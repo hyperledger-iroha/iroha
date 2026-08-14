@@ -3316,8 +3316,10 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
         'pinned_arguments=("$subcommand" -j1)',
         'pinned_arguments+=("$@")',
         'run_cargo requires IROHA_RELEASE_CARGO_BIN',
-        '"$IROHA_RELEASE_CARGO_BIN" "$@"',
+        'if "$IROHA_RELEASE_CARGO_BIN" "$@"; then',
         '( _run_cargo_with_scoped_lock "$label" "${pinned_arguments[@]}" )',
+        '&& ! release_invocation_cargo_lock; then',
+        "os.rmdir(lock.name, dir_fd=root_fd)",
         'if ((cargo_prefix)) && [[ "$argument" == "--" ]]; then',
         '--target-dir|--target-dir=*|--manifest-path|--manifest-path=*|--config|--config=*',
     ):

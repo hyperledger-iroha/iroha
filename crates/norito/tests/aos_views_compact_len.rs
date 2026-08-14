@@ -1,5 +1,4 @@
 //! AoS borrowed views honor COMPACT_LEN for per-field lengths.
-
 use norito::{
     aos,
     columnar::{
@@ -9,7 +8,6 @@ use norito::{
     },
     core::{DecodeFlagsGuard, header_flags, reset_decode_state},
 };
-
 #[test]
 fn aos_view_str_bool_compact_len() {
     {
@@ -26,7 +24,6 @@ fn aos_view_str_bool_compact_len() {
     }
     reset_decode_state();
 }
-
 #[test]
 fn aos_view_bytes_bool_compact_len() {
     {
@@ -41,7 +38,6 @@ fn aos_view_bytes_bool_compact_len() {
     }
     reset_decode_state();
 }
-
 #[test]
 fn aos_view_str_u32_bool_compact_len() {
     {
@@ -56,7 +52,6 @@ fn aos_view_str_u32_bool_compact_len() {
     }
     reset_decode_state();
 }
-
 #[test]
 fn aos_view_bytes_u32_bool_compact_len() {
     {
@@ -72,7 +67,6 @@ fn aos_view_bytes_u32_bool_compact_len() {
     }
     reset_decode_state();
 }
-
 #[test]
 fn aos_view_optstr_bool_compact_len() {
     {
@@ -89,7 +83,6 @@ fn aos_view_optstr_bool_compact_len() {
     }
     reset_decode_state();
 }
-
 #[test]
 fn aos_view_optu32_bool_compact_len() {
     {
@@ -106,7 +99,6 @@ fn aos_view_optu32_bool_compact_len() {
     }
     reset_decode_state();
 }
-
 #[test]
 fn aos_view_enum_bool_compact_len() {
     {

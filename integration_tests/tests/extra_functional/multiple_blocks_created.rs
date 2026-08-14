@@ -1,11 +1,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Stress block production with randomized mint bursts.
-
 use std::{
     num::NonZero,
     time::{Duration, Instant},
 };
-
 use eyre::{Result, eyre};
 use integration_tests::{sandbox, sync::get_status_with_retry_async};
 use iroha::data_model::{parameter::BlockParameter, prelude::*};
@@ -14,7 +12,6 @@ use iroha_test_samples::gen_account_in;
 use rand::{SeedableRng, prelude::IteratorRandom};
 use rand_chacha::ChaCha8Rng;
 use tokio::{task::spawn_blocking, time::sleep};
-
 /// Bombard random peers with random mints in multiple rounds, ensuring they all have
 /// a consistent total amount in the end.
 #[tokio::test]
@@ -22,7 +19,6 @@ use tokio::{task::spawn_blocking, time::sleep};
 async fn multiple_blocks_created() -> Result<()> {
     const N_ROUNDS: u64 = 5;
     const N_MAX_TXS_PER_BLOCK: u64 = 10;
-
     // Given
     let builder = NetworkBuilder::new()
         .with_peers(4)
@@ -44,7 +40,6 @@ async fn multiple_blocks_created() -> Result<()> {
     let mut submit_client = leader.client();
     submit_client.transaction_status_timeout = sync_timeout;
     submit_client.transaction_ttl = Some(sync_timeout + Duration::from_secs(5));
-
     let domain_id: DomainId = DomainId::try_new("domain", "universal")?;
     let create_domain = domain_setup_instruction(&domain_id, &submit_client.account)?;
     let (account_id, _account_keypair) = gen_account_in("domain");
@@ -62,7 +57,6 @@ async fn multiple_blocks_created() -> Result<()> {
             None,
         )
     });
-
     {
         let client = submit_client.clone();
         let tx = client.clone().build_transaction(
@@ -82,7 +76,6 @@ async fn multiple_blocks_created() -> Result<()> {
             return Ok(());
         }
     }
-
     if sandbox::handle_result(
         network.ensure_blocks(2).await,
         stringify!(multiple_blocks_created),
@@ -91,7 +84,6 @@ async fn multiple_blocks_created() -> Result<()> {
     {
         return Ok(());
     }
-
     let mut last_non_empty = match sandbox::handle_result(
         get_status_with_retry_async(&submit_client).await,
         stringify!(multiple_blocks_created),
@@ -99,7 +91,6 @@ async fn multiple_blocks_created() -> Result<()> {
         Some(status) => status.blocks_non_empty,
         None => return Ok(()),
     };
-
     // When
     let mut rng = ChaCha8Rng::seed_from_u64(0x4d55_4c54);
     let mut total: u128 = 0;
@@ -114,7 +105,6 @@ async fn multiple_blocks_created() -> Result<()> {
                 .choose(&mut rng)
                 .expect("there is quite a room to choose from");
             total += value;
-
             let client = submit_client.clone();
             let tx = client.build_transaction(
                 [Mint::asset_quantity(
@@ -128,14 +118,12 @@ async fn multiple_blocks_created() -> Result<()> {
                 client.submit_transaction_blocking(&tx).map(|_| ())
             }));
         }
-
         for handle in submit_handles {
             let submit_res: eyre::Result<()> = handle.await.map_err(eyre::Report::from)?;
             if sandbox::handle_result(submit_res, stringify!(multiple_blocks_created))?.is_none() {
                 return Ok(());
             }
         }
-
         if sandbox::handle_result(
             network
                 .ensure_blocks_with(|height| height.non_empty > last_non_empty)
@@ -146,7 +134,6 @@ async fn multiple_blocks_created() -> Result<()> {
         {
             return Ok(());
         }
-
         match sandbox::handle_result(
             get_status_with_retry_async(&submit_client).await,
             stringify!(multiple_blocks_created),
@@ -155,11 +142,9 @@ async fn multiple_blocks_created() -> Result<()> {
             None => return Ok(()),
         }
     }
-
     // ensuring all have the same total
     println!("all peers should have total={total}");
     let expected_value = Quantity::from(total);
-
     // Give the network a chance to flush any straggling transactions before asserting.
     let deadline = Instant::now() + sync_timeout;
     loop {
@@ -190,19 +175,15 @@ async fn multiple_blocks_created() -> Result<()> {
                 break;
             }
         }
-
         if all_ok {
             break;
         }
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "asset totals did not converge to expected value {expected_value}"
             ));
         }
-
         sleep(Duration::from_millis(200)).await;
     }
-
     Ok(())
 }

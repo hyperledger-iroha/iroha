@@ -8,14 +8,12 @@
 //! `X5S1` MAIN/compact-CA envelope. A native reference check, projection-only
 //! proof, or collection of unbound subproofs is never accepted as a
 //! credential proof.
-
 use iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use iroha_data_model::privacy::PrivacyConsensusLimitsV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use rand::TryCryptoRng;
 use thiserror::Error;
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     accumulator_stark::{
@@ -81,12 +79,10 @@ use crate::privacy_engines::prover_randomness::{
 use crate::privacy_state::PrivacyZkX509AuthoritativeStateV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_state::validate_privacy_zk_x509_statement_state_v1;
-
 const COMPILED_PROFILE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.compiled-profile.v1";
 const REFERENCE_PREPARATION_SCHEMA_V1: &[u8] = b"trusted-authoritative-state+trusted-block-time+taira-consensus-limits+exact-IRX509W1-private-witness+strict-reference-relation";
 const COMPILED_PROFILE_FIELD_COUNT_V1: usize = 29;
 const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
-
 // Independently encoded and SHA-256 checked from the exact ordered 29-field
 // release manifest after the compact-CA descriptor and all six algebraic
 // schedules passed their release KATs. There is no provisional, root-bearing,
@@ -95,20 +91,17 @@ const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
     0x88, 0x1e, 0x56, 0x0d, 0xb8, 0x72, 0xf4, 0x7f, 0xdc, 0xd7, 0xdc, 0x29, 0x0e, 0xb6, 0xe2, 0x80,
     0x8a, 0x09, 0x82, 0x2b, 0x41, 0xe6, 0x87, 0x94, 0x92, 0x41, 0x4b, 0x7e, 0x99, 0x30, 0x3b, 0x67,
 ]);
-
 /// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509CompiledProfileV1 {
     digest: [u8; 32],
 }
-
 impl ZkX509CompiledProfileV1 {
     /// Consensus transcript digest of the complete release manifest.
     pub(crate) const fn digest(self) -> [u8; 32] {
         self.digest
     }
 }
-
 /// Canonically decoded and reference-validated private prover input.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -116,20 +109,17 @@ pub(crate) struct PreparedZkX509ProverInputV1 {
     witness: ZkX509WitnessV1,
     projection: ZkX509RelationOutputV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl PreparedZkX509ProverInputV1 {
     /// Borrow the sole canonical witness representation.
     pub(crate) const fn witness(&self) -> &ZkX509WitnessV1 {
         &self.witness
     }
-
     /// Deterministic public projection recomputed from the private relation.
     pub(crate) const fn projection(&self) -> ZkX509RelationOutputV1 {
         self.projection
     }
 }
-
 /// Complete verifier-owned public input compiled before aggregate verification.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ZkX509ConsensusPublicInputsV1 {
@@ -138,7 +128,6 @@ struct ZkX509ConsensusPublicInputsV1 {
     /// RFC predicates with the CRL number selected only from trusted state.
     rfc_statement: ZkX509Rfc5280StatementV1,
 }
-
 fn compile_zk_x509_consensus_public_inputs_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     authoritative_state: &PrivacyZkX509AuthoritativeStateV1,
@@ -153,7 +142,6 @@ fn compile_zk_x509_consensus_public_inputs_v1(
         rfc_statement,
     })
 }
-
 /// Native prover preparation or credential-proof failure.
 #[derive(Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509EngineErrorV1 {
@@ -217,7 +205,6 @@ pub(crate) enum ZkX509EngineErrorV1 {
     #[error("zk-X509 compiled profile digest mismatch")]
     CompiledProfileMismatch,
 }
-
 /// Replay the complete cryptographic verifier for the bound subproof pair.
 fn verify_zk_x509_credential_subproofs_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
@@ -272,7 +259,6 @@ fn verify_zk_x509_credential_subproofs_v1(
     )?;
     Ok(())
 }
-
 /// Verify one canonical credential proof against verifier-owned consensus data.
 ///
 /// This is the sole consensus entry point for `X5S1`. It already performs
@@ -293,7 +279,6 @@ pub(crate) fn verify_zk_x509_credential_proof_v1(
     if envelope.public != consensus_public.credential_binding {
         return Err(ZkX509CredentialProofErrorV1::PublicBindingMismatch.into());
     }
-
     verify_zk_x509_credential_subproofs_v1(
         statement,
         &consensus_public,
@@ -301,7 +286,6 @@ pub(crate) fn verify_zk_x509_credential_proof_v1(
         envelope.ca_subproof,
     )
 }
-
 /// Decode and validate the exact prover input against trusted ledger state.
 ///
 /// This function performs no proof construction. Its output is the only
@@ -321,14 +305,12 @@ pub(crate) fn prepare_zk_x509_prover_input_v1(
         consensus_limits,
     )
     .map_err(ZkX509EngineErrorV1::InvalidAuthoritativeState)?;
-
     let witness = ZkX509WitnessV1::decode_exact_v1(encoded_witness)?;
     // Decode is already exact.  Re-encoding here is a deliberate differential
     // invariant for the eventual external prover boundary.
     if witness.encode_v1()? != encoded_witness {
         return Err(ZkX509EngineErrorV1::WitnessRoundTripMismatch);
     }
-
     let trust_anchor = authoritative_state.trust_anchor();
     let crl = authoritative_state.crl_record();
     let governance = ZkX509GovernanceV1 {
@@ -342,7 +324,6 @@ pub(crate) fn prepare_zk_x509_prover_input_v1(
         projection,
     })
 }
-
 /// Construct one canonical `X5S1` credential proof with injected entropy.
 ///
 /// Every state, witness, release-profile, topology, and native-relation check
@@ -391,7 +372,6 @@ pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     if assembly.relation_output != prepared.projection() {
         return Err(ZkX509EngineErrorV1::ProverProjectionMismatch);
     }
-
     let mut checked_rng = HealthCheckedTryCryptoRngV1::new(rng)?;
     let (main_phase, main_pre_aux) = commit_zk_x509_main_base_phase_v1_with_rng(
         statement,
@@ -437,7 +417,6 @@ pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     .map_err(|_| ZkX509EngineErrorV1::ProverSelfCheckFailed)?;
     Ok(encoded)
 }
-
 fn compiled_profile_fields_v1<'a>(
     sha_schedule_digests: &'a [[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1],
     p256_schedule_digest: &'a [u8; 32],
@@ -474,7 +453,6 @@ fn compiled_profile_fields_v1<'a>(
         p256_schedule_digest,
     ]
 }
-
 fn compiled_profile_schedule_digests_v1()
 -> Result<([[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1], [u8; 32]), ZkX509EngineErrorV1> {
     let mut sha = [[0_u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1];
@@ -487,7 +465,6 @@ fn compiled_profile_schedule_digests_v1()
     let p256 = zk_x509_p256_fixed_algebraic_schedule_v1()?.descriptor_digest_v1();
     Ok((sha, p256))
 }
-
 /// Recompute the sole exact 29-field compiled-profile digest.
 pub(crate) fn recompute_zk_x509_compiled_profile_digest_v1() -> Result<[u8; 32], ZkX509EngineErrorV1>
 {
@@ -498,7 +475,6 @@ pub(crate) fn recompute_zk_x509_compiled_profile_digest_v1() -> Result<[u8; 32],
     )
     .map_err(|_| ZkX509EngineErrorV1::CompiledProfileMismatch)
 }
-
 /// Construct the sole complete algebraic-schedule-bearing release profile.
 ///
 /// All six success-only verifier schedule caches must compile before the
@@ -513,15 +489,12 @@ pub(crate) fn construct_zk_x509_compiled_profile_v1()
     }
     Ok(ZkX509CompiledProfileV1 { digest })
 }
-
 #[cfg(test)]
 mod tests {
     use sha2::{Digest, Sha256};
-
     use super::super::profile::ZK_X509_HASH_FRAME_DOMAIN_V1;
     use super::*;
     use crate::privacy_engines::zk_x509::credential_stark::encode_zk_x509_credential_envelope_v1;
-
     fn independently_encode_compiled_profile_frame_v1(fields: &[&[u8]]) -> Vec<u8> {
         let domain_len =
             u16::try_from(COMPILED_PROFILE_DIGEST_DOMAIN_V1.len()).expect("small domain");
@@ -538,11 +511,9 @@ mod tests {
         }
         frame
     }
-
     fn independent_compiled_profile_digest_v1(fields: &[&[u8]]) -> [u8; 32] {
         Sha256::digest(independently_encode_compiled_profile_frame_v1(fields)).into()
     }
-
     #[test]
     fn compiled_profile_manifest_has_the_exact_29_field_order() {
         let sha_digests: [[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
@@ -599,7 +570,6 @@ mod tests {
                 .any(|window| window == b"common-lde-log22")
         );
     }
-
     #[test]
     fn compiled_profile_digest_exactly_binds_compact_ca_subproof_descriptor_pin() {
         let sha_digests: [[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
@@ -611,7 +581,6 @@ mod tests {
             ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1.as_slice()
         );
         let canonical = independent_compiled_profile_digest_v1(&canonical_fields);
-
         let mut changed = canonical_fields
             .iter()
             .map(|field| field.to_vec())
@@ -624,7 +593,6 @@ mod tests {
             "the compact-CA prover/verifier descriptor pin must rotate the compiled profile"
         );
     }
-
     #[test]
     fn compiled_profile_binds_every_algebraic_field_and_its_order() {
         let sha_digests: [[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
@@ -636,7 +604,6 @@ mod tests {
             .iter()
             .map(|field| field.to_vec())
             .collect::<Vec<_>>();
-
         for field in 20..COMPILED_PROFILE_FIELD_COUNT_V1 {
             let mut changed = owned.clone();
             changed[field][0] ^= 1;
@@ -647,7 +614,6 @@ mod tests {
                 "manifest field {field} must be bound"
             );
         }
-
         let mut reordered = owned;
         reordered.swap(22, 23);
         let reordered_fields = reordered.iter().map(Vec::as_slice).collect::<Vec<_>>();
@@ -657,7 +623,6 @@ mod tests {
             "SHA disclosure-shape digest order must be bound"
         );
     }
-
     #[test]
     fn compiled_profile_constructor_matches_the_independent_release_pin() {
         let (sha_digests, p256_digest) =
@@ -675,7 +640,6 @@ mod tests {
             independent
         );
     }
-
     #[test]
     fn sole_profile_is_pinned_while_release_activation_stays_governance_gated() {
         assert!(ZK_X509_COMPILED_PROFILE_DIGEST_V1.is_some());
@@ -684,7 +648,6 @@ mod tests {
                 .ends_with("activation=governance-gated")
         );
     }
-
     #[test]
     fn consensus_entry_point_decodes_and_binds_context_before_verification() {
         let (statement, authoritative_state) =
@@ -718,7 +681,6 @@ mod tests {
         );
         let encoded = encode_zk_x509_credential_envelope_v1(public, b"X5M1main", b"X5C1ca")
             .expect("canonical credential envelope");
-
         assert_eq!(
             verify_zk_x509_credential_proof_v1(
                 &statement,
@@ -730,7 +692,6 @@ mod tests {
                 ZkX509CredentialProofErrorV1::MainProof
             ))
         );
-
         let mut malformed = encoded.clone();
         malformed.push(0);
         assert_eq!(
@@ -744,7 +705,6 @@ mod tests {
                 ZkX509CredentialProofErrorV1::MalformedEnvelope
             ))
         );
-
         let mut wrong_intent = statement.clone();
         wrong_intent.context.transaction_intent_digest =
             iroha_data_model::privacy::PrivacyTransactionIntentDigestV1::new([0xA1; 32]);
@@ -759,7 +719,6 @@ mod tests {
                 ZkX509CredentialProofErrorV1::PublicBindingMismatch
             ))
         );
-
         let mut wrong_profile = statement.clone();
         wrong_profile.context.verifier_digest =
             iroha_data_model::privacy::PrivacyVerifierDigestV1::new([0xA2; 32]);
@@ -774,7 +733,6 @@ mod tests {
                 ZkX509CredentialProofErrorV1::PublicBindingMismatch
             ))
         );
-
         assert_eq!(
             verify_zk_x509_credential_proof_v1(
                 &statement,
@@ -793,7 +751,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn credential_prover_has_one_preflighted_joint_root_path_and_no_subproof_escape() {
         let source = include_str!("engine.rs");
@@ -806,7 +763,6 @@ mod tests {
             .expect("sole credential prover end");
         let prover = &source[prover_start..prover_end];
         let production_source = &source[..source.find("#[cfg(test)]").expect("test module")];
-
         let profile_gate = prover
             .find("construct_zk_x509_compiled_profile_v1()")
             .expect("pinned profile validation");
@@ -863,36 +819,27 @@ mod tests {
                 "credential prover must not contain {forbidden}"
             );
         }
-
         #[derive(Debug)]
         struct EntropyMustNotBeRead;
-
         impl core::fmt::Display for EntropyMustNotBeRead {
             fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 formatter.write_str("credential preflight reached entropy")
             }
         }
-
         struct PanicEntropy;
-
         impl rand::TryRngCore for PanicEntropy {
             type Error = EntropyMustNotBeRead;
-
             fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
                 panic!("invalid credential preflight reached entropy")
             }
-
             fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
                 panic!("invalid credential preflight reached entropy")
             }
-
             fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
                 panic!("invalid credential preflight reached entropy")
             }
         }
-
         impl rand::TryCryptoRng for PanicEntropy {}
-
         let (statement, authoritative_state) =
             crate::privacy_verifier::zk_x509_dispatch_fixture_for_test();
         let trusted_block_timestamp_ms = statement

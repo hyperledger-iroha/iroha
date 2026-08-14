@@ -1,8 +1,8 @@
 //! First-release Musubi registry, signing, and production-publication boundary.
 //!
-//! Public finalized reads retain only a Torii URL and never construct an account or
-//! key pair. Mutations load a required Iroha `client.toml` only when the mutation is
-//! dispatched, then sign the concrete V1 instruction locally. Publication delegates
+//! Public finalized reads load the required exact-network account signer from the selected
+//! Iroha `client.toml` and sign every concrete query body/path. Mutations use the same required
+//! signing configuration and sign the concrete V1 instruction locally. Publication delegates
 //! clean-package validation, authenticated seed ingress, pin/order coordination, and
 //! provider readback to an explicit runtime service; the default service fails closed.
 //! Archive registration itself is not delegated: the signer prebuilds, fee-quotes, and
@@ -14,7 +14,6 @@
 //! the engine confirms that the signed location and readback floor is still current. The
 //! authorization-inclusive wire digest is a local replay-integrity binding; transaction
 //! status does not attest it.
-
 use std::{
     error::Error,
     fmt,
@@ -23,18 +22,17 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 #[cfg(test)]
 use std::fs;
-
 use iroha::{
     client::{
         Client, PublicMusubiQueryPathV1, PublicMusubiQueryResultV1, post_public_musubi_query_v1,
     },
-    config::{Config, resolve_account_chain_discriminant},
+    config::Config,
     musubi_runtime::MusubiSeedIngressCarPlanV1,
 };
 use iroha_data_model::{
+    NetworkId,
     account::address::ChainDiscriminantGuard,
     isi::InstructionBox,
     metadata::Metadata,
@@ -57,10 +55,8 @@ use iroha_data_model::{
 };
 use norito::json::{JsonDeserialize, JsonSerialize};
 use url::Url;
-
 #[cfg(test)]
 use iroha_data_model::isi::musubi::PublishMusubiReleaseV1;
-
 use crate::{
     publication_runtime::read_bounded_platform_config_v1,
     publish::{
@@ -81,13 +77,10 @@ use crate::{
         release_submission_valid_until_ms,
     },
 };
-
 const DEFAULT_CLIENT_CONFIG: &str = "client.toml";
 const MAX_PUBLIC_CONFIG_BYTES_USIZE: usize = 1024 * 1024;
-const DEFAULT_PUBLIC_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const PLATFORM_CONFIG_PROVENANCE_CONTEXT: &str =
     "iroha:musubi:platform-client-config-provenance:v1";
-
 /// Retry classification for a redacted registry failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegistryFailureClassV1 {
@@ -100,7 +93,6 @@ pub enum RegistryFailureClassV1 {
     /// A finalized cursor is stale and must not be silently restarted.
     StaleCursor,
 }
-
 /// Authoritative terminal state for one exact signed transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RegistryTerminalTransactionStateV1 {
@@ -109,7 +101,6 @@ pub(crate) enum RegistryTerminalTransactionStateV1 {
     /// The transaction expired without application.
     Expired,
 }
-
 /// Payload transaction state recovered from the typed Torii status endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RegistryTransactionStateV1 {
@@ -130,7 +121,6 @@ pub(crate) enum RegistryTransactionStateV1 {
         block_height: Option<u64>,
     },
 }
-
 /// Observed result of submitting and status-checking one locally signed mutation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RegistryMutationSubmissionV1 {
@@ -156,54 +146,58 @@ pub(crate) enum RegistryMutationSubmissionV1 {
         block_height: Option<u64>,
     },
 }
-
 /// Stable, secret-redacted registry error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RegistryErrorV1 {
     class: RegistryFailureClassV1,
     code: &'static str,
 }
-
 impl RegistryErrorV1 {
     const fn new(class: RegistryFailureClassV1, code: &'static str) -> Self {
         Self { class, code }
     }
-
     /// Return the retry classification without exposing transport or configuration detail.
     #[must_use]
     pub const fn class(&self) -> RegistryFailureClassV1 {
         self.class
     }
-
     /// Return the stable public error code.
     #[must_use]
     pub const fn code(&self) -> &'static str {
         self.code
     }
 }
-
 impl fmt::Display for RegistryErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.code)
     }
 }
-
 impl Error for RegistryErrorV1 {}
-
-/// Signer-free client for the fixed public Musubi V1 finalized-query inventory.
-#[derive(Clone, Debug)]
+/// Exact-network authenticated client for the fixed public Musubi V1 finalized-query inventory.
+#[derive(Clone)]
 pub struct RegistryReadClientV1 {
-    torii_url: Url,
+    client: Client,
     timeout: Duration,
     account_chain_discriminant: u16,
 }
-
-/// One bounded platform configuration image shared by signer-free consumers in this process.
+impl fmt::Debug for RegistryReadClientV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RegistryReadClientV1")
+            .field("authenticated", &true)
+            .field("timeout", &self.timeout)
+            .field(
+                "account_chain_discriminant",
+                &self.account_chain_discriminant,
+            )
+            .finish_non_exhaustive()
+    }
+}
+/// One bounded platform configuration image shared by authenticated consumers in this process.
 pub(crate) struct RegistryPublicConfigImageV1 {
     path: PathBuf,
     bytes: Vec<u8>,
 }
-
 /// Transient commitment to one exact platform configuration image and its anchored path.
 ///
 /// This value is deliberately crate-private and has no codec implementation. It may bridge two
@@ -212,7 +206,6 @@ pub(crate) struct PlatformConfigProvenanceV1 {
     path: PathBuf,
     digest: [u8; 32],
 }
-
 impl fmt::Debug for PlatformConfigProvenanceV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -221,19 +214,16 @@ impl fmt::Debug for PlatformConfigProvenanceV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl PlatformConfigProvenanceV1 {
     /// Return the already-anchored path whose later image must match this commitment.
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
-
     /// Return whether `bytes` are exactly the image committed by this provenance value.
     pub(crate) fn matches(&self, bytes: &[u8]) -> bool {
         self.digest == platform_config_provenance_digest(bytes)
     }
 }
-
 impl fmt::Debug for RegistryPublicConfigImageV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -242,18 +232,15 @@ impl fmt::Debug for RegistryPublicConfigImageV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl RegistryPublicConfigImageV1 {
     /// Return the original path used to resolve relative platform-owned files.
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
-
     /// Borrow the exact bounded bytes read from the selected configuration descriptor.
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
     }
-
     /// Commit this exact image without retaining its possibly secret-bearing bytes.
     pub(crate) fn provenance(&self) -> PlatformConfigProvenanceV1 {
         PlatformConfigProvenanceV1 {
@@ -262,61 +249,95 @@ impl RegistryPublicConfigImageV1 {
         }
     }
 }
-
 fn platform_config_provenance_digest(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new_derive_key(PLATFORM_CONFIG_PROVENANCE_CONTEXT);
     hasher.update(bytes);
     *hasher.finalize().as_bytes()
 }
-
 impl RegistryReadClientV1 {
-    /// Construct a signer-free client from an already validated public Torii URL.
+    /// Construct an authenticated reader from an exact-network Iroha client.
     ///
     /// # Errors
     ///
-    /// Returns an error when the URL is not credential-free HTTP(S), the
-    /// timeout is zero or exceeds one minute, or the chain discriminant is zero.
+    /// Returns an error when the URL is not credential-free HTTP(S), the account key does not
+    /// match the canonical single-signature account, the timeout is outside the one-minute bound,
+    /// a legacy witness header is configured, or the chain discriminant is zero.
     pub fn new(
-        torii_url: Url,
+        mut client: Client,
         timeout: Duration,
         account_chain_discriminant: u16,
     ) -> Result<Self, RegistryErrorV1> {
-        if !matches!(torii_url.scheme(), "http" | "https")
-            || !torii_url.username().is_empty()
-            || torii_url.password().is_some()
+        if !matches!(client.torii_url.scheme(), "http" | "https")
+            || !client.torii_url.username().is_empty()
+            || client.torii_url.password().is_some()
             || timeout == Duration::ZERO
             || timeout > Duration::from_secs(60)
             || account_chain_discriminant == 0
+            || client.account.controller.single_signatory() != Some(client.key_pair.public_key())
+            || client
+                .headers
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case("X-Iroha-Witness"))
         {
             return Err(RegistryErrorV1::new(
                 RegistryFailureClassV1::Permanent,
                 "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
             ));
         }
+        client.torii_request_timeout = timeout;
         Ok(Self {
-            torii_url,
+            client,
             timeout,
             account_chain_discriminant,
         })
     }
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        torii_url: Url,
+        timeout: Duration,
+        account_chain_discriminant: u16,
+    ) -> Result<Self, RegistryErrorV1> {
+        let timeout_ms = u64::try_from(timeout.as_millis()).map_err(|_| invalid_public_config())?;
+        let source = format!(
+            r#"
+chain = "00000000-0000-0000-0000-000000000000"
+network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+torii_url = "{torii_url}"
+torii_request_timeout_ms = {timeout_ms}
 
-    /// Load only public endpoint/network context from `--config` or platform `client.toml`.
+[account]
+chain_discriminant = {account_chain_discriminant}
+public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+"#,
+        );
+        let (configuration, _) = Config::load_bytes_with_musubi_publication(
+            Path::new("musubi-authenticated-test-client.toml"),
+            source.as_bytes(),
+        )
+        .map_err(|_| invalid_public_config())?;
+        Self::new(
+            Client::new(configuration),
+            timeout,
+            account_chain_discriminant,
+        )
+    }
+    /// Load the exact-network account signer from `--config` or platform `client.toml`.
     ///
-    /// Only `torii_url`, timeout, and `[account].profile`/`chain_discriminant` are interpreted.
-    /// Account identity, private-key, bearer-token, and basic-auth fields are neither parsed into
-    /// typed forms nor retained. The default path is the same required `client.toml` used by the
-    /// Iroha CLI; project manifests and command-line credential values are never consulted.
+    /// The exact network identity, account, matching private key, Torii URL, timeout, and account
+    /// profile are mandatory typed configuration. The default path is the same required
+    /// `client.toml` used by the Iroha CLI; project manifests, environment values, and command-line
+    /// credential values are never consulted.
     ///
     /// # Errors
     ///
     /// Returns `MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID` on non-Unix targets before the selected
     /// absolute path is inspected. On Unix, returns an error when the bounded configuration cannot
-    /// be read or its public endpoint, timeout, profile, or chain discriminant is invalid.
+    /// be read or its signer, exact network, endpoint, timeout, profile, or discriminant is invalid.
     pub fn load(config: Option<&Path>) -> Result<Self, RegistryErrorV1> {
         Self::load_with_config_image(config).map(|(reader, _image)| reader)
     }
-
-    /// Load the public reader and retain the exact same bounded image for sibling parsers.
+    /// Load the authenticated reader and retain the exact same bounded image for sibling parsers.
     ///
     /// The returned image is transient configuration provenance. Callers must parse any required
     /// secret-free subtrees immediately and must not retain its raw bytes in resolver graphs.
@@ -333,81 +354,41 @@ impl RegistryReadClientV1 {
                 .join(selected)
         };
         let bytes = read_bounded_config(&path)?;
-        let reader = Self::load_from_config_bytes(&bytes)?;
+        let reader = Self::load_from_config_bytes(&path, &bytes)?;
         Ok((reader, RegistryPublicConfigImageV1 { path, bytes }))
     }
-
-    /// Parse public endpoint and network context from one already-read `client.toml` image.
+    /// Parse the exact-network signer and endpoint from one already-read `client.toml` image.
     ///
     /// Publication uses this entry point so the signer, private runtime client, and finalized
     /// registry reader all derive from the same bounded file image instead of reopening a path
     /// after authenticated storage coordination has started.
-    pub(crate) fn load_from_config_bytes(bytes: &[u8]) -> Result<Self, RegistryErrorV1> {
+    pub(crate) fn load_from_config_bytes(
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<Self, RegistryErrorV1> {
         if bytes.is_empty() || bytes.len() > MAX_PUBLIC_CONFIG_BYTES_USIZE {
             return Err(invalid_public_config());
         }
-        let text = std::str::from_utf8(bytes).map_err(|_| invalid_public_config())?;
-        let document = text.parse::<toml::Table>().map_err(|_| {
-            RegistryErrorV1::new(
-                RegistryFailureClassV1::Permanent,
-                "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
-            )
-        })?;
-        let raw_url = document
-            .get("torii_url")
-            .and_then(toml::Value::as_str)
-            .ok_or_else(|| {
-                RegistryErrorV1::new(
-                    RegistryFailureClassV1::Permanent,
-                    "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
-                )
-            })?;
-        let torii_url = raw_url.parse::<Url>().map_err(|_| {
-            RegistryErrorV1::new(
-                RegistryFailureClassV1::Permanent,
-                "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
-            )
-        })?;
-        let timeout = document
-            .get("torii_request_timeout_ms")
-            .and_then(toml::Value::as_integer)
-            .and_then(|value| u64::try_from(value).ok())
-            .map_or(DEFAULT_PUBLIC_QUERY_TIMEOUT, Duration::from_millis)
-            .min(Duration::from_secs(60));
-        let account = match document.get("account") {
-            Some(value) => Some(value.as_table().ok_or_else(invalid_public_config)?),
-            None => None,
-        };
-        let profile = match account.and_then(|account| account.get("profile")) {
-            Some(value) => Some(value.as_str().ok_or_else(invalid_public_config)?),
-            None => None,
-        };
-        let explicit_discriminant =
-            match account.and_then(|account| account.get("chain_discriminant")) {
-                Some(value) => {
-                    let value = value.as_integer().ok_or_else(invalid_public_config)?;
-                    Some(u16::try_from(value).map_err(|_| invalid_public_config())?)
-                }
-                None => None,
-            };
-        let account_chain_discriminant =
-            resolve_account_chain_discriminant(profile, explicit_discriminant)
-                .map_err(|_| invalid_public_config())?;
-        Self::new(torii_url, timeout, account_chain_discriminant)
+        let (configuration, _) = Config::load_bytes_with_musubi_publication(path, bytes)
+            .map_err(|_| invalid_public_config())?;
+        let timeout = configuration.torii_request_timeout;
+        let account_chain_discriminant = configuration.account_chain_discriminant;
+        Self::new(
+            Client::new(configuration),
+            timeout,
+            account_chain_discriminant,
+        )
     }
-
-    /// Return the configured public endpoint. No account or credential material is retained.
+    /// Return the configured authenticated endpoint without exposing signer material.
     #[must_use]
     pub const fn torii_url(&self) -> &Url {
-        &self.torii_url
+        &self.client.torii_url
     }
-
-    /// Return the validated public I105 account chain discriminant without loading a signer.
+    /// Return the validated I105 account chain discriminant used by the request signer.
     #[must_use]
     pub const fn account_chain_discriminant(&self) -> u16 {
         self.account_chain_discriminant
     }
-
     /// Resolve canonical `namespace/package` text to its structural package identity.
     ///
     /// # Errors
@@ -433,7 +414,6 @@ impl RegistryReadClientV1 {
                 RegistryErrorV1::new(RegistryFailureClassV1::NotFound, "MUSUBI_PACKAGE_NOT_FOUND")
             })
     }
-
     /// Bind a canonical selector through its immutable namespace even before first publication.
     ///
     /// Unlike [`Self::resolve_selector`], this queries the namespace directory prefix and does
@@ -457,7 +437,6 @@ impl RegistryReadClientV1 {
         })?;
         package_id_from_namespace_binding(selector, &page.namespace_binding)
     }
-
     /// Fetch and validate one exact authoritative package record.
     ///
     /// # Errors
@@ -481,7 +460,6 @@ impl RegistryReadClientV1 {
         }
         Ok(output)
     }
-
     /// Fetch and validate one paired finalized home/universal release snapshot.
     ///
     /// # Errors
@@ -504,7 +482,6 @@ impl RegistryReadClientV1 {
         }
         Ok(output)
     }
-
     /// Fetch and validate one immutable finalized provider bundle-attestation audit record.
     ///
     /// # Errors
@@ -532,7 +509,6 @@ impl RegistryReadClientV1 {
         }
         Ok(output)
     }
-
     /// Fetch and validate one finalized resolver-index page.
     ///
     /// # Errors
@@ -550,7 +526,6 @@ impl RegistryReadClientV1 {
         page.validate_for(request).map_err(|_| invalid_response())?;
         Ok(page)
     }
-
     /// Fetch and validate one finalized package-version page.
     ///
     /// # Errors
@@ -566,7 +541,6 @@ impl RegistryReadClientV1 {
         page.validate_for(request).map_err(|_| invalid_response())?;
         Ok(page)
     }
-
     /// Fetch and validate one finalized accepted-member and pending-invitation page.
     ///
     /// # Errors
@@ -584,7 +558,6 @@ impl RegistryReadClientV1 {
         validate_maintainer_page(request, &page)?;
         Ok(page)
     }
-
     /// Fetch and validate one finalized archive-location page.
     ///
     /// # Errors
@@ -613,7 +586,6 @@ impl RegistryReadClientV1 {
         }
         Ok(page)
     }
-
     /// Fetch and validate exact finalized cache-retention decisions for one bounded batch.
     ///
     /// # Errors
@@ -648,7 +620,6 @@ impl RegistryReadClientV1 {
         }
         Ok(page)
     }
-
     /// Fetch and structurally validate one exact permanent alias record.
     ///
     /// # Errors
@@ -675,7 +646,6 @@ impl RegistryReadClientV1 {
         }
         Ok(record)
     }
-
     /// Fetch and validate one finalized permanent-alias history page.
     ///
     /// # Errors
@@ -693,7 +663,6 @@ impl RegistryReadClientV1 {
         page.validate_for(request).map_err(|_| invalid_response())?;
         Ok(page)
     }
-
     /// Fetch and validate one finalized byte-ordered package-prefix page.
     ///
     /// # Errors
@@ -711,7 +680,6 @@ impl RegistryReadClientV1 {
         page.validate_for(request).map_err(|_| invalid_response())?;
         Ok(page)
     }
-
     /// Search the rebuildable finalized-event metadata projection by exact normalized terms.
     ///
     /// This discovery API is intentionally separate from [`Self::resolver_index`]; callers
@@ -736,7 +704,6 @@ impl RegistryReadClientV1 {
         page.validate_for(request).map_err(|_| invalid_response())?;
         Ok(page)
     }
-
     fn query_required<Q, R>(
         &self,
         path: PublicMusubiQueryPathV1,
@@ -753,7 +720,6 @@ impl RegistryReadClientV1 {
             )
         })
     }
-
     fn query_optional<Q, R>(
         &self,
         path: PublicMusubiQueryPathV1,
@@ -764,7 +730,7 @@ impl RegistryReadClientV1 {
         R: JsonDeserialize,
     {
         let _chain_discriminant = ChainDiscriminantGuard::enter(self.account_chain_discriminant);
-        let response = post_public_musubi_query_v1(&self.torii_url, path, query, self.timeout)
+        let response = post_public_musubi_query_v1(&self.client, path, query, self.timeout)
             .map_err(|_| {
                 RegistryErrorV1::new(
                     RegistryFailureClassV1::Retryable,
@@ -781,14 +747,12 @@ impl RegistryReadClientV1 {
         }
     }
 }
-
 /// Client that loads a complete signer only at a registry mutation boundary.
 #[derive(Clone)]
 pub struct RegistrySigningClientV1 {
     client: Client,
     account_chain_discriminant: u16,
 }
-
 impl fmt::Debug for RegistrySigningClientV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let _chain_discriminant = ChainDiscriminantGuard::enter(self.account_chain_discriminant);
@@ -802,14 +766,20 @@ impl fmt::Debug for RegistrySigningClientV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl RegistrySigningClientV1 {
     /// Return the exact genesis-derived identity from the trusted signing configuration.
     #[must_use]
     pub(crate) fn network_id(&self) -> NetworkId {
         self.client.network_id
     }
-
+    /// Clone an authenticated registry reader from this exact signing configuration.
+    pub(crate) fn authenticated_reader(&self) -> Result<RegistryReadClientV1, RegistryErrorV1> {
+        RegistryReadClientV1::new(
+            self.client.clone(),
+            self.client.torii_request_timeout,
+            self.account_chain_discriminant,
+        )
+    }
     /// Load a required explicit `--config` or the platform `client.toml`, without env overrides.
     ///
     /// # Errors
@@ -825,7 +795,6 @@ impl RegistrySigningClientV1 {
         })?;
         Ok(Self::from_configuration(configuration))
     }
-
     #[cfg(test)]
     pub(crate) fn load_with_publication_config(
         config: Option<&Path>,
@@ -840,7 +809,6 @@ impl RegistrySigningClientV1 {
             })?;
         Ok((Self::from_configuration(configuration), publication))
     }
-
     pub(crate) fn load_with_publication_config_bytes(
         path: &Path,
         bytes: &[u8],
@@ -854,7 +822,6 @@ impl RegistrySigningClientV1 {
             })?;
         Ok((Self::from_configuration(configuration), publication))
     }
-
     fn from_configuration(configuration: Config) -> Self {
         let account_chain_discriminant = configuration.account_chain_discriminant;
         let mut client = {
@@ -867,19 +834,16 @@ impl RegistrySigningClientV1 {
             account_chain_discriminant,
         }
     }
-
     /// Return the configured mutation authority.
     #[must_use]
     pub const fn authority(&self) -> &iroha_data_model::account::AccountId {
         &self.client.account
     }
-
     /// Return the validated I105 account chain discriminant used by this signer.
     #[must_use]
     pub const fn account_chain_discriminant(&self) -> u16 {
         self.account_chain_discriminant
     }
-
     /// Construct the fixed private-publication HTTPS client from this signer.
     ///
     /// Only the chain, account, and key pair are copied. Torii Basic Auth and configured
@@ -901,7 +865,6 @@ impl RegistrySigningClientV1 {
             timeout,
         )
     }
-
     /// Parse one canonical account argument under the signing client's network profile.
     ///
     /// The scoped override is thread-local and is removed before returning. No key material is
@@ -925,7 +888,6 @@ impl RegistrySigningClientV1 {
                 )
             })
     }
-
     /// Sign, submit, and wait for commitment of one concrete V1 instruction.
     ///
     /// # Errors
@@ -961,7 +923,6 @@ impl RegistrySigningClientV1 {
             )),
         }
     }
-
     pub(crate) fn submit_observed_v1<I>(
         &self,
         instruction: I,
@@ -1012,7 +973,6 @@ impl RegistrySigningClientV1 {
             }
         }
     }
-
     /// Prebuild one exact unsigned V1 mutation payload without contacting Torii.
     ///
     /// # Errors
@@ -1038,7 +998,6 @@ impl RegistrySigningClientV1 {
                 )
             })
     }
-
     /// Fee-quote and sign the exact prebuilt payload without submitting it.
     ///
     /// # Errors
@@ -1058,7 +1017,6 @@ impl RegistrySigningClientV1 {
                 )
             })
     }
-
     /// Submit and wait for the exact already-signed V1 transaction without rebuilding it.
     ///
     /// # Errors
@@ -1080,7 +1038,6 @@ impl RegistrySigningClientV1 {
             })?;
         Ok(*hash.as_ref())
     }
-
     pub(crate) fn transaction_application_state_v1(
         &self,
         transaction: &SignedTransaction,
@@ -1153,7 +1110,6 @@ impl RegistrySigningClientV1 {
         }
     }
 }
-
 fn validate_mutation_submission_hash(
     expected_hash: [u8; 32],
     observed_hash: [u8; 32],
@@ -1166,7 +1122,6 @@ fn validate_mutation_submission_hash(
     }
     Ok(())
 }
-
 /// Runtime-only production services whose authenticated server contracts are outside Torii reads.
 pub trait PublicationRuntimeServicesV1 {
     /// Parse, verify, resolve, and compiler-check the exact clean package CAR.
@@ -1181,7 +1136,6 @@ pub trait PublicationRuntimeServicesV1 {
         request: &PublicationRequestV1,
         car: &mut dyn Read,
     ) -> Result<PublicationValidationEvidenceV1, PublicationBackendError>;
-
     /// Stage bytes through an admitted authenticated seed-ingress broker and return its receipt.
     ///
     /// # Errors
@@ -1196,7 +1150,6 @@ pub trait PublicationRuntimeServicesV1 {
         plan: &MusubiSeedIngressCarPlanV1,
         car: &mut dyn Read,
     ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError>;
-
     /// Revalidate or append the durable provider-sidecar anchor before proof submission.
     ///
     /// # Errors
@@ -1214,7 +1167,6 @@ pub trait PublicationRuntimeServicesV1 {
     ) -> Result<PublicationProviderRegistrationCheckpointAdvanceV1, PublicationBackendError> {
         Ok(PublicationProviderRegistrationCheckpointAdvanceV1::Ready)
     }
-
     /// Coordinate and sign an exact location CAS without submitting it.
     ///
     /// The caller journals the returned transaction before invoking
@@ -1232,7 +1184,6 @@ pub trait PublicationRuntimeServicesV1 {
         generation: u8,
         prior_location_ids: &[MusubiArchiveLocationIdV1],
     ) -> Result<PublicationArchiveLocationIntentV1, PublicationBackendError>;
-
     /// Submit or recover the exact journaled location transaction and finalized state.
     ///
     /// # Errors
@@ -1247,7 +1198,6 @@ pub trait PublicationRuntimeServicesV1 {
         intent: &PublicationArchiveLocationIntentV1,
         prior_location_ids: &[MusubiArchiveLocationIdV1],
     ) -> Result<PublicationArchiveLocationAdvanceV1, PublicationBackendError>;
-
     /// Read, parse, and verify the complete archive through one finalized provider.
     ///
     /// # Errors
@@ -1262,11 +1212,9 @@ pub trait PublicationRuntimeServicesV1 {
         provider: ProviderId,
     ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError>;
 }
-
 /// Fail-closed runtime used until an operator supplies all authenticated production services.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UnavailablePublicationRuntimeV1;
-
 impl PublicationRuntimeServicesV1 for UnavailablePublicationRuntimeV1 {
     fn validate_clean_package(
         &mut self,
@@ -1278,7 +1226,6 @@ impl PublicationRuntimeServicesV1 for UnavailablePublicationRuntimeV1 {
             "PACKAGE_VALIDATOR_NOT_CONFIGURED",
         ))
     }
-
     fn stage_authenticated_seed_ingress(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -1293,7 +1240,6 @@ impl PublicationRuntimeServicesV1 for UnavailablePublicationRuntimeV1 {
             "SEED_INGRESS_SERVICE_NOT_CONFIGURED",
         ))
     }
-
     fn prepare_archive_location_intent(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -1306,7 +1252,6 @@ impl PublicationRuntimeServicesV1 for UnavailablePublicationRuntimeV1 {
             "STORAGE_COORDINATOR_NOT_CONFIGURED",
         ))
     }
-
     fn submit_or_recover_archive_location(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -1319,7 +1264,6 @@ impl PublicationRuntimeServicesV1 for UnavailablePublicationRuntimeV1 {
             "STORAGE_COORDINATOR_NOT_CONFIGURED",
         ))
     }
-
     fn readback_provider(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -1332,7 +1276,6 @@ impl PublicationRuntimeServicesV1 for UnavailablePublicationRuntimeV1 {
         ))
     }
 }
-
 /// Concrete publication backend combining finalized reads, local signing, and runtime services.
 #[derive(Debug)]
 pub struct RegistryPublicationBackendV1<S> {
@@ -1342,7 +1285,6 @@ pub struct RegistryPublicationBackendV1<S> {
     operation_id: PublicationOperationIdV1,
     publisher: iroha_data_model::account::AccountId,
 }
-
 impl<S> RegistryPublicationBackendV1<S> {
     /// Bind the backend to exactly one public request and operation id.
     ///
@@ -1376,7 +1318,6 @@ impl<S> RegistryPublicationBackendV1<S> {
             publisher: request.publisher.clone(),
         })
     }
-
     fn check_operation(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -1389,7 +1330,6 @@ impl<S> RegistryPublicationBackendV1<S> {
             ))
         }
     }
-
     fn check_request(&self, request: &PublicationRequestV1) -> Result<(), PublicationBackendError> {
         if request.operation_id() == self.operation_id && request.publisher == self.publisher {
             Ok(())
@@ -1399,7 +1339,6 @@ impl<S> RegistryPublicationBackendV1<S> {
             ))
         }
     }
-
     fn recover_registered_archive(
         &self,
         request: &PublicationRequestV1,
@@ -1438,7 +1377,6 @@ impl<S> RegistryPublicationBackendV1<S> {
             .map_err(|_| PublicationBackendError::permanent("ARCHIVE_REGISTRATION_CONFLICT"))?;
         Ok(Some(recovered))
     }
-
     fn finalized_archive_absence(
         &self,
         request: &PublicationRequestV1,
@@ -1472,7 +1410,6 @@ impl<S> RegistryPublicationBackendV1<S> {
             decision,
         }))
     }
-
     fn finalized_release_absence(
         &self,
         request: &PublicationRequestV1,
@@ -1549,7 +1486,6 @@ impl<S> RegistryPublicationBackendV1<S> {
             .map_err(|_| PublicationBackendError::permanent("RELEASE_ABSENCE_RESPONSE_INVALID"))?;
         Ok(Some(absence))
     }
-
     fn terminal_release_state(
         &self,
         request: &PublicationRequestV1,
@@ -1599,7 +1535,6 @@ impl<S> RegistryPublicationBackendV1<S> {
         };
         Ok(PublicationReleaseSubmissionAdvanceV1::Terminal(terminal))
     }
-
     fn finalized_validity_window_release_state(
         &self,
         request: &PublicationRequestV1,
@@ -1620,7 +1555,6 @@ impl<S> RegistryPublicationBackendV1<S> {
             ),
         ))
     }
-
     fn pending_release_state(
         &self,
         request: &PublicationRequestV1,
@@ -1634,7 +1568,6 @@ impl<S> RegistryPublicationBackendV1<S> {
                 )
             })
     }
-
     fn terminal_registration_state(
         &self,
         request: &PublicationRequestV1,
@@ -1670,7 +1603,6 @@ impl<S> RegistryPublicationBackendV1<S> {
             }
         }
     }
-
     fn finalized_validity_window_registration_state(
         &self,
         request: &PublicationRequestV1,
@@ -1687,7 +1619,6 @@ impl<S> RegistryPublicationBackendV1<S> {
         })
     }
 }
-
 fn validate_finalized_idempotent_release(
     request: &PublicationRequestV1,
     exact_release: &MusubiExactReleaseSnapshotV1,
@@ -1721,7 +1652,6 @@ fn validate_finalized_idempotent_release(
     }
     Ok(())
 }
-
 fn validate_finalized_release_snapshot_progress(
     resolver_snapshot: iroha_data_model::musubi::MusubiRegistrySnapshotV1,
     exact_snapshot: iroha_data_model::musubi::MusubiRegistrySnapshotV1,
@@ -1742,7 +1672,6 @@ fn validate_finalized_release_snapshot_progress(
     }
     Ok(())
 }
-
 fn terminal_after_finalized_validity_window(
     request: &PublicationRequestV1,
     intent: &PublicationArchiveRegistrationIntentV1,
@@ -1764,7 +1693,6 @@ fn terminal_after_finalized_validity_window(
         .map_err(|_| PublicationBackendError::permanent("ARCHIVE_ABSENCE_RESPONSE_INVALID"))?;
     Ok(Some(terminal))
 }
-
 fn validate_registration_submission_hash(
     expected: [u8; 32],
     submitted: [u8; 32],
@@ -1777,7 +1705,6 @@ fn validate_registration_submission_hash(
         ))
     }
 }
-
 fn validate_release_submission_hash(
     expected: [u8; 32],
     submitted: [u8; 32],
@@ -1790,14 +1717,12 @@ fn validate_release_submission_hash(
         ))
     }
 }
-
 fn submit_release_after_current_location_gate<T>(
     location_matches_signed_floor: bool,
     submit_exact_transaction: impl FnOnce() -> T,
 ) -> Option<T> {
     location_matches_signed_floor.then(submit_exact_transaction)
 }
-
 impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublicationBackendV1<S> {
     fn current_time_ms(&mut self) -> Result<u64, PublicationBackendError> {
         let elapsed = SystemTime::now()
@@ -1806,7 +1731,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
         u64::try_from(elapsed.as_millis())
             .map_err(|_| PublicationBackendError::permanent("SYSTEM_TIME_INVALID"))
     }
-
     fn validate_clean_package(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -1818,7 +1742,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
         self.services
             .validate_clean_package(operation_id, request, car)
     }
-
     fn stage_authenticated_seed_ingress(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -1836,7 +1759,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
             car,
         )
     }
-
     fn prepare_archive_registration_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -1861,7 +1783,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
             signed_transaction,
         ))
     }
-
     fn submit_or_recover_archive_registration(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -1896,7 +1817,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
             }
             RegistryTransactionStateV1::Absent => {}
         }
-
         if let Some(registered) = self.recover_registered_archive(request, intent, None)? {
             return Ok(PublicationArchiveRegistrationAdvanceV1::Registered(
                 registered,
@@ -1907,7 +1827,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
         {
             return Ok(terminal);
         }
-
         let submission = self.signing.submit_signed_v1(&intent.signed_transaction);
         if let Ok(transaction_hash) = submission {
             validate_registration_submission_hash(intent.transaction_hash, transaction_hash)?;
@@ -1947,7 +1866,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
             }
         }
     }
-
     fn checkpoint_archive_location_provider_registrations(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -1969,7 +1887,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
                 checkpoint,
             )
     }
-
     fn prepare_archive_location_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -1988,7 +1905,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
             prior_location_ids,
         )
     }
-
     fn submit_or_recover_archive_location(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -2007,7 +1923,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
             prior_location_ids,
         )
     }
-
     fn finalized_replication(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -2110,7 +2025,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
             },
         ))
     }
-
     fn readback_provider(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -2123,7 +2037,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
         self.services
             .readback_provider(operation_id, request, location, provider)
     }
-
     fn prepare_release_submission_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -2148,7 +2061,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
         )
         .map_err(|_| PublicationBackendError::permanent("RELEASE_SUBMISSION_INTENT_INVALID"))
     }
-
     fn submit_or_recover_release_submission(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -2184,7 +2096,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
             }
             RegistryTransactionStateV1::Absent => {}
         }
-
         if let Some(terminal) = self.finalized_validity_window_release_state(request, intent)? {
             return Ok(PublicationReleaseSubmissionAdvanceV1::Terminal(terminal));
         }
@@ -2228,7 +2139,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
             }
         }
     }
-
     fn finalized_release_and_index(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -2261,7 +2171,6 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
         }))
     }
 }
-
 /// Bounded polling policy for finalized replication and release verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PublicationPollPolicyV1 {
@@ -2272,7 +2181,6 @@ pub struct PublicationPollPolicyV1 {
     /// Maximum exponential-backoff delay.
     pub max_delay: Duration,
 }
-
 impl Default for PublicationPollPolicyV1 {
     fn default() -> Self {
         Self {
@@ -2282,7 +2190,6 @@ impl Default for PublicationPollPolicyV1 {
         }
     }
 }
-
 impl PublicationPollPolicyV1 {
     /// Validate non-zero bounded attempts and sub-minute delays.
     ///
@@ -2303,7 +2210,6 @@ impl PublicationPollPolicyV1 {
         Ok(())
     }
 }
-
 /// Resume with bounded exponential backoff, preserving pending state when the budget expires.
 ///
 /// # Errors
@@ -2353,21 +2259,18 @@ pub fn resume_with_bounded_polling(
         |error| Err(PublicationError::Backend(error)),
     )
 }
-
 fn first_page(limit: u32) -> MusubiPageRequestV1 {
     MusubiPageRequestV1 {
         limit,
         cursor: None,
     }
 }
-
 fn invalid_response() -> RegistryErrorV1 {
     RegistryErrorV1::new(
         RegistryFailureClassV1::Permanent,
         "MUSUBI_REGISTRY_RESPONSE_INVALID",
     )
 }
-
 fn package_id_from_namespace_binding(
     selector: &MusubiPackageSelectorV1,
     binding: &MusubiNamespaceBindingV1,
@@ -2385,21 +2288,18 @@ fn package_id_from_namespace_binding(
     package.validate().map_err(|_| invalid_response())?;
     Ok(package)
 }
-
 fn validate_maintainer_page(
     request: &MusubiPackagePageQueryV1,
     page: &MusubiMaintainerPageV1,
 ) -> Result<(), RegistryErrorV1> {
     page.validate_for(request).map_err(|_| invalid_response())
 }
-
 fn invalid_public_config() -> RegistryErrorV1 {
     RegistryErrorV1::new(
         RegistryFailureClassV1::Permanent,
         "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
     )
 }
-
 fn registry_backend_error(error: RegistryErrorV1) -> PublicationBackendError {
     match error.class() {
         RegistryFailureClassV1::Retryable => PublicationBackendError::retryable(error.code()),
@@ -2408,7 +2308,6 @@ fn registry_backend_error(error: RegistryErrorV1) -> PublicationBackendError {
         | RegistryFailureClassV1::StaleCursor => PublicationBackendError::permanent(error.code()),
     }
 }
-
 fn read_bounded_config(path: &Path) -> Result<Vec<u8>, RegistryErrorV1> {
     read_bounded_platform_config_v1(path).map_err(|error| {
         let code = if error.kind() == std::io::ErrorKind::NotFound {
@@ -2419,11 +2318,9 @@ fn read_bounded_config(path: &Path) -> Result<Vec<u8>, RegistryErrorV1> {
         RegistryErrorV1::new(RegistryFailureClassV1::Permanent, code)
     })
 }
-
 #[cfg(test)]
 mod tests {
     use std::{cell::Cell, io::Write as _, net::TcpListener, time::Duration};
-
     use iroha::crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
         NetworkId,
@@ -2455,18 +2352,34 @@ mod tests {
         transaction::{Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder},
     };
     use tempfile::tempdir;
-
     use super::*;
     use crate::publish::{
         PublicationReleaseSignedEnvelopeV1, PublicationReleaseSubmissionTerminalReasonV1,
     };
-
     fn test_network_id(byte: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([byte; Hash::LENGTH]),
         ))
     }
+    fn authenticated_reader_config(url: &str) -> String {
+        let signer = KeyPair::try_from_seed(vec![0x59; 32], Algorithm::Ed25519)
+            .expect("authenticated reader key");
+        format!(
+            r#"
+chain = "musubi-registry-test"
+network_id = "{}"
+torii_url = "{url}"
 
+[account]
+profile = "taira"
+public_key = "{}"
+private_key = "{}"
+"#,
+            test_network_id(0x15),
+            signer.public_key(),
+            ExposedPrivateKey(signer.private_key().clone()),
+        )
+    }
     fn serve_http_once(
         status: &'static str,
         response: Vec<u8>,
@@ -2519,17 +2432,14 @@ mod tests {
             server,
         )
     }
-
     fn serve_json_once(response: Vec<u8>) -> (Url, thread::JoinHandle<Vec<u8>>) {
         serve_http_once("200 OK", response)
     }
-
     #[derive(Debug)]
     struct HttpRequestCapture {
         path: String,
         body: Vec<u8>,
     }
-
     fn serve_http_sequence(
         responses: Vec<(&'static str, Vec<u8>)>,
     ) -> (Url, thread::JoinHandle<Vec<HttpRequestCapture>>) {
@@ -2594,7 +2504,6 @@ mod tests {
             server,
         )
     }
-
     fn retention_page(
         archive_ids: &[ArchiveId],
         snapshot: MusubiRegistrySnapshotV1,
@@ -2616,7 +2525,6 @@ mod tests {
             finalized_time_ms: 1_700_000_000_000,
         }
     }
-
     #[test]
     fn archive_retention_client_binds_snapshot_and_exact_item_order() {
         let archive_ids = vec![ArchiveId::new([0x11; 32]), ArchiveId::new([0x22; 32])];
@@ -2629,12 +2537,11 @@ mod tests {
             archive_ids: archive_ids.clone(),
             expected_snapshot: Some(snapshot),
         };
-
         let valid = retention_page(&archive_ids, snapshot);
         let (url, server) =
             serve_json_once(norito::json::to_vec(&valid).expect("retention page JSON"));
-        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 753)
-            .expect("signer-free registry client");
+        let client = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 753)
+            .expect("authenticated registry client");
         assert_eq!(
             client
                 .archive_retention(&request)
@@ -2642,13 +2549,12 @@ mod tests {
             valid
         );
         server.join().expect("query server");
-
         let mut stale = retention_page(&archive_ids, snapshot);
         stale.snapshot.finalized_height += 1;
         stale.snapshot.finalized_block_hash = [0x72; 32];
         let (url, server) = serve_json_once(norito::json::to_vec(&stale).expect("stale page JSON"));
-        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 753)
-            .expect("signer-free registry client");
+        let client = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 753)
+            .expect("authenticated registry client");
         assert_eq!(
             client
                 .archive_retention(&request)
@@ -2657,14 +2563,13 @@ mod tests {
             "MUSUBI_REGISTRY_RESPONSE_INVALID"
         );
         server.join().expect("query server");
-
         let mismatched_ids = vec![archive_ids[0], ArchiveId::new([0x33; 32])];
         let mismatched = retention_page(&mismatched_ids, snapshot);
         let (url, server) = serve_json_once(
             norito::json::to_vec(&mismatched).expect("mismatched retention page JSON"),
         );
-        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 753)
-            .expect("signer-free registry client");
+        let client = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 753)
+            .expect("authenticated registry client");
         assert_eq!(
             client
                 .archive_retention(&request)
@@ -2673,12 +2578,11 @@ mod tests {
             "MUSUBI_REGISTRY_RESPONSE_INVALID"
         );
         server.join().expect("query server");
-
         let reversed = retention_page(&[archive_ids[1], archive_ids[0]], snapshot);
         let (url, server) =
             serve_json_once(norito::json::to_vec(&reversed).expect("reversed page JSON"));
-        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 753)
-            .expect("signer-free registry client");
+        let client = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 753)
+            .expect("authenticated registry client");
         assert_eq!(
             client
                 .archive_retention(&request)
@@ -2688,15 +2592,14 @@ mod tests {
         );
         server.join().expect("query server");
     }
-
     #[test]
     fn archive_retention_rejects_an_invalid_request_before_network_io() {
-        let client = RegistryReadClientV1::new(
+        let client = RegistryReadClientV1::new_for_test(
             "http://127.0.0.1:9/".parse().expect("loopback URL"),
             Duration::from_secs(1),
             753,
         )
-        .expect("signer-free reader");
+        .expect("authenticated reader");
         let error = client
             .archive_retention(&MusubiArchiveRetentionQueryV1 {
                 archive_ids: Vec::new(),
@@ -2705,32 +2608,20 @@ mod tests {
             .expect_err("invalid retention request must fail before transport");
         assert_eq!(error.code(), "MUSUBI_REGISTRY_RETENTION_REQUEST_INVALID");
     }
-
     #[cfg(unix)]
     #[test]
-    fn public_config_ignores_signer_fields() {
+    fn authenticated_config_image_loads_one_exact_signer_and_redacts_it() {
         let temporary = tempdir().expect("temporary directory");
         let path = temporary.path().join("client.toml");
-        fs::write(
-            &path,
-            r#"
-                torii_url = "https://registry.example/iroha/"
-                [account]
-                profile = "taira"
-                public_key = "deliberately-not-a-key"
-                private_key = "must-not-be-parsed"
-            "#,
-        )
-        .expect("write public config fixture");
-
+        let source = authenticated_reader_config("https://registry.example/iroha/");
+        fs::write(&path, &source).expect("write authenticated config fixture");
         let (client, image) = RegistryReadClientV1::load_with_config_image(Some(&path))
-            .expect("load URL and exact bounded image");
+            .expect("load signer and exact bounded image");
         assert_eq!(
             client.torii_url().as_str(),
             "https://registry.example/iroha/"
         );
         assert_eq!(client.account_chain_discriminant(), 369);
-
         let same_bytes = fs::read(&path).expect("read the selected config image");
         assert_eq!(image.path(), path.as_path());
         assert_eq!(image.bytes(), same_bytes.as_slice());
@@ -2741,41 +2632,69 @@ mod tests {
         changed_bytes.push(b'\n');
         assert!(!provenance.matches(&changed_bytes));
         let image_debug = format!("{image:?}");
-        assert!(!image_debug.contains("must-not-be-parsed"));
+        assert!(!image_debug.contains(&source));
         assert!(!image_debug.contains(path.to_string_lossy().as_ref()));
+        let client_debug = format!("{client:?}");
+        assert!(!client_debug.contains("private_key"));
+        assert!(!client_debug.contains("ed0120"));
         let provenance_debug = format!("{provenance:?}");
-        assert!(!provenance_debug.contains("must-not-be-parsed"));
+        assert!(!provenance_debug.contains(&source));
         assert!(!provenance_debug.contains(path.to_string_lossy().as_ref()));
         assert!(
             !provenance_debug
                 .contains(&hex::encode(platform_config_provenance_digest(&same_bytes)))
         );
-        let from_bytes = RegistryReadClientV1::load_from_config_bytes(&same_bytes)
-            .expect("load public context from the already-read image");
+        let from_bytes = RegistryReadClientV1::load_from_config_bytes(&path, &same_bytes)
+            .expect("load authenticated context from the already-read image");
         assert_eq!(from_bytes.torii_url(), client.torii_url());
         assert_eq!(
             from_bytes.account_chain_discriminant(),
             client.account_chain_discriminant()
         );
     }
-
+    #[cfg(unix)]
+    #[test]
+    fn authenticated_config_rejects_missing_and_foreign_account_keys_before_dispatch() {
+        let temporary = tempdir().expect("temporary directory");
+        let path = temporary.path().join("client.toml");
+        let valid = authenticated_reader_config("http://127.0.0.1:9/");
+        let missing = valid
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("private_key ="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let foreign = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
+            .expect("foreign account key");
+        let foreign_private = ExposedPrivateKey(foreign.private_key().clone()).to_string();
+        let mismatched = valid
+            .lines()
+            .map(|line| {
+                if line.trim_start().starts_with("private_key =") {
+                    format!("private_key = \"{foreign_private}\"")
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for source in [missing, mismatched] {
+            fs::write(&path, source).expect("write rejected authenticated config");
+            let error = RegistryReadClientV1::load_with_config_image(Some(&path))
+                .expect_err("missing or foreign signer must fail before dispatch");
+            assert_eq!(error.code(), "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID");
+        }
+    }
     #[cfg(unix)]
     #[test]
     fn public_config_image_rejects_symbolic_and_hard_links() {
         use std::os::unix::fs::symlink;
-
         let temporary = tempdir().expect("temporary directory");
         let path = temporary.path().join("client.toml");
         fs::write(
             &path,
-            r#"
-                torii_url = "https://registry.example/iroha/"
-                [account]
-                profile = "taira"
-            "#,
+            authenticated_reader_config("https://registry.example/iroha/"),
         )
-        .expect("write public config fixture");
-
+        .expect("write authenticated config fixture");
         let symbolic = temporary.path().join("symbolic.toml");
         symlink(&path, &symbolic).expect("create symbolic link");
         assert_eq!(
@@ -2784,7 +2703,6 @@ mod tests {
                 .code(),
             "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID"
         );
-
         let hard = temporary.path().join("hard.toml");
         fs::hard_link(&path, &hard).expect("create hard link");
         for linked in [&path, &hard] {
@@ -2796,7 +2714,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn public_config_image_anchors_a_relative_selection_once() {
@@ -2806,44 +2723,35 @@ mod tests {
         let path = temporary.path().join("client.toml");
         fs::write(
             &path,
-            r#"
-                torii_url = "https://registry.example/iroha/"
-                [account]
-                profile = "taira"
-            "#,
+            authenticated_reader_config("https://registry.example/iroha/"),
         )
-        .expect("write public config fixture");
+        .expect("write authenticated config fixture");
         let relative = path
             .strip_prefix(&current)
             .expect("temporary path is below current directory");
-
         let (_, image) = RegistryReadClientV1::load_with_config_image(Some(relative))
             .expect("load relative public configuration");
         assert!(image.path().is_absolute());
         assert_eq!(image.path(), path.as_path());
     }
-
     #[cfg(not(unix))]
     #[test]
     fn public_config_is_unsupported_before_path_io() {
         let parent = tempdir().expect("temporary parent");
         let path = parent.path().join("must-remain-absent/client.toml");
-
         let error = RegistryReadClientV1::load_with_config_image(Some(&path))
             .expect_err("non-Unix public configuration must fail closed");
-
         assert_eq!(error.code(), "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID");
         assert!(!path.parent().expect("requested path has a parent").exists());
     }
-
     #[test]
     fn search_rejects_an_invalid_request_before_network_io() {
-        let client = RegistryReadClientV1::new(
+        let client = RegistryReadClientV1::new_for_test(
             "http://127.0.0.1:9/".parse().expect("loopback URL"),
             Duration::from_secs(1),
             753,
         )
-        .expect("signer-free reader");
+        .expect("authenticated reader");
         let error = client
             .search(&MusubiSearchQueryV1 {
                 query: String::new(),
@@ -2855,7 +2763,6 @@ mod tests {
             .expect_err("invalid search must fail before transport");
         assert_eq!(error.code(), "MUSUBI_REGISTRY_SEARCH_REQUEST_INVALID");
     }
-
     #[test]
     fn signing_client_parses_account_arguments_under_its_taira_profile() {
         let temporary = tempdir().expect("temporary directory");
@@ -2885,7 +2792,6 @@ mod tests {
         let signing = RegistrySigningClientV1::load(Some(&path)).expect("load Taira signer");
         assert_eq!(signing.account_chain_discriminant(), 369);
         assert!(!format!("{signing:?}").contains(&private_key));
-
         let expected = account(90);
         let taira_literal = {
             let _chain_discriminant = ChainDiscriminantGuard::enter(369);
@@ -2897,7 +2803,6 @@ mod tests {
                 .expect("Taira account argument"),
             expected
         );
-
         let default_literal = {
             let _chain_discriminant = ChainDiscriminantGuard::enter(753);
             expected.canonical_i105().expect("default-network literal")
@@ -2907,7 +2812,6 @@ mod tests {
             .expect_err("another network's account literal must be rejected");
         assert_eq!(error.code(), "MUSUBI_ACCOUNT_ID_INVALID");
     }
-
     fn signing_client_at(
         url: &Url,
         signer_keypair: &KeyPair,
@@ -2936,7 +2840,6 @@ mod tests {
         .expect("write signing client fixture");
         RegistrySigningClientV1::load(Some(&path)).expect("load signing client fixture")
     }
-
     fn signed_status_probe(signer: &KeyPair) -> SignedTransaction {
         let authority = AccountId::new(signer.public_key().clone());
         let mut builder = TransactionBuilder::new(
@@ -2948,7 +2851,6 @@ mod tests {
         builder.set_creation_time(Duration::from_millis(900));
         builder.sign(signer.private_key())
     }
-
     fn transaction_status_body_for_hash(hash: &str, kind: &str) -> Vec<u8> {
         norito::json::to_vec(&norito::json!({
             "hash": hash,
@@ -2958,17 +2860,14 @@ mod tests {
         }))
         .expect("transaction status JSON")
     }
-
     fn transaction_status_body(transaction: &SignedTransaction, kind: &str) -> Vec<u8> {
         transaction_status_body_for_hash(&transaction.hash().to_string(), kind)
     }
-
     #[test]
     fn signing_client_maps_applied_and_pending_transaction_statuses_over_http() {
         let signer = KeyPair::try_from_seed(vec![92; 32], Algorithm::Ed25519)
             .expect("status signer fixture");
         let transaction = signed_status_probe(&signer);
-
         for (kind, expected) in [
             (
                 "Applied",
@@ -2987,13 +2886,11 @@ mod tests {
             server.join().expect("status server");
         }
     }
-
     #[test]
     fn signing_client_maps_rejected_and_absent_transaction_statuses_over_http() {
         let signer = KeyPair::try_from_seed(vec![93; 32], Algorithm::Ed25519)
             .expect("status signer fixture");
         let transaction = signed_status_probe(&signer);
-
         let (url, server) = serve_json_once(transaction_status_body(&transaction, "Rejected"));
         let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         let state = signing
@@ -3007,7 +2904,6 @@ mod tests {
             }
         );
         server.join().expect("rejected status server");
-
         let (url, server) = serve_http_once("404 Not Found", Vec::new());
         let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         assert_eq!(
@@ -3018,7 +2914,6 @@ mod tests {
         );
         server.join().expect("absent status server");
     }
-
     #[test]
     fn signing_client_requires_state_finality_and_height_for_terminal_statuses() {
         let signer = KeyPair::try_from_seed(vec![97; 32], Algorithm::Ed25519)
@@ -3042,7 +2937,6 @@ mod tests {
             RegistryTransactionStateV1::Pending
         );
         server.join().expect("cached rejection server");
-
         let heightless_applied_hash = transaction_hash.clone();
         let heightless_applied = norito::json::to_vec(&norito::json!({
             "hash": heightless_applied_hash,
@@ -3059,7 +2953,6 @@ mod tests {
         assert_eq!(error.class(), RegistryFailureClassV1::Permanent);
         assert_eq!(error.code(), "MUSUBI_REGISTRY_TRANSACTION_STATUS_INVALID");
         server.join().expect("heightless applied server");
-
         let (url, server) = serve_json_once(transaction_status_body(&transaction, "Expired"));
         let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         assert_eq!(
@@ -3072,7 +2965,6 @@ mod tests {
             }
         );
         server.join().expect("state-final expiry server");
-
         let zero_height_expiry = norito::json::to_vec(&norito::json!({
             "hash": transaction_hash,
             "status": { "kind": "Expired", "block_height": 0 },
@@ -3088,7 +2980,6 @@ mod tests {
         assert_eq!(error.code(), "MUSUBI_REGISTRY_TRANSACTION_STATUS_INVALID");
         server.join().expect("zero-height expiry server");
     }
-
     #[test]
     fn signing_client_rejects_a_status_response_for_another_transaction() {
         let signer = KeyPair::try_from_seed(vec![96; 32], Algorithm::Ed25519)
@@ -3109,7 +3000,6 @@ mod tests {
         );
         server.join().expect("wrong-hash status server");
     }
-
     #[test]
     fn mutation_submission_hash_must_match_the_locally_signed_transaction() {
         validate_mutation_submission_hash([0x41; 32], [0x41; 32])
@@ -3119,7 +3009,6 @@ mod tests {
         assert_eq!(error.class(), RegistryFailureClassV1::Permanent);
         assert_eq!(error.code(), "MUSUBI_REGISTRY_TRANSACTION_HASH_MISMATCH");
     }
-
     #[test]
     fn public_queries_decode_accounts_with_the_configured_discriminant() {
         let expected = account(91);
@@ -3128,9 +3017,8 @@ mod tests {
             norito::json::to_vec(&expected).expect("account response JSON")
         };
         let (url, server) = serve_json_once(response);
-        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 369)
+        let client = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 369)
             .expect("Taira registry reader");
-
         let actual: AccountId = client
             .query_required(
                 PublicMusubiQueryPathV1::Maintainers,
@@ -3140,7 +3028,6 @@ mod tests {
         assert_eq!(actual, expected);
         server.join().expect("query server");
     }
-
     #[test]
     fn namespace_binding_derives_an_absent_package_identity() {
         let selector: MusubiPackageSelectorV1 =
@@ -3151,13 +3038,11 @@ mod tests {
             scope: MusubiPackageScopeV1::Domain("dex".parse().expect("domain")),
             generation: 4,
         };
-
         let package = package_id_from_namespace_binding(&selector, &binding)
             .expect("namespace binding is enough before a package row exists");
         assert_eq!(package.home_dataspace, DataSpaceId::new(7));
         assert_eq!(package.scope, binding.scope);
         assert_eq!(package.name, selector.name);
-
         let other: MusubiPackageSelectorV1 = "other.universal/new-package"
             .parse()
             .expect("other selector");
@@ -3165,7 +3050,6 @@ mod tests {
             .expect_err("a response for another namespace must be rejected");
         assert_eq!(error.code(), "MUSUBI_REGISTRY_RESPONSE_INVALID");
     }
-
     #[test]
     fn exact_queries_reject_valid_records_for_another_identity() {
         let package = MusubiPackageIdV1::new(
@@ -3198,8 +3082,8 @@ mod tests {
             norito::json::to_vec(&package_record).expect("package record JSON")
         };
         let (url, server) = serve_json_once(package_response);
-        let client =
-            RegistryReadClientV1::new(url, Duration::from_secs(2), 369).expect("registry reader");
+        let client = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 369)
+            .expect("registry reader");
         let error = client
             .exact_package(requested_package.clone())
             .expect_err("an exact package response cannot cross identities");
@@ -3208,7 +3092,6 @@ mod tests {
         let query: MusubiExactPackageQueryV1 =
             norito::json::from_slice(&request_body).expect("exact package query JSON");
         assert_eq!(query.package, requested_package);
-
         let (request, _, _, _) = publication_fixture();
         let published_release = request.publication.manifest.release.clone();
         let release_snapshot = exact_release_snapshot(&request);
@@ -3226,8 +3109,8 @@ mod tests {
             norito::json::to_vec(&release_snapshot).expect("release snapshot JSON")
         };
         let (url, server) = serve_json_once(release_response);
-        let client =
-            RegistryReadClientV1::new(url, Duration::from_secs(2), 369).expect("registry reader");
+        let client = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 369)
+            .expect("registry reader");
         let error = client
             .exact_release(requested_release.clone())
             .expect_err("an exact release response cannot cross identities");
@@ -3237,7 +3120,6 @@ mod tests {
             norito::json::from_slice(&request_body).expect("exact release query JSON");
         assert_eq!(query.release, requested_release);
     }
-
     #[test]
     fn maintainer_page_accepts_members_and_pending_invites_for_the_requested_package() {
         let package = MusubiPackageIdV1::new(
@@ -3284,7 +3166,6 @@ mod tests {
         };
         validate_maintainer_page(&request, &page)
             .expect("accepted and pending entries share the requested package");
-
         let foreign_package = MusubiPackageIdV1::new(
             DataSpaceId::new(8),
             MusubiPackageScopeV1::DataspaceRoot,
@@ -3308,7 +3189,6 @@ mod tests {
             .expect_err("a package-crossing directory response must be rejected");
         assert_eq!(error.code(), "MUSUBI_REGISTRY_RESPONSE_INVALID");
     }
-
     #[test]
     fn bind_selector_namespace_uses_a_namespace_prefix_without_requiring_a_row() {
         let selector: MusubiPackageSelectorV1 =
@@ -3336,15 +3216,13 @@ mod tests {
         };
         let response = norito::json::to_vec(&page).expect("directory response JSON");
         let (url, server) = serve_json_once(response);
-        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 753)
-            .expect("signer-free registry client");
-
+        let client = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 753)
+            .expect("authenticated registry client");
         let package = client
             .bind_selector_namespace(&selector)
             .expect("empty namespace directory still binds a package");
         assert_eq!(package.home_dataspace, DataSpaceId::new(7));
         assert_eq!(package.name, selector.name);
-
         let request_body = server.join().expect("query server");
         let query: MusubiOrderedPrefixQueryV1 =
             norito::json::from_slice(&request_body).expect("ordered-prefix request JSON");
@@ -3352,18 +3230,15 @@ mod tests {
         assert_eq!(query.page.limit, 1);
         assert!(query.page.cursor.is_none());
     }
-
     struct CountingReader<'a> {
         reads: &'a Cell<usize>,
     }
-
     impl Read for CountingReader<'_> {
         fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
             self.reads.set(self.reads.get() + 1);
             Ok(0)
         }
     }
-
     #[test]
     fn missing_seed_ingress_fails_before_reading_car() {
         let mut runtime = UnavailablePublicationRuntimeV1;
@@ -3380,7 +3255,6 @@ mod tests {
             chunks: Vec::new(),
             files: Vec::new(),
         };
-
         // The service does not inspect the binding, commitment, plan, or reader before refusing.
         let error = runtime
             .stage_authenticated_seed_ingress(
@@ -3394,7 +3268,6 @@ mod tests {
         assert_eq!(error.code(), "SEED_INGRESS_SERVICE_NOT_CONFIGURED");
         assert_eq!(reads.get(), 0);
     }
-
     fn publication_commitment() -> MusubiArchiveCommitmentV1 {
         MusubiArchiveCommitmentV1 {
             root_cid: ManifestRootCid::from_blake3_digest([0x31; 32]).expect("root CID"),
@@ -3417,7 +3290,6 @@ mod tests {
             chunk_count: 4,
         }
     }
-
     #[expect(
         clippy::too_many_lines,
         reason = "the fixture constructs one cryptographically coherent publication request and intent"
@@ -3530,7 +3402,6 @@ mod tests {
             .expect("registration intent fixture");
         (request, publisher_key, broker_key, intent)
     }
-
     fn exact_release_snapshot(request: &PublicationRequestV1) -> MusubiExactReleaseSnapshotV1 {
         let manifest = request.publication.manifest.clone();
         let yank = MusubiReleaseYankV1 {
@@ -3586,7 +3457,6 @@ mod tests {
             },
         }
     }
-
     fn archive_page(
         request: &PublicationRequestV1,
         receipt: MusubiSeedIngressReceiptV1,
@@ -3611,7 +3481,6 @@ mod tests {
             },
         }
     }
-
     fn release_resolver_page(
         request: &PublicationRequestV1,
         items: Vec<MusubiResolverReleaseRowV1>,
@@ -3633,7 +3502,6 @@ mod tests {
             snapshot,
         }
     }
-
     fn release_absence_retention_page(
         request: &PublicationRequestV1,
         snapshot: MusubiRegistrySnapshotV1,
@@ -3661,7 +3529,6 @@ mod tests {
             finalized_time_ms,
         }
     }
-
     fn release_submission_fixture() -> (
         PublicationRequestV1,
         KeyPair,
@@ -3768,7 +3635,6 @@ mod tests {
         .expect("valid release submission fixture");
         (request, publisher_key, intent)
     }
-
     fn publication_absence(
         request: &PublicationRequestV1,
         finalized_time_ms: u64,
@@ -3791,14 +3657,12 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn finalized_idempotent_release_requires_exact_commitments_and_original_publisher() {
         let (request, _, _, _) = publication_fixture();
         let exact = exact_release_snapshot(&request);
         validate_finalized_idempotent_release(&request, &exact)
             .expect("same-publisher exact release is replay-safe");
-
         let mut another_publisher = exact.clone();
         another_publisher.home_release.published_by = account(99);
         another_publisher
@@ -3808,7 +3672,6 @@ mod tests {
             .expect_err("another publisher's release cannot authorize replay");
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
         assert_eq!(error.code(), "RELEASE_FINALIZED_PUBLISHER_CONFLICT");
-
         let mut another_commitment = exact;
         another_commitment.home_release.manifest.interface_digest =
             MusubiContentDigestV1::new([0x91; 32]);
@@ -3825,7 +3688,6 @@ mod tests {
             .expect_err("different immutable commitments cannot be replayed");
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
         assert_eq!(error.code(), "RELEASE_FINALIZED_COMMITMENT_CONFLICT");
-
         let resolver_snapshot = another_commitment.snapshot;
         let mut same_height_fork = resolver_snapshot;
         same_height_fork.finalized_block_hash = [0x92; 32];
@@ -3835,7 +3697,6 @@ mod tests {
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
         assert_eq!(error.code(), "RELEASE_FINALIZED_SNAPSHOT_CONFLICT");
     }
-
     #[test]
     fn absent_exact_transaction_with_matching_release_remains_location_gated() {
         let (request, publisher_key, intent) = release_submission_fixture();
@@ -3857,7 +3718,7 @@ mod tests {
             ("200 OK", resolver_json),
             ("200 OK", exact_json),
         ]);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let mut backend = RegistryPublicationBackendV1::new(
@@ -3867,7 +3728,6 @@ mod tests {
             &request,
         )
         .expect("publication backend");
-
         assert!(matches!(
             backend
                 .submit_or_recover_release_submission(
@@ -3897,7 +3757,6 @@ mod tests {
         let exact_query: MusubiExactReleaseQueryV1 =
             norito::json::from_slice(&requests[2].body).expect("exact release query JSON");
         assert_eq!(exact_query.release, request.publication.manifest.release);
-
         validate_finalized_idempotent_release(&request, &exact)
             .expect("matching finalized release authorizes exact replay");
         let sends = Cell::new(0);
@@ -3918,7 +3777,6 @@ mod tests {
         );
         assert_eq!(sends.get(), 1, "a stale location gate suppresses the send");
     }
-
     #[test]
     fn finalized_release_absence_rejects_a_foreign_network_resolver_page() {
         let (request, publisher_key, _, _) = publication_fixture();
@@ -3940,7 +3798,7 @@ mod tests {
             norito::json::to_vec(&resolver).expect("foreign resolver page JSON")
         };
         let (url, server) = serve_json_once(response);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let backend = RegistryPublicationBackendV1::new(
@@ -3950,7 +3808,6 @@ mod tests {
             &request,
         )
         .expect("publication backend");
-
         let error = backend
             .finalized_release_absence(&request, None)
             .expect_err("a foreign resolver page cannot prove release absence");
@@ -3958,7 +3815,6 @@ mod tests {
         assert_eq!(error.code(), "RELEASE_FINALIZED_NETWORK_CONFLICT");
         server.join().expect("foreign resolver query server");
     }
-
     #[test]
     fn finalized_archive_absence_rejects_a_foreign_network_retention_page() {
         let (request, publisher_key, _, _) = publication_fixture();
@@ -3977,7 +3833,7 @@ mod tests {
             norito::json::to_vec(&retention).expect("foreign retention page JSON")
         };
         let (url, server) = serve_json_once(response);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let backend = RegistryPublicationBackendV1::new(
@@ -3987,7 +3843,6 @@ mod tests {
             &request,
         )
         .expect("publication backend");
-
         let error = backend
             .finalized_archive_absence(&request, None)
             .expect_err("a foreign retention page cannot prove archive absence");
@@ -3995,7 +3850,6 @@ mod tests {
         assert_eq!(error.code(), "ARCHIVE_ABSENCE_NETWORK_CONFLICT");
         server.join().expect("foreign retention query server");
     }
-
     #[test]
     fn pending_release_becomes_terminal_after_finalized_deadline_and_exact_absence() {
         let (request, publisher_key, intent) = release_submission_fixture();
@@ -4022,7 +3876,7 @@ mod tests {
             ("200 OK", resolver_json),
             ("200 OK", retention_json),
         ]);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let mut backend = RegistryPublicationBackendV1::new(
@@ -4032,7 +3886,6 @@ mod tests {
             &request,
         )
         .expect("publication backend");
-
         let terminal = match backend
             .submit_or_recover_release_submission(request.operation_id(), &request, &intent, true)
             .expect("pending status must still check the finalized deadline")
@@ -4057,7 +3910,6 @@ mod tests {
         let requests = server.join().expect("status and absence query server");
         assert_eq!(requests.len(), 3, "pending expiry must not resubmit");
     }
-
     #[test]
     fn finalized_chain_time_rotates_only_after_deadline_and_exact_absence() {
         let (request, _, _, intent) = publication_fixture();
@@ -4072,7 +3924,6 @@ mod tests {
             .expect("valid nonterminal evidence")
             .is_none()
         );
-
         let terminal = terminal_after_finalized_validity_window(
             &request,
             &intent,
@@ -4081,7 +3932,6 @@ mod tests {
         .expect("valid terminal evidence")
         .expect("deadline has elapsed");
         assert_eq!(terminal.transaction_hash, intent.transaction_hash);
-
         let mut wrong_archive = publication_absence(&request, valid_until_ms + 1);
         wrong_archive.decision.archive_id = ArchiveId::new([0xff; 32]);
         assert_eq!(
@@ -4091,7 +3941,6 @@ mod tests {
             "ARCHIVE_ABSENCE_RESPONSE_INVALID"
         );
     }
-
     #[test]
     fn production_prebuild_and_submission_hash_check_preserve_the_exact_transaction() {
         let (request, publisher_key, _, intent) = publication_fixture();
@@ -4129,8 +3978,7 @@ mod tests {
                 .code(),
             "RELEASE_SUBMISSION_TRANSACTION_HASH_MISMATCH"
         );
-
-        let read = RegistryReadClientV1::new(
+        let read = RegistryReadClientV1::new_for_test(
             "http://127.0.0.1:9/".parse().expect("loopback URL"),
             Duration::from_secs(1),
             753,
@@ -4147,7 +3995,6 @@ mod tests {
         };
         assert_eq!(error.code(), "MUSUBI_PUBLICATION_REGISTRY_PROFILE_MISMATCH");
     }
-
     #[test]
     fn compact_release_reconstruction_matches_the_production_torii_body() {
         let (request, publisher_key, _, _) = publication_fixture();
@@ -4170,13 +4017,11 @@ mod tests {
         let reconstructed = envelope
             .reconstruct_signed_transaction(&request)
             .expect("reconstructed exact release transaction");
-
         let submitted = signing.client.prepare_transaction_payload(&signed);
         let replayed = signing.client.prepare_transaction_payload(&reconstructed);
         assert_eq!(replayed.hash(), submitted.hash());
         assert_eq!(replayed.as_bytes(), submitted.as_bytes());
     }
-
     #[test]
     fn final_publication_verification_uses_one_paired_exact_release_query() {
         let (request, publisher_key, _, _) = publication_fixture();
@@ -4186,7 +4031,7 @@ mod tests {
             norito::json::to_vec(&exact_release).expect("exact release snapshot JSON")
         };
         let (url, server) = serve_json_once(response);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let mut backend = RegistryPublicationBackendV1::new(
@@ -4206,7 +4051,6 @@ mod tests {
         );
         let submission =
             PublicationAmxSubmissionV1::new(operation_id, &instruction, [0x72; 32], 55);
-
         let evidence = backend
             .finalized_release_and_index(operation_id, &request, &submission)
             .expect("paired final query succeeds")
@@ -4215,13 +4059,11 @@ mod tests {
         assert_eq!(evidence.snapshot, exact_release.snapshot);
         assert_eq!(evidence.home_release, exact_release.home_release);
         assert_eq!(evidence.universal_release, exact_release.universal_release);
-
         let request_body = server.join().expect("exact release query server");
         let query: MusubiExactReleaseQueryV1 =
             norito::json::from_slice(&request_body).expect("exact release query JSON");
         assert_eq!(query.release, request.publication.manifest.release);
     }
-
     #[test]
     fn final_publication_verification_rejects_a_foreign_network_snapshot() {
         let (request, publisher_key, _, _) = publication_fixture();
@@ -4235,7 +4077,7 @@ mod tests {
             norito::json::to_vec(&exact_release).expect("foreign exact release snapshot JSON")
         };
         let (url, server) = serve_json_once(response);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let mut backend = RegistryPublicationBackendV1::new(
@@ -4255,7 +4097,6 @@ mod tests {
         );
         let submission =
             PublicationAmxSubmissionV1::new(operation_id, &instruction, [0x72; 32], 55);
-
         let error = backend
             .finalized_release_and_index(operation_id, &request, &submission)
             .expect_err("a foreign network response cannot become final evidence");
@@ -4263,7 +4104,6 @@ mod tests {
         assert_eq!(error.code(), "RELEASE_FINALIZED_NETWORK_CONFLICT");
         server.join().expect("foreign exact release query server");
     }
-
     #[test]
     fn production_recovery_binds_the_finalized_authoritative_archive_page() {
         let (request, publisher_key, broker_key, intent) = publication_fixture();
@@ -4273,7 +4113,7 @@ mod tests {
             norito::json::to_vec(&exact_page).expect("archive page JSON")
         };
         let (url, server) = serve_json_once(exact_page_json);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let backend = RegistryPublicationBackendV1::new(
@@ -4296,7 +4136,6 @@ mod tests {
         let query: MusubiArchiveLocationQueryV1 =
             norito::json::from_slice(&request_body).expect("archive query JSON");
         assert_eq!(query.archive_id, intent.archive_id);
-
         let mut replacement_payload = intent.staging_receipt.payload.clone();
         replacement_payload.issued_at_ms = 1_100;
         replacement_payload.expires_at_ms = 2_100;
@@ -4320,7 +4159,7 @@ mod tests {
             norito::json::to_vec(&conflicting_page).expect("conflicting archive page JSON")
         };
         let (url, server) = serve_json_once(conflicting_page_json);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let backend = RegistryPublicationBackendV1::new(
@@ -4336,7 +4175,6 @@ mod tests {
         assert_eq!(error.code(), "ARCHIVE_REGISTRATION_CONFLICT");
         server.join().expect("conflicting archive query server");
     }
-
     #[test]
     fn terminal_transaction_status_still_recovers_an_exact_finalized_archive() {
         let (request, publisher_key, _, intent) = publication_fixture();
@@ -4346,7 +4184,7 @@ mod tests {
             norito::json::to_vec(&exact_page).expect("archive page JSON")
         };
         let (url, server) = serve_json_once(response);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let backend = RegistryPublicationBackendV1::new(
@@ -4356,7 +4194,6 @@ mod tests {
             &request,
         )
         .expect("publication backend");
-
         let outcome = backend
             .terminal_registration_state(
                 &request,
@@ -4372,13 +4209,11 @@ mod tests {
         assert_eq!(registered.snapshot, exact_page.snapshot);
         server.join().expect("archive query server");
     }
-
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive fixture key pair");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn binding() -> MusubiSeedIngressReceiptBindingV1 {
         MusubiSeedIngressReceiptBindingV1 {
             network_id: test_network_id(1),
@@ -4392,7 +4227,6 @@ mod tests {
             nonce: [9; 32],
         }
     }
-
     #[test]
     fn polling_policy_rejects_unbounded_delay() {
         let error = PublicationPollPolicyV1 {

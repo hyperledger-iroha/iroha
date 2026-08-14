@@ -1,8 +1,6 @@
 //! Randomized/adversarial corpus comparing AVX2 Stage-1 to scalar reference (x86_64).
 #![cfg(all(feature = "json", target_arch = "x86_64"))]
-
 use norito::json::{build_struct_index, build_struct_index_scalar_test};
-
 fn make_mix(seed: u64, kib: usize) -> String {
     let mut rng = seed;
     let pats = [
@@ -35,7 +33,6 @@ fn make_mix(seed: u64, kib: usize) -> String {
     s.push(']');
     s
 }
-
 #[test]
 fn random_avx2_parity_or_skip() {
     if !std::is_x86_feature_detected!("avx2") {

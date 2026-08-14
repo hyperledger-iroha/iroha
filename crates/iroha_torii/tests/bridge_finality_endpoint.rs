@@ -1,11 +1,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Bridge finality endpoints expose only Kura's exact Sumeragi-v2 artifact.
-
 use std::{
     num::{NonZeroU64, NonZeroUsize},
     sync::Arc,
 };
-
 use axum::{
     Router,
     body::{Body, Bytes, to_bytes},
@@ -41,7 +39,6 @@ use iroha_data_model::{
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
 use norito::codec::Encode as _;
 use tower::ServiceExt as _;
-
 struct EndpointFixture {
     app: Router,
     network_id: NetworkId,
@@ -49,12 +46,10 @@ struct EndpointFixture {
     artifact: V2FinalityArtifact,
     kura: Arc<Kura>,
 }
-
 fn checked_bls_validator_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("generate checked bridge finality BLS validator fixture keypair")
 }
-
 #[test]
 fn bridge_finality_validator_fixture_uses_checked_bls_key_generation() {
     let key_pair = checked_bls_validator_fixture();
@@ -62,10 +57,8 @@ fn bridge_finality_validator_fixture_uses_checked_bls_key_generation() {
         .public_key()
         .try_algorithm()
         .expect("fixture validator public key has a valid algorithm");
-
     assert_eq!(algorithm, Algorithm::BlsNormal);
 }
-
 fn exact_v2_fixture(network_id: NetworkId) -> (Arc<SignedBlock>, V2FinalityArtifact) {
     let mut keys = (0..4)
         .map(|_| checked_bls_validator_fixture())
@@ -81,7 +74,6 @@ fn exact_v2_fixture(network_id: NetworkId) -> (Arc<SignedBlock>, V2FinalityArtif
             power,
         })
         .collect::<Vec<_>>();
-
     let block_key = KeyPair::try_random().expect("generate block fixture key");
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero height"),
@@ -182,7 +174,6 @@ fn exact_v2_fixture(network_id: NetworkId) -> (Arc<SignedBlock>, V2FinalityArtif
         .expect("endpoint fixture is an exact cryptographically valid v2 artifact");
     (block, artifact)
 }
-
 fn endpoint_fixture(persist_artifact: bool) -> EndpointFixture {
     let cfg = test_utils::mk_minimal_root_cfg();
     let chain_id = cfg.common.chain.clone();
@@ -198,7 +189,6 @@ fn endpoint_fixture(persist_artifact: bool) -> EndpointFixture {
         assert_eq!(receipt.height(), artifact.height);
         assert_eq!(receipt.block_hash(), artifact.block_hash);
     }
-
     let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
         World::default(),
         Arc::clone(&kura),
@@ -233,7 +223,6 @@ fn endpoint_fixture(persist_artifact: bool) -> EndpointFixture {
         kura,
     }
 }
-
 async fn get_norito(app: &Router, uri: &str) -> (StatusCode, Bytes) {
     let mut request = Request::builder()
         .uri(uri)
@@ -254,7 +243,6 @@ async fn get_norito(app: &Router, uri: &str) -> (StatusCode, Bytes) {
         .expect("bounded endpoint body");
     (status, bytes)
 }
-
 #[tokio::test]
 async fn proof_and_bundle_endpoints_return_the_exact_durable_v2_artifact() {
     let fixture = endpoint_fixture(true);
@@ -269,7 +257,6 @@ async fn proof_and_bundle_endpoints_return_the_exact_durable_v2_artifact() {
         norito::decode_from_bytes(&bytes).expect("decode exact bridge finality proof");
     assert_eq!(proof.block_header, fixture.block.header());
     assert_eq!(proof.finality_artifact, fixture.artifact);
-
     let mut missing_anchor = BridgeFinalityVerifier::new(fixture.network_id);
     assert_eq!(
         missing_anchor.verify(&proof),
@@ -280,7 +267,6 @@ async fn proof_and_bundle_endpoints_return_the_exact_durable_v2_artifact() {
     verifier
         .verify(&proof)
         .expect("trusted verifier accepts exact endpoint proof");
-
     let (status, bytes) = get_norito(&fixture.app, "/v1/bridge/finality/bundle/1").await;
     assert_eq!(
         status,
@@ -304,7 +290,6 @@ async fn proof_and_bundle_endpoints_return_the_exact_durable_v2_artifact() {
         .verify_bundle(&bundle)
         .expect("trusted verifier accepts exact endpoint bundle");
 }
-
 #[tokio::test]
 async fn proof_endpoint_survives_body_eviction_via_retained_header_record() {
     let fixture = endpoint_fixture(true);
@@ -322,7 +307,6 @@ async fn proof_endpoint_survives_body_eviction_via_retained_header_record() {
         fixture.kura.get_block(height).is_none(),
         "historical body must actually be absent"
     );
-
     for uri in ["/v1/bridge/finality/1", "/v1/bridge/finality/bundle/1"] {
         let (status, bytes) = get_norito(&fixture.app, uri).await;
         assert_eq!(
@@ -333,7 +317,6 @@ async fn proof_endpoint_survives_body_eviction_via_retained_header_record() {
         );
     }
 }
-
 #[tokio::test]
 async fn proof_and_bundle_endpoints_fail_closed_when_the_sidecar_is_missing() {
     let fixture = endpoint_fixture(false);
@@ -342,7 +325,6 @@ async fn proof_and_bundle_endpoints_fail_closed_when_the_sidecar_is_missing() {
         assert_eq!(status, StatusCode::NOT_FOUND, "unexpected status for {uri}");
     }
 }
-
 #[tokio::test]
 async fn proof_and_bundle_endpoints_fail_closed_for_a_malformed_durable_envelope() {
     let fixture = endpoint_fixture(true);
@@ -359,7 +341,6 @@ async fn proof_and_bundle_endpoints_fail_closed_for_a_malformed_durable_envelope
         .join("00000000000000000001.norito");
     std::fs::write(&path, malformed.encode())
         .expect("replace the private versioned envelope with bare artifact bytes");
-
     for uri in ["/v1/bridge/finality/1", "/v1/bridge/finality/bundle/1"] {
         let (status, _) = get_norito(&fixture.app, uri).await;
         assert_eq!(

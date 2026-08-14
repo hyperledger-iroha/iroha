@@ -1,15 +1,11 @@
 //! Sponsored account-onboarding plan encoding for the Connect C ABI.
-
 use std::slice;
-
 use iroha_data_model::{NetworkId, account::AccountId};
 use libc::{c_int, c_uchar, c_ulong};
-
 use super::{
     BridgeError, DETACHED_TRANSACTION_JSON_MAX_BYTES, bridge_result_to_code, clear_bridge_output,
     write_bytes_bridge,
 };
-
 #[derive(Debug, norito::Encode, norito::JsonSerialize, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ConnectAccountOnboardingPlanRequestV1 {
@@ -18,7 +14,6 @@ pub(crate) struct ConnectAccountOnboardingPlanRequestV1 {
     pub(crate) account_id: String,
     pub(crate) permissions: Vec<String>,
 }
-
 #[derive(Debug, norito::Encode, norito::JsonSerialize, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ConnectAccountOnboardingPlanBodyV1 {
@@ -36,7 +31,6 @@ pub(crate) struct ConnectAccountOnboardingPlanBodyV1 {
         Option<iroha_data_model::alias_setup::AliasFramedInstructionV1>,
     pub(crate) valid_until_ms: u64,
 }
-
 /// Encode an exact sponsored-onboarding plan body from its typed JSON form.
 ///
 /// The returned buffer is the bare canonical Norito encoding committed by the

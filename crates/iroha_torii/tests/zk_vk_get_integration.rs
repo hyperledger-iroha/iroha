@@ -3,9 +3,7 @@
 #![allow(clippy::similar_names)]
 #![allow(clippy::redundant_closure_for_method_calls)]
 #![cfg(feature = "app_api")]
-
 use std::{convert::TryFrom, sync::Arc};
-
 use axum::{Router, routing::get};
 use base64::Engine as _;
 use http_body_util::BodyExt;
@@ -21,7 +19,6 @@ use iroha_data_model::{
 };
 use nonzero_ext::nonzero;
 use tower::ServiceExt as _;
-
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn zk_vk_get_returns_record_with_key() {
@@ -30,7 +27,6 @@ async fn zk_vk_get_returns_record_with_key() {
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query);
     let mut state = state;
-
     // Insert a verifying key record directly into WSV via a block transaction
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -62,7 +58,6 @@ async fn zk_vk_get_returns_record_with_key() {
     drop(stx);
     drop(block);
     iroha_core::query::insert_verifying_key_record_for_test(&mut state, id.clone(), rec);
-
     let state = Arc::new(state);
     let app = Router::new().route(
         "/v1/zk/vk/{backend}/{name}",
@@ -73,7 +68,6 @@ async fn zk_vk_get_returns_record_with_key() {
             }
         }),
     );
-
     // Encode backend with '/'
     let backend_enc = urlencoding::encode(backend);
     let uri = format!("/v1/zk/vk/{backend_enc}/{name}");
@@ -147,7 +141,6 @@ async fn zk_vk_get_returns_record_with_key() {
         .decode(b64)
         .unwrap();
     assert_eq!(decoded, vk_bytes);
-
     let record_b64 = v
         .get("record_norito_base64")
         .and_then(|x| x.as_str())
@@ -173,7 +166,6 @@ async fn zk_vk_get_returns_record_with_key() {
     assert_eq!(decoded_record.activation_height, Some(10));
     assert_eq!(decoded_record.withdraw_height, Some(20));
 }
-
 #[tokio::test]
 async fn zk_vk_get_not_found() {
     let kura = Kura::blank_kura_for_testing();

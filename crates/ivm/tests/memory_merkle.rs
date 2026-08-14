@@ -1,6 +1,5 @@
 use ivm::Memory;
 use sha2::{Digest, Sha256};
-
 // Paths are ordered leaf → root; verify recomputation matches Memory::root().
 #[test]
 fn test_merkle_path_matches_root() {

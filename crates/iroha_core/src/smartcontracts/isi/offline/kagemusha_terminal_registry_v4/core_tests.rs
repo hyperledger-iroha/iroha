@@ -1,5 +1,4 @@
 // Same-scope regression coverage extracted to keep the parent source budget bounded.
-
 #[cfg(all(
     unix,
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
@@ -12,11 +11,9 @@ fn catalog_source_mutex_recovers_after_caught_panic() {
         panic!("catalog source mutex poison fixture");
     });
     assert!(panicked.is_err(), "fixture must poison the mutex once");
-
     let _guard = lock_kagemusha_catalog_source_mutex_v4(&mutex);
     assert!(!mutex.is_poisoned());
 }
-
 fn candidate_binding_reviewed_source_closure(
     source_commit: &str,
     source_tree_sha256: [u8; 32],
@@ -48,7 +45,6 @@ fn candidate_binding_reviewed_source_closure(
         .expect("candidate-binding reviewed source closure");
     (closure, descriptor_sha256)
 }
-
 fn authenticated_candidate_binding_release() -> (
     KagemushaAuthenticatedReleaseV4,
     KagemushaRecursiveSpendPromotedReleaseV4,
@@ -235,7 +231,6 @@ fn authenticated_candidate_binding_release() -> (
     };
     (authenticated, promotion)
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
@@ -267,7 +262,6 @@ fn sealed_parity_fixture(
         proving_key_permutation_columns: 1,
     }
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))

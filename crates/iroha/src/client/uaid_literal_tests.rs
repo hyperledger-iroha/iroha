@@ -9,7 +9,6 @@ fn uaid_bindings_query_leaves_query_string_empty() {
         .expect("build request");
     assert_eq!(request.uri().query(), None);
 }
-
 #[test]
 fn canonicalize_uaid_literal_is_case_insensitive() {
     let suffix = "ABCDEF01".repeat(8);
@@ -18,7 +17,6 @@ fn canonicalize_uaid_literal_is_case_insensitive() {
         canonicalize_uaid_literal(&literal, "tests.uaid").expect("canonicalize literal");
     assert_eq!(canonical, format!("uaid:{}", suffix.to_ascii_lowercase()));
 }
-
 #[test]
 fn canonicalize_uaid_literal_rejects_invalid_lsb() {
     let literal = format!("uaid:{}", "10".repeat(32));

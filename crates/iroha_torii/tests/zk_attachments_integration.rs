@@ -2,9 +2,7 @@
 //! Integration tests for /v1/zk/attachments endpoints (`app_api`).
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs)]
-
 use std::{convert::TryFrom, sync::Once};
-
 use axum::{
     Router,
     response::IntoResponse,
@@ -12,7 +10,6 @@ use axum::{
 };
 use http_body_util::BodyExt as _;
 use tower::ServiceExt as _;
-
 fn ensure_quota_config() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
@@ -34,7 +31,6 @@ fn ensure_quota_config() {
         );
     });
 }
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn attachments_post_get_list_delete_roundtrip() {
@@ -42,7 +38,6 @@ async fn attachments_post_get_list_delete_roundtrip() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     ensure_quota_config();
     iroha_torii::zk_attachments::init_persistence();
-
     // Token-specific uploads should hash tenant identity and remain distinct
     let tenant_token_a = iroha_torii::zk_attachments::AttachmentTenant::from_api_token("tenant-A");
     let meta_token_a: norito::json::Value = {
@@ -92,7 +87,6 @@ async fn attachments_post_get_list_delete_roundtrip() {
         .and_then(|v| v.as_str())
         .unwrap()
         .to_string();
-
     // Cross-tenant access should be denied by storage isolation.
     let wrong_get = iroha_torii::zk_attachments::handle_get_attachment(
         tenant_token_b.clone(),
@@ -108,7 +102,6 @@ async fn attachments_post_get_list_delete_roundtrip() {
     .await
     .into_response();
     assert_eq!(wrong_del.status(), http::StatusCode::NOT_FOUND);
-
     let _ = iroha_torii::zk_attachments::handle_delete_attachment(
         tenant_token_a.clone(),
         axum::extract::Path(id_a),
@@ -121,7 +114,6 @@ async fn attachments_post_get_list_delete_roundtrip() {
     )
     .await
     .into_response();
-
     // Router with attachments handlers
     let anon_tenant = iroha_torii::zk_attachments::AttachmentTenant::anonymous();
     let app = Router::new()
@@ -171,7 +163,6 @@ async fn attachments_post_get_list_delete_roundtrip() {
                 }
             }),
         );
-
     // POST JSON attachment
     let body_json_value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("backend", "demo"),
@@ -192,7 +183,6 @@ async fn attachments_post_get_list_delete_roundtrip() {
     let bytes = resp_post.into_body().collect().await.unwrap().to_bytes();
     let meta: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
     let id = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
-
     // GET by id
     let req_get = http::Request::builder()
         .method("GET")
@@ -211,7 +201,6 @@ async fn attachments_post_get_list_delete_roundtrip() {
     );
     let got_body = resp_get.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(String::from_utf8(got_body.to_vec()).unwrap(), body_json);
-
     // LIST
     let req_list = http::Request::builder()
         .method("GET")
@@ -226,7 +215,6 @@ async fn attachments_post_get_list_delete_roundtrip() {
         arr.iter()
             .any(|m| m.get("id").and_then(|v| v.as_str()) == Some(&id))
     );
-
     // DELETE
     let req_del = http::Request::builder()
         .method("DELETE")
@@ -235,7 +223,6 @@ async fn attachments_post_get_list_delete_roundtrip() {
         .unwrap();
     let resp_del = app.clone().oneshot(req_del).await.unwrap();
     assert_eq!(resp_del.status(), http::StatusCode::NO_CONTENT);
-
     // GET after delete -> 404
     let req_get2 = http::Request::builder()
         .method("GET")
@@ -245,13 +232,11 @@ async fn attachments_post_get_list_delete_roundtrip() {
     let resp_get2 = app.clone().oneshot(req_get2).await.unwrap();
     assert_eq!(resp_get2.status(), http::StatusCode::NOT_FOUND);
 }
-
 #[tokio::test]
 async fn attachments_enforce_per_tenant_quota() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     ensure_quota_config();
     iroha_torii::zk_attachments::init_persistence();
-
     // Seed enough attachments to exceed the per-tenant count limit (default 128)
     let mut ids = Vec::new();
     for i in 0..130u32 {
@@ -275,7 +260,6 @@ async fn attachments_enforce_per_tenant_quota() {
         ids.push(meta.get("id").and_then(|v| v.as_str()).unwrap().to_string());
         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }
-
     // Oldest entries should have been evicted (count capped at 128)
     let list_resp = iroha_torii::zk_attachments::handle_list_attachments(
         iroha_torii::zk_attachments::AttachmentTenant::anonymous(),
@@ -290,7 +274,6 @@ async fn attachments_enforce_per_tenant_quota() {
     assert!(!metas.iter().any(|m| m.id == ids[0] || m.id == ids[1]));
     assert!(metas.iter().any(|m| m.id == ids[2]));
     assert!(metas.iter().any(|m| m.id == *ids.last().unwrap()));
-
     // Exceed the per-tenant byte ceiling (8 MiB) with 1 MiB chunks
     let mut large_ids = Vec::new();
     for i in 0..10u32 {
@@ -309,7 +292,6 @@ async fn attachments_enforce_per_tenant_quota() {
         let meta: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
         large_ids.push(meta.get("id").and_then(|v| v.as_str()).unwrap().to_string());
     }
-
     let metas_bytes = iroha_torii::zk_attachments::handle_list_attachments(
         iroha_torii::zk_attachments::AttachmentTenant::anonymous(),
     )

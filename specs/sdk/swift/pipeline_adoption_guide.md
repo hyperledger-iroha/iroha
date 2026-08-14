@@ -83,8 +83,16 @@ try archive.enqueue(envelope)
 
 - `IrohaSDK` never drains or submits this archive. The application owns reconciliation,
   removal, and any explicit later action.
-- Before paging Torii, capture the context from `/v1/pipeline/recovery/{height}` via `ToriiClient.getPipelineRecovery(height:)` and export the JSON artifact with the incident report. IOS2 requires these snapshots so governance can prove that Swift clients observe the new recovery diagnostics.
-- Pair the recovery evidence with `ToriiClient.getTimeStatus()`/`getSumeragiStatus()` samples and the transaction-hash status lookup.
+- Before paging Torii, configure the client once with an immutable
+  `ToriiOperatorSigningContext` built from the exact genesis `NetworkId` and
+  operator signing key. Capture `/v1/pipeline/recovery/{height}` via
+  `ToriiClient.getPipelineRecovery(height:)` and export the JSON artifact with
+  the incident report. The helper signs the exact `GET`, substituted path,
+  query, and empty body, then dispatches once without redirects or retries.
+- Pair the recovery evidence with operator-authenticated
+  `ToriiClient.getTimeStatus()`/`getSumeragiStatus()` samples and the
+  transaction-hash status lookup. Bearer/API tokens are not an operator-read
+  fallback.
 
 # 6. Observability & Reporting
 

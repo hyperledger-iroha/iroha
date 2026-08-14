@@ -1,5 +1,4 @@
 use sorafs_chunker::ChunkProfile;
-
 #[derive(Debug, Clone, Copy)]
 pub struct RawChunkerDescriptor {
     pub id: u32,
@@ -10,7 +9,6 @@ pub struct RawChunkerDescriptor {
     pub multihash_code: u64,
     pub aliases: &'static [&'static str],
 }
-
 pub const RAW_REGISTRY: &[RawChunkerDescriptor] = &[
     RawChunkerDescriptor {
         id: 1,

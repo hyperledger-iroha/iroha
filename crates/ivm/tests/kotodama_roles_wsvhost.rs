@@ -1,18 +1,14 @@
 //! Smoke test: Kotodama role ops compile to correct pointer-ABI syscalls
 //! and execute against the mock WSV host.
-
 use std::collections::HashMap;
-
 use ivm::{
     AssetDefinitionId, IVM, PermissionToken,
     kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
 mod common;
-
 const TEST_ACCOUNT_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const TEST_ASSET_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-
 fn make_vm_with_wsv() -> (IVM, AccountId) {
     let alice: AccountId =
         iroha_data_model::account::AccountId::parse_encoded(TEST_ACCOUNT_LITERAL)
@@ -26,12 +22,10 @@ fn make_vm_with_wsv() -> (IVM, AccountId) {
     vm.set_host(host);
     (vm, alice)
 }
-
 #[test]
 fn kotodama_roles_roundtrip_on_wsvhost() {
     let (mut vm, alice) = make_vm_with_wsv();
     let compiler = KotodamaCompiler::new();
-
     // 1) Create role `minter` with permission mint_asset:rose#wonder
     let src_create = r#"
         seiyaku CreateRole {
@@ -59,7 +53,6 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
             "role should exist"
         );
     }
-
     // 2) Grant role to alice and check derived permission
     let src_grant = r#"
         seiyaku GrantRole {
@@ -86,7 +79,6 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
             "alice should inherit mint permission via role"
         );
     }
-
     // 3) Revoke role and delete; verify permissions removed and role absent
     let src_cleanup = r#"
         seiyaku RevokeAndDeleteRole {

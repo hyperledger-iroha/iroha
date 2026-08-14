@@ -4,12 +4,9 @@
 //! byte-copy permutation connects note fields, hash inputs and outputs,
 //! accumulator children, value arithmetic, and VM state.  Public statement
 //! bytes are fixed constraints at their final endpoints only.
-
 use std::collections::BTreeMap;
-
 use iroha_data_model::privacy::IrohaIvmPrivateNoteStarkStatementV1;
 use thiserror::Error;
-
 use super::{
     codec::{PRIVATE_PROGRAM_BYTES_V1, decode_private_program_v1, encode_private_program_v1},
     relation::{
@@ -23,7 +20,6 @@ use super::{
     },
 };
 use crate::privacy_engines::transparent_stark::{GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F};
-
 pub(super) const PRIVATE_NOTE_TRACE_LOG2_V1: u8 = 14;
 pub(super) const PRIVATE_NOTE_TRACE_SIZE_V1: usize = 1 << PRIVATE_NOTE_TRACE_LOG2_V1;
 pub(super) const PRIVATE_NOTE_COPY_WIDTH_V1: usize = 8;
@@ -33,7 +29,6 @@ pub(super) const PRIVATE_NOTE_SHA_BIT_GROUPS_V1: usize = 11;
 pub(super) const PRIVATE_NOTE_SHA_BITS_PER_GROUP_V1: usize = 32;
 pub(super) const PRIVATE_NOTE_SHA_BIT_COLUMNS_V1: usize =
     PRIVATE_NOTE_SHA_BIT_GROUPS_V1 * PRIVATE_NOTE_SHA_BITS_PER_GROUP_V1;
-
 pub(super) const COPY_OFFSET: usize = 0;
 pub(super) const SHA_SCHEDULE_OFFSET: usize = COPY_OFFSET + PRIVATE_NOTE_COPY_WIDTH_V1;
 pub(super) const SHA_INITIAL_STATE_OFFSET: usize =
@@ -48,7 +43,6 @@ pub(super) const SHA_CARRY_WIDTH: usize = 18;
 pub(super) const SCRATCH_OFFSET: usize = SHA_CARRY_OFFSET + SHA_CARRY_WIDTH;
 pub(super) const SCRATCH_WIDTH: usize = 96;
 pub(super) const PRIVATE_NOTE_BASE_WIDTH_V1: usize = SCRATCH_OFFSET + SCRATCH_WIDTH;
-
 pub(super) const SCRATCH_NONZERO_BYTE_SELECT_OFFSET: usize = SCRATCH_OFFSET;
 pub(super) const SCRATCH_NONZERO_BIT_SELECT_OFFSET: usize =
     SCRATCH_NONZERO_BYTE_SELECT_OFFSET + PRIVATE_NOTE_COPY_WIDTH_V1;
@@ -71,7 +65,6 @@ pub(super) const SCRATCH_VM_DIFFERENCE: usize = SCRATCH_VM_CARRY_AFTER + 1;
 pub(super) const SCRATCH_VM_RESULT: usize = SCRATCH_VM_DIFFERENCE + 1;
 pub(super) const SCRATCH_VM_RESULT_BITS_OFFSET: usize = SCRATCH_VM_RESULT + 1;
 pub(super) const SCRATCH_VM_DIFFERENCE_BITS_OFFSET: usize = SCRATCH_VM_RESULT_BITS_OFFSET + 8;
-
 pub(super) const SHA256_INITIAL_STATE_V1: [u32; 8] = [
     0x6a09_e667,
     0xbb67_ae85,
@@ -82,7 +75,6 @@ pub(super) const SHA256_INITIAL_STATE_V1: [u32; 8] = [
     0x1f83_d9ab,
     0x5be0_cd19,
 ];
-
 pub(super) const SHA256_ROUND_CONSTANTS_V1: [u32; 64] = [
     0x428a_2f98,
     0x7137_4491,
@@ -149,10 +141,8 @@ pub(super) const SHA256_ROUND_CONSTANTS_V1: [u32; 64] = [
     0xbef9_a3f7,
     0xc671_78f2,
 ];
-
 /// Stable aggregate AIR descriptor.
 pub(crate) const IVM_PRIVATE_NOTE_AGGREGATE_AIR_DESCRIPTOR_V1: &[u8] = b"ivm-private-note-aggregate-air-v1:trace=16384:copy-width=8:copy-lanes=3:sha256-wide-round64-private-io:value=u128-byte-carry:vm=fixed16-private-opcode-byte-state:tree=depth32-private-direction";
-
 /// Aggregate trace construction or algebraic failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum IvmPrivateNoteAirErrorV1 {
@@ -169,17 +159,14 @@ pub(super) enum IvmPrivateNoteAirErrorV1 {
     #[error("private-note AIR copy permutation is invalid")]
     Copy,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ByteVariableV1(usize);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(variant_size_differences)]
 enum ByteExpressionV1 {
     Constant(u8),
     Variable(ByteVariableV1),
 }
-
 impl ByteExpressionV1 {
     fn value(self, assignment: &[u8]) -> Result<u8, IvmPrivateNoteAirErrorV1> {
         match self {
@@ -191,7 +178,6 @@ impl ByteExpressionV1 {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(variant_size_differences)]
 enum CopyCellV1 {
@@ -199,7 +185,6 @@ enum CopyCellV1 {
     Constant(u8),
     Variable(ByteVariableV1),
 }
-
 impl CopyCellV1 {
     fn value(self, assignment: &[u8]) -> Result<F, IvmPrivateNoteAirErrorV1> {
         match self {
@@ -213,7 +198,6 @@ impl CopyCellV1 {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(variant_size_differences)]
 pub(super) enum PrivateNoteFixedRowV1 {
@@ -263,27 +247,23 @@ pub(super) enum PrivateNoteFixedRowV1 {
     },
     Padding,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SumSideV1 {
     Inputs,
     Outputs,
     Conservation,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PrivateNoteFixedTraceV1 {
     pub(super) rows: Vec<PrivateNoteFixedRowV1>,
     copy_cells: Vec<[CopyCellV1; PRIVATE_NOTE_COPY_WIDTH_V1]>,
     pub(super) copy_sigma: Vec<[u32; PRIVATE_NOTE_COPY_WIDTH_V1]>,
 }
-
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct PrivateNoteBaseTraceV1 {
     pub(super) fixed: PrivateNoteFixedTraceV1,
     pub(super) rows: Vec<Vec<F>>,
 }
-
 impl core::fmt::Debug for PrivateNoteBaseTraceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -293,7 +273,6 @@ impl core::fmt::Debug for PrivateNoteBaseTraceV1 {
             .finish_non_exhaustive()
     }
 }
-
 #[derive(Clone)]
 struct NoteVariablesV1 {
     value: [ByteVariableV1; 16],
@@ -302,7 +281,6 @@ struct NoteVariablesV1 {
     blinding: [ByteVariableV1; 32],
     memo: [ByteVariableV1; 32],
 }
-
 #[derive(Clone)]
 struct InputVariablesV1 {
     note: NoteVariablesV1,
@@ -311,13 +289,11 @@ struct InputVariablesV1 {
     path: [[ByteVariableV1; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
     commitment: Option<[ByteVariableV1; 32]>,
 }
-
 #[derive(Clone)]
 struct OutputVariablesV1 {
     note: NoteVariablesV1,
     commitment: Option<[ByteVariableV1; 32]>,
 }
-
 struct TraceBuilderV1<'a> {
     statement: &'a IrohaIvmPrivateNoteStarkStatementV1,
     witness: Option<&'a IvmPrivateNoteWitnessV1>,
@@ -330,7 +306,6 @@ struct TraceBuilderV1<'a> {
     invocation_cursor: usize,
     expected_final_registers: Option<[u128; 8]>,
 }
-
 impl<'a> TraceBuilderV1<'a> {
     fn new(
         statement: &'a IrohaIvmPrivateNoteStarkStatementV1,
@@ -356,7 +331,6 @@ impl<'a> TraceBuilderV1<'a> {
             expected_final_registers,
         })
     }
-
     fn allocate_bytes<const N: usize>(&mut self, bytes: [u8; N]) -> [ByteVariableV1; N] {
         core::array::from_fn(|index| {
             let variable = ByteVariableV1(self.assignment.len());
@@ -364,7 +338,6 @@ impl<'a> TraceBuilderV1<'a> {
             variable
         })
     }
-
     fn assign_bytes<const N: usize>(
         &mut self,
         variables: [ByteVariableV1; N],
@@ -382,7 +355,6 @@ impl<'a> TraceBuilderV1<'a> {
         }
         Ok(())
     }
-
     fn push_row(
         &mut self,
         fixed: PrivateNoteFixedRowV1,
@@ -400,11 +372,9 @@ impl<'a> TraceBuilderV1<'a> {
         self.rows.push(row);
         Ok(())
     }
-
     fn empty_row() -> Vec<F> {
         vec![F::ZERO; PRIVATE_NOTE_BASE_WIDTH_V1]
     }
-
     fn check_invocation(
         &mut self,
         role: Sha256InvocationRoleV1,
@@ -424,7 +394,6 @@ impl<'a> TraceBuilderV1<'a> {
         self.invocation_cursor += 1;
         Ok(())
     }
-
     fn push_hash(
         &mut self,
         role: Sha256InvocationRoleV1,
@@ -617,7 +586,6 @@ impl<'a> TraceBuilderV1<'a> {
             .ok_or(IvmPrivateNoteAirErrorV1::Resource)?;
         Ok(())
     }
-
     fn next_oracle_digest(
         &self,
         role: Sha256InvocationRoleV1,
@@ -631,7 +599,6 @@ impl<'a> TraceBuilderV1<'a> {
             .map(|invocation| invocation.digest)
             .ok_or(IvmPrivateNoteAirErrorV1::Topology)
     }
-
     fn allocate_note(
         &mut self,
         note: Option<super::relation::PrivateNotePlaintextV1>,
@@ -651,7 +618,6 @@ impl<'a> TraceBuilderV1<'a> {
             memo: self.allocate_bytes(note.memo_digest),
         }
     }
-
     fn push_node_select(
         &mut self,
         input: u8,
@@ -703,7 +669,6 @@ impl<'a> TraceBuilderV1<'a> {
         }
         Ok((left, right))
     }
-
     fn push_distinct(
         &mut self,
         comparison: u8,
@@ -711,7 +676,6 @@ impl<'a> TraceBuilderV1<'a> {
         right: &[ByteVariableV1],
     ) -> Result<(), IvmPrivateNoteAirErrorV1> {
         const PAIRS_PER_ROW: usize = PRIVATE_NOTE_COPY_WIDTH_V1 / 2;
-
         if left.is_empty() || left.len() != right.len() || left.len() > 32 {
             return Err(IvmPrivateNoteAirErrorV1::Topology);
         }
@@ -764,7 +728,6 @@ impl<'a> TraceBuilderV1<'a> {
         }
         Ok(())
     }
-
     fn push_nonzero(
         &mut self,
         component: u16,
@@ -816,7 +779,6 @@ impl<'a> TraceBuilderV1<'a> {
         }
         Ok(())
     }
-
     fn push_sum(
         &mut self,
         side: SumSideV1,
@@ -869,7 +831,6 @@ impl<'a> TraceBuilderV1<'a> {
         }
         Ok(sum_variables)
     }
-
     fn push_conservation(
         &mut self,
         input_sum: [ByteVariableV1; 16],
@@ -922,7 +883,6 @@ impl<'a> TraceBuilderV1<'a> {
         }
         Ok(())
     }
-
     fn write_vm_scratch(
         row: &mut [F],
         instruction: PrivateInstructionV1,
@@ -939,7 +899,6 @@ impl<'a> TraceBuilderV1<'a> {
         row[SCRATCH_VM_HALTED_BEFORE] = F(u64::from(halted_before));
         row[SCRATCH_VM_HALTED_AFTER] = F(u64::from(halted_after));
     }
-
     fn execute_vm_states(
         &self,
         instructions: [PrivateInstructionV1; PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1],
@@ -1013,7 +972,6 @@ impl<'a> TraceBuilderV1<'a> {
         }
         Ok(states)
     }
-
     fn push_vm(
         &mut self,
         program_variables: &[ByteVariableV1; super::codec::PRIVATE_PROGRAM_BYTES_V1],
@@ -1082,7 +1040,6 @@ impl<'a> TraceBuilderV1<'a> {
                 program_cells,
                 program_row,
             )?;
-
             let next_state = states[instruction_index + 1];
             let next_registers: [[ByteVariableV1; 16]; 8] = core::array::from_fn(|register| {
                 self.allocate_bytes(next_state[register].to_be_bytes())
@@ -1179,7 +1136,6 @@ impl<'a> TraceBuilderV1<'a> {
                     previous_cells,
                     previous_row,
                 )?;
-
                 let mut next_cells = [CopyCellV1::Inactive; PRIVATE_NOTE_COPY_WIDTH_V1];
                 for (cell, register) in next_cells.iter_mut().zip(&next_registers) {
                     *cell = CopyCellV1::Variable(register[byte]);
@@ -1214,7 +1170,6 @@ impl<'a> TraceBuilderV1<'a> {
         Ok(())
     }
 }
-
 fn variables_as_expressions<const N: usize>(
     variables: &[ByteVariableV1; N],
 ) -> Vec<ByteExpressionV1> {
@@ -1224,7 +1179,6 @@ fn variables_as_expressions<const N: usize>(
         .map(ByteExpressionV1::Variable)
         .collect()
 }
-
 fn constants_as_expressions(bytes: &[u8]) -> Vec<ByteExpressionV1> {
     bytes
         .iter()
@@ -1232,7 +1186,6 @@ fn constants_as_expressions(bytes: &[u8]) -> Vec<ByteExpressionV1> {
         .map(ByteExpressionV1::Constant)
         .collect()
 }
-
 fn frame_expressions_v1(
     domain: &[u8],
     fields: &[Vec<ByteExpressionV1>],
@@ -1269,7 +1222,6 @@ fn frame_expressions_v1(
     }
     Ok(message)
 }
-
 fn note_commitment_fields(note: &NoteVariablesV1) -> Vec<Vec<ByteExpressionV1>> {
     vec![
         variables_as_expressions(&note.value),
@@ -1279,7 +1231,6 @@ fn note_commitment_fields(note: &NoteVariablesV1) -> Vec<Vec<ByteExpressionV1>> 
         variables_as_expressions(&note.memo),
     ]
 }
-
 fn sha256_padding_v1(
     message: &[ByteExpressionV1],
 ) -> Result<Vec<ByteExpressionV1>, IvmPrivateNoteAirErrorV1> {
@@ -1295,44 +1246,35 @@ fn sha256_padding_v1(
     padded.extend(constants_as_expressions(&bit_len.to_be_bytes()));
     Ok(padded)
 }
-
 fn sigma_small_0(value: u32) -> u32 {
     value.rotate_right(7) ^ value.rotate_right(18) ^ (value >> 3)
 }
-
 fn sigma_small_1(value: u32) -> u32 {
     value.rotate_right(17) ^ value.rotate_right(19) ^ (value >> 10)
 }
-
 fn sigma_big_0(value: u32) -> u32 {
     value.rotate_right(2) ^ value.rotate_right(13) ^ value.rotate_right(22)
 }
-
 fn sigma_big_1(value: u32) -> u32 {
     value.rotate_right(6) ^ value.rotate_right(11) ^ value.rotate_right(25)
 }
-
 fn sha_choose(x: u32, y: u32, z: u32) -> u32 {
     (x & y) ^ (!x & z)
 }
-
 fn sha_majority(x: u32, y: u32, z: u32) -> u32 {
     (x & y) ^ (x & z) ^ (y & z)
 }
-
 fn write_word_bits(row: &mut [F], group: usize, value: u32) {
     let start = SHA_BITS_OFFSET + group * PRIVATE_NOTE_SHA_BITS_PER_GROUP_V1;
     for bit in 0..32 {
         row[start + bit] = F(u64::from((value >> bit) & 1));
     }
 }
-
 fn write_u32_carry(row: &mut [F], offset: usize, value: u32, bits: usize) {
     for bit in 0..bits {
         row[offset + bit] = F(u64::from((value >> bit) & 1));
     }
 }
-
 fn signed_small_field(value: i16) -> F {
     if value >= 0 {
         F(value as u64)
@@ -1340,7 +1282,6 @@ fn signed_small_field(value: i16) -> F {
         F::ZERO.sub(F(u64::from(value.unsigned_abs())))
     }
 }
-
 fn copy_cells_for_word(
     bytes: &[ByteExpressionV1],
 ) -> Result<[CopyCellV1; PRIVATE_NOTE_COPY_WIDTH_V1], IvmPrivateNoteAirErrorV1> {
@@ -1356,7 +1297,6 @@ fn copy_cells_for_word(
     }
     Ok(cells)
 }
-
 fn word_from_expressions(
     bytes: &[ByteExpressionV1],
     assignment: &[u8],
@@ -1371,7 +1311,6 @@ fn word_from_expressions(
         bytes[3].value(assignment)?,
     ]))
 }
-
 fn build_copy_sigma_v1(
     cells: &[[CopyCellV1; PRIVATE_NOTE_COPY_WIDTH_V1]],
 ) -> Result<Vec<[u32; PRIVATE_NOTE_COPY_WIDTH_V1]>, IvmPrivateNoteAirErrorV1> {
@@ -1408,11 +1347,9 @@ fn build_copy_sigma_v1(
     }
     Ok(sigma)
 }
-
 fn dummy_path() -> [[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1] {
     [[0; 32]; PRIVATE_NOTE_TREE_DEPTH_V1]
 }
-
 fn build_private_note_trace_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     witness: Option<&IvmPrivateNoteWitnessV1>,
@@ -1432,7 +1369,6 @@ fn build_private_note_trace_v1(
         .map_err(|_| IvmPrivateNoteAirErrorV1::Relation)?
         .unwrap_or([0; super::codec::PRIVATE_PROGRAM_BYTES_V1]);
     let program_variables = builder.allocate_bytes(program_bytes);
-
     let mut input_variables = Vec::with_capacity(statement.nullifiers.len());
     for index in 0..statement.nullifiers.len() {
         let input = witness.and_then(|witness| witness.inputs.get(index));
@@ -1459,7 +1395,6 @@ fn build_private_note_trace_v1(
             commitment: None,
         });
     }
-
     let program_digest = builder.allocate_bytes(*statement.program_id.as_bytes());
     let program_message = frame_expressions_v1(
         PROGRAM_ID_DOMAIN_V1,
@@ -1471,7 +1406,6 @@ fn build_private_note_trace_v1(
         program_digest,
         Some(*statement.program_id.as_bytes()),
     )?;
-
     let namespace = norito::to_bytes(&namespace_v1(statement))
         .map_err(|_| IvmPrivateNoteAirErrorV1::Topology)?;
     let mut nonzero_components = Vec::<Vec<ByteVariableV1>>::new();
@@ -1487,7 +1421,6 @@ fn build_private_note_trace_v1(
             input.note.authority,
             None,
         )?;
-
         let commitment_digest = builder
             .next_oracle_digest(Sha256InvocationRoleV1::InputCommitment { input: input_index })?;
         let commitment_variables = builder.allocate_bytes(commitment_digest);
@@ -1502,7 +1435,6 @@ fn build_private_note_trace_v1(
             None,
         )?;
         input.commitment = Some(commitment_variables);
-
         let nullifier_variables = builder.allocate_bytes(*statement.nullifiers[index].as_bytes());
         let nullifier_message = frame_expressions_v1(
             NOTE_NULLIFIER_DOMAIN_V1,
@@ -1520,7 +1452,6 @@ fn build_private_note_trace_v1(
             nullifier_variables,
             Some(*statement.nullifiers[index].as_bytes()),
         )?;
-
         let leaf_digest = builder
             .next_oracle_digest(Sha256InvocationRoleV1::AccumulatorLeaf { input: input_index })?;
         let mut current = builder.allocate_bytes(leaf_digest);
@@ -1539,7 +1470,6 @@ fn build_private_note_trace_v1(
             current,
             None,
         )?;
-
         for level in 0..PRIVATE_NOTE_TREE_DEPTH_V1 {
             let level_u8 = u8::try_from(level).map_err(|_| IvmPrivateNoteAirErrorV1::Resource)?;
             let (left, right) = builder.push_node_select(
@@ -1571,7 +1501,6 @@ fn build_private_note_trace_v1(
             )?;
             current = next;
         }
-
         nonzero_components.push(input.note.value.to_vec());
         nonzero_components.push(input.note.authority.to_vec());
         nonzero_components.push(input.note.rho.to_vec());
@@ -1581,7 +1510,6 @@ fn build_private_note_trace_v1(
             nonzero_components.push(sibling.to_vec());
         }
     }
-
     for (index, output) in output_variables.iter_mut().enumerate() {
         let output_index = u8::try_from(index).map_err(|_| IvmPrivateNoteAirErrorV1::Resource)?;
         let commitment_variables =
@@ -1604,7 +1532,6 @@ fn build_private_note_trace_v1(
         nonzero_components.push(output.note.rho.to_vec());
         nonzero_components.push(output.note.blinding.to_vec());
     }
-
     let mut comparison = 0_u8;
     if input_variables.len() == 2 {
         let left_commitment = input_variables[0]
@@ -1647,14 +1574,12 @@ fn build_private_note_trace_v1(
             .ok_or(IvmPrivateNoteAirErrorV1::Topology)?;
         builder.push_distinct(comparison, &left_commitment, &right_commitment)?;
     }
-
     for (component, variables) in nonzero_components.iter().enumerate() {
         builder.push_nonzero(
             u16::try_from(component).map_err(|_| IvmPrivateNoteAirErrorV1::Resource)?,
             variables,
         )?;
     }
-
     let input_values = input_variables
         .iter()
         .map(|input| input.note.value)
@@ -1685,7 +1610,6 @@ fn build_private_note_trace_v1(
         input_sum,
         output_sum,
     )?;
-
     if witness.is_some() && builder.invocation_cursor != builder.invocation_oracle.len() {
         return Err(IvmPrivateNoteAirErrorV1::Topology);
     }
@@ -1709,7 +1633,6 @@ fn build_private_note_trace_v1(
         rows: builder.rows,
     })
 }
-
 /// Compile the complete prover trace after checking the native differential
 /// oracle.
 pub(super) fn build_private_note_base_trace_v1(
@@ -1718,14 +1641,12 @@ pub(super) fn build_private_note_base_trace_v1(
 ) -> Result<PrivateNoteBaseTraceV1, IvmPrivateNoteAirErrorV1> {
     build_private_note_trace_v1(statement, Some(witness))
 }
-
 /// Compile verifier-fixed topology without requiring wallet material.
 pub(super) fn build_private_note_fixed_trace_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
 ) -> Result<PrivateNoteFixedTraceV1, IvmPrivateNoteAirErrorV1> {
     Ok(build_private_note_trace_v1(statement, None)?.fixed)
 }
-
 /// Compile witness-allocation identities into the shared copy-chip policy.
 pub(super) fn build_private_note_copy_schedule_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
@@ -1733,10 +1654,7 @@ pub(super) fn build_private_note_copy_schedule_v1(
     crate::privacy_engines::proof_managed_note_stark::NoteCopyScheduleV1,
     IvmPrivateNoteAirErrorV1,
 > {
-    use crate::privacy_engines::proof_managed_note_stark::{
-        NoteCopyCellPolicyV1, NoteCopyScheduleV1,
-    };
-
+    use crate::privacy_engines::proof_managed_note_stark::{NoteCopyCellPolicyV1, NoteCopyScheduleV1};
     let fixed = build_private_note_fixed_trace_v1(statement)?;
     let policies = fixed
         .copy_cells
@@ -1754,7 +1672,6 @@ pub(super) fn build_private_note_copy_schedule_v1(
         sigma: fixed.copy_sigma,
     })
 }
-
 fn ensure_canonical_row(row: &[F]) -> Result<(), IvmPrivateNoteAirErrorV1> {
     if row.len() != PRIVATE_NOTE_BASE_WIDTH_V1
         || row.iter().any(|value| F::canonical(value.0).is_none())
@@ -1763,14 +1680,12 @@ fn ensure_canonical_row(row: &[F]) -> Result<(), IvmPrivateNoteAirErrorV1> {
     }
     Ok(())
 }
-
 fn ensure_boolean(value: F) -> Result<(), IvmPrivateNoteAirErrorV1> {
     if value.mul(value.sub(F::ONE)) != F::ZERO {
         return Err(IvmPrivateNoteAirErrorV1::Assignment);
     }
     Ok(())
 }
-
 fn pack_bits(bits: &[F]) -> Result<F, IvmPrivateNoteAirErrorV1> {
     bits.iter()
         .copied()
@@ -1783,7 +1698,6 @@ fn pack_bits(bits: &[F]) -> Result<F, IvmPrivateNoteAirErrorV1> {
             Ok(sum.add(value.mul(F(weight))))
         })
 }
-
 fn packed_word_bits(row: &[F], group: usize) -> Result<F, IvmPrivateNoteAirErrorV1> {
     let start = SHA_BITS_OFFSET
         .checked_add(
@@ -1800,7 +1714,6 @@ fn packed_word_bits(row: &[F], group: usize) -> Result<F, IvmPrivateNoteAirError
             .ok_or(IvmPrivateNoteAirErrorV1::Topology)?,
     )
 }
-
 fn ensure_zero_outside(
     row: &[F],
     allowed: &[(usize, usize)],
@@ -1816,11 +1729,9 @@ fn ensure_zero_outside(
     }
     Ok(())
 }
-
 fn copy_allowed() -> (usize, usize) {
     (COPY_OFFSET, COPY_OFFSET + PRIVATE_NOTE_COPY_WIDTH_V1)
 }
-
 fn validate_copy_cells_v1(
     fixed: &PrivateNoteFixedTraceV1,
     rows: &[Vec<F>],
@@ -1876,15 +1787,12 @@ fn validate_copy_cells_v1(
     }
     Ok(())
 }
-
 fn field_to_u32(value: F) -> Result<u32, IvmPrivateNoteAirErrorV1> {
     u32::try_from(value.0).map_err(|_| IvmPrivateNoteAirErrorV1::Assignment)
 }
-
 fn field_to_u8(value: F) -> Result<u8, IvmPrivateNoteAirErrorV1> {
     u8::try_from(value.0).map_err(|_| IvmPrivateNoteAirErrorV1::Assignment)
 }
-
 fn validate_word_group(
     row: &[F],
     group: usize,
@@ -1895,7 +1803,6 @@ fn validate_word_group(
     }
     Ok(())
 }
-
 fn validate_sha_round_v1(
     fixed: &PrivateNoteFixedRowV1,
     next_fixed: &PrivateNoteFixedRowV1,
@@ -2107,7 +2014,6 @@ fn validate_sha_round_v1(
     }
     Ok(())
 }
-
 fn validate_sha_end_v1(
     fixed: &PrivateNoteFixedRowV1,
     next_fixed: &PrivateNoteFixedRowV1,
@@ -2153,7 +2059,6 @@ fn validate_sha_end_v1(
             return Err(IvmPrivateNoteAirErrorV1::Sha256);
         }
     }
-
     let terminal = usize::from(*block) + 1 == usize::from(*block_count);
     if terminal {
         let first_word = usize::from(*digest_chunk) * 2;
@@ -2190,7 +2095,6 @@ fn validate_sha_end_v1(
     {
         return Err(IvmPrivateNoteAirErrorV1::Sha256);
     }
-
     if *digest_chunk < 3 {
         if !matches!(
             next_fixed,
@@ -2240,7 +2144,6 @@ fn validate_sha_end_v1(
     }
     Ok(())
 }
-
 fn validate_node_select_v1(row: &[F]) -> Result<(), IvmPrivateNoteAirErrorV1> {
     ensure_zero_outside(row, &[copy_allowed()])?;
     let current = field_to_u8(row[COPY_OFFSET])?;
@@ -2264,7 +2167,6 @@ fn validate_node_select_v1(row: &[F]) -> Result<(), IvmPrivateNoteAirErrorV1> {
     }
     Ok(())
 }
-
 fn validate_running_transition_v1(
     before: F,
     after: F,
@@ -2285,7 +2187,6 @@ fn validate_running_transition_v1(
     }
     Ok(())
 }
-
 fn validate_nonzero_v1(
     fixed: &PrivateNoteFixedRowV1,
     next_fixed: &PrivateNoteFixedRowV1,
@@ -2382,7 +2283,6 @@ fn validate_nonzero_v1(
         next_before,
     )
 }
-
 fn validate_distinct_v1(
     fixed: &PrivateNoteFixedRowV1,
     next_fixed: &PrivateNoteFixedRowV1,
@@ -2390,7 +2290,6 @@ fn validate_distinct_v1(
     next: &[F],
 ) -> Result<(), IvmPrivateNoteAirErrorV1> {
     const PAIRS_PER_ROW: usize = PRIVATE_NOTE_COPY_WIDTH_V1 / 2;
-
     let PrivateNoteFixedRowV1::Distinct {
         comparison,
         chunk,
@@ -2493,7 +2392,6 @@ fn validate_distinct_v1(
         next_before,
     )
 }
-
 fn signed_small(value: F) -> Result<i16, IvmPrivateNoteAirErrorV1> {
     if value == F::ZERO {
         Ok(0)
@@ -2505,7 +2403,6 @@ fn signed_small(value: F) -> Result<i16, IvmPrivateNoteAirErrorV1> {
         Err(IvmPrivateNoteAirErrorV1::Assignment)
     }
 }
-
 fn validate_sum_v1(
     fixed: &PrivateNoteFixedRowV1,
     next_fixed: &PrivateNoteFixedRowV1,
@@ -2601,7 +2498,6 @@ fn validate_sum_v1(
     }
     Ok(())
 }
-
 fn extract_private_program_v1(
     fixed: &PrivateNoteFixedTraceV1,
     rows: &[Vec<F>],
@@ -2648,7 +2544,6 @@ fn extract_private_program_v1(
     }
     decode_private_program_v1(&encoded).map_err(|_| IvmPrivateNoteAirErrorV1::Assignment)
 }
-
 fn validate_vm_common_v1(
     row: &[F],
     instruction: PrivateInstructionV1,
@@ -2701,7 +2596,6 @@ fn validate_vm_common_v1(
     }
     Ok(())
 }
-
 fn vm_common_ranges() -> [(usize, usize); 6] {
     [
         (
@@ -2724,7 +2618,6 @@ fn vm_common_ranges() -> [(usize, usize); 6] {
         (SCRATCH_VM_HALTED_BEFORE, SCRATCH_VM_HALTED_AFTER + 1),
     ]
 }
-
 fn vm_halted_flags(
     program: &super::relation::PrivateProgramV1,
     instruction: usize,
@@ -2738,7 +2631,6 @@ fn vm_halted_flags(
         .any(|value| value.opcode == PrivateOpcodeV1::Halt);
     Ok((before, before || current.opcode == PrivateOpcodeV1::Halt))
 }
-
 fn validate_vm_header_v1(
     next_fixed: &PrivateNoteFixedRowV1,
     row: &[F],
@@ -2752,7 +2644,6 @@ fn validate_vm_header_v1(
     }
     Ok(())
 }
-
 fn validate_vm_program_v1(
     fixed: &PrivateNoteFixedRowV1,
     next_fixed: &PrivateNoteFixedRowV1,
@@ -2793,7 +2684,6 @@ fn validate_vm_program_v1(
     }
     Ok(())
 }
-
 fn validate_vm_previous_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     fixed: &PrivateNoteFixedRowV1,
@@ -2864,7 +2754,6 @@ fn validate_vm_previous_v1(
     {
         return Err(IvmPrivateNoteAirErrorV1::Assignment);
     }
-
     let writes = matches!(
         instruction_value.opcode,
         PrivateOpcodeV1::MoveImmediate
@@ -2882,7 +2771,6 @@ fn validate_vm_previous_v1(
     if writes && next_registers[destination] != result {
         return Err(IvmPrivateNoteAirErrorV1::Assignment);
     }
-
     let expected_result = match instruction_value.opcode {
         PrivateOpcodeV1::Halt
         | PrivateOpcodeV1::AssertEqual
@@ -2912,7 +2800,6 @@ fn validate_vm_previous_v1(
     if result != expected_result {
         return Err(IvmPrivateNoteAirErrorV1::Assignment);
     }
-
     let carry_before = row[SCRATCH_VM_CARRY_BEFORE];
     let carry_after = row[SCRATCH_VM_CARRY_AFTER];
     let arithmetic = matches!(
@@ -2978,7 +2865,6 @@ fn validate_vm_previous_v1(
     }
     Ok(())
 }
-
 fn validate_vm_next_v1(
     fixed: &PrivateNoteFixedRowV1,
     next_fixed: &PrivateNoteFixedRowV1,
@@ -3029,7 +2915,6 @@ fn validate_vm_next_v1(
     }
     Ok(())
 }
-
 /// Evaluate every native private-note AIR constraint against one complete
 /// canonical base trace. This is deliberately proof-format neutral; the shared
 /// aggregate SHA-256/Goldilocks engine consumes the same fixed and base
@@ -3055,7 +2940,6 @@ pub(super) fn validate_private_note_base_trace_v1(
     }
     validate_copy_cells_v1(&trace.fixed, &trace.rows)?;
     let program = extract_private_program_v1(&trace.fixed, &trace.rows)?;
-
     for index in 0..PRIVATE_NOTE_TRACE_SIZE_V1 {
         let fixed = &trace.fixed.rows[index];
         let row = &trace.rows[index];
@@ -3115,14 +2999,11 @@ pub(super) fn validate_private_note_base_trace_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-
     use iroha_data_model::privacy::{PrivacyActionDigestV1, PrivacyRootV1};
     use rand_08::{SeedableRng as _, rngs::StdRng};
-
     use super::*;
     use crate::privacy_engines::ivm_private_note::{
         derive_note_authority_v1, derive_note_commitment_v1, derive_note_nullifier_v1,
@@ -3133,11 +3014,9 @@ mod tests {
         },
         tests::fixture,
     };
-
     fn changed(value: F) -> F {
         if value == F::ZERO { F::ONE } else { F::ZERO }
     }
-
     fn row_index(
         trace: &PrivateNoteBaseTraceV1,
         predicate: impl Fn(&PrivateNoteFixedRowV1) -> bool,
@@ -3149,7 +3028,6 @@ mod tests {
             .position(predicate)
             .expect("fixture contains requested AIR row")
     }
-
     fn reject_cell_mutation(
         statement: &IrohaIvmPrivateNoteStarkStatementV1,
         trace: &mut PrivateNoteBaseTraceV1,
@@ -3164,7 +3042,6 @@ mod tests {
         );
         trace.rows[row][column] = original;
     }
-
     #[test]
     fn canonical_trace_is_exact_and_keeps_intermediate_hashes_private() {
         let value = fixture();
@@ -3184,7 +3061,6 @@ mod tests {
         );
         validate_private_note_base_trace_v1(&value.statement, &trace)
             .expect("native AIR evaluator");
-
         let public_endpoints = trace
             .fixed
             .rows
@@ -3223,7 +3099,6 @@ mod tests {
             )
         }));
     }
-
     #[test]
     fn mutations_across_every_constraint_family_fail_closed() {
         let value = fixture();
@@ -3231,7 +3106,6 @@ mod tests {
             .expect("canonical trace");
         validate_private_note_base_trace_v1(&value.statement, &trace)
             .expect("canonical native AIR");
-
         let sha_round = row_index(&trace, |row| {
             matches!(row, PrivateNoteFixedRowV1::ShaRound { round: 16, .. })
         });
@@ -3248,7 +3122,6 @@ mod tests {
             sha_round,
             SHA_CARRY_OFFSET + 6,
         );
-
         let sha_end = row_index(&trace, |row| {
             matches!(
                 row,
@@ -3259,12 +3132,10 @@ mod tests {
             )
         });
         reject_cell_mutation(&value.statement, &mut trace, sha_end, SHA_STATE_OFFSET);
-
         let node = row_index(&trace, |row| {
             matches!(row, PrivateNoteFixedRowV1::NodeSelect { .. })
         });
         reject_cell_mutation(&value.statement, &mut trace, node, COPY_OFFSET + 2);
-
         let distinct = row_index(&trace, |row| {
             matches!(row, PrivateNoteFixedRowV1::Distinct { .. })
         });
@@ -3274,7 +3145,6 @@ mod tests {
             distinct,
             SCRATCH_RUNNING_AFTER,
         );
-
         let nonzero = row_index(&trace, |row| {
             matches!(row, PrivateNoteFixedRowV1::NonZero { .. })
         });
@@ -3284,7 +3154,6 @@ mod tests {
             nonzero,
             SCRATCH_RUNNING_BEFORE,
         );
-
         let sum = row_index(&trace, |row| {
             matches!(
                 row,
@@ -3300,7 +3169,6 @@ mod tests {
             sum,
             SCRATCH_RELATION_CARRY_AFTER,
         );
-
         let vm_program = row_index(&trace, |row| {
             matches!(row, PrivateNoteFixedRowV1::VmProgram { instruction: 0 })
         });
@@ -3310,7 +3178,6 @@ mod tests {
             vm_program,
             SCRATCH_VM_OPCODE_SELECT_OFFSET,
         );
-
         let vm_previous = row_index(&trace, |row| {
             matches!(
                 row,
@@ -3326,44 +3193,35 @@ mod tests {
             vm_previous,
             SCRATCH_VM_RESULT_BITS_OFFSET,
         );
-
         let padding = row_index(&trace, |row| matches!(row, PrivateNoteFixedRowV1::Padding));
         reject_cell_mutation(&value.statement, &mut trace, padding, SCRATCH_OFFSET);
     }
-
     #[test]
     fn malformed_shape_fixed_topology_sigma_and_noncanonical_fields_fail() {
         let value = fixture();
         let mut trace = build_private_note_base_trace_v1(&value.statement, &value.witness)
             .expect("canonical trace");
-
         let removed = trace.rows.pop().expect("fixed trace is nonempty");
         assert!(validate_private_note_base_trace_v1(&value.statement, &trace).is_err());
         trace.rows.push(removed);
-
         let removed = trace.rows[0].pop().expect("fixed row is nonempty");
         assert!(validate_private_note_base_trace_v1(&value.statement, &trace).is_err());
         trace.rows[0].push(removed);
-
         let original = trace.rows[0][0];
         trace.rows[0][0] = F(GOLDILOCKS_MODULUS_V1);
         assert!(validate_private_note_base_trace_v1(&value.statement, &trace).is_err());
         trace.rows[0][0] = original;
-
         let original = trace.fixed.copy_sigma[0][0];
         trace.fixed.copy_sigma[0][0] = 0;
         assert!(validate_private_note_base_trace_v1(&value.statement, &trace).is_err());
         trace.fixed.copy_sigma[0][0] = original;
-
         let original = trace.fixed.rows[0].clone();
         trace.fixed.rows[0] = PrivateNoteFixedRowV1::Padding;
         assert!(validate_private_note_base_trace_v1(&value.statement, &trace).is_err());
         trace.fixed.rows[0] = original;
-
         validate_private_note_base_trace_v1(&value.statement, &trace)
             .expect("restored trace remains canonical");
     }
-
     fn maximum_fixture() -> (IrohaIvmPrivateNoteStarkStatementV1, IvmPrivateNoteWitnessV1) {
         let mut value = fixture();
         let first = value.witness.inputs[0].clone();
@@ -3379,7 +3237,6 @@ mod tests {
             derive_note_commitment_v1(&second_note).expect("second input commitment");
         let first_commitment =
             derive_note_commitment_v1(&first.note).expect("first input commitment");
-
         let second_output_secret = [0x91; 32];
         let second_output_note = PrivateNotePlaintextV1 {
             value: 10,
@@ -3409,7 +3266,6 @@ mod tests {
             .statement
             .encrypted_outputs
             .push(second_encrypted_output);
-
         let leaf_0 = accumulator_leaf_invocation_v1(&value.statement, 0, first_commitment)
             .expect("first leaf")
             .digest;
@@ -3476,7 +3332,6 @@ mod tests {
             .expect("maximum action digest");
         (value.statement, value.witness)
     }
-
     #[test]
     fn maximum_two_by_two_relation_fits_the_exact_trace_bound() {
         let (statement, witness) = maximum_fixture();

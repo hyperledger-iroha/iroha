@@ -1,16 +1,11 @@
 //! Generate the shared Kotodama V1 public-entrypoint argument-record fixture.
-
 use std::{env, fs, path::Path};
-
 #[path = "support/atomic_write.rs"]
 mod fixture_io;
-
 use iroha_primitives::json::Json;
 use ivm::{ProgramMetadata, encode_argument_record_from_json};
 use norito::json::{Map, Value};
-
 const SOURCE: &str = "seiyaku ArgumentRecordFixture {\n  view fn quote(int count, bool active, string memo, bytes digest) -> int {\n    let _active = active;\n    let _memo = memo;\n    let _digest = digest;\n    return count;\n  }\n}\n";
-
 fn object(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
     let mut map = Map::new();
     for (key, value) in entries {
@@ -18,11 +13,9 @@ fn object(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
     }
     Value::Object(map)
 }
-
 fn parameter(name: &'static str, ty: &'static str) -> Value {
     object([("name", Value::from(name)), ("type", Value::from(ty))])
 }
-
 /// Render the deterministic shared fixture document.
 pub fn render_fixture() -> String {
     let artifact = ivm::KotodamaCompiler::new()
@@ -53,7 +46,6 @@ pub fn render_fixture() -> String {
     let validated = ivm::validate_argument_record(schema, &record)
         .expect("validate canonical fixture argument record");
     let schema_bytes = norito::to_bytes(schema).expect("encode fixture argument schema");
-
     let document = object([
         ("fixture_version", Value::from(1_u64)),
         ("codec", Value::from("EntrypointArgumentRecordV1")),
@@ -125,7 +117,6 @@ pub fn render_fixture() -> String {
     rendered.push('\n');
     rendered
 }
-
 fn verify(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let expected = render_fixture();
     let actual = fs::read_to_string(path)?;
@@ -139,7 +130,6 @@ fn verify(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = env::args_os().skip(1);
     if let Some(flag) = arguments.next() {

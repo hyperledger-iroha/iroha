@@ -57,8 +57,8 @@ test("IVM derive is authority-bound, exact-network signed, and one-shot", async 
   assert.equal(init.method, "POST");
   assert.equal(init.redirect, "error");
   assert.equal(
-    Buffer.from(init.headers["X-Iroha-Account"], "latin1").toString("utf8"),
-    ACCOUNT_ID,
+    init.headers["X-Iroha-Account"],
+    AccountAddress.parseEncoded(ACCOUNT_ID).address.canonicalHex(),
   );
   const timestampMs = Number(init.headers["X-Iroha-Timestamp-Ms"]);
   const nonce = init.headers["X-Iroha-Nonce"];

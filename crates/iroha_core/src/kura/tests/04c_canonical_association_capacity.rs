@@ -43,7 +43,6 @@ fn canonical_association_stage_append_peak_rejects_before_any_stage_or_block_mut
     Arc::get_mut(&mut kura)
         .expect("exclusive append Kura")
         .max_disk_usage_bytes = exact_peak - 1;
-
     let error = kura
         .store_block(Arc::clone(&block))
         .expect_err("one byte below association overlap must reject");
@@ -61,7 +60,6 @@ fn canonical_association_stage_append_peak_rejects_before_any_stage_or_block_mut
     );
     assert_eq!(kura.exact_durable_blocks_count().unwrap(), 0);
     assert_eq!(kura.blocks_count(), 0);
-
     Arc::get_mut(&mut kura)
         .expect("exclusive append Kura after rejection")
         .max_disk_usage_bytes = exact_peak;
@@ -70,7 +68,6 @@ fn canonical_association_stage_append_peak_rejects_before_any_stage_or_block_mut
     assert!(!kura.canonical_association_stage_path().exists());
     assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
 }
-
 #[test]
 fn canonical_association_stage_replace_peak_keeps_old_top_untouched_on_rejection() {
     let temp_dir = TempDir::new().expect("association replace capacity temp dir");
@@ -90,7 +87,6 @@ fn canonical_association_stage_replace_peak_keeps_old_top_untouched_on_rejection
         .into(),
     );
     assert_ne!(replacement.hash(), original_hash);
-
     let limit_probe = u64::MAX;
     let old_bytes = kura
         .block_required_bytes_for_budget(original.as_ref(), None, limit_probe)
@@ -150,7 +146,6 @@ fn canonical_association_stage_replace_peak_keeps_old_top_untouched_on_rejection
     Arc::get_mut(&mut kura)
         .expect("exclusive replacement Kura")
         .max_disk_usage_bytes = exact_peak - 1;
-
     let error = kura
         .replace_top_block(replacement)
         .expect_err("one byte below replacement association overlap must reject");
@@ -173,7 +168,6 @@ fn canonical_association_stage_replace_peak_keeps_old_top_untouched_on_rejection
         Some(original.as_ref())
     );
 }
-
 #[test]
 fn post_marker_association_failure_poison_gates_and_restart_completes_stage() {
     let lane_id = LaneId::SINGLE;
@@ -190,7 +184,6 @@ fn post_marker_association_failure_poison_gates_and_restart_completes_stage() {
         let block_hash = block.hash();
         kura.fail_next_canonical_association_recovery
             .store(true, Ordering::Release);
-
         let error = kura
             .store_block(block)
             .expect_err("post-marker association fault must require restart");
@@ -218,7 +211,6 @@ fn post_marker_association_failure_poison_gates_and_restart_completes_stage() {
         ));
         block_hash
     };
-
     let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("restart must finish the committed association stage");
     assert_eq!(count.0, 1);

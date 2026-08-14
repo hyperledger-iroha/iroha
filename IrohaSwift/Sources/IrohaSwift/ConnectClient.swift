@@ -126,14 +126,14 @@ public actor ConnectClient {
                                         sid: String,
                                         role: ToriiConnectRole,
                                         endpointPath: String = "/v1/connect/ws") throws -> URL {
-        let normalizedSid = try validateNonEmpty(sid, field: "sid")
+        _ = try decodeConnectBase64URL(sid, byteCount: 32, field: "sid")
         let normalizedPath = endpointPath.hasPrefix("/") ? String(endpointPath.dropFirst()) : endpointPath
         guard var components = URLComponents(url: baseURL.appendingPathComponent(normalizedPath),
                                              resolvingAgainstBaseURL: false) else {
             throw ToriiClientError.invalidURL(endpointPath)
         }
         components.queryItems = [
-            URLQueryItem(name: "sid", value: normalizedSid),
+            URLQueryItem(name: "sid", value: sid),
             URLQueryItem(name: "role", value: role.rawValue)
         ]
         guard let urlWithQuery = components.url else {
@@ -158,7 +158,7 @@ public actor ConnectClient {
                                        sid: sid,
                                        role: role,
                                        endpointPath: endpointPath)
-        let normalizedToken = try validateNonEmpty(token, field: "token")
+        _ = try decodeConnectBase64URL(token, byteCount: 32, field: "token")
         if let violation = IrohaTransportSecurity.webSocketViolation(context: "ConnectClient",
                                                                      baseURL: baseURL,
                                                                      targetURL: url,
@@ -166,7 +166,7 @@ public actor ConnectClient {
             throw ToriiClientError.invalidPayload(violation)
         }
         var request = URLRequest(url: url)
-        request.setValue("Bearer \(normalizedToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         return request
     }
 

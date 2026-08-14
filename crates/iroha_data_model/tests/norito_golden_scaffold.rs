@@ -2,12 +2,10 @@
 //!
 //! These tests pin stable encodings for core data-model types so future changes
 //! surface deterministic diffs instead of silent codec drift.
-
 use hex_literal::hex;
 use iroha_data_model::block::BlockHeader;
 use nonzero_ext::nonzero;
 use norito::codec::Encode;
-
 #[test]
 fn block_header_roundtrip() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 12345, 0);
@@ -15,7 +13,6 @@ fn block_header_roundtrip() {
     let decoded: BlockHeader = norito::decode_from_bytes(&bytes).expect("decode");
     assert_eq!(decoded, header);
 }
-
 #[test]
 fn block_header_golden_bytes() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 12345, 0);

@@ -1,7 +1,6 @@
 #[test]
 fn bootle_lantern_trusted_policy_is_mandatory_valid_active_and_exact() {
     let fixture = bootle_lantern_fixture();
-
     let mut missing = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
     missing.bootle_lantern_policy = None;
     assert!(matches!(
@@ -9,7 +8,6 @@ fn bootle_lantern_trusted_policy_is_mandatory_valid_active_and_exact() {
         Err(PrivacyVerificationErrorV1::BootleLanternState(detail))
             if detail.code == PrivacyBootleLanternStateFailureCodeV1::MissingTrustedPolicy
     ));
-
     let mut corrupt = fixture.policy.clone();
     corrupt.record_digest.0[0] ^= 1;
     let mut corrupt_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
@@ -19,7 +17,6 @@ fn bootle_lantern_trusted_policy_is_mandatory_valid_active_and_exact() {
         Err(PrivacyVerificationErrorV1::BootleLanternState(detail))
             if detail.code == PrivacyBootleLanternStateFailureCodeV1::InvalidTrustedPolicy
     ));
-
     let mut revoked = fixture.policy.clone();
     revoked.epoch += 1;
     revoked.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
@@ -34,7 +31,6 @@ fn bootle_lantern_trusted_policy_is_mandatory_valid_active_and_exact() {
         Err(PrivacyVerificationErrorV1::BootleLanternState(detail))
             if detail.code == PrivacyBootleLanternStateFailureCodeV1::PolicyRevoked
     ));
-
     let mut rotated = fixture.policy.clone();
     rotated.epoch += 1;
     rotated.required_disclosure_bitmap |= 1;

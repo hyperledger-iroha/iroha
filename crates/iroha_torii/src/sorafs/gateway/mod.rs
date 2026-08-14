@@ -1,5 +1,4 @@
 //! Policy and security primitives for the SoraFS gateway service.
-
 mod acme;
 mod compliance;
 mod controller;
@@ -8,7 +7,6 @@ mod policy;
 mod provider;
 mod rate_limit;
 mod telemetry;
-
 pub use acme::{
     AcmeAutomation, AcmeAutomationError, AcmeClient, AcmeClientError, AcmeClientIdentityV1,
     AcmeClientProbeError, AcmeConfig, CertificateBundle, CertificateOrder, ChallengeProfile,
@@ -50,12 +48,9 @@ pub use policy::{
     build_gar_violation_event,
 };
 pub use provider::{GatewayProviderBindingErrorV1, GatewayProviderBindingV1};
-pub use rate_limit::{
-    ClientFingerprint, GatewayRateLimitConfig, GatewayRateLimiter, RateLimitError,
-};
+pub use rate_limit::{ClientFingerprint, GatewayRateLimitConfig, GatewayRateLimiter, RateLimitError};
 #[cfg(feature = "telemetry")]
 pub use telemetry::record_renewal_metrics;
 pub use telemetry::{SORA_TLS_STATE_HEADER, TlsRenewalResult, TlsStateSnapshot};
-
 #[cfg(test)]
 mod tests;

@@ -3,7 +3,6 @@
 //! The public Torii `SoraFS` upload route is deliberately not used here. Every request
 //! targets one fixed publication-specific route, carries a bounded canonical Norito
 //! authorization approved by the configured Iroha account controller, and rejects redirects.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
@@ -14,7 +13,6 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 use base64::Engine as _;
 use iroha_crypto::{PublicKey, SignatureOf};
 use iroha_data_model::{
@@ -57,20 +55,15 @@ use sorafs_car::{
     },
 };
 use url::Url;
-
 use crate::{client::Client, crypto::KeyPair};
-
 mod publication_clock;
 mod publication_journal;
-
 #[cfg(unix)]
 fn publication_filesystem_owner_probe(root: &std::path::Path) -> std::io::Result<u32> {
     use std::os::unix::fs::MetadataExt as _;
-
     let probe = tempfile::tempfile_in(root)?;
     Ok(probe.metadata()?.uid())
 }
-
 pub use publication_clock::{
     DurableMusubiPublicationServiceClockOpenErrorV1, DurableMusubiPublicationServiceClockV1,
 };
@@ -78,7 +71,6 @@ pub use publication_journal::{
     DurableMusubiPublicationServiceJournalLimitsV1,
     DurableMusubiPublicationServiceJournalOpenErrorV1, DurableMusubiPublicationServiceJournalV1,
 };
-
 const AUTH_DOMAIN_V1: [u8; 32] = *b"musubi-pub-runtime-auth-v1\0\0\0\0\0\0";
 /// Exact security-sensitive authorization header accepted by the private service.
 pub const MUSUBI_PUBLICATION_AUTHORIZATION_HEADER_V1: &str =
@@ -129,14 +121,12 @@ const SOURCE_TREE_DOMAIN_V1: &[u8] = b"musubi-source-tree-v1\0";
 const ARTIFACT_DESCRIPTOR_DOMAIN_V1: &[u8] = b"musubi-artifact-descriptor-v1\0";
 #[cfg(test)]
 const BUNDLE_DOMAIN_V1: &[u8] = b"musubi-bundle-v1\0";
-
 // TODO: Deployments must inject and qualify their private HTTPS listener, durable replay journal,
 // broker HSM/signer, and authoritative SoraFS backends around the transport-independent server
 // below. Before declaring a deployment production-qualified, bind each configured hostname to
 // deployment-signed provider-advert IPs and add DNS-rebinding tests; disabling proxies and
 // redirects alone is not DNS pinning. Do not adapt the daemon-private provider broker or restore
 // `/v1/sorafs/upload`; this protocol intentionally exposes neither interface.
-
 /// Fixed private publication-control operation covered by account authorization.
 #[derive(
     Clone,
@@ -160,7 +150,6 @@ pub enum MusubiPublicationRuntimeOperationV1 {
     #[codec(index = 2)]
     ProviderReadback,
 }
-
 /// Domain-separated short-lived authorization for one exact publication request.
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 pub struct MusubiPublicationRuntimeAuthorizationPayloadV1 {
@@ -183,7 +172,6 @@ pub struct MusubiPublicationRuntimeAuthorizationPayloadV1 {
     /// Inclusive authorization expiry in Unix milliseconds.
     pub expires_at_ms: u64,
 }
-
 impl MusubiPublicationRuntimeAuthorizationPayloadV1 {
     fn validate(&self) -> Result<(), MusubiPublicationRuntimeTransportErrorV1> {
         let lifetime = self.expires_at_ms.checked_sub(self.issued_at_ms);
@@ -203,7 +191,6 @@ impl MusubiPublicationRuntimeAuthorizationPayloadV1 {
         Ok(())
     }
 }
-
 /// One controller approval for a bounded private publication request.
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 pub struct MusubiPublicationRuntimeAuthorizationApprovalV1 {
@@ -212,7 +199,6 @@ pub struct MusubiPublicationRuntimeAuthorizationApprovalV1 {
     /// Signature over the exact service authorization payload.
     pub signature: SignatureOf<MusubiPublicationRuntimeAuthorizationPayloadV1>,
 }
-
 /// Bounded publisher-controller authorization for one private publication request.
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 pub struct MusubiPublicationRuntimeAuthorizationV1 {
@@ -221,7 +207,6 @@ pub struct MusubiPublicationRuntimeAuthorizationV1 {
     /// Canonically ordered, distinct publisher-controller approvals.
     pub approvals: Vec<MusubiPublicationRuntimeAuthorizationApprovalV1>,
 }
-
 impl MusubiPublicationRuntimeAuthorizationV1 {
     /// Verify the exact operation, request digest, validity window, and account controller.
     ///
@@ -238,7 +223,6 @@ impl MusubiPublicationRuntimeAuthorizationV1 {
     ) -> Result<(), MusubiPublicationRuntimeTransportErrorV1> {
         self.verify_with_clock_skew(operation, operation_id, request_digest, current_time_ms, 0)
     }
-
     /// Verify an exact request while tolerating only a bounded future clock skew.
     ///
     /// Expiry remains strict: skew can accommodate a publisher clock that is slightly
@@ -355,7 +339,6 @@ impl MusubiPublicationRuntimeAuthorizationV1 {
         }
     }
 }
-
 /// One bounded chunk in the canonical Musubi seed-ingress plan witness.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 pub struct MusubiSeedIngressCarChunkV1 {
@@ -366,7 +349,6 @@ pub struct MusubiSeedIngressCarChunkV1 {
     /// BLAKE3-256 digest of the exact chunk bytes.
     pub digest: [u8; 32],
 }
-
 /// One portable file entry in the canonical Musubi seed-ingress plan witness.
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 pub struct MusubiSeedIngressCarFileV1 {
@@ -379,7 +361,6 @@ pub struct MusubiSeedIngressCarFileV1 {
     /// Exact file byte length.
     pub size: u64,
 }
-
 /// Canonical bounded Norito witness for one exact multi-file `SoraFS` CAR build plan.
 ///
 /// The chunk profile is deliberately absent. Conversion resolves the complete, canonical profile
@@ -398,7 +379,6 @@ pub struct MusubiSeedIngressCarPlanV1 {
     /// Canonically ordered complete file inventory.
     pub files: Vec<MusubiSeedIngressCarFileV1>,
 }
-
 impl MusubiSeedIngressCarPlanV1 {
     /// Convert a validated `SoraFS` plan into its canonical V1 wire witness.
     ///
@@ -430,7 +410,6 @@ impl MusubiSeedIngressCarPlanV1 {
         plan.validate_for_ingest_with_limit(SEED_INGRESS_PLAN_HEAP_LIMIT_BYTES_V1)
             .map_err(|_| seed_ingress_plan_invalid())?;
         validate_seed_ingress_plan_commitment(commitment, plan)?;
-
         let mut chunks = Vec::new();
         chunks
             .try_reserve_exact(plan.chunks.len())
@@ -462,7 +441,6 @@ impl MusubiSeedIngressCarPlanV1 {
             files,
         })
     }
-
     /// Reconstruct the exact validated `SoraFS` plan selected by an immutable commitment.
     ///
     /// # Errors
@@ -511,7 +489,6 @@ impl MusubiSeedIngressCarPlanV1 {
         validate_seed_ingress_plan_commitment(commitment, &plan)?;
         Ok(plan)
     }
-
     /// Validate this witness against one exact immutable archive commitment.
     ///
     /// # Errors
@@ -524,7 +501,6 @@ impl MusubiSeedIngressCarPlanV1 {
     ) -> Result<(), MusubiPublicationRuntimeTransportErrorV1> {
         self.to_car_build_plan(commitment).map(|_| ())
     }
-
     /// Encode this witness as bounded canonical Norito bytes.
     ///
     /// # Errors
@@ -539,7 +515,6 @@ impl MusubiSeedIngressCarPlanV1 {
         }
         Ok(bytes)
     }
-
     /// Compute the domain-separated digest of the exact canonical witness bytes.
     ///
     /// # Errors
@@ -552,7 +527,6 @@ impl MusubiSeedIngressCarPlanV1 {
         self.canonical_bytes()
             .and_then(|bytes| seed_ingress_plan_digest(&bytes))
     }
-
     /// Return the exact canonical witness byte length.
     ///
     /// # Errors
@@ -562,12 +536,10 @@ impl MusubiSeedIngressCarPlanV1 {
     pub fn canonical_len(&self) -> Result<u64, MusubiPublicationRuntimeTransportErrorV1> {
         u64::try_from(self.canonical_bytes()?.len()).map_err(|_| seed_ingress_plan_invalid())
     }
-
     fn validate_shape(&self) -> Result<(), MusubiPublicationRuntimeTransportErrorV1> {
         self.validate_non_path_shape()?;
         self.validate_portable_paths()
     }
-
     fn validate_non_path_shape(&self) -> Result<(), MusubiPublicationRuntimeTransportErrorV1> {
         let maximum_files = usize::try_from(MUSUBI_MAX_FILES_V1)
             .unwrap_or(usize::MAX)
@@ -584,14 +556,12 @@ impl MusubiSeedIngressCarPlanV1 {
         }
         Ok(())
     }
-
     fn validate_portable_paths(&self) -> Result<(), MusubiPublicationRuntimeTransportErrorV1> {
         validate_musubi_portable_path_set_v1(self.files.iter().map(|file| file.path.as_slice()))
             .map_err(|_| seed_ingress_plan_invalid())?;
         Ok(())
     }
 }
-
 fn clone_seed_ingress_path(
     path: &[String],
 ) -> Result<Vec<String>, MusubiPublicationRuntimeTransportErrorV1> {
@@ -609,7 +579,6 @@ fn clone_seed_ingress_path(
     }
     Ok(cloned)
 }
-
 /// Authenticated metadata accompanying one framed canonical plan-and-CAR seed body.
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 pub struct MusubiSeedIngressStageRequestV1 {
@@ -626,7 +595,6 @@ pub struct MusubiSeedIngressStageRequestV1 {
     /// Exact canonical Norito plan-witness byte length in the body envelope.
     pub plan_length: u64,
 }
-
 impl MusubiSeedIngressStageRequestV1 {
     /// Validate the closed request and its exact receipt binding.
     ///
@@ -661,11 +629,9 @@ impl MusubiSeedIngressStageRequestV1 {
         Ok(())
     }
 }
-
 fn seed_ingress_plan_invalid() -> MusubiPublicationRuntimeTransportErrorV1 {
     MusubiPublicationRuntimeTransportErrorV1::permanent("MUSUBI_SEED_INGRESS_PLAN_INVALID")
 }
-
 fn seed_ingress_commitment_profile(
     commitment: &MusubiArchiveCommitmentV1,
 ) -> Result<sorafs_car::sorafs_chunker::ChunkProfile, MusubiPublicationRuntimeTransportErrorV1> {
@@ -683,7 +649,6 @@ fn seed_ingress_commitment_profile(
     }
     Ok(descriptor.profile)
 }
-
 fn validate_seed_ingress_plan_commitment(
     commitment: &MusubiArchiveCommitmentV1,
     plan: &CarBuildPlan,
@@ -705,7 +670,6 @@ fn validate_seed_ingress_plan_commitment(
     {
         return Err(seed_ingress_plan_invalid());
     }
-
     let mut source_files = 0_usize;
     let mut release_files = 0_u8;
     let mut descriptor_files = 0_u8;
@@ -728,7 +692,6 @@ fn validate_seed_ingress_plan_commitment(
     }
     Ok(())
 }
-
 fn seed_ingress_plan_digest(
     canonical_plan: &[u8],
 ) -> Result<MusubiContentDigestV1, MusubiPublicationRuntimeTransportErrorV1> {
@@ -742,7 +705,6 @@ fn seed_ingress_plan_digest(
     hasher.update(canonical_plan);
     Ok(MusubiContentDigestV1::new(*hasher.finalize().as_bytes()))
 }
-
 /// Finalized immutable archive-registration evidence sent to the storage coordinator.
 ///
 /// The named registry snapshot proves when the immutable registration became
@@ -762,7 +724,6 @@ pub struct MusubiFinalizedArchiveRegistrationEvidenceV1 {
     /// Immutable projection reproduced from the authoritative archive record.
     pub registration: MusubiArchiveRegistrationProjectionV1,
 }
-
 impl MusubiFinalizedArchiveRegistrationEvidenceV1 {
     /// Validate deployment, finality, and immutable archive-registration bindings.
     ///
@@ -795,7 +756,6 @@ impl MusubiFinalizedArchiveRegistrationEvidenceV1 {
         Ok(())
     }
 }
-
 /// Exact archive and receipt inputs sent to the private storage coordinator.
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 pub struct MusubiStorageCoordinationRequestV1 {
@@ -822,7 +782,6 @@ pub struct MusubiStorageCoordinationRequestV1 {
     /// Finalized immutable registration evidence recovered before storage coordination.
     pub finalized_registration: MusubiFinalizedArchiveRegistrationEvidenceV1,
 }
-
 impl MusubiStorageCoordinationRequestV1 {
     /// Validate every immutable storage-coordination input.
     ///
@@ -881,7 +840,6 @@ impl MusubiStorageCoordinationRequestV1 {
         Ok(())
     }
 }
-
 /// Whether the publisher must add the returned location or may reuse finalized state.
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 pub enum MusubiStorageLocationDispositionV1 {
@@ -897,7 +855,6 @@ pub enum MusubiStorageLocationDispositionV1 {
     #[codec(index = 1)]
     Registered(MusubiArchiveLocationV1),
 }
-
 /// Idempotent private storage-coordinator result.
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 pub struct MusubiStorageCoordinationResponseV1 {
@@ -918,7 +875,6 @@ pub struct MusubiStorageCoordinationResponseV1 {
     /// Finalized retry disposition.
     pub disposition: MusubiStorageLocationDispositionV1,
 }
-
 impl MusubiStorageCoordinationResponseV1 {
     /// Validate the response against the exact authenticated request.
     ///
@@ -1055,7 +1011,6 @@ impl MusubiStorageCoordinationResponseV1 {
         Ok(())
     }
 }
-
 /// Exact provider-specific full-archive readback request.
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 pub struct MusubiProviderReadbackRequestV1 {
@@ -1078,7 +1033,6 @@ pub struct MusubiProviderReadbackRequestV1 {
     /// Verification-lock digest that must be parsed from the returned bundle.
     pub verification_lock_digest: MusubiVerificationLockDigestV1,
 }
-
 impl MusubiProviderReadbackRequestV1 {
     /// Validate exact location, provider, archive, and bundle bindings.
     ///
@@ -1127,7 +1081,6 @@ impl MusubiProviderReadbackRequestV1 {
         Ok(())
     }
 }
-
 /// Exact commitment evidence returned by one provider-specific readback service.
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 pub struct MusubiProviderReadbackResponseV1 {
@@ -1146,7 +1099,6 @@ pub struct MusubiProviderReadbackResponseV1 {
     /// Verification-lock digest parsed from the canonical bundle.
     pub verification_lock_digest: MusubiVerificationLockDigestV1,
 }
-
 impl MusubiProviderReadbackResponseV1 {
     /// Validate the response against one exact provider request.
     ///
@@ -1173,7 +1125,6 @@ impl MusubiProviderReadbackResponseV1 {
         Ok(())
     }
 }
-
 /// Stable transport failure class without remote diagnostics or credentials.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MusubiPublicationRuntimeTransportFailureClassV1 {
@@ -1182,14 +1133,12 @@ pub enum MusubiPublicationRuntimeTransportFailureClassV1 {
     /// Configuration, authorization, or response content must change.
     Permanent,
 }
-
 /// Redacted failure returned by the authenticated publication HTTPS client.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MusubiPublicationRuntimeTransportErrorV1 {
     class: MusubiPublicationRuntimeTransportFailureClassV1,
     code: &'static str,
 }
-
 impl MusubiPublicationRuntimeTransportErrorV1 {
     const fn retryable(code: &'static str) -> Self {
         Self {
@@ -1197,52 +1146,43 @@ impl MusubiPublicationRuntimeTransportErrorV1 {
             code,
         }
     }
-
     const fn permanent(code: &'static str) -> Self {
         Self {
             class: MusubiPublicationRuntimeTransportFailureClassV1::Permanent,
             code,
         }
     }
-
     /// Return whether an identical idempotent call may be retried.
     #[must_use]
     pub const fn class(&self) -> MusubiPublicationRuntimeTransportFailureClassV1 {
         self.class
     }
-
     /// Return the stable payload-free failure code.
     #[must_use]
     pub const fn code(&self) -> &'static str {
         self.code
     }
 }
-
 impl fmt::Display for MusubiPublicationRuntimeTransportErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.code)
     }
 }
-
 impl std::error::Error for MusubiPublicationRuntimeTransportErrorV1 {}
-
 /// Maximum future clock skew accepted by the private publication service.
 pub const MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1: u64 = 30_000;
 /// Maximum number of append-only location transaction generations in one publication operation.
 pub const MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1: usize = 8;
-
 fn storage_generation_target(generation: u8) -> [u8; 32] {
     let mut target = [0_u8; 32];
     target[0] = generation;
     target
 }
-
 fn valid_storage_generation_target(target: [u8; 32]) -> bool {
     target[0] > 0
         && usize::from(target[0]) <= MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1
         && target[1..].iter().all(|byte| *byte == 0)
 }
-
 fn provider_readback_target(location: &MusubiArchiveLocationV1, provider: ProviderId) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(PROVIDER_READBACK_TARGET_DOMAIN_V1);
@@ -1251,7 +1191,6 @@ fn provider_readback_target(location: &MusubiArchiveLocationV1, provider: Provid
     hasher.update(provider.as_bytes());
     *hasher.finalize().as_bytes()
 }
-
 fn maximum_historical_readbacks_per_operation() -> usize {
     let bound = MUSUBI_MAX_ARCHIVE_LOCATIONS_V1
         .checked_mul(MUSUBI_MAX_LOCATION_PROVIDERS_V1)
@@ -1272,7 +1211,6 @@ pub const MUSUBI_PUBLICATION_STORAGE_COORDINATION_PATH_V1: &str =
 /// Exact private path for provider-specific full-archive readback.
 pub const MUSUBI_PUBLICATION_PROVIDER_READBACK_PATH_V1: &str =
     "/v1/musubi/publication/provider-readback";
-
 /// One of the three closed private publication routes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MusubiPublicationPrivateRouteV1 {
@@ -1283,7 +1221,6 @@ pub enum MusubiPublicationPrivateRouteV1 {
     /// Verify a complete archive through one exact provider.
     ProviderReadback,
 }
-
 impl MusubiPublicationPrivateRouteV1 {
     /// Parse an exact private route path without prefix or suffix matching.
     #[must_use]
@@ -1295,7 +1232,6 @@ impl MusubiPublicationPrivateRouteV1 {
             _ => None,
         }
     }
-
     /// Return the exact private route path.
     #[must_use]
     pub const fn path(self) -> &'static str {
@@ -1306,7 +1242,6 @@ impl MusubiPublicationPrivateRouteV1 {
         }
     }
 }
-
 /// Secret-free wire error returned by the private publication service.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 pub enum MusubiPublicationServiceErrorCodeV1 {
@@ -1368,7 +1303,6 @@ pub enum MusubiPublicationServiceErrorCodeV1 {
     #[codec(index = 18)]
     TrustedClockUnavailable,
 }
-
 impl MusubiPublicationServiceErrorCodeV1 {
     /// Return a stable payload-free diagnostic code.
     #[must_use]
@@ -1398,7 +1332,6 @@ impl MusubiPublicationServiceErrorCodeV1 {
         }
     }
 }
-
 /// Canonical bounded error response for every private publication route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 pub struct MusubiPublicationServiceErrorResponseV1 {
@@ -1409,7 +1342,6 @@ pub struct MusubiPublicationServiceErrorResponseV1 {
     /// Whether a newly authorized identical request may succeed later.
     pub retryable: bool,
 }
-
 /// Transport-neutral private HTTP request passed by a deployment-owned HTTPS ingress.
 #[derive(Clone, Copy)]
 pub struct MusubiPublicationPrivateHttpRequestV1<'a> {
@@ -1426,7 +1358,6 @@ pub struct MusubiPublicationPrivateHttpRequestV1<'a> {
     /// Exact bounded request body.
     pub body: &'a [u8],
 }
-
 impl fmt::Debug for MusubiPublicationPrivateHttpRequestV1<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1443,7 +1374,6 @@ impl fmt::Debug for MusubiPublicationPrivateHttpRequestV1<'_> {
             .finish()
     }
 }
-
 /// Transport-neutral private HTTP response emitted by the service core.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MusubiPublicationPrivateHttpResponseV1 {
@@ -1454,7 +1384,6 @@ pub struct MusubiPublicationPrivateHttpResponseV1 {
     /// Canonical bounded Norito success or error body.
     pub body: Vec<u8>,
 }
-
 /// Public, non-secret identity constraints for one private publication service.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MusubiPublicationServiceConfigurationV1 {
@@ -1469,7 +1398,6 @@ pub struct MusubiPublicationServiceConfigurationV1 {
     /// Positive lifetime assigned to broker-signed staging receipts.
     pub receipt_lifetime_ms: u64,
 }
-
 impl MusubiPublicationServiceConfigurationV1 {
     fn validate(&self) -> Result<(), MusubiPublicationServiceErrorCodeV1> {
         if self.network_id.as_bytes()[31] & 1 != 1
@@ -1484,7 +1412,6 @@ impl MusubiPublicationServiceConfigurationV1 {
         Ok(())
     }
 }
-
 /// Stable deployment identity durably bound by a publication-service journal.
 ///
 /// Timing policy is intentionally excluded so operators can adjust authorization skew or receipt
@@ -1498,7 +1425,6 @@ pub struct MusubiPublicationServiceJournalBindingV1 {
     /// Exact admitted seed provider for this private service.
     pub seed_provider: ProviderId,
 }
-
 impl MusubiPublicationServiceJournalBindingV1 {
     /// Derive the durable identity boundary from one service configuration.
     #[must_use]
@@ -1509,7 +1435,6 @@ impl MusubiPublicationServiceJournalBindingV1 {
             seed_provider: configuration.seed_provider,
         }
     }
-
     fn validate(&self) -> Result<(), MusubiPublicationServiceJournalErrorV1> {
         if self.network_id.as_bytes()[31] & 1 != 1
             || self.seed_provider.as_bytes().iter().all(|byte| *byte == 0)
@@ -1523,7 +1448,6 @@ impl MusubiPublicationServiceJournalBindingV1 {
         Ok(())
     }
 }
-
 fn controller_fits_publication_approval_bound(account: &AccountId) -> bool {
     if validate_musubi_account_id_v1(account).is_err() {
         return false;
@@ -1531,7 +1455,6 @@ fn controller_fits_publication_approval_bound(account: &AccountId) -> bool {
     let AccountController::Multisig(policy) = account.controller() else {
         return true;
     };
-
     // `AccountId`'s generic Norito decode reconstructs its controller directly. Re-run the
     // policy constructor here so a canonical but structurally invalid wire policy cannot turn a
     // zero/duplicate/unsupported controller into publication authority.
@@ -1544,7 +1467,6 @@ fn controller_fits_publication_approval_bound(account: &AccountId) -> bool {
     {
         return false;
     }
-
     // Keep only the largest weights that could fit in one bounded publication approval set. This
     // is fixed-memory even if a deployment supplies a policy with an unusually large member set.
     let mut largest_weights = [0_u16; MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1];
@@ -1563,7 +1485,6 @@ fn controller_fits_publication_approval_bound(account: &AccountId) -> bool {
     }
     largest_weights.into_iter().map(u32::from).sum::<u32>() >= u32::from(policy.threshold())
 }
-
 /// Backend failure class deliberately carrying no provider diagnostics or secrets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MusubiPublicationServiceBackendErrorV1 {
@@ -1572,7 +1493,6 @@ pub enum MusubiPublicationServiceBackendErrorV1 {
     /// Deployment configuration or immutable backend state must change.
     Permanent,
 }
-
 /// Admitted backend that durably stages an already verified exact CAR.
 pub trait MusubiSeedIngressBackendV1: Send {
     /// Return the exact admitted provider served by this backend instance.
@@ -1580,7 +1500,6 @@ pub trait MusubiSeedIngressBackendV1: Send {
     /// The service constructor compares this identity with its public configuration before
     /// accepting traffic, so an injected backend cannot silently stage for another provider.
     fn provider_id(&self) -> ProviderId;
-
     /// Stage or idempotently reuse one exact operation and receipt binding.
     ///
     /// # Errors
@@ -1596,7 +1515,6 @@ pub trait MusubiSeedIngressBackendV1: Send {
         car: &[u8],
     ) -> Result<(), MusubiPublicationServiceBackendErrorV1>;
 }
-
 /// Backend coordinating permanent pins, replication, and finalized provider completions.
 pub trait MusubiStorageCoordinationBackendV1: Send {
     /// Coordinate or idempotently return evidence for one exact immutable request.
@@ -1617,7 +1535,6 @@ pub trait MusubiStorageCoordinationBackendV1: Send {
         request: &MusubiStorageCoordinationRequestV1,
     ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationServiceBackendErrorV1>;
 }
-
 /// Backend performing complete provider-specific archive and bundle verification.
 pub trait MusubiProviderReadbackBackendV1: Send {
     /// Read, parse, and verify one exact committed CAR through the selected provider.
@@ -1631,7 +1548,6 @@ pub trait MusubiProviderReadbackBackendV1: Send {
         request: &MusubiProviderReadbackRequestV1,
     ) -> Result<MusubiProviderReadbackResponseV1, MusubiPublicationServiceBackendErrorV1>;
 }
-
 /// Immutable operation-wide binding enforced across all three private routes.
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, norito::derive::Encode, norito::derive::Decode,
@@ -1650,7 +1566,6 @@ pub struct MusubiPublicationOperationBindingV1 {
     /// Length of the exact canonical CAR.
     pub car_body_length: u64,
 }
-
 impl MusubiPublicationOperationBindingV1 {
     fn validate(&self) -> Result<(), MusubiPublicationServiceJournalErrorV1> {
         if self.operation_id.iter().all(|byte| *byte == 0)
@@ -1669,7 +1584,6 @@ impl MusubiPublicationOperationBindingV1 {
         Ok(())
     }
 }
-
 /// Canonical key for one idempotent route result within a publication operation.
 #[derive(
     Clone,
@@ -1691,7 +1605,6 @@ pub struct MusubiPublicationIdempotencyKeyV1 {
     /// coordination, or the exact location-ID/revision/provider digest for readback.
     pub target: [u8; 32],
 }
-
 /// Atomic journal attempt binding authorization replay to immutable operation state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MusubiPublicationJournalAttemptV1 {
@@ -1706,7 +1619,6 @@ pub struct MusubiPublicationJournalAttemptV1 {
     /// Inclusive expiry used to bound replay retention.
     pub authorization_expires_at_ms: u64,
 }
-
 /// Result of atomically beginning one journaled service attempt.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MusubiPublicationJournalBeginV1 {
@@ -1715,7 +1627,6 @@ pub enum MusubiPublicationJournalBeginV1 {
     /// The exact request already completed; return these canonical response bytes.
     Cached(Vec<u8>),
 }
-
 /// Stable journal failure with no filesystem, database, or credential details.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MusubiPublicationServiceJournalErrorV1 {
@@ -1732,7 +1643,6 @@ pub enum MusubiPublicationServiceJournalErrorV1 {
     /// Durable journal state could not be read or committed.
     Unavailable,
 }
-
 /// Durable atomic replay and idempotency boundary required by production services.
 ///
 /// A crash-safe implementation must recover an interrupted fresh attempt as an aborted
@@ -1742,7 +1652,6 @@ pub enum MusubiPublicationServiceJournalErrorV1 {
 pub trait MusubiPublicationServiceJournalV1: Send {
     /// Return the exact deployment identity bound by every retained record.
     fn deployment_binding(&self) -> &MusubiPublicationServiceJournalBindingV1;
-
     /// Atomically validate the operation binding and detect a cached result before reserving a
     /// new attempt and consuming its authorization digest. Cached seed receipts must remain
     /// available to [`Self::refresh_expired_seed_receipt`] with that same fresh authorization.
@@ -1756,7 +1665,6 @@ pub trait MusubiPublicationServiceJournalV1: Send {
         attempt: &MusubiPublicationJournalAttemptV1,
         current_time_ms: u64,
     ) -> Result<MusubiPublicationJournalBeginV1, MusubiPublicationServiceJournalErrorV1>;
-
     /// Atomically reopen an exact completed seed-ingress result after its receipt expired.
     ///
     /// The implementation must compare `expected_response`, consume the fresh authorization,
@@ -1772,7 +1680,6 @@ pub trait MusubiPublicationServiceJournalV1: Send {
         expected_response: &[u8],
         current_time_ms: u64,
     ) -> Result<(), MusubiPublicationServiceJournalErrorV1>;
-
     /// Atomically persist the canonical successful response for the reserved attempt.
     ///
     /// # Errors
@@ -1785,7 +1692,6 @@ pub trait MusubiPublicationServiceJournalV1: Send {
         request_digest: [u8; 32],
         response: &[u8],
     ) -> Result<(), MusubiPublicationServiceJournalErrorV1>;
-
     /// Release an unfinished reservation while retaining its request-digest tombstone and
     /// consumed-authorization replay state.
     ///
@@ -1799,7 +1705,6 @@ pub trait MusubiPublicationServiceJournalV1: Send {
         request_digest: [u8; 32],
     ) -> Result<(), MusubiPublicationServiceJournalErrorV1>;
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum InMemoryPublicationResultV1 {
     Pending([u8; 32]),
@@ -1813,7 +1718,6 @@ enum InMemoryPublicationResultV1 {
         response: Vec<u8>,
     },
 }
-
 /// Bounded process-local journal intended for tests and ephemeral development services.
 ///
 /// Production deployments must inject a crash-safe implementation of
@@ -1829,7 +1733,6 @@ pub struct InMemoryMusubiPublicationServiceJournalV1 {
     authorization_expiry: BTreeMap<[u8; 32], u64>,
     expiry_index: BTreeSet<(u64, [u8; 32])>,
 }
-
 impl InMemoryMusubiPublicationServiceJournalV1 {
     /// Construct a bounded ephemeral journal.
     ///
@@ -1865,7 +1768,6 @@ impl InMemoryMusubiPublicationServiceJournalV1 {
             expiry_index: BTreeSet::new(),
         })
     }
-
     fn prune_authorizations(&mut self, current_time_ms: u64) {
         let expired = self
             .expiry_index
@@ -1877,7 +1779,6 @@ impl InMemoryMusubiPublicationServiceJournalV1 {
             self.authorization_expiry.remove(&digest);
         }
     }
-
     fn validate_attempt(
         &self,
         attempt: &MusubiPublicationJournalAttemptV1,
@@ -1907,7 +1808,6 @@ impl InMemoryMusubiPublicationServiceJournalV1 {
         }
         Ok(())
     }
-
     fn consume_authorization(
         &mut self,
         attempt: &MusubiPublicationJournalAttemptV1,
@@ -1934,12 +1834,10 @@ impl InMemoryMusubiPublicationServiceJournalV1 {
         Ok(())
     }
 }
-
 impl MusubiPublicationServiceJournalV1 for InMemoryMusubiPublicationServiceJournalV1 {
     fn deployment_binding(&self) -> &MusubiPublicationServiceJournalBindingV1 {
         &self.binding
     }
-
     fn begin(
         &mut self,
         attempt: &MusubiPublicationJournalAttemptV1,
@@ -1953,7 +1851,6 @@ impl MusubiPublicationServiceJournalV1 for InMemoryMusubiPublicationServiceJourn
         } else if self.operation_bindings.len() >= self.max_operations {
             return Err(MusubiPublicationServiceJournalErrorV1::Capacity);
         }
-
         let retrying_aborted = if let Some(existing) = self.results.get(&attempt.key) {
             match existing {
                 InMemoryPublicationResultV1::Pending(request_digest)
@@ -2013,7 +1910,6 @@ impl MusubiPublicationServiceJournalV1 for InMemoryMusubiPublicationServiceJourn
         {
             return Err(MusubiPublicationServiceJournalErrorV1::Capacity);
         }
-
         self.consume_authorization(attempt, current_time_ms)?;
         self.operation_bindings
             .entry(attempt.binding.operation_id)
@@ -2024,7 +1920,6 @@ impl MusubiPublicationServiceJournalV1 for InMemoryMusubiPublicationServiceJourn
         );
         Ok(MusubiPublicationJournalBeginV1::Execute)
     }
-
     fn refresh_expired_seed_receipt(
         &mut self,
         attempt: &MusubiPublicationJournalAttemptV1,
@@ -2073,7 +1968,6 @@ impl MusubiPublicationServiceJournalV1 for InMemoryMusubiPublicationServiceJourn
         );
         Ok(())
     }
-
     fn commit(
         &mut self,
         key: MusubiPublicationIdempotencyKeyV1,
@@ -2113,7 +2007,6 @@ impl MusubiPublicationServiceJournalV1 for InMemoryMusubiPublicationServiceJourn
             _ => Err(MusubiPublicationServiceJournalErrorV1::Conflict),
         }
     }
-
     fn abort(
         &mut self,
         key: MusubiPublicationIdempotencyKeyV1,
@@ -2156,7 +2049,6 @@ impl MusubiPublicationServiceJournalV1 for InMemoryMusubiPublicationServiceJourn
         }
     }
 }
-
 /// Deployment-owned signing boundary for one exact seed-ingress receipt payload.
 ///
 /// Implementations may call an HSM, KMS, or threshold collection service. They return only
@@ -2167,7 +2059,6 @@ impl MusubiPublicationServiceJournalV1 for InMemoryMusubiPublicationServiceJourn
 pub trait MusubiSeedIngressReceiptSigningProviderV1: Send {
     /// Exact broker account controlled by this signing provider.
     fn broker(&self) -> &AccountId;
-
     /// Sign the exact service-constructed payload with the broker controller.
     ///
     /// # Errors
@@ -2181,7 +2072,6 @@ pub trait MusubiSeedIngressReceiptSigningProviderV1: Send {
         payload: &MusubiSeedIngressReceiptPayloadV1,
     ) -> Result<Vec<MusubiSeedIngressReceiptApprovalV1>, MusubiPublicationServiceBackendErrorV1>;
 }
-
 /// Trusted wall-clock boundary used for authorization and receipt freshness.
 ///
 /// Production implementations must persist or otherwise enforce a non-regressing time floor
@@ -2195,7 +2085,6 @@ pub trait MusubiPublicationServiceClockV1: Send {
     /// Returns a redacted backend failure when the trusted clock cannot be sampled.
     fn current_time_ms(&mut self) -> Result<u64, MusubiPublicationServiceBackendErrorV1>;
 }
-
 /// Raw system wall clock for qualified private-publication service runners.
 ///
 /// This adapter does not itself persist a high-water mark. A production platform may use it only
@@ -2203,7 +2092,6 @@ pub trait MusubiPublicationServiceClockV1: Send {
 /// backed by a durable time floor.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MusubiPublicationSystemClockV1;
-
 impl MusubiPublicationServiceClockV1 for MusubiPublicationSystemClockV1 {
     fn current_time_ms(&mut self) -> Result<u64, MusubiPublicationServiceBackendErrorV1> {
         SystemTime::now()
@@ -2215,7 +2103,6 @@ impl MusubiPublicationServiceClockV1 for MusubiPublicationSystemClockV1 {
             })
     }
 }
-
 /// Runtime-only software signing adapter for a single-controller ingress broker.
 ///
 /// Production deployments should inject an HSM/KMS implementation of
@@ -2225,7 +2112,6 @@ pub struct SoftwareMusubiSeedIngressReceiptSignerV1 {
     broker: AccountId,
     key_pair: KeyPair,
 }
-
 impl fmt::Debug for SoftwareMusubiSeedIngressReceiptSignerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2234,7 +2120,6 @@ impl fmt::Debug for SoftwareMusubiSeedIngressReceiptSignerV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl SoftwareMusubiSeedIngressReceiptSignerV1 {
     /// Construct from deployment-owned key material that exactly controls the broker account.
     ///
@@ -2254,12 +2139,10 @@ impl SoftwareMusubiSeedIngressReceiptSignerV1 {
         Ok(Self { broker, key_pair })
     }
 }
-
 impl MusubiSeedIngressReceiptSigningProviderV1 for SoftwareMusubiSeedIngressReceiptSignerV1 {
     fn broker(&self) -> &AccountId {
         &self.broker
     }
-
     fn sign_approvals(
         &mut self,
         payload: &MusubiSeedIngressReceiptPayloadV1,
@@ -2277,7 +2160,6 @@ impl MusubiSeedIngressReceiptSigningProviderV1 for SoftwareMusubiSeedIngressRece
         }])
     }
 }
-
 /// Complete transport-independent server counterpart for private Musubi publication routes.
 ///
 /// The service owns no listener, TLS key, platform credential loader, or `SoraFS` implementation.
@@ -2294,7 +2176,6 @@ pub struct MusubiPublicationPrivateServiceV1 {
     storage: Box<dyn MusubiStorageCoordinationBackendV1>,
     readback: Box<dyn MusubiProviderReadbackBackendV1>,
 }
-
 impl fmt::Debug for MusubiPublicationPrivateServiceV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2303,7 +2184,6 @@ impl fmt::Debug for MusubiPublicationPrivateServiceV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl MusubiPublicationPrivateServiceV1 {
     /// Construct a fail-closed service from deployment-owned runtime dependencies.
     ///
@@ -2344,7 +2224,6 @@ impl MusubiPublicationPrivateServiceV1 {
             readback,
         })
     }
-
     /// Handle one exact private HTTP request and always return a bounded typed response.
     #[must_use]
     pub fn handle(
@@ -2360,7 +2239,6 @@ impl MusubiPublicationPrivateServiceV1 {
             Err(error) => error.into_response(),
         }
     }
-
     fn try_handle(
         &mut self,
         request: MusubiPublicationPrivateHttpRequestV1<'_>,
@@ -2409,7 +2287,6 @@ impl MusubiPublicationPrivateServiceV1 {
             }
         }
     }
-
     #[allow(
         clippy::too_many_lines,
         reason = "the seed-ingress handler keeps one security-sensitive route's validation and journal transition contiguous"
@@ -2522,7 +2399,6 @@ impl MusubiPublicationPrivateServiceV1 {
             }
             MusubiPublicationJournalBeginV1::Execute => {}
         }
-
         let result = self
             .seed_ingress
             .stage_exact_car(
@@ -2537,7 +2413,6 @@ impl MusubiPublicationPrivateServiceV1 {
             .and_then(|response| encode_service_response(&response));
         self.finish_attempt(attempt.key, digest, result)
     }
-
     fn issue_seed_ingress_receipt(
         &mut self,
         binding: MusubiSeedIngressReceiptBindingV1,
@@ -2593,7 +2468,6 @@ impl MusubiPublicationPrivateServiceV1 {
             })?;
         Ok(receipt)
     }
-
     #[allow(
         clippy::too_many_lines,
         reason = "the storage handler keeps one security-sensitive route's validation and journal transition contiguous"
@@ -2691,7 +2565,6 @@ impl MusubiPublicationPrivateServiceV1 {
             }
             MusubiPublicationJournalBeginV1::Execute => {}
         }
-
         let result = self
             .storage
             .coordinate_storage(&decoded.value)
@@ -2712,7 +2585,6 @@ impl MusubiPublicationPrivateServiceV1 {
             });
         self.finish_attempt(attempt.key, digest, result)
     }
-
     fn handle_provider_readback(
         &mut self,
         http: MusubiPublicationPrivateHttpRequestV1<'_>,
@@ -2776,7 +2648,6 @@ impl MusubiPublicationPrivateServiceV1 {
             }
             MusubiPublicationJournalBeginV1::Execute => {}
         }
-
         let result = self
             .readback
             .readback_provider(&decoded.value)
@@ -2797,7 +2668,6 @@ impl MusubiPublicationPrivateServiceV1 {
             });
         self.finish_attempt(attempt.key, digest, result)
     }
-
     fn validate_seed_identity(
         &self,
         request: &MusubiSeedIngressStageRequestV1,
@@ -2813,7 +2683,6 @@ impl MusubiPublicationPrivateServiceV1 {
         }
         Ok(())
     }
-
     fn validate_control_identity(
         &self,
         network_id: &NetworkId,
@@ -2826,7 +2695,6 @@ impl MusubiPublicationPrivateServiceV1 {
         }
         Ok(())
     }
-
     #[allow(
         clippy::too_many_arguments,
         reason = "the fixed authorization protocol binds every route, identity, digest, and clock field explicitly"
@@ -2889,7 +2757,6 @@ impl MusubiPublicationPrivateServiceV1 {
             })?;
         Ok(authorization)
     }
-
     fn begin_attempt(
         &mut self,
         attempt: &MusubiPublicationJournalAttemptV1,
@@ -2899,7 +2766,6 @@ impl MusubiPublicationPrivateServiceV1 {
             .begin(attempt, current_time_ms)
             .map_err(service_journal_error)
     }
-
     fn sample_time(&mut self) -> Result<u64, MusubiPublicationServiceErrorV1> {
         let current_time_ms = self.clock.current_time_ms().map_err(|error| {
             service_backend_error(
@@ -2919,7 +2785,6 @@ impl MusubiPublicationPrivateServiceV1 {
         self.last_clock_ms = Some(current_time_ms);
         Ok(current_time_ms)
     }
-
     fn finish_attempt(
         &mut self,
         key: MusubiPublicationIdempotencyKeyV1,
@@ -2955,7 +2820,6 @@ impl MusubiPublicationPrivateServiceV1 {
         }
     }
 }
-
 const AUTHORIZATION_DECODE_LIMITS: DecodeLimits =
     DecodeLimits::new(128, MAX_AUTHORIZATION_BYTES, 512, 256 * 1024, 16);
 const REQUEST_METADATA_DECODE_LIMITS: DecodeLimits =
@@ -2974,12 +2838,10 @@ const CONTROL_REQUEST_DECODE_LIMITS: DecodeLimits = DecodeLimits::new(
     32 * 1024 * 1024,
     64,
 );
-
 struct VerifiedSeedIngressBodyV1<'a> {
     plan: CarBuildPlan,
     car: &'a [u8],
 }
-
 fn verify_seed_ingress_body<'a>(
     request: &MusubiSeedIngressStageRequestV1,
     body: &'a [u8],
@@ -3053,7 +2915,6 @@ fn verify_seed_ingress_body<'a>(
     }
     Ok(VerifiedSeedIngressBodyV1 { plan, car })
 }
-
 fn decode_seed_ingress_plan_witness(
     canonical_plan: &[u8],
 ) -> Result<MusubiSeedIngressCarPlanV1, MusubiPublicationServiceErrorV1> {
@@ -3070,7 +2931,6 @@ fn decode_seed_ingress_plan_witness(
     }
     Ok(witness)
 }
-
 #[cfg(test)]
 fn seed_ingress_source_material(
     mut entries: Vec<(String, u64, [u8; 32])>,
@@ -3102,14 +2962,12 @@ fn seed_ingress_source_material(
     }
     Ok(material)
 }
-
 fn seed_ingress_integrity_failure(
     surface: MusubiIntegritySurfaceV1,
 ) -> MusubiPublicationServiceErrorV1 {
     MusubiPublicationServiceErrorV1::permanent(MusubiPublicationServiceErrorCodeV1::CarBodyMismatch)
         .integrity_failure(surface)
 }
-
 fn seed_ingress_bundle_integrity_failure(
     surface: MusubiBundleIntegritySurfaceV1,
 ) -> MusubiPublicationServiceErrorV1 {
@@ -3126,7 +2984,6 @@ fn seed_ingress_bundle_integrity_failure(
     };
     seed_ingress_integrity_failure(surface)
 }
-
 #[cfg(test)]
 fn seed_ingress_append_frame(
     output: &mut Vec<u8>,
@@ -3141,7 +2998,6 @@ fn seed_ingress_append_frame(
     output.extend_from_slice(bytes);
     Ok(())
 }
-
 #[cfg(test)]
 fn seed_ingress_domain_digest(
     domain: &[u8],
@@ -3158,7 +3014,6 @@ fn seed_ingress_domain_digest(
     hasher.update(material);
     Ok(MusubiContentDigestV1::new(*hasher.finalize().as_bytes()))
 }
-
 fn encode_seed_ingress_body(
     canonical_plan: &[u8],
     car: &[u8],
@@ -3202,12 +3057,10 @@ fn encode_seed_ingress_body(
     }
     Ok(body)
 }
-
 struct CanonicalDecodedV1<T> {
     value: T,
     canonical: Vec<u8>,
 }
-
 fn decode_canonical_base64<T>(
     encoded: &str,
     max_decoded_bytes: usize,
@@ -3237,7 +3090,6 @@ where
     }
     decode_canonical_bytes(&bytes, limits, code)
 }
-
 fn decode_canonical_body<T>(
     bytes: &[u8],
     max_bytes: usize,
@@ -3258,7 +3110,6 @@ where
         MusubiPublicationServiceErrorCodeV1::RequestInvalid,
     )
 }
-
 fn decode_cached_response<T>(
     bytes: &[u8],
 ) -> Result<CanonicalDecodedV1<T>, MusubiPublicationServiceErrorV1>
@@ -3277,7 +3128,6 @@ where
         MusubiPublicationServiceErrorCodeV1::BackendResponseInvalid,
     )
 }
-
 fn decode_canonical_bytes<T>(
     bytes: &[u8],
     limits: DecodeLimits,
@@ -3296,7 +3146,6 @@ where
     }
     Ok(CanonicalDecodedV1 { value, canonical })
 }
-
 #[allow(
     clippy::too_many_arguments,
     reason = "the fixed journal record binds every immutable publication protocol field explicitly"
@@ -3332,7 +3181,6 @@ fn journal_attempt(
         authorization_expires_at_ms: authorization.value.payload.expires_at_ms,
     }
 }
-
 fn encode_service_response<T>(value: &T) -> Result<Vec<u8>, MusubiPublicationServiceErrorV1>
 where
     T: norito::core::NoritoSerialize,
@@ -3349,20 +3197,17 @@ where
     }
     Ok(bytes)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MusubiPublicationServiceTelemetryEventV1 {
     IngestDeadletter(MusubiIngestDeadletterReasonV1),
     IntegrityFailure(MusubiIntegritySurfaceV1),
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MusubiPublicationServiceErrorV1 {
     code: MusubiPublicationServiceErrorCodeV1,
     retryable: bool,
     telemetry: Option<MusubiPublicationServiceTelemetryEventV1>,
 }
-
 impl MusubiPublicationServiceErrorV1 {
     const fn permanent(code: MusubiPublicationServiceErrorCodeV1) -> Self {
         Self {
@@ -3371,7 +3216,6 @@ impl MusubiPublicationServiceErrorV1 {
             telemetry: None,
         }
     }
-
     const fn retryable(code: MusubiPublicationServiceErrorCodeV1) -> Self {
         Self {
             code,
@@ -3379,7 +3223,6 @@ impl MusubiPublicationServiceErrorV1 {
             telemetry: None,
         }
     }
-
     const fn ingest_deadletter(mut self, reason: MusubiIngestDeadletterReasonV1) -> Self {
         debug_assert!(!self.retryable);
         self.telemetry = Some(MusubiPublicationServiceTelemetryEventV1::IngestDeadletter(
@@ -3387,14 +3230,12 @@ impl MusubiPublicationServiceErrorV1 {
         ));
         self
     }
-
     const fn integrity_failure(mut self, surface: MusubiIntegritySurfaceV1) -> Self {
         self.telemetry = Some(MusubiPublicationServiceTelemetryEventV1::IntegrityFailure(
             surface,
         ));
         self
     }
-
     fn into_response(self) -> MusubiPublicationPrivateHttpResponseV1 {
         record_publication_service_telemetry(self.telemetry);
         let status = match self.code {
@@ -3431,7 +3272,6 @@ impl MusubiPublicationServiceErrorV1 {
         }
     }
 }
-
 fn record_publication_service_telemetry(event: Option<MusubiPublicationServiceTelemetryEventV1>) {
     let (Some(metrics), Some(event)) = (global_metrics(), event) else {
         return;
@@ -3445,7 +3285,6 @@ fn record_publication_service_telemetry(event: Option<MusubiPublicationServiceTe
         }
     }
 }
-
 fn service_backend_error(
     code: MusubiPublicationServiceErrorCodeV1,
     error: MusubiPublicationServiceBackendErrorV1,
@@ -3459,7 +3298,6 @@ fn service_backend_error(
         }
     }
 }
-
 fn seed_ingress_backend_error(
     error: MusubiPublicationServiceBackendErrorV1,
 ) -> MusubiPublicationServiceErrorV1 {
@@ -3473,7 +3311,6 @@ fn seed_ingress_backend_error(
         service_error
     }
 }
-
 fn service_journal_error(
     error: MusubiPublicationServiceJournalErrorV1,
 ) -> MusubiPublicationServiceErrorV1 {
@@ -3500,13 +3337,11 @@ fn service_journal_error(
         }
     }
 }
-
 fn seed_ingress_journal_error(
     error: MusubiPublicationServiceJournalErrorV1,
 ) -> MusubiPublicationServiceErrorV1 {
     publication_journal_error(MusubiPublicationRuntimeOperationV1::SeedIngress, error)
 }
-
 fn publication_journal_error(
     operation: MusubiPublicationRuntimeOperationV1,
     error: MusubiPublicationServiceJournalErrorV1,
@@ -3520,7 +3355,6 @@ fn publication_journal_error(
         service_error
     }
 }
-
 /// Closed failure returned by a deployment-owned publisher authorization signer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MusubiPublicationRuntimeAuthorizationSigningErrorV1 {
@@ -3529,7 +3363,6 @@ pub enum MusubiPublicationRuntimeAuthorizationSigningErrorV1 {
     /// Deployment policy or key state cannot authorize the exact payload.
     Permanent,
 }
-
 /// Deployment-owned controller signing boundary for private publication requests.
 ///
 /// Implementations may collect approvals from an HSM, KMS, or threshold service. The client
@@ -3538,7 +3371,6 @@ pub enum MusubiPublicationRuntimeAuthorizationSigningErrorV1 {
 pub trait MusubiPublicationRuntimeAuthorizationSigningProviderV1: Send + Sync {
     /// Exact publisher account controlled by this provider.
     fn publisher(&self) -> &AccountId;
-
     /// Sign one exact client-constructed authorization payload.
     ///
     /// # Errors
@@ -3551,7 +3383,6 @@ pub trait MusubiPublicationRuntimeAuthorizationSigningProviderV1: Send + Sync {
         MusubiPublicationRuntimeAuthorizationSigningErrorV1,
     >;
 }
-
 /// Runtime-only single-key authorization signer used by the platform Iroha client.
 ///
 /// Multisig publishers use a deployment-owned threshold implementation of
@@ -3561,7 +3392,6 @@ pub struct SoftwareMusubiPublicationRuntimeAuthorizationSignerV1 {
     publisher: AccountId,
     key_pair: KeyPair,
 }
-
 impl fmt::Debug for SoftwareMusubiPublicationRuntimeAuthorizationSignerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -3570,7 +3400,6 @@ impl fmt::Debug for SoftwareMusubiPublicationRuntimeAuthorizationSignerV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl SoftwareMusubiPublicationRuntimeAuthorizationSignerV1 {
     /// Bind one software key to the exact single-controller publisher.
     ///
@@ -3596,14 +3425,12 @@ impl SoftwareMusubiPublicationRuntimeAuthorizationSignerV1 {
         })
     }
 }
-
 impl MusubiPublicationRuntimeAuthorizationSigningProviderV1
     for SoftwareMusubiPublicationRuntimeAuthorizationSignerV1
 {
     fn publisher(&self) -> &AccountId {
         &self.publisher
     }
-
     fn sign_approvals(
         &self,
         payload: &MusubiPublicationRuntimeAuthorizationPayloadV1,
@@ -3622,7 +3449,6 @@ impl MusubiPublicationRuntimeAuthorizationSigningProviderV1
         }])
     }
 }
-
 /// Memory-only, fully authenticated request for one exact seed-ingress operation.
 ///
 /// The value owns a short-lived signed authorization together with canonical metadata and the
@@ -3637,7 +3463,6 @@ pub struct MusubiPreparedSeedIngressRequestV1 {
     authorization_issued_at_ms: u64,
     authorization_expires_at_ms: u64,
 }
-
 impl MusubiPreparedSeedIngressRequestV1 {
     /// Borrow the short-lived authorization header.
     ///
@@ -3646,7 +3471,6 @@ impl MusubiPreparedSeedIngressRequestV1 {
     pub fn authorization_header(&self) -> &str {
         &self.authorization_header
     }
-
     /// Borrow the URL-safe canonical seed metadata header.
     ///
     /// The metadata is inseparable from the signed authorization. Keep the complete prepared
@@ -3655,7 +3479,6 @@ impl MusubiPreparedSeedIngressRequestV1 {
     pub fn seed_ingress_metadata_header(&self) -> &str {
         &self.metadata_header
     }
-
     /// Borrow the exact fixed-magic plan-and-CAR body.
     ///
     /// The body is authenticated by the adjacent memory-only headers and must be submitted
@@ -3664,25 +3487,21 @@ impl MusubiPreparedSeedIngressRequestV1 {
     pub fn body(&self) -> &[u8] {
         &self.body
     }
-
     /// Borrow the exact receipt binding expected from the service response.
     #[must_use]
     pub const fn binding(&self) -> &MusubiSeedIngressReceiptBindingV1 {
         &self.binding
     }
-
     /// Return when the short-lived authorization was issued, as Unix milliseconds.
     #[must_use]
     pub const fn authorization_issued_at_ms(&self) -> u64 {
         self.authorization_issued_at_ms
     }
-
     /// Return when the short-lived authorization expires, as Unix milliseconds.
     #[must_use]
     pub const fn authorization_expires_at_ms(&self) -> u64 {
         self.authorization_expires_at_ms
     }
-
     /// Borrow this value as the exact transport-neutral request accepted by the private service.
     ///
     /// The returned request borrows replay-sensitive authorization material. Keep it in memory,
@@ -3699,7 +3518,6 @@ impl MusubiPreparedSeedIngressRequestV1 {
         }
     }
 }
-
 /// Account-authenticated client for the fixed private publication route inventory.
 ///
 /// The client owns authorization issuance time, enforces a process-lifetime non-regressing
@@ -3713,7 +3531,6 @@ pub struct AuthenticatedMusubiPublicationRuntimeClientV1 {
     publication_clock_floor_ms: Arc<AtomicU64>,
     http: HttpClient,
 }
-
 impl fmt::Debug for AuthenticatedMusubiPublicationRuntimeClientV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -3723,7 +3540,6 @@ impl fmt::Debug for AuthenticatedMusubiPublicationRuntimeClientV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl AuthenticatedMusubiPublicationRuntimeClientV1 {
     /// Construct from an already validated platform Iroha client configuration.
     ///
@@ -3748,7 +3564,6 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
             timeout,
         )
     }
-
     /// Construct with a deployment-owned HSM/KMS or threshold authorization provider.
     ///
     /// # Errors
@@ -3794,19 +3609,16 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
             http,
         })
     }
-
     /// Return the exact configured deployment identity.
     #[must_use]
     pub const fn network_id(&self) -> &NetworkId {
         &self.network_id
     }
-
     /// Return the exact configured publisher identity.
     #[must_use]
     pub const fn publisher(&self) -> &AccountId {
         &self.publisher
     }
-
     /// Prepare one bounded, authenticated seed-ingress request entirely in memory.
     ///
     /// The returned value owns a short-lived signed authorization and must be submitted promptly
@@ -3894,7 +3706,6 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
             authorization_expires_at_ms: authorization.payload.expires_at_ms,
         })
     }
-
     /// Send one bounded canonical plan-and-CAR envelope through seed ingress.
     ///
     /// # Errors
@@ -3919,7 +3730,6 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         verify_seed_ingress_receipt(&receipt, &expected_binding, verification_time_ms)?;
         Ok(receipt)
     }
-
     /// Request an idempotent permanent pin/order coordination result.
     ///
     /// # Errors
@@ -3949,7 +3759,6 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         response.validate_for(request)?;
         Ok(response)
     }
-
     /// Read back one complete archive from one exact provider-specific HTTPS origin.
     ///
     /// # Errors
@@ -3979,7 +3788,6 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         response.validate_for(request)?;
         Ok(response)
     }
-
     fn post_control(
         &self,
         base_url: &Url,
@@ -4005,7 +3813,6 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
             body.to_vec(),
         )
     }
-
     fn authorization(
         &self,
         operation: MusubiPublicationRuntimeOperationV1,
@@ -4015,7 +3822,6 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
     {
         self.authorization_with_clock(operation, operation_id, digest, system_time_ms)
     }
-
     fn authorization_with_clock<F>(
         &self,
         operation: MusubiPublicationRuntimeOperationV1,
@@ -4037,7 +3843,6 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         authorization.verify(operation, operation_id, digest, verification_time_ms)?;
         Ok(authorization)
     }
-
     fn authorization_at(
         &self,
         operation: MusubiPublicationRuntimeOperationV1,
@@ -4083,7 +3888,6 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         authorization.verify(operation, operation_id, digest, current_time_ms)?;
         Ok(authorization)
     }
-
     fn sample_publication_time<F>(
         &self,
         clock: &mut F,
@@ -4106,7 +3910,6 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         }
         Ok(current_time_ms)
     }
-
     fn ensure_request_identity(
         &self,
         network_id: &NetworkId,
@@ -4119,7 +3922,6 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         }
         Ok(())
     }
-
     fn send(
         &self,
         endpoint: Url,
@@ -4137,7 +3939,6 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         )?;
         self.execute_request(request)
     }
-
     fn send_prepared_seed_ingress(
         &self,
         endpoint: Url,
@@ -4177,7 +3978,6 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
             })?;
         self.execute_request(request)
     }
-
     fn execute_request(
         &self,
         request: reqwest::blocking::Request,
@@ -4219,7 +4019,6 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         }
         Ok(bytes)
     }
-
     fn prepare_request(
         &self,
         endpoint: Url,
@@ -4261,7 +4060,6 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         })
     }
 }
-
 /// Validate a credential-free HTTPS base used only by the private publication routes.
 ///
 /// # Errors
@@ -4287,7 +4085,6 @@ pub fn validate_publication_service_base_url(
     }
     Ok(())
 }
-
 /// Return the scheme/host/port identity used to enforce distinct provider origins.
 #[must_use]
 pub fn publication_service_origin(url: &Url) -> Option<(String, String, u16)> {
@@ -4295,7 +4092,6 @@ pub fn publication_service_origin(url: &Url) -> Option<(String, String, u16)> {
     let port = url.port_or_known_default()?;
     Some((url.scheme().to_owned(), host, port))
 }
-
 fn publication_route(
     base_url: &Url,
     route: &str,
@@ -4304,7 +4100,6 @@ fn publication_route(
         MusubiPublicationRuntimeTransportErrorV1::permanent("MUSUBI_RUNTIME_SERVICE_URL_INVALID")
     })
 }
-
 fn system_time_ms() -> Result<u64, MusubiPublicationRuntimeTransportErrorV1> {
     let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| {
         MusubiPublicationRuntimeTransportErrorV1::permanent("MUSUBI_RUNTIME_CLOCK_INVALID")
@@ -4313,7 +4108,6 @@ fn system_time_ms() -> Result<u64, MusubiPublicationRuntimeTransportErrorV1> {
         MusubiPublicationRuntimeTransportErrorV1::permanent("MUSUBI_RUNTIME_CLOCK_INVALID")
     })
 }
-
 fn verify_seed_ingress_receipt(
     receipt: &MusubiSeedIngressReceiptV1,
     expected_binding: &MusubiSeedIngressReceiptBindingV1,
@@ -4340,7 +4134,6 @@ fn verify_seed_ingress_receipt(
             )
         })
 }
-
 fn request_digest(
     operation: MusubiPublicationRuntimeOperationV1,
     body: &[u8],
@@ -4358,7 +4151,6 @@ fn request_digest(
     hasher.update(body);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn encode_authorization_header(
     authorization: &MusubiPublicationRuntimeAuthorizationV1,
 ) -> Result<String, MusubiPublicationRuntimeTransportErrorV1> {
@@ -4372,7 +4164,6 @@ fn encode_authorization_header(
     }
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(authorization))
 }
-
 fn encode_seed_ingress_metadata_header(
     metadata: &[u8],
 ) -> Result<String, MusubiPublicationRuntimeTransportErrorV1> {
@@ -4383,7 +4174,6 @@ fn encode_seed_ingress_metadata_header(
     }
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(metadata))
 }
-
 fn decode_response<T>(bytes: &[u8]) -> Result<T, MusubiPublicationRuntimeTransportErrorV1>
 where
     T: norito::core::NoritoSerialize,
@@ -4393,7 +4183,6 @@ where
         MusubiPublicationRuntimeTransportErrorV1::permanent("MUSUBI_RUNTIME_RESPONSE_INVALID")
     })
 }
-
 fn retryable_status(status: StatusCode) -> bool {
     matches!(
         status,
@@ -4406,7 +4195,6 @@ fn retryable_status(status: StatusCode) -> bool {
             | StatusCode::GATEWAY_TIMEOUT
     )
 }
-
 fn remote_transport_error(
     status: StatusCode,
     body: &[u8],
@@ -4426,7 +4214,6 @@ fn remote_transport_error(
         MusubiPublicationRuntimeTransportErrorV1::permanent("MUSUBI_RUNTIME_REMOTE_REJECTED")
     }
 }
-
 #[cfg(test)]
 mod tests {
     include!("musubi_runtime/service_journal_tests.rs");

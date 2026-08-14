@@ -1,5 +1,4 @@
 //! Gregorian date, RFC 3339, expiry, and completed-age R1CS gadgets.
-
 use super::{
     VEGA_MDL_FULL_DATE_TEXT_BYTES_V1, VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1,
     VEGA_MDL_MAX_PRESENTATION_YEAR_V1, VEGA_MDL_MIN_PRESENTATION_YEAR_V1,
@@ -7,10 +6,8 @@ use super::{
     circuit::{Bit, CircuitBuilder, CircuitError, LinearCombination},
     sha256::{ByteVar, enforce_byte_constant},
 };
-
 pub(super) const RFC3339_SECONDS_PER_DAY_V1: u64 = 86_400;
 pub(super) const RFC3339_TIMESTAMP_ORDER_SLACK_BITS_V1: usize = 40;
-
 #[derive(Clone)]
 pub(super) struct DateVar {
     year: LinearCombination,
@@ -20,13 +17,11 @@ pub(super) struct DateVar {
     month_bits: Vec<Bit>,
     day_bits: Vec<Bit>,
 }
-
 #[derive(Clone)]
 pub(super) struct Rfc3339SecondsVar {
     pub(super) date: DateVar,
     seconds_since_midnight: LinearCombination,
 }
-
 pub(super) fn parse_full_date(
     builder: &mut CircuitBuilder,
     bytes: &[ByteVar],
@@ -43,7 +38,6 @@ pub(super) fn parse_full_date(
     enforce_valid_date(builder, &date, 1)?;
     Ok(date)
 }
-
 pub(super) fn parse_rfc3339_seconds(
     builder: &mut CircuitBuilder,
     bytes: &[ByteVar],
@@ -70,7 +64,6 @@ pub(super) fn parse_rfc3339_seconds(
         seconds_since_midnight,
     })
 }
-
 pub(super) fn public_date(
     builder: &mut CircuitBuilder,
     year_index: usize,
@@ -90,7 +83,6 @@ pub(super) fn public_date(
     )?;
     Ok(date)
 }
-
 pub(super) fn public_age_threshold(
     builder: &mut CircuitBuilder,
     index: usize,
@@ -106,7 +98,6 @@ pub(super) fn public_age_threshold(
     )?;
     Ok((threshold, bits))
 }
-
 pub(super) fn enforce_completed_age(
     builder: &mut CircuitBuilder,
     birth: &DateVar,
@@ -118,7 +109,6 @@ pub(super) fn enforce_completed_age(
     let day_before_birthday = less_than(builder, &presentation.day_bits, &birth.day_bits)?;
     let same_month_and_day_before = builder.and(same_month, day_before_birthday)?;
     let before_birthday = builder.or(month_before_birthday, same_month_and_day_before)?;
-
     let presentation_year = scalar_to_u64(builder.evaluate(&presentation.year))?;
     let birth_year = scalar_to_u64(builder.evaluate(&birth.year))?;
     let threshold_value = scalar_to_u64(builder.evaluate(&threshold))?;
@@ -140,7 +130,6 @@ pub(super) fn enforce_completed_age(
             .plus(&slack_lc),
     )
 }
-
 pub(super) fn enforce_strictly_after(
     builder: &mut CircuitBuilder,
     later: &DateVar,
@@ -160,7 +149,6 @@ pub(super) fn enforce_strictly_after(
         earlier_code.plus(&LinearCombination::one()).plus(&slack_lc),
     )
 }
-
 pub(super) fn enforce_not_before(
     builder: &mut CircuitBuilder,
     later: &DateVar,
@@ -174,7 +162,6 @@ pub(super) fn enforce_not_before(
     let (_, slack_lc) = allocate_unsigned(builder, slack, 24)?;
     builder.enforce_equal(later_code, earlier_code.plus(&slack_lc))
 }
-
 pub(super) fn enforce_rfc3339_not_before(
     builder: &mut CircuitBuilder,
     later: &Rfc3339SecondsVar,
@@ -188,7 +175,6 @@ pub(super) fn enforce_rfc3339_not_before(
     let (_, slack_lc) = allocate_unsigned(builder, slack, RFC3339_TIMESTAMP_ORDER_SLACK_BITS_V1)?;
     builder.enforce_equal(later_code, earlier_code.plus(&slack_lc))
 }
-
 fn date_from_lcs(
     builder: &mut CircuitBuilder,
     year: LinearCombination,
@@ -204,7 +190,6 @@ fn date_from_lcs(
         day,
     })
 }
-
 fn enforce_valid_date(
     builder: &mut CircuitBuilder,
     date: &DateVar,
@@ -217,10 +202,8 @@ fn enforce_valid_date(
         builder.enforce_zero(below_minimum.lc())?;
     }
     enforce_less_than_constant(builder, &date.year_bits, 10_000, true)?;
-
     let month_selectors = equality_selectors(builder, date.month.clone(), 1..=12)?;
     let day_selectors = equality_selectors(builder, date.day.clone(), 1..=31)?;
-
     for month in [4_usize, 6, 9, 11] {
         builder.enforce(
             month_selectors[month - 1].lc(),
@@ -248,7 +231,6 @@ fn enforce_valid_date(
         LinearCombination::zero(),
     )
 }
-
 fn equality_selectors(
     builder: &mut CircuitBuilder,
     value: LinearCombination,
@@ -271,7 +253,6 @@ fn equality_selectors(
     builder.enforce_equal(sum, LinearCombination::one())?;
     Ok(selectors)
 }
-
 fn divisible(
     builder: &mut CircuitBuilder,
     value: LinearCombination,
@@ -290,7 +271,6 @@ fn divisible(
     )?;
     builder.is_zero(remainder)
 }
-
 fn decimal(
     builder: &mut CircuitBuilder,
     bytes: &[ByteVar],
@@ -305,7 +285,6 @@ fn decimal(
     }
     Ok(result)
 }
-
 fn decimal_digit(
     builder: &mut CircuitBuilder,
     byte: ByteVar,
@@ -329,7 +308,6 @@ fn decimal_digit(
     )?;
     Ok(digit)
 }
-
 fn enforce_small_range(
     builder: &mut CircuitBuilder,
     value: LinearCombination,
@@ -344,7 +322,6 @@ fn enforce_small_range(
     }
     Ok(bits)
 }
-
 fn enforce_nonzero(
     builder: &mut CircuitBuilder,
     value: LinearCombination,
@@ -352,7 +329,6 @@ fn enforce_nonzero(
     let zero = builder.is_zero(value)?;
     builder.enforce_zero(zero.lc())
 }
-
 fn decompose(
     builder: &mut CircuitBuilder,
     value: LinearCombination,
@@ -363,7 +339,6 @@ fn decompose(
     builder.enforce_equal(value, reconstructed)?;
     Ok(bits)
 }
-
 fn allocate_unsigned(
     builder: &mut CircuitBuilder,
     value: u64,
@@ -378,7 +353,6 @@ fn allocate_unsigned(
     let reconstructed = bits_to_lc(&bits);
     Ok((bits, reconstructed))
 }
-
 fn enforce_less_than_constant(
     builder: &mut CircuitBuilder,
     value: &[Bit],
@@ -407,7 +381,6 @@ fn enforce_less_than_constant(
     }
     Ok(borrow)
 }
-
 fn less_than(
     builder: &mut CircuitBuilder,
     left: &[Bit],
@@ -440,7 +413,6 @@ fn less_than(
     }
     Ok(borrow)
 }
-
 fn subtract(
     builder: &mut CircuitBuilder,
     value: &[Bit],
@@ -476,7 +448,6 @@ fn subtract(
     }
     Ok((difference, borrow))
 }
-
 fn constant_bit(builder: &mut CircuitBuilder, value: bool) -> Result<Bit, CircuitError> {
     let bit = builder.alloc_bit(value)?;
     builder.enforce_equal(
@@ -485,7 +456,6 @@ fn constant_bit(builder: &mut CircuitBuilder, value: bool) -> Result<Bit, Circui
     )?;
     Ok(bit)
 }
-
 fn bits_to_lc(bits: &[Bit]) -> LinearCombination {
     let mut coefficient = Scalar::one();
     bits.iter().fold(LinearCombination::zero(), |result, bit| {
@@ -494,7 +464,6 @@ fn bits_to_lc(bits: &[Bit]) -> LinearCombination {
         next
     })
 }
-
 fn date_code(date: &DateVar) -> LinearCombination {
     date.year
         .clone()
@@ -502,13 +471,11 @@ fn date_code(date: &DateVar) -> LinearCombination {
         .plus(&date.month.clone().scaled(Scalar::from_u64(32)))
         .plus(&date.day)
 }
-
 fn rfc3339_seconds_code(value: &Rfc3339SecondsVar) -> LinearCombination {
     date_code(&value.date)
         .scaled(Scalar::from_u64(RFC3339_SECONDS_PER_DAY_V1))
         .plus(&value.seconds_since_midnight)
 }
-
 fn scalar_to_u64(value: Scalar) -> Result<u64, CircuitError> {
     let bytes = value.to_be_bytes();
     if bytes[..24].iter().any(|byte| *byte != 0) {
@@ -520,12 +487,10 @@ fn scalar_to_u64(value: Scalar) -> Result<u64, CircuitError> {
             .map_err(|_| CircuitError::InvalidAssignment)?,
     ))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vega::sha256::allocate_bytes;
-
     fn check_date(value: &str, expected: bool) {
         let mut builder = CircuitBuilder::new(vec![Scalar::one()]).expect("public");
         let bytes = allocate_bytes(&mut builder, value.as_bytes()).expect("bytes");
@@ -533,16 +498,10 @@ mod tests {
         let assignment = builder.finalize().expect("shape");
         let satisfied = assignment
             .shape
-            .validate_relaxed_assignment(
-                &assignment.witness,
-                Scalar::one(),
-                &assignment.public_inputs,
-                &vec![Scalar::zero(); assignment.shape.constraint_count()],
-            )
+            .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
             .is_ok();
         assert_eq!(result.is_ok() && satisfied, expected, "{value}");
     }
-
     fn check_rfc3339_order(earlier: &str, later: &str, expected: bool) {
         let mut builder = CircuitBuilder::new(vec![Scalar::one()]).expect("public");
         let earlier_bytes =
@@ -555,19 +514,13 @@ mod tests {
         let assignment = builder.finalize().expect("shape");
         let satisfied = assignment
             .shape
-            .validate_relaxed_assignment(
-                &assignment.witness,
-                Scalar::one(),
-                &assignment.public_inputs,
-                &vec![Scalar::zero(); assignment.shape.constraint_count()],
-            )
+            .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
             .is_ok();
         assert_eq!(
             satisfied, expected,
             "expected {earlier} <= {later} to be {expected}"
         );
     }
-
     #[test]
     fn gregorian_boundaries_and_leap_rules_are_exact() {
         for valid in ["2000-02-29", "2024-02-29", "2026-07-26", "9999-12-31"] {
@@ -584,7 +537,6 @@ mod tests {
             check_date(invalid, false);
         }
     }
-
     #[test]
     fn private_rfc3339_order_retains_every_second_of_day() {
         for (earlier, later, accepted) in [
@@ -597,7 +549,6 @@ mod tests {
             check_rfc3339_order(earlier, later, accepted);
         }
     }
-
     #[test]
     fn completed_age_and_strict_expiry_reject_boundary_attacks() {
         for (birth, expiry, accepted) in [
@@ -636,17 +587,11 @@ mod tests {
             let assignment = builder.finalize().expect("shape");
             let satisfied = assignment
                 .shape
-                .validate_relaxed_assignment(
-                    &assignment.witness,
-                    Scalar::one(),
-                    &assignment.public_inputs,
-                    &vec![Scalar::zero(); assignment.shape.constraint_count()],
-                )
+                .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
                 .is_ok();
             assert_eq!(satisfied, accepted);
         }
     }
-
     #[test]
     fn public_presentation_year_has_a_satisfiable_closed_upper_bound() {
         for (year, accepted) in [
@@ -665,12 +610,7 @@ mod tests {
             let assignment = builder.finalize().expect("shape");
             let satisfied = assignment
                 .shape
-                .validate_relaxed_assignment(
-                    &assignment.witness,
-                    Scalar::one(),
-                    &assignment.public_inputs,
-                    &vec![Scalar::zero(); assignment.shape.constraint_count()],
-                )
+                .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
                 .is_ok();
             assert_eq!(parsed.is_ok() && satisfied, accepted, "year={year}");
         }

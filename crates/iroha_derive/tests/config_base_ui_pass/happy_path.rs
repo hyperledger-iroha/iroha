@@ -1,5 +1,4 @@
 use iroha_config_base::{ReadConfig, WithOrigin};
-
 #[derive(ReadConfig)]
 struct Test {
     required: u64,
@@ -21,10 +20,8 @@ struct Test {
     #[config(nested, key = "canonical_nested")]
     renamed_nested: Nested,
 }
-
 #[derive(ReadConfig)]
 struct Nested {
     foo: Option<u32>,
 }
-
 pub fn main() {}

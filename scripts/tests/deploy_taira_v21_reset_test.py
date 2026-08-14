@@ -854,6 +854,78 @@ def _health_getter(
     return get
 
 
+def test_operator_http_getter_signs_each_exact_target_without_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_file = tmp_path / "operator.key"
+    key_file.write_text("runtime-only\n", encoding="ascii")
+    key_file.chmod(0o600)
+    signed: list[tuple[str, str, bytes]] = []
+    requests = []
+
+    class Context:
+        @staticmethod
+        def headers(method: str, target: str, body: bytes) -> dict[str, str]:
+            signed.append((method, target, body))
+            return {
+                "x-iroha-operator-public-key": "ed0120" + "11" * 32,
+                "x-iroha-operator-timestamp-ms": "1800000000000",
+                "x-iroha-operator-nonce": "22" * 16,
+                "x-iroha-operator-signature": "33" * 64,
+            }
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        @staticmethod
+        def read(_limit: int) -> bytes:
+            return b'{"protocol_version":4}'
+
+    class Opener:
+        @staticmethod
+        def open(request, *, timeout: float):
+            assert timeout == 3.0
+            requests.append(request)
+            return Response()
+
+    monkeypatch.setattr(
+        MODULE,
+        "load_operator_context_from_file",
+        lambda network_id, path: (
+            Context()
+            if (network_id, path) == ("network-id", key_file)
+            else pytest.fail("unexpected operator context")
+        ),
+    )
+    monkeypatch.setattr(MODULE.urllib.request, "build_opener", lambda *_handlers: Opener())
+    getter = MODULE.build_operator_http_getter("network-id", key_file)
+
+    url = "https://validator.test/v1/sumeragi/status?view=2&height=1"
+    assert getter(url, 3.0) == {"protocol_version": 4}
+    assert getter(url, 3.0) == {"protocol_version": 4}
+
+    assert signed == [
+        ("GET", "/v1/sumeragi/status?view=2&height=1", b""),
+        ("GET", "/v1/sumeragi/status?view=2&height=1", b""),
+    ]
+    assert len(requests) == 2
+    for request in requests:
+        assert request.full_url == url
+        assert request.data is None
+        names = {name.lower() for name, _ in request.header_items()}
+        assert "authorization" not in names
+        assert "x-api-token" not in names
+        assert "x-iroha-operator-signature" in names
+    assert MODULE._RejectRedirects().redirect_request(None, None, 302, "", {}, url) is None
+
+
 @pytest.mark.parametrize(
     "value",
     [

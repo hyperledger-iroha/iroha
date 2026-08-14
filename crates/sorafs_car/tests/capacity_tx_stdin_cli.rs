@@ -1,8 +1,6 @@
 //! Integration coverage for SoraFS capacity transaction stdin construction.
 #![cfg(feature = "cli")]
-
 use std::fs;
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_data_model::{
@@ -24,7 +22,6 @@ use sorafs_manifest::{
     provider_advert::{CapabilityType, StakePointer},
 };
 use tempfile::tempdir;
-
 #[test]
 fn tx_stdin_builder_wraps_capacity_declaration_summaries() {
     let temp = tempdir().expect("tempdir");
@@ -49,7 +46,6 @@ fn tx_stdin_builder_wraps_capacity_declaration_summaries() {
         ),
     )
     .expect("write declaration summary");
-
     let payload = run_builder([
         "capacity-declaration".to_owned(),
         format!("--summary={}", summary_path.display()),
@@ -63,7 +59,6 @@ fn tx_stdin_builder_wraps_capacity_declaration_summaries() {
     assert_eq!(declaration.record.registered_epoch, 580);
     assert_eq!(declaration.record.valid_until_epoch, 10_580);
 }
-
 #[test]
 fn tx_stdin_builder_wraps_replication_order_summaries() {
     let temp = tempdir().expect("tempdir");
@@ -75,7 +70,6 @@ fn tx_stdin_builder_wraps_replication_order_summaries() {
         format!("{{\n  \"replication_order_b64\": \"{order_b64}\"\n}}\n"),
     )
     .expect("write order summary");
-
     let payload = run_builder([
         "replication-order".to_owned(),
         format!("--summary={}", summary_path.display()),
@@ -92,7 +86,6 @@ fn tx_stdin_builder_wraps_replication_order_summaries() {
     assert_eq!(order.order_id.as_bytes(), &[0x55; 32]);
     assert_eq!(order.musubi_archive, None);
 }
-
 #[test]
 fn tx_stdin_builder_binds_replication_order_to_musubi_archive() {
     let temp = tempdir().expect("tempdir");
@@ -104,7 +97,6 @@ fn tx_stdin_builder_binds_replication_order_to_musubi_archive() {
         format!("{{\n  \"replication_order_b64\": \"{order_b64}\"\n}}\n"),
     )
     .expect("write order summary");
-
     let payload = run_builder([
         "replication-order".to_owned(),
         format!("--summary={}", summary_path.display()),
@@ -122,7 +114,6 @@ fn tx_stdin_builder_binds_replication_order_to_musubi_archive() {
         Some(iroha_data_model::musubi::ArchiveId::new([0xa5; 32]))
     );
 }
-
 #[test]
 fn tx_stdin_builder_rejects_noncanonical_musubi_archive_id_hex() {
     for value in [
@@ -144,7 +135,6 @@ fn tx_stdin_builder_rejects_noncanonical_musubi_archive_id_hex() {
         );
     }
 }
-
 #[test]
 fn tx_stdin_builder_emits_completion_instruction() {
     let payload = run_builder([
@@ -164,7 +154,6 @@ fn tx_stdin_builder_emits_completion_instruction() {
     assert_eq!(completion.order_id.as_bytes(), &[0x55; 32]);
     assert_eq!(completion.provider_id.as_bytes(), &[0x66; 32]);
 }
-
 #[test]
 fn tx_stdin_builder_emits_expiration_instruction() {
     let payload = run_builder([
@@ -181,7 +170,6 @@ fn tx_stdin_builder_emits_expiration_instruction() {
     assert_eq!(expiration.expiration_epoch, 778);
     assert_eq!(expiration.order_id.as_bytes(), &[0x55; 32]);
 }
-
 #[test]
 fn tx_stdin_builder_rejects_noncanonical_epoch_flags() {
     for (args, expected) in [
@@ -227,7 +215,6 @@ fn tx_stdin_builder_rejects_noncanonical_epoch_flags() {
         );
     }
 }
-
 #[test]
 fn tx_stdin_builder_rejects_noncanonical_order_id_hex() {
     for value in [
@@ -247,7 +234,6 @@ fn tx_stdin_builder_rejects_noncanonical_order_id_hex() {
         );
     }
 }
-
 #[test]
 fn tx_stdin_builder_rejects_duplicate_options() {
     for (args, expected) in [
@@ -284,21 +270,18 @@ fn tx_stdin_builder_rejects_duplicate_options() {
         );
     }
 }
-
 fn run_builder(args: impl IntoIterator<Item = String>) -> Value {
     let mut cmd = cargo_bin_cmd!("sorafs_tx_stdin_builder");
     cmd.args(args);
     let output = cmd.assert().success().get_output().stdout.clone();
     json::from_slice(&output).expect("parse tx stdin json")
 }
-
 fn run_builder_failure(args: impl IntoIterator<Item = String>) -> String {
     let mut cmd = cargo_bin_cmd!("sorafs_tx_stdin_builder");
     cmd.args(args);
     let output = cmd.assert().failure().get_output().stderr.clone();
     String::from_utf8(output).expect("stderr should be utf8")
 }
-
 fn decode_single_instruction(payload: Value) -> InstructionBox {
     let entries = payload.as_array().expect("tx stdin array");
     assert_eq!(entries.len(), 1);
@@ -308,7 +291,6 @@ fn decode_single_instruction(payload: Value) -> InstructionBox {
         .expect("decode instruction base64");
     decode_from_bytes(&bytes).expect("decode instruction")
 }
-
 fn sample_declaration() -> CapacityDeclarationV1 {
     CapacityDeclarationV1 {
         version: CAPACITY_DECLARATION_VERSION_V1,
@@ -337,7 +319,6 @@ fn sample_declaration() -> CapacityDeclarationV1 {
         }],
     }
 }
-
 fn sample_replication_order() -> ReplicationOrderV1 {
     ReplicationOrderV1 {
         version: REPLICATION_ORDER_VERSION_V1,

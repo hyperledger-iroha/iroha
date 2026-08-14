@@ -1,5 +1,4 @@
 // Typed consensus-mode admission test included from `peer::run::state::tests`.
-
 #[test]
 fn peer_admission_requires_an_exact_typed_consensus_mode() {
     let caps = ConsensusHandshakeCaps {
@@ -11,7 +10,6 @@ fn peer_admission_requires_an_exact_typed_consensus_mode() {
     let matching = build_consensus_meta(Some(&caps));
     enforce_consensus_caps(Some(&caps), &matching)
         .expect("identical typed consensus mode must be admitted");
-
     let mut mismatched = matching;
     mismatched.mode = Some(ConsensusMode::Npos);
     let error = enforce_consensus_caps(Some(&caps), &mismatched)
@@ -21,7 +19,6 @@ fn peer_admission_requires_an_exact_typed_consensus_mode() {
     };
     assert!(reason.contains(ConsensusMode::Permissioned.tag()));
     assert!(reason.contains(ConsensusMode::Npos.tag()));
-
     let mut missing = matching;
     missing.mode = None;
     assert!(matches!(

@@ -2,19 +2,14 @@
 //!
 //! The module exposes one lifecycle: exact online top-up, recursive
 //! offline split/spend, and exact online redemption.
-
 mod receiver_snapshot;
 mod status;
-
 pub use receiver_snapshot::*;
 pub use status::*;
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 #[cfg(test)]
 use iroha_crypto::KeyPair;
-use iroha_crypto::{
-    Algorithm, Hash, PublicKey, SignatureOf, derive_non_signing_ed25519_public_key,
-};
+use iroha_crypto::{Algorithm, Hash, PublicKey, SignatureOf, derive_non_signing_ed25519_public_key};
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::IntoSchema;
@@ -25,7 +20,6 @@ use p256::ecdsa::{
     Signature as P256Signature, VerifyingKey as P256VerifyingKey, signature::Verifier as _,
 };
 use sha2::{Digest as _, Sha256};
-
 pub use self::model::*;
 use crate::{
     NetworkId,
@@ -40,7 +34,6 @@ use crate::{
     proof::{ProofAttachment, ProofBox, VerifyingKeyId, VerifyingKeyRecord},
     zk::BackendTag,
 };
-
 /// Prefix embedded into offline instruction rejection messages.
 ///
 /// Mobile SDKs parse the label after this prefix up to the first `:` to recover
@@ -79,7 +72,6 @@ pub const KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1: usize =
     KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_BYTES_V1;
 /// Maximum App Attest assertion authenticator-data size, including iOS 27 extensions.
 pub const KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1: usize = 4 * 1024;
-
 /// Maximum asset scale accepted by the exact Kagemusha V2 amount contract.
 pub const KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2: u32 = 28;
 /// Fixed confidential Merkle-tree depth shared by top-up, spend, and redemption.
@@ -574,9 +566,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE: bool =
 pub const KAGEMUSHA_VERIFIER_NAMESPACE: &str = "offline_kagemusha";
 /// Transparent backend used by the independent confidential transfer circuits.
 pub const KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND: &str = "halo2/ipa";
-
 include!("kagemusha_schema_hashes.rs");
-
 /// Error returned when canonical Kagemusha data fails validation.
 #[derive(Debug)]
 pub enum KagemushaValidationError {
@@ -610,7 +600,6 @@ pub enum KagemushaValidationError {
     /// The authenticated paired-proof Pasta backend is not linked.
     RecursiveSpendV2ProofBackendUnavailable,
 }
-
 impl core::fmt::Display for KagemushaValidationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -640,15 +629,12 @@ impl core::fmt::Display for KagemushaValidationError {
         }
     }
 }
-
 impl std::error::Error for KagemushaValidationError {}
-
 impl From<norito::Error> for KagemushaValidationError {
     fn from(err: norito::Error) -> Self {
         Self::Encode(err)
     }
 }
-
 fn ensure_kagemusha_encoded_size_at_most(
     actual: usize,
     max: usize,
@@ -658,7 +644,6 @@ fn ensure_kagemusha_encoded_size_at_most(
     }
     Ok(())
 }
-
 /// Stable failure returned while authenticating or promoting a V4 artifact release.
 #[allow(variant_size_differences)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -700,7 +685,6 @@ pub enum KagemushaReleaseVerificationError {
     /// A promotion record disagrees with the authenticated release or runtime status.
     InvalidPromotionRecord,
 }
-
 impl KagemushaReleaseVerificationError {
     /// Stable machine-readable rejection code for deployment automation.
     #[must_use]
@@ -719,7 +703,6 @@ impl KagemushaReleaseVerificationError {
         }
     }
 }
-
 impl core::fmt::Display for KagemushaReleaseVerificationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -757,9 +740,7 @@ impl core::fmt::Display for KagemushaReleaseVerificationError {
         }
     }
 }
-
 impl std::error::Error for KagemushaReleaseVerificationError {}
-
 /// Runtime proof that a V4 manifest, evidence set, and role thresholds were authenticated.
 ///
 /// Its private fields prevent unsigned release material from entering the
@@ -772,7 +753,6 @@ pub struct KagemushaAuthenticatedReleaseV4 {
     release_policy_sha256: [u8; 32],
     approved_signers: Vec<KagemushaRecursiveSpendApprovedSignerV1>,
 }
-
 fn kagemusha_poseidon_preimage<T: Encode>(
     value: &T,
 ) -> Result<[u8; Hash::LENGTH], KagemushaValidationError> {
@@ -780,7 +760,6 @@ fn kagemusha_poseidon_preimage<T: Encode>(
         &norito::encode_canonical(value)?,
     ))
 }
-
 fn validate_kagemusha_root(
     field: &'static str,
     root: [u8; Hash::LENGTH],
@@ -790,7 +769,6 @@ fn validate_kagemusha_root(
     }
     Ok(())
 }
-
 /// Derive the deterministic Kagemusha escrow account for an asset definition.
 #[must_use]
 pub fn offline_escrow_account_id(
@@ -803,37 +781,35 @@ pub fn offline_escrow_account_id(
         &[network_id.as_bytes(), definition_id.as_bytes()],
     ))
 }
-
 #[cfg(test)]
 fn kagemusha_test_network_id(seed: impl AsRef<[u8]>) -> NetworkId {
     NetworkId::from_genesis_hash(
         iroha_crypto::HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::new(seed)),
     )
 }
-
 #[cfg(test)]
 mod offline_escrow_account_tests {
     use super::*;
     use crate::domain::DomainId;
-
-    fn network_id(seed: u8) -> NetworkId {
+    fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(
             iroha_crypto::HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::new([
                 seed,
             ])),
         )
     }
-
     #[test]
     fn derivation_is_stable_without_a_public_signing_seed() {
-        let network = network_id(1);
+        let network_id = test_network_id(1);
         let definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "xor".parse().expect("asset name"),
         );
-        let custody = offline_escrow_account_id(&network, &definition_id);
-        assert_eq!(custody, offline_escrow_account_id(&network, &definition_id));
-
+        let custody = offline_escrow_account_id(&network_id, &definition_id);
+        assert_eq!(
+            custody,
+            offline_escrow_account_id(&network_id, &definition_id)
+        );
         let legacy_seed_material =
             format!("iroha.offline.escrow|offline-custody-chain|{definition_id}");
         let legacy_seed: [u8; Hash::LENGTH] = Hash::new(legacy_seed_material).into();
@@ -844,19 +820,16 @@ mod offline_escrow_account_tests {
             AccountId::new(legacy_keypair.public_key().clone()),
             "offline custody must not expose a signing key through public seed derivation"
         );
-
         assert_ne!(
             custody,
-            offline_escrow_account_id(&network_id(2), &definition_id),
+            offline_escrow_account_id(&test_network_id(2), &definition_id),
             "different genesis hashes must derive different escrow accounts"
         );
     }
 }
-
 #[model]
 mod model {
     use super::*;
-
     /// Sole first-release Kagemusha device authority key.
     ///
     /// The wire value is exactly one canonical uncompressed SEC1 NIST P-256
@@ -871,7 +844,6 @@ mod model {
     pub struct KagemushaDevicePublicKeyV2(
         pub(super) [u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2],
     );
-
     /// Sole first-release Kagemusha device signature.
     ///
     /// The wire value is exactly the fixed-width big-endian ECDSA scalar pair
@@ -884,7 +856,6 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaDeviceSignatureV2(pub(super) [u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2]);
-
     /// Exact amount contract for fractional recursive Kagemusha cash.
     ///
     /// `atomic_units` is the positive proof amount. `scale` is copied from the
@@ -901,7 +872,6 @@ mod model {
         /// Authoritative on-chain asset scale.
         pub scale: u32,
     }
-
     /// Scale-, network-, and asset-bound spendable note descriptor.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -914,15 +884,14 @@ mod model {
         /// Asset committed by the confidential note.
         pub asset: AssetDefinitionId,
         /// Current note commitment.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub note_commitment: [u8; 32],
         /// Nullifier consumed by the next split or redemption.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub spend_nullifier: [u8; 32],
         /// Exact amount at the authoritative asset scale.
         pub amount: KagemushaScaledAmountV2,
     }
-
     /// Secret-free Merkle authentication path retained with an owned note.
     ///
     /// Witness nodes are deliberately absent: native verification recomputes
@@ -938,10 +907,9 @@ mod model {
         /// One left (`0`) or right (`1`) direction per tree level.
         pub directions: Vec<u8>,
         /// Root authenticated by the complete path.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub root: [u8; 32],
     }
-
     /// Proof-bound membership state required to spend one recursive output.
     ///
     /// `input_path` authenticates the owned note at `leaf_index`.
@@ -960,7 +928,6 @@ mod model {
         /// Path authenticating a distinct empty leaf for dummy input two.
         pub dummy_input_path: KagemushaConfidentialMerklePathV2,
     }
-
     /// Canonical branch coordinate inside one top-up lineage.
     ///
     /// The first `depth` most-significant bits of `path_bits` identify the
@@ -975,15 +942,14 @@ mod model {
     )]
     pub struct KagemushaRecursiveSpendBranchPathV2 {
         /// Stable top-up lineage root, unique for one online-to-offline operation.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub lineage_root: [u8; 32],
         /// Number of significant path bits, from zero through 64.
         pub depth: u8,
         /// Big-endian branch bits; unused low-order bits are canonical zeroes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub path_bits: [u8; 8],
     }
-
     /// Replay-safe conflict claim for one independently spendable lineage leaf.
     ///
     /// `transition_tags` is one contiguous byte string containing exactly
@@ -1001,10 +967,9 @@ mod model {
         /// Canonical leaf coordinate used for ancestor/descendant conflicts.
         pub path: KagemushaRecursiveSpendBranchPathV2,
         /// Contiguous exact-depth transition-selection history with no padding.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub transition_tags: Vec<u8>,
     }
-
     /// Public inputs used by the native bridge to derive one receiver-owned
     /// confidential output.
     ///
@@ -1024,10 +989,9 @@ mod model {
         /// Exact requested amount at the authoritative asset scale.
         pub amount: KagemushaScaledAmountV2,
         /// Non-zero receiver-created nonce that domain-separates derivation.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub request_id: [u8; 32],
     }
-
     /// Public descriptor plus sender-prover material derived for one receiver
     /// output by the native bridge.
     ///
@@ -1045,7 +1009,6 @@ mod model {
         /// Opaque, bounded opening archive consumed by the sender prover.
         pub sender_output_prover_material: Vec<u8>,
     }
-
     /// Canonical unsigned fields of a receiver-created payment request.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1062,14 +1025,14 @@ mod model {
         /// Online account used only for recipient/request identity binding.
         pub recipient: AccountId,
         /// Domain-separated receiver-device public-key reference.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub recipient_key_reference: [u8; 32],
         /// Registered receiver device identifier.
         pub receiver_device_id: String,
         /// Device-bound key that authenticates this request and its later ACK.
         pub receiver_public_key: KagemushaDevicePublicKeyV2,
         /// Unique request/nonce identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub request_id: [u8; 32],
         /// Request creation time in Unix milliseconds.
         pub issued_at_ms: u64,
@@ -1080,7 +1043,6 @@ mod model {
         /// Peer-carried opaque output-opening archive consumed by the sender prover.
         pub sender_output_prover_material: Vec<u8>,
     }
-
     /// Receiver-created, nonce-bound and device-signed request for one exact offline payment.
     ///
     /// `sender_output_prover_material` is part of the signed peer request but
@@ -1104,14 +1066,14 @@ mod model {
         /// Online account used only for recipient/request identity binding.
         pub recipient: AccountId,
         /// Stable receiver-side key reference; not secret key bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub recipient_key_reference: [u8; 32],
         /// Registered receiver device identifier.
         pub receiver_device_id: String,
         /// Device-bound public key authenticating the request and later ACK.
         pub receiver_public_key: KagemushaDevicePublicKeyV2,
         /// Unique request/nonce identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub request_id: [u8; 32],
         /// Request creation time in Unix milliseconds.
         pub issued_at_ms: u64,
@@ -1124,7 +1086,6 @@ mod model {
         /// Receiver-device signature over the canonical unsigned fields.
         pub signature: KagemushaDeviceSignatureV2,
     }
-
     /// Platform assertion made by the exact hardware key admitted at registration.
     ///
     /// Both platforms carry the same canonical raw low-S P-256 signature. iOS
@@ -1139,7 +1100,6 @@ mod model {
         /// Canonical raw low-S P-256 signature (`r || s`).
         pub signature: KagemushaDeviceSignatureV2,
     }
-
     /// Apple App Attest assertion result for an online operation.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1152,7 +1112,6 @@ mod model {
         /// Canonical raw low-S P-256 signature (`r || s`).
         pub signature: KagemushaDeviceSignatureV2,
     }
-
     /// Typed platform assertion, without a stringly-typed fallback variant.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1166,7 +1125,6 @@ mod model {
         /// Apple App Attest assertion over authenticatorData || clientDataHash.
         IosAppAttest(KagemushaIosAppAttestHardwareAssertionV1),
     }
-
     /// Self-contained payer/recipient hardware authorization carried inside one V2 archive.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1185,25 +1143,24 @@ mod model {
         /// Unlike nonces and payload digests, this identifier is not scoped by
         /// `authority`; every Kagemusha V2 chain operation shares one replay
         /// namespace.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Request creation time in Unix milliseconds.
         pub issued_at_ms: u64,
         /// Inclusive request expiry time in Unix milliseconds.
         pub expires_at_ms: u64,
         /// Unique signed nonce.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub nonce: [u8; 32],
         /// Digest of the canonical unsigned top-up or redemption payload.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub payload_digest: [u8; 32],
         /// Canonical Iroha hash of the exact registration admitted by consensus.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub registration_hash: [u8; 32],
         /// Typed assertion from the registered online hardware key.
         pub hardware_assertion: KagemushaOnlineHardwareAssertionV1,
     }
-
     /// Typed public-to-confidential shield evidence for one online top-up.
     ///
     /// The proof bytes remain opaque to wallets. The duplicated root and leaf
@@ -1218,17 +1175,16 @@ mod model {
     #[norito(deny_unknown_fields)]
     pub struct KagemushaTopUpShieldEvidenceV2 {
         /// Authoritative confidential root before inserting the top-up note.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub initial_root: [u8; 32],
         /// Root after inserting exactly the requested top-up note.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub finalized_root: [u8; 32],
         /// Authoritative zero-leaf position consumed by the insertion.
         pub leaf_index: u32,
         /// Canonical shield proof and registered verifier reference.
         pub proof: ProofAttachment,
     }
-
     /// Compact, ledger-resolvable reference carried by spendable peer bundles.
     ///
     /// The complete finalized anchor remains in chain state and in the init
@@ -1241,13 +1197,12 @@ mod model {
     )]
     pub struct KagemushaRecursiveSpendTopUpAnchorRefV2 {
         /// Stable top-up operation identifier used for the chain-state lookup.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub topup_operation_id: [u8; 32],
         /// Canonical digest of the complete finalized anchor.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub anchor_digest: [u8; 32],
     }
-
     /// Bounded projection of the live Sumeragi-v2 height context needed to
     /// authenticate one Commit certificate offline.
     ///
@@ -1294,7 +1249,6 @@ mod model {
         /// Finalized leader-rotation seed.
         pub leader_seed: [u8; 32],
     }
-
     /// Canonical Sumeragi-v2 height-context projection and Commit certificate.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1307,7 +1261,6 @@ mod model {
         /// Exact Sumeragi-v2 Commit certificate persisted by Kura.
         pub certificate: QuorumCertificate,
     }
-
     /// Canonical balanced-Merkle inclusion path for one finalized top-up.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1322,11 +1275,10 @@ mod model {
         /// Siblings from leaf level to root.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes::vec")
+            norito(json = "crate::json_helpers::fixed_bytes::vec")
         )]
         pub siblings: Vec<[u8; 32]>,
     }
-
     /// Offline-verifiable proof that a finalized Commit QC authenticated one
     /// exact `(operation_id, anchor_digest)` write.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -1344,7 +1296,6 @@ mod model {
         /// Bounded block-local inclusion proof.
         pub anchor_path: KagemushaTopUpAnchorMerkleProofV2,
     }
-
     /// Ordered validator set trusted for one non-overlapping height window.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1363,7 +1314,6 @@ mod model {
         /// Fixed-size BLS proofs of possession aligned one-to-one with `validator_set`.
         pub validator_set_pops: Vec<[u8; 96]>,
     }
-
     /// Content-addressed trust artifact prefetched before any peer exchange.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1380,7 +1330,6 @@ mod model {
         /// Strictly ordered, non-overlapping validator windows.
         pub windows: Vec<KagemushaTopUpFinalityRosterWindowV2>,
     }
-
     /// Canonical descriptor for one previous branch consumed by a V2 split.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1389,7 +1338,7 @@ mod model {
     )]
     pub struct KagemushaRecursiveSpendInputBranchV2 {
         /// Canonical digest of the complete previous recursive bundle.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub bundle_digest: [u8; 32],
         /// Exact note consumed by the confidential transfer.
         pub input_note: KagemushaSpendableNoteDescriptorV2,
@@ -1397,14 +1346,13 @@ mod model {
         /// carries one transition-bound claim per contributing ancestor.
         pub branch_claims: Vec<KagemushaRecursiveSpendBranchClaimV2>,
         /// Root at which the input transfer output was created.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub input_root: [u8; 32],
         /// Recursive proof-step count of the consumed bundle.
         pub proof_step_count: u32,
         /// Peer-hop count of the consumed bundle.
         pub peer_hop_count: u32,
     }
-
     /// Role of one independently spendable output from a V2 split.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1418,7 +1366,6 @@ mod model {
         /// Sender-owned change branch.
         Change,
     }
-
     /// Canonical unshield-v3 public words cross-checked by the V4 redemption transition.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1427,34 +1374,33 @@ mod model {
     )]
     pub struct KagemushaUnshieldPublicInputsBindingV2 {
         /// First input note commitment.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub input_commitment_0: [u8; 32],
         /// Optional second input note commitment; zero for Kagemusha redemption.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub input_commitment_1: [u8; 32],
         /// First input nullifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub nullifier_0: [u8; 32],
         /// Optional second input nullifier; zero for Kagemusha redemption.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub nullifier_1: [u8; 32],
         /// Zero for full redemption or the partial-redemption change commitment.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub change_output_commitment: [u8; 32],
         /// Root at which the input note is proved live.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub root: [u8; 32],
         /// Confidential-circuit encoding of the exact credited atomic amount.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub public_amount: [u8; 32],
         /// Canonical asset tag.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub asset_tag: [u8; 32],
         /// Canonical network tag.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub network_tag: [u8; 32],
     }
-
     /// Curve role of one proof in the current two-proof Pasta recursion pair.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1468,7 +1414,6 @@ mod model {
         /// EpAffine/Pallas recursive step over the Vesta scalar field.
         StepEp,
     }
-
     /// Canonical exact state vector carried across the Pasta field boundary.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1481,7 +1426,6 @@ mod model {
         /// All 138 canonical `u32` limbs, including compact branch-history accumulators.
         pub state_limbs: Vec<u32>,
     }
-
     /// Exact dynamic offsets for one authenticated V4 public instance column.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1506,7 +1450,6 @@ mod model {
         /// Exact length of the single public instance column.
         pub instance_column_limbs: u32,
     }
-
     /// Canonical Halo2 base-circuit configuration authenticated by a V4 profile.
     ///
     /// `Default` is intentionally an invalid sentinel. Key readers and runtime
@@ -1539,7 +1482,6 @@ mod model {
         /// Exact release cap for one ordinary parent proof transcript.
         pub max_parent_proof_bytes: u32,
     }
-
     /// Kind of content-addressed material bound to one V4 Pasta profile.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1557,7 +1499,6 @@ mod model {
         /// Genuine selector-zero proof and terminally verified folds for absent slots.
         BootstrapWitness,
     }
-
     /// One immutable file in a V4 recursive-spend artifact manifest.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1572,15 +1513,14 @@ mod model {
         /// Exact framed byte length.
         pub size_bytes: u64,
         /// SHA-256 of the exact framed file bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub sha256: [u8; 32],
         /// Exact byte length of the unframed cryptographic payload.
         pub payload_size_bytes: u64,
         /// SHA-256 of the unframed cryptographic payload.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub payload_sha256: [u8; 32],
     }
-
     /// Canonical public header preceding one streamed `KRV4KEY` payload.
     ///
     /// The header intentionally contains no release-sized byte vector. A
@@ -1613,10 +1553,10 @@ mod model {
         /// Authenticated IPA degree.
         pub ipa_k: u32,
         /// Domain-separated identity of the embedded canonical circuit parameters.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub circuit_params_sha256: [u8; 32],
         /// Value-free compiled protocol structure selected by this profile.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub compiled_protocol_structure_sha256: [u8; 32],
         /// Measured ordinary Step proof bytes selected by this profile.
         pub step_proof_size_bytes: u32,
@@ -1625,10 +1565,9 @@ mod model {
         /// Exact byte length of the following unframed payload.
         pub payload_size_bytes: u64,
         /// Raw SHA-256 of the following unframed payload.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub payload_sha256: [u8; 32],
     }
-
     /// V4 reference to the unchanged canonical top-up finality roster type.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1641,7 +1580,7 @@ mod model {
         /// Exact canonical Norito byte length.
         pub size_bytes: u64,
         /// SHA-256 of the exact canonical roster bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub sha256: [u8; 32],
         /// Exact generation declared by the roster archive.
         pub artifact_generation: String,
@@ -1654,7 +1593,6 @@ mod model {
         /// Required V4 bridge ABI.
         pub required_bridge_abi_version: u32,
     }
-
     /// Authenticated fixed configuration and key material for one V4 parity.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1673,7 +1611,7 @@ mod model {
         /// Complete authenticated Halo2 base-circuit configuration.
         pub circuit_params: KagemushaStepCircuitParamsV4,
         /// Value-free structure identity shared by bootstrap and final protocol.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub compiled_protocol_structure_sha256: [u8; 32],
         /// Measured augmented proof bytes for this exact key and layout.
         pub step_proof_size_bytes: u32,
@@ -1682,7 +1620,6 @@ mod model {
         /// order. `circuit_params` is authenticated inline, never as a file.
         pub artifacts: Vec<KagemushaPastaCycleArtifactV4>,
     }
-
     /// One raw-byte-qualified untracked regular file in a reviewed source closure.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1694,7 +1631,7 @@ mod model {
         /// SHA-256 of the exact regular-file bytes.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes_hex")
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
         )]
         pub blob_sha256: [u8; 32],
         /// Canonical lowercase SHA-1 Git blob object id of the same bytes.
@@ -1706,7 +1643,6 @@ mod model {
         /// Canonical Base64 of the exact relative POSIX path bytes.
         pub path_bytes_base64: String,
     }
-
     /// Canonical independently reviewed clean source closure for one candidate.
     ///
     /// Its JSON representation matches the reviewed descriptor: SHA-256 fields,
@@ -1729,13 +1665,13 @@ mod model {
         /// Producer full-tree SHA-256 of tracked, untracked, and `Cargo.lock` bytes.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes_hex")
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
         )]
         pub source_tree_sha256: [u8; 32],
         /// SHA-256 of the canonical full-index binary Git diff from `source_commit`.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes_hex")
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
         )]
         pub tracked_binary_diff_sha256: [u8; 32],
         /// Exact number of raw-byte-sorted untracked manifest entries.
@@ -1746,7 +1682,7 @@ mod model {
         /// SHA-256 of each entry's canonical compact sorted-key JSON plus LF.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes_hex")
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
         )]
         pub untracked_path_mode_blob_oid_manifest_sha256: [u8; 32],
         /// Exact ignored root `Cargo.lock` byte length.
@@ -1754,17 +1690,16 @@ mod model {
         /// SHA-256 of the exact ignored root `Cargo.lock` bytes.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes_hex")
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
         )]
         pub ignored_cargo_lock_sha256: [u8; 32],
         /// Fingerprint proving the tracked diff and untracked manifest are empty.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes_hex")
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
         )]
         pub combined_source_fingerprint_sha256: [u8; 32],
     }
-
     /// Production release manifest for degree-parameterized paired Pasta proofs.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1787,14 +1722,14 @@ mod model {
         /// Lowercase 40-hex source revision.
         pub source_commit: String,
         /// SHA-256 of the exact tracked and untracked build source tree.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub source_tree_sha256: [u8; 32],
         /// Whether the exact build tree differed from `source_commit`.
         pub source_repo_dirty: bool,
         /// Complete independently pinned reviewed clean source closure.
         pub reviewed_source_closure: KagemushaReviewedSourceClosureV1,
         /// SHA-256 of the exact canonical descriptor JSON bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_source_closure_descriptor_sha256: [u8; 32],
         /// Exact network for which the release was built.
         pub network_id: NetworkId,
@@ -1813,26 +1748,25 @@ mod model {
         /// Exact mandatory in-process memory enforcement profile.
         pub generation_memory_enforcement_profile: String,
         /// SHA-256 of the canonical actual-recursion qualification receipt.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualification_receipt_sha256: [u8; 32],
         /// Domain-separated identity of the immutable candidate and qualification receipt.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualified_candidate_sha256: [u8; 32],
         /// Eq then Ep V4 recursive-step profiles.
         pub profiles: Vec<KagemushaPastaCycleProofProfileV4>,
         /// Release-bound validator roster reference.
         pub topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4,
         /// Digest of signed physical-device benchmark evidence.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub benchmark_evidence_sha256: [u8; 32],
         /// Digest of independent cryptographic review evidence.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub cryptographic_review_sha256: [u8; 32],
         /// Digest of the V4 signed release attestation.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub release_attestation_sha256: [u8; 32],
     }
-
     /// Immutable ABI-21 candidate captured before external review and device evidence exist.
     ///
     /// The embedded manifest commits the independently reviewed clean source
@@ -1853,7 +1787,6 @@ mod model {
         /// Complete pre-evidence manifest with its three promotion digest slots zeroed.
         pub manifest: KagemushaRecursiveSpendArtifactManifestV4,
     }
-
     /// Canonical proof-bearing receipt proving one exact candidate reached step two.
     ///
     /// Counters, parent cardinality, semantic statements, and terminal decisions
@@ -1871,24 +1804,23 @@ mod model {
         /// Receipt layout version.
         pub(super) version: u16,
         /// SHA-256 of the exact canonical unsigned candidate record.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub(super) candidate_sha256: [u8; 32],
         /// SHA-256 of the candidate's exact canonical unsigned manifest.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub(super) manifest_sha256: [u8; 32],
         /// Exact in-process physical-memory ceiling committed by the candidate.
         pub(super) generation_memory_limit_bytes: u64,
         /// Exact mandatory in-process memory enforcement profile.
         pub(super) generation_memory_enforcement_profile: String,
         /// Framed then payload SHA-256 for all eight canonical artifact roles.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_array"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_array"))]
         pub(super) artifact_role_digests: [[u8; 32]; 16],
         /// Exact canonical Eq/Ep initialization proof pair bytes.
         pub(super) initialization_pair: Vec<u8>,
         /// Exact canonical Eq/Ep one-parent child proof pair bytes.
         pub(super) append_pair: Vec<u8>,
     }
-
     /// Immutable release identity reviewed before evidence finalization.
     ///
     /// `candidate_sha256` commits the complete artifact/profile/roster/window
@@ -1902,25 +1834,25 @@ mod model {
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendCryptographicReviewSubjectV4 {
         /// SHA-256 of the canonical immutable pre-evidence candidate.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub candidate_sha256: [u8; 32],
         /// SHA-256 of the canonical actual-recursion qualification receipt.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualification_receipt_sha256: [u8; 32],
         /// Domain-separated identity of the candidate and qualification receipt.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualified_candidate_sha256: [u8; 32],
         /// Exact release generation copied from the candidate.
         pub generation: String,
         /// Exact source revision copied from the candidate.
         pub source_commit: String,
         /// Exact source-tree identity copied from the candidate.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub source_tree_sha256: [u8; 32],
         /// Exact reviewed clean-tree state copied from the candidate (`false`).
         pub source_repo_dirty: bool,
         /// Exact independently pinned closure descriptor digest copied from the candidate.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_source_closure_descriptor_sha256: [u8; 32],
         /// Exact network for which the reviewed candidate was built.
         pub network_id: NetworkId,
@@ -1929,7 +1861,6 @@ mod model {
         /// Native bridge ABI required by the reviewed candidate.
         pub bridge_abi_version: u32,
     }
-
     /// Production disposition recorded by an independent cryptographic review.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1943,7 +1874,6 @@ mod model {
         /// The exact candidate is rejected and must not be finalized.
         Rejected,
     }
-
     /// Closed, canonically ordered set of security properties reviewed for V4.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1965,7 +1895,6 @@ mod model {
         /// Parsers are canonical and all attacker-controlled resources are bounded.
         ParserCanonicalizationAndResourceBounds,
     }
-
     /// Result of one mandatory cryptographic-review check.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1979,7 +1908,6 @@ mod model {
         /// The referenced evidence does not support the reviewed property.
         Failed,
     }
-
     /// One content-addressed mandatory check inside a V4 review.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1993,10 +1921,9 @@ mod model {
         /// Review result; production finalization requires `Passed`.
         pub status: KagemushaRecursiveSpendCryptographicReviewCheckStatusV4,
         /// SHA-256 of property-specific evidence retained by the reviewer.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub evidence_sha256: [u8; 32],
     }
-
     /// Exact domain-separated payload signed by every V4 reviewer.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2012,14 +1939,13 @@ mod model {
         /// Review disposition; production requires `Approved`.
         pub decision: KagemushaRecursiveSpendCryptographicReviewDecisionV4,
         /// SHA-256 of the complete retained review report.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub report_sha256: [u8; 32],
         /// Exact Eq-then-Ep cryptographic artifact roles reviewed for ABI-21.
         pub artifact_roles: Vec<String>,
         /// Exact ordered set of mandatory, independently evidenced checks.
         pub checks: Vec<KagemushaRecursiveSpendCryptographicReviewCheckResultV4>,
     }
-
     /// One policy-authorized signature over a complete V4 review payload.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2033,7 +1959,6 @@ mod model {
         /// Signature over the exact domain, candidate, report, roles, and checks.
         pub signature: SignatureOf<KagemushaRecursiveSpendCryptographicReviewPayloadV4>,
     }
-
     /// Canonical signed independent cryptographic-review evidence for ABI-21/V4.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2051,7 +1976,6 @@ mod model {
         /// Strictly ascending, unique reviewer approvals.
         pub approvals: Vec<KagemushaRecursiveSpendCryptographicReviewApprovalV4>,
     }
-
     /// Independent authority role required to promote an authenticated release.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2067,7 +1991,6 @@ mod model {
         /// Device-lab authority approving the referenced physical-device measurements.
         PhysicalDeviceBenchmark,
     }
-
     /// Immutable subject shared by every role-specific V4 release approval.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2076,34 +1999,33 @@ mod model {
     )]
     pub struct KagemushaRecursiveSpendReleaseAttestationSubjectV4 {
         /// SHA-256 of the canonical V4 manifest with its attestation slot zeroed.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub manifest_subject_sha256: [u8; 32],
         /// SHA-256 of the canonical actual-recursion qualification receipt.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualification_receipt_sha256: [u8; 32],
         /// Domain-separated identity of the candidate and qualification receipt.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualified_candidate_sha256: [u8; 32],
         /// Exact release generation copied from the V4 manifest.
         pub generation: String,
         /// Exact source revision copied from the V4 manifest.
         pub source_commit: String,
         /// Exact source-tree identity copied from the V4 manifest.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub source_tree_sha256: [u8; 32],
         /// Exact clean-tree state copied from the V4 manifest (`false`).
         pub source_repo_dirty: bool,
         /// Exact independently pinned closure descriptor digest copied from the manifest.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_source_closure_descriptor_sha256: [u8; 32],
         /// Digest of the signed physical-device evidence file.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub benchmark_evidence_sha256: [u8; 32],
         /// Digest of the independent cryptographic review file.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub cryptographic_review_sha256: [u8; 32],
     }
-
     /// Domain-separated value signed for one independent V4 approval role.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2118,7 +2040,6 @@ mod model {
         /// Complete V4 release subject approved by the signer.
         pub subject: KagemushaRecursiveSpendReleaseAttestationSubjectV4,
     }
-
     /// One role-bound signature inside a V4 release attestation.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2133,7 +2054,6 @@ mod model {
         /// Signature over the V4 domain, role, and complete subject.
         pub signature: SignatureOf<KagemushaRecursiveSpendReleaseApprovalPayloadV4>,
     }
-
     /// Authenticated release envelope whose digest occupies the V4 manifest slot.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2150,7 +2070,6 @@ mod model {
         /// Strictly ordered, unique role/signer approvals.
         pub approvals: Vec<KagemushaRecursiveSpendReleaseApprovalV4>,
     }
-
     /// Trusted signer threshold for one independent release-approval role.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2165,7 +2084,6 @@ mod model {
         /// Strictly ordered authorized signer keys.
         pub authorized_signers: Vec<PublicKey>,
     }
-
     /// Locally trusted policy for authenticating a release envelope.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2182,7 +2100,6 @@ mod model {
         /// Exactly release, cryptographic-review, and device-benchmark policies.
         pub roles: Vec<KagemushaRecursiveSpendReleaseRolePolicyV1>,
     }
-
     /// Verified signer identity retained in a machine-readable promotion record.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2195,7 +2112,6 @@ mod model {
         /// Verified signer key.
         pub public_key: PublicKey,
     }
-
     /// Deterministic ABI-21 deployment marker written only after V4 release verification.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2210,22 +2126,22 @@ mod model {
         /// Authenticated V4 release generation.
         pub generation: String,
         /// SHA-256 of the immutable pre-evidence candidate record.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub candidate_sha256: [u8; 32],
         /// SHA-256 of the canonical actual-recursion qualification receipt.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualification_receipt_sha256: [u8; 32],
         /// Domain-separated identity of the candidate and qualification receipt.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualified_candidate_sha256: [u8; 32],
         /// SHA-256 of the complete canonical V4 manifest.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub manifest_sha256: [u8; 32],
         /// SHA-256 of the canonical signed V4 release attestation.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub release_attestation_sha256: [u8; 32],
         /// SHA-256 of the locally trusted release policy.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub release_policy_sha256: [u8; 32],
         /// Canonically ordered role/signer identities whose signatures were verified.
         pub approved_signers: Vec<KagemushaRecursiveSpendApprovedSignerV1>,
@@ -2238,7 +2154,6 @@ mod model {
         /// Authenticated release-specific proof-pair byte ceiling.
         pub max_proof_bytes: u32,
     }
-
     /// Complete signed ABI-21 release material persisted by consensus activation.
     ///
     /// The two evidence fields contain canonical signed summaries, never raw
@@ -2261,7 +2176,6 @@ mod model {
         /// Promotion marker binding the candidate, policy, release, and inventory.
         pub promotion_record: KagemushaRecursiveSpendPromotedReleaseV4,
     }
-
     /// Atomic consensus payload for one ABI-21 release and its two terminal verifiers.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2273,7 +2187,7 @@ mod model {
         /// Fully authenticated signed release record.
         pub release_record: KagemushaRecursiveSpendReleaseRecordV4,
         /// SHA-256 of the operator-configured canonical release policy.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub configured_policy_sha256: [u8; 32],
         /// Registry id for the EqAffine/Vesta verifying key.
         pub step_eq_verifier_key_id: VerifyingKeyId,
@@ -2284,7 +2198,6 @@ mod model {
         /// Inline EpAffine/Pallas verifying-key record.
         pub step_ep_verifier_record: VerifyingKeyRecord,
     }
-
     /// Installed authenticated V4 release selected by a degree-parameterized operation.
     ///
     /// The explicit wire version prevents an unversioned historical binding
@@ -2300,10 +2213,9 @@ mod model {
         /// Human-readable authenticated V4 release generation.
         pub generation: String,
         /// SHA-256 of the exact signed V4 manifest bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub manifest_sha256: [u8; 32],
     }
-
     /// Canonical fields signed by a receiver after durable payment persistence.
     ///
     /// The receiver must persist the final acknowledgement bytes under
@@ -2317,28 +2229,27 @@ mod model {
     )]
     pub struct KagemushaReceiverAcknowledgementPayloadV2 {
         /// Sender operation whose reserved inputs may be committed after ACK verification.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Canonical digest of the receiver-created payment request.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub recipient_request_digest: [u8; 32],
         /// Canonical digest of the accepted recipient bundle.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub payment_bundle_digest: [u8; 32],
         /// Recipient output commitment persisted by the receiver.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub recipient_commitment: [u8; 32],
         /// Receiver wall-clock time captured once at the durable commit boundary.
         pub accepted_at_ms: u64,
         /// Registered receiver device identifier used for device-lineage lookup.
         pub receiver_device_id: String,
         /// Domain-separated reference to `receiver_public_key`.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub receiver_key_reference: [u8; 32],
         /// Device-bound acknowledgement verification key.
         pub receiver_public_key: KagemushaDevicePublicKeyV2,
     }
-
     /// Signed durable receiver acknowledgement for one offline payment.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2351,7 +2262,6 @@ mod model {
         /// Device-key signature over the domain-separated canonical payload.
         pub signature: KagemushaDeviceSignatureV2,
     }
-
     /// Typed result returned after native acknowledgement verification.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2362,19 +2272,18 @@ mod model {
         /// All request, bundle, key-reference, and signature bindings passed.
         pub valid: bool,
         /// Stable sender operation id copied from the verified acknowledgement.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Canonical receiver request digest copied from the verified acknowledgement.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub recipient_request_digest: [u8; 32],
         /// Canonical accepted-bundle digest copied from the verified acknowledgement.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub payment_bundle_digest: [u8; 32],
         /// Canonical identity digest of the complete acknowledgement.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub acknowledgement_digest: [u8; 32],
     }
-
     /// Native capability record for the explicitly versioned ABI-21 backend.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2405,7 +2314,6 @@ mod model {
         /// Stable remaining backend gates.
         pub missing_gates: Vec<String>,
     }
-
     /// Degree-parameterized Pasta-cycle envelope carried by a V4 proof wrapper.
     ///
     /// The backend-native Eq/Ep pair remains canonical opaque bytes inside
@@ -2430,30 +2338,29 @@ mod model {
         /// Authenticated artifact generation.
         pub artifact_generation: String,
         /// SHA-256 of the exact authenticated V4 manifest.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub manifest_sha256: [u8; 32],
         /// Eq parameter generation identifier.
         pub step_eq_parameter_generation: String,
         /// Ep parameter generation identifier.
         pub step_ep_parameter_generation: String,
         /// Domain-separated identity of the Eq circuit configuration.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub step_eq_circuit_params_sha256: [u8; 32],
         /// Domain-separated identity of the Ep circuit configuration.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub step_ep_circuit_params_sha256: [u8; 32],
         /// SHA-256 of the exact Eq processed verifier-key payload.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub step_eq_verifier_key_sha256: [u8; 32],
         /// SHA-256 of the exact Ep processed verifier-key payload.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub step_ep_verifier_key_sha256: [u8; 32],
         /// Canonical cross-field state boundary exposed by the proof.
         pub state_boundary: KagemushaRecursiveSpendStateBoundaryV5,
         /// Canonical adapter-owned V4 Eq/Ep proof-pair bytes.
         pub proof: ProofBox,
     }
-
     /// Exact fixed-size ABI-21 public operation row bound by the terminal proof.
     ///
     /// Each consecutive group of eight limbs is one canonical Pallas-field
@@ -2469,11 +2376,10 @@ mod model {
         /// All 1,080 exact public limbs; no compact or legacy encoding is accepted.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_u32_limbs")
+            norito(json = "crate::json_helpers::fixed_u32_limbs")
         )]
         pub limbs: [u32; KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4],
     }
-
     /// Peer-to-peer split transition carried by an ABI-21 recursive output.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2482,22 +2388,21 @@ mod model {
     )]
     pub struct KagemushaRecursiveSpendPeerSplitTransitionV4 {
         /// Circuit-exposed digest of the exact local split intent.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub binding_digest: [u8; 32],
         /// Independently spendable output selected by this statement.
         pub branch: KagemushaRecursiveSpendBranchV2,
         /// Receiver request digest bound by the split.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub recipient_request_digest: [u8; 32],
         /// Stable split operation identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Maximum proof-step count among the consumed parent bundles.
         pub parent_max_proof_step_count: u32,
         /// Maximum peer-hop count among the consumed parent bundles.
         pub parent_max_peer_hop_count: u32,
     }
-
     /// Partial-redemption change transition carried by an ABI-21 child statement.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2506,20 +2411,19 @@ mod model {
     )]
     pub struct KagemushaRecursiveSpendRedemptionChangeTransitionV4 {
         /// Circuit-exposed digest of the exact redemption/change intent.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub binding_digest: [u8; 32],
         /// Parent bundle identity consumed by the unshield transition.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub parent_bundle_digest: [u8; 32],
         /// Stable redemption operation identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Parent proof-step count.
         pub parent_proof_step_count: u32,
         /// Parent peer-hop count.
         pub parent_peer_hop_count: u32,
     }
-
     /// Mutually exclusive semantic transition that produced an ABI-21 state.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2533,7 +2437,6 @@ mod model {
         /// Proof-bound partial-redemption change child.
         RedemptionChange(KagemushaRecursiveSpendRedemptionChangeTransitionV4),
     }
-
     /// Canonical public statement bound by an ABI-21 recursive proof.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2548,7 +2451,7 @@ mod model {
         /// Authoritative asset scale.
         pub asset_scale: u32,
         /// Root after the current transition.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub final_root: [u8; 32],
         /// First empty commitment-tree leaf after this transition.
         pub next_zero_leaf_index: u32,
@@ -2569,7 +2472,6 @@ mod model {
         /// Recursive verifier selected by the proof.
         pub verifier_key_id: VerifyingKeyId,
     }
-
     /// V4 recursive proof whose public instance includes the statement digest.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2580,12 +2482,11 @@ mod model {
         /// Verifier selected by the statement.
         pub verifier_key_id: VerifyingKeyId,
         /// Circuit-exposed digest of the complete V4 public statement.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub public_statement_digest: [u8; 32],
         /// Explicitly versioned envelope containing the opaque native pair.
         pub proof_envelope: KagemushaPastaCycleProofEnvelopeV4,
     }
-
     /// Independently spendable ABI-21 recursive state.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2600,7 +2501,6 @@ mod model {
         /// Degree-parameterized recursive proof.
         pub recursive_proof: KagemushaRecursiveSpendProofV4,
     }
-
     /// Finalized top-up anchor selecting a V4 recursive release.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2621,35 +2521,34 @@ mod model {
         /// Exact positive amount reserved into escrow.
         pub amount: KagemushaScaledAmountV2,
         /// Confidential root before the finalized transfer.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub initial_root: [u8; 32],
         /// Confidential root finalized by the transfer.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub finalized_root: [u8; 32],
         /// Confidential tree position consumed by the top-up note.
         pub shield_leaf_index: u32,
         /// Exact first spendable note.
         pub current_note: KagemushaSpendableNoteDescriptorV2,
         /// Stable top-up operation identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub topup_operation_id: [u8; 32],
         /// Active shield verifier selected at finalization.
         pub shield_verifier_id: VerifyingKeyId,
         /// Registered shield verifier commitment.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub shield_verifier_commitment: [u8; 32],
         /// Authenticated V4 recursive artifact release.
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
         /// Finalization block height.
         pub finalized_height: u64,
         /// Canonical transaction hash that created the anchor.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub finalized_tx_hash: [u8; 32],
         /// Canonical digest of every preceding receipt field.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub anchor_digest: [u8; 32],
     }
-
     /// Canonical unsigned ABI-21 online-to-offline fields covered by payer authorization.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2671,10 +2570,9 @@ mod model {
         /// Authenticated ABI-21 release selected for recursive initialization.
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
         /// Globally unique replay-stable operation identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
-
     /// Authoritative ABI-21 chain-facing online-to-offline request.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2697,12 +2595,11 @@ mod model {
         /// Authenticated ABI-21 release selected for recursive initialization.
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
         /// Globally unique replay-stable operation identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Self-contained payer/device authorization.
         pub authorization: KagemushaRequestAuthorizationV2,
     }
-
     /// Public V4 split transition with an ABI-21 output binding.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2729,13 +2626,12 @@ mod model {
         /// Sender-owned remainder, if any.
         pub change_output: Option<KagemushaSpendableNoteDescriptorV2>,
         /// Digest of the receiver's nonce-bound payment request.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub recipient_request_digest: [u8; 32],
         /// Stable idempotency/replay identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
-
     /// Public V4 redemption transition with an optional ABI-21 change binding.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2758,10 +2654,10 @@ mod model {
         /// Peer-hop count of the parent bundle.
         pub parent_peer_hop_count: u32,
         /// Canonical digest of the complete input bundle.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub parent_bundle_digest: [u8; 32],
         /// Input confidential root exposed by unshield-v3.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub input_root: [u8; 32],
         /// Online account receiving the public credit.
         pub recipient: AccountId,
@@ -2774,13 +2670,12 @@ mod model {
         /// Canonical unshield-v3 public words.
         pub unshield_public_inputs: KagemushaUnshieldPublicInputsBindingV2,
         /// Digest of the unshield words exposed by the V4 transition circuit.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub unshield_public_inputs_digest: [u8; 32],
         /// Stable authorization/idempotency operation id.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
-
     /// ABI-21 local initialization request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2797,7 +2692,6 @@ mod model {
         /// Authenticated V4 artifact release.
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
     }
-
     /// ABI-21 initialization result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2812,10 +2706,9 @@ mod model {
         /// Complete offline-verifiable origin provenance for the initialized branch.
         pub topup_provenance: KagemushaRecursiveSpendTopUpProvenanceV4,
         /// Circuit-exposed digest of the complete public statement.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub public_statement_digest: [u8; 32],
     }
-
     /// One V4 previous-proof package consumed by append.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2828,7 +2721,6 @@ mod model {
         /// Complete authenticated top-up provenance required to verify this parent offline.
         pub topup_provenance: KagemushaRecursiveSpendTopUpProvenanceV4,
     }
-
     /// ABI-21 recursive append request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2845,7 +2737,6 @@ mod model {
         /// Signed proof-evaluation snapshot; verifiers must also be live at execution.
         pub block_height: u64,
     }
-
     /// Result of one ABI-21 recursive split append.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2856,7 +2747,7 @@ mod model {
         /// Exact value-conserving transition shared by both branches.
         pub split: KagemushaRecursiveSpendSplitIntentV4,
         /// Circuit-exposed binding to the split and parent accumulator.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub split_binding_digest: [u8; 32],
         /// Receiver-owned independently spendable output.
         pub recipient_bundle: KagemushaRecursiveSpendBundleV4,
@@ -2871,7 +2762,6 @@ mod model {
         /// Complete provenance for sender change, present exactly with change.
         pub change_topup_provenance: Option<KagemushaRecursiveSpendTopUpProvenanceV4>,
     }
-
     /// Recipient-only ABI-21 peer payload emitted from a local split result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2886,7 +2776,6 @@ mod model {
         /// Complete authenticated provenance needed for offline receiver verification.
         pub topup_provenance: KagemushaRecursiveSpendTopUpProvenanceV4,
     }
-
     /// Complete finalized V4 origin carried to an offline receiver.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2899,7 +2788,6 @@ mod model {
         /// Consensus proof for the compact anchor reference.
         pub topup_finality_proof: KagemushaTopUpFinalityProofV2,
     }
-
     /// Complete authenticated top-up provenance carried by every spendable ABI-21 branch.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2912,7 +2800,6 @@ mod model {
         /// Complete evidence in the exact order of the branch statement's anchor references.
         pub topup_finality_evidence: Vec<KagemushaRecursiveSpendTopUpFinalityEvidenceV4>,
     }
-
     /// ABI-21 receiver-verification request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2935,7 +2822,6 @@ mod model {
         /// Authoritative current Unix time in milliseconds.
         pub verified_at_ms: u64,
     }
-
     /// Opaque-safe summary decoded from an ABI-21 bundle.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2948,10 +2834,10 @@ mod model {
         /// Exact current spendable amount.
         pub amount: KagemushaScaledAmountV2,
         /// Current note commitment.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub note_commitment: [u8; 32],
         /// Current note nullifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub spend_nullifier: [u8; 32],
         /// Current peer-hop count.
         pub hop_count: u32,
@@ -2964,10 +2850,9 @@ mod model {
         /// Recursive verifier selected by the proof.
         pub verifier_key_id: VerifyingKeyId,
         /// Canonical identity digest of the complete opaque bundle.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub bundle_digest: [u8; 32],
     }
-
     /// Typed ABI-21 receiver-verification result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2986,10 +2871,10 @@ mod model {
         /// Verified ABI-21 bundle summary.
         pub summary: KagemushaRecursiveSpendBundleSummaryV4,
         /// Canonical receiver request digest.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub recipient_request_digest: [u8; 32],
         /// Digest binding request, output, and bundle.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub request_output_binding_digest: [u8; 32],
         /// Active recursive verifier record identifier.
         pub verifier_key_id: VerifyingKeyId,
@@ -3004,7 +2889,6 @@ mod model {
         /// Authoritative Unix time used for acceptance.
         pub verified_at_ms: u64,
     }
-
     /// Proof-bound V4 offline change child created by partial redemption.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -3019,7 +2903,6 @@ mod model {
         /// Recursive proof making the child independently spendable.
         pub bundle: KagemushaRecursiveSpendBundleV4,
     }
-
     /// ABI-21 native redemption builder input.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -3040,10 +2923,9 @@ mod model {
         /// Signed proof-evaluation snapshot, bounded by the eventual execution height.
         pub block_height: u64,
         /// Stable idempotency identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
-
     /// Canonical unsigned ABI-21 chain redemption fields.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -3068,10 +2950,9 @@ mod model {
         /// Signed proof-evaluation snapshot, bounded by the eventual execution height.
         pub block_height: u64,
         /// Stable idempotency identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
-
     /// Prepared unsigned ABI-21 redemption result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -3082,7 +2963,7 @@ mod model {
         /// Complete unsigned V4 chain-request fields.
         pub unsigned: KagemushaRecursiveSpendRedeemUnsignedV4,
         /// Exact digest that device authorization must sign.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub authorization_digest: [u8; 32],
         /// Independently spendable proof-bound change.
         pub offline_change_bundle: Option<KagemushaRecursiveSpendBundleV4>,
@@ -3091,10 +2972,9 @@ mod model {
         /// Complete inherited origin provenance for proof-bound change.
         pub offline_change_topup_provenance: Option<KagemushaRecursiveSpendTopUpProvenanceV4>,
         /// Stable operation identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
-
     /// Versioned ABI-21 offline-to-online request.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -3121,12 +3001,11 @@ mod model {
         /// Signed proof-evaluation snapshot; chain execution also checks the current window.
         pub block_height: u64,
         /// Globally unique idempotency identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Self-contained recipient/device authorization.
         pub authorization: KagemushaRequestAuthorizationV2,
     }
-
     /// Typed native ABI-21 redemption output.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -3145,11 +3024,10 @@ mod model {
         /// Complete inherited origin provenance for proof-bound change.
         pub offline_change_topup_provenance: Option<KagemushaRecursiveSpendTopUpProvenanceV4>,
         /// Stable operation identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
 }
-
 /// Return the release-qualified verifier-key registry identifier for one ABI-21 parity.
 ///
 /// The manifest digest suffix keeps verifier records for overlapping retained
@@ -3169,7 +3047,6 @@ pub fn kagemusha_recursive_spend_verifier_key_id_v4(
         format!("{circuit_id}-{}", hex::encode(manifest_sha256)),
     )
 }
-
 /// On-chain platform-attested registration for a Kagemusha device key.
 ///
 /// This is the device-bound trust anchor used by top-up and redemption authorization.
@@ -3233,7 +3110,6 @@ pub struct OfflineDeviceAttestationRegistration {
     /// Registration validity limit in Unix milliseconds.
     pub expires_at_ms: u64,
 }
-
 /// Android `KeyMint` challenge inputs available before the attested key is generated.
 ///
 /// Android derives the final registration `key_id` from the public key created by
@@ -3277,7 +3153,6 @@ pub struct OfflineAndroidKeyMintChallenge {
     /// Registration validity limit in Unix milliseconds.
     pub expires_at_ms: u64,
 }
-
 /// Governed Offline device-attestation verifier policy.
 ///
 /// Nodes require this policy to be installed in chain state before accepting
@@ -3314,7 +3189,6 @@ pub struct OfflineDeviceAttestationPolicy {
     /// unlisted-package or signing-certificate fallback.
     pub require_android_app_policy: bool,
 }
-
 /// Trusted platform root certificate for Offline device attestation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3331,7 +3205,6 @@ pub struct OfflineDeviceAttestationTrustedRoot {
     /// Optional governance expiry time in Unix milliseconds.
     pub not_after_ms: Option<u64>,
 }
-
 /// Allowed iOS App Attest app identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3352,7 +3225,6 @@ pub struct OfflineIosAppAttestationPolicy {
     /// Whether legacy App Attest attestation and assertion authData without extensions remains accepted.
     pub allow_legacy_auth_data_without_extensions: bool,
 }
-
 /// Allowed Android `KeyMint` app identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3365,7 +3237,6 @@ pub struct OfflineAndroidAppAttestationPolicy {
     /// Allowed Android signing certificate SHA-256 digests.
     pub signing_certificate_sha256: Vec<Vec<u8>>,
 }
-
 #[derive(Debug, Clone, Decode, Encode)]
 struct OfflineDeviceAttestationChallengePreimage {
     domain: String,
@@ -3389,7 +3260,6 @@ struct OfflineDeviceAttestationChallengePreimage {
     recent_block_hash: Hash,
     expires_at_ms: u64,
 }
-
 /// `KeyMint` uses this separate schema because `key_id` is derived from the key
 /// that Android creates while processing this challenge.
 #[derive(Debug, Clone, Decode, Encode)]
@@ -3414,19 +3284,16 @@ struct OfflineAndroidKeyMintChallengePreimage {
     recent_block_hash: Hash,
     expires_at_ms: u64,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaRecipientPaymentRequestDigestPreimageV2 {
     domain: String,
     request: KagemushaRecipientPaymentRequestV2,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaRecipientPaymentRequestSigningPreimageV2 {
     domain: String,
     payload: KagemushaRecipientPaymentRequestSigningPayloadV2,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaRequestAuthorizationSigningPreimageV2 {
     domain: String,
@@ -3441,25 +3308,21 @@ struct KagemushaRequestAuthorizationSigningPreimageV2 {
     registration_hash: [u8; 32],
     platform: String,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaReceiverKeyReferencePreimageV2 {
     domain: String,
     receiver_public_key: KagemushaDevicePublicKeyV2,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaReceiverAcknowledgementSigningPreimageV2 {
     domain: String,
     payload: KagemushaReceiverAcknowledgementPayloadV2,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaReceiverAcknowledgementDigestPreimageV2 {
     domain: String,
     acknowledgement: KagemushaReceiverAcknowledgementV2,
 }
-
 impl norito::NoritoSerialize for KagemushaDevicePublicKeyV2 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         self.validate()
@@ -3467,22 +3330,18 @@ impl norito::NoritoSerialize for KagemushaDevicePublicKeyV2 {
         writer.write_all(&self.0)?;
         Ok(())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         Some(KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.encoded_len_hint()
     }
 }
-
 impl<'de> norito::NoritoDeserialize<'de> for KagemushaDevicePublicKeyV2 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("Kagemusha device public key must decode from canonical SEC1 bytes")
     }
-
     fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
         let bytes =
             norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
@@ -3493,7 +3352,6 @@ impl<'de> norito::NoritoDeserialize<'de> for KagemushaDevicePublicKeyV2 {
         Ok(value)
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for KagemushaDevicePublicKeyV2 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
         let raw = bytes
@@ -3504,7 +3362,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for KagemushaDevicePublicKeyV2 {
         Ok((value, KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2))
     }
 }
-
 impl norito::NoritoSerialize for KagemushaDeviceSignatureV2 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         self.validate()
@@ -3512,22 +3369,18 @@ impl norito::NoritoSerialize for KagemushaDeviceSignatureV2 {
         writer.write_all(&self.0)?;
         Ok(())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         Some(KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.encoded_len_hint()
     }
 }
-
 impl<'de> norito::NoritoDeserialize<'de> for KagemushaDeviceSignatureV2 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("Kagemusha device signature must decode from canonical raw P-256 bytes")
     }
-
     fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
         let bytes =
             norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
@@ -3538,7 +3391,6 @@ impl<'de> norito::NoritoDeserialize<'de> for KagemushaDeviceSignatureV2 {
         Ok(value)
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for KagemushaDeviceSignatureV2 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
         let raw = bytes
@@ -3549,7 +3401,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for KagemushaDeviceSignatureV2 {
         Ok((value, KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2))
     }
 }
-
 impl KagemushaDevicePublicKeyV2 {
     /// Parse and validate the sole canonical Kagemusha device-key encoding.
     ///
@@ -3580,7 +3431,6 @@ impl KagemushaDevicePublicKeyV2 {
         }
         Ok(Self(raw))
     }
-
     /// Validate a value obtained through a raw Norito or JSON decoder.
     ///
     /// # Errors
@@ -3589,13 +3439,11 @@ impl KagemushaDevicePublicKeyV2 {
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         Self::from_sec1_bytes(&self.0).map(|_| ())
     }
-
     /// Return the canonical uncompressed SEC1 bytes.
     #[must_use]
     pub const fn as_sec1_bytes(&self) -> &[u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2] {
         &self.0
     }
-
     fn verifying_key(&self) -> Result<P256VerifyingKey, KagemushaValidationError> {
         self.validate()?;
         P256VerifyingKey::from_sec1_bytes(&self.0).map_err(|_| {
@@ -3605,31 +3453,25 @@ impl KagemushaDevicePublicKeyV2 {
         })
     }
 }
-
 impl TryFrom<&[u8]> for KagemushaDevicePublicKeyV2 {
     type Error = KagemushaValidationError;
-
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         Self::from_sec1_bytes(value)
     }
 }
-
 impl TryFrom<[u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2]> for KagemushaDevicePublicKeyV2 {
     type Error = KagemushaValidationError;
-
     fn try_from(
         value: [u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2],
     ) -> Result<Self, Self::Error> {
         Self::from_sec1_bytes(&value)
     }
 }
-
 impl AsRef<[u8]> for KagemushaDevicePublicKeyV2 {
     fn as_ref(&self) -> &[u8] {
         &self.0
     }
 }
-
 impl KagemushaDeviceSignatureV2 {
     /// Parse a canonical fixed-width low-S P-256 ECDSA signature.
     ///
@@ -3655,7 +3497,6 @@ impl KagemushaDeviceSignatureV2 {
         }
         Ok(Self(raw))
     }
-
     /// Validate a value obtained through a raw Norito or JSON decoder.
     ///
     /// # Errors
@@ -3664,13 +3505,11 @@ impl KagemushaDeviceSignatureV2 {
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         Self::from_raw_bytes(&self.0).map(|_| ())
     }
-
     /// Return the canonical fixed-width `r || s` bytes.
     #[must_use]
     pub const fn as_raw_bytes(&self) -> &[u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2] {
         &self.0
     }
-
     /// Verify ECDSA-P256-SHA256 under the fixed Kagemusha authority profile.
     ///
     /// # Errors
@@ -3695,35 +3534,28 @@ impl KagemushaDeviceSignatureV2 {
             })
     }
 }
-
 impl TryFrom<&[u8]> for KagemushaDeviceSignatureV2 {
     type Error = KagemushaValidationError;
-
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         Self::from_raw_bytes(value)
     }
 }
-
 impl TryFrom<[u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2]> for KagemushaDeviceSignatureV2 {
     type Error = KagemushaValidationError;
-
     fn try_from(value: [u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2]) -> Result<Self, Self::Error> {
         Self::from_raw_bytes(&value)
     }
 }
-
 impl AsRef<[u8]> for KagemushaDeviceSignatureV2 {
     fn as_ref(&self) -> &[u8] {
         &self.0
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaUnshieldPublicInputsDigestPreimageV2 {
     domain: String,
     public_inputs: KagemushaUnshieldPublicInputsBindingV2,
 }
-
 impl OfflineDeviceAttestationRegistration {
     fn challenge_preimage(&self) -> OfflineDeviceAttestationChallengePreimage {
         OfflineDeviceAttestationChallengePreimage {
@@ -3749,7 +3581,6 @@ impl OfflineDeviceAttestationRegistration {
             expires_at_ms: self.expires_at_ms,
         }
     }
-
     fn android_keymint_challenge_preimage(&self) -> OfflineAndroidKeyMintChallengePreimage {
         OfflineAndroidKeyMintChallengePreimage {
             domain: OFFLINE_DEVICE_ATTESTATION_CHALLENGE_DOMAIN.to_owned(),
@@ -3773,7 +3604,6 @@ impl OfflineDeviceAttestationRegistration {
             expires_at_ms: self.expires_at_ms,
         }
     }
-
     /// Deterministic challenge hash that platform attestation evidence must bind.
     ///
     /// The preimage intentionally excludes the attestation report, evidence
@@ -3796,7 +3626,6 @@ impl OfflineDeviceAttestationRegistration {
         norito::encode_canonical(&self.challenge_preimage()).map(Hash::new)
     }
 }
-
 impl OfflineAndroidKeyMintChallenge {
     fn challenge_preimage(&self) -> OfflineAndroidKeyMintChallengePreimage {
         OfflineAndroidKeyMintChallengePreimage {
@@ -3821,7 +3650,6 @@ impl OfflineAndroidKeyMintChallenge {
             expires_at_ms: self.expires_at_ms,
         }
     }
-
     /// Return the canonical Norito preimage bytes embedded into the `KeyMint` challenge hash.
     ///
     /// # Errors
@@ -3830,7 +3658,6 @@ impl OfflineAndroidKeyMintChallenge {
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, norito::Error> {
         norito::encode_canonical(&self.challenge_preimage())
     }
-
     /// Return the canonical challenge hash Android supplies before generating the key.
     ///
     /// # Errors
@@ -3840,7 +3667,6 @@ impl OfflineAndroidKeyMintChallenge {
         self.canonical_bytes().map(Hash::new)
     }
 }
-
 impl KagemushaSpendableNoteDescriptorV2 {
     /// Validate exact amount plus disjoint, non-zero note material.
     ///
@@ -3867,7 +3693,6 @@ impl KagemushaSpendableNoteDescriptorV2 {
         Ok(())
     }
 }
-
 /// Return the canonical root shared by every branch of one finalized top-up.
 ///
 /// The lineage root is deliberately the complete finalized-anchor digest. This
@@ -3887,7 +3712,6 @@ pub fn kagemusha_recursive_spend_lineage_root_v2(
     }
     Ok(anchor_digest)
 }
-
 /// Derive the compact transition-choice tag retained by descendant claims.
 ///
 /// # Errors
@@ -3915,7 +3739,6 @@ pub fn kagemusha_recursive_spend_transition_tag_v2(
     }
     Ok(tag)
 }
-
 impl KagemushaRecursiveSpendBranchPathV2 {
     /// Construct the root coordinate for a top-up lineage.
     ///
@@ -3931,7 +3754,6 @@ impl KagemushaRecursiveSpendBranchPathV2 {
         path.validate()?;
         Ok(path)
     }
-
     /// Append the deterministic recipient (`0`) or change (`1`) branch bit.
     ///
     /// # Errors
@@ -3956,7 +3778,6 @@ impl KagemushaRecursiveSpendBranchPathV2 {
         child.validate()?;
         Ok(child)
     }
-
     /// Return the canonical parent coordinate, or `None` for a lineage root.
     #[must_use]
     pub fn parent(self) -> Option<Self> {
@@ -3971,7 +3792,6 @@ impl KagemushaRecursiveSpendBranchPathV2 {
         parent.validate().ok()?;
         Some(parent)
     }
-
     /// Return the canonical prefix at `depth`.
     ///
     /// # Errors
@@ -3997,7 +3817,6 @@ impl KagemushaRecursiveSpendBranchPathV2 {
         prefix.validate()?;
         Ok(prefix)
     }
-
     /// Validate the lineage root, depth, and canonical zeroed unused bits.
     ///
     /// # Errors
@@ -4036,7 +3855,6 @@ impl KagemushaRecursiveSpendBranchPathV2 {
         }
         Ok(())
     }
-
     /// Return whether this coordinate is an ancestor of (or equal to) `other`.
     #[must_use]
     pub fn is_prefix_of(self, other: Self) -> bool {
@@ -4058,7 +3876,6 @@ impl KagemushaRecursiveSpendBranchPathV2 {
         let mask = u8::MAX << (8 - partial_bits);
         self.path_bits[full_bytes] & mask == other.path_bits[full_bytes] & mask
     }
-
     /// Return whether two redemption coordinates conflict.
     ///
     /// Equal paths and ancestor/descendant pairs conflict; siblings and paths
@@ -4068,7 +3885,6 @@ impl KagemushaRecursiveSpendBranchPathV2 {
         self.is_prefix_of(other) || other.is_prefix_of(self)
     }
 }
-
 impl KagemushaRecursiveSpendBranchClaimV2 {
     /// Construct a root claim with an empty transition history.
     ///
@@ -4083,7 +3899,6 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
         claim.validate()?;
         Ok(claim)
     }
-
     /// Append one output edge and bind it to the exact producing transition.
     ///
     /// # Errors
@@ -4102,7 +3917,6 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
         child.validate()?;
         Ok(child)
     }
-
     /// Return the canonical ancestor claim at `depth`.
     ///
     /// # Errors
@@ -4123,7 +3937,6 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
         prefix.validate()?;
         Ok(prefix)
     }
-
     /// Validate the path and its exact-depth edge history.
     ///
     /// # Errors
@@ -4152,7 +3965,6 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
         }
         Ok(())
     }
-
     /// Return the selected transition tag for the edge from `parent_depth`.
     #[must_use]
     pub fn transition_tag_at(&self, parent_depth: u8) -> Option<[u8; 24]> {
@@ -4165,7 +3977,6 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
         let end = start.checked_add(KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2)?;
         self.transition_tags.get(start..end)?.try_into().ok()
     }
-
     fn transition_history_conflicts_with(
         &self,
         other: &Self,
@@ -4185,7 +3996,6 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
         }
         Ok(false)
     }
-
     /// Return whether two claims select overlapping value or incompatible
     /// transition histories.
     ///
@@ -4205,7 +4015,6 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
         )
     }
 }
-
 fn validate_kagemusha_recursive_spend_branch_claims_v2(
     claims: &[KagemushaRecursiveSpendBranchClaimV2],
 ) -> Result<(), KagemushaValidationError> {
@@ -4239,7 +4048,6 @@ fn validate_kagemusha_recursive_spend_branch_claims_v2(
     }
     Ok(())
 }
-
 impl KagemushaRecipientOutputDerivationRequestV2 {
     /// Validate the public, secret-free derivation context.
     ///
@@ -4261,7 +4069,6 @@ impl KagemushaRecipientOutputDerivationRequestV2 {
         Ok(())
     }
 }
-
 impl KagemushaRecipientOutputDerivationResultV2 {
     /// Validate the native result against the exact public derivation request.
     ///
@@ -4299,7 +4106,6 @@ impl KagemushaRecipientOutputDerivationResultV2 {
         Ok(())
     }
 }
-
 impl KagemushaRecipientPaymentRequestSigningPayloadV2 {
     /// Validate unsigned request fields before device signing.
     ///
@@ -4360,7 +4166,6 @@ impl KagemushaRecipientPaymentRequestSigningPayloadV2 {
         }
         Ok(())
     }
-
     /// Return the exact domain-separated bytes signed by the receiver device.
     ///
     /// # Errors
@@ -4376,56 +4181,47 @@ impl KagemushaRecipientPaymentRequestSigningPayloadV2 {
         )?)
     }
 }
-
 impl KagemushaRecipientPaymentRequestV2 {
     /// Exact network for the requested offline note.
     #[must_use]
     pub fn network_id(&self) -> &NetworkId {
         &self.network_id
     }
-
     /// Account that must own the admitted receiver registration.
     #[must_use]
     pub fn recipient(&self) -> &AccountId {
         &self.recipient
     }
-
     /// Asset definition that must be admitted by the receiver registration.
     #[must_use]
     pub fn asset(&self) -> &AssetDefinitionId {
         &self.asset
     }
-
     /// Exact requested amount at the authoritative asset scale.
     #[must_use]
     pub const fn amount(&self) -> KagemushaScaledAmountV2 {
         self.amount
     }
-
     /// Recipient output commitment and nullifier bound by the signed request.
     #[must_use]
     pub fn recipient_output(&self) -> &KagemushaSpendableNoteDescriptorV2 {
         &self.recipient_output
     }
-
     /// Registered receiver-device identifier bound by this request.
     #[must_use]
     pub fn receiver_device_id(&self) -> &str {
         &self.receiver_device_id
     }
-
     /// P-256 receiver key that must match the admitted registration.
     #[must_use]
     pub fn receiver_public_key(&self) -> &KagemushaDevicePublicKeyV2 {
         &self.receiver_public_key
     }
-
     /// Exclusive request expiry in Unix milliseconds.
     #[must_use]
     pub const fn expires_at_ms(&self) -> u64 {
         self.expires_at_ms
     }
-
     /// Construct the canonical request from prevalidated fields and a device signature.
     ///
     /// # Errors
@@ -4453,7 +4249,6 @@ impl KagemushaRecipientPaymentRequestV2 {
         request.validate_public_binding()?;
         Ok(request)
     }
-
     /// Reconstruct the canonical unsigned fields covered by the device signature.
     #[must_use]
     pub fn signing_payload(&self) -> KagemushaRecipientPaymentRequestSigningPayloadV2 {
@@ -4472,7 +4267,6 @@ impl KagemushaRecipientPaymentRequestV2 {
             sender_output_prover_material: self.sender_output_prover_material.clone(),
         }
     }
-
     /// Validate the exact signed request and opaque sender-prover material.
     ///
     /// # Errors
@@ -4495,7 +4289,6 @@ impl KagemushaRecipientPaymentRequestV2 {
         }
         Ok(())
     }
-
     /// Verify request authentication and its `[issued_at_ms, expires_at_ms)` lifetime.
     ///
     /// # Errors
@@ -4510,7 +4303,6 @@ impl KagemushaRecipientPaymentRequestV2 {
         }
         Ok(())
     }
-
     /// Return the canonical request digest bound by the split proof.
     ///
     /// # Errors
@@ -4524,7 +4316,6 @@ impl KagemushaRecipientPaymentRequestV2 {
         })
     }
 }
-
 impl KagemushaOnlineHardwareAssertionV1 {
     /// Canonical registration platform selected by this typed assertion.
     #[must_use]
@@ -4535,7 +4326,6 @@ impl KagemushaOnlineHardwareAssertionV1 {
         }
     }
 }
-
 impl KagemushaRequestAuthorizationV2 {
     #[allow(clippy::too_many_arguments)]
     fn hardware_assertion_preimage_bytes_for_fields(
@@ -4566,7 +4356,6 @@ impl KagemushaRequestAuthorizationV2 {
             },
         )?)
     }
-
     /// Derive platform signing input from unsigned public fields without constructing an
     /// on-wire authorization or fabricating a signature/authenticatorData value.
     #[allow(clippy::too_many_arguments)]
@@ -4608,7 +4397,6 @@ impl KagemushaRequestAuthorizationV2 {
             }),
         }
     }
-
     /// Return the exact bytes supplied to the platform assertion API.
     ///
     /// Android signs the complete canonical domain-separated preimage with
@@ -4632,7 +4420,6 @@ impl KagemushaRequestAuthorizationV2 {
             self.hardware_assertion.platform(),
         )
     }
-
     /// Verify the typed hardware assertion under the exact registered key.
     ///
     /// # Errors
@@ -4663,7 +4450,6 @@ impl KagemushaRequestAuthorizationV2 {
             field: "authorization.hardware_assertion.signature",
         })
     }
-
     /// Replace only the hardware signature in a prepared authorization.
     pub fn set_hardware_signature(&mut self, signature: KagemushaDeviceSignatureV2) {
         match &mut self.hardware_assertion {
@@ -4675,7 +4461,6 @@ impl KagemushaRequestAuthorizationV2 {
             }
         }
     }
-
     /// Verify structure and exact unsigned-payload binding.
     ///
     /// Consensus verifies the signature only after resolving
@@ -4734,7 +4519,6 @@ impl KagemushaRequestAuthorizationV2 {
             field: "authorization.hardware_assertion.signature",
         })
     }
-
     /// Verify the signed request is live at the authoritative Torii time.
     ///
     /// # Errors
@@ -4754,7 +4538,6 @@ impl KagemushaRequestAuthorizationV2 {
         Ok(())
     }
 }
-
 impl KagemushaScaledAmountV2 {
     /// Construct an exact positive amount from atomic units and asset scale.
     ///
@@ -4769,7 +4552,6 @@ impl KagemushaScaledAmountV2 {
         amount.validate()?;
         Ok(amount)
     }
-
     /// Convert an Iroha public quantity to the asset's atomic units without rounding.
     ///
     /// # Errors
@@ -4808,14 +4590,12 @@ impl KagemushaScaledAmountV2 {
         )?;
         Self::new(atomic_units, asset_scale)
     }
-
     /// Return the public quantity at the authoritative asset scale.
     #[must_use]
     pub fn public_quantity(self) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(self.atomic_units, self.scale))
             .expect("a u128 scaled amount is always a non-negative quantity")
     }
-
     /// Validate the exact amount contract.
     ///
     /// # Errors
@@ -4835,7 +4615,6 @@ impl KagemushaScaledAmountV2 {
         Ok(())
     }
 }
-
 impl KagemushaConfidentialMerklePathV2 {
     /// Validate the fixed-depth, binary-direction path shape.
     ///
@@ -4854,7 +4633,6 @@ impl KagemushaConfidentialMerklePathV2 {
         }
         Ok(())
     }
-
     /// Return the leaf index encoded by the canonical direction bits.
     ///
     /// # Errors
@@ -4870,7 +4648,6 @@ impl KagemushaConfidentialMerklePathV2 {
                 index | (u32::from(*direction) << level)
             }))
     }
-
     /// Validate that the direction bits encode one exact leaf index.
     ///
     /// # Errors
@@ -4887,7 +4664,6 @@ impl KagemushaConfidentialMerklePathV2 {
         Ok(())
     }
 }
-
 impl KagemushaNoteMembershipWitnessV2 {
     /// Validate the public witness shape and shared-root relationship.
     ///
@@ -4910,7 +4686,6 @@ impl KagemushaNoteMembershipWitnessV2 {
         }
         Ok(())
     }
-
     /// Validate that the witness is bound to one proof statement root.
     ///
     /// # Errors
@@ -4925,7 +4700,6 @@ impl KagemushaNoteMembershipWitnessV2 {
         }
         Ok(())
     }
-
     /// Validate both the statement root and its proof-bound append-only frontier index.
     ///
     /// # Errors
@@ -4945,7 +4719,6 @@ impl KagemushaNoteMembershipWitnessV2 {
         Ok(())
     }
 }
-
 impl KagemushaRecursiveSpendStateBoundaryV5 {
     /// Construct the field-neutral boundary from the complete exact state.
     ///
@@ -4960,7 +4733,6 @@ impl KagemushaRecursiveSpendStateBoundaryV5 {
         boundary.validate()?;
         Ok(boundary)
     }
-
     /// Recover the exact canonical limbs without field reduction.
     ///
     /// # Errors
@@ -4970,7 +4742,6 @@ impl KagemushaRecursiveSpendStateBoundaryV5 {
         self.validate()?;
         Ok(&self.state_limbs)
     }
-
     /// Validate the canonical cross-field state boundary.
     ///
     /// # Errors
@@ -4989,7 +4760,6 @@ impl KagemushaRecursiveSpendStateBoundaryV5 {
         Ok(())
     }
 }
-
 impl KagemushaPastaPublicLayoutV4 {
     /// Derive every dynamic offset from the authenticated IPA round count.
     ///
@@ -5047,7 +4817,6 @@ impl KagemushaPastaPublicLayoutV4 {
         })
     }
 }
-
 impl KagemushaStepCircuitParamsV4 {
     /// Construct and validate the single reviewed first-release generation profile.
     ///
@@ -5077,7 +4846,6 @@ impl KagemushaStepCircuitParamsV4 {
         params.validate_release_generation_profile()?;
         Ok(params)
     }
-
     /// Validate the complete authenticated layout and return its public ABI.
     ///
     /// # Errors
@@ -5117,7 +4885,6 @@ impl KagemushaStepCircuitParamsV4 {
         }
         Ok(layout)
     }
-
     /// Validate the reviewed first-release profile used for full key generation.
     ///
     /// Artifact decoding and generation both admit only the compact V5 shape.
@@ -5145,7 +4912,6 @@ impl KagemushaStepCircuitParamsV4 {
         }
         Ok(layout)
     }
-
     /// Domain-separated identity of the canonical authenticated parameters.
     ///
     /// # Errors
@@ -5165,7 +4931,6 @@ impl KagemushaStepCircuitParamsV4 {
         Ok(hasher.finalize().into())
     }
 }
-
 impl KagemushaPastaCycleArtifactV4 {
     /// Validate one immutable V4 artifact descriptor.
     ///
@@ -5190,7 +4955,6 @@ impl KagemushaPastaCycleArtifactV4 {
         Ok(())
     }
 }
-
 impl KagemushaPastaCycleFramedArtifactHeaderV4 {
     /// Validate the bounded public KRV4 header without allocating its payload.
     ///
@@ -5226,7 +4990,6 @@ impl KagemushaPastaCycleFramedArtifactHeaderV4 {
         }
         Ok(())
     }
-
     /// Bind this header to one exact descriptor in a validated V4 manifest.
     ///
     /// # Errors
@@ -5239,7 +5002,6 @@ impl KagemushaPastaCycleFramedArtifactHeaderV4 {
     ) -> Result<(), KagemushaValidationError> {
         self.validate_against_manifest_state(manifest, descriptor, true)
     }
-
     /// Bind this header to one exact clean pre-promotion candidate manifest.
     /// This authenticates structure and bytes only; it does not promote or
     /// relabel the candidate as a production release.
@@ -5254,7 +5016,6 @@ impl KagemushaPastaCycleFramedArtifactHeaderV4 {
     ) -> Result<(), KagemushaValidationError> {
         self.validate_against_manifest_state(manifest, descriptor, false)
     }
-
     fn validate_against_manifest_state(
         &self,
         manifest: &KagemushaRecursiveSpendArtifactManifestV4,
@@ -5297,7 +5058,6 @@ impl KagemushaPastaCycleFramedArtifactHeaderV4 {
         Ok(())
     }
 }
-
 impl KagemushaTopUpFinalityRosterArtifactReferenceV4 {
     /// Validate the V4 role-bound reference to a canonical roster archive.
     ///
@@ -5323,7 +5083,6 @@ impl KagemushaTopUpFinalityRosterArtifactReferenceV4 {
         Ok(())
     }
 }
-
 impl KagemushaPastaCycleProofProfileV4 {
     /// Validate one V4 parity profile and its exact four-file inventory.
     ///
@@ -5384,7 +5143,6 @@ impl KagemushaPastaCycleProofProfileV4 {
         }
         Ok(())
     }
-
     /// Return the exact descriptor for the canonical bootstrap payload.
     #[must_use]
     pub fn bootstrap_artifact(&self) -> Option<&KagemushaPastaCycleArtifactV4> {
@@ -5392,7 +5150,6 @@ impl KagemushaPastaCycleProofProfileV4 {
             .get(3)
             .filter(|artifact| artifact.kind == KagemushaPastaCycleArtifactKindV4::BootstrapWitness)
     }
-
     /// Return the exact authenticated circuit-parameter identity.
     ///
     /// # Errors
@@ -5403,17 +5160,14 @@ impl KagemushaPastaCycleProofProfileV4 {
         self.circuit_params.sha256()
     }
 }
-
 const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_DESCRIPTOR_BYTES_V1: usize = 16 * 1024 * 1024;
 const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_PATH_BYTES_V1: usize = 4 * 1024;
 const KAGEMUSHA_REVIEWED_SOURCE_DIFF_DOMAIN_V1: &[u8] = b"iroha-source-diff-v1\0";
 const KAGEMUSHA_REVIEWED_SOURCE_TRACKED_DIFF_DOMAIN_V1: &[u8] = b"tracked-binary-diff-sha256\0";
 const KAGEMUSHA_REVIEWED_SOURCE_UNTRACKED_MANIFEST_DOMAIN_V1: &[u8] =
     b"untracked-path-blob-manifest-sha256\0";
-
 fn append_python_ascii_json_string(out: &mut String, value: &str) {
     use core::fmt::Write as _;
-
     out.push('"');
     for character in value.chars() {
         match character {
@@ -5440,7 +5194,6 @@ fn append_python_ascii_json_string(out: &mut String, value: &str) {
     }
     out.push('"');
 }
-
 fn kagemusha_reviewed_source_manifest_entry_json(
     entry: &KagemushaReviewedSourceClosureManifestEntryV1,
 ) -> String {
@@ -5458,7 +5211,6 @@ fn kagemusha_reviewed_source_manifest_entry_json(
     out.push('}');
     out
 }
-
 fn kagemusha_reviewed_source_path_is_safe(path: &[u8]) -> bool {
     !path.is_empty()
         && !path.starts_with(b"/")
@@ -5471,7 +5223,6 @@ fn kagemusha_reviewed_source_path_is_safe(path: &[u8]) -> bool {
         && path.split(|byte| *byte == b'/').next() != Some(b".git".as_slice())
         && path != b"Cargo.lock"
 }
-
 impl KagemushaReviewedSourceClosureV1 {
     /// Validate exact descriptor structure, raw-byte path order, and derived digests.
     ///
@@ -5506,7 +5257,6 @@ impl KagemushaReviewedSourceClosureV1 {
                 field: "pasta_cycle.v4.reviewed_source_closure",
             });
         }
-
         let mut previous_path: Option<Vec<u8>> = None;
         let mut descriptor_size = 512_usize;
         let mut manifest_hasher = Sha256::new();
@@ -5554,7 +5304,6 @@ impl KagemushaReviewedSourceClosureV1 {
                 field: "pasta_cycle.v4.reviewed_source_closure.manifest_sha256",
             });
         }
-
         let mut combined = Sha256::new();
         combined.update(KAGEMUSHA_REVIEWED_SOURCE_DIFF_DOMAIN_V1);
         combined.update(KAGEMUSHA_REVIEWED_SOURCE_TRACKED_DIFF_DOMAIN_V1);
@@ -5572,7 +5321,6 @@ impl KagemushaReviewedSourceClosureV1 {
         }
         Ok(())
     }
-
     fn canonical_descriptor_bytes(&self) -> Result<Vec<u8>, KagemushaValidationError> {
         self.validate()?;
         let mut out = String::new();
@@ -5617,7 +5365,6 @@ impl KagemushaReviewedSourceClosureV1 {
         }
         Ok(out.into_bytes())
     }
-
     /// SHA-256 of the exact canonical compact sorted-key ASCII JSON plus LF.
     ///
     /// # Errors
@@ -5627,7 +5374,6 @@ impl KagemushaReviewedSourceClosureV1 {
         Ok(Sha256::digest(self.canonical_descriptor_bytes()?).into())
     }
 }
-
 impl KagemushaRecursiveSpendArtifactManifestV4 {
     /// Validate the complete, explicitly versioned V4 release shape.
     ///
@@ -5640,7 +5386,6 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         self.validate_with_attestation_state(true)
     }
-
     /// Validate an immutable V4 release candidate before its attestation exists.
     ///
     /// Candidate manifests precede external evidence, so benchmark, review,
@@ -5653,7 +5398,6 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
     pub fn validate_unsigned_candidate(&self) -> Result<(), KagemushaValidationError> {
         self.validate_with_attestation_state(false)
     }
-
     /// Return the SHA-256 identity of the canonical finalized V4 manifest.
     ///
     /// # Errors
@@ -5663,7 +5407,6 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
         self.validate()?;
         Ok(Sha256::digest(norito::encode_canonical(self)?).into())
     }
-
     /// Reconstruct the byte-exact immutable candidate that preceded this finalized manifest.
     ///
     /// Finalization fills the qualification identities, two external-evidence
@@ -5691,7 +5434,6 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
         candidate.validate()?;
         Ok(candidate)
     }
-
     #[allow(
         clippy::too_many_lines,
         reason = "the fixed V4 manifest validator keeps all consensus-critical invariants in one auditable path"
@@ -5813,7 +5555,6 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
         }
         Ok(())
     }
-
     fn immutable_candidate_unchecked_for_qualification(
         &self,
     ) -> Result<KagemushaRecursiveSpendCandidateV4, KagemushaValidationError> {
@@ -5831,7 +5572,6 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
         candidate.validate()?;
         Ok(candidate)
     }
-
     /// Build the non-circular V4 subject signed by every release authority.
     ///
     /// # Errors
@@ -5845,7 +5585,6 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
             .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
         self.release_attestation_subject_from_validated_manifest()
     }
-
     fn release_attestation_subject_from_validated_manifest(
         &self,
     ) -> Result<KagemushaRecursiveSpendReleaseAttestationSubjectV4, KagemushaReleaseVerificationError>
@@ -5869,7 +5608,6 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
         })
     }
 }
-
 impl KagemushaRecursiveSpendCandidateV4 {
     /// Validate the reviewed-source-closure-bound pre-evidence candidate contract.
     ///
@@ -5886,7 +5624,6 @@ impl KagemushaRecursiveSpendCandidateV4 {
         }
         self.manifest.validate_unsigned_candidate()
     }
-
     /// Return the SHA-256 identity of the canonical candidate record.
     ///
     /// # Errors
@@ -5896,7 +5633,6 @@ impl KagemushaRecursiveSpendCandidateV4 {
         self.validate()?;
         Ok(Sha256::digest(norito::encode_canonical(self)?).into())
     }
-
     /// Return framed then payload identities for all eight canonical artifact roles.
     ///
     /// # Errors
@@ -5959,7 +5695,6 @@ impl KagemushaRecursiveSpendCandidateV4 {
         }
         Ok(digests)
     }
-
     /// Build the exact candidate-bound subject signed by cryptographic reviewers.
     ///
     /// # Errors
@@ -5999,7 +5734,6 @@ impl KagemushaRecursiveSpendCandidateV4 {
         })
     }
 }
-
 /// Derive the non-circular identity of one candidate and its proof-bearing receipt.
 #[must_use]
 pub fn kagemusha_recursive_spend_qualified_candidate_sha256_v4(
@@ -6013,7 +5747,6 @@ pub fn kagemusha_recursive_spend_qualified_candidate_sha256_v4(
     hasher.update(qualification_receipt_sha256);
     hasher.finalize().into()
 }
-
 impl KagemushaRecursiveSpendQualificationReceiptV4 {
     /// Construct a receipt from the two exact proof-pair byte strings.
     ///
@@ -6044,7 +5777,6 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
         receipt.validate_against_candidate(candidate)?;
         Ok(receipt)
     }
-
     /// Decode canonical, bounded Norito bytes and bind every receipt field to a candidate.
     ///
     /// # Errors
@@ -6077,7 +5809,6 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
         receipt.validate_against_candidate(candidate)?;
         Ok(receipt)
     }
-
     /// Validate structural bounds and exact candidate, manifest, and role identities.
     ///
     /// Proof counters and parent semantics are intentionally not trusted here;
@@ -6124,7 +5855,6 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
         }
         Ok(())
     }
-
     /// SHA-256 of the exact canonical receipt after candidate binding.
     ///
     /// # Errors
@@ -6137,7 +5867,6 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
         self.validate_against_candidate(candidate)?;
         Ok(Sha256::digest(norito::encode_canonical(self)?).into())
     }
-
     /// Domain-separated identity of this exact candidate and receipt.
     ///
     /// # Errors
@@ -6152,50 +5881,42 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
             self.canonical_sha256_against_candidate(candidate)?,
         ))
     }
-
     /// Exact canonical initialization proof pair.
     #[must_use]
     pub fn initialization_pair(&self) -> &[u8] {
         &self.initialization_pair
     }
-
     /// Exact canonical one-parent child proof pair.
     #[must_use]
     pub fn append_pair(&self) -> &[u8] {
         &self.append_pair
     }
-
     /// Exact candidate identity embedded in this receipt.
     #[must_use]
     pub const fn candidate_sha256(&self) -> [u8; 32] {
         self.candidate_sha256
     }
-
     /// Exact manifest identity embedded in this receipt.
     #[must_use]
     pub const fn manifest_sha256(&self) -> [u8; 32] {
         self.manifest_sha256
     }
-
     /// Exact in-process physical-memory ceiling bound by this receipt.
     #[must_use]
     pub const fn generation_memory_limit_bytes(&self) -> u64 {
         self.generation_memory_limit_bytes
     }
-
     /// Exact mandatory in-process memory enforcement profile bound by this receipt.
     #[must_use]
     pub fn generation_memory_enforcement_profile(&self) -> &str {
         &self.generation_memory_enforcement_profile
     }
-
     /// Framed then payload digests for the eight exact artifact roles.
     #[must_use]
     pub const fn artifact_role_digests(&self) -> [[u8; 32]; 16] {
         self.artifact_role_digests
     }
 }
-
 impl KagemushaRecursiveSpendCryptographicReviewCheckV4 {
     /// Exact canonical check order required by every production V4 review.
     pub const ALL: [Self; KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_CHECK_COUNT_V4] = [
@@ -6207,7 +5928,6 @@ impl KagemushaRecursiveSpendCryptographicReviewCheckV4 {
         Self::ParserCanonicalizationAndResourceBounds,
     ];
 }
-
 impl KagemushaRecursiveSpendCryptographicReviewPayloadV4 {
     /// Construct the canonical approved-review payload for an immutable candidate.
     ///
@@ -6269,7 +5989,6 @@ impl KagemushaRecursiveSpendCryptographicReviewPayloadV4 {
         })
     }
 }
-
 impl KagemushaRecursiveSpendReleaseApprovalRoleV1 {
     const fn index(self) -> usize {
         match self {
@@ -6279,7 +5998,6 @@ impl KagemushaRecursiveSpendReleaseApprovalRoleV1 {
         }
     }
 }
-
 impl KagemushaRecursiveSpendReleaseAttestationSubjectV4 {
     /// Return the exact V4 domain- and role-separated approval payload.
     #[must_use]
@@ -6294,7 +6012,6 @@ impl KagemushaRecursiveSpendReleaseAttestationSubjectV4 {
         }
     }
 }
-
 impl KagemushaRecursiveSpendReleasePolicyV1 {
     /// Validate canonical role order, thresholds, signer order, and role independence.
     ///
@@ -6314,7 +6031,6 @@ impl KagemushaRecursiveSpendReleasePolicyV1 {
         {
             return Err(KagemushaReleaseVerificationError::InvalidPolicy);
         }
-
         let mut all_signers = std::collections::BTreeSet::new();
         for (role_policy, expected_role) in self.roles.iter().zip(expected_roles) {
             let signer_count = role_policy.authorized_signers.len();
@@ -6337,7 +6053,6 @@ impl KagemushaRecursiveSpendReleasePolicyV1 {
         }
         Ok(())
     }
-
     fn role_policy(
         &self,
         role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
@@ -6347,7 +6062,6 @@ impl KagemushaRecursiveSpendReleasePolicyV1 {
             .filter(|policy| policy.role == role)
     }
 }
-
 impl KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {
     fn validate_against_candidate(
         &self,
@@ -6378,7 +6092,6 @@ impl KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {
         {
             return Err(KagemushaReleaseVerificationError::InvalidCryptographicReview);
         }
-
         let mut evidence_digests = std::collections::BTreeSet::new();
         evidence_digests.insert(self.payload.subject.candidate_sha256);
         evidence_digests.insert(self.payload.subject.qualification_receipt_sha256);
@@ -6402,7 +6115,6 @@ impl KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {
                 return Err(KagemushaReleaseVerificationError::InvalidCryptographicReview);
             }
         }
-
         let mut reviewer_keys = Vec::with_capacity(self.approvals.len());
         for approval in &self.approvals {
             approval
@@ -6415,7 +6127,6 @@ impl KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {
         }
         Ok(reviewer_keys)
     }
-
     /// Decode canonical Norito review bytes and validate their candidate binding.
     ///
     /// This structural entry point verifies every embedded signature. Release
@@ -6453,7 +6164,6 @@ impl KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {
             qualified_candidate_sha256,
         )
     }
-
     fn authenticate_canonical_bytes(
         bytes: &[u8],
         candidate: &KagemushaRecursiveSpendCandidateV4,
@@ -6493,7 +6203,6 @@ impl KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {
         Ok(reviewer_keys)
     }
 }
-
 impl KagemushaAuthenticatedReleaseV4 {
     fn verify_attestation(
         manifest: &KagemushaRecursiveSpendArtifactManifestV4,
@@ -6504,7 +6213,6 @@ impl KagemushaAuthenticatedReleaseV4 {
             .validate()
             .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
         policy.validate()?;
-
         let expected_subject = manifest.release_attestation_subject()?;
         if attestation.schema != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4
             || attestation.version != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4
@@ -6514,14 +6222,12 @@ impl KagemushaAuthenticatedReleaseV4 {
         {
             return Err(KagemushaReleaseVerificationError::InvalidAttestation);
         }
-
         let attestation_bytes = norito::encode_canonical(attestation)
             .map_err(|_| KagemushaReleaseVerificationError::InvalidAttestation)?;
         let attestation_sha256: [u8; 32] = Sha256::digest(attestation_bytes).into();
         if attestation_sha256 != manifest.release_attestation_sha256 {
             return Err(KagemushaReleaseVerificationError::InvalidAttestation);
         }
-
         let mut counts = [0_u16; 3];
         let mut approved_signers = Vec::with_capacity(attestation.approvals.len());
         let mut previous: Option<(KagemushaRecursiveSpendReleaseApprovalRoleV1, &PublicKey)> = None;
@@ -6568,7 +6274,6 @@ impl KagemushaAuthenticatedReleaseV4 {
                 });
             }
         }
-
         let manifest_sha256 = Sha256::digest(
             norito::encode_canonical(manifest)
                 .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?,
@@ -6587,7 +6292,6 @@ impl KagemushaAuthenticatedReleaseV4 {
             approved_signers,
         })
     }
-
     /// Authenticate a V4 release and hash-check its exact evidence files.
     ///
     /// # Errors
@@ -6646,38 +6350,32 @@ impl KagemushaAuthenticatedReleaseV4 {
         }
         Ok(authenticated)
     }
-
     /// Authenticated V4 manifest selected by this runtime proof.
     #[must_use]
     pub fn manifest(&self) -> &KagemushaRecursiveSpendArtifactManifestV4 {
         &self.manifest
     }
-
     /// SHA-256 of the exact canonical V4 manifest.
     #[must_use]
     pub const fn manifest_sha256(&self) -> [u8; 32] {
         self.manifest_sha256
     }
-
     /// SHA-256 of the exact signed V4 release envelope.
     #[must_use]
     pub const fn release_attestation_sha256(&self) -> [u8; 32] {
         self.release_attestation_sha256
     }
-
     /// SHA-256 of the exact locally trusted release policy.
     #[must_use]
     pub const fn release_policy_sha256(&self) -> [u8; 32] {
         self.release_policy_sha256
     }
-
     /// Canonically ordered role/signer identities whose V4 approvals verified.
     #[must_use]
     pub fn approved_signers(&self) -> &[KagemushaRecursiveSpendApprovedSignerV1] {
         &self.approved_signers
     }
 }
-
 impl KagemushaRecursiveSpendPromotedReleaseV4 {
     /// Validate the standalone ABI-21 promotion marker.
     ///
@@ -6710,7 +6408,6 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
         }
         let expected_artifact_roles =
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.map(str::to_owned);
-
         if self.schema != KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4
             || self.version != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4
             || !is_kagemusha_portable_identifier(&self.generation)
@@ -6729,7 +6426,6 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
         }
         Ok(())
     }
-
     /// Require this marker to identify one exact authenticated V4 release.
     ///
     /// # Errors
@@ -6759,7 +6455,6 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
         }
         Ok(())
     }
-
     /// Require this marker to bind the immutable candidate and finalized release.
     ///
     /// # Errors
@@ -6803,7 +6498,6 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
         Ok(())
     }
 }
-
 impl KagemushaRecursiveSpendReleaseRecordV4 {
     /// Validate deterministic release hashes without consulting local trust policy.
     ///
@@ -6871,7 +6565,6 @@ impl KagemushaRecursiveSpendReleaseRecordV4 {
         }
         Ok(())
     }
-
     /// Authenticate every signed release field against the configured policy.
     ///
     /// # Errors
@@ -6894,7 +6587,6 @@ impl KagemushaRecursiveSpendReleaseRecordV4 {
         Ok(release)
     }
 }
-
 impl KagemushaRecursiveSpendReleaseActivationV4 {
     /// Validate the release-bound Eq/Ep registry shape before consensus admission.
     ///
@@ -6940,7 +6632,6 @@ impl KagemushaRecursiveSpendReleaseActivationV4 {
         )?;
         Ok(())
     }
-
     fn validate_verifier_record(
         &self,
         record: &VerifyingKeyRecord,
@@ -6988,7 +6679,6 @@ impl KagemushaRecursiveSpendReleaseActivationV4 {
         Ok(())
     }
 }
-
 impl KagemushaRecursiveSpendArtifactBindingV4 {
     /// Validate a complete authenticated V4 manifest identity.
     ///
@@ -7006,7 +6696,6 @@ impl KagemushaRecursiveSpendArtifactBindingV4 {
         }
         Ok(())
     }
-
     /// Require this binding to identify supplied canonical V4 manifest bytes.
     ///
     /// # Errors
@@ -7028,7 +6717,6 @@ impl KagemushaRecursiveSpendArtifactBindingV4 {
         Ok(())
     }
 }
-
 impl KagemushaRecursiveSpendNativeCapabilitiesV4 {
     /// Validate an installed ABI-21 backend capability record.
     ///
@@ -7070,7 +6758,6 @@ impl KagemushaRecursiveSpendNativeCapabilitiesV4 {
         Ok(())
     }
 }
-
 impl KagemushaPastaCycleProofEnvelopeV4 {
     /// Validate the fixed ABI-21 envelope shape before release lookup.
     ///
@@ -7104,7 +6791,6 @@ impl KagemushaPastaCycleProofEnvelopeV4 {
         }
         self.state_boundary.validate()
     }
-
     /// Bind every release-selected envelope identity to a validated V4 manifest.
     ///
     /// # Errors
@@ -7116,7 +6802,6 @@ impl KagemushaPastaCycleProofEnvelopeV4 {
     ) -> Result<(), KagemushaValidationError> {
         self.validate_against_manifest_state(manifest, true)
     }
-
     /// Bind an envelope to one exact clean pre-promotion candidate manifest.
     /// This is a structural evidence check and confers no release authority.
     ///
@@ -7129,7 +6814,6 @@ impl KagemushaPastaCycleProofEnvelopeV4 {
     ) -> Result<(), KagemushaValidationError> {
         self.validate_against_manifest_state(manifest, false)
     }
-
     fn validate_against_manifest_state(
         &self,
         manifest: &KagemushaRecursiveSpendArtifactManifestV4,
@@ -7171,7 +6855,6 @@ impl KagemushaPastaCycleProofEnvelopeV4 {
         }
         Ok(())
     }
-
     /// Validate the envelope in an exact network, asset, scale, and height context.
     ///
     /// # Errors
@@ -7199,7 +6882,6 @@ impl KagemushaPastaCycleProofEnvelopeV4 {
         Ok(())
     }
 }
-
 /// Return whether `value` is a canonical cross-platform artifact identifier.
 ///
 /// Identifiers use the same single-component restrictions as artifact file
@@ -7209,7 +6891,6 @@ impl KagemushaPastaCycleProofEnvelopeV4 {
 pub fn is_kagemusha_portable_identifier(value: &str) -> bool {
     is_kagemusha_portable_file_name(value)
 }
-
 fn is_kagemusha_portable_file_name(value: &str) -> bool {
     if value.is_empty()
         || value.len() > 128
@@ -7227,7 +6908,6 @@ fn is_kagemusha_portable_file_name(value: &str) -> bool {
     {
         return false;
     }
-
     // These basenames are device aliases on Windows even when an extension is
     // present. Rejecting them keeps one manifest path unambiguous on every SDK
     // and artifact-build host instead of making validation platform-dependent.
@@ -7244,7 +6924,6 @@ fn is_kagemusha_portable_file_name(value: &str) -> bool {
             || basename_bytes[..3].eq_ignore_ascii_case(b"lpt"))
         && matches!(basename_bytes[3], b'1'..=b'9'))
 }
-
 fn is_kagemusha_source_commit(value: &str) -> bool {
     value.len() == 40
         && value.bytes().any(|byte| byte != b'0')
@@ -7252,11 +6931,9 @@ fn is_kagemusha_source_commit(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
-
 fn is_kagemusha_network_id(value: &NetworkId) -> bool {
     value.as_bytes() != Hash::prehashed([0; Hash::LENGTH]).as_ref()
 }
-
 impl KagemushaTopUpShieldEvidenceV2 {
     /// Validate the typed proof envelope before authoritative ledger checks.
     ///
@@ -7286,7 +6963,6 @@ impl KagemushaTopUpShieldEvidenceV2 {
         Ok(())
     }
 }
-
 impl KagemushaRecursiveSpendTopUpAnchorRefV2 {
     /// Validate a non-zero network-resolvable identity pair.
     ///
@@ -7302,7 +6978,6 @@ impl KagemushaRecursiveSpendTopUpAnchorRefV2 {
         Ok(())
     }
 }
-
 impl KagemushaTopUpFinalityHeightContextV2 {
     /// Validate the bounded context projection independently of a trust artifact.
     ///
@@ -7335,7 +7010,6 @@ impl KagemushaTopUpFinalityHeightContextV2 {
         }
         Ok(())
     }
-
     /// Reconstruct and validate the exact complete height context using one
     /// manifest-authenticated roster window.
     ///
@@ -7385,7 +7059,6 @@ impl KagemushaTopUpFinalityHeightContextV2 {
         Ok(context)
     }
 }
-
 impl KagemushaTopUpFinalityCompactQcV2 {
     /// Validate canonical bounds before consulting a trusted roster.
     ///
@@ -7421,7 +7094,6 @@ impl KagemushaTopUpFinalityCompactQcV2 {
         }
         Ok(())
     }
-
     /// Bind the compact certificate to one separately trusted roster window.
     ///
     /// # Errors
@@ -7443,7 +7115,6 @@ impl KagemushaTopUpFinalityCompactQcV2 {
         Ok(())
     }
 }
-
 impl KagemushaTopUpAnchorMerkleProofV2 {
     /// Validate the unique balanced-tree shape implied by `leaf_count`.
     ///
@@ -7472,7 +7143,6 @@ impl KagemushaTopUpAnchorMerkleProofV2 {
         Ok(())
     }
 }
-
 impl KagemushaTopUpFinalityProofV2 {
     /// Validate the canonical self-contained proof shape. Cryptographic QC and
     /// Merkle verification are performed by the native verifier.
@@ -7503,7 +7173,6 @@ impl KagemushaTopUpFinalityProofV2 {
         Ok(())
     }
 }
-
 impl KagemushaTopUpFinalityRosterWindowV2 {
     /// Validate the exact ordered roster, powers, and activation window without
     /// performing proof-of-possession pairings.
@@ -7545,7 +7214,6 @@ impl KagemushaTopUpFinalityRosterWindowV2 {
         }
         Ok(())
     }
-
     /// Validate the complete roster window, including every BLS proof of
     /// possession. Callers handling repeated proofs should cache success by the
     /// authenticated roster-archive digest.
@@ -7570,7 +7238,6 @@ impl KagemushaTopUpFinalityRosterWindowV2 {
         Ok(())
     }
 }
-
 impl KagemushaTopUpFinalityRosterArtifactV2 {
     /// Validate network-scoped, strictly ordered, non-overlapping trust windows
     /// without performing BLS proof-of-possession pairings.
@@ -7601,7 +7268,6 @@ impl KagemushaTopUpFinalityRosterArtifactV2 {
         }
         Ok(())
     }
-
     /// Validate every structural field and every BLS proof of possession.
     ///
     /// # Errors
@@ -7614,7 +7280,6 @@ impl KagemushaTopUpFinalityRosterArtifactV2 {
         }
         Ok(())
     }
-
     /// Select exactly one trusted roster for `height`.
     ///
     /// # Errors
@@ -7641,7 +7306,6 @@ impl KagemushaTopUpFinalityRosterArtifactV2 {
         Ok(window)
     }
 }
-
 fn validate_kagemusha_recursive_spend_topup_anchor_refs_v2(
     refs: &[KagemushaRecursiveSpendTopUpAnchorRefV2],
 ) -> Result<Vec<[u8; 32]>, KagemushaValidationError> {
@@ -7670,14 +7334,12 @@ fn validate_kagemusha_recursive_spend_topup_anchor_refs_v2(
     lineage_roots.sort_unstable();
     Ok(lineage_roots)
 }
-
 /// Encode an exact atomic amount in the confidential circuit's 32-byte field layout.
 pub fn kagemusha_confidential_amount_encoding_v2(atomic_units: u128) -> [u8; 32] {
     let mut encoded = [0u8; 32];
     encoded[..16].copy_from_slice(&atomic_units.to_le_bytes());
     encoded
 }
-
 impl KagemushaUnshieldPublicInputsBindingV2 {
     /// Return the domain-separated digest exposed by the redemption-change circuit.
     ///
@@ -7691,29 +7353,23 @@ impl KagemushaUnshieldPublicInputsBindingV2 {
         })
     }
 }
-
 #[cfg(test)]
 mod kagemusha_v4_artifact_contract_tests {
     use norito::core::{DecodeFromSlice as _, NoritoDeserialize as _};
-
     use crate::{
         domain::DomainId,
         isi::{InstructionBox, offline::ActivateKagemushaRecursiveReleaseV4},
     };
-
     use super::*;
-
     fn digest(label: &[u8]) -> [u8; 32] {
         Sha256::digest(label).into()
     }
-
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         to_bytes(value).expect("encode alternate-layout V4 artifact value")
     }
-
     fn reviewed_source_closure() -> KagemushaReviewedSourceClosureV1 {
         let source_commit = "1234567890abcdef1234567890abcdef12345678".to_owned();
         let manifest_sha256 = Sha256::digest([]).into();
@@ -7739,24 +7395,20 @@ mod kagemusha_v4_artifact_contract_tests {
             combined_source_fingerprint_sha256: combined.finalize().into(),
         }
     }
-
     #[test]
     fn reviewed_source_closure_json_matches_canonical_hex_descriptor() {
         let closure = reviewed_source_closure();
         let json = norito::json::to_json(&closure).expect("serialize reviewed source closure JSON");
-
         assert!(json.contains(&format!(
             "\"source_tree_sha256\":\"{}\"",
             hex::encode(closure.source_tree_sha256)
         )));
         assert!(json.contains("\"source_repo_dirty\":false"));
         assert!(json.contains("\"untracked_file_count\":0"));
-
         let decoded: KagemushaReviewedSourceClosureV1 =
             norito::json::from_str(&json).expect("decode canonical hex descriptor JSON");
         assert_eq!(decoded, closure);
     }
-
     #[test]
     fn first_release_reviewed_source_closure_rejects_every_dirty_shape() {
         assert_eq!(KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V1, 0);
@@ -7769,13 +7421,11 @@ mod kagemusha_v4_artifact_contract_tests {
             combined.update(closure.untracked_path_mode_blob_oid_manifest_sha256);
             closure.combined_source_fingerprint_sha256 = combined.finalize().into();
         };
-
         let mut tracked = reviewed_source_closure();
         tracked.source_repo_dirty = true;
         tracked.tracked_binary_diff_sha256 = digest(b"forbidden tracked diff");
         recompute_combined(&mut tracked);
         assert!(tracked.validate().is_err());
-
         let mut untracked = reviewed_source_closure();
         let entry = KagemushaReviewedSourceClosureManifestEntryV1 {
             blob_sha256: digest(b"forbidden untracked bytes"),
@@ -7793,12 +7443,10 @@ mod kagemusha_v4_artifact_contract_tests {
         recompute_combined(&mut untracked);
         assert!(untracked.validate().is_err());
     }
-
     fn circuit_params() -> KagemushaStepCircuitParamsV4 {
         KagemushaStepCircuitParamsV4::reviewed_first_release_generation_profile()
             .expect("reviewed first-release circuit profile")
     }
-
     fn artifact(
         kind: KagemushaPastaCycleArtifactKindV4,
         file_name: &str,
@@ -7815,7 +7463,6 @@ mod kagemusha_v4_artifact_contract_tests {
             payload_sha256,
         }
     }
-
     fn profile(
         parity: KagemushaPastaCycleParityV1,
         params: &KagemushaStepCircuitParamsV4,
@@ -7867,7 +7514,6 @@ mod kagemusha_v4_artifact_contract_tests {
             artifacts,
         }
     }
-
     fn manifest() -> KagemushaRecursiveSpendArtifactManifestV4 {
         let params = circuit_params();
         let reviewed_source_closure = reviewed_source_closure();
@@ -7936,11 +7582,9 @@ mod kagemusha_v4_artifact_contract_tests {
         manifest.release_attestation_sha256 = digest(b"v4 artifact test attestation");
         manifest
     }
-
     fn qualification_receipt_sha256() -> [u8; 32] {
         digest(b"v4 artifact test qualification receipt")
     }
-
     fn unsigned_candidate(
         template: &KagemushaRecursiveSpendArtifactManifestV4,
     ) -> KagemushaRecursiveSpendCandidateV4 {
@@ -7958,7 +7602,6 @@ mod kagemusha_v4_artifact_contract_tests {
         candidate.validate().expect("valid test V4 candidate");
         candidate
     }
-
     fn signed_review_bytes(
         candidate: &KagemushaRecursiveSpendCandidateV4,
         reviewers: &[&KeyPair],
@@ -8002,7 +7645,6 @@ mod kagemusha_v4_artifact_contract_tests {
         })
         .expect("canonical signed review evidence")
     }
-
     #[test]
     fn v4_artifact_identities_ignore_ambient_norito_layout() {
         let manifest = manifest();
@@ -8016,7 +7658,6 @@ mod kagemusha_v4_artifact_contract_tests {
         let expected_attestation_subject = manifest
             .release_attestation_subject()
             .expect("canonical release-attestation subject");
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
@@ -8045,7 +7686,6 @@ mod kagemusha_v4_artifact_contract_tests {
             expected_attestation_subject
         );
     }
-
     #[test]
     fn qualified_candidate_identity_has_a_fixed_domain_separated_preimage() {
         let candidate_sha256 = [0x11; 32];
@@ -8069,7 +7709,6 @@ mod kagemusha_v4_artifact_contract_tests {
             expected
         );
     }
-
     #[test]
     fn qualification_receipt_binds_canonical_role_order_and_candidate() {
         let candidate = unsigned_candidate(&manifest());
@@ -8126,7 +7765,6 @@ mod kagemusha_v4_artifact_contract_tests {
             assert_eq!(role_digests[2 * index], descriptor.sha256);
             assert_eq!(role_digests[2 * index + 1], descriptor.payload_sha256);
         }
-
         let receipt =
             KagemushaRecursiveSpendQualificationReceiptV4::new(&candidate, vec![0x41], vec![0x42])
                 .expect("structurally valid qualification receipt");
@@ -8148,7 +7786,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 .validate_against_candidate(&candidate)
                 .expect("JSON receipt remains candidate-bound");
         }
-
         let mut reordered = receipt.clone();
         reordered.artifact_role_digests.swap(0, 2);
         assert!(reordered.validate_against_candidate(&candidate).is_err());
@@ -8174,7 +7811,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 .validate_against_candidate(&candidate)
                 .is_err()
         );
-
         let mut other_candidate = candidate.clone();
         other_candidate.manifest.network_id =
             kagemusha_test_network_id("other-v4-artifact-test-network");
@@ -8186,7 +7822,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 .validate_against_candidate(&other_candidate)
                 .is_err()
         );
-
         let mut noncanonical = encoded;
         noncanonical.push(0);
         assert!(
@@ -8205,7 +7840,6 @@ mod kagemusha_v4_artifact_contract_tests {
             .is_err()
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn qualification_receipt_json_rejects_wrong_digest_cardinality_and_encoding() {
@@ -8213,7 +7847,6 @@ mod kagemusha_v4_artifact_contract_tests {
         let receipt =
             KagemushaRecursiveSpendQualificationReceiptV4::new(&candidate, vec![0x41], vec![0x42])
                 .expect("structurally valid qualification receipt");
-
         for malformed_len in [15_usize, 17] {
             let mut value =
                 norito::json::to_value(&receipt).expect("qualification receipt JSON value");
@@ -8238,7 +7871,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 "unexpected qualification receipt cardinality error: {error}",
             );
         }
-
         for malformed_digest in ["00".repeat(31), "gg".repeat(32)] {
             let mut value =
                 norito::json::to_value(&receipt).expect("qualification receipt JSON value");
@@ -8253,7 +7885,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 .expect_err("qualification receipt digest must be exactly 32 bytes of hex");
         }
     }
-
     fn promoted_release() -> KagemushaRecursiveSpendPromotedReleaseV4 {
         let finalized_manifest = manifest();
         let candidate = unsigned_candidate(&finalized_manifest);
@@ -8291,7 +7922,6 @@ mod kagemusha_v4_artifact_contract_tests {
             max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
         }
     }
-
     fn release_activation_wire_fixture() -> KagemushaRecursiveSpendReleaseActivationV4 {
         let manifest = manifest();
         let release_attestation = KagemushaRecursiveSpendReleaseAttestationV4 {
@@ -8331,7 +7961,6 @@ mod kagemusha_v4_artifact_contract_tests {
             ),
         }
     }
-
     fn device_attestation_policy_wire_fixture() -> OfflineDeviceAttestationPolicy {
         OfflineDeviceAttestationPolicy {
             version: 1,
@@ -8358,13 +7987,11 @@ mod kagemusha_v4_artifact_contract_tests {
             require_android_app_policy: true,
         }
     }
-
     #[derive(Clone, Encode)]
     struct RetiredArtifactBindingFixture {
         generation: String,
         manifest_sha256: [u8; 32],
     }
-
     #[derive(Clone, Encode)]
     struct RetiredTopUpUnsignedFixture {
         asset: AssetId,
@@ -8374,7 +8001,6 @@ mod kagemusha_v4_artifact_contract_tests {
         artifact_binding: RetiredArtifactBindingFixture,
         operation_id: [u8; 32],
     }
-
     fn retired_top_up_fixture() -> RetiredTopUpUnsignedFixture {
         let network_id = kagemusha_test_network_id("v4-wire-test-network");
         let definition = AssetDefinitionId::derive_from_components(
@@ -8419,7 +8045,6 @@ mod kagemusha_v4_artifact_contract_tests {
             operation_id: digest(b"v4 wire operation"),
         }
     }
-
     #[test]
     fn offline_note_inputs_reject_zero_network_identity() {
         let mut note = retired_top_up_fixture().current_note;
@@ -8429,7 +8054,6 @@ mod kagemusha_v4_artifact_contract_tests {
             Hash::prehashed([0; Hash::LENGTH])
         ));
         assert!(note.validate_public_binding().is_err());
-
         let request = KagemushaRecipientOutputDerivationRequestV2 {
             network_id: note.network_id,
             asset: note.asset,
@@ -8438,61 +8062,52 @@ mod kagemusha_v4_artifact_contract_tests {
         };
         assert!(request.validate().is_err());
     }
-
     #[test]
     fn v4_promotion_record_is_distinct_and_fail_closed() {
         let record = promoted_release();
         record.validate().expect("valid V4 promotion record");
-
         let mut tampered = record.clone();
         tampered.schema = "retired-promoted-release".to_owned();
         assert_eq!(
             tampered.validate(),
             Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
         );
-
         let mut tampered = record.clone();
         tampered.version = KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1;
         assert_eq!(
             tampered.validate(),
             Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
         );
-
         let mut tampered = record.clone();
         tampered.generation = "not portable/".to_owned();
         assert_eq!(
             tampered.validate(),
             Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
         );
-
         let mut tampered = record.clone();
         tampered.manifest_sha256 = [0; 32];
         assert_eq!(
             tampered.validate(),
             Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
         );
-
         let mut tampered = record.clone();
         tampered.release_policy_sha256 = tampered.release_attestation_sha256;
         assert_eq!(
             tampered.validate(),
             Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
         );
-
         let mut tampered = record.clone();
         tampered.approved_signers.swap(0, 1);
         assert_eq!(
             tampered.validate(),
             Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
         );
-
         let mut tampered = record.clone();
         tampered.approved_signers.pop();
         assert_eq!(
             tampered.validate(),
             Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
         );
-
         let mut tampered = record.clone();
         let duplicate_signer = tampered.approved_signers[0].clone();
         tampered.approved_signers.insert(1, duplicate_signer);
@@ -8500,35 +8115,30 @@ mod kagemusha_v4_artifact_contract_tests {
             tampered.validate(),
             Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
         );
-
         let mut tampered = record.clone();
         tampered.artifact_inventory_verified = false;
         assert_eq!(
             tampered.validate(),
             Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
         );
-
         let mut tampered = record.clone();
         tampered.bridge_abi_version = KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4 - 1;
         assert_eq!(
             tampered.validate(),
             Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
         );
-
         let mut tampered = record.clone();
         tampered.artifact_roles.swap(0, 1);
         assert_eq!(
             tampered.validate(),
             Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
         );
-
         let mut tampered = record.clone();
         tampered.max_proof_bytes = 0;
         assert_eq!(
             tampered.validate(),
             Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
         );
-
         let mut tampered = record;
         tampered.max_proof_bytes = KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 + 1;
         assert_eq!(
@@ -8536,7 +8146,6 @@ mod kagemusha_v4_artifact_contract_tests {
             Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
         );
     }
-
     #[test]
     fn v4_release_generation_profile_is_exact_compact_geometry() {
         let reviewed = circuit_params();
@@ -8566,7 +8175,6 @@ mod kagemusha_v4_artifact_contract_tests {
         );
         assert_eq!(KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4, [220]);
         assert_eq!(KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4, [25, 0, 0]);
-
         let mut uncalibrated = reviewed.clone();
         uncalibrated.num_advice_per_phase = vec![1];
         uncalibrated.num_lookup_advice_per_phase = vec![1];
@@ -8575,7 +8183,6 @@ mod kagemusha_v4_artifact_contract_tests {
             uncalibrated.validate_release_generation_profile().is_err(),
             "uncalibrated geometry must not authorize release generation"
         );
-
         let mut uncalibrated_proof = reviewed.clone();
         uncalibrated_proof.max_parent_proof_bytes += 1;
         assert!(uncalibrated_proof.validate().is_ok());
@@ -8585,7 +8192,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 .is_err(),
             "uncalibrated proof length must not authorize release generation"
         );
-
         let mut phantom_phase = reviewed.clone();
         phantom_phase.num_advice_per_phase.push(1);
         phantom_phase.num_lookup_advice_per_phase.push(0);
@@ -8593,7 +8199,6 @@ mod kagemusha_v4_artifact_contract_tests {
             phantom_phase.validate().is_err(),
             "Kagemusha must reject an unconstrained speculative advice phase"
         );
-
         let mut unreviewed_degree = reviewed;
         unreviewed_degree.k = KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4 + 1;
         unreviewed_degree.lookup_bits = unreviewed_degree.k - 1;
@@ -8604,7 +8209,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 .is_err()
         );
     }
-
     #[test]
     fn v4_public_input_schema_tracks_the_authenticated_dynamic_layout() {
         assert_eq!(
@@ -8633,7 +8237,6 @@ mod kagemusha_v4_artifact_contract_tests {
             KAGEMUSHA_RECURSIVE_SPEND_STEP_MAX_PUBLIC_INPUT_LIMBS_V4,
         );
         assert_eq!(KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4, 5);
-
         let mut maximum_params = circuit_params();
         maximum_params.k = KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4;
         maximum_params.lookup_bits = KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4 - 1;
@@ -8652,7 +8255,6 @@ mod kagemusha_v4_artifact_contract_tests {
         above_maximum.lookup_bits = above_maximum.k - 1;
         above_maximum.public_input_limbs = 66;
         assert!(above_maximum.validate().is_err());
-
         for schema in [
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V4,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V4,
@@ -8692,7 +8294,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V4,
             ))
         );
-
         let manifest = manifest();
         assert_eq!(
             manifest.profiles[0].circuit_id,
@@ -8707,7 +8308,6 @@ mod kagemusha_v4_artifact_contract_tests {
             KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
         );
     }
-
     #[test]
     fn v4_profiles_bind_exact_four_role_inventory_and_inline_params() {
         let manifest = manifest();
@@ -8740,11 +8340,9 @@ mod kagemusha_v4_artifact_contract_tests {
                 KagemushaPastaCycleArtifactKindV4::BootstrapWitness
             );
         }
-
         let mut tampered = manifest.clone();
         tampered.profiles[0].circuit_params.num_fixed = 0;
         assert!(tampered.validate().is_err());
-
         let mut separate_params_file = manifest.clone();
         let mut rejected_artifact = separate_params_file.profiles[0].artifacts[0].clone();
         rejected_artifact.file_name = ["step-eq.circuit-", "params.krv4"].concat();
@@ -8757,12 +8355,10 @@ mod kagemusha_v4_artifact_contract_tests {
             separate_params_file.validate().is_err(),
             "a separate circuit-parameter file must not extend the exact inventory"
         );
-
         let mut reordered = manifest;
         reordered.profiles[0].artifacts.swap(1, 2);
         assert!(reordered.validate().is_err());
     }
-
     #[test]
     fn v4_artifact_contract_source_guard_is_exhaustive() {
         fn canonical_index(kind: KagemushaPastaCycleArtifactKindV4) -> usize {
@@ -8773,7 +8369,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 KagemushaPastaCycleArtifactKindV4::BootstrapWitness => 3,
             }
         }
-
         let kinds = [
             KagemushaPastaCycleArtifactKindV4::ParamsIpa,
             KagemushaPastaCycleArtifactKindV4::ProvingKey,
@@ -8788,7 +8383,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 .iter()
                 .all(|profile| profile.artifacts.len() == 4)
         );
-
         let source = include_str!("mod.rs");
         assert!(source.contains("KagemushaPastaCycleFramedArtifactHeaderV4"));
         for forbidden in [
@@ -8802,7 +8396,6 @@ mod kagemusha_v4_artifact_contract_tests {
             );
         }
     }
-
     #[test]
     fn compact_recursive_state_boundary_has_a_distinct_v5_protocol() {
         assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5, 5);
@@ -8817,7 +8410,6 @@ mod kagemusha_v4_artifact_contract_tests {
             KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_DOMAIN_V5
         );
     }
-
     #[test]
     fn v4_envelope_uses_verifying_key_role_at_canonical_index() {
         let manifest = manifest();
@@ -8858,11 +8450,9 @@ mod kagemusha_v4_artifact_contract_tests {
         envelope
             .validate_against_manifest(&manifest)
             .expect("V4 envelope binds verifying-key role at index two");
-
         envelope.step_eq_verifier_key_sha256 = vesta_profile.artifacts[1].payload_sha256;
         assert!(envelope.validate_against_manifest(&manifest).is_err());
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -8886,7 +8476,6 @@ mod kagemusha_v4_artifact_contract_tests {
         manifest.benchmark_evidence_sha256 = digest(&benchmark);
         manifest.cryptographic_review_sha256 = digest(&review);
         manifest.release_attestation_sha256 = digest(b"first nonzero staging digest");
-
         let first_subject = manifest
             .release_attestation_subject()
             .expect("first V4 attestation subject");
@@ -8895,7 +8484,6 @@ mod kagemusha_v4_artifact_contract_tests {
             .release_attestation_subject()
             .expect("second V4 attestation subject");
         assert_eq!(first_subject, second_subject);
-
         let mut params_tamper = manifest.clone();
         params_tamper.profiles[0]
             .circuit_params
@@ -8914,7 +8502,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 .release_attestation_subject()
                 .expect("valid modified bootstrap subject")
         );
-
         let policy = KagemushaRecursiveSpendReleasePolicyV1 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
@@ -8966,7 +8553,6 @@ mod kagemusha_v4_artifact_contract_tests {
         .expect("fully authenticated V4 release");
         assert_eq!(authenticated.manifest(), &manifest);
         assert_eq!(authenticated.approved_signers().len(), roles.len());
-
         let alternate_reviewer = KeyPair::from_seed(vec![24; 32], Algorithm::Ed25519);
         let mut mismatched_policy = policy.clone();
         mismatched_policy.roles[1]
@@ -9004,7 +8590,6 @@ mod kagemusha_v4_artifact_contract_tests {
             ),
             Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
         );
-
         let mut signed_params_tamper = manifest.clone();
         signed_params_tamper.profiles[0]
             .circuit_params
@@ -9032,7 +8617,6 @@ mod kagemusha_v4_artifact_contract_tests {
             Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
         );
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -9057,7 +8641,6 @@ mod kagemusha_v4_artifact_contract_tests {
             .expect("canonical signed review"),
             vec![reviewer.public_key().clone()]
         );
-
         assert!(
             KagemushaRecursiveSpendCryptographicReviewPayloadV4::approved(
                 &candidate,
@@ -9095,7 +8678,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 role: KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
             })
         );
-
         assert_eq!(
             KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
                 b"approved by independent review",
@@ -9105,7 +8687,6 @@ mod kagemusha_v4_artifact_contract_tests {
             ),
             Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
         );
-
         let mut wrong_candidate = candidate.clone();
         wrong_candidate.manifest.activation_height += 1;
         wrong_candidate
@@ -9120,7 +8701,6 @@ mod kagemusha_v4_artifact_contract_tests {
             ),
             Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
         );
-
         let review: KagemushaRecursiveSpendCryptographicReviewEvidenceV4 =
             norito::decode_canonical(&review_bytes).expect("decode canonical test review");
         let alternate_review_bytes = encode_with_alternate_norito_layout(&review);
@@ -9141,7 +8721,6 @@ mod kagemusha_v4_artifact_contract_tests {
             ),
             Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
         );
-
         let mut rejected = review.clone();
         rejected.payload.decision = KagemushaRecursiveSpendCryptographicReviewDecisionV4::Rejected;
         assert_eq!(
@@ -9153,7 +8732,6 @@ mod kagemusha_v4_artifact_contract_tests {
             ),
             Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
         );
-
         let mut failed_check = review.clone();
         failed_check.payload.checks[0].status =
             KagemushaRecursiveSpendCryptographicReviewCheckStatusV4::Failed;
@@ -9166,7 +8744,6 @@ mod kagemusha_v4_artifact_contract_tests {
             ),
             Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
         );
-
         let mut duplicate_digest = review.clone();
         duplicate_digest.payload.checks[1].evidence_sha256 =
             duplicate_digest.payload.checks[0].evidence_sha256;
@@ -9179,7 +8756,6 @@ mod kagemusha_v4_artifact_contract_tests {
             ),
             Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
         );
-
         let impostor = KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519);
         let mut invalid_signature = review.clone();
         invalid_signature.approvals[0].signature =
@@ -9197,7 +8773,6 @@ mod kagemusha_v4_artifact_contract_tests {
             })
         );
     }
-
     #[test]
     fn v4_candidate_precedes_and_excludes_external_evidence() {
         let finalized = manifest();
@@ -9206,7 +8781,6 @@ mod kagemusha_v4_artifact_contract_tests {
             finalized.validate_unsigned_candidate().is_err(),
             "a finalized manifest must not be accepted as an unsigned candidate"
         );
-
         let mut candidate_manifest = finalized.clone();
         candidate_manifest.qualification_receipt_sha256 = [0; 32];
         candidate_manifest.qualified_candidate_sha256 = [0; 32];
@@ -9227,7 +8801,6 @@ mod kagemusha_v4_artifact_contract_tests {
         };
         candidate.validate().expect("valid candidate record");
         assert_ne!(candidate.sha256().expect("candidate digest"), [0; 32]);
-
         let mut unreviewed = candidate;
         unreviewed
             .manifest
@@ -9235,7 +8808,6 @@ mod kagemusha_v4_artifact_contract_tests {
             .source_tree_sha256 = digest(b"unreviewed source tree");
         assert!(unreviewed.validate().is_err());
     }
-
     #[test]
     fn v4_capabilities_require_exact_eight_roles_and_release_cap() {
         let mut capabilities = KagemushaRecursiveSpendNativeCapabilitiesV4 {
@@ -9255,7 +8827,6 @@ mod kagemusha_v4_artifact_contract_tests {
             missing_gates: Vec::new(),
         };
         capabilities.validate().expect("valid V4 capabilities");
-
         capabilities.artifact_roles.swap(0, 1);
         assert!(capabilities.validate().is_err());
         capabilities.artifact_roles = KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4
@@ -9272,7 +8843,6 @@ mod kagemusha_v4_artifact_contract_tests {
         capabilities.missing_gates.reverse();
         assert!(capabilities.validate().is_err());
     }
-
     #[test]
     fn all_v4_lifecycle_schemas_reach_the_v4_artifact_binding() {
         for schema in [
@@ -9290,7 +8860,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 .contains_key::<KagemushaRecursiveSpendOperationVectorV4>()
         );
     }
-
     #[test]
     fn v4_top_up_wire_roundtrips_and_rejects_the_retired_layout() {
         let legacy = retired_top_up_fixture();
@@ -9307,7 +8876,6 @@ mod kagemusha_v4_artifact_contract_tests {
             },
             operation_id: legacy.operation_id,
         };
-
         let encoded = v4.encode();
         let decoded =
             <KagemushaRecursiveSpendTopUpUnsignedV4 as norito::codec::DecodeAll>::decode_all(
@@ -9315,7 +8883,6 @@ mod kagemusha_v4_artifact_contract_tests {
             )
             .expect("V4 top-up wire must roundtrip");
         assert_eq!(decoded, v4);
-
         let legacy_encoded = legacy.encode();
         assert!(
             <KagemushaRecursiveSpendTopUpUnsignedV4 as norito::codec::DecodeAll>::decode_all(
@@ -9325,7 +8892,6 @@ mod kagemusha_v4_artifact_contract_tests {
             "the legacy field layout must not decode as ABI-21"
         );
     }
-
     #[test]
     fn v4_activation_wire_binds_policy_and_rejects_legacy_one_field_layout() {
         let policy = device_attestation_policy_wire_fixture();
@@ -9333,7 +8899,6 @@ mod kagemusha_v4_artifact_contract_tests {
             release_activation_wire_fixture(),
             policy.clone(),
         );
-
         let boxed = InstructionBox::from(instruction.clone());
         let bytes = norito::core::to_bytes(&boxed).expect("serialize composite activation");
         let archived = norito::core::from_bytes::<InstructionBox>(&bytes)
@@ -9348,7 +8913,6 @@ mod kagemusha_v4_artifact_contract_tests {
             "the embedded device policy must survive the actual instruction-box wire path",
         );
         assert_eq!(instruction.device_attestation_policy(), &policy);
-
         let encoded = instruction.encode();
         let flags = norito::core::default_encode_flags();
         assert_eq!(
@@ -9360,7 +8924,6 @@ mod kagemusha_v4_artifact_contract_tests {
             .expect("composite activation payload must roundtrip");
         assert_eq!(used, encoded.len());
         assert_eq!(roundtrip, instruction);
-
         let mut legacy_len = 0usize;
         crate::isi::read_aos_field(&encoded, &mut legacy_len, flags)
             .expect("read the former activation-only field");
@@ -9370,7 +8933,6 @@ mod kagemusha_v4_artifact_contract_tests {
             "legacy one-field activation bytes must fail closed instead of defaulting a policy",
         );
     }
-
     #[test]
     fn v4_verifier_ids_are_manifest_and_parity_qualified() {
         let manifest_sha256 = [0xab; 32];
@@ -9383,7 +8945,6 @@ mod kagemusha_v4_artifact_contract_tests {
             manifest_sha256,
         );
         let suffix = "ab".repeat(32);
-
         assert_eq!(
             eq.name,
             format!("{KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4}-{suffix}")
@@ -9406,9 +8967,7 @@ mod kagemusha_v4_artifact_contract_tests {
         );
     }
 }
-
 include!("device_authority_p256_tests.rs");
-
 /// Derive the canonical public reference carried by a receiver payment request.
 ///
 /// # Errors
@@ -9423,7 +8982,6 @@ pub fn kagemusha_receiver_key_reference_v2(
         receiver_public_key: *receiver_public_key,
     })
 }
-
 impl KagemushaReceiverAcknowledgementPayloadV2 {
     /// Validate structural fields and the domain-separated public-key reference.
     ///
@@ -9450,7 +9008,6 @@ impl KagemushaReceiverAcknowledgementPayloadV2 {
         }
         Ok(())
     }
-
     /// Return the exact domain-separated bytes signed by the receiver device key.
     ///
     /// # Errors
@@ -9465,14 +9022,12 @@ impl KagemushaReceiverAcknowledgementPayloadV2 {
             },
         )?)
     }
-
     /// Stable persistence/replay key for byte-identical duplicate acknowledgements.
     #[must_use]
     pub fn idempotency_key(&self) -> ([u8; 32], [u8; 32]) {
         (self.operation_id, self.recipient_request_digest)
     }
 }
-
 impl KagemushaReceiverAcknowledgementV2 {
     /// Return the canonical identity digest of the signed acknowledgement.
     ///
@@ -9485,7 +9040,6 @@ impl KagemushaReceiverAcknowledgementV2 {
             acknowledgement: self.clone(),
         })
     }
-
     /// Verify the unchanged ACK leaf against an authoritative ABI-21 recipient bundle.
     ///
     /// # Errors
@@ -9543,7 +9097,6 @@ impl KagemushaReceiverAcknowledgementV2 {
         }
         Ok(())
     }
-
     /// Return canonical ACK bytes after ABI-21 payment validation.
     ///
     /// # Errors
@@ -9557,7 +9110,6 @@ impl KagemushaReceiverAcknowledgementV2 {
         self.validate_for_payment_v4(recipient_request, recipient_bundle)?;
         Ok(norito::encode_canonical(self)?)
     }
-
     /// Build the unchanged typed ACK result after ABI-21 payment validation.
     ///
     /// # Errors
@@ -9578,7 +9130,6 @@ impl KagemushaReceiverAcknowledgementV2 {
         })
     }
 }
-
 impl KagemushaReceiverAcknowledgementVerifyResultV2 {
     /// Enforce fail-closed result consistency before a sender consumes inputs.
     ///
@@ -9599,7 +9150,6 @@ impl KagemushaReceiverAcknowledgementVerifyResultV2 {
         Ok(())
     }
 }
-
 fn validate_kagemusha_redeem_proof_attachment_v2(
     proof: &ProofAttachment,
 ) -> Result<(), KagemushaValidationError> {
@@ -9621,7 +9171,6 @@ fn validate_kagemusha_redeem_proof_attachment_v2(
     }
     Ok(())
 }
-
 /// Domain separator for ABI-21 unsigned top-up authorization payloads.
 pub const KAGEMUSHA_TOPUP_PAYLOAD_DIGEST_DOMAIN_V4: &str = "iroha:kagemusha:v4:topup-payload";
 /// Domain separator for ABI-21 finalized top-up anchor receipts.
@@ -9637,7 +9186,6 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V4: &str =
     "iroha:kagemusha:v4:public-statement";
 /// Exact finalized-anchor schema carried by an ABI-21 init request.
 pub const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4: u16 = 4;
-
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaTopUpAnchorDigestPreimageV4 {
     domain: String,
@@ -9658,7 +9206,6 @@ struct KagemushaTopUpAnchorDigestPreimageV4 {
     finalized_height: u64,
     finalized_tx_hash: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaTopUpUnsignedPayloadDigestPreimageV4 {
     domain: String,
@@ -9670,25 +9217,21 @@ struct KagemushaTopUpUnsignedPayloadDigestPreimageV4 {
     artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
     operation_id: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaRecursiveSpendSplitBindingDigestPreimageV4 {
     domain: String,
     split: KagemushaRecursiveSpendSplitIntentV4,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaRedemptionTransitionDigestPreimageV4 {
     domain: String,
     intent: KagemushaRecursiveSpendRedemptionIntentV4,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaRecursiveSpendPublicStatementDigestPreimageV4 {
     domain: String,
     statement: KagemushaRecursiveSpendPublicStatementV4,
 }
-
 impl KagemushaRecursiveSpendTopUpAnchorV4 {
     /// Populate and validate the canonical ABI-21 receipt digest.
     ///
@@ -9700,7 +9243,6 @@ impl KagemushaRecursiveSpendTopUpAnchorV4 {
         self.validate_public_binding()?;
         Ok(self)
     }
-
     /// Compute the V4-domain digest of every immutable receipt field.
     ///
     /// # Errors
@@ -9727,7 +9269,6 @@ impl KagemushaRecursiveSpendTopUpAnchorV4 {
             finalized_tx_hash: self.finalized_tx_hash,
         })
     }
-
     /// Validate the complete finalized receipt and authenticated V4 release.
     ///
     /// # Errors
@@ -9761,7 +9302,6 @@ impl KagemushaRecursiveSpendTopUpAnchorV4 {
         }
         Ok(())
     }
-
     /// Return the stable compact identity retained by ABI-21 descendants.
     ///
     /// # Errors
@@ -9777,7 +9317,6 @@ impl KagemushaRecursiveSpendTopUpAnchorV4 {
         })
     }
 }
-
 impl KagemushaRecursiveSpendTopUpUnsignedV4 {
     /// Validate every ABI-21 top-up field before payer authorization is attached.
     ///
@@ -9801,7 +9340,6 @@ impl KagemushaRecursiveSpendTopUpUnsignedV4 {
         }
         Ok(())
     }
-
     /// Return the V4-domain digest placed into payer authorization.
     ///
     /// # Errors
@@ -9820,7 +9358,6 @@ impl KagemushaRecursiveSpendTopUpUnsignedV4 {
             operation_id: self.operation_id,
         })
     }
-
     /// Attach matching payer authorization and produce the authoritative request.
     ///
     /// # Errors
@@ -9844,7 +9381,6 @@ impl KagemushaRecursiveSpendTopUpUnsignedV4 {
         Ok(request)
     }
 }
-
 impl KagemushaRecursiveSpendTopUpRequestV4 {
     /// Construct and validate an ABI-21 online-to-offline request.
     #[allow(clippy::too_many_arguments)]
@@ -9872,7 +9408,6 @@ impl KagemushaRecursiveSpendTopUpRequestV4 {
         }
         .into_request(authorization)
     }
-
     /// Reconstruct the exact V4 fields covered by payer authorization.
     #[must_use]
     pub fn unsigned_payload(&self) -> KagemushaRecursiveSpendTopUpUnsignedV4 {
@@ -9886,7 +9421,6 @@ impl KagemushaRecursiveSpendTopUpRequestV4 {
             operation_id: self.operation_id,
         }
     }
-
     /// Validate the debit, note, release, and self-contained payer authorization.
     ///
     /// # Errors
@@ -9910,7 +9444,6 @@ impl KagemushaRecursiveSpendTopUpRequestV4 {
         }
         self.authorization.validate_for_payload(unsigned.digest()?)
     }
-
     /// Return the digest of every unsigned ABI-21 top-up field.
     ///
     /// # Errors
@@ -9919,7 +9452,6 @@ impl KagemushaRecursiveSpendTopUpRequestV4 {
     pub fn unsigned_payload_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.unsigned_payload().digest()
     }
-
     /// Verify payer authorization at authoritative Torii time.
     ///
     /// # Errors
@@ -9931,7 +9463,6 @@ impl KagemushaRecursiveSpendTopUpRequestV4 {
             .validate_for_payload_at(self.unsigned_payload_digest()?, now_ms)
     }
 }
-
 impl KagemushaRecursiveSpendInitRequestV4 {
     /// Validate finalized provenance and its exact authenticated ABI-21 release.
     ///
@@ -9964,7 +9495,6 @@ impl KagemushaRecursiveSpendInitRequestV4 {
         Ok(())
     }
 }
-
 impl KagemushaRecursiveSpendSplitIntentV4 {
     /// Validate exact conservation, canonical parents, and disjoint V4 outputs.
     #[expect(
@@ -10081,7 +9611,6 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
         }
         Ok(())
     }
-
     /// Return the exact validated input total.
     ///
     /// # Errors
@@ -10099,7 +9628,6 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
             self.asset_scale,
         )
     }
-
     /// Return the V4-domain transition binding consumed by ABI-21 Step.
     ///
     /// # Errors
@@ -10112,7 +9640,6 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
             split: self.clone(),
         })
     }
-
     /// Derive the deterministic conflict claims for one ABI-21 child.
     ///
     /// # Errors
@@ -10141,7 +9668,6 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
         Ok(claims)
     }
 }
-
 impl KagemushaRecursiveSpendRedemptionIntentV4 {
     /// Validate exact full/partial conservation and canonical unshield words.
     ///
@@ -10240,7 +9766,6 @@ impl KagemushaRecursiveSpendRedemptionIntentV4 {
         }
         Ok(())
     }
-
     /// Return the V4-domain circuit binding for this redemption.
     ///
     /// # Errors
@@ -10253,7 +9778,6 @@ impl KagemushaRecursiveSpendRedemptionIntentV4 {
             intent: self.clone(),
         })
     }
-
     /// Derive the exact continuing change claims for a partial redemption.
     ///
     /// # Errors
@@ -10279,7 +9803,6 @@ impl KagemushaRecursiveSpendRedemptionIntentV4 {
         Ok(claims)
     }
 }
-
 impl KagemushaRecursiveSpendPublicStatementV4 {
     /// Validate the canonical ABI-21 recursive-state statement.
     ///
@@ -10345,7 +9868,6 @@ impl KagemushaRecursiveSpendPublicStatementV4 {
         }
         Ok(())
     }
-
     /// Return the V4-domain digest exposed by the ABI-21 Step instance.
     ///
     /// # Errors
@@ -10359,11 +9881,9 @@ impl KagemushaRecursiveSpendPublicStatementV4 {
         })
     }
 }
-
 #[cfg(test)]
 mod kagemusha_v4_lifecycle_domain_tests {
     use super::*;
-
     #[test]
     fn abi21_lifecycle_digest_domains_are_distinct_from_v2() {
         let v4 = [
@@ -10400,7 +9920,6 @@ mod kagemusha_v4_lifecycle_domain_tests {
             KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V2
         );
     }
-
     #[test]
     fn abi21_operation_vector_rejects_noncanonical_pallas_elements() {
         let mut limbs = [0_u32; KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4];
@@ -10408,7 +9927,6 @@ mod kagemusha_v4_lifecycle_domain_tests {
         KagemushaRecursiveSpendOperationVectorV4 { limbs }
             .validate()
             .expect("one followed by canonical zero fields is valid");
-
         let mut equal = limbs;
         equal[..8].copy_from_slice(&KAGEMUSHA_RECURSIVE_SPEND_OPERATION_FP_MODULUS_U32_LE_V4);
         assert!(
@@ -10416,7 +9934,6 @@ mod kagemusha_v4_lifecycle_domain_tests {
                 .validate()
                 .is_err()
         );
-
         let mut greater = equal;
         greater[0] = greater[0].saturating_add(1);
         assert!(
@@ -10424,7 +9941,6 @@ mod kagemusha_v4_lifecycle_domain_tests {
                 .validate()
                 .is_err()
         );
-
         let mut high_limb = limbs;
         high_limb[7] = 0x4000_0001;
         assert!(
@@ -10432,7 +9948,6 @@ mod kagemusha_v4_lifecycle_domain_tests {
                 .validate()
                 .is_err()
         );
-
         let mut below_by_high_limb = limbs;
         below_by_high_limb[..7].fill(u32::MAX);
         below_by_high_limb[7] = 0x3fff_ffff;
@@ -10503,7 +10018,6 @@ pub const KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWA
     + 6 * KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4
     + 1024 * 1024;
 const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_MAX_NESTING_DEPTH_V4: usize = 64;
-
 fn canonical_kagemusha_archive_payload_v4<T: norito::NoritoSerialize>(
     frame: &[u8],
 ) -> Result<&[u8], norito::Error> {
@@ -10516,7 +10030,6 @@ fn canonical_kagemusha_archive_payload_v4<T: norito::NoritoSerialize>(
     if header.schema != <T as norito::NoritoSerialize>::schema_hash() {
         return Err(norito::Error::SchemaMismatch);
     }
-
     let archive_limit = norito::core::max_archive_len().min(usize::MAX as u64);
     if header.length > archive_limit {
         return Err(norito::Error::ArchiveLengthExceeded {
@@ -10553,7 +10066,6 @@ fn canonical_kagemusha_archive_payload_v4<T: norito::NoritoSerialize>(
     }
     Ok(payload)
 }
-
 fn canonical_kagemusha_compact_field_v4(
     bytes: &[u8],
     index: usize,
@@ -10579,7 +10091,6 @@ fn canonical_kagemusha_compact_field_v4(
     }
     Err(norito::Error::LengthMismatch)
 }
-
 fn preflight_kagemusha_unshield_proof_archive_v4<T: norito::NoritoSerialize>(
     frame: &[u8],
     field_path: &[usize],
@@ -10607,7 +10118,6 @@ fn preflight_kagemusha_unshield_proof_archive_v4<T: norito::NoritoSerialize>(
     }
     Ok(())
 }
-
 /// Reject an oversized unshield proof in a canonical redemption request before
 /// materializing its `ProofAttachment` byte vector.
 ///
@@ -10622,7 +10132,6 @@ pub fn preflight_kagemusha_redeem_request_archive_v4(frame: &[u8]) -> Result<(),
         &[4, 1, 1],
     )
 }
-
 /// Reject an oversized unshield proof in canonical unsigned redemption fields
 /// before materializing its `ProofAttachment` byte vector.
 ///
@@ -10637,7 +10146,6 @@ pub fn preflight_kagemusha_redeem_unsigned_archive_v4(frame: &[u8]) -> Result<()
         &[4, 1, 1],
     )
 }
-
 /// Reject an oversized nested unshield proof in a canonical redemption-build
 /// result before materializing its `ProofAttachment` byte vector.
 ///
@@ -10654,7 +10162,6 @@ pub fn preflight_kagemusha_redeem_build_result_archive_v4(
         &[0, 4, 1, 1],
     )
 }
-
 fn kagemusha_recursive_spend_redeem_decode_limits_v4(encoded_len: usize) -> norito::DecodeLimits {
     // The canonical wire preflight enforces the unshield cap before Vec
     // reconstruction. The fourfold base covers decoded structures and ordinary
@@ -10673,13 +10180,11 @@ fn kagemusha_recursive_spend_redeem_decode_limits_v4(encoded_len: usize) -> nori
         KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_MAX_NESTING_DEPTH_V4,
     )
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaRecursiveSpendBundleDigestPreimageV4 {
     domain: String,
     bundle: KagemushaRecursiveSpendBundleV4,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaRedeemUnsignedPayloadDigestPreimageV4 {
     domain: String,
@@ -10693,7 +10198,6 @@ struct KagemushaRedeemUnsignedPayloadDigestPreimageV4 {
     block_height: u64,
     operation_id: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaRequestOutputBindingDigestPreimageV4 {
     domain: String,
@@ -10701,7 +10205,6 @@ struct KagemushaRequestOutputBindingDigestPreimageV4 {
     recipient_output: KagemushaSpendableNoteDescriptorV2,
     bundle_digest: [u8; 32],
 }
-
 impl KagemushaRecursiveSpendOperationVectorV4 {
     /// Require all 135 encoded Pallas elements to be canonical and the row to
     /// be non-empty. Comparison is exact on little-endian limbs and performs no
@@ -10731,7 +10234,6 @@ impl KagemushaRecursiveSpendOperationVectorV4 {
         Ok(())
     }
 }
-
 impl KagemushaRecursiveSpendBundleV4 {
     /// Validate the exact V4 statement/proof/release identity while keeping proof bytes opaque.
     ///
@@ -10762,7 +10264,6 @@ impl KagemushaRecursiveSpendBundleV4 {
         }
         Ok(())
     }
-
     /// Return the V4-domain identity of the complete opaque bundle.
     ///
     /// # Errors
@@ -10775,7 +10276,6 @@ impl KagemushaRecursiveSpendBundleV4 {
             bundle: self.clone(),
         })
     }
-
     /// Decode only wallet-visible V4 state while preserving the opaque proof payload.
     ///
     /// # Errors
@@ -10799,7 +10299,6 @@ impl KagemushaRecursiveSpendBundleV4 {
         })
     }
 }
-
 impl KagemushaRecursiveSpendInitResultV4 {
     /// Validate that initialization created exactly the finalized top-up state.
     ///
@@ -10854,7 +10353,6 @@ impl KagemushaRecursiveSpendInitResultV4 {
         Ok(())
     }
 }
-
 impl KagemushaRecursiveSpendAppendRequestV4 {
     /// Validate canonical parents, the confidential proof envelope, and the exact split inputs.
     ///
@@ -10930,7 +10428,6 @@ impl KagemushaRecursiveSpendAppendRequestV4 {
         Ok(())
     }
 }
-
 impl KagemushaRecursiveSpendSplitIntentV4 {
     /// Validate one independently spendable V4 child against this exact split.
     ///
@@ -10995,7 +10492,6 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
         Ok(())
     }
 }
-
 impl KagemushaRecursiveSpendSplitResultV4 {
     /// Validate conservation and both independently spendable V4 branches.
     ///
@@ -11063,7 +10559,6 @@ impl KagemushaRecursiveSpendSplitResultV4 {
         }
     }
 }
-
 impl KagemushaRecursiveSpendPeerPaymentV4 {
     /// Project the recipient-only ABI-21 transport from a validated split result.
     ///
@@ -11082,7 +10577,6 @@ impl KagemushaRecursiveSpendPeerPaymentV4 {
         payment.validate_public_binding()?;
         Ok(payment)
     }
-
     /// Return the recipient peer-split transition embedded by the ABI-21 statement.
     ///
     /// # Errors
@@ -11106,7 +10600,6 @@ impl KagemushaRecursiveSpendPeerPaymentV4 {
         }
         Ok(transition)
     }
-
     /// Return the canonical split operation identifier.
     ///
     /// # Errors
@@ -11115,7 +10608,6 @@ impl KagemushaRecursiveSpendPeerPaymentV4 {
     pub fn operation_id(&self) -> Result<[u8; 32], KagemushaValidationError> {
         Ok(self.recipient_split_transition()?.operation_id)
     }
-
     /// Return the receiver-request digest bound by the recipient transition.
     ///
     /// # Errors
@@ -11124,7 +10616,6 @@ impl KagemushaRecursiveSpendPeerPaymentV4 {
     pub fn recipient_request_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         Ok(self.recipient_split_transition()?.recipient_request_digest)
     }
-
     /// Validate the recipient branch, membership state, and ABI-21 peer-size ceiling.
     ///
     /// # Errors
@@ -11151,7 +10642,6 @@ impl KagemushaRecursiveSpendPeerPaymentV4 {
         Ok(())
     }
 }
-
 impl KagemushaRecursiveSpendTopUpFinalityEvidenceV4 {
     /// Validate one bounded finalized V4 origin and its exact compact reference.
     ///
@@ -11178,7 +10668,6 @@ impl KagemushaRecursiveSpendTopUpFinalityEvidenceV4 {
         }
         Ok(())
     }
-
     /// Validate the exact canonical origin inventory carried by a V4 state.
     ///
     /// # Errors
@@ -11209,7 +10698,6 @@ impl KagemushaRecursiveSpendTopUpFinalityEvidenceV4 {
         Ok(())
     }
 }
-
 impl KagemushaRecursiveSpendTopUpProvenanceV4 {
     fn anchor_refs(
         &self,
@@ -11219,7 +10707,6 @@ impl KagemushaRecursiveSpendTopUpProvenanceV4 {
             .map(|evidence| evidence.topup_anchor.compact_ref())
             .collect()
     }
-
     fn validate_for_statement_at_height(
         &self,
         statement: &KagemushaRecursiveSpendPublicStatementV4,
@@ -11279,7 +10766,6 @@ impl KagemushaRecursiveSpendTopUpProvenanceV4 {
         }
         Ok(())
     }
-
     /// Validate exact ordered provenance against one spendable branch.
     ///
     /// # Errors
@@ -11292,7 +10778,6 @@ impl KagemushaRecursiveSpendTopUpProvenanceV4 {
         bundle.validate_public_binding()?;
         self.validate_for_statement_at_height(&bundle.statement, None)
     }
-
     /// Validate provenance against a branch at the append evaluation height.
     ///
     /// # Errors
@@ -11306,7 +10791,6 @@ impl KagemushaRecursiveSpendTopUpProvenanceV4 {
         bundle.validate_public_binding()?;
         self.validate_for_statement_at_height(&bundle.statement, Some(block_height))
     }
-
     fn merge_for_statements_at(
         inputs: &[(&KagemushaRecursiveSpendPublicStatementV4, &Self)],
         block_height: u64,
@@ -11362,7 +10846,6 @@ impl KagemushaRecursiveSpendTopUpProvenanceV4 {
         }
         Ok(provenance)
     }
-
     /// Canonically merge one or two parent inventories under one exact roster.
     ///
     /// An origin shared by two parents is coalesced only when its complete
@@ -11386,7 +10869,6 @@ impl KagemushaRecursiveSpendTopUpProvenanceV4 {
         Self::merge_for_statements_at(&contexts, block_height)
     }
 }
-
 include!("kagemusha_v4_topup_provenance_inline_tests.rs");
 #[cfg(test)]
 mod kagemusha_v4_lifecycle_additional_domain_tests {

@@ -3,9 +3,7 @@
 //! Run with `cargo run -p iroha_data_model --features dev-tools,test-fixtures --bin axt_fixtures`
 //! to refresh `tests/fixtures/*.json`. Use `--check` to verify the checked-in
 //! fixtures are up to date without rewriting them.
-
 use std::{env, error::Error, fs, path::Path};
-
 use hex::{decode, encode};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
@@ -26,7 +24,6 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use iroha_zkp_halo2::poseidon::{poseidon2_params_width3, poseidon2_params_width6};
 use norito::{json, to_bytes};
-
 const DESCRIPTOR_FIXTURE_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/axt_descriptor_multi_ds.json"
@@ -39,11 +36,9 @@ const POSEIDON_FIXTURE_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/axt_poseidon_constants.json"
 );
-
 fn fixture_issuer() -> KeyPair {
     KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519)
 }
-
 fn signed_fixture_handle(draft: AssetHandleDraft, dsid: DataSpaceId) -> AssetHandle {
     let context = AxtHandleIssuerContextV1 {
         network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
@@ -60,14 +55,12 @@ fn signed_fixture_handle(draft: AssetHandleDraft, dsid: DataSpaceId) -> AssetHan
         .sign_by_issuer_v1(context, fixture_issuer().private_key())
         .expect("fixture issuer key must sign canonical AXT claims")
 }
-
 fn fixture_digest(label: &[u8], dsid: DataSpaceId) -> String {
     let mut payload = Vec::new();
     payload.extend_from_slice(label);
     payload.extend_from_slice(&dsid.as_u64().to_le_bytes());
     encode(Hash::new(payload).as_ref())
 }
-
 fn fixture_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
     AxtFastpqBinding {
         parameter: "fastpq-lane-balanced".to_string(),
@@ -87,12 +80,10 @@ fn fixture_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
         effect_binding: None,
     }
 }
-
 fn encoded_account(public_key_hex: &str) -> String {
     iroha_data_model::account::AccountId::new(public_key_hex.parse().expect("public key"))
         .to_string()
 }
-
 fn build_descriptor_fixture() -> Result<DescriptorFixture, Box<dyn Error>> {
     let descriptor = AxtDescriptorBuilder::new()
         .dataspace(DataSpaceId::new(7))
@@ -104,10 +95,8 @@ fn build_descriptor_fixture() -> Result<DescriptorFixture, Box<dyn Error>> {
             ["aggregates/", "audits/"],
         )
         .build()?;
-
     let descriptor_bytes = to_bytes(&descriptor)?;
     let binding_hex = encode(compute_descriptor_binding(&descriptor)?);
-
     let touch_manifest = vec![
         AxtTouchFragment {
             dsid: DataSpaceId::new(1),
@@ -121,7 +110,6 @@ fn build_descriptor_fixture() -> Result<DescriptorFixture, Box<dyn Error>> {
             ),
         },
     ];
-
     Ok(DescriptorFixture {
         descriptor,
         descriptor_hex: encode(descriptor_bytes),
@@ -129,21 +117,18 @@ fn build_descriptor_fixture() -> Result<DescriptorFixture, Box<dyn Error>> {
         binding_hex,
     })
 }
-
 fn fixture_binding(descriptor: &DescriptorFixture) -> Result<AxtBinding, Box<dyn Error>> {
     let binding_bytes = decode(&descriptor.binding_hex)?;
     let mut binding = [0u8; 32];
     binding.copy_from_slice(&binding_bytes);
     Ok(AxtBinding::new(binding))
 }
-
 fn manifest_root(manifest: &TouchManifest) -> Result<[u8; 32], Box<dyn Error>> {
     let root = Hash::new(&to_bytes(manifest)?);
     let mut out = [0u8; 32];
     out.copy_from_slice(root.as_ref());
     Ok(out)
 }
-
 fn proof_blob_fixture(
     dsid: DataSpaceId,
     manifest_root: [u8; 32],
@@ -165,7 +150,6 @@ fn proof_blob_fixture(
         expiry_slot: Some(expiry_slot),
     })
 }
-
 fn transfer_handle_fixture(
     binding: AxtBinding,
     manifest_view_root: [u8; 32],
@@ -214,7 +198,6 @@ fn transfer_handle_fixture(
         amount_commitment: None,
     }
 }
-
 fn lock_handle_fixture(
     binding: AxtBinding,
     manifest_view_root: [u8; 32],
@@ -263,17 +246,13 @@ fn lock_handle_fixture(
         amount_commitment: None,
     }
 }
-
 fn rejected_handle_fixtures(happy: &[AxtHandleFragment]) -> Vec<AxtHandleFragment> {
     let mut mismatched_binding = happy[0].clone();
     mismatched_binding.handle.axt_binding = AxtBinding::new([0u8; 32]);
-
     let mut stale_manifest = happy[1].clone();
     stale_manifest.handle.manifest_view_root = [0u8; 32];
-
     vec![mismatched_binding, stale_manifest]
 }
-
 fn build_envelope_fixture(
     descriptor: &DescriptorFixture,
 ) -> Result<EnvelopeFixture, Box<dyn Error>> {
@@ -301,7 +280,6 @@ fn build_envelope_fixture(
         vec![0xFE, 0xED, 0xFA, 0xCE],
         98,
     )?;
-
     let proofs = vec![
         AxtProofFragment {
             dsid: dsid_one,
@@ -312,20 +290,17 @@ fn build_envelope_fixture(
             proof: proof_seven.clone(),
         },
     ];
-
     let alice =
         encoded_account("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
     let bob =
         encoded_account("ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016");
     let carol =
         encoded_account("ed0120ED77765E503B45FF9C059A1C19BF1DDE82C60432B7C2D01F7FCD75F5F9F3C07C");
-
     let happy_handles = vec![
         transfer_handle_fixture(binding, manifest_root_one, proof_one, alice, bob.clone()),
         lock_handle_fixture(binding, manifest_root_seven, proof_seven, bob, carol),
     ];
     let rejects = rejected_handle_fixtures(&happy_handles);
-
     Ok(EnvelopeFixture {
         descriptor_hex: descriptor.descriptor_hex.clone(),
         binding_hex: descriptor.binding_hex.clone(),
@@ -336,11 +311,9 @@ fn build_envelope_fixture(
         },
     })
 }
-
 fn build_poseidon_fixture() -> PoseidonConstantsFixture {
     let width3 = poseidon2_params_width3();
     let width6 = poseidon2_params_width6();
-
     let encode_rounds = |rounds: Vec<[[u8; 32]; 3]>| {
         rounds
             .into_iter()
@@ -363,7 +336,6 @@ fn build_poseidon_fixture() -> PoseidonConstantsFixture {
             .map(|row| row.into_iter().map(encode).collect())
             .collect()
     };
-
     PoseidonConstantsFixture {
         width3: PoseidonParamsFixture {
             round_constants: encode_rounds(width3.round_constants),
@@ -375,7 +347,6 @@ fn build_poseidon_fixture() -> PoseidonConstantsFixture {
         },
     }
 }
-
 fn write_fixture<T: json::JsonSerialize>(
     path: &Path,
     value: &T,
@@ -393,21 +364,16 @@ fn write_fixture<T: json::JsonSerialize>(
         }
         return Ok(());
     }
-
     fs::write(path, new_content)?;
     Ok(())
 }
-
 fn main() -> Result<(), Box<dyn Error>> {
     let check_only = env::args().any(|arg| arg == "--check");
-
     let descriptor = build_descriptor_fixture()?;
     let envelope = build_envelope_fixture(&descriptor)?;
     let poseidon = build_poseidon_fixture();
-
     write_fixture(Path::new(DESCRIPTOR_FIXTURE_PATH), &descriptor, check_only)?;
     write_fixture(Path::new(ENVELOPE_FIXTURE_PATH), &envelope, check_only)?;
     write_fixture(Path::new(POSEIDON_FIXTURE_PATH), &poseidon, check_only)?;
-
     Ok(())
 }

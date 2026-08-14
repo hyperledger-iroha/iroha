@@ -1,30 +1,23 @@
 //! Regression checks for the checked-in default Docker Compose identities.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
-
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey};
-
 type ServiceEnvironments = BTreeMap<String, BTreeMap<String, String>>;
-
 const DEFAULT_STREAMING_PUBLIC_KEY: &str =
     "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
 const DEFAULT_STREAMING_PRIVATE_KEY: &str =
     "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83";
-
 fn defaults_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults")
 }
-
 fn parse_service_environments(path: &Path) -> ServiceEnvironments {
     let contents = std::fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
     let mut environments = ServiceEnvironments::new();
     let mut current_service: Option<String> = None;
     let mut in_environment = false;
-
     for line in contents.lines() {
         if let Some(candidate) = line
             .strip_prefix("  ")
@@ -39,16 +32,13 @@ fn parse_service_environments(path: &Path) -> ServiceEnvironments {
             in_environment = false;
             continue;
         }
-
         if current_service.is_some() && line == "    environment:" {
             in_environment = true;
             continue;
         }
-
         if !in_environment {
             continue;
         }
-
         let Some(field) = line.strip_prefix("      ") else {
             if !line.trim().is_empty() {
                 in_environment = false;
@@ -66,10 +56,8 @@ fn parse_service_environments(path: &Path) -> ServiceEnvironments {
             .expect("service environment was initialized")
             .insert(name.to_owned(), value.to_owned());
     }
-
     environments
 }
-
 fn yaml_scalar(value: &str) -> &str {
     value
         .strip_prefix('"')
@@ -81,7 +69,6 @@ fn yaml_scalar(value: &str) -> &str {
         })
         .unwrap_or(value)
 }
-
 fn validate_transport_identities(
     path: &Path,
     environments: &ServiceEnvironments,
@@ -95,7 +82,6 @@ fn validate_transport_identities(
         "{} must describe the canonical four-validator committee",
         path.display()
     );
-
     let mut public_keys = BTreeSet::new();
     let mut private_keys = BTreeSet::new();
     let mut identities = BTreeMap::new();
@@ -120,7 +106,6 @@ fn validate_transport_identities(
                 .get("PRIVATE_KEY")
                 .unwrap_or_else(|| panic!("{service} lacks its validator private key")),
         );
-
         let public = public_text
             .parse::<PublicKey>()
             .unwrap_or_else(|error| panic!("{service} transport public key is invalid: {error}"));
@@ -132,7 +117,6 @@ fn validate_transport_identities(
             .unwrap_or_else(|error| panic!("{service} validator public key is invalid: {error}"));
         let transport = KeyPair::new(public.clone(), private.0)
             .unwrap_or_else(|error| panic!("{service} transport key pair does not match: {error}"));
-
         assert_eq!(transport.algorithm(), Algorithm::Ed25519);
         assert_eq!(node_public.algorithm(), Algorithm::BlsNormal);
         assert_ne!(public, node_public, "{service} reuses its signing identity");
@@ -163,10 +147,8 @@ fn validate_transport_identities(
             (public_text.to_owned(), private_text.to_owned()),
         );
     }
-
     identities
 }
-
 #[test]
 fn default_compose_snapshots_share_valid_dedicated_soranet_identities() {
     let paths = [
@@ -176,7 +158,6 @@ fn default_compose_snapshots_share_valid_dedicated_soranet_identities() {
     ];
     let baseline_environments = parse_service_environments(&paths[0]);
     let baseline_identities = validate_transport_identities(&paths[0], &baseline_environments);
-
     for path in &paths[1..] {
         let environments = parse_service_environments(path);
         let identities = validate_transport_identities(path, &environments);

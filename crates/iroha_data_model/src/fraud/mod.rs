@@ -5,7 +5,5 @@
 //! keep Norito compatibility and to unblock SDK scaffolding across languages.
 //! Further fields can be added once the services mature; any breaking changes
 //! must be accompanied by migrations and documented in `norito.md`.
-
 pub mod types;
-
 pub use types::*;

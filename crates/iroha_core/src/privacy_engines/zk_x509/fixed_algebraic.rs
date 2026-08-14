@@ -17,20 +17,15 @@
 //! residue group.  Consequently the working set is
 //! `O(native_size + query_count * width + atom_count)`, never a materialized
 //! `native_size * width` matrix or an LDE table.
-
 use core::cmp::Ordering;
 use std::vec::Vec;
-
 use thiserror::Error;
-
 use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
     goldilocks_batch_invert_v1, goldilocks_primitive_root_v1, sha256_frame_v1,
 };
-
 /// Exact first-release semantics committed alongside every schedule digest.
 pub(crate) const ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1: &[u8] = b"zk-x509-fixed-algebraic-v1-incompatible:verifier-derived-only:no-proof-fixed-material:no-artifact:no-merkle:additive-canonical-atoms=affine-range+repeated-affine-stride+sparse:overlap=goldilocks-field-addition:exact-duplicate-atoms-rejected:semantically-equivalent-alternate-decompositions-have-distinct-descriptor-digests:goldilocks-modulus=0xffffffff00000001:native-root-domain:generator-shifted-lde-coset:coset-disjoint-from-lde-subgroup:query-index-derived-point:residue-grouped-barycentric-lagrange:batch-inverted-native-denominators:cyclic-prefix-affine-sums:repeated-sums=generic-gcd-cycles+reduced-stride-modular-inverse+cyclic-weight-and-ordinal-prefixes+per-stride-min-direct-occurrence-work-vs-native-prefix-work:one-column-native-streaming:no-native-times-width-or-lde-table:bounded-native20-lde25-blowup8-width472-atoms65536-queries116-output-fields54752-work2pow28:wire=X5K1+u16be-version1+u16be-header24+native-log2-u8+lde-log2-u8+width-u16be+atom-count-u32be+coset-shift-u64be+canonical-variable-atoms:first-release-no-legacy";
-
 const ZK_X509_FIXED_ALGEBRAIC_MAGIC_V1: [u8; 4] = *b"X5K1";
 const ZK_X509_FIXED_ALGEBRAIC_VERSION_V1: u16 = 1;
 const ZK_X509_FIXED_ALGEBRAIC_HEADER_BYTES_V1: u16 = 24;
@@ -43,7 +38,6 @@ const ZK_X509_FIXED_ALGEBRAIC_AFFINE_BYTES_V1: usize = 35;
 const ZK_X509_FIXED_ALGEBRAIC_REPEATED_BYTES_V1: usize = 43;
 const ZK_X509_FIXED_ALGEBRAIC_SPARSE_BYTES_V1: usize = 19;
 const ZK_X509_FIXED_ALGEBRAIC_BUILDER_GROWTH_V1: usize = 256;
-
 /// Largest native domain accepted by the first-release kernel.
 pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_NATIVE_LOG2_V1: u8 = 20;
 /// Largest extension domain accepted by the first-release kernel.
@@ -60,7 +54,6 @@ pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_QUERIES_V1: usize = 116;
 pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_OUTPUT_FIELDS_V1: usize = 116 * 472;
 /// Deterministic cap on the evaluator's coarse field-operation work score.
 pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_EVALUATION_WORK_V1: u64 = 1_u64 << 28;
-
 /// Fail-closed error from construction, binding, or deterministic evaluation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509FixedAlgebraicErrorV1 {
@@ -102,7 +95,6 @@ pub(crate) enum ZkX509FixedAlgebraicErrorV1 {
     #[error("zk-X509 algebraic fixed internal invariant failed")]
     InternalInvariant,
 }
-
 fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> ZkX509FixedAlgebraicErrorV1 {
     match error {
         TransparentStarkErrorV1::InvalidDomain | TransparentStarkErrorV1::DomainTooLarge => {
@@ -118,11 +110,9 @@ fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> ZkX509FixedAlgebr
         _ => ZkX509FixedAlgebraicErrorV1::InternalInvariant,
     }
 }
-
 fn canonical_field_v1(value: F) -> bool {
     value.value() < GOLDILOCKS_MODULUS_V1
 }
-
 /// Checked native and extension-domain geometry for one fixed schedule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509FixedAlgebraicDomainV1 {
@@ -130,7 +120,6 @@ pub(crate) struct ZkX509FixedAlgebraicDomainV1 {
     lde_log2: u8,
     coset_shift: F,
 }
-
 impl ZkX509FixedAlgebraicDomainV1 {
     /// Construct a release-bounded, subgroup-disjoint evaluation domain.
     pub(crate) fn new_v1(
@@ -175,46 +164,39 @@ impl ZkX509FixedAlgebraicDomainV1 {
             coset_shift,
         })
     }
-
     /// Native-domain base-two logarithm.
     #[cfg(test)]
     pub(crate) const fn native_log2_v1(self) -> u8 {
         self.native_log2
     }
-
     /// Extension-domain base-two logarithm.
     #[cfg(test)]
     pub(crate) const fn lde_log2_v1(self) -> u8 {
         self.lde_log2
     }
-
     /// Canonical multiplicative coset shift.
     #[cfg(test)]
     pub(crate) const fn coset_shift_v1(self) -> F {
         self.coset_shift
     }
-
     /// Exact native-domain size.
     pub(crate) fn native_size_v1(self) -> Result<u64, ZkX509FixedAlgebraicErrorV1> {
         1_u64
             .checked_shl(u32::from(self.native_log2))
             .ok_or(ZkX509FixedAlgebraicErrorV1::IntegerOverflow)
     }
-
     /// Exact extension-domain size.
     pub(crate) fn lde_size_v1(self) -> Result<u64, ZkX509FixedAlgebraicErrorV1> {
         1_u64
             .checked_shl(u32::from(self.lde_log2))
             .ok_or(ZkX509FixedAlgebraicErrorV1::IntegerOverflow)
     }
-
     /// Exact power-of-two LDE blowup.
     pub(crate) fn blowup_v1(self) -> Result<u64, ZkX509FixedAlgebraicErrorV1> {
         1_u64
             .checked_shl(u32::from(self.lde_log2 - self.native_log2))
             .ok_or(ZkX509FixedAlgebraicErrorV1::IntegerOverflow)
     }
-
     /// Map one canonical extension-domain index to its verifier point.
     #[cfg(test)]
     pub(crate) fn query_point_v1(self, query_index: u64) -> Result<F, ZkX509FixedAlgebraicErrorV1> {
@@ -229,7 +211,6 @@ impl ZkX509FixedAlgebraicDomainV1 {
         Ok(point)
     }
 }
-
 /// One additive compact atom in a verifier-owned native fixed schedule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ZkX509FixedAlgebraicAtomV1 {
@@ -272,7 +253,6 @@ pub(crate) enum ZkX509FixedAlgebraicAtomV1 {
         value: F,
     },
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct AtomOrderKeyV1 {
     column: u16,
@@ -283,7 +263,6 @@ struct AtomOrderKeyV1 {
     value_a: u64,
     value_b: u64,
 }
-
 impl ZkX509FixedAlgebraicAtomV1 {
     /// Construct one non-redundant contiguous affine range.
     pub(crate) fn affine_v1(
@@ -310,7 +289,6 @@ impl ZkX509FixedAlgebraicAtomV1 {
             step,
         })
     }
-
     /// Construct a constant contribution at an arithmetic progression of rows.
     pub(crate) fn repeated_v1(
         column: u16,
@@ -321,7 +299,6 @@ impl ZkX509FixedAlgebraicAtomV1 {
     ) -> Result<Self, ZkX509FixedAlgebraicErrorV1> {
         Self::repeated_affine_v1(column, first, count, stride, value, F::ZERO)
     }
-
     /// Construct an affine value sequence at an arithmetic progression of rows.
     pub(crate) fn repeated_affine_v1(
         column: u16,
@@ -354,7 +331,6 @@ impl ZkX509FixedAlgebraicAtomV1 {
             step,
         })
     }
-
     /// Construct one nonzero isolated row contribution.
     pub(crate) fn sparse_v1(
         column: u16,
@@ -369,7 +345,6 @@ impl ZkX509FixedAlgebraicAtomV1 {
         }
         Ok(Self::Sparse { column, row, value })
     }
-
     fn column_v1(self) -> u16 {
         match self {
             Self::Affine { column, .. }
@@ -377,7 +352,6 @@ impl ZkX509FixedAlgebraicAtomV1 {
             | Self::Sparse { column, .. } => column,
         }
     }
-
     fn order_key_v1(self) -> AtomOrderKeyV1 {
         match self {
             Self::Affine {
@@ -422,11 +396,9 @@ impl ZkX509FixedAlgebraicAtomV1 {
             },
         }
     }
-
     fn canonical_cmp_v1(self, other: Self) -> Ordering {
         self.order_key_v1().cmp(&other.order_key_v1())
     }
-
     fn encoded_len_v1(self) -> usize {
         match self {
             Self::Affine { .. } => ZK_X509_FIXED_ALGEBRAIC_AFFINE_BYTES_V1,
@@ -434,7 +406,6 @@ impl ZkX509FixedAlgebraicAtomV1 {
             Self::Sparse { .. } => ZK_X509_FIXED_ALGEBRAIC_SPARSE_BYTES_V1,
         }
     }
-
     fn validate_for_schedule_v1(
         self,
         native_size: u64,
@@ -490,7 +461,6 @@ impl ZkX509FixedAlgebraicAtomV1 {
         }
         Ok(())
     }
-
     #[cfg(test)]
     fn contribution_at_native_row_v1(
         self,
@@ -540,14 +510,12 @@ impl ZkX509FixedAlgebraicAtomV1 {
         }
     }
 }
-
 /// Incremental checked builder for one canonical fixed schedule.
 pub(crate) struct ZkX509FixedAlgebraicScheduleBuilderV1 {
     domain: ZkX509FixedAlgebraicDomainV1,
     width: u16,
     atoms: Vec<ZkX509FixedAlgebraicAtomV1>,
 }
-
 impl ZkX509FixedAlgebraicScheduleBuilderV1 {
     /// Start a release-bounded schedule.
     pub(crate) fn new_v1(
@@ -561,7 +529,6 @@ impl ZkX509FixedAlgebraicScheduleBuilderV1 {
             atoms: Vec::new(),
         })
     }
-
     /// Add one already checked atom.  Ordering is canonicalized by `finish_v1`.
     pub(crate) fn push_atom_v1(
         &mut self,
@@ -582,7 +549,6 @@ impl ZkX509FixedAlgebraicScheduleBuilderV1 {
         self.atoms.push(atom);
         Ok(())
     }
-
     /// Add one contiguous affine range.
     pub(crate) fn push_affine_v1(
         &mut self,
@@ -600,7 +566,6 @@ impl ZkX509FixedAlgebraicScheduleBuilderV1 {
             step,
         )?)
     }
-
     /// Add an affine repeated contribution.
     pub(crate) fn push_repeated_affine_v1(
         &mut self,
@@ -620,7 +585,6 @@ impl ZkX509FixedAlgebraicScheduleBuilderV1 {
             step,
         )?)
     }
-
     /// Add one isolated value.
     pub(crate) fn push_sparse_v1(
         &mut self,
@@ -630,7 +594,6 @@ impl ZkX509FixedAlgebraicScheduleBuilderV1 {
     ) -> Result<(), ZkX509FixedAlgebraicErrorV1> {
         self.push_atom_v1(ZkX509FixedAlgebraicAtomV1::sparse_v1(column, row, value)?)
     }
-
     /// Canonicalize, bind, and close the schedule.
     pub(crate) fn finish_v1(
         self,
@@ -638,14 +601,12 @@ impl ZkX509FixedAlgebraicScheduleBuilderV1 {
         ZkX509FixedAlgebraicScheduleV1::new_v1(self.domain, self.width, self.atoms)
     }
 }
-
 fn validate_width_v1(width: u16) -> Result<(), ZkX509FixedAlgebraicErrorV1> {
     if width == 0 || width > ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1 {
         return Err(ZkX509FixedAlgebraicErrorV1::InvalidWidth);
     }
     Ok(())
 }
-
 /// Closed, immutable, canonically bound verifier-owned fixed schedule.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509FixedAlgebraicScheduleV1 {
@@ -654,7 +615,6 @@ pub(crate) struct ZkX509FixedAlgebraicScheduleV1 {
     atoms: Vec<ZkX509FixedAlgebraicAtomV1>,
     descriptor_digest: [u8; 32],
 }
-
 impl ZkX509FixedAlgebraicScheduleV1 {
     /// Check, canonically order, and bind an additive atom collection.
     pub(crate) fn new_v1(
@@ -695,22 +655,18 @@ impl ZkX509FixedAlgebraicScheduleV1 {
         .map_err(map_transparent_error_v1)?;
         Ok(schedule)
     }
-
     /// Checked domain geometry.
     pub(crate) const fn domain_v1(&self) -> ZkX509FixedAlgebraicDomainV1 {
         self.domain
     }
-
     /// Exact fixed-column width.
     pub(crate) const fn width_v1(&self) -> u16 {
         self.width
     }
-
     /// Canonical atom order committed by the schedule digest.
     pub(crate) fn atoms_v1(&self) -> &[ZkX509FixedAlgebraicAtomV1] {
         &self.atoms
     }
-
     /// Exact canonical big-endian descriptor bytes.
     pub(crate) fn canonical_descriptor_v1(&self) -> Result<Vec<u8>, ZkX509FixedAlgebraicErrorV1> {
         let mut encoded_len = usize::from(ZK_X509_FIXED_ALGEBRAIC_HEADER_BYTES_V1);
@@ -780,12 +736,10 @@ impl ZkX509FixedAlgebraicScheduleV1 {
         }
         Ok(encoded)
     }
-
     /// SHA-256 frame digest of protocol semantics and exact canonical bytes.
     pub(crate) const fn descriptor_digest_v1(&self) -> [u8; 32] {
         self.descriptor_digest
     }
-
     /// Fail closed unless the compiled profile pins this exact schedule.
     #[cfg(test)]
     pub(crate) fn verify_descriptor_digest_v1(
@@ -797,7 +751,6 @@ impl ZkX509FixedAlgebraicScheduleV1 {
         }
         Ok(())
     }
-
     /// Evaluate one native row without constructing a native matrix.
     #[cfg(test)]
     pub(crate) fn native_row_v1(
@@ -820,7 +773,6 @@ impl ZkX509FixedAlgebraicScheduleV1 {
         }
         Ok(())
     }
-
     /// Fill one complete native fixed column for a one-column-at-a-time IFFT.
     ///
     /// The caller owns exactly `native_size` fields.  The method clears that
@@ -911,7 +863,6 @@ impl ZkX509FixedAlgebraicScheduleV1 {
         }
         Ok(())
     }
-
     /// Evaluate every fixed column at sorted, unique verifier LDE indices.
     pub(crate) fn evaluate_query_indices_v1(
         &self,
@@ -949,13 +900,11 @@ impl ZkX509FixedAlgebraicScheduleV1 {
             &repeated_runs,
             native_size,
         )?;
-
         let mut fields = Vec::new();
         fields
             .try_reserve_exact(output_fields)
             .map_err(|_| ZkX509FixedAlgebraicErrorV1::AllocationFailure)?;
         fields.resize(output_fields, F::ZERO);
-
         let mut group_start = 0_usize;
         while group_start < grouped.len() {
             let first = grouped
@@ -1048,7 +997,6 @@ impl ZkX509FixedAlgebraicScheduleV1 {
             }
             group_start = group_end;
         }
-
         let mut indices = Vec::new();
         indices
             .try_reserve_exact(query_indices.len())
@@ -1061,7 +1009,6 @@ impl ZkX509FixedAlgebraicScheduleV1 {
             fields,
         })
     }
-
     fn validate_evaluation_work_v1(
         &self,
         grouped_queries: &[GroupedQueryV1],
@@ -1150,7 +1097,6 @@ impl ZkX509FixedAlgebraicScheduleV1 {
         Ok(())
     }
 }
-
 fn validate_query_indices_v1(
     domain: ZkX509FixedAlgebraicDomainV1,
     query_indices: &[u64],
@@ -1175,21 +1121,18 @@ fn validate_query_indices_v1(
     }
     Ok(())
 }
-
 #[derive(Clone, Copy)]
 struct GroupedQueryV1 {
     remainder: u64,
     shift: u64,
     slot: usize,
 }
-
 #[derive(Clone, Copy)]
 struct RepeatedAtomReferenceV1 {
     stride: u64,
     atom_index: usize,
     count: u64,
 }
-
 #[derive(Clone, Copy)]
 struct RepeatedStrideRunV1 {
     stride: u64,
@@ -1197,7 +1140,6 @@ struct RepeatedStrideRunV1 {
     references_end: usize,
     total_occurrences: u64,
 }
-
 fn repeated_stride_plan_v1(
     atoms: &[ZkX509FixedAlgebraicAtomV1],
 ) -> Result<(Vec<RepeatedAtomReferenceV1>, Vec<RepeatedStrideRunV1>), ZkX509FixedAlgebraicErrorV1> {
@@ -1219,7 +1161,6 @@ fn repeated_stride_plan_v1(
         }
     }
     references.sort_unstable_by_key(|reference| (reference.stride, reference.atom_index));
-
     let mut runs = Vec::new();
     runs.try_reserve_exact(references.len())
         .map_err(|_| ZkX509FixedAlgebraicErrorV1::AllocationFailure)?;
@@ -1257,7 +1198,6 @@ fn repeated_stride_plan_v1(
     }
     Ok((references, runs))
 }
-
 fn repeated_stride_uses_table_v1(
     run: RepeatedStrideRunV1,
     query_count: usize,
@@ -1284,14 +1224,12 @@ fn repeated_stride_uses_table_v1(
         .ok_or(ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?;
     Ok(table < direct)
 }
-
 struct LagrangeTableV1 {
     native_size: usize,
     weights: Vec<F>,
     prefix: Vec<F>,
     linear_prefix: Vec<F>,
 }
-
 impl LagrangeTableV1 {
     fn new_v1(
         domain: ZkX509FixedAlgebraicDomainV1,
@@ -1320,7 +1258,6 @@ impl LagrangeTableV1 {
             .inv()
             .ok_or(ZkX509FixedAlgebraicErrorV1::DivisionByZero)?;
         let common = numerator.mul(inverse_size);
-
         let mut weights = Vec::new();
         weights
             .try_reserve_exact(native_size)
@@ -1344,7 +1281,6 @@ impl LagrangeTableV1 {
         if native_point != F::ONE || weight_sum != F::ONE {
             return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
         }
-
         let prefix_len = native_size
             .checked_add(1)
             .ok_or(ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?;
@@ -1384,7 +1320,6 @@ impl LagrangeTableV1 {
             linear_prefix,
         })
     }
-
     fn shifted_weight_v1(
         &self,
         row: usize,
@@ -1403,7 +1338,6 @@ impl LagrangeTableV1 {
             .copied()
             .ok_or(ZkX509FixedAlgebraicErrorV1::InternalInvariant)
     }
-
     fn affine_prefix_sum_v1(
         &self,
         start: usize,
@@ -1444,7 +1378,6 @@ impl LagrangeTableV1 {
             .mul(weight_sum)
             .add(step.mul(relative_linear_sum)))
     }
-
     fn shifted_affine_sum_v1(
         &self,
         start: u64,
@@ -1509,7 +1442,6 @@ impl LagrangeTableV1 {
         }
         Ok(result)
     }
-
     fn non_repeated_atom_sum_v1(
         &self,
         atom: ZkX509FixedAlgebraicAtomV1,
@@ -1533,7 +1465,6 @@ impl LagrangeTableV1 {
             }
         }
     }
-
     fn repeated_atom_sum_naive_v1(
         &self,
         atom: ZkX509FixedAlgebraicAtomV1,
@@ -1564,7 +1495,6 @@ impl LagrangeTableV1 {
         Ok(result)
     }
 }
-
 fn gcd_usize_v1(mut left: usize, mut right: usize) -> usize {
     while right != 0 {
         let remainder = left % right;
@@ -1573,7 +1503,6 @@ fn gcd_usize_v1(mut left: usize, mut right: usize) -> usize {
     }
     left
 }
-
 fn multiply_mod_usize_v1(
     left: usize,
     right: usize,
@@ -1591,7 +1520,6 @@ fn multiply_mod_usize_v1(
         % u128::try_from(modulus).map_err(|_| ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?;
     usize::try_from(reduced).map_err(|_| ZkX509FixedAlgebraicErrorV1::IntegerOverflow)
 }
-
 fn modular_inverse_power_of_two_v1(
     value: usize,
     modulus: usize,
@@ -1618,7 +1546,6 @@ fn modular_inverse_power_of_two_v1(
     }
     Ok(inverse)
 }
-
 /// Prefix sums over every additive cycle generated by one native row stride.
 ///
 /// For `g = gcd(stride, N)`, the stride partitions the native row indices into
@@ -1634,7 +1561,6 @@ struct CyclicStrideTableV1 {
     prefix: Vec<F>,
     ordinal_prefix: Vec<F>,
 }
-
 impl CyclicStrideTableV1 {
     fn new_v1(weights: &[F], stride: u64) -> Result<Self, ZkX509FixedAlgebraicErrorV1> {
         let native_size = weights.len();
@@ -1725,7 +1651,6 @@ impl CyclicStrideTableV1 {
             ordinal_prefix,
         })
     }
-
     fn cycle_segment_v1(
         &self,
         cycle: usize,
@@ -1770,7 +1695,6 @@ impl CyclicStrideTableV1 {
             .ok_or(ZkX509FixedAlgebraicErrorV1::InternalInvariant)?;
         Ok((weight_end.sub(weight_start), ordinal_end.sub(ordinal_start)))
     }
-
     fn repeated_affine_sum_v1(
         &self,
         first: u64,
@@ -1846,7 +1770,6 @@ impl CyclicStrideTableV1 {
         }
         Ok(start_value.mul(weight_sum).add(step.mul(relative_sum)))
     }
-
     fn repeated_atom_sum_v1(
         &self,
         atom: ZkX509FixedAlgebraicAtomV1,
@@ -1866,7 +1789,6 @@ impl CyclicStrideTableV1 {
         self.repeated_affine_sum_v1(first, count, stride, start_value, step, shift)
     }
 }
-
 /// Canonical row-major verifier-derived fixed openings.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509FixedAlgebraicOpeningsV1 {
@@ -1875,7 +1797,6 @@ pub(crate) struct ZkX509FixedAlgebraicOpeningsV1 {
     width: u16,
     fields: Vec<F>,
 }
-
 impl ZkX509FixedAlgebraicOpeningsV1 {
     /// Concatenate independently capped child schedules in fixed column order.
     ///
@@ -1959,32 +1880,26 @@ impl ZkX509FixedAlgebraicOpeningsV1 {
             fields,
         })
     }
-
     /// Schedule binding shared by every returned row.
     pub(crate) const fn schedule_digest_v1(&self) -> [u8; 32] {
         self.schedule_digest
     }
-
     /// Canonical sorted verifier query indices.
     pub(crate) fn query_indices_v1(&self) -> &[u64] {
         &self.query_indices
     }
-
     /// Exact fixed row width.
     pub(crate) const fn width_v1(&self) -> u16 {
         self.width
     }
-
     /// Number of verifier-derived rows.
     pub(crate) fn len_v1(&self) -> usize {
         self.query_indices.len()
     }
-
     /// Whether the checked opening set is empty.  Valid instances are not.
     pub(crate) fn is_empty_v1(&self) -> bool {
         self.query_indices.is_empty()
     }
-
     /// Borrow one row by canonical slot.
     pub(crate) fn row_v1(&self, slot: usize) -> Result<&[F], ZkX509FixedAlgebraicErrorV1> {
         if slot >= self.query_indices.len() {
@@ -2001,7 +1916,6 @@ impl ZkX509FixedAlgebraicOpeningsV1 {
             .get(start..end)
             .ok_or(ZkX509FixedAlgebraicErrorV1::InternalInvariant)
     }
-
     /// Borrow the row for one exact verifier query index.
     pub(crate) fn row_for_query_v1(
         &self,
@@ -2013,25 +1927,21 @@ impl ZkX509FixedAlgebraicOpeningsV1 {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::privacy_engines::transparent_stark::{
         GOLDILOCKS_GENERATOR_V1, goldilocks_evaluate_coset_v1, goldilocks_ifft_v1,
     };
-
     fn release_shift_v1() -> F {
         F(GOLDILOCKS_GENERATOR_V1)
     }
-
     fn domain_v1(
         native_log2: u8,
         lde_log2: u8,
     ) -> Result<ZkX509FixedAlgebraicDomainV1, ZkX509FixedAlgebraicErrorV1> {
         ZkX509FixedAlgebraicDomainV1::new_v1(native_log2, lde_log2, release_shift_v1())
     }
-
     fn kat_schedule_v1() -> ZkX509FixedAlgebraicScheduleV1 {
         let domain = domain_v1(3, 5).expect("KAT domain");
         ZkX509FixedAlgebraicScheduleV1::new_v1(
@@ -2047,7 +1957,6 @@ mod tests {
         )
         .expect("KAT schedule")
     }
-
     fn mixed_schedule_v1(
         seed: u64,
     ) -> Result<ZkX509FixedAlgebraicScheduleV1, ZkX509FixedAlgebraicErrorV1> {
@@ -2067,7 +1976,6 @@ mod tests {
         builder.push_sparse_v1(3, seed % 16, F(23 + seed))?;
         builder.finish_v1()
     }
-
     fn materialized_fft_lde_v1(schedule: &ZkX509FixedAlgebraicScheduleV1) -> Vec<Vec<F>> {
         let domain = schedule.domain_v1();
         let native_size =
@@ -2100,7 +2008,6 @@ mod tests {
         }
         lde_columns
     }
-
     fn assert_matches_fft_v1(schedule: &ZkX509FixedAlgebraicScheduleV1, query_indices: &[u64]) {
         let materialized = materialized_fft_lde_v1(schedule);
         let openings = schedule
@@ -2119,7 +2026,6 @@ mod tests {
             }
         }
     }
-
     fn naive_repeated_affine_sum_v1(
         table: &LagrangeTableV1,
         first: usize,
@@ -2144,7 +2050,6 @@ mod tests {
         }
         result
     }
-
     fn grouped_queries_v1(
         domain: ZkX509FixedAlgebraicDomainV1,
         query_indices: &[u64],
@@ -2163,7 +2068,6 @@ mod tests {
         grouped.sort_unstable_by_key(|query| (query.remainder, query.shift, query.slot));
         grouped
     }
-
     #[test]
     fn domain_constructor_rejects_every_invalid_boundary_v1() {
         assert_eq!(
@@ -2203,7 +2107,6 @@ mod tests {
             ZkX509FixedAlgebraicDomainV1::new_v1(4, 6, lde_root),
             Err(ZkX509FixedAlgebraicErrorV1::InvalidDomain)
         );
-
         let maximum = domain_v1(
             ZK_X509_FIXED_ALGEBRAIC_MAX_NATIVE_LOG2_V1,
             ZK_X509_FIXED_ALGEBRAIC_MAX_LDE_LOG2_V1,
@@ -2213,7 +2116,6 @@ mod tests {
         assert_eq!(maximum.lde_size_v1(), Ok(1_u64 << 25));
         assert_eq!(maximum.blowup_v1(), Ok(1_u64 << 5));
     }
-
     #[test]
     fn query_points_are_exact_coset_points_and_never_native_v1() {
         let domain = domain_v1(4, 6).expect("domain");
@@ -2230,7 +2132,6 @@ mod tests {
             Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)
         );
     }
-
     #[test]
     fn atom_constructors_reject_zero_aliases_overflow_and_noncanonical_fields_v1() {
         assert_eq!(
@@ -2274,7 +2175,6 @@ mod tests {
             Err(ZkX509FixedAlgebraicErrorV1::NonCanonicalField)
         );
     }
-
     #[test]
     fn schedule_revalidates_public_atom_variants_fail_closed_v1() {
         let domain = domain_v1(3, 5).expect("domain");
@@ -2343,7 +2243,6 @@ mod tests {
             Err(ZkX509FixedAlgebraicErrorV1::LimitExceeded)
         );
     }
-
     #[test]
     fn builder_growth_is_chunked_and_stays_below_the_atom_cap_v1() {
         let domain = domain_v1(10, 12).expect("domain");
@@ -2360,7 +2259,6 @@ mod tests {
         assert!(builder.atoms.capacity() <= 512);
         assert!(builder.atoms.capacity() <= ZK_X509_FIXED_ALGEBRAIC_MAX_ATOMS_V1);
     }
-
     #[test]
     fn canonical_descriptor_and_digest_have_exact_kat_v1() {
         let schedule = kat_schedule_v1();
@@ -2407,7 +2305,6 @@ mod tests {
             Err(ZkX509FixedAlgebraicErrorV1::DescriptorMismatch)
         );
     }
-
     #[test]
     fn insertion_order_is_canonical_but_alternate_decomposition_is_bound_v1() {
         let schedule = kat_schedule_v1();
@@ -2427,7 +2324,6 @@ mod tests {
             reordered.descriptor_digest_v1(),
             schedule.descriptor_digest_v1()
         );
-
         let domain = domain_v1(3, 5).expect("domain");
         let affine = ZkX509FixedAlgebraicScheduleV1::new_v1(
             domain,
@@ -2457,7 +2353,6 @@ mod tests {
             "the profile pins the compiler representation, not only its values"
         );
     }
-
     #[test]
     fn native_rows_apply_exact_additive_overlap_semantics_v1() {
         let schedule = mixed_schedule_v1(0).expect("mixed schedule");
@@ -2477,7 +2372,6 @@ mod tests {
             Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)
         );
     }
-
     #[test]
     fn native_column_stream_matches_native_rows_for_every_column_v1() {
         let schedule = mixed_schedule_v1(7).expect("mixed schedule");
@@ -2506,7 +2400,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn native_column_stream_accepts_boundary_columns_and_fails_closed_v1() {
         let domain = domain_v1(7, 9).expect("boundary domain");
@@ -2538,7 +2431,6 @@ mod tests {
         assert_eq!(last[97], F(26));
         assert_eq!(last[127], F(11));
         assert!(first.iter().chain(&last).copied().all(canonical_field_v1));
-
         let mut unchanged = vec![F(99); 128];
         assert_eq!(
             schedule.fill_native_column_v1(472, &mut unchanged),
@@ -2550,7 +2442,6 @@ mod tests {
             Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)
         );
     }
-
     #[test]
     fn generic_stride_tables_match_naive_sums_for_all_gcd_cycles_v1() {
         let domain = domain_v1(6, 8).expect("stride-test domain");
@@ -2625,7 +2516,6 @@ mod tests {
         assert!(saw_wrap, "at least one shifted cycle must wrap");
         assert!(saw_non_wrap, "at least one shifted cycle must not wrap");
     }
-
     #[test]
     fn generic_stride_table_rejects_malformed_shapes_v1() {
         let domain = domain_v1(6, 8).expect("stride-test domain");
@@ -2633,7 +2523,6 @@ mod tests {
         assert!(CyclicStrideTableV1::new_v1(&lagrange.weights, 0).is_err());
         assert!(CyclicStrideTableV1::new_v1(&lagrange.weights, 64).is_err());
         assert!(CyclicStrideTableV1::new_v1(&lagrange.weights[..63], 3).is_err());
-
         let cyclic =
             CyclicStrideTableV1::new_v1(&lagrange.weights, 24).expect("generic stride table");
         for malformed in [
@@ -2650,7 +2539,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn repeated_stride_cost_choice_uses_direct_on_exact_ties_v1() {
         let tied = RepeatedStrideRunV1 {
@@ -2684,7 +2572,6 @@ mod tests {
             Ok(false)
         );
     }
-
     #[test]
     fn mixed_atoms_match_independent_ifft_and_coset_fft_across_groups_v1() {
         let schedule = mixed_schedule_v1(0).expect("mixed schedule");
@@ -2693,7 +2580,6 @@ mod tests {
         let queries = [0, 1, 2, 3, 4, 7, 8, 13, 19, 31, 47, 63];
         assert_matches_fft_v1(&schedule, &queries);
     }
-
     #[test]
     fn hybrid_repeated_table_and_direct_paths_match_independent_fft_v1() {
         let domain = domain_v1(6, 8).expect("hybrid domain");
@@ -2721,7 +2607,6 @@ mod tests {
         let queries: Vec<u64> = (0..116).collect();
         assert_matches_fft_v1(&schedule, &queries);
     }
-
     #[test]
     fn deterministic_property_schedules_match_independent_fft_v1() {
         let queries = [0, 1, 3, 4, 9, 16, 27, 42, 55, 63];
@@ -2730,7 +2615,6 @@ mod tests {
             assert_matches_fft_v1(&schedule, &queries);
         }
     }
-
     #[test]
     fn constant_full_domain_atom_opens_to_the_same_constant_v1() {
         let domain = domain_v1(4, 6).expect("domain");
@@ -2751,7 +2635,6 @@ mod tests {
             assert_eq!(openings.row_v1(slot).expect("row"), &[F(91)]);
         }
     }
-
     #[test]
     fn query_shape_and_opening_accessors_fail_closed_v1() {
         let schedule = kat_schedule_v1();
@@ -2785,7 +2668,6 @@ mod tests {
             Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)
         );
     }
-
     #[test]
     fn composite_opening_concatenation_is_row_major_and_fail_closed_v1() {
         let left = ZkX509FixedAlgebraicOpeningsV1 {
@@ -2811,7 +2693,6 @@ mod tests {
         assert_eq!(combined.width_v1(), 3);
         assert_eq!(combined.row_v1(0), Ok(&[F(11), F(12), F(13)][..]));
         assert_eq!(combined.row_v1(1), Ok(&[F(21), F(22), F(23)][..]));
-
         assert_eq!(
             ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(composite_digest, &[]),
             Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)
@@ -2823,7 +2704,6 @@ mod tests {
             ),
             Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)
         );
-
         let mut mismatched_queries = right.clone();
         mismatched_queries.query_indices[1] = 10;
         assert_eq!(
@@ -2844,7 +2724,6 @@ mod tests {
             ),
             Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)
         );
-
         let mut malformed_fields = right.clone();
         malformed_fields.fields.pop();
         assert_eq!(
@@ -2881,7 +2760,6 @@ mod tests {
             ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(composite_digest, &over_profile_width,),
             Err(ZkX509FixedAlgebraicErrorV1::InvalidWidth)
         );
-
         let maximum_width_part = ZkX509FixedAlgebraicOpeningsV1 {
             schedule_digest: [5_u8; 32],
             query_indices: vec![0],
@@ -2896,7 +2774,6 @@ mod tests {
             Err(ZkX509FixedAlgebraicErrorV1::IntegerOverflow)
         );
     }
-
     #[test]
     fn exact_release_116_by_472_result_boundary_is_accepted_v1() {
         assert_eq!(ZK_X509_FIXED_ALGEBRAIC_MAX_OUTPUT_FIELDS_V1, 54_752);
@@ -2929,7 +2806,6 @@ mod tests {
             Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)
         );
     }
-
     #[test]
     fn release_p256_shaped_schedule_accepts_and_evaluates_116_queries_v1() {
         let domain = domain_v1(19, 25).expect("P-256-shaped domain");
@@ -2963,7 +2839,6 @@ mod tests {
                 domain.native_size_v1().expect("native size"),
             )
             .expect("full spread work must fit the release cap");
-
         // Keep the release-shape evaluator test practical while still opening
         // all 116 verifier rows: one remainder group exercises the same dense
         // stride table against every native-root shift.
@@ -2986,7 +2861,6 @@ mod tests {
             "the nonzero fixed schedule must not collapse to all-zero openings"
         );
     }
-
     #[test]
     fn adversarial_distinct_stride_work_is_rejected_before_evaluation_v1() {
         let domain = domain_v1(20, 21).expect("large native domain");

@@ -1,9 +1,7 @@
 // SoraFS discovery advert-key mismatch regression.
-
 #[test]
 fn disk_fixtures_detect_advert_key_mismatch() {
     let fixtures = [("advert_v1.to", "envelope_v1.to")];
-
     for (advert_path, envelope_path) in fixtures {
         let fixture = fixture_from_disk(advert_path, envelope_path);
         let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
@@ -14,7 +12,6 @@ fn disk_fixtures_detect_advert_key_mismatch() {
             ],
             registry,
         );
-
         let now = fixture
             .advert
             .issued_at

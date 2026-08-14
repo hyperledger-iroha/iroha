@@ -100,7 +100,6 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         ),
         Err("READY execution input is not durably readable")
     ));
-
     let (locked_round, locked_subject) = global_lock_for_block(&adapter, &block);
     assert_eq!(
         adapter.mark_global_body_locked(locked_round, locked_subject),
@@ -189,7 +188,6 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
             .is_none(),
         "an authorized in-memory READY body cannot replay without a fresh durable capability"
     );
-
     let validator_set_pops = proposal
         .descriptor
         .validator_set
@@ -207,7 +205,6 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         .iter()
         .find(|key| key.public_key() == adapter.local_peer.public_key())
         .expect("local READY key");
-
     let authorization = adapter
         .kura
         .mint_lane_ready_authorization(
@@ -232,7 +229,6 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         ),
         Err(LaneAutonomousArtifactError::AvailabilityAuthorizationMismatch)
     );
-
     let authorization = adapter
         .kura
         .mint_lane_ready_authorization(
@@ -257,7 +253,6 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         ),
         Err(LaneAutonomousArtifactError::AvailabilityAuthorizationMismatch)
     );
-
     let wrong_signer_key = keys
         .iter()
         .find(|key| key.public_key() != adapter.local_peer.public_key())
@@ -285,7 +280,6 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         ),
         Err(LaneAutonomousArtifactError::AvailabilityAuthorizationMismatch)
     );
-
     let authorization = adapter
         .kura
         .mint_lane_ready_authorization(
@@ -311,7 +305,6 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         ),
         Err(LaneAutonomousArtifactError::AvailabilityAuthorizationMismatch)
     );
-
     let recovered_authorization = adapter
         .kura
         .mint_lane_ready_authorization(
@@ -334,7 +327,6 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
     .expect("recovered exact authority signs the same READY body");
     assert_eq!(recovered_vote.body, availability_body);
     assert_eq!(recovered_vote.signer, adapter.local_peer);
-
     let mut payload_drift = payload.clone();
     payload_drift.payload_hash = Hash::new(b"drifted-ready-payload");
     assert!(
@@ -385,7 +377,6 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         retransmitted_payload_peers.is_empty(),
         "a receiving durable holder must not impersonate the producer during payload retransmission"
     );
-
     let remote_keys = keys
         .iter()
         .filter(|key| key.public_key() != adapter.local_peer.public_key())
@@ -421,7 +412,6 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
             .is_some_and(|artifact| artifact.availability_certificate.is_none()),
         "quorum formation alone is not a durability boundary"
     );
-
     adapter.drive_lane_sessions();
     let session = adapter
         .lane_sessions
@@ -448,7 +438,6 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
             certificate: prepare_qc,
         })
     );
-
     // Materialize the exact certified source consumed by canonical merge
     // construction without advancing the live adapter's Commit session.
     // The terminal receipt helper must carry a production-valid
@@ -489,7 +478,6 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         .kura
         .persist_committed_lane_block_session(&certified_session, &certified_pops)
         .expect("persist terminal receipt certified merge source");
-
     let terminal_receipt =
         crate::kura::tests::persist_merge_application_receipt_for_autonomous_payload_for_test(
             adapter.kura.as_ref(),
@@ -530,10 +518,8 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
     )
     .expect("derive exact terminal NewView body");
     assert!(
-        !adapter.autonomous_new_view_transition_is_current(
-            &terminal_new_view_body,
-            locked_round.view,
-        ),
+        !adapter
+            .autonomous_new_view_transition_is_current(&terminal_new_view_body, locked_round.view,),
         "an exact receipt must close the central NewView transition predicate"
     );
     let terminal_new_view_vote = crate::lane_consensus::LaneBlockNewViewVoteV1::new_signed(
@@ -656,7 +642,6 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         }),
         "terminal sessions must not produce READY, Prepare, QC, or payload rebroadcast effects"
     );
-
     let mut pending_payload = payload.clone();
     pending_payload.origin_proposal.payload_block_hint = None;
     adapter

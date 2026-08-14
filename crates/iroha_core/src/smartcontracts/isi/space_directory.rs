@@ -1,5 +1,4 @@
 //! Space Directory manifest publication flow.
-
 use iroha_data_model::{
     account::AccountId,
     events::data::space_directory::{
@@ -19,10 +18,8 @@ use iroha_executor_data_model::permission::nexus::{
     CanPublishSpaceDirectoryManifest, CanPublishSpaceDirectoryManifestForAccountDomain,
     CanPublishSpaceDirectoryManifestForUaid,
 };
-
 use super::*;
 use crate::{nexus::space_directory::SpaceDirectoryManifestRecord, state::StateTransaction};
-
 impl Execute for PublishSpaceDirectoryManifest {
     fn execute(
         self,
@@ -37,7 +34,6 @@ impl Execute for PublishSpaceDirectoryManifest {
                 "not permitted: CanPublishSpaceDirectoryManifest".into(),
             ));
         }
-
         let uaid = manifest.uaid;
         let activation_epoch = manifest.activation_epoch;
         let expiry_epoch = manifest.expiry_epoch;
@@ -67,7 +63,6 @@ impl Execute for PublishSpaceDirectoryManifest {
         Ok(())
     }
 }
-
 impl Execute for ExpireSpaceDirectoryManifest {
     fn execute(
         self,
@@ -81,7 +76,6 @@ impl Execute for ExpireSpaceDirectoryManifest {
                 "not permitted: CanPublishSpaceDirectoryManifest".into(),
             ));
         }
-
         let uaid = self.uaid;
         state_transaction
             .world
@@ -93,11 +87,9 @@ impl Execute for ExpireSpaceDirectoryManifest {
                 state_transaction.axt_current_slot(),
             )?;
         state_transaction.refresh_axt_policies_from_directory();
-
         Ok(())
     }
 }
-
 impl Execute for RevokeSpaceDirectoryManifest {
     fn execute(
         self,
@@ -111,7 +103,6 @@ impl Execute for RevokeSpaceDirectoryManifest {
                 "not permitted: CanPublishSpaceDirectoryManifest".into(),
             ));
         }
-
         let uaid = self.uaid;
         let mut set = state_transaction
             .world
@@ -128,7 +119,6 @@ impl Execute for RevokeSpaceDirectoryManifest {
                 "Space Directory manifest does not exist for dataspace".into(),
             )
         })?;
-
         record
             .lifecycle
             .mark_revoked(self.revoked_epoch, self.reason.clone());
@@ -140,7 +130,6 @@ impl Execute for RevokeSpaceDirectoryManifest {
             .insert(uaid, set);
         state_transaction.rebuild_space_directory_bindings(uaid);
         state_transaction.refresh_axt_policies_from_directory();
-
         state_transaction
             .world
             .emit_events(Some(SpaceDirectoryEvent::ManifestRevoked(
@@ -158,11 +147,9 @@ impl Execute for RevokeSpaceDirectoryManifest {
                 .telemetry
                 .record_space_directory_revision(dataspace);
         }
-
         Ok(())
     }
 }
-
 fn upsert_manifest(
     state_transaction: &mut StateTransaction<'_, '_>,
     uaid: UniversalAccountId,
@@ -180,7 +167,6 @@ fn upsert_manifest(
         .space_directory_manifests
         .insert(uaid, set);
 }
-
 fn ensure_known_dataspace(
     state_transaction: &StateTransaction<'_, '_>,
     dataspace: DataSpaceId,
@@ -194,7 +180,6 @@ fn ensure_known_dataspace(
     {
         return Ok(());
     }
-
     Err(
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(format!(
             "unknown dataspace id {}",
@@ -203,7 +188,6 @@ fn ensure_known_dataspace(
         .into(),
     )
 }
-
 fn has_publish_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -222,7 +206,6 @@ fn has_publish_permission(
     ) {
         return true;
     }
-
     let role_ids: Vec<_> = state_transaction
         .world
         .account_roles_iter(authority)
@@ -244,11 +227,9 @@ fn has_publish_permission(
     }
     false
 }
-
 const MANIFEST_PERMISSION: &str = "CanPublishSpaceDirectoryManifest";
 const UAID_MANIFEST_PERMISSION: &str = "CanPublishSpaceDirectoryManifestForUaid";
 const ACCOUNT_DOMAIN_MANIFEST_PERMISSION: &str = "CanPublishSpaceDirectoryManifestForAccountDomain";
-
 fn has_permission_in_source(
     permissions: Option<&Permissions>,
     dataspace: DataSpaceId,
@@ -256,7 +237,6 @@ fn has_permission_in_source(
 ) -> bool {
     permissions.is_some_and(|perms| permissions_allow_manifest(perms, dataspace, uaid))
 }
-
 fn has_account_domain_permission_in_source(
     permissions: Option<&Permissions>,
     state_transaction: &StateTransaction<'_, '_>,
@@ -267,7 +247,6 @@ fn has_account_domain_permission_in_source(
         permissions_allow_account_domain_manifest(perms, state_transaction, dataspace, uaid)
     })
 }
-
 #[allow(single_use_lifetimes)]
 fn permissions_allow_manifest<'a>(
     permissions: impl IntoIterator<Item = &'a Permission>,
@@ -288,7 +267,6 @@ fn permissions_allow_manifest<'a>(
             _ => false,
         })
 }
-
 #[allow(single_use_lifetimes)]
 fn permissions_allow_account_domain_manifest<'a>(
     permissions: impl IntoIterator<Item = &'a Permission>,
@@ -314,7 +292,6 @@ fn permissions_allow_account_domain_manifest<'a>(
             })
     })
 }
-
 fn uaid_is_bound_to_account_domain(
     state_transaction: &StateTransaction<'_, '_>,
     uaid: UniversalAccountId,
@@ -331,7 +308,6 @@ fn uaid_is_bound_to_account_domain(
     else {
         return false;
     };
-
     let mut matched_domain = false;
     let mut retail_fi_home = None;
     for alias in aliases {
@@ -366,14 +342,11 @@ fn uaid_is_bound_to_account_domain(
         }
         matched_domain |= &alias_domain == domain;
     }
-
     matched_domain
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::isi::error::InvalidParameterError;
     use iroha_data_model::{
@@ -391,32 +364,26 @@ mod tests {
     };
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{
         nexus::space_directory::SpaceDirectoryManifestSet,
         state::{State, World},
     };
-
     fn test_state() -> State {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         State::new_for_testing(World::default(), kura, query)
     }
-
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("Space Directory fixture key generation should succeed")
     }
-
     fn checked_account_id() -> AccountId {
         AccountId::new(checked_keypair().public_key().clone())
     }
-
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
-
     fn grant_manifest_permission(world: &mut World, authority: &AccountId, dataspace: DataSpaceId) {
         let mut permissions = Permissions::new();
         permissions.insert(Permission::from(CanPublishSpaceDirectoryManifest {
@@ -426,7 +393,6 @@ mod tests {
             .account_permissions
             .insert(authority.clone(), permissions);
     }
-
     fn grant_uaid_manifest_permission(
         world: &mut World,
         authority: &AccountId,
@@ -442,7 +408,6 @@ mod tests {
             .account_permissions
             .insert(authority.clone(), permissions);
     }
-
     fn grant_account_domain_manifest_permission(
         world: &mut World,
         authority: &AccountId,
@@ -457,7 +422,6 @@ mod tests {
             .account_permissions
             .insert(authority.clone(), permissions);
     }
-
     fn seed_account_alias_lease(
         transaction: &mut StateTransaction<'_, '_>,
         alias: &iroha_data_model::account::rekey::AccountAlias,
@@ -484,7 +448,6 @@ mod tests {
             norito::codec::Encode::encode(&record),
         );
     }
-
     #[test]
     fn permissions_allow_manifest_rejects_unscoped_null_payload() {
         let mut permissions = Permissions::new();
@@ -493,14 +456,12 @@ mod tests {
             iroha_primitives::json::Json::from_raw_json("null".to_string())
                 .expect("valid null JSON fixture"),
         ));
-
         assert!(!permissions_allow_manifest(
             &permissions,
             DataSpaceId::new(10),
             UniversalAccountId::from_hash(Hash::new(b"uaid::null-permission")),
         ));
     }
-
     #[test]
     fn uaid_scoped_manifest_permission_rejects_cross_registrar_publish_revoke_and_expire() {
         let mut state = test_state();
@@ -512,17 +473,14 @@ mod tests {
         seed_dataspace_catalog_with_alias(&mut state, dataspace, "sbp");
         grant_uaid_manifest_permission(&mut state.world, &hbl_registrar, dataspace, hbl_uaid);
         grant_uaid_manifest_permission(&mut state.world, &ubl_registrar, dataspace, ubl_uaid);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         PublishSpaceDirectoryManifest {
             manifest: sample_manifest(ubl_uaid, dataspace, 1),
         }
         .execute(&ubl_registrar, &mut tx)
         .expect("UBL registrar publishes its exact customer manifest");
-
         let publish_err = PublishSpaceDirectoryManifest {
             manifest: sample_manifest(ubl_uaid, dataspace, 2),
         }
@@ -534,7 +492,6 @@ mod tests {
                 .contains("CanPublishSpaceDirectoryManifest"),
             "cross-FI publish rejection must identify the missing scoped permission: {publish_err}"
         );
-
         RevokeSpaceDirectoryManifest {
             uaid: ubl_uaid,
             dataspace,
@@ -543,7 +500,6 @@ mod tests {
         }
         .execute(&hbl_registrar, &mut tx)
         .expect_err("HBL registrar must not revoke a UBL customer manifest");
-
         ExpireSpaceDirectoryManifest {
             uaid: ubl_uaid,
             dataspace,
@@ -551,14 +507,12 @@ mod tests {
         }
         .execute(&hbl_registrar, &mut tx)
         .expect_err("HBL registrar must not expire a UBL customer manifest");
-
         PublishSpaceDirectoryManifest {
             manifest: sample_manifest(hbl_uaid, dataspace, 3),
         }
         .execute(&hbl_registrar, &mut tx)
         .expect("HBL registrar keeps access to its exact customer manifest");
     }
-
     #[test]
     fn account_domain_manifest_permission_rejects_cross_fi_customer_management() {
         let mut state = test_state();
@@ -586,7 +540,6 @@ mod tests {
             dataspace,
             ubl_domain,
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -634,7 +587,6 @@ mod tests {
         );
         seed_account_alias_lease(&mut tx, &hbl_alias, &hbl_customer);
         seed_account_alias_lease(&mut tx, &ubl_alias, &ubl_customer);
-
         PublishSpaceDirectoryManifest {
             manifest: sample_manifest(ubl_uaid, dataspace, 1),
         }
@@ -666,7 +618,6 @@ mod tests {
         .execute(&hbl_registrar, &mut tx)
         .expect("HBL registrar keeps access to its own domain customer manifest");
     }
-
     #[test]
     fn account_domain_manifest_permission_fails_closed_for_dual_fi_alias_state() {
         let mut state = test_state();
@@ -692,7 +643,6 @@ mod tests {
             dataspace,
             ubl_domain,
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -713,13 +663,11 @@ mod tests {
             .insert_account_alias_binding(hbl_alias, customer.clone());
         tx.world
             .insert_account_alias_binding(ubl_alias, customer.clone());
-
         let mut set = SpaceDirectoryManifestSet::default();
         let mut existing = SpaceDirectoryManifestRecord::new(sample_manifest(uaid, dataspace, 1));
         existing.lifecycle.mark_activated(5);
         set.upsert(existing);
         tx.world.space_directory_manifests.insert(uaid, set);
-
         for registrar in [&hbl_registrar, &ubl_registrar] {
             PublishSpaceDirectoryManifest {
                 manifest: sample_manifest(uaid, dataspace, 2),
@@ -742,7 +690,6 @@ mod tests {
             .execute(registrar, &mut tx)
             .expect_err("neither FI may expire for an adversarial dual-home account");
         }
-
         let record = tx
             .world
             .space_directory_manifests
@@ -753,7 +700,6 @@ mod tests {
         assert!(record.lifecycle.revocation.is_none());
         assert!(record.lifecycle.expired_epoch.is_none());
     }
-
     fn sample_manifest(
         uaid: UniversalAccountId,
         dataspace: DataSpaceId,
@@ -769,7 +715,6 @@ mod tests {
             entries: Vec::new(),
         }
     }
-
     fn seed_domain(state: &mut State, id: &DomainId, owner: &AccountId) {
         let domain = Domain {
             id: id.clone(),
@@ -779,7 +724,6 @@ mod tests {
         };
         state.world.domains.insert(id.clone(), domain);
     }
-
     fn seed_dataspace_catalog(state: &mut State, dataspace: DataSpaceId) {
         seed_dataspace_catalog_with_alias(
             state,
@@ -787,7 +731,6 @@ mod tests {
             &format!("dataspace_{}", dataspace.as_u64()),
         );
     }
-
     fn seed_dataspace_catalog_with_alias(state: &mut State, dataspace: DataSpaceId, alias: &str) {
         let mut entries = state.nexus.read().dataspace_catalog.entries().to_vec();
         if entries.iter().all(|entry| entry.id != dataspace) {
@@ -801,7 +744,6 @@ mod tests {
         state.nexus.write().dataspace_catalog =
             DataSpaceCatalog::new(entries).expect("dataspace catalog");
     }
-
     #[test]
     fn publish_manifest_requires_permission() {
         let mut state = test_state();
@@ -810,11 +752,9 @@ mod tests {
         let dataspace = DataSpaceId::new(11);
         seed_dataspace_catalog(&mut state, dataspace);
         let manifest = sample_manifest(uaid, dataspace, 1);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let err = PublishSpaceDirectoryManifest { manifest }
             .execute(&authority, &mut tx)
             .expect_err("permission missing");
@@ -824,7 +764,6 @@ mod tests {
             "error references missing permission: {message}"
         );
     }
-
     #[test]
     fn publish_manifest_records_manifest_snapshot() {
         let mut state = test_state();
@@ -834,11 +773,9 @@ mod tests {
         seed_dataspace_catalog(&mut state, dataspace);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
         let manifest = sample_manifest(uaid, dataspace, 5);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         PublishSpaceDirectoryManifest {
             manifest: manifest.clone(),
         }
@@ -846,7 +783,6 @@ mod tests {
         .expect("publish manifest");
         tx.apply();
         block.commit().unwrap();
-
         let view = state.view();
         let stored = view
             .world()
@@ -867,7 +803,6 @@ mod tests {
             "no UAID accounts were registered, so bindings remain empty"
         );
     }
-
     #[test]
     fn publish_manifest_allows_cross_account_direct_grant() {
         let mut state = test_state();
@@ -877,11 +812,9 @@ mod tests {
         seed_dataspace_catalog(&mut state, dataspace);
         grant_manifest_permission(&mut state.world, &grantee, dataspace);
         let manifest = sample_manifest(uaid, dataspace, 7);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         PublishSpaceDirectoryManifest {
             manifest: manifest.clone(),
         }
@@ -889,7 +822,6 @@ mod tests {
         .expect("cross-account direct grant should authorize publish");
         tx.apply();
         block.commit().unwrap();
-
         let view = state.view();
         let stored = view
             .world()
@@ -900,7 +832,6 @@ mod tests {
         assert_eq!(stored.manifest.uaid, manifest.uaid);
         assert_eq!(stored.manifest.dataspace, manifest.dataspace);
     }
-
     #[test]
     fn publishing_replaces_existing_manifest_and_rebuilds_bindings() {
         let mut state = test_state();
@@ -909,20 +840,17 @@ mod tests {
         seed_dataspace_catalog(&mut state, dataspace);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::rotate"));
         grant_manifest_permission(&mut state.world, &authority, dataspace);
-
         let domain_id: DomainId = DomainId::try_new("space", "publish").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(new_account)
             .execute(&authority, &mut tx)
             .expect("register account with UAID");
-
         let mut active_manifest =
             SpaceDirectoryManifestRecord::new(sample_manifest(uaid, dataspace, 10));
         active_manifest.lifecycle.mark_activated(3);
@@ -937,7 +865,6 @@ mod tests {
                 .is_some_and(|bindings| !bindings.is_empty()),
             "active manifest binds account"
         );
-
         PublishSpaceDirectoryManifest {
             manifest: sample_manifest(uaid, dataspace, 20),
         }
@@ -945,7 +872,6 @@ mod tests {
         .expect("replace manifest");
         tx.apply();
         block.commit().unwrap();
-
         let view = state.view();
         let set = view
             .world()
@@ -968,7 +894,6 @@ mod tests {
             "replacement keeps UAID bound to dataspace"
         );
     }
-
     #[test]
     fn publish_manifest_emits_activation_event_and_binds_accounts() {
         let mut state = test_state();
@@ -977,13 +902,11 @@ mod tests {
         seed_dataspace_catalog(&mut state, dataspace);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::activate"));
         grant_manifest_permission(&mut state.world, &authority, dataspace);
-
         let domain_id: DomainId = DomainId::try_new("spaces", "activate").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -991,13 +914,11 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register account");
         tx.world.take_external_events();
-
         PublishSpaceDirectoryManifest {
             manifest: sample_manifest(uaid, dataspace, 30),
         }
         .execute(&authority, &mut tx)
         .expect("publish manifest");
-
         let bindings = tx
             .world
             .uaid_dataspaces
@@ -1009,7 +930,6 @@ mod tests {
                 .any(|(id, accounts)| *id == dataspace && accounts.contains(&account_id)),
             "account bound to dataspace after activation"
         );
-
         let events = tx.world.take_external_events();
         let activated = events
             .into_iter()
@@ -1031,7 +951,6 @@ mod tests {
             other => panic!("unexpected event: {other:?}"),
         }
     }
-
     #[test]
     fn revoke_manifest_marks_lifecycle_and_emits_event() {
         let mut state = test_state();
@@ -1040,20 +959,17 @@ mod tests {
         let dataspace = DataSpaceId::new(55);
         seed_dataspace_catalog(&mut state, dataspace);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
-
         let domain_id: DomainId = DomainId::try_new("spaces", "revoke").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let kp = checked_keypair();
         let account_id = AccountId::new(kp.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(new_account)
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let mut set = SpaceDirectoryManifestSet::default();
         let mut record = SpaceDirectoryManifestRecord::new(sample_manifest(uaid, dataspace, 5));
         record.lifecycle.mark_activated(3);
@@ -1068,7 +984,6 @@ mod tests {
             "bindings exist prior to revocation"
         );
         tx.world.take_external_events();
-
         RevokeSpaceDirectoryManifest {
             uaid,
             dataspace,
@@ -1077,7 +992,6 @@ mod tests {
         }
         .execute(&authority, &mut tx)
         .expect("revoke manifest");
-
         let set = tx
             .world
             .space_directory_manifests
@@ -1100,7 +1014,6 @@ mod tests {
             tx.world.uaid_dataspaces.get(&uaid).is_none(),
             "bindings cleared by revocation"
         );
-
         let events = tx.world.take_external_events();
         let revoked = events
             .into_iter()
@@ -1122,7 +1035,6 @@ mod tests {
             other => panic!("unexpected event: {other:?}"),
         }
     }
-
     #[test]
     fn expire_manifest_marks_lifecycle_and_emits_event() {
         let mut state = test_state();
@@ -1131,20 +1043,17 @@ mod tests {
         let dataspace = DataSpaceId::new(88);
         seed_dataspace_catalog(&mut state, dataspace);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
-
         let domain_id: DomainId = DomainId::try_new("spaces", "expire").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let kp = checked_keypair();
         let account_id = AccountId::new(kp.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(new_account)
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let mut set = SpaceDirectoryManifestSet::default();
         let mut record = SpaceDirectoryManifestRecord::new(sample_manifest(uaid, dataspace, 9));
         record.lifecycle.mark_activated(4);
@@ -1159,7 +1068,6 @@ mod tests {
             "bindings exist prior to expiry"
         );
         tx.world.take_external_events();
-
         ExpireSpaceDirectoryManifest {
             uaid,
             dataspace,
@@ -1167,7 +1075,6 @@ mod tests {
         }
         .execute(&authority, &mut tx)
         .expect("expire manifest");
-
         let set = tx
             .world
             .space_directory_manifests
@@ -1184,7 +1091,6 @@ mod tests {
             tx.world.uaid_dataspaces.get(&uaid).is_none(),
             "bindings cleared by expiry"
         );
-
         let events = tx.world.take_external_events();
         let expired = events
             .into_iter()
@@ -1205,7 +1111,6 @@ mod tests {
             other => panic!("unexpected event: {other:?}"),
         }
     }
-
     #[test]
     fn publish_manifest_rejects_unknown_dataspace() {
         let mut state = test_state();
@@ -1216,17 +1121,14 @@ mod tests {
             fault_tolerance: 1,
         }])
         .expect("dataspace catalog");
-
         let authority = (*ALICE_ID).clone();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::unknown-publish"));
         let dataspace = DataSpaceId::new(404);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
         let manifest = sample_manifest(uaid, dataspace, 1);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let err = PublishSpaceDirectoryManifest { manifest }
             .execute(&authority, &mut tx)
             .expect_err("unknown dataspace should be rejected");
@@ -1238,7 +1140,6 @@ mod tests {
             "error should mention unknown dataspace: {message}"
         );
     }
-
     #[test]
     fn revoke_manifest_rejects_unknown_dataspace() {
         let mut state = test_state();
@@ -1249,16 +1150,13 @@ mod tests {
             fault_tolerance: 1,
         }])
         .expect("dataspace catalog");
-
         let authority = (*ALICE_ID).clone();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::unknown-revoke"));
         let dataspace = DataSpaceId::new(405);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let err = RevokeSpaceDirectoryManifest {
             uaid,
             dataspace,
@@ -1275,7 +1173,6 @@ mod tests {
             "error should mention unknown dataspace: {message}"
         );
     }
-
     #[test]
     fn expire_manifest_rejects_unknown_dataspace() {
         let mut state = test_state();
@@ -1286,16 +1183,13 @@ mod tests {
             fault_tolerance: 1,
         }])
         .expect("dataspace catalog");
-
         let authority = (*ALICE_ID).clone();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::unknown-expire"));
         let dataspace = DataSpaceId::new(406);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let err = ExpireSpaceDirectoryManifest {
             uaid,
             dataspace,
@@ -1311,7 +1205,6 @@ mod tests {
             "error should mention unknown dataspace: {message}"
         );
     }
-
     #[test]
     fn publish_manifest_rejects_after_direct_permission_revoke() {
         let mut state = test_state();
@@ -1325,11 +1218,9 @@ mod tests {
             .account_permissions
             .insert(grantee.clone(), Permissions::new());
         let manifest = sample_manifest(uaid, dataspace, 8);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let err = PublishSpaceDirectoryManifest { manifest }
             .execute(&grantee, &mut tx)
             .expect_err("revoked direct grant should reject publish");

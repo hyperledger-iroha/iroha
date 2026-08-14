@@ -1,9 +1,7 @@
 //! Quick helper to compile an inline Kotodama source string and dump SCALLs.
-
 use ivm::{
     Memory, ProgramMetadata, decode as ivm_decode, kotodama::compiler::Compiler as KotodamaCompiler,
 };
-
 fn dump(src: &str) {
     let code = KotodamaCompiler::new()
         .compile_source(src)
@@ -29,13 +27,11 @@ fn dump(src: &str) {
         pc += len as u64;
     }
 }
-
 fn main() {
     // Case 1: create_nfts_for_all_users + set_account_detail
     let src1 = "seiyaku Sample1 { kotoage fn run() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_detail(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); } }";
     println!("-- case 1 --");
     dump(src1);
-
     // Case 2: typed NFT syscalls
     let src2 = "seiyaku Sample2 { kotoage fn run() authorize(\"Admin\") { ledger::nft::mint(NftId::parse(\"n0$wonderland\"), AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\")); ledger::nft::transfer(source: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"), nft: NftId::parse(\"n0$wonderland\"), destination: AccountId::parse(\"sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76\")); } }";
     println!("-- case 2 --");

@@ -1,8 +1,6 @@
 //! Kotodama pointer roundtrip tests.
-
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 mod common;
-
 fn run_prog(body: &str) {
     let src = format!(
         "seiyaku PointerRoundtrip {{ kotoage fn main() authorize(\"PointerRoundtrip\") {{\n{body}\n}} }}"
@@ -16,7 +14,6 @@ fn run_prog(body: &str) {
     vm.run()
         .expect("program should run with CoreHost TLV validation");
 }
-
 #[test]
 fn roundtrip_nft_mint_asset() {
     let src = r#"
@@ -27,7 +24,6 @@ fn roundtrip_nft_mint_asset() {
     "#;
     run_prog(src);
 }
-
 #[test]
 fn roundtrip_nft_set_metadata() {
     let src = r#"
@@ -35,7 +31,6 @@ fn roundtrip_nft_set_metadata() {
     "#;
     run_prog(src);
 }
-
 #[test]
 fn roundtrip_transfer_asset() {
     let src = r#"
@@ -43,7 +38,6 @@ fn roundtrip_transfer_asset() {
     "#;
     run_prog(src);
 }
-
 #[test]
 fn roundtrip_nft_burn_asset() {
     let src = r#"
@@ -51,7 +45,6 @@ fn roundtrip_nft_burn_asset() {
     "#;
     run_prog(src);
 }
-
 #[test]
 fn roundtrip_nft_mint_asset_accepts_runtime_owner() {
     let src = r#"
@@ -63,7 +56,6 @@ fn roundtrip_nft_mint_asset_accepts_runtime_owner() {
     "#;
     run_prog(src);
 }
-
 #[test]
 fn roundtrip_nft_transfer_asset_accepts_runtime_from() {
     let src = r#"

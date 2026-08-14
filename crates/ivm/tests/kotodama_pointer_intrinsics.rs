@@ -1,7 +1,5 @@
 //! Kotodama pointer-ABI intrinsic compilation coverage.
-
 use ivm::kotodama::compiler::Compiler;
-
 #[test]
 fn raw_axt_pointer_constructors_are_rejected() {
     let src = r#"
@@ -12,7 +10,6 @@ fn raw_axt_pointer_constructors_are_rejected() {
             }
         }
     "#;
-
     let error = Compiler::new()
         .compile_source(src)
         .expect_err("raw AXT pointer constructors are not part of the V1 source language");
@@ -23,7 +20,6 @@ fn raw_axt_pointer_constructors_are_rejected() {
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn kotodama_zk_verify_accepts_typed_bytes_parameter() {
     let src = r#"

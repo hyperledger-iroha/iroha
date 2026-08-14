@@ -1,10 +1,8 @@
 //! ACME automation controller wiring for the SoraFS gateway TLS surface.
-
 use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
-
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::prelude::*;
 use tokio::{
@@ -12,7 +10,6 @@ use tokio::{
     task::JoinHandle,
     time as tokio_time,
 };
-
 #[cfg(feature = "telemetry")]
 use super::telemetry::record_renewal_metrics;
 use super::{
@@ -21,10 +18,8 @@ use super::{
     telemetry::{TlsRenewalResult, TlsStateSnapshot},
 };
 use crate::routing::MaybeTelemetry;
-
 /// Default automation poll interval (seconds).
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_mins(1);
-
 /// Handle that manages TLS automation and updates gateway telemetry state.
 pub struct TlsAutomationHandle {
     automation: Mutex<AcmeAutomation<Arc<dyn AcmeClient>>>,
@@ -32,7 +27,6 @@ pub struct TlsAutomationHandle {
     hostnames: Vec<String>,
     poll_interval: Duration,
 }
-
 impl TlsAutomationHandle {
     /// Construct a new automation handle after exact client qualification.
     ///
@@ -55,7 +49,6 @@ impl TlsAutomationHandle {
             poll_interval: DEFAULT_POLL_INTERVAL,
         })
     }
-
     /// Spawn the automation loop on the Tokio runtime.
     pub fn spawn(
         self: &Arc<Self>,
@@ -67,13 +60,10 @@ impl TlsAutomationHandle {
             handle.run_loop(telemetry, shutdown).await;
         })
     }
-
     async fn run_loop(self: Arc<Self>, telemetry: MaybeTelemetry, shutdown: ShutdownSignal) {
         self.poll_once(&telemetry).await;
-
         let mut ticker = tokio_time::interval(self.poll_interval);
         ticker.set_missed_tick_behavior(tokio_time::MissedTickBehavior::Delay);
-
         loop {
             tokio::select! {
                 _ = shutdown.receive() => {
@@ -86,7 +76,6 @@ impl TlsAutomationHandle {
             }
         }
     }
-
     async fn poll_once(&self, telemetry: &MaybeTelemetry) {
         let now = SystemTime::now();
         let mut automation = self.automation.lock().await;
@@ -109,7 +98,6 @@ impl TlsAutomationHandle {
             }
         }
     }
-
     async fn record_success(
         &self,
         now: SystemTime,
@@ -122,13 +110,11 @@ impl TlsAutomationHandle {
             guard.record_success(bundle, now);
             guard.clone()
         };
-
         #[cfg(not(feature = "telemetry"))]
         {
             let mut guard = self.tls_state.write().await;
             guard.record_success(bundle, now);
         }
-
         #[cfg(feature = "telemetry")]
         {
             let _ = telemetry.with_metrics(|metrics| {
@@ -136,11 +122,9 @@ impl TlsAutomationHandle {
                 snapshot.apply_metrics(metrics, now);
             });
         }
-
         #[cfg(not(feature = "telemetry"))]
         let _ = (now, telemetry);
     }
-
     async fn record_failure(&self, message: &str, now: SystemTime, telemetry: &MaybeTelemetry) {
         #[cfg(feature = "telemetry")]
         let snapshot = {
@@ -148,13 +132,11 @@ impl TlsAutomationHandle {
             guard.record_failure(message);
             guard.clone()
         };
-
         #[cfg(not(feature = "telemetry"))]
         {
             let mut guard = self.tls_state.write().await;
             guard.record_failure(message);
         }
-
         #[cfg(feature = "telemetry")]
         {
             let _ = telemetry.with_metrics(|metrics| {
@@ -162,18 +144,15 @@ impl TlsAutomationHandle {
                 snapshot.apply_metrics(metrics, now);
             });
         }
-
         #[cfg(not(feature = "telemetry"))]
         let _ = (now, telemetry);
     }
-
     #[cfg(test)]
     /// Test helper: execute a single automation tick with telemetry disabled.
     pub async fn poll_once_for_tests(&self) {
         self.poll_once(&MaybeTelemetry::disabled()).await;
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::super::acme::{
@@ -181,11 +160,9 @@ mod tests {
     };
     use super::*;
     use crate::sorafs::gateway::ChallengeProfile;
-
     /// Test-only fake. Production constructors require a runtime-owned client.
     #[derive(Debug, Default)]
     struct SelfSignedAcmeClient;
-
     impl AcmeClient for SelfSignedAcmeClient {
         fn qualification(&self) -> Result<AcmeClientIdentityV1, AcmeClientProbeError> {
             Ok(AcmeClientIdentityV1 {
@@ -195,7 +172,6 @@ mod tests {
                 test_marked: false,
             })
         }
-
         fn order_certificate(
             &self,
             order: &CertificateOrder,
@@ -215,7 +191,6 @@ mod tests {
             })
         }
     }
-
     fn sample_binding() -> GatewayProviderBindingV1 {
         GatewayProviderBindingV1::try_new(
             "runtime://sorafs/gateway-acme/primary".to_owned(),
@@ -224,7 +199,6 @@ mod tests {
         )
         .expect("valid test ACME provider binding")
     }
-
     fn sample_config() -> AcmeConfig {
         AcmeConfig {
             enabled: true,
@@ -241,7 +215,6 @@ mod tests {
             },
         }
     }
-
     #[tokio::test]
     async fn automation_updates_snapshot_on_success() {
         let tls_state = Arc::new(RwLock::new(TlsStateSnapshot::new(false)));
@@ -255,12 +228,10 @@ mod tests {
             .expect("qualified TLS automation"),
         );
         handle.poll_once_for_tests().await;
-
         let snapshot = tls_state.read().await.clone();
         assert!(snapshot.expiry().is_some(), "expected expiry after renewal");
         assert_eq!(snapshot.last_result(), TlsRenewalResult::Success);
     }
-
     #[tokio::test]
     async fn automation_records_failure_for_blank_hostnames() {
         let tls_state = Arc::new(RwLock::new(TlsStateSnapshot::new(false)));
@@ -276,7 +247,6 @@ mod tests {
             .expect("qualified TLS automation"),
         );
         handle.poll_once_for_tests().await;
-
         let snapshot = tls_state.read().await.clone();
         assert_eq!(snapshot.last_result(), TlsRenewalResult::Failure);
         assert!(snapshot.header_value().contains("last-error="));

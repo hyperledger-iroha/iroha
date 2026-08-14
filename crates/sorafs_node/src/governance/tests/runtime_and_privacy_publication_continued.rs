@@ -1,11 +1,9 @@
 // Signed runtime DAG, privacy publication, and appeal-finance regressions.
-
 #[test]
 fn filesystem_publisher_appends_signed_runtime_dag_for_supported_payloads() {
     let temp = tempdir().expect("tempdir");
     let publisher = signed_runtime_publisher(temp.path());
     let (settlement, encoded) = sample_settlement();
-
     publisher
         .publish_deal_settlement(&settlement, &encoded)
         .expect("publish settlement into runtime DAG");
@@ -25,27 +23,22 @@ fn filesystem_publisher_appends_signed_runtime_dag_for_supported_payloads() {
             .map(Vec::len),
         Some(1)
     );
-
     let (snapshot, snapshot_encoded) = sample_reputation_snapshot();
     publisher
         .publish_reputation_snapshot(&snapshot, &snapshot_encoded)
         .expect("publish reputation snapshot into runtime DAG");
-
     let (finance_report, finance_encoded) = sample_appeal_finance_report();
     publisher
         .publish_appeal_finance_report(&finance_report, &finance_encoded)
         .expect("publish appeal finance report into runtime DAG");
-
     let (finance_rollup, rollup_encoded) = sample_appeal_finance_weekly_rollup();
     publisher
         .publish_appeal_finance_weekly_rollup(&finance_rollup, &rollup_encoded)
         .expect("publish appeal finance weekly rollup into runtime DAG");
-
     let (finance_receipt, receipt_encoded) = sample_appeal_finance_settlement_receipt();
     publisher
         .publish_appeal_finance_settlement_receipt(&finance_receipt, &receipt_encoded)
         .expect("publish appeal finance settlement receipt into runtime DAG");
-
     let (transparency_publication, transparency_encoded) = sample_transparency_ledger_publication();
     publisher
         .publish_transparency_ledger_publication(
@@ -54,7 +47,6 @@ fn filesystem_publisher_appends_signed_runtime_dag_for_supported_payloads() {
             None,
         )
         .expect("publish transparency ledger publication into runtime DAG");
-
     let index = runtime_index(temp.path());
     assert_eq!(
         index.get("block_count").and_then(JsonValue::as_u64),
@@ -100,7 +92,6 @@ fn filesystem_publisher_appends_signed_runtime_dag_for_supported_payloads() {
             .map(Vec::len),
         Some(1)
     );
-
     let head_bytes = runtime_head_bytes(temp.path());
     let head: GovernanceDagHeadV1 =
         norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
@@ -208,13 +199,11 @@ fn filesystem_publisher_appends_signed_runtime_dag_for_supported_payloads() {
         other => panic!("unexpected sixth runtime DAG payload: {other:?}"),
     }
 }
-
 #[test]
 fn filesystem_publisher_keeps_full_history_and_signs_checkpoint_window_with_one_identity() {
     let temp = tempdir().expect("tempdir");
     let publisher = signed_runtime_publisher(temp.path());
     let (template, _) = sample_settlement();
-
     for marker in 1_u8..=GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 as u8 {
         let mut settlement = template.clone();
         settlement.deal_id = [marker; 32];
@@ -231,7 +220,6 @@ fn filesystem_publisher_keeps_full_history_and_signs_checkpoint_window_with_one_
             .publish_deal_settlement(&settlement, &encoded)
             .expect("publish settlement into runtime DAG");
     }
-
     let head_bytes = runtime_head_bytes(temp.path());
     let head_at_window: GovernanceDagHeadV1 =
         norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
@@ -240,7 +228,6 @@ fn filesystem_publisher_keeps_full_history_and_signs_checkpoint_window_with_one_
         GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 as u64
     );
     assert_eq!(head_at_window.checkpoint_cid, None);
-
     let mut settlement = template;
     settlement.deal_id = [0xFF; 32];
     settlement.ledger.deal_id = settlement.deal_id;
@@ -255,7 +242,6 @@ fn filesystem_publisher_keeps_full_history_and_signs_checkpoint_window_with_one_
     publisher
         .publish_deal_settlement(&settlement, &encoded)
         .expect("publish first checkpointed settlement");
-
     let index = runtime_index(temp.path());
     let blocks = runtime_blocks_from_index(temp.path(), &index);
     assert_eq!(
@@ -271,7 +257,6 @@ fn filesystem_publisher_keeps_full_history_and_signs_checkpoint_window_with_one_
         assert_eq!(pair[1].prev_block_cid, Some(pair[0].block_cid.clone()));
         assert_eq!(pair[1].node.prev_cid, Some(pair[0].node.node_cid.clone()));
     }
-
     let head_bytes = runtime_head_bytes(temp.path());
     let head: GovernanceDagHeadV1 =
         norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
@@ -284,7 +269,6 @@ fn filesystem_publisher_keeps_full_history_and_signs_checkpoint_window_with_one_
         &blocks[blocks.len() - GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1..],
     )
     .expect("canonical checkpoint tail validates against checkpointed head");
-
     let governed_public_key = &head.head_signature.public_key;
     assert_eq!(
         head.head_signature.algorithm,
@@ -308,17 +292,14 @@ fn filesystem_publisher_keeps_full_history_and_signs_checkpoint_window_with_one_
         );
     }
 }
-
 #[test]
 fn filesystem_publisher_writes_moderation_ballot_event_files_and_runtime_dag() {
     let temp = tempdir().expect("tempdir");
     let publisher = signed_runtime_publisher(temp.path());
     let (event, encoded) = sample_moderation_ballot_event();
-
     publisher
         .publish_moderation_ballot_event(&event, &encoded)
         .expect("publish moderation ballot event");
-
     let (encoded_path, json_path) =
         only_published_source_paths(temp.path(), "moderation_ballot_event");
     let bytes = fs::read(&encoded_path).expect("read moderation event payload");
@@ -327,7 +308,6 @@ fn filesystem_publisher_writes_moderation_ballot_event_files_and_runtime_dag() {
         norito::decode_from_bytes(&bytes).expect("decode moderation event payload");
     assert_eq!(decoded, event);
     assert!(json_path.exists());
-
     let index = read_publication_section_fixture(temp.path(), "publish_index");
     assert_eq!(
         index
@@ -337,7 +317,6 @@ fn filesystem_publisher_writes_moderation_ballot_event_files_and_runtime_dag() {
             .map(Vec::len),
         Some(1)
     );
-
     let runtime_index = runtime_index(temp.path());
     assert_eq!(
         runtime_index
@@ -367,25 +346,21 @@ fn filesystem_publisher_writes_moderation_ballot_event_files_and_runtime_dag() {
         other => panic!("unexpected runtime DAG payload: {other:?}"),
     }
 }
-
 #[test]
 fn fused_privacy_publisher_retries_the_exact_request_idempotently() {
     let provider = Arc::new(TestFencedTransparencyPublisher::new());
     let publisher = qualified_test_fenced_publisher(Arc::clone(&provider));
     let request = sample_fenced_request(7, None);
-
     let first = publisher
         .compare_and_append_privacy_classified(&request)
         .expect("first fused append");
     let retried = publisher
         .compare_and_append_privacy_classified(&request)
         .expect("idempotent fused retry");
-
     assert_eq!(retried, first);
     assert_eq!(provider.append_count(), 1);
     assert_eq!(provider.head(), Some(first.included_head()));
 }
-
 #[test]
 fn fused_privacy_target_deduplicates_same_lease_before_fencing() {
     let provider = Arc::new(TestFencedTransparencyPublisher::new());
@@ -405,11 +380,9 @@ fn fused_privacy_target_deduplicates_same_lease_before_fencing() {
         first.included_head().fencing_floor(),
     )
     .expect("same-lease lookup request remains structurally valid");
-
     let duplicate = publisher
         .compare_and_append_privacy_classified(&same_lease_request)
         .expect("stable scope lookup precedes stale-fence rejection");
-
     assert_eq!(
         duplicate.disposition(),
         FencedPrivacyPublicationDispositionV1::AlreadyIncluded
@@ -418,7 +391,6 @@ fn fused_privacy_target_deduplicates_same_lease_before_fencing() {
     assert_eq!(duplicate.readback_head(), first.readback_head());
     assert_eq!(provider.append_count(), 1);
 }
-
 #[test]
 fn fused_privacy_target_rejects_conflicting_release_evidence_for_scope() {
     let provider = Arc::new(TestFencedTransparencyPublisher::new());
@@ -442,11 +414,9 @@ fn fused_privacy_target_rejects_conflicting_release_evidence_for_scope() {
         first.included_head().fencing_floor(),
     )
     .expect("conflicting stable-scope request");
-
     let error = publisher
         .compare_and_append_privacy_classified(&conflicting_request)
         .expect_err("one release scope cannot change its release evidence");
-
     assert!(
         error
             .error
@@ -457,11 +427,9 @@ fn fused_privacy_target_rejects_conflicting_release_evidence_for_scope() {
     assert_eq!(provider.append_count(), 1);
     assert_eq!(provider.head(), Some(first.included_head()));
 }
-
 #[test]
 fn fenced_head_reader_qualification_rejects_substitution_staleness_and_test_markers() {
     let target = Arc::new(TestFencedTransparencyPublisher::new());
-
     let substituted = Arc::new(TestFencedTransparencyHeadReader::with_handle(
         Arc::clone(&target),
         "https-pinned:governance:fenced-privacy-head-secondary",
@@ -474,7 +442,6 @@ fn fenced_head_reader_qualification_rejects_substitution_staleness_and_test_mark
     )
     .expect_err("substituted reader identity must fail");
     assert!(error.to_string().contains("does not match configuration"));
-
     let stale = test_fenced_head_reader(Arc::clone(&target));
     stale.set_revision(2);
     let stale: Arc<dyn FencedTransparencyAuthoritativeHeadReaderV1> = stale;
@@ -485,7 +452,6 @@ fn fenced_head_reader_qualification_rejects_substitution_staleness_and_test_mark
     )
     .expect_err("stale reader policy must fail");
     assert!(error.to_string().contains("does not match configuration"));
-
     let test_marked_handle = "https-pinned:governance:fenced-privacy-head-test";
     let test_marked = Arc::new(TestFencedTransparencyHeadReader::with_handle(
         target,
@@ -500,7 +466,6 @@ fn fenced_head_reader_qualification_rejects_substitution_staleness_and_test_mark
     .expect_err("test-marked reader must fail");
     assert!(error.to_string().contains("test-marked"));
 }
-
 #[test]
 fn fused_writer_and_head_reader_require_one_exact_runtime_binding() {
     let target = Arc::new(TestFencedTransparencyPublisher::new());
@@ -525,7 +490,6 @@ fn fused_writer_and_head_reader_require_one_exact_runtime_binding() {
             GovernanceDagRuntimeProviderQualificationV1::new(1, [0x74; 32]),
         ),
     ];
-
     for (handle, qualification) in cases {
         let reader = Arc::new(TestFencedTransparencyHeadReader::with_binding(
             Arc::clone(&target),
@@ -545,7 +509,6 @@ fn fused_writer_and_head_reader_require_one_exact_runtime_binding() {
         assert!(error.to_string().contains("one exact identity"));
     }
 }
-
 #[test]
 fn authenticated_head_bootstrap_rejects_read_failure_and_malformed_head_without_cache() {
     let failed_root = tempdir().expect("failed root");
@@ -562,7 +525,6 @@ fn authenticated_head_bootstrap_rejects_read_failure_and_malformed_head_without_
         read_fenced_privacy_head_sync(failed_root.path()).expect("read failed bootstrap state"),
         None
     );
-
     let malformed_root = tempdir().expect("malformed root");
     let malformed_target = Arc::new(TestFencedTransparencyPublisher::new());
     let malformed_reader = test_fenced_head_reader(malformed_target);
@@ -585,7 +547,6 @@ fn authenticated_head_bootstrap_rejects_read_failure_and_malformed_head_without_
         None
     );
 }
-
 #[test]
 fn fenced_privacy_pending_clear_is_typed_and_idempotent() {
     let temp = tempdir().expect("tempdir");
@@ -594,7 +555,6 @@ fn fenced_privacy_pending_clear_is_typed_and_idempotent() {
     let request = sample_fenced_request(7, None);
     let pending = FencedPrivacyPendingRequestV1::from_request(&request, &publisher)
         .expect("build pending request");
-
     write_fenced_privacy_pending_request(temp.path(), &pending).expect("persist pending");
     assert_eq!(
         read_fenced_privacy_pending_request(temp.path()).expect("read pending"),
@@ -606,7 +566,6 @@ fn fenced_privacy_pending_clear_is_typed_and_idempotent() {
     assert_fenced_privacy_pending_logically_cleared(temp.path());
     assert!(!fenced_privacy_pending_path(temp.path()).exists());
 }
-
 #[test]
 fn persisted_pending_and_head_sync_reject_qualified_target_rotation() {
     let temp = tempdir().expect("tempdir");
@@ -623,7 +582,6 @@ fn persisted_pending_and_head_sync_reject_qualified_target_rotation() {
     let restored = read_fenced_privacy_pending_request(temp.path())
         .expect("read pending request")
         .expect("pending request exists");
-
     let error = restored
         .reconstruct_request(request.authorization(), &publication, &encoded, &publisher)
         .expect_err("pending request must remain bound to its qualified target");
@@ -632,7 +590,6 @@ fn persisted_pending_and_head_sync_reject_qualified_target_rotation() {
             .to_string()
             .contains("belongs to a different qualified target")
     );
-
     let receipt = FencedPrivacyPublicationReceiptV1::from_verified_append(
         &request,
         TEST_FENCED_PUBLISHER_HANDLE,
@@ -664,7 +621,6 @@ fn persisted_pending_and_head_sync_reject_qualified_target_rotation() {
         },
     )
     .expect("clear retired writer-bound records before reader-binding check");
-
     let retired_sync = FencedPrivacyAuthoritativeHeadSyncV1 {
         version: GOVERNANCE_FENCED_PRIVACY_HEAD_SYNC_VERSION_V1,
         reader_handle: "https-pinned:governance:fenced-privacy-retired".to_owned(),
@@ -685,7 +641,6 @@ fn persisted_pending_and_head_sync_reject_qualified_target_rotation() {
     assert_eq!(provider.append_count(), 0);
     assert!(provider.head().is_none());
 }
-
 #[test]
 fn authenticated_head_sync_rejects_rollbacks_forks_and_stale_reader() {
     let temp = tempdir().expect("tempdir");
@@ -728,19 +683,16 @@ fn authenticated_head_sync_rejects_rollbacks_forks_and_stale_reader() {
     );
     let (publication, encoded) = sample_privacy_publication();
     let authorization = sample_privacy_authorization(&publication, &encoded, 9);
-
     head_reader.override_head(Some(first_receipt.included_head()));
     let error = publisher
         .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
         .expect_err("generation rollback must fail");
     assert!(error.to_string().contains("failed authentication"));
-
     head_reader.override_head(None);
     let error = publisher
         .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
         .expect_err("genesis rollback must fail");
     assert!(error.to_string().contains("failed authentication"));
-
     head_reader.override_head(Some(
         FencedTransparencyTargetHeadV1::try_new(
             authoritative_head.generation(),
@@ -753,7 +705,6 @@ fn authenticated_head_sync_rejects_rollbacks_forks_and_stale_reader() {
         .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
         .expect_err("same-generation substitution must fail");
     assert!(error.to_string().contains("failed authentication"));
-
     head_reader.override_head(Some(
         FencedTransparencyTargetHeadV1::try_new(
             authoritative_head.generation() + 1,
@@ -766,14 +717,12 @@ fn authenticated_head_sync_rejects_rollbacks_forks_and_stale_reader() {
         .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
         .expect_err("unproven higher fork must fail");
     assert!(error.to_string().contains("failed authentication"));
-
     head_reader.override_head(Some(authoritative_head));
     head_reader.set_revision(2);
     let error = publisher
         .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
         .expect_err("stale reader qualification must fail");
     assert!(error.to_string().contains("changed after qualification"));
-
     assert_no_privacy_publication_side_effects(temp.path());
     assert_eq!(
         read_fenced_privacy_pending_request(temp.path()).expect("read pending request"),
@@ -787,7 +736,6 @@ fn authenticated_head_sync_rejects_rollbacks_forks_and_stale_reader() {
         "rejected reads must not roll back the authenticated cache"
     );
 }
-
 #[test]
 fn authenticated_head_sync_rejects_publication_at_unrelated_valid_ancestor() {
     let temp = tempdir().expect("tempdir");
@@ -797,7 +745,6 @@ fn authenticated_head_sync_rejects_publication_at_unrelated_valid_ancestor() {
     let first_receipt = writer
         .compare_and_append_privacy_classified(&first_request)
         .expect("seed first release");
-
     let next_spec = SamplePrivacyReleaseSpec::next();
     let (next_publication, next_encoded) = sample_privacy_publication_for(next_spec);
     let next_authorization =
@@ -813,7 +760,6 @@ fn authenticated_head_sync_rejects_publication_at_unrelated_valid_ancestor() {
     let second_receipt = writer
         .compare_and_append_privacy_classified(&second_request)
         .expect("seed unrelated later release");
-
     let (publication, encoded) = sample_privacy_publication();
     let duplicate_authorization = sample_privacy_authorization(&publication, &encoded, 9);
     let duplicate_request = FencedPrivacyPublicationRequestV1::try_new(
@@ -833,11 +779,9 @@ fn authenticated_head_sync_rejects_publication_at_unrelated_valid_ancestor() {
     )
     .expect("structurally valid receipt at an unrelated ancestor");
     let reader = qualified_test_fenced_head_reader(test_fenced_head_reader(Arc::clone(&provider)));
-
     let error =
         synchronize_fenced_privacy_authoritative_head(temp.path(), &reader, Some(&forged_receipt))
             .expect_err("ancestry alone must not prove a different publication identity");
-
     assert!(error.to_string().contains("failed authentication"));
     assert_eq!(
         read_fenced_privacy_head_sync(temp.path()).expect("read rejected head sync state"),
@@ -849,7 +793,6 @@ fn authenticated_head_sync_rejects_publication_at_unrelated_valid_ancestor() {
         second_receipt.included_head()
     );
 }
-
 #[test]
 fn filesystem_privacy_publication_replays_cached_request_after_lease_rotation() {
     let temp = tempdir().expect("tempdir");
@@ -866,7 +809,6 @@ fn filesystem_privacy_publication_replays_cached_request_after_lease_rotation() 
     let (publication, encoded) = sample_privacy_publication();
     let authorization = sample_privacy_authorization(&publication, &encoded, 8);
     let rotated_authorization = sample_privacy_authorization(&publication, &encoded, 9);
-
     publisher
         .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
         .expect("first filesystem publication");
@@ -883,13 +825,11 @@ fn filesystem_privacy_publication_replays_cached_request_after_lease_rotation() 
     let retry_cache = read_fenced_privacy_head_cache(temp.path())
         .expect("read retry cache")
         .expect("retry cache exists");
-
     assert_eq!(retry_cache, first_cache);
     assert_eq!(retry_cache.last_fencing_token, 8);
     assert_eq!(retry_cache.authoritative_head.fencing_floor(), 8);
     assert_eq!(provider.append_count(), 1);
     assert_eq!(provider.head(), Some(retry_cache.authoritative_head));
-
     let conflicting_spec = SamplePrivacyReleaseSpec {
         release_record_digest: [0xB8; 32],
         ..SamplePrivacyReleaseSpec::primary()
@@ -917,7 +857,6 @@ fn filesystem_privacy_publication_replays_cached_request_after_lease_rotation() 
         first_cache
     );
 }
-
 #[test]
 fn filesystem_privacy_publication_without_fused_adapter_fails_before_side_effects() {
     let temp = tempdir().expect("tempdir");
@@ -925,11 +864,9 @@ fn filesystem_privacy_publication_without_fused_adapter_fails_before_side_effect
         FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
     let (publication, encoded) = sample_privacy_publication();
     let authorization = sample_privacy_authorization(&publication, &encoded, 8);
-
     let error = publisher
         .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
         .expect_err("privacy publication must require fused adapter");
-
     assert!(
         error
             .to_string()
@@ -941,7 +878,6 @@ fn filesystem_privacy_publication_without_fused_adapter_fails_before_side_effect
         None
     );
 }
-
 #[test]
 fn fresh_filesystem_root_without_authenticated_head_reader_fails_closed() {
     let temp = tempdir().expect("tempdir");
@@ -952,11 +888,9 @@ fn fresh_filesystem_root_without_authenticated_head_reader_fails_closed() {
         .expect("attach fused publisher");
     let (publication, encoded) = sample_privacy_publication();
     let authorization = sample_privacy_authorization(&publication, &encoded, 8);
-
     let error = publisher
         .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
         .expect_err("fresh root must not infer authoritative genesis");
-
     assert!(
         error
             .to_string()
@@ -972,7 +906,6 @@ fn fresh_filesystem_root_without_authenticated_head_reader_fails_closed() {
         None
     );
 }
-
 #[test]
 fn filesystem_privacy_publication_rejects_substituted_receipt_before_side_effects() {
     let temp = tempdir().expect("tempdir");
@@ -989,11 +922,9 @@ fn filesystem_privacy_publication_rejects_substituted_receipt_before_side_effect
         .expect("attach authenticated head reader");
     let (publication, encoded) = sample_privacy_publication();
     let authorization = sample_privacy_authorization(&publication, &encoded, 9);
-
     let error = publisher
         .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
         .expect_err("substituted receipt must fail closed");
-
     assert!(error.to_string().contains("publication receipt is invalid"));
     assert_eq!(provider.append_count(), 1);
     assert_no_privacy_publication_side_effects(temp.path());
@@ -1003,7 +934,6 @@ fn filesystem_privacy_publication_rejects_substituted_receipt_before_side_effect
             .is_some(),
         "ambiguous append must retain its exact pending request"
     );
-
     provider.set_substitute_receipt(false);
     let rotated_authorization = sample_privacy_authorization(&publication, &encoded, 10);
     publisher
@@ -1013,7 +943,6 @@ fn filesystem_privacy_publication_rejects_substituted_receipt_before_side_effect
             Some(&rotated_authorization),
         )
         .expect("recover exact request after malformed receipt");
-
     assert_eq!(provider.append_count(), 1);
     assert_fenced_privacy_pending_logically_cleared(temp.path());
     let cache = read_fenced_privacy_head_cache(temp.path())
@@ -1036,7 +965,6 @@ fn filesystem_privacy_publication_rejects_substituted_receipt_before_side_effect
         Some(9)
     );
 }
-
 #[test]
 fn fresh_roots_deduplicate_release_across_leases_and_later_heads() {
     let first_root = tempdir().expect("first tempdir");
@@ -1078,7 +1006,6 @@ fn fresh_roots_deduplicate_release_across_leases_and_later_heads() {
             Some(&same_lease_authorization),
         )
         .expect("fresh root recognizes the same lease and stable release");
-
     assert_eq!(provider.append_count(), 1);
     assert_eq!(provider.head(), Some(first_head));
     assert_eq!(
@@ -1112,7 +1039,6 @@ fn fresh_roots_deduplicate_release_across_leases_and_later_heads() {
             .last_disposition,
         FencedPrivacyPublicationDispositionV1::AlreadyIncluded
     );
-
     let next_spec = SamplePrivacyReleaseSpec::next();
     let (next_publication, next_encoded) = sample_privacy_publication_for(next_spec);
     let next_authorization =
@@ -1127,7 +1053,6 @@ fn fresh_roots_deduplicate_release_across_leases_and_later_heads() {
     let advanced_head = provider.head().expect("advanced authoritative head");
     assert_ne!(advanced_head, first_head);
     assert_eq!(provider.append_count(), 2);
-
     assert!(
         !first_root
             .path()
@@ -1140,7 +1065,6 @@ fn fresh_roots_deduplicate_release_across_leases_and_later_heads() {
             .join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE)
             .exists()
     );
-
     let later_anchor_reader = test_fenced_head_reader(Arc::clone(&provider));
     let later_anchor_publisher =
         FilesystemGovernancePublisher::try_new(later_anchor_root.path().to_path_buf())
@@ -1181,7 +1105,6 @@ fn fresh_roots_deduplicate_release_across_leases_and_later_heads() {
             Some(&later_anchor_authorization),
         )
         .expect("fresh root recognizes a release under a later finalized anchor");
-
     assert_eq!(provider.append_count(), 2);
     assert_eq!(provider.head(), Some(advanced_head));
     let later_cache = read_fenced_privacy_head_cache(later_anchor_root.path())
@@ -1195,7 +1118,6 @@ fn fresh_roots_deduplicate_release_across_leases_and_later_heads() {
     );
     assert_fenced_privacy_pending_logically_cleared(later_anchor_root.path());
 }
-
 #[test]
 fn newer_fencing_token_wins_while_paused_predecessor_has_zero_side_effects() {
     let stale_root = tempdir().expect("stale tempdir");
@@ -1241,7 +1163,6 @@ fn newer_fencing_token_wins_while_paused_predecessor_has_zero_side_effects() {
         )
     });
     provider.wait_until_paused();
-
     let winner_result = winner_publisher.publish_transparency_ledger_publication(
         &winner_publication,
         &winner_encoded,
@@ -1253,7 +1174,6 @@ fn newer_fencing_token_wins_while_paused_predecessor_has_zero_side_effects() {
         .join()
         .expect("stale publication thread")
         .expect_err("paused stale token must fail");
-
     assert!(stale_error.to_string().contains("fencing token is stale"));
     assert_eq!(provider.append_count(), 1);
     assert_no_privacy_publication_side_effects(stale_root.path());
@@ -1271,18 +1191,15 @@ fn newer_fencing_token_wins_while_paused_predecessor_has_zero_side_effects() {
             .exists()
     );
 }
-
 #[test]
 fn filesystem_publisher_writes_transparency_ledger_publication_files_and_car_queue() {
     let temp = tempdir().expect("tempdir");
     let publisher =
         FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
     let (publication, encoded) = sample_transparency_ledger_publication();
-
     publisher
         .publish_transparency_ledger_publication(&publication, &encoded, None)
         .expect("publish transparency ledger publication");
-
     let (encoded_path, json_path) =
         only_published_source_paths(temp.path(), "transparency_ledger_publication");
     let bytes = fs::read(&encoded_path).expect("read transparency ledger payload");
@@ -1291,7 +1208,6 @@ fn filesystem_publisher_writes_transparency_ledger_publication_files_and_car_que
         norito::decode_from_bytes(&bytes).expect("decode transparency ledger publication");
     assert_eq!(decoded, publication);
     assert!(json_path.exists());
-
     let index = read_publication_section_fixture(temp.path(), "publish_index");
     assert_eq!(
         index
@@ -1320,7 +1236,6 @@ fn filesystem_publisher_writes_transparency_ledger_publication_files_and_car_que
         labels.get("entry_count").and_then(JsonValue::as_u64),
         Some(u64::from(publication.block.entry_count))
     );
-
     let queue = read_publication_section_fixture(temp.path(), "car_queue");
     assert_eq!(
         queue
@@ -1335,17 +1250,14 @@ fn filesystem_publisher_writes_transparency_ledger_publication_files_and_car_que
         Some(1)
     );
 }
-
 #[test]
 fn filesystem_publisher_writes_proof_token_issuance_files_and_car_queue() {
     let temp = tempdir().expect("tempdir");
     let publisher = signed_runtime_publisher(temp.path());
     let (issuance, encoded) = sample_proof_token_issuance();
-
     publisher
         .publish_proof_token_issuance(&issuance, &encoded)
         .expect("publish proof-token issuance");
-
     let token_id_hex = hex::encode(issuance.token_id);
     let (encoded_path, json_path) =
         only_published_source_paths(temp.path(), "proof_token_issuance");
@@ -1354,7 +1266,6 @@ fn filesystem_publisher_writes_proof_token_issuance_files_and_car_queue() {
     let decoded: ProofTokenIssuanceV1 =
         norito::decode_from_bytes(&bytes).expect("decode proof-token issuance");
     assert_eq!(decoded, issuance);
-
     assert!(json_path.exists());
     let json_body = fs::read(&json_path).expect("read proof-token issuance json");
     let json_value: JsonValue = json::from_slice(&json_body).expect("issuance json");
@@ -1365,7 +1276,6 @@ fn filesystem_publisher_writes_proof_token_issuance_files_and_car_queue() {
             .and_then(JsonValue::as_str),
         Some(token_id_hex.as_str())
     );
-
     let index = read_publication_section_fixture(temp.path(), "publish_index");
     assert_eq!(
         index
@@ -1394,7 +1304,6 @@ fn filesystem_publisher_writes_proof_token_issuance_files_and_car_queue() {
         Some(2)
     );
     assert_single_runtime_external(temp.path(), "proof_token_issuance", &encoded);
-
     let queue = read_publication_section_fixture(temp.path(), "car_queue");
     assert_eq!(
         queue
@@ -1409,17 +1318,14 @@ fn filesystem_publisher_writes_proof_token_issuance_files_and_car_queue() {
         Some(1)
     );
 }
-
 #[test]
 fn filesystem_publisher_writes_appeal_finance_report_files_and_runtime_dag() {
     let temp = tempdir().expect("tempdir");
     let publisher = signed_runtime_publisher(temp.path());
     let (report, encoded) = sample_appeal_finance_report();
-
     publisher
         .publish_appeal_finance_report(&report, &encoded)
         .expect("publish appeal finance report");
-
     let (encoded_path, json_path) =
         only_published_source_paths(temp.path(), "appeal_finance_report");
     let bytes = fs::read(&encoded_path).expect("read appeal finance report payload");
@@ -1428,7 +1334,6 @@ fn filesystem_publisher_writes_appeal_finance_report_files_and_runtime_dag() {
         norito::decode_from_bytes(&bytes).expect("decode appeal finance report");
     assert_eq!(decoded, report);
     assert!(json_path.exists());
-
     let index = read_publication_section_fixture(temp.path(), "publish_index");
     assert_eq!(
         index
@@ -1438,7 +1343,6 @@ fn filesystem_publisher_writes_appeal_finance_report_files_and_runtime_dag() {
             .map(Vec::len),
         Some(1)
     );
-
     let runtime_index = runtime_index(temp.path());
     assert_eq!(
         runtime_index
@@ -1464,14 +1368,12 @@ fn filesystem_publisher_writes_appeal_finance_report_files_and_runtime_dag() {
         other => panic!("unexpected runtime DAG payload: {other:?}"),
     }
 }
-
 #[test]
 fn signed_runtime_dag_rejects_missing_authenticated_submission_provenance_before_writes() {
     let temp = tempdir().expect("tempdir");
     let publisher = signed_runtime_publisher(temp.path());
     let (report, encoded) = sample_appeal_finance_report();
     let payload = GovernanceLogPayloadV1::AppealFinanceReport(report);
-
     let error = publisher
         .preflight_runtime_signed_payload_with_provenance(&payload, encoded.len(), None)
         .expect_err("signed caller-supplied payload must retain authenticated provenance");
@@ -1489,7 +1391,6 @@ fn signed_runtime_dag_rejects_missing_authenticated_submission_provenance_before
     assert_empty_publication_authority(temp.path());
     assert!(!temp.path().join(GOVERNANCE_RUNTIME_DAG_DIR).exists());
 }
-
 #[test]
 fn authenticated_submission_identity_participates_in_publication_idempotency() {
     let temp = tempdir().expect("tempdir");
@@ -1503,14 +1404,12 @@ fn authenticated_submission_identity_participates_in_publication_idempotency() {
         AccountId::new(other_key),
         crate::GovernanceSubmissionOriginV1::AppealFinanceReport,
     );
-
     for provenance in [&first, &second] {
         <FilesystemGovernancePublisher as GovernancePublisher>::publish_appeal_finance_report(
             &publisher, &report, &encoded, provenance,
         )
         .expect("distinct authenticated publisher is a distinct attestation");
     }
-
     let publish_index = read_publication_section_fixture(temp.path(), "publish_index");
     assert_eq!(
         publish_index
@@ -1519,7 +1418,6 @@ fn authenticated_submission_identity_participates_in_publication_idempotency() {
             .map(Vec::len),
         Some(2)
     );
-
     let runtime_index = runtime_index(temp.path());
     let blocks = runtime_blocks_from_index(temp.path(), &runtime_index);
     assert_eq!(blocks.len(), 2);
@@ -1529,17 +1427,14 @@ fn authenticated_submission_identity_participates_in_publication_idempotency() {
     );
     assert_ne!(blocks[0].node.node_cid, blocks[1].node.node_cid);
 }
-
 #[test]
 fn filesystem_publisher_writes_appeal_finance_weekly_rollup_files_and_runtime_dag() {
     let temp = tempdir().expect("tempdir");
     let publisher = signed_runtime_publisher(temp.path());
     let (rollup, encoded) = sample_appeal_finance_weekly_rollup();
-
     publisher
         .publish_appeal_finance_weekly_rollup(&rollup, &encoded)
         .expect("publish appeal finance weekly rollup");
-
     let (encoded_path, json_path) =
         only_published_source_paths(temp.path(), "appeal_finance_weekly_rollup");
     let bytes = fs::read(&encoded_path).expect("read appeal finance weekly rollup payload");
@@ -1557,7 +1452,6 @@ fn filesystem_publisher_writes_appeal_finance_weekly_rollup_files_and_runtime_da
             .and_then(JsonValue::as_str),
         Some("2026-W26")
     );
-
     let index = read_publication_section_fixture(temp.path(), "publish_index");
     assert_eq!(
         index
@@ -1567,7 +1461,6 @@ fn filesystem_publisher_writes_appeal_finance_weekly_rollup_files_and_runtime_da
             .map(Vec::len),
         Some(1)
     );
-
     let runtime_index = runtime_index(temp.path());
     assert_eq!(
         runtime_index
@@ -1593,7 +1486,6 @@ fn filesystem_publisher_writes_appeal_finance_weekly_rollup_files_and_runtime_da
         other => panic!("unexpected runtime DAG payload: {other:?}"),
     }
 }
-
 #[test]
 fn appeal_finance_settlement_receipt_source_identity_binds_finalized_cursor() {
     let (receipt, encoded) = sample_appeal_finance_settlement_receipt();
@@ -1611,14 +1503,12 @@ fn appeal_finance_settlement_receipt_source_identity_binds_finalized_cursor() {
         .expect("derive composite source identity")
     };
     let path = source_identity(&receipt, &encoded);
-
     let mut changed_height = receipt.clone();
     changed_height.finalized_block_height += 1;
     let changed_height_encoded =
         norito::to_bytes(&changed_height).expect("encode changed-height receipt");
     let changed_height_path = source_identity(&changed_height, &changed_height_encoded);
     assert_ne!(changed_height_path, path);
-
     let mut changed_hash = receipt;
     changed_hash.finalized_block_hash[0] ^= 0x01;
     let changed_hash_encoded =
@@ -1626,17 +1516,14 @@ fn appeal_finance_settlement_receipt_source_identity_binds_finalized_cursor() {
     let changed_hash_path = source_identity(&changed_hash, &changed_hash_encoded);
     assert_ne!(changed_hash_path, path);
 }
-
 #[test]
 fn filesystem_publisher_writes_appeal_finance_settlement_receipt_files_and_runtime_dag() {
     let temp = tempdir().expect("tempdir");
     let publisher = signed_runtime_publisher(temp.path());
     let (receipt, encoded) = sample_appeal_finance_settlement_receipt();
-
     publisher
         .publish_appeal_finance_settlement_receipt(&receipt, &encoded)
         .expect("publish appeal finance settlement receipt");
-
     let (encoded_path, json_path) =
         only_published_source_paths(temp.path(), "appeal_finance_settlement_receipt");
     let bytes = fs::read(&encoded_path).expect("read settlement receipt payload");
@@ -1677,7 +1564,6 @@ fn filesystem_publisher_writes_appeal_finance_settlement_receipt_files_and_runti
             .and_then(JsonValue::as_str),
         Some(expected_finalized_block_hash_hex.as_str())
     );
-
     let index = read_publication_section_fixture(temp.path(), "publish_index");
     assert_eq!(
         index
@@ -1717,7 +1603,6 @@ fn filesystem_publisher_writes_appeal_finance_settlement_receipt_files_and_runti
             .and_then(JsonValue::as_str),
         Some(expected_finalized_block_hash_hex.as_str())
     );
-
     let runtime_index = runtime_index(temp.path());
     assert_eq!(
         runtime_index

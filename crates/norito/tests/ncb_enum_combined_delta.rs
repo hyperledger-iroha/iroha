@@ -1,7 +1,5 @@
 //! Targeted test: enum NCB with both id-delta and code-delta enabled on a modular Code pattern.
-
 use norito::columnar as ncb;
-
 #[test]
 fn enum_combined_delta_modular_codes_roundtrip() {
     let mut rows_borrowed: Vec<(u64, ncb::EnumBorrow<'_>, bool)> = Vec::new();

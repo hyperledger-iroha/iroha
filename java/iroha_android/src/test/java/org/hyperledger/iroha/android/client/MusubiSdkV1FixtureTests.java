@@ -12,8 +12,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.Signature;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -52,6 +56,7 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.Version;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.VersionComparator;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.VersionReq;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.WireValue;
+import org.hyperledger.iroha.android.client.transport.RequestReplayPolicy;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.model.NetworkId;
@@ -59,6 +64,14 @@ import org.junit.Test;
 
 /** Cross-SDK checks for the Rust-owned Musubi first-release JSON fixture. */
 public final class MusubiSdkV1FixtureTests {
+  private static final NetworkId NETWORK_ID =
+      NetworkId.parse(
+          "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+  private static final NetworkId OTHER_NETWORK_ID =
+      NetworkId.parse(
+          "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22");
+  private static final KeyPair KEY_PAIR = generateKeyPair();
+  private static final String ACCOUNT_ID = publicKeyAccountId(KEY_PAIR);
   private static final Set<String> EXPECTED_PATHS =
       new LinkedHashSet<>(
           Arrays.asList(
@@ -464,8 +477,10 @@ public final class MusubiSdkV1FixtureTests {
         MusubiToriiClientV1.builder()
             .baseUri(URI.create("http://localhost:8080"))
             .executor(executor)
+            .localSigningContext(new LocalSigningContext(NETWORK_ID))
             .build();
 
+    final Set<String> nonces = new LinkedHashSet<>();
     for (final Map<String, Object> route : routes) {
       final String path = (String) route.get("path");
       final WireValue request = MusubiJsonV1.decodeQuery(path, route.get("request"));
@@ -475,12 +490,40 @@ public final class MusubiSdkV1FixtureTests {
       assertEquals(path, captured.uri().getPath());
       assertEquals(route.get("request"), parseJson(captured.body()));
       assertEquals(Long.valueOf(32L * 1024L * 1024L), captured.maximumResponseBytes());
+      assertEquals(RequestReplayPolicy.ONE_SHOT, captured.replayPolicy());
+      assertCanonicalSignature(captured);
+      assertTrue(nonces.add(firstHeader(captured, CanonicalRequestSigner.HEADER_NONCE)));
     }
     final Set<String> actualPaths = new LinkedHashSet<>();
     for (final TransportRequest request : executor.requests) {
       actualPaths.add(request.uri().getPath());
     }
     assertEquals(EXPECTED_PATHS, actualPaths);
+    assertFalse(EXPECTED_PATHS.contains("/v1/musubi/instructions/publish-release"));
+  }
+
+  @Test
+  public void authenticatedClientFailsClosedWithoutSigningContextOrWithInjectedAuthHeaders()
+      throws Exception {
+    final Map<String, Object> route = routes().get(0);
+    final String path = (String) route.get("path");
+    final WireValue request = MusubiJsonV1.decodeQuery(path, route.get("request"));
+    final Map<String, byte[]> responses = new LinkedHashMap<>();
+    responses.put(
+        path,
+        JsonEncoder.encode(route.get("response")).getBytes(StandardCharsets.UTF_8));
+    final FixtureExecutor executor = new FixtureExecutor(responses);
+    assertThrows(
+        IllegalStateException.class,
+        () -> MusubiToriiClientV1.builder().executor(executor).build());
+    final MusubiToriiClientV1 client =
+        MusubiToriiClientV1.builder()
+            .executor(executor)
+            .localSigningContext(new LocalSigningContext(NETWORK_ID))
+            .addHeader("x-IROHA-signature", "forged")
+            .build();
+    assertThrows(IllegalArgumentException.class, () -> invoke(client, path, request));
+    assertTrue(executor.requests.isEmpty());
   }
 
   @Test
@@ -1201,45 +1244,153 @@ public final class MusubiSdkV1FixtureTests {
 
   private static void invoke(
       final MusubiToriiClientV1 client, final String path, final WireValue request) {
+    final ToriiCanonicalRequestAuth auth = canonicalAuth();
     switch (path) {
       case MusubiToriiClientV1.EXACT_PACKAGE_PATH:
-        client.findExactPackage((ExactPackageQuery) request).join();
+        client.findExactPackage((ExactPackageQuery) request, auth).join();
         break;
       case MusubiToriiClientV1.EXACT_RELEASE_PATH:
-        client.findExactRelease((ExactReleaseQuery) request).join();
+        client.findExactRelease((ExactReleaseQuery) request, auth).join();
         break;
       case MusubiToriiClientV1.PROVIDER_BUNDLE_ATTESTATION_PATH:
-        client.findProviderBundleAttestation((ProviderBundleAttestationKey) request).join();
+        client.findProviderBundleAttestation((ProviderBundleAttestationKey) request, auth).join();
         break;
       case MusubiToriiClientV1.RESOLVER_INDEX_PATH:
-        client.findResolverIndex((ResolverIndexQuery) request).join();
+        client.findResolverIndex((ResolverIndexQuery) request, auth).join();
         break;
       case MusubiToriiClientV1.VERSIONS_PATH:
-        client.findVersions((PackagePageQuery) request).join();
+        client.findVersions((PackagePageQuery) request, auth).join();
         break;
       case MusubiToriiClientV1.MAINTAINERS_PATH:
-        client.findMaintainers((PackagePageQuery) request).join();
+        client.findMaintainers((PackagePageQuery) request, auth).join();
         break;
       case MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH:
-        client.findArchiveLocations((ArchiveLocationQuery) request).join();
+        client.findArchiveLocations((ArchiveLocationQuery) request, auth).join();
         break;
       case MusubiToriiClientV1.ARCHIVE_RETENTION_PATH:
-        client.findArchiveRetention((ArchiveRetentionQuery) request).join();
+        client.findArchiveRetention((ArchiveRetentionQuery) request, auth).join();
         break;
       case MusubiToriiClientV1.ALIAS_PATH:
-        client.findAlias((AliasQuery) request).join();
+        client.findAlias((AliasQuery) request, auth).join();
         break;
       case MusubiToriiClientV1.ALIAS_HISTORY_PATH:
-        client.findAliasHistory((AliasQuery) request).join();
+        client.findAliasHistory((AliasQuery) request, auth).join();
         break;
       case MusubiToriiClientV1.ORDERED_PREFIX_PATH:
-        client.findOrderedPrefix((OrderedPrefixQuery) request).join();
+        client.findOrderedPrefix((OrderedPrefixQuery) request, auth).join();
         break;
       case MusubiToriiClientV1.SEARCH_PATH:
-        client.search((SearchQuery) request).join();
+        client.search((SearchQuery) request, auth).join();
         break;
       default:
         throw new AssertionError("unhandled fixture path " + path);
+    }
+  }
+
+  private static ToriiCanonicalRequestAuth canonicalAuth() {
+    return new ToriiCanonicalRequestAuth(ACCOUNT_ID, MusubiSdkV1FixtureTests::sign);
+  }
+
+  private static KeyPair generateKeyPair() {
+    try {
+      return KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    } catch (final Exception error) {
+      throw new IllegalStateException("failed to create Musubi signing fixture", error);
+    }
+  }
+
+  private static byte[] sign(final byte[] message) {
+    try {
+      final Signature signer = Signature.getInstance("Ed25519");
+      signer.initSign(KEY_PAIR.getPrivate());
+      signer.update(message);
+      return signer.sign();
+    } catch (final Exception error) {
+      throw new IllegalStateException("failed to sign Musubi request fixture", error);
+    }
+  }
+
+  private static String publicKeyAccountId(final KeyPair keyPair) {
+    final byte[] encoded = keyPair.getPublic().getEncoded();
+    if (encoded.length < 32) {
+      throw new IllegalStateException("Ed25519 public-key fixture is truncated");
+    }
+    final StringBuilder literal = new StringBuilder("ed0120");
+    for (int index = encoded.length - 32; index < encoded.length; index++) {
+      final int value = encoded[index] & 0xFF;
+      literal.append(Character.toUpperCase(Character.forDigit(value >>> 4, 16)));
+      literal.append(Character.toUpperCase(Character.forDigit(value & 0x0F, 16)));
+    }
+    return literal.toString();
+  }
+
+  private static String firstHeader(final TransportRequest request, final String name) {
+    for (final Map.Entry<String, List<String>> header : request.headers().entrySet()) {
+      if (header.getKey().equalsIgnoreCase(name) && !header.getValue().isEmpty()) {
+        return header.getValue().get(0);
+      }
+    }
+    throw new AssertionError("missing header " + name);
+  }
+
+  private static void assertCanonicalSignature(final TransportRequest request) {
+    assertEquals(ACCOUNT_ID, firstHeader(request, CanonicalRequestSigner.HEADER_ACCOUNT));
+    final long timestampMs =
+        Long.parseLong(firstHeader(request, CanonicalRequestSigner.HEADER_TIMESTAMP_MS));
+    final String nonce = firstHeader(request, CanonicalRequestSigner.HEADER_NONCE);
+    final byte[] signature =
+        Base64.getDecoder().decode(firstHeader(request, CanonicalRequestSigner.HEADER_SIGNATURE));
+    assertTrue(
+        verifies(request, NETWORK_ID, request.uri(), request.body(), timestampMs, nonce, signature));
+    assertFalse(
+        verifies(
+            request,
+            OTHER_NETWORK_ID,
+            request.uri(),
+            request.body(),
+            timestampMs,
+            nonce,
+            signature));
+    assertFalse(
+        verifies(
+            request,
+            NETWORK_ID,
+            URI.create("https://example.test/v1/musubi/wrong"),
+            request.body(),
+            timestampMs,
+            nonce,
+            signature));
+    final byte[] wrongBody = Arrays.copyOf(request.body(), request.body().length + 1);
+    assertFalse(
+        verifies(request, NETWORK_ID, request.uri(), wrongBody, timestampMs, nonce, signature));
+    assertFalse(
+        verifies(
+            request,
+            NETWORK_ID,
+            request.uri(),
+            request.body(),
+            timestampMs,
+            "replayed-with-another-nonce",
+            signature));
+  }
+
+  private static boolean verifies(
+      final TransportRequest request,
+      final NetworkId networkId,
+      final URI uri,
+      final byte[] body,
+      final long timestampMs,
+      final String nonce,
+      final byte[] signature) {
+    try {
+      final Signature verifier = Signature.getInstance("Ed25519");
+      verifier.initVerify(KEY_PAIR.getPublic());
+      verifier.update(
+          CanonicalRequestSigner.canonicalRequestSignatureMessage(
+              networkId, request.method(), uri, body, timestampMs, nonce));
+      return verifier.verify(signature);
+    } catch (final Exception error) {
+      throw new AssertionError("failed to verify Musubi request signature", error);
     }
   }
 
@@ -1275,6 +1426,7 @@ public final class MusubiSdkV1FixtureTests {
         MusubiToriiClientV1.builder()
             .baseUri(URI.create("http://localhost:8080"))
             .executor(new FixtureExecutor(responses))
+            .localSigningContext(new LocalSigningContext(NETWORK_ID))
             .build();
     expectAsyncFailure(() -> invoke(client, path, request));
   }

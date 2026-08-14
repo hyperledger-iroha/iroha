@@ -1,8 +1,6 @@
 #![cfg(feature = "json")]
 //! Verify that `Parser::parse_key` consumes the trailing colon.
-
 use norito::json::Parser;
-
 #[test]
 fn parse_key_consumes_colon() {
     let s = "{\"id\":123}";

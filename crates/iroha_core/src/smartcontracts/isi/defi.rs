@@ -1,5 +1,4 @@
 //! Metadata-backed DeFi instruction handlers.
-
 use iroha_data_model::{
     events::data::prelude::{AccountEvent, MetadataChanged},
     isi::{
@@ -14,25 +13,20 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_primitives::numeric::Quantity;
-
 use super::prelude::*;
-
 fn invalid(message: impl Into<String>) -> Error {
     InstructionExecutionError::InvariantViolation(message.into().into())
 }
-
 fn metadata_key(module: &str, id: &Name) -> Result<Name, Error> {
     format!("defi/{module}/{id}")
         .parse()
         .map_err(|_| invalid(format!("invalid DeFi metadata key for {module}/{id}")))
 }
-
 fn metadata_key_u64(module: &str, id: u64) -> Result<Name, Error> {
     format!("defi/{module}/{id}")
         .parse()
         .map_err(|_| invalid(format!("invalid DeFi metadata key for {module}/{id}")))
 }
-
 fn ensure_account_record_missing(
     state_transaction: &StateTransaction<'_, '_>,
     account: &AccountId,
@@ -45,7 +39,6 @@ fn ensure_account_record_missing(
     }
     Ok(())
 }
-
 fn account_record(
     state_transaction: &StateTransaction<'_, '_>,
     account: &AccountId,
@@ -59,7 +52,6 @@ fn account_record(
         .cloned()
         .ok_or_else(|| invalid(format!("{label} is missing")))
 }
-
 fn write_account_record(
     state_transaction: &mut StateTransaction<'_, '_>,
     account: AccountId,
@@ -86,21 +78,18 @@ fn write_account_record(
         })));
     Ok(())
 }
-
 fn ensure_quantity_non_zero(value: &Quantity, label: &str) -> Result<(), Error> {
     if value.is_zero() {
         return Err(invalid(format!("{label} must be greater than zero")));
     }
     Ok(())
 }
-
 fn ensure_bps(value: u16, label: &str) -> Result<(), Error> {
     if value > 10_000 {
         return Err(invalid(format!("{label} exceeds 10000 bps")));
     }
     Ok(())
 }
-
 fn record_status(value: &Json) -> Result<String, Error> {
     let json = value
         .try_into_any_norito::<norito::json::Value>()
@@ -114,14 +103,12 @@ fn record_status(value: &Json) -> Result<String, Error> {
         .map(ToOwned::to_owned)
         .ok_or_else(|| invalid("DeFi metadata record is missing status"))
 }
-
 fn ensure_open_record(value: &Json, label: &str) -> Result<(), Error> {
     match record_status(value)?.as_str() {
         "open" | "submitted" => Ok(()),
         status => Err(invalid(format!("{label} is already terminal: {status}"))),
     }
 }
-
 fn ensure_terminal_status(status: &Name) -> Result<(), Error> {
     match status.as_ref() {
         "filled" | "cancelled" | "settled" => Ok(()),
@@ -130,7 +117,6 @@ fn ensure_terminal_status(status: &Name) -> Result<(), Error> {
         )),
     }
 }
-
 macro_rules! record_json {
     ($module:literal, $action:literal, $status:expr, { $($key:literal : $value:expr),* $(,)? }) => {
         Json::from(norito::json!({
@@ -142,7 +128,6 @@ macro_rules! record_json {
         }))
     };
 }
-
 impl Execute for SubmitDefiIntent {
     fn execute(
         self,
@@ -158,7 +143,6 @@ impl Execute for SubmitDefiIntent {
         state_transaction
             .world
             .asset_definition(&self.output_asset)?;
-
         let intent_key = metadata_key("intent", &self.intent_id)?;
         let nonce_key = metadata_key_u64("intent_nonce", self.nonce)?;
         ensure_account_record_missing(state_transaction, authority, &intent_key, "DeFi intent")?;
@@ -168,7 +152,6 @@ impl Execute for SubmitDefiIntent {
             &nonce_key,
             "DeFi intent nonce",
         )?;
-
         write_account_record(
             state_transaction,
             authority.clone(),
@@ -197,7 +180,6 @@ impl Execute for SubmitDefiIntent {
         )
     }
 }
-
 impl Execute for SettleDefiIntent {
     fn execute(
         self,
@@ -211,11 +193,9 @@ impl Execute for SettleDefiIntent {
         state_transaction.world.account(&self.owner)?;
         state_transaction.world.account(&self.solver)?;
         ensure_terminal_status(&self.status)?;
-
         let key = metadata_key("intent", &self.intent_id)?;
         let existing = account_record(state_transaction, &self.owner, &key, "DeFi intent")?;
         ensure_open_record(&existing, "DeFi intent")?;
-
         write_account_record(
             state_transaction,
             self.owner.clone(),
@@ -229,7 +209,6 @@ impl Execute for SettleDefiIntent {
         )
     }
 }
-
 impl Execute for RegisterDefiVault {
     fn execute(
         self,
@@ -258,7 +237,6 @@ impl Execute for RegisterDefiVault {
         )
     }
 }
-
 impl Execute for RecordDefiVaultRequest {
     fn execute(
         self,
@@ -291,7 +269,6 @@ impl Execute for RecordDefiVaultRequest {
         )
     }
 }
-
 impl Execute for RegisterDefiOperator {
     fn execute(
         self,
@@ -318,7 +295,6 @@ impl Execute for RegisterDefiOperator {
         )
     }
 }
-
 impl Execute for RecordDefiOperatorHeartbeat {
     fn execute(
         self,
@@ -343,7 +319,6 @@ impl Execute for RecordDefiOperatorHeartbeat {
         )
     }
 }
-
 impl Execute for ConfigureDefiAmmHook {
     fn execute(
         self,
@@ -366,7 +341,6 @@ impl Execute for ConfigureDefiAmmHook {
         )
     }
 }
-
 impl Execute for RecordDefiHookExecution {
     fn execute(
         self,
@@ -393,7 +367,6 @@ impl Execute for RecordDefiHookExecution {
         )
     }
 }
-
 impl Execute for RegisterDefiMarginMarket {
     fn execute(
         self,
@@ -421,7 +394,6 @@ impl Execute for RegisterDefiMarginMarket {
         )
     }
 }
-
 impl Execute for UpdateDefiMarginAccount {
     fn execute(
         self,
@@ -446,7 +418,6 @@ impl Execute for UpdateDefiMarginAccount {
         )
     }
 }
-
 impl Execute for RegisterDefiRwaMarket {
     fn execute(
         self,
@@ -475,7 +446,6 @@ impl Execute for RegisterDefiRwaMarket {
         )
     }
 }
-
 impl Execute for ReportDefiRwaNav {
     fn execute(
         self,
@@ -496,7 +466,6 @@ impl Execute for ReportDefiRwaNav {
         )
     }
 }
-
 impl Execute for DeFiInstructionBox {
     fn execute(
         self,
@@ -519,22 +488,18 @@ impl Execute for DeFiInstructionBox {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_data_model::block::BlockHeader;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
-
     #[test]
     fn defi_quantity_guards_reject_invalid_values() {
         assert!(ensure_quantity_non_zero(&Quantity::zero(), "amount").is_err());
         assert!(ensure_quantity_non_zero(&Quantity::one(), "amount").is_ok());
     }
-
     #[test]
     fn report_rwa_nav_persists_nominal_quantity_and_rejects_zero() {
         let authority = ALICE_ID.clone();
@@ -554,7 +519,6 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
-
         let market_id: Name = "tbill_a".parse().expect("market id");
         let status: Name = "active".parse().expect("status");
         let key = metadata_key("rwa_nav", &market_id).expect("metadata key");
@@ -565,7 +529,6 @@ mod tests {
             report_slot: 5_000,
             status: status.clone(),
         };
-
         let error = report(Quantity::zero())
             .execute(&authority, &mut transaction)
             .expect_err("zero NAV must be rejected");
@@ -583,12 +546,10 @@ mod tests {
                 .is_none(),
             "a rejected NAV report must not mutate account metadata"
         );
-
         let nav_per_share: Quantity = "1.25".parse().expect("positive canonical NAV");
         report(nav_per_share.clone())
             .execute(&authority, &mut transaction)
             .expect("positive NAV report");
-
         let expected = record_json!("rwa", "nav", status.to_string(), {
             "market_id": market_id.to_string(),
             "nav_per_share": nav_per_share.to_string(),

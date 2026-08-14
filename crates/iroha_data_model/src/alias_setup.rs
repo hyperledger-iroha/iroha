@@ -3,15 +3,12 @@
 //! Textual names in this module are catalog-free.  Resolution pins the canonical
 //! text to the numeric dataspace identifier that consensus must revalidate when
 //! executing an alias instruction.
-
 use core::{fmt, str::FromStr};
 use std::{string::String, vec::Vec};
-
 use iroha_crypto::{Hash, HashOf};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 use crate::{
     NetworkId,
     account::{
@@ -24,17 +21,13 @@ use crate::{
     name::{self, Name},
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
-
 /// Domain separator for [`AliasTransactionPlanBodyV1`] commitments.
 pub const ALIAS_TRANSACTION_PLAN_HASH_DOMAIN_V1: &[u8] = b"iroha:alias-transaction-plan-body:v1\0";
-
 /// Domain separator for [`AliasLifecycleTransactionPlanBodyV1`] commitments.
 pub const ALIAS_LIFECYCLE_TRANSACTION_PLAN_HASH_DOMAIN_V1: &[u8] =
     b"iroha:alias-lifecycle-transaction-plan-body:v1\0";
-
 /// Deterministic duration of one SNS lease year in milliseconds (365 days).
 pub const ALIAS_LEASE_YEAR_MS: u64 = 31_536_000_000;
-
 /// Catalog-free textual account alias.
 ///
 /// `merchant@banka.paynet` has label `merchant`, domain `banka`, and
@@ -54,7 +47,6 @@ pub struct AccountAliasName {
     /// Canonical textual dataspace name.
     pub dataspace: Name,
 }
-
 impl AccountAliasName {
     /// Parse canonical alias components without consulting a dataspace catalog.
     ///
@@ -77,13 +69,11 @@ impl AccountAliasName {
             dataspace,
         })
     }
-
     /// Return the canonical alias literal.
     #[must_use]
     pub fn canonical_text(&self) -> String {
         self.to_string()
     }
-
     /// Resolve the optional domain portion into its fully qualified textual ID.
     #[must_use]
     pub fn domain_id(&self) -> Option<DomainId> {
@@ -91,7 +81,6 @@ impl AccountAliasName {
             .as_ref()
             .and_then(|domain| DomainId::try_new(domain, &self.dataspace).ok())
     }
-
     /// Check that directly decoded or constructed fields are in canonical form.
     #[must_use]
     pub fn is_canonical(&self) -> bool {
@@ -100,7 +89,6 @@ impl AccountAliasName {
             .is_ok_and(|value| value == *self)
     }
 }
-
 impl fmt::Display for AccountAliasName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}@", self.label)?;
@@ -110,10 +98,8 @@ impl fmt::Display for AccountAliasName {
         write!(f, "{}", self.dataspace)
     }
 }
-
 impl FromStr for AccountAliasName {
     type Err = ParseError;
-
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         if input.is_empty() {
             return Err(ParseError::new("account alias must not be empty"));
@@ -128,7 +114,6 @@ impl FromStr for AccountAliasName {
                 "account alias must not contain control characters",
             ));
         }
-
         let (label, scope) = input.split_once('@').ok_or_else(|| {
             ParseError::new(
                 "account alias must use `name@domain.dataspace` or `name@dataspace` format",
@@ -149,7 +134,6 @@ impl FromStr for AccountAliasName {
                 "account alias dataspace segment must not be empty",
             ));
         }
-
         match scope.bytes().filter(|byte| *byte == b'.').count() {
             0 => Self::try_new(label, Option::<&str>::None, scope),
             1 => {
@@ -169,14 +153,12 @@ impl FromStr for AccountAliasName {
         }
     }
 }
-
 #[derive(Clone, Copy)]
 enum AliasSegment {
     Label,
     Domain,
     Dataspace,
 }
-
 fn canonical_alias_segment(raw: &str, segment: AliasSegment) -> Result<Name, ParseError> {
     if raw.is_empty() || raw.contains('.') {
         return Err(match segment {
@@ -198,7 +180,6 @@ fn canonical_alias_segment(raw: &str, segment: AliasSegment) -> Result<Name, Par
         AliasSegment::Dataspace => ParseError::new("account alias dataspace segment is invalid"),
     })
 }
-
 /// Canonical dataspace text paired with the numeric ID expected by the caller.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -211,7 +192,6 @@ pub struct ResolvedDataSpaceV1 {
     /// Numeric dataspace ID that the text must resolve to at execution.
     pub dataspace_id: DataSpaceId,
 }
-
 impl ResolvedDataSpaceV1 {
     /// Construct a resolved dataspace pair.
     #[must_use]
@@ -221,7 +201,6 @@ impl ResolvedDataSpaceV1 {
             dataspace_id,
         }
     }
-
     /// Resolve a textual dataspace using a static catalog.
     ///
     /// # Errors
@@ -235,7 +214,6 @@ impl ResolvedDataSpaceV1 {
             .ok_or_else(|| ParseError::new("unknown dataspace alias"))?;
         Ok(Self::new(canonical, dataspace_id))
     }
-
     /// Return whether the textual name still maps to the pinned numeric ID.
     #[must_use]
     pub fn matches_catalog(&self, catalog: &DataSpaceCatalog) -> bool {
@@ -243,20 +221,17 @@ impl ResolvedDataSpaceV1 {
             .by_alias(self.canonical_name.as_ref())
             .is_some_and(|entry| entry.id == self.dataspace_id)
     }
-
     /// Return the canonical textual form.
     #[must_use]
     pub fn canonical_text(&self) -> String {
         self.canonical_name.to_string()
     }
 }
-
 impl fmt::Display for ResolvedDataSpaceV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.canonical_name.fmt(f)
     }
 }
-
 /// Canonical fully qualified domain paired with its expected numeric dataspace ID.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -269,7 +244,6 @@ pub struct ResolvedDomainV1 {
     /// Numeric parent dataspace ID that the text must resolve to at execution.
     pub dataspace_id: DataSpaceId,
 }
-
 impl ResolvedDomainV1 {
     /// Construct a resolved domain pair.
     #[must_use]
@@ -279,7 +253,6 @@ impl ResolvedDomainV1 {
             dataspace_id,
         }
     }
-
     /// Resolve a fully qualified domain using a static catalog.
     ///
     /// # Errors
@@ -293,7 +266,6 @@ impl ResolvedDomainV1 {
             .ok_or_else(|| ParseError::new("unknown dataspace alias in domain"))?;
         Ok(Self::new(canonical_name, dataspace_id))
     }
-
     /// Return whether the textual parent still maps to the pinned numeric ID.
     #[must_use]
     pub fn matches_catalog(&self, catalog: &DataSpaceCatalog) -> bool {
@@ -301,26 +273,22 @@ impl ResolvedDomainV1 {
             .by_alias(self.canonical_name.dataspace().as_ref())
             .is_some_and(|entry| entry.id == self.dataspace_id)
     }
-
     /// Return the canonical textual form.
     #[must_use]
     pub fn canonical_text(&self) -> String {
         self.canonical_name.to_string()
     }
-
     /// Return the resolved parent dataspace.
     #[must_use]
     pub fn parent_dataspace(&self) -> ResolvedDataSpaceV1 {
         ResolvedDataSpaceV1::new(self.canonical_name.dataspace().clone(), self.dataspace_id)
     }
 }
-
 impl fmt::Display for ResolvedDomainV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.canonical_name.fmt(f)
     }
 }
-
 /// Canonical account-alias text paired with its expected numeric dataspace ID.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -333,7 +301,6 @@ pub struct ResolvedAccountAliasV1 {
     /// Numeric parent dataspace ID that the text must resolve to at execution.
     pub dataspace_id: DataSpaceId,
 }
-
 impl ResolvedAccountAliasV1 {
     /// Construct a resolved account alias pair.
     #[must_use]
@@ -343,7 +310,6 @@ impl ResolvedAccountAliasV1 {
             dataspace_id,
         }
     }
-
     /// Resolve an account alias using a static catalog.
     ///
     /// # Errors
@@ -357,7 +323,6 @@ impl ResolvedAccountAliasV1 {
             .ok_or_else(|| ParseError::new("unknown dataspace alias in account alias"))?;
         Ok(Self::new(canonical_name, dataspace_id))
     }
-
     /// Return whether the textual parent still maps to the pinned numeric ID.
     #[must_use]
     pub fn matches_catalog(&self, catalog: &DataSpaceCatalog) -> bool {
@@ -365,13 +330,11 @@ impl ResolvedAccountAliasV1 {
             .by_alias(self.canonical_name.dataspace.as_ref())
             .is_some_and(|entry| entry.id == self.dataspace_id)
     }
-
     /// Return the canonical textual form.
     #[must_use]
     pub fn canonical_text(&self) -> String {
         self.canonical_name.to_string()
     }
-
     /// Convert to the numeric on-chain account-alias key.
     #[must_use]
     pub fn account_alias(&self) -> AccountAlias {
@@ -384,7 +347,6 @@ impl ResolvedAccountAliasV1 {
             self.dataspace_id,
         )
     }
-
     /// Return the optional resolved domain parent.
     #[must_use]
     pub fn parent_domain(&self) -> Option<ResolvedDomainV1> {
@@ -393,25 +355,21 @@ impl ResolvedAccountAliasV1 {
             .map(|canonical_name| ResolvedDomainV1::new(canonical_name, self.dataspace_id))
     }
 }
-
 impl fmt::Display for ResolvedAccountAliasV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.canonical_name.fmt(f)
     }
 }
-
 impl From<&ResolvedAccountAliasV1> for AccountAlias {
     fn from(value: &ResolvedAccountAliasV1) -> Self {
         value.account_alias()
     }
 }
-
 impl From<ResolvedAccountAliasV1> for AccountAlias {
     fn from(value: ResolvedAccountAliasV1) -> Self {
         value.account_alias()
     }
 }
-
 /// Account provisioning behavior requested by an account-alias intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -431,7 +389,6 @@ pub enum AccountProvisionV1 {
     #[codec(index = 1)]
     Create,
 }
-
 /// Whether an account alias should be primary or additional.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -451,7 +408,6 @@ pub enum AccountAliasRoleV1 {
     #[codec(index = 1)]
     Additional,
 }
-
 /// Desired state for one dataspace alias.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -464,7 +420,6 @@ pub struct AliasDataSpaceIntentV1 {
     /// Exact desired owner.
     pub owner: AccountId,
 }
-
 /// Desired state for one domain.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -477,7 +432,6 @@ pub struct AliasDomainIntentV1 {
     /// Exact desired owner.
     pub owner: AccountId,
 }
-
 /// Desired state for one account alias.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -494,7 +448,6 @@ pub struct AliasAccountIntentV1 {
     /// Whether this is the primary or an additional alias.
     pub role: AccountAliasRoleV1,
 }
-
 /// Declarative desired state for one alias/SNS resource.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -516,7 +469,6 @@ pub enum AliasIntentV1 {
     #[codec(index = 2)]
     AccountAlias(AliasAccountIntentV1),
 }
-
 impl AliasIntentV1 {
     /// Return the resource targeted by the intent.
     #[must_use]
@@ -528,7 +480,6 @@ impl AliasIntentV1 {
         }
     }
 }
-
 /// Lease terms used only when setup classifies a resource as absent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -542,7 +493,6 @@ pub struct AliasLeaseAcquisitionV1 {
     #[norito(default)]
     pub pricing_class_hint: Option<u8>,
 }
-
 impl AliasLeaseAcquisitionV1 {
     /// Construct acquisition terms.
     #[must_use]
@@ -553,7 +503,6 @@ impl AliasLeaseAcquisitionV1 {
         }
     }
 }
-
 /// Guard binding a lease operation to an exact policy and bounded quote.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -570,7 +519,6 @@ pub struct AliasQuoteGuardV1 {
     /// Last block timestamp at which the quote may be used.
     pub valid_until_ms: u64,
 }
-
 /// Canonical signed request body for planning one atomic alias setup transaction.
 ///
 /// Each entry is the exact [`EnsureAlias`](crate::isi::alias_setup::EnsureAlias)
@@ -588,11 +536,9 @@ pub struct AliasSetupPlanRequestV1 {
     /// Per-resource ensure instructions forming one indivisible setup intent.
     pub intents: Vec<crate::isi::alias_setup::EnsureAlias>,
 }
-
 impl AliasSetupPlanRequestV1 {
     /// Current signed planner request layout version.
     pub const VERSION: u8 = 1;
-
     /// Construct a versioned planner request.
     #[must_use]
     pub const fn new(intents: Vec<crate::isi::alias_setup::EnsureAlias>) -> Self {
@@ -602,7 +548,6 @@ impl AliasSetupPlanRequestV1 {
         }
     }
 }
-
 /// Resolved resource supported by setup, renewal, and auto-renew operations.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -624,7 +569,6 @@ pub enum AliasTargetV1 {
     #[codec(index = 2)]
     AccountAlias(ResolvedAccountAliasV1),
 }
-
 impl AliasTargetV1 {
     /// Return the pinned numeric dataspace for deterministic routing and revalidation.
     #[must_use]
@@ -636,7 +580,6 @@ impl AliasTargetV1 {
         }
     }
 }
-
 impl fmt::Display for AliasTargetV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -646,7 +589,6 @@ impl fmt::Display for AliasTargetV1 {
         }
     }
 }
-
 /// Owner-configured deterministic auto-renew policy.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -669,7 +611,6 @@ pub struct AliasAutoRenewConfigV1 {
     /// Number of failures after which auto-renew is suspended.
     pub max_failures: u32,
 }
-
 /// Persisted compare-and-set state for native deterministic alias auto-renew.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -697,11 +638,9 @@ pub struct AliasAutoRenewStateV1 {
     #[norito(default)]
     pub suspended_reason: Option<String>,
 }
-
 impl AliasAutoRenewStateV1 {
     /// Current persisted layout version.
     pub const VERSION: u8 = 1;
-
     /// Construct a freshly configured or disabled record.
     #[must_use]
     pub const fn new(
@@ -722,7 +661,6 @@ impl AliasAutoRenewStateV1 {
         }
     }
 }
-
 /// Canonical signed request body for planning one lease renewal.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -735,11 +673,9 @@ pub struct AliasLeaseRenewPlanRequestV1 {
     /// Exact absolute-expiry CAS renewal the client intends to submit.
     pub renewal: crate::isi::alias_setup::RenewAliasLease,
 }
-
 impl AliasLeaseRenewPlanRequestV1 {
     /// Current signed renewal planner request layout version.
     pub const VERSION: u8 = 1;
-
     /// Construct a versioned renewal planner request.
     #[must_use]
     pub const fn new(renewal: crate::isi::alias_setup::RenewAliasLease) -> Self {
@@ -749,7 +685,6 @@ impl AliasLeaseRenewPlanRequestV1 {
         }
     }
 }
-
 /// Canonical signed request body for planning one auto-renew configuration CAS.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -762,11 +697,9 @@ pub struct AliasAutoRenewPlanRequestV1 {
     /// Exact owner-only configuration CAS the client intends to submit.
     pub configuration: crate::isi::alias_setup::ConfigureAliasAutoRenew,
 }
-
 impl AliasAutoRenewPlanRequestV1 {
     /// Current signed auto-renew planner request layout version.
     pub const VERSION: u8 = 1;
-
     /// Construct a versioned auto-renew planner request.
     #[must_use]
     pub const fn new(configuration: crate::isi::alias_setup::ConfigureAliasAutoRenew) -> Self {
@@ -776,7 +709,6 @@ impl AliasAutoRenewPlanRequestV1 {
         }
     }
 }
-
 /// Exact lifecycle operation committed by a lifecycle transaction plan.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -795,7 +727,6 @@ pub enum AliasLifecycleOperationV1 {
     #[codec(index = 1)]
     ConfigureAutoRenew(crate::isi::alias_setup::ConfigureAliasAutoRenew),
 }
-
 impl AliasLifecycleOperationV1 {
     /// Return the resolved resource targeted by this lifecycle operation.
     #[must_use]
@@ -806,7 +737,6 @@ impl AliasLifecycleOperationV1 {
         }
     }
 }
-
 /// Planner classification for one lifecycle operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -826,7 +756,6 @@ pub enum AliasLifecyclePlanDispositionV1 {
     #[codec(index = 1)]
     Apply,
 }
-
 /// Planner classification for one resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -852,7 +781,6 @@ pub enum AliasPlanDispositionV1 {
     #[codec(index = 3)]
     Conflict,
 }
-
 /// Exact lease quote attached to a create or renewal plan resource.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -875,7 +803,6 @@ pub struct AliasLeaseQuoteV1 {
     /// Resulting redemption-period expiry.
     pub redemption_expires_at_ms: u64,
 }
-
 /// Planner result for one ordered resource intent.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -894,7 +821,6 @@ pub struct AliasPlanResourceV1 {
     #[norito(default)]
     pub instruction_index: Option<u32>,
 }
-
 /// Exact framed Norito instruction returned by the planner.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -907,7 +833,6 @@ pub struct AliasFramedInstructionV1 {
     /// Exact Norito frame that clients must decode and re-encode.
     pub framed_payload: Vec<u8>,
 }
-
 /// Exact total charge for one payment asset.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -920,7 +845,6 @@ pub struct AliasAssetTotalV1 {
     /// Exact aggregate amount.
     pub amount: Quantity,
 }
-
 /// Overall setup/readiness state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -943,7 +867,6 @@ pub enum AliasSetupStatusV1 {
     #[codec(index = 2)]
     Blocked,
 }
-
 /// Phase that produced a setup diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -972,7 +895,6 @@ pub enum AliasSetupValidationPhaseV1 {
     #[codec(index = 4)]
     Planning,
 }
-
 /// Severity of a setup diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -995,7 +917,6 @@ pub enum AliasSetupSeverityV1 {
     #[codec(index = 2)]
     Error,
 }
-
 /// One stable, secret-free setup/readiness diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1024,7 +945,6 @@ pub struct AliasSetupDiagnosticV1 {
     /// Human-readable corrective action.
     pub remediation: String,
 }
-
 /// Deterministically ordered setup/readiness diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1039,11 +959,9 @@ pub struct AliasSetupReportV1 {
     /// Stable diagnostics sorted by their canonical field order.
     pub diagnostics: Vec<AliasSetupDiagnosticV1>,
 }
-
 impl AliasSetupReportV1 {
     /// Current report layout version.
     pub const VERSION: u8 = 1;
-
     /// Construct a report and sort diagnostics deterministically.
     #[must_use]
     pub fn new(status: AliasSetupStatusV1, mut diagnostics: Vec<AliasSetupDiagnosticV1>) -> Self {
@@ -1055,7 +973,6 @@ impl AliasSetupReportV1 {
         }
     }
 }
-
 /// World-state anchor used to classify an alias plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1068,7 +985,6 @@ pub struct AliasPlanAnchorV1 {
     /// Hash of the anchored block.
     pub block_hash: Hash,
 }
-
 /// Canonical body committed by an alias transaction plan hash.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1097,11 +1013,9 @@ pub struct AliasTransactionPlanBodyV1 {
     /// Last block timestamp at which the plan may be submitted.
     pub valid_until_ms: u64,
 }
-
 impl AliasTransactionPlanBodyV1 {
     /// Current canonical body layout version.
     pub const VERSION: u8 = 1;
-
     /// Compute the domain-separated canonical plan body hash.
     #[must_use]
     pub fn canonical_hash(&self) -> HashOf<Self> {
@@ -1111,7 +1025,6 @@ impl AliasTransactionPlanBodyV1 {
             encoded.as_slice(),
         ]))
     }
-
     /// Sort fields whose wire semantics are sets while preserving resource and instruction order.
     pub fn canonicalize_unordered_fields(&mut self) {
         self.totals_by_asset.sort();
@@ -1119,7 +1032,6 @@ impl AliasTransactionPlanBodyV1 {
         self.blockers.sort();
     }
 }
-
 /// Alias transaction plan and its canonical body commitment.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1132,7 +1044,6 @@ pub struct AliasTransactionPlanV1 {
     /// Domain-separated hash of `body`.
     pub plan_hash: HashOf<AliasTransactionPlanBodyV1>,
 }
-
 impl AliasTransactionPlanV1 {
     /// Construct a plan after canonicalizing unordered body fields.
     #[must_use]
@@ -1141,14 +1052,12 @@ impl AliasTransactionPlanV1 {
         let plan_hash = body.canonical_hash();
         Self { body, plan_hash }
     }
-
     /// Verify that the carried hash matches the canonical body.
     #[must_use]
     pub fn verify_hash(&self) -> bool {
         self.plan_hash == self.body.canonical_hash()
     }
 }
-
 /// Canonical body committed by an alias lifecycle transaction plan hash.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1183,11 +1092,9 @@ pub struct AliasLifecycleTransactionPlanBodyV1 {
     /// Last wall-clock millisecond at which a client may submit this plan.
     pub valid_until_ms: u64,
 }
-
 impl AliasLifecycleTransactionPlanBodyV1 {
     /// Current canonical lifecycle plan body layout version.
     pub const VERSION: u8 = 1;
-
     /// Compute the domain-separated canonical lifecycle plan body hash.
     #[must_use]
     pub fn canonical_hash(&self) -> HashOf<Self> {
@@ -1197,7 +1104,6 @@ impl AliasLifecycleTransactionPlanBodyV1 {
             encoded.as_slice(),
         ]))
     }
-
     /// Sort fields whose wire semantics are sets.
     pub fn canonicalize_unordered_fields(&mut self) {
         self.totals_by_asset.sort();
@@ -1205,7 +1111,6 @@ impl AliasLifecycleTransactionPlanBodyV1 {
         self.blockers.sort();
     }
 }
-
 /// Alias lifecycle transaction plan and its canonical body commitment.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1218,7 +1123,6 @@ pub struct AliasLifecycleTransactionPlanV1 {
     /// Domain-separated hash of `body`.
     pub plan_hash: HashOf<AliasLifecycleTransactionPlanBodyV1>,
 }
-
 impl AliasLifecycleTransactionPlanV1 {
     /// Construct a plan after canonicalizing unordered body fields.
     #[must_use]
@@ -1227,28 +1131,23 @@ impl AliasLifecycleTransactionPlanV1 {
         let plan_hash = body.canonical_hash();
         Self { body, plan_hash }
     }
-
     /// Verify that the carried hash matches the canonical body.
     #[must_use]
     pub fn verify_hash(&self) -> bool {
         self.plan_hash == self.body.canonical_hash()
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_primitives::numeric::Numeric;
-
     use super::*;
     use crate::nexus::DataSpaceMetadata;
-
     fn plan_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
             Hash::new([seed]),
         ))
     }
-
     fn shared_plan_network_id() -> NetworkId {
         let mut bytes = [0_u8; Hash::LENGTH];
         hex::decode_to_slice(
@@ -1260,7 +1159,6 @@ mod tests {
             Hash::prehashed(bytes),
         ))
     }
-
     #[derive(crate::DeriveJsonDeserialize)]
     struct SharedAliasSetupFixture {
         schema_version: u8,
@@ -1273,14 +1171,12 @@ mod tests {
         instruction_frame_vectors: Vec<SharedInstructionFrameVector>,
         report_json_vector: AliasSetupReportV1,
     }
-
     #[derive(crate::DeriveJsonDeserialize)]
     struct SharedResolvedNameVectors {
         dataspace: ResolvedDataSpaceV1,
         domain: ResolvedDomainV1,
         account_alias: ResolvedAccountAliasV1,
     }
-
     #[derive(crate::DeriveJsonDeserialize)]
     struct SharedAliasNameCase {
         input: String,
@@ -1289,7 +1185,6 @@ mod tests {
         domain: Option<String>,
         dataspace: String,
     }
-
     #[derive(crate::DeriveJsonDeserialize)]
     struct SharedPlanHashVector {
         name: String,
@@ -1297,17 +1192,14 @@ mod tests {
         canonical_body_norito_hex: String,
         canonical_plan_hash_hex: String,
     }
-
     #[derive(crate::DeriveJsonDeserialize)]
     struct SharedInstructionFrameVector {
         name: String,
         wire_id: String,
         framed_payload_hex: String,
     }
-
     const ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1: &[u8] =
         b"iroha:account-onboarding-plan-receipt:v1\0";
-
     #[derive(
         Debug,
         Clone,
@@ -1326,7 +1218,6 @@ mod tests {
         #[norito(default)]
         permissions: Vec<String>,
     }
-
     #[derive(
         Debug,
         Clone,
@@ -1352,7 +1243,6 @@ mod tests {
         owner_auto_renew_instruction: Option<AliasFramedInstructionV1>,
         valid_until_ms: u64,
     }
-
     impl FixtureAccountOnboardingPlanBodyV1 {
         fn canonical_hash(&self) -> Hash {
             let encoded = self.encode();
@@ -1362,7 +1252,6 @@ mod tests {
             ])
         }
     }
-
     #[derive(
         Debug,
         Clone,
@@ -1379,7 +1268,6 @@ mod tests {
         plan_hash: Hash,
         signature: Signature,
     }
-
     impl FixtureAccountOnboardingPlanReceiptV1 {
         fn verify(&self) -> bool {
             self.plan_hash == self.body.canonical_hash()
@@ -1394,7 +1282,6 @@ mod tests {
                     })
         }
     }
-
     #[derive(
         Debug, Clone, PartialEq, Eq, crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize,
     )]
@@ -1408,13 +1295,11 @@ mod tests {
         signature_hex: String,
         receipt_json: FixtureAccountOnboardingPlanReceiptV1,
     }
-
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked alias setup fixture keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn catalog() -> DataSpaceCatalog {
         DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
@@ -1427,23 +1312,19 @@ mod tests {
         ])
         .expect("dataspace catalog")
     }
-
     fn resolved_alias() -> ResolvedAccountAliasV1 {
         ResolvedAccountAliasV1::resolve_catalog("merchant@banka.paynet", &catalog())
             .expect("resolved alias")
     }
-
     fn payment_asset() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("assets", "paynet").expect("asset domain"),
             "xor".parse().expect("asset name"),
         )
     }
-
     fn amount(value: u32) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(value, 0)).expect("quantity")
     }
-
     fn deterministic_account_onboarding_receipt_vector() -> SharedAccountOnboardingReceiptVector {
         let target_signer = KeyPair::try_from_seed(vec![0x22; 32], Algorithm::Ed25519)
             .expect("derive deterministic onboarding target");
@@ -1529,18 +1410,15 @@ mod tests {
             receipt_json: receipt,
         }
     }
-
     #[test]
     fn account_alias_name_parses_both_supported_forms() {
         let domainful: AccountAliasName = "Merchant@Banka.Paynet".parse().expect("domain alias");
         assert_eq!(domainful.to_string(), "merchant@banka.paynet");
         assert_eq!(domainful.domain.as_ref().map(Name::as_ref), Some("banka"));
-
         let root: AccountAliasName = "Merchant@Paynet".parse().expect("root alias");
         assert_eq!(root.to_string(), "merchant@paynet");
         assert!(root.domain.is_none());
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -1551,7 +1429,6 @@ mod tests {
             CompareAndSetPrimaryAccountAlias, ConfigureAliasAutoRenew, EnsureAlias,
             RebindAccountAlias, RenewAliasLease,
         };
-
         let fixture: SharedAliasSetupFixture = norito::json::from_str(include_str!(
             "../../../fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json"
         ))
@@ -1596,7 +1473,6 @@ mod tests {
             );
             assert_eq!(parsed.dataspace.as_ref(), case.dataspace);
         }
-
         let resolved_alias = resolved_alias();
         assert_eq!(
             fixture.resolved_name_json_vectors.dataspace,
@@ -1645,7 +1521,6 @@ mod tests {
             )
             .expect("decode exact alias permission value");
         assert_eq!(permission_alias, resolved_alias);
-
         let expected_hash_domains = [
             (
                 "setup_account_alias_create",
@@ -1684,7 +1559,6 @@ mod tests {
                 _ => unreachable!("expected plan vector names are closed"),
             }
         }
-
         let expected_frames = [
             ("ensure_account_alias", EnsureAlias::WIRE_ID),
             ("renew_account_alias", RenewAliasLease::WIRE_ID),
@@ -1726,7 +1600,6 @@ mod tests {
             assert_eq!(reencoded_wire_id, wire_id);
             assert_eq!(reencoded, framed);
         }
-
         let expected_report = AliasSetupReportV1::new(
             AliasSetupStatusV1::Blocked,
             vec![AliasSetupDiagnosticV1 {
@@ -1748,7 +1621,6 @@ mod tests {
             norito::json::from_str(&report_json).expect("decode shared report JSON");
         assert_eq!(report, fixture.report_json_vector);
     }
-
     #[test]
     fn account_alias_name_rejects_noncanonical_shapes() {
         for input in [
@@ -1767,30 +1639,25 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn resolved_names_pin_and_revalidate_dataspace_ids() {
         let alias = resolved_alias();
         assert_eq!(alias.dataspace_id, DataSpaceId::new(7));
         assert!(alias.matches_catalog(&catalog()));
         assert_eq!(alias.account_alias().dataspace, DataSpaceId::new(7));
-
         let wrong = ResolvedAccountAliasV1::new(alias.canonical_name, DataSpaceId::new(8));
         assert!(!wrong.matches_catalog(&catalog()));
     }
-
     #[test]
     fn resolved_names_roundtrip_through_norito_and_json() {
         let alias = resolved_alias();
         let bytes = alias.encode();
         let decoded = ResolvedAccountAliasV1::decode(&mut bytes.as_slice()).expect("Norito decode");
         assert_eq!(decoded, alias);
-
         let json = norito::json::to_json(&alias).expect("JSON encode");
         let decoded: ResolvedAccountAliasV1 = norito::json::from_str(&json).expect("JSON decode");
         assert_eq!(decoded, alias);
     }
-
     #[test]
     fn setup_dtos_roundtrip_and_plan_hash_detects_changes() {
         let alias = resolved_alias();
@@ -1821,7 +1688,6 @@ mod tests {
         let decoded_request: AliasSetupPlanRequestV1 =
             norito::json::from_str(&request_json).expect("JSON decode setup request");
         assert_eq!(decoded_request, request);
-
         let body = AliasTransactionPlanBodyV1 {
             version: AliasTransactionPlanBodyV1::VERSION,
             authority,
@@ -1858,12 +1724,10 @@ mod tests {
         };
         let plan = AliasTransactionPlanV1::new(body);
         assert!(plan.verify_hash());
-
         let encoded = norito::to_bytes(&plan).expect("encode plan");
         let decoded: AliasTransactionPlanV1 =
             norito::decode_from_bytes(&encoded).expect("decode plan");
         assert_eq!(decoded, plan);
-
         let json = norito::json::to_json(&plan).expect("JSON encode");
         let decoded: AliasTransactionPlanV1 = norito::json::from_str(&json).expect("JSON decode");
         assert_eq!(decoded, plan);
@@ -1873,16 +1737,13 @@ mod tests {
             norito::json::from_str::<AliasTransactionPlanV1>(&legacy_json).is_err(),
             "retired chain_id plan fields must fail closed"
         );
-
         let mut tampered = plan;
         tampered.body.valid_until_ms += 1;
         assert!(!tampered.verify_hash());
     }
-
     #[test]
     fn lifecycle_planner_dtos_roundtrip_and_hash_detects_changes() {
         use crate::isi::alias_setup::{ConfigureAliasAutoRenew, RenewAliasLease};
-
         let authority = account(0xA3);
         let target = AliasTargetV1::AccountAlias(resolved_alias());
         let guard = AliasQuoteGuardV1 {
@@ -1901,7 +1762,6 @@ mod tests {
         let decoded: AliasLeaseRenewPlanRequestV1 =
             norito::json::from_str(&json).expect("JSON decode renewal request");
         assert_eq!(decoded, renewal_request);
-
         let configuration = ConfigureAliasAutoRenew::new(
             target.clone(),
             4,
@@ -1925,7 +1785,6 @@ mod tests {
         let decoded: AliasAutoRenewPlanRequestV1 =
             norito::json::from_str(&json).expect("JSON decode auto-renew request");
         assert_eq!(decoded, configuration_request);
-
         let body = AliasLifecycleTransactionPlanBodyV1 {
             version: AliasLifecycleTransactionPlanBodyV1::VERSION,
             authority,
@@ -1973,12 +1832,10 @@ mod tests {
             norito::json::from_str::<AliasLifecycleTransactionPlanV1>(&legacy_json).is_err(),
             "retired chain_id lifecycle-plan fields must fail closed"
         );
-
         let mut tampered = plan;
         tampered.body.valid_until_ms += 1;
         assert!(!tampered.verify_hash());
     }
-
     #[test]
     fn auto_renew_state_roundtrips_for_enable_and_disable() {
         let alias = resolved_alias();
@@ -2016,7 +1873,6 @@ mod tests {
             assert_eq!(decoded, state);
         }
     }
-
     #[test]
     fn report_diagnostics_are_sorted_deterministically() {
         let diagnostic = |code: &str| AliasSetupDiagnosticV1 {

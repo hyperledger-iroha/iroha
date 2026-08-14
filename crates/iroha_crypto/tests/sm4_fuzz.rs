@@ -1,19 +1,13 @@
 //! Deterministic tests for SM4 AEAD helpers.
 #![cfg(feature = "sm")]
-
 use iroha_crypto::Sm4Key;
-
 #[path = "sm4_wycheproof_fixture.rs"]
 mod sm4_wycheproof_fixture;
-
 use sm4_wycheproof_fixture::{Sm4WycheproofMode, load_sm4_wycheproof_cases};
-
 const TAG_LENGTHS: [usize; 7] = [4, 6, 8, 10, 12, 14, 16];
-
 fn u8_index(idx: usize) -> u8 {
     u8::try_from(idx).expect("test helper index fits in u8")
 }
-
 fn key(seed: u8) -> [u8; 16] {
     let mut out = [0u8; 16];
     for (idx, byte) in out.iter_mut().enumerate() {
@@ -21,7 +15,6 @@ fn key(seed: u8) -> [u8; 16] {
     }
     out
 }
-
 fn nonce12(seed: u8) -> [u8; 12] {
     let mut out = [0u8; 12];
     for (idx, byte) in out.iter_mut().enumerate() {
@@ -29,13 +22,11 @@ fn nonce12(seed: u8) -> [u8; 12] {
     }
     out
 }
-
 fn bytes(seed: u8, len: usize) -> Vec<u8> {
     (0..len)
         .map(|idx| seed.wrapping_mul(31).wrapping_add(u8_index(idx)))
         .collect()
 }
-
 #[test]
 fn sm4_wycheproof_invalid_cases_are_rejected() {
     for case in load_sm4_wycheproof_cases() {
@@ -71,7 +62,6 @@ fn sm4_wycheproof_invalid_cases_are_rejected() {
         }
     }
 }
-
 #[test]
 fn sm4_gcm_detects_tampering_deterministic() {
     for seed in [0_u8, 1, 7, 31, 127, 255] {
@@ -82,7 +72,6 @@ fn sm4_gcm_detects_tampering_deterministic() {
         let (ciphertext, tag) = key
             .encrypt_gcm(&nonce, &aad, &plaintext)
             .expect("encrypt_gcm should succeed with 16-byte key");
-
         let mut tampered_tag = tag;
         let idx = seed as usize % tampered_tag.len();
         tampered_tag[idx] ^= 0x01;
@@ -91,7 +80,6 @@ fn sm4_gcm_detects_tampering_deterministic() {
                 .is_err(),
             "SM4-GCM must reject when tag byte {idx} is flipped",
         );
-
         let mut tampered_cipher = ciphertext.clone();
         tampered_cipher[0] ^= 0x80;
         assert!(
@@ -101,7 +89,6 @@ fn sm4_gcm_detects_tampering_deterministic() {
         );
     }
 }
-
 #[test]
 fn sm4_ccm_detects_tampering_deterministic() {
     for seed in [0_u8, 1, 7, 31, 127, 255] {
@@ -113,7 +100,6 @@ fn sm4_ccm_detects_tampering_deterministic() {
             let (ciphertext, tag) = key
                 .encrypt_ccm(&nonce, &aad, &plaintext, tag_len)
                 .expect("encrypt_ccm should succeed for supported tag lengths");
-
             let mut tampered_cipher = ciphertext.clone();
             tampered_cipher[0] ^= 0x40;
             assert!(
@@ -121,7 +107,6 @@ fn sm4_ccm_detects_tampering_deterministic() {
                     .is_err(),
                 "SM4-CCM must reject modified ciphertext",
             );
-
             let mut tampered_tag = tag.clone();
             let idx = seed as usize % tampered_tag.len();
             tampered_tag[idx] ^= 0x02;
@@ -130,7 +115,6 @@ fn sm4_ccm_detects_tampering_deterministic() {
                     .is_err(),
                 "SM4-CCM must reject altered tag",
             );
-
             if tag.len() > 1 {
                 let truncated_tag = &tampered_tag[..tampered_tag.len() - 1];
                 assert!(

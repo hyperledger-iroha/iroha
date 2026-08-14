@@ -1,6 +1,5 @@
 //! Governance pipeline SLA enforcement tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -21,7 +20,6 @@ use iroha_data_model::{
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
 fn deploy_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
     iroha_data_model::smart_contract::ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -33,7 +31,6 @@ fn deploy_contract_address() -> iroha_data_model::smart_contract::ContractAddres
     )
     .expect("deploy contract address")
 }
-
 fn deploy_payload(code_hex: &str, abi_hex: &str) -> DeployContractProposal {
     DeployContractProposal {
         contract_address: deploy_contract_address(),
@@ -43,7 +40,6 @@ fn deploy_payload(code_hex: &str, abi_hex: &str) -> DeployContractProposal {
         manifest_provenance: None,
     }
 }
-
 #[test]
 fn pipeline_rejects_when_referendum_missing_at_study_deadline() {
     let kura = Kura::blank_kura_for_testing();
@@ -54,7 +50,6 @@ fn pipeline_rejects_when_referendum_missing_at_study_deadline() {
     state.gov.pipeline_review_sla_blocks = 10;
     state.gov.pipeline_decision_sla_blocks = 10;
     state.gov.pipeline_enactment_sla_blocks = 10;
-
     let mut block1 = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
     let mut tx1 = block1.transaction();
     let pid = [0xAA; 32];
@@ -87,7 +82,6 @@ fn pipeline_rejects_when_referendum_missing_at_study_deadline() {
         .insert(rid, approvals);
     tx1.apply();
     block1.commit().expect("commit first block");
-
     let block2 = state.block(BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0));
     let rec = block2
         .world
@@ -112,7 +106,6 @@ fn pipeline_rejects_when_referendum_missing_at_study_deadline() {
         "study stage failure must be recorded"
     );
 }
-
 #[test]
 fn pipeline_marks_enactment_overdue() {
     let kura = Kura::blank_kura_for_testing();
@@ -125,7 +118,6 @@ fn pipeline_marks_enactment_overdue() {
     state.gov.pipeline_review_sla_blocks = 1;
     state.gov.pipeline_decision_sla_blocks = 1;
     state.gov.pipeline_enactment_sla_blocks = 1;
-
     let mut block1 = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
     let mut tx1 = block1.transaction();
     let pid = [0xBB; 32];
@@ -170,7 +162,6 @@ fn pipeline_marks_enactment_overdue() {
         .insert(rid.clone(), approvals);
     tx1.apply();
     block1.commit().expect("commit first block");
-
     let block2 = state.block(BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0));
     let rec = block2
         .world
@@ -193,7 +184,6 @@ fn pipeline_marks_enactment_overdue() {
         "enactment stage should record overdue failure"
     );
 }
-
 #[test]
 fn pipeline_rejects_when_rules_quorum_missing() {
     let kura = Kura::blank_kura_for_testing();
@@ -206,7 +196,6 @@ fn pipeline_rejects_when_rules_quorum_missing() {
     state.gov.pipeline_review_sla_blocks = 10;
     state.gov.pipeline_decision_sla_blocks = 10;
     state.gov.pipeline_enactment_sla_blocks = 10;
-
     let mut block1 = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
     let mut tx1 = block1.transaction();
     let pid = [0xCC; 32];
@@ -226,7 +215,6 @@ fn pipeline_rejects_when_rules_quorum_missing() {
     );
     tx1.apply();
     block1.commit().expect("commit first block");
-
     let block2 = state.block(BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0));
     let rec = block2
         .world

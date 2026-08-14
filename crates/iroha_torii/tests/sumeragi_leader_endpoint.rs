@@ -1,10 +1,7 @@
 //! Router-level coverage for the authoritative Sumeragi v2 leader endpoint.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "telemetry")]
-
 use std::sync::Mutex;
-
 use axum::{Router, body::Body, http::Request, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::sumeragi::status;
@@ -14,9 +11,7 @@ use iroha_data_model::block::consensus_v2::{
     SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase,
 };
 use tower::ServiceExt as _;
-
 static LEADER_ENDPOINT_TEST_LOCK: Mutex<()> = Mutex::new(());
-
 #[tokio::test]
 async fn sumeragi_leader_endpoint_uses_authoritative_v2_round() {
     let _guard = LEADER_ENDPOINT_TEST_LOCK
@@ -58,7 +53,6 @@ async fn sumeragi_leader_endpoint_uses_authoritative_v2_round() {
     };
     published.validate().expect("valid leader status fixture");
     status::set_v2_status(published);
-
     let app = Router::new().route(
         "/v1/sumeragi/leader",
         get(|| async move {
@@ -78,7 +72,6 @@ async fn sumeragi_leader_endpoint_uses_authoritative_v2_round() {
         .await
         .expect("leader response");
     status::clear_v2_status();
-
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let body = response
         .into_body()

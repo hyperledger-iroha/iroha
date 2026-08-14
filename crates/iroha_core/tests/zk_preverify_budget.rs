@@ -3,10 +3,8 @@
 #![cfg(feature = "zk-tests")]
 //! Unit tests for pre-verify budget handling.
 #![cfg(feature = "zk-preverify")]
-
 use iroha_core::zk::{DedupCache, PreverifyResult, preverify_with_budget};
 use iroha_data_model::proof::ProofBox;
-
 #[test]
 fn budget_exceeded_for_large_input_vs_budget() {
     let mut d = DedupCache::new();

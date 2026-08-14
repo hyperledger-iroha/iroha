@@ -1,5 +1,4 @@
 // Durable terminal-boundary and compaction-fault regression tests.
-
 #[test]
 fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain() {
     #[derive(Clone, Copy, Debug)]
@@ -10,7 +9,6 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
         CompleteRelease,
         Commit,
     }
-
     for terminal in [
         TerminalAppend::Release,
         TerminalAppend::OrderedRelease,
@@ -61,7 +59,6 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
             !pressure_rx.borrow().is_saturated(),
             "{terminal:?}: pressure must be healthy before fault injection"
         );
-
         let inject_ambiguous_append = || {
             queue
                 .lane_reservation_journal
@@ -99,7 +96,6 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
                 queue.commit_lane_reservation_for_test(&keys[0]).map(|_| ())
             }
         };
-
         assert!(
             matches!(result, Err(LaneQueueReservationError::Journal(_))),
             "{terminal:?}: ambiguous terminal append must report a journal error"
@@ -122,13 +118,11 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
             "{terminal:?}: terminal ambiguity must block even unrelated lane drain"
         );
     }
-
     #[derive(Clone, Copy, Debug)]
     enum StartupTerminalAppend {
         ForgetCommitAfterProof,
         ForgetReleaseAfterProof,
     }
-
     for terminal in [
         StartupTerminalAppend::ForgetCommitAfterProof,
         StartupTerminalAppend::ForgetReleaseAfterProof,
@@ -211,7 +205,6 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
             }
             (keys, barrier)
         };
-
         if matches!(terminal, StartupTerminalAppend::ForgetCommitAfterProof) {
             let block_header =
                 ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
@@ -226,7 +219,6 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
                 .commit()
                 .expect("commit exact startup-terminal identity");
         }
-
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let replay = queue
             .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -303,7 +295,6 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
             .as_mut()
             .expect("restored reservation journal")
             .inject_next_append_fault(ReservationJournalAppendFault::SyncAfterFullWrite);
-
         let error = match terminal {
             StartupTerminalAppend::ForgetCommitAfterProof => queue
                 .commit_lane_reservation_for_test(&keys[0])
@@ -358,7 +349,6 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
         }
     }
 }
-
 #[test]
 fn ambiguous_reservation_compaction_fails_closed_after_terminal_application() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -415,7 +405,6 @@ fn ambiguous_reservation_compaction_fails_closed_after_terminal_application() {
         .inject_next_compaction_fault(
             ReservationJournalCompactionFault::AfterRenameBeforeParentSync,
         );
-
     assert_eq!(
         queue
             .release_lane_reservation(&key)

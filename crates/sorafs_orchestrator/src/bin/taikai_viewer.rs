@@ -6,7 +6,6 @@
 //! Multiple renditions can be supplied via repeated `--segment` flags to cover
 //! ABR ladders in one run.
 #![allow(unexpected_cfgs)]
-
 use std::{
     collections::HashMap,
     env, fs, io,
@@ -14,7 +13,6 @@ use std::{
     path::{Path, PathBuf},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
-
 use blake3::hash as blake3_hash;
 use iroha_data_model::taikai::{CekRotationReceiptV1, TaikaiSegmentEnvelopeV1};
 use iroha_telemetry::metrics::Metrics;
@@ -22,35 +20,29 @@ use norito::{
     decode_from_bytes, json,
     json::{Map, Value},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
-
 const USAGE: &str = "\
 taikai_viewer --segment envelope=PATH,car=PATH [--segment ...] [--cluster LABEL] [--lane LABEL]
               [--rebuffer-events N] [--pq-health PCT] [--cek-receipt PATH] [--cek-fetch-ms N]
               [--alert ALERTNAME ...] [--metrics-out PATH] [--summary-out PATH]
 ";
-
 #[derive(Debug)]
 struct SegmentInput {
     envelope: PathBuf,
     car: PathBuf,
 }
-
 #[derive(Debug, Default)]
 struct StreamStats {
     segments: u64,
     rebuffer_events: u64,
 }
-
 fn main() {
     if let Err(err) = run() {
         eprintln!("taikai_viewer: {err}");
         std::process::exit(1);
     }
 }
-
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args()?;
     if args.segments.is_empty() {
@@ -60,17 +52,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
-
     let metrics = Metrics::default();
     let mut summaries: Vec<Value> = Vec::new();
     let mut stream_stats: HashMap<String, StreamStats> = HashMap::new();
     let mut stream_order: Vec<String> = Vec::new();
-
     for segment in &args.segments {
         let envelope = load_envelope(&segment.envelope)?;
         let car_bytes = fs::read(&segment.car)?;
         validate_car(&envelope, &car_bytes, &segment.car)?;
-
         let render_name = envelope.rendition_id.to_string();
         let stream = envelope.stream_id.to_string();
         if !stream_stats.contains_key(&stream) {
@@ -78,7 +67,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         let stats = stream_stats.entry(stream.clone()).or_default();
         stats.segments += 1;
-
         let ingest = &envelope.ingest;
         let instrumentation = &envelope.instrumentation;
         let mut entry = Map::new();
@@ -110,7 +98,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         summaries.push(Value::Object(entry));
     }
-
     if let Some(first_stream) = stream_order.first().cloned()
         && let Some(first_stats) = stream_stats.get_mut(&first_stream)
     {
@@ -119,13 +106,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             metrics.inc_taikai_viewer_rebuffer(&args.cluster, &first_stream, args.rebuffer_events);
         }
     }
-
     for (stream, stats) in &stream_stats {
         metrics.inc_taikai_viewer_segments(&args.cluster, stream, stats.segments);
     }
-
     metrics.set_taikai_viewer_pq_health(&args.cluster, args.pq_health);
-
     let mut cek_summary: Option<Map> = None;
     if let Some(path) = args.cek_receipt.as_ref() {
         let (measured_ms, age_seconds) = read_cek_receipt(path)?;
@@ -145,18 +129,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         cek.insert("rotation_age_seconds".into(), Value::from(age_seconds));
         cek_summary = Some(cek);
     }
-
     for alertname in &args.alerts {
         metrics.inc_taikai_viewer_alert_firing(&args.cluster, alertname);
     }
-
     let metrics_text = metrics.try_to_string()?;
     if let Some(path) = args.metrics_out.as_ref() {
         write_output_bytes(path, "metrics output", metrics_text.as_bytes())?;
     } else {
         println!("{metrics_text}");
     }
-
     if let Some(path) = args.summary_out.as_ref() {
         let mut root = Map::new();
         root.insert("cluster".into(), Value::from(args.cluster));
@@ -185,15 +166,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let rendered = json::to_json_pretty(&Value::Object(root))?;
         write_output_bytes(path, "summary output", rendered.as_bytes())?;
     }
-
     Ok(())
 }
-
 fn write_output_bytes(path: &Path, label: &str, bytes: &[u8]) -> io::Result<()> {
     let mut file = open_output_file(path, label)?;
     file.write_all(bytes)
 }
-
 fn open_output_file(path: &Path, label: &str) -> io::Result<fs::File> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -224,7 +202,6 @@ fn open_output_file(path: &Path, label: &str) -> io::Result<fs::File> {
     }
     Ok(file)
 }
-
 fn ensure_parent_dir(path: &Path) -> io::Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -242,7 +219,6 @@ fn ensure_parent_dir(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-
 fn validate_output_path(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -267,7 +243,6 @@ fn validate_output_path(path: &Path) -> io::Result<()> {
             ));
         }
     }
-
     if let Some(parent) = path.parent() {
         for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
             if ancestor.as_os_str().is_empty() {
@@ -303,20 +278,16 @@ fn validate_output_path(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut fs::OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -332,7 +303,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -349,13 +319,11 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0
 }
-
 fn load_envelope(path: &Path) -> Result<TaikaiSegmentEnvelopeV1, Box<dyn std::error::Error>> {
     let bytes = fs::read(path)?;
     decode_from_bytes(&bytes)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()).into())
 }
-
 fn validate_car(
     envelope: &TaikaiSegmentEnvelopeV1,
     car_bytes: &[u8],
@@ -390,7 +358,6 @@ fn validate_car(
     }
     Ok(())
 }
-
 fn read_cek_receipt(path: &Path) -> Result<(u32, u64), Box<dyn std::error::Error>> {
     let start = Instant::now();
     let bytes = fs::read(path)?;
@@ -401,7 +368,6 @@ fn read_cek_receipt(path: &Path) -> Result<(u32, u64), Box<dyn std::error::Error
     let duration_ms = start.elapsed().as_millis();
     let observed_ms = duration_ms.max(decode_elapsed.as_millis());
     let clamped_ms = observed_ms.min(u128::from(u32::MAX)) as u32;
-
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -409,7 +375,6 @@ fn read_cek_receipt(path: &Path) -> Result<(u32, u64), Box<dyn std::error::Error
     let age = now.saturating_sub(receipt.issued_at_unix);
     Ok((clamped_ms, age))
 }
-
 struct ParsedArgs {
     cluster: String,
     lane: String,
@@ -422,7 +387,6 @@ struct ParsedArgs {
     segments: Vec<SegmentInput>,
     alerts: Vec<String>,
 }
-
 fn parse_args() -> Result<ParsedArgs, Box<dyn std::error::Error>> {
     let mut cluster = String::from("local");
     let mut lane = String::from("lane-a");
@@ -434,7 +398,6 @@ fn parse_args() -> Result<ParsedArgs, Box<dyn std::error::Error>> {
     let mut summary_out: Option<PathBuf> = None;
     let mut segments = Vec::new();
     let mut alerts = Vec::new();
-
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -564,7 +527,6 @@ fn parse_args() -> Result<ParsedArgs, Box<dyn std::error::Error>> {
             }
         }
     }
-
     Ok(ParsedArgs {
         cluster,
         lane,
@@ -578,7 +540,6 @@ fn parse_args() -> Result<ParsedArgs, Box<dyn std::error::Error>> {
         alerts,
     })
 }
-
 fn parse_segment(raw: &str) -> Result<SegmentInput, Box<dyn std::error::Error>> {
     let mut envelope = None;
     let mut car = None;
@@ -603,29 +564,22 @@ fn parse_segment(raw: &str) -> Result<SegmentInput, Box<dyn std::error::Error>> 
     })?;
     Ok(SegmentInput { envelope, car })
 }
-
 #[cfg(test)]
 mod tests {
     use tempfile::{TempDir, tempdir};
-
     use super::*;
-
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");
         (temp, path)
     }
-
     #[test]
     fn write_output_bytes_creates_parent_and_writes_all_bytes() {
         let (_temp, temp_path) = canonical_tempdir();
         let output_path = temp_path.join("nested").join("metrics.prom");
-
         write_output_bytes(&output_path, "metrics output", b"metric 1\n").expect("write metrics");
-
         assert_eq!(fs::read(&output_path).expect("read output"), b"metric 1\n");
     }
-
     #[cfg(unix)]
     #[test]
     fn write_output_bytes_rejects_symlink_output() {
@@ -634,18 +588,15 @@ mod tests {
         fs::write(&target_path, b"unchanged\n").expect("write target");
         let output_path = temp_path.join("metrics.prom");
         std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
-
         let err = write_output_bytes(&output_path, "metrics output", b"replace")
             .expect_err("reject symlink output");
         let message = err.to_string();
-
         assert!(
             message.contains("must not be a symlink"),
             "unexpected error: {message}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
     }
-
     #[cfg(unix)]
     #[test]
     fn write_output_bytes_rejects_symlink_parent() {
@@ -655,11 +606,9 @@ mod tests {
         let linked_dir = temp_path.join("linked");
         std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
         let output_path = linked_dir.join("summary.json");
-
         let err = write_output_bytes(&output_path, "summary output", b"replace")
             .expect_err("reject symlink parent");
         let message = err.to_string();
-
         assert!(
             message.contains("parent") && message.contains("must not be a symlink"),
             "unexpected error: {message}"

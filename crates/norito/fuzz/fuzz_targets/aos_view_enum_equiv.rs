@@ -1,20 +1,17 @@
 #![no_main]
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-
 #[derive(Clone, Debug, Arbitrary)]
 enum E {
     Name(#[arbitrary(with = arbitrary_string_cap)] String),
     Code(u32),
 }
-
 #[derive(Clone, Debug, Arbitrary)]
 struct Row {
     id: u64,
     e: E,
     flag: bool,
 }
-
 fn arbitrary_string_cap(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<String> {
     let n: usize = u.int_in_range(0..=32)?;
     let mut s = String::with_capacity(n);
@@ -24,7 +21,6 @@ fn arbitrary_string_cap(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Resul
     }
     Ok(s)
 }
-
 fuzz_target!(|rows: Vec<Row>| {
     use norito::columnar::{AosEnumRef, EnumBorrow};
     let rows = rows.into_iter().take(128).collect::<Vec<_>>();

@@ -1,38 +1,29 @@
 // pub(crate) for inner modules it is not redundant, the contents of `signature` module get re-exported at root
 #![allow(clippy::redundant_pub_crate)]
-
 #[cfg(all(feature = "bls", not(feature = "ffi_import")))]
 pub(crate) mod bls;
-
 #[cfg(not(feature = "ffi_import"))]
 pub(crate) mod ed25519;
-
-#[cfg(not(feature = "ffi_import"))]
-pub(crate) mod secp256k1;
-
 #[cfg(all(feature = "gost", not(feature = "ffi_import")))]
 pub(crate) mod gost;
-
+#[cfg(not(feature = "ffi_import"))]
+pub(crate) mod secp256k1;
 #[cfg(all(feature = "sm", not(feature = "ffi_import")))]
 pub(crate) mod sm;
-
-use core::marker::PhantomData;
-use std::{cell::RefCell, format, string::String, vec, vec::Vec};
-
-use derive_more::{Deref, DerefMut};
-use iroha_primitives::const_vec::ConstVec;
-use iroha_schema::{IntoSchema, TypeId};
-use norito::core::{self as ncore, DecodeFromSlice};
-#[cfg(feature = "json")]
-use norito::json::{self, FastJsonWrite, JsonDeserialize};
-
 #[cfg(feature = "sm")]
 use crate::sm::Sm2Signature;
 use crate::{
     Algorithm, Error, HashOf, PrivateKey, PublicKey, PublicKeyFull, error::ParseError, ffi,
     hex_decode,
 };
-
+use core::marker::PhantomData;
+use derive_more::{Deref, DerefMut};
+use iroha_primitives::const_vec::ConstVec;
+use iroha_schema::{IntoSchema, TypeId};
+use norito::core::{self as ncore, DecodeFromSlice};
+#[cfg(feature = "json")]
+use norito::json::{self, FastJsonWrite, JsonDeserialize};
+use std::{cell::RefCell, format, string::String, vec, vec::Vec};
 ffi::ffi_item! {
     /// Represents a signature of the data (`Block` or `Transaction` for example).
     #[allow(unexpected_cfgs)]
@@ -48,22 +39,18 @@ ffi::ffi_item! {
         payload: ConstVec<u8>
     }
 }
-
 const PUBLIC_KEY_FULL_CACHE_LIMIT: usize = 128;
 const ED25519_PUBLIC_KEY_FULL_FAST_CACHE_SIZE: usize = 16_384;
-
 struct PublicKeyFullCacheEntry {
     algorithm: u8,
     payload: Vec<u8>,
     full: PublicKeyFull,
 }
-
 #[derive(Clone, Copy)]
 struct Ed25519PublicKeyFullFastEntry {
     payload: [u8; 32],
     full: ed25519::PublicKey,
 }
-
 struct PublicKeyFullFastCache {
     ed25519: Box<[Option<Ed25519PublicKeyFullFastEntry>]>,
     #[cfg(test)]
@@ -73,7 +60,6 @@ struct PublicKeyFullFastCache {
     #[cfg(test)]
     ed25519_inserts: usize,
 }
-
 impl PublicKeyFullFastCache {
     fn new() -> Self {
         Self {
@@ -86,7 +72,6 @@ impl PublicKeyFullFastCache {
             ed25519_inserts: 0,
         }
     }
-
     fn get_ed25519(&mut self, payload: &[u8]) -> Option<ed25519::PublicKey> {
         let payload: [u8; 32] = payload.try_into().ok()?;
         let slot = ed25519_public_key_full_fast_index(&payload);
@@ -105,7 +90,6 @@ impl PublicKeyFullFastCache {
         }
         None
     }
-
     fn insert_ed25519(&mut self, payload: [u8; 32], full: ed25519::PublicKey) {
         let slot = ed25519_public_key_full_fast_index(&payload);
         self.ed25519[slot] = Some(Ed25519PublicKeyFullFastEntry { payload, full });
@@ -114,7 +98,6 @@ impl PublicKeyFullFastCache {
             self.ed25519_inserts = self.ed25519_inserts.saturating_add(1);
         }
     }
-
     #[cfg(test)]
     fn reset(&mut self) {
         self.ed25519.fill(None);
@@ -122,7 +105,6 @@ impl PublicKeyFullFastCache {
         self.ed25519_misses = 0;
         self.ed25519_inserts = 0;
     }
-
     #[cfg(test)]
     fn stats(&self) -> PublicKeyFullFastCacheStats {
         PublicKeyFullFastCacheStats {
@@ -132,7 +114,6 @@ impl PublicKeyFullFastCache {
         }
     }
 }
-
 #[cfg(test)]
 #[derive(Debug, Default, PartialEq, Eq)]
 struct PublicKeyFullFastCacheStats {
@@ -140,19 +121,16 @@ struct PublicKeyFullFastCacheStats {
     misses: usize,
     inserts: usize,
 }
-
 thread_local! {
     static PUBLIC_KEY_FULL_FAST_CACHE: RefCell<PublicKeyFullFastCache> =
         RefCell::new(PublicKeyFullFastCache::new());
     static PUBLIC_KEY_FULL_CACHE: RefCell<Vec<PublicKeyFullCacheEntry>> =
         const { RefCell::new(Vec::new()) };
 }
-
 #[inline]
 fn ed25519_public_key_full_fast_index(payload: &[u8; 32]) -> usize {
     ed25519_public_key_full_fast_index_for_size(payload, ED25519_PUBLIC_KEY_FULL_FAST_CACHE_SIZE)
 }
-
 #[inline]
 fn ed25519_public_key_full_fast_index_for_size(payload: &[u8; 32], cache_size: usize) -> usize {
     let Some(a) = le_u64_chunk(payload, 0) else {
@@ -176,7 +154,6 @@ fn ed25519_public_key_full_fast_index_for_size(payload: &[u8; 32], cache_size: u
     let mixed = a ^ b.rotate_left(17) ^ c.rotate_left(31) ^ d.rotate_left(47);
     usize::try_from(mixed & mask).unwrap_or(0)
 }
-
 #[inline]
 fn le_u64_chunk(payload: &[u8; 32], start: usize) -> Option<u64> {
     let end = start.checked_add(8)?;
@@ -185,17 +162,14 @@ fn le_u64_chunk(payload: &[u8; 32], start: usize) -> Option<u64> {
     bytes.copy_from_slice(chunk);
     Some(u64::from_le_bytes(bytes))
 }
-
 #[cfg(test)]
 fn reset_public_key_full_fast_cache_for_tests() {
     PUBLIC_KEY_FULL_FAST_CACHE.with(|cache| cache.borrow_mut().reset());
 }
-
 #[cfg(test)]
 fn public_key_full_fast_cache_stats_for_tests() -> PublicKeyFullFastCacheStats {
     PUBLIC_KEY_FULL_FAST_CACHE.with(|cache| cache.borrow().stats())
 }
-
 pub(crate) fn public_key_full_cached(public_key: &PublicKey) -> Result<PublicKeyFull, Error> {
     let (algorithm, payload) = public_key.try_to_bytes()?;
     if algorithm == Algorithm::Ed25519 {
@@ -213,7 +187,6 @@ pub(crate) fn public_key_full_cached(public_key: &PublicKey) -> Result<PublicKey
         });
         return Ok(PublicKeyFull::Ed25519(full));
     }
-
     let algorithm_tag = algorithm as u8;
     PUBLIC_KEY_FULL_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
@@ -238,7 +211,6 @@ pub(crate) fn public_key_full_cached(public_key: &PublicKey) -> Result<PublicKey
         Ok(full)
     })
 }
-
 impl Signature {
     /// Creates new signature by signing payload via [`crate::KeyPair::private_key`].
     ///
@@ -248,7 +220,6 @@ impl Signature {
     /// rejects the private-key material or message.
     pub fn try_new(private_key: &PrivateKey, payload: &[u8]) -> Result<Self, Error> {
         use crate::secrecy::ExposeSecret;
-
         let signature = match private_key.0.expose_secret() {
             crate::PrivateKeyInner::Ed25519(sk) => ed25519::Ed25519Sha512::sign(payload, sk),
             crate::PrivateKeyInner::Secp256k1(sk) => {
@@ -267,23 +238,19 @@ impl Signature {
             #[cfg(feature = "sm")]
             crate::PrivateKeyInner::Sm2(sk) => sk.try_sign(payload)?.as_bytes().to_vec(),
         };
-
         Ok(Self {
             payload: ConstVec::new(signature),
         })
     }
-
     /// Creates new signature by signing payload via [`crate::KeyPair::private_key`].
     pub fn new(private_key: &PrivateKey, payload: &[u8]) -> Self {
         Self::try_new(private_key, payload)
             .expect("signing should succeed for a valid private key and payload")
     }
-
     /// Get the raw payload of the signature.
     pub fn payload(&self) -> &[u8] {
         &self.payload
     }
-
     /// Creates new signature from its raw payload and public key.
     ///
     /// **This method does not sign the payload.** Use [`Signature::new`] for this purpose.
@@ -295,7 +262,6 @@ impl Signature {
             payload: ConstVec::new(payload),
         }
     }
-
     /// Fallibly create a signature from raw bytes received from an external boundary.
     ///
     /// This preserves [`Signature::from_bytes`] for tests and compatibility code that intentionally
@@ -310,6 +276,41 @@ impl Signature {
         Ok(Self::from_bytes(payload))
     }
 
+    /// Fallibly retain exact signature bytes at an admission boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed parse error for empty/all-zero input and a decode
+    /// allocation error if the exact payload destination cannot be created.
+    #[doc(hidden)]
+    #[allow(unsafe_code)]
+    pub fn try_from_bytes_for_admission(payload: &[u8]) -> Result<Self, norito::core::Error> {
+        validate_signature_payload_for_admission(payload)
+            .map_err(|_| norito::core::Error::Message("invalid signature".to_owned()))?;
+        if payload.is_empty() {
+            return Err(norito::core::Error::Message("invalid signature".to_owned()));
+        }
+        norito::core::reserve_decode_allocation(payload.len())?;
+        let layout = std::alloc::Layout::array::<u8>(payload.len())
+            .map_err(|_| norito::core::Error::LengthMismatch)?;
+        // SAFETY: the non-zero layout describes exactly `payload.len()` bytes;
+        // a null allocation is handled before ownership is constructed.
+        let allocation = unsafe { std::alloc::alloc(layout) };
+        if allocation.is_null() {
+            return Err(norito::core::Error::AllocationFailed {
+                bytes: u64::try_from(payload.len()).unwrap_or(u64::MAX),
+            });
+        }
+        // SAFETY: source and destination are valid, non-overlapping buffers of
+        // exactly `payload.len()` bytes.
+        unsafe { std::ptr::copy_nonoverlapping(payload.as_ptr(), allocation, payload.len()) };
+        let slice = std::ptr::slice_from_raw_parts_mut(allocation, payload.len());
+        // SAFETY: `slice` is the exact allocation described above and is fully
+        // initialized by the copy.
+        Ok(Self {
+            payload: ConstVec::new(unsafe { Box::from_raw(slice) }),
+        })
+    }
     /// A shorthand for [`Self::from_bytes`] accepting payload as hex.
     ///
     /// # Errors
@@ -318,7 +319,6 @@ impl Signature {
         let payload: Vec<u8> = hex_decode(payload.as_ref())?;
         Ok(Self::from_bytes(&payload))
     }
-
     /// Fallibly create a signature from hex received from an external boundary.
     ///
     /// This preserves [`Signature::from_hex`] for tests and compatibility code
@@ -332,7 +332,6 @@ impl Signature {
         let payload: Vec<u8> = hex_decode(payload.as_ref())?;
         Self::try_from_bytes(&payload)
     }
-
     /// Verify `payload` using signed data and [`crate::KeyPair::public_key`].
     ///
     /// # Errors
@@ -413,15 +412,12 @@ impl Signature {
                 pk.verify(payload, &signature)
             }
         }?;
-
         Ok(())
     }
 }
-
 fn signature_payload_is_all_zero(payload: &[u8]) -> bool {
     !payload.is_empty() && payload.iter().all(|&byte| byte == 0)
 }
-
 fn validate_signature_payload_for_admission(payload: &[u8]) -> Result<(), ParseError> {
     if payload.is_empty() {
         return Err(ParseError("signature payload must not be empty".to_owned()));
@@ -434,36 +430,79 @@ fn validate_signature_payload_for_admission(payload: &[u8]) -> Result<(), ParseE
     Ok(())
 }
 
-fn decode_signature_payload_unpacked(bytes: &[u8]) -> Result<ConstVec<u8>, ncore::Error> {
+fn unpacked_raw_signature_payload(bytes: &[u8]) -> Result<Option<&[u8]>, ncore::Error> {
     if bytes.len() < 8 {
-        return Err(ncore::Error::LengthMismatch);
+        return Ok(None);
     }
-
-    let mut count_bytes = [0u8; 8];
-    count_bytes.copy_from_slice(&bytes[..8]);
+    let count_bytes: [u8; 8] = bytes
+        .get(..8)
+        .expect("length checked above")
+        .try_into()
+        .map_err(|_| ncore::Error::LengthMismatch)?;
     let count = usize::try_from(u64::from_le_bytes(count_bytes))
         .map_err(|_| ncore::Error::LengthMismatch)?;
-    let raw_start = 8usize;
-    if bytes.len() == raw_start.saturating_add(count) {
-        return Ok(ConstVec::from(bytes[raw_start..].to_vec()));
-    }
+    let end = 8usize
+        .checked_add(count)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    Ok((end == bytes.len()).then(|| &bytes[8..end]))
+}
 
+#[allow(unsafe_code)]
+fn allocate_signature_payload_exact(length: usize) -> Result<Box<[u8]>, ncore::Error> {
+    if length == 0 {
+        return Ok(Box::default());
+    }
+    let layout =
+        std::alloc::Layout::array::<u8>(length).map_err(|_| ncore::Error::LengthMismatch)?;
+    // SAFETY: the non-zero layout describes exactly `length` bytes. A null
+    // result is handled before ownership is constructed.
+    let allocation = unsafe { std::alloc::alloc_zeroed(layout) };
+    if allocation.is_null() {
+        return Err(ncore::Error::AllocationFailed {
+            bytes: u64::try_from(length).unwrap_or(u64::MAX),
+        });
+    }
+    let slice = std::ptr::slice_from_raw_parts_mut(allocation, length);
+    // SAFETY: `alloc_zeroed` initialized the exact allocation above.
+    Ok(unsafe { Box::from_raw(slice) })
+}
+
+fn copy_raw_signature_payload_for_decode(
+    sequence_bytes: &[u8],
+    payload_bytes: &[u8],
+) -> Result<ConstVec<u8>, ncore::Error> {
+    let (count, _) = ncore::read_seq_len_slice(sequence_bytes)?;
+    if count != payload_bytes.len() {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    // `read_seq_len_slice` already charged one retained byte per u8 element.
+    let mut payload = allocate_signature_payload_exact(payload_bytes.len())?;
+    payload.copy_from_slice(payload_bytes);
+    Ok(ConstVec::new(payload))
+}
+
+fn decode_signature_payload_unpacked(bytes: &[u8]) -> Result<ConstVec<u8>, ncore::Error> {
+    if let Some(raw) = unpacked_raw_signature_payload(bytes)? {
+        return copy_raw_signature_payload_for_decode(bytes, raw);
+    }
+    let (count, raw_start) = ncore::read_seq_len_slice(bytes)?;
+    if count > bytes.len().saturating_sub(raw_start) {
+        return Err(ncore::Error::LengthMismatch);
+    }
     let mut offset = raw_start;
-    let mut payload = Vec::new();
-    payload
-        .try_reserve(count)
-        .map_err(|_| ncore::Error::LengthMismatch)?;
-    for _ in 0..count {
-        let (elem_len, header_len) =
-            ncore::read_len_from_slice(bytes.get(offset..).ok_or(ncore::Error::LengthMismatch)?)?;
+    // The sequence reader already charged one retained byte per u8 element.
+    let mut payload = allocate_signature_payload_exact(count)?;
+    for destination in payload.iter_mut() {
+        let (elem_len, header_len) = ncore::inspect_len_from_slice(
+            bytes.get(offset..).ok_or(ncore::Error::LengthMismatch)?,
+        )?;
         if elem_len != 1 {
             return Err(ncore::Error::LengthMismatch);
         }
         offset = offset
             .checked_add(header_len)
             .ok_or(ncore::Error::LengthMismatch)?;
-        let byte = *bytes.get(offset).ok_or(ncore::Error::LengthMismatch)?;
-        payload.push(byte);
+        *destination = *bytes.get(offset).ok_or(ncore::Error::LengthMismatch)?;
         offset = offset
             .checked_add(elem_len)
             .ok_or(ncore::Error::LengthMismatch)?;
@@ -471,29 +510,39 @@ fn decode_signature_payload_unpacked(bytes: &[u8]) -> Result<ConstVec<u8>, ncore
     if offset != bytes.len() {
         return Err(ncore::Error::LengthMismatch);
     }
-    Ok(ConstVec::from(payload))
+    Ok(ConstVec::new(payload))
 }
-
 fn decode_signature_payload_from_slice(
     bytes: &[u8],
 ) -> Result<(ConstVec<u8>, usize), ncore::Error> {
-    <ConstVec<u8> as DecodeFromSlice>::decode_from_slice(bytes)
-        .or_else(|_| decode_signature_payload_unpacked(bytes).map(|payload| (payload, bytes.len())))
+    if let Some(raw) = unpacked_raw_signature_payload(bytes)? {
+        return copy_raw_signature_payload_for_decode(bytes, raw)
+            .map(|payload| (payload, bytes.len()));
+    }
+    let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
+    if ncore::packed_seq_enabled_for_flags(flags) {
+        <ConstVec<u8> as DecodeFromSlice>::decode_from_slice(bytes)
+    } else {
+        decode_signature_payload_unpacked(bytes).map(|payload| (payload, bytes.len()))
+    }
 }
-
 fn validate_signature_payload_for_decode(payload: &[u8]) -> Result<(), ncore::Error> {
     validate_signature_payload_for_admission(payload)
         .map_err(|err| ncore::Error::Message(err.to_string()))
 }
-
 #[cfg(all(feature = "json", not(feature = "ffi_import")))]
 impl FastJsonWrite for Signature {
     fn write_json(&self, out: &mut String) {
         let encoded = hex::encode_upper(self.payload());
         json::write_json_string(&encoded, out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_upper_hex_json_string_to(self.payload(), out)
+    }
 }
-
 #[cfg(all(feature = "json", not(feature = "ffi_import")))]
 impl JsonDeserialize for Signature {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -501,13 +550,11 @@ impl JsonDeserialize for Signature {
         Signature::try_from_hex(&encoded).map_err(|err| json::Error::Message(err.to_string()))
     }
 }
-
 impl<T> From<SignatureOf<T>> for Signature {
     fn from(SignatureOf(signature, ..): SignatureOf<T>) -> Self {
         signature
     }
 }
-
 ffi::ffi_item! {
     /// Represents signature of the data (`Block` or `Transaction` for example).
     // Lint triggers when expanding #[codec(skip)]
@@ -521,11 +568,9 @@ ffi::ffi_item! {
         Signature,
         PhantomData<T>,
     );
-
     // SAFETY: `SignatureOf` has no trap representation in `Signature`
     ffi_type(unsafe {robust})
 }
-
 #[cfg(not(feature = "ffi_import"))]
 impl<T> core::fmt::Debug for SignatureOf<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -534,13 +579,11 @@ impl<T> core::fmt::Debug for SignatureOf<T> {
             .finish()
     }
 }
-
 impl<T> Clone for SignatureOf<T> {
     fn clone(&self) -> Self {
         Self(self.0.clone(), PhantomData)
     }
 }
-
 #[allow(clippy::unconditional_recursion)] // False-positive
 impl<T> PartialEq for SignatureOf<T> {
     fn eq(&self, other: &Self) -> bool {
@@ -548,7 +591,6 @@ impl<T> PartialEq for SignatureOf<T> {
     }
 }
 impl<T> Eq for SignatureOf<T> {}
-
 impl<T> PartialOrd for SignatureOf<T> {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
@@ -559,14 +601,12 @@ impl<T> Ord for SignatureOf<T> {
         self.0.cmp(&other.0)
     }
 }
-
 #[cfg(not(feature = "ffi_import"))]
 impl<T> core::hash::Hash for SignatureOf<T> {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.0.hash(state);
     }
 }
-
 #[cfg(not(feature = "ffi_import"))]
 impl<T: IntoSchema> IntoSchema for SignatureOf<T> {
     fn type_name() -> String {
@@ -579,51 +619,59 @@ impl<T: IntoSchema> IntoSchema for SignatureOf<T> {
                     types: vec![core::any::TypeId::of::<Signature>()],
                 },
             ));
-
             Signature::update_schema_map(map);
         }
     }
 }
-
 /// Archived representation of [`SignatureOf`].
 pub type ArchivedSignatureOf<T> = norito::core::Archived<SignatureOf<T>>;
-
 #[cfg(not(feature = "ffi_import"))]
 impl ncore::NoritoSerialize for Signature {
     fn serialize(&self, writer: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
         self.payload.serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.payload.encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.payload.encoded_len_exact()
     }
 }
-
 #[cfg(not(feature = "ffi_import"))]
 impl<'de> ncore::NoritoDeserialize<'de> for Signature {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("Signature decode")
     }
-
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let payload_bytes =
             ncore::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>()).ok();
-        let payload =
-            ConstVec::<u8>::try_deserialize(archived.cast::<ConstVec<u8>>()).or_else(|err| {
-                let bytes = payload_bytes.ok_or(err)?;
+        let raw_payload = payload_bytes
+            .map(unpacked_raw_signature_payload)
+            .transpose()?
+            .flatten();
+        let payload = if let Some(raw) = raw_payload {
+            let bytes = payload_bytes.expect("raw payload came from this slice");
+            let payload = copy_raw_signature_payload_for_decode(bytes, raw)?;
+            ncore::note_payload_access(bytes, bytes.len());
+            payload
+        } else {
+            let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
+            if ncore::packed_seq_enabled_for_flags(flags) {
+                let bytes = payload_bytes.ok_or(ncore::Error::MissingPayloadContext)?;
+                let (payload, used) = <ConstVec<u8> as DecodeFromSlice>::decode_from_slice(bytes)?;
+                ncore::note_payload_access(bytes, used);
+                payload
+            } else {
+                let bytes = payload_bytes.ok_or(ncore::Error::MissingPayloadContext)?;
                 let payload = decode_signature_payload_unpacked(bytes)?;
                 ncore::note_payload_access(bytes, bytes.len());
-                Ok::<_, ncore::Error>(payload)
-            })?;
+                payload
+            }
+        };
         validate_signature_payload_for_decode(&payload)?;
         Ok(Signature { payload })
     }
 }
-
 // Use default Norito derives for SignatureOf<T> provided by the crate macros.
 impl<'a> norito::core::DecodeFromSlice<'a> for Signature {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
@@ -632,27 +680,22 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Signature {
         Ok((Signature { payload }, used))
     }
 }
-
 impl<T> norito::core::NoritoSerialize for SignatureOf<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         // Delegate to inner Signature so SignatureOf has identical on-wire bytes.
         norito::core::NoritoSerialize::serialize(&self.0, writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         norito::core::NoritoSerialize::encoded_len_hint(&self.0)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         norito::core::NoritoSerialize::encoded_len_exact(&self.0)
     }
 }
-
 impl<'de, T> norito::core::NoritoDeserialize<'de> for SignatureOf<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("SignatureOf decode")
     }
-
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -660,21 +703,24 @@ impl<'de, T> norito::core::NoritoDeserialize<'de> for SignatureOf<T> {
         Ok(SignatureOf(signature, PhantomData))
     }
 }
-
 #[cfg(all(feature = "json", not(feature = "ffi_import")))]
 impl<T> FastJsonWrite for SignatureOf<T> {
     fn write_json(&self, out: &mut String) {
         self.0.write_json(out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.write_json_to(out)
+    }
 }
-
 #[cfg(all(feature = "json", not(feature = "ffi_import")))]
 impl<T> JsonDeserialize for SignatureOf<T> {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         Signature::json_deserialize(parser).map(|sig| SignatureOf(sig, PhantomData))
     }
 }
-
 // Norito already provides blanket `Encode`/`Decode` implementations via the
 // `NoritoSerialize`/`NoritoDeserialize` traits. However, packed sequence layouts
 // used by `ConstVec<u8>` require the slice decoder to cooperate with the Norito
@@ -686,7 +732,6 @@ impl<'a, T> DecodeFromSlice<'a> for SignatureOf<T> {
         Ok((SignatureOf(inner, PhantomData), used))
     }
 }
-
 impl<T> SignatureOf<T> {
     /// Fallibly create [`SignatureOf`] from the given hash with
     /// [`crate::KeyPair::private_key`].
@@ -699,20 +744,17 @@ impl<T> SignatureOf<T> {
     pub fn try_from_hash(private_key: &PrivateKey, hash: HashOf<T>) -> Result<Self, Error> {
         Signature::try_new(private_key, hash.as_ref()).map(|signature| Self(signature, PhantomData))
     }
-
     /// Create [`SignatureOf`] from the given hash with [`crate::KeyPair::private_key`].
     #[inline]
     pub fn from_hash(private_key: &PrivateKey, hash: HashOf<T>) -> Self {
         Self::try_from_hash(private_key, hash)
             .expect("signing should succeed for a valid private key and hash payload")
     }
-
     /// Construct [`SignatureOf`] from an already-produced [`Signature`].
     #[inline]
     pub fn from_signature(signature: Signature) -> Self {
         Self(signature, PhantomData)
     }
-
     /// Verify signature for this hash
     ///
     /// # Errors
@@ -722,7 +764,6 @@ impl<T> SignatureOf<T> {
         self.0.verify(public_key, hash.as_ref())
     }
 }
-
 impl<T: norito::codec::Encode> SignatureOf<T> {
     /// Fallibly create [`SignatureOf`] by signing the given value with
     /// [`crate::KeyPair::private_key`].
@@ -738,7 +779,6 @@ impl<T: norito::codec::Encode> SignatureOf<T> {
         let h = HashOf::new(value);
         Self::try_from_hash(private_key, h)
     }
-
     /// Create [`SignatureOf`] by signing the given value with [`crate::KeyPair::private_key`].
     /// The value provided will be hashed before being signed. If you already have the
     /// hash of the value you can sign it with [`SignatureOf::from_hash`] instead.
@@ -747,7 +787,6 @@ impl<T: norito::codec::Encode> SignatureOf<T> {
         Self::try_new(private_key, value)
             .expect("signing should succeed for a valid private key and value")
     }
-
     /// Verifies signature for this item
     ///
     /// # Errors
@@ -756,24 +795,19 @@ impl<T: norito::codec::Encode> SignatureOf<T> {
         self.verify_hash(public_key, HashOf::new(value))
     }
 }
-
 // Provide slice-based decoding for Signature as well (used by hybrid decoders)
 #[cfg(not(feature = "ffi_import"))]
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::{Algorithm, HashOf, KeyGenOption, KeyPair, PublicKeyCompact};
-
     #[cfg(feature = "rand")]
     fn checked_random_keypair(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).expect("generate checked random keypair")
     }
-
     fn checked_signature(key_pair: &KeyPair, message: &[u8]) -> Signature {
         Signature::try_new(key_pair.private_key(), message).expect("sign checked signature fixture")
     }
-
     const ED25519_SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -783,7 +817,6 @@ mod tests {
         0x69, 0x5c, 0xdc, 0xd6, 0xfd, 0x31, 0xe2, 0xa4, 0xc0, 0xfe, 0x53, 0x6e, 0xcd, 0xd3, 0x36,
         0x69, 0x92,
     ];
-
     #[test]
     #[cfg(feature = "rand")]
     fn create_signature_ed25519() {
@@ -796,7 +829,6 @@ mod tests {
             .verify(wrong_key.public_key(), message)
             .expect_err("Ed25519 signature rejects wrong key");
     }
-
     #[test]
     #[cfg(feature = "rand")]
     fn create_signature_secp256k1() {
@@ -809,7 +841,6 @@ mod tests {
             .verify(wrong_key.public_key(), message)
             .expect_err("secp256k1 signature rejects wrong key");
     }
-
     #[test]
     fn create_signature_secp256k1_checked_path() {
         let key_pair = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Secp256k1)
@@ -817,10 +848,8 @@ mod tests {
         let message = b"Test message to sign with checked secp256k1.";
         let signature = Signature::try_new(key_pair.private_key(), message)
             .expect("checked secp256k1 signature");
-
         signature.verify(key_pair.public_key(), message).unwrap();
     }
-
     #[test]
     #[cfg(feature = "sm")]
     fn create_signature_sm2_checked_path() {
@@ -831,7 +860,6 @@ mod tests {
             Signature::try_new(key_pair.private_key(), message).expect("checked SM2 signature");
         signature.verify(key_pair.public_key(), message).unwrap();
     }
-
     #[test]
     #[cfg(all(feature = "rand", feature = "bls"))]
     fn create_signature_bls_normal() {
@@ -844,7 +872,6 @@ mod tests {
             .verify(wrong_key.public_key(), message)
             .expect_err("BLS normal signature rejects wrong key");
     }
-
     #[test]
     #[cfg(all(feature = "rand", feature = "bls"))]
     fn create_signature_bls_small() {
@@ -857,7 +884,6 @@ mod tests {
             .verify(wrong_key.public_key(), message)
             .expect_err("BLS small signature rejects wrong key");
     }
-
     #[test]
     #[cfg(all(feature = "rand", feature = "bls"))]
     fn signature_verify_rejects_noncanonical_bls_lengths() {
@@ -871,12 +897,10 @@ mod tests {
                 _ => unreachable!("loop contains only BLS algorithms"),
             };
             assert_eq!(signature.payload().len(), expected_len);
-
             let shortened = Signature::from_bytes(&signature.payload()[1..]);
             shortened
                 .verify(key_pair.public_key(), message)
                 .expect_err("short BLS signature must fail at the public boundary");
-
             let mut extended = signature.payload().to_vec();
             extended.push(0x01);
             Signature::from_bytes(&extended)
@@ -884,7 +908,6 @@ mod tests {
                 .expect_err("long BLS signature must fail at the public boundary");
         }
     }
-
     #[test]
     #[cfg(feature = "rand")]
     fn signature_verify_cache_separates_keys() {
@@ -892,7 +915,6 @@ mod tests {
         let key_two = checked_random_keypair(Algorithm::Ed25519);
         let message = b"Signature verify cache test";
         let signature = checked_signature(&key_one, message);
-
         signature.verify(key_one.public_key(), message).unwrap();
         assert!(
             signature.verify(key_two.public_key(), message).is_err(),
@@ -900,13 +922,11 @@ mod tests {
         );
         signature.verify(key_one.public_key(), message).unwrap();
     }
-
     #[test]
     fn ed25519_public_key_full_fast_cache_hits_after_first_lookup() {
         let (raw_public, _) = ed25519::Ed25519Sha512::keypair(KeyGenOption::UseSeed(vec![7u8; 32]));
         let public_key = PublicKey::new(PublicKeyFull::Ed25519(raw_public));
         reset_public_key_full_fast_cache_for_tests();
-
         let first = public_key_full_cached(&public_key).expect("public key parses");
         assert!(matches!(first, PublicKeyFull::Ed25519(_)));
         assert_eq!(
@@ -917,7 +937,6 @@ mod tests {
                 inserts: 1,
             }
         );
-
         let second = public_key_full_cached(&public_key).expect("public key parses");
         assert!(matches!(second, PublicKeyFull::Ed25519(_)));
         assert_eq!(
@@ -929,44 +948,34 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn ed25519_public_key_full_fast_index_is_total() {
         let payload = [0xA5; 32];
-
         assert_eq!(ed25519_public_key_full_fast_index_for_size(&payload, 0), 0);
         assert_eq!(ed25519_public_key_full_fast_index_for_size(&payload, 1), 0);
-
         let index = ed25519_public_key_full_fast_index(&payload);
         assert!(index < ED25519_PUBLIC_KEY_FULL_FAST_CACHE_SIZE);
         assert_eq!(index, ed25519_public_key_full_fast_index(&payload));
     }
-
     #[test]
     fn signature_verify_rejects_malformed_cached_ed25519_public_key_without_panic() {
         let malformed = PublicKey(PublicKeyCompact::new(Algorithm::Ed25519, &[]));
         let signature = Signature::from_bytes(&[0u8; 64]);
-
         let err = signature
             .verify(&malformed, b"message")
             .expect_err("malformed public key must fail verification");
-
         assert!(matches!(err, Error::Parse(_)));
     }
-
     #[test]
     fn signature_verify_rejects_all_zero_payload_before_backend() {
         let key_pair = KeyPair::try_from_seed(vec![0x44; 32], Algorithm::Ed25519)
             .expect("seeded Ed25519 keypair");
         let signature = Signature::from_bytes(&[0u8; 64]);
-
         let err = signature
             .verify(key_pair.public_key(), b"message")
             .expect_err("all-zero signature payload must fail closed");
-
         assert!(matches!(err, Error::BadSignature));
     }
-
     #[test]
     fn signature_verify_rejects_malformed_ed25519_r_before_backend() {
         let key_pair = KeyPair::try_from_seed(vec![0x46; 32], Algorithm::Ed25519)
@@ -976,7 +985,6 @@ mod tests {
         valid_signature
             .verify(key_pair.public_key(), message)
             .expect("valid signature verifies before mutation");
-
         for (label, replacement_r) in [
             ("small-order", ED25519_SMALL_ORDER_R),
             ("noncanonical", ED25519_NONCANONICAL_R),
@@ -984,18 +992,15 @@ mod tests {
             let mut payload = valid_signature.payload().to_vec();
             payload[..replacement_r.len()].copy_from_slice(&replacement_r);
             let signature = Signature::from_bytes(&payload);
-
             let err = signature
                 .verify(key_pair.public_key(), message)
                 .expect_err("malformed Ed25519 R must fail through generic verification");
-
             assert!(
                 matches!(err, Error::BadSignature),
                 "{label} R produced unexpected error: {err:?}"
             );
         }
     }
-
     #[test]
     fn signature_of_verify_rejects_malformed_ed25519_r_before_backend() {
         let key_pair = KeyPair::try_from_seed(vec![0x47; 32], Algorithm::Ed25519)
@@ -1005,7 +1010,6 @@ mod tests {
         valid_signature
             .verify(key_pair.public_key(), &())
             .expect("valid typed signature verifies before mutation");
-
         for (label, replacement_r) in [
             ("small-order", ED25519_SMALL_ORDER_R),
             ("noncanonical", ED25519_NONCANONICAL_R),
@@ -1013,111 +1017,211 @@ mod tests {
             let mut payload = valid_signature.payload().to_vec();
             payload[..replacement_r.len()].copy_from_slice(&replacement_r);
             let signature = SignatureOf::<()>::from_signature(Signature::from_bytes(&payload));
-
             let err = signature
                 .verify(key_pair.public_key(), &())
                 .expect_err("malformed Ed25519 R must fail through typed verification");
-
             assert!(
                 matches!(err, Error::BadSignature),
                 "{label} R produced unexpected typed error: {err:?}"
             );
         }
     }
-
     #[test]
     fn signature_try_from_bytes_rejects_empty_payload() {
         let err = Signature::try_from_bytes(&[]).expect_err("empty signature must fail closed");
-
         assert!(
             err.to_string().contains("empty"),
             "unexpected empty signature error: {err}"
         );
     }
-
     #[test]
     fn signature_try_from_bytes_rejects_all_zero_payload() {
         let err =
             Signature::try_from_bytes(&[0u8; 64]).expect_err("all-zero signature must fail closed");
-
         assert!(
             err.to_string().contains("all zero"),
             "unexpected all-zero signature error: {err}"
         );
     }
-
     #[test]
     fn signature_norito_try_deserialize_rejects_empty_payload() {
         let signature = Signature::from_bytes(&[]);
         let framed = norito::core::to_bytes(&signature).expect("frame empty signature");
         let archived =
             norito::from_bytes::<Signature>(&framed).expect("archive empty signature fixture");
-
         let err = <Signature as norito::core::NoritoDeserialize>::try_deserialize(archived)
             .expect_err("empty Norito signature must fail closed");
-
         assert!(
             err.to_string().contains("empty"),
             "unexpected empty Norito signature error: {err}"
         );
     }
-
     #[test]
     fn signature_norito_try_deserialize_rejects_all_zero_payload() {
         let signature = Signature::from_bytes(&[0u8; 64]);
         let framed = norito::core::to_bytes(&signature).expect("frame all-zero signature");
         let archived =
             norito::from_bytes::<Signature>(&framed).expect("archive all-zero signature fixture");
-
         let err = <Signature as norito::core::NoritoDeserialize>::try_deserialize(archived)
             .expect_err("all-zero Norito signature must fail closed");
-
         assert!(
             err.to_string().contains("all zero"),
             "unexpected all-zero Norito signature error: {err}"
         );
     }
-
     #[test]
     fn signature_decode_from_slice_rejects_empty_payload() {
         use norito::codec::Encode as _;
-
         let signature = Signature::from_bytes(&[]);
         let bytes = signature.encode();
-
         let err = <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
             .expect_err("empty bare signature must fail closed");
-
         assert!(
             err.to_string().contains("empty"),
             "unexpected empty bare signature error: {err}"
         );
     }
-
     #[test]
     fn signature_decode_from_slice_rejects_all_zero_payload() {
         use norito::codec::Encode as _;
-
         let signature = Signature::from_bytes(&[0u8; 64]);
         let bytes = signature.encode();
-
         let err = <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
             .expect_err("all-zero bare signature must fail closed");
-
         assert!(
             err.to_string().contains("all zero"),
             "unexpected all-zero bare signature error: {err}"
         );
     }
-
     #[test]
     fn signature_try_from_bytes_accepts_nonzero_payload() {
         let signature =
             Signature::try_from_bytes(&[0x11u8; 64]).expect("nonzero signature payload");
-
         assert_eq!(signature.payload(), &[0x11u8; 64]);
     }
+    #[test]
+    fn raw_compatibility_signature_decode_uses_exact_fallible_storage() {
+        let payload = [0x11_u8; 64];
+        let mut bytes = Vec::with_capacity(8 + payload.len());
+        bytes.extend_from_slice(&u64::try_from(payload.len()).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&payload);
+        let limits = |allocated| {
+            norito::core::DecodeLimits::new(
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                allocated,
+                usize::MAX,
+            )
+        };
+        let (decoded, usage) =
+            norito::core::with_decode_limits_measured(limits(payload.len()), || {
+                <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
+            });
+        let (decoded, used) = decoded.expect("exact raw compatibility allocation");
+        assert_eq!(decoded.payload(), payload);
+        assert_eq!(used, bytes.len());
+        assert_eq!(usage.total_allocated_bytes(), payload.len());
 
+        let (denied, usage) =
+            norito::core::with_decode_limits_measured(limits(payload.len() - 1), || {
+                <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
+            });
+        assert!(denied.is_err());
+        assert!(usage.total_allocated_bytes() <= payload.len() - 1);
+
+        let sequence_limited = norito::core::DecodeLimits::new(
+            payload.len() - 1,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+        );
+        let error = norito::core::with_decode_limits(sequence_limited, || {
+            <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
+        })
+        .expect_err("raw compatibility decode must enforce the sequence-element ceiling");
+        assert!(matches!(
+            error,
+            norito::core::Error::SequenceLengthExceeded {
+                length: 64,
+                limit: 63
+            }
+        ));
+
+        let packed_flags =
+            norito::core::header_flags::PACKED_SEQ | norito::core::header_flags::COMPACT_LEN;
+        let mut packed = Vec::new();
+        {
+            let _flags = norito::core::DecodeFlagsGuard::enter(packed_flags);
+            norito::core::serialize_to_buffer(&decoded, &mut packed)
+                .expect("serialize packed signature payload");
+        }
+        {
+            let _flags = norito::core::DecodeFlagsGuard::enter(packed_flags);
+            let slice_error = norito::core::with_decode_limits(sequence_limited, || {
+                <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&packed)
+            })
+            .expect_err("packed slice decode must enforce the sequence-element ceiling");
+            assert!(matches!(
+                slice_error,
+                norito::core::Error::SequenceLengthExceeded {
+                    length: 64,
+                    limit: 63
+                }
+            ));
+            let archived = norito::core::archived_from_slice::<Signature>(&packed)
+                .expect("sized packed archived signature marker");
+            let _context = norito::core::PayloadCtxGuard::enter(archived.bytes());
+            let pointer_error = norito::core::with_decode_limits(sequence_limited, || {
+                <Signature as norito::core::NoritoDeserialize<'_>>::try_deserialize(
+                    archived.as_ref(),
+                )
+            })
+            .expect_err("packed pointer decode must preserve the terminal sequence limit");
+            assert!(matches!(
+                pointer_error,
+                norito::core::Error::SequenceLengthExceeded {
+                    length: 64,
+                    limit: 63
+                }
+            ));
+        }
+
+        let mut length_prefixed = Vec::with_capacity(8 + payload.len() * 9);
+        length_prefixed.extend_from_slice(&u64::try_from(payload.len()).unwrap().to_le_bytes());
+        for byte in payload {
+            length_prefixed.extend_from_slice(&1_u64.to_le_bytes());
+            length_prefixed.push(byte);
+        }
+        let _flags = norito::core::DecodeFlagsGuard::enter(0);
+        let error = norito::core::with_decode_limits(sequence_limited, || {
+            <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&length_prefixed)
+        })
+        .expect_err("length-prefixed decode must enforce the sequence-element ceiling");
+        assert!(matches!(
+            error,
+            norito::core::Error::SequenceLengthExceeded {
+                length: 64,
+                limit: 63
+            }
+        ));
+
+        let archived = norito::core::archived_from_slice::<Signature>(&length_prefixed)
+            .expect("sized archived signature marker");
+        let _context = norito::core::PayloadCtxGuard::enter(archived.bytes());
+        let error = norito::core::with_decode_limits(sequence_limited, || {
+            <Signature as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived.as_ref())
+        })
+        .expect_err("archived length-prefixed decode must enforce the sequence-element ceiling");
+        assert!(matches!(
+            error,
+            norito::core::Error::SequenceLengthExceeded {
+                length: 64,
+                limit: 63
+            }
+        ));
+    }
     #[test]
     #[cfg(feature = "sm")]
     fn signature_verify_rejects_malformed_sm2_payload_as_bad_signature() {
@@ -1126,107 +1230,86 @@ mod tests {
         let mut payload = [0u8; crate::Sm2Signature::LENGTH];
         payload[crate::Sm2Signature::LENGTH - 1] = 1;
         let signature = Signature::from_bytes(&payload);
-
         let err = signature
             .verify(key_pair.public_key(), b"message")
             .expect_err("malformed SM2 signature payload must fail closed");
-
         assert!(matches!(err, Error::BadSignature));
     }
-
     #[test]
     fn signature_serialized_representation() {
         let input = norito::json!(
             "3A7991AF1ABB77F3FD27CC148404A6AE4439D095A63591B77C788D53F708A02A1509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         );
-
         let signature: Signature = norito::json::from_value(input.clone()).unwrap();
-
         assert_eq!(norito::json::to_value(&signature).unwrap(), input);
     }
-
     #[test]
     fn signature_from_hex_simply_reproduces_the_data() {
         let payload = "3a7991af1abb77f3fd27cc148404a6ae4439d095a63591b77c788d53f708a02a1509a611ad6d97b01d871e58ed00c8fd7c3917b6ca61a8c2833a19e000aac2e4";
-
         let value = Signature::from_hex(payload).unwrap();
         assert_eq!(value.payload.as_ref(), &hex::decode(payload).unwrap());
     }
-
     #[test]
     fn signature_json_rejects_empty_payload() {
         let input = norito::json!("");
         let err = norito::json::from_value::<Signature>(input)
             .expect_err("JSON signature decoding must reject empty payloads");
-
         assert!(
             err.to_string().contains("empty"),
             "unexpected empty JSON signature error: {err}"
         );
     }
-
     #[test]
     fn signature_json_rejects_all_zero_payload() {
         let input = norito::json!("00".repeat(64));
         let err = norito::json::from_value::<Signature>(input)
             .expect_err("JSON signature decoding must reject all-zero payloads");
-
         assert!(
             err.to_string().contains("all zero"),
             "unexpected JSON signature error: {err}"
         );
     }
-
     #[test]
     fn signature_try_from_hex_rejects_empty_payload() {
         let err = Signature::try_from_hex("").expect_err("empty hex signature must fail closed");
-
         assert!(
             err.to_string().contains("empty"),
             "unexpected empty signature error: {err}"
         );
     }
-
     #[test]
     fn signature_try_from_hex_rejects_all_zero_payload() {
         let err = Signature::try_from_hex("00".repeat(64))
             .expect_err("all-zero hex signature must fail closed");
-
         assert!(
             err.to_string().contains("all zero"),
             "unexpected all-zero signature error: {err}"
         );
     }
-
     #[test]
     fn signature_of_json_rejects_empty_payload() {
         let input = norito::json!("");
         let err = norito::json::from_value::<SignatureOf<()>>(input)
             .expect_err("typed JSON signature decoding must reject empty payloads");
-
         assert!(
             err.to_string().contains("empty"),
             "unexpected empty typed JSON signature error: {err}"
         );
     }
-
     #[test]
     fn signature_of_json_rejects_all_zero_payload() {
         let input = norito::json!("00".repeat(64));
         let err = norito::json::from_value::<SignatureOf<()>>(input)
             .expect_err("typed JSON signature decoding must reject all-zero payloads");
-
         assert!(
             err.to_string().contains("all zero"),
             "unexpected all-zero typed JSON signature error: {err}"
         );
     }
-
     #[test]
     #[cfg(feature = "rand")]
     fn signature_of_roundtrip() {
         use norito::codec::{Decode, Encode};
-
         let key_pair = checked_random_keypair(Algorithm::Ed25519);
         let hash = HashOf::new(&());
         let sig = SignatureOf::try_from_hash(key_pair.private_key(), hash)
@@ -1237,7 +1320,6 @@ mod tests {
         let decoded = SignatureOf::<()>(decoded_sig, PhantomData);
         assert_eq!(sig, decoded);
     }
-
     #[test]
     fn signature_norito_roundtrip_preserves_payload() {
         use norito::{
@@ -1245,29 +1327,23 @@ mod tests {
             codec::{Decode, Encode},
             core::DecodeFromSlice as _,
         };
-
         let payload = (0u8..32).collect::<Vec<_>>();
         let signature = Signature::from_bytes(&payload);
-
         let bytes = signature.encode();
         let mut cursor = &bytes[..];
         let decoded_codec = Signature::decode(&mut cursor).expect("codec decode");
         assert_eq!(decoded_codec, signature);
-
         let framed = norito::core::to_bytes(&signature).expect("frame signature payload");
         let archived = norito::from_bytes::<Signature>(&framed).expect("archived signature");
         let decoded = Signature::deserialize(archived);
         assert_eq!(decoded, signature);
-
         let inner_payload = &framed[std::mem::size_of::<norito::core::Header>()..];
         let (decoded_from_slice, used) =
             Signature::decode_from_slice(inner_payload).expect("slice decode");
         assert_eq!(used, inner_payload.len());
         assert_eq!(decoded_from_slice, signature);
-
         norito::core::reset_decode_state();
     }
-
     #[test]
     fn signature_of_try_deserialize_preserves_compact_const_vec_payload() {
         let payload = (0u8..64).collect::<Vec<_>>();
@@ -1275,108 +1351,84 @@ mod tests {
         let framed = norito::core::to_bytes(&typed).expect("frame typed signature");
         let archived =
             norito::from_bytes::<SignatureOf<()>>(&framed).expect("archived typed signature");
-
         let decoded =
             <SignatureOf<()> as norito::core::NoritoDeserialize>::try_deserialize(archived)
                 .expect("typed signature decodes");
-
         assert_eq!(decoded, typed);
         norito::core::reset_decode_state();
     }
-
     #[test]
     fn signature_of_try_deserialize_rejects_empty_payload() {
         let typed = SignatureOf::<()>::from_signature(Signature::from_bytes(&[]));
         let framed = norito::core::to_bytes(&typed).expect("frame empty typed signature");
         let archived =
             norito::from_bytes::<SignatureOf<()>>(&framed).expect("archived typed signature");
-
         let err = <SignatureOf<()> as norito::core::NoritoDeserialize>::try_deserialize(archived)
             .expect_err("empty typed signature must fail closed");
-
         assert!(
             err.to_string().contains("empty"),
             "unexpected empty typed signature error: {err}"
         );
         norito::core::reset_decode_state();
     }
-
     #[test]
     fn signature_of_try_deserialize_rejects_all_zero_payload() {
         let typed = SignatureOf::<()>::from_signature(Signature::from_bytes(&[0u8; 64]));
         let framed = norito::core::to_bytes(&typed).expect("frame all-zero typed signature");
         let archived =
             norito::from_bytes::<SignatureOf<()>>(&framed).expect("archived typed signature");
-
         let err = <SignatureOf<()> as norito::core::NoritoDeserialize>::try_deserialize(archived)
             .expect_err("all-zero typed signature must fail closed");
-
         assert!(
             err.to_string().contains("all zero"),
             "unexpected all-zero typed signature error: {err}"
         );
         norito::core::reset_decode_state();
     }
-
     #[test]
     fn signature_of_decode_from_slice_rejects_empty_payload() {
         use norito::codec::Encode as _;
-
         let typed = SignatureOf::<()>::from_signature(Signature::from_bytes(&[]));
         let bytes = typed.encode();
-
         let err = <SignatureOf<()> as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
             .expect_err("empty bare typed signature must fail closed");
-
         assert!(
             err.to_string().contains("empty"),
             "unexpected empty bare typed signature error: {err}"
         );
     }
-
     #[test]
     fn signature_of_decode_from_slice_rejects_all_zero_payload() {
         use norito::codec::Encode as _;
-
         let typed = SignatureOf::<()>::from_signature(Signature::from_bytes(&[0u8; 64]));
         let bytes = typed.encode();
-
         let err = <SignatureOf<()> as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
             .expect_err("all-zero bare typed signature must fail closed");
-
         assert!(
             err.to_string().contains("all zero"),
             "unexpected all-zero bare typed signature error: {err}"
         );
     }
-
     #[test]
     fn signature_of_from_signature_wraps_payload() {
         let payload = (0u8..64).collect::<Vec<_>>();
         let signature = Signature::from_bytes(&payload);
-
         let typed = SignatureOf::<()>::from_signature(signature.clone());
-
         assert_eq!(Signature::from(typed), signature);
     }
-
     #[test]
     fn signature_vec_roundtrip_via_norito() {
         use norito::NoritoDeserialize;
-
         let payload = (0u8..16).collect::<Vec<_>>();
         let signature = Signature::from_bytes(&payload);
         let values = vec![signature.clone()];
-
         let bytes = norito::core::to_bytes(&values).expect("encode signature vec");
         println!("signature vec encoded bytes {bytes:02X?}");
         let archived = norito::core::from_bytes::<Vec<Signature>>(&bytes)
             .expect("decode signature vec header");
         let decoded = Vec::<Signature>::deserialize(archived);
-
         let payload = decoded[0].payload();
         println!("decoded signature payload {payload:02X?}");
-
         assert_eq!(decoded, values);
     }
 }

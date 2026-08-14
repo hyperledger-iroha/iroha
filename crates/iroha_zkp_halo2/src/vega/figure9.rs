@@ -5,11 +5,6 @@
 //! relation's soundness argument. Both ES256 checks reconstruct the unique
 //! P1363 `s` scalar from the inverse witness and enforce the canonical low-s
 //! representative inside the proof relation.
-
-use core::fmt;
-
-use thiserror::Error;
-
 #[cfg(test)]
 use super::{
     VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
@@ -17,7 +12,10 @@ use super::{
 };
 use super::{
     VegaT256ScalarV1 as Scalar,
-    circuit::{Bit, CircuitAssignment, CircuitBuilder, CircuitError, Variable},
+    circuit::{
+        Bit, CircuitAssignment, CircuitBuilder, CircuitDimensions, CircuitError, CircuitProfile,
+        Variable,
+    },
     date::{
         enforce_completed_age, enforce_not_before, enforce_rfc3339_not_before,
         enforce_strictly_after, parse_full_date, parse_rfc3339_seconds, public_age_threshold,
@@ -30,16 +28,18 @@ use super::{
         sha256_with_trace,
     },
 };
-
+use core::fmt;
+use once_cell::sync::Lazy;
+use std::sync::Arc;
+use thiserror::Error;
 /// Exact number of public T256 scalars in the released Figure 9 relation.
 pub const VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1: usize = 14;
 pub(super) const VEGA_MDL_FIGURE9_SHA256_STEPS_V1: usize = 8;
-
-#[derive(Clone)]
 pub(super) struct Figure9McMaterial {
     pub(super) assignment: CircuitAssignment,
 }
-
+static FIGURE9_CANONICAL_PROFILE: Lazy<Result<Arc<CircuitProfile>, CircuitError>> =
+    Lazy::new(build_canonical_profile);
 const ISSUER_X_INDEX: usize = 0;
 const ISSUER_Y_INDEX: usize = 1;
 const DEVICE_DIGEST_WORD_START: usize = 2;
@@ -47,7 +47,6 @@ const PRESENTATION_YEAR_INDEX: usize = 10;
 const PRESENTATION_MONTH_INDEX: usize = 11;
 const PRESENTATION_DAY_INDEX: usize = 12;
 const AGE_THRESHOLD_INDEX: usize = 13;
-
 /// Failure at the public boundary of the fixed Figure 9 relation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum VegaMdlFigure9ErrorV1 {
@@ -74,7 +73,6 @@ pub enum VegaMdlFigure9ErrorV1 {
     #[error("Vega Figure 9 witness does not satisfy the released relation")]
     UnsatisfiedRelation,
 }
-
 /// Borrowed private inputs for the one released Figure 9 mDL relation.
 ///
 /// The caller retains ownership so document bytes and signature witnesses do
@@ -91,7 +89,6 @@ pub struct VegaMdlFigure9WitnessV1<'a> {
     device_r: &'a [u8; 32],
     device_s_inverse: &'a [u8; 32],
 }
-
 impl<'a> VegaMdlFigure9WitnessV1<'a> {
     /// Construct a witness after enforcing the exact first-release byte shape.
     ///
@@ -122,7 +119,6 @@ impl<'a> VegaMdlFigure9WitnessV1<'a> {
         })
     }
 }
-
 /// Check the exact fixed-byte deterministic-CBOR Figure 9 profile.
 ///
 /// Only the authenticated digest, P-256 device coordinates, three RFC 3339
@@ -150,7 +146,6 @@ pub fn validate_vega_mdl_figure9_encoding_v1(
         &FIGURE9_LAYOUT.birth_fixed,
     )
 }
-
 impl fmt::Debug for VegaMdlFigure9WitnessV1<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -167,7 +162,6 @@ impl fmt::Debug for VegaMdlFigure9WitnessV1<'_> {
             .finish()
     }
 }
-
 /// Validate the complete strict Figure 9 relation without creating a proof.
 ///
 /// This is useful for prover-side diagnostics and cross-crate integration
@@ -182,26 +176,16 @@ pub fn validate_vega_mdl_figure9_relation_v1(
     public_inputs: &[Scalar; VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1],
     witness: &VegaMdlFigure9WitnessV1<'_>,
 ) -> Result<(), VegaMdlFigure9ErrorV1> {
-    let assignment = synthesize_figure9(public_inputs, witness)
-        .map_err(|_| VegaMdlFigure9ErrorV1::UnsatisfiedRelation)?;
-    assignment
-        .shape
-        .validate_relaxed_assignment(
-            &assignment.witness,
-            Scalar::one(),
-            &assignment.public_inputs,
-            &vec![Scalar::zero(); assignment.shape.constraint_count()],
-        )
+    synthesize_figure9(public_inputs, witness)
+        .map(|_| ())
         .map_err(|_| VegaMdlFigure9ErrorV1::UnsatisfiedRelation)
 }
-
 pub(super) fn synthesize_figure9(
     public_inputs: &[Scalar; VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1],
     witness: &VegaMdlFigure9WitnessV1<'_>,
 ) -> Result<CircuitAssignment, CircuitError> {
     synthesize_figure9_mc_material(public_inputs, witness).map(|material| material.assignment)
 }
-
 pub(super) fn synthesize_figure9_mc_material(
     public_inputs: &[Scalar; VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1],
     witness: &VegaMdlFigure9WitnessV1<'_>,
@@ -212,87 +196,103 @@ pub(super) fn synthesize_figure9_mc_material(
     {
         return Err(CircuitError::InvalidDimension);
     }
-
-    let mut builder = CircuitBuilder::new(public_inputs.to_vec())?;
+    let profile = canonical_profile()?;
+    let mut builder =
+        CircuitBuilder::new_with_profile(public_inputs.to_vec(), Arc::clone(profile))?;
+    synthesize_figure9_inner(&mut builder, witness)?;
+    Ok(Figure9McMaterial {
+        assignment: builder.finalize_with_shape()?,
+    })
+}
+/// Count first, then compile the fixed Figure 9 topology directly into CSR.
+///
+/// The supplied values need not satisfy the relation: profile compilation
+/// deliberately records topology and exact raw dimensions only.
+fn synthesize_figure9_count_then_compile(
+    public_inputs: &[Scalar; VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1],
+    witness: &VegaMdlFigure9WitnessV1<'_>,
+) -> Result<(CircuitAssignment, CircuitDimensions), CircuitError> {
+    let public_scalars = public_inputs.to_vec();
+    let mut counter = CircuitBuilder::new_counting(public_scalars.clone())?;
+    synthesize_figure9_inner(&mut counter, witness)?;
+    let dimensions = counter.finish_counting()?;
+    let mut compiler = CircuitBuilder::new_compiling(public_scalars, dimensions)?;
+    synthesize_figure9_inner(&mut compiler, witness)?;
+    Ok((compiler.finalize_compiled()?, dimensions))
+}
+fn synthesize_figure9_inner(
+    builder: &mut CircuitBuilder,
+    witness: &VegaMdlFigure9WitnessV1<'_>,
+) -> Result<(), CircuitError> {
+    let layout = &*FIGURE9_LAYOUT;
     let issuer = allocate_profile_bytes(
-        &mut builder,
+        builder,
         witness.issuer_authentication_sig_structure,
         &layout.issuer_template,
         &layout.issuer_fixed,
     )?;
     let birth = allocate_profile_bytes(
-        &mut builder,
+        builder,
         witness.birth_date_issuer_signed_item,
         &layout.birth_template,
         &layout.birth_fixed,
     )?;
-
     // The disclosed birth item is bound to the exact digest entry in the
     // issuer-authenticated MSO bytes.
-    let (birth_digest, birth_trace) = sha256_with_trace(&mut builder, &birth)?;
+    let (birth_digest, birth_trace) = sha256_with_trace(builder, &birth)?;
     bind_digest_to_bytes(
-        &mut builder,
+        builder,
         birth_digest,
         &issuer[layout.issuer_birth_digest.clone()],
     )?;
-
     // The device key is private but authenticated as part of the issuer's
     // exact Sig_structure.
     let device_key = private_point_from_be_bytes(
-        &mut builder,
+        builder,
         &issuer[layout.issuer_device_x.clone()],
         &issuer[layout.issuer_device_y.clone()],
     )?;
-
     // Parse and constrain every private calendar value, including the two
     // validity endpoints that cheap native preflight must not be trusted to
     // enforce for soundness.
-    let signed =
-        parse_rfc3339_seconds(&mut builder, &issuer[layout.issuer_signed_datetime.clone()])?;
-    let valid_from = parse_rfc3339_seconds(
-        &mut builder,
-        &issuer[layout.issuer_valid_from_datetime.clone()],
-    )?;
-    let valid_until = parse_rfc3339_seconds(
-        &mut builder,
-        &issuer[layout.issuer_valid_until_datetime.clone()],
-    )?;
-    let birth_date = parse_full_date(&mut builder, &birth[layout.birth_date.clone()])?;
+    let signed = parse_rfc3339_seconds(builder, &issuer[layout.issuer_signed_datetime.clone()])?;
+    let valid_from =
+        parse_rfc3339_seconds(builder, &issuer[layout.issuer_valid_from_datetime.clone()])?;
+    let valid_until =
+        parse_rfc3339_seconds(builder, &issuer[layout.issuer_valid_until_datetime.clone()])?;
+    let birth_date = parse_full_date(builder, &birth[layout.birth_date.clone()])?;
     let presentation = public_date(
-        &mut builder,
+        builder,
         PRESENTATION_YEAR_INDEX,
         PRESENTATION_MONTH_INDEX,
         PRESENTATION_DAY_INDEX,
     )?;
-    let (threshold, _) = public_age_threshold(&mut builder, AGE_THRESHOLD_INDEX)?;
-    enforce_rfc3339_not_before(&mut builder, &valid_from, &signed)?;
-    enforce_not_before(&mut builder, &presentation, &valid_from.date)?;
-    enforce_strictly_after(&mut builder, &valid_until.date, &presentation)?;
-    enforce_completed_age(&mut builder, &birth_date, &presentation, threshold)?;
-
-    let (issuer_digest, issuer_trace) = sha256_with_trace(&mut builder, &issuer)?;
-    let issuer_key = public_point(&mut builder, ISSUER_X_INDEX, ISSUER_Y_INDEX)?;
+    let (threshold, _) = public_age_threshold(builder, AGE_THRESHOLD_INDEX)?;
+    enforce_rfc3339_not_before(builder, &valid_from, &signed)?;
+    enforce_not_before(builder, &presentation, &valid_from.date)?;
+    enforce_strictly_after(builder, &valid_until.date, &presentation)?;
+    enforce_completed_age(builder, &birth_date, &presentation, threshold)?;
+    let (issuer_digest, issuer_trace) = sha256_with_trace(builder, &issuer)?;
+    let issuer_key = public_point(builder, ISSUER_X_INDEX, ISSUER_Y_INDEX)?;
     verify_es256_low_s_from_inverse(
-        &mut builder,
+        builder,
         issuer_digest,
         &issuer_key,
         *witness.issuer_r,
         *witness.issuer_s_inverse,
     )?;
-
     let device_digest = (0..8)
-        .map(|offset| public_word(&mut builder, DEVICE_DIGEST_WORD_START + offset))
+        .map(|offset| public_word(builder, DEVICE_DIGEST_WORD_START + offset))
         .collect::<Result<Vec<_>, _>>()?
         .try_into()
         .map_err(|_| CircuitError::InvalidDimension)?;
     verify_es256_low_s_from_inverse(
-        &mut builder,
+        builder,
         device_digest,
         &device_key,
         *witness.device_r,
         *witness.device_s_inverse,
     )?;
-
     byte_indices(&issuer)?;
     byte_indices(&birth)?;
     let issuer_state_count = state_indices(&issuer_trace)?.len();
@@ -300,11 +300,38 @@ pub(super) fn synthesize_figure9_mc_material(
     if issuer_state_count != 6 || birth_state_count != 2 {
         return Err(CircuitError::InvalidDimension);
     }
-    Ok(Figure9McMaterial {
-        assignment: builder.finalize()?,
-    })
+    Ok(())
 }
-
+fn build_canonical_profile() -> Result<Arc<CircuitProfile>, CircuitError> {
+    let layout = &*FIGURE9_LAYOUT;
+    let one = [1_u8; 32];
+    let witness = VegaMdlFigure9WitnessV1::new(
+        &layout.issuer_template,
+        &layout.birth_template,
+        &one,
+        &one,
+        &one,
+        &one,
+    )
+    .map_err(|_| CircuitError::InvalidAssignment)?;
+    let mut public_inputs = [Scalar::one(); VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1];
+    public_inputs[PRESENTATION_YEAR_INDEX] = Scalar::from_u64(2026);
+    public_inputs[PRESENTATION_MONTH_INDEX] = Scalar::from_u64(7);
+    public_inputs[PRESENTATION_DAY_INDEX] = Scalar::from_u64(26);
+    public_inputs[AGE_THRESHOLD_INDEX] = Scalar::from_u64(18);
+    let (assignment, dimensions) = synthesize_figure9_count_then_compile(&public_inputs, &witness)?;
+    Ok(Arc::new(CircuitProfile::new(
+        assignment.shape,
+        dimensions.emitted_private_value_count,
+        dimensions.emitted_constraint_count,
+    )?))
+}
+fn canonical_profile() -> Result<&'static Arc<CircuitProfile>, CircuitError> {
+    match &*FIGURE9_CANONICAL_PROFILE {
+        Ok(profile) => Ok(profile),
+        Err(error) => Err(*error),
+    }
+}
 fn byte_indices(bytes: &[ByteVar]) -> Result<Vec<[usize; 8]>, CircuitError> {
     bytes
         .iter()
@@ -312,7 +339,6 @@ fn byte_indices(bytes: &[ByteVar]) -> Result<Vec<[usize; 8]>, CircuitError> {
         .map(|byte| bit_indices(byte.bits_le()))
         .collect()
 }
-
 fn state_indices(trace: &Sha256Trace) -> Result<Vec<[[usize; 32]; 8]>, CircuitError> {
     trace
         .states_after_blocks
@@ -329,7 +355,6 @@ fn state_indices(trace: &Sha256Trace) -> Result<Vec<[[usize; 32]; 8]>, CircuitEr
         })
         .collect()
 }
-
 fn bit_indices<const N: usize>(bits: [Bit; N]) -> Result<[usize; N], CircuitError> {
     bits.map(|bit| match bit.variable() {
         Variable::Private(index) => Ok(index),
@@ -340,7 +365,6 @@ fn bit_indices<const N: usize>(bits: [Bit; N]) -> Result<[usize; N], CircuitErro
     .try_into()
     .map_err(|_| CircuitError::InvalidDimension)
 }
-
 fn allocate_profile_bytes(
     builder: &mut CircuitBuilder,
     actual: &[u8],
@@ -363,7 +387,6 @@ fn allocate_profile_bytes(
     }
     Ok(allocated)
 }
-
 fn bind_digest_to_bytes(
     builder: &mut CircuitBuilder,
     digest: [super::sha256::WordVar; 8],
@@ -381,7 +404,6 @@ fn bind_digest_to_bytes(
     }
     Ok(())
 }
-
 fn validate_length(
     field: &'static str,
     actual: usize,
@@ -396,7 +418,6 @@ fn validate_length(
     }
     Ok(())
 }
-
 fn validate_profile_encoding(
     field: &'static str,
     actual: &[u8],
@@ -414,11 +435,9 @@ fn validate_profile_encoding(
     }
     Ok(())
 }
-
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
-
     const ISSUER_X: &str = "df666ab5a8f2c65017756b27cabae13b4b8e3864c5a4182884c4872920f43364";
     const ISSUER_Y: &str = "b2470a2618899b3bc06b6e6d356a68d7eefcc120c828c628edbeb4352068b6e7";
     const DEVICE_X: &str = "864145351e998d7aaab002ed334edf912fb26a0a699c704fdde71a9ee43867f8";
@@ -461,7 +480,6 @@ pub(super) mod tests {
         "c544f2c2e94236f2b6ab81ae61e5f0b7ee89a1af8a08d730c9e26a9c16537122";
     const SIGNED_AFTER_VALID_FROM_ISSUER_S_INVERSE: &str =
         "b63409e4735522039616beda2651614d3f616b4a9205598677075e9418f5e482";
-
     #[derive(Clone)]
     pub(crate) struct SignedFixture {
         pub(crate) public: [Scalar; VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1],
@@ -472,7 +490,6 @@ pub(super) mod tests {
         pub(crate) device_r: [u8; 32],
         pub(crate) device_s_inverse: [u8; 32],
     }
-
     impl SignedFixture {
         pub(crate) fn witness(&self) -> VegaMdlFigure9WitnessV1<'_> {
             VegaMdlFigure9WitnessV1::new(
@@ -486,14 +503,12 @@ pub(super) mod tests {
             .expect("closed signed fixture")
         }
     }
-
     fn hex32(value: &str) -> [u8; 32] {
         hex::decode(value)
             .expect("hex")
             .try_into()
             .expect("32 bytes")
     }
-
     pub(crate) fn high_s_counterpart_inverse(low_s_inverse: [u8; 32]) -> [u8; 32] {
         let mut high_s_inverse = [0_u8; 32];
         let mut borrow = 0_u16;
@@ -514,7 +529,6 @@ pub(super) mod tests {
         assert_ne!(high_s_inverse, [0; 32], "fixture inverse is nonzero");
         high_s_inverse
     }
-
     pub(crate) fn baseline_signed_fixture() -> SignedFixture {
         let mut issuer = FIGURE9_LAYOUT.issuer_template.clone();
         let birth = FIGURE9_LAYOUT.birth_template.clone();
@@ -522,7 +536,6 @@ pub(super) mod tests {
             .copy_from_slice(&hex32(BASELINE_BIRTH_DIGEST));
         issuer[FIGURE9_LAYOUT.issuer_device_x.clone()].copy_from_slice(&hex32(DEVICE_X));
         issuer[FIGURE9_LAYOUT.issuer_device_y.clone()].copy_from_slice(&hex32(DEVICE_Y));
-
         let issuer_x = Scalar::from_be_bytes_exact(hex32(ISSUER_X)).expect("canonical issuer x");
         let issuer_y = Scalar::from_be_bytes_exact(hex32(ISSUER_Y)).expect("canonical issuer y");
         let digest = hex32(DEVICE_DIGEST);
@@ -554,7 +567,6 @@ pub(super) mod tests {
             device_s_inverse: hex32(DEVICE_S_INVERSE),
         }
     }
-
     fn signed_variant(
         birth_date: Option<(&[u8; 10], &str)>,
         signed: Option<&[u8; 20]>,
@@ -584,11 +596,33 @@ pub(super) mod tests {
         fixture.issuer_s_inverse = hex32(issuer_s_inverse);
         fixture
     }
-
     fn dummy_signature_material() -> ([u8; 32], [u8; 32], [u8; 32], [u8; 32]) {
         ([1; 32], [2; 32], [3; 32], [4; 32])
     }
-
+    #[test]
+    fn production_synthesis_uses_one_streaming_canonical_profile() {
+        let source = include_str!("figure9.rs");
+        let production = source
+            .split("#[cfg(test)]\npub(super) mod tests")
+            .next()
+            .expect("production Figure 9 source");
+        assert!(production.contains(
+            "static FIGURE9_CANONICAL_PROFILE: Lazy<Result<Arc<CircuitProfile>, CircuitError>>"
+        ));
+        assert!(production.contains("CircuitBuilder::new_counting("));
+        assert!(production.contains("CircuitBuilder::new_compiling("));
+        assert!(production.contains("CircuitBuilder::new_with_profile("));
+        assert!(production.contains("builder.finalize_with_shape()?"));
+        assert!(!production.contains("CircuitBuilder::new("));
+        assert!(!production.contains("builder.finalize()?"));
+        assert!(!production.contains("#[derive(Clone)]\npub(super) struct Figure9McMaterial"));
+        let public_validator = production
+            .split("pub fn validate_vega_mdl_figure9_relation_v1")
+            .nth(1)
+            .and_then(|tail| tail.split("pub(super) fn synthesize_figure9").next())
+            .expect("public relation validator");
+        assert!(!public_validator.contains("validate_strict_assignment"));
+    }
     #[test]
     fn encoding_boundary_rejects_every_fixed_byte_and_wrong_length() {
         let layout = &*FIGURE9_LAYOUT;
@@ -600,7 +634,6 @@ pub(super) mod tests {
         );
         assert_eq!(birth.len(), VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1);
         validate_vega_mdl_figure9_encoding_v1(&issuer, &birth).expect("template encoding");
-
         for (index, fixed) in layout.issuer_fixed.iter().copied().enumerate() {
             if fixed {
                 let mut altered = issuer.clone();
@@ -621,7 +654,6 @@ pub(super) mod tests {
                 );
             }
         }
-
         assert!(
             validate_vega_mdl_figure9_encoding_v1(&issuer[..issuer.len() - 1], &birth).is_err()
         );
@@ -633,7 +665,6 @@ pub(super) mod tests {
         overlong_birth.push(0);
         assert!(validate_vega_mdl_figure9_encoding_v1(&issuer, &overlong_birth).is_err());
     }
-
     #[test]
     fn encoding_boundary_classifies_every_variable_byte_and_redacts_debug() {
         let layout = &*FIGURE9_LAYOUT;
@@ -653,7 +684,6 @@ pub(super) mod tests {
                     .unwrap_or_else(|_| panic!("birth variable byte {index}"));
             }
         }
-
         let (issuer_r, issuer_s_inverse, device_r, device_s_inverse) = dummy_signature_material();
         let witness = VegaMdlFigure9WitnessV1::new(
             &layout.issuer_template,
@@ -668,14 +698,12 @@ pub(super) mod tests {
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains(&hex::encode(issuer_r)));
     }
-
     #[test]
     fn independent_openssl_signed_figure9_vector_satisfies_the_complete_relation() {
         let fixture = baseline_signed_fixture();
         validate_vega_mdl_figure9_relation_v1(&fixture.public, &fixture.witness())
             .expect("complete signed relation");
     }
-
     #[test]
     fn issuer_and_device_high_s_counterparts_are_unsatisfied_in_the_circuit_relation() {
         let baseline = baseline_signed_fixture();
@@ -700,7 +728,6 @@ pub(super) mod tests {
             );
         }
     }
-
     #[test]
     #[cfg_attr(
         debug_assertions,
@@ -717,7 +744,6 @@ pub(super) mod tests {
         );
         validate_vega_mdl_figure9_relation_v1(&birthday_exact.public, &birthday_exact.witness())
             .expect("exact eighteenth birthday is accepted");
-
         let underage = signed_variant(
             Some((b"2008-07-27", UNDERAGE_BIRTH_DIGEST)),
             None,
@@ -730,7 +756,6 @@ pub(super) mod tests {
             validate_vega_mdl_figure9_relation_v1(&underage.public, &underage.witness()),
             Err(VegaMdlFigure9ErrorV1::UnsatisfiedRelation)
         );
-
         let expiry_exact = signed_variant(
             None,
             None,
@@ -743,7 +768,6 @@ pub(super) mod tests {
             validate_vega_mdl_figure9_relation_v1(&expiry_exact.public, &expiry_exact.witness()),
             Err(VegaMdlFigure9ErrorV1::UnsatisfiedRelation)
         );
-
         let expiry_next = signed_variant(
             None,
             None,
@@ -754,7 +778,6 @@ pub(super) mod tests {
         );
         validate_vega_mdl_figure9_relation_v1(&expiry_next.public, &expiry_next.witness())
             .expect("next-day expiry is accepted");
-
         let future_valid_from = signed_variant(
             None,
             None,
@@ -770,7 +793,6 @@ pub(super) mod tests {
             ),
             Err(VegaMdlFigure9ErrorV1::UnsatisfiedRelation)
         );
-
         let signed_after_valid_from = signed_variant(
             None,
             Some(b"2026-08-01T03:04:05Z"),
@@ -787,7 +809,6 @@ pub(super) mod tests {
             Err(VegaMdlFigure9ErrorV1::UnsatisfiedRelation)
         );
     }
-
     #[test]
     #[cfg_attr(
         debug_assertions,
@@ -801,7 +822,6 @@ pub(super) mod tests {
                 Err(VegaMdlFigure9ErrorV1::UnsatisfiedRelation)
             );
         };
-
         for range in [
             FIGURE9_LAYOUT.issuer_birth_digest.clone(),
             FIGURE9_LAYOUT.issuer_device_x.clone(),
@@ -838,23 +858,19 @@ pub(super) mod tests {
             changed.public[index] += Scalar::one();
             assert_unsatisfied(&changed);
         }
-
         let mut before_valid_from = baseline.clone();
         before_valid_from.public[10] = Scalar::from_u64(2025);
         before_valid_from.public[11] = Scalar::from_u64(1);
         before_valid_from.public[12] = Scalar::from_u64(1);
         assert_unsatisfied(&before_valid_from);
-
         let mut expiry_boundary = baseline.clone();
         expiry_boundary.public[10] = Scalar::from_u64(2035);
         expiry_boundary.public[11] = Scalar::from_u64(8);
         expiry_boundary.public[12] = Scalar::from_u64(17);
         assert_unsatisfied(&expiry_boundary);
-
         let mut invalid_calendar = baseline.clone();
         invalid_calendar.public[11] = Scalar::from_u64(13);
         assert_unsatisfied(&invalid_calendar);
-
         let mut threshold_too_high = baseline;
         threshold_too_high.public[13] = Scalar::from_u64(40);
         assert_unsatisfied(&threshold_too_high);

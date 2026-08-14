@@ -14,16 +14,13 @@
 //! binds sparse source tokens to each compact SHA message. A separate
 //! four-lane copy product binds every repeated byte occurrence. Padding rows
 //! and unused hash slots are algebraically zero.
-
 use std::collections::BTreeMap;
-
 use iroha_data_model::privacy::{
     IrohaZkX509StarkP256StatementV1, PrivacyStatementV1, ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1,
     ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1,
 };
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::io_air::{
     ZkX509IoChannelDeclarationV1, ZkX509IoChannelWitnessV1, ZkX509IoEndpointV1,
@@ -36,7 +33,6 @@ use super::profile::{
     ZK_X509_SCOPED_KEY_DOMAIN_V1, ZK_X509_SOURCE_PROFILE_V1, ZK_X509_SUITE_V1,
 };
 use crate::privacy_engines::transparent_stark::{GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F};
-
 /// Exact manifest descriptor for the projection chip.
 #[cfg(test)]
 pub(crate) const ZK_X509_PROJECTION_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-projection-air-v1:trace=32768:base-width=17:aux-width=32:hash-slots=7:sha-buffer=2048:private-length-prefix:source-compaction-permutation-4lane:byte-copy-dual-products-4lane:governance-scoped-leaf-spki+stable-issuer-serial-nullifier+4-disclosures+ownership:fixed-three-spki-input-channels:optional-third-slot-canonical-zero:verifier-fixed-public-digests:zero-padding:first-release";
@@ -60,7 +56,6 @@ pub(crate) const ZK_X509_PROJECTION_STARK_CONSTRAINT_COUNT_V1: usize =
     243 + 14 * ZK_X509_PROJECTION_COPY_LANES_V1;
 /// Maximum algebraic degree in committed projection columns.
 pub(crate) const ZK_X509_PROJECTION_STARK_CONSTRAINT_DEGREE_V1: u8 = 4;
-
 const VALUE: usize = 0;
 const VALUE_BITS: usize = 1;
 const USED: usize = 9;
@@ -71,7 +66,6 @@ const LENGTH_ACC_BEFORE: usize = 13;
 const LENGTH_ACC_AFTER: usize = 14;
 const REGION_BEFORE: usize = 15;
 const REGION_AFTER: usize = 16;
-
 const COPY_LANES: usize = ZK_X509_PROJECTION_COPY_LANES_V1;
 pub(super) const ZK_X509_PROJECTION_CHALLENGE_LABELS_V1: [[&[u8]; 7]; COPY_LANES] = [
     [
@@ -119,11 +113,9 @@ const AUX_SOURCE_BEFORE: usize = AUX_COPY_DENOMINATOR_AFTER + COPY_LANES;
 const AUX_SOURCE_AFTER: usize = AUX_SOURCE_BEFORE + COPY_LANES;
 const AUX_OUTPUT_BEFORE: usize = AUX_SOURCE_AFTER + COPY_LANES;
 const AUX_OUTPUT_AFTER: usize = AUX_OUTPUT_BEFORE + COPY_LANES;
-
 const _: () = assert!(ZK_X509_PROJECTION_AUX_WIDTH_V1 == 32);
 const _: () = assert!(ZK_X509_PROJECTION_STARK_CONSTRAINT_COUNT_V1 == 299);
 const _: () = assert!(AUX_OUTPUT_AFTER + COPY_LANES == ZK_X509_PROJECTION_AUX_WIDTH_V1);
-
 const FIX_INPUT_SPKI: usize = 0;
 const FIX_INPUT_LENGTH: usize = 1;
 const FIX_INPUT_BYTE: usize = 2;
@@ -149,7 +141,6 @@ const FIX_COPY_SIGMA: usize = 21;
 const FIX_FIRST_ROW: usize = 22;
 const FIX_LAST_ROW: usize = 23;
 const FIX_USED_MONOTONE_TRANSITION: usize = 24;
-
 /// Wallet-local projection witness extracted by the constrained DER segment.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,7 +154,6 @@ pub(crate) struct ZkX509ProjectionWitnessV1 {
     /// Private salts for disclosures in statement order.
     pub(crate) attribute_salts: Vec<[u8; ZK_X509_ATTRIBUTE_SALT_BYTES_V1]>,
 }
-
 /// Semantic projection hash slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ZkX509ProjectionHashV1 {
@@ -176,7 +166,6 @@ pub(crate) enum ZkX509ProjectionHashV1 {
     /// Public statement and wallet-ownership challenge binding.
     OwnershipChallenge,
 }
-
 impl ZkX509ProjectionHashV1 {
     const fn slot(self) -> usize {
         match self {
@@ -187,13 +176,11 @@ impl ZkX509ProjectionHashV1 {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum PrivateInputV1 {
     Serial,
     Attribute(u8),
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum CopyKeyV1 {
     Spki { certificate: u8, offset: u16 },
@@ -210,7 +197,6 @@ enum CopyKeyV1 {
     InactiveInput { family: u8, offset: u16 },
     Padding(u16),
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SourceTokenV1 {
     Constant(u8),
@@ -222,7 +208,6 @@ enum SourceTokenV1 {
     AttributeSalt { disclosure: u8, offset: u8 },
     Unused,
 }
-
 /// One verifier-fixed projection row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ZkX509ProjectionFixedRowV1 {
@@ -316,7 +301,6 @@ pub(crate) enum ZkX509ProjectionFixedRowV1 {
     /// Algebraically zero trace padding.
     Padding,
 }
-
 /// Public spelling of source-token semantics used by fixed preprocessing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ZkX509ProjectionSourceTokenV1 {
@@ -337,7 +321,6 @@ pub(crate) enum ZkX509ProjectionSourceTokenV1 {
     /// Inactive fixed-buffer token.
     Unused,
 }
-
 impl From<SourceTokenV1> for ZkX509ProjectionSourceTokenV1 {
     fn from(value: SourceTokenV1) -> Self {
         match value {
@@ -364,7 +347,6 @@ impl From<SourceTokenV1> for ZkX509ProjectionSourceTokenV1 {
         }
     }
 }
-
 /// Verifier-built fixed projection trace.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509ProjectionFixedTraceV1 {
@@ -375,7 +357,6 @@ pub(crate) struct ZkX509ProjectionFixedTraceV1 {
     /// Fixed copy-cycle permutation labels.
     pub(crate) copy_sigma: Vec<F>,
 }
-
 /// Witness-bearing projection base trace.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -383,7 +364,6 @@ pub(crate) struct ZkX509ProjectionBaseTraceV1 {
     /// Exact base rows.
     pub(crate) rows: Vec<[F; ZK_X509_PROJECTION_BASE_WIDTH_V1]>,
 }
-
 /// Challenge-dependent copy and compaction products.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -391,7 +371,6 @@ pub(crate) struct ZkX509ProjectionAuxTraceV1 {
     /// Exact auxiliary rows.
     pub(crate) rows: Vec<[F; ZK_X509_PROJECTION_AUX_WIDTH_V1]>,
 }
-
 /// One copy-product challenge lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509ProjectionCopyChallengesV1 {
@@ -400,7 +379,6 @@ pub(crate) struct ZkX509ProjectionCopyChallengesV1 {
     /// Tuple offset.
     pub(crate) gamma: F,
 }
-
 /// One source-compaction challenge lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509ProjectionCompactionChallengesV1 {
@@ -415,7 +393,6 @@ pub(crate) struct ZkX509ProjectionCompactionChallengesV1 {
     /// Tuple offset.
     pub(crate) gamma: F,
 }
-
 /// Four independent copy and compaction challenge lanes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509ProjectionChallengesV1 {
@@ -424,7 +401,6 @@ pub(crate) struct ZkX509ProjectionChallengesV1 {
     /// Source/output compaction lanes.
     pub(crate) compaction: [ZkX509ProjectionCompactionChallengesV1; COPY_LANES],
 }
-
 /// One prover-internal I/O channel emitted by projection.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -438,7 +414,6 @@ pub(crate) struct ZkX509ProjectionIoChannelV1 {
     /// Verifier-fixed public value, when a public-input consumer exists.
     pub(crate) public_value: Option<Vec<u8>>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509ProjectionIoChannelV1 {
     /// Convert plans to the shared sequential channel-witness format.
@@ -466,7 +441,6 @@ impl ZkX509ProjectionIoChannelV1 {
         })
     }
 }
-
 /// Complete projection witness material.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
@@ -478,14 +452,12 @@ pub(crate) struct ZkX509ProjectionTraceV1 {
     /// Prover-internal cross-segment channel values.
     pub(crate) io_channels: Vec<ZkX509ProjectionIoChannelV1>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for ZkX509ProjectionTraceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkX509ProjectionTraceV1 { <private material redacted> }")
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509ProjectionTraceV1 {
     /// Overwrite every witness-bearing projection row and private channel.
@@ -505,13 +477,11 @@ impl ZkX509ProjectionTraceV1 {
         }
         self.io_channels.clear();
     }
-
     #[cfg(test)]
     pub(crate) fn private_is_zeroized_v1(&self) -> bool {
         self.base.rows.is_empty() && self.io_channels.is_empty()
     }
 }
-
 /// Projection trace construction or algebraic failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509ProjectionAirErrorV1 {
@@ -542,7 +512,6 @@ pub(crate) enum ZkX509ProjectionAirErrorV1 {
     #[error("zk-X509 projection resource bound is exceeded")]
     Resource,
 }
-
 #[derive(Clone)]
 enum FrameFieldV1 {
     Fixed(Vec<u8>),
@@ -551,7 +520,6 @@ enum FrameFieldV1 {
     AttributeValue(u8),
     AttributeSalt(u8),
 }
-
 #[derive(Clone)]
 struct InvocationSpecV1 {
     kind: ZkX509ProjectionHashV1,
@@ -561,33 +529,27 @@ struct InvocationSpecV1 {
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     public_digest: bool,
 }
-
 #[derive(Clone)]
 struct FixedRowSpecV1 {
     row: ZkX509ProjectionFixedRowV1,
     key: CopyKeyV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn endpoint(role: ZkX509IoSegmentRoleV1, instance: u16) -> ZkX509IoEndpointV1 {
     ZkX509IoEndpointV1 { role, instance }
 }
-
 fn checked_u16(value: usize) -> Result<u16, ZkX509ProjectionAirErrorV1> {
     u16::try_from(value).map_err(|_| ZkX509ProjectionAirErrorV1::Resource)
 }
-
 fn input_tag(input: PrivateInputV1) -> u8 {
     match input {
         PrivateInputV1::Serial => 3,
         PrivateInputV1::Attribute(index) => 4 + index,
     }
 }
-
 fn append_fixed(tokens: &mut Vec<SourceTokenV1>, bytes: &[u8]) {
     tokens.extend(bytes.iter().copied().map(SourceTokenV1::Constant));
 }
-
 fn append_field_length(
     tokens: &mut Vec<SourceTokenV1>,
     field: &FrameFieldV1,
@@ -623,7 +585,6 @@ fn append_field_length(
     }
     Ok(())
 }
-
 fn append_field_bytes(
     tokens: &mut Vec<SourceTokenV1>,
     field: FrameFieldV1,
@@ -665,7 +626,6 @@ fn append_field_bytes(
     }
     Ok(())
 }
-
 fn frame_tokens_v1(
     domain: &[u8],
     fields: Vec<FrameFieldV1>,
@@ -688,7 +648,6 @@ fn frame_tokens_v1(
     }
     Ok(tokens)
 }
-
 fn hash_public_frame_v1(
     domain: &[u8],
     fields: &[&[u8]],
@@ -712,16 +671,13 @@ fn hash_public_frame_v1(
     }
     Ok(hash.finalize().into())
 }
-
 fn fixed_field(bytes: &[u8]) -> FrameFieldV1 {
     FrameFieldV1::Fixed(bytes.to_vec())
 }
-
 fn compile_invocations_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<Vec<InvocationSpecV1>, ZkX509ProjectionAirErrorV1> {
     let relation_version = ZK_X509_RELATION_VERSION_V1.to_be_bytes();
-
     let mut scoped_fields = vec![
         fixed_field(ZK_X509_SUITE_V1),
         fixed_field(ZK_X509_SOURCE_PROFILE_V1),
@@ -740,7 +696,6 @@ fn compile_invocations_v1(
         #[cfg(any(test, feature = "privacy-release-evidence"))]
         public_digest: true,
     };
-
     let nullifier = InvocationSpecV1 {
         kind: ZkX509ProjectionHashV1::CertificateNullifier,
         active: true,
@@ -758,7 +713,6 @@ fn compile_invocations_v1(
         #[cfg(any(test, feature = "privacy-release-evidence"))]
         public_digest: true,
     };
-
     let mut invocations = Vec::with_capacity(ZK_X509_PROJECTION_HASH_SLOTS_V1);
     invocations.push(scoped);
     invocations.push(nullifier);
@@ -796,7 +750,6 @@ fn compile_invocations_v1(
             });
         }
     }
-
     let statement_digest = PrivacyStatementV1::IrohaZkX509StarkP256V0(statement.clone())
         .digest()
         .map_err(|_| ZkX509ProjectionAirErrorV1::Encoding)?;
@@ -835,7 +788,6 @@ fn compile_invocations_v1(
         #[cfg(any(test, feature = "privacy-release-evidence"))]
         public_digest: false,
     });
-
     if invocations.len() != ZK_X509_PROJECTION_HASH_SLOTS_V1
         || invocations
             .iter()
@@ -846,7 +798,6 @@ fn compile_invocations_v1(
     }
     Ok(invocations)
 }
-
 fn token_key_v1(invocation: u8, offset: u16, token: SourceTokenV1) -> CopyKeyV1 {
     match token {
         SourceTokenV1::Constant(_) => CopyKeyV1::SourceConstant { invocation, offset },
@@ -871,7 +822,6 @@ fn token_key_v1(invocation: u8, offset: u16, token: SourceTokenV1) -> CopyKeyV1 
         SourceTokenV1::Unused => CopyKeyV1::SourceUnused { invocation, offset },
     }
 }
-
 fn push_input_fixed_rows_v1(
     specs: &mut Vec<FixedRowSpecV1>,
     statement: &IrohaZkX509StarkP256StatementV1,
@@ -894,7 +844,6 @@ fn push_input_fixed_rows_v1(
             });
         }
     }
-
     let serial = PrivateInputV1::Serial;
     for byte in 0_u8..8 {
         specs.push(FixedRowSpecV1 {
@@ -921,7 +870,6 @@ fn push_input_fixed_rows_v1(
             key: CopyKeyV1::Serial(offset_u8),
         });
     }
-
     for disclosure in 0..ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1 {
         let disclosure_u8 =
             u8::try_from(disclosure).map_err(|_| ZkX509ProjectionAirErrorV1::Resource)?;
@@ -975,7 +923,6 @@ fn push_input_fixed_rows_v1(
     }
     Ok(())
 }
-
 fn fixed_specs_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<(Vec<FixedRowSpecV1>, Vec<InvocationSpecV1>), ZkX509ProjectionAirErrorV1> {
@@ -986,7 +933,6 @@ fn fixed_specs_v1(
         .try_reserve_exact(ZK_X509_PROJECTION_TRACE_SIZE_V1)
         .map_err(|_| ZkX509ProjectionAirErrorV1::Resource)?;
     push_input_fixed_rows_v1(&mut specs, statement)?;
-
     for (invocation_index, invocation) in invocations.iter().enumerate() {
         let invocation_u8 =
             u8::try_from(invocation_index).map_err(|_| ZkX509ProjectionAirErrorV1::Resource)?;
@@ -1055,7 +1001,6 @@ fn fixed_specs_v1(
             });
         }
     }
-
     if specs.len() > ZK_X509_PROJECTION_TRACE_SIZE_V1 {
         return Err(ZkX509ProjectionAirErrorV1::Resource);
     }
@@ -1068,7 +1013,6 @@ fn fixed_specs_v1(
     }
     Ok((specs, invocations))
 }
-
 fn compile_fixed_trace_v1(
     specs: &[FixedRowSpecV1],
 ) -> Result<ZkX509ProjectionFixedTraceV1, ZkX509ProjectionAirErrorV1> {
@@ -1101,7 +1045,6 @@ fn compile_fixed_trace_v1(
         copy_sigma: sigma,
     })
 }
-
 fn validate_public_shape_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<(), ZkX509ProjectionAirErrorV1> {
@@ -1127,7 +1070,6 @@ fn validate_public_shape_v1(
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_witness_shape_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
@@ -1156,12 +1098,10 @@ fn validate_witness_shape_v1(
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn empty_base_row_v1() -> [F; ZK_X509_PROJECTION_BASE_WIDTH_V1] {
     [F::ZERO; ZK_X509_PROJECTION_BASE_WIDTH_V1]
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn chain_spki_byte_v1(
     witness: &ZkX509ProjectionWitnessV1,
@@ -1181,7 +1121,6 @@ fn chain_spki_byte_v1(
         })
         .unwrap_or(Ok(0))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn set_byte_v1(row: &mut [F; ZK_X509_PROJECTION_BASE_WIDTH_V1], value: u8) {
     row[VALUE] = F(u64::from(value));
@@ -1189,14 +1128,12 @@ fn set_byte_v1(row: &mut [F; ZK_X509_PROJECTION_BASE_WIDTH_V1], value: u8) {
         row[VALUE_BITS + bit] = F(u64::from((value >> bit) & 1));
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn f_usize_v1(value: usize) -> Result<F, ZkX509ProjectionAirErrorV1> {
     Ok(F(
         u64::try_from(value).map_err(|_| ZkX509ProjectionAirErrorV1::Resource)?
     ))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn length_accumulators_v1(bytes: [u8; 8], byte: usize) -> (u64, u64) {
     let before = bytes[..byte].iter().fold(0_u64, |accumulator, value| {
@@ -1204,7 +1141,6 @@ fn length_accumulators_v1(bytes: [u8; 8], byte: usize) -> (u64, u64) {
     });
     (before, before * 256 + u64::from(bytes[byte]))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn input_length_v1(
     input: u8,
@@ -1220,7 +1156,6 @@ fn input_length_v1(
         _ => Err(ZkX509ProjectionAirErrorV1::Topology),
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn input_value_v1(
     input: u8,
@@ -1237,7 +1172,6 @@ fn input_value_v1(
         _ => Err(ZkX509ProjectionAirErrorV1::Topology),
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fill_length_row_v1(
     row: &mut [F; ZK_X509_PROJECTION_BASE_WIDTH_V1],
@@ -1254,7 +1188,6 @@ fn fill_length_row_v1(
     row[LENGTH_ACC_AFTER] = F(after);
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fill_variable_row_v1(
     row: &mut [F; ZK_X509_PROJECTION_BASE_WIDTH_V1],
@@ -1270,7 +1203,6 @@ fn fill_variable_row_v1(
     row[REGION_AFTER] = f_usize_v1((offset + 1).min(length))?;
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fill_input_row_v1(
     fixed: ZkX509ProjectionFixedRowV1,
@@ -1324,7 +1256,6 @@ fn fill_input_row_v1(
     }
     Ok(row)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn source_token_material_v1(
     token: ZkX509ProjectionSourceTokenV1,
@@ -1399,7 +1330,6 @@ fn source_token_material_v1(
         ZkX509ProjectionSourceTokenV1::Unused => Ok((0, false, None)),
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_base_trace_v1(
     fixed: &ZkX509ProjectionFixedTraceV1,
@@ -1414,7 +1344,6 @@ fn build_base_trace_v1(
     let mut digests = vec![[0_u8; 32]; ZK_X509_PROJECTION_HASH_SLOTS_V1];
     let mut source_counts = [0_usize; ZK_X509_PROJECTION_HASH_SLOTS_V1];
     let mut output_counts = [0_usize; ZK_X509_PROJECTION_HASH_SLOTS_V1];
-
     for fixed_row in fixed.rows.iter().copied() {
         let mut row = empty_base_row_v1();
         match fixed_row {
@@ -1509,7 +1438,6 @@ fn build_base_trace_v1(
         }
         rows.push(row);
     }
-
     for (index, invocation) in invocations.iter().enumerate() {
         if invocation.active {
             if messages[index].is_empty()
@@ -1529,7 +1457,6 @@ fn build_base_trace_v1(
     }
     Ok((ZkX509ProjectionBaseTraceV1 { rows }, messages, digests))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn padded_v1(value: &[u8], length: usize) -> Result<Vec<u8>, ZkX509ProjectionAirErrorV1> {
     if value.len() > length {
@@ -1543,7 +1470,6 @@ fn padded_v1(value: &[u8], length: usize) -> Result<Vec<u8>, ZkX509ProjectionAir
     padded.resize(length, 0);
     Ok(padded)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn push_io_channel_v1(
     channels: &mut Vec<ZkX509ProjectionIoChannelV1>,
@@ -1560,7 +1486,6 @@ fn push_io_channel_v1(
         value,
     });
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_io_channels_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
@@ -1575,7 +1500,6 @@ fn build_io_channels_v1(
     let projection = endpoint(ZkX509IoSegmentRoleV1::Projection, 0);
     let public = endpoint(ZkX509IoSegmentRoleV1::PublicInput, 0);
     let mut channels = Vec::new();
-
     for certificate in 0..ZK_X509_MAX_CHAIN_DEPTH_V1 {
         let spki = witness
             .chain_spki_der
@@ -1623,7 +1547,6 @@ fn build_io_channels_v1(
             false,
         );
     }
-
     for (index, invocation) in invocations.iter().enumerate() {
         if !invocation.active {
             continue;
@@ -1671,7 +1594,6 @@ fn build_io_channels_v1(
     }
     Ok(channels)
 }
-
 /// Compile the verifier-fixed projection schedule for a statement.
 ///
 /// # Errors
@@ -1684,7 +1606,6 @@ pub(crate) fn compile_zk_x509_projection_fixed_trace_v1(
     let (specs, _) = fixed_specs_v1(statement)?;
     compile_fixed_trace_v1(&specs)
 }
-
 fn projection_stark_fixed_row_v1(
     row: ZkX509ProjectionFixedRowV1,
     copy_identity: F,
@@ -1815,7 +1736,6 @@ fn projection_stark_fixed_row_v1(
     fixed[FIX_LAST_ROW] = F(u64::from(row_index + 1 == ZK_X509_PROJECTION_TRACE_SIZE_V1));
     fixed
 }
-
 /// Compile the exact numeric preprocessing rows consumed by the aggregate
 /// verifier. The proof never supplies any selector, expected output byte, or
 /// permutation label.
@@ -1841,7 +1761,6 @@ pub(crate) fn compile_zk_x509_projection_stark_fixed_rows_v1(
         })
         .collect())
 }
-
 /// Build a complete projection witness trace and prover-internal I/O plan.
 ///
 /// # Errors
@@ -1864,7 +1783,6 @@ pub(crate) fn build_zk_x509_projection_trace_v1(
         io_channels,
     })
 }
-
 /// Convert a projection I/O plan to globally numbered shared witnesses.
 ///
 /// # Errors
@@ -1889,7 +1807,6 @@ pub(crate) fn projection_io_witnesses_v1(
         })
         .collect()
 }
-
 impl ZkX509ProjectionChallengesV1 {
     pub(crate) fn validate(self) -> Result<(), ZkX509ProjectionAirErrorV1> {
         let canonical_nonzero = |value: F| {
@@ -1920,7 +1837,6 @@ impl ZkX509ProjectionChallengesV1 {
         Ok(())
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compaction_term_v1(
     challenge: ZkX509ProjectionCompactionChallengesV1,
@@ -1935,7 +1851,6 @@ fn compaction_term_v1(
         .add(challenge.value.mul(row[VALUE]));
     challenge.gamma.add(used.mul(tuple))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fixed_compaction_role_v1(row: ZkX509ProjectionFixedRowV1) -> Option<(bool, u8)> {
     match row {
@@ -1944,7 +1859,6 @@ fn fixed_compaction_role_v1(row: ZkX509ProjectionFixedRowV1) -> Option<(bool, u8
         _ => None,
     }
 }
-
 /// Build the challenge-dependent copy and source-compaction products.
 ///
 /// # Errors
@@ -1975,7 +1889,6 @@ pub(crate) fn build_zk_x509_projection_aux_trace_v1(
     {
         return Err(ZkX509ProjectionAirErrorV1::NonCanonicalField);
     }
-
     let mut copy_numerator = [F::ONE; COPY_LANES];
     let mut copy_denominator = [F::ONE; COPY_LANES];
     let mut source = [F::ONE; COPY_LANES];
@@ -1992,7 +1905,6 @@ pub(crate) fn build_zk_x509_projection_aux_trace_v1(
             .copy_from_slice(&copy_denominator);
         aux[AUX_SOURCE_BEFORE..AUX_SOURCE_BEFORE + COPY_LANES].copy_from_slice(&source);
         aux[AUX_OUTPUT_BEFORE..AUX_OUTPUT_BEFORE + COPY_LANES].copy_from_slice(&output);
-
         for lane in 0..COPY_LANES {
             let copy_challenge = challenges.copy[lane];
             let identity_term = copy_challenge
@@ -2032,22 +1944,18 @@ pub(crate) fn build_zk_x509_projection_aux_trace_v1(
     }
     Ok(ZkX509ProjectionAuxTraceV1 { rows })
 }
-
 #[cfg(test)]
 fn add_residue_v1(residues: &mut Vec<F>, left: F, right: F) {
     residues.push(left.sub(right));
 }
-
 #[cfg(test)]
 fn add_zero_v1(residues: &mut Vec<F>, value: F) {
     residues.push(value);
 }
-
 #[cfg(test)]
 fn add_boolean_v1(residues: &mut Vec<F>, value: F) {
     residues.push(value.mul(value.sub(F::ONE)));
 }
-
 #[cfg(test)]
 fn enforce_auxiliary_zero_v1(
     residues: &mut Vec<F>,
@@ -2070,7 +1978,6 @@ fn enforce_auxiliary_zero_v1(
         add_zero_v1(residues, row[REGION_AFTER]);
     }
 }
-
 #[cfg(test)]
 fn source_token_is_length_v1(token: ZkX509ProjectionSourceTokenV1) -> bool {
     matches!(
@@ -2079,7 +1986,6 @@ fn source_token_is_length_v1(token: ZkX509ProjectionSourceTokenV1) -> bool {
             | ZkX509ProjectionSourceTokenV1::AttributeLength { .. }
     )
 }
-
 #[cfg(test)]
 fn source_token_is_variable_v1(token: ZkX509ProjectionSourceTokenV1) -> bool {
     matches!(
@@ -2088,7 +1994,6 @@ fn source_token_is_variable_v1(token: ZkX509ProjectionSourceTokenV1) -> bool {
             | ZkX509ProjectionSourceTokenV1::AttributeValue { .. }
     )
 }
-
 #[cfg(test)]
 fn source_token_constant_v1(token: ZkX509ProjectionSourceTokenV1) -> Option<u8> {
     match token {
@@ -2096,7 +2001,6 @@ fn source_token_constant_v1(token: ZkX509ProjectionSourceTokenV1) -> Option<u8> 
         _ => None,
     }
 }
-
 fn source_length_position_v1(token: ZkX509ProjectionSourceTokenV1) -> Option<(u8, bool, bool)> {
     match token {
         ZkX509ProjectionSourceTokenV1::SerialLength(byte)
@@ -2106,7 +2010,6 @@ fn source_length_position_v1(token: ZkX509ProjectionSourceTokenV1) -> Option<(u8
         _ => None,
     }
 }
-
 fn source_variable_position_v1(
     token: ZkX509ProjectionSourceTokenV1,
 ) -> Option<(usize, usize, bool, bool)> {
@@ -2132,7 +2035,6 @@ fn source_variable_position_v1(
         _ => None,
     }
 }
-
 #[cfg(test)]
 fn same_source_variable_group_v1(
     left: ZkX509ProjectionSourceTokenV1,
@@ -2153,7 +2055,6 @@ fn same_source_variable_group_v1(
         _ => false,
     }
 }
-
 #[cfg(test)]
 fn same_source_length_group_v1(
     left: ZkX509ProjectionSourceTokenV1,
@@ -2175,7 +2076,6 @@ fn same_source_length_group_v1(
         _ => false,
     }
 }
-
 #[cfg(test)]
 fn matching_length_to_variable_v1(
     length: ZkX509ProjectionSourceTokenV1,
@@ -2199,7 +2099,6 @@ fn matching_length_to_variable_v1(
         _ => false,
     }
 }
-
 #[cfg(test)]
 fn constrain_length_row_v1(
     residues: &mut Vec<F>,
@@ -2234,7 +2133,6 @@ fn constrain_length_row_v1(
         add_residue_v1(residues, next[DECLARED_LENGTH], current[DECLARED_LENGTH]);
     }
 }
-
 #[cfg(test)]
 fn constrain_variable_row_v1(
     residues: &mut Vec<F>,
@@ -2264,12 +2162,10 @@ fn constrain_variable_row_v1(
         }
     }
 }
-
 #[cfg(test)]
 fn all_zero_base_v1(residues: &mut Vec<F>, row: &[F; ZK_X509_PROJECTION_BASE_WIDTH_V1]) {
     residues.extend(row.iter().copied());
 }
-
 #[cfg(test)]
 fn next_input_length_v1(
     current_input: u8,
@@ -2292,7 +2188,6 @@ fn next_input_length_v1(
         _ => (false, false),
     }
 }
-
 #[cfg(test)]
 fn next_input_byte_same_v1(
     current_input: u8,
@@ -2309,7 +2204,6 @@ fn next_input_byte_same_v1(
         }) if input == current_input && offset == current_offset + 1
     )
 }
-
 #[cfg(test)]
 fn ensure_canonical_rows_v1(
     base: &[F; ZK_X509_PROJECTION_BASE_WIDTH_V1],
@@ -2331,7 +2225,6 @@ fn ensure_canonical_rows_v1(
     }
     Ok(())
 }
-
 /// Evaluate all base-domain projection constraint residues for one opened row.
 ///
 /// Fixed rows, identity labels, and sigma labels are verifier preprocessing,
@@ -2366,7 +2259,6 @@ pub(crate) fn evaluate_zk_x509_projection_constraint_residues_v1(
         copy_sigma,
     )?;
     let mut residues = Vec::with_capacity(96);
-
     add_boolean_v1(&mut residues, current[USED]);
     let mut reconstructed = F::ZERO;
     for bit in 0..8 {
@@ -2375,7 +2267,6 @@ pub(crate) fn evaluate_zk_x509_projection_constraint_residues_v1(
         reconstructed = reconstructed.add(value.mul(F(1_u64 << bit)));
     }
     add_residue_v1(&mut residues, current[VALUE], reconstructed);
-
     match fixed {
         ZkX509ProjectionFixedRowV1::InputSpki { active, .. } => {
             if active {
@@ -2471,7 +2362,6 @@ pub(crate) fn evaluate_zk_x509_projection_constraint_residues_v1(
                     _ => residues.push(F::ONE),
                 }
             }
-
             if !active {
                 add_zero_v1(&mut residues, current[USED]);
                 add_zero_v1(&mut residues, current[VALUE]);
@@ -2682,7 +2572,6 @@ pub(crate) fn evaluate_zk_x509_projection_constraint_residues_v1(
             all_zero_base_v1(&mut residues, current);
         }
     }
-
     for lane in 0..COPY_LANES {
         let copy = challenges.copy[lane];
         let identity_term = copy
@@ -2703,7 +2592,6 @@ pub(crate) fn evaluate_zk_x509_projection_constraint_residues_v1(
             current_aux[AUX_COPY_DENOMINATOR_AFTER + lane],
             current_aux[AUX_COPY_DENOMINATOR_BEFORE + lane].mul(identity_term),
         );
-
         let (source_factor, output_factor) =
             if let Some((is_source, invocation)) = fixed_compaction_role_v1(fixed) {
                 let term = compaction_term_v1(challenges.compaction[lane], current, invocation);
@@ -2725,7 +2613,6 @@ pub(crate) fn evaluate_zk_x509_projection_constraint_residues_v1(
             current_aux[AUX_OUTPUT_AFTER + lane],
             current_aux[AUX_OUTPUT_BEFORE + lane].mul(output_factor),
         );
-
         if first_row {
             add_residue_v1(
                 &mut residues,
@@ -2778,11 +2665,9 @@ pub(crate) fn evaluate_zk_x509_projection_constraint_residues_v1(
     }
     Ok(residues)
 }
-
 fn push_projection_stark_residue_v1(residues: &mut Vec<F>, gate: F, residue: F) {
     residues.push(gate.mul(residue));
 }
-
 fn push_projection_stark_zero_base_v1(
     residues: &mut Vec<F>,
     gate: F,
@@ -2792,7 +2677,6 @@ fn push_projection_stark_zero_base_v1(
         push_projection_stark_residue_v1(residues, gate, *value);
     }
 }
-
 fn push_projection_stark_zero_fields_v1(
     residues: &mut Vec<F>,
     gate: F,
@@ -2803,7 +2687,6 @@ fn push_projection_stark_zero_fields_v1(
         push_projection_stark_residue_v1(residues, gate, row[*field]);
     }
 }
-
 fn push_projection_stark_length_v1(
     residues: &mut Vec<F>,
     gate: F,
@@ -2841,7 +2724,6 @@ fn push_projection_stark_length_v1(
         next[DECLARED_LENGTH].sub(current[DECLARED_LENGTH]),
     );
 }
-
 fn push_projection_stark_variable_v1(
     residues: &mut Vec<F>,
     gate: F,
@@ -2885,7 +2767,6 @@ fn push_projection_stark_variable_v1(
         next[USED].mul(F::ONE.sub(current[USED])),
     );
 }
-
 /// Evaluate the projection AIR as one fixed-width polynomial vector.
 ///
 /// Unlike the test-only native projection constraint evaluator, this
@@ -2923,7 +2804,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
     let first = fixed[FIX_FIRST];
     let last = fixed[FIX_LAST];
     let not_last = F::ONE.sub(last);
-
     residues.push(current[USED].mul(current[USED].sub(F::ONE)));
     let mut reconstructed = F::ZERO;
     for bit in 0..8 {
@@ -2932,7 +2812,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
         reconstructed = reconstructed.add(value.mul(F(1_u64 << bit)));
     }
     residues.push(current[VALUE].sub(reconstructed));
-
     let input_spki = fixed[FIX_INPUT_SPKI];
     let input_spki_active = input_spki.mul(active);
     push_projection_stark_residue_v1(&mut residues, input_spki_active, current[USED].sub(F::ONE));
@@ -2951,7 +2830,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
         ],
     );
     push_projection_stark_zero_base_v1(&mut residues, input_spki.mul(inactive), current);
-
     let input_length = fixed[FIX_INPUT_LENGTH];
     let input_length_active = input_length.mul(active);
     push_projection_stark_zero_fields_v1(
@@ -2975,7 +2853,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
         next,
     );
     push_projection_stark_zero_base_v1(&mut residues, input_length.mul(inactive), current);
-
     let input_byte = fixed[FIX_INPUT_BYTE];
     let input_byte_active = input_byte.mul(active);
     push_projection_stark_zero_fields_v1(
@@ -2994,7 +2871,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
         next,
     );
     push_projection_stark_zero_base_v1(&mut residues, input_byte.mul(inactive), current);
-
     let source = fixed[FIX_SOURCE];
     push_projection_stark_residue_v1(
         &mut residues,
@@ -3027,7 +2903,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
             REGION_AFTER,
         ],
     );
-
     let source_constant = active.mul(fixed[FIX_SOURCE_CONSTANT]);
     push_projection_stark_residue_v1(&mut residues, source_constant, current[USED].sub(F::ONE));
     push_projection_stark_residue_v1(
@@ -3047,7 +2922,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
             REGION_AFTER,
         ],
     );
-
     let source_copy = active.mul(fixed[FIX_SOURCE_COPY]);
     push_projection_stark_residue_v1(&mut residues, source_copy, current[USED].sub(F::ONE));
     push_projection_stark_zero_fields_v1(
@@ -3062,7 +2936,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
             REGION_AFTER,
         ],
     );
-
     let source_length = active.mul(fixed[FIX_SOURCE_LENGTH]);
     push_projection_stark_residue_v1(&mut residues, source_length, current[USED].sub(F::ONE));
     push_projection_stark_zero_fields_v1(
@@ -3079,7 +2952,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
         current,
         next,
     );
-
     let source_variable = active.mul(fixed[FIX_SOURCE_VARIABLE]);
     push_projection_stark_zero_fields_v1(
         &mut residues,
@@ -3096,7 +2968,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
         current,
         next,
     );
-
     let source_unused = active.mul(fixed[FIX_SOURCE_UNUSED]);
     push_projection_stark_zero_fields_v1(
         &mut residues,
@@ -3112,7 +2983,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
             REGION_AFTER,
         ],
     );
-
     let message_length = fixed[FIX_MESSAGE_LENGTH];
     let message_length_active = message_length.mul(active);
     push_projection_stark_zero_fields_v1(
@@ -3136,7 +3006,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
         next,
     );
     push_projection_stark_zero_base_v1(&mut residues, message_length.mul(inactive), current);
-
     let output = fixed[FIX_OUTPUT];
     let output_active = output.mul(active);
     push_projection_stark_residue_v1(
@@ -3191,7 +3060,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
         next[USED].mul(F::ONE.sub(current[USED])),
     );
     push_projection_stark_zero_base_v1(&mut residues, output.mul(inactive), current);
-
     let digest = fixed[FIX_DIGEST];
     let digest_active = digest.mul(active);
     push_projection_stark_residue_v1(&mut residues, digest_active, current[USED].sub(F::ONE));
@@ -3216,7 +3084,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
     );
     push_projection_stark_zero_base_v1(&mut residues, digest.mul(inactive), current);
     push_projection_stark_zero_base_v1(&mut residues, fixed[FIX_PADDING], current);
-
     for lane in 0..COPY_LANES {
         let copy = challenges.copy[lane];
         let identity_term = copy
@@ -3235,7 +3102,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
             current_aux[AUX_COPY_DENOMINATOR_AFTER + lane]
                 .sub(current_aux[AUX_COPY_DENOMINATOR_BEFORE + lane].mul(identity_term)),
         );
-
         let compact = challenges.compaction[lane];
         let tuple = compact
             .active
@@ -3253,7 +3119,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
             current_aux[AUX_OUTPUT_AFTER + lane]
                 .sub(current_aux[AUX_OUTPUT_BEFORE + lane].mul(output_factor)),
         );
-
         let first_row = fixed[FIX_FIRST_ROW];
         residues.push(first_row.mul(current_aux[AUX_COPY_NUMERATOR_BEFORE + lane].sub(F::ONE)));
         residues.push(first_row.mul(current_aux[AUX_COPY_DENOMINATOR_BEFORE + lane].sub(F::ONE)));
@@ -3298,7 +3163,6 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
     }
     Ok(residues)
 }
-
 /// Validate every row of a complete base/aux projection trace.
 ///
 /// # Errors
@@ -3336,7 +3200,6 @@ pub(crate) fn validate_zk_x509_projection_trace_v1(
     }
     Ok(aux)
 }
-
 #[cfg(test)]
 pub(crate) mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -3355,20 +3218,16 @@ pub(crate) mod tests {
             PrivacyZkX509DisclosedAttributeV1, PrivacyZkX509TrustAnchorRecordDigestV1,
         },
     };
-
     use super::*;
     use crate::privacy_engines::zk_x509::io_air::build_zk_x509_io_base_tables_v1;
-
     fn raw(byte: u8) -> [u8; 32] {
         [byte; 32]
     }
-
     pub(crate) fn account(seed: u8) -> AccountId {
         let key_pair =
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("fixed account seed");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn challenges() -> ZkX509ProjectionChallengesV1 {
         ZkX509ProjectionChallengesV1 {
             copy: [
@@ -3421,7 +3280,6 @@ pub(crate) mod tests {
             ],
         }
     }
-
     pub(crate) fn fixture() -> (IrohaZkX509StarkP256StatementV1, ZkX509ProjectionWitnessV1) {
         let witness = ZkX509ProjectionWitnessV1 {
             chain_spki_der: vec![
@@ -3488,7 +3346,6 @@ pub(crate) mod tests {
             wallet_challenge: PrivacyChallengeV1::new(raw(18)),
             certificate_nullifier: PrivacyNullifierV1::new(raw(19)),
         };
-
         let relation_version = ZK_X509_RELATION_VERSION_V1.to_be_bytes();
         statement.subject_public_key_digest = PrivacyCertificateKeyDigestV1::new(
             hash_public_frame_v1(
@@ -3539,7 +3396,6 @@ pub(crate) mod tests {
         }
         (statement, witness)
     }
-
     fn row_index(
         trace: &ZkX509ProjectionTraceV1,
         predicate: impl Fn(ZkX509ProjectionFixedRowV1) -> bool,
@@ -3552,7 +3408,6 @@ pub(crate) mod tests {
             .position(predicate)
             .expect("fixed row exists")
     }
-
     #[test]
     fn canonical_projection_trace_and_io_are_complete() {
         let (statement, witness) = fixture();
@@ -3579,7 +3434,6 @@ pub(crate) mod tests {
                     + ZK_X509_PROJECTION_HASH_SLOTS_V1
                         * (2 * ZK_X509_PROJECTION_HASH_BUFFER_BYTES_V1 + 8 + 32))
         );
-
         let shared =
             projection_io_witnesses_v1(trace.io_channels.clone(), 0).expect("shared I/O witnesses");
         build_zk_x509_io_base_tables_v1(&shared).expect("canonical cross-segment channels");
@@ -3607,7 +3461,6 @@ pub(crate) mod tests {
             "the absent third certificate has one canonical private encoding"
         );
     }
-
     #[test]
     fn scoped_subject_key_is_leaf_only_and_private_depth_has_one_fixed_topology() {
         let (statement, witness) = fixture();
@@ -3620,7 +3473,6 @@ pub(crate) mod tests {
                 "leaf SPKI byte {offset} must be bound by the public digest"
             );
         }
-
         let baseline =
             build_zk_x509_projection_trace_v1(&statement, &witness).expect("depth-two trace");
         let mut depth_three = witness.clone();
@@ -3670,7 +3522,6 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
             "private depth cannot change channel topology or lengths"
         );
-
         let mut one_slot = witness.clone();
         one_slot.chain_spki_der.pop();
         assert_eq!(
@@ -3694,7 +3545,6 @@ pub(crate) mod tests {
             Err(ZkX509ProjectionAirErrorV1::Shape)
         );
     }
-
     #[test]
     fn aggregate_numeric_fixed_evaluator_matches_every_canonical_row() {
         let (statement, witness) = fixture();
@@ -3724,7 +3574,6 @@ pub(crate) mod tests {
             );
         }
     }
-
     #[test]
     fn combined_monotone_gate_is_exact_and_keeps_the_fri_degree_bounded() {
         let (statement, _) = fixture();
@@ -3751,14 +3600,12 @@ pub(crate) mod tests {
             );
         }
     }
-
     #[test]
     fn zero_disclosure_statement_keeps_the_fixed_topology() {
         let (mut statement, mut witness) = fixture();
         statement.disclosed_attributes.clear();
         witness.disclosed_attribute_values.clear();
         witness.attribute_salts.clear();
-
         let trace =
             build_zk_x509_projection_trace_v1(&statement, &witness).expect("projection trace");
         validate_zk_x509_projection_trace_v1(&statement, &trace, challenges())
@@ -3789,7 +3636,6 @@ pub(crate) mod tests {
             4 * ZK_X509_PROJECTION_HASH_BUFFER_BYTES_V1
         );
     }
-
     #[test]
     fn every_projection_row_family_fails_closed_under_mutation() {
         let (statement, witness) = fixture();
@@ -3880,7 +3726,6 @@ pub(crate) mod tests {
                 "mutation {mutation} at row {index} must fail"
             );
         }
-
         let mut noncanonical = trace.clone();
         noncanonical.base.rows[0][VALUE] = F(GOLDILOCKS_MODULUS_V1);
         assert_eq!(
@@ -3888,20 +3733,17 @@ pub(crate) mod tests {
             Err(ZkX509ProjectionAirErrorV1::NonCanonicalField)
         );
     }
-
     #[test]
     fn fixed_topology_copy_cycles_and_padding_are_not_prover_selectable() {
         let (statement, witness) = fixture();
         let trace =
             build_zk_x509_projection_trace_v1(&statement, &witness).expect("projection trace");
-
         let mut changed_sigma = trace.clone();
         changed_sigma.fixed.copy_sigma.swap(0, 1);
         assert_eq!(
             validate_zk_x509_projection_trace_v1(&statement, &changed_sigma, challenges()),
             Err(ZkX509ProjectionAirErrorV1::Topology)
         );
-
         let mut changed_fixed = trace.clone();
         let digest = row_index(&changed_fixed, |row| {
             matches!(row, ZkX509ProjectionFixedRowV1::Digest { active: true, .. })
@@ -3915,7 +3757,6 @@ pub(crate) mod tests {
             validate_zk_x509_projection_trace_v1(&statement, &changed_fixed, challenges()),
             Err(ZkX509ProjectionAirErrorV1::Topology)
         );
-
         let mut truncated = trace.clone();
         truncated.base.rows.pop();
         assert_eq!(
@@ -3923,25 +3764,21 @@ pub(crate) mod tests {
             Err(ZkX509ProjectionAirErrorV1::Topology)
         );
     }
-
     #[test]
     fn statement_and_private_length_replays_fail_closed() {
         let (statement, witness) = fixture();
-
         let mut reordered = statement.clone();
         reordered.disclosed_attributes.swap(0, 1);
         assert_eq!(
             build_zk_x509_projection_trace_v1(&reordered, &witness),
             Err(ZkX509ProjectionAirErrorV1::Shape)
         );
-
         let mut cross_policy = statement.clone();
         cross_policy.certificate_policy_id = PrivacyPolicyIdV1::new(raw(0xA0));
         assert_eq!(
             build_zk_x509_projection_trace_v1(&cross_policy, &witness),
             Err(ZkX509ProjectionAirErrorV1::ProjectionMismatch)
         );
-
         let mut cross_transaction = statement.clone();
         cross_transaction.context.transaction_intent_digest =
             PrivacyTransactionIntentDigestV1::new(raw(0xA1));
@@ -3950,14 +3787,12 @@ pub(crate) mod tests {
             validate_zk_x509_projection_trace_v1(&cross_transaction, &old_trace, challenges()),
             Err(ZkX509ProjectionAirErrorV1::Topology)
         );
-
         let mut leading_zero = witness.clone();
         leading_zero.leaf_serial[0] = 0;
         assert_eq!(
             build_zk_x509_projection_trace_v1(&statement, &leading_zero),
             Err(ZkX509ProjectionAirErrorV1::Shape)
         );
-
         let mut oversized = witness.clone();
         oversized.disclosed_attribute_values[0] =
             vec![0x55; ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1 + 1];
@@ -3965,7 +3800,6 @@ pub(crate) mod tests {
             build_zk_x509_projection_trace_v1(&statement, &oversized),
             Err(ZkX509ProjectionAirErrorV1::Shape)
         );
-
         let mut wrong_spki = witness.clone();
         wrong_spki.chain_spki_der[0].pop();
         assert_eq!(
@@ -3973,7 +3807,6 @@ pub(crate) mod tests {
             Err(ZkX509ProjectionAirErrorV1::Shape)
         );
     }
-
     #[test]
     fn challenge_substitution_and_auxiliary_product_mutations_fail() {
         let (statement, witness) = fixture();
@@ -3991,7 +3824,6 @@ pub(crate) mod tests {
             validate_zk_x509_projection_trace_v1(&statement, &trace, repeated),
             Err(ZkX509ProjectionAirErrorV1::Challenge)
         );
-
         let aux = build_zk_x509_projection_aux_trace_v1(&trace.base, &trace.fixed, challenges())
             .expect("aux");
         let index = row_index(&trace, |row| {
@@ -4016,7 +3848,6 @@ pub(crate) mod tests {
         .expect("residues");
         assert!(residues.iter().any(|residue| *residue != F::ZERO));
     }
-
     #[test]
     fn copy_product_is_total_at_a_challenge_collision_and_rejects_a_bad_multiset() {
         let (statement, witness) = fixture();
@@ -4037,10 +3868,8 @@ pub(crate) mod tests {
         collision
             .validate()
             .expect("valid distinct challenge lanes");
-
         validate_zk_x509_projection_trace_v1(&statement, &trace, collision)
             .expect("dual products cannot abort when one denominator factor is zero");
-
         let zero_numerator_index = (0..trace.base.rows.len())
             .find(|index| {
                 collision.copy[0]

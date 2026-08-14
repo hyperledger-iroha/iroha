@@ -1,7 +1,5 @@
 //! Inspect a Norito-framed `SignedBlock` (e.g., encoded genesis) for debugging.
-
 use std::{collections::BTreeSet, convert::TryFrom, env, error::Error, fs};
-
 use iroha_crypto::{KeyPair, SignatureOf};
 use iroha_data_model::{
     block::{
@@ -12,11 +10,9 @@ use iroha_data_model::{
     transaction::{ExecutableBatchItem, executable::Executable},
 };
 use nonzero_ext::nonzero;
-
 fn reference_signer() -> Result<KeyPair, iroha_crypto::Error> {
     KeyPair::try_random()
 }
-
 fn read_varint(bytes: &[u8], mut pos: usize) -> Result<(u64, usize), Box<dyn Error>> {
     let mut value = 0u64;
     let mut shift = 0u32;
@@ -35,7 +31,6 @@ fn read_varint(bytes: &[u8], mut pos: usize) -> Result<(u64, usize), Box<dyn Err
         }
     }
 }
-
 fn extract_first_btreeset_element(payload: &[u8]) -> Result<&[u8], Box<dyn Error>> {
     let (len, mut pos) = read_varint(payload, 0)?;
     if len == 0 {
@@ -59,7 +54,6 @@ fn extract_first_btreeset_element(payload: &[u8]) -> Result<&[u8], Box<dyn Error
         .get(start..end)
         .ok_or("element span out of range")?)
 }
-
 fn dump_reference_encoding() -> Result<(), Box<dyn Error>> {
     let kp = reference_signer()?;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -80,18 +74,15 @@ fn dump_reference_encoding() -> Result<(), Box<dyn Error>> {
     );
     Ok(())
 }
-
 #[allow(clippy::too_many_lines)]
 fn main() -> Result<(), Box<dyn Error>> {
     dump_reference_encoding()?;
-
     let path = env::args()
         .nth(1)
         .ok_or("usage: decode_signed_block <path>")?;
     let bytes = fs::read(&path)?;
     println!("file: {path}");
     println!("total bytes: {}", bytes.len());
-
     let deframed = deframe_versioned_signed_block_bytes(&bytes)?;
     let header_index = 1 + norito::core::Header::SIZE - 1;
     let header_flags = bytes
@@ -100,14 +91,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .unwrap_or(norito::core::default_encode_flags());
     println!("framed header flags: 0x{header_flags:02x}");
     println!("bare versioned len: {}", deframed.bare_versioned.len());
-
     let versioned = deframed.bare_versioned.as_ref();
     if versioned.is_empty() {
         return Err("versioned payload empty".into());
     }
     let payload = &versioned[1..];
     println!("payload len: {}", payload.len());
-
     println!(
         "payload head: {}",
         payload
@@ -117,7 +106,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             .collect::<Vec<_>>()
             .join(" ")
     );
-
     norito::core::reset_decode_state();
     match norito::core::decode_field_canonical::<BTreeSet<BlockSignature>>(payload) {
         Ok((signatures, used)) => {
@@ -160,7 +148,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("failed to extract element: {err}");
         }
     }
-
     match std::panic::catch_unwind(|| decode_framed_signed_block(&bytes)) {
         Ok(Ok(block)) => {
             let header = block.header();
@@ -254,18 +241,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("decode_framed_signed_block panicked");
         }
     }
-
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn reference_signer_uses_checked_default_key_generation() {
         let key_pair = reference_signer().expect("checked reference signer generation");
-
         assert_eq!(
             key_pair
                 .public_key()

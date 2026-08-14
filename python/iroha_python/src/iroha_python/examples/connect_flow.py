@@ -4,8 +4,7 @@ This example script demonstrates how to:
 
 1. Create a Torii client using the high-level Python SDK.
 2. Open a Connect session and inspect the typed `ConnectSessionInfo`.
-3. Inspect the current Connect runtime status (active sessions, policy limits).
-4. Construct a typed `ConnectControlOpen` frame and optionally post it back to Torii.
+3. Construct a typed `ConnectControlOpen` frame and optionally post it back to Torii.
 
 The script intentionally focuses on developer ergonomics rather than providing a
 complete wallet implementation. It uses the same typed dataclasses that the SDK
@@ -31,7 +30,6 @@ import argparse
 import base64
 import json
 import os
-from dataclasses import asdict
 from importlib import resources
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
@@ -45,7 +43,6 @@ from iroha_python import (
     ConnectPermissions,
     ConnectPreviewBootstrapResult,
     ConnectSessionInfo,
-    ConnectStatusSnapshot,
     NetworkId,
     bootstrap_connect_preview_session,
     connect_public_key_from_private,
@@ -83,30 +80,6 @@ def _print_session_info(info: ConnectSessionInfo) -> None:
         print(f"  Expires at:    {info.expires_at.isoformat(timespec='seconds')}Z")
 
 
-def _print_connect_status(status: Optional[ConnectStatusSnapshot]) -> None:
-    if status is None:
-        print("Connect status: unavailable (endpoint returned no payload)")
-        return
-    print("Connect status snapshot")
-    print(f"  Enabled:              {status.enabled}")
-    print(f"  Sessions (total/active): {status.sessions_total}/{status.sessions_active}")
-    if status.per_ip_sessions:
-        for entry in status.per_ip_sessions:
-            print(f"    - {entry.ip}: {entry.sessions} session(s)")
-    print(f"  Buffered sessions:    {status.buffered_sessions}")
-    print(f"  Buffer bytes total:   {status.total_buffer_bytes}")
-    print(f"  Dedup cache size:     {status.dedupe_size}")
-    if status.policy:
-        print("  Policy limits:")
-        print(f"    ws_max_sessions:          {status.policy.ws_max_sessions}")
-        print(f"    ws_per_ip_max_sessions:   {status.policy.ws_per_ip_max_sessions}")
-        print(f"    ws_rate_per_ip_per_min:   {status.policy.ws_rate_per_ip_per_min}")
-        print(f"    session_ttl_ms:           {status.policy.session_ttl_ms}")
-        print(f"    frame_max_bytes:          {status.policy.frame_max_bytes}")
-        print(f"    session_buffer_max_bytes: {status.policy.session_buffer_max_bytes}")
-        print(f"    relay_enabled:            {status.policy.relay_enabled}")
-
-
 def _json_safe(value: Any) -> Any:
     if isinstance(value, (bytes, bytearray, memoryview)):
         return base64.b64encode(bytes(value)).decode("ascii")
@@ -117,12 +90,6 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, tuple):
         return [_json_safe(item) for item in value]
     return value
-
-
-def _status_json_ready(snapshot: ConnectStatusSnapshot) -> Any:
-    payload = asdict(snapshot)
-    payload["per_ip_sessions"].sort(key=lambda entry: entry["ip"])
-    return _json_safe(payload)
 
 
 def _load_app_metadata_from_file(path: str) -> ConnectAppMetadata:
@@ -263,8 +230,6 @@ def build_connect_open_frame(
 def _run_preview_mode(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
     """Handle `--mode preview` flows."""
 
-    if args.status_only:
-        parser.error("--status-only cannot be combined with --mode=preview")
     if args.write_app_metadata_template:
         parser.error("--write-app-metadata-template cannot be combined with --mode=preview")
     if not args.network_id:
@@ -436,15 +401,6 @@ def main() -> None:
         help="Optional path for a JSON serialization of the frame (base64-encodes binary fields).",
     )
     parser.add_argument(
-        "--status-json-output",
-        help="Optional path for a JSON serialization of the Connect status snapshot.",
-    )
-    parser.add_argument(
-        "--status-only",
-        action="store_true",
-        help="Only fetch and print the Connect status (skips session creation and frame construction).",
-    )
-    parser.add_argument(
         "--preview-register",
         action="store_true",
         help="When --mode=preview, also register the session with Torii and record the issued tokens.",
@@ -484,60 +440,26 @@ def main() -> None:
             parser.error(str(exc))
         print(f"Metadata template written to {args.write_app_metadata_template}")
         return
-    if args.status_only:
-        if (
-            args.sid
-            or args.network_id
-            or args.nonce
-            or args.app_public_key
-            or args.app_name
-            or args.app_url
-            or args.app_icon_hash
-            or args.app_metadata_file
-            or args.frame_output
-            or args.frame_json_output
-            or args.send_open
-            or args.sequence != 1
-            or args.methods != list(_DEFAULT_METHODS)
-            or args.events
-        ):
-            parser.error("--status-only cannot be combined with session or frame flags")
-    else:
-        if args.app_metadata_file and (args.app_name or args.app_url or args.app_icon_hash):
-            parser.error("--app-metadata-file cannot be combined with --app-name/--app-url/--app-icon-hash")
-        if (args.app_url or args.app_icon_hash) and not args.app_name:
-            parser.error("--app-name is required when specifying --app-url or --app-icon-hash")
-        if not args.sid:
-            parser.error("--sid is required (provide --sid or use --write-app-metadata-template)")
-        if not args.network_id:
-            parser.error("--network-id is required")
-        if not args.app_public_key:
-            parser.error("--app-public-key is required")
-        if not args.nonce:
-            parser.error("--nonce is required")
-        if args.sequence != 1:
-            parser.error("Connect Open sequence must be exactly 1")
+    if args.app_metadata_file and (args.app_name or args.app_url or args.app_icon_hash):
+        parser.error("--app-metadata-file cannot be combined with --app-name/--app-url/--app-icon-hash")
+    if (args.app_url or args.app_icon_hash) and not args.app_name:
+        parser.error("--app-name is required when specifying --app-url or --app-icon-hash")
+    if not args.sid:
+        parser.error("--sid is required (provide --sid or use --write-app-metadata-template)")
+    if not args.network_id:
+        parser.error("--network-id is required")
+    if not args.app_public_key:
+        parser.error("--app-public-key is required")
+    if not args.nonce:
+        parser.error("--nonce is required")
+    if args.sequence != 1:
+        parser.error("Connect Open sequence must be exactly 1")
 
     client = create_torii_client(
         args.base_url,
         auth_token=args.auth_token,
         api_token=args.api_token,
     )
-
-    status_snapshot = client.get_connect_status_typed()
-
-    _print_connect_status(status_snapshot)
-    if args.status_json_output:
-        destination = Path(args.status_json_output)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        payload = None if status_snapshot is None else _status_json_ready(status_snapshot)
-        destination.write_text(
-            json.dumps(payload, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        print(f"Status JSON written to {destination}")
-    if args.status_only:
-        return
 
     try:
         network_id = NetworkId.parse(args.network_id)
@@ -559,17 +481,6 @@ def main() -> None:
         }
     )
     _print_session_info(session_info)
-
-    _print_connect_status(status_snapshot)
-    if args.status_json_output:
-        destination = Path(args.status_json_output)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        payload = None if status_snapshot is None else _status_json_ready(status_snapshot)
-        destination.write_text(
-            json.dumps(payload, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        print(f"Status JSON written to {destination}")
 
     if _decode_sid(session_info.sid) != sid_bytes:
         raise RuntimeError("Torii substituted the registered Connect SID")

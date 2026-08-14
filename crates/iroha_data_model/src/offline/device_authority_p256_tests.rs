@@ -1,10 +1,8 @@
 #[cfg(test)]
 mod device_authority_p256_tests {
     use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
-
     use super::*;
     use crate::domain::DomainId;
-
     const P256_ORDER: [u8; 32] = [
         0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63,
@@ -15,38 +13,32 @@ mod device_authority_p256_tests {
         0xff, 0xde, 0x73, 0x7d, 0x56, 0xd3, 0x8b, 0xcf, 0x42, 0x79, 0xdc, 0xe5, 0x61, 0x7e, 0x31,
         0x92, 0xa8,
     ];
-
     fn signing_key(seed: u8) -> SigningKey {
         SigningKey::from_bytes((&[seed; 32]).into()).expect("non-zero P-256 test scalar")
     }
-
     fn device_public_key(key: &SigningKey) -> KagemushaDevicePublicKeyV2 {
         KagemushaDevicePublicKeyV2::from_sec1_bytes(
             key.verifying_key().to_encoded_point(false).as_bytes(),
         )
         .expect("canonical uncompressed test key")
     }
-
     fn sign(key: &SigningKey, message: &[u8]) -> KagemushaDeviceSignatureV2 {
         let signature: P256Signature = key.sign(message);
         let signature = signature.normalize_s().unwrap_or(signature);
         KagemushaDeviceSignatureV2::from_raw_bytes(signature.to_bytes().as_slice())
             .expect("canonical low-S test signature")
     }
-
     fn scalar_pair(r: [u8; 32], s: [u8; 32]) -> [u8; 64] {
         let mut raw = [0_u8; 64];
         raw[..32].copy_from_slice(&r);
         raw[32..].copy_from_slice(&s);
         raw
     }
-
     fn one() -> [u8; 32] {
         let mut value = [0_u8; 32];
         value[31] = 1;
         value
     }
-
     fn account(seed: u8) -> AccountId {
         AccountId::new(
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -55,19 +47,16 @@ mod device_authority_p256_tests {
                 .clone(),
         )
     }
-
     fn asset(name: &str) -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("offline", "universal").expect("test domain"),
             name.parse().expect("test asset name"),
         )
     }
-
     fn placeholder_signature() -> KagemushaDeviceSignatureV2 {
         KagemushaDeviceSignatureV2::from_raw_bytes(&scalar_pair(one(), one()))
             .expect("valid low-S placeholder")
     }
-
     fn authorization(
         assertion_key: &SigningKey,
         ios_authenticator_data: Option<Vec<u8>>,
@@ -115,7 +104,6 @@ mod device_authority_p256_tests {
         authorization.set_hardware_signature(sign(assertion_key, &signed_message));
         authorization
     }
-
     fn recipient_payment_request(
         receiver_key: &SigningKey,
         issued_at_ms: u64,
@@ -153,7 +141,6 @@ mod device_authority_p256_tests {
         KagemushaRecipientPaymentRequestV2::from_signed_payload(payload, signature)
             .expect("signed recipient request")
     }
-
     fn recipient_payment_bundle(
         request: &KagemushaRecipientPaymentRequestV2,
     ) -> KagemushaRecursiveSpendBundleV4 {
@@ -243,7 +230,6 @@ mod device_authority_p256_tests {
             .expect("recipient bundle binding");
         bundle
     }
-
     fn receiver_acknowledgement(
         receiver_key: &SigningKey,
         request: &KagemushaRecipientPaymentRequestV2,
@@ -279,7 +265,6 @@ mod device_authority_p256_tests {
         );
         KagemushaReceiverAcknowledgementV2 { payload, signature }
     }
-
     #[test]
     fn device_public_key_accepts_only_canonical_uncompressed_p256() {
         let key = signing_key(7);
@@ -288,7 +273,6 @@ mod device_authority_p256_tests {
             KagemushaDevicePublicKeyV2::from_sec1_bytes(canonical.as_bytes()).expect("valid key");
         parsed.validate().expect("decoded key revalidates");
         assert_eq!(parsed.as_sec1_bytes().as_slice(), canonical.as_bytes());
-
         for malformed in [
             Vec::new(),
             canonical.as_bytes()[..64].to_vec(),
@@ -305,21 +289,17 @@ mod device_authority_p256_tests {
                 malformed.len()
             );
         }
-
         let mut wrong_prefix = canonical.as_bytes().to_vec();
         wrong_prefix[0] = 0x06;
         assert!(KagemushaDevicePublicKeyV2::from_sec1_bytes(&wrong_prefix).is_err());
-
         let mut off_curve = canonical.as_bytes().to_vec();
         off_curve[64] ^= 0x02;
         assert!(KagemushaDevicePublicKeyV2::from_sec1_bytes(&off_curve).is_err());
-
         assert_eq!(
             norito::codec::Encode::encode(&parsed),
             canonical.as_bytes(),
             "the key newtype must be wire-transparent"
         );
-
         // Invalid points are rejected by serialization and deserialization,
         // not merely by higher-level request validation.
         let malformed = KagemushaDevicePublicKeyV2([0_u8; 65]);
@@ -330,7 +310,6 @@ mod device_authority_p256_tests {
                 .is_err()
         );
     }
-
     #[test]
     fn device_signature_rejects_bad_width_scalars_and_high_s() {
         for malformed in [vec![], vec![0_u8; 63], vec![0_u8; 65]] {
@@ -352,7 +331,6 @@ mod device_authority_p256_tests {
         high_s[31] += 1;
         let high_s = scalar_pair(one(), high_s);
         assert!(KagemushaDeviceSignatureV2::from_raw_bytes(&high_s).is_err());
-
         let malformed = KagemushaDeviceSignatureV2(high_s);
         assert!(norito::encode_canonical(&malformed).is_err());
         let mut malformed_bytes = malformed.0.as_slice();
@@ -360,7 +338,6 @@ mod device_authority_p256_tests {
             <KagemushaDeviceSignatureV2 as norito::codec::Decode>::decode(&mut malformed_bytes)
                 .is_err()
         );
-
         let valid = KagemushaDeviceSignatureV2::from_raw_bytes(&scalar_pair(one(), one()))
             .expect("valid low-S signature");
         assert_eq!(
@@ -369,7 +346,6 @@ mod device_authority_p256_tests {
             "the signature newtype must be wire-transparent"
         );
     }
-
     #[test]
     fn ecdsa_sha256_verification_is_key_and_message_bound() {
         let key = signing_key(9);
@@ -391,7 +367,6 @@ mod device_authority_p256_tests {
                 .is_err()
         );
     }
-
     #[test]
     fn signed_requests_acknowledgements_and_archives_ignore_ambient_norito_layout() {
         let issued_at_ms = 1_800_000_000_000;
@@ -402,7 +377,6 @@ mod device_authority_p256_tests {
         let bundle = recipient_payment_bundle(&request);
         let acknowledgement =
             receiver_acknowledgement(&receiver_key, &request, &bundle, issued_at_ms + 1);
-
         let expected_authorization_signing_bytes = authorization
             .signing_bytes()
             .expect("canonical authorization signing bytes");
@@ -424,7 +398,6 @@ mod device_authority_p256_tests {
         let expected_acknowledgement_archive = acknowledgement
             .canonical_archive_for_payment_v4(&request, &bundle)
             .expect("canonical acknowledgement archive");
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
@@ -485,7 +458,6 @@ mod device_authority_p256_tests {
             expected_acknowledgement_archive
         );
     }
-
     #[test]
     fn redeem_result_rejects_alternate_layout_and_compressed_expansion_archives() {
         let receiver_request =
@@ -556,7 +528,6 @@ mod device_authority_p256_tests {
             .expect("alternate-layout redeem request remains structurally decodable"),
             request
         );
-
         let result = KagemushaRecursiveSpendRedeemResultV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
             redeem_request_archive: alternate_request_archive,
@@ -571,7 +542,6 @@ mod device_authority_p256_tests {
                 field: "redeem_result.v4.request_archive",
             })
         ));
-
         const NORITO_COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;
         const NORITO_UNCOMPRESSED_LENGTH_OFFSET: usize = NORITO_COMPRESSION_OFFSET + 1;
         let mut compressed_expansion_archive = canonical_request_archive;
@@ -597,7 +567,6 @@ mod device_authority_p256_tests {
                 field: "redeem_result.v4.request_archive",
             })
         ));
-
         let unshield_backend: iroha_schema::Ident = KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND.into();
         let mut semantic_unshield = ProofAttachment::new_ref(
             unshield_backend.clone(),
@@ -617,7 +586,6 @@ mod device_authority_p256_tests {
                 field: "redeem_proof",
             })
         ));
-
         let mut maximum_unshield = request.clone();
         maximum_unshield.redeem_proof.proof.bytes =
             vec![0x65; KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4];
@@ -672,7 +640,6 @@ mod device_authority_p256_tests {
             preflight_kagemusha_redeem_build_result_archive_v4(&oversized_build_result_archive),
             Err(norito::Error::FieldLengthExceeded { .. })
         ));
-
         let mut maximum_request = request;
         maximum_request
             .bundle
@@ -702,7 +669,6 @@ mod device_authority_p256_tests {
             .expect("maximum-shaped redeem request must fit the schema-bounded allocation budget");
         assert_eq!(decoded, maximum_request);
     }
-
     #[test]
     fn redeem_result_decode_limits_cover_the_exact_archive_ceiling() {
         let limits = kagemusha_recursive_spend_redeem_decode_limits_v4(
@@ -732,13 +698,11 @@ mod device_authority_p256_tests {
             KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_MAX_NESTING_DEPTH_V4
         );
     }
-
     #[test]
     fn recipient_payment_request_expiry_is_exclusive() {
         let issued_at_ms = 1_800_000_000_000;
         let expires_at_ms = issued_at_ms + 30_000;
         let request = recipient_payment_request(&signing_key(11), issued_at_ms, expires_at_ms);
-
         request
             .validate_at(issued_at_ms)
             .expect("request is valid at issuance");
@@ -749,7 +713,6 @@ mod device_authority_p256_tests {
         assert!(request.validate_at(expires_at_ms).is_err());
         assert!(request.validate_at(expires_at_ms + 1).is_err());
     }
-
     #[test]
     fn receiver_acknowledgement_expiry_is_exclusive() {
         let issued_at_ms = 1_800_000_000_000;
@@ -757,7 +720,6 @@ mod device_authority_p256_tests {
         let receiver_key = signing_key(12);
         let request = recipient_payment_request(&receiver_key, issued_at_ms, expires_at_ms);
         let bundle = recipient_payment_bundle(&request);
-
         receiver_acknowledgement(&receiver_key, &request, &bundle, expires_at_ms - 1)
             .validate_for_payment_v4(&request, &bundle)
             .expect("acknowledgement is valid immediately before expiry");
@@ -768,7 +730,6 @@ mod device_authority_p256_tests {
             "acknowledgement at the exclusive expiry must fail closed",
         );
     }
-
     #[test]
     fn online_android_assertion_binds_every_authorization_coordinate_and_key() {
         let key = signing_key(31);
@@ -789,7 +750,6 @@ mod device_authority_p256_tests {
                 .is_err(),
             "a substituted assertion key must fail",
         );
-
         let mut mutations = Vec::new();
         let mut changed = authorization.clone();
         changed.authority = account(22);
@@ -831,7 +791,6 @@ mod device_authority_p256_tests {
             },
         );
         mutations.push(changed);
-
         for mutation in mutations {
             assert!(
                 mutation
@@ -841,7 +800,6 @@ mod device_authority_p256_tests {
             );
         }
     }
-
     #[test]
     fn online_ios_assertion_binds_authenticator_data_and_client_data_hash() {
         let key = signing_key(41);
@@ -853,7 +811,6 @@ mod device_authority_p256_tests {
         authorization
             .verify_hardware_signature(public_key.as_bytes())
             .expect("exact App Attest assertion verifies");
-
         let mut changed_counter = authorization.clone();
         let KagemushaOnlineHardwareAssertionV1::IosAppAttest(assertion) =
             &mut changed_counter.hardware_assertion
@@ -867,7 +824,6 @@ mod device_authority_p256_tests {
                 .is_err(),
             "the signature must bind the exact authenticatorData counter",
         );
-
         let mut wrong_length = authorization;
         let KagemushaOnlineHardwareAssertionV1::IosAppAttest(assertion) =
             &mut wrong_length.hardware_assertion

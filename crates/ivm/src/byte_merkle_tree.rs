@@ -1,9 +1,7 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-
 use iroha_crypto::{HashOf, MerkleProof, MerkleTree};
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
-
 /// Merkle tree over fixed-size byte chunks, implemented as a thin adaptor over
 /// the canonical `iroha_crypto::MerkleTree<[u8;32]>`.
 ///
@@ -19,7 +17,6 @@ pub struct ByteMerkleTree {
     leaves: Mutex<Vec<[u8; 32]>>,
     cached: Mutex<Option<MerkleTree<[u8; 32]>>>,
 }
-
 impl Clone for ByteMerkleTree {
     fn clone(&self) -> Self {
         let leaves = self.leaves.lock().clone();
@@ -32,7 +29,6 @@ impl Clone for ByteMerkleTree {
         }
     }
 }
-
 static MERKLE_GPU_MIN_LEAVES: AtomicUsize = AtomicUsize::new(8192);
 // On AArch64 with ARMv8 SHA2, CPU can outperform GPU for medium trees.
 // Prefer CPU hashing for trees up to this many leaves before considering GPU offload.
@@ -48,41 +44,33 @@ static MERKLE_GPU_ROOTS: AtomicU64 = AtomicU64::new(0);
 static MERKLE_CPU_ROOTS: AtomicU64 = AtomicU64::new(0);
 static MERKLE_REBUILDS: AtomicU64 = AtomicU64::new(0);
 static MERKLE_INCREMENTAL_LEAF_UPDATES: AtomicU64 = AtomicU64::new(0);
-
 pub(crate) fn set_merkle_gpu_min_leaves(n: usize) {
     MERKLE_GPU_MIN_LEAVES.store(n.max(1), Ordering::SeqCst);
 }
-
 pub(crate) fn merkle_gpu_min_leaves() -> usize {
     MERKLE_GPU_MIN_LEAVES.load(Ordering::SeqCst)
 }
-
 // Backend-specific minimum thresholds (default to the generic GPU threshold)
 static MERKLE_METAL_MIN_LEAVES: AtomicUsize = AtomicUsize::new(0);
 static MERKLE_CUDA_MIN_LEAVES: AtomicUsize = AtomicUsize::new(0);
-
 pub(crate) fn set_merkle_metal_min_leaves(n: usize) {
     MERKLE_METAL_MIN_LEAVES.store(n, Ordering::SeqCst);
 }
-
 pub(crate) fn set_merkle_cuda_min_leaves(n: usize) {
     MERKLE_CUDA_MIN_LEAVES.store(n, Ordering::SeqCst);
 }
-
 #[inline]
 #[cfg(any(target_os = "macos", test))]
 fn merkle_metal_min_leaves() -> usize {
     let v = MERKLE_METAL_MIN_LEAVES.load(Ordering::SeqCst);
     if v == 0 { merkle_gpu_min_leaves() } else { v }
 }
-
 #[inline]
 #[cfg(feature = "cuda")]
 fn merkle_cuda_min_leaves() -> usize {
     let v = MERKLE_CUDA_MIN_LEAVES.load(Ordering::SeqCst);
     if v == 0 { merkle_gpu_min_leaves() } else { v }
 }
-
 // Test-only helpers to validate configuration wiring.
 #[cfg(test)]
 pub(crate) fn test_get_metal_min() -> usize {
@@ -92,7 +80,6 @@ pub(crate) fn test_get_metal_min() -> usize {
 pub(crate) fn test_get_cuda_min() -> usize {
     merkle_cuda_min_leaves()
 }
-
 #[inline]
 fn cpu_sha2_available_any() -> bool {
     #[cfg(target_arch = "aarch64")]
@@ -109,7 +96,6 @@ fn cpu_sha2_available_any() -> bool {
     }
     false
 }
-
 #[inline]
 fn prefer_cpu_sha2(leaves: usize) -> bool {
     if !cpu_sha2_available_any() {
@@ -131,17 +117,14 @@ fn prefer_cpu_sha2(leaves: usize) -> bool {
     }
     false
 }
-
 #[cfg(target_arch = "aarch64")]
 pub(crate) fn set_prefer_cpu_sha2_max_leaves_aarch64(v: usize) {
     MERKLE_AARCH64_CPU_PREFER_MAX_LEAVES.store(v, Ordering::SeqCst);
 }
-
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) fn set_prefer_cpu_sha2_max_leaves_x86(v: usize) {
     MERKLE_X86_CPU_PREFER_MAX_LEAVES.store(v, Ordering::SeqCst);
 }
-
 #[allow(dead_code)]
 pub fn merkle_root_counters() -> (u64, u64) {
     (
@@ -149,7 +132,6 @@ pub fn merkle_root_counters() -> (u64, u64) {
         MERKLE_CPU_ROOTS.load(Ordering::Relaxed),
     )
 }
-
 /// Return cumulative Merkle maintenance counters `(full_rebuilds, incremental_leaf_updates)`.
 #[allow(dead_code)]
 pub fn merkle_update_counters() -> (u64, u64) {
@@ -158,7 +140,6 @@ pub fn merkle_update_counters() -> (u64, u64) {
         MERKLE_INCREMENTAL_LEAF_UPDATES.load(Ordering::Relaxed),
     )
 }
-
 impl ByteMerkleTree {
     fn compute_zero_hash(chunk: usize) -> [u8; 32] {
         let buf = [0u8; 32];
@@ -167,7 +148,6 @@ impl ByteMerkleTree {
         out.copy_from_slice(&digest);
         out
     }
-
     fn hash_chunk_padded(&self, data: &[u8]) -> [u8; 32] {
         let mut buf = [0u8; 32];
         let len = data.len().min(self.chunk);
@@ -178,7 +158,6 @@ impl ByteMerkleTree {
         // Accelerated one-block SHA-256 using our CPU/GPU paths.
         sha256_oneblock32(&buf[..self.chunk])
     }
-
     fn rebuild_locked(&self, cached: &mut Option<MerkleTree<[u8; 32]>>) {
         let leaves = self.leaves.lock().clone();
         *cached = Some(MerkleTree::from_hashed_leaves_sha256(leaves));
@@ -186,7 +165,6 @@ impl ByteMerkleTree {
         let metrics = iroha_telemetry::metrics::global_or_default();
         metrics.ivm_merkle_rebuild_total.inc();
     }
-
     /// Construct a tree from raw bytes, padding the final chunk with zeros.
     pub fn from_bytes(data: &[u8], chunk: usize) -> Self {
         assert!(chunk > 0 && chunk <= 32);
@@ -209,7 +187,6 @@ impl ByteMerkleTree {
             cached: Mutex::new(Some(canonical)),
         }
     }
-
     /// Construct a tree from raw bytes in parallel using Rayon.
     pub fn from_bytes_parallel(data: &[u8], chunk: usize) -> Self {
         assert!(chunk > 0 && chunk <= 32);
@@ -232,7 +209,6 @@ impl ByteMerkleTree {
             cached: Mutex::new(Some(canonical)),
         }
     }
-
     /// Construct a tree from raw bytes in parallel using exactly `num_leaves`
     /// padded chunks.
     pub(crate) fn from_bytes_parallel_with_leaf_count(
@@ -241,7 +217,6 @@ impl ByteMerkleTree {
         num_leaves: usize,
     ) -> Self {
         use rayon::prelude::*;
-
         assert!(chunk > 0 && chunk <= 32);
         let zero_hash = Self::compute_zero_hash(chunk);
         let leaf_count = num_leaves.max(1);
@@ -269,7 +244,6 @@ impl ByteMerkleTree {
             cached: Mutex::new(Some(canonical)),
         }
     }
-
     #[cfg(test)]
     pub(crate) fn reset_from(&mut self, other: &ByteMerkleTree) {
         self.chunk = other.chunk;
@@ -279,17 +253,14 @@ impl ByteMerkleTree {
         let cached_copy = { other.cached.lock().clone() };
         *self.cached.lock() = cached_copy;
     }
-
     /// Whether two trees have the same immutable leaf geometry.
     pub(crate) fn has_same_shape(&self, other: &ByteMerkleTree) -> bool {
         self.chunk == other.chunk && self.leaf_count() == other.leaf_count()
     }
-
     /// Byte width of one Merkle leaf.
     pub(crate) fn chunk_size(&self) -> usize {
         self.chunk
     }
-
     /// Restore selected leaves from a shape-compatible immutable template
     /// without cloning the complete leaf vector or canonical tree.
     pub(crate) fn reset_leaves_from(&mut self, other: &ByteMerkleTree, indices: &[usize]) {
@@ -315,12 +286,10 @@ impl ByteMerkleTree {
         // template's already-known root for ordinary execution.
         *self.cached.lock() = None;
     }
-
     #[cfg(test)]
     pub(crate) fn has_cached_tree(&self) -> bool {
         self.cached.lock().is_some()
     }
-
     /// Construct a tree from raw bytes using acceleration when beneficial.
     ///
     /// - If a CUDA backend is available and the number of leaves is above a
@@ -333,12 +302,10 @@ impl ByteMerkleTree {
         #[cfg(any(target_os = "macos", feature = "cuda"))]
         let zero_hash = Self::compute_zero_hash(chunk);
         let leaves_count = data.len().div_ceil(chunk).max(1);
-
         // Prefer CPU SHA2 on AArch64 for medium sizes to avoid GPU overheads.
         if prefer_cpu_sha2(leaves_count) {
             return Self::from_bytes_parallel(data, chunk);
         }
-
         // Attempt Metal offload for large trees (macOS)
         #[cfg(target_os = "macos")]
         if crate::vector::metal_available() && leaves_count >= merkle_metal_min_leaves() {
@@ -366,7 +333,6 @@ impl ByteMerkleTree {
                 };
             }
         }
-
         // Attempt CUDA offload for large trees
         #[cfg(feature = "cuda")]
         {
@@ -403,11 +369,9 @@ impl ByteMerkleTree {
                 };
             }
         }
-
         // CPU path (parallel when Rayon is enabled)
         Self::from_bytes_parallel(data, chunk)
     }
-
     /// Recompute all leaf digests from `data` using acceleration when available.
     /// On success, updates internal hashed leaves and invalidates the cached tree.
     /// Returns true if acceleration was used, false otherwise (no changes made).
@@ -453,7 +417,6 @@ impl ByteMerkleTree {
         }
         false
     }
-
     pub fn new(num_leaves: usize, chunk: usize) -> Self {
         assert!(chunk > 0 && chunk <= 32);
         let zero_hash = Self::compute_zero_hash(chunk);
@@ -465,11 +428,9 @@ impl ByteMerkleTree {
             cached: Mutex::new(None),
         }
     }
-
     pub(crate) fn leaf_count(&self) -> usize {
         self.leaves.lock().len()
     }
-
     /// Return the canonical Merkle root as a typed hash.
     pub fn root_hash(&self) -> HashOf<MerkleTree<[u8; 32]>> {
         let mut cached = self.cached.lock();
@@ -482,7 +443,6 @@ impl ByteMerkleTree {
             .root()
             .expect("tree has at least one leaf")
     }
-
     /// Retrieve the canonical Merkle proof for the leaf at `index`.
     pub fn proof(&self, index: usize) -> MerkleProof<[u8; 32]> {
         let mut cached = self.cached.lock();
@@ -495,7 +455,6 @@ impl ByteMerkleTree {
             .get_proof(index as u32)
             .expect("valid index")
     }
-
     /// Combined helper returning both the root hash and the Merkle proof.
     pub fn root_and_proof(
         &self,
@@ -510,12 +469,10 @@ impl ByteMerkleTree {
         let proof = tree.get_proof(index as u32).expect("valid index");
         (root, proof)
     }
-
     pub fn root(&self) -> [u8; 32] {
         let root = self.root_hash();
         *root.as_ref()
     }
-
     /// Update leaf at `index` with new chunk bytes.
     pub fn update_leaf(&self, index: usize, data: &[u8]) {
         // Compute the new digest for this chunk.
@@ -536,7 +493,6 @@ impl ByteMerkleTree {
             // keep as None; next root()/path() will rebuild once.
         }
     }
-
     /// Authentication path for leaf at `index`.
     ///
     /// Ordering: returns siblings from leaf → root. Each entry is the sibling
@@ -554,7 +510,6 @@ impl ByteMerkleTree {
         }
         path
     }
-
     /// Batch-update a set of leaves by re-hashing the corresponding chunks from
     /// the provided `data` buffer. Intended for high-throughput update paths
     /// (e.g., memory commits) to avoid serial contention on the cached tree.
@@ -565,11 +520,9 @@ impl ByteMerkleTree {
     /// full rebuild.
     pub fn update_leaves_from_bytes_parallel(&self, data: &[u8], indices: &[usize]) {
         use rayon::prelude::*;
-
         if indices.is_empty() {
             return;
         }
-
         let leaf_count = self.leaves.lock().len();
         let mut indices = indices.to_vec();
         indices.sort_unstable();
@@ -578,7 +531,6 @@ impl ByteMerkleTree {
         if indices.is_empty() {
             return;
         }
-
         // Compute all digests first (in parallel) without mutating internal state.
         let chunk = self.chunk;
         let zero_hash = self.zero_hash;
@@ -600,7 +552,6 @@ impl ByteMerkleTree {
                 (idx, digest)
             })
             .collect();
-
         // Apply digests to the leaves vector in a single critical section.
         {
             let mut leaves = self.leaves.lock();
@@ -610,7 +561,6 @@ impl ByteMerkleTree {
                 }
             }
         }
-
         // Keep hot VM memory templates hot: if the canonical tree is already
         // cached, update the deterministic leaf paths instead of forcing a full
         // rebuild on the following root query.
@@ -627,7 +577,6 @@ impl ByteMerkleTree {
                 .inc_by(updated);
         }
     }
-
     /// Return both the Merkle root and the authentication path for `index`.
     /// Performs at most one rebuild of the cached canonical tree if missing.
     pub fn root_and_path(&self, index: usize) -> (HashOf<MerkleTree<[u8; 32]>>, Vec<[u8; 32]>) {
@@ -639,14 +588,12 @@ impl ByteMerkleTree {
             .collect();
         (root, path)
     }
-
     /// Compute a Merkle root directly from raw bytes using acceleration for both leaf hashing
     /// and inner-node reduction when beneficial. Falls back to CPU for small trees or when
     /// accelerators are unavailable.
     pub fn root_from_bytes_accel(data: &[u8], chunk: usize) -> [u8; 32] {
         assert!(chunk > 0 && chunk <= 32);
         let leaves_count = data.len().div_ceil(chunk).max(1);
-
         // Prefer CPU SHA2 on AArch64 for medium sizes
         if prefer_cpu_sha2(leaves_count) {
             let canonical =
@@ -655,7 +602,6 @@ impl ByteMerkleTree {
             metrics.merkle_root_cpu_total.inc();
             return *canonical.root().expect("non-empty").as_ref();
         }
-
         // GPU Metal path (macOS)
         #[cfg(target_os = "macos")]
         if crate::vector::metal_available() && leaves_count >= merkle_metal_min_leaves() {
@@ -682,7 +628,6 @@ impl ByteMerkleTree {
                 return root;
             }
         }
-
         // GPU CUDA path
         #[cfg(feature = "cuda")]
         let use_cuda = {
@@ -712,14 +657,12 @@ impl ByteMerkleTree {
                 return root;
             }
         }
-
         // CPU fallback
         let canonical = MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk).expect("valid chunk");
         let metrics = iroha_telemetry::metrics::global_or_default();
         metrics.merkle_root_cpu_total.inc();
         *canonical.root().expect("non-empty").as_ref()
     }
-
     /// Compute a SHA-256 digest for inputs up to 32 bytes by constructing a
     /// single padded block and using the accelerated `sha256_compress`.
     /// This leverages Metal/CUDA/ARMv8/x86 SHA-NI where available and falls
@@ -731,7 +674,6 @@ impl ByteMerkleTree {
         sha256_oneblock32(input)
     }
 }
-
 #[inline]
 fn sha256_oneblock32(input: &[u8]) -> [u8; 32] {
     debug_assert!(input.len() <= 32);
@@ -761,11 +703,9 @@ fn sha256_oneblock32(input: &[u8]) -> [u8; 32] {
     }
     out
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn sha256_oneblock32_matches_sha2() {
         for &len in &[0usize, 1, 7, 16, 31, 32] {
@@ -778,7 +718,6 @@ mod tests {
             assert_eq!(ours.as_slice(), &theirs[..]);
         }
     }
-
     #[test]
     fn root_from_bytes_accel_matches_canonical() {
         let samples: &[(&[u8], usize)] = &[
@@ -795,7 +734,6 @@ mod tests {
             assert_eq!(accel, expected);
         }
     }
-
     #[test]
     fn recompute_all_leaves_accel_small_tree_returns_false() {
         let data = b"small";
@@ -804,7 +742,6 @@ mod tests {
         // Below GPU threshold; must return false (no acceleration used)
         assert!(!tree.recompute_all_leaves_accel(data));
     }
-
     #[test]
     fn set_per_backend_thresholds_applied() {
         // Capture current values
@@ -835,7 +772,6 @@ mod tests {
             set_merkle_cuda_min_leaves(cuda0);
         }
     }
-
     #[test]
     fn reset_from_restores_state() {
         let data_a = vec![0u8; 96];
@@ -843,15 +779,12 @@ mod tests {
         let source = ByteMerkleTree::from_bytes(&data_a, 32);
         let other = ByteMerkleTree::from_bytes(&data_b, 32);
         other.update_leaf(1, &[5u8; 32]);
-
         let mut target = ByteMerkleTree::new(3, 32);
         target.reset_from(&other);
         assert_eq!(target.root(), other.root());
-
         target.reset_from(&source);
         assert_eq!(target.root(), source.root());
     }
-
     #[test]
     fn selected_leaf_reset_restores_template_without_tree_clone() {
         let template = ByteMerkleTree::from_bytes(&[0u8; 128], 32);
@@ -862,12 +795,9 @@ mod tests {
         worker.update_leaf(1, &[0xAA; 32]);
         worker.update_leaf(3, &[0x55; 32]);
         assert_ne!(worker.root(), template.root());
-
         worker.reset_leaves_from(&template, &[1, 3]);
-
         assert_eq!(worker.root(), template.root());
     }
-
     #[test]
     fn batch_update_keeps_cached_tree_and_matches_full_rebuild() {
         let mut data = vec![0u8; 32 * 8];
@@ -877,12 +807,10 @@ mod tests {
         let tree = ByteMerkleTree::from_bytes(&data, 32);
         assert!(tree.has_cached_tree());
         let (_, updates_before) = merkle_update_counters();
-
         data[32..64].fill(0xAA);
         data[96..128].fill(0x55);
         tree.update_leaves_from_bytes_parallel(&data, &[3, 1, 1]);
         assert!(tree.has_cached_tree());
-
         let expected = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32)
             .expect("canonical tree")
             .root()
@@ -894,14 +822,12 @@ mod tests {
             "deduped leaf updates should be counted once per touched leaf"
         );
     }
-
     #[test]
     fn cloned_tree_preserves_cache_for_incremental_updates() {
         let mut data = vec![7u8; 32 * 4];
         let tree = ByteMerkleTree::from_bytes(&data, 32);
         let cloned = tree.clone();
         assert!(cloned.has_cached_tree());
-
         data[64..96].fill(0x11);
         cloned.update_leaves_from_bytes_parallel(&data, &[2]);
         assert!(cloned.has_cached_tree());

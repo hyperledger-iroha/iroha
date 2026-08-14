@@ -1,7 +1,5 @@
 //! X.509 production-dispatch and release-candidate verifier tests.
-
 use super::*;
-
 #[test]
 fn zk_x509_dispatch_is_state_first_context_bound_and_fail_closed() {
     let (statement, authoritative_state) = zk_x509_dispatch_fixture_for_test();
@@ -15,7 +13,6 @@ fn zk_x509_dispatch_is_state_first_context_bound_and_fail_closed() {
             .expect("canonical X.509 credential envelope"),
     );
     let malformed_proof = PrivacyProofBytesV1::new(Vec::new());
-
     assert!(matches!(
         verify_zk_x509_certificate_v1(
             &statement,
@@ -25,7 +22,6 @@ fn zk_x509_dispatch_is_state_first_context_bound_and_fail_closed() {
         Err(PrivacyVerificationErrorV1::ZkX509State(detail))
             if detail.code == PrivacyZkX509StateFailureCodeV1::MissingTrustedState
     ));
-
     let mut wrong_record = statement.clone();
     wrong_record.trust_anchor_record_digest =
         iroha_data_model::privacy::PrivacyZkX509TrustAnchorRecordDigestV1::new([0xB1; 32]);
@@ -59,7 +55,6 @@ fn zk_x509_dispatch_is_state_first_context_bound_and_fail_closed() {
             "{label} did not fail at the authoritative-state boundary"
         );
     }
-
     let (_, successor_crl_state) = zk_x509_dispatch_fixture_with_successor_crl_v1();
     assert_eq!(
         successor_crl_state.crl_record().record_epoch,
@@ -88,7 +83,6 @@ fn zk_x509_dispatch_is_state_first_context_bound_and_fail_closed() {
         Err(PrivacyVerificationErrorV1::ZkX509State(detail))
             if detail.code == PrivacyZkX509StateFailureCodeV1::AuthoritativeStateMismatch
     ));
-
     assert!(matches!(
         verify_zk_x509_certificate_v1(
             &statement,
@@ -104,7 +98,6 @@ fn zk_x509_dispatch_is_state_first_context_bound_and_fail_closed() {
         Err(PrivacyVerificationErrorV1::ZkX509State(detail))
             if detail.code == PrivacyZkX509StateFailureCodeV1::DuplicateCertificateNullifier
     ));
-
     assert!(matches!(
         verify_zk_x509_certificate_v1(
             &statement,
@@ -123,7 +116,6 @@ fn zk_x509_dispatch_is_state_first_context_bound_and_fail_closed() {
                     ZkX509CredentialProofErrorV1::MalformedEnvelope
                 )
     ));
-
     assert!(matches!(
         verify_zk_x509_certificate_v1(
             &statement,
@@ -140,7 +132,6 @@ fn zk_x509_dispatch_is_state_first_context_bound_and_fail_closed() {
             if detail.source
                 == ZkX509EngineErrorV1::CredentialProof(ZkX509CredentialProofErrorV1::MainProof)
     ));
-
     let mut wrong_intent = statement.clone();
     wrong_intent.context.transaction_intent_digest =
         PrivacyTransactionIntentDigestV1::new([0xC1; 32]);
@@ -174,12 +165,10 @@ fn zk_x509_dispatch_is_state_first_context_bound_and_fail_closed() {
         );
     }
 }
-
 #[cfg(feature = "privacy-release-evidence")]
 #[test]
 fn zk_x509_candidate_verifier_does_not_relax_consensus_availability() {
     use crate::privacy_profiles::CompiledPrivacyProfileErrorV1;
-
     let (profile, activation) = active_zk_x509_profile();
     let (statement, authoritative_state) = zk_x509_dispatch_fixture_for_test();
     let genesis_hash = [0x91; 32];
@@ -204,7 +193,6 @@ fn zk_x509_candidate_verifier_does_not_relax_consensus_availability() {
         statement: typed_statement,
         proof: PrivacyProofV1::IrohaZkX509StarkP256V0(PrivacyProofBytesV1::new(synthetic_x5s1)),
     };
-
     let normal = verify_privacy_envelope_v1(
         &envelope,
         zk_x509_context(
@@ -236,7 +224,6 @@ fn zk_x509_candidate_verifier_does_not_relax_consensus_availability() {
                     )
         ));
     }
-
     assert!(matches!(
         verify_zk_x509_release_candidate_envelope_v1(
             &envelope,

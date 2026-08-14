@@ -80,8 +80,9 @@ with lengths `[177082, 210377, 403145, 187169, 70803]`, offsets
 `13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482`, and
 BLAKE3 chunk digests
 `["7789b490337d16c51b59a92e354a657ba450da4bab872c31e85e4d4fedcb3a27", "56397fe0ff8cc24c790e0719505fff05c49dca09289b595d17455bedcc1f7438", "2a2a47eedcc11effdb5d13190fe09143d6b31f959c72980bb0f2b8a5058971fd", "8dbb40d7a3439aa57bd69a3adfe98ff43b9043764072bc42d7dc211942e46ef8", "194c8180f4b90e021a86199d17092af3b2bd29792dc028e401258d903616b664"]`.
-`cargo run -p sorafs_chunker --features dev-tools --bin export_vectors` regenerates the JSON/Rust/Go/TS
-fixtures alongside a BLAKE3 manifest for provenance checks. The
+`export_vectors --write --staging-root <private-external-stage>` regenerates the
+JSON/Rust/Go/TS fixtures alongside a BLAKE3 manifest for provenance checks. A
+changed manifest also requires `--signing-key-file <private-key-file>`. The
 `ci/check_sorafs_fixtures.sh` job replays this generator in CI; any unsigned or
 drifted output fails the pipeline so governance signatures remain attached to
 the published vectors. Conformance details and steward responsibilities live in

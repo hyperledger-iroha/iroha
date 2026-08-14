@@ -1,20 +1,16 @@
 //! Asset values and entries.
-
 use derive_more::Display;
 use getset::Getters;
 use iroha_data_model_derive::{IdEqOrdHash, model};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 pub use self::model::*;
 use super::id::AssetId;
 use crate::{Identifiable, IntoKeyValue, Registered};
-
 #[model]
 mod model {
     use super::*;
-
     /// Asset represents some sort of commodity or value.
     /// All possible variants of [`Asset`] entity's components.
     #[derive(Debug, Display, Clone, IdEqOrdHash, Getters, Decode, Encode, IntoSchema)]
@@ -32,18 +28,14 @@ mod model {
         pub value: Quantity,
     }
 }
-
 use crate::common::{Owned, Ref};
-
 /// Read-only reference to [`Asset`].
 /// Used in query filters to avoid copying.
 pub type AssetEntry<'world> = Ref<'world, AssetId, AssetValue>;
-
 /// [`Asset`] without `id` field.
 /// Needed only for the world-state asset map to reduce memory usage.
 /// In other places use [`Asset`] directly.
 pub type AssetValue = Owned<Quantity>;
-
 impl Asset {
     /// Constructor
     pub fn new(id: AssetId, value: impl Into<Quantity>) -> <Self as Registered>::With {
@@ -53,11 +45,9 @@ impl Asset {
         }
     }
 }
-
 impl Registered for Asset {
     type With = Self;
 }
-
 impl IntoKeyValue for Asset {
     type Key = AssetId;
     type Value = AssetValue;
@@ -65,19 +55,15 @@ impl IntoKeyValue for Asset {
         (self.id, Owned::new(self.value))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};
-
     use super::*;
-
     #[test]
     fn negative_numeric_payload_cannot_decode_as_stored_asset_value() {
         let forged = Owned::new(Numeric::new(-1_i32, 0));
         let encoded = forged.encode();
-
         assert!(
             AssetValue::decode(&mut encoded.as_slice()).is_err(),
             "a signed negative payload must not cross the nominal stored-balance boundary"

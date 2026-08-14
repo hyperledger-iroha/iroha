@@ -1,9 +1,6 @@
 //! Sponsored account-onboarding clean-break contract tests.
-
 #![cfg(feature = "app_api")]
-
 use std::{borrow::Cow, collections::BTreeSet, num::NonZeroU8, sync::Arc};
-
 use axum::{
     body::{Body, to_bytes},
     extract::connect_info::ConnectInfo,
@@ -49,31 +46,25 @@ use iroha_torii_shared::route_catalog::{
         ACCOUNTS_ONBOARD_PLAN_POST, ACCOUNTS_ONBOARD_POST, ACCOUNTS_ONBOARDING_READINESS_GET,
     },
 };
-
 #[path = "fixtures.rs"]
 mod fixtures;
-
 const ONBOARDING_API_TOKEN: &str = "torii-onboarding-test-token-32-bytes";
 const ONBOARDING_SIGNER_PATH: &str = "/runtime-only/onboarding-test-signer.key";
-
 struct OnboardingTestContext {
     app: axum::Router,
     state: Arc<State>,
     queue: Arc<Queue>,
     chain_id: iroha_data_model::ChainId,
 }
-
 struct JsonResponse {
     status: StatusCode,
     raw_body: String,
     payload: norito::json::Value,
 }
-
 fn checked_key_pair(seed: u8, algorithm: Algorithm, context: &str) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], algorithm)
         .unwrap_or_else(|error| panic!("{context}: {error}"))
 }
-
 fn install_account_alias_policy(
     world: &mut World,
     authority: &AccountId,
@@ -94,7 +85,6 @@ fn install_account_alias_policy(
         norito::codec::Encode::encode(&policy),
     );
 }
-
 fn install_universal_parent_lease(world: &mut World, authority: &AccountId) {
     let selector =
         iroha_core::sns::selector_for_dataspace_alias("universal").expect("universal selector");
@@ -124,11 +114,9 @@ fn install_universal_parent_lease(world: &mut World, authority: &AccountId) {
         norito::codec::Encode::encode(&record),
     );
 }
-
 fn build_onboarding_test_context() -> OnboardingTestContext {
     build_onboarding_test_context_with(iroha_torii::test_utils::signed_query_network_id(), 0xD1)
 }
-
 fn build_onboarding_test_context_with(
     network_id: NetworkId,
     onboarding_signer_seed: u8,
@@ -171,7 +159,6 @@ fn build_onboarding_test_context_with(
             scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
         })]),
     );
-
     let chain_id = iroha_data_model::ChainId::from("onboarding-test-chain");
     let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
         world,
@@ -212,7 +199,6 @@ fn build_onboarding_test_context_with(
         .unpack(|_| {});
     let committed = valid.commit_unchecked().unpack(|_| {});
     iroha_torii::test_utils::finalize_committed_block(&state, state_block, committed);
-
     cfg.torii.account_onboarding =
         Some(iroha_config::parameters::actual::AccountOnboarding {
             authority: authority_id,
@@ -231,7 +217,6 @@ fn build_onboarding_test_context_with(
             lease_term_years: NonZeroU8::new(1).expect("non-zero lease term"),
             auto_renew: None,
         });
-
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(Queue::from_config(
         iroha_config::parameters::actual::Queue::default(),
@@ -250,7 +235,6 @@ fn build_onboarding_test_context_with(
         true,
         false,
     );
-
     OnboardingTestContext {
         app: torii.router(),
         state,
@@ -258,11 +242,9 @@ fn build_onboarding_test_context_with(
         chain_id,
     }
 }
-
 fn distinct_onboarding_network_id(seed: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new([seed])))
 }
-
 fn onboarding_plan_request(alias: &str, account_id: &AccountId) -> norito::json::Value {
     json_object(vec![
         json_entry("version", 1_u64),
@@ -271,11 +253,9 @@ fn onboarding_plan_request(alias: &str, account_id: &AccountId) -> norito::json:
         json_entry("permissions", Vec::<String>::new()),
     ])
 }
-
 fn onboarding_apply_request(receipt: norito::json::Value) -> norito::json::Value {
     json_object(vec![json_entry("receipt", receipt)])
 }
-
 fn onboarding_http_request(
     path: &str,
     payload: &norito::json::Value,
@@ -301,7 +281,6 @@ fn onboarding_http_request(
         ))));
     request
 }
-
 async fn send_onboarding_request(
     app: &axum::Router,
     path: &str,
@@ -326,7 +305,6 @@ async fn send_onboarding_request(
         payload,
     }
 }
-
 fn response_field<'a>(payload: &'a norito::json::Value, field: &str) -> &'a str {
     payload
         .as_object()
@@ -334,7 +312,6 @@ fn response_field<'a>(payload: &'a norito::json::Value, field: &str) -> &'a str 
         .and_then(norito::json::Value::as_str)
         .unwrap_or_else(|| panic!("response is missing string field `{field}`: {payload:?}"))
 }
-
 fn disposition_kind(payload: &norito::json::Value) -> &str {
     payload
         .as_object()
@@ -344,7 +321,6 @@ fn disposition_kind(payload: &norito::json::Value) -> &str {
         .and_then(norito::json::Value::as_str)
         .unwrap_or_else(|| panic!("response is missing a typed disposition: {payload:?}"))
 }
-
 fn plan_disposition_kind(receipt: &norito::json::Value) -> &str {
     receipt
         .as_object()
@@ -358,7 +334,6 @@ fn plan_disposition_kind(receipt: &norito::json::Value) -> &str {
         .and_then(norito::json::Value::as_str)
         .unwrap_or_else(|| panic!("plan is missing a typed disposition: {receipt:?}"))
 }
-
 fn mutate_onboarding_receipt_body(
     receipt: &norito::json::Value,
     mutate: impl FnOnce(&mut norito::json::Map),
@@ -372,7 +347,6 @@ fn mutate_onboarding_receipt_body(
     mutate(body);
     mutated
 }
-
 fn assert_secret_free(response: &JsonResponse) {
     for forbidden in [
         ONBOARDING_API_TOKEN,
@@ -387,7 +361,6 @@ fn assert_secret_free(response: &JsonResponse) {
         );
     }
 }
-
 fn remove_exact_alias_permission(
     context: &OnboardingTestContext,
     alias: &str,
@@ -442,7 +415,6 @@ fn remove_exact_alias_permission(
     iroha_torii::test_utils::finalize_committed_block(&context.state, state_block, committed);
     permission
 }
-
 #[test]
 fn sponsored_onboarding_catalog_contains_only_plan_apply_and_readiness() {
     for route in [
@@ -457,7 +429,6 @@ fn sponsored_onboarding_catalog_contains_only_plan_apply_and_readiness() {
             route.stable_route_id()
         );
     }
-
     for removed in [
         "/v1/accounts/onboard/multisig",
         "/v1/accounts/onboard/renew",
@@ -469,7 +440,6 @@ fn sponsored_onboarding_catalog_contains_only_plan_apply_and_readiness() {
         );
     }
 }
-
 #[tokio::test]
 async fn sponsored_onboarding_receipt_binds_exact_network_and_active_signer() {
     let local_network = distinct_onboarding_network_id(0xA1);
@@ -479,7 +449,6 @@ async fn sponsored_onboarding_receipt_binds_exact_network_and_active_signer() {
     let rotated_signer = build_onboarding_test_context_with(local_network, 0xE1);
     assert_eq!(origin.chain_id, foreign_genesis.chain_id);
     assert_eq!(origin.chain_id, rotated_signer.chain_id);
-
     let target = AccountId::new(
         checked_key_pair(
             0xD3,
@@ -510,7 +479,6 @@ async fn sponsored_onboarding_receipt_binds_exact_network_and_active_signer() {
     for retired in ["chain", "chainId", "chain_id"] {
         assert!(!body.contains_key(retired));
     }
-
     let apply = onboarding_apply_request(plan.payload.clone());
     for (context, replay) in [
         (&foreign_genesis, "same-label foreign-genesis"),
@@ -530,7 +498,6 @@ async fn sponsored_onboarding_receipt_binds_exact_network_and_active_signer() {
         assert_eq!(context.queue.active_len(), 0);
     }
 }
-
 #[tokio::test]
 async fn sponsored_onboarding_receipt_rejects_genesis_and_retired_network_keys() {
     let context = build_onboarding_test_context();
@@ -550,7 +517,6 @@ async fn sponsored_onboarding_receipt_rejects_genesis_and_retired_network_keys()
     )
     .await;
     assert_eq!(plan.status, StatusCode::OK, "{}", plan.raw_body);
-
     let genesis = mutate_onboarding_receipt_body(&plan.payload, |body| {
         body.insert(
             "network_id".to_owned(),
@@ -569,7 +535,6 @@ async fn sponsored_onboarding_receipt_rejects_genesis_and_retired_network_keys()
         "{}",
         response.raw_body
     );
-
     for retired in ["chain", "chainId", "chain_id"] {
         for keep_network_id in [false, true] {
             let mutated = mutate_onboarding_receipt_body(&plan.payload, |body| {
@@ -597,7 +562,6 @@ async fn sponsored_onboarding_receipt_rejects_genesis_and_retired_network_keys()
     }
     assert_eq!(context.queue.active_len(), 0);
 }
-
 #[tokio::test]
 async fn sponsored_onboarding_create_replay_and_repair_use_the_real_handlers() {
     let context = build_onboarding_test_context();
@@ -606,13 +570,11 @@ async fn sponsored_onboarding_create_replay_and_repair_use_the_real_handlers() {
     let target_id = AccountId::new(target_key_pair.public_key().clone());
     let alias = "replayuser@universal";
     let plan_request = onboarding_plan_request(alias, &target_id);
-
     let plan =
         send_onboarding_request(&context.app, "/v1/accounts/onboard/plan", &plan_request).await;
     assert_eq!(plan.status, StatusCode::OK, "{}", plan.raw_body);
     assert_eq!(plan_disposition_kind(&plan.payload), "create");
     assert_secret_free(&plan);
-
     let apply_request = onboarding_apply_request(plan.payload.clone());
     let created =
         send_onboarding_request(&context.app, "/v1/accounts/onboard", &apply_request).await;
@@ -629,7 +591,6 @@ async fn sponsored_onboarding_create_replay_and_repair_use_the_real_handlers() {
         "create response must identify its one queued transaction"
     );
     assert_secret_free(&created);
-
     let expected_height = u64::try_from(context.state.view().height())
         .unwrap_or(0)
         .saturating_add(1);
@@ -643,7 +604,6 @@ async fn sponsored_onboarding_create_replay_and_repair_use_the_real_handlers() {
         1,
         "create apply must submit exactly one atomic transaction"
     );
-
     let replay =
         send_onboarding_request(&context.app, "/v1/accounts/onboard", &apply_request).await;
     assert_eq!(replay.status, StatusCode::OK, "{}", replay.raw_body);
@@ -658,7 +618,6 @@ async fn sponsored_onboarding_create_replay_and_repair_use_the_real_handlers() {
     );
     assert_eq!(context.queue.active_len(), 0);
     assert_secret_free(&replay);
-
     let removed_permission =
         remove_exact_alias_permission(&context, alias, &target_id, &target_key_pair);
     let repair_plan =
@@ -671,7 +630,6 @@ async fn sponsored_onboarding_create_replay_and_repair_use_the_real_handlers() {
     );
     assert_eq!(plan_disposition_kind(&repair_plan.payload), "repair");
     assert_secret_free(&repair_plan);
-
     let repair_request = onboarding_apply_request(repair_plan.payload.clone());
     let repaired =
         send_onboarding_request(&context.app, "/v1/accounts/onboard", &repair_request).await;
@@ -685,7 +643,6 @@ async fn sponsored_onboarding_create_replay_and_repair_use_the_real_handlers() {
     assert_eq!(disposition_kind(&repaired.payload), "repair");
     assert_eq!(context.queue.active_len(), 1);
     assert_secret_free(&repaired);
-
     let expected_height = u64::try_from(context.state.view().height())
         .unwrap_or(0)
         .saturating_add(1);
@@ -707,7 +664,6 @@ async fn sponsored_onboarding_create_replay_and_repair_use_the_real_handlers() {
             .account_contains_inherent_permission(&target_id, &removed_permission),
         "repair must restore the exact derived alias permission"
     );
-
     let repair_replay =
         send_onboarding_request(&context.app, "/v1/accounts/onboard", &repair_request).await;
     assert_eq!(
@@ -731,7 +687,6 @@ async fn sponsored_onboarding_create_replay_and_repair_use_the_real_handlers() {
     assert_eq!(context.queue.active_len(), 0);
     assert_secret_free(&repair_replay);
 }
-
 #[tokio::test]
 async fn sponsored_onboarding_stale_create_receipt_returns_redacted_conflict() {
     let context = build_onboarding_test_context();
@@ -771,7 +726,6 @@ async fn sponsored_onboarding_stale_create_receipt_returns_redacted_conflict() {
         assert_eq!(plan_disposition_kind(&plan.payload), "create");
         assert_secret_free(plan);
     }
-
     let conflicting_apply = send_onboarding_request(
         &context.app,
         "/v1/accounts/onboard",
@@ -797,7 +751,6 @@ async fn sponsored_onboarding_stale_create_receipt_returns_redacted_conflict() {
         1,
         "the racing create must commit before stale receipt revalidation"
     );
-
     let stale = send_onboarding_request(
         &context.app,
         "/v1/accounts/onboard",
@@ -811,7 +764,6 @@ async fn sponsored_onboarding_stale_create_receipt_returns_redacted_conflict() {
     );
     assert_eq!(context.queue.active_len(), 0);
     assert_secret_free(&stale);
-
     for removed in [
         "/v1/accounts/onboard/multisig",
         "/v1/accounts/onboard/renew",

@@ -1,7 +1,5 @@
 //! Grouped IVM integration tests.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 #[path = "../_debug_koto.rs"]
 mod _debug_koto;
 #[path = "../abi_hash_table.rs"]

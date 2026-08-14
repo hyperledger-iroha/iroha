@@ -3,19 +3,15 @@
 //! This module backs the first SF-11 validator slice. It reuses the canonical
 //! SoraFS Norito models and reports deterministic, machine-readable outcomes
 //! that can be consumed by CLIs, CI, and dashboards.
-
 // Reference validators intentionally return the full structured outcome as the
 // error so FFI/CLI callers can render identical diagnostics without side state.
 #![allow(clippy::result_large_err)]
-
 use std::collections::BTreeSet;
-
 use ed25519_dalek::SigningKey;
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::Quantity;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-
 use crate::{
     AdmissionRecord, AdvertValidationError, BillingLineDirectionV1, BillingLineItemKindV1,
     BillingLineItemV1, BillingStatementV1, ByteRangeV1, GovernanceDagBlockV1,
@@ -55,13 +51,10 @@ use crate::{
     verify_pop_commitment_root_signature_v1, verify_pop_credential_signature_v1,
     verify_pop_revocation_list_signature_v1, verify_settlement_receipt_signature_v1,
 };
-
 /// Current schema version for [`ValidationOutcomeV1`].
 pub const VALIDATION_OUTCOME_VERSION_V1: u8 = 1;
-
 /// Error-catalogue document referenced by emitted outcomes.
 pub const REFERENCE_SDK_ERRORS_DOC_URL: &str = "https://docs.iroha.tech/";
-
 const STATUS_OK: &str = "Ok";
 const STATUS_ERROR: &str = "Error";
 const CATEGORY_VALIDATION: &str = "validation";
@@ -74,14 +67,12 @@ const PDP_STRUCTURAL_OK_CODE: &str = "SFS-PDP-DIAG-000";
 const PDP_TRUST_REQUIRED_CODE: &str = "SFS-PDP-004";
 const PDP_REFERENCE_DECODE_MAX_DEPTH_V1: usize = 64;
 const CANCEL_ASSET_LOCK_REFERENCE_MAX_BYTES_V1: usize = 4 * 1024;
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(schema_name = "iroha_data_model::isi::escrow::CancelAssetLock")]
 struct CancelAssetLockWireV1 {
     escrow_id: Hash,
     expected_remaining_amount: Quantity,
 }
-
 /// Structured key/value context attached to validation outcomes.
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -92,7 +83,6 @@ pub struct ValidationContextFieldV1 {
     /// Context value.
     pub value: String,
 }
-
 impl ValidationContextFieldV1 {
     /// Creates a validation context field.
     #[must_use]
@@ -103,7 +93,6 @@ impl ValidationContextFieldV1 {
         }
     }
 }
-
 /// Input metadata attached to validation outcomes.
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -114,7 +103,6 @@ pub struct ValidationInputV1 {
     /// Human-readable input path or label.
     pub path: String,
 }
-
 impl ValidationInputV1 {
     /// Creates input metadata for an outcome.
     #[must_use]
@@ -125,7 +113,6 @@ impl ValidationInputV1 {
         }
     }
 }
-
 /// Deterministic validation result for SF-11 reference tooling.
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -154,7 +141,6 @@ pub struct ValidationOutcomeV1 {
     /// UNIX timestamp when the outcome was generated.
     pub generated_at: u64,
 }
-
 impl ValidationOutcomeV1 {
     /// Creates a successful validation outcome.
     #[must_use]
@@ -180,7 +166,6 @@ impl ValidationOutcomeV1 {
             generated_at,
         }
     }
-
     /// Creates a rejected validation outcome.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
@@ -208,14 +193,12 @@ impl ValidationOutcomeV1 {
             generated_at,
         }
     }
-
     /// Returns true when this outcome represents an accepted payload.
     #[must_use]
     pub fn is_ok(&self) -> bool {
         self.status == STATUS_OK
     }
 }
-
 /// Payload kinds accepted by the fixture bundle cross-link validator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixtureBundlePayloadKindV1 {
@@ -258,7 +241,6 @@ pub enum FixtureBundlePayloadKindV1 {
     /// [`SettlementReceiptV1`] orderbook payload.
     OrderbookSettlementReceipt,
 }
-
 impl FixtureBundlePayloadKindV1 {
     fn input_kind(self) -> &'static str {
         match self {
@@ -283,7 +265,6 @@ impl FixtureBundlePayloadKindV1 {
             Self::OrderbookSettlementReceipt => "settlement_receipt",
         }
     }
-
     fn schema(self) -> &'static str {
         match self {
             Self::ProviderAdvert => "ProviderAdvertV1",
@@ -308,7 +289,6 @@ impl FixtureBundlePayloadKindV1 {
         }
     }
 }
-
 /// A Norito payload included in a fixture-directory bundle validation run.
 pub struct FixtureBundlePayloadV1<'payload> {
     /// Payload kind.
@@ -318,7 +298,6 @@ pub struct FixtureBundlePayloadV1<'payload> {
     /// Norito bytes for the payload.
     pub bytes: &'payload [u8],
 }
-
 impl<'payload> FixtureBundlePayloadV1<'payload> {
     /// Creates a fixture bundle payload reference.
     #[must_use]
@@ -334,7 +313,6 @@ impl<'payload> FixtureBundlePayloadV1<'payload> {
         }
     }
 }
-
 #[derive(Debug, Default)]
 struct FixtureBundleLinks {
     manifest_digest: Option<([u8; 32], String)>,
@@ -342,7 +320,6 @@ struct FixtureBundleLinks {
     linked_providers: Vec<FixtureBundleProviderLink>,
     linkable_artifacts: BTreeSet<String>,
 }
-
 #[derive(Debug)]
 struct FixtureBundleProviderLink {
     kind: &'static str,
@@ -350,7 +327,6 @@ struct FixtureBundleProviderLink {
     provider_id: [u8; 32],
     requires_order_assignment: bool,
 }
-
 impl FixtureBundleLinks {
     fn observe_manifest(
         &mut self,
@@ -391,7 +367,6 @@ impl FixtureBundleLinks {
         }
         Ok(())
     }
-
     fn observe_provider(
         &mut self,
         kind: &'static str,
@@ -407,7 +382,6 @@ impl FixtureBundleLinks {
             requires_order_assignment,
         });
     }
-
     fn finish(
         self,
         inputs: Vec<ValidationInputV1>,
@@ -428,7 +402,6 @@ impl FixtureBundleLinks {
                 generated_at,
             ));
         }
-
         if self.order_assignment_providers.is_empty() {
             if let Some(first) = self.linked_providers.first() {
                 for link in self.linked_providers.iter().skip(1) {
@@ -480,7 +453,6 @@ impl FixtureBundleLinks {
                 }
             }
         }
-
         let mut context = vec![
             ValidationContextFieldV1::new("artifact_count", inputs.len().to_string()),
             ValidationContextFieldV1::new("linkable_artifacts", linkable_artifacts.to_string()),
@@ -518,7 +490,6 @@ impl FixtureBundleLinks {
         Ok(context)
     }
 }
-
 /// Validates a fixture-directory payload set and checks manifest/provider links.
 #[must_use]
 pub fn validate_fixture_bundle_payloads(
@@ -531,7 +502,6 @@ pub fn validate_fixture_bundle_payloads(
         .map(|payload| ValidationInputV1::new(payload.kind.input_kind(), payload.label.clone()))
         .collect();
     let mut links = FixtureBundleLinks::default();
-
     for payload in payloads {
         if let Err(outcome) =
             validate_fixture_bundle_payload(payload, &mut links, now, generated_at)
@@ -539,7 +509,6 @@ pub fn validate_fixture_bundle_payloads(
             return remap_bundle_payload_error(outcome, inputs, generated_at);
         }
     }
-
     let pdp_commitment = payloads
         .iter()
         .find(|payload| payload.kind == FixtureBundlePayloadKindV1::PdpCommitment);
@@ -550,7 +519,6 @@ pub fn validate_fixture_bundle_payloads(
         .iter()
         .find(|payload| payload.kind == FixtureBundlePayloadKindV1::PdpProof);
     let mut pdp_witness_diagnostic = false;
-
     if let (Some(commitment), Some(challenge), Some(proof)) =
         (pdp_commitment, pdp_challenge, pdp_proof)
     {
@@ -580,7 +548,6 @@ pub fn validate_fixture_bundle_payloads(
                 return remap_bundle_payload_error(outcome, inputs, generated_at);
             }
         }
-
         if let (Some(commitment), Some(challenge)) = (pdp_commitment, pdp_challenge) {
             let outcome = validate_pdp_commitment_challenge_bytes(
                 commitment.bytes,
@@ -594,7 +561,6 @@ pub fn validate_fixture_bundle_payloads(
             }
         }
     }
-
     if let (Some(challenge), Some(proof)) = (
         payloads
             .iter()
@@ -614,12 +580,10 @@ pub fn validate_fixture_bundle_payloads(
             return remap_bundle_payload_error(outcome, inputs, generated_at);
         }
     }
-
     let mut context = match links.finish(inputs.clone(), generated_at) {
         Ok(context) => context,
         Err(outcome) => return outcome,
     };
-
     if pdp_witness_diagnostic {
         context.extend([
             ValidationContextFieldV1::new(
@@ -642,7 +606,6 @@ pub fn validate_fixture_bundle_payloads(
             generated_at,
         );
     }
-
     ValidationOutcomeV1::ok(
         "SFS-OK-000",
         "fixture bundle cross-links accepted",
@@ -655,7 +618,6 @@ pub fn validate_fixture_bundle_payloads(
         generated_at,
     )
 }
-
 fn validate_fixture_bundle_payload(
     payload: &FixtureBundlePayloadV1<'_>,
     links: &mut FixtureBundleLinks,
@@ -1177,7 +1139,6 @@ fn validate_fixture_bundle_payload(
     }
     Ok(())
 }
-
 fn validate_orderbook_bundle_payload(
     kind: OrderbookValidationPayloadKindV1,
     payload: &FixtureBundlePayloadV1<'_>,
@@ -1191,7 +1152,6 @@ fn validate_orderbook_bundle_payload(
         Err(outcome)
     }
 }
-
 fn validate_repair_bundle_value<T>(
     result: Result<(), RepairValidationError>,
     value: &T,
@@ -1223,7 +1183,6 @@ where
     }
     Ok(())
 }
-
 fn decode_bundle_payload<T>(
     payload: &FixtureBundlePayloadV1<'_>,
     generated_at: u64,
@@ -1240,7 +1199,6 @@ where
         )
     })
 }
-
 fn decode_repair_bundle_payload<T>(
     payload: &FixtureBundlePayloadV1<'_>,
     generated_at: u64,
@@ -1257,7 +1215,6 @@ where
         )
     })
 }
-
 fn bundle_decode_error(
     kind: FixtureBundlePayloadKindV1,
     label: &str,
@@ -1274,7 +1231,6 @@ fn bundle_decode_error(
         generated_at,
     )
 }
-
 fn bundle_error(
     code: impl Into<String>,
     category: impl Into<String>,
@@ -1298,7 +1254,6 @@ fn bundle_error(
         generated_at,
     )
 }
-
 fn remap_bundle_payload_error(
     outcome: ValidationOutcomeV1,
     inputs: Vec<ValidationInputV1>,
@@ -1326,7 +1281,6 @@ fn remap_bundle_payload_error(
         generated_at,
     )
 }
-
 fn provider_mismatch_error(
     reason: &str,
     expected_provider: [u8; 32],
@@ -1358,7 +1312,6 @@ fn provider_mismatch_error(
         generated_at,
     )
 }
-
 /// Validates a Norito-encoded [`GovernanceLogNodeV1`] and emits a reference outcome.
 #[must_use]
 pub fn validate_governance_log_node_bytes(
@@ -1390,7 +1343,6 @@ pub fn validate_governance_log_node_bytes(
             );
         }
     };
-
     let mut context = governance_log_node_context(&node);
     if let Some(expected_node_cid) = expected_node_cid
         && node.node_cid.as_slice() != expected_node_cid
@@ -1417,7 +1369,6 @@ pub fn validate_governance_log_node_bytes(
             generated_at,
         );
     }
-
     if let Err(error) = node.validate() {
         let code = governance_log_validation_code(&error);
         let category = governance_log_validation_category(&error);
@@ -1439,7 +1390,6 @@ pub fn validate_governance_log_node_bytes(
             generated_at,
         );
     }
-
     if let Err(error) = node.verify_publisher_signature() {
         context.push(ValidationContextFieldV1::new(
             "signature_error",
@@ -1462,7 +1412,6 @@ pub fn validate_governance_log_node_bytes(
             generated_at,
         );
     }
-
     if let GovernanceLogPayloadV1::ProviderAdvert(advert) = &node.payload
         && let Err(error) = advert.verify_signature()
     {
@@ -1484,7 +1433,6 @@ pub fn validate_governance_log_node_bytes(
             generated_at,
         );
     }
-
     ValidationOutcomeV1::ok(
         "SFS-OK-000",
         "governance log node accepted",
@@ -1497,7 +1445,6 @@ pub fn validate_governance_log_node_bytes(
         generated_at,
     )
 }
-
 /// Validates a Norito-encoded [`GovernanceDagBlockV1`] and emits a reference outcome.
 #[must_use]
 pub fn validate_governance_dag_block_bytes(
@@ -1532,7 +1479,6 @@ pub fn validate_governance_dag_block_bytes(
             );
         }
     };
-
     let mut context = governance_dag_block_context(&block);
     if let Some(expected_block_cid) = expected_block_cid
         && block.block_cid.as_slice() != expected_block_cid
@@ -1559,7 +1505,6 @@ pub fn validate_governance_dag_block_bytes(
             generated_at,
         );
     }
-
     if let Err(error) = block.validate() {
         let code = governance_dag_block_validation_code(&error);
         let category = governance_dag_block_validation_category(&error);
@@ -1581,7 +1526,6 @@ pub fn validate_governance_dag_block_bytes(
             generated_at,
         );
     }
-
     ValidationOutcomeV1::ok(
         "SFS-OK-000",
         "governance DAG block accepted",
@@ -1594,7 +1538,6 @@ pub fn validate_governance_dag_block_bytes(
         generated_at,
     )
 }
-
 /// Validates a signed [`GovernanceDagHeadV1`] against Norito-encoded blocks.
 #[must_use]
 pub fn validate_governance_dag_head_chain_bytes(
@@ -1614,7 +1557,6 @@ pub fn validate_governance_dag_head_chain_bytes(
             label.clone(),
         ));
     }
-
     let head = match norito::decode_from_bytes::<GovernanceDagHeadV1>(head_bytes) {
         Ok(head) => head,
         Err(error) => {
@@ -1636,7 +1578,6 @@ pub fn validate_governance_dag_head_chain_bytes(
             );
         }
     };
-
     let mut blocks = Vec::with_capacity(block_payloads.len());
     for (bytes, label) in block_payloads {
         match norito::decode_from_bytes::<GovernanceDagBlockV1>(bytes) {
@@ -1663,7 +1604,6 @@ pub fn validate_governance_dag_head_chain_bytes(
             }
         }
     }
-
     let mut context = governance_dag_head_context(&head);
     context.push(ValidationContextFieldV1::new(
         "block_payload_count",
@@ -1675,7 +1615,6 @@ pub fn validate_governance_dag_head_chain_bytes(
             bounded_governance_cid_hex(&block.block_cid),
         ));
     }
-
     if let Err(error) = validate_governance_dag_head_against_chain_v1(&head, &blocks) {
         let code = governance_dag_head_chain_validation_code(&error);
         let category = governance_dag_head_chain_validation_category(&error);
@@ -1697,7 +1636,6 @@ pub fn validate_governance_dag_head_chain_bytes(
             generated_at,
         );
     }
-
     ValidationOutcomeV1::ok(
         "SFS-OK-000",
         "governance DAG head accepted",
@@ -1710,7 +1648,6 @@ pub fn validate_governance_dag_head_chain_bytes(
         generated_at,
     )
 }
-
 fn governance_log_node_context(node: &GovernanceLogNodeV1) -> Vec<ValidationContextFieldV1> {
     let mut context = vec![
         ValidationContextFieldV1::new("schema", "GovernanceLogNodeV1"),
@@ -1773,7 +1710,6 @@ fn governance_log_node_context(node: &GovernanceLogNodeV1) -> Vec<ValidationCont
     }
     context
 }
-
 fn governance_dag_block_context(block: &GovernanceDagBlockV1) -> Vec<ValidationContextFieldV1> {
     let mut context = vec![
         ValidationContextFieldV1::new("schema", "GovernanceDagBlockV1"),
@@ -1830,7 +1766,6 @@ fn governance_dag_block_context(block: &GovernanceDagBlockV1) -> Vec<ValidationC
     }
     context
 }
-
 fn governance_dag_head_context(head: &GovernanceDagHeadV1) -> Vec<ValidationContextFieldV1> {
     let mut context = vec![
         ValidationContextFieldV1::new("schema", "GovernanceDagHeadV1"),
@@ -1878,7 +1813,6 @@ fn governance_dag_head_context(head: &GovernanceDagHeadV1) -> Vec<ValidationCont
     }
     context
 }
-
 fn bounded_governance_cid_hex(bytes: &[u8]) -> String {
     if bytes.len() == crate::GOVERNANCE_DAG_CID_BYTES_V1 {
         hex::encode(bytes)
@@ -1886,7 +1820,6 @@ fn bounded_governance_cid_hex(bytes: &[u8]) -> String {
         format!("<invalid-length:{}>", bytes.len())
     }
 }
-
 fn bounded_governance_bytes(bytes: &[u8], maximum: usize) -> String {
     if bytes.len() <= maximum {
         String::from_utf8_lossy(bytes).into_owned()
@@ -1894,7 +1827,6 @@ fn bounded_governance_bytes(bytes: &[u8], maximum: usize) -> String {
         format!("<oversized:{}>", bytes.len())
     }
 }
-
 fn order_request_context(order: &OrderRequestV1) -> Vec<ValidationContextFieldV1> {
     let mut context = vec![
         ValidationContextFieldV1::new("schema", "OrderRequestV1"),
@@ -1914,7 +1846,6 @@ fn order_request_context(order: &OrderRequestV1) -> Vec<ValidationContextFieldV1
     append_orderbook_signature_context(&mut context, &order.signature);
     context
 }
-
 fn order_cancel_context(cancel: &OrderCancelV1) -> Vec<ValidationContextFieldV1> {
     let mut context = vec![
         ValidationContextFieldV1::new("schema", "OrderCancelV1"),
@@ -1927,7 +1858,6 @@ fn order_cancel_context(cancel: &OrderCancelV1) -> Vec<ValidationContextFieldV1>
     append_orderbook_signature_context(&mut context, &cancel.signature);
     context
 }
-
 fn trade_event_context(trade: &TradeEventV1) -> Vec<ValidationContextFieldV1> {
     vec![
         ValidationContextFieldV1::new("schema", "TradeEventV1"),
@@ -1943,7 +1873,6 @@ fn trade_event_context(trade: &TradeEventV1) -> Vec<ValidationContextFieldV1> {
         ValidationContextFieldV1::new("timestamp_unix", trade.timestamp_unix.to_string()),
     ]
 }
-
 fn settlement_channel_context(channel: &SettlementChannelV1) -> Vec<ValidationContextFieldV1> {
     vec![
         ValidationContextFieldV1::new("schema", "SettlementChannelV1"),
@@ -1960,7 +1889,6 @@ fn settlement_channel_context(channel: &SettlementChannelV1) -> Vec<ValidationCo
         ValidationContextFieldV1::new("updated_at_unix", channel.updated_at_unix.to_string()),
     ]
 }
-
 fn settlement_receipt_context(receipt: &SettlementReceiptV1) -> Vec<ValidationContextFieldV1> {
     let mut context = vec![
         ValidationContextFieldV1::new("schema", "SettlementReceiptV1"),
@@ -1980,7 +1908,6 @@ fn settlement_receipt_context(receipt: &SettlementReceiptV1) -> Vec<ValidationCo
     append_orderbook_signature_context(&mut context, &receipt.settlement_signature);
     context
 }
-
 fn append_orderbook_signature_context(
     context: &mut Vec<ValidationContextFieldV1>,
     signature: &crate::OrderbookSignatureV1,
@@ -1998,7 +1925,6 @@ fn append_orderbook_signature_context(
         signature.signature.len().to_string(),
     ));
 }
-
 fn hedging_price_feed_context(feed: &HedgingPriceFeedV1) -> Vec<ValidationContextFieldV1> {
     vec![
         ValidationContextFieldV1::new("schema", "HedgingPriceFeedV1"),
@@ -2012,7 +1938,6 @@ fn hedging_price_feed_context(feed: &HedgingPriceFeedV1) -> Vec<ValidationContex
         ValidationContextFieldV1::new("status", hedging_feed_status_label(feed.status)),
     ]
 }
-
 fn hedging_reference_price_decision_context(
     decision: &HedgingReferencePriceDecisionV1,
 ) -> Vec<ValidationContextFieldV1> {
@@ -2035,7 +1960,6 @@ fn hedging_reference_price_decision_context(
         ),
     ]
 }
-
 fn billing_line_item_context(line: &BillingLineItemV1) -> Vec<ValidationContextFieldV1> {
     vec![
         ValidationContextFieldV1::new("schema", "BillingLineItemV1"),
@@ -2050,7 +1974,6 @@ fn billing_line_item_context(line: &BillingLineItemV1) -> Vec<ValidationContextF
         ValidationContextFieldV1::new("note_present", line.note.is_some().to_string()),
     ]
 }
-
 fn billing_statement_context(statement: &BillingStatementV1) -> Vec<ValidationContextFieldV1> {
     vec![
         ValidationContextFieldV1::new("schema", "BillingStatementV1"),
@@ -2077,7 +2000,6 @@ fn billing_statement_context(statement: &BillingStatementV1) -> Vec<ValidationCo
         ),
     ]
 }
-
 fn hedging_feed_status_label(status: HedgingFeedStatusV1) -> String {
     match status {
         HedgingFeedStatusV1::Ok => "ok",
@@ -2086,7 +2008,6 @@ fn hedging_feed_status_label(status: HedgingFeedStatusV1) -> String {
     }
     .to_owned()
 }
-
 fn billing_line_direction_label(direction: BillingLineDirectionV1) -> String {
     match direction {
         BillingLineDirectionV1::Debit => "debit",
@@ -2094,7 +2015,6 @@ fn billing_line_direction_label(direction: BillingLineDirectionV1) -> String {
     }
     .to_owned()
 }
-
 fn billing_line_kind_label(kind: BillingLineItemKindV1) -> String {
     match kind {
         BillingLineItemKindV1::Storage => "storage",
@@ -2107,7 +2027,6 @@ fn billing_line_kind_label(kind: BillingLineItemKindV1) -> String {
     }
     .to_owned()
 }
-
 fn pop_credential_context(credential: &PopCredentialV1) -> Vec<ValidationContextFieldV1> {
     let mut context = vec![
         ValidationContextFieldV1::new("schema", "PopCredentialV1"),
@@ -2146,7 +2065,6 @@ fn pop_credential_context(credential: &PopCredentialV1) -> Vec<ValidationContext
     append_pop_signature_context(&mut context, &credential.issuer_signature);
     context
 }
-
 fn pop_commitment_root_context(root: &PopCommitmentRootV1) -> Vec<ValidationContextFieldV1> {
     let mut context = vec![
         ValidationContextFieldV1::new("schema", "PopCommitmentRootV1"),
@@ -2169,7 +2087,6 @@ fn pop_commitment_root_context(root: &PopCommitmentRootV1) -> Vec<ValidationCont
     append_pop_signature_context(&mut context, &root.publisher_signature);
     context
 }
-
 fn pop_revocation_list_context(revocations: &PopRevocationListV1) -> Vec<ValidationContextFieldV1> {
     let mut context = vec![
         ValidationContextFieldV1::new("schema", "PopRevocationListV1"),
@@ -2197,7 +2114,6 @@ fn pop_revocation_list_context(revocations: &PopRevocationListV1) -> Vec<Validat
     append_pop_signature_context(&mut context, &revocations.publisher_signature);
     context
 }
-
 fn pop_issued_credential_bundle_context(
     bundle: &PopIssuedCredentialBundleV1,
 ) -> Vec<ValidationContextFieldV1> {
@@ -2227,7 +2143,6 @@ fn pop_issued_credential_bundle_context(
         ),
     ]
 }
-
 fn pop_enrollment_request_context(
     request: &PopEnrollmentRequestV1,
 ) -> Vec<ValidationContextFieldV1> {
@@ -2252,7 +2167,6 @@ fn pop_enrollment_request_context(
         ValidationContextFieldV1::new("expires_at_epoch", request.expires_at_epoch.to_string()),
     ]
 }
-
 fn pop_renewal_request_context(request: &PopRenewalRequestV1) -> Vec<ValidationContextFieldV1> {
     vec![
         ValidationContextFieldV1::new("schema", "PopRenewalRequestV1"),
@@ -2281,7 +2195,6 @@ fn pop_renewal_request_context(request: &PopRenewalRequestV1) -> Vec<ValidationC
         ),
     ]
 }
-
 fn pop_membership_proof_context(proof: &PopMembershipProofV1) -> Vec<ValidationContextFieldV1> {
     vec![
         ValidationContextFieldV1::new("schema", "PopMembershipProofV1"),
@@ -2323,7 +2236,6 @@ fn pop_membership_proof_context(proof: &PopMembershipProofV1) -> Vec<ValidationC
         ValidationContextFieldV1::new("expires_at_epoch", proof.expires_at_epoch.to_string()),
     ]
 }
-
 fn append_pop_signature_context(
     context: &mut Vec<ValidationContextFieldV1>,
     signature: &PopSignatureV1,
@@ -2341,7 +2253,6 @@ fn append_pop_signature_context(
         signature.signature.len().to_string(),
     ));
 }
-
 fn pop_eligibility_class_label(class: PopEligibilityClassV1) -> &'static str {
     match class {
         PopEligibilityClassV1::General => "general",
@@ -2351,26 +2262,22 @@ fn pop_eligibility_class_label(class: PopEligibilityClassV1) -> &'static str {
         PopEligibilityClassV1::Observer => "observer",
     }
 }
-
 fn pop_signature_algorithm_label(algorithm: PopSignatureAlgorithmV1) -> &'static str {
     match algorithm {
         PopSignatureAlgorithmV1::Ed25519 => "ed25519",
     }
 }
-
 fn pop_membership_proof_system_label(system: PopMembershipProofSystemV1) -> &'static str {
     match system {
         PopMembershipProofSystemV1::Halo2IpaPastaV1 => "halo2_ipa_pasta_v1",
     }
 }
-
 fn order_side_label(side: OrderSideV1) -> &'static str {
     match side {
         OrderSideV1::Bid => "bid",
         OrderSideV1::Ask => "ask",
     }
 }
-
 fn order_tier_label(tier: OrderTierV1) -> &'static str {
     match tier {
         OrderTierV1::Hot => "hot",
@@ -2378,7 +2285,6 @@ fn order_tier_label(tier: OrderTierV1) -> &'static str {
         OrderTierV1::Archive => "archive",
     }
 }
-
 fn order_cancel_reason_label(reason: OrderCancelReasonV1) -> &'static str {
     match reason {
         OrderCancelReasonV1::OwnerRequested => "owner_requested",
@@ -2387,7 +2293,6 @@ fn order_cancel_reason_label(reason: OrderCancelReasonV1) -> &'static str {
         OrderCancelReasonV1::Replaced => "replaced",
     }
 }
-
 fn settlement_channel_status_label(status: SettlementChannelStatusV1) -> &'static str {
     match status {
         SettlementChannelStatusV1::Open => "open",
@@ -2397,7 +2302,6 @@ fn settlement_channel_status_label(status: SettlementChannelStatusV1) -> &'stati
         SettlementChannelStatusV1::Refunded => "refunded",
     }
 }
-
 fn governance_payload_kind(payload: &GovernanceLogPayloadV1) -> &'static str {
     match payload {
         GovernanceLogPayloadV1::ProviderAdvert(_) => "provider_advert",
@@ -2419,14 +2323,12 @@ fn governance_payload_kind(payload: &GovernanceLogPayloadV1) -> &'static str {
         GovernanceLogPayloadV1::PorWeeklyReport(_) => "por_weekly_report",
     }
 }
-
 fn governance_signature_algorithm_label(algorithm: GovernanceSignatureAlgorithm) -> &'static str {
     match algorithm {
         GovernanceSignatureAlgorithm::Ed25519 => "ed25519",
         GovernanceSignatureAlgorithm::Dilithium3 => "dilithium3",
     }
 }
-
 fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'static str {
     match error {
         GovernanceLogValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
@@ -2466,7 +2368,6 @@ fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'sta
         | GovernanceLogValidationError::SubmissionOriginMismatch { .. } => "SFS-GOV-001",
     }
 }
-
 fn governance_log_validation_category(error: &GovernanceLogValidationError) -> &'static str {
     match error {
         GovernanceLogValidationError::UnsupportedVersion { .. } => CATEGORY_VALIDATION,
@@ -2506,7 +2407,6 @@ fn governance_log_validation_category(error: &GovernanceLogValidationError) -> &
         | GovernanceLogValidationError::InvalidNodeCid => CATEGORY_VALIDATION,
     }
 }
-
 fn governance_signature_verification_code(
     error: &GovernanceLogSignatureVerificationError,
 ) -> &'static str {
@@ -2519,7 +2419,6 @@ fn governance_signature_verification_code(
         | GovernanceLogSignatureVerificationError::Verification { .. } => "SFS-SIG-005",
     }
 }
-
 fn governance_signature_verification_category(
     error: &GovernanceLogSignatureVerificationError,
 ) -> &'static str {
@@ -2528,7 +2427,6 @@ fn governance_signature_verification_category(
         _ => CATEGORY_SIGNATURE,
     }
 }
-
 fn governance_dag_block_validation_code(error: &GovernanceDagBlockValidationError) -> &'static str {
     match error {
         GovernanceDagBlockValidationError::CanonicalLengthUnavailable
@@ -2555,7 +2453,6 @@ fn governance_dag_block_validation_code(error: &GovernanceDagBlockValidationErro
         GovernanceDagBlockValidationError::InvalidBlockCid => "SFS-GOV-004",
     }
 }
-
 fn governance_dag_block_validation_category(
     error: &GovernanceDagBlockValidationError,
 ) -> &'static str {
@@ -2571,7 +2468,6 @@ fn governance_dag_block_validation_category(
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn governance_dag_head_validation_code(error: &GovernanceDagHeadValidationError) -> &'static str {
     match error {
         GovernanceDagHeadValidationError::UnsupportedVersion { .. }
@@ -2586,7 +2482,6 @@ fn governance_dag_head_validation_code(error: &GovernanceDagHeadValidationError)
         | GovernanceDagHeadValidationError::HeadSignature(_) => "SFS-SIG-007",
     }
 }
-
 fn governance_dag_head_validation_category(
     error: &GovernanceDagHeadValidationError,
 ) -> &'static str {
@@ -2597,7 +2492,6 @@ fn governance_dag_head_validation_category(
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn governance_dag_chain_validation_code(error: &GovernanceDagChainValidationError) -> &'static str {
     match error {
         GovernanceDagChainValidationError::InvalidBlock { source, .. } => {
@@ -2617,7 +2511,6 @@ fn governance_dag_chain_validation_code(error: &GovernanceDagChainValidationErro
         | GovernanceDagChainValidationError::PublisherKeyMismatch { .. } => "SFS-SIG-006",
     }
 }
-
 fn governance_dag_chain_validation_category(
     error: &GovernanceDagChainValidationError,
 ) -> &'static str {
@@ -2630,7 +2523,6 @@ fn governance_dag_chain_validation_category(
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn governance_dag_head_chain_validation_code(
     error: &GovernanceDagHeadChainValidationError,
 ) -> &'static str {
@@ -2654,7 +2546,6 @@ fn governance_dag_head_chain_validation_code(
         | GovernanceDagHeadChainValidationError::HeadTimestampBeforeTip { .. } => "SFS-GOV-008",
     }
 }
-
 fn governance_dag_head_chain_validation_category(
     error: &GovernanceDagHeadChainValidationError,
 ) -> &'static str {
@@ -2680,7 +2571,6 @@ fn governance_dag_head_chain_validation_category(
         }
     }
 }
-
 /// Repair payload kinds supported by the reference validator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepairValidationPayloadKindV1 {
@@ -2701,7 +2591,6 @@ pub enum RepairValidationPayloadKindV1 {
     /// [`RepairAuditEventV1`] payload.
     AuditEvent,
 }
-
 impl RepairValidationPayloadKindV1 {
     fn input_kind(self) -> &'static str {
         match self {
@@ -2715,7 +2604,6 @@ impl RepairValidationPayloadKindV1 {
             Self::AuditEvent => "repair_audit_event",
         }
     }
-
     fn schema(self) -> &'static str {
         match self {
             Self::Evidence => "RepairEvidenceV1",
@@ -2728,7 +2616,6 @@ impl RepairValidationPayloadKindV1 {
             Self::AuditEvent => "RepairAuditEventV1",
         }
     }
-
     fn success_message(self) -> &'static str {
         match self {
             Self::Evidence => "repair evidence accepted",
@@ -2742,7 +2629,6 @@ impl RepairValidationPayloadKindV1 {
         }
     }
 }
-
 /// Orderbook payload kinds supported by the reference validator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderbookValidationPayloadKindV1 {
@@ -2757,7 +2643,6 @@ pub enum OrderbookValidationPayloadKindV1 {
     /// [`SettlementReceiptV1`] payload.
     SettlementReceipt,
 }
-
 impl OrderbookValidationPayloadKindV1 {
     fn input_kind(self) -> &'static str {
         match self {
@@ -2768,7 +2653,6 @@ impl OrderbookValidationPayloadKindV1 {
             Self::SettlementReceipt => "settlement_receipt",
         }
     }
-
     fn schema(self) -> &'static str {
         match self {
             Self::OrderRequest => "OrderRequestV1",
@@ -2778,7 +2662,6 @@ impl OrderbookValidationPayloadKindV1 {
             Self::SettlementReceipt => "SettlementReceiptV1",
         }
     }
-
     fn tag(self) -> &'static str {
         match self {
             Self::OrderRequest => "order_request",
@@ -2788,7 +2671,6 @@ impl OrderbookValidationPayloadKindV1 {
             Self::SettlementReceipt => "settlement_receipt",
         }
     }
-
     fn success_message(self) -> &'static str {
         match self {
             Self::OrderRequest => "orderbook order request accepted",
@@ -2799,7 +2681,6 @@ impl OrderbookValidationPayloadKindV1 {
         }
     }
 }
-
 /// PoP credential payload kinds supported by the reference validator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PopValidationPayloadKindV1 {
@@ -2818,7 +2699,6 @@ pub enum PopValidationPayloadKindV1 {
     /// [`PopMembershipProofV1`] payload.
     MembershipProof,
 }
-
 impl PopValidationPayloadKindV1 {
     fn input_kind(self) -> &'static str {
         match self {
@@ -2831,7 +2711,6 @@ impl PopValidationPayloadKindV1 {
             Self::MembershipProof => "pop_membership_proof",
         }
     }
-
     fn schema(self) -> &'static str {
         match self {
             Self::Credential => "PopCredentialV1",
@@ -2843,7 +2722,6 @@ impl PopValidationPayloadKindV1 {
             Self::MembershipProof => "PopMembershipProofV1",
         }
     }
-
     fn tag(self) -> &'static str {
         match self {
             Self::Credential => "credential",
@@ -2855,7 +2733,6 @@ impl PopValidationPayloadKindV1 {
             Self::MembershipProof => "membership_proof",
         }
     }
-
     fn success_message(self) -> &'static str {
         match self {
             Self::Credential => "PoP credential accepted",
@@ -2868,7 +2745,6 @@ impl PopValidationPayloadKindV1 {
         }
     }
 }
-
 /// SoraFS hedging and billing payload kinds supported by the reference validator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HedgingValidationPayloadKindV1 {
@@ -2881,7 +2757,6 @@ pub enum HedgingValidationPayloadKindV1 {
     /// [`BillingStatementV1`] payload.
     BillingStatement,
 }
-
 impl HedgingValidationPayloadKindV1 {
     fn input_kind(self) -> &'static str {
         match self {
@@ -2891,7 +2766,6 @@ impl HedgingValidationPayloadKindV1 {
             Self::BillingStatement => "billing_statement",
         }
     }
-
     fn schema(self) -> &'static str {
         match self {
             Self::PriceFeed => "HedgingPriceFeedV1",
@@ -2900,7 +2774,6 @@ impl HedgingValidationPayloadKindV1 {
             Self::BillingStatement => "BillingStatementV1",
         }
     }
-
     fn tag(self) -> &'static str {
         match self {
             Self::PriceFeed => "price_feed",
@@ -2909,7 +2782,6 @@ impl HedgingValidationPayloadKindV1 {
             Self::BillingStatement => "billing_statement",
         }
     }
-
     fn success_message(self) -> &'static str {
         match self {
             Self::PriceFeed => "hedging price feed accepted",
@@ -2919,7 +2791,6 @@ impl HedgingValidationPayloadKindV1 {
         }
     }
 }
-
 /// Validates a Norito-encoded orderbook payload and emits a reference outcome.
 #[must_use]
 pub fn validate_orderbook_payload_bytes(
@@ -2933,7 +2804,6 @@ pub fn validate_orderbook_payload_bytes(
         kind.input_kind(),
         input_label.clone(),
     )];
-
     match kind {
         OrderbookValidationPayloadKindV1::OrderRequest => match decode_order_request_v1(bytes) {
             Ok(payload) => validate_orderbook_payload_value(
@@ -2991,7 +2861,6 @@ pub fn validate_orderbook_payload_bytes(
         }
     }
 }
-
 /// Validates a Norito-encoded SoraFS hedging/billing payload and emits a reference outcome.
 #[must_use]
 pub fn validate_hedging_payload_bytes(
@@ -3005,7 +2874,6 @@ pub fn validate_hedging_payload_bytes(
         kind.input_kind(),
         input_label.clone(),
     )];
-
     match kind {
         HedgingValidationPayloadKindV1::PriceFeed => match decode_hedging_price_feed_v1(bytes) {
             Ok(payload) => validate_hedging_payload_value(
@@ -3055,7 +2923,6 @@ pub fn validate_hedging_payload_bytes(
         }
     }
 }
-
 /// Error returned while signing already-encoded orderbook payload bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum OrderbookPayloadSigningError {
@@ -3099,7 +2966,6 @@ pub enum OrderbookPayloadSigningError {
         reason: String,
     },
 }
-
 /// Field-level input for building a signed [`OrderRequestV1`] payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderbookOrderRequestFieldsV1 {
@@ -3126,7 +2992,6 @@ pub struct OrderbookOrderRequestFieldsV1 {
     /// Taker fee in basis points.
     pub taker_fee_bps: u16,
 }
-
 /// Field-level input for building a signed [`OrderCancelV1`] payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderbookOrderCancelFieldsV1 {
@@ -3139,7 +3004,6 @@ pub struct OrderbookOrderCancelFieldsV1 {
     /// Owner nonce used to prevent replay.
     pub nonce: u64,
 }
-
 /// Field-level input for building a signed [`SettlementReceiptV1`] payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderbookSettlementReceiptFieldsV1 {
@@ -3166,7 +3030,6 @@ pub struct OrderbookSettlementReceiptFieldsV1 {
     /// Unix timestamp (seconds) when the receipt was issued.
     pub issued_at_unix: u64,
 }
-
 fn empty_sdk_orderbook_signature() -> OrderbookSignatureV1 {
     OrderbookSignatureV1 {
         algorithm: SignatureAlgorithm::Ed25519,
@@ -3174,14 +3037,12 @@ fn empty_sdk_orderbook_signature() -> OrderbookSignatureV1 {
         signature: Vec::new(),
     }
 }
-
 fn encode_signed_orderbook_builder_payload<T: norito::core::NoritoSerialize>(
     schema: &'static str,
     value: &T,
 ) -> Result<Vec<u8>, OrderbookPayloadSigningError> {
     encode_signed_orderbook_payload(schema, value)
 }
-
 /// Build, sign, validate, and encode a field-level order request payload.
 pub fn build_signed_orderbook_order_request_bytes_ed25519_v1(
     fields: OrderbookOrderRequestFieldsV1,
@@ -3220,7 +3081,6 @@ pub fn build_signed_orderbook_order_request_bytes_ed25519_v1(
     })?;
     encode_signed_orderbook_builder_payload(schema, &signed)
 }
-
 /// Build, sign, validate, and encode a field-level order-cancel payload.
 pub fn build_signed_orderbook_order_cancel_bytes_ed25519_v1(
     fields: OrderbookOrderCancelFieldsV1,
@@ -3250,7 +3110,6 @@ pub fn build_signed_orderbook_order_cancel_bytes_ed25519_v1(
     })?;
     encode_signed_orderbook_builder_payload(schema, &signed)
 }
-
 /// Build, sign, validate, and encode a field-level settlement receipt payload.
 pub fn build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(
     fields: OrderbookSettlementReceiptFieldsV1,
@@ -3283,7 +3142,6 @@ pub fn build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(
     })?;
     encode_signed_orderbook_builder_payload(schema, &signed)
 }
-
 /// Signs an already-encoded mutable orderbook payload and returns signed Norito bytes.
 ///
 /// This helper accepts `OrderRequestV1`, `OrderCancelV1`, and
@@ -3349,7 +3207,6 @@ pub fn sign_orderbook_payload_bytes_ed25519_v1(
         other => Err(OrderbookPayloadSigningError::UnsupportedPayloadKind { kind: other }),
     }
 }
-
 fn orderbook_signing_key_from_bytes(
     bytes: &[u8],
 ) -> Result<SigningKey, OrderbookPayloadSigningError> {
@@ -3365,7 +3222,6 @@ fn orderbook_signing_key_from_bytes(
     signing_key.copy_from_slice(bytes);
     Ok(SigningKey::from_bytes(&signing_key))
 }
-
 fn encode_signed_orderbook_payload<T>(
     schema: &'static str,
     payload: &T,
@@ -3378,7 +3234,6 @@ where
         reason: err.to_string(),
     })
 }
-
 fn validate_orderbook_payload_value(
     kind: OrderbookValidationPayloadKindV1,
     result: Result<(), OrderbookValidationError>,
@@ -3408,7 +3263,6 @@ fn validate_orderbook_payload_value(
             generated_at,
         );
     }
-
     ValidationOutcomeV1::ok(
         "SFS-OK-000",
         kind.success_message(),
@@ -3422,7 +3276,6 @@ fn validate_orderbook_payload_value(
         generated_at,
     )
 }
-
 fn orderbook_decode_error(
     kind: OrderbookValidationPayloadKindV1,
     error: String,
@@ -3444,7 +3297,6 @@ fn orderbook_decode_error(
         generated_at,
     )
 }
-
 fn validate_hedging_payload_value(
     kind: HedgingValidationPayloadKindV1,
     result: Result<(), HedgingValidationError>,
@@ -3455,7 +3307,6 @@ fn validate_hedging_payload_value(
     if let Err(error) = result {
         return hedging_validation_error_outcome(kind, error, context, inputs, generated_at);
     }
-
     ValidationOutcomeV1::ok(
         "SFS-OK-000",
         kind.success_message(),
@@ -3469,7 +3320,6 @@ fn validate_hedging_payload_value(
         generated_at,
     )
 }
-
 fn hedging_decode_error(
     kind: HedgingValidationPayloadKindV1,
     error: String,
@@ -3491,7 +3341,6 @@ fn hedging_decode_error(
         generated_at,
     )
 }
-
 /// Validates a Norito-encoded PoP credential payload and emits a reference outcome.
 #[must_use]
 pub fn validate_pop_payload_bytes(
@@ -3502,7 +3351,6 @@ pub fn validate_pop_payload_bytes(
 ) -> ValidationOutcomeV1 {
     let input = ValidationInputV1::new(kind.input_kind(), input_label);
     let inputs = vec![input];
-
     match kind {
         PopValidationPayloadKindV1::Credential => {
             match decode_pop_reference_payload::<PopCredentialV1>(bytes) {
@@ -3590,7 +3438,6 @@ pub fn validate_pop_payload_bytes(
         }
     }
 }
-
 fn decode_pop_reference_payload<T>(bytes: &[u8]) -> Result<T, String>
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
@@ -3616,7 +3463,6 @@ where
     }
     Ok(payload)
 }
-
 fn validate_pop_payload_value(
     kind: PopValidationPayloadKindV1,
     result: Result<(), PopCredentialValidationError>,
@@ -3627,7 +3473,6 @@ fn validate_pop_payload_value(
     if let Err(error) = result {
         return pop_validation_error_outcome(kind, error, context, inputs, generated_at);
     }
-
     ValidationOutcomeV1::ok(
         "SFS-OK-000",
         kind.success_message(),
@@ -3641,7 +3486,6 @@ fn validate_pop_payload_value(
         generated_at,
     )
 }
-
 fn pop_decode_error(
     kind: PopValidationPayloadKindV1,
     error: String,
@@ -3663,7 +3507,6 @@ fn pop_decode_error(
         generated_at,
     )
 }
-
 /// Validates a Norito-encoded [`ProviderAdvertV1`] and emits a reference outcome.
 #[must_use]
 pub fn validate_provider_advert_bytes(
@@ -3689,7 +3532,6 @@ pub fn validate_provider_advert_bytes(
             );
         }
     };
-
     let mut context = advert_context(&advert);
     if let Err(error) = advert.validate_with_body(now) {
         let code = advert_validation_code(&error);
@@ -3712,7 +3554,6 @@ pub fn validate_provider_advert_bytes(
             generated_at,
         );
     }
-
     if let Err(error) = advert.verify_signature() {
         context.push(ValidationContextFieldV1::new(
             "signature_error",
@@ -3732,7 +3573,6 @@ pub fn validate_provider_advert_bytes(
             generated_at,
         );
     }
-
     ValidationOutcomeV1::ok(
         "SFS-OK-000",
         "provider advert accepted",
@@ -3745,7 +3585,6 @@ pub fn validate_provider_advert_bytes(
         generated_at,
     )
 }
-
 /// Validates a Norito-encoded repair payload and emits a reference outcome.
 #[must_use]
 pub fn validate_repair_payload_bytes(
@@ -3775,7 +3614,6 @@ pub fn validate_repair_payload_bytes(
             }
         };
     }
-
     let context = match kind {
         RepairValidationPayloadKindV1::Evidence => {
             let evidence = decode_repair_payload!(RepairEvidenceV1);
@@ -3854,7 +3692,6 @@ pub fn validate_repair_payload_bytes(
             context
         }
     };
-
     ValidationOutcomeV1::ok(
         "SFS-OK-000",
         kind.success_message(),
@@ -3867,14 +3704,12 @@ pub fn validate_repair_payload_bytes(
         generated_at,
     )
 }
-
 fn decode_repair_archive_payload<T>(bytes: &[u8]) -> Result<T, norito::Error>
 where
     T: norito::NoritoSerialize + for<'decode> norito::NoritoDeserialize<'decode>,
 {
     norito::decode_canonical::<T>(bytes)
 }
-
 /// Validates a canonical appeal-finance `CancelAssetLock` V1 Norito payload.
 #[must_use]
 pub fn validate_appeal_finance_cancel_asset_lock_bytes(
@@ -3901,7 +3736,6 @@ pub fn validate_appeal_finance_cancel_asset_lock_bytes(
             );
         }
     };
-
     let context = vec![
         ValidationContextFieldV1::new("schema", "CancelAssetLock"),
         ValidationContextFieldV1::new("escrow_id_hex", hex::encode(instruction.escrow_id.as_ref())),
@@ -3926,7 +3760,6 @@ pub fn validate_appeal_finance_cancel_asset_lock_bytes(
             generated_at,
         );
     }
-
     ValidationOutcomeV1::ok(
         "SFS-OK-000",
         "appeal-finance CancelAssetLock payload accepted",
@@ -3939,7 +3772,6 @@ pub fn validate_appeal_finance_cancel_asset_lock_bytes(
         generated_at,
     )
 }
-
 fn decode_cancel_asset_lock_reference(bytes: &[u8]) -> Result<CancelAssetLockWireV1, String> {
     if bytes.len() > CANCEL_ASSET_LOCK_REFERENCE_MAX_BYTES_V1 {
         return Err(format!(
@@ -3965,7 +3797,6 @@ fn decode_cancel_asset_lock_reference(bytes: &[u8]) -> Result<CancelAssetLockWir
     }
     Ok(instruction)
 }
-
 /// Validates a Norito-encoded [`ReplicationOrderV1`] and emits a reference outcome.
 #[must_use]
 pub fn validate_replication_order_bytes(
@@ -3993,7 +3824,6 @@ pub fn validate_replication_order_bytes(
             );
         }
     };
-
     let mut context = replication_order_context(&order);
     if let Err(error) = order.validate() {
         let code = replication_order_validation_code(&error);
@@ -4016,7 +3846,6 @@ pub fn validate_replication_order_bytes(
             generated_at,
         );
     }
-
     ValidationOutcomeV1::ok(
         "SFS-OK-000",
         "replication order accepted",
@@ -4029,7 +3858,6 @@ pub fn validate_replication_order_bytes(
         generated_at,
     )
 }
-
 /// Validates a Norito-encoded [`SignedReplicationOrderV1`] and emits a reference outcome.
 #[must_use]
 pub fn validate_signed_replication_order_bytes(
@@ -4060,7 +3888,6 @@ pub fn validate_signed_replication_order_bytes(
             );
         }
     };
-
     let mut context = signed_replication_order_context(&envelope);
     if let Err(error) = envelope.validate() {
         let code = signed_replication_order_validation_code(&error);
@@ -4083,7 +3910,6 @@ pub fn validate_signed_replication_order_bytes(
             generated_at,
         );
     }
-
     if let Err(error) = envelope.verify_signature() {
         context.push(ValidationContextFieldV1::new(
             "signature_error",
@@ -4104,7 +3930,6 @@ pub fn validate_signed_replication_order_bytes(
             generated_at,
         );
     }
-
     ValidationOutcomeV1::ok(
         "SFS-OK-000",
         "signed replication order accepted",
@@ -4117,7 +3942,6 @@ pub fn validate_signed_replication_order_bytes(
         generated_at,
     )
 }
-
 /// Validates a Norito-encoded [`ProviderAdmissionEnvelopeV1`] and emits a reference outcome.
 #[must_use]
 pub fn validate_provider_admission_envelope_bytes(
@@ -4145,7 +3969,6 @@ pub fn validate_provider_admission_envelope_bytes(
             );
         }
     };
-
     let mut context = provider_admission_context(&envelope);
     match verify_envelope_untrusted_signers(&envelope) {
         Ok(advert_digest) => {
@@ -4192,7 +4015,6 @@ pub fn validate_provider_admission_envelope_bytes(
         }
     }
 }
-
 /// Validates a Norito-encoded provider admission renewal against a previous envelope.
 #[must_use]
 pub fn validate_provider_admission_renewal_bytes(
@@ -4246,7 +4068,6 @@ pub fn validate_provider_admission_renewal_bytes(
             );
         }
     };
-
     let mut context = provider_admission_renewal_context(&renewal);
     let previous_record = match AdmissionRecord::new_untrusted_signers(previous_envelope) {
         Ok(record) => record,
@@ -4272,7 +4093,6 @@ pub fn validate_provider_admission_renewal_bytes(
             );
         }
     };
-
     match previous_record.apply_renewal_untrusted_signers(&renewal) {
         Ok(updated_record) => {
             context.push(ValidationContextFieldV1::new(
@@ -4318,7 +4138,6 @@ pub fn validate_provider_admission_renewal_bytes(
         }
     }
 }
-
 /// Validates a Norito-encoded provider admission revocation against an envelope.
 #[must_use]
 pub fn validate_provider_admission_revocation_bytes(
@@ -4370,7 +4189,6 @@ pub fn validate_provider_admission_revocation_bytes(
             );
         }
     };
-
     let mut context = provider_admission_revocation_context(&revocation);
     let record = match AdmissionRecord::new_untrusted_signers(envelope) {
         Ok(record) => record,
@@ -4396,7 +4214,6 @@ pub fn validate_provider_admission_revocation_bytes(
             );
         }
     };
-
     match record.verify_revocation_untrusted_signers(&revocation) {
         Ok(()) => {
             context.push(ValidationContextFieldV1::new(
@@ -4438,7 +4255,6 @@ pub fn validate_provider_admission_revocation_bytes(
         }
     }
 }
-
 /// Diagnoses a Norito-encoded [`PdpCommitmentV1`] without authorizing acceptance.
 #[must_use]
 pub fn validate_pdp_commitment_bytes(
@@ -4463,7 +4279,6 @@ pub fn validate_pdp_commitment_bytes(
             );
         }
     };
-
     let mut context = pdp_commitment_context(&commitment);
     if let Err(error) = commitment.validate() {
         let code = pdp_commitment_validation_code(&error);
@@ -4483,7 +4298,6 @@ pub fn validate_pdp_commitment_bytes(
             generated_at,
         );
     }
-
     pdp_structural_ok(
         "PDP commitment is structurally valid",
         context,
@@ -4491,7 +4305,6 @@ pub fn validate_pdp_commitment_bytes(
         generated_at,
     )
 }
-
 /// Diagnoses a Norito-encoded [`PdpChallengeV1`] without authorizing acceptance.
 #[must_use]
 pub fn validate_pdp_challenge_bytes(
@@ -4513,7 +4326,6 @@ pub fn validate_pdp_challenge_bytes(
             );
         }
     };
-
     let mut context = pdp_challenge_context(&challenge);
     if let Err(error) = challenge.validate() {
         let code = pdp_challenge_validation_code(&error);
@@ -4533,7 +4345,6 @@ pub fn validate_pdp_challenge_bytes(
             generated_at,
         );
     }
-
     pdp_structural_ok(
         "PDP challenge is structurally valid",
         context,
@@ -4541,7 +4352,6 @@ pub fn validate_pdp_challenge_bytes(
         generated_at,
     )
 }
-
 /// Diagnoses a Norito-encoded [`PdpProofV1`] without admission or root verification.
 #[must_use]
 pub fn validate_pdp_proof_bytes(
@@ -4563,7 +4373,6 @@ pub fn validate_pdp_proof_bytes(
             );
         }
     };
-
     let mut context = pdp_proof_context(&proof);
     if let Err(error) = proof.validate() {
         let code = pdp_proof_validation_code(&error);
@@ -4583,7 +4392,6 @@ pub fn validate_pdp_proof_bytes(
             generated_at,
         );
     }
-
     pdp_structural_ok(
         "PDP proof is structurally valid; signer admission and Merkle roots were not evaluated",
         context,
@@ -4591,7 +4399,6 @@ pub fn validate_pdp_proof_bytes(
         generated_at,
     )
 }
-
 /// Validates Norito-encoded PDP commitment and challenge payload binding.
 #[must_use]
 pub fn validate_pdp_commitment_challenge_bytes(
@@ -4629,7 +4436,6 @@ pub fn validate_pdp_commitment_challenge_bytes(
             );
         }
     };
-
     let mut context = pdp_commitment_challenge_context(&commitment, &challenge);
     if let Err(error) = commitment.validate() {
         let code = pdp_commitment_validation_code(&error);
@@ -4742,7 +4548,6 @@ pub fn validate_pdp_commitment_challenge_bytes(
             generated_at,
         );
     }
-
     pdp_structural_ok(
         "PDP commitment/challenge binding is structurally valid",
         context,
@@ -4750,7 +4555,6 @@ pub fn validate_pdp_commitment_challenge_bytes(
         generated_at,
     )
 }
-
 /// Exhaustively diagnoses PDP witnesses without evaluating governed admission.
 #[must_use]
 pub fn validate_pdp_commitment_challenge_proof_bytes(
@@ -4800,7 +4604,6 @@ pub fn validate_pdp_commitment_challenge_proof_bytes(
             return pdp_decode_error("PdpProofV1", "pdp proof", error, inputs, generated_at);
         }
     };
-
     let mut context = pdp_commitment_challenge_context(&commitment, &challenge);
     context.extend(pdp_proof_context(&proof));
     context.push(ValidationContextFieldV1::new(
@@ -4828,7 +4631,6 @@ pub fn validate_pdp_commitment_challenge_proof_bytes(
             generated_at,
         );
     }
-
     pdp_diagnostic_ok(
         "PDP sampled bytes, signature, geometry, coverage, and both Merkle roots are valid; production admission was not evaluated",
         "exhaustive_pdp_witness_diagnostic_without_admission",
@@ -4837,7 +4639,6 @@ pub fn validate_pdp_commitment_challenge_proof_bytes(
         generated_at,
     )
 }
-
 /// Exhaustively verifies canonical PDP bytes against an active governed admission record.
 ///
 /// `active_admission` must come from the caller's current council-verified,
@@ -4892,7 +4693,6 @@ pub fn validate_pdp_commitment_challenge_proof_with_admission_bytes(
             return pdp_decode_error("PdpProofV1", "pdp proof", error, inputs, generated_at);
         }
     };
-
     let mut context = pdp_commitment_challenge_context(&commitment, &challenge);
     context.extend(pdp_proof_context(&proof));
     context.extend([
@@ -4910,7 +4710,6 @@ pub fn validate_pdp_commitment_challenge_proof_with_admission_bytes(
         ),
         ValidationContextFieldV1::new("verification_scope", "exhaustive_production"),
     ]);
-
     let verified = match verify_pdp_bundle_v1(&commitment, &challenge, &proof, active_admission) {
         Ok(verified) => verified,
         Err(error) => {
@@ -4935,7 +4734,6 @@ pub fn validate_pdp_commitment_challenge_proof_with_admission_bytes(
             );
         }
     };
-
     context.extend([
         ValidationContextFieldV1::new("production_acceptance", "true"),
         ValidationContextFieldV1::new(
@@ -4964,7 +4762,6 @@ pub fn validate_pdp_commitment_challenge_proof_with_admission_bytes(
         generated_at,
     )
 }
-
 /// Validates Norito-encoded PDP challenge/proof payloads and their pair binding.
 #[must_use]
 pub fn validate_pdp_challenge_proof_bytes(
@@ -5002,7 +4799,6 @@ pub fn validate_pdp_challenge_proof_bytes(
             );
         }
     };
-
     let mut context = pdp_challenge_proof_context(&challenge, &proof);
     if let Err(error) = challenge.validate() {
         let code = pdp_challenge_validation_code(&error);
@@ -5132,7 +4928,6 @@ pub fn validate_pdp_challenge_proof_bytes(
             generated_at,
         );
     }
-
     pdp_structural_ok(
         "PDP challenge/proof binding and proof signature are structurally valid; signer admission and Merkle roots were not evaluated",
         context,
@@ -5140,7 +4935,6 @@ pub fn validate_pdp_challenge_proof_bytes(
         generated_at,
     )
 }
-
 /// Validates Norito-encoded PoR challenge/proof payloads and their pair binding.
 #[must_use]
 pub fn validate_por_challenge_proof_bytes(
@@ -5184,7 +4978,6 @@ pub fn validate_por_challenge_proof_bytes(
             );
         }
     };
-
     let mut context = por_context(&challenge, &proof);
     if let Err(error) = challenge.validate() {
         let code = por_challenge_validation_code(&error);
@@ -5300,7 +5093,6 @@ pub fn validate_por_challenge_proof_bytes(
             generated_at,
         );
     }
-
     if let Err(error) = proof.verify_signature() {
         context.push(ValidationContextFieldV1::new(
             "proof_signature_error",
@@ -5320,7 +5112,6 @@ pub fn validate_por_challenge_proof_bytes(
             generated_at,
         );
     }
-
     context.push(ValidationContextFieldV1::new(
         "proof_digest_hex",
         hex::encode(proof.proof_digest()),
@@ -5337,7 +5128,6 @@ pub fn validate_por_challenge_proof_bytes(
         generated_at,
     )
 }
-
 /// Validates a Norito-encoded [`PotrReceiptV1`] and emits a reference outcome.
 #[must_use]
 pub fn validate_potr_receipt_bytes(
@@ -5363,7 +5153,6 @@ pub fn validate_potr_receipt_bytes(
             );
         }
     };
-
     let mut context = potr_context(&receipt);
     if let Err(error) = receipt.validate() {
         let code = potr_receipt_validation_code(&error);
@@ -5386,7 +5175,6 @@ pub fn validate_potr_receipt_bytes(
             generated_at,
         );
     }
-
     if let Some(expected_tier) = expected_tier
         && receipt.tier != expected_tier
     {
@@ -5412,7 +5200,6 @@ pub fn validate_potr_receipt_bytes(
             generated_at,
         );
     }
-
     ValidationOutcomeV1::ok(
         "SFS-OK-000",
         "PoTR receipt accepted",
@@ -5425,7 +5212,6 @@ pub fn validate_potr_receipt_bytes(
         generated_at,
     )
 }
-
 fn advert_context(advert: &ProviderAdvertV1) -> Vec<ValidationContextFieldV1> {
     vec![
         ValidationContextFieldV1::new("provider_id_hex", hex::encode(advert.body.provider_id)),
@@ -5439,14 +5225,12 @@ fn advert_context(advert: &ProviderAdvertV1) -> Vec<ValidationContextFieldV1> {
         ),
     ]
 }
-
 fn pdp_tags(code: &str) -> Vec<String> {
     vec![
         "sorafs.reference.pdp".to_owned(),
         format!("sorafs.reference.code.{code}"),
     ]
 }
-
 fn decode_pdp_commitment_reference(bytes: &[u8]) -> Result<PdpCommitmentV1, String> {
     decode_pdp_reference_payload(
         bytes,
@@ -5455,7 +5239,6 @@ fn decode_pdp_commitment_reference(bytes: &[u8]) -> Result<PdpCommitmentV1, Stri
         256,
     )
 }
-
 fn decode_pdp_challenge_reference(bytes: &[u8]) -> Result<PdpChallengeV1, String> {
     decode_pdp_reference_payload(
         bytes,
@@ -5464,7 +5247,6 @@ fn decode_pdp_challenge_reference(bytes: &[u8]) -> Result<PdpChallengeV1, String
         PDP_MAX_SEGMENT_SAMPLES_V1.max(PDP_MAX_HOT_LEAVES_PER_SEGMENT_SAMPLE_V1),
     )
 }
-
 fn decode_pdp_proof_reference(bytes: &[u8]) -> Result<PdpProofV1, String> {
     decode_pdp_reference_payload(
         bytes,
@@ -5476,7 +5258,6 @@ fn decode_pdp_proof_reference(bytes: &[u8]) -> Result<PdpProofV1, String> {
             .max(PDP_MAX_MERKLE_PATH_DEPTH_V1),
     )
 }
-
 fn decode_pdp_reference_payload<T>(
     bytes: &[u8],
     schema: &'static str,
@@ -5509,7 +5290,6 @@ where
     }
     Ok(payload)
 }
-
 fn pdp_decode_error(
     schema: &'static str,
     label: &'static str,
@@ -5528,7 +5308,6 @@ fn pdp_decode_error(
         generated_at,
     )
 }
-
 fn pdp_binding_error(
     message: impl Into<String>,
     action: impl Into<String>,
@@ -5547,7 +5326,6 @@ fn pdp_binding_error(
         generated_at,
     )
 }
-
 fn pdp_structural_ok(
     message: impl Into<String>,
     context: Vec<ValidationContextFieldV1>,
@@ -5562,7 +5340,6 @@ fn pdp_structural_ok(
         generated_at,
     )
 }
-
 fn pdp_diagnostic_ok(
     message: impl Into<String>,
     verification_scope: impl Into<String>,
@@ -5591,7 +5368,6 @@ fn pdp_diagnostic_ok(
         generated_at,
     )
 }
-
 fn pdp_commitment_context(commitment: &PdpCommitmentV1) -> Vec<ValidationContextFieldV1> {
     vec![
         ValidationContextFieldV1::new("schema", "PdpCommitmentV1"),
@@ -5622,7 +5398,6 @@ fn pdp_commitment_context(commitment: &PdpCommitmentV1) -> Vec<ValidationContext
         ValidationContextFieldV1::new("sealed_at", commitment.sealed_at.to_string()),
     ]
 }
-
 fn pdp_challenge_context(challenge: &PdpChallengeV1) -> Vec<ValidationContextFieldV1> {
     vec![
         ValidationContextFieldV1::new("schema", "PdpChallengeV1"),
@@ -5656,7 +5431,6 @@ fn pdp_challenge_context(challenge: &PdpChallengeV1) -> Vec<ValidationContextFie
         ),
     ]
 }
-
 fn pdp_proof_context(proof: &PdpProofV1) -> Vec<ValidationContextFieldV1> {
     vec![
         ValidationContextFieldV1::new("schema", "PdpProofV1"),
@@ -5679,7 +5453,6 @@ fn pdp_proof_context(proof: &PdpProofV1) -> Vec<ValidationContextFieldV1> {
         ValidationContextFieldV1::new("issued_at_unix", proof.issued_at_unix.to_string()),
     ]
 }
-
 fn pdp_commitment_challenge_context(
     commitment: &PdpCommitmentV1,
     challenge: &PdpChallengeV1,
@@ -5704,7 +5477,6 @@ fn pdp_commitment_challenge_context(
     ]);
     context
 }
-
 fn pdp_challenge_proof_context(
     challenge: &PdpChallengeV1,
     proof: &PdpProofV1,
@@ -5733,7 +5505,6 @@ fn pdp_challenge_proof_context(
         ValidationContextFieldV1::new("issued_at_unix", proof.issued_at_unix.to_string()),
     ]
 }
-
 fn validate_pdp_proof_coverage(
     challenge: &PdpChallengeV1,
     proof: &PdpProofV1,
@@ -5769,14 +5540,11 @@ fn validate_pdp_proof_coverage(
             }
         }
     }
-
     Ok(())
 }
-
 fn chunk_profile_label(profile: &crate::ChunkingProfileV1) -> String {
     format!("{}.{}@{}", profile.namespace, profile.name, profile.semver)
 }
-
 fn por_context(challenge: &PorChallengeV1, proof: &PorProofV1) -> Vec<ValidationContextFieldV1> {
     vec![
         ValidationContextFieldV1::new("challenge_id_hex", hex::encode(challenge.challenge_id)),
@@ -5794,7 +5562,6 @@ fn por_context(challenge: &PorChallengeV1, proof: &PorProofV1) -> Vec<Validation
         ValidationContextFieldV1::new("submitted_at", proof.submitted_at.to_string()),
     ]
 }
-
 fn potr_context(receipt: &PotrReceiptV1) -> Vec<ValidationContextFieldV1> {
     vec![
         ValidationContextFieldV1::new("manifest_digest_hex", hex::encode(receipt.manifest_digest)),
@@ -5810,7 +5577,6 @@ fn potr_context(receipt: &PotrReceiptV1) -> Vec<ValidationContextFieldV1> {
         ValidationContextFieldV1::new("range_end", receipt.range_end.to_string()),
     ]
 }
-
 fn proof_stream_tier_label(tier: ProofStreamTier) -> &'static str {
     match tier {
         ProofStreamTier::Hot => "hot",
@@ -5818,7 +5584,6 @@ fn proof_stream_tier_label(tier: ProofStreamTier) -> &'static str {
         ProofStreamTier::Archive => "archive",
     }
 }
-
 fn provider_admission_context(
     envelope: &ProviderAdmissionEnvelopeV1,
 ) -> Vec<ValidationContextFieldV1> {
@@ -5846,7 +5611,6 @@ fn provider_admission_context(
         ),
     ]
 }
-
 fn provider_admission_renewal_context(
     renewal: &ProviderAdmissionRenewalV1,
 ) -> Vec<ValidationContextFieldV1> {
@@ -5872,7 +5636,6 @@ fn provider_admission_renewal_context(
         ValidationContextFieldV1::new("notes_present", renewal.notes.is_some().to_string()),
     ]
 }
-
 fn provider_admission_revocation_context(
     revocation: &ProviderAdmissionRevocationV1,
 ) -> Vec<ValidationContextFieldV1> {
@@ -5891,7 +5654,6 @@ fn provider_admission_revocation_context(
         ValidationContextFieldV1::new("notes_present", revocation.notes.is_some().to_string()),
     ]
 }
-
 fn replication_order_context(order: &ReplicationOrderV1) -> Vec<ValidationContextFieldV1> {
     vec![
         ValidationContextFieldV1::new("order_id_hex", hex::encode(order.order_id)),
@@ -5904,7 +5666,6 @@ fn replication_order_context(order: &ReplicationOrderV1) -> Vec<ValidationContex
         ValidationContextFieldV1::new("deadline_at", order.deadline_at.to_string()),
     ]
 }
-
 fn signed_replication_order_context(
     envelope: &SignedReplicationOrderV1,
 ) -> Vec<ValidationContextFieldV1> {
@@ -5931,14 +5692,12 @@ fn signed_replication_order_context(
     ));
     context
 }
-
 fn signature_algorithm_label(algorithm: SignatureAlgorithm) -> &'static str {
     match algorithm {
         SignatureAlgorithm::Ed25519 => "ed25519",
         SignatureAlgorithm::MultiSig => "multi-sig",
     }
 }
-
 fn repair_evidence_context(evidence: &RepairEvidenceV1) -> Vec<ValidationContextFieldV1> {
     let mut context = vec![
         ValidationContextFieldV1::new("manifest_digest_hex", hex::encode(evidence.manifest_digest)),
@@ -5953,7 +5712,6 @@ fn repair_evidence_context(evidence: &RepairEvidenceV1) -> Vec<ValidationContext
     }
     context
 }
-
 fn repair_report_context(report: &RepairReportV1) -> Vec<ValidationContextFieldV1> {
     let mut context = repair_evidence_context(&report.evidence);
     context.push(ValidationContextFieldV1::new(
@@ -5970,7 +5728,6 @@ fn repair_report_context(report: &RepairReportV1) -> Vec<ValidationContextFieldV
     ));
     context
 }
-
 fn repair_task_context(task: &RepairTaskRecordV1) -> Vec<ValidationContextFieldV1> {
     let mut context = vec![
         ValidationContextFieldV1::new("ticket_id", task.ticket_id.to_string()),
@@ -5997,7 +5754,6 @@ fn repair_task_context(task: &RepairTaskRecordV1) -> Vec<ValidationContextFieldV
     ));
     context
 }
-
 fn repair_slash_proposal_context(
     proposal: &RepairSlashProposalV1,
 ) -> Vec<ValidationContextFieldV1> {
@@ -6011,7 +5767,6 @@ fn repair_slash_proposal_context(
         ValidationContextFieldV1::new("approval_present", proposal.approval.is_some().to_string()),
     ]
 }
-
 fn repair_escalation_policy_context(
     policy: &RepairEscalationPolicyV1,
 ) -> Vec<ValidationContextFieldV1> {
@@ -6026,7 +5781,6 @@ fn repair_escalation_policy_context(
         ValidationContextFieldV1::new("max_penalty", policy.max_penalty.to_string()),
     ]
 }
-
 fn repair_escalation_approval_context(
     approval: &RepairEscalationApprovalV1,
 ) -> Vec<ValidationContextFieldV1> {
@@ -6038,7 +5792,6 @@ fn repair_escalation_approval_context(
         ValidationContextFieldV1::new("finalized_at_unix", approval.finalized_at_unix.to_string()),
     ]
 }
-
 fn repair_task_event_context(event: &RepairTaskEventV1) -> Vec<ValidationContextFieldV1> {
     let mut context = vec![
         ValidationContextFieldV1::new("ticket_id", event.ticket_id.to_string()),
@@ -6052,7 +5805,6 @@ fn repair_task_event_context(event: &RepairTaskEventV1) -> Vec<ValidationContext
     }
     context
 }
-
 fn repair_cause_label(evidence: &RepairEvidenceV1) -> String {
     match &evidence.cause {
         crate::RepairCauseV1::PorFailure(_) => "por_failure",
@@ -6063,7 +5815,6 @@ fn repair_cause_label(evidence: &RepairEvidenceV1) -> String {
     }
     .to_owned()
 }
-
 fn repair_task_state_label(state: &RepairTaskStateV1) -> String {
     match state {
         RepairTaskStateV1::Queued(_) => "queued",
@@ -6074,7 +5825,6 @@ fn repair_task_state_label(state: &RepairTaskStateV1) -> String {
     }
     .to_owned()
 }
-
 fn por_binding_error(
     code: &'static str,
     message: &'static str,
@@ -6098,7 +5848,6 @@ fn por_binding_error(
         generated_at,
     )
 }
-
 fn repair_validation_error_outcome(
     error: RepairValidationError,
     mut context: Vec<ValidationContextFieldV1>,
@@ -6125,7 +5874,6 @@ fn repair_validation_error_outcome(
         generated_at,
     )
 }
-
 fn repair_validation_action(code: &str) -> &'static str {
     match code {
         "SFS-NORITO-001" => "Re-encode the repair payload with the canonical SoraFS Norito schema.",
@@ -6151,7 +5899,6 @@ fn repair_validation_action(code: &str) -> &'static str {
         _ => "Regenerate the repair payload from canonical SoraFS state and retry validation.",
     }
 }
-
 fn pop_validation_error_outcome(
     kind: PopValidationPayloadKindV1,
     error: PopCredentialValidationError,
@@ -6182,7 +5929,6 @@ fn pop_validation_error_outcome(
         generated_at,
     )
 }
-
 fn pop_validation_action(code: &str) -> &'static str {
     match code {
         "SFS-NORITO-001" => "Re-encode the PoP payload with the canonical SoraFS Norito schema.",
@@ -6205,7 +5951,6 @@ fn pop_validation_action(code: &str) -> &'static str {
         _ => "Regenerate the PoP payload from canonical SoraFS state and retry validation.",
     }
 }
-
 fn hedging_validation_error_outcome(
     kind: HedgingValidationPayloadKindV1,
     error: HedgingValidationError,
@@ -6236,7 +5981,6 @@ fn hedging_validation_error_outcome(
         generated_at,
     )
 }
-
 fn hedging_validation_action(code: &str) -> &'static str {
     match code {
         "SFS-NORITO-001" => {
@@ -6260,7 +6004,6 @@ fn hedging_validation_action(code: &str) -> &'static str {
         }
     }
 }
-
 fn advert_validation_code(error: &AdvertValidationError) -> &'static str {
     match error {
         AdvertValidationError::UnsupportedVersion(_) => "SFS-VAL-002",
@@ -6276,7 +6019,6 @@ fn advert_validation_code(error: &AdvertValidationError) -> &'static str {
         _ => "SFS-VAL-004",
     }
 }
-
 fn orderbook_validation_code(error: &OrderbookValidationError) -> &'static str {
     match error {
         OrderbookValidationError::UnsupportedOrderVersion { .. }
@@ -6314,7 +6056,6 @@ fn orderbook_validation_code(error: &OrderbookValidationError) -> &'static str {
         _ => "SFS-OBK-001",
     }
 }
-
 fn pop_validation_code(error: &PopCredentialValidationError) -> &'static str {
     match error {
         PopCredentialValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
@@ -6361,7 +6102,6 @@ fn pop_validation_code(error: &PopCredentialValidationError) -> &'static str {
         | PopCredentialValidationError::ProofBackend { .. } => "SFS-INT-001",
     }
 }
-
 fn hedging_validation_code(error: &HedgingValidationError) -> &'static str {
     match error {
         HedgingValidationError::UnsupportedPriceFeedVersion { .. }
@@ -6418,7 +6158,6 @@ fn hedging_validation_code(error: &HedgingValidationError) -> &'static str {
         | HedgingValidationError::Norito(_) => "SFS-INT-001",
     }
 }
-
 fn repair_validation_code(error: &RepairValidationError) -> &'static str {
     match error {
         RepairValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
@@ -6437,7 +6176,6 @@ fn repair_validation_code(error: &RepairValidationError) -> &'static str {
         _ => "SFS-REP-002",
     }
 }
-
 fn pdp_commitment_validation_code(error: &PdpCommitmentValidationError) -> &'static str {
     match error {
         PdpCommitmentValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
@@ -6448,7 +6186,6 @@ fn pdp_commitment_validation_code(error: &PdpCommitmentValidationError) -> &'sta
         _ => "SFS-PDP-002",
     }
 }
-
 fn pdp_challenge_validation_code(error: &PdpChallengeValidationError) -> &'static str {
     match error {
         PdpChallengeValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
@@ -6473,7 +6210,6 @@ fn pdp_challenge_validation_code(error: &PdpChallengeValidationError) -> &'stati
         | PdpChallengeValidationError::CanonicalEncoding => "SFS-PDP-002",
     }
 }
-
 fn pdp_proof_validation_code(error: &PdpProofValidationError) -> &'static str {
     match error {
         PdpProofValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
@@ -6502,7 +6238,6 @@ fn pdp_proof_validation_code(error: &PdpProofValidationError) -> &'static str {
         | PdpProofValidationError::CanonicalEncoding => "SFS-PDP-002",
     }
 }
-
 fn pdp_verification_code_and_category(
     error: &PdpVerificationError,
 ) -> (&'static str, &'static str) {
@@ -6552,7 +6287,6 @@ fn pdp_verification_code_and_category(
         _ => ("SFS-PDP-003", CATEGORY_VALIDATION),
     }
 }
-
 fn por_challenge_validation_code(error: &PorChallengeValidationError) -> &'static str {
     match error {
         PorChallengeValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
@@ -6564,7 +6298,6 @@ fn por_challenge_validation_code(error: &PorChallengeValidationError) -> &'stati
         _ => "SFS-VAL-008",
     }
 }
-
 fn por_proof_validation_code(error: &PorProofValidationError) -> &'static str {
     match error {
         PorProofValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
@@ -6573,7 +6306,6 @@ fn por_proof_validation_code(error: &PorProofValidationError) -> &'static str {
         _ => "SFS-VAL-009",
     }
 }
-
 fn potr_receipt_validation_code(error: &PotrReceiptValidationError) -> &'static str {
     match error {
         PotrReceiptValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
@@ -6583,7 +6315,6 @@ fn potr_receipt_validation_code(error: &PotrReceiptValidationError) -> &'static 
         _ => "SFS-VAL-010",
     }
 }
-
 fn provider_admission_envelope_code(error: &ProviderAdmissionEnvelopeError) -> &'static str {
     match error {
         ProviderAdmissionEnvelopeError::Validation(error) => {
@@ -6593,7 +6324,6 @@ fn provider_admission_envelope_code(error: &ProviderAdmissionEnvelopeError) -> &
         ProviderAdmissionEnvelopeError::Serialization { .. } => "SFS-INT-001",
     }
 }
-
 fn provider_admission_renewal_code(error: &ProviderAdmissionRenewalError) -> &'static str {
     match error {
         ProviderAdmissionRenewalError::UnsupportedVersion { .. } => "SFS-VAL-002",
@@ -6611,7 +6341,6 @@ fn provider_admission_renewal_code(error: &ProviderAdmissionRenewalError) -> &'s
         | ProviderAdmissionRenewalError::PorVrfKeyChanged => "SFS-VAL-006",
     }
 }
-
 fn provider_admission_revocation_code(error: &ProviderAdmissionRevocationError) -> &'static str {
     match error {
         ProviderAdmissionRevocationError::UnsupportedVersion { .. } => "SFS-VAL-002",
@@ -6623,7 +6352,6 @@ fn provider_admission_revocation_code(error: &ProviderAdmissionRevocationError) 
         ProviderAdmissionRevocationError::Serialization(_) => "SFS-INT-001",
     }
 }
-
 fn provider_admission_validation_code(error: &ProviderAdmissionValidationError) -> &'static str {
     match error {
         ProviderAdmissionValidationError::UnsupportedProposalVersion { .. }
@@ -6640,7 +6368,6 @@ fn provider_admission_validation_code(error: &ProviderAdmissionValidationError) 
         _ => "SFS-VAL-006",
     }
 }
-
 fn replication_order_validation_code(error: &ReplicationOrderValidationError) -> &'static str {
     match error {
         ReplicationOrderValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
@@ -6655,7 +6382,6 @@ fn replication_order_validation_code(error: &ReplicationOrderValidationError) ->
         _ => "SFS-VAL-005",
     }
 }
-
 fn signed_replication_order_validation_code(
     error: &SignedReplicationOrderValidationError,
 ) -> &'static str {
@@ -6667,7 +6393,6 @@ fn signed_replication_order_validation_code(
         SignedReplicationOrderValidationError::InvalidSignature => "SFS-SIG-006",
     }
 }
-
 fn replication_order_signature_verification_code(
     error: &ReplicationOrderSignatureVerificationError,
 ) -> &'static str {
@@ -6680,7 +6405,6 @@ fn replication_order_signature_verification_code(
         | ReplicationOrderSignatureVerificationError::Verification { .. } => "SFS-SIG-006",
     }
 }
-
 fn repair_validation_category(error: &RepairValidationError) -> &'static str {
     match error {
         RepairValidationError::InvalidTimestamp { .. }
@@ -6692,28 +6416,24 @@ fn repair_validation_category(error: &RepairValidationError) -> &'static str {
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn pdp_commitment_validation_category(error: &PdpCommitmentValidationError) -> &'static str {
     match error {
         PdpCommitmentValidationError::InvalidSealedAt => CATEGORY_POLICY,
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn pdp_challenge_validation_category(error: &PdpChallengeValidationError) -> &'static str {
     match error {
         PdpChallengeValidationError::InvalidDeadline { .. } => CATEGORY_POLICY,
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn pdp_proof_validation_category(error: &PdpProofValidationError) -> &'static str {
     match error {
         PdpProofValidationError::InvalidSignature(_) => CATEGORY_SIGNATURE,
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn advert_validation_category(error: &AdvertValidationError) -> &'static str {
     match error {
         AdvertValidationError::InvalidTimestamps
@@ -6723,7 +6443,6 @@ fn advert_validation_category(error: &AdvertValidationError) -> &'static str {
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn orderbook_validation_category(error: &OrderbookValidationError) -> &'static str {
     match error {
         OrderbookValidationError::InvalidTimestamp
@@ -6741,7 +6460,6 @@ fn orderbook_validation_category(error: &OrderbookValidationError) -> &'static s
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn pop_validation_category(error: &PopCredentialValidationError) -> &'static str {
     match error {
         PopCredentialValidationError::InvalidTimestamp { .. }
@@ -6765,7 +6483,6 @@ fn pop_validation_category(error: &PopCredentialValidationError) -> &'static str
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn hedging_validation_category(error: &HedgingValidationError) -> &'static str {
     match error {
         HedgingValidationError::RejectedFeed { .. }
@@ -6779,14 +6496,12 @@ fn hedging_validation_category(error: &HedgingValidationError) -> &'static str {
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn por_challenge_validation_category(error: &PorChallengeValidationError) -> &'static str {
     match error {
         PorChallengeValidationError::InvalidDeadline { .. } => CATEGORY_POLICY,
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn potr_receipt_validation_category(error: &PotrReceiptValidationError) -> &'static str {
     match error {
         PotrReceiptValidationError::LatencyExceedsDeadline { .. } => CATEGORY_POLICY,
@@ -6794,7 +6509,6 @@ fn potr_receipt_validation_category(error: &PotrReceiptValidationError) -> &'sta
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn provider_admission_envelope_category(error: &ProviderAdmissionEnvelopeError) -> &'static str {
     match error {
         ProviderAdmissionEnvelopeError::Validation(error) => {
@@ -6804,7 +6518,6 @@ fn provider_admission_envelope_category(error: &ProviderAdmissionEnvelopeError) 
         ProviderAdmissionEnvelopeError::Serialization { .. } => CATEGORY_INTERNAL,
     }
 }
-
 fn provider_admission_renewal_category(error: &ProviderAdmissionRenewalError) -> &'static str {
     match error {
         ProviderAdmissionRenewalError::Envelope(error) => {
@@ -6815,7 +6528,6 @@ fn provider_admission_renewal_category(error: &ProviderAdmissionRenewalError) ->
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn provider_admission_revocation_category(
     error: &ProviderAdmissionRevocationError,
 ) -> &'static str {
@@ -6826,7 +6538,6 @@ fn provider_admission_revocation_category(
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn provider_admission_validation_category(
     error: &ProviderAdmissionValidationError,
 ) -> &'static str {
@@ -6836,7 +6547,6 @@ fn provider_admission_validation_category(
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn replication_order_validation_category(error: &ReplicationOrderValidationError) -> &'static str {
     match error {
         ReplicationOrderValidationError::InvalidDeadline
@@ -6844,7 +6554,6 @@ fn replication_order_validation_category(error: &ReplicationOrderValidationError
         _ => CATEGORY_VALIDATION,
     }
 }
-
 fn signed_replication_order_validation_category(
     error: &SignedReplicationOrderValidationError,
 ) -> &'static str {
@@ -6856,7 +6565,6 @@ fn signed_replication_order_validation_category(
         SignedReplicationOrderValidationError::InvalidSignature => CATEGORY_SIGNATURE,
     }
 }
-
 fn replication_order_signature_verification_category(
     error: &ReplicationOrderSignatureVerificationError,
 ) -> &'static str {
@@ -6865,15 +6573,12 @@ fn replication_order_signature_verification_category(
         _ => CATEGORY_SIGNATURE,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};
-
     use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
     use norito::{decode_from_bytes, to_bytes};
-
     use super::*;
     use crate::repair::QueuedRepairStateV1;
     use crate::{
@@ -6887,13 +6592,11 @@ mod tests {
         RepairTaskRecordV1, RepairTaskStateV1, RepairTicketId, ReplicationAssignmentV1,
         ReplicationOrderSlaV1, SignatureAlgorithm, StakePointer,
     };
-
     fn workspace_fixture(path: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join(path)
     }
-
     fn admission_envelope() -> ProviderAdmissionEnvelopeV1 {
         let bytes = fs::read(workspace_fixture(
             "fixtures/sorafs_manifest/provider_admission/envelope_v1.to",
@@ -6901,21 +6604,18 @@ mod tests {
         .expect("read admission envelope fixture");
         decode_from_bytes(&bytes).expect("decode admission envelope fixture")
     }
-
     fn admission_renewal_bytes() -> Vec<u8> {
         fs::read(workspace_fixture(
             "fixtures/sorafs_manifest/provider_admission/renewal_v1.to",
         ))
         .expect("read admission renewal fixture")
     }
-
     fn admission_revocation_bytes() -> Vec<u8> {
         fs::read(workspace_fixture(
             "fixtures/sorafs_manifest/provider_admission/revocation_v1.to",
         ))
         .expect("read admission revocation fixture")
     }
-
     fn por_challenge() -> PorChallengeV1 {
         let bytes = fs::read(workspace_fixture(
             "fixtures/sorafs_manifest/por/challenge_v1.to",
@@ -6923,7 +6623,6 @@ mod tests {
         .expect("read PoR challenge fixture");
         decode_from_bytes(&bytes).expect("decode PoR challenge fixture")
     }
-
     fn por_proof() -> PorProofV1 {
         let bytes = fs::read(workspace_fixture(
             "fixtures/sorafs_manifest/por/proof_v1.to",
@@ -6931,7 +6630,6 @@ mod tests {
         .expect("read PoR proof fixture");
         decode_from_bytes(&bytes).expect("decode PoR proof fixture")
     }
-
     fn governance_node() -> GovernanceLogNodeV1 {
         let bytes = fs::read(workspace_fixture(
             "fixtures/sorafs_manifest/governance/node_v1.to",
@@ -6939,7 +6637,6 @@ mod tests {
         .expect("read governance node fixture");
         decode_from_bytes(&bytes).expect("decode governance node fixture")
     }
-
     fn ed25519_signed_governance_node() -> GovernanceLogNodeV1 {
         let mut node = governance_node();
         let signing_key = SigningKey::from_bytes(&[0xA6; 32]);
@@ -6954,7 +6651,6 @@ mod tests {
         };
         node
     }
-
     fn dilithium3_signed_governance_node() -> GovernanceLogNodeV1 {
         let mut node = governance_node();
         let key_pair = KeyPair::try_from_seed(vec![0xD6; 32], Algorithm::MlDsa)
@@ -6976,7 +6672,6 @@ mod tests {
         };
         node
     }
-
     fn empty_ed25519_governance_signature() -> crate::GovernanceLogSignatureV1 {
         crate::GovernanceLogSignatureV1 {
             algorithm: GovernanceSignatureAlgorithm::Ed25519,
@@ -6984,7 +6679,6 @@ mod tests {
             signature: Vec::new(),
         }
     }
-
     fn sign_governance_dag_block(block: &mut GovernanceDagBlockV1, seed: &[u8; 32]) {
         let signing_key = SigningKey::from_bytes(seed);
         let payload_bytes = block
@@ -6997,7 +6691,6 @@ mod tests {
             signature: signature.to_bytes().to_vec(),
         };
     }
-
     fn sign_governance_dag_head(head: &mut GovernanceDagHeadV1, seed: &[u8; 32]) {
         let signing_key = SigningKey::from_bytes(seed);
         let payload_bytes = head
@@ -7010,7 +6703,6 @@ mod tests {
             signature: signature.to_bytes().to_vec(),
         };
     }
-
     fn signed_governance_dag_block(
         prev_block_cid: Option<Vec<u8>>,
         prev_node_cid: Option<Vec<u8>>,
@@ -7035,7 +6727,6 @@ mod tests {
             public_key: signing_key.verifying_key().to_bytes().to_vec(),
             signature: node_signature.to_bytes().to_vec(),
         };
-
         let block_cid = crate::governance_dag_block_cid_v1(
             prev_block_cid.as_deref(),
             sequence,
@@ -7057,7 +6748,6 @@ mod tests {
         sign_governance_dag_block(&mut block, &[0xC7; 32]);
         block
     }
-
     fn signed_governance_dag_chain() -> (Vec<GovernanceDagBlockV1>, GovernanceDagHeadV1) {
         let first = signed_governance_dag_block(None, None, 0, 1_700_000_300);
         let second = signed_governance_dag_block(
@@ -7083,7 +6773,6 @@ mod tests {
         sign_governance_dag_head(&mut head, &[0xC7; 32]);
         (blocks, head)
     }
-
     fn assert_bounded_governance_outcome(outcome: &ValidationOutcomeV1) {
         let json = norito::json::to_string(outcome).expect("encode validation outcome JSON");
         assert!(
@@ -7092,7 +6781,6 @@ mod tests {
             json.len()
         );
     }
-
     fn empty_orderbook_signature(signing_key: &SigningKey) -> crate::OrderbookSignatureV1 {
         crate::OrderbookSignatureV1 {
             algorithm: SignatureAlgorithm::Ed25519,
@@ -7100,7 +6788,6 @@ mod tests {
             signature: Vec::new(),
         }
     }
-
     fn orderbook_order_request() -> OrderRequestV1 {
         let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
         let owner_account = b"buyer@sora".to_vec();
@@ -7127,7 +6814,6 @@ mod tests {
         )
         .expect("sign orderbook order request fixture")
     }
-
     fn orderbook_order_cancel() -> OrderCancelV1 {
         let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
         let order = orderbook_order_request();
@@ -7144,7 +6830,6 @@ mod tests {
         )
         .expect("sign orderbook cancel fixture")
     }
-
     fn orderbook_settlement_receipt() -> SettlementReceiptV1 {
         let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
         sign_settlement_receipt_ed25519_v1(
@@ -7172,7 +6857,6 @@ mod tests {
         )
         .expect("sign orderbook settlement receipt fixture")
     }
-
     fn orderbook_trade_event() -> TradeEventV1 {
         TradeEventV1 {
             version: crate::ORDERBOOK_TRADE_EVENT_VERSION_V1,
@@ -7190,14 +6874,12 @@ mod tests {
             timestamp_unix: 1_800_000_005,
         }
     }
-
     fn hedging_digest(label: &str) -> [u8; 32] {
         let hash = blake3::hash(label.as_bytes());
         let mut out = [0_u8; 32];
         out.copy_from_slice(hash.as_bytes());
         out
     }
-
     fn hedging_feed(feed_id: &str, price: &str, observed_at_unix: u64) -> HedgingPriceFeedV1 {
         HedgingPriceFeedV1 {
             version: crate::HEDGING_PRICE_FEED_VERSION_V1,
@@ -7210,7 +6892,6 @@ mod tests {
             status: HedgingFeedStatusV1::Ok,
         }
     }
-
     fn hedging_reference_decision() -> HedgingReferencePriceDecisionV1 {
         crate::derive_reference_price_decision_v1(
             1_800,
@@ -7223,7 +6904,6 @@ mod tests {
         )
         .expect("reference decision")
     }
-
     fn billing_statement() -> BillingStatementV1 {
         let reference_price = hedging_reference_decision();
         let storage = crate::build_billing_line_item_v1(
@@ -7257,23 +6937,19 @@ mod tests {
         )
         .expect("billing statement")
     }
-
     fn pop_digest(seed: u8) -> [u8; 32] {
         [seed; 32]
     }
-
     fn pop_scalar(value: u64) -> [u8; 32] {
         let mut bytes = [0u8; 32];
         bytes[..8].copy_from_slice(&value.to_le_bytes());
         bytes
     }
-
     fn pop_nonce(value: u128) -> [u8; 32] {
         let mut bytes = [0u8; 32];
         bytes[..16].copy_from_slice(&value.to_le_bytes());
         bytes
     }
-
     fn pop_empty_signature() -> crate::PopSignatureV1 {
         crate::PopSignatureV1 {
             algorithm: crate::PopSignatureAlgorithmV1::Ed25519,
@@ -7281,7 +6957,6 @@ mod tests {
             signature: vec![2; SIGNATURE_LENGTH],
         }
     }
-
     fn pop_credential() -> crate::PopCredentialV1 {
         crate::PopCredentialV1 {
             version: crate::POP_CREDENTIAL_VERSION_V1,
@@ -7303,7 +6978,6 @@ mod tests {
             issuer_signature: pop_empty_signature(),
         }
     }
-
     fn pop_commitment_root() -> crate::PopCommitmentRootV1 {
         crate::PopCommitmentRootV1 {
             version: crate::POP_COMMITMENT_ROOT_VERSION_V1,
@@ -7318,7 +6992,6 @@ mod tests {
             publisher_signature: pop_empty_signature(),
         }
     }
-
     fn pop_revocations() -> crate::PopRevocationListV1 {
         crate::PopRevocationListV1 {
             version: crate::POP_REVOCATION_LIST_VERSION_V1,
@@ -7333,7 +7006,6 @@ mod tests {
             publisher_signature: pop_empty_signature(),
         }
     }
-
     fn pop_enrollment() -> crate::PopEnrollmentRequestV1 {
         crate::PopEnrollmentRequestV1 {
             version: crate::POP_ENROLLMENT_REQUEST_VERSION_V1,
@@ -7346,7 +7018,6 @@ mod tests {
             expires_at_epoch: 200,
         }
     }
-
     fn pop_renewal() -> crate::PopRenewalRequestV1 {
         crate::PopRenewalRequestV1 {
             version: crate::POP_RENEWAL_REQUEST_VERSION_V1,
@@ -7359,7 +7030,6 @@ mod tests {
             attestation_digest: pop_digest(0x33),
         }
     }
-
     fn pop_membership_proof() -> crate::PopMembershipProofV1 {
         let proof = crate::PopMembershipProofV1 {
             version: crate::POP_MEMBERSHIP_PROOF_VERSION_V1,
@@ -7387,7 +7057,6 @@ mod tests {
         proof.validate().expect("validate PoP proof payload");
         proof
     }
-
     fn signed_pop_material() -> (
         crate::PopCredentialV1,
         crate::PopCommitmentRootV1,
@@ -7402,7 +7071,6 @@ mod tests {
             .expect("sign revocations");
         (credential, root, revocations)
     }
-
     fn issued_pop_bundle() -> crate::PopIssuedCredentialBundleV1 {
         crate::issue_pop_credential_bundle_ed25519_v1(
             pop_credential(),
@@ -7412,7 +7080,6 @@ mod tests {
         )
         .expect("issue PoP bundle")
     }
-
     fn potr_receipt() -> PotrReceiptV1 {
         let receipt = PotrReceiptV1 {
             version: POTR_RECEIPT_VERSION_V1,
@@ -7440,7 +7107,6 @@ mod tests {
         crate::sign_potr_receipt_v1(receipt, &gateway_key, &provider_key)
             .expect("sign PoTR fixture")
     }
-
     fn resign_potr_receipt(receipt: &mut PotrReceiptV1) {
         let gateway_key = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
             .expect("fixture gateway key");
@@ -7449,7 +7115,6 @@ mod tests {
         *receipt = crate::sign_potr_receipt_v1(receipt.clone(), &gateway_key, &provider_key)
             .expect("re-sign PoTR fixture");
     }
-
     fn repair_evidence() -> RepairEvidenceV1 {
         RepairEvidenceV1 {
             version: REPAIR_EVIDENCE_VERSION_V1,
@@ -7465,7 +7130,6 @@ mod tests {
             notes: Some("auditor confirmed repair trigger".to_owned()),
         }
     }
-
     fn repair_task_record() -> RepairTaskRecordV1 {
         RepairTaskRecordV1 {
             version: REPAIR_TASK_VERSION_V1,
@@ -7483,7 +7147,6 @@ mod tests {
             slash_proposal_digest: None,
         }
     }
-
     fn signed_advert(now: u64) -> ProviderAdvertV1 {
         let body = ProviderAdvertBodyV1 {
             provider_id: [0x11; 32],
@@ -7558,7 +7221,6 @@ mod tests {
         advert.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
         advert
     }
-
     fn replication_order() -> ReplicationOrderV1 {
         ReplicationOrderV1 {
             version: REPLICATION_ORDER_VERSION_V1,
@@ -7592,7 +7254,6 @@ mod tests {
             }],
         }
     }
-
     fn signed_replication_order() -> SignedReplicationOrderV1 {
         let signing_key = SigningKey::from_bytes(&[0xA7; 32]);
         let mut envelope = SignedReplicationOrderV1 {
@@ -7611,21 +7272,18 @@ mod tests {
         envelope.signature.signature = signature.to_bytes().to_vec();
         envelope
     }
-
     #[test]
     fn validation_context_field_new_sets_fields() {
         let field = ValidationContextFieldV1::new("provider", "alpha");
         assert_eq!(field.key, "provider");
         assert_eq!(field.value, "alpha");
     }
-
     #[test]
     fn validation_input_new_sets_fields() {
         let input = ValidationInputV1::new("provider_advert", "advert.to");
         assert_eq!(input.kind, "provider_advert");
         assert_eq!(input.path, "advert.to");
     }
-
     #[test]
     fn validation_outcome_ok_reports_success() {
         let outcome = ValidationOutcomeV1::ok(
@@ -7640,7 +7298,6 @@ mod tests {
         assert_eq!(outcome.version, VALIDATION_OUTCOME_VERSION_V1);
         assert_eq!(outcome.generated_at, 42);
     }
-
     #[test]
     fn validation_outcome_error_reports_failure() {
         let outcome = ValidationOutcomeV1::error(
@@ -7656,7 +7313,6 @@ mod tests {
         assert!(!outcome.is_ok());
         assert_eq!(outcome.action.as_deref(), Some("fix input"));
     }
-
     #[test]
     fn pdp_reference_context_and_categories_match_fixed_signature_model() {
         let proof = PdpProofV1 {
@@ -7677,7 +7333,6 @@ mod tests {
         assert!(context.iter().any(|field| {
             field.key == "signature_len" && field.value == SIGNATURE_LENGTH.to_string()
         }));
-
         assert_eq!(
             pdp_challenge_validation_category(&PdpChallengeValidationError::InvalidDeadline {
                 issued_at: 2,
@@ -7698,7 +7353,6 @@ mod tests {
             CATEGORY_VALIDATION
         );
     }
-
     #[test]
     fn untrusted_admission_renewal_maps_to_structural_validation() {
         let error = ProviderAdmissionRenewalError::UntrustedBaseRecord;
@@ -7708,7 +7362,6 @@ mod tests {
             CATEGORY_VALIDATION
         );
     }
-
     #[test]
     fn validate_fixture_bundle_payloads_accepts_linked_advert_and_order() {
         let advert = signed_advert(1_700_000_000);
@@ -7727,9 +7380,7 @@ mod tests {
                 &order_bytes,
             ),
         ];
-
         let outcome = validate_fixture_bundle_payloads(&payloads, 1_700_000_001, 42);
-
         assert!(outcome.is_ok(), "{outcome:?}");
         assert_eq!(outcome.code, "SFS-OK-000");
         assert!(
@@ -7740,7 +7391,6 @@ mod tests {
             "{outcome:?}"
         );
     }
-
     #[test]
     fn validate_fixture_bundle_payloads_accepts_orderbook_payloads_with_linked_artifacts() {
         let advert = signed_advert(1_700_000_000);
@@ -7774,9 +7424,7 @@ mod tests {
                 &receipt_bytes,
             ),
         ];
-
         let outcome = validate_fixture_bundle_payloads(&payloads, 1_700_000_001, 46);
-
         assert!(outcome.is_ok(), "{outcome:?}");
         assert!(
             outcome
@@ -7800,7 +7448,6 @@ mod tests {
             "{outcome:?}"
         );
     }
-
     #[test]
     fn validate_fixture_bundle_payloads_rejects_single_linkable_artifact() {
         let order = replication_order();
@@ -7810,14 +7457,11 @@ mod tests {
             "order.to",
             &order_bytes,
         )];
-
         let outcome = validate_fixture_bundle_payloads(&payloads, 1_700_000_001, 43);
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-BND-001");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_fixture_bundle_payloads_rejects_manifest_digest_mismatch() {
         let order = replication_order();
@@ -7839,14 +7483,11 @@ mod tests {
                 &receipt_bytes,
             ),
         ];
-
         let outcome = validate_fixture_bundle_payloads(&payloads, 1_700_000_001, 44);
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-BND-002");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_fixture_bundle_payloads_rejects_provider_assignment_mismatch() {
         let order = replication_order();
@@ -7868,14 +7509,11 @@ mod tests {
                 &receipt_bytes,
             ),
         ];
-
         let outcome = validate_fixture_bundle_payloads(&payloads, 1_700_000_001, 45);
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-BND-003");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_governance_log_node_bytes_accepts_fixture() {
         let node = governance_node();
@@ -7886,7 +7524,6 @@ mod tests {
             Some(node.node_cid.as_slice()),
             46,
         );
-
         assert!(outcome.is_ok(), "{outcome:?}");
         assert_eq!(outcome.code, "SFS-OK-000");
         assert!(
@@ -7897,7 +7534,6 @@ mod tests {
             "{outcome:?}"
         );
     }
-
     #[test]
     fn governance_log_node_context_exposes_signed_submission_provenance() {
         let mut node = governance_node();
@@ -7907,7 +7543,6 @@ mod tests {
             ),
             origin: crate::GovernanceDagSubmissionOriginV1::AppealFinanceReport,
         });
-
         let context = governance_log_node_context(&node);
         assert!(context.iter().any(|field| {
             field.key == "submission_publisher_account_digest_hex"
@@ -7920,14 +7555,12 @@ mod tests {
             field.key == "submission_origin" && field.value == "appeal_finance_report"
         }));
     }
-
     #[test]
     fn validate_governance_log_node_bytes_verifies_ed25519_publisher_signature() {
         let node = ed25519_signed_governance_node();
         let bytes = to_bytes(&node).expect("encode governance node");
         let outcome = validate_governance_log_node_bytes(&bytes, "governance-node.to", None, 47);
         assert!(outcome.is_ok(), "{outcome:?}");
-
         let mut tampered = node;
         tampered.publisher_peer_id.extend_from_slice(b"-tampered");
         tampered.node_cid = tampered
@@ -7936,19 +7569,16 @@ mod tests {
         let bytes = to_bytes(&tampered).expect("encode tampered governance node");
         let outcome =
             validate_governance_log_node_bytes(&bytes, "tampered-governance-node.to", None, 48);
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-SIG-005");
         assert_eq!(outcome.category, CATEGORY_SIGNATURE);
     }
-
     #[test]
     fn validate_governance_log_node_bytes_verifies_dilithium3_publisher_signature() {
         let node = dilithium3_signed_governance_node();
         let bytes = to_bytes(&node).expect("encode governance node");
         let outcome = validate_governance_log_node_bytes(&bytes, "governance-node.to", None, 47);
         assert!(outcome.is_ok(), "{outcome:?}");
-
         let mut tampered = node;
         tampered.timestamp += 1;
         tampered.node_cid = tampered
@@ -7957,21 +7587,17 @@ mod tests {
         let bytes = to_bytes(&tampered).expect("encode tampered governance node");
         let outcome =
             validate_governance_log_node_bytes(&bytes, "tampered-governance-node.to", None, 48);
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-SIG-005");
         assert_eq!(outcome.category, CATEGORY_SIGNATURE);
     }
-
     #[test]
     fn validate_governance_log_node_bytes_rejects_malformed_norito() {
         let outcome = validate_governance_log_node_bytes(b"not norito", "bad-node.to", None, 47);
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, CATEGORY_NORITO);
     }
-
     #[test]
     fn validate_governance_log_node_bytes_rejects_cid_mismatch() {
         let node = governance_node();
@@ -7982,28 +7608,23 @@ mod tests {
             Some(b"bafywronggovernancenode"),
             48,
         );
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-GOV-003");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_governance_log_node_bytes_rejects_structural_failure() {
         let mut node = governance_node();
         node.node_cid.clear();
         let bytes = to_bytes(&node).expect("encode governance node");
         let outcome = validate_governance_log_node_bytes(&bytes, "bad-node.to", None, 49);
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-GOV-001");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn governance_reference_outcomes_bound_malformed_cid_and_peer_context() {
         const ADVERSARIAL_BYTES: usize = 256 * 1024;
-
         let mut node = governance_node();
         node.node_cid = vec![0xA5; ADVERSARIAL_BYTES];
         let node_bytes = to_bytes(&node).expect("encode oversized governance node");
@@ -8011,7 +7632,6 @@ mod tests {
             validate_governance_log_node_bytes(&node_bytes, "oversized-node.to", None, 49);
         assert!(!outcome.is_ok());
         assert_bounded_governance_outcome(&outcome);
-
         let mut block = signed_governance_dag_block(None, None, 0, 1_700_000_300);
         block.publisher_peer_id = vec![0x5A; ADVERSARIAL_BYTES];
         let block_bytes = to_bytes(&block).expect("encode oversized governance block");
@@ -8019,7 +7639,6 @@ mod tests {
             validate_governance_dag_block_bytes(&block_bytes, "oversized-block.to", None, 49);
         assert!(!outcome.is_ok());
         assert_bounded_governance_outcome(&outcome);
-
         let (blocks, mut head) = signed_governance_dag_chain();
         head.checkpoint_cid = Some(vec![0xC3; ADVERSARIAL_BYTES]);
         let head_bytes = to_bytes(&head).expect("encode oversized governance head");
@@ -8041,7 +7660,6 @@ mod tests {
         assert!(!outcome.is_ok());
         assert_bounded_governance_outcome(&outcome);
     }
-
     #[test]
     fn pdp_archive_governance_errors_have_stable_reference_mappings() {
         let errors = [
@@ -8053,7 +7671,6 @@ mod tests {
                 node_timestamp: 1,
             },
         ];
-
         for error in errors {
             assert_eq!(governance_log_validation_code(&error), "SFS-GOV-001");
             assert_eq!(
@@ -8062,11 +7679,9 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn submission_provenance_errors_have_stable_reference_mappings() {
         use crate::GovernanceDagSubmissionOriginV1;
-
         let errors = [
             GovernanceLogValidationError::MissingSubmissionProvenance {
                 expected: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
@@ -8079,7 +7694,6 @@ mod tests {
                 found: GovernanceDagSubmissionOriginV1::PrivacyAggregatePublishDue,
             },
         ];
-
         for error in errors {
             assert_eq!(governance_log_validation_code(&error), "SFS-GOV-001");
             assert_eq!(
@@ -8088,7 +7702,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn validate_governance_dag_block_bytes_accepts_signed_block() {
         let block = signed_governance_dag_block(None, None, 0, 1_700_000_300);
@@ -8099,7 +7712,6 @@ mod tests {
             Some(&block.block_cid),
             50,
         );
-
         assert!(outcome.is_ok(), "{outcome:?}");
         assert_eq!(outcome.code, "SFS-OK-000");
         assert!(
@@ -8110,7 +7722,6 @@ mod tests {
             "{outcome:?}"
         );
     }
-
     #[test]
     fn validate_governance_dag_block_bytes_rejects_cid_mismatch() {
         let block = signed_governance_dag_block(None, None, 0, 1_700_000_300);
@@ -8121,12 +7732,10 @@ mod tests {
             Some(&[0xFF; 32]),
             51,
         );
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-GOV-004");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_governance_dag_head_chain_bytes_accepts_signed_head() {
         let (blocks, head) = signed_governance_dag_chain();
@@ -8146,11 +7755,9 @@ mod tests {
             &block_refs,
             52,
         );
-
         assert!(outcome.is_ok(), "{outcome:?}");
         assert_eq!(outcome.code, "SFS-OK-000");
     }
-
     #[test]
     fn validate_governance_dag_head_chain_bytes_rejects_block_count_mismatch() {
         let (blocks, mut head) = signed_governance_dag_chain();
@@ -8172,12 +7779,10 @@ mod tests {
             &block_refs,
             53,
         );
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-GOV-008");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_governance_dag_head_chain_bytes_rejects_head_before_tip() {
         let (blocks, mut head) = signed_governance_dag_chain();
@@ -8204,12 +7809,10 @@ mod tests {
             &block_refs,
             53,
         );
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-GOV-008");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn committed_governance_dag_outcome_matches_reference_validator() {
         let head_bytes = fs::read(workspace_fixture(
@@ -8243,10 +7846,8 @@ mod tests {
             "fixtures/sorafs_manifest/governance/dag_head_validation_outcome_v1.json",
         ))
         .expect("read governance DAG outcome fixture");
-
         assert_eq!(actual, expected);
     }
-
     #[test]
     fn committed_governance_dag_negative_outcomes_match_reference_validator() {
         let read_fixture = |name: &str| {
@@ -8267,7 +7868,6 @@ mod tests {
                     .expect("outcome fixture is UTF-8");
                 assert_eq!(actual, expected);
             };
-
         let bad_block_signature = read_fixture("dag_block_bad_signature_v1.to");
         let outcome = validate_governance_dag_block_bytes(
             &bad_block_signature,
@@ -8280,7 +7880,6 @@ mod tests {
             "dag_block_bad_signature_validation_outcome_v1.json",
             "SFS-SIG-006",
         );
-
         let trailing_bytes = read_fixture("dag_block_trailing_bytes_v1.to");
         let outcome = validate_governance_dag_block_bytes(
             &trailing_bytes,
@@ -8293,7 +7892,6 @@ mod tests {
             "dag_block_trailing_bytes_validation_outcome_v1.json",
             "SFS-NORITO-001",
         );
-
         let root = read_fixture("dag_block_0_v1.to");
         let child = read_fixture("dag_block_1_v1.to");
         let canonical_blocks = [
@@ -8312,7 +7910,6 @@ mod tests {
             "dag_head_bad_signature_validation_outcome_v1.json",
             "SFS-SIG-007",
         );
-
         let bad_predecessor_child = read_fixture("dag_block_1_bad_predecessor_v1.to");
         let bad_predecessor_blocks = [
             (root.as_slice(), "dag_block_0_v1.to".to_owned()),
@@ -8334,7 +7931,6 @@ mod tests {
             "SFS-GOV-006",
         );
     }
-
     #[test]
     fn validate_governance_dag_head_chain_bytes_rejects_noncanonical_order() {
         let (blocks, head) = signed_governance_dag_chain();
@@ -8355,7 +7951,6 @@ mod tests {
             &block_refs,
             54,
         );
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-GOV-006");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
@@ -8368,7 +7963,6 @@ mod tests {
             "{outcome:?}"
         );
     }
-
     #[test]
     fn validate_provider_advert_bytes_accepts_signed_advert() {
         let advert = signed_advert(1_700_000_000);
@@ -8382,7 +7976,6 @@ mod tests {
                 .expect("decode outcome");
         assert_eq!(roundtrip, outcome);
     }
-
     #[test]
     fn validate_provider_advert_bytes_rejects_malformed_norito() {
         let outcome = validate_provider_advert_bytes(b"not norito", "bad.to", 1, 2);
@@ -8390,7 +7983,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, CATEGORY_NORITO);
     }
-
     #[test]
     fn validate_provider_advert_bytes_rejects_policy_failure() {
         let mut advert = signed_advert(1_700_000_000);
@@ -8401,7 +7993,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-POL-001");
         assert_eq!(outcome.category, CATEGORY_POLICY);
     }
-
     #[test]
     fn validate_provider_advert_bytes_rejects_bad_signature() {
         let mut advert = signed_advert(1_700_000_000);
@@ -8412,7 +8003,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-SIG-001");
         assert_eq!(outcome.category, CATEGORY_SIGNATURE);
     }
-
     #[test]
     fn validate_provider_admission_envelope_bytes_accepts_fixture() {
         let envelope = admission_envelope();
@@ -8425,7 +8015,6 @@ mod tests {
                 .expect("decode outcome");
         assert_eq!(roundtrip, outcome);
     }
-
     #[test]
     fn validate_provider_admission_renewal_bytes_accepts_fixture() {
         let envelope = admission_envelope();
@@ -8447,7 +8036,6 @@ mod tests {
             "{outcome:?}"
         );
     }
-
     #[test]
     fn validate_provider_admission_renewal_bytes_rejects_malformed_renewal() {
         let envelope = admission_envelope();
@@ -8463,7 +8051,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, CATEGORY_NORITO);
     }
-
     #[test]
     fn validate_provider_admission_revocation_bytes_accepts_fixture() {
         let envelope = admission_envelope();
@@ -8486,7 +8073,6 @@ mod tests {
             "{outcome:?}"
         );
     }
-
     #[test]
     fn validate_provider_admission_revocation_bytes_rejects_malformed_revocation() {
         let envelope = admission_envelope();
@@ -8502,7 +8088,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, CATEGORY_NORITO);
     }
-
     #[test]
     fn validate_provider_admission_envelope_bytes_rejects_malformed_norito() {
         let outcome =
@@ -8511,7 +8096,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, CATEGORY_NORITO);
     }
-
     #[test]
     fn validate_provider_admission_envelope_bytes_rejects_digest_mismatch() {
         let mut envelope = admission_envelope();
@@ -8522,7 +8106,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-VAL-007");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_provider_admission_envelope_bytes_rejects_signature_failure() {
         let mut envelope = admission_envelope();
@@ -8533,7 +8116,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-SIG-002");
         assert_eq!(outcome.category, CATEGORY_SIGNATURE);
     }
-
     #[test]
     fn validate_provider_admission_envelope_bytes_rejects_retention_policy() {
         let mut envelope = admission_envelope();
@@ -8544,7 +8126,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-POL-004");
         assert_eq!(outcome.category, CATEGORY_POLICY);
     }
-
     #[test]
     fn validate_provider_admission_envelope_bytes_rejects_structural_failure() {
         let mut envelope = admission_envelope();
@@ -8555,7 +8136,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-VAL-006");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_provider_admission_envelope_bytes_rejects_chunker_failure() {
         let mut envelope = admission_envelope();
@@ -8566,7 +8146,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-VAL-003");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_por_challenge_proof_bytes_accepts_fixtures() {
         let challenge = por_challenge();
@@ -8587,7 +8166,6 @@ mod tests {
                 .expect("decode outcome");
         assert_eq!(roundtrip, outcome);
     }
-
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_malformed_challenge() {
         let proof = por_proof();
@@ -8603,7 +8181,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, CATEGORY_NORITO);
     }
-
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_binding_mismatch() {
         let challenge = por_challenge();
@@ -8622,7 +8199,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-POR-003");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_late_proof() {
         let challenge = por_challenge();
@@ -8641,7 +8217,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-POL-002");
         assert_eq!(outcome.category, CATEGORY_POLICY);
     }
-
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_preissued_proof() {
         let challenge = por_challenge();
@@ -8660,7 +8235,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-POL-002");
         assert_eq!(outcome.category, CATEGORY_POLICY);
     }
-
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_sample_coverage_mismatch() {
         let challenge = por_challenge();
@@ -8679,7 +8253,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-POR-001");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_reordered_samples() {
         let challenge = por_challenge();
@@ -8698,7 +8271,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-POR-001");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_forged_signature() {
         let challenge = por_challenge();
@@ -8717,7 +8289,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-SIG-008");
         assert_eq!(outcome.category, CATEGORY_SIGNATURE);
     }
-
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_challenge_structure_failure() {
         let mut challenge = por_challenge();
@@ -8736,7 +8307,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-VAL-003");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_proof_structure_failure() {
         let challenge = por_challenge();
@@ -8755,7 +8325,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-VAL-009");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_potr_receipt_bytes_accepts_valid_receipt() {
         let receipt = potr_receipt();
@@ -8769,7 +8338,6 @@ mod tests {
                 .expect("decode outcome");
         assert_eq!(roundtrip, outcome);
     }
-
     #[test]
     fn validate_potr_receipt_bytes_rejects_malformed_norito() {
         let outcome = validate_potr_receipt_bytes(b"not norito", "bad-receipt.to", None, 22);
@@ -8777,7 +8345,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, CATEGORY_NORITO);
     }
-
     #[test]
     fn validate_potr_receipt_bytes_rejects_late_success_receipt() {
         let mut receipt = potr_receipt();
@@ -8790,7 +8357,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-POTR-001");
         assert_eq!(outcome.category, CATEGORY_POLICY);
     }
-
     #[test]
     fn validate_potr_receipt_bytes_rejects_invalid_signature() {
         let mut receipt = potr_receipt();
@@ -8805,7 +8371,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-SIG-003");
         assert_eq!(outcome.category, CATEGORY_SIGNATURE);
     }
-
     #[test]
     fn validate_potr_receipt_bytes_rejects_tier_mismatch() {
         let receipt = potr_receipt();
@@ -8816,7 +8381,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-POTR-002");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_potr_receipt_bytes_rejects_structural_failure() {
         let mut receipt = potr_receipt();
@@ -8827,7 +8391,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-VAL-010");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_repair_payload_bytes_accepts_task_record() {
         let task = repair_task_record();
@@ -8845,7 +8408,6 @@ mod tests {
                 .expect("decode outcome");
         assert_eq!(roundtrip, outcome);
     }
-
     #[test]
     fn validate_repair_payload_bytes_rejects_alternate_norito_layout() {
         let task = repair_task_record();
@@ -8861,7 +8423,6 @@ mod tests {
             decode_repair_archive_payload::<RepairTaskRecordV1>(&bytes),
             Err(norito::Error::NonCanonicalEncoding)
         ));
-
         let outcome = validate_repair_payload_bytes(
             RepairValidationPayloadKindV1::TaskRecord,
             &bytes,
@@ -8872,7 +8433,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, CATEGORY_NORITO);
     }
-
     #[test]
     fn validate_repair_payload_bytes_uses_stable_pdp_failure_label() {
         let mut evidence = repair_evidence();
@@ -8890,7 +8450,6 @@ mod tests {
             "pdp-repair-evidence.to",
             28,
         );
-
         assert!(outcome.is_ok(), "{outcome:?}");
         assert!(
             outcome
@@ -8900,7 +8459,6 @@ mod tests {
             "PDP repair evidence must retain its stable reference label"
         );
     }
-
     #[test]
     fn validate_repair_payload_bytes_rejects_malformed_norito() {
         let outcome = validate_repair_payload_bytes(
@@ -8913,7 +8471,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, CATEGORY_NORITO);
     }
-
     #[test]
     fn validate_repair_payload_bytes_rejects_evidence_failure() {
         let mut evidence = repair_evidence();
@@ -8933,7 +8490,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-REP-001", "{outcome:?}");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_hedging_payload_bytes_accepts_billing_statement() {
         let statement = billing_statement();
@@ -8950,7 +8506,6 @@ mod tests {
             field.key == "statement_id_hex" && field.value == hex::encode(statement.statement_id)
         }));
     }
-
     #[test]
     fn billing_context_preserves_exact_sub_micro_xor_values() {
         let exact: XorQuantity = "0.0000001"
@@ -8965,7 +8520,6 @@ mod tests {
                 .iter()
                 .any(|field| { field.key == "xor_amount" && field.value == "0.0000001" })
         );
-
         statement.total_debit_xor = exact.clone();
         statement.total_credit_xor = exact.clone();
         statement.net_due_xor = exact;
@@ -8978,7 +8532,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn validate_hedging_payload_bytes_rejects_malformed_norito() {
         let outcome = validate_hedging_payload_bytes(
@@ -8991,7 +8544,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, CATEGORY_NORITO);
     }
-
     #[test]
     fn validate_hedging_payload_bytes_rejects_oversized_and_noncanonical_archives() {
         let oversized = vec![0_u8; crate::HEDGING_SMALL_PAYLOAD_MAX_CANONICAL_BYTES_V1 + 1];
@@ -9005,7 +8557,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, CATEGORY_NORITO);
         assert!(outcome.message.contains("maximum canonical size"));
-
         let mut noncanonical =
             to_bytes(&hedging_feed("primary", "1", 1_790)).expect("encode canonical hedging feed");
         noncanonical.push(0);
@@ -9019,7 +8570,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, CATEGORY_NORITO);
     }
-
     #[test]
     fn validate_hedging_payload_bytes_rejects_stale_decision_feed() {
         let mut decision = hedging_reference_decision();
@@ -9037,10 +8587,8 @@ mod tests {
         assert_eq!(outcome.code, "SFS-POL-020", "{outcome:?}");
         assert_eq!(outcome.category, CATEGORY_POLICY);
     }
-
     // Textual inclusion preserves the original reference test-module paths.
     include!("reference/tests/pop_validation.rs");
-
     #[test]
     fn validate_orderbook_payload_bytes_accepts_order_request() {
         let order = orderbook_order_request();
@@ -9051,7 +8599,6 @@ mod tests {
             "orderbook-order.to",
             32,
         );
-
         assert!(outcome.is_ok(), "{outcome:?}");
         assert_eq!(outcome.code, "SFS-OK-000");
         assert!(
@@ -9065,7 +8612,6 @@ mod tests {
                 .expect("decode outcome");
         assert_eq!(roundtrip, outcome);
     }
-
     #[test]
     fn validate_orderbook_payload_bytes_accepts_signed_cancel_and_receipt() {
         let cases = [
@@ -9081,14 +8627,12 @@ mod tests {
                 "settlement-receipt.to",
             ),
         ];
-
         for (kind, bytes, label) in cases {
             let outcome = validate_orderbook_payload_bytes(kind, &bytes, label, 32);
             assert!(outcome.is_ok(), "{kind:?}: {outcome:?}");
             assert_eq!(outcome.code, "SFS-OK-000", "{kind:?}: {outcome:?}");
         }
     }
-
     #[test]
     fn sign_orderbook_payload_bytes_ed25519_v1_signs_mutable_payloads() {
         let seed = [0xB7; 32];
@@ -9096,7 +8640,6 @@ mod tests {
             .verifying_key()
             .to_bytes()
             .to_vec();
-
         let order_bytes =
             to_bytes(&orderbook_order_request()).expect("encode orderbook order request");
         let signed_order_bytes = sign_orderbook_payload_bytes_ed25519_v1(
@@ -9109,7 +8652,6 @@ mod tests {
             decode_from_bytes(&signed_order_bytes).expect("decode signed order request");
         assert_eq!(signed_order.signature.public_key, expected_public_key);
         crate::verify_order_request_signature_v1(&signed_order).expect("valid order signature");
-
         let cancel_bytes = to_bytes(&orderbook_order_cancel()).expect("encode orderbook cancel");
         let signed_cancel_bytes = sign_orderbook_payload_bytes_ed25519_v1(
             OrderbookValidationPayloadKindV1::OrderCancel,
@@ -9121,7 +8663,6 @@ mod tests {
             decode_from_bytes(&signed_cancel_bytes).expect("decode signed order cancel");
         assert_eq!(signed_cancel.signature.public_key, expected_public_key);
         crate::verify_order_cancel_signature_v1(&signed_cancel).expect("valid cancel signature");
-
         let receipt_bytes =
             to_bytes(&orderbook_settlement_receipt()).expect("encode settlement receipt");
         let signed_receipt_bytes = sign_orderbook_payload_bytes_ed25519_v1(
@@ -9139,7 +8680,6 @@ mod tests {
         crate::verify_settlement_receipt_signature_v1(&signed_receipt)
             .expect("valid receipt signature");
     }
-
     #[test]
     fn build_signed_orderbook_payload_bytes_ed25519_v1_builds_field_level_payloads() {
         let seed = [0xB7; 32];
@@ -9147,7 +8687,6 @@ mod tests {
             .verifying_key()
             .to_bytes()
             .to_vec();
-
         let owner_account = vec![0x03; 32];
         let order_nonce = 1;
         let order_id = crate::derive_orderbook_order_id_v1(&owner_account, order_nonce);
@@ -9172,7 +8711,6 @@ mod tests {
             decode_from_bytes(&order_bytes).expect("decode built order request");
         assert_eq!(order.signature.public_key, expected_public_key);
         crate::verify_order_request_signature_v1(&order).expect("valid built order request");
-
         let cancel_bytes = build_signed_orderbook_order_cancel_bytes_ed25519_v1(
             OrderbookOrderCancelFieldsV1 {
                 order_id,
@@ -9187,7 +8725,6 @@ mod tests {
             decode_from_bytes(&cancel_bytes).expect("decode built order cancel");
         assert_eq!(cancel.signature.public_key, expected_public_key);
         crate::verify_order_cancel_signature_v1(&cancel).expect("valid built order cancel");
-
         let receipt_bytes = build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(
             OrderbookSettlementReceiptFieldsV1 {
                 receipt_id: [0x07; 32],
@@ -9211,7 +8748,6 @@ mod tests {
         crate::verify_settlement_receipt_signature_v1(&receipt)
             .expect("valid built settlement receipt");
     }
-
     #[test]
     fn field_level_orderbook_builders_accept_owner_account_at_v1_byte_ceiling() {
         let seed = [0xB7; 32];
@@ -9239,7 +8775,6 @@ mod tests {
         let order: OrderRequestV1 =
             decode_from_bytes(&order_bytes).expect("decode maximum-length owner request");
         assert_eq!(order.owner_account, owner_account);
-
         let cancel_bytes = build_signed_orderbook_order_cancel_bytes_ed25519_v1(
             OrderbookOrderCancelFieldsV1 {
                 order_id,
@@ -9257,7 +8792,6 @@ mod tests {
             crate::ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1
         );
     }
-
     #[test]
     fn field_level_orderbook_builders_reject_oversized_owner_before_key_or_id_use() {
         let owner_account = vec![0x44; crate::ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
@@ -9284,7 +8818,6 @@ mod tests {
             matches!(request_err, OrderbookPayloadSigningError::Sign { reason, .. }
             if reason.contains("exceeds maximum 256 bytes"))
         );
-
         let cancel_err = build_signed_orderbook_order_cancel_bytes_ed25519_v1(
             OrderbookOrderCancelFieldsV1 {
                 order_id: [0x11; 32],
@@ -9300,7 +8833,6 @@ mod tests {
             if reason.contains("exceeds maximum 256 bytes"))
         );
     }
-
     #[test]
     fn build_signed_orderbook_payload_bytes_ed25519_v1_rejects_invalid_fields() {
         let err = build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(
@@ -9322,12 +8854,10 @@ mod tests {
         .expect_err("imbalanced settlement receipt must fail");
         assert!(matches!(err, OrderbookPayloadSigningError::Sign { .. }));
     }
-
     #[test]
     fn sign_orderbook_payload_bytes_ed25519_v1_rejects_bad_key_material() {
         let order_bytes =
             to_bytes(&orderbook_order_request()).expect("encode orderbook order request");
-
         assert_eq!(
             sign_orderbook_payload_bytes_ed25519_v1(
                 OrderbookValidationPayloadKindV1::OrderRequest,
@@ -9345,11 +8875,9 @@ mod tests {
             Err(OrderbookPayloadSigningError::InvalidSigningKeyMaterial)
         );
     }
-
     #[test]
     fn sign_orderbook_payload_bytes_ed25519_v1_rejects_runtime_generated_payloads() {
         let trade_bytes = to_bytes(&orderbook_trade_event()).expect("encode orderbook trade event");
-
         assert_eq!(
             sign_orderbook_payload_bytes_ed25519_v1(
                 OrderbookValidationPayloadKindV1::TradeEvent,
@@ -9361,7 +8889,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn validate_orderbook_payload_bytes_rejects_malformed_norito() {
         let outcome = validate_orderbook_payload_bytes(
@@ -9370,12 +8897,10 @@ mod tests {
             "bad-receipt.to",
             33,
         );
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, CATEGORY_NORITO);
     }
-
     #[test]
     fn orderbook_reference_and_signing_paths_reject_oversized_archive() {
         let archive = vec![0_u8; crate::ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1 + 1];
@@ -9389,7 +8914,6 @@ mod tests {
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, CATEGORY_NORITO);
         assert!(outcome.message.contains("maximum canonical size"));
-
         assert!(matches!(
             sign_orderbook_payload_bytes_ed25519_v1(
                 OrderbookValidationPayloadKindV1::OrderRequest,
@@ -9400,7 +8924,6 @@ mod tests {
                 if reason.contains("maximum canonical size")
         ));
     }
-
     #[test]
     fn validate_orderbook_payload_bytes_rejects_policy_failure() {
         let mut order = orderbook_order_request();
@@ -9412,12 +8935,10 @@ mod tests {
             "bad-orderbook-order.to",
             34,
         );
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-POL-007", "{outcome:?}");
         assert_eq!(outcome.category, CATEGORY_POLICY);
     }
-
     #[test]
     fn validate_orderbook_payload_bytes_rejects_oversized_request_and_cancel_owners() {
         let owner_account = vec![0x45; crate::ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
@@ -9435,7 +8956,6 @@ mod tests {
         assert_eq!(order_outcome.code, "SFS-VAL-001", "{order_outcome:?}");
         assert_eq!(order_outcome.category, CATEGORY_VALIDATION);
         assert!(order_outcome.message.contains("exceeds maximum 256 bytes"));
-
         let mut cancel = orderbook_order_cancel();
         cancel.owner_account = owner_account;
         let cancel_bytes = to_bytes(&cancel).expect("encode oversized-owner cancel");
@@ -9450,7 +8970,6 @@ mod tests {
         assert_eq!(cancel_outcome.category, CATEGORY_VALIDATION);
         assert!(cancel_outcome.message.contains("exceeds maximum 256 bytes"));
     }
-
     #[test]
     fn validate_orderbook_payload_bytes_rejects_signature_failure() {
         let mut order = orderbook_order_request();
@@ -9462,12 +8981,10 @@ mod tests {
             "bad-orderbook-signature.to",
             35,
         );
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-SIG-007", "{outcome:?}");
         assert_eq!(outcome.category, CATEGORY_SIGNATURE);
     }
-
     #[test]
     fn orderbook_signature_errors_share_the_canonical_outcome_mapping() {
         let errors = [
@@ -9487,7 +9004,6 @@ mod tests {
                 reason: "forged signature".to_owned(),
             },
         ];
-
         for error in errors {
             assert_eq!(orderbook_validation_code(&error), "SFS-SIG-007");
             assert_eq!(
@@ -9497,7 +9013,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn validate_orderbook_payload_bytes_rejects_cancel_and_receipt_signature_failures() {
         let mut cancel = orderbook_order_cancel();
@@ -9512,7 +9027,6 @@ mod tests {
         assert!(!cancel_outcome.is_ok());
         assert_eq!(cancel_outcome.code, "SFS-SIG-007", "{cancel_outcome:?}");
         assert_eq!(cancel_outcome.category, CATEGORY_SIGNATURE);
-
         let mut receipt = orderbook_settlement_receipt();
         receipt.settlement_signature.signature[0] ^= 1;
         let receipt_bytes = to_bytes(&receipt).expect("encode forged settlement receipt");
@@ -9526,7 +9040,6 @@ mod tests {
         assert_eq!(receipt_outcome.code, "SFS-SIG-007", "{receipt_outcome:?}");
         assert_eq!(receipt_outcome.category, CATEGORY_SIGNATURE);
     }
-
     #[test]
     fn validate_orderbook_payload_bytes_rejects_settlement_imbalance() {
         let mut receipt = orderbook_settlement_receipt();
@@ -9539,12 +9052,10 @@ mod tests {
             "bad-orderbook-receipt.to",
             36,
         );
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-OBK-002", "{outcome:?}");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
     }
-
     #[test]
     fn validate_replication_order_bytes_accepts_valid_order() {
         let order = replication_order();
@@ -9557,7 +9068,6 @@ mod tests {
                 .expect("decode outcome");
         assert_eq!(roundtrip, outcome);
     }
-
     #[test]
     fn validate_appeal_finance_cancel_asset_lock_bytes_accepts_canonical_fixture() {
         let bytes = fs::read(workspace_fixture(
@@ -9566,7 +9076,6 @@ mod tests {
         .expect("read canonical CancelAssetLock fixture");
         let outcome =
             validate_appeal_finance_cancel_asset_lock_bytes(&bytes, "cancel_asset_lock_v1.to", 41);
-
         assert!(outcome.is_ok(), "{outcome:?}");
         assert_eq!(outcome.code, "SFS-OK-000");
         assert_eq!(
@@ -9578,6 +9087,5 @@ mod tests {
             Some("85")
         );
     }
-
     include!("reference/tests/replication_and_cancel_validation.rs");
 }

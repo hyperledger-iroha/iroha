@@ -1,11 +1,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ignored Torii HTTP hot-path load profile for focused performance validation.
-
 use std::{
     env,
     time::{Duration, Instant},
 };
-
 use eyre::{WrapErr, ensure, eyre};
 use futures_util::StreamExt as _;
 use integration_tests::sandbox;
@@ -24,14 +22,12 @@ use iroha_data_model::{
 };
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-
 const DEFAULT_HTTP_QUERY_SAMPLES: usize = 512;
 const DEFAULT_HTTP_TX_SAMPLES: usize = 256;
 const DEFAULT_HTTP_COMMIT_SAMPLES: usize = 32;
 const DEFAULT_HTTP_CONCURRENCY: usize = 32;
 const HTTP_WARMUP_SAMPLES: usize = 16;
 const EVENT_STREAM_HANDSHAKE_DELAY: Duration = Duration::from_millis(25);
-
 fn env_usize(name: &str, default: usize) -> usize {
     env::var(name)
         .ok()
@@ -39,11 +35,9 @@ fn env_usize(name: &str, default: usize) -> usize {
         .filter(|value| *value > 0)
         .unwrap_or(default)
 }
-
 fn bounded_concurrency(sample_count: usize, requested: usize) -> usize {
     requested.max(1).min(sample_count.max(1))
 }
-
 fn build_log_transaction(network_id: NetworkId, prefix: &str, index: usize) -> SignedTransaction {
     TransactionBuilder::new(
         network_id,
@@ -53,7 +47,6 @@ fn build_log_transaction(network_id: NetworkId, prefix: &str, index: usize) -> S
     .with_instructions([Log::new(Level::INFO, format!("{prefix}-{index:04}"))])
     .sign(ALICE_KEYPAIR.private_key())
 }
-
 async fn warmup_queries(clients: &[Client], warmup_samples: usize) -> eyre::Result<()> {
     for index in 0..warmup_samples {
         let client = clients[index % clients.len()].clone();
@@ -65,7 +58,6 @@ async fn warmup_queries(clients: &[Client], warmup_samples: usize) -> eyre::Resu
     }
     Ok(())
 }
-
 async fn run_query_profile(
     clients: &[Client],
     samples: usize,
@@ -99,7 +91,6 @@ async fn run_query_profile(
     }
     Ok((durations, wall_start.elapsed()))
 }
-
 async fn warmup_transactions(
     clients: &[Client],
     network_id: NetworkId,
@@ -116,7 +107,6 @@ async fn warmup_transactions(
     }
     Ok(())
 }
-
 async fn run_transaction_submit_profile(
     clients: &[Client],
     network_id: NetworkId,
@@ -153,7 +143,6 @@ async fn run_transaction_submit_profile(
     }
     Ok((durations, wall_start.elapsed()))
 }
-
 async fn measure_submit_to_commit(
     client: Client,
     network_id: NetworkId,
@@ -169,9 +158,7 @@ async fn measure_submit_to_commit(
     .await
     .wrap_err("timed out opening transaction event stream")?
     .wrap_err("failed to open transaction event stream")?;
-
     tokio::time::sleep(EVENT_STREAM_HANDSHAKE_DELAY).await;
-
     let submit_client = client.clone();
     let start = Instant::now();
     let submitted_hash =
@@ -180,7 +167,6 @@ async fn measure_submit_to_commit(
             .wrap_err("commit transaction submit worker panicked")?
             .wrap_err("commit transaction submit worker failed")?;
     std::hint::black_box(submitted_hash);
-
     tokio::time::timeout(event_timeout, async {
         loop {
             let Some(next) = events.next().await else {
@@ -202,10 +188,8 @@ async fn measure_submit_to_commit(
     .await
     .wrap_err("timed out waiting for transaction approval")??;
     events.close().await;
-
     Ok(start.elapsed())
 }
-
 async fn run_transaction_commit_profile(
     clients: &[Client],
     network_id: NetworkId,
@@ -241,7 +225,6 @@ async fn run_transaction_commit_profile(
     }
     Ok((durations, wall_start.elapsed()))
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "HTTP load profile; run explicitly with --ignored --nocapture"]
 async fn torii_http_hot_path_load_profile() -> eyre::Result<()> {
@@ -261,7 +244,6 @@ async fn torii_http_hot_path_load_profile() -> eyre::Result<()> {
         "IROHA_TORII_LOAD_PROFILE_CONCURRENCY",
         DEFAULT_HTTP_CONCURRENCY,
     );
-
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_config_layer(|layer| {
@@ -283,11 +265,9 @@ async fn torii_http_hot_path_load_profile() -> eyre::Result<()> {
     else {
         return Ok(());
     };
-
     network
         .ensure_blocks_with(|height| height.total >= 1)
         .await?;
-
     let clients = network
         .peers()
         .iter()
@@ -297,7 +277,6 @@ async fn torii_http_hot_path_load_profile() -> eyre::Result<()> {
         clients.len() == 4,
         "expected a 4-peer Torii load profile network"
     );
-
     let query_warmup = HTTP_WARMUP_SAMPLES.min(query_samples);
     warmup_queries(&clients, query_warmup).await?;
     let (query_durations, query_wall_time) =
@@ -310,7 +289,6 @@ async fn torii_http_hot_path_load_profile() -> eyre::Result<()> {
         bounded_concurrency(query_samples, concurrency),
         query_wall_time,
     );
-
     let network_id = network.network_id();
     let tx_warmup = HTTP_WARMUP_SAMPLES.min(tx_samples);
     warmup_transactions(&clients, network_id, tx_warmup).await?;
@@ -324,7 +302,6 @@ async fn torii_http_hot_path_load_profile() -> eyre::Result<()> {
         bounded_concurrency(tx_samples, concurrency),
         tx_wall_time,
     );
-
     let event_timeout = network.sync_timeout().max(Duration::from_secs(60));
     let (commit_durations, commit_wall_time) = run_transaction_commit_profile(
         &clients,
@@ -342,6 +319,5 @@ async fn torii_http_hot_path_load_profile() -> eyre::Result<()> {
         bounded_concurrency(commit_samples, concurrency.min(DEFAULT_HTTP_COMMIT_SAMPLES)),
         commit_wall_time,
     );
-
     Ok(())
 }

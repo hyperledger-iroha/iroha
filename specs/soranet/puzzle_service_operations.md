@@ -68,7 +68,11 @@ forking consumption state.
 Empty, malformed, over-TTL, or over-capacity snapshots fail startup rather
 than silently discarding replay history. Keep the TTL bound aligned with
 `max_ttl_secs`, place the snapshot on durable storage, and size the capacity
-to cover the expected client burst for the configured retention window.
+to cover the expected client burst for the configured retention window. The
+first-release capacity ceiling is 65,536 entries. Snapshot reads are capped
+from the configured capacity before decoding, reject symbolic links/reparse
+points and path replacement, and apply explicit Norito element and allocation
+budgets before allocating replay maps.
 Relay metrics expose `soranet_token_verify_total{issuer,relay,outcome}` counters
 for acceptance, replay, expiry/TTL, mismatch, revocation, and store failures so
 dashboards can alert on replay spikes or issuer/relay mismatches.
@@ -106,7 +110,11 @@ user, and size the TTL/capacity to cover the longest accepted ticket lifetime
 and peak issuance rate. Active entries are never evicted: a full store rejects
 new handshakes until records expire. A missing snapshot starts as an empty
 persistent store at the configured path; an unreadable or malformed snapshot
-fails startup instead of silently discarding consumption history.
+fails startup instead of silently discarding consumption history. Capacity is
+hard-limited to 65,536 entries in the first release. The loader admits only a
+stable direct regular file within the capacity-derived byte envelope and uses
+explicit Norito decode and allocation limits; persistence streams through the
+same envelope without retaining a second encoded snapshot buffer.
 Telemetry exposes `soranet_privacy_pow_rejects_total{reason}` with `relay_mismatch`,
 `replay`, and `store_error` reason labels so dashboards can distinguish cross-relay
 presentation from genuine replay attempts and correlate spikes with store errors or relay

@@ -3,11 +3,9 @@ use std::{
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet},
 };
-
 #[cfg(test)]
 use super::ir::Program;
 use super::ir::{BasicBlock, Function, Instr, Label, Temp, Terminator};
-
 /// Result of register allocation for a function.
 #[derive(Debug, PartialEq)]
 pub struct Allocation {
@@ -18,7 +16,6 @@ pub struct Allocation {
     /// Total frame size in bytes (16-byte aligned).
     pub frame_size: usize,
 }
-
 /// One register-resident slice of a temporary whose canonical home is a spill slot.
 ///
 /// Split segments are read-only: code generation reloads the spill slot at
@@ -33,7 +30,6 @@ pub(crate) struct SplitSegment {
     end: usize,
     use_count: usize,
 }
-
 /// Reload scheduled at the beginning of a split live segment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SplitReload {
@@ -42,7 +38,6 @@ pub(crate) struct SplitReload {
     /// Physical register holding this segment.
     pub(crate) register: usize,
 }
-
 /// Internal code-generation plan combining stable stack homes with split ranges.
 ///
 /// The public [`Allocation`] shape remains the canonical home-location view.
@@ -54,15 +49,12 @@ pub(crate) struct AllocationPlan {
     segments: HashMap<Temp, Vec<SplitSegment>>,
     reloads: BTreeMap<usize, Vec<SplitReload>>,
 }
-
 impl std::ops::Deref for AllocationPlan {
     type Target = Allocation;
-
     fn deref(&self) -> &Self::Target {
         &self.home
     }
 }
-
 impl AllocationPlan {
     /// Return the register containing `temp` at a source-use position.
     pub(crate) fn register_for_use(&self, temp: Temp, position: usize) -> Option<usize> {
@@ -78,12 +70,10 @@ impl AllocationPlan {
         }
         self.home.regs.get(&temp).copied()
     }
-
     /// Return deterministic spill reloads required before `position` executes.
     pub(crate) fn reloads_at(&self, position: usize) -> &[SplitReload] {
         self.reloads.get(&position).map_or(&[], Vec::as_slice)
     }
-
     /// Return every physical register used by a home or split interval.
     pub(crate) fn used_registers(&self) -> Vec<usize> {
         let mut registers = self.home.regs.values().copied().collect::<BTreeSet<_>>();
@@ -92,12 +82,10 @@ impl AllocationPlan {
         }
         registers.into_iter().collect()
     }
-
     #[cfg(test)]
     fn split_segments(&self, temp: Temp) -> &[SplitSegment] {
         self.segments.get(&temp).map_or(&[], Vec::as_slice)
     }
-
     #[cfg(test)]
     pub(crate) fn first_split_register(&self, temp: Temp) -> Option<usize> {
         self.segments
@@ -105,7 +93,6 @@ impl AllocationPlan {
             .and_then(|segments| segments.first())
             .map(|segment| segment.register)
     }
-
     #[cfg(test)]
     fn saved_reload_count(&self) -> usize {
         self.segments
@@ -115,7 +102,6 @@ impl AllocationPlan {
             .sum()
     }
 }
-
 /// Registers r10-r22 are used for argument passing.
 pub const ARG_REGS: [usize; 13] = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
 /// Maximum number of recursively flattened argument words in the V1 call ABI.
@@ -128,17 +114,14 @@ pub const MAX_RETURN_VALUES: usize = ARG_REGS.len();
 pub const SP_REG: usize = 31;
 /// r30 may be used as a frame pointer.
 pub const FP_REG: usize = 30;
-
 // Pool of allocatable registers (see policy above)
 const ALLOC_POOL: &[usize] = &[2, 3, 4, 5, 6, 7, 8, 9, 23, 24];
-
 #[derive(Clone, Copy, Debug)]
 struct Interval {
     temp: Temp,
     start: usize,
     end: usize,
 }
-
 #[cfg(test)]
 /// Legacy transport-IR optimizer retained only for regression comparison.
 ///
@@ -166,7 +149,6 @@ pub(crate) fn optimize_program(program: &mut Program) {
         }
     }
 }
-
 #[cfg(test)]
 /// Legacy transport-IR whole-program DCE retained for regression tests.
 /// Remove functions that cannot be reached from any deployable or test root.
@@ -193,7 +175,6 @@ pub(crate) fn retain_reachable_functions(
             ));
         }
     }
-
     let mut pending = Vec::with_capacity(roots.len());
     for root in roots.iter().rev() {
         let Some(index) = function_indices.get(root).copied() else {
@@ -203,7 +184,6 @@ pub(crate) fn retain_reachable_functions(
         };
         pending.push(index);
     }
-
     let mut reachable = BTreeSet::new();
     while let Some(index) = pending.pop() {
         if !reachable.insert(index) {
@@ -228,7 +208,6 @@ pub(crate) fn retain_reachable_functions(
             pending.push(callee_index);
         }
     }
-
     let mut index = 0usize;
     program.functions.retain(|_| {
         let keep = reachable.contains(&index);
@@ -237,7 +216,6 @@ pub(crate) fn retain_reachable_functions(
     });
     Ok(())
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg(test)]
 enum ConstantState {
@@ -245,7 +223,6 @@ enum ConstantState {
     Integer(i64),
     Overdefined,
 }
-
 #[cfg(test)]
 fn merge_constant_state(left: ConstantState, right: ConstantState) -> ConstantState {
     match (left, right) {
@@ -258,7 +235,6 @@ fn merge_constant_state(left: ConstantState, right: ConstantState) -> ConstantSt
         | (_, ConstantState::Overdefined) => ConstantState::Overdefined,
     }
 }
-
 #[cfg(test)]
 fn constant_state(constants: &HashMap<Temp, ConstantState>, temp: Temp) -> ConstantState {
     constants
@@ -266,7 +242,6 @@ fn constant_state(constants: &HashMap<Temp, ConstantState>, temp: Temp) -> Const
         .copied()
         .unwrap_or(ConstantState::Unknown)
 }
-
 #[cfg(test)]
 fn integer_constant(constants: &HashMap<Temp, ConstantState>, temp: Temp) -> Option<i64> {
     match constant_state(constants, temp) {
@@ -274,7 +249,6 @@ fn integer_constant(constants: &HashMap<Temp, ConstantState>, temp: Temp) -> Opt
         ConstantState::Unknown | ConstantState::Overdefined => None,
     }
 }
-
 #[cfg(test)]
 fn merge_definition(
     constants: &mut HashMap<Temp, ConstantState>,
@@ -289,11 +263,9 @@ fn merge_definition(
     constants.insert(dest, merged);
     true
 }
-
 #[cfg(test)]
 fn checked_binary_constant(op: super::ast::BinaryOp, left: i64, right: i64) -> Option<i64> {
     use super::ast::BinaryOp;
-
     match op {
         BinaryOp::Add => left.checked_add(right),
         BinaryOp::Sub => left.checked_sub(right),
@@ -310,11 +282,9 @@ fn checked_binary_constant(op: super::ast::BinaryOp, left: i64, right: i64) -> O
         BinaryOp::Ge => Some(i64::from(left >= right)),
     }
 }
-
 #[cfg(test)]
 fn wrapping_binary_constant(op: super::ast::BinaryOp, left: i64, right: i64) -> Option<i64> {
     use super::ast::BinaryOp;
-
     match op {
         BinaryOp::Add => Some(left.wrapping_add(right)),
         BinaryOp::Sub => Some(left.wrapping_sub(right)),
@@ -331,7 +301,6 @@ fn wrapping_binary_constant(op: super::ast::BinaryOp, left: i64, right: i64) -> 
         | BinaryOp::Ge => None,
     }
 }
-
 #[cfg(test)]
 fn unary_constant(op: super::ast::UnaryOp, operand: i64) -> Option<i64> {
     match op {
@@ -339,7 +308,6 @@ fn unary_constant(op: super::ast::UnaryOp, operand: i64) -> Option<i64> {
         super::ast::UnaryOp::Not => Some(i64::from(operand == 0)),
     }
 }
-
 #[cfg(test)]
 fn instruction_constant_state(
     instruction: &Instr,
@@ -362,7 +330,6 @@ fn instruction_constant_state(
             (ConstantState::Unknown, _) | (_, ConstantState::Unknown) => ConstantState::Unknown,
         }
     };
-
     match instruction {
         Instr::Const { value, .. } => ConstantState::Integer(*value),
         Instr::Copy { src, .. } => constant_state(constants, *src),
@@ -386,7 +353,6 @@ fn instruction_constant_state(
         _ => ConstantState::Overdefined,
     }
 }
-
 /// Infer constants across SSA copies and control-flow joins. A temporary is a
 /// constant only when every reachable definition converges to the same value.
 /// Treating unknown definitions as the lattice bottom lets loop-carried copies
@@ -415,7 +381,6 @@ fn infer_integer_constants(function: &Function) -> HashMap<Temp, ConstantState> 
         }
     }
 }
-
 #[cfg(test)]
 fn simplify_binary_instruction(
     dest: Temp,
@@ -425,13 +390,11 @@ fn simplify_binary_instruction(
     constants: &HashMap<Temp, ConstantState>,
 ) -> Option<Instr> {
     use super::ast::BinaryOp;
-
     let left_constant = integer_constant(constants, left);
     let right_constant = integer_constant(constants, right);
     if let (Some(left), Some(right)) = (left_constant, right_constant) {
         return checked_binary_constant(op, left, right).map(|value| Instr::Const { dest, value });
     }
-
     match op {
         // Do not rewrite integer addition with zero: the existing IR also uses
         // `DataRef + 0` as a typed literal materialization marker.
@@ -474,7 +437,6 @@ fn simplify_binary_instruction(
         | BinaryOp::Ge => None,
     }
 }
-
 #[cfg(test)]
 fn simplify_wrapping_binary_instruction(
     dest: Temp,
@@ -484,13 +446,11 @@ fn simplify_wrapping_binary_instruction(
     constants: &HashMap<Temp, ConstantState>,
 ) -> Option<Instr> {
     use super::ast::BinaryOp;
-
     let left_constant = integer_constant(constants, left);
     let right_constant = integer_constant(constants, right);
     if let (Some(left), Some(right)) = (left_constant, right_constant) {
         return wrapping_binary_constant(op, left, right).map(|value| Instr::Const { dest, value });
     }
-
     match op {
         BinaryOp::Add if left_constant == Some(0) => Some(Instr::Copy { dest, src: right }),
         BinaryOp::Add if right_constant == Some(0) => Some(Instr::Copy { dest, src: left }),
@@ -514,7 +474,6 @@ fn simplify_wrapping_binary_instruction(
         | BinaryOp::Ge => None,
     }
 }
-
 #[cfg(test)]
 fn fold_integer_instructions(
     function: &mut Function,
@@ -557,7 +516,6 @@ fn fold_integer_instructions(
     }
     changed
 }
-
 #[cfg(test)]
 fn resolve_trampoline(mut label: Label, trampolines: &HashMap<Label, Label>) -> Label {
     let original = label;
@@ -570,7 +528,6 @@ fn resolve_trampoline(mut label: Label, trampolines: &HashMap<Label, Label>) -> 
     }
     label
 }
-
 #[cfg(test)]
 fn simplify_control_flow(
     function: &mut Function,
@@ -596,7 +553,6 @@ fn simplify_control_flow(
             }
         }
     }
-
     let trampolines: HashMap<Label, Label> = function
         .blocks
         .iter()
@@ -613,7 +569,6 @@ fn simplify_control_flow(
     if trampolines.is_empty() {
         return changed;
     }
-
     let entry = resolve_trampoline(function.entry, &trampolines);
     changed |= entry != function.entry;
     function.entry = entry;
@@ -642,7 +597,6 @@ fn simplify_control_flow(
     }
     changed
 }
-
 #[cfg(test)]
 fn retarget_simple_definition(instruction: &mut Instr, from: Temp, to: Temp) -> bool {
     let dest = match instruction {
@@ -666,7 +620,6 @@ fn retarget_simple_definition(instruction: &mut Instr, from: Temp, to: Temp) -> 
     *dest = to;
     true
 }
-
 #[cfg(test)]
 fn is_simple_definition(instruction: &Instr, temp: Temp) -> bool {
     matches!(
@@ -686,7 +639,6 @@ fn is_simple_definition(instruction: &Instr, temp: Temp) -> bool {
             if *dest == temp
     )
 }
-
 /// Coalesce a copy into its unique, same-block producer. Restricting the pass
 /// to a single block and a source with exactly one use makes dominance and
 /// lifetime preservation explicit; multi-definition join/loop copies remain
@@ -710,7 +662,6 @@ fn coalesce_local_copies(function: &mut Function) -> bool {
                 *use_counts.entry(temp).or_default() += 1;
             });
         }
-
         let mut candidate = None;
         'blocks: for (block_index, block) in function.blocks.iter().enumerate() {
             for (copy_index, instruction) in block.instrs.iter().enumerate() {
@@ -733,7 +684,6 @@ fn coalesce_local_copies(function: &mut Function) -> bool {
                 }
             }
         }
-
         let Some((block_index, producer_index, copy_index, src, dest)) = candidate else {
             return any_changed;
         };
@@ -747,7 +697,6 @@ fn coalesce_local_copies(function: &mut Function) -> bool {
         any_changed = true;
     }
 }
-
 #[cfg(test)]
 fn retain_reachable_blocks(function: &mut Function) {
     let label_to_idx: HashMap<Label, usize> = function
@@ -761,7 +710,6 @@ fn retain_reachable_blocks(function: &mut Function) {
         // regular compiler validation reports it instead of hiding it here.
         return;
     };
-
     let mut reachable = HashSet::new();
     let mut pending = vec![entry_index];
     while let Some(index) = pending.pop() {
@@ -775,7 +723,6 @@ fn retain_reachable_blocks(function: &mut Function) {
         successors.reverse();
         pending.extend(successors);
     }
-
     let mut index = 0usize;
     function.blocks.retain(|_| {
         let keep = reachable.contains(&index);
@@ -783,7 +730,6 @@ fn retain_reachable_blocks(function: &mut Function) {
         keep
     });
 }
-
 #[cfg(test)]
 fn eliminate_dead_pure_instructions(function: &mut Function) -> bool {
     let label_to_idx: HashMap<Label, usize> = function
@@ -811,14 +757,12 @@ fn eliminate_dead_pure_instructions(function: &mut Function) -> bool {
         .map(|block| block_successors(block, &label_to_idx))
         .collect::<Vec<_>>();
     let (_, live_out) = compute_liveness(&block_uses, &block_defs, &block_succs);
-
     let mut changed = false;
     for (block_index, block) in function.blocks.iter_mut().enumerate() {
         let mut live = live_out[block_index].clone();
         visit_terminator_uses(&block.terminator, |temp| {
             live.insert(temp);
         });
-
         let mut retained = Vec::with_capacity(block.instrs.len());
         for instruction in block.instrs.drain(..).rev() {
             let mut definitions = Vec::new();
@@ -830,7 +774,6 @@ fn eliminate_dead_pure_instructions(function: &mut Function) -> bool {
                 changed = true;
                 continue;
             }
-
             for definition in definitions {
                 live.remove(&definition);
             }
@@ -844,7 +787,6 @@ fn eliminate_dead_pure_instructions(function: &mut Function) -> bool {
     }
     changed
 }
-
 #[cfg(test)]
 fn is_dead_code_eliminable(instruction: &Instr) -> bool {
     match instruction {
@@ -873,7 +815,6 @@ fn is_dead_code_eliminable(instruction: &Instr) -> bool {
         _ => false,
     }
 }
-
 fn instruction_preserves_argument_registers(instruction: &Instr) -> bool {
     matches!(
         instruction,
@@ -908,7 +849,6 @@ fn instruction_preserves_argument_registers(instruction: &Instr) -> bool {
             | Instr::MapSet { .. }
     )
 }
-
 #[derive(Debug)]
 struct ArgumentRegisterClobber {
     position: usize,
@@ -918,7 +858,6 @@ struct ArgumentRegisterClobber {
     /// control-flow path, including fields carried by virtual tuples.
     live_across: HashSet<Temp>,
 }
-
 fn update_tuple_definitions(tuple_defs: &mut HashMap<Temp, Vec<Temp>>, instruction: &Instr) {
     match instruction {
         Instr::TuplePack { dest, items } => {
@@ -946,7 +885,6 @@ fn update_tuple_definitions(tuple_defs: &mut HashMap<Temp, Vec<Temp>>, instructi
         _ => {}
     }
 }
-
 fn extend_virtual_tuple_liveness(live: &mut HashSet<Temp>, tuple_defs: &HashMap<Temp, Vec<Temp>>) {
     let mut pending = live.iter().copied().collect::<Vec<_>>();
     while let Some(tuple) = pending.pop() {
@@ -959,7 +897,6 @@ fn extend_virtual_tuple_liveness(live: &mut HashSet<Temp>, tuple_defs: &HashMap<
         }
     }
 }
-
 fn collect_argument_register_clobbers(function: &Function) -> Vec<ArgumentRegisterClobber> {
     let mut label_to_idx = HashMap::with_capacity(function.blocks.len());
     for (idx, block) in function.blocks.iter().enumerate() {
@@ -979,7 +916,6 @@ fn collect_argument_register_clobbers(function: &Function) -> Vec<ArgumentRegist
         block_succs.push(block_successors(block, &label_to_idx));
     }
     let (_, live_out) = compute_liveness(&block_uses, &block_defs, &block_succs);
-
     let mut clobbers = Vec::new();
     let mut position = 0usize;
     let mut block_starts = Vec::with_capacity(function.blocks.len());
@@ -1024,7 +960,6 @@ fn collect_argument_register_clobbers(function: &Function) -> Vec<ArgumentRegist
     clobbers.sort_unstable_by_key(|clobber| clobber.position);
     clobbers
 }
-
 fn interval_can_use_argument_registers(
     interval: Interval,
     clobbers: &[ArgumentRegisterClobber],
@@ -1034,7 +969,6 @@ fn interval_can_use_argument_registers(
             && (clobber.internal_call || !clobber.uses.contains(&interval.temp))
     })
 }
-
 fn reload_range_survives_clobber(
     start: usize,
     end: usize,
@@ -1044,7 +978,6 @@ fn reload_range_survives_clobber(
         .iter()
         .any(|clobber| start <= clobber.position && clobber.position < end)
 }
-
 fn split_candidate_can_use_argument_registers(
     candidate: SplitCandidate,
     clobbers: &[ArgumentRegisterClobber],
@@ -1057,7 +990,6 @@ fn split_candidate_can_use_argument_registers(
                 || candidate.end < clobber.position
         })
 }
-
 /// Whether a direct function call can overwrite the return-address register.
 pub(crate) fn has_internal_calls(function: &Function) -> bool {
     function.blocks.iter().any(|block| {
@@ -1067,7 +999,6 @@ pub(crate) fn has_internal_calls(function: &Function) -> bool {
             .any(|instruction| matches!(instruction, Instr::Call { .. } | Instr::CallMulti { .. }))
     })
 }
-
 fn precolored_argument_temps(
     function: &Function,
     argument_register_temps: &HashSet<Temp>,
@@ -1079,7 +1010,6 @@ fn precolored_argument_temps(
     else {
         return HashMap::new();
     };
-
     entry
         .instrs
         .iter()
@@ -1099,13 +1029,11 @@ fn precolored_argument_temps(
         })
         .collect()
 }
-
 /// Allocate registers for a function using a single-pass linear scan.
 pub fn allocate(func: &Function) -> Allocation {
     let intervals = collect_live_intervals(func);
     allocate_intervals(func, &intervals)
 }
-
 /// Allocate canonical homes, then fill post-pressure register holes with
 /// read-only slices of frequently reused spills.
 pub(crate) fn allocate_with_splitting(func: &Function) -> AllocationPlan {
@@ -1127,7 +1055,6 @@ pub(crate) fn allocate_with_splitting(func: &Function) -> AllocationPlan {
     for position_reloads in reloads.values_mut() {
         position_reloads.sort_unstable_by_key(|reload| (reload.register, reload.temp.0));
     }
-
     if crate::dev_env::debug_regalloc_enabled() {
         let mut ordered = segments.values().flatten().copied().collect::<Vec<_>>();
         ordered.sort_unstable_by_key(|segment| (segment.start, segment.temp.0, segment.register));
@@ -1138,14 +1065,12 @@ pub(crate) fn allocate_with_splitting(func: &Function) -> AllocationPlan {
             );
         }
     }
-
     AllocationPlan {
         home,
         segments,
         reloads,
     }
 }
-
 fn collect_live_intervals(func: &Function) -> Vec<Interval> {
     let mut intervals: HashMap<Temp, Interval> = HashMap::new();
     let mut tuple_defs: HashMap<Temp, Vec<Temp>> = HashMap::new();
@@ -1166,7 +1091,6 @@ fn collect_live_intervals(func: &Function) -> Vec<Interval> {
     }
     let (live_in, _live_out) = compute_liveness(&block_uses, &block_defs, &block_succs);
     let mut block_end_pos: Vec<usize> = Vec::with_capacity(block_count);
-
     for block in &func.blocks {
         for instr in &block.instrs {
             visit_instr_uses(instr, |temp| add_use(&mut intervals, temp, position));
@@ -1180,7 +1104,6 @@ fn collect_live_intervals(func: &Function) -> Vec<Interval> {
         block_end_pos.push(position);
         position = position.saturating_add(1);
     }
-
     for (block_idx, succs) in block_succs.iter().enumerate() {
         for &succ in succs {
             if succ <= block_idx {
@@ -1202,18 +1125,14 @@ fn collect_live_intervals(func: &Function) -> Vec<Interval> {
             }
         }
     }
-
     extend_tuple_intervals(&mut intervals, &tuple_defs);
-
     let mut interval_list: Vec<Interval> = intervals.values().copied().collect();
     interval_list.sort_by_key(|iv| (iv.start, iv.temp.0));
     interval_list
 }
-
 fn register_allowed_for_interval(register: usize, can_use_argument_register: bool) -> bool {
     ALLOC_POOL.contains(&register) || can_use_argument_register && ARG_REGS.contains(&register)
 }
-
 fn take_preferred_free_register(
     free_registers: &mut Vec<usize>,
     can_use_argument_register: bool,
@@ -1233,7 +1152,6 @@ fn take_preferred_free_register(
     }
     None
 }
-
 fn allocate_intervals(func: &Function, interval_list: &[Interval]) -> Allocation {
     let mut allocation = Allocation {
         regs: HashMap::new(),
@@ -1255,10 +1173,8 @@ fn allocate_intervals(func: &Function, interval_list: &[Interval]) -> Allocation
         .copied()
         .collect::<Vec<_>>();
     let mut spilled = HashSet::new();
-
     for interval in interval_list.iter().copied() {
         expire_old_intervals(interval.start, &mut active, &mut free_regs);
-
         if let Some(&register) = precolored.get(&interval.temp) {
             if let Some(index) = free_regs.iter().position(|free| *free == register) {
                 free_regs.swap_remove(index);
@@ -1275,7 +1191,6 @@ fn allocate_intervals(func: &Function, interval_list: &[Interval]) -> Allocation
             active.sort_by_key(|(end, _, _)| *end);
             continue;
         }
-
         let can_use_argument_register = argument_register_temps.contains(&interval.temp);
         if let Some(reg) = take_preferred_free_register(&mut free_regs, can_use_argument_register) {
             allocation.regs.insert(interval.temp, reg);
@@ -1283,7 +1198,6 @@ fn allocate_intervals(func: &Function, interval_list: &[Interval]) -> Allocation
             active.sort_by_key(|(end, _, _)| *end);
             continue;
         }
-
         if let Some((idx, _, _, _)) = active
             .iter()
             .enumerate()
@@ -1304,10 +1218,8 @@ fn allocate_intervals(func: &Function, interval_list: &[Interval]) -> Allocation
                 continue;
             }
         }
-
         spilled.insert(interval.temp);
     }
-
     let (stack, mut next_slot) = assign_spill_slots(interval_list, &spilled);
     allocation.stack = stack;
     if !next_slot.is_multiple_of(16) {
@@ -1330,9 +1242,7 @@ fn allocate_intervals(func: &Function, interval_list: &[Interval]) -> Allocation
     }
     allocation
 }
-
 const MAX_SPLIT_USE_GAP: usize = 8;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SplitCandidate {
     temp: Temp,
@@ -1340,7 +1250,6 @@ struct SplitCandidate {
     end: usize,
     use_count: usize,
 }
-
 fn ranges_overlap(
     left_start: usize,
     left_end: usize,
@@ -1349,7 +1258,6 @@ fn ranges_overlap(
 ) -> bool {
     left_start <= right_end && right_start <= left_end
 }
-
 fn split_candidate_uses<F: FnMut(Temp)>(instruction: &Instr, mut visit: F) {
     match instruction {
         Instr::Binary { left, right, .. }
@@ -1444,7 +1352,6 @@ fn split_candidate_uses<F: FnMut(Temp)>(instruction: &Instr, mut visit: F) {
         _ => {}
     }
 }
-
 fn split_candidate_terminator_uses<F: FnMut(Temp)>(terminator: &Terminator, mut visit: F) {
     match terminator {
         Terminator::Return(Some(temp)) => visit(*temp),
@@ -1461,7 +1368,6 @@ fn split_candidate_terminator_uses<F: FnMut(Temp)>(terminator: &Terminator, mut 
         Terminator::Branch { cond, .. } => visit(*cond),
     }
 }
-
 fn fused_relational_operands(block: &BasicBlock) -> Option<(Temp, Temp)> {
     let Terminator::Branch { cond, .. } = &block.terminator else {
         return None;
@@ -1489,7 +1395,6 @@ fn fused_relational_operands(block: &BasicBlock) -> Option<(Temp, Temp)> {
         None
     }
 }
-
 fn push_split_clusters(
     candidates: &mut Vec<SplitCandidate>,
     temp: Temp,
@@ -1522,7 +1427,6 @@ fn push_split_clusters(
         cluster_start = cluster_end;
     }
 }
-
 fn collect_split_candidates(func: &Function, home: &Allocation) -> Vec<SplitCandidate> {
     let mut candidates = Vec::new();
     let mut position = 0usize;
@@ -1586,7 +1490,6 @@ fn collect_split_candidates(func: &Function, home: &Allocation) -> Vec<SplitCand
             });
             position = position.saturating_add(1);
         }
-
         if let Some((left, right)) = fused {
             for temp in [left, right] {
                 if home.stack.contains_key(&temp) && !rematerializable.contains(&temp) {
@@ -1603,7 +1506,6 @@ fn collect_split_candidates(func: &Function, home: &Allocation) -> Vec<SplitCand
             });
         }
         position = position.saturating_add(1);
-
         let mut block_uses = uses.into_iter().collect::<Vec<_>>();
         block_uses.sort_unstable_by_key(|((temp, epoch), _)| (temp.0, *epoch));
         for ((temp, _), positions) in block_uses {
@@ -1612,7 +1514,6 @@ fn collect_split_candidates(func: &Function, home: &Allocation) -> Vec<SplitCand
     }
     candidates
 }
-
 fn build_split_segments(
     func: &Function,
     intervals: &[Interval],
@@ -1621,7 +1522,6 @@ fn build_split_segments(
     if home.stack.is_empty() {
         return Vec::new();
     }
-
     let clobbers = collect_argument_register_clobbers(func);
     let home_registers = home.regs.values().copied().collect::<BTreeSet<_>>();
     // Reusing a preserved register that already has a home interval avoids
@@ -1633,7 +1533,6 @@ fn build_split_segments(
         .copied()
         .filter(|register| home_registers.contains(register))
         .collect::<Vec<_>>();
-
     let mut occupied: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
     for interval in intervals {
         if let Some(register) = home.regs.get(&interval.temp).copied() {
@@ -1643,7 +1542,6 @@ fn build_split_segments(
                 .push((interval.start, interval.end));
         }
     }
-
     let mut candidates = collect_split_candidates(func, home);
     candidates.sort_unstable_by(|left, right| {
         right
@@ -1657,7 +1555,6 @@ fn build_split_segments(
             .then_with(|| left.start.cmp(&right.start))
             .then_with(|| left.temp.0.cmp(&right.temp.0))
     });
-
     let mut segments = Vec::new();
     for candidate in candidates {
         let can_use_argument_register =
@@ -1692,7 +1589,6 @@ fn build_split_segments(
     }
     segments
 }
-
 fn expire_stack_intervals(
     current_start: usize,
     active: &mut Vec<(usize, usize)>,
@@ -1705,7 +1601,6 @@ fn expire_stack_intervals(
         free_slots.push(Reverse(slot));
     }
 }
-
 fn assign_spill_slots(
     intervals: &[Interval],
     spilled: &HashSet<Temp>,
@@ -1714,7 +1609,6 @@ fn assign_spill_slots(
     let mut active: Vec<(usize, usize)> = Vec::new();
     let mut free_slots: BinaryHeap<Reverse<usize>> = BinaryHeap::new();
     let mut next_slot = 0usize;
-
     for interval in intervals
         .iter()
         .filter(|interval| spilled.contains(&interval.temp))
@@ -1734,10 +1628,8 @@ fn assign_spill_slots(
             right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1))
         });
     }
-
     (slots, next_slot)
 }
-
 fn extend_tuple_intervals(
     intervals: &mut HashMap<Temp, Interval>,
     tuple_defs: &HashMap<Temp, Vec<Temp>>,
@@ -1771,7 +1663,6 @@ fn extend_tuple_intervals(
         }
         visiting.remove(&tuple);
     }
-
     let mut visiting: HashSet<Temp> = HashSet::new();
     let tuples: Vec<(Temp, usize)> = tuple_defs
         .keys()
@@ -1781,7 +1672,6 @@ fn extend_tuple_intervals(
         extend_tuple_items(tuple, tuple_end, intervals, tuple_defs, &mut visiting);
     }
 }
-
 fn add_def(intervals: &mut HashMap<Temp, Interval>, temp: Temp, pos: usize) {
     intervals
         .entry(temp)
@@ -1795,7 +1685,6 @@ fn add_def(intervals: &mut HashMap<Temp, Interval>, temp: Temp, pos: usize) {
             end: pos,
         });
 }
-
 fn add_use(intervals: &mut HashMap<Temp, Interval>, temp: Temp, pos: usize) {
     intervals
         .entry(temp)
@@ -1806,7 +1695,6 @@ fn add_use(intervals: &mut HashMap<Temp, Interval>, temp: Temp, pos: usize) {
             end: pos,
         });
 }
-
 fn expire_old_intervals(
     current_start: usize,
     active: &mut Vec<(usize, Temp, usize)>,
@@ -1822,7 +1710,6 @@ fn expire_old_intervals(
         }
     }
 }
-
 fn block_uses_defs(block: &BasicBlock) -> (HashSet<Temp>, HashSet<Temp>) {
     let mut uses = HashSet::new();
     let mut defs = HashSet::new();
@@ -1843,7 +1730,6 @@ fn block_uses_defs(block: &BasicBlock) -> (HashSet<Temp>, HashSet<Temp>) {
     });
     (uses, defs)
 }
-
 fn block_successors(block: &BasicBlock, label_to_idx: &HashMap<Label, usize>) -> Vec<usize> {
     match block.terminator {
         Terminator::Jump(label) => label_to_idx.get(&label).copied().into_iter().collect(),
@@ -1862,7 +1748,6 @@ fn block_successors(block: &BasicBlock, label_to_idx: &HashMap<Label, usize>) ->
         Terminator::Return(_) | Terminator::Return2(_, _) | Terminator::ReturnN(_) => Vec::new(),
     }
 }
-
 fn compute_liveness(
     block_uses: &[HashSet<Temp>],
     block_defs: &[HashSet<Temp>],
@@ -1894,7 +1779,6 @@ fn compute_liveness(
     }
     (live_in, live_out)
 }
-
 pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
     use Instr::*;
     match instr {
@@ -2505,7 +2389,6 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         AxtCommit => {}
     }
 }
-
 pub(crate) fn visit_terminator_uses<F: FnMut(Temp)>(term: &Terminator, mut f: F) {
     match term {
         Terminator::Return(Some(temp)) => f(*temp),
@@ -2522,7 +2405,6 @@ pub(crate) fn visit_terminator_uses<F: FnMut(Temp)>(term: &Terminator, mut f: F)
         Terminator::Return(None) | Terminator::Jump(_) => {}
     }
 }
-
 fn dest_temp(instr: &Instr) -> Option<Temp> {
     match instr {
         Instr::PointerEq { dest, .. }
@@ -2717,7 +2599,6 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::CoreQueryPage { .. } => None,
     }
 }
-
 /// Visit every temporary defined by one IR instruction.
 pub(crate) fn visit_instr_defs<F: FnMut(Temp)>(instruction: &Instr, mut visit: F) {
     if let Some(dest) = dest_temp(instruction) {
@@ -2746,12 +2627,10 @@ pub(crate) fn visit_instr_defs<F: FnMut(Temp)>(instruction: &Instr, mut visit: F
         _ => {}
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ir::{self, BasicBlock, Instr, Terminator};
-
     #[test]
     fn private_numeric_commitment_reports_each_pointer_operand_once() {
         let value = Temp(1);
@@ -2761,13 +2640,10 @@ mod tests {
             value,
             blind,
         };
-
         let mut uses = Vec::new();
         visit_instr_uses(&instruction, |used| uses.push(used));
-
         assert_eq!(uses, vec![value, blind]);
     }
-
     #[test]
     fn private_numeric_instruction_visitors_preserve_aliased_uses_and_definitions() {
         let shared = Temp(1);
@@ -2783,7 +2659,6 @@ mod tests {
         visit_instr_defs(&commitment, |defined| commitment_defs.push(defined));
         assert_eq!(commitment_uses, vec![shared, shared]);
         assert_eq!(commitment_defs, vec![commitment_dest]);
-
         let private_input = Instr::GetPrivateInput {
             dest: shared,
             index: shared,
@@ -2796,7 +2671,6 @@ mod tests {
         assert_eq!(private_input_uses, vec![shared]);
         assert_eq!(private_input_defs, vec![shared]);
     }
-
     #[test]
     fn rounded_decimal_conversion_reports_its_mode_operand_once() {
         let value = Temp(1);
@@ -2807,13 +2681,10 @@ mod tests {
             mode: Some(mode),
             op: ir::DecimalToIntOp::Round,
         };
-
         let mut uses = Vec::new();
         visit_instr_uses(&instruction, |used| uses.push(used));
-
         assert_eq!(uses, vec![value, mode]);
     }
-
     #[test]
     fn virtual_tuple_copy_keeps_constant_field_live_until_state_value_extraction() {
         let status = Temp(0);
@@ -2873,7 +2744,6 @@ mod tests {
             entry: Label(0),
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
-
         let intervals = collect_live_intervals(&function);
         let status_interval = intervals
             .iter()
@@ -2884,7 +2754,6 @@ mod tests {
             "virtual tuple copies and nested projections must keep the source field live until TupleGet materializes it"
         );
     }
-
     #[test]
     fn virtual_tuple_fields_needed_after_a_call_use_preserved_homes() {
         let field = Temp(0);
@@ -2920,14 +2789,12 @@ mod tests {
             entry: Label(0),
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
-
         let allocation = allocate(&function);
         assert!(
             ALLOC_POOL.contains(&allocation.regs[&field]),
             "a virtual tuple field materialized after the call must survive it: {allocation:#?}"
         );
     }
-
     #[test]
     fn reuse_registers_when_intervals_do_not_overlap() {
         let mut blocks = Vec::new();
@@ -2957,7 +2824,6 @@ mod tests {
             assert!(ARG_REGS.contains(&reg));
         }
     }
-
     #[test]
     fn precolors_leaf_parameters_in_abi_argument_registers() {
         let parameter = Temp(0);
@@ -2975,14 +2841,12 @@ mod tests {
             entry: Label(0),
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
-
         let alloc = allocate(&func);
         assert_eq!(alloc.regs.get(&parameter), Some(&RET_REG));
         assert!(alloc.stack.is_empty());
         assert_eq!(alloc.frame_size, 0);
         assert!(!has_internal_calls(&func));
     }
-
     #[test]
     fn call_aware_allocation_preserves_only_values_live_across_the_call() {
         let carried = Temp(0);
@@ -3020,14 +2884,12 @@ mod tests {
             entry: Label(0),
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
-
         let allocation = allocate(&function);
         assert!(ALLOC_POOL.contains(&allocation.regs[&carried]));
         assert!(ARG_REGS.contains(&allocation.regs[&argument]));
         assert!(ARG_REGS.contains(&allocation.regs[&call_result]));
         assert!(allocation.stack.is_empty());
     }
-
     #[test]
     fn parameter_precolouring_is_kept_only_when_it_does_not_cross_a_call() {
         let parameter = Temp(0);
@@ -3054,7 +2916,6 @@ mod tests {
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
         assert_eq!(allocate(&dead_at_call).regs[&parameter], RET_REG);
-
         let after_call = Temp(2);
         let live_across_call = Function {
             name: "live_across_call".into(),
@@ -3087,7 +2948,6 @@ mod tests {
         assert_ne!(allocation.regs[&parameter], RET_REG);
         assert!(ALLOC_POOL.contains(&allocation.regs[&parameter]));
     }
-
     #[test]
     fn values_between_multiple_calls_reuse_argument_registers() {
         let carried = Temp(0);
@@ -3126,14 +2986,12 @@ mod tests {
             entry: Label(0),
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
-
         let allocation = allocate(&function);
         assert!(ALLOC_POOL.contains(&allocation.regs[&carried]));
         assert!(ARG_REGS.contains(&allocation.regs[&first_result]));
         assert!(ARG_REGS.contains(&allocation.regs[&second_result]));
         assert_eq!(allocation, allocate(&function));
     }
-
     #[test]
     fn loop_carried_value_uses_a_preserved_home_across_calls() {
         let carried = Temp(0);
@@ -3172,12 +3030,10 @@ mod tests {
             entry: Label(0),
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
-
         let allocation = allocate(&function);
         assert!(ALLOC_POOL.contains(&allocation.regs[&carried]));
         assert!(ARG_REGS.contains(&allocation.regs[&call_result]));
     }
-
     #[test]
     fn join_live_value_uses_a_preserved_home_across_one_branch_call() {
         let carried = Temp(0);
@@ -3221,11 +3077,9 @@ mod tests {
             entry: Label(0),
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
-
         let allocation = allocate(&function);
         assert!(ALLOC_POOL.contains(&allocation.regs[&carried]));
     }
-
     #[test]
     fn disjoint_branch_liveness_does_not_create_false_call_crossings() {
         let condition = Temp(0);
@@ -3298,7 +3152,6 @@ mod tests {
             entry: Label(0),
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
-
         let call_position = 6;
         let intervals = collect_live_intervals(&function);
         for temp in [branch_local, merged] {
@@ -3311,7 +3164,6 @@ mod tests {
                 "the physical block layout must reproduce the conservative linear crossing"
             );
         }
-
         let allocation = allocate(&function);
         assert!(
             [branch_local, merged]
@@ -3322,7 +3174,6 @@ mod tests {
         assert!(allocation.stack.is_empty(), "{allocation:#?}");
         assert_eq!(allocation.frame_size, 0);
     }
-
     #[test]
     fn host_call_operands_are_preserved_while_results_use_argument_registers() {
         let actor = Temp(0);
@@ -3347,12 +3198,10 @@ mod tests {
             entry: Label(0),
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
-
         let allocation = allocate(&function);
         assert!(ALLOC_POOL.contains(&allocation.regs[&actor]));
         assert!(ARG_REGS.contains(&allocation.regs[&account]));
     }
-
     #[test]
     fn call_local_pressure_uses_the_full_caller_saved_window_without_spills() {
         let carried = Temp(0);
@@ -3404,7 +3253,6 @@ mod tests {
             entry: Label(0),
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
-
         let allocation = allocate(&function);
         assert!(allocation.stack.is_empty(), "{allocation:#?}");
         assert!(ALLOC_POOL.contains(&allocation.regs[&carried]));
@@ -3415,7 +3263,6 @@ mod tests {
         );
         assert_eq!(allocation, allocate(&function));
     }
-
     #[test]
     fn optimizer_removes_unreachable_blocks_and_dead_ssa_chains() {
         let dead_source = Temp(0);
@@ -3455,7 +3302,6 @@ mod tests {
                 location: crate::ast::SourceLocation { line: 1, column: 1 },
             }],
         };
-
         optimize_program(&mut program);
         let function = &program.functions[0];
         assert_eq!(function.blocks.len(), 1);
@@ -3467,7 +3313,6 @@ mod tests {
             }]
         );
     }
-
     #[test]
     fn optimizer_keeps_checked_arithmetic_that_can_trap() {
         let left = Temp(0);
@@ -3501,7 +3346,6 @@ mod tests {
                 location: crate::ast::SourceLocation { line: 1, column: 1 },
             }],
         };
-
         optimize_program(&mut program);
         assert!(
             program.functions[0].blocks[0]
@@ -3510,7 +3354,6 @@ mod tests {
                 .any(|instruction| matches!(instruction, Instr::Binary { .. }))
         );
     }
-
     #[test]
     fn optimizer_folds_constant_branch_and_removes_unreachable_effects() {
         let left = Temp(0);
@@ -3564,9 +3407,7 @@ mod tests {
                 location: crate::ast::SourceLocation { line: 1, column: 1 },
             }],
         };
-
         optimize_program(&mut program);
-
         let function = &program.functions[0];
         assert_eq!(function.entry, Label(1));
         assert_eq!(function.blocks.len(), 1);
@@ -3578,11 +3419,9 @@ mod tests {
             }]
         );
     }
-
     #[test]
     fn optimizer_does_not_fold_checked_trap_boundaries() {
         use crate::ast::{BinaryOp, UnaryOp};
-
         let max = Temp(0);
         let one = Temp(1);
         let min = Temp(2);
@@ -3645,9 +3484,7 @@ mod tests {
                 location: crate::ast::SourceLocation { line: 1, column: 1 },
             }],
         };
-
         optimize_program(&mut program);
-
         let instructions = &program.functions[0].blocks[0].instrs;
         assert!(
             instructions
@@ -3670,7 +3507,6 @@ mod tests {
                 .any(|instruction| matches!(instruction, Instr::Unary { dest: Temp(8), .. }))
         );
     }
-
     #[test]
     fn optimizer_coalesces_unknown_copy_chains() {
         let input = Temp(0);
@@ -3702,9 +3538,7 @@ mod tests {
                 location: crate::ast::SourceLocation { line: 1, column: 1 },
             }],
         };
-
         optimize_program(&mut program);
-
         assert_eq!(
             program.functions[0].blocks[0].instrs,
             vec![Instr::LoadVar {
@@ -3713,7 +3547,6 @@ mod tests {
             }]
         );
     }
-
     #[test]
     fn optimizer_eliminates_folded_dead_work() {
         let left = Temp(0);
@@ -3747,12 +3580,9 @@ mod tests {
                 location: crate::ast::SourceLocation { line: 1, column: 1 },
             }],
         };
-
         optimize_program(&mut program);
-
         assert!(program.functions[0].blocks[0].instrs.is_empty());
     }
-
     #[test]
     fn optimizer_simplifies_safe_algebra_without_dropping_input() {
         let input = Temp(0);
@@ -3786,9 +3616,7 @@ mod tests {
                 location: crate::ast::SourceLocation { line: 1, column: 1 },
             }],
         };
-
         optimize_program(&mut program);
-
         assert_eq!(
             program.functions[0].blocks[0].instrs,
             vec![Instr::LoadVar {
@@ -3797,7 +3625,6 @@ mod tests {
             }]
         );
     }
-
     #[test]
     fn whole_program_dce_keeps_only_transitively_reachable_functions_and_fails_closed() {
         let function = |name: &str, instructions: Vec<Instr>| Function {
@@ -3825,7 +3652,6 @@ mod tests {
                 function("helper", Vec::new()),
             ],
         };
-
         retain_reachable_functions(&mut program, &BTreeSet::from(["root".to_owned()]))
             .expect("reachable direct-call graph");
         assert_eq!(
@@ -3836,7 +3662,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["root", "helper"],
         );
-
         let mut unresolved = Program {
             functions: vec![function(
                 "root",
@@ -3854,7 +3679,6 @@ mod tests {
             error.contains("unresolved lowered callee `missing`"),
             "{error}"
         );
-
         let error =
             retain_reachable_functions(&mut unresolved, &BTreeSet::from(["absent".to_owned()]))
                 .expect_err("missing executable root must fail closed");
@@ -3863,7 +3687,6 @@ mod tests {
             "{error}"
         );
     }
-
     #[test]
     fn spills_when_live_set_exceeds_pool() {
         let live = ALLOC_POOL.len() + ARG_REGS.len() + 4;
@@ -3899,7 +3722,6 @@ mod tests {
         assert!(alloc.frame_size > 0);
         assert_eq!(alloc.frame_size % 16, 0);
     }
-
     #[test]
     fn splits_a_long_spill_into_one_reload_for_a_reuse_cluster() {
         let reused = Temp(0);
@@ -3945,7 +3767,6 @@ mod tests {
             entry: Label(0),
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
-
         let baseline = allocate(&function);
         assert!(
             baseline.stack.contains_key(&reused),
@@ -3974,7 +3795,6 @@ mod tests {
             "split allocation must be deterministic"
         );
     }
-
     #[test]
     fn split_candidates_reload_again_after_a_definition_epoch() {
         let value = Temp(0);
@@ -4012,7 +3832,6 @@ mod tests {
             stack: [(value, 0)].into_iter().collect(),
             frame_size: 16,
         };
-
         let mut candidates = collect_split_candidates(&function, &home);
         candidates.sort_unstable_by_key(|candidate| candidate.start);
         assert_eq!(
@@ -4034,7 +3853,6 @@ mod tests {
             "a definition must terminate the prior read-only split segment"
         );
     }
-
     #[test]
     fn split_reload_segments_stop_at_internal_call_clobbers() {
         let value = Temp(0);
@@ -4089,7 +3907,6 @@ mod tests {
             start: 0,
             end: 4,
         }];
-
         let mut segments = build_split_segments(&function, &intervals, &home);
         segments.sort_unstable_by_key(|segment| segment.start);
         assert_eq!(segments.len(), 2, "{segments:#?}");
@@ -4106,7 +3923,6 @@ mod tests {
                 .all(|segment| { !(segment.start <= 2 && 2 < segment.end) })
         );
     }
-
     #[test]
     fn split_candidates_exclude_virtual_and_rematerialized_stack_homes() {
         let literal = Temp(0);
@@ -4155,13 +3971,11 @@ mod tests {
                 .collect(),
             frame_size: 16,
         };
-
         assert!(
             collect_split_candidates(&function, &home).is_empty(),
             "literal copies and metadata-only tuples must never trigger stack reloads"
         );
     }
-
     #[test]
     fn deterministic_allocation_for_equal_start_intervals() {
         let dest0 = Temp(0);
@@ -4189,7 +4003,6 @@ mod tests {
         assert_eq!(alloc.regs.get(&dest0), Some(&expected_first));
         assert_eq!(alloc.regs.get(&dest1), Some(&expected_second));
     }
-
     #[test]
     fn reuses_spill_slots_for_non_overlapping_pressure_phases() {
         fn pressure_phase(instrs: &mut Vec<Instr>, next_temp: &mut usize, live: usize) {
@@ -4209,7 +4022,6 @@ mod tests {
                 items: (first..first + live).map(Temp).collect(),
             });
         }
-
         let live = ALLOC_POOL.len() + ARG_REGS.len() + 4;
         let mut one_phase = Vec::new();
         let mut next_temp = 0;
@@ -4225,7 +4037,6 @@ mod tests {
             entry: Label(0),
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
-
         let mut two_phases = Vec::new();
         let mut next_temp = 0;
         pressure_phase(&mut two_phases, &mut next_temp, live);
@@ -4241,7 +4052,6 @@ mod tests {
             entry: Label(0),
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
-
         let one = allocate(&one_phase);
         let two = allocate(&two_phases);
         assert!(!one.stack.is_empty());
@@ -4260,7 +4070,6 @@ mod tests {
             "at least one physical spill slot should be shared by disjoint intervals"
         );
     }
-
     #[test]
     fn spill_slot_coloring_preserves_full_interval_overlap() {
         let long = Temp(0);
@@ -4285,7 +4094,6 @@ mod tests {
         ];
         let spilled = [long, early, late].into_iter().collect();
         let (slots, high_water) = assign_spill_slots(&intervals, &spilled);
-
         assert_ne!(slots[&long], slots[&early]);
         assert_eq!(slots[&early], slots[&late]);
         assert_eq!(high_water, 16);

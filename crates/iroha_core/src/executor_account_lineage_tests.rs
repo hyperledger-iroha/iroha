@@ -8,7 +8,6 @@ fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() 
         nexus::{DataSpaceCatalog, DataSpaceId},
         sns::{NameControllerV1, NameRecordV1, NameStatus, NameTombstoneStateV1},
     };
-
     let retired = checked_account_id();
     let active = checked_account_id();
     let unrelated = checked_account_id();
@@ -49,7 +48,6 @@ fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() 
     world
         .account_rekey_records
         .insert(alias.clone(), canonical.clone());
-
     let state = State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),
@@ -57,7 +55,6 @@ fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() 
     );
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 50, 0));
     let mut state_transaction = block.transaction();
-
     assert!(
         initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
             .expect("lineage check")
@@ -70,7 +67,6 @@ fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() 
         !initial_accounts_share_active_lineage(&state_transaction, &unrelated, &active)
             .expect("unrelated lineage check")
     );
-
     lease.status = NameStatus::Tombstoned(NameTombstoneStateV1 {
         reason: "revoked".to_owned(),
     });
@@ -82,7 +78,6 @@ fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() 
         !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
             .expect("revoked lineage check")
     );
-
     lease.status = NameStatus::Active;
     lease.expires_at_ms = 40;
     lease.grace_expires_at_ms = 45;
@@ -95,7 +90,6 @@ fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() 
         !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
             .expect("stale lineage check")
     );
-
     lease.expires_at_ms = 100;
     lease.grace_expires_at_ms = 200;
     lease.redemption_expires_at_ms = 300;
@@ -113,7 +107,6 @@ fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() 
         !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
             .expect("alias reassignment lineage check")
     );
-
     let mut cyclic = canonical;
     cyclic.previous_account_ids.push(active.clone());
     cyclic

@@ -2,14 +2,12 @@
 //!
 //! Run:
 //!   cargo run -p `iroha_torii_shared` --example `connect_dump_open`
-
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{NetworkId, block::BlockHeader};
 use iroha_torii_shared::connect::{
     AppMeta, ConnectControlV1, ConnectFrameV1, Constraints, Dir, FrameKind, PermissionsV1,
     encode_connect_frame_bare,
 };
-
 fn main() {
     let frame = ConnectFrameV1 {
         sid: [0xAB; 32],
@@ -36,7 +34,6 @@ fn main() {
             }),
         }),
     };
-
     let bytes = encode_connect_frame_bare(&frame).expect("encode open frame");
     println!("{}", hex::encode(bytes));
 }

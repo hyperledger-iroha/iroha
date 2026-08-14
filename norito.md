@@ -96,6 +96,14 @@ encoding:
 - Packed-sequence offsets are always `(len + 1)` u64 offsets, monotonic with the
   first offset 0.
 
+Encoders compute length-delimited fields and packed offset tables with a real
+counting pass, then stream payloads directly into the destination. They retain
+only the fixed-width length table required by the wire layout, not a second
+copy of the encoded payload. The write pass verifies every counted length and
+fails with a length mismatch if a stateful serializer changes between passes.
+Allocation failures in temporary codec buffers are returned as errors rather
+than using infallible `Vec` growth. These rules do not change the v1 bytes.
+
 Varint encodings must fit in `u64` and use the shortest (canonical) encoding;
 overflow or overlong encodings are rejected.
 

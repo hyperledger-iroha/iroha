@@ -101,6 +101,23 @@ PXE logs show missing/failed hosts. These checks integrate cleanly with CI so
 automation can reject promotion attempts that skip attestation review or lack
 PXE success artefacts.
 
+## Local input corridors
+
+The first-release CLI accepts only direct regular files and reads each input as
+one stable, bounded snapshot. Configuration files are limited to 1 MiB, health
+reports to 4 MiB, attestation bundles to 512 KiB, and PXE logs to 8 MiB. Norito
+JSON preflight also bounds individual decoded strings (64 KiB for configuration
+and 16 KiB for the other inputs), aggregate strings, collection counts,
+allocations, and nesting depth before typed decoding starts.
+
+Semantic admission limits retain at most 2,048 configuration entries per
+critical collection, 4,096 configured nodes, 2,048 health-report services,
+8,192 total health-check results, 2,048 attestation annotations, and 8,192 PXE
+events. Service names, node hostnames, health service entries, and health checks
+must be unique in their respective scopes. Keep producer batches within these
+corridors; an exact-limit document remains valid, while limit-plus-one input is
+rejected before promotion evaluation.
+
 ## Integration points
 
 - **PXE / Golden image pipeline** – use the generated template to inject

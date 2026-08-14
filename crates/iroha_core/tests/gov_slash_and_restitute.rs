@@ -1,6 +1,5 @@
 //! Governance slashing and restitution flows for plain ballots and manual appeals.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -23,7 +22,6 @@ use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
 fn governance_state_with_accounts(
     voting_asset_id: AssetDefinitionId,
     escrow_account: &iroha_data_model::account::AccountId,
@@ -57,7 +55,6 @@ fn governance_state_with_accounts(
         AssetId::new(voting_asset_id, slash_account.clone()),
         Quantity::from(0_u64),
     );
-
     let world = World::with_assets(
         [domain],
         [alice_account, escrow, slash],
@@ -69,7 +66,6 @@ fn governance_state_with_accounts(
     let query_handle = LiveQueryStore::start_test();
     State::new_for_testing(world, kura, query_handle)
 }
-
 fn seed_slash_snapshot(
     state: &mut State,
     rid: &str,
@@ -120,7 +116,6 @@ fn seed_slash_snapshot(
     seed_tx.apply();
     let _ = seed_block.commit();
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn double_vote_slashes_plain_lock() {
@@ -141,7 +136,6 @@ fn double_vote_slashes_plain_lock() {
     gov_cfg.slash_receiver_account = slash_id.clone();
     gov_cfg.slash_double_vote_bps = 2_000; // 20%
     state.set_gov(gov_cfg);
-
     // Block 1: seed referendum and cast initial ballot.
     let rid = "rid-slash-plain".to_string();
     {
@@ -164,7 +158,6 @@ fn double_vote_slashes_plain_lock() {
         Grant::account_permission(perm, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx1)
             .expect("grant ballot permission");
-
         let ballot_ok = iroha_data_model::isi::governance::CastPlainBallot {
             referendum_id: rid.clone(),
             owner: ALICE_ID.clone(),
@@ -178,7 +171,6 @@ fn double_vote_slashes_plain_lock() {
         stx1.apply();
         let _ = sblock1.commit();
     }
-
     // Block 2: conflicting direction triggers slash + rejection.
     let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut sblock2 = state.block(header2);
@@ -210,7 +202,6 @@ fn double_vote_slashes_plain_lock() {
     // Commit side effects so the slash is reflected in state for inspection.
     stx2.apply();
     let _ = sblock2.commit();
-
     // Escrow should now hold 16 (20 - 20% slash), slash receiver 4.
     let view = state.view();
     let escrow_asset_id = AssetId::new(def_id.clone(), escrow_id);
@@ -238,7 +229,6 @@ fn double_vote_slashes_plain_lock() {
     assert_eq!(escrow_balance.clone(), Quantity::from(16_u64));
     assert_eq!(slash_balance.clone(), Quantity::from(4_u64));
     drop(view);
-
     let header3 = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
     let mut sblock3 = state.block(header3);
     let mut stx3 = sblock3.transaction();
@@ -281,7 +271,6 @@ fn double_vote_slashes_plain_lock() {
         Quantity::from(4_u64)
     );
 }
-
 #[test]
 fn restitution_restores_slashed_balance() {
     let def_id: AssetDefinitionId =
@@ -299,13 +288,11 @@ fn restitution_restores_slashed_balance() {
     gov_cfg.bond_escrow_account = escrow_id.clone();
     gov_cfg.slash_receiver_account = slash_id.clone();
     state.set_gov(gov_cfg);
-
     let rid = "rid-restitute".to_string();
     let escrow_asset_id = AssetId::new(def_id.clone(), escrow_id.clone());
     let slash_asset_id = AssetId::new(def_id.clone(), slash_id.clone());
     // Pre-seed a lock with a recorded slash (amount=60 active, 40 slashed) and matching balances.
     seed_slash_snapshot(&mut state, &rid, &escrow_asset_id, &slash_asset_id);
-
     {
         let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
         let mut sblock = state.block(header);
@@ -327,7 +314,6 @@ fn restitution_restores_slashed_balance() {
         Grant::account_permission(perm, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant restitution permission");
-
         iroha_data_model::isi::governance::RestituteGovernanceLock {
             referendum_id: rid.clone(),
             owner: ALICE_ID.clone(),
@@ -350,7 +336,6 @@ fn restitution_restores_slashed_balance() {
         stx.apply();
         let _ = sblock.commit();
     }
-
     let view = state.view();
     let lock = view
         .world()
@@ -360,7 +345,6 @@ fn restitution_restores_slashed_balance() {
         .expect("lock present after restitution");
     assert_eq!(lock.amount, Quantity::from(90_u64));
     assert_eq!(lock.slashed, Quantity::from(10_u64));
-
     let escrow_balance = view
         .world()
         .asset(&escrow_asset_id)
@@ -376,7 +360,6 @@ fn restitution_restores_slashed_balance() {
     assert_eq!(escrow_balance.clone(), Quantity::from(90_u64));
     assert_eq!(slash_balance.clone(), Quantity::from(10_u64));
 }
-
 #[test]
 fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing() {
     let def_id = AssetDefinitionId::derive_from_components(
@@ -391,12 +374,10 @@ fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing()
     gov_cfg.bond_escrow_account = escrow_id.clone();
     gov_cfg.slash_receiver_account = slash_id.clone();
     state.set_gov(gov_cfg);
-
     let referendum_id = "restitution-missing-ledger";
     let escrow_asset_id = AssetId::new(def_id.clone(), escrow_id);
     let slash_asset_id = AssetId::new(def_id, slash_id);
     seed_slash_snapshot(&mut state, referendum_id, &escrow_asset_id, &slash_asset_id);
-
     {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -416,7 +397,6 @@ fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing()
         state_transaction.apply();
         let _ = block.commit();
     }
-
     let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut state_transaction = block.transaction();
@@ -429,12 +409,10 @@ fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing()
     .execute(&ALICE_ID, &mut state_transaction)
     .expect_err("missing slash ledger must reject restitution");
     assert!(error.to_string().contains("slash ledger missing"));
-
     // Deliberately apply the errored overlay to prove the helper itself did not
     // stage any custody or lock mutation before its ledger preflight failed.
     state_transaction.apply();
     let _ = block.commit();
-
     let view = state.view();
     let lock = view
         .world()
@@ -459,7 +437,6 @@ fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing()
         &Quantity::from(40_u64)
     );
 }
-
 #[test]
 fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain");
@@ -480,7 +457,6 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
     let old_receiver_asset_id = AssetId::new(old_definition_id.clone(), old_receiver.clone());
     let live_escrow_asset_id = AssetId::new(live_definition_id.clone(), live_escrow.clone());
     let live_receiver_asset_id = AssetId::new(live_definition_id.clone(), live_receiver.clone());
-
     let world = World::with_assets(
         [Domain::new(domain_id).build(&alice)],
         [
@@ -522,7 +498,6 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
     live_governance.bond_escrow_account = live_escrow;
     live_governance.slash_receiver_account = live_receiver;
     state.set_gov(live_governance);
-
     let referendum_id = "stored-custody-slash-restitution";
     let stored_custody = iroha_core::state::GovernanceLockCustody {
         escrowed: true,
@@ -561,7 +536,6 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
     tx.world
         .governance_locks_mut()
         .insert(referendum_id.to_owned(), locks);
-
     iroha_data_model::isi::governance::SlashGovernanceLock {
         referendum_id: referendum_id.to_owned(),
         owner: alice.clone(),
@@ -570,7 +544,6 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
     }
     .execute(&alice, &mut tx)
     .expect("slash must use the lock's stored custody");
-
     let lock_after_slash = tx
         .world
         .governance_locks()
@@ -625,7 +598,6 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
         GovernanceSlashReason::Manual
     );
     assert_eq!(ledger_after_slash.last_height, 1);
-
     iroha_data_model::isi::governance::RestituteGovernanceLock {
         referendum_id: referendum_id.to_owned(),
         owner: alice.clone(),
@@ -634,7 +606,6 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
     }
     .execute(&alice, &mut tx)
     .expect("restitution must use the lock's stored custody");
-
     let lock_after_restitution = tx
         .world
         .governance_locks()

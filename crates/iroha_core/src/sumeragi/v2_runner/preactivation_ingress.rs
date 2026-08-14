@@ -18,6 +18,10 @@ pub(in crate::sumeragi) struct ProductionLifecycleCanonicalRecoveryIngressV1<'ac
 
 impl ProductionLifecycleCanonicalRecoveryIngressV1<'_> {
     /// Borrow the exact opened ingress for the canonical recovery predicate.
+    #[allow(
+        dead_code,
+        reason = "consumed at the pending atomic lifecycle runner cutover"
+    )]
     pub(in crate::sumeragi) fn ingress(&self) -> &FairV2Ingress {
         self.block_ingress.as_ref()
     }

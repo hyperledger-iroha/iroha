@@ -1,7 +1,5 @@
 //! Penalty enforcement for `NPoS`: VRF non-participation and consensus evidence slashing.
-
 use std::collections::{BTreeMap, BTreeSet};
-
 use eyre::{Result, WrapErr, eyre};
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
@@ -19,7 +17,6 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
-
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
 use crate::{
@@ -30,24 +27,20 @@ use crate::{
     },
     sumeragi::consensus::ValidatorIndex,
 };
-
 #[derive(Clone, Copy, Default)]
 pub struct PenaltyOutcome {
     pub applied: u64,
     pub slashed: u64,
     pub jailed: u64,
 }
-
 #[derive(Clone)]
 struct ValidatorLocator {
     lane_id: LaneId,
     validator: AccountId,
 }
-
 pub struct PenaltyApplier<'a> {
     state: &'a State,
 }
-
 impl<'a> PenaltyApplier<'a> {
     pub(crate) fn from_committed_state(
         state: &'a State,
@@ -57,7 +50,6 @@ impl<'a> PenaltyApplier<'a> {
     ) -> Self {
         Self { state }
     }
-
     pub(crate) fn from_parts(
         state: &'a State,
         #[cfg(feature = "telemetry")] telemetry: Option<&'a StateTelemetry>,
@@ -72,12 +64,10 @@ impl<'a> PenaltyApplier<'a> {
             telemetry,
         )
     }
-
     fn build_validator_locator_map(&self) -> BTreeMap<PublicKey, ValidatorLocator> {
         let world = self.state.world_view();
         let nexus_enabled = self.state.nexus_snapshot().enabled;
         let mut candidates_map: BTreeMap<PublicKey, Vec<ValidatorLocator>> = BTreeMap::new();
-
         for (key, record) in world.public_lane_validators().iter() {
             if !public_lane_validator_record_matches_key(key, record) {
                 continue;
@@ -97,7 +87,6 @@ impl<'a> PenaltyApplier<'a> {
                     validator: validator_id.clone(),
                 });
         }
-
         let mut result = BTreeMap::new();
         for (pk, mut locators) in candidates_map {
             locators.sort_by(|lhs, rhs| {
@@ -111,7 +100,6 @@ impl<'a> PenaltyApplier<'a> {
         }
         result
     }
-
     pub(crate) fn derive_npos_consensus_effects(
         &self,
         current_height: u64,
@@ -129,7 +117,6 @@ impl<'a> PenaltyApplier<'a> {
         effects.vrf_epoch_seals.dedup_by_key(|record| record.epoch);
         Ok(effects)
     }
-
     /// Derive only deterministic penalty actions from pre-block state.
     pub(crate) fn derive_npos_penalty_actions(
         &self,
@@ -141,7 +128,6 @@ impl<'a> PenaltyApplier<'a> {
         actions.dedup();
         Ok(actions)
     }
-
     fn derive_vrf_penalty_actions(&self, current_height: u64) -> Result<Vec<NposPenaltyAction>> {
         let view = self.state.world.vrf_epochs.view();
         let mut due_records: Vec<VrfEpochRecord> = Vec::new();
@@ -158,11 +144,9 @@ impl<'a> PenaltyApplier<'a> {
             due_records.push(record.clone());
         }
         drop(view);
-
         if due_records.is_empty() {
             return Ok(Vec::new());
         }
-
         let validator_map = self.build_validator_locator_map();
         let mut actions = Vec::new();
         for record in due_records {
@@ -208,7 +192,6 @@ impl<'a> PenaltyApplier<'a> {
                     record.epoch
                 )
             })?;
-
             // A signed commitment is an attributable promise to reveal.  The
             // exact boundary record (including its non-reveal partition) is
             // covered by the verified CommitQC, so a proposer cannot jail a
@@ -245,7 +228,6 @@ impl<'a> PenaltyApplier<'a> {
         }
         Ok(actions)
     }
-
     #[allow(clippy::too_many_lines)]
     fn derive_consensus_penalty_actions(
         &self,
@@ -280,11 +262,9 @@ impl<'a> PenaltyApplier<'a> {
             pending.push((key.clone(), record.clone()));
         }
         drop(evidence_view);
-
         if pending.is_empty() {
             return Ok(Vec::new());
         }
-
         let validator_map = self.build_validator_locator_map();
         let mut actions = Vec::new();
         for (key, record) in pending {
@@ -355,7 +335,6 @@ impl<'a> PenaltyApplier<'a> {
         }
         Ok(actions)
     }
-
     #[allow(clippy::unused_self)]
     fn locate_validator_in_roster_cached(
         &self,
@@ -370,7 +349,6 @@ impl<'a> PenaltyApplier<'a> {
             .map(|locator| (peer.clone(), locator))
     }
 }
-
 pub(crate) fn apply_npos_consensus_effects_to_transaction(
     tx: &mut StateTransaction<'_, '_>,
     effects: &NposConsensusEffects,
@@ -475,7 +453,6 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
     }
     Ok(outcome)
 }
-
 fn height_context_for_evidence(
     state: &State,
     evidence: &Evidence,
@@ -508,7 +485,6 @@ fn height_context_for_evidence(
     }
     Ok(Some(artifact.height_context))
 }
-
 fn evidence_matches_height_context(
     evidence: &Evidence,
     recorded_at_height: u64,
@@ -578,7 +554,6 @@ fn evidence_matches_height_context(
         _ => false,
     }
 }
-
 fn canonical_indices(
     indices: impl IntoIterator<Item = ValidatorIndex>,
     roster_len: usize,
@@ -590,7 +565,6 @@ fn canonical_indices(
         .into_iter()
         .collect()
 }
-
 fn censorship_anchor_height(
     receipts: &[TransactionSubmissionReceipt],
     recorded_at_height: u64,
@@ -601,7 +575,6 @@ fn censorship_anchor_height(
         .max()?;
     Some(max_receipt_height.min(recorded_at_height))
 }
-
 fn evidence_context_height(evidence: &Evidence, recorded_at_height: u64) -> Option<u64> {
     match &evidence.payload {
         EvidencePayload::DoubleVote { v1, .. } => Some(v1.height),
@@ -613,7 +586,6 @@ fn evidence_context_height(evidence: &Evidence, recorded_at_height: u64) -> Opti
         EvidencePayload::SumeragiV2Equivocation(evidence) => Some(evidence.context.height),
     }
 }
-
 fn offender_indices(
     evidence: &Evidence,
     recorded_at_height: u64,
@@ -661,7 +633,6 @@ fn offender_indices(
         | EvidencePayload::InvalidQc { .. } => Vec::new(),
     }
 }
-
 fn evidence_has_legitimate_empty_offenders(evidence: &Evidence) -> bool {
     match &evidence.payload {
         EvidencePayload::InvalidQc { certificate, .. } => {
@@ -673,7 +644,6 @@ fn evidence_has_legitimate_empty_offenders(evidence: &Evidence) -> bool {
         | EvidencePayload::SumeragiV2Equivocation(_) => false,
     }
 }
-
 fn bitmap_indices(bitmap: &[u8]) -> Vec<ValidatorIndex> {
     let mut indices = Vec::new();
     for (byte_idx, byte) in bitmap.iter().enumerate() {
@@ -687,7 +657,6 @@ fn bitmap_indices(bitmap: &[u8]) -> Vec<ValidatorIndex> {
     }
     indices
 }
-
 fn max_slash_amount_for_validator_from_state(
     state: &State,
     locator: &ValidatorLocator,
@@ -710,7 +679,6 @@ fn max_slash_amount_for_validator_from_state(
     }
     Ok(Some(amount))
 }
-
 fn jail_in_transaction(
     tx: &mut WorldTransaction<'_, '_>,
     locator: &ValidatorLocator,
@@ -744,14 +712,12 @@ fn jail_in_transaction(
     }
     true
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
         num::{NonZeroU32, NonZeroU64},
         sync::Arc,
     };
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         NetworkId,
@@ -782,7 +748,6 @@ mod tests {
     };
     use iroha_primitives::numeric::Quantity;
     use mv::storage::StorageReadOnly;
-
     use super::*;
     use crate::{
         block::ValidBlock,
@@ -791,11 +756,9 @@ mod tests {
         state::{State, World},
         sumeragi::{consensus::default_chain_order_hash, evidence::evidence_key},
     };
-
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("penalty fixture key generation should succeed")
     }
-
     fn fresh_state() -> State {
         State::new_for_testing(
             World::default(),
@@ -835,18 +798,15 @@ mod tests {
         keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
         keys
     }
-
     fn roster() -> Vec<PeerId> {
         roster_keys()
             .iter()
             .map(|key| PeerId::new(key.public_key().clone()))
             .collect()
     }
-
     fn test_block_hash(byte: u8) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::prehashed([byte; Hash::LENGTH]))
     }
-
     fn test_vote(
         signer: ValidatorIndex,
         height: u64,
@@ -869,7 +829,6 @@ mod tests {
             bls_sig: vec![0xA5; 96],
         }
     }
-
     fn double_prepare_evidence(
         signer: ValidatorIndex,
         height: u64,
@@ -884,7 +843,6 @@ mod tests {
             },
         }
     }
-
     fn height_one_context(
         network_id: NetworkId,
         roster: &[PeerId],
@@ -923,11 +881,9 @@ mod tests {
             leader_seed: [0x42; 32],
         }
     }
-
     fn install_height_one_artifact(state: &State, roster: &[PeerId]) -> HeightContext {
         install_height_one_artifact_with_network(state, roster, state.network_id_ref().clone())
     }
-
     fn install_height_one_artifact_with_network(
         state: &State,
         roster: &[PeerId],
@@ -956,7 +912,6 @@ mod tests {
             .kura()
             .store_block(Arc::clone(&block))
             .expect("store canonical test block");
-
         let context = height_one_context(network_id, roster, block.hash());
         let subject = BlockSubject {
             parent_block_hash: None,
@@ -1022,7 +977,6 @@ mod tests {
             .expect("persist canonical v2 finality artifact");
         context
     }
-
     fn install_npos_boundary_artifact(
         state: &State,
         roster: &[PeerId],
@@ -1138,7 +1092,6 @@ mod tests {
             },
         );
         context.validate().expect("valid NPoS boundary context");
-
         let subject = BlockSubject {
             parent_block_hash: block.header().prev_block_hash(),
             block_hash: block.hash(),
@@ -1196,7 +1149,6 @@ mod tests {
             .expect("persist canonical NPoS boundary finality artifact");
         context
     }
-
     fn finalized_non_reveal_record(
         context: &HeightContext,
         signer_key: &KeyPair,
@@ -1253,14 +1205,12 @@ mod tests {
             validator_election: None,
         }
     }
-
     fn set_commit_topology(state: &State, peers: Vec<PeerId>) {
         let mut topology = state.commit_topology.block();
         topology.clear();
         topology.extend(peers);
         topology.commit();
     }
-
     fn insert_evidence(state: &State, evidence: Evidence, recorded_at_height: u64) -> Vec<u8> {
         let key = evidence_key(&evidence);
         let record = EvidenceRecord {
@@ -1314,7 +1264,6 @@ mod tests {
         parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
         parameters.commit();
     }
-
     fn test_censorship_receipt(height: u64) -> TransactionSubmissionReceipt {
         let tx_hash =
             HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x77; 32]));
@@ -1331,7 +1280,6 @@ mod tests {
             &signer,
         )
     }
-
     #[test]
     fn canonical_artifact_context_is_the_only_roster_authority() {
         let state = fresh_state();
@@ -1339,12 +1287,10 @@ mod tests {
         let context = install_height_one_artifact(&state, &frozen_roster);
         let mutable_fallback = PeerId::new(checked_keypair().public_key().clone());
         set_commit_topology(&state, vec![mutable_fallback.clone()]);
-
         let evidence = double_prepare_evidence(1, 1, 99, 0);
         let resolved = height_context_for_evidence(&state, &evidence, 1)
             .expect("Kura lookup succeeds")
             .expect("canonical artifact exists");
-
         assert_eq!(resolved, context);
         assert_eq!(
             resolved
@@ -1362,7 +1308,6 @@ mod tests {
         );
         assert_eq!(offender_indices(&evidence, 1, &resolved), vec![1]);
     }
-
     #[test]
     fn quorum_certified_signed_non_reveal_jails_only_the_committer() {
         let state = fresh_state();
@@ -1377,7 +1322,6 @@ mod tests {
         let mut epochs = state.world.vrf_epochs.block();
         epochs.insert(record.epoch, record);
         epochs.commit();
-
         let actions = PenaltyApplier::from_parts(
             &state,
             #[cfg(feature = "telemetry")]
@@ -1387,7 +1331,6 @@ mod tests {
         )
         .derive_npos_penalty_actions(11)
         .expect("verified boundary finality deterministically authorizes the penalty");
-
         assert!(actions.iter().any(|action| matches!(
             action,
             NposPenaltyAction::VrfJail(jail)
@@ -1411,7 +1354,6 @@ mod tests {
             "unsigned network absence must not become attributable jail evidence"
         );
     }
-
     #[test]
     fn vrf_penalty_ignores_singleton_non_owner_shared_dataspace_projection() {
         let mut state = fresh_state();
@@ -1483,7 +1425,6 @@ mod tests {
         let mut epochs = state.world.vrf_epochs.block();
         epochs.insert(record.epoch, record);
         epochs.commit();
-
         let error = PenaltyApplier::from_parts(
             &state,
             #[cfg(feature = "telemetry")]
@@ -1495,14 +1436,12 @@ mod tests {
         .expect_err("an unauthenticated absence partition must not be marked or punished");
         assert!(error.to_string().contains("boundary finality artifact"));
     }
-
     #[test]
     fn missing_artifact_fails_closed_without_mutable_topology_fallback() {
         let state = fresh_state();
         install_one_block_delay_npos(&state);
         set_commit_topology(&state, roster());
         let evidence = double_prepare_evidence(1, 1, 0, 0);
-
         let error = height_context_for_evidence(&state, &evidence, 1)
             .expect_err("missing canonical provenance must stop derivation");
         assert!(
@@ -1510,7 +1449,6 @@ mod tests {
                 .to_string()
                 .contains("missing canonical Sumeragi v2 finality artifact")
         );
-
         insert_evidence(&state, evidence, 1);
         let applier = PenaltyApplier::from_parts(
             &state,
@@ -1526,7 +1464,6 @@ mod tests {
             "a validator missing canonical evidence provenance must not derive a block"
         );
     }
-
     #[test]
     fn future_dated_evidence_is_rejected_before_history_lookup() {
         let state = fresh_state();
@@ -1537,14 +1474,12 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn artifact_context_rejects_epoch_mismatch() {
         let state = fresh_state();
         let frozen_roster = roster();
         install_height_one_artifact(&state, &frozen_roster);
         let evidence = double_prepare_evidence(0, 1, 0, 1);
-
         assert!(
             height_context_for_evidence(&state, &evidence, 1)
                 .expect("canonical artifact lookup succeeds")
@@ -1552,7 +1487,6 @@ mod tests {
             "legacy evidence metadata must not override the frozen v2 epoch"
         );
     }
-
     #[test]
     fn artifact_from_another_chain_fails_closed() {
         let state = fresh_state();
@@ -1562,12 +1496,10 @@ mod tests {
             &frozen_roster,
             crate::sumeragi::synthetic_network_id("wrong-genesis"),
         );
-
         let error = height_context_for_evidence(&state, &double_prepare_evidence(0, 1, 0, 0), 1)
             .expect_err("cross-chain provenance must never authorize a slash");
         assert!(error.to_string().contains("belongs to another chain"));
     }
-
     #[test]
     fn artifact_context_rejects_internally_mismatched_double_vote_epoch() {
         let state = fresh_state();
@@ -1578,14 +1510,12 @@ mod tests {
             unreachable!("fixture is double-vote evidence");
         };
         v2.epoch = 1;
-
         assert!(
             height_context_for_evidence(&state, &evidence, 1)
                 .expect("canonical artifact lookup succeeds")
                 .is_none()
         );
     }
-
     #[test]
     fn artifact_context_rejects_cross_view_double_vote_claim() {
         let state = fresh_state();
@@ -1596,7 +1526,6 @@ mod tests {
             unreachable!("fixture is double-vote evidence");
         };
         v2.view = 1;
-
         assert!(
             height_context_for_evidence(&state, &evidence, 1)
                 .expect("canonical artifact lookup succeeds")
@@ -1604,7 +1533,6 @@ mod tests {
             "votes from different rounds are not an equivocation in the v2 reducer"
         );
     }
-
     #[test]
     fn artifact_context_rejects_different_signers_in_double_vote_claim() {
         let state = fresh_state();
@@ -1615,7 +1543,6 @@ mod tests {
             unreachable!("fixture is double-vote evidence");
         };
         v2.signer = 1;
-
         assert!(
             height_context_for_evidence(&state, &evidence, 1)
                 .expect("canonical artifact lookup succeeds")
@@ -1623,7 +1550,6 @@ mod tests {
             "a crafted pair must not transfer one validator's fault to another"
         );
     }
-
     #[test]
     fn artifact_context_rejects_kind_payload_mismatch() {
         let state = fresh_state();
@@ -1631,14 +1557,12 @@ mod tests {
         install_height_one_artifact(&state, &frozen_roster);
         let mut evidence = double_prepare_evidence(0, 1, 0, 0);
         evidence.kind = EvidenceKind::InvalidQc;
-
         assert!(
             height_context_for_evidence(&state, &evidence, 1)
                 .expect("canonical artifact lookup succeeds")
                 .is_none()
         );
     }
-
     #[test]
     fn corrupt_finality_artifact_propagates_a_fail_closed_error() {
         let state = fresh_state();
@@ -1648,7 +1572,6 @@ mod tests {
             .kura()
             .overwrite_v2_finality_bytes_for_tests(1, b"not a Norito finality artifact")
             .expect("corrupt test artifact");
-
         let error = height_context_for_evidence(&state, &double_prepare_evidence(0, 1, 0, 0), 1)
             .expect_err("corrupt canonical provenance must stop derivation");
         assert!(
@@ -1657,7 +1580,6 @@ mod tests {
                 .contains("failed to read Sumeragi v2 finality artifact at height 1")
         );
     }
-
     #[test]
     fn signer_indices_are_canonical_and_do_not_rotate_with_view() {
         let state = fresh_state();
@@ -1665,11 +1587,9 @@ mod tests {
         let context = install_height_one_artifact(&state, &frozen_roster);
         let view_zero = double_prepare_evidence(2, 1, 0, 0);
         let late_view = double_prepare_evidence(2, 1, u64::MAX, 0);
-
         assert_eq!(offender_indices(&view_zero, 1, &context), vec![2]);
         assert_eq!(offender_indices(&late_view, 1, &context), vec![2]);
     }
-
     #[test]
     fn npos_mode_does_not_remap_equal_vote_evidence_signer_indices() {
         let state = fresh_state();
@@ -1681,18 +1601,15 @@ mod tests {
         );
         context.mode = V2ConsensusMode::Npos;
         context.validate().expect("valid equal-vote NPoS context");
-
         let evidence = double_prepare_evidence(1, 1, 47, 0);
         assert_eq!(offender_indices(&evidence, 1, &context), vec![1]);
     }
-
     #[test]
     fn canonical_indices_filter_duplicates_and_out_of_range_signers() {
         assert_eq!(canonical_indices([3, 1, 3, 7, u32::MAX], 4), vec![1, 3]);
         assert!(canonical_indices([0], 0).is_empty());
         assert_eq!(bitmap_indices(&[0b1000_0101]), vec![0, 2, 7]);
     }
-
     #[test]
     fn censorship_attribution_uses_the_frozen_v2_leader() {
         let state = fresh_state();
@@ -1706,13 +1623,11 @@ mod tests {
                 receipts: vec![receipt],
             },
         };
-
         assert_eq!(
             offender_indices(&evidence, 1, &context),
             vec![context.leader(0)]
         );
     }
-
     #[test]
     fn derived_slash_targets_frozen_roster_even_when_live_topology_diverges() {
         let state = fresh_state();
@@ -1737,7 +1652,6 @@ mod tests {
         .derive_npos_consensus_effects(2, std::iter::empty())
         .expect("canonical evidence produces deterministic effects")
         .penalty_actions;
-
         assert!(actions.iter().any(|action| matches!(
             action,
             NposPenaltyAction::ConsensusSlash(slash)
@@ -1752,7 +1666,6 @@ mod tests {
                 if mark.evidence_key == key && mark.height == 2
         )));
     }
-
     #[test]
     fn consensus_penalty_ignores_singleton_non_owner_shared_dataspace_projection() {
         let mut state = fresh_state();
@@ -1814,7 +1727,6 @@ mod tests {
         .derive_npos_consensus_effects(2, std::iter::empty())
         .expect("epoch mismatch is a closed, deterministic rejection")
         .penalty_actions;
-
         assert!(actions.is_empty());
         let view = state.world.consensus_evidence.view();
         let record = view.get(&key).expect("evidence remains persisted");

@@ -1,25 +1,21 @@
 //! Verify that halo2::verify_merkle_path uses the unified super_hash
 //! for pairwise compression with correct left/right ordering semantics,
 //! and that index-based and dirs-based helpers are equivalent.
-
 #[test]
 fn merkle_super_hash_depth1() {
     let leaf: u64 = 1;
     let sib: u64 = 2;
     let mut path = [0u64; 32];
     path[0] = sib;
-
     // bit0 = 0 → accumulator is left child
     let root_l = ivm::halo2::verify_merkle_path_depth(leaf, 0, &path, 1);
     let exp_l = ivm::poseidon2(leaf, sib);
     assert_eq!(root_l, exp_l, "left-branch mismatch");
-
     // bit0 = 1 → accumulator is right child
     let root_r = ivm::halo2::verify_merkle_path_depth(leaf, 1, &path, 1);
     let exp_r = ivm::poseidon2(sib, leaf);
     assert_eq!(root_r, exp_r, "right-branch mismatch");
 }
-
 #[test]
 fn merkle_super_hash_depth3_mixed_dirs() {
     let leaf: u64 = 0xDEADBEEFDEADBEEF;
@@ -30,7 +26,6 @@ fn merkle_super_hash_depth3_mixed_dirs() {
     path[0] = s0;
     path[1] = s1;
     path[2] = s2;
-
     // Helper to compute expected root using the same pairwise hash and bit ordering
     fn expected_root(mut cur: u64, idx: u32, path: &[u64; 32], depth: usize) -> u64 {
         for (i, sib) in path.iter().take(depth).enumerate() {
@@ -43,20 +38,17 @@ fn merkle_super_hash_depth3_mixed_dirs() {
         }
         cur
     }
-
     // All-left (000b)
     let idx0 = 0b000;
     let got0 = ivm::halo2::verify_merkle_path_depth(leaf, idx0, &path, 3);
     let exp0 = expected_root(leaf, idx0, &path, 3);
     assert_eq!(got0, exp0, "depth3 all-left mismatch");
-
     // Mixed (101b): right at level 0, left at 1, right at 2
     let idx1 = 0b101;
     let got1 = ivm::halo2::verify_merkle_path_depth(leaf, idx1, &path, 3);
     let exp1 = expected_root(leaf, idx1, &path, 3);
     assert_eq!(got1, exp1, "depth3 mixed-dirs mismatch");
 }
-
 #[test]
 fn merkle_dirs_vs_index_equivalence() {
     let leaf: u64 = 0x0123_4567_89AB_CDEF;
@@ -65,7 +57,6 @@ fn merkle_dirs_vs_index_equivalence() {
     for (i, slot) in path.iter_mut().enumerate().take(16) {
         *slot = 0x100 + i as u64;
     }
-
     // Also cross-check explicit reference computation with dirs
     fn ref_root_with_dirs(mut cur: u64, dirs: u32, path: &[u64; 32], depth: usize) -> u64 {
         let mut d = dirs;
@@ -80,13 +71,11 @@ fn merkle_dirs_vs_index_equivalence() {
         }
         cur
     }
-
     fn push_unique(haystack: &mut Vec<u32>, needle: u32) {
         if !haystack.contains(&needle) {
             haystack.push(needle);
         }
     }
-
     for &depth in &[1usize, 3, 5, 8, 12, 16] {
         let max = 1u32 << depth;
         // Larger depths get expensive; limit coverage to a deterministic sample
@@ -114,7 +103,6 @@ fn merkle_dirs_vs_index_equivalence() {
         } else {
             8
         };
-
         if (max as usize) <= case_budget {
             for index in 0..max {
                 run_case(index);
@@ -155,7 +143,6 @@ fn merkle_dirs_vs_index_equivalence() {
         }
     }
 }
-
 #[test]
 fn merkle_random_matrix_equivalence() {
     // Simple deterministic SplitMix64 PRNG (no external deps).
@@ -172,7 +159,6 @@ fn merkle_random_matrix_equivalence() {
             z ^ (z >> 31)
         }
     }
-
     const SEEDS: &[u64] = &[0xC0FFEE];
     // Keep the sample matrix broad but bounded so the test stays fast.
     const LEAF_SAMPLES: usize = 1;
@@ -184,7 +170,6 @@ fn merkle_random_matrix_equivalence() {
         (16, 0xCAFE),
         (31, 0x7FFF_FFFF),
     ];
-
     for &seed in SEEDS {
         let mut rng = Rng::new(seed);
         // Build a random path
@@ -229,7 +214,6 @@ fn merkle_random_matrix_equivalence() {
         }
     }
 }
-
 mod deterministic_equivalence {
     #[inline]
     fn dirs_reference(mut cur: u64, mut dirs: u32, path: &[u64; 32], depth: usize) -> u64 {
@@ -244,7 +228,6 @@ mod deterministic_equivalence {
         }
         cur
     }
-
     fn path_for_seed(seed: u64) -> [u64; 32] {
         let mut state = seed;
         let mut path = [0u64; 32];
@@ -257,14 +240,12 @@ mod deterministic_equivalence {
         }
         path
     }
-
     /// Deterministic equivalence check between index- and dirs-based verifiers.
     #[test]
     fn depth_vs_dirs_equivalence_deterministic() {
         let leaves = [0, 1, 0x0123_4567_89AB_CDEF, u64::MAX];
         let depths = [1usize, 2, 3, 5, 8, 12];
         let indices = [0u32, 1, 2, 3, 0x55AA, 0xAAAA, 0xFFFF_FFFF];
-
         for leaf in leaves {
             for depth in depths {
                 for seed in [0xC0FFEE_u64, 0x1234_5678_9ABC_DEF0] {
@@ -296,13 +277,11 @@ mod deterministic_equivalence {
             }
         }
     }
-
     /// Deterministic equivalence between full-depth helper variants.
     #[test]
     fn full_depth_equivalence_deterministic() {
         let leaves = [0, 1, 0x0123_4567_89AB_CDEF, u64::MAX];
         let indices = [0u32, 1, 2, 3, 0x55AA, 0xAAAA, 0xFFFF_FFFF];
-
         for leaf in leaves {
             for seed in [0xBADC0FFEE_u64, 0xCAFE_BABE_DEAD_BEEF] {
                 let path = path_for_seed(seed ^ leaf);
@@ -317,7 +296,6 @@ mod deterministic_equivalence {
         }
     }
 }
-
 #[test]
 fn merkle_full_depth_equivalence() {
     // Cross-check that full-depth helper equals depth=32 and dirs-based variants
@@ -335,7 +313,6 @@ fn merkle_full_depth_equivalence() {
             z ^ (z >> 31)
         }
     }
-
     let mut rng = Rng::new(0xABCDEF1234567890);
     for _ in 0..8 {
         let mut path = [0u64; 32];

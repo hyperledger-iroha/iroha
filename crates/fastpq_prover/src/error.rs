@@ -1,8 +1,6 @@
 use thiserror::Error;
-
 /// Convenient alias for results produced by this crate.
 pub type Result<T, E = Error> = core::result::Result<T, E>;
-
 /// Errors produced by the FASTPQ prover/verifier.
 #[derive(Debug, Error)]
 pub enum Error {

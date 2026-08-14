@@ -146,6 +146,13 @@ iroha compute invoke \
   --payload fixtures/compute/payload_compute_payments.json
 ```
 
+The CLI reads manifest/call JSON through a 1 MiB descriptor corridor with a
+lexical preflight and explicit decode budgets. Payloads are capped by the
+selected route and the shared 64 MiB first-release CLI artifact ceiling before
+allocation. Successful gateway responses are streamed with `Content-Length`
+preflight plus a max+1 growth probe; their complete JSON/base64 envelope and
+decoded graph are bounded from the call's `max_response_bytes`.
+
 - JS: `loadComputeFixtures`/`simulateCompute`/`buildGatewayRequest` live in
   `javascript/iroha_js/src/compute.js` with regression tests under
   `javascript/iroha_js/test/computeExamples.test.js`.

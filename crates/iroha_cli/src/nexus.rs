@@ -1,12 +1,9 @@
 //! Nexus helpers (lane governance reports and public-lane snapshots).
-
 use eyre::{Result, eyre};
 use iroha::data_model::nexus::LaneId;
 use norito::json::{Map, Value};
 use std::{convert::TryFrom, fmt::Write};
-
 use crate::{Run, RunContext};
-
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Show governance manifest status per lane
@@ -15,7 +12,6 @@ pub enum Command {
     #[command(subcommand)]
     PublicLane(PublicLaneCommand),
 }
-
 #[derive(clap::Args, Debug, Default)]
 pub struct LaneReportArgs {
     /// Print a compact table instead of JSON
@@ -28,7 +24,6 @@ pub struct LaneReportArgs {
     #[arg(long, default_value_t = false)]
     pub fail_on_sealed: bool,
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum PublicLaneCommand {
     /// List validators for a public lane with lifecycle hints
@@ -36,7 +31,6 @@ pub enum PublicLaneCommand {
     /// List bonded stake and pending unbonds for a public lane
     Stake(PublicLaneStakeArgs),
 }
-
 #[derive(clap::Args, Debug)]
 pub struct PublicLaneValidatorsArgs {
     /// Public lane identifier (defaults to SINGLE lane)
@@ -46,7 +40,6 @@ pub struct PublicLaneValidatorsArgs {
     #[arg(long, default_value_t = false)]
     pub summary: bool,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct PublicLaneStakeArgs {
     /// Public lane identifier (defaults to SINGLE lane)
@@ -59,7 +52,6 @@ pub struct PublicLaneStakeArgs {
     #[arg(long, default_value_t = false)]
     pub summary: bool,
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -71,7 +63,6 @@ impl Run for Command {
         }
     }
 }
-
 fn lane_report<C: RunContext>(context: &mut C, args: &LaneReportArgs) -> Result<()> {
     let client = context.client_from_config();
     let status = norito::json::to_value(&client.get_sumeragi_diagnostics()?)?;
@@ -123,7 +114,6 @@ fn lane_report<C: RunContext>(context: &mut C, args: &LaneReportArgs) -> Result<
     }
     Ok(())
 }
-
 fn public_lane_validators<C: RunContext>(
     context: &mut C,
     args: &PublicLaneValidatorsArgs,
@@ -137,7 +127,6 @@ fn public_lane_validators<C: RunContext>(
     }
     Ok(())
 }
-
 fn public_lane_stake<C: RunContext>(context: &mut C, args: &PublicLaneStakeArgs) -> Result<()> {
     let client = context.client_from_config();
     let validator = args
@@ -154,7 +143,6 @@ fn public_lane_stake<C: RunContext>(context: &mut C, args: &PublicLaneStakeArgs)
     }
     Ok(())
 }
-
 fn filter_lane_entries(value: Value, only_missing: bool) -> Value {
     if !only_missing {
         return value;
@@ -166,7 +154,6 @@ fn filter_lane_entries(value: Value, only_missing: bool) -> Value {
         value
     }
 }
-
 fn lane_still_sealed(entry: &Value) -> bool {
     let Some(map) = entry.as_object() else {
         return false;
@@ -181,7 +168,6 @@ fn lane_still_sealed(entry: &Value) -> bool {
         .unwrap_or(false);
     required && !ready
 }
-
 fn count_sealed(value: &Value) -> usize {
     match value {
         Value::Array(entries) => entries
@@ -191,7 +177,6 @@ fn count_sealed(value: &Value) -> usize {
         _ => 0,
     }
 }
-
 fn collect_sealed_aliases(value: &Value) -> Vec<String> {
     match value {
         Value::Array(entries) => entries
@@ -208,7 +193,6 @@ fn collect_sealed_aliases(value: &Value) -> Vec<String> {
         _ => Vec::new(),
     }
 }
-
 fn format_lane_summary(value: &Value, only_missing: bool) -> String {
     let Some(array) = value.as_array() else {
         return "No lane governance entries returned.".to_string();
@@ -220,7 +204,6 @@ fn format_lane_summary(value: &Value, only_missing: bool) -> String {
             "No lane governance entries returned.".to_string()
         };
     }
-
     let mut rows = Vec::with_capacity(array.len());
     for entry in array {
         if let Some(map) = entry.as_object() {
@@ -234,7 +217,6 @@ fn format_lane_summary(value: &Value, only_missing: bool) -> String {
             "No lane governance entries returned.".to_string()
         };
     }
-
     let header = format!(
         "{:>4}  {:<16}  {:<16}  {:<7}  {:>6}  {:>10}  {}",
         "ID", "ALIAS", "MODULE", "STATUS", "QUORUM", "VALIDATORS", "DETAIL"
@@ -248,7 +230,6 @@ fn format_lane_summary(value: &Value, only_missing: bool) -> String {
     }
     formatted.trim_end().to_string()
 }
-
 fn build_lane_row(entry: &Map) -> String {
     let lane_id = entry
         .get("lane_id")
@@ -285,12 +266,10 @@ fn build_lane_row(entry: &Map) -> String {
         .map_or(0, Vec::len);
     let validators = validator_count.to_string();
     let detail = lane_detail(entry, manifest_required, manifest_ready);
-
     format!(
         "{lane_id:>4}  {alias:<16}  {module:<16}  {status:<7}  {quorum:>6}  {validators:>10}  {detail}"
     )
 }
-
 fn lane_detail(entry: &Map, manifest_required: bool, manifest_ready: bool) -> String {
     if !manifest_required {
         return "governance not configured".to_string();
@@ -307,7 +286,6 @@ fn lane_detail(entry: &Map, manifest_required: bool, manifest_ready: bool) -> St
     }
     "manifest missing".to_string()
 }
-
 fn format_validator_summary(payload: &Value) -> Result<String> {
     let mut entries = lane_items(payload)?;
     if entries.is_empty() {
@@ -318,7 +296,6 @@ fn format_validator_summary(payload: &Value) -> Result<String> {
         let r_val = rhs.get("validator").and_then(Value::as_str).unwrap_or("");
         l_val.cmp(r_val)
     });
-
     let mut output = String::new();
     writeln!(
         &mut output,
@@ -338,10 +315,8 @@ fn format_validator_summary(payload: &Value) -> Result<String> {
             truncate_field(&row.last_reward, 11),
         )?;
     }
-
     Ok(output.trim_end().to_string())
 }
-
 fn format_stake_summary(payload: &Value) -> Result<String> {
     let mut entries = lane_items(payload)?;
     if entries.is_empty() {
@@ -356,7 +331,6 @@ fn format_stake_summary(payload: &Value) -> Result<String> {
             l_staker.cmp(r_staker)
         })
     });
-
     let mut output = String::new();
     writeln!(
         &mut output,
@@ -374,10 +348,8 @@ fn format_stake_summary(payload: &Value) -> Result<String> {
             truncate_field(&row.pending_unbonds, 22),
         )?;
     }
-
     Ok(output.trim_end().to_string())
 }
-
 fn lane_items(payload: &Value) -> Result<Vec<&Map>> {
     let Some(items) = payload.get("items").and_then(Value::as_array) else {
         return Err(eyre!(
@@ -393,7 +365,6 @@ fn lane_items(payload: &Value) -> Result<Vec<&Map>> {
     }
     Ok(mapped)
 }
-
 struct ValidatorRow {
     validator: String,
     peer_id: String,
@@ -402,7 +373,6 @@ struct ValidatorRow {
     stake: String,
     last_reward: String,
 }
-
 fn build_validator_row(entry: &Map) -> ValidatorRow {
     let validator = entry
         .get("validator")
@@ -427,7 +397,6 @@ fn build_validator_row(entry: &Map) -> ValidatorRow {
         .get("last_reward_epoch")
         .and_then(Value::as_u64)
         .map_or_else(|| "-".to_string(), |value| value.to_string());
-
     ValidatorRow {
         validator,
         peer_id,
@@ -437,7 +406,6 @@ fn build_validator_row(entry: &Map) -> ValidatorRow {
         last_reward,
     }
 }
-
 fn validator_status_label(status: Option<&Value>) -> String {
     let Some(map) = status.and_then(Value::as_object) else {
         return "-".to_string();
@@ -474,7 +442,6 @@ fn validator_status_label(status: Option<&Value>) -> String {
         other => other.to_string(),
     }
 }
-
 fn activation_label(entry: &Map) -> String {
     let epoch = entry
         .get("activation_epoch")
@@ -491,14 +458,12 @@ fn activation_label(entry: &Map) -> String {
         _ => "-".to_string(),
     }
 }
-
 struct StakeRow {
     validator: String,
     staker: String,
     bonded: String,
     pending_unbonds: String,
 }
-
 fn build_stake_row(entry: &Map) -> StakeRow {
     let validator = entry
         .get("validator")
@@ -514,7 +479,6 @@ fn build_stake_row(entry: &Map) -> StakeRow {
         .get("bonded")
         .map_or_else(|| "-".to_string(), stringify_value);
     let pending_unbonds = pending_unbond_label(entry);
-
     StakeRow {
         validator,
         staker,
@@ -522,7 +486,6 @@ fn build_stake_row(entry: &Map) -> StakeRow {
         pending_unbonds,
     }
 }
-
 fn pending_unbond_label(entry: &Map) -> String {
     let Some(pending) = entry.get("pending_unbonds").and_then(Value::as_array) else {
         return "-".to_string();
@@ -545,28 +508,23 @@ fn pending_unbond_label(entry: &Map) -> String {
         |ts| format!("{} pending (next @ {ts})", pending.len()),
     )
 }
-
 fn stringify_value(value: &Value) -> String {
     if let Some(as_str) = value.as_str() {
         return as_str.to_owned();
     }
     norito::json::to_string(value).unwrap_or_else(|_| "-".to_string())
 }
-
 fn truncate_field(value: &str, max_len: usize) -> String {
     value.chars().take(max_len).collect()
 }
-
 fn normalize_width(value: &str) -> String {
     const MAX_LEN: usize = 16;
     value.chars().take(MAX_LEN).collect()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
-
     fn fixture_account_i105(seed: u8) -> String {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair");
@@ -574,7 +532,6 @@ mod tests {
             .canonical_i105()
             .expect("canonical I105")
     }
-
     #[test]
     fn fixture_account_i105_uses_checked_seed_derivation() {
         assert!(!fixture_account_i105(0x10).is_empty());
@@ -583,7 +540,6 @@ mod tests {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     #[test]
     fn lane_summary_formats_rows() {
         let entry = Map::from_iter([
@@ -607,7 +563,6 @@ mod tests {
         assert!(table.contains("SEALED"));
         assert!(table.contains("manifest missing"));
     }
-
     #[test]
     fn lane_summary_handles_empty() {
         let value = Value::Array(Vec::new());
@@ -616,7 +571,6 @@ mod tests {
         let filtered = format_lane_summary(&value, true);
         assert_eq!(filtered, "All governance manifests are provisioned.");
     }
-
     #[test]
     fn filter_removes_ready_lanes() {
         let sealed = Map::from_iter([
@@ -657,12 +611,10 @@ mod tests {
             vec![String::from("sealed")]
         );
     }
-
     #[test]
     fn collect_sealed_aliases_returns_empty_on_non_array() {
         assert!(collect_sealed_aliases(&Value::Null).is_empty());
     }
-
     #[test]
     fn validator_summary_formats_activation_and_status() {
         let validator = fixture_account_i105(0x11);
@@ -688,14 +640,12 @@ mod tests {
             ("total".into(), Value::from(1u64)),
             ("items".into(), Value::Array(vec![Value::Object(record)])),
         ]));
-
         let summary = format_validator_summary(&payload).expect("format summary");
         assert!(summary.contains(&truncate_field(&validator, 36)));
         assert!(summary.contains("Pending(epoch 2)"));
         assert!(summary.contains("epoch 1 @ 3601"));
         assert!(summary.contains("1000 (self 800)"));
     }
-
     #[test]
     fn stake_summary_marks_pending_unbonds() {
         let validator = fixture_account_i105(0x12);
@@ -720,19 +670,16 @@ mod tests {
             ("total".into(), Value::from(1u64)),
             ("items".into(), Value::Array(vec![Value::Object(record)])),
         ]));
-
         let summary = format_stake_summary(&payload).expect("format summary");
         assert!(summary.contains(&truncate_field(&validator, 32)));
         assert!(summary.contains(&truncate_field(&staker, 32)));
         assert!(summary.contains("750"));
         assert!(summary.contains("pending (next @ 10)"));
     }
-
     #[test]
     fn normalize_width_preserves_short_values() {
         assert_eq!(normalize_width("governance"), "governance");
     }
-
     #[test]
     fn normalize_width_truncates_unicode_on_char_boundary() {
         let input = "いろはにほへとちりぬるをわかよたれそ";

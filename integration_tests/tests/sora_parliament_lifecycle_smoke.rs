@@ -1,15 +1,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! 4-peer SORA parliament lifecycle smoke: fund, bond citizenship, approve, vote, finalize, enact.
-
 #[path = "common/sora_runtime_governance.rs"]
 #[allow(dead_code)]
 pub(super) mod sora_runtime_governance;
-
 use std::{
     collections::BTreeSet,
     time::{Duration, Instant},
 };
-
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::{sandbox, sync};
 use iroha::client::Client;
@@ -42,7 +39,6 @@ use iroha_executor_data_model::permission::governance::{
 };
 use iroha_test_network::{NetworkBuilder, NetworkPeer, ensure_domain_setup_for_network};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
-
 const CITIZEN_COUNT: usize = 20;
 const CITIZEN_FUND: u128 = 15_000;
 const CITIZEN_BOND: u128 = 10_000;
@@ -73,24 +69,20 @@ const HOSTILE_DEPLOY_CODE_HASH_HEX: &str =
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const HOSTILE_RUNTIME_START_HEIGHT: u64 = 1_000;
 const HOSTILE_RUNTIME_END_HEIGHT: u64 = 1_060;
-
 fn canonical_abi_hex() -> String {
     hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
 }
-
 fn governance_escrow_account_literal() -> String {
     ALICE_ID
         .canonical_i105()
         .expect("alice account id should encode to canonical I105")
 }
-
 fn governance_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::parse_fully_qualified(GOV_DOMAIN_ID).expect("governance domain id must parse"),
         "xor".parse().expect("governance asset name must parse"),
     )
 }
-
 fn governance_contract_address(contract_id: &str) -> ContractAddress {
     let deploy_nonce = match contract_id {
         FIRST_CONTRACT_ID => 1,
@@ -108,13 +100,11 @@ fn governance_contract_address(contract_id: &str) -> ContractAddress {
     )
     .expect("governance smoke contract address")
 }
-
 fn tune_client_timeouts(client: &mut Client) {
     client.transaction_status_timeout = TX_STATUS_TIMEOUT;
     client.torii_request_timeout = TORII_REQUEST_TIMEOUT;
     client.transaction_ttl = Some(TX_TTL);
 }
-
 async fn wait_for_ready_torii_peer(
     network: &sandbox::SerializedNetwork,
     http: &reqwest::Client,
@@ -156,14 +146,12 @@ async fn wait_for_ready_torii_peer(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 fn parse_hex32(input: &str) -> [u8; 32] {
     let bytes = hex::decode(input).expect("hex should decode");
     let mut out = [0_u8; 32];
     out.copy_from_slice(&bytes);
     out
 }
-
 fn manifest_provenance(
     code_hash_hex: &str,
     abi_hash_hex: &str,
@@ -188,20 +176,17 @@ fn manifest_provenance(
     .provenance
     .expect("manifest should contain provenance")
 }
-
 fn compute_proposal_id(
     contract_address: &ContractAddress,
     code_hash_hex: &str,
     abi_hash_hex: &str,
 ) -> [u8; 32] {
     use iroha_crypto::blake2::{Blake2b512, Digest as _};
-
     let code_hash = parse_hex32(code_hash_hex);
     let abi_hash = parse_hex32(abi_hash_hex);
     let contract_address = contract_address.as_str();
     let contract_address_len =
         u32::try_from(contract_address.len()).expect("contract address length fits");
-
     let mut input = Vec::with_capacity(
         b"iroha:gov:proposal:v1|".len()
             + core::mem::size_of::<u32>()
@@ -214,20 +199,17 @@ fn compute_proposal_id(
     input.extend_from_slice(contract_address.as_bytes());
     input.extend_from_slice(&code_hash);
     input.extend_from_slice(&abi_hash);
-
     let digest = Blake2b512::digest(&input);
     let mut out = [0_u8; 32];
     out.copy_from_slice(&digest[..32]);
     out
 }
-
 fn json_u128(value: &norito::json::Value) -> Option<u128> {
     value
         .as_u64()
         .map(u128::from)
         .or_else(|| value.as_str().and_then(|raw| raw.parse::<u128>().ok()))
 }
-
 fn integer_sqrt_u128(value: u128) -> u128 {
     if value < 2 {
         return value;
@@ -240,14 +222,12 @@ fn integer_sqrt_u128(value: u128) -> u128 {
     }
     x0
 }
-
 fn expected_plain_total_weight(voter_count: usize) -> u128 {
     let conviction_factor = (1_u64 + BALLOT_DURATION_BLOCKS).min(GOV_MAX_CONVICTION);
     integer_sqrt_u128(BALLOT_LOCK)
         .saturating_mul(u128::from(conviction_factor))
         .saturating_mul(u128::try_from(voter_count).expect("voter count should fit u128"))
 }
-
 async fn wait_for_proposal_found(
     client: &Client,
     proposal_id_hex: &str,
@@ -275,7 +255,6 @@ async fn wait_for_proposal_found(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_referendum_found(
     client: &Client,
     referendum_id: &str,
@@ -303,7 +282,6 @@ async fn wait_for_referendum_found(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_proposal_status(
     client: &Client,
     proposal_id_hex: &str,
@@ -337,7 +315,6 @@ async fn wait_for_proposal_status(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_referendum_status(
     client: &Client,
     referendum_id: &str,
@@ -371,7 +348,6 @@ async fn wait_for_referendum_status(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_tally_total(
     client: &Client,
     referendum_id: &str,
@@ -417,7 +393,6 @@ async fn wait_for_tally_total(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_account_registration(
     client: &Client,
     account_id: &iroha::data_model::account::AccountId,
@@ -451,7 +426,6 @@ async fn wait_for_account_registration(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 fn group_permission_grants_by_account(
     grants: &[(iroha::data_model::account::AccountId, Permission)],
 ) -> Vec<(iroha::data_model::account::AccountId, Vec<Permission>)> {
@@ -470,7 +444,6 @@ fn group_permission_grants_by_account(
     }
     grouped
 }
-
 async fn wait_for_account_permissions(
     client: &Client,
     account_id: &iroha::data_model::account::AccountId,
@@ -510,7 +483,6 @@ async fn wait_for_account_permissions(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn submit_permission_grants_and_wait(
     client: &Client,
     grants: Vec<(iroha::data_model::account::AccountId, Permission)>,
@@ -542,11 +514,9 @@ async fn submit_permission_grants_and_wait(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod helper_tests {
     use super::*;
-
     #[test]
     fn group_permission_grants_by_account_deduplicates_permissions() {
         let other_account = gen_account_in("wonderland").0;
@@ -561,7 +531,6 @@ mod helper_tests {
             (ALICE_ID.clone(), propose_perm.clone()),
             (other_account.clone(), enact_perm.clone()),
         ]);
-
         assert_eq!(grouped.len(), 2);
         let alice_permissions = grouped
             .iter()
@@ -579,7 +548,6 @@ mod helper_tests {
                 .iter()
                 .any(|permission| permission == &propose_perm)
         );
-
         let other_permissions = grouped
             .iter()
             .find(|(account_id, _)| account_id == &other_account)
@@ -588,7 +556,6 @@ mod helper_tests {
         assert_eq!(other_permissions, &vec![enact_perm]);
     }
 }
-
 async fn wait_for_council_member_present(
     client: &Client,
     expected_member: &iroha::data_model::account::AccountId,
@@ -635,7 +602,6 @@ async fn wait_for_council_member_present(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 fn parliament_body_json_key(body: ParliamentBody) -> &'static str {
     match body {
         ParliamentBody::RulesCommittee => "rules-committee",
@@ -647,7 +613,6 @@ fn parliament_body_json_key(body: ParliamentBody) -> &'static str {
         ParliamentBody::FmaCommittee => "fma-committee",
     }
 }
-
 fn proposal_snapshot_body_members(
     proposal_payload: &norito::json::Value,
     body: ParliamentBody,
@@ -692,7 +657,6 @@ fn proposal_snapshot_body_members(
     }
     Ok(Some(parsed))
 }
-
 fn find_account_keypair<'a>(
     accounts: &'a [(iroha::data_model::account::AccountId, KeyPair)],
     account_id: &iroha::data_model::account::AccountId,
@@ -703,7 +667,6 @@ fn find_account_keypair<'a>(
         .map(|(_, keypair)| keypair)
         .ok_or_else(|| eyre!("missing key pair for account `{account_id}`"))
 }
-
 async fn wait_for_domain_registration(
     client: &Client,
     domain_id: &DomainId,
@@ -737,7 +700,6 @@ async fn wait_for_domain_registration(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_asset_definition_registration(
     client: &Client,
     asset_definition_id: &AssetDefinitionId,
@@ -771,7 +733,6 @@ async fn wait_for_asset_definition_registration(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_all_citizen_balances(
     client: &Client,
     asset_def_id: &AssetDefinitionId,
@@ -816,7 +777,6 @@ async fn wait_for_all_citizen_balances(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 fn numeric_asset_balance_u128(client: &Client, asset_id: AssetId) -> Result<Option<u128>> {
     let asset = match client.query_single(FindAssetById::new(asset_id.clone())) {
         Ok(asset) => asset,
@@ -842,7 +802,6 @@ fn numeric_asset_balance_u128(client: &Client, asset_id: AssetId) -> Result<Opti
     }
     Ok(asset.value().as_numeric().try_mantissa_u128())
 }
-
 async fn wait_for_asset_balance(
     client: &Client,
     asset_id: AssetId,
@@ -864,7 +823,6 @@ async fn wait_for_asset_balance(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
     let status = payload
         .get("content")
@@ -876,7 +834,6 @@ fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
         _ => None,
     }
 }
-
 async fn wait_for_tx_applied(
     http: &reqwest::Client,
     torii_url: &reqwest::Url,
@@ -893,7 +850,6 @@ async fn wait_for_tx_applied(
     let mut last_kind = String::from("unavailable");
     let mut last_payload = String::new();
     let mut last_error = String::new();
-
     loop {
         match http
             .get(status_url.clone())
@@ -949,7 +905,6 @@ async fn wait_for_tx_applied(
                 last_error = format!("{err}");
             }
         }
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "{stage}: timed out waiting for tx `{tx_hash_hex}` to reach Applied; last_kind={last_kind}, last_payload={last_payload}, last_error={last_error}"
@@ -958,7 +913,6 @@ async fn wait_for_tx_applied(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_tx_rejected(
     http: &reqwest::Client,
     torii_url: &reqwest::Url,
@@ -975,7 +929,6 @@ async fn wait_for_tx_rejected(
     let mut last_kind = String::from("unavailable");
     let mut last_payload = String::new();
     let mut last_error = String::new();
-
     loop {
         match http
             .get(status_url.clone())
@@ -1031,7 +984,6 @@ async fn wait_for_tx_rejected(
                 last_error = format!("{err}");
             }
         }
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "{stage}: timed out waiting for tx `{tx_hash_hex}` to reach Rejected; last_kind={last_kind}, last_payload={last_payload}, last_error={last_error}"
@@ -1040,7 +992,6 @@ async fn wait_for_tx_rejected(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 fn governance_builder_for_hostile_takeover() -> NetworkBuilder {
     let alice_escrow_account = governance_escrow_account_literal();
     let governance_asset_id = governance_asset_definition_id().to_string();
@@ -1137,7 +1088,6 @@ fn governance_builder_for_hostile_takeover() -> NetworkBuilder {
                 .write(["gov", "parliament_alternate_size"], 2);
         })
 }
-
 fn hostile_required_approvals() -> usize {
     let required = u128::try_from(HOSTILE_RULES_SIZE)
         .expect("size should fit u128")
@@ -1146,7 +1096,6 @@ fn hostile_required_approvals() -> usize {
         .saturating_div(10_000);
     usize::try_from(required.max(1)).expect("required approvals should fit usize")
 }
-
 struct HostileFixture {
     network: sandbox::SerializedNetwork,
     http: reqwest::Client,
@@ -1155,7 +1104,6 @@ struct HostileFixture {
     attackers: Vec<(iroha::data_model::account::AccountId, KeyPair)>,
     honest: Vec<(iroha::data_model::account::AccountId, KeyPair)>,
 }
-
 async fn setup_hostile_fixture(
     test_name: &'static str,
     attacker_count: usize,
@@ -1177,13 +1125,11 @@ async fn setup_hostile_fixture(
     sync::get_status_with_retry_async(&alice)
         .await
         .wrap_err("wait for selected Torii peer status readiness")?;
-
     let mut all_citizens: Vec<_> = (0..(attacker_count + honest_count))
         .map(|_| gen_account_in("wonderland"))
         .collect();
     let honest = all_citizens.split_off(attacker_count);
     let attackers = all_citizens;
-
     let gov_domain_id = DomainId::parse_fully_qualified(GOV_DOMAIN_ID)?;
     let asset_def_id = governance_asset_definition_id();
     ensure_domain_setup_for_network(&network, &gov_domain_id)
@@ -1205,7 +1151,6 @@ async fn setup_hostile_fixture(
     wait_for_asset_definition_registration(&alice, &asset_def_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for governance asset definition registration in hostile fixture")?;
-
     let deploy_perm: Permission = CanProposeContractDeployment {
         contract_address: governance_contract_address(HOSTILE_DEPLOY_CONTRACT_ID),
     }
@@ -1225,7 +1170,6 @@ async fn setup_hostile_fixture(
     )
     .await
     .wrap_err("grant hostile-fixture governance permissions to alice")?;
-
     alice
         .submit_all_blocking(
             attackers
@@ -1242,7 +1186,6 @@ async fn setup_hostile_fixture(
                 format!("wait for hostile-fixture account registration `{account_id}`")
             })?;
     }
-
     let total_accounts = attacker_count.saturating_add(honest_count);
     let total_fund = CITIZEN_FUND.saturating_mul(u128::try_from(total_accounts).expect("count"));
     let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -1273,7 +1216,6 @@ async fn setup_hostile_fixture(
     )
     .await
     .wrap_err("wait for hostile-fixture proposer mint balance")?;
-
     alice
         .submit_all_blocking(
             attackers
@@ -1300,7 +1242,6 @@ async fn setup_hostile_fixture(
         .await
         .wrap_err_with(|| format!("wait for hostile-fixture account funding `{account_id}`"))?;
     }
-
     for (idx, (account_id, key_pair)) in attackers.iter().chain(honest.iter()).enumerate() {
         let mut citizen_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
         tune_client_timeouts(&mut citizen_client);
@@ -1338,7 +1279,6 @@ async fn setup_hostile_fixture(
         .await
         .wrap_err_with(|| format!("wait for hostile-fixture post-bond balance `{account_id}`"))?;
     }
-
     Ok(Some(HostileFixture {
         network,
         http,
@@ -1348,7 +1288,6 @@ async fn setup_hostile_fixture(
         honest,
     }))
 }
-
 fn hostile_parliament_bodies() -> [ParliamentBody; 7] {
     [
         ParliamentBody::RulesCommittee,
@@ -1360,7 +1299,6 @@ fn hostile_parliament_bodies() -> [ParliamentBody; 7] {
         ParliamentBody::FmaCommittee,
     ]
 }
-
 fn deploy_parliament_bodies() -> [ParliamentBody; 6] {
     [
         ParliamentBody::RulesCommittee,
@@ -1371,7 +1309,6 @@ fn deploy_parliament_bodies() -> [ParliamentBody; 6] {
         ParliamentBody::OversightCommittee,
     ]
 }
-
 async fn cast_stage_approvals_from_snapshot(
     http: &reqwest::Client,
     ready_peer: &NetworkPeer,
@@ -1420,19 +1357,16 @@ async fn cast_stage_approvals_from_snapshot(
     }
     Ok(())
 }
-
 #[tokio::test]
 async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     eprintln!("sora smoke: start");
     let builder = sora_runtime_governance::governance_builder_for_runtime_resilience();
-
     let Some(network) =
         sandbox::start_network_async_or_skip(builder, stringify!(sora_parliament_lifecycle_smoke))
             .await?
     else {
         return Ok(());
     };
-
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
@@ -1446,7 +1380,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .await
         .wrap_err("wait for selected Torii peer status readiness")?;
     eprintln!("sora smoke: ready peer selected");
-
     let citizens: Vec<_> = (0..CITIZEN_COUNT)
         .map(|_| gen_account_in("wonderland"))
         .collect();
@@ -1477,7 +1410,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         CITIZEN_COUNT,
         "generated citizen identities must be unique"
     );
-
     let contract_id = FIRST_CONTRACT_ID;
     let reject_contract_id = SECOND_CONTRACT_ID;
     let contract_address = governance_contract_address(contract_id);
@@ -1495,7 +1427,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     let reject_proposal_id_hex = hex::encode(reject_proposal_id);
     let referendum_id = proposal_id_hex.clone();
     let reject_referendum_id = reject_proposal_id_hex.clone();
-
     let gov_domain_id = DomainId::parse_fully_qualified(GOV_DOMAIN_ID)?;
     let asset_def_id = governance_asset_definition_id();
     ensure_domain_setup_for_network(&network, &gov_domain_id)
@@ -1518,7 +1449,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .await
         .wrap_err("wait for governance asset definition registration")?;
     eprintln!("sora smoke: governance domain + asset ready");
-
     let propose_perm: Permission = CanProposeContractDeployment {
         contract_address: contract_address.clone(),
     }
@@ -1543,7 +1473,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     )
     .await
     .wrap_err("grant governance proposal/enact permissions to alice")?;
-
     alice
         .submit_all_blocking(
             citizens
@@ -1567,7 +1496,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .await
         .wrap_err("wait for outsider account registration")?;
     eprintln!("sora smoke: citizen accounts registered");
-
     let total_fund = CITIZEN_FUND.saturating_mul(u128::try_from(CITIZEN_COUNT).expect("count"));
     let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let funding_mint_tx_hash = alice
@@ -1637,7 +1565,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .wrap_err_with(|| format!("initial proposer mint wait failed: {initial_mint_wait_err}"))?;
     }
     eprintln!("sora smoke: proposer funding minted");
-
     submit_permission_grants_and_wait(
         &alice,
         citizens
@@ -1663,7 +1590,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     )
     .await
     .wrap_err("grant ballot permissions for both referenda")?;
-
     alice
         .submit_all_blocking(
             citizens.iter().map(|(account_id, _)| {
@@ -1676,7 +1602,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err("transfer citizen funding allocations")?;
-
     wait_for_all_citizen_balances(
         &alice,
         &asset_def_id,
@@ -1696,7 +1621,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     )
     .await?;
     eprintln!("sora smoke: proposer post-funding balance settled");
-
     let mut outsider_client =
         ready_peer.client_for(&outsider_id, outsider_key_pair.private_key().clone());
     tune_client_timeouts(&mut outsider_client);
@@ -1719,7 +1643,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     .await
     .wrap_err("outsider underfunded citizenship bond should be rejected")?;
     eprintln!("sora smoke: outsider underfunded bond rejected");
-
     for (idx, (account_id, key_pair)) in citizens.iter().enumerate() {
         let mut citizen_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
         tune_client_timeouts(&mut citizen_client);
@@ -1745,7 +1668,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         })?;
     }
     eprintln!("sora smoke: citizen bond txs submitted");
-
     wait_for_all_citizen_balances(
         &alice,
         &asset_def_id,
@@ -1756,7 +1678,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     )
     .await?;
     eprintln!("sora smoke: citizen post-bond balances settled");
-
     let expected_escrow_delta =
         CITIZEN_BOND.saturating_mul(u128::try_from(CITIZEN_COUNT).expect("count"));
     wait_for_asset_balance(
@@ -1768,7 +1689,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     )
     .await?;
     eprintln!("sora smoke: escrow bond total settled");
-
     let (council_member_id, _) = &citizens[0];
     let council_split = CITIZEN_COUNT / 2;
     let council_members: Vec<_> = citizens
@@ -1795,7 +1715,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .await
         .wrap_err("wait for persisted council epoch 0 member")?;
     eprintln!("sora smoke: council persisted");
-
     alice
         .submit(
             ProposeDeployContract {
@@ -1818,7 +1737,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .await
         .wrap_err("wait for governance proposal to be queryable")?;
     eprintln!("sora smoke: proposal submitted");
-
     let mut unauthorized_approver_client =
         ready_peer.client_for(&outsider_id, outsider_key_pair.private_key().clone());
     tune_client_timeouts(&mut unauthorized_approver_client);
@@ -1840,7 +1758,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     )
     .await
     .wrap_err("unauthorized proposal approval attempt should be rejected")?;
-
     let proposal_payload = alice
         .get_gov_proposal_json(&proposal_id_hex)
         .wrap_err("query first governance proposal payload for parliament snapshot")?;
@@ -1883,7 +1800,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     wait_for_referendum_status(&alice, &referendum_id, "Proposed", Duration::from_secs(60))
         .await
         .wrap_err("wait for referendum to remain proposed after one rules ballot")?;
-
     cast_stage_approvals_from_snapshot(
         &http,
         ready_peer,
@@ -1901,7 +1817,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .await
         .wrap_err("deploy referendum must remain proposed after only Rules + Agenda")?;
     eprintln!("sora smoke: deploy referendum stayed proposed after Rules + Agenda only");
-
     cast_stage_approvals_from_snapshot(
         &http,
         ready_peer,
@@ -1921,7 +1836,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .await
         .wrap_err("wait for referendum status to open after full parliament gate")?;
     eprintln!("sora smoke: referendum open");
-
     for (idx, (account_id, key_pair)) in citizens.iter().take(FIRST_REFERENDUM_VOTERS).enumerate() {
         let mut citizen_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
         tune_client_timeouts(&mut citizen_client);
@@ -1952,7 +1866,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     .await
     .wrap_err("wait for full ballot tally ingestion")?;
     eprintln!("sora smoke: tally reached expected total");
-
     let premature_enact_tx_hash = alice
         .submit(
             EnactReferendum {
@@ -1976,7 +1889,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     .await
     .wrap_err("premature enact referendum should be rejected before finalize")?;
     eprintln!("sora smoke: premature enact rejected");
-
     let finalize_tx_hash = alice
         .submit(
             FinalizeReferendum {
@@ -2003,7 +1915,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     )
     .await
     .wrap_err("wait for approved proposal status before enactment")?;
-
     let enact_tx_hash = alice
         .submit(
             EnactReferendum {
@@ -2038,7 +1949,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     .await
     .wrap_err("wait for enacted proposal status")?;
     eprintln!("sora smoke: enactment observed for first referendum");
-
     let referendum_payload = alice.get_gov_referendum_json(&referendum_id)?;
     assert_eq!(
         referendum_payload
@@ -2053,7 +1963,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .and_then(norito::json::Value::as_str)
         .unwrap_or_default();
     assert_eq!(referendum_status, "Closed");
-
     let proposal_payload = alice.get_gov_proposal_json(&proposal_id_hex)?;
     assert_eq!(
         proposal_payload
@@ -2068,7 +1977,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .and_then(norito::json::Value::as_str)
         .unwrap_or_default();
     assert_eq!(proposal_status, "Enacted");
-
     let tally_payload = alice.get_gov_tally_json(&referendum_id)?;
     let approve = tally_payload
         .get("approve")
@@ -2082,7 +1990,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         approve > reject,
         "approval votes should exceed rejection votes"
     );
-
     let deployed_instance = alice.get_gov_contract_json(&contract_address)?;
     assert_eq!(
         deployed_instance
@@ -2098,7 +2005,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         Some(code_hash_hex.as_str()),
         "deployed instance should be bound to the enacted code hash"
     );
-
     let manifest_payload = alice
         .get_contract_manifest_json(&code_hash_hex)
         .wrap_err("fetch contract manifest for enacted code hash")?;
@@ -2119,7 +2025,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         "manifest abi hash should match proposed ABI hash"
     );
     eprintln!("sora smoke: deployment side effects verified");
-
     alice
         .submit(
             ProposeDeployContract {
@@ -2142,7 +2047,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .await
         .wrap_err("wait for second governance proposal to be queryable")?;
     eprintln!("sora smoke: rejection-path proposal submitted");
-
     let reject_proposal_payload = alice
         .get_gov_proposal_json(&reject_proposal_id_hex)
         .wrap_err("query second governance proposal payload for parliament snapshot")?;
@@ -2167,7 +2071,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     )
     .await
     .wrap_err("wait for rejection-path referendum status to open")?;
-
     for (idx, (account_id, key_pair)) in citizens
         .iter()
         .skip(FIRST_REFERENDUM_VOTERS)
@@ -2203,7 +2106,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     )
     .await
     .wrap_err("wait for rejection-path ballot tally ingestion")?;
-
     let reject_finalize_tx_hash = alice
         .submit(
             FinalizeReferendum {
@@ -2230,7 +2132,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     )
     .await
     .wrap_err("wait for rejection-path proposal status")?;
-
     let rejected_enact_tx_hash = alice
         .submit(
             EnactReferendum {
@@ -2253,7 +2154,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     )
     .await
     .wrap_err("enactment of rejected proposal should be rejected")?;
-
     let reject_tally_payload = alice.get_gov_tally_json(&reject_referendum_id)?;
     let reject_path_approve = reject_tally_payload
         .get("approve")
@@ -2267,7 +2167,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         reject_path_reject > reject_path_approve,
         "rejection-path votes should reject the proposal"
     );
-
     let reject_proposal_payload = alice.get_gov_proposal_json(&reject_proposal_id_hex)?;
     let reject_proposal_status = reject_proposal_payload
         .get("proposal")
@@ -2279,7 +2178,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         "second proposal should finish as rejected"
     );
     eprintln!("sora smoke: rejection-path referendum verified");
-
     let mut runtime_fixture = sora_runtime_governance::RuntimeGovernanceFixture {
         network,
         http,
@@ -2298,10 +2196,8 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         "runtime-upgrade governance round should produce a positive activation height"
     );
     eprintln!("sora smoke: runtime-upgrade governance path verified");
-
     Ok(())
 }
-
 #[tokio::test]
 async fn sora_parliament_hostile_takeover_blocked_without_sortition_capture() -> Result<()> {
     let Some(fixture) = setup_hostile_fixture(
@@ -2313,7 +2209,6 @@ async fn sora_parliament_hostile_takeover_blocked_without_sortition_capture() ->
     else {
         return Ok(());
     };
-
     let ready_peer = &fixture.network.peers()[fixture.ready_peer_idx];
     let honest_members: Vec<_> = fixture
         .honest
@@ -2355,14 +2250,12 @@ async fn sora_parliament_hostile_takeover_blocked_without_sortition_capture() ->
     )
     .await
     .wrap_err("wait for honest-only parliament selection")?;
-
     let contract_address = governance_contract_address(HOSTILE_DEPLOY_CONTRACT_ID);
     let code_hash_hex = HOSTILE_DEPLOY_CODE_HASH_HEX.to_owned();
     let abi_hash_hex = canonical_abi_hex();
     let proposal_id = compute_proposal_id(&contract_address, &code_hash_hex, &abi_hash_hex);
     let proposal_id_hex = hex::encode(proposal_id);
     let referendum_id = proposal_id_hex.clone();
-
     fixture
         .alice
         .submit(
@@ -2388,7 +2281,6 @@ async fn sora_parliament_hostile_takeover_blocked_without_sortition_capture() ->
     wait_for_referendum_found(&fixture.alice, &referendum_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for blocked hostile referendum to be queryable")?;
-
     for (idx, (attacker_id, attacker_keypair)) in fixture.attackers.iter().take(3).enumerate() {
         let mut attacker_client =
             ready_peer.client_for(attacker_id, attacker_keypair.private_key().clone());
@@ -2415,7 +2307,6 @@ async fn sora_parliament_hostile_takeover_blocked_without_sortition_capture() ->
         .wrap_err_with(|| {
             format!("blocked hostile rules approval attempt should be rejected for `{attacker_id}`")
         })?;
-
         let agenda_hash = attacker_client
             .submit(
                 ApproveGovernanceProposal {
@@ -2441,7 +2332,6 @@ async fn sora_parliament_hostile_takeover_blocked_without_sortition_capture() ->
             )
         })?;
     }
-
     wait_for_referendum_status(
         &fixture.alice,
         &referendum_id,
@@ -2463,10 +2353,8 @@ async fn sora_parliament_hostile_takeover_blocked_without_sortition_capture() ->
         proposal_status, "Proposed",
         "wealthy non-members must not progress proposal without sortition capture"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_after_economic_capture()
 -> Result<()> {
@@ -2481,7 +2369,6 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     else {
         return Ok(());
     };
-
     let ready_peer = &fixture.network.peers()[fixture.ready_peer_idx];
     let attacker_members: Vec<_> = fixture.attackers.iter().take(HOSTILE_RULES_SIZE).collect();
     assert_eq!(
@@ -2523,14 +2410,12 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     )
     .await
     .wrap_err("wait for attacker-captured parliament selection")?;
-
     let contract_address = governance_contract_address(HOSTILE_DEPLOY_CONTRACT_ID);
     let code_hash_hex = HOSTILE_DEPLOY_CODE_HASH_HEX.to_owned();
     let abi_hash_hex = canonical_abi_hex();
     let deploy_proposal_id = compute_proposal_id(&contract_address, &code_hash_hex, &abi_hash_hex);
     let deploy_proposal_id_hex = hex::encode(deploy_proposal_id);
     let deploy_referendum_id = deploy_proposal_id_hex.clone();
-
     let deploy_voters: Vec<_> = fixture.attackers.iter().take(6).collect();
     submit_permission_grants_and_wait(
         &fixture.alice,
@@ -2550,7 +2435,6 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     )
     .await
     .wrap_err("grant hostile deploy referendum ballot permissions")?;
-
     fixture
         .alice
         .submit(
@@ -2577,7 +2461,6 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     )
     .await
     .wrap_err("wait for captured hostile deploy proposal to be queryable")?;
-
     for body in deploy_parliament_bodies() {
         for (member_id, member_keypair) in &attacker_members {
             let mut member_client =
@@ -2604,7 +2487,6 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     )
     .await
     .wrap_err("wait for captured hostile deploy referendum to open")?;
-
     for (idx, (account_id, key_pair)) in deploy_voters.iter().enumerate() {
         let mut voter_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
         tune_client_timeouts(&mut voter_client);
@@ -2631,7 +2513,6 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     )
     .await
     .wrap_err("wait for captured hostile deploy tally ingestion")?;
-
     let deploy_finalize_hash = fixture
         .alice
         .submit(
@@ -2659,7 +2540,6 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     )
     .await
     .wrap_err("captured hostile deploy proposal should become approved")?;
-
     let deploy_enact_hash = fixture
         .alice
         .submit(
@@ -2691,7 +2571,6 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     )
     .await
     .wrap_err("captured hostile deploy proposal should become enacted")?;
-
     let runtime_manifest = RuntimeUpgradeManifest {
         name: "parliament.hostile.runtime.v1".to_owned(),
         description: "captured parliament runtime tamper scenario".to_owned(),
@@ -2728,7 +2607,6 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     )
     .await
     .wrap_err("grant hostile runtime referendum ballot permissions")?;
-
     fixture
         .alice
         .submit(
@@ -2747,7 +2625,6 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     )
     .await
     .wrap_err("wait for captured hostile runtime proposal to be queryable")?;
-
     for body in hostile_parliament_bodies() {
         for (member_id, member_keypair) in &attacker_members {
             let mut member_client =
@@ -2774,7 +2651,6 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     )
     .await
     .wrap_err("wait for captured hostile runtime referendum to open")?;
-
     for (idx, (account_id, key_pair)) in runtime_voters.iter().enumerate() {
         let mut voter_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
         tune_client_timeouts(&mut voter_client);
@@ -2801,7 +2677,6 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     )
     .await
     .wrap_err("wait for captured hostile runtime tally ingestion")?;
-
     let runtime_finalize_hash = fixture
         .alice
         .submit(
@@ -2829,7 +2704,6 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     )
     .await
     .wrap_err("captured hostile runtime proposal should become approved")?;
-
     let runtime_enact_hash = fixture
         .alice
         .submit(
@@ -2861,7 +2735,6 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     )
     .await
     .wrap_err("captured hostile runtime proposal should become enacted")?;
-
     let upgrades_payload = fixture
         .alice
         .get_runtime_upgrades_json()
@@ -2883,6 +2756,5 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
         runtime_manifest_present,
         "captured hostile runtime proposal should publish runtime upgrade record"
     );
-
     Ok(())
 }

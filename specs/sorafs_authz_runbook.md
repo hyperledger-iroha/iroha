@@ -1,8 +1,8 @@
 # SoraFS/SoraNet Authz Runbook
 
-This note summarises the authorization and abuse controls around SoraFS control-plane actions and the SoraNet privacy ingest endpoints so operators can provision tokens, bind providers, and rotate credentials without guesswork.
+This note summarises the authorization and abuse controls around SoraFS control-plane actions and the SoraNet privacy ingest endpoints so operators can bind providers and rotate signer credentials without guesswork.
 
-## Surfaces and tokens
+## Surfaces and credentials
 
 - `RegisterPinManifest` is a paid public operation for any authenticated
   transaction account on the universal lane; there is no general pin
@@ -32,8 +32,20 @@ This note summarises the authorization and abuse controls around SoraFS control-
   `RepairWorkerSignaturePayloadV1` bodies are not accepted as a compatibility
   format, and Torii never injects an authority into an unsigned request.
 - V1 exposes no public storage-ingest API. `POST /v1/sorafs/pin/register` accepts only a canonical caller-signed transaction; after finality, a provider-internal durable outbox may ingest the payload only when the approved manifest, exact finalized height/hash, configured provider identity, and committed replication assignment all agree. Idempotency and dead-letter identities are derived from those committed fields, never from caller-selected HTTP metadata.
+- The legacy `GET /v1/sorafs/{aliases,replication}` projections require exact
+  canonical-account request signatures and are classified as expensive
+  compute. Their response pages are bounded, but the current implementation
+  materializes the authoritative inventory before applying `limit`/`offset`,
+  so they are not anonymous scan endpoints.
+- `GET /v1/sorafs/storage/state` and the legacy
+  `POST /v1/sorafs/storage/fetch` diagnostic require fresh exact-network
+  operator signatures; fetch authentication runs before JSON decoding. Public
+  content transfer uses request-bound stream tokens with the CAR/chunk GET
+  handlers. A CID-site or query-projection cache miss without such a capability
+  now fails closed instead of inventing operator credentials or retrying the
+  legacy fetch unsigned; already-local cache paths remain available.
 - Local moderation quarantine review, release, and encrypted object store/read endpoints require canonical request signatures from accounts holding the `sorafs_moderation_operator` role. Keep this as a dedicated empty role for the Torii API gate; do not attach broad ledger permissions to it unless a separate governance change requires them.
-- SoraNet privacy ingest endpoints (`/v1/soranet/privacy/{event,share}`) require `X-SoraNet-Privacy-Token` (or `X-API-Token`), a non-empty CIDR allow-list, and the token/burst limits under `torii.soranet_privacy_ingest`; requests outside the namespace or over budget are rejected before metrics ingestion.
+- SoraNet privacy ingest endpoints (`/v1/soranet/privacy/{event,share}`) require the four exact `X-Iroha-Operator-*` signature headers bound to the active `NetworkId`, method, path, query, body, timestamp, and fresh nonce. A non-empty CIDR allow-list and the per-operator burst limits under `torii.soranet_privacy_ingest` remain secondary controls; bearer collector and generic API tokens are rejected.
 
 ## Telemetry submitters and provider overrides
 
@@ -44,14 +56,12 @@ This note summarises the authorization and abuse controls around SoraFS control-
 ## Torii ingress guards
 
 - Storage ingest is not an ingress route in V1. Reject any deployment or generated OpenAPI/catalog that reintroduces a public POST upload path. Only the supervised provider worker consumes finalized ledger state and its durable outbox; ordinary HTTP traffic cannot alter storage bytes, quota reservations, or provider-keyed metadata.
-- `torii.soranet_privacy_ingest`: disabled by default; enabling requires a token list and CIDR scope (empty list denies). The rate limiter uses `rate_per_sec`/`burst`, keyed by token/IP, and emits `soranet_privacy_ingest_reject_total{endpoint,reason}` on rejects.
+- `torii.soranet_privacy_ingest`: disabled by default; enabling requires a CIDR scope (empty list denies). The exact operator signer is admitted by `[torii.operator_signatures]`; the rate limiter uses `rate_per_sec`/`burst`, keyed by authenticated public key, and emits `soranet_privacy_ingest_reject_total{endpoint,reason}` on rejects.
 - Sample configuration:
 
 ```toml
 [torii.soranet_privacy_ingest]
 enabled = true
-require_token = true
-tokens = ["privacy-prod-token"]
 allow_cidrs = ["10.20.0.0/16", "fd00:20::/48"]
 rate_per_sec = 5
 burst = 10
@@ -76,12 +86,7 @@ per_provider_submitters = { "deadbeef..." = ["<i105-account-id>"] }
   derives the submission epoch from block consensus time and enforces the
   global/per-account count and byte quotas. The retired client epoch flag is
   not accepted.
-- Audit or rotate tokens/allow-lists by reloading the Torii config and verifying the rejects:
-  ```bash
-  curl -H "X-SoraNet-Privacy-Token: privacy-prod-token" \
-    https://torii.example.com/v1/soranet/privacy/event \
-    --data-binary @tests/fixtures/privacy_event.json
-  ```
+- Audit or rotate operator keys and CIDR allow-lists by reloading the Torii config, then submit a sample with the canonical operator request-signing helper. Never persist the private key or precomputed signature headers in this repository; each request needs a fresh timestamp and nonce.
 - Confirm telemetry submitter bindings before sending windows (rejects surface as `unauthorised_submitter[_provider]` in logs/telemetry):
   ```bash
   iroha_cli ledger query --config /etc/iroha/config.toml \
@@ -128,11 +133,11 @@ per_provider_submitters = { "deadbeef..." = ["<i105-account-id>"] }
 3. Delegate `CanOperateSorafsRepair` to repair worker accounts before enabling automation, and rotate by revoking the permission plus reissuing worker keys (no admin-only bypass for repair actions).
 4. Register `sorafs_moderation_operator`, grant it only to reviewed canonical operator accounts, and confirm unsigned quarantine calls return `401` while signed non-operator calls return `403`.
 5. Confirm submitters are funded with the configured SoraFS public pin-fee asset and that `governance.sorafs_pin_fee_*` points at the expected treasury before opening storage ingest.
-6. Enable `torii.soranet_privacy_ingest` only after populating `tokens` and `allow_cidrs`; rotate credentials by reloading the config and watch `soranet_privacy_ingest_reject_total` for namespace/token rejects.
-7. Verify ingress with a signed sample request (e.g., `curl -H "X-SoraNet-Privacy-Token: privacy-prod-token" …/v1/soranet/privacy/event`) and confirm the endpoint returns `202 Accepted`.
+6. Enable `torii.soranet_privacy_ingest` only after populating `allow_cidrs` and allow-listing the collector public key under `torii.operator_signatures`; rotate credentials by reloading the config and watch `soranet_privacy_ingest_reject_total` for namespace/signature rejects.
+7. Verify ingress with a freshly signed exact-network sample request and confirm the endpoint returns `202 Accepted`; unsigned, replayed, wrong-network, body-substituted, and bearer-only requests must fail before decoding.
 8. Monitor `soranet_privacy_ingest_reject_total{reason}`,
    `soranet_privacy_throttles_total`, and the SoraFS operational gauges to catch
    abuse early. Use finalized `PinManifestPageV1.charged_usage`, not sampled
    Prometheus inventory, as the authoritative retained-record/live-content
    charge; keep
-   the checklist alongside change tickets for token/allow-list rotations.
+   the checklist alongside change tickets for signer/allow-list rotations.

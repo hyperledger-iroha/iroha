@@ -1,5 +1,4 @@
 use std::{env, fs, path::PathBuf};
-
 use clap::{Parser, Subcommand};
 use soranet_handshake_harness::{
     CapabilitySummary, CapabilityTlv, HandshakeSuite, HarnessError, HexInput,
@@ -13,7 +12,6 @@ use soranet_pq::{
     MlKemSuite, SuiteParseError, validate_mlkem_ciphertext, validate_mlkem_public_key,
     validate_mlkem_secret_key,
 };
-
 /// Command-line interface for the (still evolving) SoraNet handshake harness.
 #[derive(Parser, Debug)]
 #[command(author, version, about = "SoraNet handshake harness", long_about = None)]
@@ -21,7 +19,6 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 }
-
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Inspect capability TLVs and compute the transcript hash.
@@ -184,10 +181,8 @@ enum Commands {
         only_capabilities: Vec<String>,
     },
 }
-
 fn main() -> Result<(), HarnessError> {
     let cli = Cli::parse();
-
     match cli.command {
         Commands::Inspect {
             client_hex,
@@ -207,7 +202,6 @@ fn main() -> Result<(), HarnessError> {
             let relay_nonce = decode_hex(&relay_nonce_hex)?;
             let resume_hash = resume_hash_hex.map(|h| h.0);
             let kem_id = resolve_kem_id(kem_id, kem_suite.as_deref())?;
-
             let client_caps = parse_capabilities(&client_bytes)?;
             let relay_caps = parse_capabilities(&relay_bytes)?;
             println!(
@@ -215,7 +209,6 @@ fn main() -> Result<(), HarnessError> {
                 format_capabilities(&client_caps)
             );
             println!("Relay capabilities:\n{}", format_capabilities(&relay_caps));
-
             let handshake_suite = negotiate_handshake_suite(&client_caps, &relay_caps)?;
             let transcript = TranscriptInputs {
                 descriptor_commit: &desc_commit,
@@ -236,7 +229,6 @@ fn main() -> Result<(), HarnessError> {
                     .map(|suite| suite.to_string())
                     .unwrap_or_else(|| format!("unknown({kem_id})"))
             );
-
             let warnings = diff_capabilities(&client_caps, &relay_caps);
             if warnings.is_empty() {
                 println!("All required capabilities satisfied.");
@@ -404,7 +396,6 @@ fn main() -> Result<(), HarnessError> {
             let capability_filter_vec = capability_filter
                 .as_ref()
                 .map(|set| set.iter().copied().collect::<Vec<_>>());
-
             let result = simulate_handshake(&SimulationParams {
                 client_capabilities: &client_caps,
                 relay_capabilities: &relay_caps,
@@ -417,7 +408,6 @@ fn main() -> Result<(), HarnessError> {
                 kem_id,
                 sig_id,
             })?;
-
             println!("Transcript hash: 0x{}", hex::encode(result.transcript_hash));
             println!("Negotiated handshake suite: {}", result.handshake_suite);
             println!(
@@ -455,7 +445,6 @@ fn main() -> Result<(), HarnessError> {
                     result.telemetry_payloads.len()
                 );
             }
-
             if show_steps {
                 println!("Handshake steps:");
                 for step in &result.handshake_steps {
@@ -468,7 +457,6 @@ fn main() -> Result<(), HarnessError> {
                     println!("    note: {}", step.note);
                 }
             }
-
             if let Some(dir) = frames_out {
                 fs::create_dir_all(&dir)?;
                 for step in &result.handshake_steps {
@@ -487,7 +475,6 @@ fn main() -> Result<(), HarnessError> {
                 }
                 println!("wrote handshake frames to {}", dir.display());
             }
-
             if let Some(path) = json_out {
                 let json = simulation_report_json(&result, capability_filter_vec.as_deref())?;
                 if path == std::path::Path::new("-") {
@@ -497,7 +484,6 @@ fn main() -> Result<(), HarnessError> {
                     println!("wrote {}", path.display());
                 }
             }
-
             if let Some(path) = telemetry_out {
                 if result.telemetry_payloads.is_empty() {
                     println!("No telemetry payloads available to write.");
@@ -512,10 +498,8 @@ fn main() -> Result<(), HarnessError> {
             }
         }
     }
-
     Ok(())
 }
-
 fn parse_capability_filters(
     values: &[String],
 ) -> Result<Option<std::collections::BTreeSet<u16>>, HarnessError> {
@@ -538,9 +522,7 @@ fn parse_capability_filters(
     }
     Ok(Some(out))
 }
-
 const CAPABILITY_SUITE_LIST: u16 = 0x0104;
-
 fn suite_list_from_caps(
     caps: &[CapabilityTlv],
 ) -> Result<Option<Vec<HandshakeSuite>>, HarnessError> {
@@ -589,7 +571,6 @@ fn suite_list_from_caps(
     }
     Ok(Some(suites))
 }
-
 fn describe_suites(suites: &[HandshakeSuite]) -> String {
     suites
         .iter()
@@ -597,7 +578,6 @@ fn describe_suites(suites: &[HandshakeSuite]) -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
-
 fn negotiate_handshake_suite(
     client_caps: &[CapabilityTlv],
     relay_caps: &[CapabilityTlv],
@@ -630,7 +610,6 @@ fn negotiate_handshake_suite(
         )),
     }
 }
-
 fn resolve_kem_id(base: u8, suite_label: Option<&str>) -> Result<u8, HarnessError> {
     if let Some(label) = suite_label {
         let suite = parse_kem_suite(label)?;
@@ -645,7 +624,6 @@ fn resolve_kem_id(base: u8, suite_label: Option<&str>) -> Result<u8, HarnessErro
         Ok(base)
     }
 }
-
 fn resolve_kem_suite(
     kem_id: Option<u8>,
     suite_label: Option<&str>,
@@ -677,7 +655,6 @@ fn resolve_kem_suite(
         )),
     }
 }
-
 fn parse_kem_suite(label: &str) -> Result<MlKemSuite, HarnessError> {
     label
         .parse::<MlKemSuite>()
@@ -685,7 +662,6 @@ fn parse_kem_suite(label: &str) -> Result<MlKemSuite, HarnessError> {
             HarnessError::Validation(format!("unsupported ML-KEM suite '{value}'"))
         })
 }
-
 fn suite_to_kem_id(suite: MlKemSuite) -> u8 {
     match suite {
         MlKemSuite::MlKem512 => 0,
@@ -693,7 +669,6 @@ fn suite_to_kem_id(suite: MlKemSuite) -> u8 {
         MlKemSuite::MlKem1024 => 2,
     }
 }
-
 fn mlkem_suite_from_id(id: u8) -> Option<MlKemSuite> {
     match id {
         0 => Some(MlKemSuite::MlKem512),
@@ -702,7 +677,6 @@ fn mlkem_suite_from_id(id: u8) -> Option<MlKemSuite> {
         _ => None,
     }
 }
-
 fn decode_optional_hex(
     label: &str,
     input: Option<String>,
@@ -717,7 +691,6 @@ fn decode_optional_hex(
         None => Ok(None),
     }
 }
-
 fn run_kem_validation(
     suite: MlKemSuite,
     public: Option<&[u8]>,
@@ -729,9 +702,7 @@ fn run_kem_validation(
             "provide at least one of --public-hex, --secret-hex, or --ciphertext-hex".into(),
         ));
     }
-
     let mut status = Vec::new();
-
     if let Some(bytes) = public {
         validate_mlkem_public_key(suite, bytes)
             .map_err(|err| HarnessError::Kem(err.to_string()))?;
@@ -747,16 +718,12 @@ fn run_kem_validation(
             .map_err(|err| HarnessError::Kem(err.to_string()))?;
         status.push(format!("ciphertext valid ({} bytes)", bytes.len()));
     }
-
     Ok(status)
 }
-
 #[cfg(test)]
 mod tests {
     use soranet_pq::{encapsulate_mlkem_from_os, generate_mlkem_keypair_from_os};
-
     use super::*;
-
     #[test]
     fn run_kem_validation_accepts_valid_materials() {
         let suite = MlKemSuite::MlKem768;
@@ -772,33 +739,28 @@ mod tests {
         assert_eq!(messages.len(), 3);
         assert!(messages.iter().all(|msg| msg.contains("valid")));
     }
-
     #[test]
     fn run_kem_validation_rejects_invalid_public_key() {
         let err =
             run_kem_validation(MlKemSuite::MlKem512, Some(&[0u8; 8]), None, None).unwrap_err();
         assert!(matches!(err, HarnessError::Kem(_)));
     }
-
     #[test]
     fn run_kem_validation_requires_material() {
         let err = run_kem_validation(MlKemSuite::MlKem512, None, None, None).unwrap_err();
         assert!(matches!(err, HarnessError::Validation(message) if message.contains("provide")));
     }
-
     #[test]
     fn resolve_kem_suite_from_label_only() {
         let (id, suite) = resolve_kem_suite(None, Some("mlkem1024")).expect("suite should resolve");
         assert_eq!(id, 2);
         assert_eq!(suite, MlKemSuite::MlKem1024);
     }
-
     #[test]
     fn resolve_kem_suite_rejects_mismatch() {
         let err = resolve_kem_suite(Some(0), Some("mlkem768")).unwrap_err();
         assert!(matches!(err, HarnessError::Validation(message) if message.contains("maps to id")));
     }
-
     #[test]
     fn suite_list_from_caps_dedupes_entries() {
         let caps = vec![CapabilityTlv {
@@ -823,7 +785,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn suite_list_from_caps_rejects_only_pre_release_ids() {
         let caps = vec![CapabilityTlv {
@@ -842,7 +803,6 @@ mod tests {
             other => panic!("expected validation error, got {other:?}"),
         }
     }
-
     #[test]
     fn negotiate_handshake_suite_prefers_client_order() {
         let client_caps = vec![CapabilityTlv {

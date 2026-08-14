@@ -1,13 +1,9 @@
 //! Control-flow opcode semantics tests.
-
 use ivm::{IVM, ProgramMetadata, VMError, encoding, instruction};
-
 const CLASSIC_ARITH_IMM: u8 = 0x13;
-
 fn encode_li16(op: u8, rd: u8, imm8: i8) -> u16 {
     ((op & 0xF) as u16) << 12 | ((rd & 0xF) as u16) << 8 | (imm8 as u8 as u16)
 }
-
 #[allow(dead_code)]
 fn program_with(instrs: &[u32]) -> Vec<u8> {
     let meta = ProgramMetadata {
@@ -24,7 +20,6 @@ fn program_with(instrs: &[u32]) -> Vec<u8> {
     }
     bytes
 }
-
 #[test]
 fn jalr_alignment_word_aligns_target() {
     // x1 (RA) <- pc+4; pc <- (x2 + imm) & !3
@@ -49,7 +44,6 @@ fn jalr_alignment_word_aligns_target() {
     // RA saved is implementation: return_addr = old_pc + 4 (here, pc after addi=4, so RA=8)
     assert_eq!(vm.register(3), 8);
 }
-
 #[test]
 fn compressed_forms_are_rejected() {
     let mut prog = ProgramMetadata::default().encode();
@@ -61,7 +55,6 @@ fn compressed_forms_are_rejected() {
         .expect_err("compressed forms must be rejected");
     assert!(matches!(err, VMError::MemoryAccessViolation { .. }));
 }
-
 #[test]
 fn jal_skips_next_instruction() {
     // addi r7, r0, 1; jal x0, +2; addi r7, r0, 2; halt
@@ -84,7 +77,6 @@ fn jal_skips_next_instruction() {
     vm.run().expect("run");
     assert_eq!(vm.register(7), 1);
 }
-
 #[test]
 fn jal_link_register_saved_correctly() {
     // addi r2,r0,0; jal r5,+2; addi r2,r0,7; halt
@@ -110,7 +102,6 @@ fn jal_link_register_saved_correctly() {
     // The addi after JAL is skipped, so r2 stays 0.
     assert_eq!(vm.register(2), 0);
 }
-
 #[test]
 fn compressed_ebreak_rejected() {
     let mut prog = ProgramMetadata::default().encode();

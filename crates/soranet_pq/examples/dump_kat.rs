@@ -1,15 +1,12 @@
 //! Dump deterministic `SoraNet` PQ fixtures for manual inspection.
-
 use soranet_pq::{
     HedgedRngSeed, MlDsaSuite, MlKemSuite, generate_mldsa_keypair, generate_mlkem_keypair,
     hedged_chacha20_rng, sign_mldsa,
 };
-
 fn main() {
     dump_mlkem();
     dump_mldsa();
 }
-
 fn dump_mlkem() {
     for suite in [
         MlKemSuite::MlKem512,
@@ -34,7 +31,6 @@ fn dump_mlkem() {
         println!("  ss={}", to_hex(shared.as_bytes()));
     }
 }
-
 fn dump_ml_dsa_suite(suite: MlDsaSuite, message: &[u8]) {
     let mut key_rng = hedged_chacha20_rng(
         HedgedRngSeed::from_entropy([suite.suite_id(); 32]),
@@ -52,17 +48,14 @@ fn dump_ml_dsa_suite(suite: MlDsaSuite, message: &[u8]) {
     println!("  msg={}", to_hex(message));
     println!("  sig={}", to_hex(sig.as_bytes()));
 }
-
 fn dump_mldsa() {
     let message = b"SoraNet PQ fixture";
     dump_ml_dsa_suite(MlDsaSuite::MlDsa44, message);
     dump_ml_dsa_suite(MlDsaSuite::MlDsa65, message);
     dump_ml_dsa_suite(MlDsaSuite::MlDsa87, message);
 }
-
 fn to_hex<T: AsRef<[u8]>>(value: T) -> String {
     use std::fmt::Write as _;
-
     let bytes = value.as_ref();
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {

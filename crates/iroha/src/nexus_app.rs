@@ -4,9 +4,7 @@
 //! pipeline APIs intact. SDK applications can use this module to build a
 //! canonical transfer payload, request a wallet signature, finalize the signed
 //! transaction, submit it, and optionally wait for a terminal pipeline status.
-
 use std::{num::NonZeroU32, time::Duration};
-
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
     prelude::{AccountId, AssetId, ChainId, Metadata, NetworkId, Quantity, Transfer},
@@ -14,16 +12,13 @@ use iroha_data_model::{
 };
 use thiserror::Error;
 use url::Url;
-
 use crate::client::{Client, TransactionWaitOptions, TransactionWaitOutcome};
-
 /// V1 supported signature algorithm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NexusSignatureAlgorithm {
     /// Ed25519 transaction signature.
     Ed25519,
 }
-
 impl NexusSignatureAlgorithm {
     fn from_public_key(public_key: &PublicKey) -> Result<Self, NexusAppError> {
         let algorithm = public_key
@@ -37,7 +32,6 @@ impl NexusSignatureAlgorithm {
         }
     }
 }
-
 /// Errors surfaced by [`NexusAppClient`].
 #[derive(Debug, Error)]
 pub enum NexusAppError {
@@ -93,7 +87,6 @@ pub enum NexusAppError {
     #[error("transaction status wait failed: {0}")]
     StatusWait(String),
 }
-
 impl NexusAppError {
     /// Stable machine-readable error code shared across SDK facades.
     #[must_use]
@@ -114,7 +107,6 @@ impl NexusAppError {
         }
     }
 }
-
 /// Static configuration for a Nexus app facade instance.
 #[derive(Debug, Clone)]
 pub struct NexusAppConfig {
@@ -133,7 +125,6 @@ pub struct NexusAppConfig {
     /// Explicit signing public key override for accounts that cannot derive it.
     pub signing_public_key: Option<PublicKey>,
 }
-
 impl NexusAppConfig {
     /// Construct config with the display label and exact transaction network.
     #[must_use]
@@ -149,7 +140,6 @@ impl NexusAppConfig {
         }
     }
 }
-
 /// Options for creating a Connect session.
 #[derive(Debug, Clone, Default)]
 pub struct NexusConnectOptions {
@@ -159,7 +149,6 @@ pub struct NexusConnectOptions {
     /// Optional node hint overriding [`NexusAppConfig::node`].
     pub node: Option<String>,
 }
-
 /// Registered Connect session plus wallet launch metadata.
 #[derive(Debug, Clone)]
 pub struct NexusConnectSession {
@@ -182,7 +171,6 @@ pub struct NexusConnectSession {
     /// Ed25519 signing public key resolved from the approval or explicit override.
     pub signing_public_key: Option<PublicKey>,
 }
-
 /// Account approved by a wallet Connect session.
 #[derive(Debug, Clone)]
 pub struct NexusApprovedAccount {
@@ -191,7 +179,6 @@ pub struct NexusApprovedAccount {
     /// Resolved Ed25519 signing public key.
     pub signing_public_key: PublicKey,
 }
-
 /// Asset quantity transfer input covered by V1.
 #[derive(Debug, Clone)]
 pub struct NexusTransferInput {
@@ -214,7 +201,6 @@ pub struct NexusTransferInput {
     /// Optional transaction nonce.
     pub nonce: Option<NonZeroU32>,
 }
-
 /// Canonical draft returned by [`NexusAppClient::build_transfer_draft`].
 #[derive(Debug, Clone)]
 pub struct NexusTransferDraft {
@@ -223,7 +209,6 @@ pub struct NexusTransferDraft {
     /// Canonical signable transaction.
     pub signable: NexusSignableTransaction,
 }
-
 /// Canonical transaction payload that can be signed by a wallet.
 #[derive(Debug, Clone)]
 pub struct NexusSignableTransaction {
@@ -239,7 +224,6 @@ pub struct NexusSignableTransaction {
     /// Expected signing public key, when known.
     pub signing_public_key: Option<PublicKey>,
 }
-
 /// Wallet signature response.
 #[derive(Debug, Clone)]
 pub struct NexusWalletSignature {
@@ -248,14 +232,12 @@ pub struct NexusWalletSignature {
     /// Raw signature bytes.
     pub signature: Vec<u8>,
 }
-
 /// Options for finalization and Torii submission.
 #[derive(Debug, Clone, Default)]
 pub struct NexusFinalizeOptions {
     /// Wait options. When omitted, the transaction is submitted without polling.
     pub wait: Option<TransactionWaitOptions>,
 }
-
 /// Receipt returned after finalization and Torii submission.
 #[derive(Debug, Clone)]
 pub struct NexusTransferReceipt {
@@ -266,7 +248,6 @@ pub struct NexusTransferReceipt {
     /// Optional terminal pipeline status.
     pub status: Option<TransactionWaitOutcome>,
 }
-
 /// Connect transport required by the facade.
 pub trait NexusConnectTransport {
     /// Register a Connect session and return launch metadata.
@@ -279,7 +260,6 @@ pub trait NexusConnectTransport {
         config: &NexusAppConfig,
         options: NexusConnectOptions,
     ) -> Result<NexusConnectSession, NexusAppError>;
-
     /// Wait for wallet approval and return the approved account.
     ///
     /// # Errors
@@ -289,7 +269,6 @@ pub trait NexusConnectTransport {
         &self,
         session: &mut NexusConnectSession,
     ) -> Result<NexusApprovedAccount, NexusAppError>;
-
     /// Request a wallet signature for the canonical payload bytes.
     ///
     /// # Errors
@@ -301,7 +280,6 @@ pub trait NexusConnectTransport {
         signable: &NexusSignableTransaction,
     ) -> Result<NexusWalletSignature, NexusAppError>;
 }
-
 /// Torii submission dependency used by the facade.
 pub trait NexusToriiSubmitter {
     /// Quote the exact unsigned payload before the wallet signs it.
@@ -313,7 +291,6 @@ pub trait NexusToriiSubmitter {
         &self,
         payload: &TransactionPayload,
     ) -> Result<FeePaymentIntent, NexusAppError>;
-
     /// Submit the signed transaction and optionally wait for final status.
     ///
     /// # Errors
@@ -325,11 +302,9 @@ pub trait NexusToriiSubmitter {
         options: NexusFinalizeOptions,
     ) -> Result<NexusTransferReceipt, NexusAppError>;
 }
-
 /// Placeholder Connect transport used when callers construct from a bare Torii client.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct UnsupportedConnectTransport;
-
 impl NexusConnectTransport for UnsupportedConnectTransport {
     fn start_connect(
         &self,
@@ -338,14 +313,12 @@ impl NexusConnectTransport for UnsupportedConnectTransport {
     ) -> Result<NexusConnectSession, NexusAppError> {
         Err(NexusAppError::ConnectTransportUnavailable)
     }
-
     fn await_approval(
         &self,
         _session: &mut NexusConnectSession,
     ) -> Result<NexusApprovedAccount, NexusAppError> {
         Err(NexusAppError::ConnectTransportUnavailable)
     }
-
     fn request_signature(
         &self,
         _session: &NexusConnectSession,
@@ -354,7 +327,6 @@ impl NexusConnectTransport for UnsupportedConnectTransport {
         Err(NexusAppError::ConnectTransportUnavailable)
     }
 }
-
 impl NexusToriiSubmitter for Client {
     fn quote_fee_payment(
         &self,
@@ -377,7 +349,6 @@ impl NexusToriiSubmitter for Client {
             .map_err(|err| NexusAppError::FeeQuote(err.to_string()))?;
         Ok(quote.intent)
     }
-
     fn submit_and_wait(
         &self,
         transaction: &SignedTransaction,
@@ -393,7 +364,6 @@ impl NexusToriiSubmitter for Client {
                     .map_err(|err| NexusAppError::StatusWait(err.to_string()))
             })
             .transpose()?;
-
         Ok(NexusTransferReceipt {
             signed_transaction: transaction.clone(),
             signed_transaction_hash_hex: hex::encode(hash.as_ref()),
@@ -401,7 +371,6 @@ impl NexusToriiSubmitter for Client {
         })
     }
 }
-
 /// High-level Nexus app facade.
 #[derive(Debug, Clone)]
 pub struct NexusAppClient<C = UnsupportedConnectTransport, S = Client> {
@@ -409,7 +378,6 @@ pub struct NexusAppClient<C = UnsupportedConnectTransport, S = Client> {
     connect: C,
     submitter: S,
 }
-
 impl NexusAppClient<UnsupportedConnectTransport, Client> {
     /// Construct a facade over an existing Torii client.
     ///
@@ -424,7 +392,6 @@ impl NexusAppClient<UnsupportedConnectTransport, Client> {
         }
     }
 }
-
 impl<C, S> NexusAppClient<C, S>
 where
     C: NexusConnectTransport,
@@ -439,7 +406,6 @@ where
             submitter,
         }
     }
-
     /// Register an app-role Connect session and return wallet launch metadata.
     ///
     /// # Errors
@@ -451,7 +417,6 @@ where
     ) -> Result<NexusConnectSession, NexusAppError> {
         self.connect.start_connect(&self.config, options)
     }
-
     /// Wait for wallet approval and cache the resolved account on the session.
     ///
     /// # Errors
@@ -473,7 +438,6 @@ where
         session.signing_public_key = Some(approved.signing_public_key.clone());
         Ok(approved)
     }
-
     /// Build a canonical signable numeric asset transfer.
     ///
     /// # Errors
@@ -486,7 +450,6 @@ where
         let signable = self.build_signable_transfer(&input, None)?;
         Ok(NexusTransferDraft { input, signable })
     }
-
     /// Send a wallet `SIGN_REQUEST_TX` for the canonical transaction payload.
     ///
     /// # Errors
@@ -499,7 +462,6 @@ where
     ) -> Result<NexusWalletSignature, NexusAppError> {
         self.connect.request_signature(session, signable)
     }
-
     /// Build a signed transaction from a wallet signature, submit it to Torii,
     /// and optionally wait for a terminal pipeline status.
     ///
@@ -528,7 +490,6 @@ where
                 signature_bytes.len()
             )));
         }
-
         if let Some(signing_public_key) = signable.signing_public_key.as_ref() {
             ensure_authority_matches_public_key(&signable.authority, signing_public_key)?;
         } else {
@@ -537,14 +498,12 @@ where
                 self.config.signing_public_key.as_ref(),
             )?;
         }
-
         let signature = iroha_crypto::ed25519_parse_signature(&signature_bytes)
             .map_err(|err| NexusAppError::InvalidSignature(err.to_string()))?;
         let signed = signable.builder.build_with_signature(signature);
         signed
             .verify_signature()
             .map_err(|err| NexusAppError::SignatureVerification(err.to_string()))?;
-
         let receipt = self.submitter.submit_and_wait(&signed, options)?;
         let local_hash_hex = hex::encode(signed.hash().as_ref());
         if receipt.signed_transaction_hash_hex != local_hash_hex {
@@ -555,7 +514,6 @@ where
         }
         Ok(receipt)
     }
-
     /// Convenience wrapper over draft, wallet signature, finalize, submit, and wait.
     ///
     /// # Errors
@@ -594,7 +552,6 @@ where
         let signature = self.request_signature(session, &signable)?;
         self.finalize_and_submit(signable, signature, options)
     }
-
     fn build_signable_transfer(
         &self,
         input: &NexusTransferInput,
@@ -612,7 +569,6 @@ where
             Some(public_key) => NexusSignatureAlgorithm::from_public_key(public_key)?,
             None => return Err(NexusAppError::MissingSigningPublicKey),
         };
-
         let mut builder = TransactionBuilder::new(
             self.config.network_id,
             authority.clone(),
@@ -653,7 +609,6 @@ where
             .map_err(|err| NexusAppError::TransactionBuild(err.to_string()))?;
         let payload_bytes = builder.encode_payload();
         let payload_hash_hex = hex::encode(builder.payload_hash_bytes());
-
         Ok(NexusSignableTransaction {
             builder,
             payload_bytes,
@@ -664,7 +619,6 @@ where
         })
     }
 }
-
 fn resolve_signing_public_key(
     account_id: &AccountId,
     explicit: Option<&PublicKey>,
@@ -677,7 +631,6 @@ fn resolve_signing_public_key(
     ensure_authority_matches_public_key(account_id, &public_key)?;
     Ok(public_key)
 }
-
 fn ensure_authority_matches_public_key(
     account_id: &AccountId,
     public_key: &PublicKey,
@@ -688,19 +641,14 @@ fn ensure_authority_matches_public_key(
         None => Err(NexusAppError::MissingSigningPublicKey),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{cell::RefCell, rc::Rc};
-
     use iroha_crypto::{KeyPair, Signature};
     use iroha_data_model::{asset::AssetDefinitionId, prelude::Name};
     use iroha_primitives::json::Json;
-
     use super::*;
-
     const FIXTURE: &str = include_str!("../../../fixtures/sdk/nexus_connect_transfer_v1.json");
-
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(
             iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
@@ -708,7 +656,6 @@ mod tests {
             ),
         )
     }
-
     fn wallet_signature_for(
         key_pair: &KeyPair,
         signable: &NexusSignableTransaction,
@@ -723,24 +670,20 @@ mod tests {
             signature: signature.payload().to_vec(),
         }
     }
-
     fn checked_ed25519_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked Nexus app Ed25519 fixture keypair")
     }
-
     fn checked_secp256k1_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Secp256k1)
             .expect("generate checked Nexus app secp256k1 fixture keypair")
     }
-
     #[derive(Debug, Clone)]
     struct FakeConnect {
         account: AccountId,
         signature: Vec<u8>,
         requested_payloads: Rc<RefCell<Vec<Vec<u8>>>>,
     }
-
     impl NexusConnectTransport for FakeConnect {
         fn start_connect(
             &self,
@@ -760,7 +703,6 @@ mod tests {
                 signing_public_key: None,
             })
         }
-
         fn await_approval(
             &self,
             _session: &mut NexusConnectSession,
@@ -770,7 +712,6 @@ mod tests {
                 signing_public_key: self.account.expect_single_signatory().clone(),
             })
         }
-
         fn request_signature(
             &self,
             _session: &NexusConnectSession,
@@ -785,12 +726,10 @@ mod tests {
             })
         }
     }
-
     #[derive(Debug, Clone, Default)]
     struct FakeSubmitter {
         submitted_hashes: Rc<RefCell<Vec<String>>>,
     }
-
     impl NexusToriiSubmitter for FakeSubmitter {
         fn quote_fee_payment(
             &self,
@@ -798,7 +737,6 @@ mod tests {
         ) -> Result<FeePaymentIntent, NexusAppError> {
             Ok(payload.fee_payment.clone())
         }
-
         fn submit_and_wait(
             &self,
             transaction: &SignedTransaction,
@@ -813,10 +751,8 @@ mod tests {
             })
         }
     }
-
     #[derive(Debug, Clone)]
     struct MismatchedHashSubmitter;
-
     impl NexusToriiSubmitter for MismatchedHashSubmitter {
         fn quote_fee_payment(
             &self,
@@ -824,7 +760,6 @@ mod tests {
         ) -> Result<FeePaymentIntent, NexusAppError> {
             Ok(payload.fee_payment.clone())
         }
-
         fn submit_and_wait(
             &self,
             transaction: &SignedTransaction,
@@ -837,10 +772,8 @@ mod tests {
             })
         }
     }
-
     #[derive(Debug, Clone)]
     struct MismatchedQuoteSubmitter;
-
     impl NexusToriiSubmitter for MismatchedQuoteSubmitter {
         fn quote_fee_payment(
             &self,
@@ -851,7 +784,6 @@ mod tests {
                 std::num::NonZeroU64::new(1),
             ))
         }
-
         fn submit_and_wait(
             &self,
             _transaction: &SignedTransaction,
@@ -860,12 +792,10 @@ mod tests {
             unreachable!("a mismatched quote must fail before submission")
         }
     }
-
     #[derive(Debug)]
     struct FailingSubmitter {
         error: NexusAppError,
     }
-
     impl NexusToriiSubmitter for FailingSubmitter {
         fn quote_fee_payment(
             &self,
@@ -873,7 +803,6 @@ mod tests {
         ) -> Result<FeePaymentIntent, NexusAppError> {
             Ok(payload.fee_payment.clone())
         }
-
         fn submit_and_wait(
             &self,
             _transaction: &SignedTransaction,
@@ -886,7 +815,6 @@ mod tests {
             })
         }
     }
-
     fn sample_input(authority: AccountId) -> NexusTransferInput {
         let definition = AssetDefinitionId::from_uuid_bytes([
             0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x42, 0x22, 0x82, 0x22, 0x22, 0x22, 0x22, 0x22,
@@ -905,14 +833,12 @@ mod tests {
             nonce: Some(NonZeroU32::new(7).expect("nonzero")),
         }
     }
-
     fn fixture_string(key: &str) -> String {
         let needle = format!("\"{key}\": \"");
         let start = FIXTURE.find(&needle).expect("fixture key") + needle.len();
         let rest = &FIXTURE[start..];
         rest[..rest.find('"').expect("fixture string terminator")].to_owned()
     }
-
     fn fixture_u64(key: &str) -> u64 {
         let needle = format!("\"{key}\": ");
         let start = FIXTURE.find(&needle).expect("fixture numeric key") + needle.len();
@@ -922,13 +848,11 @@ mod tests {
             .expect("fixture numeric terminator");
         rest[..end].parse().expect("fixture integer")
     }
-
     fn fixture_account(key: &str) -> AccountId {
         AccountId::parse_encoded(&fixture_string(key))
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("fixture account")
     }
-
     fn fixture_transfer_input() -> NexusTransferInput {
         let authority = fixture_account("authority");
         let source_asset = fixture_string("source_asset_id");
@@ -939,7 +863,6 @@ mod tests {
             "purpose".parse::<Name>().expect("metadata key"),
             Json::from("nexus-app-fixture"),
         );
-
         NexusTransferInput {
             source_asset_id: AssetId::new(
                 definition.parse().expect("asset definition"),
@@ -958,7 +881,6 @@ mod tests {
             ),
         }
     }
-
     #[test]
     fn nexus_app_rejects_quote_that_changes_signature_bound_gas_selection() {
         let key_pair = checked_ed25519_keypair();
@@ -973,7 +895,6 @@ mod tests {
             .expect_err("mismatched fee quote must fail before wallet signing");
         assert!(matches!(error, NexusAppError::FeeQuote(_)));
     }
-
     #[test]
     fn nexus_app_builds_transfer_draft_and_finalizes_wallet_signature() {
         let key_pair = checked_ed25519_keypair();
@@ -995,7 +916,6 @@ mod tests {
             draft.signable.payload_hash_hex,
             hex::encode(draft.signable.builder.payload_hash_bytes())
         );
-
         let wallet_signature = wallet_signature_for(&key_pair, &draft.signable);
         let submitter = FakeSubmitter::default();
         let client = NexusAppClient::new(config, UnsupportedConnectTransport, submitter.clone());
@@ -1009,7 +929,6 @@ mod tests {
         assert!(receipt.signed_transaction.verify_signature().is_ok());
         assert_eq!(submitter.submitted_hashes.borrow().len(), 1);
     }
-
     #[test]
     fn nexus_app_transfer_with_wallet_runs_connect_sign_submit_flow() {
         let key_pair = checked_ed25519_keypair();
@@ -1047,12 +966,10 @@ mod tests {
                 NexusFinalizeOptions::default(),
             )
             .expect("receipt");
-
         assert!(receipt.signed_transaction.verify_signature().is_ok());
         assert_eq!(connect.requested_payloads.borrow().len(), 1);
         assert_eq!(submitter.submitted_hashes.borrow().len(), 1);
     }
-
     #[test]
     fn nexus_app_transfer_payload_matches_shared_fixture() {
         let public_key = PublicKey::from_bytes(
@@ -1076,11 +993,9 @@ mod tests {
             UnsupportedConnectTransport,
             FakeSubmitter::default(),
         );
-
         let draft = client
             .build_transfer_draft(fixture_transfer_input())
             .expect("fixture draft");
-
         assert_eq!(
             hex::encode(&draft.signable.payload_bytes),
             fixture_string("payload_bytes_hex")
@@ -1090,7 +1005,6 @@ mod tests {
             fixture_string("payload_hash_hex")
         );
     }
-
     #[test]
     fn nexus_app_signed_transaction_hash_matches_shared_fixture() {
         let public_key = PublicKey::from_bytes(
@@ -1125,13 +1039,11 @@ mod tests {
                 NexusFinalizeOptions::default(),
             )
             .expect("fixture receipt");
-
         assert_eq!(
             receipt.signed_transaction_hash_hex,
             fixture_string("signed_transaction_hash_hex")
         );
     }
-
     #[test]
     fn nexus_app_error_codes_are_stable() {
         assert_eq!(
@@ -1183,7 +1095,6 @@ mod tests {
             "status_wait_failed"
         );
     }
-
     #[test]
     fn nexus_app_rejects_non_ed25519_signing_key_before_building_draft() {
         let secp_key_pair = checked_secp256k1_keypair();
@@ -1197,18 +1108,15 @@ mod tests {
             UnsupportedConnectTransport,
             FakeSubmitter::default(),
         );
-
         let error = client
             .build_transfer_draft(sample_input(account))
             .expect_err("non-Ed25519 signing key must be rejected");
-
         assert!(matches!(
             error,
             NexusAppError::UnsupportedSignatureAlgorithm { algorithm }
                 if algorithm == Algorithm::Secp256k1.as_static_str()
         ));
     }
-
     #[test]
     fn nexus_app_rejects_authority_mismatch_before_requesting_signature() {
         let key_pair = checked_ed25519_keypair();
@@ -1238,11 +1146,9 @@ mod tests {
                 NexusFinalizeOptions::default(),
             )
             .expect_err("authority mismatch");
-
         assert_eq!(error.code(), "approval_account_mismatch");
         assert!(connect.requested_payloads.borrow().is_empty());
     }
-
     #[test]
     fn nexus_app_rejects_invalid_signature_length_before_submission() {
         let key_pair = checked_ed25519_keypair();
@@ -1268,10 +1174,8 @@ mod tests {
                 NexusFinalizeOptions::default(),
             )
             .expect_err("invalid signature");
-
         assert_eq!(error.code(), "invalid_signature");
     }
-
     #[test]
     fn nexus_app_rejects_all_zero_wallet_signature_before_submission() {
         let key_pair = checked_ed25519_keypair();
@@ -1298,7 +1202,6 @@ mod tests {
                 NexusFinalizeOptions::default(),
             )
             .expect_err("all-zero signature material must reject");
-
         assert_eq!(error.code(), "invalid_signature");
         assert!(
             error
@@ -1308,7 +1211,6 @@ mod tests {
         );
         assert!(submitter.submitted_hashes.borrow().is_empty());
     }
-
     #[test]
     fn nexus_app_rejects_malformed_ed25519_wallet_signature_r_before_submission() {
         const SMALL_ORDER_R: [u8; 32] = [
@@ -1320,7 +1222,6 @@ mod tests {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         let key_pair = checked_ed25519_keypair();
         let account = AccountId::new(key_pair.public_key().clone());
         for (label, replacement_r) in [
@@ -1341,7 +1242,6 @@ mod tests {
                 .expect("draft");
             let mut signature = wallet_signature_for(&key_pair, &draft.signable);
             signature.signature[..replacement_r.len()].copy_from_slice(&replacement_r);
-
             let error = match client.finalize_and_submit(
                 draft.signable,
                 signature,
@@ -1350,7 +1250,6 @@ mod tests {
                 Ok(_) => panic!("{label} Ed25519 wallet signature R must reject before submission"),
                 Err(error) => error,
             };
-
             assert_eq!(error.code(), "invalid_signature");
             assert!(
                 submitter.submitted_hashes.borrow().is_empty(),
@@ -1358,7 +1257,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn nexus_app_rejects_transaction_hash_mismatch() {
         let key_pair = checked_ed25519_keypair();
@@ -1382,10 +1280,8 @@ mod tests {
                 NexusFinalizeOptions::default(),
             )
             .expect_err("hash mismatch");
-
         assert_eq!(error.code(), "transaction_hash_mismatch");
     }
-
     #[test]
     fn nexus_app_preserves_submit_and_status_wait_error_codes() {
         let key_pair = checked_ed25519_keypair();
@@ -1417,7 +1313,6 @@ mod tests {
                     NexusFinalizeOptions::default(),
                 )
                 .expect_err("submitter failure");
-
             assert_eq!(error.code(), expected_code);
         }
     }

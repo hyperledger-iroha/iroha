@@ -1,6 +1,5 @@
 use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
 use ivm::{IVMHost, syscalls};
-
 fn build_env(public_input_len: usize) -> Vec<u8> {
     let envelope = OpenVerifyEnvelope::new(
         BackendTag::Halo2IpaPasta,
@@ -11,7 +10,6 @@ fn build_env(public_input_len: usize) -> Vec<u8> {
     );
     norito::to_bytes(&envelope).expect("encode canonical envelope")
 }
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
@@ -22,7 +20,6 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 #[test]
 fn default_host_fails_closed_for_canonical_input_size_matrix() {
     let mut vm = ivm::IVM::new(u64::MAX);

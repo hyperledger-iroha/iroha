@@ -35,7 +35,6 @@ fn direct_close_ack_retains_reply_route_from_lane_through_worker() {
         responder: request.responder,
     };
     close.close_id = close.canonical_close_id();
-
     assert_eq!(
         adapter.accept_relay_message(
             LaneRelayMessage::CertifiedMergeSidecar {
@@ -74,7 +73,6 @@ fn direct_close_ack_retains_reply_route_from_lane_through_worker() {
             .to_string()
             .contains("reply-route ownership")
     );
-
     dispatch_lane_work_effects(&mut adapter, &services, 1)
         .expect("dispatch the direct CloseAck through exact output");
     assert_eq!(adapter.effect_count(), 0);
@@ -84,7 +82,6 @@ fn direct_close_ack_retains_reply_route_from_lane_through_worker() {
             .expect("inspect direct CloseAck route in worker ownership")
     );
 }
-
 #[test]
 fn closed_sidecar_prefix_handoff_requeues_only_failed_suffix() {
     let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
@@ -106,7 +103,6 @@ fn closed_sidecar_prefix_handoff_requeues_only_failed_suffix() {
     // eight authenticated sources. Each capability must advertise that
     // exact geometry even though this case exercises one source.
     let mut routes = NetworkReplyRouteTestFixture::new(hub.clone());
-
     for request in &requests {
         let reply_route = routes.mint_via(request.requester.clone(), hub.clone());
         assert_eq!(
@@ -141,7 +137,6 @@ fn closed_sidecar_prefix_handoff_requeues_only_failed_suffix() {
             V2LaneIngressOutcome::Inserted
         );
     }
-
     let mut first_applied = Vec::new();
     let mut calls = 0usize;
     let error = apply_certified_merge_sidecar_closed_prefixes_with(&mut adapter, |prefix| {
@@ -160,7 +155,6 @@ fn closed_sidecar_prefix_handoff_requeues_only_failed_suffix() {
             if reason == "injected exact-output close failure"
     ));
     assert_eq!(first_applied.len(), 1);
-
     let mut retry_applied = Vec::new();
     apply_certified_merge_sidecar_closed_prefixes_with(&mut adapter, |prefix| {
         retry_applied.push(prefix.clone());
@@ -185,13 +179,11 @@ fn closed_sidecar_prefix_handoff_requeues_only_failed_suffix() {
         applied_requesters, requesters,
         "the successful prefix plus the retried suffix cover the exact drained batch"
     );
-
     apply_certified_merge_sidecar_closed_prefixes_with(&mut adapter, |_| {
         panic!("a confirmed handoff must leave no prefix for another retry")
     })
     .expect("the confirmed handoff is empty");
 }
-
 #[test]
 fn relayed_generation_hint_preserves_reply_route_from_lane_through_worker() {
     let super::super::v2_lane_work::tests::CertifiedSidecarServerFixture {
@@ -226,7 +218,6 @@ fn relayed_generation_hint_preserves_reply_route_from_lane_through_worker() {
     let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
     let route_a = routes.mint_via(requester.clone(), hub_a);
     let route_b = routes.mint_via(requester.clone(), hub_b);
-
     assert_eq!(
         adapter.accept_relay_message(
             LaneRelayMessage::CertifiedMergeSidecar {
@@ -268,7 +259,6 @@ fn relayed_generation_hint_preserves_reply_route_from_lane_through_worker() {
                 CertifiedMergeSidecarMessage::GenerationHint(_)
             )
     ));
-
     let mut malformed = adapter
         .next_effect()
         .expect("the routed GenerationHint remains lane-owned before dispatch");
@@ -282,7 +272,6 @@ fn relayed_generation_hint_preserves_reply_route_from_lane_through_worker() {
             .to_string()
             .contains("reply-route ownership")
     );
-
     assert!(routes.retire(&route_a));
     dispatch_lane_work_effects(&mut adapter, &services, 1)
         .expect("dispatch the routed GenerationHint through exact output");
@@ -298,7 +287,6 @@ fn relayed_generation_hint_preserves_reply_route_from_lane_through_worker() {
             .expect("the live Hint sibling must remain in worker ownership")
     );
 }
-
 #[test]
 fn runner_dispatch_prunes_retired_sidecar_source_without_losing_live_sibling() {
     let (mut services, keys) = super::super::v2_worker::tests::fixture();
@@ -337,7 +325,6 @@ fn runner_dispatch_prunes_retired_sidecar_source_without_losing_live_sibling() {
         super::super::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
     assert!(lane_work.requeue_effect(effect));
     assert!(route_fixture.retire(&route_a));
-
     dispatch_lane_work_effects(&mut lane_work, &services, 1)
         .expect("a retired owned route cannot poison its live sibling");
     assert_eq!(lane_work.effect_count(), 0);
@@ -352,7 +339,6 @@ fn runner_dispatch_prunes_retired_sidecar_source_without_losing_live_sibling() {
             .expect("inspect live sibling ownership")
     );
 }
-
 #[test]
 fn runner_preflight_enqueue_race_retains_sidecar_source_until_capacity_reopens() {
     let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
@@ -368,7 +354,6 @@ fn runner_preflight_enqueue_race_retains_sidecar_source_until_capacity_reopens()
     services
         .set_exact_output_shared_unit_capacity_for_test(1)
         .expect("install one shared race slot plus frozen target reservations");
-
     let hub_a = PeerId::new(KeyPair::random().public_key().clone());
     let hub_b = PeerId::new(KeyPair::random().public_key().clone());
     let hub_c = PeerId::new(KeyPair::random().public_key().clone());
@@ -399,7 +384,6 @@ fn runner_preflight_enqueue_race_retains_sidecar_source_until_capacity_reopens()
         .drain_effects(1)
         .pop()
         .expect("take the exact effect after successful preflight");
-
     services.set_exact_output_admission_hook(|post, ticket| {
         Err(NetworkActorAdmissionError::Backpressured {
             message: post,
@@ -432,7 +416,6 @@ fn runner_preflight_enqueue_race_retains_sidecar_source_until_capacity_reopens()
             LaneWorkEffectDispatch::Complete
         ));
     }
-
     let retained_effect = match dispatch_lane_work_effect(&services, actual_effect)
         .expect("the enqueue race is bounded source backpressure")
     {
@@ -442,7 +425,6 @@ fn runner_preflight_enqueue_race_retains_sidecar_source_until_capacity_reopens()
         }
     };
     assert!(!services.exact_output_restart_required_for_test());
-
     let filler_controls = Arc::new(Mutex::new(Vec::new()));
     let filler_controls_for_hook = Arc::clone(&filler_controls);
     let mut filler_routes = vec![
@@ -502,7 +484,6 @@ fn runner_preflight_enqueue_race_retains_sidecar_source_until_capacity_reopens()
             .has_pending_exact_output()
             .expect("drained filler receipts release their exact ownership")
     );
-
     let actual_admissions = Arc::new(AtomicUsize::new(0));
     let actual_admissions_for_hook = Arc::clone(&actual_admissions);
     let actual_route_for_hook = actual_route.clone();
@@ -545,7 +526,6 @@ fn runner_preflight_enqueue_race_retains_sidecar_source_until_capacity_reopens()
     );
     assert!(!services.exact_output_restart_required_for_test());
 }
-
 #[test]
 fn runner_dispatch_advances_certified_sidecar_only_after_writer_flush() {
     let (mut services, keys) = super::super::v2_worker::tests::fixture();
@@ -572,7 +552,6 @@ fn runner_dispatch_advances_certified_sidecar_only_after_writer_flush() {
     });
     let reply_routes = NetworkReplyRoutes::try_from_route(route).expect("live reply route set");
     let chunk = runner_sidecar_chunk(local, requester.clone(), b"runner admitted sidecar request");
-
     dispatch_lane_work_effect(
         &services,
         V2LaneWorkEffect::PostCertifiedMergeSidecar {
@@ -624,7 +603,6 @@ fn runner_dispatch_advances_certified_sidecar_only_after_writer_flush() {
             .has_pending_exact_output()
             .expect("receipt ownership is released after drain")
     );
-
     let (mut closed_services, keys) = super::super::v2_worker::tests::fixture();
     let local = PeerId::new(keys[0].public_key().clone());
     let requester = PeerId::new(keys[1].public_key().clone());
@@ -684,7 +662,6 @@ fn runner_dispatch_advances_certified_sidecar_only_after_writer_flush() {
         "a closed writer acknowledgement cannot erase an active source's current item"
     );
 }
-
 #[test]
 fn runner_dispatch_retired_admission_race_emits_no_sidecar_receipt() {
     let (mut services, keys) = super::super::v2_worker::tests::fixture();
@@ -700,7 +677,6 @@ fn runner_dispatch_retired_admission_race_emits_no_sidecar_receipt() {
     });
     let reply_routes =
         NetworkReplyRoutes::try_from_route(route).expect("initially live reply route set");
-
     dispatch_lane_work_effect(
         &services,
         V2LaneWorkEffect::PostCertifiedMergeSidecar {
@@ -726,7 +702,6 @@ fn runner_dispatch_retired_admission_race_emits_no_sidecar_receipt() {
             .expect("retired occurrence releases worker ownership")
     );
 }
-
 #[test]
 fn runner_closed_sidecar_flush_reconnect_retries_same_chunk_then_advances_once() {
     let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
@@ -759,7 +734,6 @@ fn runner_closed_sidecar_flush_reconnect_retries_same_chunk_then_advances_once()
         }
         other => panic!("expected first Kura-backed sidecar chunk, got {other:?}"),
     };
-
     let first_route_for_hook = first_route.clone();
     let close_control = Arc::new(Mutex::new(None));
     let close_control_for_hook = Arc::clone(&close_control);
@@ -812,7 +786,6 @@ fn runner_closed_sidecar_flush_reconnect_retries_same_chunk_then_advances_once()
         }
         other => panic!("expected reconnected current sidecar chunk, got {other:?}"),
     }
-
     dispatch_lane_work_effects(&mut lane_work, &services, 1)
         .expect("the worker absorbs the reconnect into its retained source attempt");
     assert_eq!(
@@ -825,7 +798,6 @@ fn runner_closed_sidecar_flush_reconnect_retries_same_chunk_then_advances_once()
             .has_pending_exact_output()
             .expect("old writer flush remains process-locally owned")
     );
-
     let reconnected_route_for_hook = reconnected_route.clone();
     let flush_control = Arc::new(Mutex::new(None));
     let flush_control_for_hook = Arc::clone(&flush_control);
@@ -870,7 +842,6 @@ fn runner_closed_sidecar_flush_reconnect_retries_same_chunk_then_advances_once()
             .expect("writer-flushed receipt is fully applied")
     );
 }
-
 #[test]
 fn runner_old_flushed_sidecar_receipt_cancels_queued_reconnect_retry() {
     let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
@@ -895,7 +866,6 @@ fn runner_old_flushed_sidecar_receipt_cancels_queued_reconnect_retry() {
             .expect("materialize the first exact sidecar chunk"),
         V2LaneIngressOutcome::Inserted
     );
-
     let first_route_for_hook = first_route.clone();
     let flush_control = Arc::new(Mutex::new(None));
     let flush_control_for_hook = Arc::clone(&flush_control);
@@ -913,7 +883,6 @@ fn runner_old_flushed_sidecar_receipt_cancels_queued_reconnect_retry() {
     });
     dispatch_lane_work_effects(&mut lane_work, &services, 1)
         .expect("dispatch the first route chunk");
-
     assert!(routes.retire(&first_route));
     let reconnected_route = routes.mint(fixture.requester.clone());
     assert_eq!(
@@ -934,7 +903,6 @@ fn runner_old_flushed_sidecar_receipt_cancels_queued_reconnect_retry() {
             .has_pending_exact_output()
             .expect("the worker owns the reconnect while the old flush is pending")
     );
-
     assert!(
         flush_control
             .lock()
@@ -945,7 +913,6 @@ fn runner_old_flushed_sidecar_receipt_cancels_queued_reconnect_retry() {
     );
     retry_exact_output_and_apply_sidecar_admissions(&mut lane_work, &services, 1)
         .expect("late old flush advances the rebound source without identity mismatch");
-
     assert_eq!(
         lane_work.effect_count(),
         0,
@@ -963,14 +930,12 @@ fn runner_old_flushed_sidecar_receipt_cancels_queued_reconnect_retry() {
     );
     assert!(!services.exact_output_restart_required_for_test());
 }
-
 #[test]
 fn runner_dispatch_rejects_certified_sidecar_chunk_without_reply_route() {
     let (services, keys) = super::super::v2_worker::tests::fixture();
     let local = PeerId::new(keys[0].public_key().clone());
     let requester = PeerId::new(keys[1].public_key().clone());
     let chunk = runner_sidecar_chunk(local, requester.clone(), b"runner missing sidecar route");
-
     let error = dispatch_lane_work_effect(
         &services,
         V2LaneWorkEffect::PostCertifiedMergeSidecar {
@@ -982,7 +947,6 @@ fn runner_dispatch_rejects_certified_sidecar_chunk_without_reply_route() {
     .expect_err("runner must reject a sidecar response without local reply authority");
     assert!(error.to_string().contains("reply-route ownership"));
 }
-
 #[test]
 fn runner_dispatch_rejects_durable_response_without_reply_routes() {
     let history = super::super::v2_lane_work::tests::durable_lane_history_fixture();
@@ -1010,7 +974,6 @@ fn runner_dispatch_rejects_durable_response_without_reply_routes() {
             .contains("lost its authenticated reply routes")
     );
 }
-
 #[test]
 fn snapshot_successor_time_is_exact_bounded_and_restart_deterministic() {
     let height_started_at = Instant::now();
@@ -1028,7 +991,6 @@ fn snapshot_successor_time_is_exact_bounded_and_restart_deterministic() {
     assert!(!retain_eager_block_sync(false, false));
     assert!(retain_eager_block_sync(true, false));
     assert!(retain_eager_block_sync(false, true));
-
     let anchor = wire::SnapshotBootstrapAnchor {
         snapshot_height: 99,
         snapshot_block_hash: HashOf::from_untyped_unchecked(Hash::new(b"snapshot tip")),
@@ -1042,7 +1004,6 @@ fn snapshot_successor_time_is_exact_bounded_and_restart_deterministic() {
         .expect("restart derives the same successor time");
     assert_eq!(first, Duration::from_millis(50_750));
     assert_eq!(restarted, first);
-
     assert!(matches!(
         snapshot_successor_logical_time(&anchor, Duration::ZERO),
         Err(V2RunnerError::InvalidSnapshotBootstrapCadence)
@@ -1060,7 +1021,6 @@ fn snapshot_successor_time_is_exact_bounded_and_restart_deterministic() {
         Err(V2RunnerError::V2BlockTimeOverflow)
     ));
 }
-
 #[test]
 fn unsupported_storage_platform_rejects_runner_voter_and_admits_observer() {
     let admit_role = |role| require_validator_storage_platform(role == NodeRole::Validator, false);
@@ -1074,7 +1034,6 @@ fn unsupported_storage_platform_rejects_runner_voter_and_admits_observer() {
         "an unsupported host may enter only the explicitly non-voting runner path"
     );
 }
-
 #[test]
 fn explicit_observer_never_votes_even_when_present_in_roster() {
     let (context, keys) = context();
@@ -1098,7 +1057,6 @@ fn explicit_observer_never_votes_even_when_present_in_roster() {
         None
     );
 }
-
 #[test]
 fn runtime_queue_reserves_progress_and_completions() {
     let config = SumeragiV2Config {
@@ -1162,7 +1120,6 @@ fn runtime_queue_reserves_progress_and_completions() {
     };
     assert!(runtime_queue_config(&config).is_ok());
     assert!(effect_queue_config(&config).is_ok());
-
     let mut invalid = config;
     invalid.limits.effect_work_capacity = 3;
     assert!(matches!(
@@ -1173,7 +1130,6 @@ fn runtime_queue_reserves_progress_and_completions() {
         })
     ));
 }
-
 #[test]
 fn commit_certificate_runtime_backpressure_remains_retryable() {
     let admission = Err(CommitCertificateAdmissionError::Enqueue(

@@ -12,13 +12,11 @@ use iroha_crypto::{
 use iroha_data_model::NetworkId;
 use norito::codec::Encode;
 use sha2::{Digest, Sha256};
-
 use crate::connect::{
     ConnectCiphertextV1, ConnectFrameV1, ConnectPayloadV1, ConnectRelayEnvelopeV1, Constraints,
     Dir, EnvelopeV1, FrameKind, PermissionsV1, Role, SignInProofV1, WalletSignatureV1,
     decode_connect_envelope_framed, encode_connect_envelope_framed,
 };
-
 /// Derive the canonical Connect session identifier for one exact deployment.
 #[must_use]
 pub fn derive_session_id(network_id: &NetworkId, app_pk: &[u8; 32], nonce: &[u8; 16]) -> [u8; 32] {
@@ -32,7 +30,6 @@ pub fn derive_session_id(network_id: &NetworkId, app_pk: &[u8; 32], nonce: &[u8;
         .expect("fixed BLAKE2b output buffer has the requested length");
     out
 }
-
 /// Connect bearer-token class used for domain-separated token hashes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TokenKind {
@@ -43,7 +40,6 @@ pub enum TokenKind {
     /// Stable session management token.
     Management,
 }
-
 impl TokenKind {
     const fn label(self) -> &'static [u8] {
         match self {
@@ -53,7 +49,6 @@ impl TokenKind {
         }
     }
 }
-
 /// Derive per-direction keys from a `SessionKey` using HKDF-SHA256 with a BLAKE2b(sid) salt.
 pub fn derive_direction_keys(session_key: &SessionKey, sid: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
     let mut salt = [0u8; 32];
@@ -69,7 +64,6 @@ pub fn derive_direction_keys(session_key: &SessionKey, sid: &[u8; 32]) -> ([u8; 
         .expect("ok");
     (k_app, k_wallet)
 }
-
 /// Compute X25519 shared secret and derive direction keys.
 ///
 /// # Errors
@@ -89,7 +83,6 @@ pub fn x25519_derive_keys(
     let sess = x.compute_shared_secret(&sk, &peer)?;
     Ok(derive_direction_keys(&sess, sid))
 }
-
 fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     const BLOCK_LEN: usize = 64;
     let mut key_block = [0u8; BLOCK_LEN];
@@ -98,27 +91,23 @@ fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     } else {
         key_block[..key.len()].copy_from_slice(key);
     }
-
     let mut ipad = [0x36u8; BLOCK_LEN];
     let mut opad = [0x5cu8; BLOCK_LEN];
     for idx in 0..BLOCK_LEN {
         ipad[idx] ^= key_block[idx];
         opad[idx] ^= key_block[idx];
     }
-
     let mut inner = Sha256::new();
     Digest::update(&mut inner, ipad);
     for part in parts {
         Digest::update(&mut inner, part);
     }
     let inner_digest = inner.finalize();
-
     let mut outer = Sha256::new();
     Digest::update(&mut outer, opad);
     Digest::update(&mut outer, inner_digest);
     outer.finalize().into()
 }
-
 /// Derive the Connect P2P relay MAC key from a session id and relay token.
 #[must_use]
 pub fn derive_relay_mac_key(sid: &[u8; 32], relay_token: &str) -> [u8; 32] {
@@ -132,7 +121,6 @@ pub fn derive_relay_mac_key(sid: &[u8; 32], relay_token: &str) -> [u8; 32] {
         .expect("hkdf expansion to 32 bytes must succeed");
     out
 }
-
 /// Compute the relay auth hash bound into wallet approval signatures.
 #[must_use]
 pub fn relay_auth_hash(sid: &[u8; 32], relay_token: &str) -> [u8; 32] {
@@ -142,7 +130,6 @@ pub fn relay_auth_hash(sid: &[u8; 32], relay_token: &str) -> [u8; 32] {
     Digest::update(&mut hasher, relay_token.as_bytes());
     hasher.finalize().into()
 }
-
 /// Compute a domain-separated authentication hash for a Connect bearer token.
 #[must_use]
 pub fn token_auth_hash(kind: TokenKind, sid: &[u8; 32], token: &str) -> [u8; 32] {
@@ -153,7 +140,6 @@ pub fn token_auth_hash(kind: TokenKind, sid: &[u8; 32], token: &str) -> [u8; 32]
     Digest::update(&mut hasher, token.as_bytes());
     hasher.finalize().into()
 }
-
 /// Compute the relay MAC for a Connect frame and remaining relay TTL.
 ///
 /// # Errors
@@ -178,7 +164,6 @@ pub fn compute_relay_mac(
         ],
     ))
 }
-
 /// Build an authenticated relay envelope for P2P forwarding.
 ///
 /// # Errors
@@ -191,7 +176,6 @@ pub fn seal_relay_envelope(
     let mac = compute_relay_mac(relay_key, &frame, ttl)?;
     Ok(ConnectRelayEnvelopeV1 { frame, ttl, mac })
 }
-
 /// Verify an authenticated relay envelope.
 ///
 /// # Errors
@@ -203,7 +187,6 @@ pub fn verify_relay_envelope(
     let expected = compute_relay_mac(relay_key, &envelope.frame, envelope.ttl)?;
     Ok(constant_time_eq(&expected, &envelope.mac))
 }
-
 /// Compare two byte slices without data-dependent early exit.
 #[must_use]
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -216,7 +199,6 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     }
     diff == 0
 }
-
 /// Build v1 AAD: "connect:v1" || sid || dir || seq || kind=1
 pub fn aad_current(sid: &[u8; 32], dir: Dir, seq: u64) -> Vec<u8> {
     let mut aad = Vec::with_capacity(8 + 32 + 1 + 8 + 1);
@@ -230,19 +212,16 @@ pub fn aad_current(sid: &[u8; 32], dir: Dir, seq: u64) -> Vec<u8> {
     aad.push(1u8); // kind = Ciphertext
     aad
 }
-
 /// Build canonical AAD for the current Connect envelope format.
 pub fn aad(sid: &[u8; 32], dir: Dir, seq: u64) -> Vec<u8> {
     aad_current(sid, dir, seq)
 }
-
 /// Derive a 96-bit ChaCha20-Poly1305 nonce from sequence: 0x00000000 || `seq_le`.
 pub fn nonce_from_seq(seq: u64) -> [u8; 12] {
     let mut n = [0u8; 12];
     n[4..].copy_from_slice(&seq.to_le_bytes());
     n
 }
-
 /// Seal an envelope (payload+seq) into a ciphertext frame using the provided key bytes.
 pub fn seal_envelope_current(
     key: &[u8; 32],
@@ -270,7 +249,6 @@ pub fn seal_envelope_current(
         }),
     }
 }
-
 /// Seal an envelope using the canonical Connect envelope format.
 pub fn seal_envelope(
     key: &[u8; 32],
@@ -281,7 +259,6 @@ pub fn seal_envelope(
 ) -> ConnectFrameV1 {
     seal_envelope_current(key, sid, dir, seq, payload)
 }
-
 /// Open a ciphertext frame and return the decrypted envelope. Enforces Envelope.seq == frame.seq.
 ///
 /// # Errors
@@ -312,7 +289,6 @@ pub fn open_envelope_current(
     }
     Ok(env)
 }
-
 /// Open a ciphertext frame using the canonical Connect envelope format.
 ///
 /// # Errors
@@ -323,7 +299,6 @@ pub fn open_envelope_current(
 pub fn open_envelope(key: &[u8; 32], frame: &ConnectFrameV1) -> Result<EnvelopeV1, &'static str> {
     open_envelope_current(key, frame)
 }
-
 /// Deterministic Norito-encoded BLAKE2b-256 hash of permissions.
 pub fn hash_permissions_current(perms: &PermissionsV1) -> [u8; 32] {
     use iroha_crypto::blake2::{Blake2bVar, digest::Update};
@@ -334,7 +309,6 @@ pub fn hash_permissions_current(perms: &PermissionsV1) -> [u8; 32] {
     b2.finalize_variable(&mut out).expect("ok");
     out
 }
-
 /// Deterministic Norito-encoded BLAKE2b-256 hash of sign-in proof.
 pub fn hash_signin_proof_current(proof: &SignInProofV1) -> [u8; 32] {
     use iroha_crypto::blake2::{Blake2bVar, digest::Update};
@@ -345,7 +319,6 @@ pub fn hash_signin_proof_current(proof: &SignInProofV1) -> [u8; 32] {
     b2.finalize_variable(&mut out).expect("ok");
     out
 }
-
 /// Deterministic Norito-encoded BLAKE2b-256 hash of session constraints.
 #[must_use]
 pub fn hash_constraints_current(constraints: &Constraints) -> [u8; 32] {
@@ -357,7 +330,6 @@ pub fn hash_constraints_current(constraints: &Constraints) -> [u8; 32] {
         .expect("fixed BLAKE2b output buffer has the requested length");
     out
 }
-
 /// Build the canonical approval preimage for wallet signature.
 ///
 /// The preimage binds the exact deployment, all application constraints, and
@@ -394,7 +366,6 @@ pub fn build_approve_preimage(
     push_tagged(&mut out, b"relay_auth", relay_auth);
     out
 }
-
 /// Verify a wallet's approval signature against the canonical session preimage.
 ///
 /// # Errors
@@ -435,7 +406,6 @@ pub fn verify_wallet_approval_signature(
         .verify(account_signatory, &preimage)
         .map_err(|_| "connect_wallet_signature_invalid")
 }
-
 fn push_tagged(out: &mut Vec<u8>, tag: &[u8], value: &[u8]) {
     let tag_len = u16::try_from(tag.len()).expect("connect SDK tags are bounded");
     out.extend_from_slice(&tag_len.to_le_bytes());
@@ -443,7 +413,6 @@ fn push_tagged(out: &mut Vec<u8>, tag: &[u8], value: &[u8]) {
     out.extend_from_slice(&(value.len() as u64).to_le_bytes());
     out.extend_from_slice(value);
 }
-
 /// Convenience: encrypt a Close control as an encrypted payload.
 #[allow(clippy::too_many_arguments)]
 pub fn encrypt_close_current(
@@ -464,7 +433,6 @@ pub fn encrypt_close_current(
     });
     seal_envelope_current(key, sid, dir, seq, payload)
 }
-
 /// Convenience: encrypt a Reject control as an encrypted payload.
 pub fn encrypt_reject_current(
     key: &[u8; 32],
@@ -482,11 +450,9 @@ pub fn encrypt_reject_current(
     });
     seal_envelope_current(key, sid, dir, seq, payload)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn aead_bind_header_and_seq() {
         let key = [7u8; 32];
@@ -514,7 +480,6 @@ mod tests {
             open_envelope_current(&key, &tampered).err(),
             Some("decrypt")
         );
-
         // Both redundant direction fields must agree, and the outer direction
         // is part of the authenticated header.
         let mut tampered_outer_dir = frame.clone();
@@ -533,7 +498,6 @@ mod tests {
             Some("dir_mismatch")
         );
     }
-
     #[test]
     fn sealed_envelope_frame_encodes() {
         let key = [0x11_u8; 32];
@@ -556,7 +520,6 @@ mod tests {
             crate::connect::decode_connect_frame_bare(&bytes).expect("sealed frame must decode");
         assert_eq!(decoded, frame);
     }
-
     #[test]
     fn relay_mac_authenticates_frame_and_ttl() {
         let sid = [0x22_u8; 32];
@@ -569,22 +532,18 @@ mod tests {
         let key = derive_relay_mac_key(&sid, "relay-token");
         let envelope = seal_relay_envelope(&key, frame.clone(), 3).expect("relay envelope");
         assert!(verify_relay_envelope(&key, &envelope).expect("verify relay envelope"));
-
         let mut bad = envelope.clone();
         bad.ttl = 2;
         assert!(!verify_relay_envelope(&key, &bad).expect("verify relay envelope"));
-
         let wrong_key = derive_relay_mac_key(&sid, "wrong-token");
         assert!(!verify_relay_envelope(&wrong_key, &envelope).expect("verify relay envelope"));
     }
-
     #[test]
     fn token_auth_hash_is_domain_separated() {
         let sid = [0x33_u8; 32];
         let app = token_auth_hash(TokenKind::App, &sid, "token");
         let wallet = token_auth_hash(TokenKind::Wallet, &sid, "token");
         let management = token_auth_hash(TokenKind::Management, &sid, "token");
-
         assert_ne!(app, wallet);
         assert_ne!(app, management);
         assert!(constant_time_eq(
@@ -596,7 +555,6 @@ mod tests {
             &token_auth_hash(TokenKind::App, &sid, "other-token")
         ));
     }
-
     #[test]
     fn connect_session_vectors_match_fixture() {
         let fixture: norito::json::Value = norito::json::from_str(include_str!(
@@ -661,7 +619,6 @@ mod tests {
                 .and_then(norito::json::Value::as_str)
                 .expect("hash")
         };
-
         assert_eq!(
             hex::encode(token_auth_hash(TokenKind::App, &sid, token("app"))),
             hash("app")
@@ -694,19 +651,16 @@ mod tests {
         );
     }
 }
-
 #[cfg(test)]
 mod approve_preimage_tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{account::AccountId, block::BlockHeader};
-
     fn network_id(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             label,
         )))
     }
-
     #[test]
     fn canonical_approval_fixture_verifies_end_to_end() {
         let fixture: norito::json::Value = norito::json::from_str(include_str!(
@@ -776,7 +730,6 @@ mod approve_preimage_tests {
                 .and_then(norito::json::Value::as_str)
                 .expect("approve_preimage_hex")
         );
-
         let key_pair = KeyPair::try_from_seed(
             decode(approval, "account_private_key_seed_hex"),
             Algorithm::Ed25519,
@@ -816,7 +769,6 @@ mod approve_preimage_tests {
         )
         .expect("canonical fixture approval verifies");
     }
-
     #[test]
     fn approval_signature_binds_exact_network_constraints_and_relay() {
         let sid = [1u8; 32];
@@ -868,7 +820,6 @@ mod approve_preimage_tests {
             &signature,
         )
         .expect("exact approval verifies");
-
         let wrong_constraints = Constraints {
             network_id: network_id(b"connect-approval-genesis-b"),
         };
@@ -914,7 +865,6 @@ mod approve_preimage_tests {
         assert!(img.windows(32).any(|w| w == relay));
         assert!(std::str::from_utf8(&img).is_err(), "binary tail included");
     }
-
     #[test]
     fn session_id_rejects_same_label_different_genesis() {
         let app = [7u8; 32];

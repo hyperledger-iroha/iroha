@@ -11,7 +11,7 @@ public sealed class ToriiAccountFaucetSolveOptions
 {
     public ulong StartNonce { get; init; }
 
-    public int MaxAttempts { get; init; } = 100_000;
+    public int MaxAttempts { get; init; } = 1_000_000;
 
     public int NonceByteCount { get; init; } = sizeof(ulong);
 }
@@ -37,43 +37,66 @@ public sealed record class ToriiAccountFaucetSolution
         return new ToriiAccountFaucetRequest
         {
             AccountId = AccountId,
-            PowAnchorHeight = DifficultyBits == 0 ? null : AnchorHeight,
-            PowNonceHex = DifficultyBits == 0 ? null : NonceHex,
+            PowAnchorHeight = AnchorHeight,
+            PowNonceHex = NonceHex,
         };
     }
 }
 
 public static class ToriiAccountFaucetPow
 {
-    public const string Algorithm = "scrypt-leading-zero-bits-v1";
+    public const string Algorithm = "scrypt-leading-zero-bits-v2";
 
     internal const long MaxScryptRomixMemoryBytes = 64L * 1024 * 1024;
     internal const uint MaxScryptParallelization = 16;
 
-    private static readonly byte[] DomainSeparator = Encoding.ASCII.GetBytes("iroha:accounts:faucet:pow:v2");
+    private static readonly byte[] DomainSeparator = Encoding.ASCII.GetBytes("iroha:accounts:faucet:pow:v3");
 
     public static byte[] ComputeChallenge(
         string accountId,
+        NetworkId networkId,
+        ushort chainDiscriminant,
         ulong anchorHeight,
         string anchorBlockHashHex,
         string? challengeSaltHex = null)
     {
-        var exactAccountId = RequireExactAccountId(accountId, nameof(accountId));
+        ArgumentNullException.ThrowIfNull(networkId);
+        var exactAccountId = RequireExactAccountId(
+            accountId,
+            nameof(accountId),
+            chainDiscriminant);
         if (anchorHeight == 0)
         {
             throw new ArgumentOutOfRangeException(nameof(anchorHeight), "Anchor height must be positive.");
         }
 
-        var anchorHash = Convert.FromHexString(RequireExactHex(anchorBlockHashHex, nameof(anchorBlockHashHex)));
+        var anchorHash = Convert.FromHexString(
+            ToriiExplorerDirectMetadata.RequireExactSizedHex(
+                anchorBlockHashHex,
+                nameof(anchorBlockHashHex),
+                32));
         var challengeSalt = challengeSaltHex is null
             ? Array.Empty<byte>()
-            : Convert.FromHexString(RequireExactHex(challengeSaltHex, nameof(challengeSaltHex)));
+            : Convert.FromHexString(
+                ToriiExplorerDirectMetadata.RequireExactSizedHex(
+                    challengeSaltHex,
+                    nameof(challengeSaltHex),
+                    32));
         var accountBytes = Encoding.UTF8.GetBytes(exactAccountId);
-        var payload = new byte[DomainSeparator.Length + accountBytes.Length + sizeof(ulong) + anchorHash.Length + challengeSalt.Length];
+        var payload = new byte[
+            DomainSeparator.Length
+            + NetworkId.ByteLength
+            + accountBytes.Length
+            + sizeof(ulong)
+            + anchorHash.Length
+            + challengeSalt.Length];
         var offset = 0;
 
         DomainSeparator.CopyTo(payload, offset);
         offset += DomainSeparator.Length;
+
+        networkId.AsSpan().CopyTo(payload.AsSpan(offset, NetworkId.ByteLength));
+        offset += NetworkId.ByteLength;
 
         accountBytes.CopyTo(payload, offset);
         offset += accountBytes.Length;
@@ -91,7 +114,13 @@ public static class ToriiAccountFaucetPow
     public static byte[] ComputeChallenge(string accountId, ToriiAccountFaucetPuzzle puzzle)
     {
         ArgumentNullException.ThrowIfNull(puzzle);
-        return ComputeChallenge(accountId, puzzle.AnchorHeight, puzzle.AnchorBlockHashHex, puzzle.ChallengeSaltHex);
+        return ComputeChallenge(
+            accountId,
+            puzzle.NetworkId,
+            puzzle.ChainDiscriminant,
+            puzzle.AnchorHeight,
+            puzzle.AnchorBlockHashHex,
+            puzzle.ChallengeSaltHex);
     }
 
     public static byte[] ComputeDigest(
@@ -141,6 +170,7 @@ public static class ToriiAccountFaucetPow
         out int leadingZeroBits)
     {
         ArgumentNullException.ThrowIfNull(puzzle);
+        RequirePositiveDifficulty(puzzle);
         var normalizedNonce = RequireExactHex(nonceHex, nameof(nonceHex));
         var nonceBytes = Convert.FromHexString(normalizedNonce);
         var challenge = ComputeChallenge(accountId, puzzle);
@@ -159,7 +189,11 @@ public static class ToriiAccountFaucetPow
         RequireSupportedAlgorithm(
             puzzle.Algorithm,
             $"{nameof(puzzle)}.{nameof(ToriiAccountFaucetPuzzle.Algorithm)}");
-        var exactAccountId = RequireExactAccountId(accountId, nameof(accountId));
+        RequirePositiveDifficulty(puzzle);
+        var exactAccountId = RequireExactAccountId(
+            accountId,
+            nameof(accountId),
+            puzzle.ChainDiscriminant);
 
         options ??= new ToriiAccountFaucetSolveOptions();
         if (options.MaxAttempts <= 0)
@@ -178,17 +212,6 @@ public static class ToriiAccountFaucetPow
             throw new ArgumentOutOfRangeException(
                 nameof(options.MaxAttempts),
                 "MaxAttempts must not advance the nonce past UInt64.MaxValue from StartNonce.");
-        }
-
-        if (puzzle.DifficultyBits == 0)
-        {
-            return new ToriiAccountFaucetSolution
-            {
-                AccountId = exactAccountId,
-                AnchorHeight = puzzle.AnchorHeight,
-                DifficultyBits = puzzle.DifficultyBits,
-                Attempts = 0,
-            };
         }
 
         var challenge = ComputeChallenge(exactAccountId, puzzle);
@@ -229,6 +252,16 @@ public static class ToriiAccountFaucetPow
         Span<byte> nonceBuffer = stackalloc byte[sizeof(ulong)];
         BinaryPrimitives.WriteUInt64BigEndian(nonceBuffer, nonceValue);
         nonceBuffer[^destination.Length..].CopyTo(destination);
+    }
+
+    private static void RequirePositiveDifficulty(ToriiAccountFaucetPuzzle puzzle)
+    {
+        if (puzzle.DifficultyBits == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                $"{nameof(puzzle)}.{nameof(ToriiAccountFaucetPuzzle.DifficultyBits)}",
+                "Faucet PoW difficulty must be positive.");
+        }
     }
 
     private static int CheckedWorkFactor(byte scryptLogN)
@@ -290,6 +323,14 @@ public static class ToriiAccountFaucetPow
 
     internal static string RequireExactAccountId(string? value, string paramName)
     {
+        return RequireExactAccountId(value, paramName, AccountAddress.DefaultChainDiscriminant);
+    }
+
+    internal static string RequireExactAccountId(
+        string? value,
+        string paramName,
+        ushort? chainDiscriminant)
+    {
         if (string.IsNullOrWhiteSpace(value))
         {
             throw new ArgumentException("Account id cannot be null or whitespace.", paramName);
@@ -307,8 +348,10 @@ public static class ToriiAccountFaucetPow
 
         try
         {
-            return AccountAddress.Parse(value, AccountAddress.DefaultChainDiscriminant)
-                .ToI105(AccountAddress.DefaultChainDiscriminant);
+            var address = AccountAddress.Parse(value, chainDiscriminant);
+            return chainDiscriminant.HasValue
+                ? address.ToI105(chainDiscriminant.Value)
+                : value;
         }
         catch (AccountAddressException exception)
         {

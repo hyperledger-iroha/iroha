@@ -218,7 +218,6 @@ impl IrohaRuntimeDeps {
                 .is_none()
             && self.sorafs_musubi_provider_attestation_inventory.is_none()
     }
-
     /// Attach the deployment-owned Bootle/Lantern issuer and authentication registry.
     #[must_use]
     pub fn with_bootle_lantern_issuance_provider_registry(
@@ -230,7 +229,6 @@ impl IrohaRuntimeDeps {
         self.bootle_lantern_issuance_provider_registry = Some(registry);
         self
     }
-
     /// Attach the production PKCS#11/KMS wrapper for moderation quarantine
     /// object data keys.
     #[must_use]
@@ -241,7 +239,6 @@ impl IrohaRuntimeDeps {
         self.moderation_quarantine_key_wrapper = Some(key_wrapper);
         self
     }
-
     /// Attach the production threshold-PRF provider for differential-privacy
     /// publication cycles.
     #[must_use]
@@ -252,7 +249,6 @@ impl IrohaRuntimeDeps {
         self.privacy_cycle_prf_provider = Some(provider);
         self
     }
-
     /// Attach the independently administered finalized privacy-release head.
     #[must_use]
     pub fn with_privacy_release_anchor(
@@ -262,7 +258,6 @@ impl IrohaRuntimeDeps {
         self.privacy_release_anchor = Some(anchor);
         self
     }
-
     /// Attach the production external sealed-CAS transparency leader lease.
     #[must_use]
     pub fn with_transparency_leader_lease_provider(
@@ -272,7 +267,6 @@ impl IrohaRuntimeDeps {
         self.transparency_leader_lease_provider = Some(provider);
         self
     }
-
     /// Attach the deployment-owned fused privacy Governance target writer.
     ///
     /// Enabled privacy publication requires this writer and an authenticated
@@ -286,7 +280,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_fenced_transparency_publisher = Some(publisher);
         self
     }
-
     /// Attach the authenticated authoritative-head reader paired with the
     /// fused privacy target writer.
     ///
@@ -301,7 +294,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_fenced_transparency_head_reader = Some(reader);
         self
     }
-
     /// Attach the production HSM/KMS signer for the embedded `SoraFS`
     /// Governance DAG publisher.
     #[must_use]
@@ -312,7 +304,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_governance_dag_signer = Some(signer);
         self
     }
-
     /// Attach the production Kubo/IPFS/IPNS request authenticator for the
     /// supervised Governance DAG service.
     #[must_use]
@@ -323,7 +314,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_governance_dag_ipfs_authenticator = Some(authenticator);
         self
     }
-
     /// Attach the production signed-head compare-and-swap authenticator for
     /// the supervised Governance DAG service.
     #[must_use]
@@ -334,7 +324,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_governance_dag_head_authenticator = Some(authenticator);
         self
     }
-
     /// Attach the sealed monotonic checkpoint and publish-intent store for the
     /// supervised Governance DAG service.
     #[must_use]
@@ -345,7 +334,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_governance_dag_checkpoint_store = Some(checkpoint_store);
         self
     }
-
     /// Attach the production HSM/KMS signer for `SoraFS` stream-token issuance.
     #[must_use]
     pub fn with_sorafs_stream_token_signer(
@@ -355,7 +343,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_stream_token_signer = Some(signer);
         self
     }
-
     /// Attach the deployment-owned atomic stream-token quota, sealed sequence,
     /// and ordered callback-outbox provider.
     #[must_use]
@@ -366,7 +353,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_stream_token_gateway_admission = Some(provider);
         self
     }
-
     /// Attach runtime-only HSM/KMS providers for appeal-finance lock,
     /// disbursement, and refund transactions.
     #[must_use]
@@ -377,7 +363,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_appeal_finance_runtime_signers = Some(signers);
         self
     }
-
     /// Attach the HSM/KMS-authenticated monotonic checkpoint boundary for the
     /// appeal-finance transaction forwarder.
     #[must_use]
@@ -390,7 +375,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_appeal_finance_checkpoint_runtime = Some(runtime);
         self
     }
-
     /// Attach a raw runtime-only signer for authoritative proof-outcome
     /// transactions.
     ///
@@ -405,7 +389,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_proof_outcome_signer = Some(signer);
         self
     }
-
     /// Attach a raw runtime-only signer for native repair transactions.
     ///
     /// The deployment registry resolver replaces this provider with an
@@ -419,7 +402,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_repair_transaction_signer = Some(signer);
         self
     }
-
     /// Attach a raw runtime-only signer for native reserve/rent transactions.
     ///
     /// The deployment registry resolver replaces this provider with an
@@ -433,7 +415,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_reserve_transaction_signer = Some(signer);
         self
     }
-
     /// Attach a raw runtime-only signer for native orderbook transactions.
     ///
     /// The deployment registry resolver replaces this provider with an
@@ -447,7 +428,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_orderbook_transaction_signer = Some(signer);
         self
     }
-
     /// Attach the raw deployment-owned Soracloud transaction and provenance signer.
     ///
     /// The runtime-provider registry replaces this provider with an immutable
@@ -461,7 +441,6 @@ impl IrohaRuntimeDeps {
         self.soracloud_runtime_mutation_signer = Some(signer);
         self
     }
-
     /// Attach the raw deployment-owned authenticated HF credential provider.
     ///
     /// The registry resolver replaces this provider with an immutable facade
@@ -476,7 +455,6 @@ impl IrohaRuntimeDeps {
         self.soracloud_hf_inference_credential_provider = Some(provider);
         self
     }
-
     /// Attach the runtime-only HSM/KMS signer for exact moderation native
     /// transaction envelopes.
     #[must_use]
@@ -489,7 +467,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_moderation_transaction_signer = Some(signer);
         self
     }
-
     /// Attach the durable appeal-finance boundary for finalized moderation
     /// settlement handoffs.
     #[must_use]
@@ -502,7 +479,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_moderation_settlement_handoff = Some(boundary);
         self
     }
-
     /// Attach the durable governance/transparency boundary for finalized
     /// moderation publication handoffs.
     #[must_use]
@@ -515,7 +491,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_moderation_publication_handoff = Some(boundary);
         self
     }
-
     /// Attach the durable payload-free juror-notification boundary.
     #[must_use]
     pub fn with_sorafs_moderation_panel_notification(
@@ -527,7 +502,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_moderation_panel_notification = Some(boundary);
         self
     }
-
     /// Attach the immutable authenticated moderation notification-receipt archive.
     #[must_use]
     pub fn with_sorafs_moderation_panel_notification_archive(
@@ -539,7 +513,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_moderation_panel_notification_archive = Some(archive);
         self
     }
-
     /// Attach the deployment-owned sealed monotonic moderation checkpoint authority.
     #[must_use]
     pub fn with_sorafs_moderation_checkpoint_store(
@@ -551,7 +524,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_moderation_checkpoint_store = Some(checkpoint_store);
         self
     }
-
     /// Attach the production `WebAuthn` verifier for evidence-viewer sessions.
     #[must_use]
     pub fn with_sorafs_evidence_viewer_webauthn(
@@ -561,7 +533,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_evidence_viewer_webauthn = Some(boundary);
         self
     }
-
     /// Attach the finalized assignment/role grant authority for evidence
     /// viewing.
     #[must_use]
@@ -572,7 +543,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_evidence_viewer_grants = Some(boundary);
         self
     }
-
     /// Attach the HSM-backed signer for hash-chained evidence access receipts.
     #[must_use]
     pub fn with_sorafs_evidence_viewer_receipt_signer(
@@ -582,7 +552,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_evidence_viewer_receipt_signer = Some(signer);
         self
     }
-
     /// Attach the authenticated evidence erasure boundary. Its implementation
     /// owns KMS/storage credentials and must honor stable operation IDs.
     #[must_use]
@@ -593,7 +562,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_evidence_viewer_erasure = Some(boundary);
         self
     }
-
     /// Attach the deployment-owned linearizable evidence-viewer checkpoint
     /// authority. Its implementation owns all CAS credentials and sealed
     /// persistence state.
@@ -605,7 +573,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_evidence_viewer_checkpoint_store = Some(checkpoint_store);
         self
     }
-
     /// Attach the authenticated immutable evidence-viewer compaction archive.
     ///
     /// Archive credentials and its Ed25519 private signing key remain inside
@@ -618,7 +585,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_evidence_viewer_compaction_archive = Some(archive);
         self
     }
-
     /// Attach the deployment-owned signed monotonic evidence transparency publisher.
     ///
     /// Publisher credentials and the Ed25519 private signing key remain inside
@@ -634,7 +600,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_evidence_viewer_transparency_publisher = Some(publisher);
         self
     }
-
     /// Attach the deployment-owned registry for all runtime-only `PoP`
     /// enrollment, issuer, finalized-query, wallet, and authentication
     /// providers.
@@ -648,7 +613,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_pop_credential_provider_registry = Some(provider_registry);
         self
     }
-
     /// Attach independently administered runtime HSM services for the `SoraFS`
     /// `PoTR` gateway Ed25519 and provider ML-DSA-65 receipt roles.
     ///
@@ -662,7 +626,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_potr_runtime_signer_roles = Some(roles);
         self
     }
-
     /// Attach the runtime-owned ACME client used by the `SoraFS` regional gateway.
     ///
     /// Account and DNS-provider credentials remain inside the implementation
@@ -675,7 +638,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_gateway_acme_client = Some(client);
         self
     }
-
     /// Attach the authenticated, address-pinned `SoraFS` compliance feed transport.
     ///
     /// Bearer tokens, client identities, DNS credentials, and TLS key material
@@ -688,7 +650,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_gateway_compliance_feed_transport = Some(transport);
         self
     }
-
     /// Attach a runtime-only identity-matching signer and normal-queue
     /// submitter for native `PoR` and stream-token reputation journal entries.
     #[must_use]
@@ -701,7 +662,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_reputation_journal_transaction_submitter = Some(submitter);
         self
     }
-
     /// Attach the externally sealed monotonic checkpoint provider for the
     /// native reputation journal outbox.
     #[must_use]
@@ -712,7 +672,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_reputation_journal_checkpoint_provider = Some(provider);
         self
     }
-
     /// Attach the external threshold-signing service for exact committed
     /// reputation material.
     #[must_use]
@@ -723,7 +682,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_reputation_threshold_signer = Some(signer);
         self
     }
-
     /// Attach the authenticated Governance DAG publication/readback service for
     /// committed reputation snapshots.
     #[must_use]
@@ -734,7 +692,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_reputation_governance_dag = Some(governance_dag);
         self
     }
-
     /// Attach the separate sealed monotonic finalized-reputation archive
     /// retention authority.
     #[must_use]
@@ -747,7 +704,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_reputation_retention_authority = Some(authority);
         self
     }
-
     /// Attach the identity-pinned finalized billing query, including typed
     /// consensus-authenticated period-close records.
     #[must_use]
@@ -758,7 +714,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_hedging_billing_finalized_query = Some(query);
         self
     }
-
     /// Attach the consensus billing-journal inclusion/finality verifier.
     #[must_use]
     pub fn with_sorafs_hedging_billing_journal_verifier(
@@ -768,7 +723,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_hedging_billing_journal_verifier = Some(verifier);
         self
     }
-
     /// Attach the runtime-only HSM/KMS billing statement signer.
     #[must_use]
     pub fn with_sorafs_billing_statement_signer(
@@ -778,7 +732,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_billing_statement_signer = Some(signer);
         self
     }
-
     /// Attach the authenticated immutable billing statement publisher.
     #[must_use]
     pub fn with_sorafs_billing_statement_publisher(
@@ -788,7 +741,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_billing_statement_publisher = Some(publisher);
         self
     }
-
     /// Attach the authoritative billing statement acknowledgement service.
     #[must_use]
     pub fn with_sorafs_billing_acknowledgement_authority(
@@ -800,7 +752,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_billing_acknowledgement_authority = Some(authority);
         self
     }
-
     /// Attach the authenticated monotonic sealed billing epoch witness store.
     #[must_use]
     pub fn with_sorafs_hedging_billing_epoch_witness_store(
@@ -810,7 +761,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_hedging_billing_epoch_witness_store = Some(store);
         self
     }
-
     /// Attach the authenticated governed source-fetch boundary used by local
     /// finalized replication ingest.
     #[must_use]
@@ -821,7 +771,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_provider_ingest_authenticated_source = Some(source);
         self
     }
-
     /// Attach the governance-aware runtime HSM/KMS completion-signer resolver.
     #[must_use]
     pub fn with_sorafs_provider_ingest_signer_resolver(
@@ -833,7 +782,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_provider_ingest_signer_resolver = Some(resolver);
         self
     }
-
     /// Attach the sealed monotonic provider-ingest checkpoint authority.
     #[must_use]
     pub fn with_sorafs_provider_ingest_checkpoint_runtime(
@@ -843,7 +791,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_provider_ingest_checkpoint_runtime = Some(runtime);
         self
     }
-
     /// Attach the separate sealed monotonic finalized-archive retention authority.
     #[must_use]
     pub fn with_sorafs_provider_ingest_retention_authority(
@@ -855,7 +802,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_provider_ingest_retention_authority = Some(authority);
         self
     }
-
     /// Attach the authenticated immutable finalized-PoR replay archive.
     ///
     /// Archive credentials and the Ed25519 private signing key remain inside
@@ -868,7 +814,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_por_finalized_replay_archive = Some(archive);
         self
     }
-
     /// Attach the rollback-resistant monotonic clock seal reserved for the
     /// supervised Musubi provider-attestation journal.
     #[must_use]
@@ -879,7 +824,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_musubi_provider_attestation_clock_seal = Some(seal);
         self
     }
-
     /// Attach the approval-only HSM/KMS or threshold signer reserved for the
     /// supervised Musubi provider-attestation journal.
     #[must_use]
@@ -890,7 +834,6 @@ impl IrohaRuntimeDeps {
         self.sorafs_musubi_provider_attestation_approval_signer = Some(signer);
         self
     }
-
     /// Attach the authenticated coordinator inventory reserved for the
     /// supervised Musubi provider-attestation journal.
     #[must_use]

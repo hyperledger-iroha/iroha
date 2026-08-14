@@ -9,12 +9,10 @@ use iroha_data_model::{
     prelude::Decode,
 };
 use norito::core;
-
 /// Minimal vector-backed registry used for benchmarking decode performance.
 struct VecRegistry {
     entries: Vec<(&'static str, InstructionConstructor)>,
 }
-
 impl VecRegistry {
     /// Create an empty vector-backed registry.
     fn new() -> Self {
@@ -22,7 +20,6 @@ impl VecRegistry {
             entries: Vec::new(),
         }
     }
-
     /// Register a single instruction type in the registry.
     fn register<T>(mut self) -> Self
     where
@@ -36,12 +33,10 @@ impl VecRegistry {
             let instruction = T::decode(&mut &*input)?;
             Ok(Box::new(instruction).into_instruction_box())
         }
-
         let name = std::any::type_name::<T>();
         self.entries.push((name, ctor::<T>));
         self
     }
-
     /// Decode an instruction by its type name using the stored constructor.
     fn decode(
         &self,
@@ -55,7 +50,6 @@ impl VecRegistry {
             .map(|(_, ctor)| ctor(flags, bytes))
     }
 }
-
 /// Benchmark the decode path for a vector registry vs. `InstructionRegistry`.
 fn bench_decode(c: &mut Criterion) {
     let name = std::any::type_name::<Log>();
@@ -65,24 +59,20 @@ fn bench_decode(c: &mut Criterion) {
     let view = core::from_bytes_view(&framed_bytes).expect("validate framed bytes");
     let flags = view.flags();
     let payload = view.as_bytes().to_vec();
-
     let vec_registry = VecRegistry::new().register::<Log>();
     let hash_registry = InstructionRegistry::new().register::<Log>();
     let boxed = InstructionBox::from(instruction);
     let boxed_payload = norito::codec::encode_adaptive(&boxed);
-
     c.bench_function("decode_vec", |b| {
         b.iter(|| {
             vec_registry.decode(name, flags, &payload).unwrap().unwrap();
         })
     });
-
     c.bench_function("decode_hashmap", |b| {
         b.iter(|| {
             hash_registry.decode(name, &framed_bytes).unwrap().unwrap();
         })
     });
-
     c.bench_function("decode_instruction_box_pair_owned", |b| {
         b.iter(|| {
             let (wire_id, bytes): (String, Vec<u8>) =
@@ -91,7 +81,6 @@ fn bench_decode(c: &mut Criterion) {
             hash_registry.decode(&wire_id, &bytes).unwrap().unwrap();
         })
     });
-
     c.bench_function("decode_instruction_box", |b| {
         b.iter(|| {
             norito::codec::decode_exact_from_slice::<InstructionBox>(&boxed_payload)
@@ -99,7 +88,6 @@ fn bench_decode(c: &mut Criterion) {
         })
     });
 }
-
 /// Entry point for the benchmark binary.
 fn main() {
     let mut c = Criterion::default().configure_from_args();

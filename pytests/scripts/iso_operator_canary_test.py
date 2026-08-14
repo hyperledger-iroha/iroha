@@ -22,8 +22,15 @@ assert SPEC.loader is not None
 sys.modules[SPEC.name] = CANARY
 SPEC.loader.exec_module(CANARY)
 
+TEST_NETWORK_ID = "hash:0808080808080808080808080808080808080808080808080808080808080809#9F75"
+
 
 def write_config(root, body):
+    body = copy.deepcopy(body)
+    rail = body.get("rail") if type(body) is dict else None
+    if type(rail) is dict:
+        rail.setdefault("network_id", TEST_NETWORK_ID)
+        rail.setdefault("operator_private_key_file", "runtime/operator.key")
     path = root / "canary.json"
     path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
     return path
@@ -975,16 +982,16 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 },
             ),
             (
-                "rail-bearer",
-                "rail.bearer_token_file",
-                "rail.bearer",
+                "rail-operator-key",
+                "rail.operator_private_key_file",
+                "rail.operator.key",
                 lambda path: {
                     "provider": "local-bank",
                     "environment": "preprod",
                     "rail": {
                         "inbox_dir": "inbox",
                         "torii_base_url": "https://torii.local-bank.bank",
-                        "bearer_token_file": path.name,
+                        "operator_private_key_file": path.name,
                     },
                 },
             ),
@@ -2064,78 +2071,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     expected,
                 )
 
-    def test_runs_rail_notary_and_verifies_generated_receipts(self):
-        with tempfile.TemporaryDirectory() as raw_root:
-            root = Path(raw_root)
-            inbox = root / "inbox"
-            inbox.mkdir()
-            rail_test.write_message(inbox)
-            export_dir = root / "export"
-            export_dir.mkdir()
-            audit_test.write_export(
-                export_dir,
-                store_dir=root / "audit-store",
-                write_record_sources_flag=True,
-            )
-            summary_out = root / "summary" / "canary.summary.json"
-            summary_out.parent.mkdir()
-            summary_out.write_text('{"stale": true}\n' + ("x" * 4096), encoding="utf-8")
-
-            with rail_test.capture_server() as (torii_url, rail_requests):
-                with audit_test.capture_server() as (notary_url, notary_requests):
-                    config = write_config(
-                        root,
-                        {
-                            "provider": "local-bank",
-                            "environment": "preprod",
-                            "rail": {
-                                "inbox_dir": str(inbox),
-                                "torii_base_url": torii_url,
-                                "allow_insecure_http": True,
-                            },
-                            "notary": {
-                                "export_dir": str(export_dir),
-                                "endpoints": [notary_url],
-                                "allow_insecure_http": True,
-                            },
-                            "verify": {
-                                "allow_insecure_http": True,
-                                "require_source_files": True,
-                            },
-                        },
-                    )
-                    rc, stdout, stderr = run_canary(
-                        ["--config", str(config), "--summary-out", str(summary_out)]
-                    )
-
-            self.assertEqual(rc, 1, stderr)
-            self.assertEqual(len(rail_requests), 1)
-            self.assertEqual(len(notary_requests), 1)
-            self.assertTrue(summary_out.exists())
-            summary = load_summary(stdout)
-            self.assertEqual(summary["version"], CANARY.CANARY_SUMMARY_VERSION)
-            self.assertFalse(summary["ok"])
-            self.assertEqual(summary["provider"], "local-bank")
-            self.assertFalse(summary["policy"]["require_explicit_policy"])
-            self.assertEqual([stage["name"] for stage in summary["stages"]], ["rail", "notary", "verify"])
-            self.assertEqual([stage["returncode"] for stage in summary["stages"]], [0, 0, 0])
-            for stage in summary["stages"]:
-                self.assertRegex(stage["started_at"], r"^\d{4}-\d{2}-\d{2}T")
-                self.assertRegex(stage["finished_at"], r"^\d{4}-\d{2}-\d{2}T")
-            body = dict(summary)
-            digest = body.pop("summary_sha256")
-            self.assertEqual(digest, CANARY.sha256_hex(CANARY._canonical_json_bytes(body)))
-            self.assertEqual(
-                json.loads(summary_out.read_text(encoding="utf-8")),
-                summary,
-            )
-            self.assertEqual(summary_out.stat().st_mode & 0o077, 0)
-            self.assertEqual(
-                list(summary_out.parent.glob(".iso-*.tmp")),
-                [],
-            )
-
-    def test_plan_only_redacts_token_paths_and_does_not_execute(self):
+    def test_plan_only_redacts_runtime_secret_paths_and_does_not_execute(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             config = write_config(
@@ -2146,7 +2082,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "rail": {
                         "inbox_dir": "missing-inbox",
                         "torii_base_url": "https://torii.local-bank.bank",
-                        "bearer_token_file": "secrets/torii.bearer",
+                        "operator_private_key_file": "secrets/torii.operator.key",
                     },
                     "notary": {
                         "export_dir": "missing-export",
@@ -2171,7 +2107,8 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             )
             planned_text = json.dumps(summary["planned_stages"])
             self.assertIn("<runtime-token-file>", planned_text)
-            self.assertNotIn("secrets/torii.bearer", planned_text)
+            self.assertIn("<runtime-private-key-file>", planned_text)
+            self.assertNotIn("secrets/torii.operator.key", planned_text)
             self.assertNotIn("secrets/notary.bearer", planned_text)
 
     def test_boolean_output_limit_is_rejected_before_execution(self):
@@ -2599,26 +2536,6 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                         CANARY.run(args)
 
                     self.assertIn(expected, str(caught.exception))
-
-    def test_redacts_equals_form_bearer_token_arguments(self):
-        redacted = CANARY._redacted_command(
-            [
-                "iso_rail_gateway_adapter.py",
-                "--bearer-token-file=/ops/secrets/live-token",
-                "--timeout-secs",
-                "10",
-            ]
-        )
-
-        self.assertEqual(
-            redacted,
-            [
-                "iso_rail_gateway_adapter.py",
-                "--bearer-token-file=<runtime-token-file>",
-                "--timeout-secs",
-                "10",
-            ],
-        )
 
     def test_checked_in_profile_runbook_templates_plan_without_network(self):
         template_dir = REPO_ROOT / "fixtures" / "iso20022" / "operator_canary"
@@ -4038,21 +3955,23 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             }
             cases = (
                 (
-                    "rail-token-under-receipts",
+                    "rail-operator-key-under-receipts",
                     lambda body: body["rail"].__setitem__(
-                        "bearer_token_file",
+                        "operator_private_key_file",
                         "rail-receipts/runtime-rail-proof",
                     ),
-                    "rail.receipt_dir must not overlap rail.bearer_token_file",
+                    "rail.receipt_dir must not overlap rail.operator_private_key_file",
                     "runtime-rail-proof",
                 ),
                 (
-                    "rail-receipts-under-token-path",
+                    "rail-receipts-under-operator-key-path",
                     lambda body: (
                         body["rail"].__setitem__("receipt_dir", "runtime/rail-proof/receipts"),
-                        body["rail"].__setitem__("bearer_token_file", "runtime/rail-proof"),
+                        body["rail"].__setitem__(
+                            "operator_private_key_file", "runtime/rail-proof"
+                        ),
                     ),
-                    "rail.receipt_dir must not overlap rail.bearer_token_file",
+                    "rail.receipt_dir must not overlap rail.operator_private_key_file",
                     "runtime/rail-proof",
                 ),
                 (
@@ -4131,21 +4050,23 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             }
             cases = (
                 (
-                    "rail-token-under-inbox",
+                    "rail-operator-key-under-inbox",
                     lambda body: body["rail"].__setitem__(
-                        "bearer_token_file",
+                        "operator_private_key_file",
                         "inbox/runtime-rail-proof",
                     ),
-                    "rail.bearer_token_file must not overlap rail.inbox_dir",
+                    "rail.operator_private_key_file must not overlap rail.inbox_dir",
                     "runtime-rail-proof",
                 ),
                 (
-                    "rail-inbox-under-token-path",
+                    "rail-inbox-under-operator-key-path",
                     lambda body: (
                         body["rail"].__setitem__("inbox_dir", "runtime/rail-proof/inbox"),
-                        body["rail"].__setitem__("bearer_token_file", "runtime/rail-proof"),
+                        body["rail"].__setitem__(
+                            "operator_private_key_file", "runtime/rail-proof"
+                        ),
                     ),
-                    "rail.bearer_token_file must not overlap rail.inbox_dir",
+                    "rail.operator_private_key_file must not overlap rail.inbox_dir",
                     "runtime/rail-proof",
                 ),
                 (
@@ -5878,12 +5799,12 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 "rail.receipt_dir must not contain control characters",
             ),
             (
-                "rail token empty segment",
+                "rail operator key empty segment",
                 lambda body: body["rail"].__setitem__(
-                    "bearer_token_file",
-                    "secrets//torii.bearer",
+                    "operator_private_key_file",
+                    "secrets//torii.operator.key",
                 ),
-                "rail.bearer_token_file must not contain empty path segments",
+                "rail.operator_private_key_file must not contain empty path segments",
             ),
             (
                 "notary export dot segment",
@@ -6055,12 +5976,12 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 "rail.torii_base_url must not have surrounding whitespace",
             ),
             (
-                "rail token path",
+                "rail operator key path",
                 lambda body: body["rail"].__setitem__(
-                    "bearer_token_file",
-                    " secrets/torii.bearer",
+                    "operator_private_key_file",
+                    " secrets/torii.operator.key",
                 ),
-                "rail.bearer_token_file must not have surrounding whitespace",
+                "rail.operator_private_key_file must not have surrounding whitespace",
             ),
             (
                 "notary endpoint",
@@ -6124,9 +6045,9 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 "rail.receipt_dir must be a non-empty string when provided",
             ),
             (
-                "rail token path null",
-                lambda body: body["rail"].__setitem__("bearer_token_file", None),
-                "rail.bearer_token_file must be a non-empty string when provided",
+                "rail operator key path null",
+                lambda body: body["rail"].__setitem__("operator_private_key_file", None),
+                "rail.operator_private_key_file must be a non-empty string",
             ),
             (
                 "rail max payload null",

@@ -20,7 +20,6 @@ fn tc_body_rebind_cancels_fetch_superseded_by_a_higher_different_qc() {
         )
         .expect("begin original protected fetch");
     let original_id = services.fetch_tasks[0].id();
-
     let mut first_timeout = timeout_at_view(&fixture, 0);
     first_timeout.groups[0].highest_prepare_qc = Some(original.clone());
     executor
@@ -33,7 +32,6 @@ fn tc_body_rebind_cancels_fetch_superseded_by_a_higher_different_qc() {
             &mut services,
         )
         .expect("retain original exact high-QC fetch");
-
     let replacement_subject = wire::BlockSubject {
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replacement high-QC block")),
         payload_hash: Hash::new(b"replacement high-QC payload"),
@@ -61,12 +59,10 @@ fn tc_body_rebind_cancels_fetch_superseded_by_a_higher_different_qc() {
             &mut services,
         )
         .expect("higher different QC supersedes old acquisition");
-
     assert!(executor.pending_fetches.is_empty());
     assert!(executor.body_pipeline_owners.is_empty());
     assert!(executor.outstanding_requests.is_empty());
     assert_eq!(services.cancelled_fetches, vec![original_id]);
-
     let replacement_sources = certified_sources(&fixture, &replacement);
     executor
         .consume_effects(
@@ -85,7 +81,6 @@ fn tc_body_rebind_cancels_fetch_superseded_by_a_higher_different_qc() {
     assert_eq!(executor.pending_work(), 1);
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn certified_view_churn_cancels_stale_fetches_and_releases_capacity() {
     let fixture = Fixture::new();
@@ -134,7 +129,6 @@ fn certified_view_churn_cancels_stale_fetches_and_releases_capacity() {
     assert_eq!(services.cancelled_fetches.len(), 6);
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn certified_view_churn_cancels_stale_signing_and_releases_capacity() {
     let fixture = Fixture::new();
@@ -190,7 +184,6 @@ fn certified_view_churn_cancels_stale_signing_and_releases_capacity() {
     );
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn certified_sources_must_exactly_match_canonical_frozen_roster() {
     let fixture = Fixture::new();
@@ -226,7 +219,6 @@ fn certified_sources_must_exactly_match_canonical_frozen_roster() {
         assert!(executor.status().fail_closed);
     }
 }
-
 #[test]
 fn reopened_durable_receipt_satisfies_fetch_without_network() {
     let fixture = Fixture::new();
@@ -319,7 +311,6 @@ fn reopened_durable_receipt_satisfies_fetch_without_network() {
         .complete_body_validation(completion, &mut services)
         .expect("validate reopened exact body");
 }
-
 #[test]
 fn delayed_pending_tip_recovery_allows_only_local_apply_pipeline() {
     let fixture = Fixture::new();
@@ -339,7 +330,6 @@ fn delayed_pending_tip_recovery_allows_only_local_apply_pipeline() {
         })
         .expect("persist exact deterministic-validation marker");
     drop(store);
-
     let reopened = V2BodyStore::open_with_policy(
         directory.path(),
         fixture.context.clone(),
@@ -407,7 +397,6 @@ fn delayed_pending_tip_recovery_allows_only_local_apply_pipeline() {
             subject: fixture.manifest.subject,
             certificate: commit,
         }])));
-
     let mut executor = V2EffectExecutor::with_runtime(
         runtime,
         recovered,
@@ -425,7 +414,6 @@ fn delayed_pending_tip_recovery_allows_only_local_apply_pipeline() {
         requester_key: Some(fixture.requester_key.clone()),
         ..FakeServices::default()
     };
-
     for _ in 0..4 {
         assert!(matches!(
             executor
@@ -450,7 +438,6 @@ fn delayed_pending_tip_recovery_allows_only_local_apply_pipeline() {
     assert!(services.entered_views.is_empty());
     assert!(services.equivocations.is_empty());
     assert!(services.invalid_bodies.is_empty());
-
     // Model a slow WSV/checkpoint/fsync completion. Repeated idle polling must remain silent,
     // and an accidental reducer broadcast is rejected before reaching the network adapter.
     for _ in 0..3 {
@@ -492,7 +479,6 @@ fn delayed_pending_tip_recovery_allows_only_local_apply_pipeline() {
     ));
     assert!(services.broadcasts.is_empty());
 }
-
 #[test]
 fn runtime_step_dispatches_entire_effect_batch_before_returning() {
     let fixture = Fixture::new();
@@ -518,7 +504,6 @@ fn runtime_step_dispatches_entire_effect_batch_before_returning() {
                 certificate: fixture.qc(wire::GlobalPhase::Prepare),
             },
         ])));
-
     assert_eq!(
         executor
             .step(Instant::now(), &mut services)
@@ -544,7 +529,6 @@ fn runtime_step_dispatches_entire_effect_batch_before_returning() {
         EffectExecutorStep::Idle
     );
 }
-
 #[test]
 fn runtime_step_consumes_effect_batch_and_idle_publishes_status() {
     let fixture = Fixture::new();
@@ -578,7 +562,6 @@ fn runtime_step_consumes_effect_batch_and_idle_publishes_status() {
     assert_eq!(services.sign_tasks.len(), 1);
     assert_eq!(services.statuses.len(), 2);
 }
-
 #[test]
 fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
     let mut fixture = ProductionTransportFixture::new_validator();
@@ -588,7 +571,6 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
         .arm_live_clocks(started)
         .expect("arm the production serialized runtime");
     let mut services = FakeServices::default();
-
     let conflicting_body = b"delayed-GST equivocation payload".to_vec();
     let conflicting_subject = wire::BlockSubject {
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"delayed-GST equivocation block")),
@@ -614,7 +596,6 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
         .runtime
         .bind_validated_body(&conflicting_manifest, &conflicting_validated)
         .expect("bind a second locally validated equivocation subject");
-
     let signed_vote = |subject: wire::BlockSubject,
                        execution_commitment: wire::ExecutionCommitment,
                        signer: wire::ValidatorIndex| {
@@ -684,7 +665,6 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
             .expect("inspect durable decision before quorum")
             .is_none()
     );
-
     let canonical_prepare =
         fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment);
     assert_eq!(canonical_prepare.signers, vec![0, 1, 2]);
@@ -721,24 +701,19 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
         let mut foreign_context = fixture.context.clone();
         foreign_context.network_id =
             crate::sumeragi::synthetic_network_id("delayed-gst-foreign-context");
-
         let mut wrong_context = canonical_prepare.clone();
         wrong_context.round.context_id = foreign_context.id();
         wrong_context.proposal_round.context_id = foreign_context.id();
         resign(&mut wrong_context);
-
         let mut wrong_height = canonical_prepare.clone();
         wrong_height.round.height += 1;
         wrong_height.proposal_round.height += 1;
         resign(&mut wrong_height);
-
         let mut wrong_view = canonical_prepare.clone();
         wrong_view.proposal_round.view += 1;
         resign(&mut wrong_view);
-
         let mut wrong_signature = canonical_prepare.clone();
         wrong_signature.aggregate_signature[0] ^= 0x80;
-
         let wrong_commitment =
             fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.conflicting_commitment);
         [
@@ -767,7 +742,6 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
         );
         assert!(!fixture.executor.status().fail_closed);
     }
-
     let prepare_message = wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::QuorumCertificate(canonical_prepare.clone()),
     );
@@ -798,7 +772,6 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
             .expect("PrepareQC is not a decision")
             .is_none()
     );
-
     let canonical_commit =
         fixture.quorum_certificate(wire::GlobalPhase::Commit, fixture.canonical_commitment);
     assert_eq!(canonical_commit.signers, vec![0, 1, 2]);

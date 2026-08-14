@@ -2,7 +2,6 @@
 //!
 //! - Keccak: if CUDA is available, compares `keccak_f1600_cuda` vs scalar `keccak_f1600`.
 //! - AES: compares `aesenc_cuda`/`aesdec_cuda` vs CPU round implementations.
-
 #[cfg(feature = "cuda")]
 #[test]
 fn keccak_parity_cuda_vs_scalar() {
@@ -19,7 +18,6 @@ fn keccak_parity_cuda_vs_scalar() {
     assert!(ivm::keccak_f1600_cuda(&mut s_cuda));
     assert_eq!(s_cpu, s_cuda, "CUDA keccak must match scalar");
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn aes_parity_cuda_vs_cpu_round() {
@@ -32,11 +30,9 @@ fn aes_parity_cuda_vs_cpu_round() {
         0x0f, 0x15, 0x71, 0xc9, 0x47, 0xd9, 0xe8, 0x59, 0x0c, 0xb7, 0xad, 0xd6, 0xaf, 0x7f, 0x67,
         0x98,
     ];
-
     let cpu_enc = ivm::aesenc(state, rk);
     let cuda_enc = ivm::aesenc_cuda(state, rk).expect("aesenc_cuda should return Some");
     assert_eq!(cpu_enc, cuda_enc, "AESENC parity");
-
     let cpu_dec = ivm::aesdec(cpu_enc, rk);
     let cuda_dec = ivm::aesdec_cuda(cuda_enc, rk).expect("aesdec_cuda should return Some");
     assert_eq!(cpu_dec, cuda_dec, "AESDEC parity");

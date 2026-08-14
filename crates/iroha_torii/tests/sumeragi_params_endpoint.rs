@@ -1,10 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level test for GET /v1/sumeragi/params
-
 #[cfg(feature = "telemetry")]
 #[path = "fixtures.rs"]
 mod fixtures;
-
 #[cfg(feature = "telemetry")]
 use axum::{
     body::Body,
@@ -19,14 +17,12 @@ use iroha_config::{
 };
 #[cfg(feature = "telemetry")]
 use tower::ServiceExt as _;
-
 #[cfg(feature = "telemetry")]
 struct ToriiTestHarness {
     cfg: Root,
     app: axum::Router,
     _kiso_child: iroha_futures::supervisor::Child,
 }
-
 #[cfg(feature = "telemetry")]
 fn torii_test_harness(cfg: Root) -> ToriiTestHarness {
     let (kiso, kiso_child) = iroha_core::kiso::KisoHandle::start(cfg.clone());
@@ -42,7 +38,6 @@ fn torii_test_harness(cfg: Root) -> ToriiTestHarness {
     let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let telemetry_handle =
         iroha_torii::MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
-
     let torii = iroha_torii::Torii::new_with_handle(
         iroha_data_model::ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
@@ -58,19 +53,16 @@ fn torii_test_harness(cfg: Root) -> ToriiTestHarness {
         None,
         telemetry_handle,
     );
-
     ToriiTestHarness {
         cfg,
         app: torii.api_router_for_tests(),
         _kiso_child: kiso_child,
     }
 }
-
 #[cfg(feature = "telemetry")]
 async fn collect_body(response: axum::response::Response) -> axum::body::Bytes {
     response.into_body().collect().await.unwrap().to_bytes()
 }
-
 #[cfg(feature = "telemetry")]
 async fn signed_get_configuration(harness: &ToriiTestHarness) -> axum::response::Response {
     let req = fixtures::operator_signed_request(
@@ -83,7 +75,6 @@ async fn signed_get_configuration(harness: &ToriiTestHarness) -> axum::response:
     );
     harness.app.clone().oneshot(req).await.unwrap()
 }
-
 #[cfg(feature = "telemetry")]
 async fn get_sumeragi_params(
     harness: &ToriiTestHarness,
@@ -100,7 +91,6 @@ async fn get_sumeragi_params(
         .await
         .unwrap()
 }
-
 #[cfg(feature = "telemetry")]
 fn assert_content_type_starts_with(response: &axum::response::Response, expected: &str) {
     let content_type = response
@@ -113,7 +103,6 @@ fn assert_content_type_starts_with(response: &axum::response::Response, expected
         "expected content type prefix `{expected}`, got `{content_type}`"
     );
 }
-
 #[cfg(feature = "telemetry")]
 fn assert_confidential_gas_matches(
     actual: iroha_config::client_api::ConfidentialGas,
@@ -125,13 +114,11 @@ fn assert_confidential_gas_matches(
     assert_eq!(actual.per_nullifier, expected.per_nullifier);
     assert_eq!(actual.per_commitment, expected.per_commitment);
 }
-
 #[cfg(feature = "telemetry")]
 fn checked_configuration_outsider_fixture() -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random()
         .expect("generate checked Sumeragi params outsider fixture keypair")
 }
-
 #[cfg(feature = "telemetry")]
 #[test]
 fn configuration_outsider_fixture_uses_checked_ed25519_key_generation() {
@@ -140,10 +127,8 @@ fn configuration_outsider_fixture_uses_checked_ed25519_key_generation() {
         .public_key()
         .try_algorithm()
         .expect("fixture outsider public key has a valid algorithm");
-
     assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
 }
-
 #[cfg(feature = "telemetry")]
 fn configuration_update_body(gas: ConfidentialGas) -> Vec<u8> {
     format!(
@@ -156,17 +141,14 @@ fn configuration_update_body(gas: ConfidentialGas) -> Vec<u8> {
     )
     .into_bytes()
 }
-
 #[cfg(feature = "telemetry")]
 fn configuration_update_without_logger_body() -> Vec<u8> {
     b"{}".to_vec()
 }
-
 #[cfg(feature = "telemetry")]
 fn configuration_update_with_logger_level_body(level: &str) -> Vec<u8> {
     format!(r#"{{"logger":{{"level":"{level}","filter":null}}}}"#).into_bytes()
 }
-
 #[cfg(feature = "telemetry")]
 fn configuration_update_missing_per_commitment_body(gas: ConfidentialGas) -> Vec<u8> {
     format!(
@@ -175,7 +157,6 @@ fn configuration_update_missing_per_commitment_body(gas: ConfidentialGas) -> Vec
     )
     .into_bytes()
 }
-
 #[cfg(feature = "telemetry")]
 fn signed_post_configuration(
     harness: &ToriiTestHarness,
@@ -194,13 +175,11 @@ fn signed_post_configuration(
         signature_body_bytes,
     )
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sumeragi_params_endpoint_shape() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
-
     let resp = get_sumeragi_params(&harness, None).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
@@ -218,15 +197,12 @@ async fn sumeragi_params_endpoint_shape() {
         assert!(v.get(k).is_some(), "missing key {k}");
     }
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sumeragi_params_endpoint_honors_norito_accept_header() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
-
     let resp = get_sumeragi_params(&harness, Some("application/x-norito")).await;
-
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         resp.headers().get(header::CONTENT_TYPE),
@@ -235,38 +211,32 @@ async fn sumeragi_params_endpoint_honors_norito_accept_header() {
     let body = collect_body(resp).await;
     assert!(!body.is_empty(), "Norito response body should not be empty");
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sumeragi_params_endpoint_prefers_json_when_quality_is_higher() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
-
     let resp = get_sumeragi_params(
         &harness,
         Some("application/x-norito;q=0.2, application/json;q=0.8"),
     )
     .await;
-
     assert_eq!(resp.status(), StatusCode::OK);
     assert_content_type_starts_with(&resp, "application/json");
     let body = collect_body(resp).await;
     let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
     assert!(v.get("block_time_ms").is_some());
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sumeragi_params_endpoint_prefers_norito_on_equal_quality() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
-
     let resp = get_sumeragi_params(
         &harness,
         Some("application/json;q=0.5, application/x-norito;q=0.5"),
     )
     .await;
-
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         resp.headers().get(header::CONTENT_TYPE),
@@ -275,74 +245,60 @@ async fn sumeragi_params_endpoint_prefers_norito_on_equal_quality() {
     let body = collect_body(resp).await;
     assert!(!body.is_empty(), "Norito response body should not be empty");
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sumeragi_params_endpoint_treats_wildcard_accept_as_json() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
-
     let resp = get_sumeragi_params(&harness, Some("*/*")).await;
-
     assert_eq!(resp.status(), StatusCode::OK);
     assert_content_type_starts_with(&resp, "application/json");
     let body = collect_body(resp).await;
     let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
     assert!(v.get("commit_time_ms").is_some());
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sumeragi_params_endpoint_rejects_zero_quality_supported_formats() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
-
     let resp = get_sumeragi_params(
         &harness,
         Some("application/json;q=0, application/x-norito;q=0"),
     )
     .await;
-
     assert_eq!(resp.status(), StatusCode::NOT_ACCEPTABLE);
     let body = collect_body(resp).await;
     let text = String::from_utf8_lossy(&body);
     assert!(text.contains("unsupported Accept header"));
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sumeragi_params_endpoint_rejects_invalid_accept_quality() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
-
     let resp = get_sumeragi_params(&harness, Some("application/json;q=bogus")).await;
-
     assert_eq!(resp.status(), StatusCode::NOT_ACCEPTABLE);
     let body = collect_body(resp).await;
     let text = String::from_utf8_lossy(&body);
     assert!(text.contains("invalid q-value"));
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sumeragi_params_endpoint_rejects_unsupported_accept_header() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
-
     let resp = get_sumeragi_params(&harness, Some("text/plain")).await;
-
     assert_eq!(resp.status(), StatusCode::NOT_ACCEPTABLE);
     let body = collect_body(resp).await;
     let text = String::from_utf8_lossy(&body);
     assert!(text.contains("unsupported Accept header"));
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_includes_confidential_gas() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
-
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
@@ -361,13 +317,11 @@ async fn configuration_endpoint_includes_confidential_gas() {
         assert!(gas.get(key).is_some(), "confidential_gas missing key {key}");
     }
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_unsigned_requests() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
-
     let resp = harness
         .app
         .oneshot(
@@ -378,7 +332,6 @@ async fn configuration_endpoint_rejects_unsigned_requests() {
         )
         .await
         .unwrap();
-
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     let body = collect_body(resp).await;
     let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
@@ -387,7 +340,6 @@ async fn configuration_endpoint_rejects_unsigned_requests() {
         Some("operator_signature_missing")
     );
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_replayed_operator_signature() {
@@ -402,17 +354,14 @@ async fn configuration_endpoint_rejects_replayed_operator_signature() {
         &[],
     );
     let replay_headers = signed.headers().clone();
-
     let first = harness.app.clone().oneshot(signed).await.unwrap();
     assert_eq!(first.status(), StatusCode::OK);
-
     let mut replay = Request::builder()
         .uri(iroha_torii_shared::uri::CONFIGURATION)
         .body(Body::empty())
         .unwrap();
     *replay.headers_mut() = replay_headers;
     let resp = harness.app.clone().oneshot(replay).await.unwrap();
-
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     let body = collect_body(resp).await;
     let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
@@ -421,7 +370,6 @@ async fn configuration_endpoint_rejects_replayed_operator_signature() {
         Some("operator_signature_replay")
     );
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_non_node_operator_key() {
@@ -436,9 +384,7 @@ async fn configuration_endpoint_rejects_non_node_operator_key() {
             .unwrap(),
         &[],
     );
-
     let resp = harness.app.clone().oneshot(req).await.unwrap();
-
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     let body = collect_body(resp).await;
     let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
@@ -447,7 +393,6 @@ async fn configuration_endpoint_rejects_non_node_operator_key() {
         Some("operator_key_not_allowed")
     );
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_invalid_operator_timestamp_header() {
@@ -465,9 +410,7 @@ async fn configuration_endpoint_rejects_invalid_operator_timestamp_header() {
         "x-iroha-operator-timestamp-ms",
         "not-a-number".parse().unwrap(),
     );
-
     let resp = harness.app.clone().oneshot(req).await.unwrap();
-
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body = collect_body(resp).await;
     let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
@@ -476,7 +419,6 @@ async fn configuration_endpoint_rejects_invalid_operator_timestamp_header() {
         Some("operator_signature_invalid")
     );
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_accepts_query_when_signature_covers_query() {
@@ -490,15 +432,12 @@ async fn configuration_endpoint_accepts_query_when_signature_covers_query() {
             .unwrap(),
         &[],
     );
-
     let resp = harness.app.clone().oneshot(req).await.unwrap();
-
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
     let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, harness.cfg.confidential.gas);
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_signature_bound_to_different_query() {
@@ -517,9 +456,7 @@ async fn configuration_endpoint_rejects_signature_bound_to_different_query() {
         .body(Body::empty())
         .unwrap();
     *mismatched.headers_mut() = signed.headers().clone();
-
     let resp = harness.app.clone().oneshot(mismatched).await.unwrap();
-
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     let body = collect_body(resp).await;
     let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
@@ -528,7 +465,6 @@ async fn configuration_endpoint_rejects_signature_bound_to_different_query() {
         Some("operator_signature_bad")
     );
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_signature_bound_to_different_method() {
@@ -549,9 +485,7 @@ async fn configuration_endpoint_rejects_signature_bound_to_different_method() {
         .body(Body::empty())
         .unwrap();
     *mismatched.headers_mut() = signed.headers().clone();
-
     let resp = harness.app.clone().oneshot(mismatched).await.unwrap();
-
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     let body = collect_body(resp).await;
     let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
@@ -560,7 +494,6 @@ async fn configuration_endpoint_rejects_signature_bound_to_different_method() {
         Some("operator_signature_bad")
     );
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_unversioned_path_is_not_registered() {
@@ -574,12 +507,9 @@ async fn configuration_endpoint_unversioned_path_is_not_registered() {
             .unwrap(),
         &[],
     );
-
     let resp = harness.app.clone().oneshot(req).await.unwrap();
-
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_uses_configured_confidential_gas_values() {
@@ -593,16 +523,13 @@ async fn configuration_endpoint_uses_configured_confidential_gas_values() {
     };
     let expected = cfg.confidential.gas;
     let harness = torii_test_harness(cfg);
-
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_content_type_starts_with(&resp, "application/json");
     let body = collect_body(resp).await;
     let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
-
     assert_confidential_gas_matches(dto.confidential_gas, expected);
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_confidential_gas_update_via_post() {
@@ -623,17 +550,14 @@ async fn configuration_endpoint_rejects_confidential_gas_update_via_post() {
         &body_bytes,
         "application/json",
     );
-
     let resp = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
     let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, initial_gas);
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_accepts_vendor_json_content_type() {
@@ -646,17 +570,14 @@ async fn configuration_endpoint_accepts_vendor_json_content_type() {
         &body_bytes,
         "application/merge-patch+json",
     );
-
     let resp = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
-
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
     let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
     assert_eq!(dto.logger.level, iroha_data_model::Level::DEBUG);
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_accepts_json_update_without_content_type() {
@@ -672,17 +593,14 @@ async fn configuration_endpoint_accepts_json_update_without_content_type() {
             .unwrap(),
         &body_bytes,
     );
-
     let resp = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
-
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
     let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
     assert_eq!(dto.logger.level, iroha_data_model::Level::DEBUG);
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_post_body_tampering() {
@@ -691,9 +609,7 @@ async fn configuration_endpoint_rejects_post_body_tampering() {
     let signed = configuration_update_with_logger_level_body("INFO");
     let tampered = configuration_update_with_logger_level_body("DEBUG");
     let req = signed_post_configuration(&harness, tampered, &signed, "application/json");
-
     let resp = harness.app.clone().oneshot(req).await.unwrap();
-
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     let body = collect_body(resp).await;
     let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
@@ -702,7 +618,6 @@ async fn configuration_endpoint_rejects_post_body_tampering() {
         Some("operator_signature_bad")
     );
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_signed_non_json_content_type() {
@@ -710,12 +625,9 @@ async fn configuration_endpoint_rejects_signed_non_json_content_type() {
     let harness = torii_test_harness(cfg);
     let body_bytes = configuration_update_with_logger_level_body("INFO");
     let req = signed_post_configuration(&harness, body_bytes.clone(), &body_bytes, "text/plain");
-
     let resp = harness.app.clone().oneshot(req).await.unwrap();
-
     assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_update_without_required_logger() {
@@ -729,17 +641,14 @@ async fn configuration_endpoint_rejects_update_without_required_logger() {
         &body_bytes,
         "application/json",
     );
-
     let resp = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
     let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, initial_gas);
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_invalid_logger_level_and_preserves_gas() {
@@ -753,17 +662,14 @@ async fn configuration_endpoint_rejects_invalid_logger_level_and_preserves_gas()
         &body_bytes,
         "application/json",
     );
-
     let resp = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
     let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, initial_gas);
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_incomplete_confidential_gas_and_preserves_state() {
@@ -783,17 +689,14 @@ async fn configuration_endpoint_rejects_incomplete_confidential_gas_and_preserve
         &body_bytes,
         "application/json",
     );
-
     let resp = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
     let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, initial_gas);
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_malformed_json_update() {
@@ -807,10 +710,8 @@ async fn configuration_endpoint_rejects_malformed_json_update() {
         &body_bytes,
         "application/json",
     );
-
     let resp = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;

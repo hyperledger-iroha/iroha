@@ -1,7 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
+import java.io.ByteArrayOutputStream;
 import java.net.URI;
-import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.model.NetworkId;
 
 /**
@@ -30,6 +31,11 @@ public final class CanonicalRequestSigner {
   public static final String BODY_TIMESTAMP_MS = "timestamp_ms";
   public static final String BODY_NONCE = "nonce";
   public static final String BODY_SIGNATURE_BASE64 = "signature_base64";
+  public static final int CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1 = 64;
+  public static final int CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1 = 64 * 1024;
+  public static final int CANONICAL_REQUEST_MAX_METHOD_BYTES_V1 = 32;
+  public static final int CANONICAL_REQUEST_MAX_PATH_BYTES_V1 = 64 * 1024;
+  public static final int CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1 = 36 * 1024;
   private static final String BODY_WITNESS_BASE64 = "witness_base64";
   private static final SecureRandom NONCE_RANDOM = new SecureRandom();
   private static final byte[] NETWORK_DOMAIN =
@@ -44,8 +50,24 @@ public final class CanonicalRequestSigner {
     if (raw == null || raw.isEmpty()) {
       return "";
     }
+    if (raw.getBytes(StandardCharsets.UTF_8).length
+        > CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1) {
+      throw new IllegalArgumentException(
+          "canonical request query exceeds "
+              + CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1
+              + " raw UTF-8 bytes");
+    }
     final List<Map.Entry<String, String>> pairs = new ArrayList<>();
     for (final String component : raw.split("&", -1)) {
+      if (component.isEmpty()) {
+        continue;
+      }
+      if (pairs.size() >= CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1) {
+        throw new IllegalArgumentException(
+            "canonical request query exceeds "
+                + CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1
+                + " pairs");
+      }
       final String[] kv = component.split("=", 2);
       final String key = kv.length > 0 ? kv[0] : "";
       final String value = kv.length > 1 ? kv[1] : "";
@@ -54,11 +76,11 @@ public final class CanonicalRequestSigner {
     }
     pairs.sort(
         (a, b) -> {
-          final int keyCompare = a.getKey().compareTo(b.getKey());
+          final int keyCompare = compareUtf8(a.getKey(), b.getKey());
           if (keyCompare != 0) {
             return keyCompare;
           }
-          return a.getValue().compareTo(b.getValue());
+          return compareUtf8(a.getValue(), b.getValue());
         });
     final StringBuilder builder = new StringBuilder();
     for (int i = 0; i < pairs.size(); i++) {
@@ -78,8 +100,25 @@ public final class CanonicalRequestSigner {
    */
   public static byte[] canonicalRequestMessage(
       final String method, final URI uri, final byte[] body) {
+    if (method.length() > CANONICAL_REQUEST_MAX_METHOD_BYTES_V1
+        || method.getBytes(StandardCharsets.UTF_8).length
+            > CANONICAL_REQUEST_MAX_METHOD_BYTES_V1) {
+      throw new IllegalArgumentException(
+          "canonical request method exceeds "
+              + CANONICAL_REQUEST_MAX_METHOD_BYTES_V1
+              + " UTF-8 bytes");
+    }
+    final String rawPath = uri.getRawPath();
+    final String path = rawPath == null || rawPath.isEmpty() ? "/" : rawPath;
+    if (path.length() > CANONICAL_REQUEST_MAX_PATH_BYTES_V1
+        || path.getBytes(StandardCharsets.UTF_8).length
+            > CANONICAL_REQUEST_MAX_PATH_BYTES_V1) {
+      throw new IllegalArgumentException(
+          "canonical request path exceeds "
+              + CANONICAL_REQUEST_MAX_PATH_BYTES_V1
+              + " UTF-8 bytes");
+    }
     final String query = canonicalQueryString(uri.getRawQuery());
-    final String path = uri.getRawPath() == null ? "" : uri.getRawPath();
     final byte[] bodyBytes = body == null ? new byte[0] : body;
     final byte[] digest;
     try {
@@ -108,6 +147,9 @@ public final class CanonicalRequestSigner {
       final byte[] body,
       final long timestampMs,
       final String nonce) {
+    if (timestampMs < 0) {
+      throw new IllegalArgumentException("timestampMs must be non-negative");
+    }
     requireExactNonBlank(nonce, "nonce");
     Objects.requireNonNull(networkId, "networkId");
     return concat(
@@ -209,6 +251,9 @@ public final class CanonicalRequestSigner {
 
   /**
    * Build canonical signing headers including freshness metadata.
+   *
+   * <p>Canonical I105 identities are emitted as lowercase canonical hex in {@link
+   * #HEADER_ACCOUNT}; printable ASCII aliases are emitted unchanged.
    */
   public static Map<String, String> buildHeaders(
       final NetworkId networkId,
@@ -228,6 +273,9 @@ public final class CanonicalRequestSigner {
 
   /**
    * Build canonical signing headers with explicit freshness metadata.
+   *
+   * <p>Canonical I105 identities are emitted as lowercase canonical hex in {@link
+   * #HEADER_ACCOUNT}; printable ASCII aliases are emitted unchanged.
    */
   public static Map<String, String> buildHeaders(
       final NetworkId networkId,
@@ -262,15 +310,33 @@ public final class CanonicalRequestSigner {
       final String nonce) {
     requireExactNonBlank(accountId, "accountId");
     requireExactNonBlank(nonce, "nonce");
+    final String accountHeader = canonicalAccountHeaderValue(accountId);
     final byte[] message =
         canonicalRequestSignatureMessage(networkId, method, uri, body, timestampMs, nonce);
     final byte[] signatureBytes = signCanonicalMessage(signatureProvider, message);
     final Map<String, String> headers = new HashMap<>();
-    headers.put(HEADER_ACCOUNT, accountId);
+    headers.put(HEADER_ACCOUNT, accountHeader);
     headers.put(HEADER_SIGNATURE, Base64.getEncoder().encodeToString(signatureBytes));
     headers.put(HEADER_TIMESTAMP_MS, Long.toString(timestampMs));
     headers.put(HEADER_NONCE, nonce);
     return headers;
+  }
+
+  private static String canonicalAccountHeaderValue(final String accountId) {
+    try {
+      return AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null)
+          .address
+          .canonicalHex();
+    } catch (AccountAddress.AccountAddressException ignored) {
+      for (int index = 0; index < accountId.length(); index++) {
+        final char character = accountId.charAt(index);
+        if (character < 0x21 || character > 0x7e) {
+          throw new IllegalArgumentException(
+              "accountId must be a canonical I105 account or printable ASCII account alias");
+        }
+      }
+      return accountId;
+    }
   }
 
   private static Map<String, Object> bodyWithBodyAuthFreshness(
@@ -308,6 +374,27 @@ public final class CanonicalRequestSigner {
     if (Character.isWhitespace(value.charAt(0))
         || Character.isWhitespace(value.charAt(value.length() - 1))) {
       throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+    }
+    if ("accountId".equals(field)
+        && value.getBytes(StandardCharsets.UTF_8).length
+            > CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1) {
+      throw new IllegalArgumentException(
+          "accountId exceeds "
+              + CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1
+              + " UTF-8 bytes");
+    }
+    if ("nonce".equals(field)) {
+      if (value.getBytes(StandardCharsets.UTF_8).length > 256) {
+        throw new IllegalArgumentException(
+            "nonce must contain 1...256 non-whitespace ASCII bytes");
+      }
+      for (int index = 0; index < value.length(); index++) {
+        final char character = value.charAt(index);
+        if (character < 0x21 || character > 0x7e) {
+          throw new IllegalArgumentException(
+              "nonce must contain 1...256 non-whitespace ASCII bytes");
+        }
+      }
     }
   }
 
@@ -349,11 +436,56 @@ public final class CanonicalRequestSigner {
   }
 
   private static String urlDecode(final String value) {
-    try {
-      return URLDecoder.decode(value, StandardCharsets.UTF_8.toString());
-    } catch (Exception ex) {
-      throw new IllegalArgumentException("failed to decode query component", ex);
+    final byte[] raw = value.getBytes(StandardCharsets.UTF_8);
+    final ByteArrayOutputStream decoded = new ByteArrayOutputStream(raw.length);
+    int index = 0;
+    while (index < raw.length) {
+      final int current = raw[index] & 0xff;
+      if (current == '+') {
+        decoded.write(' ');
+        index++;
+      } else if (current == '%' && index + 2 < raw.length) {
+        final int high = hexValue(raw[index + 1] & 0xff);
+        final int low = hexValue(raw[index + 2] & 0xff);
+        if (high >= 0 && low >= 0) {
+          decoded.write((high << 4) | low);
+          index += 3;
+        } else {
+          decoded.write(current);
+          index++;
+        }
+      } else {
+        decoded.write(current);
+        index++;
+      }
     }
+    return new String(decoded.toByteArray(), StandardCharsets.UTF_8);
+  }
+
+  private static int hexValue(final int value) {
+    if (value >= '0' && value <= '9') {
+      return value - '0';
+    }
+    if (value >= 'A' && value <= 'F') {
+      return value - 'A' + 10;
+    }
+    if (value >= 'a' && value <= 'f') {
+      return value - 'a' + 10;
+    }
+    return -1;
+  }
+
+  private static int compareUtf8(final String left, final String right) {
+    final byte[] leftBytes = left.getBytes(StandardCharsets.UTF_8);
+    final byte[] rightBytes = right.getBytes(StandardCharsets.UTF_8);
+    final int sharedLength = Math.min(leftBytes.length, rightBytes.length);
+    for (int index = 0; index < sharedLength; index++) {
+      final int difference = (leftBytes[index] & 0xff) - (rightBytes[index] & 0xff);
+      if (difference != 0) {
+        return difference;
+      }
+    }
+    return leftBytes.length - rightBytes.length;
   }
 
   private static String hex(final byte[] bytes) {

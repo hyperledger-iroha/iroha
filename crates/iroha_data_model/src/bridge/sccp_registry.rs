@@ -4,16 +4,13 @@
 //! typed protocol identity. Operator checklists, URLs, RPC observations,
 //! executable blobs, prover packages, and deployment logs are deliberately not
 //! consensus state.
-
 use std::collections::{BTreeMap, BTreeSet};
-
 use blake2::{Blake2b, Digest as _, digest::consts::U32};
 use iroha_crypto::{derive_non_signing_ed25519_public_key, keccak256};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sha2::Sha256;
 use thiserror::Error;
-
 use super::{
     BridgeNativeProofBackendV1, SCCP_SOLANA_TESTNET_GENESIS_HASH_V1, SccpEvmSourceEmitterV1,
     SccpLaneIdV1, SccpNativeTrustAnchorV1, SccpNetworkV1, SccpSolanaSourceEmitterV1,
@@ -22,12 +19,10 @@ use super::{
 use crate::{
     NetworkId, account::AccountId, asset::AssetDefinitionId, block::consensus_v2::PROTOCOL_VERSION,
 };
-
 /// Oldest authoritative Sumeragi wire revision retained in SCCP V1 anchors.
 pub const SCCP_V1_MIN_SUMERAGI_PROTOCOL_VERSION: u16 = 3;
 /// Newest authoritative Sumeragi wire revision accepted by SCCP V1 anchors.
 pub const SCCP_V1_MAX_SUMERAGI_PROTOCOL_VERSION: u16 = PROTOCOL_VERSION;
-
 /// Maximum decimal scale accepted by first-release SCCP amount payloads.
 pub const SCCP_V1_MAX_PAYLOAD_AMOUNT_SCALE: u32 = 28;
 /// Exact decimal scale of the first-release XOR SCCP payload.
@@ -76,13 +71,11 @@ pub const SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS: &str = "ivm_proved_record_s
 pub const SCCP_V1_MAX_SORA_OUTBOUND_GAS_LIMIT: u64 = 1_000_000_000;
 /// Canonical live Taira XOR asset definition governed by every V1 route.
 pub const SCCP_V1_TAIRA_XOR_ASSET_DEFINITION_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
-
 const SCCP_DOMAIN_SORA: u32 = 0;
 const SCCP_DOMAIN_ETH: u32 = 1;
 const SCCP_DOMAIN_BSC: u32 = 2;
 const SCCP_DOMAIN_SOLANA: u32 = 3;
 const SCCP_DOMAIN_TRON: u32 = 5;
-
 const EVM_BINDING_DOMAIN_V1: &[u8] = b"iroha:sccp:evm-destination-binding:v1";
 const TRON_BINDING_DOMAIN_V1: &[u8] = b"iroha:sccp:tron-destination-binding:v1";
 const SOLANA_BINDING_DOMAIN_V1: &[u8] = b"iroha:sccp:solana-destination-binding:v1";
@@ -113,13 +106,11 @@ const GROTH16_PUBLIC_SIGNAL_LABELS_V1: [&[u8]; 11] = [
     b"sccp:groth16-bn254:signal:route-configuration-hash:v1",
     b"sccp:groth16-bn254:signal:sora-finality-anchor-hash:v1",
 ];
-
 /// BN254 base-field modulus in canonical big-endian form.
 const BN254_BASE_FIELD_MODULUS_BE: [u8; 32] = [
     0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
     0x97, 0x81, 0x6a, 0x91, 0x68, 0x71, 0xca, 0x8d, 0x3c, 0x20, 0x8c, 0x16, 0xd8, 0x7c, 0xfd, 0x47,
 ];
-
 const SORA_TAIRA_CHAIN_ID_BYTES: [u8; 16] = [
     0xfc, 0x56, 0x98, 0x4b, 0x2b, 0xe7, 0x43, 0x1d, 0x84, 0x0e, 0x21, 0x51, 0x4d, 0x18, 0x83, 0xf0,
 ];
@@ -127,7 +118,6 @@ const SOLANA_CLASSIC_TOKEN_PROGRAM_ID: [u8; 32] = [
     6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28, 180, 133, 237,
     95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169,
 ];
-
 /// Validation failure for a closed SCCP route or registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum SccpRouteValidationError {
@@ -263,7 +253,6 @@ pub enum SccpRouteValidationError {
     )]
     InvalidInboundFinalityCutoff,
 }
-
 /// Canonical non-infinity BN254 G1 point in Solidity ABI coordinate order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -279,7 +268,6 @@ pub struct SccpBn254G1PointV1 {
     /// Canonical big-endian base-field y coordinate.
     pub y: [u8; 32],
 }
-
 impl SccpBn254G1PointV1 {
     /// Return whether both coordinates are canonical field elements and the
     /// point is not the conventional all-zero point-at-infinity encoding.
@@ -290,7 +278,6 @@ impl SccpBn254G1PointV1 {
             && self.y < BN254_BASE_FIELD_MODULUS_BE
     }
 }
-
 /// Canonical non-infinity BN254 G2 point in Solidity verifier limb order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -310,7 +297,6 @@ pub struct SccpBn254G2PointV1 {
     /// Second y-coordinate Fq2 limb (`y[1]` in the Solidity verifier).
     pub y_c1: [u8; 32],
 }
-
 impl SccpBn254G2PointV1 {
     /// Return whether every limb is a canonical field element and the point is
     /// not the conventional all-zero point-at-infinity encoding.
@@ -321,7 +307,6 @@ impl SccpBn254G2PointV1 {
             && limbs.iter().all(|limb| *limb < BN254_BASE_FIELD_MODULUS_BE)
     }
 }
-
 /// Fixed Groth16 IC vector: one constant point and exactly eleven signal points.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -357,7 +342,6 @@ pub struct SccpGroth16Bn254IcV1 {
     /// IC point for signal 10 (governed SORA finality-anchor hash).
     pub signal_10: SccpBn254G1PointV1,
 }
-
 impl SccpGroth16Bn254IcV1 {
     /// Return the constant point followed by the eleven public-signal points.
     #[must_use]
@@ -378,7 +362,6 @@ impl SccpGroth16Bn254IcV1 {
         ]
     }
 }
-
 /// Closed SCCP BN254 Groth16 verification key for exactly eleven public signals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -402,7 +385,6 @@ pub struct SccpGroth16Bn254VerifyingKeyV1 {
     /// Constant IC point followed by exactly eleven public-signal IC points.
     pub ic: SccpGroth16Bn254IcV1,
 }
-
 impl SccpGroth16Bn254VerifyingKeyV1 {
     /// Validate the closed shape and canonical field encoding.
     ///
@@ -429,14 +411,12 @@ impl SccpGroth16Bn254VerifyingKeyV1 {
         }
         Ok(())
     }
-
     /// Return whether the closed shape and every field encoding are canonical.
     #[must_use]
     pub fn is_structurally_canonical(self) -> bool {
         self.validate_structure().is_ok()
     }
 }
-
 /// Encode a structurally canonical key byte-identically to the fixed Solidity
 /// `verifyingKeyHash()` preimage: 38 consecutive ABI words.
 ///
@@ -467,7 +447,6 @@ pub fn canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
     }
     Ok(out)
 }
-
 /// Hash a structurally canonical key byte-identically to the fixed Solidity
 /// `verifyingKeyHash()` implementation.
 ///
@@ -482,7 +461,6 @@ pub fn sccp_groth16_bn254_verifying_key_hash_v1(
         canonical_sccp_groth16_bn254_verifying_key_bytes_v1(verifying_key)?,
     ))
 }
-
 /// Immutable commitments identifying one audited semantic Groth16 circuit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -502,7 +480,6 @@ pub struct SccpGroth16Bn254SemanticCircuitV1 {
     /// Commitment to the ordered eleven-signal public-input schema.
     pub public_signal_schema_hash: [u8; 32],
 }
-
 /// Closed semantic proof profile accepted by first-release outbound routes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -520,7 +497,6 @@ pub enum SccpSemanticProofProfileV1 {
     #[norito(rename = "sora_taira_finality_inclusion_groth16_bn254")]
     SoraTairaFinalityInclusionGroth16Bn254(SccpGroth16Bn254SemanticCircuitV1),
 }
-
 impl SccpSemanticProofProfileV1 {
     /// Validate the closed profile and exact ordered public-signal schema.
     ///
@@ -544,7 +520,6 @@ impl SccpSemanticProofProfileV1 {
         }
         Ok(())
     }
-
     /// Return the fixed circuit commitments in protocol-role order.
     #[must_use]
     pub const fn commitments(self) -> [[u8; 32]; 3] {
@@ -556,7 +531,6 @@ impl SccpSemanticProofProfileV1 {
         ]
     }
 }
-
 /// Immutable Taira checkpoint anchoring one governed outbound proof policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -585,7 +559,6 @@ pub struct SccpSoraFinalityAnchorV1 {
     /// Domain-separated hash of the canonical durable v2 finality artifact.
     pub checkpoint_finality_artifact_hash: [u8; 32],
 }
-
 impl SccpSoraFinalityAnchorV1 {
     /// Validate the exact Taira chain identity and consensus checkpoint roles.
     ///
@@ -613,7 +586,6 @@ impl SccpSoraFinalityAnchorV1 {
         Ok(())
     }
 }
-
 /// Mandatory immutable proof policy of one value-moving destination deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -631,7 +603,6 @@ pub struct SccpOutboundProofPolicyV1 {
     /// Exact governed SORA checkpoint exposed as public signal 10.
     pub sora_finality_anchor: SccpSoraFinalityAnchorV1,
 }
-
 impl SccpOutboundProofPolicyV1 {
     /// Validate every typed policy role and their domain-separated hashes.
     ///
@@ -657,7 +628,6 @@ impl SccpOutboundProofPolicyV1 {
         validate_hash_roles(&roles)
             .map_err(|_| SccpRouteValidationError::InvalidOutboundProofPolicy)
     }
-
     /// Return the domain-separated semantic-profile commitment pinned on-chain.
     ///
     /// # Errors
@@ -667,7 +637,6 @@ impl SccpOutboundProofPolicyV1 {
     pub fn semantic_profile_hash(self) -> Result<[u8; 32], SccpRouteValidationError> {
         sccp_semantic_proof_profile_hash_v1(self.semantic_profile)
     }
-
     /// Return the domain-separated Taira finality-anchor commitment pinned on-chain.
     ///
     /// # Errors
@@ -678,7 +647,6 @@ impl SccpOutboundProofPolicyV1 {
         sccp_sora_finality_anchor_hash_v1(self.sora_finality_anchor)
     }
 }
-
 /// Strict portable reference to one governance-registered IVM verification key.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -698,7 +666,6 @@ pub struct SccpPortableVerifyingKeyRefV1 {
     /// Exact domain-separated commitment of the verification-key bytes.
     pub commitment: [u8; 32],
 }
-
 impl SccpPortableVerifyingKeyRefV1 {
     /// Return whether both fields use the bounded portable registry grammar.
     #[must_use]
@@ -708,7 +675,6 @@ impl SccpPortableVerifyingKeyRefV1 {
             && self.version != 0
             && self.commitment != [0; 32]
     }
-
     /// Compare this governed reference with the exact verified registry record.
     #[must_use]
     pub fn matches(
@@ -723,7 +689,6 @@ impl SccpPortableVerifyingKeyRefV1 {
             && self.commitment == commitment
     }
 }
-
 /// Mandatory TAIRA-side execution policy for one SORA-origin SCCP route.
 ///
 /// Contract bytes remain outside consensus state. Governance pins their SHA-256,
@@ -749,7 +714,6 @@ pub struct SccpSoraOutboundExecutionPolicyV1 {
     /// Exact nonzero transaction gas limit used for derive, prove, and submit.
     pub gas_limit: u64,
 }
-
 impl SccpSoraOutboundExecutionPolicyV1 {
     /// Validate the exact first-release execution semantics and bounds.
     ///
@@ -770,7 +734,6 @@ impl SccpSoraOutboundExecutionPolicyV1 {
         Ok(())
     }
 }
-
 /// Directional activation state for one complete governed SCCP route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -803,32 +766,27 @@ pub enum SccpRouteActivationV1 {
     #[norito(rename = "retired")]
     Retired,
 }
-
 impl SccpRouteActivationV1 {
     /// Return whether SORA-origin outbound messages may use the route.
     #[must_use]
     pub const fn allows_outbound(self) -> bool {
         matches!(self, Self::Bidirectional)
     }
-
     /// Return whether native external-source proofs may settle through the route.
     #[must_use]
     pub const fn allows_inbound(self) -> bool {
         matches!(self, Self::Bidirectional | Self::InboundOnly)
     }
-
     /// Return whether this revision is the unique live outbound revision.
     #[must_use]
     pub const fn is_enabled(self) -> bool {
         self.allows_outbound()
     }
-
     /// Return whether this revision is terminal historical state.
     #[must_use]
     pub const fn is_terminal(self) -> bool {
         matches!(self, Self::Retired)
     }
-
     /// Return whether this revision still consumes live governance capacity.
     ///
     /// Staged, active, draining, and paused revisions may all change state or
@@ -837,7 +795,6 @@ impl SccpRouteActivationV1 {
     pub const fn consumes_live_capacity(self) -> bool {
         !self.is_terminal()
     }
-
     /// Return whether a compare-and-swap transition is legal.
     #[must_use]
     pub fn can_transition_to(self, next: Self) -> bool {
@@ -854,7 +811,6 @@ impl SccpRouteActivationV1 {
         )
     }
 }
-
 /// Authenticated upper bound for delayed claims on one retired route revision.
 ///
 /// An external event whose fully verified consensus-progress coordinate is at
@@ -880,7 +836,6 @@ pub struct SccpInboundFinalityCutoffV1 {
     /// finalized block height.
     pub max_anchor_interval_height: u64,
 }
-
 impl SccpInboundFinalityCutoffV1 {
     /// Return whether both cutoff roles are nonzero.
     #[must_use]
@@ -888,7 +843,6 @@ impl SccpInboundFinalityCutoffV1 {
         self.trust_anchor_hash != [0; 32] && self.max_anchor_interval_height != 0
     }
 }
-
 /// Exact immutable lookup key for a governed SCCP route.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -908,7 +862,6 @@ pub struct SccpRouteKeyV1 {
     /// Nonzero immutable deployment revision within the semantic lineage.
     pub revision: u32,
 }
-
 impl SccpRouteKeyV1 {
     /// Construct a key after validating its exact lane and canonical identifier.
     ///
@@ -931,7 +884,6 @@ impl SccpRouteKeyV1 {
         key.validate()?;
         Ok(key)
     }
-
     /// Validate this exact inbound lane and canonical route id.
     ///
     /// # Errors
@@ -947,14 +899,12 @@ impl SccpRouteKeyV1 {
         }
         Ok(())
     }
-
     /// Return whether this key is valid.
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
         self.validate().is_ok()
     }
 }
-
 /// Exact EVM verifier, bridge, and ERC-20 deployment identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -986,7 +936,6 @@ pub struct SccpEvmDestinationDeploymentV1 {
     /// Exact Taira base-unit to wrapped-token base-unit multiplier.
     pub taira_to_token_multiplier: u64,
 }
-
 /// Exact TRON verifier, route, and TRC-20 deployment identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1018,7 +967,6 @@ pub struct SccpTronDestinationDeploymentV1 {
     /// Exact Taira base-unit to wrapped-token base-unit multiplier.
     pub taira_to_token_multiplier: u64,
 }
-
 /// Exact immutable Solana route and native-verifier deployment identity.
 ///
 /// All account identities are raw 32-byte Solana public keys. The route and
@@ -1070,7 +1018,6 @@ pub struct SccpSolanaDestinationDeploymentV1 {
     /// Exact Taira base-unit to SPL-token base-unit multiplier.
     pub taira_to_token_multiplier: u64,
 }
-
 /// Closed family-specific destination deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1095,7 +1042,6 @@ pub enum SccpDestinationDeploymentV1 {
     #[norito(rename = "solana")]
     Solana(SccpSolanaDestinationDeploymentV1),
 }
-
 impl SccpDestinationDeploymentV1 {
     /// Return the exact governed Groth16 verification-key hash when applicable.
     #[must_use]
@@ -1106,7 +1052,6 @@ impl SccpDestinationDeploymentV1 {
             Self::Solana(deployment) => deployment.verifier_key_hash,
         }
     }
-
     /// Return the mandatory immutable outbound proof policy.
     #[must_use]
     pub const fn outbound_proof_policy(&self) -> SccpOutboundProofPolicyV1 {
@@ -1116,7 +1061,6 @@ impl SccpDestinationDeploymentV1 {
             Self::Solana(deployment) => deployment.outbound_proof_policy,
         }
     }
-
     /// Validate exact family identity and role separation for an inbound lane.
     ///
     /// # Errors
@@ -1146,13 +1090,11 @@ impl SccpDestinationDeploymentV1 {
             _ => Err(SccpRouteValidationError::DestinationFamilyMismatch),
         }
     }
-
     /// Return whether this deployment is valid for an exact inbound lane.
     #[must_use]
     pub fn is_well_formed_for_lane(&self, lane: SccpLaneIdV1) -> bool {
         self.validate_for_lane(lane).is_ok()
     }
-
     /// Derive the exact destination binding consumed by the family implementation.
     ///
     /// # Errors
@@ -1174,7 +1116,6 @@ impl SccpDestinationDeploymentV1 {
             }
         }
     }
-
     /// Derive the immutable route-configuration hash exposed by the deployment.
     ///
     /// # Errors
@@ -1227,7 +1168,6 @@ impl SccpDestinationDeploymentV1 {
         }
     }
 }
-
 /// Typed SORA-side asset and custody policy for atomic SCCP settlement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1249,7 +1189,6 @@ pub struct SccpSoraSettlementV1 {
     /// Decimal scale used by the SCCP unsigned amount field.
     pub payload_amount_scale: u32,
 }
-
 /// Derive the non-signable protocol escrow account for one exact SCCP route.
 ///
 /// The derivation binds the genesis-derived [`NetworkId`], the complete
@@ -1272,7 +1211,6 @@ pub fn sccp_route_escrow_account_id_v1(
         ],
     ))
 }
-
 impl SccpSoraSettlementV1 {
     /// Validate the exact first-release Taira XOR settlement identity and scale.
     ///
@@ -1289,14 +1227,12 @@ impl SccpSoraSettlementV1 {
         }
         Ok(())
     }
-
     /// Return whether the amount scale is representable in first-release settlement.
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
         self.validate().is_ok()
     }
 }
-
 /// Parse the built-in canonical live Taira XOR asset definition id.
 ///
 /// The literal is release protocol state and is covered by data-model tests;
@@ -1306,7 +1242,6 @@ pub fn sccp_v1_taira_xor_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(SCCP_V1_TAIRA_XOR_ASSET_DEFINITION_ID)
         .expect("built-in SCCP Taira XOR asset definition id must remain valid")
 }
-
 /// One complete, atomic, immutable-identity SCCP route governance record.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1338,7 +1273,6 @@ pub struct SccpGovernedRouteV1 {
     /// Typed atomic SORA settlement policy.
     pub settlement: SccpSoraSettlementV1,
 }
-
 impl SccpGovernedRouteV1 {
     /// Return the immutable lookup key of this route.
     #[must_use]
@@ -1350,7 +1284,6 @@ impl SccpGovernedRouteV1 {
             revision: self.revision,
         }
     }
-
     /// Validate every immutable route component and the selected activation.
     ///
     /// # Errors
@@ -1420,7 +1353,6 @@ impl SccpGovernedRouteV1 {
         }
         Ok(())
     }
-
     /// Validate a route specifically for first registration.
     ///
     /// # Errors
@@ -1434,7 +1366,6 @@ impl SccpGovernedRouteV1 {
         }
         Ok(())
     }
-
     /// Validate the route against its lane-level native checkpoint.
     ///
     /// # Errors
@@ -1467,13 +1398,11 @@ impl SccpGovernedRouteV1 {
         }
         Ok(())
     }
-
     /// Return whether every immutable route component is complete and exact.
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
         self.validate().is_ok()
     }
-
     /// Return whether native inbound settlement may be enabled safely.
     #[must_use]
     pub fn supports_inbound_activation(&self) -> bool {
@@ -1481,13 +1410,11 @@ impl SccpGovernedRouteV1 {
             && self.source_identity.is_well_formed()
             && self.source_identity.has_governance_activatable_source()
     }
-
     /// Return whether this record's selected activation is internally valid.
     #[must_use]
     pub fn activation_is_valid(&self) -> bool {
         self.validate().is_ok()
     }
-
     /// Return whether an authenticated backend-specific consensus-progress
     /// coordinate may settle through this revision.
     #[must_use]
@@ -1498,7 +1425,6 @@ impl SccpGovernedRouteV1 {
                     anchor_interval_height <= cutoff.max_anchor_interval_height
                 }))
     }
-
     /// Derive the exact immutable route-configuration hash exposed by the
     /// destination contract.
     ///
@@ -1521,7 +1447,6 @@ impl SccpGovernedRouteV1 {
             self.settlement.payload_amount_scale,
         )
     }
-
     /// Derive the destination deployment binding committed by outbound messages.
     ///
     /// # Errors
@@ -1532,7 +1457,6 @@ impl SccpGovernedRouteV1 {
         self.destination.destination_binding_hash(self.lane_id)
     }
 }
-
 /// One append-only lane checkpoint history and its exact immutable routes.
 ///
 /// Every native checkpoint remains available after rotation so a message
@@ -1565,7 +1489,6 @@ pub struct SccpGovernedLaneV1 {
     /// history for exact message and configuration resolution.
     pub routes: Vec<SccpGovernedRouteV1>,
 }
-
 impl SccpGovernedLaneV1 {
     /// Return the current highest native checkpoint.
     #[must_use]
@@ -1576,7 +1499,6 @@ impl SccpGovernedLaneV1 {
             .copied()
             .filter(|anchor| anchor.anchor_hash == current_hash)
     }
-
     /// Resolve one retained native checkpoint by its authenticated hash.
     ///
     /// Consensus admission uses a precomputed registry index for this lookup;
@@ -1591,7 +1513,6 @@ impl SccpGovernedLaneV1 {
             .copied()
             .find(|anchor| anchor.anchor_hash == anchor_hash)
     }
-
     /// Resolve a retained checkpoint and its inclusive successor boundary.
     #[must_use]
     pub fn native_trust_anchor_interval(
@@ -1609,7 +1530,6 @@ impl SccpGovernedLaneV1 {
                 .map(|next| next.checkpoint_height),
         ))
     }
-
     /// Return whether a retirement cutoff closes one complete historical
     /// anchor interval through its successor checkpoint, inclusively.
     #[must_use]
@@ -1629,7 +1549,6 @@ impl SccpGovernedLaneV1 {
             .map(|next| next.checkpoint_height)
             == Some(cutoff.max_anchor_interval_height)
     }
-
     /// Validate bounded append-only history, bounded live routes, and membership.
     ///
     /// # Errors
@@ -1716,7 +1635,6 @@ impl SccpGovernedLaneV1 {
         Ok(())
     }
 }
-
 /// Versioned authoritative SCCP route registry payload.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1732,7 +1650,6 @@ pub struct SccpRegistryV1 {
     /// Governed lanes with bounded append-only history and bounded live routes.
     pub lanes: Vec<SccpGovernedLaneV1>,
 }
-
 impl Default for SccpRegistryV1 {
     fn default() -> Self {
         Self {
@@ -1741,7 +1658,6 @@ impl Default for SccpRegistryV1 {
         }
     }
 }
-
 impl SccpRegistryV1 {
     /// Validate the bounded registry, live surface, and uniqueness invariants.
     ///
@@ -1801,7 +1717,6 @@ impl SccpRegistryV1 {
         Ok(())
     }
 }
-
 /// Return the stable one-byte V1 tag for an exact SCCP network profile.
 ///
 /// Tags `6..=9` are permanently reserved for retired pre-release identities.
@@ -1823,7 +1738,6 @@ pub const fn sccp_network_tag_v1(network: SccpNetworkV1) -> u8 {
         SccpNetworkV1::SolanaTestnet => 13,
     }
 }
-
 /// Return canonical bytes of the ordered eleven-signal Groth16 schema.
 #[must_use]
 pub fn canonical_sccp_groth16_bn254_public_signal_schema_bytes_v1() -> Vec<u8> {
@@ -1839,7 +1753,6 @@ pub fn canonical_sccp_groth16_bn254_public_signal_schema_bytes_v1() -> Vec<u8> {
     }
     out
 }
-
 /// Hash the exact ordered eleven-signal Groth16 public-input schema.
 #[must_use]
 pub fn sccp_groth16_bn254_public_signal_schema_hash_v1() -> [u8; 32] {
@@ -1848,13 +1761,11 @@ pub fn sccp_groth16_bn254_public_signal_schema_hash_v1() -> [u8; 32] {
     preimage.extend_from_slice(&canonical_sccp_groth16_bn254_public_signal_schema_bytes_v1());
     keccak256(preimage)
 }
-
 /// Return the canonical Taira chain-id commitment used by finality anchors.
 #[must_use]
 pub fn sccp_sora_taira_chain_id_hash_v1() -> [u8; 32] {
     keccak256(SORA_TAIRA_CHAIN_ID_BYTES)
 }
-
 /// Encode one valid semantic proof profile independently of Norito framing.
 ///
 /// # Errors
@@ -1875,7 +1786,6 @@ pub fn canonical_sccp_semantic_proof_profile_bytes_v1(
     out.extend_from_slice(&circuit.public_signal_schema_hash);
     Ok(out)
 }
-
 /// Hash one valid semantic proof profile for destination-contract pinning.
 ///
 /// # Errors
@@ -1890,7 +1800,6 @@ pub fn sccp_semantic_proof_profile_hash_v1(
     preimage.extend_from_slice(&canonical_sccp_semantic_proof_profile_bytes_v1(profile)?);
     Ok(keccak256(preimage))
 }
-
 /// Encode one valid Taira finality anchor independently of Norito framing.
 ///
 /// # Errors
@@ -1912,7 +1821,6 @@ pub fn canonical_sccp_sora_finality_anchor_bytes_v1(
     out.extend_from_slice(&anchor.checkpoint_finality_artifact_hash);
     Ok(out)
 }
-
 /// Hash one valid Taira finality anchor for destination-contract pinning.
 ///
 /// # Errors
@@ -1927,7 +1835,6 @@ pub fn sccp_sora_finality_anchor_hash_v1(
     preimage.extend_from_slice(&canonical_sccp_sora_finality_anchor_bytes_v1(anchor)?);
     Ok(keccak256(preimage))
 }
-
 /// Return canonical V1 bytes for an exact SCCP network profile.
 #[must_use]
 pub fn canonical_sccp_network_bytes_v1(network: SccpNetworkV1) -> Vec<u8> {
@@ -1950,7 +1857,6 @@ pub fn canonical_sccp_network_bytes_v1(network: SccpNetworkV1) -> Vec<u8> {
     }
     out
 }
-
 /// Hash the canonical V1 identity of an exact SCCP network profile.
 #[must_use]
 pub fn sccp_network_identity_hash_v1(network: SccpNetworkV1) -> [u8; 32] {
@@ -1959,7 +1865,6 @@ pub fn sccp_network_identity_hash_v1(network: SccpNetworkV1) -> [u8; 32] {
         &canonical_sccp_network_bytes_v1(network),
     )
 }
-
 /// Return canonical V1 bytes for a semantically valid directed SCCP lane.
 #[must_use]
 pub fn canonical_sccp_lane_id_bytes_v1(lane: SccpLaneIdV1) -> Option<Vec<u8>> {
@@ -1974,7 +1879,6 @@ pub fn canonical_sccp_lane_id_bytes_v1(lane: SccpLaneIdV1) -> Option<Vec<u8>> {
     push_vec(&mut out, &target);
     Some(out)
 }
-
 /// Hash a semantically valid directed SCCP lane.
 #[must_use]
 pub fn sccp_lane_id_hash_v1(lane: SccpLaneIdV1) -> Option<[u8; 32]> {
@@ -1983,7 +1887,6 @@ pub fn sccp_lane_id_hash_v1(lane: SccpLaneIdV1) -> Option<[u8; 32]> {
         &canonical_sccp_lane_id_bytes_v1(lane)?,
     ))
 }
-
 /// Return canonical V1 bytes for a well-formed typed source emitter.
 #[must_use]
 pub fn canonical_sccp_source_emitter_bytes_v1(emitter: &SccpSourceEmitterV1) -> Option<Vec<u8>> {
@@ -2032,7 +1935,6 @@ pub fn canonical_sccp_source_emitter_bytes_v1(emitter: &SccpSourceEmitterV1) -> 
     }
     Some(out)
 }
-
 /// Hash a well-formed typed SCCP source emitter.
 #[must_use]
 pub fn sccp_source_emitter_identity_hash_v1(emitter: &SccpSourceEmitterV1) -> Option<[u8; 32]> {
@@ -2041,7 +1943,6 @@ pub fn sccp_source_emitter_identity_hash_v1(emitter: &SccpSourceEmitterV1) -> Op
         &canonical_sccp_source_emitter_bytes_v1(emitter)?,
     ))
 }
-
 /// Return canonical V1 bytes for a well-formed inbound SCCP source identity.
 #[must_use]
 pub fn canonical_sccp_source_identity_bytes_v1(identity: &SccpSourceIdentityV1) -> Option<Vec<u8>> {
@@ -2056,7 +1957,6 @@ pub fn canonical_sccp_source_identity_bytes_v1(identity: &SccpSourceIdentityV1) 
     push_vec(&mut out, &emitter);
     Some(out)
 }
-
 /// Hash a well-formed inbound SCCP source identity.
 #[must_use]
 pub fn sccp_source_identity_hash_v1(identity: &SccpSourceIdentityV1) -> Option<[u8; 32]> {
@@ -2065,7 +1965,6 @@ pub fn sccp_source_identity_hash_v1(identity: &SccpSourceIdentityV1) -> Option<[
         &canonical_sccp_source_identity_bytes_v1(identity)?,
     ))
 }
-
 /// Derive the EVM binding using exactly the Solidity `abi.encode` layout.
 ///
 /// # Errors
@@ -2102,7 +2001,6 @@ pub fn sccp_evm_destination_binding_hash_v1(
     payload.extend_from_slice(&finality_anchor_hash);
     Ok(keccak256(payload))
 }
-
 /// Derive the TRON binding using exactly the TVM Solidity `abi.encode` layout.
 ///
 /// # Errors
@@ -2138,7 +2036,6 @@ pub fn sccp_tron_destination_binding_hash_v1(
     payload.extend_from_slice(&finality_anchor_hash);
     Ok(keccak256(payload))
 }
-
 /// Derive the Solana destination binding from raw public keys and immutable
 /// Loader-v3 deployment pins.
 ///
@@ -2189,7 +2086,6 @@ pub fn sccp_solana_destination_binding_hash_v1(
     payload.extend_from_slice(&finality_anchor_hash);
     Ok(keccak256(payload))
 }
-
 /// Derive the one-way native-verifier material configuration commitment for
 /// the exact Solana-testnet XOR route.
 ///
@@ -2249,7 +2145,6 @@ pub fn sccp_solana_native_verifier_config_hash_v1(
     if circuit.public_signal_schema_hash != sccp_groth16_bn254_public_signal_schema_hash_v1() {
         return Err(SccpRouteValidationError::InvalidSemanticProofProfile);
     }
-
     let sora_network = canonical_sccp_network_bytes_v1(SccpNetworkV1::SoraTaira);
     let solana_network = canonical_sccp_network_bytes_v1(SccpNetworkV1::SolanaTestnet);
     let asset_len = u8::try_from(asset_key.len())
@@ -2281,7 +2176,6 @@ pub fn sccp_solana_native_verifier_config_hash_v1(
     payload.extend_from_slice(&circuit.public_signal_schema_hash);
     Ok(Sha256::digest(payload).into())
 }
-
 /// Compute the immutable route-config hash exposed by the exact EVM XOR route.
 ///
 /// # Errors
@@ -2322,7 +2216,6 @@ pub fn sccp_exact_evm_xor_route_config_hash_v1(
         semantic_profile_hash,
         finality_anchor_hash,
     ])?;
-
     let mut deployment_config = Vec::with_capacity(32 * 7);
     deployment_config.extend_from_slice(&abi_word_bytes20(deployment.token_address));
     deployment_config.extend_from_slice(&deployment.token_code_hash);
@@ -2332,14 +2225,12 @@ pub fn sccp_exact_evm_xor_route_config_hash_v1(
     deployment_config.extend_from_slice(&semantic_profile_hash);
     deployment_config.extend_from_slice(&finality_anchor_hash);
     let deployment_config_hash = keccak256(deployment_config);
-
     let mut asset_route = Vec::with_capacity(32 * 4);
     asset_route.extend_from_slice(&keccak256(b"xor"));
     asset_route.extend_from_slice(&keccak256(route_id));
     asset_route.extend_from_slice(&abi_word_u32(route_revision));
     asset_route.extend_from_slice(&abi_word_u64(deployment.taira_to_token_multiplier));
     let asset_route_config_hash = keccak256(asset_route);
-
     let mut payload = Vec::with_capacity(32 * 8);
     payload.extend_from_slice(&keccak256(CONCRETE_ROUTE_CONFIG_DOMAIN_V1));
     payload.extend_from_slice(&abi_word_u32(domain));
@@ -2351,7 +2242,6 @@ pub fn sccp_exact_evm_xor_route_config_hash_v1(
     payload.extend_from_slice(&asset_route_config_hash);
     Ok(keccak256(payload))
 }
-
 /// Compute the immutable route-config hash exposed by the exact TRON XOR route.
 ///
 /// # Errors
@@ -2391,7 +2281,6 @@ pub fn sccp_exact_tron_xor_route_config_hash_v1(
         finality_anchor_hash,
         destination_binding_hash,
     ])?;
-
     let mut deployment_config = Vec::with_capacity(32 * 8);
     deployment_config.extend_from_slice(&abi_word_bytes20(deployment.token_address));
     deployment_config.extend_from_slice(&deployment.token_code_hash);
@@ -2402,14 +2291,12 @@ pub fn sccp_exact_tron_xor_route_config_hash_v1(
     deployment_config.extend_from_slice(&finality_anchor_hash);
     deployment_config.extend_from_slice(&destination_binding_hash);
     let deployment_config_hash = keccak256(deployment_config);
-
     let mut asset_route = Vec::with_capacity(32 * 4);
     asset_route.extend_from_slice(&keccak256(b"xor"));
     asset_route.extend_from_slice(&keccak256(b"taira_tron_xor"));
     asset_route.extend_from_slice(&abi_word_u32(route_revision));
     asset_route.extend_from_slice(&abi_word_u64(deployment.taira_to_token_multiplier));
     let asset_route_config_hash = keccak256(asset_route);
-
     let mut payload = Vec::with_capacity(32 * 8);
     payload.extend_from_slice(&keccak256(CONCRETE_ROUTE_CONFIG_DOMAIN_V1));
     payload.extend_from_slice(&abi_word_u32(SCCP_DOMAIN_TRON));
@@ -2421,7 +2308,6 @@ pub fn sccp_exact_tron_xor_route_config_hash_v1(
     payload.extend_from_slice(&asset_route_config_hash);
     Ok(keccak256(payload))
 }
-
 /// Compute the immutable route-config hash for the exact Solana-testnet XOR route.
 ///
 /// # Errors
@@ -2459,7 +2345,6 @@ pub fn sccp_exact_solana_xor_route_config_hash_v1(
         finality_anchor_hash,
         destination_binding_hash,
     ])?;
-
     let mut deployment_config = Vec::with_capacity(640);
     deployment_config.extend_from_slice(&deployment.token_mint_address);
     deployment_config.extend_from_slice(&deployment.route_program_id);
@@ -2481,14 +2366,12 @@ pub fn sccp_exact_solana_xor_route_config_hash_v1(
     deployment_config.extend_from_slice(&finality_anchor_hash);
     deployment_config.extend_from_slice(&destination_binding_hash);
     let deployment_config_hash = keccak256(deployment_config);
-
     let mut asset_route = Vec::with_capacity(96);
     asset_route.extend_from_slice(b"xor");
     asset_route.extend_from_slice(b"taira_sol_xor");
     push_u32(&mut asset_route, route_revision);
     push_u64(&mut asset_route, deployment.taira_to_token_multiplier);
     let asset_route_config_hash = keccak256(asset_route);
-
     let mut payload = Vec::with_capacity(256);
     payload.extend_from_slice(CONCRETE_ROUTE_CONFIG_DOMAIN_V1);
     payload.push(1);
@@ -2501,14 +2384,12 @@ pub fn sccp_exact_solana_xor_route_config_hash_v1(
     payload.extend_from_slice(&asset_route_config_hash);
     Ok(keccak256(payload))
 }
-
 fn validate_inbound_lane(lane: SccpLaneIdV1) -> Result<(), SccpRouteValidationError> {
     if !lane.is_well_formed() || !lane.source.is_external() || !lane.target.is_sora() {
         return Err(SccpRouteValidationError::InvalidInboundLane);
     }
     Ok(())
 }
-
 fn validate_key(label: &'static str, value: &str) -> Result<(), SccpRouteValidationError> {
     let bytes = value.as_bytes();
     let valid = !bytes.is_empty()
@@ -2523,7 +2404,6 @@ fn validate_key(label: &'static str, value: &str) -> Result<(), SccpRouteValidat
     }
     Ok(())
 }
-
 fn validate_concrete_route_identity(
     network: SccpNetworkV1,
     route_id: &str,
@@ -2549,7 +2429,6 @@ fn validate_concrete_route_identity(
     }
     Ok(())
 }
-
 fn validate_evm_deployment(
     deployment: &SccpEvmDestinationDeploymentV1,
 ) -> Result<(), SccpRouteValidationError> {
@@ -2582,7 +2461,6 @@ fn validate_evm_deployment(
         finality_anchor_hash,
     ])
 }
-
 fn validate_tron_deployment(
     deployment: &SccpTronDestinationDeploymentV1,
 ) -> Result<(), SccpRouteValidationError> {
@@ -2615,7 +2493,6 @@ fn validate_tron_deployment(
         finality_anchor_hash,
     ])
 }
-
 fn validate_solana_deployment(
     deployment: &SccpSolanaDestinationDeploymentV1,
 ) -> Result<(), SccpRouteValidationError> {
@@ -2656,7 +2533,6 @@ fn validate_solana_deployment(
     }
     validate_distinct(&roles)
 }
-
 fn source_matches_destination(
     source: SccpSourceEmitterV1,
     destination: &SccpDestinationDeploymentV1,
@@ -2724,7 +2600,6 @@ fn source_matches_destination(
         _ => false,
     }
 }
-
 fn native_backend_matches_family(
     backend: BridgeNativeProofBackendV1,
     network: SccpNetworkV1,
@@ -2746,7 +2621,6 @@ fn native_backend_matches_family(
         )
     )
 }
-
 fn validate_lane_hash_pair(
     network: SccpNetworkV1,
     source_lane_hash: [u8; 32],
@@ -2767,14 +2641,12 @@ fn validate_lane_hash_pair(
     }
     Ok(())
 }
-
 fn validate_hash_roles(values: &[[u8; 32]]) -> Result<(), SccpRouteValidationError> {
     for value in values {
         validate_nonzero("hash", value)?;
     }
     validate_distinct(values)
 }
-
 fn validate_nonzero<const N: usize>(
     label: &'static str,
     value: &[u8; N],
@@ -2784,7 +2656,6 @@ fn validate_nonzero<const N: usize>(
     }
     Ok(())
 }
-
 fn validate_distinct<const N: usize>(values: &[[u8; N]]) -> Result<(), SccpRouteValidationError> {
     if values
         .iter()
@@ -2795,71 +2666,58 @@ fn validate_distinct<const N: usize>(values: &[[u8; N]]) -> Result<(), SccpRoute
     }
     Ok(())
 }
-
 fn abi_word_u32(value: u32) -> [u8; 32] {
     let mut word = [0u8; 32];
     word[28..].copy_from_slice(&value.to_be_bytes());
     word
 }
-
 fn abi_word_u64(value: u64) -> [u8; 32] {
     let mut word = [0u8; 32];
     word[24..].copy_from_slice(&value.to_be_bytes());
     word
 }
-
 fn abi_word_bytes20(value: [u8; 20]) -> [u8; 32] {
     let mut word = [0u8; 32];
     word[12..].copy_from_slice(&value);
     word
 }
-
 fn abi_word_tron_address(value: [u8; 20]) -> [u8; 32] {
     let mut word = [0u8; 32];
     word[11] = 0x41;
     word[12..].copy_from_slice(&value);
     word
 }
-
 fn push_u32(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&value.to_le_bytes());
 }
-
 fn push_u16(out: &mut Vec<u8>, value: u16) {
     out.extend_from_slice(&value.to_le_bytes());
 }
-
 fn push_u64(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&value.to_le_bytes());
 }
-
 fn push_vec(out: &mut Vec<u8>, value: &[u8]) {
     let len = u32::try_from(value.len()).expect("bounded SCCP field length fits u32");
     push_u32(out, len);
     out.extend_from_slice(value);
 }
-
 fn blake2b256(prefix: &[u8], payload: &[u8]) -> [u8; 32] {
     let mut hasher = Blake2b::<U32>::new();
     hasher.update(prefix);
     hasher.update(payload);
     hasher.finalize().into()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use norito::codec::DecodeAll as _;
-
     const SIGNATORY: &str =
         "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
-
     fn word_u64(value: u64) -> [u8; 32] {
         let mut word = [0; 32];
         word[24..].copy_from_slice(&value.to_be_bytes());
         word
     }
-
     fn hex32(value: &str) -> [u8; 32] {
         assert_eq!(value.len(), 64);
         let mut output = [0; 32];
@@ -2873,7 +2731,6 @@ mod tests {
         }
         output
     }
-
     fn verifying_key() -> SccpGroth16Bn254VerifyingKeyV1 {
         let g1 = SccpBn254G1PointV1 {
             x: word_u64(1),
@@ -2907,7 +2764,6 @@ mod tests {
             },
         }
     }
-
     fn outbound_proof_policy() -> SccpOutboundProofPolicyV1 {
         SccpOutboundProofPolicyV1 {
             version: 1,
@@ -2931,7 +2787,6 @@ mod tests {
             },
         }
     }
-
     fn sora_outbound_execution_policy() -> SccpSoraOutboundExecutionPolicyV1 {
         SccpSoraOutboundExecutionPolicyV1 {
             version: 1,
@@ -2946,14 +2801,12 @@ mod tests {
             gas_limit: 50_000_000,
         }
     }
-
     fn lane() -> SccpLaneIdV1 {
         SccpLaneIdV1 {
             source: SccpNetworkV1::EthereumMainnet,
             target: SccpNetworkV1::SoraTaira,
         }
     }
-
     fn deployment(revision: u32) -> SccpEvmDestinationDeploymentV1 {
         let key = verifying_key();
         let key_hash = sccp_groth16_bn254_verifying_key_hash_v1(key)
@@ -2972,7 +2825,6 @@ mod tests {
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
         }
     }
-
     fn tron_deployment() -> SccpTronDestinationDeploymentV1 {
         let key = verifying_key();
         SccpTronDestinationDeploymentV1 {
@@ -2989,14 +2841,12 @@ mod tests {
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
         }
     }
-
     fn solana_lane() -> SccpLaneIdV1 {
         SccpLaneIdV1 {
             source: SccpNetworkV1::SolanaTestnet,
             target: SccpNetworkV1::SoraTaira,
         }
     }
-
     /// Cross-language Solana fixture shared byte-for-byte with
     /// `javascript/iroha_js/test/sccpExact.test.js`.
     fn solana_outbound_proof_policy() -> SccpOutboundProofPolicyV1 {
@@ -3022,7 +2872,6 @@ mod tests {
             },
         }
     }
-
     fn solana_deployment() -> SccpSolanaDestinationDeploymentV1 {
         let key = verifying_key();
         let mut deployment = SccpSolanaDestinationDeploymentV1 {
@@ -3055,7 +2904,6 @@ mod tests {
         .expect("exact one-way native verifier config");
         deployment
     }
-
     fn solana_route(activation: SccpRouteActivationV1) -> SccpGovernedRouteV1 {
         let lane = solana_lane();
         let deployment = solana_deployment();
@@ -3101,7 +2949,6 @@ mod tests {
             },
         }
     }
-
     fn solana_anchor(height: u64) -> SccpNativeTrustAnchorV1 {
         SccpNativeTrustAnchorV1 {
             backend: BridgeNativeProofBackendV1::SolanaAgave,
@@ -3109,7 +2956,6 @@ mod tests {
             checkpoint_height: height,
         }
     }
-
     fn route(revision: u32, activation: SccpRouteActivationV1) -> SccpGovernedRouteV1 {
         let lane = lane();
         let deployment = deployment(revision);
@@ -3152,7 +2998,6 @@ mod tests {
             },
         }
     }
-
     fn network_id(byte: u8) -> NetworkId {
         NetworkId::from_genesis_hash(
             iroha_crypto::HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
@@ -3160,7 +3005,6 @@ mod tests {
             ),
         )
     }
-
     #[test]
     fn route_escrow_derivation_is_stable_and_exact_network_bound() {
         let first_route = route(1, SccpRouteActivationV1::Staged);
@@ -3182,7 +3026,6 @@ mod tests {
             "immutable route revisions must not share custody"
         );
     }
-
     fn retarget_evm_route_source(
         mut route: SccpGovernedRouteV1,
         source: SccpNetworkV1,
@@ -3209,7 +3052,6 @@ mod tests {
         emitter.route_config_hash = route_config_hash;
         route
     }
-
     fn anchor(height: u64) -> SccpNativeTrustAnchorV1 {
         SccpNativeTrustAnchorV1 {
             backend: BridgeNativeProofBackendV1::EthereumBeacon,
@@ -3217,14 +3059,12 @@ mod tests {
             checkpoint_height: height,
         }
     }
-
     fn registry(
         routes: Vec<SccpGovernedRouteV1>,
         native_trust_anchor: Option<SccpNativeTrustAnchorV1>,
     ) -> SccpRegistryV1 {
         registry_for_lane(lane(), routes, native_trust_anchor)
     }
-
     fn registry_for_lane(
         lane_id: SccpLaneIdV1,
         routes: Vec<SccpGovernedRouteV1>,
@@ -3242,7 +3082,6 @@ mod tests {
             }],
         }
     }
-
     #[cfg(feature = "json")]
     fn insert_unknown_json_field(value: &mut norito::json::Value, path: &[&str]) {
         let mut current = value;
@@ -3262,7 +3101,6 @@ mod tests {
             norito::json::Value::Null,
         );
     }
-
     #[test]
     fn solidity_verifying_key_hash_vector_is_exact() {
         let key = verifying_key();
@@ -3277,7 +3115,6 @@ mod tests {
             hex32("6923e63427820ab42cc16c3c2bc0eb4097577919bb3911ea50cbb4f20cebfddb")
         );
     }
-
     #[test]
     fn network_tags_and_tron_route_hash_match_exact_contract_vectors() {
         assert_eq!(sccp_network_tag_v1(SccpNetworkV1::SoraTaira), 1);
@@ -3289,7 +3126,6 @@ mod tests {
         assert_eq!(sccp_network_tag_v1(SccpNetworkV1::TronNile), 11);
         assert_eq!(sccp_network_tag_v1(SccpNetworkV1::TronShasta), 12);
         assert_eq!(sccp_network_tag_v1(SccpNetworkV1::SolanaTestnet), 13);
-
         let mut expected_solana_network = vec![0x01, 0x0d, 0x03, 0x00, 0x00, 0x00];
         expected_solana_network.extend_from_slice(&SCCP_SOLANA_TESTNET_GENESIS_HASH_V1);
         assert_eq!(
@@ -3297,14 +3133,12 @@ mod tests {
             expected_solana_network,
             "Solana network identity must contain the raw genesis bytes, never Base58 text"
         );
-
         // Tags 0 and 6..=9 are permanently reserved. This exact byte vector is
         // consumed by SccpExactTransferCodec.tronNetwork in deployed contracts.
         assert_eq!(
             canonical_sccp_network_bytes_v1(SccpNetworkV1::TronNile),
             vec![0x01, 0x0b, 0x05, 0x00, 0x00, 0x00, 0xdc, 0x90, 0x86, 0xcd]
         );
-
         let inbound_lane = SccpLaneIdV1 {
             source: SccpNetworkV1::TronNile,
             target: SccpNetworkV1::SoraTaira,
@@ -3336,7 +3170,6 @@ mod tests {
             hex32("d6e06a169ace343b7cd3a3bcd0b1188f7b98ff3abe7def64ca230333babc39c9")
         );
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -3459,7 +3292,6 @@ mod tests {
             Err(SccpRouteValidationError::InvalidRouteRevision),
             "the exact first-release Solana executable must reject revision two"
         );
-
         let source = solana_route(SccpRouteActivationV1::Staged)
             .source_identity
             .emitter;
@@ -3487,7 +3319,6 @@ mod tests {
             hex32("714bd05afa96ae367e08d4daed9632b208f6c432660f106dd10a8d616d17929c"),
             "Solana source emitter must match the independent JavaScript V1 vector"
         );
-
         let encoded = norito::to_bytes(&destination).expect("Solana destination encodes");
         assert_eq!(
             norito::decode_from_bytes::<SccpDestinationDeploymentV1>(&encoded)
@@ -3505,7 +3336,6 @@ mod tests {
             SccpDestinationDeploymentV1::decode_all(&mut unknown_variant.as_slice()).is_err(),
             "unknown destination families must fail before interpreting payload bytes"
         );
-
         #[cfg(feature = "json")]
         {
             let json = norito::json::to_json(&destination).expect("Solana destination JSON");
@@ -3521,7 +3351,6 @@ mod tests {
                 .is_err()
             );
         }
-
         for wrong_lane in [
             SccpLaneIdV1 {
                 source: SccpNetworkV1::EthereumMainnet,
@@ -3541,7 +3370,6 @@ mod tests {
                 "cross-family/direction lane unexpectedly accepted: {wrong_lane:?}"
             );
         }
-
         let assert_invalid = |hostile: SccpSolanaDestinationDeploymentV1| {
             assert!(
                 SccpDestinationDeploymentV1::Solana(hostile)
@@ -3598,7 +3426,6 @@ mod tests {
             verifier_key_hash: deployment.native_verifier_config_hash,
             ..deployment
         });
-
         let baseline_binding = destination
             .destination_binding_hash(lane)
             .expect("baseline binding");
@@ -3650,7 +3477,6 @@ mod tests {
                 .expect("swapped route hash"),
             "approved route hash must reject a ProgramData/state substitution"
         );
-
         let mut swapped_hashes = deployment;
         core::mem::swap(
             &mut swapped_hashes.route_program_code_hash,
@@ -3664,7 +3490,6 @@ mod tests {
                 .expect("swapped hash binding"),
             "code and configuration hashes must be position-bound"
         );
-
         let route = solana_route(SccpRouteActivationV1::Staged);
         let SccpSourceEmitterV1::Solana(source_deployment) = route.source_identity.emitter else {
             unreachable!("fixture uses Solana")
@@ -3749,7 +3574,6 @@ mod tests {
             swapped_source.validate(),
             Err(SccpRouteValidationError::SourceDestinationMismatch)
         );
-
         assert_eq!(
             destination.route_configuration_hash(
                 lane,
@@ -3766,7 +3590,6 @@ mod tests {
             Err(SccpRouteValidationError::TrustAnchorFamilyMismatch)
         );
     }
-
     #[test]
     fn verifying_key_structure_and_embedded_hash_fail_closed() {
         let mut invalid_version = verifying_key();
@@ -3775,7 +3598,6 @@ mod tests {
             invalid_version.validate_structure(),
             Err(SccpRouteValidationError::InvalidGroth16VerifyingKey)
         );
-
         let mut infinity = verifying_key();
         infinity.alpha1 = SccpBn254G1PointV1 {
             x: [0; 32],
@@ -3785,14 +3607,12 @@ mod tests {
             infinity.validate_structure(),
             Err(SccpRouteValidationError::InvalidGroth16VerifyingKey)
         );
-
         let mut out_of_field = verifying_key();
         out_of_field.alpha1.x = BN254_BASE_FIELD_MODULUS_BE;
         assert_eq!(
             out_of_field.validate_structure(),
             Err(SccpRouteValidationError::InvalidGroth16VerifyingKey)
         );
-
         let mut mismatch = route(1, SccpRouteActivationV1::Staged);
         let SccpDestinationDeploymentV1::Evm(deployment) = &mut mismatch.destination else {
             unreachable!("fixture uses EVM")
@@ -3803,7 +3623,6 @@ mod tests {
             Err(SccpRouteValidationError::Groth16VerifyingKeyHashMismatch)
         );
     }
-
     #[test]
     fn route_revision_is_explicit_in_config_and_source_identity() {
         let first = route(1, SccpRouteActivationV1::Staged);
@@ -3853,7 +3672,6 @@ mod tests {
         );
         assert!(first.validate().is_ok());
         assert!(second.validate().is_ok());
-
         let mut invalid_source = first.clone();
         let SccpSourceEmitterV1::Evm(mut emitter) = invalid_source.source_identity.emitter else {
             panic!("fixture route must use an EVM source emitter");
@@ -3865,7 +3683,6 @@ mod tests {
             Err(SccpRouteValidationError::SourceDestinationMismatch)
         );
     }
-
     #[test]
     fn optional_anchor_and_draining_lifecycle_preserve_redemption() {
         assert!(
@@ -3887,7 +3704,6 @@ mod tests {
                 .is_ok()
         );
     }
-
     #[test]
     fn governance_activation_is_separate_from_network_environment_classification() {
         let staging_lane = SccpLaneIdV1 {
@@ -3900,7 +3716,6 @@ mod tests {
         staged
             .validate_with_anchor(Some(native_anchor))
             .expect("staging route remains governable while disabled");
-
         for activation in [
             SccpRouteActivationV1::InboundOnly,
             SccpRouteActivationV1::Bidirectional,
@@ -3918,7 +3733,6 @@ mod tests {
                 Err(SccpRouteValidationError::UnsupportedInboundActivation)
             );
         }
-
         let solana = solana_route(SccpRouteActivationV1::Bidirectional);
         assert!(solana.lane_id.is_staging_environment());
         assert!(!solana.source_identity.has_production_source());
@@ -3930,7 +3744,6 @@ mod tests {
             .validate()
             .expect("Solana testnet remains staging-classified while active by governance");
     }
-
     #[test]
     fn trust_anchor_history_is_append_only_and_current_selects_highest_checkpoint() {
         let first = anchor(100);
@@ -3957,14 +3770,12 @@ mod tests {
             lane.native_trust_anchor_interval(second.anchor_hash),
             Some((second, None))
         );
-
         let mut stale_pointer = governed.clone();
         stale_pointer.lanes[0].current_native_trust_anchor_hash = Some(first.anchor_hash);
         assert_eq!(
             stale_pointer.validate(),
             Err(SccpRouteValidationError::InvalidCurrentTrustAnchor)
         );
-
         let mut duplicate_hash = governed.clone();
         duplicate_hash.lanes[0]
             .native_trust_anchors
@@ -3978,7 +3789,6 @@ mod tests {
             duplicate_hash.validate(),
             Err(SccpRouteValidationError::InvalidTrustAnchorHistory)
         );
-
         let mut rollback = governed;
         rollback.lanes[0]
             .native_trust_anchors
@@ -3993,7 +3803,6 @@ mod tests {
             Err(SccpRouteValidationError::InvalidTrustAnchorHistory)
         );
     }
-
     #[test]
     fn terminal_history_does_not_exhaust_live_route_capacity() {
         let routes = (1..=12)
@@ -4031,7 +3840,6 @@ mod tests {
             .validate()
             .expect("retained terminal history below the generous cap remains valid");
         assert_eq!(governed.lanes[0].routes.len(), 12);
-
         let live_routes = (1..=SCCP_V1_MAX_LIVE_ROUTES_PER_LANE + 1)
             .map(|revision| {
                 route(
@@ -4045,7 +3853,6 @@ mod tests {
             Err(SccpRouteValidationError::InvalidLaneLiveRouteCount)
         );
     }
-
     #[test]
     fn retained_history_caps_accept_exact_bounds_and_reject_one_more() {
         let first = anchor(99);
@@ -4072,7 +3879,6 @@ mod tests {
         exact_routes
             .validate()
             .expect("exact retained-route bound remains admissible");
-
         let mut excess_routes = exact_routes;
         excess_routes.lanes[0].routes.push(route(
             u32::try_from(SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE + 1)
@@ -4083,7 +3889,6 @@ mod tests {
             excess_routes.validate(),
             Err(SccpRouteValidationError::TooManyRetainedRoutes)
         );
-
         let retained_anchor = |height: usize| {
             let height = u64::try_from(height).expect("retained anchor bound fits u64");
             let mut anchor_hash = [0_u8; 32];
@@ -4113,7 +3918,6 @@ mod tests {
         exact_anchors
             .validate()
             .expect("exact retained-anchor bound remains admissible");
-
         let mut excess_anchors = exact_anchors;
         let excess_anchor = retained_anchor(SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE + 1);
         excess_anchors.lanes[0]
@@ -4124,7 +3928,6 @@ mod tests {
             excess_anchors.validate(),
             Err(SccpRouteValidationError::TooManyRetainedTrustAnchors)
         );
-
         let maximum_route = route(1, SccpRouteActivationV1::Retired);
         maximum_route
             .validate()
@@ -4145,7 +3948,6 @@ mod tests {
             "conservative retained-entry envelope must remain eight MiB"
         );
     }
-
     #[test]
     fn retired_route_cutoff_must_belong_to_one_retained_anchor_interval() {
         let first = anchor(100);
@@ -4182,7 +3984,6 @@ mod tests {
         governed
             .validate()
             .expect("cutoff at the inclusive successor checkpoint is valid");
-
         for cutoff in [
             None,
             Some(SccpInboundFinalityCutoffV1 {
@@ -4214,7 +4015,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn multiple_outbound_revisions_and_revision_gaps_are_rejected() {
         assert_eq!(
@@ -4237,7 +4037,6 @@ mod tests {
             Err(SccpRouteValidationError::InvalidRouteRevision)
         );
     }
-
     #[test]
     fn activation_transitions_enforce_drain_before_retirement() {
         use SccpRouteActivationV1 as A;
@@ -4249,7 +4048,6 @@ mod tests {
         assert!(!A::Retired.can_transition_to(A::InboundOnly));
         assert!(!A::Paused.can_transition_to(A::Paused));
     }
-
     #[test]
     fn settlement_asset_scale_and_canonical_keys_are_exact() {
         let mut wrong_scale = route(1, SccpRouteActivationV1::Staged);
@@ -4258,7 +4056,6 @@ mod tests {
             wrong_scale.validate(),
             Err(SccpRouteValidationError::InvalidSettlementScale)
         );
-
         let mut wrong_asset = route(1, SccpRouteActivationV1::Staged);
         wrong_asset.settlement.asset_definition_id = AssetDefinitionId::derive_from_components(
             crate::domain::DomainId::try_new("wrong", "universal").expect("valid domain"),
@@ -4268,7 +4065,6 @@ mod tests {
             wrong_asset.validate(),
             Err(SccpRouteValidationError::SettlementAssetMismatch)
         );
-
         let mut uppercase = route(1, SccpRouteActivationV1::Staged);
         uppercase.asset_key = "XOR".to_owned();
         assert!(matches!(
@@ -4276,7 +4072,6 @@ mod tests {
             Err(SccpRouteValidationError::NonCanonicalKey("asset_key"))
         ));
     }
-
     #[test]
     fn source_destination_and_role_aliasing_fail_closed() {
         let mut source_drift = route(1, SccpRouteActivationV1::Staged);
@@ -4288,7 +4083,6 @@ mod tests {
             source_drift.validate(),
             Err(SccpRouteValidationError::SourceDestinationMismatch)
         );
-
         let mut alias = route(1, SccpRouteActivationV1::Staged);
         let SccpDestinationDeploymentV1::Evm(deployment) = &mut alias.destination else {
             unreachable!("fixture uses EVM")
@@ -4296,7 +4090,6 @@ mod tests {
         deployment.route_address = deployment.token_address;
         assert_eq!(alias.validate(), Err(SccpRouteValidationError::RoleAlias));
     }
-
     #[test]
     fn outbound_proof_policy_rejects_every_malformed_or_aliased_role() {
         let policy = outbound_proof_policy();
@@ -4327,14 +4120,12 @@ mod tests {
         assert_ne!(profile_hash, [0; 32]);
         assert_ne!(anchor_hash, [0; 32]);
         assert_ne!(profile_hash, anchor_hash);
-
         let mut invalid = policy;
         invalid.version = 0;
         assert_eq!(
             invalid.validate(),
             Err(SccpRouteValidationError::InvalidOutboundProofPolicy)
         );
-
         let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(mut circuit) =
             policy.semantic_profile;
         circuit.circuit_commitment = [0; 32];
@@ -4345,7 +4136,6 @@ mod tests {
             invalid.validate(),
             Err(SccpRouteValidationError::InvalidSemanticProofProfile)
         );
-
         let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(mut circuit) =
             policy.semantic_profile;
         circuit.witness_generator_commitment = circuit.circuit_commitment;
@@ -4356,7 +4146,6 @@ mod tests {
             invalid.validate(),
             Err(SccpRouteValidationError::InvalidSemanticProofProfile)
         );
-
         let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(mut circuit) =
             policy.semantic_profile;
         circuit.public_signal_schema_hash[0] ^= 1;
@@ -4367,7 +4156,6 @@ mod tests {
             invalid.validate(),
             Err(SccpRouteValidationError::InvalidSemanticProofProfile)
         );
-
         let anchor_mutations: [fn(&mut SccpSoraFinalityAnchorV1); 10] = [
             |anchor: &mut SccpSoraFinalityAnchorV1| anchor.version = 0,
             |anchor: &mut SccpSoraFinalityAnchorV1| {
@@ -4399,7 +4187,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn canonical_destination_deployments_roundtrip_with_typed_outbound_policy() {
         let evm = deployment(1);
@@ -4415,7 +4202,6 @@ mod tests {
             .outbound_proof_policy
             .validate()
             .expect("roundtripped EVM policy remains valid");
-
         let tron = tron_deployment();
         let tron_bytes = norito::to_bytes(&tron).expect("canonical TRON deployment encodes");
         let decoded_tron =
@@ -4431,7 +4217,6 @@ mod tests {
             .validate()
             .expect("roundtripped TRON policy remains valid");
     }
-
     #[test]
     fn policyless_norito_destination_deployments_are_rejected() {
         #[derive(norito::derive::NoritoSerialize)]
@@ -4446,7 +4231,6 @@ mod tests {
             route_code_hash: [u8; 32],
             taira_to_token_multiplier: u64,
         }
-
         #[derive(norito::derive::NoritoSerialize)]
         struct PolicylessTronDestinationDeploymentV1 {
             token_address: [u8; 20],
@@ -4459,7 +4243,6 @@ mod tests {
             route_code_hash: [u8; 32],
             taira_to_token_multiplier: u64,
         }
-
         let evm = deployment(1);
         let mut evm_bytes = norito::to_bytes(&PolicylessEvmDestinationDeploymentV1 {
             token_address: evm.token_address,
@@ -4480,7 +4263,6 @@ mod tests {
             norito::decode_from_bytes::<SccpEvmDestinationDeploymentV1>(&evm_bytes).is_err(),
             "policy-less EVM deployment must not decode as the canonical V1 shape"
         );
-
         let tron = tron_deployment();
         let mut tron_bytes = norito::to_bytes(&PolicylessTronDestinationDeploymentV1 {
             token_address: tron.token_address,
@@ -4502,7 +4284,6 @@ mod tests {
             "policy-less TRON deployment must not decode as the canonical V1 shape"
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn policyless_json_destination_deployments_are_rejected() {
@@ -4513,7 +4294,6 @@ mod tests {
         assert!(evm_object.remove("outbound_proof_policy").is_some());
         let evm_json = norito::json::to_json(&evm).expect("serialize policy-less EVM deployment");
         assert!(norito::json::from_json::<SccpEvmDestinationDeploymentV1>(&evm_json).is_err());
-
         let mut tron =
             norito::json::to_value(&tron_deployment()).expect("serialize TRON deployment");
         let norito::json::Value::Object(tron_object) = &mut tron else {
@@ -4524,7 +4304,6 @@ mod tests {
             norito::json::to_json(&tron).expect("serialize policy-less TRON deployment");
         assert!(norito::json::from_json::<SccpTronDestinationDeploymentV1>(&tron_json).is_err());
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn governed_route_json_requires_exact_sora_execution_policy_and_vk_pin() {
@@ -4536,7 +4315,6 @@ mod tests {
         route_object.remove("sora_outbound_execution_policy");
         let json = norito::json::to_json(&policyless).expect("serialize policy-less route");
         assert!(norito::json::from_json::<SccpGovernedRouteV1>(&json).is_err());
-
         for missing in ["version", "commitment"] {
             let mut hostile = norito::json::to_value(&route).expect("serialize governed route");
             let norito::json::Value::Object(route_object) = &mut hostile else {
@@ -4561,13 +4339,11 @@ mod tests {
                 "missing governed verification-key {missing} must reject"
             );
         }
-
         let exact = &route.sora_outbound_execution_policy.vk_ref;
         let id = crate::proof::VerifyingKeyId::new(exact.backend.clone(), exact.name.clone());
         assert!(exact.matches(&id, exact.version, exact.commitment));
         assert!(!exact.matches(&id, exact.version.saturating_add(1), exact.commitment));
         assert!(!exact.matches(&id, exact.version, [0x7f; 32]));
-
         let mut zero_version = route.clone();
         zero_version.sora_outbound_execution_policy.vk_ref.version = 0;
         assert_eq!(
@@ -4576,7 +4352,6 @@ mod tests {
             "governance must not pin the unversioned registry sentinel"
         );
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -4595,7 +4370,6 @@ mod tests {
                 SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
             )
             .expect("route hash");
-
         let mut changed_profile = baseline;
         let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(ref mut circuit) =
             changed_profile.outbound_proof_policy.semantic_profile;
@@ -4621,7 +4395,6 @@ mod tests {
                 )
                 .expect("changed route hash")
         );
-
         let mut changed_anchor = baseline;
         changed_anchor
             .outbound_proof_policy
@@ -4648,7 +4421,6 @@ mod tests {
                 )
                 .expect("changed anchor route hash")
         );
-
         let tron_lane = SccpLaneIdV1 {
             source: SccpNetworkV1::TronMainnet,
             target: SccpNetworkV1::SoraTaira,
@@ -4666,7 +4438,6 @@ mod tests {
                 SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
             )
             .expect("TRON route hash");
-
         let mut changed_tron_profile = baseline_tron;
         let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(ref mut circuit) =
             changed_tron_profile.outbound_proof_policy.semantic_profile;
@@ -4692,7 +4463,6 @@ mod tests {
                 )
                 .expect("changed TRON route hash")
         );
-
         let mut changed_tron_anchor = baseline_tron;
         changed_tron_anchor
             .outbound_proof_policy
@@ -4720,7 +4490,6 @@ mod tests {
                 .expect("changed TRON anchor route hash")
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn registry_json_rejects_unknown_fields_at_every_consensus_boundary() {
@@ -4731,7 +4500,6 @@ mod tests {
                 .expect("valid route decodes"),
             route
         );
-
         for path in [
             &[][..],
             &["destination"][..],
@@ -4779,7 +4547,6 @@ mod tests {
                 "unexpected error for path {path:?}: {error}"
             );
         }
-
         let registry = registry(vec![route], None);
         let registry_json = norito::json::to_json(&registry).expect("registry serializes");
         assert_eq!(

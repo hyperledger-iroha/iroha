@@ -6,7 +6,6 @@ use crate::{
         ResolverId,
     },
 };
-
 isi! {
     /// Submit a resolver directory draft signed by an approved release engineer.
     pub struct SubmitDirectoryDraft {
@@ -22,9 +21,7 @@ isi! {
         pub builder_signature: iroha_crypto::Signature,
     }
 }
-
 impl crate::seal::Instruction for SubmitDirectoryDraft {}
-
 isi! {
     /// Publish a resolver directory draft after council approval.
     pub struct PublishDirectory {
@@ -34,9 +31,7 @@ isi! {
         pub expected_prev: Option<DirectoryId>,
     }
 }
-
 impl crate::seal::Instruction for PublishDirectory {}
-
 isi! {
     /// Revoke a resolver immediately without publishing a new directory record.
     pub struct RevokeResolver {
@@ -46,9 +41,7 @@ isi! {
         pub reason: RadRevokeReason,
     }
 }
-
 impl crate::seal::Instruction for RevokeResolver {}
-
 isi! {
     /// Remove an entry from the resolver revocation set.
     pub struct UnrevokeResolver {
@@ -56,9 +49,7 @@ isi! {
         pub resolver_id: ResolverId,
     }
 }
-
 impl crate::seal::Instruction for UnrevokeResolver {}
-
 isi! {
     /// Add a release engineer key authorized to submit directory drafts.
     pub struct AddReleaseSigner {
@@ -66,9 +57,7 @@ isi! {
         pub public_key: iroha_crypto::PublicKey,
     }
 }
-
 impl crate::seal::Instruction for AddReleaseSigner {}
-
 isi! {
     /// Remove a release engineer key from the draft submission allowlist.
     pub struct RemoveReleaseSigner {
@@ -76,9 +65,7 @@ isi! {
         pub public_key: iroha_crypto::PublicKey,
     }
 }
-
 impl crate::seal::Instruction for RemoveReleaseSigner {}
-
 isi! {
     /// Update the resolver directory rotation policy enforced during publish.
     pub struct SetDirectoryRotationPolicy {
@@ -86,5 +73,4 @@ isi! {
         pub policy: DirectoryRotationPolicyV1,
     }
 }
-
 impl crate::seal::Instruction for SetDirectoryRotationPolicy {}

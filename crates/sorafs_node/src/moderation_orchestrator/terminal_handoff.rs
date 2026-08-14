@@ -1,5 +1,4 @@
 //! Deterministic terminal-handoff identity and finalized-event binding.
-
 use iroha_data_model::{
     NetworkId,
     events::data::sorafs::SorafsModerationLedgerEventKind,
@@ -8,14 +7,12 @@ use iroha_data_model::{
         is_canonical_moderation_identifier_v1,
     },
 };
-
 use super::{
     ACTION_DIGEST_DOMAIN_V1, HANDOFF_ID_DOMAIN_V1, MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1,
     ModerationOrchestratorCheckpointV1, ModerationOrchestratorError,
     ModerationTerminalHandoffKindV1, ModerationTerminalHandoffV1, domain_hash,
     external_work_cursor_is_valid, refresh_panel_notification_outbox_digest,
 };
-
 impl ModerationOrchestratorCheckpointV1 {
     pub(super) fn new(network_id: &NetworkId) -> Self {
         let mut state = Self {
@@ -49,7 +46,6 @@ impl ModerationOrchestratorCheckpointV1 {
         state
     }
 }
-
 pub(super) fn terminal_handoff_id(
     network_id: &NetworkId,
     kind: ModerationTerminalHandoffKindV1,
@@ -72,7 +68,6 @@ pub(super) fn terminal_handoff_id(
         ],
     )
 }
-
 pub(super) fn retained_terminal_finalization_event<'a>(
     snapshot: &'a ModerationFinalizedLedgerSnapshotV1,
     case_id: &str,
@@ -89,7 +84,6 @@ pub(super) fn retained_terminal_finalization_event<'a>(
     }
     Ok(event)
 }
-
 pub(super) fn terminal_finalization_event_matches_outcome(
     event: &ModerationFinalizedEventV1,
     outcome: &ModerationOutcomeRecordV1,
@@ -97,7 +91,6 @@ pub(super) fn terminal_finalization_event_matches_outcome(
     event.event.authority() == &outcome.finalized_by
         && *event.event.occurred_at_unix_ms() == outcome.finalized_at_unix_ms
 }
-
 pub(super) fn validate_retained_terminal_handoff(
     handoff: &ModerationTerminalHandoffV1,
     snapshot: Option<&ModerationFinalizedLedgerSnapshotV1>,

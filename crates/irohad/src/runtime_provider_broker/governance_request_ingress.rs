@@ -6,7 +6,6 @@ const fn governance_request_auth_scope_to_wire(
         sorafs_node::GovernanceDagAuthenticationScope::SignedHead => 2,
     }
 }
-
 fn governance_request_auth_scope_from_wire(
     scope: u8,
 ) -> Result<sorafs_node::GovernanceDagAuthenticationScope, BrokerError> {
@@ -16,7 +15,6 @@ fn governance_request_auth_scope_from_wire(
         _ => Err(BrokerError::Rejected),
     }
 }
-
 fn governance_request_ingress_binding_to_wire(
     binding: sorafs_node::GovernanceDagRequestIngressBindingV1,
 ) -> GovernanceRequestIngressBindingWireV1 {
@@ -29,7 +27,6 @@ fn governance_request_ingress_binding_to_wire(
         max_future_skew_secs: binding.max_future_skew_secs(),
     }
 }
-
 fn governance_request_ingress_binding_from_wire(
     binding: GovernanceRequestIngressBindingWireV1,
 ) -> Result<sorafs_node::GovernanceDagRequestIngressBindingV1, BrokerError> {
@@ -44,7 +41,6 @@ fn governance_request_ingress_binding_from_wire(
     )
     .map_err(|_| BrokerError::BindingMismatch)
 }
-
 fn governance_request_ingress_binding_from_provider_binding(
     binding: &ProviderBindingWireV1,
 ) -> Result<sorafs_node::GovernanceDagRequestIngressBindingV1, BrokerError> {
@@ -67,7 +63,6 @@ fn governance_request_ingress_binding_from_provider_binding(
     }
     Ok(ingress)
 }
-
 fn governance_request_ingress_qualification_to_wire(
     qualification: sorafs_node::GovernanceDagRequestIngressQualificationV1,
 ) -> GovernanceRequestIngressQualificationWireV1 {
@@ -83,7 +78,6 @@ fn governance_request_ingress_qualification_to_wire(
         replica_set_digest: qualification.replica_set_digest(),
     }
 }
-
 fn governance_request_ingress_qualification_from_wire(
     qualification: GovernanceRequestIngressQualificationWireV1,
 ) -> Result<sorafs_node::GovernanceDagRequestIngressQualificationV1, BrokerError> {
@@ -101,7 +95,6 @@ fn governance_request_ingress_qualification_from_wire(
     )
     .map_err(|_| BrokerError::Protocol)
 }
-
 fn governance_request_auth_to_wire(
     request: &sorafs_node::GovernanceDagCanonicalRequestV1,
 ) -> GovernanceRequestAuthRequestWireV1 {
@@ -122,7 +115,6 @@ fn governance_request_auth_to_wire(
         request_digest: request.request_digest(),
     }
 }
-
 fn governance_request_auth_from_wire(
     wire: &GovernanceRequestAuthRequestWireV1,
     max_body_bytes: u64,
@@ -156,7 +148,6 @@ fn governance_request_auth_from_wire(
     }
     Ok(request)
 }
-
 fn validate_governance_request_auth_envelope(
     request: &sorafs_node::GovernanceDagCanonicalRequestV1,
     result: GovernanceRequestAuthResultWireV1,
@@ -195,7 +186,6 @@ fn validate_governance_request_auth_envelope(
         .map_err(|_| BrokerError::Rejected)?;
     Ok(envelope)
 }
-
 fn governance_request_auth_result_to_wire(
     envelope: &sorafs_node::GovernanceDagRequestAuthenticationEnvelopeV1,
 ) -> GovernanceRequestAuthResultWireV1 {

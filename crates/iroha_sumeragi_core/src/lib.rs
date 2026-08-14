@@ -11,10 +11,8 @@
 //! The types use only deterministic standard-library collections and integer
 //! arithmetic. This keeps the executable transition relation small enough to
 //! serve as both the production core and the target of deductive verification.
-
 #[cfg(all(verus_only, feature = "verus"))]
 use vstd::prelude::*;
-
 #[path = "../../iroha_core/src/sumeragi/v2_core/committee.rs"]
 mod committee;
 #[path = "../../iroha_core/src/sumeragi/v2_core/quorum.rs"]
@@ -37,7 +35,6 @@ mod wal;
 #[cfg(all(verus_only, feature = "verus"))]
 #[path = "effective_lock_verus_proofs.rs"]
 mod zz_effective_lock_verus_proofs;
-
 pub use committee::{
     Committee, CommitteeError, CommitteeRole, MAX_COMMITTEE_SIZE, MIN_COMMITTEE_SIZE,
     ValidatorIndex,
@@ -66,7 +63,6 @@ pub use wal::{
     WalHeaderCorruption, WalIdentityField, WalIoStage, WalRecord, WalRetirementAuthorization,
     encode_wal_file_header, encode_wal_frame, recover_wal_file,
 };
-
 #[cfg(test)]
 #[path = "../../iroha_core/src/sumeragi/v2_core/tests.rs"]
 mod tests;

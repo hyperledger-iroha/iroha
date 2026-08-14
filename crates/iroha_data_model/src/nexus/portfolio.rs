@@ -1,15 +1,12 @@
 //! Portfolio snapshot structures for UAID aggregation.
-
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-
 use crate::{
     account::{AccountId, rekey::AccountAlias},
     asset::{AssetDefinitionId, AssetId},
     nexus::{DataSpaceId, UniversalAccountId},
 };
-
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 /// Aggregated holdings for a universal account identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -25,7 +22,6 @@ pub struct UniversalPortfolio {
     /// Summary counters for the snapshot.
     pub totals: PortfolioTotals,
 }
-
 /// Summary counters for a UAID portfolio snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -38,7 +34,6 @@ pub struct PortfolioTotals {
     /// Number of asset positions across all accounts.
     pub positions: u64,
 }
-
 /// Holdings scoped to a single dataspace.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -55,7 +50,6 @@ pub struct DataspacePortfolio {
     #[norito(default)]
     pub accounts: Vec<AccountPortfolio>,
 }
-
 /// Holdings for a single account mapped to a UAID.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -72,7 +66,6 @@ pub struct AccountPortfolio {
     #[norito(default)]
     pub assets: Vec<AssetPosition>,
 }
-
 /// Individual asset position captured in a portfolio snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(

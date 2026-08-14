@@ -4,9 +4,7 @@
 //! sequencing, active concurrency leases, and the ordered callback outbox. This
 //! module only derives the public launch binding, performs an exact startup
 //! readback, and supervises replay into the committed reputation runtime.
-
 use std::{fmt, sync::Arc, time::Duration};
-
 use iroha_config::parameters::actual::SorafsTokenConfig;
 use iroha_data_model::{NetworkId, sorafs::reputation::derive_stream_token_gateway_id_v1};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
@@ -15,9 +13,7 @@ use iroha_torii::sorafs::{
     StreamTokenGatewayAdmissionProviderV1, StreamTokenGatewayAdmissionQualificationV1,
 };
 use sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionApiV1;
-
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
-
 /// Fail-closed launcher error without runtime credentials or evidence payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StreamTokenGatewayRuntimeErrorV1 {
@@ -36,7 +32,6 @@ pub(crate) enum StreamTokenGatewayRuntimeErrorV1 {
     /// The reconciliation cadence is zero.
     InvalidReconcileInterval,
 }
-
 impl fmt::Display for StreamTokenGatewayRuntimeErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -64,7 +59,6 @@ impl fmt::Display for StreamTokenGatewayRuntimeErrorV1 {
         })
     }
 }
-
 impl std::error::Error for StreamTokenGatewayRuntimeErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -73,13 +67,11 @@ impl std::error::Error for StreamTokenGatewayRuntimeErrorV1 {
         }
     }
 }
-
 impl From<StreamTokenGatewayAdmissionErrorV1> for StreamTokenGatewayRuntimeErrorV1 {
     fn from(error: StreamTokenGatewayAdmissionErrorV1) -> Self {
         Self::Admission(error)
     }
 }
-
 /// Build and live-qualify the exact capture boundary requested by config.
 ///
 /// The first pending readback is reconciled synchronously. Consequently Torii
@@ -135,7 +127,6 @@ pub(crate) fn prepare_capture(
     capture.reconcile_pending()?;
     Ok(Some(capture))
 }
-
 /// Start bounded replay of externally durable callbacks after startup.
 pub(crate) fn start_reconciler(
     capture: Arc<StreamTokenAdmissionCaptureV1>,
@@ -185,7 +176,6 @@ pub(crate) fn start_reconciler(
     });
     Ok(Child::new(task, OnShutdown::Wait(SHUTDOWN_WAIT)))
 }
-
 const fn is_transient(error: StreamTokenGatewayAdmissionErrorV1) -> bool {
     matches!(
         error,
@@ -194,7 +184,6 @@ const fn is_transient(error: StreamTokenGatewayAdmissionErrorV1) -> bool {
             | StreamTokenGatewayAdmissionErrorV1::ReputationCallback
     )
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Hash, HashOf};
@@ -211,11 +200,8 @@ mod tests {
         ReputationJournalEnqueueOutcomeV1, ReputationNativeOutcomeAdmissionStateV1,
         ReputationRuntimeError, StreamTokenReputationAdmissionOutcomeV1,
     };
-
     use super::*;
-
     const HANDLE: &str = "sealed://sorafs/stream-admission/eu-1";
-
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(
             HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -223,7 +209,6 @@ mod tests {
             )),
         )
     }
-
     fn token_config() -> SorafsTokenConfig {
         SorafsTokenConfig {
             enabled: true,
@@ -245,7 +230,6 @@ mod tests {
             ..SorafsTokenConfig::default()
         }
     }
-
     fn qualification(revision: u64) -> StreamTokenGatewayAdmissionQualificationV1 {
         StreamTokenGatewayAdmissionQualificationV1 {
             gateway_id: derive_stream_token_gateway_id_v1(&network_id(0x61), "gateway.dxb-1")
@@ -257,25 +241,21 @@ mod tests {
             lease_ttl_ms: 120_000,
         }
     }
-
     #[derive(Debug)]
     struct ProviderProbe {
         qualification: StreamTokenGatewayAdmissionQualificationV1,
         readback: StreamTokenGatewayAdmissionReadbackV1,
     }
-
     impl StreamTokenGatewayAdmissionProviderV1 for ProviderProbe {
         fn handle(&self) -> &str {
             HANDLE
         }
-
         fn qualification(
             &self,
         ) -> Result<StreamTokenGatewayAdmissionQualificationV1, StreamTokenGatewayAdmissionErrorV1>
         {
             Ok(self.qualification)
         }
-
         fn admit(
             &self,
             _request: &StreamTokenGatewayAdmissionRequestV1,
@@ -283,7 +263,6 @@ mod tests {
         {
             Err(StreamTokenGatewayAdmissionErrorV1::Rejected)
         }
-
         fn pending(
             &self,
             _max_items: u32,
@@ -291,14 +270,12 @@ mod tests {
         {
             Ok(self.readback.clone())
         }
-
         fn acknowledge(
             &self,
             _record: StreamTokenGatewayAdmissionRecordV1,
         ) -> Result<StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1> {
             Err(StreamTokenGatewayAdmissionErrorV1::Rejected)
         }
-
         fn release_lease(
             &self,
             _record: StreamTokenGatewayAdmissionRecordV1,
@@ -306,17 +283,14 @@ mod tests {
             Err(StreamTokenGatewayAdmissionErrorV1::Rejected)
         }
     }
-
     #[derive(Debug)]
     struct ReputationProbe;
-
     impl ReputationNativeOutcomeAdmissionApiV1 for ReputationProbe {
         fn activation_state(
             &self,
         ) -> Result<ReputationNativeOutcomeAdmissionStateV1, ReputationRuntimeError> {
             Ok(ReputationNativeOutcomeAdmissionStateV1::Active)
         }
-
         fn record_por_terminal(
             &self,
             _provider_id: ProviderId,
@@ -324,7 +298,6 @@ mod tests {
         ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
             Err(ReputationRuntimeError::InvalidRuntimePolicy)
         }
-
         fn record_authenticated_stream_token_validation(
             &self,
             _provider_id: ProviderId,
@@ -333,7 +306,6 @@ mod tests {
             Err(ReputationRuntimeError::InvalidRuntimePolicy)
         }
     }
-
     fn provider(
         revision: u64,
         acknowledged_through_sequence: u64,
@@ -348,11 +320,9 @@ mod tests {
             },
         })
     }
-
     fn reputation() -> Arc<dyn ReputationNativeOutcomeAdmissionApiV1> {
         Arc::new(ReputationProbe)
     }
-
     #[test]
     fn exact_configured_provider_is_live_qualified_before_launch() {
         let capture = prepare_capture(
@@ -368,7 +338,6 @@ mod tests {
             .validate_expected_binding(HANDLE, qualification(7), 16)
             .expect("exact binding");
     }
-
     #[test]
     fn provider_revision_substitution_fails_startup() {
         let error = prepare_capture(
@@ -386,7 +355,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn malformed_pending_readback_fails_before_torii_launch() {
         let error = prepare_capture(
@@ -404,7 +372,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn disabled_service_rejects_injected_provider() {
         let error = prepare_capture(
@@ -417,7 +384,6 @@ mod tests {
         .expect_err("disabled provider injection must fail");
         assert_eq!(error, StreamTokenGatewayRuntimeErrorV1::UnexpectedProvider);
     }
-
     #[test]
     fn enabled_service_requires_active_reputation_callback() {
         let error = prepare_capture(

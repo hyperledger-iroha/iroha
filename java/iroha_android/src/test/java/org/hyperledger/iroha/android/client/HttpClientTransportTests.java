@@ -5,6 +5,9 @@ import static org.hyperledger.iroha.android.client.CanonicalRequestSigningTestSu
 import static org.hyperledger.iroha.android.client.CanonicalRequestSigningTestSupport.signedClientConfig;
 import static org.hyperledger.iroha.android.client.HttpClientTransportSubmissionContractTests.compatibleCapabilitiesResponse;
 import static org.hyperledger.iroha.android.client.HttpClientTransportSubmissionContractTests.isCapabilitiesRequest;
+import static org.hyperledger.iroha.android.client.HttpClientTransportRamLfeTestSupport.ramLfeExecuteResponseJson;
+import static org.hyperledger.iroha.android.client.HttpClientTransportRamLfeTestSupport.ramLfeReceiptVerifyResponseJson;
+import static org.hyperledger.iroha.android.client.HttpClientTransportRamLfeTestSupport.applicationAuth;
 
 import java.net.URI;
 import java.net.URLEncoder;
@@ -92,7 +95,6 @@ public final class HttpClientTransportTests {
   }
 
   private HttpClientTransportTests() {}
-
   public static void main(final String[] args) throws Exception {
     submitBuildsToriiRequest();
     submitPropagatesExecutorFailure();
@@ -124,6 +126,8 @@ public final class HttpClientTransportTests {
     identifierClaimLookupAllowsNotFound();
     identifierClaimRecordParserRejectsNonExactClaimFields();
     identifierClaimReceiptUsesAccountPath();
+    identifierClaimReceiptRejectsPathSubstitutionBeforeDispatch();
+    HttpClientTransportApplicationPostAuthTests.runAll();
     ramLfeExecuteRequestParsesResponse();
     ramLfeExecuteRequestAllowsNotFound();
     ramLfeReceiptVerifyUsesRawReceipt();
@@ -1554,7 +1558,7 @@ public final class HttpClientTransportTests {
         + "}";
   }
 
-  private static String identifierOpeningJson(final RamLfeOutputOpening opening) {
+  static String identifierOpeningJson(final RamLfeOutputOpening opening) {
     final RamLfeOutputOpeningPayload payload = opening.payload();
     final String expires =
         payload.expiresAtMs() == null ? "" : ",\"expires_at_ms\":" + payload.expiresAtMs();
@@ -1584,7 +1588,7 @@ public final class HttpClientTransportTests {
     return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
   }
 
-  private static RamLfeOutputOpening sampleOpening(final String programId) {
+  static RamLfeOutputOpening sampleOpening(final String programId) {
     return new RamLfeOutputOpening(
         new RamLfeOutputOpeningPayload(
             programId,
@@ -1627,11 +1631,16 @@ public final class HttpClientTransportTests {
         new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+            executor, signedClientConfig("https://torii.example"));
 
     final Optional<IdentifierResolutionReceipt> response =
-        transport.resolveIdentifier(" phone#retail ", "0xABCD", payload.opening()).join();
+        transport
+            .resolveIdentifier(
+                " phone#retail ",
+                "0xABCD",
+                payload.opening(),
+                applicationAuth(TestAccountIds.ed25519Authority(0x33), "identifier-resolve-1"))
+            .join();
     assert response.isPresent() : "Expected identifier resolution receipt";
     final IdentifierResolutionReceipt receipt = response.orElseThrow();
     assert "phone#retail".equals(receipt.policyId()) : "Policy id mismatch";
@@ -1662,6 +1671,11 @@ public final class HttpClientTransportTests {
         : "Identifier resolve URI mismatch";
     assert request.headers().getOrDefault("Content-Type", List.of()).contains("application/json")
         : "Identifier resolve must send JSON";
+    assert request.headers().containsKey(CanonicalRequestSigner.HEADER_SIGNATURE)
+        : "Identifier resolve must carry canonical account authentication";
+    assert request.replayPolicy()
+            == org.hyperledger.iroha.android.client.transport.RequestReplayPolicy.ONE_SHOT
+        : "Identifier resolve must be one-shot";
     final String requestBody = readBody(request);
     assert requestBody.contains("\"policy_id\":\"phone#retail\"")
         : "Identifier resolve payload must include policy id";
@@ -1701,11 +1715,16 @@ public final class HttpClientTransportTests {
         new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+            executor, signedClientConfig("https://torii.example"));
 
     final Optional<IdentifierResolutionReceipt> response =
-        transport.resolveIdentifier("email#retail", "ABCD", payload.opening()).join();
+        transport
+            .resolveIdentifier(
+                "email#retail",
+                "ABCD",
+                payload.opening(),
+                applicationAuth(TestAccountIds.ed25519Authority(0x33), "identifier-resolve-2"))
+            .join();
     assert response.isPresent() : "Expected structured identifier resolution receipt";
     final IdentifierResolutionReceipt receipt = response.orElseThrow();
     assert "email#retail".equals(receipt.policyId()) : "Structured policy id mismatch";
@@ -1739,11 +1758,16 @@ public final class HttpClientTransportTests {
     final StubResponseExecutor executor = new StubResponseExecutor(404, new byte[0], "not found");
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+            executor, signedClientConfig("https://torii.example"));
 
     final Optional<IdentifierResolutionReceipt> response =
-        transport.resolveIdentifier("phone#retail", "0xABCD", sampleOpening("identifier_lookup_retail")).join();
+        transport
+            .resolveIdentifier(
+                "phone#retail",
+                "0xABCD",
+                sampleOpening("identifier_lookup_retail"),
+                applicationAuth(TestAccountIds.ed25519Authority(0x33), "identifier-resolve-3"))
+            .join();
     assert response.isEmpty() : "404 identifier resolution should return Optional.empty";
 
     final TransportRequest request = executor.lastRequest();
@@ -1926,11 +1950,17 @@ public final class HttpClientTransportTests {
         new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+            executor, signedClientConfig("https://torii.example/api"));
 
     final Optional<IdentifierResolutionReceipt> response =
-        transport.issueIdentifierClaimReceipt(accountId, "phone#retail", "ABCD", payload.opening()).join();
+        transport
+            .issueIdentifierClaimReceipt(
+                accountId,
+                "phone#retail",
+                "ABCD",
+                payload.opening(),
+                applicationAuth(accountId, "identifier-claim-1"))
+            .join();
     assert response.isPresent() : "Claim receipt should parse";
     assert ("opaque:" + "44".repeat(32)).equals(response.orElseThrow().opaqueId())
         : "Opaque id mismatch";
@@ -1951,6 +1981,26 @@ public final class HttpClientTransportTests {
         : "Identifier claim payload must include output opening";
   }
 
+  private static void identifierClaimReceiptRejectsPathSubstitutionBeforeDispatch() {
+    final CapturingExecutor executor = new CapturingExecutor();
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(executor, signedClientConfig("https://torii.example"));
+    final String pathAccount = TestAccountIds.ed25519Authority(0x33);
+    final ToriiCanonicalRequestAuth foreignAuth =
+        applicationAuth(TestAccountIds.ed25519Authority(0x34), "identifier-claim-substitution");
+
+    expectIllegalArgument(
+        () ->
+            transport.issueIdentifierClaimReceipt(
+                pathAccount,
+                "phone#retail",
+                "ABCD",
+                sampleOpening("identifier_lookup_retail"),
+                foreignAuth),
+        "claim receipt must reject a substituted path account before dispatch");
+    assert executor.lastRequest == null : "substituted claim must not dispatch";
+  }
+
   private static void ramLfeExecuteRequestParsesResponse() {
     final String outputHash = "44".repeat(32);
     final String json = ramLfeExecuteResponseJson();
@@ -1958,11 +2008,15 @@ public final class HttpClientTransportTests {
         new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+            executor, signedClientConfig("https://torii.example"));
 
     final Optional<RamLfeExecuteResponse> response =
-        transport.executeRamLfeProgram("identifier_lookup_retail", "0xABCD").join();
+        transport
+            .executeRamLfeProgram(
+                "identifier_lookup_retail",
+                "0xABCD",
+                applicationAuth(TestAccountIds.ed25519Authority(0x33), "ram-lfe-execute-1"))
+            .join();
     assert response.isPresent() : "Expected RAM-LFE execute response";
     final RamLfeExecuteResponse execute = response.orElseThrow();
     assert "identifier_lookup_retail".equals(execute.programId()) : "Program id mismatch";
@@ -1989,11 +2043,15 @@ public final class HttpClientTransportTests {
     final StubResponseExecutor executor = new StubResponseExecutor(404, new byte[0], "not found");
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+            executor, signedClientConfig("https://torii.example"));
 
     final Optional<RamLfeExecuteResponse> response =
-        transport.executeRamLfeProgram("identifier_lookup_retail", "ABCD").join();
+        transport
+            .executeRamLfeProgram(
+                "identifier_lookup_retail",
+                "ABCD",
+                applicationAuth(TestAccountIds.ed25519Authority(0x33), "ram-lfe-execute-2"))
+            .join();
     assert response.isEmpty() : "404 RAM-LFE execute should return Optional.empty";
 
     final TransportRequest request = executor.lastRequest();
@@ -2008,8 +2066,7 @@ public final class HttpClientTransportTests {
         new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+            executor, signedClientConfig("https://torii.example/api"));
     final Map<String, Object> verificationMode = new LinkedHashMap<>();
     verificationMode.put("mode", "Signed");
     verificationMode.put("value", null);
@@ -2028,7 +2085,12 @@ public final class HttpClientTransportTests {
     receipt.put("signature", "aa".repeat(64));
 
     final RamLfeReceiptVerifyResponse response =
-        transport.verifyRamLfeReceipt(receipt, "C0FFEE").join();
+        transport
+            .verifyRamLfeReceipt(
+                receipt,
+                "C0FFEE",
+                applicationAuth(TestAccountIds.ed25519Authority(0x33), "ram-lfe-verify-1"))
+            .join();
     assert response.valid() : "RAM-LFE verify response should be valid";
     assert "identifier_lookup_retail".equals(response.programId()) : "Program id mismatch";
     assert Boolean.TRUE.equals(response.outputHashMatches()) : "Output-hash match mismatch";
@@ -2151,68 +2213,6 @@ public final class HttpClientTransportTests {
       assert expected.getMessage() == null || expected.getMessage().contains(label)
           : label + " failure should mention field, got " + expected;
     }
-  }
-
-  private static String ramLfeExecuteResponseJson() {
-    return "{"
-        + "\"program_id\":\"identifier_lookup_retail\","
-        + "\"opaque_hash\":\""
-        + "11".repeat(32)
-        + "\","
-        + "\"receipt_hash\":\""
-        + "22".repeat(32)
-        + "\","
-        + "\"output_ciphertext\":\"abcd\","
-        + "\"output_hash\":\""
-        + "44".repeat(32)
-        + "\","
-        + "\"associated_data_hash\":\""
-        + "55".repeat(32)
-        + "\","
-        + "\"executed_at_ms\":42,"
-        + "\"expires_at_ms\":142,"
-        + "\"backend\":\"bfv-programmed-sha3-256-v1\","
-        + "\"verification_mode\":\"signed\","
-        + "\"receipt\":{"
-        + "\"payload\":{"
-        + "\"program_id\":{\"name\":\"identifier_lookup_retail\"},"
-        + "\"program_digest\":\"hash:"
-        + "11".repeat(32).toUpperCase()
-        + "#ABCD\","
-        + "\"backend\":\"bfv-programmed-sha3-256-v1\","
-        + "\"verification_mode\":{\"mode\":\"Signed\",\"value\":null},"
-        + "\"output_hash\":\"hash:"
-        + "22".repeat(32).toUpperCase()
-        + "#BCDE\","
-        + "\"associated_data_hash\":\"hash:"
-        + "33".repeat(32).toUpperCase()
-        + "#CDEF\","
-        + "\"executed_at_ms\":42,"
-        + "\"expires_at_ms\":142"
-        + "},"
-        + "\"signature\":\""
-        + "aa".repeat(64)
-        + "\""
-        + "},"
-        + "\"output_opening\":"
-        + identifierOpeningJson(sampleOpening("identifier_lookup_retail"))
-        + "}";
-  }
-
-  private static String ramLfeReceiptVerifyResponseJson() {
-    return "{"
-        + "\"valid\":true,"
-        + "\"program_id\":\"identifier_lookup_retail\","
-        + "\"backend\":\"bfv-programmed-sha3-256-v1\","
-        + "\"verification_mode\":\"signed\","
-        + "\"output_hash\":\""
-        + "44".repeat(32)
-        + "\","
-        + "\"associated_data_hash\":\""
-        + "55".repeat(32)
-        + "\","
-        + "\"output_hash_matches\":true"
-        + "}";
   }
 
   private static void vpnQuoteRequestSignsCanonicalBodyAndParsesOpenLeaseInstruction()
@@ -5807,7 +5807,7 @@ public final class HttpClientTransportTests {
     assert executor.invalidated : "invalidateAndCancel should reach the executor";
   }
 
-  private static ToriiCanonicalRequestAuth canonicalAuth(
+  static ToriiCanonicalRequestAuth canonicalAuth(
       final String accountId,
       final KeyPair keyPair,
       final Long timestampMs,

@@ -3,15 +3,11 @@
 //! These structs provide a deterministic interface between the ledger and
 //! out-of-process risk engines. They are minimal yet feature-complete enough
 //! to cover synchronous scoring, signed assessments, and governance exports.
-
 use std::{string::String, vec::Vec};
-
 use norito::codec::{Decode, Encode};
-
 #[cfg(feature = "governance")]
 use crate::governance::types::{GovernanceEnactment, GovernanceParameters};
 use crate::{account::AccountId, asset::AssetId};
-
 /// Operation that triggered a fraud screening request.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum RiskOperation {
@@ -25,7 +21,6 @@ pub enum RiskOperation {
     /// Custom host-defined action encoded as a lower-case slug.
     Custom(String),
 }
-
 /// Rich context supplied with a [`RiskQuery`].
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct RiskContext {
@@ -36,7 +31,6 @@ pub struct RiskContext {
     /// Free-form reason code (e.g., "`manual_review`", "velocity").
     pub reason: Option<String>,
 }
-
 /// Feature inputs provided to the risk engine.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct FeatureInput {
@@ -45,7 +39,6 @@ pub struct FeatureInput {
     /// Blake2b-32 hash of the feature payload to avoid leaking PII on-chain.
     pub value_hash: [u8; 32],
 }
-
 /// Ledger-facing query emitted before a transaction is executed.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct RiskQuery {
@@ -64,7 +57,6 @@ pub struct RiskQuery {
     /// Additional contextual metadata.
     pub context: RiskContext,
 }
-
 /// Recommended action for a [`FraudAssessment`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum AssessmentDecision {
@@ -75,7 +67,6 @@ pub enum AssessmentDecision {
     /// Abort the transaction immediately.
     Deny,
 }
-
 /// Individual rule outcome contributing to the overall score.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Ord, PartialOrd)]
 pub struct RuleOutcome {
@@ -86,7 +77,6 @@ pub struct RuleOutcome {
     /// Human-readable rationale anchored in observability dashboards.
     pub rationale: Option<String>,
 }
-
 /// Response returned by the risk engine.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct FraudAssessment {
@@ -107,7 +97,6 @@ pub struct FraudAssessment {
     /// Optional signature over the assessment payload (Norito encoding).
     pub signature: Option<Vec<u8>>,
 }
-
 impl FraudAssessment {
     /// Construct a new assessment ensuring deterministic rule ordering.
     pub fn new(mut rule_outcomes: Vec<RuleOutcome>, rest: FraudAssessmentParts) -> Self {
@@ -124,7 +113,6 @@ impl FraudAssessment {
         }
     }
 }
-
 /// Helper struct for [`FraudAssessment::new`] to keep argument lists readable.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FraudAssessmentParts {
@@ -143,7 +131,6 @@ pub struct FraudAssessmentParts {
     /// Optional detached signature over the Norito-encoded assessment.
     pub signature: Option<Vec<u8>>,
 }
-
 /// Aggregated export for governance and auditor tooling.
 #[cfg(feature = "governance")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -161,7 +148,6 @@ pub struct GovernanceExport {
     /// Aggregated decision counts.
     pub aggregates: Vec<DecisionAggregate>,
 }
-
 /// Summary of decisions used for governance exports.
 #[cfg(feature = "governance")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
@@ -171,22 +157,18 @@ pub struct DecisionAggregate {
     /// Count of occurrences.
     pub count: u64,
 }
-
 #[cfg(all(test, feature = "governance"))]
 mod tests {
     use iroha_crypto::KeyPair;
-
     use super::*;
     use crate::{
         asset::id::AssetDefinitionId,
         domain::DomainId,
         governance::types::{AtWindow, ProposalId},
     };
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked fraud fixture keypair")
     }
-
     #[test]
     fn risk_query_encodes() {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -197,7 +179,6 @@ mod tests {
                 "rose".parse().unwrap(),
             );
         let asset_id = AssetId::of(asset_def, account_id.clone());
-
         let query = RiskQuery {
             query_id: [0xAA; 32],
             subject: account_id,
@@ -216,10 +197,8 @@ mod tests {
                 reason: Some("velocity".to_string()),
             },
         };
-
         assert!(!Encode::encode(&query).is_empty());
     }
-
     #[test]
     fn assessment_orders_rules() {
         let outcome_a = RuleOutcome {
@@ -232,7 +211,6 @@ mod tests {
             score_delta_bps: -10,
             rationale: Some("velocity".to_string()),
         };
-
         let parts = FraudAssessmentParts {
             query_id: [0xBB; 32],
             engine_id: "risk-engine-eu1".to_string(),
@@ -242,7 +220,6 @@ mod tests {
             generated_at_ms: 1_700_000_100_000,
             signature: None,
         };
-
         let assessment = FraudAssessment::new(vec![outcome_a.clone(), outcome_b.clone()], parts);
         let ids: Vec<_> = assessment
             .rule_outcomes
@@ -252,7 +229,6 @@ mod tests {
         assert_eq!(ids, vec!["rule.alpha", "rule.zeta"]);
         assert!(!Encode::encode(&assessment).is_empty());
     }
-
     #[test]
     fn governance_export_encodes() {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -263,7 +239,6 @@ mod tests {
                 "rose".parse().unwrap(),
             );
         let voting_asset = AssetId::of(asset_def, account_id);
-
         let params = GovernanceParameters {
             voting_asset,
             base_lock_period_blocks: 1440,
@@ -277,7 +252,6 @@ mod tests {
             deposit_per_byte: 5_u64.into(),
             deposit_per_block: 50_u64.into(),
         };
-
         let export = GovernanceExport {
             generated_at_ms: 1_700_000_200_000,
             parameters: params,
@@ -296,7 +270,6 @@ mod tests {
                 count: 42,
             }],
         };
-
         assert!(!Encode::encode(&export).is_empty());
     }
 }

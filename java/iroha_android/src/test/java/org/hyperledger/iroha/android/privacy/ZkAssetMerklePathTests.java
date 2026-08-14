@@ -31,6 +31,7 @@ public final class ZkAssetMerklePathTests {
     localProviderComputesAndVerifiesCurrentFrontierPath();
     localProviderRejectsAmbiguousOrMismatchedFrontiers();
     toriiProviderFetchesAndValidatesNodeEndpointPaths();
+    toriiProviderRejectsReusableExplicitFreshness();
     toriiProviderRejectsPathCountDriftAndReorderedNodeResponses();
     toriiProviderRejectsMismatchedNodeCommitment();
     toriiProviderRejectsNonVerifyingNodePath();
@@ -173,6 +174,24 @@ public final class ZkAssetMerklePathTests {
       assert expected.getCause().getMessage().contains("commitment mismatch at index 0")
           : "wrong message";
     }
+  }
+
+  private static void toriiProviderRejectsReusableExplicitFreshness() {
+    final ConfidentialAssetToriiClient client =
+        ConfidentialAssetToriiClient.builder()
+            .executor(new CapturingExecutor("{}"))
+            .baseUri(URI.create("https://example.com"))
+            .localSigningContext(new LocalSigningContext(NETWORK_ID))
+            .build();
+    assertThrows(
+        () ->
+            new ToriiZkAssetMerklePathProvider(
+                client,
+                new ToriiCanonicalRequestAuth(
+                    "alice",
+                    ZkAssetMerklePathTests::sign,
+                    Long.valueOf(1_700_000_000_000L),
+                    "reused-provider-nonce")));
   }
 
   private static void toriiProviderRejectsMismatchedNodeCommitment() {
@@ -342,10 +361,7 @@ public final class ZkAssetMerklePathTests {
 
   private static ToriiCanonicalRequestAuth canonicalAuth() {
     return new ToriiCanonicalRequestAuth(
-        "alice",
-        ZkAssetMerklePathTests::sign,
-        Long.valueOf(1_700_000_000_000L),
-        "zk-provider-1");
+        "alice", ZkAssetMerklePathTests::sign);
   }
 
   private static KeyPair generateKeyPair() {

@@ -1,9 +1,6 @@
 //! Build-time embedding for immutable mobile proving artifacts.
-
 use std::{env, fs, path::PathBuf};
-
 use sha2::{Digest as _, Sha256};
-
 const ARTIFACTS: [(&str, &str, &str); 2] = [
     (
         "TRANSFER_V2",
@@ -16,7 +13,6 @@ const ARTIFACTS: [(&str, &str, &str); 2] = [
         "kagemusha-unshield-v3-prover.bin",
     ),
 ];
-
 fn main() {
     println!("cargo:rerun-if-env-changed=CONNECT_NORITO_SOURCE_REVISION");
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo sets OUT_DIR"));

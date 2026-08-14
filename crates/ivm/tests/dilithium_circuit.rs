@@ -1,10 +1,8 @@
 //! Dilithium circuit checks for the Halo2 verifier.
-
 #![cfg(feature = "ivm_zk_tests")]
 use ivm::halo2::{DilithiumLevel, DilithiumVerifyCircuit};
 use pqcrypto_mldsa::{mldsa44 as dilithium2, mldsa65 as dilithium3};
 use pqcrypto_traits::sign::{DetachedSignature, PublicKey};
-
 #[test]
 fn dilithium2_circuit_ok() {
     let (pk, sk) = dilithium2::keypair();
@@ -19,7 +17,6 @@ fn dilithium2_circuit_ok() {
     };
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn dilithium3_circuit_bad_sig() {
     let (pk, sk) = dilithium3::keypair();
@@ -38,7 +35,6 @@ fn dilithium3_circuit_bad_sig() {
     };
     assert!(circuit.verify().is_err());
 }
-
 #[test]
 fn dilithium3_circuit_all_zero_signature_is_false() {
     let (pk, _) = dilithium3::keypair();
@@ -50,10 +46,8 @@ fn dilithium3_circuit_all_zero_signature_is_false() {
         message: b"dilithium3 zero signature",
         result: false,
     };
-
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn dilithium3_circuit_all_zero_public_key_is_false() {
     let (_, sk) = dilithium3::keypair();
@@ -67,6 +61,5 @@ fn dilithium3_circuit_all_zero_public_key_is_false() {
         message: msg,
         result: false,
     };
-
     assert!(circuit.verify().is_ok());
 }

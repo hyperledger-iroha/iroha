@@ -1,26 +1,20 @@
 //! Shared `kagami` binary resolution helpers for integration tests.
-
 use std::{
     env,
     path::{Path, PathBuf},
     process::Command,
     sync::OnceLock,
 };
-
 use eyre::{Result, WrapErr, ensure, eyre};
 use iroha_test_network::{
     ReleasePrebuiltBinary, resolve_release_prebuilt_binary, revalidate_release_prebuilt_binary,
 };
-
 use crate::process::{build_timeout, output_with_timeout};
-
 const KAGAMI_BIN_ENV: &str = "KAGAMI_BIN";
 const IROHA_TEST_SKIP_BUILD_ENV: &str = "IROHA_TEST_SKIP_BUILD";
 const IROHA_TEST_TARGET_DIR_ENV: &str = "IROHA_TEST_TARGET_DIR";
 const IROHA_TEST_TARGET_SUBDIR: &str = "iroha-test-network";
-
 static KAGAMI_BIN: OnceLock<PathBuf> = OnceLock::new();
-
 /// Resolve the `kagami` binary path for localnet integration tests.
 ///
 /// Resolution order:
@@ -44,12 +38,10 @@ pub fn resolve_kagami_bin() -> Result<PathBuf> {
             return Ok(path.clone());
         }
     }
-
     let resolved = resolve_kagami_bin_uncached()?;
     let _ = KAGAMI_BIN.set(resolved.clone());
     Ok(resolved)
 }
-
 fn resolve_kagami_bin_uncached() -> Result<PathBuf> {
     if let Some(expected) = resolve_release_prebuilt_binary(ReleasePrebuiltBinary::Kagami)? {
         if let Ok(path) = env::var(KAGAMI_BIN_ENV) {
@@ -62,7 +54,6 @@ fn resolve_kagami_bin_uncached() -> Result<PathBuf> {
         }
         return Ok(expected);
     }
-
     if let Ok(path) = env::var(KAGAMI_BIN_ENV) {
         return canonicalize_repo_relative(PathBuf::from(path))
             .wrap_err_with(|| format!("resolve path from {KAGAMI_BIN_ENV}"));
@@ -71,24 +62,20 @@ fn resolve_kagami_bin_uncached() -> Result<PathBuf> {
         return canonicalize_repo_relative(PathBuf::from(path))
             .wrap_err("resolve path from CARGO_BIN_EXE_kagami");
     }
-
     let repo = repo_root();
     let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_owned());
     let bin = bin_name("kagami");
     let candidates = kagami_candidates(&repo, &profile, &bin);
-
     if skip_build_enabled() {
         return try_candidates(&candidates).ok_or_else(|| {
             eyre!("kagami binary not found in target roots and {IROHA_TEST_SKIP_BUILD_ENV}=1")
         });
     }
-
     // Existing candidates can predate the current checkout. Always let Cargo
     // validate/rebuild the source-bound isolated target before selecting one.
     build_kagami(&repo, &profile)?;
     try_candidates(&candidates).ok_or_else(|| eyre!("kagami binary not found after build"))
 }
-
 fn kagami_candidates(repo: &Path, profile: &str, bin: &str) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     let mut push_root = |root: PathBuf| {
@@ -102,7 +89,6 @@ fn kagami_candidates(repo: &Path, profile: &str, bin: &str) -> Vec<PathBuf> {
             }
         }
     };
-
     // Prefer the exact root that `build_kagami` validates. In particular, the
     // release corridor sets both target variables to keep the outer test build
     // and re-entrant program builds on separate Cargo locks.
@@ -115,10 +101,8 @@ fn kagami_candidates(repo: &Path, profile: &str, bin: &str) -> Vec<PathBuf> {
     }
     push_root(default_test_target_dir(repo));
     push_root(repo.join("target"));
-
     candidates
 }
-
 fn resolve_target_dir(repo: &Path, path: PathBuf) -> PathBuf {
     if path.is_absolute() {
         path
@@ -126,11 +110,9 @@ fn resolve_target_dir(repo: &Path, path: PathBuf) -> PathBuf {
         repo.join(path)
     }
 }
-
 fn default_test_target_dir(repo: &Path) -> PathBuf {
     repo.join("target").join(IROHA_TEST_TARGET_SUBDIR)
 }
-
 fn kagami_build_target_dir(repo: &Path) -> PathBuf {
     if let Ok(path) = env::var(IROHA_TEST_TARGET_DIR_ENV) {
         return resolve_target_dir(repo, PathBuf::from(path));
@@ -140,7 +122,6 @@ fn kagami_build_target_dir(repo: &Path) -> PathBuf {
     }
     default_test_target_dir(repo)
 }
-
 fn canonicalize_repo_relative(path: PathBuf) -> Result<PathBuf> {
     let candidate = if path.is_absolute() {
         path
@@ -151,13 +132,11 @@ fn canonicalize_repo_relative(path: PathBuf) -> Result<PathBuf> {
         .canonicalize()
         .wrap_err_with(|| format!("canonicalize {}", candidate.display()))
 }
-
 fn skip_build_enabled() -> bool {
     env::var(IROHA_TEST_SKIP_BUILD_ENV)
         .ok()
         .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
-
 fn build_kagami(repo: &Path, profile: &str) -> Result<()> {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let target_dir = kagami_build_target_dir(repo);
@@ -171,7 +150,6 @@ fn build_kagami(repo: &Path, profile: &str) -> Result<()> {
     );
     Ok(())
 }
-
 fn kagami_build_command(cargo: &str, repo: &Path, target_dir: &Path, profile: &str) -> Command {
     let mut command = Command::new(cargo);
     command
@@ -188,14 +166,12 @@ fn kagami_build_command(cargo: &str, repo: &Path, target_dir: &Path, profile: &s
     }
     command
 }
-
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("integration_tests manifest dir should have repo root parent")
         .to_path_buf()
 }
-
 fn bin_name(raw: &str) -> String {
     if cfg!(windows) {
         format!("{raw}.exe")
@@ -203,7 +179,6 @@ fn bin_name(raw: &str) -> String {
         raw.to_owned()
     }
 }
-
 fn try_candidates(candidates: &[PathBuf]) -> Option<PathBuf> {
     for candidate in candidates {
         if let Ok(path) = candidate.canonicalize() {
@@ -212,11 +187,9 @@ fn try_candidates(candidates: &[PathBuf]) -> Option<PathBuf> {
     }
     None
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn kagami_build_command_is_locked_and_uses_isolated_target() {
         let repo = Path::new("/workspace/iroha");
@@ -226,7 +199,6 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-
         assert_eq!(
             args,
             [
@@ -249,7 +221,6 @@ mod tests {
             Some(target.as_os_str())
         );
     }
-
     #[test]
     fn kagami_debug_build_command_uses_default_profile() {
         let command = kagami_build_command(
@@ -262,7 +233,6 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-
         assert!(!args.iter().any(|arg| arg == "--profile"));
     }
 }

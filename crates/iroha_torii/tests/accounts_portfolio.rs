@@ -1,9 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii UAID portfolio endpoint tests.
 #![cfg(feature = "app_api")]
-
 use std::sync::Arc;
-
 use axum::{Router, extract::connect_info::ConnectInfo};
 use http::StatusCode;
 use http_body_util::BodyExt as _;
@@ -30,13 +28,10 @@ use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 use norito::json::{self, Value};
 use tower::ServiceExt as _;
-
 #[path = "fixtures.rs"]
 mod fixtures;
-
 const ACCOUNT_SIGNATORY: &str =
     "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
-
 #[tokio::test]
 async fn accounts_portfolio_endpoint_returns_snapshot() {
     let (app, uaid) = setup_portfolio_app(|state| {
@@ -74,7 +69,6 @@ async fn accounts_portfolio_endpoint_returns_snapshot() {
         vec!["250".to_string(), "500".to_string()]
     );
 }
-
 #[tokio::test]
 async fn accounts_portfolio_snapshot_matches_fixture() {
     let (app, uaid) = setup_portfolio_app(seed_fixture_portfolio_accounts);
@@ -99,7 +93,6 @@ async fn accounts_portfolio_snapshot_matches_fixture() {
     .expect("portfolio fixture JSON");
     assert_eq!(value, fixture);
 }
-
 #[tokio::test]
 async fn accounts_portfolio_filters_by_asset_id() {
     let (app, uaid) = setup_portfolio_app(|state| {
@@ -126,7 +119,6 @@ async fn accounts_portfolio_filters_by_asset_id() {
         .as_str()
         .expect("baseline asset id")
         .to_owned();
-
     let mut req = fixtures::get_request(
         &(format!(
             "/v1/accounts/uaid:{uaid_hex}/portfolio?asset_id={}",
@@ -153,7 +145,6 @@ async fn accounts_portfolio_filters_by_asset_id() {
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0]["asset_id"], Value::from(asset_id));
 }
-
 fn setup_portfolio_app<SeedFn>(seed_fn: SeedFn) -> (Router, UniversalAccountId)
 where
     SeedFn: FnOnce(&Arc<State>) -> UniversalAccountId,
@@ -166,12 +157,10 @@ where
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let uaid = seed_fn(&state);
-
     let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
     let app = torii.router();
     (app, uaid)
 }
-
 fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<AccountId>) {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii_portfolio"));
     let domain_id: DomainId = DomainId::try_new("portfolio", "universal").unwrap();
@@ -200,7 +189,6 @@ fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<Accou
         Mint::asset_quantity(500u64, AssetId::new(cash_id, first_account.clone())).into(),
         Mint::asset_quantity(250u64, AssetId::new(points_id, first_account.clone())).into(),
     ];
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
@@ -232,10 +220,8 @@ fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<Accou
     }
     tx.apply();
     block.commit().unwrap();
-
     (uaid, vec![first_account])
 }
-
 fn seed_fixture_portfolio_accounts(state: &Arc<State>) -> UniversalAccountId {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii_fixture"));
     let domain_id: DomainId = DomainId::try_new("portfolio_fixture", "universal").unwrap();
@@ -264,7 +250,6 @@ fn seed_fixture_portfolio_accounts(state: &Arc<State>) -> UniversalAccountId {
         Mint::asset_quantity(875u64, AssetId::new(cash_id, first_account.clone())).into(),
         Mint::asset_quantity(320u64, AssetId::new(points_id, first_account.clone())).into(),
     ];
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
@@ -296,10 +281,8 @@ fn seed_fixture_portfolio_accounts(state: &Arc<State>) -> UniversalAccountId {
     }
     tx.apply();
     block.commit().unwrap();
-
     uaid
 }
-
 fn account_id_from_signatory(_domain_id: DomainId, signatory_hex: &str) -> AccountId {
     let normalized = signatory_hex
         .strip_prefix("ed0120")
@@ -308,7 +291,6 @@ fn account_id_from_signatory(_domain_id: DomainId, signatory_hex: &str) -> Accou
         .expect("signatory literal parses into a public key");
     AccountId::new(public_key)
 }
-
 fn account_id_from_seed(_domain_id: &DomainId, seed_byte: u8) -> AccountId {
     let seed = vec![seed_byte; 32];
     let (public, _) = KeyPair::try_from_seed(seed, Algorithm::Ed25519)

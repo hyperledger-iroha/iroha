@@ -1,14 +1,10 @@
 //! Resolver directory events exposed via the data event stream.
-
 use iroha_data_model_derive::model;
-
 pub use self::model::*;
 use super::*;
-
 #[model]
 mod model {
     use super::*;
-
     /// Events emitted by the resolver attestation directory governance lane.
     #[derive(
         Debug,

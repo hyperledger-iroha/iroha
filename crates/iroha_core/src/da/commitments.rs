@@ -3,12 +3,10 @@
 //! This module reads Torii-emitted `da-commitment-*.norito` files from the
 //! configured spool directory and assembles a deterministic bundle ready to
 //! embed into a block payload.
-
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
-
 use iroha_data_model::{
     da::{
         commitment::{DaCommitmentBundle, DaCommitmentRecord},
@@ -18,9 +16,7 @@ use iroha_data_model::{
 };
 use norito::decode_from_bytes;
 use thiserror::Error;
-
 use crate::da::{ReplayFingerprint, commitment_store::DaCommitmentStore};
-
 /// Errors encountered while loading DA commitment artefacts from disk.
 #[derive(Debug, Error)]
 pub enum DaSpoolError {
@@ -117,7 +113,6 @@ pub enum DaSpoolError {
         sequence: u64,
     },
 }
-
 /// Load all DA commitment records from the spool directory.
 ///
 /// Commitment-record files are filtered by filename (`da-commitment-*.norito`,
@@ -141,7 +136,6 @@ pub fn load_commitment_bundle(
     let Some(dir_entries) = open_commitment_spool_dir(spool_dir)? else {
         return Ok(None);
     };
-
     let mut paths = Vec::new();
     for entry in dir_entries {
         let entry = entry.map_err(|source| DaSpoolError::ReadEntry {
@@ -155,7 +149,6 @@ pub fn load_commitment_bundle(
         paths.push(path);
     }
     paths.sort();
-
     for path in paths {
         let bytes = read_regular_commitment_file(&path)?;
         let (filename_key, record) = decode_commitment_record(&bytes, &path)?;
@@ -187,15 +180,12 @@ pub fn load_commitment_bundle(
         }
         records.push(record);
     }
-
     if records.is_empty() {
         return Ok(None);
     }
-
     records.sort();
     Ok(Some(DaCommitmentBundle::new(records)))
 }
-
 fn open_commitment_spool_dir(spool_dir: &Path) -> Result<Option<std::fs::ReadDir>, DaSpoolError> {
     let metadata = match std::fs::symlink_metadata(spool_dir) {
         Ok(metadata) => metadata,
@@ -223,7 +213,6 @@ fn open_commitment_spool_dir(spool_dir: &Path) -> Result<Option<std::fs::ReadDir
             source,
         })
 }
-
 fn read_regular_commitment_file(path: &Path) -> Result<Vec<u8>, DaSpoolError> {
     let metadata = std::fs::symlink_metadata(path).map_err(|source| DaSpoolError::ReadFile {
         path: path.to_path_buf(),
@@ -245,7 +234,6 @@ fn read_regular_commitment_file(path: &Path) -> Result<Vec<u8>, DaSpoolError> {
     revalidate_regular_commitment_file(path, &metadata, bytes.len())?;
     Ok(bytes)
 }
-
 fn revalidate_regular_commitment_file(
     path: &Path,
     metadata: &std::fs::Metadata,
@@ -278,7 +266,6 @@ fn revalidate_regular_commitment_file(
     }
     Ok(())
 }
-
 /// Load commitments from disk and build an in-memory index for query paths.
 ///
 /// Returns an empty store if no commitments are present. See
@@ -293,7 +280,6 @@ pub fn load_commitment_store(spool_dir: &Path) -> Result<DaCommitmentStore, DaSp
         None => Ok(DaCommitmentStore::default()),
     }
 }
-
 fn is_da_commitment_file(path: &Path) -> Result<bool, DaSpoolError> {
     let Some(name) = path.file_name() else {
         return Ok(false);
@@ -311,20 +297,16 @@ fn is_da_commitment_file(path: &Path) -> Result<bool, DaSpoolError> {
     }
     Ok(false)
 }
-
 #[cfg(unix)]
 fn non_utf8_artifact_name_matches(name: &std::ffi::OsStr, prefix: &[u8], suffix: &[u8]) -> bool {
     use std::os::unix::ffi::OsStrExt;
-
     let bytes = name.as_bytes();
     bytes.starts_with(prefix) && bytes.ends_with(suffix)
 }
-
 #[cfg(not(unix))]
 fn non_utf8_artifact_name_matches(_name: &std::ffi::OsStr, _prefix: &[u8], _suffix: &[u8]) -> bool {
     false
 }
-
 #[derive(Clone, Copy)]
 struct CommitmentFileKey {
     lane_id: LaneId,
@@ -333,7 +315,6 @@ struct CommitmentFileKey {
     storage_ticket: StorageTicketId,
     fingerprint: ReplayFingerprint,
 }
-
 fn parse_commitment_file_key(path: &Path) -> Result<CommitmentFileKey, DaSpoolError> {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return Err(malformed_filename(path));
@@ -344,7 +325,6 @@ fn parse_commitment_file_key(path: &Path) -> Result<CommitmentFileKey, DaSpoolEr
     else {
         return Err(malformed_filename(path));
     };
-
     let mut fields = rest.split('-');
     let Some(lane_hex) = fields.next() else {
         return Err(malformed_filename(path));
@@ -364,13 +344,11 @@ fn parse_commitment_file_key(path: &Path) -> Result<CommitmentFileKey, DaSpoolEr
     if fields.next().is_some() {
         return Err(malformed_filename(path));
     }
-
     let lane_id = parse_fixed_hex_u32(lane_hex, 8, path).map(LaneId::new)?;
     let epoch = parse_fixed_hex_u64(epoch_hex, 16, path)?;
     let sequence = parse_fixed_hex_u64(sequence_hex, 16, path)?;
     let storage_ticket = StorageTicketId::new(parse_fixed_hex_32(ticket_hex, path)?);
     let fingerprint = ReplayFingerprint::from(parse_fixed_hex_32(fingerprint_hex, path)?);
-
     Ok(CommitmentFileKey {
         lane_id,
         epoch,
@@ -379,21 +357,18 @@ fn parse_commitment_file_key(path: &Path) -> Result<CommitmentFileKey, DaSpoolEr
         fingerprint,
     })
 }
-
 fn parse_fixed_hex_u32(value: &str, width: usize, path: &Path) -> Result<u32, DaSpoolError> {
     if value.len() != width || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(malformed_filename(path));
     }
     u32::from_str_radix(value, 16).map_err(|_| malformed_filename(path))
 }
-
 fn parse_fixed_hex_u64(value: &str, width: usize, path: &Path) -> Result<u64, DaSpoolError> {
     if value.len() != width || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(malformed_filename(path));
     }
     u64::from_str_radix(value, 16).map_err(|_| malformed_filename(path))
 }
-
 fn parse_fixed_hex_32(value: &str, path: &Path) -> Result<[u8; 32], DaSpoolError> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(malformed_filename(path));
@@ -402,13 +377,11 @@ fn parse_fixed_hex_32(value: &str, path: &Path) -> Result<[u8; 32], DaSpoolError
     hex::decode_to_slice(value, &mut bytes).map_err(|_| malformed_filename(path))?;
     Ok(bytes)
 }
-
 fn malformed_filename(path: &Path) -> DaSpoolError {
     DaSpoolError::MalformedFilename {
         path: path.to_path_buf(),
     }
 }
-
 fn decode_commitment_record(
     data: &[u8],
     path: &Path,
@@ -436,10 +409,8 @@ fn decode_commitment_record(
             record_ticket: record.storage_ticket,
         });
     }
-
     Ok((filename_key, record))
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Hash, Signature};
@@ -453,9 +424,7 @@ mod tests {
     };
     use norito::to_bytes;
     use tempfile::tempdir;
-
     use super::*;
-
     fn sample_record(lane: u32, seq: u64) -> DaCommitmentRecord {
         DaCommitmentRecord::new(
             LaneId::new(lane),
@@ -472,7 +441,6 @@ mod tests {
                 .expect("checked core DA commitment persistence signature fixture"),
         )
     }
-
     fn commitment_file_name(record: &DaCommitmentRecord, fingerprint: [u8; 32]) -> String {
         format!(
             "da-commitment-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}.norito",
@@ -483,7 +451,6 @@ mod tests {
             fingerprint = hex::encode(fingerprint)
         )
     }
-
     fn commitment_schedule_file_name(record: &DaCommitmentRecord, fingerprint: [u8; 32]) -> String {
         format!(
             "da-commitment-schedule-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}.norito",
@@ -494,38 +461,30 @@ mod tests {
             fingerprint = hex::encode(fingerprint)
         )
     }
-
     #[test]
     fn returns_none_for_missing_dir() {
         let missing = PathBuf::from("this-path-should-not-exist-da-spool");
         assert!(load_commitment_bundle(&missing).unwrap().is_none());
     }
-
     #[test]
     fn loads_and_sorts_commitments() {
         let dir = tempdir().expect("tempdir");
         let record_a = sample_record(2, 5);
         let record_b = sample_record(1, 1);
-
         let bytes_a = to_bytes(&record_a).expect("encode record a");
         let bytes_b = to_bytes(&record_b).expect("encode record b");
-
         let file_a = dir.path().join(commitment_file_name(&record_a, [0xaa; 32]));
         let file_b = dir.path().join(commitment_file_name(&record_b, [0xbb; 32]));
-
         std::fs::write(file_a, bytes_a).expect("write a");
         std::fs::write(file_b, bytes_b).expect("write b");
-
         let bundle = load_commitment_bundle(dir.path())
             .expect("load bundle")
             .expect("bundle present");
-
         assert_eq!(bundle.commitments.len(), 2);
         // Sorted by lane then sequence, so record_b should come first.
         assert_eq!(bundle.commitments[0].lane_id, LaneId::new(1));
         assert_eq!(bundle.commitments[0].sequence, 1);
     }
-
     #[test]
     fn ignores_commitment_schedule_sidecars() {
         let dir = tempdir().expect("tempdir");
@@ -535,18 +494,15 @@ mod tests {
             .join(commitment_schedule_file_name(&record, [0x12; 32]));
         std::fs::write(&schedule_path, b"schedule bytes are not commitment records")
             .expect("write schedule sidecar");
-
         assert!(
             load_commitment_bundle(dir.path())
                 .expect("load schedule-only spool")
                 .is_none(),
             "schedule-only spools should not look like commitment work"
         );
-
         let record_path = dir.path().join(commitment_file_name(&record, [0x13; 32]));
         std::fs::write(record_path, to_bytes(&record).expect("encode record"))
             .expect("write commitment record");
-
         let bundle = load_commitment_bundle(dir.path())
             .expect("load bundle")
             .expect("bundle present");
@@ -556,7 +512,6 @@ mod tests {
             "sidecar should be left for its owner"
         );
     }
-
     #[test]
     fn commitment_store_builds_from_spool() {
         let dir = tempdir().expect("tempdir");
@@ -564,30 +519,25 @@ mod tests {
         let path = dir.path().join(commitment_file_name(&record, [0xcc; 32]));
         let bytes = to_bytes(&record).expect("encode");
         std::fs::write(&path, bytes).expect("write");
-
         let store = load_commitment_store(dir.path()).expect("load store");
         let fetched = store
             .get_by_lane_epoch_sequence(1, 1, 1)
             .expect("commitment present");
         assert_eq!(fetched.commitment.storage_ticket, record.storage_ticket);
     }
-
     #[test]
     fn commitment_bundle_rejects_corrupt_entries() {
         let dir = tempdir().expect("tempdir");
         let record = sample_record(1, 1);
         let bytes = to_bytes(&record).expect("encode record");
-
         let valid_path = dir.path().join(commitment_file_name(&record, [0xdd; 32]));
         let mut corrupt_record = sample_record(1, 2);
         corrupt_record.storage_ticket = record.storage_ticket;
         let corrupt_path = dir
             .path()
             .join(commitment_file_name(&corrupt_record, [0xee; 32]));
-
         std::fs::write(valid_path, bytes).expect("write valid");
         std::fs::write(corrupt_path, b"corrupt").expect("write corrupt");
-
         assert!(
             matches!(
                 load_commitment_bundle(dir.path()),
@@ -596,14 +546,12 @@ mod tests {
             "corrupt commitment artifacts must reject the whole spool load"
         );
     }
-
     #[test]
     fn commitment_bundle_rejects_commitment_shaped_directory() {
         let dir = tempdir().expect("tempdir");
         let record = sample_record(1, 1);
         let path = dir.path().join(commitment_file_name(&record, [0x7a; 32]));
         std::fs::create_dir(&path).expect("create commitment-shaped directory");
-
         assert!(
             matches!(
                 load_commitment_bundle(dir.path()),
@@ -612,12 +560,10 @@ mod tests {
             "commitment-shaped non-files must reject the whole spool load"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn commitment_bundle_rejects_commitment_shaped_symlink() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("tempdir");
         let record = sample_record(1, 1);
         let target = dir.path().join("commitment-target.bin");
@@ -625,7 +571,6 @@ mod tests {
             .expect("write target record");
         let path = dir.path().join(commitment_file_name(&record, [0x7a; 32]));
         symlink(&target, &path).expect("create commitment-shaped symlink");
-
         assert!(
             matches!(
                 load_commitment_bundle(dir.path()),
@@ -634,21 +579,17 @@ mod tests {
             "commitment-shaped symlinks must reject the whole spool load"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn commitment_bundle_rejects_spool_dir_symlink() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("tempdir");
         let target = dir.path().join("commitment-spool-target");
         std::fs::create_dir(&target).expect("create target directory");
         let spool = dir.path().join("commitment-spool-link");
         symlink(&target, &spool).expect("create commitment spool symlink");
-
         let err =
             load_commitment_bundle(&spool).expect_err("symlinked commitment spool must reject");
-
         match err {
             DaSpoolError::ReadDir {
                 path: observed,
@@ -675,7 +616,6 @@ mod tests {
             "spool symlink target should not be removed"
         );
     }
-
     #[test]
     fn commitment_read_revalidation_rejects_length_change() {
         let dir = tempdir().expect("tempdir");
@@ -684,10 +624,8 @@ mod tests {
         std::fs::write(&path, b"old").expect("write initial commitment");
         let metadata = std::fs::symlink_metadata(&path).expect("inspect initial commitment");
         std::fs::write(&path, b"new-longer").expect("replace commitment bytes");
-
         let err = revalidate_regular_commitment_file(&path, &metadata, 3)
             .expect_err("post-read length changes must reject DA commitment artifacts");
-
         match err {
             DaSpoolError::ReadFile {
                 path: observed,
@@ -703,12 +641,10 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn commitment_read_revalidation_rejects_symlink_replacement() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("tempdir");
         let record = sample_record(1, 1);
         let path = dir.path().join(commitment_file_name(&record, [0x7e; 32]));
@@ -718,10 +654,8 @@ mod tests {
         std::fs::write(&target, b"old").expect("write symlink target");
         std::fs::remove_file(&path).expect("remove inspected commitment");
         symlink(&target, &path).expect("replace commitment with symlink");
-
         let err = revalidate_regular_commitment_file(&path, &metadata, 3)
             .expect_err("post-read symlink replacement must reject DA commitment artifacts");
-
         match err {
             DaSpoolError::ReadFile {
                 path: observed,
@@ -737,12 +671,10 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn commitment_file_matcher_rejects_non_utf8_commitment_shaped_filename() {
         use std::{ffi::OsString, os::unix::ffi::OsStringExt};
-
         let schedule_path = PathBuf::from(OsString::from_vec(
             b"da-commitment-schedule-\xFF.norito".to_vec(),
         ));
@@ -750,34 +682,28 @@ mod tests {
             !is_da_commitment_file(&schedule_path).expect("non-UTF8 schedule sidecar is ignored"),
             "schedule sidecars are owned by the schedule loader, not the commitment bundle loader"
         );
-
         let path = PathBuf::from(OsString::from_vec(b"da-commitment-\xFF.norito".to_vec()));
-
         let err = is_da_commitment_file(&path).expect_err("non-UTF8 shaped artifact rejects");
         match err {
             DaSpoolError::MalformedFilename { path: seen } => assert_eq!(seen, path),
             _ => panic!("expected malformed filename for non-UTF8 DA artifact, got {err:?}"),
         }
     }
-
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn commitment_bundle_rejects_non_utf8_commitment_shaped_filename() {
         use std::{ffi::OsString, os::unix::ffi::OsStringExt};
-
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join(PathBuf::from(OsString::from_vec(
             b"da-commitment-\xFF.norito".to_vec(),
         )));
         std::fs::write(&path, b"ignored").expect("write invalid utf8 filename");
-
         let err = load_commitment_bundle(dir.path()).expect_err("non-UTF8 DA artifact rejects");
         match err {
             DaSpoolError::MalformedFilename { path: seen } => assert_eq!(seen, path),
             _ => panic!("expected malformed filename for non-UTF8 DA artifact, got {err:?}"),
         }
     }
-
     #[test]
     fn commitment_bundle_rejects_malformed_filenames() {
         let dir = tempdir().expect("tempdir");
@@ -786,9 +712,7 @@ mod tests {
         let malformed_path = dir
             .path()
             .join("da-commitment-00000001-0000000000000001-0000000000000001.norito");
-
         std::fs::write(malformed_path, bytes).expect("write malformed filename record");
-
         assert!(
             matches!(
                 load_commitment_bundle(dir.path()),
@@ -797,7 +721,6 @@ mod tests {
             "malformed commitment filenames must reject the whole spool load"
         );
     }
-
     #[test]
     fn commitment_bundle_rejects_filename_tuple_mismatches() {
         let dir = tempdir().expect("tempdir");
@@ -806,9 +729,7 @@ mod tests {
         let mut file_key = record.clone();
         file_key.sequence = 2;
         let mismatch_path = dir.path().join(commitment_file_name(&file_key, [0x99; 32]));
-
         std::fs::write(mismatch_path, bytes).expect("write mismatch record");
-
         assert!(
             matches!(
                 load_commitment_bundle(dir.path()),
@@ -817,7 +738,6 @@ mod tests {
             "commitment filename/body tuple mismatches must reject the whole spool load"
         );
     }
-
     #[test]
     fn commitment_bundle_rejects_filename_ticket_mismatches() {
         let dir = tempdir().expect("tempdir");
@@ -826,9 +746,7 @@ mod tests {
         let mut file_key = record.clone();
         file_key.storage_ticket = StorageTicketId::new([0x99; 32]);
         let mismatch_path = dir.path().join(commitment_file_name(&file_key, [0x88; 32]));
-
         std::fs::write(mismatch_path, bytes).expect("write ticket mismatch record");
-
         assert!(
             matches!(
                 load_commitment_bundle(dir.path()),
@@ -837,18 +755,15 @@ mod tests {
             "commitment filename/body ticket mismatches must reject the whole spool load"
         );
     }
-
     #[test]
     fn commitment_bundle_rejects_same_record_under_different_fingerprint() {
         let dir = tempdir().expect("tempdir");
         let record = sample_record(1, 1);
         let bytes = to_bytes(&record).expect("encode record");
-
         for fingerprint in [[0x45; 32], [0x44; 32]] {
             let path = dir.path().join(commitment_file_name(&record, fingerprint));
             std::fs::write(path, &bytes).expect("write duplicate-fingerprint record");
         }
-
         let err = load_commitment_bundle(dir.path())
             .expect_err("same commitment body under different fingerprints must reject");
         match err {
@@ -868,7 +783,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn commitment_bundle_rejects_duplicate_key_with_different_record() {
         let dir = tempdir().expect("tempdir");
@@ -876,7 +790,6 @@ mod tests {
         let mut conflicting = sample_record(1, 1);
         conflicting.manifest_hash = ManifestDigest::new([0x23; 32]);
         conflicting.storage_ticket = StorageTicketId::new([0x67; 32]);
-
         let record_path = dir.path().join(commitment_file_name(&record, [0x46; 32]));
         let conflicting_path = dir
             .path()
@@ -888,7 +801,6 @@ mod tests {
             to_bytes(&conflicting).expect("encode conflicting record"),
         )
         .expect("write conflicting record");
-
         let err = load_commitment_bundle(dir.path())
             .expect_err("duplicate commitment keys with different bodies must reject");
         assert!(matches!(

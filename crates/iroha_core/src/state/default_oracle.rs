@@ -52,7 +52,6 @@ fn default_oracle() -> iroha_config::parameters::actual::Oracle {
         },
     }
 }
-
 fn default_content_cfg() -> iroha_config::parameters::actual::Content {
     iroha_config::parameters::actual::Content {
         max_bundle_bytes: iroha_config::parameters::defaults::content::MAX_BUNDLE_BYTES,
@@ -98,7 +97,6 @@ fn default_content_cfg() -> iroha_config::parameters::actual::Content {
         stripe_layout: iroha_config::parameters::defaults::content::default_stripe_layout(),
     }
 }
-
 fn default_fraud_monitoring_cfg() -> iroha_config::parameters::actual::FraudMonitoring {
     iroha_config::parameters::actual::FraudMonitoring::new(
         iroha_config::parameters::defaults::fraud_monitoring::ENABLED,

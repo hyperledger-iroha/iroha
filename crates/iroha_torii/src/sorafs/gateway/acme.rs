@@ -1,16 +1,12 @@
 //! Deterministic ACME automation harness for the SoraFS gateway.
-
 use std::{
     fmt::{self, Debug},
     sync::Arc,
     time::{Duration, SystemTime},
 };
-
 use blake3::Hasher;
 use thiserror::Error;
-
 use super::provider::{GatewayProviderBindingErrorV1, GatewayProviderBindingV1};
-
 /// Challenge profile describing which ACME flows must be exercised.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChallengeProfile {
@@ -19,7 +15,6 @@ pub struct ChallengeProfile {
     /// Whether TLS-ALPN-01 challenges should be solved.
     pub tls_alpn_01: bool,
 }
-
 impl Default for ChallengeProfile {
     fn default() -> Self {
         Self {
@@ -28,7 +23,6 @@ impl Default for ChallengeProfile {
         }
     }
 }
-
 /// Static configuration for ACME automation.
 #[derive(Clone)]
 pub struct AcmeConfig {
@@ -51,7 +45,6 @@ pub struct AcmeConfig {
     /// Challenge profile to exercise.
     pub challenge: ChallengeProfile,
 }
-
 impl Debug for AcmeConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -71,7 +64,6 @@ impl Debug for AcmeConfig {
             .finish()
     }
 }
-
 impl Default for AcmeConfig {
     fn default() -> Self {
         Self {
@@ -87,7 +79,6 @@ impl Default for AcmeConfig {
         }
     }
 }
-
 /// Certificate and key material emitted by ACME renewals.
 #[derive(Clone, PartialEq, Eq)]
 pub struct CertificateBundle {
@@ -100,7 +91,6 @@ pub struct CertificateBundle {
     /// Expiry timestamp of the certificate.
     pub not_after: SystemTime,
 }
-
 impl Debug for CertificateBundle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -112,7 +102,6 @@ impl Debug for CertificateBundle {
             .finish()
     }
 }
-
 impl Drop for CertificateBundle {
     fn drop(&mut self) {
         scrub_acme_secret_string(&mut self.private_key_pem);
@@ -122,7 +111,6 @@ impl Drop for CertificateBundle {
         }
     }
 }
-
 fn scrub_acme_secret_string(value: &mut String) {
     if !value.is_empty() {
         let zeroes = "\0".repeat(value.len());
@@ -130,7 +118,6 @@ fn scrub_acme_secret_string(value: &mut String) {
         let _ = std::hint::black_box(value.as_bytes());
     }
 }
-
 /// Order descriptor passed to the ACME client implementation.
 #[derive(Clone)]
 pub struct CertificateOrder {
@@ -145,7 +132,6 @@ pub struct CertificateOrder {
     /// Challenge profile to satisfy.
     pub challenge: ChallengeProfile,
 }
-
 impl Debug for CertificateOrder {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -161,7 +147,6 @@ impl Debug for CertificateOrder {
             .finish()
     }
 }
-
 /// Errors emitted by the ACME client implementation.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum AcmeClientError {
@@ -178,7 +163,6 @@ pub enum AcmeClientError {
     #[error("acme provider transport or cryptographic operation failed")]
     Transport,
 }
-
 /// Payload-free public identity reported by one runtime ACME provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcmeClientIdentityV1 {
@@ -191,12 +175,10 @@ pub struct AcmeClientIdentityV1 {
     /// Explicit marker set by test, mock, development, or placeholder clients.
     pub test_marked: bool,
 }
-
 /// Redacted failure returned when an ACME client cannot attest its identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("ACME client qualification failed")]
 pub struct AcmeClientProbeError;
-
 /// Runtime-injected ACME client backend.
 ///
 /// Implementations own all provider credentials and transport state. Torii does
@@ -207,7 +189,6 @@ pub trait AcmeClient: Send + Sync {
     /// Provider diagnostics, credentials, and private material must remain
     /// behind this payload-free probe.
     fn qualification(&self) -> Result<AcmeClientIdentityV1, AcmeClientProbeError>;
-
     /// Place an order and return the resulting certificate bundle.
     ///
     /// # Errors
@@ -218,7 +199,6 @@ pub trait AcmeClient: Send + Sync {
         order: &CertificateOrder,
     ) -> Result<CertificateBundle, AcmeClientError>;
 }
-
 impl<T> AcmeClient for Arc<T>
 where
     T: AcmeClient + ?Sized,
@@ -226,7 +206,6 @@ where
     fn qualification(&self) -> Result<AcmeClientIdentityV1, AcmeClientProbeError> {
         (**self).qualification()
     }
-
     fn order_certificate(
         &self,
         order: &CertificateOrder,
@@ -234,7 +213,6 @@ where
         (**self).order_certificate(order)
     }
 }
-
 /// Errors surfaced by the automation harness.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum AcmeAutomationError {
@@ -257,7 +235,6 @@ pub enum AcmeAutomationError {
     #[error("acme client error: {0}")]
     Client(AcmeClientError),
 }
-
 #[derive(Debug, Default, Clone)]
 struct AcmeState {
     bundle: Option<CertificateBundle>,
@@ -266,7 +243,6 @@ struct AcmeState {
     next_attempt: Option<SystemTime>,
     attempts: u32,
 }
-
 impl AcmeState {
     fn record_success(&mut self, bundle: CertificateBundle, now: SystemTime) {
         self.bundle = Some(bundle);
@@ -275,18 +251,15 @@ impl AcmeState {
         self.attempts = 0;
         self.next_attempt = None;
     }
-
     fn record_failure(&mut self, error: AcmeAutomationError, retry_at: SystemTime) {
         self.last_error = Some(error);
         self.attempts = self.attempts.saturating_add(1);
         self.next_attempt = Some(retry_at);
     }
-
     fn certificate(&self) -> Option<&CertificateBundle> {
         self.bundle.as_ref()
     }
 }
-
 /// Deterministic ACME automation harness.
 pub struct AcmeAutomation<C> {
     config: AcmeConfig,
@@ -294,7 +267,6 @@ pub struct AcmeAutomation<C> {
     client: C,
     state: AcmeState,
 }
-
 impl<C> Debug for AcmeAutomation<C> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -306,7 +278,6 @@ impl<C> Debug for AcmeAutomation<C> {
             .finish()
     }
 }
-
 impl<C> AcmeAutomation<C>
 where
     C: AcmeClient,
@@ -330,19 +301,16 @@ where
             state: AcmeState::default(),
         })
     }
-
     /// Access the last known certificate bundle.
     #[must_use]
     pub fn certificate(&self) -> Option<&CertificateBundle> {
         self.state.certificate()
     }
-
     /// Returns the last error recorded by the automation loop.
     #[must_use]
     pub fn last_error(&self) -> Option<&AcmeAutomationError> {
         self.state.last_error.as_ref()
     }
-
     /// Execute the automation loop. Returns `Some(bundle)` when a renewal succeeds.
     ///
     /// # Errors
@@ -355,17 +323,14 @@ where
         if !self.config.enabled {
             return Ok(None);
         }
-
         if let Some(next_attempt) = self.state.next_attempt {
             if now < next_attempt {
                 return Ok(None);
             }
         }
-
         if !self.needs_renewal(now) {
             return Ok(None);
         }
-
         let order = CertificateOrder {
             hostnames: self.config.hostnames.clone(),
             account_email: self.config.account_email.clone(),
@@ -373,7 +338,6 @@ where
             dns_provider_id: self.config.dns_provider_id.clone(),
             challenge: self.config.challenge.clone(),
         };
-
         qualify_acme_client(&self.client_binding, &self.client)?;
         let result = self.client.order_certificate(&order);
         if let Err(error) = qualify_acme_client(&self.client_binding, &self.client) {
@@ -382,7 +346,6 @@ where
             self.state.record_failure(error, retry_at);
             return Err(error);
         }
-
         match result {
             Ok(bundle) => {
                 let deadline = self.next_deadline(&bundle);
@@ -404,7 +367,6 @@ where
             }
         }
     }
-
     fn needs_renewal(&self, now: SystemTime) -> bool {
         self.state.bundle.as_ref().map_or(true, |bundle| {
             bundle
@@ -413,14 +375,12 @@ where
                 .map_or(true, |renew_at| now >= renew_at)
         })
     }
-
     fn next_deadline(&self, bundle: &CertificateBundle) -> SystemTime {
         bundle
             .not_after
             .checked_sub(self.config.renewal_window)
             .unwrap_or(bundle.not_after)
     }
-
     fn compute_jitter(&self) -> Duration {
         if self.config.retry_jitter.is_zero() {
             return Duration::ZERO;
@@ -445,14 +405,12 @@ where
         let jitter_ns = spread % (max_ns + 1);
         Duration::from_nanos(jitter_ns)
     }
-
     #[cfg(test)]
     /// Returns the scheduled next attempt for test verification.
     pub fn next_attempt(&self) -> Option<SystemTime> {
         self.state.next_attempt
     }
 }
-
 fn qualify_acme_client(
     expected: &GatewayProviderBindingV1,
     client: &dyn AcmeClient,
@@ -485,20 +443,16 @@ fn qualify_acme_client(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     };
-
     use super::*;
-
     const TEST_PROVIDER_HANDLE: &str = "runtime://sorafs/gateway-acme/primary";
     const TEST_PROVIDER_REVISION: u64 = 7;
     const TEST_PROVIDER_POLICY_DIGEST: [u8; 32] = [0xA7; 32];
-
     #[derive(Debug)]
     struct MockClient {
         responses: Mutex<Vec<Result<CertificateBundle, AcmeClientError>>>,
@@ -510,12 +464,10 @@ mod tests {
         qualification_calls: AtomicUsize,
         order_calls: AtomicUsize,
     }
-
     impl MockClient {
         fn with_responses(responses: Vec<Result<CertificateBundle, AcmeClientError>>) -> Self {
             Self::with_identity(responses, expected_identity())
         }
-
         fn with_identity(
             responses: Vec<Result<CertificateBundle, AcmeClientError>>,
             identity: AcmeClientIdentityV1,
@@ -532,7 +484,6 @@ mod tests {
             }
         }
     }
-
     impl AcmeClient for MockClient {
         fn qualification(&self) -> Result<AcmeClientIdentityV1, AcmeClientProbeError> {
             self.qualification_calls.fetch_add(1, Ordering::SeqCst);
@@ -545,7 +496,6 @@ mod tests {
                 .expect("mock ACME identity lock poisoned")
                 .clone())
         }
-
         fn order_certificate(
             &self,
             _order: &CertificateOrder,
@@ -578,7 +528,6 @@ mod tests {
             response
         }
     }
-
     fn expected_binding() -> GatewayProviderBindingV1 {
         GatewayProviderBindingV1::try_new(
             TEST_PROVIDER_HANDLE.to_owned(),
@@ -587,7 +536,6 @@ mod tests {
         )
         .expect("valid test ACME provider binding")
     }
-
     fn expected_identity() -> AcmeClientIdentityV1 {
         AcmeClientIdentityV1 {
             provider_handle: TEST_PROVIDER_HANDLE.to_owned(),
@@ -596,12 +544,10 @@ mod tests {
             test_marked: false,
         }
     }
-
     fn automation(config: AcmeConfig, client: Arc<MockClient>) -> AcmeAutomation<Arc<MockClient>> {
         AcmeAutomation::try_new(config, expected_binding(), client)
             .expect("qualified ACME automation")
     }
-
     fn sample_bundle(valid_for: Duration, now: SystemTime) -> CertificateBundle {
         CertificateBundle {
             certificate_pem: "CERT".to_string(),
@@ -610,7 +556,6 @@ mod tests {
             not_after: now + valid_for,
         }
     }
-
     #[test]
     fn certificate_debug_redacts_private_key_material() {
         let bundle = sample_bundle(Duration::from_secs(60), SystemTime::now());
@@ -618,7 +563,6 @@ mod tests {
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("SECRET-PRIVATE-KEY"));
     }
-
     #[test]
     fn acme_debug_surfaces_redact_contact_and_runtime_client_state() {
         let private_contact = "private-operator@example.test";
@@ -637,7 +581,6 @@ mod tests {
         };
         assert!(!format!("{config:?}").contains(private_contact));
         assert!(!format!("{order:?}").contains(private_contact));
-
         let client = Arc::new(MockClient::with_responses(vec![Ok(sample_bundle(
             Duration::from_secs(60),
             SystemTime::now(),
@@ -648,7 +591,6 @@ mod tests {
         assert!(!debug.contains(private_contact));
         assert!(!debug.contains("SECRET-PRIVATE-KEY"));
     }
-
     #[test]
     fn qualification_rejects_bad_clients_before_ordering() {
         let cases = [
@@ -727,7 +669,6 @@ mod tests {
             assert_eq!(client.order_calls.load(Ordering::SeqCst), 0);
             assert_eq!(client.qualification_calls.load(Ordering::SeqCst), 1);
         }
-
         let unavailable = Arc::new(MockClient::with_responses(Vec::new()));
         unavailable.probe_available.store(false, Ordering::SeqCst);
         assert!(matches!(
@@ -743,7 +684,6 @@ mod tests {
         ));
         assert_eq!(unavailable.order_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn automation_renews_when_due() {
         let now = SystemTime::now();
@@ -761,7 +701,6 @@ mod tests {
         assert!(result.is_some());
         assert!(automation.certificate().is_some());
     }
-
     #[test]
     fn automation_waits_until_window() {
         let now = SystemTime::now();
@@ -779,7 +718,6 @@ mod tests {
         let result = automation.process(later).expect("no-op");
         assert!(result.is_none());
     }
-
     #[test]
     fn automation_backoff_on_error() {
         let now = SystemTime::now();
@@ -801,7 +739,6 @@ mod tests {
         let retry_at = automation.next_attempt().expect("retry scheduled");
         assert!(retry_at >= now + Duration::from_mins(1));
     }
-
     #[test]
     fn automation_discards_certificate_when_provider_drifts_during_order() {
         for (drift, expected_error) in [
@@ -828,7 +765,6 @@ mod tests {
                 },
                 Arc::clone(&client),
             );
-
             let error = automation
                 .process(now)
                 .expect_err("in-flight provider drift must discard returned key material");

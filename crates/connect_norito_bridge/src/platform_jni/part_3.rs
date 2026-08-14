@@ -7,7 +7,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ) -> jni::sys::jbyteArray {
     java_native_public_key_from_private(&mut env, algorithm_code, private_key)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeBridgeAbiVersion(
     _env: jni::JNIEnv<'_>,
@@ -15,7 +14,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeSignerContractRevision(
     _env: jni::JNIEnv<'_>,
@@ -23,7 +21,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ) -> jni::sys::jint {
     native_signer_jni_contract_revision() as jni::sys::jint
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeKeypairFromSeed(
     mut env: jni::JNIEnv<'_>,
@@ -33,7 +30,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ) -> jni::sys::jobjectArray {
     java_native_keypair_from_seed(&mut env, algorithm_code, seed)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeSignDetached(
     mut env: jni::JNIEnv<'_>,
@@ -44,7 +40,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ) -> jni::sys::jbyteArray {
     java_native_sign_detached(&mut env, algorithm_code, private_key, message)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeVerifyDetached(
     mut env: jni::JNIEnv<'_>,
@@ -56,7 +51,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ) -> jni::sys::jboolean {
     java_native_verify_detached(&mut env, algorithm_code, public_key, message, signature)
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeEncodeRegisterZkAssetSignedTransaction(
@@ -95,7 +89,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         fee_payment_json,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativePublicKeyFromPrivate(
     mut env: jni::JNIEnv<'_>,
@@ -105,7 +98,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
 ) -> jni::sys::jbyteArray {
     java_native_public_key_from_private(&mut env, algorithm_code, private_key)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeBridgeAbiVersion(
     _env: jni::JNIEnv<'_>,
@@ -113,7 +105,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeSignerContractRevision(
     _env: jni::JNIEnv<'_>,
@@ -121,7 +112,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
 ) -> jni::sys::jint {
     native_signer_jni_contract_revision() as jni::sys::jint
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeKeypairFromSeed(
     mut env: jni::JNIEnv<'_>,
@@ -131,7 +121,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
 ) -> jni::sys::jobjectArray {
     java_native_keypair_from_seed(&mut env, algorithm_code, seed)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeSignDetached(
     mut env: jni::JNIEnv<'_>,
@@ -142,7 +131,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
 ) -> jni::sys::jbyteArray {
     java_native_sign_detached(&mut env, algorithm_code, private_key, message)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeVerifyDetached(
     mut env: jni::JNIEnv<'_>,
@@ -154,7 +142,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
 ) -> jni::sys::jboolean {
     java_native_verify_detached(&mut env, algorithm_code, public_key, message, signature)
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeEncodeRegisterZkAssetSignedTransaction(
@@ -193,7 +180,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         fee_payment_json,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeBridgeAbiVersion(
     _env: jni::JNIEnv<'_>,
@@ -201,7 +187,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeCompiledProfileCatalog(
     mut env: jni::JNIEnv<'_>,
@@ -209,7 +194,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
 ) -> jni::sys::jbyteArray {
     java_native_privacy_compiled_profile_catalog(&mut env)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateCompiledProfileCatalog(
     mut env: jni::JNIEnv<'_>,
@@ -218,7 +202,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
 ) -> jni::sys::jint {
     java_native_privacy_validate_compiled_profile_catalog(&mut env, archive)
 }
-
 /// Validate a Torii Exact12 capability manifest for the Kotlin/JVM SDK.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateExact12CapabilityManifest(
@@ -228,7 +211,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
 ) -> jni::sys::jint {
     java_native_privacy_validate_exact12_capability_manifest(&mut env, archive)
 }
-
 /// Inspect one validated Torii Exact12 manifest and compare all local profile tuples.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeInspectExact12CapabilityManifest(
@@ -238,7 +220,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
 ) -> jni::sys::jbyteArray {
     java_native_privacy_inspect_exact12_capability_manifest(&mut env, archive)
 }
-
 /// Require active committed admission and exact local tuple equality for Kotlin/JVM.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeRequireExact12CapabilityTuple(
@@ -249,7 +230,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
 ) -> jni::sys::jboolean {
     java_native_privacy_require_exact12_capability_tuple(&mut env, archive, protocol_index)
 }
-
 /// Validate a canonical retained submit-proof instruction against committed Kotlin/JVM admission.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateExact12SubmitProofConstruction(
@@ -266,7 +246,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
         instruction_archive,
     )
 }
-
 /// Return the canonical exact-12 privacy fixture bundle to the Kotlin/JVM SDK.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle(
@@ -275,7 +254,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
 ) -> jni::sys::jbyteArray {
     java_native_privacy_exact12_fixture_bundle(&mut env)
 }
-
 /// Validate an exact-12 privacy fixture bundle for the Kotlin/JVM SDK.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle(
@@ -285,7 +263,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
 ) -> jni::sys::jint {
     java_native_privacy_validate_exact12_fixture_bundle(&mut env, archive)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeBridgeAbiVersion(
     _env: jni::JNIEnv<'_>,
@@ -293,7 +270,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeCompiledProfileCatalog(
     mut env: jni::JNIEnv<'_>,
@@ -301,7 +277,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
 ) -> jni::sys::jbyteArray {
     java_native_privacy_compiled_profile_catalog(&mut env)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateCompiledProfileCatalog(
     mut env: jni::JNIEnv<'_>,
@@ -310,7 +285,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
 ) -> jni::sys::jint {
     java_native_privacy_validate_compiled_profile_catalog(&mut env, archive)
 }
-
 /// Validate a Torii Exact12 capability manifest for the Java Android SDK.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12CapabilityManifest(
@@ -320,7 +294,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
 ) -> jni::sys::jint {
     java_native_privacy_validate_exact12_capability_manifest(&mut env, archive)
 }
-
 /// Inspect one validated Torii Exact12 manifest and compare all local profile tuples.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeInspectExact12CapabilityManifest(
@@ -330,7 +303,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
 ) -> jni::sys::jbyteArray {
     java_native_privacy_inspect_exact12_capability_manifest(&mut env, archive)
 }
-
 /// Require active committed admission and exact local tuple equality for Java/Android.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeRequireExact12CapabilityTuple(
@@ -341,7 +313,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
 ) -> jni::sys::jboolean {
     java_native_privacy_require_exact12_capability_tuple(&mut env, archive, protocol_index)
 }
-
 /// Validate a canonical retained submit-proof instruction against committed Java admission.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12SubmitProofConstruction(
@@ -358,7 +329,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
         instruction_archive,
     )
 }
-
 /// Return the canonical exact-12 privacy fixture bundle to the Java Android SDK.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle(
@@ -367,7 +337,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
 ) -> jni::sys::jbyteArray {
     java_native_privacy_exact12_fixture_bundle(&mut env)
 }
-
 /// Validate an exact-12 privacy fixture bundle for the Java Android SDK.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle(
@@ -377,7 +346,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
 ) -> jni::sys::jint {
     java_native_privacy_validate_exact12_fixture_bundle(&mut env, archive)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeBridgeAbiVersion(
     _env: jni::JNIEnv<'_>,
@@ -385,7 +353,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeHasGovernanceDagSymbols(
     _env: jni::JNIEnv<'_>,
@@ -393,7 +360,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jboolean {
     jni::sys::JNI_TRUE
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeHasGovernanceLogNodeSymbols(
     _env: jni::JNIEnv<'_>,
@@ -401,7 +367,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jboolean {
     jni::sys::JNI_TRUE
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeHasFixtureBundleSymbols(
     _env: jni::JNIEnv<'_>,
@@ -409,7 +374,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jboolean {
     jni::sys::JNI_TRUE
 }
-
 /// Reports that the Kotlin/JVM ABI contains appeal-finance validator symbols.
 ///
 /// # Safety
@@ -421,7 +385,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jboolean {
     jni::sys::JNI_TRUE
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateOrderbookPayloadJson(
     mut env: jni::JNIEnv<'_>,
@@ -439,7 +402,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidatePopPayloadJson(
     mut env: jni::JNIEnv<'_>,
@@ -451,7 +413,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jbyteArray {
     java_sorafs_reference_validate_pop_payload_json(&mut env, kind, payload, label, generated_at)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateHedgingPayloadJson(
     mut env: jni::JNIEnv<'_>,
@@ -469,7 +430,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-
 /// JNI entrypoint for Kotlin/JVM appeal-finance `CancelAssetLock` validation.
 ///
 /// # Safety
@@ -489,7 +449,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateFixtureBundleJson(
     mut env: jni::JNIEnv<'_>,
@@ -509,7 +468,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateGovernanceLogNodeJson(
     mut env: jni::JNIEnv<'_>,
@@ -527,7 +485,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateGovernanceDagBlockJson(
     mut env: jni::JNIEnv<'_>,
@@ -545,7 +502,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateGovernanceDagHeadChainJson(
     mut env: jni::JNIEnv<'_>,
@@ -565,7 +521,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeSignOrderbookPayload(
     mut env: jni::JNIEnv<'_>,
@@ -576,7 +531,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jbyteArray {
     java_sorafs_reference_sign_orderbook_payload(&mut env, kind, payload, private_key)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeDeriveOrderbookOrderId(
     mut env: jni::JNIEnv<'_>,
@@ -586,7 +540,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jbyteArray {
     java_sorafs_reference_derive_orderbook_order_id(&mut env, owner_account, nonce)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookOrderRequest(
     mut env: jni::JNIEnv<'_>,
@@ -624,7 +577,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         },
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookOrderCancel(
     mut env: jni::JNIEnv<'_>,
@@ -644,7 +596,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         private_key,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookSettlementReceipt(
     mut env: jni::JNIEnv<'_>,
@@ -680,7 +631,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         },
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidatePdpPayloadJson(
     mut env: jni::JNIEnv<'_>,
@@ -692,7 +642,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jbyteArray {
     java_sorafs_reference_validate_pdp_payload_json(&mut env, kind, payload, label, generated_at)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidatePdpCommitmentChallengeJson(
     mut env: jni::JNIEnv<'_>,
@@ -712,7 +661,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidatePdpChallengeProofJson(
     mut env: jni::JNIEnv<'_>,
@@ -732,7 +680,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidatePdpBundleJson(
     mut env: jni::JNIEnv<'_>,
@@ -758,7 +705,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeBridgeAbiVersion(
     _env: jni::JNIEnv<'_>,
@@ -766,7 +712,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeHasGovernanceDagSymbols(
     _env: jni::JNIEnv<'_>,
@@ -774,7 +719,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
 ) -> jni::sys::jboolean {
     jni::sys::JNI_TRUE
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeHasGovernanceLogNodeSymbols(
     _env: jni::JNIEnv<'_>,
@@ -782,7 +726,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
 ) -> jni::sys::jboolean {
     jni::sys::JNI_TRUE
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeHasFixtureBundleSymbols(
     _env: jni::JNIEnv<'_>,
@@ -790,7 +733,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
 ) -> jni::sys::jboolean {
     jni::sys::JNI_TRUE
 }
-
 /// Reports that the Java Android ABI contains appeal-finance validator symbols.
 ///
 /// # Safety
@@ -802,7 +744,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
 ) -> jni::sys::jboolean {
     jni::sys::JNI_TRUE
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateOrderbookPayloadJson(
     mut env: jni::JNIEnv<'_>,
@@ -820,7 +761,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidatePopPayloadJson(
     mut env: jni::JNIEnv<'_>,
@@ -832,7 +772,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
 ) -> jni::sys::jbyteArray {
     java_sorafs_reference_validate_pop_payload_json(&mut env, kind, payload, label, generated_at)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateHedgingPayloadJson(
     mut env: jni::JNIEnv<'_>,
@@ -850,7 +789,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
         generated_at,
     )
 }
-
 /// JNI entrypoint for Java Android appeal-finance `CancelAssetLock` validation.
 ///
 /// # Safety
@@ -870,7 +808,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateFixtureBundleJson(
     mut env: jni::JNIEnv<'_>,
@@ -890,7 +827,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateGovernanceLogNodeJson(
     mut env: jni::JNIEnv<'_>,
@@ -908,7 +844,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateGovernanceDagBlockJson(
     mut env: jni::JNIEnv<'_>,
@@ -926,7 +861,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateGovernanceDagHeadChainJson(
     mut env: jni::JNIEnv<'_>,
@@ -946,7 +880,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeSignOrderbookPayload(
     mut env: jni::JNIEnv<'_>,
@@ -957,7 +890,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
 ) -> jni::sys::jbyteArray {
     java_sorafs_reference_sign_orderbook_payload(&mut env, kind, payload, private_key)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeDeriveOrderbookOrderId(
     mut env: jni::JNIEnv<'_>,
@@ -967,7 +899,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
 ) -> jni::sys::jbyteArray {
     java_sorafs_reference_derive_orderbook_order_id(&mut env, owner_account, nonce)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookOrderRequest(
     mut env: jni::JNIEnv<'_>,
@@ -1005,7 +936,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
         },
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookOrderCancel(
     mut env: jni::JNIEnv<'_>,
@@ -1025,7 +955,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
         private_key,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookSettlementReceipt(
     mut env: jni::JNIEnv<'_>,
@@ -1061,7 +990,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
         },
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidatePdpPayloadJson(
     mut env: jni::JNIEnv<'_>,
@@ -1073,7 +1001,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
 ) -> jni::sys::jbyteArray {
     java_sorafs_reference_validate_pdp_payload_json(&mut env, kind, payload, label, generated_at)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidatePdpCommitmentChallengeJson(
     mut env: jni::JNIEnv<'_>,
@@ -1093,7 +1020,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidatePdpChallengeProofJson(
     mut env: jni::JNIEnv<'_>,
@@ -1113,7 +1039,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidatePdpBundleJson(
     mut env: jni::JNIEnv<'_>,
@@ -1139,7 +1064,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
         generated_at,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBridgeAbiVersion(
     _env: jni::JNIEnv<'_>,
@@ -1147,7 +1071,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePastaCycleV4BackendAvailable(
     _env: jni::JNIEnv<'_>,
@@ -1155,7 +1078,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jboolean {
     java_native_kagemusha_pasta_cycle_v4_backend_available()
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeArtifactBeginV4(
     mut env: jni::JNIEnv<'_>,
@@ -1171,7 +1093,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         artifact_sha256,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeArtifactWriteV4(
     mut env: jni::JNIEnv<'_>,
@@ -1181,7 +1102,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) {
     java_native_kagemusha_artifact_write_v4(&mut env, handle, chunk);
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeArtifactFinalizeV4(
     mut env: jni::JNIEnv<'_>,
@@ -1190,7 +1110,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) {
     java_native_kagemusha_artifact_finish_v4(&mut env, handle, false);
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeArtifactCancelV4(
     mut env: jni::JNIEnv<'_>,
@@ -1199,7 +1118,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) {
     java_native_kagemusha_artifact_finish_v4(&mut env, handle, true);
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeArtifactSetInstallV4(
     mut env: jni::JNIEnv<'_>,
@@ -1225,7 +1143,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         handles,
     );
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeArtifactSetIsInstalledV4(
     mut env: jni::JNIEnv<'_>,
@@ -1235,7 +1152,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jboolean {
     java_native_kagemusha_artifact_set_is_installed_v4(&mut env, manifest_norito, manifest_sha256)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeInstalledManifestSha256V4(
     mut env: jni::JNIEnv<'_>,
@@ -1243,7 +1159,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_installed_manifest_sha256_v4(&mut env)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildArtifactBindingV4(
     mut env: jni::JNIEnv<'_>,
@@ -1253,7 +1168,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_build_artifact_binding_v4(&mut env, manifest_norito, manifest_sha256)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeArtifactSetUninstallV4(
     mut env: jni::JNIEnv<'_>,
@@ -1262,7 +1176,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) {
     java_native_kagemusha_artifact_set_uninstall_v4(&mut env, manifest_sha256);
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeInitSpendV4(
     mut env: jni::JNIEnv<'_>,
@@ -1284,7 +1197,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         },
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeAppendSpendV4(
     mut env: jni::JNIEnv<'_>,
@@ -1300,7 +1212,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         verified_at_ms,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeVerifySpendV4(
     mut env: jni::JNIEnv<'_>,
@@ -1322,7 +1233,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         },
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildRedeemV4(
     mut env: jni::JNIEnv<'_>,
@@ -1344,7 +1254,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         },
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePrepareRecipientRequestV2(
@@ -1383,7 +1292,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         diversifier,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientRequestV2(
     mut env: jni::JNIEnv<'_>,
@@ -1393,7 +1301,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_create_recipient_request_v2(&mut env, payload, signature)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRequestV2(
     mut env: jni::JNIEnv<'_>,
@@ -1403,7 +1310,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_verify_recipient_request_v2(&mut env, request, verified_at_ms)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientLineageQueryV2(
     mut env: jni::JNIEnv<'_>,
@@ -1425,7 +1331,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         trusted_checkpoint_height,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRegistrationLineageV2(
@@ -1446,7 +1351,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         trusted_checkpoint_context_id,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientReceiveOfferV2(
     mut env: jni::JNIEnv<'_>,
@@ -1462,7 +1366,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         publisher_checkpoint_envelope,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectRecipientReceiveOfferV2(
     mut env: jni::JNIEnv<'_>,
@@ -1471,7 +1374,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_recipient_receive_offer_v2(&mut env, offer)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientReceiveOfferV2(
     mut env: jni::JNIEnv<'_>,
@@ -1489,7 +1391,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         trusted_checkpoint_context_id,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildOutputMembershipFrontierV4(
     mut env: jni::JNIEnv<'_>,
@@ -1507,7 +1408,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         root,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeDeriveOutputMembershipPathsV4(
     mut env: jni::JNIEnv<'_>,
@@ -1523,7 +1423,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         change_commitment,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeValidateSpendableBranchV4(
     mut env: jni::JNIEnv<'_>,
@@ -1543,7 +1442,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         block_height,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildOutputMembershipPathsV4(
     mut env: jni::JNIEnv<'_>,
@@ -1563,7 +1461,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         dummy_fields,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildInitRequestV4(
     mut env: jni::JNIEnv<'_>,
@@ -1583,7 +1480,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         output_membership,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildTopUpProvenanceV4(
     mut env: jni::JNIEnv<'_>,
@@ -1603,7 +1499,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         block_height,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeValidateTopUpProvenanceV4(
     mut env: jni::JNIEnv<'_>,
@@ -1614,7 +1509,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_validate_topup_provenance_v4(&mut env, bundle, provenance, block_height)
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildAppendRequestV4(
@@ -1643,7 +1537,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         block_height,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildVerifyRequestV4(
@@ -1667,7 +1560,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         JavaKagemushaArtifactRegistryV4::Production,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildRedeemRequestV4(
@@ -1704,7 +1596,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         block_height,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectPeerPaymentV4(
     mut env: jni::JNIEnv<'_>,
@@ -1713,7 +1604,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_peer_payment_v4(&mut env, payment)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectInitResultV4(
     mut env: jni::JNIEnv<'_>,
@@ -1722,7 +1612,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_init_result_v4(&mut env, result)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectSplitResultV4(
     mut env: jni::JNIEnv<'_>,
@@ -1731,7 +1620,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_split_result_v4(&mut env, result)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectVerifyResultV4(
     mut env: jni::JNIEnv<'_>,
@@ -1740,7 +1628,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_verify_result_v4(&mut env, result)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectRedeemBuildResultV4(
     mut env: jni::JNIEnv<'_>,
@@ -1749,7 +1636,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_redeem_build_result_v4(&mut env, result)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePrepareAcknowledgementV2(
     mut env: jni::JNIEnv<'_>,
@@ -1760,7 +1646,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_prepare_acknowledgement_v2(&mut env, request, payment, accepted_at_ms)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAcknowledgementV2(
     mut env: jni::JNIEnv<'_>,
@@ -1772,7 +1657,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_create_acknowledgement_v2(&mut env, payload, signature, request, payment)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeVerifyAcknowledgementV2(
     mut env: jni::JNIEnv<'_>,
@@ -1783,7 +1667,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_verify_acknowledgement_v2(&mut env, acknowledgement, request, payment)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectReadinessV4(
     mut env: jni::JNIEnv<'_>,
@@ -1792,7 +1675,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_readiness_v4(&mut env, readiness)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectAuthenticatedArtifactSetV4(
     mut env: jni::JNIEnv<'_>,
@@ -1801,7 +1683,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_authenticated_artifact_set_v4(&mut env, artifact_set)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectActiveVerifierV2(
     mut env: jni::JNIEnv<'_>,
@@ -1810,7 +1691,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_active_verifier_v2(&mut env, verifier)
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePrepareAuthorizationV2(
@@ -1843,7 +1723,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         hardware_assertion_platform,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeFinalizeHardwareAuthorizationV2(
     mut env: jni::JNIEnv<'_>,
@@ -1859,7 +1738,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         signature_der,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeFinalizeIosAppAttestAuthorizationV2(
     mut env: jni::JNIEnv<'_>,
@@ -1873,7 +1751,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         assertion_object,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeFinalizeTopUpV4(
     mut env: jni::JNIEnv<'_>,
@@ -1883,7 +1760,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_finalize_top_up_v4(&mut env, unsigned, authorization)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeFinalizeRedeemV4(
     mut env: jni::JNIEnv<'_>,
@@ -1893,7 +1769,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_finalize_redeem_v4(&mut env, build_result, authorization)
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePrepareTopUpV4(
@@ -1936,7 +1811,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         artifact_binding,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectOperationStatusV4(
     mut env: jni::JNIEnv<'_>,
@@ -1945,7 +1819,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_operation_status_v4(&mut env, status)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBranchClaimsConflictV2(
     mut env: jni::JNIEnv<'_>,
@@ -1955,7 +1828,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jboolean {
     java_native_kagemusha_branch_claims_conflict_v2(&mut env, left, right)
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePrepareRedemptionChangeV4(
@@ -1978,7 +1850,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         entropy,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePreparePeerSplitChangeV4(
@@ -2003,7 +1874,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         entropy,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePrepareNoteOpeningV2(
     mut env: jni::JNIEnv<'_>,
@@ -2014,7 +1884,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_prepare_note_opening_v2(&mut env, spend_key, rho, diversifier)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeProjectRecipientRequestV2(
     mut env: jni::JNIEnv<'_>,
@@ -2023,7 +1892,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_recipient_request_v2(&mut env, request)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBridgeAbiVersion(
     _env: jni::JNIEnv<'_>,
@@ -2031,7 +1899,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePastaCycleV4BackendAvailable(
     _env: jni::JNIEnv<'_>,
@@ -2039,7 +1906,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jboolean {
     java_native_kagemusha_pasta_cycle_v4_backend_available()
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeArtifactBeginV4(
     mut env: jni::JNIEnv<'_>,
@@ -2055,7 +1921,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         artifact_sha256,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeArtifactWriteV4(
     mut env: jni::JNIEnv<'_>,
@@ -2065,7 +1930,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) {
     java_native_kagemusha_artifact_write_v4(&mut env, handle, chunk);
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeArtifactFinalizeV4(
     mut env: jni::JNIEnv<'_>,
@@ -2074,7 +1938,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) {
     java_native_kagemusha_artifact_finish_v4(&mut env, handle, false);
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeArtifactCancelV4(
     mut env: jni::JNIEnv<'_>,
@@ -2083,7 +1946,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) {
     java_native_kagemusha_artifact_finish_v4(&mut env, handle, true);
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeArtifactSetInstallV4(
     mut env: jni::JNIEnv<'_>,
@@ -2109,7 +1971,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         handles,
     );
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeArtifactSetIsInstalledV4(
     mut env: jni::JNIEnv<'_>,
@@ -2119,7 +1980,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jboolean {
     java_native_kagemusha_artifact_set_is_installed_v4(&mut env, manifest_norito, manifest_sha256)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeInstalledManifestSha256V4(
     mut env: jni::JNIEnv<'_>,
@@ -2127,7 +1987,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_installed_manifest_sha256_v4(&mut env)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildArtifactBindingV4(
     mut env: jni::JNIEnv<'_>,
@@ -2137,7 +1996,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_build_artifact_binding_v4(&mut env, manifest_norito, manifest_sha256)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeArtifactSetUninstallV4(
     mut env: jni::JNIEnv<'_>,
@@ -2146,7 +2004,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) {
     java_native_kagemusha_artifact_set_uninstall_v4(&mut env, manifest_sha256);
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeInitSpendV4(
     mut env: jni::JNIEnv<'_>,
@@ -2168,7 +2025,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         },
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeAppendSpendV4(
     mut env: jni::JNIEnv<'_>,
@@ -2184,7 +2040,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         verified_at_ms,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeVerifySpendV4(
     mut env: jni::JNIEnv<'_>,
@@ -2206,7 +2061,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         },
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildRedeemV4(
     mut env: jni::JNIEnv<'_>,
@@ -2228,7 +2082,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         },
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePrepareRecipientRequestV2(
@@ -2267,7 +2120,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         diversifier,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientRequestV2(
     mut env: jni::JNIEnv<'_>,
@@ -2277,7 +2129,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_create_recipient_request_v2(&mut env, payload, signature)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRequestV2(
     mut env: jni::JNIEnv<'_>,
@@ -2287,7 +2138,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_verify_recipient_request_v2(&mut env, request, verified_at_ms)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientLineageQueryV2(
     mut env: jni::JNIEnv<'_>,
@@ -2309,7 +2159,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         trusted_checkpoint_height,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRegistrationLineageV2(
@@ -2330,7 +2179,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         trusted_checkpoint_context_id,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientReceiveOfferV2(
     mut env: jni::JNIEnv<'_>,
@@ -2346,7 +2194,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         publisher_checkpoint_envelope,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectRecipientReceiveOfferV2(
     mut env: jni::JNIEnv<'_>,
@@ -2355,7 +2202,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_recipient_receive_offer_v2(&mut env, offer)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientReceiveOfferV2(
     mut env: jni::JNIEnv<'_>,
@@ -2373,7 +2219,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         trusted_checkpoint_context_id,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildOutputMembershipFrontierV4(
     mut env: jni::JNIEnv<'_>,
@@ -2391,7 +2236,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         root,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeDeriveOutputMembershipPathsV4(
     mut env: jni::JNIEnv<'_>,
@@ -2407,7 +2251,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         change_commitment,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeValidateSpendableBranchV4(
     mut env: jni::JNIEnv<'_>,
@@ -2427,7 +2270,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         block_height,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildOutputMembershipPathsV4(
     mut env: jni::JNIEnv<'_>,
@@ -2447,7 +2289,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         dummy_fields,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildInitRequestV4(
     mut env: jni::JNIEnv<'_>,
@@ -2467,7 +2308,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         output_membership,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildTopUpProvenanceV4(
     mut env: jni::JNIEnv<'_>,
@@ -2487,7 +2327,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         block_height,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeValidateTopUpProvenanceV4(
     mut env: jni::JNIEnv<'_>,
@@ -2498,7 +2337,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_validate_topup_provenance_v4(&mut env, bundle, provenance, block_height)
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildAppendRequestV4(
@@ -2527,7 +2365,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         block_height,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildVerifyRequestV4(
@@ -2551,7 +2388,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         JavaKagemushaArtifactRegistryV4::Production,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildRedeemRequestV4(
@@ -2588,7 +2424,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         block_height,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectPeerPaymentV4(
     mut env: jni::JNIEnv<'_>,
@@ -2597,7 +2432,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_peer_payment_v4(&mut env, payment)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectInitResultV4(
     mut env: jni::JNIEnv<'_>,
@@ -2606,7 +2440,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_init_result_v4(&mut env, result)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectSplitResultV4(
     mut env: jni::JNIEnv<'_>,
@@ -2615,7 +2448,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_split_result_v4(&mut env, result)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectVerifyResultV4(
     mut env: jni::JNIEnv<'_>,
@@ -2624,7 +2456,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_verify_result_v4(&mut env, result)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectRedeemBuildResultV4(
     mut env: jni::JNIEnv<'_>,
@@ -2633,7 +2464,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_redeem_build_result_v4(&mut env, result)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePrepareAcknowledgementV2(
     mut env: jni::JNIEnv<'_>,
@@ -2644,7 +2474,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_prepare_acknowledgement_v2(&mut env, request, payment, accepted_at_ms)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAcknowledgementV2(
     mut env: jni::JNIEnv<'_>,
@@ -2656,7 +2485,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_create_acknowledgement_v2(&mut env, payload, signature, request, payment)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeVerifyAcknowledgementV2(
     mut env: jni::JNIEnv<'_>,
@@ -2667,7 +2495,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_verify_acknowledgement_v2(&mut env, acknowledgement, request, payment)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectReadinessV4(
     mut env: jni::JNIEnv<'_>,
@@ -2676,7 +2503,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_readiness_v4(&mut env, readiness)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectAuthenticatedArtifactSetV4(
     mut env: jni::JNIEnv<'_>,
@@ -2685,7 +2511,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_authenticated_artifact_set_v4(&mut env, artifact_set)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectActiveVerifierV2(
     mut env: jni::JNIEnv<'_>,
@@ -2694,7 +2519,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_active_verifier_v2(&mut env, verifier)
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePrepareAuthorizationV2(
@@ -2727,7 +2551,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         hardware_assertion_platform,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeFinalizeHardwareAuthorizationV2(
     mut env: jni::JNIEnv<'_>,
@@ -2743,7 +2566,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         signature_der,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeFinalizeIosAppAttestAuthorizationV2(
     mut env: jni::JNIEnv<'_>,
@@ -2757,7 +2579,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         assertion_object,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeFinalizeTopUpV4(
     mut env: jni::JNIEnv<'_>,
@@ -2767,7 +2588,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_finalize_top_up_v4(&mut env, unsigned, authorization)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeFinalizeRedeemV4(
     mut env: jni::JNIEnv<'_>,
@@ -2777,7 +2597,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_finalize_redeem_v4(&mut env, build_result, authorization)
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePrepareTopUpV4(
@@ -2820,7 +2639,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         artifact_binding,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectOperationStatusV4(
     mut env: jni::JNIEnv<'_>,
@@ -2829,7 +2647,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_operation_status_v4(&mut env, status)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBranchClaimsConflictV2(
     mut env: jni::JNIEnv<'_>,
@@ -2839,7 +2656,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jboolean {
     java_native_kagemusha_branch_claims_conflict_v2(&mut env, left, right)
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePrepareRedemptionChangeV4(
@@ -2862,7 +2678,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         entropy,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePreparePeerSplitChangeV4(
@@ -2887,7 +2702,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         entropy,
     )
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePrepareNoteOpeningV2(
     mut env: jni::JNIEnv<'_>,
@@ -2898,7 +2712,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_prepare_note_opening_v2(&mut env, spend_key, rho, diversifier)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeProjectRecipientRequestV2(
     mut env: jni::JNIEnv<'_>,
@@ -2907,7 +2720,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jobjectArray {
     java_native_kagemusha_project_recipient_request_v2(&mut env, request)
 }
-
 pub(super) fn ensure_min_array_length(
     env: &mut jni::JNIEnv<'_>,
     array: &jni::objects::JLongArray<'_>,
@@ -2932,7 +2744,6 @@ pub(super) fn ensure_min_array_length(
         }
     }
 }
-
 pub(super) fn read_long_array(
     env: &mut jni::JNIEnv<'_>,
     array: &jni::objects::JLongArray<'_>,
@@ -2948,7 +2759,6 @@ pub(super) fn read_long_array(
             return None;
         }
     } as usize;
-
     let mut buf = vec![0i64; len];
     if let Err(err) = env.get_long_array_region(array, 0, &mut buf) {
         throw_java_illegal_state(
@@ -2959,7 +2769,6 @@ pub(super) fn read_long_array(
     }
     Some(buf)
 }
-
 pub(super) fn write_long_array(
     env: &mut jni::JNIEnv<'_>,
     array: &jni::objects::JLongArray<'_>,
@@ -2975,7 +2784,6 @@ pub(super) fn write_long_array(
     }
     true
 }
-
 pub(super) fn convert_field_elem<L: Into<String>>(
     env: &mut jni::JNIEnv<'_>,
     array: &jni::objects::JLongArray<'_>,
@@ -2993,7 +2801,6 @@ pub(super) fn convert_field_elem<L: Into<String>>(
     }
     Some(limbs)
 }
-
 pub(super) fn convert_field_elems<L: Into<String>>(
     env: &mut jni::JNIEnv<'_>,
     array: &jni::objects::JLongArray<'_>,
@@ -3018,7 +2825,6 @@ pub(super) fn convert_field_elems<L: Into<String>>(
     }
     Some(elems)
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativePoseidon2(
     mut env: jni::JNIEnv<'_>,
@@ -3028,7 +2834,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     out: jni::objects::JLongArray<'_>,
 ) -> jni::sys::jboolean {
     use jni::sys::{JNI_FALSE, JNI_TRUE};
-
     if !ensure_min_array_length(&mut env, &out, 1, "poseidon2") {
         return JNI_FALSE;
     }
@@ -3049,7 +2854,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
         JNI_FALSE
     }
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativePoseidon2Batch(
     mut env: jni::JNIEnv<'_>,
@@ -3058,7 +2862,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     out: jni::objects::JLongArray<'_>,
 ) -> jni::sys::jboolean {
     use jni::sys::{JNI_FALSE, JNI_TRUE};
-
     let buf = match read_long_array(&mut env, &inputs, "poseidon2Batch inputs") {
         Some(values) => values,
         None => return JNI_FALSE,
@@ -3095,7 +2898,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
         JNI_FALSE
     }
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativePoseidon6(
     mut env: jni::JNIEnv<'_>,
@@ -3104,7 +2906,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     out: jni::objects::JLongArray<'_>,
 ) -> jni::sys::jboolean {
     use jni::sys::{JNI_FALSE, JNI_TRUE};
-
     if !ensure_min_array_length(&mut env, &out, 1, "poseidon6") {
         return JNI_FALSE;
     }
@@ -3136,7 +2937,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
         JNI_FALSE
     }
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativePoseidon6Batch(
     mut env: jni::JNIEnv<'_>,
@@ -3145,7 +2945,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     out: jni::objects::JLongArray<'_>,
 ) -> jni::sys::jboolean {
     use jni::sys::{JNI_FALSE, JNI_TRUE};
-
     let buf = match read_long_array(&mut env, &inputs, "poseidon6Batch inputs") {
         Some(values) => values,
         None => return JNI_FALSE,
@@ -3186,7 +2985,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
         JNI_FALSE
     }
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeBn254Add(
     mut env: jni::JNIEnv<'_>,
@@ -3196,7 +2994,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     out: jni::objects::JLongArray<'_>,
 ) -> jni::sys::jboolean {
     use jni::sys::{JNI_FALSE, JNI_TRUE};
-
     if !ensure_min_array_length(&mut env, &out, 4, "bn254Add") {
         return JNI_FALSE;
     }
@@ -3224,7 +3021,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
         JNI_FALSE
     }
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeBn254Sub(
     mut env: jni::JNIEnv<'_>,
@@ -3234,7 +3030,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     out: jni::objects::JLongArray<'_>,
 ) -> jni::sys::jboolean {
     use jni::sys::{JNI_FALSE, JNI_TRUE};
-
     if !ensure_min_array_length(&mut env, &out, 4, "bn254Sub") {
         return JNI_FALSE;
     }
@@ -3262,7 +3057,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
         JNI_FALSE
     }
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeBn254Mul(
     mut env: jni::JNIEnv<'_>,
@@ -3272,7 +3066,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     out: jni::objects::JLongArray<'_>,
 ) -> jni::sys::jboolean {
     use jni::sys::{JNI_FALSE, JNI_TRUE};
-
     if !ensure_min_array_length(&mut env, &out, 4, "bn254Mul") {
         return JNI_FALSE;
     }
@@ -3300,7 +3093,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
         JNI_FALSE
     }
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeBn254AddBatch(
     mut env: jni::JNIEnv<'_>,
@@ -3310,7 +3102,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     out: jni::objects::JLongArray<'_>,
 ) -> jni::sys::jboolean {
     use jni::sys::{JNI_FALSE, JNI_TRUE};
-
     let lhs = match convert_field_elems(&mut env, &lhs, "bn254AddBatch lhs") {
         Some(value) => value,
         None => return JNI_FALSE,
@@ -3359,7 +3150,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
         JNI_FALSE
     }
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeBn254SubBatch(
     mut env: jni::JNIEnv<'_>,
@@ -3369,7 +3159,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     out: jni::objects::JLongArray<'_>,
 ) -> jni::sys::jboolean {
     use jni::sys::{JNI_FALSE, JNI_TRUE};
-
     let lhs = match convert_field_elems(&mut env, &lhs, "bn254SubBatch lhs") {
         Some(value) => value,
         None => return JNI_FALSE,
@@ -3418,7 +3207,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
         JNI_FALSE
     }
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeBn254MulBatch(
     mut env: jni::JNIEnv<'_>,
@@ -3428,7 +3216,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     out: jni::objects::JLongArray<'_>,
 ) -> jni::sys::jboolean {
     use jni::sys::{JNI_FALSE, JNI_TRUE};
-
     let lhs = match convert_field_elems(&mut env, &lhs, "bn254MulBatch lhs") {
         Some(value) => value,
         None => return JNI_FALSE,

@@ -1,5 +1,4 @@
 // ISO 20022 lifecycle wrong-family regression.
-
 #[test]
 fn lifecycle_wrong_message_family_fails_parser_validation() {
     let err = parse_message(

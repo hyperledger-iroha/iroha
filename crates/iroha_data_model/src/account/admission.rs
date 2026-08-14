@@ -5,28 +5,22 @@
 //! for Ethereum/Bitcoin-like UX: sending/minting assets (or transferring NFTs) to a
 //! never-before-seen `AccountId` can auto-create the corresponding account object when the
 //! global policy allows it.
-
-use std::collections::BTreeMap;
-
-use iroha_primitives::{json::Json, numeric::Quantity};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-
 use crate::{
     parameter::{CustomParameter, CustomParameterId},
     prelude::{AccountId, AssetDefinitionId, RoleId},
 };
-
+use iroha_primitives::{json::Json, numeric::Quantity};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::collections::BTreeMap;
 /// Legacy domain metadata key previously used for account admission policy payloads.
 ///
 /// Account admission is now configured globally via
 /// [`AccountAdmissionPolicy::PARAMETER_ID_STR`], and this key is retained only for compatibility
 /// with external tooling that may still reference the literal.
 pub const ACCOUNT_ADMISSION_POLICY_METADATA_KEY: &str = "iroha:account_admission_policy";
-
 /// Default cap for the number of implicit accounts that may be created in a single transaction.
 pub const DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX: u32 = 16;
-
 /// Admission mode for implicit account creation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -40,7 +34,6 @@ pub enum AccountAdmissionMode {
     /// Receipt-like operations may implicitly create destination accounts.
     ImplicitReceive,
 }
-
 /// Destination for implicit account creation fees.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -54,7 +47,6 @@ pub enum ImplicitAccountFeeDestination {
     /// Deposit the fee into the provided account.
     Account(AccountId),
 }
-
 /// Fee charged when creating an account implicitly.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -69,7 +61,6 @@ pub struct ImplicitAccountCreationFee {
     /// Where the fee should be routed.
     pub destination: ImplicitAccountFeeDestination,
 }
-
 /// Chain-level policy controlling whether receipt operations may create accounts implicitly.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -95,7 +86,6 @@ pub struct AccountAdmissionPolicy {
     #[norito(default)]
     pub default_role_on_create: Option<RoleId>,
 }
-
 impl Default for AccountAdmissionPolicy {
     fn default() -> Self {
         Self {
@@ -108,11 +98,9 @@ impl Default for AccountAdmissionPolicy {
         }
     }
 }
-
 impl AccountAdmissionPolicy {
     /// Identifier of the chain-level custom parameter that provides a default policy.
     pub const PARAMETER_ID_STR: &'static str = "iroha:default_account_admission_policy";
-
     /// Construct the [`CustomParameterId`] associated with this payload.
     #[must_use]
     pub fn parameter_id() -> CustomParameterId {
@@ -120,13 +108,11 @@ impl AccountAdmissionPolicy {
             .parse()
             .expect("valid default account admission policy parameter identifier")
     }
-
     /// Convert the policy into a [`CustomParameter`] (chain parameter).
     #[must_use]
     pub fn into_custom_parameter(self) -> CustomParameter {
         CustomParameter::new(Self::parameter_id(), Json::new(self))
     }
-
     /// Attempt to decode this policy from a [`CustomParameter`].
     #[must_use]
     pub fn from_custom_parameter(custom: &CustomParameter) -> Option<Self> {
@@ -135,55 +121,45 @@ impl AccountAdmissionPolicy {
         }
         custom.payload().try_into_any_norito::<Self>().ok()
     }
-
     /// Return the effective per-transaction cap for implicit account creations.
     #[must_use]
     pub fn max_implicit_creations_per_tx(&self) -> u32 {
         self.max_implicit_creations_per_tx
             .unwrap_or(DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX)
     }
-
     /// Return the per-block cap for implicit account creations, if configured.
     #[must_use]
     pub fn max_implicit_creations_per_block(&self) -> Option<u32> {
         self.max_implicit_creations_per_block
     }
-
     /// Return the configured fee charged for implicit account creation, if any.
     #[must_use]
     pub fn implicit_creation_fee(&self) -> Option<&ImplicitAccountCreationFee> {
         self.implicit_creation_fee.as_ref()
     }
-
     /// Return the minimum initial amount required for the given asset definition, if configured.
     #[must_use]
     pub fn min_initial_amount_for(&self, id: &AssetDefinitionId) -> Option<&Quantity> {
         self.min_initial_amounts.get(id)
     }
-
     /// Return the role to be assigned on implicit creation, if configured.
     #[must_use]
     pub fn default_role_on_create(&self) -> Option<&RoleId> {
         self.default_role_on_create.as_ref()
     }
 }
-
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use iroha_primitives::numeric::Numeric;
-    use norito::codec::{Decode as _, Encode as _};
-    use norito::json;
-
     use super::*;
     use crate::domain::DomainId;
-
+    use iroha_primitives::numeric::Numeric;
+    use norito::json;
     #[derive(Encode)]
     struct ForgedImplicitAccountCreationFee {
         asset_definition_id: AssetDefinitionId,
         amount: Numeric,
         destination: ImplicitAccountFeeDestination,
     }
-
     #[derive(Encode)]
     struct ForgedAccountAdmissionPolicy {
         mode: AccountAdmissionMode,
@@ -193,14 +169,12 @@ mod tests {
         min_initial_amounts: BTreeMap<AssetDefinitionId, Numeric>,
         default_role_on_create: Option<RoleId>,
     }
-
     fn asset_definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("asset name"),
         )
     }
-
     #[test]
     fn negative_numeric_payloads_cannot_decode_as_account_admission_amounts() {
         let forged_fee = ForgedImplicitAccountCreationFee {
@@ -213,7 +187,6 @@ mod tests {
             ImplicitAccountCreationFee::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as an implicit-creation fee"
         );
-
         let forged_policy = ForgedAccountAdmissionPolicy {
             mode: AccountAdmissionMode::ImplicitReceive,
             max_implicit_creations_per_tx: None,
@@ -228,7 +201,6 @@ mod tests {
             "a negative signed payload must not decode as a minimum initial amount"
         );
     }
-
     #[test]
     fn policy_json_roundtrips_with_tagged_mode() {
         let policy = AccountAdmissionPolicy {
@@ -244,14 +216,12 @@ mod tests {
             serialized.contains("\"mode\":{\"mode\":\"implicit_receive\""),
             "serialized policy must carry tagged enum value: {serialized}"
         );
-
         let decoded: AccountAdmissionPolicy =
             json::from_str(&serialized).expect("decode policy from JSON");
         assert_eq!(decoded.mode, AccountAdmissionMode::ImplicitReceive);
         assert_eq!(decoded.max_implicit_creations_per_tx, Some(3));
         assert_eq!(decoded.max_implicit_creations_per_block, Some(9));
     }
-
     #[test]
     fn default_cap_applies_when_unspecified() {
         let policy = AccountAdmissionPolicy {
@@ -267,7 +237,6 @@ mod tests {
             DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX
         );
     }
-
     #[test]
     fn policy_custom_parameter_roundtrips() {
         let policy = AccountAdmissionPolicy {
@@ -284,7 +253,6 @@ mod tests {
             AccountAdmissionPolicy::from_custom_parameter(&custom).expect("decode policy");
         assert_eq!(decoded, policy);
     }
-
     #[test]
     fn fee_and_minimums_roundtrip() {
         let mut minimums = BTreeMap::new();
@@ -311,7 +279,6 @@ mod tests {
             min_initial_amounts: minimums,
             default_role_on_create: Some("basic_user".parse().expect("role id")),
         };
-
         let serialized = json::to_json(&policy).expect("serialize policy");
         let decoded: AccountAdmissionPolicy =
             json::from_str(&serialized).expect("decode policy with fee/minimums");

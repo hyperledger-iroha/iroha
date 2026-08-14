@@ -1702,13 +1702,13 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
 4, Kotlin 6, and Java 5 tests. The current mutable source closure enumerates
-1,351 grouped and 1,350 diagnostics records. The checked-in grouped fixture has
+1,383 grouped and 1,383 diagnostics records. The checked-in grouped fixture has
 SHA-256
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
 the grouped and diagnostics suite-source SHA-256 values are
-`92a87e705eccad8a63d32c1d4e0c8ce3c6167671905e4e7b76672cc60575606a`
+`e2ee760f6e47f0f2356154d00b35e42591f46dc771e0103c0c61dac552452d83`
 and
-`c141cd7d6d379417af63b9712a2b9a5521327f5d88b33e6d55e71205655ee1e3`.
+`d865504a77bc35d48b4d52cb36deab51e55b02f250af36c37db06881769a91f5`.
 The diagnostics closure directly includes the 48-line wire fixture whose
 SHA-256 is
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
@@ -1983,18 +1983,16 @@ Swift `4`, Kotlin `6`, and Java `5`, with exactly 55 grouped Native negative
 controls. The diagnostics inventory is Rust `14`, Python `121`, JavaScript
 source/distribution `88`, Swift `17`, Kotlin `26`, and Java `24`. The recursive
 source-closure design covers every transitive production input, including the
-browser JavaScript distribution, SoraFS orderbook JavaScript implementation
-and types, the standalone Python orderbook module, Kotlin/Java Native models,
-grouped JSON, and wire TSV; the mutable closure enumerates 1,351 grouped and
-1,350 diagnostics records. The current grouped JSON and wire TSV SHA-256
-values are
+browser JavaScript distribution, Kotlin/Java Native models, grouped JSON, and
+wire TSV; the mutable closure enumerates 1,383 grouped and 1,383 diagnostics
+records. The current grouped JSON and wire TSV SHA-256 values are
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`
 and
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The grouped and diagnostics suite-source SHA-256 values are
-`92a87e705eccad8a63d32c1d4e0c8ce3c6167671905e4e7b76672cc60575606a`
+`e2ee760f6e47f0f2356154d00b35e42591f46dc771e0103c0c61dac552452d83`
 and
-`c141cd7d6d379417af63b9712a2b9a5521327f5d88b33e6d55e71205655ee1e3`.
+`d865504a77bc35d48b4d52cb36deab51e55b02f250af36c37db06881769a91f5`.
 
 Those are development-source inventories, not SDK results. The changed
 JavaScript production roots require fresh deterministic source/distribution

@@ -1,5 +1,4 @@
 //! Host-side validation for the non-shipping Android candidate-lab seed set.
-
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fs::{self, OpenOptions},
@@ -8,7 +7,6 @@ use std::{
     os::unix::fs::{MetadataExt as _, OpenOptionsExt as _},
     path::Path,
 };
-
 use iroha_data_model::{
     account::{AccountId, address::ChainDiscriminantGuard},
     offline::{
@@ -19,19 +17,16 @@ use iroha_data_model::{
 };
 use sha2::{Digest as _, Sha256};
 use zeroize::{Zeroize as _, Zeroizing};
-
 use super::{
     KagemushaNoteOpeningV2, KagemushaOutputMembershipPathsV4,
     KagemushaRecipientOutputProverMaterialV2, decode_canonical_kagemusha_archive,
     derive_kagemusha_owned_note_v2,
 };
-
 const REPORT_SCHEMA: &str = "iroha.kagemusha.android_candidate_scenario_validation.v1";
 const INVENTORY_DOMAIN: &[u8] = b"iroha.kagemusha.android-candidate-scenario-inventory.v1\0";
 const MAX_CANDIDATE_BYTES: u64 = 1024 * 1024;
 const MAX_ROSTER_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_SCENARIO_BYTES: u64 = 16 * 1024 * 1024;
-
 pub(super) const SCENARIO_FILES: [&str; 33] = [
     "init-top-up-anchor-v4.norito",
     "init-top-up-finality-proof-v2.norito",
@@ -67,18 +62,14 @@ pub(super) const SCENARIO_FILES: [&str; 33] = [
     "duplicate-input-block-height.txt",
     "duplicate-input-verified-at-ms.txt",
 ];
-
 #[derive(Default)]
 pub(super) struct ScenarioPayloads(pub(super) BTreeMap<String, Vec<u8>>);
-
 impl Deref for ScenarioPayloads {
     type Target = BTreeMap<String, Vec<u8>>;
-
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 impl Drop for ScenarioPayloads {
     fn drop(&mut self) {
         for payload in self.0.values_mut() {
@@ -87,7 +78,6 @@ impl Drop for ScenarioPayloads {
         self.0.clear();
     }
 }
-
 fn metadata_identity(metadata: &fs::Metadata) -> (u64, u64, u32, u64, u32, u64, i64, i64) {
     (
         metadata.dev(),
@@ -100,7 +90,18 @@ fn metadata_identity(metadata: &fs::Metadata) -> (u64, u64, u32, u64, u32, u64, 
         metadata.mtime_nsec(),
     )
 }
-
+fn read_at_most(reader: &mut impl Read, maximum: u64, bytes: &mut Vec<u8>) -> Result<(), String> {
+    Read::by_ref(reader)
+        .take(maximum.saturating_add(1))
+        .read_to_end(bytes)
+        .map_err(|error| format!("failed to read bounded input: {error}"))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > maximum {
+        return Err(format!(
+            "input grew beyond its {maximum}-byte bound while reading"
+        ));
+    }
+    Ok(())
+}
 pub(super) fn read_private_regular(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
     if !path.is_absolute() {
         return Err(format!("input path must be absolute: {}", path.display()));
@@ -133,8 +134,8 @@ pub(super) fn read_private_regular(path: &Path, maximum: u64) -> Result<Vec<u8>,
     let capacity = usize::try_from(opened.size())
         .map_err(|_| format!("input is too large for this host: {}", path.display()))?;
     let mut bytes = Zeroizing::new(Vec::with_capacity(capacity));
-    file.read_to_end(&mut bytes)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    read_at_most(&mut file, maximum, &mut bytes)
+        .map_err(|error| format!("{error}: {}", path.display()))?;
     let after_open = file
         .metadata()
         .map_err(|error| format!("failed to reinspect open {}: {error}", path.display()))?;
@@ -148,7 +149,18 @@ pub(super) fn read_private_regular(path: &Path, maximum: u64) -> Result<Vec<u8>,
     }
     Ok(std::mem::take(&mut *bytes))
 }
-
+#[cfg(test)]
+mod bounded_read_tests {
+    use std::io::Cursor;
+    use super::read_at_most;
+    #[test]
+    fn reader_cannot_append_beyond_the_admitted_size() {
+        let mut reader = Cursor::new(vec![0xA5; 9]);
+        let mut bytes = Vec::new();
+        assert!(read_at_most(&mut reader, 8, &mut bytes).is_err());
+        assert_eq!(bytes.len(), 9, "only the one-byte overflow probe is read");
+    }
+}
 pub(super) fn load_scenario(directory: &Path) -> Result<ScenarioPayloads, String> {
     if !directory.is_absolute() {
         return Err("scenario directory path must be absolute".to_owned());
@@ -196,7 +208,6 @@ pub(super) fn load_scenario(directory: &Path) -> Result<ScenarioPayloads, String
     }
     Ok(files)
 }
-
 pub(super) fn bytes<'a>(
     files: &'a BTreeMap<String, Vec<u8>>,
     name: &str,
@@ -206,7 +217,6 @@ pub(super) fn bytes<'a>(
         .map(Vec::as_slice)
         .ok_or_else(|| format!("missing scenario input {name}"))
 }
-
 fn decode<T>(payload: &[u8], label: &str) -> Result<T, String>
 where
     T: norito::NoritoSerialize,
@@ -215,13 +225,11 @@ where
     decode_canonical_kagemusha_archive(payload)
         .map_err(|_| format!("{label} is not one canonical typed Norito archive"))
 }
-
 pub(super) fn digest32(files: &BTreeMap<String, Vec<u8>>, name: &str) -> Result<[u8; 32], String> {
     bytes(files, name)?
         .try_into()
         .map_err(|_| format!("{name} must contain exactly 32 bytes"))
 }
-
 pub(super) fn positive_decimal(
     files: &BTreeMap<String, Vec<u8>>,
     name: &str,
@@ -246,7 +254,6 @@ pub(super) fn positive_decimal(
         .ok_or_else(|| format!("{name} is outside the positive Android Long corridor"))?;
     Ok(value)
 }
-
 fn validate_request_opening(
     request: &KagemushaRecipientPaymentRequestV2,
     opening: &KagemushaNoteOpeningV2,
@@ -294,7 +301,6 @@ fn validate_request_opening(
     }
     Ok(note)
 }
-
 fn validate_request_material_without_opening(
     request: &KagemushaRecipientPaymentRequestV2,
 ) -> Result<(), String> {
@@ -322,7 +328,6 @@ fn validate_request_material_without_opening(
     }
     Ok(())
 }
-
 fn parse_canonical_account_id_for_chain(
     account_text: &str,
     account_chain_discriminant: u16,
@@ -338,7 +343,6 @@ fn parse_canonical_account_id_for_chain(
     }
     Ok(parsed.into_account_id())
 }
-
 pub(super) fn scenario_inventory_sha256(
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<[u8; 32], String> {
@@ -366,7 +370,6 @@ pub(super) fn scenario_inventory_sha256(
     }
     Ok(hasher.finalize().into())
 }
-
 /// Validate the exact 33-file Android candidate scenario against real bridge
 /// carrier types, the candidate manifest, and the production finality verifier.
 ///
@@ -394,14 +397,12 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
     let manifest_bytes =
         norito::to_bytes(&candidate.manifest).map_err(|_| "failed to encode candidate manifest")?;
     let manifest_sha256: [u8; 32] = Sha256::digest(&manifest_bytes).into();
-
     let candidate_roster_bytes = read_private_regular(candidate_roster_path, MAX_ROSTER_BYTES)?;
     let candidate_roster: KagemushaTopUpFinalityRosterArtifactV2 =
         decode(&candidate_roster_bytes, "candidate finality roster")?;
     candidate_roster
         .validate()
         .map_err(|_| "candidate finality roster cryptography is invalid".to_owned())?;
-
     let files = load_scenario(scenario_directory)?;
     if bytes(&files, "init-top-up-finality-roster-artifact-v2.norito")? != candidate_roster_bytes {
         return Err(
@@ -435,7 +436,6 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
     {
         return Err("typed finality result is not bound to the candidate inputs".to_owned());
     }
-
     let init_opening: KagemushaNoteOpeningV2 =
         decode(bytes(&files, "init-opening-v2.norito")?, "init opening")?;
     let init_note = derive_kagemusha_owned_note_v2(
@@ -455,7 +455,6 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
     init_membership
         .for_init_v4(&anchor)
         .map_err(|_| "init output membership is not bound to the anchor roots/note".to_owned())?;
-
     let hop_one_verified_at = positive_decimal(&files, "append-hop-01-verified-at-ms.txt")?;
     let hop_two_verified_at = positive_decimal(&files, "append-hop-02-verified-at-ms.txt")?;
     let duplicate_verified_at = positive_decimal(&files, "duplicate-input-verified-at-ms.txt")?;
@@ -463,7 +462,6 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
     {
         return Err("recipient verification times are not in lifecycle order".to_owned());
     }
-
     let hop_one_request: KagemushaRecipientPaymentRequestV2 = decode(
         bytes(&files, "append-hop-01-recipient-request-v2.norito")?,
         "hop-one recipient request",
@@ -514,7 +512,6 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
         .map_err(|_| {
             "hop-one output paths do not cryptographically bind both outputs".to_owned()
         })?;
-
     let hop_two_request: KagemushaRecipientPaymentRequestV2 = decode(
         bytes(&files, "append-hop-02-recipient-request-v2.norito")?,
         "hop-two recipient request",
@@ -563,7 +560,6 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
         .map_err(|_| {
             "hop-two output paths do not cryptographically bind both outputs".to_owned()
         })?;
-
     let duplicate_request: KagemushaRecipientPaymentRequestV2 = decode(
         bytes(&files, "duplicate-input-recipient-request-v2.norito")?,
         "duplicate-input recipient request",
@@ -596,7 +592,6 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
             None,
         )
         .map_err(|_| "duplicate-input output paths do not bind its recipient output".to_owned())?;
-
     let request_ids = [
         hop_one_request.request_id,
         hop_two_request.request_id,
@@ -639,7 +634,6 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
     if commitments.len() != notes.len() || nullifiers.len() != notes.len() {
         return Err("scenario note commitments/nullifiers must all be distinct".to_owned());
     }
-
     let expected_transfer = iroha_core::zk::hash_vk(
         &iroha_core::zk::confidential_v2::confidential_transfer_v2_vk_box()
             .map_err(|error| format!("failed to construct canonical transfer verifier: {error}"))?,
@@ -658,7 +652,6 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
             "unshield verifier commitment is not the canonical current-source key".to_owned(),
         );
     }
-
     let operation_names = [
         "append-hop-01-operation-id.bin",
         "append-hop-02-operation-id.bin",
@@ -674,7 +667,6 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
             return Err(format!("{name} is zero or reuses another operation id"));
         }
     }
-
     let hop_one_height = positive_decimal(&files, "append-hop-01-block-height.txt")?;
     let hop_two_height = positive_decimal(&files, "append-hop-02-block-height.txt")?;
     let duplicate_height = positive_decimal(&files, "duplicate-input-block-height.txt")?;
@@ -705,7 +697,6 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
             return Err("redemption height precedes candidate activation".to_owned());
         }
     }
-
     let account_payload = bytes(&files, "redeem-recipient-account-id.txt")?;
     let account_line = account_payload
         .strip_suffix(b"\n")
@@ -713,7 +704,6 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
     let account_text = std::str::from_utf8(account_line)
         .map_err(|_| "redemption account is not UTF-8".to_owned())?;
     let _account = parse_canonical_account_id_for_chain(account_text, account_chain_discriminant)?;
-
     let inventory_sha256 = scenario_inventory_sha256(&files)?;
     Ok(format!(
         "{{\"candidate_manifest_sha256\":\"{}\",\"candidate_record_sha256\":\"{}\",\"finalized_height\":{},\"scenario_file_count\":{},\"scenario_inventory_sha256\":\"{}\",\"schema\":\"{}\"}}\n",
@@ -726,18 +716,15 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
     )
     .into_bytes())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
-
     #[test]
     fn arbitrary_ascii_is_not_a_typed_norito_seed() {
         assert!(decode::<KagemushaNoteOpeningV2>(b"not norito\n", "opening").is_err());
         assert!(decode::<KagemushaRecipientPaymentRequestV2>(b"{}\n", "request").is_err());
     }
-
     #[test]
     fn account_canonical_roundtrip_uses_the_explicit_chain_discriminant() {
         const TAIRA: u16 = 369;
@@ -752,7 +739,6 @@ mod tests {
             let _taira = ChainDiscriminantGuard::enter(TAIRA);
             account.to_string()
         };
-
         let _ambient_sora = ChainDiscriminantGuard::enter(SORA);
         assert_eq!(
             parse_canonical_account_id_for_chain(&taira_literal, TAIRA)

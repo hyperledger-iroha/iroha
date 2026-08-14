@@ -1,9 +1,6 @@
 //! Tests for xtask command parsing and release helpers.
-
 use norito::json::Value;
-
 use super::*;
-
 #[test]
 fn norito_rpc_fixtures_accepts_only_the_canonical_output_root_option() {
     let args = [
@@ -16,7 +13,6 @@ fn norito_rpc_fixtures_accepts_only_the_canonical_output_root_option() {
         parse_command(args.into_iter().map(String::from)).expect("canonical option parses"),
         CommandKind::NoritoRpcFixtures { .. }
     ));
-
     for retired in [
         "--fixtures",
         "--exporter",
@@ -41,7 +37,6 @@ fn norito_rpc_fixtures_accepts_only_the_canonical_output_root_option() {
         );
     }
 }
-
 #[test]
 fn norito_rpc_fixtures_rejects_ambiguous_output_roots() {
     for invalid in ["", ".", "..", "../stage", "stage/../escape", "/", "--all"] {
@@ -56,7 +51,6 @@ fn norito_rpc_fixtures_rejects_ambiguous_output_roots() {
         );
     }
 }
-
 #[test]
 fn norito_rpc_verify_accepts_only_one_explicit_report_target() {
     for arguments in [
@@ -75,7 +69,6 @@ fn norito_rpc_verify_accepts_only_one_explicit_report_target() {
             CommandKind::NoritoRpcVerify { .. }
         ));
     }
-
     for arguments in [
         vec!["xtask", "norito-rpc-verify", "--json-out"],
         vec!["xtask", "norito-rpc-verify", "--json-out", ""],
@@ -92,7 +85,6 @@ fn norito_rpc_verify_accepts_only_one_explicit_report_target() {
         assert!(parse_command(arguments.into_iter().map(String::from)).is_err());
     }
 }
-
 #[test]
 fn norito_rpc_verify_help_describes_the_fixture_only_contract() {
     let help = NORITO_RPC_VERIFY_USAGE_DESCRIPTION.to_ascii_lowercase();
@@ -111,7 +103,6 @@ fn norito_rpc_verify_help_describes_the_fixture_only_contract() {
         );
     }
 }
-
 #[test]
 fn norito_rpc_fixture_help_discloses_every_publication_surface() {
     let help = NORITO_RPC_FIXTURES_USAGE_DESCRIPTION.to_ascii_lowercase();
@@ -129,19 +120,16 @@ fn norito_rpc_fixture_help_discloses_every_publication_surface() {
         );
     }
 }
-
 #[test]
 fn vote_tally_default_path_points_into_fixtures() {
     let default = default_vote_tally_path();
     assert!(default.ends_with("fixtures/zk/vote_tally"));
 }
-
 #[test]
 fn soranet_fixture_default_path_points_into_tests() {
     let default = soranet::default_fixture_dir(&workspace_root());
     assert!(default.ends_with("tests/interop/soranet/capabilities"));
 }
-
 #[test]
 fn parse_sorafs_adoption_check_rejects_relaxation_without_override_id() {
     let args = ["xtask", "sorafs-adoption-check", "--allow-single-source"];
@@ -156,7 +144,6 @@ fn parse_sorafs_adoption_check_rejects_relaxation_without_override_id() {
         "unexpected error: {message}"
     );
 }
-
 #[test]
 fn parse_sorafs_adoption_check_rejects_malformed_override_id() {
     let args = [
@@ -177,7 +164,6 @@ fn parse_sorafs_adoption_check_rejects_malformed_override_id() {
         "unexpected error: {message}"
     );
 }
-
 #[test]
 fn parse_sorafs_adoption_check_accepts_relaxation_with_override_id() {
     let args = [
@@ -198,7 +184,6 @@ fn parse_sorafs_adoption_check_accepts_relaxation_with_override_id() {
         _ => panic!("expected sorafs-adoption-check command"),
     }
 }
-
 #[test]
 fn sm_operator_snippet_with_seed_emits_expected_files() {
     let temp = TempDir::new().expect("temp dir");
@@ -213,7 +198,6 @@ fn sm_operator_snippet_with_seed_emits_expected_files() {
         snippet_out: Some(crate::sm::OutputTarget::file(snippet_path.clone())),
     };
     crate::sm::generate_sm_operator_snippet(options).expect("generate snippet");
-
     let json_text = std::fs::read_to_string(&json_path).expect("read sm2-key.json");
     let value: Value = norito::json::from_str(&json_text).expect("parse sm2 json");
     assert_eq!(
@@ -229,7 +213,6 @@ fn sm_operator_snippet_with_seed_emits_expected_files() {
             .is_ok(),
         "public key config should round-trip via PublicKey::from_str"
     );
-
     let snippet = std::fs::read_to_string(&snippet_path).expect("read client-sm2.toml");
     assert!(
         snippet.contains("public_key = \""),
@@ -256,7 +239,6 @@ fn sm_operator_snippet_with_seed_emits_expected_files() {
         "snippet should mention optional OpenSSL preview toggle"
     );
 }
-
 #[test]
 fn sm_operator_snippet_supports_stdout_targets() {
     let temp = TempDir::new().expect("temp dir");
@@ -270,7 +252,6 @@ fn sm_operator_snippet_supports_stdout_targets() {
         snippet_out: Some(crate::sm::OutputTarget::file(snippet_path.clone())),
     };
     crate::sm::generate_sm_operator_snippet(options).expect("generate snippet");
-
     assert!(
         !snippet_path.parent().unwrap().join("sm2-key.json").exists(),
         "JSON file should not be created when streamed to stdout"
@@ -281,12 +262,10 @@ fn sm_operator_snippet_supports_stdout_targets() {
         "stdout run should still produce snippet file when requested"
     );
 }
-
 #[test]
 fn iso_bridge_lint_uses_default_reference_data() {
     lint_iso_bridge(IsoLintOptions::default()).expect("default iso lint should succeed");
 }
-
 #[cfg(feature = "vote-tally")]
 #[test]
 fn vote_tally_bundle_matches_expected_hashes() {
@@ -330,7 +309,6 @@ fn vote_tally_bundle_matches_expected_hashes() {
         .get("vote_tally_vk.zk1")
         .expect("vk entry present");
     assert_eq!(vk_entry.0, summary.vk_len as u64);
-
     assert_eq!(
         summary.backend,
         "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1"
@@ -358,7 +336,6 @@ fn vote_tally_bundle_matches_expected_hashes() {
     assert!(summary.vk_len > 0);
     assert!(summary.proof_len > 0);
 }
-
 #[cfg(feature = "vote-tally")]
 #[test]
 fn attestation_verification_rejects_proof_digest_drift() {
@@ -370,7 +347,6 @@ fn attestation_verification_rejects_proof_digest_drift() {
     let mut manifest_text = norito::json::to_string_pretty(&manifest_value).unwrap();
     manifest_text.push('\n');
     std::fs::write(&manifest_path, manifest_text).unwrap();
-
     let mut parsed: Value =
         norito::json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
     if let Some(object) = parsed.as_object_mut()
@@ -404,7 +380,6 @@ fn attestation_verification_rejects_proof_digest_drift() {
         "error must cite proof artefact"
     );
 }
-
 #[cfg(feature = "vote-tally")]
 #[test]
 fn attestation_verification_rejects_metadata_drift() {
@@ -416,7 +391,6 @@ fn attestation_verification_rejects_metadata_drift() {
     let mut manifest_text = norito::json::to_string_pretty(&manifest_value).unwrap();
     manifest_text.push('\n');
     std::fs::write(&manifest_path, manifest_text).unwrap();
-
     // Mutate the meta file digest (deterministic artefact) and ensure verification fails.
     let mut parsed: Value =
         norito::json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
@@ -451,7 +425,6 @@ fn attestation_verification_rejects_metadata_drift() {
         "error should reference the divergent artefact"
     );
 }
-
 #[test]
 fn verify_requires_seeded_baseline() {
     let baseline = TempDir::new().expect("baseline dir");

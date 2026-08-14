@@ -5,9 +5,7 @@
 //! module defines the canonical V1 entry, block, and inclusion-proof payloads
 //! plus the deterministic BLAKE3 Merkle helpers needed by publishers and public
 //! verifiers.
-
 use std::collections::{BTreeMap, BTreeSet};
-
 use blake3::Hasher;
 use iroha_schema::IntoSchema;
 use norito::{
@@ -15,14 +13,11 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
 };
 use thiserror::Error;
-
 mod fixed_bytes {
     use norito::json::{self, JsonDeserialize as _, JsonSerialize as _, Parser};
-
     pub fn serialize<const N: usize>(bytes: &[u8; N], out: &mut String) {
         bytes.as_slice().to_vec().json_serialize(out);
     }
-
     pub fn deserialize<const N: usize>(parser: &mut Parser<'_>) -> Result<[u8; N], json::Error> {
         let values = Vec::<u8>::json_deserialize(parser)?;
         if values.len() != N {
@@ -35,10 +30,8 @@ mod fixed_bytes {
         array.copy_from_slice(&values);
         Ok(array)
     }
-
     pub mod option {
         use norito::json::{self, Parser};
-
         #[allow(clippy::ref_option)]
         pub fn serialize<const N: usize>(value: &Option<[u8; N]>, out: &mut String) {
             match value.as_ref() {
@@ -46,7 +39,6 @@ mod fixed_bytes {
                 None => out.push_str("null"),
             }
         }
-
         pub fn deserialize<const N: usize>(
             parser: &mut Parser<'_>,
         ) -> Result<Option<[u8; N]>, json::Error> {
@@ -58,7 +50,6 @@ mod fixed_bytes {
         }
     }
 }
-
 /// Schema version for [`ModerationLedgerEntryV1`].
 pub const MODERATION_LEDGER_ENTRY_VERSION_V1: u16 = 1;
 /// Schema version for [`ModerationLedgerBlockV1`].
@@ -105,7 +96,6 @@ pub const MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1: &str =
 /// SoraFS V1 uses a pure differential-privacy mechanism, so delta is
 /// explicitly encoded and must be zero.
 pub const MODERATION_PRIVACY_DELTA_PPB_MAX: u64 = 0;
-
 const ENTRY_HASH_DOMAIN_V1: &[u8] = b"sorafs.transparency.entry.v1";
 const BLOCK_HASH_DOMAIN_V1: &[u8] = b"sorafs.transparency.block.v1";
 const PUBLICATION_HASH_DOMAIN_V1: &[u8] = b"sorafs.transparency.publication.v1";
@@ -115,7 +105,6 @@ const PRIVACY_AGGREGATE_SUBJECT_DOMAIN_V1: &[u8] =
     b"sorafs.transparency.privacy_aggregate.subject.v1";
 const PROOF_TOKEN_ISSUANCE_HASH_DOMAIN_V1: &[u8] = b"sorafs.transparency.proof_token_issuance.v1";
 const PROOF_TOKEN_SUBJECT_DOMAIN_V1: &[u8] = b"sorafs.transparency.proof_token.subject.v1";
-
 /// Transparency ledger entry kind.
 #[derive(
     Clone,
@@ -151,7 +140,6 @@ pub enum ModerationLedgerEntryKindV1 {
     /// Domain-specific entry kind identified by a governance-controlled slug.
     Custom(String),
 }
-
 /// Public metadata attached to a transparency ledger entry.
 #[derive(
     Clone,
@@ -172,7 +160,6 @@ pub struct ModerationLedgerMetadataV1 {
     /// Metadata value.
     pub value: String,
 }
-
 /// Privacy mode used for an aggregate row.
 #[derive(
     Clone,
@@ -197,7 +184,6 @@ pub enum ModerationPrivacyModeV1 {
     /// Differential privacy and suppression parameters are both present.
     DifferentialPrivacyWithSuppression,
 }
-
 /// Explicit privacy parameters for a transparency aggregate.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
@@ -224,7 +210,6 @@ pub struct ModerationPrivacyParametersV1 {
     #[norito(default)]
     pub suppression_threshold: Option<u64>,
 }
-
 /// One privacy-safe aggregate metric.
 #[derive(
     Clone,
@@ -248,7 +233,6 @@ pub struct ModerationPrivacyAggregateMetricV1 {
     /// Unit label for the published value.
     pub unit: String,
 }
-
 /// Typed noise-source evidence for one privacy aggregate release.
 ///
 /// Every aggregate carries this field on wire. Differential-privacy modes
@@ -265,7 +249,6 @@ pub enum ModerationPrivacyNoiseSourceV1 {
     /// The release uses hidden threshold-PRF output committed by BLAKE3-256.
     ThresholdPrf(ModerationPrivacyThresholdPrfCommitmentV1),
 }
-
 /// Nonzero public commitment to hidden threshold-PRF cycle output.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
@@ -276,7 +259,6 @@ pub struct ModerationPrivacyThresholdPrfCommitmentV1 {
     #[norito(with = "fixed_bytes")]
     pub commitment: [u8; 32],
 }
-
 /// Canonical privacy-safe moderation aggregate for SFM-4c dashboards.
 #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
@@ -317,7 +299,6 @@ pub struct ModerationPrivacyAggregateV1 {
     #[norito(default)]
     pub metadata: Vec<ModerationLedgerMetadataV1>,
 }
-
 /// Canonical privacy-safe record for one issued `SoraFS` moderation proof token.
 #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
@@ -358,7 +339,6 @@ pub struct ProofTokenIssuanceV1 {
     #[norito(default)]
     pub metadata: Vec<ModerationLedgerMetadataV1>,
 }
-
 /// Canonical SFM-4c transparency ledger entry.
 #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
@@ -400,7 +380,6 @@ pub struct ModerationLedgerEntryV1 {
     #[norito(default)]
     pub metadata: Vec<ModerationLedgerMetadataV1>,
 }
-
 /// Canonical transparency ledger cycle header.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
@@ -427,7 +406,6 @@ pub struct ModerationLedgerBlockV1 {
     #[norito(with = "fixed_bytes::option")]
     pub previous_block_hash: Option<[u8; 32]>,
 }
-
 /// Relative position of a sibling in a Merkle audit path.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
@@ -439,7 +417,6 @@ pub enum ModerationLedgerProofSideV1 {
     /// Sibling hash is right of the current node.
     Right,
 }
-
 /// One sibling node in a transparency ledger Merkle proof.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
@@ -451,7 +428,6 @@ pub struct ModerationLedgerProofNodeV1 {
     #[norito(with = "fixed_bytes")]
     pub hash: [u8; 32],
 }
-
 /// Inclusion proof for a transparency ledger entry.
 #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
@@ -476,7 +452,6 @@ pub struct ModerationLedgerProofV1 {
     #[norito(default)]
     pub audit_path: Vec<ModerationLedgerProofNodeV1>,
 }
-
 /// Canonical SFM-4c cycle publication bundle.
 #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
@@ -494,7 +469,6 @@ pub struct ModerationLedgerCyclePublicationV1 {
     /// is sorted by aggregate id and binds one-to-one to [`Self::proofs`].
     pub privacy_aggregates: Vec<ModerationPrivacyAggregateV1>,
 }
-
 impl ModerationPrivacyParametersV1 {
     /// Validate the explicit privacy parameters for an aggregate.
     ///
@@ -535,7 +509,6 @@ impl ModerationPrivacyParametersV1 {
         Ok(())
     }
 }
-
 impl ModerationPrivacyAggregateV1 {
     /// Validate this privacy-safe aggregate payload.
     ///
@@ -608,7 +581,6 @@ impl ModerationPrivacyAggregateV1 {
         }
         Ok(())
     }
-
     /// Compute the domain-separated canonical aggregate hash.
     ///
     /// # Errors
@@ -617,7 +589,6 @@ impl ModerationPrivacyAggregateV1 {
     pub fn aggregate_hash(&self) -> Result<[u8; 32], TransparencyLedgerError> {
         hash_norito(PRIVACY_AGGREGATE_HASH_DOMAIN_V1, self)
     }
-
     /// Convert this aggregate payload into a public transparency ledger entry.
     ///
     /// The resulting entry uses [`ModerationLedgerEntryKindV1::PrivacyAggregate`],
@@ -638,7 +609,6 @@ impl ModerationPrivacyAggregateV1 {
         self.validate()?;
         require_nonzero16("cycle_id", &cycle_id)?;
         require_nonzero16("entry_id", &entry_id)?;
-
         let payload_digest = self.aggregate_hash()?;
         let mut metadata = BTreeMap::new();
         insert_metadata(&mut metadata, "aggregate_id", self.aggregate_id.clone())?;
@@ -703,7 +673,6 @@ impl ModerationPrivacyAggregateV1 {
         for item in &self.metadata {
             insert_metadata(&mut metadata, &item.key, item.value.clone())?;
         }
-
         let entry = ModerationLedgerEntryV1 {
             version: MODERATION_LEDGER_ENTRY_VERSION_V1,
             cycle_id,
@@ -726,7 +695,6 @@ impl ModerationPrivacyAggregateV1 {
         Ok(entry)
     }
 }
-
 impl ProofTokenIssuanceV1 {
     /// Validate this proof-token issuance record.
     ///
@@ -767,7 +735,6 @@ impl ProofTokenIssuanceV1 {
         validate_metadata(&self.metadata)?;
         Ok(())
     }
-
     /// Compute the domain-separated canonical issuance hash.
     ///
     /// # Errors
@@ -776,7 +743,6 @@ impl ProofTokenIssuanceV1 {
     pub fn issuance_hash(&self) -> Result<[u8; 32], TransparencyLedgerError> {
         hash_norito(PROOF_TOKEN_ISSUANCE_HASH_DOMAIN_V1, self)
     }
-
     /// Convert this proof-token issuance record into a public transparency ledger entry.
     ///
     /// # Errors
@@ -793,7 +759,6 @@ impl ProofTokenIssuanceV1 {
         self.validate()?;
         require_nonzero16("cycle_id", &cycle_id)?;
         require_nonzero16("entry_id", &entry_id)?;
-
         let payload_digest = self.issuance_hash()?;
         let token_id_hex = hex::encode(self.token_id);
         let mut metadata = BTreeMap::new();
@@ -838,7 +803,6 @@ impl ProofTokenIssuanceV1 {
         for item in &self.metadata {
             insert_metadata(&mut metadata, &item.key, item.value.clone())?;
         }
-
         let entry = ModerationLedgerEntryV1 {
             version: MODERATION_LEDGER_ENTRY_VERSION_V1,
             cycle_id,
@@ -861,7 +825,6 @@ impl ProofTokenIssuanceV1 {
         Ok(entry)
     }
 }
-
 impl ModerationLedgerEntryV1 {
     /// Validate this ledger entry.
     ///
@@ -921,7 +884,6 @@ impl ModerationLedgerEntryV1 {
         }
         Ok(())
     }
-
     /// Compute the domain-separated canonical entry hash.
     ///
     /// # Errors
@@ -931,7 +893,6 @@ impl ModerationLedgerEntryV1 {
         hash_norito(ENTRY_HASH_DOMAIN_V1, self)
     }
 }
-
 impl ModerationLedgerBlockV1 {
     /// Build a canonical block header from a set of entries.
     ///
@@ -986,7 +947,6 @@ impl ModerationLedgerBlockV1 {
             previous_block_hash,
         })
     }
-
     /// Validate this block header.
     ///
     /// # Errors
@@ -1029,7 +989,6 @@ impl ModerationLedgerBlockV1 {
         }
         Ok(())
     }
-
     /// Compute the domain-separated canonical block hash.
     ///
     /// # Errors
@@ -1039,7 +998,6 @@ impl ModerationLedgerBlockV1 {
         hash_norito(BLOCK_HASH_DOMAIN_V1, self)
     }
 }
-
 impl ModerationLedgerProofV1 {
     /// Build an inclusion proof for `entry_id` from a cycle entry set.
     ///
@@ -1076,7 +1034,6 @@ impl ModerationLedgerProofV1 {
             audit_path,
         })
     }
-
     /// Validate this proof without a block header.
     ///
     /// # Errors
@@ -1110,7 +1067,6 @@ impl ModerationLedgerProofV1 {
         }
         Ok(())
     }
-
     /// Verify this proof against a block header.
     ///
     /// # Errors
@@ -1143,7 +1099,6 @@ impl ModerationLedgerProofV1 {
         Ok(())
     }
 }
-
 impl ModerationLedgerCyclePublicationV1 {
     /// Build a canonical cycle publication from an entry set.
     ///
@@ -1173,7 +1128,6 @@ impl ModerationLedgerCyclePublicationV1 {
             &[],
         )
     }
-
     /// Build a canonical privacy-only cycle publication carrying its exact
     /// typed aggregate payload inventory.
     ///
@@ -1232,7 +1186,6 @@ impl ModerationLedgerCyclePublicationV1 {
         publication.validate()?;
         Ok(publication)
     }
-
     /// Validate this publication bundle.
     ///
     /// # Errors
@@ -1275,7 +1228,6 @@ impl ModerationLedgerCyclePublicationV1 {
         self.validate_privacy_aggregate_inventory()?;
         Ok(())
     }
-
     fn validate_privacy_aggregate_inventory(&self) -> Result<(), TransparencyLedgerError> {
         let privacy_proof_count = self
             .proofs
@@ -1302,7 +1254,6 @@ impl ModerationLedgerCyclePublicationV1 {
         if self.block.generated_at_unix != self.block.cycle_end_unix {
             return Err(TransparencyLedgerError::InvalidPrivacyPublicationGeneratedAt);
         }
-
         let mut previous_id: Option<&str> = None;
         for aggregate in &self.privacy_aggregates {
             aggregate.validate()?;
@@ -1329,7 +1280,6 @@ impl ModerationLedgerCyclePublicationV1 {
         }
         Ok(())
     }
-
     /// Compute the domain-separated canonical publication hash.
     ///
     /// # Errors
@@ -1339,7 +1289,6 @@ impl ModerationLedgerCyclePublicationV1 {
         hash_norito(PUBLICATION_HASH_DOMAIN_V1, self)
     }
 }
-
 /// Errors surfaced while validating transparency ledger payloads.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum TransparencyLedgerError {
@@ -1642,7 +1591,6 @@ pub enum TransparencyLedgerError {
     #[error("moderation ledger proof root mismatch")]
     ProofRootMismatch,
 }
-
 fn sorted_entries_for_cycle(
     cycle_id: [u8; 16],
     entries: &[ModerationLedgerEntryV1],
@@ -1678,7 +1626,6 @@ fn sorted_entries_for_cycle(
     });
     Ok(sorted)
 }
-
 fn merkle_root_from_leaf_hashes(
     leaf_hashes: &[[u8; 32]],
 ) -> Result<[u8; 32], TransparencyLedgerError> {
@@ -1691,7 +1638,6 @@ fn merkle_root_from_leaf_hashes(
     }
     Ok(layer[0])
 }
-
 fn merkle_audit_path(
     leaf_hashes: &[[u8; 32]],
     mut index: usize,
@@ -1720,7 +1666,6 @@ fn merkle_audit_path(
     }
     Ok(path)
 }
-
 fn next_merkle_layer(layer: &[[u8; 32]]) -> Vec<[u8; 32]> {
     layer
         .chunks(2)
@@ -1731,7 +1676,6 @@ fn next_merkle_layer(layer: &[[u8; 32]]) -> Vec<[u8; 32]> {
         })
         .collect()
 }
-
 fn recompute_root_from_path(
     mut current: [u8; 32],
     path: &[ModerationLedgerProofNodeV1],
@@ -1747,7 +1691,6 @@ fn recompute_root_from_path(
     }
     Ok(current)
 }
-
 fn verify_audit_path_shape(
     leaf_index: u32,
     entry_count: u32,
@@ -1783,7 +1726,6 @@ fn verify_audit_path_shape(
     }
     Ok(())
 }
-
 fn hash_node(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
     let mut hasher = Hasher::new();
     hasher.update(MERKLE_NODE_DOMAIN_V1);
@@ -1791,7 +1733,6 @@ fn hash_node(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
     hasher.update(&right);
     *hasher.finalize().as_bytes()
 }
-
 fn hash_norito<T: Encode>(domain: &[u8], value: &T) -> Result<[u8; 32], TransparencyLedgerError> {
     let bytes = norito::to_bytes(value).map_err(|_| TransparencyLedgerError::CanonicalEncode)?;
     let mut hasher = Hasher::new();
@@ -1799,32 +1740,27 @@ fn hash_norito<T: Encode>(domain: &[u8], value: &T) -> Result<[u8; 32], Transpar
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn hash_text(domain: &[u8], value: &str) -> [u8; 32] {
     let mut hasher = Hasher::new();
     hasher.update(domain);
     hasher.update(value.as_bytes());
     *hasher.finalize().as_bytes()
 }
-
 fn require_nonzero16(field: &'static str, value: &[u8; 16]) -> Result<(), TransparencyLedgerError> {
     if value.iter().all(|byte| *byte == 0) {
         return Err(TransparencyLedgerError::MissingDigest { field });
     }
     Ok(())
 }
-
 fn require_nonzero32(field: &'static str, value: &[u8; 32]) -> Result<(), TransparencyLedgerError> {
     if value.iter().all(|byte| *byte == 0) {
         return Err(TransparencyLedgerError::MissingDigest { field });
     }
     Ok(())
 }
-
 fn require_public_text(field: &'static str, value: &str) -> Result<(), TransparencyLedgerError> {
     require_bounded_public_text(field, value, MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1)
 }
-
 fn require_bounded_public_text(
     field: &'static str,
     value: &str,
@@ -1842,7 +1778,6 @@ fn require_bounded_public_text(
     }
     Ok(())
 }
-
 fn require_positive_parameter(
     field: &'static str,
     value: Option<u64>,
@@ -1853,7 +1788,6 @@ fn require_positive_parameter(
         None => Err(TransparencyLedgerError::MissingPrivacyParameter { field }),
     }
 }
-
 fn require_canonical_epsilon(
     numerator: Option<u64>,
     denominator: Option<u64>,
@@ -1867,7 +1801,6 @@ fn require_canonical_epsilon(
     }
     Ok(())
 }
-
 const fn gcd_u64(mut left: u64, mut right: u64) -> u64 {
     while right != 0 {
         let remainder = left % right;
@@ -1876,7 +1809,6 @@ const fn gcd_u64(mut left: u64, mut right: u64) -> u64 {
     }
     left
 }
-
 fn require_delta_parameter(value: Option<u64>) -> Result<u64, TransparencyLedgerError> {
     match value {
         Some(0) => Ok(MODERATION_PRIVACY_DELTA_PPB_MAX),
@@ -1884,7 +1816,6 @@ fn require_delta_parameter(value: Option<u64>) -> Result<u64, TransparencyLedger
         None => Err(TransparencyLedgerError::MissingPrivacyParameter { field: "delta_ppb" }),
     }
 }
-
 fn require_absent_parameter(
     field: &'static str,
     value: Option<u64>,
@@ -1894,7 +1825,6 @@ fn require_absent_parameter(
     }
     Ok(())
 }
-
 fn validate_metadata(
     metadata: &[ModerationLedgerMetadataV1],
 ) -> Result<(), TransparencyLedgerError> {
@@ -1946,7 +1876,6 @@ fn validate_metadata(
     }
     Ok(())
 }
-
 fn validate_privacy_metrics(
     metrics: &[ModerationPrivacyAggregateMetricV1],
 ) -> Result<(), TransparencyLedgerError> {
@@ -1981,7 +1910,6 @@ fn validate_privacy_metrics(
     }
     Ok(())
 }
-
 fn validate_entry_ids(entry_ids: &[String]) -> Result<(), TransparencyLedgerError> {
     if entry_ids.is_empty() {
         return Err(TransparencyLedgerError::ProofTokenEntryIdsMissing);
@@ -2004,7 +1932,6 @@ fn validate_entry_ids(entry_ids: &[String]) -> Result<(), TransparencyLedgerErro
     }
     Ok(())
 }
-
 fn insert_metadata(
     metadata: &mut BTreeMap<String, String>,
     key: &str,
@@ -2017,7 +1944,6 @@ fn insert_metadata(
     }
     Ok(())
 }
-
 fn privacy_mode_label(mode: ModerationPrivacyModeV1) -> &'static str {
     match mode {
         ModerationPrivacyModeV1::DifferentialPrivacy => "differential_privacy",
@@ -2027,19 +1953,15 @@ fn privacy_mode_label(mode: ModerationPrivacyModeV1) -> &'static str {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn digest(seed: u8) -> [u8; 32] {
         [seed; 32]
     }
-
     fn cycle_id() -> [u8; 16] {
         *b"cycle-2026-wk-01"
     }
-
     fn entry(entry_seed: u8, sequence: u64) -> ModerationLedgerEntryV1 {
         ModerationLedgerEntryV1 {
             version: MODERATION_LEDGER_ENTRY_VERSION_V1,
@@ -2066,7 +1988,6 @@ mod tests {
             ],
         }
     }
-
     fn privacy_aggregate() -> ModerationPrivacyAggregateV1 {
         ModerationPrivacyAggregateV1 {
             version: MODERATION_PRIVACY_AGGREGATE_VERSION_V1,
@@ -2110,7 +2031,6 @@ mod tests {
             }],
         }
     }
-
     fn proof_token_issuance() -> ProofTokenIssuanceV1 {
         ProofTokenIssuanceV1 {
             version: PROOF_TOKEN_ISSUANCE_VERSION_V1,
@@ -2130,7 +2050,6 @@ mod tests {
             }],
         }
     }
-
     #[test]
     fn transparency_entry_block_and_proof_round_trip_via_norito() {
         let entries = vec![entry(0x22, 2), entry(0x11, 1), entry(0x33, 3)];
@@ -2148,18 +2067,15 @@ mod tests {
         proof
             .verify_against_block(&block)
             .expect("proof verifies against block");
-
         let block_bytes = norito::to_bytes(&block).expect("block encodes");
         let decoded_block: ModerationLedgerBlockV1 =
             norito::decode_from_bytes(&block_bytes).expect("block decodes");
         assert_eq!(decoded_block, block);
-
         let proof_bytes = norito::to_bytes(&proof).expect("proof encodes");
         let decoded_proof: ModerationLedgerProofV1 =
             norito::decode_from_bytes(&proof_bytes).expect("proof decodes");
         assert_eq!(decoded_proof, proof);
     }
-
     #[test]
     fn transparency_publication_round_trip_via_norito() {
         let entries = vec![entry(0x22, 2), entry(0x11, 1), entry(0x33, 3)];
@@ -2186,7 +2102,6 @@ mod tests {
                 .verify_against_block(&publication.block)
                 .expect("publication proof verifies");
         }
-
         let publication_bytes = norito::to_bytes(&publication).expect("publication encodes");
         let decoded_publication: ModerationLedgerCyclePublicationV1 =
             norito::decode_from_bytes(&publication_bytes).expect("publication decodes");
@@ -2198,7 +2113,6 @@ mod tests {
             publication.publication_hash().expect("publication hashes")
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn transparency_proof_round_trip_via_json() {
@@ -2210,7 +2124,6 @@ mod tests {
             norito::json::from_slice(&json).expect("proof json decodes");
         assert_eq!(decoded, proof);
     }
-
     #[test]
     fn transparency_entries_are_sorted_before_rooting() {
         let sorted = vec![entry(0x11, 1), entry(0x22, 2), entry(0x33, 3)];
@@ -2235,7 +2148,6 @@ mod tests {
         .expect("unsorted block");
         assert_eq!(sorted_block.entry_root, unsorted_block.entry_root);
     }
-
     #[test]
     fn transparency_proof_rejects_tampered_entry() {
         let entries = vec![entry(0x22, 2), entry(0x11, 1)];
@@ -2256,7 +2168,6 @@ mod tests {
             Err(TransparencyLedgerError::ProofEntryHashMismatch)
         );
     }
-
     #[test]
     fn transparency_proof_rejects_wrong_leaf_index() {
         let entries = vec![entry(0x22, 2), entry(0x11, 1)];
@@ -2280,7 +2191,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn transparency_publication_rejects_missing_proof() {
         let entries = vec![entry(0x22, 2), entry(0x11, 1)];
@@ -2302,7 +2212,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn transparency_publication_rejects_unsorted_proofs() {
         let entries = vec![entry(0x22, 2), entry(0x11, 1)];
@@ -2321,7 +2230,6 @@ mod tests {
             Err(TransparencyLedgerError::PublicationProofsUnsorted)
         );
     }
-
     #[test]
     fn transparency_publication_rejects_duplicate_leaf_index() {
         let entries = vec![entry(0x22, 2), entry(0x11, 1)];
@@ -2340,7 +2248,6 @@ mod tests {
             Err(TransparencyLedgerError::DuplicatePublicationProofLeafIndex { leaf_index: 0 })
         );
     }
-
     #[test]
     fn transparency_block_rejects_duplicate_entries() {
         let entries = vec![entry(0x11, 1), entry(0x11, 2)];
@@ -2356,7 +2263,6 @@ mod tests {
             Err(TransparencyLedgerError::DuplicateEntryId { .. })
         ));
     }
-
     #[test]
     fn transparency_entry_rejects_unsorted_metadata() {
         let mut candidate = entry(0x11, 1);
@@ -2375,7 +2281,6 @@ mod tests {
             Err(TransparencyLedgerError::MetadataKeysUnsorted)
         );
     }
-
     #[test]
     fn privacy_aggregate_round_trips_and_converts_to_ledger_entry() {
         let aggregate = privacy_aggregate();
@@ -2388,7 +2293,6 @@ mod tests {
             decoded.aggregate_hash().expect("decoded hashes"),
             aggregate.aggregate_hash().expect("aggregate hashes")
         );
-
         let aggregate_entry = aggregate
             .to_ledger_entry(cycle_id(), [0x44; 16], 4)
             .expect("aggregate converts");
@@ -2427,7 +2331,6 @@ mod tests {
                 "window_start_unix",
             ]
         );
-
         let entries = vec![aggregate_entry];
         let publication = ModerationLedgerCyclePublicationV1::from_entries_with_privacy_aggregates(
             cycle_id(),
@@ -2442,7 +2345,6 @@ mod tests {
         assert_eq!(publication.block.entry_count, 1);
         assert_eq!(publication.privacy_aggregates, vec![aggregate]);
     }
-
     #[test]
     fn privacy_aggregate_rejects_noncanonical_generated_at() {
         let mut aggregate = privacy_aggregate();
@@ -2466,12 +2368,10 @@ mod tests {
             Err(TransparencyLedgerError::InvalidPrivacyAggregateGeneratedAt)
         );
     }
-
     #[test]
     fn privacy_aggregate_requires_and_hashes_source_commitment() {
         let aggregate = privacy_aggregate();
         let original_hash = aggregate.aggregate_hash().expect("aggregate hashes");
-
         let mut changed = aggregate.clone();
         changed.source_commitment[0] ^= 1;
         assert_ne!(
@@ -2479,7 +2379,6 @@ mod tests {
             original_hash,
             "the canonical aggregate hash must bind the private source-event commitment"
         );
-
         let mut missing = aggregate;
         missing.source_commitment = [0; 32];
         assert_eq!(
@@ -2489,7 +2388,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn privacy_publication_requires_exact_payload_inventory() {
         let aggregate = privacy_aggregate();
@@ -2513,7 +2411,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn privacy_publication_rejects_payload_inventory_tampering() {
         let aggregate_a = privacy_aggregate();
@@ -2539,28 +2436,24 @@ mod tests {
             &[aggregate_a, aggregate_b],
         )
         .expect("privacy publication builds");
-
         let mut metric_tamper = publication.clone();
         metric_tamper.privacy_aggregates[0].metrics[0].value += 1;
         assert_eq!(
             metric_tamper.validate(),
             Err(TransparencyLedgerError::PublicationPrivacyAggregateEntryMismatch)
         );
-
         let mut population_tamper = publication.clone();
         population_tamper.privacy_aggregates[0].population_digest[0] ^= 1;
         assert_eq!(
             population_tamper.validate(),
             Err(TransparencyLedgerError::PublicationPrivacyAggregateEntryMismatch)
         );
-
         let mut ordering_tamper = publication.clone();
         ordering_tamper.privacy_aggregates.swap(0, 1);
         assert_eq!(
             ordering_tamper.validate(),
             Err(TransparencyLedgerError::PublicationPrivacyAggregatesUnsorted)
         );
-
         let mut count_tamper = publication.clone();
         count_tamper.privacy_aggregates.pop();
         assert_eq!(
@@ -2572,7 +2465,6 @@ mod tests {
                 }
             )
         );
-
         let mut hash_tamper = publication;
         hash_tamper.proofs[0].entry.payload_digest[0] ^= 1;
         assert!(matches!(
@@ -2581,7 +2473,6 @@ mod tests {
                 | TransparencyLedgerError::ProofRootMismatch)
         ));
     }
-
     #[test]
     fn privacy_aggregate_json_rejects_retired_exact_count_fields() {
         let aggregate = privacy_aggregate();
@@ -2589,7 +2480,6 @@ mod tests {
             norito::json::to_string(&aggregate).expect("encode canonical aggregate JSON");
         let parsed: norito::json::Value =
             norito::json::from_str(&canonical).expect("parse canonical aggregate JSON");
-
         for field in [
             "source_event_count",
             "source_subject_count",
@@ -2606,7 +2496,6 @@ mod tests {
                 "retired public exact count `{field}` must be rejected"
             );
         }
-
         let mut forged = parsed;
         let norito::json::Value::Object(object) = &mut forged else {
             panic!("aggregate JSON must be an object");
@@ -2624,7 +2513,6 @@ mod tests {
             "retired public suppressed bucket count must be rejected"
         );
     }
-
     #[test]
     fn privacy_aggregate_rejects_missing_dp_parameters() {
         let mut aggregate = privacy_aggregate();
@@ -2638,7 +2526,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn privacy_aggregate_rejects_nonzero_delta() {
         let mut aggregate = privacy_aggregate();
@@ -2648,7 +2535,6 @@ mod tests {
             Err(TransparencyLedgerError::InvalidPrivacyParameter { field: "delta_ppb" })
         );
     }
-
     #[test]
     fn privacy_aggregate_requires_nonzero_typed_randomness_commitment() {
         let mut aggregate = privacy_aggregate();
@@ -2657,7 +2543,6 @@ mod tests {
             aggregate.validate(),
             Err(TransparencyLedgerError::MissingPrivacyRandomnessCommitment)
         );
-
         aggregate.noise_source = ModerationPrivacyNoiseSourceV1::ThresholdPrf(
             ModerationPrivacyThresholdPrfCommitmentV1 {
                 commitment: [0; 32],
@@ -2670,7 +2555,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn privacy_aggregate_rejects_commitment_on_suppression_only_release() {
         let mut aggregate = privacy_aggregate();
@@ -2687,13 +2571,11 @@ mod tests {
             aggregate.validate(),
             Err(TransparencyLedgerError::UnexpectedPrivacyRandomnessCommitment)
         );
-
         aggregate.noise_source = ModerationPrivacyNoiseSourceV1::SuppressionOnly;
         aggregate
             .validate()
             .expect("suppression-only release accepts explicit no-randomness source");
     }
-
     #[test]
     fn privacy_aggregate_rejects_missing_policy_and_shadow_commitment() {
         let mut aggregate = privacy_aggregate();
@@ -2704,7 +2586,6 @@ mod tests {
                 field: "policy_digest",
             })
         );
-
         let mut aggregate = privacy_aggregate();
         aggregate.metadata.insert(
             0,
@@ -2720,7 +2601,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn privacy_aggregate_rejects_missing_per_subject_cap() {
         let mut aggregate = privacy_aggregate();
@@ -2732,7 +2612,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn privacy_aggregate_rejects_noncanonical_epsilon() {
         let mut aggregate = privacy_aggregate();
@@ -2745,7 +2624,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn privacy_aggregate_rejects_unsorted_metrics() {
         let mut aggregate = privacy_aggregate();
@@ -2766,7 +2644,6 @@ mod tests {
             Err(TransparencyLedgerError::PrivacyAggregateMetricKeysUnsorted)
         );
     }
-
     #[test]
     fn privacy_aggregate_rejects_suppression_without_threshold() {
         let mut aggregate = privacy_aggregate();
@@ -2783,7 +2660,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn proof_token_issuance_round_trips_and_converts_to_ledger_entry() {
         let issuance = proof_token_issuance();
@@ -2796,7 +2672,6 @@ mod tests {
             decoded.issuance_hash().expect("decoded hashes"),
             issuance.issuance_hash().expect("issuance hashes")
         );
-
         let entry = issuance
             .to_ledger_entry(cycle_id(), [0x57; 16], 5)
             .expect("issuance converts");
@@ -2820,7 +2695,6 @@ mod tests {
             Some(token_id_hex.as_str())
         );
     }
-
     #[test]
     fn proof_token_issuance_rejects_duplicate_entry_ids_and_bad_expiry() {
         let mut issuance = proof_token_issuance();
@@ -2831,7 +2705,6 @@ mod tests {
                 entry_id: "denylist/global".to_string()
             })
         );
-
         let mut issuance = proof_token_issuance();
         issuance.expires_at_unix = Some(issuance.issued_at_unix);
         assert_eq!(
@@ -2839,7 +2712,6 @@ mod tests {
             Err(TransparencyLedgerError::InvalidProofTokenExpiry)
         );
     }
-
     #[test]
     fn public_text_and_metadata_bounds_fail_closed() {
         let mut value = entry(0x31, 1);
@@ -2848,7 +2720,6 @@ mod tests {
             value.validate(),
             Err(TransparencyLedgerError::MissingText { field: "subject" })
         );
-
         let mut value = entry(0x31, 1);
         value.metadata = (0..=MODERATION_LEDGER_MAX_METADATA_ENTRIES_V1)
             .map(|index| ModerationLedgerMetadataV1 {
@@ -2863,7 +2734,6 @@ mod tests {
                 ..
             })
         ));
-
         let mut value = entry(0x31, 1);
         value.metadata[0].value = "v".repeat(MODERATION_LEDGER_MAX_METADATA_VALUE_BYTES_V1 + 1);
         assert!(matches!(
@@ -2874,7 +2744,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn entry_proof_token_and_publication_collection_bounds_fail_closed() {
         let mut value = entry(0x31, 1);
@@ -2888,7 +2757,6 @@ mod tests {
                 ..
             })
         ));
-
         let mut issuance = proof_token_issuance();
         issuance.entry_ids = (0..=PROOF_TOKEN_MAX_ENTRY_IDS_V1)
             .map(|index| format!("entry-{index:03}"))
@@ -2900,7 +2768,6 @@ mod tests {
                 ..
             })
         ));
-
         let entries = (0..=MODERATION_LEDGER_MAX_ENTRIES_V1)
             .map(|index| {
                 let mut value = entry(0x31, index as u64 + 1);

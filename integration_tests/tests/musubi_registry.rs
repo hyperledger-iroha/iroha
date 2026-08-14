@@ -1,5 +1,4 @@
 //! Musubi V1 registry public-contract integration coverage.
-
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
 use iroha_data_model::{
     NetworkId,
@@ -38,16 +37,13 @@ use iroha_data_model::{
     },
 };
 use norito::codec::{DecodeAll, Encode};
-
 fn keypair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("fixture seed derives an Ed25519 keypair")
 }
-
 fn account(seed: u8) -> AccountId {
     AccountId::new(keypair(seed).public_key().clone())
 }
-
 fn package(name: &str) -> MusubiPackageIdV1 {
     MusubiPackageIdV1::new(
         DataSpaceId::new(7),
@@ -55,11 +51,9 @@ fn package(name: &str) -> MusubiPackageIdV1 {
         name.parse().expect("package name"),
     )
 }
-
 fn release(name: &str, version: &str) -> MusubiReleaseIdV1 {
     MusubiReleaseIdV1::new(package(name), version.parse().expect("version"))
 }
-
 fn namespace_binding() -> MusubiNamespaceBindingV1 {
     MusubiNamespaceBindingV1 {
         namespace: "dex.universal".parse().expect("namespace"),
@@ -68,7 +62,6 @@ fn namespace_binding() -> MusubiNamespaceBindingV1 {
         generation: 4,
     }
 }
-
 fn archive_commitment() -> MusubiArchiveCommitmentV1 {
     MusubiArchiveCommitmentV1 {
         root_cid: ManifestRootCid::from_blake3_digest([1; 32]).expect("root CID"),
@@ -91,7 +84,6 @@ fn archive_commitment() -> MusubiArchiveCommitmentV1 {
         chunk_count: 4,
     }
 }
-
 fn snapshot() -> MusubiRegistrySnapshotV1 {
     MusubiRegistrySnapshotV1 {
         finalized_height: 42,
@@ -99,7 +91,6 @@ fn snapshot() -> MusubiRegistrySnapshotV1 {
         index_revision: 3,
     }
 }
-
 fn staging_receipt(
     commitment: &MusubiArchiveCommitmentV1,
     semantic_release_manifest_digest: iroha_data_model::musubi::MusubiSemanticReleaseDigestV1,
@@ -136,7 +127,6 @@ fn staging_receipt(
         payload,
     }
 }
-
 fn publication() -> MusubiPublicationV1 {
     let root = release("swap", "1.2.3");
     let dependency_release = release("math", "1.1.0");
@@ -187,14 +177,12 @@ fn publication() -> MusubiPublicationV1 {
         },
     }
 }
-
 fn roundtrip<T>(value: &T) -> T
 where
     T: Encode + DecodeAll,
 {
     T::decode_all(&mut value.encode().as_slice()).expect("Norito roundtrip")
 }
-
 #[test]
 fn namespace_claim_uses_current_signed_owner_generation() {
     let binding = namespace_binding();
@@ -223,7 +211,6 @@ fn namespace_claim_uses_current_signed_owner_generation() {
         }],
         payload,
     };
-
     delegation
         .verify(&binding, &owner, 4, &delegate, 100)
         .expect("current signed delegation verifies");
@@ -242,7 +229,6 @@ fn namespace_claim_uses_current_signed_owner_generation() {
             .verify(&binding, &owner, 4, &delegate, 101)
             .is_err()
     );
-
     let register = RegisterMusubiNamespaceBindingV1::new(binding, 7);
     assert_eq!(roundtrip(&register), register);
     let publish = PublishMusubiReleaseV1::new(
@@ -254,7 +240,6 @@ fn namespace_claim_uses_current_signed_owner_generation() {
     );
     assert_eq!(roundtrip(&publish), publish);
 }
-
 #[test]
 fn archive_registration_and_publication_bind_the_exact_graph() {
     let commitment = archive_commitment();
@@ -270,19 +255,16 @@ fn archive_registration_and_publication_bind_the_exact_graph() {
         .expect("signed staging receipt");
     let register = RegisterMusubiArchiveV1::new(commitment.clone(), receipt, 9);
     assert_eq!(roundtrip(&register), register);
-
     let mut mismatched = publication.clone();
     mismatched.resolution.lock.root_dependencies[0].requirement =
         "^2.0.0".parse().expect("requirement");
     assert!(mismatched.validate().is_err());
-
     let assertion = iroha_data_model::isi::musubi::AssertMusubiReleaseDigestV1::new(
         publication.manifest.release.clone(),
         publication.manifest.release_digest(),
     );
     assert_eq!(roundtrip(&assertion), assertion);
 }
-
 #[test]
 fn governance_yank_and_cursor_requests_are_revision_bound() {
     let owner = account(51);
@@ -306,7 +288,6 @@ fn governance_yank_and_cursor_requests_are_revision_bound() {
     let mut ownerless = record.clone();
     ownerless.owners.clear();
     assert!(ownerless.validate().is_err());
-
     let remove_last_owner = RemoveMusubiPackageMaintainerV1 {
         package: package.clone(),
         account: owner.clone(),
@@ -314,7 +295,6 @@ fn governance_yank_and_cursor_requests_are_revision_bound() {
     };
     assert_eq!(roundtrip(&remove_last_owner), remove_last_owner);
     assert_eq!(remove_last_owner.expected_governance_revision, 5);
-
     let release = release("swap", "1.2.3");
     let yank = SetMusubiReleaseYankV1::new(
         release.clone(),
@@ -334,7 +314,6 @@ fn governance_yank_and_cursor_requests_are_revision_bound() {
         unyank.expected_yank_revision,
         yank.expected_yank_revision + 1
     );
-
     let cursor = MusubiFinalizedCursorV1 {
         snapshot: snapshot(),
         query_hash: MusubiQueryHashV1::new([0x55; 32]),
@@ -348,13 +327,11 @@ fn governance_yank_and_cursor_requests_are_revision_bound() {
     };
     page.validate().expect("page cursor");
     assert_eq!(page.effective_limit(), 50);
-
     let stale_snapshot = MusubiRegistrySnapshotV1 {
         index_revision: snapshot().index_revision + 1,
         ..snapshot()
     };
     assert_ne!(cursor.snapshot, stale_snapshot);
-
     let alias: MusubiAliasNameV1 = "swap".parse().expect("alias");
     let exact_package = FindMusubiExactPackageV1::new(MusubiExactPackageQueryV1 {
         package: package.clone(),
@@ -389,7 +366,6 @@ fn governance_yank_and_cursor_requests_are_revision_bound() {
         prefix: MusubiOrderedPrefixV1::new("dex.universal/").expect("prefix"),
         page,
     });
-
     assert_eq!(roundtrip(&exact_package), exact_package);
     assert_eq!(roundtrip(&exact_release), exact_release);
     assert_eq!(roundtrip(&resolver), resolver);

@@ -76,11 +76,11 @@
     "entrypoint_count": 2
   },
   "source_provenance": {
-    "scope": "tracked-semantic-source-closure-v1",
-    "closure_algorithm": "sha256-framed-path-and-bytes-v1",
-    "closure_sha256": "48db2837caede58823e66d9e0e8b24f4a4835a86fc7d230da4554fdb5f9a5f68",
-    "file_count": 1568,
+    "scope": "semantic-worktree-source-closure-v2",
+    "closure_algorithm": "sha256-framed-present-path-and-bytes-v2",
+    "closure_sha256": "48591c3c03985237cd5cc5da9e089102ea45e2a52dd1f2d5428a629227532b21",
+    "file_count": 1995,
     "contract_source_git_blob": "9187a6b5eeda3306f9c8be4029168c473a49c42e",
-    "artifact_generator_git_blob": "d3c6eb9c904ee404bdc37e44673d050b4b884c21"
+    "artifact_generator_git_blob": "0f14c277c2af10c4000801daae2752ade3a865df"
   }
 }

@@ -62,6 +62,30 @@ class ConfidentialAssetToriiClientTest {
         assertEquals(1, executor.requestCount)
         assertCanonicalSignature(executor.lastRequest, networkId, keyPair, "zk-roots-1", true)
         assertCanonicalSignature(executor.lastRequest, otherNetworkId, keyPair, "zk-roots-1", false)
+        assertCanonicalSignature(
+            executor.lastRequest,
+            networkId,
+            keyPair,
+            "zk-roots-1",
+            false,
+            method = "GET",
+        )
+        assertCanonicalSignature(
+            executor.lastRequest,
+            networkId,
+            keyPair,
+            "zk-roots-1",
+            false,
+            uri = URI.create("https://example.com/v1/zk/merkle-path"),
+        )
+        assertCanonicalSignature(
+            executor.lastRequest,
+            networkId,
+            keyPair,
+            "zk-roots-1",
+            false,
+            body = executor.lastRequest.body + 0,
+        )
         assertEquals(root, response.latest)
         assertEquals(listOf(root), response.roots)
         assertEquals(7, response.evaluatedBlockHeight)
@@ -148,6 +172,35 @@ class ConfidentialAssetToriiClientTest {
 
         assertEquals("", response.latest)
         assertNull(response.getLatestRootBytes())
+    }
+
+    @Test
+    fun latestRootAndClientConfigConversionRequireExactNetworkAuth() {
+        val root = "01".repeat(32)
+        val executor = CapturingExecutor(
+            """{"latest":"$root","roots":["$root"],"evaluated_block_height":7,"evaluated_block_hash":"${"0a".repeat(32)}"}""",
+        )
+        assertFailsWith<IllegalStateException> {
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://example.com"))
+                .build()
+                .toConfidentialAssetToriiClient(executor)
+        }
+        assertEquals(0, executor.requestCount)
+
+        val client = ClientConfig.builder()
+            .setBaseUri(URI.create("https://example.com"))
+            .setLocalSigningContext(LocalSigningContext(networkId))
+            .build()
+            .toConfidentialAssetToriiClient(executor)
+        val latest = client.getLatestZkAssetRoot(
+            "usd#bank",
+            canonicalAuth("zk-latest-1"),
+        ).join()
+
+        assertContentEquals(ByteArray(32) { 1 }, latest)
+        assertEquals("/v1/zk/roots", executor.lastRequest.uri.path)
+        assertEquals(RequestReplayPolicy.ONE_SHOT, executor.lastRequest.replayPolicy)
     }
 
     @Test
@@ -380,6 +433,9 @@ class ConfidentialAssetToriiClientTest {
         signingKeyPair: KeyPair,
         nonce: String,
         expected: Boolean,
+        method: String = request.method,
+        uri: URI = request.uri,
+        body: ByteArray = request.body,
     ) {
         val encoded = assertNotNull(firstHeader(request, CanonicalRequestSigner.HEADER_SIGNATURE))
         val verifier = Signature.getInstance("Ed25519")
@@ -387,9 +443,9 @@ class ConfidentialAssetToriiClientTest {
         verifier.update(
             CanonicalRequestSigner.canonicalRequestSignatureMessage(
                 expectedNetworkId,
-                request.method,
-                request.uri,
-                request.body,
+                method,
+                uri,
+                body,
                 1_700_000_000_000L,
                 nonce,
             ),

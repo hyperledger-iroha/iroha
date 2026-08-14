@@ -2,18 +2,15 @@ use manyhow::{Result, error_message};
 use num_bigint::BigInt;
 use proc_macro2::TokenStream;
 use quote::quote;
-
 pub fn numeric_impl(input: TokenStream) -> Result<TokenStream> {
     let lit = input.to_string();
     parse_literal(&lit)?;
     let lit_str = lit.trim();
-
     Ok(quote! {
         <::iroha_primitives::numeric::Numeric as ::core::str::FromStr>::from_str(#lit_str)
             .expect("invalid numeric literal")
     })
 }
-
 fn parse_literal(input: &str) -> Result<()> {
     let trimmed = input.trim();
     if trimmed.is_empty() {

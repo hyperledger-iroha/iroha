@@ -1,13 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for installing and executing a real IVM executor.
-
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_test_network::{IvmFuelConfig, NetworkBuilder};
-
 const CANONICAL_EXECUTOR: &[u8] = include_bytes!("../../defaults/executor.to");
-
 #[test]
 fn canonical_guest_executor_upgrade_works() -> Result<()> {
     let builder = NetworkBuilder::new()
@@ -22,12 +19,10 @@ fn canonical_guest_executor_upgrade_works() -> Result<()> {
     };
     let client = network.client();
     let initial_data_model = client.query_single(FindExecutorDataModel)?;
-
     let upgrade = Upgrade::new(Executor::new(IvmBytecode::from_compiled(
         CANONICAL_EXECUTOR.to_vec(),
     )));
     client.submit_blocking(upgrade, FeePaymentIntent::authority(Vec::new(), None))?;
-
     client.submit_blocking(
         Log::new(Level::INFO, "canonical executor is active".to_owned()),
         FeePaymentIntent::authority(Vec::new(), None),
@@ -37,6 +32,5 @@ fn canonical_guest_executor_upgrade_works() -> Result<()> {
         initial_data_model,
         "a unit migration result must retain the current executor data model"
     );
-
     Ok(())
 }

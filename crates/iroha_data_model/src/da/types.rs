@@ -1,17 +1,13 @@
 #![allow(clippy::useless_let_if_seq)]
-
 use std::ops::{Deref, DerefMut};
-
 use iroha_primitives::numeric::{RoundingMode, XorQuantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sorafs_manifest::deal::BASIS_POINTS_PER_UNIT;
 use thiserror::Error;
-
 use crate::sorafs::pin_registry::StorageClass;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-
 /// Blake3-based digest used across DA ingest structures (blob identifiers, manifests, tickets).
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
@@ -19,55 +15,53 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 #[repr(transparent)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct BlobDigest(
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
+    #[cfg_attr(
+        feature = "json",
+        norito(
+            with = "crate::json_helpers::fixed_bytes",
+            bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
+        )
+    )]
+    pub [u8; 32],
 );
-
 impl BlobDigest {
     /// Construct a new digest wrapper.
     #[must_use]
     pub const fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
-
     /// Returns `true` when all digest bytes are zeroed.
     #[must_use]
     pub fn is_zero(&self) -> bool {
         self.0.iter().all(|byte| *byte == 0)
     }
-
     /// Construct a digest from a Blake3 hash.
     #[must_use]
     pub fn from_hash(hash: blake3::Hash) -> Self {
         Self(hash.into())
     }
-
     /// Access the raw digest bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
-
 impl Deref for BlobDigest {
     type Target = [u8; 32];
-
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 impl DerefMut for BlobDigest {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
-
 impl AsRef<[u8; 32]> for BlobDigest {
     fn as_ref(&self) -> &[u8; 32] {
         &self.0
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for BlobDigest {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = bytes;
@@ -77,10 +71,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for BlobDigest {
         Ok((value, consumed))
     }
 }
-
 /// Chunk-level commitment digest.
 pub type ChunkDigest = BlobDigest;
-
 /// Identifier referencing a storage ticket issued by the `SoraFS` orchestrator.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
@@ -88,49 +80,48 @@ pub type ChunkDigest = BlobDigest;
 #[repr(transparent)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct StorageTicketId(
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
+    #[cfg_attr(
+        feature = "json",
+        norito(
+            with = "crate::json_helpers::fixed_bytes",
+            bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
+        )
+    )]
+    pub [u8; 32],
 );
-
 impl StorageTicketId {
     /// Construct a new storage ticket identifier.
     #[must_use]
     pub const fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
-
     /// Construct a ticket identifier from a Blake3 hash.
     #[must_use]
     pub fn from_hash(hash: blake3::Hash) -> Self {
         Self(hash.into())
     }
-
     /// Access the raw identifier bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
-
 impl Deref for StorageTicketId {
     type Target = [u8; 32];
-
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 impl DerefMut for StorageTicketId {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
-
 impl AsRef<[u8; 32]> for StorageTicketId {
     fn as_ref(&self) -> &[u8; 32] {
         &self.0
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for StorageTicketId {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = bytes;
@@ -140,7 +131,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for StorageTicketId {
         Ok((value, consumed))
     }
 }
-
 /// Semantic classification for an incoming DA blob.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
@@ -158,13 +148,11 @@ pub enum BlobClass {
     /// Future-proof custom class reserved for governance-approved extensions.
     Custom(u16),
 }
-
 /// Codec label describing the blob payload.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default)]
 #[repr(transparent)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct BlobCodec(pub String);
-
 impl BlobCodec {
     /// Construct a codec label.
     #[must_use]
@@ -172,7 +160,6 @@ impl BlobCodec {
         Self(codec.into())
     }
 }
-
 /// Compression applied to the submitted payload.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default, Hash,
@@ -190,7 +177,6 @@ pub enum Compression {
     /// Payload compressed with Zstandard.
     Zstd,
 }
-
 /// Governance tag tying a blob to a retention or policy decision.
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default, Hash,
@@ -198,7 +184,6 @@ pub enum Compression {
 #[repr(transparent)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct GovernanceTag(pub String);
-
 impl GovernanceTag {
     /// Construct a governance tag wrapper.
     #[must_use]
@@ -206,7 +191,6 @@ impl GovernanceTag {
         Self(tag.into())
     }
 }
-
 /// Forward-error-correction schemes supported by the DA layer.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default, Hash, PartialOrd, Ord,
@@ -224,7 +208,6 @@ pub enum FecScheme {
     /// Governance-approved custom profile identified by numeric code.
     Custom(u16),
 }
-
 impl From<FecScheme> for norito::streaming::FecScheme {
     fn from(value: FecScheme) -> Self {
         match value {
@@ -234,7 +217,6 @@ impl From<FecScheme> for norito::streaming::FecScheme {
         }
     }
 }
-
 impl From<norito::streaming::FecScheme> for FecScheme {
     fn from(value: norito::streaming::FecScheme) -> Self {
         match value {
@@ -244,7 +226,6 @@ impl From<norito::streaming::FecScheme> for FecScheme {
         }
     }
 }
-
 /// Erasure coding parameters applied during chunking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -262,7 +243,6 @@ pub struct ErasureProfile {
     /// FEC scheme describing the encoding.
     pub fec_scheme: FecScheme,
 }
-
 impl Default for ErasureProfile {
     fn default() -> Self {
         Self {
@@ -274,13 +254,11 @@ impl Default for ErasureProfile {
         }
     }
 }
-
 // Norito's `skip_serializing_if` predicates take a reference to the field value.
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_zero_u16(value: &u16) -> bool {
     *value == 0
 }
-
 /// Retention policy negotiated for a DA blob.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -296,7 +274,6 @@ pub struct RetentionPolicy {
     /// Governance tag anchoring the policy decision.
     pub governance_tag: GovernanceTag,
 }
-
 impl Default for RetentionPolicy {
     fn default() -> Self {
         Self {
@@ -308,7 +285,6 @@ impl Default for RetentionPolicy {
         }
     }
 }
-
 /// Optional metadata entries supplied by submitters.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -316,7 +292,6 @@ pub struct ExtraMetadata {
     /// Metadata key-value pairs.
     pub items: Vec<MetadataEntry>,
 }
-
 impl ExtraMetadata {
     /// Returns `true` when no metadata entries are present.
     #[must_use]
@@ -324,7 +299,6 @@ impl ExtraMetadata {
         self.items.is_empty()
     }
 }
-
 /// Encryption algorithm applied to a metadata entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -336,7 +310,6 @@ pub enum MetadataEncryption {
     /// `ChaCha20Poly1305` envelope with optional metadata (e.g., key labels).
     ChaCha20Poly1305(#[norito(default)] MetadataCipherEnvelope),
 }
-
 impl MetadataEncryption {
     /// Build a ChaCha20-Poly1305 envelope with an optional key label.
     #[must_use]
@@ -344,7 +317,6 @@ impl MetadataEncryption {
         Self::ChaCha20Poly1305(MetadataCipherEnvelope::with_label(label))
     }
 }
-
 /// Additional envelope metadata associated with an encrypted entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -354,7 +326,6 @@ pub struct MetadataCipherEnvelope {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub key_label: Option<String>,
 }
-
 impl MetadataCipherEnvelope {
     /// Create an envelope with the provided key label.
     #[must_use]
@@ -367,7 +338,6 @@ impl MetadataCipherEnvelope {
         }
     }
 }
-
 /// Single metadata entry stored alongside the blob.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -375,7 +345,13 @@ pub struct MetadataEntry {
     /// Metadata key (UTF-8, governance-approved).
     pub key: String,
     /// Raw metadata value bytes (Norito or application-specific encoding).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(
+        feature = "json",
+        norito(
+            with = "crate::json_helpers::base64_vec",
+            bounded_with = "crate::json_helpers::base64_vec::serialize_bounded"
+        )
+    )]
     pub value: Vec<u8>,
     /// Visibility scope for the entry.
     pub visibility: MetadataVisibility,
@@ -383,14 +359,12 @@ pub struct MetadataEntry {
     #[norito(default)]
     pub encryption: MetadataEncryption,
 }
-
 impl MetadataEntry {
     /// Construct a metadata entry.
     #[must_use]
     pub fn new(key: impl Into<String>, value: Vec<u8>, visibility: MetadataVisibility) -> Self {
         Self::with_encryption(key, value, visibility, MetadataEncryption::None)
     }
-
     /// Construct a metadata entry with explicit encryption metadata.
     #[must_use]
     pub fn with_encryption(
@@ -407,7 +381,6 @@ impl MetadataEntry {
         }
     }
 }
-
 /// Visibility scope for a metadata entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -419,10 +392,8 @@ pub enum MetadataVisibility {
     /// Entry is restricted to governance/oversight entities.
     GovernanceOnly,
 }
-
 /// Schema version for [`DaRentPolicyV1`].
 pub const DA_RENT_POLICY_VERSION_V1: u8 = 1;
-
 /// Maximum decimal scale accepted for configured DA rent rates.
 ///
 /// DA rates intentionally retain micro-XOR precision so basis-point splits
@@ -430,7 +401,6 @@ pub const DA_RENT_POLICY_VERSION_V1: u8 = 1;
 /// still use [`XorQuantity`] at every boundary, preventing other DA amounts
 /// from exceeding XOR's independent nine-decimal ledger limit.
 const DA_RENT_RATE_SCALE: u32 = 6;
-
 /// Rent and incentive policy for DA submissions (see roadmap task DA-7).
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -448,7 +418,6 @@ pub struct DaRentPolicyV1 {
     /// XOR credit per GiB of egress served to fetchers.
     pub egress_credit_per_gib: XorQuantity,
 }
-
 impl Default for DaRentPolicyV1 {
     fn default() -> Self {
         Self {
@@ -463,7 +432,6 @@ impl Default for DaRentPolicyV1 {
         }
     }
 }
-
 impl DaRentPolicyV1 {
     /// Construct a policy from exact XOR rates and basis-point parameters.
     #[must_use]
@@ -483,7 +451,6 @@ impl DaRentPolicyV1 {
             egress_credit_per_gib,
         }
     }
-
     /// Validate the policy parameters.
     ///
     /// # Errors
@@ -508,7 +475,6 @@ impl DaRentPolicyV1 {
         }
         Ok(())
     }
-
     fn validate_ratio(value: u16, field: RentRatioField) -> Result<(), DaRentError> {
         if u32::from(value) > u32::from(BASIS_POINTS_PER_UNIT) {
             return Err(DaRentError::InvalidRatio {
@@ -518,7 +484,6 @@ impl DaRentPolicyV1 {
         }
         Ok(())
     }
-
     /// Quote the rent and incentive components for the provided usage.
     ///
     /// # Errors
@@ -544,7 +509,6 @@ impl DaRentPolicyV1 {
             .map_err(|_| DaRentError::Overflow)?;
         let pdp_bonus = apply_basis_points(&base_rent, self.pdp_bonus_bps)?;
         let potr_bonus = apply_basis_points(&base_rent, self.potr_bonus_bps)?;
-
         Ok(DaRentQuote {
             base_rent,
             protocol_reserve,
@@ -555,7 +519,6 @@ impl DaRentPolicyV1 {
         })
     }
 }
-
 fn apply_basis_points(amount: &XorQuantity, basis_points: u16) -> Result<XorQuantity, DaRentError> {
     amount
         .checked_mul_ratio_round(
@@ -567,7 +530,6 @@ fn apply_basis_points(amount: &XorQuantity, basis_points: u16) -> Result<XorQuan
         )
         .map_err(|_| DaRentError::Overflow)
 }
-
 /// Rent and incentive breakdown derived from [`DaRentPolicyV1`].
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -585,7 +547,6 @@ pub struct DaRentQuote {
     /// Credit per GiB of successful egress served to fetch clients.
     pub egress_credit_per_gib: XorQuantity,
 }
-
 impl Default for DaRentQuote {
     fn default() -> Self {
         Self {
@@ -598,7 +559,6 @@ impl Default for DaRentQuote {
         }
     }
 }
-
 /// Ledger-oriented projection derived from a [`DaRentQuote`].
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -616,7 +576,6 @@ pub struct DaRentLedgerProjection {
     /// Credit per GiB to reimburse fetch egress.
     pub egress_credit_per_gib: XorQuantity,
 }
-
 impl DaRentQuote {
     /// Project ledger-facing rent and incentive deltas.
     #[must_use]
@@ -631,7 +590,6 @@ impl DaRentQuote {
         }
     }
 }
-
 /// Errors emitted while validating or quoting rent schedules.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum DaRentError {
@@ -665,7 +623,6 @@ pub enum DaRentError {
     #[error("DA rent rates support at most six fractional digits")]
     PrecisionTooFine,
 }
-
 /// Identifiers for basis-point ratios in [`DaRentPolicyV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RentRatioField {
@@ -676,7 +633,6 @@ pub enum RentRatioField {
     /// `potr_bonus_bps`.
     PotrBonus,
 }
-
 impl RentRatioField {
     const fn label(self) -> &'static str {
         match self {
@@ -686,20 +642,16 @@ impl RentRatioField {
         }
     }
 }
-
 #[cfg(test)]
 mod erasure_profile_tests {
     use norito::json;
-
     use super::*;
-
     #[test]
     fn skips_zero_row_parity_stripes_in_json() {
         let profile = ErasureProfile {
             row_parity_stripes: 0,
             ..Default::default()
         };
-
         let serialized = json::to_value(&profile)
             .and_then(|value| json::to_string(&value))
             .expect("serialize erasure profile");
@@ -708,14 +660,12 @@ mod erasure_profile_tests {
             "zero stripes should be omitted: {serialized}"
         );
     }
-
     #[test]
     fn serializes_non_zero_row_parity_stripes_in_json() {
         let profile = ErasureProfile {
             row_parity_stripes: 2,
             ..Default::default()
         };
-
         let serialized = json::to_value(&profile)
             .and_then(|value| json::to_string(&value))
             .expect("serialize erasure profile");
@@ -725,15 +675,12 @@ mod erasure_profile_tests {
         );
     }
 }
-
 #[cfg(test)]
 mod rent_policy_tests {
     use super::*;
     use iroha_primitives::{bigint::BigInt, numeric::Numeric};
-
     const MAX_XOR: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
     const XOR_OVERFLOW: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
-
     #[derive(Encode)]
     struct ForgedNumeric {
         #[codec(compact)]
@@ -741,7 +688,6 @@ mod rent_policy_tests {
         #[codec(compact)]
         scale: u32,
     }
-
     impl From<Numeric> for ForgedNumeric {
         fn from(value: Numeric) -> Self {
             Self {
@@ -750,7 +696,6 @@ mod rent_policy_tests {
             }
         }
     }
-
     #[derive(Encode)]
     struct ForgedDaRentQuote {
         base_rent: ForgedNumeric,
@@ -760,7 +705,6 @@ mod rent_policy_tests {
         potr_bonus: ForgedNumeric,
         egress_credit_per_gib: ForgedNumeric,
     }
-
     fn forged_quote(base_rent: ForgedNumeric) -> ForgedDaRentQuote {
         ForgedDaRentQuote {
             base_rent,
@@ -771,19 +715,16 @@ mod rent_policy_tests {
             egress_credit_per_gib: Numeric::zero().into(),
         }
     }
-
     #[cfg(feature = "json")]
     fn quote_json(base_rent: &str) -> String {
         format!(
             r#"{{"base_rent":{base_rent},"protocol_reserve":"0","provider_reward":"0","pdp_bonus":"0","potr_bonus":"0","egress_credit_per_gib":"0"}}"#
         )
     }
-
     #[test]
     fn default_policy_quote_matches_expected_breakdown() {
         let policy = DaRentPolicyV1::default();
         let quote = policy.quote(10, 3).expect("rent quote");
-
         assert_eq!(quote.base_rent.to_string(), "7.5");
         assert_eq!(quote.protocol_reserve.to_string(), "1.5");
         assert_eq!(quote.provider_reward.to_string(), "6");
@@ -791,14 +732,12 @@ mod rent_policy_tests {
         assert_eq!(quote.potr_bonus.to_string(), "0.1875");
         assert_eq!(quote.egress_credit_per_gib.to_string(), "0.0015");
     }
-
     #[test]
     fn rent_quote_validates_inputs() {
         let policy = DaRentPolicyV1::default();
         assert!(matches!(policy.quote(0, 1), Err(DaRentError::ZeroUsage)));
         assert!(matches!(policy.quote(4, 0), Err(DaRentError::ZeroDuration)));
     }
-
     #[test]
     fn rent_policy_rejects_invalid_ratios() {
         let policy = DaRentPolicyV1 {
@@ -813,7 +752,6 @@ mod rent_policy_tests {
             })
         ));
     }
-
     #[test]
     fn rent_policy_rejects_finer_than_micro_rate_precision() {
         let policy = DaRentPolicyV1 {
@@ -822,7 +760,6 @@ mod rent_policy_tests {
         };
         assert_eq!(policy.validate(), Err(DaRentError::PrecisionTooFine));
     }
-
     #[test]
     fn rent_quote_rejects_512_bit_overflow() {
         let policy = DaRentPolicyV1 {
@@ -831,7 +768,6 @@ mod rent_policy_tests {
         };
         assert_eq!(policy.quote(2, 1), Err(DaRentError::Overflow));
     }
-
     #[test]
     fn rent_split_rounds_toward_zero_at_policy_scale() {
         let policy = DaRentPolicyV1::from_components(
@@ -848,7 +784,6 @@ mod rent_policy_tests {
         assert_eq!(quote.pdp_bonus, XorQuantity::zero());
         assert_eq!(quote.potr_bonus, XorQuantity::zero());
     }
-
     #[test]
     fn rent_quote_norito_rejects_invalid_xor_payloads() {
         for invalid in [
@@ -870,7 +805,6 @@ mod rent_policy_tests {
             );
         }
     }
-
     #[test]
     fn rent_quote_norito_accepts_scale_nine_maximum_and_wide_values() {
         for canonical in [
@@ -887,7 +821,6 @@ mod rent_policy_tests {
             assert_eq!(decoded, quote, "canonical={canonical}");
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn rent_policy_json_uses_canonical_quantity_strings() {
@@ -895,7 +828,6 @@ mod rent_policy_tests {
         assert!(json.contains("\"base_rate_per_gib_month\":\"0.25\""));
         assert!(json.contains("\"egress_credit_per_gib\":\"0.0015\""));
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn rent_quote_json_rejects_invalid_xor_representations() {
@@ -918,7 +850,6 @@ mod rent_policy_tests {
             );
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn rent_quote_json_roundtrips_submicro_wide_and_maximum_values() {
@@ -935,7 +866,6 @@ mod rent_policy_tests {
             assert!(encoded.contains(&format!("\"base_rent\":\"{canonical}\"")));
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn rent_policy_json_rejects_retired_micro_aliases() {
@@ -945,7 +875,6 @@ mod rent_policy_tests {
             "retired implicit micro-XOR aliases must not decode"
         );
     }
-
     #[test]
     fn ledger_projection_reflects_quote_breakdown() {
         let policy = DaRentPolicyV1::default();

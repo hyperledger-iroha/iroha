@@ -1,14 +1,11 @@
 use std::fs;
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
 use tempfile::tempdir;
-
 #[test]
 fn soranet_gateway_ops_m0_pack_is_deterministic() {
     let temp = tempdir().expect("tempdir");
     let out_dir = temp.path().join("ops");
-
     let mut cmd = cargo_bin_cmd!("xtask");
     let output = cmd
         .args([
@@ -28,7 +25,6 @@ fn soranet_gateway_ops_m0_pack_is_deterministic() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
     let otel_config =
         fs::read_to_string(out_dir.join("otel_collector.yaml")).expect("otel config exists");
     let expected_otel = "# OTEL collector profile for qa-pop-01 (SN15-M0-10)\n\
@@ -121,7 +117,6 @@ service:\n\
       processors: [attributes/drop_pii, batch]\n\
       exporters: [loki, clickhouse]\n";
     assert_eq!(otel_config, expected_otel, "otel config drifted");
-
     let dashboard_bytes =
         fs::read(out_dir.join("grafana_dashboard.json")).expect("dashboard exists");
     let dashboard: Value = json::from_slice(&dashboard_bytes).expect("dashboard parses");
@@ -185,7 +180,6 @@ service:\n\
         }
     });
     assert_eq!(dashboard, expected_dashboard, "dashboard drifted");
-
     let alerts = fs::read_to_string(out_dir.join("alert_rules.yml")).expect("alert rules exist");
     let expected_alerts = "# Prometheus alert rules for qa-pop-01 (SN15-M0-10/11)\n\
 groups:\n\
@@ -237,7 +231,6 @@ groups:\n\
         summary: \"Tail sampling is dropping spans\"\n\
         description: \"Tune sampling percentage or Kafka throughput; span loss invalidates change packets for observability GA.\"\n";
     assert_eq!(alerts, expected_alerts, "alert rules drifted");
-
     let pq_bytes =
         fs::read(out_dir.join("pq_readiness_checklist.json")).expect("pq checklist exists");
     let pq: Value = json::from_slice(&pq_bytes).expect("pq checklist parses");
@@ -253,7 +246,6 @@ groups:\n\
             "notes": "Use canaries for PQ cipher rollout before flipping defaults."
         })
     );
-
     let summary_bytes = fs::read(out_dir.join("ops_summary.json")).expect("summary exists");
     let summary: Value = json::from_slice(&summary_bytes).expect("summary parses");
     assert_eq!(summary["pop"], Value::from("qa-pop_01"));

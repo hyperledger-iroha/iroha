@@ -1,8 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smart contract query behaviour checks.
-
 use std::num::NonZeroU64;
-
 use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
 use iroha::{
@@ -12,7 +10,6 @@ use iroha::{
 use iroha_core::smartcontracts::ivm::gas_limit_for_meta;
 use iroha_test_network::*;
 use iroha_test_samples::load_sample_ivm;
-
 fn fee_payment_with_gas_limit(bytecode: &IvmBytecode) -> Result<FeePaymentIntent> {
     let parsed =
         ivm::ProgramMetadata::parse(bytecode.as_ref()).wrap_err("parse IVM program metadata")?;
@@ -23,7 +20,6 @@ fn fee_payment_with_gas_limit(bytecode: &IvmBytecode) -> Result<FeePaymentIntent
         NonZeroU64::new(gas_limit),
     ))
 }
-
 #[test]
 fn smart_contract_query_scenarios() -> Result<()> {
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
@@ -38,14 +34,12 @@ fn smart_contract_query_scenarios() -> Result<()> {
     let client = network.client();
     let torii = client.torii_url.clone();
     let env_dir = network.env_dir().to_path_buf();
-
     // live_query_is_dropped_after_smart_contract_end
     {
         let bytecode = load_sample_ivm("query_assets_and_save_cursor");
         let fee_payment = fee_payment_with_gas_limit(&bytecode)?;
         let transaction = client.build_transaction(bytecode, fee_payment, Metadata::default());
         client.submit_transaction_blocking(&transaction)?;
-
         let cursor_key: Name = "cursor".parse().unwrap();
         let asset_cursor = client
             .query(FindAccounts)
@@ -55,7 +49,6 @@ fn smart_contract_query_scenarios() -> Result<()> {
             .and_then(|account| account.metadata().get(&cursor_key).cloned())
             .expect("account metadata must contain cursor")
             .try_into_any_norito()?;
-
         let err = client
             .raw_continue_iterable_query(asset_cursor)
             .expect_err("Request with cursor from smart contract should fail");
@@ -74,7 +67,6 @@ fn smart_contract_query_scenarios() -> Result<()> {
             .contains("cursor continuation requires stored cursor mode");
         assert!(allowed, "unexpected query error: {err:?}");
     }
-
     // smart_contract_can_filter_queries
     {
         let bytecode = load_sample_ivm("smart_contract_can_filter_queries");
@@ -89,6 +81,5 @@ fn smart_contract_query_scenarios() -> Result<()> {
                 )
             })?;
     }
-
     Ok(())
 }

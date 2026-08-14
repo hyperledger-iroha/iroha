@@ -6,14 +6,10 @@
 //! in masked committed segments and evaluates the same identities at
 //! transcript-derived points. The production aggregate binds the complete
 //! numeric trace material and is independently replayed by the verifier.
-
 use thiserror::Error;
-
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
-
 /// Stable digest input for the implemented components.
 pub(crate) const ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1: &[u8] = b"byte-memory-permutation=complete|strict-der-segment=complete|projection-segment=complete|shared-current-next-deep-ali=complete|rfc5280-base-row-provider=complete|rfc5280-aggregate-and-eighteen-independent-output-role-products=complete|rfc5280-x5r1-and-der-terminal-validator=complete|sha-call-witness-assembly-and-terminal-binding=complete|p256-witness-assembly-and-terminal-binding=complete|compact-ca-subproof=complete|full-49-registration-prover-and-verifier=complete|combined-main-ca-envelope=complete|consensus-verifier-integration=complete|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|activation=governance-gated";
-
 /// SHA-256 of the dedicated compact-CA prover/verifier descriptor.
 ///
 /// The pin binds the exact X5C1/X5C2 proof system rather than only its
@@ -22,7 +18,6 @@ pub(crate) const ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1: [u8; 32] = [
     0x86, 0xb4, 0x0c, 0xea, 0x39, 0xa3, 0x5a, 0xc0, 0x35, 0x1e, 0xe1, 0x46, 0xa2, 0x86, 0x6b, 0x50,
     0x57, 0xe4, 0x6c, 0x30, 0x85, 0x77, 0x50, 0xa1, 0xa3, 0x12, 0xca, 0x9f, 0x52, 0x35, 0x56, 0xa7,
 ];
-
 /// Failure of an implemented zk-X509 AIR primitive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509AirErrorV1 {
@@ -41,7 +36,6 @@ pub(crate) enum ZkX509AirErrorV1 {
     #[error("zk-X509 AIR gate selector constraint failed")]
     GateSelector,
 }
-
 /// One degree-two range-check row for a private byte.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,7 +45,6 @@ pub(crate) struct ByteRangeAirRowV1 {
     /// Little-endian bit decomposition.
     pub(crate) bits: [F; 8],
 }
-
 #[cfg(test)]
 impl ByteRangeAirRowV1 {
     /// Construct the canonical witness row for one byte.
@@ -61,7 +54,6 @@ impl ByteRangeAirRowV1 {
             bits: core::array::from_fn(|bit| F(u64::from((value >> bit) & 1))),
         }
     }
-
     /// Evaluate all local degree-two AIR identities.
     pub(crate) fn validate(self) -> Result<(), ZkX509AirErrorV1> {
         validate_bits_v1(&self.bits)?;
@@ -79,7 +71,6 @@ impl ByteRangeAirRowV1 {
         Ok(())
     }
 }
-
 /// One degree-two range-check row for an address, clock, or SHA-256 word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct U32RangeAirRowV1 {
@@ -88,7 +79,6 @@ pub(crate) struct U32RangeAirRowV1 {
     /// Little-endian bit decomposition.
     pub(crate) bits: [F; 32],
 }
-
 impl U32RangeAirRowV1 {
     /// Construct the canonical witness row.
     pub(crate) fn from_u32(value: u32) -> Self {
@@ -97,7 +87,6 @@ impl U32RangeAirRowV1 {
             bits: core::array::from_fn(|bit| F(u64::from((value >> bit) & 1))),
         }
     }
-
     /// Evaluate all local degree-two AIR identities.
     pub(crate) fn validate(self) -> Result<(), ZkX509AirErrorV1> {
         validate_bits_v1(&self.bits)?;
@@ -115,7 +104,6 @@ impl U32RangeAirRowV1 {
         Ok(())
     }
 }
-
 /// One fixed-selector Boolean gate row used by SHA-256 and P-256 bit logic.
 ///
 /// Selectors are fixed preprocessing columns in the final segment.  Keeping
@@ -141,25 +129,21 @@ pub(crate) struct BooleanGateAirRowV1 {
     /// Full-adder carry output; zero on AND/XOR rows.
     pub(crate) carry_out: F,
 }
-
 #[cfg(test)]
 impl BooleanGateAirRowV1 {
     /// Canonical AND witness row.
     pub(crate) fn and(left: bool, right: bool) -> Self {
         Self::new_selector([1, 0, 0], left, right, false, left & right, false)
     }
-
     /// Canonical XOR witness row.
     pub(crate) fn xor(left: bool, right: bool) -> Self {
         Self::new_selector([0, 1, 0], left, right, false, left ^ right, false)
     }
-
     /// Canonical one-bit full-adder witness row.
     pub(crate) fn full_adder(left: bool, right: bool, carry_in: bool) -> Self {
         let sum = u8::from(left) + u8::from(right) + u8::from(carry_in);
         Self::new_selector([0, 0, 1], left, right, carry_in, sum & 1 == 1, sum >= 2)
     }
-
     fn new_selector(
         selectors: [u64; 3],
         left: bool,
@@ -179,7 +163,6 @@ impl BooleanGateAirRowV1 {
             carry_out: F(u64::from(carry_out)),
         }
     }
-
     /// Evaluate the selector, Boolean, and selected gate equations.
     ///
     /// The bit equations have degree two; multiplying them by one fixed
@@ -203,7 +186,6 @@ impl BooleanGateAirRowV1 {
         {
             return Err(ZkX509AirErrorV1::GateSelector);
         }
-
         let and_constraint = self.out.sub(self.left.mul(self.right));
         let xor_constraint = self.out.sub(
             self.left
@@ -232,7 +214,6 @@ impl BooleanGateAirRowV1 {
         Ok(())
     }
 }
-
 fn validate_bits_v1(bits: &[F]) -> Result<(), ZkX509AirErrorV1> {
     if bits
         .iter()
@@ -243,11 +224,9 @@ fn validate_bits_v1(bits: &[F]) -> Result<(), ZkX509AirErrorV1> {
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use sha2::{Digest as _, Sha256};
-
     use super::*;
     use crate::privacy_engines::zk_x509::{
         accumulator_air::{
@@ -275,7 +254,6 @@ mod tests {
         },
         sha_call_bus_stark::ZkX509ShaCallScheduleV1,
     };
-
     #[test]
     fn byte_and_word_range_rows_reject_every_local_malleation() {
         for value in 0..=u8::MAX {
@@ -288,7 +266,6 @@ mod tests {
                 .validate()
                 .expect("canonical word row");
         }
-
         let mut changed = ByteRangeAirRowV1::from_byte(173);
         changed.bits[4] = F(2);
         assert_eq!(changed.validate(), Err(ZkX509AirErrorV1::NonBoolean));
@@ -305,7 +282,6 @@ mod tests {
             Err(ZkX509AirErrorV1::RangeDecomposition)
         );
     }
-
     #[test]
     fn boolean_gate_rows_cover_truth_tables_and_reject_adversarial_outputs() {
         for left in [false, true] {
@@ -323,7 +299,6 @@ mod tests {
                 }
             }
         }
-
         let mut changed = BooleanGateAirRowV1::xor(true, false);
         changed.out = F::ZERO;
         assert_eq!(changed.validate(), Err(ZkX509AirErrorV1::BitGate));
@@ -334,7 +309,6 @@ mod tests {
         changed.carry_out = F::ONE;
         assert_eq!(changed.validate(), Err(ZkX509AirErrorV1::BitGate));
     }
-
     #[test]
     fn component_manifest_is_complete_and_governance_gated() {
         let descriptor = String::from_utf8_lossy(ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1);
@@ -345,7 +319,6 @@ mod tests {
             "{descriptor}"
         );
     }
-
     #[test]
     fn compact_ca_descriptor_pin_names_the_exact_dedicated_prover_and_verifier() {
         let digest: [u8; 32] = Sha256::digest(ZK_X509_ACCUMULATOR_STARK_DESCRIPTOR_V1).into();
@@ -369,7 +342,6 @@ mod tests {
                 "compact-CA descriptor must bind {required}"
             );
         }
-
         assert_eq!(ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1, 7);
         assert_eq!(ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1, 128);
         assert_eq!(ZK_X509_CA_FRI_LDE_LOG2_V1, 14);
@@ -389,7 +361,6 @@ mod tests {
         assert_eq!(ZK_X509_CA_ACCUMULATOR_DEEP_OPENING_BYTES_V1, 52_768);
         assert_eq!(ZK_X509_CA_ACCUMULATOR_INNER_MAX_PROOF_BYTES_V1, 1_036_984);
         assert_eq!(ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1, 1_038_294);
-
         let _prover: fn(
             &ZkX509CaAccumulatorTraceV1,
             &ZkX509ShaCallScheduleV1,

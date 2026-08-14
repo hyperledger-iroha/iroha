@@ -1,10 +1,4 @@
 //! Sealed projection from exact runtime-bound adapter effects into lifecycle admission.
-
-use iroha_crypto::{Hash, HashOf, KeyPair};
-use iroha_data_model::block::consensus_v2 as wire;
-use norito::codec::Encode;
-use thiserror::Error;
-
 use super::replay_authority::{
     CertifiedFetchReplayEvidenceV1, CertifiedServeReplayEvidencePairV1,
     CertifiedServeTerminalReplayAuthorityPairV1, exact_direct_signed_admission_authority,
@@ -19,6 +13,10 @@ use super::schema::{
 use super::work_registry::{
     CertifiedServeRegistryBatchPublicationError, CertifiedServeTerminalRegistryPublicationError,
     PreparedCertifiedServeRegistryBatchV1, PreparedCertifiedServeTerminalRegistryTransitionV1,
+};
+#[cfg(test)]
+use crate::sumeragi::v2_certified_serve_payload_store::{
+    CertifiedServePayloadStoreError, CertifiedServePayloadStoreV1,
 };
 use crate::sumeragi::{
     v2::{AdapterEffect, SignRequest, VerifiedHeightContext},
@@ -38,12 +36,10 @@ use crate::sumeragi::{
     v2_runtime::{PendingRuntimeEffectBinding, RuntimeCandidateSemanticStatement},
     v2_transport::AuthenticatedCertifiedBodyRequest,
 };
-
-#[cfg(test)]
-use crate::sumeragi::v2_certified_serve_payload_store::{
-    CertifiedServePayloadStoreError, CertifiedServePayloadStoreV1,
-};
-
+use iroha_crypto::{Hash, HashOf, KeyPair};
+use iroha_data_model::block::consensus_v2 as wire;
+use norito::codec::Encode;
+use thiserror::Error;
 const BLOCK_SUBJECT_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:block-subject:v1";
 const EXECUTION_COMMITMENT_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:execution-commitment:v1";
 const EQUIVOCATION_SUBJECT_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:equivocation-subject:v1";
@@ -57,7 +53,6 @@ const REDUCER_FENCE_WAIT_SOURCE_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:re
 #[cfg(test)]
 const PRODUCER_TURN_PHYSICAL_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:lifecycle:producer-turn-physical:v1";
-
 /// Fail-closed reason why an exact adapter effect could not become lifecycle admission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AdapterEffectAdmissionError {
@@ -74,7 +69,6 @@ pub(crate) enum AdapterEffectAdmissionError {
     /// No exact sealed replay wrapper exists at this raw admission boundary.
     UnsupportedReplayAuthority,
 }
-
 /// Authority-free projection of one exact runtime-bound adapter effect.
 ///
 /// This value contains only deterministic lifecycle coordinates and physical
@@ -96,7 +90,6 @@ pub(super) struct AuthorityFreeAdmissionProjection {
     /// Exact physical effect slot reconstructed from the pending binding.
     pub(super) physical_geometry: PhysicalGeometry,
 }
-
 /// Fail-closed reason why durable Certified-Serve work could not be admitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CertifiedServeAdmissionError {
@@ -107,7 +100,6 @@ pub(crate) enum CertifiedServeAdmissionError {
     /// The post-fsync receipt names another request or certificate.
     ReceiptMismatch,
 }
-
 /// Fail-closed reason why a ledger body-frame reference could not be rebound.
 #[derive(Debug, Error)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
@@ -122,7 +114,6 @@ pub(super) enum DurableBodyFrameRecoveryError {
     #[error("durable lifecycle body frame is ambiguous in the opened body store")]
     Ambiguous,
 }
-
 /// Opaque body-store recovery authority for one exact LedgerV1 frame reference.
 ///
 /// The receipt and manifest have no parts API. A future registry reconstruction
@@ -136,7 +127,6 @@ pub(super) struct AuthenticatedDurableBodyFrameRecovery {
     manifest: wire::PayloadManifest,
     receipt: DurableBodyReceipt,
 }
-
 impl AuthenticatedDurableBodyFrameRecovery {
     /// Consume this exact catalog seal only through its frame-bound Certified
     /// Fetch replay family.
@@ -149,7 +139,6 @@ impl AuthenticatedDurableBodyFrameRecovery {
             .then_some(self.receipt)
     }
 }
-
 /// Failure at the payload-first/ledger-second Certified-Serve admission
 /// boundary.
 #[derive(Debug, Error)]
@@ -163,7 +152,6 @@ pub(crate) enum CertifiedServeAdmissionBoundaryError {
     #[error("authenticated Certified-Serve projection failed: {0:?}")]
     Projection(CertifiedServeAdmissionError),
 }
-
 /// Stable failure class for the receipt-free Certified-Serve terminal owner
 /// transaction. The enclosing result distinguishes safe prepublication input
 /// rejection from restart-required owner invariant or durability failures.
@@ -184,13 +172,11 @@ pub(crate) enum CertifiedServeTerminalSettlementFailureV1 {
     /// Exact LedgerV1 successor publication failed.
     Ledger,
 }
-
 #[derive(Clone, Copy, Debug)]
 enum DurableCertifiedServeTerminalPublicationV1 {
     Completed(DurableCertifiedServeCompletedReceipt),
     Negative(DurableCertifiedServeNegativeReceipt),
 }
-
 /// Opaque fail-stop result retaining every move-only authority still needed by
 /// startup reconciliation. The live owner remains faulted and continues to own
 /// its exact terminal payload store.
@@ -202,14 +188,12 @@ pub(crate) struct CertifiedServeTerminalSettlementRestartV1 {
     _publication: Option<DurableCertifiedServeTerminalPublicationV1>,
     _transition: Option<PreparedCertifiedServeTerminalRegistryTransitionV1>,
 }
-
 impl CertifiedServeTerminalSettlementRestartV1 {
     /// Return the stable fail-stop class without releasing retained authority.
     pub(crate) const fn failure(&self) -> CertifiedServeTerminalSettlementFailureV1 {
         self.failure
     }
 }
-
 /// Ownership-preserving terminal settlement failure. Prepublication failures
 /// return the unchanged active lease; restart-required failures retain all
 /// post-fsync authority opaquely.
@@ -218,7 +202,6 @@ impl CertifiedServeTerminalSettlementRestartV1 {
 pub(crate) struct CertifiedServeTerminalSettlementErrorV1 {
     kind: CertifiedServeTerminalSettlementErrorKindV1,
 }
-
 #[allow(variant_size_differences)]
 #[derive(Debug)]
 enum CertifiedServeTerminalSettlementErrorKindV1 {
@@ -228,7 +211,6 @@ enum CertifiedServeTerminalSettlementErrorKindV1 {
     },
     RestartRequired(CertifiedServeTerminalSettlementRestartV1),
 }
-
 impl CertifiedServeTerminalSettlementErrorV1 {
     /// Return the stable failure class.
     pub(crate) const fn failure(&self) -> CertifiedServeTerminalSettlementFailureV1 {
@@ -239,7 +221,6 @@ impl CertifiedServeTerminalSettlementErrorV1 {
             }
         }
     }
-
     /// Whether terminal storage may already be durable and startup is required.
     pub(crate) const fn restart_required(&self) -> bool {
         matches!(
@@ -247,7 +228,6 @@ impl CertifiedServeTerminalSettlementErrorV1 {
             CertifiedServeTerminalSettlementErrorKindV1::RestartRequired(_)
         )
     }
-
     /// Recover the unchanged active lease only before any terminal publication.
     pub(crate) fn into_lease(self) -> Result<super::TurnLease, Self> {
         match self.kind {
@@ -257,7 +237,6 @@ impl CertifiedServeTerminalSettlementErrorV1 {
             }
         }
     }
-
     fn prepublication(
         failure: CertifiedServeTerminalSettlementFailureV1,
         lease: super::TurnLease,
@@ -266,14 +245,12 @@ impl CertifiedServeTerminalSettlementErrorV1 {
             kind: CertifiedServeTerminalSettlementErrorKindV1::Prepublication { failure, lease },
         }
     }
-
     fn requiring_restart(restart: CertifiedServeTerminalSettlementRestartV1) -> Self {
         Self {
             kind: CertifiedServeTerminalSettlementErrorKindV1::RestartRequired(restart),
         }
     }
 }
-
 /// Stable classification for the sealed fresh Certified-Serve transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CertifiedServeConcreteAdmissionFailureV1 {
@@ -292,14 +269,12 @@ pub(crate) enum CertifiedServeConcreteAdmissionFailureV1 {
     /// The exact pre-ledger Pending abort did not complete durably.
     PendingAbort,
 }
-
 /// Opaque ownership-preserving result of one selector-bound payload-first admission.
 #[cfg_attr(not(test), allow(dead_code))]
 #[must_use = "the selector-owned Certified-Serve target must be handled"]
 pub(crate) struct CertifiedServeConcreteAdmissionV1 {
     kind: CertifiedServeConcreteAdmissionKindV1,
 }
-
 #[allow(variant_size_differences)]
 enum CertifiedServeConcreteAdmissionKindV1 {
     Published {
@@ -319,7 +294,6 @@ enum CertifiedServeConcreteAdmissionKindV1 {
         _batch: Option<PreparedCertifiedServeRegistryBatchV1>,
     },
 }
-
 /// Safe consuming continuation after a published result or proven pre-ledger rollback.
 #[cfg_attr(not(test), allow(dead_code))]
 #[must_use = "the selector-owned Certified-Serve continuation must be handled"]
@@ -328,7 +302,6 @@ pub(crate) struct CertifiedServeConcreteAdmissionContinuationV1 {
     failure: Option<CertifiedServeConcreteAdmissionFailureV1>,
     target: super::LifecycleIngressIoTargetSeal,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl CertifiedServeConcreteAdmissionV1 {
     /// Return the durable admission decision when one was safely published or
@@ -340,7 +313,6 @@ impl CertifiedServeConcreteAdmissionV1 {
             CertifiedServeConcreteAdmissionKindV1::RestartRequired { .. } => None,
         }
     }
-
     /// Return whether the process must restart before touching this owner.
     pub(crate) const fn restart_required(&self) -> bool {
         matches!(
@@ -348,7 +320,6 @@ impl CertifiedServeConcreteAdmissionV1 {
             CertifiedServeConcreteAdmissionKindV1::RestartRequired { .. }
         )
     }
-
     /// Return the stable failure class, if this was not a publication success.
     pub(crate) const fn failure(&self) -> Option<CertifiedServeConcreteAdmissionFailureV1> {
         match &self.kind {
@@ -359,7 +330,6 @@ impl CertifiedServeConcreteAdmissionV1 {
             }
         }
     }
-
     /// Extract a safe continuation only when no fail-stop authority is retained.
     pub(crate) fn into_safe_continuation(
         self,
@@ -386,7 +356,6 @@ impl CertifiedServeConcreteAdmissionV1 {
             }
         }
     }
-
     fn published(
         decision: super::AdmissionDecision,
         target: super::LifecycleIngressIoTargetSeal,
@@ -395,7 +364,6 @@ impl CertifiedServeConcreteAdmissionV1 {
             kind: CertifiedServeConcreteAdmissionKindV1::Published { decision, target },
         }
     }
-
     fn retryable(
         failure: CertifiedServeConcreteAdmissionFailureV1,
         decision: Option<super::AdmissionDecision>,
@@ -409,7 +377,6 @@ impl CertifiedServeConcreteAdmissionV1 {
             },
         }
     }
-
     fn requiring_restart(
         failure: CertifiedServeConcreteAdmissionFailureV1,
         target: super::LifecycleIngressIoTargetSeal,
@@ -428,25 +395,21 @@ impl CertifiedServeConcreteAdmissionV1 {
         }
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl CertifiedServeConcreteAdmissionContinuationV1 {
     /// Return the safe logical decision, if projection failed before one existed.
     pub(crate) const fn decision(&self) -> Option<super::AdmissionDecision> {
         self.decision
     }
-
     /// Return the safe pre-ledger failure class, if any.
     pub(crate) const fn failure(&self) -> Option<CertifiedServeConcreteAdmissionFailureV1> {
         self.failure
     }
-
     /// Recover the unchanged selector target only from this safe continuation.
     pub(crate) fn into_target(self) -> super::LifecycleIngressIoTargetSeal {
         self.target
     }
 }
-
 fn certified_serve_terminal_replay_decision(
     coordinator: &super::LifecycleCoordinator,
     verified: &VerifiedHeightContext,
@@ -588,7 +551,6 @@ fn certified_serve_terminal_replay_decision(
         TerminalOutcome::Advanced | TerminalOutcome::Completed(None) => return None,
     })
 }
-
 impl super::ProductionLifecycleOwnerV1 {
     /// Persist one selected Certified-Serve payload, then atomically publish its
     /// adjacent LedgerV1 rows and two exact concrete carriers.
@@ -782,7 +744,6 @@ impl super::ProductionLifecycleOwnerV1 {
             }
         }
     }
-
     fn certified_serve_preledger_failure(
         &mut self,
         target: super::LifecycleIngressIoTargetSeal,
@@ -814,7 +775,6 @@ impl super::ProductionLifecycleOwnerV1 {
         )
     }
 }
-
 impl super::ProductionLifecycleOwnerV1 {
     /// Persist and publish one exact completed Certified-Serve terminal.
     ///
@@ -871,7 +831,6 @@ impl super::ProductionLifecycleOwnerV1 {
             DurableCertifiedServeTerminalPublicationV1::Completed(receipt),
         )
     }
-
     /// Persist and publish one exact typed negative Certified-Serve terminal.
     ///
     /// The retained payload store derives the opaque request id from the
@@ -909,7 +868,6 @@ impl super::ProductionLifecycleOwnerV1 {
             DurableCertifiedServeTerminalPublicationV1::Negative(receipt),
         )
     }
-
     fn preflight_certified_serve_terminal(
         &mut self,
         lease: &super::TurnLease,
@@ -1023,7 +981,6 @@ impl super::ProductionLifecycleOwnerV1 {
         }
         Ok(())
     }
-
     fn publish_certified_serve_terminal(
         &mut self,
         lease: super::TurnLease,
@@ -1146,7 +1103,6 @@ impl super::ProductionLifecycleOwnerV1 {
             }
         }
     }
-
     fn certified_serve_terminal_restart(
         &mut self,
         failure: CertifiedServeTerminalSettlementFailureV1,
@@ -1167,7 +1123,6 @@ impl super::ProductionLifecycleOwnerV1 {
         )
     }
 }
-
 impl super::LifecycleCoordinator {
     /// Durably retain and atomically admit one authenticated Certified-Serve
     /// request.
@@ -1275,7 +1230,6 @@ impl super::LifecycleCoordinator {
         Ok(decision)
     }
 }
-
 /// Complete recovery projection for one authenticated Certified-Serve payload.
 ///
 /// A Pending frame projects a Pending candidate; a terminal frame projects
@@ -1288,7 +1242,6 @@ pub(super) struct RecoveredCertifiedServeProjection {
     terminal_outcome: Option<TerminalOutcome>,
     terminal_replay: Option<CertifiedServeTerminalReplayAuthorityPairV1>,
 }
-
 impl RecoveredCertifiedServeProjection {
     /// Consume the sealed projection into coordinator- and registry-owned
     /// recovery parts.
@@ -1309,7 +1262,6 @@ impl RecoveredCertifiedServeProjection {
             self.replay,
         )
     }
-
     /// Consume a test projection without exporting its runtime-only replay pair.
     #[cfg(test)]
     pub(super) fn into_parts(
@@ -1328,7 +1280,6 @@ impl RecoveredCertifiedServeProjection {
         )
     }
 }
-
 /// One exact post-fsync Certified-Serve candidate kept inseparable from the
 /// common replay family required by both adjacent concrete carriers.
 #[must_use = "the prepared Certified-Serve admission still owns its replay family"]
@@ -1336,7 +1287,6 @@ pub(super) struct PreparedCertifiedServeAdmissionV1 {
     candidate: CandidateAdmission,
     replay: CertifiedServeReplayEvidencePairV1,
 }
-
 impl PreparedCertifiedServeAdmissionV1 {
     /// Consume the closed projection at the coordinator/registry transaction.
     pub(super) fn into_candidate_and_replay(
@@ -1345,14 +1295,12 @@ impl PreparedCertifiedServeAdmissionV1 {
         (self.candidate, self.replay)
     }
 }
-
 #[derive(Clone, Copy)]
 struct ProjectedShape {
     key: LifecycleKey,
     work_class: LifecycleWorkClass,
     stage_kind: LifecycleStageKind,
 }
-
 /// Project one authenticated, durably retained request into an atomic
 /// Certified-Serve/ProducerTurn admission.
 ///
@@ -1375,7 +1323,6 @@ pub(super) fn certified_serve_admission_request(
         },
     )
 }
-
 /// Close one authenticated, post-fsync request over the candidate and the
 /// opaque replay family that must enter both concrete registry rows.
 pub(super) fn prepare_certified_serve_admission(
@@ -1407,7 +1354,6 @@ pub(super) fn prepare_certified_serve_admission(
     let candidate = certified_serve_candidate(active_context, authenticated, &replay)?;
     Ok(PreparedCertifiedServeAdmissionV1 { candidate, replay })
 }
-
 /// Reconstruct one authenticated payload-store record into its exact
 /// admission candidate, resolved durable payload, and optional terminal cut.
 ///
@@ -1496,7 +1442,6 @@ pub(super) fn recovered_certified_serve_projection(
         terminal_replay,
     })
 }
-
 fn certified_serve_candidate(
     active_context: LifecycleContext,
     authenticated: &AuthenticatedCertifiedBodyRequest,
@@ -1515,12 +1460,10 @@ fn certified_serve_candidate(
     {
         return Err(CertifiedServeAdmissionError::InvalidRequest);
     }
-
     replay
         .admission_candidate(active_context)
         .ok_or(CertifiedServeAdmissionError::InvalidRequest)
 }
-
 pub(super) fn admission_request(
     active_context: LifecycleContext,
     verified: &VerifiedHeightContext,
@@ -1544,7 +1487,6 @@ pub(super) fn admission_request(
     );
     Ok(AdmissionRequest::Candidate(candidate))
 }
-
 /// Project exact runtime coordinates without attaching replay authority.
 ///
 /// The returned value is inert. Closed replay evidence must perform the final
@@ -1573,7 +1515,6 @@ pub(super) fn authority_free_admission_projection(
     {
         return Err(AdapterEffectAdmissionError::ForeignContext);
     }
-
     let causal_root = pending_effect_causal_root(binding);
     let causal_digest = causal_root.digest();
     let physical_digest = digest_from_hash(binding.exact_effect_identity());
@@ -1591,7 +1532,6 @@ pub(super) fn authority_free_admission_projection(
         ),
     })
 }
-
 fn project_shape(
     context: &wire::HeightContext,
     effect: &AdapterEffect,
@@ -1712,7 +1652,6 @@ fn project_shape(
         }
     }
 }
-
 fn project_sign(
     context: &wire::HeightContext,
     tag: crate::sumeragi::v2_core::EventTag,
@@ -1799,7 +1738,6 @@ fn project_sign(
         }
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn project_fetch(
     context: &wire::HeightContext,
@@ -1870,7 +1808,6 @@ fn project_fetch(
         stage_kind: LifecycleStageKind::FetchBody,
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 fn project_inherited_body_stage(
     context: &wire::HeightContext,
@@ -1910,7 +1847,6 @@ fn project_inherited_body_stage(
         stage_kind,
     })
 }
-
 fn project_apply(
     context: &wire::HeightContext,
     tag: crate::sumeragi::v2_core::EventTag,
@@ -1937,7 +1873,6 @@ fn project_apply(
         stage_kind: LifecycleStageKind::ApplyDecision,
     })
 }
-
 fn project_broadcast(
     context: &wire::HeightContext,
     message: &wire::ConsensusMessageV2,
@@ -2063,7 +1998,6 @@ fn project_broadcast(
         }
     }
 }
-
 fn project_enter_view(
     context: &wire::HeightContext,
     tag: crate::sumeragi::v2_core::EventTag,
@@ -2125,7 +2059,6 @@ fn project_enter_view(
         stage_kind: LifecycleStageKind::EnterView,
     })
 }
-
 fn validate_tag_for_round(
     context: &wire::HeightContext,
     tag: crate::sumeragi::v2_core::EventTag,
@@ -2137,7 +2070,6 @@ fn validate_tag_for_round(
     }
     Ok(())
 }
-
 fn validate_round(
     context: &wire::HeightContext,
     round: wire::ConsensusRound,
@@ -2147,11 +2079,9 @@ fn validate_round(
     }
     Ok(())
 }
-
 pub(in crate::sumeragi) fn lifecycle_context(context: &wire::HeightContext) -> LifecycleContext {
     LifecycleContext::new(digest_from_bytes(context.id().0.as_ref()), context.height)
 }
-
 /// Project one non-forgeable body-store receipt into its LedgerV1 frame reference.
 ///
 /// The returned value binds only the exact fsynced body bytes. Restart must
@@ -2173,7 +2103,6 @@ pub(super) fn durable_body_frame_reference(
         digest_from_hash(&receipt.frame_hash()),
     ))
 }
-
 /// Rebind one exact LedgerV1 body-frame reference from an opened body store.
 ///
 /// This performs a complete catalog census rather than inverting the lifecycle
@@ -2192,7 +2121,6 @@ pub(super) fn authenticate_durable_body_frame_recovery(
         store.recovery_catalog()?.into_values(),
     )
 }
-
 fn authenticate_durable_body_frame_catalog(
     active_context: LifecycleContext,
     expected: DurableBodyFrameReference,
@@ -2216,7 +2144,6 @@ fn authenticate_durable_body_frame_catalog(
         receipt,
     })
 }
-
 fn lifecycle_key(
     context: &wire::HeightContext,
     round: wire::ConsensusRound,
@@ -2234,17 +2161,14 @@ fn lifecycle_key(
         execution_commitment,
     )
 }
-
 /// Derive the lifecycle-domain digest for one exact block subject.
 pub(super) fn block_subject(subject: wire::BlockSubject) -> LifecycleDigest {
     domain_digest(BLOCK_SUBJECT_DOMAIN, &subject.encode())
 }
-
 /// Derive the lifecycle-domain digest for one exact execution commitment.
 pub(super) fn execution_commitment(commitment: wire::ExecutionCommitment) -> LifecycleDigest {
     domain_digest(EXECUTION_COMMITMENT_DOMAIN, &commitment.encode())
 }
-
 /// Derive the logical key shared by certified-Fetch admission and its
 /// authenticated late response. Ordinary, uncertified Fetch work is excluded:
 /// this helper requires explicit certificate phase and commitment authority.
@@ -2280,7 +2204,6 @@ pub(super) fn certified_fetch_lifecycle_key(
         Some(execution_commitment(commitment)),
     ))
 }
-
 /// Derive the unique external generation source for one exact signed
 /// certified-body request. Future Fetch settlement and response wake
 /// publication must share this function.
@@ -2292,7 +2215,6 @@ pub(super) fn certified_fetch_wait_source(
         request_hash.as_ref(),
     ))
 }
-
 /// Derive the unique external generation source for one exact closed durable
 /// Validate carrier.
 ///
@@ -2391,7 +2313,6 @@ pub(super) fn durable_validation_wait_source(
         &encoded,
     ))
 }
-
 /// Derive the one context-scoped external generation source which wakes direct
 /// completions after the adapter's reducer fence changes.
 ///
@@ -2403,13 +2324,11 @@ pub(super) fn reducer_fence_wait_source(context: LifecycleContext) -> WaitSource
     let encoded = (*context.id().as_bytes(), context.height()).encode();
     WaitSource::External(domain_digest(REDUCER_FENCE_WAIT_SOURCE_DOMAIN, &encoded))
 }
-
 /// Recover the coordinator's semantic owner root from one sealed pending
 /// runtime-effect binding.
 pub(super) fn pending_effect_causal_root(binding: &PendingRuntimeEffectBinding) -> CausalRoot {
     CausalRoot::new(digest_from_hash(binding.causal_lifecycle_key()))
 }
-
 /// Authenticate the durable body outcome carried by one terminal Validate parent.
 ///
 /// This projection deliberately proves only the exact body outcome and the
@@ -2447,7 +2366,6 @@ pub(super) fn recovered_validate_no_successor_ledger_identity_is_authenticated(
         (None, Some(BodyValidationRejectionIdentity::Rejected), None) => true,
         _ => false,
     };
-
     context.id() == expected_context
         && context.height() == durable.round().height
         && durable.round().context_id == durable.context_id()
@@ -2462,7 +2380,6 @@ pub(super) fn recovered_validate_no_successor_ledger_identity_is_authenticated(
         && Some(payload) == expected_payload
         && outcome_is_exact
 }
-
 /// Authenticate a terminal Validate candidate including its transient physical episode.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn recovered_validate_no_successor_is_authenticated(
@@ -2496,7 +2413,6 @@ pub(super) fn recovered_validate_no_successor_is_authenticated(
         && candidate.producer_turn.is_none()
         && geometry_is_exact
 }
-
 /// Build the six-field Serve-key subject from the certified block and exact
 /// signed request. The request hash is deliberately part of the semantic key:
 /// the durable ledger stores one terminal response per record, and responses
@@ -2512,7 +2428,6 @@ pub(super) fn certified_serve_key_subject(
     append_field(&mut projection, request_hash.as_ref());
     digest_from_hash(&Hash::new(projection))
 }
-
 fn equivocation_subject(
     evidence: &crate::sumeragi::v2::AdapterEquivocationEvidence,
 ) -> LifecycleDigest {
@@ -2529,14 +2444,12 @@ fn equivocation_subject(
     append_field(&mut projection, &second);
     digest_from_hash(&Hash::new(projection))
 }
-
 fn domain_digest(domain: &[u8], encoded: &[u8]) -> LifecycleDigest {
     let mut projection = Vec::with_capacity(domain.len() + 8 + encoded.len());
     projection.extend_from_slice(domain);
     append_field(&mut projection, encoded);
     digest_from_hash(&Hash::new(projection))
 }
-
 fn append_field(projection: &mut Vec<u8>, field: &[u8]) {
     projection.extend_from_slice(
         &u64::try_from(field.len())
@@ -2545,21 +2458,17 @@ fn append_field(projection: &mut Vec<u8>, field: &[u8]) {
     );
     projection.extend_from_slice(field);
 }
-
 fn digest_from_hash(hash: &Hash) -> LifecycleDigest {
     digest_from_bytes(hash.as_ref())
 }
-
 fn digest_from_bytes(hash: &[u8]) -> LifecycleDigest {
     let mut bytes = [0_u8; 32];
     bytes.copy_from_slice(hash);
     LifecycleDigest::new(bytes)
 }
-
 #[cfg(test)]
 mod wait_source_tests {
     use super::*;
-
     fn validate_recovery_fixture() -> (
         LifecycleContext,
         CandidateAdmission,
@@ -2591,20 +2500,17 @@ mod wait_source_tests {
         );
         (context, candidate, durable)
     }
-
     #[test]
     fn reducer_fence_source_is_context_and_height_scoped() {
         let first = LifecycleContext::new(LifecycleDigest::new([0xA1; 32]), 7);
         let other_context = LifecycleContext::new(LifecycleDigest::new([0xA2; 32]), 7);
         let other_height = LifecycleContext::new(first.id(), 8);
-
         let source = reducer_fence_wait_source(first);
         assert!(matches!(source, WaitSource::External(_)));
         assert_eq!(source, reducer_fence_wait_source(first));
         assert_ne!(source, reducer_fence_wait_source(other_context));
         assert_ne!(source, reducer_fence_wait_source(other_height));
     }
-
     #[test]
     fn durable_body_frame_projection_binds_every_receipt_coordinate() {
         let (context, candidate, durable) = validate_recovery_fixture();
@@ -2619,7 +2525,6 @@ mod wait_source_tests {
             digest_from_bytes(durable.manifest_hash().as_ref())
         );
         assert_eq!(reference.frame, digest_from_hash(&durable.frame_hash()));
-
         let foreign_context = LifecycleContext::new(LifecycleDigest::new([0x76; 32]), 7);
         assert_eq!(
             durable_body_frame_reference(foreign_context, &durable),
@@ -2628,7 +2533,6 @@ mod wait_source_tests {
         let foreign_height = LifecycleContext::new(context.id(), 8);
         assert_eq!(durable_body_frame_reference(foreign_height, &durable), None);
     }
-
     #[test]
     fn durable_body_frame_recovery_requires_one_exact_catalog_row() {
         let (context, _, template) = validate_recovery_fixture();
@@ -2655,7 +2559,6 @@ mod wait_source_tests {
         );
         let expected = durable_body_frame_reference(context, &receipt)
             .expect("catalog receipt projects into its active context");
-
         let recovered = authenticate_durable_body_frame_catalog(
             context,
             expected,
@@ -2665,7 +2568,6 @@ mod wait_source_tests {
         assert_eq!(recovered.reference, expected);
         assert_eq!(recovered.manifest, manifest);
         assert_eq!(recovered.receipt, receipt);
-
         assert!(matches!(
             authenticate_durable_body_frame_catalog(context, expected, []),
             Err(DurableBodyFrameRecoveryError::Missing)
@@ -2681,7 +2583,6 @@ mod wait_source_tests {
             ),
             Err(DurableBodyFrameRecoveryError::Ambiguous)
         ));
-
         let mut foreign_manifest = manifest;
         foreign_manifest.payload_size_bytes = 2;
         assert!(matches!(
@@ -2693,7 +2594,6 @@ mod wait_source_tests {
             Err(DurableBodyFrameRecoveryError::Missing)
         ));
     }
-
     #[test]
     fn terminal_validate_recovery_binds_exact_body_outcome_and_parent_identity() {
         let (context, candidate, durable) = validate_recovery_fixture();
@@ -2704,7 +2604,6 @@ mod wait_source_tests {
         assert!(recovered_validate_no_successor_is_authenticated(
             context, &candidate, &validated,
         ));
-
         let rejected =
             crate::sumeragi::v2_body_store::DurableBodyValidationOutcome::rejected_for_test(
                 durable,
@@ -2712,7 +2611,6 @@ mod wait_source_tests {
         assert!(recovered_validate_no_successor_is_authenticated(
             context, &candidate, &rejected,
         ));
-
         let mut committed_rejection = candidate.clone();
         committed_rejection.key.execution_commitment = Some(LifecycleDigest::new([0x74; 32]));
         assert!(recovered_validate_no_successor_is_authenticated(
@@ -2720,13 +2618,11 @@ mod wait_source_tests {
             &committed_rejection,
             &rejected,
         ));
-
         let mut foreign = candidate.clone();
         foreign.key.subject = Some(LifecycleDigest::new([0x75; 32]));
         assert!(!recovered_validate_no_successor_is_authenticated(
             context, &foreign, &validated,
         ));
-
         let mut substituted = candidate.clone();
         let DurablePayloadReference::BodyFrame(mut substituted_frame) = substituted.payload else {
             panic!("Validate recovery fixture must retain its durable body frame");
@@ -2738,7 +2634,6 @@ mod wait_source_tests {
             &substituted,
             &validated,
         ));
-
         let mut malformed = candidate;
         malformed.physical_geometry = PhysicalGeometry::new([], []);
         assert!(!recovered_validate_no_successor_is_authenticated(
@@ -2746,7 +2641,6 @@ mod wait_source_tests {
         ));
     }
 }
-
 #[cfg(all(test, feature = "bls"))]
 mod tests {
     include!("tests/v2_lifecycle_projection_cases.rs");

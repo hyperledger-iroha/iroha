@@ -20,7 +20,7 @@ path = "src/lib.rs"
 default = ["governance", "bridge"]
 governance = []
 bridge = []
-test-support = []
+test = []
 
 [dependencies]
 iroha_crypto = { workspace = true, features = ["consensus"], default-features = false }

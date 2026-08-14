@@ -1,33 +1,27 @@
 use p256::elliptic_curve::bigint::Encoding as _;
 use rand_core_06::{CryptoRng, Error as RngError, RngCore};
 use zeroize::{Zeroize as _, Zeroizing};
-
 use super::*;
-
 struct TestRng {
     state: u64,
     fail: bool,
     stuck: Option<u8>,
 }
-
 impl RngCore for TestRng {
     fn next_u32(&mut self) -> u32 {
         let mut bytes = [0_u8; 4];
         self.fill_bytes(&mut bytes);
         u32::from_le_bytes(bytes)
     }
-
     fn next_u64(&mut self) -> u64 {
         let mut bytes = [0_u8; 8];
         self.fill_bytes(&mut bytes);
         u64::from_le_bytes(bytes)
     }
-
     fn fill_bytes(&mut self, destination: &mut [u8]) {
         self.try_fill_bytes(destination)
             .expect("infallible test invocation");
     }
-
     fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
         if self.fail {
             return Err(RngError::new("injected failure"));
@@ -45,24 +39,19 @@ impl RngCore for TestRng {
         Ok(())
     }
 }
-
 impl CryptoRng for TestRng {}
-
 fn test_seed() -> [u8; 32] {
     core::array::from_fn(|index| u8::try_from(index + 1).expect("index fits"))
 }
-
 fn test_randomness() -> ProofRandomnessV1 {
     ProofRandomnessV1::for_test(test_seed()).expect("healthy deterministic seed")
 }
-
 fn finite_threshold(value: BernoulliThresholdV1) -> U256 {
     match value {
         BernoulliThresholdV1::Finite(value) => value,
         other => panic!("expected finite threshold, got {other:?}"),
     }
 }
-
 fn absolute_difference(left: U256, right: U256) -> U256 {
     if left >= right {
         left.wrapping_sub(&right)
@@ -70,14 +59,12 @@ fn absolute_difference(left: U256, right: U256) -> U256 {
         right.wrapping_sub(&left)
     }
 }
-
 fn rational_q256(numerator: u64, denominator: u64) -> U512 {
     rational_to_q256_round_v1(
         U512::from_u64(numerator).shl_vartime(Q256_FRACTION_BITS_V1),
         U512::from_u64(denominator),
     )
 }
-
 #[test]
 fn external_rng_failure_and_stuck_sentinels_fail_closed() {
     let mut failed = TestRng {
@@ -101,11 +88,9 @@ fn external_rng_failure_and_stuck_sentinels_fail_closed() {
         ));
     }
 }
-
 #[test]
 fn successful_proof_seed_is_owned_by_zeroizing_storage() {
     fn require_zeroizing_seed(_: &Zeroizing<[u8; 32]>) {}
-
     let mut rng = TestRng {
         state: 1,
         fail: false,
@@ -117,7 +102,6 @@ fn successful_proof_seed_is_owned_by_zeroizing_storage() {
     randomness.seed.zeroize();
     assert_eq!(*randomness.seed, [0; 32]);
 }
-
 #[test]
 fn deterministic_stream_is_domain_position_and_seed_separated() {
     let mut first = test_randomness();
@@ -143,7 +127,6 @@ fn deterministic_stream_is_domain_position_and_seed_separated() {
     assert_eq!(first.stream, 1);
     assert_eq!(replay.stream, 2);
 }
-
 #[test]
 fn secret_randomness_diagnostics_are_invariant_and_fully_redacted() {
     let mut first = test_randomness();
@@ -156,12 +139,10 @@ fn secret_randomness_diagnostics_are_invariant_and_fully_redacted() {
     first.fill_bytes(b"advance-secret-stream", output.as_mut());
     second.fill_bytes(b"another-secret-stream", output.as_mut());
     second.fill_bytes(b"another-secret-stream", output.as_mut());
-
     assert_eq!(initial, "ProofRandomnessV1(<redacted>)");
     assert_eq!(format!("{first:?}"), initial);
     assert_eq!(format!("{second:?}"), initial);
 }
-
 #[test]
 fn closed_profiles_pin_width_shape_truncation_and_rejection_kind() {
     assert_eq!(GAUSSIAN_VARIANCE_NUMERATOR_V1, 961);
@@ -206,7 +187,6 @@ fn closed_profiles_pin_width_shape_truncation_and_rejection_kind() {
         assert!(m < U512::from_u64(3).shl_vartime(Q256_FRACTION_BITS_V1));
     }
 }
-
 #[test]
 fn q256_cdf_constants_and_boundaries_are_canonical() {
     assert_eq!(
@@ -237,7 +217,6 @@ fn q256_cdf_constants_and_boundaries_are_canonical() {
         );
     }
 }
-
 #[test]
 fn gaussian_correction_uses_exact_nonnegative_rationals() {
     let scale = 1_u64 << 12;
@@ -249,7 +228,6 @@ fn gaussian_correction_uses_exact_nonnegative_rationals() {
     assert_eq!(first_positive, rational_q256(200, 961));
     let largest = gaussian_correction_exponent_q256_v1(29, true, 0, scale);
     assert_eq!(largest, rational_q256(11_800, 961));
-
     for magnitude in [0, 1, 7, 29] {
         for offset in [1, 17, scale / 2, scale - 1] {
             let negative = gaussian_correction_exponent_q256_v1(magnitude, false, offset, scale);
@@ -259,7 +237,6 @@ fn gaussian_correction_uses_exact_nonnegative_rationals() {
         }
     }
 }
-
 #[test]
 fn q256_decay_matches_independent_high_precision_vectors() {
     let cases = [
@@ -312,7 +289,6 @@ fn q256_decay_matches_independent_high_precision_vectors() {
         U512::ZERO
     );
 }
-
 #[test]
 fn q256_decay_is_monotone_through_the_full_cutoff() {
     let mut previous = decay_q256_v1(U512::ZERO);
@@ -330,7 +306,6 @@ fn q256_decay_is_monotone_through_the_full_cutoff() {
     }
     assert_eq!(previous, U512::ZERO);
 }
-
 #[test]
 fn ratio_thresholds_pin_zero_one_half_and_saturation() {
     let one = q256_one_v1();
@@ -351,7 +326,6 @@ fn ratio_thresholds_pin_zero_one_half_and_saturation() {
         BernoulliThresholdV1::Finite(U256::ONE.shl_vartime(255))
     );
 }
-
 #[test]
 fn bernoulli_draws_are_big_endian_fixed_width_and_boundary_exact() {
     let domain = b"bernoulli-boundary-test";
@@ -360,24 +334,20 @@ fn bernoulli_draws_are_big_endian_fixed_width_and_boundary_exact() {
     probe.fill_bytes(domain, &mut bytes);
     let draw = U256::from_be_bytes(bytes);
     assert_ne!(draw, U256::MAX);
-
     let mut equal = test_randomness();
     assert!(!equal.bernoulli_q256(domain, BernoulliThresholdV1::Finite(draw)));
     assert_eq!(equal.stream, 1);
-
     let mut below = test_randomness();
     assert!(below.bernoulli_q256(
         domain,
         BernoulliThresholdV1::Finite(draw.wrapping_add(&U256::ONE))
     ));
     assert_eq!(below.stream, 1);
-
     let mut endpoints = test_randomness();
     assert!(!endpoints.bernoulli_q256(domain, BernoulliThresholdV1::Never));
     assert!(endpoints.bernoulli_q256(domain, BernoulliThresholdV1::Always));
     assert_eq!(endpoints.stream, 2);
 }
-
 #[test]
 fn zero_rejection_inputs_match_exact_reciprocal_m_vectors() {
     let expected = [
@@ -394,7 +364,6 @@ fn zero_rejection_inputs_match_exact_reciprocal_m_vectors() {
         assert_eq!(finite_threshold(threshold), U256::from_be_hex(expected));
     }
 }
-
 #[test]
 fn standard_and_bimodal_thresholds_match_independent_decimal_vectors() {
     // For z1, raw = 961*2^41 gives exponent +/- 25/4 exactly.
@@ -414,7 +383,6 @@ fn standard_and_bimodal_thresholds_match_independent_decimal_vectors() {
     ));
     let standard_reference =
         U256::from_be_hex("00367e08a8d34d4ae0b11a7eb9fbdb857150ef30cd7220e42945a45a08ee3cf4");
-
     // For z2, dot = 961*2^17 gives t = 25/8.  With norm=dot,
     // n=25/16 and the decision exercises the d>=0 formula.
     let dot = 961_i128 << 17;
@@ -435,13 +403,11 @@ fn standard_and_bimodal_thresholds_match_independent_decimal_vectors() {
     assert!(absolute_difference(standard_negative, standard_reference) <= tolerance);
     assert!(absolute_difference(bimodal, bimodal_reference) <= tolerance);
     assert_eq!(bimodal, bimodal_negative_dot);
-
     assert_eq!(
         bimodal_rejection_threshold_v1(dot, norm * 4, BootleSamplingProfileV1::ResponseZ2),
         BernoulliThresholdV1::Always
     );
 }
-
 #[test]
 fn adversarial_underflow_overflow_product_case_rejects_instead_of_accepting_nan() {
     let profile = BootleSamplingProfileV1::ProjectionZ3;
@@ -464,7 +430,6 @@ fn adversarial_underflow_overflow_product_case_rejects_instead_of_accepting_nan(
             .expect("well-shaped adversarial decision")
     );
     assert_eq!(randomness.stream, 1);
-
     z[0] = 0;
     let mut saturation = test_randomness();
     assert!(
@@ -474,14 +439,12 @@ fn adversarial_underflow_overflow_product_case_rejects_instead_of_accepting_nan(
     );
     assert_eq!(saturation.stream, 1);
 }
-
 #[test]
 fn standard_extreme_exponents_saturate_in_the_correct_direction() {
     let profile = BootleSamplingProfileV1::ResponseZ1;
     let mut z = vec![0_i64; profile.expected_coefficients()];
     let mut shift = vec![0_i64; profile.expected_coefficients()];
     shift[0] = 1_000_000_000_000;
-
     let mut positive = test_randomness();
     assert!(
         positive
@@ -496,7 +459,6 @@ fn standard_extreme_exponents_saturate_in_the_correct_direction() {
             .expect("negative exponent")
     );
 }
-
 #[test]
 fn rejection_shapes_and_arithmetic_overflow_fail_before_randomness_is_used() {
     let mut randomness = test_randomness();
@@ -505,7 +467,6 @@ fn rejection_shapes_and_arithmetic_overflow_fail_before_randomness_is_used() {
         Err(SamplingErrorV1::InvalidRejectionShape)
     );
     assert_eq!(randomness.stream, 0);
-
     let profile = BootleSamplingProfileV1::ResponseZ1;
     let extreme = vec![i64::MAX; profile.expected_coefficients()];
     assert_eq!(
@@ -514,7 +475,6 @@ fn rejection_shapes_and_arithmetic_overflow_fail_before_randomness_is_used() {
     );
     assert_eq!(randomness.stream, 0);
 }
-
 #[test]
 fn uniform_power_of_two_draws_have_no_spurious_rejection_block() {
     let mut randomness = test_randomness();
@@ -527,7 +487,6 @@ fn uniform_power_of_two_draws_have_no_spurious_rejection_block() {
         assert_eq!(randomness.stream, before + 1);
     }
 }
-
 #[test]
 fn gaussian_polynomials_are_reproducible_canonical_and_bounded() {
     let mut first = test_randomness();
@@ -614,7 +573,6 @@ fn gaussian_polynomials_are_reproducible_canonical_and_bounded() {
     assert_eq!(first.stream, replay.stream);
     assert!(first.stream >= 4 * APPLICATION_RING_DEGREE_V1 as u64);
 }
-
 #[test]
 fn z4_gaussian_kat_coefficient_13_is_reconstructed_from_pinned_raw_draws() {
     // The fourth polynomial starts at stream 942. Accounting for the two
@@ -623,7 +581,6 @@ fn z4_gaussian_kat_coefficient_13_is_reconstructed_from_pinned_raw_draws() {
     // and reconstruct the coefficient without calling gaussian_coefficient.
     let mut randomness = test_randomness();
     randomness.stream = 1_000;
-
     let mut fraction_bytes = [0_u8; 8];
     randomness.fill_bytes(b"gaussian-z4-fraction-v1", &mut fraction_bytes);
     assert_eq!(
@@ -633,12 +590,10 @@ fn z4_gaussian_kat_coefficient_13_is_reconstructed_from_pinned_raw_draws() {
     let scale = 1_u64 << 29;
     let fractional = u64::from_be_bytes(fraction_bytes) % scale;
     assert_eq!(fractional, 465_911_508);
-
     let mut sign_bytes = [0_u8; 1];
     randomness.fill_bytes(b"gaussian-z4-sign-v1", &mut sign_bytes);
     assert_eq!(sign_bytes, [0x41]);
     assert_eq!(sign_bytes[0] & 1, 1, "odd draw selects the positive branch");
-
     let mut cdf_bytes = [0_u8; 32];
     randomness.fill_bytes(b"gaussian-z4-cdf-v1", &mut cdf_bytes);
     assert_eq!(
@@ -654,7 +609,6 @@ fn z4_gaussian_kat_coefficient_13_is_reconstructed_from_pinned_raw_draws() {
     assert!(cdf_draw < CDF_155_Q256_V1[1]);
     assert!(cdf_draw >= CDF_155_Q256_V1[2]);
     let magnitude = 2_i64;
-
     let mut accept_bytes = [0_u8; 32];
     randomness.fill_bytes(b"gaussian-z4-accept-v1", &mut accept_bytes);
     assert_eq!(
@@ -670,7 +624,6 @@ fn z4_gaussian_kat_coefficient_13_is_reconstructed_from_pinned_raw_draws() {
     let ideal_acceptance_floor =
         U256::from_be_hex("e47ea296d803ad0cbf21ed310ac31c2a5fa1bb5f76fc5cf4095764be1f85c125");
     assert!(U256::from_be_bytes(accept_bytes) < ideal_acceptance_floor);
-
     let candidate = magnitude + 1;
     let reconstructed = candidate
         .checked_mul(i64::try_from(scale).expect("fixed scale fits i64"))
@@ -681,7 +634,6 @@ fn z4_gaussian_kat_coefficient_13_is_reconstructed_from_pinned_raw_draws() {
     assert_eq!(reconstructed, 1_144_701_228);
     assert_eq!(randomness.stream, 1_004);
 }
-
 #[test]
 fn gaussian_retry_and_probability_error_budgets_have_integer_margins() {
     // The event branch=negative, magnitude=0 alone has probability above
@@ -697,7 +649,6 @@ fn gaussian_retry_and_probability_error_budgets_have_integer_margins() {
     assert!(2_u128 * 21_u128.pow(4) < 25_u128.pow(4));
     assert_eq!(MAX_GAUSSIAN_COEFFICIENT_ATTEMPTS_V1, 4_096);
     assert_eq!(MAX_GAUSSIAN_COEFFICIENT_ATTEMPTS_V1 / 4, 1_024);
-
     let response_coefficients =
         u128::try_from((TBOX_M1_V1 + TBOX_M2_V1) * APPLICATION_RING_DEGREE_V1)
             .expect("fixed dimensions");
@@ -709,11 +660,9 @@ fn gaussian_retry_and_probability_error_budgets_have_integer_margins() {
     assert_eq!(240 - 37, 203);
     assert!(252 - 37 >= 214);
 }
-
 #[test]
 fn decay_tables_initialize_on_a_bounded_native_thread_stack() {
     const CALLER_STACK_BYTES: usize = 512 * 1024;
-
     let digest = std::thread::Builder::new()
         .name("bootle-decay-table-small-stack".to_owned())
         .stack_size(CALLER_STACK_BYTES)
@@ -729,14 +678,12 @@ fn decay_tables_initialize_on_a_bounded_native_thread_stack() {
         .expect("bounded-stack test thread must spawn")
         .join()
         .expect("decay-table initialization must not exhaust the caller stack");
-
     assert_ne!(digest, [0; 32]);
     assert_eq!(
         hex::encode(digest),
         "ccffc4215f89cd7903a81d7f6353bf619791c7b68dba00287e2f010495ecbfbd"
     );
 }
-
 #[test]
 fn complete_sampling_profile_digest_is_one_field_mutation_closed() {
     let baseline = bootle_sampling_profile_binding_v1();
@@ -751,7 +698,6 @@ fn complete_sampling_profile_digest_is_one_field_mutation_closed() {
         hex::encode(baseline_digest),
         "6e037c7342b327b75df5621f999506799174254ca7a7846d7549a6526f6ef897"
     );
-
     macro_rules! assert_mutation {
         ($label:literal, |$profile:ident| $mutation:expr) => {{
             let mut changed = baseline.clone();
@@ -765,7 +711,6 @@ fn complete_sampling_profile_digest_is_one_field_mutation_closed() {
             );
         }};
     }
-
     assert_mutation!("algorithm_descriptor", |profile| profile
         .algorithm_descriptor =
         b"mutated");
@@ -815,7 +760,6 @@ fn complete_sampling_profile_digest_is_one_field_mutation_closed() {
     assert_mutation!("decay_tables_digest", |profile| {
         profile.decay_tables_digest[0] ^= 1
     });
-
     for index in 0..BootleSamplingProfileV1::ALL.len() {
         let mut changed = baseline.clone();
         changed.log2_sigma[index] ^= 1;
@@ -824,7 +768,6 @@ fn complete_sampling_profile_digest_is_one_field_mutation_closed() {
             sampling_profile_digest_from_binding_v1(&changed),
             "log2 sigma role {index} was not bound"
         );
-
         let mut changed = baseline.clone();
         changed.expected_polynomials[index] += 1;
         assert_ne!(
@@ -832,7 +775,6 @@ fn complete_sampling_profile_digest_is_one_field_mutation_closed() {
             sampling_profile_digest_from_binding_v1(&changed),
             "expected polynomial count role {index} was not bound"
         );
-
         let mut changed = baseline.clone();
         changed.rejection_kinds[index] ^= 1;
         assert_ne!(
@@ -840,7 +782,6 @@ fn complete_sampling_profile_digest_is_one_field_mutation_closed() {
             sampling_profile_digest_from_binding_v1(&changed),
             "rejection kind role {index} was not bound"
         );
-
         let mut changed = baseline.clone();
         changed.truncation_bounds[index] -= 1;
         assert_ne!(
@@ -848,7 +789,6 @@ fn complete_sampling_profile_digest_is_one_field_mutation_closed() {
             sampling_profile_digest_from_binding_v1(&changed),
             "truncation bound role {index} was not bound"
         );
-
         let mut changed = baseline.clone();
         changed.rejection_m_q256_limbs[index][0] ^= 1;
         assert_ne!(
@@ -856,7 +796,6 @@ fn complete_sampling_profile_digest_is_one_field_mutation_closed() {
             sampling_profile_digest_from_binding_v1(&changed),
             "rejection M role {index} was not bound"
         );
-
         for domains in 0..5 {
             let mut changed = baseline.clone();
             match domains {
@@ -874,7 +813,6 @@ fn complete_sampling_profile_digest_is_one_field_mutation_closed() {
             );
         }
     }
-
     for index in 0..baseline.cdf_155_q256.len() {
         let mut changed = baseline.clone();
         changed.cdf_155_q256[index] = changed.cdf_155_q256[index].wrapping_add(&U256::ONE);
@@ -885,7 +823,6 @@ fn complete_sampling_profile_digest_is_one_field_mutation_closed() {
         );
     }
 }
-
 #[test]
 fn staged_randomness_api_is_crate_private_and_retry_caps_have_distinct_roles() {
     let sampling = include_str!("sampling.rs")
@@ -907,7 +844,6 @@ fn staged_randomness_api_is_crate_private_and_retry_caps_have_distinct_roles() {
             "staged sampler method `{method}` must remain crate-private"
         );
     }
-
     let ternary = sampling
         .split("pub(crate) fn ternary(")
         .nth(1)
@@ -917,7 +853,6 @@ fn staged_randomness_api_is_crate_private_and_retry_caps_have_distinct_roles() {
         .expect("ternary body");
     assert!(ternary.contains("MAX_UNIFORM_REJECTION_ATTEMPTS_V1"));
     assert!(!ternary.contains("MAX_GAUSSIAN_COEFFICIENT_ATTEMPTS_V1"));
-
     let gaussian = sampling
         .split("fn gaussian_coefficient(")
         .nth(1)
@@ -927,7 +862,6 @@ fn staged_randomness_api_is_crate_private_and_retry_caps_have_distinct_roles() {
         .expect("Gaussian body");
     assert!(gaussian.contains("MAX_GAUSSIAN_COEFFICIENT_ATTEMPTS_V1"));
     assert!(!gaussian.contains("for _ in 0..MAX_UNIFORM_REJECTION_ATTEMPTS_V1"));
-
     let uniform = sampling
         .split("fn uniform_modulus(")
         .nth(1)
@@ -935,7 +869,6 @@ fn staged_randomness_api_is_crate_private_and_retry_caps_have_distinct_roles() {
     assert!(uniform.contains("MAX_UNIFORM_REJECTION_ATTEMPTS_V1"));
     assert!(!uniform.contains("MAX_GAUSSIAN_COEFFICIENT_ATTEMPTS_V1"));
 }
-
 #[test]
 fn production_sampler_sources_exclude_native_float_and_transcendental_paths() {
     let sampling = include_str!("sampling.rs")

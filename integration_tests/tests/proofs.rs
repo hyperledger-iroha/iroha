@@ -1,8 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration smoke test: submit a proof attachment and query its record via Torii.
-
 use std::{convert::TryFrom as _, str::FromStr as _, time::Duration};
-
 use eyre::{Report, Result};
 use integration_tests::sandbox;
 use iroha_core::zk::test_utils::halo2_fixture_envelope;
@@ -17,11 +15,9 @@ use iroha_data_model::{
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
 use reqwest::Client as HttpClient;
-
 fn compute_proof_hash(backend: &str, bytes: &[u8]) -> [u8; 32] {
     iroha_core::zk::hash_proof(&ProofBox::new(backend.into(), bytes.to_vec()))
 }
-
 fn parse_hex32(input: &str) -> Option<[u8; 32]> {
     let hex = input.strip_prefix("0x").unwrap_or(input);
     if hex.len() != 64 {
@@ -36,7 +32,6 @@ fn parse_hex32(input: &str) -> Option<[u8; 32]> {
     }
     Some(out)
 }
-
 fn hex_char(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
@@ -45,7 +40,6 @@ fn hex_char(b: u8) -> Option<u8> {
         _ => None,
     }
 }
-
 fn parse_proof_id_from_json(value: &norito::json::Value) -> Option<ProofId> {
     match value {
         norito::json::Value::String(s) => ProofId::from_str(s).ok(),
@@ -74,7 +68,6 @@ fn parse_proof_id_from_json(value: &norito::json::Value) -> Option<ProofId> {
         _ => None,
     }
 }
-
 fn is_retryable_snapshot_error(err: &Report) -> bool {
     err.chain().any(|cause| {
         cause
@@ -86,7 +79,6 @@ fn is_retryable_snapshot_error(err: &Report) -> bool {
             })
     })
 }
-
 fn is_tx_confirmation_timeout(err: &Report) -> bool {
     const NEEDLES: [&str; 4] = [
         "haven't got tx confirmation within",
@@ -99,7 +91,6 @@ fn is_tx_confirmation_timeout(err: &Report) -> bool {
         NEEDLES.iter().any(|needle| text.contains(needle))
     })
 }
-
 fn is_transient_client_error(err: &Report) -> bool {
     const NEEDLES: [&str; 6] = [
         "Failed to send http",
@@ -114,7 +105,6 @@ fn is_transient_client_error(err: &Report) -> bool {
         NEEDLES.iter().any(|needle| text.contains(needle))
     })
 }
-
 fn is_duplicate_tx_error(err: &Report) -> bool {
     const NEEDLES: [&str; 6] = [
         "PRTRY:ALREADY_COMMITTED",
@@ -129,7 +119,6 @@ fn is_duplicate_tx_error(err: &Report) -> bool {
         NEEDLES.iter().any(|needle| text.contains(needle))
     })
 }
-
 fn active_halo2_vk_registration(
     vk_name: &str,
 ) -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
@@ -158,7 +147,6 @@ fn active_halo2_vk_registration(
     record.gas_schedule_id = Some("halo2_default".to_owned());
     record.key = Some(vk_box);
     record.status = ConfidentialStatus::Active;
-
     let vk_id = VerifyingKeyId::new(backend, vk_name);
     let attachment = ProofAttachment::new_ref(backend.into(), proof, vk_id.clone());
     (
@@ -166,7 +154,6 @@ fn active_halo2_vk_registration(
         verifying_keys::RegisterVerifyingKey { id: vk_id, record },
     )
 }
-
 async fn fetch_proof_snapshot(url: reqwest::Url) -> Result<(String, [u8; 32], ProofStatus)> {
     let response = HttpClient::new()
         .get(url)
@@ -183,7 +170,6 @@ async fn fetch_proof_snapshot(url: reqwest::Url) -> Result<(String, [u8; 32], Pr
         .map(str::to_owned)
         .unwrap_or_default();
     let bytes = response.bytes().await.map_err(Report::new)?;
-
     if bytes.len() >= norito::core::Header::SIZE && bytes.starts_with(&norito::core::MAGIC) {
         let record: iroha_data_model::proof::ProofRecord =
             norito::decode_from_bytes(&bytes).map_err(Report::new)?;
@@ -193,7 +179,6 @@ async fn fetch_proof_snapshot(url: reqwest::Url) -> Result<(String, [u8; 32], Pr
             record.status,
         ));
     }
-
     if content_type.starts_with("application/json") || bytes.starts_with(b"{") {
         let value: norito::json::Value = norito::json::from_slice(&bytes).map_err(Report::new)?;
         let status_str = value
@@ -216,10 +201,8 @@ async fn fetch_proof_snapshot(url: reqwest::Url) -> Result<(String, [u8; 32], Pr
             .ok_or_else(|| Report::msg("missing id field in proof response"))?;
         return Ok((proof_id.backend.clone(), proof_id.proof_hash, status));
     }
-
     Err(Report::msg("unexpected proof response payload"))
 }
-
 #[tokio::test]
 async fn submit_proof_and_query_record() -> Result<()> {
     let (attachment, vk_registration) = active_halo2_vk_registration("proof_vk");
@@ -249,11 +232,9 @@ async fn submit_proof_and_query_record() -> Result<()> {
     if peer_clients.is_empty() {
         peer_clients.push(client.clone());
     }
-
     let backend = "halo2/ipa";
     let proof_bytes = attachment.proof.bytes.clone();
     let isi = iroha_data_model::isi::zk::VerifyProof::new(attachment);
-
     // Submit the transaction to all peers so one healthy peer can accept it
     // even if another peer is timing out under load.
     let tx = client.build_transaction_from_items(
@@ -291,7 +272,6 @@ async fn submit_proof_and_query_record() -> Result<()> {
             return Ok(());
         };
     }
-
     let Some(_) = sandbox::handle_result(
         network.ensure_blocks(2).await,
         "submit_proof_and_query_record::wait_blocks",
@@ -299,7 +279,6 @@ async fn submit_proof_and_query_record() -> Result<()> {
     else {
         return Ok(());
     };
-
     // Compute the expected ProofId string for GET /v1/proofs/:id
     let proof_hash = compute_proof_hash(backend, &proof_bytes);
     let pid = iroha_data_model::proof::ProofId {
@@ -307,7 +286,6 @@ async fn submit_proof_and_query_record() -> Result<()> {
         proof_hash,
     };
     let pid_str = format!("{pid}");
-
     // Query Torii
     let proof_path = ["v1", "proofs", pid_str.as_str()];
     let deadline = tokio::time::Instant::now() + Duration::from_secs(600);
@@ -325,7 +303,6 @@ async fn submit_proof_and_query_record() -> Result<()> {
             segments.clear();
             segments.extend(proof_path);
         }
-
         match fetch_proof_snapshot(url).await {
             Ok((backend_got, proof_hash_got, status_got))
                 if status_got == iroha_data_model::proof::ProofStatus::Verified =>
@@ -372,11 +349,9 @@ async fn submit_proof_and_query_record() -> Result<()> {
     else {
         return Ok(());
     };
-
     // Validate record fields
     assert_eq!(backend_got, backend);
     assert_eq!(proof_hash_got, proof_hash);
     assert_eq!(status_got, iroha_data_model::proof::ProofStatus::Verified);
-
     Ok(())
 }

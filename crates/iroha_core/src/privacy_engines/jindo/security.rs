@@ -5,16 +5,12 @@
 //! contains distinct challenges whose difference is a zero divisor. A future
 //! certificate therefore needs a distribution-wide numerical bound, its exact
 //! extractor/composition loss, and pinned machine-checkable evidence.
-
 use thiserror::Error;
-
 use super::{
     JINDO_RING_DEGREE_V1,
     ring::{JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoRnsPolynomialV1},
 };
-
 const JINDO_CHALLENGE_WEIGHT_V1: usize = 35;
-
 /// Requirements for issuing the first theorem-backed Jindo security
 /// certificate.
 ///
@@ -22,7 +18,6 @@ const JINDO_CHALLENGE_WEIGHT_V1: usize = 35;
 /// transcript input. The current experimental profile remains unchanged and
 /// the sealed capability remains unavailable.
 pub const JINDO_SECURITY_CERTIFICATE_REQUIREMENTS_V1: &[u8] = b"iroha-jindo-security-certificate-v1|status=blocked|challenge=complete-uniform-S35|required=distribution-wide-numerical-bound-on-Pr[distinct-challenge-difference-is-nonunit]-for-all-compiled-inner-and-outer-ring-factors;knowledge-extractor-and-alpha-c-composition-loss;fiat-shamir-qrom-loss;machine-checkable-artifact-and-pinned-source-digest";
-
 /// Sealed evidence that the compiled Jindo profile has met its complete
 /// theorem-backed knowledge-soundness requirements.
 ///
@@ -32,7 +27,6 @@ pub const JINDO_SECURITY_CERTIFICATE_REQUIREMENTS_V1: &[u8] = b"iroha-jindo-secu
 pub struct JindoSecurityCertificateV1 {
     _sealed: (),
 }
-
 /// Reason the compiled Jindo profile cannot issue a security certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum JindoSecurityCertificateErrorV1 {
@@ -43,7 +37,6 @@ pub enum JindoSecurityCertificateErrorV1 {
     )]
     MissingDistributionWideKnowledgeSoundnessEvidence,
 }
-
 /// Request the theorem-backed security certificate for the compiled Jindo
 /// profile.
 ///
@@ -63,7 +56,6 @@ pub const fn jindo_security_certificate_v1()
     // composition, and Fiat--Shamir losses meet the release target.
     Err(JindoSecurityCertificateErrorV1::MissingDistributionWideKnowledgeSoundnessEvidence)
 }
-
 /// Structural failure while checking a pair of current `S_35` challenges.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum JindoChallengePairErrorV1 {
@@ -111,7 +103,6 @@ pub enum JindoChallengePairErrorV1 {
     #[error("Jindo challenge pair is identical")]
     Identical,
 }
-
 /// Check whether two canonical, distinct current `S_35` challenges have a unit
 /// difference in every compiled inner and outer ring factor.
 ///
@@ -133,7 +124,6 @@ pub fn jindo_challenge_pair_has_unit_difference_v1(
     if left == right {
         return Err(JindoChallengePairErrorV1::Identical);
     }
-
     let difference: [i128; JINDO_RING_DEGREE_V1] =
         core::array::from_fn(|index| i128::from(left[index]) - i128::from(right[index]));
     let inner = JindoRnsPolynomialV1::from_balanced_coefficients(difference, JINDO_INNER_MODULI_V1);
@@ -143,7 +133,6 @@ pub fn jindo_challenge_pair_has_unit_difference_v1(
     let outer = JindoRnsPolynomialV1::from_balanced_coefficients(difference, JINDO_OUTER_MODULI_V1);
     Ok(outer.is_unit(JINDO_OUTER_MODULI_V1))
 }
-
 fn validate_challenge_v1(challenge: &[i8], left: bool) -> Result<(), JindoChallengePairErrorV1> {
     if challenge.len() != JINDO_RING_DEGREE_V1 {
         return Err(if left {
@@ -156,7 +145,6 @@ fn validate_challenge_v1(challenge: &[i8], left: bool) -> Result<(), JindoChalle
             }
         });
     }
-
     let mut weight = 0_usize;
     for (index, value) in challenge.iter().copied().enumerate() {
         match value {
@@ -180,14 +168,11 @@ fn validate_challenge_v1(challenge: &[i8], left: bool) -> Result<(), JindoChalle
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const OUTER_Q0: u64 = 48_591_984_641;
     const OUTER_Q0_PSI: u64 = 25_236_428_417;
-
     fn challenge(shared: core::ops::Range<usize>, tail: [usize; 3]) -> [i8; 1024] {
         let mut coefficients = [0_i8; 1024];
         for index in shared.chain(tail) {
@@ -195,7 +180,6 @@ mod tests {
         }
         coefficients
     }
-
     fn evaluate_at_outer_q0_root(coefficients: &[i8; 1024]) -> u64 {
         let mut value = 0_u64;
         let mut power = 1_u64;
@@ -210,7 +194,6 @@ mod tests {
         }
         value
     }
-
     #[test]
     fn security_certificate_remains_fail_closed_without_distribution_theorem() {
         assert_eq!(
@@ -218,7 +201,6 @@ mod tests {
             Err(JindoSecurityCertificateErrorV1::MissingDistributionWideKnowledgeSoundnessEvidence)
         );
     }
-
     #[test]
     fn complete_s35_contains_a_pinned_nonunit_difference() {
         let left = challenge(0..32, [71, 74, 784]);
@@ -226,7 +208,6 @@ mod tests {
         assert_eq!(left.iter().filter(|value| **value != 0).count(), 35);
         assert_eq!(right.iter().filter(|value| **value != 0).count(), 35);
         assert_ne!(left, right);
-
         // The two three-term tails both evaluate to 45_746_542_050. Adding
         // their common 32-term prefix gives the same full-challenge value at
         // the pinned primitive 2048th root modulo outer q0. Their non-zero
@@ -239,7 +220,6 @@ mod tests {
             Ok(false)
         );
     }
-
     #[test]
     fn pair_checker_accepts_both_signed_monomial_difference_classes() {
         let mut support_swap_left = [0_i8; 1024];
@@ -254,7 +234,6 @@ mod tests {
             jindo_challenge_pair_has_unit_difference_v1(&support_swap_left, &support_swap_right),
             Ok(true)
         );
-
         let sign_flip_left = challenge(0..32, [71, 74, 784]);
         let mut sign_flip_right = sign_flip_left;
         sign_flip_right[0] = -1;
@@ -263,11 +242,9 @@ mod tests {
             Ok(true)
         );
     }
-
     #[test]
     fn pair_checker_rejects_noncanonical_and_identical_inputs() {
         let canonical = challenge(0..32, [71, 74, 784]);
-
         assert_eq!(
             jindo_challenge_pair_has_unit_difference_v1(&canonical[..1023], &canonical),
             Err(JindoChallengePairErrorV1::LeftLength { count: 1023 })
@@ -276,7 +253,6 @@ mod tests {
             jindo_challenge_pair_has_unit_difference_v1(&canonical, &canonical[..1023]),
             Err(JindoChallengePairErrorV1::RightLength { count: 1023 })
         );
-
         let mut invalid_coefficient = canonical;
         invalid_coefficient[1000] = 2;
         assert_eq!(
@@ -293,7 +269,6 @@ mod tests {
                 value: 2,
             })
         );
-
         let mut invalid_weight = canonical;
         invalid_weight[0] = 0;
         assert_eq!(

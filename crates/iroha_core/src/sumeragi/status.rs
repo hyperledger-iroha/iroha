@@ -3,7 +3,6 @@
 //! Consensus state itself is published exclusively as the exact reducer-owned
 //! [`SumeragiV2Status`]. The remaining snapshots in this module are
 //! non-consensus Nexus economics, settlement, lane, and adapter diagnostics.
-
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::Condvar;
@@ -12,7 +11,6 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, OnceLock, Weak},
     time::{Duration, Instant},
 };
-
 use iroha_crypto::{
     Hash, Hash as UntypedHash, HashOf,
     privacy::{CommitmentScheme, LanePrivacyCommitment},
@@ -51,7 +49,6 @@ use iroha_primitives::numeric::Quantity;
 use iroha_telemetry::metrics;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use super::{
     FairV2Ingress,
     v2_core::{
@@ -81,22 +78,18 @@ use crate::{
     governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook},
     queue::{BackpressureState, QueuePressureSnapshot},
 };
-
 static SUMERAGI_V2_STATUS: OnceLock<Mutex<Option<SumeragiV2Status>>> = OnceLock::new();
 static SUMERAGI_V2_EFFECT_STATUS: OnceLock<Mutex<Option<EffectExecutorStatus>>> = OnceLock::new();
 static SUMERAGI_V2_PROGRESS_CLOCK: OnceLock<Mutex<Option<V2ProgressClock>>> = OnceLock::new();
 static SUMERAGI_V2_WATCHDOG_REVISION: AtomicU64 = AtomicU64::new(0);
-
 fn bump_v2_watchdog_revision() {
     SUMERAGI_V2_WATCHDOG_REVISION.fetch_add(1, Ordering::Release);
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct V2StatusOwner {
     height_context_id: HeightContextId,
     height: u64,
 }
-
 impl V2StatusOwner {
     const fn from_status(status: &SumeragiV2Status) -> Self {
         Self {
@@ -105,17 +98,14 @@ impl V2StatusOwner {
         }
     }
 }
-
 struct V2NetworkIngressRegistration {
     owner: V2StatusOwner,
     ingress: Weak<FairV2Ingress>,
 }
-
 struct V2EffectCompletionRegistration {
     owner: V2StatusOwner,
     observer: Weak<dyn V2IoCompletionQueueObserver>,
 }
-
 static SUMERAGI_V2_NETWORK_INGRESS: OnceLock<Mutex<Option<V2NetworkIngressRegistration>>> =
     OnceLock::new();
 static SUMERAGI_V2_EFFECT_COMPLETION_OBSERVER: OnceLock<
@@ -158,15 +148,12 @@ static AVAILABILITY_STATS: OnceLock<Mutex<AvailabilityStats>> = OnceLock::new();
 static QC_LATENCY_MS: OnceLock<Mutex<BTreeMap<&'static str, u64>>> = OnceLock::new();
 static RBC_BACKLOG: OnceLock<Mutex<RbcBacklogSnapshot>> = OnceLock::new();
 static PENDING_RBC_STATE: OnceLock<Mutex<PendingRbcSnapshot>> = OnceLock::new();
-
 const VALIDATOR_CHECKPOINT_HISTORY_CAP: usize = 64;
 const COMMIT_CERT_HISTORY_CAP: usize = 512;
-
 /// Guard serializing destructive canonical-chain transitions.
 pub(crate) struct ConsensusTransitionGuard {
     _guard: MutexGuard<'static, ()>,
 }
-
 /// Serialize a Kura canonical-chain mutation with other consensus transitions.
 pub(crate) fn consensus_transition_guard() -> ConsensusTransitionGuard {
     let guard = CONSENSUS_TRANSITION_GATE
@@ -175,7 +162,6 @@ pub(crate) fn consensus_transition_guard() -> ConsensusTransitionGuard {
         .unwrap_or_else(|_| fail_closed_after_consensus_transition_poison());
     ConsensusTransitionGuard { _guard: guard }
 }
-
 /// Clear poison left by an intentionally caught canonical-transition panic.
 ///
 /// Production treats transition-gate poison as process-fatal. Kura fault
@@ -187,7 +173,6 @@ pub(crate) fn clear_consensus_transition_poison_for_tests() {
         gate.clear_poison();
     }
 }
-
 fn fail_closed_after_consensus_transition_poison() -> ! {
     iroha_logger::error!("consensus transition gate was poisoned; refusing canonical mutation");
     #[cfg(not(test))]
@@ -195,7 +180,6 @@ fn fail_closed_after_consensus_transition_poison() -> ! {
     #[cfg(test)]
     panic!("consensus transition gate poisoned; refusing canonical mutation");
 }
-
 /// Opaque test-only view of one authenticated legacy commit-roster snapshot.
 ///
 /// Sumeragi v2 carries finality in its exact Kura-owned v2 artifact and does
@@ -204,7 +188,6 @@ fn fail_closed_after_consensus_transition_poison() -> ! {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg(test)]
 pub(crate) struct AuthenticatedCommitRoster(CommitRosterSnapshot);
-
 #[cfg(test)]
 impl AuthenticatedCommitRoster {
     /// Return the authenticated commit certificate.
@@ -212,7 +195,6 @@ impl AuthenticatedCommitRoster {
     pub(crate) fn commit_qc(&self) -> &crate::sumeragi::consensus::Qc {
         &self.0.commit_qc
     }
-
     /// Return the validator checkpoint bound to the certificate.
     #[must_use]
     pub(crate) fn validator_checkpoint(
@@ -220,7 +202,6 @@ impl AuthenticatedCommitRoster {
     ) -> &iroha_data_model::consensus::ValidatorSetCheckpoint {
         &self.0.validator_checkpoint
     }
-
     /// Return the optional stake authority bound to the validator roster.
     #[must_use]
     pub(crate) fn stake_snapshot(
@@ -228,7 +209,6 @@ impl AuthenticatedCommitRoster {
     ) -> Option<&crate::sumeragi::stake_snapshot::CommitStakeSnapshot> {
         self.0.stake_snapshot.as_ref()
     }
-
     /// Construct a capability from an internally authenticated fixture.
     ///
     /// This seam is deliberately test-only: production v2 code must never
@@ -256,7 +236,6 @@ impl AuthenticatedCommitRoster {
         (exact_checkpoint && exact_stake).then_some(Self(snapshot))
     }
 }
-
 #[cfg(test)]
 mod archival_status_tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -265,12 +244,9 @@ mod archival_status_tests {
         consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
         peer::PeerId,
     };
-
     use crate::commit_roster_journal::CommitRosterSnapshot;
     use crate::sumeragi::consensus::{PERMISSIONED_TAG, Phase};
-
     use super::AuthenticatedCommitRoster;
-
     fn fixture() -> CommitRosterSnapshot {
         let key_pair = KeyPair::try_from_seed(
             b"authenticated-commit-roster-status-test".to_vec(),
@@ -335,7 +311,6 @@ mod archival_status_tests {
             &snapshot.validator_checkpoint
         );
         assert_eq!(capability.stake_snapshot(), None);
-
         let mut mismatched = snapshot;
         mismatched.validator_checkpoint.view += 1;
         assert!(AuthenticatedCommitRoster::from_snapshot_for_tests(mismatched).is_none());
@@ -345,7 +320,6 @@ mod archival_status_tests {
         let _guard = super::mode_tags_test_guard();
         super::clear_v2_status();
         super::set_mode_tags(PERMISSIONED_TAG, Some("staged"), Some(9));
-
         assert_eq!(
             super::mode_tags(),
             (
@@ -356,7 +330,6 @@ mod archival_status_tests {
             )
         );
         assert_eq!(super::v2_status(), None);
-
         super::set_mode_tags("", None, None);
     }
     #[test]
@@ -374,7 +347,6 @@ mod archival_status_tests {
         let _guard = super::commit_history_test_guard();
         super::reset_commit_certs_for_tests();
         super::reset_validator_checkpoints_for_tests();
-
         let first = fixture();
         let mut second = first.clone();
         second.commit_qc.height += 1;
@@ -383,7 +355,6 @@ mod archival_status_tests {
         super::record_validator_checkpoint(first.validator_checkpoint.clone());
         super::record_commit_qc(second.commit_qc.clone());
         super::record_validator_checkpoint(second.validator_checkpoint.clone());
-
         assert_eq!(
             super::commit_qc_history()
                 .first()
@@ -396,7 +367,6 @@ mod archival_status_tests {
                 .map(|checkpoint| checkpoint.height),
             Some(second.validator_checkpoint.height)
         );
-
         super::reset_commit_certs_for_tests();
         super::reset_validator_checkpoints_for_tests();
         assert!(super::commit_qc_history().is_empty());
@@ -425,9 +395,7 @@ mod archival_status_tests {
             "pipeline execution test",
         )
         .rbc_chunks_total = 3;
-
         super::reset_rbc_backlog_stats_for_tests();
-
         assert!(
             super::lock_operator_status_slot(super::lane_activity_slot(), "lane activity test")
                 .is_empty()
@@ -449,14 +417,12 @@ mod archival_status_tests {
         );
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct V2ProgressMarker {
     generation: u64,
     round: ConsensusRound,
     transition: SumeragiV2ProgressTransition,
 }
-
 impl From<SumeragiV2ProgressTransitionStatus> for V2ProgressMarker {
     fn from(status: SumeragiV2ProgressTransitionStatus) -> Self {
         Self {
@@ -466,7 +432,6 @@ impl From<SumeragiV2ProgressTransitionStatus> for V2ProgressMarker {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct V2ProgressObservation {
     marker: Option<V2ProgressMarker>,
@@ -475,7 +440,6 @@ struct V2ProgressObservation {
     timeout_quorums: Vec<SumeragiV2TimeoutQuorumStatus>,
     height_rank: V2HeightProgressRank,
 }
-
 impl V2ProgressObservation {
     fn from_status(status: &SumeragiV2Status) -> Self {
         Self {
@@ -486,7 +450,6 @@ impl V2ProgressObservation {
             height_rank: V2HeightProgressRank::from_status(status),
         }
     }
-
     /// Return the newly observed transition, including a repeated vote-admission
     /// transition whose exact partial pool grew.
     fn transition_since(&self, next: &Self) -> Option<SumeragiV2ProgressTransition> {
@@ -514,7 +477,6 @@ impl V2ProgressObservation {
         }
     }
 }
-
 /// Bounded semantic high-water for one height.
 ///
 /// View and reducer generation are deliberately absent. A timeout certificate
@@ -528,14 +490,12 @@ struct V2HeightProgressRank {
     prepare_signers: u32,
     commit_signers: u32,
 }
-
 impl V2HeightProgressRank {
     fn from_status(status: &SumeragiV2Status) -> Self {
         let mut rank = Self::default();
         if let Some(marker) = status.liveness.last_progress {
             rank.stage = progress_transition_rank(marker.transition);
         }
-
         rank.stage = rank.stage.max(match status.body_state {
             SumeragiV2BodyState::Missing => 0,
             SumeragiV2BodyState::Reconstructing => 1,
@@ -558,7 +518,6 @@ impl V2HeightProgressRank {
         if status.locked_prepare_qc.is_some() {
             rank.stage = rank.stage.max(7);
         }
-
         for quorum in &status.liveness.prepare_quorums {
             rank.stage = rank.stage.max(5);
             rank.prepare_signers = rank.prepare_signers.max(quorum.signer_count);
@@ -580,7 +539,6 @@ impl V2HeightProgressRank {
         }
         rank
     }
-
     /// Merge `next` into this height-wide high-water and report a strict gain.
     fn absorb(&mut self, next: Self) -> bool {
         let advanced = next.stage > self.stage
@@ -591,14 +549,12 @@ impl V2HeightProgressRank {
         self.commit_signers = self.commit_signers.max(next.commit_signers);
         advanced
     }
-
     fn strictly_advances(self, previous: Self) -> bool {
         self.stage > previous.stage
             || self.prepare_signers > previous.prepare_signers
             || self.commit_signers > previous.commit_signers
     }
 }
-
 const fn progress_transition_rank(transition: SumeragiV2ProgressTransition) -> u8 {
     match transition {
         SumeragiV2ProgressTransition::TimeoutVoteAdmitted
@@ -621,7 +577,6 @@ const fn progress_transition_rank(transition: SumeragiV2ProgressTransition) -> u
         SumeragiV2ProgressTransition::Applied => 11,
     }
 }
-
 #[derive(Clone, Debug)]
 struct V2ProgressClock {
     owner: V2StatusOwner,
@@ -632,7 +587,6 @@ struct V2ProgressClock {
     height_progress_at: Instant,
     watchdog_threshold: Option<Duration>,
 }
-
 impl V2ProgressClock {
     fn new(status: &SumeragiV2Status, now: Instant, watchdog_threshold: Option<Duration>) -> Self {
         let observation = V2ProgressObservation::from_status(status);
@@ -646,7 +600,6 @@ impl V2ProgressClock {
             watchdog_threshold,
         }
     }
-
     fn observe(
         &mut self,
         status: &SumeragiV2Status,
@@ -660,7 +613,6 @@ impl V2ProgressClock {
         if watchdog_threshold.is_some() {
             self.watchdog_threshold = watchdog_threshold;
         }
-
         let next = V2ProgressObservation::from_status(status);
         if self.observation.transition_since(&next).is_some() {
             self.last_transition_at = Some(now);
@@ -671,7 +623,6 @@ impl V2ProgressClock {
         self.observation = next;
         self.status_captured_at = now;
     }
-
     fn overlay_ages(
         &self,
         status: &mut SumeragiV2Status,
@@ -708,15 +659,12 @@ impl V2ProgressClock {
         ))
     }
 }
-
 fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
-
 fn saturating_duration_add(left: Duration, right: Duration) -> Duration {
     left.checked_add(right).unwrap_or(Duration::MAX)
 }
-
 fn set_v2_status_at(status: SumeragiV2Status, now: Instant) {
     #[cfg(test)]
     let _guard = rbc_status_test_guard();
@@ -749,12 +697,10 @@ fn set_v2_status_at(status: SumeragiV2Status, now: Instant) {
         bump_v2_watchdog_revision();
     }
 }
-
 /// Publish the exact protocol-v2 reducer snapshot served by Torii.
 pub fn set_v2_status(status: SumeragiV2Status) {
     set_v2_status_at(status, Instant::now());
 }
-
 /// Publish the latest local effect/runtime ownership snapshot.
 pub(crate) fn set_v2_effect_status(status: EffectExecutorStatus) {
     #[cfg(test)]
@@ -779,7 +725,6 @@ pub(crate) fn set_v2_effect_status(status: EffectExecutorStatus) {
         *slot = Some(status);
         changed
     };
-
     let published_owner = SUMERAGI_V2_STATUS.get().and_then(|slot| {
         slot.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -800,7 +745,6 @@ pub(crate) fn set_v2_effect_status(status: EffectExecutorStatus) {
         bump_v2_watchdog_revision();
     }
 }
-
 /// Read-only view of the live bounded I/O completion owner.
 ///
 /// The status registry retains only a weak reference, so diagnostics cannot
@@ -809,7 +753,6 @@ pub(crate) trait V2IoCompletionQueueObserver: Send + Sync {
     /// Snapshot exact completion ownership at `now`.
     fn completion_queue_snapshot(&self, now: Instant) -> RuntimeQueueLaneSnapshot;
 }
-
 /// Register the live height worker completion owner for read-time overlays.
 pub(crate) fn set_v2_effect_completion_observer<T>(
     height_context_id: HeightContextId,
@@ -834,7 +777,6 @@ pub(crate) fn set_v2_effect_completion_observer<T>(
             observer: Arc::downgrade(&observer),
         });
 }
-
 /// Diagnostic contract failure while transferring one applied height to its
 /// exact active successor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -913,7 +855,6 @@ pub(crate) enum V2SuccessorActivationError {
     #[error("retired CompleteTip authority does not authenticate the prepared successor")]
     RecoveredCompleteTipAuthorityMismatch,
 }
-
 const fn successor_stage_projection(stage: SumeragiV2LocalWorkStage) -> u8 {
     match stage {
         SumeragiV2LocalWorkStage::Queued => SUCCESSOR_STAGE_QUEUED,
@@ -922,7 +863,6 @@ const fn successor_stage_projection(stage: SumeragiV2LocalWorkStage) -> u8 {
         _ => super::v2_core::SUCCESSOR_STAGE_NONE,
     }
 }
-
 fn successor_snapshot_refinement_projection(
     expected_context_id: HeightContextId,
     successor: &SumeragiV2Status,
@@ -950,7 +890,6 @@ fn successor_snapshot_refinement_projection(
         marker_age_ms: marker.map_or(u64::MAX, |marker| marker.age_ms),
     }
 }
-
 fn update_v2_successor_work_stage_at(
     height: u64,
     expected: SumeragiV2LocalWorkStage,
@@ -967,12 +906,10 @@ fn update_v2_successor_work_stage_at(
         return Err(V2SuccessorActivationError::MissingFinalizedStatus);
     };
     validate_v2_predecessor_status(&status, height, expected)?;
-
     status.liveness.work.successor_height = stage;
     set_v2_status_at(status, now);
     Ok(())
 }
-
 fn validate_v2_predecessor_status(
     status: &SumeragiV2Status,
     height: u64,
@@ -1008,7 +945,6 @@ fn validate_v2_predecessor_status(
     }
     Ok(())
 }
-
 /// Publish the start of runner-owned successor construction.
 ///
 /// The reducer can prove only that application completed and therefore reports
@@ -1051,7 +987,6 @@ pub(crate) fn begin_v2_successor_activation(
         Instant::now(),
     )
 }
-
 fn validate_v2_successor_snapshot(
     finalized_height: u64,
     expected_successor_context_id: HeightContextId,
@@ -1093,7 +1028,6 @@ fn validate_v2_successor_snapshot(
     }
     Ok(())
 }
-
 fn activate_v2_successor_height_at(
     expected_predecessor: DurableV2PredecessorIdentity,
     authority: DurableSuccessorActivationAuthority,
@@ -1141,7 +1075,6 @@ fn activate_v2_successor_height_at(
         return Err(V2SuccessorActivationError::RefinementRejected);
     };
     let _authorized_trace = checked_trace.into_projection();
-
     // Validate the predecessor and publish Complete before replacing it with
     // the prepared successor snapshot. This is the sole accepted Running ->
     // Complete transition, so a repeated activation cannot refresh either
@@ -1155,7 +1088,6 @@ fn activate_v2_successor_height_at(
     set_v2_status_at(successor, now);
     Ok(())
 }
-
 // Both recovered startup variants enter this projection-shaped helper only
 // through their distinct consuming authorities. CompleteTip additionally
 // reauthenticates its Kura-derived successor ledger immediately beforehand.
@@ -1210,7 +1142,6 @@ fn publish_recovered_v2_successor_height_at(
     set_v2_status_at(successor, now);
     Ok(())
 }
-
 /// Publish the exact one-shot boundary at which a prepared successor becomes
 /// live.
 ///
@@ -1226,7 +1157,6 @@ pub(crate) fn activate_v2_successor_height(
 ) -> Result<(), V2SuccessorActivationError> {
     activate_v2_successor_height_at(expected_predecessor, authority, successor, Instant::now())
 }
-
 fn activate_recovered_complete_tip_v2_height_at(
     authority: RetiredRecoveredCompleteTipActivationAuthorityV1,
     successor: SumeragiV2Status,
@@ -1250,20 +1180,18 @@ fn activate_recovered_complete_tip_v2_height_at(
     drop(authority);
     publication
 }
-
 /// Consume one retired canonical CompleteTip authority to publish its exact H+1 status.
 ///
 /// The runner reaches this bridge only after the successor runtime has armed
 /// its clocks and authenticated ingress is open. The token reopens and compares
 /// its retained successor ledger before the existing checked recovered-status
 /// transition can publish anything.
-pub(crate) fn activate_recovered_complete_tip_v2_height(
+pub(in crate::sumeragi) fn activate_recovered_complete_tip_v2_height(
     authority: RetiredRecoveredCompleteTipActivationAuthorityV1,
     successor: SumeragiV2Status,
 ) -> Result<(), V2SuccessorActivationError> {
     activate_recovered_complete_tip_v2_height_at(authority, successor, Instant::now())
 }
-
 fn activate_snapshot_bootstrap_v2_height_at(
     authority: SnapshotSuccessorActivationAuthority,
     successor: SumeragiV2Status,
@@ -1282,7 +1210,6 @@ fn activate_snapshot_bootstrap_v2_height_at(
         now,
     )
 }
-
 /// Publish the authenticated first executable height after an audited snapshot.
 ///
 /// This is the empty process-local status publication path for audited snapshot
@@ -1294,7 +1221,6 @@ pub(crate) fn activate_snapshot_bootstrap_v2_height(
 ) -> Result<(), V2SuccessorActivationError> {
     activate_snapshot_bootstrap_v2_height_at(authority, successor, Instant::now())
 }
-
 /// Register the live bounded transport-to-runner ingress for status overlays.
 pub(crate) fn set_v2_network_ingress(
     height_context_id: HeightContextId,
@@ -1314,21 +1240,17 @@ pub(crate) fn set_v2_network_ingress(
         ingress: Arc::downgrade(ingress),
     });
 }
-
 fn bounded_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
-
 fn age_ms(age: Option<Duration>) -> Option<u64> {
     age.map(duration_ms)
 }
-
 fn age_queue_at_read(queue: &mut SumeragiV2QueueStatus, elapsed: Duration) {
     let captured_age_ms = queue.oldest_age_ms.unwrap_or_default();
     queue.oldest_age_ms =
         (queue.depth != 0).then(|| captured_age_ms.saturating_add(duration_ms(elapsed)));
 }
-
 fn latest_v2_effect_status() -> Option<EffectExecutorStatus> {
     SUMERAGI_V2_EFFECT_STATUS.get().and_then(|slot| {
         slot.lock()
@@ -1336,7 +1258,6 @@ fn latest_v2_effect_status() -> Option<EffectExecutorStatus> {
             .clone()
     })
 }
-
 fn latest_v2_network_ingress(owner: V2StatusOwner) -> Option<Arc<FairV2Ingress>> {
     SUMERAGI_V2_NETWORK_INGRESS.get().and_then(|slot| {
         slot.lock()
@@ -1346,13 +1267,11 @@ fn latest_v2_network_ingress(owner: V2StatusOwner) -> Option<Arc<FairV2Ingress>>
             .and_then(|registration| registration.ingress.upgrade())
     })
 }
-
 enum V2EffectCompletionObservation {
     Unregistered,
     Live(RuntimeQueueLaneSnapshot),
     Retired,
 }
-
 fn latest_v2_effect_completion_snapshot(
     owner: V2StatusOwner,
     now: Instant,
@@ -1375,7 +1294,6 @@ fn latest_v2_effect_completion_snapshot(
     drop(slot);
     V2EffectCompletionObservation::Live(observer.completion_queue_snapshot(now))
 }
-
 fn overlay_v2_network_ingress(status: &mut SumeragiV2Status, now: Instant) -> Option<Duration> {
     status
         .liveness
@@ -1397,14 +1315,12 @@ fn overlay_v2_network_ingress(status: &mut SumeragiV2Status, now: Instant) -> Op
     });
     snapshot.service_idle_age
 }
-
 fn overlay_v2_effect_status(
     status: &mut SumeragiV2Status,
     effect_status: &EffectExecutorStatus,
     now: Instant,
 ) {
     status.restart_required |= effect_status.fail_closed;
-
     let queues = effect_status.runtime_queues;
     let snapshot_age = now.saturating_duration_since(effect_status.captured_at);
     status.liveness.queues.retain(|queue| {
@@ -1444,7 +1360,6 @@ fn overlay_v2_effect_status(
             service_debt: snapshot.max_service_debt,
         });
     }
-
     if effect_status.pending_candidate_loads != 0 {
         status.liveness.work.candidate = SumeragiV2LocalWorkStage::Running;
     }
@@ -1465,7 +1380,6 @@ fn overlay_v2_effect_status(
         overlay_pending_tip_recovery_work(status, stage);
     }
 }
-
 /// Replace reducer-queued startup work with the exact closed-ingress recovery stage.
 ///
 /// A durable Decision keeps the public phase/body pair at `PendingApply`.
@@ -1477,7 +1391,6 @@ fn overlay_pending_tip_recovery_work(
     stage: PendingKuraApplyRecoveryStage,
 ) {
     use SumeragiV2LocalWorkStage::{Complete, Idle, Queued, Running};
-
     let work = &mut status.liveness.work;
     match stage {
         PendingKuraApplyRecoveryStage::CertifiedFetch => {
@@ -1518,7 +1431,6 @@ fn overlay_pending_tip_recovery_work(
         }
     }
 }
-
 fn overlay_v2_effect_completion_snapshot(
     status: &mut SumeragiV2Status,
     snapshot: RuntimeQueueLaneSnapshot,
@@ -1535,20 +1447,16 @@ fn overlay_v2_effect_completion_snapshot(
         service_debt: snapshot.max_service_debt,
     });
 }
-
 const FAIR_SERVICE_CLASS_COUNT: u64 = 3;
-
 fn stage_is_pending(stage: SumeragiV2LocalWorkStage) -> bool {
     matches!(
         stage,
         SumeragiV2LocalWorkStage::Queued | SumeragiV2LocalWorkStage::Running
     )
 }
-
 fn quorum_is_complete(quorum: &SumeragiV2VoteQuorumStatus) -> bool {
     quorum.signer_count >= quorum.min_signers
 }
-
 fn queue_is_starved(queue: &SumeragiV2QueueStatus) -> bool {
     // `Ingress` is the retained semantic-admission/equivocation table, not a
     // serviceable queue. `EffectDispatch` is a reserved strict FIFO attempted
@@ -1562,7 +1470,6 @@ fn queue_is_starved(queue: &SumeragiV2QueueStatus) -> bool {
     ) && queue.depth != 0
         && queue.service_debt >= FAIR_SERVICE_CLASS_COUNT
 }
-
 fn has_outbound_intent(status: &SumeragiV2Status, kind: SumeragiV2OutboundIntentKind) -> bool {
     status
         .liveness
@@ -1570,7 +1477,6 @@ fn has_outbound_intent(status: &SumeragiV2Status, kind: SumeragiV2OutboundIntent
         .iter()
         .any(|intent| intent.kind == kind)
 }
-
 fn has_current_view_outbound_intent(
     status: &SumeragiV2Status,
     kind: SumeragiV2OutboundIntentKind,
@@ -1581,7 +1487,6 @@ fn has_current_view_outbound_intent(
         .iter()
         .any(|intent| intent.kind == kind && intent.round.view == status.view)
 }
-
 fn has_exact_locked_commit_progress(status: &SumeragiV2Status) -> bool {
     let Some(locked) = status.locked_prepare_qc.as_ref() else {
         return false;
@@ -1612,7 +1517,6 @@ fn has_exact_locked_commit_progress(status: &SumeragiV2Status) -> bool {
         });
     exact_quorum || exact_outbound || exact_decision
 }
-
 /// Classify one post-threshold snapshot with a stable most-specific precedence.
 fn classify_v2_liveness_blocker(
     status: &SumeragiV2Status,
@@ -1638,18 +1542,15 @@ fn classify_v2_liveness_blocker(
     {
         return SumeragiV2LivenessBlocker::BodyUnavailable;
     }
-
     if status.phase == SumeragiV2StatusPhase::PendingApply
         && status.body_state == SumeragiV2BodyState::Applied
         && work.application == SumeragiV2LocalWorkStage::Complete
     {
         return SumeragiV2LivenessBlocker::SuccessorActivationPending;
     }
-
     if status.phase == SumeragiV2StatusPhase::PendingApply || stage_is_pending(work.application) {
         return SumeragiV2LivenessBlocker::ApplicationPending;
     }
-
     let local_control_pending = stage_is_pending(work.candidate)
         || status.pending_persistence_id.is_some()
         || status.liveness.outbound_intents.iter().any(|intent| {
@@ -1662,7 +1563,6 @@ fn classify_v2_liveness_blocker(
     if local_control_pending {
         return SumeragiV2LivenessBlocker::LocalControlPending;
     }
-
     let outbound_delivery_stalled = status.liveness.outbound_intents.iter().any(|intent| {
         let relevant_view = !matches!(
             intent.kind,
@@ -1677,7 +1577,6 @@ fn classify_v2_liveness_blocker(
     {
         return SumeragiV2LivenessBlocker::SchedulerStarvation;
     }
-
     // A durable current-view timeout intent retires local proposal/Prepare
     // ownership and prevents fresh lock acquisition in that view. The reducer
     // may still report its pre-timeout Prepare phase while it collects the
@@ -1712,7 +1611,6 @@ fn classify_v2_liveness_blocker(
             SumeragiV2LivenessBlocker::TimeoutCertificateMissing
         };
     }
-
     if status.phase == SumeragiV2StatusPhase::Commit {
         let formed = status
             .liveness
@@ -1726,7 +1624,6 @@ fn classify_v2_liveness_blocker(
             SumeragiV2LivenessBlocker::CommitQuorumMissing
         };
     }
-
     if status.phase == SumeragiV2StatusPhase::Prepare {
         let formed = status
             .liveness
@@ -1740,7 +1637,6 @@ fn classify_v2_liveness_blocker(
             SumeragiV2LivenessBlocker::PrepareQuorumMissing
         };
     }
-
     if timeout_pool_started {
         let formed = status
             .liveness
@@ -1753,10 +1649,8 @@ fn classify_v2_liveness_blocker(
             SumeragiV2LivenessBlocker::TimeoutCertificateMissing
         };
     }
-
     SumeragiV2LivenessBlocker::MissingProposal
 }
-
 fn overlay_v2_liveness_clock(
     status: &mut SumeragiV2Status,
     now: Instant,
@@ -1770,13 +1664,11 @@ fn overlay_v2_liveness_clock(
         })?
         .overlay_ages(status, now)
 }
-
 struct V2StatusObservation {
     status: SumeragiV2Status,
     watchdog_threshold: Option<Duration>,
     semantic_progress_at: Option<Instant>,
 }
-
 fn v2_status_observation_at(now: Instant) -> Option<V2StatusObservation> {
     let mut status = SUMERAGI_V2_STATUS.get().and_then(|slot| {
         slot.lock()
@@ -1844,11 +1736,9 @@ fn v2_status_observation_at(now: Instant) -> Option<V2StatusObservation> {
         semantic_progress_at,
     })
 }
-
 fn v2_status_at(now: Instant) -> Option<SumeragiV2Status> {
     v2_status_observation_at(now).map(|observation| observation.status)
 }
-
 fn current_v2_status_owner() -> Option<V2StatusOwner> {
     SUMERAGI_V2_STATUS.get().and_then(|slot| {
         slot.lock()
@@ -1857,14 +1747,12 @@ fn current_v2_status_owner() -> Option<V2StatusOwner> {
             .map(V2StatusOwner::from_status)
     })
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum V2LivenessQuorumKind {
     Prepare,
     Commit,
     Timeout,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct V2LivenessQuorumContext {
     kind: V2LivenessQuorumKind,
@@ -1877,7 +1765,6 @@ struct V2LivenessQuorumContext {
     total_power: u64,
     certificate_formed: Option<bool>,
 }
-
 fn relevant_vote_quorum(
     status: &SumeragiV2Status,
     pools: &[SumeragiV2VoteQuorumStatus],
@@ -1891,7 +1778,6 @@ fn relevant_vote_quorum(
         )
     })
 }
-
 fn relevant_timeout_quorum(status: &SumeragiV2Status) -> Option<SumeragiV2TimeoutQuorumStatus> {
     status
         .liveness
@@ -1908,7 +1794,6 @@ fn relevant_timeout_quorum(status: &SumeragiV2Status) -> Option<SumeragiV2Timeou
             )
         })
 }
-
 fn relevant_quorum_context(
     status: &SumeragiV2Status,
     blocker: SumeragiV2LivenessBlocker,
@@ -1964,7 +1849,6 @@ fn relevant_quorum_context(
         | SumeragiV2LivenessBlocker::LocalControlPending => None,
     }
 }
-
 fn relevant_queue_context(status: &SumeragiV2Status) -> Option<SumeragiV2QueueStatus> {
     status
         .liveness
@@ -1980,7 +1864,6 @@ fn relevant_queue_context(status: &SumeragiV2Status) -> Option<SumeragiV2QueueSt
             )
         })
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum V2LivenessWatchdogTransition {
     Blocked {
@@ -1991,24 +1874,20 @@ enum V2LivenessWatchdogTransition {
         blocker: SumeragiV2LivenessBlocker,
     },
 }
-
 struct V2LivenessWatchdogEvent {
     transition: V2LivenessWatchdogTransition,
     status: SumeragiV2Status,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct V2LivenessActiveAlert {
     blocker: SumeragiV2LivenessBlocker,
     semantic_progress: V2SemanticProgressWitness,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct V2SemanticProgressWitness {
     height_progress_at: Option<Instant>,
     fallback_rank: V2HeightProgressRank,
 }
-
 impl V2SemanticProgressWitness {
     fn strictly_advances(self, previous: Self) -> bool {
         match (self.height_progress_at, previous.height_progress_at) {
@@ -2017,7 +1896,6 @@ impl V2SemanticProgressWitness {
         }
     }
 }
-
 /// Edge-triggered operator watchdog for one process-local v2 status stream.
 ///
 /// The serialized runner polls this on every turn. Full status overlays are
@@ -2033,7 +1911,6 @@ pub(crate) struct V2LivenessWatchdog {
     #[cfg(test)]
     observation_count: u64,
 }
-
 impl Default for V2LivenessWatchdog {
     fn default() -> Self {
         Self {
@@ -2047,17 +1924,14 @@ impl Default for V2LivenessWatchdog {
         }
     }
 }
-
 impl V2LivenessWatchdog {
     const MIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
-
     fn reset_to_owner(&mut self, owner: Option<V2StatusOwner>) {
         self.initialized = true;
         self.owner = owner;
         self.active = None;
         self.next_due_at = None;
     }
-
     fn schedule_next(
         &mut self,
         status: &SumeragiV2Status,
@@ -2075,7 +1949,6 @@ impl V2LivenessWatchdog {
             now.checked_add(delay)
         });
     }
-
     fn observe(
         &mut self,
         observation: V2StatusObservation,
@@ -2090,7 +1963,6 @@ impl V2LivenessWatchdog {
         if self.owner != Some(owner) {
             self.reset_to_owner(Some(owner));
         }
-
         let semantic_progress = V2SemanticProgressWitness {
             height_progress_at: semantic_progress_at,
             fallback_rank: V2HeightProgressRank::from_status(&status),
@@ -2128,7 +2000,6 @@ impl V2LivenessWatchdog {
         self.schedule_next(&status, watchdog_threshold, now);
         transition.map(|transition| V2LivenessWatchdogEvent { transition, status })
     }
-
     fn poll_event_at(&mut self, now: Instant) -> Option<V2LivenessWatchdogEvent> {
         let revision = SUMERAGI_V2_WATCHDOG_REVISION.load(Ordering::Acquire);
         let revision_changed = !self.initialized || revision != self.seen_revision;
@@ -2152,7 +2023,6 @@ impl V2LivenessWatchdog {
                 return None;
             }
         }
-
         self.initialized = true;
         self.seen_revision = revision;
         #[cfg(test)]
@@ -2166,20 +2036,17 @@ impl V2LivenessWatchdog {
         };
         self.observe(observation, now)
     }
-
     /// Poll and emit only edge-triggered liveness diagnostics.
     pub(crate) fn poll(&mut self, now: Instant) {
         if let Some(event) = self.poll_event_at(now) {
             log_v2_liveness_watchdog_event(&event);
         }
     }
-
     #[cfg(test)]
     const fn observation_count(&self) -> u64 {
         self.observation_count
     }
 }
-
 fn log_v2_liveness_watchdog_event(event: &V2LivenessWatchdogEvent) {
     let status = &event.status;
     let queue = relevant_queue_context(status);
@@ -2247,13 +2114,11 @@ fn log_v2_liveness_watchdog_event(event: &V2LivenessWatchdogEvent) {
         }
     }
 }
-
 /// Return the latest protocol-v2 reducer snapshot, if v2 has started.
 #[must_use]
 pub fn v2_status() -> Option<SumeragiV2Status> {
     v2_status_at(Instant::now())
 }
-
 /// Return the latest exact reducer snapshot with process-wide fail-stop state
 /// overlaid at read time.
 ///
@@ -2267,7 +2132,6 @@ pub fn v2_status_with_restart_required(restart_required: bool) -> Option<Sumerag
         status
     })
 }
-
 /// Mark a valid current reducer snapshot as restart-required.
 ///
 /// The process-wide output guard is activated by the runner before this local
@@ -2314,7 +2178,6 @@ pub(crate) fn mark_v2_restart_required() {
         status.restart_required = true;
     }
 }
-
 /// Clear protocol-v2 status during shutdown and isolated tests.
 pub fn clear_v2_status() {
     #[cfg(test)]
@@ -2353,7 +2216,6 @@ pub fn clear_v2_status() {
     set_committed_lane_blocks(Vec::new());
     bump_v2_watchdog_revision();
 }
-
 #[cfg(test)]
 mod v2_liveness_watchdog_tests {
     use std::{
@@ -2361,7 +2223,6 @@ mod v2_liveness_watchdog_tests {
         thread,
         time::{Duration, Instant},
     };
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::block::{
         BlockHeader,
@@ -2378,7 +2239,6 @@ mod v2_liveness_watchdog_tests {
         },
     };
     use iroha_data_model::peer::PeerId;
-
     use super::{
         EffectExecutorStatus, PendingKuraApplyRecoveryStage, SnapshotSuccessorActivationAuthority,
         V2IoCompletionQueueObserver, V2LivenessWatchdog, V2LivenessWatchdogTransition,
@@ -2394,24 +2254,20 @@ mod v2_liveness_watchdog_tests {
         v2_recovery::{DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity},
         v2_runtime::{RuntimeQueueLaneSnapshot, RuntimeQueueSnapshot},
     };
-
     fn test_predecessor(height: u64, label: &[u8]) -> DurableV2PredecessorIdentity {
         DurableV2PredecessorIdentity::for_test(height, label)
     }
-
     fn test_successor_authority(
         predecessor: DurableV2PredecessorIdentity,
         successor_context_id: HeightContextId,
     ) -> DurableSuccessorActivationAuthority {
         DurableSuccessorActivationAuthority::for_test(predecessor, successor_context_id)
     }
-
     fn context_id() -> HeightContextId {
         HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(
             b"v2-liveness-watchdog-context",
         )))
     }
-
     fn authenticated_ingress_prepare(
         seed: &[u8],
         context_id: HeightContextId,
@@ -2452,7 +2308,6 @@ mod v2_liveness_watchdog_tests {
         let inbound = InboundBlockMessage::new(message, Some(transport.clone()));
         (transport, inbound)
     }
-
     fn status() -> SumeragiV2Status {
         SumeragiV2Status {
             protocol_version: PROTOCOL_VERSION,
@@ -2487,7 +2342,6 @@ mod v2_liveness_watchdog_tests {
             liveness: Default::default(),
         }
     }
-
     fn round(status: &SumeragiV2Status, view: u64) -> ConsensusRound {
         ConsensusRound {
             context_id: status.height_context_id,
@@ -2495,7 +2349,6 @@ mod v2_liveness_watchdog_tests {
             view,
         }
     }
-
     fn subject(seed: u8) -> BlockSubject {
         BlockSubject {
             parent_block_hash: None,
@@ -2503,7 +2356,6 @@ mod v2_liveness_watchdog_tests {
             payload_hash: Hash::new([seed, 1]),
         }
     }
-
     fn execution_commitment(seed: u8) -> ExecutionCommitment {
         ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new([seed, 2]),
@@ -2513,7 +2365,6 @@ mod v2_liveness_watchdog_tests {
             Hash::new([seed, 5]),
         )
     }
-
     fn prepare_qc(status: &SumeragiV2Status, view: u64, seed: u8) -> QuorumCertificateRef {
         let round = round(status, view);
         QuorumCertificateRef {
@@ -2524,7 +2375,6 @@ mod v2_liveness_watchdog_tests {
             execution_commitment: execution_commitment(seed),
         }
     }
-
     fn commit_quorum(
         status: &SumeragiV2Status,
         view: u64,
@@ -2542,7 +2392,6 @@ mod v2_liveness_watchdog_tests {
             total_power: 4,
         }
     }
-
     fn set_progress(
         status: &mut SumeragiV2Status,
         generation: u64,
@@ -2557,7 +2406,6 @@ mod v2_liveness_watchdog_tests {
             age_ms: 0,
         });
     }
-
     fn lane(capacity: usize) -> RuntimeQueueLaneSnapshot {
         RuntimeQueueLaneSnapshot {
             depth: 0,
@@ -2566,11 +2414,9 @@ mod v2_liveness_watchdog_tests {
             max_service_debt: 0,
         }
     }
-
     struct TestCompletionObserver {
         snapshot: Mutex<RuntimeQueueLaneSnapshot>,
     }
-
     impl V2IoCompletionQueueObserver for TestCompletionObserver {
         fn completion_queue_snapshot(&self, _now: Instant) -> RuntimeQueueLaneSnapshot {
             *self
@@ -2579,7 +2425,6 @@ mod v2_liveness_watchdog_tests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
         }
     }
-
     fn effect_status(threshold: Duration, captured_at: Instant) -> EffectExecutorStatus {
         EffectExecutorStatus {
             height_context_id: context_id(),
@@ -2616,7 +2461,6 @@ mod v2_liveness_watchdog_tests {
     #[test]
     fn pending_tip_recovery_overlay_reports_the_exact_local_stage() {
         use SumeragiV2LocalWorkStage::{Complete, Idle, Queued, Running};
-
         let captured_at = Instant::now();
         let mut baseline = status();
         baseline.phase = SumeragiV2StatusPhase::PendingApply;
@@ -2647,7 +2491,6 @@ mod v2_liveness_watchdog_tests {
                 (Complete, Complete, Complete, Complete),
             ),
         ];
-
         for (stage, expected) in cases {
             let mut observed = baseline.clone();
             let phase_before = observed.phase;
@@ -2694,7 +2537,6 @@ mod v2_liveness_watchdog_tests {
         let publication = status();
         let (attempted_tx, attempted_rx) = mpsc::sync_channel(0);
         let (completed_tx, completed_rx) = mpsc::sync_channel(0);
-
         let publisher = thread::spawn(move || {
             assert!(
                 super::try_reentrant_test_guard(&super::RBC_STATUS_TEST_LOCK).is_none(),
@@ -2708,7 +2550,6 @@ mod v2_liveness_watchdog_tests {
                 .send(())
                 .expect("announce publication after lease release");
         });
-
         attempted_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("publisher reaches the guarded mutation boundary");
@@ -2716,13 +2557,11 @@ mod v2_liveness_watchdog_tests {
             v2_status_at(started_at).is_none(),
             "the stable test window must exclude a foreign publisher"
         );
-
         drop(guard);
         completed_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("publisher resumes after the stable window closes");
         publisher.join().expect("publisher thread completes");
-
         let _cleanup_guard = super::rbc_status_test_guard();
         clear_v2_status();
     }
@@ -2740,7 +2579,6 @@ mod v2_liveness_watchdog_tests {
         );
         set_v2_status_at(initial.clone(), started_at);
         set_v2_effect_status(effect_status(Duration::from_secs(5), started_at));
-
         let mut first_timeout_vote = initial.clone();
         set_progress(
             &mut first_timeout_vote,
@@ -2749,7 +2587,6 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2ProgressTransition::TimeoutVoteAdmitted,
         );
         set_v2_status_at(first_timeout_vote, started_at + Duration::from_secs(1));
-
         let mut first_tc = initial.clone();
         first_tc.view = 1;
         set_progress(
@@ -2759,7 +2596,6 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2ProgressTransition::TimeoutCertificateInstalled,
         );
         set_v2_status_at(first_tc.clone(), started_at + Duration::from_secs(2));
-
         let mut second_timeout_vote = first_tc;
         set_progress(
             &mut second_timeout_vote,
@@ -2768,7 +2604,6 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2ProgressTransition::TimeoutVoteAdmitted,
         );
         set_v2_status_at(second_timeout_vote, started_at + Duration::from_secs(3));
-
         let mut second_tc = initial;
         second_tc.view = 2;
         set_progress(
@@ -2790,7 +2625,6 @@ mod v2_liveness_watchdog_tests {
                 stage: SumeragiV2OutboundIntentStage::Sent,
             });
         set_v2_status_at(second_tc, started_at + Duration::from_secs(4));
-
         let observed = v2_status_at(started_at + Duration::from_secs(6)).expect("v2 status");
         assert_eq!(observed.liveness.no_progress_age_ms, 6_000);
         assert_eq!(
@@ -2805,7 +2639,6 @@ mod v2_liveness_watchdog_tests {
             observed.liveness.blocker,
             Some(SumeragiV2LivenessBlocker::MissingProposal)
         );
-
         let mut body_available = observed;
         set_progress(
             &mut body_available,
@@ -2847,7 +2680,6 @@ mod v2_liveness_watchdog_tests {
         );
         set_v2_status_at(locked.clone(), started_at);
         set_v2_effect_status(effect_status(Duration::from_secs(5), started_at));
-
         let mut first_tc = locked.clone();
         first_tc.view = 1;
         first_tc.liveness.commit_quorums.clear();
@@ -2858,7 +2690,6 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2ProgressTransition::TimeoutCertificateInstalled,
         );
         set_v2_status_at(first_tc.clone(), started_at + Duration::from_secs(1));
-
         let mut first_rebuild = first_tc.clone();
         first_rebuild.liveness.commit_quorums = vec![commit_quorum(&first_rebuild, 0, 1)];
         set_progress(
@@ -2868,10 +2699,8 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2ProgressTransition::CommitVoteAdmitted,
         );
         set_v2_status_at(first_rebuild.clone(), started_at + Duration::from_secs(2));
-
         first_rebuild.liveness.commit_quorums = vec![commit_quorum(&first_rebuild, 0, 2)];
         set_v2_status_at(first_rebuild, started_at + Duration::from_secs(3));
-
         let mut second_tc = first_tc;
         second_tc.view = 2;
         set_progress(
@@ -2881,7 +2710,6 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2ProgressTransition::TimeoutCertificateInstalled,
         );
         set_v2_status_at(second_tc.clone(), started_at + Duration::from_secs(4));
-
         let mut second_rebuild = second_tc;
         second_rebuild.liveness.commit_quorums = vec![commit_quorum(&second_rebuild, 0, 2)];
         set_progress(
@@ -2891,14 +2719,12 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2ProgressTransition::CommitVoteAdmitted,
         );
         set_v2_status_at(second_rebuild.clone(), started_at + Duration::from_secs(5));
-
         let stalled = v2_status_at(started_at + Duration::from_secs(6)).expect("v2 status");
         assert_eq!(stalled.liveness.no_progress_age_ms, 6_000);
         assert_eq!(
             stalled.liveness.blocker,
             Some(SumeragiV2LivenessBlocker::CommitQuorumMissing)
         );
-
         second_rebuild.liveness.commit_quorums = vec![commit_quorum(&second_rebuild, 0, 3)];
         set_v2_status_at(second_rebuild, started_at + Duration::from_secs(7));
         let advanced = v2_status_at(started_at + Duration::from_secs(8)).expect("v2 status");
@@ -2917,7 +2743,6 @@ mod v2_liveness_watchdog_tests {
             classify_v2_liveness_blocker(&baseline, true),
             SumeragiV2LivenessBlocker::SchedulerStarvation
         );
-
         let mut body = baseline.clone();
         body.phase = SumeragiV2StatusPhase::ReconstructingPayload;
         body.body_state = SumeragiV2BodyState::Reconstructing;
@@ -2926,7 +2751,6 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2LivenessBlocker::BodyUnavailable,
             "body recovery must take precedence over a stopped ingress scheduler"
         );
-
         let mut decided_body_recovery = baseline.clone();
         decided_body_recovery.phase = SumeragiV2StatusPhase::PendingApply;
         decided_body_recovery.liveness.work.body_recovery = SumeragiV2LocalWorkStage::Running;
@@ -2936,7 +2760,6 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2LivenessBlocker::BodyUnavailable,
             "decided-body prerequisites must remain distinguishable from application"
         );
-
         let mut prepare = baseline.clone();
         prepare.phase = SumeragiV2StatusPhase::Prepare;
         prepare.body_state = SumeragiV2BodyState::Validated;
@@ -2944,14 +2767,12 @@ mod v2_liveness_watchdog_tests {
             classify_v2_liveness_blocker(&prepare, false),
             SumeragiV2LivenessBlocker::PrepareQuorumMissing
         );
-
         let mut commit = prepare.clone();
         commit.phase = SumeragiV2StatusPhase::Commit;
         assert_eq!(
             classify_v2_liveness_blocker(&commit, false),
             SumeragiV2LivenessBlocker::CommitQuorumMissing
         );
-
         let mut candidate = commit.clone();
         candidate.liveness.work.candidate = SumeragiV2LocalWorkStage::Running;
         assert_eq!(
@@ -2959,7 +2780,6 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2LivenessBlocker::LocalControlPending,
             "locked-candidate acquisition must precede a missing-quorum diagnosis"
         );
-
         let mut timeout = baseline.clone();
         let timeout_round = round(&timeout, 0);
         timeout
@@ -2977,7 +2797,6 @@ mod v2_liveness_watchdog_tests {
             classify_v2_liveness_blocker(&timeout, false),
             SumeragiV2LivenessBlocker::TimeoutCertificateMissing
         );
-
         let mut scheduler = baseline.clone();
         scheduler.liveness.queues.push(SumeragiV2QueueStatus {
             queue: SumeragiV2QueueKind::RuntimeProgress,
@@ -2990,7 +2809,6 @@ mod v2_liveness_watchdog_tests {
             classify_v2_liveness_blocker(&scheduler, false),
             SumeragiV2LivenessBlocker::SchedulerStarvation
         );
-
         let mut queued = baseline.clone();
         let queued_round = round(&queued, 0);
         queued
@@ -3008,7 +2826,6 @@ mod v2_liveness_watchdog_tests {
             classify_v2_liveness_blocker(&queued, false),
             SumeragiV2LivenessBlocker::SchedulerStarvation
         );
-
         let mut persistence = scheduler.clone();
         persistence.pending_persistence_id = Some(17);
         assert_eq!(
@@ -3016,7 +2833,6 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2LivenessBlocker::LocalControlPending,
             "WAL persistence must take precedence over every scheduler witness"
         );
-
         let mut pending_persistence = scheduler.clone();
         pending_persistence.view = 1;
         let stale_round = round(&pending_persistence, 0);
@@ -3036,7 +2852,6 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2LivenessBlocker::LocalControlPending,
             "a pending WAL intent blocks the reducer even outside the current view"
         );
-
         let mut pending_signature = scheduler;
         pending_signature.view = 1;
         let stale_round = round(&pending_signature, 0);
@@ -3056,7 +2871,6 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2LivenessBlocker::LocalControlPending,
             "a pending signature blocks the reducer even outside the current view"
         );
-
         let mut application = pending_signature;
         application.liveness.work.application = SumeragiV2LocalWorkStage::Running;
         assert_eq!(
@@ -3090,7 +2904,6 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2LivenessBlocker::PrepareQuorumMissing,
             "a remote partial timeout pool does not close the local Prepare path"
         );
-
         prepare
             .liveness
             .outbound_intents
@@ -3110,7 +2923,6 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2LivenessBlocker::TimeoutCertificateMissing,
             "a durable timeout closes the current Prepare path"
         );
-
         let mut current_commit = prepare.clone();
         current_commit.phase = SumeragiV2StatusPhase::Commit;
         let current_lock = prepare_qc(&current_commit, current_commit.view, 0xA2);
@@ -3124,7 +2936,6 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2LivenessBlocker::TimeoutCertificateMissing,
             "a lock without Commit ownership follows its durable timeout recovery path"
         );
-
         current_commit
             .liveness
             .outbound_intents
@@ -3141,7 +2952,6 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2LivenessBlocker::CommitQuorumMissing,
             "an exact durable Commit remains active across its same-view timeout"
         );
-
         let mut retained_commit = current_commit;
         retained_commit.view = 1;
         let retained_lock = prepare_qc(&retained_commit, 0, 0xA2);
@@ -3168,7 +2978,6 @@ mod v2_liveness_watchdog_tests {
         let mut effects = effect_status(Duration::from_secs(1), started_at);
         effects.pending_applications = 1;
         set_v2_effect_status(effects);
-
         let observed = v2_status_at(started_at + Duration::from_secs(2)).expect("v2 status");
         assert_eq!(
             observed.liveness.work.application,
@@ -3198,7 +3007,6 @@ mod v2_liveness_watchdog_tests {
         );
         set_v2_status_at(predecessor.clone(), started_at);
         set_v2_effect_status(effect_status(Duration::from_secs(1), started_at));
-
         let successor_context_id = HeightContextId(
             HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(b"successor overlay")),
         );
@@ -3208,7 +3016,6 @@ mod v2_liveness_watchdog_tests {
         effects.height = successor_height;
         effects.pending_fetches = 1;
         set_v2_effect_status(effects);
-
         let observer = Arc::new(TestCompletionObserver {
             snapshot: Mutex::new(RuntimeQueueLaneSnapshot {
                 depth: 1,
@@ -3230,7 +3037,6 @@ mod v2_liveness_watchdog_tests {
         ingress.open().expect("open successor ingress");
         ingress.try_push(inbound).expect("queue successor input");
         set_v2_network_ingress(successor_context_id, successor_height, &ingress);
-
         let during_startup =
             v2_status_at(started_at + Duration::from_secs(3)).expect("predecessor status");
         assert_eq!(during_startup.height, predecessor.height);
@@ -3263,7 +3069,6 @@ mod v2_liveness_watchdog_tests {
             Some(SumeragiV2LivenessBlocker::SuccessorActivationPending),
             "durably applied predecessor status must expose successor activation, not application, as the remaining blocker"
         );
-
         let mut successor = status();
         successor.height_context_id = successor_context_id;
         successor.height = successor_height;
@@ -3301,9 +3106,7 @@ mod v2_liveness_watchdog_tests {
         corrupted.restart_required = false;
         corrupted.liveness.work.successor_height = SumeragiV2LocalWorkStage::Running;
         set_v2_status_at(corrupted, started_at);
-
         mark_v2_restart_required();
-
         let failed = v2_status_at(started_at).expect("failed status remains visible");
         assert!(
             !failed.restart_required,
@@ -3340,7 +3143,6 @@ mod v2_liveness_watchdog_tests {
         set_progress(&mut applied, 3, 0, SumeragiV2ProgressTransition::Applied);
         let height = applied.height;
         set_v2_status_at(applied, started_at);
-
         update_v2_successor_work_stage_at(
             height,
             SumeragiV2LocalWorkStage::Queued,
@@ -3365,7 +3167,6 @@ mod v2_liveness_watchdog_tests {
             running.liveness.no_progress_age_ms, 12_000,
             "starting successor construction is ownership, not completed height progress"
         );
-
         let mut successor = status();
         successor.height = height + 1;
         successor.height_context_id = HeightContextId(
@@ -3407,7 +3208,6 @@ mod v2_liveness_watchdog_tests {
         assert_eq!(marker.round.view, successor.view);
         assert_eq!(marker.age_ms, 2_000);
         assert_eq!(active.liveness.no_progress_age_ms, 2_000);
-
         assert_eq!(
             activate_v2_successor_height_at(
                 predecessor,
@@ -3432,7 +3232,6 @@ mod v2_liveness_watchdog_tests {
             "a rejected duplicate must not republish the activation marker"
         );
         assert_eq!(not_refreshed.liveness.no_progress_age_ms, 4_000);
-
         let mut proposed = not_refreshed;
         set_progress(
             &mut proposed,
@@ -3448,7 +3247,6 @@ mod v2_liveness_watchdog_tests {
         );
         clear_v2_status();
     }
-
     #[test]
     fn completed_predecessor_work_alone_never_claims_successor_activation() {
         let _guard = super::rbc_status_test_guard();
@@ -3462,7 +3260,6 @@ mod v2_liveness_watchdog_tests {
         set_progress(&mut applied, 3, 0, SumeragiV2ProgressTransition::Applied);
         let height = applied.height;
         set_v2_status_at(applied, started_at);
-
         update_v2_successor_work_stage_at(
             height,
             SumeragiV2LocalWorkStage::Running,
@@ -3487,14 +3284,12 @@ mod v2_liveness_watchdog_tests {
         assert_eq!(completed.liveness.no_progress_age_ms, 5_000);
         clear_v2_status();
     }
-
     #[cfg(feature = "bls")]
     #[test]
     fn complete_tip_retirement_and_successor_owner_bind_are_release_bound() {
         crate::sumeragi::v2_first_release_recovery::run_complete_tip_retirement_release_regressions(
         );
     }
-
     #[test]
     fn snapshot_recovery_publishes_one_exact_live_successor_boundary() {
         let _guard = super::rbc_status_test_guard();
@@ -3516,7 +3311,6 @@ mod v2_liveness_watchdog_tests {
         let snapshot_block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             b"status snapshot bootstrap block",
         ));
-
         activate_snapshot_bootstrap_v2_height_at(
             SnapshotSuccessorActivationAuthority::for_test(
                 snapshot_record_hash,
@@ -3539,7 +3333,6 @@ mod v2_liveness_watchdog_tests {
                 ..
             })
         ));
-
         assert_eq!(
             activate_snapshot_bootstrap_v2_height_at(
                 SnapshotSuccessorActivationAuthority::for_test(
@@ -3568,12 +3361,10 @@ mod v2_liveness_watchdog_tests {
         );
         clear_v2_status();
     }
-
     #[test]
     fn rejected_successor_activation_never_mutates_or_replaces_the_predecessor() {
         let _guard = super::rbc_status_test_guard();
         let started_at = Instant::now();
-
         struct Case {
             name: &'static str,
             published: Option<(u64, SumeragiV2LocalWorkStage)>,
@@ -3583,7 +3374,6 @@ mod v2_liveness_watchdog_tests {
             valid_marker: bool,
             expected: V2SuccessorActivationError,
         }
-
         let cases = [
             Case {
                 name: "missing predecessor",
@@ -3662,7 +3452,6 @@ mod v2_liveness_watchdog_tests {
                 expected: V2SuccessorActivationError::SuccessorMarkerMismatch,
             },
         ];
-
         for case in cases {
             clear_v2_status();
             if let Some((height, stage)) = case.published {
@@ -3680,7 +3469,6 @@ mod v2_liveness_watchdog_tests {
                 );
                 set_v2_status_at(predecessor, started_at);
             }
-
             let mut successor = status();
             successor.height = case.successor_height;
             successor.last_committed_height = case.successor_parent;
@@ -3707,7 +3495,6 @@ mod v2_liveness_watchdog_tests {
                 "{}",
                 case.name
             );
-
             match case.published {
                 None => assert!(
                     v2_status_at(started_at + Duration::from_secs(2)).is_none(),
@@ -3742,7 +3529,6 @@ mod v2_liveness_watchdog_tests {
                 }
             }
         }
-
         clear_v2_status();
         let mut predecessor = status();
         predecessor.phase = SumeragiV2StatusPhase::PendingApply;
@@ -3800,12 +3586,10 @@ mod v2_liveness_watchdog_tests {
         );
         clear_v2_status();
     }
-
     #[test]
     fn successor_handoff_rejects_every_incomplete_predecessor_witness() {
         let _guard = super::rbc_status_test_guard();
         let started_at = Instant::now();
-
         for fault in ["phase", "body", "application", "marker"] {
             clear_v2_status();
             let mut predecessor = status();
@@ -3838,7 +3622,6 @@ mod v2_liveness_watchdog_tests {
             let original = predecessor.clone();
             let height = predecessor.height;
             set_v2_status_at(predecessor, started_at);
-
             assert_eq!(
                 begin_v2_successor_activation(test_predecessor(height, fault.as_bytes(),)),
                 Err(V2SuccessorActivationError::PredecessorNotApplied(height)),
@@ -3866,7 +3649,6 @@ mod v2_liveness_watchdog_tests {
         }
         clear_v2_status();
     }
-
     #[test]
     fn apply_waiting_on_merge_sidecar_is_application_pending_not_body_unavailable() {
         let _guard = super::rbc_status_test_guard();
@@ -3877,13 +3659,11 @@ mod v2_liveness_watchdog_tests {
         reducer_status.body_state = SumeragiV2BodyState::PendingApply;
         let validation_before_overlay = reducer_status.liveness.work.validation;
         set_v2_status_at(reducer_status, started_at);
-
         let mut effects = effect_status(Duration::from_secs(1), started_at);
         effects.pending_applications = 1;
         effects.deferred_application_merge_work = 1;
         effects.deferred_merge_work = 1;
         set_v2_effect_status(effects);
-
         let observed = v2_status_at(started_at + Duration::from_secs(2)).expect("v2 status");
         assert_eq!(
             observed.liveness.work.validation, validation_before_overlay,
@@ -3899,7 +3679,6 @@ mod v2_liveness_watchdog_tests {
         );
         clear_v2_status();
     }
-
     #[test]
     fn locked_candidate_load_overlay_precedes_commit_quorum_diagnosis() {
         let _guard = super::rbc_status_test_guard();
@@ -3912,7 +3691,6 @@ mod v2_liveness_watchdog_tests {
         let mut effects = effect_status(Duration::from_secs(1), started_at);
         effects.pending_candidate_loads = 1;
         set_v2_effect_status(effects);
-
         let observed = v2_status_at(started_at + Duration::from_secs(2)).expect("v2 status");
         assert_eq!(
             observed.liveness.work.candidate,
@@ -3925,7 +3703,6 @@ mod v2_liveness_watchdog_tests {
         );
         clear_v2_status();
     }
-
     #[test]
     fn paused_status_reads_advance_adapter_and_runtime_queue_ages_once() {
         let _guard = super::rbc_status_test_guard();
@@ -3940,12 +3717,10 @@ mod v2_liveness_watchdog_tests {
             service_debt: 1,
         });
         set_v2_status_at(reducer_status, captured_at);
-
         let mut effects = effect_status(Duration::from_secs(60), captured_at);
         effects.runtime_queues.progress.depth = 1;
         effects.runtime_queues.progress.oldest_age = Some(Duration::from_millis(500));
         set_v2_effect_status(effects);
-
         let queue_age = |status: &SumeragiV2Status, kind| {
             status
                 .liveness
@@ -3964,7 +3739,6 @@ mod v2_liveness_watchdog_tests {
             Some(2_500)
         );
         assert_eq!(queue_age(&first, SumeragiV2QueueKind::RuntimeNormal), None);
-
         let later = v2_status_at(captured_at + Duration::from_secs(4)).expect("v2 status");
         assert_eq!(
             queue_age(&later, SumeragiV2QueueKind::DeferredProgress),
@@ -3977,7 +3751,6 @@ mod v2_liveness_watchdog_tests {
         assert_eq!(queue_age(&later, SumeragiV2QueueKind::RuntimeNormal), None);
         clear_v2_status();
     }
-
     #[test]
     fn effect_completion_overlay_preserves_capacity_age_and_service_debt() {
         let _guard = super::rbc_status_test_guard();
@@ -3992,7 +3765,6 @@ mod v2_liveness_watchdog_tests {
             max_service_debt: 3,
         };
         set_v2_effect_status(effects);
-
         let observed = v2_status_at(captured_at + Duration::from_secs(2)).expect("v2 status");
         let completion = observed
             .liveness
@@ -4006,7 +3778,6 @@ mod v2_liveness_watchdog_tests {
         assert_eq!(completion.service_debt, 3);
         clear_v2_status();
     }
-
     #[test]
     fn effect_dispatch_overlay_exposes_age_without_claiming_scheduler_starvation() {
         let _guard = super::rbc_status_test_guard();
@@ -4021,7 +3792,6 @@ mod v2_liveness_watchdog_tests {
             max_service_debt: 2,
         };
         set_v2_effect_status(effects.clone());
-
         let below_threshold =
             v2_status_at(captured_at + Duration::from_secs(2)).expect("v2 status");
         let dispatch = below_threshold
@@ -4039,7 +3809,6 @@ mod v2_liveness_watchdog_tests {
             Some(SumeragiV2LivenessBlocker::SchedulerStarvation),
             "EffectDispatch never participates in scheduler skip rotation"
         );
-
         effects.effect_dispatch_queue.max_service_debt = 3;
         set_v2_effect_status(effects);
         let full_rotation = v2_status_at(captured_at + Duration::from_secs(2)).expect("v2 status");
@@ -4050,7 +3819,6 @@ mod v2_liveness_watchdog_tests {
         );
         clear_v2_status();
     }
-
     #[test]
     fn live_effect_completion_observer_survives_stopped_runner_and_clears_stale_depth() {
         let _guard = super::rbc_status_test_guard();
@@ -4067,7 +3835,6 @@ mod v2_liveness_watchdog_tests {
             }),
         });
         set_v2_effect_completion_observer(context_id(), 7, &observer);
-
         *observer
             .snapshot
             .lock()
@@ -4089,7 +3856,6 @@ mod v2_liveness_watchdog_tests {
         assert_eq!(completion.capacity, 4);
         assert_eq!(completion.oldest_age_ms, Some(750));
         assert_eq!(completion.service_debt, 2);
-
         *observer
             .snapshot
             .lock()
@@ -4110,7 +3876,6 @@ mod v2_liveness_watchdog_tests {
         assert_eq!(completion.depth, 0);
         assert_eq!(completion.oldest_age_ms, None);
         assert_eq!(completion.service_debt, 0);
-
         let mut stale = effect_status(Duration::from_secs(60), captured_at);
         stale.effect_completion_queue = RuntimeQueueLaneSnapshot {
             depth: 3,
@@ -4130,7 +3895,6 @@ mod v2_liveness_watchdog_tests {
             .expect("retired effect completion queue");
         assert_eq!(completion.depth, 0);
         assert_eq!(completion.capacity, 8);
-
         clear_v2_status();
         set_v2_status_at(status(), captured_at + Duration::from_secs(4));
         let mut fallback = effect_status(Duration::from_secs(60), captured_at);
@@ -4153,7 +3917,6 @@ mod v2_liveness_watchdog_tests {
         assert_eq!(completion.capacity, 8);
         clear_v2_status();
     }
-
     #[test]
     fn aged_queue_without_service_debt_does_not_claim_scheduler_starvation() {
         let _guard = super::rbc_status_test_guard();
@@ -4169,7 +3932,6 @@ mod v2_liveness_watchdog_tests {
         });
         set_v2_status_at(reducer_status, captured_at);
         set_v2_effect_status(effect_status(Duration::from_secs(2), captured_at));
-
         let before_threshold =
             v2_status_at(captured_at + Duration::from_secs(1)).expect("v2 status");
         assert_eq!(before_threshold.liveness.blocker, None);
@@ -4189,7 +3951,6 @@ mod v2_liveness_watchdog_tests {
         assert_eq!(queue.service_debt, 0);
         clear_v2_status();
     }
-
     #[test]
     fn network_ingress_service_clock_distinguishes_stopped_and_active_scans() {
         let _guard = super::rbc_status_test_guard();
@@ -4209,7 +3970,6 @@ mod v2_liveness_watchdog_tests {
             .try_push_at(inbound, captured_at - Duration::from_millis(250))
             .expect("enqueue transport message");
         set_v2_network_ingress(context_id(), 7, &ingress);
-
         let mut reducer_status = status();
         reducer_status.liveness.queues.push(SumeragiV2QueueStatus {
             queue: SumeragiV2QueueKind::Ingress,
@@ -4220,7 +3980,6 @@ mod v2_liveness_watchdog_tests {
         });
         set_v2_status_at(reducer_status, captured_at);
         set_v2_effect_status(effect_status(Duration::from_secs(2), captured_at));
-
         let before_threshold =
             v2_status_at(captured_at + Duration::from_secs(1)).expect("v2 status");
         assert_eq!(before_threshold.liveness.blocker, None);
@@ -4241,7 +4000,6 @@ mod v2_liveness_watchdog_tests {
                 .iter()
                 .any(|queue| queue.queue == SumeragiV2QueueKind::Ingress)
         );
-
         let after_threshold =
             v2_status_at(captured_at + Duration::from_secs(3)).expect("v2 status");
         assert_eq!(
@@ -4257,7 +4015,6 @@ mod v2_liveness_watchdog_tests {
             .expect("live network ingress queue");
         assert_eq!(network.oldest_age_ms, Some(3_250));
         assert_eq!(network.service_debt, 0);
-
         assert!(
             ingress
                 .try_recv_if_at(captured_at + Duration::from_secs(3), |_| false)
@@ -4282,7 +4039,6 @@ mod v2_liveness_watchdog_tests {
         assert_eq!(network.service_debt, 0);
         clear_v2_status();
     }
-
     #[test]
     fn retained_semantic_ingress_age_does_not_mask_a_missing_commit_quorum() {
         let mut commit = status();
@@ -4295,13 +4051,11 @@ mod v2_liveness_watchdog_tests {
             oldest_age_ms: Some(60_000),
             service_debt: u64::MAX,
         });
-
         assert_eq!(
             classify_v2_liveness_blocker(&commit, false),
             SumeragiV2LivenessBlocker::CommitQuorumMissing
         );
     }
-
     #[test]
     fn active_watchdog_is_deadline_driven_edge_triggered_and_recovers_on_progress() {
         let _guard = super::rbc_status_test_guard();
@@ -4310,7 +4064,6 @@ mod v2_liveness_watchdog_tests {
         set_v2_status_at(status(), started_at);
         set_v2_effect_status(effect_status(Duration::from_secs(1), started_at));
         let mut watchdog = V2LivenessWatchdog::default();
-
         assert!(
             watchdog
                 .poll_event_at(started_at + Duration::from_millis(500))
@@ -4325,7 +4078,6 @@ mod v2_liveness_watchdog_tests {
             "the runner's fast loop must not rebuild a snapshot before it is due"
         );
         assert_eq!(watchdog.observation_count(), 1);
-
         let alert = watchdog
             .poll_event_at(started_at + Duration::from_secs(1))
             .expect("threshold crossing emits one alert");
@@ -4350,7 +4102,6 @@ mod v2_liveness_watchdog_tests {
             "an unchanged active blocker must remain edge-triggered at reclassification"
         );
         assert_eq!(watchdog.observation_count(), 3);
-
         let blocker_changed_at = started_at + Duration::from_millis(2_001);
         let mut timeout = status();
         let timeout_round = round(&timeout, 0);
@@ -4383,7 +4134,6 @@ mod v2_liveness_watchdog_tests {
                 previous_blocker: Some(SumeragiV2LivenessBlocker::MissingProposal),
             }
         );
-
         let recovered_at = started_at + Duration::from_millis(3_001);
         let mut progressed = status();
         progressed.phase = SumeragiV2StatusPhase::Prepare;
@@ -4415,7 +4165,6 @@ mod v2_liveness_watchdog_tests {
         );
         clear_v2_status();
     }
-
     #[test]
     fn active_watchdog_resets_on_successor_owner_and_status_clear() {
         let _guard = super::rbc_status_test_guard();
@@ -4434,7 +4183,6 @@ mod v2_liveness_watchdog_tests {
                 previous_blocker: None,
             }
         );
-
         let successor_started_at = started_at + Duration::from_millis(1_100);
         let mut successor = status();
         successor.height = 8;
@@ -4447,7 +4195,6 @@ mod v2_liveness_watchdog_tests {
             watchdog.poll_event_at(successor_started_at).is_none(),
             "a successor owner resets the predecessor alert without claiming recovery"
         );
-
         let successor = watchdog
             .poll_event_at(successor_started_at + Duration::from_secs(1))
             .expect("the successor owns an independent alert interval");
@@ -4458,7 +4205,6 @@ mod v2_liveness_watchdog_tests {
                 previous_blocker: None,
             }
         );
-
         clear_v2_status();
         assert!(
             watchdog
@@ -4468,7 +4214,6 @@ mod v2_liveness_watchdog_tests {
         assert_eq!(watchdog.owner, None);
         assert!(watchdog.active.is_none());
     }
-
     #[test]
     fn clear_resets_the_process_local_progress_clock() {
         let _guard = super::rbc_status_test_guard();
@@ -4492,7 +4237,6 @@ mod v2_liveness_watchdog_tests {
                 .age_ms,
             3_000
         );
-
         clear_v2_status();
         assert_eq!(v2_status_at(started_at + Duration::from_secs(4)), None);
         set_v2_status_at(initial, started_at + Duration::from_secs(10));
@@ -4511,7 +4255,6 @@ mod v2_liveness_watchdog_tests {
         clear_v2_status();
     }
 }
-
 /// Record archival consensus-mode labels used by retained evidence validation.
 ///
 /// The labels are process-local diagnostics only. Protocol-v2 consensus mode
@@ -4534,7 +4277,6 @@ pub fn set_mode_tags(
         "staged mode activation height",
     ) = staged_mode_activation_height;
 }
-
 /// Return archival consensus-mode labels used by retained operator routes.
 #[must_use]
 pub fn mode_tags() -> (String, Option<String>, Option<u64>, Option<u64>) {
@@ -4556,7 +4298,6 @@ pub fn mode_tags() -> (String, Option<String>, Option<u64>, Option<u64>) {
         .unwrap_or_default();
     (mode, staged, activation, lag)
 }
-
 /// Legacy lane-RBC mismatch labels retained only by lane-local telemetry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RbcMismatchKind {
@@ -4567,7 +4308,6 @@ pub enum RbcMismatchKind {
     /// Merkle root for chunk digests does not match the expected root.
     ChunkRoot,
 }
-
 impl RbcMismatchKind {
     /// Stable telemetry label.
     #[must_use]
@@ -4579,19 +4319,16 @@ impl RbcMismatchKind {
         }
     }
 }
-
 #[derive(Default)]
 struct AvailabilityStats {
     total_votes: u64,
     per_peer: BTreeMap<PeerId, CollectorEntry>,
 }
-
 #[derive(Clone)]
 struct CollectorEntry {
     idx: u64,
     votes: u64,
 }
-
 /// Snapshot entry describing availability votes ingested by a collector.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AvailabilityCollectorSnapshot {
@@ -4602,7 +4339,6 @@ pub struct AvailabilityCollectorSnapshot {
     /// Number of availability votes ingested by this collector.
     pub votes_ingested: u64,
 }
-
 /// Aggregated availability vote ingestion snapshot for the telemetry route.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AvailabilitySnapshot {
@@ -4611,7 +4347,6 @@ pub struct AvailabilitySnapshot {
     /// Per-collector vote counts keyed by topology index and peer id.
     pub collectors: Vec<AvailabilityCollectorSnapshot>,
 }
-
 /// Aggregated RBC backlog metrics snapshot for the telemetry route.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RbcBacklogSnapshot {
@@ -4622,7 +4357,6 @@ pub struct RbcBacklogSnapshot {
     /// Number of sessions whose local chunk delivery is still incomplete.
     pub pending_sessions: u64,
 }
-
 /// Pending pre-INIT RBC stash entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PendingRbcEntrySnapshot {
@@ -4651,7 +4385,6 @@ pub struct PendingRbcEntrySnapshot {
     /// Age in milliseconds since the first pending message was recorded.
     pub age_ms: u64,
 }
-
 impl Default for PendingRbcEntrySnapshot {
     fn default() -> Self {
         Self {
@@ -4670,7 +4403,6 @@ impl Default for PendingRbcEntrySnapshot {
         }
     }
 }
-
 /// Aggregated pending RBC stash metrics.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PendingRbcSnapshot {
@@ -4727,7 +4459,6 @@ pub struct PendingRbcSnapshot {
     /// Pending sessions with per-session drop counters.
     pub entries: Vec<PendingRbcEntrySnapshot>,
 }
-
 /// Process-local phase-latency and retained compatibility-counter snapshot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PhaseLatenciesSnapshot {
@@ -4782,7 +4513,6 @@ pub struct PhaseLatenciesSnapshot {
     /// Block-created messages rejected due to proposal mismatch.
     pub block_created_proposal_mismatch_total: u64,
 }
-
 fn lock_operator_status_slot<T>(
     slot: &'static Mutex<T>,
     label: &'static str,
@@ -4797,7 +4527,6 @@ fn lock_operator_status_slot<T>(
         }
     }
 }
-
 static SETTLEMENT_STATUS: OnceLock<Mutex<SettlementStatusState>> = OnceLock::new();
 static LANE_ACTIVITY: OnceLock<Mutex<Vec<LaneActivitySnapshot>>> = OnceLock::new();
 static PIPELINE_EXECUTION: OnceLock<Mutex<PipelineExecutionSnapshot>> = OnceLock::new();
@@ -4825,27 +4554,21 @@ static TX_QUEUE_SATURATED_BY_COUNT: AtomicBool = AtomicBool::new(false);
 static TX_QUEUE_SATURATED_BY_BYTES: AtomicBool = AtomicBool::new(false);
 static TX_QUEUE_SATURATED_BY_AGE: AtomicBool = AtomicBool::new(false);
 static TX_QUEUE_OLDEST_QUEUED_AGE_MS: AtomicU64 = AtomicU64::new(0);
-
 const LANE_RELAY_ENVELOPES_CAP: usize = 64;
 pub(crate) const LANE_PAYLOAD_OWNERSHIPS_CAP: usize = 128;
 pub(crate) const COMMITTED_LANE_BLOCKS_CAP: usize = 128;
-
 fn availability_slot() -> &'static Mutex<AvailabilityStats> {
     AVAILABILITY_STATS.get_or_init(|| Mutex::new(AvailabilityStats::default()))
 }
-
 fn qc_latency_slot() -> &'static Mutex<BTreeMap<&'static str, u64>> {
     QC_LATENCY_MS.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
-
 fn rbc_backlog_slot() -> &'static Mutex<RbcBacklogSnapshot> {
     RBC_BACKLOG.get_or_init(|| Mutex::new(RbcBacklogSnapshot::default()))
 }
-
 fn pending_rbc_slot() -> &'static Mutex<PendingRbcSnapshot> {
     PENDING_RBC_STATE.get_or_init(|| Mutex::new(PendingRbcSnapshot::default()))
 }
-
 /// Actor responsible for paying a Nexus fee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NexusFeePayer {
@@ -4854,7 +4577,6 @@ pub enum NexusFeePayer {
     /// A sponsor covered the fee.
     Sponsor,
 }
-
 /// Aggregated Nexus fee debit outcomes for status/telemetry surfacing.
 #[derive(Clone, Debug, Default)]
 pub struct NexusFeeSnapshot {
@@ -4879,7 +4601,6 @@ pub struct NexusFeeSnapshot {
     /// Most recent error message (if any).
     pub last_error: Option<String>,
 }
-
 /// Outcome emitted when attempting to debit Nexus fees.
 #[derive(Clone, Debug)]
 pub enum NexusFeeEvent {
@@ -4913,7 +4634,6 @@ pub enum NexusFeeEvent {
         reason: String,
     },
 }
-
 /// Per-lane staking summary for Nexus public lanes.
 #[derive(Clone, Debug)]
 pub struct NexusStakingLaneSnapshot {
@@ -4926,7 +4646,6 @@ pub struct NexusStakingLaneSnapshot {
     /// Total slashes applied.
     pub slash_total: u64,
 }
-
 impl Default for NexusStakingLaneSnapshot {
     fn default() -> Self {
         Self {
@@ -4937,31 +4656,26 @@ impl Default for NexusStakingLaneSnapshot {
         }
     }
 }
-
 /// Aggregated Nexus staking snapshot (all lanes).
 #[derive(Clone, Debug, Default)]
 pub struct NexusStakingSnapshot {
     /// Per-lane staking summaries.
     pub lanes: Vec<NexusStakingLaneSnapshot>,
 }
-
 // Whether this node has been removed from the world state (peer unregistered).
 static LOCAL_REMOVED_FROM_WORLD: AtomicBool = AtomicBool::new(false);
-
 /// Record whether the local peer is present in the world state.
 pub fn set_local_removed_from_world(removed: bool) {
     #[cfg(test)]
     let _guard = local_removed_test_guard();
     LOCAL_REMOVED_FROM_WORLD.store(removed, Ordering::Relaxed);
 }
-
 /// Check if the local peer has been removed from the world state.
 pub fn local_peer_removed() -> bool {
     #[cfg(test)]
     let _guard = local_removed_test_guard();
     LOCAL_REMOVED_FROM_WORLD.load(Ordering::Relaxed)
 }
-
 /// Outcome classification for settlement telemetry snapshots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettlementOutcomeKind {
@@ -4970,7 +4684,6 @@ pub enum SettlementOutcomeKind {
     /// Settlement execution failed (preconditions or execution error).
     Failure,
 }
-
 impl SettlementOutcomeKind {
     /// String label used for metrics and status JSON.
     #[inline]
@@ -4981,7 +4694,6 @@ impl SettlementOutcomeKind {
         }
     }
 }
-
 /// Aggregated settlement telemetry counters captured by the local peer.
 #[derive(Clone, Debug, Default)]
 pub struct SettlementStatusSnapshot {
@@ -4990,7 +4702,6 @@ pub struct SettlementStatusSnapshot {
     /// Payment-versus-payment telemetry snapshot.
     pub pvp: PvpSettlementSnapshot,
 }
-
 /// Derived counters and the last event snapshot for `DvP` settlements.
 #[derive(Clone, Debug, Default)]
 pub struct DvpSettlementSnapshot {
@@ -5005,7 +4716,6 @@ pub struct DvpSettlementSnapshot {
     /// Last observed `DvP` settlement event.
     pub last_event: Option<DvpSettlementEventSnapshot>,
 }
-
 /// Telemetry snapshot describing a single `DvP` settlement event.
 #[derive(Clone, Debug)]
 pub struct DvpSettlementEventSnapshot {
@@ -5028,7 +4738,6 @@ pub struct DvpSettlementEventSnapshot {
     /// Whether the payment leg remained committed after execution.
     pub payment_committed: bool,
 }
-
 impl Default for DvpSettlementEventSnapshot {
     fn default() -> Self {
         Self {
@@ -5044,7 +4753,6 @@ impl Default for DvpSettlementEventSnapshot {
         }
     }
 }
-
 /// Derived counters and the last event snapshot for `PvP` settlements.
 #[derive(Clone, Debug, Default)]
 pub struct PvpSettlementSnapshot {
@@ -5059,7 +4767,6 @@ pub struct PvpSettlementSnapshot {
     /// Last observed `PvP` settlement event.
     pub last_event: Option<PvpSettlementEventSnapshot>,
 }
-
 /// Telemetry snapshot describing a single `PvP` settlement event.
 #[derive(Clone, Debug)]
 pub struct PvpSettlementEventSnapshot {
@@ -5084,7 +4791,6 @@ pub struct PvpSettlementEventSnapshot {
     /// Observed FX window in milliseconds (time between committed legs).
     pub fx_window_ms: Option<u64>,
 }
-
 impl Default for PvpSettlementEventSnapshot {
     fn default() -> Self {
         Self {
@@ -5101,17 +4807,14 @@ impl Default for PvpSettlementEventSnapshot {
         }
     }
 }
-
 #[derive(Clone, Debug, Default)]
 struct SettlementStatusState {
     dvp: DvpSettlementSnapshot,
     pvp: PvpSettlementSnapshot,
 }
-
 fn settlement_status_slot() -> &'static Mutex<SettlementStatusState> {
     SETTLEMENT_STATUS.get_or_init(|| Mutex::new(SettlementStatusState::default()))
 }
-
 /// Update payload produced when a `DvP` settlement completes.
 #[derive(Clone, Debug)]
 pub struct DvpSettlementEventUpdate {
@@ -5134,7 +4837,6 @@ pub struct DvpSettlementEventUpdate {
     /// Whether the payment leg remained committed after execution.
     pub payment_committed: bool,
 }
-
 /// Update payload produced when a `PvP` settlement completes.
 #[derive(Clone, Debug)]
 pub struct PvpSettlementEventUpdate {
@@ -5159,7 +4861,6 @@ pub struct PvpSettlementEventUpdate {
     /// Observed FX window in milliseconds (time between committed legs).
     pub fx_window_ms: Option<u64>,
 }
-
 /// Record a `DvP` settlement telemetry update.
 pub fn record_dvp_settlement_event(update: DvpSettlementEventUpdate) {
     let mut guard = lock_operator_status_slot(settlement_status_slot(), "settlement status");
@@ -5191,7 +4892,6 @@ pub fn record_dvp_settlement_event(update: DvpSettlementEventUpdate) {
         payment_committed: update.payment_committed,
     });
 }
-
 /// Record a `PvP` settlement telemetry update.
 pub fn record_pvp_settlement_event(update: PvpSettlementEventUpdate) {
     let mut guard = lock_operator_status_slot(settlement_status_slot(), "settlement status");
@@ -5224,7 +4924,6 @@ pub fn record_pvp_settlement_event(update: PvpSettlementEventUpdate) {
         fx_window_ms: update.fx_window_ms,
     });
 }
-
 /// Read-only snapshot of settlement telemetry state.
 pub fn settlement_snapshot() -> SettlementStatusSnapshot {
     let guard = lock_operator_status_slot(settlement_status_slot(), "settlement status");
@@ -5233,7 +4932,6 @@ pub fn settlement_snapshot() -> SettlementStatusSnapshot {
         pvp: guard.pvp.clone(),
     }
 }
-
 /// Per-lane execution summary for operator dashboards.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LaneActivitySnapshot {
@@ -5274,7 +4972,6 @@ pub struct LaneActivitySnapshot {
     /// Quarantine transactions executed in the sequential quarantine lane.
     pub quarantine_executed: u64,
 }
-
 /// Aggregate execution summary for the latest block pipeline run.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PipelineExecutionSnapshot {
@@ -5313,7 +5010,6 @@ pub struct PipelineExecutionSnapshot {
     /// Quarantine transactions executed in the sequential quarantine lane.
     pub quarantine_executed_total: u64,
 }
-
 /// Summary of access-set sources used for IVM transactions in the latest block.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AccessSetSourceSummary {
@@ -5326,7 +5022,6 @@ pub struct AccessSetSourceSummary {
     /// Transactions that fell back to the conservative global set.
     pub conservative_fallback: u64,
 }
-
 /// Per-dataspace execution summary for operator dashboards.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DataspaceActivitySnapshot {
@@ -5337,7 +5032,6 @@ pub struct DataspaceActivitySnapshot {
     /// Transactions executed for this dataspace.
     pub tx_served: u64,
 }
-
 /// Aggregated per-lane RBC backlog snapshot for operator dashboards.
 #[derive(Clone, Copy, Debug, Default, Encode, Decode, PartialEq, Eq)]
 pub struct LaneRbcSnapshot {
@@ -5352,7 +5046,6 @@ pub struct LaneRbcSnapshot {
     /// Total RBC payload bytes attributed to this lane across active sessions.
     pub rbc_bytes_total: u64,
 }
-
 /// Aggregated per-dataspace RBC backlog snapshot for operator dashboards.
 #[derive(Clone, Copy, Debug, Default, Encode, Decode, PartialEq, Eq)]
 pub struct DataspaceRbcSnapshot {
@@ -5369,7 +5062,6 @@ pub struct DataspaceRbcSnapshot {
     /// Total RBC payload bytes attributed to this dataspace across active sessions.
     pub rbc_bytes_total: u64,
 }
-
 /// Aggregated per-lane commitment summary for recently committed blocks.
 #[derive(Clone, Copy, Debug)]
 pub struct LaneCommitmentSnapshot {
@@ -5388,7 +5080,6 @@ pub struct LaneCommitmentSnapshot {
     /// Block hash identifying the commitment.
     pub block_hash: HashOf<BlockHeader>,
 }
-
 /// Aggregated per-dataspace commitment summary for recently committed blocks.
 #[derive(Clone, Copy, Debug)]
 pub struct DataspaceCommitmentSnapshot {
@@ -5409,7 +5100,6 @@ pub struct DataspaceCommitmentSnapshot {
     /// Block hash identifying the commitment.
     pub block_hash: HashOf<BlockHeader>,
 }
-
 /// Execution readiness for a certified standalone lane-local block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommittedLaneBlockExecutionStatus {
@@ -5432,7 +5122,6 @@ pub enum CommittedLaneBlockExecutionStatus {
     /// Accepted entrypoints were directly applied to local WSV without a canonical block append.
     StateAppliedByDirectExecution,
 }
-
 impl CommittedLaneBlockExecutionStatus {
     /// Stable operator-facing label.
     #[must_use]
@@ -5465,7 +5154,6 @@ impl CommittedLaneBlockExecutionStatus {
             }
         }
     }
-
     /// Whether the committed lane block can be handed to a standalone executor.
     #[must_use]
     pub const fn executable_payload_available(self) -> bool {
@@ -5482,7 +5170,6 @@ impl CommittedLaneBlockExecutionStatus {
         }
     }
 }
-
 /// Standalone lane-local block that has proposal, prepare QC, and commit QC.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommittedLaneBlockSnapshot {
@@ -5507,7 +5194,6 @@ pub struct CommittedLaneBlockSnapshot {
     /// Commit QC for the proposal.
     pub commit_qc: LaneBlockQcV1,
 }
-
 impl CommittedLaneBlockSnapshot {
     /// Build an operator snapshot from one fully validated committed lane session.
     pub(crate) fn from_committed_session_with_execution_status(
@@ -5528,14 +5214,12 @@ impl CommittedLaneBlockSnapshot {
             commit_qc: session.commit_qc.clone(),
         }
     }
-
     /// Whether the committed lane block has enough payload material for execution.
     #[must_use]
     pub const fn executable_payload_available(&self) -> bool {
         self.execution_status.executable_payload_available()
     }
 }
-
 /// Bounded lane diagnostics reconstructed from current State and durable Kura evidence.
 ///
 /// This snapshot intentionally excludes adapter/session caches so a restarted peer reports
@@ -5549,7 +5233,6 @@ pub struct DurableLaneDiagnosticsSnapshot {
     /// Durable certified-session summaries.
     pub lane_block_sessions: Vec<SumeragiLaneBlockSessionStatus>,
 }
-
 /// Governance manifest snapshot for a lane.
 #[derive(Clone, Debug, Default)]
 pub struct LaneGovernanceSnapshot {
@@ -5582,7 +5265,6 @@ pub struct LaneGovernanceSnapshot {
     /// Privacy commitments advertised by the lane manifest.
     pub privacy_commitments: Vec<LanePrivacyCommitmentSnapshot>,
 }
-
 /// Snapshot of a privacy commitment registered for a lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LanePrivacyCommitmentSnapshot {
@@ -5591,7 +5273,6 @@ pub struct LanePrivacyCommitmentSnapshot {
     /// Scheme-specific metadata captured at registry time.
     pub scheme: LanePrivacyCommitmentSchemeSnapshot,
 }
-
 /// Scheme metadata surfaced for observability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LanePrivacyCommitmentSchemeSnapshot {
@@ -5603,7 +5284,6 @@ pub enum LanePrivacyCommitmentSchemeSnapshot {
         max_depth: u8,
     },
 }
-
 impl From<&LanePrivacyCommitment> for LanePrivacyCommitmentSnapshot {
     fn from(commitment: &LanePrivacyCommitment) -> Self {
         let scheme = match commitment.scheme() {
@@ -5618,12 +5298,10 @@ impl From<&LanePrivacyCommitment> for LanePrivacyCommitmentSnapshot {
         }
     }
 }
-
 fn hash_of_bytes<T>(hash: HashOf<T>) -> [u8; 32] {
     let untyped: UntypedHash = hash.into();
     untyped.into()
 }
-
 /// Runtime-upgrade governance hook snapshot.
 #[derive(Clone, Debug, Default)]
 pub struct LaneRuntimeUpgradeHookSnapshot {
@@ -5636,15 +5314,12 @@ pub struct LaneRuntimeUpgradeHookSnapshot {
     /// Allowed metadata identifiers when an allowlist is configured.
     pub allowed_ids: Vec<String>,
 }
-
 fn nexus_fee_slot() -> &'static Mutex<NexusFeeSnapshot> {
     NEXUS_FEE_STATUS.get_or_init(|| Mutex::new(NexusFeeSnapshot::default()))
 }
-
 fn nexus_staking_slot() -> &'static Mutex<BTreeMap<LaneId, NexusStakingLaneSnapshot>> {
     NEXUS_STAKING_STATUS.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
-
 /// Record a Nexus fee debit outcome for later status/telemetry surfacing.
 pub fn record_nexus_fee_event(event: NexusFeeEvent) {
     #[cfg(test)]
@@ -5695,7 +5370,6 @@ pub fn record_nexus_fee_event(event: NexusFeeEvent) {
         }
     }
 }
-
 fn update_staking_lane<F>(lane_id: LaneId, mut update: F)
 where
     F: FnMut(&mut NexusStakingLaneSnapshot),
@@ -5713,7 +5387,6 @@ where
         });
     update(entry);
 }
-
 fn adjust_quantity_value(current: Quantity, delta: &Quantity, increase: bool) -> Quantity {
     if delta.is_zero() {
         return current;
@@ -5740,14 +5413,12 @@ fn adjust_quantity_value(current: Quantity, delta: &Quantity, increase: bool) ->
         })
     }
 }
-
 /// Record a bonded stake delta for a Nexus lane.
 pub fn record_public_lane_bonded_delta(lane_id: LaneId, amount: &Quantity, increase: bool) {
     update_staking_lane(lane_id, |snapshot| {
         snapshot.bonded = adjust_quantity_value(snapshot.bonded.clone(), amount, increase);
     });
 }
-
 /// Record a pending-unbond delta for a Nexus lane.
 pub fn record_public_lane_pending_unbond_delta(lane_id: LaneId, amount: &Quantity, increase: bool) {
     update_staking_lane(lane_id, |snapshot| {
@@ -5755,14 +5426,12 @@ pub fn record_public_lane_pending_unbond_delta(lane_id: LaneId, amount: &Quantit
             adjust_quantity_value(snapshot.pending_unbond.clone(), amount, increase);
     });
 }
-
 /// Record a slash event for a Nexus lane.
 pub fn record_public_lane_slash(lane_id: LaneId) {
     update_staking_lane(lane_id, |snapshot| {
         snapshot.slash_total = snapshot.slash_total.saturating_add(1);
     });
 }
-
 /// Remove accumulated Nexus public-lane staking status for reset lanes.
 pub fn reset_public_lane_staking_lanes(lanes_to_reset: &BTreeSet<LaneId>) {
     if lanes_to_reset.is_empty() {
@@ -5772,18 +5441,15 @@ pub fn reset_public_lane_staking_lanes(lanes_to_reset: &BTreeSet<LaneId>) {
     let Some(_guard) = try_reentrant_test_guard(&RBC_STATUS_TEST_LOCK) else {
         return;
     };
-
     let mut guard = lock_operator_status_slot(nexus_staking_slot(), "nexus staking status");
     for lane_id in lanes_to_reset {
         guard.remove(lane_id);
     }
 }
-
 /// Latest aggregated Nexus fee snapshot.
 pub fn nexus_fee_snapshot() -> NexusFeeSnapshot {
     lock_operator_status_slot(nexus_fee_slot(), "nexus fee status").clone()
 }
-
 /// Latest aggregated Nexus staking snapshot.
 pub fn nexus_staking_snapshot() -> NexusStakingSnapshot {
     let guard = lock_operator_status_slot(nexus_staking_slot(), "nexus staking status");
@@ -5791,21 +5457,18 @@ pub fn nexus_staking_snapshot() -> NexusStakingSnapshot {
     lanes.sort_by_key(|lane| lane.lane_id.as_u32());
     NexusStakingSnapshot { lanes }
 }
-
 /// Shared lock for tests that mutate global Nexus fee state.
 #[cfg(not(test))]
 pub fn nexus_fee_test_lock() -> &'static std::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
-
 /// Shared lock for tests that mutate global Nexus fee state.
 #[cfg(test)]
 pub(crate) fn nexus_fee_test_lock() -> &'static NexusFeeTestLock {
     static LOCK: NexusFeeTestLock = NexusFeeTestLock;
     &LOCK
 }
-
 /// Clear Nexus economics snapshots (test-only helper).
 pub fn reset_nexus_economics_for_tests() {
     #[cfg(test)]
@@ -5819,7 +5482,6 @@ pub fn reset_nexus_economics_for_tests() {
         guard.clear();
     }
 }
-
 /// Reasons a peer-consensus-key admission can be rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PeerKeyPolicyRejectReason {
@@ -5838,7 +5500,6 @@ pub enum PeerKeyPolicyRejectReason {
     /// Consensus-key identifier collides with an existing id for the same public key.
     IdentifierCollision,
 }
-
 impl PeerKeyPolicyRejectReason {
     /// Return a stable label for telemetry.
     #[must_use]
@@ -5854,10 +5515,8 @@ impl PeerKeyPolicyRejectReason {
         }
     }
 }
-
 static PEER_KEY_POLICY_REJECT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static PEER_KEY_POLICY_LAST_REASON: OnceLock<Mutex<Option<&'static str>>> = OnceLock::new();
-
 /// Record a peer consensus-key policy rejection.
 pub fn record_peer_key_policy_reject(reason: PeerKeyPolicyRejectReason) {
     #[cfg(test)]
@@ -5870,7 +5529,6 @@ pub fn record_peer_key_policy_reject(reason: PeerKeyPolicyRejectReason) {
         "peer key policy reason",
     ) = Some(reason.as_str());
 }
-
 /// Reset peer-key policy diagnostics in isolated tests.
 #[cfg(test)]
 pub(crate) fn reset_peer_key_policy_counters_for_tests() {
@@ -5881,7 +5539,6 @@ pub(crate) fn reset_peer_key_policy_counters_for_tests() {
         "peer key policy reason",
     ) = None;
 }
-
 /// Read the compact peer-key rejection diagnostic in isolated unit tests.
 #[cfg(test)]
 pub(crate) fn peer_key_policy_reject_snapshot_for_tests() -> (u64, Option<&'static str>) {
@@ -5892,22 +5549,17 @@ pub(crate) fn peer_key_policy_reject_snapshot_for_tests() -> (u64, Option<&'stat
     );
     (total, last_reason)
 }
-
 const KEY_LIFECYCLE_HISTORY_CAP: usize = 128;
 static KEY_LIFECYCLE_HISTORY: OnceLock<Mutex<VecDeque<ConsensusKeyRecord>>> = OnceLock::new();
-
 fn key_history_slot() -> &'static Mutex<VecDeque<ConsensusKeyRecord>> {
     KEY_LIFECYCLE_HISTORY.get_or_init(|| Mutex::new(VecDeque::new()))
 }
-
 fn checkpoint_history_slot() -> &'static Mutex<VecDeque<ValidatorSetCheckpoint>> {
     VALIDATOR_CHECKPOINT_HISTORY.get_or_init(|| Mutex::new(VecDeque::new()))
 }
-
 fn commit_cert_history_slot() -> &'static Mutex<VecDeque<Qc>> {
     COMMIT_CERT_HISTORY.get_or_init(|| Mutex::new(VecDeque::new()))
 }
-
 /// Record a validator checkpoint for retained archival query routes.
 pub fn record_validator_checkpoint(checkpoint: ValidatorSetCheckpoint) {
     let mut history =
@@ -5917,7 +5569,6 @@ pub fn record_validator_checkpoint(checkpoint: ValidatorSetCheckpoint) {
         history.pop_front();
     }
 }
-
 /// Return retained validator checkpoints newest first.
 #[must_use]
 pub fn validator_checkpoint_history() -> Vec<ValidatorSetCheckpoint> {
@@ -5927,7 +5578,6 @@ pub fn validator_checkpoint_history() -> Vec<ValidatorSetCheckpoint> {
         .cloned()
         .collect()
 }
-
 /// Record a legacy commit certificate for archival query and fixture consumers.
 ///
 /// Protocol-v2 finality remains represented exclusively by its typed finality
@@ -5945,7 +5595,6 @@ pub fn record_commit_qc(cert: Qc) {
         history.pop_front();
     }
 }
-
 /// Return retained legacy commit certificates newest first.
 #[must_use]
 pub fn commit_qc_history() -> Vec<Qc> {
@@ -5962,14 +5611,12 @@ pub fn commit_qc_history() -> Vec<Qc> {
     });
     entries
 }
-
 /// Raw finality fixture hook for dependent-crate tests.
 #[cfg(all(feature = "iroha-core-tests", feature = "finality-test-fixtures"))]
 #[doc(hidden)]
 pub fn record_commit_qc_for_tests(cert: Qc) {
     record_commit_qc(cert);
 }
-
 /// Record a consensus-key lifecycle entry for the remaining legacy Torii endpoint.
 pub fn record_consensus_key(record: ConsensusKeyRecord) {
     let mut history = lock_operator_status_slot(key_history_slot(), "key lifecycle history");
@@ -5979,7 +5626,6 @@ pub fn record_consensus_key(record: ConsensusKeyRecord) {
         history.pop_front();
     }
 }
-
 /// Return consensus-key lifecycle entries newest first.
 #[must_use]
 pub fn consensus_key_history() -> Vec<ConsensusKeyRecord> {
@@ -5989,30 +5635,25 @@ pub fn consensus_key_history() -> Vec<ConsensusKeyRecord> {
         .cloned()
         .collect()
 }
-
 /// Clear consensus-key lifecycle history in tests.
 #[cfg(test)]
 pub fn reset_consensus_keys_for_tests() {
     lock_operator_status_slot(key_history_slot(), "key lifecycle history").clear();
 }
-
 /// Clear validator checkpoint history in isolated tests.
 #[cfg(test)]
 pub fn reset_validator_checkpoints_for_tests() {
     lock_operator_status_slot(checkpoint_history_slot(), "validator checkpoint history").clear();
 }
-
 /// Clear legacy commit-certificate history in isolated tests.
 #[cfg(test)]
 pub fn reset_commit_certs_for_tests() {
     lock_operator_status_slot(commit_cert_history_slot(), "commit certificate history").clear();
 }
-
 static VRF_PENALTY_EPOCH: AtomicU64 = AtomicU64::new(0);
 static VRF_NON_REVEAL_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VRF_NO_PARTICIPATION_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VRF_LATE_REVEALS_TOTAL: AtomicU64 = AtomicU64::new(0);
-
 /// Return the legacy VRF penalty counters still consumed by one Torii route.
 #[must_use]
 pub fn vrf_penalty_snapshot() -> (u64, u64, u64, u64) {
@@ -6023,7 +5664,6 @@ pub fn vrf_penalty_snapshot() -> (u64, u64, u64, u64) {
         VRF_LATE_REVEALS_TOTAL.load(Ordering::Relaxed),
     )
 }
-
 /// Worker-loop queue identifiers used by the remaining async adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkerQueueKind {
@@ -6042,10 +5682,8 @@ pub enum WorkerQueueKind {
     /// Background post requests.
     Background,
 }
-
 static WORKER_QUEUE_DEPTHS: [AtomicU64; 7] = [const { AtomicU64::new(0) }; 7];
 static WORKER_QUEUE_DROPS: [AtomicU64; 7] = [const { AtomicU64::new(0) }; 7];
-
 const fn worker_queue_index(kind: WorkerQueueKind) -> usize {
     match kind {
         WorkerQueueKind::Votes => 0,
@@ -6057,113 +5695,90 @@ const fn worker_queue_index(kind: WorkerQueueKind) -> usize {
         WorkerQueueKind::Background => 6,
     }
 }
-
 /// Record an enqueue for the given adapter queue.
 pub fn record_worker_queue_enqueue(kind: WorkerQueueKind) {
     WORKER_QUEUE_DEPTHS[worker_queue_index(kind)].fetch_add(1, Ordering::Relaxed);
 }
-
 /// Record a dropped enqueue for the given adapter queue.
 pub fn record_worker_queue_drop(kind: WorkerQueueKind) {
     WORKER_QUEUE_DROPS[worker_queue_index(kind)].fetch_add(1, Ordering::Relaxed);
 }
-
 static GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
-
 /// Set the last observed propose-phase latency in milliseconds.
 pub fn set_phase_propose_ms(ms: u64) {
     store_phase_ms(&LAST_PROPOSE_MS, &MAX_PROPOSE_MS, ms);
 }
-
 /// Set the last observed data-availability collection latency in milliseconds.
 pub fn set_phase_collect_da_ms(ms: u64) {
     store_phase_ms(&LAST_COLLECT_DA_MS, &MAX_COLLECT_DA_MS, ms);
 }
-
 /// Set the last observed prevote collection latency in milliseconds.
 pub fn set_phase_collect_prevote_ms(ms: u64) {
     store_phase_ms(&LAST_COLLECT_PREVOTE_MS, &MAX_COLLECT_PREVOTE_MS, ms);
 }
-
 /// Set the last observed precommit collection latency in milliseconds.
 pub fn set_phase_collect_precommit_ms(ms: u64) {
     store_phase_ms(&LAST_COLLECT_PRECOMMIT_MS, &MAX_COLLECT_PRECOMMIT_MS, ms);
 }
-
 /// Set the last observed redundant collector fan-out latency in milliseconds.
 pub fn set_phase_collect_aggregator_ms(ms: u64) {
     store_phase_ms(&LAST_COLLECT_AGG_MS, &MAX_COLLECT_AGG_MS, ms);
 }
-
 /// Set the last observed commit-phase latency in milliseconds.
 pub fn set_phase_commit_ms(ms: u64) {
     store_phase_ms(&LAST_COMMIT_MS, &MAX_COMMIT_MS, ms);
 }
-
 fn store_phase_ms(latest: &AtomicU64, maximum: &AtomicU64, ms: u64) {
     latest.store(ms, Ordering::Relaxed);
     maximum.fetch_max(ms, Ordering::Relaxed);
 }
-
 /// Set the EMA propose-phase latency in milliseconds.
 pub fn set_phase_propose_ema_ms(ms: u64) {
     LAST_PROPOSE_EMA_MS.store(ms, Ordering::Relaxed);
 }
-
 /// Set the EMA data-availability collection latency in milliseconds.
 pub fn set_phase_collect_da_ema_ms(ms: u64) {
     LAST_COLLECT_DA_EMA_MS.store(ms, Ordering::Relaxed);
 }
-
 /// Set the EMA prevote collection latency in milliseconds.
 pub fn set_phase_collect_prevote_ema_ms(ms: u64) {
     LAST_COLLECT_PREVOTE_EMA_MS.store(ms, Ordering::Relaxed);
 }
-
 /// Set the EMA precommit collection latency in milliseconds.
 pub fn set_phase_collect_precommit_ema_ms(ms: u64) {
     LAST_COLLECT_PRECOMMIT_EMA_MS.store(ms, Ordering::Relaxed);
 }
-
 /// Set the EMA redundant collector fan-out latency in milliseconds.
 pub fn set_phase_collect_aggregator_ema_ms(ms: u64) {
     LAST_COLLECT_AGG_EMA_MS.store(ms, Ordering::Relaxed);
 }
-
 /// Set the EMA commit-phase latency in milliseconds.
 pub fn set_phase_commit_ema_ms(ms: u64) {
     LAST_COMMIT_EMA_MS.store(ms, Ordering::Relaxed);
 }
-
 /// Set the EMA aggregate pipeline latency in milliseconds.
 pub fn set_phase_pipeline_total_ema_ms(ms: u64) {
     LAST_PIPELINE_TOTAL_EMA_MS.store(ms, Ordering::Relaxed);
 }
-
 /// Increment the collector-exhaustion gossip fallback counter.
 pub fn inc_gossip_fallback() {
     GOSSIP_FALLBACK_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
-
 /// Increment the counter for block-created messages rejected by the lock gate.
 pub fn inc_block_created_dropped_by_lock() {
     BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
-
 /// Increment the counter for block-created hint mismatches.
 pub fn inc_block_created_hint_mismatch() {
     BLOCK_CREATED_HINT_MISMATCH_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
-
 /// Increment the counter for block-created proposal mismatches.
 pub fn inc_block_created_proposal_mismatch() {
     BLOCK_CREATED_PROPOSAL_MISMATCH_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
-
 fn phase_pipeline_total(values: [u64; 5]) -> u64 {
     values.into_iter().fold(0_u64, u64::saturating_add)
 }
-
 /// Snapshot process-local per-phase latency diagnostics.
 #[must_use]
 pub fn phase_latencies_snapshot() -> PhaseLatenciesSnapshot {
@@ -6179,7 +5794,6 @@ pub fn phase_latencies_snapshot() -> PhaseLatenciesSnapshot {
     let collect_precommit_max_ms = MAX_COLLECT_PRECOMMIT_MS.load(Ordering::Relaxed);
     let collect_aggregator_max_ms = MAX_COLLECT_AGG_MS.load(Ordering::Relaxed);
     let commit_max_ms = MAX_COMMIT_MS.load(Ordering::Relaxed);
-
     PhaseLatenciesSnapshot {
         propose_ms,
         collect_da_ms,
@@ -6223,7 +5837,6 @@ pub fn phase_latencies_snapshot() -> PhaseLatenciesSnapshot {
             .load(Ordering::Relaxed),
     }
 }
-
 /// Record an availability vote ingested by the local collector.
 pub fn record_availability_vote(collector_idx: u64, peer: &PeerId) {
     let mut stats = lock_operator_status_slot(availability_slot(), "availability vote stats");
@@ -6238,7 +5851,6 @@ pub fn record_availability_vote(collector_idx: u64, peer: &PeerId) {
     entry.idx = collector_idx;
     entry.votes = entry.votes.saturating_add(1);
 }
-
 /// Snapshot process-local availability vote ingestion counters.
 #[must_use]
 pub fn availability_snapshot() -> AvailabilitySnapshot {
@@ -6258,12 +5870,10 @@ pub fn availability_snapshot() -> AvailabilitySnapshot {
         collectors,
     }
 }
-
 /// Record the last observed QC assembly latency for a stable kind label.
 pub fn record_qc_latency(kind: &'static str, ms: u64) {
     lock_operator_status_slot(qc_latency_slot(), "QC latency stats").insert(kind, ms);
 }
-
 /// Snapshot QC assembly latencies sorted by kind label.
 #[must_use]
 pub fn qc_latency_snapshot() -> Vec<(String, u64)> {
@@ -6272,7 +5882,6 @@ pub fn qc_latency_snapshot() -> Vec<(String, u64)> {
         .map(|(kind, ms)| ((*kind).to_owned(), *ms))
         .collect()
 }
-
 /// Replace the aggregated RBC backlog telemetry snapshot.
 pub fn set_rbc_backlog_snapshot(
     total_missing_chunks: u64,
@@ -6285,20 +5894,17 @@ pub fn set_rbc_backlog_snapshot(
         pending_sessions,
     };
 }
-
 /// Snapshot the aggregated RBC backlog telemetry.
 #[must_use]
 pub fn rbc_backlog_snapshot() -> RbcBacklogSnapshot {
     *lock_operator_status_slot(rbc_backlog_slot(), "RBC backlog snapshot")
 }
-
 /// Replace the pending-RBC compatibility snapshot.
 pub fn set_pending_rbc_snapshot(snapshot: PendingRbcSnapshot) {
     #[cfg(test)]
     let _guard = rbc_status_test_guard();
     *lock_operator_status_slot(pending_rbc_slot(), "pending RBC snapshot") = snapshot;
 }
-
 /// Snapshot pending-RBC compatibility diagnostics.
 #[must_use]
 pub fn pending_rbc_snapshot() -> PendingRbcSnapshot {
@@ -6306,19 +5912,15 @@ pub fn pending_rbc_snapshot() -> PendingRbcSnapshot {
     let _guard = rbc_status_test_guard();
     lock_operator_status_slot(pending_rbc_slot(), "pending RBC snapshot").clone()
 }
-
 #[cfg(test)]
 mod telemetry_compatibility_tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{block::BlockHeader, peer::PeerId};
-
     use super::{PendingRbcEntrySnapshot, PendingRbcSnapshot, RbcBacklogSnapshot};
-
     #[test]
     fn phase_snapshot_tracks_current_max_ema_and_compatibility_counters() {
         let _guard = super::rbc_status_test_guard();
         super::reset_rbc_backlog_stats_for_tests();
-
         super::set_phase_propose_ms(10);
         super::set_phase_propose_ms(4);
         super::set_phase_collect_da_ms(2);
@@ -6337,7 +5939,6 @@ mod telemetry_compatibility_tests {
         super::inc_block_created_dropped_by_lock();
         super::inc_block_created_hint_mismatch();
         super::inc_block_created_proposal_mismatch();
-
         let snapshot = super::phase_latencies_snapshot();
         assert_eq!(snapshot.propose_ms, 4);
         assert_eq!(snapshot.propose_max_ms, 10);
@@ -6359,25 +5960,20 @@ mod telemetry_compatibility_tests {
         assert_eq!(snapshot.block_created_dropped_by_lock_total, 1);
         assert_eq!(snapshot.block_created_hint_mismatch_total, 1);
         assert_eq!(snapshot.block_created_proposal_mismatch_total, 1);
-
         super::reset_rbc_backlog_stats_for_tests();
         assert_eq!(super::phase_latencies_snapshot(), Default::default());
     }
-
     #[test]
     fn phase_pipeline_totals_saturate() {
         let _guard = super::rbc_status_test_guard();
         super::reset_rbc_backlog_stats_for_tests();
         super::set_phase_propose_ms(u64::MAX);
         super::set_phase_collect_da_ms(1);
-
         let snapshot = super::phase_latencies_snapshot();
         assert_eq!(snapshot.pipeline_total_ms, u64::MAX);
         assert_eq!(snapshot.pipeline_total_max_ms, u64::MAX);
-
         super::reset_rbc_backlog_stats_for_tests();
     }
-
     #[test]
     fn collector_qc_and_rbc_snapshots_roundtrip_and_reset() {
         let _guard = super::rbc_status_test_guard();
@@ -6388,7 +5984,6 @@ mod telemetry_compatibility_tests {
         )
         .expect("derive collector fixture");
         let peer = PeerId::new(key_pair.public_key().clone());
-
         super::record_availability_vote(4, &peer);
         super::record_availability_vote(5, &peer);
         let availability = super::availability_snapshot();
@@ -6397,7 +5992,6 @@ mod telemetry_compatibility_tests {
         assert_eq!(availability.collectors[0].collector_idx, 5);
         assert_eq!(availability.collectors[0].peer, peer);
         assert_eq!(availability.collectors[0].votes_ingested, 2);
-
         super::record_qc_latency("precommit", 30);
         super::record_qc_latency("availability", 10);
         super::record_qc_latency("availability", 20);
@@ -6408,7 +6002,6 @@ mod telemetry_compatibility_tests {
                 ("precommit".to_owned(), 30)
             ]
         );
-
         super::set_rbc_backlog_snapshot(9, 4, 2);
         assert_eq!(
             super::rbc_backlog_snapshot(),
@@ -6418,7 +6011,6 @@ mod telemetry_compatibility_tests {
                 pending_sessions: 2,
             }
         );
-
         let pending = PendingRbcSnapshot {
             sessions: 1,
             session_cap: 8,
@@ -6439,7 +6031,6 @@ mod telemetry_compatibility_tests {
         };
         super::set_pending_rbc_snapshot(pending.clone());
         assert_eq!(super::pending_rbc_snapshot(), pending);
-
         super::reset_rbc_backlog_stats_for_tests();
         assert_eq!(super::availability_snapshot(), Default::default());
         assert!(super::qc_latency_snapshot().is_empty());
@@ -6447,33 +6038,26 @@ mod telemetry_compatibility_tests {
         assert_eq!(super::pending_rbc_snapshot(), Default::default());
     }
 }
-
 /// Count a duplicate transaction skipped by gossip.
 pub fn inc_gossip_duplicate_known_skipped() {
     GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
-
 fn lane_activity_slot() -> &'static Mutex<Vec<LaneActivitySnapshot>> {
     LANE_ACTIVITY.get_or_init(|| Mutex::new(Vec::new()))
 }
-
 fn access_set_source_slot() -> &'static Mutex<AccessSetSourceSummary> {
     ACCESS_SET_SOURCES.get_or_init(|| Mutex::new(AccessSetSourceSummary::default()))
 }
-
 fn dataspace_activity_slot() -> &'static Mutex<Vec<DataspaceActivitySnapshot>> {
     DATASPACE_ACTIVITY.get_or_init(|| Mutex::new(Vec::new()))
 }
-
 fn pipeline_execution_slot() -> &'static Mutex<PipelineExecutionSnapshot> {
     PIPELINE_EXECUTION.get_or_init(|| Mutex::new(PipelineExecutionSnapshot::default()))
 }
-
 /// Replace the lane-activity adapter diagnostic.
 pub fn set_lane_activity_snapshot(entries: Vec<LaneActivitySnapshot>) {
     *lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot") = entries;
 }
-
 /// Replace the aggregate pipeline-execution adapter diagnostic.
 pub fn set_pipeline_execution_snapshot(snapshot: PipelineExecutionSnapshot) {
     #[cfg(test)]
@@ -6482,57 +6066,45 @@ pub fn set_pipeline_execution_snapshot(snapshot: PipelineExecutionSnapshot) {
     };
     *lock_operator_status_slot(pipeline_execution_slot(), "pipeline execution snapshot") = snapshot;
 }
-
 /// Replace the access-set source adapter diagnostic.
 pub fn set_access_set_source_summary(summary: AccessSetSourceSummary) {
     *lock_operator_status_slot(access_set_source_slot(), "access-set source snapshot") = summary;
 }
-
 /// Record the latest conflict rate (basis points) for the pipeline DAG.
 pub fn set_pipeline_conflict_rate_bps(bps: u64) {
     PIPELINE_CONFLICT_RATE_BPS.store(bps, Ordering::Relaxed);
 }
-
 /// Replace the dataspace-activity adapter diagnostic.
 pub fn set_dataspace_activity_snapshot(entries: Vec<DataspaceActivitySnapshot>) {
     *lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot") = entries;
 }
-
 fn lane_commitments_slot() -> &'static Mutex<Vec<LaneCommitmentSnapshot>> {
     LANE_COMMITMENTS.get_or_init(|| Mutex::new(Vec::new()))
 }
-
 fn dataspace_commitments_slot() -> &'static Mutex<Vec<DataspaceCommitmentSnapshot>> {
     DATASPACE_COMMITMENTS.get_or_init(|| Mutex::new(Vec::new()))
 }
-
 fn lane_settlement_commitments_slot() -> &'static Mutex<Vec<LaneBlockCommitment>> {
     LANE_SETTLEMENT_COMMITMENTS.get_or_init(|| Mutex::new(Vec::new()))
 }
-
 fn lane_relay_envelopes_slot() -> &'static Mutex<Vec<LaneRelayEnvelope>> {
     LANE_RELAY_ENVELOPES.get_or_init(|| Mutex::new(Vec::new()))
 }
-
 fn lane_payload_ownerships_slot() -> &'static Mutex<Vec<SumeragiLanePayloadOwnership>> {
     LANE_PAYLOAD_OWNERSHIPS.get_or_init(|| Mutex::new(Vec::new()))
 }
-
 fn committed_lane_blocks_slot() -> &'static Mutex<Vec<CommittedLaneBlockSnapshot>> {
     COMMITTED_LANE_BLOCKS.get_or_init(|| Mutex::new(Vec::new()))
 }
-
 fn lane_block_sessions_slot() -> &'static Mutex<Vec<SumeragiLaneBlockSessionStatus>> {
     LANE_BLOCK_SESSIONS.get_or_init(|| Mutex::new(Vec::new()))
 }
-
 type LaneRelayKey = (
     iroha_data_model::nexus::LaneId,
     iroha_data_model::nexus::DataSpaceId,
     Hash,
     u64,
 );
-
 fn lane_relay_key(envelope: &LaneRelayEnvelope) -> LaneRelayKey {
     (
         envelope.lane_id,
@@ -6541,7 +6113,6 @@ fn lane_relay_key(envelope: &LaneRelayEnvelope) -> LaneRelayKey {
         envelope.block_height,
     )
 }
-
 fn record_relay_error(err: &LaneRelayError) {
     if let Some(metrics) = metrics::global() {
         metrics
@@ -6550,7 +6121,6 @@ fn record_relay_error(err: &LaneRelayError) {
             .inc();
     }
 }
-
 fn upsert_lane_relay_envelope(storage: &mut Vec<LaneRelayEnvelope>, envelope: LaneRelayEnvelope) {
     match envelope.verify().and_then(|()| {
         if envelope.fastpq_proof.is_some() {
@@ -6573,7 +6143,6 @@ fn upsert_lane_relay_envelope(storage: &mut Vec<LaneRelayEnvelope>, envelope: La
             return;
         }
     }
-
     let key = lane_relay_key(&envelope);
     if let Some(existing) = storage
         .iter()
@@ -6608,7 +6177,6 @@ fn upsert_lane_relay_envelope(storage: &mut Vec<LaneRelayEnvelope>, envelope: La
         }
     }
 }
-
 /// Replace the aggregated lane/dataspace commitment snapshots used by Nexus diagnostics.
 pub fn set_lane_commitments(
     lane_entries: Vec<LaneCommitmentSnapshot>,
@@ -6627,7 +6195,6 @@ pub fn set_lane_commitments(
         *guard = dataspace_entries;
     }
 }
-
 /// Replace the aggregated lane settlement commitments used by Nexus diagnostics.
 pub fn set_lane_settlement_commitments(entries: Vec<LaneBlockCommitment>) {
     let mut guard = lock_operator_status_slot(
@@ -6636,7 +6203,6 @@ pub fn set_lane_settlement_commitments(entries: Vec<LaneBlockCommitment>) {
     );
     *guard = entries;
 }
-
 /// Replace the stored lane relay envelopes captured during block sealing.
 pub fn set_lane_relay_envelopes(entries: Vec<LaneRelayEnvelope>) {
     let mut guard =
@@ -6646,14 +6212,12 @@ pub fn set_lane_relay_envelopes(entries: Vec<LaneRelayEnvelope>) {
         upsert_lane_relay_envelope(&mut guard, envelope);
     }
 }
-
 /// Append a single validated lane relay envelope to the cached snapshot.
 pub fn push_lane_relay_envelope(envelope: LaneRelayEnvelope) {
     let mut guard =
         lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot");
     upsert_lane_relay_envelope(&mut guard, envelope);
 }
-
 /// Update the legacy process-local lane ownership snapshot.
 ///
 /// Updates are merged by `(lane_id, dataspace_id)` so a proposal for one lane
@@ -6692,7 +6256,6 @@ pub fn set_lane_payload_ownerships(mut entries: Vec<SumeragiLanePayloadOwnership
         guard.drain(0..drain);
     }
 }
-
 /// Clear all cached lane-local DA/RBC ownership identities.
 pub fn clear_lane_payload_ownerships() {
     let mut guard = lock_operator_status_slot(
@@ -6701,7 +6264,6 @@ pub fn clear_lane_payload_ownerships() {
     );
     guard.clear();
 }
-
 fn upsert_lane_payload_ownership(
     entries: &mut Vec<SumeragiLanePayloadOwnership>,
     entry: SumeragiLanePayloadOwnership,
@@ -6718,7 +6280,6 @@ fn upsert_lane_payload_ownership(
     }
     entries.push(entry);
 }
-
 fn lane_payload_ownership_retention_key(
     entry: &SumeragiLanePayloadOwnership,
 ) -> (u64, u64, u64, u64, u32, u64) {
@@ -6731,7 +6292,6 @@ fn lane_payload_ownership_retention_key(
         entry.dataspace_id.as_u64(),
     )
 }
-
 fn validate_committed_lane_block_snapshot(
     entry: &CommittedLaneBlockSnapshot,
 ) -> Result<(), String> {
@@ -6745,7 +6305,6 @@ fn validate_committed_lane_block_snapshot(
     {
         return Err("summary fields do not match embedded lane-block proposal".to_owned());
     }
-
     let session = crate::lane_consensus::CommittedLaneBlockSession {
         proposal: entry.proposal.clone(),
         prepare_qc: entry.prepare_qc.clone(),
@@ -6754,7 +6313,6 @@ fn validate_committed_lane_block_snapshot(
     crate::lane_consensus::validate_committed_lane_block_session(&session)
         .map_err(|err| err.to_string())
 }
-
 /// Replace the legacy process-local committed lane-block snapshot.
 ///
 /// The public diagnostics endpoint reconstructs authoritative rows from State
@@ -6788,14 +6346,12 @@ pub fn set_committed_lane_blocks(mut entries: Vec<CommittedLaneBlockSnapshot>) {
     );
     *guard = entries;
 }
-
 /// Remove lane-scoped operator status snapshots for lanes whose runtime state was reset.
 pub fn prune_lane_scoped_snapshots(lanes_to_reset: &BTreeSet<LaneId>) {
     if lanes_to_reset.is_empty() {
         return;
     }
     let lane_matches = |lane_id: u32| lanes_to_reset.contains(&LaneId::new(lane_id));
-
     lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot")
         .retain(|entry| !lane_matches(entry.lane_id));
     lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot")
@@ -6829,7 +6385,6 @@ pub fn prune_lane_scoped_snapshots(lanes_to_reset: &BTreeSet<LaneId>) {
     lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot")
         .retain(|entry| !lane_matches(entry.lane_id));
 }
-
 #[cfg(test)]
 pub(crate) fn lane_scoped_status_fingerprint_for_tests() -> String {
     format!(
@@ -6860,11 +6415,9 @@ pub(crate) fn lane_scoped_status_fingerprint_for_tests() -> String {
         lock_operator_status_slot(nexus_fee_slot(), "nexus fee status"),
     )
 }
-
 fn lane_commitments_snapshot() -> Vec<LaneCommitmentSnapshot> {
     lock_operator_status_slot(lane_commitments_slot(), "lane commitments snapshot").clone()
 }
-
 fn dataspace_commitments_snapshot() -> Vec<DataspaceCommitmentSnapshot> {
     lock_operator_status_slot(
         dataspace_commitments_slot(),
@@ -6872,7 +6425,6 @@ fn dataspace_commitments_snapshot() -> Vec<DataspaceCommitmentSnapshot> {
     )
     .clone()
 }
-
 fn lane_settlement_commitments_snapshot() -> Vec<LaneBlockCommitment> {
     lock_operator_status_slot(
         lane_settlement_commitments_slot(),
@@ -6880,12 +6432,10 @@ fn lane_settlement_commitments_snapshot() -> Vec<LaneBlockCommitment> {
     )
     .clone()
 }
-
 /// Return the cached lane relay envelopes used by Nexus diagnostics.
 pub fn lane_relay_envelopes_snapshot() -> Vec<LaneRelayEnvelope> {
     lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot").clone()
 }
-
 /// Return the legacy process-local lane-local DA ownership snapshot.
 pub fn lane_payload_ownerships_snapshot() -> Vec<SumeragiLanePayloadOwnership> {
     lock_operator_status_slot(
@@ -6894,7 +6444,6 @@ pub fn lane_payload_ownerships_snapshot() -> Vec<SumeragiLanePayloadOwnership> {
     )
     .clone()
 }
-
 /// Return the legacy process-local standalone committed lane-block snapshot.
 pub fn committed_lane_blocks_snapshot() -> Vec<CommittedLaneBlockSnapshot> {
     lock_operator_status_slot(
@@ -6903,32 +6452,26 @@ pub fn committed_lane_blocks_snapshot() -> Vec<CommittedLaneBlockSnapshot> {
     )
     .clone()
 }
-
 /// Replace the legacy process-local standalone lane-block session snapshot.
 pub fn set_lane_block_sessions(entries: Vec<SumeragiLaneBlockSessionStatus>) {
     *lock_operator_status_slot(lane_block_sessions_slot(), "lane block sessions snapshot") =
         entries;
 }
-
 /// Return the legacy process-local standalone lane-block session snapshot.
 pub fn lane_block_sessions_snapshot() -> Vec<SumeragiLaneBlockSessionStatus> {
     lock_operator_status_slot(lane_block_sessions_slot(), "lane block sessions snapshot").clone()
 }
-
 fn lane_governance_slot() -> &'static Mutex<Vec<LaneGovernanceSnapshot>> {
     LANE_GOVERNANCE.get_or_init(|| Mutex::new(Vec::new()))
 }
-
 /// Replace the governance manifest snapshot used by Nexus diagnostics.
 pub fn set_lane_governance_snapshot(entries: Vec<LaneGovernanceSnapshot>) {
     *lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot") = entries;
 }
-
 /// Return the cached governance manifest snapshot used by Nexus diagnostics.
 pub fn lane_governance_snapshot() -> Vec<LaneGovernanceSnapshot> {
     lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot").clone()
 }
-
 fn runtime_upgrade_hook_snapshot(hook: &RuntimeUpgradeHook) -> LaneRuntimeUpgradeHookSnapshot {
     LaneRuntimeUpgradeHookSnapshot {
         allow: hook.allow,
@@ -6944,7 +6487,6 @@ fn runtime_upgrade_hook_snapshot(hook: &RuntimeUpgradeHook) -> LaneRuntimeUpgrad
             .unwrap_or_default(),
     }
 }
-
 fn governance_rules_snapshot(
     rules: &GovernanceRules,
 ) -> (
@@ -6971,7 +6513,6 @@ fn governance_rules_snapshot(
         .map(runtime_upgrade_hook_snapshot);
     (validators, quorum, protected_namespaces, runtime_upgrade)
 }
-
 /// Update governance manifest snapshots from the provided registry statuses.
 pub fn update_lane_governance_from_statuses(statuses: &[LaneManifestStatus]) {
     let snapshots = statuses
@@ -7013,7 +6554,6 @@ pub fn update_lane_governance_from_statuses(statuses: &[LaneManifestStatus]) {
         .collect();
     set_lane_governance_snapshot(snapshots);
 }
-
 /// Lane-local Nexus diagnostics kept separate from global v2 consensus status.
 #[derive(Clone, Debug, Default)]
 pub struct StatusSnapshot {
@@ -7047,7 +6587,6 @@ pub struct StatusSnapshot {
     /// Lane governance readiness.
     pub lane_governance: Vec<LaneGovernanceSnapshot>,
 }
-
 fn lane_governance_sealed_summary() -> (u32, Vec<String>, Vec<LaneGovernanceSnapshot>) {
     let lane_governance = lane_governance_snapshot();
     let aliases: Vec<_> = lane_governance
@@ -7058,7 +6597,6 @@ fn lane_governance_sealed_summary() -> (u32, Vec<String>, Vec<LaneGovernanceSnap
     let total = u32::try_from(aliases.len()).unwrap_or(u32::MAX);
     (total, aliases, lane_governance)
 }
-
 /// Snapshot non-consensus Nexus lane diagnostics.
 #[must_use]
 pub fn snapshot() -> StatusSnapshot {
@@ -7082,7 +6620,6 @@ pub fn snapshot() -> StatusSnapshot {
         lane_governance,
     }
 }
-
 /// Latest transaction-queue pressure published for operator queries.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TxQueueBackpressureSnapshot {
@@ -7105,7 +6642,6 @@ pub struct TxQueueBackpressureSnapshot {
     /// Age in milliseconds of the oldest queued transaction.
     pub oldest_queued_age_ms: u64,
 }
-
 /// Record the latest transaction-queue pressure snapshot for operator queries.
 pub fn set_tx_queue_pressure(snapshot: QueuePressureSnapshot) {
     let saturated_by_count = snapshot.saturated_by_count;
@@ -7121,7 +6657,6 @@ pub fn set_tx_queue_pressure(snapshot: QueuePressureSnapshot) {
     TX_QUEUE_SATURATED_BY_AGE.store(snapshot.saturated_by_age, Ordering::Relaxed);
     TX_QUEUE_OLDEST_QUEUED_AGE_MS.store(snapshot.oldest_queued_tx_age_ms, Ordering::Relaxed);
 }
-
 /// Record the latest transaction-queue backpressure snapshot for operator queries.
 pub fn set_tx_queue_backpressure(state: BackpressureState) {
     match state {
@@ -7149,7 +6684,6 @@ pub fn set_tx_queue_backpressure(state: BackpressureState) {
         }
     }
 }
-
 /// Snapshot the recorded transaction-queue backpressure state.
 pub fn tx_queue_backpressure() -> TxQueueBackpressureSnapshot {
     TxQueueBackpressureSnapshot {
@@ -7164,5 +6698,4 @@ pub fn tx_queue_backpressure() -> TxQueueBackpressureSnapshot {
         oldest_queued_age_ms: TX_QUEUE_OLDEST_QUEUED_AGE_MS.load(Ordering::Relaxed),
     }
 }
-
 include!("status/test_guards.rs");

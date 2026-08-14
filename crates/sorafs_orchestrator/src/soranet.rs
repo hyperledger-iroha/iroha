@@ -5,9 +5,7 @@
 //! persists selections using Norito so CLI tooling and SDKs can reuse guard
 //! caches across sessions. This underpins SNNet-5 by providing deterministic
 //! guard pinning ahead of the circuit manager and transport integration.
-
 #![allow(unexpected_cfgs)]
-
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet},
@@ -16,7 +14,6 @@ use std::{
     num::{NonZeroU64, NonZeroUsize},
     time::Duration,
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::Hasher as Blake3Hasher;
 use ed25519_dalek::VerifyingKey as Ed25519VerifyingKey;
@@ -33,9 +30,7 @@ use iroha_logger::info;
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 use rand::{rand_core::TryCryptoRng, rngs::OsRng};
 use thiserror::Error;
-
 use crate::{AnonymityPolicy, SORANET_BANDWIDTH_UNIT_BYTES};
-
 const GUARD_SET_VERSION_MIN: u8 = 1;
 const GUARD_SET_VERSION: u8 = 7;
 const DEFAULT_RETENTION_SECS: u64 = 30 * 24 * 60 * 60;
@@ -45,7 +40,6 @@ const CACHE_TAG_LEN: usize = 32;
 const GUARD_CAPABILITY_PQ_SHIFT: u32 = 96;
 const GUARD_CAPABILITY_GUARD_SHIFT: u32 = 64;
 const GUARD_CAPABILITY_BANDWIDTH_SHIFT: u32 = 32;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GuardCapabilityComponents {
     pq_rank: u8,
@@ -54,7 +48,6 @@ pub(crate) struct GuardCapabilityComponents {
     bandwidth_units: u32,
     reputation_weight: u32,
 }
-
 impl GuardCapabilityComponents {
     pub(crate) fn from_descriptor(
         descriptor: &RelayDescriptor,
@@ -69,7 +62,6 @@ impl GuardCapabilityComponents {
             descriptor.reputation_weight,
         )
     }
-
     pub(crate) fn from_inputs(
         pq_rank: u8,
         pq_flag: bool,
@@ -92,17 +84,14 @@ impl GuardCapabilityComponents {
             reputation_weight,
         }
     }
-
     pub(crate) fn score(&self) -> u128 {
         let pq_bits = ((u128::from(self.pq_rank) << 1) | u128::from(self.pq_flag as u8))
             << GUARD_CAPABILITY_PQ_SHIFT;
         let guard_bits = u128::from(self.guard_weight) << GUARD_CAPABILITY_GUARD_SHIFT;
         let bandwidth_bits = u128::from(self.bandwidth_units) << GUARD_CAPABILITY_BANDWIDTH_SHIFT;
         let reputation_bits = u128::from(self.reputation_weight);
-
         pq_bits | guard_bits | bandwidth_bits | reputation_bits
     }
-
     pub(crate) fn cmp(&self, other: &Self) -> Ordering {
         other
             .pq_rank
@@ -112,28 +101,22 @@ impl GuardCapabilityComponents {
             .then_with(|| other.bandwidth_units.cmp(&self.bandwidth_units))
             .then_with(|| other.reputation_weight.cmp(&self.reputation_weight))
     }
-
     pub(crate) fn pq_rank(&self) -> u8 {
         self.pq_rank
     }
-
     pub(crate) fn has_pq_certificate(&self) -> bool {
         self.pq_flag
     }
-
     pub(crate) fn guard_weight(&self) -> u32 {
         self.guard_weight
     }
-
     pub(crate) fn bandwidth_units(&self) -> u32 {
         self.bandwidth_units
     }
-
     pub(crate) fn reputation_weight(&self) -> u32 {
         self.reputation_weight
     }
 }
-
 /// Generic endpoint descriptor used for both relay metadata and persisted guard entries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
@@ -144,7 +127,6 @@ pub struct Endpoint {
     /// Stream tags advertised by this endpoint.
     pub tags: Vec<EndpointTag>,
 }
-
 impl Endpoint {
     /// Creates a new endpoint descriptor.
     #[must_use]
@@ -155,7 +137,6 @@ impl Endpoint {
             tags: Vec::new(),
         }
     }
-
     /// Creates a new endpoint descriptor with explicit tags.
     #[must_use]
     pub fn with_tags(
@@ -169,34 +150,28 @@ impl Endpoint {
             tags: tags.into(),
         }
     }
-
     fn ordering_key(&self) -> (u8, &str) {
         (self.priority, self.url.as_str())
     }
-
     /// Returns the stream tags attached to this endpoint.
     #[must_use]
     pub fn tags(&self) -> &[EndpointTag] {
         &self.tags
     }
-
     /// Returns `true` when the endpoint advertises the provided tag.
     #[must_use]
     pub fn has_tag(&self, tag: EndpointTag) -> bool {
         self.tags.contains(&tag)
     }
 }
-
 /// Tags advertised by relay endpoints describing supported streaming overlays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndpointTag {
     /// Endpoint accepts Norito streaming over SoraNet.
     NoritoStream,
 }
-
 impl EndpointTag {
     const NORITO_STREAM_LABEL: &'static str = "norito-stream";
-
     /// Convert a textual label into an endpoint tag.
     pub fn from_label(label: &str) -> Result<Self, EndpointTagError> {
         match label.trim().to_ascii_lowercase().as_str() {
@@ -204,7 +179,6 @@ impl EndpointTag {
             other => Err(EndpointTagError::UnknownTag(other.to_string())),
         }
     }
-
     /// Returns the canonical label for this tag.
     #[must_use]
     pub const fn as_label(&self) -> &'static str {
@@ -213,13 +187,11 @@ impl EndpointTag {
         }
     }
 }
-
 impl fmt::Display for EndpointTag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_label())
     }
 }
-
 /// Errors produced while parsing endpoint tags.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum EndpointTagError {
@@ -227,7 +199,6 @@ pub enum EndpointTagError {
     #[error("unknown endpoint tag `{0}`")]
     UnknownTag(String),
 }
-
 /// Relay roles advertised in the SoraNet directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RelayRoles {
@@ -238,7 +209,6 @@ pub struct RelayRoles {
     /// Relay may act as an exit hop.
     pub exit: bool,
 }
-
 impl RelayRoles {
     /// Construct a new role descriptor.
     #[must_use]
@@ -249,19 +219,16 @@ impl RelayRoles {
             exit,
         }
     }
-
     /// Returns `true` when the descriptor currently advertises exit capability.
     #[must_use]
     pub const fn exit(&self) -> bool {
         self.exit
     }
-
     /// Clear the exit capability flag.
     pub fn disable_exit(&mut self) {
         self.exit = false;
     }
 }
-
 /// Metadata describing a relay extracted from the directory consensus.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayDescriptor {
@@ -284,7 +251,6 @@ pub struct RelayDescriptor {
     /// Optional topology metadata used to bias path selection.
     pub path_metadata: PathMetadata,
 }
-
 /// Topology metadata used when choosing relays and enforcing diversity.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PathMetadata {
@@ -297,7 +263,6 @@ pub struct PathMetadata {
     /// Whether the relay belongs to a validator-class fast lane.
     pub validator_lane: bool,
 }
-
 /// Outcome when applying a collection of path hints to a guard directory.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PathHintReport {
@@ -306,7 +271,6 @@ pub struct PathHintReport {
     /// Relay identifiers (hex) that did not match any descriptor.
     pub missing: Vec<String>,
 }
-
 impl PathMetadata {
     /// Apply a hint to override metadata fields.
     fn apply_hint(&mut self, hint: &RelayPathHint) {
@@ -327,7 +291,6 @@ impl PathMetadata {
         }
     }
 }
-
 /// Hint describing supplemental relay metadata not present in the directory snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayPathHint {
@@ -342,7 +305,6 @@ pub struct RelayPathHint {
     /// Whether the relay participates in the validator fast lane.
     pub validator_lane: bool,
 }
-
 impl RelayPathHint {
     /// Construct a hint from a hex-encoded relay identifier.
     ///
@@ -374,14 +336,12 @@ impl RelayPathHint {
         })
     }
 }
-
 impl RelayDescriptor {
     /// Returns true when the relay may serve as an entry guard.
     #[must_use]
     pub fn is_entry_guard(&self) -> bool {
         self.roles.entry
     }
-
     /// Returns the highest priority endpoint, if any.
     #[must_use]
     pub fn primary_endpoint(&self) -> Option<&Endpoint> {
@@ -389,7 +349,6 @@ impl RelayDescriptor {
             .iter()
             .min_by(|left, right| left.ordering_key().cmp(&right.ordering_key()))
     }
-
     /// Returns the endpoint matching the provided tag, falling back to primary if unavailable.
     pub fn preferred_endpoint(&self, preferred_tag: Option<EndpointTag>) -> Option<&Endpoint> {
         if let Some(tag) = preferred_tag {
@@ -405,7 +364,6 @@ impl RelayDescriptor {
         }
         self.primary_endpoint()
     }
-
     /// Returns true when the descriptor advertises PQ-capable handshakes.
     ///
     /// This method does not validate certificate lifetimes; use
@@ -414,21 +372,18 @@ impl RelayDescriptor {
     pub fn is_pq_capable(&self) -> bool {
         self.pq_kem_public().is_some()
     }
-
     /// Returns true when the descriptor advertises PQ-capable handshakes and any
     /// embedded certificate is valid at `now_unix`.
     #[must_use]
     pub fn is_pq_capable_at(&self, now_unix: u64) -> bool {
         self.pq_kem_public_at(now_unix).is_some()
     }
-
     /// Iterate over endpoints that advertise the provided tag.
     pub fn endpoints_with_tag(&self, tag: EndpointTag) -> impl Iterator<Item = &Endpoint> {
         self.endpoints
             .iter()
             .filter(move |endpoint| endpoint.has_tag(tag))
     }
-
     /// Returns the advertised ML-KEM public key, if present.
     #[must_use]
     pub fn pq_kem_public(&self) -> Option<&[u8]> {
@@ -439,7 +394,6 @@ impl RelayDescriptor {
         }
         self.pq_kem_public.as_deref()
     }
-
     fn pq_kem_public_at(&self, now_unix: u64) -> Option<&[u8]> {
         if let Some(bundle) = self.certificate.as_ref() {
             if !is_certificate_valid_at(bundle, now_unix) {
@@ -452,13 +406,11 @@ impl RelayDescriptor {
         }
         self.pq_kem_public.as_deref()
     }
-
     /// Returns the relay certificate bundle, if supplied.
     #[must_use]
     pub fn certificate(&self) -> Option<&RelayCertificateBundleV2> {
         self.certificate.as_ref()
     }
-
     /// Returns certificate metadata distilled for weighting and telemetry.
     #[must_use]
     pub fn certificate_metadata(&self) -> Option<GuardCertificateMetadata> {
@@ -466,7 +418,6 @@ impl RelayDescriptor {
             .as_ref()
             .map(GuardCertificateMetadata::from_bundle)
     }
-
     /// Returns the certificate validity window when available.
     #[must_use]
     pub fn certificate_validity(&self) -> Option<(i64, i64)> {
@@ -478,7 +429,6 @@ impl RelayDescriptor {
         })
     }
 }
-
 /// Resolver-friendly view over the directory consensus.
 #[derive(Debug, Clone, Default)]
 pub struct RelayDirectory {
@@ -489,7 +439,6 @@ pub struct RelayDirectory {
     valid_until_unix: Option<i64>,
     validation_phase: Option<CertificateValidationPhase>,
 }
-
 /// Reason why an exit role was revoked while enforcing the bond policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitDemotionReason {
@@ -502,7 +451,6 @@ pub enum ExitDemotionReason {
     /// Bond amount fell below the minimum exit requirement.
     BelowMinimum,
 }
-
 /// Outcome entry returned when exit capability is revoked for a relay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExitDemotion {
@@ -511,7 +459,6 @@ pub struct ExitDemotion {
     /// Reason for the demotion.
     pub reason: ExitDemotionReason,
 }
-
 /// Errors surfaced while decoding or validating guard directory snapshots.
 #[derive(Debug, Error)]
 pub enum GuardDirectoryError {
@@ -624,17 +571,14 @@ pub enum GuardDirectoryError {
         reason: String,
     },
 }
-
 fn parse_validation_phase(value: u8) -> Result<CertificateValidationPhase, GuardDirectoryError> {
     decode_validation_phase(value)
         .ok_or(GuardDirectoryError::UnknownValidationPhase { phase: value })
 }
-
 struct VerifiedGuardDirectoryIssuer {
     issuer: GuardDirectoryIssuerV1,
     ed25519_key: Ed25519VerifyingKey,
 }
-
 fn parse_guard_directory_issuer_ed25519_key(
     fingerprint: String,
     public_key: &[u8; 32],
@@ -645,7 +589,6 @@ fn parse_guard_directory_issuer_ed25519_key(
             reason: "public key material must not be all zero",
         });
     }
-
     let parsed = iroha_crypto::ed25519_parse_public_key(public_key).map_err(|err| {
         let message = err.to_string();
         let reason = if message.contains("non-canonical") {
@@ -660,7 +603,6 @@ fn parse_guard_directory_issuer_ed25519_key(
             reason,
         }
     })?;
-
     Ed25519VerifyingKey::from_bytes(parsed.as_bytes()).map_err(|source| {
         GuardDirectoryError::InvalidIssuerEd25519Key {
             fingerprint,
@@ -668,7 +610,6 @@ fn parse_guard_directory_issuer_ed25519_key(
         }
     })
 }
-
 impl RelayDirectory {
     /// Build a directory from relay descriptors.
     #[must_use]
@@ -682,43 +623,36 @@ impl RelayDirectory {
             validation_phase: None,
         }
     }
-
     /// Returns all relay descriptors.
     #[must_use]
     pub fn entries(&self) -> &[RelayDescriptor] {
         &self.entries
     }
-
     /// Returns the directory hash advertised by the snapshot.
     #[must_use]
     pub fn directory_hash(&self) -> Option<[u8; 32]> {
         self.directory_hash
     }
-
     /// Returns the published-at timestamp (Unix seconds) if known.
     #[must_use]
     pub fn published_at(&self) -> Option<i64> {
         self.published_at_unix
     }
-
     /// Returns the validity window start timestamp (Unix seconds) if known.
     #[must_use]
     pub fn valid_after(&self) -> Option<i64> {
         self.valid_after_unix
     }
-
     /// Returns the validity window end timestamp (Unix seconds) if known.
     #[must_use]
     pub fn valid_until(&self) -> Option<i64> {
         self.valid_until_unix
     }
-
     /// Returns the certificate validation phase advertised by the snapshot.
     #[must_use]
     pub fn validation_phase(&self) -> Option<CertificateValidationPhase> {
         self.validation_phase
     }
-
     /// Apply supplemental path hints to the relay descriptors in the directory.
     ///
     /// Returns the number of hints applied and any unmatched relay identifiers.
@@ -727,21 +661,17 @@ impl RelayDirectory {
         let mut missing = Vec::new();
         let mut by_id: HashMap<[u8; 32], &RelayPathHint> =
             hints.iter().map(|hint| (hint.relay_id, hint)).collect();
-
         for descriptor in &mut self.entries {
             if let Some(hint) = by_id.remove(&descriptor.relay_id) {
                 descriptor.path_metadata.apply_hint(hint);
                 applied += 1;
             }
         }
-
         for (relay_id, _) in by_id {
             missing.push(hex::encode(relay_id));
         }
-
         PathHintReport { applied, missing }
     }
-
     /// Inspect a guard directory snapshot without establishing external trust or freshness.
     ///
     /// This is suitable for local diagnostics only. Runtime callers must use
@@ -756,7 +686,6 @@ impl RelayDirectory {
             .map_err(|source| GuardDirectoryError::Decode { source })?;
         Self::from_guard_directory_snapshot(snapshot, None)
     }
-
     /// Authenticate an exact guard directory artifact at an explicit Unix second.
     ///
     /// The expected snapshot digest must be obtained independently of the
@@ -781,7 +710,6 @@ impl RelayDirectory {
         .map_err(|source| GuardDirectoryError::SnapshotAuthentication { source })?;
         Self::from_guard_directory_snapshot(snapshot, Some(at_unix))
     }
-
     fn from_guard_directory_snapshot(
         snapshot: GuardDirectorySnapshotV2,
         at_unix: Option<i64>,
@@ -791,13 +719,10 @@ impl RelayDirectory {
                 version: snapshot.version,
             });
         }
-
         if snapshot.relays.is_empty() {
             return Err(GuardDirectoryError::EmptyDirectory);
         }
-
         let validation_phase = parse_validation_phase(snapshot.validation_phase)?;
-
         let mut issuers: HashMap<[u8; 32], VerifiedGuardDirectoryIssuer> =
             HashMap::with_capacity(snapshot.issuers.len());
         for issuer in snapshot.issuers {
@@ -842,26 +767,22 @@ impl RelayDirectory {
                 });
             }
         }
-
         let mut entries = Vec::with_capacity(snapshot.relays.len());
         for entry in snapshot.relays {
             let bundle = RelayCertificateBundleV2::from_cbor(&entry.certificate)
                 .map_err(|source| GuardDirectoryError::CertificateDecode { source })?;
-
             if bundle.certificate.directory_hash != snapshot.directory_hash {
                 return Err(GuardDirectoryError::CertificateDirectoryHashMismatch {
                     expected: hex::encode(snapshot.directory_hash),
                     found: hex::encode(bundle.certificate.directory_hash),
                 });
             }
-
             let issuer_fingerprint = bundle.certificate.issuer_fingerprint;
             let issuer = issuers.get(&issuer_fingerprint).ok_or_else(|| {
                 GuardDirectoryError::CertificateUnknownIssuer {
                     fingerprint: hex::encode(issuer_fingerprint),
                 }
             })?;
-
             let verified = if let Some(at_unix) = at_unix {
                 bundle.verify_at(
                     &issuer.ed25519_key,
@@ -877,7 +798,6 @@ impl RelayDirectory {
                 )
             };
             verified.map_err(|source| GuardDirectoryError::CertificateDecode { source })?;
-
             let mut endpoints = Vec::with_capacity(bundle.certificate.endpoints.len());
             for endpoint in &bundle.certificate.endpoints {
                 let mut tags = Vec::with_capacity(endpoint.tags.len());
@@ -899,7 +819,6 @@ impl RelayDirectory {
                     tags,
                 });
             }
-
             entries.push(RelayDescriptor {
                 relay_id: bundle.certificate.relay_id,
                 guard_weight: bundle.certificate.guard_weight,
@@ -916,7 +835,6 @@ impl RelayDirectory {
                 path_metadata: PathMetadata::default(),
             });
         }
-
         Ok(Self {
             entries,
             directory_hash: Some(snapshot.directory_hash),
@@ -926,12 +844,10 @@ impl RelayDirectory {
             validation_phase: Some(validation_phase),
         })
     }
-
     #[cfg(test)]
     fn push(&mut self, descriptor: RelayDescriptor) {
         self.entries.push(descriptor);
     }
-
     /// Apply the relay bond policy to the directory, revoking exit roles that no longer satisfy it.
     ///
     /// Relays missing a bond ledger entry, using the wrong bond asset, or falling below the minimum
@@ -947,13 +863,11 @@ impl RelayDirectory {
     {
         let ledger: BTreeMap<[u8; 32], &RelayBondLedgerEntryV1> =
             bonds.into_iter().map(|(id, entry)| (*id, entry)).collect();
-
         let mut demotions = Vec::new();
         for descriptor in &mut self.entries {
             if !descriptor.roles.exit() {
                 continue;
             }
-
             let Some(entry) = ledger.get(&descriptor.relay_id) else {
                 descriptor.roles.disable_exit();
                 demotions.push(ExitDemotion {
@@ -962,7 +876,6 @@ impl RelayDirectory {
                 });
                 continue;
             };
-
             if !entry.exit_capable {
                 descriptor.roles.disable_exit();
                 demotions.push(ExitDemotion {
@@ -971,7 +884,6 @@ impl RelayDirectory {
                 });
                 continue;
             }
-
             if entry.bond_asset_id != policy.bond_asset_id {
                 descriptor.roles.disable_exit();
                 demotions.push(ExitDemotion {
@@ -980,7 +892,6 @@ impl RelayDirectory {
                 });
                 continue;
             }
-
             if !entry.meets_exit_minimum(policy) {
                 descriptor.roles.disable_exit();
                 demotions.push(ExitDemotion {
@@ -989,11 +900,9 @@ impl RelayDirectory {
                 });
             }
         }
-
         demotions
     }
 }
-
 /// Guard assignment with the pinned timestamp and endpoint metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuardRecord {
@@ -1016,7 +925,6 @@ pub struct GuardRecord {
     /// Topology metadata used for path selection and diversity.
     pub path_metadata: PathMetadata,
 }
-
 /// Metadata distilled from a relay certificate for telemetry and weighting decisions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuardCertificateMetadata {
@@ -1033,7 +941,6 @@ pub struct GuardCertificateMetadata {
     /// Whether a PQ ML-KEM key was embedded in the certificate payload.
     pub has_pq_key: bool,
 }
-
 impl GuardCertificateMetadata {
     fn from_bundle(bundle: &RelayCertificateBundleV2) -> Self {
         let has_dual_signatures = bundle.signatures.mldsa65.is_some();
@@ -1047,7 +954,6 @@ impl GuardCertificateMetadata {
             has_pq_key,
         }
     }
-
     fn handshake_labels(&self) -> Vec<&'static str> {
         self.handshake_suites
             .iter()
@@ -1055,14 +961,12 @@ impl GuardCertificateMetadata {
             .collect()
     }
 }
-
 impl GuardRecord {
     /// Returns the certificate bundle if cached for this guard.
     #[must_use]
     pub fn certificate(&self) -> Option<&RelayCertificateBundleV2> {
         self.certificate.as_ref()
     }
-
     /// Returns metadata distilled from the cached certificate, when available.
     #[must_use]
     pub fn certificate_metadata(&self) -> Option<GuardCertificateMetadata> {
@@ -1071,21 +975,17 @@ impl GuardRecord {
             .map(GuardCertificateMetadata::from_bundle)
     }
 }
-
 /// Symmetric key used to authenticate persisted guard caches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuardCacheKey([u8; 32]);
-
 impl GuardCacheKey {
     /// Length of guard cache keys in bytes.
     pub const LENGTH: usize = 32;
-
     /// Construct a key from raw bytes.
     #[must_use]
     pub const fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
-
     /// Parse a guard cache key from a hex string.
     pub fn from_hex(hex: &str) -> Result<Self, GuardCacheKeyError> {
         let trimmed = hex.trim();
@@ -1100,26 +1000,22 @@ impl GuardCacheKey {
             .map_err(|_| GuardCacheKeyError::InvalidHex(trimmed.to_string()))?;
         Ok(Self(bytes))
     }
-
     /// Return the underlying bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
-
     /// Render the key as an uppercase hex string.
     #[must_use]
     pub fn to_hex(&self) -> String {
         hex::encode_upper(self.0)
     }
 }
-
 impl fmt::Display for GuardCacheKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.to_hex())
     }
 }
-
 /// Errors encountered while parsing guard cache keys.
 #[derive(Debug, Error)]
 pub enum GuardCacheKeyError {
@@ -1135,20 +1031,17 @@ pub enum GuardCacheKeyError {
         actual: usize,
     },
 }
-
 /// Authentication tag persisted alongside guard caches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GuardCacheTag {
     nonce: [u8; CACHE_NONCE_LEN],
     mac: [u8; CACHE_TAG_LEN],
 }
-
 impl GuardCacheTag {
     fn generate(key: &GuardCacheKey, payload: &[u8]) -> Result<Self, GuardSetPersistenceError> {
         let mut rng = OsRng;
         Self::generate_with_rng(key, payload, &mut rng)
     }
-
     fn generate_with_rng<R: TryCryptoRng>(
         key: &GuardCacheKey,
         payload: &[u8],
@@ -1172,7 +1065,6 @@ impl GuardCacheTag {
             mac: mac_bytes,
         })
     }
-
     fn verify(&self, key: &GuardCacheKey, payload: &[u8]) -> bool {
         let mut hasher = Blake3Hasher::new_keyed(key.as_bytes());
         hasher.update(CACHE_TAG_LABEL);
@@ -1181,14 +1073,12 @@ impl GuardCacheTag {
         let mac = hasher.finalize();
         mac.as_bytes() == &self.mac
     }
-
     fn to_hex(&self) -> String {
         let mut buf = [0u8; CACHE_NONCE_LEN + CACHE_TAG_LEN];
         buf[..CACHE_NONCE_LEN].copy_from_slice(&self.nonce);
         buf[CACHE_NONCE_LEN..].copy_from_slice(&self.mac);
         hex::encode_upper(buf)
     }
-
     fn from_hex(hex: &str) -> Result<Self, GuardSetPersistenceError> {
         let trimmed = hex.trim();
         if trimmed.len() != (CACHE_NONCE_LEN + CACHE_TAG_LEN) * 2 {
@@ -1207,48 +1097,40 @@ impl GuardCacheTag {
         Ok(Self { nonce, mac })
     }
 }
-
 /// Guard set persisted across client sessions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuardSet {
     guards: Vec<GuardRecord>,
 }
-
 impl GuardSet {
     /// Creates a new guard set with the supplied records.
     #[must_use]
     pub fn new(guards: Vec<GuardRecord>) -> Self {
         Self { guards }
     }
-
     /// Returns the guard entries in the set.
     #[must_use]
     pub fn guards(&self) -> &[GuardRecord] {
         &self.guards
     }
-
     /// Number of guards in the set.
     #[must_use]
     pub fn len(&self) -> usize {
         self.guards.len()
     }
-
     /// Returns `true` when the guard set is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.guards.is_empty()
     }
-
     /// Iterate over guard records.
     pub fn iter(&self) -> impl Iterator<Item = &GuardRecord> {
         self.guards.iter()
     }
-
     /// Serialise the guard set to Norito bytes without authentication.
     pub fn encode(&self) -> Result<Vec<u8>, GuardSetPersistenceError> {
         self.encode_with_key(None)
     }
-
     /// Serialise the guard set to Norito bytes with an authentication tag.
     pub fn encode_with_key(
         &self,
@@ -1266,12 +1148,10 @@ impl GuardSet {
         }
         to_bytes(&persist).map_err(GuardSetPersistenceError::Encode)
     }
-
     /// Deserialise a guard set from Norito bytes without verifying an authentication tag.
     pub fn decode(bytes: &[u8]) -> Result<Self, GuardSetPersistenceError> {
         Self::decode_with_key(bytes, None)
     }
-
     /// Deserialise a guard set from Norito bytes, verifying the authentication tag when present.
     pub fn decode_with_key(
         bytes: &[u8],
@@ -1284,7 +1164,6 @@ impl GuardSet {
                 version: payload.version,
             });
         }
-
         if let Some(tag_hex) = payload.cache_tag_hex.as_deref() {
             let key = key.ok_or(GuardSetPersistenceError::MissingCacheKey)?;
             let tag = GuardCacheTag::from_hex(tag_hex)?;
@@ -1297,32 +1176,27 @@ impl GuardSet {
         } else if key.is_some() && payload.version >= 3 {
             return Err(GuardSetPersistenceError::MissingCacheTag);
         }
-
         let guards = payload.guards.into_iter().map(GuardRecord::from).collect();
         Ok(Self { guards })
     }
 }
-
 /// Controls how long guard assignments remain sticky.
 #[derive(Debug, Clone, Copy)]
 pub struct GuardRetention {
     retention_secs: NonZeroU64,
 }
-
 impl GuardRetention {
     /// Creates a new retention policy.
     #[must_use]
     pub const fn new(retention_secs: NonZeroU64) -> Self {
         Self { retention_secs }
     }
-
     /// Returns the retention window in seconds.
     #[must_use]
     pub fn as_secs(self) -> u64 {
         self.retention_secs.get()
     }
 }
-
 impl Default for GuardRetention {
     fn default() -> Self {
         Self {
@@ -1331,7 +1205,6 @@ impl Default for GuardRetention {
         }
     }
 }
-
 fn guard_capability_score(
     descriptor: &RelayDescriptor,
     policy: AnonymityPolicy,
@@ -1339,7 +1212,6 @@ fn guard_capability_score(
 ) -> u128 {
     GuardCapabilityComponents::from_descriptor(descriptor, policy, pq_capable).score()
 }
-
 fn guard_pq_rank(policy: AnonymityPolicy, pq_capable: bool) -> u8 {
     if !pq_capable {
         return 0;
@@ -1350,14 +1222,12 @@ fn guard_pq_rank(policy: AnonymityPolicy, pq_capable: bool) -> u8 {
         AnonymityPolicy::GuardPq => 1,
     }
 }
-
 /// Deterministic guard selector that honours existing pins and retention policy.
 #[derive(Debug, Clone)]
 pub struct GuardSelector {
     desired_count: NonZeroUsize,
     retention: GuardRetention,
 }
-
 impl GuardSelector {
     /// Creates a selector targeting `desired_count` entry guards.
     #[must_use]
@@ -1367,26 +1237,22 @@ impl GuardSelector {
             retention: GuardRetention::default(),
         }
     }
-
     /// Overrides the retention policy applied to guards.
     #[must_use]
     pub fn with_retention(mut self, retention: GuardRetention) -> Self {
         self.retention = retention;
         self
     }
-
     /// Returns the configured retention policy.
     #[must_use]
     pub fn retention(&self) -> GuardRetention {
         self.retention
     }
-
     /// Returns the desired guard count.
     #[must_use]
     pub fn desired_count(&self) -> NonZeroUsize {
         self.desired_count
     }
-
     /// Selects guards based on the latest directory, preserving existing pins when possible.
     pub fn select(
         &self,
@@ -1410,13 +1276,11 @@ impl GuardSelector {
         let mut selected_classical = 0usize;
         let mut used_asn: HashSet<u32> = HashSet::new();
         let mut used_regions: HashSet<String> = HashSet::new();
-
         let directory_map: BTreeMap<[u8; 32], &RelayDescriptor> = directory
             .entries()
             .iter()
             .map(|descriptor| (descriptor.relay_id, descriptor))
             .collect();
-
         if let Some(previous) = existing {
             for record in previous.iter() {
                 if selected.len() >= max_count {
@@ -1489,12 +1353,10 @@ impl GuardSelector {
                 }
             }
         }
-
         if selected.len() >= max_count {
             emit_guard_selection_telemetry(&selected);
             return GuardSet::new(selected);
         }
-
         let mut candidates: Vec<(PathSortKey, u128, &RelayDescriptor)> = directory
             .entries()
             .iter()
@@ -1523,7 +1385,6 @@ impl GuardSelector {
                     .then_with(|| left_descriptor.relay_id.cmp(&right_descriptor.relay_id))
             },
         );
-
         for (idx, (_path, _score, descriptor)) in candidates.iter().enumerate() {
             if selected.len() >= max_count {
                 break;
@@ -1552,7 +1413,6 @@ impl GuardSelector {
                     continue;
                 }
                 let path_metadata = reconcile_path_metadata(descriptor, None);
-
                 let asn_collision = path_metadata
                     .asn
                     .map(|asn| used_asn.contains(&asn))
@@ -1578,7 +1438,6 @@ impl GuardSelector {
                 {
                     continue;
                 }
-
                 selected_ids.push(descriptor.relay_id);
                 selected.push(GuardRecord {
                     relay_id: descriptor.relay_id,
@@ -1597,12 +1456,10 @@ impl GuardSelector {
                 }
             }
         }
-
         emit_guard_selection_telemetry(&selected);
         GuardSet::new(selected)
     }
 }
-
 fn certificate_pq_kem_public(bundle: &RelayCertificateBundleV2) -> Option<Vec<u8>> {
     if bundle.certificate.pq_kem_public.is_empty() {
         None
@@ -1610,7 +1467,6 @@ fn certificate_pq_kem_public(bundle: &RelayCertificateBundleV2) -> Option<Vec<u8
         Some(bundle.certificate.pq_kem_public.clone())
     }
 }
-
 fn preferred_pq_kem_public(
     certificate: Option<&RelayCertificateBundleV2>,
     descriptor_pq: Option<&[u8]>,
@@ -1626,7 +1482,6 @@ fn preferred_pq_kem_public(
     }
     record_pq.map(|value| value.to_vec())
 }
-
 fn is_certificate_valid_at(bundle: &RelayCertificateBundleV2, now_unix: u64) -> bool {
     let now_i64 = i64::try_from(now_unix).unwrap_or(i64::MAX);
     if bundle.certificate.valid_after > now_i64 {
@@ -1637,7 +1492,6 @@ fn is_certificate_valid_at(bundle: &RelayCertificateBundleV2, now_unix: u64) -> 
     }
     true
 }
-
 fn enforce_certificate_validity(
     bundle: RelayCertificateBundleV2,
     now_unix: u64,
@@ -1648,7 +1502,6 @@ fn enforce_certificate_validity(
         None
     }
 }
-
 fn emit_guard_selection_telemetry(guards: &[GuardRecord]) {
     for guard in guards {
         let relay_id_hex = hex::encode(guard.relay_id);
@@ -1685,7 +1538,6 @@ fn emit_guard_selection_telemetry(guards: &[GuardRecord]) {
         }
     }
 }
-
 fn emit_circuit_build_telemetry(guard: &GuardRecord) {
     let relay_id_hex = hex::encode(guard.relay_id);
     if let Some(metadata) = guard.certificate_metadata() {
@@ -1719,7 +1571,6 @@ fn emit_circuit_build_telemetry(guard: &GuardRecord) {
         );
     }
 }
-
 fn allowed_classical(policy: AnonymityPolicy, target: usize, pq_available: usize) -> usize {
     match policy {
         AnonymityPolicy::GuardPq | AnonymityPolicy::MajorityPq => {
@@ -1733,13 +1584,11 @@ fn allowed_classical(policy: AnonymityPolicy, target: usize, pq_available: usize
         AnonymityPolicy::StrictPq => 0,
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PathSortKey {
     validator_lane: bool,
     rtt_ms: Option<u32>,
 }
-
 fn compare_rtt(left: Option<u32>, right: Option<u32>) -> Ordering {
     match (left, right) {
         (Some(lhs), Some(rhs)) => lhs.cmp(&rhs),
@@ -1748,7 +1597,6 @@ fn compare_rtt(left: Option<u32>, right: Option<u32>) -> Ordering {
         (None, None) => Ordering::Equal,
     }
 }
-
 fn avoids_asn(descriptor: &RelayDescriptor, avoid_asn: &HashSet<u32>) -> bool {
     descriptor
         .path_metadata
@@ -1756,7 +1604,6 @@ fn avoids_asn(descriptor: &RelayDescriptor, avoid_asn: &HashSet<u32>) -> bool {
         .map(|asn| !avoid_asn.contains(&asn))
         .unwrap_or(true)
 }
-
 fn record_path_usage(
     metadata: &PathMetadata,
     used_asn: &mut HashSet<u32>,
@@ -1771,7 +1618,6 @@ fn record_path_usage(
         used_regions.insert(region.clone());
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn has_diverse_future(
     candidates: &[(PathSortKey, u128, &RelayDescriptor)],
@@ -1821,7 +1667,6 @@ fn has_diverse_future(
     }
     false
 }
-
 fn reconcile_path_metadata(
     descriptor: &RelayDescriptor,
     record: Option<&GuardRecord>,
@@ -1851,7 +1696,6 @@ fn reconcile_path_metadata(
     }
     metadata
 }
-
 /// Errors surfaced when persisting guard sets.
 #[derive(Debug, Error)]
 pub enum GuardSetPersistenceError {
@@ -1893,7 +1737,6 @@ pub enum GuardSetPersistenceError {
         message: String,
     },
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct GuardSetPersist {
     version: u8,
@@ -1901,7 +1744,6 @@ struct GuardSetPersist {
     #[norito(default)]
     cache_tag_hex: Option<String>,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct GuardRecordPersist {
     relay_id: [u8; 32],
@@ -1925,7 +1767,6 @@ struct GuardRecordPersist {
     #[norito(default)]
     path_validator_lane: bool,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct GuardEndpointPersistV1 {
     url: String,
@@ -1933,7 +1774,6 @@ struct GuardEndpointPersistV1 {
     #[norito(default)]
     tags: Vec<String>,
 }
-
 impl From<&GuardRecord> for GuardRecordPersist {
     fn from(record: &GuardRecord) -> Self {
         Self {
@@ -1964,7 +1804,6 @@ impl From<&GuardRecord> for GuardRecordPersist {
         }
     }
 }
-
 impl From<GuardRecordPersist> for GuardRecord {
     fn from(persist: GuardRecordPersist) -> Self {
         let GuardRecordPersist {
@@ -1981,7 +1820,6 @@ impl From<GuardRecordPersist> for GuardRecord {
             path_asn,
             path_validator_lane,
         } = persist;
-
         let pq_kem_public = pq_kem_public_hex.and_then(|hex| hex::decode(hex).ok());
         let certificate = certificate_base64.and_then(|encoded| {
             BASE64_STANDARD
@@ -2016,25 +1854,21 @@ impl From<GuardRecordPersist> for GuardRecord {
         }
     }
 }
-
 /// Stable identifier allocated to each circuit managed by [`CircuitManager`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CircuitId(u64);
-
 impl CircuitId {
     /// Construct a circuit identifier from a raw number.
     #[must_use]
     pub const fn from_raw(value: u64) -> Self {
         Self(value)
     }
-
     /// Returns the raw numeric identifier.
     #[must_use]
     pub const fn raw(self) -> u64 {
         self.0
     }
 }
-
 /// Relay descriptor retained within a circuit path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CircuitRelay {
@@ -2045,7 +1879,6 @@ pub struct CircuitRelay {
     /// Whether the relay advertises PQ-capable transport.
     pub pq_capable: bool,
 }
-
 #[derive(Debug, Clone)]
 struct Circuit {
     id: CircuitId,
@@ -2057,7 +1890,6 @@ struct Circuit {
     expires_at_unix: u64,
     latency: LatencyWindow,
 }
-
 impl Circuit {
     fn info(&self) -> CircuitInfo {
         CircuitInfo {
@@ -2071,7 +1903,6 @@ impl Circuit {
         }
     }
 }
-
 /// Snapshot of an active circuit exposed to callers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CircuitInfo {
@@ -2090,7 +1921,6 @@ pub struct CircuitInfo {
     /// Exit relay metadata.
     pub exit: CircuitRelay,
 }
-
 /// Reason why a circuit left the active set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CircuitRetirementReason {
@@ -2103,7 +1933,6 @@ pub enum CircuitRetirementReason {
     /// Guard metadata changed and a new circuit replaced the previous one.
     MetadataChanged(CircuitRenewalReason),
 }
-
 /// Reason why a circuit was renewed while the guard remained selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CircuitRenewalReason {
@@ -2114,7 +1943,6 @@ pub enum CircuitRenewalReason {
     /// Guard PQ material changed (e.g., new ML-KEM key).
     PqKeyUpdated,
 }
-
 /// Aggregated latency data collected while the circuit was active.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CircuitLatencySnapshot {
@@ -2127,7 +1955,6 @@ pub struct CircuitLatencySnapshot {
     /// Maximum latency observed in milliseconds.
     pub max_ms: u64,
 }
-
 /// Historical entry describing a retired circuit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CircuitRotationRecord {
@@ -2140,27 +1967,23 @@ pub struct CircuitRotationRecord {
     /// Latency snapshot gathered while the circuit was active.
     pub latency: Option<CircuitLatencySnapshot>,
 }
-
 /// Configuration applied to the circuit lifecycle manager.
 #[derive(Debug, Clone)]
 pub struct CircuitManagerConfig {
     circuit_ttl: Duration,
 }
-
 impl CircuitManagerConfig {
     /// Creates a configuration with the supplied circuit TTL.
     #[must_use]
     pub const fn new(circuit_ttl: Duration) -> Self {
         Self { circuit_ttl }
     }
-
     /// Returns the configured circuit TTL.
     #[must_use]
     pub const fn circuit_ttl(&self) -> Duration {
         self.circuit_ttl
     }
 }
-
 impl Default for CircuitManagerConfig {
     fn default() -> Self {
         Self {
@@ -2168,7 +1991,6 @@ impl Default for CircuitManagerConfig {
         }
     }
 }
-
 #[derive(Debug, Default, Clone)]
 struct LatencyWindow {
     samples: u64,
@@ -2176,7 +1998,6 @@ struct LatencyWindow {
     min_ms: Option<u64>,
     max_ms: Option<u64>,
 }
-
 impl LatencyWindow {
     fn record(&mut self, latency: Duration) {
         let millis = latency.as_millis();
@@ -2192,7 +2013,6 @@ impl LatencyWindow {
             None => millis_u64,
         });
     }
-
     fn snapshot(&self) -> Option<CircuitLatencySnapshot> {
         if self.samples == 0 {
             return None;
@@ -2206,7 +2026,6 @@ impl LatencyWindow {
         })
     }
 }
-
 /// Errors raised by [`CircuitManager::refresh`].
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum CircuitManagerError {
@@ -2223,7 +2042,6 @@ pub enum CircuitManagerError {
     #[error("no viable exit relay found for guard {guard_id:?}")]
     NoExitRelay { guard_id: [u8; 32] },
 }
-
 /// Event emitted while refreshing circuits.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CircuitEvent {
@@ -2232,7 +2050,6 @@ pub enum CircuitEvent {
     /// Circuit was retired.
     Retired { record: CircuitRotationRecord },
 }
-
 /// Lifecycle manager that keeps SoraNet circuits aligned with the guard set.
 #[derive(Debug)]
 pub struct CircuitManager {
@@ -2241,7 +2058,6 @@ pub struct CircuitManager {
     rotation_history: Vec<CircuitRotationRecord>,
     next_circuit_id: u64,
 }
-
 impl CircuitManager {
     /// Creates a new circuit manager.
     #[must_use]
@@ -2253,13 +2069,11 @@ impl CircuitManager {
             next_circuit_id: 1,
         }
     }
-
     /// Returns the configuration currently in use.
     #[must_use]
     pub const fn config(&self) -> &CircuitManagerConfig {
         &self.config
     }
-
     /// Returns the active circuits.
     #[must_use]
     pub fn active_circuits(&self) -> Vec<CircuitInfo> {
@@ -2267,13 +2081,11 @@ impl CircuitManager {
         infos.sort_by(|left, right| left.entry.relay_id.cmp(&right.entry.relay_id));
         infos
     }
-
     /// Returns the recorded rotation history.
     #[must_use]
     pub fn rotation_history(&self) -> &[CircuitRotationRecord] {
         &self.rotation_history
     }
-
     /// Records a latency sample for the specified circuit.
     ///
     /// Returns `true` when the circuit exists and the sample was recorded.
@@ -2284,7 +2096,6 @@ impl CircuitManager {
         }
         false
     }
-
     /// Refreshes the active circuit set so it matches the guard set.
     ///
     /// Expired circuits are rotated out, new guards trigger fresh circuits, and telemetry snapshots
@@ -2299,19 +2110,15 @@ impl CircuitManager {
         if guard_set.is_empty() {
             return Err(CircuitManagerError::EmptyGuardSet);
         }
-
         let mut events = Vec::new();
-
         let guard_map: HashMap<[u8; 32], &GuardRecord> = guard_set
             .iter()
             .map(|record| (record.relay_id, record))
             .collect();
-
         let drained: Vec<_> = self.circuits.drain(..).collect();
         let mut retained = Vec::with_capacity(drained.len());
         for mut circuit in drained {
             let guard_id = circuit.guard.relay_id;
-
             let Some(updated_guard) = guard_map.get(&guard_id) else {
                 let record = self.record_retirement(
                     circuit,
@@ -2321,19 +2128,16 @@ impl CircuitManager {
                 events.push(CircuitEvent::Retired { record });
                 continue;
             };
-
             if now_unix >= circuit.expires_at_unix {
                 let record =
                     self.record_retirement(circuit, now_unix, CircuitRetirementReason::Expired);
                 events.push(CircuitEvent::Retired { record });
                 continue;
             }
-
             let endpoint_changed = updated_guard.endpoint != circuit.guard.endpoint;
             let pq_changed =
                 updated_guard.pq_kem_public.as_deref() != circuit.guard.pq_kem_public.as_deref();
             let pinned_newer = updated_guard.pinned_at_unix > circuit.guard.pinned_at_unix;
-
             let renewal_reason = if endpoint_changed {
                 Some(CircuitRenewalReason::EndpointUpdated)
             } else if pq_changed {
@@ -2343,7 +2147,6 @@ impl CircuitManager {
             } else {
                 None
             };
-
             if let Some(reason) = renewal_reason {
                 let record = self.record_retirement(
                     circuit,
@@ -2353,14 +2156,12 @@ impl CircuitManager {
                 events.push(CircuitEvent::Retired { record });
                 continue;
             }
-
             circuit.guard = (*updated_guard).clone();
             circuit.entry.endpoint = circuit.guard.endpoint.clone();
             circuit.entry.pq_capable = circuit.guard.pq_kem_public.is_some();
             retained.push(circuit);
         }
         self.circuits = retained;
-
         for guard in guard_set.iter() {
             if self
                 .circuits
@@ -2369,19 +2170,15 @@ impl CircuitManager {
             {
                 continue;
             }
-
             let circuit = self.build_circuit(directory, guard, now_unix, policy)?;
             let info = circuit.info();
             events.push(CircuitEvent::Built { info: info.clone() });
             self.circuits.push(circuit);
         }
-
         self.circuits
             .sort_by(|left, right| left.entry.relay_id.cmp(&right.entry.relay_id));
-
         Ok(events)
     }
-
     /// Tears down every active circuit, returning the recorded rotation results.
     pub fn teardown_all(&mut self, now_unix: u64) -> Vec<CircuitRotationRecord> {
         let drained: Vec<_> = self.circuits.drain(..).collect();
@@ -2393,7 +2190,6 @@ impl CircuitManager {
         }
         records
     }
-
     fn build_circuit(
         &mut self,
         directory: &RelayDirectory,
@@ -2407,12 +2203,10 @@ impl CircuitManager {
                 guard_id: guard.relay_id,
             });
         }
-
         let mut avoid_asn: HashSet<u32> = HashSet::new();
         if let Some(asn) = guard.path_metadata.asn {
             avoid_asn.insert(asn);
         }
-
         let middle_descriptor = select_relay(
             directory,
             |descriptor| descriptor.roles.middle && descriptor.relay_id != guard.relay_id,
@@ -2440,7 +2234,6 @@ impl CircuitManager {
         .ok_or(CircuitManagerError::NoExitRelay {
             guard_id: guard.relay_id,
         })?;
-
         let entry = CircuitRelay {
             relay_id: guard.relay_id,
             endpoint,
@@ -2453,7 +2246,6 @@ impl CircuitManager {
         self.next_circuit_id = self.next_circuit_id.wrapping_add(1);
         let ttl_secs = self.config.circuit_ttl.as_secs();
         let expires_at_unix = now_unix.saturating_add(ttl_secs);
-
         let circuit = Circuit {
             id,
             guard: guard.clone(),
@@ -2467,7 +2259,6 @@ impl CircuitManager {
         emit_circuit_build_telemetry(&circuit.guard);
         Ok(circuit)
     }
-
     fn record_retirement(
         &mut self,
         circuit: Circuit,
@@ -2486,7 +2277,6 @@ impl CircuitManager {
         record
     }
 }
-
 fn descriptor_to_circuit_relay(
     descriptor: &RelayDescriptor,
     preferred_tag: Option<EndpointTag>,
@@ -2501,7 +2291,6 @@ fn descriptor_to_circuit_relay(
         pq_capable: descriptor.is_pq_capable_at(now_unix),
     }
 }
-
 fn select_relay<'a>(
     directory: &'a RelayDirectory,
     predicate: impl Fn(&'a RelayDescriptor) -> bool,
@@ -2515,19 +2304,15 @@ fn select_relay<'a>(
         .filter(|descriptor| predicate(descriptor))
         .filter(|descriptor| descriptor.primary_endpoint().is_some())
         .collect();
-
     if matches!(policy, AnonymityPolicy::StrictPq) {
         candidates.retain(|descriptor| descriptor.is_pq_capable_at(now_unix));
     }
-
     if candidates.is_empty() {
         return None;
     }
-
     candidates.sort_by(|left, right| {
         let left_avoids_asn = avoids_asn(left, avoid_asn);
         let right_avoids_asn = avoids_asn(right, avoid_asn);
-
         right
             .path_metadata
             .validator_lane
@@ -2547,10 +2332,8 @@ fn select_relay<'a>(
             .then_with(|| right.guard_weight.cmp(&left.guard_weight))
             .then_with(|| left.relay_id.cmp(&right.relay_id))
     });
-
     candidates.into_iter().next()
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -2558,7 +2341,6 @@ mod tests {
         str::FromStr,
         time::Duration,
     };
-
     use ed25519_dalek::SigningKey;
     use iroha_crypto::soranet::{
         certificate::{
@@ -2577,52 +2359,38 @@ mod tests {
     use iroha_primitives::numeric::Quantity;
     use rand::rand_core::TryRngCore;
     use rand::{RngCore, SeedableRng, rngs::StdRng};
-    use soranet_pq::{
-        MlDsaSuite, MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair,
-    };
-
+    use soranet_pq::{MlDsaSuite, MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     use super::*;
-
     const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     const ED25519_NONCANONICAL_IDENTITY: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     struct FailingTryRng;
-
     #[derive(Debug)]
     struct FailingTryRngError;
-
     impl fmt::Display for FailingTryRngError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("failing guard cache RNG")
         }
     }
-
     impl TryRngCore for FailingTryRng {
         type Error = FailingTryRngError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingTryRngError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(FailingTryRngError)
         }
-
         fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
             Err(FailingTryRngError)
         }
     }
-
     impl TryCryptoRng for FailingTryRng {}
-
     fn build_directory_snapshot(
         validation_phase: CertificateValidationPhase,
         directory_hash: [u8; 32],
@@ -2632,13 +2400,11 @@ mod tests {
         rng.fill_bytes(&mut ed_seed);
         let ed_signing_key = SigningKey::from_bytes(&ed_seed);
         let ed_public = Ed25519VerifyingKey::from(&ed_signing_key).to_bytes();
-
         let mldsa_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
             .expect("ML-DSA keypair generation should succeed");
         let fingerprint = compute_issuer_fingerprint(&ed_public, mldsa_keys.public_key())
             .expect("sample issuer fingerprint should compute");
         let preferred_kem_suite = MlKemSuite::MlKem1024;
-
         let certificate = RelayCertificateV2 {
             relay_id: ed_public,
             identity_ed25519: ed_public,
@@ -2683,16 +2449,13 @@ mod tests {
             issuer_fingerprint: fingerprint,
             pq_kem_public: vec![0x55; preferred_kem_suite.public_key_len()],
         };
-
         let published_at = certificate.published_at;
         let valid_after = certificate.valid_after;
         let valid_until = certificate.valid_until;
         let validation_phase_raw = encode_validation_phase(validation_phase);
-
         let bundle = certificate
             .issue(&ed_signing_key, mldsa_keys.secret_key())
             .expect("certificate issuance");
-
         let snapshot = GuardDirectorySnapshotV2 {
             version: 2,
             directory_hash,
@@ -2709,10 +2472,8 @@ mod tests {
                 certificate: bundle.to_cbor(),
             }],
         };
-
         (snapshot, bundle)
     }
-
     #[test]
     fn guard_directory_decodes_snapshot_v2() {
         let directory_hash = [0xAB; 32];
@@ -2721,7 +2482,6 @@ mod tests {
             directory_hash,
         );
         let bytes = to_bytes(&snapshot).expect("encode snapshot");
-
         let directory =
             RelayDirectory::inspect_guard_directory_bytes(&bytes).expect("decode guard directory");
         assert_eq!(directory.directory_hash(), Some(directory_hash));
@@ -2732,7 +2492,6 @@ mod tests {
         assert_eq!(directory.published_at(), Some(snapshot.published_at_unix));
         assert_eq!(directory.valid_after(), Some(snapshot.valid_after_unix));
         assert_eq!(directory.valid_until(), Some(snapshot.valid_until_unix));
-
         let descriptor = directory.entries().first().expect("descriptor");
         assert_eq!(descriptor.relay_id, bundle.certificate.relay_id);
         assert_eq!(descriptor.guard_weight, bundle.certificate.guard_weight);
@@ -2747,7 +2506,6 @@ mod tests {
         );
         assert!(descriptor.certificate().is_some());
     }
-
     #[test]
     fn guard_directory_runtime_load_requires_exact_digest_and_current_window() {
         let directory_hash = [0xAB; 32];
@@ -2757,10 +2515,8 @@ mod tests {
         );
         let bytes = to_bytes(&snapshot).expect("encode snapshot");
         let digest = compute_snapshot_digest(&bytes);
-
         RelayDirectory::from_guard_directory_bytes_at(&bytes, digest, snapshot.valid_after_unix)
             .expect("pinned active snapshot should load");
-
         let digest_err = RelayDirectory::from_guard_directory_bytes_at(
             &bytes,
             [0xEE; 32],
@@ -2768,7 +2524,6 @@ mod tests {
         )
         .expect_err("untrusted snapshot digest must fail");
         assert!(digest_err.to_string().contains("digest mismatch"));
-
         let expired = RelayDirectory::from_guard_directory_bytes_at(
             &bytes,
             digest,
@@ -2777,14 +2532,12 @@ mod tests {
         .expect_err("expired snapshot must fail");
         assert!(expired.to_string().contains("expired"));
     }
-
     #[test]
     fn guard_directory_detects_hash_mismatch() {
         let (mut snapshot, _) =
             build_directory_snapshot(CertificateValidationPhase::Phase3RequireDual, [0xAA; 32]);
         snapshot.directory_hash = [0xBB; 32];
         let bytes = to_bytes(&snapshot).expect("encode snapshot");
-
         let err = RelayDirectory::inspect_guard_directory_bytes(&bytes)
             .expect_err("hash mismatch expected");
         match err {
@@ -2799,14 +2552,12 @@ mod tests {
             other => panic!("unexpected guard directory error: {other:?}"),
         }
     }
-
     #[test]
     fn guard_directory_rejects_all_zero_issuer_ed25519_key_material() {
         let (mut snapshot, _) =
             build_directory_snapshot(CertificateValidationPhase::Phase3RequireDual, [0xAA; 32]);
         snapshot.issuers[0].ed25519_public = [0u8; 32];
         snapshot.issuers[0].fingerprint = [0xEE; 32];
-
         let err = RelayDirectory::from_guard_directory_snapshot(snapshot, None)
             .expect_err("all-zero issuer Ed25519 key should fail before certificate verification");
         match err {
@@ -2819,7 +2570,6 @@ mod tests {
             other => panic!("unexpected guard directory error: {other:?}"),
         }
     }
-
     #[test]
     fn guard_directory_rejects_noncanonical_or_small_order_issuer_ed25519_key_material() {
         for (public_key, expected_reason) in [
@@ -2830,7 +2580,6 @@ mod tests {
                 build_directory_snapshot(CertificateValidationPhase::Phase3RequireDual, [0xAA; 32]);
             snapshot.issuers[0].ed25519_public = public_key;
             snapshot.issuers[0].fingerprint = [0xEE; 32];
-
             let err = RelayDirectory::from_guard_directory_snapshot(snapshot, None).expect_err(
                 "invalid issuer Ed25519 key should fail before certificate verification",
             );
@@ -2845,11 +2594,9 @@ mod tests {
             }
         }
     }
-
     fn relay_id(byte: u8) -> [u8; 32] {
         [byte; 32]
     }
-
     fn entry_descriptor(id_byte: u8, weight: u32, endpoints: Vec<Endpoint>) -> RelayDescriptor {
         RelayDescriptor {
             relay_id: relay_id(id_byte),
@@ -2863,13 +2610,11 @@ mod tests {
             path_metadata: PathMetadata::default(),
         }
     }
-
     fn pq_entry_descriptor(id_byte: u8, weight: u32, endpoints: Vec<Endpoint>) -> RelayDescriptor {
         let mut descriptor = entry_descriptor(id_byte, weight, endpoints);
         descriptor.pq_kem_public = Some(vec![0xAB; 4]);
         descriptor
     }
-
     fn middle_descriptor(id_byte: u8, weight: u32, pq: bool, priority: u8) -> RelayDescriptor {
         let mut descriptor = RelayDescriptor {
             relay_id: relay_id(id_byte),
@@ -2890,7 +2635,6 @@ mod tests {
         }
         descriptor
     }
-
     fn exit_descriptor(id_byte: u8, weight: u32, pq: bool, priority: u8) -> RelayDescriptor {
         let mut descriptor = RelayDescriptor {
             relay_id: relay_id(id_byte),
@@ -2911,13 +2655,11 @@ mod tests {
         }
         descriptor
     }
-
     fn asset_definition(name: &str) -> AssetDefinitionId {
         let domain = DomainId::try_new("sora", "universal").expect("domain id");
         let asset_name = Name::from_str(name).expect("asset name");
         AssetDefinitionId::derive_from_components(domain, asset_name)
     }
-
     fn bond_policy(minimum: &str, asset: &AssetDefinitionId) -> RelayBondPolicyV1 {
         RelayBondPolicyV1 {
             minimum_exit_bond: Quantity::from_str(minimum).expect("quantity"),
@@ -2927,7 +2669,6 @@ mod tests {
             activation_grace_epochs: 0,
         }
     }
-
     fn bond_entry(
         relay_id: [u8; 32],
         amount: &str,
@@ -2942,7 +2683,6 @@ mod tests {
             exit_capable,
         }
     }
-
     fn guard_record(id_byte: u8, pinned_at_unix: u64, endpoint: &str) -> GuardRecord {
         GuardRecord {
             relay_id: relay_id(id_byte),
@@ -2956,7 +2696,6 @@ mod tests {
             path_metadata: PathMetadata::default(),
         }
     }
-
     fn guard_record_with_pq(
         id_byte: u8,
         pinned_at_unix: u64,
@@ -2975,7 +2714,6 @@ mod tests {
             path_metadata: PathMetadata::default(),
         }
     }
-
     #[test]
     fn guard_cache_key_roundtrip() {
         let key = GuardCacheKey::from_hex(
@@ -2987,7 +2725,6 @@ mod tests {
             "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
         );
     }
-
     #[test]
     fn guard_set_roundtrip_with_key() {
         let key = GuardCacheKey::from_hex(
@@ -3005,7 +2742,6 @@ mod tests {
         assert_eq!(decoded.guards()[0].bandwidth_bytes_per_sec, 4 * 1024 * 1024);
         assert_eq!(decoded.guards()[0].reputation_weight, 77);
     }
-
     #[test]
     fn guard_selector_filters_expired_certificates() {
         let (_, mut bundle) =
@@ -3030,7 +2766,6 @@ mod tests {
         assert!(guard.certificate().is_none());
         assert!(guard.pq_kem_public.is_none());
     }
-
     #[test]
     fn guard_selector_ignores_stale_record_pq_keys() {
         let (_, mut bundle) =
@@ -3060,7 +2795,6 @@ mod tests {
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
-
         let selector = GuardSelector::new(NonZeroUsize::new(1).expect("non-zero"));
         let guards = selector.select(&directory, Some(&existing), 100, AnonymityPolicy::GuardPq);
         assert_eq!(guards.guards().len(), 1);
@@ -3068,7 +2802,6 @@ mod tests {
         assert!(guard.certificate().is_none());
         assert!(guard.pq_kem_public.is_none());
     }
-
     #[test]
     fn guard_set_persists_certificate_bundle() {
         let (_, bundle) =
@@ -3097,7 +2830,6 @@ mod tests {
                 .is_some_and(|key| key == &bundle.certificate.pq_kem_public)
         );
     }
-
     #[test]
     fn guard_selector_prefers_validator_lane_with_path_hints() {
         let mut directory = RelayDirectory::new(vec![
@@ -3123,7 +2855,6 @@ mod tests {
         let report = directory.apply_path_hints(&hints);
         assert_eq!(report.applied, 2);
         assert!(report.missing.is_empty());
-
         let selector = GuardSelector::new(NonZeroUsize::new(1).expect("non-zero"));
         let guards = selector.select(&directory, None, 0, AnonymityPolicy::GuardPq);
         let guard = guards.guards().first().expect("selected guard");
@@ -3131,7 +2862,6 @@ mod tests {
         assert_eq!(guard.path_metadata.avg_rtt_ms, Some(20));
         assert!(guard.path_metadata.validator_lane);
     }
-
     #[test]
     fn guard_set_tag_verification_fails_without_key() {
         let key = GuardCacheKey::from_hex(
@@ -3146,7 +2876,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn guard_set_tag_verification_detects_tampering() {
         let key = GuardCacheKey::from_hex(
@@ -3168,7 +2897,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn exit_bond_policy_demotes_missing_bond() {
         let asset = asset_definition("xor");
@@ -3185,15 +2913,12 @@ mod tests {
             path_metadata: PathMetadata::default(),
         }]);
         let ledger: BTreeMap<RelayId, RelayBondLedgerEntryV1> = BTreeMap::new();
-
         let demotions = directory.enforce_exit_bond_policy(&policy, ledger.iter());
-
         assert_eq!(demotions.len(), 1);
         assert_eq!(demotions[0].relay_id, relay_id(0xAA));
         assert_eq!(demotions[0].reason, ExitDemotionReason::MissingBond);
         assert!(!directory.entries()[0].roles.exit());
     }
-
     #[test]
     fn exit_bond_policy_demotes_disabled_in_ledger() {
         let asset = asset_definition("xor");
@@ -3201,7 +2926,6 @@ mod tests {
         let entry = bond_entry(relay_id(0xBB), "150", &asset, false);
         let mut ledger = BTreeMap::new();
         ledger.insert(entry.relay_id, entry);
-
         let mut directory = RelayDirectory::new(vec![RelayDescriptor {
             relay_id: relay_id(0xBB),
             guard_weight: 10,
@@ -3213,9 +2937,7 @@ mod tests {
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
-
         let demotions = directory.enforce_exit_bond_policy(&policy, ledger.iter());
-
         assert_eq!(demotions.len(), 1);
         assert_eq!(
             demotions[0].reason,
@@ -3223,7 +2945,6 @@ mod tests {
         );
         assert!(!directory.entries()[0].roles.exit());
     }
-
     #[test]
     fn exit_bond_policy_demotes_below_minimum() {
         let asset = asset_definition("xor");
@@ -3231,7 +2952,6 @@ mod tests {
         let entry = bond_entry(relay_id(0xCC), "80", &asset, true);
         let mut ledger = BTreeMap::new();
         ledger.insert(entry.relay_id, entry);
-
         let mut directory = RelayDirectory::new(vec![RelayDescriptor {
             relay_id: relay_id(0xCC),
             guard_weight: 10,
@@ -3243,14 +2963,11 @@ mod tests {
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
-
         let demotions = directory.enforce_exit_bond_policy(&policy, ledger.iter());
-
         assert_eq!(demotions.len(), 1);
         assert_eq!(demotions[0].reason, ExitDemotionReason::BelowMinimum);
         assert!(!directory.entries()[0].roles.exit());
     }
-
     #[test]
     fn exit_bond_policy_demotes_asset_mismatch() {
         let asset = asset_definition("xor");
@@ -3259,7 +2976,6 @@ mod tests {
         let entry = bond_entry(relay_id(0xDD), "200", &other, true);
         let mut ledger = BTreeMap::new();
         ledger.insert(entry.relay_id, entry);
-
         let mut directory = RelayDirectory::new(vec![RelayDescriptor {
             relay_id: relay_id(0xDD),
             guard_weight: 10,
@@ -3271,14 +2987,11 @@ mod tests {
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
-
         let demotions = directory.enforce_exit_bond_policy(&policy, ledger.iter());
-
         assert_eq!(demotions.len(), 1);
         assert_eq!(demotions[0].reason, ExitDemotionReason::BondAssetMismatch);
         assert!(!directory.entries()[0].roles.exit());
     }
-
     #[test]
     fn exit_bond_policy_retains_compliant_exit() {
         let asset = asset_definition("xor");
@@ -3286,7 +2999,6 @@ mod tests {
         let entry = bond_entry(relay_id(0xEE), "250", &asset, true);
         let mut ledger = BTreeMap::new();
         ledger.insert(entry.relay_id, entry);
-
         let mut directory = RelayDirectory::new(vec![RelayDescriptor {
             relay_id: relay_id(0xEE),
             guard_weight: 10,
@@ -3298,13 +3010,10 @@ mod tests {
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
-
         let demotions = directory.enforce_exit_bond_policy(&policy, ledger.iter());
-
         assert!(demotions.is_empty());
         assert!(directory.entries()[0].roles.exit());
     }
-
     fn sample_directory() -> RelayDirectory {
         RelayDirectory::new(vec![
             entry_descriptor(0x01, 120, vec![Endpoint::new("soranet://relay-1", 0)]),
@@ -3313,13 +3022,11 @@ mod tests {
             entry_descriptor(0x04, 90, vec![Endpoint::new("soranet://relay-4", 0)]),
         ])
     }
-
     #[test]
     fn circuit_manager_builds_initial_circuits() {
         let directory = sample_directory();
         let guard_set = GuardSet::new(vec![guard_record(0x01, 0, "soranet://relay-1")]);
         let mut manager = CircuitManager::new(CircuitManagerConfig::default());
-
         let events = manager
             .refresh(&directory, &guard_set, 0, AnonymityPolicy::GuardPq)
             .expect("refresh");
@@ -3327,14 +3034,11 @@ mod tests {
         assert!(matches!(events[0], CircuitEvent::Built { .. }));
         assert_eq!(manager.active_circuits().len(), 1);
     }
-
     #[test]
     fn circuit_manager_builds_validator_mesh_without_bypass() {
         let mut entry = entry_descriptor(0x01, 120, vec![Endpoint::new("soranet://entry", 0)]);
         entry.path_metadata.validator_lane = true;
-
         let middle = middle_descriptor(0x02, 80, false, 0);
-
         let exit = RelayDescriptor {
             relay_id: relay_id(0x03),
             guard_weight: 80,
@@ -3346,13 +3050,11 @@ mod tests {
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
-
         let directory = RelayDirectory::new(vec![entry, middle, exit]);
         let mut guard = guard_record(0x01, 0, "soranet://entry");
         guard.path_metadata.validator_lane = true;
         let guard_set = GuardSet::new(vec![guard]);
         let mut manager = CircuitManager::new(CircuitManagerConfig::default());
-
         let events = manager
             .refresh(&directory, &guard_set, 0, AnonymityPolicy::GuardPq)
             .expect("refresh");
@@ -3362,16 +3064,13 @@ mod tests {
                 .any(|event| matches!(event, CircuitEvent::Built { .. })),
             "expected a circuit build event"
         );
-
         let circuits = manager.active_circuits();
         assert!(!circuits.is_empty(), "expected an active circuit");
     }
-
     #[test]
     fn circuit_manager_rotates_when_guard_pinned_updates() {
         let directory = sample_directory();
         let mut manager = CircuitManager::new(CircuitManagerConfig::default());
-
         let initial_guard = guard_record(0x01, 10, "soranet://relay-1");
         manager
             .refresh(
@@ -3381,11 +3080,9 @@ mod tests {
                 AnonymityPolicy::GuardPq,
             )
             .expect("initial refresh");
-
         for circuit in manager.active_circuits() {
             assert!(manager.record_latency(circuit.id, Duration::from_millis(50)));
         }
-
         let rotated_guard = guard_record(0x01, 200, "soranet://relay-1");
         let events = manager
             .refresh(
@@ -3395,7 +3092,6 @@ mod tests {
                 AnonymityPolicy::GuardPq,
             )
             .expect("rotation refresh");
-
         assert!(events.iter().any(|event| match event {
             CircuitEvent::Retired { record } => matches!(
                 record.reason,
@@ -3409,12 +3105,10 @@ mod tests {
                 .any(|event| matches!(event, CircuitEvent::Built { .. }))
         );
     }
-
     #[test]
     fn circuit_manager_rotates_when_endpoint_changes() {
         let directory = sample_directory();
         let mut manager = CircuitManager::new(CircuitManagerConfig::default());
-
         let initial_guard = guard_record(0x01, 0, "soranet://relay-1");
         manager
             .refresh(
@@ -3424,7 +3118,6 @@ mod tests {
                 AnonymityPolicy::GuardPq,
             )
             .expect("initial refresh");
-
         let updated_guard = guard_record(0x01, 0, "soranet://relay-1-alt");
         let events = manager
             .refresh(
@@ -3434,7 +3127,6 @@ mod tests {
                 AnonymityPolicy::GuardPq,
             )
             .expect("refresh with endpoint change");
-
         assert!(events.iter().any(|event| match event {
             CircuitEvent::Retired { record } => matches!(
                 record.reason,
@@ -3443,12 +3135,10 @@ mod tests {
             _ => false,
         }));
     }
-
     #[test]
     fn circuit_manager_rotates_when_pq_material_changes() {
         let directory = sample_directory();
         let mut manager = CircuitManager::new(CircuitManagerConfig::default());
-
         let initial_guard = guard_record_with_pq(0x01, 0, "soranet://relay-1", Some(vec![0xAA; 4]));
         manager
             .refresh(
@@ -3458,7 +3148,6 @@ mod tests {
                 AnonymityPolicy::GuardPq,
             )
             .expect("initial refresh");
-
         let updated_guard = guard_record_with_pq(0x01, 0, "soranet://relay-1", Some(vec![0xBB; 4]));
         let events = manager
             .refresh(
@@ -3468,7 +3157,6 @@ mod tests {
                 AnonymityPolicy::GuardPq,
             )
             .expect("refresh with pq change");
-
         assert!(events.iter().any(|event| match event {
             CircuitEvent::Retired { record } => matches!(
                 record.reason,
@@ -3477,16 +3165,13 @@ mod tests {
             _ => false,
         }));
     }
-
     #[test]
     fn circuit_manager_retires_removed_guards() {
         let directory = sample_directory();
         let mut manager = CircuitManager::new(CircuitManagerConfig::default());
-
         let guard_a = guard_record(0x01, 0, "soranet://relay-1");
         let guard_b = guard_record(0x02, 0, "soranet://relay-2");
         let guard_b_id = guard_b.relay_id;
-
         manager
             .refresh(
                 &directory,
@@ -3495,7 +3180,6 @@ mod tests {
                 AnonymityPolicy::GuardPq,
             )
             .expect("initial refresh");
-
         let events = manager
             .refresh(
                 &directory,
@@ -3504,7 +3188,6 @@ mod tests {
                 AnonymityPolicy::GuardPq,
             )
             .expect("refresh removing guard");
-
         assert!(events.iter().any(|event| match event {
             CircuitEvent::Retired { record } => {
                 record.info.entry.relay_id == guard_b_id
@@ -3513,12 +3196,10 @@ mod tests {
             _ => false,
         }));
     }
-
     #[test]
     fn circuit_manager_latency_soak_remains_stable_across_rotations() {
         let directory = sample_directory();
         let mut manager = CircuitManager::new(CircuitManagerConfig::default());
-
         let rotations = [
             GuardSet::new(vec![
                 guard_record(0x01, 0, "soranet://relay-1"),
@@ -3537,10 +3218,8 @@ mod tests {
                 guard_record(0x02, 300, "soranet://relay-2"),
             ]),
         ];
-
         let mut averages = Vec::new();
         let latency_samples = [48u64, 49, 47, 48];
-
         for (idx, guard_set) in rotations.iter().enumerate() {
             let events = manager
                 .refresh(
@@ -3550,7 +3229,6 @@ mod tests {
                     AnonymityPolicy::GuardPq,
                 )
                 .expect("refresh succeeds");
-
             if idx > 0 {
                 let mut rotation_latencies = Vec::new();
                 for event in &events {
@@ -3564,19 +3242,16 @@ mod tests {
                 let avg = rotation_latencies.iter().sum::<f64>() / rotation_latencies.len() as f64;
                 averages.push(avg);
             }
-
             for circuit in manager.active_circuits() {
                 assert!(
                     manager.record_latency(circuit.id, Duration::from_millis(latency_samples[idx]))
                 );
             }
         }
-
         assert!(
             averages.len() >= 3,
             "expected at least three rotation averages, got {averages:?}"
         );
-
         let min_avg = averages
             .iter()
             .copied()
@@ -3593,7 +3268,6 @@ mod tests {
             "latency spread {spread} across rotations exceeds threshold; averages={averages:?}"
         );
     }
-
     #[test]
     fn selector_prefers_highest_weight_entry_guards() {
         let mut directory = RelayDirectory::default();
@@ -3612,10 +3286,8 @@ mod tests {
             200,
             vec![Endpoint::new("soranet://relay-3", 0)],
         ));
-
         let selector = GuardSelector::new(NonZeroUsize::new(2).expect("non-zero"));
         let guards = selector.select(&directory, None, 5, AnonymityPolicy::GuardPq);
-
         assert_eq!(guards.len(), 2);
         assert_eq!(guards.guards()[0].relay_id, relay_id(0x02));
         assert_eq!(guards.guards()[1].relay_id, relay_id(0x03));
@@ -3624,7 +3296,6 @@ mod tests {
         assert_eq!(guards.guards()[0].pinned_at_unix, 5);
         assert_eq!(guards.guards()[1].pinned_at_unix, 5);
     }
-
     #[test]
     fn selector_prefers_higher_bandwidth_on_weight_tie() {
         let mut high_bw =
@@ -3634,18 +3305,15 @@ mod tests {
         let mut low_bw = pq_entry_descriptor(0x11, 150, vec![Endpoint::new("soranet://low-bw", 0)]);
         low_bw.bandwidth_bytes_per_sec = 5 * 1024 * 1024;
         low_bw.reputation_weight = 90;
-
         let directory = RelayDirectory::new(vec![high_bw.clone(), low_bw.clone()]);
         let selector = GuardSelector::new(NonZeroUsize::new(2).expect("non-zero"));
         let guards = selector.select(&directory, None, 5, AnonymityPolicy::GuardPq);
-
         assert_eq!(guards.len(), 2);
         assert_eq!(guards.guards()[0].relay_id, high_bw.relay_id);
         assert_eq!(guards.guards()[1].relay_id, low_bw.relay_id);
         assert_eq!(guards.guards()[0].bandwidth_bytes_per_sec, 9 * 1024 * 1024);
         assert_eq!(guards.guards()[1].bandwidth_bytes_per_sec, 5 * 1024 * 1024);
     }
-
     #[test]
     fn selector_prefers_higher_reputation_after_bandwidth() {
         let mut first = pq_entry_descriptor(0x20, 180, vec![Endpoint::new("soranet://first", 0)]);
@@ -3654,25 +3322,21 @@ mod tests {
         let mut second = pq_entry_descriptor(0x21, 180, vec![Endpoint::new("soranet://second", 0)]);
         second.bandwidth_bytes_per_sec = first.bandwidth_bytes_per_sec;
         second.reputation_weight = 90;
-
         let directory = RelayDirectory::new(vec![first.clone(), second.clone()]);
         let selector = GuardSelector::new(NonZeroUsize::new(2).expect("non-zero"));
         let guards = selector.select(&directory, None, 42, AnonymityPolicy::GuardPq);
-
         assert_eq!(guards.len(), 2);
         assert_eq!(guards.guards()[0].relay_id, second.relay_id);
         assert_eq!(guards.guards()[1].relay_id, first.relay_id);
         assert_eq!(guards.guards()[0].reputation_weight, 90);
         assert_eq!(guards.guards()[1].reputation_weight, 60);
     }
-
     #[test]
     fn selector_prefers_pq_guard_over_heavier_classical_in_compatible_policy() {
         let mut pq_guard =
             pq_entry_descriptor(0x40, 150, vec![Endpoint::new("soranet://pq-guard", 0)]);
         pq_guard.bandwidth_bytes_per_sec = 6 * 1024 * 1024;
         pq_guard.reputation_weight = 110;
-
         let mut classical_guard = entry_descriptor(
             0x41,
             220,
@@ -3680,16 +3344,13 @@ mod tests {
         );
         classical_guard.bandwidth_bytes_per_sec = 10 * 1024 * 1024;
         classical_guard.reputation_weight = 190;
-
         let directory = RelayDirectory::new(vec![classical_guard.clone(), pq_guard.clone()]);
         let selector = GuardSelector::new(NonZeroUsize::new(1).expect("non-zero"));
         let guards = selector.select(&directory, None, 5, AnonymityPolicy::GuardPq);
-
         assert_eq!(guards.len(), 1);
         assert_eq!(guards.guards()[0].relay_id, pq_guard.relay_id);
         assert!(guards.guards()[0].pq_kem_public.is_some());
     }
-
     #[test]
     fn selector_is_deterministic_for_equivalent_descriptors() {
         let directory = RelayDirectory::new(vec![
@@ -3697,24 +3358,20 @@ mod tests {
             entry_descriptor(0x10, 120, vec![Endpoint::new("soranet://relay-10", 0)]),
             entry_descriptor(0x20, 120, vec![Endpoint::new("soranet://relay-20", 0)]),
         ]);
-
         let selector = GuardSelector::new(NonZeroUsize::new(3).expect("non-zero"));
         let guards = selector.select(&directory, None, 7, AnonymityPolicy::GuardPq);
         let ordered: Vec<[u8; 32]> = guards.iter().map(|record| record.relay_id).collect();
-
         assert_eq!(
             ordered,
             vec![relay_id(0x10), relay_id(0x20), relay_id(0x30)]
         );
     }
-
     #[test]
     fn selector_retains_pinned_guards_within_retention() {
         let directory = RelayDirectory::new(vec![
             entry_descriptor(0x01, 10, vec![Endpoint::new("soranet://guard-1", 0)]),
             entry_descriptor(0x02, 50, vec![Endpoint::new("soranet://guard-2", 0)]),
         ]);
-
         let existing = GuardSet::new(vec![GuardRecord {
             relay_id: relay_id(0x01),
             pinned_at_unix: 10,
@@ -3726,12 +3383,10 @@ mod tests {
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
-
         let retention = GuardRetention::new(NonZeroU64::new(100).expect("non-zero"));
         let selector =
             GuardSelector::new(NonZeroUsize::new(2).expect("non-zero")).with_retention(retention);
         let guards = selector.select(&directory, Some(&existing), 50, AnonymityPolicy::GuardPq);
-
         assert_eq!(guards.len(), 2);
         assert_eq!(guards.guards()[0].relay_id, relay_id(0x01));
         assert_eq!(guards.guards()[0].pinned_at_unix, 10);
@@ -3739,14 +3394,12 @@ mod tests {
         assert_eq!(guards.guards()[1].relay_id, relay_id(0x02));
         assert_eq!(guards.guards()[1].pinned_at_unix, 50);
     }
-
     #[test]
     fn selector_drops_expired_or_missing_guards() {
         let directory = RelayDirectory::new(vec![
             entry_descriptor(0x10, 70, vec![Endpoint::new("soranet://fresh-1", 0)]),
             entry_descriptor(0x11, 60, vec![Endpoint::new("soranet://fresh-2", 0)]),
         ]);
-
         let existing = GuardSet::new(vec![
             GuardRecord {
                 relay_id: relay_id(0x01),
@@ -3771,19 +3424,16 @@ mod tests {
                 path_metadata: PathMetadata::default(),
             },
         ]);
-
         let retention = GuardRetention::new(NonZeroU64::new(10).expect("non-zero"));
         let selector =
             GuardSelector::new(NonZeroUsize::new(2).expect("non-zero")).with_retention(retention);
         let guards = selector.select(&directory, Some(&existing), 20, AnonymityPolicy::GuardPq);
-
         assert_eq!(guards.len(), 2);
         assert_eq!(guards.guards()[0].relay_id, relay_id(0x10));
         assert_eq!(guards.guards()[1].relay_id, relay_id(0x11));
         assert_eq!(guards.guards()[0].pinned_at_unix, 20);
         assert_eq!(guards.guards()[1].pinned_at_unix, 20);
     }
-
     #[test]
     fn selector_prioritises_pq_guards_when_policy_requires() {
         let directory = RelayDirectory::new(vec![
@@ -3791,15 +3441,12 @@ mod tests {
             entry_descriptor(0x02, 20, vec![Endpoint::new("soranet://classical-1", 0)]),
             pq_entry_descriptor(0x03, 5, vec![Endpoint::new("soranet://pq-2", 0)]),
         ]);
-
         let selector = GuardSelector::new(NonZeroUsize::new(2).expect("non-zero"));
         let guards = selector.select(&directory, None, 100, AnonymityPolicy::GuardPq);
-
         assert_eq!(guards.len(), 2);
         assert!(guards.guards()[0].pq_kem_public.is_some());
         assert!(guards.guards()[1].pq_kem_public.is_some());
     }
-
     #[test]
     fn selector_replaces_classical_guard_when_pq_available() {
         let directory = RelayDirectory::new(vec![
@@ -3810,7 +3457,6 @@ mod tests {
                 vec![Endpoint::new("soranet://classical-guard", 0)],
             ),
         ]);
-
         let existing = GuardSet::new(vec![GuardRecord {
             relay_id: relay_id(0x02),
             pinned_at_unix: 0,
@@ -3822,15 +3468,12 @@ mod tests {
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
-
         let selector = GuardSelector::new(NonZeroUsize::new(1).expect("non-zero"));
         let guards = selector.select(&directory, Some(&existing), 10, AnonymityPolicy::GuardPq);
-
         assert_eq!(guards.len(), 1);
         assert_eq!(guards.guards()[0].relay_id, relay_id(0x01));
         assert!(guards.guards()[0].pq_kem_public.is_some());
     }
-
     #[test]
     fn selector_ignores_classical_when_pq_supply_sufficient() {
         let directory = RelayDirectory::new(vec![
@@ -3843,7 +3486,6 @@ mod tests {
                 vec![Endpoint::new("soranet://classical-guard", 0)],
             ),
         ]);
-
         let selector = GuardSelector::new(NonZeroUsize::new(2).expect("non-zero"));
         let guard_set = selector.select(&directory, None, 5, AnonymityPolicy::GuardPq);
         assert_eq!(guard_set.len(), 2);
@@ -3853,7 +3495,6 @@ mod tests {
                 .iter()
                 .all(|record| record.pq_kem_public.is_some())
         );
-
         let guard_set_majority = selector.select(&directory, None, 5, AnonymityPolicy::MajorityPq);
         assert_eq!(guard_set_majority.len(), 2);
         assert!(
@@ -3863,7 +3504,6 @@ mod tests {
                 .all(|record| record.pq_kem_public.is_some())
         );
     }
-
     #[test]
     fn guard_set_persistence_roundtrip() {
         let guards = GuardSet::new(vec![
@@ -3890,18 +3530,14 @@ mod tests {
                 path_metadata: PathMetadata::default(),
             },
         ]);
-
         let bytes = guards.encode().expect("encode guard set");
         let decoded = GuardSet::decode(&bytes).expect("decode guard set");
-
         assert_eq!(decoded, guards);
     }
-
     #[test]
     fn guard_cache_tag_reports_rng_failure() {
         let key = GuardCacheKey::from_bytes([0xA5; 32]);
         let mut rng = FailingTryRng;
-
         match GuardCacheTag::generate_with_rng(&key, b"guard payload", &mut rng) {
             Err(GuardSetPersistenceError::RandomBytes { operation, message }) => {
                 assert_eq!(operation, "generating guard cache tag nonce");
@@ -3911,7 +3547,6 @@ mod tests {
             Err(other) => panic!("expected RNG failure, got {other:?}"),
         }
     }
-
     #[test]
     fn circuit_manager_builds_circuits_per_guard() {
         let guard_a = GuardRecord {
@@ -3937,19 +3572,16 @@ mod tests {
             path_metadata: PathMetadata::default(),
         };
         let guard_set = GuardSet::new(vec![guard_a.clone(), guard_b.clone()]);
-
         let directory = RelayDirectory::new(vec![
             middle_descriptor(0x10, 50, true, 0),
             exit_descriptor(0x20, 60, true, 0),
             exit_descriptor(0x21, 55, true, 1),
         ]);
-
         let mut manager = CircuitManager::new(CircuitManagerConfig::new(Duration::from_secs(60)));
         let events = manager
             .refresh(&directory, &guard_set, 1_000, AnonymityPolicy::GuardPq)
             .expect("build circuits");
         assert_eq!(events.len(), 2);
-
         let circuits = manager.active_circuits();
         assert_eq!(circuits.len(), 2);
         let entry_ids: BTreeSet<[u8; 32]> =
@@ -3957,7 +3589,6 @@ mod tests {
         assert!(entry_ids.contains(&guard_a.relay_id));
         assert!(entry_ids.contains(&guard_b.relay_id));
     }
-
     #[test]
     fn circuit_manager_rotates_on_ttl() {
         let guard = GuardRecord {
@@ -3972,29 +3603,24 @@ mod tests {
             path_metadata: PathMetadata::default(),
         };
         let guard_set = GuardSet::new(vec![guard.clone()]);
-
         let directory = RelayDirectory::new(vec![
             middle_descriptor(0x12, 45, true, 0),
             exit_descriptor(0x22, 70, true, 0),
         ]);
-
         let ttl = Duration::from_secs(5);
         let mut manager = CircuitManager::new(CircuitManagerConfig::new(ttl));
         let first_events = manager
             .refresh(&directory, &guard_set, 10, AnonymityPolicy::GuardPq)
             .expect("initial build");
         assert_eq!(first_events.len(), 1);
-
         let initial_circuit = manager
             .active_circuits()
             .into_iter()
             .next()
             .expect("active circuit");
         assert_eq!(initial_circuit.entry.relay_id, guard.relay_id);
-
         assert!(manager.record_latency(initial_circuit.id, Duration::from_millis(48)));
         assert!(manager.record_latency(initial_circuit.id, Duration::from_millis(52)));
-
         let later = 10 + ttl.as_secs() + 1;
         let events = manager
             .refresh(&directory, &guard_set, later, AnonymityPolicy::GuardPq)
@@ -4009,7 +3635,6 @@ mod tests {
             .count();
         assert_eq!(retired, 1);
         assert_eq!(built, 1);
-
         let history = manager.rotation_history();
         assert_eq!(history.len(), 1);
         let record = &history[0];
@@ -4023,7 +3648,6 @@ mod tests {
         assert_eq!(latency.min_ms, 48);
         assert_eq!(latency.max_ms, 52);
     }
-
     #[test]
     fn circuit_manager_teardown_all_records_manual_shutdown() {
         let guard_a = GuardRecord {
@@ -4049,33 +3673,27 @@ mod tests {
             path_metadata: PathMetadata::default(),
         };
         let guard_set = GuardSet::new(vec![guard_a.clone(), guard_b.clone()]);
-
         let directory = RelayDirectory::new(vec![
             middle_descriptor(0x30, 70, true, 0),
             exit_descriptor(0x40, 80, true, 0),
             exit_descriptor(0x41, 75, true, 1),
         ]);
-
         let mut manager = CircuitManager::new(CircuitManagerConfig::new(Duration::from_secs(120)));
         manager
             .refresh(&directory, &guard_set, 1_000, AnonymityPolicy::GuardPq)
             .expect("build initial circuits");
-
         let active = manager.active_circuits();
         assert_eq!(active.len(), 2);
-
         let mut expected_latencies = BTreeMap::new();
         for (idx, circuit) in active.iter().enumerate() {
             let millis = if idx == 0 { 55 } else { 62 };
             assert!(manager.record_latency(circuit.id, Duration::from_millis(millis)));
             expected_latencies.insert(circuit.entry.relay_id, millis);
         }
-
         let retired_at = 2_000;
         let records = manager.teardown_all(retired_at);
         assert_eq!(records.len(), expected_latencies.len());
         assert!(manager.active_circuits().is_empty());
-
         for record in &records {
             assert_eq!(record.reason, CircuitRetirementReason::ManualTeardown);
             assert_eq!(record.retired_at_unix, retired_at);
@@ -4098,14 +3716,12 @@ mod tests {
                 snapshot.average_ms
             );
         }
-
         assert_eq!(manager.rotation_history().len(), records.len());
         for record in manager.rotation_history() {
             assert_eq!(record.reason, CircuitRetirementReason::ManualTeardown);
             assert!(record.latency.is_some());
         }
     }
-
     #[test]
     fn circuit_manager_soak_maintains_latency_stability() {
         let guard = GuardRecord {
@@ -4120,17 +3736,14 @@ mod tests {
             path_metadata: PathMetadata::default(),
         };
         let guard_set = GuardSet::new(vec![guard.clone()]);
-
         let directory = RelayDirectory::new(vec![
             middle_descriptor(0x13, 55, true, 0),
             exit_descriptor(0x23, 65, true, 0),
         ]);
-
         let ttl = Duration::from_secs(2);
         let mut manager = CircuitManager::new(CircuitManagerConfig::new(ttl));
         let mut now = 0u64;
         let mut averages = Vec::new();
-
         for rotation in 0..3 {
             if manager.active_circuits().is_empty() {
                 let events = manager
@@ -4142,7 +3755,6 @@ mod tests {
                         .any(|event| matches!(event, CircuitEvent::Built { .. }))
                 );
             }
-
             let circuit = manager
                 .active_circuits()
                 .into_iter()
@@ -4152,7 +3764,6 @@ mod tests {
             for sample in [base, base + 2, base - 1] {
                 assert!(manager.record_latency(circuit.id, Duration::from_millis(sample)));
             }
-
             now += ttl.as_secs() + 1;
             let events = manager
                 .refresh(&directory, &guard_set, now, AnonymityPolicy::GuardPq)
@@ -4169,7 +3780,6 @@ mod tests {
                 .expect("retired circuit latency present");
             averages.push(retired_avg);
         }
-
         assert_eq!(averages.len(), 3);
         let min = averages
             .iter()
@@ -4186,11 +3796,9 @@ mod tests {
             "expected at least three rotation records"
         );
     }
-
     #[test]
     fn provider_support_helpers_match_metadata() {
         use sorafs_car::multi_fetch::{FetchProvider, ProviderMetadata, TransportHint};
-
         let mut pq_metadata = ProviderMetadata::new();
         pq_metadata.capability_names = vec!["soranet_pq_strict".into()];
         pq_metadata.transport_hints = vec![TransportHint {
@@ -4199,7 +3807,6 @@ mod tests {
             priority: 0,
         }];
         let pq_provider = FetchProvider::new("pq-provider").with_metadata(pq_metadata);
-
         let mut classical_metadata = ProviderMetadata::new();
         classical_metadata.capability_names = vec!["soranet_classical".into()];
         classical_metadata.transport_hints = vec![TransportHint {
@@ -4209,13 +3816,11 @@ mod tests {
         }];
         let classical_provider =
             FetchProvider::new("classic-provider").with_metadata(classical_metadata);
-
         assert!(crate::provider_supports_soranet(&pq_provider));
         assert!(crate::provider_supports_pq(&pq_provider));
         assert!(crate::provider_supports_soranet(&classical_provider));
         assert!(!crate::provider_supports_pq(&classical_provider));
     }
-
     #[test]
     fn endpoint_tag_roundtrip() {
         let tag = EndpointTag::from_label("norito-stream").expect("parse norito-stream tag");
@@ -4223,7 +3828,6 @@ mod tests {
         assert_eq!(tag.as_label(), "norito-stream");
         assert!(EndpointTag::from_label("unknown-tag").is_err());
     }
-
     #[test]
     fn descriptor_prefers_tagged_endpoint_for_exit() {
         let descriptor = RelayDescriptor {
@@ -4242,11 +3846,9 @@ mod tests {
         };
         let relay = descriptor_to_circuit_relay(&descriptor, Some(EndpointTag::NoritoStream), 0);
         assert_eq!(relay.endpoint.url, "soranet://exit-norito");
-
         let fallback = descriptor_to_circuit_relay(&descriptor, None, 0);
         assert_eq!(fallback.endpoint.url, "soranet://exit-default");
     }
-
     #[test]
     fn path_hints_enrich_directory_metadata() {
         let relay_id = relay_id(0xEF);
@@ -4268,18 +3870,15 @@ mod tests {
             asn: Some(64_512),
             validator_lane: true,
         };
-
         let report = directory.apply_path_hints(&[hint]);
         assert_eq!(report.applied, 1);
         assert!(report.missing.is_empty());
-
         let metadata = &directory.entries()[0].path_metadata;
         assert_eq!(metadata.avg_rtt_ms, Some(22));
         assert_eq!(metadata.region.as_deref(), Some("us-west"));
         assert_eq!(metadata.asn, Some(64_512));
         assert!(metadata.validator_lane);
     }
-
     #[test]
     fn selector_prioritises_validator_and_asn_diversity() {
         let validator = RelayDescriptor {
@@ -4330,11 +3929,9 @@ mod tests {
                 validator_lane: false,
             },
         };
-
         let directory = RelayDirectory::new(vec![validator, same_asn, diverse_asn]);
         let selector = GuardSelector::new(NonZeroUsize::new(2).expect("non-zero"));
         let guards = selector.select(&directory, None, 5, AnonymityPolicy::GuardPq);
-
         assert_eq!(guards.len(), 2);
         assert_eq!(guards.guards()[0].relay_id, relay_id(0x01));
         assert!(guards.guards()[0].path_metadata.validator_lane);

@@ -1,5 +1,4 @@
 //! Data-availability helpers shared across SDKs.
-
 use std::{
     collections::HashSet,
     convert::TryFrom,
@@ -8,7 +7,6 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-
 use base64::{Engine, engine::general_purpose::STANDARD as Base64Standard};
 use blake3::Hasher;
 use eyre::{Result, WrapErr, eyre};
@@ -42,7 +40,6 @@ use sorafs_car::fetch_plan::chunk_fetch_plan_from_json;
 use sorafs_car::sorafs_chunker::ChunkProfile;
 use sorafs_manifest::pdp::PdpCommitmentV1;
 use sorafs_orchestrator::prelude::{CarBuildPlan, ChunkStore, InMemoryPayload, PorProof};
-
 use crate::{
     crypto::{HashOf, KeyPair},
     data_model::{
@@ -51,10 +48,8 @@ use crate::{
         isi::{InstructionBox, Transfer},
     },
 };
-
 /// Canonical HTTP header carrying the base64-encoded PDP commitment bytes.
 pub const PDP_COMMITMENT_HEADER: &str = "sora-pdp-commitment";
-
 /// Decode the `sora-pdp-commitment` header into a typed PDP commitment.
 ///
 /// # Errors
@@ -67,7 +62,6 @@ pub fn decode_pdp_commitment_header(value: &str) -> Result<PdpCommitmentV1> {
         .map_err(|err| eyre!("invalid {PDP_COMMITMENT_HEADER} header: {err}"))?;
     decode_pdp_commitment_bytes(&bytes)
 }
-
 /// Decode Norito-encoded PDP commitment bytes into a typed structure.
 ///
 /// # Errors
@@ -76,7 +70,6 @@ pub fn decode_pdp_commitment_header(value: &str) -> Result<PdpCommitmentV1> {
 pub fn decode_pdp_commitment_bytes(bytes: &[u8]) -> Result<PdpCommitmentV1> {
     decode_from_bytes(bytes).map_err(|err| eyre!("failed to decode PDP commitment: {err}"))
 }
-
 /// Decode the optional PDP commitment embedded in a DA receipt.
 ///
 /// # Errors
@@ -88,7 +81,6 @@ pub fn receipt_pdp_commitment(receipt: &DaIngestReceipt) -> Result<Option<PdpCom
         |bytes| decode_pdp_commitment_bytes(bytes).map(Some),
     )
 }
-
 /// Canonical manifest + chunk-plan artefacts returned by Torii.
 #[derive(Debug, Clone)]
 pub struct DaManifestBundle {
@@ -115,7 +107,6 @@ pub struct DaManifestBundle {
     /// Chunk plan JSON emitted by Torii.
     pub chunk_plan: Value,
 }
-
 /// Paths produced when a manifest bundle is written to disk.
 #[derive(Debug, Clone)]
 pub struct DaManifestPersistedPaths {
@@ -126,7 +117,6 @@ pub struct DaManifestPersistedPaths {
     /// Path to the pretty-rendered chunk plan JSON payload.
     pub chunk_plan: PathBuf,
 }
-
 /// Canonical ledger tip that binds a DA list cursor to one immutable view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaListSnapshot {
@@ -135,7 +125,6 @@ pub struct DaListSnapshot {
     /// Hash of the block at `block_height`, absent only for the empty chain.
     pub block_hash: Option<HashOf<BlockHeader>>,
 }
-
 /// Forward-only cursor for canonically ordered DA commitments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaCommitmentListCursor {
@@ -144,7 +133,6 @@ pub struct DaCommitmentListCursor {
     /// Last raw commitment examined in `(lane_id, epoch, sequence)` order.
     pub after: DaCommitmentKey,
 }
-
 /// Request payload for `/v1/da/commitments`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaCommitmentListRequest {
@@ -153,7 +141,6 @@ pub struct DaCommitmentListRequest {
     /// Server-issued continuation cursor from the preceding page.
     pub cursor: Option<DaCommitmentListCursor>,
 }
-
 /// Request payload for `/v1/da/commitments/prove`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaCommitmentProofRequest {
@@ -166,7 +153,6 @@ pub struct DaCommitmentProofRequest {
     /// Optional sequence used with `lane_id` and `epoch` fallback lookup.
     pub sequence: Option<u64>,
 }
-
 /// Response payload for `/v1/da/commitments`.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaCommitmentListResponse {
@@ -177,7 +163,6 @@ pub struct DaCommitmentListResponse {
     /// Cursor for the next bounded scan, or `None` when the index is exhausted.
     pub next_cursor: Option<DaCommitmentListCursor>,
 }
-
 /// Response payload for `/v1/da/commitments/prove`.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaCommitmentProofResponse {
@@ -186,7 +171,6 @@ pub struct DaCommitmentProofResponse {
     /// Commitment proof bound to the requested record.
     pub proof: DaCommitmentProof,
 }
-
 /// Response payload for `/v1/da/commitments/verify`.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaCommitmentVerifyResponse {
@@ -196,7 +180,6 @@ pub struct DaCommitmentVerifyResponse {
     /// Optional verification failure detail when `valid` is false.
     pub error: Option<String>,
 }
-
 /// Forward-only cursor for canonically ordered DA pin intents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaPinIntentListCursor {
@@ -205,7 +188,6 @@ pub struct DaPinIntentListCursor {
     /// Last raw pin intent examined in canonical block-location order.
     pub after: DaCommitmentLocation,
 }
-
 /// Request payload for `/v1/da/pin-intents`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaPinIntentListRequest {
@@ -214,7 +196,6 @@ pub struct DaPinIntentListRequest {
     /// Server-issued continuation cursor from the preceding page.
     pub cursor: Option<DaPinIntentListCursor>,
 }
-
 /// Response payload for `/v1/da/pin-intents`.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaPinIntentListResponse {
@@ -223,7 +204,6 @@ pub struct DaPinIntentListResponse {
     /// Cursor for the next bounded scan, or `None` when the index is exhausted.
     pub next_cursor: Option<DaPinIntentListCursor>,
 }
-
 /// Request payload for `/v1/da/pin-intents/prove`.
 #[derive(Debug, Default, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaPinIntentQueryRequest {
@@ -240,7 +220,6 @@ pub struct DaPinIntentQueryRequest {
     /// Optional sequence used with `lane_id` and `epoch` fallback lookup.
     pub sequence: Option<u64>,
 }
-
 /// Response payload for `/v1/da/pin-intents/verify`.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaPinIntentVerifyResponse {
@@ -249,7 +228,6 @@ pub struct DaPinIntentVerifyResponse {
     /// Optional verification failure detail when `valid` is false.
     pub error: Option<String>,
 }
-
 impl DaManifestBundle {
     /// Parse a Torii `/v1/da/manifests/{ticket}` JSON payload into a bundle.
     ///
@@ -311,7 +289,6 @@ impl DaManifestBundle {
             chunk_plan,
         })
     }
-
     /// Decode the embedded Norito manifest payload.
     ///
     /// # Errors
@@ -321,7 +298,6 @@ impl DaManifestBundle {
         decode_from_bytes(&self.manifest_bytes)
             .map_err(|err| eyre!("failed to decode DaManifestV1: {err}"))
     }
-
     /// Persist the manifest artefacts to the provided directory, mirroring
     /// the `iroha da get-blob` layout (`manifest_<ticket>.norito/json`,
     /// `chunk_plan_<ticket>.json`).
@@ -356,7 +332,6 @@ impl DaManifestBundle {
         let manifest_path = root.join(format!("manifest_{label}.norito"));
         let manifest_json_path = root.join(format!("manifest_{label}.json"));
         let chunk_plan_path = root.join(format!("chunk_plan_{label}.json"));
-
         fs::write(&manifest_path, &self.manifest_bytes)
             .wrap_err_with(|| format!("failed to write `{}`", manifest_path.display()))?;
         let manifest_json = json::to_json_pretty(&self.manifest_json)
@@ -367,7 +342,6 @@ impl DaManifestBundle {
             .map_err(|err| eyre!("failed to render chunk plan JSON: {err}"))?;
         fs::write(&chunk_plan_path, chunk_plan_json)
             .wrap_err_with(|| format!("failed to write `{}`", chunk_plan_path.display()))?;
-
         Ok(DaManifestPersistedPaths {
             manifest_raw: manifest_path,
             manifest_json: manifest_json_path,
@@ -375,7 +349,6 @@ impl DaManifestBundle {
         })
     }
 }
-
 fn sanitize_manifest_label(label: &str) -> Result<String> {
     let trimmed = label.trim();
     if trimmed.is_empty() {
@@ -395,7 +368,6 @@ fn sanitize_manifest_label(label: &str) -> Result<String> {
     }
     Ok(sanitized)
 }
-
 /// Generate a CAR build plan directly from a DA manifest.
 ///
 /// # Errors
@@ -404,7 +376,6 @@ fn sanitize_manifest_label(label: &str) -> Result<String> {
 pub fn build_car_plan_from_manifest(manifest: &DaManifestV1) -> Result<CarBuildPlan> {
     sorafs_car::build_plan_from_da_manifest(manifest).map_err(|err| eyre!(err))
 }
-
 /// Compute a `PoR` summary from an in-memory payload and manifest metadata.
 ///
 /// The returned JSON mirrors `iroha da prove --json-out` so downstream tooling can
@@ -420,7 +391,6 @@ pub fn generate_da_proof_summary(
 ) -> Result<Value> {
     generate_da_proof_summary_inner(manifest, payload, config, None)
 }
-
 /// Generate a CLI-compatible `PoR` artefact that includes manifest/payload paths.
 ///
 /// This helper mirrors `iroha da prove --json-out` so SDKs can emit the same Norito
@@ -438,7 +408,6 @@ pub fn generate_da_proof_artifact(
 ) -> Result<Value> {
     generate_da_proof_summary_inner(manifest, payload, config, Some(metadata))
 }
-
 fn generate_da_proof_summary_inner(
     manifest: &DaManifestV1,
     payload: &[u8],
@@ -451,16 +420,13 @@ fn generate_da_proof_summary_inner(
     chunk_store
         .ingest_plan_source(&plan, &mut ingest_source)
         .wrap_err("failed to ingest payload for PoR generation")?;
-
     validate_manifest_consistency(manifest, &chunk_store)?;
-
     let mut proof_source = InMemoryPayload::new(payload);
     let por_root = *chunk_store.por_tree().root();
     let leaf_total = chunk_store.por_tree().leaf_count();
     let segment_total = chunk_store.por_tree().segment_count();
     let chunk_total = chunk_store.por_tree().chunks().len();
     let proofs = collect_proofs(&chunk_store, &mut proof_source, &por_root, config)?;
-
     let summary_inputs = ProofSummaryInputs {
         manifest,
         por_root_hex: hex::encode(por_root),
@@ -473,11 +439,9 @@ fn generate_da_proof_summary_inner(
     };
     Ok(build_proof_summary(summary_inputs, &proofs))
 }
-
 fn duration_to_millis(duration: Duration) -> u64 {
     duration.as_millis().try_into().unwrap_or(u64::MAX)
 }
-
 /// Benchmark `PoR` verification against a soft budget.
 ///
 /// The benchmark rebuilds the chunk store from the manifest/payload pair,
@@ -507,7 +471,6 @@ pub fn benchmark_da_proof_verification(
         },
     )
 }
-
 fn benchmark_da_proof_verification_with_measure<M>(
     manifest: &DaManifestV1,
     payload: &[u8],
@@ -524,14 +487,11 @@ where
     chunk_store
         .ingest_plan_source(&plan, &mut ingest_source)
         .wrap_err("failed to ingest payload for verification benchmark")?;
-
     validate_manifest_consistency(manifest, &chunk_store)?;
-
     let por_root = *chunk_store.por_tree().root();
     let leaf_count = chunk_store.por_tree().leaf_count();
     let mut proof_source = InMemoryPayload::new(payload);
     let proofs = collect_proofs(&chunk_store, &mut proof_source, &por_root, config)?;
-
     let mut total_duration = Duration::ZERO;
     let mut max_duration = Duration::ZERO;
     for proof in &proofs {
@@ -553,7 +513,6 @@ where
             max_duration = elapsed;
         }
     }
-
     let proof_count = proofs.len();
     let average_duration = if proof_count == 0 {
         Duration::ZERO
@@ -561,7 +520,6 @@ where
         total_duration / u32::try_from(proof_count).expect("proof count fits in u32 for averaging")
     };
     let budget_duration = Duration::from_millis(budget_ms);
-
     Ok(DaProofBenchmark {
         requested_sample_count: config.sample_count,
         explicit_index_count: config.leaf_indexes.len(),
@@ -577,7 +535,6 @@ where
         within_budget: total_duration <= budget_duration,
     })
 }
-
 /// Canonical ingest parameters shared by CLI and SDK clients.
 #[derive(Debug, Clone)]
 pub struct DaIngestParams {
@@ -600,7 +557,6 @@ pub struct DaIngestParams {
     /// Optional caller-supplied blob digest override. Defaults to BLAKE3(payload).
     pub client_blob_id: Option<BlobDigest>,
 }
-
 impl DaIngestParams {
     /// Override the client-provided blob digest.
     #[must_use]
@@ -609,7 +565,6 @@ impl DaIngestParams {
         self
     }
 }
-
 impl Default for DaIngestParams {
     fn default() -> Self {
         Self {
@@ -625,7 +580,6 @@ impl Default for DaIngestParams {
         }
     }
 }
-
 fn default_retention_policy() -> RetentionPolicy {
     RetentionPolicy {
         storage_class: StorageClass::Warm,
@@ -633,7 +587,6 @@ fn default_retention_policy() -> RetentionPolicy {
         ..RetentionPolicy::default()
     }
 }
-
 /// Build and sign a canonical `DaIngestRequest` using the supplied key pair.
 ///
 /// # Errors
@@ -676,7 +629,6 @@ pub fn build_da_request(
     .try_sign(key_pair)
     .wrap_err("failed to sign canonical DA ingest request intent")
 }
-
 /// Sampling and verification controls for `PoR` proof generation.
 #[derive(Debug, Clone)]
 pub struct DaProofConfig {
@@ -687,7 +639,6 @@ pub struct DaProofConfig {
     /// Explicit `PoR` leaf indexes to verify in addition to sampled entries.
     pub leaf_indexes: Vec<usize>,
 }
-
 impl Default for DaProofConfig {
     fn default() -> Self {
         Self {
@@ -697,7 +648,6 @@ impl Default for DaProofConfig {
         }
     }
 }
-
 /// CLI-compatible metadata used when emitting `PoR` artefacts.
 #[derive(Debug, Clone)]
 pub struct DaProofArtifactMetadata {
@@ -706,7 +656,6 @@ pub struct DaProofArtifactMetadata {
     /// Path (or label) pointing to the payload used for proof generation.
     pub payload_path: String,
 }
-
 impl DaProofArtifactMetadata {
     /// Construct metadata from displayable manifest/payload paths.
     #[must_use]
@@ -717,7 +666,6 @@ impl DaProofArtifactMetadata {
         }
     }
 }
-
 /// Benchmark summary for data-availability proof verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize)]
 pub struct DaProofBenchmark {
@@ -746,7 +694,6 @@ pub struct DaProofBenchmark {
     /// Whether the aggregate verification fits within the budget.
     pub within_budget: bool,
 }
-
 #[cfg(test)]
 fn chunk_profile_from_chunk_size(chunk_size: u32) -> Result<ChunkProfile> {
     if chunk_size == 0 {
@@ -760,7 +707,6 @@ fn chunk_profile_from_chunk_size(chunk_size: u32) -> Result<ChunkProfile> {
         break_mask: 1,
     })
 }
-
 fn validate_manifest_consistency(manifest: &DaManifestV1, store: &ChunkStore) -> Result<()> {
     let blob_hash_bytes = manifest.blob_hash.as_ref();
     if store.payload_digest().as_bytes() != blob_hash_bytes {
@@ -780,7 +726,6 @@ fn validate_manifest_consistency(manifest: &DaManifestV1, store: &ChunkStore) ->
     }
     Ok(())
 }
-
 fn collect_proofs(
     chunk_store: &ChunkStore,
     proof_source: &mut InMemoryPayload<'_>,
@@ -810,7 +755,6 @@ fn collect_proofs(
     }
     Ok(proofs)
 }
-
 fn sampled_proofs(
     chunk_store: &ChunkStore,
     proof_source: &mut InMemoryPayload<'_>,
@@ -839,7 +783,6 @@ fn sampled_proofs(
     }
     Ok(proofs)
 }
-
 fn explicit_proofs(
     chunk_store: &ChunkStore,
     proof_source: &mut InMemoryPayload<'_>,
@@ -880,13 +823,11 @@ fn explicit_proofs(
     }
     Ok(proofs)
 }
-
 #[derive(Debug)]
 enum ProofOrigin {
     Sampled,
     Explicit,
 }
-
 impl ProofOrigin {
     fn as_str(&self) -> &'static str {
         match self {
@@ -895,14 +836,12 @@ impl ProofOrigin {
         }
     }
 }
-
 struct ProofReport {
     origin: ProofOrigin,
     leaf_index: usize,
     proof: PorProof,
     verified: bool,
 }
-
 struct ProofSummaryInputs<'a> {
     manifest: &'a DaManifestV1,
     por_root_hex: String,
@@ -913,7 +852,6 @@ struct ProofSummaryInputs<'a> {
     sample_seed: u64,
     artifact_metadata: Option<&'a DaProofArtifactMetadata>,
 }
-
 fn build_proof_summary(inputs: ProofSummaryInputs<'_>, proofs: &[ProofReport]) -> Value {
     let mut map = Map::new();
     if let Some(metadata) = inputs.artifact_metadata {
@@ -948,7 +886,6 @@ fn build_proof_summary(inputs: ProofSummaryInputs<'_>, proofs: &[ProofReport]) -
     map.insert("proofs".into(), Value::Array(proof_values));
     Value::Object(map)
 }
-
 fn proof_to_json(report: &ProofReport) -> Value {
     let mut map = Map::new();
     map.insert("origin".into(), Value::from(report.origin.as_str()));
@@ -1040,7 +977,6 @@ fn proof_to_json(report: &ProofReport) -> Value {
     map.insert("verified".into(), Value::from(report.verified));
     Value::Object(map)
 }
-
 /// Planned rent ledger movements derived from a [`DaRentLedgerProjection`].
 #[derive(Debug, Clone)]
 pub struct DaRentLedgerPlan {
@@ -1059,7 +995,6 @@ pub struct DaRentLedgerPlan {
     /// Transfer instructions required to enact the plan.
     pub instructions: Vec<InstructionBox>,
 }
-
 /// Accounts participating in the rent ledger settlement plan.
 #[derive(Debug, Clone, Copy)]
 pub struct DaRentLedgerAccounts<'a> {
@@ -1076,7 +1011,6 @@ pub struct DaRentLedgerAccounts<'a> {
     /// Account credited with the `PoTR` bonus portion.
     pub potr_bonus: &'a AccountId,
 }
-
 /// Build the transfer plan used to settle a rent ledger projection.
 ///
 /// This mirrors the rent-ledger workflow exposed through `iroha da rent-ledger`,
@@ -1124,7 +1058,6 @@ pub fn build_da_rent_ledger_plan(
         projection.potr_bonus_pool.clone(),
         asset_definition,
     );
-
     DaRentLedgerPlan {
         rent_due: projection.rent_due.clone(),
         protocol_reserve_due: projection.protocol_reserve_due.clone(),
@@ -1135,7 +1068,6 @@ pub fn build_da_rent_ledger_plan(
         instructions,
     }
 }
-
 fn push_rent_instruction(
     instructions: &mut Vec<InstructionBox>,
     source_account: &AccountId,
@@ -1154,15 +1086,12 @@ fn push_rent_instruction(
     );
     instructions.push(InstructionBox::from(transfer));
 }
-
 fn value_from_usize(value: usize) -> Value {
     Value::from(u64::try_from(value).unwrap_or(u64::MAX))
 }
-
 fn value_from_u32(value: u32) -> Value {
     Value::from(u64::from(value))
 }
-
 fn require_hex_field(object: &Map, keys: &[&str]) -> Result<String> {
     for key in keys {
         if let Some(Value::String(value)) = object.get(*key) {
@@ -1175,12 +1104,10 @@ fn require_hex_field(object: &Map, keys: &[&str]) -> Result<String> {
     }
     Err(eyre!("response missing `{}` field", keys[0]))
 }
-
 fn require_u64_field(object: &Map, keys: &[&str]) -> Result<u64> {
     optional_u64_field(object, keys)?
         .map_or_else(|| Err(eyre!("response missing `{}` field", keys[0])), Ok)
 }
-
 fn optional_u64_field(object: &Map, keys: &[&str]) -> Result<Option<u64>> {
     for key in keys {
         if let Some(value) = object.get(*key) {
@@ -1189,7 +1116,6 @@ fn optional_u64_field(object: &Map, keys: &[&str]) -> Result<Option<u64>> {
     }
     Ok(None)
 }
-
 fn parse_u64_value(value: &Value, label: &str) -> Result<u64> {
     match value {
         Value::Number(number) => number
@@ -1202,11 +1128,9 @@ fn parse_u64_value(value: &Value, label: &str) -> Result<u64> {
         _ => Err(eyre!("field `{label}` must be an integer")),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{fs, time::Duration};
-
     use base64::engine::general_purpose::STANDARD as BASE64;
     use blake3::hash as blake3_hash;
     use iroha_crypto::Algorithm;
@@ -1228,15 +1152,12 @@ mod tests {
     use sorafs_manifest::{ChunkingProfileV1, pdp::PdpMerkleTreeV1};
     use sorafs_orchestrator::prelude::ChunkStore;
     use tempfile::tempdir;
-
     use super::*;
     use crate::crypto::KeyPair;
-
     fn checked_seed_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed derives DA Ed25519 keypair")
     }
-
     fn empty_chunk_fetch_plan(payload_digest_byte: u8) -> Value {
         Value::Object(Map::from_iter([
             (
@@ -1250,13 +1171,11 @@ mod tests {
             ("chunk_fetch_specs".into(), Value::Array(Vec::new())),
         ]))
     }
-
     #[test]
     fn chunk_profile_from_chunk_size_rejects_zero() {
         let err = chunk_profile_from_chunk_size(0).expect_err("expected failure");
         assert!(err.to_string().contains("non-zero"));
     }
-
     #[test]
     fn chunk_profile_from_chunk_size_sets_equal_bounds() {
         let profile = chunk_profile_from_chunk_size(512).expect("fixed chunk profile");
@@ -1265,7 +1184,6 @@ mod tests {
         assert_eq!(profile.max_size, 512);
         assert_eq!(profile.break_mask, 1);
     }
-
     #[test]
     fn build_da_request_hashes_payload_when_digest_absent() {
         let key_pair = checked_seed_keypair(0x11);
@@ -1287,7 +1205,6 @@ mod tests {
         assert_eq!(request.client_blob_id, expected);
         assert_eq!(request.payload, payload);
     }
-
     #[test]
     fn build_da_request_respects_digest_override() {
         let key_pair = checked_seed_keypair(0x22);
@@ -1306,7 +1223,6 @@ mod tests {
         assert_eq!(request.client_blob_id, override_digest);
         assert_eq!(request.chunk_size, params.chunk_size);
     }
-
     #[test]
     fn header_decodes_commitment() {
         let commitment = sample_commitment();
@@ -1315,7 +1231,6 @@ mod tests {
         let decoded = decode_pdp_commitment_header(&header_value).expect("decode header");
         assert_eq!(decoded, commitment);
     }
-
     #[test]
     fn receipt_helper_respects_absent_commitment() {
         let mut receipt = sample_receipt();
@@ -1326,7 +1241,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn receipt_helper_decodes_bytes() {
         let commitment = sample_commitment();
@@ -1338,7 +1252,6 @@ mod tests {
             .expect("commitment present");
         assert_eq!(decoded, commitment);
     }
-
     #[test]
     fn invalid_header_surfaces_error() {
         let err = decode_pdp_commitment_header("###").expect_err("expected failure");
@@ -1347,7 +1260,6 @@ mod tests {
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn da_commitment_proof_request_roundtrips_json() {
         let request = DaCommitmentProofRequest {
@@ -1356,17 +1268,14 @@ mod tests {
             epoch: Some(9),
             sequence: Some(12),
         };
-
         let bytes = norito::json::to_vec(&request).expect("encode request");
         let decoded: DaCommitmentProofRequest =
             norito::json::from_slice(&bytes).expect("decode request");
-
         assert_eq!(decoded.manifest_hash, request.manifest_hash);
         assert_eq!(decoded.lane_id, request.lane_id);
         assert_eq!(decoded.epoch, request.epoch);
         assert_eq!(decoded.sequence, request.sequence);
     }
-
     #[test]
     fn da_commitment_list_cursor_roundtrips_json() {
         let request = DaCommitmentListRequest {
@@ -1383,14 +1292,11 @@ mod tests {
                 },
             }),
         };
-
         let bytes = norito::json::to_vec(&request).expect("encode request");
         let decoded: DaCommitmentListRequest =
             norito::json::from_slice(&bytes).expect("decode request");
-
         assert_eq!(decoded, request);
     }
-
     #[test]
     fn da_pin_intent_query_request_roundtrips_json() {
         let request = DaPinIntentQueryRequest {
@@ -1401,11 +1307,9 @@ mod tests {
             epoch: Some(8),
             sequence: Some(16),
         };
-
         let bytes = norito::json::to_vec(&request).expect("encode request");
         let decoded: DaPinIntentQueryRequest =
             norito::json::from_slice(&bytes).expect("decode request");
-
         assert_eq!(decoded.manifest_hash, request.manifest_hash);
         assert_eq!(decoded.storage_ticket, request.storage_ticket);
         assert_eq!(decoded.alias, request.alias);
@@ -1413,7 +1317,6 @@ mod tests {
         assert_eq!(decoded.epoch, request.epoch);
         assert_eq!(decoded.sequence, request.sequence);
     }
-
     #[test]
     fn da_pin_intent_list_cursor_roundtrips_json() {
         let request = DaPinIntentListRequest {
@@ -1429,14 +1332,11 @@ mod tests {
                 },
             }),
         };
-
         let bytes = norito::json::to_vec(&request).expect("encode request");
         let decoded: DaPinIntentListRequest =
             norito::json::from_slice(&bytes).expect("decode request");
-
         assert_eq!(decoded, request);
     }
-
     #[test]
     fn manifest_bundle_parses_required_fields() {
         let mut object = Map::new();
@@ -1467,7 +1367,6 @@ mod tests {
         assert_eq!(bundle.lane_id, 0);
         assert_eq!(bundle.epoch, 1);
     }
-
     #[test]
     fn manifest_bundle_rejects_retired_or_unbound_chunk_plans() {
         let base = Map::from_iter([
@@ -1496,7 +1395,6 @@ mod tests {
             empty_chunk_fetch_plan(0),
             empty_chunk_fetch_plan(0x77),
         ];
-
         for plan in invalid_plans {
             let mut object = base.clone();
             object.insert("chunk_plan".into(), plan);
@@ -1508,7 +1406,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn car_plan_matches_manifest_metadata() {
         let (manifest, _) = sample_manifest_and_payload();
@@ -1517,7 +1414,6 @@ mod tests {
         assert_eq!(plan.content_length, manifest.total_size);
         assert_eq!(plan.payload_digest.as_bytes(), manifest.blob_hash.as_ref());
     }
-
     #[test]
     fn proof_summary_contains_expected_fields() {
         let (manifest, payload) = sample_manifest_and_payload();
@@ -1540,7 +1436,6 @@ mod tests {
             "proof array missing"
         );
     }
-
     #[test]
     fn proof_artifact_includes_paths() {
         let (manifest, payload) = sample_manifest_and_payload();
@@ -1562,7 +1457,6 @@ mod tests {
         );
         assert!(map.contains_key("por_root"), "missing por_root");
     }
-
     #[test]
     fn benchmark_reports_under_budget() {
         let (manifest, payload) = sample_manifest_and_payload();
@@ -1592,7 +1486,6 @@ mod tests {
         assert_eq!(bench.payload_bytes, manifest.total_size);
         assert_eq!(bench.chunk_size, manifest.chunk_size);
     }
-
     #[test]
     fn benchmark_flags_over_budget_runs() {
         let (manifest, payload) = sample_manifest_and_payload();
@@ -1618,7 +1511,6 @@ mod tests {
         assert_eq!(bench.max_duration_ms, 10);
         assert_eq!(bench.budget_ms, 1);
     }
-
     #[test]
     fn benchmark_rejects_failed_verification() {
         let (manifest, payload) = sample_manifest_and_payload();
@@ -1640,7 +1532,6 @@ mod tests {
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn manifest_bundle_persist_to_dir_writes_outputs() {
         let (manifest, _) = sample_manifest_and_payload();
@@ -1665,7 +1556,6 @@ mod tests {
         let paths = bundle
             .persist_to_dir(dir.path(), "AA11")
             .expect("persist bundle");
-
         assert!(paths.manifest_raw.exists());
         assert!(paths.manifest_json.exists());
         assert!(paths.chunk_plan.exists());
@@ -1682,7 +1572,6 @@ mod tests {
             norito::json::from_slice(chunk_plan_json.as_bytes()).expect("chunk plan json parses");
         assert!(chunk_plan_value.is_object());
     }
-
     #[test]
     fn rent_ledger_plan_emits_expected_transfers() {
         let projection = DaRentLedgerProjection {
@@ -1698,22 +1587,16 @@ mod tests {
         let _wonderland_domain: DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain");
         let _sora_domain: DomainId = DomainId::try_new("sora", "universal").expect("domain");
-
         let payer_key = checked_seed_keypair(1);
         let payer = AccountId::new(payer_key.public_key().clone());
-
         let treasury_key = checked_seed_keypair(2);
         let treasury = AccountId::new(treasury_key.public_key().clone());
-
         let reserve_key = checked_seed_keypair(3);
         let protocol_reserve = AccountId::new(reserve_key.public_key().clone());
-
         let provider_key = checked_seed_keypair(4);
         let provider = AccountId::new(provider_key.public_key().clone());
-
         let pdp_key = checked_seed_keypair(5);
         let pdp_bonus = AccountId::new(pdp_key.public_key().clone());
-
         let potr_key = checked_seed_keypair(6);
         let potr_bonus = AccountId::new(potr_key.public_key().clone());
         let asset_definition: AssetDefinitionId =
@@ -1721,7 +1604,6 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
-
         let accounts = DaRentLedgerAccounts {
             payer: &payer,
             treasury: &treasury,
@@ -1731,18 +1613,15 @@ mod tests {
             potr_bonus: &potr_bonus,
         };
         let plan = build_da_rent_ledger_plan(&projection, &accounts, &asset_definition);
-
         assert_eq!(plan.rent_due, projection.rent_due);
         assert_eq!(plan.protocol_reserve_due, projection.protocol_reserve_due);
         assert_eq!(plan.provider_reward_due, projection.provider_reward_due);
         assert_eq!(plan.egress_credit_per_gib, projection.egress_credit_per_gib);
-
         let rent_amount = projection.rent_due.as_quantity().clone();
         let reserve_amount = projection.protocol_reserve_due.as_quantity().clone();
         let provider_amount = projection.provider_reward_due.as_quantity().clone();
         let pdp_amount = projection.pdp_bonus_pool.as_quantity().clone();
         let potr_amount = projection.potr_bonus_pool.as_quantity().clone();
-
         let expected = vec![
             InstructionBox::from(Transfer::asset_quantity(
                 AssetId::new(asset_definition.clone(), payer.clone()),
@@ -1772,7 +1651,6 @@ mod tests {
         ];
         assert_eq!(plan.instructions, expected);
     }
-
     fn sample_commitment() -> PdpCommitmentV1 {
         let payload = vec![0x5A; 64 * 1024];
         let tree = PdpMerkleTreeV1::from_bytes(&payload).expect("build sample PDP tree");
@@ -1782,7 +1660,6 @@ mod tests {
         PdpCommitmentV1::from_tree(&tree, [0x11; 32], chunk_profile, 16, 1_701_800_000)
             .expect("build canonical sample PDP commitment")
     }
-
     fn sample_receipt() -> DaIngestReceipt {
         DaIngestReceipt {
             client_blob_id: iroha_data_model::da::types::BlobDigest::new([0xAA; 32]),
@@ -1804,7 +1681,6 @@ mod tests {
                 .expect("nonzero DA receipt signature fixture"),
         }
     }
-
     fn sample_manifest_and_payload() -> (DaManifestV1, Vec<u8>) {
         let payload = vec![0xAB; 8];
         let mut store = ChunkStore::new();
@@ -1902,7 +1778,6 @@ mod tests {
         };
         (manifest, payload)
     }
-
     fn sample_ingest_params(override_digest: Option<BlobDigest>) -> DaIngestParams {
         DaIngestParams {
             lane_id: LaneId::new(5),

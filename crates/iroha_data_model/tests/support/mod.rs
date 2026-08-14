@@ -4,26 +4,22 @@
 //! into the library or build script. They provide deterministic and safe
 //! behavior, especially around filesystem traversal where symlinks are
 //! explicitly ignored to prevent infinite recursion.
-
 use std::{
     collections::{BTreeMap, VecDeque},
     fs,
     path::Path,
 };
-
 /// Collect modules annotated with `#[model]` under `dir` without following symlinks.
 #[allow(dead_code)]
 pub fn collect_model_items(dir: &Path) -> std::io::Result<BTreeMap<String, Vec<String>>> {
     let mut map = BTreeMap::new();
     let mut queue = VecDeque::from([dir.to_path_buf()]);
-
     while let Some(current) = queue.pop_front() {
         for entry in fs::read_dir(&current)? {
             let entry = entry?;
             let path = entry.path();
             let meta = fs::symlink_metadata(&path)?;
             let ft = meta.file_type();
-
             if ft.is_symlink() {
                 // Avoid following symlinks to prevent cycles and hangs.
                 continue;
@@ -35,7 +31,6 @@ pub fn collect_model_items(dir: &Path) -> std::io::Result<BTreeMap<String, Vec<S
             if !ft.is_file() {
                 continue;
             }
-
             let Ok(src) = fs::read_to_string(&path) else {
                 continue;
             };
@@ -46,10 +41,8 @@ pub fn collect_model_items(dir: &Path) -> std::io::Result<BTreeMap<String, Vec<S
             }
         }
     }
-
     Ok(map)
 }
-
 /// Parse Rust-like source to find a `#[model] mod` and collect public item names.
 ///
 /// This is a lightweight, best-effort parser sufficient for tests. It avoids
@@ -87,7 +80,6 @@ pub fn parse_model_module(src: &str) -> Vec<String> {
         }
     }
     let body = &src[brace_start + 1..end];
-
     // Naively collect identifiers following `pub struct|enum|union|type|const|fn|trait`.
     let mut names = Vec::new();
     for line in body.lines() {

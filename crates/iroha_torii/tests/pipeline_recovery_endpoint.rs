@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for the pipeline recovery endpoints.
-
 use axum::{Router, routing::get};
 use http_body_util::{BodyExt as _, Full};
 use iroha_config::parameters::actual::LaneConfig;
@@ -8,7 +7,6 @@ use iroha_core::kura::{FastpqProofSnapshot, Kura, PipelineDagSnapshot, PipelineR
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::BlockHeader;
 use tower::ServiceExt as _; // for Router::oneshot
-
 #[tokio::test]
 async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
     // Initialize a persistent Kura in a temp dir so sidecars can be written/read
@@ -35,7 +33,6 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
         &LaneConfig::default(),
     )
     .expect("kura init");
-
     // Wire only the tested route, mimicking the closure in lib.rs
     let app = Router::new()
         .route(
@@ -114,7 +111,6 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
                 }
             }),
         );
-
     // Prepare a sidecar for height=1
     let mut fingerprint = [0u8; 32];
     fingerprint[..3].copy_from_slice(&[0xAB, 0xCD, 0xEF]);
@@ -130,7 +126,6 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
         Vec::new(),
     );
     kura.write_pipeline_metadata(&sidecar);
-
     // Query existing height
     let req_ok = http::Request::builder()
         .method("GET")
@@ -149,7 +144,6 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
         v.get("block_hash").and_then(|x| x.as_str()),
         Some(block_hash_str.as_str())
     );
-
     let req_fastpq_empty = http::Request::builder()
         .method("GET")
         .uri("/v1/pipeline/recovery/1/fastpq-proofs")
@@ -165,7 +159,6 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
         .to_bytes();
     let v: norito::json::Value = norito::json::from_slice(&resp_body).unwrap();
     assert_eq!(v.get("proofs").and_then(|x| x.as_array()).unwrap().len(), 0);
-
     let proof = b"fastpq-proof".to_vec();
     let mut sidecar_with_proof = sidecar;
     sidecar_with_proof.fastpq_proofs.push(FastpqProofSnapshot {
@@ -184,7 +177,6 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
         proof,
     });
     kura.write_pipeline_metadata(&sidecar_with_proof);
-
     let req_fastpq_populated = http::Request::builder()
         .method("GET")
         .uri("/v1/pipeline/recovery/1/fastpq-proofs")
@@ -205,7 +197,6 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
         proofs[0].get("parameter").and_then(|x| x.as_str()),
         Some("fastpq-lane-balanced")
     );
-
     // Query missing height
     let req_missing = http::Request::builder()
         .method("GET")
@@ -214,7 +205,6 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
         .unwrap();
     let resp_missing = app.clone().oneshot(req_missing).await.unwrap();
     assert_eq!(resp_missing.status(), http::StatusCode::NOT_FOUND);
-
     let req_fastpq_missing = http::Request::builder()
         .method("GET")
         .uri("/v1/pipeline/recovery/2/fastpq-proofs")

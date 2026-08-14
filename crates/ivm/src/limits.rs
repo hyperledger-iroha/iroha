@@ -1,9 +1,6 @@
 //! Gas schedule exposure helpers for host/runtime enforcement.
-
 use iroha_crypto::Hash;
-
 use crate::gas;
-
 /// Single opcode entry in the canonical gas schedule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GasScheduleEntry {
@@ -12,7 +9,6 @@ pub struct GasScheduleEntry {
     /// Gas cost charged for the opcode in its canonical form.
     pub cost: u64,
 }
-
 /// Return the canonical gas schedule entries in opcode order.
 #[must_use]
 pub fn gas_schedule_entries() -> Vec<GasScheduleEntry> {
@@ -24,17 +20,14 @@ pub fn gas_schedule_entries() -> Vec<GasScheduleEntry> {
         })
         .collect()
 }
-
 /// Deterministic digest of the canonical gas schedule.
 #[must_use]
 pub fn schedule_hash() -> Hash {
     gas::schedule_hash()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn gas_schedule_entries_match_opcodes() {
         let entries = gas_schedule_entries();
@@ -46,7 +39,6 @@ mod tests {
             assert_eq!(entry.cost, expected);
         }
     }
-
     #[test]
     fn schedule_hash_matches_gas_hash() {
         assert_eq!(schedule_hash(), gas::schedule_hash());

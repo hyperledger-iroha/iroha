@@ -1,11 +1,8 @@
 //! Compiled expectation-pin enforcement for the native release runner.
-
 use iroha_core::privacy_release_evidence::{
     privacy_release_expectation_capture_open_v1, privacy_release_expectation_fixture_matches_v1,
 };
-
 use super::*;
-
 /// Build the shape-only provisional evidence replaced by native capture.
 pub(super) fn empty_expected_evidence(
     protocol_id: PrivacyProtocolIdV1,
@@ -41,7 +38,6 @@ pub(super) fn empty_expected_evidence(
         resources,
     }
 }
-
 /// Reject capture once any capture-owned source pin is populated.
 pub(super) fn require_capture_open_v1() -> Result<(), DynError> {
     if privacy_release_expectation_capture_open_v1() {
@@ -49,7 +45,6 @@ pub(super) fn require_capture_open_v1() -> Result<(), DynError> {
     }
     Err("native release capture is disabled after any capture-owned source pin is populated".into())
 }
-
 /// Securely load and cross-codec validate a newly captured expectation pair.
 pub(super) fn load_capture_pair_v1(
     norito_path: &Path,
@@ -77,7 +72,6 @@ pub(super) fn load_capture_pair_v1(
     validate_expectations(&expectations)?;
     Ok((expectations, norito, json))
 }
-
 /// Securely load, cross-codec validate, and compiled-pin the expectation pair.
 pub(super) fn load_pinned_pair_v1(
     norito_path: &Path,
@@ -91,11 +85,9 @@ pub(super) fn load_pinned_pair_v1(
     }
     Ok((expectations, norito, json))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn capture_loader_rejects_fake_nrt_bytes() {
         let directory = tempfile::tempdir().expect("temporary expectation fixture directory");
@@ -108,7 +100,6 @@ mod tests {
         fs::write(&norito_path, b"NRT0\0not-canonical-norito")
             .expect("write fake expectation Norito");
         fs::write(&json_path, b"{}\n").expect("write expectation JSON");
-
         let error = load_capture_pair_v1(&norito_path, &json_path)
             .err()
             .expect("fake expectation Norito must reject");

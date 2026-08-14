@@ -3,42 +3,32 @@
 //! This module wires the NX-10 domain-separated Merkle descriptors into a
 //! deterministic registry so admission/compliance logic can look up the
 //! commitments advertised by each lane.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
-
-use iroha_crypto::privacy::{
-    LaneCommitmentId, LanePrivacyCommitment, PrivacyError, PrivacyWitness,
-};
+use iroha_crypto::privacy::{LaneCommitmentId, LanePrivacyCommitment, PrivacyError, PrivacyWitness};
 use iroha_data_model::nexus::{DataSpaceId, LaneId, LanePrivacyProof};
 use thiserror::Error;
-
 use crate::governance::manifest::{LaneManifestRegistry, LaneManifestStatus};
-
 /// Registry of per-lane privacy commitments derived from governance manifests.
 #[derive(Debug, Clone, Default)]
 pub struct LanePrivacyRegistry {
     entries: BTreeMap<LaneId, LanePrivacyLane>,
 }
-
 /// Shared handle to a [`LanePrivacyRegistry`].
 pub type LanePrivacyRegistryHandle = Arc<LanePrivacyRegistry>;
-
 impl LanePrivacyRegistry {
     /// Construct an empty registry.
     #[must_use]
     pub fn empty() -> Self {
         Self::default()
     }
-
     /// Whether the registry has no recorded entries.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
-
     /// Build the registry by snapshotting the provided manifest statuses.
     #[must_use]
     pub fn from_statuses(statuses: &[LaneManifestStatus]) -> Self {
@@ -51,19 +41,16 @@ impl LanePrivacyRegistry {
         }
         Self { entries }
     }
-
     /// Build the registry directly from the manifest registry helper.
     #[must_use]
     pub fn from_manifest_registry(registry: &LaneManifestRegistry) -> Self {
         let statuses = registry.statuses();
         Self::from_statuses(&statuses)
     }
-
     /// Borrow the entry recorded for `lane_id`, if any.
     pub fn lane(&self, lane_id: LaneId) -> Option<&LanePrivacyLane> {
         self.entries.get(&lane_id)
     }
-
     /// Verify the provided witness against the registered commitment.
     ///
     /// # Errors
@@ -98,7 +85,6 @@ impl LanePrivacyRegistry {
             })
     }
 }
-
 /// Verify the supplied privacy proofs against the lane registry, returning the
 /// set of commitment identifiers proven for `lane_id`.
 ///
@@ -117,7 +103,6 @@ pub fn verify_lane_privacy_proofs(
     }
     Ok(verified)
 }
-
 /// Per-lane commitment snapshot derived from manifests.
 #[derive(Debug, Clone)]
 pub struct LanePrivacyLane {
@@ -125,7 +110,6 @@ pub struct LanePrivacyLane {
     dataspace_id: DataSpaceId,
     commitments: BTreeMap<LaneCommitmentId, LanePrivacyCommitment>,
 }
-
 impl LanePrivacyLane {
     fn from_status(status: &LaneManifestStatus) -> Self {
         let commitments = status
@@ -140,36 +124,30 @@ impl LanePrivacyLane {
             commitments,
         }
     }
-
     /// Lane identifier associated with this entry.
     #[must_use]
     pub const fn lane_id(&self) -> LaneId {
         self.lane_id
     }
-
     /// Dataspace identifier advertised by the manifest.
     #[must_use]
     pub const fn dataspace_id(&self) -> DataSpaceId {
         self.dataspace_id
     }
-
     /// Iterator over the registered commitments.
     pub fn commitments(&self) -> impl Iterator<Item = LanePrivacyCommitment> + '_ {
         self.commitments.values().copied()
     }
-
     /// Retrieve a specific commitment by identifier.
     pub fn get(&self, id: LaneCommitmentId) -> Option<LanePrivacyCommitment> {
         self.commitments.get(&id).copied()
     }
-
     /// Whether the lane recorded any privacy commitments.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.commitments.is_empty()
     }
 }
-
 /// Errors surfaced when querying or verifying lane commitments.
 #[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
 pub enum LanePrivacyRegistryError {
@@ -199,7 +177,6 @@ pub enum LanePrivacyRegistryError {
         source: PrivacyError,
     },
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{
@@ -213,9 +190,7 @@ mod tests {
         DataSpaceId, LaneId, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
         LaneStorageProfile, LaneVisibility,
     };
-
     use super::*;
-
     fn status_with_commitments(
         lane: LaneId,
         dataspace: DataSpaceId,
@@ -233,7 +208,6 @@ mod tests {
             privacy_commitments: commitments,
         }
     }
-
     fn merkle_status_with_witness(
         lane: LaneId,
         dataspace: DataSpaceId,
@@ -256,7 +230,6 @@ mod tests {
         );
         (status, witness)
     }
-
     #[test]
     fn registry_tracks_entries_from_statuses() {
         let commitment_id = LaneCommitmentId::new(1);
@@ -276,7 +249,6 @@ mod tests {
         );
         assert!(registry.lane(LaneId::new(8)).is_none());
     }
-
     #[test]
     fn registry_verifies_merkle_commitments() {
         let commitment_id = LaneCommitmentId::new(5);
@@ -320,7 +292,6 @@ mod tests {
             LanePrivacyRegistryError::LaneMissing { .. }
         ));
     }
-
     #[test]
     fn verify_lane_privacy_proofs_accepts_merkle_attachment() {
         let commitment_id = LaneCommitmentId::new(11);
@@ -340,7 +311,6 @@ mod tests {
         assert_eq!(verified.len(), 1);
         assert!(verified.contains(&commitment_id));
     }
-
     #[test]
     fn verify_lane_privacy_proofs_rejects_malformed_attachment() {
         let commitment_id = LaneCommitmentId::new(12);

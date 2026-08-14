@@ -3,13 +3,9 @@
 //! This module provides conversions from the internal settlement router
 //! parameters to the Norito-friendly data model types published as part of the
 //! `LaneBlockCommitment` payload.
-
-use iroha_data_model::block::consensus::{
-    LaneLiquidityProfile, LaneSwapMetadata, LaneVolatilityClass,
-};
+use iroha_data_model::block::consensus::{LaneLiquidityProfile, LaneSwapMetadata, LaneVolatilityClass};
 use iroha_primitives::numeric::Numeric;
 use settlement_router::{VolatilityBucket, haircut::LiquidityProfile};
-
 /// Deterministic snapshot of the conversion parameters used for XOR settlement.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SwapEvidence {
@@ -24,7 +20,6 @@ pub struct SwapEvidence {
     /// Volatility bucket recorded when adding extra safety margin.
     pub volatility_bucket: VolatilityBucket,
 }
-
 impl SwapEvidence {
     /// Convert the evidence into a Norito-friendly metadata structure.
     #[must_use]
@@ -37,14 +32,12 @@ impl SwapEvidence {
             volatility_class: convert_volatility_bucket(self.volatility_bucket),
         }
     }
-
     /// Borrowing variant of [`SwapEvidence::into_lane_metadata`].
     #[must_use]
     pub fn to_lane_metadata(&self) -> LaneSwapMetadata {
         self.clone().into_lane_metadata()
     }
 }
-
 /// Convert the settlement-router liquidity profile into the public data-model enum.
 #[must_use]
 pub fn convert_liquidity_profile(profile: LiquidityProfile) -> LaneLiquidityProfile {
@@ -54,7 +47,6 @@ pub fn convert_liquidity_profile(profile: LiquidityProfile) -> LaneLiquidityProf
         LiquidityProfile::Tier3 => LaneLiquidityProfile::Tier3,
     }
 }
-
 /// Convert the settlement-router volatility bucket into the public data-model enum.
 #[must_use]
 pub fn convert_volatility_bucket(bucket: VolatilityBucket) -> LaneVolatilityClass {
@@ -64,15 +56,12 @@ pub fn convert_volatility_bucket(bucket: VolatilityBucket) -> LaneVolatilityClas
         VolatilityBucket::Dislocated => LaneVolatilityClass::Dislocated,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_data_model::block::consensus::LaneVolatilityClass;
     use iroha_primitives::numeric::Numeric;
     use settlement_router::{VolatilityBucket, haircut::LiquidityProfile};
-
     use super::{SwapEvidence, convert_liquidity_profile, convert_volatility_bucket};
-
     #[test]
     fn converts_liquidity_profile() {
         assert!(matches!(
@@ -88,7 +77,6 @@ mod tests {
             iroha_data_model::block::consensus::LaneLiquidityProfile::Tier3
         ));
     }
-
     #[test]
     fn swap_evidence_to_metadata() {
         let evidence = SwapEvidence {
@@ -98,7 +86,6 @@ mod tests {
             twap_local_per_xor: "12.5".parse::<Numeric>().expect("canonical TWAP"),
             volatility_bucket: VolatilityBucket::Elevated,
         };
-
         let metadata = evidence.to_lane_metadata();
         assert_eq!(metadata.epsilon_bps, 25);
         assert_eq!(metadata.twap_window_seconds, 60);
@@ -108,7 +95,6 @@ mod tests {
             LaneVolatilityClass::Elevated
         ));
     }
-
     #[test]
     fn converts_volatility_bucket() {
         assert!(matches!(

@@ -1,17 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-
 #![allow(clippy::redundant_pub_crate)]
-
 //! CUDA bindings for the FASTPQ preview backend.
 //!
 //! The GPU backend is optional – enable the `fastpq-gpu` feature and provide a CUDA toolchain
 //! (SM80+) to compile the kernels. When unavailable, all entry points return
 //! [`CudaBackendError::Unavailable`] so the caller can fall back to the scalar implementation.
-
 use core::fmt;
 #[cfg(feature = "fastpq-gpu")]
 use core::{convert::TryFrom, ffi::c_void, ptr::NonNull};
-
 use crate::bn254::{self, BN254_LIMBS};
 #[cfg(feature = "fastpq-gpu")]
 use crate::trace::PoseidonColumnSlice;
@@ -22,7 +18,6 @@ use crate::{
 };
 /// Result alias for CUDA operations.
 pub type Result<T> = core::result::Result<T, CudaBackendError>;
-
 /// Errors surfaced by the CUDA backend wrappers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CudaBackendError {
@@ -43,7 +38,6 @@ pub enum CudaBackendError {
         code: u32,
     },
 }
-
 impl fmt::Display for CudaBackendError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -56,14 +50,11 @@ impl fmt::Display for CudaBackendError {
         }
     }
 }
-
 impl std::error::Error for CudaBackendError {}
-
 #[cfg(feature = "fastpq-gpu")]
 const POSEIDON_STATE_WIDTH: usize = 3;
 #[cfg(feature = "fastpq-gpu")]
 const POSEIDON_RATE: usize = 2;
-
 #[cfg(feature = "fastpq-gpu")]
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -71,12 +62,10 @@ struct Bn254PoseidonCudaSlice {
     offset: u32,
     len: u32,
 }
-
 #[cfg(feature = "fastpq-gpu")]
 pub(crate) struct PendingCudaDispatch {
     handle: Option<NonNull<c_void>>,
 }
-
 #[cfg(feature = "fastpq-gpu")]
 impl PendingCudaDispatch {
     fn new(handle: *mut c_void) -> Result<Self> {
@@ -85,7 +74,6 @@ impl PendingCudaDispatch {
             handle: Some(handle),
         })
     }
-
     pub(crate) fn wait(mut self) -> Result<()> {
         let handle = self
             .handle
@@ -94,7 +82,6 @@ impl PendingCudaDispatch {
         native::pending_wait(handle.as_ptr())
     }
 }
-
 #[cfg(feature = "fastpq-gpu")]
 impl Drop for PendingCudaDispatch {
     fn drop(&mut self) {
@@ -103,7 +90,6 @@ impl Drop for PendingCudaDispatch {
         }
     }
 }
-
 #[cfg(all(feature = "fastpq-gpu", not(fastpq_cuda_unavailable)))]
 #[allow(unsafe_code)]
 mod native {
@@ -111,7 +97,6 @@ mod native {
     use crate::bn254::BN254_LIMBS;
     use crate::trace::PoseidonColumnSlice;
     use core::{ffi::c_void, ptr};
-
     #[link(name = "fastpq_cuda", kind = "static")]
     unsafe extern "C" {
         fn fastpq_pending_wait_cuda(handle: *mut c_void) -> i32;
@@ -206,7 +191,6 @@ mod native {
             out_hashes: *mut u64,
         ) -> i32;
     }
-
     #[inline]
     fn map_cuda(code: i32) -> Result<()> {
         match code {
@@ -216,19 +200,16 @@ mod native {
             }),
         }
     }
-
     pub(super) fn pending_wait(handle: *mut c_void) -> Result<()> {
         // SAFETY: the caller passes a handle previously returned by the matching submit wrapper.
         let code = unsafe { fastpq_pending_wait_cuda(handle) };
         map_cuda(code)
     }
-
     #[cfg(test)]
     pub(super) fn test_wait_timeout(timeout_ms: u32) -> Result<()> {
         let code = unsafe { fastpq_test_wait_timeout_cuda(timeout_ms) };
         map_cuda(code)
     }
-
     pub(super) fn fft_submit(
         elements: &mut [u64],
         column_count: usize,
@@ -249,7 +230,6 @@ mod native {
         map_cuda(code)?;
         Ok(handle)
     }
-
     pub(super) fn ifft_submit(
         elements: &mut [u64],
         column_count: usize,
@@ -270,7 +250,6 @@ mod native {
         map_cuda(code)?;
         Ok(handle)
     }
-
     pub(super) fn lde_submit(
         coeffs: &[u64],
         column_count: usize,
@@ -297,7 +276,6 @@ mod native {
         map_cuda(code)?;
         Ok(handle)
     }
-
     pub(super) fn fft(
         elements: &mut [u64],
         column_count: usize,
@@ -308,7 +286,6 @@ mod native {
         let code = unsafe { fastpq_fft_cuda(elements.as_mut_ptr(), column_count, log_size, root) };
         map_cuda(code)
     }
-
     pub(super) fn ifft(
         elements: &mut [u64],
         column_count: usize,
@@ -319,7 +296,6 @@ mod native {
         let code = unsafe { fastpq_ifft_cuda(elements.as_mut_ptr(), column_count, log_size, root) };
         map_cuda(code)
     }
-
     pub(super) fn lde(
         coeffs: &[u64],
         column_count: usize,
@@ -343,7 +319,6 @@ mod native {
         };
         map_cuda(code)
     }
-
     pub(super) fn bn254_fft(
         elements: &mut [u64],
         column_count: usize,
@@ -362,7 +337,6 @@ mod native {
         };
         map_cuda(code)
     }
-
     pub(super) fn bn254_lde(
         coeffs: &[u64],
         column_count: usize,
@@ -387,13 +361,11 @@ mod native {
         };
         map_cuda(code)
     }
-
     pub(super) fn poseidon_permute(states: &mut [u64], state_count: usize) -> Result<()> {
         // SAFETY: the caller validated the state buffer width and passes a live mutable slice.
         let code = unsafe { fastpq_poseidon_permute_cuda(states.as_mut_ptr(), state_count) };
         map_cuda(code)
     }
-
     pub(super) fn poseidon_hash_columns(
         payloads: &[u64],
         slices: &[PoseidonColumnSlice],
@@ -413,7 +385,6 @@ mod native {
         };
         map_cuda(code)
     }
-
     // The low-level fused leaf+parent kernel stays available for parity tests;
     // production callers use the scalar-equivalent column plus Merkle-pair path
     // until a fresh throughput gate justifies hot-path promotion.
@@ -437,7 +408,6 @@ mod native {
         };
         map_cuda(code)
     }
-
     pub(super) fn bn254_poseidon_hash_words(
         words: &[u64],
         slices: &[Bn254PoseidonCudaSlice],
@@ -462,7 +432,6 @@ mod native {
         map_cuda(code)
     }
 }
-
 #[cfg(any(not(feature = "fastpq-gpu"), fastpq_cuda_unavailable))]
 mod native {
     #[cfg(feature = "fastpq-gpu")]
@@ -473,17 +442,14 @@ mod native {
     use crate::trace::PoseidonColumnSlice;
     #[cfg(feature = "fastpq-gpu")]
     use core::ffi::c_void;
-
     #[cfg(feature = "fastpq-gpu")]
     pub(super) fn pending_wait(_handle: *mut c_void) -> Result<()> {
         Err(CudaBackendError::Unavailable)
     }
-
     #[cfg(test)]
     pub(super) fn test_wait_timeout(_timeout_ms: u32) -> Result<()> {
         Err(CudaBackendError::Unavailable)
     }
-
     #[cfg(feature = "fastpq-gpu")]
     pub(super) fn fft_submit(
         _elements: &mut [u64],
@@ -493,7 +459,6 @@ mod native {
     ) -> Result<*mut c_void> {
         Err(CudaBackendError::Unavailable)
     }
-
     #[cfg(feature = "fastpq-gpu")]
     pub(super) fn ifft_submit(
         _elements: &mut [u64],
@@ -503,7 +468,6 @@ mod native {
     ) -> Result<*mut c_void> {
         Err(CudaBackendError::Unavailable)
     }
-
     #[cfg(feature = "fastpq-gpu")]
     pub(super) fn lde_submit(
         _coeffs: &[u64],
@@ -516,7 +480,6 @@ mod native {
     ) -> Result<*mut c_void> {
         Err(CudaBackendError::Unavailable)
     }
-
     pub(super) fn fft(
         _elements: &mut [u64],
         _column_count: usize,
@@ -525,7 +488,6 @@ mod native {
     ) -> Result<()> {
         Err(CudaBackendError::Unavailable)
     }
-
     pub(super) fn ifft(
         _elements: &mut [u64],
         _column_count: usize,
@@ -534,7 +496,6 @@ mod native {
     ) -> Result<()> {
         Err(CudaBackendError::Unavailable)
     }
-
     pub(super) fn lde(
         _coeffs: &[u64],
         _column_count: usize,
@@ -546,7 +507,6 @@ mod native {
     ) -> Result<()> {
         Err(CudaBackendError::Unavailable)
     }
-
     pub(super) fn bn254_fft(
         _elements: &mut [u64],
         _column_count: usize,
@@ -555,7 +515,6 @@ mod native {
     ) -> Result<()> {
         Err(CudaBackendError::Unavailable)
     }
-
     pub(super) fn bn254_lde(
         _coeffs: &[u64],
         _column_count: usize,
@@ -567,12 +526,10 @@ mod native {
     ) -> Result<()> {
         Err(CudaBackendError::Unavailable)
     }
-
     #[cfg(feature = "fastpq-gpu")]
     pub(super) fn poseidon_permute(_states: &mut [u64], _state_count: usize) -> Result<()> {
         Err(CudaBackendError::Unavailable)
     }
-
     #[cfg(feature = "fastpq-gpu")]
     pub(super) fn poseidon_hash_columns(
         _payloads: &[u64],
@@ -583,7 +540,6 @@ mod native {
     ) -> Result<()> {
         Err(CudaBackendError::Unavailable)
     }
-
     #[cfg(feature = "fastpq-gpu")]
     // The low-level fused leaf+parent kernel stays parked in non-CUDA builds too;
     // production callers use the scalar-equivalent column plus Merkle-pair path.
@@ -597,7 +553,6 @@ mod native {
     ) -> Result<()> {
         Err(CudaBackendError::Unavailable)
     }
-
     #[cfg(feature = "fastpq-gpu")]
     pub(super) fn bn254_poseidon_hash_words(
         _words: &[u64],
@@ -609,7 +564,6 @@ mod native {
         Err(CudaBackendError::Unavailable)
     }
 }
-
 fn validate_dense(buffer_len: usize, column_count: usize, log_size: u32) -> Result<(usize, usize)> {
     let extent = 1usize
         .checked_shl(log_size)
@@ -625,7 +579,6 @@ fn validate_dense(buffer_len: usize, column_count: usize, log_size: u32) -> Resu
     }
     Ok((extent, expected))
 }
-
 fn validate_bn254_dense(
     buffer_len: usize,
     column_count: usize,
@@ -646,12 +599,10 @@ fn validate_bn254_dense(
     }
     Ok((extent, expected))
 }
-
 fn usize_to_u32(value: usize) -> u32 {
     let capped = value.min(u32::MAX as usize);
     u32::try_from(capped).unwrap_or(u32::MAX)
 }
-
 /// Safe wrapper for the forward FFT (column-major layout).
 ///
 /// # Errors
@@ -668,7 +619,6 @@ pub fn fastpq_fft(
     validate_dense(elements.len(), column_count, log_size)?;
     native::fft(elements, column_count, log_size, root)
 }
-
 #[cfg(feature = "fastpq-gpu")]
 pub(crate) fn fastpq_fft_submit(
     elements: &mut [u64],
@@ -679,7 +629,6 @@ pub(crate) fn fastpq_fft_submit(
     validate_dense(elements.len(), column_count, log_size)?;
     PendingCudaDispatch::new(native::fft_submit(elements, column_count, log_size, root)?)
 }
-
 /// Safe wrapper for the inverse FFT (column-major layout).
 ///
 /// # Errors
@@ -696,7 +645,6 @@ pub fn fastpq_ifft(
     validate_dense(elements.len(), column_count, log_size)?;
     native::ifft(elements, column_count, log_size, root)
 }
-
 #[cfg(feature = "fastpq-gpu")]
 pub(crate) fn fastpq_ifft_submit(
     elements: &mut [u64],
@@ -707,7 +655,6 @@ pub(crate) fn fastpq_ifft_submit(
     validate_dense(elements.len(), column_count, log_size)?;
     PendingCudaDispatch::new(native::ifft_submit(elements, column_count, log_size, root)?)
 }
-
 /// Safe wrapper for the coset low-degree extension.
 ///
 /// # Errors
@@ -742,7 +689,6 @@ pub fn fastpq_lde(
         out,
     )
 }
-
 #[cfg(feature = "fastpq-gpu")]
 pub(crate) fn fastpq_lde_submit(
     coeffs: &[u64],
@@ -771,7 +717,6 @@ pub(crate) fn fastpq_lde_submit(
         out,
     )?)
 }
-
 /// Safe wrapper for the BN254 forward FFT (column-major canonical limbs).
 ///
 /// # Errors
@@ -786,7 +731,6 @@ pub fn fastpq_bn254_fft(elements: &mut [u64], column_count: usize, log_size: u32
     let flat_twiddles = bn254::flatten_twiddles(&twiddles);
     native::bn254_fft(elements, column_count, log_size, &flat_twiddles)
 }
-
 /// Safe wrapper for the BN254 coset LDE (column-major canonical limbs).
 ///
 /// # Errors
@@ -823,7 +767,6 @@ pub fn fastpq_bn254_lde(
         out,
     )
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn validate_poseidon_states(len: usize) -> Result<usize> {
     const STATE_WIDTH: usize = 3;
@@ -842,7 +785,6 @@ fn validate_poseidon_states(len: usize) -> Result<usize> {
     }
     Ok(len / STATE_WIDTH)
 }
-
 /// Safe wrapper for the Poseidon permutation over a batch of states.
 #[cfg(feature = "fastpq-gpu")]
 ///
@@ -858,7 +800,6 @@ pub fn fastpq_poseidon_permute(states: &mut [u64]) -> Result<()> {
     let state_count = validate_poseidon_states(states.len())?;
     native::poseidon_permute(states, state_count)
 }
-
 #[cfg(feature = "fastpq-gpu")]
 pub fn fastpq_poseidon_hash_columns(
     payloads: &[u64],
@@ -908,7 +849,6 @@ pub fn fastpq_poseidon_hash_columns(
     }
     native::poseidon_hash_columns(payloads, slices, column_count, block_count, out)
 }
-
 #[cfg(feature = "fastpq-gpu")]
 /// Validate and dispatch the low-level fused leaf-plus-parent Poseidon kernel.
 #[allow(dead_code)]
@@ -964,7 +904,6 @@ pub fn fastpq_poseidon_hash_columns_fused(
     }
     native::poseidon_hash_columns_fused(payloads, slices, column_count, block_count, out)
 }
-
 #[cfg(feature = "fastpq-gpu")]
 pub(crate) fn fastpq_bn254_poseidon_hash_words(
     words: &[u64],
@@ -973,7 +912,6 @@ pub(crate) fn fastpq_bn254_poseidon_hash_words(
     if slices.is_empty() {
         return Ok(Vec::new());
     }
-
     let mut cuda_slices = Vec::with_capacity(slices.len());
     for slice in slices {
         let end = slice
@@ -996,7 +934,6 @@ pub(crate) fn fastpq_bn254_poseidon_hash_words(
             })?,
         });
     }
-
     let params = bn254_poseidon_width3_params();
     let staged_words = if words.is_empty() { &[0u64][..] } else { words };
     let output_len =
@@ -1019,11 +956,9 @@ pub(crate) fn fastpq_bn254_poseidon_hash_words(
         .map(bn254_limbs_to_bytes)
         .collect())
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_zkp_halo2::Bn254Scalar;
-
     use super::{
         CudaBackendError, fastpq_bn254_fft, fastpq_bn254_lde, fastpq_fft, fastpq_lde, usize_to_u32,
         validate_bn254_dense, validate_dense,
@@ -1037,7 +972,6 @@ mod tests {
         BN254_LIMBS, canonical_to_scalars, cpu_fft, cpu_lde, sample_columns, sample_coset,
         scalar_from_canonical_limbs, scalars_to_canonical, stage_twiddles_scalars,
     };
-
     #[test]
     fn validate_bn254_dense_requires_full_limb_columns() {
         let err = validate_bn254_dense(3, 1, 0).expect_err("shape mismatch");
@@ -1049,7 +983,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn validate_dense_reports_shape_mismatch_and_overflow() {
         let err = validate_dense(7, 2, 2).expect_err("shape mismatch");
@@ -1060,14 +993,11 @@ mod tests {
                 got: 7,
             }
         );
-
         let err = validate_dense(0, usize::MAX, 2).expect_err("overflow");
         assert_eq!(err, CudaBackendError::Unavailable);
-
         let err = validate_dense(0, 1, usize::BITS).expect_err("invalid shift");
         assert_eq!(err, CudaBackendError::Unavailable);
     }
-
     #[test]
     fn usize_to_u32_saturates_reported_lengths() {
         assert_eq!(usize_to_u32(0), 0);
@@ -1075,7 +1005,6 @@ mod tests {
         assert_eq!(usize_to_u32((u32::MAX as usize) + 1), u32::MAX);
         assert_eq!(usize_to_u32(usize::MAX), u32::MAX);
     }
-
     #[test]
     fn fastpq_fft_and_lde_reject_shape_before_backend_call() {
         let mut dense = vec![0u64; 7];
@@ -1087,7 +1016,6 @@ mod tests {
                 got: 7,
             }
         );
-
         let coeffs = vec![0u64; 4];
         let mut out = vec![0u64; 7];
         let err = fastpq_lde(&coeffs, 1, 2, 1, 1, 1, &mut out).expect_err("shape mismatch");
@@ -1099,7 +1027,6 @@ mod tests {
             }
         );
     }
-
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn validate_poseidon_states_reports_padded_shape() {
@@ -1113,7 +1040,6 @@ mod tests {
             })
         );
     }
-
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn bn254_poseidon_words_rejects_out_of_bounds_slice_before_backend_call() {
@@ -1124,7 +1050,6 @@ mod tests {
         .expect_err("out-of-bounds slice rejected");
         assert!(matches!(err, CudaBackendError::InvalidInput(_)));
     }
-
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn bn254_poseidon_words_rejects_overflowing_slice_before_backend_call() {
@@ -1141,13 +1066,11 @@ mod tests {
             CudaBackendError::InvalidInput("BN254 Poseidon slice range overflows")
         );
     }
-
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn poseidon_permute_rejects_partial_state_before_backend_call() {
         let mut empty = [];
         fastpq_poseidon_permute(&mut empty).expect("empty Poseidon batch is a no-op");
-
         let mut partial = [1u64, 2, 3, 4, 5];
         let err = fastpq_poseidon_permute(&mut partial).expect_err("partial state rejected");
         assert_eq!(
@@ -1158,7 +1081,6 @@ mod tests {
             }
         );
     }
-
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn poseidon_column_cuda_wrapper_rejects_adversarial_metadata_before_backend_call() {
@@ -1169,7 +1091,6 @@ mod tests {
         let payloads = batch.payloads();
         let slices = batch.offsets();
         let mut out = vec![0u64; batch.columns() * 3];
-
         let err = fastpq_poseidon_hash_columns(
             payloads,
             slices,
@@ -1185,7 +1106,6 @@ mod tests {
                 got: usize_to_u32(batch.columns()),
             }
         );
-
         let err = fastpq_poseidon_hash_columns(
             &payloads[..payloads.len() - 1],
             slices,
@@ -1201,7 +1121,6 @@ mod tests {
                 got: usize_to_u32(payloads.len() - 1),
             }
         );
-
         let mut short_out = vec![0u64; batch.columns() * 3 - 1];
         let err = fastpq_poseidon_hash_columns(
             payloads,
@@ -1218,7 +1137,6 @@ mod tests {
                 got: usize_to_u32(batch.columns() * 3 - 1),
             }
         );
-
         let err = fastpq_poseidon_hash_columns(
             payloads,
             slices,
@@ -1235,7 +1153,6 @@ mod tests {
             }
         );
     }
-
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn fused_poseidon_cuda_wrapper_rejects_short_parent_output_before_backend_call() {
@@ -1261,7 +1178,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn cuda_backend_error_display_is_stable() {
         assert_eq!(
@@ -1285,7 +1201,6 @@ mod tests {
             "cudaError_t(700)"
         );
     }
-
     #[test]
     fn fastpq_bn254_lde_rejects_invalid_coset() {
         let coeffs = vec![0u64; BN254_LIMBS << 1];
@@ -1301,7 +1216,6 @@ mod tests {
         .expect_err("invalid coset rejected");
         assert!(matches!(err, CudaBackendError::InvalidInput(_)));
     }
-
     #[test]
     fn fastpq_bn254_wrappers_reject_shape_before_backend_call() {
         let mut dense = vec![0u64; BN254_LIMBS * 2 - 1];
@@ -1313,7 +1227,6 @@ mod tests {
                 got: usize_to_u32(BN254_LIMBS * 2 - 1),
             }
         );
-
         let coeffs = vec![0u64; BN254_LIMBS * 2];
         let mut out = vec![0u64; BN254_LIMBS * 4 - 1];
         let err = fastpq_bn254_lde(&coeffs, 1, 1, 1, sample_coset(), &mut out)
@@ -1326,7 +1239,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn cuda_wait_timeout_harness_fails_closed_without_wedged_gpu() {
         match super::native::test_wait_timeout(1) {
@@ -1338,7 +1250,6 @@ mod tests {
             Err(err) => panic!("unexpected timeout harness error: {err}"),
         }
     }
-
     #[test]
     fn fastpq_bn254_fft_matches_cpu_when_backend_available() {
         let log_size = 4;
@@ -1368,7 +1279,6 @@ mod tests {
         }
         assert_eq!(gpu_columns, cpu_expected);
     }
-
     #[test]
     fn fastpq_bn254_lde_matches_cpu_when_backend_available() {
         let trace_log = 3;
@@ -1404,7 +1314,6 @@ mod tests {
         let gpu_eval: Vec<Vec<u64>> = out.chunks_exact(eval_extent).map(<[u64]>::to_vec).collect();
         assert_eq!(gpu_eval, cpu_expected);
     }
-
     #[test]
     fn fastpq_bn254_cuda_transforms_are_repeat_deterministic_when_available() {
         let log_size = 4;
@@ -1429,7 +1338,6 @@ mod tests {
             }
             expected_fft = Some(dense);
         }
-
         let trace_log = 3;
         let blowup_log = 2;
         let coeffs = sample_columns(trace_log, column_count);

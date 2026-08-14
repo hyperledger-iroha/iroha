@@ -6,7 +6,6 @@ fn autonomous_anchor_admission_rejects_same_label_different_network() {
     fixture.state.network_id = deterministic_test_network_id(0x7A);
     assert_eq!(fixture.state.chain_id, display_name);
     assert_ne!(fixture.state.network_id, original_network_id);
-
     let error = validate_autonomous_anchor_fixture(&fixture, &fixture.block, &fixture.bundle)
         .expect_err("the same display label must not authorize another genesis lineage");
     assert!(matches!(

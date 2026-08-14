@@ -4,11 +4,7 @@
 //! and queue state to three booleans, then execute the selected work. This is
 //! the authoritative branch relation shared by production and formal
 //! refinement.
-
-use super::refinement::{
-    ProductionSchedulerTraceProjection, check_production_scheduler_transition,
-};
-
+use super::refinement::{ProductionSchedulerTraceProjection, check_production_scheduler_transition};
 // Constructor expressions are arguments because the ordinary Rust and Verus
 // instantiations use different result types. Keeping the branch conditions in
 // one macro prevents either side from silently changing timer/FIFO priority.
@@ -36,7 +32,6 @@ macro_rules! schedule_select_body {
         }
     }};
 }
-
 /// Persistent state required by the scheduling decision.
 ///
 /// A non-timeout timer may run before an already-admitted command, preserving
@@ -47,7 +42,6 @@ macro_rules! schedule_select_body {
 pub struct ScheduleState {
     pub(crate) fifo_owed: bool,
 }
-
 /// One source selected for a serialized runtime step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScheduledWork {
@@ -60,7 +54,6 @@ pub enum ScheduledWork {
     /// No timer is due and the FIFO is empty.
     Idle,
 }
-
 impl ScheduleState {
     /// Select exactly one source and return the next arbitration state.
     pub fn select(
@@ -108,29 +101,24 @@ impl ScheduleState {
         (selected, next)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn timeout_has_absolute_priority_and_preserves_fifo_debt() {
         let (work, next) = ScheduleState { fifo_owed: true }.select(true, true, true);
         assert_eq!(work, ScheduledWork::Timeout);
         assert!(next.fifo_owed);
     }
-
     #[test]
     fn periodic_timer_can_delay_ready_fifo_only_once() {
         let (work, next) = ScheduleState::default().select(false, true, true);
         assert_eq!(work, ScheduledWork::PeriodicTimer);
         assert!(next.fifo_owed);
-
         let (work, next) = next.select(false, true, true);
         assert_eq!(work, ScheduledWork::Fifo);
         assert!(!next.fifo_owed);
     }
-
     #[test]
     fn idle_and_uncontended_fifo_do_not_create_debt() {
         assert_eq!(

@@ -1,7 +1,6 @@
 use iroha_crypto::Hash;
 use mv::json::JsonKeyCodec;
 use norito::json;
-
 macro_rules! impl_id_key_codec {
     ($($ty:path),+ $(,)?) => {
         $(
@@ -9,7 +8,6 @@ macro_rules! impl_id_key_codec {
                 fn encode_json_key(&self, out: &mut String) {
                     json::write_json_string(&self.to_string(), out);
                 }
-
                 fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
                     encoded
                         .parse::<$ty>()
@@ -19,7 +17,6 @@ macro_rules! impl_id_key_codec {
         )+
     };
 }
-
 macro_rules! impl_nested_json_key_codec {
     ($($ty:path),+ $(,)?) => {
         $(
@@ -29,7 +26,6 @@ macro_rules! impl_nested_json_key_codec {
                     norito::json::JsonSerialize::json_serialize(self, &mut encoded);
                     json::write_json_string(&encoded, out);
                 }
-
                 fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
                     let mut parser = json::Parser::new(encoded);
                     norito::json::JsonDeserialize::json_deserialize(&mut parser)
@@ -38,7 +34,6 @@ macro_rules! impl_nested_json_key_codec {
         )+
     };
 }
-
 impl_id_key_codec!(
     crate::asset::AssetDefinitionId,
     crate::asset::AssetId,
@@ -49,7 +44,6 @@ impl_id_key_codec!(
     crate::proof::ProofId,
     crate::isi::settlement::SettlementId,
 );
-
 // Musubi uses structural, versioned keys whose complete typed JSON form is
 // embedded into the surrounding storage object's string key. This avoids
 // delimiter ambiguity for nested package/account identities while keeping
@@ -69,117 +63,97 @@ impl_nested_json_key_codec!(
     crate::musubi::MusubiAliasNameV1,
     crate::musubi::MusubiAliasHistoryKeyV1,
 );
-
 impl JsonKeyCodec for crate::domain::DomainId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         crate::domain::DomainId::parse_fully_qualified(encoded)
             .map_err(|err| json::Error::Message(err.to_string()))
     }
 }
-
 impl JsonKeyCodec for crate::account::AccountId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         crate::account::AccountId::parse_encoded(encoded)
             .map(crate::account::ParsedAccountId::into_account_id)
             .map_err(|err| json::Error::Message(err.to_string()))
     }
 }
-
 impl JsonKeyCodec for crate::name::Name {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(self.as_ref(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse::<crate::name::Name>()
             .map_err(|err| json::Error::Message(err.reason.into()))
     }
 }
-
 impl JsonKeyCodec for crate::state_path::StatePath {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(self.as_ref(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse::<crate::state_path::StatePath>()
             .map_err(|err| json::Error::Message(err.reason.into()))
     }
 }
-
 impl JsonKeyCodec for crate::proof::VerifyingKeyId {
     fn encode_json_key(&self, out: &mut String) {
         let mut buf = String::new();
         norito::json::JsonSerialize::json_serialize(self, &mut buf);
         json::write_json_string(&buf, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(encoded);
         norito::json::JsonDeserialize::json_deserialize(&mut parser)
     }
 }
-
 impl JsonKeyCodec for crate::runtime::RuntimeUpgradeId {
     fn encode_json_key(&self, out: &mut String) {
         <[u8; 32] as JsonKeyCodec>::encode_json_key(&self.0, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <[u8; 32] as JsonKeyCodec>::decode_json_key(encoded).map(Self)
     }
 }
-
 impl JsonKeyCodec for crate::escrow::EscrowId {
     fn encode_json_key(&self, out: &mut String) {
         self.as_hash().encode_json_key(out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <Hash as JsonKeyCodec>::decode_json_key(encoded).map(Self::new)
     }
 }
-
 impl JsonKeyCodec for crate::account::rekey::AccountAlias {
     fn encode_json_key(&self, out: &mut String) {
         let mut buf = String::new();
         norito::json::JsonSerialize::json_serialize(self, &mut buf);
         json::write_json_string(&buf, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(encoded);
         norito::json::JsonDeserialize::json_deserialize(&mut parser)
     }
 }
-
 impl JsonKeyCodec for crate::smart_contract::ContractAlias {
     fn encode_json_key(&self, out: &mut String) {
         norito::json::write_json_string(self.as_ref(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse()
             .map_err(|err: crate::ParseError| json::Error::Message(err.reason.into()))
     }
 }
-
 impl JsonKeyCodec for crate::smart_contract::ContractAddress {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(self.as_ref(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse()
@@ -188,12 +162,10 @@ impl JsonKeyCodec for crate::smart_contract::ContractAddress {
             })
     }
 }
-
 impl JsonKeyCodec for crate::confidential::ConfidentialParamsId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse::<u32>()
@@ -201,32 +173,26 @@ impl JsonKeyCodec for crate::confidential::ConfidentialParamsId {
             .map_err(|err| json::Error::Message(err.to_string()))
     }
 }
-
 impl JsonKeyCodec for crate::sorafs::capacity::ProviderId {
     fn encode_json_key(&self, out: &mut String) {
         <[u8; 32] as JsonKeyCodec>::encode_json_key(&self.0, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <[u8; 32] as JsonKeyCodec>::decode_json_key(encoded).map(Self)
     }
 }
-
 impl JsonKeyCodec for crate::sorafs::pin_registry::ReplicationOrderId {
     fn encode_json_key(&self, out: &mut String) {
         <[u8; 32] as JsonKeyCodec>::encode_json_key(self.as_bytes(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <[u8; 32] as JsonKeyCodec>::decode_json_key(encoded).map(Self::new)
     }
 }
-
 impl JsonKeyCodec for crate::sorafs::pin_registry::ManifestAliasId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.as_label(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let (namespace, name) = encoded
             .split_once('/')
@@ -234,68 +200,56 @@ impl JsonKeyCodec for crate::sorafs::pin_registry::ManifestAliasId {
         Ok(Self::new(namespace.to_owned(), name.to_owned()))
     }
 }
-
 impl JsonKeyCodec for crate::oracle::OracleDisputeId {
     fn encode_json_key(&self, out: &mut String) {
         <u64 as JsonKeyCodec>::encode_json_key(&self.0, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <u64 as JsonKeyCodec>::decode_json_key(encoded).map(Self)
     }
 }
-
 impl JsonKeyCodec for crate::oracle::OracleProviderKey {
     fn encode_json_key(&self, out: &mut String) {
         let mut buf = String::new();
         norito::json::JsonSerialize::json_serialize(self, &mut buf);
         json::write_json_string(&buf, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(encoded);
         norito::json::JsonDeserialize::json_deserialize(&mut parser)
     }
 }
-
 impl JsonKeyCodec for crate::oracle::DefiOracleAttestationKey {
     fn encode_json_key(&self, out: &mut String) {
         let mut buf = String::new();
         norito::json::JsonSerialize::json_serialize(self, &mut buf);
         json::write_json_string(&buf, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(encoded);
         norito::json::JsonDeserialize::json_deserialize(&mut parser)
     }
 }
-
 impl JsonKeyCodec for crate::oracle::OracleChangeId {
     fn encode_json_key(&self, out: &mut String) {
         self.0.encode_json_key(out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <Hash as JsonKeyCodec>::decode_json_key(encoded).map(Self)
     }
 }
-
 impl JsonKeyCodec for crate::nexus::DataSpaceId {
     fn encode_json_key(&self, out: &mut String) {
         <u64 as JsonKeyCodec>::encode_json_key(&self.as_u64(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <u64 as JsonKeyCodec>::decode_json_key(encoded).map(Self::from)
     }
 }
-
 impl JsonKeyCodec for crate::nexus::LaneId {
     fn encode_json_key(&self, out: &mut String) {
         <u64 as JsonKeyCodec>::encode_json_key(&u64::from(self.as_u32()), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <u64 as JsonKeyCodec>::decode_json_key(encoded).and_then(|value| {
             u32::try_from(value)
@@ -304,30 +258,25 @@ impl JsonKeyCodec for crate::nexus::LaneId {
         })
     }
 }
-
 impl JsonKeyCodec for crate::nexus::UniversalAccountId {
     fn encode_json_key(&self, out: &mut String) {
         <Hash as JsonKeyCodec>::encode_json_key(self.as_hash(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <Hash as JsonKeyCodec>::decode_json_key(encoded)
             .map(crate::nexus::UniversalAccountId::from_hash)
     }
 }
-
 impl JsonKeyCodec for crate::nexus::FeeSponsorProgramId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse::<crate::nexus::FeeSponsorProgramId>()
             .map_err(|err| json::Error::Message(err.to_string()))
     }
 }
-
 macro_rules! impl_fee_sponsor_struct_key_codec {
     ($($ty:path),+ $(,)?) => {
         $(
@@ -337,7 +286,6 @@ macro_rules! impl_fee_sponsor_struct_key_codec {
                     norito::json::JsonSerialize::json_serialize(self, &mut encoded);
                     json::write_json_string(&encoded, out);
                 }
-
                 fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
                     let mut parser = json::Parser::new(encoded);
                     norito::json::JsonDeserialize::json_deserialize(&mut parser)
@@ -346,48 +294,40 @@ macro_rules! impl_fee_sponsor_struct_key_codec {
         )+
     };
 }
-
 impl_fee_sponsor_struct_key_codec!(
     crate::nexus::FeeSponsorProgramRevisionKey,
     crate::nexus::FeeSponsorEnrollmentKey,
     crate::nexus::FeeSponsorVaultKey,
     crate::nexus::FeeSponsorBudgetCounterKey,
 );
-
 impl JsonKeyCodec for crate::account::OpaqueAccountId {
     fn encode_json_key(&self, out: &mut String) {
         <Hash as JsonKeyCodec>::encode_json_key(self.as_hash(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <Hash as JsonKeyCodec>::decode_json_key(encoded).map(crate::account::OpaqueAccountId::from)
     }
 }
-
 impl JsonKeyCodec for crate::identifier::IdentifierPolicyId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse::<crate::identifier::IdentifierPolicyId>()
             .map_err(|err| json::Error::Message(err.to_string()))
     }
 }
-
 impl JsonKeyCodec for crate::ram_lfe::RamLfeProgramId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse::<crate::ram_lfe::RamLfeProgramId>()
             .map_err(|err| json::Error::Message(err.to_string()))
     }
 }
-
 impl JsonKeyCodec for crate::bridge::sccp::SccpOutboundMessageKeyV1 {
     fn encode_json_key(&self, out: &mut String) {
         let encoded = format!(
@@ -398,10 +338,8 @@ impl JsonKeyCodec for crate::bridge::sccp::SccpOutboundMessageKeyV1 {
         );
         json::write_json_string(&encoded, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         const PREFIX: &str = "sccp-outbound-v1";
-
         let mut parts = encoded.split(':');
         if parts.next() != Some(PREFIX) {
             return Err(json::Error::Message(
@@ -453,7 +391,6 @@ impl JsonKeyCodec for crate::bridge::sccp::SccpOutboundMessageKeyV1 {
         })
     }
 }
-
 impl JsonKeyCodec for crate::bridge::sccp::SccpOutboundMessageIndexKeyV1 {
     fn encode_json_key(&self, out: &mut String) {
         let encoded = format!(
@@ -466,10 +403,8 @@ impl JsonKeyCodec for crate::bridge::sccp::SccpOutboundMessageIndexKeyV1 {
         );
         json::write_json_string(&encoded, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         const PREFIX: &str = "sccp-outbound-index-v1";
-
         let mut parts = encoded.split(':');
         if parts.next() != Some(PREFIX) {
             return Err(json::Error::Message(
@@ -553,7 +488,6 @@ impl JsonKeyCodec for crate::bridge::sccp::SccpOutboundMessageIndexKeyV1 {
         })
     }
 }
-
 impl JsonKeyCodec for crate::bridge::sccp::SccpInboundMessageKeyV1 {
     fn encode_json_key(&self, out: &mut String) {
         let encoded = format!(
@@ -564,10 +498,8 @@ impl JsonKeyCodec for crate::bridge::sccp::SccpInboundMessageKeyV1 {
         );
         json::write_json_string(&encoded, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         const PREFIX: &str = "sccp-inbound-v1";
-
         let mut parts = encoded.split(':');
         if parts.next() != Some(PREFIX) {
             return Err(json::Error::Message(
@@ -619,7 +551,6 @@ impl JsonKeyCodec for crate::bridge::sccp::SccpInboundMessageKeyV1 {
         })
     }
 }
-
 impl JsonKeyCodec for crate::bridge::sccp::SccpInboundAnchorHighWaterKeyV1 {
     fn encode_json_key(&self, out: &mut String) {
         let encoded = format!(
@@ -630,10 +561,8 @@ impl JsonKeyCodec for crate::bridge::sccp::SccpInboundAnchorHighWaterKeyV1 {
         );
         json::write_json_string(&encoded, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         const PREFIX: &str = "sccp-inbound-anchor-high-water-v1";
-
         let mut parts = encoded.split(':');
         if parts.next() != Some(PREFIX) {
             return Err(json::Error::Message(
@@ -685,13 +614,11 @@ impl JsonKeyCodec for crate::bridge::sccp::SccpInboundAnchorHighWaterKeyV1 {
         })
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::KeyPair;
     use mv::json::JsonKeyCodec;
     use norito::json::Parser;
-
     use crate::account::AccountId;
     use crate::bridge::sccp::{
         SccpInboundAnchorHighWaterKeyV1, SccpInboundMessageKeyV1, SccpLaneIdV1, SccpNetworkV1,
@@ -705,11 +632,9 @@ mod tests {
         nexus::DataSpaceId,
         sorafs::{capacity::ProviderId, pin_registry::ReplicationOrderId},
     };
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked JSON key codec fixture keypair")
     }
-
     #[test]
     fn account_id_json_key_codec_roundtrip() {
         let keypair = checked_random_keypair();
@@ -721,7 +646,6 @@ mod tests {
         let decoded = AccountId::decode_json_key(&raw_key).expect("decode json key");
         assert_eq!(decoded, account);
     }
-
     #[test]
     fn musubi_maintainer_directory_key_json_codec_roundtrip() {
         let keypair = checked_random_keypair();
@@ -742,7 +666,6 @@ mod tests {
             .expect("decode maintainer directory key");
         assert_eq!(decoded, key);
     }
-
     #[test]
     fn musubi_provider_bundle_attestation_key_json_codec_roundtrip() {
         let key = MusubiProviderBundleAttestationKeyV1 {
@@ -757,7 +680,6 @@ mod tests {
         let decoded = MusubiProviderBundleAttestationKeyV1::decode_json_key(&raw_key)
             .expect("decode provider bundle attestation key");
         assert_eq!(decoded, key);
-
         let with_unknown_field = raw_key
             .strip_suffix('}')
             .expect("structural Musubi key is a JSON object")
@@ -768,7 +690,6 @@ mod tests {
             "provider attestation key must reject unknown fields"
         );
     }
-
     #[test]
     fn account_id_json_key_codec_rejects_domain_suffix_literal() {
         let err = crate::account::AccountId::decode_json_key("alice@banka.dataspace")
@@ -778,7 +699,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn sccp_outbound_message_key_json_key_codec_is_canonical() {
         let key = SccpOutboundMessageKeyV1::new(
@@ -803,7 +723,6 @@ mod tests {
         let decoded = SccpOutboundMessageKeyV1::decode_json_key(&raw_key).expect("decode json key");
         assert_eq!(decoded, key);
     }
-
     #[test]
     fn sccp_outbound_message_key_json_key_codec_rejects_aliases_and_malleability() {
         let message_id = "4242424242424242424242424242424242424242424242424242424242424242";
@@ -825,7 +744,6 @@ mod tests {
             format!("sccp-outbound-v1:sora-taira:bsc-testnet:{message_id}:trailing"),
             String::new(),
         ];
-
         for encoded in hostile {
             assert!(
                 SccpOutboundMessageKeyV1::decode_json_key(&encoded).is_err(),
@@ -833,7 +751,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn sccp_outbound_index_key_json_key_codec_is_canonical() {
         let key = SccpOutboundMessageIndexKeyV1 {
@@ -863,7 +780,6 @@ mod tests {
             key
         );
     }
-
     #[test]
     fn sccp_outbound_index_key_json_key_codec_rejects_malleability() {
         let id = "7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b";
@@ -893,7 +809,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn sccp_inbound_message_key_json_key_codec_is_canonical() {
         let key = SccpInboundMessageKeyV1::new(
@@ -913,7 +828,6 @@ mod tests {
                 "abababababababababababababababababababababababababababababababab\""
             )
         );
-
         let mut parser = Parser::new(&encoded);
         let raw_key = parser.parse_string().expect("parse encoded json key");
         assert_eq!(
@@ -922,7 +836,6 @@ mod tests {
             key
         );
     }
-
     #[test]
     fn sccp_inbound_message_key_json_key_codec_rejects_aliases_and_malleability() {
         let message_id = "abababababababababababababababababababababababababababababababab";
@@ -962,7 +875,6 @@ mod tests {
             "sccp-inbound-v1:ethereum-mainnet:sora-taira:".to_owned(),
             String::new(),
         ];
-
         for encoded in hostile {
             assert!(
                 SccpInboundMessageKeyV1::decode_json_key(&encoded).is_err(),
@@ -970,7 +882,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn sccp_inbound_anchor_high_water_key_json_key_codec_is_canonical() {
         let key = SccpInboundAnchorHighWaterKeyV1::new(
@@ -990,7 +901,6 @@ mod tests {
                 "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\""
             )
         );
-
         let mut parser = Parser::new(&encoded);
         let raw_key = parser.parse_string().expect("parse encoded json key");
         assert_eq!(
@@ -999,7 +909,6 @@ mod tests {
             key
         );
     }
-
     #[test]
     fn sccp_inbound_anchor_high_water_key_json_key_codec_rejects_malleability() {
         let anchor_hash = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
@@ -1034,7 +943,6 @@ mod tests {
             "sccp-inbound-anchor-high-water-v1:bsc-mainnet:sora-taira:".to_owned(),
             String::new(),
         ];
-
         for encoded in hostile {
             assert!(
                 SccpInboundAnchorHighWaterKeyV1::decode_json_key(&encoded).is_err(),

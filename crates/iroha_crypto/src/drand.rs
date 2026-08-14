@@ -7,24 +7,19 @@
 //! signature. This module deliberately performs no network I/O and accepts no
 //! remotely supplied chain metadata; callers must pin the chain identity and
 //! public key in configuration before invoking the verifier.
-
 use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared};
 use group::{Curve as _, Group as _, prime::PrimeCurveAffine as _};
 use pairing::{MillerLoopResult as _, MultiMillerLoop as _};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
-
 /// drand scheme supported by the first-release verifier.
 pub const UNCHAINED_G1_RFC9380_SCHEME: &str = "bls-unchained-g1-rfc9380";
-
 /// RFC 9380 BLS signature domain used by drand's G1 signature scheme.
 const DRAND_G1_SIGNATURE_DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_";
-
 /// Length of a canonical compressed drand G2 public key.
 pub const DRAND_PUBLIC_KEY_BYTES: usize = 96;
 /// Length of a canonical compressed drand G1 signature.
 pub const DRAND_SIGNATURE_BYTES: usize = 48;
-
 /// Errors returned while verifying a drand beacon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DrandVerificationError {
@@ -44,13 +39,11 @@ pub enum DrandVerificationError {
     #[error("drand advertised randomness does not match the verified signature")]
     RandomnessMismatch,
 }
-
 /// Return whether bytes encode a canonical, non-identity drand G2 public key.
 #[must_use]
 pub fn is_valid_unchained_g1_rfc9380_public_key(public_key: &[u8]) -> bool {
     decode_public_key(public_key).is_ok()
 }
-
 /// Verify one `bls-unchained-g1-rfc9380` beacon against a pinned public key.
 ///
 /// The returned bytes are the canonical randomness derived as SHA-256 of the
@@ -73,13 +66,11 @@ pub fn verify_unchained_g1_rfc9380(
     }
     let public_key = decode_public_key(public_key)?;
     let signature_point = decode_signature(signature)?;
-
     // drand hashes the fixed-width big-endian round before applying the BLS
     // hash-to-curve operation for the unchained scheme.
     let message_digest = Sha256::digest(round.to_be_bytes());
     let message_point =
         G1Projective::hash_to_curve(&message_digest, DRAND_G1_SIGNATURE_DST, &[]).to_affine();
-
     // e(signature, G2 generator) == e(H(message), public key).
     let terms: [(&G1Affine, &G2Prepared); 2] = [
         (&signature_point, &G2Prepared::from(G2Affine::generator())),
@@ -92,7 +83,6 @@ pub fn verify_unchained_g1_rfc9380(
     if !bool::from(pairing.is_identity()) {
         return Err(DrandVerificationError::SignatureMismatch);
     }
-
     let randomness: [u8; 32] = Sha256::digest(signature).into();
     if let Some(advertised) = advertised_randomness
         && advertised != &randomness[..]
@@ -101,7 +91,6 @@ pub fn verify_unchained_g1_rfc9380(
     }
     Ok(randomness)
 }
-
 fn decode_public_key(bytes: &[u8]) -> Result<G2Affine, DrandVerificationError> {
     let encoded: [u8; DRAND_PUBLIC_KEY_BYTES] = bytes
         .try_into()
@@ -114,7 +103,6 @@ fn decode_public_key(bytes: &[u8]) -> Result<G2Affine, DrandVerificationError> {
     }
     Ok(point)
 }
-
 fn decode_signature(bytes: &[u8]) -> Result<G1Affine, DrandVerificationError> {
     let encoded: [u8; DRAND_SIGNATURE_BYTES] = bytes
         .try_into()
@@ -127,13 +115,10 @@ fn decode_signature(bytes: &[u8]) -> Result<G1Affine, DrandVerificationError> {
     }
     Ok(point)
 }
-
 #[cfg(test)]
 mod tests {
-    use hex_literal::hex;
-
     use super::{DrandVerificationError, verify_unchained_g1_rfc9380};
-
+    use hex_literal::hex;
     // Official Quicknet public key and round 1000 beacon. The vector is fixed
     // so verification tests never depend on network access or wall-clock time.
     const QUICKNET_PUBLIC_KEY: [u8; 96] = hex!(
@@ -147,7 +132,6 @@ mod tests {
     );
     const QUICKNET_ROUND_1000_RANDOMNESS: [u8; 32] =
         hex!("fe290beca10872ef2fb164d2aa4442de4566183ec51c56ff3cd603d930e54fdd");
-
     #[test]
     fn official_quicknet_round_verifies() {
         assert_eq!(
@@ -160,7 +144,6 @@ mod tests {
             Ok(QUICKNET_ROUND_1000_RANDOMNESS)
         );
     }
-
     #[test]
     fn wrong_round_and_randomness_fail_closed() {
         assert_eq!(
@@ -193,7 +176,6 @@ mod tests {
             Err(DrandVerificationError::RandomnessMismatch)
         );
     }
-
     #[test]
     fn malformed_key_and_signature_encodings_are_rejected() {
         assert_eq!(
@@ -240,7 +222,6 @@ mod tests {
             Err(DrandVerificationError::InvalidSignature)
         );
     }
-
     #[test]
     fn tampering_and_zero_round_are_rejected() {
         assert_eq!(
@@ -252,7 +233,6 @@ mod tests {
             ),
             Err(DrandVerificationError::ZeroRound)
         );
-
         let mut tampered_signature = QUICKNET_ROUND_1000_SIGNATURE;
         tampered_signature[17] ^= 1;
         assert!(matches!(
@@ -260,7 +240,6 @@ mod tests {
             Err(DrandVerificationError::InvalidSignature
                 | DrandVerificationError::SignatureMismatch)
         ));
-
         let mut wrong_public_key = QUICKNET_PUBLIC_KEY;
         wrong_public_key[31] ^= 1;
         assert!(matches!(

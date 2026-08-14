@@ -1,19 +1,15 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for fraud monitoring admission policy using mocked assessments.
-
 use std::str::FromStr;
-
 use eyre::{Report, Result};
 use integration_tests::sandbox;
 use iroha::data_model::{Level, metadata::Metadata, name::Name, prelude::*};
 use iroha_primitives::json::Json;
 use iroha_test_network::NetworkBuilder;
 use toml::Value as TomlValue;
-
 fn error_chain(err: &Report) -> Vec<String> {
     err.chain().map(ToString::to_string).collect()
 }
-
 #[test]
 fn fraud_monitoring_requires_assessment_bands() -> Result<()> {
     let context = stringify!(fraud_monitoring_requires_assessment_bands);
@@ -36,13 +32,11 @@ fn fraud_monitoring_requires_assessment_bands() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     let indicator = Name::from_str("fraud_assessment_band").expect("static metadata key");
     let score_key = Name::from_str("fraud_assessment_score_bps").expect("static score key");
     let tenant_key = Name::from_str("fraud_assessment_tenant").expect("static tenant key");
     let latency_key = Name::from_str("fraud_assessment_latency_ms").expect("static latency key");
     let message = "fraud-monitor integration".to_string();
-
     let missing_err = client
         .submit_blocking_with_metadata(
             Log::new(Level::INFO, message.clone()),
@@ -62,7 +56,6 @@ fn fraud_monitoring_requires_assessment_bands() -> Result<()> {
             .any(|msg| msg.contains("fraud monitoring requires an attached assessment")),
         "unexpected rejection chain: {missing_chain:?}"
     );
-
     let mut low_metadata = Metadata::default();
     low_metadata.insert(indicator.clone(), Json::new("medium"));
     low_metadata.insert(score_key.clone(), Json::new(450_u64));
@@ -87,7 +80,6 @@ fn fraud_monitoring_requires_assessment_bands() -> Result<()> {
             .any(|msg| msg.contains("fraud assessment band medium below required minimum high")),
         "unexpected rejection chain: {low_chain:?}"
     );
-
     let mut ok_metadata = Metadata::default();
     ok_metadata.insert(indicator, Json::new("critical"));
     ok_metadata.insert(score_key, Json::new(8_500_u64));
@@ -105,6 +97,5 @@ fn fraud_monitoring_requires_assessment_bands() -> Result<()> {
         }
         return Err(err);
     }
-
     Ok(())
 }

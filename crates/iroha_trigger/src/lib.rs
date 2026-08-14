@@ -1,20 +1,14 @@
 //! Iroha Trigger Rust SDK
 #![allow(unsafe_code)]
-
 pub use iroha_smart_contract as smart_contract;
-pub use iroha_smart_contract_codec::{
-    decode_with_length_prefix_from_raw, encode_with_length_prefix,
-};
+pub use iroha_smart_contract_codec::{decode_with_length_prefix_from_raw, encode_with_length_prefix};
 pub use iroha_smart_contract_utils::{DebugExpectExt, DebugUnwrapExt, dbg, dbg_panic};
 pub use iroha_trigger_derive::main;
 pub use smart_contract::{Iroha, data_model};
-
 #[doc(hidden)]
 pub mod utils {
     //! Crate with utilities
-
     pub use iroha_smart_contract_utils::register_getrandom_err_callback;
-
     /// Get context for smart contract `main()` entrypoint.
     ///
     /// # Safety
@@ -29,12 +23,10 @@ pub mod utils {
         unsafe { iroha_smart_contract_codec::decode_with_length_prefix_from_raw(context) }
     }
 }
-
 pub mod log {
     //! IVM runtime logging utilities
     pub use iroha_smart_contract_utils::{debug, error, event, info, trace, warn};
 }
-
 pub mod prelude {
     //! Common imports used by triggers
     pub use crate::{

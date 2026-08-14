@@ -19,7 +19,6 @@ fn timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier() {
         _ => unreachable!("timeout fixture is a v2 envelope"),
     }
     let _gate_directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
-
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::new(response, Some(validator.clone()),)),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
@@ -41,7 +40,6 @@ fn timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier() {
             super::FairV2IngressLeaderWirePhase::CertifiedResponse
         );
     }
-
     let is_timeout_vote = |inbound: &InboundBlockMessage| {
         matches!(
             inbound.message(),
@@ -94,7 +92,6 @@ fn timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier() {
             })
     );
 }
-
 #[test]
 fn restored_productive_retry_stays_behind_an_earlier_certified_request_carrier() {
     let fixture = restored_leader_wire_fixture(RestoredLeaderWireCut::Reserved);
@@ -116,7 +113,6 @@ fn restored_productive_retry_stays_behind_an_earlier_certified_request_carrier()
         .expect("certified request owns its fresh physical occurrence")
         .admission_ordinal;
     assert!(target_ordinal > fixture.token.admission_ordinal());
-
     assert!(matches!(
         fixture.ingress.try_push(InboundBlockMessage::new(
             fixture.message.clone(),
@@ -145,7 +141,6 @@ fn restored_productive_retry_stays_behind_an_earlier_certified_request_carrier()
             .is_none(),
         "the later productive retry cannot cross the certified target cutoff"
     );
-
     let target = fixture
         .ingress
         .try_recv_if(fair_v2_ingress_is_certified_body_request)
@@ -161,7 +156,6 @@ fn restored_productive_retry_stays_behind_an_earlier_certified_request_carrier()
             .is_some_and(|ownership| { ownership.leader_wire_token() == Some(&fixture.token) })
     );
 }
-
 #[test]
 fn restored_productive_retry_freezes_the_current_physical_source_prefix() {
     let fixture = restored_leader_wire_fixture(RestoredLeaderWireCut::Reserved);
@@ -183,7 +177,6 @@ fn restored_productive_retry_freezes_the_current_physical_source_prefix() {
         .find(|entry| entry.leader_wire_token.is_none())
         .expect("ordinary traffic owns its physical occurrence")
         .admission_ordinal;
-
     assert!(matches!(
         fixture.ingress.try_push(InboundBlockMessage::new(
             fixture.message.clone(),
@@ -202,7 +195,6 @@ fn restored_productive_retry_freezes_the_current_physical_source_prefix() {
         .expect("restored lifecycle acquired one fresh carrier")
         .admission_ordinal;
     assert!(earlier_ordinal < retry_ordinal);
-
     assert!(
         fixture
             .ingress
@@ -235,7 +227,6 @@ fn restored_productive_retry_freezes_the_current_physical_source_prefix() {
             .is_some_and(|ownership| { ownership.leader_wire_token() == Some(&fixture.token) })
     );
 }
-
 #[test]
 fn restored_older_logical_owner_cannot_cross_an_earlier_physical_leader_wire() {
     let fixture = restored_leader_wire_fixture(RestoredLeaderWireCut::Reserved);
@@ -250,13 +241,11 @@ fn restored_older_logical_owner_cannot_cross_an_earlier_physical_leader_wire() {
     let BlockMessage::V2(earlier_envelope) = &mut earlier_message else {
         unreachable!("vote fixture is a v2 envelope");
     };
-    let wire::ConsensusMessageV2Payload::Vote(earlier_vote) = &mut earlier_envelope.payload
-    else {
+    let wire::ConsensusMessageV2Payload::Vote(earlier_vote) = &mut earlier_envelope.payload else {
         unreachable!("vote fixture carries a vote");
     };
     earlier_vote.round = round;
     earlier_vote.proposal_round = round;
-
     assert!(matches!(
         fixture.ingress.try_push(InboundBlockMessage::new(
             earlier_message,
@@ -289,7 +278,6 @@ fn restored_older_logical_owner_cannot_cross_an_earlier_physical_leader_wire() {
         earlier_token.scheduler_ordinal > fixture.token.scheduler_ordinal,
         "the fresh lifecycle has a newer logical identity"
     );
-
     assert!(matches!(
         fixture.ingress.try_push(InboundBlockMessage::new(
             fixture.message.clone(),
@@ -337,14 +325,13 @@ fn restored_older_logical_owner_cannot_cross_an_earlier_physical_leader_wire() {
         fixture
             .ingress
             .try_recv_if(|inbound| {
-                inbound.ingress_ownership().is_some_and(|ownership| {
-                    ownership.leader_wire_token() == Some(&fixture.token)
-                })
+                inbound
+                    .ingress_ownership()
+                    .is_some_and(|ownership| ownership.leader_wire_token() == Some(&fixture.token))
             })
             .is_none(),
         "the physically later replay cannot be selected merely because its logical ordinal is older"
     );
-
     let mut first = fixture
         .ingress
         .try_recv_if(|_| true)
@@ -361,7 +348,6 @@ fn restored_older_logical_owner_cannot_cross_an_earlier_physical_leader_wire() {
         .ingress
         .bind_leader_wire_runtime_ownership(&mut first_ownership)
         .expect("bind the selected fresh lifecycle");
-
     let second = fixture
         .ingress
         .try_recv_if(|_| true)
@@ -372,12 +358,10 @@ fn restored_older_logical_owner_cannot_cross_an_earlier_physical_leader_wire() {
             .is_some_and(|ownership| { ownership.leader_wire_token() == Some(&fixture.token) })
     );
 }
-
 #[test]
 fn restored_productive_retry_ordinal_exhaustion_keeps_the_owner_dormant() {
     let fixture = restored_leader_wire_fixture(RestoredLeaderWireCut::Reserved);
     fixture.ingress.state.lock().last_admission_ordinal = u64::MAX;
-
     assert!(matches!(
         fixture.ingress.try_push(InboundBlockMessage::new(
             fixture.message.clone(),
@@ -408,7 +392,6 @@ fn restored_productive_retry_ordinal_exhaustion_keeps_the_owner_dormant() {
         "ordinal exhaustion cannot publish a carrierless scheduler owner"
     );
 }
-
 #[test]
 fn full_ingress_does_not_persist_a_carrierless_leader_wire_barrier() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
@@ -422,7 +405,6 @@ fn full_ingress_does_not_persist_a_carrierless_leader_wire_barrier() {
         unreachable!("proposal fixture carries Proposal");
     };
     let _directory = bind_test_leader_wire_gate(&ingress, &validator, proposal.round, 2);
-
     let mut occurrence = 0_u64;
     loop {
         let request = InboundBlockMessage::new(
@@ -440,7 +422,6 @@ fn full_ingress_does_not_persist_a_carrierless_leader_wire_barrier() {
         }
     }
     assert_ne!(occurrence, 0, "the test must materialize a physical prefix");
-
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::new(
             proposal_message.clone(),
@@ -452,7 +433,6 @@ fn full_ingress_does_not_persist_a_carrierless_leader_wire_barrier() {
         ingress.state.lock().leader_wire_lifecycles.is_empty(),
         "ordinary backpressure must not leave a durable off-queue barrier"
     );
-
     while ingress.try_recv_if(|_| true).is_some() {}
     assert!(
         matches!(
@@ -475,19 +455,16 @@ fn full_ingress_does_not_persist_a_carrierless_leader_wire_barrier() {
         "the exact lifecycle begins only with its physically owned carrier"
     );
 }
-
 #[test]
 fn delayed_proposal_keeps_first_chunk_lossless_without_a_global_orphan_barrier() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
     ingress.close();
-
     let validator = PeerId::new(KeyPair::random().public_key().clone());
     ingress
         .configure_roster([validator.clone()])
         .expect("one-validator fair-ingress geometry");
     ingress.require_leader_wire_lifecycle_gate();
     ingress.state.lock().leader_wire_max_chunk_count = 2;
-
     let layout = minimal_rs16_layout();
     let proposal_message = v2_maximum_structural_proposal_wire(layout, 1);
     let BlockMessage::V2(proposal_envelope) = &proposal_message else {
@@ -498,7 +475,6 @@ fn delayed_proposal_keeps_first_chunk_lossless_without_a_global_orphan_barrier()
     };
     let manifest_hash = HashOf::new(&proposal.manifest);
     let round = proposal.round;
-
     let directory = TempDir::new().expect("temporary leader-wire directory");
     let wal_path = directory.path().join("safety.wal");
     let owner = [0xA5; 32];
@@ -537,7 +513,6 @@ fn delayed_proposal_keeps_first_chunk_lossless_without_a_global_orphan_barrier()
         )
         .expect("bind exact leader-wire gate");
     ingress.open().expect("open bound fair ingress");
-
     let chunk_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
             manifest_hash,
@@ -571,7 +546,6 @@ fn delayed_proposal_keeps_first_chunk_lossless_without_a_global_orphan_barrier()
         ingress.state.lock().leader_wire_lifecycles.is_empty(),
         "an unbound chunk must not mint a Byzantine-pinnable global scheduler owner"
     );
-
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::new(
             proposal_message,
@@ -624,7 +598,6 @@ fn delayed_proposal_keeps_first_chunk_lossless_without_a_global_orphan_barrier()
         "manifest-bound Proposal begins the durable exact lifecycle"
     );
 }
-
 #[test]
 fn retained_vote_does_not_hide_matching_proposal_or_transport_completion() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
@@ -638,7 +611,6 @@ fn retained_vote_does_not_hide_matching_proposal_or_transport_completion() {
         _ => unreachable!("vote fixture carries a v2 Vote"),
     };
     let _directory = bind_test_leader_wire_gate(&ingress, &validator, vote_round, 2);
-
     let layout = minimal_rs16_layout();
     let mut proposal_message = v2_maximum_structural_proposal_wire(layout, 1);
     let manifest_hash = match &mut proposal_message {
@@ -663,14 +635,12 @@ fn retained_vote_does_not_hide_matching_proposal_or_transport_completion() {
             signature: vec![0x5A],
         }),
     ));
-
     for message in [vote_message.clone(), proposal_message, chunk_message] {
         assert!(matches!(
             ingress.try_push(InboundBlockMessage::new(message, Some(validator.clone()),)),
             Ok(super::FairV2IngressPushDisposition::Enqueued)
         ));
     }
-
     let proposal = ingress
         .try_recv_if(|inbound| {
             matches!(
@@ -690,20 +660,17 @@ fn retained_vote_does_not_hide_matching_proposal_or_transport_completion() {
         })
     ));
     assert_eq!(ingress.state.lock().len, 2);
-
     let chunk = ingress
         .try_recv_if(super::fair_v2_ingress_is_transport_completion)
         .expect("body completion bypasses retained reducer-control ownership");
     assert_eq!(payload_chunk_index(&chunk), Some(0));
     assert_eq!(ingress.state.lock().len, 1);
-
     let retained_vote = ingress
         .try_recv_if(|_| true)
         .expect("the retained Vote remains owned after its dependencies drain");
     assert_eq!(retained_vote.message().encode(), vote_message.encode());
     assert_eq!(ingress.state.lock().len, 0);
 }
-
 #[test]
 fn retained_vote_does_not_hide_timeout_certificate_that_closes_its_view() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
@@ -721,7 +688,6 @@ fn retained_vote_does_not_hide_timeout_certificate_that_closes_its_view() {
         _ => unreachable!("vote fixture carries a v2 Vote"),
     };
     let _directory = bind_test_leader_wire_gate(&ingress, &validator, vote_round, 1);
-
     let mut timeout_certificate = v2_timeout_certificate(vote_round.view);
     let BlockMessage::V2(wire::ConsensusMessageV2 {
         payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
@@ -731,7 +697,6 @@ fn retained_vote_does_not_hide_timeout_certificate_that_closes_its_view() {
         unreachable!("timeout fixture carries a v2 TimeoutCertificate");
     };
     certificate.round = vote_round;
-
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::new(
             vote_message.clone(),
@@ -748,7 +713,6 @@ fn retained_vote_does_not_hide_timeout_certificate_that_closes_its_view() {
         .expect("the retained Vote owns the first leader-wire lifecycle")
         .token
         .clone();
-
     let mut stale_timeout_certificate = timeout_certificate.clone();
     let BlockMessage::V2(wire::ConsensusMessageV2 {
         payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(stale),
@@ -782,7 +746,6 @@ fn retained_vote_does_not_hide_timeout_certificate_that_closes_its_view() {
         )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
-
     let installed_timeout = ingress
         .try_recv_if(|inbound| {
             matches!(
@@ -802,14 +765,12 @@ fn retained_vote_does_not_hide_timeout_certificate_that_closes_its_view() {
         })
     ));
     assert_eq!(ingress.state.lock().len, 1);
-
     let retained_vote = ingress
         .try_recv_if(|_| true)
         .expect("the superseded Vote remains exactly owned until normal retirement");
     assert_eq!(retained_vote.message().encode(), vote_message.encode());
     assert_eq!(ingress.state.lock().len, 0);
 }
-
 #[test]
 fn certified_fence_escape_crosses_retained_control_reservation() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
@@ -827,7 +788,6 @@ fn certified_fence_escape_crosses_retained_control_reservation() {
         _ => unreachable!("vote fixture carries a v2 Vote"),
     };
     let _directory = bind_test_leader_wire_gate(&ingress, &validator, vote_round, 1);
-
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::new(
             vote_message.clone(),
@@ -835,7 +795,6 @@ fn certified_fence_escape_crosses_retained_control_reservation() {
         )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
-
     let mut commit_response = v2_commit_certificate_response(7, &validator);
     let BlockMessage::V2(wire::ConsensusMessageV2 {
         payload: wire::ConsensusMessageV2Payload::CommitCertificateResponse(response),
@@ -871,7 +830,6 @@ fn certified_fence_escape_crosses_retained_control_reservation() {
         )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
-
     let escaped = ingress
         .try_recv_if(super::fair_v2_ingress_is_certified_fence_escape)
         .expect("CommitQC discovery crosses the retained control reservation");
@@ -883,7 +841,6 @@ fn certified_fence_escape_crosses_retained_control_reservation() {
         })
     ));
     assert_eq!(ingress.state.lock().len, 1);
-
     let timeout = v2_timeout_certificate(vote_round.view);
     assert!(super::fair_v2_ingress_is_certified_fence_escape(
         &InboundBlockMessage::new(timeout, Some(validator.clone())),
@@ -902,14 +859,12 @@ fn certified_fence_escape_crosses_retained_control_reservation() {
     assert!(!super::fair_v2_ingress_is_certified_fence_escape(
         &InboundBlockMessage::new(wrong_version, Some(validator)),
     ));
-
     let retained_vote = ingress
         .try_recv_if(|_| true)
         .expect("certified escape does not replace the retained Vote owner");
     assert_eq!(retained_vote.message().encode(), vote_message.encode());
     assert_eq!(ingress.state.lock().len, 0);
 }
-
 #[test]
 fn retained_vote_does_not_hide_timeout_vote_needed_to_close_its_view() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
@@ -927,7 +882,6 @@ fn retained_vote_does_not_hide_timeout_vote_needed_to_close_its_view() {
         _ => unreachable!("vote fixture carries a v2 Vote"),
     };
     let _directory = bind_test_leader_wire_gate(&ingress, &validator, vote_round, 1);
-
     let mut timeout_vote = v2_timeout_vote();
     let BlockMessage::V2(wire::ConsensusMessageV2 {
         payload: wire::ConsensusMessageV2Payload::TimeoutVote(timeout),
@@ -937,7 +891,6 @@ fn retained_vote_does_not_hide_timeout_vote_needed_to_close_its_view() {
         unreachable!("timeout fixture carries a v2 TimeoutVote");
     };
     timeout.round = vote_round;
-
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::new(
             vote_message.clone(),
@@ -954,7 +907,6 @@ fn retained_vote_does_not_hide_timeout_vote_needed_to_close_its_view() {
         .expect("the retained Vote owns the first leader-wire lifecycle")
         .token
         .clone();
-
     for (view, expected) in [
         (vote_round.view - 1, false),
         (vote_round.view, true),
@@ -985,7 +937,6 @@ fn retained_vote_does_not_hide_timeout_vote_needed_to_close_its_view() {
         )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
-
     let admitted_timeout_vote = ingress
         .try_recv_if(|inbound| {
             matches!(
@@ -1005,36 +956,29 @@ fn retained_vote_does_not_hide_timeout_vote_needed_to_close_its_view() {
         })
     ));
     assert_eq!(ingress.state.lock().len, 1);
-
     let retained_vote = ingress
         .try_recv_if(|_| true)
         .expect("the timed-out Vote remains exactly owned until normal retirement");
     assert_eq!(retained_vote.message().encode(), vote_message.encode());
     assert_eq!(ingress.state.lock().len, 0);
 }
-
 #[test]
 fn ingress_stays_closed_until_replay_owner_acknowledges_ready() {
     let (handle, receiver, _relay_receiver) = test_sumeragi_handle(1);
     handle.ingress_ready.store(false, Ordering::Release);
-
     assert!(!handle.incoming_block_message(v2_message()));
     assert!(receiver.try_recv().is_none());
-
     handle.ingress_ready.store(true, Ordering::Release);
     assert!(handle.incoming_block_message(v2_message()));
     assert!(receiver.try_recv().is_some());
 }
-
 #[test]
 fn retired_global_v1_messages_never_enter_live_queues() {
     let (handle, receiver, _relay_receiver) = test_sumeragi_handle(1);
     handle.ingress_ready.store(true, Ordering::Release);
-
     assert!(!handle.incoming_block_message(BlockMessage::invalid_wire_sentinel()));
     assert!(receiver.try_recv().is_none());
 }
-
 #[test]
 fn first_release_vrf_frames_are_decode_only_and_never_enter_live_queues() {
     let (handle, receiver, _relay_receiver) = test_sumeragi_handle(1);
@@ -1051,12 +995,10 @@ fn first_release_vrf_frames_are_decode_only_and_never_enter_live_queues() {
         signer: 0,
         bls_sig: vec![0x5B],
     });
-
     assert!(!handle.incoming_block_message(commit));
     assert!(!handle.incoming_block_message(reveal));
     assert!(receiver.try_recv().is_none());
 }
-
 #[test]
 fn authenticated_lane_drain_votes_enter_the_bounded_live_relay_queue() {
     let (handle, _receiver, relay_receiver) = test_sumeragi_handle(1);
@@ -1070,11 +1012,11 @@ fn authenticated_lane_drain_votes_enter_the_bounded_live_relay_queue() {
             version: 1,
             intent: LaneDrainIntentV1 {
                 version: 1,
-                network_id: iroha_data_model::NetworkId::from_genesis_hash(
-                    iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-                        Hash::new(b"live-drain-ingress-genesis"),
-                    ),
-                ),
+                network_id: iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    Hash::new(b"live-drain-ingress-genesis"),
+                )),
                 lane_id: LaneId::new(7),
                 dataspace_id: DataSpaceId::new(9),
                 lane_incarnation: Hash::new(b"live-drain-ingress-incarnation"),
@@ -1104,7 +1046,6 @@ fn authenticated_lane_drain_votes_enter_the_bounded_live_relay_queue() {
         keypair.private_key(),
     )
     .expect("sign valid lane-drain vote");
-
     assert!(handle.try_incoming_lane_drain_vote(signer.clone(), vote.clone()));
     let LaneRelayMessage::DrainVote {
         sender,
@@ -1117,22 +1058,18 @@ fn authenticated_lane_drain_votes_enter_the_bounded_live_relay_queue() {
     };
     assert_eq!(sender, signer);
     assert_eq!(queued_vote, vote);
-
     let mismatched_sender = PeerId::new(KeyPair::random().public_key().clone());
     assert!(!handle.try_incoming_lane_drain_vote(mismatched_sender, vote.clone()));
     assert!(relay_receiver.try_recv().is_err());
-
     let mut tampered = vote;
     tampered.bls_signature[0] ^= 0x01;
     assert!(!handle.try_incoming_lane_drain_vote(signer, tampered));
     assert!(relay_receiver.try_recv().is_err());
 }
-
 #[test]
 fn v2_ingress_is_bounded_and_never_blocks_a_network_caller() {
     let (handle, receiver, _relay_receiver) = test_sumeragi_handle(1);
     handle.ingress_ready.store(true, Ordering::Release);
-
     assert!(handle.incoming_block_message(v2_message()));
     assert!(
         !handle.incoming_block_message(v2_auxiliary_prepare(1)),
@@ -1141,12 +1078,10 @@ fn v2_ingress_is_bounded_and_never_blocks_a_network_caller() {
     let _ = receiver.try_recv().expect("drain the bounded v2 queue");
     assert!(handle.incoming_block_message(v2_message()));
 }
-
 #[test]
 fn saturated_v2_ingress_returns_the_exact_owned_message_for_retry() {
     let (handle, receiver, _relay_receiver) = test_sumeragi_handle_with_source_geometry(4, Some(1));
     let sender = validator_peers(1).pop().expect("sender fixture");
-
     assert!(matches!(
         handle.try_incoming_block_message_from_owned(sender.clone(), v2_message()),
         super::SumeragiIngressDisposition::Accepted
@@ -1158,7 +1093,6 @@ fn saturated_v2_ingress_returns_the_exact_owned_message_for_retry() {
     };
     assert_eq!(inbound.sender(), Some(&sender));
     assert_eq!(vote_height(&inbound), Some(2));
-
     let _ = receiver
         .try_recv()
         .expect("release bounded ingress capacity");
@@ -1167,25 +1101,21 @@ fn saturated_v2_ingress_returns_the_exact_owned_message_for_retry() {
         super::SumeragiIngressDisposition::Accepted
     ));
 }
-
 #[test]
 fn direct_and_synthetic_envelopes_keep_identity_roles_consistent() {
     let sender = validator_peers(1).pop().expect("sender fixture");
     let direct = InboundBlockMessage::new(v2_message(), Some(sender.clone()));
     assert_eq!(direct.sender(), Some(&sender));
     assert_eq!(direct.via(), Some(&sender));
-
     let synthetic = InboundBlockMessage::new(v2_message(), None);
     assert!(synthetic.sender().is_none());
     assert!(synthetic.via().is_none());
 }
-
 #[test]
 fn atomic_lane_certificate_uses_the_shared_progress_owner() {
     let (handle, ingress, _relay_receiver) = test_sumeragi_handle(1);
     let certificate = lane_block_certificate(71);
     let expected = certificate.encode();
-
     assert_eq!(
         FairV2IngressClass::classify(&InboundBlockMessage::new(certificate.clone(), None,)),
         FairV2IngressClass::Progress
@@ -1199,7 +1129,6 @@ fn atomic_lane_certificate_uses_the_shared_progress_owner() {
         .expect("shared fair ingress retains the lane certificate");
     assert_eq!(retained.message().encode(), expected);
 }
-
 #[test]
 fn oversized_atomic_lane_certificate_is_returned_exactly() {
     let (handle, ingress, _relay_receiver) = test_sumeragi_handle(1);
@@ -1211,7 +1140,6 @@ fn oversized_atomic_lane_certificate_is_returned_exactly() {
         vec![0xA5; super::MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES];
     let expected = certificate.encode();
     assert!(expected.len() > super::MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES);
-
     let disposition =
         handle.try_incoming_block_message_owned(InboundBlockMessage::new(certificate, None));
     let super::SumeragiIngressDisposition::Rejected(retained) = disposition else {
@@ -1220,7 +1148,6 @@ fn oversized_atomic_lane_certificate_is_returned_exactly() {
     assert_eq!(retained.message().encode(), expected);
     assert!(ingress.try_recv().is_none());
 }
-
 #[test]
 fn saturated_lane_ingress_returns_the_exact_owned_message_for_retry() {
     let (handle, _receiver, relay_receiver) = test_sumeragi_handle(1);
@@ -1242,7 +1169,6 @@ fn saturated_lane_ingress_returns_the_exact_owned_message_for_retry() {
         bls_sig: vec![0x5A],
         leader_candidate_body: None,
     };
-
     assert!(matches!(
         handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::MergeSignature(first)),
         super::SumeragiIngressDisposition::Accepted
@@ -1257,7 +1183,6 @@ fn saturated_lane_ingress_returns_the_exact_owned_message_for_retry() {
     };
     assert_eq!(retained.view, 2);
     assert_eq!(retained.bls_sig, vec![0x5A]);
-
     let _ = relay_receiver
         .try_recv()
         .expect("release bounded lane ingress capacity");
@@ -1266,18 +1191,15 @@ fn saturated_lane_ingress_returns_the_exact_owned_message_for_retry() {
         super::SumeragiIngressDisposition::Accepted
     ));
 }
-
 #[test]
 fn sidecar_allocations_defer_historical_roster_proof_to_bounded_lane_owner() {
     use std::num::NonZeroU64;
-
     use crate::merge_sidecar::{
         CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarCloseV1,
         CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
         CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
         CertifiedMergeSidecarStreamEpochV1,
     };
-
     let ingress_capacity = super::fair_v2_ingress_required_capacity(1, None)
         .expect("one-validator ingress geometry is representable");
     assert_eq!(ingress_capacity, 7);
@@ -1291,7 +1213,6 @@ fn sidecar_allocations_defer_historical_roster_proof_to_bounded_lane_owner() {
         .configure_roster([roster_requester.clone()])
         .expect("one frozen sidecar requester fits the ingress geometry");
     ingress.open().expect("open the frozen sidecar roster");
-
     let request_for = |requester: &PeerId| {
         let mut request = CertifiedMergeSidecarRequestV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
@@ -1313,7 +1234,6 @@ fn sidecar_allocations_defer_historical_roster_proof_to_bounded_lane_owner() {
         request
     };
     let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 8);
-
     let outsider_request = request_for(&outsider);
     let outsider_route = routes.mint_via(outsider.clone(), hub.clone());
     let admitted =
@@ -1339,7 +1259,6 @@ fn sidecar_allocations_defer_historical_roster_proof_to_bounded_lane_owner() {
             && route.is_authenticated_via(&hub)
             && route.semantic_target() == &outsider
     ));
-
     let mut outsider_close = CertifiedMergeSidecarCloseV1 {
         version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
         service_generation: CertifiedMergeSidecarServiceGenerationV1::INITIAL,
@@ -1373,7 +1292,6 @@ fn sidecar_allocations_defer_historical_roster_proof_to_bounded_lane_owner() {
             && route.is_authenticated_via(&hub)
             && route.semantic_target() == &outsider
     ));
-
     let mismatched_request = request_for(&outsider);
     let roster_route = routes.mint_via(roster_requester.clone(), hub.clone());
     assert!(matches!(
@@ -1391,7 +1309,6 @@ fn sidecar_allocations_defer_historical_roster_proof_to_bounded_lane_owner() {
         ),
         "a roster transport identity cannot allocate for another semantic requester"
     );
-
     let outsider_request = request_for(&outsider);
     let wrong_target_route = routes.mint_via(roster_requester.clone(), hub.clone());
     assert!(matches!(
@@ -1409,7 +1326,6 @@ fn sidecar_allocations_defer_historical_roster_proof_to_bounded_lane_owner() {
         ),
         "a reply route for another semantic peer cannot reach the proof owner"
     );
-
     let roster_request = request_for(&roster_requester);
     let roster_route = routes.mint_via(roster_requester.clone(), hub.clone());
     assert!(matches!(
@@ -1433,12 +1349,10 @@ fn sidecar_allocations_defer_historical_roster_proof_to_bounded_lane_owner() {
             && route.is_authenticated_via(&hub)
     ));
 }
-
 #[test]
 fn restart_required_ingress_rejects_before_queue_mutation() {
     let (handle, receiver, _relay_receiver) = test_sumeragi_handle(1);
     handle.output_guard.activate_restart_required();
-
     assert!(handle.restart_required());
     assert!(!handle.incoming_block_message(v2_message()));
     assert!(
@@ -1446,7 +1360,6 @@ fn restart_required_ingress_rejects_before_queue_mutation() {
         "restart-required admission must not mutate the bounded ingress queue"
     );
 }
-
 fn validator_peers(count: u8) -> Vec<PeerId> {
     (0..count)
         .map(|seed| {
@@ -1462,7 +1375,6 @@ fn validator_peers(count: u8) -> Vec<PeerId> {
         })
         .collect()
 }
-
 #[test]
 fn byzantine_v2_source_cannot_consume_honest_ingress_reservations_or_service_turns() {
     // The exact N=4, H=2 corridor needs 28 slots. Add one deliberate
@@ -1477,7 +1389,6 @@ fn byzantine_v2_source_cannot_consume_honest_ingress_reservations_or_service_tur
         .configure_roster(validators.clone())
         .expect("four validators, their progress and TimeoutVote slots, and anonymous fit");
     ingress.open().expect("open configured roster");
-
     for index in 0..2 {
         assert!(
             handle.try_incoming_block_message_from(attacker.clone(), v2_auxiliary_prepare(index),)
@@ -1492,7 +1403,6 @@ fn byzantine_v2_source_cannot_consume_honest_ingress_reservations_or_service_tur
     }
     assert!(handle.try_incoming_block_message_from(outsider.clone(), v2_message()));
     assert_eq!(ingress.len(), 6);
-
     let first_cycle = (0..5)
         .map(|_| {
             ingress
@@ -1514,7 +1424,6 @@ fn byzantine_v2_source_cannot_consume_honest_ingress_reservations_or_service_tur
     );
     assert_eq!(ingress.len(), 1, "only the attacker's second item remains");
 }
-
 #[test]
 fn relayed_origin_churn_uses_one_via_lane_and_preserves_protocol_origin() {
     const RELAYED_ORIGINS: usize = 32;
@@ -1532,7 +1441,6 @@ fn relayed_origin_churn_uses_one_via_lane_and_preserves_protocol_origin() {
         .configure_roster(validators.clone())
         .expect("four validator owners and the anonymous owner fit");
     ingress.open().expect("open configured roster");
-
     let mut accepted = 0_usize;
     for (index, origin) in origins.iter().enumerate() {
         let inbound = InboundBlockMessage::from_transport(
@@ -1570,7 +1478,6 @@ fn relayed_origin_churn_uses_one_via_lane_and_preserves_protocol_origin() {
             std::collections::VecDeque::from([nonempty[0].clone()])
         );
     }
-
     assert!(
         handle.try_incoming_block_message_from(validators[2].clone(), v2_message()),
         "one relayed via cannot consume a responsive validator's reserved owner"
@@ -1589,7 +1496,6 @@ fn relayed_origin_churn_uses_one_via_lane_and_preserves_protocol_origin() {
         .expect("the via retains its second admitted origin");
     assert_eq!(second.sender(), Some(&origins[1]));
     assert!(ingress.try_recv().is_none());
-
     assert!(matches!(
         handle.try_incoming_block_message_owned(InboundBlockMessage::from_transport(
             lane_block_certificate(73),
@@ -1630,7 +1536,6 @@ fn kura_replica_advert_requires_exact_signed_direct_keeper_ownership() {
             .payload()
             .to_vec();
     let message = BlockMessage::KuraReplicaAdvert(advert.clone());
-
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::from_transport(
             message.clone(),
@@ -1647,7 +1552,6 @@ fn kura_replica_advert_requires_exact_signed_direct_keeper_ownership() {
             && ownership.matches_message(admitted.message())
             && ownership.matches_semantic_origin(Some(&keeper))
     }));
-
     let other = PeerId::new(KeyPair::random().public_key().clone());
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::from_transport(
@@ -1665,7 +1569,6 @@ fn kura_replica_advert_requires_exact_signed_direct_keeper_ownership() {
         )),
         Err(super::FairV2IngressPushError::Rejected(_))
     ));
-
     advert.signature[0] ^= 0x80;
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::from_transport(

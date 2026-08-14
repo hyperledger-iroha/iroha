@@ -1,7 +1,6 @@
 //! VM-level AESENC stress benchmark: builds a program with repeated AESENC rounds.
 use criterion::Criterion;
 use ivm::{IVM, ProgramMetadata, encoding, instruction, ivm_mode};
-
 fn assemble(mut body: Vec<u32>) -> Vec<u8> {
     let mut metadata = ProgramMetadata::default();
     metadata.mode |= ivm_mode::VECTOR;
@@ -12,7 +11,6 @@ fn assemble(mut body: Vec<u32>) -> Vec<u8> {
     }
     v
 }
-
 fn program_repeated_aesenc(reps: usize) -> Vec<u8> {
     let mut code = Vec::with_capacity(reps + 1);
     let instr = encoding::wide::encode_rr(instruction::wide::crypto::AESENC, 5, 1, 3);
@@ -22,7 +20,6 @@ fn program_repeated_aesenc(reps: usize) -> Vec<u8> {
     code.push(encoding::wide::encode_halt());
     assemble(code)
 }
-
 fn bench_vm_aesenc(c: &mut Criterion) {
     let reps = 200_000usize;
     let prog = program_repeated_aesenc(reps);
@@ -43,7 +40,6 @@ fn bench_vm_aesenc(c: &mut Criterion) {
         })
     });
 }
-
 fn program_repeated_aesdec(reps: usize) -> Vec<u8> {
     let mut code = Vec::with_capacity(reps + 1);
     let instr = encoding::wide::encode_rr(instruction::wide::crypto::AESDEC, 5, 1, 3);
@@ -53,7 +49,6 @@ fn program_repeated_aesdec(reps: usize) -> Vec<u8> {
     code.push(encoding::wide::encode_halt());
     assemble(code)
 }
-
 fn bench_vm_aesdec(c: &mut Criterion) {
     let reps = 200_000usize;
     let prog = program_repeated_aesdec(reps);
@@ -73,7 +68,6 @@ fn bench_vm_aesdec(c: &mut Criterion) {
         })
     });
 }
-
 fn program_mixed_aes(reps: usize) -> Vec<u8> {
     let mut code = Vec::with_capacity(2 * reps + 1);
     let enc = encoding::wide::encode_rr(instruction::wide::crypto::AESENC, 5, 1, 3);
@@ -85,7 +79,6 @@ fn program_mixed_aes(reps: usize) -> Vec<u8> {
     code.push(encoding::wide::encode_halt());
     assemble(code)
 }
-
 fn bench_vm_aes_mix(c: &mut Criterion) {
     let reps = 100_000usize; // 200k ops total (enc+dec)
     let prog = program_mixed_aes(reps);
@@ -105,7 +98,6 @@ fn bench_vm_aes_mix(c: &mut Criterion) {
         })
     });
 }
-
 fn main() {
     ivm::set_banner_enabled(false);
     let mut c = Criterion::default().configure_from_args();

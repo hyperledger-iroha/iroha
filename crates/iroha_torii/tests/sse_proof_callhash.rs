@@ -2,15 +2,12 @@
 //! Assert that SSE event JSON for Proof events includes `call_hash`.
 #![cfg(feature = "app_api")]
 #![allow(clippy::items_after_statements)]
-
 #[path = "common/proof_events.rs"]
 mod proof_events;
-
 use axum::{Router, routing::get};
 use proof_events::ProofEventFixture;
 // use http_body_util::BodyExt as _; // not needed, we stream SSE
 use tower::ServiceExt as _;
-
 #[tokio::test]
 async fn proof_event_json_includes_call_hash() {
     // Create a sender and build a router exposing /v1/events/sse
@@ -22,7 +19,6 @@ async fn proof_event_json_includes_call_hash() {
             move |q| async move { iroha_torii::handle_v1_events_sse(events, q) }
         }),
     );
-
     // Spawn request to SSE endpoint
     let req = http::Request::builder()
         .method("GET")
@@ -31,14 +27,12 @@ async fn proof_event_json_includes_call_hash() {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::OK);
-
     // Send a single Proof::Rejected event with a known call_hash
     let call_hash = [0xABu8; 32];
     let ev = ProofEventFixture::new("halo2/ipa", [0x11; 32])
         .with_call_hash(Some(call_hash))
         .rejected();
     let _ = events.send(ev);
-
     // Read the first SSE frame body and parse as JSON
     use futures_util::StreamExt as _;
     let mut body_stream = resp.into_body().into_data_stream();

@@ -1,7 +1,6 @@
 #![doc = "Gated test: `FinalizeElection` verifies tally proof via real VK (tiny-add public input).\nRequires Halo2 dev tests. Skipped by default; run with `IROHA_RUN_IGNORED=1`."]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]
 fn zk_finalize_verifies_with_inline_vk_public_input() {
@@ -9,9 +8,7 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
         eprintln!("Skipping: gated (IROHA_RUN_IGNORED!=1)");
         return;
     }
-
     use core::num::NonZeroU64;
-
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
@@ -36,7 +33,6 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
     use mv::storage::StorageReadOnly;
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let domain_id: iroha_data_model::domain::DomainId =
@@ -45,11 +41,9 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
     let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let world = iroha_core::state::World::with([domain], [account], []);
     let state = State::new_for_testing(world, kura, query);
-
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
     let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
     let vk_commitment = iroha_core::zk::hash_vk(&vk_box);
@@ -81,7 +75,6 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register vk");
-
     // Create election with 1 option.
     let create = CreateElection {
         election_id: "ref-final".to_string(),
@@ -94,7 +87,6 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
         domain_tag: "gov:ballot:v1".to_string(),
     };
     create.execute(&ALICE_ID, &mut stx).expect("create ok");
-
     // Finalize with tally [4] and the registered VK reference.
     let att = ProofAttachment::new_ref("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_id);
     let fin = FinalizeElection {
@@ -103,7 +95,6 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
         tally_proof: att,
     };
     fin.execute(&ALICE_ID, &mut stx).expect("finalize ok");
-
     // Assert finalized
     let st = stx
         .world

@@ -1,16 +1,12 @@
 // Privacy-release evidence regression tests.
 //
 // Included by `privacy_release_evidence::tests` to preserve exact libtest names.
-
 use iroha_primitives::json::Json;
-
 use super::*;
 use crate::privacy_engines::vega::{
     build_signed_vega_privacy_action_with_rng_v1, sign_prepared_vega_privacy_action_v1,
 };
-
 const RAYON_POOL_CHILD_MARKER_V1: &str = "IROHA_PRIVACY_RELEASE_RAYON_POOL_CHILD_V1";
-
 fn compiled_profile_digest_mutations_v1() -> [fn(&mut CompiledPrivacyProfileV1); 5] {
     [
         |profile| profile.parameter_id.0[0] ^= 1,
@@ -20,7 +16,6 @@ fn compiled_profile_digest_mutations_v1() -> [fn(&mut CompiledPrivacyProfileV1);
         |profile| profile.engine_manifest_digest.0[0] ^= 1,
     ]
 }
-
 #[test]
 fn zk_ace_and_bootle_release_contexts_bind_every_compiled_profile_digest() {
     for protocol_id in [
@@ -56,7 +51,6 @@ fn zk_ace_and_bootle_release_contexts_bind_every_compiled_profile_digest() {
         }
     }
 }
-
 #[test]
 fn verange_release_transcript_binds_every_compiled_profile_digest() {
     let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
@@ -84,7 +78,6 @@ fn verange_release_transcript_binds_every_compiled_profile_digest() {
         );
     }
 }
-
 #[test]
 fn fcmp_release_statement_length_frames_every_compiled_profile_digest() {
     let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1)
@@ -134,7 +127,6 @@ fn fcmp_release_statement_length_frames_every_compiled_profile_digest() {
         offset += length;
     }
     assert_eq!(offset, baseline.len(), "profile tuple has trailing bytes");
-
     for mutate in compiled_profile_digest_mutations_v1() {
         let mut changed = profile;
         mutate(&mut changed);
@@ -150,14 +142,12 @@ fn fcmp_release_statement_length_frames_every_compiled_profile_digest() {
         );
     }
 }
-
 #[test]
 fn zk_ams_release_lineage_uses_distinct_single_action_transactions() {
     let admission =
         zk_ams_admission_transaction_context_v1().expect("admission transaction context");
     let provision =
         zk_ams_provision_transaction_context_v1().expect("provision transaction context");
-
     assert_eq!(ZK_AMS_RELEASE_ADMISSION_ACTION_INDEX_V1, 0);
     assert_eq!(ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1, 0);
     assert_eq!(admission.network_id, provision.network_id);
@@ -174,7 +164,6 @@ fn zk_ams_release_lineage_uses_distinct_single_action_transactions() {
         "sequential transactions require ordered nonces"
     );
 }
-
 #[test]
 fn zk_ams_release_envelope_distinguishes_admission_from_native_rejection() {
     let ring = zk_ams_sorted_ring_v1(ZK_AMS_MIN_RING_SIZE_V1).expect("canonical minimum ring");
@@ -189,7 +178,6 @@ fn zk_ams_release_envelope_distinguishes_admission_from_native_rejection() {
     .expect("canonical provisioning statement");
     let authoritative_network_id =
         release_network_id_from_genesis_hash(ZK_AMS_RELEASE_GENESIS_HASH_V1);
-
     let native_rejection = verify_zk_ams_release_production_envelope_v1(
         &statement,
         &[0x01],
@@ -209,7 +197,6 @@ fn zk_ams_release_envelope_distinguishes_admission_from_native_rejection() {
         ),
         Ok(()),
     );
-
     let mut impossible_second_action = statement.clone();
     impossible_second_action.context.action_index = 1;
     let pre_native_rejection = verify_zk_ams_release_production_envelope_v1(
@@ -239,7 +226,6 @@ fn zk_ams_release_envelope_distinguishes_admission_from_native_rejection() {
         ),
         Ok(()),
     );
-
     let oversized_len = usize::try_from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1)
         .expect("closed Taira proof-byte ceiling fits usize")
         + 1;
@@ -272,7 +258,6 @@ fn zk_ams_release_envelope_distinguishes_admission_from_native_rejection() {
         Ok(()),
     );
 }
-
 #[test]
 fn jindo_release_envelope_requires_the_production_native_dispatch() {
     let profile =
@@ -299,7 +284,6 @@ fn jindo_release_envelope_requires_the_production_native_dispatch() {
         evaluation_point: jindo_field_v1(13),
         claimed_evaluations: (17_u64..=20).map(jindo_field_v1).collect(),
     };
-
     let native_rejection = verify_jindo_release_production_envelope_v1(
         &statement,
         &[0x01],
@@ -319,7 +303,6 @@ fn jindo_release_envelope_requires_the_production_native_dispatch() {
         ),
         Ok(()),
     );
-
     let mut impossible_second_action = statement;
     impossible_second_action.context.action_index = 1;
     let pre_native_rejection = verify_jindo_release_production_envelope_v1(
@@ -343,7 +326,6 @@ fn jindo_release_envelope_requires_the_production_native_dispatch() {
         "release evidence must not count a pre-native rejection as native corruption coverage"
     );
 }
-
 #[test]
 fn vega_release_fixture_uses_the_canonical_single_taira_action() {
     let fixture = vega_release_fixture_v1().expect("canonical Vega release fixture");
@@ -362,7 +344,6 @@ fn vega_release_fixture_uses_the_canonical_single_taira_action() {
         statement_schema_digest: profile.statement_schema_digest,
         engine_manifest_digest: profile.engine_manifest_digest,
     };
-
     fixture
         .public_input
         .issuer_record
@@ -381,7 +362,6 @@ fn vega_release_fixture_uses_the_canonical_single_taira_action() {
         Duration::from_millis(VEGA_RELEASE_CREATION_TIME_MS_V1)
     );
     assert_eq!(transaction.nonce, NonZeroU32::new(VEGA_RELEASE_NONCE_V1));
-
     let mut impossible_second_action = context;
     impossible_second_action.action_index = 1;
     assert!(matches!(
@@ -394,7 +374,6 @@ fn vega_release_fixture_uses_the_canonical_single_taira_action() {
         )
     ));
 }
-
 #[test]
 fn vega_release_envelope_requires_the_production_native_dispatch() {
     let fixture = vega_release_fixture_v1().expect("canonical Vega release fixture");
@@ -428,7 +407,6 @@ fn vega_release_envelope_requires_the_production_native_dispatch() {
     };
     refresh_vega_device_authentication_digest_v1(&mut statement, fixture.genesis_hash)
         .expect("canonical Vega device binding");
-
     let native_rejection = verify_vega_release_production_envelope_v1(
         &statement,
         Some(&record),
@@ -450,7 +428,6 @@ fn vega_release_envelope_requires_the_production_native_dispatch() {
         ),
         Ok(()),
     );
-
     statement.context.action_index = 1;
     refresh_vega_device_authentication_digest_v1(&mut statement, fixture.genesis_hash)
         .expect("rebound impossible Vega action index");
@@ -477,7 +454,6 @@ fn vega_release_envelope_requires_the_production_native_dispatch() {
         "release evidence must not count a pre-native rejection as Vega corruption coverage"
     );
 }
-
 #[test]
 #[ignore = "release gate: proves the full native Vega Figure 9 action once"]
 fn vega_action_api_binds_signs_and_rejects_transaction_proof_and_statement_drift() {
@@ -511,7 +487,6 @@ fn vega_action_api_binds_signs_and_rejects_transaction_proof_and_statement_drift
     assert!(!prepared_debug.contains("TransactionPayload"));
     assert!(!prepared_debug.contains("PrivacyProofBytes"));
     assert!(!prepared_debug.contains("issuer_authentication_sig_structure"));
-
     let payload = prepared.release_evidence_payload_v1().clone();
     match payload.instructions() {
         iroha_data_model::transaction::Executable::Instructions(instructions) => {
@@ -580,7 +555,6 @@ fn vega_action_api_binds_signs_and_rejects_transaction_proof_and_statement_drift
             .is_err(),
         "the internal proof-empty projection must never be submittable"
     );
-
     let mut changed_network = payload.clone();
     changed_network.domain = iroha_data_model::transaction::TransactionDomain::Network(
         release_network_id_from_genesis_hash([0xa8; 32]),
@@ -645,7 +619,6 @@ fn vega_action_api_binds_signs_and_rejects_transaction_proof_and_statement_drift
             .is_err(),
         "metadata mutation must invalidate the signed intent"
     );
-
     let binding = VegaMdlConsensusBindingV1::from_context(&statement.context, fixture.genesis_hash);
     let mut changed_proof = proof.as_bytes().to_vec();
     let changed_proof_index = changed_proof.len() / 2;
@@ -688,7 +661,6 @@ fn vega_action_api_binds_signs_and_rejects_transaction_proof_and_statement_drift
             }
         )
     ));
-
     let transaction_key_pair = KeyPair::try_from_seed(vec![0x56; 32], Algorithm::Ed25519)
         .expect("fixed Vega transaction key");
     let expected_intent = prepared.transaction_intent_digest();
@@ -725,7 +697,6 @@ fn vega_action_api_binds_signs_and_rejects_transaction_proof_and_statement_drift
             .is_err(),
         "a valid transaction signature cannot redeem a stale Vega intent"
     );
-
     let wrong_key_fixture =
         vega_release_fixture_v1().expect("second canonical Vega release fixture");
     let wrong_key_material = VegaPrivacyActionWitnessMaterialV1::new(
@@ -754,7 +725,6 @@ fn vega_action_api_binds_signs_and_rejects_transaction_proof_and_statement_drift
         Err(crate::privacy_engines::vega::VegaPrivacyActionBuildErrorV1::AuthorityKeyMismatch)
     ));
 }
-
 #[test]
 fn canonical_process_profile_is_exact_and_has_one_authoritative_source() {
     let profiles = PrivacyProtocolIdV1::ALL
@@ -783,7 +753,6 @@ fn canonical_process_profile_is_exact_and_has_one_authoritative_source() {
         ZK_X509_PROVER_ADDRESS_SPACE_CEILING_BYTES_V1
     );
 }
-
 #[test]
 fn privacy_release_rayon_pool_fresh_process_child_v1() {
     if std::env::var_os(RAYON_POOL_CHILD_MARKER_V1).is_none() {
@@ -817,7 +786,6 @@ fn privacy_release_rayon_pool_fresh_process_child_v1() {
         "a second global-pool initialization must fail closed"
     );
 }
-
 #[test]
 fn privacy_release_rayon_pool_is_one_time_and_exact_at_api_boundary_v1() {
     let executable = std::env::current_exe().expect("resolve core unit-test executable");
@@ -835,7 +803,6 @@ fn privacy_release_rayon_pool_is_one_time_and_exact_at_api_boundary_v1() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
-
 #[test]
 fn frozen_stage_order_is_explicit_and_matches_the_enum_product() {
     assert!(validate_privacy_release_stage_coordinates_v1(
@@ -859,7 +826,6 @@ fn frozen_stage_order_is_explicit_and_matches_the_enum_product() {
         observed
     );
 }
-
 #[test]
 fn resource_facts_are_frozen_for_every_exact12_stage() {
     for protocol_id in PrivacyProtocolIdV1::ALL {
@@ -875,7 +841,6 @@ fn resource_facts_are_frozen_for_every_exact12_stage() {
         }
     }
 }
-
 #[test]
 fn exact_parsers_reject_aliases_and_case_folding() {
     for case_kind in PrivacyReleaseCaseKindV1::ALL {
@@ -897,7 +862,6 @@ fn exact_parsers_reject_aliases_and_case_folding() {
         None
     );
 }
-
 #[test]
 fn evidence_seeds_are_deterministic_and_purpose_separated() {
     let case_kind = PrivacyReleaseCaseKindV1::ProofCorruptionAndTruncation;
@@ -946,7 +910,6 @@ fn evidence_seeds_are_deterministic_and_purpose_separated() {
         .expect("PQ-MASP proof seed"),
     );
 }
-
 #[test]
 fn zk_x509_candidate_profile_and_resource_facts_are_total_before_capture() {
     let first = zk_x509_release_candidate_profile_material_v1()
@@ -969,7 +932,6 @@ fn zk_x509_candidate_profile_and_resource_facts_are_total_before_capture() {
         assert!(resources.validate());
     }
 }
-
 #[test]
 fn maximum_fixture_dimensions_equal_governed_first_release_caps() {
     assert_eq!(BOOTLE_LANTERN_MAX_ALLOWED_VALUES_PER_ATTRIBUTE_V1, 32);
@@ -977,14 +939,12 @@ fn maximum_fixture_dimensions_equal_governed_first_release_caps() {
     assert_eq!(ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1, 8);
     assert_eq!(ORCHARD_MAX_ACTIONS_V1, 2);
     assert_eq!(ORCHARD_TREE_DEPTH_V1, 32);
-
     let orchard = orchard_maximum_spend_fixture_v1()
         .expect("maximum Orchard fixture has two shared-anchor real spends");
     assert_eq!(orchard.spends.len(), ORCHARD_MAX_ACTIONS_V1);
     assert_eq!(orchard.total_value, 36);
     assert_ne!(orchard.anchor, orchard_empty_root_v1());
 }
-
 #[test]
 fn ordered_proof_artifact_cardinality_is_closed_and_fail_closed() {
     let artifact = |protocol_id: PrivacyProtocolIdV1,
@@ -1095,7 +1055,6 @@ fn ordered_proof_artifact_cardinality_is_closed_and_fail_closed() {
         privacy_release_proof_artifact_ceiling_v1(zk_ams_protocol, adversarial_case, 1),
         u64::try_from(MAX_ZK_AMS_LSAG_PROOF_BYTES_V1).ok()
     );
-
     let valid = artifact(ordinary_protocol, ordinary_case, 0);
     let mut hash_mismatch = valid.clone();
     hash_mismatch.proof_sha256[0] ^= 1;
@@ -1165,7 +1124,6 @@ fn ordered_proof_artifact_cardinality_is_closed_and_fail_closed() {
         ));
     }
 }
-
 #[test]
 fn proof_artifact_consensus_cap_is_exact_and_cap_plus_one_rejects() {
     assert_eq!(
@@ -1178,7 +1136,6 @@ fn proof_artifact_consensus_cap_is_exact_and_cap_plus_one_rejects() {
     let ceiling = privacy_release_proof_artifact_ceiling_v1(protocol_id, case_kind, 0)
         .expect("PQ-MASP stage has one canonical ceiling");
     assert_eq!(ceiling, PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1);
-
     let canonical_proof_bytes =
         vec![0x5a; usize::try_from(ceiling).expect("Taira proof cap fits usize")];
     let mut artifact = PrivacyReleaseProofArtifactEvidenceV1 {
@@ -1192,7 +1149,6 @@ fn proof_artifact_consensus_cap_is_exact_and_cap_plus_one_rejects() {
         case_kind,
         core::slice::from_ref(&artifact),
     ));
-
     artifact.canonical_proof_bytes.push(0);
     artifact.proof_sha256 = sha256_v1(&artifact.canonical_proof_bytes);
     assert!(!validate_privacy_release_proof_artifacts_v1(
@@ -1201,7 +1157,6 @@ fn proof_artifact_consensus_cap_is_exact_and_cap_plus_one_rejects() {
         core::slice::from_ref(&artifact),
     ));
 }
-
 #[test]
 fn zk_x509_artifact_uses_exact_encoded_x5s1_ceiling_below_outer_action_cap() {
     let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
@@ -1215,7 +1170,6 @@ fn zk_x509_artifact_uses_exact_encoded_x5s1_ceiling_below_outer_action_cap() {
     let descriptor = privacy_release_protocol_descriptor_v1(protocol_id);
     assert!(descriptor.contains("proof-artifact-cap=8212538 exact X5S1 bytes"));
     assert!(descriptor.contains("outer-action-proof-cap=9437184 bytes"));
-
     let canonical_proof_bytes = vec![0x58, 0x35, 0x53, 0x31];
     let mut artifact = PrivacyReleaseProofArtifactEvidenceV1 {
         artifact_ordinal: 0,
@@ -1228,7 +1182,6 @@ fn zk_x509_artifact_uses_exact_encoded_x5s1_ceiling_below_outer_action_cap() {
         case_kind,
         core::slice::from_ref(&artifact),
     ));
-
     for substituted_ceiling in [
         exact_x5s1_ceiling - 1,
         exact_x5s1_ceiling + 1,
@@ -1245,7 +1198,6 @@ fn zk_x509_artifact_uses_exact_encoded_x5s1_ceiling_below_outer_action_cap() {
         );
     }
 }
-
 #[test]
 fn zk_x509_public_evidence_binds_the_exact_validated_input_shape() {
     let context =
@@ -1276,7 +1228,6 @@ fn zk_x509_public_evidence_binds_the_exact_validated_input_shape() {
             .resource_shape
             .ca_membership_path_has_nonzero_sibling
     );
-
     let statement_material = b"canonical-statement".to_vec();
     let canonical_material = zk_x509_release_public_statement_material_v1(
         statement_material.clone(),
@@ -1303,7 +1254,6 @@ fn zk_x509_public_evidence_binds_the_exact_validated_input_shape() {
             ..statement_len_offset + size_of::<u64>() + statement_material.len()],
         statement_material.as_slice()
     );
-
     let shape_wire_bytes = size_of::<u8>()
         + ZK_X509_MAX_CHAIN_DEPTH_V1 * size_of::<u32>()
         + size_of::<u32>()
@@ -1320,7 +1270,6 @@ fn zk_x509_public_evidence_binds_the_exact_validated_input_shape() {
     assert_eq!(&shape_wire[26..28], &256_u16.to_be_bytes());
     assert_eq!(&shape_wire[28..30], &1_u16.to_be_bytes());
     assert_eq!(shape_wire[30], 1);
-
     let mut invalid_shape = maximum.resource_shape;
     invalid_shape.crl_der_length = 0;
     assert_eq!(
@@ -1328,7 +1277,6 @@ fn zk_x509_public_evidence_binds_the_exact_validated_input_shape() {
         Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)
     );
 }
-
 #[test]
 fn every_typed_artifact_has_one_protocol_ceiling_below_the_consensus_cap() {
     let mut artifact_count = 0_usize;
@@ -1363,7 +1311,6 @@ fn every_typed_artifact_has_one_protocol_ceiling_below_the_consensus_cap() {
     }
     assert_eq!(artifact_count, PRIVACY_RELEASE_PROOF_ARTIFACT_COUNT_V1);
 }
-
 #[test]
 fn canonical_proof_bytes_use_json_base64_and_round_trip_exactly() {
     let protocol_id = PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1;
@@ -1386,7 +1333,6 @@ fn canonical_proof_bytes_use_json_base64_and_round_trip_exactly() {
         norito::json::from_str::<PrivacyReleaseProofArtifactEvidenceV1>(&unpadded).is_err(),
         "non-canonical base64 spelling must reject"
     );
-
     let mut legacy_json = json;
     let closing_brace = legacy_json
         .pop()
@@ -1398,7 +1344,6 @@ fn canonical_proof_bytes_use_json_base64_and_round_trip_exactly() {
         "removed reported-length field must not be accepted as a compatibility alias"
     );
 }
-
 #[test]
 fn every_protocol_has_one_distinct_nonempty_canonical_descriptor() {
     let descriptors = PrivacyProtocolIdV1::ALL.map(privacy_release_protocol_descriptor_v1);
@@ -1407,7 +1352,6 @@ fn every_protocol_has_one_distinct_nonempty_canonical_descriptor() {
         assert!(!descriptors[index + 1..].contains(descriptor));
     }
 }
-
 #[test]
 fn vega_release_descriptor_is_derived_from_the_canonical_mc_constants() {
     let descriptor =
@@ -1438,7 +1382,6 @@ fn vega_release_descriptor_is_derived_from_the_canonical_mc_constants() {
         super::vega::VEGA_RELEASE_PUBLIC_INPUT_COUNT_V1,
         VEGA_MDL_PUBLIC_INPUT_COUNT_V1
     );
-
     let manifest =
         core::str::from_utf8(iroha_zkp_halo2::vega::VEGA_MDL_COMPILED_PROFILE_MANIFEST_V1)
             .expect("Vega compiled profile manifest is ASCII");
@@ -1451,7 +1394,6 @@ fn vega_release_descriptor_is_derived_from_the_canonical_mc_constants() {
     assert!(manifest.contains("envelope=IROVEGMC,version:1,context-keccak256:32"));
     assert!(manifest.contains("no-ambient-fallback"));
 }
-
 #[test]
 fn jindo_release_descriptor_does_not_condition_individual_s35_challenges_on_units() {
     let descriptor = privacy_release_protocol_descriptor_v1(
@@ -1466,7 +1408,6 @@ fn jindo_release_descriptor_does_not_condition_individual_s35_challenges_on_unit
     assert!(descriptor.contains("split-challenge=uniform-nonzero-Fp-star"));
     assert!(!descriptor.contains("S35-unit"));
 }
-
 #[test]
 #[ignore = "operator-only native proof construction for the complete Bootle/Lantern release stage"]
 fn bootle_lantern_release_stage_exercises_one_shot_issuance_and_wire_rejection() {
@@ -1495,7 +1436,6 @@ fn bootle_lantern_release_stage_exercises_one_shot_issuance_and_wire_rejection()
         &evidence.proof_artifacts,
     ));
 }
-
 #[test]
 #[ignore = "operator-only native proof construction for the complete ZK-AMS corruption stage"]
 fn zk_ams_corruption_stage_rejects_maximum_and_submaximum_wire_mutations() {

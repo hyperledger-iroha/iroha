@@ -1,14 +1,11 @@
 //! SM norito roundtrip tests covering signature and public key encoding.
-
 #[cfg(feature = "sm")]
 mod tests {
     use iroha_crypto::{Algorithm, PublicKey, Signature, Sm3Digest};
     use iroha_data_model::account::AccountId;
     use norito::NoritoDeserialize;
-
     const SM2_PUB: &str = "86265300103132333435363738313233343536373804361255A512347E76EA947EBB416C12D4C07E30B150C0EC2047ECC5E142907499B8D99C4C5CF69BFF6527E7B67396B55E42EF98625B339696DBEF9A3AABBFC06F";
     const SM2_SIG: &str = "1877845D5FFE0305946EEA3046D0279BE886B866EF620B7325413602CAD17C7FF72EBF26C29E77AAAB2226EDFBEE2D6D6ABC0D6C9B2C9A2248E2BD9324A12268";
-
     #[test]
     fn sm2_public_key_multihash_parse_roundtrip() {
         let pk: PublicKey = SM2_PUB.parse().expect("parse SM2 multihash");
@@ -16,7 +13,6 @@ mod tests {
         let encoded = pk.to_string();
         assert_eq!(encoded, SM2_PUB);
     }
-
     #[test]
     fn sm2_public_key_norito_roundtrip() {
         let pk: PublicKey = SM2_PUB.parse().expect("parse SM2 multihash");
@@ -27,7 +23,6 @@ mod tests {
         assert_eq!(used, buf.len());
         assert_eq!(decoded, pk);
     }
-
     #[test]
     fn sm2_signature_norito_roundtrip() {
         let sig_bytes = hex::decode(SM2_SIG).expect("hex signature");
@@ -40,7 +35,6 @@ mod tests {
         assert_eq!(used, buf.len());
         assert_eq!(decoded.payload(), signature.payload());
     }
-
     #[test]
     fn sm3_digest_norito_roundtrip() {
         let digest = Sm3Digest::hash(b"iroha-sm3");
@@ -57,7 +51,6 @@ mod tests {
         let decoded = Sm3Digest::deserialize(archived);
         assert_eq!(decoded.as_bytes(), digest.as_bytes());
     }
-
     #[test]
     fn account_id_with_sm2_signatory_roundtrip() {
         let pk: PublicKey = SM2_PUB.parse().expect("parse sm2 pk");

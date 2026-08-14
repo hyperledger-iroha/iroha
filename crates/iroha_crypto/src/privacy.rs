@@ -4,29 +4,22 @@
 //! commitments. A proof-system commitment must not be added here until
 //! admission can resolve an on-chain verifying key and invoke its real
 //! cryptographic verifier.
-
+use crate::{Hash, HashOf, MerkleProof, MerkleTree};
 use core::{convert::TryFrom, fmt};
-
 use iroha_schema::IntoSchema;
 #[cfg(feature = "json")]
 use norito::derive::{JsonDeserialize, JsonSerialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
-
-use crate::{Hash, HashOf, MerkleProof, MerkleTree};
-
 /// Domain tag used when hashing a raw lane-privacy Merkle leaf.
 ///
 /// The trailing NUL prevents the tag from being a prefix of another protocol
 /// label.
 const LANE_MERKLE_LEAF_DOMAIN_V1: &[u8] = b"iroha:nexus:lane-privacy:merkle:leaf:v1\x00";
-
 /// Domain tag used when hashing a lane-privacy Merkle internal node.
 const LANE_MERKLE_NODE_DOMAIN_V1: &[u8] = b"iroha:nexus:lane-privacy:merkle:node:v1\x00";
-
 /// Result type returned by the privacy commitment helpers.
 pub type Result<T, E = PrivacyError> = core::result::Result<T, E>;
-
 /// Identifier assigned to a registered commitment slot.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(
@@ -43,27 +36,23 @@ pub type Result<T, E = PrivacyError> = core::result::Result<T, E>;
     IntoSchema,
 )]
 pub struct LaneCommitmentId(u16);
-
 impl LaneCommitmentId {
     /// Create a new identifier.
     #[must_use]
     pub const fn new(id: u16) -> Self {
         Self(id)
     }
-
     /// Return the numeric representation.
     #[must_use]
     pub const fn get(self) -> u16 {
         self.0
     }
 }
-
 impl fmt::Display for LaneCommitmentId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
-
 /// Canonical commitment schemes supported by Nexus private lanes.
 ///
 /// The first release deliberately exposes only Merkle commitments. A
@@ -74,21 +63,18 @@ pub enum CommitmentScheme {
     /// Merkle tree root enforcing membership proofs.
     Merkle(MerkleCommitment),
 }
-
 /// Runtime witness supplied when validating a commitment.
 #[derive(Clone, Debug)]
 pub enum PrivacyWitness {
     /// Membership proof for a Merkle commitment.
     Merkle(MerkleWitness),
 }
-
 /// High-level commitment descriptor stored in the lane registry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LanePrivacyCommitment {
     id: LaneCommitmentId,
     scheme: CommitmentScheme,
 }
-
 impl LanePrivacyCommitment {
     /// Construct a Merkle-root commitment.
     #[must_use]
@@ -98,19 +84,16 @@ impl LanePrivacyCommitment {
             scheme: CommitmentScheme::Merkle(commitment),
         }
     }
-
     /// Return the identifier assigned to this commitment.
     #[must_use]
     pub const fn id(&self) -> LaneCommitmentId {
         self.id
     }
-
     /// Borrow the embedded commitment scheme.
     #[must_use]
     pub const fn scheme(&self) -> &CommitmentScheme {
         &self.scheme
     }
-
     /// Verify the provided witness against the stored scheme.
     ///
     /// # Errors
@@ -124,7 +107,6 @@ impl LanePrivacyCommitment {
         }
     }
 }
-
 /// Errors raised when verifying lane commitments.
 #[derive(Debug, Error, PartialEq, Eq, Copy, Clone)]
 pub enum PrivacyError {
@@ -149,7 +131,6 @@ pub enum PrivacyError {
     #[error("merkle proof failed to verify against the registered root")]
     InvalidMerkleProof,
 }
-
 /// Merkle membership proof bound to a raw 32-byte lane leaf.
 ///
 /// The verifier applies the lane-specific leaf domain before walking the
@@ -159,32 +140,27 @@ pub struct MerkleWitness {
     leaf: [u8; 32],
     proof: MerkleProof<[u8; 32]>,
 }
-
 impl MerkleWitness {
     /// Construct a witness from raw leaf bytes and a proof.
     #[must_use]
     pub fn new(leaf: [u8; 32], proof: MerkleProof<[u8; 32]>) -> Self {
         Self { leaf, proof }
     }
-
     /// Construct a witness from raw leaf bytes and a proof.
     #[must_use]
     pub fn from_leaf_bytes(leaf: [u8; 32], proof: MerkleProof<[u8; 32]>) -> Self {
         Self::new(leaf, proof)
     }
-
     /// Borrow the raw leaf referenced by this witness.
     #[must_use]
     pub const fn leaf(&self) -> &[u8; 32] {
         &self.leaf
     }
-
     /// Borrow the Merkle proof.
     #[must_use]
     pub const fn proof(&self) -> &MerkleProof<[u8; 32]> {
         &self.proof
     }
-
     /// Compute the lane-specific Merkle root implied by this witness.
     ///
     /// Leaves and internal nodes use distinct SHA-256 domains. Paths must be
@@ -209,7 +185,6 @@ impl MerkleWitness {
         if depth < u32::BITS as usize && u64::from(self.proof.leaf_index()) >= 1_u64 << depth {
             return Err(PrivacyError::InvalidMerkleProof);
         }
-
         let mut position = self.proof.leaf_index();
         let mut accumulator = lane_merkle_leaf_hash(&self.leaf);
         for (level, sibling) in self.proof.audit_path().iter().enumerate() {
@@ -225,26 +200,22 @@ impl MerkleWitness {
             };
             position >>= 1;
         }
-
         let root: Hash = accumulator.into();
         Ok(HashOf::from_untyped_unchecked(root))
     }
 }
-
 /// Metadata recorded for registered Merkle roots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MerkleCommitment {
     root: HashOf<MerkleTree<[u8; 32]>>,
     max_depth: u8,
 }
-
 impl MerkleCommitment {
     /// Create a new commitment from a canonical lane-specific root hash.
     #[must_use]
     pub const fn new(root: HashOf<MerkleTree<[u8; 32]>>, max_depth: u8) -> Self {
         Self { root, max_depth }
     }
-
     /// Convert a raw 32-byte root digest into the typed representation.
     #[must_use]
     pub fn from_root_bytes(root: [u8; 32], max_depth: u8) -> Self {
@@ -252,19 +223,16 @@ impl MerkleCommitment {
         let typed = HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(hash);
         Self::new(typed, max_depth)
     }
-
     /// Borrow the registered root hash.
     #[must_use]
     pub const fn root(&self) -> &HashOf<MerkleTree<[u8; 32]>> {
         &self.root
     }
-
     /// Maximum depth allowed for membership proofs.
     #[must_use]
     pub const fn max_depth(&self) -> u8 {
         self.max_depth
     }
-
     fn verify(&self, witness: &MerkleWitness) -> Result<()> {
         if witness.implied_root(self.max_depth)? == self.root {
             Ok(())
@@ -273,7 +241,6 @@ impl MerkleCommitment {
         }
     }
 }
-
 /// Hash a raw lane-privacy leaf using the versioned leaf domain.
 #[must_use]
 pub fn lane_merkle_leaf_hash(leaf: &[u8; 32]) -> HashOf<[u8; 32]> {
@@ -283,7 +250,6 @@ pub fn lane_merkle_leaf_hash(leaf: &[u8; 32]) -> HashOf<[u8; 32]> {
     let digest: [u8; 32] = hasher.finalize().into();
     HashOf::from_untyped_unchecked(Hash::prehashed(digest))
 }
-
 /// Hash a lane-privacy internal node using the versioned node domain.
 #[must_use]
 pub fn lane_merkle_node_hash(
@@ -297,11 +263,9 @@ pub fn lane_merkle_node_hash(
     let digest: [u8; 32] = hasher.finalize().into();
     HashOf::from_untyped_unchecked(Hash::prehashed(digest))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn witness_with_root(
         leaf: [u8; 32],
         leaf_index: u32,
@@ -314,7 +278,6 @@ mod tests {
             .expect("well-formed proof must produce a root");
         (witness, root)
     }
-
     #[test]
     fn merkle_commitment_accepts_valid_proof() {
         let (witness, root) = witness_with_root([0x11; 32], 1, vec![[0x22; 32], [0x33; 32]]);
@@ -322,7 +285,6 @@ mod tests {
             LanePrivacyCommitment::merkle(LaneCommitmentId::new(7), MerkleCommitment::new(root, 8));
         assert!(commitment.verify(PrivacyWitness::Merkle(witness)).is_ok());
     }
-
     #[test]
     fn merkle_commitment_rejects_empty_path() {
         let witness = MerkleWitness::new(
@@ -340,7 +302,6 @@ mod tests {
             PrivacyError::EmptyMerkleProof
         );
     }
-
     #[test]
     fn merkle_commitment_rejects_missing_sibling() {
         let witness = MerkleWitness::new([0x11; 32], MerkleProof::from_audit_path(0, vec![None]));
@@ -355,7 +316,6 @@ mod tests {
             PrivacyError::MissingMerkleSibling { level: 0 }
         );
     }
-
     #[test]
     fn merkle_commitment_rejects_out_of_range_leaf_index() {
         let witness = MerkleWitness::new(
@@ -369,7 +329,6 @@ mod tests {
             PrivacyError::InvalidMerkleProof
         );
     }
-
     #[test]
     fn merkle_commitment_rejects_excessive_depth() {
         let (witness, root) =
@@ -387,7 +346,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn lane_merkle_leaf_and_node_domains_are_distinct() {
         let raw = [0x5A; 32];
@@ -399,7 +357,6 @@ mod tests {
             "an internal node must not be usable as a leaf"
         );
     }
-
     #[test]
     fn lane_merkle_hashing_matches_v1_golden_vector() {
         let (witness, root) = witness_with_root([0xAA; 32], 0, vec![[0xBB; 32]]);

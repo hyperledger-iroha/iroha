@@ -107,7 +107,6 @@ fn connect_open_rejects_identity_substitution_and_replayed_sequence() {
     assert!(out_ptr.is_null());
     assert_eq!(out_len, 0);
 }
-
 #[test]
 fn connect_approval_verifier_binds_exact_identity_account_and_relay() {
     let network_hash = Hash::new(b"connect-approval-exact-network");

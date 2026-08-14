@@ -10,10 +10,8 @@
 //!   participation and penalties.
 //! - Input derivation deliberately excludes current block contents to remove
 //!   grinding opportunities for the current proposer.
-
 use iroha_crypto::Hash;
 use iroha_data_model::NetworkId;
-
 /// Build the canonical epoch VRF input bytes.
 ///
 /// Layout: `b"iroha:beacon:v1" || network_id[32] || epoch_be || prev_finalized_hash` where
@@ -28,7 +26,6 @@ pub fn epoch_input(network_id: &NetworkId, epoch: u64, prev_finalized_hash: [u8;
     v.extend_from_slice(&prev_finalized_hash);
     v
 }
-
 /// Build the canonical leader‑election VRF input (slot‑bound, pk‑bound).
 ///
 /// Layout: `b"iroha:vrf:v1:input|leader|" || network_id[32] || epoch_be || slot_be || prev_finalized_hash || pk_bytes`
@@ -48,7 +45,6 @@ pub fn leader_input(
     v.extend_from_slice(pk_bytes);
     v
 }
-
 /// Aggregate a set of per‑validator VRF outputs deterministically.
 ///
 /// Construction: `Hash(b"iroha:beacon:v1:agg" || network_id[32] || sort(outputs))` where sorting
@@ -65,7 +61,6 @@ pub fn aggregate_outputs(network_id: &NetworkId, mut outputs: Vec<[u8; 32]>) -> 
     }
     *Hash::new(&buf).as_ref()
 }
-
 /// Aggregate outputs with metadata binding: committee root and a reveal bitmap.
 ///
 /// Layout: `b"iroha:beacon:v1:agg|" || network_id[32] || epoch_be || committee_root || bitmap_len_be || bitmap_bytes || concat(sort_lex(y_i))`
@@ -91,19 +86,16 @@ pub fn aggregate_outputs_with_meta(
     }
     *Hash::new(&buf).as_ref()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::HashOf;
     use iroha_data_model::block::BlockHeader;
-
     fn network_id(marker: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([marker; Hash::LENGTH]),
         ))
     }
-
     #[test]
     fn epoch_input_has_domain_and_sizes() {
         let prev = [7u8; 32];
@@ -112,7 +104,6 @@ mod tests {
         assert!(x.starts_with(b"iroha:beacon:v1"));
         assert_eq!(x.len(), b"iroha:beacon:v1".len() + 32 + 8 + 32);
     }
-
     #[test]
     fn aggregate_is_order_independent() {
         let a = [1u8; 32];
@@ -123,7 +114,6 @@ mod tests {
         let r2 = aggregate_outputs(&network_id, vec![c, a, b]);
         assert_eq!(r1, r2);
     }
-
     #[test]
     fn aggregate_deduplicates_outputs() {
         let a = [1u8; 32];
@@ -133,7 +123,6 @@ mod tests {
         let r2 = aggregate_outputs(&network_id, vec![a, b, a, b]);
         assert_eq!(r1, r2, "duplicate VRF outputs must not skew the beacon");
     }
-
     #[test]
     fn leader_input_binds_pk_and_slot() {
         let network_id = network_id(0x81);
@@ -154,7 +143,6 @@ mod tests {
         let r2 = aggregate_outputs_with_meta(&network_id, 1, [9u8; 32], &[0b01], out);
         assert_ne!(r1, r2);
     }
-
     #[test]
     fn aggregate_with_meta_deduplicates_outputs() {
         let network_id = network_id(0x81);
@@ -168,7 +156,6 @@ mod tests {
         );
         assert_eq!(base, duped);
     }
-
     #[test]
     fn every_beacon_domain_rejects_same_label_different_genesis_by_construction() {
         let first = network_id(0x81);

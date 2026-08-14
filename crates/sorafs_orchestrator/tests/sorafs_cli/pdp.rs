@@ -3,16 +3,13 @@ use iroha_crypto::PublicKey;
 use iroha_data_model::NetworkId;
 use sha2::Sha256;
 use sorafs_manifest::{PdpChallengeV1, PdpCommitmentV1, PdpProofV1};
-
 const PDP_OPERATOR_SIGNATURE_DOMAIN: &[u8] = b"iroha.operator.http-request.network.v1\0";
-
 fn pdp_fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join("fixtures/sorafs_manifest/pdp")
         .join(name)
 }
-
 fn pdp_object<const N: usize>(entries: [(&str, Value); N]) -> Value {
     Value::Object(
         entries
@@ -21,7 +18,6 @@ fn pdp_object<const N: usize>(entries: [(&str, Value); N]) -> Value {
             .collect(),
     )
 }
-
 fn pdp_operator_key(directory: &Path, algorithm: Algorithm) -> (PathBuf, String) {
     let key_pair = KeyPair::try_from_seed(
         format!("sorafs-cli-pdp-operator-{algorithm:?}").into_bytes(),
@@ -34,13 +30,11 @@ fn pdp_operator_key(directory: &Path, algorithm: Algorithm) -> (PathBuf, String)
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
             .expect("secure PDP operator test key");
     }
     (path, key_pair.public_key().to_string())
 }
-
 fn pdp_common_args(server: &MockServer, key_path: &Path) -> Vec<String> {
     vec![
         format!("--torii-url={}", server.base_url()),
@@ -48,7 +42,6 @@ fn pdp_common_args(server: &MockServer, key_path: &Path) -> Vec<String> {
         format!("--operator-private-key-file={}", key_path.display()),
     ]
 }
-
 fn pdp_assert(
     operation: &str,
     common: &[String],
@@ -62,7 +55,6 @@ fn pdp_assert(
         .args(operation_args);
     command.assert()
 }
-
 fn pdp_single_header(request: &HttpMockRequest, name: &str) -> Option<String> {
     let mut values = request
         .headers_vec()
@@ -72,7 +64,6 @@ fn pdp_single_header(request: &HttpMockRequest, name: &str) -> Option<String> {
     let value = values.next()?;
     values.next().is_none().then_some(value)
 }
-
 fn pdp_signed_request_matches(
     request: &HttpMockRequest,
     expected_path: &str,
@@ -144,7 +135,6 @@ fn pdp_signed_request_matches(
     message.extend_from_slice(nonce.as_bytes());
     signature.verify(&public_key, &message).is_ok()
 }
-
 fn pdp_json_mock<'a>(
     server: &'a MockServer,
     path: &str,
@@ -170,7 +160,6 @@ fn pdp_json_mock<'a>(
             .body(response);
     })
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -198,7 +187,6 @@ fn pdp_no_content_mock<'a>(
         then.status(204);
     })
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -228,7 +216,6 @@ fn pdp_pending_status(challenge: &PdpChallengeV1) -> Value {
         ),
     ])
 }
-
 fn pdp_terminal_status(challenge: &PdpChallengeV1, proof: &PdpProofV1) -> Value {
     pdp_object([
         ("sequence", Value::from(1_u64)),
@@ -255,7 +242,6 @@ fn pdp_terminal_status(challenge: &PdpChallengeV1, proof: &PdpProofV1) -> Value 
         ),
     ])
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -284,7 +270,6 @@ fn pdp_operator_commands_sign_exact_bodies_and_validate_all_five_routes() {
         .checked_sub(1)
         .filter(|timestamp| *timestamp != 0)
         .expect("PDP fixture permits enqueue before its future-skewed issue time");
-
     let enqueue_request = pdp_object([
         (
             "commitment_b64",
@@ -309,7 +294,6 @@ fn pdp_operator_commands_sign_exact_bodies_and_validate_all_five_routes() {
         "application/json",
         &enqueue_response,
     );
-
     let next_request = pdp_object([("provider_id_hex", Value::from(provider_id_hex.clone()))]);
     let next_response = pdp_object([
         ("sequence", Value::from(1_u64)),
@@ -328,7 +312,6 @@ fn pdp_operator_commands_sign_exact_bodies_and_validate_all_five_routes() {
         "application/json",
         &next_response,
     );
-
     let submit_request = pdp_object([
         ("challenge_id_hex", Value::from(challenge_id_hex.clone())),
         (
@@ -345,7 +328,6 @@ fn pdp_operator_commands_sign_exact_bodies_and_validate_all_five_routes() {
         "application/json",
         &terminal_status,
     );
-
     let status_request = pdp_object([("challenge_id_hex", Value::from(challenge_id_hex.clone()))]);
     let pending_status = pdp_pending_status(&challenge);
     let status_mock = pdp_json_mock(
@@ -356,7 +338,6 @@ fn pdp_operator_commands_sign_exact_bodies_and_validate_all_five_routes() {
         "application/json",
         &pending_status,
     );
-
     let export_request = pdp_object([
         ("after_sequence", Value::from(0_u64)),
         ("limit", Value::from(2_u32)),
@@ -373,7 +354,6 @@ fn pdp_operator_commands_sign_exact_bodies_and_validate_all_five_routes() {
         "application/json",
         &export_response,
     );
-
     let enqueue_args = vec![
         format!("--commitment={}", commitment_path.display()),
         format!("--challenge={}", challenge_path.display()),
@@ -384,7 +364,6 @@ fn pdp_operator_commands_sign_exact_bodies_and_validate_all_five_routes() {
         from_slice::<Value>(&enqueue.get_output().stdout).expect("parse enqueue stdout"),
         enqueue_response
     );
-
     let challenge_out = directory.path().join("next-challenge.to");
     let next_args = vec![
         format!("--provider-id-hex={provider_id_hex}"),
@@ -400,7 +379,6 @@ fn pdp_operator_commands_sign_exact_bodies_and_validate_all_five_routes() {
         fs::read(&challenge_out).expect("read PDP next output"),
         challenge_bytes
     );
-
     let submit_args = vec![
         format!("--challenge-id-hex={challenge_id_hex}"),
         format!("--proof={}", proof_path.display()),
@@ -410,14 +388,12 @@ fn pdp_operator_commands_sign_exact_bodies_and_validate_all_five_routes() {
         from_slice::<Value>(&submit.get_output().stdout).expect("parse submit stdout"),
         terminal_status
     );
-
     let status_args = vec![format!("--challenge-id-hex={challenge_id_hex}")];
     let status = pdp_assert("status", &common, &status_args).success();
     assert_eq!(
         from_slice::<Value>(&status.get_output().stdout).expect("parse status stdout"),
         pending_status
     );
-
     let export_out = directory.path().join("pdp-export.json");
     let export_args = vec![
         "--after-sequence=0".to_owned(),
@@ -436,14 +412,12 @@ fn pdp_operator_commands_sign_exact_bodies_and_validate_all_five_routes() {
             .expect("parse PDP export"),
         export_response
     );
-
     enqueue_mock.assert_calls(1);
     next_mock.assert_calls(1);
     submit_mock.assert_calls(1);
     status_mock.assert_calls(1);
     export_mock.assert_calls(1);
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -472,7 +446,6 @@ fn pdp_next_accepts_exact_no_content_without_creating_output() {
     assert!(!output.exists());
     mock.assert_calls(1);
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -520,7 +493,6 @@ fn pdp_next_rejects_unknown_response_fields_before_output() {
     assert!(!output.exists());
     mock.assert_calls(1);
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -570,7 +542,6 @@ fn pdp_next_rejects_enqueued_timestamp_after_challenge_deadline() {
     assert!(!output.exists());
     mock.assert_calls(1);
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -608,7 +579,6 @@ fn pdp_export_rejects_noncanonical_content_type_before_output() {
     assert!(!output.exists());
     mock.assert_calls(1);
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -642,7 +612,6 @@ fn pdp_outputs_are_create_new_and_fail_before_network() {
     );
     route.assert_calls(0);
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -652,7 +621,6 @@ fn pdp_outputs_are_create_new_and_fail_before_network() {
 #[test]
 fn pdp_rejects_symlink_inputs_and_outputs_before_network() {
     use std::os::unix::fs::symlink;
-
     let directory = tempdir().expect("create PDP symlink tempdir");
     let server = MockServer::start();
     let (key_path, _) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
@@ -665,7 +633,6 @@ fn pdp_rejects_symlink_inputs_and_outputs_before_network() {
         when.method(POST);
         then.status(500);
     });
-
     let output_target = directory.path().join("output-target.to");
     fs::write(&output_target, b"target").expect("write symlink target");
     let output_link = directory.path().join("output-link.to");
@@ -679,7 +646,6 @@ fn pdp_rejects_symlink_inputs_and_outputs_before_network() {
         String::from_utf8_lossy(&next_assert.get_output().stderr).contains("must not be a symlink")
     );
     assert_eq!(fs::read(&output_target).expect("read target"), b"target");
-
     let commitment_link = directory.path().join("commitment-link.to");
     symlink(pdp_fixture("commitment_v1.to"), &commitment_link).expect("create commitment symlink");
     let enqueue_args = vec![
@@ -694,7 +660,6 @@ fn pdp_rejects_symlink_inputs_and_outputs_before_network() {
     );
     route.assert_calls(0);
 }
-
 #[test]
 fn pdp_operator_auth_rejects_non_ed25519_keys_before_network() {
     let directory = tempdir().expect("create PDP key algorithm tempdir");
@@ -716,7 +681,6 @@ fn pdp_operator_auth_rejects_non_ed25519_keys_before_network() {
     );
     route.assert_calls(0);
 }
-
 #[test]
 fn pdp_submit_rejects_canonical_proof_with_tampered_signed_payload_before_network() {
     let directory = tempdir().expect("create PDP tampered-proof tempdir");
@@ -751,7 +715,6 @@ fn pdp_submit_rejects_canonical_proof_with_tampered_signed_payload_before_networ
     );
     route.assert_calls(0);
 }
-
 #[test]
 fn pdp_enqueue_rejects_canonical_commitment_window_and_sealing_mismatches_before_network() {
     let directory = tempdir().expect("create PDP binding-mismatch tempdir");
@@ -771,7 +734,6 @@ fn pdp_enqueue_rejects_canonical_commitment_window_and_sealing_mismatches_before
         when.method(POST).path("/v1/sorafs/pdp/challenge");
         then.status(500);
     });
-
     for (case, mut commitment, mut challenge) in [
         (
             "sample-window",
@@ -825,7 +787,6 @@ fn pdp_enqueue_rejects_canonical_commitment_window_and_sealing_mismatches_before
     }
     route.assert_calls(0);
 }
-
 #[test]
 fn pdp_submit_rejects_mismatched_response_proof_digest() {
     let directory = tempdir().expect("create PDP response-binding tempdir");
@@ -868,7 +829,6 @@ fn pdp_submit_rejects_mismatched_response_proof_digest() {
     );
     mock.assert_calls(1);
 }
-
 #[test]
 fn pdp_submit_rejects_accepted_response_with_mismatched_proof_scope() {
     let directory = tempdir().expect("create PDP proof-scope tempdir");
@@ -885,7 +845,6 @@ fn pdp_submit_rejects_accepted_response_with_mismatched_proof_scope() {
             Value::from(BASE64_STANDARD.encode(&proof_bytes)),
         ),
     ]);
-
     for (field, wrong_value) in [
         ("manifest_digest_hex", Value::from("88".repeat(32))),
         ("provider_id_hex", Value::from("77".repeat(32))),
@@ -918,7 +877,6 @@ fn pdp_submit_rejects_accepted_response_with_mismatched_proof_scope() {
         mock.assert_calls(1);
     }
 }
-
 #[test]
 fn pdp_submit_rejects_terminal_reasons_that_cannot_result_from_proof_submission() {
     let directory = tempdir().expect("create PDP submit-matrix tempdir");
@@ -935,7 +893,6 @@ fn pdp_submit_rejects_terminal_reasons_that_cannot_result_from_proof_submission(
             Value::from(BASE64_STANDARD.encode(&proof_bytes)),
         ),
     ]);
-
     for rejection_reason in [
         "deadline_expired",
         "admission_inactive",
@@ -969,7 +926,6 @@ fn pdp_submit_rejects_terminal_reasons_that_cannot_result_from_proof_submission(
         mock.assert_calls(1);
     }
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -986,7 +942,6 @@ fn pdp_export_rejects_duplicate_challenge_ids_and_provider_scopes() {
         ("after_sequence", Value::from(0_u64)),
         ("limit", Value::from(100_u32)),
     ]);
-
     for (case, replacement_id) in [
         ("duplicate-id", None),
         ("duplicate-scope", Some("aa".repeat(32))),
@@ -1023,7 +978,6 @@ fn pdp_export_rejects_duplicate_challenge_ids_and_provider_scopes() {
         mock.assert_calls(1);
     }
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1050,12 +1004,10 @@ fn pdp_export_rejects_oversized_response_before_output() {
     assert!(!output.exists());
     mock.assert_calls(1);
 }
-
 #[cfg(unix)]
 #[test]
 fn pdp_inputs_reject_hardlinks_and_group_world_writable_files_before_network() {
     use std::os::unix::fs::PermissionsExt as _;
-
     let directory = tempdir().expect("create PDP input-policy tempdir");
     let server = MockServer::start();
     let (key_path, _) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
@@ -1078,7 +1030,6 @@ fn pdp_inputs_reject_hardlinks_and_group_world_writable_files_before_network() {
     ];
     let assert = pdp_assert("enqueue", &common, &args).failure();
     assert!(String::from_utf8_lossy(&assert.get_output().stderr).contains("hard link"));
-
     fs::remove_file(&linked).expect("remove extra hard link");
     fs::set_permissions(&copied, fs::Permissions::from_mode(0o666))
         .expect("make commitment writable");
@@ -1086,7 +1037,6 @@ fn pdp_inputs_reject_hardlinks_and_group_world_writable_files_before_network() {
     assert!(String::from_utf8_lossy(&assert.get_output().stderr).contains("group or world write"));
     route.assert_calls(0);
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1096,7 +1046,6 @@ fn pdp_inputs_reject_hardlinks_and_group_world_writable_files_before_network() {
 #[test]
 fn pdp_output_rejects_non_private_parent_before_network() {
     use std::os::unix::fs::PermissionsExt as _;
-
     let directory = tempdir().expect("create PDP output-parent tempdir");
     let server = MockServer::start();
     let (key_path, _) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
@@ -1128,7 +1077,6 @@ fn pdp_output_rejects_non_private_parent_before_network() {
     fs::set_permissions(&writable_parent, fs::Permissions::from_mode(0o700))
         .expect("restore output parent permissions");
 }
-
 #[cfg(not(any(
     target_os = "android",
     target_os = "ios",

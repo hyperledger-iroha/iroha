@@ -4,12 +4,9 @@
 //! data-model crates so they remain usable from lightweight environments
 //! (e.g., wallets or signing services) while still matching the canonical
 //! on-chain derivations.
-
 use crate::poseidon;
-
 /// Domain-separation tag for confidential nullifier derivation.
 const NULLIFIER_DST: &[u8] = b"iroha:conf:nullifier:v1";
-
 /// Derive a canonical 32-byte nullifier from the nullifier key `nk`,
 /// per-note randomness `rho`, the asset identifier, and the exact network ID.
 ///
@@ -36,7 +33,6 @@ pub fn derive_nullifier(
     network_id: &[u8; 32],
 ) -> [u8; 32] {
     let asset_id = asset_id.as_ref();
-
     let mut buf = Vec::with_capacity(
         NULLIFIER_DST.len()
             + 1
@@ -55,19 +51,15 @@ pub fn derive_nullifier(
     buf.extend_from_slice(network_id);
     poseidon::hash_bytes(&buf)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const NK: [u8; 32] = [0xA5; 32];
     const RHO: [u8; 32] = [0x5A; 32];
-
     #[test]
     fn derive_nullifier_is_deterministic() {
         let asset_id = b"shielded#chain";
         let network_id = [0x31; 32];
-
         let first = derive_nullifier(&NK, &RHO, asset_id, &network_id);
         let second = derive_nullifier(&NK, &RHO, asset_id, &network_id);
         assert_eq!(
@@ -75,20 +67,17 @@ mod tests {
             "nullifier derivation must be deterministic for identical inputs"
         );
     }
-
     #[test]
     fn derive_nullifier_domain_separates_inputs() {
         let asset_id_a = b"asset#a";
         let asset_id_b = b"asset#b";
         let network_id = [0x41; 32];
-
         let nullifier_a = derive_nullifier(&NK, &RHO, asset_id_a, &network_id);
         let nullifier_b = derive_nullifier(&NK, &RHO, asset_id_b, &network_id);
         assert_ne!(
             nullifier_a, nullifier_b,
             "distinct asset ids must yield distinct nullifiers"
         );
-
         let nullifier_network = derive_nullifier(&NK, &RHO, asset_id_a, &[0x43; 32]);
         assert_ne!(
             nullifier_a, nullifier_network,

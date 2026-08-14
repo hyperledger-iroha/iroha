@@ -32,7 +32,6 @@ fn encrypted_field_scratch_rejects_authenticated_noncanonical_fields() {
     scratch.file.write_all(&ciphertext).expect("replace record");
     assert!(scratch.read_chunk(0).is_err());
 }
-
 #[test]
 fn replayed_masked_trace_spill_matches_exact_masked_lde_rows() {
     let native_log2 = 3;

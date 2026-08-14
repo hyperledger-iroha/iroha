@@ -6,21 +6,17 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GenerationMode {
     Write,
     Check,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GenerationOptions {
     pub(crate) mode: GenerationMode,
     pub(crate) root: PathBuf,
 }
-
 static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(0);
-
 /// One fully rendered generated file.
 ///
 /// Construction reads and validates the existing destination, then renders its
@@ -32,7 +28,6 @@ pub(crate) struct GeneratedOutput {
     expected: Vec<u8>,
     permissions: Option<fs::Permissions>,
 }
-
 impl GeneratedOutput {
     #[allow(dead_code)]
     pub(crate) fn render(
@@ -58,7 +53,6 @@ impl GeneratedOutput {
             permissions,
         })
     }
-
     #[allow(dead_code)]
     pub(crate) fn exact(
         path: impl Into<PathBuf>,
@@ -73,12 +67,10 @@ impl GeneratedOutput {
             permissions,
         })
     }
-
     fn changed(&self) -> bool {
         self.original.as_deref() != Some(self.expected.as_slice())
     }
 }
-
 /// Validate every output before staging or publishing any of them, then either
 /// check the complete set or publish each changed file by same-directory
 /// rename. A validation or staging failure cannot mutate an output. Publication
@@ -89,7 +81,6 @@ pub(crate) fn sync_generated_outputs(
     regenerate_command: &str,
 ) -> Result<Vec<PathBuf>, String> {
     validate_output_set(outputs)?;
-
     let changed = outputs
         .iter()
         .filter(|output| output.changed())
@@ -109,7 +100,6 @@ pub(crate) fn sync_generated_outputs(
     if changed.is_empty() {
         return Ok(Vec::new());
     }
-
     // Stage every payload before the first rename. A later write, flush, sync,
     // or destination validation failure therefore leaves all outputs intact.
     let mut staged = Vec::with_capacity(changed.len());
@@ -117,7 +107,6 @@ pub(crate) fn sync_generated_outputs(
         staged.push(stage_output(output)?);
     }
     validate_output_set(outputs)?;
-
     let mut updated = Vec::with_capacity(staged.len());
     let mut parent_directories = BTreeSet::new();
     for mut pending in staged {
@@ -140,7 +129,6 @@ pub(crate) fn sync_generated_outputs(
     }
     Ok(updated)
 }
-
 pub(crate) fn parse_generation_options(
     args: impl IntoIterator<Item = String>,
     default_root: impl Into<PathBuf>,
@@ -184,17 +172,14 @@ pub(crate) fn parse_generation_options(
         root: root.unwrap_or_else(|| default_root.into()),
     })
 }
-
 struct TemporaryFile {
     path: PathBuf,
 }
-
 impl TemporaryFile {
     fn disarm(&mut self) {
         self.path = PathBuf::new();
     }
 }
-
 impl Drop for TemporaryFile {
     fn drop(&mut self) {
         if !self.path.as_os_str().is_empty() {
@@ -202,12 +187,10 @@ impl Drop for TemporaryFile {
         }
     }
 }
-
 struct StagedOutput {
     destination: PathBuf,
     temporary: TemporaryFile,
 }
-
 fn stage_output(output: &GeneratedOutput) -> Result<StagedOutput, String> {
     let parent = output_parent(&output.path)
         .ok_or_else(|| format!("output has no parent: {}", output.path.display()))?;
@@ -251,7 +234,6 @@ fn stage_output(output: &GeneratedOutput) -> Result<StagedOutput, String> {
         temporary,
     })
 }
-
 fn create_temporary(parent: &Path, file_name: &OsStr) -> Result<(File, PathBuf), String> {
     for _ in 0..128 {
         let serial = NEXT_TEMPORARY.fetch_add(1, Ordering::Relaxed);
@@ -279,7 +261,6 @@ fn create_temporary(parent: &Path, file_name: &OsStr) -> Result<(File, PathBuf),
         parent.display()
     ))
 }
-
 fn validate_output_set(outputs: &[GeneratedOutput]) -> Result<(), String> {
     let mut paths = BTreeSet::new();
     for output in outputs {
@@ -299,7 +280,6 @@ fn validate_output_set(outputs: &[GeneratedOutput]) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn read_regular_destination(
     path: &Path,
 ) -> Result<(Option<Vec<u8>>, Option<fs::Permissions>), String> {
@@ -326,13 +306,11 @@ fn read_regular_destination(
         .map_err(|error| format!("read generated output {}: {error}", path.display()))?;
     Ok((Some(contents), Some(metadata.permissions())))
 }
-
 fn output_parent(path: &Path) -> Option<&Path> {
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .or_else(|| Some(Path::new(".")))
 }
-
 fn validate_real_directory(path: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("inspect output directory {}: {error}", path.display()))?;
@@ -344,30 +322,22 @@ fn validate_real_directory(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn sync_directory(path: &Path) -> std::io::Result<()> {
     File::open(path)?.sync_all()
 }
-
 #[cfg(not(unix))]
 fn sync_directory(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
         fs,
         sync::atomic::{AtomicU64, Ordering},
     };
-
-    use super::{
-        GeneratedOutput, GenerationMode, parse_generation_options, sync_generated_outputs,
-    };
-
+    use super::{GeneratedOutput, GenerationMode, parse_generation_options, sync_generated_outputs};
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
-
     fn temp_directory(label: &str) -> std::path::PathBuf {
         let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
@@ -375,7 +345,6 @@ mod tests {
             std::process::id()
         ))
     }
-
     #[test]
     fn generation_options_require_exactly_one_mode_and_accept_an_explicit_root() {
         let default_root = std::path::PathBuf::from("/workspace");
@@ -411,7 +380,6 @@ mod tests {
         );
         assert!(parse_generation_options(["--unknown".to_owned()], &default_root).is_err());
     }
-
     #[test]
     fn generation_options_reject_malformed_root_arguments() {
         let default_root = std::path::PathBuf::from("/workspace");
@@ -435,7 +403,6 @@ mod tests {
             assert!(parse_generation_options(arguments, &default_root).is_err());
         }
     }
-
     #[test]
     fn complete_output_set_is_checked_then_published_atomically_per_file() {
         let directory = temp_directory("publish");
@@ -448,7 +415,6 @@ mod tests {
             GeneratedOutput::exact(&first, "new first\n").expect("prepare first output"),
             GeneratedOutput::exact(&second, "new second\n").expect("prepare second output"),
         ];
-
         assert!(
             sync_generated_outputs(&outputs, GenerationMode::Check, "generator --write").is_err()
         );
@@ -460,7 +426,6 @@ mod tests {
             fs::read_to_string(&second).expect("read second after check"),
             "old second\n"
         );
-
         let updated = sync_generated_outputs(&outputs, GenerationMode::Write, "generator --write")
             .expect("publish complete output set");
         assert_eq!(updated, [first.clone(), second.clone()]);
@@ -481,10 +446,8 @@ mod tests {
                     .to_string_lossy()
                     .ends_with(".tmp"))
         );
-
         fs::remove_dir_all(directory).expect("remove test directory");
     }
-
     #[test]
     fn exact_output_can_atomically_create_a_missing_destination() {
         let directory = temp_directory("create");
@@ -492,7 +455,6 @@ mod tests {
         let path = directory.join("generated.rs");
         let outputs =
             [GeneratedOutput::exact(&path, "generated\n").expect("prepare missing output")];
-
         assert!(
             sync_generated_outputs(&outputs, GenerationMode::Check, "generator --write").is_err()
         );
@@ -506,10 +468,8 @@ mod tests {
             fs::read_to_string(&path).expect("read generated output"),
             "generated\n"
         );
-
         fs::remove_dir_all(directory).expect("remove test directory");
     }
-
     #[test]
     fn late_renderer_failure_leaves_earlier_output_unchanged() {
         let directory = temp_directory("late-renderer");
@@ -519,7 +479,6 @@ mod tests {
         fs::write(&first, "begin\nstale\nend\n").expect("write first fixture");
         fs::write(&second, "malformed\n").expect("write second fixture");
         let before = fs::read(&first).expect("snapshot first fixture");
-
         let first_output =
             GeneratedOutput::render(&first, |text| Ok(text.replace("stale", "current")))
                 .expect("render first output");
@@ -531,15 +490,12 @@ mod tests {
             fs::read(&first).expect("read first after late render failure"),
             before
         );
-
         fs::remove_dir_all(directory).expect("remove test directory");
     }
-
     #[cfg(unix)]
     #[test]
     fn late_destination_validation_failure_is_nonmutating() {
         use std::os::unix::fs::symlink;
-
         let directory = temp_directory("late-destination");
         fs::create_dir_all(&directory).expect("create test directory");
         let first = directory.join("first.md");
@@ -553,7 +509,6 @@ mod tests {
             GeneratedOutput::exact(&first, "new first\n").expect("prepare first output"),
             GeneratedOutput::exact(&second, "new second\n").expect("prepare second output"),
         ];
-
         fs::remove_file(&second).expect("remove second output");
         symlink(&symlink_target, &second).expect("replace second output with symlink");
         assert!(
@@ -567,7 +522,6 @@ mod tests {
             fs::read_to_string(&symlink_target).expect("read symlink target"),
             "untouched\n"
         );
-
         fs::remove_dir_all(directory).expect("remove test directory");
     }
 }

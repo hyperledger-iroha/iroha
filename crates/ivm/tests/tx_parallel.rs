@@ -1,5 +1,4 @@
 use ivm::{IVM, Memory, PostRunPhase, Transaction, execute_transactions_parallel};
-
 fn encode_add(rd: u16, rs: u16, rt: u16) -> [u8; 2] {
     let word = ((0x1u16) << 12) | ((rd & 0xf) << 8) | ((rs & 0xf) << 4) | (rt & 0xf);
     word.to_le_bytes()
@@ -15,7 +14,6 @@ fn encode_store(rs: u16, base: u16) -> [u8; 2] {
 fn encode_halt() -> [u8; 2] {
     0u16.to_le_bytes()
 }
-
 fn build_increment_tx(id: usize, addr: u64) -> Transaction {
     let mut code = Vec::new();
     code.extend_from_slice(&encode_load(1, 3));
@@ -38,7 +36,6 @@ fn build_increment_tx(id: usize, addr: u64) -> Transaction {
         result: Ok(()),
     }
 }
-
 #[test]
 fn parallel_conflict_increments() {
     let addr = Memory::HEAP_START + 0x100;
@@ -47,7 +44,6 @@ fn parallel_conflict_increments() {
     let val = mem.load_u64(addr).unwrap();
     assert_eq!(val, 2);
 }
-
 #[test]
 fn parallel_non_conflicting() {
     let addr1 = Memory::HEAP_START + 0x100;
@@ -57,7 +53,6 @@ fn parallel_non_conflicting() {
     assert_eq!(mem.load_u64(addr1).unwrap(), 1);
     assert_eq!(mem.load_u64(addr2).unwrap(), 1);
 }
-
 fn build_write_tx(id: usize, addr: u64, value: u64) -> Transaction {
     let mut code = Vec::new();
     code.extend_from_slice(&encode_store(2, 3));
@@ -78,7 +73,6 @@ fn build_write_tx(id: usize, addr: u64, value: u64) -> Transaction {
         result: Ok(()),
     }
 }
-
 fn build_read_then_write(id: usize, read_addr: u64, write_addr: u64) -> Transaction {
     let mut code = Vec::new();
     code.extend_from_slice(&encode_load(1, 3));
@@ -101,7 +95,6 @@ fn build_read_then_write(id: usize, read_addr: u64, write_addr: u64) -> Transact
         result: Ok(()),
     }
 }
-
 fn build_post_bytes_tx(id: usize, dest: u64, payload: Vec<u8>) -> Transaction {
     let mut code = Vec::new();
     code.extend_from_slice(&encode_halt());
@@ -125,7 +118,6 @@ fn build_post_bytes_tx(id: usize, dest: u64, payload: Vec<u8>) -> Transaction {
         result: Ok(()),
     }
 }
-
 fn build_post_u32_tx(id: usize, dest: u64, value: u32) -> Transaction {
     let mut code = Vec::new();
     code.extend_from_slice(&encode_halt());
@@ -148,7 +140,6 @@ fn build_post_u32_tx(id: usize, dest: u64, value: u32) -> Transaction {
         result: Ok(()),
     }
 }
-
 #[test]
 fn read_write_conflict_replay() {
     let addr_a = Memory::HEAP_START + 0x200;
@@ -159,7 +150,6 @@ fn read_write_conflict_replay() {
     let mem = execute_transactions_parallel(&mut txs).unwrap();
     assert_eq!(mem.load_u64(addr_b).unwrap(), 10);
 }
-
 #[test]
 fn store_bytes_conflict_detected() {
     let dest = Memory::HEAP_START + 0x380;
@@ -182,7 +172,6 @@ fn store_bytes_conflict_detected() {
     mem.load_bytes(dest, &mut buf).unwrap();
     assert_eq!(buf, vec![9u8; 5]);
 }
-
 #[test]
 fn store_u32_conflict_detected() {
     let dest = Memory::HEAP_START + 0x300;
@@ -193,18 +182,15 @@ fn store_u32_conflict_detected() {
     let mem = execute_transactions_parallel(&mut txs).unwrap();
     assert_eq!(mem.load_u32(dest).unwrap(), 0x3333_4444);
 }
-
 #[test]
 fn post_run_final_invoked_once_per_tx() {
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
-
     let dest = Memory::HEAP_START + 0x3C0;
     let spec_counter = Arc::new(AtomicUsize::new(0));
     let final_counter = Arc::new(AtomicUsize::new(0));
-
     let make_tx = |id: usize, value: u32| {
         let mut code = Vec::new();
         code.extend_from_slice(&encode_halt());
@@ -235,7 +221,6 @@ fn post_run_final_invoked_once_per_tx() {
             result: Ok(()),
         }
     };
-
     let mut txs = vec![make_tx(0, 0xAAAA5555), make_tx(1, 0xBBBB6666)];
     let mem = execute_transactions_parallel(&mut txs).unwrap();
     assert_eq!(mem.load_u32(dest).unwrap(), 0xBBBB6666);

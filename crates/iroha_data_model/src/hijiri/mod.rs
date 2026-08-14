@@ -6,16 +6,12 @@
 //! them, and incentives determine how much an attestation can boost the
 //! `S_attestation` component of the global risk score as well as how registries
 //! are compensated.
-
 use std::{convert::TryFrom, fmt};
-
 use derive_more::{AsRef, Deref};
 use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity};
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use crate::{account::AccountId, metadata::Metadata, name::Name};
-
 /// Unsigned Q16.16 fixed-point representation backed by `u32`.
 ///
 /// Hijiri scoring relies on Q16.16 arithmetic. This lightweight wrapper keeps
@@ -25,40 +21,33 @@ use crate::{account::AccountId, metadata::Metadata, name::Name};
 )]
 #[repr(transparent)]
 pub struct Q16(pub u32);
-
 impl Q16 {
     /// Zero in Q16.16.
     pub const ZERO: Self = Self(0);
     /// One in Q16.16.
     pub const ONE: Self = Self(0x0001_0000);
-
     /// Construct a `Q16` from an integer/fraction pair.
     pub const fn from_parts(integer: u16, fraction: u16) -> Self {
         Self(((integer as u32) << 16) | fraction as u32)
     }
-
     /// Construct a `Q16` directly from the underlying raw value.
     pub const fn from_raw(raw: u32) -> Self {
         Self(raw)
     }
-
     /// Return the raw underlying value.
     pub const fn raw(self) -> u32 {
         self.0
     }
-
     /// Saturating addition.
     #[must_use]
     pub const fn saturating_add(self, rhs: Self) -> Self {
         Self(self.0.saturating_add(rhs.0))
     }
-
     /// Saturating subtraction.
     #[must_use]
     pub const fn saturating_sub(self, rhs: Self) -> Self {
         Self(self.0.saturating_sub(rhs.0))
     }
-
     /// Saturating multiplication by an integer factor.
     #[must_use]
     pub fn saturating_mul(self, factor: u32) -> Self {
@@ -66,13 +55,11 @@ impl Q16 {
         let clamped = u32::try_from(product).unwrap_or(u32::MAX);
         Self(clamped)
     }
-
     /// Clamp `self` so it never exceeds `cap`.
     #[must_use]
     pub const fn min(self, cap: Self) -> Self {
         if self.0 > cap.0 { cap } else { self }
     }
-
     /// Saturating multiplication by another Q16 value with rounding half-up.
     #[must_use]
     pub fn saturating_mul_q16(self, rhs: Self) -> Self {
@@ -83,7 +70,6 @@ impl Q16 {
         Self(clamped)
     }
 }
-
 impl fmt::Display for Q16 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let integer = self.0 >> 16;
@@ -91,25 +77,21 @@ impl fmt::Display for Q16 {
         write!(f, "{}.{:05}", integer, (fraction * 100_000 + 0x7FFF) >> 16)
     }
 }
-
 /// Identifier of an observer profile approved by governance.
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, AsRef, Deref, derive_more::From,
 )]
 pub struct ObserverProfileId(Name);
-
 impl ObserverProfileId {
     /// Create a new profile identifier.
     pub fn new(name: Name) -> Self {
         Self(name)
     }
-
     /// Access the inner name.
     pub fn as_name(&self) -> &Name {
         &self.0
     }
 }
-
 /// Capability advertised by an observer profile.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum DelegatedAttestationClass {
@@ -123,7 +105,6 @@ pub enum DelegatedAttestationClass {
         max_penalty_q16: Option<Q16>,
     },
 }
-
 /// Governance-approved observer profile describing capabilities and incentives.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ObserverProfile {
@@ -140,7 +121,6 @@ pub struct ObserverProfile {
     /// Additional metadata for governance/observability.
     pub metadata: Metadata,
 }
-
 impl ObserverProfile {
     /// Helper to locate the positive attestation incentive for this profile.
     pub fn positive_incentive(&self) -> Option<&PositiveAttestationIncentive> {
@@ -153,7 +133,6 @@ impl ObserverProfile {
         })
     }
 }
-
 /// Registry record linking an observer account to a profile version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ObserverRegistryEntry {
@@ -168,7 +147,6 @@ pub struct ObserverRegistryEntry {
     /// Optional metadata surfaced to operators.
     pub metadata: Metadata,
 }
-
 /// Schedule describing how registries are compensated for positive attestations.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct RegistryCreditSchedule {
@@ -179,7 +157,6 @@ pub struct RegistryCreditSchedule {
     /// Settlement stride expressed in Hijiri rounds.
     pub settlement_period_rounds: u32,
 }
-
 impl RegistryCreditSchedule {
     /// Compute the total credit owed for `attestations` positive receipts.
     ///
@@ -191,7 +168,6 @@ impl RegistryCreditSchedule {
             .try_mul_decimal(&Numeric::from(attestations))
     }
 }
-
 /// Positive attestation incentive applied to the subject account and registry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PositiveAttestationIncentive {
@@ -202,7 +178,6 @@ pub struct PositiveAttestationIncentive {
     /// Registry reward schedule credited for positive attestations.
     pub registry_credit: RegistryCreditSchedule,
 }
-
 impl PositiveAttestationIncentive {
     /// Construct a new incentive after validating invariants.
     ///
@@ -235,7 +210,6 @@ impl PositiveAttestationIncentive {
             registry_credit,
         })
     }
-
     /// Apply the incentive to `current` score given `attestations` positive receipts.
     pub fn apply_boost(&self, current: Q16, attestations: u32) -> Q16 {
         if attestations == 0 {
@@ -249,7 +223,6 @@ impl PositiveAttestationIncentive {
         boosted.min(self.max_score_boost)
     }
 }
-
 /// Validation errors encountered when constructing an incentive.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum PositiveAttestationError {
@@ -271,14 +244,12 @@ pub enum PositiveAttestationError {
     #[error("settlement period must be at least one Hijiri round")]
     ZeroSettlementStride,
 }
-
 /// Hashing algorithm identifier for privacy-preserving evidence commitments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum EvidenceHashAlgorithm {
     /// Poseidon2 permutation over the Goldilocks field with 32-byte output.
     Poseidon2Goldilocks,
 }
-
 impl EvidenceHashAlgorithm {
     /// Output length in bytes for the selected algorithm.
     pub const fn output_len(self) -> usize {
@@ -287,7 +258,6 @@ impl EvidenceHashAlgorithm {
         }
     }
 }
-
 /// Commitment to a redacted evidence field.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct EvidenceFieldCommitment {
@@ -300,7 +270,6 @@ pub struct EvidenceFieldCommitment {
     /// Optional salted hash of the raw payload for replay protection.
     pub value_digest: Option<[u8; 32]>,
 }
-
 impl EvidenceFieldCommitment {
     /// Construct a new field commitment ensuring the path is well-formed.
     ///
@@ -331,7 +300,6 @@ impl EvidenceFieldCommitment {
         })
     }
 }
-
 /// Envelope containing the commitments for a redacted evidence payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct EvidenceHashBundle {
@@ -342,7 +310,6 @@ pub struct EvidenceHashBundle {
     /// Per-field commitments for every redacted value.
     pub redacted_fields: Vec<EvidenceFieldCommitment>,
 }
-
 impl EvidenceHashBundle {
     /// Construct a bundle while checking invariants.
     ///
@@ -369,7 +336,6 @@ impl EvidenceHashBundle {
         })
     }
 }
-
 /// Validation errors for evidence hashing bundles.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum EvidenceHashError {
@@ -383,7 +349,6 @@ pub enum EvidenceHashError {
     #[error("duplicate evidence field path in commitment bundle")]
     DuplicateFieldPath,
 }
-
 /// Band describing the fee multiplier applied to a given Hijiri risk range.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct FeeMultiplierBand {
@@ -392,7 +357,6 @@ pub struct FeeMultiplierBand {
     /// Fee multiplier used when the band matches.
     pub multiplier: Q16,
 }
-
 impl FeeMultiplierBand {
     /// Create a band while validating bounds and multiplier.
     ///
@@ -411,7 +375,6 @@ impl FeeMultiplierBand {
         })
     }
 }
-
 /// Deterministic fee policy mapping risk scores to fee multipliers.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct HijiriFeePolicy {
@@ -420,7 +383,6 @@ pub struct HijiriFeePolicy {
     /// Maximum multiplier allowed by policy.
     pub penalty_cap: Q16,
 }
-
 impl HijiriFeePolicy {
     /// Construct a new policy, ensuring bands are sorted and cover the full range.
     ///
@@ -453,7 +415,6 @@ impl HijiriFeePolicy {
         }
         Ok(Self { bands, penalty_cap })
     }
-
     /// Return the multiplier for a given risk score.
     pub fn multiplier_for(&self, risk: Q16) -> Q16 {
         for band in &self.bands {
@@ -463,13 +424,11 @@ impl HijiriFeePolicy {
         }
         self.penalty_cap
     }
-
     /// Apply the policy to a base fee expressed in Q16.
     pub fn apply(&self, base_fee: Q16, risk: Q16) -> Q16 {
         base_fee.saturating_mul_q16(self.multiplier_for(risk))
     }
 }
-
 /// Validation errors produced when building a fee policy.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum FeePolicyError {
@@ -495,25 +454,20 @@ pub enum FeePolicyError {
     #[error("band upper bound must be non-zero")]
     ZeroUpperBound,
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::KeyPair;
-
     use super::*;
     use crate::metadata::Metadata;
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("test fixture random key generation should succeed")
     }
-
     #[derive(Encode)]
     struct ForgedRegistryCreditSchedule {
         reward_account: AccountId,
         reward_per_attestation: Numeric,
         settlement_period_rounds: u32,
     }
-
     #[test]
     fn q16_saturating_mul_caps() {
         let value = Q16::from_parts(0, 0x8000); // 0.5
@@ -521,7 +475,6 @@ mod tests {
         let huge = Q16::from_raw(u32::MAX);
         assert_eq!(huge.saturating_mul(2).raw(), u32::MAX);
     }
-
     #[test]
     fn incentive_apply_respects_cap() {
         let reward_account = {
@@ -539,12 +492,10 @@ mod tests {
             schedule,
         )
         .expect("valid incentive");
-
         // Start at zero and apply five attestations; cap should clamp to 1.0.
         let boosted = incentive.apply_boost(Q16::ZERO, 5);
         assert_eq!(boosted, Q16::ONE);
     }
-
     #[test]
     fn incentive_rewards_scale_linearly() {
         let reward_account = {
@@ -562,7 +513,6 @@ mod tests {
             schedule.clone(),
         )
         .expect("valid incentive");
-
         assert_eq!(
             schedule.total_reward(3).expect("bounded reward"),
             Quantity::from(1_500_u32)
@@ -575,7 +525,6 @@ mod tests {
             Quantity::from(1_500_u32)
         );
     }
-
     #[test]
     fn profile_positive_incentive_lookup() {
         let kp = checked_random_keypair();
@@ -591,7 +540,6 @@ mod tests {
             schedule,
         )
         .expect("valid incentive");
-
         let profile = ObserverProfile {
             id: ObserverProfileId::new("psp_compliance".parse().unwrap()),
             version: 1,
@@ -606,10 +554,8 @@ mod tests {
             ],
             metadata: Metadata::default(),
         };
-
         assert!(profile.positive_incentive().is_some());
     }
-
     #[test]
     fn registry_credit_rejects_forged_negative_reward() {
         let forged = ForgedRegistryCreditSchedule {
@@ -619,13 +565,11 @@ mod tests {
         };
         let encoded = forged.encode();
         let mut input = encoded.as_slice();
-
         assert!(
             <RegistryCreditSchedule as Decode>::decode(&mut input).is_err(),
             "nominal reward decoding must reject a forged negative value"
         );
     }
-
     #[test]
     fn evidence_field_commitment_validation() {
         let commitment = EvidenceFieldCommitment::new(
@@ -640,7 +584,6 @@ mod tests {
             vec!["details".to_string(), "case_id".to_string()]
         );
     }
-
     #[test]
     fn evidence_bundle_rejects_duplicates() {
         let commitment =
@@ -657,7 +600,6 @@ mod tests {
         .expect_err("duplicate paths must be rejected");
         assert_eq!(err, EvidenceHashError::DuplicateFieldPath);
     }
-
     #[test]
     fn evidence_bundle_sorts_paths() {
         let field_b = EvidenceFieldCommitment::new(
@@ -674,7 +616,6 @@ mod tests {
             Some([0x06; 32]),
         )
         .expect("valid commitment");
-
         let bundle = EvidenceHashBundle::new(
             EvidenceHashAlgorithm::Poseidon2Goldilocks,
             [0xFF; 32],
@@ -684,7 +625,6 @@ mod tests {
         assert_eq!(bundle.redacted_fields[0].field_path, field_a.field_path);
         assert_eq!(bundle.redacted_fields[1].field_path, field_b.field_path);
     }
-
     #[test]
     fn fee_policy_enforces_ordering_and_bounds() {
         let bands = vec![
@@ -702,7 +642,6 @@ mod tests {
             Q16::from_parts(1, 0x4000)
         );
     }
-
     #[test]
     fn fee_policy_applies_penalty_cap() {
         let bands = vec![

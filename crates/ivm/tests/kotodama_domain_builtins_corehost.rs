@@ -1,13 +1,10 @@
 //! End-to-end tests for Kotodama domain builtins: unregister_domain and transfer_domain.
-
 use std::collections::HashMap;
-
 use ivm::{
     IVM, KotodamaCompiler,
     mock_wsv::{AccountId, DomainId, MockWorldStateView, PermissionToken, WsvHost},
 };
 mod common;
-
 #[test]
 fn kotodama_unregister_domain() {
     // Program unregisters a domain using a constructor
@@ -44,7 +41,6 @@ fn kotodama_unregister_domain() {
     vm.run()
         .expect("unregister_domain should validate TLV and queue ISI");
 }
-
 #[test]
 fn kotodama_transfer_domain() {
     // Program transfers a domain from the execution authority to bob.

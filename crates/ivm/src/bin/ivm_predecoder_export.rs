@@ -17,14 +17,11 @@
 //! Notes:
 //! - The decoded op list is invariant across the header variants emitted here.
 //! - JSON is produced via `norito::json` as per repo policy.
-
 use std::path::PathBuf;
-
 #[derive(Debug, PartialEq, Eq)]
 struct Options {
     output_dir: PathBuf,
 }
-
 fn parse_options_from(
     arguments: impl IntoIterator<Item = String>,
     default_output_dir: PathBuf,
@@ -54,25 +51,21 @@ fn parse_options_from(
         output_dir: output_dir.unwrap_or(default_output_dir),
     })
 }
-
 fn parse_options() -> Result<Options, Box<dyn std::error::Error>> {
     parse_options_from(
         std::env::args().skip(1),
         ivm::predecoder_fixtures::default_predecoder_mixed_root(),
     )
 }
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = parse_options()?.output_dir;
     ivm::predecoder_fixtures::generate_predecoder_mixed_fixtures(&root)?;
     eprintln!("wrote fixtures to {}", root.display());
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn output_directory_defaults_to_the_live_fixture_path_and_can_be_staged() {
         let default = PathBuf::from("/workspace/predecoder");
@@ -93,7 +86,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn malformed_output_directory_options_are_rejected() {
         let default = PathBuf::from("/workspace/predecoder");

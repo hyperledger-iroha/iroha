@@ -16,9 +16,7 @@
 //! the archive record is opened, their exclusive cursor is resolved against
 //! that immutable row here, and the reputation worker independently validates
 //! the returned anchor and continuation before consuming the page.
-
 use std::{fmt, sync::Arc};
-
 use eyre::{Result, bail};
 use iroha_config::parameters::{actual::SorafsReputationRuntime, is_production_runtime_handle};
 use iroha_core::{
@@ -83,7 +81,6 @@ use sorafs_node::reputation::{
         ReputationRuntimeProviderQualificationV1, ReputationRuntimeProviderV1,
     },
 };
-
 const FAILURE_INVALID_REQUEST: u8 = 0xA1;
 const FAILURE_ARCHIVE_READ: u8 = 0xA2;
 const FAILURE_MISSING_ANCHOR: u8 = 0xA3;
@@ -92,7 +89,6 @@ const FAILURE_INVALID_LIMIT: u8 = 0xA5;
 const FAILURE_INVALID_CURSOR: u8 = 0xA6;
 const FAILURE_PAGE_BOUNDS: u8 = 0xA7;
 const FAILURE_BELOW_ACTIVATION_FLOOR: u8 = 0xA8;
-
 /// Typed failure while qualifying the configured finalized archive for startup.
 #[derive(Debug)]
 pub(crate) enum ReputationFinalizedArchiveStartupErrorV1 {
@@ -119,7 +115,6 @@ pub(crate) enum ReputationFinalizedArchiveStartupErrorV1 {
         source: Box<iroha_core::query::reputation_finalized::ReputationFinalizedArchiveError>,
     },
 }
-
 impl fmt::Display for ReputationFinalizedArchiveStartupErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -143,7 +138,6 @@ impl fmt::Display for ReputationFinalizedArchiveStartupErrorV1 {
         }
     }
 }
-
 impl std::error::Error for ReputationFinalizedArchiveStartupErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -154,7 +148,6 @@ impl std::error::Error for ReputationFinalizedArchiveStartupErrorV1 {
         }
     }
 }
-
 /// Recovery mode authenticated while opening the reputation archive.
 #[derive(Debug)]
 pub(crate) enum ReputationFinalizedArchiveStartupModeV1 {
@@ -179,7 +172,6 @@ pub(crate) enum ReputationFinalizedArchiveStartupModeV1 {
         activation_floor_created: bool,
     },
 }
-
 impl ReputationFinalizedArchiveStartupModeV1 {
     fn activation_gate(&self) -> ArchiveActivationGateV1 {
         match self {
@@ -193,7 +185,6 @@ impl ReputationFinalizedArchiveStartupModeV1 {
         }
     }
 }
-
 /// Exact archive qualification retained between startup and adapter assembly.
 #[derive(Debug)]
 #[must_use]
@@ -203,31 +194,26 @@ pub(crate) struct PreparedReputationFinalizedArchiveV1 {
     activation: ReputationFinalizedArchiveActivationV1,
     retention_authority: Option<QualifiedReputationRetentionAuthorityV1>,
 }
-
 impl PreparedReputationFinalizedArchiveV1 {
     /// Return the archive installed into the Sumeragi commit corridor.
     pub(crate) fn archive(&self) -> &Arc<ReputationFinalizedArchive> {
         &self.archive
     }
-
     /// Return the exact authenticated startup mode.
     pub(crate) const fn startup_mode(&self) -> &ReputationFinalizedArchiveStartupModeV1 {
         &self.startup_mode
     }
-
     /// Return the cloneable deferred-activation probe retained by the runtime
     /// launcher.
     pub(crate) const fn activation(&self) -> &ReputationFinalizedArchiveActivationV1 {
         &self.activation
     }
-
     /// Return the authority qualified for explicit finalized-prefix retention.
     pub(crate) const fn retention_authority(
         &self,
     ) -> Option<&QualifiedReputationRetentionAuthorityV1> {
         self.retention_authority.as_ref()
     }
-
     /// Build the supervised explicit-retention controller when configured.
     pub(crate) fn retention_controller(
         &self,
@@ -243,14 +229,12 @@ impl PreparedReputationFinalizedArchiveV1 {
         })
     }
 }
-
 /// Exact configured retention authority retained after startup qualification.
 #[derive(Clone)]
 pub(crate) struct QualifiedReputationRetentionAuthorityV1 {
     binding: ReputationFinalizedArchiveRetentionAuthorityBindingV1,
     authority: Arc<dyn ReputationFinalizedArchiveRetentionAuthorityV1>,
 }
-
 impl fmt::Debug for QualifiedReputationRetentionAuthorityV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -260,7 +244,6 @@ impl fmt::Debug for QualifiedReputationRetentionAuthorityV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// One supervised result for the explicit finalized-archive retention control.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ReputationFinalizedArchiveRetentionControlOutcomeV1 {
@@ -285,7 +268,6 @@ pub(crate) enum ReputationFinalizedArchiveRetentionControlOutcomeV1 {
         compaction: ReputationFinalizedArchiveCompactionOutcomeV1,
     },
 }
-
 /// Fail-closed error while reconciling explicit finalized-archive retention.
 #[derive(Debug)]
 pub(crate) enum ReputationFinalizedArchiveRetentionControlErrorV1 {
@@ -305,7 +287,6 @@ pub(crate) enum ReputationFinalizedArchiveRetentionControlErrorV1 {
         source: Box<ReputationFinalizedArchiveError>,
     },
 }
-
 impl fmt::Display for ReputationFinalizedArchiveRetentionControlErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -324,7 +305,6 @@ impl fmt::Display for ReputationFinalizedArchiveRetentionControlErrorV1 {
         }
     }
 }
-
 impl std::error::Error for ReputationFinalizedArchiveRetentionControlErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -333,7 +313,6 @@ impl std::error::Error for ReputationFinalizedArchiveRetentionControlErrorV1 {
         }
     }
 }
-
 /// Runtime contract consumed by the supervised reputation worker.
 pub(crate) trait ReputationFinalizedArchiveRetentionControlV1:
     fmt::Debug + Send + Sync
@@ -342,7 +321,6 @@ pub(crate) trait ReputationFinalizedArchiveRetentionControlV1:
     fn revalidate(
         &self,
     ) -> std::result::Result<(), ReputationFinalizedArchiveRetentionControlErrorV1>;
-
     /// Reconcile the latest explicit caller-signed committed request once.
     fn reconcile_once(
         &self,
@@ -351,7 +329,6 @@ pub(crate) trait ReputationFinalizedArchiveRetentionControlV1:
         ReputationFinalizedArchiveRetentionControlErrorV1,
     >;
 }
-
 /// State/Kura/archive-bound implementation of explicit governed retention.
 #[derive(Clone)]
 pub(crate) struct ReputationFinalizedArchiveRetentionControllerV1 {
@@ -362,7 +339,6 @@ pub(crate) struct ReputationFinalizedArchiveRetentionControllerV1 {
     binding: ReputationFinalizedArchiveRetentionAuthorityBindingV1,
     authority: Arc<dyn ReputationFinalizedArchiveRetentionAuthorityV1>,
 }
-
 impl fmt::Debug for ReputationFinalizedArchiveRetentionControllerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -374,20 +350,17 @@ impl fmt::Debug for ReputationFinalizedArchiveRetentionControllerV1 {
             .finish_non_exhaustive()
     }
 }
-
 #[derive(Debug)]
 struct ReputationRetentionAuthorizationSnapshotV1 {
     request: ReputationFinalizedArchiveRetentionRequestV1,
     authorization_anchor: ReputationFinalizedArchiveKeyV1,
     qualification: ReputationFinalizedArchiveQualificationV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReputationRetentionDecisionV1 {
     Apply(ReputationFinalizedArchiveKeyV1),
     AlreadyApplied(ReputationFinalizedArchiveKeyV1),
 }
-
 impl ReputationFinalizedArchiveRetentionControllerV1 {
     fn archive_error(
         source: ReputationFinalizedArchiveError,
@@ -396,7 +369,6 @@ impl ReputationFinalizedArchiveRetentionControllerV1 {
             source: Box::new(source),
         }
     }
-
     fn revalidate_authority(
         &self,
     ) -> std::result::Result<(), ReputationFinalizedArchiveRetentionControlErrorV1> {
@@ -419,7 +391,6 @@ impl ReputationFinalizedArchiveRetentionControllerV1 {
         }
         Ok(())
     }
-
     fn authorization_snapshot(
         &self,
     ) -> std::result::Result<
@@ -531,7 +502,6 @@ impl ReputationFinalizedArchiveRetentionControllerV1 {
             qualification,
         }))
     }
-
     fn classify(
         snapshot: &ReputationRetentionAuthorizationSnapshotV1,
     ) -> std::result::Result<
@@ -546,7 +516,6 @@ impl ReputationFinalizedArchiveRetentionControllerV1 {
         )
     }
 }
-
 fn classify_retention_request(
     request: &ReputationFinalizedArchiveRetentionRequestV1,
     authorization_anchor: &ReputationFinalizedArchiveKeyV1,
@@ -601,7 +570,6 @@ fn classify_retention_request(
     }
     Ok(ReputationRetentionDecisionV1::Apply(target))
 }
-
 impl ReputationFinalizedArchiveRetentionControlV1
     for ReputationFinalizedArchiveRetentionControllerV1
 {
@@ -610,7 +578,6 @@ impl ReputationFinalizedArchiveRetentionControlV1
     ) -> std::result::Result<(), ReputationFinalizedArchiveRetentionControlErrorV1> {
         self.revalidate_authority()
     }
-
     fn reconcile_once(
         &self,
     ) -> std::result::Result<
@@ -641,7 +608,6 @@ impl ReputationFinalizedArchiveRetentionControlV1
             .archive
             .prepare_kura_authenticated_compaction(&fence, self.kura.as_ref())
             .map_err(Self::archive_error)?;
-
         let refreshed = self.authorization_snapshot()?.ok_or(
             ReputationFinalizedArchiveRetentionControlErrorV1::Boundary {
                 reason: "retention authorization was removed before approval",
@@ -675,20 +641,17 @@ impl ReputationFinalizedArchiveRetentionControlV1
         )
     }
 }
-
 impl QualifiedReputationRetentionAuthorityV1 {
     /// Return the exact credential-free expected authority binding.
     pub(crate) const fn binding(&self) -> &ReputationFinalizedArchiveRetentionAuthorityBindingV1 {
         &self.binding
     }
-
     /// Return the runtime-only deployment-owned authority.
     pub(crate) const fn authority(
         &self,
     ) -> &Arc<dyn ReputationFinalizedArchiveRetentionAuthorityV1> {
         &self.authority
     }
-
     fn revalidate(&self) -> Result<(), ReputationFinalizedArchiveStartupErrorV1> {
         let handle_before = self.authority.handle();
         let qualification = self.authority.qualification().map_err(|_| {
@@ -710,14 +673,12 @@ impl QualifiedReputationRetentionAuthorityV1 {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArchiveStartupBoundaryV1 {
     Bootstrap,
     Qualified,
     PendingTip { height: u64 },
 }
-
 fn classify_archive_startup_boundary(
     state_height: u64,
     kura_height: u64,
@@ -743,7 +704,6 @@ fn classify_archive_startup_boundary(
         height: pending_height,
     })
 }
-
 fn validate_pending_archive_tip(
     pending_tip_height: u64,
     state_height: u64,
@@ -763,7 +723,6 @@ fn validate_pending_archive_tip(
         None => Err("non-genesis pending V2 replay requires an authenticated archive anchor"),
     }
 }
-
 fn classify_pending_replay_completion(
     expected_height: u64,
     durable_height: u64,
@@ -779,14 +738,12 @@ fn classify_pending_replay_completion(
         Some(_) => Err("recovery exposed a mismatched pending V2 durable tip"),
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArchiveActivationGateV1 {
     StrictLive,
     AwaitingGenesis,
     PendingTip { height: u64 },
 }
-
 impl ArchiveActivationGateV1 {
     fn accepts_visible_archive_tip(self, archive_tip_height: u64) -> bool {
         match self {
@@ -795,13 +752,11 @@ impl ArchiveActivationGateV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ArchiveActivationBoundaryV1 {
     state_height: u64,
     durable_kura_blocks: u64,
 }
-
 /// Cloneable fail-closed activation probe for deferred reputation assembly.
 #[derive(Clone)]
 pub(crate) struct ReputationFinalizedArchiveActivationV1 {
@@ -812,7 +767,6 @@ pub(crate) struct ReputationFinalizedArchiveActivationV1 {
     maximum_kura_tip_lag_blocks: u64,
     gate: ArchiveActivationGateV1,
 }
-
 impl fmt::Debug for ReputationFinalizedArchiveActivationV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -827,7 +781,6 @@ impl fmt::Debug for ReputationFinalizedArchiveActivationV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ReputationFinalizedArchiveActivationV1 {
     /// Return true only after the archive satisfies ordinary configured live
     /// qualification and any frozen pending tip revalidates as fully
@@ -862,7 +815,6 @@ impl ReputationFinalizedArchiveActivationV1 {
             ArchiveActivationGateV1::PendingTip { height } => self.pending_tip_activation(height),
         }
     }
-
     fn strict_qualification_is_ready(
         &self,
         qualification: Option<&ReputationFinalizedArchiveQualificationV1>,
@@ -884,7 +836,6 @@ impl ReputationFinalizedArchiveActivationV1 {
             }
         }
     }
-
     fn awaiting_genesis_activation(
         &self,
         strict_result: Result<
@@ -909,7 +860,6 @@ impl ReputationFinalizedArchiveActivationV1 {
             reason: "reputation genesis archive tip is not visible through committed State",
         })
     }
-
     fn pending_tip_activation(
         &self,
         pending_tip_height: u64,
@@ -938,7 +888,6 @@ impl ReputationFinalizedArchiveActivationV1 {
         .map_err(|reason| ReputationFinalizedArchiveError::FinalityAuthentication { reason })?;
         Ok(false)
     }
-
     fn activation_boundary(
         &self,
         kura_operation: &'static str,
@@ -971,7 +920,6 @@ impl ReputationFinalizedArchiveActivationV1 {
             durable_kura_blocks: kura_height,
         })
     }
-
     fn qualification_is_visible(
         &self,
         qualification: &ReputationFinalizedArchiveQualificationV1,
@@ -1004,7 +952,6 @@ impl ReputationFinalizedArchiveActivationV1 {
         }
         Ok(true)
     }
-
     fn pending_replay_complete(
         &self,
         expected_height: u64,
@@ -1028,15 +975,12 @@ impl ReputationFinalizedArchiveActivationV1 {
         .map_err(|reason| ReputationFinalizedArchiveError::FinalityAuthentication { reason })
     }
 }
-
 type ArchiveStartupResultV1<T> = std::result::Result<T, ReputationFinalizedArchiveStartupErrorV1>;
-
 struct AuthenticatedArchiveStartupV1<'state> {
     state_view: StateQueryView<'state>,
     state_height: u64,
     boundary: ArchiveStartupBoundaryV1,
 }
-
 fn archive_startup_error(
     stage: &'static str,
     source: ReputationFinalizedArchiveError,
@@ -1046,7 +990,6 @@ fn archive_startup_error(
         source: Box::new(source),
     }
 }
-
 fn open_reputation_finalized_archive(
     config: &SorafsReputationRuntime,
     network_id: &NetworkId,
@@ -1112,7 +1055,6 @@ fn open_reputation_finalized_archive(
         .map(|archive| (archive, qualified_authority))
         .map_err(|source| archive_startup_error("durable open and retention recovery", source))
 }
-
 fn authenticate_archive_startup<'state>(
     state: &'state State,
     kura: &Kura,
@@ -1156,7 +1098,6 @@ fn authenticate_archive_startup<'state>(
         boundary,
     })
 }
-
 fn qualify_existing_archive(
     archive: &ReputationFinalizedArchive,
     network_id: &NetworkId,
@@ -1175,7 +1116,6 @@ fn qualify_existing_archive(
         live_qualification,
     })
 }
-
 fn qualify_pending_archive(
     archive: &ReputationFinalizedArchive,
     network_id: &NetworkId,
@@ -1185,7 +1125,6 @@ fn qualify_pending_archive(
         .qualify_against_kura_tip(network_id, kura, 1)
         .map_err(|source| archive_startup_error("pending-tip one-block qualification", source))
 }
-
 fn capture_pending_archive_predecessor(
     archive: &ReputationFinalizedArchive,
     kura: &Kura,
@@ -1206,7 +1145,6 @@ fn capture_pending_archive_predecessor(
         .map_err(|source| archive_startup_error("pending-tip predecessor capture", source))?;
     Ok(())
 }
-
 fn prepare_pending_archive_mode(
     archive: &ReputationFinalizedArchive,
     network_id: &NetworkId,
@@ -1245,7 +1183,6 @@ fn prepare_pending_archive_mode(
         activation_floor_created,
     })
 }
-
 fn prepare_archive_startup_mode(
     archive: &ReputationFinalizedArchive,
     network_id: &NetworkId,
@@ -1275,7 +1212,6 @@ fn prepare_archive_startup_mode(
         }
     }
 }
-
 /// Open and qualify the deployment-owned reputation archive before consensus.
 ///
 /// The exact Kura-tip reconciliation always uses a zero-gap barrier. Only
@@ -1336,7 +1272,6 @@ pub(crate) fn prepare_reputation_finalized_archive_v1(
         retention_authority,
     })
 }
-
 /// Production finalized-query adapter over immutable reputation archive rows.
 #[derive(Debug)]
 pub struct ArchivedReputationFinalizedQueryV1 {
@@ -1344,7 +1279,6 @@ pub struct ArchivedReputationFinalizedQueryV1 {
     qualification: ReputationRuntimeProviderQualificationV1,
     archive: Arc<ReputationFinalizedArchive>,
 }
-
 impl ArchivedReputationFinalizedQueryV1 {
     /// Bind one public runtime identity and qualification to a durable archive.
     ///
@@ -1379,7 +1313,6 @@ impl ArchivedReputationFinalizedQueryV1 {
             archive,
         })
     }
-
     fn ensure_at_or_above_activation_floor(
         &self,
         network_id: &NetworkId,
@@ -1395,7 +1328,6 @@ impl ArchivedReputationFinalizedQueryV1 {
         }
         Ok(())
     }
-
     fn select_at_or_before(
         &self,
         network_id: &NetworkId,
@@ -1410,7 +1342,6 @@ impl ArchivedReputationFinalizedQueryV1 {
             .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
             .ok_or_else(|| external_failure(FAILURE_MISSING_ANCHOR))
     }
-
     fn select_delivery_at_or_before(
         &self,
         network_id: &NetworkId,
@@ -1425,7 +1356,6 @@ impl ArchivedReputationFinalizedQueryV1 {
             .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
             .ok_or_else(|| external_failure(FAILURE_MISSING_ANCHOR))
     }
-
     fn load_exact(
         &self,
         anchor: &ReputationFinalizedAnchorV1,
@@ -1455,7 +1385,6 @@ impl ArchivedReputationFinalizedQueryV1 {
         }
         Ok(projection)
     }
-
     fn journal_page_from_projection(
         projection: &ReputationFinalizedProjectionV1,
         after: Option<ReputationJournalFinalizedEventCursorV1>,
@@ -1485,12 +1414,10 @@ impl ArchivedReputationFinalizedQueryV1 {
         Ok(page)
     }
 }
-
 impl ReputationRuntimeProviderV1 for ArchivedReputationFinalizedQueryV1 {
     fn handle(&self) -> &str {
         &self.handle
     }
-
     fn qualification(&self) -> ExternalResult<ReputationRuntimeProviderQualificationV1> {
         // Provider identity readiness is valid before genesis capture, but it
         // still rescans the complete empty namespace. Once any record exists,
@@ -1508,7 +1435,6 @@ impl ReputationRuntimeProviderV1 for ArchivedReputationFinalizedQueryV1 {
         Ok(self.qualification)
     }
 }
-
 impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
     fn finalized_at_or_before(
         &self,
@@ -1518,7 +1444,6 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
         let projection = self.select_at_or_before(network_id, maximum_height)?;
         Ok(anchor_from_projection(&projection))
     }
-
     fn reputation_journal_delivery_view(
         &self,
         network_id: &NetworkId,
@@ -1540,7 +1465,6 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
             .map_err(|_| external_failure(FAILURE_PAGE_BOUNDS))?;
         Ok(view)
     }
-
     fn reputation_journal_event_by_source_id(
         &self,
         network_id: &NetworkId,
@@ -1605,7 +1529,6 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
             .map_err(|_| external_failure(FAILURE_PAGE_BOUNDS))?;
         Ok(view)
     }
-
     fn proof_outcome_page(
         &self,
         anchor: &ReputationFinalizedAnchorV1,
@@ -1632,7 +1555,6 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
             },
         )
     }
-
     fn reputation_journal_page(
         &self,
         anchor: &ReputationFinalizedAnchorV1,
@@ -1642,7 +1564,6 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
         let projection = self.load_exact(anchor)?;
         Self::journal_page_from_projection(&projection, after, limit)
     }
-
     fn repair_page(
         &self,
         anchor: &ReputationFinalizedAnchorV1,
@@ -1670,7 +1591,6 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
             },
         )
     }
-
     fn orderbook_page(
         &self,
         anchor: &ReputationFinalizedAnchorV1,
@@ -1698,7 +1618,6 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
             },
         )
     }
-
     fn reserve_page(
         &self,
         anchor: &ReputationFinalizedAnchorV1,
@@ -1726,7 +1645,6 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
             },
         )
     }
-
     fn reserve_provider_page(
         &self,
         anchor: &ReputationFinalizedAnchorV1,
@@ -1755,9 +1673,7 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
         )
     }
 }
-
 type ExternalResult<T> = std::result::Result<T, ReputationExternalFailureV1>;
-
 fn anchor_from_projection(
     projection: &ReputationFinalizedProjectionV1,
 ) -> ReputationFinalizedAnchorV1 {
@@ -1770,7 +1686,6 @@ fn anchor_from_projection(
         finalized_at_unix_ms: projection.finalized_at_unix_ms,
     }
 }
-
 fn materialize_bounded_page<T, C, P>(
     all: &[T],
     after: Option<C>,
@@ -1821,7 +1736,6 @@ where
     if minimum_end == maximum_end {
         return Err(external_failure(FAILURE_PAGE_BOUNDS));
     }
-
     let mut lower = minimum_end;
     let mut upper = maximum_end - 1;
     let mut best = None;
@@ -1846,16 +1760,13 @@ where
     }
     best.ok_or_else(|| external_failure(FAILURE_PAGE_BOUNDS))
 }
-
 fn external_failure(marker: u8) -> ReputationExternalFailureV1 {
     ReputationExternalFailureV1::try_new([marker; 32])
         .expect("fixed finalized-query failure markers are non-zero")
 }
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-
     use iroha_config::base::util::Bytes;
     use iroha_core::{
         query::{
@@ -1875,11 +1786,8 @@ mod tests {
         },
     };
     use tempfile::TempDir;
-
     use super::*;
-
     const FINALIZED_AT_MS: u64 = 1_800_000_010_000;
-
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(
             HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -1887,7 +1795,6 @@ mod tests {
             )),
         )
     }
-
     fn runtime_config(root: PathBuf) -> SorafsReputationRuntime {
         SorafsReputationRuntime {
             state_dir: root.with_extension("state"),
@@ -1932,7 +1839,6 @@ mod tests {
             repair_breach_bps: 1_000,
         }
     }
-
     fn retention_request(
         target_height: u64,
         target_hash: [u8; 32],
@@ -1946,12 +1852,10 @@ mod tests {
         )
         .expect("valid request")
     }
-
     fn archive_key(height: u64, block_hash: [u8; 32]) -> ReputationFinalizedArchiveKeyV1 {
         ReputationFinalizedArchiveKeyV1::try_new(network_id(0x61), height, block_hash)
             .expect("valid archive key")
     }
-
     #[test]
     fn explicit_retention_classification_is_fresh_monotonic_and_idempotent() {
         let request = retention_request(7, [0x71; 32]);
@@ -1962,7 +1866,6 @@ mod tests {
                 .expect("physical target remains actionable"),
             ReputationRetentionDecisionV1::Apply(archive_key(7, [0x71; 32]))
         );
-
         let checkpoint_floor = archive_key(7, [0x71; 32]);
         assert_eq!(
             classify_retention_request(
@@ -1997,7 +1900,6 @@ mod tests {
             Err(ReputationFinalizedArchiveRetentionControlErrorV1::Boundary { .. })
         ));
     }
-
     #[test]
     fn enabled_retention_fails_before_open_without_injected_authority() {
         let directory = TempDir::new().expect("create archive directory");
@@ -2014,13 +1916,11 @@ mod tests {
         );
         let kura = Kura::blank_kura_for_testing();
         let network_id = network_id(0x63);
-
         assert!(matches!(
             open_reputation_finalized_archive(&config, &network_id, kura.as_ref(), None,),
             Err(ReputationFinalizedArchiveStartupErrorV1::RetentionAuthorityConfiguration { .. })
         ));
     }
-
     #[test]
     fn fresh_height_zero_opens_empty_archive_for_genesis_capture() {
         let directory = TempDir::new().expect("create archive directory");
@@ -2061,7 +1961,6 @@ mod tests {
             "identity readiness must not pretend genesis is already captured"
         );
     }
-
     #[test]
     fn fresh_height_zero_rejects_archive_for_another_chain() {
         let directory = TempDir::new().expect("create archive directory");
@@ -2107,7 +2006,6 @@ mod tests {
             ReputationFinalizedArchiveStartupErrorV1::StartupBoundary { .. }
         ));
     }
-
     #[test]
     fn pending_boundary_allows_only_exact_tip_or_predecessor() {
         assert_eq!(
@@ -2121,7 +2019,6 @@ mod tests {
         assert!(classify_archive_startup_boundary(6, 8, Some(8)).is_err());
         assert!(classify_archive_startup_boundary(7, 8, None).is_err());
         assert!(classify_archive_startup_boundary(7, 8, Some(9)).is_err());
-
         assert_eq!(validate_pending_archive_tip(8, 7, Some(7)), Ok(()));
         assert_eq!(validate_pending_archive_tip(8, 7, Some(8)), Ok(()));
         assert_eq!(validate_pending_archive_tip(8, 8, Some(8)), Ok(()));
@@ -2131,7 +2028,6 @@ mod tests {
         assert!(validate_pending_archive_tip(8, 7, None).is_err());
         assert_eq!(validate_pending_archive_tip(1, 0, None), Ok(()));
         assert!(validate_pending_archive_tip(1, 1, None).is_err());
-
         let gate = ArchiveActivationGateV1::PendingTip { height: 8 };
         assert!(!gate.accepts_visible_archive_tip(7));
         assert!(gate.accepts_visible_archive_tip(8));
@@ -2147,7 +2043,6 @@ mod tests {
                 .activation_gate(),
             ArchiveActivationGateV1::AwaitingGenesis
         );
-
         assert_eq!(classify_pending_replay_completion(8, 8, Some(8)), Ok(false));
         assert_eq!(classify_pending_replay_completion(8, 8, None), Ok(true));
         assert_eq!(classify_pending_replay_completion(8, 9, None), Ok(true));
@@ -2156,13 +2051,11 @@ mod tests {
         assert!(classify_pending_replay_completion(8, 10, Some(9)).is_err());
         assert!(classify_pending_replay_completion(8, 8, Some(7)).is_err());
     }
-
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
             .expect("derive deterministic account");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn authority_policy() -> ReputationJournalAuthorityPolicyV1 {
         ReputationJournalAuthorityPolicyV1 {
             version: REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
@@ -2174,7 +2067,6 @@ mod tests {
             max_source_age_ms: 86_400_000,
         }
     }
-
     fn authority_record() -> ReputationJournalAuthorityPolicyRecordV1 {
         ReputationJournalAuthorityPolicyRecordV1::try_new(
             authority_policy(),
@@ -2183,7 +2075,6 @@ mod tests {
         )
         .expect("valid authority policy record")
     }
-
     fn journal_event(
         sequence: u64,
         event_index: u32,
@@ -2229,7 +2120,6 @@ mod tests {
             entry,
         }
     }
-
     fn projection(
         height: u64,
         block_hash: [u8; 32],
@@ -2248,14 +2138,12 @@ mod tests {
             reserve_providers: Vec::new(),
         }
     }
-
     fn qualification() -> ReputationRuntimeProviderQualificationV1 {
         ReputationRuntimeProviderQualificationV1::new(
             REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
             [0xD1; 32],
         )
     }
-
     fn adapter_with(
         projections: impl IntoIterator<Item = ReputationFinalizedProjectionV1>,
     ) -> (TempDir, ArchivedReputationFinalizedQueryV1) {
@@ -2280,7 +2168,6 @@ mod tests {
         .expect("construct archived query");
         (directory, adapter)
     }
-
     fn anchor(height: u64, block_hash: [u8; 32]) -> ReputationFinalizedAnchorV1 {
         ReputationFinalizedAnchorV1 {
             network_id: network_id(0x61),
@@ -2288,14 +2175,12 @@ mod tests {
             finalized_at_unix_ms: FINALIZED_AT_MS,
         }
     }
-
     #[test]
     fn selects_historical_anchor_at_or_before_bound() {
         let (_directory, adapter) = adapter_with([
             projection(7, [0x71; 32], Vec::new()),
             projection(9, [0x91; 32], Vec::new()),
         ]);
-
         assert_eq!(adapter.handle(), "reputation-archive:region-a");
         assert_eq!(
             adapter.qualification().expect("qualification"),
@@ -2326,7 +2211,6 @@ mod tests {
             [FAILURE_BELOW_ACTIVATION_FLOOR; 32]
         );
     }
-
     #[test]
     fn live_qualification_rejects_post_start_archive_corruption() {
         let exact = projection(7, [0x71; 32], Vec::new());
@@ -2335,7 +2219,6 @@ mod tests {
             adapter.qualification().expect("healthy qualification"),
             qualification()
         );
-
         let path = adapter
             .archive
             .record_path(&exact.key)
@@ -2344,13 +2227,11 @@ mod tests {
         let last = bytes.last_mut().expect("archive record is non-empty");
         *last ^= 0xFF;
         std::fs::write(path, bytes).expect("corrupt archive record");
-
         assert!(
             adapter.qualification().is_err(),
             "live qualification must rescan the durable generation"
         );
     }
-
     #[test]
     fn journal_cursor_and_delivery_view_remain_on_one_archive_row() {
         let block_hash = [0x91; 32];
@@ -2362,21 +2243,18 @@ mod tests {
             vec![first.clone(), second.clone()],
         )]);
         let exact_anchor = anchor(9, block_hash);
-
         let first_page = adapter
             .reputation_journal_page(&exact_anchor, None, 1)
             .expect("first journal page");
         assert_eq!(first_page.events, vec![first.clone()]);
         assert!(first_page.has_more);
         assert_eq!(first_page.next_after, Some(first.cursor()));
-
         let second_page = adapter
             .reputation_journal_page(&exact_anchor, first_page.next_after, 1)
             .expect("second journal page");
         assert_eq!(second_page.events, vec![second.clone()]);
         assert!(!second_page.has_more);
         assert_eq!(second_page.next_after, None);
-
         let delivery = adapter
             .reputation_journal_delivery_view(
                 &network_id(0x61),
@@ -2393,7 +2271,6 @@ mod tests {
         assert_eq!(delivery.authority_policy, authority_record());
         assert_eq!(delivery.authority_policy_history, vec![authority_record()]);
         assert_eq!(delivery.journal_page.events, vec![second.clone()]);
-
         let finalized_cursor = ReputationJournalFinalizedCursorV1 {
             height: exact_anchor.identity.height,
             block_hash: exact_anchor.identity.block_hash,
@@ -2411,7 +2288,6 @@ mod tests {
             .expect("source response matches request");
         assert_eq!(source.anchor, exact_anchor);
         assert_eq!(source.event, Some(second));
-
         let absent_query = FindSorafsReputationJournalEventBySourceId::new(
             iroha_data_model::sorafs::reputation::ReputationJournalSourceIdV1::for_por_challenge(
                 [0xFE; 32],
@@ -2422,7 +2298,6 @@ mod tests {
             .reputation_journal_event_by_source_id(&network_id(0x61), 9, absent_query)
             .expect("complete archive proves source absence");
         assert_eq!(absent.event, None);
-
         let mut stale_cursor = first.cursor();
         stale_cursor.block_hash = [0x92; 32];
         assert!(
@@ -2431,7 +2306,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn source_query_expected_cursor_selects_exact_historical_archive_row() {
         let historical_hash = [0x81; 32];
@@ -2451,16 +2325,13 @@ mod tests {
             historical_event.entry.source_id,
             Some(historical_cursor),
         );
-
         let view = adapter
             .reputation_journal_event_by_source_id(&network_id(0x61), 9, query)
             .expect("load exact historical source view");
-
         assert_eq!(view.anchor, anchor(8, historical_hash));
         assert_eq!(view.event, Some(historical_event));
         view.validate_for_request(&network_id(0x61), 9, query)
             .expect("historical response honors the expected cursor");
-
         let timestamp_substitution = FindSorafsReputationJournalEventBySourceId::new(
             query.source_id(),
             Some(ReputationJournalFinalizedCursorV1 {
@@ -2480,7 +2351,6 @@ mod tests {
             [FAILURE_ANCHOR_MISMATCH; 32]
         );
     }
-
     #[test]
     fn source_query_reports_explicit_activation_floor_before_archive_selection() {
         let floor_hash = [0x71; 32];
@@ -2497,7 +2367,6 @@ mod tests {
                 .receipt(),
             [FAILURE_BELOW_ACTIVATION_FLOOR; 32]
         );
-
         let below_floor_cursor = ReputationJournalFinalizedCursorV1 {
             height: 6,
             block_hash: [0x61; 32],
@@ -2514,7 +2383,6 @@ mod tests {
                 .receipt(),
             [FAILURE_BELOW_ACTIVATION_FLOOR; 32]
         );
-
         let missing_above_floor = FindSorafsReputationJournalEventBySourceId::new(
             floor_event.entry.source_id,
             Some(ReputationJournalFinalizedCursorV1 {
@@ -2530,7 +2398,6 @@ mod tests {
                 .receipt(),
             [FAILURE_MISSING_ANCHOR; 32]
         );
-
         let mismatched_floor_time = FindSorafsReputationJournalEventBySourceId::new(
             floor_event.entry.source_id,
             Some(ReputationJournalFinalizedCursorV1 {
@@ -2547,7 +2414,6 @@ mod tests {
             [FAILURE_ANCHOR_MISMATCH; 32]
         );
     }
-
     #[test]
     fn source_query_preserves_archive_read_failure_receipt() {
         let block_hash = [0x71; 32];
@@ -2563,7 +2429,6 @@ mod tests {
         let last = bytes.last_mut().expect("archive record is non-empty");
         *last ^= 0x01;
         std::fs::write(path, bytes).expect("corrupt archive record");
-
         let query = FindSorafsReputationJournalEventBySourceId::new(event.entry.source_id, None);
         assert_eq!(
             adapter
@@ -2573,7 +2438,6 @@ mod tests {
             [FAILURE_ARCHIVE_READ; 32]
         );
     }
-
     #[test]
     fn page_byte_fitting_selects_the_largest_bounded_prefix() {
         let block_hash = [0x91; 32];
@@ -2621,13 +2485,11 @@ mod tests {
         assert!(page.has_more);
         assert_eq!(page.next_after, Some(events[2].cursor()));
     }
-
     #[test]
     fn rejects_invalid_page_limits() {
         let block_hash = [0x71; 32];
         let (_directory, adapter) = adapter_with([projection(7, block_hash, Vec::new())]);
         let exact_anchor = anchor(7, block_hash);
-
         assert!(adapter.proof_outcome_page(&exact_anchor, None, 0).is_err());
         assert!(
             adapter
@@ -2677,13 +2539,11 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn rejects_invalid_cursors_and_mismatched_exact_anchors() {
         let block_hash = [0x71; 32];
         let (_directory, adapter) = adapter_with([projection(7, block_hash, Vec::new())]);
         let exact_anchor = anchor(7, block_hash);
-
         assert!(
             adapter
                 .proof_outcome_page(
@@ -2745,7 +2605,6 @@ mod tests {
                 .reserve_provider_page(&exact_anchor, Some(ProviderId::new([0x31; 32])), 1,)
                 .is_err()
         );
-
         let mut wrong_hash = exact_anchor.clone();
         wrong_hash.identity.block_hash = [0x72; 32];
         assert!(adapter.proof_outcome_page(&wrong_hash, None, 1).is_err());
@@ -2760,13 +2619,11 @@ mod tests {
         wrong_chain.network_id = network_id(0x62);
         assert!(adapter.proof_outcome_page(&wrong_chain, None, 1).is_err());
     }
-
     #[test]
     fn empty_pages_are_terminal_and_share_the_exact_anchor() {
         let block_hash = [0x71; 32];
         let (_directory, adapter) = adapter_with([projection(7, block_hash, Vec::new())]);
         let exact_anchor = anchor(7, block_hash);
-
         let proof = adapter
             .proof_outcome_page(&exact_anchor, None, 1)
             .expect("empty proof page");
@@ -2775,7 +2632,6 @@ mod tests {
         assert_eq!(proof.next_after, None);
         assert_eq!(proof.finalized_cursor.height, 7);
         assert_eq!(proof.finalized_cursor.block_hash, block_hash);
-
         let journal = adapter
             .reputation_journal_page(&exact_anchor, None, 1)
             .expect("empty journal page");
@@ -2786,28 +2642,24 @@ mod tests {
             journal.finalized_cursor.finalized_at_unix_ms,
             FINALIZED_AT_MS
         );
-
         let repair = adapter
             .repair_page(&exact_anchor, None, 1)
             .expect("empty repair page");
         assert!(repair.events.is_empty());
         assert!(!repair.has_more);
         assert_eq!(repair.next_after, None);
-
         let orderbook = adapter
             .orderbook_page(&exact_anchor, None, 1)
             .expect("empty orderbook page");
         assert!(orderbook.events.is_empty());
         assert!(!orderbook.has_more);
         assert_eq!(orderbook.next_after, None);
-
         let reserve = adapter
             .reserve_page(&exact_anchor, None, 1)
             .expect("empty reserve page");
         assert!(reserve.events.is_empty());
         assert!(!reserve.has_more);
         assert_eq!(reserve.next_after, None);
-
         let providers = adapter
             .reserve_provider_page(&exact_anchor, None, 1)
             .expect("empty provider page");
@@ -2815,7 +2667,6 @@ mod tests {
         assert!(!providers.has_more);
         assert_eq!(providers.next_after, None);
     }
-
     #[test]
     fn construction_rejects_test_handles_and_invalid_qualification() {
         let directory = TempDir::new().expect("create archive directory");

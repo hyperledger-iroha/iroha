@@ -15,30 +15,23 @@
     clippy::vec_init_then_push
 )]
 //! Izanami chaosnet tool for orchestrating fault-injection scenarios on local Iroha clusters.
-
 mod chaos;
 mod config;
 mod instructions;
 mod persistence;
 mod smart_contracts;
 mod tui;
-
 pub use izanami::faults;
-
 use clap::{ArgMatches, CommandFactory, FromArgMatches, parser::ValueSource};
 use color_eyre::Result;
-
 use crate::config::IzanamiArgs;
-
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
     let command = config::IzanamiArgs::command();
     let matches = command.get_matches();
-
     let args = config::IzanamiArgs::from_arg_matches(&matches)
         .expect("command-generated matches should parse");
-
     if args.tui {
         let defaults = config::IzanamiArgs::defaults();
         let persisted = persistence::load_args()?.unwrap_or_else(|| defaults.clone());
@@ -60,7 +53,6 @@ async fn main() -> Result<()> {
         chaos::IzanamiRunner::new(config).await?.run().await
     }
 }
-
 fn merge_with_overrides(
     mut base: IzanamiArgs,
     overrides: &IzanamiArgs,
@@ -178,10 +170,8 @@ fn merge_with_overrides(
     base.tui = overrides.tui;
     base
 }
-
 fn is_cli_source(matches: &ArgMatches, id: &str) -> bool {
     use std::borrow::Cow;
-
     let mut variants: Vec<Cow<'_, str>> = vec![Cow::Borrowed(id)];
     if id.contains('-') {
         variants.push(Cow::Owned(id.replace('-', "_")));
@@ -189,7 +179,6 @@ fn is_cli_source(matches: &ArgMatches, id: &str) -> bool {
     if id.contains('_') {
         variants.push(Cow::Owned(id.replace('_', "-")));
     }
-
     for candidate in variants {
         let needle = candidate.as_ref();
         if matches.ids().any(|existing| existing.as_str() == needle)
@@ -202,16 +191,12 @@ fn is_cli_source(matches: &ArgMatches, id: &str) -> bool {
     }
     false
 }
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
-
     use clap::{CommandFactory, FromArgMatches};
-
     use super::*;
     use crate::config;
-
     fn parse_cli_arguments(args: Vec<String>) -> (IzanamiArgs, ArgMatches) {
         let command = config::IzanamiArgs::command();
         let matches = command
@@ -221,7 +206,6 @@ mod tests {
             .expect("matches produced by clap should be valid");
         (parsed, matches)
     }
-
     #[test]
     fn tui_cli_overrides_persisted_peers_even_when_default() {
         let defaults = config::IzanamiArgs::defaults();
@@ -244,7 +228,6 @@ mod tests {
         persisted.log_filter = "debug".to_string();
         persisted.fault_interval_min = Duration::from_secs(1);
         persisted.fault_interval_max = Duration::from_secs(2);
-
         let peers_arg = defaults.peers.to_string();
         let (cli_args, matches) = parse_cli_arguments(vec![
             "izanami".to_string(),
@@ -252,9 +235,7 @@ mod tests {
             "--peers".to_string(),
             peers_arg,
         ]);
-
         let merged = merge_with_overrides(persisted.clone(), &cli_args, &matches);
-
         assert!(merged.tui, "cli --tui flag should be respected");
         assert_eq!(merged.peers, defaults.peers);
         assert_eq!(merged.faulty, persisted.faulty);
@@ -277,7 +258,6 @@ mod tests {
         assert_eq!(merged.fault_interval_min, persisted.fault_interval_min);
         assert_eq!(merged.fault_interval_max, persisted.fault_interval_max);
     }
-
     #[test]
     fn cli_value_matching_default_replaces_persisted_setting() {
         let defaults = config::IzanamiArgs::defaults();
@@ -291,7 +271,6 @@ mod tests {
         persisted.shutdown_drain_timeout = Duration::from_secs(31);
         persisted.fault_window_start = Some(Duration::from_secs(5));
         persisted.fault_window_end = Some(Duration::from_secs(10));
-
         let max_inflight_arg = defaults.max_inflight.to_string();
         let (cli_args, matches) = parse_cli_arguments(vec![
             "izanami".to_string(),
@@ -299,9 +278,7 @@ mod tests {
             "--max-inflight".to_string(),
             max_inflight_arg,
         ]);
-
         let merged = merge_with_overrides(persisted.clone(), &cli_args, &matches);
-
         assert_eq!(merged.max_inflight, defaults.max_inflight);
         assert_eq!(merged.submitters, persisted.submitters);
         assert_eq!(merged.peers, persisted.peers);
@@ -316,14 +293,12 @@ mod tests {
         assert_eq!(merged.fault_window_start, persisted.fault_window_start);
         assert_eq!(merged.fault_window_end, persisted.fault_window_end);
     }
-
     #[test]
     fn cli_overrides_fault_window_offsets() {
         let defaults = config::IzanamiArgs::defaults();
         let mut persisted = defaults.clone();
         persisted.fault_window_start = Some(Duration::from_secs(33));
         persisted.fault_window_end = Some(Duration::from_secs(66));
-
         let (cli_args, matches) = parse_cli_arguments(vec![
             "izanami".to_string(),
             "--tui".to_string(),
@@ -332,20 +307,16 @@ mod tests {
             "--fault-window-end".to_string(),
             "266s".to_string(),
         ]);
-
         let merged = merge_with_overrides(persisted, &cli_args, &matches);
-
         assert_eq!(merged.fault_window_start, Some(Duration::from_secs(133)));
         assert_eq!(merged.fault_window_end, Some(Duration::from_secs(266)));
     }
-
     #[test]
     fn cli_overrides_latency_p95_threshold() {
         let defaults = config::IzanamiArgs::defaults();
         let mut persisted = defaults.clone();
         persisted.target_blocks = Some(50);
         persisted.latency_p95_threshold = Some(Duration::from_millis(2_000));
-
         let (cli_args, matches) = parse_cli_arguments(vec![
             "izanami".to_string(),
             "--tui".to_string(),
@@ -354,21 +325,18 @@ mod tests {
             "--latency-p95-threshold".to_string(),
             "900ms".to_string(),
         ]);
-
         let merged = merge_with_overrides(persisted, &cli_args, &matches);
         assert_eq!(
             merged.latency_p95_threshold,
             Some(Duration::from_millis(900))
         );
     }
-
     #[test]
     fn cli_overrides_sumeragi_block_tuning() {
         let defaults = config::IzanamiArgs::defaults();
         let mut persisted = defaults.clone();
         persisted.sumeragi_block_max_transactions = 1_024;
         persisted.sumeragi_proposal_queue_scan_multiplier = 1;
-
         let (cli_args, matches) = parse_cli_arguments(vec![
             "izanami".to_string(),
             "--tui".to_string(),
@@ -377,48 +345,39 @@ mod tests {
             "--sumeragi-proposal-queue-scan-multiplier".to_string(),
             "2".to_string(),
         ]);
-
         let merged = merge_with_overrides(persisted, &cli_args, &matches);
         assert_eq!(merged.sumeragi_block_max_transactions, 1_536);
         assert_eq!(merged.sumeragi_proposal_queue_scan_multiplier, 2);
     }
-
     #[test]
     fn cli_overrides_shutdown_drain_timeout() {
         let defaults = config::IzanamiArgs::defaults();
         let mut persisted = defaults.clone();
         persisted.shutdown_drain_timeout = Duration::from_secs(9);
-
         let (cli_args, matches) = parse_cli_arguments(vec![
             "izanami".to_string(),
             "--tui".to_string(),
             "--shutdown-drain-timeout".to_string(),
             "60s".to_string(),
         ]);
-
         let merged = merge_with_overrides(persisted, &cli_args, &matches);
         assert_eq!(merged.shutdown_drain_timeout, Duration::from_secs(60));
     }
-
     #[test]
     fn cli_overrides_allow_contract_deploy_in_stable() {
         let defaults = config::IzanamiArgs::defaults();
         let mut persisted = defaults.clone();
         persisted.allow_contract_deploy_in_stable = false;
-
         let (cli_args, matches) = parse_cli_arguments(vec![
             "izanami".to_string(),
             "--allow-contract-deploy-in-stable".to_string(),
         ]);
-
         let merged = merge_with_overrides(persisted, &cli_args, &matches);
-
         assert!(
             merged.allow_contract_deploy_in_stable,
             "cli flag should enable contract deploys in stable runs"
         );
     }
-
     #[test]
     fn tui_cli_overrides_fault_toggles() {
         let defaults = config::IzanamiArgs::defaults();
@@ -434,7 +393,6 @@ mod tests {
             cpu_stress: false,
             disk_saturation: false,
         };
-
         let (cli_args, matches) = parse_cli_arguments(vec![
             "izanami".to_string(),
             "--tui".to_string(),
@@ -444,9 +402,7 @@ mod tests {
             "--fault-enable-spam-invalid-transactions".to_string(),
             "--fault-enable-cpu-stress".to_string(),
         ]);
-
         let merged = merge_with_overrides(persisted, &cli_args, &matches);
-
         assert!(merged.faults.crash_restart);
         assert!(merged.faults.wipe_storage);
         assert!(merged.faults.spam_invalid_transactions);
@@ -456,7 +412,6 @@ mod tests {
         assert!(!merged.faults.network_packet_loss);
         assert!(!merged.faults.disk_saturation);
     }
-
     #[test]
     fn cli_accepts_explicit_false_fault_toggles() {
         let (cli_args, _) = parse_cli_arguments(vec![
@@ -470,7 +425,6 @@ mod tests {
             "--fault-enable-cpu-stress=false".to_string(),
             "--fault-enable-disk-saturation=false".to_string(),
         ]);
-
         assert!(!cli_args.faults.crash_restart);
         assert!(!cli_args.faults.wipe_storage);
         assert!(!cli_args.faults.spam_invalid_transactions);
@@ -480,38 +434,30 @@ mod tests {
         assert!(!cli_args.faults.cpu_stress);
         assert!(!cli_args.faults.disk_saturation);
     }
-
     #[test]
     fn cli_overrides_packet_loss_percent() {
         let defaults = config::IzanamiArgs::defaults();
         let mut persisted = defaults.clone();
         persisted.packet_loss_percent = 75;
-
         let (cli_args, matches) = parse_cli_arguments(vec![
             "izanami".to_string(),
             "--fault-network-packet-loss-percent".to_string(),
             "25".to_string(),
         ]);
-
         let merged = merge_with_overrides(persisted, &cli_args, &matches);
-
         assert_eq!(merged.packet_loss_percent, 25);
     }
-
     #[test]
     fn cli_overrides_submitter_count() {
         let defaults = config::IzanamiArgs::defaults();
         let mut persisted = defaults.clone();
         persisted.submitters = 7;
-
         let (cli_args, matches) = parse_cli_arguments(vec![
             "izanami".to_string(),
             "--submitters".to_string(),
             "3".to_string(),
         ]);
-
         let merged = merge_with_overrides(persisted, &cli_args, &matches);
-
         assert_eq!(merged.submitters, 3);
     }
 }

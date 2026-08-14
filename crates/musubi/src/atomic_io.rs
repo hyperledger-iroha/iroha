@@ -4,7 +4,6 @@
 //! and then provide only a normal relative path. This deliberately prevents a
 //! path read from a lockfile or registry response from becoming an arbitrary
 //! filesystem target.
-
 use std::{
     ffi::OsString,
     fmt,
@@ -13,26 +12,22 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::os::fd::AsRawFd as _;
 #[cfg(unix)]
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
-
 const TEMP_CREATE_ATTEMPTS: u64 = 128;
 const POST_LINK_CLEANUP_ATTEMPTS: usize = 2;
 const TEMP_FILE_PREFIX: &str = ".musubi-tmp-";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
 #[cfg(all(test, unix))]
 std::thread_local! {
     static TEST_DIRECTORY_SYNC_FAILURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TEST_IMMUTABLE_READ_FIFO_SUBSTITUTIONS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
-
 #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
 std::thread_local! {
     static TEST_AFTER_DESCRIPTOR_TARGET_BIND: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
@@ -40,7 +35,6 @@ std::thread_local! {
     static TEST_BEFORE_DESCRIPTOR_ROOT_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
 }
-
 #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
 pub(crate) fn install_descriptor_root_read_test_hooks(
     after_target_bind: impl FnOnce() + 'static,
@@ -63,7 +57,6 @@ pub(crate) fn install_descriptor_root_read_test_hooks(
         );
     });
 }
-
 #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
 fn run_test_after_descriptor_target_bind() {
     TEST_AFTER_DESCRIPTOR_TARGET_BIND.with(|hook| {
@@ -72,7 +65,6 @@ fn run_test_after_descriptor_target_bind() {
         }
     });
 }
-
 #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
 fn run_test_before_descriptor_root_revalidation() {
     TEST_BEFORE_DESCRIPTOR_ROOT_REVALIDATION.with(|hook| {
@@ -81,7 +73,6 @@ fn run_test_before_descriptor_root_revalidation() {
         }
     });
 }
-
 /// Result of installing immutable bytes at a previously absent path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AtomicInstallOutcome {
@@ -90,7 +81,6 @@ pub enum AtomicInstallOutcome {
     /// The destination already contained exactly the requested bytes.
     AlreadyPresent,
 }
-
 /// Stable category for an atomic-write failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AtomicWriteErrorCode {
@@ -115,7 +105,6 @@ pub enum AtomicWriteErrorCode {
     /// A filesystem operation failed.
     Io,
 }
-
 impl AtomicWriteErrorCode {
     /// Return the stable diagnostic spelling for this failure category.
     #[must_use]
@@ -134,7 +123,6 @@ impl AtomicWriteErrorCode {
         }
     }
 }
-
 /// Error returned by an [`AtomicWriteRoot`] operation.
 #[derive(Debug)]
 pub struct AtomicWriteError {
@@ -144,7 +132,6 @@ pub struct AtomicWriteError {
     source: Option<io::Error>,
     recovery: Option<String>,
 }
-
 impl AtomicWriteError {
     fn new(code: AtomicWriteErrorCode, path: impl Into<PathBuf>, operation: &'static str) -> Self {
         Self {
@@ -155,7 +142,6 @@ impl AtomicWriteError {
             recovery: None,
         }
     }
-
     fn io(path: impl Into<PathBuf>, operation: &'static str, source: io::Error) -> Self {
         Self {
             code: AtomicWriteErrorCode::Io,
@@ -165,7 +151,6 @@ impl AtomicWriteError {
             recovery: None,
         }
     }
-
     fn with_recovery_failure(mut self, recovery: &Self) -> Self {
         let recovery = recovery.to_string();
         self.recovery = Some(match self.recovery.take() {
@@ -178,20 +163,17 @@ impl AtomicWriteError {
         });
         self
     }
-
     /// Return the stable failure category.
     #[must_use]
     pub const fn code(&self) -> AtomicWriteErrorCode {
         self.code
     }
-
     /// Return the path at which validation or I/O failed.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 }
-
 impl fmt::Display for AtomicWriteError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -213,7 +195,6 @@ impl fmt::Display for AtomicWriteError {
         Ok(())
     }
 }
-
 impl std::error::Error for AtomicWriteError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.source
@@ -221,7 +202,6 @@ impl std::error::Error for AtomicWriteError {
             .map(|source| -> &(dyn std::error::Error + 'static) { source })
     }
 }
-
 /// Trusted directory within which Musubi may atomically access project-state files.
 #[derive(Debug)]
 pub struct AtomicWriteRoot {
@@ -230,7 +210,6 @@ pub struct AtomicWriteRoot {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     root_handle: File,
 }
-
 impl AtomicWriteRoot {
     /// Create or bind one private user-state root without following a requested descendant link.
     ///
@@ -254,14 +233,12 @@ impl AtomicWriteRoot {
                 "create a private atomic write root on this platform",
             ));
         }
-
         #[cfg(unix)]
         {
             let canonical_root = create_or_open_private_root(root)?;
             Self::new(&canonical_root)
         }
     }
-
     /// Bind future writes to an existing, non-symlink directory.
     ///
     /// Musubi V1 enables this writer on Unix. Other targets fail closed until
@@ -316,13 +293,11 @@ impl AtomicWriteRoot {
             root_handle,
         })
     }
-
     /// Return the canonical trusted root.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.canonical_root
     }
-
     /// Durably replace one root-relative regular file.
     ///
     /// The destination parent must already exist. The method rejects absolute
@@ -346,7 +321,6 @@ impl AtomicWriteRoot {
     pub fn replace(&self, relative: &Path, contents: &[u8]) -> Result<(), AtomicWriteError> {
         validate_relative_path(relative)?;
         self.validate_root()?;
-
         let target = self.canonical_root.join(relative);
         let parent = target.parent().ok_or_else(|| {
             AtomicWriteError::new(
@@ -358,7 +332,6 @@ impl AtomicWriteRoot {
         let parent_chain = self.validate_parent_chain(parent)?;
         let target_snapshot = inspect_target(&target)?;
         let retained_permissions = target_snapshot.permissions();
-
         let mut pending = PendingTemp::create(parent)?;
         if let Some(permissions) = retained_permissions {
             pending.file.set_permissions(permissions).map_err(|error| {
@@ -374,12 +347,10 @@ impl AtomicWriteRoot {
         pending.file.sync_all().map_err(|error| {
             AtomicWriteError::io(&pending.path, "synchronize the temporary file", error)
         })?;
-
         self.validate_root()?;
         validate_directory_snapshots(&parent_chain)?;
         validate_target_snapshot(&target, &target_snapshot)?;
         pending.validate_path_identity()?;
-
         fs::rename(&pending.path, &target).map_err(|error| {
             AtomicWriteError::io(&target, "atomically replace the destination", error)
         })?;
@@ -390,7 +361,6 @@ impl AtomicWriteRoot {
         )?;
         Ok(())
     }
-
     /// Load one bounded immutable root-relative regular file.
     ///
     /// The destination parent must already exist. The method rejects absolute
@@ -419,7 +389,6 @@ impl AtomicWriteRoot {
             ));
         }
         self.validate_root()?;
-
         let target = self.canonical_root.join(relative);
         let parent = target.parent().ok_or_else(|| {
             AtomicWriteError::new(
@@ -467,7 +436,6 @@ impl AtomicWriteRoot {
                 ));
             }
         };
-
         let expected_identity = FileIdentity::from_metadata(&linked);
         let read = read_immutable_target_bounded(&target, max_bytes, Some(expected_identity));
         let revalidation = (|| {
@@ -483,7 +451,6 @@ impl AtomicWriteRoot {
             )),
         }
     }
-
     /// Load one private immutable file through the retained root descriptor.
     ///
     /// Linux and Android expose an open directory descriptor as
@@ -505,7 +472,6 @@ impl AtomicWriteRoot {
         max_bytes: usize,
     ) -> Result<Option<Vec<u8>>, AtomicWriteError> {
         validate_relative_path(relative)?;
-
         #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             let _ = max_bytes;
@@ -517,7 +483,6 @@ impl AtomicWriteRoot {
                 "load private bytes through a retained root descriptor",
             ));
         }
-
         #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             self.validate_retained_root()?;
@@ -535,7 +500,6 @@ impl AtomicWriteRoot {
             preserve_primary_result(read, revalidation)
         }
     }
-
     /// Durably install one immutable root-relative regular file without replacement.
     ///
     /// The destination and parent constraints are the same as for [`Self::replace`].
@@ -587,7 +551,6 @@ impl AtomicWriteRoot {
             ));
         }
         self.validate_root()?;
-
         let target = self.canonical_root.join(relative);
         let parent = target.parent().ok_or_else(|| {
             AtomicWriteError::new(
@@ -628,7 +591,6 @@ impl AtomicWriteRoot {
                 ));
             }
         }
-
         let mut pending = PendingTemp::create(parent)?;
         let prepared = (|| {
             pending.file.write_all(contents).map_err(|error| {
@@ -657,7 +619,6 @@ impl AtomicWriteRoot {
             );
             return preserve_primary_result(Err(error), cleanup);
         }
-
         match fs::hard_link(&pending.path, &target) {
             Ok(()) => {
                 let installed_identity = pending.identity;
@@ -731,7 +692,6 @@ impl AtomicWriteRoot {
             }
         }
     }
-
     fn validate_root(&self) -> Result<(), AtomicWriteError> {
         let current = fs::symlink_metadata(&self.canonical_root).map_err(|error| {
             AtomicWriteError::io(&self.canonical_root, "revalidate the write root", error)
@@ -748,7 +708,6 @@ impl AtomicWriteRoot {
         }
         Ok(())
     }
-
     #[cfg(any(target_os = "linux", target_os = "android"))]
     fn validate_retained_root(&self) -> Result<(), AtomicWriteError> {
         let opened_before = self.root_handle.metadata().map_err(|error| {
@@ -784,7 +743,6 @@ impl AtomicWriteRoot {
         }
         Ok(())
     }
-
     #[cfg(any(target_os = "linux", target_os = "android"))]
     fn validate_descriptor_root(&self, descriptor_root: &Path) -> Result<(), AtomicWriteError> {
         let opened_before = self.root_handle.metadata().map_err(|error| {
@@ -823,7 +781,6 @@ impl AtomicWriteRoot {
         }
         Ok(())
     }
-
     fn validate_parent_chain(
         &self,
         parent: &Path,
@@ -885,7 +842,6 @@ impl AtomicWriteRoot {
             }
             snapshots.push(DirectorySnapshot::new(current.clone(), &metadata));
         }
-
         let canonical_parent = fs::canonicalize(parent).map_err(|error| {
             AtomicWriteError::io(parent, "canonicalize the destination parent", error)
         })?;
@@ -899,7 +855,6 @@ impl AtomicWriteRoot {
         Ok(snapshots)
     }
 }
-
 #[cfg(unix)]
 #[expect(
     clippy::too_many_lines,
@@ -924,7 +879,6 @@ fn create_or_open_private_root(root: &Path) -> Result<PathBuf, AtomicWriteError>
             "create a private write root with no-follow access",
         ));
     }
-
     let mut existing = root.to_path_buf();
     let mut missing = Vec::<OsString>::new();
     let linked_existing = loop {
@@ -968,7 +922,6 @@ fn create_or_open_private_root(root: &Path) -> Result<PathBuf, AtomicWriteError>
             }
         }
     };
-
     let canonical_existing = fs::canonicalize(&existing).map_err(|error| {
         AtomicWriteError::io(&existing, "canonicalize the private-root ancestor", error)
     })?;
@@ -989,7 +942,6 @@ fn create_or_open_private_root(root: &Path) -> Result<PathBuf, AtomicWriteError>
             "bind the canonical private-root ancestor",
         ));
     }
-
     let mut current = canonical_existing;
     for component in missing.into_iter().rev() {
         let parent_metadata = fs::symlink_metadata(&current).map_err(|error| {
@@ -1017,7 +969,6 @@ fn create_or_open_private_root(root: &Path) -> Result<PathBuf, AtomicWriteError>
                 ));
             }
         }
-
         let linked = fs::symlink_metadata(&next).map_err(|error| {
             AtomicWriteError::io(&next, "inspect a private write-root component", error)
         })?;
@@ -1036,7 +987,6 @@ fn create_or_open_private_root(root: &Path) -> Result<PathBuf, AtomicWriteError>
         sync_directory(&current, &parent_snapshot)?;
         current = next;
     }
-
     let linked = fs::symlink_metadata(&current)
         .map_err(|error| AtomicWriteError::io(&current, "inspect the private write root", error))?;
     if !private_root_metadata_is_safe(&linked) {
@@ -1049,7 +999,6 @@ fn create_or_open_private_root(root: &Path) -> Result<PathBuf, AtomicWriteError>
     let _directory = open_private_directory_no_follow(&current, &linked)?;
     Ok(current)
 }
-
 #[cfg(unix)]
 fn open_private_directory_no_follow(
     path: &Path,
@@ -1083,7 +1032,6 @@ fn open_private_directory_no_follow(
     }
     Ok(directory)
 }
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn open_directory_no_follow(path: &Path, linked: &fs::Metadata) -> Result<File, AtomicWriteError> {
     let secure_open_flags = PLATFORM_SECURE_OPEN_FLAGS.ok_or_else(|| {
@@ -1120,14 +1068,12 @@ fn open_directory_no_follow(path: &Path, linked: &fs::Metadata) -> Result<File, 
     }
     Ok(directory)
 }
-
 #[cfg(unix)]
 fn private_root_metadata_is_safe(metadata: &fs::Metadata) -> bool {
     metadata.is_dir()
         && !metadata.file_type().is_symlink()
         && metadata.permissions().mode() & 0o7777 == 0o700
 }
-
 fn validate_relative_path(relative: &Path) -> Result<(), AtomicWriteError> {
     let mut count = 0_usize;
     for component in relative.components() {
@@ -1149,13 +1095,11 @@ fn validate_relative_path(relative: &Path) -> Result<(), AtomicWriteError> {
     }
     Ok(())
 }
-
 #[derive(Debug)]
 struct DirectorySnapshot {
     path: PathBuf,
     identity: FileIdentity,
 }
-
 impl DirectorySnapshot {
     fn new(path: PathBuf, metadata: &fs::Metadata) -> Self {
         Self {
@@ -1164,7 +1108,6 @@ impl DirectorySnapshot {
         }
     }
 }
-
 fn validate_directory_snapshots(snapshots: &[DirectorySnapshot]) -> Result<(), AtomicWriteError> {
     for snapshot in snapshots {
         let metadata = fs::symlink_metadata(&snapshot.path).map_err(|error| {
@@ -1183,7 +1126,6 @@ fn validate_directory_snapshots(snapshots: &[DirectorySnapshot]) -> Result<(), A
     }
     Ok(())
 }
-
 #[derive(Debug)]
 enum TargetSnapshot {
     Absent,
@@ -1192,7 +1134,6 @@ enum TargetSnapshot {
         permissions: fs::Permissions,
     },
 }
-
 impl TargetSnapshot {
     fn permissions(&self) -> Option<fs::Permissions> {
         match self {
@@ -1201,7 +1142,6 @@ impl TargetSnapshot {
         }
     }
 }
-
 fn inspect_target(target: &Path) -> Result<TargetSnapshot, AtomicWriteError> {
     match fs::symlink_metadata(target) {
         Ok(metadata) => {
@@ -1228,7 +1168,6 @@ fn inspect_target(target: &Path) -> Result<TargetSnapshot, AtomicWriteError> {
         )),
     }
 }
-
 fn validate_target_snapshot(
     target: &Path,
     snapshot: &TargetSnapshot,
@@ -1255,7 +1194,6 @@ fn validate_target_snapshot(
         )),
     }
 }
-
 fn bind_existing_immutable_target(
     target: &Path,
     contents: &[u8],
@@ -1302,7 +1240,6 @@ fn bind_existing_immutable_target(
         ))
     }
 }
-
 fn revalidate_existing_immutable_target(
     target: &Path,
     contents: &[u8],
@@ -1318,7 +1255,6 @@ fn revalidate_existing_immutable_target(
         ))
     }
 }
-
 fn validate_new_immutable_link(
     target: &Path,
     pending: &PendingTemp,
@@ -1345,7 +1281,6 @@ fn validate_new_immutable_link(
     }
     Ok(())
 }
-
 fn validate_installed_immutable_target(
     target: &Path,
     expected_identity: FileIdentity,
@@ -1366,7 +1301,6 @@ fn validate_installed_immutable_target(
     }
     Ok(())
 }
-
 fn readback_immutable_target(
     target: &Path,
     contents: &[u8],
@@ -1377,12 +1311,10 @@ fn readback_immutable_target(
         ImmutableReadOutcome::Exceeded => Ok(false),
     }
 }
-
 enum ImmutableReadOutcome {
     Within(Vec<u8>),
     Exceeded,
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "bounded immutable readback keeps the pre-open, open-handle, and post-read identity checks together as one fail-closed state machine"
@@ -1400,7 +1332,6 @@ fn read_immutable_target_bounded(
             "bind immutable readback to the installed inode",
         ));
     }
-
     let secure_open_flags = PLATFORM_SECURE_OPEN_FLAGS.ok_or_else(|| {
         AtomicWriteError::new(
             AtomicWriteErrorCode::UnsupportedPlatform,
@@ -1468,7 +1399,6 @@ fn read_immutable_target_bounded(
             "bind the open immutable destination",
         ));
     }
-
     let max_bytes_u64 = u64::try_from(max_bytes).unwrap_or(u64::MAX);
     let metadata_exceeds_bound = opened_before.len() > max_bytes_u64;
     let read_limit = max_bytes_u64.saturating_add(1);
@@ -1479,7 +1409,6 @@ fn read_immutable_target_bounded(
             .read_to_end(&mut observed)
             .map_err(|error| AtomicWriteError::io(target, "read immutable bytes", error))?;
     }
-
     let opened_after = file.metadata().map_err(|error| {
         AtomicWriteError::io(target, "reinspect the open immutable destination", error)
     })?;
@@ -1507,7 +1436,6 @@ fn read_immutable_target_bounded(
     }
     Ok(ImmutableReadOutcome::Within(observed))
 }
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn read_private_immutable_target_bounded(
     target: &Path,
@@ -1586,7 +1514,6 @@ fn read_private_immutable_target_bounded(
         )),
     }
 }
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn same_immutable_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev()
@@ -1599,7 +1526,6 @@ fn same_immutable_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bo
         && left.nlink() == right.nlink()
         && left.mode() == right.mode()
 }
-
 fn inspect_single_link_immutable_target(target: &Path) -> Result<fs::Metadata, AtomicWriteError> {
     let metadata = match fs::symlink_metadata(target) {
         Ok(metadata) => metadata,
@@ -1621,7 +1547,6 @@ fn inspect_single_link_immutable_target(target: &Path) -> Result<fs::Metadata, A
     validate_single_link_immutable_metadata(target, &metadata)?;
     Ok(metadata)
 }
-
 fn validate_single_link_immutable_metadata(
     target: &Path,
     metadata: &fs::Metadata,
@@ -1636,7 +1561,6 @@ fn validate_single_link_immutable_metadata(
     }
     Ok(())
 }
-
 fn cleanup_pending_and_sync(
     mut pending: PendingTemp,
     expected_links: u64,
@@ -1667,7 +1591,6 @@ fn cleanup_pending_and_sync(
     let sync = sync_directory_bounded(parent, parent_snapshot);
     preserve_primary_result(cleanup, sync)
 }
-
 fn recover_post_link_temp_and_sync(
     pending: &mut PendingTemp,
     parent: &Path,
@@ -1695,7 +1618,6 @@ fn recover_post_link_temp_and_sync(
     let sync = sync_directory_bounded(parent, parent_snapshot);
     preserve_primary_result(cleanup, sync)
 }
-
 fn sync_directory_bounded(
     parent: &Path,
     parent_snapshot: &DirectorySnapshot,
@@ -1709,7 +1631,6 @@ fn sync_directory_bounded(
     }
     Err(last_error.expect("the bounded synchronization loop executes at least once"))
 }
-
 fn preserve_primary_result<T>(
     primary: Result<T, AtomicWriteError>,
     recovery: Result<(), AtomicWriteError>,
@@ -1721,14 +1642,12 @@ fn preserve_primary_result<T>(
         (Err(primary), Err(recovery)) => Err(primary.with_recovery_failure(&recovery)),
     }
 }
-
 struct PendingTemp {
     path: PathBuf,
     file: File,
     identity: FileIdentity,
     armed: bool,
 }
-
 impl PendingTemp {
     fn create(parent: &Path) -> Result<Self, AtomicWriteError> {
         let process = std::process::id();
@@ -1771,11 +1690,9 @@ impl PendingTemp {
             "create a private temporary file",
         ))
     }
-
     fn validate_path_identity(&self) -> Result<(), AtomicWriteError> {
         self.validate_path_identity_with_links(1)
     }
-
     fn validate_path_identity_with_links(
         &self,
         expected_links: u64,
@@ -1789,7 +1706,6 @@ impl PendingTemp {
         }
         Ok(())
     }
-
     fn owned_link_count(&self) -> Result<u64, AtomicWriteError> {
         if !self.has_owned_name() {
             return Err(AtomicWriteError::new(
@@ -1821,17 +1737,14 @@ impl PendingTemp {
         }
         Ok(hard_link_count(&opened))
     }
-
     fn remove_owned(&mut self, expected_links: u64) -> Result<(), AtomicWriteError> {
         self.validate_path_identity_with_links(expected_links)?;
         self.remove_validated_owned(expected_links)
     }
-
     fn remove_owned_exact(&mut self) -> Result<(), AtomicWriteError> {
         let links = self.owned_link_count()?;
         self.remove_validated_owned(links)
     }
-
     fn remove_validated_owned(&mut self, expected_links: u64) -> Result<(), AtomicWriteError> {
         fs::remove_file(&self.path).map_err(|error| {
             AtomicWriteError::io(&self.path, "remove the owned temporary file", error)
@@ -1852,19 +1765,16 @@ impl PendingTemp {
         }
         Ok(())
     }
-
     fn has_owned_name(&self) -> bool {
         self.path
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.starts_with(TEMP_FILE_PREFIX))
     }
-
     fn disarm(&mut self) {
         self.armed = false;
     }
 }
-
 impl Drop for PendingTemp {
     fn drop(&mut self) {
         if !self.armed {
@@ -1884,7 +1794,6 @@ impl Drop for PendingTemp {
         }
     }
 }
-
 fn sync_directory(path: &Path, snapshot: &DirectorySnapshot) -> Result<(), AtomicWriteError> {
     #[cfg(all(test, unix))]
     if TEST_DIRECTORY_SYNC_FAILURES.with(|remaining| {
@@ -1932,7 +1841,6 @@ fn sync_directory(path: &Path, snapshot: &DirectorySnapshot) -> Result<(), Atomi
         .sync_all()
         .map_err(|error| AtomicWriteError::io(path, "synchronize the destination directory", error))
 }
-
 #[cfg(all(test, unix))]
 fn substitute_immutable_read_target_with_fifo_for_test(
     path: &Path,
@@ -1975,14 +1883,12 @@ fn substitute_immutable_read_target_with_fifo_for_test(
         ))
     }
 }
-
 #[cfg(unix)]
 #[derive(Clone, Copy, Debug)]
 struct FileIdentity {
     device: u64,
     inode: u64,
 }
-
 #[cfg(unix)]
 impl FileIdentity {
     fn from_metadata(metadata: &fs::Metadata) -> Self {
@@ -1991,69 +1897,56 @@ impl FileIdentity {
             inode: metadata.ino(),
         }
     }
-
     fn matches(self, metadata: &fs::Metadata) -> bool {
         self.device == metadata.dev() && self.inode == metadata.ino()
     }
 }
-
 #[cfg(not(unix))]
 #[derive(Clone, Copy, Debug)]
 struct FileIdentity;
-
 #[cfg(not(unix))]
 impl FileIdentity {
     fn from_metadata(_metadata: &fs::Metadata) -> Self {
         Self
     }
-
     fn matches(self, _metadata: &fs::Metadata) -> bool {
         true
     }
 }
-
 #[cfg(unix)]
 fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(not(unix))]
 fn same_file(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     true
 }
-
 #[cfg(unix)]
 fn cleanup_identity_matches(identity: &FileIdentity, metadata: &fs::Metadata) -> bool {
     identity.matches(metadata)
 }
-
 #[cfg(not(unix))]
 fn cleanup_identity_matches(_identity: &FileIdentity, _metadata: &fs::Metadata) -> bool {
     // Without a stable std-only file identity, leaking a private temporary file
     // is safer than deleting a path that another process may have substituted.
     false
 }
-
 #[cfg(unix)]
 fn has_multiple_hard_links(metadata: &fs::Metadata) -> bool {
     metadata.nlink() != 1
 }
-
 #[cfg(not(unix))]
 fn has_multiple_hard_links(_metadata: &fs::Metadata) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn hard_link_count(metadata: &fs::Metadata) -> u64 {
     metadata.nlink()
 }
-
 #[cfg(not(unix))]
 fn hard_link_count(_metadata: &fs::Metadata) -> u64 {
     1
 }
-
 #[cfg(all(
     target_os = "android",
     not(any(
@@ -2065,7 +1958,6 @@ fn hard_link_count(_metadata: &fs::Metadata) -> u64 {
     ))
 ))]
 compile_error!("Musubi atomic file reads are not qualified for this Android architecture");
-
 #[cfg(all(
     unix,
     not(any(
@@ -2080,12 +1972,10 @@ compile_error!("Musubi atomic file reads are not qualified for this Android arch
     ))
 ))]
 compile_error!("Musubi atomic file reads are not qualified for this Unix target");
-
 #[cfg(all(target_os = "android", target_arch = "riscv64"))]
 const fn platform_no_follow_flag() -> i32 {
     0x400000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "aarch64", target_arch = "arm")
@@ -2093,7 +1983,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x8000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "x86", target_arch = "x86_64")
@@ -2101,7 +1990,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x20000
 }
-
 #[cfg(all(
     target_os = "linux",
     any(
@@ -2115,7 +2003,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x8000
 }
-
 #[cfg(all(
     target_os = "linux",
     not(any(
@@ -2129,7 +2016,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x20000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -2145,7 +2031,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     target_os = "linux",
     any(
@@ -2158,7 +2043,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_nonblocking_flag() -> i32 {
     0x80
 }
-
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "sparc", target_arch = "sparc64")
@@ -2166,7 +2050,6 @@ const fn platform_nonblocking_flag() -> i32 {
 const fn platform_nonblocking_flag() -> i32 {
     0x4000
 }
-
 #[cfg(any(
     target_os = "android",
     all(
@@ -2184,7 +2067,6 @@ const fn platform_nonblocking_flag() -> i32 {
 const fn platform_nonblocking_flag() -> i32 {
     0x800
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -2200,40 +2082,32 @@ const fn platform_nonblocking_flag() -> i32 {
 const fn platform_nonblocking_flag() -> i32 {
     0x4
 }
-
 #[cfg(unix)]
 const PLATFORM_SECURE_OPEN_FLAGS: Option<i32> =
     Some(platform_no_follow_flag() | platform_nonblocking_flag());
-
 #[cfg(not(unix))]
 const PLATFORM_SECURE_OPEN_FLAGS: Option<i32> = None;
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[cfg(unix)]
     struct DirectorySyncFailureReset;
-
     #[cfg(unix)]
     impl Drop for DirectorySyncFailureReset {
         fn drop(&mut self) {
             TEST_DIRECTORY_SYNC_FAILURES.with(|remaining| remaining.set(0));
         }
     }
-
     #[cfg(unix)]
     fn inject_directory_sync_failures(count: usize) -> DirectorySyncFailureReset {
         TEST_DIRECTORY_SYNC_FAILURES.with(|remaining| remaining.set(count));
         DirectorySyncFailureReset
     }
-
     #[cfg(unix)]
     #[test]
     fn creates_and_replaces_a_root_confined_file() {
         let root = tempfile::tempdir().expect("temporary root");
         let writer = AtomicWriteRoot::new(root.path()).expect("bind root");
-
         writer
             .replace(Path::new("Musubi.lock"), b"schema = \"musubi-lock\"\n")
             .expect("create lockfile");
@@ -2243,7 +2117,6 @@ mod tests {
                 b"schema = \"musubi-lock\"\nversion = 1\n",
             )
             .expect("replace lockfile");
-
         assert_eq!(
             fs::read(root.path().join("Musubi.lock")).expect("read lockfile"),
             b"schema = \"musubi-lock\"\nversion = 1\n"
@@ -2256,12 +2129,10 @@ mod tests {
                 .starts_with(".musubi-tmp-")
         }));
     }
-
     #[cfg(unix)]
     #[test]
     fn creates_and_reopens_a_nested_private_write_root() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let holder = tempfile::tempdir().expect("private-root holder");
         let requested = holder.path().join("state/iroha/musubi");
         let writer = AtomicWriteRoot::open_or_create_private(&requested)
@@ -2279,17 +2150,14 @@ mod tests {
             assert!(!metadata.file_type().is_symlink());
             assert_eq!(metadata.permissions().mode() & 0o7777, 0o700);
         }
-
         let reopened = AtomicWriteRoot::open_or_create_private(&requested)
             .expect("reopen identical private root");
         assert_eq!(reopened.path(), writer.path());
     }
-
     #[cfg(unix)]
     #[test]
     fn private_write_root_creation_rejects_links_and_nonprivate_existing_roots() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-
         let outside = tempfile::tempdir().expect("outside root");
         let holder = tempfile::tempdir().expect("private-root holder");
         let linked_parent = holder.path().join("linked-state");
@@ -2298,7 +2166,6 @@ mod tests {
             .expect_err("linked ancestor rejected");
         assert_eq!(error.code(), AtomicWriteErrorCode::UnsafeRoot);
         assert!(!outside.path().join("musubi").exists());
-
         let public_root = holder.path().join("public-state");
         fs::create_dir(&public_root).expect("public state root");
         fs::set_permissions(&public_root, fs::Permissions::from_mode(0o755))
@@ -2315,17 +2182,14 @@ mod tests {
             0o755
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn installs_immutable_file_privately_and_idempotently() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let root = tempfile::tempdir().expect("temporary root");
         let writer = AtomicWriteRoot::new(root.path()).expect("bind root");
         let relative = Path::new("checkpoints/release.norito");
         fs::create_dir(root.path().join("checkpoints")).expect("checkpoint directory");
-
         assert_eq!(
             writer
                 .install_immutable(relative, b"exact-release-checkpoint")
@@ -2338,7 +2202,6 @@ mod tests {
                 .expect("idempotent immutable install"),
             AtomicInstallOutcome::AlreadyPresent
         );
-
         let target = root.path().join(relative);
         assert_eq!(
             fs::read(&target).expect("read immutable target"),
@@ -2364,7 +2227,6 @@ mod tests {
                 })
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn immutable_retry_resynchronizes_an_exact_destination_after_interrupted_install() {
@@ -2373,7 +2235,6 @@ mod tests {
         let relative = Path::new("checkpoints/release.norito");
         fs::create_dir(root.path().join("checkpoints")).expect("checkpoint directory");
         let _reset = inject_directory_sync_failures(POST_LINK_CLEANUP_ATTEMPTS + 1);
-
         let first_error = writer
             .install_immutable(relative, b"exact-release-checkpoint")
             .expect_err("post-link directory synchronization failure must be reported");
@@ -2393,13 +2254,11 @@ mod tests {
             hard_link_count(&fs::metadata(&target).expect("single-link target metadata")),
             1
         );
-
         TEST_DIRECTORY_SYNC_FAILURES.with(|remaining| remaining.set(POST_LINK_CLEANUP_ATTEMPTS));
         writer
             .install_immutable(relative, b"exact-release-checkpoint")
             .expect_err("exact-existing retry must prove parent-directory durability");
         TEST_DIRECTORY_SYNC_FAILURES.with(|remaining| assert_eq!(remaining.get(), 0));
-
         TEST_DIRECTORY_SYNC_FAILURES.with(|remaining| remaining.set(0));
         assert_eq!(
             writer
@@ -2408,7 +2267,6 @@ mod tests {
             AtomicInstallOutcome::AlreadyPresent
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn loads_an_installed_immutable_file_within_the_bound() {
@@ -2420,7 +2278,6 @@ mod tests {
         writer
             .install_immutable(relative, contents)
             .expect("install immutable checkpoint");
-
         assert_eq!(
             writer
                 .load_immutable(relative, contents.len())
@@ -2428,12 +2285,10 @@ mod tests {
             Some(contents.to_vec())
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn immutable_load_rejects_a_fifo_substitution_without_blocking() {
         use std::os::unix::fs::FileTypeExt as _;
-
         let root = tempfile::tempdir().expect("temporary root");
         let writer = AtomicWriteRoot::new(root.path()).expect("bind root");
         let relative = Path::new("checkpoints/release.norito");
@@ -2442,7 +2297,6 @@ mod tests {
         writer
             .install_immutable(relative, contents)
             .expect("install immutable checkpoint");
-
         TEST_IMMUTABLE_READ_FIFO_SUBSTITUTIONS.with(|remaining| remaining.set(1));
         let error = writer
             .load_immutable(relative, contents.len())
@@ -2456,14 +2310,12 @@ mod tests {
         );
         TEST_IMMUTABLE_READ_FIFO_SUBSTITUTIONS.with(|remaining| assert_eq!(remaining.get(), 0));
     }
-
     #[cfg(unix)]
     #[test]
     fn loading_a_missing_immutable_file_returns_none() {
         let root = tempfile::tempdir().expect("temporary root");
         let writer = AtomicWriteRoot::new(root.path()).expect("bind root");
         fs::create_dir(root.path().join("checkpoints")).expect("checkpoint directory");
-
         assert_eq!(
             writer
                 .load_immutable(Path::new("checkpoints/missing.norito"), 1024)
@@ -2471,23 +2323,19 @@ mod tests {
             None
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn immutable_load_rejects_oversized_and_unsafe_targets() {
         use std::os::unix::fs::symlink;
-
         let root = tempfile::tempdir().expect("temporary root");
         let writer = AtomicWriteRoot::new(root.path()).expect("bind root");
         writer
             .install_immutable(Path::new("oversized"), b"four")
             .expect("install oversized fixture");
-
         let oversized = writer
             .load_immutable(Path::new("oversized"), 3)
             .expect_err("oversized immutable target rejected");
         assert_eq!(oversized.code(), AtomicWriteErrorCode::UnsafeTarget);
-
         let outside = tempfile::tempdir().expect("outside root");
         let outside_file = outside.path().join("outside");
         fs::write(&outside_file, b"outside").expect("outside file");
@@ -2497,7 +2345,6 @@ mod tests {
             .expect_err("symlink immutable target rejected");
         assert_eq!(unsafe_target.code(), AtomicWriteErrorCode::UnsafeTarget);
     }
-
     #[cfg(unix)]
     #[test]
     fn immutable_install_rejects_conflicting_bytes_without_overwrite() {
@@ -2507,7 +2354,6 @@ mod tests {
         writer
             .install_immutable(relative, b"first")
             .expect("first immutable install");
-
         let error = writer
             .install_immutable(relative, b"different")
             .expect_err("different immutable bytes must conflict");
@@ -2517,18 +2363,15 @@ mod tests {
             b"first"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn immutable_install_rejects_symlink_and_hard_link_targets() {
         use std::os::unix::fs::symlink;
-
         let outside = tempfile::tempdir().expect("outside root");
         let outside_file = outside.path().join("outside");
         fs::write(&outside_file, b"outside").expect("outside file");
         let root = tempfile::tempdir().expect("temporary root");
         let writer = AtomicWriteRoot::new(root.path()).expect("bind root");
-
         symlink(&outside_file, root.path().join("symlink-target")).expect("target symlink");
         let error = writer
             .install_immutable(Path::new("symlink-target"), b"blocked")
@@ -2538,7 +2381,6 @@ mod tests {
             fs::read(&outside_file).expect("outside contents"),
             b"outside"
         );
-
         let source = root.path().join("hard-source");
         fs::write(&source, b"hard-linked").expect("hard-link source");
         fs::hard_link(&source, root.path().join("hard-target")).expect("hard-link target");
@@ -2548,7 +2390,6 @@ mod tests {
         assert_eq!(error.code(), AtomicWriteErrorCode::UnsafeTarget);
         assert_eq!(fs::read(source).expect("source contents"), b"hard-linked");
     }
-
     #[cfg(unix)]
     #[test]
     fn concurrent_identical_immutable_installers_are_idempotent() {
@@ -2556,7 +2397,6 @@ mod tests {
             sync::{Arc, Barrier},
             thread,
         };
-
         let root = tempfile::tempdir().expect("temporary root");
         let writer = Arc::new(AtomicWriteRoot::new(root.path()).expect("bind root"));
         let barrier = Arc::new(Barrier::new(8));
@@ -2575,7 +2415,6 @@ mod tests {
             .into_iter()
             .map(|handle| handle.join().expect("immutable installer thread"))
             .collect::<Vec<_>>();
-
         assert_eq!(
             results
                 .iter()
@@ -2609,7 +2448,6 @@ mod tests {
                 .starts_with(TEMP_FILE_PREFIX)
         }));
     }
-
     #[cfg(unix)]
     #[test]
     fn concurrent_different_immutable_installers_never_overwrite() {
@@ -2617,7 +2455,6 @@ mod tests {
             sync::{Arc, Barrier},
             thread,
         };
-
         let root = tempfile::tempdir().expect("temporary root");
         let writer = Arc::new(AtomicWriteRoot::new(root.path()).expect("bind root"));
         let barrier = Arc::new(Barrier::new(2));
@@ -2636,7 +2473,6 @@ mod tests {
             .into_iter()
             .map(|handle| handle.join().expect("immutable installer thread"))
             .collect::<Vec<_>>();
-
         assert_eq!(
             results
                 .iter()
@@ -2682,13 +2518,11 @@ mod tests {
                 .starts_with(TEMP_FILE_PREFIX)
         }));
     }
-
     #[cfg(unix)]
     #[test]
     fn rejects_absolute_and_traversing_destinations() {
         let root = tempfile::tempdir().expect("temporary root");
         let writer = AtomicWriteRoot::new(root.path()).expect("bind root");
-
         for path in [
             Path::new(""),
             Path::new("../escape"),
@@ -2703,12 +2537,10 @@ mod tests {
             .expect_err("absolute path rejected");
         assert_eq!(error.code(), AtomicWriteErrorCode::InvalidRelativePath);
     }
-
     #[cfg(unix)]
     #[test]
     fn rejects_symlink_roots_parents_and_targets() {
         use std::os::unix::fs::symlink;
-
         let outside = tempfile::tempdir().expect("outside root");
         let holder = tempfile::tempdir().expect("holder root");
         let linked_root = holder.path().join("linked-root");
@@ -2719,7 +2551,6 @@ mod tests {
                 .code(),
             AtomicWriteErrorCode::UnsafeRoot
         );
-
         let root = tempfile::tempdir().expect("temporary root");
         let writer = AtomicWriteRoot::new(root.path()).expect("bind root");
         let linked_parent = root.path().join("linked-parent");
@@ -2731,7 +2562,6 @@ mod tests {
                 .code(),
             AtomicWriteErrorCode::SymlinkAncestor
         );
-
         let outside_file = outside.path().join("outside-file");
         fs::write(&outside_file, b"unchanged").expect("outside file");
         symlink(&outside_file, root.path().join("target")).expect("target symlink");
@@ -2747,12 +2577,10 @@ mod tests {
             b"unchanged"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn rejects_hard_linked_targets_and_creates_private_new_files() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let root = tempfile::tempdir().expect("temporary root");
         let writer = AtomicWriteRoot::new(root.path()).expect("bind root");
         writer
@@ -2764,7 +2592,6 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o600);
-
         let linked = root.path().join("linked");
         fs::hard_link(root.path().join("private"), &linked).expect("hard link");
         let error = writer
@@ -2776,7 +2603,6 @@ mod tests {
             b"secret-free state"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn pending_temporary_file_cleanup_is_identity_bound() {
@@ -2787,7 +2613,6 @@ mod tests {
         };
         assert!(!path.exists());
     }
-
     #[cfg(not(unix))]
     #[test]
     fn atomic_replacement_fails_closed_on_unsupported_platforms() {

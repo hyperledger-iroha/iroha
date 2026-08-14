@@ -1,7 +1,5 @@
 //! Opcode validation checks for instruction slots.
-
 use ivm::instruction;
-
 #[test]
 fn first_release_extension_opcodes_are_valid_but_reserved_iso_slots_are_invalid() {
     assert!(instruction::wide::is_valid_opcode(
@@ -47,7 +45,6 @@ fn first_release_extension_opcodes_are_valid_but_reserved_iso_slots_are_invalid(
         );
     }
 }
-
 #[test]
 fn first_release_iso_helpers_have_no_network_transport_surface() {
     let source = include_str!("../src/iso20022.rs");

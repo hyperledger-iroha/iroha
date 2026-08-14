@@ -1,12 +1,8 @@
 #![allow(clippy::redundant_pub_crate, clippy::needless_pass_by_value)]
-
 use eyre::Result;
 use norito::json::Value;
-
 use crate::{CliOutputFormat, RunContext};
-
 use super::commands::{PacemakerArgs, PhasesArgs, TelemetryArgs};
-
 pub(crate) fn pacemaker<C: RunContext>(context: &mut C, _args: PacemakerArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_pacemaker_json()?;
@@ -46,7 +42,6 @@ pub(crate) fn pacemaker<C: RunContext>(context: &mut C, _args: PacemakerArgs) ->
         context.print_data(&value)
     }
 }
-
 pub(crate) fn phases<C: RunContext>(context: &mut C, _args: PhasesArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_phases_json()?;
@@ -55,7 +50,6 @@ pub(crate) fn phases<C: RunContext>(context: &mut C, _args: PhasesArgs) -> Resul
         CliOutputFormat::Json => context.print_data(&value),
     }
 }
-
 pub(crate) fn telemetry<C: RunContext>(context: &mut C, _args: TelemetryArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_telemetry_json()?;
@@ -64,7 +58,6 @@ pub(crate) fn telemetry<C: RunContext>(context: &mut C, _args: TelemetryArgs) ->
         CliOutputFormat::Json => context.print_data(&value),
     }
 }
-
 fn summarize_phases(v: &Value) -> String {
     let g = |k: &str| v.get(k).and_then(norito::json::Value::as_u64).unwrap_or(0);
     let pipeline_total = g("pipeline_total_ms");
@@ -122,7 +115,6 @@ fn summarize_phases(v: &Value) -> String {
             },
         )
 }
-
 fn summarize_telemetry(v: &Value) -> String {
     let availability = v.get("availability").and_then(|x| x.as_object());
     let total_votes = availability
@@ -167,11 +159,9 @@ fn summarize_telemetry(v: &Value) -> String {
         "availability_votes={total_votes} collectors={collectors} rbc_pending_sessions={pending_sessions} vrf_epoch={vrf_epoch} vrf_finalized={vrf_finalized} reveals={reveals} late_reveals={late} committed_no_reveal={penalties} no_participation={no_participation}"
     )
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn summarize_phases_includes_ema_when_present() {
         let value = norito::json!({
@@ -199,7 +189,6 @@ mod tests {
             "propose=10 da=20 prevote=30 precommit=40 aggregator=50 commit=80 pipeline_total=0 ms | ema(propose=11 da=21 prevote=31 precommit=41 aggregator=51 commit=81 pipeline_total=0) | gossip_fallbacks=2 | block_created_drops=3 | block_created_hint_mismatch=4 | block_created_proposal_mismatch=5"
         );
     }
-
     #[test]
     fn summarize_telemetry_reports_key_counters() {
         let value = norito::json!({

@@ -3,35 +3,26 @@
 //! These types define the canonical Norito encoding for JDG attestations,
 //! including their scope, signer sets, optional proofs, and the domain-tagged
 //! hash used for signing.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     str::FromStr,
 };
-
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use crate::{nexus::DataSpaceId, proof::ProofBox};
-
 /// Maximum supported length (bytes) for a jurisdiction identifier.
 pub const JDG_MAX_JURISDICTION_ID_LEN: usize = 64;
-
 /// Explicit attestation format version (v1).
 pub const JDG_ATTESTATION_VERSION_V1: u16 = 1;
-
 /// Domain tag used when hashing [`JdgAttestation`] for signing.
 pub const JDG_ATTESTATION_DOMAIN_TAG_V1: &[u8] = b"iroha:jurisdiction:attestation:v1\x00";
-
 /// Explicit SDN commitment format version (v1).
 pub const JDG_SDN_COMMITMENT_VERSION_V1: u16 = 1;
-
 /// Domain tag used when hashing [`JdgSdnCommitment`] for signing.
 pub const JDG_SDN_COMMITMENT_DOMAIN_TAG_V1: &[u8] = b"iroha:jurisdiction:sdn:commitment:v1\x00";
-
 /// Identifier for a jurisdiction (e.g., derived from BIC/ClearingSystemId).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[repr(transparent)]
@@ -41,7 +32,6 @@ pub const JDG_SDN_COMMITMENT_DOMAIN_TAG_V1: &[u8] = b"iroha:jurisdiction:sdn:com
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct JurisdictionId(Vec<u8>);
-
 impl JurisdictionId {
     /// Construct a jurisdiction identifier from canonical bytes.
     ///
@@ -61,28 +51,23 @@ impl JurisdictionId {
         }
         Ok(Self(bytes))
     }
-
     /// Return the canonical identifier bytes.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 }
-
 impl TryFrom<Vec<u8>> for JurisdictionId {
     type Error = JurisdictionIdError;
-
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
         Self::new(value)
     }
 }
-
 impl From<JurisdictionId> for Vec<u8> {
     fn from(value: JurisdictionId) -> Self {
         value.0
     }
 }
-
 /// Errors returned when constructing a [`JurisdictionId`].
 #[derive(Debug, Copy, Clone, Error, PartialEq, Eq)]
 pub enum JurisdictionIdError {
@@ -98,7 +83,6 @@ pub enum JurisdictionIdError {
         max: usize,
     },
 }
-
 /// Inclusive block-height range covered by an attestation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -111,7 +95,6 @@ pub struct JdgBlockRange {
     /// Last block height (inclusive).
     pub end_height: u64,
 }
-
 impl JdgBlockRange {
     /// Construct a block range ensuring `start_height <= end_height`.
     ///
@@ -130,13 +113,11 @@ impl JdgBlockRange {
             end_height,
         })
     }
-
     /// Check whether `height` lies inside the range.
     #[must_use]
     pub fn contains(&self, height: u64) -> bool {
         height >= self.start_height && height <= self.end_height
     }
-
     /// Validate the block range bounds.
     ///
     /// # Errors
@@ -153,7 +134,6 @@ impl JdgBlockRange {
         }
     }
 }
-
 /// Statement scope bound into an attestation (dataspace + block window + jurisdiction id).
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -168,7 +148,6 @@ pub struct JdgAttestationScope {
     /// Covered block range (inclusive).
     pub block_range: JdgBlockRange,
 }
-
 /// Canonical read/write access set used by the attested execution.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -181,7 +160,6 @@ pub struct JdgStateAccessSet {
     /// Canonical write keys (byte-sorted and deduplicated).
     pub writes: Vec<Vec<u8>>,
 }
-
 impl JdgStateAccessSet {
     /// Build a normalized access set by sorting and deduplicating the supplied keys.
     #[must_use]
@@ -192,7 +170,6 @@ impl JdgStateAccessSet {
         }
     }
 }
-
 /// Verdict emitted by a JDG after evaluating policy/rules.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -206,12 +183,10 @@ pub enum JdgVerdict {
     /// Business rules rejected the transaction with a stable code.
     Reject(u32),
 }
-
 /// Threshold scheme with per-signer signatures.
 pub const JDG_SIGNATURE_SCHEME_SIMPLE_THRESHOLD: u16 = 1;
 /// Pre-aggregated BLS-normal signature for same-message validation.
 pub const JDG_SIGNATURE_SCHEME_BLS_NORMAL_AGGREGATE: u16 = 2;
-
 /// Allowed JDG signature scheme identifiers.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
@@ -228,7 +203,6 @@ pub enum JdgSignatureScheme {
     /// Pre-aggregated BLS-normal signature over the attestation hash.
     BlsNormalAggregate,
 }
-
 impl JdgSignatureScheme {
     /// Returns the numeric scheme identifier.
     #[must_use]
@@ -238,7 +212,6 @@ impl JdgSignatureScheme {
             Self::BlsNormalAggregate => JDG_SIGNATURE_SCHEME_BLS_NORMAL_AGGREGATE,
         }
     }
-
     /// Returns the canonical string representation.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -248,21 +221,17 @@ impl JdgSignatureScheme {
         }
     }
 }
-
 impl fmt::Display for JdgSignatureScheme {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
-
 /// Error surfaced when parsing a JDG signature scheme from a string.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("invalid JDG signature scheme `{0}`")]
 pub struct JdgSignatureSchemeParseError(pub String);
-
 impl FromStr for JdgSignatureScheme {
     type Err = JdgSignatureSchemeParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "simple_threshold" | "simple-threshold" | "simple" => Ok(Self::SimpleThreshold),
@@ -278,7 +247,6 @@ impl FromStr for JdgSignatureScheme {
         }
     }
 }
-
 /// Error surfaced when converting a signature scheme id into a known scheme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("unsupported JDG signature scheme id {scheme_id}")]
@@ -286,10 +254,8 @@ pub struct JdgSignatureSchemeIdError {
     /// Raw scheme identifier.
     pub scheme_id: u16,
 }
-
 impl TryFrom<u16> for JdgSignatureScheme {
     type Error = JdgSignatureSchemeIdError;
-
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
             JDG_SIGNATURE_SCHEME_SIMPLE_THRESHOLD => Ok(Self::SimpleThreshold),
@@ -298,7 +264,6 @@ impl TryFrom<u16> for JdgSignatureScheme {
         }
     }
 }
-
 /// Threshold signature envelope; concrete scheme defined by JDG policy.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -314,7 +279,6 @@ pub struct JdgThresholdSignature {
     /// Raw signatures (ordered as defined by the scheme).
     pub signatures: Vec<Vec<u8>>,
 }
-
 /// Commitment to secret data stored under a Secret Data Node (SDN).
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -333,7 +297,6 @@ pub struct JdgSdnCommitment {
     /// SDN public key used to generate the seal.
     pub sdn_public_key: PublicKey,
 }
-
 impl JdgSdnCommitment {
     /// Validate invariants that are independent of the attestation.
     ///
@@ -362,7 +325,6 @@ impl JdgSdnCommitment {
         }
         Ok(())
     }
-
     /// Compute the domain-tagged signing hash for the commitment body.
     #[must_use]
     pub fn signing_hash(&self) -> HashOf<JdgSdnCommitmentSignable> {
@@ -376,7 +338,6 @@ impl JdgSdnCommitment {
         HashOf::from_untyped_unchecked(Hash::new(payload))
     }
 }
-
 /// Commitment body covered by the SDN seal.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -389,7 +350,6 @@ pub struct JdgSdnCommitmentSignable {
     encrypted_payload_hash: Hash,
     sdn_public_key: PublicKey,
 }
-
 impl From<&JdgSdnCommitment> for JdgSdnCommitmentSignable {
     fn from(commitment: &JdgSdnCommitment) -> Self {
         Self {
@@ -400,7 +360,6 @@ impl From<&JdgSdnCommitment> for JdgSdnCommitmentSignable {
         }
     }
 }
-
 /// Rotation/overlap policy applied when sealing SDN payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -411,7 +370,6 @@ pub struct JdgSdnRotationPolicy {
     /// Number of blocks the previous SDN key remains valid after a successor activates.
     pub dual_publish_blocks: u64,
 }
-
 /// Policy describing how SDN commitments are enforced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -424,7 +382,6 @@ pub struct JdgSdnPolicy {
     /// Rotation/overlap rules for SDN keys.
     pub rotation: JdgSdnRotationPolicy,
 }
-
 /// SDN sealing key with activation and retirement windows.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -443,25 +400,21 @@ pub struct JdgSdnKeyRecord {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub rotation_parent: Option<PublicKey>,
 }
-
 impl JdgSdnKeyRecord {
     /// Whether the key is active for the provided block range.
     #[must_use]
     pub fn is_active_for(&self, range: &JdgBlockRange) -> bool {
         range.start_height >= self.activated_at && range.end_height <= self.retirement_bound()
     }
-
     fn retirement_bound(&self) -> u64 {
         self.retired_at.unwrap_or(u64::MAX)
     }
 }
-
 /// Registry of SDN sealing keys keyed by algorithm+payload bytes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JdgSdnRegistry {
     keys: BTreeMap<(Algorithm, Vec<u8>), JdgSdnKeyRecord>,
 }
-
 impl JdgSdnRegistry {
     /// Register a new SDN key, wiring retirement for the parent according to the rotation policy.
     ///
@@ -482,7 +435,6 @@ impl JdgSdnRegistry {
         if self.keys.contains_key(&fingerprint) {
             return Err(JdgSdnRegistryError::DuplicateKey);
         }
-
         if let Some(parent) = &record.rotation_parent {
             let parent_fingerprint =
                 Self::fingerprint(parent).map_err(|_| JdgSdnRegistryError::MalformedPublicKey {
@@ -519,11 +471,9 @@ impl JdgSdnRegistry {
                 _ => parent_record.retired_at = Some(allowed_retired_at),
             }
         }
-
         self.keys.insert(fingerprint, record);
         Ok(())
     }
-
     /// Verify a single SDN commitment against the registry and policy.
     ///
     /// # Errors
@@ -539,11 +489,9 @@ impl JdgSdnRegistry {
         commitment
             .validate_basic()
             .map_err(|source| JdgSdnValidationError::Commitment { index, source })?;
-
         if commitment.scope != *attestation_scope {
             return Err(JdgSdnValidationError::ScopeMismatch { index });
         }
-
         let fingerprint = Self::fingerprint(&commitment.sdn_public_key).map_err(|_| {
             JdgSdnValidationError::Commitment {
                 index,
@@ -557,7 +505,6 @@ impl JdgSdnRegistry {
                     index,
                     public_key: commitment.sdn_public_key.clone(),
                 })?;
-
         if !record.is_active_for(&commitment.scope.block_range) {
             return Err(JdgSdnValidationError::InactiveSdnKey {
                 index,
@@ -567,7 +514,6 @@ impl JdgSdnRegistry {
                 end_height: commitment.scope.block_range.end_height,
             });
         }
-
         // Honour rotation grace by ensuring the retirement window was clamped according to policy.
         if let Some(retired_at) = record.retired_at {
             let max_allowed = record
@@ -583,27 +529,22 @@ impl JdgSdnRegistry {
                 });
             }
         }
-
         commitment
             .seal
             .verify_hash(&commitment.sdn_public_key, commitment.signing_hash())
             .map_err(|_| JdgSdnValidationError::InvalidSeal { index })?;
-
         Ok(())
     }
-
     /// Fetch a key record by public key fingerprint.
     #[must_use]
     pub fn record(&self, key: &PublicKey) -> Option<&JdgSdnKeyRecord> {
         let fingerprint = Self::fingerprint(key).ok()?;
         self.keys.get(&fingerprint)
     }
-
     /// Iterate over all registered SDN key records.
     pub fn keys(&self) -> impl Iterator<Item = &JdgSdnKeyRecord> {
         self.keys.values()
     }
-
     fn fingerprint(
         key: &PublicKey,
     ) -> Result<(Algorithm, Vec<u8>), iroha_crypto::error::ParseError> {
@@ -611,7 +552,6 @@ impl JdgSdnRegistry {
         Ok((algorithm, bytes.to_vec()))
     }
 }
-
 /// Committee identifier bound into an attestation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[repr(transparent)]
@@ -621,7 +561,6 @@ impl JdgSdnRegistry {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct JdgCommitteeId(pub [u8; 32]);
-
 impl JdgCommitteeId {
     /// Construct a committee identifier from a 32-byte value.
     #[must_use]
@@ -629,7 +568,6 @@ impl JdgCommitteeId {
         Self(bytes)
     }
 }
-
 /// JDG attestation payload including scope, signer set, optional proof, and signature envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -678,7 +616,6 @@ pub struct JdgAttestation {
     /// Threshold signature over the domain-tagged attestation payload.
     pub signature: JdgThresholdSignature,
 }
-
 impl JdgAttestation {
     /// Compute a stable hash for signing using the v1 domain tag.
     #[must_use]
@@ -691,13 +628,11 @@ impl JdgAttestation {
         payload.extend_from_slice(&encoded);
         HashOf::from_untyped_unchecked(Hash::new(payload))
     }
-
     /// Hash the signer set to record the ordered signer commitment.
     #[must_use]
     pub fn signer_commitment(&self) -> HashOf<Vec<PublicKey>> {
         HashOf::new(&self.signer_set)
     }
-
     /// Validate attestation invariants (version, ranges, thresholds, signer set).
     ///
     /// # Errors
@@ -706,7 +641,6 @@ impl JdgAttestation {
     pub fn validate(&self) -> Result<(), JdgAttestationError> {
         self.validate_with_sdn(false)
     }
-
     /// Validate attestation invariants and, optionally, SDN commitments.
     ///
     /// Set `require_sdn_commitments` to `true` when the attestation must carry
@@ -747,7 +681,6 @@ impl JdgAttestation {
         }
         self.validate_sdn_commitments(require_sdn_commitments)
     }
-
     fn validate_sdn_commitments(
         &self,
         require_sdn_commitments: bool,
@@ -758,7 +691,6 @@ impl JdgAttestation {
             }
             return Ok(());
         }
-
         let mut seen = BTreeSet::new();
         for (index, commitment) in self.sdn_commitments.iter().enumerate() {
             commitment
@@ -788,7 +720,6 @@ impl JdgAttestation {
         }
         Ok(())
     }
-
     /// Validate SDN commitments structurally and against the provided registry/policy.
     ///
     /// # Errors
@@ -808,7 +739,6 @@ impl JdgAttestation {
         Ok(())
     }
 }
-
 /// Errors surfaced by [`JdgSdnCommitment`] validation.
 #[derive(Debug, Copy, Clone, Error, PartialEq, Eq)]
 pub enum JdgSdnCommitmentError {
@@ -831,7 +761,6 @@ pub enum JdgSdnCommitmentError {
     #[error("SDN public key is malformed")]
     MalformedSdnPublicKey,
 }
-
 /// Errors surfaced by SDN key registration and rotation.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum JdgSdnRegistryError {
@@ -881,7 +810,6 @@ pub enum JdgSdnRegistryError {
         parent_retired_at: u64,
     },
 }
-
 /// Errors surfaced by [`JdgAttestation`] validation.
 #[derive(Debug, Copy, Clone, Error, PartialEq, Eq)]
 pub enum JdgAttestationError {
@@ -952,7 +880,6 @@ pub enum JdgAttestationError {
         index: usize,
     },
 }
-
 /// Errors surfaced when validating SDN commitments against a registry.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum JdgSdnValidationError {
@@ -1009,7 +936,6 @@ pub enum JdgSdnValidationError {
         source: JdgSdnCommitmentError,
     },
 }
-
 /// View of [`JdgAttestation`] used for hashing/signing (omits the signature).
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1035,7 +961,6 @@ pub struct JdgAttestationSignable {
     epoch: u64,
     block_height: u64,
 }
-
 impl From<&JdgAttestation> for JdgAttestationSignable {
     fn from(value: &JdgAttestation) -> Self {
         Self {
@@ -1059,22 +984,18 @@ impl From<&JdgAttestation> for JdgAttestationSignable {
         }
     }
 }
-
 fn normalize_keys(mut keys: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
     keys.sort();
     keys.dedup();
     keys
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn checked_random_keypair() -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_random()
             .expect("generate checked data-model JDG fixture keypair")
     }
-
     fn sample_sdn_commitment(
         scope: &JdgAttestationScope,
         keypair: &iroha_crypto::KeyPair,
@@ -1096,7 +1017,6 @@ mod tests {
         commitment.seal = seal;
         commitment
     }
-
     fn sample_attestation() -> JdgAttestation {
         let jurisdiction_id = JurisdictionId::new(b"JUR1".to_vec()).expect("valid id");
         let scope = JdgAttestationScope {
@@ -1133,19 +1053,16 @@ mod tests {
             },
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn json_decode_defaults_missing_sdn_commitments() {
         let mut attestation = sample_attestation();
         attestation.sdn_commitments.clear();
-
         let json = norito::json::to_json_pretty(&attestation).expect("serialize attestation");
         assert!(
             !json.contains("sdn_commitments"),
             "empty commitments should be elided: {json}"
         );
-
         let decoded: JdgAttestation =
             norito::json::from_str(&json).expect("deserialize attestation");
         assert!(decoded.sdn_commitments.is_empty());
@@ -1153,7 +1070,6 @@ mod tests {
         assert_eq!(decoded.block_height, attestation.block_height);
         assert_eq!(decoded.expiry_height, attestation.expiry_height);
     }
-
     #[test]
     fn jurisdiction_id_bounds() {
         assert_eq!(
@@ -1169,7 +1085,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn block_range_validation() {
         let err = JdgBlockRange::new(5, 4).unwrap_err();
@@ -1181,7 +1096,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn attestation_signing_hash_uses_domain_tag() {
         let attestation = sample_attestation();
@@ -1193,11 +1107,9 @@ mod tests {
         expected_payload.extend_from_slice(JDG_ATTESTATION_DOMAIN_TAG_V1);
         expected_payload.extend_from_slice(&encoded);
         let expected = HashOf::from_untyped_unchecked(Hash::new(expected_payload.clone()));
-
         assert_eq!(attestation.signing_hash(), expected);
         assert_ne!(attestation.signing_hash(), HashOf::new(&signable));
     }
-
     #[test]
     fn signature_scheme_from_str_accepts_aliases() {
         assert_eq!(
@@ -1209,7 +1121,6 @@ mod tests {
             JdgSignatureScheme::BlsNormalAggregate
         );
     }
-
     #[test]
     fn signature_scheme_ids_and_labels() {
         assert_eq!(
@@ -1233,7 +1144,6 @@ mod tests {
             "simple_threshold"
         );
     }
-
     #[test]
     fn signature_scheme_try_from_id_rejects_unknown() {
         assert_eq!(
@@ -1247,7 +1157,6 @@ mod tests {
         let err = JdgSignatureScheme::try_from(99).unwrap_err();
         assert_eq!(err.scheme_id, 99);
     }
-
     #[test]
     fn attestation_validation_catches_signer_issues() {
         let mut attestation = sample_attestation();
@@ -1260,14 +1169,12 @@ mod tests {
                 threshold: 2
             }
         );
-
         let duplicate_key = attestation.signer_set[0].clone();
         attestation.signer_set.push(duplicate_key);
         attestation.committee_threshold = 1;
         let err = attestation.validate().unwrap_err();
         assert_eq!(err, JdgAttestationError::DuplicateSigners);
     }
-
     #[test]
     fn attestation_validation_checks_block_range() {
         let mut attestation = sample_attestation();
@@ -1282,7 +1189,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn access_set_is_normalized() {
         let access_set = JdgStateAccessSet::normalized(
@@ -1292,7 +1198,6 @@ mod tests {
         assert_eq!(access_set.reads, vec![b"a".to_vec(), b"b".to_vec()]);
         assert_eq!(access_set.writes, vec![b"y".to_vec(), b"z".to_vec()]);
     }
-
     #[test]
     fn attestation_requires_sdn_commitments_when_flagged() {
         let mut attestation = sample_attestation();
@@ -1302,7 +1207,6 @@ mod tests {
             .expect_err("sdn commitments must be enforced when required");
         assert_eq!(err, JdgAttestationError::MissingSdnCommitments);
     }
-
     #[test]
     fn sdn_commitment_scope_mismatch_is_rejected() {
         let mut attestation = sample_attestation();
@@ -1315,7 +1219,6 @@ mod tests {
             other => panic!("expected SdnScopeMismatch, got {other:?}"),
         }
     }
-
     #[test]
     fn sdn_commitment_empty_seal_is_rejected() {
         let mut attestation = sample_attestation();
@@ -1332,7 +1235,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn sdn_commitment_all_zero_seal_is_rejected() {
         let mut attestation = sample_attestation();
@@ -1349,7 +1251,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn sdn_commitment_invalid_range_is_rejected() {
         let mut attestation = sample_attestation();
@@ -1368,7 +1269,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn duplicate_sdn_commitments_are_rejected() {
         let mut attestation = sample_attestation();
@@ -1386,7 +1286,6 @@ mod tests {
             JdgAttestationError::DuplicateSdnCommitment { .. }
         ));
     }
-
     #[test]
     fn sdn_registry_accepts_active_commitment() {
         let attestation = sample_attestation();
@@ -1418,17 +1317,14 @@ mod tests {
             .expect("checked registered public-key payload");
         assert_eq!(record_algorithm, expected_algorithm);
         assert_eq!(record_payload, expected_payload.as_slice());
-
         let policy = JdgSdnPolicy {
             require_commitments: true,
             rotation,
         };
-
         attestation
             .validate_with_sdn_registry(&registry, &policy)
             .expect("registry validation should pass");
     }
-
     #[test]
     fn sdn_registry_rejects_unknown_key() {
         let attestation = sample_attestation();
@@ -1437,7 +1333,6 @@ mod tests {
             rotation: JdgSdnRotationPolicy::default(),
         };
         let registry = JdgSdnRegistry::default();
-
         let err = attestation
             .validate_with_sdn_registry(&registry, &policy)
             .expect_err("missing registry entry should be rejected");
@@ -1446,7 +1341,6 @@ mod tests {
             other => panic!("expected UnknownSdnKey, got {other:?}"),
         }
     }
-
     #[test]
     fn sdn_registry_rejects_inactive_key() {
         let attestation = sample_attestation();
@@ -1455,7 +1349,6 @@ mod tests {
             require_commitments: true,
             rotation: JdgSdnRotationPolicy::default(),
         };
-
         let key = attestation.sdn_commitments[0].sdn_public_key.clone();
         registry
             .register_key(
@@ -1468,7 +1361,6 @@ mod tests {
                 &policy.rotation,
             )
             .expect("register inactive key");
-
         let err = attestation
             .validate_with_sdn_registry(&registry, &policy)
             .expect_err("inactive key should be rejected");
@@ -1477,7 +1369,6 @@ mod tests {
             JdgSdnValidationError::InactiveSdnKey { index: 0, .. }
         ));
     }
-
     #[test]
     fn sdn_registry_rejects_bad_signature() {
         let mut attestation = sample_attestation();
@@ -1486,7 +1377,6 @@ mod tests {
             rotation: JdgSdnRotationPolicy::default(),
         };
         let mut registry = JdgSdnRegistry::default();
-
         let key = attestation.sdn_commitments[0].sdn_public_key.clone();
         registry
             .register_key(
@@ -1499,7 +1389,6 @@ mod tests {
                 &policy.rotation,
             )
             .expect("register key");
-
         attestation.sdn_commitments[0].seal =
             SignatureOf::from_signature(Signature::from_bytes(&[0xAA]));
         let err = attestation
@@ -1510,7 +1399,6 @@ mod tests {
             JdgSdnValidationError::InvalidSeal { index: 0 }
         ));
     }
-
     #[test]
     fn sdn_registry_sets_parent_retirement_window() {
         let rotation = JdgSdnRotationPolicy {
@@ -1519,7 +1407,6 @@ mod tests {
         let parent = checked_random_keypair();
         let child = checked_random_keypair();
         let mut registry = JdgSdnRegistry::default();
-
         registry
             .register_key(
                 JdgSdnKeyRecord {
@@ -1542,11 +1429,9 @@ mod tests {
                 &rotation,
             )
             .expect("register child");
-
         let parent_record = registry.record(parent.public_key()).expect("parent record");
         assert_eq!(parent_record.retired_at, Some(23));
     }
-
     #[test]
     fn sdn_registry_rejects_overlap_beyond_policy() {
         let rotation = JdgSdnRotationPolicy {
@@ -1555,7 +1440,6 @@ mod tests {
         let parent = checked_random_keypair();
         let child = checked_random_keypair();
         let mut registry = JdgSdnRegistry::default();
-
         registry
             .register_key(
                 JdgSdnKeyRecord {
@@ -1567,7 +1451,6 @@ mod tests {
                 &rotation,
             )
             .expect("register parent");
-
         let err = registry
             .register_key(
                 JdgSdnKeyRecord {

@@ -41,7 +41,6 @@ pub(super) fn java_native_kagemusha_create_recipient_receive_offer_v2(
             .map_err(|error| error.to_string())
     })
 }
-
 pub(super) fn java_native_kagemusha_project_recipient_receive_offer_v2(
     env: &mut jni::JNIEnv<'_>,
     offer: jni::objects::JByteArray<'_>,
@@ -73,7 +72,6 @@ pub(super) fn java_native_kagemusha_project_recipient_receive_offer_v2(
         }
     }
 }
-
 pub(super) fn java_native_kagemusha_verify_recipient_receive_offer_v2(
     env: &mut jni::JNIEnv<'_>,
     offer: jni::objects::JByteArray<'_>,
@@ -136,7 +134,6 @@ pub(super) fn java_native_kagemusha_verify_recipient_receive_offer_v2(
         }
     }
 }
-
 pub(super) fn java_native_kagemusha_project_recipient_request_v2(
     env: &mut jni::JNIEnv<'_>,
     request: jni::objects::JByteArray<'_>,
@@ -178,7 +175,6 @@ pub(super) fn java_native_kagemusha_project_recipient_request_v2(
         )
     })
 }
-
 pub(super) fn java_kagemusha_decode_archive<T>(
     env: &mut jni::JNIEnv<'_>,
     archive: &jni::objects::JByteArray<'_>,
@@ -202,7 +198,6 @@ where
     decode_canonical_kagemusha_archive(&bytes)
         .map_err(|_| format!("{field} is not a canonical typed archive"))
 }
-
 pub(super) fn java_kagemusha_decode_sensitive_archive<T>(
     env: &mut jni::JNIEnv<'_>,
     archive: &jni::objects::JByteArray<'_>,
@@ -228,7 +223,6 @@ where
     decode_canonical_kagemusha_sensitive_archive(bytes.as_slice())
         .map_err(|_| format!("{field} is not a canonical typed archive"))
 }
-
 pub(super) fn java_kagemusha_decode_archive_bounded<T>(
     env: &mut jni::JNIEnv<'_>,
     archive: &jni::objects::JByteArray<'_>,
@@ -244,27 +238,22 @@ where
     decode_canonical_kagemusha_archive(&bytes)
         .map_err(|_| format!("{field} is not a canonical typed archive"))
 }
-
 pub(super) struct JavaKagemushaSensitiveOpeningV2 {
     value: KagemushaNoteOpeningV2,
 }
-
 impl Drop for JavaKagemushaSensitiveOpeningV2 {
     fn drop(&mut self) {
         self.value.zeroize();
     }
 }
-
 pub(super) struct JavaKagemushaSensitiveMembershipWitnessV2 {
     value: KagemushaNoteMembershipWitnessV2,
 }
-
 impl Drop for JavaKagemushaSensitiveMembershipWitnessV2 {
     fn drop(&mut self) {
         zeroize_kagemusha_note_membership_witness_v2(&mut self.value);
     }
 }
-
 pub(super) fn java_kagemusha_optional_opening(
     env: &mut jni::JNIEnv<'_>,
     archive: &jni::objects::JByteArray<'_>,
@@ -284,15 +273,12 @@ pub(super) fn java_kagemusha_optional_opening(
         .map_err(|_| format!("{field} is invalid"))?;
     Ok(Some(JavaKagemushaSensitiveOpeningV2 { value: opening }))
 }
-
 pub(super) const KAGEMUSHA_JVM_EXACT_STATE_PROJECTION_VERSION_V1: u32 = 1;
-
 pub(super) fn java_kagemusha_projection_version_v1() -> Vec<u8> {
     KAGEMUSHA_JVM_EXACT_STATE_PROJECTION_VERSION_V1
         .to_be_bytes()
         .to_vec()
 }
-
 pub(super) fn java_kagemusha_count_v1(value: usize, field: &str) -> Result<Vec<u8>, String> {
     if !(1..=iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2)
         .contains(&value)
@@ -304,7 +290,6 @@ pub(super) fn java_kagemusha_count_v1(value: usize, field: &str) -> Result<Vec<u
         .map(|bytes| bytes.to_vec())
         .map_err(|_| format!("{field} count exceeds the projection range"))
 }
-
 pub(super) fn java_kagemusha_validate_claims_v1(
     claims: &[iroha_data_model::offline::KagemushaRecursiveSpendBranchClaimV2],
 ) -> Result<(), String> {
@@ -325,7 +310,6 @@ pub(super) fn java_kagemusha_validate_claims_v1(
     }
     Ok(())
 }
-
 /// Append the canonical exact-state projection of one independently spendable branch.
 ///
 /// The tuple is deliberately self-authenticating: the bundle is validated first and is the
@@ -379,7 +363,6 @@ pub(super) fn java_kagemusha_append_branch_projection_v1(
     }
     Ok(())
 }
-
 pub(super) fn java_kagemusha_byte_array_vector(
     env: &mut jni::JNIEnv<'_>,
     values: &jni::objects::JObjectArray<'_>,
@@ -403,7 +386,6 @@ pub(super) fn java_kagemusha_byte_array_vector(
     }
     Ok(result)
 }
-
 pub(super) fn java_kagemusha_byte_array_vector_bounded(
     env: &mut jni::JNIEnv<'_>,
     values: &jni::objects::JObjectArray<'_>,
@@ -439,7 +421,6 @@ pub(super) fn java_kagemusha_byte_array_vector_bounded(
     }
     Ok(result)
 }
-
 pub(super) fn java_kagemusha_decimal_u32(bytes: &[u8], field: &str) -> Result<u32, String> {
     let text = std::str::from_utf8(bytes).map_err(|_| format!("{field} must be UTF-8"))?;
     if text.is_empty()
@@ -451,7 +432,6 @@ pub(super) fn java_kagemusha_decimal_u32(bytes: &[u8], field: &str) -> Result<u3
     text.parse::<u32>()
         .map_err(|_| format!("{field} must fit in u32"))
 }
-
 pub(super) fn java_kagemusha_output_path_v4(
     leaf_index: u32,
     flattened_siblings: &[u8],
@@ -483,7 +463,6 @@ pub(super) fn java_kagemusha_output_path_v4(
         .map_err(|_| format!("{field} shape, directions, or leaf index is invalid"))?;
     Ok(path)
 }
-
 pub(super) fn java_kagemusha_output_leaf_fields_v4(
     fields: &[Zeroizing<Vec<u8>>],
     field: &str,
@@ -513,7 +492,6 @@ pub(super) fn java_kagemusha_output_leaf_fields_v4(
         )?,
     }))
 }
-
 pub(super) fn java_kagemusha_copy_c_archive_v4(
     status: c_int,
     output: *mut c_uchar,
@@ -546,7 +524,6 @@ pub(super) fn java_kagemusha_copy_c_archive_v4(
     connect_norito_free(output);
     Ok(archive)
 }
-
 pub(super) fn java_native_kagemusha_build_output_membership_frontier_v4(
     env: &mut jni::JNIEnv<'_>,
     leaf_index: jni::sys::jint,
@@ -603,7 +580,6 @@ pub(super) fn java_native_kagemusha_build_output_membership_frontier_v4(
             .map_err(|error| error.to_string())
     })
 }
-
 pub(super) fn java_kagemusha_output_path_projection_fields_v4(
     leaf_index: u32,
     path: &KagemushaConfidentialMerklePathV2,
@@ -615,7 +591,6 @@ pub(super) fn java_kagemusha_output_path_projection_fields_v4(
         path.root.to_vec(),
     ]
 }
-
 pub(super) fn java_kagemusha_output_leaf_projection_fields_v4(
     leaf: Option<&KagemushaOutputMembershipLeafPathsV4>,
 ) -> Vec<Vec<u8>> {
@@ -629,7 +604,6 @@ pub(super) fn java_kagemusha_output_leaf_projection_fields_v4(
     fields.extend(membership.into_iter().skip(1));
     fields
 }
-
 pub(super) fn java_native_kagemusha_derive_output_membership_paths_v4(
     env: &mut jni::JNIEnv<'_>,
     frontier: jni::objects::JByteArray<'_>,
@@ -723,7 +697,6 @@ pub(super) fn java_native_kagemusha_derive_output_membership_paths_v4(
         java_kagemusha_secret_byte_arrays(env, &mut fields)
     })
 }
-
 pub(super) fn java_native_kagemusha_validate_spendable_branch_v4(
     env: &mut jni::JNIEnv<'_>,
     bundle: jni::objects::JByteArray<'_>,
@@ -817,7 +790,6 @@ pub(super) fn java_native_kagemusha_validate_spendable_branch_v4(
             .map_err(|error| error.to_string())
     })
 }
-
 #[cfg(all(
     feature = "kagemusha-candidate-evidence-lab",
     any(
@@ -902,7 +874,6 @@ pub(super) fn java_native_kagemusha_candidate_lab_validate_branch_v4(
             .map_err(|error| error.to_string())
     })
 }
-
 pub(super) fn java_native_kagemusha_build_output_membership_paths_v4(
     env: &mut jni::JNIEnv<'_>,
     initial_root: jni::objects::JByteArray<'_>,
@@ -960,7 +931,6 @@ pub(super) fn java_native_kagemusha_build_output_membership_paths_v4(
             .map_err(|error| error.to_string())
     })
 }
-
 pub(super) fn kagemusha_append_inputs_conflict_v4(
     left: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
     right: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
@@ -979,7 +949,6 @@ pub(super) fn kagemusha_append_inputs_conflict_v4(
                 .any(|right_claim| left_claim.path.conflicts_with(right_claim.path))
         })
 }
-
 pub(super) struct JavaKagemushaAppendInputV4 {
     canonical_sha256: [u8; 32],
     bundle: iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
@@ -987,14 +956,12 @@ pub(super) struct JavaKagemushaAppendInputV4 {
     opening: KagemushaNoteOpeningV2,
     witness: KagemushaNoteMembershipWitnessV2,
 }
-
 impl Drop for JavaKagemushaAppendInputV4 {
     fn drop(&mut self) {
         self.opening.zeroize();
         zeroize_kagemusha_note_membership_witness_v2(&mut self.witness);
     }
 }
-
 pub(super) fn java_native_kagemusha_project_peer_payment_v4(
     env: &mut jni::JNIEnv<'_>,
     payment: jni::objects::JByteArray<'_>,
@@ -1033,7 +1000,6 @@ pub(super) fn java_native_kagemusha_project_peer_payment_v4(
         java_kagemusha_byte_arrays(env, &fields)
     })
 }
-
 pub(super) fn java_native_kagemusha_project_init_result_v4(
     env: &mut jni::JNIEnv<'_>,
     result: jni::objects::JByteArray<'_>,
@@ -1078,7 +1044,6 @@ pub(super) fn java_native_kagemusha_project_init_result_v4(
         java_kagemusha_byte_arrays(env, &fields)
     })
 }
-
 pub(super) fn java_native_kagemusha_project_split_result_v4(
     env: &mut jni::JNIEnv<'_>,
     split: jni::objects::JByteArray<'_>,
@@ -1138,7 +1103,6 @@ pub(super) fn java_native_kagemusha_project_split_result_v4(
         java_kagemusha_byte_arrays(env, &fields)
     })
 }
-
 pub(super) fn java_native_kagemusha_project_verify_result_v4(
     env: &mut jni::JNIEnv<'_>,
     result: jni::objects::JByteArray<'_>,
@@ -1213,7 +1177,6 @@ pub(super) fn java_native_kagemusha_project_verify_result_v4(
         java_kagemusha_byte_arrays(env, &fields)
     })
 }
-
 pub(super) fn java_native_kagemusha_project_redeem_build_result_v4(
     env: &mut jni::JNIEnv<'_>,
     result: jni::objects::JByteArray<'_>,
@@ -1261,7 +1224,6 @@ pub(super) fn java_native_kagemusha_project_redeem_build_result_v4(
         java_kagemusha_byte_arrays(env, &fields)
     })
 }
-
 #[cfg(all(
     feature = "kagemusha-candidate-evidence-lab",
     any(
@@ -1324,7 +1286,6 @@ pub(super) fn java_native_kagemusha_candidate_lab_project_redeem_result_v4(
         java_kagemusha_byte_arrays(env, &fields)
     })
 }
-
 pub(super) fn java_native_kagemusha_prepare_acknowledgement_v2(
     env: &mut jni::JNIEnv<'_>,
     request: jni::objects::JByteArray<'_>,
@@ -1373,7 +1334,6 @@ pub(super) fn java_native_kagemusha_prepare_acknowledgement_v2(
         )
     })
 }
-
 pub(super) fn java_native_kagemusha_create_acknowledgement_v2(
     env: &mut jni::JNIEnv<'_>,
     payload: jni::objects::JByteArray<'_>,
@@ -1418,7 +1378,6 @@ pub(super) fn java_native_kagemusha_create_acknowledgement_v2(
             .map_err(|error| error.to_string())
     })
 }
-
 pub(super) fn java_native_kagemusha_verify_acknowledgement_v2(
     env: &mut jni::JNIEnv<'_>,
     acknowledgement: jni::objects::JByteArray<'_>,
@@ -1463,7 +1422,6 @@ pub(super) fn java_native_kagemusha_verify_acknowledgement_v2(
         )
     })
 }
-
 pub(super) fn java_native_kagemusha_build_init_request_v4(
     env: &mut jni::JNIEnv<'_>,
     anchor: jni::objects::JByteArray<'_>,
@@ -1512,7 +1470,6 @@ pub(super) fn java_native_kagemusha_build_init_request_v4(
             .map_err(|error| error.to_string())
     })
 }
-
 pub(super) fn java_native_kagemusha_build_topup_provenance_v4(
     env: &mut jni::JNIEnv<'_>,
     bundle: jni::objects::JByteArray<'_>,
@@ -1620,7 +1577,6 @@ pub(super) fn java_native_kagemusha_build_topup_provenance_v4(
             .map_err(|error| error.to_string())
     })
 }
-
 pub(super) fn java_native_kagemusha_validate_topup_provenance_v4(
     env: &mut jni::JNIEnv<'_>,
     bundle: jni::objects::JByteArray<'_>,
@@ -1659,7 +1615,6 @@ pub(super) fn java_native_kagemusha_validate_topup_provenance_v4(
             .map_err(|error| error.to_string())
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn java_native_kagemusha_build_append_request_with_policy_v4(
     env: &mut jni::JNIEnv<'_>,
@@ -1853,7 +1808,6 @@ pub(super) fn java_native_kagemusha_build_append_request_with_policy_v4(
             .map_err(|error| error.to_string())
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn java_native_kagemusha_build_append_request_v4(
     env: &mut jni::JNIEnv<'_>,
@@ -1881,14 +1835,12 @@ pub(super) fn java_native_kagemusha_build_append_request_v4(
         false,
     )
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum JavaKagemushaArtifactRegistryV4 {
     Production,
     #[cfg(feature = "kagemusha-candidate-evidence-lab")]
     CandidateEvidenceLab,
 }
-
 pub(super) fn validate_java_kagemusha_topup_provenance_v4(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
     provenance: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpProvenanceV4,
@@ -1913,7 +1865,6 @@ pub(super) fn validate_java_kagemusha_topup_provenance_v4(
         }
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn java_native_kagemusha_build_verify_request_v4(
     env: &mut jni::JNIEnv<'_>,
@@ -1996,7 +1947,6 @@ pub(super) fn java_native_kagemusha_build_verify_request_v4(
             .map_err(|error| error.to_string())
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn java_native_kagemusha_build_redeem_request_v4(
     env: &mut jni::JNIEnv<'_>,
@@ -2103,7 +2053,6 @@ pub(super) fn java_native_kagemusha_build_redeem_request_v4(
             .map_err(|error| error.to_string())
     })
 }
-
 pub(super) fn java_kagemusha_lower_hex_32(value: &str, field: &str) -> Result<Vec<u8>, String> {
     if value.len() != 64
         || !value
@@ -2118,7 +2067,6 @@ pub(super) fn java_kagemusha_lower_hex_32(value: &str, field: &str) -> Result<Ve
     }
     Ok(digest)
 }
-
 pub(super) fn java_kagemusha_validate_active_verifier(
     verifier: &iroha_torii_shared::offline_api::OfflineActiveTransferVerifier,
     evaluated_height: u64,
@@ -2154,7 +2102,6 @@ pub(super) fn java_kagemusha_validate_active_verifier(
     }
     Ok(())
 }
-
 pub(super) fn java_kagemusha_readiness_verifier_archive(
     verifier: Option<&iroha_torii_shared::offline_api::OfflineActiveTransferVerifier>,
     evaluated_height: u64,
@@ -2166,7 +2113,6 @@ pub(super) fn java_kagemusha_readiness_verifier_archive(
     java_kagemusha_validate_active_verifier(verifier, evaluated_height, field)?;
     norito::to_bytes(verifier).map_err(|error| format!("failed to encode {field}: {error}"))
 }
-
 pub(super) fn java_kagemusha_authenticated_artifact_set_v4_fields(
     artifact_set: &iroha_torii_shared::offline_api::OfflineAuthenticatedArtifactSet,
 ) -> Result<Vec<Vec<u8>>, String> {
@@ -2214,7 +2160,6 @@ pub(super) fn java_kagemusha_authenticated_artifact_set_v4_fields(
         artifact_set.asset_scale.to_string().into_bytes(),
     ])
 }
-
 pub(super) fn java_kagemusha_validate_exact_readiness_verifier_role(
     verifier: Option<&iroha_torii_shared::offline_api::OfflineActiveTransferVerifier>,
     field: &str,
@@ -2234,7 +2179,6 @@ pub(super) fn java_kagemusha_validate_exact_readiness_verifier_role(
     }
     Ok(())
 }
-
 pub(super) fn java_kagemusha_project_readiness_v4_fields(
     readiness: iroha_torii_shared::offline_api::OfflineReadiness,
 ) -> Result<Vec<Vec<u8>>, String> {
@@ -2261,7 +2205,6 @@ pub(super) fn java_kagemusha_project_readiness_v4_fields(
     }
     let block_hash =
         java_kagemusha_lower_hex_32(&readiness.evaluated_block_hash, "evaluatedBlockHash")?;
-
     for (verifier, field, expected_name, expected_circuit_id) in [
         (
             readiness.active_transfer_verifier.as_ref(),
@@ -2301,7 +2244,6 @@ pub(super) fn java_kagemusha_project_readiness_v4_fields(
             expected_circuit_id,
         )?;
     }
-
     let transfer = java_kagemusha_readiness_verifier_archive(
         readiness.active_transfer_verifier.as_ref(),
         readiness.evaluated_block_height,
@@ -2327,7 +2269,6 @@ pub(super) fn java_kagemusha_project_readiness_v4_fields(
         readiness.evaluated_block_height,
         "activeRecursiveStepEpVerifier",
     )?;
-
     let active_verifiers = [
         readiness.active_transfer_verifier.as_ref(),
         readiness.active_topup_shield_verifier.as_ref(),
@@ -2346,7 +2287,6 @@ pub(super) fn java_kagemusha_project_readiness_v4_fields(
             return Err("readiness reuses verifier identity across production roles".to_owned());
         }
     }
-
     let recursive_pair_present = !step_eq.is_empty() && !step_ep.is_empty();
     if step_eq.is_empty() != step_ep.is_empty() {
         return Err("ABI-21 V4 recursive verifiers must be reported atomically".to_owned());
@@ -2402,7 +2342,6 @@ pub(super) fn java_kagemusha_project_readiness_v4_fields(
                 .map_err(|error| format!("failed to encode artifactSet: {error}"))?
         }
     };
-
     let mut blocker_codes = std::collections::BTreeSet::new();
     for blocker in &readiness.blockers {
         let code = blocker.code.as_bytes();
@@ -2483,7 +2422,6 @@ pub(super) fn java_kagemusha_project_readiness_v4_fields(
     if readiness.ready != expected_ready {
         return Err("ready must equal the complete ABI-21 runtime conjunction".to_owned());
     }
-
     let mut fields = vec![
         readiness.cash_handoff_capability.into_bytes(),
         readiness
@@ -2515,7 +2453,6 @@ pub(super) fn java_kagemusha_project_readiness_v4_fields(
     }
     Ok(fields)
 }
-
 pub(super) fn java_native_kagemusha_project_readiness_v4(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
@@ -2528,7 +2465,6 @@ pub(super) fn java_native_kagemusha_project_readiness_v4(
         java_kagemusha_byte_arrays(env, &fields)
     })
 }
-
 pub(super) fn java_native_kagemusha_project_authenticated_artifact_set_v4(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
@@ -2541,7 +2477,6 @@ pub(super) fn java_native_kagemusha_project_authenticated_artifact_set_v4(
         java_kagemusha_byte_arrays(env, &fields)
     })
 }
-
 pub(super) fn java_native_kagemusha_project_active_verifier_v2(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
@@ -2582,7 +2517,6 @@ pub(super) fn java_native_kagemusha_project_active_verifier_v2(
         )
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn java_native_kagemusha_prepare_authorization_v2(
     env: &mut jni::JNIEnv<'_>,
@@ -2673,7 +2607,6 @@ pub(super) fn java_native_kagemusha_prepare_authorization_v2(
         )
     })
 }
-
 pub(super) fn java_native_kagemusha_finalize_hardware_authorization_v2(
     env: &mut jni::JNIEnv<'_>,
     preparation: jni::objects::JByteArray<'_>,
@@ -2711,7 +2644,6 @@ pub(super) fn java_native_kagemusha_finalize_hardware_authorization_v2(
         java_kagemusha_byte_arrays(env, &[archive, signature.as_raw_bytes().to_vec()])
     })
 }
-
 pub(super) fn java_native_kagemusha_finalize_ios_app_attest_authorization_v2(
     env: &mut jni::JNIEnv<'_>,
     preparation: jni::objects::JByteArray<'_>,
@@ -2744,7 +2676,6 @@ pub(super) fn java_native_kagemusha_finalize_ios_app_attest_authorization_v2(
         java_kagemusha_byte_arrays(env, &[archive, signature_raw, authenticator_data])
     })
 }
-
 pub(super) fn java_native_kagemusha_finalize_top_up_v4(
     env: &mut jni::JNIEnv<'_>,
     unsigned: jni::objects::JByteArray<'_>,
@@ -2780,7 +2711,6 @@ pub(super) fn java_native_kagemusha_finalize_top_up_v4(
             .map_err(|error| error.to_string())
     })
 }
-
 pub(super) fn java_native_kagemusha_finalize_redeem_v4(
     env: &mut jni::JNIEnv<'_>,
     build_result: jni::objects::JByteArray<'_>,
@@ -2825,7 +2755,6 @@ pub(super) fn java_native_kagemusha_finalize_redeem_v4(
         java_kagemusha_byte_arrays(env, &[request_archive, result.operation_id.to_vec()])
     })
 }
-
 pub(super) fn java_kagemusha_bridge_failure(
     label: &str,
     error: BridgeError,
@@ -2849,7 +2778,6 @@ pub(super) fn java_kagemusha_bridge_failure(
         )),
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn java_native_kagemusha_prepare_top_up_v4(
     env: &mut jni::JNIEnv<'_>,
@@ -3027,7 +2955,6 @@ pub(super) fn java_native_kagemusha_prepare_top_up_v4(
         }
     }
 }
-
 pub(super) fn java_native_kagemusha_project_operation_status_v4(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
@@ -3130,13 +3057,11 @@ pub(super) fn java_native_kagemusha_project_operation_status_v4(
         java_kagemusha_byte_arrays(env, &fields)
     })
 }
-
 pub(super) fn java_privacy_compiled_profile_catalog_archive() -> Result<Vec<u8>, String> {
     privacy_compiled_profile_catalog_archive_v1()
         .map(<[u8]>::to_vec)
         .map_err(|_| "failed to derive local compiled-profile catalog archive".to_owned())
 }
-
 pub(super) fn java_privacy_exact12_fixture_bundle_archive() -> Result<Vec<u8>, String> {
     let mut archive = privacy_exact12_fixture_bundle_bytes_v1()
         .map_err(|err| format!("failed to encode exact-12 privacy fixture bundle: {err}"))?;
@@ -3154,7 +3079,6 @@ pub(super) fn java_privacy_exact12_fixture_bundle_archive() -> Result<Vec<u8>, S
     }
     Ok(archive)
 }
-
 pub(super) fn java_privacy_validate_exact12_fixture_bundle_bytes(
     archive: Option<&[u8]>,
 ) -> jni::sys::jint {
@@ -3166,7 +3090,6 @@ pub(super) fn java_privacy_validate_exact12_fixture_bundle_bytes(
     }
     validate_privacy_exact12_fixture_bundle_v1(archive).code()
 }
-
 pub(super) fn java_native_privacy_validate_compiled_profile_catalog(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
@@ -3194,7 +3117,6 @@ pub(super) fn java_native_privacy_validate_compiled_profile_catalog(
         Err(_) => PrivacyCompiledProfileCatalogArchiveValidationStatusV1::MalformedArchive.code(),
     }
 }
-
 pub(super) fn java_native_privacy_validate_exact12_capability_manifest(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
@@ -3219,7 +3141,6 @@ pub(super) fn java_native_privacy_validate_exact12_capability_manifest(
         Err(_) => PrivacyCapabilityArchiveValidationStatusV1::MalformedArchive.code(),
     }
 }
-
 pub(super) fn java_privacy_exact12_capability_tuple_admitted(
     archive: &[u8],
     protocol_index: jni::sys::jint,
@@ -3250,14 +3171,12 @@ pub(super) fn java_privacy_exact12_capability_tuple_admitted(
         && committed.is_network_available()
         && committed.compiled_profile == local.compiled_profile
 }
-
 pub(super) fn java_native_privacy_require_exact12_capability_tuple(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
     protocol_index: jni::sys::jint,
 ) -> jni::sys::jboolean {
     use jni::sys::{JNI_FALSE, JNI_TRUE};
-
     if archive.is_null() {
         return JNI_FALSE;
     }
@@ -3278,7 +3197,6 @@ pub(super) fn java_native_privacy_require_exact12_capability_tuple(
     archive_bytes.fill(0);
     if admitted { JNI_TRUE } else { JNI_FALSE }
 }
-
 pub(super) fn java_privacy_exact12_submit_proof_admitted(
     manifest_archive: &[u8],
     protocol_index: jni::sys::jint,
@@ -3323,7 +3241,6 @@ pub(super) fn java_privacy_exact12_submit_proof_admitted(
             )
             .is_ok()
 }
-
 pub(super) fn java_native_privacy_validate_exact12_submit_proof_construction(
     env: &mut jni::JNIEnv<'_>,
     manifest_archive: jni::objects::JByteArray<'_>,
@@ -3331,7 +3248,6 @@ pub(super) fn java_native_privacy_validate_exact12_submit_proof_construction(
     instruction_archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jboolean {
     use jni::sys::{JNI_FALSE, JNI_TRUE};
-
     if manifest_archive.is_null() || instruction_archive.is_null() {
         return JNI_FALSE;
     }
@@ -3375,7 +3291,6 @@ pub(super) fn java_native_privacy_validate_exact12_submit_proof_construction(
     instruction_bytes.fill(0);
     if admitted { JNI_TRUE } else { JNI_FALSE }
 }
-
 pub(super) fn java_privacy_exact12_capability_manifest_inspection(
     archive: &[u8],
 ) -> Result<Vec<u8>, String> {
@@ -3404,7 +3319,6 @@ pub(super) fn java_privacy_exact12_capability_manifest_inspection(
                 && committed.compiled_profile == local.compiled_profile
         })
         .collect::<Vec<_>>();
-
     let mut projection = JsonMap::new();
     projection.insert(
         "manifest".to_owned(),
@@ -3419,7 +3333,6 @@ pub(super) fn java_privacy_exact12_capability_manifest_inspection(
     norito::json::to_vec(&JsonValue::Object(projection))
         .map_err(|error| format!("failed to encode exact-12 capability inspection: {error}"))
 }
-
 pub(super) fn java_native_privacy_inspect_exact12_capability_manifest(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
@@ -3456,7 +3369,6 @@ pub(super) fn java_native_privacy_inspect_exact12_capability_manifest(
         }
     }
 }
-
 pub(super) fn java_native_privacy_compiled_profile_catalog(
     env: &mut jni::JNIEnv<'_>,
 ) -> jni::sys::jbyteArray {
@@ -3477,7 +3389,6 @@ pub(super) fn java_native_privacy_compiled_profile_catalog(
         }
     }
 }
-
 pub(super) fn java_native_privacy_validate_exact12_fixture_bundle(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
@@ -3502,7 +3413,6 @@ pub(super) fn java_native_privacy_validate_exact12_fixture_bundle(
         Err(_) => PrivacyExact12FixtureBundleValidationStatusV1::MalformedArchive.code(),
     }
 }
-
 pub(super) fn java_native_privacy_exact12_fixture_bundle(
     env: &mut jni::JNIEnv<'_>,
 ) -> jni::sys::jbyteArray {

@@ -34,6 +34,7 @@ import {
   emitDaProofSummaryArtifact,
 } from "./dataAvailability.js";
 import { normaliseGatewayProvider, sorafsGatewayFetch } from "./sorafs.js";
+import { normalizeIsoWeekLabel } from "./sorafsPorWeek.js";
 import { buildPacs008Message, buildPacs009Message } from "./isoBridge.js";
 import { looksLikeIban, normalizeIban } from "./identifiers.js";
 import {
@@ -83,6 +84,25 @@ import {
   buildCanonicalRequestHeaders,
   requireCanonicalAuthAccount,
 } from "./canonicalRequest.js";
+import {
+  applyOperatorRequestHeaders,
+  installOperatorSigningContext,
+  OperatorSigningContext,
+  rejectMixedRequestAuth,
+  rejectRetiredIsoAuthHeaders,
+  requireIsoOperatorSigningContext,
+  requireOperatorSigningContext,
+  resolveOperatorSigningContext,
+} from "./operatorRequest.js";
+import {
+  getIsoStatusTransport,
+  normalizeIsoOptionalString,
+  normalizeIsoProfile,
+  normalizeIsoStatus,
+  normalizeIsoStringArray,
+  normalizePacs002Code,
+  submitIsoTransport,
+} from "./iso20022Transport.js";
 import { blake2b256 } from "./blake2b.js";
 import { NetworkId, networkIdBytes } from "./networkId.js";
 import { generateConnectSid, validateConnectSessionResponseIdentity } from "./connectSession.js";
@@ -91,6 +111,23 @@ import {
   createToriiGovernanceNormalizers,
   VERIFYING_KEY_PRIVATE_KEY_FIELDS,
 } from "./toriiGovernanceNormalizers.js";
+import { createSubscriptionResponseNormalizers } from "./subscriptionResponses.js";
+import { requestSoracloudAppInfraStatus } from "./soracloud.js";
+import {
+  normalizeCanonicalApplicationPostOptions,
+  rejectPrecomputedCanonicalHeaders,
+  requireCanonicalApplicationAuthority,
+} from "./applicationPostAuth.js";
+import {
+  sortJsonForErrorMessage,
+  strictDecodeBase64,
+} from "./toriiClientEncoding.js";
+import {
+  isExactJsonMediaType,
+  maybeBoundedJsonResponse, maybeJsonResponse,
+  PIPELINE_FASTPQ_RECOVERY_JSON_MAX_BYTES,
+  PIPELINE_RECOVERY_JSON_MAX_BYTES,
+} from "./toriiBoundedResponse.js";
 import {
   KotodamaQuantity,
   NumericV1,
@@ -318,8 +355,6 @@ const eventTargetRemoveEventListener =
     : EventTarget.prototype.removeEventListener;
 const BOUNDED_JSON_MAX_READ_TIMEOUT_MS = 30_000;
 const HTTP_ERROR_BODY_MAX_BYTES = 64 * 1024;
-const EXACT_JSON_MEDIA_TYPE_PATTERN =
-  /^[ \t]*application\/json(?:[ \t]*;[ \t]*[!#$%&'*+\-.^_`|~0-9A-Za-z]+=(?:[!#$%&'*+\-.^_`|~0-9A-Za-z]+|"(?:[ \t!#-\[\]-~\u0080-\u00ff]|\\[ \t!-~\u0080-\u00ff])*"))*[ \t]*$/i;
 const DEFAULT_ISO_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_ISO_POLL_ATTEMPTS = 12;
 // SCCP response limits are part of the client-side resource boundary. They
@@ -441,20 +476,12 @@ const FEE_QUOTE_RESPONSE_KEYS = new Set([
   "decision",
 ]);
 const ISO_NON_TERMINAL_STATUS_VALUES = new Set(["pending", "accepted"]);
-const ISO_STATUS_VALUES = new Map([
-  ["pending", "Pending"],
-  ["accepted", "Accepted"],
-  ["rejected", "Rejected"],
-  ["committed", "Committed"],
-]);
 const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
   "COLLECTING_SIGNATURES",
   "FINALIZED",
   "CANCELED",
   "EXPIRED",
 ]);
-const PACS002_STATUS_CODES = new Set(["ACTC", "ACSP", "ACSC", "ACWC", "PDNG", "RJCT"]);
-
 function resolveNativeBinding(nativeBinding) {
   return nativeBinding ?? globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
 }
@@ -642,7 +669,11 @@ function cancelReadableBodyBestEffort(body, reason) {
 function cancelResponseBodyBestEffort(response, reason) {
   cancelReadableBodyBestEffort(responseBodyWithoutUserGetter(response), reason);
 }
-
+function discardResponseBody(response, reason, signal) {
+  cancelResponseBodyBestEffort(response, reason);
+  throwIfAborted(signal);
+  return null;
+}
 function cancelReaderBestEffort(reader, reason, genuineReader = false) {
   try {
     ignoreCancellationResult(
@@ -739,10 +770,6 @@ function copyArrayBufferBytes(buffer, byteOffset, byteLength) {
   const copy = new Uint8ArrayIntrinsic(byteLength);
   Reflect.apply(typedArraySet, copy, [source]);
   return copy;
-}
-
-function isExactJsonMediaType(value) {
-  return typeof value === "string" && EXACT_JSON_MEDIA_TYPE_PATTERN.test(value);
 }
 
 const KAIGI_CALL_EVENT_KIND_VALUES = new Set(["roster_updated", "ended"]);
@@ -1014,6 +1041,7 @@ const SORAFS_ALIAS_ITERATOR_OPTION_KEYS = new Set([
   "pageSize",
   "maxItems",
   "signal",
+  "canonicalAuth",
 ]);
 const SORAFS_PIN_ITERATOR_OPTION_KEYS = new Set([
   "status",
@@ -1034,6 +1062,7 @@ const SORAFS_REPLICATION_ITERATOR_OPTION_KEYS = new Set([
   "pageSize",
   "maxItems",
   "signal",
+  "canonicalAuth",
 ]);
 const SORAFS_REPUTATION_CACHE_OPTION_KEYS = new Set([
   "ifNoneMatch",
@@ -1299,76 +1328,6 @@ export function decodePdpCommitmentHeader(headers) {
   }
 }
 
-function strictDecodeBase64(value) {
-  const compact = value.replace(/\s+/gu, "");
-  validateBase64Alphabet(compact);
-  if (typeof Buffer !== "undefined") {
-    const decoded = Buffer.from(compact, "base64");
-    ensureBase64RoundTrip(decoded, compact);
-    return Uint8Array.from(decoded);
-  }
-  if (typeof atob === "function") {
-    let binary;
-    try {
-      binary = atob(compact);
-    } catch (error) {
-      throw error instanceof Error ? error : new Error(String(error));
-    }
-    const reencoded = typeof btoa === "function" ? btoa(binary) : null;
-    if (reencoded && !base64StringsEquivalent(reencoded, compact)) {
-      throw new Error("invalid base64 payload");
-    }
-    const decoded = new Uint8Array(binary.length);
-    for (let idx = 0; idx < binary.length; idx += 1) {
-      decoded[idx] = binary.charCodeAt(idx);
-    }
-    return decoded;
-  }
-  throw new Error("no base64 decoder available");
-}
-
-const BASE64_ALPHABET_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/u;
-const BASE64_DATA_PATTERN = /[A-Za-z0-9+/]/u;
-
-function validateBase64Alphabet(value) {
-  if (!value) {
-    throw new Error("payload is empty");
-  }
-  if (!BASE64_ALPHABET_PATTERN.test(value) || !BASE64_DATA_PATTERN.test(value)) {
-    throw new Error("invalid base64 payload");
-  }
-}
-
-function ensureBase64RoundTrip(buffer, original) {
-  const canonical =
-    buffer.length === 0 ? "" : Buffer.from(buffer).toString("base64");
-  if (!base64StringsEquivalent(canonical, original)) {
-    throw new Error("invalid base64 payload");
-  }
-}
-
-function base64StringsEquivalent(left, right) {
-  return stripBase64Padding(left) === stripBase64Padding(right);
-}
-
-function stripBase64Padding(value) {
-  return value.replace(/=+$/u, "");
-}
-
-function sortJsonForErrorMessage(value) {
-  if (Array.isArray(value)) {
-    return value.map((item) => sortJsonForErrorMessage(item));
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  const sorted = {};
-  for (const key of Object.keys(value).sort()) {
-    sorted[key] = sortJsonForErrorMessage(value[key]);
-  }
-  return sorted;
-}
-
 /**
  * Torii HTTP client for typed queries, transaction submission, status
  * inspection, event streams, attachments, and prover reports.
@@ -1455,6 +1414,7 @@ export class LocalSigningContext {
   /** @returns {number} */ get chainDiscriminant() { return this.#chainDiscriminant; }
 }
 
+export { OperatorSigningContext };
 /**
  * @template [T=unknown]
  * @typedef {Object} SseEvent
@@ -1482,7 +1442,8 @@ export class ToriiClient {
    * @param {string} [options.authToken]
    * @param {string} [options.apiToken]
    * @param {LocalSigningContext} [options.localSigningContext] Immutable context required by local-signing APIs.
-   * @param {CanonicalRequestAuth} [options.canonicalRequestAuth] Required by internal authenticated compatibility probes.
+   * @param {OperatorSigningContext} [options.operatorSigningContext] Immutable exact-network signer required by operator-only APIs.
+   * @param {CanonicalRequestAuth} [options.canonicalRequestAuth] Default exact-network signer for authenticated calls, including expensive query POSTs.
    * @param {typeof sorafsGatewayFetch} [options.sorafsGatewayFetch] Custom gateway fetch hook (tests).
    * @param {object} [options.sorafsAliasPolicy] Override SoraFS alias cache TTLs (seconds).
    * @param {(warning: {alias: string | null, evaluation: {state: string | null, statusLabel: string | null, rotationDue: boolean, ageSeconds: number | null, generatedAtUnix: number | null, expiresAtUnix: number | null, expiresInSeconds: number | null, servable: boolean}}) => void} [options.onSorafsAliasWarning]
@@ -1524,6 +1485,7 @@ export class ToriiClient {
       configurable: false,
       enumerable: false,
     });
+    installOperatorSigningContext(this, opts.operatorSigningContext);
     Object.defineProperty(this, "_canonicalRequestAuth", { value: ToriiClient._normalizeCanonicalAuth(opts.canonicalRequestAuth, "ToriiClient options.canonicalRequestAuth"), writable: false });
     const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
     const fetchImpl = opts.fetchImpl ?? opts.fetch ?? globalThis.fetch;
@@ -1585,6 +1547,7 @@ export class ToriiClient {
     delete overrides.generateDaProofSummary;
     delete overrides.__nativeBinding;
     delete overrides.localSigningContext;
+    delete overrides.operatorSigningContext;
     this._config = resolveToriiClientConfig({
       config: opts.config,
       overrides,
@@ -3421,19 +3384,17 @@ export class ToriiClient {
   /**
    * Resolve an identifier through a hidden-function policy (`POST /v1/identifiers/resolve`).
    * Returns null when the policy or identifier binding is missing (404).
-   * @param {{policyId: string, encryptedInput: string, outputOpening: Record<string, unknown>, signal?: AbortSignal}} options
+   * @param {{policyId: string, encryptedInput: string, outputOpening: Record<string, unknown>, signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async resolveIdentifier(options) {
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
-      options,
-      "resolveIdentifier",
-    );
+    const { signal, canonicalAuth, rest } = normalizeCanonicalApplicationPostOptions(options, "resolveIdentifier", ToriiClient);
     const payload = buildIdentifierResolveRequest(rest, "resolveIdentifier");
     const response = await this._request("POST", "/v1/identifiers/resolve", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
+      canonicalAuth,
     });
     if (response.status === 404) {
       return null;
@@ -3457,7 +3418,7 @@ export class ToriiClient {
    * (`POST /v1/ram-lfe/programs/{program_id}/execute`).
    * Returns null when the program policy is missing (404).
    * @param {string} programId
-   * @param {{encryptedInput: string, signal?: AbortSignal}} options
+   * @param {{encryptedInput: string, signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async executeRamLfeProgram(programId, options) {
@@ -3465,10 +3426,7 @@ export class ToriiClient {
       programId,
       "executeRamLfeProgram.programId",
     );
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
-      options,
-      "executeRamLfeProgram",
-    );
+    const { signal, canonicalAuth, rest } = normalizeCanonicalApplicationPostOptions(options, "executeRamLfeProgram", ToriiClient);
     const payload = buildRamLfeExecuteRequest(rest, "executeRamLfeProgram");
     const response = await this._request(
       "POST",
@@ -3477,6 +3435,7 @@ export class ToriiClient {
         headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
+        canonicalAuth,
       },
     );
     if (response.status === 404) {
@@ -3543,15 +3502,12 @@ export class ToriiClient {
    * Issue a signed on-chain claim receipt for an account identifier binding.
    * Returns null when the policy or account is missing (404).
    * @param {string} accountId
-   * @param {{policyId: string, encryptedInput: string, outputOpening: Record<string, unknown>, signal?: AbortSignal}} options
+   * @param {{policyId: string, encryptedInput: string, outputOpening: Record<string, unknown>, signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async issueIdentifierClaimReceipt(accountId, options) {
-    const normalizedAccountId = normalizeAccountPathLiteral(accountId, "accountId");
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
-      options,
-      "issueIdentifierClaimReceipt",
-    );
+    const { signal, canonicalAuth, rest } = normalizeCanonicalApplicationPostOptions(options, "issueIdentifierClaimReceipt", ToriiClient);
+    const normalizedAccountId = requireCanonicalApplicationAuthority(canonicalAuth, accountId, "issueIdentifierClaimReceipt");
     const payload = buildIdentifierResolveRequest(rest, "issueIdentifierClaimReceipt");
     const response = await this._request(
       "POST",
@@ -3560,6 +3516,7 @@ export class ToriiClient {
         headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
+        canonicalAuth,
       },
     );
     if (response.status === 404) {
@@ -3582,19 +3539,17 @@ export class ToriiClient {
   /**
    * Verify a RAM-LFE execution receipt against the node's registered program policy
    * (`POST /v1/ram-lfe/receipts/verify`).
-   * @param {{receipt: Record<string, unknown>, outputHex?: string, signal?: AbortSignal}} options
+   * @param {{receipt: Record<string, unknown>, outputHex?: string, signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<Record<string, unknown>>}
    */
   async verifyRamLfeReceipt(options) {
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
-      options,
-      "verifyRamLfeReceipt",
-    );
+    const { signal, canonicalAuth, rest } = normalizeCanonicalApplicationPostOptions(options, "verifyRamLfeReceipt", ToriiClient);
     const payload = buildRamLfeReceiptVerifyRequest(rest, "verifyRamLfeReceipt");
     const response = await this._request("POST", "/v1/ram-lfe/receipts/verify", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
+      canonicalAuth,
     });
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
@@ -3609,11 +3564,11 @@ export class ToriiClient {
 
   /**
    * List SoraFS alias bindings with attestation metadata (`GET /v1/sorafs/aliases`).
-   * @param {{namespace?: string, manifestDigestHex?: string, limit?: number, offset?: number, signal?: AbortSignal}} [options]
+   * @param {{namespace?: string, manifestDigestHex?: string, limit?: number, offset?: number, signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<SorafsAliasListResponse>}
    */
-  async listSorafsAliases(options = {}) {
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+  async listSorafsAliases(options) {
+    const { signal, rest, canonicalAuth } = normalizeSorafsInventoryReadOptions(
       options,
       "listSorafsAliases",
     );
@@ -3622,6 +3577,7 @@ export class ToriiClient {
       headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
+      canonicalAuth,
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -3633,10 +3589,10 @@ export class ToriiClient {
 
   /**
    * Iterate SoraFS alias bindings with offset-based pagination.
-   * @param {{pageSize?: number, maxItems?: number, signal?: AbortSignal} & SorafsAliasListOptions} [options]
+   * @param {{pageSize?: number, maxItems?: number, signal?: AbortSignal} & SorafsAliasListOptions} options
    * @returns {AsyncGenerator<SorafsAliasRecord, void, unknown>}
    */
-  iterateSorafsAliases(options = {}) {
+  iterateSorafsAliases(options) {
     return this._iterateOffsetIterable(
       this.listSorafsAliases,
       options,
@@ -3755,11 +3711,11 @@ export class ToriiClient {
 
   /**
    * List SoraFS replication orders with attestation metadata (`GET /v1/sorafs/replication`).
-   * @param {{status?: "pending"|"completed"|"expired", manifestDigestHex?: string, limit?: number, offset?: number, signal?: AbortSignal}} [options]
+   * @param {{status?: "pending"|"completed"|"expired", manifestDigestHex?: string, limit?: number, offset?: number, signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<SorafsReplicationListResponse>}
    */
-  async listSorafsReplicationOrders(options = {}) {
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+  async listSorafsReplicationOrders(options) {
+    const { signal, rest, canonicalAuth } = normalizeSorafsInventoryReadOptions(
       options,
       "listSorafsReplicationOrders",
     );
@@ -3768,6 +3724,7 @@ export class ToriiClient {
       headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
+      canonicalAuth,
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -3779,10 +3736,10 @@ export class ToriiClient {
 
   /**
    * Iterate SoraFS replication orders via the list endpoint.
-   * @param {{pageSize?: number, maxItems?: number, signal?: AbortSignal} & SorafsReplicationListOptions} [options]
+   * @param {{pageSize?: number, maxItems?: number, signal?: AbortSignal} & SorafsReplicationListOptions} options
    * @returns {AsyncGenerator<SorafsReplicationOrderRecord, void, unknown>}
    */
-  iterateSorafsReplicationOrders(options = {}) {
+  iterateSorafsReplicationOrders(options) {
     return this._iterateOffsetIterable(
       this.listSorafsReplicationOrders,
       options,
@@ -4831,6 +4788,15 @@ export class ToriiClient {
    */
   async fetchSorafsPayloadRange(input) {
     const record = ensureRecord(input ?? {}, "fetchSorafsPayloadRange input");
+    const operatorSigningContext = resolveOperatorSigningContext(
+      this._operatorSigningContext,
+      "fetchSorafsPayloadRange operatorSigningContext",
+    );
+    if (operatorSigningContext === null) {
+      throw new TypeError(
+        "fetchSorafsPayloadRange requires ToriiClient options.operatorSigningContext",
+      );
+    }
     const manifestId =
       record.manifest_id_hex ??
       record.manifestIdHex ??
@@ -4870,6 +4836,7 @@ export class ToriiClient {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(body),
       signal: record.signal,
+      operatorSigningContext,
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -4886,9 +4853,19 @@ export class ToriiClient {
    */
   async getSorafsStorageState(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSorafsStorageState");
+    const operatorSigningContext = resolveOperatorSigningContext(
+      this._operatorSigningContext,
+      "getSorafsStorageState operatorSigningContext",
+    );
+    if (operatorSigningContext === null) {
+      throw new TypeError(
+        "getSorafsStorageState requires ToriiClient options.operatorSigningContext",
+      );
+    }
     const response = await this._request("GET", "/v1/sorafs/storage/state", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      operatorSigningContext,
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -5437,7 +5414,11 @@ export class ToriiClient {
       options,
       "getSorafsPorWeeklyReport",
     );
-    const label = normalizeIsoWeekLabel(isoWeek, "getSorafsPorWeeklyReport.isoWeek");
+    const label = normalizeIsoWeekLabel(
+      isoWeek,
+      "getSorafsPorWeeklyReport.isoWeek",
+      ToriiClient,
+    );
     const response = await this._request(
       "GET",
       `/v1/sorafs/por/report/${encodeURIComponent(label)}`,
@@ -5549,18 +5530,19 @@ export class ToriiClient {
   /**
    * Publish (or rotate) a Space Directory manifest (`POST /v1/space-directory/manifests`).
    * @param {PublishSpaceDirectoryManifestRequest} request
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<AppApiTransactionDraft>}
    */
-  async publishSpaceDirectoryManifest(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "publishSpaceDirectoryManifest",
-    );
+  async publishSpaceDirectoryManifest(request = {}, options) {
+    const { signal, canonicalAuth, rest } = normalizeCanonicalApplicationPostOptions(options, "publishSpaceDirectoryManifest", ToriiClient);
+    assertSupportedOptionKeys(rest, new Set([]), "publishSpaceDirectoryManifest options");
     const payload = normalizePublishSpaceDirectoryManifestRequest(request);
+    payload.authority = requireCanonicalApplicationAuthority(canonicalAuth, request.authority, "publishSpaceDirectoryManifest");
     const response = await this._request("POST", "/v1/space-directory/manifests", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
+      canonicalAuth,
     });
     await this._expectStatus(response, [200]);
     return normalizeAppApiTransactionDraft(
@@ -5572,14 +5554,14 @@ export class ToriiClient {
   /**
    * Revoke an active Space Directory manifest (`POST /v1/space-directory/manifests/revoke`).
    * @param {RevokeSpaceDirectoryManifestRequest} request
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<AppApiTransactionDraft>}
    */
-  async revokeSpaceDirectoryManifest(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "revokeSpaceDirectoryManifest",
-    );
+  async revokeSpaceDirectoryManifest(request = {}, options) {
+    const { signal, canonicalAuth, rest } = normalizeCanonicalApplicationPostOptions(options, "revokeSpaceDirectoryManifest", ToriiClient);
+    assertSupportedOptionKeys(rest, new Set([]), "revokeSpaceDirectoryManifest options");
     const payload = normalizeRevokeSpaceDirectoryManifestRequest(request);
+    payload.authority = requireCanonicalApplicationAuthority(canonicalAuth, request.authority, "revokeSpaceDirectoryManifest");
     const response = await this._request(
       "POST",
       "/v1/space-directory/manifests/revoke",
@@ -5587,6 +5569,7 @@ export class ToriiClient {
         headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
+        canonicalAuth,
       },
     );
     await this._expectStatus(response, [200]);
@@ -6081,22 +6064,34 @@ export class ToriiClient {
    * Fetch the pipeline recovery sidecar for a block height (`GET /v1/pipeline/recovery/{height}`).
    * Returns null when the node has no recovery artefacts for the requested height.
    * @param {number | string | bigint} height
+   * @param {{ signal?: AbortSignal }} [options]
    * @returns {Promise<any | null>}
    */
-  async getPipelineRecovery(height) {
+  async getPipelineRecovery(height, options = {}) {
     const normalizedHeight = ToriiClient._normalizeUnsignedInteger(height, "height", {
       allowZero: true,
     });
+    const { signal } = normalizeSignalOnlyOption(options, "getPipelineRecovery");
     const response = await this._request(
       "GET",
       `/v1/pipeline/recovery/${normalizedHeight}`,
-      { headers: JSON_ACCEPT_HEADERS },
+      {
+        headers: JSON_ACCEPT_HEADERS,
+        signal,
+        operatorSigningContext: requireOperatorSigningContext(
+          this._operatorSigningContext,
+          "getPipelineRecovery",
+        ),
+      },
     );
-    if (response.status === 404) {
-      return null;
-    }
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    if (response.status === 404) return discardResponseBody(response, "discarding 404 response body", signal);
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._maybeBoundedJson(
+      response,
+      PIPELINE_RECOVERY_JSON_MAX_BYTES,
+      "pipeline recovery response",
+      { signal },
+    );
     if (!payload) {
       throw new Error("pipeline recovery endpoint returned no payload");
     }
@@ -6106,10 +6101,11 @@ export class ToriiClient {
   /**
    * Fetch a pipeline recovery sidecar and normalise it into typed fields.
    * @param {number | string | bigint} height
+   * @param {{ signal?: AbortSignal }} [options]
    * @returns {Promise<ToriiPipelineRecoverySidecar | null>}
    */
-  async getPipelineRecoveryTyped(height) {
-    const payload = await this.getPipelineRecovery(height);
+  async getPipelineRecoveryTyped(height, options = {}) {
+    const payload = await this.getPipelineRecovery(height, options);
     if (!payload) {
       return null;
     }
@@ -6126,9 +6122,18 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/pipeline/preflight", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getPipelinePreflight",
+      ),
     });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._maybeBoundedJson(
+      response,
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+      "pipeline preflight response",
+      { signal },
+    );
     if (!payload) {
       throw new Error("pipeline preflight endpoint returned no payload");
     }
@@ -6154,13 +6159,23 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/pipeline/recovery/${normalizedHeight}/fastpq-proofs`,
-      { headers: JSON_ACCEPT_HEADERS, signal },
+      {
+        headers: JSON_ACCEPT_HEADERS,
+        signal,
+        operatorSigningContext: requireOperatorSigningContext(
+          this._operatorSigningContext,
+          "getPipelineRecoveryFastpqProofs",
+        ),
+      },
     );
-    if (response.status === 404) {
-      return null;
-    }
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    if (response.status === 404) return discardResponseBody(response, "discarding 404 response body", signal);
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._maybeBoundedJson(
+      response,
+      PIPELINE_FASTPQ_RECOVERY_JSON_MAX_BYTES,
+      "pipeline recovery FASTPQ proofs response",
+      { signal },
+    );
     if (!payload) {
       throw new Error("pipeline recovery FASTPQ proofs endpoint returned no payload");
     }
@@ -6264,7 +6279,7 @@ export class ToriiClient {
   /**
    * Submit a canonical Soracloud app-infra deployment request.
    * @param {Record<string, unknown>} request
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<unknown>}
    */
   async deploySoracloudAppInfra(request, options = {}) {
@@ -6279,7 +6294,7 @@ export class ToriiClient {
   /**
    * Submit a canonical Soracloud app-infra upgrade request.
    * @param {Record<string, unknown>} request
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<unknown>}
    */
   async upgradeSoracloudAppInfra(request, options = {}) {
@@ -6293,63 +6308,25 @@ export class ToriiClient {
 
   /**
    * Fetch authoritative Soracloud app-infra status.
-   * @param {{appName?: string, auditLimit?: number | string | bigint, signal?: AbortSignal}} [options]
+   * @param {{appName?: string, auditLimit?: number | string | bigint, signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<unknown>}
    */
   async getSoracloudAppInfraStatus(options = {}) {
-    const { signal } = normalizeSignalOption(options, "getSoracloudAppInfraStatus");
-    const params = {};
-    if (options.appName !== undefined && options.appName !== null) {
-      params.app_name = assertNonBlankString(options.appName, "appName");
-    }
-    if (options.auditLimit !== undefined && options.auditLimit !== null) {
-      params.audit_limit = ToriiClient._normalizeUnsignedInteger(
-        options.auditLimit,
-        "auditLimit",
-        { allowZero: false },
-      );
-    }
-    const response = await this._request("GET", "/v1/soracloud/apps/status", {
-      params,
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    return this._maybeJson(response);
+    return requestSoracloudAppInfraStatus(this, options);
   }
 
   /**
    * Fetch authoritative Soracloud app-infra status for one app.
    * @param {string} appName
-   * @param {{auditLimit?: number | string | bigint, signal?: AbortSignal}} [options]
+   * @param {{auditLimit?: number | string | bigint, signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<unknown>}
    */
   async getSoracloudNamedAppInfraStatus(appName, options = {}) {
-    const normalizedAppName = encodeURIComponent(assertNonBlankString(appName, "appName"));
-    const { signal } = normalizeSignalOption(options, "getSoracloudNamedAppInfraStatus");
-    const params = {};
-    if (options.auditLimit !== undefined && options.auditLimit !== null) {
-      params.audit_limit = ToriiClient._normalizeUnsignedInteger(
-        options.auditLimit,
-        "auditLimit",
-        { allowZero: false },
-      );
-    }
-    const response = await this._request(
-      "GET",
-      `/v1/soracloud/apps/${normalizedAppName}/status`,
-      {
-        params,
-        headers: JSON_ACCEPT_HEADERS,
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    return this._maybeJson(response);
+    return requestSoracloudAppInfraStatus(this, options, appName);
   }
 
   async _submitSoracloudAppInfraMutation(path, request, options, context) {
-    const { signal } = normalizeSignalOnlyOption(options, context);
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
     if (request == null || typeof request !== "object" || Array.isArray(request)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
@@ -6361,6 +6338,7 @@ export class ToriiClient {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(request),
       signal,
+      canonicalAuth,
     });
     await this._expectStatus(response, [200]);
     return this._maybeJson(response);
@@ -6392,9 +6370,18 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/time/status", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getNetworkTimeStatus",
+      ),
     });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._maybeBoundedJson(
+      response,
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+      "network time status response",
+      { signal },
+    );
     return normalizeTimeStatusResponse(payload);
   }
 
@@ -6892,9 +6879,18 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/peers", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "listPeers",
+      ),
     });
-    await this._expectStatus(response, [200]);
-    return this._maybeJson(response);
+    await this._expectStatus(response, [200], { signal });
+    return this._maybeBoundedJson(
+      response,
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+      "peer list response",
+      { signal },
+    );
   }
 
   /**
@@ -7781,6 +7777,10 @@ export class ToriiClient {
   async listSumeragiCommitCertificates() {
     const response = await this._request("GET", "/v1/sumeragi/commit-certificates", {
       headers: { Accept: this._acceptHeader() },
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "listSumeragiCommitCertificates",
+      ),
     });
     if (!response) {
       throw new Error("sumeragi commit certificates endpoint returned no payload");
@@ -7794,6 +7794,10 @@ export class ToriiClient {
   async listSumeragiKeyLifecycle() {
     const response = await this._request("GET", "/v1/sumeragi/key-lifecycle", {
       headers: { Accept: this._acceptHeader() },
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "listSumeragiKeyLifecycle",
+      ),
     });
     if (!response) {
       throw new Error("sumeragi key lifecycle endpoint returned no payload");
@@ -7806,6 +7810,10 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/sumeragi/status", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getSumeragiStatus",
+      ),
     });
     await this._expectStatus(response, [200]);
     return this._maybeJson(response);
@@ -7821,6 +7829,10 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/sumeragi/status", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getSumeragiStatusTyped",
+      ),
     });
     await this._expectStatus(response, [200]);
     const payload = await this._readBoundedLosslessIntegerJson(
@@ -7842,6 +7854,10 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/sumeragi/diagnostics", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getSumeragiDiagnostics",
+      ),
     });
     await this._expectStatus(response, [200]);
     return this._maybeJson(response);
@@ -7860,6 +7876,10 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/sumeragi/diagnostics", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getSumeragiDiagnosticsTyped",
+      ),
     });
     await this._expectStatus(response, [200]);
     const payload = await this._readBoundedLosslessIntegerJson(
@@ -7907,6 +7927,10 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/sumeragi/qc", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getSumeragiQc",
+      ),
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -7938,6 +7962,10 @@ export class ToriiClient {
       {
         headers: JSON_ACCEPT_HEADERS,
         signal,
+        operatorSigningContext: requireOperatorSigningContext(
+          this._operatorSigningContext,
+          "getSumeragiCommitQc",
+        ),
       },
     );
     await this._expectStatus(response, [200]);
@@ -7980,6 +8008,10 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/sumeragi/bls-keys", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getSumeragiBlsKeys",
+      ),
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -7999,6 +8031,10 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/sumeragi/leader", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getSumeragiLeader",
+      ),
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -8021,6 +8057,10 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/sumeragi/params", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getSumeragiParams",
+      ),
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -8043,6 +8083,10 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/sumeragi/telemetry", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getSumeragiTelemetry",
+      ),
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -8107,6 +8151,10 @@ export class ToriiClient {
       headers: JSON_ACCEPT_HEADERS,
       params: Object.keys(params).length > 0 ? params : undefined,
       signal,
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "listSumeragiEvidence",
+      ),
     });
     await this._expectStatus(response, [200]);
     return normalizeSumeragiEvidenceListResponse(await this._maybeJson(response));
@@ -8119,6 +8167,7 @@ export class ToriiClient {
   async getSumeragiEvidenceCount() {
     const response = await this._request("GET", "/v1/sumeragi/evidence/count", {
       headers: JSON_ACCEPT_HEADERS,
+      operatorSigningContext: requireOperatorSigningContext(this._operatorSigningContext, "getSumeragiEvidenceCount"),
     });
     await this._expectStatus(response, [200]);
     const payload = ensureRecord(
@@ -8485,7 +8534,7 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch Kaigi relay summaries (`GET /v1/kaigi/relays`).
+   * Fetch operator-authenticated Kaigi relay summaries (`GET /v1/kaigi/relays`).
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<KaigiRelaySummaryList>}
    */
@@ -8494,6 +8543,7 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/kaigi/relays", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      operatorSigningContext: requireOperatorSigningContext(this._operatorSigningContext, "listKaigiRelays"),
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -8501,7 +8551,7 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch detailed metadata for a Kaigi relay (`GET /v1/kaigi/relays/{relay_id}`).
+   * Fetch operator-authenticated metadata for a Kaigi relay (`GET /v1/kaigi/relays/{relay_id}`).
    * @param {string} relayId
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<KaigiRelayDetail | null>}
@@ -8512,7 +8562,11 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/kaigi/relays/${encodeURIComponent(normalizedRelay)}`,
-      { headers: JSON_ACCEPT_HEADERS, signal },
+      {
+        headers: JSON_ACCEPT_HEADERS,
+        signal,
+        operatorSigningContext: requireOperatorSigningContext(this._operatorSigningContext, "getKaigiRelay"),
+      },
     );
     if (response.status === 404) {
       return null;
@@ -8526,7 +8580,7 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch aggregated Kaigi relay health metrics (`GET /v1/kaigi/relays/health`).
+   * Fetch operator-authenticated aggregate Kaigi relay health metrics.
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<KaigiRelayHealthSnapshot>}
    */
@@ -8535,6 +8589,7 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/kaigi/relays/health", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      operatorSigningContext: requireOperatorSigningContext(this._operatorSigningContext, "getKaigiRelaysHealth"),
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -8618,13 +8673,15 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch Connect overlay status (`GET /v1/connect/status`).
+   * Fetch operator-only Connect aggregate status (`GET /v1/connect/status/aggregate`).
+   * Requires the immutable exact-network operator signing context configured on this client.
    * Returns null when Connect is disabled on the node.
    * @returns {Promise<any | null>}
    */
   async getConnectStatus() {
-    const response = await this._request("GET", "/v1/connect/status", {
+    const response = await this._request("GET", "/v1/connect/status/aggregate", {
       headers: JSON_ACCEPT_HEADERS,
+      operatorSigningContext: requireOperatorSigningContext(this._operatorSigningContext, "getConnectStatusAggregate"),
     });
     if (response.status === 404) {
       return null;
@@ -9788,22 +9845,14 @@ export class ToriiClient {
   /**
    * Create a subscription plan (`POST /v1/subscriptions/plans`).
    * @param {SubscriptionPlanCreateRequest} request
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<SubscriptionPlanCreateResponse>}
    */
   async createSubscriptionPlan(request, options = {}) {
     const payload = normalizeSubscriptionPlanCreateRequest(request);
-    const { signal } = normalizeSignalOnlyOption(options, "createSubscriptionPlan");
-    const response = await this._request("POST", "/v1/subscriptions/plans", {
-      headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(payload),
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("subscription plan create endpoint returned no payload");
-    }
+    const body = await this._submitSubscriptionMutation(
+      "/v1/subscriptions/plans", payload, options, "createSubscriptionPlan", [200],
+    );
     return normalizeSubscriptionPlanCreateResponse(body, payload.plan_id);
   }
 
@@ -9836,23 +9885,15 @@ export class ToriiClient {
   /**
    * Create a subscription (`POST /v1/subscriptions`).
    * @param {SubscriptionCreateRequest} request
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<SubscriptionCreateResponse>}
    */
   async createSubscription(request, options = {}) {
     const payload = normalizeSubscriptionCreateRequest(request);
-    const { signal } = normalizeSignalOnlyOption(options, "createSubscription");
-    const response = await this._request("POST", "/v1/subscriptions", {
-      headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(payload),
-      signal,
-    });
-    await this._expectStatus(response, [200, 202]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("subscription create endpoint returned no payload");
-    }
-    return normalizeSubscriptionCreateResponse(body);
+    const body = await this._submitSubscriptionMutation(
+      "/v1/subscriptions", payload, options, "createSubscription", [200],
+    );
+    return normalizeSubscriptionCreateResponse(body, payload);
   }
 
   /**
@@ -9887,119 +9928,99 @@ export class ToriiClient {
    * Pause a subscription (`POST /v1/subscriptions/{subscription_id}/pause`).
    * @param {string} subscriptionId
    * @param {SubscriptionActionRequest} request
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<SubscriptionActionResponse>}
    */
   async pauseSubscription(subscriptionId, request, options = {}) {
     const normalizedId = requireNonEmptyString(subscriptionId, "subscriptionId");
     const payload = normalizeSubscriptionActionRequest(request, "pauseSubscription");
-    const { signal } = normalizeSignalOnlyOption(options, "pauseSubscription");
-    const response = await this._request(
-      "POST",
+    const body = await this._submitSubscriptionMutation(
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/pause`,
-      {
-        headers: JSON_REQUEST_HEADERS,
-        body: JSON.stringify(payload),
-        signal,
-      },
+      payload, options, "pauseSubscription", [200],
     );
-    await this._expectStatus(response, [200, 202]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("subscription pause endpoint returned no payload");
-    }
-    return normalizeSubscriptionActionResponse(body, "pauseSubscription response");
+    return normalizeSubscriptionActionResponse(
+      body,
+      "pause",
+      payload.authority,
+      normalizedId,
+      "pauseSubscription response",
+    );
   }
 
   /**
    * Resume a subscription (`POST /v1/subscriptions/{subscription_id}/resume`).
    * @param {string} subscriptionId
    * @param {SubscriptionActionRequest} request
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<SubscriptionActionResponse>}
    */
   async resumeSubscription(subscriptionId, request, options = {}) {
     const normalizedId = requireNonEmptyString(subscriptionId, "subscriptionId");
     const payload = normalizeSubscriptionActionRequest(request, "resumeSubscription");
-    const { signal } = normalizeSignalOnlyOption(options, "resumeSubscription");
-    const response = await this._request(
-      "POST",
+    const body = await this._submitSubscriptionMutation(
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/resume`,
-      {
-        headers: JSON_REQUEST_HEADERS,
-        body: JSON.stringify(payload),
-        signal,
-      },
+      payload, options, "resumeSubscription", [200],
     );
-    await this._expectStatus(response, [200, 202]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("subscription resume endpoint returned no payload");
-    }
-    return normalizeSubscriptionActionResponse(body, "resumeSubscription response");
+    return normalizeSubscriptionActionResponse(
+      body,
+      "resume",
+      payload.authority,
+      normalizedId,
+      "resumeSubscription response",
+    );
   }
 
   /**
    * Cancel a subscription (`POST /v1/subscriptions/{subscription_id}/cancel`).
    * @param {string} subscriptionId
    * @param {SubscriptionActionRequest} request
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<SubscriptionActionResponse>}
    */
   async cancelSubscription(subscriptionId, request, options = {}) {
     const normalizedId = requireNonEmptyString(subscriptionId, "subscriptionId");
     const payload = normalizeSubscriptionActionRequest(request, "cancelSubscription");
-    const { signal } = normalizeSignalOnlyOption(options, "cancelSubscription");
-    const response = await this._request(
-      "POST",
+    const body = await this._submitSubscriptionMutation(
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/cancel`,
-      {
-        headers: JSON_REQUEST_HEADERS,
-        body: JSON.stringify(payload),
-        signal,
-      },
+      payload, options, "cancelSubscription", [200],
     );
-    await this._expectStatus(response, [200, 202]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("subscription cancel endpoint returned no payload");
-    }
-    return normalizeSubscriptionActionResponse(body, "cancelSubscription response");
+    return normalizeSubscriptionActionResponse(
+      body,
+      "cancel",
+      payload.authority,
+      normalizedId,
+      "cancelSubscription response",
+    );
   }
 
   /**
    * Keep a subscription (`POST /v1/subscriptions/{subscription_id}/keep`).
    * @param {string} subscriptionId
    * @param {SubscriptionActionRequest} request
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<SubscriptionActionResponse>}
    */
   async keepSubscription(subscriptionId, request, options = {}) {
     const normalizedId = requireNonEmptyString(subscriptionId, "subscriptionId");
     const payload = normalizeSubscriptionActionRequest(request, "keepSubscription");
-    const { signal } = normalizeSignalOnlyOption(options, "keepSubscription");
-    const response = await this._request(
-      "POST",
+    const body = await this._submitSubscriptionMutation(
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/keep`,
-      {
-        headers: JSON_REQUEST_HEADERS,
-        body: JSON.stringify(payload),
-        signal,
-      },
+      payload, options, "keepSubscription", [200],
     );
-    await this._expectStatus(response, [200, 202]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("subscription keep endpoint returned no payload");
-    }
-    return normalizeSubscriptionActionResponse(body, "keepSubscription response");
+    return normalizeSubscriptionActionResponse(
+      body,
+      "keep",
+      payload.authority,
+      normalizedId,
+      "keepSubscription response",
+    );
   }
 
   /**
    * Charge a subscription immediately (`POST /v1/subscriptions/{subscription_id}/charge-now`).
    * @param {string} subscriptionId
    * @param {SubscriptionActionRequest} request
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<SubscriptionActionResponse>}
    */
   async chargeSubscriptionNow(subscriptionId, request, options = {}) {
@@ -10008,54 +10029,55 @@ export class ToriiClient {
       request,
       "chargeSubscriptionNow",
     );
-    const { signal } = normalizeSignalOnlyOption(options, "chargeSubscriptionNow");
-    const response = await this._request(
-      "POST",
+    const body = await this._submitSubscriptionMutation(
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/charge-now`,
-      {
-        headers: JSON_REQUEST_HEADERS,
-        body: JSON.stringify(payload),
-        signal,
-      },
+      payload, options, "chargeSubscriptionNow", [200],
     );
-    await this._expectStatus(response, [200, 202]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("subscription charge-now endpoint returned no payload");
-    }
-    return normalizeSubscriptionActionResponse(body, "chargeSubscriptionNow response");
+    return normalizeSubscriptionActionResponse(
+      body,
+      "charge_now",
+      payload.authority,
+      normalizedId,
+      "chargeSubscriptionNow response",
+    );
   }
 
   /**
    * Record subscription usage (`POST /v1/subscriptions/{subscription_id}/usage`).
    * @param {string} subscriptionId
    * @param {SubscriptionUsageRequest} request
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<SubscriptionActionResponse>}
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
+   * @returns {Promise<SubscriptionUsageDraft>}
    */
   async recordSubscriptionUsage(subscriptionId, request, options = {}) {
     const normalizedId = requireNonEmptyString(subscriptionId, "subscriptionId");
     const payload = normalizeSubscriptionUsageRequest(request, "recordSubscriptionUsage");
-    const { signal } = normalizeSignalOnlyOption(options, "recordSubscriptionUsage");
-    const response = await this._request(
-      "POST",
+    const body = await this._submitSubscriptionMutation(
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/usage`,
-      {
-        headers: JSON_REQUEST_HEADERS,
-        body: JSON.stringify(payload),
-        signal,
-      },
+      payload, options, "recordSubscriptionUsage", [200],
     );
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("subscription usage endpoint returned no payload");
-    }
     return normalizeSubscriptionUsageDraft(
       body,
       normalizedId,
       "recordSubscriptionUsage response",
     );
+  }
+
+  async _submitSubscriptionMutation(path, payload, options, context, expectedStatus) {
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
+    if (canonicalAuth.accountId !== payload.authority) {
+      throw new TypeError(`${context} canonicalAuth.accountId must equal payload.authority`);
+    }
+    const response = await this._request("POST", path, {
+      headers: JSON_REQUEST_HEADERS,
+      body: JSON.stringify(payload),
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, expectedStatus);
+    const body = await this._maybeJson(response);
+    if (!body) throw new Error(`${context} endpoint returned no payload`);
+    return body;
   }
 
   /**
@@ -10102,26 +10124,15 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async submitIsoPacs008(message, options = {}) {
-    const { signal, contentType, retryProfile, profile } = normalizeIsoSubmissionOptions(
+    const transportOptions = normalizeIsoSubmissionOptions(
       options,
       "submitIsoPacs008",
     );
     const body = normalizeIsoPayload(message, "submitIsoPacs008.message");
-    const headers = {
-      "Content-Type": contentType ?? "application/xml",
-      Accept: APPLICATION_JSON,
-    };
-    if (profile) {
-      headers["X-Iroha-Iso-Profile"] = profile;
-    }
-    const response = await this._request("POST", "/v1/iso20022/pacs008", {
-      headers,
-      body,
-      signal,
-      retryProfile,
+    const payload = await submitIsoTransport(this, "pacs008", body, {
+      ...transportOptions,
+      operatorSigningContext: this._operatorSigningContext,
     });
-    await this._expectStatus(response, [202]);
-    const payload = await this._maybeJson(response);
     return payload == null
       ? null
       : normalizeIsoSubmissionResponse(payload, "ISO pacs008 submission");
@@ -10134,26 +10145,15 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async submitIsoPacs009(message, options = {}) {
-    const { signal, contentType, retryProfile, profile } = normalizeIsoSubmissionOptions(
+    const transportOptions = normalizeIsoSubmissionOptions(
       options,
       "submitIsoPacs009",
     );
     const body = normalizeIsoPayload(message, "submitIsoPacs009.message");
-    const headers = {
-      "Content-Type": contentType ?? "application/xml",
-      Accept: APPLICATION_JSON,
-    };
-    if (profile) {
-      headers["X-Iroha-Iso-Profile"] = profile;
-    }
-    const response = await this._request("POST", "/v1/iso20022/pacs009", {
-      headers,
-      body,
-      signal,
-      retryProfile,
+    const payload = await submitIsoTransport(this, "pacs009", body, {
+      ...transportOptions,
+      operatorSigningContext: this._operatorSigningContext,
     });
-    await this._expectStatus(response, [202]);
-    const payload = await this._maybeJson(response);
     return payload == null
       ? null
       : normalizeIsoSubmissionResponse(payload, "ISO pacs009 submission");
@@ -10167,14 +10167,11 @@ export class ToriiClient {
    */
   async getIsoMessageStatus(messageId, options = {}) {
     const normalizedId = requireNonEmptyString(messageId, "messageId");
-    const { signal, retryProfile } = normalizeIsoStatusOptions(options, "getIsoMessageStatus");
-    const response = await this._request(
-      "GET",
-      `/v1/iso20022/messages/${encodeURIComponent(normalizedId)}`,
-      { headers: JSON_ACCEPT_HEADERS, signal, retryProfile },
-    );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    const transportOptions = normalizeIsoStatusOptions(options, "getIsoMessageStatus");
+    const payload = await getIsoStatusTransport(this, normalizedId, {
+      ...transportOptions,
+      operatorSigningContext: this._operatorSigningContext,
+    });
     if (!payload) {
       return null;
     }
@@ -10500,11 +10497,20 @@ export class ToriiClient {
     const originMatches =
       url.host === this._baseHost && protocol === this._baseProtocol;
     const initHeaders = this._createHeaders(options.headers);
+    const operatorSigningContext = options.requireIsoOperatorAuth === true
+      ? requireIsoOperatorSigningContext(options.operatorSigningContext, initHeaders)
+      : resolveOperatorSigningContext(options.operatorSigningContext);
     const hasCredentials = headersContainCredentials(initHeaders);
     const canonicalAuth = options.canonicalAuth
       ? ToriiClient._normalizeCanonicalAuth(options.canonicalAuth)
       : null;
     const hasCanonicalAuth = canonicalAuth !== null;
+    const hasOperatorAuth = operatorSigningContext !== null;
+    rejectMixedRequestAuth(canonicalAuth, operatorSigningContext);
+    if (hasOperatorAuth) {
+      rejectRetiredIsoAuthHeaders(initHeaders, "operator request");
+    }
+    if (hasCanonicalAuth) rejectPrecomputedCanonicalHeaders(initHeaders);
     const exactNetworkId = options.exactNetworkId ?? null;
     let signingNetworkId = null;
     if (hasCanonicalAuth) {
@@ -10532,9 +10538,10 @@ export class ToriiClient {
       }
     }
     const hasCanonicalNonce = hasHeader(initHeaders, "x-iroha-nonce");
-    const hasOneShotAuth = hasCanonicalAuth || hasCanonicalNonce;
+    const hasOperatorNonce = hasHeader(initHeaders, "x-iroha-operator-nonce");
+    const hasOneShotAuth = hasCanonicalAuth || hasOperatorAuth || hasCanonicalNonce || hasOperatorNonce;
     const hasSensitiveBody = bodyContainsSensitiveKeyMaterial(options.body, initHeaders);
-    const hasSensitiveTransport = hasCredentials || hasCanonicalAuth || hasSensitiveBody;
+    const hasSensitiveTransport = hasCredentials || hasCanonicalAuth || hasOperatorAuth || hasSensitiveBody;
     const allowAbsoluteUrl = options.allowAbsoluteUrl === true;
     const methodUpper = String(method).toUpperCase();
     if (hasSensitiveTransport) {
@@ -10620,6 +10627,8 @@ export class ToriiClient {
         setHeader(initHeaders, key, value);
       }
     }
+    // Sign only after the final URL query and request body are fixed.
+    await applyOperatorRequestHeaders(initHeaders, operatorSigningContext, methodUpper, url, init.body);
     const retryProfileName =
       typeof options.retryProfile === "string" && options.retryProfile
         ? options.retryProfile
@@ -11570,67 +11579,31 @@ export class ToriiClient {
     return APPLICATION_JSON;
   }
 
-  async _maybeJson(response) {
-    const contentType = this._getHeader(response, "content-type");
-    if (
-      typeof contentType !== "string" ||
-      !contentType.toLowerCase().includes(APPLICATION_JSON)
-    ) {
-      return null;
-    }
-    try {
-      return await response.json();
-    } catch {
-      return null;
-    }
+  async _maybeJson(
+    response,
+    {
+      maxBytes = SCCP_JSON_RESPONSE_MAX_BYTES,
+      context = "Torii JSON response",
+      signal,
+    } = {},
+  ) {
+    return maybeJsonResponse(
+      this._maybeBoundedJson.bind(this),
+      response,
+      { maxBytes, context, signal, signalIsAborted },
+    );
   }
 
   async _maybeBoundedJson(response, maxBytes, context, { signal } = {}) {
-    let contentType;
-    try {
-      contentType = this._getHeader(response, "content-type");
-    } catch (error) {
-      cancelResponseBodyBestEffort(
-        response,
-        `${context} rejected an unreadable Content-Type header`,
-      );
-      throw error;
-    }
-    if (!isExactJsonMediaType(contentType)) {
-      cancelResponseBodyBestEffort(
-        response,
-        `${context} rejected a non-JSON response body`,
-      );
-      return null;
-    }
-    const { bytes, body } = await this._readBoundedResponseBytes(
-      response,
-      maxBytes,
-      context,
-      { signal },
-    );
-    let text;
-    try {
-      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    } catch (error) {
-      cancelReadableBodyBestEffort(body, `${context} rejected invalid UTF-8`);
-      throw new TypeError(`${context} must be valid UTF-8`, { cause: error });
-    }
-    try {
-      const parsed = JSON.parse(text);
-      if (signalIsAborted(signal)) {
-        cancelReadableBodyBestEffort(body, `${context} was aborted`);
-        throw bodyReadAbortError(signal, context);
-      }
-      return parsed;
-    } catch (error) {
-      if (signalIsAborted(signal) || error?.name === "AbortError") {
-        cancelReadableBodyBestEffort(body, `${context} was aborted`);
-        throw error;
-      }
-      cancelReadableBodyBestEffort(body, `${context} rejected invalid JSON`);
-      throw new TypeError(`${context} must contain valid JSON`, { cause: error });
-    }
+    return maybeBoundedJsonResponse(response, maxBytes, context, {
+      signal,
+      getHeader: this._getHeader.bind(this),
+      readBoundedResponseBytes: this._readBoundedResponseBytes.bind(this),
+      cancelResponseBodyBestEffort,
+      cancelReadableBodyBestEffort,
+      signalIsAborted,
+      bodyReadAbortError,
+    });
   }
 
   async _readBoundedLosslessIntegerJson(
@@ -11934,8 +11907,7 @@ export class ToriiClient {
       optionContext,
       extraAllowedKeys,
     );
-    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
-    const { signal, canonicalAuth: _ignoredCanonical, ...rest } = normalizedOptions;
+    const { signal, canonicalAuth, rest } = normalizeCanonicalApplicationPostOptions(normalizedOptions, optionContext, ToriiClient, this._canonicalRequestAuth);
     const envelope = ToriiClient._buildIterableQueryEnvelope(rest);
     if (typeof envelopeHook === "function") {
       envelopeHook(envelope, rest);
@@ -14055,27 +14027,6 @@ function normalizeIsoStatusHistory(value, context) {
   });
 }
 
-function normalizeIsoStatus(value, context) {
-  const status = ToriiClient._requireNonEmptyString(value, context).trim();
-  const normalized = ISO_STATUS_VALUES.get(status.toLowerCase());
-  if (!normalized) {
-    throw new TypeError(
-      `${context} must be one of ${[...ISO_STATUS_VALUES.values()].join(", ")}`,
-    );
-  }
-  return normalized;
-}
-
-function normalizePacs002Code(value, context) {
-  const code = ToriiClient._requireNonEmptyString(value, context).trim().toUpperCase();
-  if (!PACS002_STATUS_CODES.has(code)) {
-    throw new TypeError(
-      `${context} must be one of ${[...PACS002_STATUS_CODES.values()].join(", ")}`,
-    );
-  }
-  return code;
-}
-
 function normalizeIsoMessageKind(value, context) {
   const normalizedPath =
     typeof context === "string" ? context.replace(/\s+/g, ".") : context;
@@ -14156,7 +14107,7 @@ function normalizeIsoSubmissionOptions(options, context, extraAllowedKeys = []) 
   }
   let profile;
   if (options.profile !== undefined && options.profile !== null) {
-    profile = requireNonEmptyString(options.profile, `${optionPath}.profile`);
+    profile = normalizeIsoProfile(options.profile, `${optionPath}.profile`);
   }
   return { signal, contentType, retryProfile, profile };
 }
@@ -14223,39 +14174,6 @@ function normalizeIsoPayload(message, context) {
     }
     throw error;
   }
-}
-
-function normalizeIsoOptionalString(value, name, options = {}) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  if (typeof value !== "string") {
-    throw new TypeError(`${name} must be a string or null`);
-  }
-  const trimmed = value.trim();
-  if (!trimmed && !options.allowEmpty) {
-    return null;
-  }
-  return trimmed;
-}
-
-function normalizeIsoStringArray(value, name) {
-  if (value === undefined || value === null) {
-    return [];
-  }
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${name} must be an array of strings`);
-  }
-  return value.map((entry, index) => {
-    if (typeof entry !== "string") {
-      throw new TypeError(`${name}[${index}] must be a string`);
-    }
-    const normalized = entry.trim();
-    if (!normalized) {
-      throw new TypeError(`${name}[${index}] must be a non-empty string`);
-    }
-    return normalized;
-  });
 }
 
 function normalizeHealthSnapshot(payload, context) {
@@ -24698,6 +24616,23 @@ function normalizeRamLfeReceiptVerifyResponse(
   return result;
 }
 
+function normalizeSorafsInventoryReadOptions(options, context) {
+  const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, context);
+  const canonicalAuth = ToriiClient._normalizeCanonicalAuth(
+    rest.canonicalAuth,
+    `${context}.canonicalAuth`,
+  );
+  if (!canonicalAuth) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} options.canonicalAuth is required`,
+      `${context}.canonicalAuth`,
+    );
+  }
+  const { canonicalAuth: _ignoredCanonicalAuth, ...filterOptions } = rest;
+  return { signal, canonicalAuth, rest: filterOptions };
+}
+
 function buildSorafsAliasListParams(options = {}) {
   const record = ensureRecord(options, "listSorafsAliases options");
   assertSupportedOptionKeys(
@@ -25068,7 +25003,7 @@ function buildSorafsReputationRequestAuth(
       account.value,
       `${context}.headers.X-Iroha-Account`,
     );
-    setHeader(headers, "X-Iroha-Account", canonicalAccount);
+    setHeader(headers, "X-Iroha-Account", canonicalAccount.includes("@") ? canonicalAccount : AccountAddress.parseEncoded(canonicalAccount).address.canonicalHex());
   }
   return { headers, canonicalAuth: null };
 }
@@ -28542,51 +28477,6 @@ function normalizeSorafsPorVerdictResponse(
   return normalizeSorafsPorSubmissionResponse(payload, context);
 }
 
-function normalizeIsoWeekLabel(input, name) {
-  const path = normalizeErrorPath(name);
-  if (typeof input === "string") {
-    const trimmed = input.trim();
-    if (!trimmed) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        `${name} must be a non-empty ISO week string`,
-        path,
-      );
-    }
-    if (!/^\d{4}-W\d{2}$/u.test(trimmed)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        `${name} must match YYYY-Www format`,
-        path,
-      );
-    }
-    return trimmed;
-  }
-  if (input && typeof input === "object") {
-    const year = ToriiClient._normalizeUnsignedInteger(input.year, `${name}.year`, {
-      allowZero: false,
-    });
-    const week = ToriiClient._normalizeUnsignedInteger(input.week, `${name}.week`, {
-      allowZero: false,
-    });
-    if (week < 1 || week > 53) {
-      throw createValidationError(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
-        `${name}.week must be between 1 and 53`,
-        normalizeErrorPath(`${name}.week`),
-      );
-    }
-    const weekLabel = week.toString().padStart(2, "0");
-    const yearLabel = year.toString().padStart(4, "0");
-    return `${yearLabel}-W${weekLabel}`;
-  }
-  throw createValidationError(
-    ValidationErrorCode.INVALID_OBJECT,
-    `${name} must be an ISO week string or {year, week} object`,
-    path,
-  );
-}
-
 function normalizePeerListResponse(payload, context = "peer list response") {
   if (!Array.isArray(payload)) {
     throw new TypeError(`${context} must be an array`);
@@ -31253,7 +31143,7 @@ function normalizeSubscriptionPlanCreateRequest(input) {
 
 function normalizeSubscriptionCreateRequest(input) {
   const record = ensureRecord(input, "createSubscription request");
-  const credentials = normalizeAuthorityCredentials(record, "createSubscription");
+  const credentials = normalizeSecretFreeAuthority(record, "createSubscription");
   const subscriptionId = pickOverride(record, "subscription_id", "subscriptionId");
   if (subscriptionId === undefined || subscriptionId === null) {
     throw new TypeError("createSubscription.subscriptionId is required");
@@ -31301,12 +31191,15 @@ function normalizeSubscriptionCreateRequest(input) {
 
 function normalizeSubscriptionActionRequest(input, context) {
   const record = ensureRecord(input, `${context} request`);
-  const credentials = normalizeAuthorityCredentials(record, context);
+  const credentials = normalizeSecretFreeAuthority(record, context);
   const payload = {
     ...credentials,
   };
   const chargeAt = pickOverride(record, "charge_at_ms", "chargeAtMs");
   if (chargeAt !== undefined && chargeAt !== null) {
+    if (context !== "resumeSubscription" && context !== "chargeSubscriptionNow") {
+      throw new TypeError(`${context}.chargeAtMs is not accepted`);
+    }
     payload.charge_at_ms = ToriiClient._normalizeUnsignedInteger(
       chargeAt,
       `${context}.chargeAtMs`,
@@ -31315,11 +31208,16 @@ function normalizeSubscriptionActionRequest(input, context) {
   }
   const cancelMode = pickOverride(record, "cancel_mode", "cancelMode");
   if (cancelMode !== undefined && cancelMode !== null) {
+    if (context !== "cancelSubscription") {
+      throw new TypeError(`${context}.cancelMode is not accepted`);
+    }
     const normalized = requireNonEmptyString(cancelMode, `${context}.cancelMode`).toLowerCase();
     if (normalized !== "immediate" && normalized !== "period_end") {
       throw new TypeError(`${context}.cancelMode must be immediate or period_end`);
     }
-    payload.cancel_mode = normalized;
+    payload.cancel_mode = { mode: normalized, value: null };
+  } else if (context === "cancelSubscription") {
+    throw new TypeError("cancelSubscription.cancelMode is required");
   }
   return payload;
 }
@@ -31387,90 +31285,24 @@ function normalizeTriggerListResponse(payload, context) {
   };
 }
 
-function normalizeSubscriptionPlanCreateResponse(payload, expectedPlanId) {
-  const record = ensureRecord(payload, "subscription plan create response");
-  const draft = normalizeAppApiTransactionDraft(
-    record,
-    "subscription plan create response",
-    ["plan_id"],
-  );
-  const planId = ToriiClient._requireAssetDefinitionId(record.plan_id);
-  if (planId !== expectedPlanId) {
-    throw new TypeError(
-      "subscription plan create response.plan_id is not bound to the request",
-    );
-  }
-  return {
-    ...draft,
-    plan_id: planId,
-  };
-}
-
-function normalizeSubscriptionUsageDraft(payload, expectedSubscriptionId, context) {
-  const record = ensureRecord(payload, context);
-  const draft = normalizeAppApiTransactionDraft(
-    record,
-    context,
-    ["subscription_id"],
-  );
-  const subscriptionId = requireExactNonEmptyString(
-    record.subscription_id,
-    `${context}.subscription_id`,
-  );
-  if (subscriptionId !== expectedSubscriptionId) {
-    throw new TypeError(`${context}.subscription_id is not bound to the request`);
-  }
-  return {
-    ...draft,
-    subscription_id: subscriptionId,
-  };
-}
-
-function normalizeSubscriptionCreateResponse(payload) {
-  const record = ensureRecord(payload, "subscription create response");
-  const normalized = {
-    ok: Boolean(record.ok),
-    subscription_id: requireNonEmptyString(
-      record.subscription_id,
-      "subscriptionCreate.subscription_id",
-    ),
-    billing_trigger_id: requireNonEmptyString(
-      record.billing_trigger_id,
-      "subscriptionCreate.billing_trigger_id",
-    ),
-    first_charge_ms: ToriiClient._normalizeUnsignedInteger(
-      record.first_charge_ms,
-      "subscriptionCreate.first_charge_ms",
-      { allowZero: true },
-    ),
-    tx_hash_hex: requireNonEmptyString(
-      record.tx_hash_hex,
-      "subscriptionCreate.tx_hash_hex",
-    ),
-  };
-  if (record.usage_trigger_id !== undefined && record.usage_trigger_id !== null) {
-    normalized.usage_trigger_id = requireNonEmptyString(
-      record.usage_trigger_id,
-      "subscriptionCreate.usage_trigger_id",
-    );
-  }
-  return normalized;
-}
-
-function normalizeSubscriptionActionResponse(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    ok: Boolean(record.ok),
-    subscription_id: requireNonEmptyString(
-      record.subscription_id,
-      `${context}.subscription_id`,
-    ),
-    tx_hash_hex: requireNonEmptyString(
-      record.tx_hash_hex,
-      `${context}.tx_hash_hex`,
-    ),
-  };
-}
+const {
+  normalizeSubscriptionActionResponse,
+  normalizeSubscriptionCreateResponse,
+  normalizeSubscriptionPlanCreateResponse,
+  normalizeSubscriptionUsageDraft,
+} = createSubscriptionResponseNormalizers({
+  cloneJsonValue,
+  ensureRecord,
+  isPlainObject,
+  normalizeAccountId: ToriiClient._normalizeAccountId,
+  normalizeAppApiTransactionDraft,
+  normalizeAssetDefinitionId: ToriiClient._requireAssetDefinitionId,
+  normalizeUnsignedInteger: ToriiClient._normalizeUnsignedInteger,
+  requireExactBoolean,
+  requireExactLowerEvenHexString,
+  requireExactNonEmptyString,
+  requireNonEmptyString,
+});
 
 function normalizeSubscriptionPlanListResponse(payload) {
   const record = ensureRecord(payload ?? {}, "subscription plan list response");

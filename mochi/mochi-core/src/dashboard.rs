@@ -1,7 +1,5 @@
 //! Dashboard data aggregation for the Mochi desktop shell.
-
 use std::collections::{BTreeMap, BTreeSet};
-
 use crate::{
     SigningAuthority,
     torii::{
@@ -9,10 +7,8 @@ use crate::{
         ExplorerBlockRecord, ExplorerBlocksQuery, ToriiClient, ToriiError, ToriiErrorInfo,
     },
 };
-
 const DASHBOARD_BLOCK_LIMIT: u32 = 6;
 const DASHBOARD_EXPLORER_PAGE_SIZE: u32 = 100;
-
 /// An individual balance displayed under a dev account card.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardAssetBalance {
@@ -21,7 +17,6 @@ pub struct DashboardAssetBalance {
     /// Raw string value returned by Explorer.
     pub value: String,
 }
-
 /// A single account card shown on the dashboard.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardAccountCard {
@@ -40,7 +35,6 @@ pub struct DashboardAccountCard {
     /// Recent balances for this account.
     pub balances: Vec<DashboardAssetBalance>,
 }
-
 /// Lightweight block summary for the dashboard activity rail.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardRecentBlock {
@@ -53,7 +47,6 @@ pub struct DashboardRecentBlock {
     /// Rejected transaction count.
     pub transactions_rejected: u64,
 }
-
 /// A complete dashboard snapshot fetched from a target peer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardSnapshot {
@@ -66,7 +59,6 @@ pub struct DashboardSnapshot {
     /// Recent blocks from the explorer API.
     pub recent_blocks: Vec<DashboardRecentBlock>,
 }
-
 /// Fetch a dashboard snapshot from a target peer.
 pub async fn fetch_dashboard_snapshot(
     peer_alias: impl Into<String>,
@@ -120,7 +112,6 @@ pub async fn fetch_dashboard_snapshot(
         }
         account_cursor = Some(next);
     }
-
     let mut cards = Vec::with_capacity(signers.len());
     for signer in signers {
         let account_id = signer.account_id().to_string();
@@ -162,7 +153,6 @@ pub async fn fetch_dashboard_snapshot(
             balances,
         ));
     }
-
     Ok(DashboardSnapshot {
         peer_alias,
         api_base: client.base_url().to_owned(),
@@ -170,7 +160,6 @@ pub async fn fetch_dashboard_snapshot(
         recent_blocks: blocks.items.into_iter().map(map_recent_block).collect(),
     })
 }
-
 fn map_account_card(
     label: &str,
     account_id: &str,
@@ -193,7 +182,6 @@ fn map_account_card(
             .collect(),
     }
 }
-
 fn map_recent_block(block: ExplorerBlockRecord) -> DashboardRecentBlock {
     DashboardRecentBlock {
         height: block.height,
@@ -202,20 +190,16 @@ fn map_recent_block(block: ExplorerBlockRecord) -> DashboardRecentBlock {
         transactions_rejected: block.transactions_rejected,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use httpmock::prelude::*;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     use norito::json;
-
     use super::fetch_dashboard_snapshot;
     use crate::{SigningAuthority, torii::ToriiClient};
-
     fn signer() -> SigningAuthority {
         SigningAuthority::new("Alice", ALICE_ID.clone(), ALICE_KEYPAIR.clone())
     }
-
     #[tokio::test]
     async fn fetch_dashboard_snapshot_aggregates_signers_assets_and_blocks() {
         let server = MockServer::start();
@@ -284,12 +268,10 @@ mod tests {
                     .expect("serialize assets body"),
                 );
         });
-
         let client = ToriiClient::new(server.url("/")).expect("client");
         let snapshot = fetch_dashboard_snapshot("peer0", &client, &[signer()])
             .await
             .expect("snapshot");
-
         assert_eq!(snapshot.peer_alias, "peer0");
         assert_eq!(snapshot.accounts.len(), 1);
         assert_eq!(snapshot.accounts[0].label, "Alice");

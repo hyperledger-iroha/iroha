@@ -1,20 +1,16 @@
 //! Developer helper for regenerating the vote tally Halo2 bundle artifacts.
 #![allow(unexpected_cfgs)]
-
 #[cfg(not(all(feature = "dev-tests", feature = "halo2-dev-tests")))]
 fn main() {
     eprintln!("Enable both `dev-tests` and `halo2-dev-tests` features to build this example.");
 }
-
 #[cfg(all(feature = "dev-tests", feature = "halo2-dev-tests"))]
 fn main() -> anyhow::Result<()> {
     vote_tally_bundle::run()
 }
-
 #[cfg(all(feature = "dev-tests", feature = "halo2-dev-tests"))]
 mod vote_tally_bundle {
     use std::{env, fs, path::PathBuf};
-
     use anyhow::{Context, Result};
     use halo2_proofs::{
         halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
@@ -30,7 +26,6 @@ mod vote_tally_bundle {
     use iroha_data_model::proof::VerifyingKeyBox;
     use norito::json::{self, Value};
     use rand::rngs::OsRng;
-
     pub fn run() -> Result<()> {
         let out_dir = env::args()
             .nth(1)
@@ -38,17 +33,13 @@ mod vote_tally_bundle {
             .unwrap_or_else(|| PathBuf::from("artifacts/zk_vote_tally"));
         fs::create_dir_all(&out_dir)
             .with_context(|| format!("failed to create {}", out_dir.display()))?;
-
         let bundle = generate_bundle()?;
-
         let vk_path = out_dir.join("vote_tally_vk.zk1");
         fs::write(&vk_path, &bundle.vk_bytes)
             .with_context(|| format!("failed to write {}", vk_path.display()))?;
-
         let proof_path = out_dir.join("vote_tally_proof.zk1");
         fs::write(&proof_path, &bundle.proof_bytes)
             .with_context(|| format!("failed to write {}", proof_path.display()))?;
-
         let meta = json::json!({
             "generated_unix_ms": chrono::Utc::now().timestamp_millis(),
             "bundle": vote_tally::summary_to_json(&bundle.summary),
@@ -56,7 +47,6 @@ mod vote_tally_bundle {
         let meta_path = out_dir.join("vote_tally_meta.json");
         fs::write(&meta_path, json::to_vec_pretty(&meta)?)
             .with_context(|| format!("failed to write {}", meta_path.display()))?;
-
         let summary_json = vote_tally::summary_to_json(&bundle.summary);
         println!("wrote vote tally bundle artifacts to {}", out_dir.display());
         println!(
@@ -65,18 +55,15 @@ mod vote_tally_bundle {
         );
         Ok(())
     }
-
     struct VoteTallyArtifacts {
         summary: vote_tally::BundleSummary,
         vk_bytes: Vec<u8>,
         proof_bytes: Vec<u8>,
     }
-
     fn generate_bundle() -> Result<VoteTallyArtifacts> {
         const BACKEND: &str = "halo2/pasta/ipa/vote-bool-commit-merkle8";
         const CIRCUIT_ID: &str = "halo2/pasta/vote-bool-commit-merkle8";
         const K: u32 = 6;
-
         let params = ParamsIPA::<Curve>::new(K);
         let circuit = zk::depth::VoteBoolCommitMerkle::<8>;
         let vk = keygen_vk(&params, &circuit)?;
@@ -95,10 +82,8 @@ mod vote_tally_bundle {
             &mut transcript,
         )?;
         let proof_bytes = transcript.finalize();
-
         let commit = instances[0][0];
         let root = instances[1][0];
-
         let vk_bytes = zk::write_vk_bytes(&VerifyingKeyBox::try_from(&vk)?)?;
         let vk_commitment = hash_vk(&vk_bytes);
         let summary = vote_tally::BundleSummary {
@@ -111,17 +96,14 @@ mod vote_tally_bundle {
             vk_len: vk_bytes.len(),
             proof_len: proof_bytes.len(),
         };
-
         Ok(VoteTallyArtifacts {
             summary,
             vk_bytes,
             proof_bytes,
         })
     }
-
     mod vote_tally {
         use super::*;
-
         #[derive(Debug, Clone)]
         pub struct BundleSummary {
             pub backend: String,
@@ -133,7 +115,6 @@ mod vote_tally_bundle {
             pub vk_len: usize,
             pub proof_len: usize,
         }
-
         pub fn summary_to_json(summary: &BundleSummary) -> Value {
             json::json!({
                 "backend": summary.backend,
@@ -146,11 +127,9 @@ mod vote_tally_bundle {
                 "proof_len": summary.proof_len,
             })
         }
-
         #[cfg(test)]
         mod tests {
             use super::*;
-
             #[test]
             fn summary_to_json_emits_expected_structure() {
                 let backend = "backend-x".to_owned();
@@ -161,7 +140,6 @@ mod vote_tally_bundle {
                 let vk_commit_hex = "55667788".to_owned();
                 let vk_len = 1024usize;
                 let proof_len = 2048usize;
-
                 let summary = BundleSummary {
                     backend: backend.clone(),
                     circuit_id: circuit_id.clone(),
@@ -172,12 +150,10 @@ mod vote_tally_bundle {
                     vk_len,
                     proof_len,
                 };
-
                 let value = summary_to_json(&summary);
                 let object = value
                     .as_object()
                     .expect("vote tally summary should serialize as JSON object");
-
                 assert_eq!(
                     object.get("backend").and_then(Value::as_str),
                     Some(backend.as_str())

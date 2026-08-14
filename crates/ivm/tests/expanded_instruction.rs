@@ -1,5 +1,4 @@
 use ivm::{encoding, instruction};
-
 #[test]
 fn wide_field_extractors() {
     let word = encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 0xAB, 0xCD, 0xEF);

@@ -1,6 +1,5 @@
 pub use iroha_i18n::Language;
 use iroha_i18n::wrap_placeholder;
-
 const TRANSLATION_LANGUAGE_COUNT: usize = 76;
 const TRANSLATION_MESSAGE_COUNT: usize = 15;
 const TRANSLATION_OFFSET_WIDTH: usize = std::mem::size_of::<u32>() * 2;
@@ -9,7 +8,6 @@ const TRANSLATION_OFFSETS: &[u8; TRANSLATION_LANGUAGE_COUNT
      * TRANSLATION_MESSAGE_COUNT
      * TRANSLATION_OFFSET_WIDTH] =
     include_bytes!(concat!(env!("OUT_DIR"), "/kotodama_i18n_v1_offsets.bin"));
-
 #[repr(usize)]
 enum MessageIndex {
     NoFunctions,
@@ -28,7 +26,6 @@ enum MessageIndex {
     LintUsage,
     LintUsageHelp,
 }
-
 const fn language_index(lang: Language) -> usize {
     match lang {
         Language::English => 0,
@@ -109,7 +106,6 @@ const fn language_index(lang: Language) -> usize {
         Language::Manchurian => 75,
     }
 }
-
 fn translation_offset(index: usize) -> usize {
     let start = index * std::mem::size_of::<u32>();
     u32::from_le_bytes([
@@ -119,26 +115,22 @@ fn translation_offset(index: usize) -> usize {
         TRANSLATION_OFFSETS[start + 3],
     ]) as usize
 }
-
 fn message_for(lang: Language, message: MessageIndex) -> &'static str {
     let offset_index = (language_index(lang) * TRANSLATION_MESSAGE_COUNT + message as usize) * 2;
     let start = translation_offset(offset_index);
     let end = translation_offset(offset_index + 1);
     &TRANSLATION_TEXT[start..end]
 }
-
 /// Detect the best-fit language from overrides and environment.
 pub fn detect_language() -> Language {
     iroha_i18n::detect_language(None)
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateShadowContext {
     Parameter,
     Binding,
     MapBinding,
 }
-
 pub enum Message<'a> {
     NoFunctions,
     UnsupportedBinaryOp(&'a str),
@@ -165,7 +157,6 @@ pub enum Message<'a> {
     LintUsage,
     LintUsageHelp,
 }
-
 fn render_template(
     template: &str,
     replacements: &[(&str, &str)],
@@ -191,7 +182,6 @@ fn render_template(
         None
     }
 }
-
 pub fn translate(lang: Language, msg: Message) -> String {
     match msg {
         Message::NoFunctions => message_for(lang, MessageIndex::NoFunctions).to_string(),
@@ -284,25 +274,21 @@ pub fn translate(lang: Language, msg: Message) -> String {
         Message::LintUsageHelp => message_for(lang, MessageIndex::LintUsageHelp).to_string(),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn semantic_error_templates_preserve_braces_in_replacement_values() {
         let rendered = translate(
             Language::English,
             Message::SemanticError(r#"invalid JSON literal `{"owner":1}`"#),
         );
-
         assert_eq!(
             rendered,
             r#"semantic error: invalid JSON literal `{"owner":1}`"#
         );
         assert!(!rendered.contains("{error}"));
     }
-
     #[test]
     fn template_rendering_rejects_missing_or_unknown_markers() {
         assert!(

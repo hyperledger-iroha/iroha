@@ -1,16 +1,12 @@
 //! Schema coverage for core `NonZero*` integers.
-
 use core::any::TypeId;
-
 use impls::impls;
 use iroha_schema::{IntoSchema, MetaMap, Metadata, UnnamedFieldsMeta};
-
 macro_rules! check_non_zero {
     ($($ty:ty => $inner:ty),* $(,)?) => {
         $(
             let mut map = MetaMap::new();
             <$ty>::update_schema_map(&mut map);
-
             let schema = map
                 .get::<$ty>()
                 .unwrap_or_else(|| panic!("missing schema for {}", stringify!($ty)));
@@ -20,12 +16,10 @@ macro_rules! check_non_zero {
                     types: vec![TypeId::of::<$inner>()],
                 })
             );
-
             assert!(map.contains_key::<$inner>());
         )*
     };
 }
-
 #[test]
 fn non_zero_integers_schema() {
     check_non_zero! {
@@ -41,7 +35,6 @@ fn non_zero_integers_schema() {
         core::num::NonZeroI128 => i128,
     }
 }
-
 #[test]
 fn arch_dependent_non_zero_are_excluded() {
     // Keeping architecture-dependent `isize`/`usize` out of the schema surface

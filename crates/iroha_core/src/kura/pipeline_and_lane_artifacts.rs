@@ -18,10 +18,8 @@ pub struct PipelineRecoverySidecar {
     #[norito(default)]
     pub fastpq_proofs: Vec<FastpqProofSnapshot>,
 }
-
 impl PipelineRecoverySidecar {
     const FORMAT_LABEL: &'static str = "pipeline.recovery";
-
     /// Create a new recovery sidecar payload.
     pub fn new(
         height: u64,
@@ -39,14 +37,12 @@ impl PipelineRecoverySidecar {
             fastpq_proofs: Vec::new(),
         }
     }
-
     /// Return the human-readable format tag describing the recovery payload.
     pub fn format_label(&self) -> &'static str {
         match self.format {
             PipelineRecoveryFormat::Current => Self::FORMAT_LABEL,
         }
     }
-
     /// Convert the sidecar into a JSON value for operator tooling.
     pub fn to_json_value(&self) -> JsonValue {
         let dag = {
@@ -62,7 +58,6 @@ impl PipelineRecoverySidecar {
             );
             norito::json::Value::Object(dag)
         };
-
         let txs = self
             .txs
             .iter()
@@ -91,7 +86,6 @@ impl PipelineRecoverySidecar {
                 norito::json::Value::Object(entry)
             })
             .collect::<Vec<_>>();
-
         let proofs = self
             .proofs
             .iter()
@@ -125,7 +119,6 @@ impl PipelineRecoverySidecar {
             .iter()
             .map(FastpqProofSnapshot::to_json_value)
             .collect::<Vec<_>>();
-
         let mut root = norito::json::Map::new();
         root.insert(
             "format".to_string(),
@@ -149,7 +142,6 @@ impl PipelineRecoverySidecar {
         );
         norito::json::Value::Object(root)
     }
-
     /// Encode the sidecar into a framed Norito buffer.
     ///
     /// # Errors
@@ -165,7 +157,6 @@ impl PipelineRecoverySidecar {
         Ok(bytes)
     }
 }
-
 /// Known metadata format variants for pipeline recovery sidecars.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum PipelineRecoveryFormat {
@@ -173,7 +164,6 @@ pub enum PipelineRecoveryFormat {
     /// Sidecars anchored to a specific block hash to avoid reuse across forks.
     Current,
 }
-
 /// Deterministic DAG summary embedded in pipeline recovery metadata.
 #[derive(Debug, Copy, Clone, Encode, Decode)]
 pub struct PipelineDagSnapshot {
@@ -182,7 +172,6 @@ pub struct PipelineDagSnapshot {
     /// Number of unique DAG keys observed during block construction.
     pub key_count: u32,
 }
-
 /// Transaction access summary persisted for pipeline recovery/replay.
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct PipelineTxSnapshot {
@@ -199,7 +188,6 @@ pub struct PipelineTxSnapshot {
     #[norito(default)]
     pub write_count: u32,
 }
-
 impl PipelineTxSnapshot {
     /// Create a compact tx access summary without embedding the full key lists.
     #[must_use]
@@ -216,14 +204,12 @@ impl PipelineTxSnapshot {
             write_count: u32::try_from(write_count).unwrap_or(u32::MAX),
         }
     }
-
     /// Total number of read keys represented by this snapshot.
     #[must_use]
     pub fn read_count(&self) -> u32 {
         self.read_count
             .max(u32::try_from(self.reads.len()).unwrap_or(u32::MAX))
     }
-
     /// Total number of write keys represented by this snapshot.
     #[must_use]
     pub fn write_count(&self) -> u32 {
@@ -231,7 +217,6 @@ impl PipelineTxSnapshot {
             .max(u32::try_from(self.writes.len()).unwrap_or(u32::MAX))
     }
 }
-
 /// ZK proof artifacts captured alongside pipeline metadata.
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct PipelineProofSnapshot {
@@ -245,7 +230,6 @@ pub struct PipelineProofSnapshot {
     #[norito(default)]
     pub tx_hash: Option<[u8; 32]>,
 }
-
 /// FASTPQ proof artifact captured after block commit for local AXT packaging and audits.
 ///
 /// Sidecar persistence stores compact metadata-only snapshots to keep per-block
@@ -275,7 +259,6 @@ pub struct FastpqProofSnapshot {
     /// Norito-encoded FASTPQ proof bytes; empty when persisted as sidecar metadata.
     pub proof: Vec<u8>,
 }
-
 impl FastpqProofSnapshot {
     /// Create a compact sidecar snapshot from a proven batch without embedding
     /// transition rows or proof bytes.
@@ -305,7 +288,6 @@ impl FastpqProofSnapshot {
             proof: Vec::new(),
         }
     }
-
     /// Return a bounded sidecar representation while retaining proof identity.
     #[must_use]
     pub fn compact_for_sidecar(&self) -> Self {
@@ -326,7 +308,6 @@ impl FastpqProofSnapshot {
             proof: Vec::new(),
         }
     }
-
     /// Return `true` when both snapshots describe the same proof attachment.
     #[must_use]
     pub fn same_attachment(&self, other: &Self) -> bool {
@@ -334,7 +315,6 @@ impl FastpqProofSnapshot {
             && self.batch_index == other.batch_index
             && self.proof_digest == other.proof_digest
     }
-
     /// Decode the embedded FASTPQ proof.
     ///
     /// # Errors
@@ -343,7 +323,6 @@ impl FastpqProofSnapshot {
     pub fn decode_proof(&self) -> Result<fastpq_prover::Proof, norito::Error> {
         norito::decode_from_bytes(&self.proof)
     }
-
     /// Convert this FASTPQ proof snapshot to the JSON object used by recovery endpoints.
     #[must_use]
     pub fn to_json_value(&self) -> JsonValue {
@@ -388,7 +367,6 @@ impl FastpqProofSnapshot {
         );
         norito::json::Value::Object(entry)
     }
-
     /// Package this snapshot as an AXT proof blob.
     ///
     /// # Errors
@@ -412,7 +390,6 @@ impl FastpqProofSnapshot {
         )
     }
 }
-
 /// Known metadata format variants for certified standalone lane blocks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum CertifiedLaneBlockArtifactFormat {
@@ -420,7 +397,6 @@ pub enum CertifiedLaneBlockArtifactFormat {
     /// Standalone lane block certified by prepare and commit lane-local QCs.
     Current,
 }
-
 /// Persisted standalone lane block certification artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct CertifiedLaneBlockArtifact {
@@ -435,10 +411,8 @@ pub struct CertifiedLaneBlockArtifact {
     /// Proof-of-possession material for every signer selected by either QC.
     pub signer_pops: BTreeMap<PublicKey, Vec<u8>>,
 }
-
 impl CertifiedLaneBlockArtifact {
     const FORMAT_LABEL: &'static str = "lane.certified_block";
-
     /// Construct a certified lane block artifact using the current schema.
     #[must_use]
     pub(crate) fn new(
@@ -453,7 +427,6 @@ impl CertifiedLaneBlockArtifact {
             signer_pops,
         }
     }
-
     /// Return the human-readable format tag describing the artifact payload.
     #[must_use]
     pub fn format_label(&self) -> &'static str {
@@ -461,7 +434,6 @@ impl CertifiedLaneBlockArtifact {
             CertifiedLaneBlockArtifactFormat::Current => Self::FORMAT_LABEL,
         }
     }
-
     /// Encode the artifact into a framed Norito buffer.
     ///
     /// # Errors
@@ -478,7 +450,6 @@ impl CertifiedLaneBlockArtifact {
         Ok(bytes)
     }
 }
-
 /// Bounded durable head for one active lane's latest certified session.
 ///
 /// The complete artifact is retained so a frontier publication that survives a
@@ -491,13 +462,11 @@ struct LatestCertifiedLaneBlockFrontierV1 {
     artifact: CertifiedLaneBlockArtifact,
     integrity_hash: Hash,
 }
-
 #[derive(Debug)]
 struct LatestCertifiedLaneBlockFrontierRead {
     frontier: LatestCertifiedLaneBlockFrontierV1,
     snapshot: StableSidecarRead,
 }
-
 impl LatestCertifiedLaneBlockFrontierV1 {
     fn new(artifact: CertifiedLaneBlockArtifact) -> Option<Self> {
         let mut frontier = Self {
@@ -508,7 +477,6 @@ impl LatestCertifiedLaneBlockFrontierV1 {
         frontier.integrity_hash = frontier.computed_integrity_hash()?;
         Some(frontier)
     }
-
     fn computed_integrity_hash(&self) -> Option<Hash> {
         let mut canonical = self.clone();
         canonical.integrity_hash = Hash::prehashed([0; Hash::LENGTH]);
@@ -516,12 +484,10 @@ impl LatestCertifiedLaneBlockFrontierV1 {
             Hash::new_from_chunks(&[LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_DIGEST_DOMAIN, &bytes])
         })
     }
-
     fn ordinary_height(&self) -> u64 {
         self.artifact.proposal.descriptor.lane_block_height
     }
 }
-
 /// Known metadata formats for lane-owned executable payloads and view proofs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub(crate) enum AutonomousLaneBlockArtifactFormat {
@@ -529,7 +495,6 @@ pub(crate) enum AutonomousLaneBlockArtifactFormat {
     /// Canonical executable payload followed by a contiguous NewView proof chain.
     Current,
 }
-
 /// Durable lane-owned payload and authenticated view-transition chain.
 ///
 /// Unlike [`LaneBlockArtifact`], this artifact does not depend on a global block
@@ -552,7 +517,6 @@ pub(crate) struct AutonomousLaneBlockArtifact {
     /// checkpoint target, to the current view.
     pub(crate) new_view_certificates: Vec<DurableLaneBlockNewViewCertificateV1>,
 }
-
 impl AutonomousLaneBlockArtifact {
     fn new(executable_payload: LaneExecutablePayloadV1) -> Self {
         Self {
@@ -563,7 +527,6 @@ impl AutonomousLaneBlockArtifact {
             new_view_certificates: Vec::new(),
         }
     }
-
     fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
         let bytes = norito::encode_canonical(self)?;
         if bytes.len() > MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES {
@@ -574,7 +537,6 @@ impl AutonomousLaneBlockArtifact {
         Ok(bytes)
     }
 }
-
 /// Authenticated pointer to the latest attempt at one lane-local height.
 ///
 /// Every attempt, including the first, is immutable in its versioned
@@ -598,10 +560,8 @@ struct AutonomousLaneBlockLatestAttemptV1 {
     origin_proposal_hash: Hash,
     executable_payload_hash: Hash,
 }
-
 impl AutonomousLaneBlockLatestAttemptV1 {
     const VERSION: u16 = 1;
-
     fn from_payload(payload: &LaneExecutablePayloadV1) -> Self {
         let descriptor = &payload.origin_proposal.descriptor;
         Self {
@@ -619,12 +579,10 @@ impl AutonomousLaneBlockLatestAttemptV1 {
             executable_payload_hash: payload.payload_hash,
         }
     }
-
     fn matches_payload(&self, payload: &LaneExecutablePayloadV1) -> bool {
         self.version == Self::VERSION && self == &Self::from_payload(payload)
     }
 }
-
 /// Canonical identity and monotonic value stored for one Kura-root process generation.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -634,10 +592,8 @@ struct AutonomousLifecycleProcessGenerationBodyV1 {
     local_peer_id: PeerId,
     generation: u64,
 }
-
 impl AutonomousLifecycleProcessGenerationBodyV1 {
     const VERSION: u16 = 1;
-
     fn new(
         network_id: iroha_data_model::NetworkId,
         local_peer_id: PeerId,
@@ -652,7 +608,6 @@ impl AutonomousLifecycleProcessGenerationBodyV1 {
         body.validate_structure()?;
         Ok(body)
     }
-
     fn validate_structure(&self) -> Result<(), &'static str> {
         if self.version != Self::VERSION || self.generation == 0 {
             return Err(
@@ -669,7 +624,6 @@ impl AutonomousLifecycleProcessGenerationBodyV1 {
         }
         Ok(())
     }
-
     fn canonical_hash(&self) -> Result<Hash, norito::Error> {
         let encoded = norito::encode_canonical(self)?;
         Ok(Hash::new_from_chunks(&[
@@ -678,7 +632,6 @@ impl AutonomousLifecycleProcessGenerationBodyV1 {
         ]))
     }
 }
-
 /// Self-hashed first-release process-generation record for one exclusive Kura root.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -686,7 +639,6 @@ struct AutonomousLifecycleProcessGenerationRecordV1 {
     body: AutonomousLifecycleProcessGenerationBodyV1,
     record_hash: Hash,
 }
-
 impl AutonomousLifecycleProcessGenerationRecordV1 {
     fn new(
         network_id: iroha_data_model::NetworkId,
@@ -700,7 +652,6 @@ impl AutonomousLifecycleProcessGenerationRecordV1 {
         )?;
         Ok(Self { body, record_hash })
     }
-
     fn validate_structure(&self) -> Result<(), &'static str> {
         self.body.validate_structure()?;
         let expected_hash = self.body.canonical_hash().map_err(
@@ -711,7 +662,6 @@ impl AutonomousLifecycleProcessGenerationRecordV1 {
         }
         Ok(())
     }
-
     fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
         let bytes = norito::encode_canonical(self)?;
         if bytes.is_empty() || bytes.len() > AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_MAX_BYTES {
@@ -723,7 +673,6 @@ impl AutonomousLifecycleProcessGenerationRecordV1 {
         Ok(bytes)
     }
 }
-
 /// Opaque proof that this Kura instance durably claimed one exact process generation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AutonomousLifecycleProcessGenerationClaim {
@@ -733,27 +682,23 @@ pub(crate) struct AutonomousLifecycleProcessGenerationClaim {
     generation: u64,
     record_hash: Hash,
 }
-
 impl AutonomousLifecycleProcessGenerationClaim {
     /// Return the non-zero durable generation owned by this process.
     #[must_use]
     pub(crate) const fn generation(&self) -> u64 {
         self.generation
     }
-
     /// Return the exact network identity bound into the durable claim.
     #[must_use]
     pub(crate) const fn network_id(&self) -> iroha_data_model::NetworkId {
         self.network_id
     }
-
     /// Return the exact local public-key identity bound into the durable claim.
     #[must_use]
     pub(crate) fn local_peer_id(&self) -> &PeerId {
         &self.local_peer_id
     }
 }
-
 /// Stable, versioned encoding of a fixed-width canonical identity projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -765,7 +710,6 @@ struct AutonomousLifecycleCanonicalIdentityV1 {
     word2: u64,
     word3: u64,
 }
-
 impl AutonomousLifecycleCanonicalIdentityV1 {
     fn from_production(value: CanonicalIdentityProjection) -> Self {
         Self {
@@ -777,7 +721,6 @@ impl AutonomousLifecycleCanonicalIdentityV1 {
             word3: value.word3,
         }
     }
-
     fn to_production(self) -> CanonicalIdentityProjection {
         CanonicalIdentityProjection {
             domain: self.domain,
@@ -789,7 +732,6 @@ impl AutonomousLifecycleCanonicalIdentityV1 {
         }
     }
 }
-
 /// Stable Queue/QueuePlan portion of one autonomous lifecycle projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -798,7 +740,6 @@ struct AutonomousLifecycleQueueProjectionV1 {
     selected_count: u64,
     reservation_state: u8,
 }
-
 /// Stable Kura and carrier-evidence portion of one lifecycle projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -807,7 +748,6 @@ struct AutonomousLifecycleCarrierProjectionV1 {
     execution_input_durable: u128,
     ready_qc_durable: bool,
 }
-
 /// Stable volatile-custody portion of one autonomous lifecycle projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -817,7 +757,6 @@ struct AutonomousLifecycleSessionProjectionV1 {
     crashed: u128,
     producer_alive: bool,
 }
-
 /// Stable monotonic-history portion of one autonomous lifecycle projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -834,7 +773,6 @@ struct AutonomousLifecycleHistoryProjectionV1 {
     pending_high_water: u64,
     released_high_water: u64,
 }
-
 /// Stable decision/application portion of one autonomous lifecycle projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -847,7 +785,6 @@ struct AutonomousLifecycleDecisionProjectionV1 {
     application_count: u8,
     applied_by: u128,
 }
-
 /// Stable release-progress portion of one autonomous lifecycle projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -857,7 +794,6 @@ struct AutonomousLifecycleReleaseProjectionV1 {
     released_prefix: u64,
     fifo_restored: bool,
 }
-
 /// Versioned durable mirror of the complete first-release safety projection.
 ///
 /// The persistence layout deliberately does not encode the internal
@@ -880,10 +816,8 @@ pub(crate) struct AutonomousLifecycleStableStateV1 {
     decision: AutonomousLifecycleDecisionProjectionV1,
     release: AutonomousLifecycleReleaseProjectionV1,
 }
-
 impl AutonomousLifecycleStableStateV1 {
     const VERSION: u16 = 1;
-
     /// Reserve the exact fixed-width terminal-state payload for Pending outcomes.
     /// This deliberately unsupported production projection gives Pending and
     /// Complete identical framed lengths in the first-release persistence layout.
@@ -951,11 +885,9 @@ impl AutonomousLifecycleStableStateV1 {
             },
         }
     }
-
     fn is_terminal_outcome_pending_reservation(self) -> bool {
         self == Self::terminal_outcome_pending_reservation()
     }
-
     /// Convert one complete checked production projection into its durable
     /// first-release layout.
     #[must_use]
@@ -1020,7 +952,6 @@ impl AutonomousLifecycleStableStateV1 {
             },
         }
     }
-
     fn to_production(self) -> Option<ProductionInFlightFirstReleaseStateProjection> {
         (self.version == Self::VERSION).then_some(ProductionInFlightFirstReleaseStateProjection {
             validator_count: self.validator_count,
@@ -1078,7 +1009,6 @@ impl AutonomousLifecycleStableStateV1 {
         })
     }
 }
-
 /// Complete stable discriminator for one prepared production transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -1087,7 +1017,6 @@ pub(crate) struct AutonomousLifecycleActionV1 {
     actor: u128,
     target: u128,
 }
-
 /// Durable lifecycle phase for one exact autonomous proposal attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AutonomousLifecycleCursorPhaseKindV2 {
@@ -1100,7 +1029,6 @@ pub(crate) enum AutonomousLifecycleCursorPhaseKindV2 {
     /// Terminal economic ownership is durable for this attempt.
     Terminal,
 }
-
 /// Durable lifecycle phase for one exact autonomous proposal attempt.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) enum AutonomousLifecycleCursorPhaseV2 {
@@ -1145,7 +1073,6 @@ pub(crate) enum AutonomousLifecycleCursorPhaseV2 {
         projection: AutonomousLifecycleStableStateV1,
     },
 }
-
 impl AutonomousLifecycleCursorPhaseV2 {
     /// Build a prepared phase only from a production transition accepted by
     /// the current composed first-release transition gate.
@@ -1172,7 +1099,6 @@ impl AutonomousLifecycleCursorPhaseV2 {
             after: AutonomousLifecycleStableStateV1::from_production(transition.after),
         })
     }
-
     /// Build a live phase from a valid complete state and non-zero owner generation.
     pub(crate) fn live(
         owner_generation: u64,
@@ -1189,7 +1115,6 @@ impl AutonomousLifecycleCursorPhaseV2 {
             projection: AutonomousLifecycleStableStateV1::from_production(projection),
         })
     }
-
     /// Build a crash observation; the cursor binding later supplies the exact
     /// local actor used to recheck the production Crash transition.
     pub(crate) fn crashed(
@@ -1213,7 +1138,6 @@ impl AutonomousLifecycleCursorPhaseV2 {
             after: AutonomousLifecycleStableStateV1::from_production(after),
         })
     }
-
     /// Transfer ownership of an already durable crash observation to a newer
     /// process generation without fabricating a second Crash transition.
     pub(crate) fn observed_crashed(
@@ -1235,7 +1159,6 @@ impl AutonomousLifecycleCursorPhaseV2 {
             after: stable,
         })
     }
-
     /// Return the process generation that owns this phase.
     #[must_use]
     pub(crate) const fn owner_generation(&self) -> u64 {
@@ -1255,7 +1178,6 @@ impl AutonomousLifecycleCursorPhaseV2 {
             } => *observing_generation,
         }
     }
-
     /// Return the earlier owner generation displaced by a crash observation.
     #[must_use]
     pub(crate) const fn source_generation(&self) -> Option<u64> {
@@ -1266,7 +1188,6 @@ impl AutonomousLifecycleCursorPhaseV2 {
             Self::Prepared { .. } | Self::Live { .. } | Self::Terminal { .. } => None,
         }
     }
-
     /// Return the stable phase discriminator without exposing the durable DTO.
     #[must_use]
     pub(crate) const fn kind(&self) -> AutonomousLifecycleCursorPhaseKindV2 {
@@ -1277,7 +1198,6 @@ impl AutonomousLifecycleCursorPhaseV2 {
             Self::Terminal { .. } => AutonomousLifecycleCursorPhaseKindV2::Terminal,
         }
     }
-
     /// Return the checked first stable projection carried by this phase.
     pub(crate) fn before_projection(
         &self,
@@ -1293,7 +1213,6 @@ impl AutonomousLifecycleCursorPhaseV2 {
             .then_some(projection)
             .ok_or("autonomous lifecycle phase state is invalid")
     }
-
     /// Return the checked second stable projection carried by a prepared or
     /// crashed phase.
     pub(crate) fn after_projection(
@@ -1314,7 +1233,6 @@ impl AutonomousLifecycleCursorPhaseV2 {
             })
             .transpose()
     }
-
     /// Return the checked production transition carried by a prepared phase.
     pub(crate) fn prepared_transition_projection(
         &self,
@@ -1345,7 +1263,6 @@ impl AutonomousLifecycleCursorPhaseV2 {
             .then_some(Some(transition))
             .ok_or("autonomous lifecycle prepared transition is unstable")
     }
-
     fn states(&self) -> [Option<AutonomousLifecycleStableStateV1>; 2] {
         match self {
             Self::Prepared { before, after, .. } | Self::Crashed { before, after, .. } => {
@@ -1357,7 +1274,6 @@ impl AutonomousLifecycleCursorPhaseV2 {
         }
     }
 }
-
 /// Versioned, payload-free identity of one ordered Queue reservation group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -1368,10 +1284,8 @@ struct AutonomousLifecycleReservationGroupV1 {
     reservation_group_hash: Hash,
     reservation_count: u64,
 }
-
 impl AutonomousLifecycleReservationGroupV1 {
     const VERSION: u16 = 1;
-
     fn from_binding(binding: LaneQueueReservationGroupBindingV1) -> Self {
         Self {
             version: Self::VERSION,
@@ -1381,12 +1295,10 @@ impl AutonomousLifecycleReservationGroupV1 {
             reservation_count: binding.reservation_count,
         }
     }
-
     fn matches_binding(&self, binding: LaneQueueReservationGroupBindingV1) -> bool {
         self.version == Self::VERSION && self == &Self::from_binding(binding)
     }
 }
-
 /// Complete immutable identity bound into every autonomous lifecycle cursor.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -1413,10 +1325,8 @@ pub(crate) struct AutonomousLifecycleAttemptBindingV1 {
     producer_index: u16,
     local_validator_index: u16,
 }
-
 impl AutonomousLifecycleAttemptBindingV1 {
     const VERSION: u16 = 1;
-
     /// Derive the exact stable cursor binding from a validated payload, its
     /// Queue-authenticated ordered reservation group, and local committee member.
     pub(crate) fn from_payload(
@@ -1517,7 +1427,6 @@ impl AutonomousLifecycleAttemptBindingV1 {
         binding.validate_for_payload(payload)?;
         Ok(binding)
     }
-
     fn validate_structure(&self) -> Result<(), &'static str> {
         if self.version != Self::VERSION {
             return Err("unsupported autonomous lifecycle binding version");
@@ -1547,8 +1456,8 @@ impl AutonomousLifecycleAttemptBindingV1 {
         ];
         if self.network_id.as_bytes().iter().all(|byte| *byte == 0)
             || hashes
-            .iter()
-            .any(|hash| hash.as_ref().iter().all(|byte| *byte == 0))
+                .iter()
+                .any(|hash| hash.as_ref().iter().all(|byte| *byte == 0))
             || self
                 .height_context_id
                 .0
@@ -1565,7 +1474,6 @@ impl AutonomousLifecycleAttemptBindingV1 {
         }
         Ok(())
     }
-
     fn validate_for_payload(&self, payload: &LaneExecutablePayloadV1) -> Result<(), &'static str> {
         self.validate_structure()?;
         payload
@@ -1613,21 +1521,17 @@ impl AutonomousLifecycleAttemptBindingV1 {
         }
         Ok(())
     }
-
     fn local_actor(&self) -> u128 {
         1_u128 << u32::from(self.local_validator_index)
     }
-
     fn producer_actor(&self) -> u128 {
         1_u128 << u32::from(self.producer_index)
     }
-
     /// Return the exact active route and incarnation bound into this attempt.
     #[must_use]
     pub(crate) const fn route_identity(&self) -> (LaneId, DataSpaceId, Hash) {
         (self.lane_id, self.dataspace_id, self.lane_incarnation)
     }
-
     /// Return proposal height, lane-block height, and lane-block view.
     #[must_use]
     pub(crate) const fn attempt_coordinates(&self) -> (u64, u64, u64) {
@@ -1637,31 +1541,26 @@ impl AutonomousLifecycleAttemptBindingV1 {
             self.lane_block_view,
         )
     }
-
     /// Return the authenticated global height-context identity.
     #[must_use]
     pub(crate) const fn height_context_id(&self) -> HeightContextId {
         self.height_context_id
     }
-
     /// Return the immutable origin-proposal hash bound into the signed cursor.
     #[must_use]
     pub(crate) const fn origin_proposal_hash(&self) -> Hash {
         self.origin_proposal_hash
     }
-
     /// Return the canonical executable-payload hash bound into the signed cursor.
     #[must_use]
     pub(crate) const fn executable_payload_hash(&self) -> Hash {
         self.executable_payload_hash
     }
-
     /// Return the ordered reservation-group hash.
     #[must_use]
     pub(crate) const fn reservation_group_hash(&self) -> Hash {
         self.reservation_group.reservation_group_hash
     }
-
     /// Return the frozen validator-set hash version, hash, and member count.
     #[must_use]
     pub(crate) const fn validator_set_identity(&self) -> (u16, HashOf<Vec<PeerId>>, u16) {
@@ -1671,19 +1570,16 @@ impl AutonomousLifecycleAttemptBindingV1 {
             self.validator_count,
         )
     }
-
     /// Return the local validator index and its one-hot projection actor.
     #[must_use]
     pub(crate) fn local_validator_identity(&self) -> (u16, u128) {
         (self.local_validator_index, self.local_actor())
     }
-
     /// Return the frozen producer's one-hot projection actor.
     #[must_use]
     pub(crate) fn producer_actor_projection(&self) -> u128 {
         self.producer_actor()
     }
-
     /// Reconstruct the exact Queue reservation-group binding.
     #[must_use]
     pub(crate) const fn reservation_group_binding(&self) -> LaneQueueReservationGroupBindingV1 {
@@ -1702,7 +1598,6 @@ impl AutonomousLifecycleAttemptBindingV1 {
             reservation_count: self.reservation_group.reservation_count,
         }
     }
-
     fn validate_state(&self, state: AutonomousLifecycleStableStateV1) -> Result<(), &'static str> {
         let projection = state
             .to_production()
@@ -1733,7 +1628,6 @@ impl AutonomousLifecycleAttemptBindingV1 {
         }
         Ok(())
     }
-
     fn validate_phase(&self, phase: &AutonomousLifecycleCursorPhaseV2) -> Result<(), &'static str> {
         self.validate_structure()?;
         for state in phase.states().into_iter().flatten() {
@@ -1835,7 +1729,6 @@ impl AutonomousLifecycleAttemptBindingV1 {
         Ok(())
     }
 }
-
 /// Canonical unsigned portion of one autonomous lifecycle cursor.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -1847,10 +1740,8 @@ pub(crate) struct AutonomousLifecycleCursorUnsignedV2 {
     phase: AutonomousLifecycleCursorPhaseV2,
     signer: PeerId,
 }
-
 impl AutonomousLifecycleCursorUnsignedV2 {
     const VERSION: u16 = 2;
-
     /// Construct the only signable canonical lifecycle body.
     pub(crate) fn new(
         sequence: u64,
@@ -1870,7 +1761,6 @@ impl AutonomousLifecycleCursorUnsignedV2 {
         body.validate_structure()?;
         Ok(body)
     }
-
     fn validate_structure(&self) -> Result<(), &'static str> {
         if self.version != Self::VERSION || self.sequence == 0 {
             return Err("autonomous lifecycle cursor has an unsupported version or zero sequence");
@@ -1891,7 +1781,6 @@ impl AutonomousLifecycleCursorUnsignedV2 {
         }
         Ok(())
     }
-
     /// Return the domain-separated hash of this exact canonical unsigned body.
     pub(crate) fn cursor_hash(&self) -> Result<Hash, norito::Error> {
         let encoded = norito::encode_canonical(self)?;
@@ -1900,7 +1789,6 @@ impl AutonomousLifecycleCursorUnsignedV2 {
             &encoded,
         ]))
     }
-
     /// Return the exact domain-separated bytes the adapter must sign.
     pub(crate) fn signing_preimage(&self) -> Result<Vec<u8>, norito::Error> {
         let cursor_hash = self.cursor_hash()?;
@@ -1910,7 +1798,6 @@ impl AutonomousLifecycleCursorUnsignedV2 {
         preimage.extend_from_slice(cursor_hash.as_ref());
         Ok(preimage)
     }
-
     /// Finalize a cursor with one exact 96-byte BLS-normal signature and
     /// immediately reverify it against the supplied canonical validator set.
     pub(crate) fn finalize(
@@ -1930,7 +1817,6 @@ impl AutonomousLifecycleCursorUnsignedV2 {
         Ok(cursor)
     }
 }
-
 /// Signed, hash-chained durable lifecycle cursor for one proposal attempt.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -1939,7 +1825,6 @@ pub(crate) struct AutonomousLifecycleCursorV2 {
     cursor_hash: Hash,
     signature: [u8; 96],
 }
-
 impl AutonomousLifecycleCursorV2 {
     fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
         let bytes = norito::encode_canonical(self)?;
@@ -1950,7 +1835,6 @@ impl AutonomousLifecycleCursorV2 {
         }
         Ok(bytes)
     }
-
     fn validate_against_validator_set(&self, validator_set: &[PeerId]) -> Result<(), &'static str> {
         self.validate_signature()?;
         if validator_set.is_empty()
@@ -1963,7 +1847,6 @@ impl AutonomousLifecycleCursorV2 {
         }
         Ok(())
     }
-
     fn validate_signature(&self) -> Result<(), &'static str> {
         self.body.validate_structure()?;
         let expected_hash = self
@@ -1984,80 +1867,67 @@ impl AutonomousLifecycleCursorV2 {
             .map_err(|_| "autonomous lifecycle cursor signature verification failed")?;
         Ok(())
     }
-
     fn validate_for_payload(&self, payload: &LaneExecutablePayloadV1) -> Result<(), &'static str> {
         self.body.binding.validate_for_payload(payload)?;
         self.validate_against_validator_set(&payload.origin_proposal.descriptor.validator_set)
     }
-
     /// Monotonic sequence number of this cursor.
     #[must_use]
     pub(crate) fn sequence(&self) -> u64 {
         self.body.sequence
     }
-
     /// Hash of this exact cursor's unsigned canonical body.
     #[must_use]
     pub(crate) fn cursor_hash(&self) -> Hash {
         self.cursor_hash
     }
-
     /// Immutable attempt binding carried by this cursor.
     #[must_use]
     pub(crate) fn binding(&self) -> &AutonomousLifecycleAttemptBindingV1 {
         &self.body.binding
     }
-
     /// Durable lifecycle phase carried by this cursor.
     #[must_use]
     pub(crate) fn phase(&self) -> &AutonomousLifecycleCursorPhaseV2 {
         &self.body.phase
     }
-
     /// Return the stable phase kind without exposing persistence DTO fields.
     #[must_use]
     pub(crate) const fn phase_kind(&self) -> AutonomousLifecycleCursorPhaseKindV2 {
         self.body.phase.kind()
     }
-
     /// Return the process generation that owns the current cursor phase.
     #[must_use]
     pub(crate) const fn owner_generation(&self) -> u64 {
         self.body.phase.owner_generation()
     }
-
     /// Return the displaced owner for a crash observation, when applicable.
     #[must_use]
     pub(crate) const fn source_generation(&self) -> Option<u64> {
         self.body.phase.source_generation()
     }
-
     /// Return the checked first production projection carried by the phase.
     pub(crate) fn before_projection(
         &self,
     ) -> Result<ProductionInFlightFirstReleaseStateProjection, &'static str> {
         self.body.phase.before_projection()
     }
-
     /// Return the checked second production projection carried by the phase.
     pub(crate) fn after_projection(
         &self,
     ) -> Result<Option<ProductionInFlightFirstReleaseStateProjection>, &'static str> {
         self.body.phase.after_projection()
     }
-
     /// Return the checked production transition carried by a prepared phase.
     pub(crate) fn prepared_transition_projection(
         &self,
     ) -> Result<Option<ProductionInFlightFirstReleaseTransitionProjection>, &'static str> {
         self.body.phase.prepared_transition_projection()
     }
-
     fn signer_actor(&self) -> u128 {
         self.body.binding.local_actor()
     }
 }
-
 /// Source-authenticated economic outcome for one exact autonomous attempt.
 ///
 /// The compact source coordinates are never sufficient on their own. Kura
@@ -2080,7 +1950,6 @@ pub(crate) enum AutonomousLifecycleTerminalOutcomeSourceV1 {
     #[codec(index = 2)]
     RetiredRelease { retirement_hash: Hash },
 }
-
 impl AutonomousLifecycleTerminalOutcomeSourceV1 {
     fn validate_structure(&self) -> Result<(), &'static str> {
         match self {
@@ -2113,16 +1982,13 @@ impl AutonomousLifecycleTerminalOutcomeSourceV1 {
         }
         Ok(())
     }
-
     const fn is_canonical_carrier(&self) -> bool {
         matches!(self, Self::CanonicalCarrier { .. })
     }
-
     const fn is_retired_release(&self) -> bool {
         matches!(self, Self::RetiredRelease { .. })
     }
 }
-
 /// Crash-safe publication stage for one exact terminal outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -2139,7 +2005,6 @@ pub(crate) enum AutonomousLifecycleTerminalOutcomeStageV1 {
         terminal: AutonomousLifecycleStableStateV1,
     },
 }
-
 /// Hash-protected body of one autonomous lifecycle terminal outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -2149,7 +2014,6 @@ struct AutonomousLifecycleTerminalOutcomeBodyV1 {
     source: AutonomousLifecycleTerminalOutcomeSourceV1,
     stage: AutonomousLifecycleTerminalOutcomeStageV1,
 }
-
 /// Durable source/Queue join for terminal ownership of one exact attempt.
 ///
 /// A `Pending` file is intentionally a drain blocker. `Complete` is accepted
@@ -2164,10 +2028,8 @@ pub(crate) struct AutonomousLifecycleTerminalOutcomeV1 {
     body: AutonomousLifecycleTerminalOutcomeBodyV1,
     outcome_hash: Hash,
 }
-
 impl AutonomousLifecycleTerminalOutcomeV1 {
     const VERSION: u16 = 1;
-
     fn pending(
         binding: AutonomousLifecycleAttemptBindingV1,
         source: AutonomousLifecycleTerminalOutcomeSourceV1,
@@ -2183,7 +2045,6 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         };
         Self::from_body(body)
     }
-
     fn complete(
         &self,
         terminal: ProductionInFlightFirstReleaseStateProjection,
@@ -2204,7 +2065,6 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         };
         Self::from_body(body)
     }
-
     fn from_body(body: AutonomousLifecycleTerminalOutcomeBodyV1) -> Result<Self, &'static str> {
         Self::validate_body(&body)?;
         let encoded = norito::encode_canonical(&body)
@@ -2213,7 +2073,6 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
             Hash::new_from_chunks(&[AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN, &encoded]);
         Ok(Self { body, outcome_hash })
     }
-
     fn validate_body(body: &AutonomousLifecycleTerminalOutcomeBodyV1) -> Result<(), &'static str> {
         if body.version != Self::VERSION {
             return Err("unsupported autonomous lifecycle terminal outcome version");
@@ -2259,7 +2118,6 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         }
         Ok(())
     }
-
     fn validate_structure(&self) -> Result<(), &'static str> {
         Self::validate_body(&self.body)?;
         let encoded = norito::encode_canonical(&self.body)
@@ -2271,12 +2129,10 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         }
         Ok(())
     }
-
     fn validate_for_payload(&self, payload: &LaneExecutablePayloadV1) -> Result<(), &'static str> {
         self.validate_structure()?;
         self.body.binding.validate_for_payload(payload)
     }
-
     fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
         let bytes = norito::encode_canonical(self)?;
         if bytes.is_empty() || bytes.len() > AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES {
@@ -2286,27 +2142,22 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         }
         Ok(bytes)
     }
-
     const fn binding(&self) -> &AutonomousLifecycleAttemptBindingV1 {
         &self.body.binding
     }
-
     fn source(&self) -> AutonomousLifecycleTerminalOutcomeSourceV1 {
         self.body.source.clone()
     }
-
     #[cfg(test)]
     const fn stage(&self) -> AutonomousLifecycleTerminalOutcomeStageV1 {
         self.body.stage
     }
-
     fn is_complete(&self) -> bool {
         matches!(
             self.body.stage,
             AutonomousLifecycleTerminalOutcomeStageV1::Complete { .. }
         )
     }
-
     fn terminal_projection(
         &self,
     ) -> Result<Option<ProductionInFlightFirstReleaseStateProjection>, &'static str> {
@@ -2319,7 +2170,6 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         }
     }
 }
-
 /// Move-only Kura proof that one exact canonical source-outcome record is
 /// durable for an ordered reservation group.
 ///
@@ -2333,7 +2183,6 @@ pub(crate) struct AutonomousLifecycleCanonicalQueueSourceOutcomeAuthorization {
     ordered_keys: Vec<LaneQueueReservationKeyV2>,
     source_outcome_hash: Hash,
 }
-
 impl AutonomousLifecycleCanonicalQueueSourceOutcomeAuthorization {
     /// Consume only when the exact FIFO-ordered key bytes still derive the
     /// bound group. This deliberately exposes no source selector or terminal
@@ -2361,7 +2210,6 @@ impl AutonomousLifecycleCanonicalQueueSourceOutcomeAuthorization {
         ))
     }
 }
-
 /// Complete canonical carrier source-outcome set published before live Queue
 /// cleanup. Members remain in canonical merge-lane order and cover the whole
 /// execution set. Before first cleanup every member is Pending; a retry after
@@ -2374,7 +2222,6 @@ pub(crate) struct AutonomousLifecycleCanonicalCarrierSourceOutcomePublication {
         AutonomousLifecycleCanonicalQueueSourceOutcomeAuthorization,
     )>,
 }
-
 impl AutonomousLifecycleCanonicalCarrierSourceOutcomePublication {
     /// Return the non-authorizing committed-entry identity used to deduplicate
     /// whole-carrier startup reconstruction requests.
@@ -2382,7 +2229,6 @@ impl AutonomousLifecycleCanonicalCarrierSourceOutcomePublication {
     pub(crate) const fn entry_hash(&self) -> HashOf<MergeLedgerEntry> {
         self.entry_hash
     }
-
     /// Consume only for the exact committed entry whose complete execution
     /// set produced these source-outcome records.
     pub(crate) fn consume_for_v2_apply(
@@ -2409,7 +2255,6 @@ impl AutonomousLifecycleCanonicalCarrierSourceOutcomePublication {
         .then_some(self.queue_authorizations)
     }
 }
-
 /// Move-only proof that one exact retired-release source-outcome record is durable.
 /// Queue must pair this token with the byte-identical release barrier before
 /// it can bind terminal evidence to the record hash.
@@ -2418,7 +2263,6 @@ pub(crate) struct AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization {
     barrier: LaneQueueReservationReleaseBarrierV3,
     source_outcome_hash: Hash,
 }
-
 impl AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization {
     /// Consume only for the exact durable barrier bound into this token.
     pub(crate) fn consume_for_queue(
@@ -2434,7 +2278,6 @@ impl AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization {
         .then_some(self.source_outcome_hash)
     }
 }
-
 /// Opaque source-bound input for reconstructing the independent ApplyCarrier
 /// authority associated with a canonical Pending outcome.
 ///
@@ -2454,7 +2297,6 @@ pub(crate) struct AutonomousLifecyclePendingCanonicalCarrierRecovery {
     carrier_block_hash: HashOf<BlockHeader>,
     expected_network_id: iroha_data_model::NetworkId,
 }
-
 impl AutonomousLifecyclePendingCanonicalCarrierRecovery {
     /// Consume the source coordinates only after their compact reference still
     /// exactly identifies the complete entry. This method never returns a
@@ -2516,28 +2358,24 @@ impl AutonomousLifecyclePendingCanonicalCarrierRecovery {
         ))
     }
 }
-
 /// One bounded, fully validated active-route lifecycle recovery candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AutonomousLifecycleAttemptInventoryEntry {
     executable_payload: LaneExecutablePayloadV1,
     cursor: Option<AutonomousLifecycleCursorV2>,
 }
-
 impl AutonomousLifecycleAttemptInventoryEntry {
     /// Borrow the exact immutable executable payload retained by Kura.
     #[must_use]
     pub(crate) fn executable_payload(&self) -> &LaneExecutablePayloadV1 {
         &self.executable_payload
     }
-
     /// Borrow the validated local lifecycle cursor, if one is durable.
     #[must_use]
     pub(crate) fn cursor(&self) -> Option<&AutonomousLifecycleCursorV2> {
         self.cursor.as_ref()
     }
 }
-
 /// Move-only exact-file compare-and-swap authority for one lifecycle cursor.
 #[must_use = "the exact lifecycle cursor lease must be consumed or deliberately dropped"]
 pub(crate) struct AutonomousLifecycleCursorLease {
@@ -2552,21 +2390,18 @@ pub(crate) struct AutonomousLifecycleCursorLease {
     binding: AutonomousLifecycleAttemptBindingV1,
     validator_set: Vec<PeerId>,
 }
-
 /// Exact cursor observation plus its single-use compare-and-swap authority.
 #[must_use = "the cursor observation contains a move-only mutation lease"]
 pub(crate) struct AutonomousLifecycleCursorRead {
     cursor: Option<AutonomousLifecycleCursorV2>,
     lease: AutonomousLifecycleCursorLease,
 }
-
 impl AutonomousLifecycleCursorRead {
     /// Borrow the exact cursor observed while minting the lease.
     #[must_use]
     pub(crate) fn cursor(&self) -> Option<&AutonomousLifecycleCursorV2> {
         self.cursor.as_ref()
     }
-
     /// Consume the observation into its cursor and move-only lease.
     #[must_use]
     pub(crate) fn into_parts(
@@ -2578,7 +2413,6 @@ impl AutonomousLifecycleCursorRead {
         (self.cursor, self.lease)
     }
 }
-
 /// Authenticated origin of local executable-payload custody before Kura activation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[allow(dead_code)] // Reserved for source-specific validators at the audited persistence sinks.
@@ -2602,7 +2436,6 @@ pub(crate) enum AutonomousLifecyclePayloadCustodySourceV1 {
     #[codec(index = 6)]
     CanonicalHistoricalRecoveryRecord,
 }
-
 /// Canonical identity of the exact losing-slot retirement which supplied
 /// payload custody. This is deliberately an internal, encode-only DTO: callers
 /// must pass the complete typed retirement to Kura's source-specific validator
@@ -2615,7 +2448,6 @@ struct AutonomousLifecycleLosingRetirementCustodyEvidenceV1 {
     origin_proposal_hash: Hash,
     executable_payload_hash: Hash,
 }
-
 /// Canonical identity of one QC-authenticated canonical carrier repair.
 #[derive(Debug, Encode)]
 struct AutonomousLifecycleCanonicalCarrierRepairCustodyEvidenceV1 {
@@ -2629,7 +2461,6 @@ struct AutonomousLifecycleCanonicalCarrierRepairCustodyEvidenceV1 {
     origin_proposal_hash: Hash,
     executable_payload_hash: Hash,
 }
-
 /// Canonical identity of one locally protected global carrier delivery.
 #[derive(Debug, Encode)]
 struct AutonomousLifecycleProtectedCarrierReceiveCustodyEvidenceV1 {
@@ -2642,7 +2473,6 @@ struct AutonomousLifecycleProtectedCarrierReceiveCustodyEvidenceV1 {
     origin_proposal_hash: Hash,
     executable_payload_hash: Hash,
 }
-
 /// Canonical identity of an outstanding-request-bound historical QC response.
 #[derive(Debug, Encode)]
 struct AutonomousLifecycleHistoricalQcResponseCustodyEvidenceV1 {
@@ -2657,7 +2487,6 @@ struct AutonomousLifecycleHistoricalQcResponseCustodyEvidenceV1 {
     origin_proposal_hash: Hash,
     executable_payload_hash: Hash,
 }
-
 /// Canonical identity of the complete State-preflighted historical recovery
 /// record which supplied payload custody before its dependent sidecars exist.
 #[derive(Debug, Encode)]
@@ -2670,7 +2499,6 @@ struct AutonomousLifecycleCanonicalHistoricalRecoveryCustodyEvidenceV1 {
     origin_proposal_hash: Hash,
     executable_payload_hash: Hash,
 }
-
 /// Exact typed custody evidence bound into the signed lifecycle bootstrap.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -2679,10 +2507,8 @@ struct AutonomousLifecyclePayloadCustodyBindingV1 {
     source: AutonomousLifecyclePayloadCustodySourceV1,
     evidence_hash: Hash,
 }
-
 impl AutonomousLifecyclePayloadCustodyBindingV1 {
     const VERSION: u16 = 1;
-
     fn producer_queue(binding: &AutonomousLifecycleAttemptBindingV1) -> Result<Self, &'static str> {
         let encoded = norito::encode_canonical(binding)
             .map_err(|_| "producer Queue custody binding is not canonically encodable")?;
@@ -2695,7 +2521,6 @@ impl AutonomousLifecyclePayloadCustodyBindingV1 {
             ]),
         })
     }
-
     fn authenticated(
         source: AutonomousLifecyclePayloadCustodySourceV1,
         evidence_hash: Hash,
@@ -2711,7 +2536,6 @@ impl AutonomousLifecyclePayloadCustodyBindingV1 {
         binding.validate(None)?;
         Ok(binding)
     }
-
     fn validate(
         &self,
         attempt: Option<&AutonomousLifecycleAttemptBindingV1>,
@@ -2733,7 +2557,6 @@ impl AutonomousLifecyclePayloadCustodyBindingV1 {
         Ok(())
     }
 }
-
 /// Move-only checked custody authority consumed at initial bootstrap persistence.
 #[must_use = "authenticated payload custody must be consumed by its exact lifecycle bootstrap"]
 pub(crate) struct AutonomousLifecyclePayloadCustodyAuthorization {
@@ -2741,7 +2564,6 @@ pub(crate) struct AutonomousLifecyclePayloadCustodyAuthorization {
     custody: AutonomousLifecyclePayloadCustodyBindingV1,
     activate_kura: ProductionInFlightFirstReleaseTransitionProjection,
 }
-
 impl AutonomousLifecyclePayloadCustodyAuthorization {
     /// Borrow the exact checked ActivateKura projection callers must sign.
     #[must_use]
@@ -2752,7 +2574,6 @@ impl AutonomousLifecyclePayloadCustodyAuthorization {
         self.activate_kura
     }
 }
-
 #[allow(variant_size_differences)] // Ephemeral checked Queue facts stay inline and allocation-free.
 enum AutonomousLifecycleBootstrapPersistenceAuthentication<'authorization> {
     ProducerQueue {
@@ -2763,7 +2584,6 @@ enum AutonomousLifecycleBootstrapPersistenceAuthentication<'authorization> {
     },
     PayloadCustody(&'authorization AutonomousLifecyclePayloadCustodyAuthorization),
 }
-
 /// Canonical signed intent persisted before the first autonomous payload mutation.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -2777,10 +2597,8 @@ struct AutonomousLifecycleBootstrapBodyV1 {
     prepared_activate: AutonomousLifecycleCursorV2,
     live_activate: AutonomousLifecycleCursorV2,
 }
-
 impl AutonomousLifecycleBootstrapBodyV1 {
     const VERSION: u16 = 1;
-
     fn new(
         process_generation: &AutonomousLifecycleProcessGenerationClaim,
         executable_payload: LaneExecutablePayloadV1,
@@ -2802,7 +2620,6 @@ impl AutonomousLifecycleBootstrapBodyV1 {
         body.validate_structure()?;
         Ok(body)
     }
-
     fn validate_structure(&self) -> Result<(), &'static str> {
         if self.version != Self::VERSION
             || self.process_generation == 0
@@ -2867,7 +2684,6 @@ impl AutonomousLifecycleBootstrapBodyV1 {
         }
         Ok(())
     }
-
     fn canonical_hash(&self) -> Result<Hash, norito::Error> {
         let encoded = norito::encode_canonical(self)?;
         Ok(Hash::new_from_chunks(&[
@@ -2875,7 +2691,6 @@ impl AutonomousLifecycleBootstrapBodyV1 {
             &encoded,
         ]))
     }
-
     fn signing_preimage(&self) -> Result<Vec<u8>, norito::Error> {
         let body_hash = self.canonical_hash()?;
         let mut preimage = Vec::with_capacity(
@@ -2886,7 +2701,6 @@ impl AutonomousLifecycleBootstrapBodyV1 {
         Ok(preimage)
     }
 }
-
 /// Self-hashed first-release bootstrap artifact retained through every crash boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -2895,7 +2709,6 @@ struct AutonomousLifecycleBootstrapV1 {
     bootstrap_hash: Hash,
     signature: [u8; 96],
 }
-
 impl AutonomousLifecycleBootstrapV1 {
     fn from_body(
         body: AutonomousLifecycleBootstrapBodyV1,
@@ -2912,7 +2725,6 @@ impl AutonomousLifecycleBootstrapV1 {
         bootstrap.validate_structure()?;
         Ok(bootstrap)
     }
-
     fn validate_structure(&self) -> Result<(), &'static str> {
         self.body.validate_structure()?;
         let expected_hash = self
@@ -2936,7 +2748,6 @@ impl AutonomousLifecycleBootstrapV1 {
             .map_err(|_| "autonomous lifecycle bootstrap signature verification failed")?;
         Ok(())
     }
-
     fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
         let bytes = norito::encode_canonical(self)?;
         if bytes.is_empty() || bytes.len() > AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES {
@@ -2947,7 +2758,6 @@ impl AutonomousLifecycleBootstrapV1 {
         Ok(bytes)
     }
 }
-
 /// Exact durable crash boundary observed for one signed lifecycle bootstrap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AutonomousLifecycleBootstrapRecoveryStage {
@@ -2960,7 +2770,6 @@ pub(crate) enum AutonomousLifecycleBootstrapRecoveryStage {
     /// The exact signed Live successor is durable; bootstrap deletion remains.
     LiveDurable,
 }
-
 /// Move-only authority bound to one exact bootstrap file observation and Kura root.
 #[must_use = "bootstrap recovery authority must be authenticated or deliberately dropped"]
 pub(crate) struct AutonomousLifecycleBootstrapRecoveryAuthority {
@@ -2972,7 +2781,6 @@ pub(crate) struct AutonomousLifecycleBootstrapRecoveryAuthority {
     bootstrap: AutonomousLifecycleBootstrapV1,
     stage: AutonomousLifecycleBootstrapRecoveryStage,
 }
-
 impl AutonomousLifecycleBootstrapRecoveryAuthority {
     /// Return the structurally observed durable crash boundary.
     #[must_use]
@@ -2980,19 +2788,16 @@ impl AutonomousLifecycleBootstrapRecoveryAuthority {
     pub(crate) const fn stage(&self) -> AutonomousLifecycleBootstrapRecoveryStage {
         self.stage
     }
-
     /// Borrow the exact signed payload retained by the bootstrap.
     #[must_use]
     pub(crate) fn executable_payload(&self) -> &LaneExecutablePayloadV1 {
         &self.bootstrap.body.executable_payload
     }
-
     /// Borrow the exact height-context and attempt binding requiring caller authentication.
     #[must_use]
     pub(crate) fn binding(&self) -> &AutonomousLifecycleAttemptBindingV1 {
         &self.bootstrap.body.binding
     }
-
     /// Borrow the signature-validated Live successor retained by this bootstrap observation.
     ///
     /// The bootstrap body validation proves that this cursor is the contiguous successor of the
@@ -3001,16 +2806,13 @@ impl AutonomousLifecycleBootstrapRecoveryAuthority {
     pub(crate) fn live_cursor(&self) -> &AutonomousLifecycleCursorV2 {
         &self.bootstrap.body.live_activate
     }
-
     /// Identify which source-specific recovery path must authenticate this bootstrap.
     #[must_use]
     pub(crate) const fn custody_source(&self) -> AutonomousLifecyclePayloadCustodySourceV1 {
         self.bootstrap.body.custody.source
     }
 }
-
 include!("autonomous_merge_bundle_support.rs");
-
 /// One source-revalidated Pending terminal outcome ready for startup Queue
 /// reconciliation. Every variant is move-only; inventory never exposes raw
 /// lifecycle projections or a constructor from caller-selected identities.
@@ -3026,7 +2828,6 @@ pub(crate) enum AutonomousLifecyclePendingTerminalOutcomeRecovery {
         source_outcome_authorization: AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization,
     },
 }
-
 /// Read-only exact Queue-group coordinates for partitioning Pending startup work.
 ///
 /// This observation carries no terminal source hash, merge entry, release
@@ -3039,21 +2840,18 @@ pub(crate) struct AutonomousLifecyclePendingReservationGroupObservation {
     binding: LaneQueueReservationGroupBindingV1,
     ordered_keys: Vec<LaneQueueReservationKeyV2>,
 }
-
 impl AutonomousLifecyclePendingReservationGroupObservation {
     /// Return the complete order-sensitive reservation-group binding.
     #[must_use]
     pub(crate) const fn binding(&self) -> LaneQueueReservationGroupBindingV1 {
         self.binding
     }
-
     /// Borrow the exact source-authenticated FIFO-ordered reservation keys.
     #[must_use]
     pub(crate) fn ordered_keys(&self) -> &[LaneQueueReservationKeyV2] {
         &self.ordered_keys
     }
 }
-
 /// Source role independently revalidated while proving one expected terminal
 /// outcome file still exists at its exact durable coordinates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3063,7 +2861,6 @@ pub(crate) enum AutonomousLifecycleTerminalOutcomeSourceKind {
     /// A losing lane slot durably returned its exact reservations to FIFO.
     RetiredRelease,
 }
-
 /// Durable stage independently revalidated for one expected terminal outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AutonomousLifecycleTerminalOutcomeDurableStage {
@@ -3072,7 +2869,6 @@ pub(crate) enum AutonomousLifecycleTerminalOutcomeDurableStage {
     /// The source and exact Queue terminal owner are durably joined.
     Complete,
 }
-
 /// Non-authorizing proof that one caller-expected terminal outcome still
 /// exists, source-revalidates, and has one exact durable stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3081,27 +2877,23 @@ pub(crate) struct AutonomousLifecycleTerminalOutcomeStageObservation {
     source_kind: AutonomousLifecycleTerminalOutcomeSourceKind,
     stage: AutonomousLifecycleTerminalOutcomeDurableStage,
 }
-
 impl AutonomousLifecycleTerminalOutcomeStageObservation {
     /// Return the exact order-sensitive reservation-group identity.
     #[must_use]
     pub(crate) const fn binding(&self) -> LaneQueueReservationGroupBindingV1 {
         self.binding
     }
-
     /// Return the independently revalidated terminal source role.
     #[must_use]
     pub(crate) const fn source_kind(&self) -> AutonomousLifecycleTerminalOutcomeSourceKind {
         self.source_kind
     }
-
     /// Return the exact durable publication stage.
     #[must_use]
     pub(crate) const fn stage(&self) -> AutonomousLifecycleTerminalOutcomeDurableStage {
         self.stage
     }
 }
-
 impl AutonomousLifecyclePendingTerminalOutcomeRecovery {
     /// Return the exact non-authorizing reservation groups whose outcome stage
     /// is still Pending and may therefore require Queue mutation.
@@ -3155,7 +2947,6 @@ impl AutonomousLifecyclePendingTerminalOutcomeRecovery {
             }
         }
     }
-
     /// Return every already source-validated route/incarnation for independent
     /// comparison with authoritative startup State. Canonical carrier recovery
     /// is all-group and may therefore span multiple routes. This accessor is
@@ -3183,7 +2974,6 @@ impl AutonomousLifecyclePendingTerminalOutcomeRecovery {
             )],
         }
     }
-
     /// Count exact Pending outcome files represented by this recovery unit.
     #[must_use]
     pub(crate) fn pending_outcome_count(&self) -> usize {
@@ -3192,7 +2982,6 @@ impl AutonomousLifecyclePendingTerminalOutcomeRecovery {
             Self::RetiredRelease { .. } => 1,
         }
     }
-
     /// Return the source-validated network binding for comparison with the
     /// active height context before Queue mutation.
     #[must_use]
@@ -3203,7 +2992,6 @@ impl AutonomousLifecyclePendingTerminalOutcomeRecovery {
         }
     }
 }
-
 /// Durable state of one autonomous executable-entrypoint owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 enum AutonomousLaneEntrypointClaimStateV3 {
@@ -3219,7 +3007,6 @@ enum AutonomousLaneEntrypointClaimStateV3 {
     #[codec(index = 3)]
     Released(Hash),
 }
-
 /// Durable exact-key owner for one autonomous executable entrypoint.
 ///
 /// Claims live in hash-addressed files outside individual lane segments, so a
@@ -3244,10 +3031,8 @@ struct AutonomousLaneEntrypointClaimV3 {
     executable_payload_hash: Hash,
     state: AutonomousLaneEntrypointClaimStateV3,
 }
-
 impl AutonomousLaneEntrypointClaimV3 {
     const VERSION: u16 = 3;
-
     fn new(payload: &LaneExecutablePayloadV1, entrypoint_hash: Hash) -> Self {
         let descriptor = &payload.origin_proposal.descriptor;
         Self {
@@ -3265,7 +3050,6 @@ impl AutonomousLaneEntrypointClaimV3 {
             state: AutonomousLaneEntrypointClaimStateV3::Active,
         }
     }
-
     fn owns_payload(&self, payload: &LaneExecutablePayloadV1) -> bool {
         let mut expected = Self::new(payload, self.entrypoint_hash);
         expected.state = self.state;
@@ -3273,12 +3057,10 @@ impl AutonomousLaneEntrypointClaimV3 {
             && payload.entrypoint_hashes.contains(&self.entrypoint_hash)
             && self == &expected
     }
-
     fn active_for_payload(&self, payload: &LaneExecutablePayloadV1) -> bool {
         matches!(self.state, AutonomousLaneEntrypointClaimStateV3::Active)
             && self.owns_payload(payload)
     }
-
     fn release_pending_for_payload(
         payload: &LaneExecutablePayloadV1,
         entrypoint_hash: Hash,
@@ -3288,7 +3070,6 @@ impl AutonomousLaneEntrypointClaimV3 {
         claim.state = AutonomousLaneEntrypointClaimStateV3::ReleasePending(retirement_hash);
         claim
     }
-
     fn released_for_payload(
         payload: &LaneExecutablePayloadV1,
         entrypoint_hash: Hash,
@@ -3298,7 +3079,6 @@ impl AutonomousLaneEntrypointClaimV3 {
         claim.state = AutonomousLaneEntrypointClaimStateV3::Released(retirement_hash);
         claim
     }
-
     fn retirement_hash(&self) -> Option<Hash> {
         match self.state {
             AutonomousLaneEntrypointClaimStateV3::Active => None,
@@ -3307,7 +3087,6 @@ impl AutonomousLaneEntrypointClaimV3 {
         }
     }
 }
-
 /// Terminal durable identity for one abandoned autonomous lane-height slot.
 ///
 /// The record is written before any queue reservation returns to ordinary FIFO
@@ -3331,10 +3110,8 @@ pub(crate) struct AutonomousLaneSlotRetirementV1 {
     executable_payload_hash: Hash,
     reservation_keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
 }
-
 impl AutonomousLaneSlotRetirementV1 {
     const VERSION: u16 = 1;
-
     /// Build the only valid retirement identity for an authenticated payload.
     #[must_use]
     pub(crate) fn from_payload(payload: &LaneExecutablePayloadV1) -> Self {
@@ -3356,11 +3133,9 @@ impl AutonomousLaneSlotRetirementV1 {
             reservation_keys: payload.reservation_keys.clone(),
         }
     }
-
     fn matches_payload(&self, payload: &LaneExecutablePayloadV1) -> bool {
         self.version == Self::VERSION && self == &Self::from_payload(payload)
     }
-
     pub(crate) fn digest(&self) -> Result<Hash> {
         let bytes = norito::encode_canonical(self).map_err(Error::NoritoFrame)?;
         Ok(Hash::new_from_chunks(&[
@@ -3368,7 +3143,6 @@ impl AutonomousLaneSlotRetirementV1 {
             &bytes,
         ]))
     }
-
     /// Build the exact Queue-side ordered barrier for this durable retirement.
     pub(crate) fn queue_release_barrier(
         &self,
@@ -3391,7 +3165,6 @@ impl AutonomousLaneSlotRetirementV1 {
         })
     }
 }
-
 /// Known formats for the bounded mutable view state of an autonomous payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 enum AutonomousLaneBlockViewStateFormat {
@@ -3399,7 +3172,6 @@ enum AutonomousLaneBlockViewStateFormat {
     /// Quorum checkpoint plus a bounded contiguous certificate suffix.
     Current,
 }
-
 /// Mutable view state stored separately from the immutable executable payload.
 ///
 /// Separating this small record prevents every timeout from appending another
@@ -3424,7 +3196,6 @@ struct AutonomousLaneBlockViewState {
     certificates: Vec<DurableLaneBlockNewViewCertificateV1>,
     retirement: Option<AutonomousLaneSlotRetirementV1>,
 }
-
 impl AutonomousLaneBlockViewState {
     fn from_artifact(artifact: &AutonomousLaneBlockArtifact) -> Self {
         let payload = &artifact.executable_payload;
@@ -3446,7 +3217,6 @@ impl AutonomousLaneBlockViewState {
             retirement: None,
         }
     }
-
     fn matches_payload(&self, payload: &LaneExecutablePayloadV1) -> bool {
         let descriptor = &payload.origin_proposal.descriptor;
         matches!(self.format, AutonomousLaneBlockViewStateFormat::Current)
@@ -3461,18 +3231,15 @@ impl AutonomousLaneBlockViewState {
             && self.executable_payload_hash == payload.payload_hash
     }
 }
-
 struct AutonomousLaneBlockDurableRecord {
     artifact: AutonomousLaneBlockArtifact,
     retirement: Option<AutonomousLaneSlotRetirementV1>,
     view_state_path: PathBuf,
 }
-
 include!("autonomous_reservation_types.rs");
 include!("autonomous_reservation_inventory.rs");
 include!("autonomous_reservation_classifier.rs");
 include!("historical_autonomous_recovery.rs");
-
 /// Known metadata format variants for lane-local block artifacts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum LaneBlockArtifactFormat {
@@ -3480,7 +3247,6 @@ pub enum LaneBlockArtifactFormat {
     /// Lane payload ownership artifact anchored to a committed global block hash.
     Current,
 }
-
 /// Persisted lane-local payload ownership artifact anchored to a global block.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct LaneBlockArtifact {
@@ -3491,10 +3257,8 @@ pub struct LaneBlockArtifact {
     /// Lane-local payload ownership and RBC instance identity.
     pub ownership: SumeragiLanePayloadOwnership,
 }
-
 impl LaneBlockArtifact {
     const FORMAT_LABEL: &'static str = "lane.block_artifact";
-
     /// Construct a lane block artifact using the current schema.
     #[must_use]
     pub fn new(
@@ -3507,7 +3271,6 @@ impl LaneBlockArtifact {
             ownership,
         }
     }
-
     /// Return the human-readable format tag describing the artifact payload.
     #[must_use]
     pub fn format_label(&self) -> &'static str {
@@ -3515,7 +3278,6 @@ impl LaneBlockArtifact {
             LaneBlockArtifactFormat::Current => Self::FORMAT_LABEL,
         }
     }
-
     /// Encode the artifact into a framed Norito buffer.
     ///
     /// # Errors
@@ -3525,7 +3287,6 @@ impl LaneBlockArtifact {
         norito::encode_canonical(self)
     }
 }
-
 /// Known metadata format variants for roster snapshots persisted alongside blocks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum RosterSidecarFormat {
@@ -3533,7 +3294,6 @@ pub enum RosterSidecarFormat {
     /// Roster snapshot format with stake metadata.
     Current,
 }
-
 /// Persisted roster metadata enabling roster reconstruction during block sync.
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct RosterSidecar {
@@ -3554,10 +3314,8 @@ pub struct RosterSidecar {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub stake_snapshot: Option<CommitStakeSnapshot>,
 }
-
 impl RosterSidecar {
     const FORMAT_LABEL: &'static str = "roster.snapshot";
-
     /// Construct a new roster sidecar payload using the current schema.
     pub fn new(
         height: u64,
@@ -3575,14 +3333,12 @@ impl RosterSidecar {
             stake_snapshot,
         }
     }
-
     /// Return the human-readable format tag.
     pub fn format_label(&self) -> &'static str {
         match self.format {
             RosterSidecarFormat::Current => Self::FORMAT_LABEL,
         }
     }
-
     /// Encode the sidecar into a framed Norito buffer.
     ///
     /// # Errors
@@ -3591,7 +3347,6 @@ impl RosterSidecar {
     pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
         norito::encode_canonical(self)
     }
-
     /// Return the roster snapshot contained in the sidecar, preferring commit certificates over
     /// checkpoints.
     #[must_use]
@@ -3606,19 +3361,16 @@ impl RosterSidecar {
             })
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SidecarIndexEntry {
     offset: u64,
     len: u64,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SidecarIndexOrigin {
     HeightOne,
     FirstWrite,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SidecarIndexLayout {
     base_height: u64,
@@ -3626,7 +3378,6 @@ struct SidecarIndexLayout {
     entry_count: u64,
     aligned_len: u64,
 }
-
 #[derive(Debug, Clone, Copy)]
 enum IndexedSidecarRewrite {
     RetainNewest {
@@ -3654,13 +3405,11 @@ enum IndexedSidecarRewrite {
         strict_retained: bool,
     },
 }
-
 #[derive(Debug, Clone, Copy)]
 enum LaneBlockArtifactConflictPolicy {
     PreserveCanonical,
     AllowCanonicalReplacementAtProposalHeight(u64),
 }
-
 #[derive(Debug)]
 struct LaneBlockArtifactWriteCheckpoint {
     data_path: PathBuf,
@@ -3674,7 +3423,6 @@ struct LaneBlockArtifactWriteCheckpoint {
     index_entry_bytes: Option<[u8; PIPELINE_INDEX_ENTRY_SIZE]>,
     tracked_bytes_before: Option<u64>,
 }
-
 struct LaneBlockArtifactWriteBatch<'a> {
     kura: &'a Kura,
     // Fields drop in declaration order, so the inner sidecar gate is released
@@ -3684,14 +3432,12 @@ struct LaneBlockArtifactWriteBatch<'a> {
     checkpoints: Vec<LaneBlockArtifactWriteCheckpoint>,
     finished: bool,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FastpqProofWriteResult {
     Written,
     Retry,
     Drop,
 }
-
 impl SidecarIndexEntry {
     fn to_bytes(self) -> [u8; PIPELINE_INDEX_ENTRY_SIZE] {
         let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
@@ -3699,17 +3445,14 @@ impl SidecarIndexEntry {
         buf[8..].copy_from_slice(&self.len.to_le_bytes());
         buf
     }
-
     fn from_bytes(bytes: [u8; PIPELINE_INDEX_ENTRY_SIZE]) -> Self {
         let offset = u64::from_le_bytes(bytes[..8].try_into().expect("slice length matches"));
         let len = u64::from_le_bytes(bytes[8..].try_into().expect("slice length matches"));
         Self { offset, len }
     }
 }
-
 impl SidecarIndexLayout {
     const LEGACY_BASE_HEIGHT: u64 = 1;
-
     fn legacy(index_len: u64) -> Self {
         let aligned_len = index_len - index_len % PIPELINE_INDEX_ENTRY_SIZE_U64;
         Self {
@@ -3719,7 +3462,6 @@ impl SidecarIndexLayout {
             aligned_len,
         }
     }
-
     fn based(base_height: u64, index_len: u64) -> Result<Self, &'static str> {
         if base_height <= Self::LEGACY_BASE_HEIGHT {
             return Err("sidecar base height must be greater than one");
@@ -3739,15 +3481,12 @@ impl SidecarIndexLayout {
             aligned_len: INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + aligned_entries_len,
         })
     }
-
     fn is_based(self) -> bool {
         self.entries_offset != 0
     }
-
     fn next_height(self) -> Option<u64> {
         self.base_height.checked_add(self.entry_count)
     }
-
     fn entry_position(self, height: u64) -> Option<u64> {
         let relative = height.checked_sub(self.base_height)?;
         if relative >= self.entry_count {
@@ -3757,7 +3496,6 @@ impl SidecarIndexLayout {
             .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
             .and_then(|offset| self.entries_offset.checked_add(offset))
     }
-
     fn height_range(self) -> Option<core::ops::RangeInclusive<u64>> {
         if self.entry_count == 0 {
             return None;
@@ -3765,7 +3503,6 @@ impl SidecarIndexLayout {
         let end = self.next_height()?.checked_sub(1)?;
         Some(self.base_height..=end)
     }
-
     fn base_header(base_height: u64) -> [u8; INDEXED_SIDECAR_BASE_HEADER_SIZE] {
         let mut header = [0u8; INDEXED_SIDECAR_BASE_HEADER_SIZE];
         header[..8].copy_from_slice(&u64::MAX.to_le_bytes());
@@ -3775,12 +3512,10 @@ impl SidecarIndexLayout {
             .copy_from_slice(&(base_height ^ INDEXED_SIDECAR_BASE_CHECK_MASK).to_le_bytes());
         header
     }
-
     fn read_from(index: &mut std::fs::File, index_len: u64) -> Result<Self, &'static str> {
         if index_len < PIPELINE_INDEX_ENTRY_SIZE_U64 {
             return Ok(Self::legacy(index_len));
         }
-
         let mut first_buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
         index
             .seek(SeekFrom::Start(0))
@@ -3797,7 +3532,6 @@ impl SidecarIndexLayout {
         if index_len < INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 {
             return Err("sidecar base-height header is truncated");
         }
-
         let mut metadata_buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
         index
             .read_exact(&mut metadata_buf)
@@ -3809,7 +3543,6 @@ impl SidecarIndexLayout {
         Self::based(metadata.offset, index_len)
     }
 }
-
 /// Local availability state for the executable payload behind a certified lane block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaneBlockPayloadAvailability {
@@ -3828,7 +3561,6 @@ pub enum LaneBlockPayloadAvailability {
     /// An accepted entrypoint hash differs from the certified descriptor.
     EntrypointHashMismatch,
 }
-
 /// Read-only startup classification for one ordinary application receipt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LaneBlockApplicationReceiptRepairPreflight {
@@ -3837,7 +3569,6 @@ pub(crate) enum LaneBlockApplicationReceiptRepairPreflight {
     /// The finality-authenticated result-bearing global body must be rehydrated.
     MissingCanonicalBody,
 }
-
 /// Verified payload material recovered for a certified standalone lane block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveredLaneBlockPayload {
@@ -3861,7 +3592,6 @@ pub struct RecoveredLaneBlockPayload {
     /// Producer-authenticated native-AMX receipts in entrypoint order.
     pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
 }
-
 /// Known metadata format variants for durable lane-block execution input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum LaneBlockExecutionInputArtifactFormat {
@@ -3869,7 +3599,6 @@ pub enum LaneBlockExecutionInputArtifactFormat {
     /// Recovered standalone lane-block payload awaiting state application.
     Current,
 }
-
 /// Durable recovered input for a certified standalone lane block.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -3897,10 +3626,8 @@ pub struct LaneBlockExecutionInputArtifact {
     /// Producer-authenticated native-AMX receipts in entrypoint order.
     pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
 }
-
 impl LaneBlockExecutionInputArtifact {
     const FORMAT_LABEL: &'static str = "lane.execution_input";
-
     /// Construct a durable execution input artifact from a verified recovery result.
     #[must_use]
     pub fn new(recovered: RecoveredLaneBlockPayload) -> Self {
@@ -3923,7 +3650,6 @@ impl LaneBlockExecutionInputArtifact {
             native_amx_receipts: recovered.native_amx_receipts,
         }
     }
-
     /// Return the human-readable format tag describing the artifact payload.
     #[must_use]
     pub fn format_label(&self) -> &'static str {
@@ -3931,7 +3657,6 @@ impl LaneBlockExecutionInputArtifact {
             LaneBlockExecutionInputArtifactFormat::Current => Self::FORMAT_LABEL,
         }
     }
-
     /// Encode the artifact into a framed Norito buffer.
     ///
     /// # Errors
@@ -3941,7 +3666,6 @@ impl LaneBlockExecutionInputArtifact {
         norito::encode_canonical(self)
     }
 }
-
 /// Known metadata format variants for durable lane-block direct-execution preflights.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum LaneBlockExecutionPreflightArtifactFormat {
@@ -3949,7 +3673,6 @@ pub enum LaneBlockExecutionPreflightArtifactFormat {
     /// Non-committing direct-execution preflight result for recovered lane input.
     Current,
 }
-
 /// Durable result of non-committing direct-execution preflight for a lane block.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct LaneBlockExecutionPreflightArtifact {
@@ -3972,10 +3695,8 @@ pub struct LaneBlockExecutionPreflightArtifact {
     /// Preflight transaction results in lane descriptor order.
     pub results: Vec<TransactionResult>,
 }
-
 impl LaneBlockExecutionPreflightArtifact {
     const FORMAT_LABEL: &'static str = "lane.execution_preflight";
-
     /// Construct a durable direct-execution preflight result from recovered input.
     #[must_use]
     pub fn new(
@@ -4000,7 +3721,6 @@ impl LaneBlockExecutionPreflightArtifact {
             results,
         }
     }
-
     /// Return the human-readable format tag describing the artifact payload.
     #[must_use]
     pub fn format_label(&self) -> &'static str {
@@ -4008,13 +3728,11 @@ impl LaneBlockExecutionPreflightArtifact {
             LaneBlockExecutionPreflightArtifactFormat::Current => Self::FORMAT_LABEL,
         }
     }
-
     /// Whether any transaction failed during preflight.
     #[must_use]
     pub fn has_rejections(&self) -> bool {
         self.results.iter().any(|result| result.0.is_err())
     }
-
     /// Encode the artifact into a framed Norito buffer.
     ///
     /// # Errors
@@ -4024,7 +3742,6 @@ impl LaneBlockExecutionPreflightArtifact {
         norito::encode_canonical(self)
     }
 }
-
 /// Known metadata format variants for durable lane-block application receipts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum LaneBlockApplicationReceiptArtifactFormat {
@@ -4038,7 +3755,6 @@ pub enum LaneBlockApplicationReceiptArtifactFormat {
     /// Canonical merge-batch execution results proving lane payload state application.
     MergeExecution,
 }
-
 /// Durable receipt proving a certified standalone lane block has committed results.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -4085,7 +3801,6 @@ pub struct LaneBlockApplicationReceiptArtifact {
     pub merge_settlement_hash:
         Option<HashOf<iroha_data_model::block::consensus::LaneBlockCommitment>>,
 }
-
 /// Versioned durable cursor proving a contiguous lane-local prefix reached the
 /// canonical global merge carrier.
 ///
@@ -4111,10 +3826,8 @@ struct LaneMergeApplicationFrontierV1 {
     application_block_hash: HashOf<BlockHeader>,
     receipt_hash: HashOf<LaneBlockApplicationReceiptArtifact>,
 }
-
 impl LaneMergeApplicationFrontierV1 {
     const VERSION: u8 = 1;
-
     fn from_receipt(receipt: &LaneBlockApplicationReceiptArtifact) -> Option<Self> {
         if receipt.format != LaneBlockApplicationReceiptArtifactFormat::MergeExecution {
             return None;
@@ -4136,17 +3849,13 @@ impl LaneMergeApplicationFrontierV1 {
             receipt_hash: HashOf::new(receipt),
         })
     }
-
     fn matches_receipt(&self, receipt: &LaneBlockApplicationReceiptArtifact) -> bool {
         Self::from_receipt(receipt).as_ref() == Some(self)
     }
 }
-
 include!("native_amx_participant_application_artifacts.rs");
-
 impl LaneBlockApplicationReceiptArtifact {
     const FORMAT_LABEL: &'static str = "lane.application_receipt";
-
     /// Construct a durable application receipt from canonical block results.
     #[must_use]
     pub fn new(
@@ -4192,7 +3901,6 @@ impl LaneBlockApplicationReceiptArtifact {
             merge_settlement_hash: None,
         }
     }
-
     /// Construct a durable application receipt from clean direct-execution preflight results.
     #[must_use]
     pub fn new_direct_execution(
@@ -4231,7 +3939,6 @@ impl LaneBlockApplicationReceiptArtifact {
             merge_settlement_hash: None,
         })
     }
-
     fn new_merge_execution(
         entry: &MergeLedgerEntry,
         batch: &MergeExecutionBatch,
@@ -4269,7 +3976,6 @@ impl LaneBlockApplicationReceiptArtifact {
             merge_settlement_hash: Some(execution.settlement_hash),
         }
     }
-
     /// Return the human-readable format tag describing the artifact payload.
     #[must_use]
     pub fn format_label(&self) -> &'static str {
@@ -4279,7 +3985,6 @@ impl LaneBlockApplicationReceiptArtifact {
             | LaneBlockApplicationReceiptArtifactFormat::MergeExecution => Self::FORMAT_LABEL,
         }
     }
-
     /// Encode the artifact into a framed Norito buffer.
     ///
     /// # Errors
@@ -4289,7 +3994,6 @@ impl LaneBlockApplicationReceiptArtifact {
         norito::encode_canonical(self)
     }
 }
-
 impl LaneBlockArtifactConflictPolicy {
     fn allows_canonical_replacement(
         self,
@@ -4306,7 +4010,6 @@ impl LaneBlockArtifactConflictPolicy {
         }
     }
 }
-
 impl<'a> LaneBlockArtifactWriteBatch<'a> {
     fn new(kura: &'a Kura) -> Self {
         let geometry_guard = kura.lane_geometry_lock.lock();
@@ -4319,20 +4022,16 @@ impl<'a> LaneBlockArtifactWriteBatch<'a> {
             finished: false,
         }
     }
-
     fn push(&mut self, checkpoint: LaneBlockArtifactWriteCheckpoint) {
         self.checkpoints.push(checkpoint);
     }
-
     fn commit(mut self) {
         self.finished = true;
     }
-
     fn rollback(&mut self) -> Result<()> {
         if self.finished {
             return Ok(());
         }
-
         let mut first_error = None;
         while let Some(checkpoint) = self.checkpoints.pop() {
             if let Err(err) = self
@@ -4346,7 +4045,6 @@ impl<'a> LaneBlockArtifactWriteBatch<'a> {
             }
         }
         self.finished = true;
-
         if let Some(err) = first_error {
             Err(err)
         } else {
@@ -4354,7 +4052,6 @@ impl<'a> LaneBlockArtifactWriteBatch<'a> {
         }
     }
 }
-
 impl Drop for LaneBlockArtifactWriteBatch<'_> {
     fn drop(&mut self) {
         if !self.finished

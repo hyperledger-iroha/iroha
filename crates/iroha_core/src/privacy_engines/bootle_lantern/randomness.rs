@@ -4,18 +4,13 @@
 //! operation.  One health-checked 64-byte root is then split internally into
 //! fixed, non-interchangeable SHAKE256 streams.  Callers cannot accidentally
 //! supply identically seeded RNG objects for two different secret roles.
-
 use rand_core_06::{CryptoRng, RngCore};
 use sha3::{
     Shake256,
     digest::{ExtendableOutput, Update, XofReader},
 };
 use zeroize::{Zeroize, Zeroizing};
-
-use crate::privacy_engines::prover_randomness::{
-    HealthCheckedCryptoRngV1, ProverRandomnessErrorV1,
-};
-
+use crate::privacy_engines::prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1};
 const MASTER_ROOT_BYTES_V1: usize = 64;
 const STREAM_KEY_BYTES_V1: usize = 64;
 const STREAM_BLOCK_BYTES_V1: usize = 64;
@@ -29,21 +24,17 @@ const HOLDER_MASK_PURPOSE_V1: &[u8] = b"credential-mask-v1";
 const HOLDER_PROOF_PURPOSE_V1: &[u8] = b"blind-request-proof-v1";
 const ISSUER_TAG_PURPOSE_V1: &[u8] = b"credential-tag-v1";
 const ISSUER_PREIMAGE_PURPOSE_V1: &[u8] = b"falcon-preimage-coins-v1";
-
 /// Canonical master-root and fixed-purpose substream policy.
 pub(crate) const BOOTLE_LANTERN_ISSUANCE_RANDOMNESS_DESCRIPTOR_V1: &[u8] = b"master:one-health-checked-fixed64-source-block-per-operation|split:SHAKE256(frame(root-domain)+frame(operation)+frame(purpose)+frame(context-digest32)+frame(master64))->key64|expand:SHAKE256(frame(stream-domain)+frame(key64)+frame(counter-u64be))->block64|counter:checked-u64|holder:authorization-digest->{credential-mask,blind-request-proof}|issuer:request-digest->{credential-tag,falcon-preimage-coins}|closed-purpose-enum:no-caller-selected-labels|chunk-invariant-reservoir64|zeroize-root+keys+reservoirs:v1";
-
 /// A single health-checked root consumed to construct one closed stream pair.
 pub(crate) struct BootleLanternIssuanceRandomnessRootV1 {
     root: Zeroizing<[u8; MASTER_ROOT_BYTES_V1]>,
 }
-
 impl core::fmt::Debug for BootleLanternIssuanceRandomnessRootV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("BootleLanternIssuanceRandomnessRootV1(<redacted>)")
     }
 }
-
 impl BootleLanternIssuanceRandomnessRootV1 {
     /// Draw exactly one canonical health-checked master block.
     pub(crate) fn from_rng_v1<R: CryptoRng + RngCore>(
@@ -56,7 +47,6 @@ impl BootleLanternIssuanceRandomnessRootV1 {
             .map_err(|_| ProverRandomnessErrorV1::Unavailable)?;
         Ok(Self { root })
     }
-
     /// Consume the root into the two fixed holder-side streams.
     pub(crate) fn split_holder_v1(
         self,
@@ -74,7 +64,6 @@ impl BootleLanternIssuanceRandomnessRootV1 {
         );
         (mask, proof)
     }
-
     /// Consume the root into the two fixed issuer-side streams.
     pub(crate) fn split_issuer_v1(
         self,
@@ -88,7 +77,6 @@ impl BootleLanternIssuanceRandomnessRootV1 {
         );
         (tag, preimage)
     }
-
     fn derive_v1(
         &self,
         operation: &[u8],
@@ -106,7 +94,6 @@ impl BootleLanternIssuanceRandomnessRootV1 {
         BootleLanternPurposeRngV1::from_key_v1(key)
     }
 }
-
 /// Deterministic cryptographic RNG for one fixed issuance purpose.
 pub(crate) struct BootleLanternPurposeRngV1 {
     key: Zeroizing<[u8; STREAM_KEY_BYTES_V1]>,
@@ -114,13 +101,11 @@ pub(crate) struct BootleLanternPurposeRngV1 {
     cursor: usize,
     counter: u64,
 }
-
 impl core::fmt::Debug for BootleLanternPurposeRngV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("BootleLanternPurposeRngV1(<redacted>)")
     }
 }
-
 impl BootleLanternPurposeRngV1 {
     fn from_key_v1(key: Zeroizing<[u8; STREAM_KEY_BYTES_V1]>) -> Self {
         Self {
@@ -130,7 +115,6 @@ impl BootleLanternPurposeRngV1 {
             counter: 0,
         }
     }
-
     fn refill_v1(&mut self) {
         let counter = self.counter.to_be_bytes();
         self.counter = self
@@ -145,7 +129,6 @@ impl BootleLanternPurposeRngV1 {
         state.finalize_xof().read(self.reservoir.as_mut());
         self.cursor = 0;
     }
-
     fn fill_canonical_v1(&mut self, destination: &mut [u8]) {
         let mut written = 0;
         while written < destination.len() {
@@ -163,32 +146,26 @@ impl BootleLanternPurposeRngV1 {
         }
     }
 }
-
 impl RngCore for BootleLanternPurposeRngV1 {
     fn next_u32(&mut self) -> u32 {
         let mut bytes = [0_u8; 4];
         self.fill_canonical_v1(&mut bytes);
         u32::from_le_bytes(bytes)
     }
-
     fn next_u64(&mut self) -> u64 {
         let mut bytes = [0_u8; 8];
         self.fill_canonical_v1(&mut bytes);
         u64::from_le_bytes(bytes)
     }
-
     fn fill_bytes(&mut self, destination: &mut [u8]) {
         self.fill_canonical_v1(destination);
     }
-
     fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
         self.fill_canonical_v1(destination);
         Ok(())
     }
 }
-
 impl CryptoRng for BootleLanternPurposeRngV1 {}
-
 impl Drop for BootleLanternPurposeRngV1 {
     fn drop(&mut self) {
         self.key.zeroize();
@@ -197,7 +174,6 @@ impl Drop for BootleLanternPurposeRngV1 {
         self.counter.zeroize();
     }
 }
-
 fn absorb_frame_v1(state: &mut Shake256, bytes: &[u8]) {
     state.update(
         &u64::try_from(bytes.len())
@@ -206,33 +182,26 @@ fn absorb_frame_v1(state: &mut Shake256, bytes: &[u8]) {
     );
     state.update(bytes);
 }
-
 #[cfg(test)]
 mod tests {
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-
     use super::*;
-
     struct TestRng(u64);
-
     impl RngCore for TestRng {
         fn next_u32(&mut self) -> u32 {
             let mut bytes = [0_u8; 4];
             self.fill_bytes(&mut bytes);
             u32::from_le_bytes(bytes)
         }
-
         fn next_u64(&mut self) -> u64 {
             let mut bytes = [0_u8; 8];
             self.fill_bytes(&mut bytes);
             u64::from_le_bytes(bytes)
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             self.try_fill_bytes(destination)
                 .expect("infallible deterministic test source");
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             for byte in destination {
                 self.0 ^= self.0 << 13;
@@ -243,55 +212,41 @@ mod tests {
             Ok(())
         }
     }
-
     impl CryptoRng for TestRng {}
-
     struct FailingRng;
-
     impl RngCore for FailingRng {
         fn next_u32(&mut self) -> u32 {
             panic!("fallible boundary must use try_fill_bytes")
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("fallible boundary must use try_fill_bytes")
         }
-
         fn fill_bytes(&mut self, _: &mut [u8]) {
             panic!("fallible boundary must use try_fill_bytes")
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             destination.fill(0xa5);
             Err(RngError::new("injected master entropy failure"))
         }
     }
-
     impl CryptoRng for FailingRng {}
-
     struct ConstantRng;
-
     impl RngCore for ConstantRng {
         fn next_u32(&mut self) -> u32 {
             0
         }
-
         fn next_u64(&mut self) -> u64 {
             0
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             destination.fill(0x42);
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             destination.fill(0x42);
             Ok(())
         }
     }
-
     impl CryptoRng for ConstantRng {}
-
     fn holder_streams(
         seed: u64,
         context: [u8; 32],
@@ -300,7 +255,6 @@ mod tests {
             .expect("healthy master source")
             .split_holder_v1(context)
     }
-
     #[test]
     fn fixed_holder_and_issuer_purposes_are_distinct_for_one_master_stream() {
         let mut holder_source = TestRng(0x6a09_e667_f3bc_c908);
@@ -324,7 +278,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn derivation_is_deterministic_context_separated_and_chunk_invariant() {
         let (mut whole, _) = holder_streams(0xbb67_ae85_84ca_a73b, [0x41; 32]);
@@ -342,7 +295,6 @@ mod tests {
         assert_eq!(actual, expected);
         assert_ne!(separated, expected);
     }
-
     #[test]
     fn master_entropy_failure_and_health_sentinels_fail_closed() {
         assert_eq!(
@@ -354,7 +306,6 @@ mod tests {
             ProverRandomnessErrorV1::Unhealthy
         );
     }
-
     #[test]
     fn debug_output_never_exposes_root_or_stream_material() {
         let root =

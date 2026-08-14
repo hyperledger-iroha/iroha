@@ -24,7 +24,6 @@
 //! Non-Unix mutation fails closed: Windows needs an audited `NtCreateFile`
 //! `RootDirectory` plus handle-relative `FileLinkInformation` wrapper before
 //! this archive can be production-qualified there.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt, fs,
@@ -33,12 +32,10 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
-
 #[cfg(unix)]
 use std::ffi::{OsStr, OsString};
 #[cfg(unix)]
 use std::io::Write as _;
-
 use iroha_data_model::{
     NetworkId,
     query::sorafs::prelude::{
@@ -75,13 +72,11 @@ use norito::{
     derive::{NoritoDeserialize, NoritoSerialize},
 };
 use thiserror::Error;
-
 use crate::{
     kura::{Kura, KuraV2CommitReceipt},
     smartcontracts::ValidSingularQuery,
     state::StateReadOnly,
 };
-
 const ARCHIVE_VERSION_V1: u16 = 1;
 const ANCHORS_DIRECTORY: &str = "anchors";
 const CHECKPOINTS_DIRECTORY: &str = "checkpoints";
@@ -139,7 +134,6 @@ const RETENTION_APPROVAL_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     RETENTION_APPROVAL_MAX_CANONICAL_BYTES_V1 * 4,
     32,
 );
-
 /// Resource ceilings enforced for every archive scan, read, and write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReputationFinalizedArchiveBounds {
@@ -147,7 +141,6 @@ pub struct ReputationFinalizedArchiveBounds {
     max_entries: NonZeroUsize,
     max_total_bytes: u64,
 }
-
 impl ReputationFinalizedArchiveBounds {
     /// Construct explicit archive resource ceilings.
     ///
@@ -191,26 +184,22 @@ impl ReputationFinalizedArchiveBounds {
             max_total_bytes,
         })
     }
-
     /// Maximum canonical bytes accepted for one anchor or policy artifact.
     #[must_use]
     pub const fn max_record_bytes(self) -> u64 {
         self.max_record_bytes
     }
-
     /// Maximum immutable records accepted in each anchor, checkpoint, or policy namespace.
     #[must_use]
     pub const fn max_entries(self) -> usize {
         self.max_entries.get()
     }
-
     /// Maximum aggregate bytes accepted across anchors, checkpoints, and
     /// policy records.
     #[must_use]
     pub const fn max_total_bytes(self) -> u64 {
         self.max_total_bytes
     }
-
     fn decode_limits(self) -> DecodeLimits {
         let max = usize::try_from(self.max_record_bytes)
             .expect("archive construction validates target address-space fit");
@@ -224,7 +213,6 @@ impl ReputationFinalizedArchiveBounds {
         )
     }
 }
-
 /// Exact immutable finalized-chain identity used as an archive key.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -237,7 +225,6 @@ pub struct ReputationFinalizedArchiveKeyV1 {
     /// Exact finalized block hash.
     pub block_hash: [u8; 32],
 }
-
 impl ReputationFinalizedArchiveKeyV1 {
     /// Construct and validate one exact finalized archive key.
     ///
@@ -257,7 +244,6 @@ impl ReputationFinalizedArchiveKeyV1 {
         key.validate()?;
         Ok(key)
     }
-
     /// Validate the exact finalized identity.
     ///
     /// # Errors
@@ -282,7 +268,6 @@ impl ReputationFinalizedArchiveKeyV1 {
         Ok(())
     }
 }
-
 /// Complete typed reputation query projection captured from one finalized view.
 ///
 /// Event feeds contain their full ordered history through `key`; they are not
@@ -310,7 +295,6 @@ pub struct ReputationFinalizedProjectionV1 {
     /// Complete provider-id-ordered authoritative reserve projection.
     pub reserve_providers: Vec<ReserveProviderAccountV1>,
 }
-
 /// Source-indexed reputation journal result from one exact finalized archive view.
 ///
 /// The `event` is absent only when the selected finalized view authoritatively
@@ -326,7 +310,6 @@ pub struct ReputationFinalizedArchiveJournalSourceViewV1 {
     /// Latest canonical event for the requested source through this view.
     pub event: Option<ReputationJournalFinalizedEventV1>,
 }
-
 impl ReputationFinalizedProjectionV1 {
     /// Validate exact-anchor, policy, feed-order, and provider-order invariants.
     ///
@@ -351,7 +334,6 @@ impl ReputationFinalizedProjectionV1 {
                 reason: "authority policy activates after the finalized anchor",
             });
         }
-
         let mut block_hashes = BTreeMap::from([(self.key.height, self.key.block_hash)]);
         validate_event_feed(
             &self.key,
@@ -428,7 +410,6 @@ impl ReputationFinalizedProjectionV1 {
                 )
             },
         )?;
-
         let mut previous_provider_id = None;
         for account in &self.reserve_providers {
             let provider_id = account.terms.provider_id;
@@ -443,7 +424,6 @@ impl ReputationFinalizedProjectionV1 {
         Ok(())
     }
 }
-
 fn validate_event_feed<T>(
     anchor: &ReputationFinalizedArchiveKeyV1,
     events: &[T],
@@ -504,7 +484,6 @@ fn validate_event_feed<T>(
     }
     Ok(())
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EventIdentity {
     sequence: u64,
@@ -512,7 +491,6 @@ struct EventIdentity {
     block_hash: [u8; 32],
     event_index: u32,
 }
-
 impl From<(u64, u64, [u8; 32], u32)> for EventIdentity {
     fn from((sequence, block_height, block_hash, event_index): (u64, u64, [u8; 32], u32)) -> Self {
         Self {
@@ -523,7 +501,6 @@ impl From<(u64, u64, [u8; 32], u32)> for EventIdentity {
         }
     }
 }
-
 fn proof_event_identity(event: &ProofOutcomeFinalizedEventV1) -> EventIdentity {
     EventIdentity::from((
         event.sequence,
@@ -532,7 +509,6 @@ fn proof_event_identity(event: &ProofOutcomeFinalizedEventV1) -> EventIdentity {
         event.event_index,
     ))
 }
-
 fn journal_event_identity(event: &ReputationJournalFinalizedEventV1) -> EventIdentity {
     EventIdentity::from((
         event.sequence,
@@ -541,7 +517,6 @@ fn journal_event_identity(event: &ReputationJournalFinalizedEventV1) -> EventIde
         event.event_index,
     ))
 }
-
 fn repair_event_identity(event: &RepairFinalizedEventV1) -> EventIdentity {
     EventIdentity::from((
         event.sequence,
@@ -550,7 +525,6 @@ fn repair_event_identity(event: &RepairFinalizedEventV1) -> EventIdentity {
         event.event_index,
     ))
 }
-
 fn orderbook_event_identity(event: &OrderbookFinalizedEventV1) -> EventIdentity {
     EventIdentity::from((
         event.sequence,
@@ -559,7 +533,6 @@ fn orderbook_event_identity(event: &OrderbookFinalizedEventV1) -> EventIdentity 
         event.event_index,
     ))
 }
-
 fn reserve_event_identity(event: &ReserveFinalizedEventV1) -> EventIdentity {
     EventIdentity::from((
         event.sequence,
@@ -568,7 +541,6 @@ fn reserve_event_identity(event: &ReserveFinalizedEventV1) -> EventIdentity {
         event.event_index,
     ))
 }
-
 fn validate_retained_feed<T>(
     prefix: ReputationFeedPrefixSummaryV1,
     retained_suffix: &[T],
@@ -602,7 +574,6 @@ fn validate_retained_feed<T>(
     }
     Ok(())
 }
-
 fn retained_feed_high_water<T>(
     feed: &ReputationRetainedFeedStateV1<T>,
 ) -> Result<u64, ReputationFinalizedArchiveError> {
@@ -613,7 +584,6 @@ fn retained_feed_high_water<T>(
             reason: "retained feed high-water mark overflowed",
         })
 }
-
 fn compact_retained_feed<T>(
     domain: &[u8],
     feed: &ReputationRetainedFeedStateV1<T>,
@@ -636,7 +606,6 @@ where
     prefix.validate()?;
     Ok(prefix)
 }
-
 fn merge_journal_source_heads(
     prefix_heads: &[ReputationJournalFinalizedEventV1],
     retained_suffix: &[ReputationJournalFinalizedEventV1],
@@ -675,7 +644,6 @@ fn merge_journal_source_heads(
     }
     Ok(heads.into_values().collect())
 }
-
 fn validate_journal_source_id(
     source_id: ReputationJournalSourceIdV1,
 ) -> Result<(), ReputationFinalizedArchiveError> {
@@ -686,7 +654,6 @@ fn validate_journal_source_id(
     }
     Ok(())
 }
-
 fn validate_journal_prefix_source_heads(
     prefix: ReputationFeedPrefixSummaryV1,
     prefix_heads: &[ReputationJournalFinalizedEventV1],
@@ -755,7 +722,6 @@ fn validate_journal_prefix_source_heads(
     merge_journal_source_heads(prefix_heads, retained_suffix)?;
     Ok(())
 }
-
 fn journal_prefix_source_head_root(
     prefix_heads: &[ReputationJournalFinalizedEventV1],
 ) -> Result<[u8; 32], ReputationFinalizedArchiveError> {
@@ -769,7 +735,6 @@ fn journal_prefix_source_head_root(
     }
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn journal_source_head_commitment(
     prefix_heads: &[ReputationJournalFinalizedEventV1],
     retained_suffix: &[ReputationJournalFinalizedEventV1],
@@ -780,7 +745,6 @@ fn journal_source_head_commitment(
     let root = journal_prefix_source_head_root(&heads)?;
     Ok((heads, count, root))
 }
-
 fn journal_prefix_after_events(
     prefix: ReputationFeedPrefixSummaryV1,
     events: &[ReputationJournalFinalizedEventV1],
@@ -803,7 +767,6 @@ fn journal_prefix_after_events(
     next.validate()?;
     Ok(next)
 }
-
 fn validate_journal_source_head_delta_standalone(
     checkpoint: &ReputationFinalizedVirtualBaseCheckpointV1,
 ) -> Result<(), ReputationFinalizedArchiveError> {
@@ -880,7 +843,6 @@ fn validate_journal_source_head_delta_standalone(
             reason: "checkpoint source-lineage delta does not reach the journal terminal",
         });
     }
-
     let (complete_heads, _, _) = journal_source_head_commitment(
         &checkpoint.journal_prefix_source_heads,
         &checkpoint.journal_retained_suffix,
@@ -897,7 +859,6 @@ fn validate_journal_source_head_delta_standalone(
     ) {
         record_retained_feed_block_hash(&mut block_hashes, identity)?;
     }
-
     if checkpoint.checkpoint_generation == 1 {
         let expected_prefix = journal_prefix_after_events(
             ReputationFeedPrefixSummaryV1::default(),
@@ -913,7 +874,6 @@ fn validate_journal_source_head_delta_standalone(
     }
     Ok(())
 }
-
 fn validate_journal_source_head_lineage(
     previous: &ReputationFinalizedVirtualBaseCheckpointV1,
     current: &ReputationFinalizedVirtualBaseCheckpointV1,
@@ -947,7 +907,6 @@ fn validate_journal_source_head_lineage(
     }
     Ok(())
 }
-
 fn validate_reserve_provider_account(
     account: &ReserveProviderAccountV1,
     finalized_at_unix_ms: u64,
@@ -984,7 +943,6 @@ fn validate_reserve_provider_account(
         })?;
     Ok(())
 }
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationFeedHighWaterMarksV1 {
     proof_outcomes: u64,
@@ -993,7 +951,6 @@ struct ReputationFeedHighWaterMarksV1 {
     orderbook_events: u64,
     reserve_events: u64,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationFinalizedAnchorManifestV1 {
     key: ReputationFinalizedArchiveKeyV1,
@@ -1008,7 +965,6 @@ struct ReputationFinalizedAnchorManifestV1 {
     reserve_provider_count: u64,
     reserve_provider_state_root: [u8; 32],
 }
-
 impl ReputationFinalizedAnchorManifestV1 {
     fn validate_standalone(&self) -> Result<(), ReputationFinalizedArchiveError> {
         self.key.validate()?;
@@ -1053,7 +1009,6 @@ impl ReputationFinalizedAnchorManifestV1 {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationFinalizedAnchorDeltaV1 {
     proof_outcomes: Vec<ProofOutcomeFinalizedEventV1>,
@@ -1064,7 +1019,6 @@ struct ReputationFinalizedAnchorDeltaV1 {
     reserve_provider_upserts: Vec<ReserveProviderAccountV1>,
     reserve_provider_removals: Vec<ProviderId>,
 }
-
 impl ReputationFinalizedAnchorDeltaV1 {
     fn validate_provider_operations(
         &self,
@@ -1109,7 +1063,6 @@ impl ReputationFinalizedAnchorDeltaV1 {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PersistedReputationFinalizedAnchorV1 {
     version: u16,
@@ -1118,14 +1071,12 @@ struct PersistedReputationFinalizedAnchorV1 {
     manifest: ReputationFinalizedAnchorManifestV1,
     delta: ReputationFinalizedAnchorDeltaV1,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize)]
 struct ReputationFinalizedAnchorDigestMaterialV1 {
     version: u16,
     manifest_digest: [u8; 32],
     delta_digest: [u8; 32],
 }
-
 impl PersistedReputationFinalizedAnchorV1 {
     fn try_new(
         manifest: ReputationFinalizedAnchorManifestV1,
@@ -1141,7 +1092,6 @@ impl PersistedReputationFinalizedAnchorV1 {
             delta,
         })
     }
-
     fn validate_standalone(&self) -> Result<(), ReputationFinalizedArchiveError> {
         if self.version != ARCHIVE_VERSION_V1 {
             return Err(ReputationFinalizedArchiveError::UnsupportedArchiveVersion {
@@ -1159,7 +1109,6 @@ impl PersistedReputationFinalizedAnchorV1 {
         }
         Ok(())
     }
-
     fn anchor_digest(&self) -> Result<[u8; 32], ReputationFinalizedArchiveError> {
         canonical_domain_digest(
             ANCHOR_DIGEST_DOMAIN_V1,
@@ -1171,14 +1120,12 @@ impl PersistedReputationFinalizedAnchorV1 {
         )
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PersistedReputationAuthorityPolicyV1 {
     version: u16,
     record_digest: [u8; 32],
     record: ReputationJournalAuthorityPolicyRecordV1,
 }
-
 impl PersistedReputationAuthorityPolicyV1 {
     fn try_new(
         record: ReputationJournalAuthorityPolicyRecordV1,
@@ -1194,7 +1141,6 @@ impl PersistedReputationAuthorityPolicyV1 {
             record,
         })
     }
-
     fn validate(&self) -> Result<(), ReputationFinalizedArchiveError> {
         if self.version != ARCHIVE_VERSION_V1 {
             return Err(ReputationFinalizedArchiveError::UnsupportedArchiveVersion {
@@ -1214,14 +1160,12 @@ impl PersistedReputationAuthorityPolicyV1 {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationFeedPrefixSummaryV1 {
     pruned_through: Option<ReputationFinalizedEventPositionV1>,
     rolling_prefix_digest: [u8; 32],
     pruned_event_count: u64,
 }
-
 impl ReputationFeedPrefixSummaryV1 {
     fn validate(self) -> Result<(), ReputationFinalizedArchiveError> {
         match (self.pruned_event_count, self.pruned_through) {
@@ -1240,7 +1184,6 @@ impl ReputationFeedPrefixSummaryV1 {
             }),
         }
     }
-
     const fn public(self) -> ReputationFinalizedFeedPrefixV1 {
         ReputationFinalizedFeedPrefixV1 {
             pruned_through: self.pruned_through,
@@ -1249,7 +1192,6 @@ impl ReputationFeedPrefixSummaryV1 {
         }
     }
 }
-
 fn validate_feed_prefix_terminal(
     prefix: ReputationFeedPrefixSummaryV1,
     anchor: &ReputationFinalizedArchiveKeyV1,
@@ -1268,7 +1210,6 @@ fn validate_feed_prefix_terminal(
     }
     Ok(Some(identity))
 }
-
 fn record_retained_feed_block_hash(
     block_hashes: &mut BTreeMap<u64, [u8; 32]>,
     identity: EventIdentity,
@@ -1283,7 +1224,6 @@ fn record_retained_feed_block_hash(
     }
     Ok(())
 }
-
 fn validate_feed_prefixes_against_anchor(
     anchor: &ReputationFinalizedArchiveKeyV1,
     prefixes: [ReputationFeedPrefixSummaryV1; 5],
@@ -1296,7 +1236,6 @@ fn validate_feed_prefixes_against_anchor(
     }
     Ok(block_hashes)
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationCheckpointValidationSummaryV1 {
     high_water_marks: ReputationFeedHighWaterMarksV1,
@@ -1306,7 +1245,6 @@ struct ReputationCheckpointValidationSummaryV1 {
     reserve_provider_count: u64,
     reserve_provider_state_root: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationFinalizedVirtualBaseCheckpointV1 {
     original_activation_floor: ReputationFinalizedArchiveKeyV1,
@@ -1343,14 +1281,12 @@ struct ReputationFinalizedVirtualBaseCheckpointV1 {
     validation_summary: ReputationCheckpointValidationSummaryV1,
     validation_summary_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PersistedReputationFinalizedVirtualBaseCheckpointV1 {
     version: u16,
     checkpoint_digest: [u8; 32],
     checkpoint: ReputationFinalizedVirtualBaseCheckpointV1,
 }
-
 impl PersistedReputationFinalizedVirtualBaseCheckpointV1 {
     fn try_new(
         checkpoint: ReputationFinalizedVirtualBaseCheckpointV1,
@@ -1363,7 +1299,6 @@ impl PersistedReputationFinalizedVirtualBaseCheckpointV1 {
         persisted.validate_standalone()?;
         Ok(persisted)
     }
-
     fn validate_standalone(&self) -> Result<(), ReputationFinalizedArchiveError> {
         if self.version != ARCHIVE_VERSION_V1 {
             return Err(ReputationFinalizedArchiveError::UnsupportedArchiveVersion {
@@ -1526,19 +1461,16 @@ impl PersistedReputationFinalizedVirtualBaseCheckpointV1 {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone)]
 struct CheckpointIndexEntry {
     persisted: PersistedReputationFinalizedVirtualBaseCheckpointV1,
     path: PathBuf,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReputationRetainedFeedStateV1<T> {
     prefix: ReputationFeedPrefixSummaryV1,
     retained_suffix: Vec<T>,
 }
-
 impl<T> Default for ReputationRetainedFeedStateV1<T> {
     fn default() -> Self {
         Self {
@@ -1547,7 +1479,6 @@ impl<T> Default for ReputationRetainedFeedStateV1<T> {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReputationReconstructionStateV1 {
     key: ReputationFinalizedArchiveKeyV1,
@@ -1561,7 +1492,6 @@ struct ReputationReconstructionStateV1 {
     reserve_events: ReputationRetainedFeedStateV1<ReserveFinalizedEventV1>,
     reserve_providers: Vec<ReserveProviderAccountV1>,
 }
-
 impl ReputationReconstructionStateV1 {
     fn from_projection(projection: ReputationFinalizedProjectionV1) -> Self {
         Self {
@@ -1592,7 +1522,6 @@ impl ReputationReconstructionStateV1 {
             reserve_providers: projection.reserve_providers,
         }
     }
-
     fn from_checkpoint(
         checkpoint: &ReputationFinalizedVirtualBaseCheckpointV1,
     ) -> Result<Self, ReputationFinalizedArchiveError> {
@@ -1626,7 +1555,6 @@ impl ReputationReconstructionStateV1 {
         state.validate()?;
         Ok(state)
     }
-
     fn full_projection(
         &self,
     ) -> Result<ReputationFinalizedProjectionV1, ReputationFinalizedArchiveError> {
@@ -1665,7 +1593,6 @@ impl ReputationReconstructionStateV1 {
             reserve_providers: self.reserve_providers.clone(),
         })
     }
-
     fn high_water_marks(
         &self,
     ) -> Result<ReputationFeedHighWaterMarksV1, ReputationFinalizedArchiveError> {
@@ -1677,7 +1604,6 @@ impl ReputationReconstructionStateV1 {
             reserve_events: retained_feed_high_water(&self.reserve_events)?,
         })
     }
-
     fn validate(&self) -> Result<(), ReputationFinalizedArchiveError> {
         self.key.validate()?;
         if self.finalized_at_unix_ms == 0 || self.finalized_at_unix_ms == u64::MAX {
@@ -1823,7 +1749,6 @@ impl ReputationReconstructionStateV1 {
         Ok(())
     }
 }
-
 fn journal_source_view(
     key: &ReputationFinalizedArchiveKeyV1,
     finalized_at_unix_ms: u64,
@@ -1852,7 +1777,6 @@ fn journal_source_view(
         event,
     })
 }
-
 fn journal_source_view_from_state(
     state: &ReputationReconstructionStateV1,
     expected_source_head_count: u64,
@@ -1869,14 +1793,12 @@ fn journal_source_view_from_state(
         source_id,
     )
 }
-
 #[derive(Debug, Clone)]
 struct AnchorIndexEntry {
     manifest: ReputationFinalizedAnchorManifestV1,
     anchor_digest: [u8; 32],
     path: PathBuf,
 }
-
 #[derive(Debug, Default)]
 struct ArchiveIndex {
     by_height: BTreeMap<(NetworkId, u64), AnchorIndexEntry>,
@@ -1891,7 +1813,6 @@ struct ArchiveIndex {
     generation: u64,
     requires_reopen: bool,
 }
-
 #[derive(Debug, Clone)]
 struct PreparedReputationFinalizedArchiveCompactionV1 {
     network_id: NetworkId,
@@ -1901,14 +1822,12 @@ struct PreparedReputationFinalizedArchiveCompactionV1 {
     newly_pruned_bytes: u64,
     expected_archive_generation: u64,
 }
-
 fn active_checkpoint_digest(index: &ArchiveIndex, network_id: &NetworkId) -> Option<[u8; 32]> {
     index
         .checkpoints
         .get(network_id)
         .map(|checkpoint| checkpoint.persisted.checkpoint_digest)
 }
-
 fn validate_qualification_archive_boundary(
     index: &ArchiveIndex,
     network_id: &NetworkId,
@@ -1926,13 +1845,11 @@ fn validate_qualification_archive_boundary(
     }
     Ok(())
 }
-
 fn bounded_len(length: usize) -> Result<u64, ReputationFinalizedArchiveError> {
     u64::try_from(length).map_err(|_| ReputationFinalizedArchiveError::InvalidProjection {
         reason: "finalized projection length exceeds the supported range",
     })
 }
-
 /// Result of an immutable archive insertion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReputationFinalizedArchiveInsertOutcome {
@@ -1941,7 +1858,6 @@ pub enum ReputationFinalizedArchiveInsertOutcome {
     /// Byte-equivalent typed content was already durable at the exact key.
     ExactReplay,
 }
-
 /// Stable normalized identity of one retained or compacted finalized-feed row.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -1956,7 +1872,6 @@ pub struct ReputationFinalizedEventPositionV1 {
     /// Canonical feed-event index in the block.
     pub event_index: u32,
 }
-
 const fn event_position(identity: EventIdentity) -> ReputationFinalizedEventPositionV1 {
     ReputationFinalizedEventPositionV1 {
         sequence: identity.sequence,
@@ -1965,7 +1880,6 @@ const fn event_position(identity: EventIdentity) -> ReputationFinalizedEventPosi
         event_index: identity.event_index,
     }
 }
-
 const fn position_identity(position: ReputationFinalizedEventPositionV1) -> EventIdentity {
     EventIdentity {
         sequence: position.sequence,
@@ -1974,7 +1888,6 @@ const fn position_identity(position: ReputationFinalizedEventPositionV1) -> Even
         event_index: position.event_index,
     }
 }
-
 /// Public prefix commitment accompanying one retained finalized feed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
@@ -1986,7 +1899,6 @@ pub struct ReputationFinalizedFeedPrefixV1 {
     /// Cumulative number of rows compacted into the prefix.
     pub pruned_event_count: u64,
 }
-
 /// Typed result of paginating one retained finalized feed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
@@ -2010,7 +1922,6 @@ pub enum ReputationFinalizedArchivePageV1<T, C> {
         prefix: ReputationFinalizedFeedPrefixV1,
     },
 }
-
 /// Exact caller-supplied fence authorizing one prefix-compaction transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[must_use]
@@ -2020,7 +1931,6 @@ pub struct ReputationFinalizedArchiveRetentionFenceV1 {
     expected_checkpoint_digest: Option<[u8; 32]>,
     expected_generation: u64,
 }
-
 impl ReputationFinalizedArchiveRetentionFenceV1 {
     /// Construct an exact-key, exact-content, checkpoint-head, and generation fence.
     ///
@@ -2049,32 +1959,27 @@ impl ReputationFinalizedArchiveRetentionFenceV1 {
             expected_generation,
         })
     }
-
     /// Exact terminal anchor whose prefix may be compacted.
     #[must_use]
     pub const fn compact_through(&self) -> &ReputationFinalizedArchiveKeyV1 {
         &self.compact_through
     }
-
     /// Content digest of the exact terminal anchor.
     #[must_use]
     pub const fn compact_through_anchor_digest(&self) -> [u8; 32] {
         self.compact_through_anchor_digest
     }
-
     /// Active virtual-base checkpoint content address frozen by the caller.
     #[must_use]
     pub const fn expected_checkpoint_digest(&self) -> Option<[u8; 32]> {
         self.expected_checkpoint_digest
     }
-
     /// Archive generation frozen by the caller.
     #[must_use]
     pub const fn expected_generation(&self) -> u64 {
         self.expected_generation
     }
 }
-
 /// Public qualification of a deployment-owned sealed retention authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationFinalizedArchiveRetentionAuthorityQualificationV1 {
@@ -2082,7 +1987,6 @@ pub struct ReputationFinalizedArchiveRetentionAuthorityQualificationV1 {
     revision: u64,
     policy_digest: [u8; 32],
 }
-
 impl ReputationFinalizedArchiveRetentionAuthorityQualificationV1 {
     /// Construct one exact public adapter and policy qualification.
     #[must_use]
@@ -2093,19 +1997,16 @@ impl ReputationFinalizedArchiveRetentionAuthorityQualificationV1 {
             policy_digest,
         }
     }
-
     /// Return the exact adapter/public-policy revision.
     #[must_use]
     pub const fn revision(self) -> u64 {
         self.revision
     }
-
     /// Return the exact public-policy digest.
     #[must_use]
     pub const fn policy_digest(self) -> [u8; 32] {
         self.policy_digest
     }
-
     fn validate(self) -> Result<(), ReputationFinalizedArchiveError> {
         if self.version != ARCHIVE_VERSION_V1 || self.revision == 0 || self.policy_digest == [0; 32]
         {
@@ -2114,14 +2015,12 @@ impl ReputationFinalizedArchiveRetentionAuthorityQualificationV1 {
         Ok(())
     }
 }
-
 /// Credential-free expected identity of a sealed retention authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReputationFinalizedArchiveRetentionAuthorityBindingV1 {
     handle: String,
     qualification: ReputationFinalizedArchiveRetentionAuthorityQualificationV1,
 }
-
 impl ReputationFinalizedArchiveRetentionAuthorityBindingV1 {
     /// Construct one exact deployment-owned authority binding.
     ///
@@ -2147,13 +2046,11 @@ impl ReputationFinalizedArchiveRetentionAuthorityBindingV1 {
             qualification,
         })
     }
-
     /// Return the exact credential-free runtime-provider handle.
     #[must_use]
     pub fn handle(&self) -> &str {
         &self.handle
     }
-
     /// Return the exact public adapter and policy qualification.
     #[must_use]
     pub const fn qualification(
@@ -2162,7 +2059,6 @@ impl ReputationFinalizedArchiveRetentionAuthorityBindingV1 {
         self.qualification
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationFinalizedArchiveCompactionProposalMaterialV1 {
     version: u16,
@@ -2172,7 +2068,6 @@ struct ReputationFinalizedArchiveCompactionProposalMaterialV1 {
     journal_source_head_count: u64,
     journal_source_head_root: [u8; 32],
 }
-
 /// Exact canonical checkpoint, source-head summary, and fence submitted for
 /// external approval.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -2180,7 +2075,6 @@ pub struct ReputationFinalizedArchiveCompactionProposalV1 {
     material: ReputationFinalizedArchiveCompactionProposalMaterialV1,
     proposal_digest: [u8; 32],
 }
-
 impl ReputationFinalizedArchiveCompactionProposalV1 {
     fn try_new(
         fence: ReputationFinalizedArchiveRetentionFenceV1,
@@ -2206,7 +2100,6 @@ impl ReputationFinalizedArchiveCompactionProposalV1 {
         proposal.validate()?;
         Ok(proposal)
     }
-
     fn validate(&self) -> Result<(), ReputationFinalizedArchiveError> {
         self.material.fence.compact_through.validate()?;
         if self.material.version != ARCHIVE_VERSION_V1
@@ -2229,44 +2122,37 @@ impl ReputationFinalizedArchiveCompactionProposalV1 {
         }
         Ok(())
     }
-
     /// Return the exact Kura-authenticated archive fence.
     #[must_use]
     pub const fn fence(&self) -> &ReputationFinalizedArchiveRetentionFenceV1 {
         &self.material.fence
     }
-
     /// Return the content-addressed archive checkpoint digest.
     #[must_use]
     pub const fn checkpoint_digest(&self) -> [u8; 32] {
         self.material.checkpoint_digest
     }
-
     /// Return the digest of the complete canonical checkpoint bytes.
     #[must_use]
     pub const fn checkpoint_canonical_digest(&self) -> [u8; 32] {
         self.material.checkpoint_canonical_digest
     }
-
     /// Return the externally approved complete source-head count.
     #[must_use]
     pub const fn journal_source_head_count(&self) -> u64 {
         self.material.journal_source_head_count
     }
-
     /// Return the externally approved complete source-head root.
     #[must_use]
     pub const fn journal_source_head_root(&self) -> [u8; 32] {
         self.material.journal_source_head_root
     }
-
     /// Return the digest naming this exact proposal.
     #[must_use]
     pub const fn proposal_digest(&self) -> [u8; 32] {
         self.proposal_digest
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationFinalizedArchiveRetentionApprovalMaterialV1 {
     namespace: [u8; 32],
@@ -2277,14 +2163,12 @@ struct ReputationFinalizedArchiveRetentionApprovalMaterialV1 {
     predecessor_revision: Option<[u8; 32]>,
     predecessor_checkpoint_digest: Option<[u8; 32]>,
 }
-
 /// Canonical monotonic CAS record approving one exact compaction proposal.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationFinalizedArchiveRetentionApprovalRecordV1 {
     material: ReputationFinalizedArchiveRetentionApprovalMaterialV1,
     revision: [u8; 32],
 }
-
 impl ReputationFinalizedArchiveRetentionApprovalRecordV1 {
     fn try_new(
         sequence: u64,
@@ -2307,7 +2191,6 @@ impl ReputationFinalizedArchiveRetentionApprovalRecordV1 {
         record.validate()?;
         Ok(record)
     }
-
     fn validate(&self) -> Result<(), ReputationFinalizedArchiveError> {
         self.material.authority_qualification.validate()?;
         self.material.proposal.validate()?;
@@ -2336,7 +2219,6 @@ impl ReputationFinalizedArchiveRetentionApprovalRecordV1 {
         }
         Ok(())
     }
-
     /// Decode one strictly bounded canonical Norito approval record.
     ///
     /// # Errors
@@ -2363,7 +2245,6 @@ impl ReputationFinalizedArchiveRetentionApprovalRecordV1 {
         }
         Ok(record)
     }
-
     /// Encode this approval as strictly bounded canonical Norito.
     ///
     /// # Errors
@@ -2379,13 +2260,11 @@ impl ReputationFinalizedArchiveRetentionApprovalRecordV1 {
         }
         Ok(bytes)
     }
-
     /// Return the monotonic authority sequence.
     #[must_use]
     pub const fn sequence(&self) -> u64 {
         self.material.sequence
     }
-
     /// Return the exact public authority qualification.
     #[must_use]
     pub const fn authority_qualification(
@@ -2393,32 +2272,27 @@ impl ReputationFinalizedArchiveRetentionApprovalRecordV1 {
     ) -> ReputationFinalizedArchiveRetentionAuthorityQualificationV1 {
         self.material.authority_qualification
     }
-
     /// Return the exact approved proposal.
     #[must_use]
     pub const fn proposal(&self) -> &ReputationFinalizedArchiveCompactionProposalV1 {
         &self.material.proposal
     }
-
     /// Return the exact predecessor approval revision.
     #[must_use]
     pub const fn predecessor_revision(&self) -> Option<[u8; 32]> {
         self.material.predecessor_revision
     }
-
     /// Return the exact predecessor archive-checkpoint digest.
     #[must_use]
     pub const fn predecessor_checkpoint_digest(&self) -> Option<[u8; 32]> {
         self.material.predecessor_checkpoint_digest
     }
-
     /// Return this deterministic CAS revision.
     #[must_use]
     pub const fn revision(&self) -> [u8; 32] {
         self.revision
     }
 }
-
 /// Fixed payload-free failures returned by an external retention authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1 {
@@ -2429,7 +2303,6 @@ pub enum ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1 {
     /// A compare-and-swap may have committed and requires exact readback.
     Ambiguous,
 }
-
 /// Deployment-owned sealed monotonic CAS authority for archive retention.
 ///
 /// Implementations own all credentials and durable state. Each `network_id`
@@ -2438,7 +2311,6 @@ pub enum ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1 {
 pub trait ReputationFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt::Debug {
     /// Return the stable credential-free production handle.
     fn handle(&self) -> &str;
-
     /// Return the current public adapter and policy qualification.
     ///
     /// # Errors
@@ -2450,7 +2322,6 @@ pub trait ReputationFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt::Deb
         ReputationFinalizedArchiveRetentionAuthorityQualificationV1,
         ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
     >;
-
     /// Load the exact latest authoritative record for `network_id`.
     ///
     /// # Errors
@@ -2463,7 +2334,6 @@ pub trait ReputationFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt::Deb
         Option<ReputationFinalizedArchiveRetentionApprovalRecordV1>,
         ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
     >;
-
     /// Install `next` only when the authoritative revision is exactly
     /// `expected_revision`.
     ///
@@ -2480,7 +2350,6 @@ pub trait ReputationFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt::Deb
         next: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
     ) -> Result<(), ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1>;
 }
-
 /// Durable result of one explicit finalized-prefix compaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
@@ -2491,39 +2360,33 @@ pub struct ReputationFinalizedArchiveCompactionOutcomeV1 {
     pruned_bytes: u64,
     generation: u64,
 }
-
 impl ReputationFinalizedArchiveCompactionOutcomeV1 {
     /// Exact virtual-base anchor installed by the checkpoint.
     #[must_use]
     pub const fn retention_floor(&self) -> &ReputationFinalizedArchiveKeyV1 {
         &self.retention_floor
     }
-
     /// Canonical content address of the installed checkpoint.
     #[must_use]
     pub const fn checkpoint_digest(&self) -> [u8; 32] {
         self.checkpoint_digest
     }
-
     /// Physical anchor artifacts removed by this transaction.
     #[must_use]
     pub const fn pruned_anchors(&self) -> u64 {
         self.pruned_anchors
     }
-
     /// Physical anchor bytes removed by this transaction.
     #[must_use]
     pub const fn pruned_bytes(&self) -> u64 {
         self.pruned_bytes
     }
-
     /// Monotonic anchor/checkpoint-head generation retained across reopen.
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
     }
 }
-
 /// Exact durable coverage qualified against one authenticated Kura boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
@@ -2535,45 +2398,38 @@ pub struct ReputationFinalizedArchiveQualificationV1 {
     lag_blocks: u64,
     generation: u64,
 }
-
 impl ReputationFinalizedArchiveQualificationV1 {
     /// Return the first exact height covered by the archive.
     #[must_use]
     pub fn activation_floor(&self) -> &ReputationFinalizedArchiveKeyV1 {
         &self.activation_floor
     }
-
     /// Return the highest exact height covered by the archive.
     #[must_use]
     pub fn archive_tip(&self) -> &ReputationFinalizedArchiveKeyV1 {
         &self.archive_tip
     }
-
     /// Return the active virtual-base checkpoint content address, if compacted.
     #[must_use]
     pub const fn checkpoint_digest(&self) -> Option<[u8; 32]> {
         self.checkpoint_digest
     }
-
     /// Return the authenticated Kura tip used for this qualification.
     #[must_use]
     pub const fn kura_tip_height(&self) -> u64 {
         self.kura_tip_height
     }
-
     /// Return the explicit Kura suffix not yet represented by the archive.
     #[must_use]
     pub const fn lag_blocks(&self) -> u64 {
         self.lag_blocks
     }
-
     /// Return the immutable anchor/checkpoint-head generation used for this qualification.
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
     }
 }
-
 /// Result of reconciling one frozen state view into the exact archive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
@@ -2582,34 +2438,29 @@ pub struct ReputationFinalizedArchiveReconcileOutcomeV1 {
     qualification: ReputationFinalizedArchiveQualificationV1,
     activation_floor_created: bool,
 }
-
 impl ReputationFinalizedArchiveReconcileOutcomeV1 {
     /// Return whether capture inserted a record or proved an exact replay.
     #[must_use]
     pub const fn insertion(&self) -> ReputationFinalizedArchiveInsertOutcome {
         self.insertion
     }
-
     /// Return the Kura-bound archive qualification after capture.
     #[must_use]
     pub const fn qualification(&self) -> &ReputationFinalizedArchiveQualificationV1 {
         &self.qualification
     }
-
     /// Return whether this capture explicitly established a new activation floor.
     #[must_use]
     pub const fn activation_floor_created(&self) -> bool {
         self.activation_floor_created
     }
 }
-
 #[derive(Debug)]
 struct CapturePage<T, C> {
     rows: Vec<T>,
     has_more: bool,
     next_after: Option<C>,
 }
-
 #[derive(Debug)]
 struct CapturedReputationSuccessorV1 {
     key: ReputationFinalizedArchiveKeyV1,
@@ -2622,13 +2473,11 @@ struct CapturedReputationSuccessorV1 {
     reserve_events: Vec<ReserveFinalizedEventV1>,
     reserve_providers: Vec<ReserveProviderAccountV1>,
 }
-
 #[derive(Debug)]
 struct ProjectionCaptureBudget {
     charged_bytes: u64,
     maximum_bytes: u64,
 }
-
 impl ProjectionCaptureBudget {
     const fn new(maximum_bytes: u64) -> Self {
         Self {
@@ -2636,7 +2485,6 @@ impl ProjectionCaptureBudget {
             maximum_bytes,
         }
     }
-
     fn charge<T: norito::core::NoritoSerialize>(
         &mut self,
         source: &'static str,
@@ -2669,7 +2517,6 @@ impl ProjectionCaptureBudget {
         Ok(())
     }
 }
-
 /// Durable exact-anchor SoraFS reputation projection archive.
 #[derive(Debug)]
 pub struct ReputationFinalizedArchive {
@@ -2686,7 +2533,6 @@ pub struct ReputationFinalizedArchive {
     writer_lock: fs::File,
     index: RwLock<ArchiveIndex>,
 }
-
 impl ReputationFinalizedArchive {
     /// Open or create a direct, bounded archive and validate every durable row.
     ///
@@ -2708,7 +2554,6 @@ impl ReputationFinalizedArchive {
         }
         Ok(archive)
     }
-
     /// Open an archive whose retention state is sealed by `authority`.
     ///
     /// Startup installs or finishes only the exact checkpoint durably named by
@@ -2742,7 +2587,6 @@ impl ReputationFinalizedArchive {
         archive.verify_storage_boundaries()?;
         Ok(archive)
     }
-
     #[cfg(test)]
     fn try_open_unsealed_for_test(
         root: impl Into<PathBuf>,
@@ -2756,7 +2600,6 @@ impl ReputationFinalizedArchive {
         *archive.write_index()? = index;
         Ok(archive)
     }
-
     fn open_unreconciled(
         root: impl Into<PathBuf>,
         bounds: ReputationFinalizedArchiveBounds,
@@ -2771,7 +2614,6 @@ impl ReputationFinalizedArchive {
                 source,
             }
         })?;
-
         let anchors = root.join(ANCHORS_DIRECTORY);
         create_direct_directory(&anchors)?;
         let anchors_identity = direct_archive_directory_identity(&anchors).map_err(|source| {
@@ -2820,7 +2662,6 @@ impl ReputationFinalizedArchive {
                 path: root.clone(),
                 source,
             })?;
-
         let archive = Self {
             root,
             anchors,
@@ -2841,7 +2682,6 @@ impl ReputationFinalizedArchive {
         *archive.write_index()? = index;
         Ok(archive)
     }
-
     fn recover_approved_retention(
         &self,
         network_id: &NetworkId,
@@ -2868,13 +2708,11 @@ impl ReputationFinalizedArchive {
             &approval,
             network_id,
         )?;
-
         let approved_candidate = checkpoint_candidates.iter().find(|candidate| {
             candidate.persisted.checkpoint_digest == approval.proposal().checkpoint_digest()
         });
         let mut index = self.write_index()?;
         self.verify_storage_boundaries()?;
-
         if let Some(candidate) = approved_candidate {
             validate_approval_checkpoint(&approval, &candidate.persisted, self.bounds)?;
             authenticate_approval_checkpoint_against_kura(&candidate.persisted, kura)?;
@@ -2901,7 +2739,6 @@ impl ReputationFinalizedArchive {
             require_exact_retention_readback(binding, authority, network_id, &approval)?;
             return Ok(());
         }
-
         if active_checkpoint_digest(&index, network_id) != approval.predecessor_checkpoint_digest()
             || index.generation != approval.proposal().fence().expected_generation()
         {
@@ -2924,7 +2761,6 @@ impl ReputationFinalizedArchive {
         })?;
         Ok(())
     }
-
     fn load_checkpoint_candidates(
         &self,
     ) -> Result<Vec<CheckpointIndexEntry>, ReputationFinalizedArchiveError> {
@@ -2983,19 +2819,16 @@ impl ReputationFinalizedArchive {
         self.verify_storage_boundaries()?;
         Ok(candidates)
     }
-
     /// Return the archive resource policy.
     #[must_use]
     pub const fn bounds(&self) -> ReputationFinalizedArchiveBounds {
         self.bounds
     }
-
     /// Return the deployment-owned archive root.
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
-
     /// Return the deterministic path for one exact key.
     ///
     /// # Errors
@@ -3008,7 +2841,6 @@ impl ReputationFinalizedArchive {
         key.validate()?;
         Ok(self.anchors.join(anchor_file_name(key)?))
     }
-
     /// Capture one exact immutable state view authenticated by Kura finality.
     ///
     /// The caller must invoke this while the supplied view is frozen. Fresh
@@ -3068,7 +2900,6 @@ impl ReputationFinalizedArchive {
             &authority_policy,
             finalized_at_unix_ms,
         )?;
-
         let proof_cursor = ProofOutcomeFinalizedCursorV1 {
             height: key.height,
             block_hash: key.block_hash,
@@ -3111,7 +2942,6 @@ impl ReputationFinalizedArchive {
             },
             ProofOutcomeFinalizedEventV1::cursor,
         )?;
-
         let journal_cursor = ReputationJournalFinalizedCursorV1 {
             height: key.height,
             block_hash: key.block_hash,
@@ -3155,7 +2985,6 @@ impl ReputationFinalizedArchive {
             },
             ReputationJournalFinalizedEventV1::cursor,
         )?;
-
         let repair_cursor = RepairFinalizedCursorV1 {
             height: key.height,
             block_hash: key.block_hash,
@@ -3197,7 +3026,6 @@ impl ReputationFinalizedArchive {
             },
             RepairFinalizedEventV1::cursor,
         )?;
-
         let orderbook_cursor = OrderbookFinalizedCursorV1 {
             height: key.height,
             block_hash: key.block_hash,
@@ -3237,7 +3065,6 @@ impl ReputationFinalizedArchive {
             },
             OrderbookFinalizedEventV1::cursor,
         )?;
-
         let reserve_cursor = ReserveFinalizedCursorV1 {
             height: key.height,
             block_hash: key.block_hash,
@@ -3277,7 +3104,6 @@ impl ReputationFinalizedArchive {
             },
             ReserveFinalizedEventV1::cursor,
         )?;
-
         let reserve_providers = collect_capture_pages(
             "reserve providers",
             None,
@@ -3301,7 +3127,6 @@ impl ReputationFinalizedArchive {
             },
             |account: &ReserveProviderAccountV1| account.terms.provider_id,
         )?;
-
         let next_state = build_captured_successor_state(
             previous.as_ref(),
             CapturedReputationSuccessorV1 {
@@ -3319,7 +3144,6 @@ impl ReputationFinalizedArchive {
         )?;
         self.insert_captured_state(next_state, authority_policy_history)
     }
-
     /// Capture and then qualify one frozen state view against the exact Kura tip.
     ///
     /// An empty archive is allowed to establish an explicit activation floor at
@@ -3351,7 +3175,6 @@ impl ReputationFinalizedArchive {
             activation_floor_created: activation_floor_before.is_none(),
         })
     }
-
     /// Reconcile a startup state tip using Kura's recovered durable receipt.
     ///
     /// This convenience path is intended for launcher startup after State
@@ -3393,7 +3216,6 @@ impl ReputationFinalizedArchive {
             })?;
         self.reconcile_kura_authenticated_view(state_ro, kura, &receipt)
     }
-
     /// Qualify exact contiguous archive coverage against one Kura boundary.
     ///
     /// Every archive anchor from the explicit activation floor through the
@@ -3551,7 +3373,6 @@ impl ReputationFinalizedArchive {
         drop(index);
         Ok(qualification)
     }
-
     /// Return the first immutable anchor captured for `network_id`.
     ///
     /// This key is the explicit historical activation floor. Exact queries
@@ -3590,7 +3411,6 @@ impl ReputationFinalizedArchive {
             .next()
             .map(|(_, entry)| entry.manifest.key.clone()))
     }
-
     /// Return the active virtual-base retention floor, if compaction occurred.
     ///
     /// # Errors
@@ -3612,7 +3432,6 @@ impl ReputationFinalizedArchive {
             .get(network_id)
             .map(|checkpoint| checkpoint.persisted.checkpoint.retention_floor.clone()))
     }
-
     fn latest_reconstruction_state_at_or_before(
         &self,
         network_id: &NetworkId,
@@ -3645,7 +3464,6 @@ impl ReputationFinalizedArchive {
         }
         Ok(None)
     }
-
     fn require_contiguous_capture_key(
         &self,
         key: &ReputationFinalizedArchiveKeyV1,
@@ -3683,7 +3501,6 @@ impl ReputationFinalizedArchive {
         }
         Ok(())
     }
-
     /// Durably publish one immutable exact-anchor projection.
     ///
     /// The operation derives an immutable suffix from the latest exact
@@ -3724,7 +3541,6 @@ impl ReputationFinalizedArchive {
                 block_hash: projection.key.block_hash,
             });
         }
-
         let predecessor = index.latest_state.get(&projection.key.network_id).cloned();
         if let Some(previous) = &predecessor {
             if projection.key.height <= previous.key.height {
@@ -3741,7 +3557,6 @@ impl ReputationFinalizedArchive {
             )?;
         }
         validate_projection_against_index(&projection, &index)?;
-
         let delta = build_anchor_delta_from_state(
             predecessor.as_ref(),
             &projection,
@@ -3760,7 +3575,6 @@ impl ReputationFinalizedArchive {
             delta,
         )
     }
-
     fn insert_captured_state(
         &self,
         next_state: ReputationReconstructionStateV1,
@@ -3797,7 +3611,6 @@ impl ReputationFinalizedArchive {
                 block_hash: next_state.key.block_hash,
             });
         }
-
         let predecessor = index.latest_state.get(&next_state.key.network_id).cloned();
         if let Some(previous) = &predecessor {
             if next_state.key.height <= previous.key.height {
@@ -3824,7 +3637,6 @@ impl ReputationFinalizedArchive {
             delta,
         )
     }
-
     fn persist_new_state(
         &self,
         index: &mut ArchiveIndex,
@@ -3944,7 +3756,6 @@ impl ReputationFinalizedArchive {
                 maximum_bytes: self.bounds.max_total_bytes,
             },
         )?;
-
         for (persisted_policy, policy_bytes, policy_is_new) in prepared_policies {
             let policy_path = self
                 .policies
@@ -3989,7 +3800,6 @@ impl ReputationFinalizedArchive {
                 }
             }
         }
-
         let anchor_path = self.record_path(&next_state.key)?;
         publish_immutable_bytes(
             &self.anchors,
@@ -4038,7 +3848,6 @@ impl ReputationFinalizedArchive {
         self.verify_storage_boundaries()?;
         Ok(ReputationFinalizedArchiveInsertOutcome::Inserted)
     }
-
     /// Freeze the exact key, content digest, active checkpoint head, and
     /// generation for a caller-owned retention decision.
     ///
@@ -4077,7 +3886,6 @@ impl ReputationFinalizedArchive {
             index.generation,
         )
     }
-
     /// Prepare the exact canonical checkpoint proposed for sealed retention.
     ///
     /// Preparation is read-only. Every physical prefix anchor and the fence's
@@ -4100,7 +3908,6 @@ impl ReputationFinalizedArchive {
         let prepared = self.prepare_compaction_locked(&index, fence, kura)?;
         compaction_proposal(&prepared, fence)
     }
-
     /// Durably approve and install one previously prepared compaction.
     ///
     /// This is the only production compaction entry point. It repeats all
@@ -4130,7 +3937,6 @@ impl ReputationFinalizedArchive {
             return Err(ReputationFinalizedArchiveError::RetentionProposalMismatch);
         }
         assert_retention_authority_identity(binding, authority)?;
-
         let network_id = fence.compact_through();
         let network_id = &network_id.network_id;
         let current = load_retention_approval(binding, authority, network_id)?;
@@ -4182,7 +3988,6 @@ impl ReputationFinalizedArchive {
             require_exact_retention_readback(binding, authority, network_id, &next)
         })
     }
-
     #[cfg(test)]
     pub(crate) fn compact_kura_authenticated_prefix(
         &self,
@@ -4194,7 +3999,6 @@ impl ReputationFinalizedArchive {
         let prepared = self.prepare_compaction_locked(&index, fence, kura)?;
         self.publish_prepared_compaction(&mut index, prepared, || Ok(()))
     }
-
     fn prepare_compaction_locked(
         &self,
         index: &ArchiveIndex,
@@ -4237,7 +4041,6 @@ impl ReputationFinalizedArchive {
                 reason: "retention fence exact key or anchor digest was substituted",
             });
         }
-
         let state = self.reconstruct_state(&index, &target)?;
         let anchors = index
             .by_height
@@ -4428,7 +4231,6 @@ impl ReputationFinalizedArchive {
         let preflight =
             PersistedReputationFinalizedVirtualBaseCheckpointV1::try_new(checkpoint.clone())?;
         prepare_checkpoint_publication(index, self.bounds, &preflight)?;
-
         let boundary = kura.exact_replay_boundary().map_err(|error| {
             ReputationFinalizedArchiveError::KuraAuthentication {
                 operation: "freeze reputation compaction Kura boundary",
@@ -4500,7 +4302,6 @@ impl ReputationFinalizedArchive {
             })?;
         checkpoint.kura_finality_artifact_digest =
             canonical_domain_digest(KURA_FINALITY_ARTIFACT_DIGEST_DOMAIN_V1, &artifact)?;
-
         let persisted = PersistedReputationFinalizedVirtualBaseCheckpointV1::try_new(checkpoint)?;
         let checkpoint_bytes = prepare_checkpoint_publication(index, self.bounds, &persisted)?;
         let expected_archive_generation = index.generation.checked_add(1).ok_or(
@@ -4517,7 +4318,6 @@ impl ReputationFinalizedArchive {
             expected_archive_generation,
         })
     }
-
     fn publish_prepared_compaction<BeforeCleanup>(
         &self,
         index: &mut ArchiveIndex,
@@ -4553,7 +4353,6 @@ impl ReputationFinalizedArchive {
             generation: index.generation,
         })
     }
-
     /// Publish one checkpoint and adopt the authoritative durable head before cleanup.
     ///
     /// `after_publish` is an in-process phase seam used by deterministic crash
@@ -4609,7 +4408,6 @@ impl ReputationFinalizedArchive {
         }
         Ok(())
     }
-
     /// Rescan after a checkpoint-namespace mutation or latch the handle closed.
     fn reconcile_checkpoint_index(
         &self,
@@ -4628,7 +4426,6 @@ impl ReputationFinalizedArchive {
             }
         }
     }
-
     /// Read one exact `(network_id, height, block_hash)` projection.
     ///
     /// A missing exact key returns `Ok(None)`. This method never substitutes
@@ -4658,7 +4455,6 @@ impl ReputationFinalizedArchive {
         }
         self.reconstruct_projection(&index, entry).map(Some)
     }
-
     /// Read the latest journal event for one source at an exact finalized key.
     ///
     /// A missing anchor or mismatched hash returns `Ok(None)`. A present view
@@ -4720,7 +4516,6 @@ impl ReputationFinalizedArchive {
             source_id,
         )?))
     }
-
     /// Read the latest journal event for one source at the highest finalized
     /// archive view at or below `maximum_height`.
     ///
@@ -4792,7 +4587,6 @@ impl ReputationFinalizedArchive {
         }
         Ok(None)
     }
-
     /// Return the highest archived projection at or below `maximum_height`.
     ///
     /// Selection uses the synchronized direct anchor index; only the selected
@@ -4835,7 +4629,6 @@ impl ReputationFinalizedArchive {
             .map(|entry| self.reconstruct_projection(&index, entry))
             .transpose()
     }
-
     /// Return the highest archived projection and its complete authenticated
     /// authority-policy predecessor chain at or below `maximum_height`.
     ///
@@ -4899,7 +4692,6 @@ impl ReputationFinalizedArchive {
         }
         Ok(Some((projection, history)))
     }
-
     /// Page retained proof outcomes at one exact archived anchor.
     ///
     /// Requests beginning before a compacted prefix return
@@ -4941,7 +4733,6 @@ impl ReputationFinalizedArchive {
             },
         )
     }
-
     /// Page retained reputation-journal events at one exact archived anchor.
     pub fn page_journal_events(
         &self,
@@ -4984,7 +4775,6 @@ impl ReputationFinalizedArchive {
             },
         )
     }
-
     /// Page retained repair events at one exact archived anchor.
     pub fn page_repair_events(
         &self,
@@ -5023,7 +4813,6 @@ impl ReputationFinalizedArchive {
             },
         )
     }
-
     /// Page retained orderbook events at one exact archived anchor.
     pub fn page_orderbook_events(
         &self,
@@ -5063,7 +4852,6 @@ impl ReputationFinalizedArchive {
             },
         )
     }
-
     /// Page retained reserve events at one exact archived anchor.
     pub fn page_reserve_events(
         &self,
@@ -5102,7 +4890,6 @@ impl ReputationFinalizedArchive {
             },
         )
     }
-
     /// Rescan the bound archive namespace and return its live generation.
     ///
     /// An empty archive is deliberately unavailable: production startup must
@@ -5125,7 +4912,6 @@ impl ReputationFinalizedArchive {
         self.verify_synchronized_index(&index)?;
         Ok(index.generation)
     }
-
     fn verify_synchronized_index(
         &self,
         index: &ArchiveIndex,
@@ -5160,7 +4946,6 @@ impl ReputationFinalizedArchive {
         }
         Ok(())
     }
-
     /// Return whether the complete bound archive namespace has no anchors,
     /// checkpoints, or policy records.
     ///
@@ -5200,7 +4985,6 @@ impl ReputationFinalizedArchive {
             && durable.total_bytes == 0
             && durable.generation == 0)
     }
-
     fn load_anchor_at(
         &self,
         path: &Path,
@@ -5260,7 +5044,6 @@ impl ReputationFinalizedArchive {
         )?;
         Ok(persisted)
     }
-
     fn load_policy_at(
         &self,
         path: &Path,
@@ -5313,7 +5096,6 @@ impl ReputationFinalizedArchive {
         )?;
         Ok(persisted)
     }
-
     fn load_checkpoint_at(
         &self,
         path: &Path,
@@ -5368,7 +5150,6 @@ impl ReputationFinalizedArchive {
         )?;
         Ok(persisted)
     }
-
     fn remove_unreferenced_policies(
         &self,
         index: &ArchiveIndex,
@@ -5419,7 +5200,6 @@ impl ReputationFinalizedArchive {
         }
         Ok(())
     }
-
     fn finish_checkpoint_cleanup(
         &self,
         index: &ArchiveIndex,
@@ -5496,7 +5276,6 @@ impl ReputationFinalizedArchive {
         changed |= self.scan_inventory()?.policy_count != policies_before;
         Ok(changed)
     }
-
     fn reconstruct_projection(
         &self,
         index: &ArchiveIndex,
@@ -5504,7 +5283,6 @@ impl ReputationFinalizedArchive {
     ) -> Result<ReputationFinalizedProjectionV1, ReputationFinalizedArchiveError> {
         self.reconstruct_state(index, target)?.full_projection()
     }
-
     fn reconstruct_state_for_key(
         &self,
         index: &ArchiveIndex,
@@ -5541,7 +5319,6 @@ impl ReputationFinalizedArchive {
         }
         self.reconstruct_state(index, entry)
     }
-
     fn reconstruct_state(
         &self,
         index: &ArchiveIndex,
@@ -5637,7 +5414,6 @@ impl ReputationFinalizedArchive {
         state.validate()?;
         Ok(state)
     }
-
     fn verify_storage_boundaries(&self) -> Result<(), ReputationFinalizedArchiveError> {
         verify_absolute_directory_ancestry(&self.root)?;
         verify_archive_directory_identity(&self.root, self.root_identity)
@@ -5679,7 +5455,6 @@ impl ReputationFinalizedArchive {
         validate_root_namespace(&self.root)?;
         Ok(())
     }
-
     fn recover_staged_files(&self) -> Result<(), ReputationFinalizedArchiveError> {
         recover_staged_directory(
             &self.anchors,
@@ -5701,7 +5476,6 @@ impl ReputationFinalizedArchive {
         )?;
         self.verify_storage_boundaries()
     }
-
     fn scan_inventory(&self) -> Result<ArchiveIndex, ReputationFinalizedArchiveError> {
         self.verify_storage_boundaries()?;
         let mut index = ArchiveIndex::default();
@@ -5759,7 +5533,6 @@ impl ReputationFinalizedArchive {
                 });
             }
         }
-
         let mut checkpoint_lineages: BTreeMap<NetworkId, Vec<CheckpointIndexEntry>> =
             BTreeMap::new();
         for entry in fs::read_dir(&self.checkpoints).map_err(|source| {
@@ -5891,7 +5664,6 @@ impl ReputationFinalizedArchive {
             }
             index.checkpoints.insert(network_id.clone(), active);
         }
-
         let mut persisted_anchors = BTreeMap::new();
         for entry in
             fs::read_dir(&self.anchors).map_err(|source| ReputationFinalizedArchiveError::Read {
@@ -5964,7 +5736,6 @@ impl ReputationFinalizedArchive {
                 );
             }
         }
-
         let mut states = BTreeMap::new();
         let mut predecessor_anchor_digests = BTreeMap::new();
         let mut retained_anchor_count = 0_u64;
@@ -6090,7 +5861,6 @@ impl ReputationFinalizedArchive {
         self.verify_storage_boundaries()?;
         Ok(index)
     }
-
     fn read_index(
         &self,
     ) -> Result<RwLockReadGuard<'_, ArchiveIndex>, ReputationFinalizedArchiveError> {
@@ -6108,7 +5878,6 @@ impl ReputationFinalizedArchive {
         }
         Ok(index)
     }
-
     fn write_index(
         &self,
     ) -> Result<RwLockWriteGuard<'_, ArchiveIndex>, ReputationFinalizedArchiveError> {
@@ -6127,7 +5896,6 @@ impl ReputationFinalizedArchive {
         Ok(index)
     }
 }
-
 fn compaction_proposal(
     prepared: &PreparedReputationFinalizedArchiveCompactionV1,
     fence: &ReputationFinalizedArchiveRetentionFenceV1,
@@ -6144,14 +5912,12 @@ fn compaction_proposal(
         source_summary.journal_prefix_source_head_root,
     )
 }
-
 fn canonical_bytes_domain_digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
     hasher.update(bytes);
     *hasher.finalize().as_bytes()
 }
-
 fn validate_approval_checkpoint(
     approval: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
     checkpoint: &PersistedReputationFinalizedVirtualBaseCheckpointV1,
@@ -6183,7 +5949,6 @@ fn validate_approval_checkpoint(
     }
     Ok(())
 }
-
 fn validate_retention_checkpoint_candidate_inventory(
     candidates: &[CheckpointIndexEntry],
     approval: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
@@ -6194,7 +5959,6 @@ fn validate_retention_checkpoint_candidate_inventory(
     if predecessor == Some(approved) {
         return Err(ReputationFinalizedArchiveError::UnapprovedRetentionCheckpoint);
     }
-
     let mut observed = BTreeSet::new();
     for candidate in candidates {
         if &candidate.persisted.checkpoint.retention_floor.network_id != network_id
@@ -6203,7 +5967,6 @@ fn validate_retention_checkpoint_candidate_inventory(
             return Err(ReputationFinalizedArchiveError::UnapprovedRetentionCheckpoint);
         }
     }
-
     let approved_is_present = observed.contains(&approved);
     let exact = match (approved_is_present, predecessor) {
         (true, None) => observed.len() == 1,
@@ -6224,7 +5987,6 @@ fn validate_retention_checkpoint_candidate_inventory(
     }
     Ok(())
 }
-
 fn validate_approval_for_prepared(
     approval: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
     binding: &ReputationFinalizedArchiveRetentionAuthorityBindingV1,
@@ -6262,7 +6024,6 @@ fn validate_approval_for_prepared(
     }
     Ok(())
 }
-
 fn validate_retention_approval_record(
     approval: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
     binding: &ReputationFinalizedArchiveRetentionAuthorityBindingV1,
@@ -6284,7 +6045,6 @@ fn validate_retention_approval_record(
     }
     Ok(())
 }
-
 fn validate_retention_authority_predecessor(
     current: Option<&ReputationFinalizedArchiveRetentionApprovalRecordV1>,
     expected_checkpoint: Option<[u8; 32]>,
@@ -6300,7 +6060,6 @@ fn validate_retention_authority_predecessor(
     }
     Ok(())
 }
-
 fn retention_authority_external_error(
     error: ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
 ) -> ReputationFinalizedArchiveError {
@@ -6316,7 +6075,6 @@ fn retention_authority_external_error(
         }
     }
 }
-
 fn assert_retention_authority_identity(
     binding: &ReputationFinalizedArchiveRetentionAuthorityBindingV1,
     authority: &dyn ReputationFinalizedArchiveRetentionAuthorityV1,
@@ -6341,7 +6099,6 @@ fn assert_retention_authority_identity(
     }
     Ok(())
 }
-
 fn load_retention_approval(
     binding: &ReputationFinalizedArchiveRetentionAuthorityBindingV1,
     authority: &dyn ReputationFinalizedArchiveRetentionAuthorityV1,
@@ -6360,7 +6117,6 @@ fn load_retention_approval(
     }
     Ok(record)
 }
-
 fn require_exact_retention_readback(
     binding: &ReputationFinalizedArchiveRetentionAuthorityBindingV1,
     authority: &dyn ReputationFinalizedArchiveRetentionAuthorityV1,
@@ -6373,7 +6129,6 @@ fn require_exact_retention_readback(
         Err(_) => Err(ReputationFinalizedArchiveError::RetentionAuthorityCasAmbiguous),
     }
 }
-
 fn compare_and_read_back_retention_approval(
     binding: &ReputationFinalizedArchiveRetentionAuthorityBindingV1,
     authority: &dyn ReputationFinalizedArchiveRetentionAuthorityV1,
@@ -6420,7 +6175,6 @@ fn compare_and_read_back_retention_approval(
     }
     Err(ReputationFinalizedArchiveError::RetentionAuthorityEquivocation)
 }
-
 fn authenticate_approval_checkpoint_against_kura(
     checkpoint: &PersistedReputationFinalizedVirtualBaseCheckpointV1,
     kura: &Kura,
@@ -6473,7 +6227,6 @@ fn authenticate_approval_checkpoint_against_kura(
     }
     Ok(())
 }
-
 fn history_pruned_error(
     checkpoint: &ReputationFinalizedVirtualBaseCheckpointV1,
 ) -> ReputationFinalizedArchiveError {
@@ -6487,7 +6240,6 @@ fn history_pruned_error(
             .or(checkpoint.reserve_prefix.pruned_through),
     }
 }
-
 fn paginate_retained_feed<T, C>(
     feed: &ReputationRetainedFeedStateV1<T>,
     after: Option<C>,
@@ -6559,7 +6311,6 @@ where
         prefix,
     })
 }
-
 fn validate_contiguous_archive_coverage(
     network_id: &NetworkId,
     anchors: &[(ReputationFinalizedArchiveKeyV1, u64)],
@@ -6599,7 +6350,6 @@ fn validate_contiguous_archive_coverage(
     }
     Ok(())
 }
-
 fn authenticate_archive_anchor_against_kura(
     key: &ReputationFinalizedArchiveKeyV1,
     finalized_at_unix_ms: u64,
@@ -6673,7 +6423,6 @@ fn authenticate_archive_anchor_against_kura(
     }
     Ok(())
 }
-
 fn authenticate_capture_view(
     state_ro: &impl StateReadOnly,
     kura: &Kura,
@@ -6765,7 +6514,6 @@ fn authenticate_capture_view(
     )?;
     Ok((key, finalized_at_unix_ms))
 }
-
 fn same_kura_receipt(left: &KuraV2CommitReceipt, right: &KuraV2CommitReceipt) -> bool {
     left.height() == right.height()
         && left.block_hash() == right.block_hash()
@@ -6774,7 +6522,6 @@ fn same_kura_receipt(left: &KuraV2CommitReceipt, right: &KuraV2CommitReceipt) ->
         && left.certificate() == right.certificate()
         && left.artifact_hash() == right.artifact_hash()
 }
-
 fn projection_query_error(
     source: &'static str,
     error: iroha_data_model::query::error::QueryExecutionFail,
@@ -6784,11 +6531,9 @@ fn projection_query_error(
         detail: error.to_string(),
     }
 }
-
 const fn projection_anchor_error(source: &'static str) -> ReputationFinalizedArchiveError {
     ReputationFinalizedArchiveError::ProjectionCaptureAnchorMismatch { projection: source }
 }
-
 fn collect_capture_pages<T, C>(
     source: &'static str,
     initial_after: Option<C>,
@@ -6871,7 +6616,6 @@ where
     }
     Ok(collected)
 }
-
 fn retained_capture_cursor<T, C>(
     feed: &ReputationRetainedFeedStateV1<T>,
     retained_cursor: impl Fn(&T) -> C,
@@ -6882,7 +6626,6 @@ fn retained_capture_cursor<T, C>(
         .map(retained_cursor)
         .or_else(|| feed.prefix.pruned_through.map(prefix_cursor))
 }
-
 fn append_capture_suffix<T>(
     source: &'static str,
     rows: &mut Vec<T>,
@@ -6894,7 +6637,6 @@ fn append_capture_suffix<T>(
     rows.extend(suffix);
     Ok(())
 }
-
 fn build_captured_successor_state(
     previous: Option<&ReputationReconstructionStateV1>,
     captured: CapturedReputationSuccessorV1,
@@ -6949,7 +6691,6 @@ fn build_captured_successor_state(
     }
     Ok(next)
 }
-
 fn canonical_domain_digest<T: norito::core::NoritoSerialize>(
     domain: &[u8],
     value: &T,
@@ -6960,7 +6701,6 @@ fn canonical_domain_digest<T: norito::core::NoritoSerialize>(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn rolling_domain_digest<T: norito::core::NoritoSerialize>(
     domain: &[u8],
     previous: [u8; 32],
@@ -6973,7 +6713,6 @@ fn rolling_domain_digest<T: norito::core::NoritoSerialize>(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn checkpoint_content_digest(
     version: u16,
     checkpoint: &ReputationFinalizedVirtualBaseCheckpointV1,
@@ -6985,7 +6724,6 @@ fn checkpoint_content_digest(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn checkpoint_validation_summary(
     checkpoint: &ReputationFinalizedVirtualBaseCheckpointV1,
 ) -> Result<ReputationCheckpointValidationSummaryV1, ReputationFinalizedArchiveError> {
@@ -7042,13 +6780,11 @@ fn checkpoint_validation_summary(
         reserve_provider_state_root: reserve_provider_state_root(&checkpoint.reserve_providers)?,
     })
 }
-
 fn reserve_provider_state_root(
     accounts: &[ReserveProviderAccountV1],
 ) -> Result<[u8; 32], ReputationFinalizedArchiveError> {
     canonical_domain_digest(PROVIDER_STATE_ROOT_DOMAIN_V1, &accounts.to_vec())
 }
-
 fn encode_bounded_artifact<T: norito::core::NoritoSerialize>(
     artifact: &T,
     bounds: ReputationFinalizedArchiveBounds,
@@ -7063,7 +6799,6 @@ fn encode_bounded_artifact<T: norito::core::NoritoSerialize>(
     }
     Ok(bytes)
 }
-
 fn prepare_checkpoint_publication(
     index: &ArchiveIndex,
     bounds: ReputationFinalizedArchiveBounds,
@@ -7091,11 +6826,9 @@ fn prepare_checkpoint_publication(
     }
     Ok(checkpoint_bytes)
 }
-
 fn bounded_bytes_len(bytes: &[u8]) -> u64 {
     u64::try_from(bytes.len()).unwrap_or(u64::MAX)
 }
-
 fn charge_archive_bytes(
     total: &mut u64,
     bytes: u64,
@@ -7115,7 +6848,6 @@ fn charge_archive_bytes(
     }
     Ok(())
 }
-
 fn checked_artifact_count(
     current: usize,
     bounds: ReputationFinalizedArchiveBounds,
@@ -7133,7 +6865,6 @@ fn checked_artifact_count(
     }
     Ok(next)
 }
-
 fn ensure_insert_capacity(
     index: &ArchiveIndex,
     bounds: ReputationFinalizedArchiveBounds,
@@ -7166,7 +6897,6 @@ fn ensure_insert_capacity(
     }
     Ok(())
 }
-
 fn anchor_file_name(
     key: &ReputationFinalizedArchiveKeyV1,
 ) -> Result<String, ReputationFinalizedArchiveError> {
@@ -7179,15 +6909,12 @@ fn anchor_file_name(
         hex::encode(hasher.finalize().as_bytes())
     ))
 }
-
 fn policy_file_name(digest: [u8; 32]) -> String {
     format!("{}{POLICY_FILE_SUFFIX}", hex::encode(digest))
 }
-
 fn checkpoint_file_name(digest: [u8; 32]) -> String {
     format!("{}{CHECKPOINT_FILE_SUFFIX}", hex::encode(digest))
 }
-
 fn is_canonical_digest_file_name(name: &str, suffix: &str) -> bool {
     let Some(stem) = name.strip_suffix(suffix) else {
         return false;
@@ -7197,7 +6924,6 @@ fn is_canonical_digest_file_name(name: &str, suffix: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
-
 fn validate_policy_transition(
     previous: Option<&ReputationJournalAuthorityPolicyRecordV1>,
     current: &ReputationJournalAuthorityPolicyRecordV1,
@@ -7235,7 +6961,6 @@ fn validate_policy_transition(
     }
     Ok(())
 }
-
 fn validate_authority_policy_history(
     history: &[ReputationJournalAuthorityPolicyRecordV1],
     active: &ReputationJournalAuthorityPolicyRecordV1,
@@ -7285,7 +7010,6 @@ fn validate_authority_policy_history(
     }
     Ok(())
 }
-
 fn authority_policy_history_digest(
     history: &[ReputationJournalAuthorityPolicyRecordV1],
 ) -> Result<[u8; 32], ReputationFinalizedArchiveError> {
@@ -7299,7 +7023,6 @@ fn authority_policy_history_digest(
     }
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn policy_record_by_policy_digest<'a>(
     index: &'a ArchiveIndex,
     policy_digest: [u8; 32],
@@ -7321,7 +7044,6 @@ fn policy_record_by_policy_digest<'a>(
     }
     Ok(first)
 }
-
 fn resolve_authority_policy_history(
     index: &ArchiveIndex,
     active: &ReputationJournalAuthorityPolicyRecordV1,
@@ -7368,7 +7090,6 @@ fn resolve_authority_policy_history(
     validate_authority_policy_history(&descending, active, finalized_at_unix_ms)?;
     Ok(descending)
 }
-
 fn ensure_append_only<T: PartialEq>(
     previous: &[T],
     current: &[T],
@@ -7380,7 +7101,6 @@ fn ensure_append_only<T: PartialEq>(
     }
     Ok(())
 }
-
 fn appended_suffix<T: Clone + PartialEq>(
     previous: &[T],
     current: &[T],
@@ -7388,7 +7108,6 @@ fn appended_suffix<T: Clone + PartialEq>(
     ensure_append_only(previous, current)?;
     Ok(current[previous.len()..].to_vec())
 }
-
 fn build_anchor_delta(
     previous: Option<&ReputationFinalizedProjectionV1>,
     current: &ReputationFinalizedProjectionV1,
@@ -7435,7 +7154,6 @@ fn build_anchor_delta(
         reserve_provider_removals,
     })
 }
-
 fn validate_full_feed_extends_retained_state<T>(
     domain: &[u8],
     previous: &ReputationRetainedFeedStateV1<T>,
@@ -7480,7 +7198,6 @@ where
     }
     Ok(())
 }
-
 fn validate_projection_transition_from_state(
     previous: &ReputationReconstructionStateV1,
     current: &ReputationFinalizedProjectionV1,
@@ -7564,7 +7281,6 @@ fn validate_projection_transition_from_state(
     }
     Ok(())
 }
-
 fn validate_retained_feed_extension<T: PartialEq>(
     previous: &ReputationRetainedFeedStateV1<T>,
     current: &ReputationRetainedFeedStateV1<T>,
@@ -7576,7 +7292,6 @@ fn validate_retained_feed_extension<T: PartialEq>(
     }
     ensure_append_only(&previous.retained_suffix, &current.retained_suffix)
 }
-
 fn validate_reconstruction_state_transition(
     previous: &ReputationReconstructionStateV1,
     current: &ReputationReconstructionStateV1,
@@ -7607,7 +7322,6 @@ fn validate_reconstruction_state_transition(
     validate_retained_feed_extension(&previous.repair_events, &current.repair_events)?;
     validate_retained_feed_extension(&previous.orderbook_events, &current.orderbook_events)?;
     validate_retained_feed_extension(&previous.reserve_events, &current.reserve_events)?;
-
     let previous_accounts = previous
         .reserve_providers
         .iter()
@@ -7627,7 +7341,6 @@ fn validate_reconstruction_state_transition(
     }
     Ok(())
 }
-
 fn retained_feed_delta<T: Clone + PartialEq>(
     previous: Option<&ReputationRetainedFeedStateV1<T>>,
     current: &ReputationRetainedFeedStateV1<T>,
@@ -7637,7 +7350,6 @@ fn retained_feed_delta<T: Clone + PartialEq>(
         |previous| appended_suffix(&previous.retained_suffix, &current.retained_suffix),
     )
 }
-
 fn build_anchor_delta_from_reconstruction_state(
     previous: Option<&ReputationReconstructionStateV1>,
     current: &ReputationReconstructionStateV1,
@@ -7686,7 +7398,6 @@ fn build_anchor_delta_from_reconstruction_state(
             .collect(),
     })
 }
-
 fn retained_suffix_start<T>(
     feed: &ReputationRetainedFeedStateV1<T>,
 ) -> Result<usize, ReputationFinalizedArchiveError> {
@@ -7697,7 +7408,6 @@ fn retained_suffix_start<T>(
             reason: "compacted feed high-water mark does not fit this target",
         })
 }
-
 fn build_anchor_delta_from_state(
     previous: Option<&ReputationReconstructionStateV1>,
     current: &ReputationFinalizedProjectionV1,
@@ -7741,7 +7451,6 @@ fn build_anchor_delta_from_state(
             .collect(),
     })
 }
-
 fn reconstruction_state_from_full_successor(
     previous: Option<&ReputationReconstructionStateV1>,
     current: &ReputationFinalizedProjectionV1,
@@ -7813,7 +7522,6 @@ fn reconstruction_state_from_full_successor(
     state.validate()?;
     Ok(state)
 }
-
 fn apply_anchor_delta_to_state(
     previous: Option<ReputationReconstructionStateV1>,
     previous_anchor_digest: Option<[u8; 32]>,
@@ -7872,7 +7580,6 @@ fn apply_anchor_delta_to_state(
             digest: manifest.policy_record_digest,
         });
     }
-
     let previous_marks = previous
         .as_ref()
         .map(ReputationReconstructionStateV1::high_water_marks)
@@ -7905,7 +7612,6 @@ fn apply_anchor_delta_to_state(
             reason: "anchor feed high-water marks do not match its immutable suffixes",
         });
     }
-
     validate_delta_event_anchors(persisted)?;
     let mut state = previous.unwrap_or_else(|| ReputationReconstructionStateV1 {
         key: manifest.key.clone(),
@@ -7942,7 +7648,6 @@ fn apply_anchor_delta_to_state(
         .reserve_events
         .retained_suffix
         .extend(persisted.delta.reserve_events.iter().cloned());
-
     let mut providers = state
         .reserve_providers
         .into_iter()
@@ -7990,7 +7695,6 @@ fn apply_anchor_delta_to_state(
     }
     Ok(state)
 }
-
 fn add_suffix_len(
     previous: u64,
     suffix_len: usize,
@@ -8001,7 +7705,6 @@ fn add_suffix_len(
         },
     )
 }
-
 fn validate_delta_event_anchors(
     persisted: &PersistedReputationFinalizedAnchorV1,
 ) -> Result<(), ReputationFinalizedArchiveError> {
@@ -8063,7 +7766,6 @@ fn validate_delta_event_anchors(
         ))
     })
 }
-
 fn validate_event_suffix_anchor<T>(
     events: &[T],
     anchor: &ReputationFinalizedArchiveKeyV1,
@@ -8084,7 +7786,6 @@ fn validate_event_suffix_anchor<T>(
     }
     Ok(())
 }
-
 fn validate_projection_against_index(
     projection: &ReputationFinalizedProjectionV1,
     index: &ArchiveIndex,
@@ -8105,7 +7806,6 @@ fn validate_projection_against_index(
         (event.block_height, event.block_hash)
     })
 }
-
 fn validate_reconstruction_state_against_index(
     state: &ReputationReconstructionStateV1,
     index: &ArchiveIndex,
@@ -8141,7 +7841,6 @@ fn validate_reconstruction_state_against_index(
         |event| (event.block_height, event.block_hash),
     )
 }
-
 fn validate_feed_against_index<T>(
     projection: &ReputationFinalizedProjectionV1,
     index: &ArchiveIndex,
@@ -8162,7 +7861,6 @@ fn validate_feed_against_index<T>(
     }
     Ok(())
 }
-
 fn validate_state_feed_against_index<T>(
     key: &ReputationFinalizedArchiveKeyV1,
     index: &ArchiveIndex,
@@ -8181,7 +7879,6 @@ fn validate_state_feed_against_index<T>(
     }
     Ok(())
 }
-
 fn validate_archive_root_path(path: &Path) -> Result<(), ReputationFinalizedArchiveError> {
     if !path.is_absolute()
         || path.parent().is_none()
@@ -8196,7 +7893,6 @@ fn validate_archive_root_path(path: &Path) -> Result<(), ReputationFinalizedArch
     }
     Ok(())
 }
-
 fn verify_existing_directory_ancestry(path: &Path) -> Result<(), ReputationFinalizedArchiveError> {
     let mut current = PathBuf::new();
     for component in path.components() {
@@ -8220,7 +7916,6 @@ fn verify_existing_directory_ancestry(path: &Path) -> Result<(), ReputationFinal
     }
     Ok(())
 }
-
 fn verify_absolute_directory_ancestry(path: &Path) -> Result<(), ReputationFinalizedArchiveError> {
     validate_archive_root_path(path)?;
     let mut current = PathBuf::new();
@@ -8243,16 +7938,13 @@ fn verify_absolute_directory_ancestry(path: &Path) -> Result<(), ReputationFinal
     verify_unix_directory_ancestry(path)?;
     Ok(())
 }
-
 #[cfg(unix)]
 fn verify_unix_directory_ancestry(path: &Path) -> Result<(), ReputationFinalizedArchiveError> {
     open_unix_directory_ancestry(path).map(drop)
 }
-
 #[cfg(unix)]
 fn open_unix_directory_ancestry(path: &Path) -> Result<fs::File, ReputationFinalizedArchiveError> {
     use std::os::unix::fs::MetadataExt as _;
-
     let mut current = fs::File::from(
         rustix::fs::open(
             "/",
@@ -8327,7 +8019,6 @@ fn open_unix_directory_ancestry(path: &Path) -> Result<fs::File, ReputationFinal
     }
     Ok(current)
 }
-
 fn validate_root_namespace(root: &Path) -> Result<(), ReputationFinalizedArchiveError> {
     for entry in fs::read_dir(root).map_err(|source| ReputationFinalizedArchiveError::Read {
         path: root.to_path_buf(),
@@ -8351,7 +8042,6 @@ fn validate_root_namespace(root: &Path) -> Result<(), ReputationFinalizedArchive
     }
     Ok(())
 }
-
 fn recover_staged_directory(
     directory: &Path,
     expected_directory_identity: ArchiveFileIdentity,
@@ -8361,7 +8051,6 @@ fn recover_staged_directory(
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt as _;
-
         let directory_file = open_unix_directory_ancestry(directory)?;
         verify_unix_directory_handle(&directory_file, expected_directory_identity, directory)?;
         let entries = rustix::fs::Dir::read_from(&directory_file)
@@ -8448,7 +8137,6 @@ fn recover_staged_directory(
             directory,
         );
     }
-
     #[cfg(not(unix))]
     {
         let _ = (expected_directory_identity, canonical_suffix);
@@ -8482,7 +8170,6 @@ fn recover_staged_directory(
         Ok(())
     }
 }
-
 #[cfg(unix)]
 fn unix_staged_file_has_canonical_target(
     directory: &fs::File,
@@ -8491,7 +8178,6 @@ fn unix_staged_file_has_canonical_target(
     canonical_suffix: &str,
 ) -> Result<bool, rustix::io::Errno> {
     use std::os::unix::ffi::OsStrExt as _;
-
     let entries = rustix::fs::Dir::read_from(directory)?;
     let mut matches = 0_u8;
     for entry in entries {
@@ -8520,7 +8206,6 @@ fn unix_staged_file_has_canonical_target(
     }
     Ok(matches == 1)
 }
-
 fn publish_immutable_bytes(
     directory: &Path,
     expected_directory_identity: ArchiveFileIdentity,
@@ -8538,7 +8223,6 @@ fn publish_immutable_bytes(
             .ok_or_else(|| ReputationFinalizedArchiveError::PathBindingMismatch {
                 path: target.to_path_buf(),
             })?;
-
     #[cfg(unix)]
     {
         return publish_immutable_bytes_unix_with_hooks(
@@ -8551,7 +8235,6 @@ fn publish_immutable_bytes(
             || {},
         );
     }
-
     #[cfg(not(unix))]
     {
         let _ = (expected_directory_identity, target_name, bytes);
@@ -8561,7 +8244,6 @@ fn publish_immutable_bytes(
         })
     }
 }
-
 fn unlink_immutable_archive_file(
     directory: &Path,
     expected_directory_identity: ArchiveFileIdentity,
@@ -8623,7 +8305,6 @@ fn unlink_immutable_archive_file(
         })
     }
 }
-
 #[cfg(unix)]
 fn publish_immutable_bytes_unix_with_hooks<BeforeCreate, BeforeLink>(
     directory: &Path,
@@ -8650,7 +8331,6 @@ where
     }
     let directory_file = open_unix_directory_ancestry(directory)?;
     verify_unix_directory_handle(&directory_file, expected_directory_identity, directory)?;
-
     before_create();
     let (mut staged_file, staged_name) =
         create_unix_staged_file(&directory_file).map_err(|source| {
@@ -8694,7 +8374,6 @@ where
             "staged archive artifact could not be bound before immutable publication"
         },
     })?;
-
     before_link();
     verify_unix_directory_handle(&directory_file, expected_directory_identity, directory)?;
     let published_new = match rustix::fs::linkat(
@@ -8752,7 +8431,6 @@ where
             });
         }
     };
-
     if let Err(unlink_error) = staged.unlink() {
         let rollback = if published_new {
             rustix::fs::unlinkat(&directory_file, target_name, rustix::fs::AtFlags::empty())
@@ -8791,14 +8469,12 @@ where
     }
     verify_unix_directory_handle(&directory_file, expected_directory_identity, directory)
 }
-
 #[cfg(unix)]
 struct UnixStagedArtifact<'directory> {
     directory: &'directory fs::File,
     name: OsString,
     armed: bool,
 }
-
 #[cfg(unix)]
 impl UnixStagedArtifact<'_> {
     fn unlink(&mut self) -> Result<(), rustix::io::Errno> {
@@ -8809,18 +8485,15 @@ impl UnixStagedArtifact<'_> {
         Ok(())
     }
 }
-
 #[cfg(unix)]
 impl Drop for UnixStagedArtifact<'_> {
     fn drop(&mut self) {
         let _ = self.unlink();
     }
 }
-
 #[cfg(unix)]
 fn create_unix_staged_file(directory: &fs::File) -> io::Result<(fs::File, OsString)> {
     use std::os::unix::fs::MetadataExt as _;
-
     for _ in 0..128 {
         let name = OsString::from(format!(
             "{STAGED_FILE_PREFIX}{:08x}-{:016x}",
@@ -8861,7 +8534,6 @@ fn create_unix_staged_file(directory: &fs::File) -> io::Result<(fs::File, OsStri
         "could not allocate a unique staged archive artifact",
     ))
 }
-
 #[cfg(unix)]
 fn verify_unix_directory_handle(
     directory: &fs::File,
@@ -8883,7 +8555,6 @@ fn verify_unix_directory_handle(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn verify_unix_named_file(
     directory: &fs::File,
@@ -8905,7 +8576,6 @@ fn verify_unix_named_file(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn unix_stat_matches_metadata(
     entry: &rustix::fs::Stat,
@@ -8913,7 +8583,6 @@ fn unix_stat_matches_metadata(
     expected_links: u64,
 ) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     rustix::fs::FileType::from_raw_mode(entry.st_mode) == rustix::fs::FileType::RegularFile
         && entry.st_dev as u64 == metadata.dev()
         && entry.st_ino as u64 == metadata.ino()
@@ -8921,7 +8590,6 @@ fn unix_stat_matches_metadata(
         && metadata.nlink() == expected_links
         && u64::try_from(entry.st_size).ok() == Some(metadata.len())
 }
-
 #[cfg(unix)]
 fn read_bounded_archive_file_at_unix(
     directory: &fs::File,
@@ -8980,7 +8648,6 @@ fn read_bounded_archive_file_at_unix(
     }
     Ok(bytes)
 }
-
 fn create_direct_directory(path: &Path) -> Result<(), ReputationFinalizedArchiveError> {
     validate_archive_root_path(path)?;
     verify_existing_directory_ancestry(path)?;
@@ -9026,7 +8693,6 @@ fn create_direct_directory(path: &Path) -> Result<(), ReputationFinalizedArchive
         source,
     })
 }
-
 fn open_writer_lock_file(path: &Path) -> Result<fs::File, ReputationFinalizedArchiveError> {
     let mut options = fs::OpenOptions::new();
     options.read(true).write(true).create(true);
@@ -9074,7 +8740,6 @@ fn open_writer_lock_file(path: &Path) -> Result<fs::File, ReputationFinalizedArc
     }
     Ok(file)
 }
-
 fn acquire_writer_ownership(
     file: &fs::File,
     path: &Path,
@@ -9092,44 +8757,36 @@ fn acquire_writer_ownership(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 type ArchiveFileIdentity = (u64, u64);
 #[cfg(windows)]
 type ArchiveFileIdentity = (Option<u32>, Option<u64>);
 #[cfg(not(any(unix, windows)))]
 type ArchiveFileIdentity = ();
-
 #[cfg(unix)]
 fn archive_file_identity(metadata: &fs::Metadata) -> ArchiveFileIdentity {
     use std::os::unix::fs::MetadataExt;
     (metadata.dev(), metadata.ino())
 }
-
 #[cfg(windows)]
 fn archive_file_identity(metadata: &fs::Metadata) -> ArchiveFileIdentity {
     use std::os::windows::fs::MetadataExt;
     (metadata.volume_serial_number(), metadata.file_index())
 }
-
 #[cfg(not(any(unix, windows)))]
 fn archive_file_identity(_metadata: &fs::Metadata) -> ArchiveFileIdentity {}
-
 #[cfg(unix)]
 const fn archive_file_identity_available(_identity: ArchiveFileIdentity) -> bool {
     true
 }
-
 #[cfg(windows)]
 const fn archive_file_identity_available(identity: ArchiveFileIdentity) -> bool {
     identity.0.is_some() && identity.1.is_some()
 }
-
 #[cfg(not(any(unix, windows)))]
 const fn archive_file_identity_available(_identity: ArchiveFileIdentity) -> bool {
     false
 }
-
 fn archive_file_is_single_link(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -9147,7 +8804,6 @@ fn archive_file_is_single_link(metadata: &fs::Metadata) -> bool {
         false
     }
 }
-
 fn direct_archive_directory_identity(path: &Path) -> io::Result<ArchiveFileIdentity> {
     let metadata = fs::symlink_metadata(path)?;
     let identity = archive_file_identity(&metadata);
@@ -9162,7 +8818,6 @@ fn direct_archive_directory_identity(path: &Path) -> io::Result<ArchiveFileIdent
     }
     Ok(identity)
 }
-
 fn verify_archive_directory_identity(path: &Path, expected: ArchiveFileIdentity) -> io::Result<()> {
     if direct_archive_directory_identity(path)? != expected {
         return Err(io::Error::new(
@@ -9172,7 +8827,6 @@ fn verify_archive_directory_identity(path: &Path, expected: ArchiveFileIdentity)
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn archive_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -9185,7 +8839,6 @@ fn archive_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) ->
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(windows)]
 fn archive_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
@@ -9197,12 +8850,10 @@ fn archive_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) ->
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn archive_file_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 fn direct_archive_file_metadata(path: &Path, max_bytes: u64) -> io::Result<fs::Metadata> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink()
@@ -9217,7 +8868,6 @@ fn direct_archive_file_metadata(path: &Path, max_bytes: u64) -> io::Result<fs::M
     }
     Ok(metadata)
 }
-
 fn read_bounded_archive_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
     let path_before = direct_archive_file_metadata(path, max_bytes)?;
     let mut options = fs::OpenOptions::new();
@@ -9265,7 +8915,6 @@ fn read_bounded_archive_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>>
     }
     Ok(bytes)
 }
-
 fn sync_archive_directory(path: &Path) -> io::Result<()> {
     #[cfg(windows)]
     {
@@ -9280,7 +8929,6 @@ fn sync_archive_directory(path: &Path) -> io::Result<()> {
         fs::File::open(path)?.sync_all()
     }
 }
-
 /// Fail-closed errors returned by the finalized reputation archive.
 #[derive(Debug, Error)]
 pub enum ReputationFinalizedArchiveError {
@@ -9700,7 +9348,6 @@ pub enum ReputationFinalizedArchiveError {
         block_hash: [u8; 32],
     },
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -9709,7 +9356,6 @@ mod tests {
         sync::{Arc, Barrier, Mutex},
         thread,
     };
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::AccountId,
@@ -9741,9 +9387,7 @@ mod tests {
     };
     use sorafs_manifest::deal::XorQuantity;
     use tempfile::tempdir;
-
     use super::*;
-
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(
             HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -9751,22 +9395,18 @@ mod tests {
             )),
         )
     }
-
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
             .expect("construct deterministic test key");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn bounds() -> ReputationFinalizedArchiveBounds {
         ReputationFinalizedArchiveBounds::try_new(1 << 20, 16, 16 << 20)
             .expect("valid test archive bounds")
     }
-
     fn archive_root(directory: &tempfile::TempDir) -> PathBuf {
         fs::canonicalize(directory.path()).expect("canonicalize temporary archive root")
     }
-
     fn open_archive(
         directory: &tempfile::TempDir,
         bounds: ReputationFinalizedArchiveBounds,
@@ -9774,7 +9414,6 @@ mod tests {
         ReputationFinalizedArchive::try_open_unsealed_for_test(archive_root(directory), bounds)
             .expect("open finalized archive")
     }
-
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum TestRetentionCasBehavior {
         Apply,
@@ -9782,7 +9421,6 @@ mod tests {
         LeaveUnchanged,
         Equivocate,
     }
-
     #[derive(Debug)]
     struct TestRetentionAuthority {
         handle: String,
@@ -9794,7 +9432,6 @@ mod tests {
         load_count: Mutex<usize>,
         cas_count: Mutex<usize>,
     }
-
     impl TestRetentionAuthority {
         fn new() -> Self {
             Self {
@@ -9810,7 +9447,6 @@ mod tests {
                 cas_count: Mutex::new(0),
             }
         }
-
         fn binding(&self) -> ReputationFinalizedArchiveRetentionAuthorityBindingV1 {
             ReputationFinalizedArchiveRetentionAuthorityBindingV1::try_new(
                 self.handle.clone(),
@@ -9819,36 +9455,29 @@ mod tests {
             )
             .expect("valid test retention authority binding")
         }
-
         fn set_behavior(&self, behavior: TestRetentionCasBehavior) {
             *self.behavior.lock().expect("lock CAS behavior") = behavior;
         }
-
         fn set_competing(&self, record: ReputationFinalizedArchiveRetentionApprovalRecordV1) {
             *self.competing.lock().expect("lock competing approval") = Some(record);
         }
-
         fn load_count(&self) -> usize {
             *self.load_count.lock().expect("lock load count")
         }
-
         fn qualification_count(&self) -> usize {
             *self
                 .qualification_count
                 .lock()
                 .expect("lock qualification count")
         }
-
         fn cas_count(&self) -> usize {
             *self.cas_count.lock().expect("lock CAS count")
         }
     }
-
     impl ReputationFinalizedArchiveRetentionAuthorityV1 for TestRetentionAuthority {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -9861,7 +9490,6 @@ mod tests {
                 .expect("lock qualification count") += 1;
             Ok(self.qualification)
         }
-
         fn load_latest(
             &self,
             _network_id: &NetworkId,
@@ -9872,7 +9500,6 @@ mod tests {
             *self.load_count.lock().expect("lock load count") += 1;
             Ok(self.latest.lock().expect("lock latest approval").clone())
         }
-
         fn compare_and_swap_latest(
             &self,
             _network_id: &NetworkId,
@@ -9909,7 +9536,6 @@ mod tests {
             }
         }
     }
-
     fn retention_test_proposal(
         height: u64,
         marker: u8,
@@ -9932,7 +9558,6 @@ mod tests {
         )
         .expect("valid retention test proposal")
     }
-
     #[test]
     fn retention_authority_binding_rejects_test_stale_and_substituted_identity() {
         assert!(matches!(
@@ -9951,7 +9576,6 @@ mod tests {
             ),
             Err(ReputationFinalizedArchiveError::InvalidRetentionAuthorityBinding)
         ));
-
         let expected = TestRetentionAuthority::new();
         let binding = expected.binding();
         let mut substituted = TestRetentionAuthority::new();
@@ -9968,7 +9592,6 @@ mod tests {
             Err(ReputationFinalizedArchiveError::RetentionAuthoritySubstitution)
         ));
     }
-
     #[test]
     fn retention_approval_codec_and_cas_readback_fail_closed() {
         let authority = TestRetentionAuthority::new();
@@ -10002,7 +9625,6 @@ mod tests {
             ])
             .is_err()
         );
-
         authority.set_behavior(TestRetentionCasBehavior::ApplyAmbiguous);
         compare_and_read_back_retention_approval(
             &binding,
@@ -10020,7 +9642,6 @@ mod tests {
             &approval,
         )
         .expect("replica that loses an identical CAS converges by exact readback");
-
         let unchanged = TestRetentionAuthority::new();
         unchanged.set_behavior(TestRetentionCasBehavior::LeaveUnchanged);
         assert!(matches!(
@@ -10033,7 +9654,6 @@ mod tests {
             ),
             Err(ReputationFinalizedArchiveError::RetentionAuthorityCasUnchanged)
         ));
-
         let equivocation = TestRetentionAuthority::new();
         equivocation.set_behavior(TestRetentionCasBehavior::Equivocate);
         let competing_proposal = retention_test_proposal(1, 0x41);
@@ -10057,7 +9677,6 @@ mod tests {
             Err(ReputationFinalizedArchiveError::RetentionAuthorityEquivocation)
         ));
     }
-
     fn proposal_network_id(
         approval: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
     ) -> NetworkId {
@@ -10068,7 +9687,6 @@ mod tests {
             .network_id
             .clone()
     }
-
     #[test]
     fn complete_namespace_empty_check_rejects_any_record() {
         let directory = tempdir().expect("create archive directory");
@@ -10079,7 +9697,6 @@ mod tests {
             .expect("insert projection");
         assert!(!archive.is_empty().expect("inspect populated archive"));
     }
-
     fn sample_projection(height: u64, block_hash: [u8; 32]) -> ReputationFinalizedProjectionV1 {
         let policy = ReputationJournalAuthorityPolicyV1 {
             version: REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
@@ -10108,7 +9725,6 @@ mod tests {
             reserve_providers: Vec::new(),
         }
     }
-
     fn rotated_projection(
         predecessor: &ReputationFinalizedProjectionV1,
         height: u64,
@@ -10128,7 +9744,6 @@ mod tests {
         .expect("rotated authority policy");
         projection
     }
-
     fn rotated_policy_record(
         predecessor: &ReputationJournalAuthorityPolicyRecordV1,
         recorder_marker: u8,
@@ -10141,7 +9756,6 @@ mod tests {
         ReputationJournalAuthorityPolicyRecordV1::try_new(policy, account(4), activated_at_unix_ms)
             .expect("rotated authority policy record")
     }
-
     fn journal_event(
         policy: &ReputationJournalAuthorityPolicyV1,
         sequence: u64,
@@ -10185,7 +9799,6 @@ mod tests {
             entry,
         }
     }
-
     fn opened_dispute_journal_event(
         policy: &ReputationJournalAuthorityPolicyV1,
         sequence: u64,
@@ -10219,7 +9832,6 @@ mod tests {
             entry,
         }
     }
-
     fn resolved_dispute_journal_event(
         policy: &ReputationJournalAuthorityPolicyV1,
         sequence: u64,
@@ -10262,7 +9874,6 @@ mod tests {
             entry,
         }
     }
-
     fn orderbook_event(block_height: u64, block_hash: [u8; 32]) -> OrderbookFinalizedEventV1 {
         OrderbookFinalizedEventV1 {
             sequence: 1,
@@ -10282,7 +9893,6 @@ mod tests {
             },
         }
     }
-
     fn proof_event(block_height: u64, block_hash: [u8; 32]) -> ProofOutcomeFinalizedEventV1 {
         ProofOutcomeFinalizedEventV1 {
             sequence: 1,
@@ -10314,7 +9924,6 @@ mod tests {
             },
         }
     }
-
     fn repair_event(block_height: u64, block_hash: [u8; 32]) -> RepairFinalizedEventV1 {
         RepairFinalizedEventV1 {
             sequence: 1,
@@ -10333,7 +9942,6 @@ mod tests {
             },
         }
     }
-
     fn reserve_event(block_height: u64, block_hash: [u8; 32]) -> ReserveFinalizedEventV1 {
         ReserveFinalizedEventV1 {
             sequence: 1,
@@ -10352,7 +9960,6 @@ mod tests {
             },
         }
     }
-
     fn projection_with_all_feeds(
         height: u64,
         block_hash: [u8; 32],
@@ -10379,7 +9986,6 @@ mod tests {
             .push(reserve_event(height, block_hash));
         projection
     }
-
     fn captured_all_feed_successor(
         previous: &ReputationReconstructionStateV1,
         height: u64,
@@ -10418,7 +10024,6 @@ mod tests {
             reserve_providers: previous.reserve_providers.clone(),
         }
     }
-
     fn reserve_account(marker: u8, revision: u64) -> ReserveProviderAccountV1 {
         ReserveProviderAccountV1 {
             terms: ReserveProviderTermsV1 {
@@ -10444,7 +10049,6 @@ mod tests {
             updated_at_unix: 1_700_000_000 + revision,
         }
     }
-
     fn test_checkpoint_artifact(
         archive: &ReputationFinalizedArchive,
         target_key: &ReputationFinalizedArchiveKeyV1,
@@ -10581,7 +10185,6 @@ mod tests {
         drop(index);
         (persisted, bytes, path)
     }
-
     fn publish_test_checkpoint(
         archive: &ReputationFinalizedArchive,
         target_key: &ReputationFinalizedArchiveKeyV1,
@@ -10596,7 +10199,6 @@ mod tests {
         .expect("publish test checkpoint");
         persisted
     }
-
     #[test]
     fn production_open_rejects_a_checkpoint_without_retention_authority() {
         let directory = tempdir().expect("create archive directory");
@@ -10608,13 +10210,11 @@ mod tests {
                 .expect("insert retention-floor projection");
             publish_test_checkpoint(&archive, &projection.key);
         }
-
         assert!(matches!(
             ReputationFinalizedArchive::try_open(archive_root(&directory), bounds()),
             Err(ReputationFinalizedArchiveError::RetentionAuthorityRequired)
         ));
     }
-
     fn replace_test_checkpoint_with_recomputed_content_address(
         checkpoints: &Path,
         mut persisted: PersistedReputationFinalizedVirtualBaseCheckpointV1,
@@ -10635,7 +10235,6 @@ mod tests {
             persisted.checkpoint_digest, original_digest,
             "semantic checkpoint rewrite must change its content address"
         );
-
         let original_path = checkpoints.join(checkpoint_file_name(original_digest));
         let replacement_path = checkpoints.join(checkpoint_file_name(persisted.checkpoint_digest));
         fs::remove_file(original_path).expect("remove original test checkpoint");
@@ -10646,7 +10245,6 @@ mod tests {
         .expect("write recommitted test checkpoint");
         replacement_path
     }
-
     fn replace_test_checkpoint_with_recomputed_checkpoint_digest(
         checkpoints: &Path,
         mut persisted: PersistedReputationFinalizedVirtualBaseCheckpointV1,
@@ -10659,7 +10257,6 @@ mod tests {
             persisted.checkpoint_digest, original_digest,
             "checkpoint mutation must change its content address"
         );
-
         let original_path = checkpoints.join(checkpoint_file_name(original_digest));
         let replacement_path = checkpoints.join(checkpoint_file_name(persisted.checkpoint_digest));
         fs::remove_file(original_path).expect("remove original test checkpoint");
@@ -10670,7 +10267,6 @@ mod tests {
         .expect("write recommitted test checkpoint");
         replacement_path
     }
-
     fn archive_with_two_source_checkpoint() -> (
         tempfile::TempDir,
         PersistedReputationFinalizedVirtualBaseCheckpointV1,
@@ -10702,7 +10298,6 @@ mod tests {
         };
         (directory, persisted)
     }
-
     #[test]
     fn checkpoint_reopen_rejects_duplicate_and_reordered_source_heads() {
         let (duplicate_directory, mut duplicate) = archive_with_two_source_checkpoint();
@@ -10722,7 +10317,6 @@ mod tests {
             ),
             Err(ReputationFinalizedArchiveError::InvalidCheckpoint { .. })
         ));
-
         let (reordered_directory, mut reordered) = archive_with_two_source_checkpoint();
         reordered.checkpoint.journal_prefix_source_heads.swap(0, 1);
         replace_test_checkpoint_with_recomputed_content_address(
@@ -10737,7 +10331,6 @@ mod tests {
             Err(ReputationFinalizedArchiveError::InvalidCheckpoint { .. })
         ));
     }
-
     #[test]
     fn checkpoint_reopen_rejects_substituted_source_head_and_committed_root() {
         let directory = tempdir().expect("create archive directory");
@@ -10777,7 +10370,6 @@ mod tests {
                 reason: "initial checkpoint source-lineage delta is incomplete or substituted",
             })
         ));
-
         let (root_directory, mut substituted_root) = archive_with_two_source_checkpoint();
         substituted_root
             .checkpoint
@@ -10800,7 +10392,6 @@ mod tests {
             Err(ReputationFinalizedArchiveError::CheckpointDigestMismatch)
         ));
     }
-
     fn archive_with_source_revision_checkpoint() -> (
         tempfile::TempDir,
         PersistedReputationFinalizedVirtualBaseCheckpointV1,
@@ -10845,7 +10436,6 @@ mod tests {
         };
         (directory, persisted, opened, resolved, terminal)
     }
-
     fn approved_cleaned_source_revision_checkpoint() -> (
         tempfile::TempDir,
         PersistedReputationFinalizedVirtualBaseCheckpointV1,
@@ -10908,7 +10498,6 @@ mod tests {
         }
         (directory, persisted, opened, resolved, terminal, authority)
     }
-
     fn recommit_checkpoint_journal_history(
         checkpoints: &Path,
         mut persisted: PersistedReputationFinalizedVirtualBaseCheckpointV1,
@@ -10924,7 +10513,6 @@ mod tests {
         persisted.checkpoint.journal_retained_suffix.clear();
         replace_test_checkpoint_with_recomputed_content_address(checkpoints, persisted);
     }
-
     #[test]
     fn sealed_reopen_rejects_self_consistent_source_omission_and_stale_head_after_cleanup() {
         let (omitted_directory, omitted, _opened, _resolved, mut terminal, omitted_authority) =
@@ -10957,7 +10545,6 @@ mod tests {
                 .count(),
             0
         );
-
         let (stale_directory, stale, opened, _resolved, mut terminal, stale_authority) =
             approved_cleaned_source_revision_checkpoint();
         terminal.sequence = 2;
@@ -10989,7 +10576,6 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn checkpoint_reopen_rejects_recommitted_omitted_and_stale_source_heads() {
         let (omitted_directory, mut omitted, _opened, resolved, _terminal) =
@@ -11011,7 +10597,6 @@ mod tests {
                 reason: "initial checkpoint source-lineage delta is incomplete or substituted",
             })
         ));
-
         let (stale_directory, mut stale, opened, resolved, _terminal) =
             archive_with_source_revision_checkpoint();
         let stale_head = stale
@@ -11035,7 +10620,6 @@ mod tests {
             })
         ));
     }
-
     fn successor_checkpoint_with_journal_delta(
         previous: &PersistedReputationFinalizedVirtualBaseCheckpointV1,
         retention_floor_block_hash: [u8; 32],
@@ -11089,7 +10673,6 @@ mod tests {
         .expect("digest source-lineage successor summary");
         current
     }
-
     #[test]
     fn checkpoint_source_head_lineage_accepts_new_resolved_dispute_with_complete_delta() {
         let directory = tempdir().expect("create archive directory");
@@ -11126,7 +10709,6 @@ mod tests {
             [0x81; 32],
             vec![opened, resolved.clone()],
         );
-
         PersistedReputationFinalizedVirtualBaseCheckpointV1::try_new(current.clone())
             .expect("complete new dispute lifecycle is standalone canonical");
         validate_journal_source_head_lineage(&previous.checkpoint, &current)
@@ -11137,7 +10719,6 @@ mod tests {
             "the resolved revision is the authenticated latest source head"
         );
     }
-
     #[test]
     fn checkpoint_reopen_accepts_new_resolved_dispute_with_complete_delta() {
         let directory = tempdir().expect("create archive directory");
@@ -11223,7 +10804,6 @@ mod tests {
             .expect("publish successor checkpoint");
             (previous, resolved_source_id)
         };
-
         let reopened = open_archive(&directory, bounds());
         let floor = reopened
             .retention_floor(&previous.checkpoint.retention_floor.network_id)
@@ -11256,7 +10836,6 @@ mod tests {
             "reopen may clean physical anchors only after lineage validation succeeds"
         );
     }
-
     #[test]
     fn checkpoint_source_head_lineage_rejects_new_resolved_dispute_without_opener() {
         let directory = tempdir().expect("create archive directory");
@@ -11310,7 +10889,6 @@ mod tests {
             &forged.validation_summary,
         )
         .expect("digest forged source summary");
-
         assert!(matches!(
             validate_journal_source_head_lineage(&previous.checkpoint, &forged),
             Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
@@ -11318,7 +10896,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn checkpoint_source_head_lineage_rejects_omission_and_rollback() {
         let (_directory, previous, opened, resolved, _terminal) =
@@ -11326,7 +10903,6 @@ mod tests {
         let unchanged = successor_checkpoint_with_journal_delta(&previous, [0x81; 32], Vec::new());
         validate_journal_source_head_lineage(&previous.checkpoint, &unchanged)
             .expect("unchanged checkpoint source heads extend through an empty delta");
-
         let mut omitted = unchanged.clone();
         omitted
             .journal_prefix_source_heads
@@ -11337,7 +10913,6 @@ mod tests {
                 reason: "checkpoint source-head lineage omitted, rolled back, or substituted a source",
             })
         ));
-
         let mut rolled_back = unchanged;
         *rolled_back
             .journal_prefix_source_heads
@@ -11351,7 +10926,6 @@ mod tests {
             })
         ));
     }
-
     fn archive_with_historical_source_checkpoint() -> (
         tempfile::TempDir,
         PersistedReputationFinalizedVirtualBaseCheckpointV1,
@@ -11395,7 +10969,6 @@ mod tests {
         };
         (directory, persisted, historical_source_id)
     }
-
     #[test]
     fn checkpoint_reopen_rejects_recommitted_source_head_block_hash_and_timestamp_substitution() {
         let (hash_directory, mut substituted_hash, source_id) =
@@ -11420,7 +10993,6 @@ mod tests {
                 reason: "retained feeds disagree on a finalized block hash",
             })
         ));
-
         let (timestamp_directory, mut substituted_timestamp, source_id) =
             archive_with_historical_source_checkpoint();
         substituted_timestamp
@@ -11444,7 +11016,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn anchor_reopen_rejects_recommitted_source_head_root_substitution() {
         let directory = tempdir().expect("create archive directory");
@@ -11478,7 +11049,6 @@ mod tests {
             norito::to_bytes(&persisted).expect("encode recommitted anchor"),
         )
         .expect("write recommitted anchor");
-
         assert!(matches!(
             ReputationFinalizedArchive::try_open(archive_root(&directory), bounds()),
             Err(ReputationFinalizedArchiveError::InvalidManifest {
@@ -11486,7 +11056,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn public_compaction_paths_reject_oversize_checkpoint_before_approval_or_pruning() {
         let directory = tempdir().expect("create archive directory");
@@ -11549,7 +11118,6 @@ mod tests {
                 maximum,
             }) if size == checkpoint_bytes_len && maximum == checkpoint_bytes_len - 1
         ));
-
         let source_summary = &persisted.checkpoint.validation_summary;
         let proposal = ReputationFinalizedArchiveCompactionProposalV1::try_new(
             fence,
@@ -11610,7 +11178,6 @@ mod tests {
             "public prepare and install must fail before checkpoint publication"
         );
     }
-
     #[test]
     fn predecessor_link_binds_the_exact_anchor_digest() {
         let directory = tempdir().expect("create archive directory");
@@ -11637,13 +11204,11 @@ mod tests {
             norito::to_bytes(&persisted).expect("encode tampered successor"),
         )
         .expect("write tampered successor");
-
         assert!(matches!(
             ReputationFinalizedArchive::try_open(archive_root(&directory), bounds()),
             Err(ReputationFinalizedArchiveError::InvalidManifest { .. })
         ));
     }
-
     #[test]
     fn retention_fence_rejects_generation_drift_before_kura_work() {
         let directory = tempdir().expect("create archive directory");
@@ -11666,11 +11231,9 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn post_link_checkpoint_error_reconciles_live_index_and_stales_prior_fence() {
         const INJECTED_ERROR: &str = "injected post-link checkpoint publication failure";
-
         let directory = tempdir().expect("create archive directory");
         let archive = open_archive(&directory, bounds());
         let first = sample_projection(7, [0x71; 32]);
@@ -11693,7 +11256,6 @@ mod tests {
             .expect("freeze pre-checkpoint fence");
         assert_eq!(stale_fence.expected_generation(), 2);
         assert_eq!(stale_fence.expected_checkpoint_digest(), None);
-
         let (persisted, checkpoint_bytes, _checkpoint_path) =
             test_checkpoint_artifact(&archive, &first.key);
         let checkpoint_digest = persisted.checkpoint_digest;
@@ -11750,7 +11312,6 @@ mod tests {
                 .expect("read reconciled generation"),
             3
         );
-
         let kura = Kura::blank_kura_for_testing();
         assert!(matches!(
             archive.compact_kura_authenticated_prefix(&stale_fence, &kura),
@@ -11802,7 +11363,6 @@ mod tests {
                 reason: "retention fence does not bind the active checkpoint head",
             })
         ));
-
         drop(archive);
         let reopened = open_archive(&directory, bounds());
         assert_eq!(
@@ -11824,11 +11384,9 @@ mod tests {
             3
         );
     }
-
     #[test]
     fn unrecoverable_post_link_checkpoint_error_latches_until_reopen() {
         const INJECTED_ERROR: &str = "injected post-link checkpoint publication failure";
-
         let directory = tempdir().expect("create archive directory");
         let archive = open_archive(&directory, bounds());
         let first = sample_projection(7, [0x71; 32]);
@@ -11896,7 +11454,6 @@ mod tests {
                 reason: CHECKPOINT_PUBLICATION_REOPEN_REQUIRED_REASON,
             })
         ));
-
         fs::remove_file(&obstruction).expect("remove inventory obstruction");
         assert!(matches!(
             archive.retention_floor(&first.key.network_id),
@@ -11905,7 +11462,6 @@ mod tests {
             })
         ));
         drop(archive);
-
         let reopened = open_archive(&directory, bounds());
         assert!(matches!(
             reopened.get_exact(&first.key),
@@ -11918,7 +11474,6 @@ mod tests {
             2
         );
     }
-
     #[test]
     fn checkpoint_reopen_finishes_crash_cleanup_and_pages_retained_suffix() {
         let directory = tempdir().expect("create archive directory");
@@ -11966,7 +11521,6 @@ mod tests {
                 "checkpoint publication precedes unlink"
             );
         }
-
         let reopened = open_archive(&directory, bounds());
         assert_eq!(
             reopened
@@ -12039,7 +11593,6 @@ mod tests {
         );
         assert_eq!(reopened.health_generation().expect("stable generation"), 3);
     }
-
     #[test]
     fn checkpoint_source_head_lookup_survives_reopen_and_preserves_absence_boundaries() {
         let directory = tempdir().expect("create archive directory");
@@ -12069,7 +11622,6 @@ mod tests {
                 .expect("insert source-indexed retention floor");
             publish_test_checkpoint(&archive, &floor.key);
         }
-
         let reopened = open_archive(&directory, bounds());
         let exact = reopened
             .journal_event_by_source_at_exact(&floor.key, source_id)
@@ -12078,7 +11630,6 @@ mod tests {
         assert_eq!(exact.key, floor.key);
         assert_eq!(exact.finalized_at_unix_ms, floor.finalized_at_unix_ms);
         assert_eq!(exact.event, Some(resolved.clone()));
-
         let latest = reopened
             .latest_journal_event_by_source_at_or_before(
                 &floor.key.network_id,
@@ -12088,7 +11639,6 @@ mod tests {
             .expect("query latest checkpoint source head")
             .expect("checkpoint floor is selectable");
         assert_eq!(latest, exact);
-
         let absent_source = ReputationJournalSourceIdV1::for_por_challenge([0xFE; 32]);
         let absent = reopened
             .journal_event_by_source_at_exact(&floor.key, absent_source)
@@ -12096,7 +11646,6 @@ mod tests {
             .expect("checkpoint floor exists");
         assert_eq!(absent.key, floor.key);
         assert_eq!(absent.event, None);
-
         let wrong_hash = ReputationFinalizedArchiveKeyV1::try_new(
             floor.key.network_id.clone(),
             floor.key.height,
@@ -12154,7 +11703,6 @@ mod tests {
         ));
         assert!("".parse::<NetworkId>().is_err());
     }
-
     #[test]
     fn checkpoint_source_index_merges_retained_source_updates_and_new_sources() {
         let directory = tempdir().expect("create archive directory");
@@ -12169,7 +11717,6 @@ mod tests {
         );
         let dispute_source_id = opened.entry.source_id;
         floor.journal_events.push(opened.clone());
-
         let mut successor = floor.clone();
         successor.key = ReputationFinalizedArchiveKeyV1::try_new(
             floor.key.network_id.clone(),
@@ -12207,7 +11754,6 @@ mod tests {
                 .expect("insert retained source successor");
             publish_test_checkpoint(&archive, &floor.key);
         }
-
         let reopened = open_archive(&directory, bounds());
         assert_eq!(
             reopened
@@ -12250,7 +11796,6 @@ mod tests {
             Some(new_source)
         );
     }
-
     #[test]
     fn compacted_capture_accepts_no_new_feed_events_without_querying_pruned_history() {
         let directory = tempdir().expect("create archive directory");
@@ -12357,7 +11902,6 @@ mod tests {
                 .last()
                 .map(ReserveFinalizedEventV1::cursor)
         );
-
         let next = build_captured_successor_state(
             Some(&previous),
             CapturedReputationSuccessorV1 {
@@ -12397,7 +11941,6 @@ mod tests {
             Err(ReputationFinalizedArchiveError::HistoryPruned { .. })
         ));
     }
-
     #[test]
     fn compacted_capture_appends_all_feeds_and_replays_after_reopen() {
         let directory = tempdir().expect("create archive directory");
@@ -12459,7 +12002,6 @@ mod tests {
             );
             next
         };
-
         let reopened = open_archive(&directory, bounds());
         let restored = reopened
             .latest_reconstruction_state_at_or_before(&next.key.network_id, next.key.height)
@@ -12488,7 +12030,6 @@ mod tests {
             Err(ReputationFinalizedArchiveError::HistoryPruned { .. })
         ));
     }
-
     #[test]
     fn compacted_capture_rejects_prefix_cursor_substitution_and_feed_gaps() {
         let directory = tempdir().expect("create archive directory");
@@ -12505,7 +12046,6 @@ mod tests {
             .latest_reconstruction_state_at_or_before(&first.key.network_id, first.key.height)
             .expect("reconstruct compacted predecessor")
             .expect("checkpoint state exists");
-
         let mut gapped = captured_all_feed_successor(&previous, 8, [0x81; 32]);
         gapped.journal_events[0].sequence = 3;
         assert!(matches!(
@@ -12516,7 +12056,6 @@ mod tests {
             ),
             Err(ReputationFinalizedArchiveError::InvalidCheckpoint { .. })
         ));
-
         let mut forked = captured_all_feed_successor(&previous, 8, [0x81; 32]);
         forked.proof_outcomes[0].block_height = first.key.height;
         forked.proof_outcomes[0].block_hash = [0x72; 32];
@@ -12529,7 +12068,6 @@ mod tests {
             ),
             Err(ReputationFinalizedArchiveError::InvalidCheckpoint { .. })
         ));
-
         let mut substituted = previous.clone();
         substituted
             .reserve_events
@@ -12562,7 +12100,6 @@ mod tests {
             ),
             Err(ReputationFinalizedArchiveError::InvalidCheckpoint { .. })
         ));
-
         let mut future_prefix = previous;
         let future_cursor = future_prefix
             .journal_events
@@ -12579,7 +12116,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn recommitted_checkpoint_rejects_future_and_cross_feed_prefix_terminals() {
         let future_directory = tempdir().expect("create future-prefix archive directory");
@@ -12621,7 +12157,6 @@ mod tests {
                 reason: "feed prefix terminal cursor crosses or disagrees with its retention-floor anchor",
             })
         ));
-
         let cross_feed_directory = tempdir().expect("create cross-feed-prefix archive directory");
         let first = projection_with_all_feeds(7, [0x71; 32]);
         let mut second = first.clone();
@@ -12660,7 +12195,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn checkpoint_tamper_and_policy_gc_fail_closed() {
         let tampered_directory = tempdir().expect("create tamper archive directory");
@@ -12689,7 +12223,6 @@ mod tests {
             ReputationFinalizedArchive::try_open(archive_root(&tampered_directory), bounds()),
             Err(ReputationFinalizedArchiveError::CheckpointDigestMismatch)
         ));
-
         let gc_directory = tempdir().expect("create policy-GC archive directory");
         let first = sample_projection(7, [0x71; 32]);
         let mut second = first.clone();
@@ -12732,7 +12265,6 @@ mod tests {
             3
         );
     }
-
     #[test]
     fn exact_hit_miss_and_replay_are_identity_pinned() {
         let directory = tempdir().expect("create archive directory");
@@ -12756,7 +12288,6 @@ mod tests {
                 .expect("read exact projection"),
             Some(projection.clone())
         );
-
         let missing = ReputationFinalizedArchiveKeyV1::try_new(
             projection.key.network_id.clone(),
             projection.key.height,
@@ -12765,7 +12296,6 @@ mod tests {
         .expect("valid missing key");
         assert_eq!(archive.get_exact(&missing).expect("read exact miss"), None);
     }
-
     #[test]
     fn archive_reopens_and_selects_latest_bounded_anchor() {
         let directory = tempdir().expect("create archive directory");
@@ -12776,7 +12306,6 @@ mod tests {
             archive.insert(first.clone()).expect("insert first");
             archive.insert(second.clone()).expect("insert second");
         }
-
         let reopened = open_archive(&directory, bounds());
         assert_eq!(reopened.health_generation().expect("indexed generation"), 2);
         assert_eq!(
@@ -12792,7 +12321,6 @@ mod tests {
             Some(second)
         );
     }
-
     #[test]
     fn policy_predecessor_closure_survives_compaction_restart() {
         let directory = tempdir().expect("create archive directory");
@@ -12820,7 +12348,6 @@ mod tests {
             );
             publish_test_checkpoint(&archive, &third.key);
         }
-
         let archive = open_archive(&directory, bounds());
         {
             let index = archive.read_index().expect("read restarted index");
@@ -12852,7 +12379,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn captured_policy_history_accepts_same_block_revision_jump_and_recovers() {
         let directory = tempdir().expect("create archive directory");
@@ -12896,7 +12422,6 @@ mod tests {
                 .insert_captured_state(next.clone(), authority_policy_history.clone())
                 .expect("insert revision-three capture");
         }
-
         let reopened = open_archive(&directory, bounds());
         assert_eq!(
             reopened
@@ -12916,7 +12441,6 @@ mod tests {
             authority_policy_history
         );
     }
-
     #[test]
     fn captured_policy_history_rejects_divergent_previous_revision() {
         let directory = tempdir().expect("create archive directory");
@@ -12932,7 +12456,6 @@ mod tests {
         archive
             .insert_captured_state(previous.clone(), canonical_history)
             .expect("insert canonical revision-two capture");
-
         let divergent_second =
             rotated_policy_record(&revision_one.authority_policy, 0x71, activation_time);
         let divergent_third = rotated_policy_record(&divergent_second, 0x72, activation_time);
@@ -12969,7 +12492,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn restart_rejects_missing_policy_predecessor_artifact() {
         let directory = tempdir().expect("create archive directory");
@@ -12989,13 +12511,11 @@ mod tests {
             )
             .expect("remove predecessor artifact");
         }
-
         assert!(matches!(
             ReputationFinalizedArchive::try_open(archive_root(&directory), bounds()),
             Err(ReputationFinalizedArchiveError::MissingPolicy { .. })
         ));
     }
-
     #[test]
     fn checkpoint_history_commitment_rejects_substituted_predecessor_metadata() {
         let directory = tempdir().expect("create archive directory");
@@ -13038,7 +12558,6 @@ mod tests {
             publish_immutable_bytes(&archive.policies, archive.policies_identity, &path, &bytes)
                 .expect("publish substituted predecessor");
         }
-
         assert!(matches!(
             ReputationFinalizedArchive::try_open(archive_root(&directory), bounds()),
             Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
@@ -13046,7 +12565,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn activation_floor_is_explicit_and_survives_restart() {
         let directory = tempdir().expect("create archive directory");
@@ -13069,7 +12587,6 @@ mod tests {
                 Some(first.key.clone())
             );
         }
-
         let reopened = open_archive(&directory, bounds());
         assert_eq!(
             reopened
@@ -13078,7 +12595,6 @@ mod tests {
             Some(first.key)
         );
     }
-
     #[test]
     fn archive_before_view_publication_restarts_as_exact_replay() {
         let directory = tempdir().expect("create archive directory");
@@ -13089,7 +12605,6 @@ mod tests {
                 .insert(projection.clone())
                 .expect("simulate archive publication before WSV publication");
         }
-
         let reopened = open_archive(&directory, bounds());
         reopened
             .require_contiguous_capture_key(&projection.key)
@@ -13107,7 +12622,6 @@ mod tests {
             Some(projection)
         );
     }
-
     #[test]
     fn qualification_coverage_rejects_every_gap_above_activation_floor() {
         let network_id = network_id(0x61);
@@ -13122,7 +12636,6 @@ mod tests {
         ];
         validate_contiguous_archive_coverage(&network_id, &contiguous)
             .expect("contiguous activation coverage");
-
         let gapped = vec![contiguous[0].clone(), contiguous[2].clone()];
         assert!(matches!(
             validate_contiguous_archive_coverage(&network_id, &gapped),
@@ -13132,7 +12645,6 @@ mod tests {
                 ..
             })
         ));
-
         let directory = tempdir().expect("create archive directory");
         let archive = open_archive(&directory, bounds());
         archive
@@ -13147,7 +12659,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn capture_pagination_is_strict_and_memory_bounded() {
         let mut pages = VecDeque::from([
@@ -13183,7 +12694,6 @@ mod tests {
         .expect("collect strict capture pages");
         assert_eq!(rows, vec![1, 2, 3]);
         assert!(pages.is_empty());
-
         let mut invalid_budget = ProjectionCaptureBudget::new(0);
         assert!(matches!(
             collect_capture_pages(
@@ -13204,7 +12714,6 @@ mod tests {
                 }
             )
         ));
-
         let mut continuation_budget = ProjectionCaptureBudget::new(1 << 20);
         assert!(matches!(
             collect_capture_pages(
@@ -13226,7 +12735,6 @@ mod tests {
             )
         ));
     }
-
     #[cfg(any(unix, windows))]
     #[test]
     fn writer_ownership_rejects_a_live_contender_and_releases_on_drop() {
@@ -13234,17 +12742,14 @@ mod tests {
         let root = archive_root(&directory);
         let first =
             ReputationFinalizedArchive::try_open(&root, bounds()).expect("open first archive");
-
         assert!(matches!(
             ReputationFinalizedArchive::try_open(&root, bounds()),
             Err(ReputationFinalizedArchiveError::WriterBusy { .. })
         ));
-
         drop(first);
         ReputationFinalizedArchive::try_open(root, bounds())
             .expect("kernel released writer ownership after drop");
     }
-
     #[test]
     fn tampered_record_fails_bounded_canonical_read_and_restart() {
         let directory = tempdir().expect("create archive directory");
@@ -13277,12 +12782,10 @@ mod tests {
         file.write_all(&[original[0] ^ 0xFF])
             .expect("corrupt final record byte");
         file.sync_all().expect("sync record corruption");
-
         assert!(archive.get_exact(&projection.key).is_err());
         drop(archive);
         assert!(ReputationFinalizedArchive::try_open(archive_root(&directory), bounds()).is_err());
     }
-
     #[test]
     fn exact_path_rejects_a_valid_record_for_another_anchor() {
         let directory = tempdir().expect("create archive directory");
@@ -13294,13 +12797,11 @@ mod tests {
         let first_path = archive.record_path(&first.key).expect("first path");
         let second_path = archive.record_path(&second.key).expect("second path");
         fs::copy(second_path, first_path).expect("substitute canonical second record");
-
         assert!(matches!(
             archive.get_exact(&first.key),
             Err(ReputationFinalizedArchiveError::ExactKeyMismatch { .. })
         ));
     }
-
     #[test]
     fn record_and_aggregate_bounds_fail_closed() {
         let directory = tempdir().expect("create archive directory");
@@ -13310,7 +12811,6 @@ mod tests {
             archive.insert(sample_projection(7, [0x71; 32])),
             Err(ReputationFinalizedArchiveError::RecordTooLarge { .. })
         ));
-
         let directory = tempdir().expect("create second archive directory");
         let one_record = ReputationFinalizedArchiveBounds::try_new(1 << 20, 1, 2 << 20)
             .expect("valid one-record bounds");
@@ -13323,7 +12823,6 @@ mod tests {
             Err(ReputationFinalizedArchiveError::RetentionRequired { .. })
         ));
     }
-
     #[test]
     fn policy_first_crash_retains_a_bounded_nonqualifying_cache_entry() {
         let directory = tempdir().expect("create archive directory");
@@ -13340,14 +12839,12 @@ mod tests {
             let path = archive
                 .policies
                 .join(policy_file_name(policy.record_digest));
-
             // Simulate process loss after the policy-first durable publication
             // and before the corresponding anchor publication.
             publish_immutable_bytes(&archive.policies, archive.policies_identity, &path, &bytes)
                 .expect("publish policy crash artifact");
             (policy.record_digest, path, bounded_bytes_len(&bytes))
         };
-
         let archive = open_archive(&directory, one_per_namespace);
         assert!(
             orphan_path.is_file(),
@@ -13364,7 +12861,6 @@ mod tests {
             archive.health_generation(),
             Err(ReputationFinalizedArchiveError::ArchiveUnavailable { .. })
         ));
-
         let mut different_policy = projection.clone();
         let mut different_body = different_policy.authority_policy.policy.clone();
         different_body.por_recorder_authority = account(0x61);
@@ -13382,7 +12878,6 @@ mod tests {
                 ..
             })
         ));
-
         archive
             .insert(projection.clone())
             .expect("matching anchor reuses retained policy");
@@ -13399,7 +12894,6 @@ mod tests {
                 .expect("referenced anchor qualifies archive"),
             1
         );
-
         let mut successor = projection;
         successor.key = ReputationFinalizedArchiveKeyV1::try_new(
             successor.key.network_id.clone(),
@@ -13417,14 +12911,12 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn conflicting_content_and_finalized_fork_are_rejected() {
         let directory = tempdir().expect("create archive directory");
         let archive = open_archive(&directory, bounds());
         let original = sample_projection(7, [0x71; 32]);
         archive.insert(original.clone()).expect("insert original");
-
         let mut conflict = original.clone();
         conflict.finalized_at_unix_ms += 1;
         assert!(matches!(
@@ -13436,7 +12928,6 @@ mod tests {
             Err(ReputationFinalizedArchiveError::FinalizedFork { .. })
         ));
     }
-
     #[test]
     fn append_only_deltas_grow_linearly_and_reconstruct_full_history() {
         let directory = tempdir().expect("create archive directory");
@@ -13478,7 +12969,6 @@ mod tests {
                 .expect("load compact anchor");
             assert_eq!(persisted.delta.journal_events.len(), 1);
         }
-
         let compact_anchor_bytes = fs::read_dir(&archive.anchors)
             .expect("read anchor directory")
             .try_fold(0_u64, |total, entry| {
@@ -13501,7 +12991,6 @@ mod tests {
         );
         assert_eq!(archive.health_generation().expect("live generation"), 8);
     }
-
     #[test]
     fn reserve_provider_deltas_reconstruct_upserts_and_removals() {
         let directory = tempdir().expect("create archive directory");
@@ -13509,7 +12998,6 @@ mod tests {
         let mut first = sample_projection(7, [0x71; 32]);
         first.reserve_providers = vec![reserve_account(0x21, 1), reserve_account(0x31, 1)];
         archive.insert(first.clone()).expect("insert provider base");
-
         let mut second = first.clone();
         second.key =
             ReputationFinalizedArchiveKeyV1::try_new(second.key.network_id.clone(), 8, [0x81; 32])
@@ -13519,7 +13007,6 @@ mod tests {
         archive
             .insert(second.clone())
             .expect("insert provider delta");
-
         let persisted = archive
             .load_anchor_at(
                 &archive
@@ -13550,7 +13037,6 @@ mod tests {
             Some(second)
         );
     }
-
     #[test]
     fn cross_feed_hash_disagreement_and_noncanonical_reserve_accounts_fail() {
         let mut cross_feed = sample_projection(8, [0x81; 32]);
@@ -13568,7 +13054,6 @@ mod tests {
             cross_feed.validate(),
             Err(ReputationFinalizedArchiveError::InvalidProjection { .. })
         ));
-
         let mut invalid_debt = sample_projection(8, [0x81; 32]);
         let mut account = reserve_account(0x31, 1);
         account.debt_principal = XorQuantity::try_from_micro(2_000_000_000).expect("debt fixture");
@@ -13577,7 +13062,6 @@ mod tests {
             invalid_debt.validate(),
             Err(ReputationFinalizedArchiveError::InvalidProjection { .. })
         ));
-
         let mut invalid_interest = sample_projection(8, [0x81; 32]);
         let mut account = reserve_account(0x31, 1);
         account.accrued_interest = XorQuantity::try_from_micro(1).expect("interest fixture");
@@ -13586,7 +13070,6 @@ mod tests {
             invalid_interest.validate(),
             Err(ReputationFinalizedArchiveError::InvalidProjection { .. })
         ));
-
         let mut invalid_pending = sample_projection(8, [0x81; 32]);
         let mut account = reserve_account(0x31, 1);
         account.pending_movements = RESERVE_MAX_PENDING_MOVEMENTS_V1 + 1;
@@ -13595,7 +13078,6 @@ mod tests {
             invalid_pending.validate(),
             Err(ReputationFinalizedArchiveError::InvalidProjection { .. })
         ));
-
         let mut invalid_appeals = sample_projection(8, [0x81; 32]);
         let mut account = reserve_account(0x31, 1);
         account.open_appeals = RESERVE_MAX_OPEN_APPEALS_V1 + 1;
@@ -13604,7 +13086,6 @@ mod tests {
             invalid_appeals.validate(),
             Err(ReputationFinalizedArchiveError::InvalidProjection { .. })
         ));
-
         let mut invalid_timestamp = sample_projection(8, [0x81; 32]);
         let mut account = reserve_account(0x31, 1);
         account.updated_at_unix = 1_800_000_000;
@@ -13614,7 +13095,6 @@ mod tests {
             Err(ReputationFinalizedArchiveError::InvalidProjection { .. })
         ));
     }
-
     #[test]
     fn synchronized_index_keeps_concurrent_reads_on_complete_generations() {
         let directory = tempdir().expect("create archive directory");
@@ -13660,7 +13140,6 @@ mod tests {
         }
         assert_eq!(archive.health_generation().expect("final generation"), 17);
     }
-
     #[test]
     fn startup_removes_direct_crash_staged_files() {
         let directory = tempdir().expect("create archive directory");
@@ -13678,12 +13157,10 @@ mod tests {
             Err(ReputationFinalizedArchiveError::ArchiveUnavailable { .. })
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn startup_recovers_a_stage_linked_to_one_canonical_policy_target() {
         use std::os::unix::fs::MetadataExt as _;
-
         let directory = tempdir().expect("create archive directory");
         let projection = sample_projection(7, [0x71; 32]);
         let archive = open_archive(&directory, bounds());
@@ -13696,14 +13173,12 @@ mod tests {
             .policies
             .join(policy_file_name(policy.record_digest));
         drop(archive);
-
         fs::write(&staged, bytes).expect("write linked staged policy");
         fs::hard_link(&staged, &target).expect("link canonical policy target");
         assert_eq!(
             fs::metadata(&staged).expect("read staged metadata").nlink(),
             2
         );
-
         let reopened = open_archive(&directory, bounds());
         assert!(!staged.exists());
         assert_eq!(
@@ -13717,12 +13192,10 @@ mod tests {
         assert_eq!(index.policy_count, 1);
         assert!(index.policies.contains_key(&policy.record_digest));
     }
-
     #[cfg(unix)]
     #[test]
     fn descriptor_relative_publication_resists_directory_substitution() {
         use std::os::unix::fs::symlink;
-
         for substitute_before_create in [true, false] {
             let directory = tempdir().expect("create archive directory");
             let external_guard = tempdir().expect("create replacement directory");
@@ -13741,7 +13214,6 @@ mod tests {
                 fs::rename(&archive.anchors, &moved).expect("move bound archive directory");
                 symlink(&external, &archive.anchors).expect("substitute archive directory");
             };
-
             let result = if substitute_before_create {
                 publish_immutable_bytes_unix_with_hooks(
                     &archive.anchors,
@@ -13774,7 +13246,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn descriptor_relative_publication_is_no_clobber_and_cleans_staging() {
@@ -13782,7 +13253,6 @@ mod tests {
         let archive = open_archive(&directory, bounds());
         let target = archive.anchors.join("no-clobber.anchor.to");
         let original = [0x41; 32];
-
         publish_immutable_bytes(
             &archive.anchors,
             archive.anchors_identity,
@@ -13821,14 +13291,12 @@ mod tests {
             0
         );
     }
-
     #[cfg(windows)]
     #[test]
     fn unsupported_publication_fails_before_any_path_mutation() {
         let directory = tempdir().expect("create archive directory");
         let archive = open_archive(&directory, bounds());
         let target = archive.anchors.join("unsupported.anchor.to");
-
         assert!(matches!(
             publish_immutable_bytes(
                 &archive.anchors,
@@ -13846,7 +13314,6 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn storage_root_rejects_relative_parent_and_symlink_ancestry() {
         assert!(matches!(
@@ -13862,11 +13329,9 @@ mod tests {
             ),
             Err(ReputationFinalizedArchiveError::InvalidStorage { .. })
         ));
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
-
             let direct = root.join("direct");
             fs::create_dir(&direct).expect("create direct ancestor");
             let alias = root.join("alias");
@@ -13877,7 +13342,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn persisted_record_is_byte_canonical_norito() {
         let directory = tempdir().expect("create archive directory");

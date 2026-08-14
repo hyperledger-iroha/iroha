@@ -1,11 +1,9 @@
 #![allow(clippy::disallowed_types, clippy::items_after_test_module)]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use std::{
     num::{NonZeroU16, NonZeroU64},
     sync::Arc,
 };
-
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
     governance::manifest::LaneManifestRegistry,
@@ -29,7 +27,6 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::{
     account::CanUnregisterAccount, asset_definition::CanUnregisterAssetDefinition,
 };
-
 /// Create block
 pub fn create_block<'a>(
     state: &'a State,
@@ -40,7 +37,6 @@ pub fn create_block<'a>(
     peer_private_key: &PrivateKey,
 ) -> (CommittedBlock, StateBlock<'a>) {
     let network_id = *state.network_id_ref();
-
     let transaction = TransactionBuilder::new(
         network_id,
         account_id,
@@ -53,7 +49,6 @@ pub fn create_block<'a>(
         let params = state_view.world.parameters();
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
-
     let crypto_cfg = state.crypto();
     let unverified_block = BlockBuilder::new(vec![
         AcceptedTransaction::accept(
@@ -68,7 +63,6 @@ pub fn create_block<'a>(
     .chain(0, state.view().latest_block().as_deref())
     .sign(peer_private_key)
     .unpack(|_| {});
-
     let mut state_block = state.block(unverified_block.header());
     let block = unverified_block
         .validate_and_record_transactions(&mut state_block)
@@ -76,13 +70,10 @@ pub fn create_block<'a>(
         .commit(topology)
         .unpack(|_| {})
         .unwrap();
-
     // Verify that transactions are valid (non-fatal in release benches)
     debug_assert_eq!(block.as_ref().errors().count(), 0);
-
     (block, state_block)
 }
-
 fn domain_for_index(domains: &[DomainId], total_items: usize, index: usize) -> Option<&DomainId> {
     if domains.is_empty() || total_items == 0 {
         return None;
@@ -90,7 +81,6 @@ fn domain_for_index(domains: &[DomainId], total_items: usize, index: usize) -> O
     let domain_index = index.saturating_mul(domains.len()) / total_items;
     domains.get(domain_index.min(domains.len() - 1))
 }
-
 /// Return the semantic name assigned by [`generate_ids`] to an asset fixture.
 ///
 /// # Panics
@@ -120,7 +110,6 @@ pub fn generated_asset_definition_name(
         index % assets_per_domain
     )
 }
-
 pub fn populate_state(
     domains: &[DomainId],
     accounts: &[AccountId],
@@ -128,7 +117,6 @@ pub fn populate_state(
     owner_id: &AccountId,
 ) -> Vec<InstructionBox> {
     let mut instructions: Vec<InstructionBox> = Vec::new();
-
     for account_id in accounts {
         let account = Account::new(account_id.clone());
         instructions.push(Register::account(account).into());
@@ -140,7 +128,6 @@ pub fn populate_state(
         );
         instructions.push(can_unregister_account.into());
     }
-
     for (index, asset_definition_id) in asset_definitions.iter().enumerate() {
         let asset_definition = AssetDefinition::numeric(
             asset_definition_id.clone(),
@@ -157,10 +144,8 @@ pub fn populate_state(
         );
         instructions.push(can_unregister_asset_definition.into());
     }
-
     instructions
 }
-
 pub fn delete_every_nth(
     domains: &[DomainId],
     accounts: &[AccountId],
@@ -202,7 +187,6 @@ pub fn delete_every_nth(
     }
     instructions
 }
-
 pub fn restore_every_nth(
     domains: &[DomainId],
     accounts: &[AccountId],
@@ -253,7 +237,6 @@ pub fn restore_every_nth(
     }
     instructions
 }
-
 pub fn build_state(
     rt: &tokio::runtime::Handle,
     account_id: &AccountId,
@@ -283,7 +266,6 @@ pub fn build_state(
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
-
     {
         let network_id = *state.network_id_ref();
         let transaction = TransactionBuilder::new(
@@ -313,7 +295,6 @@ pub fn build_state(
         .sign(account_private_key)
         .unpack(|_| {});
         let mut state_block = state.block(unverified_block.header());
-
         state_block.world.parameters.transaction = TransactionParameters::with_max_signatures(
             NonZeroU64::MAX,
             NonZeroU64::MAX,
@@ -326,7 +307,6 @@ pub fn build_state(
         state_block.world.parameters.executor.memory =
             NonZeroU64::new(iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES)
                 .expect("ABI heap window is non-zero");
-
         let mut state_transaction = state_block.transaction();
         let path_to_executor =
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../defaults/executor.to");
@@ -337,7 +317,6 @@ pub fn build_state(
             // Ignore upgrade failure and keep the default executor when bytecode is invalid
             let _ = Upgrade::new(executor).execute(account_id, &mut state_transaction);
         }
-
         state_transaction.apply();
         let committed_block = unverified_block
             .validate_and_record_transactions(&mut state_block)
@@ -346,15 +325,12 @@ pub fn build_state(
             .unpack(|_| {});
         let _ = state_block.apply_without_execution(&committed_block, Vec::new());
         state_block.commit().unwrap();
-
         let block_arc = Arc::new(committed_block.into());
         kura.store_block(block_arc)
             .expect("store block in bench setup");
     }
-
     state
 }
-
 /// Bootstrap synthetic benchmark domains and their active SNS leases in state.
 pub fn seed_benchmark_domains(state: &mut State, domains: &[DomainId], owner_id: &AccountId) {
     let address =
@@ -378,7 +354,6 @@ pub fn seed_benchmark_domains(state: &mut State, domains: &[DomainId], owner_id:
             norito::codec::Encode::encode(&record),
         );
     }
-
     let current_header = state
         .view()
         .latest_block()
@@ -398,11 +373,9 @@ pub fn seed_benchmark_domains(state: &mut State, domains: &[DomainId], owner_id:
         .commit()
         .expect("commit synthetic benchmark domains");
 }
-
 fn construct_domain_id(i: usize) -> DomainId {
     DomainId::try_new(format!("non_inlinable_domain_name_{i}"), "universal").unwrap()
 }
-
 fn generate_account_id(seed: u128) -> AccountId {
     let mut seed_material = b"iroha-core-block-bench-account".to_vec();
     seed_material.extend_from_slice(&seed.to_le_bytes());
@@ -410,31 +383,25 @@ fn generate_account_id(seed: u128) -> AccountId {
         .expect("derive block benchmark account key");
     AccountId::new(keypair.public_key().clone())
 }
-
 #[cfg(test)]
 mod tests {
     #[allow(unused_imports)]
     use iroha_data_model::peer::PeerId;
     #[allow(unused_imports)]
     use tokio::runtime::Runtime;
-
     #[allow(unused_imports)]
     use super::*;
-
     #[test]
     fn build_state_succeeds_without_executor_bytecode() {
         let rt = Runtime::new().unwrap();
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
-
         // Should not panic even if executor bytecode is missing or invalid
         let state = build_state(rt.handle(), &account_id, keypair.private_key());
-
         let view = state.view();
         assert_eq!(view.height(), 1);
         assert!(view.latest_block().is_some());
     }
-
     #[test]
     fn seed_benchmark_domains_makes_generated_children_registrable() {
         let rt = Runtime::new().unwrap();
@@ -442,9 +409,7 @@ mod tests {
         let account_id = AccountId::new(keypair.public_key().clone());
         let mut state = build_state(rt.handle(), &account_id, keypair.private_key());
         let (domain_ids, account_ids, asset_definition_ids) = generate_ids(1, 1, 1);
-
         seed_benchmark_domains(&mut state, &domain_ids, &account_id);
-
         let (peer_public_key, peer_private_key) =
             KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
         let topology = Topology::new(vec![PeerId::new(peer_public_key)]);
@@ -461,11 +426,9 @@ mod tests {
             &topology,
             &peer_private_key,
         );
-
         assert_eq!(block.as_ref().errors().count(), 0);
     }
 }
-
 fn construct_asset_definition_id(i: usize, domain_id: DomainId) -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         domain_id,
@@ -474,7 +437,6 @@ fn construct_asset_definition_id(i: usize, domain_id: DomainId) -> AssetDefiniti
             .unwrap(),
     )
 }
-
 pub fn generate_ids(
     domains: usize,
     accounts_per_domain: usize,
@@ -483,7 +445,6 @@ pub fn generate_ids(
     let mut domain_ids = Vec::new();
     let mut account_ids = Vec::new();
     let mut asset_definition_ids = Vec::new();
-
     for i in 0..domains {
         let domain_id = construct_domain_id(i);
         domain_ids.push(domain_id.clone());
@@ -497,6 +458,5 @@ pub fn generate_ids(
             asset_definition_ids.push(asset_definition_id);
         }
     }
-
     (domain_ids, account_ids, asset_definition_ids)
 }

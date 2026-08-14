@@ -4,19 +4,14 @@
 //! `daf14859b5aa3f8d75c42966ba7de83e6eb59997` (Unlicense).  The unusual
 //! word-major eight-block output layout is intentional and matches the Falcon
 //! C implementation and its AVX2 path byte for byte.
-
 use zeroize::Zeroize;
-
 use super::PRNG;
-
 pub(in crate::privacy_engines::bootle_lantern::falcon512) struct ChaCha20Prng {
     buffer: [u8; 512],
     state: [u8; 56],
     pointer: usize,
 }
-
 const CONSTANT_WORDS: [u32; 4] = [0x6170_7865, 0x3320_646e, 0x7962_2d32, 0x6b20_6574];
-
 impl ChaCha20Prng {
     fn refill(&mut self) {
         let mut counter = zeroize::Zeroizing::new(u64::from_le_bytes(
@@ -74,19 +69,16 @@ impl ChaCha20Prng {
         self.pointer = 0;
     }
 }
-
 impl core::fmt::Debug for ChaCha20Prng {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("FalconChaCha20Prng(<redacted>)")
     }
 }
-
 impl Drop for ChaCha20Prng {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 impl PRNG for ChaCha20Prng {
     fn new(seed: &[u8]) -> Self {
         assert_eq!(seed.len(), 56, "Falcon ChaCha20 seed is exactly 56 bytes");
@@ -99,7 +91,6 @@ impl PRNG for ChaCha20Prng {
         output.refill();
         output
     }
-
     fn next_u8(&mut self) -> u8 {
         if self.pointer == self.buffer.len() {
             self.refill();
@@ -108,7 +99,6 @@ impl PRNG for ChaCha20Prng {
         self.pointer += 1;
         output
     }
-
     fn next_u16(&mut self) -> u16 {
         // Preserve the pinned upstream implementation's (unused by the
         // signer) one-bit shift exactly for differential reproducibility.
@@ -116,7 +106,6 @@ impl PRNG for ChaCha20Prng {
         let high = self.next_u8();
         u16::from(low) | (u16::from(high) << 1)
     }
-
     fn next_u64(&mut self) -> u64 {
         if self.pointer >= self.buffer.len() - 9 {
             self.refill();
@@ -129,14 +118,12 @@ impl PRNG for ChaCha20Prng {
                 .expect("fixed ChaCha output word"),
         )
     }
-
     fn zeroize(&mut self) {
         self.buffer.zeroize();
         self.state.zeroize();
         self.pointer.zeroize();
     }
 }
-
 fn quarter_round(state: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize) {
     state[a] = state[a].wrapping_add(state[b]);
     state[d] ^= state[a];
@@ -151,14 +138,11 @@ fn quarter_round(state: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize) 
     state[b] ^= state[c];
     state[b] = state[b].rotate_left(7);
 }
-
 #[cfg(test)]
 mod tests {
     use sha2::{Digest as _, Sha256};
     use zeroize::Zeroizing;
-
     use super::*;
-
     #[test]
     fn pinned_falcon_chacha20_stream_kat() {
         let seed: [u8; 56] = hex::decode(
@@ -183,7 +167,6 @@ mod tests {
                 .expect("hex")
         );
     }
-
     #[test]
     fn pinned_falcon_chacha20_two_refill_digest_and_tail_boundary() {
         let seed: [u8; 56] = hex::decode(
@@ -202,7 +185,6 @@ mod tests {
             hex::decode("edc508303c516de4cee4dcd329ce19af316fae7ab396e0bf17932322ece5d81a")
                 .expect("hex")
         );
-
         let mut at_502 = ChaCha20Prng::new(&seed);
         let mut bytewise_502 = ChaCha20Prng::new(&seed);
         for _ in 0..502 {
@@ -215,7 +197,6 @@ mod tests {
             *byte = bytewise_502.next_u8();
         }
         assert_eq!(mixed, u64::from_le_bytes(expected));
-
         let mut at_503 = ChaCha20Prng::new(&seed);
         let mut fresh_refill = ChaCha20Prng::new(&seed);
         for _ in 0..503 {

@@ -1,7 +1,6 @@
 //! Benchmarks for IVM memory commit performance and memory operations.
 use criterion::Criterion;
 use ivm::Memory;
-
 fn dirty_memory() -> Memory {
     let mut mem = Memory::new(0);
     for i in 0..1024u64 {
@@ -10,7 +9,6 @@ fn dirty_memory() -> Memory {
     }
     mem
 }
-
 fn dirty_memory_large() -> Memory {
     let mut mem = Memory::new(0);
     // Expand the heap to its maximum size so large writes do not violate
@@ -23,7 +21,6 @@ fn dirty_memory_large() -> Memory {
     }
     mem
 }
-
 fn bench_memory_commit(c: &mut Criterion) {
     let base = dirty_memory();
     c.bench_function("memory_commit", |b| {
@@ -34,7 +31,6 @@ fn bench_memory_commit(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_memory_commit_large(c: &mut Criterion) {
     let base = dirty_memory_large();
     c.bench_function("memory_commit_large", |b| {
@@ -45,7 +41,6 @@ fn bench_memory_commit_large(c: &mut Criterion) {
         })
     });
 }
-
 /// Entry point for the benchmark binary.
 fn main() {
     let mut c = Criterion::default().configure_from_args();

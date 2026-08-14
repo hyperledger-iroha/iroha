@@ -1,5 +1,4 @@
 //! Rejection test for the removed in-memory `Map` surface.
-
 #[test]
 fn in_memory_map_contains_is_rejected() {
     let src = r#"

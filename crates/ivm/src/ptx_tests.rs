@@ -1,7 +1,6 @@
 #[cfg(all(test, feature = "cuda"))]
 mod tests {
     use std::{fs, path::Path};
-
     #[test]
     fn cuda_generated_ptx_files_exist() {
         let out_dir = env!("OUT_DIR");
@@ -18,7 +17,6 @@ mod tests {
             "signature.ptx",
             "vector.ptx",
         ];
-
         for file in files {
             let path = Path::new(out_dir).join(file);
             let bytes = fs::read(&path).unwrap_or_else(|err| {

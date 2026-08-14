@@ -1,10 +1,8 @@
 //! Tests for adaptive enum-shaped rows AoS/columnar Norito encoding.
-
 use norito::columnar::{
     ADAPTIVE_ENUM_TAG_AOS, ADAPTIVE_ENUM_TAG_NCB, EnumBorrow, RowEnumOwned,
     decode_rows_u64_enum_bool_adaptive, encode_rows_u64_enum_bool_adaptive, should_use_columnar,
 };
-
 #[test]
 fn adaptive_enum_small_roundtrip() {
     // Build a small dataset mixing Name and Code variants
@@ -46,7 +44,6 @@ fn adaptive_enum_small_roundtrip() {
     let decoded = decode_rows_u64_enum_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows_owned);
 }
-
 #[test]
 fn adaptive_enum_large_prefers_columnar() {
     let mut rows_borrowed: Vec<(u64, EnumBorrow<'_>, bool)> = Vec::new();

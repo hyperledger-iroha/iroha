@@ -1,14 +1,11 @@
 //! Round-trip tests for DA ingest/manifest Norito types.
-
 use std::{convert::TryFrom, str::FromStr};
-
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId, account::AccountId, block::BlockHeader, da::prelude::*, nexus::LaneId,
     sorafs::pin_registry::StorageClass,
 };
 use norito::{core::NoritoDeserialize, from_bytes};
-
 fn sample_digest(seed: u8) -> BlobDigest {
     let mut bytes = [0u8; 32];
     for (idx, byte) in bytes.iter_mut().enumerate() {
@@ -17,7 +14,6 @@ fn sample_digest(seed: u8) -> BlobDigest {
     }
     BlobDigest::new(bytes)
 }
-
 fn sample_signature(seed: u8) -> Signature {
     let mut payload = [0u8; 64];
     for (idx, byte) in payload.iter_mut().enumerate() {
@@ -26,23 +22,19 @@ fn sample_signature(seed: u8) -> Signature {
     }
     Signature::try_from_bytes(&payload).expect("DA ingest fixture signature must pass admission")
 }
-
 fn sample_public_key() -> PublicKey {
     PublicKey::from_str("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03")
         .expect("ed25519 test key")
 }
-
 fn sample_ticket(seed: u8) -> StorageTicketId {
     let digest = sample_digest(seed);
     StorageTicketId::new(*digest.as_bytes())
 }
-
 fn sample_network_id(seed: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([seed; 32]),
     ))
 }
-
 fn sample_pdp_commitment_bytes() -> Vec<u8> {
     (0..96)
         .map(|idx| {
@@ -51,7 +43,6 @@ fn sample_pdp_commitment_bytes() -> Vec<u8> {
         })
         .collect()
 }
-
 #[test]
 fn da_ingest_request_norito_roundtrip() {
     let request = DaIngestRequest {
@@ -102,13 +93,11 @@ fn da_ingest_request_norito_roundtrip() {
             signature: sample_signature(0x42),
         }],
     };
-
     let buf = norito::to_bytes(&request).expect("serialize ingest request");
     let archived = from_bytes::<DaIngestRequest>(&buf).expect("decode request");
     let decoded = DaIngestRequest::deserialize(archived);
     assert_eq!(decoded, request);
 }
-
 #[test]
 fn da_ingest_signature_binds_complete_request_intent() {
     let key_pair = KeyPair::try_from_seed(vec![0x19; 32], Algorithm::Ed25519)
@@ -161,39 +150,31 @@ fn da_ingest_signature_binds_complete_request_intent() {
     let request = intent
         .try_sign(&key_pair)
         .expect("sign complete DA request intent");
-
     assert_eq!(request.signing_digest(), expected_digest);
     request
         .verify_signatures()
         .expect("unchanged request must verify");
-
     let mut changed_profile = request.clone();
     changed_profile.erasure_profile.parity_shards += 1;
     assert!(changed_profile.verify_signatures().is_err());
-
     let mut changed_lane = request.clone();
     changed_lane.lane_id = LaneId::new(3);
     assert!(changed_lane.verify_signatures().is_err());
-
     let mut replayed_under_new_nonce = request.clone();
     replayed_under_new_nonce.sequence += 1;
     assert!(
         replayed_under_new_nonce.verify_signatures().is_err(),
         "one signed DA authorization cannot be replayed under another sequence"
     );
-
     let mut changed_network = request.clone();
     changed_network.network_id = sample_network_id(0xB6);
     assert!(changed_network.verify_signatures().is_err());
-
     let mut changed_payload = request.clone();
     changed_payload.payload[0] ^= 0xFF;
     assert!(changed_payload.verify_signatures().is_err());
-
     let mut changed_payload_charge = request.clone();
     changed_payload_charge.total_size += 1;
     assert!(changed_payload_charge.verify_signatures().is_err());
-
     let mut changed_metadata = request.clone();
     changed_metadata.metadata.items.push(MetadataEntry::new(
         "tampered",
@@ -201,14 +182,12 @@ fn da_ingest_signature_binds_complete_request_intent() {
         MetadataVisibility::Public,
     ));
     assert!(changed_metadata.verify_signatures().is_err());
-
     let other = KeyPair::try_from_seed(vec![0x20; 32], Algorithm::Ed25519)
         .expect("derive alternate DA submitter");
     let mut changed_signer = request;
     changed_signer.signatures[0].signer = other.public_key().clone();
     assert!(changed_signer.verify_signatures().is_err());
 }
-
 #[test]
 fn da_manifest_roundtrip() {
     let manifest = DaManifestV1 {
@@ -276,13 +255,11 @@ fn da_manifest_roundtrip() {
         },
         issued_at_unix: 1_707_000_000,
     };
-
     let buf = norito::to_bytes(&manifest).expect("serialize manifest");
     let archived = from_bytes::<DaManifestV1>(&buf).expect("decode manifest");
     let decoded = DaManifestV1::deserialize(archived);
     assert_eq!(decoded, manifest);
 }
-
 #[test]
 fn da_ingest_receipt_roundtrip() {
     let receipt = DaIngestReceipt {
@@ -303,7 +280,6 @@ fn da_ingest_receipt_roundtrip() {
         rent_quote: DaRentQuote::default(),
         operator_signature: sample_signature(0x99),
     };
-
     let buf = norito::to_bytes(&receipt).expect("serialize receipt");
     let archived = from_bytes::<DaIngestReceipt>(&buf).expect("decode receipt");
     let decoded = DaIngestReceipt::deserialize(archived);

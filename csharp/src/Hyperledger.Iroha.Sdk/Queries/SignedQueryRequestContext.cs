@@ -9,21 +9,6 @@ internal static class SignedQueryRequestContext
     internal const ulong DefaultTimeToLiveMilliseconds = 100_000;
     internal const int NonceLength = 32;
 
-    internal static byte[] DecodeNetworkId(string networkId, string parameterName)
-    {
-        try
-        {
-            return NetworkId.Parse(networkId).ToBytes();
-        }
-        catch (Exception error) when (error is ArgumentNullException or FormatException)
-        {
-            throw new ArgumentException(
-                "Network id must be a canonical checksummed Norito Hash literal.",
-                parameterName,
-                error);
-        }
-    }
-
     internal static (ulong CreationTimeMilliseconds, byte[] Nonce) CreateFresh()
     {
         var unixTimeMilliseconds = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();

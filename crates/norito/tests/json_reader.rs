@@ -1,8 +1,6 @@
 //! Tests for the TapeWalker-based JSON Reader/Token API.
 #![cfg(feature = "json")]
-
 use norito::json::{Reader, Token};
-
 fn collect_tokens(input: &str) -> Vec<Token<'_>> {
     let mut rdr = Reader::new(input);
     let mut toks = Vec::new();
@@ -11,7 +9,6 @@ fn collect_tokens(input: &str) -> Vec<Token<'_>> {
     }
     toks
 }
-
 #[test]
 fn reader_tokens_basic() {
     let s = r#"{"a":1,"b":"x","c":null,"d":true,"e":[1,2]}"#;
@@ -52,7 +49,6 @@ fn reader_tokens_basic() {
         }
     }
 }
-
 #[test]
 fn reader_tokens_vs_serde_count() {
     // Generate an array of objects with a large string payload and a small number field.
@@ -77,7 +73,6 @@ fn reader_tokens_vs_serde_count() {
         s.push(']');
         s
     }
-
     let input = make_blob(8, 64);
     let norito_count = {
         let mut rdr = Reader::new(&input);
@@ -87,7 +82,6 @@ fn reader_tokens_vs_serde_count() {
         }
         c
     };
-
     let serde_count = {
         let v: norito::json::Value = norito::json::from_json(&input).expect("norito decode");
         fn walk(v: &norito::json::Value, c: &mut usize) {
@@ -115,14 +109,12 @@ fn reader_tokens_vs_serde_count() {
         walk(&v, &mut c);
         c
     };
-
     // Counts need not be equal (different tokenization granularity), but both must be > 0
     assert!(
         norito_count > 0 && serde_count > 0,
         "zero tokens: norito={norito_count}, serde={serde_count}"
     );
 }
-
 #[test]
 fn reader_tokens_with_ws() {
     // Whitespace around colon and commas should not affect tokenization order.
@@ -153,7 +145,6 @@ fn reader_tokens_with_ws() {
         }
     }
 }
-
 #[test]
 fn unescape_json_string_works() {
     let raw = r#"a\n\t\"z:\u0041\uD834\uDD1E"#; // A + surrogate pair
@@ -161,7 +152,6 @@ fn unescape_json_string_works() {
     let expected = format!("a\n\t\"z:{}{}", 'A', char::from_u32(0x1D11E).unwrap());
     assert_eq!(s, expected);
 }
-
 #[test]
 fn reader_value_with_surrogate_pair_unescapes() {
     // The Reader yields a borrowed slice; verify unescape to owned scalar.
@@ -181,7 +171,6 @@ fn reader_value_with_surrogate_pair_unescapes() {
     let owned = norito::json::unescape_json_string(val).expect("unescape");
     assert_eq!(owned, char::from_u32(0x1D11E).unwrap().to_string());
 }
-
 #[test]
 fn reader_handles_commas_and_colons() {
     // Ensure Reader progresses across punctuation even if tape index desyncs.

@@ -2,9 +2,7 @@
 //! DA-4 regression: Torii must enforce the configured retention profile even
 //! when callers submit stale values. The manifest fetched from Torii should
 //! always expose the canonical policy, not the caller intent.
-
 use std::{collections::BTreeMap, path::Path};
-
 use eyre::Result;
 use hex::encode as hex_encode;
 use integration_tests::sandbox::start_network_async_or_skip;
@@ -32,14 +30,11 @@ use norito::{
 use reqwest::{Client, StatusCode};
 use tempfile::tempdir;
 use toml::value::{Table, Value as TomlValue};
-
 const TEST_NAME: &str = "da_replication_policy_is_enforced";
-
 #[tokio::test]
 async fn da_replication_policy_is_enforced() -> Result<()> {
     let manifest_dir = tempdir()?;
     let replay_dir = tempdir()?;
-
     let default_policy = PolicyNumbers {
         hot_retention_secs: 900,
         cold_retention_secs: 3600,
@@ -54,7 +49,6 @@ async fn da_replication_policy_is_enforced() -> Result<()> {
         storage_class: "hot",
         governance_tag: "da.test.taikai",
     };
-
     let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
     let builder = NetworkBuilder::new()
         .with_peers(4)
@@ -73,7 +67,6 @@ async fn da_replication_policy_is_enforced() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let caller_policy = RetentionPolicy {
         hot_retention_secs: 60,
         cold_retention_secs: 120,
@@ -91,15 +84,12 @@ async fn da_replication_policy_is_enforced() -> Result<()> {
     assert_override_applied(&outcome.manifest, &override_policy);
     assert_rent_quote_consistency(&outcome);
     assert_rent_quote_matches_policy(&outcome, &enforced_policy);
-
     network.shutdown().await;
     Ok(())
 }
-
 fn build_da_request(network: &Network, retention_policy: RetentionPolicy) -> DaIngestRequest {
     let payload = b"da retention regression vector payload".to_vec();
     let client_blob_id = BlobDigest::from_hash(blake3::hash(&payload));
-
     DaIngestRequestIntentV1 {
         network_id: network.client().network_id,
         owner: network.client().account.clone(),
@@ -122,13 +112,11 @@ fn build_da_request(network: &Network, retention_policy: RetentionPolicy) -> DaI
     .try_sign(&ALICE_KEYPAIR)
     .expect("sign canonical DA ingest request")
 }
-
 struct ManifestFetchOutcome {
     receipt: DaIngestReceipt,
     manifest: DaManifestV1,
     response: Value,
 }
-
 async fn ingest_and_fetch_manifest(
     network: &Network,
     http: &Client,
@@ -139,7 +127,6 @@ async fn ingest_and_fetch_manifest(
         json::to_value(&ingest_request).expect("serialize DA ingest request to JSON");
     let request_json =
         json::to_string(&request_value).expect("render DA ingest request JSON literal");
-
     let ingest_url = network
         .client()
         .torii_url
@@ -157,7 +144,6 @@ async fn ingest_and_fetch_manifest(
         "DA ingest must succeed, got {}",
         response.status()
     );
-
     let response_value: Value = json::from_slice(&response.bytes().await?)?;
     let receipt_value = response_value
         .get("receipt")
@@ -165,7 +151,6 @@ async fn ingest_and_fetch_manifest(
         .expect("DA ingest response must include a receipt");
     let receipt: DaIngestReceipt = json::from_value(receipt_value)?;
     let manifest_ticket_hex = hex_encode(receipt.storage_ticket.as_bytes());
-
     let manifest_url = network
         .client()
         .torii_url
@@ -194,7 +179,6 @@ async fn ingest_and_fetch_manifest(
         response: manifest_value,
     })
 }
-
 fn assert_override_applied(manifest: &DaManifestV1, override_policy: &PolicyNumbers) {
     let enforced = retention_from_numbers(override_policy);
     assert_eq!(
@@ -218,7 +202,6 @@ fn assert_override_applied(manifest: &DaManifestV1, override_policy: &PolicyNumb
         "governance tag must match the configured override"
     );
 }
-
 fn configure_da_ingest_layer<'a>(
     layer: &'a mut iroha_config_base::toml::Writer<'a>,
     manifest_dir: &Path,
@@ -259,7 +242,6 @@ fn configure_da_ingest_layer<'a>(
             taikai_availability_overrides(),
         );
 }
-
 fn retention_table(policy: &PolicyNumbers) -> TomlValue {
     let mut table = Table::new();
     table.insert(
@@ -288,14 +270,12 @@ fn retention_table(policy: &PolicyNumbers) -> TomlValue {
     );
     TomlValue::Table(table)
 }
-
 fn override_entry(class_label: &str, policy: &PolicyNumbers) -> TomlValue {
     let mut entry = Table::new();
     entry.insert("class".into(), TomlValue::String(class_label.into()));
     entry.insert("retention".into(), retention_table(policy));
     TomlValue::Table(entry)
 }
-
 fn taikai_availability_overrides() -> TomlValue {
     let entries = iroha_config::parameters::defaults::torii::taikai_availability_overrides()
         .into_iter()
@@ -318,7 +298,6 @@ fn taikai_availability_overrides() -> TomlValue {
         .collect();
     TomlValue::Array(entries)
 }
-
 fn retention_table_from_policy(policy: &RetentionPolicy) -> TomlValue {
     let mut table = Table::new();
     table.insert(
@@ -354,7 +333,6 @@ fn retention_table_from_policy(policy: &RetentionPolicy) -> TomlValue {
     );
     TomlValue::Table(table)
 }
-
 fn retention_from_numbers(policy: &PolicyNumbers) -> RetentionPolicy {
     RetentionPolicy {
         hot_retention_secs: policy.hot_retention_secs,
@@ -368,7 +346,6 @@ fn retention_from_numbers(policy: &PolicyNumbers) -> RetentionPolicy {
         governance_tag: GovernanceTag::new(policy.governance_tag),
     }
 }
-
 #[derive(Clone, Copy)]
 struct PolicyNumbers {
     hot_retention_secs: u64,
@@ -377,7 +354,6 @@ struct PolicyNumbers {
     storage_class: &'static str,
     governance_tag: &'static str,
 }
-
 #[test]
 fn retention_from_numbers_maps_fields() {
     let input = PolicyNumbers {
@@ -394,7 +370,6 @@ fn retention_from_numbers_maps_fields() {
     assert_eq!(policy.storage_class, StorageClass::Warm);
     assert_eq!(policy.governance_tag.0, "demo");
 }
-
 #[test]
 fn caller_policy_mismatch_is_detected() {
     let baseline = retention_from_numbers(&PolicyNumbers {
@@ -418,7 +393,6 @@ fn caller_policy_mismatch_is_detected() {
     assert!(mismatch);
     assert_eq!(enforced, &baseline);
 }
-
 #[test]
 fn policy_override_matches_expected_defaults() {
     let policy = DaReplicationPolicy::default();
@@ -439,7 +413,6 @@ fn policy_override_matches_expected_defaults() {
     assert_eq!(enforced.required_replicas, 5);
     assert_eq!(enforced.storage_class, StorageClass::Hot);
     assert_eq!(enforced.governance_tag.0, "da.taikai.live");
-
     let default_template = policy
         .retention_for(BlobClass::NexusLaneSidecar, None)
         .clone();
@@ -451,7 +424,6 @@ fn policy_override_matches_expected_defaults() {
     );
     assert_eq!(default_result, &default_template);
 }
-
 #[test]
 fn manifest_encoding_is_stable_after_enforcement() {
     let policy = DaReplicationPolicy::default();
@@ -472,7 +444,6 @@ fn manifest_encoding_is_stable_after_enforcement() {
         "manifest encoding must remain stable once the policy override is applied"
     );
 }
-
 fn manifest_bytes_after_enforcement(
     policy: &DaReplicationPolicy,
     class: BlobClass,
@@ -482,7 +453,6 @@ fn manifest_bytes_after_enforcement(
     let manifest = sample_manifest(enforced.clone(), class);
     to_bytes(&manifest).expect("encode manifest")
 }
-
 fn sample_manifest(retention_policy: RetentionPolicy, blob_class: BlobClass) -> DaManifestV1 {
     DaManifestV1 {
         version: DaManifestV1::VERSION,
@@ -516,14 +486,12 @@ fn sample_manifest(retention_policy: RetentionPolicy, blob_class: BlobClass) -> 
         issued_at_unix: 1_700_000_000,
     }
 }
-
 fn assert_rent_quote_consistency(outcome: &ManifestFetchOutcome) {
     assert_eq!(
         outcome.receipt.rent_quote, outcome.manifest.rent_quote,
         "rent quote must match between the ingestion receipt and canonical manifest"
     );
 }
-
 fn assert_rent_quote_matches_policy(
     outcome: &ManifestFetchOutcome,
     enforced_retention: &RetentionPolicy,
@@ -534,7 +502,6 @@ fn assert_rent_quote_matches_policy(
         "rent quote must be derived from the configured rent policy"
     );
 }
-
 fn expected_rent_quote(total_size: u64, retention: &RetentionPolicy) -> DaRentQuote {
     let policy = DaRentPolicyV1::default();
     let (rent_gib, rent_months) = rent_usage(total_size, retention);
@@ -542,7 +509,6 @@ fn expected_rent_quote(total_size: u64, retention: &RetentionPolicy) -> DaRentQu
         .quote(rent_gib, rent_months)
         .expect("default rent policy should quote incoming submissions")
 }
-
 fn rent_usage(total_size: u64, retention: &RetentionPolicy) -> (u64, u32) {
     let adjusted_size = total_size.max(1);
     let gib = ceil_div_u64(adjusted_size, BYTES_PER_GIB).max(1);
@@ -554,13 +520,11 @@ fn rent_usage(total_size: u64, retention: &RetentionPolicy) -> (u64, u32) {
     let months_u32 = u32::try_from(months).unwrap_or(u32::MAX);
     (gib, months_u32)
 }
-
 fn ceil_div_u64(value: u64, divisor: u64) -> u64 {
     if divisor == 0 || value == 0 {
         return 0;
     }
     value.div_ceil(divisor)
 }
-
 const BYTES_PER_GIB: u64 = 1 << 30;
 const SECS_PER_MONTH: u64 = 30 * 24 * 60 * 60;

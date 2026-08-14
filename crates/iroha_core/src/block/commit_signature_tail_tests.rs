@@ -1,7 +1,6 @@
 // Commit-signature quorum and restoration tests.
 //
 // Included by `block::commit_signature_tally_tests` to preserve exact libtest names.
-
 #[cfg(feature = "bls")]
 #[test]
 fn commit_with_signers_accepts_quorum_without_proxy_tail_signature() {
@@ -15,7 +14,6 @@ fn commit_with_signers_accepts_quorum_without_proxy_tail_signature() {
         PeerId::new(kp_proxy.public_key().clone()),
         PeerId::new(kp_set_b.public_key().clone()),
     ]);
-
     // Sign with leader + validator but omit proxy-tail signature to mirror a QC with trimmed
     // block signatures.
     let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -40,7 +38,6 @@ fn commit_with_signers_accepts_quorum_without_proxy_tail_signature() {
         ValidatorIndex::try_from(1).expect("validator index parses"),
         ValidatorIndex::try_from(2).expect("validator index parses"),
     ]);
-
     let result = block
         .commit_with_signers(&topology, &signers, false)
         .unpack(|_| {});
@@ -49,7 +46,6 @@ fn commit_with_signers_accepts_quorum_without_proxy_tail_signature() {
         "QC quorum should commit even when block signatures are trimmed"
     );
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn commit_with_signers_allows_block_signer_not_in_qc() {
@@ -63,7 +59,6 @@ fn commit_with_signers_allows_block_signer_not_in_qc() {
         PeerId::new(kp_extra_validator.public_key().clone()),
         PeerId::new(kp_proxy.public_key().clone()),
     ]);
-
     // QC captured votes from leader + validator + proxy; block also carries a signature
     // from a validator that is not part of the QC signer set.
     let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -92,7 +87,6 @@ fn commit_with_signers_allows_block_signer_not_in_qc() {
         ValidatorIndex::try_from(1).expect("validator index parses"),
         ValidatorIndex::try_from(3).expect("validator index parses"),
     ]);
-
     let result = block
         .commit_with_signers(&topology, &signers, false)
         .unpack(|_| {});
@@ -101,7 +95,6 @@ fn commit_with_signers_allows_block_signer_not_in_qc() {
         "extra commit-role signatures outside the QC set should not block commit"
     );
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn replace_signatures_restores_previous_on_failure() {
@@ -111,7 +104,6 @@ fn replace_signatures_restores_previous_on_failure() {
         PeerId::new(kp_leader.public_key().clone()),
         PeerId::new(kp_proxy.public_key().clone()),
     ]);
-
     let mut vb = ValidBlock::new_dummy(kp_leader.private_key());
     vb.sign(&kp_proxy, &topology);
     let original: BTreeSet<_> = vb.as_ref().signatures().cloned().collect();
@@ -121,7 +113,6 @@ fn replace_signatures_restores_previous_on_failure() {
         1,
         checked_block_signature(kp_proxy.private_key(), hash),
     ));
-
     let result = vb.replace_signatures(invalid, &topology).unpack(|_| {});
     assert!(matches!(
         result,

@@ -4,7 +4,6 @@ fn saturated_delivered_panel_notifications(
 ) -> SaturatedPanelNotificationFixture {
     saturated_delivered_panel_notifications_with_probe(temp, checkpoint_name, None)
 }
-
 fn saturated_delivered_panel_notifications_with_probe(
     temp: &TempDir,
     checkpoint_name: &str,
@@ -39,7 +38,6 @@ fn saturated_delivered_panel_notifications_with_probe(
     )
     .expect("orchestrator");
     orchestrator.reconcile().expect("queue assignments");
-
     let sink = MockPanelNotificationSink::default();
     let assignments = orchestrator
         .claim_panel_notifications([0xA1; 32], 1_000, 3)
@@ -66,7 +64,6 @@ fn saturated_delivered_panel_notifications_with_probe(
                 .all(|entry| entry.state == StoredPanelNotificationStateV1::Delivered)
         );
     }
-
     SaturatedPanelNotificationFixture {
         bounds,
         governance,
@@ -77,7 +74,6 @@ fn saturated_delivered_panel_notifications_with_probe(
         orchestrator,
     }
 }
-
 fn audited_two_generation_panel_notification_archive(
     temp: &TempDir,
     checkpoint_name: &str,
@@ -126,7 +122,6 @@ fn audited_two_generation_panel_notification_archive(
     );
     (fixture, first, second)
 }
-
 #[test]
 fn panel_notification_capacity_recovers_only_after_exact_signed_archive_readback() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -146,7 +141,6 @@ fn panel_notification_capacity_recovers_only_after_exact_signed_archive_readback
             limit: 3
         })
     ));
-
     let before = orchestrator.state.lock().expect("state").clone();
     archive.fail_next_read(1);
     let first_attempt = orchestrator.compact_panel_notification_receipts(2);
@@ -185,7 +179,6 @@ fn panel_notification_capacity_recovers_only_after_exact_signed_archive_readback
             .len(),
         2
     );
-
     let head = orchestrator
         .compact_panel_notification_receipts(2)
         .expect("retry exact archived batch")
@@ -227,7 +220,6 @@ fn panel_notification_capacity_recovers_only_after_exact_signed_archive_readback
         Some(head)
     );
 }
-
 #[test]
 fn panel_notification_archive_publishes_audits_and_rotates_signers() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -256,7 +248,6 @@ fn panel_notification_archive_publishes_audits_and_rotates_signers() {
         .expect("claim assignments");
     assert_eq!(claims.len(), 3);
     claims.sort_by_key(|claim| claim.notification.notification_id);
-
     let delivery_sink = MockPanelNotificationSink::default();
     for claim in &claims {
         let receipt = delivery_sink.deliver(claim, 1_001);
@@ -269,7 +260,6 @@ fn panel_notification_archive_publishes_audits_and_rotates_signers() {
             )
             .expect("terminal delivery receipt");
     }
-
     let first = orchestrator
         .compact_panel_notification_receipts(2)
         .expect("first archive compaction")
@@ -295,7 +285,6 @@ fn panel_notification_archive_publishes_audits_and_rotates_signers() {
             ) if *notification_id != [0; 32] && *source_record_digest != [0; 32]
         )
     }));
-
     let unpublished = orchestrator
         .durable_health()
         .expect("unpublished archive health");
@@ -328,7 +317,6 @@ fn panel_notification_archive_publishes_audits_and_rotates_signers() {
             .expect("fresh first archive health")
             .archive_is_fresh()
     );
-
     let previous_epoch = orchestrator
         .panel_notification_archive_signer_epochs()
         .expect("bootstrap signer epoch")
@@ -337,7 +325,6 @@ fn panel_notification_archive_publishes_audits_and_rotates_signers() {
         .expect("bootstrap epoch");
     let network_id = orchestrator.network_id;
     drop(orchestrator);
-
     let predecessor_key = SigningKey::from_bytes(&PANEL_NOTIFICATION_ARCHIVE_SIGNING_SEED);
     let rotated_key = SigningKey::from_bytes(&PANEL_NOTIFICATION_ARCHIVE_ROTATED_SIGNING_SEED);
     let mut proposed_epoch = ModerationPanelNotificationArchiveSignerEpochV1 {
@@ -366,7 +353,6 @@ fn panel_notification_archive_publishes_audits_and_rotates_signers() {
     let new_key_possession_signature = rotated_key.sign(&possession_message).to_bytes();
     proposed_epoch.predecessor_authorization_signature = Some(predecessor_authorization_signature);
     proposed_epoch.new_key_possession_signature = Some(new_key_possession_signature);
-
     bounds.expected_panel_notification_archive_qualification =
         PANEL_NOTIFICATION_ARCHIVE_ROTATED_QUALIFICATION;
     bounds.panel_notification_archive_public_key = rotated_key.verifying_key().to_bytes();
@@ -379,7 +365,6 @@ fn panel_notification_archive_publishes_audits_and_rotates_signers() {
         .provider
         .set_qualification(PANEL_NOTIFICATION_ARCHIVE_ROTATED_QUALIFICATION);
     archive.rotate_signing_key(PANEL_NOTIFICATION_ARCHIVE_ROTATED_SIGNING_SEED);
-
     let mut substituted = bounds.clone();
     substituted
         .panel_notification_archive_predecessor_authorization_signature
@@ -389,7 +374,6 @@ fn panel_notification_archive_publishes_audits_and_rotates_signers() {
         ModerationOrchestratorV1::open(substituted, runtime_deps()),
         Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid)
     ));
-
     let rotated =
         ModerationOrchestratorV1::open(bounds.clone(), runtime_deps()).expect("rotated signer");
     let epochs = rotated
@@ -409,7 +393,6 @@ fn panel_notification_archive_publishes_audits_and_rotates_signers() {
         epochs[1].new_key_possession_signature,
         proposed_epoch.new_key_possession_signature
     );
-
     let second = rotated
         .compact_panel_notification_receipts(2)
         .expect("post-rotation archive compaction")
@@ -439,7 +422,6 @@ fn panel_notification_archive_publishes_audits_and_rotates_signers() {
             .expect("fresh rotated archive health")
             .archive_is_fresh()
     );
-
     let mut corrupt_predecessor = first_artifact_bytes;
     corrupt_predecessor.push(0);
     archive.replace_artifact(first.operation_id, corrupt_predecessor);
@@ -450,7 +432,6 @@ fn panel_notification_archive_publishes_audits_and_rotates_signers() {
         Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid)
     );
 }
-
 #[test]
 fn panel_notification_archive_full_history_audit_resumes_after_restart() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -466,7 +447,6 @@ fn panel_notification_archive_full_history_audit_resumes_after_restart() {
     assert_eq!(first_page.target_generation, 2);
     assert_eq!(first_page.last_completed_generation, 0);
     assert!(!first_page.cycle_complete);
-
     let incomplete_health = fixture
         .orchestrator
         .durable_health()
@@ -481,7 +461,6 @@ fn panel_notification_archive_full_history_audit_resumes_after_restart() {
         0
     );
     assert!(!incomplete_health.archive_is_fresh());
-
     let SaturatedPanelNotificationFixture {
         bounds,
         reader,
@@ -511,7 +490,6 @@ fn panel_notification_archive_full_history_audit_resumes_after_restart() {
             .expect("restarted incomplete full-history health"),
         incomplete_health
     );
-
     let completed = restarted
         .audit_panel_notification_archive(1)
         .expect("resume and complete the sealed full-history audit");
@@ -528,7 +506,6 @@ fn panel_notification_archive_full_history_audit_resumes_after_restart() {
     );
     assert!(completed_health.archive_is_fresh());
 }
-
 #[test]
 fn panel_notification_archive_full_history_corrupt_predecessor_fails_closed_after_restart() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -543,7 +520,6 @@ fn panel_notification_archive_full_history_corrupt_predecessor_fails_closed_afte
     assert_eq!(first_page.verified_heads, 1);
     assert_eq!(first_page.last_completed_generation, 0);
     assert!(!first_page.cycle_complete);
-
     let mut corrupt_predecessor = fixture.archive.artifact(first.operation_id);
     corrupt_predecessor.push(0);
     fixture
@@ -578,7 +554,6 @@ fn panel_notification_archive_full_history_corrupt_predecessor_fails_closed_afte
     assert_eq!(checkpoint_store.latest(), sealed_incomplete_record);
     assert_eq!(archive.artifact(first.operation_id), corrupt_predecessor);
 }
-
 #[test]
 fn panel_notification_archive_full_history_invalid_bounds_preserve_trusted_progress() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -598,7 +573,6 @@ fn panel_notification_archive_full_history_invalid_bounds_preserve_trusted_progr
         .expect("orchestrator state")
         .panel_notification_archive_audit_cursor
         .clone();
-
     for maximum_heads in [0, 17] {
         assert!(matches!(
             fixture
@@ -628,7 +602,6 @@ fn panel_notification_archive_full_history_invalid_bounds_preserve_trusted_progr
         );
     }
 }
-
 #[test]
 fn panel_notification_archive_broker_fixture_is_canonical_and_source_bound() {
     let fixture = moderation_panel_notification_archive_broker_fixture_v1()
@@ -662,7 +635,6 @@ fn panel_notification_archive_broker_fixture_is_canonical_and_source_bound() {
         .expect("strict signed archive head");
     assert_eq!(head_validation, fixture.validation);
     assert_eq!(signed_head.archive_signature, fixture.archive_signature);
-
     let mut trailing_artifact = fixture.canonical_artifact.clone();
     trailing_artifact.push(0);
     assert_eq!(
@@ -707,7 +679,6 @@ fn panel_notification_archive_broker_fixture_is_canonical_and_source_bound() {
         );
     }
 }
-
 #[test]
 fn panel_notification_archive_callbacks_run_without_the_state_mutex() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -720,7 +691,6 @@ fn panel_notification_archive_callbacks_run_without_the_state_mutex() {
         );
     let orchestrator = Arc::new(orchestrator);
     probe.attach(&orchestrator);
-
     let head = orchestrator
         .compact_panel_notification_receipts(1)
         .expect("archive outside state mutex")
@@ -738,7 +708,6 @@ fn panel_notification_archive_callbacks_run_without_the_state_mutex() {
     );
     assert!(probe.checks() >= 12);
 }
-
 #[test]
 fn panel_notification_archive_provider_is_mandatory_and_exactly_qualified() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -749,7 +718,6 @@ fn panel_notification_archive_provider_is_mandatory_and_exactly_qualified() {
         .parent()
         .expect("checkpoint parent")
         .to_path_buf();
-
     for archive in [
         Arc::new(MockPanelNotificationArchive::default()),
         Arc::new(MockPanelNotificationArchive::with_handle(
@@ -777,7 +745,6 @@ fn panel_notification_archive_provider_is_mandatory_and_exactly_qualified() {
         assert!(!missing_parent.exists());
     }
 }
-
 #[test]
 fn panel_notification_archive_rejects_corrupt_signature_rollback_and_predecessor_substitution() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -805,7 +772,6 @@ fn panel_notification_archive_rejects_corrupt_signature_rollback_and_predecessor
     assert_eq!(second.generation, 2);
     assert_eq!(second.predecessor_head_digest, Some(first.head_digest));
     assert_eq!(second.predecessor_operation_id, Some(first.operation_id));
-
     for behavior in [2, 3, 4] {
         archive.fail_next_read(behavior);
         assert_eq!(
@@ -813,14 +779,12 @@ fn panel_notification_archive_rejects_corrupt_signature_rollback_and_predecessor
             Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid)
         );
     }
-
     archive.replace_artifact(second.operation_id, first_bytes.clone());
     assert_eq!(
         orchestrator.panel_notification_archive_head(),
         Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid)
     );
     archive.replace_artifact(second.operation_id, second_bytes.clone());
-
     archive.replace_artifact(first.operation_id, second_bytes);
     assert_eq!(
         orchestrator.panel_notification_archive_head(),
@@ -834,7 +798,6 @@ fn panel_notification_archive_rejects_corrupt_signature_rollback_and_predecessor
         Some(second)
     );
 }
-
 #[test]
 fn panel_notification_archive_crash_boundary_replays_exact_batch_after_restart_with_smaller_hint() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -854,7 +817,6 @@ fn panel_notification_archive_crash_boundary_replays_exact_batch_after_restart_w
     );
     assert_eq!(archive.artifact_count(), 1);
     drop(orchestrator);
-
     let restarted = ModerationOrchestratorV1::open(
         bounds,
         ModerationOrchestratorDepsV1 {
@@ -877,7 +839,6 @@ fn panel_notification_archive_crash_boundary_replays_exact_batch_after_restart_w
     assert_eq!(archive.artifact_count(), 1);
     assert_eq!(archive.install_calls(), 2);
 }
-
 #[test]
 fn panel_notification_archive_conflicting_replica_is_fenced_by_sealed_checkpoint_cas() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -907,7 +868,6 @@ fn panel_notification_archive_conflicting_replica_is_fenced_by_sealed_checkpoint
         },
     )
     .expect("open second replica at the same sealed source checkpoint");
-
     let committed = first
         .compact_panel_notification_receipts(1)
         .expect("first replica compaction")
@@ -920,7 +880,6 @@ fn panel_notification_archive_conflicting_replica_is_fenced_by_sealed_checkpoint
     assert_eq!(archive.artifact_count(), 1);
     assert_eq!(archive.install_calls(), 1);
 }
-
 #[test]
 fn panel_notification_claims_recover_crashes_and_finalize_one_stable_receipt() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -950,7 +909,6 @@ fn panel_notification_claims_recover_crashes_and_finalize_one_stable_receipt() {
     let first_receipt = sink.deliver(&first_claims[0], 1_001);
     let target_id = first_claims[0].notification.notification_id;
     drop(orchestrator);
-
     let restarted = ModerationOrchestratorV1::open(checkpoint, deps(reader, submitter))
         .expect("restart with durable claims");
     assert!(
@@ -978,7 +936,6 @@ fn panel_notification_claims_recover_crashes_and_finalize_one_stable_receipt() {
     assert_eq!(deduplicated_receipt, first_receipt);
     assert_eq!(sink.calls(), 2);
     assert_eq!(sink.unique_deliveries(), 1);
-
     assert!(matches!(
         restarted.finalize_panel_notification_delivery(
             first_claims[0].worker_id,
@@ -1036,7 +993,6 @@ fn panel_notification_claims_recover_crashes_and_finalize_one_stable_receipt() {
         }) if receipt_digest == first_receipt.receipt_digest
     ));
 }
-
 #[test]
 fn panel_notification_backoff_poison_and_retry_exhaustion_are_bounded() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1115,7 +1071,6 @@ fn panel_notification_backoff_poison_and_retry_exhaustion_are_bounded() {
             })
         ));
     }
-
     let poison_cursor = snapshot.anchor();
     let poison = ModerationOrchestratorV1::open(
         config(&temp, "panel-poison.norito"),
@@ -1158,7 +1113,6 @@ fn panel_notification_backoff_poison_and_retry_exhaustion_are_bounded() {
     assert_eq!(health.panel_notification_dead_letters, 1);
     assert!(health.has_dead_letters());
 }
-
 #[test]
 fn panel_notification_claim_inputs_tokens_and_clock_are_fail_closed() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1231,7 +1185,6 @@ fn panel_notification_claim_inputs_tokens_and_clock_are_fail_closed() {
         Err(ModerationOrchestratorError::InvalidPanelNotificationReceipt)
     );
 }
-
 #[test]
 fn panel_notification_checkpoint_tampering_and_old_versions_fail_closed() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1250,7 +1203,6 @@ fn panel_notification_checkpoint_tampering_and_old_versions_fail_closed() {
         .claim_panel_notifications([0xA1; 32], 1_000, 3)
         .expect("durable claims");
     drop(orchestrator);
-
     let original = std::fs::read(&bounds.checkpoint_path).expect("read checkpoint");
     let limits = checkpoint_decode_limits(bounds.checkpoint_max_bytes).expect("decode limits");
     let mut checkpoint =
@@ -1271,7 +1223,6 @@ fn panel_notification_checkpoint_tampering_and_old_versions_fail_closed() {
         ),
         Err(ModerationOrchestratorError::CheckpointCorrupt(_))
     ));
-
     for version in [2, 3, 4] {
         let mut old_checkpoint =
             decode_from_bytes_with_limits::<ModerationOrchestratorCheckpointV1>(&original, limits)
@@ -1292,7 +1243,6 @@ fn panel_notification_checkpoint_tampering_and_old_versions_fail_closed() {
         ));
     }
 }
-
 #[test]
 fn panel_notification_source_provenance_mismatch_is_rejected() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1319,7 +1269,6 @@ fn panel_notification_source_provenance_mismatch_is_rejected() {
             if message.contains("sortition event provenance")
     ));
 }
-
 #[test]
 fn panel_notification_scan_rejects_cross_snapshot_event_gaps() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1345,7 +1294,6 @@ fn panel_notification_scan_rejects_cross_snapshot_event_gaps() {
             if message.contains("sequence gap")
     ));
 }
-
 #[test]
 fn same_tip_with_a_changed_finalized_timestamp_is_rejected_as_equivocation() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1359,17 +1307,14 @@ fn same_tip_with_a_changed_finalized_timestamp_is_rejected_as_equivocation() {
     )
     .expect("orchestrator");
     orchestrator.reconcile().expect("initial finalized tip");
-
     let mut forged = empty_snapshot(2, [2; 32]);
     forged.finalized_at_unix_ms = forged.finalized_at_unix_ms.saturating_add(1);
     reader.replace(forged);
-
     assert_eq!(
         orchestrator.reconcile(),
         Err(ModerationOrchestratorError::FinalizedEquivocation { height: 2 })
     );
 }
-
 #[test]
 fn authenticated_request_binding_is_exact_and_canonical() {
     let authority = account(1);
@@ -1398,7 +1343,6 @@ fn authenticated_request_binding_is_exact_and_canonical() {
         &action,
     )
     .expect("canonical binding");
-
     assert_ne!(first, changed_body);
     assert_ne!(first, changed_query);
     assert!(matches!(
@@ -1422,7 +1366,6 @@ fn authenticated_request_binding_is_exact_and_canonical() {
         Err(ModerationOrchestratorError::InvalidRequestBinding)
     ));
 }
-
 #[cfg(unix)]
 #[test]
 fn checkpoint_failure_latches_the_process_fail_closed() {
@@ -1441,7 +1384,6 @@ fn checkpoint_failure_latches_the_process_fail_closed() {
         &checkpoint_path,
     )
     .expect("install checkpoint symlink");
-
     assert!(matches!(
         orchestrator.reconcile(),
         Err(ModerationOrchestratorError::CheckpointIo(_))
@@ -1453,6 +1395,5 @@ fn checkpoint_failure_latches_the_process_fail_closed() {
     );
     assert!(orchestrator.snapshot().is_none());
 }
-
 include!("terminal_handoff_tests.rs");
 include!("checkpoint_store_tests.rs");

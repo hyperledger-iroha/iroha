@@ -1,11 +1,9 @@
 // Exact-network persistence and governed-key recovery tests for provider VRF state.
-
 #[test]
 fn vrf_restart_drops_revoked_provider_entries_but_keeps_replay_high_water() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private state root");
@@ -40,7 +38,6 @@ fn vrf_restart_drops_revoked_provider_entries_but_keeps_replay_high_water() {
         persisted.sequences.insert(provider_id, 11);
         let network_id = test_network_id(0x61);
         persist_vrf_state(&path, &network_id, &persisted).expect("persist admitted-era state");
-
         let restored = load_vrf_state(
             &path,
             16,
@@ -52,13 +49,11 @@ fn vrf_restart_drops_revoked_provider_entries_but_keeps_replay_high_water() {
         assert_eq!(restored.sequences.get(&provider_id), Some(&11));
     }
 }
-
 #[test]
 fn vrf_restart_rejects_state_from_another_exact_network() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private state root");
@@ -67,7 +62,6 @@ fn vrf_restart_rejects_state_from_another_exact_network() {
         let foreign = test_network_id(0x63);
         persist_vrf_state(&path, &local, &VrfState::default())
             .expect("persist local-network state");
-
         assert!(matches!(
             load_vrf_state(
                 &path,
@@ -79,13 +73,11 @@ fn vrf_restart_rejects_state_from_another_exact_network() {
         ));
     }
 }
-
 #[test]
 fn vrf_restart_rejects_foreign_network_entry_inside_local_snapshot() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private state root");
@@ -118,7 +110,6 @@ fn vrf_restart_rejects_foreign_network_entry_inside_local_snapshot() {
         state.entries.insert(key, submission);
         state.sequences.insert(key.provider_id, 13);
         persist_vrf_state(&path, &local, &state).expect("persist local snapshot envelope");
-
         assert!(matches!(
             load_vrf_state(
                 &path,
@@ -130,13 +121,11 @@ fn vrf_restart_rejects_foreign_network_entry_inside_local_snapshot() {
         ));
     }
 }
-
 #[test]
 fn vrf_restart_drops_entries_invalidated_by_active_key_rotation() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private state root");
@@ -188,7 +177,6 @@ fn vrf_restart_drops_entries_invalidated_by_active_key_rotation() {
         persisted.sequences.insert(provider_id, 12);
         let network_id = test_network_id(0x64);
         persist_vrf_state(&path, &network_id, &persisted).expect("persist pre-rotation state");
-
         let restored = load_vrf_state(&path, 16, &admission, &network_id)
             .expect("governed key rotation must not brick restart");
         assert!(restored.entries.is_empty());

@@ -1,10 +1,8 @@
 //! Tests for adaptive AoS/columnar Norito encoding.
-
 use norito::columnar::{
     ADAPTIVE_TAG_AOS, ADAPTIVE_TAG_NCB, decode_rows_u64_str_bool_adaptive, encode_ncb_u64_str_bool,
     encode_rows_u64_str_bool_adaptive, should_use_columnar,
 };
-
 #[test]
 fn adaptive_small_two_pass_picks_smaller() {
     // For n < 64, encoder performs a two-pass size probe and picks the smaller
@@ -27,7 +25,6 @@ fn adaptive_small_two_pass_picks_smaller() {
     let decoded = decode_rows_u64_str_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows);
 }
-
 #[test]
 fn adaptive_large_prefers_columnar() {
     // n ≥ 64 should choose columnar path
@@ -49,7 +46,6 @@ fn adaptive_large_prefers_columnar() {
     let decoded = decode_rows_u64_str_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows);
 }
-
 #[test]
 fn adaptive_small_high_delta_short_names_prefers_aos() {
     for n in [8usize, 32, 64] {
@@ -60,11 +56,9 @@ fn adaptive_small_high_delta_short_names_prefers_aos() {
             .iter()
             .map(|(id, s, b)| (*id, s.as_str(), *b))
             .collect();
-
         let bytes = encode_rows_u64_str_bool_adaptive(&borrowed);
         let aos_len = norito::aos::encode_rows_u64_str_bool(&borrowed).len();
         let ncb_len = encode_ncb_u64_str_bool(&borrowed).len();
-
         assert!(
             aos_len <= ncb_len,
             "fixture must remain AoS-friendly for n={n}: aos={aos_len}, ncb={ncb_len}"

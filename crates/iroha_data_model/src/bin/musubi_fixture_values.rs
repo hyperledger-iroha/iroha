@@ -3,12 +3,11 @@
 //! This module is compiled by the release-only generator and included directly by
 //! the grouped integration tests. Generated JSON is never read while constructing
 //! either fixture.
-
 use std::{
     any::type_name,
+    collections::BTreeSet,
     fmt::{Debug, Write as _},
 };
-
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
 use iroha_data_model::{
     NetworkId,
@@ -66,13 +65,11 @@ use norito::{
     core::{DecodeFlagsGuard, DecodeFromSlice},
     json::{self, JsonDeserialize, JsonSerialize, Value},
 };
-
 /// Odd network marker used by both V1 fixture documents.
 ///
 /// The final byte is deliberately odd so every network-bound model exercises the
 /// first-release anti-sentinel validation path.
 const FIXTURE_NETWORK_MARKER: u8 = 0xA5;
-
 // These non-zero Ed25519 seeds are public test material, never production keys.
 // Each role has a distinct seed so authority substitution cannot pass unnoticed.
 const INSTRUCTION_NAMESPACE_OWNER_SEED: u8 = 0x80;
@@ -81,12 +78,11 @@ const INSTRUCTION_RECEIPT_BROKER_SEED: u8 = 0x82;
 const INSTRUCTION_PROVIDER_1_SEED: u8 = 0x90;
 const INSTRUCTION_PROVIDER_2_SEED: u8 = 0x91;
 const INSTRUCTION_PROVIDER_3_SEED: u8 = 0x92;
-
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) const MUSUBI_FIXTURE_OUTPUTS: [&str; 2] = [
     "fixtures/musubi/instructions_v1.json",
     "fixtures/musubi/sdk_v1.json",
 ];
-
 pub(crate) fn fixture_network_id() -> NetworkId {
     let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([FIXTURE_NETWORK_MARKER; Hash::LENGTH]),
@@ -98,17 +94,14 @@ pub(crate) fn fixture_network_id() -> NetworkId {
     );
     network_id
 }
-
 pub(crate) fn keypair(seed: u8) -> KeyPair {
     assert_ne!(seed, 0, "fixture signing seeds must be non-zero");
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("fixed fixture seed derives an Ed25519 keypair")
 }
-
 pub(crate) fn account(seed: u8) -> AccountId {
     AccountId::new(keypair(seed).public_key().clone())
 }
-
 fn package(home_dataspace: u64, scope: MusubiPackageScopeV1, name: &str) -> MusubiPackageIdV1 {
     MusubiPackageIdV1::new(
         DataSpaceId::new(home_dataspace),
@@ -116,7 +109,6 @@ fn package(home_dataspace: u64, scope: MusubiPackageScopeV1, name: &str) -> Musu
         MusubiPackageNameV1::new(name).expect("fixture package name"),
     )
 }
-
 fn metadata(
     description: &str,
     readme: &str,
@@ -153,7 +145,6 @@ fn metadata(
     value.validate().expect("fixture metadata is canonical");
     value
 }
-
 fn encode_hex(bytes: &[u8]) -> String {
     let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -161,7 +152,6 @@ fn encode_hex(bytes: &[u8]) -> String {
     }
     output
 }
-
 fn render_instruction_case<T>(id: &str, value: T) -> Value
 where
     T: Clone
@@ -178,7 +168,6 @@ where
     let semantic_decoded: T =
         json::from_value(semantic.clone()).expect("decode typed instruction semantic JSON");
     assert_eq!(semantic_decoded, value);
-
     let (bare_payload, header_flags) = norito::codec::encode_with_header_flags(&value);
     let concrete_frame =
         norito::core::frame_bare_with_header_flags::<T>(&bare_payload, header_flags)
@@ -190,7 +179,6 @@ where
         norito::core::to_bytes(&concrete_decoded).expect("re-encode concrete instruction frame"),
         concrete_frame
     );
-
     let boxed: InstructionBox = value.clone().into();
     let wire_id = instruction_wire_id(&boxed)
         .expect("every fixture instruction must be registered")
@@ -208,7 +196,6 @@ where
             .expect("registered instruction concrete type"),
         &value
     );
-
     let (instruction_box_pair, pair_flags) = norito::codec::encode_with_header_flags(&boxed);
     assert_eq!(pair_flags, header_flags);
     let pair_decoded = {
@@ -229,7 +216,6 @@ where
         norito::codec::encode_with_header_flags(&pair_decoded);
     assert_eq!(reencoded_pair_flags, pair_flags);
     assert_eq!(reencoded_pair, instruction_box_pair);
-
     let standalone_instruction_box_frame = norito::core::frame_bare_with_header_flags::<
         InstructionBox,
     >(&instruction_box_pair, pair_flags)
@@ -249,7 +235,6 @@ where
             .expect("re-encode standalone InstructionBox frame"),
         standalone_instruction_box_frame
     );
-
     norito::json!({
         "id": id,
         "wire_id": wire_id,
@@ -263,7 +248,6 @@ where
         "standalone_instruction_box_frame_hex": (encode_hex(&standalone_instruction_box_frame)),
     })
 }
-
 /// Construct the complete instruction fixture from concrete Rust values.
 #[must_use]
 pub(crate) fn instruction_document() -> Value {
@@ -801,7 +785,6 @@ pub(crate) fn instruction_document() -> Value {
         policy: replacement_policy,
         expected_policy_revision: current_policy.revision,
     };
-
     assert_ne!(accept.invite_id, revoke.invite_id);
     assert_ne!(
         accept.invite_id.as_bytes(),
@@ -1041,7 +1024,6 @@ pub(crate) fn instruction_document() -> Value {
         set_policy.decision.action_digest,
         policy_action.action_digest()
     );
-
     let cases = vec![
         render_instruction_case("accept-root-max-revision", accept),
         render_instruction_case("revoke-domain-invitation", revoke),
@@ -1072,7 +1054,6 @@ pub(crate) fn instruction_document() -> Value {
         render_instruction_case("replace-domain-metadata-high-revision", set_metadata),
         render_instruction_case("set-allowlisted-policy-repriced-aliases", set_policy),
     ];
-
     norito::json!({
         "format": "iroha-musubi-instructions-v1",
         "fixture_version": 1,

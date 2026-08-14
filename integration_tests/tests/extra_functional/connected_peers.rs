@@ -1,8 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Connected peers count and reconfiguration under register/unregister.
-
 use std::{fmt::Write as _, time::Duration};
-
 use assert_matches::assert_matches;
 use eyre::{Result, WrapErr, eyre};
 use futures_util::{StreamExt, stream::FuturesUnordered};
@@ -21,24 +19,20 @@ use tokio::{
     task::spawn_blocking,
     time::{Instant, sleep, timeout},
 };
-
 fn leader_peer<'a>(peers: impl IntoIterator<Item = &'a NetworkPeer>) -> &'a NetworkPeer {
     peers
         .into_iter()
         .min_by(|left, right| left.id().cmp(&right.id()))
         .expect("network should have at least one peer")
 }
-
 #[tokio::test]
 async fn connected_peers_with_f_2_1_2() -> Result<()> {
     connected_peers_with_f(stringify!(connected_peers_with_f_2_1_2), 2).await
 }
-
 #[tokio::test]
 async fn connected_peers_with_f_1_0_1() -> Result<()> {
     connected_peers_with_f(stringify!(connected_peers_with_f_1_0_1), 1).await
 }
-
 #[tokio::test]
 async fn register_new_peer() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -51,7 +45,6 @@ async fn register_new_peer() -> Result<()> {
     else {
         return Ok(());
     };
-
     let peer = NetworkPeerBuilder::new().build(network.env());
     let submit_timeout = network
         .sync_timeout()
@@ -78,10 +71,8 @@ async fn register_new_peer() -> Result<()> {
     {
         return Ok(());
     }
-
     let genesis = network.genesis();
     peer.start(network.config_layers(), Some(&genesis)).await?;
-
     if sandbox::handle_result(
         timeout(peer_sync_timeout, peer.once_block(2))
             .await
@@ -92,7 +83,6 @@ async fn register_new_peer() -> Result<()> {
     {
         return Ok(());
     }
-
     let mut client = network.client();
     client.transaction_status_timeout = submit_timeout;
     client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
@@ -110,7 +100,6 @@ async fn register_new_peer() -> Result<()> {
     {
         return Ok(());
     }
-
     if sandbox::handle_result(
         timeout(peer_sync_timeout, peer.once_block(3))
             .await
@@ -121,15 +110,12 @@ async fn register_new_peer() -> Result<()> {
     {
         return Ok(());
     }
-
     Ok(())
 }
-
 /// Test the number of connected peers, changing the number of faults tolerated down and up.
 #[allow(clippy::too_many_lines)]
 async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<()> {
     let n_peers = 3 * faults + 1;
-
     let builder = NetworkBuilder::new()
         .with_peers(n_peers)
         .with_block_cadence(std::time::Duration::from_secs(2));
@@ -141,7 +127,6 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     let sync_timeout = network.sync_timeout().saturating_mul(2);
     let da_commit_timeout = network.da_commit_quorum_timeout();
     let expected_connected = expected_connected_peers(n_peers);
-
     if sandbox::handle_result(
         assert_peers_status(network.peers().iter(), 1, expected_connected, sync_timeout).await,
         context,
@@ -150,7 +135,6 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     {
         return Ok(());
     }
-
     let mut randomized_peers = {
         let mut rng = ChaCha8Rng::seed_from_u64(0x434f_4e4e);
         network.peers().iter().choose_multiple(&mut rng, n_peers)
@@ -158,7 +142,6 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     let removed_peer = randomized_peers.remove(0);
     let roster_client = leader_peer(randomized_peers.iter().copied()).client();
     let submit_timeout = sync_timeout.saturating_add(da_commit_timeout);
-
     // Unregister a peer and wait for the roster to reflect the change.
     let unregister_peer = Unregister::peer(removed_peer.id());
     if sandbox::handle_result(
@@ -194,7 +177,6 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     {
         return Ok(());
     }
-
     // Removed peers remain connected to continue block sync; ensure they still observe block 2.
     if sandbox::handle_result(
         wait_for_block_height(std::iter::once(removed_peer), 2, sync_timeout).await,
@@ -204,11 +186,9 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     {
         return Ok(());
     }
-
     let status = removed_peer.status().await?;
     // Removed peer might see one extra commit while transitioning to follower mode.
     assert_matches!(status.blocks_non_empty, 1 | 2 | 3);
-
     // Re-register the peer using the same join flow as a new peer. Keeping the
     // removed peer process online while it is outside the roster is flaky on
     // 4-peer localnets; restarting it after the register block is more stable.
@@ -241,7 +221,6 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     {
         return Ok(());
     }
-
     let genesis = network.genesis();
     if sandbox::handle_result(
         removed_peer
@@ -273,7 +252,6 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
         return Ok(());
     }
     let expected_connected = expected_connected_peers(n_peers);
-
     if sandbox::handle_result(
         assert_peers_status(network.peers().iter(), 3, expected_connected, sync_timeout).await,
         context,
@@ -282,10 +260,8 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     {
         return Ok(());
     }
-
     Ok(())
 }
-
 async fn assert_peers_status(
     peers: impl IntoIterator<Item = &'_ NetworkPeer>,
     expected_blocks: u64,
@@ -294,7 +270,6 @@ async fn assert_peers_status(
 ) -> Result<()> {
     let peers: Vec<_> = peers.into_iter().collect();
     let deadline = Instant::now() + timeout;
-
     loop {
         let mismatches = peers
             .iter()
@@ -317,7 +292,6 @@ async fn assert_peers_status(
                         if peers_ok && blocks_ok {
                             return None;
                         }
-
                         let mut message = format!(
                             "{}: peers={}, blocks={}, blocks_non_empty={}",
                             peer.id(),
@@ -346,7 +320,6 @@ async fn assert_peers_status(
                         {
                             return None;
                         }
-
                         let mut message = format!(
                             "{}: status error: {err}; stdout={:?} stderr={:?}",
                             peer.id(),
@@ -373,22 +346,18 @@ async fn assert_peers_status(
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
-
         if mismatches.is_empty() {
             return Ok(());
         }
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "deadline has elapsed waiting for peer status: {:?}",
                 mismatches
             ));
         }
-
         sleep(Duration::from_millis(200)).await;
     }
 }
-
 async fn wait_for_block_height(
     peers: impl IntoIterator<Item = &'_ NetworkPeer>,
     expected_blocks: u64,
@@ -396,7 +365,6 @@ async fn wait_for_block_height(
 ) -> Result<()> {
     let peers: Vec<_> = peers.into_iter().collect();
     let deadline = Instant::now() + timeout;
-
     loop {
         let lagging = peers
             .iter()
@@ -416,7 +384,6 @@ async fn wait_for_block_height(
                         if blocks_ok {
                             return None;
                         }
-
                         let mut message = format!(
                             "{}: blocks={}, blocks_non_empty={}",
                             peer.id(),
@@ -437,7 +404,6 @@ async fn wait_for_block_height(
                         if fallback_height.is_some_and(|height| height.total >= expected_blocks) {
                             return None;
                         }
-
                         let mut message = format!(
                             "{}: status error: {err}; stdout={:?} stderr={:?}",
                             peer.id(),
@@ -461,22 +427,18 @@ async fn wait_for_block_height(
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
-
         if lagging.is_empty() {
             return Ok(());
         }
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "deadline has elapsed waiting for block height {expected_blocks}: {:?}",
                 lagging
             ));
         }
-
         sleep(Duration::from_millis(200)).await;
     }
 }
-
 async fn submit_instruction_or_warn(
     client: iroha::client::Client,
     instruction: impl Into<InstructionBox>,
@@ -496,7 +458,6 @@ async fn submit_instruction_or_warn(
     .await??;
     Ok(())
 }
-
 async fn submit_instruction_until_peer_roster(
     peers: impl IntoIterator<Item = &'_ NetworkPeer>,
     roster_client: &iroha::client::Client,
@@ -510,7 +471,6 @@ async fn submit_instruction_until_peer_roster(
     let deadline = Instant::now() + timeout;
     let mut last_submit_err: Option<String> = None;
     let mut last_roster_err: Option<String> = None;
-
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -518,7 +478,6 @@ async fn submit_instruction_until_peer_roster(
                 "timed out waiting for peer roster size {expected_roster}; last_submit_err={last_submit_err:?}; last_roster_err={last_roster_err:?}"
             ));
         }
-
         let tx_timeout = submit_timeout.min(remaining);
         let mut client = leader_peer(peers.iter().copied()).client();
         client.transaction_status_timeout = tx_timeout;
@@ -530,7 +489,6 @@ async fn submit_instruction_until_peer_roster(
             }
             Err(err) => return Err(err),
         }
-
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Err(eyre!(
@@ -551,7 +509,6 @@ async fn submit_instruction_until_peer_roster(
         }
     }
 }
-
 fn is_submit_timeout_error(err: &eyre::Report) -> bool {
     err.chain().any(|cause| {
         let message = cause.to_string();
@@ -561,21 +518,18 @@ fn is_submit_timeout_error(err: &eyre::Report) -> bool {
             || message.contains("timed out")
     })
 }
-
 fn is_register_duplicate_error(err: &eyre::Report) -> bool {
     err.chain().any(|cause| {
         let message = cause.to_string();
         message.contains("RepetitionError") || message.contains("Repetition of")
     })
 }
-
 fn expected_connected_peers(roster_len: usize) -> u64 {
     commit_quorum_from_len(roster_len)
         .saturating_sub(1)
         .try_into()
         .unwrap_or(0)
 }
-
 async fn wait_for_peer_roster(
     client: &iroha::client::Client,
     expected: usize,
@@ -584,7 +538,6 @@ async fn wait_for_peer_roster(
     let deadline = Instant::now() + timeout;
     let mut last_err = None;
     let mut last_count = None;
-
     loop {
         let client = client.clone();
         let result = spawn_blocking(move || {
@@ -594,7 +547,6 @@ async fn wait_for_peer_roster(
                 .map(|peers| peers.len())
         })
         .await?;
-
         match result {
             Ok(count) => {
                 last_count = Some(count);
@@ -606,17 +558,14 @@ async fn wait_for_peer_roster(
                 last_err = Some(err);
             }
         }
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "timed out waiting for peer roster size {expected}; last_count={last_count:?} last_err={last_err:?}"
             ));
         }
-
         sleep(Duration::from_millis(200)).await;
     }
 }
-
 async fn sample_peer_rosters(peers: &[&NetworkPeer], expected: usize) -> (bool, Vec<String>) {
     let samples = peers
         .iter()
@@ -630,7 +579,6 @@ async fn sample_peer_rosters(peers: &[&NetworkPeer], expected: usize) -> (bool, 
                     .map(|roster| roster.len())
             })
             .await;
-
             match result {
                 Ok(Ok(count)) => (count == expected, format!("{peer_id}={count}")),
                 Ok(Err(err)) => (false, format!("{peer_id}=err({err})")),
@@ -640,7 +588,6 @@ async fn sample_peer_rosters(peers: &[&NetworkPeer], expected: usize) -> (bool, 
         .collect::<FuturesUnordered<_>>()
         .collect::<Vec<_>>()
         .await;
-
     let matched = samples.iter().any(|(matched, _)| *matched);
     let details = samples.into_iter().map(|(_, detail)| detail).collect();
     (matched, details)

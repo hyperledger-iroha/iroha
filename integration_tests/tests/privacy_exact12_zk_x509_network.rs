@@ -15,14 +15,12 @@
 //! privacy_exact12_zk_x509_network::canonical_zk_x509_action_survives_four_peer_activation_replay_and_restart \
 //! -- --exact --nocapture --test-threads=1
 //! ```
-
 use std::{
     fs,
     num::{NonZeroU32, NonZeroU64},
     path::Path,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -77,7 +75,6 @@ use iroha_core::{
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use tokio::time::{Instant, sleep, timeout};
-
 const RELEASE_TEST_NAME: &str =
     "canonical_zk_x509_action_survives_four_peer_activation_replay_and_restart";
 const REQUIRED_DAEMON_FEATURE: &str = "zk-stark";
@@ -102,7 +99,6 @@ const DUPLICATE_CERTIFICATE_NULLIFIER_MESSAGE: &str = concat!(
     "privacy proof admission rejected: trusted X.509 state failed validation: ",
     "DuplicateCertificateNullifier"
 );
-
 fn require_test_network_feature(feature: &str) -> Result<()> {
     let enabled = std::env::var("TEST_NETWORK_IROHAD_FEATURES")
         .ok()
@@ -118,7 +114,6 @@ fn require_test_network_feature(feature: &str) -> Result<()> {
     );
     Ok(())
 }
-
 fn require_authoritative_network_mode() -> Result<()> {
     let enabled = std::env::var(sandbox::REQUIRE_NETWORK_ENV)
         .ok()
@@ -136,24 +131,20 @@ fn require_authoritative_network_mode() -> Result<()> {
     );
     Ok(())
 }
-
 fn bounded_client(mut client: Client) -> Client {
     client.transaction_status_timeout = SUBMISSION_TIMEOUT;
     client.torii_request_timeout = Duration::from_secs(30);
     client.transaction_ttl = Some(ACTION_TTL);
     client
 }
-
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
 }
-
 fn now_duration() -> Result<Duration> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .wrap_err("system clock is before the Unix epoch")
 }
-
 fn installed_resource_certificate() -> Result<PrivacyReleaseZkX509ResourceCertificateV1> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(RESOURCE_CERTIFICATE_RELATIVE_PATH);
     let bytes = fs::read(&path).wrap_err_with(|| {
@@ -182,7 +173,6 @@ fn installed_resource_certificate() -> Result<PrivacyReleaseZkX509ResourceCertif
     );
     Ok(certificate)
 }
-
 fn authenticated_network_prover_timeout(
     certificate: &PrivacyReleaseZkX509ResourceCertificateV1,
 ) -> Result<Duration> {
@@ -210,7 +200,6 @@ fn authenticated_network_prover_timeout(
     );
     Ok(proof_timeout)
 }
-
 fn latest_committed_block_timestamp_ms(client: &Client) -> Result<u64> {
     let blocks = client
         .query(FindBlocks)
@@ -223,7 +212,6 @@ fn latest_committed_block_timestamp_ms(client: &Client) -> Result<u64> {
     u64::try_from(latest.header().creation_time().as_millis())
         .map_err(|_| eyre!("trusted block timestamp does not fit u64 milliseconds"))
 }
-
 fn require_live_x509_submission_window(
     client: &Client,
     statement: &IrohaZkX509StarkP256StatementV1,
@@ -252,7 +240,6 @@ fn require_live_x509_submission_window(
     );
     Ok(())
 }
-
 fn single_zk_x509_proof_bytes<'a>(
     transaction: &'a SignedTransaction,
     expected_statement: &IrohaZkX509StarkP256StatementV1,
@@ -281,7 +268,6 @@ fn single_zk_x509_proof_bytes<'a>(
         )),
     }
 }
-
 fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     let blocks = client
         .query(FindBlocks)
@@ -300,19 +286,16 @@ fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     ensure!(hash != [0; 32], "canonical genesis hash must be non-zero");
     Ok(hash)
 }
-
 fn error_chain_contains(error: &eyre::Report, needle: &str) -> bool {
     let needle = needle.to_ascii_lowercase();
     error
         .chain()
         .any(|cause| cause.to_string().to_ascii_lowercase().contains(&needle))
 }
-
 fn is_exact_committed_transaction_replay(error: &eyre::Report) -> bool {
     error_chain_contains(error, "PRTRY:ALREADY_COMMITTED")
         && error_chain_contains(error, "transaction already committed to the blockchain")
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ExactCommittedBlock {
     height: u64,
@@ -320,13 +303,11 @@ struct ExactCommittedBlock {
     parent_hash: Option<HashOf<BlockHeader>>,
     creation_time_ms: u64,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct TipObservation {
     block: ExactCommittedBlock,
     contains_transaction: bool,
 }
-
 fn query_tip(client: &Client, transaction: Option<&SignedTransaction>) -> Result<TipObservation> {
     let blocks = client
         .query(FindBlocks)
@@ -371,7 +352,6 @@ fn query_tip(client: &Client, transaction: Option<&SignedTransaction>) -> Result
         contains_transaction,
     })
 }
-
 async fn wait_for_all_common_tip(
     clients: &[Client],
     wait: Duration,
@@ -419,7 +399,6 @@ async fn wait_for_all_common_tip(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 async fn wait_for_all_signed_tip(
     clients: &[Client],
     transaction: &SignedTransaction,
@@ -482,7 +461,6 @@ async fn wait_for_all_signed_tip(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 fn assert_all_exact_tip(
     clients: &[Client],
     expected: ExactCommittedBlock,
@@ -498,13 +476,11 @@ fn assert_all_exact_tip(
     }
     Ok(())
 }
-
 fn tagged_metadata(tag: u64) -> Result<Metadata> {
     let mut metadata = Metadata::default();
     metadata.insert("zk_x509_network_probe".parse::<Name>()?, tag);
     Ok(metadata)
 }
-
 fn instruction_transaction(
     client: &Client,
     instruction: impl Into<InstructionBox>,
@@ -524,7 +500,6 @@ fn instruction_transaction(
         .try_sign(client.key_pair.private_key())
         .wrap_err("sign exact tagged native ZK-X509 transaction")
 }
-
 async fn submit_signed_transaction(
     client: &Client,
     transaction: &SignedTransaction,
@@ -541,7 +516,6 @@ async fn submit_signed_transaction(
     .map_err(|error| eyre!("{context}: submission task failed: {error}"))?
     .wrap_err_with(|| context.to_owned())
 }
-
 async fn submit_expecting_rejection(
     client: &Client,
     transaction: &SignedTransaction,
@@ -553,7 +527,6 @@ async fn submit_expecting_rejection(
         Err(error) => Ok(error),
     }
 }
-
 async fn submit_instruction(
     client: &Client,
     instruction: impl Into<InstructionBox>,
@@ -568,7 +541,6 @@ async fn submit_instruction(
     );
     Ok((transaction, hash))
 }
-
 fn exact_committed_transaction(
     client: &Client,
     transaction: &SignedTransaction,
@@ -602,7 +574,6 @@ fn exact_committed_transaction(
         committed.result_hash() == &committed.result().hash(),
         "finalized transaction result hash differs from its full typed result"
     );
-
     let blocks = client
         .query(FindBlocks)
         .execute_all()
@@ -623,7 +594,6 @@ fn exact_committed_transaction(
     );
     Ok(Some(committed.clone()))
 }
-
 fn exact_transaction_result(
     client: &Client,
     transaction: &SignedTransaction,
@@ -631,7 +601,6 @@ fn exact_transaction_result(
     Ok(exact_committed_transaction(client, transaction)?
         .map(|committed| committed.result().0.is_ok()))
 }
-
 fn exact_applied_transaction_visible(
     client: &Client,
     transaction: &SignedTransaction,
@@ -642,7 +611,6 @@ fn exact_applied_transaction_visible(
         None => Ok(false),
     }
 }
-
 async fn wait_for_transaction_on_peers(
     clients: &[Client],
     transaction: &SignedTransaction,
@@ -675,7 +643,6 @@ async fn wait_for_transaction_on_peers(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 async fn wait_for_transaction_result_on_peers(
     clients: &[Client],
     transaction: &SignedTransaction,
@@ -713,7 +680,6 @@ async fn wait_for_transaction_result_on_peers(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 fn assert_all_exact_duplicate_certificate_nullifier_results(
     clients: &[Client],
     transaction: &SignedTransaction,
@@ -766,7 +732,6 @@ fn assert_all_exact_duplicate_certificate_nullifier_results(
     }
     Ok(())
 }
-
 fn assert_zk_x509_available(
     snapshot: &PrivacyExact12CapabilityManifestV1,
     expected_height: u64,
@@ -818,7 +783,6 @@ fn assert_zk_x509_available(
     );
     Ok(())
 }
-
 async fn wait_for_available_snapshots(
     clients: &[Client],
     expected_height: u64,
@@ -889,7 +853,6 @@ async fn wait_for_available_snapshots(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 fn next_incoming_height(client: &Client) -> Result<u64> {
     client
         .get_privacy_capabilities()
@@ -898,7 +861,6 @@ fn next_incoming_height(client: &Client) -> Result<u64> {
         .checked_add(1)
         .ok_or_else(|| eyre!("incoming ZK-X509 governance height overflowed"))
 }
-
 async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<()> {
     let start = client
         .get_privacy_capabilities()
@@ -937,7 +899,6 @@ async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<
     );
     Ok(())
 }
-
 async fn advance_to_semantic_base_after_crl_second(
     clients: &[Client],
     submitter: &Client,
@@ -956,7 +917,6 @@ async fn advance_to_semantic_base_after_crl_second(
     if semantic_base.creation_time_ms / 1_000 > predecessor_this_update_unix_seconds {
         return Ok(semantic_base);
     }
-
     for ordinal in 0..SEMANTIC_TIME_ADVANCE_MAX_BLOCKS {
         let tag = SEMANTIC_TIME_ADVANCE_NONCE_BASE
             .checked_add(ordinal)
@@ -1000,7 +960,6 @@ async fn advance_to_semantic_base_after_crl_second(
             return Ok(semantic_base);
         }
     }
-
     Err(eyre!(
         "native ZK-X509 semantic-time advance exhausted its explicit \
          {SEMANTIC_TIME_ADVANCE_MAX_BLOCKS}-block bound: exact base {semantic_base:?} did not \
@@ -1008,7 +967,6 @@ async fn advance_to_semantic_base_after_crl_second(
          {predecessor_this_update_unix_seconds}"
     ))
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_restart() -> Result<()> {
     // This is intentionally an error today. There is no unavailable-as-success
@@ -1023,7 +981,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
         "ZK-X509 four-peer release gate requires the canonical installed native-resource \
          certificate after source pin authentication",
     )?;
-
     require_authoritative_network_mode()?;
     require_test_network_feature(REQUIRED_DAEMON_FEATURE)?;
     ensure!(
@@ -1050,6 +1007,10 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             layer
                 .write(["zk", "stark", "enabled"], true)
                 .write(["torii", "max_content_len"], TORII_CONTENT_BUDGET_BYTES)
+                .write(
+                    ["torii", "query_fanout_max_retained_bytes"],
+                    TORII_CONTENT_BUDGET_BYTES,
+                )
                 .write(["network", "max_frame_bytes"], NETWORK_FRAME_BUDGET_BYTES)
                 .write(
                     ["network", "max_frame_bytes_consensus"],
@@ -1086,7 +1047,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
                  startup under any environment"
             )
         })?;
-
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
@@ -1103,7 +1063,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             client.network_id.as_bytes() == &genesis_hash,
             "client network ID is not derived from the canonical genesis hash"
         );
-
         let (grant_transaction, _) = submit_instruction(
             &client,
             Grant::account_permission(Permission::from(CanEnactGovernance), client.account.clone()),
@@ -1117,7 +1076,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "native ZK-X509 governance permission convergence",
         )
         .await?;
-
         let proposed_at_height = next_incoming_height(&client)?;
         let activate_at_height = proposed_at_height
             .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
@@ -1150,7 +1108,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "exact proposed ZK-X509 capability row",
         )
         .await?;
-
         timeout(
             ACTIVATION_ADVANCE_TIMEOUT,
             advance_to_exact_height(&client, activate_at_height),
@@ -1178,7 +1135,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "exact active ZK-X509 capability row",
         )
         .await?;
-
         let trusted_block_timestamp_ms = latest_committed_block_timestamp_ms(&client)?;
         let creation_time = now_duration()?;
         let action_context = PrivacyReleaseTransactionContextV1 {
@@ -1258,7 +1214,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "native ZK-X509 canonical/malformed controls lost their exact nonce, intent, or \
              distinct signed hashes"
         );
-
         let governance_transactions = [
             submit_instruction(
                 &client,
@@ -1299,7 +1254,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             )
             .await?;
         }
-
         require_live_x509_submission_window(
             &client,
             &actions.statement,
@@ -1324,7 +1278,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "malformed native ZK-X509 rejection convergence",
         )
         .await?;
-
         let pre_outage_tip = wait_for_all_common_tip(
             &all_clients,
             PEER_CONVERGENCE_TIMEOUT,
@@ -1340,7 +1293,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "pre-outage byte-identical active ZK-X509 manifests",
         )
         .await?;
-
         let restart_index = all_clients.len() - 1;
         let restart_peer = network.peers()[restart_index].clone();
         let config_layers = network.config_layers().collect::<Vec<_>>();
@@ -1349,7 +1301,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "selected active ZK-X509 validator was not running before restart coverage"
         );
         let healthy_clients = all_clients[..restart_index].to_vec();
-
         require_live_x509_submission_window(
             &client,
             &actions.statement,
@@ -1389,7 +1340,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "healthy-peer direct query of canonical native ZK-X509 finality",
         )
         .await?;
-
         for (index, replay_client) in healthy_clients.iter().enumerate() {
             let replay_error = replay_client
                 .submit_transaction(&actions.canonical_transaction)
@@ -1408,7 +1358,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
                 &format!("pre-restart replay through peer {index} must not advance any validator"),
             )?;
         }
-
         let (catch_up_transaction, _) = submit_instruction(
             &client,
             Log::new(
@@ -1445,7 +1394,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "three-validator direct query of native ZK-X509 catch-up sentinel finality",
         )
         .await?;
-
         timeout(
             RESTART_TIMEOUT,
             restart_peer.start_checked(config_layers.iter(), None),
@@ -1505,7 +1453,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "post-restart all-four canonical native ZK-X509 visibility",
         )
         .await?;
-
         let restarted_client = recovered_clients[restart_index].clone();
         let semantic_base_block = timeout(
             SEMANTIC_TIME_ADVANCE_TIMEOUT,
@@ -1651,7 +1598,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
                         .ok_or_else(|| eyre!("native ZK-X509 CRL nextUpdate overflowed"))?,
             "fresh native ZK-X509 CRL is not the exact signed epoch/number/digest-linked successor"
         );
-
         let (crl_rotation_transaction, _) = submit_instruction(
             &restarted_client,
             RotatePrivacyZkX509CrlV1::new(
@@ -1691,7 +1637,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "all-four direct query of the fresh signed-CRL rotation",
         )
         .await?;
-
         require_live_x509_submission_window(
             &restarted_client,
             &semantic_replay.statement,
@@ -1747,7 +1692,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             semantic_rejection_block,
             "fresh semantic replay rejection must leave every validator at its one exact result tip",
         )?;
-
         let (successor_transaction, _) = submit_instruction(
             &restarted_client,
             Log::new(
@@ -1796,7 +1740,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "all-four byte-identical active ZK-X509 manifests at the exact successor",
         )
         .await?;
-
         for (index, replay_client) in recovered_clients.iter().enumerate() {
             let post_restart_replay_error = replay_client
                 .submit_transaction(&actions.canonical_transaction)
@@ -1833,7 +1776,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
         Ok(())
     }
     .await;
-
     network.shutdown().await;
     result
 }

@@ -310,7 +310,7 @@ fn prepare_and_dequeue_current_certified_serve<'cursor>(
                 Ok((sender, authenticated_via)) => {
                     match executor.authenticate_certified_body_request(request.clone(), sender) {
                         Err(error) => match services.stage_certified_serve_rejection(
-                            HashOf::new(request),
+                            iroha_crypto::HashOf::new(request),
                             CertifiedServeNegativeOutcome::InvalidCertificate,
                         ) {
                             Ok(()) => {

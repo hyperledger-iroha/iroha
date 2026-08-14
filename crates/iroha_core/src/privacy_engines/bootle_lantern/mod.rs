@@ -5,7 +5,6 @@
 //! Consensus admission supplies the exact committed issuer-policy revision,
 //! recomputes the transaction-intent binding, and binds the chain genesis
 //! hash before this verifier is invoked.
-
 pub mod bounds;
 pub mod codec;
 pub mod compression;
@@ -24,13 +23,11 @@ pub mod sampling;
 pub mod scope;
 mod toolbox;
 pub mod transcript;
-
 use iroha_data_model::privacy::{
     BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1, PrivacyStatementV1,
 };
 use rand_core_06::{CryptoRng, RngCore};
 use thiserror::Error;
-
 pub(crate) use credential_sampling::{
     BOOTLE_CREDENTIAL_RANDOMNESS_PROFILE_DESCRIPTOR_V1,
     CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1, CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1,
@@ -51,12 +48,10 @@ pub(crate) use issuer::BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1;
 pub(crate) use randomness::BOOTLE_LANTERN_ISSUANCE_RANDOMNESS_DESCRIPTOR_V1;
 pub(crate) use scope::BOOTLE_LANTERN_CREDENTIAL_SCOPE_DIGEST_DOMAIN_V1;
 pub(crate) use toolbox::application_relation_digest_v1;
-
 /// The complete first-release fixed-profile prover, verifier, strict codec,
 /// governed binding pipeline, masked coefficient-field compiler, and exact
 /// integer-ring challenge rejection path are available.
 pub const BOOTLE_LANTERN_FULL_ENGINE_AVAILABLE_V1: bool = true;
-
 /// Failure while constructing or verifying one fully consensus-bound presentation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum BoundPresentationErrorV1 {
@@ -76,7 +71,6 @@ pub enum BoundPresentationErrorV1 {
     #[error("Bootle/Lantern native presentation proof failed: {0}")]
     Proof(#[from] proof::PresentationProofErrorV1),
 }
-
 /// Failure while strictly decoding and verifying one fully bound presentation.
 ///
 /// The codec variant is kept distinct so consensus callers can preserve their
@@ -91,7 +85,6 @@ pub enum BoundPresentationEncodedErrorV1 {
     #[error(transparent)]
     Presentation(#[from] BoundPresentationErrorV1),
 }
-
 fn compile_bound_presentation_v1(
     statement: &IrohaBootleLanternAnoncredStatementV1,
     policy: &BootleLanternIssuerPolicyV1,
@@ -126,7 +119,6 @@ fn compile_bound_presentation_v1(
     )?;
     Ok((relation, transcript))
 }
-
 fn prove_bound_presentation_enabled_v1<R: CryptoRng + RngCore>(
     statement: &IrohaBootleLanternAnoncredStatementV1,
     policy: &BootleLanternIssuerPolicyV1,
@@ -139,7 +131,6 @@ fn prove_bound_presentation_enabled_v1<R: CryptoRng + RngCore>(
     proof::prove_presentation_v1(&relation, witness, transcript, rng)
         .map_err(BoundPresentationErrorV1::from)
 }
-
 fn verify_bound_presentation_enabled_v1(
     statement: &IrohaBootleLanternAnoncredStatementV1,
     policy: &BootleLanternIssuerPolicyV1,
@@ -151,7 +142,6 @@ fn verify_bound_presentation_enabled_v1(
     proof::verify_presentation_v1(&relation, transcript, proof)
         .map_err(BoundPresentationErrorV1::from)
 }
-
 fn verify_bound_presentation_encoded_enabled_v1(
     statement: &IrohaBootleLanternAnoncredStatementV1,
     policy: &BootleLanternIssuerPolicyV1,
@@ -163,7 +153,6 @@ fn verify_bound_presentation_encoded_enabled_v1(
     verify_bound_presentation_enabled_v1(statement, policy, canonical_genesis_hash, &proof)?;
     Ok(())
 }
-
 /// Prove one canonical typed Bootle/Lantern presentation.
 ///
 /// This is the producer-side counterpart of the consensus verifier. It
@@ -196,7 +185,6 @@ pub fn prove_bound_presentation_v1<R: CryptoRng + RngCore>(
     }
     prove_bound_presentation_enabled_v1(statement, policy, canonical_genesis_hash, witness, rng)
 }
-
 /// Verify one canonical typed Bootle/Lantern presentation through the same
 /// governed policy, statement digest, genesis binding, and compiled relation
 /// used by the producer.
@@ -216,7 +204,6 @@ pub fn verify_bound_presentation_v1(
     }
     verify_bound_presentation_enabled_v1(statement, policy, canonical_genesis_hash, proof)
 }
-
 /// Strictly decode and verify one canonical typed Bootle/Lantern presentation.
 ///
 /// This is the sole encoded production verifier. It composes the fixed-width,

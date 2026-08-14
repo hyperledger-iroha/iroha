@@ -3,14 +3,12 @@
 //! Exercises the production verifier (not the `MockProver`) by generating a real
 //! IPA proof, verifying it twice for determinism, and then corrupting the proof
 //! to ensure verification fails cleanly instead of panicking.
-
 use iroha_zkp_halo2 as h2;
 use iroha_zkp_halo2::{
     OpenVerifyEnvelope,
     backend::{bn254::Bn254Backend, pallas::PallasBackend},
     norito_helpers as nh,
 };
-
 fn build_envelope(label: &str) -> OpenVerifyEnvelope {
     // Small polynomial over ToyP61 with a fixed transcript label to keep proof
     // generation deterministic.
@@ -33,16 +31,13 @@ fn build_envelope(label: &str) -> OpenVerifyEnvelope {
         domain_tag: None,
     }
 }
-
 #[test]
 fn verify_open_envelope_is_deterministic_and_rejects_corruption() {
     let env = build_envelope("deterministic-proof");
     let bytes = norito::to_bytes(&env).expect("encode env");
-
     // Deterministic: repeated verification of the same envelope must succeed.
     assert!(ivm::zk_verify::verify_open_envelope(&bytes).expect("verify 1"));
     assert!(ivm::zk_verify::verify_open_envelope(&bytes).expect("verify 2"));
-
     // Corrupt a limb in the proof while keeping the envelope well-formed.
     let mut corrupted = env.clone();
     if let Some(first_l) = corrupted.proof.l.first_mut() {
@@ -61,7 +56,6 @@ fn verify_open_envelope_is_deterministic_and_rejects_corruption() {
         }
     }
 }
-
 #[test]
 fn verify_bn254_envelope_roundtrip_and_corruption() {
     let params = h2::Bn254Params::new(8).expect("params");
@@ -82,10 +76,8 @@ fn verify_bn254_envelope_roundtrip_and_corruption() {
         public_inputs_schema_hash: None,
         domain_tag: None,
     };
-
     let bytes = norito::to_bytes(&env).expect("encode env");
     assert!(ivm::zk_verify::verify_open_envelope(&bytes).expect("verify bn254 ok"));
-
     let mut corrupted = env.clone();
     if let Some(first_r) = corrupted.proof.r.first_mut() {
         first_r[0] ^= 0x55;

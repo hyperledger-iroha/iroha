@@ -1,7 +1,5 @@
 //! Witness-side proof construction for active-receiver snapshots.
-
 use std::collections::{BTreeMap, BTreeSet};
-
 use iroha_crypto::Hash;
 use iroha_data_model::offline::{
     KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1, KagemushaActiveReceiverWitnessProofV1,
@@ -9,12 +7,10 @@ use iroha_data_model::offline::{
 use iroha_data_model::validation_fee::{
     VALIDATION_FEE_POLICY_WITNESS_KEY_V1, ValidationFeePolicyWitnessProofV1,
 };
-
 use crate::sumeragi::{
     consensus::ExecWitness,
     smt::{KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KvPair},
 };
-
 /// Construct the exact fixed-key proof against the ordinary-write SMT.
 pub(crate) fn active_receiver_witness_proof_v1(
     witness: &ExecWitness,
@@ -29,7 +25,6 @@ pub(crate) fn active_receiver_witness_proof_v1(
             "execution witness contains {target_count} active-receiver synthetic writes; expected exactly one"
         ));
     }
-
     let mut canonical = BTreeMap::<Vec<u8>, Vec<u8>>::new();
     for entry in &witness.writes {
         canonical.insert(entry.key.clone(), entry.value.clone());
@@ -57,7 +52,6 @@ pub(crate) fn active_receiver_witness_proof_v1(
     }
     Ok((proof, ordinary_root))
 }
-
 /// Construct the exact fixed-key validation-fee policy proof against the ordinary-write SMT.
 pub(crate) fn validation_fee_policy_witness_proof_v1(
     witness: &ExecWitness,
@@ -72,7 +66,6 @@ pub(crate) fn validation_fee_policy_witness_proof_v1(
             "execution witness contains {target_count} validation-fee synthetic writes; expected exactly one"
         ));
     }
-
     let mut canonical = BTreeMap::<Vec<u8>, Vec<u8>>::new();
     for entry in &witness.writes {
         canonical.insert(entry.key.clone(), entry.value.clone());
@@ -103,7 +96,6 @@ pub(crate) fn validation_fee_policy_witness_proof_v1(
     }
     Ok((proof, ordinary_root))
 }
-
 fn sparse_smt_siblings(inputs: &[KvPair], target: &KvPair) -> Result<Vec<Hash>, String> {
     let empty = Hash::new([]);
     let target_path = hash_bytes(&target.key).to_vec();
@@ -121,14 +113,12 @@ fn sparse_smt_siblings(inputs: &[KvPair], target: &KvPair) -> Result<Vec<Hash>, 
     if !current.contains_key(&target_path) {
         return Err("active-receiver target path is absent from ordinary writes".to_owned());
     }
-
     let mut current_target = target_path;
     let mut siblings = Vec::with_capacity(256);
     let mut current_bits = 256_u16;
     while current_bits > 0 {
         let sibling = sibling_prefix(&current_target, current_bits);
         siblings.push(current.get(&sibling).copied().unwrap_or(empty));
-
         let mut parents = BTreeSet::new();
         for prefix in current.keys() {
             parents.insert(parent_prefix(prefix, current_bits));
@@ -154,11 +144,9 @@ fn sparse_smt_siblings(inputs: &[KvPair], target: &KvPair) -> Result<Vec<Hash>, 
     }
     Ok(siblings)
 }
-
 fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
     Hash::new(bytes).into()
 }
-
 fn leaf_hash(pair: &KvPair) -> Hash {
     let mut preimage = Vec::with_capacity(1 + 2 * Hash::LENGTH);
     preimage.push(0);
@@ -166,7 +154,6 @@ fn leaf_hash(pair: &KvPair) -> Hash {
     preimage.extend_from_slice(&hash_bytes(&pair.value));
     Hash::new(preimage)
 }
-
 fn node_hash(left: Hash, right: Hash) -> Hash {
     let mut preimage = Vec::with_capacity(1 + 2 * Hash::LENGTH);
     preimage.push(1);
@@ -174,11 +161,9 @@ fn node_hash(left: Hash, right: Hash) -> Hash {
     preimage.extend_from_slice(right.as_ref());
     Hash::new(preimage)
 }
-
 fn parent_prefix(prefix: &[u8], len_bits: u16) -> Vec<u8> {
     truncate_prefix(prefix, len_bits - 1)
 }
-
 fn sibling_prefix(prefix: &[u8], len_bits: u16) -> Vec<u8> {
     let parent = parent_prefix(prefix, len_bits);
     let bit_index = len_bits - 1;
@@ -189,7 +174,6 @@ fn sibling_prefix(prefix: &[u8], len_bits: u16) -> Vec<u8> {
         .is_some_and(|byte| byte & (1_u8 << bit_offset) != 0);
     child_prefix(&parent, len_bits, !right)
 }
-
 fn child_prefix(parent: &[u8], child_len_bits: u16, right: bool) -> Vec<u8> {
     let mut output = parent.to_vec();
     let bit_index = child_len_bits - 1;
@@ -207,7 +191,6 @@ fn child_prefix(parent: &[u8], child_len_bits: u16, right: bool) -> Vec<u8> {
     mask_tail_bits(&mut output, child_len_bits);
     output
 }
-
 fn truncate_prefix(prefix: &[u8], len_bits: u16) -> Vec<u8> {
     if len_bits == 0 {
         return Vec::new();
@@ -218,7 +201,6 @@ fn truncate_prefix(prefix: &[u8], len_bits: u16) -> Vec<u8> {
     mask_tail_bits(&mut output, len_bits);
     output
 }
-
 fn mask_tail_bits(bytes: &mut [u8], len_bits: u16) {
     let remainder = (len_bits % 8) as u8;
     if remainder == 0 || bytes.is_empty() {
@@ -229,7 +211,6 @@ fn mask_tail_bits(bytes: &mut [u8], len_bits: u16) {
         *last &= mask;
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,7 +219,6 @@ mod tests {
         KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_VERSION_V1, KagemushaActiveReceiverSnapshotCommitmentV1,
         KagemushaActiveReceiverSnapshotStatusV1,
     };
-
     fn snapshot_value() -> Vec<u8> {
         norito::to_bytes(&KagemushaActiveReceiverSnapshotCommitmentV1 {
             version: KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_VERSION_V1,
@@ -250,7 +230,6 @@ mod tests {
         })
         .expect("encode snapshot")
     }
-
     #[test]
     fn fixed_write_proof_matches_consensus_ordinary_root_and_rejects_tampering() {
         let witness = ExecWitness {
@@ -279,7 +258,6 @@ mod tests {
         tampered.siblings[127] = Hash::new(b"tampered sibling");
         assert!(!tampered.verify(root));
     }
-
     #[test]
     fn fixed_write_must_appear_exactly_once() {
         let empty = ExecWitness {

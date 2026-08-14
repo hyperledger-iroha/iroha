@@ -5,10 +5,8 @@ use halo2curves::{
 };
 use ivm::{poseidon2, poseidon2_simd, poseidon6, poseidon6_simd, simd_bits};
 use poseidon_primitives::poseidon::primitives::Spec;
-
 #[derive(Debug)]
 struct TestSpec;
-
 impl poseidon_primitives::poseidon::primitives::Spec<Fr, 6, 5> for TestSpec {
     fn full_rounds() -> usize {
         8
@@ -23,7 +21,6 @@ impl poseidon_primitives::poseidon::primitives::Spec<Fr, 6, 5> for TestSpec {
         0
     }
 }
-
 impl poseidon_primitives::poseidon::primitives::Spec<Fr, 3, 2> for TestSpec {
     fn full_rounds() -> usize {
         8
@@ -38,13 +35,11 @@ impl poseidon_primitives::poseidon::primitives::Spec<Fr, 3, 2> for TestSpec {
         0
     }
 }
-
 fn fr_to_u64(f: Fr) -> u64 {
     let repr = f.to_repr();
     let b = repr.as_ref();
     u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
 }
-
 const POSEIDON2_VECTORS: &[(u64, u64, u64)] = &[
     (0, 0, 0x541b_c08e_21ea_84d9),
     (1, 0, 0xf0e5_b216_08c2_4308),
@@ -52,7 +47,6 @@ const POSEIDON2_VECTORS: &[(u64, u64, u64)] = &[
     (1, 1, 0x6ce7_51f5_2456_cdf3),
     (u64::MAX, u64::MAX, 0x2a3b_041a_8625_f023),
 ];
-
 const POSEIDON6_VECTORS: &[([u64; 6], u64)] = &[
     ([0, 0, 0, 0, 0, 0], 0x6300_6c10_f267_d188),
     ([1, 2, 3, 4, 5, 6], 0xe56f_9ee6_b038_389a),
@@ -60,7 +54,6 @@ const POSEIDON6_VECTORS: &[([u64; 6], u64)] = &[
     ([0, 1, 0, 0, 0, 0], 0x819b_7cdd_1631_9d0f),
     ([u64::MAX; 6], 0xe4f4_13ec_7ee9_62ad),
 ];
-
 #[test]
 fn test_poseidon2_simd_matches_scalar() {
     if simd_bits() <= 64 {
@@ -72,7 +65,6 @@ fn test_poseidon2_simd_matches_scalar() {
     let scalar = poseidon2(a, b);
     assert_eq!(simd, scalar);
 }
-
 #[test]
 fn test_poseidon6_simd_matches_scalar() {
     if simd_bits() <= 64 {
@@ -83,7 +75,6 @@ fn test_poseidon6_simd_matches_scalar() {
     let scalar = poseidon6(inputs);
     assert_eq!(simd, scalar);
 }
-
 #[test]
 fn test_poseidon6_first_round() {
     use ivm::bn254_vec::{self as field_vec, FieldElem};
@@ -116,7 +107,6 @@ fn test_poseidon6_first_round() {
         ns[i] = acc;
     }
     st = ns;
-
     let mut scalar = inputs.map(Fr::from);
     for i in 0..6 {
         scalar[i] = <TestSpec as Spec<Fr, 6, 5>>::sbox(scalar[i] + rc[0][i]);
@@ -132,7 +122,6 @@ fn test_poseidon6_first_round() {
         assert_eq!(st[i].to_fr(), scalar[i]);
     }
 }
-
 #[test]
 fn test_poseidon6_full_permutation() {
     let inputs = [1u64, 2, 3, 4, 5, 6];
@@ -173,7 +162,6 @@ fn test_poseidon6_full_permutation() {
     let expected = fr_to_u64(state[0]);
     assert_eq!(poseidon6(inputs), expected);
 }
-
 #[test]
 fn test_poseidon2_vectors() {
     for &(a, b, expected) in POSEIDON2_VECTORS {
@@ -182,7 +170,6 @@ fn test_poseidon2_vectors() {
         assert_eq!(simd, expected);
     }
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn test_poseidon2_cuda_vectors() {
@@ -204,7 +191,6 @@ fn test_poseidon2_cuda_vectors() {
         }
     }
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn test_poseidon6_cuda_vectors() {
@@ -226,7 +212,6 @@ fn test_poseidon6_cuda_vectors() {
         }
     }
 }
-
 #[test]
 fn test_poseidon6_vectors() {
     for &(inputs, expected) in POSEIDON6_VECTORS {
@@ -235,7 +220,6 @@ fn test_poseidon6_vectors() {
         assert_eq!(simd, expected);
     }
 }
-
 #[test]
 fn test_poseidon2_first_round() {
     use ivm::bn254_vec::{self as field_vec, FieldElem};
@@ -266,7 +250,6 @@ fn test_poseidon2_first_round() {
         ns[i] = acc;
     }
     st = ns;
-
     let mut scalar = [Fr::from(a), Fr::from(b), Fr::ZERO];
     for i in 0..3 {
         scalar[i] = <TestSpec as Spec<Fr, 3, 2>>::sbox(scalar[i] + rc[0][i]);
@@ -282,7 +265,6 @@ fn test_poseidon2_first_round() {
         assert_eq!(st[i].to_fr(), scalar[i]);
     }
 }
-
 #[test]
 fn test_poseidon2_many_matches_scalar() {
     let inputs = [
@@ -296,7 +278,6 @@ fn test_poseidon2_many_matches_scalar() {
         assert_eq!(*result, ivm::poseidon2(a, b));
     }
 }
-
 #[test]
 fn test_poseidon6_many_matches_scalar() {
     let inputs = [

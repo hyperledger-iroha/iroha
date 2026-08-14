@@ -6,14 +6,12 @@
 //! `(domain, parameter_digest, ppseed, role, rows, columns, row, column,
 //! coefficient, rejection_counter)`. This makes parallel expansion and random
 //! access byte-for-byte identical and prevents stream-position ambiguity.
-
 use p256::elliptic_curve::bigint::{U512, U1024};
 use sha3::{
     Shake256,
     digest::{ExtendableOutput, Update, XofReader},
 };
 use thiserror::Error;
-
 use super::{
     params::{
         APPLICATION_MODULUS_V1, APPLICATION_RING_DEGREE_V1, CHALLENGE_ETA_V1,
@@ -23,7 +21,6 @@ use super::{
     },
     ring::{ApplicationPolynomialV1, ProofPolynomialV1},
 };
-
 const MATRIX_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.matrix.v1";
 /// Nothing-up-my-sleeve domain for the fixed transparent public-parameter seed.
 pub const PUBLIC_PARAMETER_SEED_DOMAIN_V1: &[u8] =
@@ -37,26 +34,22 @@ const APPLICATION_ACCEPTANCE_LIMIT_V1: u16 = 61_445;
 const PROOF_ACCEPTANCE_LIMIT_V1: u64 = 70_931_694_131_122_923;
 const MAX_STAGED_UNIFORM_POLYNOMIALS_V1: usize = 4;
 const MAX_STAGED_UNIFORM_SCALARS_V1: usize = 2_568;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SignedU512V1 {
     negative: bool,
     magnitude: U512,
 }
-
 impl SignedU512V1 {
     const ZERO: Self = Self {
         negative: false,
         magnitude: U512::ZERO,
     };
-
     fn from_centered(value: i64) -> Self {
         Self {
             negative: value < 0,
             magnitude: U512::from_u64(value.unsigned_abs()),
         }
     }
-
     fn negate(self) -> Self {
         Self {
             negative: !self.negative && self.magnitude != U512::ZERO,
@@ -64,7 +57,6 @@ impl SignedU512V1 {
         }
     }
 }
-
 const fn challenge_eta_power_bound_v1() -> U1024 {
     let mut bound = U1024::ONE;
     let eta = U1024::from_u64(CHALLENGE_ETA_V1 as u64);
@@ -75,9 +67,7 @@ const fn challenge_eta_power_bound_v1() -> U1024 {
     }
     bound
 }
-
 const CHALLENGE_ETA_POWER_BOUND_V1: U1024 = challenge_eta_power_bound_v1();
-
 /// Derive the fixed transparent public-parameter seed from the pinned source
 /// profile.
 ///
@@ -93,7 +83,6 @@ pub fn public_parameter_seed_v1() -> [u8; 32] {
     reader.read(&mut output);
     output
 }
-
 /// Construct the unique transparent matrix seed for one compiled parameter
 /// digest.
 ///
@@ -103,7 +92,6 @@ pub fn public_parameter_seed_v1() -> [u8; 32] {
 pub fn matrix_seed_v1(parameter_digest: [u8; 32]) -> Result<MatrixSeedV1, TranscriptErrorV1> {
     MatrixSeedV1::new(parameter_digest, public_parameter_seed_v1())
 }
-
 /// Closed transparent-matrix roles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MatrixRoleV1 {
@@ -120,7 +108,6 @@ pub enum MatrixRoleV1 {
     /// Internal `B'` in `R_q^(12 x 44)`.
     InternalBPrime,
 }
-
 impl MatrixRoleV1 {
     /// Stable one-byte derivation tag.
     #[must_use]
@@ -134,7 +121,6 @@ impl MatrixRoleV1 {
             Self::InternalBPrime => 0x13,
         }
     }
-
     /// Exact matrix dimensions `(rows, columns)`.
     #[must_use]
     pub const fn dimensions(self) -> (u16, u16) {
@@ -146,7 +132,6 @@ impl MatrixRoleV1 {
             Self::InternalBPrime => (12, 44),
         }
     }
-
     /// Whether this role belongs to the application ring.
     #[must_use]
     pub const fn is_application(self) -> bool {
@@ -156,14 +141,12 @@ impl MatrixRoleV1 {
         )
     }
 }
-
 /// Complete seed material for transparent matrices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MatrixSeedV1 {
     parameter_digest: [u8; 32],
     public_parameter_seed: [u8; 32],
 }
-
 impl MatrixSeedV1 {
     /// Construct non-zero governed seed material.
     ///
@@ -187,20 +170,17 @@ impl MatrixSeedV1 {
             public_parameter_seed,
         })
     }
-
     /// Governed parameter-manifest digest.
     #[must_use]
     pub const fn parameter_digest(&self) -> &[u8; 32] {
         &self.parameter_digest
     }
-
     /// Public expansion seed.
     #[must_use]
     pub const fn public_parameter_seed(&self) -> &[u8; 32] {
         &self.public_parameter_seed
     }
 }
-
 /// Row-major application-ring matrix.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApplicationMatrixV1 {
@@ -209,39 +189,33 @@ pub struct ApplicationMatrixV1 {
     columns: u16,
     entries: Box<[ApplicationPolynomialV1]>,
 }
-
 impl ApplicationMatrixV1 {
     /// Exact closed role.
     #[must_use]
     pub const fn role(&self) -> MatrixRoleV1 {
         self.role
     }
-
     /// Exact row count.
     #[must_use]
     pub const fn rows(&self) -> u16 {
         self.rows
     }
-
     /// Exact column count.
     #[must_use]
     pub const fn columns(&self) -> u16 {
         self.columns
     }
-
     /// Borrow one entry, returning `None` for an out-of-range coordinate.
     #[must_use]
     pub fn get(&self, row: u16, column: u16) -> Option<&ApplicationPolynomialV1> {
         matrix_index(self.rows, self.columns, row, column).and_then(|index| self.entries.get(index))
     }
-
     /// Borrow row-major entries.
     #[must_use]
     pub fn entries(&self) -> &[ApplicationPolynomialV1] {
         &self.entries
     }
 }
-
 /// Row-major internal proof-ring matrix.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProofMatrixV1 {
@@ -250,39 +224,33 @@ pub struct ProofMatrixV1 {
     columns: u16,
     entries: Box<[ProofPolynomialV1]>,
 }
-
 impl ProofMatrixV1 {
     /// Exact closed role.
     #[must_use]
     pub const fn role(&self) -> MatrixRoleV1 {
         self.role
     }
-
     /// Exact row count.
     #[must_use]
     pub const fn rows(&self) -> u16 {
         self.rows
     }
-
     /// Exact column count.
     #[must_use]
     pub const fn columns(&self) -> u16 {
         self.columns
     }
-
     /// Borrow one entry, returning `None` for an out-of-range coordinate.
     #[must_use]
     pub fn get(&self, row: u16, column: u16) -> Option<&ProofPolynomialV1> {
         matrix_index(self.rows, self.columns, row, column).and_then(|index| self.entries.get(index))
     }
-
     /// Borrow row-major entries.
     #[must_use]
     pub fn entries(&self) -> &[ProofPolynomialV1] {
         &self.entries
     }
 }
-
 /// Expand one complete application matrix.
 ///
 /// # Errors
@@ -309,7 +277,6 @@ pub fn expand_application_matrix_v1(
         entries: entries.into_boxed_slice(),
     })
 }
-
 /// Expand one complete internal proof matrix.
 ///
 /// # Errors
@@ -336,7 +303,6 @@ pub fn expand_proof_matrix_v1(
         entries: entries.into_boxed_slice(),
     })
 }
-
 /// Derive one random-access application matrix entry.
 ///
 /// # Errors
@@ -365,7 +331,6 @@ pub fn derive_application_polynomial_v1(
     }
     ApplicationPolynomialV1::new(coefficients).map_err(|_| TranscriptErrorV1::InternalInvariant)
 }
-
 /// Derive one random-access internal proof matrix entry.
 ///
 /// # Errors
@@ -394,7 +359,6 @@ pub fn derive_proof_polynomial_v1(
     }
     ProofPolynomialV1::new(coefficients).map_err(|_| TranscriptErrorV1::InternalInvariant)
 }
-
 fn validate_coordinate(role: MatrixRoleV1, row: u16, column: u16) -> Result<(), TranscriptErrorV1> {
     let (rows, columns) = role.dimensions();
     if row >= rows || column >= columns {
@@ -408,7 +372,6 @@ fn validate_coordinate(role: MatrixRoleV1, row: u16, column: u16) -> Result<(), 
     }
     Ok(())
 }
-
 fn derive_application_coefficient(
     seed: MatrixSeedV1,
     role: MatrixRoleV1,
@@ -425,7 +388,6 @@ fn derive_application_coefficient(
     }
     Err(TranscriptErrorV1::UniformRejectionExhausted)
 }
-
 fn derive_proof_coefficient(
     seed: MatrixSeedV1,
     role: MatrixRoleV1,
@@ -444,7 +406,6 @@ fn derive_proof_coefficient(
     }
     Err(TranscriptErrorV1::UniformRejectionExhausted)
 }
-
 fn candidate_bytes<const N: usize>(
     seed: MatrixSeedV1,
     role: MatrixRoleV1,
@@ -470,7 +431,6 @@ fn candidate_bytes<const N: usize>(
     reader.read(&mut output);
     output
 }
-
 /// Complete public binding for the presentation Fiat--Shamir challenge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PresentationChallengeBindingV1 {
@@ -485,7 +445,6 @@ pub struct PresentationChallengeBindingV1 {
     /// Verifier-recomputed transaction-intent digest.
     pub transaction_intent_digest: [u8; 32],
 }
-
 impl PresentationChallengeBindingV1 {
     fn validate(self) -> Result<(), TranscriptErrorV1> {
         for (field, digest) in [
@@ -505,7 +464,6 @@ impl PresentationChallengeBindingV1 {
         Ok(())
     }
 }
-
 /// Complete public prefix shared by every presentation transcript stage.
 ///
 /// The canonical statement digest binds the exact genesis-derived network ID,
@@ -520,7 +478,6 @@ pub struct PresentationTranscriptV1 {
     binding: PresentationChallengeBindingV1,
     core: ProofTranscriptCoreV1,
 }
-
 /// Honest public binding for a holder's blind-issuance proof of knowledge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlindIssuanceRequestChallengeBindingV1 {
@@ -539,7 +496,6 @@ pub struct BlindIssuanceRequestChallengeBindingV1 {
     /// Issuer-generated one-shot authorization digest for this request.
     pub issuance_authorization_digest: [u8; 32],
 }
-
 impl BlindIssuanceRequestChallengeBindingV1 {
     fn validate(self) -> Result<(), TranscriptErrorV1> {
         for (field, digest) in [
@@ -564,27 +520,23 @@ impl BlindIssuanceRequestChallengeBindingV1 {
         Ok(())
     }
 }
-
 /// Distinct P1 transcript; it has no statement or transaction-intent field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlindIssuanceRequestTranscriptV1 {
     binding: BlindIssuanceRequestChallengeBindingV1,
     core: ProofTranscriptCoreV1,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TranscriptBindingV1 {
     Presentation(PresentationChallengeBindingV1),
     BlindIssuanceRequest(BlindIssuanceRequestChallengeBindingV1),
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ProofTranscriptCoreV1 {
     binding: TranscriptBindingV1,
     matrix_seed: MatrixSeedV1,
     relation_digest: [u8; 32],
 }
-
 impl PresentationTranscriptV1 {
     /// Construct one fully bound presentation transcript.
     ///
@@ -615,30 +567,25 @@ impl PresentationTranscriptV1 {
             },
         })
     }
-
     /// Return the final challenge binding.
     #[must_use]
     pub const fn binding(&self) -> PresentationChallengeBindingV1 {
         self.binding
     }
-
     /// Return the transparent matrix seed.
     #[must_use]
     pub const fn matrix_seed(&self) -> MatrixSeedV1 {
         self.core.matrix_seed
     }
-
     /// Return the exact compiled-relation digest.
     #[must_use]
     pub const fn relation_digest(&self) -> [u8; 32] {
         self.core.relation_digest
     }
-
     pub(crate) const fn proof_core(&self) -> ProofTranscriptCoreV1 {
         self.core
     }
 }
-
 impl BlindIssuanceRequestTranscriptV1 {
     /// Construct a fully bound P1 transcript with honest issuance fields.
     pub fn new(
@@ -664,27 +611,22 @@ impl BlindIssuanceRequestTranscriptV1 {
             },
         })
     }
-
     /// Return the exact P1 public binding.
     #[must_use]
     pub const fn binding(&self) -> BlindIssuanceRequestChallengeBindingV1 {
         self.binding
     }
-
     pub(crate) const fn proof_core(&self) -> ProofTranscriptCoreV1 {
         self.core
     }
 }
-
 impl ProofTranscriptCoreV1 {
     pub(crate) const fn matrix_seed(&self) -> MatrixSeedV1 {
         self.matrix_seed
     }
-
     pub(crate) const fn relation_digest(&self) -> [u8; 32] {
         self.relation_digest
     }
-
     /// Derive arbitrary public stage bytes with strict field framing.
     ///
     /// # Errors
@@ -717,7 +659,6 @@ impl ProofTranscriptCoreV1 {
         reader.read(output);
         Ok(())
     }
-
     /// Derive one ternary projection row in `{-1,0,1}^columns`.
     ///
     /// # Errors
@@ -759,7 +700,6 @@ impl ProofTranscriptCoreV1 {
         }
         Ok(output)
     }
-
     /// Derive uniform proof-ring polynomials.
     ///
     /// # Errors
@@ -805,7 +745,6 @@ impl ProofTranscriptCoreV1 {
         }
         Ok(output)
     }
-
     /// Derive independent uniform proof-ring scalars.
     ///
     /// The scalar-vector shape is explicitly framed, so this stream cannot
@@ -821,7 +760,6 @@ impl ProofTranscriptCoreV1 {
         count: usize,
     ) -> Result<Vec<u64>, TranscriptErrorV1> {
         const SCALAR_SHAPE_V1: &[u8] = b"scalar-vector-v1";
-
         let mut output =
             fixed_capacity_vec_v1(count, MAX_STAGED_UNIFORM_SCALARS_V1, "uniform_scalars")?;
         let count_u32 = u32::try_from(count).map_err(|_| TranscriptErrorV1::FieldTooLarge)?;
@@ -847,7 +785,6 @@ impl ProofTranscriptCoreV1 {
         }
         Ok(output)
     }
-
     /// Derive the final auto-stable challenge from this complete prefix.
     ///
     /// # Errors
@@ -869,7 +806,6 @@ impl ProofTranscriptCoreV1 {
         derive_challenge_from_transcript_binding_v1(self.binding, &commitment_components)
     }
 }
-
 fn fixed_capacity_vec_v1<T>(
     capacity: usize,
     maximum: usize,
@@ -884,7 +820,6 @@ fn fixed_capacity_vec_v1<T>(
         .map_err(|_| TranscriptErrorV1::AllocationFailed { field })?;
     Ok(output)
 }
-
 fn absorb_stage_prefix(
     transcript: &ProofTranscriptCoreV1,
     state: &mut Shake256,
@@ -908,7 +843,6 @@ fn absorb_stage_prefix(
     }
     Ok(())
 }
-
 fn absorb_transcript_binding_v1(
     state: &mut Shake256,
     binding: TranscriptBindingV1,
@@ -934,7 +868,6 @@ fn absorb_transcript_binding_v1(
     }
     Ok(())
 }
-
 fn checked_add_u1024_v1(accumulator: &mut U1024, addend: U1024) -> Option<()> {
     let sum = accumulator.wrapping_add(&addend);
     if sum < *accumulator {
@@ -943,7 +876,6 @@ fn checked_add_u1024_v1(accumulator: &mut U1024, addend: U1024) -> Option<()> {
     *accumulator = sum;
     Some(())
 }
-
 fn signed_difference_u1024_v1(positive: U1024, negative: U1024) -> (bool, U1024) {
     if positive >= negative {
         (false, positive.wrapping_sub(&negative))
@@ -951,7 +883,6 @@ fn signed_difference_u1024_v1(positive: U1024, negative: U1024) -> (bool, U1024)
         (true, negative.wrapping_sub(&positive))
     }
 }
-
 fn integer_negacyclic_square_v1(
     polynomial: &[SignedU512V1; APPLICATION_RING_DEGREE_V1],
 ) -> Option<[SignedU512V1; APPLICATION_RING_DEGREE_V1]> {
@@ -974,7 +905,6 @@ fn integer_negacyclic_square_v1(
             )?;
         }
     }
-
     let mut output = [SignedU512V1::ZERO; APPLICATION_RING_DEGREE_V1];
     for index in 0..APPLICATION_RING_DEGREE_V1 {
         let (negative, magnitude) = signed_difference_u1024_v1(positive[index], negative[index]);
@@ -989,7 +919,6 @@ fn integer_negacyclic_square_v1(
     }
     Some(output)
 }
-
 fn challenge_integer_power_v1(
     challenge: ProofPolynomialV1,
 ) -> Option<[SignedU512V1; APPLICATION_RING_DEGREE_V1]> {
@@ -1006,7 +935,6 @@ fn challenge_integer_power_v1(
     }
     (exponent == CHALLENGE_NORM_POWER_V1).then_some(power)
 }
-
 fn challenge_eta_norm_v1(challenge: ProofPolynomialV1) -> Option<U1024> {
     let power = challenge_integer_power_v1(challenge)?;
     let sigma_power: [SignedU512V1; APPLICATION_RING_DEGREE_V1] = core::array::from_fn(|index| {
@@ -1016,7 +944,6 @@ fn challenge_eta_norm_v1(challenge: ProofPolynomialV1) -> Option<U1024> {
             power[APPLICATION_RING_DEGREE_V1 - index].negate()
         }
     });
-
     let mut positive = vec![U1024::ZERO; APPLICATION_RING_DEGREE_V1];
     let mut negative = vec![U1024::ZERO; APPLICATION_RING_DEGREE_V1];
     for (lhs_index, lhs) in sigma_power.iter().copied().enumerate() {
@@ -1036,7 +963,6 @@ fn challenge_eta_norm_v1(challenge: ProofPolynomialV1) -> Option<U1024> {
             )?;
         }
     }
-
     let mut norm = U1024::ZERO;
     for (positive, negative) in positive.into_iter().zip(negative) {
         let (_, magnitude) = signed_difference_u1024_v1(positive, negative);
@@ -1044,11 +970,9 @@ fn challenge_eta_norm_v1(challenge: ProofPolynomialV1) -> Option<U1024> {
     }
     Some(norm)
 }
-
 fn challenge_eta_norm_is_accepted_v1(norm: U1024) -> bool {
     norm <= CHALLENGE_ETA_POWER_BOUND_V1
 }
-
 /// Check the exact LNP22 equation (19) challenge rejection condition.
 ///
 /// All arithmetic is over the integer negacyclic ring
@@ -1058,7 +982,6 @@ fn challenge_eta_norm_is_accepted_v1(norm: U1024) -> bool {
 pub(crate) fn challenge_eta_is_valid_v1(challenge: ProofPolynomialV1) -> bool {
     challenge_eta_norm_v1(challenge).is_some_and(challenge_eta_norm_is_accepted_v1)
 }
-
 /// Derive the unique auto-stable 64-coefficient challenge over the proof
 /// modulus from the exact public binding and pre-challenge commitment wire.
 ///
@@ -1082,7 +1005,6 @@ pub(crate) fn derive_presentation_challenge_v1(
     }
     derive_presentation_challenge_from_components_v1(binding, &[pre_challenge_commitments])
 }
-
 #[cfg(test)]
 fn derive_presentation_challenge_from_components_v1(
     binding: PresentationChallengeBindingV1,
@@ -1094,7 +1016,6 @@ fn derive_presentation_challenge_from_components_v1(
         pre_challenge_commitment_components,
     )
 }
-
 fn derive_challenge_from_transcript_binding_v1(
     binding: TranscriptBindingV1,
     pre_challenge_commitment_components: &[&[u8]],
@@ -1104,7 +1025,6 @@ fn derive_challenge_from_transcript_binding_v1(
     absorb_transcript_binding_v1(&mut state, binding)?;
     absorb_concatenated_frame_checked(&mut state, pre_challenge_commitment_components)?;
     let mut reader = state.finalize_xof();
-
     for _ in 0..MAX_CHALLENGE_CANDIDATE_ATTEMPTS_V1 {
         let mut challenge = [0_u64; APPLICATION_RING_DEGREE_V1];
         for coefficient in &mut challenge[..32] {
@@ -1141,7 +1061,6 @@ fn derive_challenge_from_transcript_binding_v1(
     }
     Err(TranscriptErrorV1::ChallengeCandidateRejectionExhausted)
 }
-
 fn absorb_concatenated_frame_checked(
     state: &mut Shake256,
     components: &[&[u8]],
@@ -1159,27 +1078,23 @@ fn absorb_concatenated_frame_checked(
     }
     Ok(())
 }
-
 fn matrix_index(rows: u16, columns: u16, row: u16, column: u16) -> Option<usize> {
     if row >= rows || column >= columns {
         return None;
     }
     Some(usize::from(row) * usize::from(columns) + usize::from(column))
 }
-
 fn absorb_frame(state: &mut Shake256, bytes: &[u8]) {
     let length = u32::try_from(bytes.len()).expect("fixed transcript field fits u32");
     state.update(&length.to_be_bytes());
     state.update(bytes);
 }
-
 fn absorb_frame_checked(state: &mut Shake256, bytes: &[u8]) -> Result<(), TranscriptErrorV1> {
     let length = u32::try_from(bytes.len()).map_err(|_| TranscriptErrorV1::FieldTooLarge)?;
     state.update(&length.to_be_bytes());
     state.update(bytes);
     Ok(())
 }
-
 /// Transparent-expansion or Fiat--Shamir transcript failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum TranscriptErrorV1 {
@@ -1248,15 +1163,12 @@ pub enum TranscriptErrorV1 {
     #[error("Bootle/Lantern internal transcript invariant failed")]
     InternalInvariant,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn seed() -> MatrixSeedV1 {
         MatrixSeedV1::new([0x31; 32], [0x72; 32]).expect("nonzero seed")
     }
-
     #[test]
     fn public_parameter_seed_is_a_pinned_nothing_up_my_sleeve_value() {
         assert_eq!(
@@ -1274,7 +1186,6 @@ mod tests {
             &public_parameter_seed_v1()
         );
     }
-
     fn binding() -> PresentationChallengeBindingV1 {
         PresentationChallengeBindingV1 {
             parameter_digest: [0x11; 32],
@@ -1284,12 +1195,10 @@ mod tests {
             transaction_intent_digest: [0x44; 32],
         }
     }
-
     fn presentation_seed() -> MatrixSeedV1 {
         MatrixSeedV1::new(binding().parameter_digest, [0x72; 32])
             .expect("presentation seed matches its challenge binding")
     }
-
     fn challenge_from_first_half(
         first_half: [i64; APPLICATION_RING_DEGREE_V1 / 2],
     ) -> ProofPolynomialV1 {
@@ -1311,17 +1220,14 @@ mod tests {
         }
         ProofPolynomialV1::new(coefficients).expect("canonical challenge fixture")
     }
-
     fn centered_first_half(challenge: ProofPolynomialV1) -> [i64; APPLICATION_RING_DEGREE_V1 / 2] {
         core::array::from_fn(|index| challenge.centered_coefficient(index))
     }
-
     fn presentation_transcript() -> ProofTranscriptCoreV1 {
         PresentationTranscriptV1::new(binding(), presentation_seed(), [0x95; 32])
             .expect("fully bound transcript")
             .proof_core()
     }
-
     #[test]
     fn seed_rejects_each_zero_digest() {
         assert_eq!(
@@ -1335,7 +1241,6 @@ mod tests {
             Err(TranscriptErrorV1::ZeroDigest { field: "ppseed" })
         );
     }
-
     #[test]
     fn roles_have_the_exact_closed_tags_and_dimensions() {
         assert_eq!(MatrixRoleV1::ApplicationRandomness.dimensions(), (8, 16));
@@ -1356,7 +1261,6 @@ mod tests {
             [0x01, 0x02, 0x03, 0x11, 0x12, 0x13]
         );
     }
-
     #[test]
     fn wrong_ring_roles_and_out_of_range_coordinates_fail_closed() {
         assert_eq!(
@@ -1380,7 +1284,6 @@ mod tests {
             Err(TranscriptErrorV1::MatrixCoordinateOutOfRange { .. })
         ));
     }
-
     #[test]
     fn matrix_expansion_has_exact_shapes_and_canonical_residues() {
         for role in [
@@ -1428,7 +1331,6 @@ mod tests {
             }));
         }
     }
-
     #[test]
     fn every_seed_role_and_coordinate_dimension_is_domain_separated() {
         let base =
@@ -1470,7 +1372,6 @@ mod tests {
             .expect("expansion")
         );
     }
-
     #[test]
     fn challenge_is_autostable_canonical_deterministic_and_fully_bound() {
         let challenge = derive_presentation_challenge_v1(binding(), b"canonical commitments")
@@ -1509,7 +1410,6 @@ mod tests {
             derive_presentation_challenge_v1(binding(), b"canonical commitments")
                 .expect("challenge")
         );
-
         let mut mutations = Vec::new();
         let base = binding();
         let mut changed = base;
@@ -1540,7 +1440,6 @@ mod tests {
                 .expect("challenge")
         );
     }
-
     #[test]
     fn challenge_eta_integer_norm_has_exact_boundary_and_adversarial_kats() {
         let threshold = U1024::from_be_hex(
@@ -1551,7 +1450,6 @@ mod tests {
         assert!(!challenge_eta_norm_is_accepted_v1(
             threshold.wrapping_add(&U1024::ONE)
         ));
-
         let all_eight = challenge_from_first_half([8; 32]);
         let all_eight_norm = challenge_eta_norm_v1(all_eight).expect("bounded exact arithmetic");
         assert_eq!(
@@ -1561,7 +1459,6 @@ mod tests {
             )
         );
         assert!(!challenge_eta_is_valid_v1(all_eight));
-
         let patterned = challenge_from_first_half(core::array::from_fn(|index| {
             i64::try_from(index % 17).expect("small index") - 8
         }));
@@ -1572,7 +1469,6 @@ mod tests {
             )
         );
         assert!(challenge_eta_is_valid_v1(patterned));
-
         let all_one = challenge_from_first_half([1; 32]);
         assert_eq!(
             challenge_eta_norm_v1(all_one).expect("bounded exact arithmetic"),
@@ -1582,7 +1478,6 @@ mod tests {
         );
         assert!(challenge_eta_is_valid_v1(all_one));
     }
-
     #[test]
     fn challenge_eta_rejection_retries_sequentially_in_one_xof() {
         let rejected = challenge_from_first_half([
@@ -1596,7 +1491,6 @@ mod tests {
             )
         );
         assert!(!challenge_eta_is_valid_v1(rejected));
-
         let expected = [
             7, 6, 7, 2, -6, 4, 5, -1, 4, -2, 0, -8, -3, 4, 0, -1, 2, 0, 6, -2, -7, 5, -7, 1, 8, -4,
             -5, -8, 5, -3, 4, 0,
@@ -1617,7 +1511,6 @@ mod tests {
                 .expect("retry transcript is deterministic")
         );
     }
-
     #[test]
     fn challenge_rejects_every_zero_binding_and_empty_commitments() {
         let base = binding();
@@ -1641,7 +1534,6 @@ mod tests {
             Err(TranscriptErrorV1::EmptyPreChallengeCommitments)
         );
     }
-
     #[test]
     fn matrix_and_challenge_known_answer_prefixes_are_frozen() {
         let application =
@@ -1651,7 +1543,6 @@ mod tests {
             derive_proof_polynomial_v1(seed(), MatrixRoleV1::InternalA1, 0, 0).expect("expansion");
         let challenge = derive_presentation_challenge_v1(binding(), b"canonical commitments")
             .expect("challenge");
-
         assert_eq!(
             &application.coefficients()[..4],
             &[3_766, 7_759, 1_604, 8_810]
@@ -1679,7 +1570,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn staged_transcript_is_framed_deterministic_and_fully_bound() {
         let transcript = presentation_transcript();
@@ -1700,7 +1590,6 @@ mod tests {
             .derive_bytes(b"stage-b", &[b"ab", b"c"], &mut second)
             .expect("stage");
         assert_ne!(first, second);
-
         let mut changed_binding = binding();
         changed_binding.statement_digest[0] ^= 1;
         let changed =
@@ -1715,7 +1604,6 @@ mod tests {
             )
             .expect("stage");
         assert_ne!(first, second);
-
         let changed = PresentationTranscriptV1::new(binding(), presentation_seed(), [0x94; 32])
             .expect("relation binding");
         changed
@@ -1728,7 +1616,6 @@ mod tests {
             .expect("stage");
         assert_ne!(first, second);
     }
-
     #[test]
     fn staged_uniform_and_ternary_expansion_is_canonical_and_random_access() {
         let transcript = presentation_transcript();
@@ -1746,7 +1633,6 @@ mod tests {
                 .derive_ternary_row(b"projection", &[b"commitment"], 18, 1_024)
                 .expect("row")
         );
-
         let polynomials = transcript
             .derive_uniform_polynomials(b"weights", &[b"commitment"], 4)
             .expect("uniform polynomials");
@@ -1763,7 +1649,6 @@ mod tests {
                 .derive_uniform_polynomials(b"weights", &[b"commitment"], 4)
                 .expect("uniform polynomials")
         );
-
         let scalars = transcript
             .derive_uniform_scalars(b"weights", &[b"commitment"], 257)
             .expect("uniform scalars");
@@ -1781,7 +1666,6 @@ mod tests {
         );
         assert_ne!(scalars[0], polynomials[0].coefficients()[0]);
     }
-
     #[test]
     fn staged_transcript_rejects_mismatched_or_empty_inputs() {
         assert_eq!(

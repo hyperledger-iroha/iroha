@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};
-
     use crate::{
         builtins::{Builtin, BuiltinSurface},
         compiler::{Compiler, CompilerOptions},
@@ -12,7 +11,6 @@ mod tests {
         semantic::{V1_LIST_MEMBER_NAMES, V1_ROUNDING_PATHS, V1_SOURCE_TYPE_NAMES, V1_SUM_PATHS},
         session::{CompileRequest, CompilerSession},
     };
-
     fn docs_roots() -> [PathBuf; 2] {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         [
@@ -20,7 +18,6 @@ mod tests {
             manifest_dir.join("../ivm/docs"),
         ]
     }
-
     fn is_localized_markdown(path: &std::path::Path) -> bool {
         // Translations are informative snapshots. The English V1 grammar and
         // Current branded examples are the release-language input to CI.
@@ -34,7 +31,6 @@ mod tests {
         stem.rsplit_once('.')
             .is_some_and(|(_, suffix)| LOCALES.contains(&suffix))
     }
-
     fn kotodama_doc_paths() -> Vec<PathBuf> {
         let mut paths = Vec::new();
         for root in docs_roots() {
@@ -57,7 +53,6 @@ mod tests {
         paths.sort();
         paths
     }
-
     fn collect_markdown_files(root: &std::path::Path, paths: &mut Vec<PathBuf>) {
         let entries = fs::read_dir(root).unwrap_or_else(|err| {
             panic!("read {}: {err}", root.display());
@@ -73,7 +68,6 @@ mod tests {
             }
         }
     }
-
     fn kotodama_fences(text: &str) -> Vec<(usize, String)> {
         let mut snippets = Vec::new();
         let mut start_line = None;
@@ -94,7 +88,6 @@ mod tests {
         assert!(start_line.is_none(), "unterminated `kotodama` code fence");
         snippets
     }
-
     fn textmate_match<'a>(grammar: &'a norito::json::Value, section: &str) -> &'a str {
         let patterns = grammar
             .pointer(&format!("/repository/{section}/patterns"))
@@ -110,7 +103,6 @@ mod tests {
             .and_then(norito::json::Value::as_str)
             .unwrap_or_else(|| panic!("TextMate grammar omitted {section} match pattern"))
     }
-
     fn textmate_attribute_match(grammar: &norito::json::Value) -> &str {
         let patterns = grammar
             .pointer("/repository/attributes/patterns/0/patterns")
@@ -128,7 +120,6 @@ mod tests {
         );
         matches[0]
     }
-
     fn textmate_named_match<'a>(grammar: &'a norito::json::Value, name: &str) -> &'a str {
         grammar
             .pointer("/repository/numbers/patterns")
@@ -140,7 +131,6 @@ mod tests {
             .and_then(norito::json::Value::as_str)
             .unwrap_or_else(|| panic!("TextMate grammar omitted matcher `{name}`"))
     }
-
     fn textmate_top_level_includes(grammar: &norito::json::Value) -> Vec<&str> {
         grammar
             .get("patterns")
@@ -151,7 +141,6 @@ mod tests {
             .filter_map(norito::json::Value::as_str)
             .collect()
     }
-
     fn textmate_definition_matches(grammar: &norito::json::Value) -> Vec<&str> {
         grammar
             .pointer("/repository/definitions/patterns")
@@ -162,11 +151,9 @@ mod tests {
             .filter_map(norito::json::Value::as_str)
             .collect()
     }
-
     fn alternation_pattern(paths: &[&str]) -> String {
         format!(r"\b(?:{})\b", paths.join("|"))
     }
-
     fn generated_section<'a>(text: &'a str, name: &str) -> &'a str {
         let start_marker = format!("<!-- BEGIN GENERATED: {name} -->\n");
         let end_marker = format!("<!-- END GENERATED: {name} -->");
@@ -178,7 +165,6 @@ mod tests {
             .unwrap_or_else(|| panic!("unterminated generated section `{name}`"));
         section
     }
-
     #[test]
     fn kotodama_docs_do_not_advertise_removed_helper_spellings() {
         for path in kotodama_doc_paths() {
@@ -217,7 +203,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn canonical_syntax_tables_cover_docs_and_textmate_grammar() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -231,7 +216,6 @@ mod tests {
             .expect("read TextMate grammar");
         let textmate_value: norito::json::Value =
             norito::json::from_str(&textmate).expect("parse TextMate grammar JSON");
-
         assert_eq!(
             generated_section(&specification, "kotodama-v1-keywords"),
             V1_KEYWORD_DOC_TABLE,
@@ -262,7 +246,6 @@ mod tests {
             r"\b(?:fixture|test)\b",
             "TextMate attributes must expose only the supported test annotation surface"
         );
-
         let top_level_includes = textmate_top_level_includes(&textmate_value);
         for section in [
             "#namedFields",
@@ -281,7 +264,6 @@ mod tests {
                 "TextMate grammar must include V1 contextual section `{section}` exactly once"
             );
         }
-
         assert_eq!(
             textmate_match(&textmate_value, "namedFields"),
             r"\b[A-Za-z_][A-Za-z0-9_]*\b(?=\s*:)",
@@ -302,7 +284,6 @@ mod tests {
             r"\bjson\b(?=\s*[\{\[])",
             "TextMate must treat `json` as contextual object/array construction syntax"
         );
-
         let mut member_names = V1_LIST_MEMBER_NAMES.to_vec();
         member_names.push("div_round");
         member_names.push("ratio_round");
@@ -328,7 +309,6 @@ mod tests {
             r"(?<![A-Za-z0-9_])(?:0[xX][0-9A-Fa-f_]+|0[bB][01_]+|\d(?:[\d_]*\d)?(?:\.\d(?:[\d_]*\d)?)?(?:[eE][+-]?\d(?:[\d_]*\d)?)?)(?:amt|qty)\b",
             "TextMate retired numeric suffix highlighting drifted from amt/qty fix-it policy"
         );
-
         let mut type_names = V1_SOURCE_TYPE_NAMES.to_vec();
         type_names.push("Rounding");
         assert_eq!(
@@ -341,7 +321,6 @@ mod tests {
             r"\b(?:\d(?:[\d_]*\d)?\.\d(?:[\d_]*\d)?(?:[eE][+-]?\d(?:[\d_]*\d)?)?|\d(?:[\d_]*\d)?[eE][+-]?\d(?:[\d_]*\d)?)\b",
             "TextMate decimal literal highlighting drifted from unsuffixed V1 syntax"
         );
-
         let definition_matches = textmate_definition_matches(&textmate_value);
         for retired in ["contract", "entry", "init", "upgrade"] {
             assert!(
@@ -412,7 +391,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn every_current_kotodama_documentation_fence_compiles() {
         let mut paths = Vec::new();
@@ -420,7 +398,6 @@ mod tests {
             collect_markdown_files(&root, &mut paths);
         }
         paths.sort();
-
         let compiler = Compiler::new();
         let session = CompilerSession::new(CompilerOptions::default());
         let mut failures = Vec::new();
@@ -444,7 +421,6 @@ mod tests {
                 }
             }
         }
-
         assert!(
             failures.is_empty(),
             "Kotodama documentation snippets failed to compile:\n{}",

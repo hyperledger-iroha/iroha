@@ -1,8 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Negative-path coverage for the Norito Streaming integration harness.
-
 use crate::streaming;
-
 use iroha_config::parameters::actual;
 use iroha_core::streaming::{KeyUpdateSpec, StreamingProcessError};
 use iroha_crypto::{Algorithm, KeyPair};
@@ -12,7 +10,6 @@ use norito::streaming::{
     PrivacyRelay, PrivacyRoute, StreamMetadata,
     codec::{BaselineManifestParams, ManifestError},
 };
-
 #[test]
 fn manifest_chunk_root_mismatch_detected() {
     let (_config, segment, _frames) = streaming::baseline_segment(2);
@@ -53,10 +50,8 @@ fn manifest_chunk_root_mismatch_detected() {
         neural_bundle: None,
         transport_capabilities_hash: [0xAC; 32],
     });
-
     let mut tampered_manifest: ManifestV1 = manifest.clone();
     tampered_manifest.chunk_root[0] ^= 0xFF;
-
     let err = segment
         .verify_manifest(&tampered_manifest)
         .expect_err("tampered chunk root must fail verification");
@@ -65,7 +60,6 @@ fn manifest_chunk_root_mismatch_detected() {
         "expected chunk root mismatch, found {err:?}"
     );
 }
-
 #[test]
 fn key_update_signature_mismatch_rejected() {
     let publisher_keys = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
@@ -73,13 +67,10 @@ fn key_update_signature_mismatch_rejected() {
     let viewer_keys = KeyPair::try_random().expect("generate checked streaming viewer keypair");
     let publisher_peer = streaming::make_peer(&publisher_keys, 27_100);
     let viewer_peer = streaming::make_peer(&viewer_keys, 27_101);
-
     let publisher_handle = streaming::streaming_handle();
     let viewer_handle = streaming::streaming_handle();
-
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x11; 32]);
     let session_id = [0x22; 32];
-
     let update = publisher_handle
         .build_key_update(
             &viewer_peer,
@@ -93,32 +84,26 @@ fn key_update_signature_mismatch_rejected() {
             publisher_keys.private_key(),
         )
         .expect("publisher key update");
-
     let mut tampered_update = update.clone();
     tampered_update.signature[0] ^= 0x01;
-
     let result = viewer_handle
         .process_control_frame(&publisher_peer, &ControlFrame::KeyUpdate(tampered_update));
     assert!(
         matches!(result, Err(StreamingProcessError::Handshake(_))),
         "tampered signature must map to handshake error: {result:?}"
     );
-
     // Ensure the untampered update still succeeds to avoid false positives.
     viewer_handle
         .process_control_frame(&publisher_peer, &ControlFrame::KeyUpdate(update))
         .expect("valid key update must be accepted");
 }
-
 #[test]
 fn bundled_manifest_requires_negotiated_flag() {
     let vector = streaming::baseline_test_vector();
     let mut manifest = vector.manifest.clone();
     manifest.entropy_mode = EntropyMode::RansBundled;
-
     let handle = streaming::bundled_streaming_handle(2);
     manifest.entropy_tables_checksum = Some(handle.bundle_tables_checksum());
-
     let (_publisher_keys, viewer_keys) = streaming::test_keypairs();
     let viewer_peer = streaming::make_peer(&viewer_keys, 27_201);
     let base_flags = streaming::BASE_CAPABILITIES;
@@ -130,7 +115,6 @@ fn bundled_manifest_requires_negotiated_flag() {
         vector.max_chunk_len(),
     );
     manifest.transport_capabilities_hash = resolution.capabilities_hash();
-
     let err = handle
         .validate_manifest_transport_capabilities(viewer_peer.id(), &manifest)
         .expect_err("bundled manifest must fail without negotiated entropy bit");
@@ -139,16 +123,13 @@ fn bundled_manifest_requires_negotiated_flag() {
         StreamingProcessError::ManifestEntropyModeNotNegotiated { .. }
     ));
 }
-
 #[test]
 fn bundled_manifest_checksum_mismatch_detected() {
     let vector = streaming::baseline_test_vector();
     let mut manifest = vector.manifest.clone();
     manifest.entropy_mode = EntropyMode::RansBundled;
-
     let handle = streaming::bundled_streaming_handle(3);
     manifest.entropy_tables_checksum = Some(handle.bundle_tables_checksum());
-
     let (_publisher_keys, viewer_keys) = streaming::test_keypairs();
     let viewer_peer = streaming::make_peer(&viewer_keys, 27_202);
     let negotiated = streaming::BASE_CAPABILITIES;
@@ -159,12 +140,10 @@ fn bundled_manifest_checksum_mismatch_detected() {
         vector.max_chunk_len(),
     );
     manifest.transport_capabilities_hash = resolution.capabilities_hash();
-
     manifest
         .entropy_tables_checksum
         .as_mut()
         .expect("checksum must be present")[0] ^= 0xFF;
-
     let err = handle
         .validate_manifest_transport_capabilities(viewer_peer.id(), &manifest)
         .expect_err("tampered checksum must be rejected");
@@ -173,7 +152,6 @@ fn bundled_manifest_checksum_mismatch_detected() {
         StreamingProcessError::ManifestEntropyTablesMismatch { .. }
     ));
 }
-
 #[test]
 fn gpu_bundled_manifest_requires_negotiated_acceleration_flag() {
     if !BUNDLED_RANS_GPU_BUILD_AVAILABLE {
@@ -189,10 +167,8 @@ fn gpu_bundled_manifest_requires_negotiated_acceleration_flag() {
         .capabilities
         .insert(CapabilityFlags::FEATURE_ENTROPY_BUNDLED)
         .insert(CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU);
-
     let handle = streaming::bundled_streaming_handle_with_accel(3, actual::BundleAcceleration::Gpu);
     manifest.entropy_tables_checksum = Some(handle.bundle_tables_checksum());
-
     let (_publisher_keys, viewer_keys) = streaming::test_keypairs();
     let viewer_peer = streaming::make_peer(&viewer_keys, 27_205);
     let negotiated =
@@ -204,7 +180,6 @@ fn gpu_bundled_manifest_requires_negotiated_acceleration_flag() {
         vector.max_chunk_len(),
     );
     manifest.transport_capabilities_hash = resolution.capabilities_hash();
-
     let err = handle
         .validate_manifest_transport_capabilities(viewer_peer.id(), &manifest)
         .expect_err("GPU handle must reject viewers lacking the GPU acceleration bit");
@@ -213,7 +188,6 @@ fn gpu_bundled_manifest_requires_negotiated_acceleration_flag() {
         StreamingProcessError::ManifestAccelerationNotNegotiated { .. }
     ));
 }
-
 #[test]
 fn bundled_vector_requires_entropy_negotiation() {
     let vector = streaming::bundled_test_vector();
@@ -222,7 +196,6 @@ fn bundled_vector_requires_entropy_negotiation() {
     let viewer_peer = streaming::make_peer(&viewer_keys, 27_250);
     let negotiated = streaming::BASE_CAPABILITIES.remove(CapabilityFlags::FEATURE_ENTROPY_BUNDLED);
     streaming::seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
-
     let mut manifest = vector.manifest.clone();
     let err = handle
         .apply_manifest_transport_capabilities(viewer_peer.id(), &mut manifest)
@@ -232,7 +205,6 @@ fn bundled_vector_requires_entropy_negotiation() {
         StreamingProcessError::ManifestEntropyModeNotNegotiated { .. }
     ));
 }
-
 #[test]
 fn bundled_vector_applies_after_entropy_negotiation() {
     let vector = streaming::bundled_test_vector();
@@ -246,7 +218,6 @@ fn bundled_vector_applies_after_entropy_negotiation() {
         negotiated,
         vector.max_chunk_len(),
     );
-
     let mut manifest = vector.manifest.clone();
     handle
         .apply_manifest_transport_capabilities(viewer_peer.id(), &mut manifest)
@@ -271,7 +242,6 @@ fn bundled_vector_applies_after_entropy_negotiation() {
         .validate_manifest_transport_capabilities(viewer_peer.id(), &manifest)
         .expect("validated manifest must pass when flags match");
 }
-
 #[test]
 fn cpu_accelerated_bundled_manifest_advertises_acceleration_bit() {
     let vector = streaming::bundled_test_vector();
@@ -287,7 +257,6 @@ fn cpu_accelerated_bundled_manifest_advertises_acceleration_bit() {
         negotiated,
         vector.max_chunk_len(),
     );
-
     let mut manifest = vector.manifest.clone();
     handle
         .apply_manifest_transport_capabilities(viewer_peer.id(), &mut manifest)
@@ -310,7 +279,6 @@ fn cpu_accelerated_bundled_manifest_advertises_acceleration_bit() {
         "transport hash must reflect the negotiated CPU acceleration bits"
     );
 }
-
 #[test]
 fn gpu_accelerated_bundled_manifest_advertises_acceleration_bit() {
     if !BUNDLED_RANS_GPU_BUILD_AVAILABLE {
@@ -330,7 +298,6 @@ fn gpu_accelerated_bundled_manifest_advertises_acceleration_bit() {
         negotiated,
         vector.max_chunk_len(),
     );
-
     let mut manifest = vector.manifest.clone();
     handle
         .apply_manifest_transport_capabilities(viewer_peer.id(), &mut manifest)

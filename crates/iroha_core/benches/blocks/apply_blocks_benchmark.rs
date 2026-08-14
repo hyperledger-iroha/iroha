@@ -1,13 +1,11 @@
 //! Criterion benchmark driver for applying blocks.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 mod apply_blocks;
-
 use apply_blocks::StateApplyBlocks;
 use apply_blocks::common::{generate_ids, generated_asset_definition_name};
 use criterion::{BatchSize, Criterion};
 use iroha_core::state::World;
 use iroha_data_model::{Registrable, account::Account, asset::AssetDefinition, domain::Domain};
-
 fn apply_blocks(c: &mut Criterion) {
     // Ensure instruction registry is initialized for benches using InstructionBox
     iroha_data_model::isi::set_instruction_registry(
@@ -30,7 +28,6 @@ fn apply_blocks(c: &mut Criterion) {
     });
     group.finish();
 }
-
 fn large_world() -> World {
     let (domain_ids, account_ids, asset_definition_ids) = generate_ids(10, 100, 100);
     let authority = account_ids
@@ -58,10 +55,8 @@ fn large_world() -> World {
             )
             .build(&authority)
         });
-
     World::with(domains, accounts, asset_definitions)
 }
-
 fn state_commit(c: &mut Criterion) {
     let mut group = c.benchmark_group("state_commit");
     group.significance_level(0.1).sample_size(30);
@@ -77,7 +72,6 @@ fn state_commit(c: &mut Criterion) {
     });
     group.finish();
 }
-
 /// Entry point for the benchmark binary.
 fn main() {
     // Silence IVM banner for block-validation benches.

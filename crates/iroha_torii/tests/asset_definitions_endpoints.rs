@@ -1,10 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smoke tests for Torii asset definitions endpoints.
 #![cfg(feature = "app_api")]
-
 use std::num::NonZeroU64;
 use std::sync::Arc;
-
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::Request;
 use http::StatusCode;
@@ -23,12 +21,10 @@ use iroha_data_model::isi::SetAssetDefinitionAlias;
 use iroha_data_model::prelude as dm;
 use iroha_torii::Torii;
 use tower::ServiceExt as _;
-
 fn checked_asset_definition_ed25519_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked asset-definition Ed25519 fixture keypair")
 }
-
 #[test]
 fn asset_definition_authority_fixture_uses_checked_ed25519_key_generation() {
     let key_pair = checked_asset_definition_ed25519_key_fixture();
@@ -36,10 +32,8 @@ fn asset_definition_authority_fixture_uses_checked_ed25519_key_generation() {
         .public_key()
         .try_algorithm()
         .expect("fixture asset-definition public key has a valid algorithm");
-
     assert_eq!(algorithm, Algorithm::Ed25519);
 }
-
 fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) {
     let authority = dm::AccountId::new(
         checked_asset_definition_ed25519_key_fixture()
@@ -50,7 +44,6 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
         DomainId::try_new("wonderland", "universal").expect("valid domain");
     let domain = dm::Domain::new(domain_id.clone()).build(&authority);
     let account = dm::Account::new(authority.clone()).build(&authority);
-
     let cbdc_id = dm::AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
         "cbdc".parse().expect("asset name"),
@@ -62,7 +55,6 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
         None,
     )
     .build(&authority);
-
     let usd_id = dm::AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
         "usd".parse().expect("asset name"),
@@ -74,7 +66,6 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
         None,
     )
     .build(&authority);
-
     let state = Arc::new(State::new_for_testing(
         World::with([domain], [account], [cbdc, usd]),
         Kura::blank_kura_for_testing(),
@@ -99,10 +90,8 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
     .expect("bind permanent asset alias");
     tx.apply();
     block.commit().expect("commit permanent asset alias");
-
     (state, cbdc_id, usd_id)
 }
-
 fn build_app(state: Arc<State>) -> axum::Router {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -132,11 +121,9 @@ fn build_app(state: Arc<State>) -> axum::Router {
     )
     .api_router_for_tests()
 }
-
 fn loopback_connect_info() -> ConnectInfo<std::net::SocketAddr> {
     ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
 }
-
 fn commit_alias_lease(
     state: &Arc<State>,
     authority: &dm::AccountId,
@@ -166,12 +153,10 @@ fn commit_alias_lease(
     tx.apply();
     block.commit().expect("commit alias lease");
 }
-
 #[tokio::test]
 async fn asset_definitions_endpoints_return_name_and_alias() {
     let (state, cbdc_id, _) = seeded_state();
     let app = build_app(state);
-
     // GET /v1/assets/definitions
     let resp = app
         .clone()
@@ -202,7 +187,6 @@ async fn asset_definitions_endpoints_return_name_and_alias() {
             && item["alias"].is_null()
             && item["alias_binding"].is_null()
     }));
-
     // GET /v1/assets/definitions/{asset}
     let resp = app
         .clone()
@@ -230,7 +214,6 @@ async fn asset_definitions_endpoints_return_name_and_alias() {
         Some("cbdc#centralbank")
     );
     assert_eq!(doc["alias_binding"]["status"].as_str(), Some("permanent"));
-
     // POST /v1/assets/definitions/query
     let resp = app
         .oneshot(
@@ -263,7 +246,6 @@ async fn asset_definitions_endpoints_return_name_and_alias() {
             && item["alias_binding"].is_null()
     }));
 }
-
 #[tokio::test]
 async fn asset_definitions_query_supports_alias_binding_sort() {
     let authority = dm::AccountId::new(
@@ -275,7 +257,6 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
         DomainId::try_new("wonderland", "universal").expect("valid domain");
     let domain = dm::Domain::new(domain_id.clone()).build(&authority);
     let account = dm::Account::new(authority.clone()).build(&authority);
-
     let cbdc_id = dm::AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "cbdc".parse().expect("asset name"),
@@ -287,7 +268,6 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
         None,
     )
     .build(&authority);
-
     let usd_id = dm::AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "usd".parse().expect("asset name"),
@@ -299,7 +279,6 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
         None,
     )
     .build(&authority);
-
     let state = Arc::new(State::new_for_testing(
         World::with([domain], [account], [cbdc, usd]),
         Kura::blank_kura_for_testing(),
@@ -326,7 +305,6 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
     block.commit().expect("commit permanent asset alias");
     commit_alias_lease(&state, &authority, &usd_id, "usd#lease", 5_000, 2, 1_000);
     let app = build_app(state);
-
     let resp = app
         .clone()
         .oneshot(

@@ -16,9 +16,7 @@
 //! The aggregate zk-X509 proof commits the arithmetic trace and all 128 window
 //! traces before sampling these challenges; this bus has no standalone
 //! activation path.
-
 use thiserror::Error;
-
 #[cfg(not(any(test, feature = "privacy-release-evidence")))]
 use super::p256_window_air::P256WindowScalarV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -33,11 +31,9 @@ use super::{
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
-
 /// Stable descriptor for the aggregate-only first-release scalar-bit copy bus.
 #[cfg(test)]
 pub(crate) const ZK_X509_P256_SCALAR_BIT_BUS_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-scalar-bit-bus-v2-incompatible:two-verifier-fixed-scalars-u1-then-u2:64-big-endian-four-bit-windows-per-scalar:pointwise-map-to-little-endian-c-limb-bits:scalar-field-c-operations-distinct:deterministic-bit-equality:four-post-arithmetic-and-window-commitment-products:scalar-window-bit-value-tuples:three-factors-per-physical-row:one-canonical-inactive-factor:256-row-canonical-padding:aggregate-base6:aux32:verifier-fixed16:constraints67-degree3:source-side-terminal-binding=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
-
 /// Independent tuple-product lanes.
 pub(crate) const P256_SCALAR_BIT_BUS_LANES_V1: usize = 4;
 /// `beta`, scalar, window, bit-within-window, and value.
@@ -75,20 +71,17 @@ pub(crate) const P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1: usize = 16;
 pub(crate) const P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1: usize = 67;
 /// Maximum total polynomial degree.
 pub(crate) const P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_DEGREE_V1: u8 = 3;
-
 const P256_SCALAR_BITS_V1: usize = 256;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 const P256_SCALAR_LIMBS_V1: usize = 16;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 const P256_SCALAR_LIMB_BITS_V1: usize = 16;
 const P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1: usize = P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 + 1;
-
 const STARK_ARITHMETIC_BITS: usize = 0;
 const STARK_WINDOW_BITS: usize = STARK_ARITHMETIC_BITS + P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1;
 const STARK_ARITHMETIC_PRODUCTS: usize = 0;
 const STARK_WINDOW_PRODUCTS: usize = STARK_ARITHMETIC_PRODUCTS
     + P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 * P256_SCALAR_BIT_BUS_LANES_V1;
-
 const STARK_FIXED_SLOT_WIDTH: usize = 4;
 const STARK_FIXED_SLOT_ACTIVE: usize = 0;
 const STARK_FIXED_SLOT_SCALAR: usize = 1;
@@ -99,7 +92,6 @@ const STARK_FIXED_FIRST_ROW: usize =
 const STARK_FIXED_LAST_ACTIVE_ROW: usize = STARK_FIXED_FIRST_ROW + 1;
 const STARK_FIXED_ACTIVE_CONTINUE: usize = STARK_FIXED_LAST_ACTIVE_ROW + 1;
 const STARK_FIXED_PADDING: usize = STARK_FIXED_ACTIVE_CONTINUE + 1;
-
 const _: () = assert!(P256_SCALAR_BIT_BUS_ACTIVE_BITS_V1 == 512);
 const _: () = assert!(P256_SCALAR_BIT_BUS_ROWS_V1 == 171);
 const _: () = assert!(P256_SCALAR_BIT_BUS_FACTOR_SLOTS_V1 == 513);
@@ -116,7 +108,6 @@ const _: () = assert!(
         == P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1
 );
 const _: () = assert!(STARK_FIXED_PADDING + 1 == P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1);
-
 /// One verifier-fixed scalar result supplying 64 window nibbles.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,7 +117,6 @@ pub(crate) struct P256ScalarBitSourceV1 {
     /// Arithmetic operation whose committed scalar-field `c` is consumed.
     pub(crate) c_operation: u32,
 }
-
 /// Verifier-regenerated identity for one factor slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256ScalarBitBusFixedAccessV1 {
@@ -142,21 +132,18 @@ pub(crate) enum P256ScalarBitBusFixedAccessV1 {
         bit: u8,
     },
 }
-
 /// One tuple-compression lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256ScalarBitBusLaneChallengesV1 {
     /// `beta` followed by coefficients for scalar, window, bit, and value.
     pub(crate) terms: [F; P256_SCALAR_BIT_BUS_TUPLE_TERMS_V1],
 }
-
 /// Four independently sampled tuple products.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256ScalarBitBusChallengesV1 {
     /// Transcript-separated product lanes.
     pub(crate) lanes: [P256ScalarBitBusLaneChallengesV1; P256_SCALAR_BIT_BUS_LANES_V1],
 }
-
 impl P256ScalarBitBusChallengesV1 {
     /// Reject zero, non-canonical, or repeated challenge coordinates.
     pub(crate) fn validate_v1(self) -> Result<(), P256ScalarBitBusErrorV1> {
@@ -177,7 +164,6 @@ impl P256ScalarBitBusChallengesV1 {
         Ok(())
     }
 }
-
 /// One physical AIR row containing three pointwise copy factors.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -195,7 +181,6 @@ pub(crate) struct P256ScalarBitBusRowV1 {
     pub(crate) window_products:
         [[F; P256_SCALAR_BIT_BUS_LANES_V1]; P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1],
 }
-
 /// Complete scalar-bit copy trace.
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -203,7 +188,6 @@ pub(crate) struct P256ScalarBitBusTraceV1 {
     /// Exactly 171 packed rows: 512 active factors and one inactive factor.
     pub(crate) rows: Vec<P256ScalarBitBusRowV1>,
 }
-
 /// Scalar-bit topology, source, equality, or product failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum P256ScalarBitBusErrorV1 {
@@ -244,7 +228,6 @@ pub(crate) enum P256ScalarBitBusErrorV1 {
     #[error("zk-X509 P-256 scalar-bit bus resource bound is exceeded")]
     Resource,
 }
-
 /// Sample product challenges after the arithmetic base commitment and all 128
 /// window base commitments have been absorbed in verifier-fixed order.
 ///
@@ -294,7 +277,6 @@ pub(crate) fn derive_zk_x509_p256_scalar_bit_bus_challenges_v1(
     }
     Ok(P256ScalarBitBusChallengesV1 { lanes })
 }
-
 /// Convert one big-endian window bit to its arithmetic `c` limb and
 /// little-endian bit position.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -317,7 +299,6 @@ pub(crate) fn p256_scalar_window_bit_to_c_position_v1(
         bit_le % P256_SCALAR_LIMB_BITS_V1,
     ))
 }
-
 /// Build all 512 fixed-position copies and the one canonical padding slot.
 #[cfg(test)]
 pub(crate) fn build_zk_x509_p256_scalar_bit_bus_trace_v1(
@@ -379,7 +360,6 @@ pub(crate) fn build_zk_x509_p256_scalar_bit_bus_trace_v1(
     trace.validate_v1(sources, windows, arithmetic_trace, challenges)?;
     Ok(trace)
 }
-
 #[cfg(test)]
 impl P256ScalarBitBusTraceV1 {
     /// Validate fixed positions, both source bindings, pointwise equality,
@@ -443,7 +423,6 @@ impl P256ScalarBitBusTraceV1 {
         Ok(())
     }
 }
-
 /// Low-degree constraints for one packed three-factor row.
 ///
 /// `fixed` is verifier-regenerated.  Every slot constrains both bits to be
@@ -497,7 +476,6 @@ pub(crate) fn evaluate_zk_x509_p256_scalar_bit_bus_row_constraints_v1(
     }
     constraints
 }
-
 /// Four aggregate boundary constraints equating endpoint products.
 #[cfg(test)]
 pub(crate) fn evaluate_zk_x509_p256_scalar_bit_bus_terminal_constraints_v1(
@@ -513,7 +491,6 @@ pub(crate) fn evaluate_zk_x509_p256_scalar_bit_bus_terminal_constraints_v1(
         arithmetic[lane].sub(window[lane])
     }))
 }
-
 /// Rectangular aggregate representation of the packed scalar-bit bus.
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -523,7 +500,6 @@ pub(crate) struct P256ScalarBitBusStarkTraceV1 {
     /// Thirty-two challenge-dependent product-state columns.
     pub(crate) aux: Vec<[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1]>,
 }
-
 #[cfg(test)]
 impl P256ScalarBitBusStarkTraceV1 {
     fn zeroize_private_v1(&mut self) {
@@ -537,14 +513,12 @@ impl P256ScalarBitBusStarkTraceV1 {
         self.aux.clear();
     }
 }
-
 #[cfg(test)]
 impl Drop for P256ScalarBitBusStarkTraceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 fn expected_stark_fixed_access_v1(
     factor: usize,
 ) -> Result<P256ScalarBitBusFixedAccessV1, P256ScalarBitBusErrorV1> {
@@ -568,7 +542,6 @@ fn expected_stark_fixed_access_v1(
         bit: u8::try_from(within_scalar % 4).map_err(|_| P256ScalarBitBusErrorV1::Resource)?,
     })
 }
-
 /// Compile the exact verifier-owned numeric preprocessing schedule.
 #[cfg(test)]
 pub(crate) fn compile_p256_scalar_bit_bus_stark_fixed_rows_v1()
@@ -584,7 +557,6 @@ pub(crate) fn compile_p256_scalar_bit_bus_stark_fixed_rows_v1()
     }
     Ok(rows)
 }
-
 /// Regenerate one verifier-owned scalar-bit bus fixed row on any shared
 /// power-of-two domain containing the exact 171 logical rows.
 ///
@@ -633,7 +605,6 @@ pub(crate) fn p256_scalar_bit_bus_stark_fixed_row_v1(
     }
     Ok(fixed)
 }
-
 /// Project the verifier-preprocessed selector for the final active packed-bus
 /// row at an arbitrary aggregate-domain opening.
 pub(crate) const fn p256_scalar_bit_bus_stark_last_active_selector_v1(
@@ -641,7 +612,6 @@ pub(crate) const fn p256_scalar_bit_bus_stark_last_active_selector_v1(
 ) -> F {
     fixed[STARK_FIXED_LAST_ACTIVE_ROW]
 }
-
 /// Convert the typed bus rows to the sole padded aggregate layout.
 #[cfg(test)]
 pub(crate) fn build_p256_scalar_bit_bus_stark_trace_v1(
@@ -694,7 +664,6 @@ pub(crate) fn build_p256_scalar_bit_bus_stark_trace_v1(
     );
     Ok(P256ScalarBitBusStarkTraceV1 { base, aux })
 }
-
 /// Challenge-independent committed material for the scalar-bit copy bus.
 ///
 /// Construction validates the arithmetic and window sources before retaining
@@ -704,7 +673,6 @@ pub(crate) fn build_p256_scalar_bit_bus_stark_trace_v1(
 pub(crate) struct P256ScalarBitBusBaseMaterialV1 {
     rows: Vec<[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1]>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256ScalarBitBusBaseMaterialV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -714,7 +682,6 @@ impl core::fmt::Debug for P256ScalarBitBusBaseMaterialV1 {
             .finish()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ScalarBitBusBaseMaterialV1 {
     /// Validate both committed sources and build the canonical padded base
@@ -738,7 +705,6 @@ impl P256ScalarBitBusBaseMaterialV1 {
             arithmetic_trace,
         )
     }
-
     fn from_sources_v1(
         sources: &[P256ScalarBitSourceV1],
         windows: &[P256WindowTraceV1],
@@ -782,7 +748,6 @@ impl P256ScalarBitBusBaseMaterialV1 {
         material.validate_integrity_v1()?;
         Ok(material)
     }
-
     #[cfg(test)]
     fn from_sources_for_test_v1(
         sources: &[P256ScalarBitSourceV1],
@@ -791,7 +756,6 @@ impl P256ScalarBitBusBaseMaterialV1 {
     ) -> Result<Self, P256ScalarBitBusErrorV1> {
         Self::from_sources_v1(sources, windows, arithmetic_trace)
     }
-
     fn validate_integrity_v1(&self) -> Result<(), P256ScalarBitBusErrorV1> {
         if self.rows.len() != P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1 {
             return Err(P256ScalarBitBusErrorV1::Topology);
@@ -801,7 +765,6 @@ impl P256ScalarBitBusBaseMaterialV1 {
         }
         Ok(())
     }
-
     fn base_row_v1(
         &self,
         row: usize,
@@ -814,14 +777,12 @@ impl P256ScalarBitBusBaseMaterialV1 {
         validate_scalar_bit_bus_base_row_v1(row, &value)?;
         Ok(value)
     }
-
     pub(crate) fn zeroize_private_v1(&mut self) {
         for row in &mut self.rows {
             row.fill(F::ZERO);
         }
         self.rows.clear();
     }
-
     #[cfg(test)]
     fn row_mut_for_test_v1(
         &mut self,
@@ -831,20 +792,17 @@ impl P256ScalarBitBusBaseMaterialV1 {
             .get_mut(row)
             .ok_or(P256ScalarBitBusErrorV1::Topology)
     }
-
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
         self.rows.is_empty()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ScalarBitBusBaseMaterialV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_scalar_bit_bus_base_row_v1(
     row_index: usize,
@@ -884,13 +842,11 @@ fn validate_scalar_bit_bus_base_row_v1(
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256ScalarBitBusColumnFillGuardV1<'a> {
     output: &'a mut [F],
     committed: bool,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ScalarBitBusColumnFillGuardV1<'a> {
     fn new_v1(output: &'a mut [F]) -> Self {
@@ -899,16 +855,13 @@ impl<'a> P256ScalarBitBusColumnFillGuardV1<'a> {
             committed: false,
         }
     }
-
     fn output_v1(&mut self) -> &mut [F] {
         self.output
     }
-
     fn commit_v1(mut self) {
         self.committed = true;
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ScalarBitBusColumnFillGuardV1<'_> {
     fn drop(&mut self) {
@@ -917,14 +870,12 @@ impl Drop for P256ScalarBitBusColumnFillGuardV1<'_> {
         }
     }
 }
-
 /// Challenge-independent committed base-row replay.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct P256ScalarBitBusStarkBaseRowProviderV1<'a> {
     material: &'a P256ScalarBitBusBaseMaterialV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ScalarBitBusStarkBaseRowProviderV1<'a> {
     fn new_v1(
@@ -935,7 +886,6 @@ impl<'a> P256ScalarBitBusStarkBaseRowProviderV1<'a> {
         }
         Ok(Self { material })
     }
-
     /// One exact committed base row.
     pub(crate) fn base_row_v1(
         self,
@@ -943,7 +893,6 @@ impl<'a> P256ScalarBitBusStarkBaseRowProviderV1<'a> {
     ) -> Result<[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1], P256ScalarBitBusErrorV1> {
         self.material.base_row_v1(row)
     }
-
     /// One exact committed base cell.
     #[cfg(test)]
     pub(crate) fn base_cell_v1(
@@ -956,7 +905,6 @@ impl<'a> P256ScalarBitBusStarkBaseRowProviderV1<'a> {
         }
         Ok(self.base_row_v1(row)?[column])
     }
-
     /// Replay one full committed base column transactionally.
     #[cfg(test)]
     pub(crate) fn fill_base_column_v1(
@@ -977,13 +925,11 @@ impl<'a> P256ScalarBitBusStarkBaseRowProviderV1<'a> {
         Ok(())
     }
 }
-
 /// Verifier-owned fixed-row replay for the sole scalar-bit bus identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256ScalarBitBusStarkFixedProviderV1 {
     trace_size: usize,
 }
-
 impl P256ScalarBitBusStarkFixedProviderV1 {
     /// Select the canonical native domain. No witness topology is accepted.
     pub(crate) fn new_v1(trace_size: usize) -> Result<Self, P256ScalarBitBusErrorV1> {
@@ -992,7 +938,6 @@ impl P256ScalarBitBusStarkFixedProviderV1 {
         }
         Ok(Self { trace_size })
     }
-
     /// One verifier-regenerated fixed row.
     pub(crate) fn fixed_row_v1(
         self,
@@ -1000,7 +945,6 @@ impl P256ScalarBitBusStarkFixedProviderV1 {
     ) -> Result<[F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1], P256ScalarBitBusErrorV1> {
         p256_scalar_bit_bus_stark_fixed_row_v1(row, self.trace_size)
     }
-
     /// One verifier-regenerated fixed cell.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn fixed_cell_v1(
@@ -1013,7 +957,6 @@ impl P256ScalarBitBusStarkFixedProviderV1 {
         }
         Ok(self.fixed_row_v1(row)?[column])
     }
-
     /// Replay one full verifier-owned fixed column transactionally.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn fill_fixed_column_v1(
@@ -1032,7 +975,6 @@ impl P256ScalarBitBusStarkFixedProviderV1 {
         Ok(())
     }
 }
-
 /// Pre-X5B1 scalar-bit bus capability.
 ///
 /// Binding is poison-on-attempt: the sole transition is consumed before any
@@ -1042,7 +984,6 @@ pub(crate) struct P256ScalarBitBusBaseSourceV1 {
     material: Option<P256ScalarBitBusBaseMaterialV1>,
     bind_attempted: bool,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256ScalarBitBusBaseSourceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -1053,7 +994,6 @@ impl core::fmt::Debug for P256ScalarBitBusBaseSourceV1 {
             .finish()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ScalarBitBusBaseSourceV1 {
     /// Validate source bindings and enter the challenge-independent phase.
@@ -1066,7 +1006,6 @@ impl P256ScalarBitBusBaseSourceV1 {
             arithmetic_trace,
         )?)
     }
-
     #[cfg(test)]
     fn from_sources_for_test_v1(
         sources: &[P256ScalarBitSourceV1],
@@ -1079,7 +1018,6 @@ impl P256ScalarBitBusBaseSourceV1 {
             arithmetic_trace,
         )?)
     }
-
     /// Enter the base phase from already validated, challenge-independent
     /// material.
     pub(crate) fn from_base_material_v1(
@@ -1091,7 +1029,6 @@ impl P256ScalarBitBusBaseSourceV1 {
             bind_attempted: false,
         })
     }
-
     fn ensure_base_phase_v1(&self) -> Result<(), P256ScalarBitBusErrorV1> {
         if self.bind_attempted || self.material.is_none() {
             Err(P256ScalarBitBusErrorV1::Phase)
@@ -1099,19 +1036,16 @@ impl P256ScalarBitBusBaseSourceV1 {
             Ok(())
         }
     }
-
     fn material_v1(&self) -> Result<&P256ScalarBitBusBaseMaterialV1, P256ScalarBitBusErrorV1> {
         self.ensure_base_phase_v1()?;
         self.material.as_ref().ok_or(P256ScalarBitBusErrorV1::Phase)
     }
-
     /// Committed base-row replay before X5B1.
     pub(crate) fn base_rows_v1(
         &self,
     ) -> Result<P256ScalarBitBusStarkBaseRowProviderV1<'_>, P256ScalarBitBusErrorV1> {
         P256ScalarBitBusStarkBaseRowProviderV1::new_v1(self.material_v1()?)
     }
-
     /// Verifier-owned fixed-row replay before X5B1.
     #[cfg(test)]
     pub(crate) fn fixed_rows_v1(
@@ -1120,7 +1054,6 @@ impl P256ScalarBitBusBaseSourceV1 {
         self.ensure_base_phase_v1()?;
         P256ScalarBitBusStarkFixedProviderV1::new_v1(P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1)
     }
-
     /// Consume the sole phase transition using the opaque MAIN X5B1 token.
     pub(crate) fn bind_v1(
         &mut self,
@@ -1145,7 +1078,6 @@ impl P256ScalarBitBusBaseSourceV1 {
             terminals,
         })
     }
-
     pub(crate) fn zeroize_private_v1(&mut self) {
         if let Some(material) = self.material.as_mut() {
             material.zeroize_private_v1();
@@ -1153,7 +1085,6 @@ impl P256ScalarBitBusBaseSourceV1 {
         self.material = None;
         self.bind_attempted = true;
     }
-
     #[cfg(test)]
     fn material_mut_for_test_v1(
         &mut self,
@@ -1161,25 +1092,21 @@ impl P256ScalarBitBusBaseSourceV1 {
         self.ensure_base_phase_v1()?;
         self.material.as_mut().ok_or(P256ScalarBitBusErrorV1::Phase)
     }
-
     #[cfg(test)]
     const fn bind_attempted_for_test_v1(&self) -> bool {
         self.bind_attempted
     }
-
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
         self.material.is_none()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ScalarBitBusBaseSourceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 /// Post-X5B1 scalar-bit bus capability.
 ///
 /// Only this type can mint challenge-dependent product replay and expose the
@@ -1190,7 +1117,6 @@ pub(crate) struct P256ScalarBitBusBoundSourceV1 {
     post_base: Option<ZkX509CredentialMainPostBaseChallengesV1>,
     terminals: [[F; P256_SCALAR_BIT_BUS_LANES_V1]; 2],
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256ScalarBitBusBoundSourceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -1200,27 +1126,23 @@ impl core::fmt::Debug for P256ScalarBitBusBoundSourceV1 {
             .finish()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ScalarBitBusBoundSourceV1 {
     fn material_v1(&self) -> Result<&P256ScalarBitBusBaseMaterialV1, P256ScalarBitBusErrorV1> {
         self.material.as_ref().ok_or(P256ScalarBitBusErrorV1::Phase)
     }
-
     /// Opaque post-base capability retained for sibling P-256 providers.
     pub(crate) fn post_base_v1(
         &self,
     ) -> Result<ZkX509CredentialMainPostBaseChallengesV1, P256ScalarBitBusErrorV1> {
         self.post_base.ok_or(P256ScalarBitBusErrorV1::Phase)
     }
-
     /// Committed base-row replay retained across the phase transition.
     pub(crate) fn base_rows_v1(
         &self,
     ) -> Result<P256ScalarBitBusStarkBaseRowProviderV1<'_>, P256ScalarBitBusErrorV1> {
         P256ScalarBitBusStarkBaseRowProviderV1::new_v1(self.material_v1()?)
     }
-
     /// Mint deterministic auxiliary replay under the bound X5B1 challenges.
     pub(crate) fn aux_source_v1(
         &self,
@@ -1234,12 +1156,10 @@ impl P256ScalarBitBusBoundSourceV1 {
         }
         Ok(source)
     }
-
     /// Arithmetic and window product terminals under X5B1.
     pub(crate) const fn terminals_v1(&self) -> [[F; P256_SCALAR_BIT_BUS_LANES_V1]; 2] {
         self.terminals
     }
-
     pub(crate) fn zeroize_private_v1(&mut self) {
         self.post_base = None;
         for terminal in &mut self.terminals {
@@ -1250,7 +1170,6 @@ impl P256ScalarBitBusBoundSourceV1 {
         }
         self.material = None;
     }
-
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
         self.post_base.is_none()
@@ -1262,14 +1181,12 @@ impl P256ScalarBitBusBoundSourceV1 {
                 .all(|value| *value == F::ZERO)
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ScalarBitBusBoundSourceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 /// Challenge-bound constant-memory auxiliary replay.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256ScalarBitBusStarkAuxSourceV1<'a> {
@@ -1280,7 +1197,6 @@ pub(crate) struct P256ScalarBitBusStarkAuxSourceV1<'a> {
     window_running: [F; P256_SCALAR_BIT_BUS_LANES_V1],
     next_row: usize,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256ScalarBitBusStarkAuxSourceV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -1291,7 +1207,6 @@ impl core::fmt::Debug for P256ScalarBitBusStarkAuxSourceV1<'_> {
             .finish()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ScalarBitBusStarkAuxSourceV1<'a> {
     fn new_v1(
@@ -1313,7 +1228,6 @@ impl<'a> P256ScalarBitBusStarkAuxSourceV1<'a> {
             next_row: 0,
         })
     }
-
     /// Emit the next exact challenge-dependent row, including canonical zero
     /// domain padding after the final logical row.
     pub(crate) fn next_aux_row_v1(
@@ -1345,7 +1259,6 @@ impl<'a> P256ScalarBitBusStarkAuxSourceV1<'a> {
         }
         Ok(Some(row))
     }
-
     /// Restart deterministic auxiliary replay.
     #[cfg(test)]
     pub(crate) fn replay_v1(&self) -> Self {
@@ -1358,7 +1271,6 @@ impl<'a> P256ScalarBitBusStarkAuxSourceV1<'a> {
             next_row: 0,
         }
     }
-
     /// Replay one complete auxiliary column transactionally.
     #[cfg(test)]
     pub(crate) fn fill_aux_column_v1(
@@ -1382,12 +1294,10 @@ impl<'a> P256ScalarBitBusStarkAuxSourceV1<'a> {
         guard.commit_v1();
         Ok(())
     }
-
     /// Bound arithmetic and window product terminals.
     pub(crate) const fn terminals_v1(&self) -> [[F; P256_SCALAR_BIT_BUS_LANES_V1]; 2] {
         self.terminals
     }
-
     pub(crate) fn zeroize_private_v1(&mut self) {
         for lane in &mut self.challenges.lanes {
             lane.terms.fill(F::ZERO);
@@ -1399,7 +1309,6 @@ impl<'a> P256ScalarBitBusStarkAuxSourceV1<'a> {
         self.window_running.fill(F::ZERO);
         self.next_row = P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1;
     }
-
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
         self.challenges
@@ -1413,14 +1322,12 @@ impl<'a> P256ScalarBitBusStarkAuxSourceV1<'a> {
             && self.next_row == P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ScalarBitBusStarkAuxSourceV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn scalar_bit_bus_aux_row_v1(
     material: &P256ScalarBitBusBaseMaterialV1,
@@ -1467,7 +1374,6 @@ fn scalar_bit_bus_aux_row_v1(
     }
     Ok(aux)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compute_scalar_bit_bus_terminals_v1(
     material: &P256ScalarBitBusBaseMaterialV1,
@@ -1482,7 +1388,6 @@ fn compute_scalar_bit_bus_terminals_v1(
     }
     Ok([arithmetic, window])
 }
-
 fn stark_scalar_bit_factor_v1(
     fixed_slot: &[F],
     value: F,
@@ -1500,7 +1405,6 @@ fn stark_scalar_bit_factor_v1(
         .add(terms[4].mul(value));
     Ok(F::ONE.add(active.mul(compressed.sub(F::ONE))))
 }
-
 /// Arithmetic and window product terminals in one opened packed-bus
 /// auxiliary row.
 ///
@@ -1516,7 +1420,6 @@ pub(crate) fn p256_scalar_bit_bus_opened_terminals_v1(
         core::array::from_fn(|lane| aux[STARK_WINDOW_PRODUCTS + final_state + lane]),
     ]
 }
-
 /// Evaluate the packed scalar-bit bus on the aggregate extension domain.
 ///
 /// The terminal equality here binds the two bus copies. Source-side products
@@ -1571,7 +1474,6 @@ pub(crate) fn evaluate_p256_scalar_bit_bus_stark_residues_v1(
                 .push(current_aux[window_after].sub(current_aux[window_before].mul(window_factor)));
         }
     }
-
     for lane in 0..P256_SCALAR_BIT_BUS_LANES_V1 {
         residues.push(
             fixed[STARK_FIXED_FIRST_ROW]
@@ -1616,7 +1518,6 @@ pub(crate) fn evaluate_p256_scalar_bit_bus_stark_residues_v1(
     }
     Ok(residues)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ExpectedAccessV1 {
@@ -1624,7 +1525,6 @@ struct ExpectedAccessV1 {
     arithmetic_bit: F,
     window_bit: F,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ExpectedAccessV1 {
     const fn inactive() -> Self {
@@ -1635,7 +1535,6 @@ impl ExpectedAccessV1 {
         }
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn expected_accesses_v1(
     sources: &[P256ScalarBitSourceV1],
@@ -1646,7 +1545,6 @@ fn expected_accesses_v1(
     if windows.len() != P256_SCALAR_BIT_BUS_SCALARS_V1 * P256_SCALAR_BIT_BUS_WINDOWS_PER_SCALAR_V1 {
         return Err(P256ScalarBitBusErrorV1::Topology);
     }
-
     let mut c_bits = [[[F::ZERO; P256_SCALAR_LIMB_BITS_V1]; P256_SCALAR_LIMBS_V1];
         P256_SCALAR_BIT_BUS_SCALARS_V1];
     for (scalar_index, source) in sources.iter().copied().enumerate() {
@@ -1657,7 +1555,6 @@ fn expected_accesses_v1(
                 .map_err(map_arithmetic_error_v1)?;
         }
     }
-
     let mut expected = Vec::new();
     expected
         .try_reserve_exact(P256_SCALAR_BIT_BUS_FACTOR_SLOTS_V1)
@@ -1699,7 +1596,6 @@ fn expected_accesses_v1(
     expected.push(ExpectedAccessV1::inactive());
     Ok(expected)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_sources_v1(
     sources: &[P256ScalarBitSourceV1],
@@ -1734,7 +1630,6 @@ fn validate_sources_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn validate_row_range_v1(row: &P256ScalarBitBusRowV1) -> Result<(), P256ScalarBitBusErrorV1> {
     if row
@@ -1765,7 +1660,6 @@ fn validate_row_range_v1(row: &P256ScalarBitBusRowV1) -> Result<(), P256ScalarBi
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn compress_access_v1(
     fixed: P256ScalarBitBusFixedAccessV1,
@@ -1790,7 +1684,6 @@ fn compress_access_v1(
         .add(terms[3].mul(F(u64::from(bit) + 1)))
         .add(terms[4].mul(value))
 }
-
 const fn expected_scalar_v1(index: usize) -> Result<P256WindowScalarV1, P256ScalarBitBusErrorV1> {
     match index {
         0 => Ok(P256WindowScalarV1::U1),
@@ -1798,7 +1691,6 @@ const fn expected_scalar_v1(index: usize) -> Result<P256WindowScalarV1, P256Scal
         _ => Err(P256ScalarBitBusErrorV1::Topology),
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn map_arithmetic_error_v1(error: ZkX509P256AirErrorV1) -> P256ScalarBitBusErrorV1 {
     match error {
@@ -1807,7 +1699,6 @@ fn map_arithmetic_error_v1(error: ZkX509P256AirErrorV1) -> P256ScalarBitBusError
         _ => P256ScalarBitBusErrorV1::ArithmeticSource,
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn map_window_error_v1(error: P256WindowAirErrorV1) -> P256ScalarBitBusErrorV1 {
     match error {
@@ -1820,11 +1711,9 @@ fn map_window_error_v1(error: P256WindowAirErrorV1) -> P256ScalarBitBusErrorV1 {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::OnceLock;
-
     use super::*;
     use crate::privacy_engines::zk_x509::{
         credential_pre_aux::{
@@ -1839,7 +1728,6 @@ mod tests {
             P256_WINDOW_CANDIDATES_V1, P256WindowPointV1, build_p256_window_trace_v1,
         },
     };
-
     struct FixtureV1 {
         values: [[u8; 32]; P256_SCALAR_BIT_BUS_SCALARS_V1],
         operations: [ZkX509P256ArithmeticOperationV1; P256_SCALAR_BIT_BUS_SCALARS_V1],
@@ -1849,7 +1737,6 @@ mod tests {
         challenges: P256ScalarBitBusChallengesV1,
         trace: P256ScalarBitBusTraceV1,
     }
-
     fn fixture_v1() -> &'static FixtureV1 {
         static FIXTURE: OnceLock<FixtureV1> = OnceLock::new();
         FIXTURE.get_or_init(|| {
@@ -1914,7 +1801,6 @@ mod tests {
             }
         })
     }
-
     fn table_v1() -> [P256WindowPointV1; P256_WINDOW_CANDIDATES_V1] {
         core::array::from_fn(|candidate| P256WindowPointV1 {
             x_be: coordinate_v1(candidate as u8, 0x11),
@@ -1922,7 +1808,6 @@ mod tests {
             z_be: coordinate_v1(candidate as u8, 0x97),
         })
     }
-
     fn coordinate_v1(candidate: u8, domain: u8) -> [u8; 32] {
         core::array::from_fn(|index| {
             domain
@@ -1930,7 +1815,6 @@ mod tests {
                 .wrapping_add((index as u8).wrapping_mul(29))
         })
     }
-
     fn bits_for_window_v1(value: [u8; 32], window: usize) -> [u8; 4] {
         let byte = value[window / 2];
         let nibble = if window.is_multiple_of(2) {
@@ -1940,7 +1824,6 @@ mod tests {
         };
         core::array::from_fn(|bit| (nibble >> (3 - bit)) & 1)
     }
-
     fn challenges_v1() -> P256ScalarBitBusChallengesV1 {
         P256ScalarBitBusChallengesV1 {
             lanes: core::array::from_fn(|lane| P256ScalarBitBusLaneChallengesV1 {
@@ -1950,7 +1833,6 @@ mod tests {
             }),
         }
     }
-
     fn post_base_v1(seed: u8) -> ZkX509CredentialMainPostBaseChallengesV1 {
         let main = ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             [seed; 32],
@@ -1968,7 +1850,6 @@ mod tests {
         .expect("opaque X5B1 binding")
         .main_post_base()
     }
-
     fn base_source_v1() -> P256ScalarBitBusBaseSourceV1 {
         let fixture = fixture_v1();
         P256ScalarBitBusBaseSourceV1::from_sources_for_test_v1(
@@ -1978,14 +1859,12 @@ mod tests {
         )
         .expect("challenge-independent scalar-bit bus")
     }
-
     fn slot_v1(trace: &P256ScalarBitBusTraceV1, ordinal: usize) -> (&P256ScalarBitBusRowV1, usize) {
         (
             &trace.rows[ordinal / P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1],
             ordinal % P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1,
         )
     }
-
     fn rebuild_products_v1(
         trace: &mut P256ScalarBitBusTraceV1,
         challenges: P256ScalarBitBusChallengesV1,
@@ -2013,11 +1892,9 @@ mod tests {
             }
         }
     }
-
     fn flip_bit_v1(bit: F) -> F {
         F::ONE.sub(bit)
     }
-
     fn post_commitment_transcript_v1(
         arithmetic_commitment: [u8; 32],
         window_commitments: &[[u8; 32]; 128],
@@ -2041,7 +1918,6 @@ mod tests {
         }
         transcript
     }
-
     fn numeric_rejects_v1(
         base: &[[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1]],
         aux: &[[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1]],
@@ -2072,7 +1948,6 @@ mod tests {
             }
         })
     }
-
     #[test]
     fn phased_source_matches_legacy_base_aux_fixed_and_terminals() {
         let fixture = fixture_v1();
@@ -2087,7 +1962,6 @@ mod tests {
         let legacy =
             build_p256_scalar_bit_bus_stark_trace_v1(&legacy_trace).expect("legacy STARK rows");
         let mut source = base_source_v1();
-
         {
             let base = source.base_rows_v1().expect("pre-X5B1 base rows");
             for column in 0..P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1 {
@@ -2124,7 +1998,6 @@ mod tests {
                 );
             }
         }
-
         let bound = source.bind_v1(post_base).expect("one-shot X5B1 bind");
         let aux = bound.aux_source_v1().expect("post-X5B1 auxiliary replay");
         for column in 0..P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1 {
@@ -2142,7 +2015,6 @@ mod tests {
             p256_scalar_bit_bus_opened_terminals_v1(&legacy.aux[P256_SCALAR_BIT_BUS_ROWS_V1 - 1],),
         );
     }
-
     #[test]
     fn two_opaque_tokens_leave_base_and_fixed_invariant_but_change_aux() {
         let first_token = post_base_v1(0x31);
@@ -2154,7 +2026,6 @@ mod tests {
         );
         let mut first = base_source_v1();
         let mut second = base_source_v1();
-
         for column in 0..P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1 {
             let mut first_column = vec![F(17); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
             let mut second_column = vec![F(29); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
@@ -2185,7 +2056,6 @@ mod tests {
                 .expect("second fixed column");
             assert_eq!(first_column, second_column, "fixed column {column}");
         }
-
         let first = first.bind_v1(first_token).expect("first opaque bind");
         let second = second.bind_v1(second_token).expect("second opaque bind");
         let mut changed = false;
@@ -2205,7 +2075,6 @@ mod tests {
             changed |= first_column != second_column;
         }
         assert!(changed, "X5B1 challenges must affect auxiliary products");
-
         for column in 0..P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1 {
             let mut first_column = vec![F(17); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
             let mut second_column = vec![F(29); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
@@ -2222,7 +2091,6 @@ mod tests {
             assert_eq!(first_column, second_column, "bound base column {column}");
         }
     }
-
     #[test]
     fn phased_source_rejects_bad_identity_width_and_length_without_mutation() {
         let fixture = fixture_v1();
@@ -2263,7 +2131,6 @@ mod tests {
             .expect("canonical scalar operation positions");
         P256ScalarBitBusBaseSourceV1::new_v1(&fixture.windows, &canonical_arithmetic)
             .expect("verifier-owned u1/u2 identities");
-
         let mut source = base_source_v1();
         let base = source.base_rows_v1().expect("base rows");
         let mut bad_width = vec![F(77); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
@@ -2280,7 +2147,6 @@ mod tests {
             Err(P256ScalarBitBusErrorV1::Topology),
         );
         assert_eq!(bad_length, before);
-
         assert_eq!(
             P256ScalarBitBusStarkFixedProviderV1::new_v1(
                 P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1 / 2,
@@ -2295,7 +2161,6 @@ mod tests {
             Err(P256ScalarBitBusErrorV1::Topology),
         );
         assert_eq!(bad_width, before);
-
         let bound = source.bind_v1(post_base_v1(0x42)).expect("opaque bind");
         let aux = bound.aux_source_v1().expect("auxiliary source");
         let mut bad_width = vec![F(80); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
@@ -2313,7 +2178,6 @@ mod tests {
         );
         assert_eq!(bad_length, before);
     }
-
     #[test]
     fn bind_is_one_shot_and_failed_attempt_is_permanently_poisoned() {
         let first_token = post_base_v1(0x51);
@@ -2334,7 +2198,6 @@ mod tests {
             malformed.bind_v1(second_token),
             Err(P256ScalarBitBusErrorV1::Phase),
         ));
-
         let mut valid = base_source_v1();
         let bound = valid.bind_v1(first_token).expect("first bind succeeds");
         assert!(matches!(
@@ -2343,7 +2206,6 @@ mod tests {
         ));
         assert!(bound.aux_source_v1().is_ok());
     }
-
     #[test]
     fn mid_column_failure_zeroizes_the_entire_destination() {
         let mut source = base_source_v1();
@@ -2360,7 +2222,6 @@ mod tests {
         );
         assert!(output.iter().all(|value| *value == F::ZERO));
     }
-
     #[test]
     fn phased_private_state_zeroizes_recursively() {
         let fixture = fixture_v1();
@@ -2372,11 +2233,9 @@ mod tests {
         .expect("base material");
         material.zeroize_private_v1();
         assert!(material.private_is_zeroized_v1());
-
         let mut source = base_source_v1();
         source.zeroize_private_v1();
         assert!(source.private_is_zeroized_v1());
-
         let mut source = base_source_v1();
         let mut bound = source
             .bind_v1(post_base_v1(0x61))
@@ -2390,14 +2249,12 @@ mod tests {
         drop(aux);
         bound.zeroize_private_v1();
         assert!(bound.private_is_zeroized_v1());
-
         let mut legacy =
             build_p256_scalar_bit_bus_stark_trace_v1(&fixture.trace).expect("legacy trace");
         legacy.zeroize_private_v1();
         assert!(legacy.base.is_empty());
         assert!(legacy.aux.is_empty());
     }
-
     #[test]
     fn numeric_fixed_evaluator_matches_all_512_copies_and_canonical_padding() {
         let fixture = fixture_v1();
@@ -2414,7 +2271,6 @@ mod tests {
             &fixed,
             fixture.challenges,
         ));
-
         for factor in 0..P256_SCALAR_BIT_BUS_FACTOR_SLOTS_V1 {
             let row = factor / P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1;
             let slot = factor % P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1;
@@ -2478,7 +2334,6 @@ mod tests {
             "verifier preprocessing must be deterministic",
         );
     }
-
     #[test]
     fn numeric_evaluator_binds_every_active_and_padding_witness_column() {
         let fixture = fixture_v1();
@@ -2488,7 +2343,6 @@ mod tests {
             compile_p256_scalar_bit_bus_stark_fixed_rows_v1().expect("canonical fixed schedule");
         let active_row = 73;
         let padding_row = P256_SCALAR_BIT_BUS_ROWS_V1 + 11;
-
         for column in 0..P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1 {
             let mut changed = stark.base.clone();
             changed[active_row][column] = changed[active_row][column].add(F::ONE);
@@ -2496,7 +2350,6 @@ mod tests {
                 numeric_rejects_v1(&changed, &stark.aux, &fixed, fixture.challenges),
                 "unbound active base column {column}",
             );
-
             let mut changed = stark.base.clone();
             changed[padding_row][column] = changed[padding_row][column].add(F::ONE);
             assert!(
@@ -2511,7 +2364,6 @@ mod tests {
                 numeric_rejects_v1(&stark.base, &changed, &fixed, fixture.challenges),
                 "unbound active auxiliary column {column}",
             );
-
             let mut changed = stark.aux.clone();
             changed[padding_row][column] = changed[padding_row][column].add(F::ONE);
             assert!(
@@ -2520,7 +2372,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn numeric_evaluator_rejects_schedule_terminal_challenge_and_range_attacks() {
         let fixture = fixture_v1();
@@ -2528,7 +2379,6 @@ mod tests {
             .expect("rectangular scalar-bit bus");
         let fixed =
             compile_p256_scalar_bit_bus_stark_fixed_rows_v1().expect("canonical fixed schedule");
-
         let mut reordered = fixed.clone();
         reordered.swap(37, 38);
         assert!(numeric_rejects_v1(
@@ -2537,7 +2387,6 @@ mod tests {
             &reordered,
             fixture.challenges,
         ));
-
         let mut substituted = fixed.clone();
         substituted[19][STARK_FIXED_SLOT_WINDOW] =
             substituted[19][STARK_FIXED_SLOT_WINDOW].add(F::ONE);
@@ -2547,7 +2396,6 @@ mod tests {
             &substituted,
             fixture.challenges,
         ));
-
         let mut terminal = stark.aux.clone();
         let last = P256_SCALAR_BIT_BUS_ROWS_V1 - 1;
         let terminal_column = STARK_WINDOW_PRODUCTS
@@ -2560,7 +2408,6 @@ mod tests {
             &fixed,
             fixture.challenges,
         ));
-
         let mut bad_challenges = fixture.challenges;
         bad_challenges.lanes[0].terms[0] = F::ZERO;
         assert!(numeric_rejects_v1(
@@ -2569,7 +2416,6 @@ mod tests {
             &fixed,
             bad_challenges,
         ));
-
         let current_row = 8;
         let next_row = current_row + 1;
         let noncanonical = F(u64::MAX);
@@ -2601,7 +2447,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn numeric_copy_bus_alone_cannot_replace_source_side_commitment_binding() {
         let fixture = fixture_v1();
@@ -2612,7 +2457,6 @@ mod tests {
         coordinated.rows[row].arithmetic_bits[slot] = replacement;
         coordinated.rows[row].window_bits[slot] = replacement;
         rebuild_products_v1(&mut coordinated, fixture.challenges);
-
         let stark = build_p256_scalar_bit_bus_stark_trace_v1(&coordinated)
             .expect("internally consistent coordinated copy");
         let fixed =
@@ -2639,7 +2483,6 @@ mod tests {
                 }),
         );
     }
-
     #[test]
     fn complete_schedule_roundtrips_with_exact_mapping_and_one_padding_slot() {
         let fixture = fixture_v1();
@@ -2665,7 +2508,6 @@ mod tests {
             p256_scalar_window_bit_to_c_position_v1(0, 4),
             Err(P256ScalarBitBusErrorV1::Topology)
         );
-
         for scalar in 0..P256_SCALAR_BIT_BUS_SCALARS_V1 {
             for global_be in 0..P256_SCALAR_BITS_V1 {
                 let ordinal = scalar * P256_SCALAR_BITS_V1 + global_be;
@@ -2680,7 +2522,6 @@ mod tests {
                 assert_eq!(limb * 16 + bit, 255 - global_be);
             }
         }
-
         let (last, padding_slot) = slot_v1(&fixture.trace, P256_SCALAR_BIT_BUS_ACTIVE_BITS_V1);
         assert_eq!(padding_slot, 2);
         assert_eq!(
@@ -2702,11 +2543,9 @@ mod tests {
             Ok([F::ZERO; P256_SCALAR_BIT_BUS_LANES_V1])
         );
     }
-
     #[test]
     fn missing_duplicate_extra_and_reordered_windows_fail_closed() {
         let fixture = fixture_v1();
-
         let mut windows = fixture.windows.clone();
         windows.pop();
         assert!(matches!(
@@ -2718,7 +2557,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Topology)
         ));
-
         let mut windows = fixture.windows.clone();
         windows.push(fixture.windows[0].clone());
         assert!(matches!(
@@ -2730,7 +2568,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Topology)
         ));
-
         let mut windows = fixture.windows.clone();
         windows[1] = windows[0].clone();
         assert!(matches!(
@@ -2742,7 +2579,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Topology)
         ));
-
         let mut windows = fixture.windows.clone();
         windows.swap(31, 32);
         assert!(matches!(
@@ -2754,7 +2590,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Topology)
         ));
-
         let mut windows = fixture.windows.clone();
         windows.swap(63, 64);
         assert!(matches!(
@@ -2767,7 +2602,6 @@ mod tests {
             Err(P256ScalarBitBusErrorV1::Topology)
         ));
     }
-
     #[test]
     fn source_operations_are_exact_ordered_distinct_scalar_field_results() {
         let fixture = fixture_v1();
@@ -2780,7 +2614,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Topology)
         ));
-
         let mut sources = fixture.sources;
         sources.swap(0, 1);
         assert!(matches!(
@@ -2792,7 +2625,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Topology)
         ));
-
         let mut sources = fixture.sources;
         sources[1].c_operation = sources[0].c_operation;
         assert!(matches!(
@@ -2804,7 +2636,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Topology)
         ));
-
         let mut sources = fixture.sources;
         sources[1].c_operation = u32::MAX;
         assert!(matches!(
@@ -2816,7 +2647,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Topology)
         ));
-
         let operations = [
             ZkX509P256ArithmeticOperationV1 {
                 modulus: ZkX509P256ModulusV1::BaseField,
@@ -2836,7 +2666,6 @@ mod tests {
             Err(P256ScalarBitBusErrorV1::Topology)
         ));
     }
-
     #[test]
     fn valid_but_inconsistent_window_bits_fail_deterministic_equality() {
         let fixture = fixture_v1();
@@ -2855,13 +2684,11 @@ mod tests {
             Err(P256ScalarBitBusErrorV1::Equality)
         ));
     }
-
     #[test]
     fn either_endpoint_or_coordinated_endpoint_mutation_remains_source_bound() {
         let fixture = fixture_v1();
         let row_index = 19;
         let slot = 1;
-
         let mut attacked = fixture.trace.clone();
         attacked.rows[row_index].arithmetic_bits[slot] =
             flip_bit_v1(attacked.rows[row_index].arithmetic_bits[slot]);
@@ -2875,7 +2702,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::ArithmeticSource)
         );
-
         let mut attacked = fixture.trace.clone();
         attacked.rows[row_index].window_bits[slot] =
             flip_bit_v1(attacked.rows[row_index].window_bits[slot]);
@@ -2889,7 +2715,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::WindowSource)
         );
-
         let mut attacked = fixture.trace.clone();
         let flipped = flip_bit_v1(attacked.rows[row_index].arithmetic_bits[slot]);
         attacked.rows[row_index].arithmetic_bits[slot] = flipped;
@@ -2905,11 +2730,9 @@ mod tests {
             Err(P256ScalarBitBusErrorV1::ArithmeticSource)
         );
     }
-
     #[test]
     fn metadata_order_shape_padding_and_noncanonical_attacks_fail_closed() {
         let fixture = fixture_v1();
-
         let mut attacked = fixture.trace.clone();
         attacked.rows[0].fixed[0] = P256ScalarBitBusFixedAccessV1::Active {
             scalar: P256WindowScalarV1::U2,
@@ -2926,7 +2749,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Topology)
         );
-
         let mut attacked = fixture.trace.clone();
         attacked.rows.swap(0, 1);
         assert_eq!(
@@ -2938,7 +2760,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Topology)
         );
-
         let mut attacked = fixture.trace.clone();
         attacked.rows.pop();
         assert_eq!(
@@ -2950,7 +2771,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Topology)
         );
-
         let mut attacked = fixture.trace.clone();
         attacked.rows.push(fixture.trace.rows[0]);
         assert_eq!(
@@ -2962,7 +2782,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Topology)
         );
-
         let last = P256_SCALAR_BIT_BUS_ROWS_V1 - 1;
         let padding = P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 - 1;
         let mut attacked = fixture.trace.clone();
@@ -2978,7 +2797,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Range)
         );
-
         let mut attacked = fixture.trace.clone();
         attacked.rows[last].fixed[padding] = P256ScalarBitBusFixedAccessV1::Active {
             scalar: P256WindowScalarV1::U2,
@@ -2995,7 +2813,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Topology)
         );
-
         let mut attacked = fixture.trace.clone();
         attacked.rows[7].arithmetic_products[2][1] = F(u64::MAX);
         assert_eq!(
@@ -3008,7 +2825,6 @@ mod tests {
             Err(P256ScalarBitBusErrorV1::Range)
         );
     }
-
     #[test]
     fn every_endpoint_value_equality_and_intermediate_product_state_is_constrained() {
         let fixture = fixture_v1();
@@ -3040,7 +2856,6 @@ mod tests {
                 .all(|constraint| *constraint == F::ZERO),
                 "honest row {row_index}"
             );
-
             for slot in 0..P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 {
                 if row.fixed[slot] == P256ScalarBitBusFixedAccessV1::Inactive {
                     continue;
@@ -3061,7 +2876,6 @@ mod tests {
                     .any(|constraint| *constraint != F::ZERO),
                     "arithmetic value row {row_index} slot {slot}"
                 );
-
                 let mut changed = row;
                 changed.window_bits[slot] = flip_bit_v1(changed.window_bits[slot]);
                 assert!(
@@ -3079,7 +2893,6 @@ mod tests {
                     "window value row {row_index} slot {slot}"
                 );
             }
-
             for endpoint in 0..2 {
                 for state in 0..P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 {
                     for lane in 0..P256_SCALAR_BIT_BUS_LANES_V1 {
@@ -3109,7 +2922,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn terminal_and_source_trace_attacks_are_detected_independently() {
         let fixture = fixture_v1();
@@ -3120,7 +2932,6 @@ mod tests {
         let terminal = evaluate_zk_x509_p256_scalar_bit_bus_terminal_constraints_v1(&attacked)
             .expect("terminal shape");
         assert_ne!(terminal[2], F::ZERO);
-
         let mut arithmetic = fixture.arithmetic.clone();
         arithmetic.base[0][0] = arithmetic.base[0][0].add(F::ONE);
         assert_eq!(
@@ -3132,7 +2943,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::ArithmeticSource)
         );
-
         let mut windows = fixture.windows.clone();
         windows[0].base[0][0] = windows[0].base[0][0].add(F::ONE);
         assert_eq!(
@@ -3145,28 +2955,22 @@ mod tests {
             Err(P256ScalarBitBusErrorV1::WindowSource)
         );
     }
-
     #[test]
     fn challenge_validation_and_post_commitment_transcript_separation_are_exact() {
         let fixture = fixture_v1();
         fixture.challenges.validate_v1().expect("test challenges");
-
         let mut bad = fixture.challenges;
         bad.lanes[0].terms[0] = F::ZERO;
         assert_eq!(bad.validate_v1(), Err(P256ScalarBitBusErrorV1::Challenge));
-
         let mut bad = fixture.challenges;
         bad.lanes[1].terms[3] = F(u64::MAX);
         assert_eq!(bad.validate_v1(), Err(P256ScalarBitBusErrorV1::Challenge));
-
         let mut bad = fixture.challenges;
         bad.lanes[2] = bad.lanes[0];
         assert_eq!(bad.validate_v1(), Err(P256ScalarBitBusErrorV1::Challenge));
-
         let mut bad = fixture.challenges;
         bad.lanes[0].terms[4] = bad.lanes[0].terms[3];
         assert_eq!(bad.validate_v1(), Err(P256ScalarBitBusErrorV1::Challenge));
-
         let mut wrong_but_well_formed = fixture.challenges;
         wrong_but_well_formed.lanes[1].terms[4] = F(1_001);
         wrong_but_well_formed
@@ -3181,7 +2985,6 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Constraint)
         );
-
         let arithmetic_commitment = [0x81; 32];
         let window_commitments: [[u8; 32]; 128] =
             core::array::from_fn(|index| core::array::from_fn(|byte| (index + byte) as u8));
@@ -3191,14 +2994,12 @@ mod tests {
         first_challenges
             .validate_v1()
             .expect("separated transcript challenges");
-
         let mut replay = post_commitment_transcript_v1(arithmetic_commitment, &window_commitments);
         assert_eq!(
             derive_zk_x509_p256_scalar_bit_bus_challenges_v1(&mut replay)
                 .expect("deterministic replay"),
             first_challenges
         );
-
         let mut changed_windows = window_commitments;
         changed_windows[91][7] ^= 1;
         let mut changed = post_commitment_transcript_v1(arithmetic_commitment, &changed_windows);
@@ -3207,14 +3008,12 @@ mod tests {
                 .expect("changed commitment challenges"),
             first_challenges
         );
-
         let mut changed = post_commitment_transcript_v1([0x82; 32], &window_commitments);
         assert_ne!(
             derive_zk_x509_p256_scalar_bit_bus_challenges_v1(&mut changed)
                 .expect("changed arithmetic commitment challenges"),
             first_challenges
         );
-
         let mut bare =
             TransparentTranscriptV1::new(b"p256-scalar-bit-bus-test", &[0x31; 32], &[0x72; 32])
                 .expect("bare transcript");

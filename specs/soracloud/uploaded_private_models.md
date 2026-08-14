@@ -14,10 +14,13 @@ uploaded-model path:
 Torii also exposes upload readiness and deterministic private execution
 endpoints:
 
-- `GET /v1/soracloud/model/upload/encryption-recipient`
-- `GET /v1/soracloud/model/upload/status`
+- `GET /v1/soracloud/model/upload/encryption-recipient` (public, one response
+  object capped at 64 KiB of encoded JSON)
+- `GET /v1/soracloud/model/upload/status` (exact-network canonical account
+  authentication)
 - `POST /v1/soracloud/model/upload/private/execute`
-- `GET /v1/soracloud/model/upload/private/receipts`
+- `GET /v1/soracloud/model/upload/private/receipts` (exact-network canonical
+  account authentication; private, non-storable responses)
 
 ## Register Flow
 
@@ -71,9 +74,10 @@ prepare the storage, runtime, and signing surfaces as one controlled change.
 6. After submission, query
    `GET /v1/soracloud/model/upload/private/receipts` with the expected service,
    model id, weight version, and `count_mode=exact` when an operator needs an
-   audited total. Compare the committed receipt commitments and encrypted
-   artifact references with the runtime response before marking the release
-   complete.
+   audited total. Sign the exact GET path and sorted query with the configured
+   NetworkId and local account key; an API token is not a substitute for this
+   proof. Compare the committed receipt commitments and encrypted artifact
+   references with the runtime response before marking the release complete.
 
 ## Chain State
 

@@ -1,7 +1,5 @@
 //! UAID portfolio aggregation helpers.
-
 use std::collections::BTreeMap;
-
 use iroha_data_model::{
     asset::{AssetBalanceScope, AssetValue},
     nexus::{
@@ -13,12 +11,10 @@ use iroha_data_model::{
     },
 };
 use mv::storage::StorageReadOnly;
-
 use crate::{
     nexus::space_directory::UaidDataspaceBindings,
     state::{AsAssetIdAccountCompare, AssetByAccountBounds, StateReadOnly, WorldReadOnly},
 };
-
 /// Collect a deterministic UAID portfolio snapshot from the given state view.
 pub fn collect_portfolio(
     state: &impl StateReadOnly,
@@ -26,7 +22,6 @@ pub fn collect_portfolio(
 ) -> UniversalPortfolio {
     collect_portfolio_from_world_and_nexus(state.world(), state.nexus(), uaid)
 }
-
 /// Collect a deterministic UAID portfolio snapshot from world and nexus snapshots.
 pub fn collect_portfolio_from_world_and_nexus(
     world: &impl WorldReadOnly,
@@ -38,7 +33,6 @@ pub fn collect_portfolio_from_world_and_nexus(
     let directory = world.uaid_dataspaces().get(&uaid);
     let mut grouped: BTreeMap<DataSpaceId, Vec<AccountPortfolio>> = BTreeMap::new();
     let mut totals = PortfolioTotals::default();
-
     let Some(account_id) = world.uaid_accounts().get(&uaid).cloned() else {
         return UniversalPortfolio {
             uaid,
@@ -53,11 +47,9 @@ pub fn collect_portfolio_from_world_and_nexus(
             totals,
         };
     };
-
     let label = stored.clone().into_inner().label;
     let mut assets = account_assets(world, &account_id);
     assets.sort_by(|a, b| a.asset_id.cmp(&b.asset_id));
-
     let mut assets_by_dataspace: BTreeMap<DataSpaceId, Vec<AssetPosition>> = BTreeMap::new();
     for asset in assets {
         let dataspace_id = match asset.asset_id.scope() {
@@ -80,13 +72,11 @@ pub fn collect_portfolio_from_world_and_nexus(
             ))
             .or_default();
     }
-
     totals.accounts = 1;
     totals.positions = assets_by_dataspace
         .values()
         .map(|assets| assets.len() as u64)
         .sum();
-
     for (dataspace_id, mut assets) in assets_by_dataspace {
         assets.sort_by(|a, b| a.asset_id.cmp(&b.asset_id));
         grouped
@@ -98,7 +88,6 @@ pub fn collect_portfolio_from_world_and_nexus(
                 assets,
             });
     }
-
     let dataspaces = grouped
         .into_iter()
         .map(|(dataspace_id, mut accounts)| {
@@ -112,14 +101,12 @@ pub fn collect_portfolio_from_world_and_nexus(
             }
         })
         .collect();
-
     UniversalPortfolio {
         uaid,
         dataspaces,
         totals,
     }
 }
-
 fn resolve_account_dataspace(
     directory: Option<&UaidDataspaceBindings>,
     default_dataspace: DataSpaceId,
@@ -129,7 +116,6 @@ fn resolve_account_dataspace(
         .and_then(|bindings| bindings.dataspace_for_account(account_id))
         .unwrap_or(default_dataspace)
 }
-
 fn account_assets(
     world: &impl WorldReadOnly,
     account_id: &iroha_data_model::account::AccountId,
@@ -140,7 +126,6 @@ fn account_assets(
         .filter_map(|(asset_id, value)| asset_position(asset_id, value))
         .collect()
 }
-
 fn asset_position(
     asset_id: &iroha_data_model::asset::AssetId,
     value: &AssetValue,
@@ -148,18 +133,15 @@ fn asset_position(
     if (**value).is_zero() {
         return None;
     }
-
     Some(AssetPosition {
         asset_id: asset_id.clone(),
         asset_definition_id: asset_id.definition().clone(),
         quantity: value.clone().into_inner(),
     })
 }
-
 struct DataspaceAliasLookup {
     aliases: BTreeMap<DataSpaceId, String>,
 }
-
 impl DataspaceAliasLookup {
     fn new(catalog: &DataSpaceCatalog) -> Self {
         let aliases = catalog
@@ -169,12 +151,10 @@ impl DataspaceAliasLookup {
             .collect();
         Self { aliases }
     }
-
     fn alias_for(&self, id: DataSpaceId) -> Option<&str> {
         self.aliases.get(&id).map(String::as_str)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::Hash;
@@ -191,20 +171,17 @@ mod tests {
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
     };
-
     #[test]
     fn aggregates_account_by_uaid() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query);
-
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::portfolio"));
         let account = iroha_test_samples::ALICE_ID.clone();
         let domain_id: DomainId =
@@ -213,7 +190,6 @@ mod tests {
             domain_id.clone(),
             "cash".parse().expect("static asset name"),
         );
-
         seed_world(
             &mut state,
             &domain_id,
@@ -222,7 +198,6 @@ mod tests {
             &[(account.clone(), uaid, 777u64)],
             None,
         );
-
         let snapshot = collect_portfolio(&state.view(), uaid);
         assert_eq!(snapshot.totals.accounts, 1);
         assert_eq!(snapshot.totals.positions, 1);
@@ -236,13 +211,11 @@ mod tests {
             Quantity::from(777_u64)
         );
     }
-
     #[test]
     fn splits_accounts_by_dataspace_when_directory_is_present() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query);
-
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::split"));
         let account = iroha_test_samples::ALICE_ID.clone();
         let domain_id: DomainId =
@@ -251,7 +224,6 @@ mod tests {
             domain_id.clone(),
             "cash".parse().expect("static asset name"),
         );
-
         let second_dataspace = DataSpaceId::new(11);
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata {
@@ -267,7 +239,6 @@ mod tests {
         ])
         .expect("dataspace catalog");
         state.nexus.get_mut().dataspace_catalog = dataspace_catalog;
-
         seed_world(
             &mut state,
             &domain_id,
@@ -276,24 +247,20 @@ mod tests {
             &[(account.clone(), uaid, 5u64)],
             Some(&[(account.clone(), uaid, second_dataspace)]),
         );
-
         let snapshot = collect_portfolio(&state.view(), uaid);
         assert_eq!(snapshot.totals.accounts, 1);
         assert_eq!(snapshot.dataspaces.len(), 1);
-
         let slice = &snapshot.dataspaces[0];
         assert_eq!(slice.dataspace_id, second_dataspace);
         assert_eq!(slice.dataspace_alias.as_deref(), Some("cbdc"));
         assert_eq!(slice.accounts.len(), 1);
         assert_eq!(slice.accounts[0].account_id, account);
     }
-
     #[test]
     fn groups_assets_by_balance_scope_dataspace() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query);
-
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::asset-scope"));
         let account = iroha_test_samples::ALICE_ID.clone();
         let domain_id: DomainId =
@@ -306,7 +273,6 @@ mod tests {
             domain_id.clone(),
             "voucher".parse().expect("static asset name"),
         );
-
         let second_dataspace = DataSpaceId::new(11);
         state.nexus.get_mut().dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata {
@@ -321,7 +287,6 @@ mod tests {
             },
         ])
         .expect("dataspace catalog");
-
         seed_world_with_scoped_assets(
             &mut state,
             &domain_id,
@@ -343,12 +308,10 @@ mod tests {
             ],
             Some(&[(account.clone(), uaid, DataSpaceId::UNIVERSAL)]),
         );
-
         let snapshot = collect_portfolio(&state.view(), uaid);
         assert_eq!(snapshot.totals.accounts, 1);
         assert_eq!(snapshot.totals.positions, 2);
         assert_eq!(snapshot.dataspaces.len(), 2);
-
         let universal = snapshot
             .dataspaces
             .iter()
@@ -360,7 +323,6 @@ mod tests {
             universal.accounts[0].assets[0].asset_definition_id,
             global_def_id
         );
-
         let scoped = snapshot
             .dataspaces
             .iter()
@@ -374,7 +336,6 @@ mod tests {
             scoped_def_id
         );
     }
-
     fn seed_world(
         state: &mut State,
         domain_id: &DomainId,
@@ -403,7 +364,6 @@ mod tests {
             .build(&ALICE_ID);
             world.asset_definitions.insert(def_id.clone(), definition);
             world.track_asset_definition_domain(def_id);
-
             for (account_id, uaid, amount) in accounts {
                 let details =
                     AccountDetails::new(Metadata::default(), None, Some(*uaid), Vec::new());
@@ -417,7 +377,6 @@ mod tests {
                     .insert(asset_id.clone(), Owned::new(Quantity::from(*amount)));
                 world.track_asset_holder(&asset_id);
             }
-
             if let Some(entries) = bindings {
                 for (account_id, binding_uaid, dataspace) in entries {
                     if let Some(existing) = world.uaid_dataspaces.get_mut(binding_uaid) {
@@ -433,7 +392,6 @@ mod tests {
         tx.apply();
         block.commit().expect("apply seeded block");
     }
-
     fn seed_world_with_scoped_assets(
         state: &mut State,
         domain_id: &DomainId,
@@ -464,7 +422,6 @@ mod tests {
                 world.asset_definitions.insert(def_id.clone(), definition);
                 world.track_asset_definition_domain(def_id);
             }
-
             let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
             world
                 .accounts
@@ -478,7 +435,6 @@ mod tests {
                     .insert(asset_id.clone(), Owned::new(Quantity::from(*amount)));
                 world.track_asset_holder(&asset_id);
             }
-
             if let Some(entries) = bindings {
                 for (account_id, binding_uaid, dataspace) in entries {
                     if let Some(existing) = world.uaid_dataspaces.get_mut(binding_uaid) {

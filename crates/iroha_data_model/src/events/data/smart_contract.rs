@@ -1,14 +1,10 @@
 //! Smart contract registry lifecycle events.
-
 use iroha_data_model_derive::model;
-
 pub use self::model::*;
 use super::*;
-
 #[model]
 mod model {
     use super::*;
-
     /// Smart contract registry events emitted when manifests, bytecode, or instance
     /// bindings change.
     #[derive(
@@ -34,7 +30,6 @@ mod model {
         /// Contract instance binding was deactivated.
         InstanceDeactivated(ContractInstanceDeactivated),
     }
-
     /// Payload describing a new code registration.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -45,7 +40,6 @@ mod model {
         /// Account that submitted the registration.
         pub registrar: crate::account::AccountId,
     }
-
     /// Payload describing a code removal operation.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -59,7 +53,6 @@ mod model {
         #[norito(default)]
         pub reason: Option<String>,
     }
-
     /// Payload describing an instance activation.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -72,7 +65,6 @@ mod model {
         /// Operator that performed the activation.
         pub activated_by: crate::account::AccountId,
     }
-
     /// Payload describing an instance deactivation.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,

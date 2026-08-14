@@ -4,18 +4,14 @@
 //! always emits exactly one versioned document on stdout and leaves stderr
 //! empty, including for command failures. Exit status remains independent of
 //! the selected presentation mode.
-
 use std::{collections::BTreeMap, io::Write};
-
 use norito::json::{Map, Value};
-
 /// Stable schema name for one-document Musubi CLI output.
 pub const OUTPUT_SCHEMA: &str = "musubi-cli-output";
 /// First-release Musubi CLI output schema version.
 pub const OUTPUT_VERSION: u64 = 1;
 /// Replacement used whenever diagnostic material contains a secret.
 pub const REDACTED: &str = "[REDACTED]";
-
 /// User-selected command output format.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OutputFormat {
@@ -25,7 +21,6 @@ pub enum OutputFormat {
     /// One deterministic, versioned Norito JSON document.
     Json,
 }
-
 /// Stable Musubi V1 command error code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ErrorCode {
@@ -70,7 +65,6 @@ pub enum ErrorCode {
     /// An invariant failed without a more specific public classification.
     Internal,
 }
-
 impl ErrorCode {
     /// Complete immutable inventory of Musubi V1 error codes.
     #[cfg(test)]
@@ -96,7 +90,6 @@ impl ErrorCode {
         Self::Io,
         Self::Internal,
     ];
-
     /// Return the stable machine-readable spelling.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -123,7 +116,6 @@ impl ErrorCode {
             Self::Internal => "MUSUBI_E_INTERNAL",
         }
     }
-
     /// Return the stable non-zero process exit code for this category.
     #[must_use]
     pub const fn exit_code(self) -> i32 {
@@ -141,7 +133,6 @@ impl ErrorCode {
         }
     }
 }
-
 /// One structured, secret-redacted command diagnostic.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
@@ -150,7 +141,6 @@ pub struct Diagnostic {
     context: BTreeMap<String, String>,
     help: Option<String>,
 }
-
 impl Diagnostic {
     /// Construct a diagnostic with a stable public code.
     #[must_use]
@@ -162,7 +152,6 @@ impl Diagnostic {
             help: None,
         }
     }
-
     /// Add deterministic key/value context.
     ///
     /// Secret-named fields are replaced in full. Other values still pass
@@ -179,28 +168,24 @@ impl Diagnostic {
         self.context.insert(key, value);
         self
     }
-
     /// Attach an actionable, secret-redacted remediation hint.
     #[must_use]
     pub fn with_help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(sanitize_diagnostic_text(&help.into()));
         self
     }
-
     /// Return the stable public code.
     #[must_use]
     #[cfg(test)]
     pub const fn code(&self) -> ErrorCode {
         self.code
     }
-
     /// Return deterministic already redacted context.
     #[must_use]
     #[cfg(test)]
     pub const fn context(&self) -> &BTreeMap<String, String> {
         &self.context
     }
-
     fn to_json_value(&self) -> Value {
         let mut diagnostic = Map::new();
         diagnostic.insert("code".to_owned(), Value::from(self.code.as_str()));
@@ -219,7 +204,6 @@ impl Diagnostic {
         }
         Value::Object(diagnostic)
     }
-
     fn render_human(&self) -> String {
         let mut rendered = format!("error[{}]: {}\n", self.code.as_str(), self.message);
         for (key, value) in &self.context {
@@ -237,20 +221,17 @@ impl Diagnostic {
         rendered
     }
 }
-
 /// Complete logical result of one Musubi command.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandOutput {
     command: String,
     outcome: CommandOutcome,
 }
-
 #[derive(Clone, Debug, PartialEq)]
 enum CommandOutcome {
     Success { message: String, data: Value },
     Failure(Diagnostic),
 }
-
 impl CommandOutput {
     /// Construct a successful command result.
     ///
@@ -269,7 +250,6 @@ impl CommandOutput {
             },
         }
     }
-
     /// Construct a failed command result.
     #[must_use]
     pub fn failure(command: impl Into<String>, diagnostic: Diagnostic) -> Self {
@@ -278,7 +258,6 @@ impl CommandOutput {
             outcome: CommandOutcome::Failure(diagnostic),
         }
     }
-
     /// Return the process exit code independent of presentation format.
     #[must_use]
     pub const fn exit_code(&self) -> i32 {
@@ -287,7 +266,6 @@ impl CommandOutput {
             CommandOutcome::Failure(diagnostic) => diagnostic.code.exit_code(),
         }
     }
-
     /// Render deterministic stdout and stderr buffers.
     ///
     /// # Errors
@@ -300,7 +278,6 @@ impl CommandOutput {
             OutputFormat::Json => self.render_json(),
         }
     }
-
     fn render_human(&self) -> RenderedOutput {
         match &self.outcome {
             CommandOutcome::Success { message, .. } => RenderedOutput {
@@ -315,7 +292,6 @@ impl CommandOutput {
             },
         }
     }
-
     fn render_json(&self) -> Result<RenderedOutput, norito::json::Error> {
         let mut envelope = Map::new();
         envelope.insert("command".to_owned(), Value::from(self.command.clone()));
@@ -341,7 +317,6 @@ impl CommandOutput {
         })
     }
 }
-
 /// Fully routed bytes and process status for one command result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderedOutput {
@@ -349,7 +324,6 @@ pub struct RenderedOutput {
     stderr: String,
     exit_code: i32,
 }
-
 impl RenderedOutput {
     /// Return bytes routed to stdout.
     #[must_use]
@@ -357,20 +331,17 @@ impl RenderedOutput {
     pub fn stdout(&self) -> &str {
         &self.stdout
     }
-
     /// Return bytes routed to stderr.
     #[must_use]
     #[cfg(test)]
     pub fn stderr(&self) -> &str {
         &self.stderr
     }
-
     /// Return the stable process exit code.
     #[must_use]
     pub const fn exit_code(&self) -> i32 {
         self.exit_code
     }
-
     /// Write the routed buffers without adding prefixes or extra documents.
     ///
     /// # Errors
@@ -387,7 +358,6 @@ impl RenderedOutput {
         stderr.flush()
     }
 }
-
 /// Redact secrets and unsafe terminal control characters from diagnostic text.
 #[must_use]
 pub fn sanitize_diagnostic_text(input: &str) -> String {
@@ -399,7 +369,6 @@ pub fn sanitize_diagnostic_text(input: &str) -> String {
         .filter(|character| !character.is_control() || matches!(character, '\n' | '\t'))
         .collect()
 }
-
 fn terminated(message: &str) -> String {
     if message.is_empty() || message.ends_with('\n') {
         message.to_owned()
@@ -407,7 +376,6 @@ fn terminated(message: &str) -> String {
         format!("{message}\n")
     }
 }
-
 fn redact_json_value(value: &Value) -> Value {
     match value {
         Value::Null => Value::Null,
@@ -433,7 +401,6 @@ fn redact_json_value(value: &Value) -> Value {
         ),
     }
 }
-
 fn is_exact_public_string(key: &str, value: &Value) -> bool {
     // `ChainId` is a validated public display/configuration label. Its grammar permits `:`, so
     // values such as `token:dev` can resemble a secret assignment even though redacting them
@@ -443,7 +410,6 @@ fn is_exact_public_string(key: &str, value: &Value) -> bool {
             .as_str()
             .is_some_and(|value| value.parse::<iroha_data_model::ChainId>().is_ok())
 }
-
 fn is_secret_key(key: &str) -> bool {
     let normalized = key
         .bytes()
@@ -472,7 +438,6 @@ fn is_secret_key(key: &str) -> bool {
     .iter()
     .any(|secret| normalized == *secret || normalized.ends_with(secret))
 }
-
 fn redact_private_key_blocks(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut private_block = false;
@@ -499,7 +464,6 @@ fn redact_private_key_blocks(input: &str) -> String {
     }
     output
 }
-
 fn redact_secret_assignments(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut output = String::with_capacity(input.len());
@@ -561,7 +525,6 @@ fn redact_secret_assignments(input: &str) -> String {
     output.push_str(&input[copied_through..]);
     output
 }
-
 fn assignment_key_at(input: &str, start: usize) -> Option<(&str, usize)> {
     let bytes = input.as_bytes();
     let first = *bytes.get(start)?;
@@ -585,18 +548,15 @@ fn assignment_key_at(input: &str, start: usize) -> Option<(&str, usize)> {
     }
     Some((&input[start..end], end))
 }
-
 const fn is_key_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')
 }
-
 fn normalize_key(key: &str) -> String {
     key.bytes()
         .filter(u8::is_ascii_alphanumeric)
         .map(|byte| char::from(byte.to_ascii_lowercase()))
         .collect()
 }
-
 fn redact_bearer_tokens(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut output = String::with_capacity(input.len());
@@ -632,13 +592,10 @@ fn redact_bearer_tokens(input: &str) -> String {
     output.push_str(&input[copied_through..]);
     output
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-
     use super::*;
-
     #[test]
     fn v1_error_codes_and_exit_codes_are_stable_and_unique() {
         let spellings = ErrorCode::ALL
@@ -651,7 +608,6 @@ mod tests {
         assert_eq!(ErrorCode::LockfileLegacy.exit_code(), 3);
         assert_eq!(ErrorCode::Internal.exit_code(), 70);
     }
-
     #[test]
     fn human_output_routes_success_and_failure_deterministically() {
         let success = CommandOutput::success("metadata", "package = demo", Value::Null)
@@ -660,7 +616,6 @@ mod tests {
         assert_eq!(success.stdout(), "package = demo\n");
         assert_eq!(success.stderr(), "");
         assert_eq!(success.exit_code(), 0);
-
         let failure = CommandOutput::failure(
             "check",
             Diagnostic::new(ErrorCode::Locked, "lockfile would change")
@@ -676,7 +631,6 @@ mod tests {
             "error[MUSUBI_E_LOCKED]: lockfile would change\n  package: demo/core\n  help: rerun without --locked\n"
         );
     }
-
     #[test]
     fn json_failure_is_one_deterministic_stdout_document() {
         let output = CommandOutput::failure(
@@ -687,7 +641,6 @@ mod tests {
         );
         let first = output.render(OutputFormat::Json).expect("first render");
         let second = output.render(OutputFormat::Json).expect("second render");
-
         assert_eq!(first, second);
         assert!(first.stderr().is_empty());
         assert_eq!(first.stdout().matches('\n').count(), 1);
@@ -703,12 +656,10 @@ mod tests {
             Some("MUSUBI_E_RESOLUTION_CONFLICT")
         );
     }
-
     #[test]
     fn diagnostics_redact_assignments_bearer_tokens_private_keys_and_controls() {
         let secret = "private_key=deadbeef stream-token='stream-secret' Authorization: Bearer auth-secret\n-----BEGIN PRIVATE KEY-----\nkey-material\n-----END PRIVATE KEY-----\nunsafe\u{1b}[31m";
         let redacted = sanitize_diagnostic_text(secret);
-
         for leaked in ["deadbeef", "stream-secret", "auth-secret", "key-material"] {
             assert!(!redacted.contains(leaked), "leaked {leaked}");
         }
@@ -718,7 +669,6 @@ mod tests {
         assert!(redacted.contains("Authorization: [REDACTED]"));
         assert!(redacted.contains("[REDACTED PRIVATE KEY]"));
     }
-
     #[test]
     fn json_data_and_context_redact_secret_named_fields_recursively() {
         let mut nested = Map::new();
@@ -730,7 +680,6 @@ mod tests {
         let output = CommandOutput::success("fetch", "fetched", Value::Object(nested))
             .render(OutputFormat::Json)
             .expect("render JSON");
-
         assert!(!output.stdout().contains("stream-secret"));
         assert!(!output.stdout().contains("bearer-secret"));
         let document: Value = norito::json::from_str(output.stdout()).expect("parse output");
@@ -744,7 +693,6 @@ mod tests {
             document.pointer("/data/message").and_then(Value::as_str),
             Some("request used Bearer [REDACTED]")
         );
-
         let diagnostic = Diagnostic::new(ErrorCode::Network, "request failed")
             .with_context("private_key", "never-print-this");
         assert_eq!(
@@ -752,7 +700,6 @@ mod tests {
             Some(&REDACTED.to_owned())
         );
     }
-
     #[test]
     fn json_data_preserves_public_chain_display_label_without_weakening_other_redaction() {
         let output = CommandOutput::success(
@@ -766,7 +713,6 @@ mod tests {
         .render(OutputFormat::Json)
         .expect("render JSON");
         let document: Value = norito::json::from_str(output.stdout()).expect("parse output");
-
         assert_eq!(
             document.pointer("/data/chain_id").and_then(Value::as_str),
             Some("token:dev")
@@ -776,7 +722,6 @@ mod tests {
             Some("token:[REDACTED]")
         );
     }
-
     #[test]
     fn rendered_output_writes_exact_routed_bytes() {
         let rendered =
@@ -788,7 +733,6 @@ mod tests {
         rendered
             .write_to(&mut stdout, &mut stderr)
             .expect("write output");
-
         assert!(stdout.is_empty());
         assert_eq!(stderr, rendered.stderr().as_bytes());
     }

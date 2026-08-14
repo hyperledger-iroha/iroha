@@ -4,7 +4,6 @@ fn sccp_submit_ingress_has_closed_endpoint_specific_limits() {
         .expect("destination endpoint policy");
     let native =
         super::sccp_submit_ingress_policy("/v1/bridge/messages").expect("native endpoint policy");
-
     assert_eq!(destination.telemetry_label, "bridge_proof");
     assert_eq!(native.telemetry_label, "bridge_message");
     assert_eq!(
@@ -34,7 +33,6 @@ fn sccp_submit_ingress_has_closed_endpoint_specific_limits() {
     assert!(super::sccp_submit_ingress_policy("/v1/bridge/proofs").is_none());
     assert!(super::sccp_submit_ingress_policy("/v1/bridge/messages/").is_none());
 }
-
 #[tokio::test]
 async fn sccp_submit_body_caps_chunked_streams_without_content_length() {
     let stream = futures::stream::iter([
@@ -44,23 +42,19 @@ async fn sccp_submit_body_caps_chunked_streams_without_content_length() {
     let error = super::collect_sccp_submit_body(axum::body::Body::from_stream(stream), 7)
         .await
         .expect_err("chunked body must not exceed the explicit cap");
-
     assert_eq!(error, super::SccpSubmitBodyReadError::TooLarge);
 }
-
 #[tokio::test]
 async fn sccp_submit_body_accepts_exact_cap_and_rejects_one_byte_over() {
     let exact = super::collect_sccp_submit_body(axum::body::Body::from("12345678"), 8)
         .await
         .expect("body at the exact endpoint cap must be accepted");
     assert_eq!(exact.as_ref(), b"12345678");
-
     let error = super::collect_sccp_submit_body(axum::body::Body::from("123456789"), 8)
         .await
         .expect_err("one byte over the endpoint cap must reject");
     assert_eq!(error, super::SccpSubmitBodyReadError::TooLarge);
 }
-
 #[tokio::test]
 async fn sccp_submit_body_distinguishes_transport_failure_from_size_rejection() {
     let stream = futures::stream::iter([Err::<axum::body::Bytes, _>(std::io::Error::other(
@@ -69,14 +63,11 @@ async fn sccp_submit_body_distinguishes_transport_failure_from_size_rejection() 
     let error = super::collect_sccp_submit_body(axum::body::Body::from_stream(stream), 64)
         .await
         .expect_err("transport error must fail closed");
-
     assert_eq!(error, super::SccpSubmitBodyReadError::Read);
 }
-
 #[tokio::test]
 async fn sccp_submit_ingress_rejects_missing_token_without_polling_body() {
     use tower::ServiceExt as _;
-
     let mut app = mk_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
@@ -84,7 +75,6 @@ async fn sccp_submit_ingress_rejects_missing_token_without_polling_body() {
         state.api_tokens_set = Arc::new(HashSet::from(["expected-token".to_owned()]));
     }
     let router = sccp_ingress_test_router(app);
-
     for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
         let mut request = sccp_ingress_request(path, sccp_body_that_must_not_be_polled());
         request.headers_mut().insert(
@@ -99,11 +89,9 @@ async fn sccp_submit_ingress_rejects_missing_token_without_polling_body() {
         assert_eq!(response.status(), StatusCode::FORBIDDEN, "path {path}");
     }
 }
-
 #[tokio::test]
 async fn sccp_submit_ingress_fails_closed_when_required_tokens_are_unconfigured() {
     use tower::ServiceExt as _;
-
     let mut app = mk_app_state_for_tests_with_options(None, Some((1, 8)), None, None);
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
@@ -114,7 +102,6 @@ async fn sccp_submit_ingress_fails_closed_when_required_tokens_are_unconfigured(
         state.query_queue_timeout = Duration::ZERO;
     }
     let router = sccp_ingress_test_router(Arc::clone(&app));
-
     for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
         let mut request = sccp_ingress_request(path, sccp_body_that_must_not_be_polled());
         request.headers_mut().insert(
@@ -133,11 +120,9 @@ async fn sccp_submit_ingress_fails_closed_when_required_tokens_are_unconfigured(
         "unconfigured authentication must reject before consuming rate budget"
     );
 }
-
 #[tokio::test]
 async fn sccp_submit_ingress_rejects_duplicate_tokens_before_rate_body_and_admission() {
     use tower::ServiceExt as _;
-
     let mut app = mk_app_state_for_tests_with_options(None, Some((1, 8)), None, None);
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
@@ -156,7 +141,6 @@ async fn sccp_submit_ingress_rejects_duplicate_tokens_before_rate_body_and_admis
         request
             .headers_mut()
             .append(HEADER_API_TOKEN, HeaderValue::from_static("expected-token"));
-
         let response = router
             .clone()
             .oneshot(request)
@@ -171,7 +155,6 @@ async fn sccp_submit_ingress_rejects_duplicate_tokens_before_rate_body_and_admis
         "duplicate authentication must reject before consuming rate budget"
     );
 }
-
 #[test]
 fn sccp_submit_content_type_accepts_only_unambiguous_utf8_application_json() {
     for value in [
@@ -188,11 +171,9 @@ fn sccp_submit_content_type_accepts_only_unambiguous_utf8_application_json() {
         assert_eq!(super::validate_sccp_submit_content_type(&headers), Ok(()));
     }
 }
-
 #[tokio::test]
 async fn sccp_submit_content_type_rejects_before_rate_body_and_admission() {
     use tower::ServiceExt as _;
-
     let mut app = mk_app_state_for_tests_with_options(None, Some((1, 8)), None, None);
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
@@ -201,7 +182,6 @@ async fn sccp_submit_content_type_rejects_before_rate_body_and_admission() {
         state.query_queue_timeout = Duration::ZERO;
     }
     let router = sccp_ingress_test_router(Arc::clone(&app));
-
     let cases = [
         (None, StatusCode::UNSUPPORTED_MEDIA_TYPE),
         (
@@ -268,7 +248,6 @@ async fn sccp_submit_content_type_rejects_before_rate_body_and_admission() {
             .expect("content-type response");
         assert_eq!(response.status(), expected, "content type {content_type:?}");
     }
-
     let mut duplicate = sccp_ingress_request(
         "/v1/bridge/proofs/submit",
         sccp_body_that_must_not_be_polled(),
@@ -289,11 +268,9 @@ async fn sccp_submit_content_type_rejects_before_rate_body_and_admission() {
         "invalid content types must reject before consuming rate budget"
     );
 }
-
 #[tokio::test]
 async fn sccp_submit_wrong_methods_bypass_proof_admission_and_body_polling() {
     use tower::ServiceExt as _;
-
     let mut app = mk_app_state_for_tests_with_options(None, Some((1, 8)), None, None);
     let app_mut = Arc::get_mut(&mut app).expect("unique app state");
     app_mut.query_inflight = Arc::new(tokio::sync::Semaphore::new(0));
@@ -310,7 +287,6 @@ async fn sccp_submit_wrong_methods_bypass_proof_admission_and_body_polling() {
         app.api_token_enforced(),
     );
     let router = sccp_ingress_test_router(Arc::clone(&app));
-
     for method in [axum::http::Method::GET, axum::http::Method::PUT] {
         let mut request = sccp_ingress_request(
             "/v1/bridge/proofs/submit",
@@ -324,7 +300,6 @@ async fn sccp_submit_wrong_methods_bypass_proof_admission_and_body_polling() {
             .expect("wrong-method response");
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
-
     assert!(
         app.deploy_rate_limiter
             .allow_cost(&key, policy.rate_limit_cost)
@@ -336,11 +311,9 @@ async fn sccp_submit_wrong_methods_bypass_proof_admission_and_body_polling() {
         "the exact weighted request must consume the full enabled burst"
     );
 }
-
 #[tokio::test]
 async fn sccp_submit_ingress_rejects_exhausted_rate_limit_without_polling_body() {
     use tower::ServiceExt as _;
-
     let app = mk_app_state_for_tests_with_options(None, Some((1, 1)), None, None);
     let headers = HeaderMap::new();
     let remote_ip = std::net::IpAddr::from([127, 0, 0, 1]);
@@ -364,7 +337,6 @@ async fn sccp_submit_ingress_rejects_exhausted_rate_limit_without_polling_body()
             .await
     );
     let router = sccp_ingress_test_router(app);
-
     for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
         let mut request = sccp_ingress_request(path, sccp_body_that_must_not_be_polled());
         request.headers_mut().insert(
@@ -383,17 +355,14 @@ async fn sccp_submit_ingress_rejects_exhausted_rate_limit_without_polling_body()
         );
     }
 }
-
 #[tokio::test]
 async fn sccp_submit_ingress_rejects_exhausted_body_gate_without_polling() {
     use tower::ServiceExt as _;
-
     let mut app = mk_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(0));
     let router = sccp_ingress_test_router(app);
-
     for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
         let response = router
             .clone()
@@ -410,12 +379,10 @@ async fn sccp_submit_ingress_rejects_exhausted_body_gate_without_polling() {
         );
     }
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stalled_sccp_body_times_out_without_reserving_query_capacity() {
     use std::task::Poll;
     use tower::ServiceExt as _;
-
     let mut app = mk_app_state_for_tests();
     let app_mut = Arc::get_mut(&mut app).expect("unique app state");
     app_mut.proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(1));
@@ -443,7 +410,6 @@ async fn stalled_sccp_body_times_out_without_reserving_query_capacity() {
     );
     let response_task = tokio::spawn(router.oneshot(request));
     started_rx.await.expect("stalled body was polled");
-
     assert_eq!(body_gate.available_permits(), 0);
     let query_permit = query
         .clone()
@@ -454,7 +420,6 @@ async fn stalled_sccp_body_times_out_without_reserving_query_capacity() {
         .try_acquire_owned()
         .expect("network body read must not reserve heavy query capacity");
     drop((query_permit, heavy_permit));
-
     let response = response_task
         .await
         .expect("body timeout task")
@@ -464,17 +429,14 @@ async fn stalled_sccp_body_times_out_without_reserving_query_capacity() {
     assert_eq!(query.available_permits(), 1);
     assert_eq!(heavy.available_permits(), 1);
 }
-
 #[tokio::test]
 async fn sccp_submit_ingress_checks_heavy_admission_after_bounded_body_collection() {
     use tower::ServiceExt as _;
-
     let mut app = mk_app_state_for_tests();
     let state = Arc::get_mut(&mut app).expect("unique app state");
     state.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
     state.query_queue_timeout = Duration::ZERO;
     let router = sccp_ingress_test_router(app);
-
     for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
         let yielded = Arc::new(AtomicUsize::new(0));
         let yielded_for_stream = Arc::clone(&yielded);
@@ -501,11 +463,9 @@ async fn sccp_submit_ingress_checks_heavy_admission_after_bounded_body_collectio
         );
     }
 }
-
 #[tokio::test]
 async fn sccp_submit_weight_is_capped_to_burst_and_consumes_the_full_budget() {
     use tower::ServiceExt as _;
-
     let mut app = mk_app_state_for_tests_with_options(None, Some((1, 7)), None, None);
     let state = Arc::get_mut(&mut app).expect("unique app state");
     state.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
@@ -529,7 +489,6 @@ async fn sccp_submit_weight_is_capped_to_burst_and_consumes_the_full_budget() {
         .expect("capped-cost response");
     assert_eq!(first.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(yielded.load(Ordering::SeqCst), 1);
-
     let second = router
         .oneshot(sccp_ingress_request(
             "/v1/bridge/messages",
@@ -539,11 +498,9 @@ async fn sccp_submit_weight_is_capped_to_burst_and_consumes_the_full_budget() {
         .expect("exhausted-cost response");
     assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
 }
-
 #[tokio::test]
 async fn sccp_submit_ingress_rejects_oversized_content_length_without_polling_body() {
     use tower::ServiceExt as _;
-
     let router = sccp_ingress_test_router(mk_app_state_for_tests());
     for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
         let policy = super::sccp_submit_ingress_policy(path).expect("known policy");
@@ -565,11 +522,9 @@ async fn sccp_submit_ingress_rejects_oversized_content_length_without_polling_bo
         );
     }
 }
-
 #[tokio::test]
 async fn sccp_submit_ingress_rejects_malformed_or_ambiguous_length_without_polling_body() {
     use tower::ServiceExt as _;
-
     let router = sccp_ingress_test_router(mk_app_state_for_tests());
     for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
         for case in 0..3 {
@@ -612,11 +567,9 @@ async fn sccp_submit_ingress_rejects_malformed_or_ambiguous_length_without_polli
         }
     }
 }
-
 #[tokio::test]
 async fn sccp_submit_ingress_treats_overflowing_numeric_length_as_too_large() {
     use tower::ServiceExt as _;
-
     let router = sccp_ingress_test_router(mk_app_state_for_tests());
     for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
         let mut request = sccp_ingress_request(path, sccp_body_that_must_not_be_polled());
@@ -636,11 +589,9 @@ async fn sccp_submit_ingress_treats_overflowing_numeric_length_as_too_large() {
         );
     }
 }
-
 #[tokio::test]
 async fn sccp_submit_ingress_honors_stricter_operator_body_limit() {
     use tower::ServiceExt as _;
-
     let router = sccp_ingress_test_router_with_limit(mk_app_state_for_tests(), 8);
     let mut request =
         sccp_ingress_request("/v1/bridge/messages", sccp_body_that_must_not_be_polled());
@@ -649,14 +600,11 @@ async fn sccp_submit_ingress_honors_stricter_operator_body_limit() {
         HeaderValue::from_static("9"),
     );
     let response = router.oneshot(request).await.expect("middleware response");
-
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
-
 #[tokio::test]
 async fn sccp_submit_ingress_accepts_exact_effective_cap_and_rejects_actual_overage() {
     use tower::ServiceExt as _;
-
     let router = sccp_ingress_test_router_with_limit(mk_app_state_for_tests(), 8);
     for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
         let mut exact = sccp_ingress_request(path, axum::body::Body::from("12345678"));
@@ -671,7 +619,6 @@ async fn sccp_submit_ingress_accepts_exact_effective_cap_and_rejects_actual_over
             .await
             .expect("exact-cap middleware response");
         assert_eq!(response.status(), StatusCode::NO_CONTENT, "path {path}");
-
         let over = sccp_ingress_request(path, axum::body::Body::from("123456789"));
         let response = router
             .clone()
@@ -685,11 +632,9 @@ async fn sccp_submit_ingress_accepts_exact_effective_cap_and_rejects_actual_over
         );
     }
 }
-
 #[tokio::test]
 async fn sccp_submit_ingress_requires_an_exact_network_account_signature() {
     use tower::ServiceExt as _;
-
     let router = sccp_ingress_test_router(mk_app_state_for_tests());
     let unsigned = sccp_ingress_request("/v1/bridge/messages", axum::body::Body::from("{}"));
     let response = router
@@ -698,7 +643,6 @@ async fn sccp_submit_ingress_requires_an_exact_network_account_signature() {
         .await
         .expect("unsigned middleware response");
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
     let mut wrong_network =
         sccp_ingress_request("/v1/bridge/messages", axum::body::Body::from("{}"));
     let (account, key_pair) = sccp_ingress_auth_fixture();
@@ -724,11 +668,9 @@ async fn sccp_submit_ingress_requires_an_exact_network_account_signature() {
         .expect("wrong-network middleware response");
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
-
 #[tokio::test]
 async fn sccp_submit_ingress_rejects_lying_content_length_with_correct_status() {
     use tower::ServiceExt as _;
-
     let router = sccp_ingress_test_router_with_limit(mk_app_state_for_tests(), 8);
     for (body, declared, expected) in [
         ("12345", "4", StatusCode::BAD_REQUEST),
@@ -748,11 +690,9 @@ async fn sccp_submit_ingress_rejects_lying_content_length_with_correct_status() 
         assert_eq!(response.status(), expected, "declared {declared}");
     }
 }
-
 #[tokio::test]
 async fn sccp_submit_ingress_preserves_missing_and_chunked_bodies_after_one_consumption() {
     use tower::ServiceExt as _;
-
     let router = sccp_ingress_echo_router_with_limit(mk_app_state_for_tests(), 16);
     for (path, chunked) in [
         ("/v1/bridge/proofs/submit", false),
@@ -795,11 +735,9 @@ async fn sccp_submit_ingress_preserves_missing_and_chunked_bodies_after_one_cons
         assert_eq!(yielded.load(Ordering::SeqCst), 2, "path {path}");
     }
 }
-
 #[tokio::test]
 async fn sccp_submit_ingress_maps_transport_failure_to_bad_request() {
     use tower::ServiceExt as _;
-
     let stream = futures::stream::iter([Err::<axum::body::Bytes, _>(std::io::Error::other(
         "adversarial stream failure",
     ))]);
@@ -809,10 +747,8 @@ async fn sccp_submit_ingress_maps_transport_failure_to_bad_request() {
         .oneshot(request)
         .await
         .expect("transport-failure middleware response");
-
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
-
 #[tokio::test]
 async fn openapi_enforces_token_policy() {
     let mut app = mk_app_state_for_tests();
@@ -823,7 +759,6 @@ async fn openapi_enforces_token_policy() {
         tokens.insert("token-123".to_owned());
         state.api_tokens_set = Arc::new(tokens);
     }
-
     let headers = HeaderMap::new();
     let missing = super::handler_openapi(
         State(app.clone()),
@@ -837,7 +772,6 @@ async fn openapi_enforces_token_policy() {
             iroha_data_model::ValidationFail::NotPermitted(_)
         ))
     ));
-
     let mut headers_with_token = HeaderMap::new();
     headers_with_token.insert("x-api-token", HeaderValue::from_static("token-123"));
     let ok = super::handler_openapi(
@@ -849,12 +783,10 @@ async fn openapi_enforces_token_policy() {
     .expect("token accepted");
     assert_eq!(ok.status(), axum::http::StatusCode::OK);
 }
-
 #[cfg(feature = "connect")]
 #[tokio::test]
 async fn connect_session_handler_rejects_missing_remote_addr_header() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
-
     let app = mk_app_state_for_tests();
     let network_id = *app.state.network_id_ref();
     let app_pk = [0x24_u8; 32];
@@ -882,7 +814,6 @@ async fn connect_session_handler_rejects_missing_remote_addr_header() {
         )) if message == "connect: remote addr unavailable"
     ));
 }
-
 #[tokio::test]
 async fn soracloud_status_handler_returns_snapshot_sections() {
     let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
@@ -895,7 +826,6 @@ async fn soracloud_status_handler_returns_snapshot_sections() {
         state_dir: PathBuf::from("/tmp/soracloud/runtime"),
         local_peer_id: None,
     }));
-
     let response = super::handler_soracloud_status(
         State(app),
         HeaderMap::new(),
@@ -905,13 +835,11 @@ async fn soracloud_status_handler_returns_snapshot_sections() {
     .await
     .expect("soracloud status should succeed");
     assert_eq!(response.status(), StatusCode::OK);
-
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("collect body");
     let payload: norito::json::Value =
         norito::json::from_slice(&body).expect("decode JSON response");
-
     assert_eq!(
         payload
             .get("schema_version")
@@ -984,7 +912,6 @@ async fn soracloud_status_handler_returns_snapshot_sections() {
         "runtime_manager section should be present"
     );
 }
-
 #[tokio::test]
 async fn soracloud_status_routing_counts_only_active_autoscale_capacity_lanes() {
     let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
@@ -1036,7 +963,6 @@ async fn soracloud_status_routing_counts_only_active_autoscale_capacity_lanes() 
             0,
         ));
     }
-
     let response = super::handler_soracloud_status(
         State(app),
         HeaderMap::new(),
@@ -1046,7 +972,6 @@ async fn soracloud_status_routing_counts_only_active_autoscale_capacity_lanes() 
     .await
     .expect("soracloud status should succeed");
     assert_eq!(response.status(), StatusCode::OK);
-
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("collect body");
@@ -1056,7 +981,6 @@ async fn soracloud_status_routing_counts_only_active_autoscale_capacity_lanes() 
         .get("routing")
         .and_then(norito::json::Value::as_object)
         .expect("routing section");
-
     assert_eq!(
         routing
             .get("configured_lane_count")
@@ -1111,7 +1035,6 @@ async fn soracloud_status_routing_counts_only_active_autoscale_capacity_lanes() 
         "future-created autoscale lanes must be absent from capacity ids"
     );
 }
-
 #[tokio::test]
 async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
     let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
@@ -1142,7 +1065,6 @@ async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
             0,
         ));
     }
-
     let response = super::handler_soracloud_status(
         State(app),
         HeaderMap::new(),
@@ -1152,7 +1074,6 @@ async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
     .await
     .expect("soracloud status should succeed");
     assert_eq!(response.status(), StatusCode::OK);
-
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("collect body");
@@ -1162,7 +1083,6 @@ async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
         .get("routing")
         .and_then(norito::json::Value::as_object)
         .expect("routing section");
-
     assert_eq!(
         routing
             .get("configured_lane_count")
@@ -1215,7 +1135,6 @@ async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
             .is_some_and(Vec::is_empty)
     );
 }
-
 #[test]
 fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
     let mut world = seed_public_soracloud_world();
@@ -1227,7 +1146,6 @@ fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
         0x7e,
         "derive hosted HTTP topology third validator fixture key",
     );
-
     world
         .soracloud_inrou_host_capabilities_mut_for_testing()
         .insert(
@@ -1343,10 +1261,8 @@ fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
                 last_error: None,
             },
         );
-
     let app = mk_app_state_for_tests_with_world(world);
     let topology = super::soracloud_hosted_http_topology_section(&app);
-
     assert_eq!(
         topology
             .get("active_capability_adverts")
@@ -1388,7 +1304,6 @@ fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
         Some(1)
     );
 }
-
 #[tokio::test]
 async fn soracloud_runtime_status_sections_report_degraded_for_hydrating_snapshots() {
     let mut app = mk_app_state_for_tests();
@@ -1401,10 +1316,8 @@ async fn soracloud_runtime_status_sections_report_degraded_for_hydrating_snapsho
         state_dir: PathBuf::from("/tmp/soracloud/runtime"),
         local_peer_id: None,
     }));
-
     let (service_health, _runtime_pressure, runtime_manager) =
         super::soracloud_runtime_status_sections(&app);
-
     assert_eq!(
         service_health
             .get("status")
@@ -1418,13 +1331,11 @@ async fn soracloud_runtime_status_sections_report_degraded_for_hydrating_snapsho
         Some(true)
     );
 }
-
 #[tokio::test]
 async fn soracloud_runtime_status_sections_report_unavailable_without_runtime() {
     let app = mk_app_state_for_tests();
     let (service_health, runtime_pressure, runtime_manager) =
         super::soracloud_runtime_status_sections(&app);
-
     assert_eq!(
         service_health
             .get("status")
@@ -1444,7 +1355,6 @@ async fn soracloud_runtime_status_sections_report_unavailable_without_runtime() 
         Some(false)
     );
 }
-
 #[tokio::test]
 async fn proof_rate_limit_sets_retry_after_header() {
     let mut app = mk_app_state_for_tests();
@@ -1462,13 +1372,11 @@ async fn proof_rate_limit_sets_retry_after_header() {
             ),
         );
     }
-
     let headers = HeaderMap::new();
     let q = crate::NoritoQuery(routing::ProofListQuery {
         limit: Some(1),
         ..Default::default()
     });
-
     let first = super::handler_list_proofs(
         State(app.clone()),
         headers.clone(),
@@ -1479,7 +1387,6 @@ async fn proof_rate_limit_sets_retry_after_header() {
     .expect("first request allowed")
     .into_response();
     assert_eq!(first.status(), axum::http::StatusCode::OK);
-
     let resp = match super::handler_list_proofs(
         State(app.clone()),
         headers,
@@ -1495,14 +1402,12 @@ async fn proof_rate_limit_sets_retry_after_header() {
     let retry_after = resp.headers().get(axum::http::header::RETRY_AFTER);
     assert_eq!(retry_after.and_then(|h| h.to_str().ok()), Some("3"));
 }
-
 #[tokio::test]
 async fn policy_rate_limit_keys_transport_remote_when_internal_header_missing() {
     let mut app = mk_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
-
     let first = super::handler_policy(
         State(app.clone()),
         HeaderMap::new(),
@@ -1512,7 +1417,6 @@ async fn policy_rate_limit_keys_transport_remote_when_internal_header_missing() 
     .expect("first policy request should be allowed")
     .into_response();
     assert_eq!(first.status(), StatusCode::OK);
-
     let second = super::handler_policy(
         State(app),
         HeaderMap::new(),
@@ -1523,7 +1427,6 @@ async fn policy_rate_limit_keys_transport_remote_when_internal_header_missing() 
     .into_response();
     assert_eq!(second.status(), StatusCode::OK);
 }
-
 #[cfg(feature = "profiling")]
 #[tokio::test]
 async fn profiling_enforces_token_policy() {
@@ -1535,10 +1438,8 @@ async fn profiling_enforces_token_policy() {
         tokens.insert("token-456".to_owned());
         state.api_tokens_set = Arc::new(tokens);
     }
-
     let params: routing::profiling::ProfileParams =
         norito::json::from_value(norito::json!({})).expect("defaults");
-
     let headers = HeaderMap::new();
     let missing = super::handler_profile(
         State(app.clone()),
@@ -1553,7 +1454,6 @@ async fn profiling_enforces_token_policy() {
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
         )))
     ));
-
     let mut headers_with_token = HeaderMap::new();
     headers_with_token.insert("x-api-token", HeaderValue::from_static("token-456"));
     let ok = super::handler_profile(
@@ -1566,7 +1466,6 @@ async fn profiling_enforces_token_policy() {
     .expect("token accepted");
     assert!(!ok.is_empty());
 }
-
 #[cfg(feature = "schema")]
 #[tokio::test]
 async fn schema_handler_ok() {
@@ -1582,13 +1481,11 @@ async fn schema_handler_ok() {
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn telemetry_handlers_ok() {
     let app = mk_app_state_for_tests();
     let headers = HeaderMap::new();
-
     // Status root
     let resp = super::handler_status_root(
         State(app.clone()),
@@ -1600,7 +1497,6 @@ async fn telemetry_handlers_ok() {
     .expect("ok")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-
     // Status tail
     let resp = super::handler_status_tail(
         State(app.clone()),
@@ -1613,7 +1509,6 @@ async fn telemetry_handlers_ok() {
     .expect("ok")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-
     // Metrics
     let text = super::handler_metrics(
         State(app.clone()),
@@ -1623,7 +1518,6 @@ async fn telemetry_handlers_ok() {
     .await
     .expect("ok");
     assert!(!text.is_empty());
-
     let resp = super::handler_sumeragi_phases(
         State(app.clone()),
         headers.clone(),
@@ -1633,7 +1527,6 @@ async fn telemetry_handlers_ok() {
     .expect("ok")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-
     // QC and leader endpoints
     let resp = super::handler_sumeragi_qc(
         State(app.clone()),
@@ -1644,7 +1537,6 @@ async fn telemetry_handlers_ok() {
     .expect("ok")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-
     app.state.metrics().set_axt_proof_cache_state(
         iroha_data_model::nexus::DataSpaceId::new(1),
         "miss",
@@ -1719,21 +1611,18 @@ async fn telemetry_handlers_ok() {
         hint.get("reason").and_then(norito::json::Value::as_str),
         Some(AxtRejectReason::HandleEra.label())
     );
-
     let resp = super::handler_sumeragi_leader(State(app), headers, crate::loopback_connect_info())
         .await
         .expect("ok")
         .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn telemetry_commit_qc_null_on_empty() {
     let app = mk_app_state_for_tests();
     let headers = HeaderMap::new();
     let sample_hash = format!("{}", iroha_crypto::Hash::new(b"torii-telemetry-test"));
-
     let resp = super::handler_commit_qc(
         State(app.clone()),
         headers,
@@ -1776,13 +1665,11 @@ async fn telemetry_commit_qc_null_on_empty() {
         norito::decode_from_bytes(&bytes).expect("decode commit_qc norito");
     assert!(decoded_opt.is_none());
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn telemetry_params_and_bls_keys_ok() {
     let app = mk_app_state_for_tests();
     let headers = HeaderMap::new();
-
     let resp = super::handler_sumeragi_params(
         State(app.clone()),
         headers.clone(),
@@ -1792,7 +1679,6 @@ async fn telemetry_params_and_bls_keys_ok() {
     .expect("ok")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-
     let resp =
         super::handler_sumeragi_bls_keys(State(app), headers, crate::loopback_connect_info())
             .await
@@ -1800,12 +1686,10 @@ async fn telemetry_params_and_bls_keys_ok() {
             .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
 }
-
 #[tokio::test]
 async fn app_api_vk_and_proofs_lists_ok() {
     let app = mk_app_state_for_tests();
     let headers = HeaderMap::new();
-
     // List VKs
     let resp = super::handler_list_vk(
         State(app.clone()),
@@ -1817,7 +1701,6 @@ async fn app_api_vk_and_proofs_lists_ok() {
     .expect("ok")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-
     // List proofs
     let resp = super::handler_list_proofs(
         State(app.clone()),
@@ -1829,7 +1712,6 @@ async fn app_api_vk_and_proofs_lists_ok() {
     .expect("ok")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-
     // Count proofs
     let resp = super::handler_count_proofs(
         State(app.clone()),
@@ -1842,12 +1724,10 @@ async fn app_api_vk_and_proofs_lists_ok() {
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
 }
-
 #[tokio::test]
 async fn app_api_get_by_id_not_found_returns_404() {
     let app = mk_app_state_for_tests();
     let headers = HeaderMap::new();
-
     // Contract code by hash (non-existent)
     let resp = super::handler_get_contract_code(
         State(app.clone()),
@@ -1861,7 +1741,6 @@ async fn app_api_get_by_id_not_found_returns_404() {
     .expect("ok mapping")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
-
     // VK by backend/name (non-existent)
     let resp = super::handler_get_vk_by_backend_name(
         State(app.clone()),
@@ -1873,7 +1752,6 @@ async fn app_api_get_by_id_not_found_returns_404() {
     .expect("ok mapping")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
-
     // Proof by backend/hash (non-existent)
     let resp = super::handler_get_proof_by_backend_hash(
         State(app.clone()),
@@ -1889,7 +1767,6 @@ async fn app_api_get_by_id_not_found_returns_404() {
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn retired_server_contract_deploy_routes_are_absent() {
@@ -1899,7 +1776,6 @@ async fn retired_server_contract_deploy_routes_are_absent() {
         http::{Method, Request, StatusCode},
     };
     use tower::ServiceExt as _;
-
     let cfg = crate::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -1934,7 +1810,6 @@ async fn retired_server_contract_deploy_routes_are_absent() {
         None,
         routing::MaybeTelemetry::disabled(),
     );
-
     for (method, path) in [
         (Method::POST, "/v1/contracts/deploy"),
         (Method::POST, "/v1/contracts/deploy-bundle"),
@@ -1952,17 +1827,14 @@ async fn retired_server_contract_deploy_routes_are_absent() {
         request
             .extensions_mut()
             .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-
         let response = torii
             .api_router_for_tests()
             .oneshot(request)
             .await
             .expect("response");
-
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "path {path}");
     }
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
@@ -1972,7 +1844,6 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
         http::{Method, Request, StatusCode},
     };
     use tower::ServiceExt as _;
-
     let cfg = crate::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -2002,7 +1873,6 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
     let storage = sorafs_node.storage().expect("enabled storage");
     assert_eq!(storage.manifest_count(), 0);
     assert_eq!(state.view().world().pin_manifests().len(), 0);
-
     let runtime_deps =
         ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled()).with_sorafs_node(sorafs_node);
     let torii = Torii::new_with_handle(
@@ -2020,7 +1890,6 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
         None,
         runtime_deps,
     );
-
     let mut request = Request::builder()
         .method(Method::POST)
         .uri("/v1/sorafs/storage/pin")
@@ -2032,7 +1901,6 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
     request
         .extensions_mut()
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-
     let response = torii
         .api_router_for_tests()
         .oneshot(request)
@@ -2050,7 +1918,6 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
         "an HTTP request must not create pre-commit pin-registry state"
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn appeal_finance_publication_routes_are_read_only() {
@@ -2058,7 +1925,6 @@ async fn appeal_finance_publication_routes_are_read_only() {
         fs,
         path::{Path, PathBuf},
     };
-
     use axum::{
         body::Body,
         extract::ConnectInfo,
@@ -2070,23 +1936,19 @@ async fn appeal_finance_publication_routes_are_read_only() {
         GovernanceDagSealedStateSlot, NodeHandle, NodeRuntimeDeps,
     };
     use tower::ServiceExt as _;
-
     #[derive(Debug)]
     struct RouterGovernanceDagSigner {
         key_pair: KeyPair,
     }
-
     impl RouterGovernanceDagSigner {
         const HANDLE: &'static str = "pkcs11:governance-dag:retired-appeal-route-primary";
         const PEER_ID: &'static [u8] = b"12D3KooWRetiredAppealRoutePublisher";
-
         fn new() -> Self {
             Self {
                 key_pair: KeyPair::try_from_seed(vec![0x4D; 32], Algorithm::Ed25519)
                     .expect("derive retired-route Governance DAG signer"),
             }
         }
-
         fn public_key_bytes(&self) -> [u8; 32] {
             let (algorithm, bytes) = self
                 .key_pair
@@ -2096,29 +1958,23 @@ async fn appeal_finance_publication_routes_are_read_only() {
             assert_eq!(algorithm, Algorithm::Ed25519);
             bytes.try_into().expect("Ed25519 public key width")
         }
-
         fn expected_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
             GovernanceDagRuntimeProviderQualificationV1::new(1, [0x85; 32])
         }
     }
-
     impl GovernanceDagRuntimeSigner for RouterGovernanceDagSigner {
         fn handle(&self) -> &str {
             Self::HANDLE
         }
-
         fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
             Ok(Self::expected_qualification())
         }
-
         fn publisher_peer_id(&self) -> &[u8] {
             Self::PEER_ID
         }
-
         fn public_key(&self) -> [u8; 32] {
             self.public_key_bytes()
         }
-
         fn sign(
             &self,
             _purpose: sorafs_node::GovernanceDagSigningPurposeV1,
@@ -2131,13 +1987,11 @@ async fn appeal_finance_publication_routes_are_read_only() {
                 .map_err(|_| "retired-route Governance DAG signature width changed".to_owned())
         }
     }
-
     #[derive(Debug)]
     struct RouterGovernanceDagCheckpointState {
         records: [Option<GovernanceDagSealedStateRecord>; 6],
         generation_floors: [u64; 6],
     }
-
     impl Default for RouterGovernanceDagCheckpointState {
         fn default() -> Self {
             Self {
@@ -2146,16 +2000,13 @@ async fn appeal_finance_publication_routes_are_read_only() {
             }
         }
     }
-
     #[derive(Debug, Default)]
     struct RouterGovernanceDagCheckpointStore {
         state: std::sync::Mutex<RouterGovernanceDagCheckpointState>,
     }
-
     impl RouterGovernanceDagCheckpointStore {
         const HANDLE: &'static str = "sealed:governance-dag:retired-appeal-route-primary";
         const POLICY_DIGEST: [u8; 32] = [0x86; 32];
-
         const fn slot_index(slot: GovernanceDagSealedStateSlot) -> usize {
             match slot {
                 GovernanceDagSealedStateSlot::Checkpoint => 0,
@@ -2166,21 +2017,17 @@ async fn appeal_finance_publication_routes_are_read_only() {
                 GovernanceDagSealedStateSlot::SignedHeadRequestReplay => 5,
             }
         }
-
         fn expected_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
             GovernanceDagRuntimeProviderQualificationV1::new(1, Self::POLICY_DIGEST)
         }
     }
-
     impl GovernanceDagSealedCheckpointStore for RouterGovernanceDagCheckpointStore {
         fn handle(&self) -> &str {
             Self::HANDLE
         }
-
         fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
             Ok(Self::expected_qualification())
         }
-
         fn load(
             &self,
             slot: GovernanceDagSealedStateSlot,
@@ -2188,7 +2035,6 @@ async fn appeal_finance_publication_routes_are_read_only() {
             let state = self.state.lock().map_err(|_| "poisoned".to_owned())?;
             Ok(state.records[Self::slot_index(slot)].clone())
         }
-
         fn compare_and_swap(
             &self,
             slot: GovernanceDagSealedStateSlot,
@@ -2210,7 +2056,6 @@ async fn appeal_finance_publication_routes_are_read_only() {
             state.records[index] = Some(next);
             Ok(())
         }
-
         fn delete(
             &self,
             slot: GovernanceDagSealedStateSlot,
@@ -2227,7 +2072,6 @@ async fn appeal_finance_publication_routes_are_read_only() {
             Ok(())
         }
     }
-
     fn snapshot_files(root: &Path) -> Vec<(PathBuf, Option<Vec<u8>>)> {
         fn visit(root: &Path, directory: &Path, snapshot: &mut Vec<(PathBuf, Option<Vec<u8>>)>) {
             let mut entries = fs::read_dir(directory)
@@ -2260,12 +2104,10 @@ async fn appeal_finance_publication_routes_are_read_only() {
                 }
             }
         }
-
         let mut snapshot = Vec::new();
         visit(root, root, &mut snapshot);
         snapshot
     }
-
     let cfg = crate::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -2319,7 +2161,6 @@ async fn appeal_finance_publication_routes_are_read_only() {
     )
     .expect("initialise runtime-signed Governance DAG publisher");
     assert!(sorafs_node.has_governance_publisher());
-
     let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
         .with_sorafs_node(sorafs_node.clone());
     let torii = Torii::new_with_handle(
@@ -2340,7 +2181,6 @@ async fn appeal_finance_publication_routes_are_read_only() {
     let router = torii.api_router_for_tests();
     let files_before = snapshot_files(&storage_root);
     let pending_before = sorafs_node.pending_governance_publication_count();
-
     for path in [
         "/v1/sorafs/appeals/finance/reports",
         "/v1/sorafs/appeals/finance/weekly-rollups",
@@ -2354,7 +2194,6 @@ async fn appeal_finance_publication_routes_are_read_only() {
         request
             .extensions_mut()
             .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-
         let response = router
             .clone()
             .oneshot(request)
@@ -2362,7 +2201,6 @@ async fn appeal_finance_publication_routes_are_read_only() {
             .expect("retired appeal-finance publication route response");
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED, "{path}");
     }
-
     assert_eq!(
         sorafs_node.pending_governance_publication_count(),
         pending_before,
@@ -2374,7 +2212,6 @@ async fn appeal_finance_publication_routes_are_read_only() {
         "retired publication routes must not mutate the Governance DAG, publish index, or durable outbox"
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode() {
@@ -2384,7 +2221,6 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
         http::{Method, Request, StatusCode},
     };
     use tower::ServiceExt as _;
-
     let cfg = crate::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -2419,7 +2255,6 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
         None,
         routing::MaybeTelemetry::disabled(),
     );
-
     let router = torii.api_router_for_tests();
     for path in ["/v1/contracts/aliases", "/v1/contracts/call/simulate"] {
         let mut request = Request::builder()
@@ -2431,7 +2266,6 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
         request
             .extensions_mut()
             .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-
         let response = router
             .clone()
             .oneshot(request)
@@ -2443,7 +2277,6 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
             "{path} must authenticate the bounded raw body before DTO decoding"
         );
     }
-
     let mut public_query = Request::builder()
         .method(Method::POST)
         .uri("/v1/sorafs/appeals/pricing/quote")
@@ -2459,7 +2292,6 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
         .expect("public query response");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn sorafs_capacity_declare_route_is_mounted_in_api_router() {
@@ -2469,7 +2301,6 @@ async fn sorafs_capacity_declare_route_is_mounted_in_api_router() {
         http::{Method, Request, StatusCode},
     };
     use tower::ServiceExt as _;
-
     let cfg = crate::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -2504,7 +2335,6 @@ async fn sorafs_capacity_declare_route_is_mounted_in_api_router() {
         None,
         routing::MaybeTelemetry::disabled(),
     );
-
     let mut request = Request::builder()
         .method(Method::POST)
         .uri("/v1/sorafs/capacity/declare")
@@ -2514,16 +2344,13 @@ async fn sorafs_capacity_declare_route_is_mounted_in_api_router() {
     request
         .extensions_mut()
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-
     let response = torii
         .api_router_for_tests()
         .oneshot(request)
         .await
         .expect("response");
-
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn retired_sorafs_mutation_routes_are_absent() {
@@ -2533,7 +2360,6 @@ async fn retired_sorafs_mutation_routes_are_absent() {
         http::{Method, Request, StatusCode},
     };
     use tower::ServiceExt as _;
-
     let cfg = crate::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -2569,7 +2395,6 @@ async fn retired_sorafs_mutation_routes_are_absent() {
         routing::MaybeTelemetry::disabled(),
     );
     let router = torii.api_router_for_tests();
-
     for path in [
         "/v1/sorafs/capacity/dispute",
         "/v1/sorafs/capacity/schedule",
@@ -2594,7 +2419,6 @@ async fn retired_sorafs_mutation_routes_are_absent() {
         request
             .extensions_mut()
             .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-
         let response = router
             .clone()
             .oneshot(request)
@@ -2602,7 +2426,6 @@ async fn retired_sorafs_mutation_routes_are_absent() {
             .expect("removed-route response");
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
     }
-
     for (method, path) in [
         (Method::POST, "/v1/sorafs/capacity/por-proof"),
         (Method::POST, "/v1/sorafs/capacity/por-verdict"),
@@ -2622,7 +2445,6 @@ async fn retired_sorafs_mutation_routes_are_absent() {
         request
             .extensions_mut()
             .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-
         let response = router
             .clone()
             .oneshot(request)
@@ -2635,13 +2457,11 @@ async fn retired_sorafs_mutation_routes_are_absent() {
         );
     }
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn sccp_recent_messages_route_survives_soracloud_fallback() {
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
-
     let cfg = crate::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -2676,7 +2496,6 @@ async fn sccp_recent_messages_route_survives_soracloud_fallback() {
         None,
         routing::MaybeTelemetry::disabled(),
     );
-
     let mut request = Request::builder()
         .method(Method::GET)
         .uri("/v1/sccp/messages/recent")
@@ -2689,13 +2508,11 @@ async fn sccp_recent_messages_route_survives_soracloud_fallback() {
             [127, 0, 0, 1],
             0,
         ))));
-
     let response = torii
         .api_router_for_tests()
         .oneshot(request)
         .await
         .expect("response");
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = response
         .into_body()
@@ -2709,11 +2526,9 @@ async fn sccp_recent_messages_route_survives_soracloud_fallback() {
         "expected SCCP recent-messages JSON payload, got: {text}"
     );
 }
-
 #[test]
 fn iso_error_mapping_returns_expected_variants() {
     use iroha_data_model::ValidationFail::{InternalError, NotPermitted};
-
     assert!(matches!(
         super::map_iso_error(MsgError::InvalidFormat),
         NotPermitted(_)
@@ -2723,11 +2538,9 @@ fn iso_error_mapping_returns_expected_variants() {
         InternalError(_)
     ));
 }
-
 #[test]
 fn push_into_queue_error_sets_backpressure_headers() {
     use nonzero_ext::nonzero;
-
     let err = super::Error::PushIntoQueue {
         source: Box::new(queue::Error::Full),
         backpressure: queue::BackpressureState::Saturated {
@@ -2735,7 +2548,6 @@ fn push_into_queue_error_sets_backpressure_headers() {
             capacity: nonzero!(5_usize),
         },
     };
-
     let response = err.into_response();
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     let headers = response.headers();
@@ -2750,11 +2562,9 @@ fn push_into_queue_error_sets_backpressure_headers() {
         Some("1")
     );
 }
-
 #[test]
 fn push_into_queue_error_sets_reject_code_header() {
     use nonzero_ext::nonzero;
-
     let err = super::Error::PushIntoQueue {
         source: Box::new(queue::Error::InBlockchain),
         backpressure: queue::BackpressureState::Healthy {
@@ -2762,7 +2572,6 @@ fn push_into_queue_error_sets_reject_code_header() {
             capacity: nonzero!(1_usize),
         },
     };
-
     let response = err.into_response();
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(
@@ -2773,11 +2582,9 @@ fn push_into_queue_error_sets_reject_code_header() {
         Some("PRTRY:ALREADY_COMMITTED")
     );
 }
-
 #[test]
 fn push_into_queue_confidential_policy_rejection_maps_to_forbidden() {
     use nonzero_ext::nonzero;
-
     let err = super::Error::PushIntoQueue {
         source: Box::new(queue::Error::ConfidentialPolicyAdmissionRejected {
             reason: TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
@@ -2790,7 +2597,6 @@ fn push_into_queue_confidential_policy_rejection_maps_to_forbidden() {
             capacity: nonzero!(1_usize),
         },
     };
-
     let response = err.into_response();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(
@@ -2809,11 +2615,9 @@ fn push_into_queue_confidential_policy_rejection_maps_to_forbidden() {
     assert_eq!(details.retry_after_seconds, None);
     assert_eq!(details.queue.expect("queue snapshot").state, "healthy");
 }
-
 #[test]
 fn push_into_queue_unresolved_route_maps_to_bad_request() {
     use nonzero_ext::nonzero;
-
     let err = super::Error::PushIntoQueue {
         source: Box::new(queue::Error::UnresolvedRoute {
             reason: "lane 9 is not present in the lane catalog".to_owned(),
@@ -2823,7 +2627,6 @@ fn push_into_queue_unresolved_route_maps_to_bad_request() {
             capacity: nonzero!(1_usize),
         },
     };
-
     let response = err.into_response();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
@@ -2834,11 +2637,9 @@ fn push_into_queue_unresolved_route_maps_to_bad_request() {
         Some("PRTRY:ROUTE_UNRESOLVED")
     );
 }
-
 #[test]
 fn push_into_queue_fee_rejections_are_typed_and_redacted() {
     use nonzero_ext::nonzero;
-
     const PRIVATE_REASON: &str = "private sponsor rule internals";
     for (source, expected_status, expected_code) in [
         (
@@ -2883,14 +2684,12 @@ fn push_into_queue_fee_rejections_are_typed_and_redacted() {
         assert_eq!(fee.code, expected_code.as_str());
     }
 }
-
 #[tokio::test]
 async fn serialization_error_emits_redacted_norito_payload() {
     let err = super::Error::SerializationFailure {
         context: "unit_test",
         source: Box::new(norito::json::Error::Message("boom".into())),
     };
-
     let response = err.into_response();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let content_type = response
@@ -2899,7 +2698,6 @@ async fn serialization_error_emits_redacted_norito_payload() {
         .map(|value| value.to_str().unwrap())
         .expect("content-type header present");
     assert_eq!(content_type, super::utils::NORITO_MIME_TYPE);
-
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
         .unwrap()
@@ -2912,7 +2710,6 @@ async fn serialization_error_emits_redacted_norito_payload() {
         "redacted message leaked internal context"
     );
 }
-
 #[tokio::test]
 async fn internal_validation_failures_never_expose_their_source_message() {
     const MARKER: &str = "private_runtime_marker_9a2c";
@@ -2939,7 +2736,6 @@ async fn internal_validation_failures_never_expose_their_source_message() {
         assert_eq!(envelope.message(), "Torii could not complete the request.");
         assert!(envelope.details.is_none());
     }
-
     let response =
         super::Error::Query(ValidationFail::InternalError(MARKER.to_owned())).into_response();
     let body = http_body_util::BodyExt::collect(response.into_body())
@@ -2951,7 +2747,6 @@ async fn internal_validation_failures_never_expose_their_source_message() {
     assert_eq!(envelope.code(), "internal_server_error");
     assert!(!envelope.message().contains(MARKER));
 }
-
 #[test]
 fn accept_transaction_signature_failure_sets_code_and_header() {
     let kp = checked_torii_test_ed25519_keypair(
@@ -2965,7 +2760,6 @@ fn accept_transaction_signature_failure_sets_code_and_header() {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .sign(kp.private_key());
-
     let fail = iroha_core::tx::SignatureVerificationFail::new(
         tx.signature().clone(),
         iroha_core::tx::SignatureRejectionCode::UnsupportedAuthority,
@@ -2974,7 +2768,6 @@ fn accept_transaction_signature_failure_sets_code_and_header() {
     let err = super::Error::AcceptTransaction(
         iroha_core::tx::AcceptTransactionFail::SignatureVerification(fail),
     );
-
     let response = err.into_response();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let headers = response.headers();
@@ -2984,7 +2777,6 @@ fn accept_transaction_signature_failure_sets_code_and_header() {
             .and_then(|v| v.to_str().ok()),
         Some(iroha_core::tx::SignatureRejectionCode::UnsupportedAuthority.as_str())
     );
-
     let body = executor::block_on(http_body_util::BodyExt::collect(response.into_body()))
         .expect("collect body")
         .to_bytes();
@@ -2996,5 +2788,4 @@ fn accept_transaction_signature_failure_sets_code_and_header() {
     );
     assert!(envelope.message().contains("failed to accept transaction"));
 }
-
 include!("part_9b_error_headers.rs");

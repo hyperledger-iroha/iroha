@@ -1,11 +1,8 @@
 //! Structures, traits and impls related to *runtime* `Executor`s.
-
 use std::{collections::BTreeSet, format, string::String, vec::Vec};
-
 use iroha_data_model_derive::model;
 use iroha_primitives::json::Json;
 use iroha_schema::Ident;
-
 #[cfg(any(feature = "transparent_api", feature = "ffi_import"))]
 pub use self::model::*;
 #[cfg(not(any(feature = "transparent_api", feature = "ffi_import")))]
@@ -17,7 +14,6 @@ pub use self::model::{
     VectorLengthTooLargeInfo,
 };
 use crate::transaction::executable::IvmBytecode;
-
 #[model]
 mod model {
     use derive_more::Constructor;
@@ -26,10 +22,8 @@ mod model {
     use iroha_macro::FromVariant;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-
     use super::*;
     use crate::{isi, nexus::AxtRejectContext, parameter::CustomParameters, query};
-
     /// executor that checks if an operation satisfies some conditions.
     #[derive(
         Debug,
@@ -52,7 +46,6 @@ mod model {
         /// IVM bytecode of the executor
         pub bytecode: IvmBytecode,
     }
-
     /// Executor data model.
     ///
     /// Defined from within the executor, it describes certain structures the executor
@@ -89,7 +82,10 @@ mod model {
         /// Holds the initial value of the parameter
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::parameter::custom::json_helpers")
+            norito(
+                with = "crate::parameter::custom::json_helpers",
+                bounded_with = "crate::parameter::custom::json_helpers::serialize_bounded"
+            )
         )]
         pub parameters: CustomParameters,
         /// Corresponds to instruction identifiers stored in [`crate::isi::InstructionBox`].
@@ -100,7 +96,6 @@ mod model {
         /// Schema of executor defined data types (instructions, parameters, permissions)
         pub schema: Json,
     }
-
     /// Operation validation failed.
     ///
     /// # Note
@@ -155,12 +150,12 @@ mod model {
             /// Contained error message if its used internally. Empty for external users.
             /// Never serialized to not to expose internal errors to the end user.
             #[codec(skip)]
+            #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::secret_string"))]
             #[skip_from]
             #[skip_try_from]
             String,
         ),
     }
-
     /// Manifest-authenticated application error returned by a contract.
     #[derive(
         Debug,
@@ -190,7 +185,6 @@ mod model {
         /// Explicit stable non-zero application error code.
         pub code: u32,
     }
-
     /// Structured reasons for IVM admission/static validation failure.
     #[derive(
         Debug,
@@ -266,7 +260,6 @@ mod model {
         #[codec(index = 17)]
         GenericSyscallNotAllowed(u32),
     }
-
     /// Unsupported IVM version details
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -279,7 +272,6 @@ mod model {
         /// Minor version
         pub minor: u8,
     }
-
     /// Vector length limit violation details
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -292,7 +284,6 @@ mod model {
         /// Maximum allowed
         pub max_allowed: u8,
     }
-
     /// Max cycles limit violation details
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -305,7 +296,6 @@ mod model {
         /// Upper bound
         pub upper_bound: u64,
     }
-
     /// Fuel limit violation details
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -318,7 +308,6 @@ mod model {
         /// Configured fuel limit
         pub fuel_limit: u64,
     }
-
     /// Decoded instruction count violation details
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -331,7 +320,6 @@ mod model {
         /// Configured limit
         pub limit: u64,
     }
-
     /// Decoded byte length violation details
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -344,7 +332,6 @@ mod model {
         /// Configured limit in bytes
         pub limit: u64,
     }
-
     /// Manifest code hash mismatch (expected, actual)
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -357,7 +344,6 @@ mod model {
         /// Actual `code_hash` (computed)
         pub actual: Hash,
     }
-
     /// Manifest abi hash mismatch (expected, actual)
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -370,7 +356,6 @@ mod model {
         /// Actual `abi_hash` (computed for policy)
         pub actual: Hash,
     }
-
     /// Artifact ABI hash mismatch (runtime descriptor, authenticated artifact binding).
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -383,12 +368,10 @@ mod model {
         /// ABI hash authenticated by the submitted artifact's CNTR section.
         pub actual: Hash,
     }
-
     // Client builds that disable `transparent_api`/`ffi_import` skip re-exporting
     // these detail structs (see conditional `pub use` above) while still allowing
     // servers and FFI consumers to access the full metadata when needed.
 }
-
 // Unify conversions from query `FindError` into `ValidationFail` by wrapping it in
 // `QueryExecutionFail::Find`. This enables ergonomic `?` usage at call sites
 // that return `ValidationFail` while invoking helpers that may produce `FindError`.
@@ -397,14 +380,18 @@ impl From<crate::query::error::FindError> for ValidationFail {
         ValidationFail::QueryFailed(crate::query::error::QueryExecutionFail::Find(e))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for Executor {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.bytecode, out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.bytecode, out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for Executor {
     fn json_deserialize(
@@ -414,28 +401,79 @@ impl norito::json::JsonDeserialize for Executor {
         Ok(Self { bytecode })
     }
 }
-
 /// Result type that every executor should return.
 pub type Result<T = (), E = crate::ValidationFail> = core::result::Result<T, E>;
-
 pub mod prelude {
     //! The prelude re-exports most commonly used traits, structs and macros from this crate.
     pub use super::{Executor, ExecutorDataModel};
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::transaction::executable::IvmBytecode;
     use norito::codec::{DecodeAll, Encode};
-
     #[test]
     fn bytecode_getter_returns_inner_bytecode() {
         let code = IvmBytecode::from_compiled(vec![1, 2, 3]);
         let executor = Executor::new(code.clone());
         assert_eq!(executor.bytecode().as_ref(), code.as_ref());
     }
-
+    #[cfg(feature = "json")]
+    #[test]
+    fn executor_json_has_closed_output_bound() {
+        let executor = Executor::new(IvmBytecode::from_compiled(vec![1, 2, 3, 4]));
+        let expected = norito::json::to_json(&executor).expect("serialize executor JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(&executor, expected.len())
+                .expect("serialize executor at exact JSON bound"),
+            expected
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&executor, expected.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn executor_data_model_json_has_closed_output_bound() {
+        use core::str::FromStr as _;
+        use std::collections::{BTreeMap, BTreeSet};
+        use crate::{
+            name::Name,
+            parameter::{CustomParameter, CustomParameterId},
+        };
+        let id = CustomParameterId::new(Name::from_str("bounded").expect("valid name"));
+        let parameter = CustomParameter::new(id.clone(), Json::new(vec![1_u64, 2, 3]));
+        let data_model = ExecutorDataModel::new(
+            BTreeMap::from([(id, parameter)]),
+            BTreeSet::from([String::from("instruction")]),
+            BTreeSet::from([String::from("permission")]),
+            Json::new(norito::json!({"nested": [true, false]})),
+        );
+        let expected = norito::json::to_json(&data_model).expect("serialize data model JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(&data_model, expected.len())
+                .expect("serialize data model at exact JSON bound"),
+            expected
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&data_model, expected.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+        let response = crate::query::QueryResponse::Singular(
+            crate::query::SingularQueryOutputBox::ExecutorDataModel(data_model),
+        );
+        let expected = norito::json::to_json(&response).expect("serialize query response JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(&response, expected.len())
+                .expect("serialize query response at exact JSON bound"),
+            expected
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&response, expected.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+    }
     #[test]
     fn ivm_admission_error_wire_tags_are_pinned_and_roundtrip() {
         let hash = iroha_crypto::Hash::new(b"ivm-admission-error-tag-test");
@@ -513,7 +551,6 @@ mod tests {
             ),
             (IvmAdmissionError::GenericSyscallNotAllowed(0x47), 17),
         ];
-
         for (error, expected_tag) in cases {
             let encoded = error.encode();
             assert!(encoded.len() >= 4);
@@ -527,7 +564,6 @@ mod tests {
                 error
             );
         }
-
         let unknown = 18_u32.encode();
         assert!(
             IvmAdmissionError::decode_all(&mut unknown.as_slice()).is_err(),

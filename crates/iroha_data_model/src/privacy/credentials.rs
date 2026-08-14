@@ -162,7 +162,6 @@ pub struct PrivacyStatementContextV1 {
     /// Digest of the pinned experimental native engine manifest.
     pub engine_manifest_digest: PrivacyEngineManifestDigestV1,
 }
-
 impl PrivacyStatementContextV1 {
     /// Validate transcript context and non-zero governed artifact bindings.
     ///
@@ -204,7 +203,6 @@ impl PrivacyStatementContextV1 {
         Ok(())
     }
 }
-
 /// Exact network, genesis, action, and governed-artifact binding shared by native engines.
 ///
 /// The binding owns every consensus-selected byte that a native proof
@@ -222,7 +220,7 @@ pub struct PrivacyNativeConsensusBindingV1 {
     /// Exact genesis-header-derived network identity.
     pub network_id: NetworkId,
     /// Trusted committed genesis-block hash for this network.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub genesis_hash: [u8; 32],
     /// Zero-based privacy action index within the transaction.
     pub action_index: u32,
@@ -239,7 +237,6 @@ pub struct PrivacyNativeConsensusBindingV1 {
     /// Digest of the pinned native engine manifest.
     pub engine_manifest_digest: PrivacyEngineManifestDigestV1,
 }
-
 impl PrivacyNativeConsensusBindingV1 {
     /// Construct the sole canonical native consensus binding for a statement context.
     ///
@@ -266,7 +263,6 @@ impl PrivacyNativeConsensusBindingV1 {
         binding.validate(limits)?;
         Ok(binding)
     }
-
     /// Validate every intrinsic field under the supplied consensus limits.
     ///
     /// # Errors
@@ -290,7 +286,6 @@ impl PrivacyNativeConsensusBindingV1 {
             .validate(limits)
             .map_err(PrivacyNativeConsensusBindingValidationErrorV1::InvalidContext)
     }
-
     /// Validate this binding and require exact equality with a statement context.
     ///
     /// # Errors
@@ -346,7 +341,6 @@ impl PrivacyNativeConsensusBindingV1 {
             .validate(limits)
             .map_err(PrivacyNativeConsensusBindingValidationErrorV1::InvalidContext)
     }
-
     /// Hash the exact canonical binding in its dedicated transcript domain.
     ///
     /// Callers must validate the binding before treating the digest as a
@@ -372,7 +366,6 @@ impl PrivacyNativeConsensusBindingV1 {
             *hasher.finalize().as_bytes(),
         ))
     }
-
     fn as_statement_context(&self) -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
             network_id: self.network_id,
@@ -386,7 +379,6 @@ impl PrivacyNativeConsensusBindingV1 {
         }
     }
 }
-
 /// Validation failure for [`PrivacyNativeConsensusBindingV1`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyNativeConsensusBindingValidationErrorV1 {
@@ -431,7 +423,6 @@ pub enum PrivacyNativeConsensusBindingValidationErrorV1 {
     )]
     EngineManifestDigestMismatch,
 }
-
 /// Typed encrypted output emitted by a private transfer.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -452,10 +443,9 @@ pub struct PrivacyEncryptedOutputV1 {
     /// Commitment to the plaintext output.
     pub commitment: PrivacyCommitmentV1,
     /// Canonical authenticated ciphertext bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub ciphertext: Vec<u8>,
 }
-
 /// Closed lifecycle of one authoritative ZK-ACE authorization policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -471,7 +461,6 @@ pub enum PrivacyZkAcePolicyLifecycleV1 {
     #[cfg_attr(feature = "json", norito(rename = "revoked"))]
     Revoked,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(schema_name = "iroha.privacy.zk-ace.policy-digest-material.v1")]
 struct PrivacyZkAcePolicyDigestMaterialV1 {
@@ -483,7 +472,6 @@ struct PrivacyZkAcePolicyDigestMaterialV1 {
     source_allowlist: Vec<AccountId>,
     lifecycle: PrivacyZkAcePolicyLifecycleV1,
 }
-
 /// Complete authoritative policy selected by a ZK-ACE authorization statement.
 ///
 /// `record_digest` commits every preceding field. The allowlist is stored in
@@ -513,7 +501,6 @@ pub struct PrivacyZkAcePolicyRecordV1 {
     /// Digest of every authoritative field above.
     pub record_digest: PrivacyZkAcePolicyRecordDigestV1,
 }
-
 impl PrivacyZkAcePolicyRecordV1 {
     /// Construct one canonical self-digested policy record.
     ///
@@ -548,7 +535,6 @@ impl PrivacyZkAcePolicyRecordV1 {
         }
         Ok(record)
     }
-
     /// Validate an initial policy registration.
     ///
     /// # Errors
@@ -568,7 +554,6 @@ impl PrivacyZkAcePolicyRecordV1 {
         }
         Ok(())
     }
-
     /// Validate this record, including its canonical self-digest.
     ///
     /// # Errors
@@ -584,7 +569,6 @@ impl PrivacyZkAcePolicyRecordV1 {
         }
         Ok(())
     }
-
     /// Recompute the canonical digest of every authoritative record field.
     ///
     /// # Errors
@@ -617,7 +601,6 @@ impl PrivacyZkAcePolicyRecordV1 {
             *hasher.finalize().as_bytes(),
         ))
     }
-
     fn validate_contents(&self) -> Result<(), PrivacyZkAcePolicyRecordValidationErrorV1> {
         if self.policy_id.is_zero() {
             return Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroPolicyId);
@@ -652,7 +635,6 @@ impl PrivacyZkAcePolicyRecordV1 {
         Ok(())
     }
 }
-
 /// Failure while validating one authoritative ZK-ACE policy record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyZkAcePolicyRecordValidationErrorV1 {
@@ -703,7 +685,6 @@ pub enum PrivacyZkAcePolicyRecordValidationErrorV1 {
     #[error("ZK-ACE policy record self-digest mismatch")]
     RecordDigestMismatch,
 }
-
 /// Failure while validating a canonical ZK-ACE governance transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyZkAcePolicyTransitionValidationErrorV1 {
@@ -743,7 +724,6 @@ pub enum PrivacyZkAcePolicyTransitionValidationErrorV1 {
     #[error("ZK-ACE revocation changed immutable policy contents")]
     RevocationContentsChanged,
 }
-
 /// Validate an active-to-active canonical ZK-ACE rotation.
 ///
 /// # Errors
@@ -786,7 +766,6 @@ pub fn validate_zk_ace_policy_rotation_v1(
     }
     Ok(())
 }
-
 /// Validate an irreversible canonical ZK-ACE revocation.
 ///
 /// # Errors
@@ -833,7 +812,6 @@ pub fn validate_zk_ace_policy_revocation_v1(
     }
     Ok(())
 }
-
 /// ZK-ACE authorization statement for a public asset transfer.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(schema_name = "iroha.privacy.zk-ace.authorization-statement.v1")]
@@ -866,7 +844,6 @@ pub struct ZkAcePqAuthorizationStatementV1 {
     /// Per-action replay nullifier.
     pub replay_nullifier: PrivacyNullifierV1,
 }
-
 /// Anonymous PGC k-out-of-n private payment statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -896,7 +873,6 @@ pub struct AnonymousPgcKOutOfNStatementV1 {
     /// Number `k` of intended positive-value recipients.
     pub recipient_count: u32,
 }
-
 /// Bit width admitted by the Iroha `VeRange` Type-1 profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -913,7 +889,6 @@ pub enum PrivacyVeRangeBitLengthV1 {
     /// 64-bit unsigned range.
     Bits64,
 }
-
 impl PrivacyVeRangeBitLengthV1 {
     /// Return the exact numeric bit width.
     #[must_use]
@@ -924,7 +899,6 @@ impl PrivacyVeRangeBitLengthV1 {
         }
     }
 }
-
 /// Iroha Type-1 P-256/SHA-256 unsigned range-proof statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -946,7 +920,6 @@ pub struct VeRangeTransparentRangeStatementV1 {
     /// Number of aggregated value commitments.
     pub aggregation_count: u32,
 }
-
 /// Exact wire version of [`PrivacyZkAmsPersonhoodCredentialV1`].
 pub const ZK_AMS_PHC_VERSION_V1: u8 = 1;
 /// Exact byte width of the closed canonical PHC payload.
@@ -959,7 +932,6 @@ pub const ZK_AMS_ISSUER_POLICY_RECORD_PAYLOAD_BYTES_V1: usize = 129;
 pub const ZK_AMS_REGISTRY_RECORD_PAYLOAD_BYTES_V1: usize = 200;
 /// Exact registry-bootstrap provenance preimage width.
 pub const ZK_AMS_REGISTRY_BOOTSTRAP_PAYLOAD_BYTES_V1: usize = 201;
-
 /// Canonical governed origin for one ZK-AMS admitted-identity registry.
 ///
 /// This is the only first-release instruction payload that may initialize an
@@ -988,7 +960,6 @@ pub struct PrivacyZkAmsRegistryBootstrapV1 {
     /// [`ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1`].
     pub initial_registry_epoch: u64,
 }
-
 impl PrivacyZkAmsRegistryBootstrapV1 {
     /// Derive the sole protocol-scoped namespace governed by this bootstrap.
     #[must_use]
@@ -1002,7 +973,6 @@ impl PrivacyZkAmsRegistryBootstrapV1 {
             }),
         )
     }
-
     /// Validate every closed nonzero field and the exact origin epoch.
     ///
     /// Core additionally parses `issuer_public_key` as a canonical,
@@ -1043,7 +1013,6 @@ impl PrivacyZkAmsRegistryBootstrapV1 {
             .validate()
             .map_err(|_| PrivacyZkAmsRegistryBootstrapValidationError::InvalidNamespace)
     }
-
     /// Derive the authoritative issuer-key/policy record digest.
     #[must_use]
     pub fn issuer_policy_record_digest(self) -> PrivacyZkAmsIssuerPolicyRecordDigestV1 {
@@ -1054,7 +1023,6 @@ impl PrivacyZkAmsRegistryBootstrapV1 {
             self.policy_digest,
         )
     }
-
     /// Derive the authoritative origin registry-snapshot record digest.
     #[must_use]
     pub fn registry_record_digest(self) -> PrivacyZkAmsRegistryRecordDigestV1 {
@@ -1068,7 +1036,6 @@ impl PrivacyZkAmsRegistryBootstrapV1 {
             self.initial_registry_epoch,
         )
     }
-
     /// Hash the exact fixed bootstrap fields in their provenance domain.
     #[must_use]
     pub fn digest(self) -> PrivacyZkAmsRegistryBootstrapDigestV1 {
@@ -1091,7 +1058,6 @@ impl PrivacyZkAmsRegistryBootstrapV1 {
         PrivacyZkAmsRegistryBootstrapDigestV1::new(hasher.finalize().into())
     }
 }
-
 /// Derive one exact authoritative ZK-AMS issuer-key/policy record digest.
 #[must_use]
 pub fn zk_ams_issuer_policy_record_digest_v1(
@@ -1115,7 +1081,6 @@ pub fn zk_ams_issuer_policy_record_digest_v1(
     hasher.update(payload);
     PrivacyZkAmsIssuerPolicyRecordDigestV1::new(hasher.finalize().into())
 }
-
 /// Derive one exact authoritative ZK-AMS registry-snapshot record digest.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
@@ -1146,7 +1111,6 @@ pub fn zk_ams_registry_record_digest_v1(
     hasher.update(payload);
     PrivacyZkAmsRegistryRecordDigestV1::new(hasher.finalize().into())
 }
-
 /// Structural failure for [`PrivacyZkAmsRegistryBootstrapV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyZkAmsRegistryBootstrapValidationError {
@@ -1178,7 +1142,6 @@ pub enum PrivacyZkAmsRegistryBootstrapValidationError {
     #[error("ZK-AMS registry bootstrap namespace is invalid")]
     InvalidNamespace,
 }
-
 /// Fixed typed Personhood Credential admitted by the Iroha ZK-AMS profile.
 ///
 /// The issuer authenticates the domain-separated SHA-256 digest of the exact
@@ -1205,7 +1168,6 @@ pub struct PrivacyZkAmsPersonhoodCredentialV1 {
     /// Issuer-selected uniqueness nonce.
     pub credential_nonce: PrivacyZkAmsCredentialNonceV1,
 }
-
 impl PrivacyZkAmsPersonhoodCredentialV1 {
     /// Return the exact fixed typed-Norito payload signed by the issuer.
     ///
@@ -1225,7 +1187,6 @@ impl PrivacyZkAmsPersonhoodCredentialV1 {
         payload[129..161].copy_from_slice(self.credential_nonce.as_bytes());
         PrivacyZkAmsPhcCanonicalPayloadV1(payload)
     }
-
     /// Hash the exact typed credential payload with domain and length framing.
     #[must_use]
     pub fn digest(&self) -> PrivacyZkAmsPhcHashV1 {
@@ -1241,7 +1202,6 @@ impl PrivacyZkAmsPersonhoodCredentialV1 {
         PrivacyZkAmsPhcHashV1::new(hasher.finalize().into())
     }
 }
-
 /// Exact fixed typed-Norito preimage of a ZK-AMS Personhood Credential.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[repr(transparent)]
@@ -1252,10 +1212,9 @@ impl PrivacyZkAmsPersonhoodCredentialV1 {
 )]
 pub struct PrivacyZkAmsPhcCanonicalPayloadV1(
     /// Exact closed credential payload.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub [u8; ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1],
 );
-
 impl PrivacyZkAmsPhcCanonicalPayloadV1 {
     /// Borrow the exact canonical payload.
     #[must_use]
@@ -1263,7 +1222,6 @@ impl PrivacyZkAmsPhcCanonicalPayloadV1 {
         &self.0
     }
 }
-
 /// One ordered public admission anchor from ZK-AMS batch input `X`.
 ///
 /// The order of these pairs is part of the Fiat-Shamir transcript certified
@@ -1281,7 +1239,6 @@ pub struct PrivacyZkAmsAdmissionAnchorV1 {
     /// Seed public key later used for anonymous account provisioning.
     pub seed_public_key: PrivacyZkAmsSeedPublicKeyV1,
 }
-
 /// Setup-free Iroha instantiation of ZK-AMS batch settlement.
 ///
 /// The native proof recursively folds one fixed credential relation for every
@@ -1307,7 +1264,6 @@ pub struct PrivacyZkAmsBatchAdmissionV1 {
     /// Ordered `{hash_PHC, pk_seed}` batch input `X`.
     pub anchors: Vec<PrivacyZkAmsAdmissionAnchorV1>,
 }
-
 /// ZK-AMS Phase-V anonymous account-provisioning public input.
 ///
 /// The native suite verifies one LSAG over Ristretto255 with a SHA3-512
@@ -1332,7 +1288,6 @@ pub struct PrivacyZkAmsProvisionAccountV1 {
     /// Deterministic LSAG key image recorded as the provisioning nullifier.
     pub key_image: PrivacyZkAmsKeyImageV1,
 }
-
 /// Closed ZK-AMS chain action.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1349,7 +1304,6 @@ pub enum PrivacyZkAmsActionV1 {
     /// Provision one anonymous account from an admitted seed-key ring.
     ProvisionAccount(PrivacyZkAmsProvisionAccountV1),
 }
-
 /// Native ZK-AMS batch-admission and anonymous-provisioning statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1380,7 +1334,6 @@ pub struct IrohaZkAmsStatementV1 {
     /// Exact batch-settlement or account-provisioning action.
     pub action: PrivacyZkAmsActionV1,
 }
-
 /// Credential document family admitted by the Vega first-release profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1395,7 +1348,6 @@ pub enum PrivacyCredentialDocumentTypeV1 {
     /// ISO/IEC 18013-5 `org.iso.18013.5.1.mDL` document.
     Iso18013_5Mdl,
 }
-
 /// Closed ISO/IEC 18013-5 namespace admitted by the Vega mDL-age profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1410,7 +1362,6 @@ pub enum PrivacyVegaMdlNamespaceV1 {
     /// The standard mDL namespace `org.iso.18013.5.1`.
     OrgIso18013_5_1,
 }
-
 /// Closed digest algorithm used throughout the Vega mDL-age circuit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1425,7 +1376,6 @@ pub enum PrivacyVegaMdlDigestAlgorithmV1 {
     /// SHA-256 for issuer authentication, signed-item digests, and `H_dev`.
     Sha256,
 }
-
 /// Closed COSE signature algorithm used by issuer and device authentication.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1440,7 +1390,6 @@ pub enum PrivacyVegaMdlSignatureAlgorithmV1 {
     /// COSE algorithm `-7`: ECDSA over P-256 with SHA-256 (`ES256`).
     CoseSign1Es256,
 }
-
 /// Forward-only lifecycle of one immutable Vega issuer governance lineage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1459,7 +1408,6 @@ pub enum PrivacyVegaIssuerRecordLifecycleV1 {
     #[cfg_attr(feature = "json", norito(rename = "revoked"))]
     Revoked,
 }
-
 /// One immutable authoritative Vega mDL issuer-key and algorithm-policy revision.
 ///
 /// Revisions form a bounded append-only self-digested lineage. A proof
@@ -1501,7 +1449,6 @@ pub struct PrivacyVegaIssuerRecordV1 {
     /// Self-digest of every authoritative field above.
     pub record_digest: PrivacyVegaIssuerRecordDigestV1,
 }
-
 impl PrivacyVegaIssuerRecordV1 {
     /// Construct one canonical self-digested Vega issuer revision.
     ///
@@ -1542,7 +1489,6 @@ impl PrivacyVegaIssuerRecordV1 {
         }
         Ok(record)
     }
-
     /// Validate a canonical active epoch-one registration.
     ///
     /// # Errors
@@ -1566,7 +1512,6 @@ impl PrivacyVegaIssuerRecordV1 {
         }
         Ok(())
     }
-
     /// Validate all fields and the complete canonical self-digest.
     ///
     /// # Errors
@@ -1582,7 +1527,6 @@ impl PrivacyVegaIssuerRecordV1 {
         }
         Ok(())
     }
-
     /// Recompute the domain-separated canonical self-digest.
     #[must_use]
     pub fn compute_record_digest(&self) -> PrivacyVegaIssuerRecordDigestV1 {
@@ -1622,7 +1566,6 @@ impl PrivacyVegaIssuerRecordV1 {
             &lifecycle,
         ]))
     }
-
     fn validate_contents(&self) -> Result<(), PrivacyVegaIssuerRecordValidationErrorV1> {
         if self.issuer_id.is_zero() {
             return Err(PrivacyVegaIssuerRecordValidationErrorV1::ZeroIssuerId);
@@ -1652,7 +1595,6 @@ impl PrivacyVegaIssuerRecordV1 {
         Ok(())
     }
 }
-
 fn privacy_vega_issuer_sha256_frame_v1(fields: &[&[u8]]) -> [u8; 32] {
     let domain_len = u16::try_from(VEGA_ISSUER_RECORD_DIGEST_DOMAIN_V1.len())
         .expect("fixed Vega issuer-record digest domain fits u16");
@@ -1671,7 +1613,6 @@ fn privacy_vega_issuer_sha256_frame_v1(fields: &[&[u8]]) -> [u8; 32] {
     }
     hash.finalize().into()
 }
-
 fn privacy_vega_issuer_predecessor_frame_v1(
     previous: Option<PrivacyVegaIssuerRecordDigestV1>,
 ) -> [u8; 33] {
@@ -1682,7 +1623,6 @@ fn privacy_vega_issuer_predecessor_frame_v1(
     }
     frame
 }
-
 /// Failure while validating one immutable Vega issuer governance revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyVegaIssuerRecordValidationErrorV1 {
@@ -1725,7 +1665,6 @@ pub enum PrivacyVegaIssuerRecordValidationErrorV1 {
     #[error("Vega issuer-record self-digest mismatch")]
     RecordDigestMismatch,
 }
-
 /// Failure while validating an append-only Vega issuer transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyVegaIssuerTransitionValidationErrorV1 {
@@ -1768,7 +1707,6 @@ pub enum PrivacyVegaIssuerTransitionValidationErrorV1 {
     #[error("Vega issuer revocation changed immutable governed contents")]
     RevocationContentsChanged,
 }
-
 fn validate_vega_issuer_transition_common_v1(
     current: &PrivacyVegaIssuerRecordV1,
     successor: &PrivacyVegaIssuerRecordV1,
@@ -1802,7 +1740,6 @@ fn validate_vega_issuer_transition_common_v1(
     }
     Ok(())
 }
-
 /// Validate an active-to-active Vega issuer key or policy rotation.
 ///
 /// # Errors
@@ -1828,7 +1765,6 @@ pub fn validate_vega_issuer_rotation_v1(
     }
     Ok(())
 }
-
 /// Validate an irreversible Vega issuer revocation.
 ///
 /// # Errors
@@ -1854,7 +1790,6 @@ pub fn validate_vega_issuer_revocation_v1(
     }
     Ok(())
 }
-
 /// Gregorian UTC calendar date used as Vega Figure 9 public input `(Y, M, D)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1870,7 +1805,6 @@ pub struct PrivacyVegaMdlDateV1 {
     /// One-based UTC day of month.
     pub day: u8,
 }
-
 /// Vega Figure 9 ISO/IEC 18013-5 mDL-age public statement.
 ///
 /// The native circuit exposes only the paper's public inputs `Q_I`, `H_dev`,
@@ -1929,7 +1863,6 @@ pub struct VegaExistingCredentialStatementV1 {
     /// into the `H_dev` consensus frame.
     pub session_transcript_digest: PrivacySessionTranscriptDigestV1,
 }
-
 /// One required X.509 key-usage bit.
 ///
 /// This is transparent in canonical Norito and JSON, so each use remains an
@@ -1937,83 +1870,75 @@ pub struct VegaExistingCredentialStatementV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
 #[repr(transparent)]
 pub struct PrivacyX509KeyUsageRequirementV1(bool);
-
 impl PrivacyX509KeyUsageRequirementV1 {
     /// Construct a key-usage requirement from its canonical boolean value.
     #[must_use]
     pub const fn new(required: bool) -> Self {
         Self(required)
     }
-
     /// Return whether this key usage is required.
     #[must_use]
     pub const fn is_required(self) -> bool {
         self.0
     }
 }
-
 impl From<bool> for PrivacyX509KeyUsageRequirementV1 {
     fn from(required: bool) -> Self {
         Self::new(required)
     }
 }
-
 impl From<PrivacyX509KeyUsageRequirementV1> for bool {
     fn from(requirement: PrivacyX509KeyUsageRequirementV1) -> Self {
         requirement.is_required()
     }
 }
-
 impl norito::core::NoritoSerialize for PrivacyX509KeyUsageRequirementV1 {
     fn schema_hash() -> [u8; 16] {
         <bool as norito::core::NoritoSerialize>::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(&self.0, writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         norito::core::NoritoSerialize::encoded_len_hint(&self.0)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         norito::core::NoritoSerialize::encoded_len_exact(&self.0)
     }
 }
-
 impl<'de> norito::core::NoritoDeserialize<'de> for PrivacyX509KeyUsageRequirementV1 {
     fn schema_hash() -> [u8; 16] {
         <bool as norito::core::NoritoSerialize>::schema_hash()
     }
-
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self(<bool as norito::core::NoritoDeserialize>::deserialize(
             archived.cast(),
         ))
     }
-
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
         <bool as norito::core::NoritoDeserialize>::try_deserialize(archived.cast()).map(Self)
     }
 }
-
 impl<'de> norito::core::DecodeFromSlice<'de> for PrivacyX509KeyUsageRequirementV1 {
     fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), norito::core::Error> {
         <bool as norito::core::DecodeFromSlice>::decode_from_slice(bytes)
             .map(|(required, used)| (Self(required), used))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for PrivacyX509KeyUsageRequirementV1 {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.0, out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for PrivacyX509KeyUsageRequirementV1 {
     fn json_deserialize(
@@ -2021,16 +1946,35 @@ impl norito::json::JsonDeserialize for PrivacyX509KeyUsageRequirementV1 {
     ) -> Result<Self, norito::json::Error> {
         <bool as norito::json::JsonDeserialize>::json_deserialize(parser).map(Self)
     }
-
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
         <bool as norito::json::JsonDeserialize>::json_from_value(value).map(Self)
     }
-
     fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
         <bool as norito::json::JsonDeserialize>::json_from_map_key(key).map(Self)
     }
 }
-
+#[cfg(all(test, feature = "json"))]
+mod x509_key_usage_json_tests {
+    use super::*;
+    #[test]
+    fn transparent_boolean_json_has_exact_checked_bound() {
+        for value in [
+            PrivacyX509KeyUsageRequirementV1::new(false),
+            PrivacyX509KeyUsageRequirementV1::new(true),
+        ] {
+            let legacy = norito::json::to_json(&value).expect("serialize requirement");
+            assert_eq!(
+                norito::json::to_json_bounded(&value, legacy.len())
+                    .expect("serialize at exact bound"),
+                legacy
+            );
+            assert_eq!(
+                norito::json::to_json_bounded(&value, legacy.len() - 1),
+                Err(norito::json::BoundedJsonError::BodyTooLarge)
+            );
+        }
+    }
+}
 /// X.509 key-usage requirements admitted by the first-release certificate profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2048,7 +1992,6 @@ pub struct PrivacyX509KeyUsageV1 {
     /// RFC 5280 key-agreement bit.
     pub key_agreement: PrivacyX509KeyUsageRequirementV1,
 }
-
 /// Exact extended-key-usage purpose required from an admitted certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2067,7 +2010,6 @@ pub enum PrivacyX509ExtendedKeyUsageV1 {
     /// Wallet or digital-identity authentication.
     WalletIdentity,
 }
-
 /// Closed lifecycle of one immutable X.509 governance-record lineage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2086,7 +2028,6 @@ pub enum PrivacyZkX509RecordLifecycleV1 {
     #[cfg_attr(feature = "json", norito(rename = "revoked"))]
     Revoked,
 }
-
 /// One immutable authoritative revision of an RFC 5280 P-256/SHA-256 trust store.
 ///
 /// Revisions form an append-only self-digested chain. `trust_store_digest`
@@ -2120,7 +2061,6 @@ pub struct PrivacyZkX509TrustAnchorRecordV1 {
     /// Self-digest of every authoritative field above.
     pub record_digest: PrivacyZkX509TrustAnchorRecordDigestV1,
 }
-
 impl PrivacyZkX509TrustAnchorRecordV1 {
     /// Construct one canonical self-digested trust-anchor revision.
     ///
@@ -2154,7 +2094,6 @@ impl PrivacyZkX509TrustAnchorRecordV1 {
         }
         Ok(record)
     }
-
     /// Validate a canonical active epoch-one registration.
     ///
     /// # Errors
@@ -2169,7 +2108,6 @@ impl PrivacyZkX509TrustAnchorRecordV1 {
             self.lifecycle,
         )
     }
-
     /// Validate all fields and the complete canonical self-digest.
     ///
     /// # Errors
@@ -2185,7 +2123,6 @@ impl PrivacyZkX509TrustAnchorRecordV1 {
         }
         Ok(())
     }
-
     /// Recompute the domain-separated self-digest.
     ///
     /// # Errors
@@ -2215,7 +2152,6 @@ impl PrivacyZkX509TrustAnchorRecordV1 {
             ),
         ))
     }
-
     fn validate_contents(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
         if self.trust_anchor_id.is_zero() {
             return Err(PrivacyZkX509RecordValidationErrorV1::ZeroTrustAnchorId);
@@ -2255,7 +2191,6 @@ impl PrivacyZkX509TrustAnchorRecordV1 {
         validate_zk_x509_revision_shape(self.record_epoch, self.previous_record_digest)
     }
 }
-
 /// One immutable authoritative X.509 certificate-policy revision.
 ///
 /// The policy fixes every public predicate selected outside the certificate
@@ -2289,7 +2224,6 @@ pub struct PrivacyZkX509CertificatePolicyRecordV1 {
     /// Self-digest of every authoritative field above.
     pub record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
 }
-
 impl PrivacyZkX509CertificatePolicyRecordV1 {
     /// Construct one canonical self-digested certificate-policy revision.
     ///
@@ -2328,7 +2262,6 @@ impl PrivacyZkX509CertificatePolicyRecordV1 {
         }
         Ok(record)
     }
-
     /// Validate a canonical active epoch-one registration.
     ///
     /// # Errors
@@ -2343,7 +2276,6 @@ impl PrivacyZkX509CertificatePolicyRecordV1 {
             self.lifecycle,
         )
     }
-
     /// Validate all fields and the complete canonical self-digest.
     ///
     /// # Errors
@@ -2359,7 +2291,6 @@ impl PrivacyZkX509CertificatePolicyRecordV1 {
         }
         Ok(())
     }
-
     /// Recompute the domain-separated self-digest.
     ///
     /// # Errors
@@ -2414,7 +2345,6 @@ impl PrivacyZkX509CertificatePolicyRecordV1 {
             ),
         ))
     }
-
     fn validate_contents(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
         if self.trust_anchor_id.is_zero() {
             return Err(PrivacyZkX509RecordValidationErrorV1::ZeroTrustAnchorId);
@@ -2431,7 +2361,6 @@ impl PrivacyZkX509CertificatePolicyRecordV1 {
         validate_zk_x509_revision_shape(self.record_epoch, self.previous_record_digest)
     }
 }
-
 /// One immutable authoritative revision of an issuer-scoped signed CRL.
 ///
 /// The exact signed DER digest, signing-key digest, and validity window are one
@@ -2474,7 +2403,6 @@ pub struct PrivacyZkX509CrlRecordV1 {
     /// Self-digest of every authoritative field above.
     pub record_digest: PrivacyZkX509CrlRecordDigestV1,
 }
-
 impl PrivacyZkX509CrlRecordV1 {
     /// Construct one canonical self-digested signed-CRL revision.
     ///
@@ -2515,7 +2443,6 @@ impl PrivacyZkX509CrlRecordV1 {
         }
         Ok(record)
     }
-
     /// Validate a canonical active epoch-one registration.
     ///
     /// # Errors
@@ -2530,7 +2457,6 @@ impl PrivacyZkX509CrlRecordV1 {
             self.lifecycle,
         )
     }
-
     /// Validate all fields and the complete canonical self-digest.
     ///
     /// # Errors
@@ -2546,7 +2472,6 @@ impl PrivacyZkX509CrlRecordV1 {
         }
         Ok(())
     }
-
     /// Recompute the domain-separated self-digest.
     ///
     /// # Errors
@@ -2581,7 +2506,6 @@ impl PrivacyZkX509CrlRecordV1 {
             ),
         ))
     }
-
     fn validate_contents(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
         if self.trust_anchor_id.is_zero() {
             return Err(PrivacyZkX509RecordValidationErrorV1::ZeroTrustAnchorId);
@@ -2601,7 +2525,6 @@ impl PrivacyZkX509CrlRecordV1 {
         validate_zk_x509_revision_shape(self.record_epoch, self.previous_record_digest)
     }
 }
-
 fn privacy_zk_x509_sha256_frame_v1(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
     let domain_len = u16::try_from(domain.len()).expect("fixed X.509 digest domain fits u16");
     let field_count = u16::try_from(fields.len()).expect("fixed X.509 digest field count fits u16");
@@ -2618,7 +2541,6 @@ fn privacy_zk_x509_sha256_frame_v1(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] 
     }
     hash.finalize().into()
 }
-
 fn privacy_zk_x509_predecessor_frame_v1<D: PrivacyDigestValueV1>(previous: Option<D>) -> [u8; 33] {
     let mut frame = [0_u8; 33];
     if let Some(digest) = previous {
@@ -2627,21 +2549,18 @@ fn privacy_zk_x509_predecessor_frame_v1<D: PrivacyDigestValueV1>(previous: Optio
     }
     frame
 }
-
 const fn privacy_zk_x509_lifecycle_frame_v1(lifecycle: PrivacyZkX509RecordLifecycleV1) -> [u8; 1] {
     [match lifecycle {
         PrivacyZkX509RecordLifecycleV1::Active => 0,
         PrivacyZkX509RecordLifecycleV1::Revoked => 1,
     }]
 }
-
 fn privacy_zk_x509_key_usage_mask_v1(key_usage: PrivacyX509KeyUsageV1) -> u8 {
     u8::from(key_usage.digital_signature.is_required())
         | (u8::from(key_usage.content_commitment.is_required()) << 1)
         | (u8::from(key_usage.key_encipherment.is_required()) << 2)
         | (u8::from(key_usage.key_agreement.is_required()) << 3)
 }
-
 const fn privacy_zk_x509_extended_key_usage_code_v1(usage: PrivacyX509ExtendedKeyUsageV1) -> u8 {
     match usage {
         PrivacyX509ExtendedKeyUsageV1::ClientAuthentication => 0,
@@ -2649,7 +2568,6 @@ const fn privacy_zk_x509_extended_key_usage_code_v1(usage: PrivacyX509ExtendedKe
         PrivacyX509ExtendedKeyUsageV1::WalletIdentity => 2,
     }
 }
-
 fn validate_zk_x509_revision_shape<D: PrivacyDigestValueV1>(
     record_epoch: u64,
     previous_record_digest: Option<D>,
@@ -2669,42 +2587,34 @@ fn validate_zk_x509_revision_shape<D: PrivacyDigestValueV1>(
         (_, Some(_)) => Ok(()),
     }
 }
-
 trait PrivacyDigestValueV1: Copy {
     fn is_zero(self) -> bool;
     fn bytes(self) -> [u8; 32];
 }
-
 impl PrivacyDigestValueV1 for PrivacyZkX509TrustAnchorRecordDigestV1 {
     fn is_zero(self) -> bool {
         PrivacyZkX509TrustAnchorRecordDigestV1::is_zero(&self)
     }
-
     fn bytes(self) -> [u8; 32] {
         *self.as_bytes()
     }
 }
-
 impl PrivacyDigestValueV1 for PrivacyZkX509CertificatePolicyRecordDigestV1 {
     fn is_zero(self) -> bool {
         PrivacyZkX509CertificatePolicyRecordDigestV1::is_zero(&self)
     }
-
     fn bytes(self) -> [u8; 32] {
         *self.as_bytes()
     }
 }
-
 impl PrivacyDigestValueV1 for PrivacyZkX509CrlRecordDigestV1 {
     fn is_zero(self) -> bool {
         PrivacyZkX509CrlRecordDigestV1::is_zero(&self)
     }
-
     fn bytes(self) -> [u8; 32] {
         *self.as_bytes()
     }
 }
-
 fn validate_zk_x509_initial_revision(
     record_epoch: u64,
     has_previous: bool,
@@ -2725,7 +2635,6 @@ fn validate_zk_x509_initial_revision(
     }
     Ok(())
 }
-
 fn validate_zk_x509_key_usage(
     key_usage: PrivacyX509KeyUsageV1,
 ) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
@@ -2734,7 +2643,6 @@ fn validate_zk_x509_key_usage(
     }
     Ok(())
 }
-
 fn validate_zk_x509_extended_key_usages(
     usages: &[PrivacyX509ExtendedKeyUsageV1],
 ) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
@@ -2754,7 +2662,6 @@ fn validate_zk_x509_extended_key_usages(
     }
     Ok(())
 }
-
 fn validate_zk_x509_disclosure_indices(
     indices: &[u8],
 ) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
@@ -2780,7 +2687,6 @@ fn validate_zk_x509_disclosure_indices(
     }
     Ok(())
 }
-
 /// Failure while validating one immutable X.509 governance revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyZkX509RecordValidationErrorV1 {
@@ -2895,7 +2801,6 @@ pub enum PrivacyZkX509RecordValidationErrorV1 {
     #[error("X.509 governance-record self-digest mismatch")]
     RecordDigestMismatch,
 }
-
 /// Failure while validating an append-only X.509 governance transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyZkX509TransitionValidationErrorV1 {
@@ -2956,7 +2861,6 @@ pub enum PrivacyZkX509TransitionValidationErrorV1 {
     #[error("X.509 revocation changed immutable governed contents")]
     RevocationContentsChanged,
 }
-
 fn validate_zk_x509_transition_common<D: Copy + PartialEq>(
     current_epoch: u64,
     current_digest: D,
@@ -2983,7 +2887,6 @@ fn validate_zk_x509_transition_common<D: Copy + PartialEq>(
     }
     Ok(())
 }
-
 /// Validate an active-to-active trust-store rotation.
 ///
 /// # Errors
@@ -3034,7 +2937,6 @@ pub fn validate_zk_x509_trust_anchor_rotation_v1(
     }
     Ok(())
 }
-
 /// Validate an irreversible trust-store revocation.
 ///
 /// # Errors
@@ -3073,7 +2975,6 @@ pub fn validate_zk_x509_trust_anchor_revocation_v1(
     }
     Ok(())
 }
-
 /// Validate an active-to-active certificate-policy rotation.
 ///
 /// # Errors
@@ -3116,7 +3017,6 @@ pub fn validate_zk_x509_certificate_policy_rotation_v1(
     }
     Ok(())
 }
-
 /// Validate an irreversible certificate-policy revocation.
 ///
 /// # Errors
@@ -3159,7 +3059,6 @@ pub fn validate_zk_x509_certificate_policy_revocation_v1(
     }
     Ok(())
 }
-
 /// Validate an active-to-active signed-CRL rotation.
 ///
 /// # Errors
@@ -3207,7 +3106,6 @@ pub fn validate_zk_x509_crl_rotation_v1(
     }
     Ok(())
 }
-
 /// Validate an irreversible signed-CRL lineage revocation.
 ///
 /// # Errors

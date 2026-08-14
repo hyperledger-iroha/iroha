@@ -43,7 +43,6 @@
 //!   embeds it into the `CompoundPredicate`. The executor evaluates it server-side
 //!   via `EvaluatePredicate`; endpoint-only fields such as `asset_id` remain
 //!   under the authoritative local transaction filter.
-
 use iroha_data_model::{
     name::Name,
     query::{
@@ -53,9 +52,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use norito::json::Value;
-
 use crate::filter::{FilterExpr, validate_filter};
-
 /// Build a server-side predicate for `CommittedTransaction` from the JSON DSL.
 pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
     if validate_filter(expr).is_err() {
@@ -83,9 +80,7 @@ pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
     }
     fn map(expr: &FilterExpr) -> TP {
         use FilterExpr as F;
-
         use crate::filter::FieldPath;
-
         fn metadata_key(field: &str) -> Option<Name> {
             field.strip_prefix("metadata.").and_then(|rest| {
                 rest.parse::<Name>()
@@ -93,11 +88,9 @@ pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
                     .filter(|name| name.to_string() == rest)
             })
         }
-
         fn json_from_value(value: &Value) -> Option<Json> {
             Json::from_norito_value_ref(value).ok()
         }
-
         fn json_vec_from_values(values: &[Value]) -> Option<Vec<Json>> {
             let mut out = Vec::with_capacity(values.len());
             for v in values {
@@ -105,12 +98,10 @@ pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
             }
             Some(out)
         }
-
         match expr {
             F::And(list) => TP::And(list.iter().map(map).collect()),
             F::Or(list) => TP::Or(list.iter().map(map).collect()),
             F::Not(inner) => TP::Not(Box::new(map(inner))),
-
             F::Eq(FieldPath(f), v) => {
                 if let Some(name) = metadata_key(f) {
                     json_from_value(v)
@@ -291,7 +282,6 @@ pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
                     TP::Const(false)
                 }
             }
-
             F::Lt(FieldPath(f), v) if f == "timestamp_ms" => {
                 v.as_u64().map(TP::TsLt).unwrap_or(TP::Const(false))
             }
@@ -304,7 +294,6 @@ pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
             F::Gte(FieldPath(f), v) if f == "timestamp_ms" => {
                 v.as_u64().map(TP::TsGte).unwrap_or(TP::Const(false))
             }
-
             // Safety default: reject invalid/unknown fields by returning a false leaf
             _ => TP::Const(false),
         }
@@ -316,19 +305,16 @@ pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
         .unwrap_or(TP::Const(false));
     CP::from_committed_tx_predicate(tree)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::filter::{FieldPath, QueryEnvelope};
-
     fn serialized_tree(expr: &FilterExpr) -> TP {
         let predicate = build_tx_predicate(expr);
         let raw = norito::json::to_json(&predicate).expect("serialize compound predicate");
         assert_ne!(raw, "{}", "committed filters must never serialize as pass");
         norito::json::from_json(&raw).expect("decode typed predicate tree")
     }
-
     #[test]
     fn query_envelope_filter_reaches_lossless_typed_predicate_codec() {
         let envelope: QueryEnvelope = norito::json::from_value(norito::json!({
@@ -344,7 +330,6 @@ mod tests {
         .expect("query envelope");
         let expr = envelope.filter.expect("filter");
         validate_filter(&expr).expect("validated envelope filter");
-
         assert_eq!(
             serialized_tree(&expr),
             TP::Or(vec![
@@ -360,7 +345,6 @@ mod tests {
             ])
         );
     }
-
     #[test]
     fn malformed_or_unsafe_envelope_filters_fail_closed_not_pass() {
         let invalid = vec![
@@ -381,12 +365,10 @@ mod tests {
                 Value::String("AA".repeat(iroha_crypto::Hash::LENGTH)),
             ),
         ];
-
         for expr in invalid {
             assert_eq!(serialized_tree(&expr), TP::Const(false));
         }
     }
-
     #[test]
     fn overdeep_programmatic_envelope_filter_fails_closed() {
         let mut expr = FilterExpr::Eq(FieldPath("result_ok".into()), Value::Bool(true));

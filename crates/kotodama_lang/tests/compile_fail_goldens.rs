@@ -1,12 +1,10 @@
 //! Public compiler-session compile-fail diagnostic goldens for Kotodama V1.
-
 use kotodama_lang::{
     diagnostic::DiagnosticPhase,
     semantic::MAX_EXPANDED_TYPE_NODES,
     session::{CompileRequest, CompilerSession},
     source::MAX_NESTING_DEPTH,
 };
-
 #[derive(Clone, Copy)]
 struct CompileFailCase {
     name: &'static str,
@@ -16,7 +14,6 @@ struct CompileFailCase {
     message: &'static str,
     line: usize,
 }
-
 const CASES: &[CompileFailCase] = &[
     CompileFailCase {
         name: "duplicate-declaration",
@@ -491,12 +488,10 @@ const CASES: &[CompileFailCase] = &[
         line: 2,
     },
 ];
-
 #[test]
 fn public_session_compile_fail_diagnostics_are_stable() {
     let session = CompilerSession::default();
     let mut failures = Vec::new();
-
     for case in CASES {
         let source_name = format!("{}.ko", case.name);
         let diagnostics = match session.build(CompileRequest {
@@ -547,10 +542,8 @@ fn public_session_compile_fail_diagnostics_are_stable() {
             ));
         }
     }
-
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
-
 #[test]
 fn tail_type_mismatch_points_at_the_exact_tail_expression() {
     let source = "seiyaku TailMismatch {\nfn value() -> bool { 1 }\n}";
@@ -568,7 +561,6 @@ fn tail_type_mismatch_points_at_the_exact_tail_expression() {
                 && diagnostic.code == "E_TAIL_TYPE_MISMATCH"
         })
         .expect("exact tail mismatch diagnostic");
-
     assert_eq!(
         diagnostic.message,
         "block tail type mismatch: type annotation mismatch: expected bool, got int"
@@ -597,7 +589,6 @@ fn tail_type_mismatch_points_at_the_exact_tail_expression() {
         "the diagnostic must select only the incompatible tail expression"
     );
 }
-
 fn trigger_metadata_contract(value: &str) -> String {
     format!(
         r#"
@@ -611,7 +602,6 @@ fn trigger_metadata_contract(value: &str) -> String {
         "#,
     )
 }
-
 #[test]
 fn public_session_enforces_json_parse_arguments_in_trigger_metadata() {
     let session = CompilerSession::default();
@@ -626,7 +616,6 @@ fn public_session_enforces_json_parse_arguments_in_trigger_metadata() {
                 panic!("canonical trigger metadata `{value}` failed: {diagnostics:#?}")
             });
     }
-
     for (value, phase, code, message) in [
         (
             r#"Json::parse(raw: "{}")"#,
@@ -693,7 +682,6 @@ fn public_session_enforces_json_parse_arguments_in_trigger_metadata() {
         );
     }
 }
-
 fn named_type_chain_source(contract: &str, struct_count: usize) -> String {
     assert!(struct_count != 0, "a named-type chain has a product root");
     let mut source = format!("seiyaku {contract} {{\n");
@@ -710,7 +698,6 @@ fn named_type_chain_source(contract: &str, struct_count: usize) -> String {
     source.push_str("view fn run() {}\n}\n");
     source
 }
-
 fn with_private_parameter(source: String, declaration: &str) -> String {
     source.replacen(
         "view fn run() {}\n}",
@@ -718,7 +705,6 @@ fn with_private_parameter(source: String, declaration: &str) -> String {
         1,
     )
 }
-
 fn branching_named_type_use_source(contract: &str, repeated_roots: usize) -> String {
     let mut source = format!("seiyaku {contract} {{\n");
     for index in 0..14 {
@@ -737,7 +723,6 @@ fn branching_named_type_use_source(contract: &str, repeated_roots: usize) -> Str
     ));
     source
 }
-
 fn branching_named_type_expression_source(contract: &str, repeated_roots: usize) -> String {
     let mut source = format!("seiyaku {contract} {{\n");
     for index in 0..14 {
@@ -756,7 +741,6 @@ fn branching_named_type_expression_source(contract: &str, repeated_roots: usize)
     ));
     source
 }
-
 #[test]
 fn acyclic_named_type_chain_preserves_the_exact_v1_resolution_boundary() {
     // Expanded depth counts every product wrapper and the terminal scalar. A
@@ -771,11 +755,9 @@ fn acyclic_named_type_chain_preserves_the_exact_v1_resolution_boundary() {
             source_name: Some("depth-boundary.ko"),
         })
         .expect("a named type exactly 256 expanded levels deep must compile");
-
     // Adding one product wrapper produces the required hostile 257-level
     // acyclic chain without relying on syntactic generic nesting.
     let source = named_type_chain_source("DeepAcyclic", MAX_NESTING_DEPTH);
-
     let diagnostics = CompilerSession::default()
         .build(CompileRequest {
             source: &source,
@@ -787,7 +769,6 @@ fn acyclic_named_type_chain_preserves_the_exact_v1_resolution_boundary() {
         .iter()
         .find(|diagnostic| diagnostic.code == "K2008")
         .expect("named-type depth diagnostic");
-
     assert_eq!(diagnostic.phase, DiagnosticPhase::Semantic);
     assert_eq!(
         diagnostic.message,
@@ -799,7 +780,6 @@ fn acyclic_named_type_chain_preserves_the_exact_v1_resolution_boundary() {
     assert_eq!(span.source.as_deref(), Some("deep-acyclic.ko"));
     assert_eq!(span.start.line, 2);
 }
-
 #[test]
 fn use_site_wrapper_cannot_hide_an_over_depth_named_type() {
     let source = with_private_parameter(
@@ -817,7 +797,6 @@ fn use_site_wrapper_cannot_hide_an_over_depth_named_type() {
         .iter()
         .find(|diagnostic| diagnostic.code == "K2008")
         .expect("use-site named-type depth diagnostic");
-
     assert_eq!(diagnostic.phase, DiagnosticPhase::Semantic);
     assert_eq!(
         diagnostic.message,
@@ -836,7 +815,6 @@ fn use_site_wrapper_cannot_hide_an_over_depth_named_type() {
         "Option<S000>"
     );
 }
-
 #[test]
 fn repeated_shared_named_type_uses_obey_the_same_expanded_node_budget() {
     // Fourteen branching definitions produce a canonical S000 DAG with 49,151
@@ -850,7 +828,6 @@ fn repeated_shared_named_type_uses_obey_the_same_expanded_node_budget() {
             source_name: Some("shared-use-boundary.ko"),
         })
         .expect("repeated shared named-type references below the node budget must compile");
-
     let hostile = branching_named_type_use_source("SharedUseOverflow", 6);
     let diagnostics = CompilerSession::default()
         .build(CompileRequest {
@@ -881,7 +858,6 @@ fn repeated_shared_named_type_uses_obey_the_same_expanded_node_budget() {
         "Option<(S000, S000, S000, S000, S000, S000)>"
     );
 }
-
 #[test]
 fn inferred_aggregate_types_cannot_bypass_the_shared_node_budget() {
     let legitimate = branching_named_type_expression_source("InferredSharedBoundary", 5);
@@ -891,7 +867,6 @@ fn inferred_aggregate_types_cannot_bypass_the_shared_node_budget() {
             source_name: Some("inferred-shared-boundary.ko"),
         })
         .expect("an inferred shared aggregate below the semantic node budget must check");
-
     let hostile = branching_named_type_expression_source("InferredSharedOverflow", 6);
     let diagnostics = CompilerSession::default()
         .check(CompileRequest {
@@ -922,7 +897,6 @@ fn inferred_aggregate_types_cannot_bypass_the_shared_node_budget() {
         "(records.get(0), records.get(0), records.get(0), records.get(0), records.get(0), records.get(0))"
     );
 }
-
 #[test]
 fn modest_shared_named_type_dag_compiles_below_the_node_budget() {
     let mut source = String::from("seiyaku ModestDag {\n");
@@ -934,7 +908,6 @@ fn modest_shared_named_type_dag_compiles_below_the_node_budget() {
         ));
     }
     source.push_str("struct S008 { int value; }\nview fn run() {}\n}\n");
-
     CompilerSession::default()
         .build(CompileRequest {
             source: &source,
@@ -942,7 +915,6 @@ fn modest_shared_named_type_dag_compiles_below_the_node_budget() {
         })
         .expect("a shared DAG whose expanded form is below the node budget must compile");
 }
-
 #[test]
 fn branching_named_type_dag_is_measured_without_exponential_expansion() {
     let mut source = String::from("seiyaku BranchingDag {\n");
@@ -954,7 +926,6 @@ fn branching_named_type_dag_is_measured_without_exponential_expansion() {
         ));
     }
     source.push_str("struct S017 { int value; }\n}\n");
-
     let diagnostics = CompilerSession::default()
         .build(CompileRequest {
             source: &source,
@@ -966,7 +937,6 @@ fn branching_named_type_dag_is_measured_without_exponential_expansion() {
         .iter()
         .find(|diagnostic| diagnostic.code == "K2008")
         .expect("named-type resource diagnostic");
-
     assert_eq!(diagnostic.phase, DiagnosticPhase::Semantic);
     assert_eq!(
         diagnostic.message,
@@ -978,7 +948,6 @@ fn branching_named_type_dag_is_measured_without_exponential_expansion() {
     assert_eq!(span.source.as_deref(), Some("branching-dag.ko"));
     assert_eq!(span.start.line, 2);
 }
-
 #[test]
 fn over_budget_named_types_point_at_parameter_and_return_references() {
     for (source_name, declaration) in [
@@ -996,7 +965,6 @@ fn over_budget_named_types_point_at_parameter_and_return_references() {
         source.push_str("struct S017 { int value; }\n");
         source.push_str(declaration);
         source.push_str("\n}\n");
-
         let diagnostics = CompilerSession::default()
             .build(CompileRequest {
                 source: &source,
@@ -1017,7 +985,6 @@ fn over_budget_named_types_point_at_parameter_and_return_references() {
         assert_eq!(&source[start..end], "S000");
     }
 }
-
 #[test]
 fn multi_error_renderers_preserve_identical_semantic_records_and_exact_spans() {
     let source = r#"seiyaku Broken {
@@ -1031,7 +998,6 @@ fn multi_error_renderers_preserve_identical_semantic_records_and_exact_spans() {
             source_name: Some(source_name),
         })
         .expect_err("independent semantic errors must fail compilation");
-
     for code in ["E_TYPE_ANNOTATION_MISMATCH", "E_IMMUTABLE_ASSIGNMENT"] {
         assert!(
             diagnostics
@@ -1045,7 +1011,6 @@ fn multi_error_renderers_preserve_identical_semantic_records_and_exact_spans() {
         diagnostics.diagnostics.len() >= 2,
         "all independent errors must be retained: {diagnostics:#?}"
     );
-
     let human = diagnostics.render_human();
     for diagnostic in &diagnostics.diagnostics {
         assert!(
@@ -1111,7 +1076,6 @@ fn multi_error_renderers_preserve_identical_semantic_records_and_exact_spans() {
             );
         }
     }
-
     let canonical: norito::json::Value = norito::json::from_str(
         &diagnostics
             .render_json()

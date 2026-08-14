@@ -1,5 +1,4 @@
 //! Provider advert ingestion and validation for Torii's SoraFS discovery pipeline.
-
 use std::{
     collections::HashMap,
     fs::{self, OpenOptions},
@@ -11,10 +10,8 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
-
 use blake3::hash as blake3_hash;
 use norito::{
     derive::{NoritoDeserialize, NoritoSerialize},
@@ -25,24 +22,19 @@ use sorafs_manifest::{
     SignatureAlgorithm,
 };
 use thiserror::Error;
-
 use super::admission::{AdmissionCheckError, AdmissionRegistry, verify_advert_against_envelope};
-
 /// Fingerprint size for stored adverts (BLAKE3-256).
 pub const FINGERPRINT_LEN: usize = 32;
-
 const REPLAY_CHECKPOINT_VERSION_V1: u8 = 1;
 const REPLAY_CHECKPOINT_HARD_MAX_ENTRIES: usize = 65_536;
 const REPLAY_CHECKPOINT_BASE_MAX_BYTES: u64 = 4 * 1024;
 const REPLAY_CHECKPOINT_MAX_BYTES_PER_ENTRY: u64 = 128;
 static REPLAY_CHECKPOINT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AdvertReplayHighWater {
     issued_at: u64,
     fingerprint: [u8; FINGERPRINT_LEN],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderAdvertReplayEntryV1 {
     version: u8,
@@ -50,7 +42,6 @@ struct ProviderAdvertReplayEntryV1 {
     issued_at: u64,
     fingerprint: [u8; FINGERPRINT_LEN],
 }
-
 #[derive(Debug)]
 struct ReplayCheckpointStore {
     path: PathBuf,
@@ -59,7 +50,6 @@ struct ReplayCheckpointStore {
     // operating-system advisory lock.
     _lock_file: fs::File,
 }
-
 /// Outcome of ingesting a provider advert into the cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdvertIngest {
@@ -79,7 +69,6 @@ pub enum AdvertIngest {
         fingerprint: [u8; FINGERPRINT_LEN],
     },
 }
-
 /// Metadata downgrade warnings emitted during advert ingestion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdvertWarning {
@@ -90,7 +79,6 @@ pub enum AdvertWarning {
     /// Provider advert omitted transport hints for range fetch.
     MissingTransportHints,
 }
-
 impl AdvertWarning {
     /// Returns the canonical telemetry reason label.
     #[must_use]
@@ -101,14 +89,12 @@ impl AdvertWarning {
             AdvertWarning::MissingTransportHints => "missing_transport_hints",
         }
     }
-
     /// Returns a short identifier suitable for JSON responses.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         self.telemetry_reason()
     }
 }
-
 /// Result of an advert ingestion attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdvertIngestResult {
@@ -117,7 +103,6 @@ pub struct AdvertIngestResult {
     /// Downgrade warnings detected during ingestion.
     pub warnings: Vec<AdvertWarning>,
 }
-
 /// Immutable inputs needed to authenticate and normalize a provider advert.
 ///
 /// A policy snapshot can be cloned while briefly holding the cache read lock,
@@ -129,7 +114,6 @@ pub struct ProviderAdvertValidationPolicy {
     known_capabilities: Vec<CapabilityType>,
     admission: Arc<AdmissionRegistry>,
 }
-
 /// Provider advert that passed structural, signature, capability, and
 /// admission-envelope validation against one cache policy snapshot.
 #[derive(Debug)]
@@ -141,7 +125,6 @@ pub struct PreparedProviderAdvert {
     policy_capabilities: Vec<CapabilityType>,
     policy_admission: Arc<AdmissionRegistry>,
 }
-
 impl ProviderAdvertValidationPolicy {
     /// Validate an advert without acquiring or retaining the provider-cache lock.
     ///
@@ -160,7 +143,6 @@ impl ProviderAdvertValidationPolicy {
             return Err(AdvertError::SignaturePolicyDisabled);
         }
         verify_signature(&advert)?;
-
         let unknown_capabilities = advert
             .body
             .capabilities
@@ -173,7 +155,6 @@ impl ProviderAdvertValidationPolicy {
                 capabilities: unknown_capabilities,
             });
         }
-
         let known_capabilities = advert
             .body
             .capabilities
@@ -191,7 +172,6 @@ impl ProviderAdvertValidationPolicy {
             .ok_or(AdvertError::AdmissionMissing { provider_id })?;
         verify_advert_against_envelope(&advert, &admission_entry)
             .map_err(|error| AdvertError::AdmissionFailed { provider_id, error })?;
-
         let warnings = collect_warnings(&advert);
         let fingerprint = fingerprint(&advert)?;
         Ok(PreparedProviderAdvert {
@@ -204,7 +184,6 @@ impl ProviderAdvertValidationPolicy {
         })
     }
 }
-
 /// Errors raised while loading or atomically updating the durable provider
 /// advert replay checkpoint.
 #[derive(Debug, Error)]
@@ -303,7 +282,6 @@ pub enum ReplayCheckpointError {
         maximum: usize,
     },
 }
-
 /// Errors surfaced while processing provider adverts.
 #[derive(Debug, Error)]
 pub enum AdvertError {
@@ -363,7 +341,6 @@ pub enum AdvertError {
         error: AdmissionCheckError,
     },
 }
-
 impl ReplayCheckpointStore {
     fn new(path: PathBuf, max_entries: NonZeroUsize) -> Result<Self, ReplayCheckpointError> {
         let lock_file = acquire_checkpoint_lock(&path)?;
@@ -373,14 +350,12 @@ impl ReplayCheckpointStore {
             _lock_file: lock_file,
         })
     }
-
     fn maximum_bytes(&self) -> u64 {
         u64::try_from(self.max_entries)
             .unwrap_or(u64::MAX)
             .saturating_mul(REPLAY_CHECKPOINT_MAX_BYTES_PER_ENTRY)
             .saturating_add(REPLAY_CHECKPOINT_BASE_MAX_BYTES)
     }
-
     fn load(
         &self,
         admission: &AdmissionRegistry,
@@ -425,7 +400,6 @@ impl ReplayCheckpointStore {
         if canonical != bytes {
             return Err(ReplayCheckpointError::NonCanonicalEncoding);
         }
-
         let mut high_water = HashMap::with_capacity(entries.len());
         for entry in entries {
             if admission.entry(&entry.provider_id).is_none() {
@@ -443,7 +417,6 @@ impl ReplayCheckpointStore {
         }
         Ok(high_water)
     }
-
     fn persist(
         &self,
         high_water: &HashMap<[u8; 32], AdvertReplayHighWater>,
@@ -473,7 +446,6 @@ impl ReplayCheckpointStore {
         write_checkpoint_atomic(&self.path, &bytes)
     }
 }
-
 fn acquire_checkpoint_lock(checkpoint_path: &Path) -> Result<fs::File, ReplayCheckpointError> {
     validate_checkpoint_path(checkpoint_path)?;
     let parent = checkpoint_parent(checkpoint_path);
@@ -482,7 +454,6 @@ fn acquire_checkpoint_lock(checkpoint_path: &Path) -> Result<fs::File, ReplayChe
         source,
     })?;
     validate_checkpoint_path(checkpoint_path)?;
-
     let lock_path = checkpoint_path.with_added_extension("lock");
     validate_checkpoint_path(&lock_path)?;
     let before_open = match fs::symlink_metadata(&lock_path) {
@@ -533,7 +504,6 @@ fn acquire_checkpoint_lock(checkpoint_path: &Path) -> Result<fs::File, ReplayChe
         ));
     }
     validate_checkpoint_path(&lock_path)?;
-
     match file.try_lock() {
         Ok(()) => {}
         Err(fs::TryLockError::WouldBlock) => {
@@ -560,7 +530,6 @@ fn acquire_checkpoint_lock(checkpoint_path: &Path) -> Result<fs::File, ReplayChe
     validate_checkpoint_path(&lock_path)?;
     Ok(file)
 }
-
 fn validate_lock_file_metadata(
     path: &Path,
     metadata: &fs::Metadata,
@@ -580,7 +549,6 @@ fn validate_lock_file_metadata(
     }
     Ok(())
 }
-
 fn read_checkpoint_bounded(
     path: &Path,
     maximum_bytes: u64,
@@ -597,7 +565,6 @@ fn read_checkpoint_bounded(
     };
     validate_checkpoint_file_metadata(path, &path_metadata, maximum_bytes)?;
     validate_checkpoint_path(path)?;
-
     let mut options = OpenOptions::new();
     options.read(true);
     set_no_follow_flag(&mut options);
@@ -620,7 +587,6 @@ fn read_checkpoint_bounded(
             "checkpoint changed between inspection and open",
         ));
     }
-
     let capacity = usize::try_from(opened_metadata.len()).unwrap_or(usize::MAX);
     let mut bytes = Vec::with_capacity(capacity.min(64 * 1024));
     (&mut file)
@@ -666,7 +632,6 @@ fn read_checkpoint_bounded(
     validate_checkpoint_path(path)?;
     Ok(Some(bytes))
 }
-
 fn validate_checkpoint_file_metadata(
     path: &Path,
     metadata: &fs::Metadata,
@@ -693,17 +658,14 @@ fn validate_checkpoint_file_metadata(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(not(unix))]
 fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len()
 }
-
 fn write_checkpoint_atomic(path: &Path, bytes: &[u8]) -> Result<(), ReplayCheckpointError> {
     validate_checkpoint_path(path)?;
     let parent = checkpoint_parent(path);
@@ -712,7 +674,6 @@ fn write_checkpoint_atomic(path: &Path, bytes: &[u8]) -> Result<(), ReplayCheckp
         source,
     })?;
     validate_checkpoint_path(path)?;
-
     let counter = REPLAY_CHECKPOINT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let temp_path = path.with_added_extension(format!("tmp.{}.{}", std::process::id(), counter));
     let mut renamed = false;
@@ -765,23 +726,19 @@ fn write_checkpoint_atomic(path: &Path, bytes: &[u8]) -> Result<(), ReplayCheckp
     }
     write_result
 }
-
 fn checkpoint_parent(path: &Path) -> &Path {
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."))
 }
-
 #[cfg(unix)]
 fn sync_checkpoint_parent(parent: &Path) -> io::Result<()> {
     fs::File::open(parent)?.sync_all()
 }
-
 #[cfg(not(unix))]
 fn sync_checkpoint_parent(_parent: &Path) -> io::Result<()> {
     Ok(())
 }
-
 fn validate_checkpoint_path(path: &Path) -> Result<(), ReplayCheckpointError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -800,7 +757,6 @@ fn validate_checkpoint_path(path: &Path) -> Result<(), ReplayCheckpointError> {
             });
         }
     }
-
     let parent = checkpoint_parent(path);
     for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
         if ancestor.as_os_str().is_empty() {
@@ -826,30 +782,24 @@ fn validate_checkpoint_path(path: &Path) -> Result<(), ReplayCheckpointError> {
     }
     Ok(())
 }
-
 fn checkpoint_io_error(path: &Path, message: &'static str) -> ReplayCheckpointError {
     ReplayCheckpointError::Io {
         path: path.to_path_buf(),
         source: io::Error::other(message),
     }
 }
-
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut OpenOptions) {
     options.custom_flags(libc::O_NOFOLLOW);
 }
-
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut OpenOptions) {}
-
 #[cfg(unix)]
 fn set_private_create_mode(options: &mut OpenOptions) {
     options.mode(0o600);
 }
-
 #[cfg(not(unix))]
 fn set_private_create_mode(_options: &mut OpenOptions) {}
-
 /// Sanitised provider advert stored by the cache.
 #[derive(Debug, Clone)]
 pub struct AdvertRecord {
@@ -858,33 +808,28 @@ pub struct AdvertRecord {
     known_capabilities: Vec<CapabilityType>,
     warnings: Vec<AdvertWarning>,
 }
-
 impl AdvertRecord {
     /// Returns the stored advert.
     #[must_use]
     pub fn advert(&self) -> &ProviderAdvertV1 {
         &self.advert
     }
-
     /// Returns the filtered capability list recognised by the cache.
     #[must_use]
     pub fn known_capabilities(&self) -> &[CapabilityType] {
         self.known_capabilities.as_slice()
     }
-
     /// Returns the downgrade warnings observed while ingesting the advert.
     #[must_use]
     pub fn warnings(&self) -> &[AdvertWarning] {
         &self.warnings
     }
-
     /// Returns the advert fingerprint.
     #[must_use]
     pub fn fingerprint(&self) -> &[u8; FINGERPRINT_LEN] {
         &self.fingerprint
     }
 }
-
 /// Provider advert cache propagated through Torii, with optional durable replay
 /// high-water storage.
 #[derive(Debug)]
@@ -901,7 +846,6 @@ pub struct ProviderAdvertCache {
     replay_checkpoint_poisoned: bool,
     admission: Arc<AdmissionRegistry>,
 }
-
 impl ProviderAdvertCache {
     /// Construct a new cache with the provided capability allow-list.
     #[must_use]
@@ -919,7 +863,6 @@ impl ProviderAdvertCache {
             admission,
         }
     }
-
     /// Construct a cache backed by an atomic, bounded Norito replay checkpoint.
     ///
     /// The constructor fails closed when the checkpoint is corrupt,
@@ -963,7 +906,6 @@ impl ProviderAdvertCache {
             admission,
         })
     }
-
     /// Snapshot the immutable validation policy for lock-free advert verification.
     #[must_use]
     pub fn validation_policy(&self) -> ProviderAdvertValidationPolicy {
@@ -972,7 +914,6 @@ impl ProviderAdvertCache {
             admission: Arc::clone(&self.admission),
         }
     }
-
     /// Atomically commit a provider advert that was authenticated outside the cache lock.
     ///
     /// The active policy identity, current-time validity, admission envelope,
@@ -999,7 +940,6 @@ impl ProviderAdvertCache {
         {
             return Err(AdvertError::ValidationPolicyChanged);
         }
-
         let PreparedProviderAdvert {
             advert,
             known_capabilities,
@@ -1014,7 +954,6 @@ impl ProviderAdvertCache {
         if !advert.signature_strict {
             return Err(AdvertError::SignaturePolicyDisabled);
         }
-
         let admission_entry = self
             .admission
             .entry(&provider_id)
@@ -1044,7 +983,6 @@ impl ProviderAdvertCache {
             Some(current) if issued_at == current.issued_at => true,
             Some(_) | None => false,
         };
-
         if !already_durable {
             let previous_high_water = self.replay_high_water.insert(
                 provider_id,
@@ -1077,7 +1015,6 @@ impl ProviderAdvertCache {
         if let Some(prev_fp) = previous {
             self.records.remove(&prev_fp);
         }
-
         let record = AdvertRecord {
             fingerprint,
             advert,
@@ -1086,27 +1023,22 @@ impl ProviderAdvertCache {
         };
         self.records.insert(fingerprint, record);
         self.by_provider.insert(provider_id, fingerprint);
-
         let outcome = match previous {
             Some(_) => AdvertIngest::Replaced { fingerprint },
             None => AdvertIngest::Stored { fingerprint },
         };
-
         Ok(AdvertIngestResult { outcome, warnings })
     }
-
     /// Return the number of cached adverts.
     #[must_use]
     pub fn len(&self) -> usize {
         self.records.len()
     }
-
     /// Returns `true` when the cache is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.records.is_empty()
     }
-
     /// Look up the advert stored for the given provider id.
     #[must_use]
     pub fn record_by_provider(&self, provider_id: &[u8; 32]) -> Option<&AdvertRecord> {
@@ -1114,12 +1046,10 @@ impl ProviderAdvertCache {
             .get(provider_id)
             .and_then(|fp| self.records.get(fp))
     }
-
     /// Iterate over all stored adverts.
     pub fn records(&self) -> impl Iterator<Item = &AdvertRecord> {
         self.records.values()
     }
-
     /// Revalidate cached adverts and drop entries that no longer pass admission checks.
     ///
     /// Provider issuance high-water marks are retained so pruning cannot reopen
@@ -1146,22 +1076,18 @@ impl ProviderAdvertCache {
                 to_remove.push((fingerprint, provider_id));
             }
         }
-
         for (fingerprint, provider_id) in &to_remove {
             self.records.remove(fingerprint);
             self.by_provider.remove(provider_id);
         }
-
         to_remove.len()
     }
 }
-
 fn fingerprint(advert: &ProviderAdvertV1) -> Result<[u8; FINGERPRINT_LEN], AdvertError> {
     let bytes = to_bytes(advert)?;
     let digest = blake3_hash(&bytes);
     Ok(digest.into())
 }
-
 fn verify_signature(advert: &ProviderAdvertV1) -> Result<(), AdvertError> {
     advert.verify_signature().map_err(|err| match err {
         AdvertSignatureError::UnsupportedAlgorithm(other) => {
@@ -1170,7 +1096,6 @@ fn verify_signature(advert: &ProviderAdvertV1) -> Result<(), AdvertError> {
         other => AdvertError::Signature(other.to_string()),
     })
 }
-
 /// Return the canonical capability name used in configuration and responses.
 #[must_use]
 pub fn capability_name(capability: CapabilityType) -> &'static str {
@@ -1183,7 +1108,6 @@ pub fn capability_name(capability: CapabilityType) -> &'static str {
         CapabilityType::VendorReserved => "vendor_reserved",
     }
 }
-
 /// Parse a capability name used in configuration into the corresponding enum value.
 #[must_use]
 pub fn parse_capability_name(name: &str) -> Option<CapabilityType> {
@@ -1197,10 +1121,8 @@ pub fn parse_capability_name(name: &str) -> Option<CapabilityType> {
         _ => None,
     }
 }
-
 fn collect_warnings(advert: &ProviderAdvertV1) -> Vec<AdvertWarning> {
     let mut warnings = Vec::new();
-
     let has_chunk_range = advert
         .body
         .capabilities
@@ -1223,11 +1145,9 @@ fn collect_warnings(advert: &ProviderAdvertV1) -> Vec<AdvertWarning> {
     }
     warnings
 }
-
 #[cfg(test)]
 mod capability_name_tests {
     use super::*;
-
     #[test]
     fn capability_names_round_trip_only_the_v1_canonical_labels() {
         let canonical = [
@@ -1242,7 +1162,6 @@ mod capability_name_tests {
             assert_eq!(parse_capability_name(name), Some(capability));
             assert_eq!(capability_name(capability), name);
         }
-
         for alias in [
             "torii",
             "quic",
@@ -1264,20 +1183,16 @@ mod capability_name_tests {
         }
     }
 }
-
 #[cfg(test)]
 mod replay_checkpoint_tests {
     use super::*;
-
     fn max_entries(value: usize) -> NonZeroUsize {
         NonZeroUsize::new(value).expect("test checkpoint capacity is non-zero")
     }
-
     fn checkpoint_store(path: PathBuf, capacity: usize) -> ReplayCheckpointStore {
         ReplayCheckpointStore::new(path, max_entries(capacity))
             .expect("acquire test replay checkpoint lock")
     }
-
     fn entry(provider_byte: u8, issued_at: u64) -> ProviderAdvertReplayEntryV1 {
         ProviderAdvertReplayEntryV1 {
             version: REPLAY_CHECKPOINT_VERSION_V1,
@@ -1286,14 +1201,12 @@ mod replay_checkpoint_tests {
             fingerprint: [provider_byte.wrapping_add(1); FINGERPRINT_LEN],
         }
     }
-
     fn write_private(path: &Path, bytes: &[u8]) {
         fs::write(path, bytes).expect("write checkpoint fixture");
         #[cfg(unix)]
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))
             .expect("set private checkpoint fixture permissions");
     }
-
     #[test]
     fn checkpoint_rejects_empty_payload() {
         let temp = tempfile::tempdir().expect("temporary directory");
@@ -1308,7 +1221,6 @@ mod replay_checkpoint_tests {
             Err(ReplayCheckpointError::Empty)
         ));
     }
-
     #[test]
     fn persistent_cache_rejects_configured_limit_above_hard_bound() {
         let temp = tempfile::tempdir().expect("temporary directory");
@@ -1328,7 +1240,6 @@ mod replay_checkpoint_tests {
                 && hard_maximum == REPLAY_CHECKPOINT_HARD_MAX_ENTRIES
         ));
     }
-
     #[test]
     fn checkpoint_lock_rejects_second_owner_until_first_drops() {
         let temp = tempfile::tempdir().expect("temporary directory");
@@ -1343,7 +1254,6 @@ mod replay_checkpoint_tests {
         ReplayCheckpointStore::new(path, max_entries(4))
             .expect("dropping first cache releases replay checkpoint lock");
     }
-
     #[test]
     fn checkpoint_preflights_declared_entry_count() {
         let temp = tempfile::tempdir().expect("temporary directory");
@@ -1358,7 +1268,6 @@ mod replay_checkpoint_tests {
             })
         ));
     }
-
     #[test]
     fn checkpoint_rejects_oversized_file_before_decode() {
         let temp = tempfile::tempdir().expect("temporary directory");
@@ -1372,7 +1281,6 @@ mod replay_checkpoint_tests {
                 if actual == maximum + 1 && maximum == store.maximum_bytes()
         ));
     }
-
     #[test]
     fn checkpoint_rejects_unknown_version_before_admission_lookup() {
         let temp = tempfile::tempdir().expect("temporary directory");
@@ -1386,7 +1294,6 @@ mod replay_checkpoint_tests {
             Err(ReplayCheckpointError::UnsupportedVersion { version: 2 })
         ));
     }
-
     #[test]
     fn checkpoint_rejects_unsorted_and_duplicate_provider_ids() {
         let temp = tempfile::tempdir().expect("temporary directory");
@@ -1402,7 +1309,6 @@ mod replay_checkpoint_tests {
             ));
         }
     }
-
     #[test]
     fn checkpoint_rejects_decodable_noncanonical_layout() {
         let temp = tempfile::tempdir().expect("temporary directory");
@@ -1425,7 +1331,6 @@ mod replay_checkpoint_tests {
             Err(ReplayCheckpointError::NonCanonicalEncoding)
         ));
     }
-
     #[test]
     fn checkpoint_rejects_unadmitted_identity() {
         let temp = tempfile::tempdir().expect("temporary directory");
@@ -1439,12 +1344,10 @@ mod replay_checkpoint_tests {
             }) if provider_id == [3; 32]
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn checkpoint_read_and_write_refuse_symlinks() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("temporary directory");
         let external = temp.path().join("external.to");
         let checkpoint = temp.path().join("replay.to");
@@ -1468,12 +1371,10 @@ mod replay_checkpoint_tests {
         ));
         assert_eq!(fs::read(external).unwrap(), sentinel);
     }
-
     #[cfg(unix)]
     #[test]
     fn checkpoint_write_refuses_symlinked_parent() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("temporary directory");
         let real_parent = temp.path().join("real-parent");
         let linked_parent = temp.path().join("linked-parent");
@@ -1488,7 +1389,6 @@ mod replay_checkpoint_tests {
             "symlinked parent must not receive checkpoint data"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn checkpoint_rejects_permissive_file_mode() {

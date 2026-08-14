@@ -3,15 +3,12 @@
 //! This module is independent of the global consensus reducer. Sumeragi v2
 //! invokes it only to derive bounded lane-local artifacts which become inputs
 //! to the authoritative reducer-owned block candidate.
-
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
-
 #[cfg(test)]
 use std::{
     collections::VecDeque,
     time::{Duration, Instant},
 };
-
 use crate::queue::{LaneQueueReservationScopeV1, RoutingDecision};
 use iroha_config::parameters::actual::Nexus;
 use iroha_crypto::{Hash, HashOf};
@@ -27,9 +24,7 @@ use iroha_data_model::{
 };
 use norito::codec::Encode;
 use thiserror::Error;
-
 use crate::{kura::Kura, state::State};
-
 /// Resolve an autoscaled lane's immutable, incarnation-bound PoPs in exact
 /// validator-set order.
 ///
@@ -54,7 +49,6 @@ pub(in crate::sumeragi) fn pinned_autoscale_validator_pops_for_set(
     let pinned = crate::state::autoscale_lane_pinned_committee_with_pops(lane)?;
     align_exact_pinned_validator_pops(pinned, validator_set).map(Some)
 }
-
 fn align_exact_pinned_validator_pops(
     pinned: Vec<(PeerId, Vec<u8>)>,
     validator_set: &[PeerId],
@@ -69,7 +63,6 @@ fn align_exact_pinned_validator_pops(
     }
     Some(pinned.into_iter().map(|(_, pop)| pop).collect())
 }
-
 /// Return true when proposal assembly should look beyond the remaining block
 /// slots to discover work from other currently routable lanes.
 ///
@@ -81,7 +74,6 @@ fn align_exact_pinned_validator_pops(
 pub(crate) fn proposal_lookahead_enabled(nexus: &Nexus, block_height: u64) -> bool {
     crate::queue::routable_lane_ids_for_nexus_at_height(nexus, block_height).len() > 1
 }
-
 /// Compute how many queued transactions proposal assembly may inspect next.
 ///
 /// Single-lane slots scan only up to the remaining block capacity. Multi-lane
@@ -106,7 +98,6 @@ pub(super) fn proposal_fetch_cap(
         remaining_budget.min(remaining_slots)
     }
 }
-
 /// Scheduler-visible properties for a fetched proposal candidate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg(test)]
@@ -116,7 +107,6 @@ pub(super) struct ProposalAdmissionCandidate {
     /// Whether this transaction consumes one IVM-heavy proposal slot.
     pub(super) is_ivm_heavy: bool,
 }
-
 /// Current proposal resource usage at a candidate admission point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg(test)]
@@ -136,7 +126,6 @@ pub(super) struct ProposalAdmissionContext {
     /// IVM-heavy transactions already accepted into the proposal block.
     pub(super) ivm_transactions_included: usize,
 }
-
 /// Reason a fetched proposal candidate should be deferred.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg(test)]
@@ -150,7 +139,6 @@ pub(super) enum ProposalDeferralReason {
     /// Lane-local consensus metadata could not be planned securely.
     LaneConsensus,
 }
-
 /// Admission decision for a fetched proposal candidate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg(test)]
@@ -161,7 +149,6 @@ pub(super) enum ProposalAdmissionDecision {
     /// Defer the candidate and requeue it with its current routing plan.
     Defer { reason: ProposalDeferralReason },
 }
-
 /// Error returned when proposal batch scheduling inputs are internally inconsistent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg(test)]
@@ -174,7 +161,6 @@ pub(super) enum ProposalBatchScheduleError {
         routing_decisions: usize,
     },
 }
-
 /// Scheduler action for one fetched proposal candidate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ProposalBatchAction {
@@ -194,7 +180,6 @@ pub(super) enum ProposalBatchAction {
         reason: ProposalDeferralReason,
     },
 }
-
 /// Deterministic action plan for a fetched proposal batch.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct ProposalBatchSchedule {
@@ -210,7 +195,6 @@ pub(super) struct ProposalBatchSchedule {
     #[cfg(test)]
     pub(super) ivm_transactions_deferred: usize,
 }
-
 /// Validator committee declared for a lane-local consensus domain.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LaneConsensusCommittee {
@@ -225,7 +209,6 @@ pub(super) struct LaneConsensusCommittee {
     /// match that deterministic threshold.
     pub(super) min_quorum: Option<u32>,
 }
-
 /// Deterministic lane-local vote/QC domain for accepted proposal work.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LaneConsensusDomain {
@@ -244,7 +227,6 @@ pub(super) struct LaneConsensusDomain {
     /// Domain-separated mode tag used for lane-local vote signatures.
     pub(super) qc_mode_tag: String,
 }
-
 /// Deterministic subject for lane-local block votes and DA ownership.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LaneBlockSubject {
@@ -267,7 +249,6 @@ pub(super) struct LaneBlockSubject {
     /// Stable Norito-backed digest of the subject preimage.
     pub(super) subject_hash: Hash,
 }
-
 /// Committed lane-local block tip known before planning the next slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct LaneBlockTip {
@@ -283,7 +264,6 @@ pub(super) struct LaneBlockTip {
     /// Descriptor hash of the latest committed lane-local block, when known.
     pub(super) latest_lane_block_descriptor_hash: Option<Hash>,
 }
-
 /// Lane-local slot coordinates assigned before subject derivation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct LaneBlockSlot {
@@ -298,7 +278,6 @@ pub(super) struct LaneBlockSlot {
     /// Lane-local view for this slot.
     pub(super) lane_block_view: u64,
 }
-
 /// Deterministic DA/RBC ownership identity for one lane-local block subject.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LanePayloadOwnership {
@@ -325,7 +304,6 @@ pub(super) struct LanePayloadOwnership {
     /// Stable digest naming the lane-local RBC instance for this payload.
     pub(super) rbc_instance_hash: Hash,
 }
-
 /// Replayable lane-local block descriptor for standalone lane scheduling.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LaneBlockDescriptor {
@@ -364,7 +342,6 @@ pub(super) struct LaneBlockDescriptor {
     /// Stable descriptor digest binding predecessor, work, ownership, committee, and quorum.
     pub(super) descriptor_hash: Hash,
 }
-
 /// Standalone lane-local block proposal artifact ready for lane voting.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LaneBlockProposal {
@@ -379,7 +356,6 @@ pub(super) struct LaneBlockProposal {
     /// Canonical public proposal artifact ready for broadcast.
     pub(super) artifact: LaneBlockProposalV1,
 }
-
 /// Stable identity used to pace proposal redrive independently for each lane slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg(test)]
@@ -391,7 +367,6 @@ struct LaneBlockRedriveIdentity {
     lane_block_view: u64,
     proposal_hash: Hash,
 }
-
 #[cfg(test)]
 impl LaneBlockRedriveIdentity {
     fn from_proposal(proposal: &LaneBlockProposalV1) -> Self {
@@ -404,7 +379,6 @@ impl LaneBlockRedriveIdentity {
             proposal_hash: proposal.proposal_hash,
         }
     }
-
     fn same_height(self, other: Self) -> bool {
         self.lane_id == other.lane_id
             && self.dataspace_id == other.dataspace_id
@@ -412,7 +386,6 @@ impl LaneBlockRedriveIdentity {
             && self.lane_block_height == other.lane_block_height
     }
 }
-
 /// Result of admitting a canonical proposal into the per-lane redrive clock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg(test)]
@@ -436,7 +409,6 @@ pub(super) enum LaneBlockRedriveObservation {
     /// The proposal failed canonical stateless validation.
     Invalid,
 }
-
 /// Bounded per-lane proposal-redrive scheduler.
 ///
 /// The persisted lane proposal is immutable: its lane view, descriptor, and DA/RBC
@@ -454,7 +426,6 @@ pub(super) struct LaneBlockRedriveTracker {
     observed_at: BTreeMap<LaneBlockRedriveIdentity, Instant>,
     order: VecDeque<LaneBlockRedriveIdentity>,
 }
-
 #[cfg(test)]
 impl LaneBlockRedriveTracker {
     /// Construct a tracker with a hard bound on retained lane proposal identities.
@@ -466,7 +437,6 @@ impl LaneBlockRedriveTracker {
             order: VecDeque::new(),
         }
     }
-
     /// Record an internally canonical proposal without resetting duplicate clocks.
     pub(super) fn observe(
         &mut self,
@@ -476,12 +446,10 @@ impl LaneBlockRedriveTracker {
         if crate::lane_consensus::validate_lane_block_proposal(proposal).is_err() {
             return LaneBlockRedriveObservation::Invalid;
         }
-
         let identity = LaneBlockRedriveIdentity::from_proposal(proposal);
         if self.observed_at.contains_key(&identity) {
             return LaneBlockRedriveObservation::Duplicate;
         }
-
         let current = self
             .observed_at
             .keys()
@@ -511,13 +479,11 @@ impl LaneBlockRedriveTracker {
             }
             None => LaneBlockRedriveObservation::Inserted,
         };
-
         self.observed_at.insert(identity, now);
         self.order.push_back(identity);
         self.enforce_capacity();
         observation
     }
-
     /// Return the timeout round for the exact current proposal, if tracked.
     #[must_use]
     pub(super) fn redrive_round(
@@ -536,7 +502,6 @@ impl LaneBlockRedriveTracker {
         let rounds = elapsed / timeout.as_nanos();
         Some(u64::try_from(rounds).unwrap_or(u64::MAX))
     }
-
     /// Return true when `peer` is the deterministic coordinator for the exact
     /// proposal's current redrive round.
     #[must_use]
@@ -563,7 +528,6 @@ impl LaneBlockRedriveTracker {
         }
         lane_block_redrive_leader(proposal, round) == Some(peer)
     }
-
     fn enforce_capacity(&mut self) {
         while self.observed_at.len() > self.capacity {
             let Some(oldest) = self.order.pop_front() else {
@@ -575,7 +539,6 @@ impl LaneBlockRedriveTracker {
             .retain(|identity| self.observed_at.contains_key(identity));
     }
 }
-
 /// Select the deterministic lane proposal transport coordinator for a redrive round.
 ///
 /// The seed deliberately excludes transaction and proposal hashes, preventing a
@@ -605,7 +568,6 @@ pub(in crate::sumeragi) fn lane_block_redrive_leader(
         redrive_round,
     )
 }
-
 /// Select the deterministic producer for a lane slot before transaction
 /// selection. The seed excludes all candidate and payload hashes, preventing a
 /// producer from grinding queue contents to win ownership.
@@ -628,7 +590,6 @@ pub(super) fn lane_block_slot_leader<'a>(
     if validator_count == 0 {
         return None;
     }
-
     let mut seed = Vec::with_capacity(128);
     seed.extend_from_slice(b"iroha:nexus:lane-block-redrive-leader:v1");
     seed.extend_from_slice(&lane_id.as_u32().to_be_bytes());
@@ -647,7 +608,6 @@ pub(super) fn lane_block_slot_leader<'a>(
     let index = usize::try_from((base + rotation) % validator_count).ok()?;
     validator_set.get(index)
 }
-
 /// Lane-local vote record over a standalone lane block proposal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LaneBlockVote {
@@ -680,7 +640,6 @@ pub(super) struct LaneBlockVote {
     /// possible.
     pub(super) signing_hash: Hash,
 }
-
 /// Quorum-ready collection of lane-local votes for one proposal phase.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LaneBlockVotePlan {
@@ -697,7 +656,6 @@ pub(super) struct LaneBlockVotePlan {
     /// Votes sorted by descriptor signer index.
     pub(super) votes: Vec<LaneBlockVote>,
 }
-
 /// One lane-local block payload descriptor for standalone lane scheduling.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LanePayloadPlanEntry {
@@ -718,7 +676,6 @@ pub(super) struct LanePayloadPlanEntry {
     /// Standalone lane-local block proposal artifact.
     pub(super) lane_block_proposal: LaneBlockProposal,
 }
-
 /// Full deterministic lane payload plan derived for accepted proposal work.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct LanePayloadPlan {
@@ -741,7 +698,6 @@ pub(super) struct LanePayloadPlan {
     /// Full-committee commit vote templates for each standalone lane proposal.
     pub(super) lane_block_commit_vote_plans: Vec<LaneBlockVotePlan>,
 }
-
 /// Error returned when lane-local slots cannot be derived from lane tips.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LaneBlockSlotPlanError {
@@ -779,7 +735,6 @@ pub(super) enum LaneBlockSlotPlanError {
         latest_lane_block_height: u64,
     },
 }
-
 /// Error returned when latest lane tips cannot be reduced from known tip candidates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LaneBlockTipPlanError {
@@ -812,7 +767,6 @@ pub(super) enum LaneBlockTipPlanError {
         latest_lane_block_height: u64,
     },
 }
-
 /// Error returned when lane-local block subjects cannot be derived safely.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LaneBlockSubjectError {
@@ -890,7 +844,6 @@ pub(super) enum LaneBlockSubjectError {
     /// Canonical subject preimage encoding failed.
     Encode,
 }
-
 /// Error returned when lane-local DA/RBC ownership identities cannot be planned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LanePayloadOwnershipError {
@@ -960,7 +913,6 @@ pub(super) enum LanePayloadOwnershipError {
     /// Canonical ownership preimage encoding failed.
     Encode,
 }
-
 /// Error returned when a full lane payload plan cannot be derived.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LanePayloadPlanError {
@@ -989,7 +941,6 @@ pub(super) enum LanePayloadPlanError {
     /// Lane-local vote templates could not be derived from a proposal artifact.
     VotePlans(LaneBlockVotePlanError),
 }
-
 /// Error returned when lane-local votes cannot be planned safely.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LaneBlockVotePlanError {
@@ -1070,7 +1021,6 @@ pub(super) enum LaneBlockVotePlanError {
         min_quorum: u32,
     },
 }
-
 /// Error returned when a lane-local consensus domain cannot be derived safely.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LaneConsensusDomainError {
@@ -1136,7 +1086,6 @@ pub(super) enum LaneConsensusDomainError {
         min_quorum: u32,
     },
 }
-
 /// Decide whether a fetched candidate should enter the current proposal.
 ///
 /// The decision is deterministic and side-effect free so the global proposal
@@ -1162,7 +1111,6 @@ where
             reason: ProposalDeferralReason::BlockFull,
         };
     }
-
     if let Some(limit) = context.max_ivm_transactions
         && candidate.is_ivm_heavy
         && context.ivm_transactions_included >= limit
@@ -1171,7 +1119,6 @@ where
             reason: ProposalDeferralReason::IvmLimit,
         };
     }
-
     if let Some(limit) = context.gas_limit_per_block {
         let remaining_gas = limit.saturating_sub(context.gas_used_in_block);
         let would_exceed = candidate.gas_cost > remaining_gas && candidate.gas_cost > 0;
@@ -1183,25 +1130,21 @@ where
             && later_candidates.into_iter().any(|candidate| {
                 candidate_fits_remaining_resources(candidate, remaining_gas, context)
             });
-
         if would_exceed && (!allow_oversized || fitting_later_candidate) {
             return ProposalAdmissionDecision::Defer {
                 reason: ProposalDeferralReason::GasLimit,
             };
         }
-
         if would_exceed {
             return ProposalAdmissionDecision::Accept {
                 exceeds_gas_limit: true,
             };
         }
     }
-
     ProposalAdmissionDecision::Accept {
         exceeds_gas_limit: false,
     }
 }
-
 #[cfg(test)]
 fn candidate_fits_remaining_resources(
     candidate: ProposalAdmissionCandidate,
@@ -1213,7 +1156,6 @@ fn candidate_fits_remaining_resources(
         .is_none_or(|max| !candidate.is_ivm_heavy || context.ivm_transactions_included < max)
         && candidate.gas_cost <= remaining_gas
 }
-
 /// Build a deterministic action plan for an already-fetched proposal batch.
 ///
 /// This combines lane interleaving with block-slot, gas, and IVM-heavy admission
@@ -1233,7 +1175,6 @@ pub(super) fn schedule_proposal_batch(
             routing_decisions: routing_decisions.len(),
         });
     }
-
     let order = LaneProposalBatch::from_routing_decisions(routing_decisions)
         .interleaved_indices_for_slot(height, view);
     let mut context = context;
@@ -1278,10 +1219,8 @@ pub(super) fn schedule_proposal_batch(
             }
         }
     }
-
     Ok(schedule)
 }
-
 /// Convert accepted batch actions into deferrals without charging accepted
 /// resource counters.
 ///
@@ -1311,7 +1250,6 @@ pub(super) fn defer_accepted_proposal_actions(
         ivm_transactions_deferred: schedule.ivm_transactions_deferred,
     }
 }
-
 /// Convert accepted batch actions for blocked lanes into deferrals while
 /// preserving resource counters for candidates that remain accepted.
 ///
@@ -1331,7 +1269,6 @@ pub(super) fn defer_accepted_proposal_actions_for_lanes(
     if blocked_lanes.is_empty() {
         return schedule.clone();
     }
-
     let mut deferred = ProposalBatchSchedule {
         actions: Vec::with_capacity(schedule.actions.len()),
         ivm_transactions_deferred: schedule.ivm_transactions_deferred,
@@ -1353,7 +1290,6 @@ pub(super) fn defer_accepted_proposal_actions_for_lanes(
                         .push(ProposalBatchAction::Defer { index, reason });
                     continue;
                 }
-
                 let candidate = candidates
                     .get(index)
                     .expect("schedule action index must reference an admission candidate");
@@ -1375,13 +1311,11 @@ pub(super) fn defer_accepted_proposal_actions_for_lanes(
     }
     deferred
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LaneAcceptedWork {
     dataspace_id: DataSpaceId,
     candidate_indices: Vec<usize>,
 }
-
 #[derive(Clone, Debug)]
 struct LaneBlockProposalVoteContext {
     candidate_indices: Vec<u64>,
@@ -1390,14 +1324,12 @@ struct LaneBlockProposalVoteContext {
     validator_count: u32,
     min_quorum: u32,
 }
-
 fn canonical_lane_commit_quorum(validator_set_len: usize) -> Option<u32> {
     u32::try_from(
         crate::sumeragi::network_topology::commit_quorum_from_len(validator_set_len).max(1),
     )
     .ok()
 }
-
 /// Derive lane-local vote/QC domains for accepted work in a scheduled batch.
 ///
 /// The returned domains are sorted by lane id, include only accepted candidates,
@@ -1412,12 +1344,10 @@ pub(super) fn plan_lane_consensus_domains(
     if base_mode_tag.trim().is_empty() {
         return Err(LaneConsensusDomainError::BlankBaseModeTag);
     }
-
     let accepted_work = accepted_work_by_lane(routing_decisions, schedule)?;
     if accepted_work.is_empty() {
         return Ok(Vec::new());
     }
-
     let committees = committees_by_lane(committees)?;
     let mut domains = Vec::with_capacity(accepted_work.len());
     for (lane_id, work) in accepted_work {
@@ -1465,10 +1395,8 @@ pub(super) fn plan_lane_consensus_domains(
             ),
         });
     }
-
     Ok(domains)
 }
-
 /// Derive lane-local committee descriptors for accepted proposal work.
 ///
 /// The authority callback is evaluated only for lanes with accepted work. If it
@@ -1504,7 +1432,6 @@ where
         })
         .collect()
 }
-
 /// Reduce known lane-local tips within exact lane-incarnation namespaces.
 ///
 /// Accepted lanes without a known tip start from lane-local height zero. Missing
@@ -1527,7 +1454,6 @@ pub(super) fn plan_latest_lane_block_tips_with_incarnations(
             });
         }
     }
-
     let mut latest_by_lane: BTreeMap<LaneId, LaneBlockTip> = BTreeMap::new();
     for tip in known_tips {
         let Some(domain) = domains_by_lane.get(&tip.lane_id) else {
@@ -1586,7 +1512,6 @@ pub(super) fn plan_latest_lane_block_tips_with_incarnations(
             }
         }
     }
-
     Ok(domains_by_lane
         .into_iter()
         .map(|(lane_id, domain)| {
@@ -1612,7 +1537,6 @@ pub(super) fn plan_latest_lane_block_tips_with_incarnations(
         })
         .collect::<Result<Vec<_>, _>>()?)
 }
-
 /// Derive the next lane-local block slots from explicit latest lane tips.
 ///
 /// Every accepted lane must have exactly one latest-tip descriptor. A newly
@@ -1632,7 +1556,6 @@ pub(super) fn plan_next_lane_block_slots(
             });
         }
     }
-
     let mut seen_lanes = BTreeSet::new();
     let mut slots = Vec::with_capacity(domains.len());
     for domain in domains {
@@ -1669,7 +1592,6 @@ pub(super) fn plan_next_lane_block_slots(
             lane_block_view,
         });
     }
-
     slots.sort_by_key(|slot| {
         (
             slot.lane_id,
@@ -1680,7 +1602,6 @@ pub(super) fn plan_next_lane_block_slots(
     });
     Ok(slots)
 }
-
 /// Derive deterministic lane block subjects from lane-local consensus domains.
 ///
 /// Subjects are sorted by lane id/dataspace id and bind the lane coordinates,
@@ -1722,7 +1643,6 @@ fn plan_lane_block_subjects(
         .collect::<Vec<_>>();
     plan_lane_block_subjects_for_slots(domains, candidate_hashes, &slots)
 }
-
 /// Derive deterministic lane block subjects from explicit lane-local slots.
 ///
 /// Unlike [`plan_lane_block_subjects`], this accepts independent height/view
@@ -1741,7 +1661,6 @@ pub(super) fn plan_lane_block_subjects_for_slots(
             });
         }
     }
-
     let mut seen_lanes = BTreeSet::new();
     let mut subjects = Vec::with_capacity(domains.len());
     for domain in domains {
@@ -1780,7 +1699,6 @@ pub(super) fn plan_lane_block_subjects_for_slots(
                 actual: slot.dataspace_id,
             });
         }
-
         let mut seen_indices = BTreeSet::new();
         let mut candidate_indices = Vec::with_capacity(domain.accepted_candidate_indices.len());
         let mut accepted_transaction_hashes =
@@ -1807,7 +1725,6 @@ pub(super) fn plan_lane_block_subjects_for_slots(
             )?;
             accepted_transaction_hashes.push(hash);
         }
-
         let subject_hash = SumeragiLanePayloadOwnership::compute_replay_subject_hash(
             domain.lane_id,
             domain.dataspace_id,
@@ -1831,7 +1748,6 @@ pub(super) fn plan_lane_block_subjects_for_slots(
             subject_hash,
         });
     }
-
     if let Some(slot) = slots
         .iter()
         .find(|slot| !seen_lanes.contains(&slot.lane_id))
@@ -1840,7 +1756,6 @@ pub(super) fn plan_lane_block_subjects_for_slots(
             lane_id: slot.lane_id,
         });
     }
-
     subjects.sort_by_key(|subject| {
         (
             subject.lane_id,
@@ -1851,7 +1766,6 @@ pub(super) fn plan_lane_block_subjects_for_slots(
     });
     Ok(subjects)
 }
-
 /// Derive deterministic DA/RBC ownership identities from lane block subjects.
 ///
 /// The planner validates each subject against its canonical subject digest
@@ -1866,7 +1780,6 @@ pub(super) fn plan_lane_payload_ownership(
     let mut seen_payload_ownership_hashes = BTreeSet::new();
     let mut seen_rbc_instance_hashes = BTreeSet::new();
     let mut ownerships = Vec::with_capacity(subjects.len());
-
     for subject in subjects {
         if subject.qc_mode_tag.trim().is_empty() {
             return Err(LanePayloadOwnershipError::BlankQcModeTag {
@@ -1885,7 +1798,6 @@ pub(super) fn plan_lane_payload_ownership(
                 candidate_hashes: subject.accepted_transaction_hashes.len(),
             });
         }
-
         let mut seen_indices = BTreeSet::new();
         let mut candidate_indices = Vec::with_capacity(subject.accepted_candidate_indices.len());
         for index in subject.accepted_candidate_indices.iter().copied() {
@@ -1902,7 +1814,6 @@ pub(super) fn plan_lane_payload_ownership(
                 }
             })?);
         }
-
         let expected_subject_hash = SumeragiLanePayloadOwnership::compute_replay_subject_hash(
             subject.lane_id,
             subject.dataspace_id,
@@ -1921,7 +1832,6 @@ pub(super) fn plan_lane_payload_ownership(
                 actual: subject.subject_hash,
             });
         }
-
         let slot = (
             subject.lane_id,
             subject.dataspace_id,
@@ -1936,7 +1846,6 @@ pub(super) fn plan_lane_payload_ownership(
                 lane_block_view: subject.lane_block_view,
             });
         }
-
         let payload_ownership_hash =
             SumeragiLanePayloadOwnership::compute_replay_payload_ownership_hash(
                 subject.lane_id,
@@ -1955,7 +1864,6 @@ pub(super) fn plan_lane_payload_ownership(
                 payload_ownership_hash,
             });
         }
-
         let rbc_instance_hash = SumeragiLanePayloadOwnership::compute_replay_rbc_instance_hash(
             subject.lane_id,
             subject.dataspace_id,
@@ -1969,7 +1877,6 @@ pub(super) fn plan_lane_payload_ownership(
         if !seen_rbc_instance_hashes.insert(rbc_instance_hash) {
             return Err(LanePayloadOwnershipError::DuplicateRbcInstanceHash { rbc_instance_hash });
         }
-
         ownerships.push(LanePayloadOwnership {
             lane_id: subject.lane_id,
             dataspace_id: subject.dataspace_id,
@@ -1984,7 +1891,6 @@ pub(super) fn plan_lane_payload_ownership(
             rbc_instance_hash,
         });
     }
-
     ownerships.sort_by_key(|ownership| {
         (
             ownership.lane_id,
@@ -1995,7 +1901,6 @@ pub(super) fn plan_lane_payload_ownership(
     });
     Ok(ownerships)
 }
-
 /// Derive the full lane-local payload plan for accepted consensus domains.
 ///
 /// Known committed tips are reduced inside exact lane-incarnation namespaces,
@@ -2058,7 +1963,6 @@ pub(super) fn plan_lane_payload_with_incarnations(
             .map_err(LanePayloadPlanError::VotePlans)
         })
         .collect::<Result<Vec<_>, _>>()?;
-
     Ok(LanePayloadPlan {
         entries,
         lane_tips,
@@ -2071,7 +1975,6 @@ pub(super) fn plan_lane_payload_with_incarnations(
         lane_block_commit_vote_plans,
     })
 }
-
 /// Bounded lane-local plan returned to the Sumeragi v2 candidate adapter.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct V2LanePayloadPlan {
@@ -2082,7 +1985,6 @@ pub(crate) struct V2LanePayloadPlan {
     /// Candidate indices whose lane authority or predecessor is unavailable.
     pub(crate) unavailable_indices: BTreeSet<usize>,
 }
-
 /// Transaction-independent ownership coordinates for the next autonomous lane slot.
 ///
 /// This plan is derived only from committed state and one frozen global height
@@ -2124,7 +2026,6 @@ pub(crate) struct AutonomousLaneReservationSlotPlan {
     /// Stable provisional slot identity, independent of selected transactions.
     pub(crate) proposal_identity_hash: Hash,
 }
-
 /// Move-only authority for the QueuePlan-conjunction and reservation-fsync
 /// production trace steps of one canonical autonomous slot.
 ///
@@ -2140,14 +2041,12 @@ pub(crate) struct AutonomousLaneReservationSelectionAuthorization {
     validator_count: u8,
     producer: u128,
 }
-
 impl AutonomousLaneReservationSelectionAuthorization {
     /// Return the exact queue scope frozen by the canonical slot plan.
     #[must_use]
     pub(crate) const fn scope(&self) -> LaneQueueReservationScopeV1 {
         self.scope
     }
-
     /// Return the frozen height-context identity which committed the exact
     /// predecessor, committee, quorum, QC domain, and producer into the slot's
     /// reservation hashes.
@@ -2155,19 +2054,16 @@ impl AutonomousLaneReservationSelectionAuthorization {
     pub(crate) const fn height_context_id(&self) -> wire::HeightContextId {
         self.height_context_id
     }
-
     /// Return the canonical committee width represented by the producer bit.
     #[must_use]
     pub(crate) const fn validator_count(&self) -> u8 {
         self.validator_count
     }
-
     /// Return the one-hot index of the deterministic producer.
     #[must_use]
     pub(crate) const fn producer(&self) -> u128 {
         self.producer
     }
-
     #[cfg(test)]
     pub(crate) fn single_validator_for_test(scope: LaneQueueReservationScopeV1) -> Self {
         Self {
@@ -2180,7 +2076,6 @@ impl AutonomousLaneReservationSelectionAuthorization {
         }
     }
 }
-
 impl AutonomousLaneReservationSlotPlan {
     /// Derive the exact committee geometry consumed by Queue's first-release
     /// selection/refinement gate.
@@ -2218,7 +2113,6 @@ impl AutonomousLaneReservationSlotPlan {
             producer,
         })
     }
-
     /// Convert the plan into the exact scope accepted by the durable queue.
     #[must_use]
     pub(crate) fn reservation_scope(&self) -> LaneQueueReservationScopeV1 {
@@ -2234,7 +2128,6 @@ impl AutonomousLaneReservationSlotPlan {
         }
     }
 }
-
 /// Failure while deriving an autonomous queue-reservation slot.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub(crate) enum AutonomousLaneReservationSlotPlanError {
@@ -2321,7 +2214,6 @@ pub(crate) enum AutonomousLaneReservationSlotPlanError {
     #[error("lane reservation identity encoding failed")]
     IdentityEncode,
 }
-
 #[derive(Encode)]
 struct AutonomousLaneReservationSlotIdentityV1 {
     identity_version: u16,
@@ -2341,17 +2233,14 @@ struct AutonomousLaneReservationSlotIdentityV1 {
     min_quorum: u32,
     qc_mode_tag: String,
 }
-
 #[derive(Encode)]
 struct AutonomousLaneReservationOwnerIdentityV1 {
     identity_version: u16,
     proposal_identity_hash: Hash,
     author: PeerId,
 }
-
 const AUTONOMOUS_LANE_RESERVATION_SLOT_IDENTITY_VERSION_V1: u16 = 1;
 const AUTONOMOUS_LANE_RESERVATION_OWNER_IDENTITY_VERSION_V1: u16 = 1;
-
 fn encode_autonomous_lane_reservation_identity_hashes(
     identity: AutonomousLaneReservationSlotIdentityV1,
     author: &PeerId,
@@ -2370,7 +2259,6 @@ fn encode_autonomous_lane_reservation_identity_hashes(
     );
     Ok((reservation_owner_hash, proposal_identity_hash))
 }
-
 /// Recompute the canonical queue-ownership identities advertised by an
 /// autonomous proposal.
 ///
@@ -2409,14 +2297,12 @@ pub(crate) fn autonomous_lane_reservation_identity_hashes_for_proposal(
         author,
     )
 }
-
 /// Failure while deriving lane-local work from one frozen v2 context.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 #[error("{message}")]
 pub(crate) struct V2LanePayloadPlanError {
     message: String,
 }
-
 impl V2LanePayloadPlanError {
     fn new(message: impl Into<String>) -> Self {
         Self {
@@ -2424,7 +2310,6 @@ impl V2LanePayloadPlanError {
         }
     }
 }
-
 fn v2_lane_context_mode_tag(context: &wire::HeightContext) -> String {
     let base_mode_tag = match context.mode {
         wire::ConsensusMode::Permissioned => wire::PERMISSIONED_TAG,
@@ -2436,7 +2321,6 @@ fn v2_lane_context_mode_tag(context: &wire::HeightContext) -> String {
         context.epoch
     )
 }
-
 fn autonomous_lane_predecessor_blocked(
     state: &State,
     lane_id: LaneId,
@@ -2449,7 +2333,6 @@ fn autonomous_lane_predecessor_blocked(
             .unapplied_certified_lane_block_heights_snapshot_cached()
             .contains_key(&(lane_id, dataspace_id))
 }
-
 fn validate_autonomous_lane_reservation_eligibility(
     context_height: u64,
     committed_height: u64,
@@ -2478,7 +2361,6 @@ fn validate_autonomous_lane_reservation_eligibility(
     }
     Ok(())
 }
-
 fn autonomous_lane_reservation_committee(
     state: &State,
     context: &wire::HeightContext,
@@ -2504,7 +2386,6 @@ fn autonomous_lane_reservation_committee(
         }
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 fn assemble_autonomous_lane_reservation_slot(
     context: &wire::HeightContext,
@@ -2572,7 +2453,6 @@ fn assemble_autonomous_lane_reservation_slot(
             },
             &author,
         )?;
-
     Ok(AutonomousLaneReservationSlotPlan {
         height_context_id: context.id(),
         lane_id,
@@ -2592,7 +2472,6 @@ fn assemble_autonomous_lane_reservation_slot(
         proposal_identity_hash,
     })
 }
-
 /// Plan the exact next autonomous lane slot before selecting queue contents.
 ///
 /// The state must still be at the parent of `context.height`. Any unapplied
@@ -2669,7 +2548,6 @@ pub(crate) fn plan_autonomous_lane_reservation_slot(
         previous_lane_block_descriptor_hash,
         validator_set,
     )?;
-
     let committed_height_after = u64::try_from(state.committed_height())
         .map_err(|_| AutonomousLaneReservationSlotPlanError::PlanningSnapshotChanged)?;
     let exact_tip_after = v2_known_lane_tip_for_route(
@@ -2701,7 +2579,6 @@ pub(crate) fn plan_autonomous_lane_reservation_slot(
     }
     Ok(plan)
 }
-
 /// Derive deterministic lane-local RBC ownership and proposal artifacts for a
 /// v2 candidate without invoking the legacy global actor.
 ///
@@ -2736,7 +2613,6 @@ pub(crate) fn prepare_v2_lane_payload_plan(
         false,
     )
 }
-
 /// Recompute a received proposal's lane plan while allowing one exact
 /// canonical predecessor whose lane certificate/application receipt is still
 /// catching up locally.
@@ -2768,7 +2644,6 @@ pub(crate) fn prepare_v2_lane_payload_validation_plan(
         true,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 fn prepare_v2_lane_payload_plan_inner(
     state: &State,
@@ -2788,7 +2663,6 @@ fn prepare_v2_lane_payload_plan_inner(
     if routing_decisions.is_empty() {
         return Ok(V2LanePayloadPlan::default());
     }
-
     let native_amx_blocked_routes =
         state.unapplied_native_amx_participant_control_heights_snapshot_cached();
     let mut blocked_routes = state.unapplied_lane_block_artifact_heights_snapshot_cached();
@@ -2876,7 +2750,6 @@ fn prepare_v2_lane_payload_plan_inner(
             ..V2LanePayloadPlan::default()
         });
     }
-
     let schedule = ProposalBatchSchedule {
         actions: (0..routing_decisions.len())
             .map(|index| ProposalBatchAction::Accept {
@@ -3002,7 +2875,6 @@ fn prepare_v2_lane_payload_plan_inner(
     .map_err(|error| {
         V2LanePayloadPlanError::new(format!("lane payload planning failed: {error:?}"))
     })?;
-
     let ownerships = plan
         .entries
         .iter()
@@ -3014,7 +2886,6 @@ fn prepare_v2_lane_payload_plan_inner(
         unavailable_indices: BTreeSet::new(),
     })
 }
-
 fn v2_known_lane_tips(state: &State, proposal_height: u64) -> Vec<LaneBlockTip> {
     let nexus = state.nexus_snapshot();
     let reset_heights = state.da_shard_canonical_reset_heights_snapshot_cached();
@@ -3086,7 +2957,6 @@ fn v2_known_lane_tips(state: &State, proposal_height: u64) -> Vec<LaneBlockTip> 
     );
     tips
 }
-
 /// Resolve the exact latest lane-local frontier for a participant-only AMX proposal.
 pub(crate) fn v2_known_lane_tip_for_route(
     state: &State,
@@ -3134,7 +3004,6 @@ pub(crate) fn v2_known_lane_tip_for_route(
     }
     Some((latest_height, hashes.pop_first()))
 }
-
 fn v2_lane_payload_ownership(
     entry: &LanePayloadPlanEntry,
     proposal_height: u64,
@@ -3169,7 +3038,6 @@ fn v2_lane_payload_ownership(
         rbc_instance_hash: ownership.rbc_instance_hash,
     }
 }
-
 fn build_lane_payload_plan_entries(
     domains: &[LaneConsensusDomain],
     lane_tips: &[LaneBlockTip],
@@ -3195,7 +3063,6 @@ fn build_lane_payload_plan_entries(
         .iter()
         .map(|ownership| (ownership.lane_id, ownership))
         .collect::<BTreeMap<_, _>>();
-
     let mut entries = Vec::with_capacity(domains.len());
     for domain in domains {
         let tip = tips_by_lane.get(&domain.lane_id).copied().ok_or(
@@ -3218,7 +3085,6 @@ fn build_lane_payload_plan_entries(
                 lane_id: domain.lane_id,
             },
         )?;
-
         let expected_next_height = tip.latest_lane_block_height.checked_add(1).ok_or(
             LanePayloadPlanError::InconsistentEntry {
                 lane_id: domain.lane_id,
@@ -3288,7 +3154,6 @@ fn build_lane_payload_plan_entries(
             lane_block_descriptor_artifact(&block_descriptor).computed_descriptor_hash();
         let lane_block_proposal =
             build_lane_block_proposal(domain.lane_id, &block_descriptor, subject, ownership)?;
-
         entries.push(LanePayloadPlanEntry {
             domain: domain.clone(),
             tip: *tip,
@@ -3300,11 +3165,9 @@ fn build_lane_payload_plan_entries(
             lane_block_proposal,
         });
     }
-
     entries.sort_by_key(|entry| entry.domain.lane_id);
     Ok(entries)
 }
-
 fn build_lane_block_proposal(
     lane_id: LaneId,
     block_descriptor: &LaneBlockDescriptor,
@@ -3342,7 +3205,6 @@ fn build_lane_block_proposal(
     if !is_consistent {
         return Err(LanePayloadPlanError::InconsistentEntry { lane_id });
     }
-
     let artifact_descriptor = lane_block_descriptor_artifact(block_descriptor);
     let mut artifact = LaneBlockProposalV1 {
         descriptor: artifact_descriptor,
@@ -3351,7 +3213,6 @@ fn build_lane_block_proposal(
     };
     let proposal_hash = artifact.computed_proposal_hash();
     artifact.proposal_hash = proposal_hash;
-
     Ok(LaneBlockProposal {
         block_descriptor: block_descriptor.clone(),
         subject: subject.clone(),
@@ -3360,7 +3221,6 @@ fn build_lane_block_proposal(
         artifact,
     })
 }
-
 fn lane_block_descriptor_artifact(descriptor: &LaneBlockDescriptor) -> LaneBlockDescriptorV1 {
     let accepted_candidate_indices = descriptor
         .accepted_candidate_indices
@@ -3391,7 +3251,6 @@ fn lane_block_descriptor_artifact(descriptor: &LaneBlockDescriptor) -> LaneBlock
         descriptor_hash: descriptor.descriptor_hash,
     }
 }
-
 /// Build a single lane-local vote for a standalone proposal and signer.
 pub(super) fn plan_lane_block_vote(
     proposal: &LaneBlockProposal,
@@ -3406,7 +3265,6 @@ pub(super) fn plan_lane_block_vote(
             lane_id: proposal.block_descriptor.lane_id,
         })
 }
-
 /// Build deterministic lane-local votes for the supplied signers.
 ///
 /// Returned votes are sorted by descriptor signer index. The signable digest is
@@ -3422,7 +3280,6 @@ pub(super) fn plan_lane_block_votes(
     let (votes, _) = plan_lane_block_votes_with_context(proposal, phase, signers)?;
     Ok(votes)
 }
-
 /// Build a quorum-ready lane-local vote plan for a proposal phase.
 pub(super) fn plan_lane_block_vote_quorum(
     proposal: &LaneBlockProposal,
@@ -3439,7 +3296,6 @@ pub(super) fn plan_lane_block_vote_quorum(
             min_quorum: context.min_quorum,
         });
     }
-
     Ok(LaneBlockVotePlan {
         phase,
         proposal_hash: proposal.proposal_hash,
@@ -3449,7 +3305,6 @@ pub(super) fn plan_lane_block_vote_quorum(
         votes,
     })
 }
-
 fn plan_lane_block_votes_with_context(
     proposal: &LaneBlockProposal,
     phase: CertPhase,
@@ -3461,7 +3316,6 @@ fn plan_lane_block_votes_with_context(
     let signing_hash = Hash::new(body.signature_preimage());
     let mut seen_signers = BTreeSet::new();
     let mut votes = Vec::with_capacity(signers.len());
-
     for signer in signers {
         if !seen_signers.insert(signer) {
             return Err(LaneBlockVotePlanError::DuplicateSigner {
@@ -3496,18 +3350,15 @@ fn plan_lane_block_votes_with_context(
             signing_hash,
         });
     }
-
     votes.sort_by_key(|vote| vote.signer_index);
     Ok((votes, context))
 }
-
 fn validate_lane_block_vote_phase(phase: CertPhase) -> Result<(), LaneBlockVotePlanError> {
     match phase {
         CertPhase::Prepare | CertPhase::Commit => Ok(()),
         CertPhase::NewView => Err(LaneBlockVotePlanError::InvalidPhase { phase }),
     }
 }
-
 fn validate_lane_block_proposal_for_vote(
     proposal: &LaneBlockProposal,
 ) -> Result<LaneBlockProposalVoteContext, LaneBlockVotePlanError> {
@@ -3528,7 +3379,6 @@ fn validate_lane_block_proposal_for_vote(
                 .map_err(|_| LaneBlockVotePlanError::InconsistentProposal { lane_id })
         })
         .collect::<Result<Vec<_>, _>>()?;
-
     let is_consistent = descriptor.lane_id == proposal.subject.lane_id
         && descriptor.dataspace_id == proposal.subject.dataspace_id
         && descriptor.lane_block_height == proposal.subject.lane_block_height
@@ -3550,7 +3400,6 @@ fn validate_lane_block_proposal_for_vote(
     if !is_consistent {
         return Err(LaneBlockVotePlanError::InconsistentProposal { lane_id });
     }
-
     if descriptor.validator_set.is_empty() {
         return Err(LaneBlockVotePlanError::EmptyValidatorSet { lane_id });
     }
@@ -3577,7 +3426,6 @@ fn validate_lane_block_proposal_for_vote(
             min_quorum: descriptor.quorum.min_quorum,
         });
     }
-
     let expected_descriptor_hash =
         lane_block_descriptor_artifact(descriptor).computed_descriptor_hash();
     if expected_descriptor_hash != descriptor.descriptor_hash {
@@ -3599,7 +3447,6 @@ fn validate_lane_block_proposal_for_vote(
             actual: descriptor.descriptor_hash,
         });
     }
-
     let expected_proposal_hash = proposal.artifact.computed_proposal_hash();
     if expected_proposal_hash != proposal.proposal_hash {
         return Err(LaneBlockVotePlanError::ProposalHashMismatch {
@@ -3623,9 +3470,7 @@ fn validate_lane_block_proposal_for_vote(
             actual: proposal.proposal_hash,
         });
     }
-
     let validator_set_hash = HashOf::new(&descriptor.validator_set);
-
     Ok(LaneBlockProposalVoteContext {
         candidate_indices,
         candidate_hashes: descriptor_candidate_hashes,
@@ -3634,7 +3479,6 @@ fn validate_lane_block_proposal_for_vote(
         min_quorum: descriptor.quorum.min_quorum,
     })
 }
-
 fn lane_block_vote_body(
     proposal: &LaneBlockProposal,
     phase: CertPhase,
@@ -3648,7 +3492,6 @@ fn lane_block_vote_body(
     debug_assert_eq!(body.min_quorum, context.min_quorum);
     body
 }
-
 fn accepted_work_by_lane(
     routing_decisions: &[RoutingDecision],
     schedule: &ProposalBatchSchedule,
@@ -3688,7 +3531,6 @@ fn accepted_work_by_lane(
     }
     Ok(accepted_work)
 }
-
 fn committees_by_lane(
     committees: &[LaneConsensusCommittee],
 ) -> Result<BTreeMap<LaneId, &LaneConsensusCommittee>, LaneConsensusDomainError> {
@@ -3702,7 +3544,6 @@ fn committees_by_lane(
     }
     Ok(by_lane)
 }
-
 fn canonical_validator_set(
     lane_id: LaneId,
     validators: &[PeerId],
@@ -3719,14 +3560,12 @@ fn canonical_validator_set(
     }
     Ok(validator_set)
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg(test)]
 struct LaneProposalWork {
     lane_id: LaneId,
     indices: VecDeque<usize>,
 }
-
 /// Batch-local lane scheduler for proposal assembly.
 ///
 /// The scheduler only includes lanes that have fetched transaction work in the
@@ -3739,7 +3578,6 @@ pub(super) struct LaneProposalBatch {
     lanes: Vec<LaneProposalWork>,
     total: usize,
 }
-
 #[cfg(test)]
 impl LaneProposalBatch {
     /// Build a scheduler batch from fetched routing decisions.
@@ -3758,19 +3596,16 @@ impl LaneProposalBatch {
             total: routing_decisions.len(),
         }
     }
-
     /// Number of lanes with fetched work in this proposal batch.
     #[must_use]
     pub(super) fn active_lane_count(&self) -> usize {
         self.lanes.len()
     }
-
     /// Return true when this batch contains work for more than one lane.
     #[must_use]
     pub(super) fn has_parallel_work(&self) -> bool {
         self.active_lane_count() > 1
     }
-
     /// Return a deterministic interleaving for the slot identified by height/view.
     #[must_use]
     pub(super) fn interleaved_indices_for_slot(&self, height: u64, view: u64) -> Vec<usize> {
@@ -3785,7 +3620,6 @@ impl LaneProposalBatch {
             .unwrap_or_default();
         self.interleaved_indices_from_offset(start_offset)
     }
-
     /// Return a deterministic interleaving starting at the provided lane offset.
     #[must_use]
     pub(super) fn interleaved_indices_from_offset(&self, start_offset: usize) -> Vec<usize> {
@@ -3795,7 +3629,6 @@ impl LaneProposalBatch {
         if self.lanes.is_empty() {
             return (0..self.total).collect();
         }
-
         let mut lanes = self.lanes.clone();
         let lane_count = lanes.len();
         let start_offset = start_offset % lane_count;
@@ -3816,20 +3649,17 @@ impl LaneProposalBatch {
                 break;
             }
         }
-
         if order.len() == self.total {
             order
         } else {
             (0..self.total).collect()
         }
     }
-
     #[cfg(test)]
     fn active_lane_ids(&self) -> Vec<LaneId> {
         self.lanes.iter().map(|lane| lane.lane_id).collect()
     }
 }
-
 #[cfg(test)]
 fn test_lane_incarnations(
     domains: &[LaneConsensusDomain],
@@ -3858,7 +3688,6 @@ fn test_lane_incarnations(
         })
         .collect()
 }
-
 #[cfg(test)]
 fn plan_latest_lane_block_tips_for_tests(
     domains: &[LaneConsensusDomain],
@@ -3870,7 +3699,6 @@ fn plan_latest_lane_block_tips_for_tests(
         &test_lane_incarnations(domains, known_tips),
     )
 }
-
 #[cfg(test)]
 fn plan_lane_payload(
     domains: &[LaneConsensusDomain],
@@ -3888,5 +3716,4 @@ fn plan_lane_payload(
         lane_block_view,
     )
 }
-
 include!("lane_planner_tests.rs");

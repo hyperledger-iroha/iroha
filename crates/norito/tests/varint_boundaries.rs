@@ -1,5 +1,4 @@
 //! Validate default compact length-prefix sizing.
-
 #[test]
 fn len_prefix_len_defaults_to_compact_width() {
     norito::core::reset_decode_state();

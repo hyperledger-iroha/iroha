@@ -1,7 +1,5 @@
 //! Governance DAG node schemas used for audit publishing.
-
 use std::collections::{BTreeMap, BTreeSet};
-
 use blake3::Hasher;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use iroha_crypto::{Algorithm, PublicKey};
@@ -9,7 +7,6 @@ use norito::core::NoritoSerialize as _;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use soranet_pq::MlDsaSuite;
 use thiserror::Error;
-
 use crate::{
     capacity::ReplicationOrderV1,
     deal::{DealSettlementV1, XorQuantity},
@@ -32,41 +29,29 @@ use crate::{
         PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1,
     },
 };
-
 /// Current governance log schema version.
 pub const GOVERNANCE_LOG_VERSION_V1: u8 = 1;
-
 /// Current public Governance DAG block schema version.
 pub const GOVERNANCE_DAG_BLOCK_VERSION_V1: u8 = 1;
-
 /// Current public Governance DAG head manifest schema version.
 pub const GOVERNANCE_DAG_HEAD_VERSION_V1: u8 = 1;
-
 /// Exact byte length of every first-release Governance DAG CID.
 pub const GOVERNANCE_DAG_CID_BYTES_V1: usize = blake3::OUT_LEN;
-
 /// Maximum byte length of a first-release Governance DAG publisher peer ID.
 pub const GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1: usize = 128;
-
 /// Maximum number of scalar labels attached to one filesystem publication.
 pub const GOVERNANCE_PUBLICATION_LABEL_MAX_ENTRIES_V1: usize = 64;
-
 /// Maximum UTF-8 byte length of one filesystem publication label key.
 pub const GOVERNANCE_PUBLICATION_LABEL_KEY_MAX_BYTES_V1: usize = 128;
-
 /// Maximum UTF-8 byte length of one string-valued filesystem publication label.
 pub const GOVERNANCE_PUBLICATION_LABEL_STRING_MAX_BYTES_V1: usize = 4 * 1024;
-
 /// Maximum compact-JSON bytes occupied by one filesystem publication label map.
 pub const GOVERNANCE_PUBLICATION_LABEL_TOTAL_MAX_BYTES_V1: usize = 64 * 1024;
-
 /// Maximum byte length of one retained filesystem CAR-segment manifest.
 pub const GOVERNANCE_CAR_SEGMENT_MANIFEST_MAX_BYTES_V1: usize = 128 * 1024;
-
 /// Exact byte length of the authenticated account digest committed by a
 /// first-release Governance DAG node.
 pub const GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_BYTES_V1: usize = blake3::OUT_LEN;
-
 /// Authenticated ingress that admitted a caller-supplied Governance DAG payload.
 #[derive(
     Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, PartialOrd, Ord,
@@ -84,7 +69,6 @@ pub enum GovernanceDagSubmissionOriginV1 {
     /// Canonical Torii appeal-finance weekly-rollup ingress.
     AppealFinanceWeeklyRollup = 4,
 }
-
 impl GovernanceDagSubmissionOriginV1 {
     /// Return the stable public label for this authenticated ingress.
     #[must_use]
@@ -98,12 +82,10 @@ impl GovernanceDagSubmissionOriginV1 {
         }
     }
 }
-
 const GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.governance_dag.submission_account.digest.v1";
 const GOVERNANCE_PUBLICATION_SOURCE_PAIR_ID_DOMAIN_V1: &[u8] =
     b"sorafs.governance.publication_source_pair.id.v1";
-
 /// Derive the authenticated-account commitment stored in signed DAG provenance.
 ///
 /// `canonical_account_bytes` must be the canonical Norito encoding of the
@@ -125,7 +107,6 @@ pub fn governance_dag_submission_account_digest_v1(
     hasher.update(canonical_account_bytes);
     *hasher.finalize().as_bytes()
 }
-
 /// Derive the content identity for one filesystem publication source pair.
 ///
 /// The identity binds the internal payload kind plus the exact encoded and JSON
@@ -154,7 +135,6 @@ pub fn governance_publication_source_pair_id_v1(
     hasher.update(&json_blake3);
     *hasher.finalize().as_bytes()
 }
-
 /// Server-derived caller identity commitment in a signed Governance DAG node.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct GovernanceDagSubmissionProvenanceV1 {
@@ -163,13 +143,11 @@ pub struct GovernanceDagSubmissionProvenanceV1 {
     /// Exact authenticated ingress that admitted the payload.
     pub origin: GovernanceDagSubmissionOriginV1,
 }
-
 impl GovernanceDagSubmissionProvenanceV1 {
     fn validate(&self) -> Result<(), GovernanceLogValidationError> {
         Ok(())
     }
 }
-
 /// Maximum canonical bytes for one source payload admitted by the V1
 /// filesystem Governance DAG producer.
 ///
@@ -178,7 +156,6 @@ impl GovernanceDagSubmissionProvenanceV1 {
 /// semantic ceiling are still subject to this producer hard cut.
 pub const GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1: usize =
     MAX_SIGNED_REPUTATION_SNAPSHOT_ENCODED_BYTES;
-
 /// Maximum canonical bytes hashed or signed for one first-release Governance
 /// DAG node, block, or head payload.
 ///
@@ -190,10 +167,8 @@ pub const GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1: usize =
 /// not require cloning the embedded payload or node.
 pub const GOVERNANCE_DAG_SIGNING_PAYLOAD_MAX_BYTES_V1: usize =
     GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1 * 2;
-
 /// Fixed allowance for the canonical block signature and outer Norito envelope.
 pub const GOVERNANCE_DAG_BLOCK_ENVELOPE_MAX_BYTES_V1: usize = 64 * 1024;
-
 const fn governance_dag_block_max_canonical_bytes_v1() -> usize {
     match GOVERNANCE_DAG_SIGNING_PAYLOAD_MAX_BYTES_V1
         .checked_add(GOVERNANCE_DAG_BLOCK_ENVELOPE_MAX_BYTES_V1)
@@ -202,7 +177,6 @@ const fn governance_dag_block_max_canonical_bytes_v1() -> usize {
         None => panic!("Governance DAG block byte ceiling overflow"),
     }
 }
-
 /// Maximum canonical header-bearing Norito bytes for one V1 Governance DAG block.
 ///
 /// The block signing payload is capped independently above. This ceiling adds
@@ -211,10 +185,8 @@ const fn governance_dag_block_max_canonical_bytes_v1() -> usize {
 /// canonical signing payload was admitted.
 pub const GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1: usize =
     governance_dag_block_max_canonical_bytes_v1();
-
 /// Number of newest blocks committed by a checkpointed first-release head.
 pub const GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1: usize = 64;
-
 /// Current moderation ballot governance event schema version.
 pub const SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1: u16 = 1;
 /// Maximum exact canonical size of one moderation ballot governance event.
@@ -225,7 +197,6 @@ pub const SORAFS_MODERATION_IDENTIFIER_MAX_BYTES_V1: usize = 256;
 pub const SORAFS_MODERATION_ACCOUNT_MAX_BYTES_V1: usize = 512;
 /// Maximum UTF-8 byte length of a moderation reason or resolution note.
 pub const SORAFS_MODERATION_PUBLIC_TEXT_MAX_BYTES_V1: usize = 4 * 1024;
-
 /// Current SoraFS appeal finance report schema version.
 pub const SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1: u16 = 1;
 /// Maximum exact canonical size of one appeal finance report.
@@ -238,7 +209,6 @@ pub const SORAFS_APPEAL_FINANCE_CONFIG_VERSION_MAX_BYTES_V1: usize = 128;
 pub const SORAFS_APPEAL_FINANCE_ACCOUNT_MAX_BYTES_V1: usize = 512;
 /// Maximum combined paid/no-show juror rows in one appeal finance report.
 pub const SORAFS_APPEAL_FINANCE_PANEL_ROWS_MAX_V1: usize = 65_536;
-
 /// Current SoraFS appeal finance weekly rollup schema version.
 pub const SORAFS_APPEAL_FINANCE_WEEKLY_ROLLUP_VERSION_V1: u16 = 1;
 /// Maximum exact canonical size of one appeal finance weekly rollup.
@@ -249,10 +219,8 @@ pub const SORAFS_APPEAL_FINANCE_WEEKLY_CONFIG_VERSIONS_MAX_V1: usize = 64;
 pub const SORAFS_APPEAL_FINANCE_WEEKLY_SOURCE_REPORTS_MAX_V1: usize = 65_536;
 /// Maximum outcome rows; V1 has exactly seven possible outcomes.
 pub const SORAFS_APPEAL_FINANCE_WEEKLY_OUTCOMES_MAX_V1: usize = 7;
-
 /// Current SoraFS appeal finance settlement receipt schema version.
 pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1: u16 = 1;
-
 /// Exact Ed25519 public-key length admitted on Governance DAG signatures.
 pub const GOVERNANCE_ED25519_PUBLIC_KEY_BYTES_V1: usize = PUBLIC_KEY_LENGTH;
 /// Exact Ed25519 signature length admitted on Governance DAG signatures.
@@ -261,7 +229,6 @@ pub const GOVERNANCE_ED25519_SIGNATURE_BYTES_V1: usize = SIGNATURE_LENGTH;
 pub const GOVERNANCE_ML_DSA_65_PUBLIC_KEY_BYTES_V1: usize = 1_952;
 /// Exact ML-DSA-65 detached-signature length admitted on Governance DAG signatures.
 pub const GOVERNANCE_ML_DSA_65_SIGNATURE_BYTES_V1: usize = 3_309;
-
 const APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1: usize = 256;
 const APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1: usize = 512;
 const APPEAL_FINANCE_SETTLEMENT_RECEIPT_CONFIG_VERSION_MAX_BYTES_V1: usize = 128;
@@ -271,10 +238,8 @@ const APPEAL_FINANCE_SETTLEMENT_RECEIPT_RECONCILIATION_STATUSES_V1: [&str; 2] =
     ["awaiting_refund_cancel", "settled"];
 const APPEAL_FINANCE_SETTLEMENT_RECEIPT_LIFECYCLE_STATUSES_V1: [&str; 3] =
     ["locked", "drawn_down", "cancelled"];
-
 /// Current generic external Governance DAG payload schema version.
 pub const SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_VERSION_V1: u16 = 1;
-
 /// Maximum canonical bytes embedded in one first-release external payload.
 pub const SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_MAX_BYTES_V1: usize = 32 * 1024 * 1024;
 /// Maximum public metadata rows on one first-release external payload.
@@ -285,7 +250,6 @@ pub const SORAFS_GOVERNANCE_EXTERNAL_METADATA_KEY_MAX_BYTES_V1: usize = 64;
 pub const SORAFS_GOVERNANCE_EXTERNAL_METADATA_VALUE_MAX_BYTES_V1: usize = 2_048;
 /// Maximum cumulative UTF-8 bytes across external metadata keys and values.
 pub const SORAFS_GOVERNANCE_EXTERNAL_METADATA_TOTAL_MAX_BYTES_V1: usize = 16 * 1_024;
-
 /// External payload kind for repair audit envelopes.
 pub const GOVERNANCE_EXTERNAL_KIND_REPAIR_AUDIT_V1: &str = "repair_audit";
 /// External payload kind for repair slash proposals.
@@ -299,10 +263,8 @@ pub const GOVERNANCE_EXTERNAL_KIND_TRANSPARENCY_LEDGER_PUBLICATION_V1: &str =
     "transparency_ledger_publication";
 /// External payload kind for proof-token issuance records.
 pub const GOVERNANCE_EXTERNAL_KIND_PROOF_TOKEN_ISSUANCE_V1: &str = "proof_token_issuance";
-
 const GOVERNANCE_DAG_BLOCK_CID_DOMAIN_V1: &[u8] = b"sorafs.governance_dag.block.cid.v1";
 const GOVERNANCE_LOG_NODE_CID_DOMAIN_V1: &[u8] = b"sorafs.governance_log.node.cid.v1";
-
 /// Governance DAG event kind for a SoraFS moderation ballot lifecycle transition.
 #[derive(
     Debug,
@@ -332,7 +294,6 @@ pub enum SoraFsModerationBallotGovernanceEventKindV1 {
     /// Ballot tally finalized by a node.
     BallotTallied,
 }
-
 impl SoraFsModerationBallotGovernanceEventKindV1 {
     /// Stable label used in local indexes and JSON sidecars.
     pub const fn as_str(self) -> &'static str {
@@ -346,7 +307,6 @@ impl SoraFsModerationBallotGovernanceEventKindV1 {
         }
     }
 }
-
 /// Governance DAG vote choice for SoraFS moderation ballots.
 #[derive(
     Debug,
@@ -370,7 +330,6 @@ pub enum SoraFsModerationVoteChoiceV1 {
     /// Escalate the case for another review path.
     Escalate,
 }
-
 impl SoraFsModerationVoteChoiceV1 {
     /// Stable label used in local indexes and JSON sidecars.
     pub const fn as_str(self) -> &'static str {
@@ -382,7 +341,6 @@ impl SoraFsModerationVoteChoiceV1 {
         }
     }
 }
-
 /// Vote totals by moderation choice for a SoraFS ballot tally.
 #[derive(
     Debug,
@@ -406,7 +364,6 @@ pub struct SoraFsModerationVoteCountsV1 {
     /// Number of `escalate` reveals.
     pub escalate: u32,
 }
-
 impl SoraFsModerationVoteCountsV1 {
     /// Total votes represented by these counts.
     pub fn total_votes(self) -> u64 {
@@ -415,7 +372,6 @@ impl SoraFsModerationVoteCountsV1 {
             .saturating_add(u64::from(self.modify))
             .saturating_add(u64::from(self.escalate))
     }
-
     fn winning_choice(self) -> Option<SoraFsModerationVoteChoiceV1> {
         let choices = [
             (SoraFsModerationVoteChoiceV1::Uphold, self.uphold),
@@ -438,7 +394,6 @@ impl SoraFsModerationVoteCountsV1 {
             .find_map(|(choice, count)| (count == max_votes).then_some(choice))
     }
 }
-
 /// Final tally carried by a SoraFS moderation ballot governance event.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -462,7 +417,6 @@ pub struct SoraFsModerationBallotGovernanceTallyV1 {
     /// UTC timestamp (milliseconds) when the tally was finalized locally.
     pub tallied_at_unix_ms: u64,
 }
-
 impl SoraFsModerationBallotGovernanceTallyV1 {
     fn validate(
         &self,
@@ -535,7 +489,6 @@ impl SoraFsModerationBallotGovernanceTallyV1 {
         Ok(())
     }
 }
-
 /// Governance DAG moderation ballot challenge category.
 #[derive(
     Debug,
@@ -563,7 +516,6 @@ pub enum SoraFsModerationBallotGovernanceChallengeKindV1 {
     /// Operator-reviewed challenge category outside the fixed labels.
     Other,
 }
-
 impl SoraFsModerationBallotGovernanceChallengeKindV1 {
     /// Stable label used in local indexes and JSON sidecars.
     pub const fn as_str(self) -> &'static str {
@@ -576,7 +528,6 @@ impl SoraFsModerationBallotGovernanceChallengeKindV1 {
             Self::Other => "other",
         }
     }
-
     const fn requires_target_juror(self) -> bool {
         matches!(
             self,
@@ -584,7 +535,6 @@ impl SoraFsModerationBallotGovernanceChallengeKindV1 {
         )
     }
 }
-
 /// Governance DAG moderation ballot challenge decision.
 #[derive(
     Debug,
@@ -604,7 +554,6 @@ pub enum SoraFsModerationBallotGovernanceChallengeDecisionV1 {
     /// The challenge was accepted and higher-level dispute handling must resolve the ballot.
     Accepted,
 }
-
 impl SoraFsModerationBallotGovernanceChallengeDecisionV1 {
     /// Stable label used in local indexes and JSON sidecars.
     pub const fn as_str(self) -> &'static str {
@@ -614,7 +563,6 @@ impl SoraFsModerationBallotGovernanceChallengeDecisionV1 {
         }
     }
 }
-
 /// Payload-free challenge record carried by moderation ballot Governance DAG events.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -652,7 +600,6 @@ pub struct SoraFsModerationBallotGovernanceChallengeV1 {
     #[norito(default)]
     pub resolution_note: Option<String>,
 }
-
 impl SoraFsModerationBallotGovernanceChallengeV1 {
     fn validate(
         &self,
@@ -741,7 +688,6 @@ impl SoraFsModerationBallotGovernanceChallengeV1 {
                 SoraFsModerationBallotGovernanceEventValidationError::MissingChallengeTarget,
             );
         }
-
         match event_kind {
             SoraFsModerationBallotGovernanceEventKindV1::ChallengeSubmitted => {
                 if self.decision.is_some()
@@ -806,7 +752,6 @@ impl SoraFsModerationBallotGovernanceChallengeV1 {
         Ok(())
     }
 }
-
 /// Governance DAG payload for one local SoraFS moderation ballot lifecycle event.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -840,7 +785,6 @@ pub struct SoraFsModerationBallotGovernanceEventV1 {
     #[norito(default)]
     pub challenge: Option<SoraFsModerationBallotGovernanceChallengeV1>,
 }
-
 impl SoraFsModerationBallotGovernanceEventV1 {
     /// Validate structural invariants for a moderation ballot governance event.
     ///
@@ -880,7 +824,6 @@ impl SoraFsModerationBallotGovernanceEventV1 {
             "round_id",
             SORAFS_MODERATION_IDENTIFIER_MAX_BYTES_V1,
         )?;
-
         match self.kind {
             SoraFsModerationBallotGovernanceEventKindV1::BallotAnnounced => {
                 if self.juror_id.is_some() {
@@ -970,7 +913,6 @@ impl SoraFsModerationBallotGovernanceEventV1 {
         Ok(())
     }
 }
-
 /// Final SoraFS appeal outcome used for finance reporting.
 #[derive(
     Debug,
@@ -1002,7 +944,6 @@ pub enum SoraFsAppealFinanceOutcomeV1 {
     /// Appeal remains escalated and funds are held for follow-up.
     Escalated,
 }
-
 impl SoraFsAppealFinanceOutcomeV1 {
     /// Stable label used in local indexes and JSON sidecars.
     pub const fn as_str(self) -> &'static str {
@@ -1017,7 +958,6 @@ impl SoraFsAppealFinanceOutcomeV1 {
         }
     }
 }
-
 /// Account-level appeal finance flow.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -1028,7 +968,6 @@ pub struct SoraFsAppealFinanceAccountFlowV1 {
     /// Exact non-negative XOR decimal amount.
     pub amount_xor: XorQuantity,
 }
-
 impl SoraFsAppealFinanceAccountFlowV1 {
     fn validate(&self, role: &'static str) -> Result<(), SoraFsAppealFinanceReportValidationError> {
         validate_non_empty_appeal_finance_label(
@@ -1040,7 +979,6 @@ impl SoraFsAppealFinanceAccountFlowV1 {
         Ok(())
     }
 }
-
 /// Per-juror appeal finance payout.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -1055,7 +993,6 @@ pub struct SoraFsAppealFinanceJurorPayoutV1 {
     /// Exact non-negative total XOR decimal amount.
     pub total_xor: XorQuantity,
 }
-
 impl SoraFsAppealFinanceJurorPayoutV1 {
     fn validate(&self) -> Result<(), SoraFsAppealFinanceReportValidationError> {
         validate_non_empty_appeal_finance_label(
@@ -1067,7 +1004,6 @@ impl SoraFsAppealFinanceJurorPayoutV1 {
         Ok(())
     }
 }
-
 /// Governance DAG appeal finance report for settlement/disbursement audits.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -1113,7 +1049,6 @@ pub struct SoraFsAppealFinanceReportV1 {
     #[norito(default)]
     pub no_show_juror_ids: Vec<String>,
 }
-
 /// Governance DAG receipt for a server-submitted appeal finance settlement step.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -1178,7 +1113,6 @@ pub struct SoraFsAppealFinanceSettlementReceiptV1 {
     /// Number of configured submitter signers available on this node.
     pub configured_signer_count: u32,
 }
-
 impl SoraFsAppealFinanceSettlementReceiptV1 {
     /// Validate structural invariants for a settlement submission receipt.
     ///
@@ -1296,7 +1230,6 @@ impl SoraFsAppealFinanceSettlementReceiptV1 {
         Ok(())
     }
 }
-
 impl SoraFsAppealFinanceReportV1 {
     /// Validate structural invariants for an appeal finance report.
     ///
@@ -1408,7 +1341,6 @@ impl SoraFsAppealFinanceReportV1 {
         Ok(())
     }
 }
-
 /// Outcome-level summary for weekly appeal finance rollups.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -1439,7 +1371,6 @@ pub struct SoraFsAppealFinanceOutcomeRollupV1 {
     /// Number of no-show juror ids represented by this row.
     pub no_show_juror_count: u64,
 }
-
 impl SoraFsAppealFinanceOutcomeRollupV1 {
     fn validate(&self) -> Result<(), SoraFsAppealFinanceWeeklyRollupValidationError> {
         if self.report_count == 0 {
@@ -1461,7 +1392,6 @@ impl SoraFsAppealFinanceOutcomeRollupV1 {
         Ok(())
     }
 }
-
 /// Weekly appeal finance transparency rollup for dashboards and treasury review.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -1502,7 +1432,6 @@ pub struct SoraFsAppealFinanceWeeklyRollupV1 {
     /// Sorted source report ids included in the rollup.
     pub source_report_ids: Vec<[u8; 16]>,
 }
-
 impl SoraFsAppealFinanceWeeklyRollupV1 {
     /// Build a deterministic weekly rollup from validated appeal finance reports.
     ///
@@ -1534,13 +1463,11 @@ impl SoraFsAppealFinanceWeeklyRollupV1 {
                 maximum: SORAFS_APPEAL_FINANCE_WEEKLY_SOURCE_REPORTS_MAX_V1,
             });
         }
-
         let mut report_ids = BTreeSet::new();
         let mut case_ids = BTreeSet::new();
         let mut config_versions = BTreeSet::new();
         let mut totals = AppealFinanceRollupAccumulator::new();
         let mut outcome_totals = BTreeMap::new();
-
         for (index, report) in reports.iter().enumerate() {
             report.validate().map_err(|source| {
                 SoraFsAppealFinanceWeeklyRollupBuildError::InvalidReport { index, source }
@@ -1560,7 +1487,6 @@ impl SoraFsAppealFinanceWeeklyRollupV1 {
                 .or_insert_with(AppealFinanceOutcomeAccumulator::new)
                 .add_report(report)?;
         }
-
         let outcomes = outcome_totals
             .into_iter()
             .map(|(outcome, accumulator)| accumulator.finish(outcome))
@@ -1589,7 +1515,6 @@ impl SoraFsAppealFinanceWeeklyRollupV1 {
             .map_err(SoraFsAppealFinanceWeeklyRollupBuildError::InvalidRollup)?;
         Ok(rollup)
     }
-
     /// Validate structural and aggregate invariants for the weekly rollup.
     ///
     /// # Errors
@@ -1671,7 +1596,6 @@ impl SoraFsAppealFinanceWeeklyRollupV1 {
                 },
             );
         }
-
         let mut source_report_ids = BTreeSet::new();
         let mut previous_report_id: Option<[u8; 16]> = None;
         for report_id in &self.source_report_ids {
@@ -1700,7 +1624,6 @@ impl SoraFsAppealFinanceWeeklyRollupV1 {
                 },
             );
         }
-
         let mut seen_outcomes = BTreeSet::new();
         let mut previous_outcome: Option<SoraFsAppealFinanceOutcomeV1> = None;
         let mut reconciled = AppealFinanceRollupAccumulator::new();
@@ -1722,7 +1645,6 @@ impl SoraFsAppealFinanceWeeklyRollupV1 {
         reconciled.compare(self)
     }
 }
-
 #[derive(Debug)]
 struct AppealFinanceRollupAccumulator {
     total_deposit_xor: XorQuantity,
@@ -1736,7 +1658,6 @@ struct AppealFinanceRollupAccumulator {
     juror_payout_count: u64,
     no_show_juror_count: u64,
 }
-
 impl AppealFinanceRollupAccumulator {
     fn new() -> Self {
         Self {
@@ -1752,7 +1673,6 @@ impl AppealFinanceRollupAccumulator {
             no_show_juror_count: 0,
         }
     }
-
     fn add_report(
         &mut self,
         report: &SoraFsAppealFinanceReportV1,
@@ -1808,7 +1728,6 @@ impl AppealFinanceRollupAccumulator {
             .saturating_add(report.no_show_juror_ids.len() as u64);
         Ok(())
     }
-
     fn add_outcome(
         &mut self,
         row: &SoraFsAppealFinanceOutcomeRollupV1,
@@ -1857,7 +1776,6 @@ impl AppealFinanceRollupAccumulator {
             .saturating_add(row.no_show_juror_count);
         Ok(())
     }
-
     fn compare(
         self,
         rollup: &SoraFsAppealFinanceWeeklyRollupV1,
@@ -1936,13 +1854,11 @@ impl AppealFinanceRollupAccumulator {
         Ok(())
     }
 }
-
 #[derive(Debug)]
 struct AppealFinanceOutcomeAccumulator {
     case_ids: BTreeSet<String>,
     totals: AppealFinanceRollupAccumulator,
 }
-
 impl AppealFinanceOutcomeAccumulator {
     fn new() -> Self {
         Self {
@@ -1950,7 +1866,6 @@ impl AppealFinanceOutcomeAccumulator {
             totals: AppealFinanceRollupAccumulator::new(),
         }
     }
-
     fn add_report(
         &mut self,
         report: &SoraFsAppealFinanceReportV1,
@@ -1958,7 +1873,6 @@ impl AppealFinanceOutcomeAccumulator {
         self.case_ids.insert(report.case_id.clone());
         self.totals.add_report(report)
     }
-
     fn finish(self, outcome: SoraFsAppealFinanceOutcomeV1) -> SoraFsAppealFinanceOutcomeRollupV1 {
         SoraFsAppealFinanceOutcomeRollupV1 {
             outcome,
@@ -1976,7 +1890,6 @@ impl AppealFinanceOutcomeAccumulator {
         }
     }
 }
-
 fn add_report_amount(
     report: &SoraFsAppealFinanceReportV1,
     field: &'static str,
@@ -1990,7 +1903,6 @@ fn add_report_amount(
         },
     )
 }
-
 fn add_rollup_amount(
     field: &'static str,
     lhs: &XorQuantity,
@@ -1999,7 +1911,6 @@ fn add_rollup_amount(
     lhs.checked_add(rhs)
         .map_err(|_| SoraFsAppealFinanceWeeklyRollupValidationError::AmountOverflow { field })
 }
-
 fn validate_sorted_non_empty_labels(
     field: &'static str,
     labels: &[String],
@@ -2030,7 +1941,6 @@ fn validate_sorted_non_empty_labels(
     }
     Ok(())
 }
-
 fn preflight_appeal_finance_weekly_rollup_len(
     rollup: &SoraFsAppealFinanceWeeklyRollupV1,
     maximum: usize,
@@ -2045,7 +1955,6 @@ fn preflight_appeal_finance_weekly_rollup_len(
     }
     Ok(found)
 }
-
 /// Publication stage bound to an external repair slash proposal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GovernanceExternalRepairSlashStageV1 {
@@ -2054,7 +1963,6 @@ pub enum GovernanceExternalRepairSlashStageV1 {
     /// Proposal has been submitted to governance.
     Submitted,
 }
-
 impl GovernanceExternalRepairSlashStageV1 {
     /// Stable metadata label.
     pub const fn as_str(self) -> &'static str {
@@ -2063,7 +1971,6 @@ impl GovernanceExternalRepairSlashStageV1 {
             Self::Submitted => "submitted",
         }
     }
-
     fn parse(value: &str) -> Option<Self> {
         match value {
             "drafted" => Some(Self::Drafted),
@@ -2072,7 +1979,6 @@ impl GovernanceExternalRepairSlashStageV1 {
         }
     }
 }
-
 /// Public metadata attached to an external Governance DAG payload.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -2083,7 +1989,6 @@ pub struct GovernanceExternalPayloadMetadataV1 {
     /// Public metadata value.
     pub value: String,
 }
-
 /// Canonical external payload bytes signed into the Governance DAG.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -2104,7 +2009,6 @@ pub struct GovernanceExternalPayloadV1 {
     /// Sorted public metadata about the payload.
     pub metadata: Vec<GovernanceExternalPayloadMetadataV1>,
 }
-
 impl GovernanceExternalPayloadV1 {
     /// Build a canonical repair-audit external payload wrapper.
     pub fn from_repair_audit(
@@ -2118,7 +2022,6 @@ impl GovernanceExternalPayloadV1 {
             repair_audit_external_metadata(event),
         )
     }
-
     /// Build a canonical repair-slash external payload wrapper.
     pub fn from_repair_slash(
         proposal: &RepairSlashProposalV1,
@@ -2132,7 +2035,6 @@ impl GovernanceExternalPayloadV1 {
             repair_slash_external_metadata(proposal, stage),
         )
     }
-
     /// Build a canonical GC-audit external payload wrapper.
     pub fn from_gc_audit(
         event: &GcAuditEventV1,
@@ -2145,7 +2047,6 @@ impl GovernanceExternalPayloadV1 {
             gc_audit_external_metadata(event),
         )
     }
-
     /// Build a canonical reconciliation external payload wrapper.
     pub fn from_reconciliation(
         report: &SorafsReconciliationReportV1,
@@ -2158,7 +2059,6 @@ impl GovernanceExternalPayloadV1 {
             reconciliation_external_metadata(report),
         )
     }
-
     /// Build a canonical transparency-publication external payload wrapper.
     pub fn from_transparency_ledger_publication(
         publication: &ModerationLedgerCyclePublicationV1,
@@ -2172,7 +2072,6 @@ impl GovernanceExternalPayloadV1 {
             metadata,
         )
     }
-
     /// Build a canonical proof-token issuance external payload wrapper.
     pub fn from_proof_token_issuance(
         issuance: &ProofTokenIssuanceV1,
@@ -2185,7 +2084,6 @@ impl GovernanceExternalPayloadV1 {
             proof_token_external_metadata(issuance),
         )
     }
-
     fn build(
         payload_kind: &str,
         payload_version: u16,
@@ -2204,7 +2102,6 @@ impl GovernanceExternalPayloadV1 {
         payload.validate()?;
         Ok(payload)
     }
-
     /// Validate the external payload wrapper and embedded byte commitment.
     ///
     /// # Errors
@@ -2319,7 +2216,6 @@ impl GovernanceExternalPayloadV1 {
             }
             last_key = Some(item.key.as_str());
         }
-
         let expected_metadata = match self.payload_kind.as_str() {
             GOVERNANCE_EXTERNAL_KIND_REPAIR_AUDIT_V1 => {
                 self.require_payload_version(u16::from(REPAIR_AUDIT_EVENT_VERSION_V1))?;
@@ -2399,7 +2295,6 @@ impl GovernanceExternalPayloadV1 {
         }
         Ok(())
     }
-
     fn require_payload_version(
         &self,
         expected: u16,
@@ -2416,7 +2311,6 @@ impl GovernanceExternalPayloadV1 {
         Ok(())
     }
 }
-
 fn decode_canonical_external_payload<T, F>(
     payload_kind: &str,
     bytes: &[u8],
@@ -2460,7 +2354,6 @@ where
     })?;
     Ok(decoded)
 }
-
 fn external_metadata(
     values: impl IntoIterator<Item = (&'static str, String)>,
 ) -> Vec<GovernanceExternalPayloadMetadataV1> {
@@ -2474,7 +2367,6 @@ fn external_metadata(
     metadata.sort_by(|left, right| left.key.cmp(&right.key));
     metadata
 }
-
 fn external_metadata_value<'a>(
     metadata: &'a [GovernanceExternalPayloadMetadataV1],
     key: &str,
@@ -2484,7 +2376,6 @@ fn external_metadata_value<'a>(
         .find(|item| item.key == key)
         .map(|item| item.value.as_str())
 }
-
 fn repair_audit_external_metadata(
     event: &RepairAuditEventV1,
 ) -> Vec<GovernanceExternalPayloadMetadataV1> {
@@ -2503,7 +2394,6 @@ fn repair_audit_external_metadata(
         ("ticket_id", event.payload.ticket_id.0.clone()),
     ])
 }
-
 fn repair_slash_external_metadata(
     proposal: &RepairSlashProposalV1,
     stage: GovernanceExternalRepairSlashStageV1,
@@ -2516,7 +2406,6 @@ fn repair_slash_external_metadata(
         ("ticket_id", proposal.ticket_id.0.clone()),
     ])
 }
-
 fn gc_audit_external_metadata(event: &GcAuditEventV1) -> Vec<GovernanceExternalPayloadMetadataV1> {
     external_metadata([
         (
@@ -2537,7 +2426,6 @@ fn gc_audit_external_metadata(event: &GcAuditEventV1) -> Vec<GovernanceExternalP
         ("sequence", event.header.sequence.to_string()),
     ])
 }
-
 fn reconciliation_external_metadata(
     report: &SorafsReconciliationReportV1,
 ) -> Vec<GovernanceExternalPayloadMetadataV1> {
@@ -2556,7 +2444,6 @@ fn reconciliation_external_metadata(
         ),
     ])
 }
-
 fn transparency_publication_external_metadata(
     publication: &ModerationLedgerCyclePublicationV1,
 ) -> Result<Vec<GovernanceExternalPayloadMetadataV1>, GovernanceExternalPayloadValidationError> {
@@ -2586,7 +2473,6 @@ fn transparency_publication_external_metadata(
         ("publication_hash_hex", hex::encode(publication_hash)),
     ]))
 }
-
 fn proof_token_external_metadata(
     issuance: &ProofTokenIssuanceV1,
 ) -> Vec<GovernanceExternalPayloadMetadataV1> {
@@ -2609,7 +2495,6 @@ fn proof_token_external_metadata(
     }
     external_metadata(values)
 }
-
 fn validate_external_payload_label(value: &str) -> Result<(), ()> {
     if value.is_empty() || value.trim() != value {
         return Err(());
@@ -2622,14 +2507,12 @@ fn validate_external_payload_label(value: &str) -> Result<(), ()> {
     }
     Ok(())
 }
-
 fn validate_external_payload_text(value: &str) -> Result<(), ()> {
     if value.is_empty() || value.trim() != value || value.chars().any(char::is_control) {
         return Err(());
     }
     Ok(())
 }
-
 /// Governance log node payload enumeration.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub enum GovernanceLogPayloadV1 {
@@ -2664,7 +2547,6 @@ pub enum GovernanceLogPayloadV1 {
     /// Validated PoR weekly health report.
     PorWeeklyReport(PorWeeklyReportV1),
 }
-
 impl GovernanceLogPayloadV1 {
     fn required_submission_origin(&self) -> Option<GovernanceDagSubmissionOriginV1> {
         match self {
@@ -2677,7 +2559,6 @@ impl GovernanceLogPayloadV1 {
             _ => None,
         }
     }
-
     fn optional_submission_origin(&self) -> Option<GovernanceDagSubmissionOriginV1> {
         match self {
             Self::ExternalPayload(payload)
@@ -2694,7 +2575,6 @@ impl GovernanceLogPayloadV1 {
             _ => None,
         }
     }
-
     /// Validate the server-derived provenance required by this payload kind.
     ///
     /// Caller-supplied finance payloads must retain their authenticated ingress
@@ -2718,7 +2598,6 @@ impl GovernanceLogPayloadV1 {
             }
             return provenance.validate();
         }
-
         let Some(provenance) = provenance else {
             return Ok(());
         };
@@ -2737,7 +2616,6 @@ impl GovernanceLogPayloadV1 {
         }
         provenance.validate()
     }
-
     fn validate(&self, timestamp: u64) -> Result<(), GovernanceLogValidationError> {
         preflight_governance_source_payload_len(
             self,
@@ -2804,7 +2682,6 @@ impl GovernanceLogPayloadV1 {
         }
     }
 }
-
 fn preflight_governance_source_payload_len(
     payload: &GovernanceLogPayloadV1,
     maximum: usize,
@@ -2817,7 +2694,6 @@ fn preflight_governance_source_payload_len(
     }
     Ok(found)
 }
-
 fn validate_non_empty_governance_label(
     value: &str,
     error: SoraFsModerationBallotGovernanceEventValidationError,
@@ -2827,7 +2703,6 @@ fn validate_non_empty_governance_label(
     }
     Ok(())
 }
-
 fn validate_moderation_text(
     value: &str,
     field: &'static str,
@@ -2844,7 +2719,6 @@ fn validate_moderation_text(
     }
     Ok(())
 }
-
 fn preflight_moderation_event_len(
     event: &SoraFsModerationBallotGovernanceEventV1,
     maximum: usize,
@@ -2862,7 +2736,6 @@ fn preflight_moderation_event_len(
     }
     Ok(found)
 }
-
 fn validate_non_empty_appeal_finance_label(
     value: &str,
     field: &'static str,
@@ -2883,7 +2756,6 @@ fn validate_non_empty_appeal_finance_label(
     }
     Ok(())
 }
-
 fn preflight_appeal_finance_report_len(
     report: &SoraFsAppealFinanceReportV1,
     maximum: usize,
@@ -2896,7 +2768,6 @@ fn preflight_appeal_finance_report_len(
     }
     Ok(found)
 }
-
 fn validate_appeal_finance_panel_bounds(
     panel_size: u32,
     payout_rows: usize,
@@ -2921,7 +2792,6 @@ fn validate_appeal_finance_panel_bounds(
     }
     Ok(accounted)
 }
-
 fn validate_bounded_visible_settlement_receipt_label(
     value: &str,
     field: &'static str,
@@ -2943,7 +2813,6 @@ fn validate_bounded_visible_settlement_receipt_label(
     }
     Ok(())
 }
-
 fn validate_settlement_receipt_config_version(
     value: &str,
 ) -> Result<(), SoraFsAppealFinanceSettlementReceiptValidationError> {
@@ -2973,7 +2842,6 @@ fn validate_settlement_receipt_config_version(
     }
     Ok(())
 }
-
 fn validate_settlement_receipt_submitted_step(
     value: &str,
 ) -> Result<(), SoraFsAppealFinanceSettlementReceiptValidationError> {
@@ -2988,7 +2856,6 @@ fn validate_settlement_receipt_submitted_step(
     }
     Ok(())
 }
-
 fn validate_settlement_receipt_reconciliation_status(
     value: &str,
 ) -> Result<(), SoraFsAppealFinanceSettlementReceiptValidationError> {
@@ -3005,7 +2872,6 @@ fn validate_settlement_receipt_reconciliation_status(
     }
     Ok(())
 }
-
 fn validate_settlement_receipt_lifecycle_status(
     value: &str,
 ) -> Result<(), SoraFsAppealFinanceSettlementReceiptValidationError> {
@@ -3022,7 +2888,6 @@ fn validate_settlement_receipt_lifecycle_status(
     }
     Ok(())
 }
-
 fn validate_settlement_receipt_finalized_state(
     submitted_step: &str,
     reconciliation_status: &str,
@@ -3040,7 +2905,6 @@ fn validate_settlement_receipt_finalized_state(
     }
     Ok(())
 }
-
 fn validate_receipt_hex(
     value: &str,
     field: &'static str,
@@ -3064,42 +2928,33 @@ fn validate_receipt_hex(
     }
     Ok(())
 }
-
 mod borrowed_norito {
     use norito::core::NoritoSerialize;
-
     /// Borrowed value that delegates canonical Norito serialization.
     pub(super) struct Value<'a, T>(pub(super) &'a T);
-
     impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
         fn schema_hash() -> [u8; 16] {
             T::schema_hash()
         }
-
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
         ) -> Result<(), norito::core::Error> {
             self.0.serialize(writer)
         }
-
         fn encoded_len_hint(&self) -> std::option::Option<usize> {
             self.0.encoded_len_hint()
         }
-
         fn encoded_len_exact(&self) -> std::option::Option<usize> {
             self.0.encoded_len_exact()
         }
     }
-
     /// Borrowed optional value with the exact owned `Option<T>` wire representation.
     pub(super) struct ValueOption<'a, T>(pub(super) std::option::Option<&'a T>);
-
     impl<T: NoritoSerialize> NoritoSerialize for ValueOption<'_, T> {
         fn schema_hash() -> [u8; 16] {
             <std::option::Option<T>>::schema_hash()
         }
-
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -3115,11 +2970,9 @@ mod borrowed_norito {
             }
             Ok(())
         }
-
         fn encoded_len_hint(&self) -> std::option::Option<usize> {
             self.encoded_len_exact()
         }
-
         fn encoded_len_exact(&self) -> std::option::Option<usize> {
             match self.0 {
                 Some(value) => {
@@ -3132,15 +2985,12 @@ mod borrowed_norito {
             }
         }
     }
-
     /// Borrowed byte slice with the exact owned `Vec<u8>` wire representation.
     pub(super) struct Vec<'a>(pub(super) &'a [u8]);
-
     impl NoritoSerialize for Vec<'_> {
         fn schema_hash() -> [u8; 16] {
             <std::vec::Vec<u8>>::schema_hash()
         }
-
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -3152,26 +3002,21 @@ mod borrowed_norito {
             writer.write_all(self.0)?;
             Ok(())
         }
-
         fn encoded_len_hint(&self) -> std::option::Option<usize> {
             self.0
                 .len()
                 .checked_add(norito::core::seq_len_prefix_len(self.0.len()))
         }
-
         fn encoded_len_exact(&self) -> std::option::Option<usize> {
             self.encoded_len_hint()
         }
     }
-
     /// Borrowed optional byte slice with the exact `Option<Vec<u8>>` wire representation.
     pub(super) struct Option<'a>(pub(super) std::option::Option<&'a [u8]>);
-
     impl NoritoSerialize for Option<'_> {
         fn schema_hash() -> [u8; 16] {
             <std::option::Option<std::vec::Vec<u8>>>::schema_hash()
         }
-
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -3187,11 +3032,9 @@ mod borrowed_norito {
             }
             Ok(())
         }
-
         fn encoded_len_hint(&self) -> std::option::Option<usize> {
             self.encoded_len_exact()
         }
-
         fn encoded_len_exact(&self) -> std::option::Option<usize> {
             match self.0 {
                 Some(bytes) => {
@@ -3205,7 +3048,6 @@ mod borrowed_norito {
         }
     }
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct GovernanceLogNodeCidPayloadV1 {
     version: u8,
@@ -3215,7 +3057,6 @@ struct GovernanceLogNodeCidPayloadV1 {
     submission_provenance: Option<GovernanceDagSubmissionProvenanceV1>,
     payload: GovernanceLogPayloadV1,
 }
-
 #[derive(NoritoSerialize)]
 struct GovernanceLogNodeCidPayloadViewWireV1<'a> {
     version: u8,
@@ -3225,27 +3066,21 @@ struct GovernanceLogNodeCidPayloadViewWireV1<'a> {
     submission_provenance: borrowed_norito::ValueOption<'a, GovernanceDagSubmissionProvenanceV1>,
     payload: borrowed_norito::Value<'a, GovernanceLogPayloadV1>,
 }
-
 struct GovernanceLogNodeCidPayloadViewV1<'a>(GovernanceLogNodeCidPayloadViewWireV1<'a>);
-
 impl norito::core::NoritoSerialize for GovernanceLogNodeCidPayloadViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         GovernanceLogNodeCidPayloadV1::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0.encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct GovernanceDagBlockCidPayloadV1 {
     version: u8,
@@ -3255,7 +3090,6 @@ struct GovernanceDagBlockCidPayloadV1 {
     publisher_peer_id: Vec<u8>,
     node: GovernanceLogNodeV1,
 }
-
 #[derive(NoritoSerialize)]
 struct GovernanceDagBlockCidPayloadViewWireV1<'a> {
     version: u8,
@@ -3265,27 +3099,21 @@ struct GovernanceDagBlockCidPayloadViewWireV1<'a> {
     publisher_peer_id: borrowed_norito::Vec<'a>,
     node: borrowed_norito::Value<'a, GovernanceLogNodeV1>,
 }
-
 struct GovernanceDagBlockCidPayloadViewV1<'a>(GovernanceDagBlockCidPayloadViewWireV1<'a>);
-
 impl norito::core::NoritoSerialize for GovernanceDagBlockCidPayloadViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         GovernanceDagBlockCidPayloadV1::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0.encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct GovernanceDagBlockSignaturePayloadV1 {
     version: u8,
@@ -3296,7 +3124,6 @@ struct GovernanceDagBlockSignaturePayloadV1 {
     publisher_peer_id: Vec<u8>,
     node: GovernanceLogNodeV1,
 }
-
 #[derive(NoritoSerialize)]
 struct GovernanceDagBlockSignaturePayloadViewWireV1<'a> {
     version: u8,
@@ -3307,11 +3134,9 @@ struct GovernanceDagBlockSignaturePayloadViewWireV1<'a> {
     publisher_peer_id: borrowed_norito::Vec<'a>,
     node: borrowed_norito::Value<'a, GovernanceLogNodeV1>,
 }
-
 struct GovernanceDagBlockSignaturePayloadViewV1<'a>(
     GovernanceDagBlockSignaturePayloadViewWireV1<'a>,
 );
-
 impl<'a> From<&'a GovernanceDagBlockV1> for GovernanceDagBlockSignaturePayloadViewV1<'a> {
     fn from(block: &'a GovernanceDagBlockV1) -> Self {
         Self(GovernanceDagBlockSignaturePayloadViewWireV1 {
@@ -3325,25 +3150,20 @@ impl<'a> From<&'a GovernanceDagBlockV1> for GovernanceDagBlockSignaturePayloadVi
         })
     }
 }
-
 impl norito::core::NoritoSerialize for GovernanceDagBlockSignaturePayloadViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         GovernanceDagBlockSignaturePayloadV1::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0.encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 #[cfg(test)]
 impl From<&GovernanceDagBlockV1> for GovernanceDagBlockSignaturePayloadV1 {
     fn from(block: &GovernanceDagBlockV1) -> Self {
@@ -3358,7 +3178,6 @@ impl From<&GovernanceDagBlockV1> for GovernanceDagBlockSignaturePayloadV1 {
         }
     }
 }
-
 fn validate_governance_dag_signing_payload_len(length: usize) -> Result<(), norito::core::Error> {
     if length > GOVERNANCE_DAG_SIGNING_PAYLOAD_MAX_BYTES_V1 {
         return Err(norito::core::Error::Message(format!(
@@ -3367,7 +3186,6 @@ fn validate_governance_dag_signing_payload_len(length: usize) -> Result<(), nori
     }
     Ok(())
 }
-
 fn encode_governance_dag_signing_payload<T: norito::NoritoSerialize>(
     value: &T,
 ) -> Result<Vec<u8>, norito::core::Error> {
@@ -3381,7 +3199,6 @@ fn encode_governance_dag_signing_payload<T: norito::NoritoSerialize>(
     validate_governance_dag_signing_payload_len(bytes.len())?;
     Ok(bytes)
 }
-
 fn encode_governance_dag_frame<T: norito::NoritoSerialize>(
     value: &T,
     payload_length: usize,
@@ -3394,7 +3211,6 @@ fn encode_governance_dag_frame<T: norito::NoritoSerialize>(
     norito::core::to_writer_seek(&mut writer, value)?;
     Ok(writer.into_inner())
 }
-
 fn validate_governance_dag_block_canonical_len(length: usize) -> Result<(), norito::core::Error> {
     if length > GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1 {
         return Err(norito::core::Error::Message(format!(
@@ -3403,7 +3219,6 @@ fn validate_governance_dag_block_canonical_len(length: usize) -> Result<(), nori
     }
     Ok(())
 }
-
 /// Public Governance DAG block wrapping one validated governance log node.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct GovernanceDagBlockV1 {
@@ -3426,7 +3241,6 @@ pub struct GovernanceDagBlockV1 {
     /// Publisher signature over the canonical block signing payload.
     pub block_signature: GovernanceLogSignatureV1,
 }
-
 impl GovernanceDagBlockV1 {
     /// Returns the bounded canonical header-bearing Norito block bytes.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
@@ -3441,12 +3255,10 @@ impl GovernanceDagBlockV1 {
         validate_governance_dag_block_canonical_len(bytes.len())?;
         Ok(bytes)
     }
-
     /// Returns canonical Norito bytes signed by the block publisher.
     pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
         encode_governance_dag_signing_payload(&GovernanceDagBlockSignaturePayloadViewV1::from(self))
     }
-
     /// Recomputes this block's deterministic CID bytes.
     pub fn recompute_block_cid(&self) -> Result<Vec<u8>, norito::core::Error> {
         governance_dag_block_cid_v1(
@@ -3457,7 +3269,6 @@ impl GovernanceDagBlockV1 {
             &self.node,
         )
     }
-
     /// Validates the block structure, embedded node, CID, and block signature.
     pub fn validate(&self) -> Result<(), GovernanceDagBlockValidationError> {
         preflight_governance_dag_block_len(self, GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1)?;
@@ -3523,7 +3334,6 @@ impl GovernanceDagBlockV1 {
         self.node
             .verify_publisher_signature()
             .map_err(GovernanceDagBlockValidationError::NodeSignature)?;
-
         let expected_cid = self.recompute_block_cid().map_err(|err| {
             GovernanceDagBlockValidationError::CidEncoding {
                 reason: err.to_string(),
@@ -3532,11 +3342,9 @@ impl GovernanceDagBlockV1 {
         if self.block_cid != expected_cid {
             return Err(GovernanceDagBlockValidationError::InvalidBlockCid);
         }
-
         self.verify_block_signature()
             .map_err(GovernanceDagBlockValidationError::BlockSignature)
     }
-
     /// Verifies the block publisher signature.
     pub fn verify_block_signature(&self) -> Result<(), GovernanceLogSignatureVerificationError> {
         let payload_bytes = self.signature_payload_bytes().map_err(|err| {
@@ -3547,7 +3355,6 @@ impl GovernanceDagBlockV1 {
         verify_governance_signature_bytes(&self.block_signature, &payload_bytes)
     }
 }
-
 fn preflight_governance_dag_block_len(
     block: &GovernanceDagBlockV1,
     maximum: usize,
@@ -3560,7 +3367,6 @@ fn preflight_governance_dag_block_len(
     }
     Ok(found)
 }
-
 /// Derives deterministic Governance DAG block CID bytes.
 pub fn governance_dag_block_cid_v1(
     prev_block_cid: Option<&[u8]>,
@@ -3583,7 +3389,6 @@ pub fn governance_dag_block_cid_v1(
     hasher.update(&payload_bytes);
     Ok(hasher.finalize().as_bytes().to_vec())
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct GovernanceDagHeadSignaturePayloadV1 {
     version: u8,
@@ -3593,7 +3398,6 @@ struct GovernanceDagHeadSignaturePayloadV1 {
     publisher_peer_id: Vec<u8>,
     checkpoint_cid: Option<Vec<u8>>,
 }
-
 #[derive(NoritoSerialize)]
 struct GovernanceDagHeadSignaturePayloadViewWireV1<'a> {
     version: u8,
@@ -3603,9 +3407,7 @@ struct GovernanceDagHeadSignaturePayloadViewWireV1<'a> {
     publisher_peer_id: borrowed_norito::Vec<'a>,
     checkpoint_cid: borrowed_norito::Option<'a>,
 }
-
 struct GovernanceDagHeadSignaturePayloadViewV1<'a>(GovernanceDagHeadSignaturePayloadViewWireV1<'a>);
-
 impl<'a> From<&'a GovernanceDagHeadV1> for GovernanceDagHeadSignaturePayloadViewV1<'a> {
     fn from(head: &'a GovernanceDagHeadV1) -> Self {
         Self(GovernanceDagHeadSignaturePayloadViewWireV1 {
@@ -3618,25 +3420,20 @@ impl<'a> From<&'a GovernanceDagHeadV1> for GovernanceDagHeadSignaturePayloadView
         })
     }
 }
-
 impl norito::core::NoritoSerialize for GovernanceDagHeadSignaturePayloadViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         GovernanceDagHeadSignaturePayloadV1::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0.encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 #[cfg(test)]
 impl From<&GovernanceDagHeadV1> for GovernanceDagHeadSignaturePayloadV1 {
     fn from(head: &GovernanceDagHeadV1) -> Self {
@@ -3650,7 +3447,6 @@ impl From<&GovernanceDagHeadV1> for GovernanceDagHeadSignaturePayloadV1 {
         }
     }
 }
-
 /// Signed public Governance DAG head manifest.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct GovernanceDagHeadV1 {
@@ -3673,13 +3469,11 @@ pub struct GovernanceDagHeadV1 {
     /// Publisher signature over the canonical head manifest payload.
     pub head_signature: GovernanceLogSignatureV1,
 }
-
 impl GovernanceDagHeadV1 {
     /// Returns canonical Norito bytes signed by the head publisher.
     pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
         encode_governance_dag_signing_payload(&GovernanceDagHeadSignaturePayloadViewV1::from(self))
     }
-
     /// Validates the head manifest structure and signature.
     pub fn validate(&self) -> Result<(), GovernanceDagHeadValidationError> {
         if self.version != GOVERNANCE_DAG_HEAD_VERSION_V1 {
@@ -3727,7 +3521,6 @@ impl GovernanceDagHeadV1 {
         self.verify_head_signature()
             .map_err(GovernanceDagHeadValidationError::HeadSignature)
     }
-
     /// Verifies the head publisher signature.
     pub fn verify_head_signature(&self) -> Result<(), GovernanceLogSignatureVerificationError> {
         let payload_bytes = self.signature_payload_bytes().map_err(|err| {
@@ -3738,7 +3531,6 @@ impl GovernanceDagHeadV1 {
         verify_governance_signature_bytes(&self.head_signature, &payload_bytes)
     }
 }
-
 /// Signature covering a governance log node.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct GovernanceLogSignatureV1 {
@@ -3749,7 +3541,6 @@ pub struct GovernanceLogSignatureV1 {
     /// Raw signature bytes.
     pub signature: Vec<u8>,
 }
-
 impl GovernanceLogSignatureV1 {
     fn validate(&self) -> Result<(), GovernanceLogValidationError> {
         let (expected_public_key, expected_signature) = match self.algorithm {
@@ -3784,7 +3575,6 @@ impl GovernanceLogSignatureV1 {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct GovernanceLogSignaturePayloadV1 {
     version: u8,
@@ -3795,7 +3585,6 @@ struct GovernanceLogSignaturePayloadV1 {
     submission_provenance: Option<GovernanceDagSubmissionProvenanceV1>,
     payload: GovernanceLogPayloadV1,
 }
-
 #[derive(NoritoSerialize)]
 struct GovernanceLogSignaturePayloadViewWireV1<'a> {
     version: u8,
@@ -3806,9 +3595,7 @@ struct GovernanceLogSignaturePayloadViewWireV1<'a> {
     submission_provenance: borrowed_norito::Value<'a, Option<GovernanceDagSubmissionProvenanceV1>>,
     payload: borrowed_norito::Value<'a, GovernanceLogPayloadV1>,
 }
-
 struct GovernanceLogSignaturePayloadViewV1<'a>(GovernanceLogSignaturePayloadViewWireV1<'a>);
-
 impl<'a> From<&'a GovernanceLogNodeV1> for GovernanceLogSignaturePayloadViewV1<'a> {
     fn from(node: &'a GovernanceLogNodeV1) -> Self {
         Self(GovernanceLogSignaturePayloadViewWireV1 {
@@ -3822,25 +3609,20 @@ impl<'a> From<&'a GovernanceLogNodeV1> for GovernanceLogSignaturePayloadViewV1<'
         })
     }
 }
-
 impl norito::core::NoritoSerialize for GovernanceLogSignaturePayloadViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         GovernanceLogSignaturePayloadV1::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0.encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 #[cfg(test)]
 impl From<&GovernanceLogNodeV1> for GovernanceLogSignaturePayloadV1 {
     fn from(node: &GovernanceLogNodeV1) -> Self {
@@ -3855,7 +3637,6 @@ impl From<&GovernanceLogNodeV1> for GovernanceLogSignaturePayloadV1 {
         }
     }
 }
-
 /// Algorithms supported for governance signatures.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
@@ -3865,7 +3646,6 @@ pub enum GovernanceSignatureAlgorithm {
     /// Dilithium3 (post-quantum) signature.
     Dilithium3 = 2,
 }
-
 /// Governance log node entry appended to the DAG.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct GovernanceLogNodeV1 {
@@ -3887,7 +3667,6 @@ pub struct GovernanceLogNodeV1 {
     /// Publisher signature covering the canonical node signing payload.
     pub publisher_signature: GovernanceLogSignatureV1,
 }
-
 impl GovernanceLogNodeV1 {
     /// Validates the log node payload.
     pub fn validate(&self) -> Result<(), GovernanceLogValidationError> {
@@ -3930,7 +3709,6 @@ impl GovernanceLogNodeV1 {
         }
         Ok(())
     }
-
     /// Returns canonical Norito bytes signed by the publisher.
     ///
     /// The payload deliberately excludes `publisher_signature` so signers and
@@ -3938,7 +3716,6 @@ impl GovernanceLogNodeV1 {
     pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
         encode_governance_dag_signing_payload(&GovernanceLogSignaturePayloadViewV1::from(self))
     }
-
     /// Recomputes this node's deterministic CID bytes.
     pub fn recompute_node_cid(&self) -> Result<Vec<u8>, norito::core::Error> {
         governance_log_node_cid_v1(
@@ -3949,7 +3726,6 @@ impl GovernanceLogNodeV1 {
             &self.payload,
         )
     }
-
     /// Verifies a publisher signature over the canonical node payload.
     pub fn verify_publisher_signature(
         &self,
@@ -3959,11 +3735,9 @@ impl GovernanceLogNodeV1 {
                 reason: err.to_string(),
             }
         })?;
-
         verify_governance_signature_bytes(&self.publisher_signature, &payload_bytes)
     }
 }
-
 fn preflight_governance_log_node_len(
     node: &GovernanceLogNodeV1,
     maximum: usize,
@@ -3976,7 +3750,6 @@ fn preflight_governance_log_node_len(
     }
     Ok(found)
 }
-
 /// Derives deterministic Governance log node CID bytes.
 pub fn governance_log_node_cid_v1(
     prev_cid: Option<&[u8]>,
@@ -4013,7 +3786,6 @@ fn verify_governance_signature_bytes(
         }
     }
 }
-
 fn verify_ed25519_governance_signature(
     publisher_signature: &GovernanceLogSignatureV1,
     payload_bytes: &[u8],
@@ -4032,17 +3804,14 @@ fn verify_ed25519_governance_signature(
             },
         );
     }
-
     let mut public_key = [0u8; PUBLIC_KEY_LENGTH];
     public_key.copy_from_slice(&publisher_signature.public_key);
     let verifying_key = crate::checked_ed25519_verifying_key_from_bytes(&public_key)
         .map_err(|err| GovernanceLogSignatureVerificationError::InvalidPublicKey { reason: err })?;
-
     let mut signature = [0u8; SIGNATURE_LENGTH];
     signature.copy_from_slice(&publisher_signature.signature);
     let signature = crate::checked_ed25519_signature_from_bytes(&signature)
         .map_err(|reason| GovernanceLogSignatureVerificationError::Verification { reason })?;
-
     verifying_key
         .verify_strict(payload_bytes, &signature)
         .map_err(
@@ -4051,7 +3820,6 @@ fn verify_ed25519_governance_signature(
             },
         )
 }
-
 fn verify_mldsa_governance_signature(
     publisher_signature: &GovernanceLogSignatureV1,
     payload_bytes: &[u8],
@@ -4088,7 +3856,6 @@ fn verify_mldsa_governance_signature(
         }
     })
 }
-
 /// Validation errors for governance log nodes.
 #[derive(Debug, Error)]
 pub enum GovernanceLogValidationError {
@@ -4185,7 +3952,6 @@ pub enum GovernanceLogValidationError {
     #[error("PoR weekly report validation failed: {0}")]
     PorWeeklyReport(crate::por::PorWeeklyReportValidationError),
 }
-
 /// Validation errors for generic external Governance DAG payloads.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum GovernanceExternalPayloadValidationError {
@@ -4345,7 +4111,6 @@ pub enum GovernanceExternalPayloadValidationError {
     #[error("repair slash external payload must not embed a governance approval summary")]
     RepairSlashApprovalForbidden,
 }
-
 /// Validation errors for SoraFS moderation ballot governance events.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SoraFsModerationBallotGovernanceEventValidationError {
@@ -4509,7 +4274,6 @@ pub enum SoraFsModerationBallotGovernanceEventValidationError {
     #[error("SoraFS moderation tally contested flag does not match winner state")]
     ContestedMismatch,
 }
-
 /// Validation errors for SoraFS appeal finance reports.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SoraFsAppealFinanceReportValidationError {
@@ -4631,7 +4395,6 @@ pub enum SoraFsAppealFinanceReportValidationError {
         accounted: usize,
     },
 }
-
 /// Validation errors for SoraFS appeal finance settlement receipts.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SoraFsAppealFinanceSettlementReceiptValidationError {
@@ -4748,7 +4511,6 @@ pub enum SoraFsAppealFinanceSettlementReceiptValidationError {
     #[error("SoraFS appeal finance settlement receipt configured signer count must be non-zero")]
     InvalidConfiguredSignerCount,
 }
-
 /// Errors raised while building a weekly appeal finance rollup.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SoraFsAppealFinanceWeeklyRollupBuildError {
@@ -4797,7 +4559,6 @@ pub enum SoraFsAppealFinanceWeeklyRollupBuildError {
     #[error("computed SoraFS appeal finance weekly rollup is invalid: {0}")]
     InvalidRollup(#[from] SoraFsAppealFinanceWeeklyRollupValidationError),
 }
-
 /// Validation errors for weekly SoraFS appeal finance rollups.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SoraFsAppealFinanceWeeklyRollupValidationError {
@@ -4999,7 +4760,6 @@ pub enum SoraFsAppealFinanceWeeklyRollupValidationError {
         actual: String,
     },
 }
-
 /// Validation errors for public Governance DAG blocks.
 #[derive(Debug, Error)]
 pub enum GovernanceDagBlockValidationError {
@@ -5048,7 +4808,6 @@ pub enum GovernanceDagBlockValidationError {
     #[error("governance DAG block signature validation failed: {0}")]
     BlockSignature(GovernanceLogSignatureVerificationError),
 }
-
 /// Validation errors for public Governance DAG head manifests.
 #[derive(Debug, Error)]
 pub enum GovernanceDagHeadValidationError {
@@ -5075,7 +4834,6 @@ pub enum GovernanceDagHeadValidationError {
     #[error("governance DAG head signature validation failed: {0}")]
     HeadSignature(GovernanceLogSignatureVerificationError),
 }
-
 /// Validation errors for Governance DAG block chains.
 #[derive(Debug, Error)]
 pub enum GovernanceDagChainValidationError {
@@ -5114,7 +4872,6 @@ pub enum GovernanceDagChainValidationError {
     #[error("governance DAG head does not match expected CID")]
     ExpectedHeadMismatch,
 }
-
 /// Validation errors for binding a signed head manifest to a block chain.
 #[derive(Debug, Error)]
 pub enum GovernanceDagHeadChainValidationError {
@@ -5150,7 +4907,6 @@ pub enum GovernanceDagHeadChainValidationError {
         tip_timestamp: u64,
     },
 }
-
 /// Validates a canonical contiguous Governance DAG history or checkpoint tail.
 ///
 /// A root history begins at sequence zero. A checkpoint tail may begin at a
@@ -5167,7 +4923,6 @@ pub fn validate_governance_dag_chain_v1(
 ) -> Result<(), GovernanceDagChainValidationError> {
     validate_governance_dag_chain_with_authority_policy_v1(blocks, expected_head_cid, true)
 }
-
 fn validate_governance_dag_chain_with_authority_policy_v1(
     blocks: &[GovernanceDagBlockV1],
     expected_head_cid: Option<&[u8]>,
@@ -5176,7 +4931,6 @@ fn validate_governance_dag_chain_with_authority_policy_v1(
     if blocks.is_empty() {
         return Err(GovernanceDagChainValidationError::Empty);
     }
-
     let mut block_cids = BTreeSet::<Vec<u8>>::new();
     let mut node_cids = BTreeSet::<Vec<u8>>::new();
     let first = &blocks[0];
@@ -5201,11 +4955,9 @@ fn validate_governance_dag_chain_with_authority_policy_v1(
         if require_stable_authority && block.block_signature.public_key != *publisher_public_key {
             return Err(GovernanceDagChainValidationError::PublisherKeyMismatch { index });
         }
-
         if index == 0 {
             continue;
         }
-
         let parent = &blocks[index - 1];
         if block.prev_block_cid.as_deref() != Some(parent.block_cid.as_slice()) {
             return Err(GovernanceDagChainValidationError::NonCanonicalOrder { index });
@@ -5231,7 +4983,6 @@ fn validate_governance_dag_chain_with_authority_policy_v1(
             return Err(GovernanceDagChainValidationError::NodeTimestampRegression { index });
         }
     }
-
     if let Some(expected_head_cid) = expected_head_cid
         && blocks.last().map(|block| block.block_cid.as_slice()) != Some(expected_head_cid)
     {
@@ -5239,7 +4990,6 @@ fn validate_governance_dag_chain_with_authority_policy_v1(
     }
     Ok(())
 }
-
 /// Validates a stable-authority signed head against a full history or its exact newest
 /// checkpoint window.
 ///
@@ -5255,7 +5005,6 @@ pub fn validate_governance_dag_head_against_chain_v1(
 ) -> Result<(), GovernanceDagHeadChainValidationError> {
     validate_governance_dag_head_against_chain_with_authority_policy_v1(head, blocks, true)
 }
-
 /// Validates a signed head against a chain whose authority rotations were
 /// authenticated separately.
 ///
@@ -5271,7 +5020,6 @@ pub fn validate_governance_dag_head_against_rotatable_chain_v1(
 ) -> Result<(), GovernanceDagHeadChainValidationError> {
     validate_governance_dag_head_against_chain_with_authority_policy_v1(head, blocks, false)
 }
-
 fn validate_governance_dag_head_against_chain_with_authority_policy_v1(
     head: &GovernanceDagHeadV1,
     blocks: &[GovernanceDagBlockV1],
@@ -5285,7 +5033,6 @@ fn validate_governance_dag_head_against_chain_with_authority_policy_v1(
         require_stable_authority,
     )
     .map_err(GovernanceDagHeadChainValidationError::Chain)?;
-
     let first = blocks
         .first()
         .ok_or(GovernanceDagHeadChainValidationError::Chain(
@@ -5310,7 +5057,6 @@ fn validate_governance_dag_head_against_chain_with_authority_policy_v1(
             },
         );
     }
-
     let chain_count = u64::try_from(blocks.len())
         .map_err(|_| GovernanceDagHeadChainValidationError::BlockCountOverflow)?;
     let window_count = u64::try_from(GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1)
@@ -5376,7 +5122,6 @@ fn validate_governance_dag_head_against_chain_with_authority_policy_v1(
     }
     Ok(())
 }
-
 /// Errors raised while verifying a governance log publisher signature.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum GovernanceLogSignatureVerificationError {
@@ -5414,15 +5159,12 @@ pub enum GovernanceLogSignatureVerificationError {
         reason: String,
     },
 }
-
 #[cfg(test)]
 mod tests {
     use std::error::Error as _;
-
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
-
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -5432,7 +5174,6 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     #[test]
     fn governance_publication_source_pair_identity_binds_every_field() {
         let baseline =
@@ -5453,24 +5194,20 @@ mod tests {
             assert_ne!(changed, baseline);
         }
     }
-
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
         let mut bytes = Vec::new();
         norito::core::serialize_to_buffer(value, &mut bytes).expect("serialize explicit layout");
         bytes
     }
-
     fn encode_frame_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
         norito::to_bytes(value).unwrap_or_else(|error| {
             panic!("serialize explicit canonical frame with flags 0x{flags:02x}: {error}")
         })
     }
-
     fn supported_layouts() -> [u8; 8] {
         use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-
         [
             0,
             COMPACT_LEN,
@@ -5482,7 +5219,6 @@ mod tests {
             PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
         ]
     }
-
     fn assert_borrowed_wire_exact<Owned, Borrowed>(label: &str, owned: &Owned, borrowed: &Borrowed)
     where
         Owned: norito::core::NoritoSerialize,
@@ -5498,7 +5234,6 @@ mod tests {
             norito::to_bytes(owned).expect("encode historical owned canonical frame"),
             "{label} default canonical frame changed"
         );
-
         for flags in supported_layouts() {
             let owned_bytes = encode_bare_with_flags(owned, flags);
             let borrowed_bytes = encode_bare_with_flags(borrowed, flags);
@@ -5525,7 +5260,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn governance_payload_surface_excludes_bare_por_challenges() {
         let compact_source: String = include_str!("governance.rs")
@@ -5542,7 +5276,6 @@ mod tests {
             "canonical PoR challenge publication variant must remain in the Governance DAG surface"
         );
     }
-
     fn signed_por_proof_payload() -> GovernanceLogPayloadV1 {
         GovernanceLogPayloadV1::PorProof(crate::por::PorProofV1 {
             version: crate::POR_PROOF_VERSION_V1,
@@ -5565,7 +5298,6 @@ mod tests {
             submitted_at: 1_700_000_200,
         })
     }
-
     fn governance_node_for_signing() -> GovernanceLogNodeV1 {
         let mut node = GovernanceLogNodeV1 {
             version: GOVERNANCE_LOG_VERSION_V1,
@@ -5586,7 +5318,6 @@ mod tests {
             .expect("derive canonical governance log node CID");
         node
     }
-
     #[test]
     fn governance_log_node_cid_is_stable_and_input_sensitive() {
         let payload = signed_por_proof_payload();
@@ -5616,12 +5347,10 @@ mod tests {
             &payload,
         )
         .expect("derive changed governance log node CID");
-
         assert_eq!(first, second);
         assert_ne!(first, changed);
         assert_eq!(first.len(), blake3::OUT_LEN);
     }
-
     fn sign_governance_node(node: &mut GovernanceLogNodeV1, seed: &[u8; 32]) {
         let signing_key = SigningKey::from_bytes(seed);
         let payload_bytes = node
@@ -5634,7 +5363,6 @@ mod tests {
             signature: signature.to_bytes().to_vec(),
         };
     }
-
     fn sign_governance_node_mldsa(node: &mut GovernanceLogNodeV1, seed: &[u8]) {
         let key_pair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::MlDsa)
             .expect("generate ML-DSA governance keypair");
@@ -5654,7 +5382,6 @@ mod tests {
             signature: signature.payload().to_vec(),
         };
     }
-
     fn empty_ed25519_signature() -> GovernanceLogSignatureV1 {
         GovernanceLogSignatureV1 {
             algorithm: GovernanceSignatureAlgorithm::Ed25519,
@@ -5662,7 +5389,6 @@ mod tests {
             signature: Vec::new(),
         }
     }
-
     #[test]
     fn governance_signature_validate_rejects_all_zero_material() {
         let mut signature = GovernanceLogSignatureV1 {
@@ -5670,21 +5396,17 @@ mod tests {
             public_key: vec![0x11; GOVERNANCE_ED25519_PUBLIC_KEY_BYTES_V1],
             signature: vec![0; GOVERNANCE_ED25519_SIGNATURE_BYTES_V1],
         };
-
         assert!(matches!(
             signature.validate(),
             Err(GovernanceLogValidationError::InvalidSignature)
         ));
-
         signature.signature = vec![0x22; GOVERNANCE_ED25519_SIGNATURE_BYTES_V1];
         signature.public_key = vec![0; GOVERNANCE_ED25519_PUBLIC_KEY_BYTES_V1];
-
         assert!(matches!(
             signature.validate(),
             Err(GovernanceLogValidationError::InvalidSignature)
         ));
     }
-
     #[test]
     fn governance_signature_validate_requires_exact_algorithm_lengths() {
         assert_eq!(
@@ -5695,14 +5417,12 @@ mod tests {
             GOVERNANCE_ML_DSA_65_SIGNATURE_BYTES_V1,
             MlDsaSuite::MlDsa65.signature_len()
         );
-
         let mut ed25519 = GovernanceLogSignatureV1 {
             algorithm: GovernanceSignatureAlgorithm::Ed25519,
             public_key: vec![0x11; GOVERNANCE_ED25519_PUBLIC_KEY_BYTES_V1],
             signature: vec![0x22; GOVERNANCE_ED25519_SIGNATURE_BYTES_V1],
         };
         ed25519.validate().expect("exact Ed25519 lengths validate");
-
         ed25519.public_key.push(0x33);
         assert!(matches!(
             ed25519.validate(),
@@ -5714,7 +5434,6 @@ mod tests {
                 }
             ) if found == GOVERNANCE_ED25519_PUBLIC_KEY_BYTES_V1 + 1
         ));
-
         let mut mldsa = GovernanceLogSignatureV1 {
             algorithm: GovernanceSignatureAlgorithm::Dilithium3,
             public_key: vec![0x44; GOVERNANCE_ML_DSA_65_PUBLIC_KEY_BYTES_V1],
@@ -5723,7 +5442,6 @@ mod tests {
         mldsa
             .validate()
             .expect("exact ML-DSA-65 lengths validate structurally");
-
         mldsa.signature.pop();
         assert!(matches!(
             mldsa.validate(),
@@ -5734,7 +5452,6 @@ mod tests {
             }) if found + 1 == GOVERNANCE_ML_DSA_65_SIGNATURE_BYTES_V1
         ));
     }
-
     #[test]
     fn governance_source_and_node_preflights_accept_boundary_and_reject_one_over() {
         let payload = signed_por_proof_payload();
@@ -5753,7 +5470,6 @@ mod tests {
                 maximum,
             }) if found == payload_len && maximum == payload_len - 1
         ));
-
         let node = governance_node_for_signing();
         let node_len = node
             .encoded_len_exact()
@@ -5770,7 +5486,6 @@ mod tests {
             }) if found == node_len && maximum == node_len - 1
         ));
     }
-
     fn sign_governance_block(block: &mut GovernanceDagBlockV1, seed: &[u8; 32]) {
         let signing_key = SigningKey::from_bytes(seed);
         let payload_bytes = block
@@ -5783,7 +5498,6 @@ mod tests {
             signature: signature.to_bytes().to_vec(),
         };
     }
-
     fn sign_governance_head(head: &mut GovernanceDagHeadV1, seed: &[u8; 32]) {
         let signing_key = SigningKey::from_bytes(seed);
         let payload_bytes = head
@@ -5796,7 +5510,6 @@ mod tests {
             signature: signature.to_bytes().to_vec(),
         };
     }
-
     fn signed_governance_block(
         prev_block_cid: Option<Vec<u8>>,
         prev_node_cid: Option<Vec<u8>>,
@@ -5812,7 +5525,6 @@ mod tests {
             .recompute_node_cid()
             .expect("derive governance DAG node CID");
         sign_governance_node(&mut node, &[0xC7; 32]);
-
         let block_cid = governance_dag_block_cid_v1(
             prev_block_cid.as_deref(),
             sequence,
@@ -5834,7 +5546,6 @@ mod tests {
         sign_governance_block(&mut block, &[0xC7; 32]);
         block
     }
-
     #[test]
     fn governance_block_preflight_accepts_boundary_and_rejects_one_over() {
         let block = signed_governance_block(None, None, 0, 1_700_000_400);
@@ -5853,7 +5564,6 @@ mod tests {
             }) if found == block_len && maximum == block_len - 1
         ));
     }
-
     fn signed_governance_head(blocks: &[GovernanceDagBlockV1]) -> GovernanceDagHeadV1 {
         let head_block_cid = blocks.last().expect("at least one block").block_cid.clone();
         let checkpoint_cid =
@@ -5876,7 +5586,6 @@ mod tests {
         sign_governance_head(&mut head, &[0xC7; 32]);
         head
     }
-
     #[test]
     fn borrowed_governance_dag_views_preserve_every_canonical_wire_and_digest() {
         let root = signed_governance_block(None, None, 0, 1_700_000_400);
@@ -5909,7 +5618,6 @@ mod tests {
             .recompute_block_cid()
             .expect("derive provenance-bearing block CID");
         sign_governance_block(&mut attributed, &[0xC7; 32]);
-
         for (label, block) in [
             ("root", &root),
             ("child", &child),
@@ -5951,7 +5659,6 @@ mod tests {
                 node_hasher.finalize().as_bytes().to_vec(),
                 "{label} node CID digest changed"
             );
-
             let owned_node_signature = GovernanceLogSignaturePayloadV1::from(node);
             let borrowed_node_signature = GovernanceLogSignaturePayloadViewV1::from(node);
             assert_borrowed_wire_exact(
@@ -5966,7 +5673,6 @@ mod tests {
                     .expect("encode historical node signature frame"),
                 "{label} node signature frame changed"
             );
-
             let owned_block_cid = GovernanceDagBlockCidPayloadV1 {
                 version: GOVERNANCE_DAG_BLOCK_VERSION_V1,
                 prev_block_cid: block.prev_block_cid.clone(),
@@ -6001,7 +5707,6 @@ mod tests {
                 block_hasher.finalize().as_bytes().to_vec(),
                 "{label} block CID digest changed"
             );
-
             let owned_block_signature = GovernanceDagBlockSignaturePayloadV1::from(block);
             let borrowed_block_signature = GovernanceDagBlockSignaturePayloadViewV1::from(block);
             assert_borrowed_wire_exact(
@@ -6022,7 +5727,6 @@ mod tests {
                 norito::to_bytes(block).expect("encode historical canonical block"),
                 "{label} streamed canonical block changed"
             );
-
             for flags in supported_layouts() {
                 let owned_node_cid_frame = encode_frame_with_flags(&owned_node_cid, flags);
                 let mut node_hasher = Hasher::new();
@@ -6031,7 +5735,6 @@ mod tests {
                 let expected_node_cid = node_hasher.finalize().as_bytes().to_vec();
                 let owned_node_signature_frame =
                     encode_frame_with_flags(&owned_node_signature, flags);
-
                 let owned_block_cid_frame = encode_frame_with_flags(&owned_block_cid, flags);
                 let mut block_hasher = Hasher::new();
                 block_hasher.update(GOVERNANCE_DAG_BLOCK_CID_DOMAIN_V1);
@@ -6040,7 +5743,6 @@ mod tests {
                 let owned_block_signature_frame =
                     encode_frame_with_flags(&owned_block_signature, flags);
                 let owned_block_frame = encode_frame_with_flags(block, flags);
-
                 let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
                 assert_eq!(
                     node.recompute_node_cid()
@@ -6077,7 +5779,6 @@ mod tests {
                 );
             }
         }
-
         let heads = [
             GovernanceDagHeadV1 {
                 version: GOVERNANCE_DAG_HEAD_VERSION_V1,
@@ -6124,7 +5825,6 @@ mod tests {
             }
         }
     }
-
     fn signed_governance_chain(start_sequence: u64, count: usize) -> Vec<GovernanceDagBlockV1> {
         assert!(count > 0);
         let mut blocks = Vec::with_capacity(count);
@@ -6161,7 +5861,6 @@ mod tests {
             SignedReputationSnapshotV1,
         },
     };
-
     #[test]
     fn governance_node_validation_succeeds() {
         let mut builder = crate::provider_advert::ProviderAdvertV1::builder();
@@ -6222,7 +5921,6 @@ mod tests {
             vec![10; 64],
         );
         let advert = builder.build().expect("valid advert");
-
         let mut node = GovernanceLogNodeV1 {
             version: GOVERNANCE_LOG_VERSION_V1,
             node_cid: Vec::new(),
@@ -6240,10 +5938,8 @@ mod tests {
         node.node_cid = node
             .recompute_node_cid()
             .expect("derive governance log node CID");
-
         assert!(node.validate().is_ok());
     }
-
     #[test]
     fn governance_signing_payload_limit_dominates_largest_embedded_envelope() {
         assert_eq!(
@@ -6268,11 +5964,9 @@ mod tests {
             "one byte above the V1 signing ceiling must fail"
         );
     }
-
     #[test]
     fn governance_signing_payload_requires_allocation_free_exact_size() {
         struct InexactSigningPayload;
-
         impl norito::NoritoSerialize for InexactSigningPayload {
             fn serialize(
                 &self,
@@ -6282,7 +5976,6 @@ mod tests {
                 Ok(())
             }
         }
-
         let error = encode_governance_dag_signing_payload(&InexactSigningPayload)
             .expect_err("an inexact payload must fail before encoding");
         assert!(
@@ -6291,11 +5984,9 @@ mod tests {
                 .contains("has no allocation-free exact size")
         );
     }
-
     #[test]
     fn governance_signing_payload_rejects_oversize_before_serialize_or_allocate() {
         struct OversizedSigningPayload;
-
         impl norito::NoritoSerialize for OversizedSigningPayload {
             fn serialize(
                 &self,
@@ -6303,12 +5994,10 @@ mod tests {
             ) -> Result<(), norito::core::Error> {
                 panic!("oversized payload must be rejected before serialization")
             }
-
             fn encoded_len_exact(&self) -> Option<usize> {
                 Some(GOVERNANCE_DAG_SIGNING_PAYLOAD_MAX_BYTES_V1 + 1)
             }
         }
-
         let error = encode_governance_dag_signing_payload(&OversizedSigningPayload)
             .expect_err("one byte over the signing ceiling must fail before serialization");
         assert!(
@@ -6316,7 +6005,6 @@ mod tests {
             "unexpected oversize error: {error}"
         );
     }
-
     #[test]
     fn governance_block_ceiling_adds_checked_fixed_envelope_allowance() {
         assert_eq!(
@@ -6334,7 +6022,6 @@ mod tests {
             .is_err(),
             "one byte above the V1 block ceiling must fail"
         );
-
         let block = signed_governance_block(None, None, 0, 1_700_000_400);
         let signing_bytes = block
             .signature_payload_bytes()
@@ -6351,13 +6038,11 @@ mod tests {
         assert!(block.recompute_block_cid().is_ok());
         assert!(block.node.recompute_node_cid().is_ok());
     }
-
     #[test]
     fn governance_signature_payload_excludes_publisher_signature() {
         let node = governance_node_for_signing();
         let mut different_signature = node.clone();
         different_signature.publisher_signature.signature = vec![0xBB; 96];
-
         assert_eq!(
             node.signature_payload_bytes()
                 .expect("encode governance signature payload"),
@@ -6365,7 +6050,6 @@ mod tests {
                 .signature_payload_bytes()
                 .expect("encode governance signature payload")
         );
-
         let mut different_payload = node.clone();
         different_payload.timestamp += 1;
         assert_ne!(
@@ -6376,37 +6060,31 @@ mod tests {
                 .expect("encode governance signature payload")
         );
     }
-
     #[test]
     fn verify_publisher_signature_accepts_ed25519_signed_node() {
         let seed = [0xA5; 32];
         let mut node = governance_node_for_signing();
         sign_governance_node(&mut node, &seed);
-
         node.verify_publisher_signature()
             .expect("governance node signature verifies");
     }
-
     #[test]
     fn verify_publisher_signature_rejects_tampered_payload() {
         let seed = [0xA5; 32];
         let mut node = governance_node_for_signing();
         sign_governance_node(&mut node, &seed);
         node.timestamp += 1;
-
         assert!(matches!(
             node.verify_publisher_signature(),
             Err(GovernanceLogSignatureVerificationError::Verification { .. })
         ));
     }
-
     #[test]
     fn verify_publisher_signature_rejects_all_zero_ed25519_signature_material() {
         let seed = [0xA5; 32];
         let mut node = governance_node_for_signing();
         sign_governance_node(&mut node, &seed);
         node.publisher_signature.signature.fill(0);
-
         let err = node
             .verify_publisher_signature()
             .expect_err("all-zero governance node signature must be rejected");
@@ -6416,7 +6094,6 @@ mod tests {
                 if reason.contains("all zero")
         ));
     }
-
     #[test]
     fn verify_publisher_signature_rejects_malformed_ed25519_signature_r() {
         for (label, replacement_r, expected_reason) in [
@@ -6427,7 +6104,6 @@ mod tests {
             let mut node = governance_node_for_signing();
             sign_governance_node(&mut node, &seed);
             node.publisher_signature.signature[..PUBLIC_KEY_LENGTH].copy_from_slice(&replacement_r);
-
             let err = node
                 .verify_publisher_signature()
                 .expect_err("malformed governance publisher signature R must be rejected");
@@ -6441,43 +6117,36 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn verify_publisher_signature_accepts_dilithium3_signed_node() {
         let seed = [0xB5; 32];
         let mut node = governance_node_for_signing();
         sign_governance_node_mldsa(&mut node, &seed);
-
         node.verify_publisher_signature()
             .expect("ML-DSA governance node signature verifies");
     }
-
     #[test]
     fn verify_publisher_signature_rejects_tampered_dilithium3_payload() {
         let seed = [0xB5; 32];
         let mut node = governance_node_for_signing();
         sign_governance_node_mldsa(&mut node, &seed);
         node.publisher_peer_id.extend_from_slice(b"-tampered");
-
         assert!(matches!(
             node.verify_publisher_signature(),
             Err(GovernanceLogSignatureVerificationError::Verification { .. })
         ));
     }
-
     #[test]
     fn verify_publisher_signature_rejects_all_zero_dilithium3_signature_material() {
         let seed = [0xB5; 32];
         let mut node = governance_node_for_signing();
         sign_governance_node_mldsa(&mut node, &seed);
         node.publisher_signature.signature.fill(0);
-
         assert!(matches!(
             node.verify_publisher_signature(),
             Err(GovernanceLogSignatureVerificationError::Verification { .. })
         ));
     }
-
     #[test]
     fn verify_publisher_signature_rejects_malformed_dilithium3_signature_lengths() {
         for label in ["short", "overlong"] {
@@ -6494,7 +6163,6 @@ mod tests {
                 "overlong" => node.publisher_signature.signature.push(0xA5),
                 _ => unreachable!("covered labels"),
             }
-
             let err = node
                 .verify_publisher_signature()
                 .expect_err("malformed ML-DSA governance signature length must be rejected");
@@ -6508,11 +6176,9 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn governance_dag_block_derives_cid_and_verifies_signature() {
         let block = signed_governance_block(None, None, 0, 1_700_000_400);
-
         block.validate().expect("valid governance DAG block");
         assert_eq!(
             block
@@ -6524,12 +6190,10 @@ mod tests {
             .verify_block_signature()
             .expect("block signature verifies");
     }
-
     #[test]
     fn governance_dag_block_rejects_all_zero_signature_material() {
         let mut block = signed_governance_block(None, None, 0, 1_700_000_400);
         block.block_signature.signature.fill(0);
-
         let err = block
             .verify_block_signature()
             .expect_err("all-zero governance block signature must be rejected");
@@ -6539,13 +6203,11 @@ mod tests {
                 if reason.contains("all zero")
         ));
     }
-
     #[test]
     fn governance_dag_block_signature_payload_excludes_signature() {
         let block = signed_governance_block(None, None, 0, 1_700_000_400);
         let mut different_signature = block.clone();
         different_signature.block_signature.signature = vec![0xEE; 64];
-
         assert_eq!(
             block
                 .signature_payload_bytes()
@@ -6554,7 +6216,6 @@ mod tests {
                 .signature_payload_bytes()
                 .expect("encode block signature payload")
         );
-
         let mut different_payload = block.clone();
         different_payload.sequence = 1;
         assert_ne!(
@@ -6566,18 +6227,15 @@ mod tests {
                 .expect("encode block signature payload")
         );
     }
-
     #[test]
     fn governance_dag_block_rejects_tampered_cid() {
         let mut block = signed_governance_block(None, None, 0, 1_700_000_400);
         block.block_cid[0] ^= 0x01;
-
         assert!(matches!(
             block.validate(),
             Err(GovernanceDagBlockValidationError::InvalidBlockCid)
         ));
     }
-
     #[test]
     fn governance_log_node_requires_exact_cids_and_bounded_peer_id() {
         let mut node = governance_node_for_signing();
@@ -6586,14 +6244,12 @@ mod tests {
             node.validate(),
             Err(GovernanceLogValidationError::InvalidNodeCidLength { length: 31 })
         ));
-
         let mut node = governance_node_for_signing();
         node.prev_cid = Some(vec![0x41; GOVERNANCE_DAG_CID_BYTES_V1 + 1]);
         assert!(matches!(
             node.validate(),
             Err(GovernanceLogValidationError::InvalidPrevCidLength { length: 33 })
         ));
-
         let mut node = governance_node_for_signing();
         node.publisher_peer_id = vec![0x42; GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1 + 1];
         assert!(matches!(
@@ -6601,29 +6257,24 @@ mod tests {
             Err(GovernanceLogValidationError::PublisherPeerIdTooLong { .. })
         ));
     }
-
     #[test]
     fn governance_log_node_rejects_noncanonical_cid() {
         let mut node = governance_node_for_signing();
         node.node_cid[0] ^= 0x01;
-
         assert!(matches!(
             node.validate(),
             Err(GovernanceLogValidationError::InvalidNodeCid)
         ));
     }
-
     #[test]
     fn governance_dag_block_requires_exact_cids_and_one_ed25519_identity() {
         let block = signed_governance_block(None, None, 0, 1_700_000_400);
-
         let mut invalid_cid = block.clone();
         invalid_cid.block_cid.push(0);
         assert!(matches!(
             invalid_cid.validate(),
             Err(GovernanceDagBlockValidationError::InvalidBlockCidLength { length: 33 })
         ));
-
         let mut invalid_prev = signed_governance_block(
             Some([0x61; GOVERNANCE_DAG_CID_BYTES_V1].to_vec()),
             Some([0x62; GOVERNANCE_DAG_CID_BYTES_V1].to_vec()),
@@ -6635,7 +6286,6 @@ mod tests {
             invalid_prev.validate(),
             Err(GovernanceDagBlockValidationError::InvalidPrevBlockCidLength { length: 31 })
         ));
-
         let mut oversized_peer = block.clone();
         oversized_peer.publisher_peer_id =
             vec![0x42; GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1 + 1];
@@ -6643,14 +6293,12 @@ mod tests {
             oversized_peer.validate(),
             Err(GovernanceDagBlockValidationError::PublisherPeerIdTooLong { .. })
         ));
-
         let mut invalid_algorithm = block.clone();
         invalid_algorithm.block_signature.algorithm = GovernanceSignatureAlgorithm::Dilithium3;
         assert!(matches!(
             invalid_algorithm.validate(),
             Err(GovernanceDagBlockValidationError::NonEd25519BlockSignature)
         ));
-
         let mut invalid_peer = block.clone();
         invalid_peer.node.publisher_peer_id[0] ^= 0x01;
         invalid_peer.node.node_cid = invalid_peer
@@ -6662,7 +6310,6 @@ mod tests {
             invalid_peer.validate(),
             Err(GovernanceDagBlockValidationError::NodePublisherPeerMismatch)
         ));
-
         let mut invalid_key = block;
         sign_governance_node(&mut invalid_key.node, &[0xD7; 32]);
         invalid_key.block_cid = invalid_key
@@ -6674,26 +6321,22 @@ mod tests {
             Err(GovernanceDagBlockValidationError::NodePublisherKeyMismatch)
         ));
     }
-
     #[test]
     fn governance_dag_head_requires_exact_cids_bounded_peer_and_ed25519() {
         let blocks = signed_governance_chain(0, 1);
         let head = signed_governance_head(&blocks);
-
         let mut invalid_cid = head.clone();
         invalid_cid.head_block_cid.pop();
         assert!(matches!(
             invalid_cid.validate(),
             Err(GovernanceDagHeadValidationError::InvalidHeadBlockCidLength { length: 31 })
         ));
-
         let mut invalid_checkpoint = head.clone();
         invalid_checkpoint.checkpoint_cid = Some(vec![0x55; 31]);
         assert!(matches!(
             invalid_checkpoint.validate(),
             Err(GovernanceDagHeadValidationError::InvalidCheckpointCidLength { length: 31 })
         ));
-
         let mut oversized_peer = head.clone();
         oversized_peer.publisher_peer_id =
             vec![0x44; GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1 + 1];
@@ -6701,7 +6344,6 @@ mod tests {
             oversized_peer.validate(),
             Err(GovernanceDagHeadValidationError::PublisherPeerIdTooLong { .. })
         ));
-
         let mut invalid_algorithm = head;
         invalid_algorithm.head_signature.algorithm = GovernanceSignatureAlgorithm::Dilithium3;
         assert!(matches!(
@@ -6709,7 +6351,6 @@ mod tests {
             Err(GovernanceDagHeadValidationError::NonEd25519HeadSignature)
         ));
     }
-
     #[test]
     fn governance_dag_chain_validates_parent_linkage_and_head() {
         let root = signed_governance_block(None, None, 0, 1_700_000_400);
@@ -6721,16 +6362,13 @@ mod tests {
         );
         let blocks = vec![root, child];
         let expected_head = blocks[1].block_cid.clone();
-
         validate_governance_dag_chain_v1(&blocks, Some(&expected_head))
             .expect("valid governance DAG chain");
     }
-
     #[test]
     fn governance_dag_chain_preserves_invalid_block_error_source() {
         let mut block = signed_governance_block(None, None, 0, 1_700_000_400);
         block.block_cid[0] ^= 0x01;
-
         let error = validate_governance_dag_chain_v1(&[block], None)
             .expect_err("a block with a tampered CID must fail chain validation");
         const SOURCE_MESSAGE: &str =
@@ -6755,16 +6393,13 @@ mod tests {
                 )
         ));
     }
-
     #[test]
     fn governance_dag_chain_accepts_external_tail_anchors() {
         let block =
             signed_governance_block(Some(vec![0xA5; 32]), Some(vec![0x5A; 32]), 1, 1_700_000_500);
-
         validate_governance_dag_chain_v1(&[block], None)
             .expect("the first checkpoint-tail block may reference external parents");
     }
-
     #[test]
     fn governance_dag_chain_rejects_noncanonical_order() {
         let root = signed_governance_block(None, None, 0, 1_700_000_400);
@@ -6775,13 +6410,11 @@ mod tests {
             1_700_000_500,
         );
         let blocks = vec![child, root];
-
         assert!(matches!(
             validate_governance_dag_chain_v1(&blocks, None),
             Err(GovernanceDagChainValidationError::NonCanonicalOrder { index: 1 })
         ));
     }
-
     #[test]
     fn governance_dag_chain_rejects_duplicate_node_cid() {
         let first = signed_governance_block(None, None, 0, 1_700_000_400);
@@ -6794,13 +6427,11 @@ mod tests {
             .recompute_block_cid()
             .expect("recompute duplicate-node block CID");
         sign_governance_block(&mut duplicate, &[0xC7; 32]);
-
         assert!(matches!(
             validate_governance_dag_chain_v1(&[first, duplicate], None),
             Err(GovernanceDagChainValidationError::DuplicateNodeCid { index: 1 })
         ));
     }
-
     #[test]
     fn governance_dag_chain_rejects_node_parent_discontinuity() {
         let root = signed_governance_block(None, None, 0, 1_700_000_400);
@@ -6810,17 +6441,14 @@ mod tests {
             1,
             1_700_000_500,
         );
-
         assert!(matches!(
             validate_governance_dag_chain_v1(&[root, child], None),
             Err(GovernanceDagChainValidationError::NodeParentMismatch { index: 1 })
         ));
     }
-
     #[test]
     fn governance_dag_chain_rejects_publisher_peer_or_key_drift() {
         let blocks = signed_governance_chain(0, 2);
-
         let mut peer_drift = blocks.clone();
         let child = &mut peer_drift[1];
         child.publisher_peer_id = b"12D3KooWGovernanceDagPublisherOther".to_vec();
@@ -6841,7 +6469,6 @@ mod tests {
             validate_governance_dag_chain_v1(&peer_drift, None),
             Err(GovernanceDagChainValidationError::PublisherPeerMismatch { index: 1 })
         ));
-
         let mut key_drift = blocks;
         let child = &mut key_drift[1];
         sign_governance_node(&mut child.node, &[0xD7; 32]);
@@ -6854,7 +6481,6 @@ mod tests {
             Err(GovernanceDagChainValidationError::PublisherKeyMismatch { index: 1 })
         ));
     }
-
     #[test]
     fn governance_dag_chain_rejects_sequence_overflow() {
         let first = signed_governance_block(
@@ -6869,13 +6495,11 @@ mod tests {
             u64::MAX,
             1_700_000_401,
         );
-
         assert!(matches!(
             validate_governance_dag_chain_v1(&[first, second], None),
             Err(GovernanceDagChainValidationError::SequenceOverflow { index: 1 })
         ));
     }
-
     #[test]
     fn governance_dag_head_manifest_signs_and_binds_chain() {
         let root = signed_governance_block(None, None, 0, 1_700_000_400);
@@ -6887,14 +6511,12 @@ mod tests {
         );
         let blocks = vec![root, child];
         let head = signed_governance_head(&blocks);
-
         head.validate().expect("valid governance DAG head");
         head.verify_head_signature()
             .expect("head signature verifies");
         validate_governance_dag_head_against_chain_v1(&head, &blocks)
             .expect("head binds the governance DAG chain");
     }
-
     #[test]
     fn governance_dag_head_accepts_a_tip_from_a_rotated_authority() {
         let mut blocks = signed_governance_chain(0, 2);
@@ -6916,7 +6538,6 @@ mod tests {
             sign_governance_block(child, &[0xD7; 32]);
             child.publisher_peer_id.clone()
         };
-
         assert!(matches!(
             validate_governance_dag_chain_v1(&blocks, None),
             Err(GovernanceDagChainValidationError::PublisherPeerMismatch { index: 1 })
@@ -6934,7 +6555,6 @@ mod tests {
             "head accepts a tip whose separate rotation policy authenticated its authority",
         );
     }
-
     #[test]
     fn governance_dag_head_binds_full_history_checkpoint_window() {
         let blocks = signed_governance_chain(
@@ -6948,7 +6568,6 @@ mod tests {
             .len()
             .checked_sub(GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1)
             .expect("full history contains checkpoint window");
-
         assert_eq!(
             head.checkpoint_cid.as_deref(),
             Some(blocks[checkpoint_index].block_cid.as_slice())
@@ -6956,7 +6575,6 @@ mod tests {
         validate_governance_dag_head_against_chain_v1(&head, &blocks)
             .expect("full history binds its newest checkpoint window");
     }
-
     #[test]
     fn governance_dag_head_accepts_exact_checkpoint_tail() {
         let full = signed_governance_chain(
@@ -6971,11 +6589,9 @@ mod tests {
             .checked_sub(GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1)
             .expect("full history contains checkpoint window");
         let tail = &full[tail_start..];
-
         validate_governance_dag_head_against_chain_v1(&head, tail)
             .expect("exact newest checkpoint tail binds the signed head");
     }
-
     #[test]
     fn governance_dag_head_rejects_short_or_misanchored_checkpoint_tail() {
         let full = signed_governance_chain(
@@ -6990,12 +6606,10 @@ mod tests {
             .checked_sub(GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1)
             .expect("full history contains checkpoint window");
         let tail = &full[tail_start..];
-
         assert!(matches!(
             validate_governance_dag_head_against_chain_v1(&head, &tail[1..]),
             Err(GovernanceDagHeadChainValidationError::CheckpointWindowLength { count: 63 })
         ));
-
         head.checkpoint_cid = Some([0xE5; GOVERNANCE_DAG_CID_BYTES_V1].to_vec());
         sign_governance_head(&mut head, &[0xC7; 32]);
         assert!(matches!(
@@ -7003,7 +6617,6 @@ mod tests {
             Err(GovernanceDagHeadChainValidationError::CheckpointMismatch)
         ));
     }
-
     #[test]
     fn governance_dag_head_rejects_checkpoint_tail_sequence_mismatch() {
         let full = signed_governance_chain(
@@ -7022,7 +6635,6 @@ mod tests {
             .len()
             .checked_sub(GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1)
             .expect("full history contains checkpoint window");
-
         assert!(matches!(
             validate_governance_dag_head_against_chain_v1(&head, &full[tail_start..]),
             Err(
@@ -7032,7 +6644,6 @@ mod tests {
                 }
             )
         ));
-
         let mut missing_generated_at = head.clone();
         missing_generated_at.generated_at = 0;
         assert!(matches!(
@@ -7040,31 +6651,26 @@ mod tests {
             Err(GovernanceDagHeadValidationError::MissingGeneratedAt)
         ));
     }
-
     #[test]
     fn governance_dag_head_rejects_checkpoint_for_short_full_history() {
         let blocks = signed_governance_chain(0, 2);
         let mut head = signed_governance_head(&blocks);
         head.checkpoint_cid = Some(blocks[0].block_cid.clone());
         sign_governance_head(&mut head, &[0xC7; 32]);
-
         assert!(matches!(
             validate_governance_dag_head_against_chain_v1(&head, &blocks),
             Err(GovernanceDagHeadChainValidationError::UnexpectedCheckpoint)
         ));
     }
-
     #[test]
     fn governance_dag_head_rejects_signer_identity_drift() {
         let blocks = signed_governance_chain(0, 2);
         let mut head = signed_governance_head(&blocks);
         sign_governance_head(&mut head, &[0xD9; 32]);
-
         assert!(matches!(
             validate_governance_dag_head_against_chain_v1(&head, &blocks),
             Err(GovernanceDagHeadChainValidationError::PublisherKeyMismatch)
         ));
-
         let mut head = signed_governance_head(&blocks);
         head.publisher_peer_id = b"12D3KooWGovernanceDagPublisherOther".to_vec();
         sign_governance_head(&mut head, &[0xC7; 32]);
@@ -7073,7 +6679,6 @@ mod tests {
             Err(GovernanceDagHeadChainValidationError::PublisherPeerMismatch)
         ));
     }
-
     #[test]
     fn governance_dag_head_rejects_generated_at_before_tip() {
         let blocks = signed_governance_chain(0, 2);
@@ -7083,7 +6688,6 @@ mod tests {
             .checked_sub(1)
             .expect("fixture tip timestamp is positive");
         sign_governance_head(&mut head, &[0xC7; 32]);
-
         assert!(matches!(
             validate_governance_dag_head_against_chain_v1(&head, &blocks),
             Err(
@@ -7094,14 +6698,12 @@ mod tests {
             ) if head_generated_at.checked_add(1) == Some(observed_tip)
         ));
     }
-
     #[test]
     fn governance_dag_head_rejects_all_zero_signature_material() {
         let root = signed_governance_block(None, None, 0, 1_700_000_400);
         let blocks = vec![root];
         let mut head = signed_governance_head(&blocks);
         head.head_signature.signature.fill(0);
-
         let err = head
             .verify_head_signature()
             .expect_err("all-zero governance head signature must be rejected");
@@ -7111,7 +6713,6 @@ mod tests {
                 if reason.contains("all zero")
         ));
     }
-
     #[test]
     fn governance_dag_head_rejects_block_count_mismatch() {
         let root = signed_governance_block(None, None, 0, 1_700_000_400);
@@ -7119,7 +6720,6 @@ mod tests {
         let mut head = signed_governance_head(&blocks);
         head.block_count += 1;
         sign_governance_head(&mut head, &[0xC7; 32]);
-
         assert!(matches!(
             validate_governance_dag_head_against_chain_v1(&head, &blocks),
             Err(GovernanceDagHeadChainValidationError::BlockCountMismatch {
@@ -7128,7 +6728,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn governance_payload_accepts_deal_settlement() {
         let xor_nanos = |value: u128| -> XorQuantity {
@@ -7185,7 +6784,6 @@ mod tests {
         let payload = GovernanceLogPayloadV1::DealSettlement(Box::new(settlement));
         payload.validate(1_700_200_200).expect("valid settlement");
     }
-
     #[test]
     fn governance_payload_accepts_reputation_snapshot() {
         let input = ReputationProviderInputV1 {
@@ -7238,12 +6836,10 @@ mod tests {
                 .to_bytes(),
         });
         let payload = GovernanceLogPayloadV1::SignedReputationSnapshot(envelope);
-
         payload
             .validate(1_800_000_100)
             .expect("valid reputation snapshot");
     }
-
     #[test]
     fn governance_payload_accepts_moderation_ballot_event() {
         let event = SoraFsModerationBallotGovernanceEventV1 {
@@ -7275,12 +6871,10 @@ mod tests {
             challenge: None,
         };
         let payload = GovernanceLogPayloadV1::ModerationBallotEvent(event);
-
         payload
             .validate(1_800_000_030)
             .expect("valid moderation ballot event");
     }
-
     #[test]
     fn moderation_ballot_event_enforces_exact_size_and_text_boundaries() {
         let mut event = SoraFsModerationBallotGovernanceEventV1 {
@@ -7298,7 +6892,6 @@ mod tests {
             challenge: None,
         };
         event.validate().expect("bounded event validates");
-
         let exact = event
             .encoded_len_exact()
             .expect("moderation event exact length");
@@ -7315,7 +6908,6 @@ mod tests {
                 }
             ) if found == exact && maximum == exact - 1
         ));
-
         event.case_id.push('c');
         assert!(matches!(
             event.validate(),
@@ -7328,7 +6920,6 @@ mod tests {
             ) if found == SORAFS_MODERATION_IDENTIFIER_MAX_BYTES_V1 + 1
         ));
     }
-
     fn sample_appeal_finance_report() -> SoraFsAppealFinanceReportV1 {
         SoraFsAppealFinanceReportV1 {
             version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
@@ -7373,16 +6964,13 @@ mod tests {
             no_show_juror_ids: vec!["juror-c".to_string()],
         }
     }
-
     #[test]
     fn governance_payload_accepts_appeal_finance_report() {
         let payload = GovernanceLogPayloadV1::AppealFinanceReport(sample_appeal_finance_report());
-
         payload
             .validate(1_800_000_031)
             .expect("valid appeal finance report");
     }
-
     #[test]
     fn governance_submission_provenance_is_required_origin_checked_and_cid_bound() {
         let payload = GovernanceLogPayloadV1::AppealFinanceReport(sample_appeal_finance_report());
@@ -7392,7 +6980,6 @@ mod tests {
                 expected: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
             })
         ));
-
         let provenance = GovernanceDagSubmissionProvenanceV1 {
             publisher_account_digest: governance_dag_submission_account_digest_v1(
                 b"canonical-norito-publisher-account",
@@ -7402,7 +6989,6 @@ mod tests {
         payload
             .validate_submission_provenance(Some(&provenance))
             .expect("matching authenticated provenance");
-
         let mut wrong_origin = provenance.clone();
         wrong_origin.origin = GovernanceDagSubmissionOriginV1::AppealFinanceWeeklyRollup;
         assert!(matches!(
@@ -7412,7 +6998,6 @@ mod tests {
                 found: GovernanceDagSubmissionOriginV1::AppealFinanceWeeklyRollup,
             })
         ));
-
         let cid = governance_log_node_cid_v1(
             None,
             1_800_000_031,
@@ -7434,7 +7019,6 @@ mod tests {
         )
         .expect("derive changed provenance-bound node CID");
         assert_ne!(cid, other_cid);
-
         let internal_payload = signed_por_proof_payload();
         internal_payload
             .validate_submission_provenance(None)
@@ -7447,7 +7031,6 @@ mod tests {
                 }
             )
         ));
-
         let external_payload = GovernanceLogPayloadV1::ExternalPayload(sample_external_payload());
         external_payload
             .validate_submission_provenance(None)
@@ -7467,7 +7050,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn governance_submission_account_digest_is_fixed_and_identity_bound() {
         let publisher =
@@ -7477,7 +7059,6 @@ mod tests {
         let other_publisher = governance_dag_submission_account_digest_v1(
             b"canonical-norito-other-publisher-account",
         );
-
         assert_eq!(
             publisher.len(),
             GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_BYTES_V1
@@ -7485,7 +7066,6 @@ mod tests {
         assert_eq!(publisher, same_publisher);
         assert_ne!(publisher, other_publisher);
     }
-
     #[test]
     fn appeal_finance_report_enforces_exact_size_text_and_panel_boundaries() {
         let mut report = sample_appeal_finance_report();
@@ -7500,7 +7080,6 @@ mod tests {
         report.juror_payouts[1].juror_id = "e".repeat(SORAFS_APPEAL_FINANCE_ACCOUNT_MAX_BYTES_V1);
         report.no_show_juror_ids[0] = "f".repeat(SORAFS_APPEAL_FINANCE_ACCOUNT_MAX_BYTES_V1);
         report.validate().expect("bounded report validates");
-
         let exact = report
             .encoded_len_exact()
             .expect("appeal finance report exact length");
@@ -7515,7 +7094,6 @@ mod tests {
                 maximum,
             }) if found == exact && maximum == exact - 1
         ));
-
         let mut long_config = report.clone();
         long_config.appeal_finance_config_version.push('v');
         assert!(matches!(
@@ -7526,7 +7104,6 @@ mod tests {
                 maximum: SORAFS_APPEAL_FINANCE_CONFIG_VERSION_MAX_BYTES_V1,
             }) if found == SORAFS_APPEAL_FINANCE_CONFIG_VERSION_MAX_BYTES_V1 + 1
         ));
-
         let mut long_account = report;
         long_account.juror_payouts[0].juror_id.push('d');
         assert!(matches!(
@@ -7537,7 +7114,6 @@ mod tests {
                 maximum: SORAFS_APPEAL_FINANCE_ACCOUNT_MAX_BYTES_V1,
             }) if found == SORAFS_APPEAL_FINANCE_ACCOUNT_MAX_BYTES_V1 + 1
         ));
-
         assert_eq!(
             validate_appeal_finance_panel_bounds(
                 SORAFS_APPEAL_FINANCE_PANEL_ROWS_MAX_V1 as u32,
@@ -7572,7 +7148,6 @@ mod tests {
             )
         ));
     }
-
     fn sample_external_payload() -> GovernanceExternalPayloadV1 {
         let cycle_id = *b"cycle-2026-wk-01";
         let entry = crate::transparency::ModerationLedgerEntryV1 {
@@ -7606,21 +7181,17 @@ mod tests {
         )
         .expect("wrap transparency publication")
     }
-
     #[test]
     fn governance_payload_accepts_external_payload() {
         let payload = GovernanceLogPayloadV1::ExternalPayload(sample_external_payload());
-
         payload
             .validate(1_800_000_031)
             .expect("valid external governance payload");
     }
-
     #[test]
     fn external_payload_rejects_digest_mismatch() {
         let mut payload = sample_external_payload();
         payload.encoded_blake3[0] ^= 0xFF;
-
         let err = payload.validate().expect_err("digest mismatch rejected");
         assert_eq!(
             err,
@@ -7636,12 +7207,10 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn external_payload_rejects_unsorted_metadata() {
         let mut payload = sample_external_payload();
         payload.metadata.swap(0, 1);
-
         let err = payload
             .validate()
             .expect_err("metadata ordering is canonical");
@@ -7650,7 +7219,6 @@ mod tests {
             GovernanceExternalPayloadValidationError::MetadataKeysUnsorted
         );
     }
-
     #[test]
     fn external_payload_rejects_unknown_kind_and_version() {
         let mut payload = sample_external_payload();
@@ -7661,7 +7229,6 @@ mod tests {
                 payload_kind
             }) if payload_kind == "arbitrary_payload"
         ));
-
         let mut payload = sample_external_payload();
         payload.payload_version = MODERATION_LEDGER_PUBLICATION_VERSION_V1 + 1;
         assert!(matches!(
@@ -7674,7 +7241,6 @@ mod tests {
                 && found == MODERATION_LEDGER_PUBLICATION_VERSION_V1 + 1
         ));
     }
-
     #[test]
     fn external_payload_rejects_oversized_and_trailing_payload_bytes() {
         let mut oversized = sample_external_payload();
@@ -7685,7 +7251,6 @@ mod tests {
             oversized.validate(),
             Err(GovernanceExternalPayloadValidationError::EncodedPayloadTooLarge { .. })
         ));
-
         let mut trailing = sample_external_payload();
         trailing.encoded_payload.push(0);
         trailing.encoded_len = trailing.encoded_payload.len() as u64;
@@ -7695,7 +7260,6 @@ mod tests {
             Err(GovernanceExternalPayloadValidationError::TypedPayloadDecode { .. })
         ));
     }
-
     #[test]
     fn external_payload_rejects_noncanonical_compressed_encoding() {
         let mut payload = sample_external_payload();
@@ -7713,7 +7277,6 @@ mod tests {
             Err(GovernanceExternalPayloadValidationError::NonCanonicalEncodedPayload { .. })
         ));
     }
-
     #[test]
     fn external_payload_rejects_invalid_typed_payload() {
         let mut payload = sample_external_payload();
@@ -7729,7 +7292,6 @@ mod tests {
             Err(GovernanceExternalPayloadValidationError::InvalidTypedPayload { .. })
         ));
     }
-
     #[test]
     fn external_payload_rejects_metadata_count_key_value_duplicate_and_mismatch() {
         let mut too_many = sample_external_payload();
@@ -7743,7 +7305,6 @@ mod tests {
             too_many.validate(),
             Err(GovernanceExternalPayloadValidationError::MetadataCountTooLarge { .. })
         ));
-
         let mut long_key = sample_external_payload();
         long_key.metadata.last_mut().expect("metadata").key =
             "z".repeat(SORAFS_GOVERNANCE_EXTERNAL_METADATA_KEY_MAX_BYTES_V1 + 1);
@@ -7751,7 +7312,6 @@ mod tests {
             long_key.validate(),
             Err(GovernanceExternalPayloadValidationError::MetadataKeyTooLong { .. })
         ));
-
         let mut long_value = sample_external_payload();
         long_value.metadata[0].value =
             "v".repeat(SORAFS_GOVERNANCE_EXTERNAL_METADATA_VALUE_MAX_BYTES_V1 + 1);
@@ -7759,7 +7319,6 @@ mod tests {
             long_value.validate(),
             Err(GovernanceExternalPayloadValidationError::MetadataValueTooLong { .. })
         ));
-
         let mut total_too_large = sample_external_payload();
         total_too_large.metadata = (0..SORAFS_GOVERNANCE_EXTERNAL_METADATA_MAX_ENTRIES_V1)
             .map(|index| GovernanceExternalPayloadMetadataV1 {
@@ -7771,14 +7330,12 @@ mod tests {
             total_too_large.validate(),
             Err(GovernanceExternalPayloadValidationError::MetadataBytesTooLarge { .. })
         ));
-
         let mut duplicate = sample_external_payload();
         duplicate.metadata.insert(1, duplicate.metadata[0].clone());
         assert!(matches!(
             duplicate.validate(),
             Err(GovernanceExternalPayloadValidationError::DuplicateMetadataKey { .. })
         ));
-
         let mut mismatch = sample_external_payload();
         mismatch.metadata[0].value = "00".repeat(32);
         assert!(matches!(
@@ -7786,7 +7343,6 @@ mod tests {
             Err(GovernanceExternalPayloadValidationError::MetadataMismatch { .. })
         ));
     }
-
     #[test]
     fn external_repair_slash_rejects_embedded_approval() {
         let proposal = RepairSlashProposalV1 {
@@ -7818,12 +7374,10 @@ mod tests {
             Err(GovernanceExternalPayloadValidationError::RepairSlashApprovalForbidden)
         );
     }
-
     #[test]
     fn appeal_finance_report_rejects_panel_reconciliation_mismatch() {
         let mut report = sample_appeal_finance_report();
         report.no_show_juror_ids.clear();
-
         let err = report.validate().expect_err("panel mismatch rejected");
         assert_eq!(
             err,
@@ -7833,10 +7387,8 @@ mod tests {
             }
         );
     }
-
     // Textual inclusion preserves the original governance test-module paths.
     include!("governance/tests/appeal_finance_settlement.rs");
-
     fn second_appeal_finance_report() -> SoraFsAppealFinanceReportV1 {
         SoraFsAppealFinanceReportV1 {
             version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
@@ -7873,7 +7425,6 @@ mod tests {
             no_show_juror_ids: Vec::new(),
         }
     }
-
     fn max_source_appeal_finance_weekly_rollup() -> SoraFsAppealFinanceWeeklyRollupV1 {
         let zero = XorQuantity::try_from_micro(0).expect("zero XOR quantity");
         let report_count = u64::try_from(SORAFS_APPEAL_FINANCE_WEEKLY_SOURCE_REPORTS_MAX_V1)
@@ -7918,7 +7469,6 @@ mod tests {
                 .collect(),
         }
     }
-
     #[test]
     fn governance_payload_accepts_appeal_finance_weekly_rollup() {
         let first = sample_appeal_finance_report();
@@ -7927,14 +7477,12 @@ mod tests {
             year: 2026,
             week: 26,
         };
-
         let rollup = SoraFsAppealFinanceWeeklyRollupV1::from_reports(
             cycle,
             1_800_000_100_000,
             &[second.clone(), first.clone()],
         )
         .expect("weekly rollup");
-
         assert_eq!(rollup.report_count, 2);
         assert_eq!(rollup.case_count, 2);
         assert_eq!(
@@ -7966,11 +7514,9 @@ mod tests {
             rollup.outcomes[1].outcome,
             SoraFsAppealFinanceOutcomeV1::Overturn
         );
-
         GovernanceLogPayloadV1::AppealFinanceWeeklyRollup(rollup)
             .validate(1_800_000_100)
             .expect("weekly rollup payload validates");
     }
-
     include!("governance/tests/weekly_rollup_and_moderation.rs");
 }

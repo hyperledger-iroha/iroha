@@ -1,5 +1,4 @@
 // Empty-input coverage for deterministic log export.
-
 #[test]
 fn collect_log_text_rejects_empty() {
     let entries: Vec<(usize, String)> = Vec::new();

@@ -1,5 +1,4 @@
 use std::sync::Arc;
-
 use sorafs_car::{
     CarBuildPlan, CarWriteStats, CarWriter, chunker_registry, compute_chunk_plan_digest_sha3,
     compute_por_root,
@@ -14,7 +13,6 @@ use sorafs_orchestrator::{
     AnonymityPolicy, FetchSession, ManifestVerificationContext, ManifestVerificationError,
     PolicyReport, PolicyStatus,
 };
-
 struct FetchFixture {
     payload: Vec<u8>,
     plan: CarBuildPlan,
@@ -24,23 +22,19 @@ struct FetchFixture {
     manifest_digest: blake3::Hash,
     car_stats: CarWriteStats,
 }
-
 impl FetchFixture {
     fn manifest_id_hex(&self) -> String {
         hex::encode(self.manifest_digest.as_bytes())
     }
 }
-
 fn build_fixture() -> FetchFixture {
     let payload_len = 32 * 1024;
     let mut payload = vec![0u8; payload_len];
     for (idx, byte) in payload.iter_mut().enumerate() {
         *byte = idx as u8;
     }
-
     let plan =
         CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("car plan");
-
     let descriptor = chunker_registry::lookup_by_profile(
         ChunkProfile::DEFAULT,
         chunker_registry::DEFAULT_MULTIHASH_CODE,
@@ -50,10 +44,8 @@ fn build_fixture() -> FetchFixture {
         "{}.{}@{}",
         descriptor.namespace, descriptor.name, descriptor.semver
     );
-
     let writer = CarWriter::new(&plan, &payload).expect("writer");
     let car_stats = writer.write_to(std::io::sink()).expect("write car bytes");
-
     let governance = GovernanceProofs {
         council_signatures: vec![CouncilSignature {
             signer: [0x42; 32],
@@ -62,7 +54,6 @@ fn build_fixture() -> FetchFixture {
     };
     let (manifest, manifest_bytes, manifest_digest) =
         build_manifest(&payload, &plan, &chunker_handle, &car_stats, governance);
-
     FetchFixture {
         payload,
         plan,
@@ -73,7 +64,6 @@ fn build_fixture() -> FetchFixture {
         car_stats,
     }
 }
-
 fn build_manifest(
     payload: &[u8],
     plan: &CarBuildPlan,
@@ -105,13 +95,11 @@ fn build_manifest(
     let manifest_digest = manifest.digest().expect("manifest digest");
     (manifest, manifest_bytes, manifest_digest)
 }
-
 fn build_fetch_session(fixture: &FetchFixture) -> FetchSession {
     let provider_label = "provider-alpha";
     let base_provider = FetchProvider::new(provider_label);
     let provider_id: ProviderId = base_provider.id().clone();
     let provider_arc = Arc::new(base_provider);
-
     let mut chunks = Vec::with_capacity(fixture.plan.chunks.len());
     let mut receipts = Vec::with_capacity(fixture.plan.chunks.len());
     for (index, chunk) in fixture.plan.chunks.iter().enumerate() {
@@ -127,20 +115,17 @@ fn build_fetch_session(fixture: &FetchFixture) -> FetchSession {
         });
         chunks.push(bytes);
     }
-
     let provider_report = ProviderReport {
         provider: provider_arc,
         successes: chunks.len(),
         failures: 0,
         disabled: false,
     };
-
     let outcome = FetchOutcome {
         chunks,
         chunk_receipts: receipts,
         provider_reports: vec![provider_report],
     };
-
     let policy_report = PolicyReport {
         policy: AnonymityPolicy::GuardPq,
         effective_policy: AnonymityPolicy::GuardPq,
@@ -151,7 +136,6 @@ fn build_fetch_session(fixture: &FetchFixture) -> FetchSession {
         status: PolicyStatus::Met,
         fallback_reason: None,
     };
-
     FetchSession {
         outcome,
         policy_report,
@@ -161,12 +145,10 @@ fn build_fetch_session(fixture: &FetchFixture) -> FetchSession {
         taikai_cache_queue: None,
     }
 }
-
 #[test]
 fn manifest_verification_produces_expected_snapshot() {
     let fixture = build_fixture();
     let mut session = build_fetch_session(&fixture);
-
     let gateway_manifest = GatewayFetchedManifest {
         manifest_bytes: fixture.manifest_bytes.clone(),
         manifest: fixture.manifest.clone(),
@@ -177,12 +159,10 @@ fn manifest_verification_produces_expected_snapshot() {
         chunk_profile_handle: fixture.chunker_handle.clone(),
         cache_version: None,
     };
-
     let context = ManifestVerificationContext::from(&gateway_manifest);
     let verification = session
         .verify_against_manifest(&fixture.plan, context)
         .expect("verification succeeds");
-
     assert_ne!(
         fixture.plan.payload_digest,
         fixture.car_stats.car_payload_digest
@@ -221,12 +201,10 @@ fn manifest_verification_produces_expected_snapshot() {
         "expected governance proofs to remain intact"
     );
 }
-
 #[test]
 fn manifest_without_governance_rejects_verification() {
     let fixture = build_fixture();
     let mut session = build_fetch_session(&fixture);
-
     let (manifest_without_governance, manifest_bytes, manifest_digest) = build_manifest(
         &fixture.payload,
         &fixture.plan,
@@ -234,7 +212,6 @@ fn manifest_without_governance_rejects_verification() {
         &fixture.car_stats,
         GovernanceProofs::default(),
     );
-
     let gateway_manifest = GatewayFetchedManifest {
         manifest_bytes,
         manifest: manifest_without_governance,
@@ -245,7 +222,6 @@ fn manifest_without_governance_rejects_verification() {
         chunk_profile_handle: fixture.chunker_handle.clone(),
         cache_version: None,
     };
-
     let context = ManifestVerificationContext::from(&gateway_manifest);
     let err = session
         .verify_against_manifest(&fixture.plan, context)

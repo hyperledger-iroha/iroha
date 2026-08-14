@@ -1,5 +1,4 @@
 // Publication backend fault-injection implementations and shared evidence fixtures.
-
 struct EarlyBackend {
     broker: KeyPair,
     fail_validation_once: bool,
@@ -8,7 +7,6 @@ struct EarlyBackend {
     receipt_window: Option<(u64, u64)>,
     prepare_calls: usize,
 }
-
 #[allow(
     clippy::struct_excessive_bools,
     reason = "independent fault-injection switches make each publication phase explicit in tests"
@@ -23,7 +21,6 @@ struct CompleteBackend {
     readback_providers: Vec<ProviderId>,
     submissions: usize,
 }
-
 struct ArchiveRecoveryBackend {
     broker: KeyPair,
     now_ms: u64,
@@ -36,7 +33,6 @@ struct ArchiveRecoveryBackend {
     return_conflicting_archive: bool,
     registration_mode: ArchiveRecoveryMode,
 }
-
 #[allow(
     clippy::struct_excessive_bools,
     reason = "independent crash and rejection switches model distinct recovery cuts in tests"
@@ -55,14 +51,12 @@ struct LocationRecoveryBackend {
     drop_release_response_once: bool,
     release_applied: bool,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ArchiveRecoveryMode {
     Commit,
     Pending,
     ExpiredAbsent,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LocationPollV1 {
     Healthy,
@@ -71,13 +65,11 @@ enum LocationPollV1 {
     Retired,
     RetiredRevisionOffset(u64),
 }
-
 impl EarlyBackend {
     fn unsupported() -> PublicationBackendError {
         PublicationBackendError::permanent("UNEXPECTED_TEST_PHASE")
     }
 }
-
 fn validate_seed_stage_fixture(
     expected: &MusubiSeedIngressReceiptBindingV1,
     commitment: &MusubiArchiveCommitmentV1,
@@ -94,12 +86,10 @@ fn validate_seed_stage_fixture(
     plan.validate(commitment)
         .map_err(|_| PublicationBackendError::permanent("TEST_SEED_PLAN_INVALID"))
 }
-
 impl PublicationBackend for EarlyBackend {
     fn current_time_ms(&mut self) -> Result<u64, PublicationBackendError> {
         Ok(self.now_ms)
     }
-
     fn validate_clean_package(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -120,7 +110,6 @@ impl PublicationBackend for EarlyBackend {
         }
         Ok(validation_evidence(request))
     }
-
     fn stage_authenticated_seed_ingress(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -141,7 +130,6 @@ impl PublicationBackend for EarlyBackend {
         }
         Ok(receipt)
     }
-
     fn prepare_archive_registration_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -151,7 +139,6 @@ impl PublicationBackend for EarlyBackend {
         self.prepare_calls += 1;
         Ok(registration_intent(operation_id, request, receipt.clone()))
     }
-
     fn submit_or_recover_archive_registration(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -160,7 +147,6 @@ impl PublicationBackend for EarlyBackend {
     ) -> Result<PublicationArchiveRegistrationAdvanceV1, PublicationBackendError> {
         Err(Self::unsupported())
     }
-
     fn prepare_archive_location_intent(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -171,7 +157,6 @@ impl PublicationBackend for EarlyBackend {
     ) -> Result<PublicationArchiveLocationIntentV1, PublicationBackendError> {
         Err(Self::unsupported())
     }
-
     fn submit_or_recover_archive_location(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -182,7 +167,6 @@ impl PublicationBackend for EarlyBackend {
     ) -> Result<PublicationArchiveLocationAdvanceV1, PublicationBackendError> {
         Err(Self::unsupported())
     }
-
     fn finalized_replication(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -191,7 +175,6 @@ impl PublicationBackend for EarlyBackend {
     ) -> Result<PublicationReplicationAdvanceV1, PublicationBackendError> {
         Err(Self::unsupported())
     }
-
     fn readback_provider(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -201,7 +184,6 @@ impl PublicationBackend for EarlyBackend {
     ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError> {
         Err(Self::unsupported())
     }
-
     fn prepare_release_submission_intent(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -210,7 +192,6 @@ impl PublicationBackend for EarlyBackend {
     ) -> Result<PublicationReleaseSubmissionIntentV1, PublicationBackendError> {
         Err(Self::unsupported())
     }
-
     fn submit_or_recover_release_submission(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -220,7 +201,6 @@ impl PublicationBackend for EarlyBackend {
     ) -> Result<PublicationReleaseSubmissionAdvanceV1, PublicationBackendError> {
         Err(Self::unsupported())
     }
-
     fn finalized_release_and_index(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -230,12 +210,10 @@ impl PublicationBackend for EarlyBackend {
         Err(Self::unsupported())
     }
 }
-
 impl PublicationBackend for CompleteBackend {
     fn current_time_ms(&mut self) -> Result<u64, PublicationBackendError> {
         Ok(1_500)
     }
-
     fn validate_clean_package(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -244,7 +222,6 @@ impl PublicationBackend for CompleteBackend {
     ) -> Result<PublicationValidationEvidenceV1, PublicationBackendError> {
         Ok(validation_evidence(request))
     }
-
     fn stage_authenticated_seed_ingress(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -256,7 +233,6 @@ impl PublicationBackend for CompleteBackend {
         validate_seed_stage_fixture(expected, commitment, plan)?;
         Ok(signed_receipt(expected, &self.broker))
     }
-
     fn prepare_archive_registration_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -265,7 +241,6 @@ impl PublicationBackend for CompleteBackend {
     ) -> Result<PublicationArchiveRegistrationIntentV1, PublicationBackendError> {
         Ok(registration_intent(operation_id, request, receipt.clone()))
     }
-
     fn submit_or_recover_archive_registration(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -276,7 +251,6 @@ impl PublicationBackend for CompleteBackend {
             registered_archive(request, &self.broker, intent),
         ))
     }
-
     fn prepare_archive_location_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -290,7 +264,6 @@ impl PublicationBackend for CompleteBackend {
         result.generation = generation;
         Ok(result)
     }
-
     fn submit_or_recover_archive_location(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -303,7 +276,6 @@ impl PublicationBackend for CompleteBackend {
         result.intent = intent.clone();
         Ok(PublicationArchiveLocationAdvanceV1::Registered(result))
     }
-
     fn finalized_replication(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -318,7 +290,6 @@ impl PublicationBackend for CompleteBackend {
             replication_checkpoint(request, registration, 3),
         ))
     }
-
     fn readback_provider(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -347,7 +318,6 @@ impl PublicationBackend for CompleteBackend {
         }
         Ok(evidence)
     }
-
     fn prepare_release_submission_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -363,7 +333,6 @@ impl PublicationBackend for CompleteBackend {
         )
         .map_err(|_| PublicationBackendError::permanent("TEST_RELEASE_INTENT_INVALID"))
     }
-
     fn submit_or_recover_release_submission(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -384,7 +353,6 @@ impl PublicationBackend for CompleteBackend {
             ),
         ))
     }
-
     fn finalized_release_and_index(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -398,18 +366,15 @@ impl PublicationBackend for CompleteBackend {
         Ok(Some(final_evidence(request)))
     }
 }
-
 impl ArchiveRecoveryBackend {
     fn unsupported() -> PublicationBackendError {
         PublicationBackendError::permanent("UNEXPECTED_TEST_PHASE")
     }
 }
-
 impl PublicationBackend for ArchiveRecoveryBackend {
     fn current_time_ms(&mut self) -> Result<u64, PublicationBackendError> {
         Ok(self.now_ms)
     }
-
     fn validate_clean_package(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -418,7 +383,6 @@ impl PublicationBackend for ArchiveRecoveryBackend {
     ) -> Result<PublicationValidationEvidenceV1, PublicationBackendError> {
         Ok(validation_evidence(request))
     }
-
     fn stage_authenticated_seed_ingress(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -432,7 +396,6 @@ impl PublicationBackend for ArchiveRecoveryBackend {
         self.staged_receipts.push(receipt.clone());
         Ok(receipt)
     }
-
     fn prepare_archive_registration_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -442,7 +405,6 @@ impl PublicationBackend for ArchiveRecoveryBackend {
         self.prepare_calls += 1;
         Ok(registration_intent(operation_id, request, receipt.clone()))
     }
-
     fn submit_or_recover_archive_registration(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -484,7 +446,6 @@ impl PublicationBackend for ArchiveRecoveryBackend {
             recovered,
         ))
     }
-
     fn prepare_archive_location_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -496,7 +457,6 @@ impl PublicationBackend for ArchiveRecoveryBackend {
         self.pin_calls += 1;
         Ok(location_registration_generation(operation_id, request, registered, generation).intent)
     }
-
     fn submit_or_recover_archive_location(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -509,7 +469,6 @@ impl PublicationBackend for ArchiveRecoveryBackend {
             finalized_location_registration(request, intent),
         ))
     }
-
     fn finalized_replication(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -518,7 +477,6 @@ impl PublicationBackend for ArchiveRecoveryBackend {
     ) -> Result<PublicationReplicationAdvanceV1, PublicationBackendError> {
         Err(Self::unsupported())
     }
-
     fn readback_provider(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -528,7 +486,6 @@ impl PublicationBackend for ArchiveRecoveryBackend {
     ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError> {
         Err(Self::unsupported())
     }
-
     fn prepare_release_submission_intent(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -537,7 +494,6 @@ impl PublicationBackend for ArchiveRecoveryBackend {
     ) -> Result<PublicationReleaseSubmissionIntentV1, PublicationBackendError> {
         Err(Self::unsupported())
     }
-
     fn submit_or_recover_release_submission(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -547,7 +503,6 @@ impl PublicationBackend for ArchiveRecoveryBackend {
     ) -> Result<PublicationReleaseSubmissionAdvanceV1, PublicationBackendError> {
         Err(Self::unsupported())
     }
-
     fn finalized_release_and_index(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -557,7 +512,6 @@ impl PublicationBackend for ArchiveRecoveryBackend {
         Err(Self::unsupported())
     }
 }
-
 impl LocationRecoveryBackend {
     fn new(broker: KeyPair, replication_script: impl IntoIterator<Item = LocationPollV1>) -> Self {
         Self {
@@ -576,12 +530,10 @@ impl LocationRecoveryBackend {
         }
     }
 }
-
 impl PublicationBackend for LocationRecoveryBackend {
     fn current_time_ms(&mut self) -> Result<u64, PublicationBackendError> {
         Ok(1_500)
     }
-
     fn validate_clean_package(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -590,7 +542,6 @@ impl PublicationBackend for LocationRecoveryBackend {
     ) -> Result<PublicationValidationEvidenceV1, PublicationBackendError> {
         Ok(validation_evidence(request))
     }
-
     fn stage_authenticated_seed_ingress(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -602,7 +553,6 @@ impl PublicationBackend for LocationRecoveryBackend {
         validate_seed_stage_fixture(expected, commitment, plan)?;
         Ok(signed_receipt(expected, &self.broker))
     }
-
     fn prepare_archive_registration_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -611,7 +561,6 @@ impl PublicationBackend for LocationRecoveryBackend {
     ) -> Result<PublicationArchiveRegistrationIntentV1, PublicationBackendError> {
         Ok(registration_intent(operation_id, request, receipt.clone()))
     }
-
     fn submit_or_recover_archive_registration(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -622,7 +571,6 @@ impl PublicationBackend for LocationRecoveryBackend {
             registered_archive(request, &self.broker, intent),
         ))
     }
-
     fn prepare_archive_location_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -635,7 +583,6 @@ impl PublicationBackend for LocationRecoveryBackend {
             .push((generation, prior_location_ids.to_vec()));
         Ok(location_registration_generation(operation_id, request, registered, generation).intent)
     }
-
     fn submit_or_recover_archive_location(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -657,7 +604,6 @@ impl PublicationBackend for LocationRecoveryBackend {
             finalized_location_registration(request, intent),
         ))
     }
-
     fn finalized_replication(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -692,7 +638,6 @@ impl PublicationBackend for LocationRecoveryBackend {
             }
         }
     }
-
     fn readback_provider(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -709,7 +654,6 @@ impl PublicationBackend for LocationRecoveryBackend {
             verification_lock_digest: request.publication.manifest.verification_lock_digest,
         })
     }
-
     fn prepare_release_submission_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -727,7 +671,6 @@ impl PublicationBackend for LocationRecoveryBackend {
         )
         .map_err(|_| PublicationBackendError::permanent("TEST_RELEASE_INTENT_INVALID"))
     }
-
     fn submit_or_recover_release_submission(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -804,7 +747,6 @@ impl PublicationBackend for LocationRecoveryBackend {
             ),
         ))
     }
-
     fn finalized_release_and_index(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -814,13 +756,11 @@ impl PublicationBackend for LocationRecoveryBackend {
         Ok(Some(final_evidence(request)))
     }
 }
-
 fn account(seed: u8) -> (AccountId, KeyPair) {
     let keypair =
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("fixture keypair");
     (AccountId::new(keypair.public_key().clone()), keypair)
 }
-
 fn maximum_legal_musubi_account() -> AccountId {
     let members = (0_u16..256)
         .map(|index| {
@@ -831,7 +771,6 @@ fn maximum_legal_musubi_account() -> AccountId {
             MultisigMember::new(keypair.public_key().clone(), 1).expect("near-limit account member")
         })
         .collect::<Vec<_>>();
-
     for count in (1..=members.len()).rev() {
         let policy =
             MultisigPolicy::new(1, members[..count].to_vec()).expect("near-limit account policy");
@@ -857,7 +796,6 @@ fn maximum_legal_musubi_account() -> AccountId {
     }
     panic!("at least one multisig member must fit the Musubi account bound");
 }
-
 fn snapshot() -> MusubiRegistrySnapshotV1 {
     MusubiRegistrySnapshotV1 {
         finalized_height: 42,
@@ -865,18 +803,14 @@ fn snapshot() -> MusubiRegistrySnapshotV1 {
         index_revision: 3,
     }
 }
-
 const PUBLICATION_FIXTURE_PLAN_PAYLOAD: &[u8] = b"canonical publication source payload";
 const PUBLICATION_FIXTURE_CAR_BODY: &[u8] = b"canonical publication CAR body";
-
 fn publication_fixture_car_plan() -> CarBuildPlan {
     publication_fixture_car_plan_with_source(PUBLICATION_FIXTURE_PLAN_PAYLOAD)
 }
-
 fn publication_fixture_car_plan_with_source(source: &[u8]) -> CarBuildPlan {
     publication_fixture_car_plan_and_payload_with_source(source).0
 }
-
 fn publication_fixture_car_plan_and_payload_with_source(source: &[u8]) -> (CarBuildPlan, Vec<u8>) {
     let entries = [
         sorafs_car::FileEntry {
@@ -901,7 +835,6 @@ fn publication_fixture_car_plan_and_payload_with_source(source: &[u8]) -> (CarBu
     ];
     CarBuildPlan::from_files(entries.into_iter().collect()).expect("fixture CAR plan")
 }
-
 fn publication_fixture_canonical_car() -> (CarBuildPlan, Vec<u8>, MusubiArchiveCommitmentV1) {
     let (plan, payload) =
         publication_fixture_car_plan_and_payload_with_source(PUBLICATION_FIXTURE_PLAN_PAYLOAD);
@@ -948,11 +881,9 @@ fn publication_fixture_canonical_car() -> (CarBuildPlan, Vec<u8>, MusubiArchiveC
     commitment.validate().expect("fixture archive commitment");
     (plan, car, commitment)
 }
-
 fn publication_fixture_commitment_for_car(car: &[u8]) -> MusubiArchiveCommitmentV1 {
     publication_fixture_commitment_for_plan(car, &publication_fixture_car_plan())
 }
-
 fn publication_fixture_commitment_for_plan(
     car: &[u8],
     plan: &CarBuildPlan,
@@ -988,11 +919,9 @@ fn publication_fixture_commitment_for_plan(
         chunk_count: u32::try_from(plan.chunks.len()).expect("fixture chunk count fits u32"),
     }
 }
-
 fn archive_commitment() -> MusubiArchiveCommitmentV1 {
     publication_fixture_commitment_for_car(PUBLICATION_FIXTURE_CAR_BODY)
 }
-
 fn request() -> (PublicationRequestV1, KeyPair) {
     let commitment = archive_commitment();
     let package = MusubiPackageIdV1::new(
@@ -1047,7 +976,6 @@ fn request() -> (PublicationRequestV1, KeyPair) {
         broker_keypair,
     )
 }
-
 fn request_with_archive_commitment(
     commitment: MusubiArchiveCommitmentV1,
 ) -> (PublicationRequestV1, KeyPair) {
@@ -1057,7 +985,6 @@ fn request_with_archive_commitment(
     request.validate().expect("canonical CAR request");
     (request, broker)
 }
-
 fn signed_release_transaction(request: &PublicationRequestV1, nonce: u32) -> SignedTransaction {
     let (publisher, publisher_keypair) = account(20);
     assert_eq!(publisher, request.publisher);
@@ -1071,7 +998,6 @@ fn signed_release_transaction(request: &PublicationRequestV1, nonce: u32) -> Sig
     builder.set_nonce(NonZeroU32::new(nonce).expect("release fixture nonce is non-zero"));
     builder.sign(publisher_keypair.private_key())
 }
-
 fn maximum_multisig_release_transaction(
     mut request: PublicationRequestV1,
 ) -> (PublicationRequestV1, SignedTransaction) {
@@ -1107,7 +1033,6 @@ fn maximum_multisig_release_transaction(
     let signed = builder.sign_multisig(signers.iter().map(KeyPair::private_key));
     (request, signed)
 }
-
 fn release_preparation_fixture(
     request: &PublicationRequestV1,
     broker: &KeyPair,
@@ -1117,7 +1042,6 @@ fn release_preparation_fixture(
 ) {
     release_preparation_fixture_with_offset(request, broker, 0)
 }
-
 fn release_preparation_fixture_with_offset(
     request: &PublicationRequestV1,
     broker: &KeyPair,
@@ -1131,7 +1055,6 @@ fn release_preparation_fixture_with_offset(
     let floor = release_preparation_for_registration(request, &registration, replication);
     (registration, floor)
 }
-
 fn release_preparation_for_registration(
     request: &PublicationRequestV1,
     registration: &PublicationArchiveRegistrationV1,
@@ -1162,7 +1085,6 @@ fn release_preparation_for_registration(
     )
     .expect("release preparation floor")
 }
-
 fn release_ready_journal(request: &PublicationRequestV1, broker: &KeyPair) -> PublicationJournalV1 {
     let operation_id = request.operation_id();
     let (location_registration, floor) = release_preparation_fixture(request, broker);
@@ -1204,7 +1126,6 @@ fn release_ready_journal(request: &PublicationRequestV1, broker: &KeyPair) -> Pu
     journal.validate().expect("release-ready journal");
     journal
 }
-
 fn release_absence_evidence(
     request: &PublicationRequestV1,
     finalized_height: u64,
@@ -1264,7 +1185,6 @@ fn release_absence_evidence(
         },
     }
 }
-
 fn validation_evidence(request: &PublicationRequestV1) -> PublicationValidationEvidenceV1 {
     PublicationValidationEvidenceV1 {
         archive_id: request.archive_commitment.archive_id(),
@@ -1279,14 +1199,12 @@ fn validation_evidence(request: &PublicationRequestV1) -> PublicationValidationE
         resolution_snapshot: request.publication.resolution.snapshot,
     }
 }
-
 fn signed_receipt(
     binding: &MusubiSeedIngressReceiptBindingV1,
     broker: &KeyPair,
 ) -> MusubiSeedIngressReceiptV1 {
     signed_receipt_at(binding, broker, 1_000, 2_000)
 }
-
 fn signed_receipt_at(
     binding: &MusubiSeedIngressReceiptBindingV1,
     broker: &KeyPair,
@@ -1308,7 +1226,6 @@ fn signed_receipt_at(
         payload,
     }
 }
-
 fn archive_absence_evidence(
     request: &PublicationRequestV1,
     finalized_height: u64,
@@ -1331,7 +1248,6 @@ fn archive_absence_evidence(
         },
     }
 }
-
 fn registration_intent(
     operation_id: PublicationOperationIdV1,
     request: &PublicationRequestV1,
@@ -1351,7 +1267,6 @@ fn registration_intent(
     let signed_transaction = builder.sign(publisher_keypair.private_key());
     PublicationArchiveRegistrationIntentV1::new(operation_id, request, receipt, signed_transaction)
 }
-
 fn registered_archive(
     request: &PublicationRequestV1,
     broker: &KeyPair,
@@ -1370,7 +1285,6 @@ fn registered_archive(
         archive,
     }
 }
-
 fn archive_record(request: &PublicationRequestV1, broker: &KeyPair) -> MusubiArchiveRecordV1 {
     MusubiArchiveRecordV1 {
         archive_id: request.archive_commitment.archive_id(),
@@ -1382,7 +1296,6 @@ fn archive_record(request: &PublicationRequestV1, broker: &KeyPair) -> MusubiArc
         location_ids: Vec::new(),
     }
 }
-
 fn registration(
     request: &PublicationRequestV1,
     broker: &KeyPair,
@@ -1468,7 +1381,6 @@ fn registration(
         },
     }
 }
-
 fn location_registration_generation(
     operation_id: PublicationOperationIdV1,
     request: &PublicationRequestV1,
@@ -1535,7 +1447,6 @@ fn location_registration_generation(
     );
     finalized_location_registration(request, &intent)
 }
-
 fn finalized_location_registration(
     request: &PublicationRequestV1,
     intent: &PublicationArchiveLocationIntentV1,
@@ -1581,13 +1492,11 @@ fn finalized_location_registration(
         },
     }
 }
-
 fn retired_location_terminal(
     registration: &PublicationArchiveRegistrationV1,
 ) -> PublicationArchiveLocationTerminalV1 {
     retired_location_terminal_with_revision_offset(registration, 0)
 }
-
 fn retired_location_terminal_with_revision_offset(
     registration: &PublicationArchiveRegistrationV1,
     offset: u64,
@@ -1608,7 +1517,6 @@ fn retired_location_terminal_with_revision_offset(
         finalized_page,
     }
 }
-
 fn provider_attestation(
     request: &PublicationRequestV1,
     replication_order: ReplicationOrderId,
@@ -1655,7 +1563,6 @@ fn provider_attestation(
         payload,
     }
 }
-
 fn provider_attestation_set_digest(
     archive_id: ArchiveId,
     replication_order: ReplicationOrderId,
@@ -1668,7 +1575,6 @@ fn provider_attestation_set_digest(
     musubi_provider_bundle_attestation_set_digest_v1(archive_id, replication_order, &references)
         .expect("canonical provider attestation set")
 }
-
 fn location(
     request: &PublicationRequestV1,
     registration: &PublicationArchiveRegistrationV1,
@@ -1704,7 +1610,6 @@ fn location(
         state: MusubiArchiveLocationStateV1::Healthy,
     }
 }
-
 fn replication_checkpoint(
     request: &PublicationRequestV1,
     registration: &PublicationArchiveRegistrationV1,
@@ -1718,7 +1623,6 @@ fn replication_checkpoint(
     finalized_page.items[index] = location(request, registration, provider_count);
     PublicationReplicationCheckpointV1 { finalized_page }
 }
-
 fn replication_checkpoint_with_revision_offset(
     request: &PublicationRequestV1,
     registration: &PublicationArchiveRegistrationV1,
@@ -1743,7 +1647,6 @@ fn replication_checkpoint_with_revision_offset(
     checkpoint.finalized_page.snapshot.index_revision += offset;
     checkpoint
 }
-
 fn replication_checkpoint_with_journal_max_shape(
     request: &PublicationRequestV1,
     registration: &PublicationArchiveRegistrationV1,
@@ -1766,7 +1669,6 @@ fn replication_checkpoint_with_journal_max_shape(
         + offset;
     target.finalized_height = registration.finalized_page.snapshot.finalized_height + 1 + offset;
     let target = target.clone();
-
     checkpoint.finalized_page.archive.location_revision = target.revision + 3;
     checkpoint.finalized_page.snapshot = MusubiRegistrySnapshotV1 {
         finalized_height: target.finalized_height + 3,
@@ -1789,7 +1691,6 @@ fn replication_checkpoint_with_journal_max_shape(
     }
     checkpoint
 }
-
 fn replication_checkpoint_with_directory_advance(
     request: &PublicationRequestV1,
     registration: &PublicationArchiveRegistrationV1,
@@ -1798,7 +1699,6 @@ fn replication_checkpoint_with_directory_advance(
     checkpoint.finalized_page.archive.location_revision += 1;
     checkpoint.finalized_page.snapshot.finalized_height += 1;
     checkpoint.finalized_page.snapshot.finalized_block_hash = [0x91; 32];
-
     let mut unrelated = checkpoint
         .location(registration)
         .expect("registered fixture location")
@@ -1814,7 +1714,6 @@ fn replication_checkpoint_with_directory_advance(
     checkpoint.finalized_page.items.push(unrelated);
     checkpoint
 }
-
 fn final_evidence(request: &PublicationRequestV1) -> PublicationFinalEvidenceV1 {
     let snapshot = MusubiRegistrySnapshotV1 {
         finalized_height: 100,

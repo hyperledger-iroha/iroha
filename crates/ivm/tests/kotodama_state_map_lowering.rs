@@ -1,7 +1,5 @@
 //! Verify Kotodama lowering of `StateMap<int, int>` into durable host state.
-
 use std::collections::HashMap;
-
 use iroha_crypto::PublicKey;
 use ivm::{
     CoreHost, IVM,
@@ -9,7 +7,6 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
 mod common;
-
 fn encoded_state_path(name: &str, key: i64) -> String {
     let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(
         i128::from(key),
@@ -17,12 +14,10 @@ fn encoded_state_path(name: &str, key: i64) -> String {
     .expect("encode canonical pointer-backed StateMap key");
     format!("{name}/{}", hex::encode(key))
 }
-
 fn account(_domain: &str, public_key: &str) -> AccountId {
     let public_key: PublicKey = public_key.parse().expect("public key");
     AccountId::new(public_key)
 }
-
 #[test]
 fn kotodama_state_map_set_writes_corehost_state() {
     let src = r#"
@@ -42,7 +37,6 @@ fn kotodama_state_map_set_writes_corehost_state() {
     vm.load_program(&code).expect("load");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run kotodama");
-
     // Inspect the host-owned state directly. Loading a CNTR-less helper program
     // for a contract-bound state syscall would correctly fail admission.
     let stored = {
@@ -53,7 +47,6 @@ fn kotodama_state_map_set_writes_corehost_state() {
     };
     assert_eq!(common::decode_int_state_value(&stored), 7);
 }
-
 #[test]
 fn kotodama_nested_struct_map_roundtrip() {
     let src = r#"
@@ -77,7 +70,6 @@ fn kotodama_nested_struct_map_roundtrip() {
     vm.run().expect("execute nested map program");
     assert_eq!(common::decode_i64_register(&vm, 10), 33);
 }
-
 #[test]
 fn kotodama_foreach_map_lowering_uses_compact_loop() {
     let src = r#"
@@ -90,7 +82,6 @@ fn kotodama_foreach_map_lowering_uses_compact_loop() {
             }
         }
     "#;
-
     let program = parser::parse(src).expect("parse loop demo");
     let typed = semantic::analyze(&program).expect("semantic analysis");
     let ir_prog = ir::lower(&typed).expect("lower");
@@ -99,7 +90,6 @@ fn kotodama_foreach_map_lowering_uses_compact_loop() {
         .iter()
         .find(|f| f.name == "main")
         .expect("lowered main");
-
     let mut state_gets = 0usize;
     let mut map_load_pairs = 0usize;
     for bb in &main_fn.blocks {
@@ -111,7 +101,6 @@ fn kotodama_foreach_map_lowering_uses_compact_loop() {
             }
         }
     }
-
     assert_eq!(
         map_load_pairs, 0,
         "state map lowering should avoid MapLoadPair unrolling"
@@ -121,7 +110,6 @@ fn kotodama_foreach_map_lowering_uses_compact_loop() {
         "state map iteration should fetch from durable state"
     );
 }
-
 #[test]
 fn kotodama_foreach_reads_durable_state_map_entries() {
     let src = r#"
@@ -135,7 +123,6 @@ fn kotodama_foreach_reads_durable_state_map_entries() {
             }
         }
     "#;
-
     let code = KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile durable loop");

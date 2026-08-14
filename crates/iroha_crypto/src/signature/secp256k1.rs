@@ -1,23 +1,18 @@
-use std::{format, vec::Vec};
-
 use self::ecdsa_secp256k1::EcdsaSecp256k1Impl;
 use crate::{Error, KeyGenOption, ParseError};
-
+use std::{format, vec::Vec};
 /// ECDSA over secp256k1 with SHA-256 hashing (used for interoperability).
 #[derive(Clone, Copy)]
 pub struct EcdsaSecp256k1Sha256;
-
 /// Compressed/uncompressed secp256k1 public key.
 pub type PublicKey = k256::PublicKey;
 /// SEC1-encoded secp256k1 secret key.
 pub type PrivateKey = k256::SecretKey;
-
 impl EcdsaSecp256k1Sha256 {
     /// Generate a secp256k1 keypair using the provided RNG option.
     pub fn keypair(option: KeyGenOption<PrivateKey>) -> (PublicKey, PrivateKey) {
         EcdsaSecp256k1Impl::keypair(option)
     }
-
     /// Fallibly generate a secp256k1 keypair using the provided RNG option.
     ///
     /// # Errors
@@ -27,12 +22,10 @@ impl EcdsaSecp256k1Sha256 {
     pub fn try_keypair(option: KeyGenOption<PrivateKey>) -> Result<(PublicKey, PrivateKey), Error> {
         EcdsaSecp256k1Impl::try_keypair(option)
     }
-
     /// Sign a message using the provided secp256k1 private key.
     pub fn sign(message: &[u8], sk: &PrivateKey) -> Vec<u8> {
         EcdsaSecp256k1Impl::sign(message, sk)
     }
-
     /// Fallibly sign a message using the provided secp256k1 private key.
     ///
     /// # Errors
@@ -41,7 +34,6 @@ impl EcdsaSecp256k1Sha256 {
     pub fn try_sign(message: &[u8], sk: &PrivateKey) -> Result<Vec<u8>, Error> {
         EcdsaSecp256k1Impl::try_sign(message, sk)
     }
-
     /// Sign a 32-byte prehash using a recoverable secp256k1 signature.
     ///
     /// Returns a 65-byte `r || s || v` payload where `v` is `27` or `28`, matching
@@ -57,7 +49,6 @@ impl EcdsaSecp256k1Sha256 {
     ) -> Result<[u8; 65], Error> {
         EcdsaSecp256k1Impl::sign_prehash_recoverable(prehash, sk)
     }
-
     /// Recover a secp256k1 public key from a 32-byte prehash and recoverable signature.
     ///
     /// The signature must be encoded as `r || s || v` where `v` is `27` or `28`.
@@ -73,12 +64,10 @@ impl EcdsaSecp256k1Sha256 {
     ) -> Result<PublicKey, Error> {
         EcdsaSecp256k1Impl::recover_public_key_from_prehash(prehash, signature)
     }
-
     /// Derive the 20-byte EVM address for a secp256k1 public key.
     pub fn evm_address(pk: &PublicKey) -> [u8; 20] {
         EcdsaSecp256k1Impl::evm_address(pk)
     }
-
     /// Verify a signature using the provided public key.
     ///
     /// # Errors
@@ -88,7 +77,6 @@ impl EcdsaSecp256k1Sha256 {
     pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey) -> Result<(), Error> {
         EcdsaSecp256k1Impl::verify(message, signature, pk)
     }
-
     /// Parse a SEC1-encoded public key.
     ///
     /// # Errors
@@ -99,6 +87,11 @@ impl EcdsaSecp256k1Sha256 {
         EcdsaSecp256k1Impl::parse_public_key(payload)
     }
 
+    /// Validate a SEC1 public key for a decode path without retaining an
+    /// encoded copy or consulting process-local state.
+    pub(crate) fn validate_public_key_for_decode(payload: &[u8]) -> Result<(), ParseError> {
+        EcdsaSecp256k1Impl::parse_public_key(payload).map(drop)
+    }
     /// Parse a SEC1-encoded private key.
     ///
     /// # Errors
@@ -107,7 +100,6 @@ impl EcdsaSecp256k1Sha256 {
     pub fn parse_private_key(payload: &[u8]) -> Result<PrivateKey, ParseError> {
         EcdsaSecp256k1Impl::parse_private_key(payload)
     }
-
     /// Deterministic batch verification helper.
     ///
     /// Verifies each (message, signature, `public_key`) triple independently in order.
@@ -142,11 +134,9 @@ impl EcdsaSecp256k1Sha256 {
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn verify_batch_deterministic_two_ok() {
         #[cfg(feature = "rand")]
@@ -169,7 +159,6 @@ mod tests {
             let sk = EcdsaSecp256k1Sha256::parse_private_key(&bytes).unwrap();
             (sk.public_key(), sk)
         };
-
         let m1 = b"m1".as_ref();
         let m2 = b"m2".as_ref();
         let s1 = EcdsaSecp256k1Sha256::sign(m1, &sk1);
@@ -182,7 +171,6 @@ mod tests {
         EcdsaSecp256k1Sha256::verify_batch_deterministic(&msgs, &sigs, &pks_arr, [0u8; 32])
             .expect("ok");
     }
-
     #[test]
     fn verify_batch_deterministic_rejects_empty() {
         let empty: Vec<&[u8]> = Vec::new();
@@ -191,7 +179,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[cfg(feature = "rand")]
     #[test]
     fn try_keypair_random_signs_and_verifies() {
@@ -199,14 +186,12 @@ mod tests {
             EcdsaSecp256k1Sha256::try_keypair(KeyGenOption::Random).expect("checked keypair");
         let message = b"secp256k1 checked random keypair";
         let signature = EcdsaSecp256k1Sha256::sign(message, &sk);
-
         EcdsaSecp256k1Sha256::verify(message, &signature, &pk).expect("signature verifies");
     }
 }
-
 mod ecdsa_secp256k1 {
-    use std::{format, string::ToString as _, vec::Vec};
-
+    use super::{PrivateKey, PublicKey};
+    use crate::{Error, KeyGenOption, ParseError, rng::rng_from_seed};
     use k256::{
         ecdsa::{
             RecoveryId, Signature, SigningKey, VerifyingKey,
@@ -220,18 +205,13 @@ mod ecdsa_secp256k1 {
     use rand_core::TryCryptoRng;
     use sha2::Digest as _;
     use sha3::Keccak256;
+    use std::{format, string::ToString as _, vec::Vec};
     use zeroize::{Zeroize as _, Zeroizing};
-
-    use super::{PrivateKey, PublicKey};
-    use crate::{Error, KeyGenOption, ParseError, rng::rng_from_seed};
-
     pub struct EcdsaSecp256k1Impl;
-
     impl EcdsaSecp256k1Impl {
         pub fn keypair(option: KeyGenOption<PrivateKey>) -> (PublicKey, PrivateKey) {
             Self::try_keypair(option).expect("secp256k1 key generation should succeed")
         }
-
         pub fn try_keypair(
             option: KeyGenOption<PrivateKey>,
         ) -> Result<(PublicKey, PrivateKey), Error> {
@@ -250,16 +230,13 @@ mod ecdsa_secp256k1 {
                 }
                 KeyGenOption::FromPrivateKey(ref s) => s.clone(),
             };
-
             let public_key = signing_key.public_key();
             Ok((public_key, signing_key))
         }
-
         #[cfg(feature = "rand")]
         fn random_private_key() -> Result<PrivateKey, Error> {
             Self::random_private_key_from_rng(&mut OsRng)
         }
-
         #[cfg(feature = "rand")]
         pub(super) fn random_private_key_from_rng<R>(rng: &mut R) -> Result<PrivateKey, Error>
         where
@@ -283,12 +260,10 @@ mod ecdsa_secp256k1 {
                 "secp256k1 OS RNG did not produce a valid scalar".to_owned(),
             ))
         }
-
         pub fn sign(message: &[u8], sk: &PrivateKey) -> Vec<u8> {
             Self::try_sign(message, sk)
                 .expect("secp256k1 signing should succeed for a valid private key and message")
         }
-
         pub fn try_sign(message: &[u8], sk: &PrivateKey) -> Result<Vec<u8>, Error> {
             let signing_key = SigningKey::from(sk);
             let digest = sha2::Sha256::digest(message);
@@ -298,7 +273,6 @@ mod ecdsa_secp256k1 {
             let signature = signature.normalize_s().unwrap_or(signature);
             Ok(signature.to_bytes().to_vec())
         }
-
         pub fn sign_prehash_recoverable(
             prehash: &[u8; 32],
             sk: &PrivateKey,
@@ -322,7 +296,6 @@ mod ecdsa_secp256k1 {
             out[64] = recovery_id.to_byte().saturating_add(27);
             Ok(out)
         }
-
         pub fn recover_public_key_from_prehash(
             prehash: &[u8; 32],
             signature: &[u8; 65],
@@ -345,7 +318,6 @@ mod ecdsa_secp256k1 {
                 .map(Into::into)
                 .map_err(|_| Error::BadSignature)
         }
-
         pub fn evm_address(pk: &PublicKey) -> [u8; 20] {
             let encoded = pk.to_encoded_point(false);
             let mut keccak = Keccak256::new();
@@ -355,7 +327,6 @@ mod ecdsa_secp256k1 {
             out.copy_from_slice(&hash[12..]);
             out
         }
-
         pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey) -> Result<(), Error> {
             if signature_payload_is_all_zero(signature) {
                 return Err(Error::BadSignature);
@@ -367,15 +338,12 @@ mod ecdsa_secp256k1 {
             if signature.normalize_s().is_some() {
                 return Err(Error::BadSignature);
             }
-
             let verifying_key = VerifyingKey::from(pk);
-
             let digest = sha2::Sha256::digest(message);
             verifying_key
                 .verify_prehash(&digest, &signature)
                 .map_err(|_| Error::BadSignature)
         }
-
         pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey, ParseError> {
             if !payload.is_empty() && payload.iter().all(|&byte| byte == 0) {
                 return Err(ParseError(
@@ -384,15 +352,17 @@ mod ecdsa_secp256k1 {
             }
             let key =
                 PublicKey::from_sec1_bytes(payload).map_err(|err| ParseError(err.to_string()))?;
-            let canonical = key.to_sec1_bytes();
-            if canonical.as_ref() != payload {
+            // `EncodedPoint` stores secp256k1's fixed-width SEC1 representation
+            // inline. Avoid `PublicKey::to_sec1_bytes`, which boxes the same
+            // canonical encoding and would make decode validation heap-backed.
+            let canonical = key.to_encoded_point(true);
+            if canonical.as_bytes() != payload {
                 return Err(ParseError(
                     "non-canonical secp256k1 public key encoding".to_string(),
                 ));
             }
             Ok(key)
         }
-
         pub fn parse_private_key(payload: &[u8]) -> Result<PrivateKey, ParseError> {
             if !payload.is_empty() && payload.iter().all(|&byte| byte == 0) {
                 return Err(ParseError(
@@ -403,27 +373,24 @@ mod ecdsa_secp256k1 {
             PrivateKey::from_slice(bytes.as_ref()).map_err(|err| ParseError(err.to_string()))
         }
     }
-
     fn signature_payload_is_all_zero(signature: &[u8]) -> bool {
         !signature.is_empty() && signature.iter().all(|&byte| byte == 0)
     }
-
     fn signature_payload_has_zero_scalar(signature: &[u8]) -> bool {
         signature.len() == 64
             && (signature[..32].iter().all(|&byte| byte == 0)
                 || signature[32..].iter().all(|&byte| byte == 0))
     }
 }
-
 impl From<elliptic_curve::Error> for Error {
     fn from(error: elliptic_curve::Error) -> Error {
         // RustCrypto doesn't expose any kind of error information =(
         Error::Other(format!("{error}"))
     }
 }
-
 #[cfg(test)]
 mod test {
+    use super::*;
     #[cfg(feature = "crypto-parity-tests")]
     use amcl::secp256k1::ecp;
     use k256::ecdsa::signature::hazmat::PrehashVerifier as _;
@@ -435,56 +402,43 @@ mod test {
         ecdsa::EcdsaSig,
         nid::Nid,
     };
-    use sha2::Digest;
-
     #[cfg(feature = "rand")]
     use rand_core::{TryCryptoRng, TryRngCore};
-
-    use super::*;
-
+    use sha2::Digest;
     #[cfg(feature = "crypto-parity-tests")]
     const MESSAGE_1: &[u8] = b"This is a dummy message for use with tests";
     #[cfg(feature = "crypto-parity-tests")]
     const SIGNATURE_1: &str = "0aab347be3530a3fd7d91c354956561101e6f273b8a1ea3d414f82fbd5939db34b99c54c16c45bf4cde8193b58d718e7efa8c055e7add7d9c9cbe8935e849200";
     const PRIVATE_KEY: &str = "e4f21b38e005d4f895a29e84948d7cc83eac79041aeb644ee4fab8d9da42f713";
     const PUBLIC_KEY: &str = "0242c1e1f775237a26da4fd51b8d75ee2709711f6e90303e511169a324ef0789c0";
-
     fn private_key() -> PrivateKey {
         let payload = hex::decode(PRIVATE_KEY).unwrap();
         EcdsaSecp256k1Sha256::parse_private_key(&payload).unwrap()
     }
-
     fn public_key() -> PublicKey {
         let payload = hex::decode(PUBLIC_KEY).unwrap();
         EcdsaSecp256k1Sha256::parse_public_key(&payload).unwrap()
     }
-
     #[cfg(feature = "rand")]
     struct FixedTryRng {
         byte: u8,
     }
-
     #[cfg(feature = "rand")]
     impl TryRngCore for FixedTryRng {
         type Error = core::convert::Infallible;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Ok(u64::from_le_bytes([self.byte; 8]))
         }
-
         fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
             dest.fill(self.byte);
             Ok(())
         }
     }
-
     #[cfg(feature = "rand")]
     impl TryCryptoRng for FixedTryRng {}
-
     #[test]
     fn parse_private_key_accepts_valid_scalar_and_signs() {
         let payload = hex::decode(PRIVATE_KEY).unwrap();
@@ -492,21 +446,17 @@ mod test {
         let (public, private) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::FromPrivateKey(secret));
         let message = b"secp256k1 parsed private key";
         let signature = EcdsaSecp256k1Sha256::sign(message, &private);
-
         EcdsaSecp256k1Sha256::verify(message, &signature, &public).expect("signature verifies");
     }
-
     #[test]
     fn parse_private_key_rejects_all_zero_scalar_material() {
         let err = EcdsaSecp256k1Sha256::parse_private_key(&[0u8; 32])
             .expect_err("all-zero secp256k1 private key material must fail");
-
         assert!(
             err.to_string().contains("all zero"),
             "unexpected all-zero private-key error: {err:?}"
         );
     }
-
     #[test]
     fn secp256k1_try_keypair_rejects_all_zero_seed_material() {
         for len in [1, 31, 32, 33] {
@@ -518,43 +468,35 @@ mod test {
             );
         }
     }
-
     #[test]
     fn secp256k1_try_keypair_accepts_empty_seed_material() {
         EcdsaSecp256k1Sha256::try_keypair(KeyGenOption::UseSeed(Vec::new()))
             .expect("empty seed material remains supported");
     }
-
     #[cfg(feature = "rand")]
     #[test]
     fn secp256k1_random_private_key_rejects_all_zero_rng_material() {
         let mut rng = FixedTryRng { byte: 0 };
-
         assert!(matches!(
             ecdsa_secp256k1::EcdsaSecp256k1Impl::random_private_key_from_rng(&mut rng),
             Err(Error::KeyGen(message)) if message.contains("all-zero scalar material")
         ));
     }
-
     #[cfg(feature = "rand")]
     #[test]
     fn secp256k1_random_private_key_accepts_nonzero_rng_material() {
         let mut rng = FixedTryRng { byte: 0x42 };
-
         let secret = ecdsa_secp256k1::EcdsaSecp256k1Impl::random_private_key_from_rng(&mut rng)
             .expect("nonzero secp256k1 random scalar material must produce a key");
         assert_eq!(secret.to_bytes().as_slice(), &[0x42; 32]);
     }
-
     #[cfg(feature = "crypto-parity-tests")]
     fn public_key_uncompressed(pk: &PublicKey) -> Vec<u8> {
         const PUBLIC_UNCOMPRESSED_KEY_SIZE: usize = 65;
-
         let mut uncompressed = [0u8; PUBLIC_UNCOMPRESSED_KEY_SIZE];
         ecp::ECP::frombytes(&pk.to_sec1_bytes()[..]).tobytes(&mut uncompressed, false);
         uncompressed.to_vec()
     }
-
     #[test]
     fn parse_public_key_rejects_non_canonical_encoding() {
         let pk = public_key();
@@ -566,120 +508,116 @@ mod test {
         } else {
             compressed.as_bytes()
         };
-
         let err = EcdsaSecp256k1Sha256::parse_public_key(non_canonical).unwrap_err();
         assert!(err.0.contains("non-canonical"), "unexpected error: {err:?}");
+    }
+
+    #[test]
+    fn decode_validator_matches_public_parser_acceptance() {
+        let key = public_key();
+        let canonical = key.to_encoded_point(true);
+        let uncompressed = key.to_encoded_point(false);
+        let all_zero = [0_u8; 33];
+        for payload in [
+            canonical.as_bytes(),
+            uncompressed.as_bytes(),
+            &[][..],
+            all_zero.as_slice(),
+        ] {
+            assert_eq!(
+                EcdsaSecp256k1Sha256::validate_public_key_for_decode(payload).is_ok(),
+                EcdsaSecp256k1Sha256::parse_public_key(payload).is_ok(),
+                "decode-only and public parsing diverged for {payload:02x?}"
+            );
+        }
     }
 
     #[test]
     fn parse_public_key_rejects_all_zero_sec1_material() {
         for len in [33, 65] {
             let payload = vec![0u8; len];
-
             let err = EcdsaSecp256k1Sha256::parse_public_key(&payload)
                 .expect_err("all-zero secp256k1 public key material must fail");
-
             assert!(
                 err.to_string().contains("all zero"),
                 "unexpected all-zero public-key error for {len} bytes: {err:?}"
             );
         }
     }
-
     #[test]
     fn try_sign_matches_compatibility_sign_and_verifies() {
         let secret = private_key();
         let (public, private) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::FromPrivateKey(secret));
         let message = b"secp256k1 checked message signing";
-
         let checked =
             EcdsaSecp256k1Sha256::try_sign(message, &private).expect("checked secp256k1 signing");
-
         assert_eq!(checked, EcdsaSecp256k1Sha256::sign(message, &private));
         assert_eq!(checked.len(), 64);
         EcdsaSecp256k1Sha256::verify(message, &checked, &public).expect("signature verifies");
     }
-
     #[test]
     fn verify_rejects_malformed_signature_as_bad_signature() {
         let public = public_key();
         let err = EcdsaSecp256k1Sha256::verify(b"malformed secp256k1", &[0x01, 0x02], &public);
-
         assert!(matches!(err, Err(Error::BadSignature)));
     }
-
     #[test]
     fn verify_rejects_all_zero_signature_before_backend() {
         let public = public_key();
         let signature = [0u8; 64];
         let err = EcdsaSecp256k1Sha256::verify(b"inert secp256k1", &signature, &public);
-
         assert!(matches!(err, Err(Error::BadSignature)));
     }
-
     #[test]
     fn verify_rejects_zero_scalar_halves_before_backend() {
         let secret = private_key();
         let public = public_key();
         let message = b"secp256k1 zero scalar half";
         let signature = EcdsaSecp256k1Sha256::sign(message, &secret);
-
         for (range, label) in [(0..32, "r"), (32..64, "s")] {
             let mut tampered = signature.clone();
             tampered[range].fill(0);
-
             let err = EcdsaSecp256k1Sha256::verify(message, &tampered, &public);
-
             assert!(
                 matches!(err, Err(Error::BadSignature)),
                 "zero {label} scalar must fail as bad signature"
             );
         }
     }
-
     #[cfg(feature = "crypto-parity-tests")]
     #[test]
     fn secp256k1_compatibility() {
         let secret = private_key();
         let (p, s) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::FromPrivateKey(secret));
-
         let _sk = secp256k1::SecretKey::from_byte_array(s.to_bytes().into()).unwrap();
         let _pk = secp256k1::PublicKey::from_slice(&p.to_sec1_bytes()).unwrap();
-
         let openssl_group = EcGroup::from_curve_name(Nid::SECP256K1).unwrap();
         let mut ctx = BigNumContext::new().unwrap();
         let _openssl_point =
             EcPoint::from_bytes(&openssl_group, &public_key_uncompressed(&p)[..], &mut ctx)
                 .unwrap();
     }
-
     #[cfg(feature = "crypto-parity-tests")]
     #[test]
     fn secp256k1_verify() {
         let p = public_key();
-
         EcdsaSecp256k1Sha256::verify(MESSAGE_1, hex::decode(SIGNATURE_1).unwrap().as_slice(), &p)
             .unwrap();
-
         let context = secp256k1::Secp256k1::new();
         let pk =
             secp256k1::PublicKey::from_slice(hex::decode(PUBLIC_KEY).unwrap().as_slice()).unwrap();
-
         let hash_bytes: [u8; 32] = sha2::Sha256::digest(MESSAGE_1).into();
         let msg = secp256k1::Message::from_digest(hash_bytes);
-
         // Check if signatures produced here can be verified by secp256k1
         let signature =
             secp256k1::ecdsa::Signature::from_compact(&hex::decode(SIGNATURE_1).unwrap()[..])
                 .unwrap();
         context.verify_ecdsa(msg, &signature, &pk).unwrap();
-
         let openssl_group = EcGroup::from_curve_name(Nid::SECP256K1).unwrap();
         let mut ctx = BigNumContext::new().unwrap();
         let openssl_point =
             EcPoint::from_bytes(&openssl_group, &pk.serialize_uncompressed(), &mut ctx).unwrap();
         let openssl_pkey = EcKey::from_public_key(&openssl_group, &openssl_point).unwrap();
-
         // Check if the signatures produced here can be verified by openssl
         let (r, s) = SIGNATURE_1.split_at(SIGNATURE_1.len() / 2);
         let openssl_r = BigNum::from_hex_str(r).unwrap();
@@ -688,32 +626,24 @@ mod test {
         let openssl_result = openssl_sig.verify(hash_bytes.as_ref(), &openssl_pkey);
         assert!(openssl_result.unwrap());
     }
-
     #[cfg(feature = "crypto-parity-tests")]
     #[test]
     fn secp256k1_sign() {
         let secret = private_key();
         let (pk, sk) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::FromPrivateKey(secret));
-
         let sig = EcdsaSecp256k1Sha256::sign(MESSAGE_1, &sk);
         EcdsaSecp256k1Sha256::verify(MESSAGE_1, &sig, &pk).unwrap();
-
         assert_eq!(sig.len(), 64);
-
         // Check if secp256k1 signs the message and this module still can verify it
         // And that private keys can sign with other libraries
         let context = secp256k1::Secp256k1::new();
         let mut key_bytes = [0u8; 32];
         key_bytes.copy_from_slice(&hex::decode(PRIVATE_KEY).unwrap());
         let sk = secp256k1::SecretKey::from_byte_array(key_bytes).unwrap();
-
         let hash_bytes: [u8; 32] = sha2::Sha256::digest(MESSAGE_1).into();
-
         let msg = secp256k1::Message::from_digest(hash_bytes);
         let sig_1 = context.sign_ecdsa(msg, &sk).serialize_compact();
-
         EcdsaSecp256k1Sha256::verify(MESSAGE_1, &sig_1, &pk).unwrap();
-
         let openssl_group = EcGroup::from_curve_name(Nid::SECP256K1).unwrap();
         let mut ctx = BigNumContext::new().unwrap();
         let openssl_point =
@@ -725,14 +655,11 @@ mod test {
             &openssl_point,
         )
         .unwrap();
-
         let openssl_sig = EcdsaSig::sign(hash_bytes.as_ref(), &openssl_secret_key).unwrap();
         let openssl_result = openssl_sig.verify(hash_bytes.as_ref(), &openssl_public_key);
         assert!(openssl_result.unwrap());
-
         let openssl_sig = {
             use std::ops::{Shr, Sub};
-
             // ensure the S value is "low" (see BIP-0062) https://github.com/bitcoin/bips/blob/master/bip-0062.mediawiki#user-content-Low_S_values_in_signatures
             // this is required for k256 to successfully verify the signature, as it will fail verification of any signature with a High S value
             // Based on https://github.com/bitcoin/bitcoin/blob/v0.9.3/src/key.cpp#L202-L227
@@ -742,14 +669,11 @@ mod test {
             let mut order = BigNum::new().unwrap();
             openssl_group.order(&mut order, &mut ctx).unwrap();
             let half_order = order.shr(1);
-
             // if the S is "high" (s > half_order), convert it to "low" form (order - s)
             if s.cmp(&half_order) == std::cmp::Ordering::Greater {
                 s = order.sub(&s);
             }
-
             let r = openssl_sig.r();
-
             // serialize the key
             let mut res = Vec::new();
             // padding because EcdsaSecp256k1Sha256::verify requires a slice of length 64
@@ -757,27 +681,22 @@ mod test {
             res.extend(s.to_vec_padded(32).expect("s fits into 32 bytes"));
             res
         };
-
         EcdsaSecp256k1Sha256::verify(MESSAGE_1, openssl_sig.as_slice(), &pk).unwrap();
-
         let (p, s) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::Random);
         let signed = EcdsaSecp256k1Sha256::sign(MESSAGE_1, &s);
         EcdsaSecp256k1Sha256::verify(MESSAGE_1, &signed, &p).unwrap();
     }
-
     #[test]
     fn secp256k1_rejects_high_s_signatures() {
         let secret = private_key();
         let (pk, sk) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::FromPrivateKey(secret));
         let message = b"secp256k1 high-s test";
         let sig = EcdsaSecp256k1Sha256::sign(message, &sk);
-
         let signature = k256::ecdsa::Signature::from_slice(&sig).expect("signature parse");
         assert!(
             signature.normalize_s().is_none(),
             "signatures must be low-S"
         );
-
         let high_sig = if signature.normalize_s().is_some() {
             signature
         } else {
@@ -785,7 +704,6 @@ mod test {
             k256::ecdsa::Signature::from_scalars(r, -s).expect("high-s signature")
         };
         assert!(high_sig.normalize_s().is_some());
-
         let digest = sha2::Sha256::digest(message);
         let verifying_key = k256::ecdsa::VerifyingKey::from(&pk);
         let normalized = high_sig
@@ -794,11 +712,9 @@ mod test {
         verifying_key
             .verify_prehash(&digest, &normalized)
             .expect("normalized low-S signature should verify");
-
         let err = EcdsaSecp256k1Sha256::verify(message, high_sig.to_bytes().as_ref(), &pk);
         assert!(matches!(err, Err(Error::BadSignature)));
     }
-
     #[test]
     fn recoverable_prehash_roundtrip_preserves_key_and_evm_address() {
         let secret = private_key();
@@ -806,7 +722,6 @@ mod test {
         let prehash = sha2::Sha256::digest(b"iroha:sccp:evm-attestation");
         let mut digest = [0u8; 32];
         digest.copy_from_slice(&prehash);
-
         let signature = EcdsaSecp256k1Sha256::sign_prehash_recoverable(&digest, &secret)
             .expect("recoverable signature");
         let compact =
@@ -817,7 +732,6 @@ mod test {
         );
         let recovered = EcdsaSecp256k1Sha256::recover_public_key_from_prehash(&digest, &signature)
             .expect("recoverable public key");
-
         assert_eq!(recovered, public);
         assert_eq!(
             EcdsaSecp256k1Sha256::evm_address(&recovered),
@@ -825,7 +739,6 @@ mod test {
         );
         assert!(matches!(signature[64], 27 | 28));
     }
-
     #[test]
     fn recoverable_prehash_rejects_all_zero_signature_payload_before_backend() {
         let prehash = sha2::Sha256::digest(b"iroha:sccp:evm-all-zero-recovery");
@@ -833,12 +746,9 @@ mod test {
         digest.copy_from_slice(&prehash);
         let mut signature = [0u8; 65];
         signature[64] = 27;
-
         let err = EcdsaSecp256k1Sha256::recover_public_key_from_prehash(&digest, &signature);
-
         assert!(matches!(err, Err(Error::BadSignature)));
     }
-
     #[test]
     fn recoverable_prehash_rejects_zero_scalar_halves_before_backend() {
         let secret = private_key();
@@ -847,27 +757,22 @@ mod test {
         digest.copy_from_slice(&prehash);
         let signature = EcdsaSecp256k1Sha256::sign_prehash_recoverable(&digest, &secret)
             .expect("recoverable signature");
-
         for (range, label) in [(0..32, "r"), (32..64, "s")] {
             let mut tampered = signature;
             tampered[range].fill(0);
-
             let err = EcdsaSecp256k1Sha256::recover_public_key_from_prehash(&digest, &tampered);
-
             assert!(
                 matches!(err, Err(Error::BadSignature)),
                 "zero {label} scalar must fail as bad recoverable signature"
             );
         }
     }
-
     #[test]
     fn recoverable_prehash_rejects_high_s_malleable_signature() {
         let secret = private_key();
         let prehash = sha2::Sha256::digest(b"iroha:sccp:evm-high-s-recovery");
         let mut digest = [0u8; 32];
         digest.copy_from_slice(&prehash);
-
         let mut signature = EcdsaSecp256k1Sha256::sign_prehash_recoverable(&digest, &secret)
             .expect("recoverable signature");
         let low = k256::ecdsa::Signature::from_slice(&signature[..64]).expect("signature parse");
@@ -884,7 +789,6 @@ mod test {
             28 => 27,
             recovery => panic!("unexpected recovery id {recovery}"),
         };
-
         let err = EcdsaSecp256k1Sha256::recover_public_key_from_prehash(&digest, &signature);
         assert!(matches!(err, Err(Error::BadSignature)));
     }

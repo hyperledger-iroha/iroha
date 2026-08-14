@@ -3,12 +3,10 @@
 //! A provider must parse and verify the complete semantic bundle before it may attest to an
 //! archive. This module centralizes that fail-closed check so seed ingress, storage providers, and
 //! later cache integration use one canonical transcript implementation.
-
 use std::{
     fmt,
     io::{self, Read},
 };
-
 use crate::{
     CarBuildPlan, CarStreamingWriter, CarVerifier, CarWriteStats, ChunkStore, ProfileId,
     compute_chunk_plan_digest_sha3,
@@ -20,14 +18,12 @@ use iroha_data_model::musubi::{
     MusubiContentDigestV1, MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
     validate_musubi_portable_path_set_v1,
 };
-
 /// Canonical bundle path of the archive-independent semantic release manifest.
 pub const MUSUBI_BUNDLE_SEMANTIC_RELEASE_PATH_V1: &str = ".musubi/semantic-release.norito";
 /// Canonical bundle path of the typed artifact descriptor.
 pub const MUSUBI_BUNDLE_ARTIFACT_DESCRIPTOR_PATH_V1: &str = ".musubi/artifact-descriptor.norito";
 /// Canonical bundle path of the normalized exact verification lock.
 pub const MUSUBI_BUNDLE_VERIFICATION_LOCK_PATH_V1: &str = ".musubi/verification-lock.norito";
-
 const SOURCE_TREE_DOMAIN_V1: &[u8] = b"musubi-source-tree-v1\0";
 const ARTIFACT_DESCRIPTOR_DOMAIN_V1: &[u8] = b"musubi-artifact-descriptor-v1\0";
 const BUNDLE_DOMAIN_V1: &[u8] = b"musubi-bundle-v1\0";
@@ -45,7 +41,6 @@ const BUNDLE_METADATA_TOTAL_MAX_BYTES_V1: u64 =
 const SOURCE_TREE_TRANSCRIPT_MAX_BYTES_V1: usize = 18 * 1024 * 1024;
 const IO_BUFFER_BYTES: usize = 64 * 1024;
 const BUNDLE_METADATA_FILE_COUNT: usize = 3;
-
 /// Closed, payload-free integrity surface reported by the Musubi bundle verifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MusubiBundleIntegritySurfaceV1 {
@@ -60,7 +55,6 @@ pub enum MusubiBundleIntegritySurfaceV1 {
     /// Normalized exact verification lock or its cross-bindings.
     VerificationLock,
 }
-
 impl MusubiBundleIntegritySurfaceV1 {
     /// Return the stable low-cardinality label for this integrity surface.
     #[must_use]
@@ -74,7 +68,6 @@ impl MusubiBundleIntegritySurfaceV1 {
         }
     }
 }
-
 /// Redacted failure returned by [`MusubiBundleVerifierV1`].
 ///
 /// The error deliberately retains no codec text, file path, payload bytes, provider URL, or
@@ -84,19 +77,16 @@ impl MusubiBundleIntegritySurfaceV1 {
 pub struct MusubiBundleVerificationErrorV1 {
     surface: MusubiBundleIntegritySurfaceV1,
 }
-
 impl MusubiBundleVerificationErrorV1 {
     const fn at(surface: MusubiBundleIntegritySurfaceV1) -> Self {
         Self { surface }
     }
-
     /// Return the bounded integrity surface at which verification failed.
     #[must_use]
     pub const fn surface(self) -> MusubiBundleIntegritySurfaceV1 {
         self.surface
     }
 }
-
 impl fmt::Display for MusubiBundleVerificationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -106,9 +96,7 @@ impl fmt::Display for MusubiBundleVerificationErrorV1 {
         )
     }
 }
-
 impl std::error::Error for MusubiBundleVerificationErrorV1 {}
-
 /// Parsed evidence produced only after every Musubi V1 bundle commitment is verified.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifiedMusubiBundleV1 {
@@ -120,55 +108,46 @@ pub struct VerifiedMusubiBundleV1 {
     source_file_count: u32,
     source_bytes: u64,
 }
-
 impl VerifiedMusubiBundleV1 {
     /// Return the exact archive identity whose complete commitment was verified.
     #[must_use]
     pub const fn archive_id(&self) -> ArchiveId {
         self.archive_id
     }
-
     /// Return canonical CAR statistics reproduced from the exact input bytes.
     #[must_use]
     pub const fn car_stats(&self) -> &CarWriteStats {
         &self.car_stats
     }
-
     /// Return the parsed and commitment-bound artifact descriptor.
     #[must_use]
     pub const fn descriptor(&self) -> &MusubiArtifactDescriptorV1 {
         &self.descriptor
     }
-
     /// Return the parsed and commitment-bound semantic release manifest.
     #[must_use]
     pub const fn semantic_release(&self) -> &MusubiSemanticReleaseManifestV1 {
         &self.semantic_release
     }
-
     /// Return the parsed and commitment-bound normalized verification lock.
     #[must_use]
     pub const fn verification_lock(&self) -> &MusubiVerificationLockV1 {
         &self.verification_lock
     }
-
     /// Return the verified number of regular source files.
     #[must_use]
     pub const fn source_file_count(&self) -> u32 {
         self.source_file_count
     }
-
     /// Return the verified total number of regular source bytes.
     #[must_use]
     pub const fn source_bytes(&self) -> u64 {
         self.source_bytes
     }
 }
-
 /// Stateless verifier for one complete canonical Musubi V1 bundle.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MusubiBundleVerifierV1;
-
 impl MusubiBundleVerifierV1 {
     /// Verify a canonical CAR, its authenticated payload, and all nested Musubi commitments.
     ///
@@ -200,7 +179,6 @@ impl MusubiBundleVerifierV1 {
         {
             return Err(archive_error());
         }
-
         let verified = CarVerifier::verify_canonical_car_with_plan_retained(plan, canonical_car)
             .map_err(|_| archive_error())?;
         let stats = verified.stats();
@@ -214,13 +192,11 @@ impl MusubiBundleVerifierV1 {
         {
             return Err(archive_error());
         }
-
         if payload_digest(verified.payload_reader()).map_err(|_| archive_error())?
             != plan.payload_digest
         {
             return Err(archive_error());
         }
-
         let mut chunk_store = ChunkStore::with_profile_and_heap_limit(
             plan.chunk_profile,
             PROVIDER_FETCH_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES_V1,
@@ -236,7 +212,6 @@ impl MusubiBundleVerifierV1 {
             return Err(archive_error());
         }
         drop(chunk_store);
-
         let parsed = verify_bundle_payload(plan, verified.payload_reader(), commitment)?;
         Ok(VerifiedMusubiBundleV1 {
             archive_id: commitment.archive_id(),
@@ -248,7 +223,6 @@ impl MusubiBundleVerifierV1 {
             source_bytes: parsed.source_bytes,
         })
     }
-
     /// Verify a canonical Musubi bundle through bounded fresh payload readers.
     ///
     /// This provider-oriented entry point never materializes the CAR. Instead, it reconstructs
@@ -278,7 +252,6 @@ impl MusubiBundleVerifierV1 {
             MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::ArchiveCommitment)
         };
         validate_plan_commitment(plan, commitment)?;
-
         let mut canonical_payload = open_payload().map_err(|_| archive_error())?;
         let stats = CarStreamingWriter::new(plan)
             .write_from_reader(&mut canonical_payload, io::sink())
@@ -295,7 +268,6 @@ impl MusubiBundleVerifierV1 {
             return Err(archive_error());
         }
         drop(canonical_payload);
-
         let mut chunk_store = ChunkStore::with_profile_and_heap_limit(
             plan.chunk_profile,
             PROVIDER_FETCH_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES_V1,
@@ -312,7 +284,6 @@ impl MusubiBundleVerifierV1 {
             return Err(archive_error());
         }
         drop(chunk_store);
-
         let bundle_payload = open_payload().map_err(|_| archive_error())?;
         let parsed = verify_bundle_payload(plan, bundle_payload, commitment)?;
         Ok(VerifiedMusubiBundleV1 {
@@ -326,7 +297,6 @@ impl MusubiBundleVerifierV1 {
         })
     }
 }
-
 fn ensure_payload_eof(payload: &mut impl Read) -> io::Result<()> {
     let mut trailing = [0_u8; 1];
     if payload.read(&mut trailing)? == 0 {
@@ -338,7 +308,6 @@ fn ensure_payload_eof(payload: &mut impl Read) -> io::Result<()> {
         ))
     }
 }
-
 fn validate_plan_commitment(
     plan: &CarBuildPlan,
     commitment: &MusubiArchiveCommitmentV1,
@@ -368,7 +337,6 @@ fn validate_plan_commitment(
         .map_err(|_| {
             MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::SourceTree)
         })?;
-
     let descriptor = crate::chunker_registry::lookup(ProfileId(commitment.chunker.profile_id))
         .ok_or_else(archive_error)?;
     if descriptor.namespace != commitment.chunker.namespace
@@ -383,7 +351,6 @@ fn validate_plan_commitment(
     {
         return Err(archive_error());
     }
-
     let expected_source_files =
         usize::try_from(commitment.file_count).map_err(|_| archive_error())?;
     let expected_files = expected_source_files
@@ -420,7 +387,6 @@ fn validate_plan_commitment(
     }
     Ok(())
 }
-
 fn validate_provider_fetch_memory_geometry(
     plan: &CarBuildPlan,
 ) -> Result<(), MusubiBundleVerificationErrorV1> {
@@ -428,20 +394,17 @@ fn validate_provider_fetch_memory_geometry(
         || MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::ArchiveCommitment);
     let source_error =
         || MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::SourceTree);
-
     // Structural plan validation runs first so the subsequent joined-path accounting cannot
     // allocate from unbounded path components supplied by an untrusted caller.
     plan.validate_for_ingest_with_limit(PROVIDER_FETCH_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES_V1)
         .map_err(|_| archive_error())?;
     validate_bundle_metadata_capture_geometry(plan)?;
-
     let source_material_capacity = source_material_capacity_v1(plan)?;
     if source_material_capacity > SOURCE_TREE_TRANSCRIPT_MAX_BYTES_V1 {
         return Err(source_error());
     }
     Ok(())
 }
-
 fn validate_bundle_metadata_capture_geometry(
     plan: &CarBuildPlan,
 ) -> Result<(), MusubiBundleVerificationErrorV1> {
@@ -466,7 +429,6 @@ fn validate_bundle_metadata_capture_geometry(
     }
     Ok(())
 }
-
 fn source_material_capacity_v1(
     plan: &CarBuildPlan,
 ) -> Result<usize, MusubiBundleVerificationErrorV1> {
@@ -492,7 +454,6 @@ fn source_material_capacity_v1(
     )?;
     usize::try_from(source_material_length).map_err(|_| archive_error())
 }
-
 fn decode_bundle_descriptor_v1(
     bytes: &[u8],
 ) -> Result<MusubiArtifactDescriptorV1, MusubiBundleVerificationErrorV1> {
@@ -500,14 +461,12 @@ fn decode_bundle_descriptor_v1(
         MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::Descriptor)
     })
 }
-
 fn decode_bundle_semantic_release_v1(
     bytes: &[u8],
 ) -> Result<MusubiSemanticReleaseManifestV1, MusubiBundleVerificationErrorV1> {
     MusubiSemanticReleaseManifestV1::decode_canonical_bundle_file(bytes)
         .map_err(|_| MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::Bundle))
 }
-
 fn decode_bundle_verification_lock_v1(
     bytes: &[u8],
 ) -> Result<MusubiVerificationLockV1, MusubiBundleVerificationErrorV1> {
@@ -515,7 +474,6 @@ fn decode_bundle_verification_lock_v1(
         MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::VerificationLock)
     })
 }
-
 struct ParsedBundlePayloadV1 {
     descriptor: MusubiArtifactDescriptorV1,
     semantic_release: MusubiSemanticReleaseManifestV1,
@@ -523,7 +481,6 @@ struct ParsedBundlePayloadV1 {
     source_file_count: u32,
     source_bytes: u64,
 }
-
 #[allow(
     clippy::too_many_lines,
     reason = "the complete bounded payload transcript stays contiguous for auditability"
@@ -543,7 +500,6 @@ fn verify_bundle_payload(
         || MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::SourceTree);
     let lock_error =
         || MusubiBundleVerificationErrorV1::at(MusubiBundleIntegritySurfaceV1::VerificationLock);
-
     let source_material_capacity = source_material_capacity_v1(plan)?;
     let mut source_count = 0_u32;
     let mut source_bytes = 0_u64;
@@ -591,7 +547,6 @@ fn verify_bundle_payload(
             }
             continue;
         }
-
         source_count = source_count.checked_add(1).ok_or_else(source_error)?;
         source_bytes = source_bytes
             .checked_add(file.size)
@@ -616,7 +571,6 @@ fn verify_bundle_payload(
     {
         return Err(archive_error());
     }
-
     // `CarBuildPlan` uses structural component-vector ordering. The package commitment uses the
     // joined portable path bytes, which differ for pairs such as `a-` and `a/z`.
     let source_material =
@@ -626,11 +580,9 @@ fn verify_bundle_payload(
     if source_digest != commitment.source_tree_digest {
         return Err(source_error());
     }
-
     let semantic_release_bytes = semantic_release_bytes.ok_or_else(archive_error)?;
     let descriptor_bytes = descriptor_bytes.ok_or_else(archive_error)?;
     let verification_lock_bytes = verification_lock_bytes.ok_or_else(archive_error)?;
-
     let descriptor = decode_bundle_descriptor_v1(&descriptor_bytes)?;
     if descriptor.source_tree_digest != source_digest
         || descriptor.source_file_count != source_count
@@ -638,12 +590,10 @@ fn verify_bundle_payload(
     {
         return Err(descriptor_error());
     }
-
     let semantic_release = decode_bundle_semantic_release_v1(&semantic_release_bytes)?;
     if descriptor.semantic_release_manifest_digest != semantic_release.semantic_digest() {
         return Err(bundle_error());
     }
-
     let verification_lock = decode_bundle_verification_lock_v1(&verification_lock_bytes)?;
     let verification_lock_digest = verification_lock.digest();
     if descriptor.verification_lock_digest != verification_lock_digest {
@@ -652,7 +602,6 @@ fn verify_bundle_payload(
     semantic_release
         .validate_verification_lock(&verification_lock)
         .map_err(|_| lock_error())?;
-
     let descriptor_material =
         descriptor_material(&descriptor_bytes).map_err(|_| descriptor_error())?;
     if domain_digest(ARTIFACT_DESCRIPTOR_DOMAIN_V1, &descriptor_material)
@@ -661,7 +610,6 @@ fn verify_bundle_payload(
     {
         return Err(descriptor_error());
     }
-
     let bundle_material_length = [
         BUNDLE_DOMAIN_V1.len(),
         semantic_release_bytes.len(),
@@ -690,7 +638,6 @@ fn verify_bundle_payload(
     {
         return Err(bundle_error());
     }
-
     Ok(ParsedBundlePayloadV1 {
         descriptor,
         semantic_release,
@@ -699,7 +646,6 @@ fn verify_bundle_payload(
         source_bytes,
     })
 }
-
 fn payload_digest(mut payload: impl Read) -> std::io::Result<blake3::Hash> {
     let mut hasher = blake3::Hasher::new();
     let mut buffer = vec![0_u8; IO_BUFFER_BYTES];
@@ -711,7 +657,6 @@ fn payload_digest(mut payload: impl Read) -> std::io::Result<blake3::Hash> {
         hasher.update(&buffer[..read]);
     }
 }
-
 fn source_material(
     mut entries: Vec<(String, u64, [u8; 32])>,
     expected_length: usize,
@@ -737,7 +682,6 @@ fn source_material(
     }
     Ok(material)
 }
-
 fn descriptor_material(bytes: &[u8]) -> Result<Vec<u8>, ()> {
     let capacity =
         frame_length(u64::try_from(ARTIFACT_DESCRIPTOR_DOMAIN_V1.len()).map_err(|_| ())?)
@@ -752,7 +696,6 @@ fn descriptor_material(bytes: &[u8]) -> Result<Vec<u8>, ()> {
     append_frame(&mut material, bytes)?;
     Ok(material)
 }
-
 fn domain_digest(domain: &[u8], material: &[u8]) -> Result<MusubiContentDigestV1, ()> {
     let length = u64::try_from(material.len()).map_err(|_| ())?;
     let mut hasher = blake3::Hasher::new();
@@ -761,25 +704,21 @@ fn domain_digest(domain: &[u8], material: &[u8]) -> Result<MusubiContentDigestV1
     hasher.update(material);
     Ok(MusubiContentDigestV1::new(*hasher.finalize().as_bytes()))
 }
-
 const fn frame_length(length: u64) -> Option<u64> {
     length.checked_add(8)
 }
-
 fn append_frame(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), ()> {
     let length = u64::try_from(bytes.len()).map_err(|_| ())?;
     output.extend_from_slice(&length.to_be_bytes());
     output.extend_from_slice(bytes);
     Ok(())
 }
-
 fn update_frame(hasher: &mut blake3::Hasher, bytes: &[u8]) -> Result<(), ()> {
     let length = u64::try_from(bytes.len()).map_err(|_| ())?;
     hasher.update(&length.to_be_bytes());
     hasher.update(bytes);
     Ok(())
 }
-
 // The provider-oriented verifier uses a 32 MiB plan/PoR ceiling, a 4 MiB-plus-64-KiB aggregate
 // metadata capture ceiling, a 48 MiB cumulative decoder budget, and an 18 MiB source-transcript
 // ceiling. The PoR store is dropped before bundle parsing in both entry points. Canonical
@@ -787,14 +726,12 @@ fn update_frame(hasher: &mut blake3::Hasher, bytes: &[u8]) -> Result<(), ()> {
 // Whole-process RSS against the 64 MiB target remains a supported-deployment promotion
 // qualification, including the deployment-owned fresh reader. These local ceilings do not
 // establish that evidence.
-
 #[cfg(test)]
 mod tests {
     use std::{
         cell::Cell,
         io::{self, Cursor, Read},
     };
-
     use iroha_data_model::{
         musubi::{
             MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiDependencyReqV1,
@@ -805,10 +742,8 @@ mod tests {
         sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
     };
     use norito::codec::Encode as _;
-
     use super::*;
     use crate::{CarWriter, FileEntry, compute_por_root};
-
     #[derive(Clone, Copy)]
     enum FixtureFault {
         None,
@@ -816,7 +751,6 @@ mod tests {
         SemanticDependencyBinding,
         SemanticLockBinding,
     }
-
     #[test]
     fn provider_fetch_memory_controls_are_individually_bounded() {
         assert_eq!(PROVIDER_FETCH_MEMORY_MAX_BYTES_V1, 64 * 1024 * 1024);
@@ -835,7 +769,6 @@ mod tests {
                 < PROVIDER_FETCH_MEMORY_MAX_BYTES_V1
         );
     }
-
     #[test]
     fn provider_fetch_memory_geometry_has_an_inclusive_aggregate_metadata_bound() {
         let mut fixture = bundle_fixture(FixtureFault::None);
@@ -855,7 +788,6 @@ mod tests {
         }
         validate_bundle_metadata_capture_geometry(&fixture.plan)
             .expect("exact aggregate metadata cap");
-
         let mut extra = fixture
             .plan
             .files
@@ -872,7 +804,6 @@ mod tests {
             MusubiBundleIntegritySurfaceV1::ArchiveCommitment
         );
     }
-
     #[test]
     fn provider_metadata_decoders_preserve_closed_integrity_surfaces() {
         let fixture = bundle_fixture(FixtureFault::None);
@@ -891,7 +822,6 @@ mod tests {
                 .expect("canonical verification lock"),
             fixture.verification_lock
         );
-
         let mut trailing_descriptor = fixture.descriptor.encode();
         trailing_descriptor.push(0);
         assert_eq!(
@@ -900,7 +830,6 @@ mod tests {
                 .surface(),
             MusubiBundleIntegritySurfaceV1::Descriptor
         );
-
         let mut noncanonical_semantic = fixture.semantic_release;
         noncanonical_semantic.exports = vec![
             "zeta".parse().expect("export"),
@@ -912,7 +841,6 @@ mod tests {
                 .surface(),
             MusubiBundleIntegritySurfaceV1::Bundle
         );
-
         assert_eq!(
             decode_bundle_verification_lock_v1(&[u8::MAX; 32])
                 .expect_err("declared-length bomb must fail")
@@ -928,7 +856,6 @@ mod tests {
             MusubiBundleIntegritySurfaceV1::Descriptor
         );
     }
-
     struct BundleFixture {
         plan: CarBuildPlan,
         payload: Vec<u8>,
@@ -938,14 +865,12 @@ mod tests {
         semantic_release: MusubiSemanticReleaseManifestV1,
         verification_lock: MusubiVerificationLockV1,
     }
-
     fn bundle_fixture(fault: FixtureFault) -> BundleFixture {
         bundle_fixture_with_sources(
             fault,
             vec![(vec!["Musubi.toml".to_owned()], vec![b'm'; 4 * 1024])],
         )
     }
-
     fn bundle_fixture_with_sources(
         fault: FixtureFault,
         sources: Vec<(Vec<String>, Vec<u8>)>,
@@ -997,7 +922,6 @@ mod tests {
         verification_lock
             .validate()
             .expect("fixture verification lock");
-
         let mut source_entries = Vec::new();
         source_entries
             .try_reserve_exact(sources.len())
@@ -1051,7 +975,6 @@ mod tests {
         }
         let bundle_digest =
             domain_digest(BUNDLE_DOMAIN_V1, &bundle_material).expect("fixture bundle digest");
-
         let mut entries = sources
             .into_iter()
             .map(|(path, data)| FileEntry { path, data })
@@ -1123,14 +1046,12 @@ mod tests {
             verification_lock,
         }
     }
-
     fn sources_len(plan: &CarBuildPlan) -> usize {
         plan.files
             .iter()
             .filter(|file| !file.path.join("/").starts_with(".musubi/"))
             .count()
     }
-
     fn verify_error(
         fixture: &BundleFixture,
         commitment: &MusubiArchiveCommitmentV1,
@@ -1138,7 +1059,6 @@ mod tests {
         MusubiBundleVerifierV1::verify(&fixture.plan, &fixture.car, commitment)
             .expect_err("substitution must fail")
     }
-
     fn verify_payload_error(
         fixture: &BundleFixture,
         commitment: &MusubiArchiveCommitmentV1,
@@ -1148,9 +1068,7 @@ mod tests {
         })
         .expect_err("payload substitution must fail")
     }
-
     struct FailingReader;
-
     impl Read for FailingReader {
         fn read(&mut self, _output: &mut [u8]) -> io::Result<usize> {
             Err(io::Error::new(
@@ -1159,12 +1077,10 @@ mod tests {
             ))
         }
     }
-
     enum SelectiveReader<'payload> {
         Payload(Cursor<&'payload [u8]>),
         Failing(FailingReader),
     }
-
     impl Read for SelectiveReader<'_> {
         fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
             match self {
@@ -1173,12 +1089,10 @@ mod tests {
             }
         }
     }
-
     struct ExclusiveReader<'payload> {
         payload: Cursor<&'payload [u8]>,
         open: &'payload Cell<bool>,
     }
-
     impl<'payload> ExclusiveReader<'payload> {
         fn try_open(payload: &'payload [u8], open: &'payload Cell<bool>) -> io::Result<Self> {
             if open.replace(true) {
@@ -1193,19 +1107,16 @@ mod tests {
             })
         }
     }
-
     impl Read for ExclusiveReader<'_> {
         fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
             self.payload.read(output)
         }
     }
-
     impl Drop for ExclusiveReader<'_> {
         fn drop(&mut self) {
             assert!(self.open.replace(false));
         }
     }
-
     #[test]
     fn verifies_complete_bundle_and_returns_typed_evidence() {
         let fixture = bundle_fixture(FixtureFault::None);
@@ -1220,7 +1131,6 @@ mod tests {
         assert_eq!(evidence.source_bytes(), 4 * 1024);
         assert_eq!(evidence.car_stats().car_size, fixture.commitment.car_size);
     }
-
     #[test]
     fn fresh_reader_verifier_matches_complete_car_evidence() {
         let fixture = bundle_fixture(FixtureFault::None);
@@ -1237,11 +1147,9 @@ mod tests {
             },
         )
         .expect("fresh-reader verifier accepts fixture");
-
         assert_eq!(actual, expected);
         assert_eq!(opens.get(), 3);
     }
-
     #[test]
     fn fresh_reader_verifier_drops_each_reader_before_opening_the_next() {
         let fixture = bundle_fixture(FixtureFault::None);
@@ -1260,12 +1168,10 @@ mod tests {
             },
         )
         .expect("each prior reader is dropped before the next pass opens");
-
         assert_eq!(actual, expected);
         assert_eq!(opens.get(), 3);
         assert!(!open.get());
     }
-
     #[test]
     fn fresh_reader_verifier_maps_open_and_read_failures_to_archive_commitment() {
         let fixture = bundle_fixture(FixtureFault::None);
@@ -1294,7 +1200,6 @@ mod tests {
                 MusubiBundleIntegritySurfaceV1::ArchiveCommitment
             );
             assert_eq!(opens.get(), failing_pass + 1);
-
             let opens = Cell::new(0_u8);
             let read_error = MusubiBundleVerifierV1::verify_payload_with_factory(
                 &fixture.plan,
@@ -1317,7 +1222,6 @@ mod tests {
             assert_eq!(opens.get(), failing_pass + 1);
         }
     }
-
     #[test]
     fn fresh_reader_verifier_rejects_mutation_on_every_pass() {
         let fixture = bundle_fixture(FixtureFault::None);
@@ -1335,7 +1239,6 @@ mod tests {
             })
             .expect("fixture source offset");
         mutated[source_offset] ^= 0x01;
-
         for (mutated_pass, expected_surface) in [
             (0_u8, MusubiBundleIntegritySurfaceV1::ArchiveCommitment),
             (1_u8, MusubiBundleIntegritySurfaceV1::ArchiveCommitment),
@@ -1361,7 +1264,6 @@ mod tests {
             assert_eq!(opens.get(), mutated_pass + 1);
         }
     }
-
     #[test]
     fn fresh_reader_verifier_rejects_truncated_and_trailing_payloads() {
         let fixture = bundle_fixture(FixtureFault::None);
@@ -1394,62 +1296,48 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn fresh_reader_verifier_preserves_commitment_substitution_surfaces() {
         let fixture = bundle_fixture(FixtureFault::None);
         let mut substitutions = Vec::new();
-
         let mut root = fixture.commitment.clone();
         let mut root_bytes = root.root_cid.as_bytes().to_vec();
         *root_bytes.last_mut().expect("fixture root CID is nonempty") ^= 0x01;
         root.root_cid = ManifestRootCid::try_from(root_bytes).expect("substituted root CID");
         substitutions.push(root);
-
         let mut chunker = fixture.commitment.clone();
         chunker.chunker.profile_id = chunker.chunker.profile_id.saturating_add(1);
         substitutions.push(chunker);
-
         let mut chunk_plan = fixture.commitment.clone();
         chunk_plan.chunk_plan_digest = MusubiContentDigestV1::new([0x9F; 32]);
         substitutions.push(chunk_plan);
-
         let mut content_length = fixture.commitment.clone();
         content_length.content_length = content_length.content_length.saturating_add(1);
         substitutions.push(content_length);
-
         let mut car = fixture.commitment.clone();
         car.car_digest = MusubiContentDigestV1::new([0xA0; 32]);
         substitutions.push(car);
-
         let mut car_size = fixture.commitment.clone();
         car_size.car_size = car_size.car_size.saturating_add(1);
         substitutions.push(car_size);
-
         let mut por = fixture.commitment.clone();
         por.por_root = MusubiContentDigestV1::new([0xA1; 32]);
         substitutions.push(por);
-
         let mut source = fixture.commitment.clone();
         source.source_tree_digest = MusubiContentDigestV1::new([0xA2; 32]);
         substitutions.push(source);
-
         let mut descriptor = fixture.commitment.clone();
         descriptor.descriptor_digest = MusubiContentDigestV1::new([0xA3; 32]);
         substitutions.push(descriptor);
-
         let mut bundle = fixture.commitment.clone();
         bundle.bundle_digest = MusubiContentDigestV1::new([0xA4; 32]);
         substitutions.push(bundle);
-
         let mut file_count = fixture.commitment.clone();
         file_count.file_count = file_count.file_count.saturating_add(1);
         substitutions.push(file_count);
-
         let mut chunk_count = fixture.commitment.clone();
         chunk_count.chunk_count = chunk_count.chunk_count.saturating_add(1);
         substitutions.push(chunk_count);
-
         for commitment in substitutions {
             assert_eq!(
                 verify_payload_error(&fixture, &commitment),
@@ -1457,11 +1345,9 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn reports_closed_surfaces_for_commitment_substitutions() {
         let fixture = bundle_fixture(FixtureFault::None);
-
         let mut substituted_car = fixture.car.clone();
         let last = substituted_car
             .last_mut()
@@ -1473,28 +1359,24 @@ mod tests {
                 .surface(),
             MusubiBundleIntegritySurfaceV1::ArchiveCommitment
         );
-
         let mut commitment = fixture.commitment.clone();
         commitment.por_root = MusubiContentDigestV1::new([0xa1; 32]);
         assert_eq!(
             verify_error(&fixture, &commitment).surface(),
             MusubiBundleIntegritySurfaceV1::ArchiveCommitment
         );
-
         let mut commitment = fixture.commitment.clone();
         commitment.source_tree_digest = MusubiContentDigestV1::new([0xa2; 32]);
         assert_eq!(
             verify_error(&fixture, &commitment).surface(),
             MusubiBundleIntegritySurfaceV1::SourceTree
         );
-
         let mut commitment = fixture.commitment.clone();
         commitment.descriptor_digest = MusubiContentDigestV1::new([0xa3; 32]);
         assert_eq!(
             verify_error(&fixture, &commitment).surface(),
             MusubiBundleIntegritySurfaceV1::Descriptor
         );
-
         let mut commitment = fixture.commitment.clone();
         commitment.bundle_digest = MusubiContentDigestV1::new([0xa4; 32]);
         assert_eq!(
@@ -1502,7 +1384,6 @@ mod tests {
             MusubiBundleIntegritySurfaceV1::Bundle
         );
     }
-
     #[test]
     fn rejects_nested_descriptor_and_lock_substitutions_after_outer_rebinding() {
         let descriptor_fault = bundle_fixture(FixtureFault::DescriptorSourceBinding);
@@ -1510,20 +1391,17 @@ mod tests {
             verify_error(&descriptor_fault, &descriptor_fault.commitment).surface(),
             MusubiBundleIntegritySurfaceV1::Descriptor
         );
-
         let lock_fault = bundle_fixture(FixtureFault::SemanticLockBinding);
         assert_eq!(
             verify_error(&lock_fault, &lock_fault.commitment).surface(),
             MusubiBundleIntegritySurfaceV1::VerificationLock
         );
-
         let dependency_fault = bundle_fixture(FixtureFault::SemanticDependencyBinding);
         assert_eq!(
             verify_error(&dependency_fault, &dependency_fault.commitment).surface(),
             MusubiBundleIntegritySurfaceV1::VerificationLock
         );
     }
-
     #[test]
     fn source_transcript_uses_joined_portable_path_order() {
         let fixture = bundle_fixture_with_sources(
@@ -1538,7 +1416,6 @@ mod tests {
                 .expect("joined-path transcript order");
         assert_eq!(evidence.source_file_count(), 2);
     }
-
     #[test]
     fn verification_error_is_payload_free() {
         let fixture = bundle_fixture(FixtureFault::None);

@@ -5,6 +5,11 @@ import assert from "node:assert/strict";
 import { ed25519 } from "@noble/curves/ed25519";
 
 import {
+  CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1,
+  CANONICAL_REQUEST_MAX_METHOD_BYTES_V1,
+  CANONICAL_REQUEST_MAX_PATH_BYTES_V1,
+  CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1,
+  CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1,
   canonicalQueryString,
   canonicalRequestMessage,
   canonicalRequestSignatureMessage,
@@ -17,6 +22,10 @@ import {
 import { AccountAddress } from "../src/address.js";
 
 const TEST_NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
+const SHARED_I105_ACCOUNT =
+  "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
+const SHARED_CANONICAL_ACCOUNT_HEX =
+  "0x02000120ce7fa46c9dce7ea4b125e2e36bdb63ea33073e7590ac92816ae1e861b7048b03";
 
 function deterministicKeyPair(seedByte) {
   const privateKey = Buffer.alloc(32, seedByte);
@@ -34,11 +43,166 @@ test("canonical request signing: canonical query sorts pairs", () => {
 test("canonical request signing: canonical query uses form encoding", () => {
   const rendered = canonicalQueryString("b=!*()~'&a=1");
   assert.equal(rendered, "a=1&b=%21*%28%29%7E%27");
+  assert.equal(canonicalQueryString("x=%41%zz%FF"), "x=A%25zz%EF%BF%BD");
+  assert.equal(
+    canonicalQueryString("\u{10000}=supplementary&\uE000=bmp"),
+    "%EE%80%80=bmp&%F0%90%80%80=supplementary",
+  );
+  assert.equal(
+    canonicalQueryString("k=\u{10000}&k=\uE000"),
+    "k=%EE%80%80&k=%F0%90%80%80",
+  );
+});
+
+test("canonical request signing: canonical query enforces V1 pair and byte limits", () => {
+  const exactPairs = Array.from(
+    { length: CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1 },
+    (_value, index) => `k${index}=v`,
+  ).join("&");
+  assert.doesNotThrow(() => canonicalQueryString(exactPairs));
+  assert.throws(
+    () => canonicalQueryString(`${exactPairs}&overflow=v`),
+    /exceeds 64 pairs/u,
+  );
+
+  const exactBytes = `k=${"x".repeat(CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1 - 2)}`;
+  assert.equal(Buffer.byteLength(exactBytes, "utf8"), 65_536);
+  assert.doesNotThrow(() => canonicalQueryString(exactBytes));
+  assert.throws(
+    () => canonicalQueryString(`${exactBytes}x`),
+    /exceeds 65536 raw UTF-8 bytes/u,
+  );
+
+  assert.equal(canonicalQueryString("&&b=2&&a=1&"), "a=1&b=2");
+});
+
+test("canonical request signing: enforces V1 account and nonce limits", () => {
+  const { privateKey } = deterministicKeyPair(12);
+  const common = {
+    networkId: TEST_NETWORK_ID,
+    method: "get",
+    path: "/v1/accounts",
+    privateKey,
+    timestampMs: 1_717_171_717_005,
+  };
+  const exactAccount = `${"a".repeat(
+    CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1 - 2,
+  )}@a`;
+  assert.equal(Buffer.byteLength(exactAccount, "utf8"), 36_864);
+  assert.doesNotThrow(() =>
+    buildCanonicalRequestHeaders({
+      ...common,
+      accountId: exactAccount,
+      nonce: "account-limit",
+    }),
+  );
+  assert.throws(
+    () =>
+      buildCanonicalRequestHeaders({
+        ...common,
+        accountId: `a${exactAccount}`,
+        nonce: "account-limit-plus-one",
+      }),
+    /exceeds 36864 UTF-8 bytes/u,
+  );
+
+  const exactNonce = "n".repeat(256);
+  assert.doesNotThrow(() =>
+    canonicalRequestSignatureMessage({
+      ...common,
+      accountId: undefined,
+      privateKey: undefined,
+      nonce: exactNonce,
+    }),
+  );
+  for (const invalidNonce of [`${exactNonce}n`, "internal space", "control\u0001", "nönce"]) {
+    assert.throws(
+      () =>
+        canonicalRequestSignatureMessage({
+          ...common,
+          accountId: undefined,
+          privateKey: undefined,
+          nonce: invalidNonce,
+        }),
+      /nonce must contain 1\.\.\.256 non-whitespace ASCII bytes/u,
+    );
+  }
+});
+
+test("canonical request signing: enforces the V1 method limit", () => {
+  const common = { path: "/v1/test", body: Buffer.alloc(0) };
+  assert.doesNotThrow(() =>
+    canonicalRequestMessage({
+      ...common,
+      method: "A".repeat(CANONICAL_REQUEST_MAX_METHOD_BYTES_V1),
+    }),
+  );
+  assert.throws(
+    () =>
+      canonicalRequestMessage({
+        ...common,
+        method: "A".repeat(CANONICAL_REQUEST_MAX_METHOD_BYTES_V1 + 1),
+      }),
+    /method exceeds 32 UTF-8 bytes/u,
+  );
+});
+
+test("canonical request signing: enforces the V1 path limit", () => {
+  const common = { method: "GET", body: Buffer.alloc(0) };
+  assert.doesNotThrow(() =>
+    canonicalRequestMessage({
+      ...common,
+      path: `/${"x".repeat(CANONICAL_REQUEST_MAX_PATH_BYTES_V1 - 1)}`,
+    }),
+  );
+  assert.throws(
+    () =>
+      canonicalRequestMessage({
+        ...common,
+        path: `/${"x".repeat(CANONICAL_REQUEST_MAX_PATH_BYTES_V1)}`,
+      }),
+    /path exceeds 65536 UTF-8 bytes/u,
+  );
+});
+
+test("canonical request signing: requires a canonical u64-compatible timestamp", () => {
+  const common = {
+    networkId: TEST_NETWORK_ID,
+    method: "GET",
+    path: "/v1/test",
+    nonce: "timestamp-limit",
+  };
+  assert.doesNotThrow(() =>
+    canonicalRequestSignatureMessage({ ...common, timestampMs: 0 }),
+  );
+  for (const timestampMs of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.POSITIVE_INFINITY]) {
+    assert.throws(
+      () => canonicalRequestSignatureMessage({ ...common, timestampMs }),
+      /timestampMs must be a non-negative safe integer/u,
+    );
+  }
+});
+
+test("canonical JSON requests do not normalize non-canonical timestamps", async () => {
+  await assert.rejects(
+    buildCanonicalJsonRequest({
+      accountId: "alice-1@wonderland",
+      networkId: TEST_NETWORK_ID,
+      method: "POST",
+      path: "/v1/test",
+      body: {},
+      privateKey: Buffer.alloc(32, 7),
+      timestampMs: 1.5,
+      nonce: "fractional-timestamp",
+    }),
+    /timestampMs must be a non-negative safe integer/u,
+  );
 });
 
 test("canonical request signing: headers include a verifiable signature", () => {
   const { privateKey, publicKey } = deterministicKeyPair(7);
-  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
+  const accountAddress = AccountAddress.fromAccount({ publicKey });
+  const accountId = accountAddress.toI105();
   const accountAlias = "alice-1@wonderland";
   const body = Buffer.from('{"foo":1}');
   const path = `/v1/accounts/${accountId}/assets`;
@@ -81,16 +245,25 @@ test("canonical request signing: headers include a verifiable signature", () => 
     timestampMs,
     nonce: `${nonce}-i105`,
   });
-  assert.notEqual(i105Headers["X-Iroha-Account"], accountId);
-  assert.equal(
-    Buffer.from(i105Headers["X-Iroha-Account"], "latin1").toString("utf8"),
-    accountId,
-  );
-  assert.ok(
-    Array.from(i105Headers["X-Iroha-Account"]).every(
-      (character) => character.codePointAt(0) <= 0xff,
-    ),
-  );
+  assert.equal(i105Headers["X-Iroha-Account"], accountAddress.canonicalHex());
+  assert.match(i105Headers["X-Iroha-Account"], /^0x[0-9a-f]+$/u);
+});
+
+test("canonical request signing: JSON helper renders I105 header identity as canonical hex", async () => {
+  const { privateKey } = deterministicKeyPair(13);
+  const request = await buildCanonicalJsonRequest({
+    accountId: SHARED_I105_ACCOUNT,
+    networkId: TEST_NETWORK_ID,
+    method: "post",
+    path: "/v1/test",
+    body: {},
+    privateKey,
+    timestampMs: 1_717_171_717_006,
+    nonce: "i105-header-hex",
+  });
+
+  assert.equal(request.headers["X-Iroha-Account"], SHARED_CANONICAL_ACCOUNT_HEX);
+  assert.match(request.headers["X-Iroha-Account"], /^0x[0-9a-f]+$/u);
 });
 
 test("canonical request signing: exact NetworkId separates same-label deployments", () => {

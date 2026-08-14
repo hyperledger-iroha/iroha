@@ -1,13 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Verify that Sumeragi operates correctly in `NPoS` mode when collectors are selected via PRF.
-
 use std::{
     fs,
     path::Path,
     sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
-
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::client::Client;
@@ -22,7 +20,6 @@ use nonzero_ext::nonzero;
 use norito::json::{self, Value};
 use tokio::time::sleep;
 use toml::Table;
-
 const MAX_HEIGHT_SKEW: u64 = 2;
 const PACEMAKER_BACKOFF_MULTIPLIER: u64 = 3;
 const PACEMAKER_RTT_FLOOR_MULTIPLIER: u64 = 2;
@@ -35,7 +32,6 @@ const NPOS_LIVENESS_SYNC_TIMEOUT: Duration = Duration::from_secs(600);
 const PACEMAKER_RESTART_SYNC_TIMEOUT: Duration = Duration::from_secs(600);
 const FAIL_ON_SANDBOX_SKIP_ENV: &str = "IROHA_FAIL_ON_SANDBOX_SKIP";
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
-
 fn fail_on_sandbox_skip() -> bool {
     let Ok(raw) = std::env::var(FAIL_ON_SANDBOX_SKIP_ENV) else {
         return false;
@@ -45,11 +41,9 @@ fn fail_on_sandbox_skip() -> bool {
         "1" | "true" | "yes" | "on"
     )
 }
-
 #[test]
 fn npos_network_produces_blocks() -> Result<()> {
     init_instruction_registry();
-
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond().clone())
@@ -76,7 +70,6 @@ fn npos_network_produces_blocks() -> Result<()> {
         let probe_client = network.client();
         let status_before = probe_client.get_status()?;
         let target_height = status_before.blocks + 5;
-
         let observed_heights = rt
             .block_on(async {
                 drive_network_to_height(
@@ -89,7 +82,6 @@ fn npos_network_produces_blocks() -> Result<()> {
                 .await
             })
             .wrap_err("heights did not converge")?;
-
         // A commit quorum should advance within the skew bound while one validator may lag.
         let max = *observed_heights.iter().max().unwrap_or(&0);
         ensure!(
@@ -105,11 +97,9 @@ fn npos_network_produces_blocks() -> Result<()> {
             ),
             "peer heights diverged during NPoS liveness check (target={target_height} allowed_skew={MAX_HEIGHT_SKEW}, got {observed_heights:?})"
         );
-
         rt.block_on(async {
             network.shutdown().await;
         });
-
         Ok(())
     })();
     if sandbox::handle_result(result, stringify!(npos_network_produces_blocks))?.is_none() {
@@ -117,11 +107,9 @@ fn npos_network_produces_blocks() -> Result<()> {
     }
     Ok(())
 }
-
 async fn wait_for_status_responses(network: &Network, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
     let mut last_error = None;
-
     loop {
         let mut all_ok = true;
         for peer in network.peers() {
@@ -149,11 +137,9 @@ async fn wait_for_status_responses(network: &Network, timeout: Duration) -> Resu
                 }
             }
         }
-
         if all_ok {
             return Ok(());
         }
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "status responses did not converge within {:?}; last_error={:?}",
@@ -161,17 +147,14 @@ async fn wait_for_status_responses(network: &Network, timeout: Duration) -> Resu
                 last_error
             ));
         }
-
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
-
 async fn wait_for_submit_connectivity(network: &Network, timeout: Duration) -> Result<Vec<u64>> {
     let deadline = Instant::now() + timeout;
     let expected = min_connected_peers_for_submit(network.peers().len());
     let mut last_snapshot = Vec::new();
     let mut last_error = None;
-
     loop {
         let mut peer_counts = Vec::new();
         for peer in network.peers() {
@@ -193,25 +176,21 @@ async fn wait_for_submit_connectivity(network: &Network, timeout: Duration) -> R
                 }
             }
         }
-
         if !peer_counts.is_empty() {
             last_snapshot.clone_from(&peer_counts);
             if peer_counts.iter().all(|count| *count >= expected) {
                 return Ok(peer_counts);
             }
         }
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "peer connectivity did not reach {expected} connected peers within {:?}; last_snapshot={last_snapshot:?} last_error={last_error:?}",
                 timeout,
             ));
         }
-
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_converged_heights(
     network: &Network,
     min_height: u64,
@@ -219,7 +198,6 @@ async fn wait_for_converged_heights(
 ) -> Result<Vec<u64>> {
     wait_for_converged_heights_with_skew(network, min_height, timeout, MAX_HEIGHT_SKEW).await
 }
-
 async fn wait_for_converged_heights_with_skew(
     network: &Network,
     min_height: u64,
@@ -228,7 +206,6 @@ async fn wait_for_converged_heights_with_skew(
 ) -> Result<Vec<u64>> {
     let deadline = Instant::now() + timeout;
     let mut last_snapshot = Vec::new();
-
     loop {
         let last_error = match peer_height_snapshot(network).await {
             Ok(heights) => {
@@ -245,18 +222,15 @@ async fn wait_for_converged_heights_with_skew(
             }
             Err(error) => Some(format!("{error:?}")),
         };
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "heights failed to converge within {:?}; target={min_height} allowed_skew={allowed_skew} last_snapshot={last_snapshot:?} last_error={last_error:?}",
                 timeout,
             ));
         }
-
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn peer_height_snapshot(network: &Network) -> Result<Vec<u64>> {
     let mut heights = Vec::with_capacity(network.peers().len());
     for peer in network.peers() {
@@ -293,7 +267,6 @@ async fn peer_height_snapshot(network: &Network) -> Result<Vec<u64>> {
     );
     Ok(heights)
 }
-
 fn all_peer_heights_advanced(baseline: &[u64], current: &[u64]) -> bool {
     !baseline.is_empty()
         && baseline.len() == current.len()
@@ -302,7 +275,6 @@ fn all_peer_heights_advanced(baseline: &[u64], current: &[u64]) -> bool {
             .zip(current)
             .all(|(before, after)| after > before)
 }
-
 async fn wait_for_all_peer_heights_to_advance(
     network: &Network,
     baseline: &[u64],
@@ -315,7 +287,6 @@ async fn wait_for_all_peer_heights_to_advance(
     );
     let deadline = Instant::now() + timeout;
     let mut last_snapshot = Vec::new();
-
     loop {
         let last_error = match peer_height_snapshot(network).await {
             Ok(heights) => {
@@ -327,7 +298,6 @@ async fn wait_for_all_peer_heights_to_advance(
             }
             Err(error) => Some(format!("{error:?}")),
         };
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "not every peer advanced within {:?}; baseline={baseline:?} last_snapshot={last_snapshot:?} last_error={last_error:?}",
@@ -337,7 +307,6 @@ async fn wait_for_all_peer_heights_to_advance(
         sleep(Duration::from_millis(250)).await;
     }
 }
-
 fn heights_meet_target(heights: &[u64], min_height: u64, allowed_skew: u64) -> bool {
     if heights.is_empty() {
         return false;
@@ -348,7 +317,6 @@ fn heights_meet_target(heights: &[u64], min_height: u64, allowed_skew: u64) -> b
         && max >= min_height
         && max.saturating_sub(min) <= allowed_skew
 }
-
 fn heights_meet_target_tolerating_lag(
     heights: &[u64],
     min_height: u64,
@@ -361,20 +329,17 @@ fn heights_meet_target_tolerating_lag(
     if tolerated_lagging == 0 || heights.len() <= tolerated_lagging {
         return heights_meet_target(heights, min_height, allowed_skew);
     }
-
     let required = heights.len().saturating_sub(tolerated_lagging).max(1);
     let mut sorted = heights.to_vec();
     sorted.sort_unstable_by(|left, right| right.cmp(left));
     heights_meet_target(&sorted[..required], min_height, allowed_skew)
 }
-
 fn min_connected_peers_for_submit(peer_count: usize) -> u64 {
     match peer_count {
         0..=2 => 0,
         _ => u64::try_from(peer_count.saturating_sub(2)).expect("peer count should fit into u64"),
     }
 }
-
 fn pick_fallback_submit_peer_index(block_totals: &[u64], seed: usize) -> usize {
     if block_totals.is_empty() {
         return 0;
@@ -391,7 +356,6 @@ fn pick_fallback_submit_peer_index(block_totals: &[u64], seed: usize) -> usize {
     let offset = seed % best_indices.len();
     best_indices[offset]
 }
-
 fn pick_submit_peer_index(
     leader_index: Option<usize>,
     leader_connected: bool,
@@ -405,7 +369,6 @@ fn pick_submit_peer_index(
         fallback
     }
 }
-
 fn ordered_submit_peer_indices(
     leader_index: Option<usize>,
     leader_connected: bool,
@@ -415,7 +378,6 @@ fn ordered_submit_peer_indices(
     if block_totals.is_empty() {
         return Vec::new();
     }
-
     let fallback = pick_fallback_submit_peer_index(block_totals, seed);
     let mut ordered = Vec::with_capacity(block_totals.len());
     if leader_connected
@@ -424,17 +386,14 @@ fn ordered_submit_peer_indices(
     {
         ordered.push(leader_index);
     }
-
     for offset in 0..block_totals.len() {
         let idx = (fallback + offset) % block_totals.len();
         if !ordered.contains(&idx) {
             ordered.push(idx);
         }
     }
-
     ordered
 }
-
 async fn submit_peer_indices_for_network(network: &Network, probe: &Client) -> Vec<usize> {
     let peer_count = network.peers().len();
     let (status, sumeragi) = tokio::task::spawn_blocking({
@@ -469,7 +428,6 @@ async fn submit_peer_indices_for_network(network: &Network, probe: &Client) -> V
         fallback_seed,
     )
 }
-
 async fn submit_seed_log(network: &Network, probe: &Client, message: String) -> Result<()> {
     let candidate_indices = submit_peer_indices_for_network(network, probe).await;
     let transaction = tokio::task::spawn_blocking({
@@ -485,7 +443,6 @@ async fn submit_seed_log(network: &Network, probe: &Client, message: String) -> 
     })
     .await
     .wrap_err("join seed transaction build task")?;
-
     let mut accepted = false;
     let mut errors = Vec::new();
     for idx in candidate_indices {
@@ -503,14 +460,12 @@ async fn submit_seed_log(network: &Network, probe: &Client, message: String) -> 
             Err(err) => errors.push(format!("{peer_name}: submit join error: {err}")),
         }
     }
-
     ensure!(
         accepted,
         "submit seed log was not accepted by any candidate peer; errors={errors:?}"
     );
     Ok(())
 }
-
 async fn drive_network_to_height(
     network: &Network,
     probe: &Client,
@@ -531,12 +486,10 @@ async fn drive_network_to_height(
     .map(|status| status.blocks.saturating_add(1))
     .unwrap_or(1)
     .min(target_height);
-
     let connectivity_timeout = timeout.min(Duration::from_secs(30));
     wait_for_submit_connectivity(network, connectivity_timeout)
         .await
         .wrap_err("submit connectivity not ready before seeding progress")?;
-
     loop {
         let now = Instant::now();
         if now >= deadline {
@@ -549,7 +502,6 @@ async fn drive_network_to_height(
         if next_height > target_height {
             return wait_for_converged_heights(network, target_height, probe_timeout).await;
         }
-
         let message = format!("{label} {attempt}");
         submit_seed_log(network, probe, message)
             .await
@@ -571,16 +523,13 @@ async fn drive_network_to_height(
         }
     }
 }
-
 fn detect_height_from_storage(peer: &NetworkPeer) -> Option<u64> {
     let storage_dir = peer
         .latest_stdout_log_path()
         .and_then(|path| path.parent().map(Path::to_path_buf))
         .map(|dir| dir.join("storage"))?;
-
     let mut max_height = 0;
     let candidates = [storage_dir.join("pipeline"), storage_dir.join("blocks")];
-
     for candidate in candidates {
         if let Ok(entries) = fs::read_dir(&candidate) {
             for entry in entries.flatten() {
@@ -604,10 +553,8 @@ fn detect_height_from_storage(peer: &NetworkPeer) -> Option<u64> {
             }
         }
     }
-
     (max_height > 0).then_some(max_height)
 }
-
 #[test]
 fn heights_meet_target_respects_skew_and_min_height() {
     assert!(heights_meet_target(&[4, 4, 4], 4, 0));
@@ -616,14 +563,12 @@ fn heights_meet_target_respects_skew_and_min_height() {
     assert!(!heights_meet_target(&[3, 4, 6], 4, 1));
     assert!(!heights_meet_target(&[], 4, 1));
 }
-
 #[test]
 fn heights_meet_target_tolerating_lag_accepts_quorum_progress() {
     assert!(heights_meet_target_tolerating_lag(&[5, 2, 4, 4], 5, 2, 1));
     assert!(!heights_meet_target_tolerating_lag(&[5, 2, 4, 4], 6, 2, 1));
     assert!(!heights_meet_target_tolerating_lag(&[5, 2, 2, 4], 5, 2, 1));
 }
-
 #[test]
 fn all_peer_heights_advanced_requires_every_matching_peer_to_progress() {
     assert!(all_peer_heights_advanced(&[4, 4, 4, 4], &[5, 6, 5, 7]));
@@ -631,7 +576,6 @@ fn all_peer_heights_advanced_requires_every_matching_peer_to_progress() {
     assert!(!all_peer_heights_advanced(&[4, 4, 4, 4], &[5, 6, 5]));
     assert!(!all_peer_heights_advanced(&[], &[]));
 }
-
 #[test]
 fn min_connected_peers_for_submit_keeps_quorum_margin() {
     assert_eq!(min_connected_peers_for_submit(0), 0);
@@ -640,30 +584,24 @@ fn min_connected_peers_for_submit_keeps_quorum_margin() {
     assert_eq!(min_connected_peers_for_submit(3), 1);
     assert_eq!(min_connected_peers_for_submit(4), 2);
 }
-
 #[test]
 fn pick_fallback_submit_peer_index_prefers_best_height_round_robin() {
     let totals = [7, 11, 11, 3];
-
     assert_eq!(pick_fallback_submit_peer_index(&totals, 0), 1);
     assert_eq!(pick_fallback_submit_peer_index(&totals, 1), 2);
     assert_eq!(pick_fallback_submit_peer_index(&totals, 2), 1);
     assert_eq!(pick_fallback_submit_peer_index(&[], 42), 0);
 }
-
 #[test]
 fn pick_submit_peer_index_prefers_connected_leader() {
     let totals = [4, 9, 9, 1];
-
     assert_eq!(pick_submit_peer_index(Some(3), true, &totals, 0), 3);
     assert_eq!(pick_submit_peer_index(Some(3), false, &totals, 0), 1);
     assert_eq!(pick_submit_peer_index(None, true, &totals, 1), 2);
 }
-
 #[test]
 fn ordered_submit_peer_indices_prioritize_leader_then_fallback_cycle() {
     let totals = [4, 9, 9, 1];
-
     assert_eq!(
         ordered_submit_peer_indices(Some(3), true, &totals, 0),
         vec![3, 1, 2, 0]
@@ -677,12 +615,10 @@ fn ordered_submit_peer_indices_prioritize_leader_then_fallback_cycle() {
         vec![2, 3, 0, 1]
     );
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
     init_instruction_registry();
-
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -724,13 +660,11 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
         );
         return Ok(());
     };
-
     let result: Result<()> = async {
         let config_layers: Vec<ConfigLayer> = network
             .config_layers()
             .map(|cow| ConfigLayer(cow.into_owned()))
             .collect();
-
         let sync_timeout = network.sync_timeout();
         wait_for_status_responses(&network, sync_timeout)
             .await
@@ -757,17 +691,13 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
             .join("v1/sumeragi/pacemaker")
             .wrap_err("compose pacemaker URL")?;
         let http = integration_tests::http::client();
-
         let pacemaker_before = fetch_pacemaker_status(&http, &pacemaker_url).await?;
         assert_pacemaker_matches_config(&pacemaker_before, "before restart");
-
         network.shutdown().await;
         sleep(Duration::from_secs(2)).await;
-
         restart_all_peers(&network, &config_layers)
             .await
             .wrap_err("peer restart failed")?;
-
         wait_for_status_responses(&network, sync_timeout)
             .await
             .wrap_err("status not ready after restart")?;
@@ -813,31 +743,25 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
             all_peer_heights_advanced(&recovered_heights, &resumed_heights),
             "every peer must advance after restart: baseline={recovered_heights:?} resumed={resumed_heights:?}"
         );
-
         let pacemaker_after = fetch_pacemaker_status(&http, &pacemaker_url).await?;
-
         assert_pacemaker_matches_config(&pacemaker_after, "after restart");
         network.shutdown().await;
         Ok(())
     }
     .await;
-
     if sandbox::handle_result(result, stringify!(npos_pacemaker_resumes_after_downtime))?.is_none()
     {
         return Ok(());
     }
     Ok(())
 }
-
 #[derive(Clone)]
 struct ConfigLayer(Table);
-
 impl AsRef<Table> for ConfigLayer {
     fn as_ref(&self) -> &Table {
         &self.0
     }
 }
-
 async fn restart_all_peers(network: &Network, layers: &[ConfigLayer]) -> Result<()> {
     for peer in network.peers() {
         let mnemonic = peer.mnemonic().to_string();
@@ -847,7 +771,6 @@ async fn restart_all_peers(network: &Network, layers: &[ConfigLayer]) -> Result<
     }
     Ok(())
 }
-
 struct PacemakerStatus {
     backoff_ms: u64,
     rtt_floor_ms: u64,
@@ -858,7 +781,6 @@ struct PacemakerStatus {
     jitter_ms: u64,
     jitter_frac_permille: u64,
 }
-
 async fn fetch_pacemaker_status(
     http: &reqwest::Client,
     url: &reqwest::Url,
@@ -904,7 +826,6 @@ async fn fetch_pacemaker_status(
         jitter_frac_permille: pacemaker_field_u64(object, "jitter_frac_permille")?,
     })
 }
-
 fn configured_pacemaker_status_fallback() -> PacemakerStatus {
     PacemakerStatus {
         backoff_ms: 0,
@@ -916,7 +837,6 @@ fn configured_pacemaker_status_fallback() -> PacemakerStatus {
         jitter_frac_permille: PACEMAKER_JITTER_FRAC_PERMILLE,
     }
 }
-
 fn should_use_pacemaker_config_fallback(status: reqwest::StatusCode) -> bool {
     matches!(
         status,
@@ -925,7 +845,6 @@ fn should_use_pacemaker_config_fallback(status: reqwest::StatusCode) -> bool {
             | reqwest::StatusCode::TOO_MANY_REQUESTS
     )
 }
-
 fn pacemaker_field_u64(object: &norito::json::Map, key: &str) -> Result<u64> {
     let value = object
         .get(key)
@@ -934,7 +853,6 @@ fn pacemaker_field_u64(object: &norito::json::Map, key: &str) -> Result<u64> {
         .as_u64()
         .ok_or_else(|| eyre!("pacemaker field {key} must be an unsigned integer"))
 }
-
 fn assert_pacemaker_matches_config(status: &PacemakerStatus, phase: &str) {
     assert_eq!(
         status.max_backoff_ms, PACEMAKER_MAX_BACKOFF_MS,
@@ -965,7 +883,6 @@ fn assert_pacemaker_matches_config(status: &PacemakerStatus, phase: &str) {
         status.max_backoff_ms
     );
 }
-
 #[test]
 fn pacemaker_fallback_status_codes_cover_auth_and_rate_limit() {
     assert!(should_use_pacemaker_config_fallback(
@@ -981,7 +898,6 @@ fn pacemaker_fallback_status_codes_cover_auth_and_rate_limit() {
         reqwest::StatusCode::INTERNAL_SERVER_ERROR
     ));
 }
-
 #[test]
 fn pacemaker_config_fallback_matches_test_configuration() {
     let fallback = configured_pacemaker_status_fallback();

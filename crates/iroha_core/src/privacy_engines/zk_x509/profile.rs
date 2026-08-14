@@ -4,11 +4,8 @@
 //! domain, accepted algorithm, custom EKU, trace segment, and transparent-proof
 //! parameter that can affect consensus.  Changing any value creates a new
 //! protocol identifier; there is no legacy decoder or parameter negotiation.
-
 mod readiness_certificates;
-
 use thiserror::Error;
-
 use crate::privacy_engines::{
     aggregate_stark::{
         AggregateFriTheorem2BoundV1, AggregateFriTheorem2CertificateV1, AggregateProofLayoutV1,
@@ -19,7 +16,6 @@ use crate::privacy_engines::{
         checked_transparent_stark_work_security_v1, transparent_stark_zk_mask_geometry_v1,
     },
 };
-
 /// Exact native relation version.
 pub(crate) const ZK_X509_RELATION_VERSION_V1: u16 = 1;
 /// Exact native proof-container version.
@@ -29,7 +25,6 @@ pub(crate) const ZK_X509_SUITE_V1: &[u8] = b"iroha-zk-x509-stark-p256-v0";
 /// Source identity for the original Iroha implementation.
 pub(crate) const ZK_X509_SOURCE_PROFILE_V1: &[u8] =
     b"iroha-native-rust:strict-der:rfc5280-p256-sha256:private-chain-crl-ownership:goldilocks-stark:v1";
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Minimum admitted certificate-chain depth, including leaf and root.
 pub(crate) const ZK_X509_MIN_CHAIN_DEPTH_V1: usize = 2;
@@ -57,7 +52,6 @@ pub(crate) const ZK_X509_ATTRIBUTE_SALT_BYTES_V1: usize = 32;
 pub(crate) const ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1: usize = 256;
 /// Fixed uncompressed P-256 affine public-key width, including SEC1 prefix.
 pub(crate) const ZK_X509_UNCOMPRESSED_P256_BYTES_V1: usize = 65;
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 /// RFC 5280 client-authentication EKU OID.
 pub(crate) const ZK_X509_CLIENT_AUTHENTICATION_EKU_OID_V1: &str = "1.3.6.1.5.5.7.3.2";
@@ -87,7 +81,6 @@ pub(crate) const ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1: &[u8] = &[
     0x69, 0x83, 0xe9, 0xce, 0xee, 0xa4, 0xdc, 0xb4, 0xda, 0xe5, 0xdf, 0xbe, 0xf0, 0xac, 0xd6, 0xd0,
     0xac, 0xc5, 0xa4, 0x6b,
 ];
-
 /// Domain for the canonical SHA-256 field-framing function.
 pub(crate) const ZK_X509_HASH_FRAME_DOMAIN_V1: &[u8] = b"iroha.zk-x509.sha256.frame.v1";
 /// Domain for occupied CA leaves.
@@ -110,13 +103,10 @@ pub(crate) const ZK_X509_CRL_DER_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.crl.d
 /// Domain for an exact CRL issuer-SPKI digest.
 pub(crate) const ZK_X509_CRL_ISSUER_SPKI_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-x509.crl.issuer-spki.v1";
-
 /// Canonical schema of one immutable governed trust-anchor revision.
 pub(crate) const ZK_X509_TRUST_ANCHOR_REVISION_SCHEMA_V1: &[u8] = b"implicit_version:u16-be=1|trust_anchor_id:bytes32|record_epoch:u64-be|trust_store_digest:bytes32|ca_membership_root:bytes32-compact-depth12|ca_membership_root_epoch:u64-be|previous_record_digest:tag-plus-bytes32|lifecycle:u8-active-or-revoked|record_digest:domain-framed-sha256";
-
 /// Canonical schema of one immutable governed certificate-policy revision.
 pub(crate) const ZK_X509_CERTIFICATE_POLICY_REVISION_SCHEMA_V1: &[u8] = b"implicit_version:u16-be=1|trust_anchor_id:bytes32|policy_id:bytes32|record_epoch:u64-be|policy_digest:bytes32|required_key_usage:u8-mask-bits0through3-upper-zero|required_extended_key_usages:u8-count-plus-strictly-sorted-u8-codes-max3|required_disclosed_attribute_indices:u8-count-plus-strictly-sorted-u8-indices-max4|previous_record_digest:tag-plus-bytes32|lifecycle:u8-active-or-revoked|record_digest:domain-framed-sha256";
-
 /// Canonical schema of one immutable governed CRL revision.
 ///
 /// The authoritative data-model record must carry all of these fields and a
@@ -134,7 +124,6 @@ pub(crate) const ZK_X509_CRL_REVISION_SCHEMA_V1: &[u8] = b"implicit_version:u16-
 /// CRLs, distribution-point partitions, and incomplete shard claims are
 /// rejected rather than interpreted.
 pub(crate) const ZK_X509_CRL_SCOPE_PROFILE_V1: &[u8] = b"leaf-only:one-issuer-per-certificate-policy:complete-base-crl:no-delta:no-indirect:no-partition:no-distribution-point";
-
 /// Canonical rules for the admitted complete base CRL.
 ///
 /// Every CRL is v2, direct, complete, and issuer-scoped. AKI and CRLNumber are
@@ -143,7 +132,6 @@ pub(crate) const ZK_X509_CRL_SCOPE_PROFILE_V1: &[u8] = b"leaf-only:one-issuer-pe
 /// distribution-point CRLs are forbidden. No CRL-entry extension is allowed,
 /// including certificateIssuer and reasonCode.
 pub(crate) const ZK_X509_CRL_PROFILE_V1: &[u8] = b"rfc5280-crl-closed-v1:der-only:v2:ecdsa-sha256-absent-params:aki-required-noncritical:crl-number-required-noncritical-u64-strictly-increasing:no-delta-crl-indicator:no-issuing-distribution-point:no-freshest-crl:no-indirect:no-partition:no-entry-extensions:complete-base-crl:max64-revoked-entries";
-
 /// Canonical rules for the admitted RFC 5280 subset.
 ///
 /// These bytes are included in the parameter/engine manifest.  They are
@@ -161,7 +149,6 @@ pub(crate) const ZK_X509_CRL_PROFILE_V1: &[u8] = b"rfc5280-crl-closed-v1:der-onl
 /// alternate names, distribution points, and every other extension are
 /// forbidden rather than silently ignored.
 pub(crate) const ZK_X509_RFC5280_PROFILE_V1: &[u8] = b"rfc5280-closed-v1:der-only:v3:serial-positive-nonzero-max20:exact-name-der:name-oids-only-c-o-ou-cn:no-duplicate-name-attributes:c-printablestring-two-uppercase-ascii:o-ou-cn-utf8string-or-printablestring:max-name-value256:disclosed-attribute-hash-content-octets-only:utf8-well-formed-no-u0000-u001f-u007f-u009f:utc-time-1970-2049:generalized-time-2050-9999:seconds-z-no-fraction:certificate-validity-inclusive:no-unique-id:ecdsa-sha256-absent-params:spki-id-ec-public-key-prime256v1-uncompressed:extensions-exact-order-aki-ski-keyusage-basicconstraints-and-optional-leaf-eku:no-duplicates-no-unknown:aki-ski-linked:bc-ku-eku-critical:ca-keycertsign-and-crlsign-only:ca-pathlen-required-explicit:direct-leaf-issuer-crlsign:root-self-name-self-signature:leaf-revocation-only:no-nameconstraints:no-policy-mapping:no-certificate-policies:no-policy-constraints:no-inhibit-any-policy:no-alt-names:no-distribution-points:no-freshest-crl";
-
 /// ECDSA signature canonicalization rules.
 ///
 /// Certificate and CRL signatures accept both mathematically valid `s`
@@ -171,7 +158,6 @@ pub(crate) const ZK_X509_RFC5280_PROFILE_V1: &[u8] = b"rfc5280-closed-v1:der-onl
 /// use low `s`, eliminating an avoidable witness malleability.
 pub(crate) const ZK_X509_ECDSA_RULES_V1: &[u8] =
     b"cert-and-crl:ecdsa-with-sha256-over-exact-tbs:minimal-der-rs-valid-range-high-or-low-s|wallet:ecdsa-p256-prehash-over-exact-32-byte-ownership-digest:minimal-der-rs-valid-range-low-s";
-
 /// Goldilocks prime `2^64 - 2^32 + 1`.
 pub(crate) const ZK_X509_GOLDILOCKS_MODULUS_V1: u64 = 0xffff_ffff_0000_0001;
 /// Maximum native trace logarithm in the canonical aggregate registration.
@@ -324,7 +310,6 @@ use readiness_certificates::{
     ZK_X509_RESOURCE_POSITIVE_PEAK_ADDRESS_SPACE_BYTES_V1,
     ZK_X509_RESOURCE_POSITIVE_PEAK_RSS_BYTES_V1,
 };
-
 const fn digest_is_nonzero_v1(digest: [u8; 32]) -> bool {
     let mut index = 0;
     while index < digest.len() {
@@ -335,7 +320,6 @@ const fn digest_is_nonzero_v1(digest: [u8; 32]) -> bool {
     }
     false
 }
-
 const fn digests_differ_v1(left: [u8; 32], right: [u8; 32]) -> bool {
     let mut index = 0;
     while index < left.len() {
@@ -346,7 +330,6 @@ const fn digests_differ_v1(left: [u8; 32], right: [u8; 32]) -> bool {
     }
     false
 }
-
 const fn release_evidence_pins_are_complete_v1(
     kat_proof_bytes: u32,
     kat_proof_sha256: [u8; 32],
@@ -360,7 +343,6 @@ const fn release_evidence_pins_are_complete_v1(
         && digest_is_nonzero_v1(expectations_json_sha256)
         && digests_differ_v1(expectations_norito_sha256, expectations_json_sha256)
 }
-
 #[derive(Clone, Copy)]
 struct ZkX509ReleaseCapturePinsV1 {
     kat_proof_bytes: u32,
@@ -375,7 +357,6 @@ struct ZkX509ReleaseCapturePinsV1 {
     maximum_peak_rss_bytes: u64,
     maximum_peak_address_space_bytes: u64,
 }
-
 const fn source_release_capture_pins_v1() -> ZkX509ReleaseCapturePinsV1 {
     ZkX509ReleaseCapturePinsV1 {
         kat_proof_bytes: ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1,
@@ -391,7 +372,6 @@ const fn source_release_capture_pins_v1() -> ZkX509ReleaseCapturePinsV1 {
         maximum_peak_address_space_bytes: ZK_X509_RESOURCE_MAXIMUM_PEAK_ADDRESS_SPACE_BYTES_V1,
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn native_release_capture_open_with_pins_v1(pins: ZkX509ReleaseCapturePinsV1) -> bool {
     pins.kat_proof_bytes == 0
@@ -406,7 +386,6 @@ const fn native_release_capture_open_with_pins_v1(pins: ZkX509ReleaseCapturePins
         && pins.maximum_peak_rss_bytes == 0
         && pins.maximum_peak_address_space_bytes == 0
 }
-
 const fn native_release_capture_pins_complete_v1(pins: ZkX509ReleaseCapturePinsV1) -> bool {
     release_evidence_pins_are_complete_v1(
         pins.kat_proof_bytes,
@@ -421,7 +400,6 @@ const fn native_release_capture_pins_complete_v1(pins: ZkX509ReleaseCapturePinsV
         && pins.maximum_peak_rss_bytes > 0
         && pins.maximum_peak_address_space_bytes > 0
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn native_release_expectation_digests_match_with_pins_v1(
     expected_norito_sha256: [u8; 32],
@@ -434,7 +412,6 @@ const fn native_release_expectation_digests_match_with_pins_v1(
         && !digests_differ_v1(actual_norito_sha256, expected_norito_sha256)
         && !digests_differ_v1(actual_json_sha256, expected_json_sha256)
 }
-
 /// Whether every deterministic proof and native fixture pin is populated.
 #[cfg(test)]
 pub(crate) const fn zk_x509_release_evidence_pins_complete_v1() -> bool {
@@ -445,13 +422,11 @@ pub(crate) const fn zk_x509_release_evidence_pins_complete_v1() -> bool {
         ZK_X509_NATIVE_RELEASE_EXPECTATIONS_JSON_SHA256_V1,
     )
 }
-
 /// Whether the one-time native expectation capture corridor remains open.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) const fn zk_x509_native_release_expectation_capture_open_v1() -> bool {
     native_release_capture_open_with_pins_v1(source_release_capture_pins_v1())
 }
-
 /// Whether an expectation pair matches both compiled release pins exactly.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) const fn zk_x509_native_release_expectation_digests_match_v1(
@@ -465,7 +440,6 @@ pub(crate) const fn zk_x509_native_release_expectation_digests_match_v1(
         json_sha256,
     )
 }
-
 /// Closed checklist that must be true before activation can be compiled.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ZkX509ReadinessV1 {
@@ -494,7 +468,6 @@ pub(crate) struct ZkX509ReadinessV1 {
     /// Release benchmarks fix measured rows, time, and peak memory below ceilings.
     pub(crate) resource_benchmarks: bool,
 }
-
 impl ZkX509ReadinessV1 {
     /// Whether every independently auditable implementation component exists.
     pub(crate) const fn is_complete(self) -> bool {
@@ -512,7 +485,6 @@ impl ZkX509ReadinessV1 {
             && self.resource_benchmarks
     }
 }
-
 /// Canonical production checklist derived from concrete release pins and
 /// independently validated certificate payloads.
 pub(crate) fn zk_x509_activation_readiness_v1() -> ZkX509ReadinessV1 {
@@ -552,7 +524,6 @@ pub(crate) fn zk_x509_activation_readiness_v1() -> ZkX509ReadinessV1 {
         resource_benchmarks,
     }
 }
-
 /// Failure in the fixed profile or activation checklist.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509ProfileErrorV1 {
@@ -572,7 +543,6 @@ pub(crate) enum ZkX509ProfileErrorV1 {
     #[error("zk-X509 engine is not complete and cannot be activated")]
     EngineIncomplete,
 }
-
 fn fri_parameters_v1(
     native_trace_log2: u8,
     blowup_log2: u8,
@@ -598,7 +568,6 @@ fn fri_parameters_v1(
         maximum_proof_bytes: ZK_X509_MAX_PROOF_BYTES_V1 as usize,
     }
 }
-
 fn fri_theorem_certificate_v1(
     domain_log2: u8,
     fold_count: u8,
@@ -627,7 +596,6 @@ fn fri_theorem_certificate_v1(
         claimed_query_error_bits: 132,
     }
 }
-
 fn validate_fri_subproof_v1(
     native_trace_log2: u8,
     blowup_log2: u8,
@@ -667,7 +635,6 @@ fn validate_fri_subproof_v1(
     )
     .map_err(|_| ZkX509ProfileErrorV1::InvalidStarkParameters)
 }
-
 /// Validate the immutable profile constants.
 pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
     let maximum_native_rows = u64::from(ZK_X509_MAX_NATIVE_TRACE_ROWS_V1);
@@ -810,7 +777,6 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
     }
     Ok(())
 }
-
 /// Enforce the compile-time activation and independent readiness gates.
 pub(crate) fn require_activation_readiness_v1(
     readiness: ZkX509ReadinessV1,
@@ -822,18 +788,15 @@ pub(crate) fn require_activation_readiness_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum SourceReleasePinStateV1 {
         BootstrapOpen,
         FullyPinned,
         Mixed,
     }
-
     const fn source_release_pin_state_v1(
         pins: ZkX509ReleaseCapturePinsV1,
     ) -> SourceReleasePinStateV1 {
@@ -845,7 +808,6 @@ mod tests {
             SourceReleasePinStateV1::Mixed
         }
     }
-
     #[test]
     fn fixed_algebraic_profile_and_activation_match_the_source_pin_state() {
         validate_profile_v1().expect("fixed zk-X509 profile");
@@ -905,7 +867,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn release_evidence_pin_state_machine_is_fail_closed() {
         let kat = [0x11; 32];
@@ -942,7 +903,6 @@ mod tests {
                 panic!("source release pins must be wholly open or wholly installed")
             }
         }
-
         assert!(release_evidence_pins_are_complete_v1(1, kat, norito, json));
         for (proof_bytes, proof_digest, norito_digest, json_digest) in [
             (0, kat, norito, json),
@@ -959,7 +919,6 @@ mod tests {
                 json_digest,
             ));
         }
-
         let empty_capture_pins = ZkX509ReleaseCapturePinsV1 {
             kat_proof_bytes: 0,
             kat_proof_sha256: [0; 32],
@@ -1032,7 +991,6 @@ mod tests {
                 "every one-pin partial source state must be rejected as mixed"
             );
         }
-
         let populated_capture_pins = ZkX509ReleaseCapturePinsV1 {
             kat_proof_bytes: 1,
             kat_proof_sha256: kat,
@@ -1053,7 +1011,6 @@ mod tests {
         assert!(native_release_capture_pins_complete_v1(
             populated_capture_pins
         ));
-
         assert!(native_release_expectation_digests_match_with_pins_v1(
             norito, json, norito, json
         ));
@@ -1072,7 +1029,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn main_and_ca_fri_theorem_substitutions_fail_closed() {
         for (native_log2, blowup_log2, terminal_log2, terminal_degree, fold_count, chunks) in
@@ -1164,7 +1120,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn independent_readiness_requirements_fail_closed() {
         let canonical = zk_x509_activation_readiness_v1();
@@ -1187,7 +1142,6 @@ mod tests {
             expected,
             "a caller-supplied all-true checklist must equal derived readiness"
         );
-
         let gates = [
             ZkX509ReadinessV1 {
                 der_and_rfc5280_air: false,
@@ -1246,7 +1200,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn custom_eku_oids_are_fixed_uuid_oids() {
         assert_eq!(
@@ -1266,7 +1219,6 @@ mod tests {
             "6983e9ceeea4dcb4dae5dfbef0acd6d0acc5a46b"
         );
     }
-
     #[test]
     fn retired_sparse_crl_profile_cannot_reenter_the_release_manifest() {
         for retired in [
@@ -1281,7 +1233,6 @@ mod tests {
             );
         }
     }
-
     const fn complete_readiness() -> ZkX509ReadinessV1 {
         ZkX509ReadinessV1 {
             der_and_rfc5280_air: true,

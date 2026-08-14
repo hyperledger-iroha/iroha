@@ -4,7 +4,6 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
 };
-
 use iroha_crypto::PublicKey;
 use iroha_primitives::numeric::Quantity;
 use ivm::{
@@ -18,7 +17,6 @@ use ivm::{
     syscalls,
 };
 mod common;
-
 fn repository_root() -> PathBuf {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     crate_dir
@@ -27,7 +25,6 @@ fn repository_root() -> PathBuf {
         .expect("crates/ivm must live two levels below the repository root")
         .to_path_buf()
 }
-
 fn documentation_examples() -> Vec<(&'static str, PathBuf)> {
     let root = repository_root();
     vec![
@@ -54,11 +51,9 @@ fn documentation_examples() -> Vec<(&'static str, PathBuf)> {
         ("transfer-asset", root.join("examples/transfer/transfer.ko")),
     ]
 }
-
 fn kotodama_compiler() -> KotodamaCompiler {
     KotodamaCompiler::new_with_options(CompilerOptions::default())
 }
-
 #[test]
 fn kotodama_documentation_examples_compile() {
     let compiler = kotodama_compiler();
@@ -73,7 +68,6 @@ fn kotodama_documentation_examples_compile() {
         );
     }
 }
-
 #[test]
 fn kotodama_documentation_examples_run() {
     let compiler = kotodama_compiler();
@@ -90,13 +84,11 @@ fn kotodama_documentation_examples_run() {
         }
     }
 }
-
 fn compile_snippet(compiler: &KotodamaCompiler, path: &Path) -> Vec<u8> {
     compiler
         .compile_file(path)
         .unwrap_or_else(|err| panic!("failed to compile {}: {err}", path.display()))
 }
-
 fn run_program_with_host<F>(label: &str, entrypoint: &str, bytecode: &[u8], host: WsvHost, check: F)
 where
     F: FnOnce(&mut WsvHost),
@@ -109,7 +101,6 @@ where
     if let Err(err) = vm.run() {
         panic!("run documentation example {label}: {err:?}");
     }
-
     let host_any = vm
         .host_mut_any()
         .expect("host must remain attached to the VM");
@@ -118,34 +109,28 @@ where
         .expect("documentation examples use WsvHost");
     check(host_ref);
 }
-
 fn account(domain: &str, public_key: &str) -> AccountId {
     let _domain = iroha_data_model::DomainId::try_new(domain, "universal").expect("domain id");
     let public_key: PublicKey = public_key.parse().expect("public key");
     AccountId::new(public_key)
 }
-
 const ACCOUNT_A_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const ACCOUNT_B_LITERAL: &str = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
 const DOCUMENTATION_CALLER_PUBLIC_KEY: &str =
     "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774";
 const TEST_ASSET_DEFINITION_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-
 fn parse_account_literal(raw: &str) -> AccountId {
     AccountId::parse_encoded(raw)
         .expect("valid encoded account literal")
         .into_account_id()
 }
-
 fn parse_asset_definition_literal(raw: &str) -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(raw).expect("valid asset definition literal")
 }
-
 #[derive(Default)]
 struct LoggingCoreHost {
     inner: ivm::CoreHost,
 }
-
 impl LoggingCoreHost {
     fn new() -> Self {
         Self {
@@ -153,7 +138,6 @@ impl LoggingCoreHost {
         }
     }
 }
-
 impl IVMHost for LoggingCoreHost {
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
         match number {
@@ -161,19 +145,16 @@ impl IVMHost for LoggingCoreHost {
             _ => self.inner.prepare_syscall(number, vm),
         }
     }
-
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         match number {
             syscalls::SYSCALL_DEBUG_PRINT | syscalls::SYSCALL_DEBUG_LOG => Ok(0),
             _ => self.inner.syscall(number, vm),
         }
     }
-
     fn as_any(&mut self) -> &mut dyn Any {
         self
     }
 }
-
 fn setup_base_world(caller: &AccountId) -> MockWorldStateView {
     let domain: DomainId =
         iroha_data_model::DomainId::try_new("default", "universal").expect("default domain id");
@@ -191,7 +172,6 @@ fn setup_base_world(caller: &AccountId) -> MockWorldStateView {
     );
     wsv
 }
-
 fn run_hajimari_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let program = compile_snippet(compiler, path);
     let mut vm = IVM::new(u64::MAX);
@@ -201,7 +181,6 @@ fn run_hajimari_snippet(compiler: &KotodamaCompiler, path: &Path) {
     common::select_kotodama_entrypoint(&mut vm, &program, "hajimari");
     vm.run().expect("run hajimari snippet");
 }
-
 fn run_threshold_escrow_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let program = compile_snippet(compiler, path);
     let mut vm = IVM::new(u64::MAX);
@@ -211,22 +190,18 @@ fn run_threshold_escrow_snippet(compiler: &KotodamaCompiler, path: &Path) {
     common::select_kotodama_entrypoint(&mut vm, &program, "hajimari");
     vm.run().expect("run threshold escrow snippet");
 }
-
 fn run_register_and_mint_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let program = compile_snippet(compiler, path);
     let caller = account("default", DOCUMENTATION_CALLER_PUBLIC_KEY);
     let mut wsv = setup_base_world(&caller);
-
     let asset_id = parse_asset_definition_literal(TEST_ASSET_DEFINITION_LITERAL);
     let recipient = parse_account_literal(ACCOUNT_A_LITERAL);
-
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::MintAsset(asset_id.clone()));
     assert!(
         wsv.register_account(&caller, recipient.clone()),
         "register recipient"
     );
-
     let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let asset_id_clone = asset_id.clone();
     run_program_with_host(
@@ -243,15 +218,12 @@ fn run_register_and_mint_snippet(compiler: &KotodamaCompiler, path: &Path) {
         },
     );
 }
-
 fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let program = compile_snippet(compiler, path);
     let caller = parse_account_literal(ACCOUNT_A_LITERAL);
     let mut wsv = setup_base_world(&caller);
-
     let recipient = parse_account_literal(ACCOUNT_B_LITERAL);
     let asset_id = parse_asset_definition_literal(TEST_ASSET_DEFINITION_LITERAL);
-
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::MintAsset(asset_id.clone()));
     assert!(
@@ -271,7 +243,6 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
         ),
         "seed caller balance"
     );
-
     let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let asset_id_clone = asset_id.clone();
     run_program_with_host(
@@ -297,16 +268,13 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
         },
     );
 }
-
 fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let program = compile_snippet(compiler, path);
     let caller = account("default", DOCUMENTATION_CALLER_PUBLIC_KEY);
     let mut wsv = setup_base_world(&caller);
-
     let alice = parse_account_literal(ACCOUNT_A_LITERAL);
     let bob = parse_account_literal(ACCOUNT_B_LITERAL);
     let asset_id = parse_asset_definition_literal(TEST_ASSET_DEFINITION_LITERAL);
-
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::MintAsset(asset_id.clone()));
     wsv.grant_permission(&caller, PermissionToken::TransferAsset(asset_id.clone()));
@@ -328,7 +296,6 @@ fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
         ),
         "seed alice balance"
     );
-
     let asset_id_clone = asset_id.clone();
     run_program_with_host(
         "call-transfer-asset",
@@ -353,18 +320,15 @@ fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
         },
     );
 }
-
 fn run_nft_flow_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let program = compile_snippet(compiler, path);
     let caller = parse_account_literal(ACCOUNT_A_LITERAL);
     let mut wsv = setup_base_world(&caller);
-
     let recipient = parse_account_literal(ACCOUNT_B_LITERAL);
     assert!(
         wsv.register_account(&caller, recipient.clone()),
         "register recipient"
     );
-
     let nft_id = NftId::from_str("n0$wonderland.universal").expect("nft id");
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(WsvHost::new_with_subject(

@@ -1,5 +1,4 @@
 // Governance ballot-v1 hard-cut and canonical-shape regressions.
-
 #[tokio::test]
 async fn ballot_zk_v1_rejects_alias_keys_in_raw_json() {
     let (state, _queue, _chain_id) = mk_basic_context();
@@ -49,7 +48,6 @@ async fn ballot_zk_v1_rejects_alias_keys_in_raw_json() {
         Some("public inputs must use root_hint (unsupported key rootHintHex)")
     );
 }
-
 #[tokio::test]
 async fn ballot_zk_v1_rejects_noncanonical_owner_hint() {
     let (state, _queue, _chain_id) = mk_basic_context();
@@ -85,11 +83,9 @@ async fn ballot_zk_v1_rejects_noncanonical_owner_hint() {
         Some("owner must use canonical I105 account id form")
     );
 }
-
 #[tokio::test]
 async fn zk_v1_handlers_reject_noncanonical_direction() {
     use iroha_data_model::isi::governance::BallotProof;
-
     let (state, _queue, _chain_id) = mk_basic_context();
     let authenticated = canonical_account(ACCOUNT_AUTHORITY);
     let network_id = *state.network_id_ref();
@@ -121,7 +117,6 @@ async fn zk_v1_handlers_reject_noncanonical_direction() {
         response.0.reason.as_deref(),
         Some("direction must be Aye, Nay, or Abstain")
     );
-
     let dto = super::ZkBallotV1BallotProofDto {
         authority: ACCOUNT_AUTHORITY.to_string(),
         network_id,
@@ -152,11 +147,9 @@ async fn zk_v1_handlers_reject_noncanonical_direction() {
         Some("direction must be Aye, Nay, or Abstain")
     );
 }
-
 #[tokio::test]
 async fn zk_v1_handlers_reject_non_token_backends_after_exact_network_admission() {
     use iroha_data_model::isi::governance::BallotProof;
-
     let (state, _queue, _chain_id) = mk_basic_context();
     let authenticated = canonical_account(ACCOUNT_AUTHORITY);
     let network_id = *state.network_id_ref();
@@ -197,7 +190,6 @@ async fn zk_v1_handlers_reject_non_token_backends_after_exact_network_admission(
                 .is_some_and(|reason| reason.contains("backend")),
             "backend `{backend:?}`"
         );
-
         let dto = super::ZkBallotV1BallotProofDto {
             authority: ACCOUNT_AUTHORITY.to_string(),
             network_id,
@@ -238,14 +230,12 @@ async fn zk_v1_handlers_reject_non_token_backends_after_exact_network_admission(
         );
     }
 }
-
 #[tokio::test]
 async fn ballot_zk_v1_ballotproof_builds_instruction_skeleton() {
     use axum::{Router, routing::post};
     use http_body_util::BodyExt as _;
     use iroha_data_model::isi::governance::BallotProof;
     use tower::ServiceExt as _;
-
     let (state, _queue, _chain_id) = mk_basic_context();
     let authenticated = canonical_account(ACCOUNT_AUTHORITY);
     let network_id = *state.network_id_ref();
@@ -270,7 +260,6 @@ async fn ballot_zk_v1_ballotproof_builds_instruction_skeleton() {
             }
         }),
     );
-
     // Build DTO
     let owner = canonical_literal(ACCOUNT_AUTHORITY);
     let ballot = BallotProof {
@@ -319,11 +308,9 @@ async fn ballot_zk_v1_ballotproof_builds_instruction_skeleton() {
             .is_some()
     );
 }
-
 #[tokio::test]
 async fn ballot_zk_v1_ballotproof_rejects_alias_keys_in_raw_json() {
     use iroha_data_model::isi::governance::BallotProof;
-
     let (state, _queue, _chain_id) = mk_basic_context();
     let authenticated = canonical_account(ACCOUNT_AUTHORITY);
     let network_id = *state.network_id_ref();

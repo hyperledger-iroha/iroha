@@ -3,21 +3,14 @@
 //!   cargo run -p ivm --features dev-tools --bin gen_abi_hash_doc -- --write
 //!   cargo run -p ivm --features dev-tools --bin gen_abi_hash_doc -- --check
 //!   cargo run -p ivm --features dev-tools --bin gen_abi_hash_doc -- --write --root /tmp/ivm-doc-stage
-
 use std::path::{Path, PathBuf};
-
 mod support;
-
-use support::{
-    GeneratedOutput, GenerationOptions, parse_generation_options, sync_generated_outputs,
-};
-
+use support::{GeneratedOutput, GenerationOptions, parse_generation_options, sync_generated_outputs};
 const BEGIN: &str = "<!-- BEGIN GENERATED ABI HASHES -->";
 const END: &str = "<!-- END GENERATED ABI HASHES -->";
 const RUNTIME_HASH_PREFIX: &str = "\"abi_hash_hex\": \"";
 const ABI_V1_GOLDEN_PREFIX: &str = "const ABI_V1_HASH_GOLDEN: &str = \"";
 const GAS_SCHEDULE_GOLDEN_PREFIX: &str = "let expected = hex!(\"";
-
 fn workspace_root() -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     PathBuf::from(manifest_dir)
@@ -26,27 +19,21 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root")
         .to_path_buf()
 }
-
 fn source_dir(root: &Path) -> PathBuf {
     root.join("specs")
 }
-
 fn abi_hash_golden_path(root: &Path) -> PathBuf {
     root.join("crates/ivm/tests/abi_hash_versions.rs")
 }
-
 fn gas_schedule_golden_path(root: &Path) -> PathBuf {
     root.join("crates/ivm/tests/gas_schedule_hash.rs")
 }
-
 fn header_paths(root: &Path) -> Vec<PathBuf> {
     vec![source_dir(root).join("ivm_header.md")]
 }
-
 fn runtime_sample_paths(root: &Path) -> Vec<PathBuf> {
     vec![source_dir(root).join("samples/runtime_abi_hash.md")]
 }
-
 fn render_generated_hash_section(text: &str, expected: &str) -> Result<String, String> {
     let begin_matches = text.match_indices(BEGIN).collect::<Vec<_>>();
     if begin_matches.len() != 1 {
@@ -74,7 +61,6 @@ fn render_generated_hash_section(text: &str, expected: &str) -> Result<String, S
     rendered.replace_range(begin..end, expected);
     Ok(rendered)
 }
-
 fn options_or_exit() -> GenerationOptions {
     match parse_generation_options(std::env::args().skip(1), workspace_root()) {
         Ok(options) => options,
@@ -84,7 +70,6 @@ fn options_or_exit() -> GenerationOptions {
         }
     }
 }
-
 fn prepare_outputs(
     header_paths: &[PathBuf],
     runtime_sample_paths: &[PathBuf],
@@ -113,13 +98,10 @@ fn prepare_outputs(
     })?);
     Ok(outputs)
 }
-
 fn main() {
     let options = options_or_exit();
-
     let table = ivm::syscalls::render_abi_hashes_markdown_table();
     let expected = format!("{BEGIN}\n{table}{END}");
-
     let header_paths = header_paths(&options.root);
     let runtime_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
     assert_eq!(
@@ -148,19 +130,15 @@ fn main() {
         eprintln!("updated: {}", path.display());
     }
 }
-
 fn render_runtime_sample(text: &str, hash: &str) -> Result<String, &'static str> {
     render_single_hash(text, RUNTIME_HASH_PREFIX, hash)
 }
-
 fn render_abi_hash_golden(text: &str, hash: &str) -> Result<String, &'static str> {
     render_single_hash(text, ABI_V1_GOLDEN_PREFIX, hash)
 }
-
 fn render_gas_schedule_golden(text: &str, hash: &str) -> Result<String, &'static str> {
     render_single_hash(text, GAS_SCHEDULE_GOLDEN_PREFIX, hash)
 }
-
 fn render_single_hash(text: &str, prefix: &str, hash: &str) -> Result<String, &'static str> {
     let Some(prefix_start) = text.find(prefix) else {
         return Err("ABI hash field not found");
@@ -177,26 +155,21 @@ fn render_single_hash(text: &str, prefix: &str, hash: &str) -> Result<String, &'
     if current.len() != 64 || !current.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("ABI hash is not 32-byte hexadecimal");
     }
-
     let mut rendered = text.to_owned();
     rendered.replace_range(value_start..value_end, hash);
     Ok(rendered)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
         fs,
         sync::atomic::{AtomicU64, Ordering},
     };
-
     use super::{
         BEGIN, END, prepare_outputs, render_abi_hash_golden, render_gas_schedule_golden,
         render_generated_hash_section, render_runtime_sample,
     };
-
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
-
     #[test]
     fn generated_hash_section_requires_exact_ordered_markers() {
         let expected = format!("{BEGIN}\ncanonical\n{END}");
@@ -216,24 +189,20 @@ mod tests {
         );
         assert!(render_generated_hash_section(&format!("{END}\n{BEGIN}"), &expected).is_err());
     }
-
     #[test]
     fn runtime_sample_replaces_exactly_one_canonical_hash() {
         let old = "{\n  \"abi_hash_hex\": \"1111111111111111111111111111111111111111111111111111111111111111\"\n}\n";
         let new = "2222222222222222222222222222222222222222222222222222222222222222";
         let rendered = render_runtime_sample(old, new).expect("valid runtime sample");
-
         assert_eq!(rendered, format!("{{\n  \"abi_hash_hex\": \"{new}\"\n}}\n"));
         assert!(render_runtime_sample("{}", new).is_err());
         assert!(render_runtime_sample(&format!("{old}{old}"), new).is_err());
     }
-
     #[test]
     fn abi_v1_golden_replaces_exactly_one_canonical_hash() {
         let old = "const ABI_V1_HASH_GOLDEN: &str = \"1111111111111111111111111111111111111111111111111111111111111111\";\n";
         let new = "2222222222222222222222222222222222222222222222222222222222222222";
         let rendered = render_abi_hash_golden(old, new).expect("valid ABI v1 golden");
-
         assert_eq!(
             rendered,
             format!("const ABI_V1_HASH_GOLDEN: &str = \"{new}\";\n")
@@ -241,18 +210,15 @@ mod tests {
         assert!(render_abi_hash_golden("const OTHER: &str = \"00\";\n", new).is_err());
         assert!(render_abi_hash_golden(&format!("{old}{old}"), new).is_err());
     }
-
     #[test]
     fn gas_schedule_golden_replaces_exactly_one_canonical_hash() {
         let old = "let expected = hex!(\"1111111111111111111111111111111111111111111111111111111111111111\");\n";
         let new = "2222222222222222222222222222222222222222222222222222222222222222";
         let rendered = render_gas_schedule_golden(old, new).expect("valid gas hash golden");
-
         assert_eq!(rendered, format!("let expected = hex!(\"{new}\");\n"));
         assert!(render_gas_schedule_golden("let other = hex!(\"00\");\n", new).is_err());
         assert!(render_gas_schedule_golden(&format!("{old}{old}"), new).is_err());
     }
-
     #[test]
     fn late_golden_failure_does_not_publish_earlier_outputs() {
         let unique = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
@@ -281,7 +247,6 @@ mod tests {
         fs::write(&gas_golden, "missing gas hash field\n").expect("write malformed late golden");
         let header_before = fs::read(&header).expect("snapshot header fixture");
         let expected = format!("{BEGIN}\ncurrent\n{END}");
-
         assert!(
             prepare_outputs(
                 &[header.clone()],
@@ -298,7 +263,6 @@ mod tests {
             fs::read(&header).expect("read header after late failure"),
             header_before
         );
-
         fs::remove_dir_all(root).expect("remove test directory");
     }
 }

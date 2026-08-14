@@ -3,9 +3,7 @@
 //! The DA program introduces Torii ingestion, replication, and enforcement logic that
 //! spans multiple crates. This module collects shared building blocks that are consumed
 //! by Torii surfaces, orchestrators, and validation pipelines.
-
 #![allow(clippy::module_name_repetitions)]
-
 pub mod commitment_store;
 pub mod commitments;
 pub mod confidential;
@@ -17,9 +15,7 @@ pub(crate) mod quota;
 pub mod receipts;
 pub mod replay_cache;
 pub mod shard_cursor;
-
 use std::collections::BTreeSet;
-
 pub use confidential::{ConfidentialComputeError, validate_confidential_compute_record};
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry, Nexus};
 use iroha_crypto::{Hash, HashOf};
@@ -51,12 +47,9 @@ pub use shard_cursor::{
     ShardCursorJournalError,
 };
 use thiserror::Error;
-
 use crate::da::pin_intents::{PinIntentDropReason, canonicalize_bundle};
-
 /// Maximum UTF-8 byte length admitted for a DA pin-intent alias.
 pub const MAX_DA_PIN_INTENT_ALIAS_BYTES: usize = 256;
-
 /// Errors returned when a DA commitment violates the configured lane proof policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DaProofPolicyError {
@@ -98,7 +91,6 @@ pub enum DaProofPolicyError {
         lane: LaneId,
     },
 }
-
 /// Errors returned when a DA commitment bundle violates invariants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DaCommitmentValidationError {
@@ -215,7 +207,6 @@ pub enum DaCommitmentValidationError {
         sequence: u64,
     },
 }
-
 /// Errors returned when a DA pin intent violates invariants.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DaPinIntentValidationError {
@@ -434,7 +425,6 @@ pub enum DaPinIntentValidationError {
         kept_ticket: iroha_data_model::da::types::StorageTicketId,
     },
 }
-
 /// Enforce that a commitment's proof scheme matches the configured lane policy.
 ///
 /// V1 defines only the Merkle proof scheme.
@@ -454,7 +444,6 @@ pub fn enforce_lane_proof_policy(
     };
     enforce_record_proof_scheme(record, entry.proof_scheme)
 }
-
 fn enforce_record_proof_scheme(
     record: &DaCommitmentRecord,
     expected_scheme: DaProofScheme,
@@ -466,7 +455,6 @@ fn enforce_record_proof_scheme(
             observed: record.proof_scheme,
         });
     }
-
     let chunk_root = record.chunk_root.as_ref();
     let chunk_root_zero_like = chunk_root[..Hash::LENGTH - 1].iter().all(|byte| *byte == 0)
         && chunk_root[Hash::LENGTH - 1] <= 1;
@@ -475,10 +463,8 @@ fn enforce_record_proof_scheme(
             lane: record.lane_id,
         });
     }
-
     Ok(())
 }
-
 /// Enforce a commitment against the proof policy authenticated in its block.
 ///
 /// # Errors
@@ -499,7 +485,6 @@ pub fn enforce_committed_proof_policy(
         })?;
     enforce_record_proof_scheme(record, policy.proof_scheme)
 }
-
 /// Validate the structure of a proof-policy sidecar authenticated by a block.
 ///
 /// # Errors
@@ -527,14 +512,12 @@ pub fn validate_committed_proof_policy_bundle(
     }
     Ok(())
 }
-
 fn active_lane_config_entry<'a>(
     nexus: &'a Nexus,
     lane_id: LaneId,
 ) -> Result<&'a LaneConfigEntry, DaProofPolicyError> {
     active_lane_config_entry_at_height(nexus, lane_id, None)
 }
-
 fn active_lane_config_entry_at_height(
     nexus: &Nexus,
     lane_id: LaneId,
@@ -543,7 +526,6 @@ fn active_lane_config_entry_at_height(
     let expected_config = LaneConfig::from_catalog(&nexus.lane_catalog);
     active_lane_config_entry_at_height_with_snapshot(nexus, &expected_config, lane_id, block_height)
 }
-
 fn active_lane_config_entry_at_height_with_snapshot<'a>(
     nexus: &'a Nexus,
     expected_config: &LaneConfig,
@@ -576,7 +558,6 @@ fn active_lane_config_entry_at_height_with_snapshot<'a>(
     }
     Ok(current)
 }
-
 /// Reusable active-lane policy view over one immutable Nexus snapshot.
 ///
 /// Constructing the view derives catalog geometry once. Query paths that
@@ -587,7 +568,6 @@ pub struct ActiveLaneProofPolicyContext<'a> {
     nexus: &'a Nexus,
     expected_config: LaneConfig,
 }
-
 impl<'a> ActiveLaneProofPolicyContext<'a> {
     /// Derive a reusable policy view for `nexus`.
     #[must_use]
@@ -597,7 +577,6 @@ impl<'a> ActiveLaneProofPolicyContext<'a> {
             expected_config: LaneConfig::from_catalog(&nexus.lane_catalog),
         }
     }
-
     /// Return the active DA proof policy for a lane at a block height.
     ///
     /// # Errors
@@ -617,7 +596,6 @@ impl<'a> ActiveLaneProofPolicyContext<'a> {
             proof_scheme: entry.proof_scheme,
         })
     }
-
     /// Require a lane to be active in this snapshot.
     ///
     /// # Errors
@@ -627,7 +605,6 @@ impl<'a> ActiveLaneProofPolicyContext<'a> {
     pub fn require_active_lane(&self, lane_id: LaneId) -> Result<(), DaProofPolicyError> {
         self.entry(lane_id, None).map(|_| ())
     }
-
     /// Require a lane to be active at a historical block height.
     ///
     /// # Errors
@@ -641,7 +618,6 @@ impl<'a> ActiveLaneProofPolicyContext<'a> {
     ) -> Result<(), DaProofPolicyError> {
         self.entry(lane_id, Some(block_height)).map(|_| ())
     }
-
     /// Enforce a commitment against the active lane policy at a block height.
     ///
     /// # Errors
@@ -656,7 +632,6 @@ impl<'a> ActiveLaneProofPolicyContext<'a> {
         let entry = self.entry(record.lane_id, Some(block_height))?;
         enforce_record_proof_scheme(record, entry.proof_scheme)
     }
-
     /// Enforce a commitment against the active lane policy.
     ///
     /// # Errors
@@ -670,7 +645,6 @@ impl<'a> ActiveLaneProofPolicyContext<'a> {
         let entry = self.entry(record.lane_id, None)?;
         enforce_record_proof_scheme(record, entry.proof_scheme)
     }
-
     fn entry(
         &self,
         lane_id: LaneId,
@@ -684,7 +658,6 @@ impl<'a> ActiveLaneProofPolicyContext<'a> {
         )
     }
 }
-
 fn catalog_lane_is_da_active(
     lane: &iroha_data_model::nexus::LaneConfig,
     nexus: &Nexus,
@@ -706,14 +679,12 @@ fn catalog_lane_is_da_active(
     }
     !inside_elastic_range
 }
-
 fn lane_uses_reserved_autoscale_metadata(lane: &iroha_data_model::nexus::LaneConfig) -> bool {
     lane.metadata.contains_key(AUTOSCALE_META_MANAGED)
         || lane.metadata.contains_key(AUTOSCALE_META_CREATED_HEIGHT)
         || lane.metadata.contains_key(AUTOSCALE_META_DRAIN_STATE)
         || lane.metadata.contains_key(AUTOSCALE_META_COMMITTEE)
 }
-
 fn lane_id_inside_enabled_autoscale_range(lane_id: LaneId, nexus: &Nexus) -> bool {
     if !nexus.enabled || !nexus.autoscale.enabled {
         return false;
@@ -723,7 +694,6 @@ fn lane_id_inside_enabled_autoscale_range(lane_id: LaneId, nexus: &Nexus) -> boo
     let lane_id = lane_id.as_u32();
     min < max && lane_id >= min && lane_id < max
 }
-
 fn lane_config_entries_match_for_da(lhs: &LaneConfigEntry, rhs: &LaneConfigEntry) -> bool {
     lhs.lane_id == rhs.lane_id
         && lhs.shard_id == rhs.shard_id
@@ -741,7 +711,6 @@ fn lane_config_entries_match_for_da(lhs: &LaneConfigEntry, rhs: &LaneConfigEntry
         && lhs.confidential_policy == rhs.confidential_policy
         && lhs.confidential_access == rhs.confidential_access
 }
-
 /// Return the active DA proof policy for a catalog-backed lane.
 ///
 /// # Errors
@@ -762,7 +731,6 @@ pub fn active_lane_proof_policy(
         proof_scheme: entry.proof_scheme,
     })
 }
-
 /// Return the active DA proof policy for a catalog-backed lane at a block height.
 ///
 /// # Errors
@@ -783,7 +751,6 @@ pub fn active_lane_proof_policy_at_height(
         proof_scheme: entry.proof_scheme,
     })
 }
-
 /// Enforce that a commitment's proof policy matches an active catalog-backed lane.
 ///
 /// # Errors
@@ -798,7 +765,6 @@ pub fn enforce_active_lane_proof_policy(
     active_lane_config_entry(nexus, record.lane_id)?;
     enforce_lane_proof_policy(record, &nexus.lane_config)
 }
-
 /// Enforce that a commitment's proof policy matches an active lane at a block height.
 ///
 /// # Errors
@@ -814,7 +780,6 @@ pub fn enforce_active_lane_proof_policy_at_height(
     active_lane_config_entry_at_height(nexus, record.lane_id, Some(block_height))?;
     enforce_lane_proof_policy(record, &nexus.lane_config)
 }
-
 /// Filter DA pin intents using the configured lane catalog.
 ///
 /// Returns `(kept, rejected)` where `kept` contains intents that passed validation
@@ -834,7 +799,6 @@ pub fn sanitize_pin_intents(
         account_exists,
     )
 }
-
 /// Filter DA pin intents using the active Nexus lane catalog.
 ///
 /// Returns `(kept, rejected)` where `kept` contains intents that passed
@@ -854,7 +818,6 @@ pub fn sanitize_pin_intents_against_nexus(
         account_exists,
     )
 }
-
 /// Filter DA pin intents using the active Nexus lane catalog at a block height.
 ///
 /// Returns `(kept, rejected)` where `kept` contains intents that passed
@@ -880,7 +843,6 @@ pub fn sanitize_pin_intents_against_nexus_at_height(
         account_exists,
     )
 }
-
 fn sanitize_pin_intents_with_lane_check(
     intents: impl IntoIterator<Item = iroha_data_model::da::pin_intent::DaPinIntent>,
     mut lane_is_active: impl FnMut(LaneId) -> bool,
@@ -894,7 +856,6 @@ fn sanitize_pin_intents_with_lane_check(
     let mut seen_manifests = BTreeSet::new();
     let mut kept = Vec::new();
     let mut rejected = Vec::new();
-
     let bounded_intents = intents
         .into_iter()
         .filter_map(|intent| {
@@ -948,17 +909,14 @@ fn sanitize_pin_intents_with_lane_check(
             }),
         }
     }
-
     for intent in canonical.intents {
         let key = (intent.lane_id, intent.epoch, intent.sequence);
-
         if !lane_is_active(intent.lane_id) {
             rejected.push(DaPinIntentValidationError::UnknownLane {
                 lane: intent.lane_id,
             });
             continue;
         }
-
         if intent
             .manifest_hash
             .as_bytes()
@@ -972,7 +930,6 @@ fn sanitize_pin_intents_with_lane_check(
             });
             continue;
         }
-
         if intent.storage_ticket.as_ref().iter().all(|byte| *byte == 0) {
             rejected.push(DaPinIntentValidationError::ZeroStorageTicket {
                 lane: intent.lane_id,
@@ -981,7 +938,6 @@ fn sanitize_pin_intents_with_lane_check(
             });
             continue;
         }
-
         let authorization = &intent.authorization;
         if authorization.lane_id != intent.lane_id
             || authorization.epoch != intent.epoch
@@ -1019,7 +975,6 @@ fn sanitize_pin_intents_with_lane_check(
             });
             continue;
         }
-
         if !seen.insert(key) {
             rejected.push(DaPinIntentValidationError::DuplicateIntent {
                 lane: intent.lane_id,
@@ -1028,7 +983,6 @@ fn sanitize_pin_intents_with_lane_check(
             });
             continue;
         }
-
         if !seen_tickets.insert(intent.storage_ticket) {
             rejected.push(DaPinIntentValidationError::DuplicateStorageTicket {
                 lane: intent.lane_id,
@@ -1037,7 +991,6 @@ fn sanitize_pin_intents_with_lane_check(
             });
             continue;
         }
-
         if !seen_manifests.insert(intent.manifest_hash) {
             rejected.push(DaPinIntentValidationError::DuplicateManifest {
                 lane: intent.lane_id,
@@ -1046,13 +999,10 @@ fn sanitize_pin_intents_with_lane_check(
             });
             continue;
         }
-
         kept.push(intent);
     }
-
     (kept, rejected)
 }
-
 fn authorization_satisfies_controller(
     authorization: &iroha_data_model::da::ingest::DaIngestAuthorizationV1,
     controller: &AccountController,
@@ -1083,7 +1033,6 @@ fn authorization_satisfies_controller(
         }
     }
 }
-
 /// Verify every pin-intent authorization against the exact network and committed account state.
 ///
 /// # Errors
@@ -1146,7 +1095,6 @@ pub fn validate_pin_intent_authorizations(
     }
     Ok(())
 }
-
 #[cfg(test)]
 /// Build a canonically signed DA ingest authorization for unit-test pin intents.
 pub(crate) fn signed_test_ingest_authorization(
@@ -1161,7 +1109,6 @@ pub(crate) fn signed_test_ingest_authorization(
         ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1},
         types::BlobDigest,
     };
-
     let mut authorization = DaIngestAuthorizationV1 {
         network_id,
         owner: AccountId::new(key_pair.public_key().clone()),
@@ -1182,7 +1129,6 @@ pub(crate) fn signed_test_ingest_authorization(
     });
     authorization
 }
-
 /// Validate a DA pin-intent bundle before accepting an inbound block.
 ///
 /// Unlike local spool ingestion, inbound block validation is fail-closed:
@@ -1202,7 +1148,6 @@ pub fn validate_pin_intent_bundle(
         });
     }
     validate_pin_intent_bundle_len(bundle.intents.len())?;
-
     let (_kept, rejected) =
         sanitize_pin_intents(bundle.intents.clone(), lane_config, account_exists);
     if let Some(error) = rejected.into_iter().next() {
@@ -1213,10 +1158,8 @@ pub fn validate_pin_intent_bundle(
     if let Some(index) = first_pin_intent_order_mismatch(&bundle.intents, &canonical.intents) {
         return Err(DaPinIntentValidationError::NonCanonicalOrder { index });
     }
-
     Ok(())
 }
-
 /// Validate a DA pin-intent bundle against active Nexus lane catalogs.
 ///
 /// # Errors
@@ -1233,7 +1176,6 @@ pub fn validate_pin_intent_bundle_against_nexus(
         });
     }
     validate_pin_intent_bundle_len(bundle.intents.len())?;
-
     let (_kept, rejected) =
         sanitize_pin_intents_against_nexus(bundle.intents.clone(), nexus, account_exists);
     if let Some(error) = rejected.into_iter().next() {
@@ -1244,10 +1186,8 @@ pub fn validate_pin_intent_bundle_against_nexus(
     if let Some(index) = first_pin_intent_order_mismatch(&bundle.intents, &canonical.intents) {
         return Err(DaPinIntentValidationError::NonCanonicalOrder { index });
     }
-
     Ok(())
 }
-
 /// Validate a DA pin-intent bundle against active Nexus lane catalogs at a block height.
 ///
 /// # Errors
@@ -1265,7 +1205,6 @@ pub fn validate_pin_intent_bundle_against_nexus_at_height(
         });
     }
     validate_pin_intent_bundle_len(bundle.intents.len())?;
-
     let (_kept, rejected) = sanitize_pin_intents_against_nexus_at_height(
         bundle.intents.clone(),
         nexus,
@@ -1280,10 +1219,8 @@ pub fn validate_pin_intent_bundle_against_nexus_at_height(
     if let Some(index) = first_pin_intent_order_mismatch(&bundle.intents, &canonical.intents) {
         return Err(DaPinIntentValidationError::NonCanonicalOrder { index });
     }
-
     Ok(())
 }
-
 fn first_pin_intent_order_mismatch(
     actual: &[iroha_data_model::da::pin_intent::DaPinIntent],
     canonical: &[iroha_data_model::da::pin_intent::DaPinIntent],
@@ -1294,7 +1231,6 @@ fn first_pin_intent_order_mismatch(
         .position(|(actual, canonical)| actual != canonical)
         .or_else(|| (actual.len() != canonical.len()).then_some(actual.len().min(canonical.len())))
 }
-
 /// Validate commitment bundle invariants before embedding into a block.
 ///
 /// Enforces a representable bundle length, unique `(lane, epoch, sequence)`
@@ -1315,7 +1251,6 @@ pub fn validate_commitment_bundle(
         Ok(())
     })
 }
-
 /// Validate commitment bundle invariants against active Nexus lane catalogs.
 ///
 /// # Errors
@@ -1332,7 +1267,6 @@ pub fn validate_commitment_bundle_against_nexus(
         Ok(())
     })
 }
-
 /// Validate commitment bundle invariants against active Nexus lanes at a block height.
 ///
 /// # Errors
@@ -1351,7 +1285,6 @@ pub fn validate_commitment_bundle_against_nexus_at_height(
         Ok(())
     })
 }
-
 fn validate_commitment_bundle_with_policy(
     bundle: &DaCommitmentBundle,
     mut validate_record_policy: impl FnMut(
@@ -1364,11 +1297,9 @@ fn validate_commitment_bundle_with_policy(
         });
     }
     validate_commitment_bundle_len(bundle.commitments.len())?;
-
     let mut seen_keys = BTreeSet::new();
     let mut seen_manifests = BTreeSet::new();
     let mut seen_tickets = BTreeSet::new();
-
     for record in &bundle.commitments {
         if record
             .manifest_hash
@@ -1382,7 +1313,6 @@ fn validate_commitment_bundle_with_policy(
                 sequence: record.sequence,
             });
         }
-
         if record.storage_ticket.as_ref().iter().all(|byte| *byte == 0) {
             return Err(DaCommitmentValidationError::ZeroStorageTicket {
                 lane: record.lane_id,
@@ -1390,7 +1320,6 @@ fn validate_commitment_bundle_with_policy(
                 sequence: record.sequence,
             });
         }
-
         let key = DaCommitmentKey::from_record(record);
         if !seen_keys.insert(key) {
             return Err(DaCommitmentValidationError::DuplicateCommitment {
@@ -1399,13 +1328,11 @@ fn validate_commitment_bundle_with_policy(
                 sequence: record.sequence,
             });
         }
-
         if !seen_manifests.insert(record.manifest_hash) {
             return Err(DaCommitmentValidationError::DuplicateManifest {
                 lane: record.lane_id,
             });
         }
-
         if !seen_tickets.insert(record.storage_ticket) {
             return Err(DaCommitmentValidationError::DuplicateStorageTicket {
                 lane: record.lane_id,
@@ -1413,7 +1340,6 @@ fn validate_commitment_bundle_with_policy(
                 sequence: record.sequence,
             });
         }
-
         validate_record_policy(record)?;
     }
     let mut canonical = bundle.commitments.clone();
@@ -1421,10 +1347,8 @@ fn validate_commitment_bundle_with_policy(
     if let Some(index) = first_commitment_order_mismatch(&bundle.commitments, &canonical) {
         return Err(DaCommitmentValidationError::NonCanonicalOrder { index });
     }
-
     Ok(())
 }
-
 fn first_commitment_order_mismatch(
     actual: &[DaCommitmentRecord],
     canonical: &[DaCommitmentRecord],
@@ -1435,16 +1359,13 @@ fn first_commitment_order_mismatch(
         .position(|(actual, canonical)| actual != canonical)
         .or_else(|| (actual.len() != canonical.len()).then_some(actual.len().min(canonical.len())))
 }
-
 pub(crate) const MAX_DA_BUNDLE_LOCATIONS: usize = u32::MAX as usize;
-
 pub(crate) fn da_bundle_location_index(index: usize) -> Option<u32> {
     if index >= MAX_DA_BUNDLE_LOCATIONS {
         return None;
     }
     u32::try_from(index).ok()
 }
-
 fn validate_commitment_bundle_len(len: usize) -> Result<(), DaCommitmentValidationError> {
     if len > MAX_DA_BUNDLE_LOCATIONS {
         return Err(DaCommitmentValidationError::BundleTooLarge {
@@ -1454,7 +1375,6 @@ fn validate_commitment_bundle_len(len: usize) -> Result<(), DaCommitmentValidati
     }
     Ok(())
 }
-
 fn validate_pin_intent_bundle_len(len: usize) -> Result<(), DaPinIntentValidationError> {
     if len > MAX_DA_BUNDLE_LOCATIONS {
         return Err(DaPinIntentValidationError::BundleTooLarge {
@@ -1464,7 +1384,6 @@ fn validate_pin_intent_bundle_len(len: usize) -> Result<(), DaPinIntentValidatio
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod proof_policy_tests {
     use iroha_data_model::{
@@ -1477,9 +1396,7 @@ mod proof_policy_tests {
         nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
-
     use super::*;
-
     fn intent(
         lane: LaneId,
         epoch: u64,
@@ -1504,7 +1421,6 @@ mod proof_policy_tests {
             signed_test_ingest_authorization(network_id, &key_pair, lane, epoch, sequence, 1),
         )
     }
-
     #[test]
     fn sanitize_pin_intents_drops_invalid_entries() {
         let lane_config = LaneConfig::default();
@@ -1513,13 +1429,11 @@ mod proof_policy_tests {
         let zero_manifest = intent(lane, 1, 2, [0; 32], [3; 32]);
         let zero_ticket = intent(lane, 1, 3, [4; 32], [0; 32]);
         let duplicate = intent(lane, 1, 1, [5; 32], [2; 32]);
-
         let (kept, rejected) = sanitize_pin_intents(
             vec![valid.clone(), zero_manifest, zero_ticket, duplicate.clone()],
             &lane_config,
             |_| true,
         );
-
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0], duplicate);
         assert_eq!(rejected.len(), 3);
@@ -1539,17 +1453,14 @@ mod proof_policy_tests {
                 .any(|err| matches!(err, DaPinIntentValidationError::DuplicateIntent { .. }))
         );
     }
-
     #[test]
     fn sanitize_pin_intents_rejects_duplicate_sequence_with_new_ticket() {
         let lane_config = LaneConfig::default();
         let lane_id = lane_config.primary().lane_id;
         let first = intent(lane_id, 2, 4, [0x11; 32], [0x10; 32]);
         let second = intent(lane_id, 2, 4, [0x33; 32], [0x22; 32]);
-
         let (kept, rejected) =
             sanitize_pin_intents(vec![first.clone(), second.clone()], &lane_config, |_| true);
-
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].storage_ticket, second.storage_ticket);
         assert!(rejected.iter().any(|err| matches!(
@@ -1558,7 +1469,6 @@ mod proof_policy_tests {
                 if *lane == lane_id && *epoch == 2 && *sequence == 4
         )));
     }
-
     #[test]
     fn sanitize_pin_intents_rejects_duplicate_ticket_and_manifest() {
         let lane_config = LaneConfig::default();
@@ -1566,13 +1476,11 @@ mod proof_policy_tests {
         let first = intent(lane, 1, 1, [0x11; 32], [0x21; 32]);
         let duplicate_ticket = intent(lane, 1, 2, [0x12; 32], [0x21; 32]);
         let duplicate_manifest = intent(lane, 1, 3, [0x11; 32], [0x23; 32]);
-
         let (kept, rejected) = sanitize_pin_intents(
             [first.clone(), duplicate_ticket, duplicate_manifest],
             &lane_config,
             |_| true,
         );
-
         assert_eq!(kept, vec![first]);
         assert!(rejected.iter().any(|err| matches!(
             err,
@@ -1591,14 +1499,12 @@ mod proof_policy_tests {
             } if *seen_lane == lane
         )));
     }
-
     #[test]
     fn validate_pin_intent_bundle_rejects_unsupported_version() {
         let lane_config = LaneConfig::default();
         let lane = lane_config.primary().lane_id;
         let mut bundle = DaPinIntentBundle::new(vec![intent(lane, 1, 1, [1; 32], [2; 32])]);
         bundle.version = DaPinIntentBundle::VERSION_V1 + 1;
-
         let err = validate_pin_intent_bundle(&bundle, &lane_config, |_| true)
             .expect_err("unsupported pin intent bundle version must fail");
         assert!(matches!(
@@ -1607,7 +1513,6 @@ mod proof_policy_tests {
                 if version == DaPinIntentBundle::VERSION_V1 + 1
         ));
     }
-
     #[test]
     fn validate_pin_intent_bundle_rejects_non_canonical_order() {
         let lane_config = LaneConfig::default();
@@ -1617,16 +1522,13 @@ mod proof_policy_tests {
         let mut bundle = DaPinIntentBundle::new(vec![first.clone(), second.clone()]);
         assert_eq!(bundle.intents, vec![first.clone(), second.clone()]);
         bundle.intents.swap(0, 1);
-
         let err = validate_pin_intent_bundle(&bundle, &lane_config, |_| true)
             .expect_err("non-canonical pin intent order must fail");
-
         assert!(matches!(
             err,
             DaPinIntentValidationError::NonCanonicalOrder { index: 0 }
         ));
     }
-
     #[test]
     fn first_pin_intent_order_mismatch_reports_first_difference() {
         let lane_config = LaneConfig::default();
@@ -1635,7 +1537,6 @@ mod proof_policy_tests {
         let second = intent(lane, 1, 2, [0x42; 32], [0x52; 32]);
         let canonical = vec![first.clone(), second.clone()];
         let reversed = vec![second, first];
-
         assert_eq!(
             first_pin_intent_order_mismatch(&reversed, &canonical),
             Some(0)
@@ -1645,7 +1546,6 @@ mod proof_policy_tests {
             None
         );
     }
-
     #[test]
     fn validate_pin_intent_bundle_rejects_duplicate_ticket() {
         let lane_config = LaneConfig::default();
@@ -1654,7 +1554,6 @@ mod proof_policy_tests {
             intent(lane, 1, 1, [0x31; 32], [0x41; 32]),
             intent(lane, 1, 2, [0x32; 32], [0x41; 32]),
         ]);
-
         let err = validate_pin_intent_bundle(&bundle, &lane_config, |_| true)
             .expect_err("duplicate pin intent ticket must fail");
         assert!(matches!(
@@ -1666,22 +1565,18 @@ mod proof_policy_tests {
             } if seen_lane == lane
         ));
     }
-
     #[test]
     fn sanitize_pin_intents_rejects_unknown_lane() {
         let lane_config = LaneConfig::default();
         let unknown_lane = LaneId::new(99);
         let record = intent(unknown_lane, 1, 1, [9; 32], [9; 32]);
-
         let (kept, rejected) = sanitize_pin_intents([record], &lane_config, |_| true);
-
         assert!(kept.is_empty());
         assert!(matches!(
             rejected.as_slice(),
             [DaPinIntentValidationError::UnknownLane { lane }] if *lane == unknown_lane
         ));
     }
-
     #[test]
     fn sanitize_pin_intents_records_alias_collision() {
         let lane_config = LaneConfig::default();
@@ -1690,10 +1585,8 @@ mod proof_policy_tests {
         first.alias = Some("alias-collision".to_string());
         let mut second = intent(lane, 1, 2, [2; 32], [2; 32]);
         second.alias = Some("alias-collision".to_string());
-
         let (kept, rejected) =
             sanitize_pin_intents(vec![first.clone(), second.clone()], &lane_config, |_| true);
-
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].storage_ticket, second.storage_ticket);
         assert!(rejected.iter().any(|err| matches!(
@@ -1707,7 +1600,6 @@ mod proof_policy_tests {
                 && *kept_ticket == second.storage_ticket
         )));
     }
-
     #[test]
     fn sanitize_pin_intents_enforces_alias_byte_limit() {
         let lane_config = LaneConfig::default();
@@ -1716,10 +1608,8 @@ mod proof_policy_tests {
         accepted.alias = Some("a".repeat(MAX_DA_PIN_INTENT_ALIAS_BYTES));
         let mut rejected = intent(lane, 1, 2, [0x32; 32], [0x42; 32]);
         rejected.alias = Some("a".repeat(MAX_DA_PIN_INTENT_ALIAS_BYTES + 1));
-
         let (kept, reasons) =
             sanitize_pin_intents([accepted.clone(), rejected], &lane_config, |_| true);
-
         assert_eq!(kept, vec![accepted]);
         assert!(matches!(
             reasons.as_slice(),
@@ -1728,7 +1618,6 @@ mod proof_policy_tests {
                     && *max == MAX_DA_PIN_INTENT_ALIAS_BYTES
         ));
     }
-
     #[test]
     fn sanitize_pin_intents_rejects_unknown_owner() {
         let lane_config = LaneConfig::default();
@@ -1751,7 +1640,6 @@ mod proof_policy_tests {
             1,
         );
         let without_owner = intent(lane, 3, 1, [0xEF; 32], [0x11; 32]);
-
         let (kept, rejected) = sanitize_pin_intents(
             vec![with_owner.clone(), without_owner.clone()],
             &lane_config,
@@ -1770,7 +1658,6 @@ mod proof_policy_tests {
             "unknown owner should surface as a validation error"
         );
     }
-
     fn signed_authorization_for_controller(
         network_id: NetworkId,
         owner: AccountId,
@@ -1804,7 +1691,6 @@ mod proof_policy_tests {
             .sort_by(|left, right| left.signer.cmp(&right.signer));
         authorization
     }
-
     #[test]
     fn ingest_authorization_rejects_same_label_different_genesis() {
         let key_pair =
@@ -1832,7 +1718,6 @@ mod proof_policy_tests {
             ManifestDigest::new([0xC7; 32]),
             authorization,
         )]);
-
         let error = validate_pin_intent_authorizations(&bundle, expected, |candidate| {
             (candidate == &owner).then(|| owner.controller().clone())
         })
@@ -1842,7 +1727,6 @@ mod proof_policy_tests {
             DaPinIntentValidationError::WrongNetwork { actual, .. } if actual == foreign
         ));
     }
-
     #[test]
     fn ingest_authorization_enforces_committed_multisig_threshold() {
         let member_a =
@@ -1882,14 +1766,12 @@ mod proof_policy_tests {
                 ),
             )])
         };
-
         validate_pin_intent_authorizations(
             &make_bundle(&[&member_a, &member_b]),
             network_id,
             |candidate| (candidate == &owner).then(|| AccountController::Multisig(policy.clone())),
         )
         .expect("canonical two-of-two witnesses satisfy committed state");
-
         let error = validate_pin_intent_authorizations(
             &make_bundle(&[&member_a]),
             network_id,
@@ -1902,7 +1784,6 @@ mod proof_policy_tests {
         ));
     }
 }
-
 /// Snapshot the configured proof policies for all lanes.
 #[must_use]
 pub fn proof_policies(lane_config: &LaneConfig) -> Vec<DaProofPolicy> {
@@ -1917,7 +1798,6 @@ pub fn proof_policies(lane_config: &LaneConfig) -> Vec<DaProofPolicy> {
         })
         .collect()
 }
-
 /// Snapshot active proof policies for catalog-backed Nexus lanes.
 #[must_use]
 pub fn active_proof_policies(nexus: &Nexus) -> Vec<DaProofPolicy> {
@@ -1928,7 +1808,6 @@ pub fn active_proof_policies(nexus: &Nexus) -> Vec<DaProofPolicy> {
         .filter_map(|lane| active_lane_proof_policy(nexus, lane.id).ok())
         .collect()
 }
-
 /// Snapshot active proof policies for catalog-backed Nexus lanes at a block height.
 #[must_use]
 pub fn active_proof_policies_at_height(nexus: &Nexus, block_height: u64) -> Vec<DaProofPolicy> {
@@ -1940,19 +1819,16 @@ pub fn active_proof_policies_at_height(nexus: &Nexus, block_height: u64) -> Vec<
         .filter_map(|lane| context.policy_at_height(lane.id, block_height).ok())
         .collect()
 }
-
 /// Snapshot the configured proof policies as a versioned bundle.
 #[must_use]
 pub fn proof_policy_bundle(lane_config: &LaneConfig) -> DaProofPolicyBundle {
     DaProofPolicyBundle::new(proof_policies(lane_config))
 }
-
 /// Snapshot active proof policies as a versioned bundle.
 #[must_use]
 pub fn active_proof_policy_bundle(nexus: &Nexus) -> DaProofPolicyBundle {
     DaProofPolicyBundle::new(active_proof_policies(nexus))
 }
-
 /// Snapshot active proof policies as a versioned bundle at a block height.
 #[must_use]
 pub fn active_proof_policy_bundle_at_height(
@@ -1961,21 +1837,18 @@ pub fn active_proof_policy_bundle_at_height(
 ) -> DaProofPolicyBundle {
     DaProofPolicyBundle::new(active_proof_policies_at_height(nexus, block_height))
 }
-
 /// Compute the hash for the current proof policy bundle.
 #[must_use]
 pub fn proof_policy_bundle_hash(lane_config: &LaneConfig) -> HashOf<DaProofPolicyBundle> {
     let bundle = proof_policy_bundle(lane_config);
     HashOf::new(&bundle)
 }
-
 /// Compute the hash for the active proof policy bundle.
 #[must_use]
 pub fn active_proof_policy_bundle_hash(nexus: &Nexus) -> HashOf<DaProofPolicyBundle> {
     let bundle = active_proof_policy_bundle(nexus);
     HashOf::new(&bundle)
 }
-
 /// Compute the hash for the active proof policy bundle at a block height.
 #[must_use]
 pub fn active_proof_policy_bundle_hash_at_height(
@@ -1985,11 +1858,9 @@ pub fn active_proof_policy_bundle_hash_at_height(
     let bundle = active_proof_policy_bundle_at_height(nexus, block_height);
     HashOf::new(&bundle)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeMap, num::NonZeroU32};
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         da::{
@@ -2004,9 +1875,7 @@ mod tests {
         peer::PeerId,
     };
     use norito::to_bytes;
-
     use super::*;
-
     fn test_pin_authorization(
         lane: LaneId,
         epoch: u64,
@@ -2021,7 +1890,6 @@ mod tests {
         );
         signed_test_ingest_authorization(network_id, &key_pair, lane, epoch, sequence, 1)
     }
-
     fn lane_catalog_with(lanes: Vec<ModelLaneConfig>) -> LaneCatalog {
         let max_lane = lanes
             .iter()
@@ -2032,14 +1900,12 @@ mod tests {
             NonZeroU32::new(max_lane.saturating_add(1)).expect("lane count is non-zero");
         LaneCatalog::new(lane_count, lanes).expect("lane catalog")
     }
-
     fn lane_config_with(
         lanes: Vec<ModelLaneConfig>,
     ) -> iroha_config::parameters::actual::LaneConfig {
         let catalog = lane_catalog_with(lanes);
         iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog)
     }
-
     fn nexus_with_catalog(lane_catalog: LaneCatalog) -> Nexus {
         let dataspace_catalog = DataSpaceCatalog::new(
             lane_catalog
@@ -2065,7 +1931,6 @@ mod tests {
             ..Default::default()
         }
     }
-
     fn attach_valid_autoscale_drain_state(lane: &mut ModelLaneConfig, close_global_height: u64) {
         let keypair =
             KeyPair::try_from_seed(b"da-policy-drain-validator".to_vec(), Algorithm::BlsNormal)
@@ -2105,7 +1970,6 @@ mod tests {
             hex::encode(norito::to_bytes(&state).expect("encode DA policy drain state")),
         );
     }
-
     fn merkle_record(lane: u32) -> DaCommitmentRecord {
         DaCommitmentRecord::new(
             LaneId::new(lane),
@@ -2122,7 +1986,6 @@ mod tests {
                 .expect("checked core DA Merkle acknowledgement signature fixture"),
         )
     }
-
     #[test]
     fn proof_policies_reflect_lane_config() {
         let lane_a = ModelLaneConfig {
@@ -2132,7 +1995,6 @@ mod tests {
             proof_scheme: DaProofScheme::MerkleSha256,
             ..ModelLaneConfig::default()
         };
-
         let lane_b = ModelLaneConfig {
             id: LaneId::new(2),
             alias: "second-merkle-lane".to_string(),
@@ -2140,22 +2002,18 @@ mod tests {
             proof_scheme: DaProofScheme::MerkleSha256,
             ..ModelLaneConfig::default()
         };
-
         let lane_config = lane_config_with(vec![lane_a.clone(), lane_b.clone()]);
         let policies = proof_policies(&lane_config);
-
         assert_eq!(policies.len(), 2);
         assert_eq!(policies[0].lane_id, lane_a.id);
         assert_eq!(policies[0].dataspace_id, lane_a.dataspace_id);
         assert_eq!(policies[0].alias, lane_a.alias);
         assert_eq!(policies[0].proof_scheme, lane_a.proof_scheme);
-
         assert_eq!(policies[1].lane_id, lane_b.id);
         assert_eq!(policies[1].dataspace_id, lane_b.dataspace_id);
         assert_eq!(policies[1].alias, lane_b.alias);
         assert_eq!(policies[1].proof_scheme, lane_b.proof_scheme);
     }
-
     #[test]
     fn active_proof_policy_bundle_ignores_stale_geometry_for_removed_catalog_lane() {
         let stale_lane = LaneId::new(1);
@@ -2174,9 +2032,7 @@ mod tests {
             nexus.lane_config.entry(stale_lane).is_some(),
             "test must seed derived geometry for the removed lane"
         );
-
         let bundle = active_proof_policy_bundle(&nexus);
-
         assert_eq!(bundle.policies.len(), 1);
         assert_eq!(bundle.policies[0].lane_id, LaneId::SINGLE);
         assert!(
@@ -2191,7 +2047,6 @@ mod tests {
             Err(DaProofPolicyError::UnknownLane { lane }) if lane == stale_lane
         ));
     }
-
     #[test]
     fn validate_commitment_bundle_against_nexus_rejects_stale_geometry_lane() {
         let stale_lane = LaneId::new(1);
@@ -2207,17 +2062,14 @@ mod tests {
         let mut nexus = nexus_with_catalog(authoritative_catalog);
         nexus.lane_config = LaneConfig::from_catalog(&stale_geometry_catalog);
         let bundle = DaCommitmentBundle::new(vec![merkle_record(stale_lane.as_u32())]);
-
         let err = validate_commitment_bundle_against_nexus(&bundle, &nexus)
             .expect_err("stale geometry-only lane must not validate commitments");
-
         assert!(matches!(
             err,
             DaCommitmentValidationError::ProofPolicy(DaProofPolicyError::UnknownLane { lane })
                 if lane == stale_lane
         ));
     }
-
     #[test]
     fn validate_pin_intent_bundle_against_nexus_rejects_stale_geometry_lane() {
         let stale_lane = LaneId::new(1);
@@ -2242,16 +2094,13 @@ mod tests {
                 test_pin_authorization(stale_lane, 1, 1),
             ),
         ]);
-
         let err = validate_pin_intent_bundle_against_nexus(&bundle, &nexus, |_| true)
             .expect_err("stale geometry-only lane must not validate pin intents");
-
         assert!(matches!(
             err,
             DaPinIntentValidationError::UnknownLane { lane } if lane == stale_lane
         ));
     }
-
     #[test]
     fn active_proof_policy_rejects_catalog_lane_with_missing_dataspace() {
         let inactive_lane = LaneId::new(1);
@@ -2268,9 +2117,7 @@ mod tests {
         let mut nexus = nexus_with_catalog(lane_catalog);
         nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata::default()])
             .expect("dataspace catalog without lane dataspace");
-
         let bundle = active_proof_policy_bundle(&nexus);
-
         assert!(
             bundle
                 .policies
@@ -2291,7 +2138,6 @@ mod tests {
             DaCommitmentValidationError::ProofPolicy(DaProofPolicyError::UnknownLane { lane })
                 if lane == inactive_lane
         ));
-
         let pin_bundle = iroha_data_model::da::pin_intent::DaPinIntentBundle::new(vec![
             iroha_data_model::da::pin_intent::DaPinIntent::new(
                 inactive_lane,
@@ -2309,7 +2155,6 @@ mod tests {
             DaPinIntentValidationError::UnknownLane { lane } if lane == inactive_lane
         ));
     }
-
     #[test]
     fn active_proof_policy_rejects_manual_lane_inside_autoscale_elastic_range() {
         let lane = LaneId::new(1);
@@ -2325,7 +2170,6 @@ mod tests {
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
         nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
-
         let bundle = active_proof_policy_bundle(&nexus);
         assert!(
             bundle.policies.iter().all(|policy| policy.lane_id != lane),
@@ -2345,7 +2189,6 @@ mod tests {
             }) if rejected == lane
         ));
     }
-
     #[test]
     fn active_proof_policy_accepts_valid_autoscale_elastic_lane() {
         let lane = LaneId::new(1);
@@ -2366,7 +2209,6 @@ mod tests {
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
         nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
-
         let policy = active_lane_proof_policy(&nexus, lane)
             .expect("valid autoscale elastic lanes must advertise DA policy");
         assert_eq!(policy.lane_id, lane);
@@ -2376,7 +2218,6 @@ mod tests {
         )
         .expect("valid autoscale elastic lane should validate DA commitments");
     }
-
     #[test]
     fn active_proof_policy_rejects_missing_or_malformed_autoscale_committee_pin() {
         for pin in [None, Some("not-canonical-hex")] {
@@ -2402,14 +2243,12 @@ mod tests {
             nexus.autoscale.enabled = true;
             nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
             nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
-
             assert!(matches!(
                 active_lane_proof_policy_at_height(&nexus, lane, 1),
                 Err(DaProofPolicyError::UnknownLane { lane: rejected }) if rejected == lane
             ));
         }
     }
-
     #[test]
     fn active_proof_policy_stops_autoscale_da_after_exact_drain_close_height() {
         let lane = LaneId::new(1);
@@ -2431,7 +2270,6 @@ mod tests {
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
         nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
-
         active_lane_proof_policy_at_height(&nexus, lane, 10)
             .expect("DA work at the exact close height remains admissible");
         assert!(matches!(
@@ -2443,7 +2281,6 @@ mod tests {
             Err(DaProofPolicyError::UnknownLane { lane: rejected }) if rejected == lane
         ));
     }
-
     #[test]
     fn active_proof_policy_at_height_rejects_future_created_autoscale_lane() {
         let lane = LaneId::new(1);
@@ -2465,7 +2302,6 @@ mod tests {
         nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
         nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
         let bundle = DaCommitmentBundle::new(vec![merkle_record(lane.as_u32())]);
-
         assert!(
             active_lane_proof_policy(&nexus, lane).is_ok(),
             "heightless policy snapshots keep well-formed autoscale lanes visible"
@@ -2490,7 +2326,6 @@ mod tests {
                 lane: rejected
             }) if rejected == lane
         ));
-
         active_lane_proof_policy_at_height(&nexus, lane, 7)
             .expect("autoscale DA policy should activate at the declared creation height");
         let active_bundle = active_proof_policy_bundle_at_height(&nexus, 7);
@@ -2504,7 +2339,6 @@ mod tests {
         validate_commitment_bundle_against_nexus_at_height(&bundle, &nexus, 7)
             .expect("autoscale DA commitments should validate at the declared creation height");
     }
-
     #[test]
     fn pin_intent_policy_at_height_rejects_future_created_autoscale_lane() {
         let lane = LaneId::new(1);
@@ -2535,7 +2369,6 @@ mod tests {
                 test_pin_authorization(lane, 1, 1),
             ),
         ]);
-
         validate_pin_intent_bundle_against_nexus(&bundle, &nexus, |_| true)
             .expect("heightless policy snapshots keep well-formed autoscale lanes visible");
         let err = validate_pin_intent_bundle_against_nexus_at_height(&bundle, &nexus, 6, |_| true)
@@ -2547,7 +2380,6 @@ mod tests {
         validate_pin_intent_bundle_against_nexus_at_height(&bundle, &nexus, 7, |_| true)
             .expect("autoscale DA pin intents should validate at the declared creation height");
     }
-
     #[test]
     fn active_proof_policy_rejects_malformed_autoscale_reserved_lane() {
         let lane = LaneId::new(1);
@@ -2567,13 +2399,11 @@ mod tests {
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
         nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
-
         assert!(matches!(
             active_lane_proof_policy(&nexus, lane),
             Err(DaProofPolicyError::UnknownLane { lane: rejected }) if rejected == lane
         ));
     }
-
     #[test]
     fn active_proof_policy_rejects_incomplete_consensus_autoscale_markers() {
         for marker in [AUTOSCALE_META_DRAIN_STATE, AUTOSCALE_META_COMMITTEE] {
@@ -2591,7 +2421,6 @@ mod tests {
             nexus.autoscale.enabled = true;
             nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
             nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
-
             assert!(
                 matches!(
                     active_lane_proof_policy(&nexus, lane),
@@ -2601,7 +2430,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn active_proof_policy_rejects_catalog_geometry_drift() {
         let drifted_lane = LaneId::new(1);
@@ -2627,9 +2455,7 @@ mod tests {
         ]);
         let mut nexus = nexus_with_catalog(authoritative_catalog);
         nexus.lane_config = LaneConfig::from_catalog(&drifted_geometry_catalog);
-
         let bundle = active_proof_policy_bundle(&nexus);
-
         assert!(
             bundle
                 .policies
@@ -2649,7 +2475,6 @@ mod tests {
             DaCommitmentValidationError::ProofPolicy(DaProofPolicyError::UnknownLane { lane })
                 if lane == drifted_lane
         ));
-
         let pin_bundle = iroha_data_model::da::pin_intent::DaPinIntentBundle::new(vec![
             iroha_data_model::da::pin_intent::DaPinIntent::new(
                 drifted_lane,
@@ -2667,28 +2492,23 @@ mod tests {
             DaPinIntentValidationError::UnknownLane { lane } if lane == drifted_lane
         ));
     }
-
     #[test]
     fn proof_policy_bundle_hash_matches_precomputed() {
         let config = lane_config_with(vec![ModelLaneConfig::default()]);
         let bundle = proof_policy_bundle(&config);
         let hash = proof_policy_bundle_hash(&config);
-
         let expected_hash = HashOf::new(&bundle);
         assert_eq!(hash, expected_hash);
         assert_eq!(bundle.version, DaProofPolicyBundle::VERSION_V1);
-
         let encoded = to_bytes(&bundle.policies).expect("encode policies");
         assert_eq!(bundle.policy_hash, Hash::new(encoded));
     }
-
     #[test]
     fn allows_merkle_lane_commitment() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let record = merkle_record(0);
         assert!(enforce_lane_proof_policy(&record, &lane_config).is_ok());
     }
-
     #[test]
     fn rejects_unknown_lane() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
@@ -2696,7 +2516,6 @@ mod tests {
         let err = enforce_lane_proof_policy(&record, &lane_config).expect_err("should fail");
         assert!(matches!(err, DaProofPolicyError::UnknownLane { .. }));
     }
-
     #[test]
     fn rejects_zero_chunk_root() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
@@ -2707,7 +2526,6 @@ mod tests {
         let err = enforce_lane_proof_policy(&record, &lane_config).expect_err("should fail");
         assert!(matches!(err, DaProofPolicyError::ZeroChunkRoot { .. }));
     }
-
     #[test]
     fn validate_commitment_bundle_rejects_duplicate_key() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
@@ -2718,7 +2536,6 @@ mod tests {
             ..record.clone()
         };
         let bundle = DaCommitmentBundle::new(vec![record, duplicate]);
-
         let err =
             validate_commitment_bundle(&bundle, &lane_config).expect_err("duplicate must fail");
         assert!(matches!(
@@ -2726,13 +2543,11 @@ mod tests {
             DaCommitmentValidationError::DuplicateCommitment { .. }
         ));
     }
-
     #[test]
     fn validate_commitment_bundle_rejects_unsupported_version() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let mut bundle = DaCommitmentBundle::new(vec![merkle_record(0)]);
         bundle.version = DaCommitmentBundle::VERSION_V1 + 1;
-
         let err = validate_commitment_bundle(&bundle, &lane_config)
             .expect_err("unsupported commitment bundle version must fail");
         assert!(matches!(
@@ -2741,7 +2556,6 @@ mod tests {
                 if version == DaCommitmentBundle::VERSION_V1 + 1
         ));
     }
-
     #[test]
     fn validate_commitment_bundle_rejects_duplicate_sequence_with_new_ticket() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
@@ -2751,7 +2565,6 @@ mod tests {
         second.manifest_hash =
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x77; 32]);
         let bundle = DaCommitmentBundle::new(vec![first, second]);
-
         let err =
             validate_commitment_bundle(&bundle, &lane_config).expect_err("duplicate must fail");
         assert!(matches!(
@@ -2759,7 +2572,6 @@ mod tests {
             DaCommitmentValidationError::DuplicateCommitment { .. }
         ));
     }
-
     #[test]
     fn validate_commitment_bundle_rejects_duplicate_manifest() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
@@ -2768,7 +2580,6 @@ mod tests {
         second.sequence = 9;
         second.storage_ticket = StorageTicketId::new([0x99; 32]);
         let bundle = DaCommitmentBundle::new(vec![first.clone(), second.clone()]);
-
         let err =
             validate_commitment_bundle(&bundle, &lane_config).expect_err("duplicate must fail");
         assert!(matches!(
@@ -2776,7 +2587,6 @@ mod tests {
             DaCommitmentValidationError::DuplicateManifest { .. }
         ));
     }
-
     #[test]
     fn validate_commitment_bundle_rejects_duplicate_storage_ticket() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
@@ -2786,7 +2596,6 @@ mod tests {
         second.manifest_hash =
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x77; 32]);
         let bundle = DaCommitmentBundle::new(vec![first.clone(), second.clone()]);
-
         let err =
             validate_commitment_bundle(&bundle, &lane_config).expect_err("duplicate must fail");
         assert!(matches!(
@@ -2794,7 +2603,6 @@ mod tests {
             DaCommitmentValidationError::DuplicateStorageTicket { .. }
         ));
     }
-
     #[test]
     fn validate_commitment_bundle_rejects_non_canonical_order() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
@@ -2809,10 +2617,8 @@ mod tests {
             version: DaCommitmentBundle::VERSION_V1,
             commitments: vec![second, first],
         };
-
         let err = validate_commitment_bundle(&reversed, &lane_config)
             .expect_err("non-canonical commitment bundle order must fail");
-
         assert_eq!(
             first_commitment_order_mismatch(&reversed.commitments, &canonical),
             Some(0)
@@ -2822,7 +2628,6 @@ mod tests {
             DaCommitmentValidationError::NonCanonicalOrder { index: 0 }
         ));
     }
-
     #[test]
     fn validate_commitment_bundle_accepts_constructor_canonicalized_input() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
@@ -2832,14 +2637,11 @@ mod tests {
         second.manifest_hash =
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x25; 32]);
         second.storage_ticket = StorageTicketId::new([0x58; 32]);
-
         let bundle = DaCommitmentBundle::new(vec![second, first.clone()]);
-
         assert_eq!(bundle.commitments[0], first);
         validate_commitment_bundle(&bundle, &lane_config)
             .expect("constructor-canonicalized commitment bundle must validate");
     }
-
     #[test]
     fn first_commitment_order_mismatch_reports_first_difference() {
         let first = merkle_record(0);
@@ -2850,7 +2652,6 @@ mod tests {
         second.storage_ticket = StorageTicketId::new([0x57; 32]);
         let canonical = vec![first.clone(), second.clone()];
         let reversed = vec![second, first];
-
         assert_eq!(
             first_commitment_order_mismatch(&reversed, &canonical),
             Some(0)
@@ -2860,14 +2661,12 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn validate_commitment_bundle_rejects_zero_manifest_hash() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let mut record = merkle_record(0);
         record.manifest_hash = iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0; 32]);
         let bundle = DaCommitmentBundle::new(vec![record]);
-
         let err =
             validate_commitment_bundle(&bundle, &lane_config).expect_err("zero manifest must fail");
         assert!(matches!(
@@ -2875,14 +2674,12 @@ mod tests {
             DaCommitmentValidationError::ZeroManifestHash { .. }
         ));
     }
-
     #[test]
     fn validate_commitment_bundle_rejects_zero_storage_ticket() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let mut record = merkle_record(0);
         record.storage_ticket = StorageTicketId::new([0; 32]);
         let bundle = DaCommitmentBundle::new(vec![record]);
-
         let err =
             validate_commitment_bundle(&bundle, &lane_config).expect_err("zero ticket must fail");
         assert!(matches!(
@@ -2890,7 +2687,6 @@ mod tests {
             DaCommitmentValidationError::ZeroStorageTicket { .. }
         ));
     }
-
     #[test]
     fn validate_commitment_bundle_rejects_confidential_lane_without_policy() {
         let mut metadata = BTreeMap::new();
@@ -2905,7 +2701,6 @@ mod tests {
             ..ModelLaneConfig::default()
         }]);
         let bundle = DaCommitmentBundle::new(vec![merkle_record(0)]);
-
         let err = validate_commitment_bundle(&bundle, &lane_config)
             .expect_err("confidential lane without key policy must fail");
         assert!(matches!(
@@ -2915,12 +2710,10 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn validate_commitment_bundle_len_rejects_unrepresentable_location_space() {
         assert!(validate_commitment_bundle_len(0).is_ok());
         assert!(validate_commitment_bundle_len(MAX_DA_BUNDLE_LOCATIONS).is_ok());
-
         if let Some(len) = MAX_DA_BUNDLE_LOCATIONS.checked_add(1) {
             let err = validate_commitment_bundle_len(len)
                 .expect_err("unrepresentable DA bundle length must fail");
@@ -2933,12 +2726,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn validate_pin_intent_bundle_len_rejects_unrepresentable_location_space() {
         assert!(validate_pin_intent_bundle_len(0).is_ok());
         assert!(validate_pin_intent_bundle_len(MAX_DA_BUNDLE_LOCATIONS).is_ok());
-
         if let Some(len) = MAX_DA_BUNDLE_LOCATIONS.checked_add(1) {
             let err = validate_pin_intent_bundle_len(len)
                 .expect_err("unrepresentable DA pin-intent bundle length must fail");
@@ -2951,7 +2742,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn proof_policy_bundle_exposes_hash() {
         let lanes = vec![
@@ -2967,15 +2757,12 @@ mod tests {
                 ..ModelLaneConfig::default()
             },
         ];
-
         let config = lane_config_with(lanes);
         let bundle = proof_policy_bundle(&config);
-
         assert_eq!(bundle.policies.len(), 2);
         assert_ne!(bundle.policy_hash, Hash::prehashed([0; 32]));
         assert_eq!(bundle.version, DaProofPolicyBundle::VERSION_V1);
     }
-
     #[test]
     fn committed_policy_bundle_rejects_duplicate_lanes_globally() {
         let policy = DaProofPolicy {
@@ -2985,7 +2772,6 @@ mod tests {
             proof_scheme: DaProofScheme::MerkleSha256,
         };
         let bundle = DaProofPolicyBundle::new(vec![policy.clone(), policy]);
-
         assert_eq!(
             validate_committed_proof_policy_bundle(&bundle),
             Err(DaProofPolicyError::DuplicateLanePolicy {

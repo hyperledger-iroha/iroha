@@ -1,10 +1,8 @@
 // Shared publication recovery fixtures and runtime DAG test support.
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn recovery_quarantine_path(root: &Path) -> PathBuf {
     root.join(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR)
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn clear_recovery_quarantine_offline(root: &Path) {
     let quarantine = recovery_quarantine_path(root);
@@ -14,7 +12,6 @@ fn clear_recovery_quarantine_offline(root: &Path) {
     );
     fs::remove_dir_all(quarantine).expect("clear recovery quarantine while publisher is stopped");
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn finish_recovery_after_offline_quarantine_cleanup(root: &Path) -> FilesystemGovernancePublisher {
     for _ in 0..3 {
@@ -32,7 +29,6 @@ fn finish_recovery_after_offline_quarantine_cleanup(root: &Path) -> FilesystemGo
     }
     panic!("recovery did not converge after bounded offline quarantine cleanup")
 }
-
 fn committed_publication_artifact_paths(
     root: &Path,
     state: &JsonMap,
@@ -94,7 +90,6 @@ fn committed_publication_artifact_paths(
         ("CAR manifest sidecar", digest_sidecar_path_for(&manifest)),
     ]
 }
-
 #[test]
 fn governance_car_segment_sources_require_recorded_length_digest_and_file_caps() {
     let temp = tempdir().expect("tempdir");
@@ -102,18 +97,15 @@ fn governance_car_segment_sources_require_recorded_length_digest_and_file_caps()
     let entry = write_car_segment_source_fixture(temp.path(), encoded);
     let root_guard =
         GovernanceFilesystemRootGuard::capture_writer(temp.path()).expect("retain CAR source root");
-
     let (files, records) = governance_car_segment_files(temp.path(), &root_guard, &entry)
         .expect("read canonical CAR sources");
     assert_eq!(files.len(), 4);
     assert_eq!(records.len(), 4);
-
     let mut wrong_length = entry.clone();
     wrong_length.encoded_len += 1;
     let error = governance_car_segment_files(temp.path(), &root_guard, &wrong_length)
         .expect_err("shorter encoded source must not satisfy its recorded length");
     assert!(error.to_string().contains("encoded source"));
-
     let encoded_path = temp.path().join(&entry.encoded_path);
     let substituted_encoded = b"tampered!-payload";
     assert_eq!(substituted_encoded.len(), encoded.len());
@@ -125,7 +117,6 @@ fn governance_car_segment_sources_require_recorded_length_digest_and_file_caps()
     let error = governance_car_segment_files(temp.path(), &root_guard, &entry)
         .expect_err("same-length encoded plus sidecar substitution must fail closed");
     assert!(error.to_string().contains("encoded source"));
-
     let entry = write_car_segment_source_fixture(temp.path(), encoded);
     let json_path = temp.path().join(&entry.json_path);
     let substituted_json = br#"{"status":"owned"}"#;
@@ -138,7 +129,6 @@ fn governance_car_segment_sources_require_recorded_length_digest_and_file_caps()
     let error = governance_car_segment_files(temp.path(), &root_guard, &entry)
         .expect_err("same-length JSON plus sidecar substitution must fail closed");
     assert!(error.to_string().contains("JSON source"));
-
     let entry = write_car_segment_source_fixture(temp.path(), encoded);
     fs::write(
         digest_sidecar_path_for(&temp.path().join(&entry.encoded_path)),
@@ -148,7 +138,6 @@ fn governance_car_segment_sources_require_recorded_length_digest_and_file_caps()
     let error = governance_car_segment_files(temp.path(), &root_guard, &entry)
         .expect_err("a mismatched retained digest sidecar must fail closed");
     assert!(error.to_string().contains("digest sidecar"));
-
     let entry = write_car_segment_source_fixture(temp.path(), encoded);
     fs::write(
         digest_sidecar_path_for(&temp.path().join(&entry.encoded_path)),
@@ -162,14 +151,12 @@ fn governance_car_segment_sources_require_recorded_length_digest_and_file_caps()
             .to_string()
             .contains(&format!("exceeds {GOVERNANCE_DIGEST_SIDECAR_BYTES} bytes"))
     );
-
     let mut corrupted_index_entry = entry;
     corrupted_index_entry.encoded_len = GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES + 1;
     let error = governance_car_segment_files(temp.path(), &root_guard, &corrupted_index_entry)
         .expect_err("corrupted publish-index length must fail before its source read");
     assert!(error.to_string().contains("encoded publication length"));
 }
-
 #[test]
 fn governance_car_source_limits_cover_each_file_and_the_checked_segment_total() {
     assert_eq!(
@@ -190,7 +177,6 @@ fn governance_car_source_limits_cover_each_file_and_the_checked_segment_total() 
             .expect_err("outside-boundary governance CAR source lengths must fail");
     }
 }
-
 #[test]
 fn governance_immutable_artifacts_are_exact_idempotent_and_non_overwritable() {
     let temp = tempdir().expect("tempdir");
@@ -198,7 +184,6 @@ fn governance_immutable_artifacts_are_exact_idempotent_and_non_overwritable() {
         .expect("retain publication root");
     let path = temp.path().join("sources").join("identity.to");
     let canonical = b"canonical-source";
-
     write_immutable_governance_artifact(
         &root_guard,
         &path,
@@ -223,7 +208,6 @@ fn governance_immutable_artifacts_are_exact_idempotent_and_non_overwritable() {
     assert!(error.to_string().contains("occupied by different bytes"));
     assert_eq!(fs::read(path).expect("read immutable source"), canonical);
 }
-
 #[test]
 fn governance_publish_index_rejects_labels_above_the_fixed_cap() {
     let temp = tempdir().expect("tempdir");
@@ -232,7 +216,6 @@ fn governance_publish_index_rejects_labels_above_the_fixed_cap() {
     for index in 0..=GOVERNANCE_PUBLICATION_LABEL_MAX_ENTRIES_V1 {
         labels.insert(format!("label_{index}"), JsonValue::from(index as u64));
     }
-
     let error = update_publish_index(
         temp.path(),
         empty_governance_publish_index(),
@@ -250,7 +233,6 @@ fn governance_publish_index_rejects_labels_above_the_fixed_cap() {
         "{GOVERNANCE_PUBLICATION_LABEL_MAX_ENTRIES_V1}-label hard cap"
     )));
 }
-
 #[test]
 fn governance_publication_labels_enforce_canonical_scalar_and_byte_bounds() {
     let mut boundary = JsonMap::new();
@@ -263,7 +245,6 @@ fn governance_publication_labels_enforce_canonical_scalar_and_byte_bounds() {
     boundary.insert("number".into(), JsonValue::from(7_u64));
     validate_governance_publication_labels(&boundary, "test publication")
         .expect("labels at the per-field boundaries remain valid");
-
     for key in [
         String::new(),
         "bad/key".to_owned(),
@@ -275,7 +256,6 @@ fn governance_publication_labels_enforce_canonical_scalar_and_byte_bounds() {
             .expect_err("noncanonical label keys must fail closed");
         assert!(error.to_string().contains("noncanonical label key"));
     }
-
     for value in [
         JsonValue::Array(Vec::new()),
         JsonValue::Object(JsonMap::new()),
@@ -286,7 +266,6 @@ fn governance_publication_labels_enforce_canonical_scalar_and_byte_bounds() {
             .expect_err("structured label values must fail closed");
         assert!(error.to_string().contains("must be a scalar"));
     }
-
     let mut oversized_string = JsonMap::new();
     oversized_string.insert(
         "value".into(),
@@ -295,7 +274,6 @@ fn governance_publication_labels_enforce_canonical_scalar_and_byte_bounds() {
     let error = validate_governance_publication_labels(&oversized_string, "test publication")
         .expect_err("oversized label strings must fail closed");
     assert!(error.to_string().contains("string bound"));
-
     let mut oversized_aggregate = JsonMap::new();
     for index in 0..16 {
         oversized_aggregate.insert(
@@ -307,7 +285,6 @@ fn governance_publication_labels_enforce_canonical_scalar_and_byte_bounds() {
         .expect_err("oversized aggregate label metadata must fail closed");
     assert!(error.to_string().contains("aggregate bound"));
 }
-
 #[test]
 fn governance_index_paths_enforce_fixed_byte_and_component_bounds() {
     let boundary = std::iter::repeat_n("a", GOVERNANCE_RELATIVE_PATH_MAX_COMPONENTS)
@@ -323,7 +300,6 @@ fn governance_index_paths_enforce_fixed_byte_and_component_bounds() {
         index_path_components(&"a".repeat(GOVERNANCE_RELATIVE_PATH_COMPONENT_MAX_BYTES)).is_ok(),
         "component at the byte boundary is valid"
     );
-
     let too_many_components = format!("{boundary}/a");
     assert!(index_path_components(&too_many_components).is_err());
     assert!(
@@ -332,7 +308,6 @@ fn governance_index_paths_enforce_fixed_byte_and_component_bounds() {
     );
     assert!(index_path_components(&"a".repeat(GOVERNANCE_RELATIVE_PATH_MAX_BYTES + 1)).is_err());
 }
-
 #[test]
 fn governance_publication_artifact_names_are_canonical_and_bounded() {
     let digest = "11".repeat(32);
@@ -356,7 +331,6 @@ fn governance_publication_artifact_names_are_canonical_and_bounded() {
             .expect("publication kind at the byte boundary");
     assert!(encoded.ends_with("/payload.to"));
     assert!(json.ends_with("/payload.json"));
-
     let pair_id = "ab".repeat(32);
     assert!(is_canonical_governance_source_pair_directory(&pair_id));
     assert!(!is_canonical_governance_source_pair_directory(
@@ -383,7 +357,6 @@ fn governance_publication_artifact_names_are_canonical_and_bounded() {
         7
     )));
 }
-
 #[test]
 fn governance_publication_state_commit_failure_preserves_immutable_orphans() {
     let temp = tempdir().expect("tempdir");
@@ -432,7 +405,6 @@ fn governance_publication_state_commit_failure_preserves_immutable_orphans() {
         JsonValue::Object(publish_index.clone()),
     );
     state.insert("car_queue".into(), JsonValue::Object(queue));
-
     commit_governance_publication_state_with(
         temp.path(),
         &root_guard,
@@ -451,7 +423,6 @@ fn governance_publication_state_commit_failure_preserves_immutable_orphans() {
         Some(0),
         "failed CAS must preserve the typed initial authority"
     );
-
     let retried_queue = assemble_governance_car_queue(
         temp.path(),
         &root_guard,
@@ -460,7 +431,6 @@ fn governance_publication_state_commit_failure_preserves_immutable_orphans() {
     )
     .expect("retry reuses exact immutable orphan artifacts");
     assert_eq!(fs::read(&car_path).expect("read reused CAR"), canonical_car);
-
     fs::write(&car_path, b"substituted orphan").expect("substitute unreachable orphan");
     let error = assemble_governance_car_queue(
         temp.path(),
@@ -470,7 +440,6 @@ fn governance_publication_state_commit_failure_preserves_immutable_orphans() {
     )
     .expect_err("retry must not replace a divergent immutable orphan");
     assert!(error.to_string().contains("occupied by different bytes"));
-
     fs::remove_file(&car_path).expect("remove divergent unreachable orphan");
     let repaired_queue = assemble_governance_car_queue(
         temp.path(),
@@ -513,7 +482,6 @@ fn governance_publication_state_commit_failure_preserves_immutable_orphans() {
     )
     .expect("committed cross-sections remain one-to-one");
 }
-
 #[test]
 fn governance_publication_failed_successor_commit_preserves_exact_predecessor() {
     let temp = tempdir().expect("tempdir");
@@ -521,7 +489,6 @@ fn governance_publication_failed_successor_commit_preserves_exact_predecessor() 
         .expect("retain publication root");
     let _ = initialize_governance_publication_authority_if_pristine(temp.path(), &root_guard)
         .expect("initialize typed publication authority before immutable artifacts");
-
     let first = write_car_segment_source_fixture(temp.path(), b"publication-a");
     let (first_index, first_entry) = update_publish_index(
         temp.path(),
@@ -548,13 +515,11 @@ fn governance_publication_failed_successor_commit_preserves_exact_predecessor() 
     first_state.insert("car_queue".into(), JsonValue::Object(first_queue));
     commit_governance_publication_state(temp.path(), &root_guard, first_state)
         .expect("commit publication A");
-
     let predecessor = read_publication_state_fixture(temp.path());
     assert_eq!(
         predecessor.get("generation").and_then(JsonValue::as_u64),
         Some(1)
     );
-
     let second = write_car_segment_source_fixture(temp.path(), b"publication-b");
     let mut successor = predecessor
         .as_object()
@@ -586,7 +551,6 @@ fn governance_publication_failed_successor_commit_preserves_exact_predecessor() 
             .expect("prepare publication B CAR");
     successor.insert("publish_index".into(), JsonValue::Object(successor_index));
     successor.insert("car_queue".into(), JsonValue::Object(successor_queue));
-
     commit_governance_publication_state_with(
         temp.path(),
         &root_guard,
@@ -611,7 +575,6 @@ fn governance_publication_failed_successor_commit_preserves_exact_predecessor() 
             .and_then(JsonValue::as_u64),
         Some(1)
     );
-
     commit_governance_publication_state(temp.path(), &root_guard, successor)
         .expect("retry publication B with the exact prepared successor");
     let committed = read_publication_state_fixture(temp.path());
@@ -633,7 +596,6 @@ fn governance_publication_failed_successor_commit_preserves_exact_predecessor() 
     )
     .expect("publication B commits both nested indexes together");
 }
-
 #[test]
 fn governance_publication_state_rejects_cross_section_substitution() {
     let temp = tempdir().expect("tempdir");
@@ -673,12 +635,10 @@ fn governance_publication_state_rejects_cross_section_substitution() {
     let mut state = empty_governance_publication_state();
     state.insert("publish_index".into(), JsonValue::Object(publish_index));
     state.insert("car_queue".into(), JsonValue::Object(queue));
-
     let error = validate_governance_publication_state(&state)
         .expect_err("cross-section substitution must fail closed");
     assert!(error.to_string().contains("one-to-one"));
 }
-
 #[test]
 fn governance_publication_state_rejects_noncanonical_car_artifact_paths() {
     let temp = tempdir().expect("tempdir");
@@ -718,7 +678,6 @@ fn governance_publication_state_rejects_noncanonical_car_artifact_paths() {
     let mut state = empty_governance_publication_state();
     state.insert("publish_index".into(), JsonValue::Object(publish_index));
     state.insert("car_queue".into(), JsonValue::Object(queue));
-
     let error = validate_governance_publication_state(&state)
         .expect_err("CAR paths must be derived from the exact position/source identity");
     assert!(
@@ -727,7 +686,6 @@ fn governance_publication_state_rejects_noncanonical_car_artifact_paths() {
             .contains("canonical composite-identity path")
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn governance_car_segment_sources_reject_linked_path_components() {
@@ -740,11 +698,9 @@ fn governance_car_segment_sources_reject_linked_path_components() {
     std::os::unix::fs::symlink(source_dir, temp.path().join("linked"))
         .expect("create linked source directory");
     entry.encoded_path = "linked/payload.to".to_owned();
-
     governance_car_segment_files(temp.path(), &root_guard, &entry)
         .expect_err("descriptor-rooted CAR reads must reject linked components");
 }
-
 #[test]
 fn governance_car_segment_source_reader_stays_rooted_and_per_file_bounded() {
     let source = include_str!("../../governance.rs");
@@ -756,7 +712,6 @@ fn governance_car_segment_source_reader_stays_rooted_and_per_file_bounded() {
         .map(|offset| start + offset)
         .expect("end of CAR source reader definition");
     let reader = &source[start..end];
-
     assert!(reader.contains("read_rooted_governance_state_file"));
     assert!(reader.contains("entry.encoded_len"));
     assert!(reader.contains("entry.encoded_blake3"));
@@ -771,7 +726,6 @@ fn governance_car_segment_source_reader_stays_rooted_and_per_file_bounded() {
         "CAR source reads must remain descriptor-rooted"
     );
 }
-
 #[test]
 fn governance_dag_head_age_seconds_saturates_for_future_heads() {
     assert_eq!(
@@ -783,18 +737,15 @@ fn governance_dag_head_age_seconds_saturates_for_future_heads() {
         0
     );
 }
-
 #[test]
 fn governance_dag_head_generated_at_from_index_prefers_head_timestamp() {
     let mut index = JsonMap::new();
     assert_eq!(governance_dag_head_generated_at_from_index(&index), None);
-
     index.insert("generated_at".into(), JsonValue::from(1_800_000_000u64));
     assert_eq!(
         governance_dag_head_generated_at_from_index(&index),
         Some(1_800_000_000)
     );
-
     index.insert(
         "head_generated_at".into(),
         JsonValue::from(1_800_000_045u64),
@@ -804,19 +755,16 @@ fn governance_dag_head_generated_at_from_index_prefers_head_timestamp() {
         Some(1_800_000_045)
     );
 }
-
 #[test]
 fn bounded_governance_state_reader_rejects_oversized_file() {
     let temp = tempdir().expect("tempdir");
     let path = temp.path().join("index.json");
     fs::write(&path, b"123456789").expect("write oversized state");
-
     let error = read_bounded_governance_state_file(&path, 8)
         .expect_err("oversized governance state must fail before allocation");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert!(error.to_string().contains("exceeds 8 bytes"));
 }
-
 #[cfg(unix)]
 #[test]
 fn bounded_governance_state_reader_rejects_symlink() {
@@ -825,12 +773,10 @@ fn bounded_governance_state_reader_rejects_symlink() {
     let path = temp.path().join("index.json");
     fs::write(&target, b"{}").expect("write target");
     std::os::unix::fs::symlink(&target, &path).expect("create index symlink");
-
     let error = read_bounded_governance_state_file(&path, 8)
         .expect_err("governance state symlink must fail closed");
     assert!(error.to_string().contains("must not be a symlink"));
 }
-
 #[cfg(unix)]
 #[test]
 fn bounded_governance_state_reader_rejects_hard_link() {
@@ -839,12 +785,10 @@ fn bounded_governance_state_reader_rejects_hard_link() {
     let path = temp.path().join("index.json");
     fs::write(&target, b"{}").expect("write target");
     fs::hard_link(&target, &path).expect("create index hard link");
-
     let error = read_bounded_governance_state_file(&path, 8)
         .expect_err("hard-linked governance state must fail closed");
     assert!(error.to_string().contains("exactly one hard link"));
 }
-
 struct TestRuntimeDagSigner {
     handle: String,
     publisher_peer_id: Vec<u8>,
@@ -859,7 +803,6 @@ struct TestRuntimeDagSigner {
     corrupt_signature: bool,
     last_purpose: Mutex<Option<GovernanceDagSigningPurposeV1>>,
 }
-
 impl fmt::Debug for TestRuntimeDagSigner {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -869,7 +812,6 @@ impl fmt::Debug for TestRuntimeDagSigner {
             .finish_non_exhaustive()
     }
 }
-
 impl TestRuntimeDagSigner {
     fn new(handle: &str, publisher_peer_id: &[u8], seed: u8) -> Self {
         Self {
@@ -888,7 +830,6 @@ impl TestRuntimeDagSigner {
             last_purpose: Mutex::new(None),
         }
     }
-
     fn public_key_bytes(&self) -> [u8; 32] {
         let (algorithm, bytes) = self
             .key_pair
@@ -898,17 +839,14 @@ impl TestRuntimeDagSigner {
         assert_eq!(algorithm, Algorithm::Ed25519);
         bytes.try_into().expect("Ed25519 public key is fixed-width")
     }
-
     fn observed_purpose(&self) -> Option<GovernanceDagSigningPurposeV1> {
         *self.last_purpose.lock().expect("signing purpose lock")
     }
 }
-
 impl GovernanceDagRuntimeSigner for TestRuntimeDagSigner {
     fn handle(&self) -> &str {
         &self.handle
     }
-
     fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
         if let Some(error) = &self.qualification_error {
             return Err(error.clone());
@@ -929,16 +867,13 @@ impl GovernanceDagRuntimeSigner for TestRuntimeDagSigner {
             TEST_RUNTIME_DAG_SIGNER_POLICY_DIGEST,
         ))
     }
-
     fn publisher_peer_id(&self) -> &[u8] {
         &self.publisher_peer_id
     }
-
     fn public_key(&self) -> [u8; 32] {
         self.public_key_override
             .unwrap_or_else(|| self.public_key_bytes())
     }
-
     fn sign(
         &self,
         purpose: GovernanceDagSigningPurposeV1,
@@ -962,7 +897,6 @@ impl GovernanceDagRuntimeSigner for TestRuntimeDagSigner {
         Ok(signature)
     }
 }
-
 fn qualified_test_runtime_dag_signer(revision: u64, seed: u8) -> GovernanceRuntimeDagSigner {
     let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
     let signer = Arc::new(TestRuntimeDagSigner::new(
@@ -986,7 +920,6 @@ fn qualified_test_runtime_dag_signer(revision: u64, seed: u8) -> GovernanceRunti
     )
     .expect("qualify runtime DAG signer")
 }
-
 fn qualified_test_runtime_dag_checkpoint_store(
     store: Arc<TestRuntimeDagCheckpointStore>,
 ) -> GovernanceRuntimeDagCheckpointStore {
@@ -997,7 +930,6 @@ fn qualified_test_runtime_dag_checkpoint_store(
     )
     .expect("qualify runtime DAG checkpoint store")
 }
-
 fn signed_runtime_publisher_with_store(
     root: &Path,
     store: Arc<TestRuntimeDagCheckpointStore>,
@@ -1010,11 +942,9 @@ fn signed_runtime_publisher_with_store(
         )
         .expect("runtime DAG providers")
 }
-
 fn signed_runtime_publisher(root: &Path) -> FilesystemGovernancePublisher {
     signed_runtime_publisher_with_store(root, Arc::new(TestRuntimeDagCheckpointStore::default()))
 }
-
 fn signed_runtime_publisher_with_observable_providers(
     root: &Path,
 ) -> (
@@ -1045,7 +975,6 @@ fn signed_runtime_publisher_with_observable_providers(
         .expect("runtime DAG providers");
     (publisher, signer_provider, checkpoint_provider)
 }
-
 fn runtime_index(root: &Path) -> JsonValue {
     let root_guard = GovernanceFilesystemRootGuard::capture_writer(root)
         .expect("retain runtime DAG fixture root");
@@ -1062,7 +991,6 @@ fn runtime_index(root: &Path) -> JsonValue {
     );
     index
 }
-
 fn runtime_head_bytes(root: &Path) -> Vec<u8> {
     let root_guard = GovernanceFilesystemRootGuard::capture_writer(root)
         .expect("retain runtime DAG fixture root");
@@ -1074,7 +1002,6 @@ fn runtime_head_bytes(root: &Path) -> Vec<u8> {
         .head_bytes
         .expect("runtime head exists")
 }
-
 fn runtime_blocks_from_index(root: &Path, index: &JsonValue) -> Vec<GovernanceDagBlockV1> {
     index
         .get("blocks")
@@ -1092,7 +1019,6 @@ fn runtime_blocks_from_index(root: &Path, index: &JsonValue) -> Vec<GovernanceDa
         })
         .collect()
 }
-
 fn filesystem_inventory_fixture(root: &Path) -> Vec<(PathBuf, bool, u64)> {
     fn visit(root: &Path, directory: &Path, inventory: &mut Vec<(PathBuf, bool, u64)>) {
         let mut entries = fs::read_dir(directory)
@@ -1113,12 +1039,10 @@ fn filesystem_inventory_fixture(root: &Path) -> Vec<(PathBuf, bool, u64)> {
             }
         }
     }
-
     let mut inventory = Vec::new();
     visit(root, root, &mut inventory);
     inventory
 }
-
 fn assert_single_runtime_external(root: &Path, kind: &str, encoded: &[u8]) {
     let index = runtime_index(root);
     let blocks = runtime_blocks_from_index(root, &index);
@@ -1133,20 +1057,17 @@ fn assert_single_runtime_external(root: &Path, kind: &str, encoded: &[u8]) {
         other => panic!("expected external runtime payload, found {other:?}"),
     }
 }
-
 #[test]
 fn filesystem_publisher_rejects_noncanonical_or_mismatched_payload_bytes() {
     let temp = tempdir().expect("tempdir");
     let publisher =
         FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
     let (settlement, canonical) = sample_settlement();
-
     let bare = settlement.encode();
     let error = publisher
         .publish_deal_settlement(&settlement, &bare)
         .expect_err("bare payload without a Norito header must fail");
     assert!(error.to_string().contains("canonical header-bearing"));
-
     let mut conflicting = settlement.clone();
     conflicting.audit_notes = Some("different typed payload".to_owned());
     let error = publisher
@@ -1161,7 +1082,6 @@ fn filesystem_publisher_rejects_noncanonical_or_mismatched_payload_bytes() {
         "validation must fail before any governance artifact is written"
     );
 }
-
 #[test]
 fn filesystem_publisher_rejects_semantically_invalid_payload_before_writes() {
     let temp = tempdir().expect("tempdir");
@@ -1170,7 +1090,6 @@ fn filesystem_publisher_rejects_semantically_invalid_payload_before_writes() {
     let (mut settlement, _) = sample_settlement();
     settlement.deal_id[0] ^= 0x80;
     let encoded = norito::to_bytes(&settlement).expect("encode invalid settlement");
-
     let error = publisher
         .publish_deal_settlement(&settlement, &encoded)
         .expect_err("ledger and settlement deal identifiers must match");
@@ -1183,33 +1102,28 @@ fn filesystem_publisher_rejects_semantically_invalid_payload_before_writes() {
         "semantic validation must fail before any governance artifact is written"
     );
 }
-
 #[test]
 fn filesystem_publisher_writes_por_payloads_into_one_signed_canonical_chain() {
     let temp = tempdir().expect("tempdir");
     let publisher = signed_runtime_publisher(temp.path());
     let (publication, publication_encoded) = sample_por_challenge_publication();
     let (report, report_encoded) = sample_por_weekly_report();
-
     publisher
         .publish_por_challenge_publication(&publication, &publication_encoded)
         .expect("publish PoR challenge");
     publisher
         .publish_por_weekly_report(&report, &report_encoded)
         .expect("publish PoR weekly report");
-
     let (challenge_path, _) = only_published_source_paths(temp.path(), "por_challenge_publication");
     assert_eq!(
         fs::read(&challenge_path).expect("read canonical challenge publication"),
         publication_encoded
     );
-
     let (report_path, _) = only_published_source_paths(temp.path(), "por_weekly_report");
     assert_eq!(
         fs::read(&report_path).expect("read canonical weekly report"),
         report_encoded
     );
-
     let index = runtime_index(temp.path());
     let blocks = runtime_blocks_from_index(temp.path(), &index);
     assert_eq!(blocks.len(), 2);
@@ -1232,23 +1146,19 @@ fn filesystem_publisher_writes_por_payloads_into_one_signed_canonical_chain() {
     validate_governance_dag_head_against_chain_v1(&head, &blocks)
         .expect("PoR runtime chain and head validate");
 }
-
 #[test]
 fn filesystem_publisher_root_has_a_single_process_owner() {
     let temp = tempdir().expect("tempdir");
     let owner = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
         .expect("acquire publisher root");
-
     let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
         .expect_err("a second publisher must not share mutable index state");
     assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
     assert!(error.to_string().contains("already in use"));
-
     drop(owner);
     FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
         .expect("publisher root ownership releases on drop");
 }
-
 #[test]
 fn filesystem_publisher_restart_rejects_runtime_signer_revision_substitution() {
     let temp = tempdir().expect("tempdir");
@@ -1273,7 +1183,6 @@ fn filesystem_publisher_restart_rejects_runtime_signer_revision_substitution() {
             .and_then(JsonValue::as_str),
         Some(expected_policy_digest.as_str())
     );
-
     let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
     let provider = Arc::new(TestRuntimeDagSigner::new(
         "pkcs11:governance-dag:primary",
@@ -1302,7 +1211,6 @@ fn filesystem_publisher_restart_rejects_runtime_signer_revision_substitution() {
             || error.to_string().contains("provider binding")
     );
 }
-
 #[test]
 fn filesystem_publisher_replays_authenticated_provider_transition_after_ambiguous_cas() {
     let temp = tempdir().expect("tempdir");
@@ -1313,7 +1221,6 @@ fn filesystem_publisher_replays_authenticated_provider_transition_after_ambiguou
     publisher
         .publish_deal_settlement(&settlement, &encoded)
         .expect("seed signed runtime DAG");
-
     checkpoint_store
         .fail_after_next_checkpoint_cas
         .store(true, Ordering::SeqCst);
@@ -1330,7 +1237,6 @@ fn filesystem_publisher_replays_authenticated_provider_transition_after_ambiguou
         .expect_err("ambiguous provider-transition checkpoint CAS must surface");
     assert!(error.to_string().contains("compare-and-swap failed"));
     drop(publisher);
-
     let recovered = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
         .expect("reopen publisher")
         .with_qualified_runtime_dag_providers(
@@ -1361,7 +1267,6 @@ fn filesystem_publisher_replays_authenticated_provider_transition_after_ambiguou
     assert_ne!(summary.transition_digest, [0; 32]);
     drop(recovered);
 }
-
 #[test]
 fn filesystem_publisher_rotates_signing_keys_with_authenticated_authority_segments() {
     let temp = tempdir().expect("tempdir");
@@ -1379,7 +1284,6 @@ fn filesystem_publisher_rotates_signing_keys_with_authenticated_authority_segmen
     publisher
         .publish_deal_settlement(&settlement, &settlement_encoded)
         .expect("publish under the outgoing authority");
-
     let next_signer = qualified_test_runtime_dag_signer(2, 0x32);
     let next_public_key = next_signer.public_key;
     assert_ne!(initial_public_key, next_public_key);
@@ -1391,7 +1295,6 @@ fn filesystem_publisher_rotates_signing_keys_with_authenticated_authority_segmen
     publisher
         .transition_qualified_runtime_dag_providers(next_signer, next_store)
         .expect("rotate to a distinct authenticated signing key");
-
     let current_signer = publisher
         .runtime_dag_signer
         .as_ref()
@@ -1438,7 +1341,6 @@ fn filesystem_publisher_rotates_signing_keys_with_authenticated_authority_segmen
         runtime_dag_producer_root_digest(temp.path()).expect("root digest"),
     )
     .expect("both continuity signatures authenticate the key transition");
-
     let (publication, publication_encoded) = sample_por_challenge_publication();
     publisher
         .publish_por_challenge_publication(&publication, &publication_encoded)
@@ -1472,7 +1374,6 @@ fn filesystem_publisher_rotates_signing_keys_with_authenticated_authority_segmen
         next_public_key.to_vec()
     );
     drop(publisher);
-
     let recovered = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
         .expect("reopen publisher after key rotation")
         .with_qualified_runtime_dag_providers(
@@ -1493,7 +1394,6 @@ fn filesystem_publisher_rotates_signing_keys_with_authenticated_authority_segmen
     )
     .expect("bounded recovery authenticates every historical signer segment");
 }
-
 #[test]
 fn qualification_compaction_seals_archive_before_prune_and_recovers_idempotently() {
     let temp = tempdir().expect("tempdir");
@@ -1517,7 +1417,6 @@ fn qualification_compaction_seals_archive_before_prune_and_recovers_idempotently
             )
             .expect("append provider transition");
     }
-
     checkpoint_store
         .fail_before_next_checkpoint_cas
         .store(true, Ordering::SeqCst);
@@ -1526,7 +1425,6 @@ fn qualification_compaction_seals_archive_before_prune_and_recovers_idempotently
         .expect_err("archive checkpoint refusal must surface after durable archive install");
     assert!(error.to_string().contains("compare-and-swap failed"));
     drop(publisher);
-
     let mut recovered = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
         .expect("reopen publisher")
         .with_qualified_runtime_dag_providers(
@@ -1604,7 +1502,6 @@ fn qualification_compaction_seals_archive_before_prune_and_recovers_idempotently
         .expect_err("ambiguous post-CAS archive checkpoint response must surface");
     assert!(error.to_string().contains("compare-and-swap failed"));
     drop(recovered);
-
     let recovered = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
         .expect("reopen publisher after post-CAS crash")
         .with_qualified_runtime_dag_providers(
@@ -1637,7 +1534,6 @@ fn qualification_compaction_seals_archive_before_prune_and_recovers_idempotently
     );
     drop(recovered);
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn qualification_archive_crash_temp_is_quarantined_before_history_inventory() {
@@ -1648,7 +1544,6 @@ fn qualification_archive_crash_temp_is_quarantined_before_history_inventory() {
     publisher
         .publish_deal_settlement(&settlement, &encoded)
         .expect("seed signed runtime DAG");
-
     let checkpoint_record = checkpoint_store
         .load(GovernanceDagSealedStateSlot::ProducerCheckpoint)
         .expect("load producer checkpoint")
@@ -1669,7 +1564,6 @@ fn qualification_archive_crash_temp_is_quarantined_before_history_inventory() {
         .expect("seed qualification archive crash temp");
     fs::set_permissions(&crash_temp, fs::Permissions::from_mode(0o600))
         .expect("make archive crash temp private");
-
     let error = recover_runtime_dag_qualification_compaction(
         temp.path(),
         publisher.root_guard(),
@@ -1700,7 +1594,6 @@ fn qualification_archive_crash_temp_is_quarantined_before_history_inventory() {
         1,
         "the exact interrupted archive object must be retained offline"
     );
-
     drop(publisher);
     clear_recovery_quarantine_offline(temp.path());
     let recovered = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
@@ -1712,7 +1605,6 @@ fn qualification_archive_crash_temp_is_quarantined_before_history_inventory() {
         .expect("archive-temp recovery converges after offline cleanup");
     drop(recovered);
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn qualification_recovery_preserves_canonical_archive_for_history_validation() {
@@ -1733,7 +1625,6 @@ fn qualification_recovery_preserves_canonical_archive_for_history_validation() {
     .expect("seed canonical archive entry");
     fs::set_permissions(&archive_path, fs::Permissions::from_mode(0o600))
         .expect("make archive entry private");
-
     let error = recover_runtime_dag_qualification_compaction(
         temp.path(),
         publisher.root_guard(),
@@ -1757,7 +1648,6 @@ fn qualification_recovery_preserves_canonical_archive_for_history_validation() {
         b"canonical-name-awaiting-authenticated-history"
     );
 }
-
 #[test]
 fn qualification_history_rejects_tamper_fork_duplicate_rollback_and_bad_bytes() {
     let temp = tempdir().expect("tempdir");
@@ -1810,14 +1700,12 @@ fn qualification_history_rejects_tamper_fork_duplicate_rollback_and_bad_bytes() 
         .history
         .expect("typed qualification history exists");
     assert_eq!(stored_history.transitions, history.transitions);
-
     let mut tampered = history.clone();
     tampered.transitions[1].key_transition.incoming_signature[0] ^= 0x80;
     assert!(
         validate_runtime_dag_qualification_history(temp.path(), &tampered, Some(&binding), None,)
             .is_err()
     );
-
     let mut outgoing_tampered = history.clone();
     outgoing_tampered.transitions[1]
         .key_transition
@@ -1831,7 +1719,6 @@ fn qualification_history_rejects_tamper_fork_duplicate_rollback_and_bad_bytes() 
         )
         .is_err()
     );
-
     let mut segment_revision_rollback = history.clone();
     let outgoing_revision = segment_revision_rollback.transitions[1]
         .key_transition
@@ -1848,7 +1735,6 @@ fn qualification_history_rejects_tamper_fork_duplicate_rollback_and_bad_bytes() 
         )
         .is_err()
     );
-
     let mut replayed_envelope = history.clone();
     replayed_envelope.transitions[1].key_transition =
         replayed_envelope.transitions[0].key_transition.clone();
@@ -1861,14 +1747,12 @@ fn qualification_history_rejects_tamper_fork_duplicate_rollback_and_bad_bytes() 
         )
         .is_err()
     );
-
     let mut forked = history.clone();
     forked.transitions.swap(1, 2);
     assert!(
         validate_runtime_dag_qualification_history(temp.path(), &forked, Some(&binding), None,)
             .is_err()
     );
-
     let mut duplicated = history.clone();
     duplicated
         .transitions
@@ -1877,7 +1761,6 @@ fn qualification_history_rejects_tamper_fork_duplicate_rollback_and_bad_bytes() 
         validate_runtime_dag_qualification_history(temp.path(), &duplicated, Some(&binding), None,)
             .is_err()
     );
-
     let mut rolled_back = history.clone();
     rolled_back.transitions.pop();
     assert!(
@@ -1889,7 +1772,6 @@ fn qualification_history_rejects_tamper_fork_duplicate_rollback_and_bad_bytes() 
         )
         .is_err()
     );
-
     let mut substituted = history.clone();
     substituted.transitions[2].body.next.signer_revision += 1;
     assert!(
@@ -1901,7 +1783,6 @@ fn qualification_history_rejects_tamper_fork_duplicate_rollback_and_bad_bytes() 
         )
         .is_err()
     );
-
     let bytes = norito::to_bytes(&history).expect("encode canonical history");
     assert!(
         decode_canonical_runtime_dag::<RuntimeDagQualificationHistoryV1>(
@@ -1920,7 +1801,6 @@ fn qualification_history_rejects_tamper_fork_duplicate_rollback_and_bad_bytes() 
         .is_err()
     );
 }
-
 #[test]
 fn filesystem_publisher_recovers_typed_stage_after_ambiguous_intent_cas() {
     let temp = tempdir().expect("tempdir");
@@ -1937,7 +1817,6 @@ fn filesystem_publisher_recovers_typed_stage_after_ambiguous_intent_cas() {
             .expect_err("ambiguous intent CAS response must surface");
         assert!(error.to_string().contains("compare-and-swap failed"));
     }
-
     assert!(
         checkpoint_store
             .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
@@ -1959,7 +1838,6 @@ fn filesystem_publisher_recovers_typed_stage_after_ambiguous_intent_cas() {
     );
     drop(publisher);
 }
-
 #[test]
 fn filesystem_publisher_replays_typed_transaction_from_sealed_intent() {
     for _replay in 0..1 {
@@ -1971,7 +1849,6 @@ fn filesystem_publisher_replays_typed_transaction_from_sealed_intent() {
         publisher
             .publish_deal_settlement(&first, &first_encoded)
             .expect("seed predecessor runtime DAG block");
-
         let mut successor = first;
         successor.deal_id = [0x42; 32];
         successor.ledger.deal_id = successor.deal_id;
@@ -1989,7 +1866,6 @@ fn filesystem_publisher_replays_typed_transaction_from_sealed_intent() {
         publisher
             .publish_deal_settlement(&successor, &successor_encoded)
             .expect_err("retain sealed successor intent before filesystem apply");
-
         let intent_record = checkpoint_store
             .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
             .expect("load retained producer intent")
@@ -2031,7 +1907,6 @@ fn filesystem_publisher_replays_typed_transaction_from_sealed_intent() {
         )
         .expect("authenticate successor before applying it");
         drop(publisher);
-
         let recovered =
             signed_runtime_publisher_with_store(temp.path(), Arc::clone(&checkpoint_store));
         assert!(
@@ -2049,7 +1924,6 @@ fn filesystem_publisher_replays_typed_transaction_from_sealed_intent() {
         drop(recovered);
     }
 }
-
 #[test]
 fn filesystem_publisher_clamps_clock_regression_before_sealing_and_recovers() {
     let temp = tempdir().expect("tempdir");
@@ -2064,7 +1938,6 @@ fn filesystem_publisher_clamps_clock_regression_before_sealing_and_recovers() {
         .and_then(JsonValue::as_u64)
         .expect("predecessor head timestamp");
     publisher.set_runtime_dag_observed_timestamp_for_test(predecessor_timestamp.saturating_sub(1));
-
     let mut successor = first;
     successor.deal_id = [0x43; 32];
     successor.ledger.deal_id = successor.deal_id;
@@ -2097,7 +1970,6 @@ fn filesystem_publisher_clamps_clock_regression_before_sealing_and_recovers() {
     assert_eq!(block.timestamp, predecessor_timestamp);
     assert_eq!(block.node.timestamp, predecessor_timestamp);
     drop(publisher);
-
     let recovered = signed_runtime_publisher_with_store(temp.path(), Arc::clone(&checkpoint_store));
     assert!(
         checkpoint_store

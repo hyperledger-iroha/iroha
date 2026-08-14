@@ -1,5 +1,4 @@
 use std::process::{Command, Stdio};
-
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use iroha_data_model::{
     block::SignedBlock,
@@ -12,10 +11,8 @@ use norito::{
     codec::{decode_adaptive, encode_with_header_flags},
     json::{self, Value as JsonValue},
 };
-
 fn main() {
     init_instruction_registry();
-
     if let Ok(mode) = std::env::var("GENESIS_DEBUG_MODE") {
         match mode.as_str() {
             "decode_step" => decode_step_mode(),
@@ -23,13 +20,10 @@ fn main() {
         }
         return;
     }
-
     let network = NetworkBuilder::new().with_peers(4).build();
     let genesis = network.genesis();
-
     inspect_transactions(&genesis.0);
 }
-
 fn inspect_transactions(block: &SignedBlock) {
     for (tx_idx, tx) in block.external_transactions().enumerate() {
         match tx.instructions() {
@@ -41,7 +35,6 @@ fn inspect_transactions(block: &SignedBlock) {
                     step.len(),
                     encoded_step.len()
                 );
-
                 match decode_step_in_child(&encoded_step) {
                     Ok(info) => {
                         let len_matches = info.len == step.len();
@@ -60,7 +53,6 @@ fn inspect_transactions(block: &SignedBlock) {
                         println!("  child decode failed: {err}");
                     }
                 }
-
                 // Per-instruction decoding is skipped for now to avoid aborting on malformed items.
             }
             Executable::ContractCall(call) => {
@@ -94,18 +86,15 @@ fn inspect_transactions(block: &SignedBlock) {
         }
     }
 }
-
 fn format_flags(flags: Option<u8>) -> String {
     flags
         .map(|f| format!("0x{f:02x}"))
         .unwrap_or_else(|| "None".to_string())
 }
-
 struct ChildDecodeInfo {
     len: usize,
     sample_fields: Option<Vec<String>>,
 }
-
 fn decode_step_in_child(bytes: &[u8]) -> Result<ChildDecodeInfo, String> {
     let payload = BASE64.encode(bytes);
     let exe = std::env::current_exe().map_err(|err| err.to_string())?;
@@ -116,7 +105,6 @@ fn decode_step_in_child(bytes: &[u8]) -> Result<ChildDecodeInfo, String> {
         .stderr(Stdio::piped())
         .output()
         .map_err(|err| err.to_string())?;
-
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         parse_child_payload(stdout.trim())
@@ -129,7 +117,6 @@ fn decode_step_in_child(bytes: &[u8]) -> Result<ChildDecodeInfo, String> {
         }
     }
 }
-
 fn parse_child_payload(line: &str) -> Result<ChildDecodeInfo, String> {
     let value: JsonValue =
         json::from_json(line).map_err(|err| format!("failed to parse child JSON: {err}"))?;
@@ -144,14 +131,12 @@ fn parse_child_payload(line: &str) -> Result<ChildDecodeInfo, String> {
     });
     Ok(ChildDecodeInfo { len, sample_fields })
 }
-
 fn decode_step_mode() {
     let payload = std::env::var("GENESIS_DEBUG_PAYLOAD")
         .unwrap_or_else(|_| panic!("GENESIS_DEBUG_PAYLOAD must be set"));
     let bytes = BASE64
         .decode(payload.as_bytes())
         .unwrap_or_else(|err| panic!("base64 decode failed: {err}"));
-
     match decode_adaptive::<ConstVec<InstructionBox>>(&bytes) {
         Ok(decoded) => {
             let len = decoded.len();
@@ -174,7 +159,6 @@ fn decode_step_mode() {
         }
     }
 }
-
 fn format_instruction_path(instruction: &InstructionBox) -> String {
     format!("{instruction}")
 }

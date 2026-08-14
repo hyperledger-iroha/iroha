@@ -6,7 +6,6 @@
 //! architecture spec. On x86_64 hosts that advertise Intel RTM support we
 //! attempt hardware transactions; other targets (or CPUs without RTM) fall back
 //! to the deterministic mutex path.
-
 use std::{
     collections::{BTreeSet, HashMap, HashSet, VecDeque},
     sync::{
@@ -14,21 +13,16 @@ use std::{
         atomic::{AtomicU8, AtomicUsize, Ordering},
     },
 };
-
 use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use rayon::ThreadPool;
-
 use crate::vector::{SimdChoice, set_thread_forced_simd};
-
 struct ThreadSimdOverrideGuard(Option<SimdChoice>);
-
 impl Drop for ThreadSimdOverrideGuard {
     fn drop(&mut self) {
         set_thread_forced_simd(self.0);
     }
 }
-
 #[cfg(all(
     feature = "htm",
     target_arch = "x86_64",
@@ -37,13 +31,10 @@ impl Drop for ThreadSimdOverrideGuard {
 mod htm_util {
     use core::arch::x86_64::{_XBEGIN_STARTED, _xbegin, _xend};
     use std::{collections::HashSet, sync::LazyLock};
-
     use parking_lot::Mutex;
-
     static STM_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
     static ACTIVE_TAGS: LazyLock<Mutex<HashSet<usize>>> =
         LazyLock::new(|| Mutex::new(HashSet::new()));
-
     pub fn with_transaction<F, T>(tags: &HashSet<usize>, f: F) -> Result<T, ()>
     where
         F: FnOnce() -> T,
@@ -57,7 +48,6 @@ mod htm_util {
                 active.insert(t);
             }
         }
-
         let status = unsafe { _xbegin() };
         if status == _XBEGIN_STARTED {
             let r = f();
@@ -75,7 +65,6 @@ mod htm_util {
             Err(())
         }
     }
-
     pub fn with_mutex<F, T>(tags: &HashSet<usize>, f: F) -> T
     where
         F: FnOnce() -> T,
@@ -97,7 +86,6 @@ mod htm_util {
         r
     }
 }
-
 #[cfg(not(all(
     feature = "htm",
     target_arch = "x86_64",
@@ -105,13 +93,10 @@ mod htm_util {
 )))]
 mod htm_util {
     use std::{collections::HashSet, sync::LazyLock};
-
     use parking_lot::Mutex;
-
     static STM_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
     static ACTIVE_TAGS: LazyLock<Mutex<HashSet<usize>>> =
         LazyLock::new(|| Mutex::new(HashSet::new()));
-
     #[allow(dead_code)]
     pub fn with_transaction<F, T>(_tags: &HashSet<usize>, _f: F) -> Result<T, ()>
     where
@@ -119,7 +104,6 @@ mod htm_util {
     {
         Err(())
     }
-
     pub fn with_mutex<F, T>(tags: &HashSet<usize>, f: F) -> T
     where
         F: FnOnce() -> T,
@@ -141,35 +125,28 @@ mod htm_util {
         r
     }
 }
-
 /// Number of general purpose registers used by the execution contexts.
 ///
 /// Matches the main VM register file size.
 pub const REGISTER_COUNT: usize = 256;
-
 /// Identifier for a state entry in the world state.  For the purposes of this
 /// crate it is simply a string key but in a real integration this could be a
 /// complex type.
 pub type StateKey = String;
-
 /// Generic state value type.
 pub type Value = u64;
-
 /// Shared key-value state accessed by transactions.
 #[derive(Clone, Default)]
 pub struct State(Arc<DashMap<StateKey, Value>>);
-
 impl State {
     /// Create an empty state.
     pub fn new() -> Self {
         Self(Arc::new(DashMap::new()))
     }
-
     /// Read a value from the state.
     pub fn get(&self, key: &StateKey) -> Option<Value> {
         self.0.get(key).map(|v| *v)
     }
-
     /// Apply a batch of updates atomically.
     pub fn apply(&self, updates: &[StateUpdate]) {
         let mut sorted: Vec<_> = updates.iter().collect();
@@ -178,7 +155,6 @@ impl State {
             self.0.insert(upd.key.clone(), upd.value);
         }
     }
-
     /// Apply a batch of updates using hardware transactional memory when
     /// available. If HTM is unsupported or the transaction aborts, a
     /// fallback lock is used to ensure atomicity.
@@ -207,7 +183,6 @@ impl State {
                 return;
             }
         }
-
         htm_util::with_mutex(tags, || {
             for upd in updates {
                 self.0.insert(upd.key.clone(), upd.value);
@@ -215,30 +190,25 @@ impl State {
         });
     }
 }
-
 /// Update produced by a transaction execution.
 #[derive(Clone, Debug)]
 pub struct StateUpdate {
     pub key: StateKey,
     pub value: Value,
 }
-
 /// Snapshot of state values available to a transaction while executing.
 pub type StateSnapshot = HashMap<StateKey, Value>;
-
 /// Result of a single transaction.
 #[derive(Clone, Debug, Default)]
 pub struct TxResult {
     pub success: bool,
     pub gas_used: u64,
 }
-
 /// Result of executing a whole block.
 #[derive(Clone, Debug, Default)]
 pub struct BlockResult {
     pub tx_results: Vec<TxResult>,
 }
-
 /// Simple transaction type used by the scheduler.  Real transactions would
 /// include signatures and additional metadata.
 #[derive(Clone, Debug)]
@@ -247,13 +217,11 @@ pub struct Transaction {
     pub gas_limit: u64,
     pub access: StateAccessSet,
 }
-
 /// A block is just a list of transactions.
 #[derive(Clone, Debug, Default)]
 pub struct Block {
     pub transactions: Vec<Transaction>,
 }
-
 /// Execution context owned by a worker thread.
 ///
 /// Each worker executing a transaction operates on its own instance of this
@@ -269,7 +237,6 @@ pub struct ExecutionContext {
     pub read_set: StateSnapshot,
     pub result: Option<TxResult>,
 }
-
 impl ExecutionContext {
     /// Create a fresh empty context.
     pub fn new() -> Self {
@@ -284,7 +251,6 @@ impl ExecutionContext {
             result: None,
         }
     }
-
     /// Reset registers and transient memory between transactions.
     pub fn reset(&mut self) {
         self.registers = [0u64; REGISTER_COUNT];
@@ -296,7 +262,6 @@ impl ExecutionContext {
         self.read_set.clear();
         self.result = None;
     }
-
     /// Prepare the context for executing `tx`.
     pub fn init_for_transaction(&mut self, tx: &Transaction, state: &State) {
         self.reset();
@@ -307,12 +272,10 @@ impl ExecutionContext {
             }
         }
     }
-
     /// Read a value from the prefetched state snapshot.
     pub fn read(&self, key: &StateKey) -> Option<Value> {
         self.read_set.get(key).copied()
     }
-
     /// Record a state write for later commit.
     pub fn write(&mut self, key: StateKey, value: Value) {
         self.write_set.push(StateUpdate {
@@ -322,13 +285,11 @@ impl ExecutionContext {
         self.read_set.insert(key, value);
     }
 }
-
 impl Default for ExecutionContext {
     fn default() -> Self {
         Self::new()
     }
 }
-
 /// Metadata about a single instruction and its scheduling state.
 #[derive(Clone, Debug)]
 pub struct InstructionNode {
@@ -341,7 +302,6 @@ pub struct InstructionNode {
     pub dependents: Vec<usize>,
     pub dep_count: usize,
 }
-
 impl InstructionNode {
     pub fn new(tx_index: usize, instr_index: usize, opcode: u8) -> Self {
         Self {
@@ -355,18 +315,15 @@ impl InstructionNode {
             dep_count: 0,
         }
     }
-
     pub fn add_dependent(&mut self, idx: usize) {
         self.dependents.push(idx);
     }
-
     pub fn decrement(&mut self) {
         if self.dep_count > 0 {
             self.dep_count -= 1;
         }
     }
 }
-
 /// Directed acyclic graph describing instruction dependencies.
 #[derive(Clone, Debug, Default)]
 pub struct DependencyGraph {
@@ -375,7 +332,6 @@ pub struct DependencyGraph {
     pub indegree: Vec<usize>,
     pub access_list: Vec<StateAccessSet>,
 }
-
 impl DependencyGraph {
     /// Build a dependency graph from a block according to transaction
     /// read/write sets. Edges are added between conflicting transactions in
@@ -392,9 +348,7 @@ impl DependencyGraph {
                 .map(|t| t.access.clone())
                 .collect(),
         };
-
         use rayon::prelude::*;
-
         let edges: Vec<(usize, usize)> = (0..tx_count)
             .into_par_iter()
             .flat_map(|i| {
@@ -411,16 +365,13 @@ impl DependencyGraph {
                     .collect::<Vec<_>>()
             })
             .collect();
-
         let mut edges = edges;
         edges.sort_unstable();
         for (i, j) in edges {
             graph.add_edge(i, j);
         }
-
         graph
     }
-
     /// Detect if two access sets conflict.
     fn conflicts(a: &StateAccessSet, b: &StateAccessSet) -> bool {
         for key in &a.write_keys {
@@ -438,35 +389,29 @@ impl DependencyGraph {
         }
         false
     }
-
     /// Add a directed edge from `i` to `j` in the graph.
     fn add_edge(&mut self, i: usize, j: usize) {
         self.adj[i].push(j);
         self.indegree[j] += 1;
     }
 }
-
 /// Thread-safe buffer used to collect instruction results.
 pub struct ResultBuffer {
     sender: crossbeam_channel::Sender<(usize, TxResult)>,
     receiver: crossbeam_channel::Receiver<(usize, TxResult)>,
 }
-
 impl ResultBuffer {
     pub fn new(size: usize) -> Self {
         let (sender, receiver) = crossbeam_channel::bounded(size);
         Self { sender, receiver }
     }
-
     pub fn store(&self, idx: usize, result: TxResult) {
         let _ = self.sender.send((idx, result));
     }
-
     pub fn take_ready(&self) -> Option<(usize, TxResult)> {
         self.receiver.try_recv().ok()
     }
 }
-
 /// Scheduler driving instruction-level parallelism.
 ///
 /// This type provides a very small implementation of the scheduling
@@ -486,17 +431,14 @@ const LOAD_WINDOW: usize = 8;
 /// worker stacks with deployment policy.
 static THREAD_STACK_SIZE: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(32 * 1024 * 1024);
-
 /// Current Rayon worker stack size used by scheduler pools.
 pub fn thread_stack_size() -> usize {
     THREAD_STACK_SIZE.load(std::sync::atomic::Ordering::Relaxed)
 }
-
 /// Override the Rayon worker stack size used by scheduler pools.
 pub fn set_thread_stack_size(bytes: usize) {
     THREAD_STACK_SIZE.store(bytes.max(1), std::sync::atomic::Ordering::Relaxed);
 }
-
 pub struct Scheduler {
     pool: RwLock<Option<ThreadPool>>,
     min_threads: usize,
@@ -508,7 +450,6 @@ pub struct Scheduler {
     gpu_manager: Option<crate::gpu_manager::GpuManager>,
     forced_simd: AtomicU8,
 }
-
 impl Scheduler {
     fn encode_simd(choice: Option<SimdChoice>) -> u8 {
         match choice {
@@ -520,7 +461,6 @@ impl Scheduler {
             Some(SimdChoice::Neon) => 5,
         }
     }
-
     fn decode_simd(val: u8) -> Option<SimdChoice> {
         match val {
             1 => Some(SimdChoice::Scalar),
@@ -531,25 +471,21 @@ impl Scheduler {
             _ => None,
         }
     }
-
     /// Create a scheduler using a fixed-size thread pool.  If `num_threads` is
     /// zero all physical CPU cores are used.
     pub fn new(num_threads: usize) -> Self {
         Self::new_dynamic(num_threads, num_threads)
     }
-
     /// Create a scheduler with dynamic thread limits. When either limit is
     /// zero all physical CPU cores are used for that bound.
     pub fn new_dynamic(min_threads: usize, max_threads: usize) -> Self {
         let htm = cfg!(feature = "htm") && crate::ivm::rtm_available();
         Self::new_dynamic_with_htm_flag(min_threads, max_threads, htm)
     }
-
     /// Testing helper to create a scheduler with the HTM flag explicitly set.
     pub fn new_with_htm_flag(num_threads: usize, htm: bool) -> Self {
         Self::new_dynamic_with_htm_flag(num_threads, num_threads, htm)
     }
-
     /// Create a scheduler with dynamic limits and explicit HTM flag.
     pub fn new_dynamic_with_htm_flag(min_threads: usize, max_threads: usize, htm: bool) -> Self {
         let phys = num_cpus::get_physical().max(1);
@@ -561,7 +497,6 @@ impl Scheduler {
             // Respect the configured max bound; clamp the minimum down.
             min = max;
         }
-
         let stack = thread_stack_size();
         let mut built_threads = min;
         let mut pool: Option<ThreadPool> = None;
@@ -616,31 +551,26 @@ impl Scheduler {
             forced_simd: AtomicU8::new(0),
         }
     }
-
     /// Returns `true` if hardware transactional memory is available on this
     /// host CPU.
     pub fn htm_available(&self) -> bool {
         self.htm
     }
-
     /// Configure a forced SIMD backend applied to worker threads.
     pub fn set_forced_simd(&self, choice: Option<SimdChoice>) {
         self.forced_simd
             .store(Self::encode_simd(choice), Ordering::SeqCst);
     }
-
     fn run_with_simd_override<T, F: FnOnce() -> T>(&self, f: F) -> T {
         let forced = Self::decode_simd(self.forced_simd.load(Ordering::SeqCst));
         let _restore_override = ThreadSimdOverrideGuard(set_thread_forced_simd(forced));
         f()
     }
-
     /// Number of GPUs detected when the scheduler was created.
     #[cfg(not(feature = "cuda"))]
     pub fn gpu_count(&self) -> usize {
         0
     }
-
     /// Number of GPUs detected when the scheduler was created.
     #[cfg(feature = "cuda")]
     pub fn gpu_count(&self) -> usize {
@@ -649,16 +579,13 @@ impl Scheduler {
             .map(|g| g.device_count())
             .unwrap_or(0)
     }
-
     /// Current number of threads in the pool.
     pub fn thread_count(&self) -> usize {
         self.current_threads.load(Ordering::SeqCst)
     }
-
     fn execute_tx<F: FnOnce() -> TxResult>(&self, func: F) -> TxResult {
         self.run_with_simd_override(func)
     }
-
     /// Execute all transactions in `block` respecting dependencies derived from
     /// their access sets. Transactions without conflicts are executed in
     /// parallel on the thread pool. Results are returned in block order.
@@ -670,26 +597,22 @@ impl Scheduler {
         let tx_count = graph.tx_count;
         let mut indegree = graph.indegree.clone();
         let txs = block.transactions;
-
         let result_buf = Arc::new(ResultBuffer::new(tx_count));
         let mut completed = vec![false; tx_count];
         let mut results = vec![TxResult::default(); tx_count];
         let mut pending: BTreeSet<usize> = (0..tx_count).collect();
-
         while !pending.is_empty() {
             let ready: Vec<usize> = pending
                 .iter()
                 .filter(|&&idx| indegree[idx] == 0)
                 .copied()
                 .collect();
-
             if ready.is_empty() {
                 // Cycle in graph or unexpected state; execute sequentially
                 let idx = *pending.iter().next().unwrap();
                 let tx = txs[idx].clone();
                 let res = self.execute_tx(move || exec(tx));
                 result_buf.store(idx, res);
-
                 if let Some((i, r)) = result_buf.take_ready() {
                     results[i] = r;
                     completed[i] = true;
@@ -722,7 +645,6 @@ impl Scheduler {
                         result_buf_for_scope.store(idx, res);
                     }
                 }
-
                 let mut step_results = Vec::with_capacity(ready.len());
                 for _ in 0..ready.len() {
                     if let Some(res) = result_buf.take_ready() {
@@ -740,20 +662,16 @@ impl Scheduler {
                 }
             }
         }
-
         // Drain any remaining results
         while let Some((idx, res)) = result_buf.take_ready() {
             results[idx] = res;
         }
-
         self.record_load(tx_count);
         self.adjust_pool();
-
         BlockResult {
             tx_results: results,
         }
     }
-
     /// Fast path for conflict-free blocks (or pre-grouped blocks).
     ///
     /// Spawns all transactions in parallel and collects results in order
@@ -770,7 +688,6 @@ impl Scheduler {
                 tx_results: Vec::new(),
             };
         }
-
         let result_buf = Arc::new(ResultBuffer::new(tx_count));
         let result_buf_for_scope = Arc::clone(&result_buf);
         if let Some(pool) = self.pool.read().as_ref() {
@@ -793,7 +710,6 @@ impl Scheduler {
                 result_buf_for_scope.store(idx, r);
             }
         }
-
         // All tasks posted to the scope have completed here; drain results.
         let mut results = vec![TxResult::default(); tx_count];
         let mut received = 0usize;
@@ -803,15 +719,12 @@ impl Scheduler {
                 received += 1;
             }
         }
-
         self.record_load(tx_count);
         self.adjust_pool();
-
         BlockResult {
             tx_results: results,
         }
     }
-
     fn record_load(&self, tx_count: usize) {
         let mut hist = self.load_history.lock();
         hist.push_back(tx_count);
@@ -819,7 +732,6 @@ impl Scheduler {
             hist.pop_front();
         }
     }
-
     fn adjust_pool(&self) {
         let avg: usize = {
             let hist = self.load_history.lock();
@@ -828,7 +740,6 @@ impl Scheduler {
             }
             hist.iter().sum::<usize>() / hist.len()
         };
-
         let cur = self.current_threads.load(Ordering::SeqCst);
         let mut new_size = cur;
         if avg > cur * 4 && cur < self.max_threads {
@@ -836,7 +747,6 @@ impl Scheduler {
         } else if avg < cur / 2 && cur > self.min_threads {
             new_size = std::cmp::max(cur / 2, self.min_threads);
         }
-
         if new_size != cur
             && let Ok(pool) = rayon::ThreadPoolBuilder::new()
                 .num_threads(new_size)
@@ -848,12 +758,10 @@ impl Scheduler {
         }
     }
 }
-
 // Global defaults for scheduler thread limits (set by the host/node).
 // 0 means "auto" (use physical cores).
 static DEFAULT_SCHED_MIN: AtomicUsize = AtomicUsize::new(0);
 static DEFAULT_SCHED_MAX: AtomicUsize = AtomicUsize::new(0);
-
 /// Set global default scheduler thread limits used by [`IVM::new`].
 ///
 /// - Pass `None` to keep "auto" for that bound (uses physical cores).
@@ -865,7 +773,6 @@ pub fn set_default_scheduler_limits(min_threads: Option<usize>, max_threads: Opt
     DEFAULT_SCHED_MIN.store(min, Ordering::SeqCst);
     DEFAULT_SCHED_MAX.store(max, Ordering::SeqCst);
 }
-
 /// Read global default scheduler limits as concrete `(min, max)` counts.
 ///
 /// 0 values are resolved to the current number of physical cores.
@@ -887,7 +794,6 @@ pub fn default_scheduler_limits() -> (usize, usize) {
     }
     (min, max)
 }
-
 /// Read and write sets associated with a transaction for conflict detection.
 #[derive(Clone, Debug)]
 pub struct StateAccessSet {
@@ -896,7 +802,6 @@ pub struct StateAccessSet {
     /// Optional register tags used for additional conflict detection.
     pub reg_tags: HashSet<usize>,
 }
-
 impl StateAccessSet {
     pub fn new() -> Self {
         Self {
@@ -905,7 +810,6 @@ impl StateAccessSet {
             reg_tags: HashSet::new(),
         }
     }
-
     /// Determine if this access set conflicts with another based on read/write overlaps.
     pub fn conflicts(&self, other: &StateAccessSet) -> bool {
         for key in &self.write_keys {
@@ -924,23 +828,19 @@ impl StateAccessSet {
         false
     }
 }
-
 impl Default for StateAccessSet {
     fn default() -> Self {
         Self::new()
     }
 }
-
 pub trait StateAccess {
     fn access_set(&self) -> &StateAccessSet;
 }
-
 impl StateAccess for Transaction {
     fn access_set(&self) -> &StateAccessSet {
         &self.access
     }
 }
-
 /// Group of non-conflicting transactions executed together.
 ///
 /// A simple deterministic grouping algorithm partitions transactions so that
@@ -952,14 +852,12 @@ impl StateAccess for Transaction {
 pub struct TransactionGroup {
     pub transactions: Vec<Transaction>,
 }
-
 impl TransactionGroup {
     pub fn new() -> Self {
         Self {
             transactions: Vec::new(),
         }
     }
-
     /// Partition a block of transactions into deterministic conflict-free
     /// groups based on their access sets.
     pub fn group_block(block: Block) -> Vec<TransactionGroup> {
@@ -967,7 +865,6 @@ impl TransactionGroup {
         let mut current = TransactionGroup::new();
         let mut reads = HashSet::new();
         let mut writes = HashSet::new();
-
         for tx in block.transactions.into_iter() {
             let conflict = tx
                 .access
@@ -975,26 +872,21 @@ impl TransactionGroup {
                 .iter()
                 .any(|k| writes.contains(k) || reads.contains(k))
                 || tx.access.read_keys.iter().any(|k| writes.contains(k));
-
             if conflict && !current.transactions.is_empty() {
                 groups.push(current);
                 current = TransactionGroup::new();
                 reads.clear();
                 writes.clear();
             }
-
             reads.extend(tx.access.read_keys.iter().cloned());
             writes.extend(tx.access.write_keys.iter().cloned());
             current.transactions.push(tx);
         }
-
         if !current.transactions.is_empty() {
             groups.push(current);
         }
-
         groups
     }
-
     /// Greedy conflict prediction grouping that tracks aggregate group access
     /// sets to avoid O(n^2) per-group membership checks.
     pub fn group_block_predicted(block: Block) -> Vec<TransactionGroup> {
@@ -1003,7 +895,6 @@ impl TransactionGroup {
         let mut agg_reads: Vec<HashSet<StateKey>> = Vec::new();
         let mut agg_writes: Vec<HashSet<StateKey>> = Vec::new();
         let mut agg_tags: Vec<HashSet<usize>> = Vec::new();
-
         for tx in block.transactions.into_iter() {
             // Find the first group with which this tx does not conflict.
             let mut target: Option<usize> = None;
@@ -1024,7 +915,6 @@ impl TransactionGroup {
                     break;
                 }
             }
-
             if let Some(i) = target {
                 // Safe to move tx (we only evaluated predicates on references).
                 // Update aggregate sets for the group.
@@ -1057,13 +947,11 @@ impl TransactionGroup {
         groups
     }
 }
-
 impl Default for TransactionGroup {
     fn default() -> Self {
         Self::new()
     }
 }
-
 /// Execute a block in groups using the provided scheduler.  Groups are derived
 /// deterministically with [`TransactionGroup::group_block`].
 pub fn execute_block_grouped<F>(scheduler: &Scheduler, block: Block, exec: F) -> BlockResult
@@ -1086,7 +974,6 @@ where
         tx_results: results,
     }
 }
-
 /// Execute a block using greedy conflict prediction to reduce serialization.
 pub fn execute_block_predicted<F>(scheduler: &Scheduler, block: Block, exec: F) -> BlockResult
 where
@@ -1108,11 +995,9 @@ where
         tx_results: results,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn deep_recurse(n: usize) {
         let buf = [0u8; 1024];
         std::hint::black_box(&buf);
@@ -1120,7 +1005,6 @@ mod tests {
             deep_recurse(n - 1);
         }
     }
-
     #[test]
     fn scheduler_threads_have_sufficient_stack() {
         let scheduler = Scheduler::new_with_htm_flag(1, false);
@@ -1130,7 +1014,6 @@ mod tests {
             .expect("scheduler should build a thread pool in tests");
         pool.install(|| deep_recurse(4096));
     }
-
     #[test]
     fn group_block_predicted_single_group_when_no_conflicts() {
         // Build a block with unique write keys so there are no conflicts.
@@ -1148,7 +1031,6 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].transactions.len(), 100);
     }
-
     #[test]
     fn schedule_block_conflict_free_preserves_order() {
         // Gas limit carries the original index for verification.
@@ -1173,7 +1055,6 @@ mod tests {
             assert_eq!(tr.gas_used as usize, i);
         }
     }
-
     #[test]
     fn scheduler_applies_forced_simd_on_worker_threads() {
         let _simd_guard = crate::vector::forced_simd_test_lock();
@@ -1198,19 +1079,16 @@ mod tests {
         );
         assert_eq!(r.tx_results[0].gas_used, 1);
     }
-
     #[test]
     fn scheduler_propagates_panics_and_restores_thread_simd_override() {
         let _simd_guard = crate::vector::forced_simd_test_lock();
         let scheduler = Scheduler::new_with_htm_flag(1, false);
         scheduler.set_forced_simd(Some(SimdChoice::Scalar));
-
         let previous_override = set_thread_forced_simd(Some(SimdChoice::Sse2));
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             scheduler.execute_tx(|| panic!("executor panic must propagate"));
         }));
         let restored_override = set_thread_forced_simd(previous_override);
-
         assert!(panic.is_err());
         assert_eq!(restored_override, Some(SimdChoice::Sse2));
     }

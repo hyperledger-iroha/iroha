@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod validation_fee_policy_proof_bridge_tests {
     use super::*;
-
     #[test]
     fn request_encoder_validates_context_without_serializing_it() {
         let first_context = [1_u8; 32];
@@ -34,7 +33,6 @@ mod validation_fee_policy_proof_bridge_tests {
             "unmarked context must fail closed"
         );
     }
-
     #[test]
     fn proof_verifier_rejects_malformed_archive() {
         assert!(

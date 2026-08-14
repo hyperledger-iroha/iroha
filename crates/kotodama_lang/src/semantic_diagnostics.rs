@@ -6,7 +6,6 @@
 //! ranges, labels, and fix recipes. Whole-program state invariants use their
 //! parser-owned state/lifecycle declaration nodes. This adapter deliberately
 //! does not scan diagnostic messages or source tokens to guess a spelling.
-
 use crate::{
     diagnostic::{
         Diagnostic, DiagnosticBundle, DiagnosticFix, DiagnosticLabel, SourceSpan,
@@ -15,16 +14,13 @@ use crate::{
     resolved::ResolvedProgram,
     source::{SourceFile, SourceRange},
 };
-
 #[cfg(test)]
 use crate::diagnostic::DiagnosticPhase;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SemanticDiagnosticLabel {
     pub(crate) source: SourceRange,
     pub(crate) message: String,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SemanticFix {
     PositionalStruct {
@@ -45,32 +41,27 @@ pub(crate) enum SemanticFix {
         replacement: String,
     },
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SemanticDiagnostic {
     pub(crate) primary: SourceRange,
     pub(crate) labels: Vec<SemanticDiagnosticLabel>,
     pub(crate) fix: Option<SemanticFix>,
 }
-
 fn source_span(source: &SourceFile, range: SourceRange) -> Option<SourceSpan> {
     (source.id() == range.source).then(|| SourceSpan::from_range(source, range.range))
 }
-
 fn safe_slice(source: &SourceFile, range: SourceRange) -> Option<&str> {
     (source.id() == range.source)
         .then(|| source.slice(range.range))
         .flatten()
         .filter(|text| !text.contains("//") && !text.contains("/*"))
 }
-
 fn strict_child(primary: SourceRange, child: SourceRange) -> bool {
     primary.source == child.source
         && primary.range != child.range
         && !child.range.is_empty()
         && primary.range.contains(child.range)
 }
-
 fn materialize_fix(
     source: &SourceFile,
     primary: SourceRange,
@@ -153,7 +144,6 @@ fn materialize_fix(
         replacement,
     })
 }
-
 /// Convert failures from typed/effect analysis into canonical diagnostics.
 ///
 /// Structured semantic metadata supplies the primary range, secondary labels,
@@ -237,7 +227,6 @@ pub(crate) fn from_semantic_failures(
             .collect(),
     )
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,7 +234,6 @@ mod tests {
         session::{CompileRequest, CompilerSession},
         source::{SourceId, TextRange},
     };
-
     fn range(source: SourceId, text: &str, needle: &str) -> SourceRange {
         let start = text.find(needle).expect("fixture substring");
         SourceRange::new(
@@ -256,7 +244,6 @@ mod tests {
             ),
         )
     }
-
     #[test]
     fn stable_error_code_is_independent_of_message_wording() {
         for message in [
@@ -280,7 +267,6 @@ mod tests {
             assert_eq!(bundle.diagnostics[0].message, message);
         }
     }
-
     #[test]
     fn independent_trigger_failures_retain_their_exact_name_spans() {
         let source = r#"seiyaku Timers {
@@ -299,7 +285,6 @@ mod tests {
             .iter()
             .filter(|diagnostic| diagnostic.code == "E_TRIGGER_VIEW_TARGET")
             .collect::<Vec<_>>();
-
         assert_eq!(trigger_diagnostics.len(), 2, "{diagnostics:?}");
         assert_eq!(
             trigger_diagnostics
@@ -316,7 +301,6 @@ mod tests {
             ["morning", "evening"]
         );
     }
-
     #[test]
     fn phase_adapter_only_promotes_registry_owned_resolver_failures() {
         for code in [
@@ -332,7 +316,6 @@ mod tests {
             assert_eq!(phase_for_semantic_failure(code), DiagnosticPhase::Semantic);
         }
     }
-
     #[test]
     fn positional_struct_fix_uses_exact_argument_spellings() {
         let text = "Pair(1.250_0, nested(2))";
@@ -355,7 +338,6 @@ mod tests {
         assert_eq!(fix.span.byte_range, Some(primary.range));
         assert_eq!(fix.replacement, "Pair { left: 1.250_0, right: nested(2), }");
     }
-
     #[test]
     fn semantic_fixes_fail_closed_for_comments_or_wrong_sources() {
         let source_id = SourceId(3);
@@ -374,7 +356,6 @@ mod tests {
             )
             .is_none()
         );
-
         let wrong_source = SourceRange::new(SourceId(99), primary.range);
         assert!(
             materialize_fix(
@@ -388,7 +369,6 @@ mod tests {
             .is_none()
         );
     }
-
     #[test]
     fn safe_list_read_fix_preserves_receiver_and_index_spelling() {
         let source_id = SourceId(11);
@@ -406,7 +386,6 @@ mod tests {
         .expect("safe list read fix");
         assert_eq!(fix.replacement, "values.get((offset + 1))");
     }
-
     #[test]
     fn safe_list_write_fix_uses_the_complete_statement_range() {
         let source_id = SourceId(12);
@@ -429,7 +408,6 @@ mod tests {
             "values.try_set(index: offset, value: replacement);"
         );
     }
-
     #[test]
     fn exact_type_replacement_does_not_rewrite_surrounding_source() {
         let source_id = SourceId(13);

@@ -1,5 +1,4 @@
 // Rooted filesystem and two-slot store regression tests.
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -11,7 +10,6 @@ mod tests {
         thread,
         time::Duration,
     };
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use std::cell::Cell;
     #[cfg(unix)]
@@ -23,9 +21,7 @@ mod tests {
         ffi::{CString, c_char, c_int, c_void},
         os::fd::AsRawFd as _,
     };
-
     use tempfile::tempdir;
-
     use super::{
         ExpectedFile, RootedDirectory, TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1, TWO_SLOT_NAMES_V1,
         TWO_SLOT_ZERO_DIGEST, TwoSlotCasOutcomeV1, TwoSlotInitFileLockV1,
@@ -35,7 +31,6 @@ mod tests {
         two_slot_init_lock_name, two_slot_lost_found_name, two_slot_stage_prefix,
         write_exact_file_region, write_two_slot_record_unlocked,
     };
-
     fn test_root(path: &std::path::Path) -> RootedDirectory {
         #[cfg(windows)]
         {
@@ -48,7 +43,6 @@ mod tests {
                 .expect("retain rooted test directory")
         }
     }
-
     fn read_only_test_root(path: &std::path::Path) -> RootedDirectory {
         #[cfg(windows)]
         {
@@ -62,16 +56,13 @@ mod tests {
                 .expect("retain read-only rooted test directory")
         }
     }
-
     fn two_slot_config(name: &str) -> TwoSlotStoreConfigV1 {
         TwoSlotStoreConfigV1::try_new(name, [0x51; 32], [0xa7; 32], 512)
             .expect("valid bounded two-slot test config")
     }
-
     fn two_slot_fault(label: &'static str) -> io::Error {
         io::Error::other(format!("injected two-slot fault after {label}"))
     }
-
     fn raw_test_record(
         store: &TwoSlotStoreV1,
         slot_id: usize,
@@ -95,7 +86,6 @@ mod tests {
             })
             .expect("write exact test record");
     }
-
     fn initialize_test_stage(
         root: &RootedDirectory,
         config: &TwoSlotStoreConfigV1,
@@ -108,7 +98,6 @@ mod tests {
         lock.release().expect("unlock test initializer");
         stage
     }
-
     fn try_load_test_canonical(
         root: &RootedDirectory,
         config: &TwoSlotStoreConfigV1,
@@ -126,7 +115,6 @@ mod tests {
             (Err(error), _) | (Ok(_), Err(error)) => Err(error),
         }
     }
-
     fn root_two_slot_stage_names(
         root: &RootedDirectory,
         config: &TwoSlotStoreConfigV1,
@@ -138,7 +126,6 @@ mod tests {
             .filter(|name| name.as_encoded_bytes().starts_with(prefix.as_bytes()))
             .collect()
     }
-
     #[test]
     fn two_slot_store_initializes_noops_and_reads_shorter_payload_exactly() {
         let temp = tempdir().expect("tempdir");
@@ -151,7 +138,6 @@ mod tests {
         let first = store.load().expect("load initial record");
         assert_eq!(first.generation(), 1);
         assert_eq!(first.payload(), initial);
-
         let before = store
             .slots
             .iter()
@@ -181,7 +167,6 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(after, before, "no-op must not write either fixed slot");
-
         let slot_1_long = vec![0x6b; 301];
         let second = store
             .compare_and_swap(&no_op, &slot_1_long)
@@ -202,7 +187,6 @@ mod tests {
         )
         .expect("mutate unauthenticated private stale tail");
         assert_eq!(store.load().expect("reload exact short payload"), fourth);
-
         let mut names = store
             .directory
             .child_names_bounded(2)
@@ -218,7 +202,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn two_slot_store_loads_through_a_read_only_root_without_initializing() {
         let temp = tempdir().expect("tempdir");
@@ -233,7 +216,6 @@ mod tests {
             .expect("commit writer successor");
         drop(store);
         drop(writer_root);
-
         let reader_root = read_only_test_root(temp.path());
         let read_only_store =
             super::open_existing_read_only_two_slot_store_v1(&reader_root, config.clone())
@@ -256,7 +238,6 @@ mod tests {
             .expect("load existing store through a read-only capability");
         assert_eq!(snapshot.generation(), 2);
         assert_eq!(snapshot.payload(), b"committed");
-
         let absent = two_slot_config("absent-read-only-store");
         let error = reader_root
             .load_existing_two_slot_store_v1(absent.clone())
@@ -271,7 +252,6 @@ mod tests {
             "read-only loading must not create an initializer lock"
         );
     }
-
     #[test]
     fn read_only_root_cannot_open_or_initialize_mutable_two_slot_store() {
         let temp = tempdir().expect("tempdir");
@@ -281,7 +261,6 @@ mod tests {
             .open_or_create_two_slot_store_v1(existing_config.clone(), b"existing")
             .expect("initialize existing test store");
         let before = writable_root.child_names().expect("enumerate test root");
-
         let read_only_root = read_only_test_root(temp.path());
         let existing_error = read_only_root
             .open_or_create_two_slot_store_v1(existing_config, b"replacement")
@@ -300,7 +279,6 @@ mod tests {
             b"existing",
             "read-only open must not mutate the existing store"
         );
-
         let absent_config = two_slot_config("absent-store");
         let absent_error = read_only_root
             .open_or_create_two_slot_store_v1(absent_config, b"initial")
@@ -314,7 +292,6 @@ mod tests {
             "read-only initialization must not create an init lock, stage, or canonical store"
         );
     }
-
     #[test]
     fn two_slot_store_remains_two_fixed_files_after_more_than_1024_updates() {
         let temp = tempdir().expect("tempdir");
@@ -347,7 +324,6 @@ mod tests {
             .sum::<u64>();
         assert_eq!(logical_bytes, store.layout.slot_file_bytes * 2);
     }
-
     #[test]
     fn two_slot_initialization_recovers_after_every_injected_boundary() {
         const LABELS: &[&str] = &[
@@ -376,7 +352,6 @@ mod tests {
             "parent-synced",
             "initialization-postcheck",
         ];
-
         for &fault_label in LABELS {
             let temp = tempdir().expect("tempdir");
             let root = test_root(temp.path());
@@ -409,7 +384,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn two_slot_cas_recovers_after_every_injected_boundary() {
         const LABELS: &[&str] = &[
@@ -458,7 +432,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn two_slot_compare_and_swap_serializes_concurrent_writers() {
         let temp = tempdir().expect("tempdir");
@@ -502,7 +475,6 @@ mod tests {
         assert_eq!(failure.kind(), io::ErrorKind::WouldBlock);
         assert_eq!(first_store.load().expect("load winner").generation(), 2);
     }
-
     #[test]
     fn two_slot_try_operations_classify_process_and_os_lock_contention_as_busy() {
         let temp = tempdir().expect("tempdir");
@@ -511,7 +483,6 @@ mod tests {
             .open_or_create_two_slot_store_v1(two_slot_config("try-busy"), b"old")
             .expect("initialize nonblocking store");
         let expected = store.load().expect("load predecessor");
-
         let process_guard = store.process_lock.lock().expect("hold process lock");
         assert!(matches!(store.try_load(), Err(TwoSlotTryErrorV1::Busy)));
         assert!(matches!(
@@ -519,7 +490,6 @@ mod tests {
             Err(TwoSlotTryErrorV1::Busy)
         ));
         drop(process_guard);
-
         let blocker = fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -534,7 +504,6 @@ mod tests {
         fs::File::unlock(&blocker).expect("release operating-system lock");
         assert_eq!(store.try_load().expect("load after lock release"), expected);
     }
-
     #[test]
     fn two_slot_try_compare_and_swap_distinguishes_exact_replay_from_conflict() {
         let temp = tempdir().expect("tempdir");
@@ -556,7 +525,6 @@ mod tests {
         };
         assert_eq!(committed.generation(), 2);
         assert_eq!(committed.payload(), b"committed");
-
         assert_eq!(
             second_store
                 .try_compare_and_swap(&expected, b"committed")
@@ -574,7 +542,6 @@ mod tests {
             committed
         );
     }
-
     #[test]
     fn two_slot_open_create_is_concurrent_and_canonical_wins() {
         let temp = tempdir().expect("tempdir");
@@ -601,7 +568,6 @@ mod tests {
             assert_eq!(snapshot.generation(), 1);
             assert_eq!(snapshot.payload(), b"initial");
         }
-
         let canonical = root
             .open_or_create_two_slot_store_v1(config.clone(), b"initial")
             .expect("open canonical");
@@ -621,7 +587,6 @@ mod tests {
             .expect("race stage preserved in lost+found");
         assert_eq!(lost.child_names().expect("lost+found entries").len(), 1);
     }
-
     #[test]
     fn two_slot_init_file_lock_blocks_independent_handle_until_release() {
         let temp = tempdir().expect("tempdir");
@@ -657,7 +622,6 @@ mod tests {
         );
         waiter.join().expect("init-lock waiter did not panic");
     }
-
     #[test]
     fn two_slot_bounded_initialization_times_out_and_recovers_after_lock_release() {
         assert!(
@@ -677,7 +641,6 @@ mod tests {
             )
             .is_err()
         );
-
         let temp = tempdir().expect("tempdir");
         let root = test_root(temp.path());
         let config = two_slot_config("bounded-init-timeout");
@@ -694,7 +657,6 @@ mod tests {
             .expect_err("contended bounded initialization must expire");
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
         assert!(started.elapsed() < Duration::from_secs(2));
-
         blocker.release().expect("release initializer lock");
         let recovered = root
             .open_or_create_two_slot_store_v1_bounded(config, b"initial", wait)
@@ -704,7 +666,6 @@ mod tests {
             b"initial"
         );
     }
-
     #[test]
     fn two_slot_bounded_initialization_acquires_before_deadline() {
         let temp = tempdir().expect("tempdir");
@@ -728,7 +689,6 @@ mod tests {
             b"initial"
         );
     }
-
     #[test]
     fn two_slot_unrelated_store_progresses_while_another_os_lock_is_held() {
         let temp = tempdir().expect("tempdir");
@@ -745,7 +705,6 @@ mod tests {
             .open(blocked.directory.display_path.join(TWO_SLOT_NAMES_V1[0]))
             .expect("open independent blocker handle");
         fs::File::lock(&blocker).expect("hold blocked store OS lock");
-
         let (blocked_started_tx, blocked_started_rx) = mpsc::channel();
         let blocked_wait_store = blocked.clone();
         let blocked_waiter = thread::spawn(move || {
@@ -792,7 +751,6 @@ mod tests {
             b"independent"
         );
     }
-
     #[test]
     fn two_slot_empty_initial_payload_roundtrips() {
         let temp = tempdir().expect("tempdir");
@@ -810,7 +768,6 @@ mod tests {
             snapshot
         );
     }
-
     #[test]
     fn two_slot_recovery_promotes_lexically_first_complete_stage() {
         let temp = tempdir().expect("tempdir");
@@ -825,7 +782,6 @@ mod tests {
         candidates.sort_by(|left, right| left.0.cmp(&right.0));
         let expected_identity = candidates[0].1;
         drop((first, second));
-
         let store = root
             .open_or_create_two_slot_store_v1(config.clone(), b"initial")
             .expect("promote deterministic stage");
@@ -836,7 +792,6 @@ mod tests {
             .expect("other complete stage is preserved");
         assert_eq!(lost.child_names().expect("lost+found entries").len(), 1);
     }
-
     #[test]
     fn two_slot_selection_rejects_ambiguous_generations_and_bad_lineage() {
         for case in ["equal", "gap", "lineage"] {
@@ -858,7 +813,6 @@ mod tests {
             assert_eq!(error.kind(), io::ErrorKind::InvalidData, "case {case}");
         }
     }
-
     #[test]
     fn two_slot_compare_and_swap_rejects_foreign_snapshot() {
         let temp = tempdir().expect("tempdir");
@@ -879,7 +833,6 @@ mod tests {
             b"right"
         );
     }
-
     #[test]
     fn two_slot_canonical_header_corruption_fails_without_overwrite() {
         let temp = tempdir().expect("tempdir");
@@ -907,7 +860,6 @@ mod tests {
             identity
         );
     }
-
     #[test]
     fn two_slot_binding_detects_slot_substitution_and_hard_links() {
         let substitution_temp = tempdir().expect("tempdir");
@@ -929,7 +881,6 @@ mod tests {
         assert!(substitution_store.load().is_err());
         assert!(preserved_path.exists());
         assert!(slot_path.exists());
-
         let hard_link_temp = tempdir().expect("tempdir");
         let hard_link_root = test_root(hard_link_temp.path());
         let hard_link_store = hard_link_root
@@ -945,7 +896,6 @@ mod tests {
         assert!(slot_path.exists());
         assert!(alias_path.exists());
     }
-
     #[test]
     fn two_slot_promotion_rejects_source_substitution_and_new_hard_link() {
         let substitution_temp = tempdir().expect("tempdir");
@@ -1010,7 +960,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(inventories.iter().any(|entries| *entries == 2));
         assert!(inventories.contains(&0));
-
         let hard_link_temp = tempdir().expect("tempdir");
         let hard_link_root = test_root(hard_link_temp.path());
         let hard_link_config = two_slot_config("stage-hard-link");
@@ -1047,7 +996,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn two_slot_lost_found_preserves_multiple_stages_and_uses_free_slot() {
         let temp = tempdir().expect("tempdir");
@@ -1081,7 +1029,6 @@ mod tests {
             ["entry-v1-0000", "entry-v1-0001", "entry-v1-0002"].map(OsString::from)
         );
     }
-
     #[test]
     fn two_slot_lost_found_saturation_fails_without_deleting_stage() {
         let temp = tempdir().expect("tempdir");
@@ -1114,7 +1061,6 @@ mod tests {
             "canonical must not be installed after failed preservation"
         );
     }
-
     #[test]
     fn two_slot_valid_canonical_survives_saturated_lost_found_and_exact_stage() {
         let temp = tempdir().expect("tempdir");
@@ -1147,7 +1093,6 @@ mod tests {
             16
         );
     }
-
     #[test]
     fn two_slot_uppercase_stage_suffix_is_rejected_and_preserved() {
         let temp = tempdir().expect("tempdir");
@@ -1169,7 +1114,6 @@ mod tests {
             "canonical remains absent"
         );
     }
-
     #[test]
     fn two_slot_nonempty_lost_found_does_not_block_clean_initialization() {
         let temp = tempdir().expect("tempdir");
@@ -1188,7 +1132,6 @@ mod tests {
             b"initial"
         );
     }
-
     #[test]
     fn two_slot_preoccupied_canonical_is_never_overwritten() {
         let file_temp = tempdir().expect("tempdir");
@@ -1205,7 +1148,6 @@ mod tests {
                 .is_err()
         );
         assert_eq!(fs::read(&file_path).expect("sentinel remains"), b"sentinel");
-
         let directory_temp = tempdir().expect("tempdir");
         let directory_root = test_root(directory_temp.path());
         let directory_config = two_slot_config("preoccupied-directory");
@@ -1222,7 +1164,6 @@ mod tests {
             b"keep"
         );
     }
-
     #[test]
     fn two_slot_init_lock_substitution_and_hard_link_fail_closed() {
         let hard_link_temp = tempdir().expect("tempdir");
@@ -1250,7 +1191,6 @@ mod tests {
         );
         assert!(lock_path.exists());
         assert!(alias_path.exists());
-
         let substitution_temp = tempdir().expect("tempdir");
         let substitution_root = test_root(substitution_temp.path());
         let substitution_config = two_slot_config("substituted-init-lock");
@@ -1282,7 +1222,6 @@ mod tests {
         assert!(lock_path.exists());
         assert!(preserved_path.exists());
     }
-
     #[test]
     fn two_slot_cas_detects_mid_commit_slot_substitution_and_hard_link() {
         let substitution_temp = tempdir().expect("tempdir");
@@ -1318,7 +1257,6 @@ mod tests {
         assert!(result.is_err());
         assert!(slot_path.exists());
         assert!(preserved_path.exists());
-
         let hard_link_temp = tempdir().expect("tempdir");
         let hard_link_root = test_root(hard_link_temp.path());
         let hard_link_store = hard_link_root
@@ -1345,7 +1283,6 @@ mod tests {
         assert!(slot_path.exists());
         assert!(alias_path.exists());
     }
-
     #[test]
     fn two_slot_stable_nonzero_partial_trailer_fails_closed() {
         let temp = tempdir().expect("tempdir");
@@ -1385,7 +1322,6 @@ mod tests {
             .expect_err("stable nonzero torn trailer must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
     #[test]
     fn two_slot_exact_zero_trailer_allows_interrupted_body_reuse() {
         let temp = tempdir().expect("tempdir");
@@ -1419,7 +1355,6 @@ mod tests {
         assert_eq!(recovered.generation(), 2);
         assert_eq!(recovered.payload(), b"new");
     }
-
     #[test]
     fn two_slot_newest_committed_corruption_never_falls_back() {
         for case in [
@@ -1443,7 +1378,6 @@ mod tests {
             let slot = &store.slots[1];
             let record_offset =
                 u64::try_from(store.layout.header_region_bytes).expect("record offset fits u64");
-
             match case {
                 "trailer-decode" => {
                     write_exact_file_region(
@@ -1513,7 +1447,6 @@ mod tests {
             assert_eq!(error.kind(), io::ErrorKind::InvalidData, "case {case}");
         }
     }
-
     #[test]
     fn two_slot_process_mutex_and_init_file_lock_recover_after_panics() {
         let temp = tempdir().expect("tempdir");
@@ -1537,7 +1470,6 @@ mod tests {
             }
             other => panic!("nonblocking poisoned lock must fail closed, got {other:?}"),
         }
-
         let init_temp = tempdir().expect("tempdir");
         let init_root = test_root(init_temp.path());
         let init_config = two_slot_config("init-poison-recovery");
@@ -1562,7 +1494,6 @@ mod tests {
             b"initial"
         );
     }
-
     #[cfg(target_os = "linux")]
     unsafe extern "C" {
         fn fsetxattr(
@@ -1574,7 +1505,6 @@ mod tests {
         ) -> c_int;
         fn fremovexattr(fd: c_int, name: *const c_char) -> c_int;
     }
-
     #[cfg(target_os = "linux")]
     fn install_linux_default_acl(handle: &fs::File) -> CString {
         fn push_acl_entry(bytes: &mut Vec<u8>, tag: u16, permissions: u16, id: u32) {
@@ -1582,7 +1512,6 @@ mod tests {
             bytes.extend_from_slice(&permissions.to_le_bytes());
             bytes.extend_from_slice(&id.to_le_bytes());
         }
-
         let name = CString::new("system.posix_acl_default").expect("ACL xattr name");
         let mut acl = 2_u32.to_le_bytes().to_vec();
         let undefined_id = u32::MAX;
@@ -1610,7 +1539,6 @@ mod tests {
         );
         name
     }
-
     #[cfg(target_os = "linux")]
     fn remove_linux_default_acl(handle: &fs::File, name: &CString) {
         // SAFETY: the retained descriptor and NUL-terminated xattr name remain
@@ -1620,7 +1548,6 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn windows_dacl_qualification_source_contract_is_handle_bound() {
         let source = [
@@ -1635,7 +1562,6 @@ mod tests {
         let pathname_api = ["GetNamed", "SecurityInfo"].concat();
         assert!(!source.contains(&pathname_api));
     }
-
     #[test]
     fn windows_atomic_replacement_source_contract_is_non_destructive() {
         let source = [
@@ -1650,7 +1576,6 @@ mod tests {
         let destructive_match = ["matches!(&expected, ExpectedFile::", "Identity(_))"].concat();
         assert!(!source.contains(&destructive_match));
     }
-
     #[test]
     fn linux_acl_stability_contract_rejects_equal_length_churn() {
         let mut snapshots = std::collections::VecDeque::from([
@@ -1678,7 +1603,6 @@ mod tests {
             "both snapshots in every retry are read"
         );
     }
-
     #[cfg(windows)]
     #[test]
     fn rooted_directory_pins_initial_windows_owner_sid() {
@@ -1692,7 +1616,6 @@ mod tests {
             io::ErrorKind::PermissionDenied
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn retained_directory_acl_policy_accepts_plain_directory() {
@@ -1701,7 +1624,6 @@ mod tests {
         super::validate_retained_directory_acl(&handle, temp.path())
             .expect("plain descriptor has no ACL mutation grant");
     }
-
     #[cfg(target_os = "macos")]
     fn change_macos_acl(path: &std::path::Path, operation: &str, acl: Option<&str>) {
         let mut command = Command::new("chmod");
@@ -1715,7 +1637,6 @@ mod tests {
             .expect("execute macOS chmod ACL operation");
         assert!(status.success(), "macOS chmod ACL operation must succeed");
     }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn retained_directory_acl_policy_rejects_mutation_allow_entry() {
@@ -1727,7 +1648,6 @@ mod tests {
         let error = result.expect_err("ACL add-file grant must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn retained_directory_acl_policy_accepts_deny_only_entry() {
@@ -1738,7 +1658,6 @@ mod tests {
         change_macos_acl(temp.path(), "-RN", None);
         result.expect("deny-only ACL must not grant mutation authority");
     }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn retained_directory_acl_policy_rejects_posix_default_acl() {
@@ -1750,7 +1669,6 @@ mod tests {
         let error = result.expect_err("POSIX ACL attribute must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn rooted_descendant_rejects_post_capture_acl_mutation() {
@@ -1770,7 +1688,6 @@ mod tests {
             io::ErrorKind::PermissionDenied
         );
     }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn rooted_descendant_rejects_post_capture_acl_mutation() {
@@ -1791,7 +1708,6 @@ mod tests {
             io::ErrorKind::PermissionDenied
         );
     }
-
     #[test]
     fn rooted_atomic_write_rejects_equal_length_identity_substitution() {
         let temp = tempdir().expect("tempdir");
@@ -1816,7 +1732,6 @@ mod tests {
             b"other"
         );
     }
-
     #[test]
     fn rooted_atomic_exact_bytes_are_storage_idempotent() {
         let temp = tempdir().expect("tempdir");
@@ -1825,7 +1740,6 @@ mod tests {
         let snapshot = root
             .read_file(OsStr::new("state"), 32)
             .expect("bind exact state");
-
         root.atomic_write(
             OsStr::new("state"),
             OsStr::new(".state.tmp-1-9"),
@@ -1841,7 +1755,6 @@ mod tests {
         #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         assert!(!temp.path().join(".state.retained-v1-0000").exists());
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_atomic_write_replaces_the_exact_existing_destination() {
@@ -1884,7 +1797,6 @@ mod tests {
             b"successor"
         );
     }
-
     #[cfg(windows)]
     #[test]
     fn rooted_atomic_write_fails_closed_for_changed_windows_target() {
@@ -1894,7 +1806,6 @@ mod tests {
         let predecessor = root
             .read_file(OsStr::new("state"), 32)
             .expect("bind Windows predecessor");
-
         let error = root
             .atomic_write(
                 OsStr::new("state"),
@@ -1911,7 +1822,6 @@ mod tests {
         assert!(!temp.path().join(".state.tmp-1-10").exists());
         assert!(!temp.path().join(".state.retained-v1-0000").exists());
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_atomic_exchange_preserves_a_substituted_target_and_predecessor() {
@@ -1924,7 +1834,6 @@ mod tests {
         let predecessor = root
             .read_file(OsStr::new("state"), 64)
             .expect("retain predecessor");
-
         let error = root
             .atomic_write_with_test_hooks(
                 OsStr::new("state"),
@@ -1954,7 +1863,6 @@ mod tests {
             b"expected-predecessor"
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_atomic_exchange_preserves_a_substituted_prepared_object() {
@@ -1967,7 +1875,6 @@ mod tests {
         let predecessor = root
             .read_file(OsStr::new("state"), 64)
             .expect("retain predecessor");
-
         root.atomic_write_with_test_hooks(
             OsStr::new("state"),
             OsStr::new(".state.tmp-1-21"),
@@ -1995,7 +1902,6 @@ mod tests {
             b"prepared-successor"
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_atomic_retention_never_overwrites_a_prepopulated_slot() {
@@ -2008,7 +1914,6 @@ mod tests {
         let predecessor = root
             .read_file(OsStr::new("state"), 64)
             .expect("retain predecessor");
-
         root.atomic_write_with_test_hooks(
             OsStr::new("state"),
             OsStr::new(".state.tmp-1-22"),
@@ -2032,7 +1937,6 @@ mod tests {
             b"prepopulated-slot"
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_atomic_retention_does_not_mutate_a_racing_hardlink() {
@@ -2045,7 +1949,6 @@ mod tests {
         let predecessor = root
             .read_file(OsStr::new("state"), 64)
             .expect("retain predecessor");
-
         root.atomic_write_with_test_hooks(
             OsStr::new("state"),
             OsStr::new(".state.tmp-1-23"),
@@ -2069,7 +1972,6 @@ mod tests {
             b"predecessor-bytes"
         );
     }
-
     #[test]
     fn rooted_child_binding_rejects_ancestor_replacement() {
         let temp = tempdir().expect("tempdir");
@@ -2092,7 +1994,6 @@ mod tests {
         assert!(!temp.path().join("original/state").exists());
         assert!(error.to_string().contains("substituted"));
     }
-
     #[cfg(unix)]
     #[test]
     fn rooted_child_open_rejects_symlink() {
@@ -2106,7 +2007,6 @@ mod tests {
             "no-follow traversal must reject symlinks"
         );
     }
-
     #[test]
     fn rooted_atomic_write_propagates_directory_sync_failure() {
         let temp = tempdir().expect("tempdir");
@@ -2127,7 +2027,6 @@ mod tests {
                 .contains("injected directory sync failure")
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_atomic_replacement_preserves_both_generations_when_exchange_sync_fails() {
@@ -2138,7 +2037,6 @@ mod tests {
             .read_file(OsStr::new("state"), 64)
             .expect("retain predecessor");
         let sync_calls = Cell::new(0_usize);
-
         root.atomic_write_with_test_sync(
             OsStr::new("state"),
             OsStr::new(".state.tmp-1-30"),
@@ -2167,7 +2065,6 @@ mod tests {
             b"predecessor"
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_atomic_replacement_preserves_retained_generation_when_retention_sync_fails() {
@@ -2178,7 +2075,6 @@ mod tests {
             .read_file(OsStr::new("state"), 64)
             .expect("retain predecessor");
         let sync_calls = Cell::new(0_usize);
-
         root.atomic_write_with_test_sync(
             OsStr::new("state"),
             OsStr::new(".state.tmp-1-31"),
@@ -2208,7 +2104,6 @@ mod tests {
         );
         assert!(!temp.path().join(".state.tmp-1-31").exists());
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_atomic_replacement_fails_closed_when_retention_slots_are_saturated() {
@@ -2225,7 +2120,6 @@ mod tests {
         let predecessor = root
             .read_file(OsStr::new("state"), 64)
             .expect("retain predecessor");
-
         let error = root
             .atomic_write(
                 OsStr::new("state"),
@@ -2242,7 +2136,6 @@ mod tests {
         );
         assert!(!temp.path().join(".state.tmp-1-32").exists());
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_atomic_replacement_enforces_retention_aggregate_byte_bound() {
@@ -2262,7 +2155,6 @@ mod tests {
         let predecessor = root
             .read_file(OsStr::new("state"), 64)
             .expect("retain predecessor");
-
         let error = root
             .atomic_write(
                 OsStr::new("state"),
@@ -2278,7 +2170,6 @@ mod tests {
             b"predecessor"
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_atomic_write_preserves_a_pre_rename_temporary_after_failure() {
@@ -2303,7 +2194,6 @@ mod tests {
             b"preserved-for-recovery"
         );
     }
-
     #[test]
     fn atomic_temp_candidate_classifier_is_target_exact_and_fail_closed() {
         assert!(super::is_atomic_temp_candidate_for(
@@ -2327,7 +2217,6 @@ mod tests {
             "state"
         ));
     }
-
     #[test]
     fn rooted_recovery_removes_only_matching_atomic_temporaries() {
         let temp = tempdir().expect("tempdir");
@@ -2342,7 +2231,6 @@ mod tests {
         assert!(!temp.path().join(".state.tmp-42000-1").exists());
         assert!(temp.path().join(".other.tmp-42000-1").exists());
     }
-
     #[test]
     fn rooted_bounded_atomic_temp_recovery_filters_decoded_targets() {
         let temp = tempdir().expect("tempdir");
@@ -2350,7 +2238,6 @@ mod tests {
         fs::write(temp.path().join(".state.tmp-42000-1"), b"stale").expect("seed allowed temp");
         fs::write(temp.path().join(".other.tmp-42000-2"), b"other").expect("seed rejected temp");
         fs::write(temp.path().join("retained"), b"retained").expect("seed retained file");
-
         assert_eq!(
             root.remove_atomic_temps_matching(3, |target| target == "state")
                 .expect("recover bounded allowed temp"),
@@ -2363,7 +2250,6 @@ mod tests {
             b"retained"
         );
     }
-
     #[test]
     fn rooted_child_enumeration_is_deterministically_sorted() {
         let temp = tempdir().expect("tempdir");
@@ -2371,13 +2257,11 @@ mod tests {
         fs::write(temp.path().join("zeta"), b"z").expect("seed zeta");
         fs::write(temp.path().join("alpha"), b"a").expect("seed alpha");
         fs::write(temp.path().join("middle"), b"m").expect("seed middle");
-
         assert_eq!(
             root.child_names().expect("enumerate retained directory"),
             ["alpha", "middle", "zeta"].map(OsString::from)
         );
     }
-
     #[test]
     fn rooted_child_enumeration_rejects_bound_overflow() {
         let temp = tempdir().expect("tempdir");
@@ -2385,13 +2269,11 @@ mod tests {
         for name in ["one", "two", "three"] {
             fs::write(temp.path().join(name), name.as_bytes()).expect("seed bounded child");
         }
-
         let error = root
             .child_names_bounded(2)
             .expect_err("enumeration overflow must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
     #[test]
     fn rooted_empty_directory_binding_removes_empty_child() {
         let temp = tempdir().expect("tempdir");
@@ -2400,12 +2282,10 @@ mod tests {
         let retained = root
             .open_directory(OsStr::new("orphan"))
             .expect("retain empty orphan directory");
-
         root.remove_empty_directory_binding(retained)
             .expect("remove exact empty orphan");
         assert!(!temp.path().join("orphan").exists());
     }
-
     #[test]
     fn rooted_empty_directory_removal_preserves_a_child_created_at_the_destructive_gap() {
         let temp = tempdir().expect("tempdir");
@@ -2415,7 +2295,6 @@ mod tests {
         let binding = root
             .open_directory(OsStr::new("orphan"))
             .expect("retain empty orphan directory");
-
         let error = root
             .remove_empty_directory_binding_with(binding, || {
                 fs::write(retained.join("racing-child"), b"preserve me")
@@ -2427,7 +2306,6 @@ mod tests {
             b"preserve me"
         );
     }
-
     #[test]
     fn rooted_exact_file_removal_preserves_a_name_substitution() {
         let temp = tempdir().expect("tempdir");
@@ -2441,7 +2319,6 @@ mod tests {
             .expect("planned orphan exists");
         fs::rename(&target, &original).expect("detach planned orphan");
         fs::write(&target, b"replacement").expect("install replacement");
-
         root.remove_file_binding(binding)
             .expect_err("exact removal must reject a substituted name");
         assert_eq!(
@@ -2453,7 +2330,6 @@ mod tests {
             b"planned-orphan"
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_private_removal_binding_enforces_private_file_policy() {
@@ -2463,7 +2339,6 @@ mod tests {
         fs::write(&target, b"private recovery state").expect("seed private orphan");
         fs::set_permissions(&target, fs::Permissions::from_mode(0o600))
             .expect("secure private orphan mode");
-
         let binding = root
             .private_removal_file_binding(OsStr::new("private-orphan"), 64)
             .expect("retain private orphan")
@@ -2471,7 +2346,6 @@ mod tests {
         root.remove_file_binding(binding)
             .expect("remove exact private orphan");
         assert!(!target.exists());
-
         fs::write(&target, b"exposed recovery state").expect("seed exposed orphan");
         fs::set_permissions(&target, fs::Permissions::from_mode(0o644))
             .expect("set exposed orphan mode");
@@ -2480,7 +2354,6 @@ mod tests {
             .expect_err("non-private recovery state must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
-
     #[test]
     fn rooted_exact_directory_removal_preserves_a_name_substitution() {
         let temp = tempdir().expect("tempdir");
@@ -2493,13 +2366,11 @@ mod tests {
             .expect("retain planned directory");
         fs::rename(&target, &original).expect("detach planned directory");
         fs::create_dir(&target).expect("install replacement directory");
-
         root.remove_empty_directory_binding(retained)
             .expect_err("exact removal must reject a substituted directory name");
         assert!(target.is_dir(), "replacement directory must remain");
         assert!(original.is_dir(), "planned directory must remain detached");
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_file_isolation_preserves_a_replacement_installed_at_the_destructive_gap() {
@@ -2515,7 +2386,6 @@ mod tests {
             .removal_file_binding(OsStr::new("orphan"), 64)
             .expect("retain planned orphan")
             .expect("planned orphan exists");
-
         root.isolate_file_binding_with(binding, &quarantine, OsStr::new("file-slot"), || {
             fs::rename(&target, &detached).expect("detach checked inode in race hook");
             fs::write(&target, b"replacement").expect("install racing replacement");
@@ -2536,7 +2406,6 @@ mod tests {
             "the raced name was isolated, not unlinked"
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_file_isolation_never_overwrites_a_prepopulated_destination() {
@@ -2550,7 +2419,6 @@ mod tests {
             .removal_file_binding(OsStr::new("orphan"), 64)
             .expect("retain source")
             .expect("source exists");
-
         root.isolate_file_binding_with(binding, &quarantine, OsStr::new("file-slot"), || {
             fs::write(
                 temp.path().join(".quarantine").join("file-slot"),
@@ -2569,7 +2437,6 @@ mod tests {
             b"prepopulated"
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_file_isolation_attempts_both_parent_syncs_when_source_sync_fails() {
@@ -2585,7 +2452,6 @@ mod tests {
             .expect("source exists");
         let source_syncs = Cell::new(0_usize);
         let quarantine_syncs = Cell::new(0_usize);
-
         let error = root
             .isolate_file_binding_with_sync(
                 binding,
@@ -2612,7 +2478,6 @@ mod tests {
             b"planned-orphan"
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_file_isolation_propagates_quarantine_parent_sync_failure() {
@@ -2628,7 +2493,6 @@ mod tests {
             .expect("source exists");
         let source_syncs = Cell::new(0_usize);
         let quarantine_syncs = Cell::new(0_usize);
-
         let error = root
             .isolate_file_binding_with_sync(
                 binding,
@@ -2655,7 +2519,6 @@ mod tests {
             b"planned-orphan"
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_directory_isolation_preserves_a_replacement_installed_at_the_destructive_gap() {
@@ -2670,7 +2533,6 @@ mod tests {
         let retained = root
             .open_directory(OsStr::new("orphan"))
             .expect("retain planned directory");
-
         root.isolate_empty_directory_binding_with(
             retained,
             &quarantine,
@@ -2692,7 +2554,6 @@ mod tests {
         );
         assert!(!target.exists(), "the raced directory was never unlinked");
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_directory_isolation_attempts_both_parent_syncs_when_source_sync_fails() {
@@ -2707,7 +2568,6 @@ mod tests {
             .expect("retain source directory");
         let source_syncs = Cell::new(0_usize);
         let quarantine_syncs = Cell::new(0_usize);
-
         let error = root
             .isolate_empty_directory_binding_with_sync(
                 child,
@@ -2735,7 +2595,6 @@ mod tests {
                 .is_dir()
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn rooted_directory_isolation_propagates_quarantine_parent_sync_failure() {
@@ -2750,7 +2609,6 @@ mod tests {
             .expect("retain source directory");
         let source_syncs = Cell::new(0_usize);
         let quarantine_syncs = Cell::new(0_usize);
-
         let error = root
             .isolate_empty_directory_binding_with_sync(
                 child,
@@ -2784,7 +2642,6 @@ mod tests {
                 .is_dir()
         );
     }
-
     #[test]
     fn rooted_empty_directory_removal_rejects_nonempty_children() {
         let temp = tempdir().expect("tempdir");
@@ -2795,7 +2652,6 @@ mod tests {
         let retained_binding = root
             .open_directory(OsStr::new("retained"))
             .expect("retain nonempty directory");
-
         root.remove_empty_directory_binding(retained_binding)
             .expect_err("nonempty retained directory must not be removed");
         assert_eq!(
@@ -2803,13 +2659,11 @@ mod tests {
             b"retained"
         );
     }
-
     #[test]
     fn rooted_read_enforces_its_byte_bound() {
         let temp = tempdir().expect("tempdir");
         let root = test_root(temp.path());
         fs::write(temp.path().join("state"), b"12345").expect("seed bounded state");
-
         let exact = root
             .read_file(OsStr::new("state"), 5)
             .expect("read at exact byte bound");
@@ -2819,7 +2673,6 @@ mod tests {
             .expect_err("oversized state must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
     #[cfg(windows)]
     #[test]
     fn rooted_read_rejects_windows_hardlinks() {
@@ -2829,13 +2682,11 @@ mod tests {
         fs::write(&state, b"linked-state").expect("seed Windows state");
         fs::hard_link(&state, temp.path().join("state-link"))
             .expect("create Windows governance hardlink");
-
         let error = root
             .read_file(OsStr::new("state"), 32)
             .expect_err("Windows governance files with multiple links must fail closed");
         assert!(error.to_string().contains("exactly one hard link"));
     }
-
     #[test]
     fn retained_private_file_rejects_name_substitution() {
         let temp = tempdir().expect("tempdir");
@@ -2856,7 +2707,6 @@ mod tests {
             fs::Permissions::from_mode(0o600),
         )
         .expect("secure replacement mode");
-
         let error = retained
             .verify()
             .expect_err("retained file substitution must fail closed");
@@ -2866,7 +2716,6 @@ mod tests {
             b"replacement"
         );
     }
-
     #[test]
     fn rooted_recovery_is_idempotent_across_restart() {
         let temp = tempdir().expect("tempdir");
@@ -2899,7 +2748,6 @@ mod tests {
             b"restarted"
         );
     }
-
     #[cfg(windows)]
     #[test]
     fn rooted_file_open_rejects_reparse_point() {
@@ -2911,7 +2759,6 @@ mod tests {
         root.read_file(OsStr::new("linked"), 16)
             .expect_err("reparse-backed file must fail closed");
     }
-
     #[cfg(windows)]
     #[test]
     fn windows_disposition_deletes_the_opened_object_after_name_replacement() {
@@ -2927,11 +2774,9 @@ mod tests {
             .expect("capture Windows file identity");
         fs::rename(&stale, &moved).expect("move opened stale object");
         fs::write(&stale, b"name-replacement").expect("replace stale pathname");
-
         super::platform::remove_open_file(&root.handle, &opened, name, Some(identity))
             .expect("mark exact opened object for deletion");
         drop(opened);
-
         assert!(!moved.exists(), "the opened stale object must be deleted");
         assert_eq!(
             fs::read(&stale).expect("read replacement"),

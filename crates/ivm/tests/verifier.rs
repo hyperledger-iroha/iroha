@@ -1,7 +1,6 @@
 use ivm::{IVM, encoding, instruction, zk::verify_trace};
 mod common;
 use common::assemble_zk;
-
 #[test]
 fn test_verify_trace_pass() {
     // Program: ASSERT x1==0; HALT
@@ -19,7 +18,6 @@ fn test_verify_trace_pass() {
     let trace = vm.register_trace();
     verify_trace(&trace, vm.constraints(), vm.memory_log(), vm.register_log()).unwrap();
 }
-
 #[test]
 fn test_verify_trace_fail() {
     // ASSERT on non-zero register should fail verification

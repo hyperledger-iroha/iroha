@@ -8,11 +8,10 @@ impl ValidSingularQuery for FindMusubiExactPackageV1 {
             .world()
             .musubi_packages()
             .get(&self.request.package)
-            .cloned()
             .ok_or(QueryExecutionFail::NotFound)
+            .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
     }
 }
-
 impl ValidSingularQuery for FindMusubiExactReleaseV1 {
     fn execute(
         &self,
@@ -22,11 +21,8 @@ impl ValidSingularQuery for FindMusubiExactReleaseV1 {
         let snapshot = query_snapshot(state_ro)?;
         let network_id = *state_ro.network_id();
         let world = state_ro.world();
-        let home_release = world.musubi_releases().get(&self.request.release).cloned();
-        let universal_release = world
-            .musubi_resolver_index()
-            .get(&self.request.release)
-            .cloned();
+        let home_release = world.musubi_releases().get(&self.request.release);
+        let universal_release = world.musubi_resolver_index().get(&self.request.release);
         let (home_release, universal_release) = match (home_release, universal_release) {
             (None, None) => return Err(QueryExecutionFail::NotFound),
             (Some(home_release), Some(universal_release)) => (home_release, universal_release),
@@ -37,19 +33,24 @@ impl ValidSingularQuery for FindMusubiExactReleaseV1 {
                 ));
             }
         };
-        let response = MusubiExactReleaseSnapshotV1 {
-            network_id,
-            snapshot,
-            home_release,
-            universal_release,
-        };
+        let response = crate::smartcontracts::isi::query::own_singular_query_struct::<
+            MusubiExactReleaseSnapshotV1,
+            4,
+        >(
+            [&network_id, &snapshot, home_release, universal_release],
+            || MusubiExactReleaseSnapshotV1 {
+                network_id,
+                snapshot,
+                home_release: home_release.clone(),
+                universal_release: universal_release.clone(),
+            },
+        )?;
         response
             .validate_for(&self.request)
             .map_err(query_invalid)?;
         Ok(response)
     }
 }
-
 impl ValidSingularQuery for FindMusubiProviderBundleAttestationV1 {
     fn execute(
         &self,
@@ -60,7 +61,6 @@ impl ValidSingularQuery for FindMusubiProviderBundleAttestationV1 {
             .world()
             .musubi_provider_bundle_attestations()
             .get(&self.key)
-            .cloned()
             .ok_or(QueryExecutionFail::NotFound)?;
         record.validate().map_err(query_invalid)?;
         record
@@ -72,10 +72,201 @@ impl ValidSingularQuery for FindMusubiProviderBundleAttestationV1 {
                 "Musubi provider attestation record has the wrong embedded identity".to_owned(),
             ));
         }
-        Ok(record)
+        crate::smartcontracts::isi::query::own_singular_query_value(record)
     }
 }
-
+struct MusubiResolverIndexPageSource<'a> {
+    query: &'a MusubiResolverIndexQueryV1,
+    network_id: iroha_data_model::id::NetworkId,
+    items: Vec<MusubiResolverReleaseRowV1>,
+    next_cursor: Option<MusubiFinalizedCursorV1>,
+    snapshot: MusubiRegistrySnapshotV1,
+}
+impl norito::core::NoritoSerialize for MusubiResolverIndexPageSource<'_> {
+    fn schema_hash() -> [u8; 16] {
+        <MusubiResolverIndexPageV1 as norito::core::NoritoSerialize>::schema_hash()
+    }
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+            MusubiResolverIndexPageV1,
+            5,
+        >::new([
+            self.query,
+            &self.network_id,
+            &self.items,
+            &self.next_cursor,
+            &self.snapshot,
+        ]);
+        norito::core::NoritoSerialize::serialize(&borrowed, writer)
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+            MusubiResolverIndexPageV1,
+            5,
+        >::new([
+            self.query,
+            &self.network_id,
+            &self.items,
+            &self.next_cursor,
+            &self.snapshot,
+        ]);
+        norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
+    }
+}
+struct MusubiVersionPageSource<'a> {
+    query: &'a MusubiPackagePageQueryV1,
+    items: Vec<MusubiVersionV1>,
+    next_cursor: Option<MusubiFinalizedCursorV1>,
+    snapshot: MusubiRegistrySnapshotV1,
+}
+impl norito::core::NoritoSerialize for MusubiVersionPageSource<'_> {
+    fn schema_hash() -> [u8; 16] {
+        <MusubiVersionPageV1 as norito::core::NoritoSerialize>::schema_hash()
+    }
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+            MusubiVersionPageV1,
+            4,
+        >::new([self.query, &self.items, &self.next_cursor, &self.snapshot]);
+        norito::core::NoritoSerialize::serialize(&borrowed, writer)
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+            MusubiVersionPageV1,
+            4,
+        >::new([self.query, &self.items, &self.next_cursor, &self.snapshot]);
+        norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
+    }
+}
+struct MusubiMaintainerPageSource<'a> {
+    query: &'a MusubiPackagePageQueryV1,
+    items: Vec<MusubiMaintainerDirectoryEntryV1>,
+    next_cursor: Option<MusubiFinalizedCursorV1>,
+    snapshot: MusubiRegistrySnapshotV1,
+}
+impl norito::core::NoritoSerialize for MusubiMaintainerPageSource<'_> {
+    fn schema_hash() -> [u8; 16] {
+        <MusubiMaintainerPageV1 as norito::core::NoritoSerialize>::schema_hash()
+    }
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+            MusubiMaintainerPageV1,
+            4,
+        >::new([self.query, &self.items, &self.next_cursor, &self.snapshot]);
+        norito::core::NoritoSerialize::serialize(&borrowed, writer)
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+            MusubiMaintainerPageV1,
+            4,
+        >::new([self.query, &self.items, &self.next_cursor, &self.snapshot]);
+        norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
+    }
+}
+struct MusubiArchiveLocationPageSource<'a> {
+    network_id: iroha_data_model::id::NetworkId,
+    archive: &'a MusubiArchiveRecordV1,
+    items: Vec<MusubiArchiveLocationV1>,
+    next_cursor: Option<MusubiFinalizedCursorV1>,
+    snapshot: MusubiRegistrySnapshotV1,
+}
+impl norito::core::NoritoSerialize for MusubiArchiveLocationPageSource<'_> {
+    fn schema_hash() -> [u8; 16] {
+        <MusubiArchiveLocationPageV1 as norito::core::NoritoSerialize>::schema_hash()
+    }
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+            MusubiArchiveLocationPageV1,
+            5,
+        >::new([
+            &self.network_id,
+            self.archive,
+            &self.items,
+            &self.next_cursor,
+            &self.snapshot,
+        ]);
+        norito::core::NoritoSerialize::serialize(&borrowed, writer)
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+            MusubiArchiveLocationPageV1,
+            5,
+        >::new([
+            &self.network_id,
+            self.archive,
+            &self.items,
+            &self.next_cursor,
+            &self.snapshot,
+        ]);
+        norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
+    }
+}
+struct MusubiAliasHistoryPageSource<'a> {
+    query: &'a MusubiAliasQueryV1,
+    items: Vec<MusubiAliasHistoryEntryV1>,
+    next_cursor: Option<MusubiFinalizedCursorV1>,
+    snapshot: MusubiRegistrySnapshotV1,
+}
+impl norito::core::NoritoSerialize for MusubiAliasHistoryPageSource<'_> {
+    fn schema_hash() -> [u8; 16] {
+        <MusubiAliasHistoryPageV1 as norito::core::NoritoSerialize>::schema_hash()
+    }
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+            MusubiAliasHistoryPageV1,
+            4,
+        >::new([self.query, &self.items, &self.next_cursor, &self.snapshot]);
+        norito::core::NoritoSerialize::serialize(&borrowed, writer)
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+            MusubiAliasHistoryPageV1,
+            4,
+        >::new([self.query, &self.items, &self.next_cursor, &self.snapshot]);
+        norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
+    }
+}
+struct MusubiOrderedPackagePageSource<'a> {
+    query: &'a MusubiOrderedPrefixQueryV1,
+    network_id: iroha_data_model::id::NetworkId,
+    namespace_binding: &'a MusubiNamespaceBindingV1,
+    items: Vec<MusubiOrderedPackageEntryV1>,
+    next_cursor: Option<MusubiFinalizedCursorV1>,
+    snapshot: MusubiRegistrySnapshotV1,
+}
+impl norito::core::NoritoSerialize for MusubiOrderedPackagePageSource<'_> {
+    fn schema_hash() -> [u8; 16] {
+        <MusubiOrderedPackagePageV1 as norito::core::NoritoSerialize>::schema_hash()
+    }
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+            MusubiOrderedPackagePageV1,
+            6,
+        >::new([
+            self.query,
+            &self.network_id,
+            self.namespace_binding,
+            &self.items,
+            &self.next_cursor,
+            &self.snapshot,
+        ]);
+        norito::core::NoritoSerialize::serialize(&borrowed, writer)
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+            MusubiOrderedPackagePageV1,
+            6,
+        >::new([
+            self.query,
+            &self.network_id,
+            self.namespace_binding,
+            &self.items,
+            &self.next_cursor,
+            &self.snapshot,
+        ]);
+        norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
+    }
+}
 /// Internal typed Musubi query failure retained through the Torii telemetry boundary.
 ///
 /// The public query error remains [`QueryExecutionFail`]. This wrapper carries
@@ -86,7 +277,6 @@ pub struct MusubiQueryExecutionErrorV1 {
     query_error: QueryExecutionFail,
     cursor_failure: Option<MusubiCursorFailureV1>,
 }
-
 impl MusubiQueryExecutionErrorV1 {
     fn cursor(reason: MusubiCursorFailureV1) -> Self {
         Self {
@@ -94,20 +284,17 @@ impl MusubiQueryExecutionErrorV1 {
             cursor_failure: Some(reason),
         }
     }
-
     /// Return the exact typed cursor failure, when this is a cursor error.
     #[must_use]
     pub const fn cursor_failure(&self) -> Option<MusubiCursorFailureV1> {
         self.cursor_failure
     }
-
     /// Drop the process-local telemetry detail and recover the stable public query error.
     #[must_use]
     pub fn into_query_error(self) -> QueryExecutionFail {
         self.query_error
     }
 }
-
 impl From<QueryExecutionFail> for MusubiQueryExecutionErrorV1 {
     fn from(query_error: QueryExecutionFail) -> Self {
         Self {
@@ -116,7 +303,6 @@ impl From<QueryExecutionFail> for MusubiQueryExecutionErrorV1 {
         }
     }
 }
-
 /// Execute a paged Musubi query while retaining its exact cursor-failure reason.
 ///
 /// Ordinary Core callers continue to use [`ValidSingularQuery`]. Torii uses
@@ -129,7 +315,6 @@ pub trait ValidMusubiSingularQuery: iroha_data_model::query::SingularQuery {
         state_ro: &impl StateReadOnly,
     ) -> Result<Self::Output, MusubiQueryExecutionErrorV1>;
 }
-
 macro_rules! impl_valid_singular_query_via_musubi {
     ($query:ty, $output:ty) => {
         impl ValidSingularQuery for $query {
@@ -143,7 +328,6 @@ macro_rules! impl_valid_singular_query_via_musubi {
         }
     };
 }
-
 impl ValidMusubiSingularQuery for FindMusubiResolverIndexV1 {
     fn execute_musubi(
         &self,
@@ -155,7 +339,7 @@ impl ValidMusubiSingularQuery for FindMusubiResolverIndexV1 {
         }
         let snapshot = query_snapshot(state_ro)?;
         let network_id = *state_ro.network_id();
-        let query_hash = resolver_query_hash(&self.request);
+        let query_hash = resolver_query_hash(&self.request)?;
         let start = package_release_page_start(&self.request.package, &self.request.page)?;
         let rows = state_ro
             .world()
@@ -168,27 +352,45 @@ impl ValidMusubiSingularQuery for FindMusubiResolverIndexV1 {
                     .as_ref()
                     .is_none_or(|requirement| requirement.matches(&release.version))
             })
-            .map(|(release, row)| (release.version.to_string(), row.clone()));
-        let (items, next_cursor) = paginate_with_json_items_budget(
+            .map(|(release, row)| {
+                Ok((
+                    release.version.to_string(),
+                    crate::smartcontracts::isi::query::own_singular_query_value(row)?,
+                ))
+            });
+        let (items, next_cursor) = paginate_fallible_with_json_items_budget(
             rows,
             &self.request.page,
             query_hash,
             snapshot,
             MUSUBI_RESOLVER_PAGE_JSON_ITEMS_BUDGET_BYTES_V1,
+            MusubiResolverReleaseRowV1::canonical_json_len_bounded,
         )?;
-        let page = MusubiResolverIndexPageV1 {
-            query: self.request.clone(),
-            network_id,
-            items,
-            next_cursor,
-            snapshot,
+        let page = if crate::smartcontracts::isi::query::singular_query_limits_active() {
+            crate::smartcontracts::isi::query::own_singular_query_serialized_source::<
+                _,
+                MusubiResolverIndexPageV1,
+            >(MusubiResolverIndexPageSource {
+                query: &self.request,
+                network_id,
+                items,
+                next_cursor,
+                snapshot,
+            })?
+        } else {
+            MusubiResolverIndexPageV1 {
+                query: self.request.clone(),
+                network_id,
+                items,
+                next_cursor,
+                snapshot,
+            }
         };
         page.validate().map_err(query_invalid)?;
         Ok(page)
     }
 }
 impl_valid_singular_query_via_musubi!(FindMusubiResolverIndexV1, MusubiResolverIndexPageV1);
-
 impl ValidMusubiSingularQuery for FindMusubiVersionsV1 {
     fn execute_musubi(
         &self,
@@ -196,27 +398,44 @@ impl ValidMusubiSingularQuery for FindMusubiVersionsV1 {
     ) -> Result<MusubiVersionPageV1, MusubiQueryExecutionErrorV1> {
         self.request.package.validate().map_err(query_invalid)?;
         let snapshot = query_snapshot(state_ro)?;
-        let query_hash = package_page_query_hash(b"versions", &self.request);
+        let query_hash = package_page_query_hash(b"versions", &self.request)?;
         let start = package_release_page_start(&self.request.package, &self.request.page)?;
         let rows = state_ro
             .world()
             .musubi_resolver_index()
             .range(start..)
             .take_while(|(release, _)| release.package == self.request.package)
-            .map(|(release, _)| (release.version.to_string(), release.version.clone()));
-        let (items, next_cursor) = paginate(rows, &self.request.page, query_hash, snapshot)?;
-        let page = MusubiVersionPageV1 {
-            query: self.request.clone(),
-            items,
-            next_cursor,
-            snapshot,
+            .map(|(release, _)| {
+                Ok((
+                    release.version.to_string(),
+                    crate::smartcontracts::isi::query::own_singular_query_value(&release.version)?,
+                ))
+            });
+        let (items, next_cursor) =
+            paginate_fallible(rows, &self.request.page, query_hash, snapshot)?;
+        let page = if crate::smartcontracts::isi::query::singular_query_limits_active() {
+            crate::smartcontracts::isi::query::own_singular_query_serialized_source::<
+                _,
+                MusubiVersionPageV1,
+            >(MusubiVersionPageSource {
+                query: &self.request,
+                items,
+                next_cursor,
+                snapshot,
+            })?
+        } else {
+            MusubiVersionPageV1 {
+                query: self.request.clone(),
+                items,
+                next_cursor,
+                snapshot,
+            }
         };
         page.validate().map_err(query_invalid)?;
         Ok(page)
     }
 }
 impl_valid_singular_query_via_musubi!(FindMusubiVersionsV1, MusubiVersionPageV1);
-
 impl ValidMusubiSingularQuery for FindMusubiMaintainersV1 {
     fn execute_musubi(
         &self,
@@ -224,7 +443,7 @@ impl ValidMusubiSingularQuery for FindMusubiMaintainersV1 {
     ) -> Result<MusubiMaintainerPageV1, MusubiQueryExecutionErrorV1> {
         self.request.package.validate().map_err(query_invalid)?;
         let snapshot = query_snapshot(state_ro)?;
-        let query_hash = package_page_query_hash(b"maintainers", &self.request);
+        let query_hash = package_page_query_hash(b"maintainers", &self.request)?;
         state_ro
             .world()
             .musubi_packages()
@@ -239,20 +458,37 @@ impl ValidMusubiSingularQuery for FindMusubiMaintainersV1 {
             .filter(|(_, entry)| {
                 maintainer_directory_entry_visible_at_height(entry, snapshot.finalized_height)
             })
-            .map(|(_, entry)| (entry.cursor_key(), entry.clone()));
-        let (items, next_cursor) = paginate(rows, &self.request.page, query_hash, snapshot)?;
-        let page = MusubiMaintainerPageV1 {
-            query: self.request.clone(),
-            items,
-            next_cursor,
-            snapshot,
+            .map(|(_, entry)| {
+                Ok((
+                    entry.cursor_key(),
+                    crate::smartcontracts::isi::query::own_singular_query_value(entry)?,
+                ))
+            });
+        let (items, next_cursor) =
+            paginate_fallible(rows, &self.request.page, query_hash, snapshot)?;
+        let page = if crate::smartcontracts::isi::query::singular_query_limits_active() {
+            crate::smartcontracts::isi::query::own_singular_query_serialized_source::<
+                _,
+                MusubiMaintainerPageV1,
+            >(MusubiMaintainerPageSource {
+                query: &self.request,
+                items,
+                next_cursor,
+                snapshot,
+            })?
+        } else {
+            MusubiMaintainerPageV1 {
+                query: self.request.clone(),
+                items,
+                next_cursor,
+                snapshot,
+            }
         };
         page.validate().map_err(query_invalid)?;
         Ok(page)
     }
 }
 impl_valid_singular_query_via_musubi!(FindMusubiMaintainersV1, MusubiMaintainerPageV1);
-
 impl ValidMusubiSingularQuery for FindMusubiArchiveLocationsV1 {
     fn execute_musubi(
         &self,
@@ -266,52 +502,59 @@ impl ValidMusubiSingularQuery for FindMusubiArchiveLocationsV1 {
         }
         let snapshot = query_snapshot(state_ro)?;
         let network_id = *state_ro.network_id();
-        let query_hash = archive_location_query_hash(&self.request);
+        let query_hash = archive_location_query_hash(&self.request)?;
         let archive = state_ro
             .world()
             .musubi_archives()
             .get(&self.request.archive_id)
-            .cloned()
             .ok_or(QueryExecutionFail::NotFound)?;
-        let rows = archive
-            .location_ids
-            .iter()
-            .map(|location_id| {
-                let key = MusubiArchiveLocationKeyV1::new(self.request.archive_id, *location_id);
-                let location = state_ro
-                    .world()
-                    .musubi_archive_locations()
-                    .get(&key)
-                    .cloned()
-                    .ok_or_else(|| {
-                        QueryExecutionFail::Conversion(
-                            "Musubi archive location directory is inconsistent".to_owned(),
-                        )
-                    })?;
-                Ok((
-                    format!(
-                        "{}:{}",
-                        digest_label(key.archive_id.as_bytes()),
-                        digest_label(key.location_id.as_bytes())
-                    ),
-                    location,
-                ))
-            })
-            .collect::<Result<Vec<_>, QueryExecutionFail>>()?;
-        let (items, next_cursor) = paginate(rows, &self.request.page, query_hash, snapshot)?;
-        let page = MusubiArchiveLocationPageV1 {
-            network_id,
-            archive,
-            items,
-            next_cursor,
-            snapshot,
+        let rows = archive.location_ids.iter().map(|location_id| {
+            let key = MusubiArchiveLocationKeyV1::new(self.request.archive_id, *location_id);
+            let location = state_ro
+                .world()
+                .musubi_archive_locations()
+                .get(&key)
+                .ok_or_else(|| {
+                    QueryExecutionFail::Conversion(
+                        "Musubi archive location directory is inconsistent".to_owned(),
+                    )
+                })?;
+            Ok((
+                format!(
+                    "{}:{}",
+                    digest_label(key.archive_id.as_bytes()),
+                    digest_label(key.location_id.as_bytes())
+                ),
+                crate::smartcontracts::isi::query::own_singular_query_value(location)?,
+            ))
+        });
+        let (items, next_cursor) =
+            paginate_fallible(rows, &self.request.page, query_hash, snapshot)?;
+        let page = if crate::smartcontracts::isi::query::singular_query_limits_active() {
+            crate::smartcontracts::isi::query::own_singular_query_serialized_source::<
+                _,
+                MusubiArchiveLocationPageV1,
+            >(MusubiArchiveLocationPageSource {
+                network_id,
+                archive,
+                items,
+                next_cursor,
+                snapshot,
+            })?
+        } else {
+            MusubiArchiveLocationPageV1 {
+                network_id,
+                archive: archive.clone(),
+                items,
+                next_cursor,
+                snapshot,
+            }
         };
         page.validate().map_err(query_invalid)?;
         Ok(page)
     }
 }
 impl_valid_singular_query_via_musubi!(FindMusubiArchiveLocationsV1, MusubiArchiveLocationPageV1);
-
 impl ValidSingularQuery for FindMusubiArchiveRetentionV1 {
     fn execute(
         &self,
@@ -327,25 +570,22 @@ impl ValidSingularQuery for FindMusubiArchiveRetentionV1 {
             return Err(QueryExecutionFail::Expired);
         }
         let network_id = *state_ro.network_id();
-        let world = state_ro.world();
-        let mut items = Vec::with_capacity(self.request.archive_ids.len());
-        for archive_id in &self.request.archive_ids {
-            items.push(archive_retention_decision(*archive_id, world)?);
+        let finalized_time_ms = state_ro.query_ledger_time_ms();
+        if finalized_time_ms == 0 {
+            return Err(QueryExecutionFail::Conversion(
+                "Musubi finalized snapshot has no ledger timestamp".to_owned(),
+            ));
         }
-        let finalized_block = state_ro.latest_block().ok_or_else(|| {
-            QueryExecutionFail::Conversion(
-                "Musubi finalized snapshot block body is unavailable".to_owned(),
-            )
-        })?;
-        let finalized_time_ms = validated_finalized_block_time(
-            &snapshot,
-            finalized_block.header().height().get(),
-            *finalized_block.hash().as_ref(),
-            finalized_block.header().creation_time_ms,
+        let world = state_ro.world();
+        let mut items = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(
+            self.request.archive_ids.len(),
         )?;
+        for archive_id in &self.request.archive_ids {
+            items.try_push(archive_retention_decision(*archive_id, world)?)?;
+        }
         let page = MusubiArchiveRetentionPageV1 {
             network_id,
-            items,
+            items: items.into_vec()?,
             snapshot,
             finalized_time_ms,
         };
@@ -353,26 +593,11 @@ impl ValidSingularQuery for FindMusubiArchiveRetentionV1 {
         Ok(page)
     }
 }
-
-fn validated_finalized_block_time(
-    snapshot: &MusubiRegistrySnapshotV1,
-    block_height: u64,
-    block_hash: [u8; 32],
-    creation_time_ms: u64,
-) -> Result<u64, QueryExecutionFail> {
-    if block_height != snapshot.finalized_height || block_hash != snapshot.finalized_block_hash {
-        return Err(QueryExecutionFail::Conversion(
-            "Musubi finalized snapshot does not match its block body".to_owned(),
-        ));
-    }
-    Ok(creation_time_ms)
-}
-
 fn archive_retention_decision(
     archive_id: ArchiveId,
     world: &impl WorldReadOnly,
 ) -> Result<MusubiArchiveRetentionDecisionV1, QueryExecutionFail> {
-    let archive = world.musubi_archives().get(&archive_id).cloned();
+    let archive = world.musubi_archives().get(&archive_id);
     let references = world.musubi_archive_reverse_references().get(&archive_id);
     let storage = world.musubi_archive_availability().get(&archive_id);
     let Some(archive) = archive else {
@@ -407,7 +632,7 @@ fn archive_retention_decision(
             "Musubi archive retention reverse-reference identity is inconsistent".to_owned(),
         ));
     }
-    let storage = storage.cloned().ok_or_else(|| {
+    let storage = storage.ok_or_else(|| {
         QueryExecutionFail::Conversion(
             "Musubi archive retention state is missing storage availability".to_owned(),
         )
@@ -418,7 +643,6 @@ fn archive_retention_decision(
             "Musubi archive retention storage identity is inconsistent".to_owned(),
         ));
     }
-
     let mut active_releases = 0_u16;
     let mut yanked_releases = 0_u16;
     let mut taken_down_releases = 0_u16;
@@ -465,18 +689,32 @@ fn archive_retention_decision(
     } else {
         MusubiArchiveRetentionDispositionV1::PruneUnreferenced
     };
-    let decision = MusubiArchiveRetentionDecisionV1 {
-        archive_id,
-        disposition,
-        active_releases,
-        yanked_releases,
-        taken_down_releases,
-        storage: Some(storage),
-    };
+    let borrowed_storage =
+        crate::smartcontracts::isi::query::BorrowedSingularOption::new(Some(storage));
+    let decision = crate::smartcontracts::isi::query::own_singular_query_struct::<
+        MusubiArchiveRetentionDecisionV1,
+        6,
+    >(
+        [
+            &archive_id,
+            &disposition,
+            &active_releases,
+            &yanked_releases,
+            &taken_down_releases,
+            &borrowed_storage,
+        ],
+        || MusubiArchiveRetentionDecisionV1 {
+            archive_id,
+            disposition,
+            active_releases,
+            yanked_releases,
+            taken_down_releases,
+            storage: Some(storage.clone()),
+        },
+    )?;
     decision.validate().map_err(query_invalid)?;
     Ok(decision)
 }
-
 impl ValidSingularQuery for FindMusubiAliasV1 {
     fn execute(
         &self,
@@ -487,11 +725,10 @@ impl ValidSingularQuery for FindMusubiAliasV1 {
             .world()
             .musubi_aliases()
             .get(&self.request.alias)
-            .cloned()
             .ok_or(QueryExecutionFail::NotFound)
+            .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
     }
 }
-
 impl ValidMusubiSingularQuery for FindMusubiAliasHistoryV1 {
     fn execute_musubi(
         &self,
@@ -499,7 +736,7 @@ impl ValidMusubiSingularQuery for FindMusubiAliasHistoryV1 {
     ) -> Result<MusubiAliasHistoryPageV1, MusubiQueryExecutionErrorV1> {
         self.request.alias.validate().map_err(query_invalid)?;
         let snapshot = query_snapshot(state_ro)?;
-        let query_hash = alias_history_query_hash(&self.request);
+        let query_hash = alias_history_query_hash(&self.request)?;
         let start = alias_history_page_start(&self.request)?;
         let rows = state_ro
             .world()
@@ -507,24 +744,36 @@ impl ValidMusubiSingularQuery for FindMusubiAliasHistoryV1 {
             .range(start..)
             .take_while(|(key, _)| key.alias == self.request.alias)
             .map(|(key, history)| {
-                (
+                Ok((
                     format!("{}:{:020}", key.alias, key.revision),
-                    history.clone(),
-                )
+                    crate::smartcontracts::isi::query::own_singular_query_value(history)?,
+                ))
             });
-        let (items, next_cursor) = paginate(rows, &self.request.page, query_hash, snapshot)?;
-        let page = MusubiAliasHistoryPageV1 {
-            query: self.request.clone(),
-            items,
-            next_cursor,
-            snapshot,
+        let (items, next_cursor) =
+            paginate_fallible(rows, &self.request.page, query_hash, snapshot)?;
+        let page = if crate::smartcontracts::isi::query::singular_query_limits_active() {
+            crate::smartcontracts::isi::query::own_singular_query_serialized_source::<
+                _,
+                MusubiAliasHistoryPageV1,
+            >(MusubiAliasHistoryPageSource {
+                query: &self.request,
+                items,
+                next_cursor,
+                snapshot,
+            })?
+        } else {
+            MusubiAliasHistoryPageV1 {
+                query: self.request.clone(),
+                items,
+                next_cursor,
+                snapshot,
+            }
         };
         page.validate().map_err(query_invalid)?;
         Ok(page)
     }
 }
 impl_valid_singular_query_via_musubi!(FindMusubiAliasHistoryV1, MusubiAliasHistoryPageV1);
-
 impl ValidMusubiSingularQuery for FindMusubiOrderedPrefixV1 {
     fn execute_musubi(
         &self,
@@ -533,14 +782,13 @@ impl ValidMusubiSingularQuery for FindMusubiOrderedPrefixV1 {
         self.request.prefix.validate().map_err(query_invalid)?;
         let snapshot = query_snapshot(state_ro)?;
         let network_id = *state_ro.network_id();
-        let query_hash = ordered_prefix_query_hash(&self.request);
+        let query_hash = ordered_prefix_query_hash(&self.request)?;
         let prefix = self.request.prefix.as_str();
         let (start, namespace, name_prefix) = directory_query_start(&self.request)?;
         let namespace_binding = state_ro
             .world()
             .musubi_namespace_bindings()
             .get(&namespace)
-            .cloned()
             .ok_or(QueryExecutionFail::NotFound)?;
         let rows = state_ro
             .world()
@@ -551,22 +799,41 @@ impl ValidMusubiSingularQuery for FindMusubiOrderedPrefixV1 {
                     && selector.name.as_str().starts_with(name_prefix.as_str())
             })
             .filter(|(selector, _)| selector.to_string().starts_with(prefix))
-            .map(|(selector, entry)| (selector.to_string(), entry.clone()));
-        let (items, next_cursor) = paginate(rows, &self.request.page, query_hash, snapshot)?;
-        let page = MusubiOrderedPackagePageV1 {
-            query: self.request.clone(),
-            network_id,
-            namespace_binding,
-            items,
-            next_cursor,
-            snapshot,
+            .map(|(selector, entry)| {
+                Ok((
+                    selector.to_string(),
+                    crate::smartcontracts::isi::query::own_singular_query_value(entry)?,
+                ))
+            });
+        let (items, next_cursor) =
+            paginate_fallible(rows, &self.request.page, query_hash, snapshot)?;
+        let page = if crate::smartcontracts::isi::query::singular_query_limits_active() {
+            crate::smartcontracts::isi::query::own_singular_query_serialized_source::<
+                _,
+                MusubiOrderedPackagePageV1,
+            >(MusubiOrderedPackagePageSource {
+                query: &self.request,
+                network_id,
+                namespace_binding,
+                items,
+                next_cursor,
+                snapshot,
+            })?
+        } else {
+            MusubiOrderedPackagePageV1 {
+                query: self.request.clone(),
+                network_id,
+                namespace_binding: namespace_binding.clone(),
+                items,
+                next_cursor,
+                snapshot,
+            }
         };
         page.validate().map_err(query_invalid)?;
         Ok(page)
     }
 }
 impl_valid_singular_query_via_musubi!(FindMusubiOrderedPrefixV1, MusubiOrderedPackagePageV1);
-
 fn query_snapshot(
     state_ro: &impl StateReadOnly,
 ) -> Result<MusubiRegistrySnapshotV1, QueryExecutionFail> {
@@ -590,31 +857,53 @@ fn query_snapshot(
     snapshot.validate().map_err(query_invalid)?;
     Ok(snapshot)
 }
-
-fn resolver_query_hash(request: &MusubiResolverIndexQueryV1) -> MusubiQueryHashV1 {
-    let mut canonical = request.clone();
-    canonical.page.cursor = None;
-    query_hash(b"resolver-index", &canonical.encode())
+fn canonical_page_request(page: &MusubiPageRequestV1) -> MusubiPageRequestV1 {
+    MusubiPageRequestV1 {
+        limit: page.limit,
+        cursor: None,
+    }
 }
-
-fn package_page_query_hash(kind: &[u8], request: &MusubiPackagePageQueryV1) -> MusubiQueryHashV1 {
-    let mut canonical = request.clone();
-    canonical.page.cursor = None;
-    query_hash(kind, &canonical.encode())
+fn resolver_query_hash(
+    request: &MusubiResolverIndexQueryV1,
+) -> Result<MusubiQueryHashV1, QueryExecutionFail> {
+    let page = canonical_page_request(&request.page);
+    let canonical = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+        MusubiResolverIndexQueryV1,
+        3,
+    >::new([&request.package, &request.requirement, &page]);
+    query_hash_value(b"resolver-index", &canonical)
 }
-
-fn archive_location_query_hash(request: &MusubiArchiveLocationQueryV1) -> MusubiQueryHashV1 {
-    let mut canonical = request.clone();
-    canonical.page.cursor = None;
-    query_hash(b"archive-locations", &canonical.encode())
+fn package_page_query_hash(
+    kind: &[u8],
+    request: &MusubiPackagePageQueryV1,
+) -> Result<MusubiQueryHashV1, QueryExecutionFail> {
+    let page = canonical_page_request(&request.page);
+    let canonical = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+        MusubiPackagePageQueryV1,
+        2,
+    >::new([&request.package, &page]);
+    query_hash_value(kind, &canonical)
 }
-
-fn alias_history_query_hash(request: &MusubiAliasQueryV1) -> MusubiQueryHashV1 {
-    let mut canonical = request.clone();
-    canonical.page.cursor = None;
-    query_hash(b"alias-history", &canonical.encode())
+fn archive_location_query_hash(
+    request: &MusubiArchiveLocationQueryV1,
+) -> Result<MusubiQueryHashV1, QueryExecutionFail> {
+    let page = canonical_page_request(&request.page);
+    let canonical = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+        MusubiArchiveLocationQueryV1,
+        2,
+    >::new([&request.archive_id, &page]);
+    query_hash_value(b"archive-locations", &canonical)
 }
-
+fn alias_history_query_hash(
+    request: &MusubiAliasQueryV1,
+) -> Result<MusubiQueryHashV1, QueryExecutionFail> {
+    let page = canonical_page_request(&request.page);
+    let canonical = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+        MusubiAliasQueryV1,
+        2,
+    >::new([&request.alias, &page]);
+    query_hash_value(b"alias-history", &canonical)
+}
 fn alias_history_page_start(
     request: &MusubiAliasQueryV1,
 ) -> Result<MusubiAliasHistoryKeyV1, MusubiQueryExecutionErrorV1> {
@@ -638,13 +927,16 @@ fn alias_history_page_start(
         revision,
     ))
 }
-
-fn ordered_prefix_query_hash(request: &MusubiOrderedPrefixQueryV1) -> MusubiQueryHashV1 {
-    let mut canonical = request.clone();
-    canonical.page.cursor = None;
-    query_hash(b"ordered-prefix", &canonical.encode())
+fn ordered_prefix_query_hash(
+    request: &MusubiOrderedPrefixQueryV1,
+) -> Result<MusubiQueryHashV1, QueryExecutionFail> {
+    let page = canonical_page_request(&request.page);
+    let canonical = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
+        MusubiOrderedPrefixQueryV1,
+        2,
+    >::new([&request.prefix, &page]);
+    query_hash_value(b"ordered-prefix", &canonical)
 }
-
 fn directory_query_start(
     request: &MusubiOrderedPrefixQueryV1,
 ) -> Result<(MusubiPackageSelectorV1, MusubiNamespaceV1, String), MusubiQueryExecutionErrorV1> {
@@ -704,60 +996,146 @@ fn directory_query_start(
     };
     Ok((start, namespace, name_prefix.to_owned()))
 }
-
+#[cfg(test)]
 fn query_hash(domain: &[u8], encoded: &[u8]) -> MusubiQueryHashV1 {
-    let mut payload = Vec::with_capacity(domain.len() + encoded.len() + 16);
-    payload.extend_from_slice(
-        &u64::try_from(domain.len())
-            .expect("static Musubi query domain length fits u64")
-            .to_le_bytes(),
-    );
-    payload.extend_from_slice(domain);
-    payload.extend_from_slice(
-        &u64::try_from(encoded.len())
-            .expect("bounded Musubi query length fits u64")
-            .to_le_bytes(),
-    );
-    payload.extend_from_slice(encoded);
-    MusubiQueryHashV1::new(*Hash::new(&payload).as_ref())
+    let domain_len = u64::try_from(domain.len())
+        .expect("static Musubi query domain length fits u64")
+        .to_le_bytes();
+    let encoded_len = u64::try_from(encoded.len())
+        .expect("bounded Musubi query length fits u64")
+        .to_le_bytes();
+    MusubiQueryHashV1::new(
+        *Hash::new_from_chunks(&[&domain_len, domain, &encoded_len, encoded]).as_ref(),
+    )
 }
-
-fn paginate<T: norito::json::JsonSerialize>(
+fn query_hash_value<T: norito::core::NoritoSerialize>(
+    domain: &[u8],
+    value: &T,
+) -> Result<MusubiQueryHashV1, QueryExecutionFail> {
+    let encoded_len =
+        norito::codec::encode_adaptive_into(value, &mut std::io::sink()).map_err(|error| {
+            QueryExecutionFail::Conversion(format!(
+                "failed to size canonical Musubi query identity: {error}"
+            ))
+        })?;
+    if encoded_len > crate::smartcontracts::isi::query::singular_query_frame_limit(usize::MAX) {
+        return Err(QueryExecutionFail::CapacityLimit);
+    }
+    let domain_len = u64::try_from(domain.len())
+        .map_err(|_| QueryExecutionFail::CapacityLimit)?
+        .to_le_bytes();
+    let encoded_len_bytes = u64::try_from(encoded_len)
+        .map_err(|_| QueryExecutionFail::CapacityLimit)?
+        .to_le_bytes();
+    let hash = Hash::new_from_writer(|writer| {
+        std::io::Write::write_all(writer, &domain_len)?;
+        std::io::Write::write_all(writer, domain)?;
+        std::io::Write::write_all(writer, &encoded_len_bytes)?;
+        let mut sized_writer = writer;
+        let written = norito::codec::encode_adaptive_into(value, &mut sized_writer)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        if written != encoded_len {
+            return Err(std::io::Error::other(
+                "Musubi query identity length changed between passes",
+            ));
+        }
+        Ok(())
+    })
+    .map_err(|error| {
+        QueryExecutionFail::Conversion(format!(
+            "failed to hash canonical Musubi query identity: {error}"
+        ))
+    })?;
+    Ok(MusubiQueryHashV1::new(*hash.as_ref()))
+}
+#[cfg(test)]
+fn paginate<T>(
     rows: impl IntoIterator<Item = (String, T)>,
     page: &MusubiPageRequestV1,
     query_hash: MusubiQueryHashV1,
     snapshot: MusubiRegistrySnapshotV1,
-) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1> {
+) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1>
+where
+    T: norito::json::JsonSerialize + norito::core::NoritoSerialize,
+    for<'de> T: norito::core::NoritoDeserialize<'de>,
+{
+    paginate_fallible(rows.into_iter().map(Ok), page, query_hash, snapshot)
+}
+fn paginate_fallible<T>(
+    rows: impl IntoIterator<Item = Result<(String, T), QueryExecutionFail>>,
+    page: &MusubiPageRequestV1,
+    query_hash: MusubiQueryHashV1,
+    snapshot: MusubiRegistrySnapshotV1,
+) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1>
+where
+    T: norito::json::JsonSerialize + norito::core::NoritoSerialize,
+    for<'de> T: norito::core::NoritoDeserialize<'de>,
+{
     paginate_for_caller_with_json_items_budget(rows, page, query_hash, snapshot, None, None)
 }
-
-fn paginate_with_json_items_budget<T: norito::json::JsonSerialize>(
+#[cfg(test)]
+fn test_json_len_bounded<T: norito::json::JsonSerialize + ?Sized>(
+    value: &T,
+    maximum: usize,
+) -> Result<usize, norito::json::BoundedJsonError> {
+    norito::json::to_json_bounded(value, maximum).map(|encoded| encoded.len())
+}
+#[cfg(test)]
+fn paginate_with_json_items_budget<T>(
     rows: impl IntoIterator<Item = (String, T)>,
     page: &MusubiPageRequestV1,
     query_hash: MusubiQueryHashV1,
     snapshot: MusubiRegistrySnapshotV1,
     json_items_budget: usize,
-) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1> {
+) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1>
+where
+    T: norito::json::JsonSerialize + norito::core::NoritoSerialize,
+    for<'de> T: norito::core::NoritoDeserialize<'de>,
+{
+    paginate_for_caller_with_json_items_budget(
+        rows.into_iter().map(Ok),
+        page,
+        query_hash,
+        snapshot,
+        None,
+        Some((json_items_budget, test_json_len_bounded::<T>)),
+    )
+}
+fn paginate_fallible_with_json_items_budget<T>(
+    rows: impl IntoIterator<Item = Result<(String, T), QueryExecutionFail>>,
+    page: &MusubiPageRequestV1,
+    query_hash: MusubiQueryHashV1,
+    snapshot: MusubiRegistrySnapshotV1,
+    json_items_budget: usize,
+    json_item_len: fn(&T, usize) -> Result<usize, norito::json::BoundedJsonError>,
+) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1>
+where
+    T: norito::json::JsonSerialize + norito::core::NoritoSerialize,
+    for<'de> T: norito::core::NoritoDeserialize<'de>,
+{
     paginate_for_caller_with_json_items_budget(
         rows,
         page,
         query_hash,
         snapshot,
         None,
-        Some(json_items_budget),
+        Some((json_items_budget, json_item_len)),
     )
 }
-
 #[cfg(test)]
-fn paginate_for_caller<T: norito::json::JsonSerialize>(
+fn paginate_for_caller<T>(
     rows: impl IntoIterator<Item = (String, T)>,
     page: &MusubiPageRequestV1,
     query_hash: MusubiQueryHashV1,
     snapshot: MusubiRegistrySnapshotV1,
     expected_caller: Option<&AccountId>,
-) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1> {
+) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1>
+where
+    T: norito::json::JsonSerialize + norito::core::NoritoSerialize,
+    for<'de> T: norito::core::NoritoDeserialize<'de>,
+{
     paginate_for_caller_with_json_items_budget(
-        rows,
+        rows.into_iter().map(Ok),
         page,
         query_hash,
         snapshot,
@@ -765,15 +1143,21 @@ fn paginate_for_caller<T: norito::json::JsonSerialize>(
         None,
     )
 }
-
-fn paginate_for_caller_with_json_items_budget<T: norito::json::JsonSerialize>(
-    rows: impl IntoIterator<Item = (String, T)>,
+fn paginate_for_caller_with_json_items_budget<T>(
+    rows: impl IntoIterator<Item = Result<(String, T), QueryExecutionFail>>,
     page: &MusubiPageRequestV1,
     query_hash: MusubiQueryHashV1,
     snapshot: MusubiRegistrySnapshotV1,
     expected_caller: Option<&AccountId>,
-    json_items_budget: Option<usize>,
-) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1> {
+    json_items_budget: Option<(
+        usize,
+        fn(&T, usize) -> Result<usize, norito::json::BoundedJsonError>,
+    )>,
+) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1>
+where
+    T: norito::json::JsonSerialize + norito::core::NoritoSerialize,
+    for<'de> T: norito::core::NoritoDeserialize<'de>,
+{
     page.validate().map_err(query_invalid)?;
     let cursor_last_key = if let Some(cursor) = &page.cursor {
         if cursor.snapshot.finalized_height != snapshot.finalized_height
@@ -804,33 +1188,52 @@ fn paginate_for_caller_with_json_items_budget<T: norito::json::JsonSerialize>(
     };
     let limit = page.effective_limit();
     let mut cursor_seen = cursor_last_key.is_none();
-    let mut page_rows = Vec::with_capacity(limit.saturating_add(1));
+    let mut items = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)
+        .map_err(MusubiQueryExecutionErrorV1::from)?;
+    let mut last_key = None;
     let mut json_items_bytes = 0_usize;
     let mut budget_has_more = false;
-    for (key, item) in rows {
+    for row in rows {
+        let (key, item) = row.map_err(MusubiQueryExecutionErrorV1::from)?;
         if !cursor_seen {
             if Some(key.as_str()) == cursor_last_key {
                 cursor_seen = true;
             }
             continue;
         }
-        if let Some(json_items_budget) = json_items_budget {
-            let encoded = norito::json::to_json(&item).map_err(|_| {
-                query_invalid(iroha_data_model::ParseError::new(
-                    "Musubi resolver row cannot be encoded as canonical JSON",
-                ))
-            })?;
-            let separator_bytes = usize::from(!page_rows.is_empty());
+        if items.len() == limit {
+            budget_has_more = true;
+            break;
+        }
+        if let Some((json_items_budget, json_item_len)) = json_items_budget {
+            let dynamic_budget =
+                crate::smartcontracts::isi::query::singular_query_frame_limit(json_items_budget);
+            let encoded_len =
+                json_item_len(&item, dynamic_budget).map_err(|error| match error {
+                    norito::json::BoundedJsonError::BodyTooLarge
+                    | norito::json::BoundedJsonError::AllocationFailed => {
+                        MusubiQueryExecutionErrorV1::from(QueryExecutionFail::CapacityLimit)
+                    }
+                    norito::json::BoundedJsonError::Unsupported
+                    | norito::json::BoundedJsonError::LengthMismatch => {
+                        MusubiQueryExecutionErrorV1::from(query_invalid(
+                            iroha_data_model::ParseError::new(
+                                "Musubi resolver row cannot be encoded as canonical JSON",
+                            ),
+                        ))
+                    }
+                })?;
+            let separator_bytes = usize::from(!items.is_empty());
             let candidate_bytes = json_items_bytes
                 .checked_add(separator_bytes)
-                .and_then(|bytes| bytes.checked_add(encoded.len()))
+                .and_then(|bytes| bytes.checked_add(encoded_len))
                 .ok_or_else(|| {
                     query_invalid(iroha_data_model::ParseError::new(
                         "Musubi resolver JSON item budget overflow",
                     ))
                 })?;
             if candidate_bytes > json_items_budget {
-                if page_rows.is_empty() {
+                if items.is_empty() {
                     return Err(query_invalid(iroha_data_model::ParseError::new(
                         "one Musubi resolver row exceeds the JSON item budget",
                     ))
@@ -841,25 +1244,17 @@ fn paginate_for_caller_with_json_items_budget<T: norito::json::JsonSerialize>(
             }
             json_items_bytes = candidate_bytes;
         }
-        page_rows.push((key, item));
-        if page_rows.len() > limit {
-            break;
-        }
+        last_key = Some(key);
+        items
+            .try_push(item)
+            .map_err(MusubiQueryExecutionErrorV1::from)?;
     }
     if !cursor_seen {
         return Err(MusubiQueryExecutionErrorV1::cursor(
             MusubiCursorFailureV1::LastKeyStale,
         ));
     }
-    let has_more = budget_has_more || page_rows.len() > limit;
-    if page_rows.len() > limit {
-        page_rows.pop();
-    }
-    let last_key = page_rows.last().map(|(key, _)| key.clone());
-    let items = page_rows
-        .into_iter()
-        .map(|(_, item)| item)
-        .collect::<Vec<_>>();
+    let has_more = budget_has_more;
     let next_cursor = if has_more {
         Some(MusubiFinalizedCursorV1 {
             snapshot,
@@ -870,9 +1265,8 @@ fn paginate_for_caller_with_json_items_budget<T: norito::json::JsonSerialize>(
     } else {
         None
     };
-    Ok((items, next_cursor))
+    Ok((items.into_vec()?, next_cursor))
 }
-
 fn query_invalid(error: iroha_data_model::ParseError) -> QueryExecutionFail {
     QueryExecutionFail::Conversion(error.to_string())
 }

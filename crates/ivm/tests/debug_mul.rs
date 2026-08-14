@@ -1,7 +1,5 @@
 //! Regression coverage for scalar multiplication in compiled Kotodama.
-
 mod common;
-
 #[test]
 fn debug_mul() {
     let src = r#"

@@ -1,5 +1,4 @@
 //! Integration test: status payload limit warnings bubble into the TUI.
-
 use std::{
     net::{Ipv4Addr, SocketAddr, TcpListener},
     path::PathBuf,
@@ -7,23 +6,19 @@ use std::{
     thread,
     time::Duration,
 };
-
 fn monitor_bin() -> Option<PathBuf> {
     std::env::var_os("CARGO_BIN_EXE_iroha_monitor").map(PathBuf::from)
 }
-
 #[test]
 fn status_limit_warning_is_rendered() {
     let Some(addr) = spawn_oversized_status_stub() else {
         eprintln!("skipping status_limit_warning_is_rendered: no stub addr");
         return;
     };
-
     let Some(bin) = monitor_bin() else {
         eprintln!("skipping: monitor binary path not provided by cargo");
         return;
     };
-
     let mut child = Command::new(bin)
         .args([
             "--attach",
@@ -37,14 +32,11 @@ fn status_limit_warning_is_rendered() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn iroha_monitor for status limit test");
-
     thread::sleep(Duration::from_millis(1600));
-
     let _ = child.kill();
     let output = child
         .wait_with_output()
         .expect("wait for iroha_monitor output");
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("body exceeds"),
@@ -52,7 +44,6 @@ fn status_limit_warning_is_rendered() {
         stdout.chars().take(256).collect::<String>()
     );
 }
-
 fn spawn_oversized_status_stub() -> Option<SocketAddr> {
     let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) {
         Ok(listener) => listener,

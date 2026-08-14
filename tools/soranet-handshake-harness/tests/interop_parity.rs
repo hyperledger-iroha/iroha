@@ -3,22 +3,16 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-
 use norito::json::{self, Value};
-
 const LANGUAGES: &[&str] = &["rust", "go", "cpp"];
-
 #[test]
 fn interop_vectors_stay_in_sync_across_languages() {
     let root = workspace_root();
-
     let mut expected_ids: Option<BTreeSet<String>> = None;
     let mut canonical_payloads: BTreeMap<String, Value> = BTreeMap::new();
-
     for &language in LANGUAGES {
         let tests_dir = interop_dir(&root, "tests/interop/soranet/interop", language);
         let fixtures_dir = interop_dir(&root, "fixtures/soranet_handshake/interop", language);
-
         assert!(
             tests_dir.exists(),
             "missing test fixtures directory for language {language}: {}",
@@ -29,10 +23,8 @@ fn interop_vectors_stay_in_sync_across_languages() {
             "missing published fixtures directory for language {language}: {}",
             fixtures_dir.display()
         );
-
         let test_ids = collect_fixture_ids(&tests_dir);
         let fixture_ids = collect_fixture_ids(&fixtures_dir);
-
         if let Some(expected) = &expected_ids {
             assert_eq!(
                 &test_ids, expected,
@@ -41,21 +33,17 @@ fn interop_vectors_stay_in_sync_across_languages() {
         } else {
             expected_ids = Some(test_ids.clone());
         }
-
         assert_eq!(
             test_ids, fixture_ids,
             "published fixtures diverge from test bundle for language {language}"
         );
-
         for id in &test_ids {
             let test_value = load_fixture(&tests_dir, id);
             let fixture_value = load_fixture(&fixtures_dir, id);
-
             assert_eq!(
                 test_value, fixture_value,
                 "published fixture differs from test fixture for {language}/{id}"
             );
-
             let normalized = normalize_fixture(&test_value, language, id);
             match canonical_payloads.entry(id.clone()) {
                 Entry::Vacant(slot) => {
@@ -72,7 +60,6 @@ fn interop_vectors_stay_in_sync_across_languages() {
         }
     }
 }
-
 fn workspace_root() -> PathBuf {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     crate_dir
@@ -82,11 +69,9 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root should exist")
         .to_path_buf()
 }
-
 fn interop_dir(root: &Path, prefix: &str, language: &str) -> PathBuf {
     root.join(prefix).join(language)
 }
-
 fn collect_fixture_ids(dir: &Path) -> BTreeSet<String> {
     let mut ids = BTreeSet::new();
     for entry in fs::read_dir(dir).expect("read interop directory") {
@@ -102,7 +87,6 @@ fn collect_fixture_ids(dir: &Path) -> BTreeSet<String> {
     }
     ids
 }
-
 fn load_fixture(dir: &Path, id: &str) -> Value {
     let path = dir.join(format!("{id}.json"));
     let contents = fs::read_to_string(&path).unwrap_or_else(|err| {
@@ -118,13 +102,11 @@ fn load_fixture(dir: &Path, id: &str) -> Value {
         )
     })
 }
-
 fn normalize_fixture(value: &Value, expected_language: &str, expected_id: &str) -> Value {
     let map = match value {
         Value::Object(map) => map,
         other => panic!("expected fixture to be a JSON object, got {other:?}"),
     };
-
     let id_value = map
         .get("id")
         .unwrap_or_else(|| panic!("fixture missing id field"));
@@ -136,7 +118,6 @@ fn normalize_fixture(value: &Value, expected_language: &str, expected_id: &str) 
         id, expected_id,
         "fixture id mismatch (expected {expected_id}, found {id})"
     );
-
     let language_value = map
         .get("language")
         .unwrap_or_else(|| panic!("fixture missing language field"));
@@ -148,11 +129,9 @@ fn normalize_fixture(value: &Value, expected_language: &str, expected_id: &str) 
         language, expected_language,
         "fixture language mismatch (expected {expected_language}, found {language})"
     );
-
     let mut normalized = map.clone();
     normalized
         .remove("language")
         .expect("language field should exist in clone");
-
     Value::Object(normalized)
 }

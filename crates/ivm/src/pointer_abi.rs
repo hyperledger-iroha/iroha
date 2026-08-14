@@ -1,6 +1,5 @@
 //! Re-export pointer-ABI helpers from `ivm_abi`.
 pub use ivm_abi::pointer_abi::*;
-
 impl crate::memory::Memory {
     /// Validate a pointer-ABI TLV at `addr` in the INPUT region and return its view.
     ///
@@ -10,7 +9,6 @@ impl crate::memory::Memory {
     /// [`crate::IVM::validate_tlv`] instead.
     pub fn validate_tlv(&self, addr: u64) -> Result<Tlv<'_>, crate::error::VMError> {
         use crate::error::VMError;
-
         // Enforce address lies in INPUT region and that header (2+1+4) fits
         let start = Self::INPUT_START;
         let end = Self::INPUT_START + Self::INPUT_SIZE;
@@ -31,7 +29,6 @@ impl crate::memory::Memory {
             let ver = hdr[2];
             eprintln!("TLV header: type=0x{type_id:04x} ver={ver} len={len} at=0x{addr:08x}");
         }
-
         // Total size including hash
         let total = 7usize
             .checked_add(len)
@@ -48,7 +45,6 @@ impl crate::memory::Memory {
         let envelope = self
             .load_region(addr, total as u64)
             .map_err(|_| VMError::NoritoInvalid)?;
-
         match validate_tlv_bytes(envelope) {
             Ok(tlv) => {
                 let (policy, abi_version) =

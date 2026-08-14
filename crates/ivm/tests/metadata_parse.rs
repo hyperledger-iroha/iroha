@@ -1,9 +1,6 @@
 //! Program metadata parsing tests for literal sections.
-
 use ivm::{HEADER_SIZE, ProgramMetadata};
-
 const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
-
 fn build_header(
     version_major: u8,
     mode: u8,
@@ -21,15 +18,12 @@ fn build_header(
     }
     .encode()
 }
-
 #[test]
 fn parse_accepts_version_1_and_abi_v1() {
     let hdr = build_header(1, 0, 0, 0, 1);
     let bytes = [hdr.as_slice(), &[1, 2, 3, 4]].concat();
     let parsed = ProgramMetadata::parse(&bytes).expect("parse ok");
-
     let meta = parsed.metadata;
-
     let off = parsed.code_offset;
     assert_eq!(meta.version_major, 1);
     assert_eq!(meta.version_minor, 1);
@@ -39,7 +33,6 @@ fn parse_accepts_version_1_and_abi_v1() {
     assert_eq!(meta.abi_version, 1);
     assert_eq!(off, HEADER_SIZE);
 }
-
 #[test]
 fn parse_rejects_unknown_major_and_mode_bits() {
     // Unsupported majors
@@ -55,7 +48,6 @@ fn parse_rejects_unknown_major_and_mode_bits() {
     let bytes2 = [hdr.as_slice(), &[0u8; 4]].concat();
     assert!(ProgramMetadata::parse(&bytes2).is_err());
 }
-
 #[test]
 fn parse_rejects_short_or_bad_magic() {
     // Too short
@@ -66,7 +58,6 @@ fn parse_rejects_short_or_bad_magic() {
     let bytes = [bad.as_slice(), &[0u8; 4]].concat();
     assert!(ProgramMetadata::parse(&bytes).is_err());
 }
-
 #[test]
 fn parse_skips_literal_section_when_present() {
     let mut bytes = build_header(1, 0, 0, 0, 1);
@@ -81,15 +72,12 @@ fn parse_skips_literal_section_when_present() {
     // Append a couple of code bytes so the parser sees a non-empty code region
     bytes.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]);
     let parsed = ProgramMetadata::parse(&bytes).expect("parse ok with literals");
-
     let meta = parsed.metadata;
-
     let off = parsed.code_offset;
     assert_eq!(meta.version_major, 1);
     assert_eq!(off, HEADER_SIZE + 16 + 16);
     assert!(off < bytes.len());
 }
-
 #[test]
 fn parse_rejects_literal_padding() {
     let mut bytes = build_header(1, 0, 0, 0, 1);
@@ -102,7 +90,6 @@ fn parse_rejects_literal_padding() {
     bytes.extend_from_slice(&[0xAA, 0xBB]);
     assert!(ProgramMetadata::parse(&bytes).is_err());
 }
-
 #[test]
 fn parse_rejects_noncanonical_literal_post_padding() {
     let mut bytes = build_header(1, 0, 0, 0, 1);
@@ -114,10 +101,8 @@ fn parse_rejects_noncanonical_literal_post_padding() {
     bytes.push(0x55);
     bytes.extend_from_slice(&[0, 0]);
     bytes.extend_from_slice(&[0xAA, 0xBB]);
-
     assert!(ProgramMetadata::parse(&bytes).is_err());
 }
-
 #[test]
 fn parse_rejects_nonzero_literal_post_padding() {
     let mut bytes = build_header(1, 0, 0, 0, 1);
@@ -129,10 +114,8 @@ fn parse_rejects_nonzero_literal_post_padding() {
     bytes.push(0x55);
     bytes.extend_from_slice(&[0, 1, 0]);
     bytes.extend_from_slice(&[0xAA, 0xBB]);
-
     assert!(ProgramMetadata::parse(&bytes).is_err());
 }
-
 #[test]
 fn parse_rejects_oversized_literal_post_padding() {
     let mut bytes = build_header(1, 0, 0, 0, 1);
@@ -143,6 +126,5 @@ fn parse_rejects_oversized_literal_post_padding() {
     bytes.extend_from_slice(&0x1122_3344_5566_7788u64.to_le_bytes());
     bytes.extend_from_slice(&[0, 0, 0, 0]);
     bytes.extend_from_slice(&[0xAA, 0xBB]);
-
     assert!(ProgramMetadata::parse(&bytes).is_err());
 }

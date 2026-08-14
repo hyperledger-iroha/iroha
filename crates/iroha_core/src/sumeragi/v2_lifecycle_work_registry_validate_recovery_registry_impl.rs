@@ -30,7 +30,6 @@ impl ConcreteLifecycleWorkRegistry {
             )
         })
     }
-
     /// Return the exact paired next-Vote ordinal retained by one Ready Broadcast.
     pub(super) fn recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal(
         &self,
@@ -57,7 +56,6 @@ impl ConcreteLifecycleWorkRegistry {
             && next_record.physical_slots.get(&next.slot) == Some(&next_digest))
         .then_some(next.ordinal)
     }
-
     /// Attest one live recovered signed Broadcast as a durable refanout source.
     pub(super) fn attest_ready_recovered_lifecycle_signed_broadcast(
         &self,
@@ -91,7 +89,6 @@ impl ConcreteLifecycleWorkRegistry {
         .then_some(())
         .ok_or("recovered signed Broadcast Ready owner changed")
     }
-
     /// Attest one adjacent Ready signed-Broadcast and next-WAL-Vote Sign pair.
     ///
     /// The Broadcast is authenticated first at the lower ordinal. Only an
@@ -124,7 +121,6 @@ impl ConcreteLifecycleWorkRegistry {
             .map_err(|_| ReadyRecoveredLifecycleSignAttestationErrorV1::InvalidCarrier)?;
         let attestation =
             self.attest_ready_recovered_lifecycle_sign(coordinator, next_sign_ordinal)?;
-
         let Some((next_slot, next_digest)) = exact_single_record_slot(
             next_sign_record,
             LifecycleWorkClass::SignVote.capacity_class(),
@@ -155,7 +151,6 @@ impl ConcreteLifecycleWorkRegistry {
         }
         Ok(attestation)
     }
-
     /// Project the exact claimed Broadcast into its service-only refanout authority.
     pub(super) fn project_claimed_recovered_lifecycle_signed_broadcast_output(
         &self,
@@ -180,7 +175,6 @@ impl ConcreteLifecycleWorkRegistry {
             })
             .flatten()
     }
-
     /// Attest one Ready recovered PhaseVote or standalone control Sign.
     ///
     /// Classification keeps the concrete carrier closed and returns only its
@@ -308,7 +302,6 @@ impl ConcreteLifecycleWorkRegistry {
             _seal: ReadyRecoveredLifecycleSignAttestationSealV1,
         })
     }
-
     /// Project one exact claimed recovered Sign into its dedicated worker task.
     pub(super) fn prepare_recovered_lifecycle_sign_dispatch(
         &mut self,
@@ -443,7 +436,6 @@ impl ConcreteLifecycleWorkRegistry {
             key,
         })
     }
-
     /// Attest one exact Ready recovered Decision Fetch and seal its request authority.
     ///
     /// The complete payload-free `FetchBody` effect remains inside its recovered
@@ -539,7 +531,6 @@ impl ConcreteLifecycleWorkRegistry {
             _seal: ReadyRecoveredDecisionFetchAttestationSealV1,
         })
     }
-
     /// Join one exact claimed recovered Decision Fetch back to its closed carrier.
     pub(super) fn matches_claimed_dispatched_recovered_decision_fetch(
         &self,
@@ -579,7 +570,6 @@ impl ConcreteLifecycleWorkRegistry {
             && fetch.dispatch_key == Some(key)
             && fetch.matches_claimed_record(address, digest, coordinator, lease)
     }
-
     /// Join one exact claimed recovered Decision Fetch back to its closed carrier.
     pub(super) fn prepare_recovered_decision_fetch_dispatch(
         &mut self,
@@ -636,17 +626,14 @@ impl ConcreteLifecycleWorkRegistry {
         }
         Ok(PreparedRecoveredDecisionFetchDispatchV1 { work: fetch, key })
     }
-
     /// Project a comparison-only seal for this exact registry instance.
     pub(super) fn instance_identity(&self) -> ConcreteLifecycleWorkRegistryInstanceIdentity {
         ConcreteLifecycleWorkRegistryInstanceIdentity(std::sync::Arc::clone(&self.identity))
     }
-
     /// Whether this registry has no installed concrete authority.
     pub(super) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
-
     /// Consume one exact durable control projection into its dedicated carrier.
     ///
     /// Every projection, opened-frame, unique-row, standalone-owner, address,
@@ -739,7 +726,6 @@ impl ConcreteLifecycleWorkRegistry {
             pair: None,
         })
     }
-
     /// Consume one exact Advanced control Sign and its live Broadcast child.
     ///
     /// The opened ledger first authenticates the parent continuation and child
@@ -875,7 +861,6 @@ impl ConcreteLifecycleWorkRegistry {
             pair: None,
         })
     }
-
     /// Consume one exact control-Proposal Broadcast plus follow-on WAL Vote.
     ///
     /// The complete frame-bound pair is checked before either child enters the
@@ -981,7 +966,6 @@ impl ConcreteLifecycleWorkRegistry {
                 },
             });
         }
-
         let parent = match control.into_durable_carrier(
             parent_address.owner,
             parent_address.ordinal,
@@ -1057,7 +1041,6 @@ impl ConcreteLifecycleWorkRegistry {
             pair: Some(pair),
         })
     }
-
     /// Consume one exact durable Decision Fetch projection into its carrier.
     ///
     /// All projection, row, owner, address, geometry, digest, store, and
@@ -1147,7 +1130,6 @@ impl ConcreteLifecycleWorkRegistry {
             digest,
         })
     }
-
     /// Consume one advanced recovered Fetch and live Store into a dedicated carrier.
     #[allow(clippy::result_large_err)]
     pub(super) fn install_recovered_wal_decision_store<'registry>(
@@ -1265,7 +1247,6 @@ impl ConcreteLifecycleWorkRegistry {
             digest,
         })
     }
-
     /// Consume one exact recovered Decision body projection into its Apply carrier.
     ///
     /// The supplied ledger is already the fully authenticated prospective
@@ -1375,7 +1356,6 @@ impl ConcreteLifecycleWorkRegistry {
             },
         ))
     }
-
     /// Install the startup Serve/Producer batch only after proving the exact
     /// prospective Fetch/(optional Sign)/Serve/Producer census. Rejection is
     /// before both registry mutation and the publication callback.
@@ -1392,7 +1372,6 @@ impl ConcreteLifecycleWorkRegistry {
         }
         self.install_certified_serve_batch_before_publication(batch, publish)
     }
-
     /// Install one fresh adjacent Serve/Producer batch only after comparing the
     /// complete current and prospective concrete census. No raw ordinal or
     /// digest enters this boundary.
@@ -1410,7 +1389,6 @@ impl ConcreteLifecycleWorkRegistry {
         }
         self.install_certified_serve_batch_before_publication(batch, publish)
     }
-
     /// Install a complete Certified-Serve/ProducerTurn batch immediately
     /// around one durable publication. The full registry and batch are checked
     /// before the first insertion. Publication failure removes every inserted
@@ -1448,7 +1426,6 @@ impl ConcreteLifecycleWorkRegistry {
             )),
         }
     }
-
     /// Publish the exact terminal LedgerV1 successor while the registry's
     /// eventual Producer replacement is staged at the same address.
     ///
@@ -1471,7 +1448,6 @@ impl ConcreteLifecycleWorkRegistry {
                 prepared,
             ));
         }
-
         if prepared.outcome == super::TerminalOutcome::Cancelled {
             if !prepared.preflights_cancelled_successor(staged) {
                 return Err(CertifiedServeTerminalRegistryPublicationError::Preflight(
@@ -1497,7 +1473,6 @@ impl ConcreteLifecycleWorkRegistry {
                 )),
             };
         }
-
         let Some(replacement) = prepared.producer_replacement(staged) else {
             return Err(CertifiedServeTerminalRegistryPublicationError::Preflight(
                 prepared,
@@ -1532,7 +1507,6 @@ impl ConcreteLifecycleWorkRegistry {
             }
         }
     }
-
     /// Whether the registry contains exactly one internally consistent
     /// recovered-WAL authority carrier and no other work.
     ///
@@ -1547,7 +1521,6 @@ impl ConcreteLifecycleWorkRegistry {
         };
         extra.cardinality() != 0 && self.entries.len() == extra.cardinality()
     }
-
     /// Classify zero or one exact WAL-owned startup carrier.
     ///
     /// `None` from this function means ambiguity (including phase and control
@@ -1620,7 +1593,6 @@ impl ConcreteLifecycleWorkRegistry {
             _ => None,
         }
     }
-
     /// Preflight a complete recovered-Fetch batch beside the sole WAL authority.
     pub(super) fn preflights_recovered_fetches_alongside_wal_authority(
         &self,
@@ -1644,7 +1616,6 @@ impl ConcreteLifecycleWorkRegistry {
                     && owners.insert(address.owner)
             })
     }
-
     /// Install one already-closed recovered Fetch completion.
     ///
     /// Callers must complete a whole-census empty-registry preflight first;
@@ -1670,7 +1641,6 @@ impl ConcreteLifecycleWorkRegistry {
             }
         }
     }
-
     /// Verify complete equality between all installed startup Fetch carriers
     /// and all live coordinator Fetch rows.
     pub(super) fn exactly_covers_recovered_ready_fetches(
@@ -1682,7 +1652,6 @@ impl ConcreteLifecycleWorkRegistry {
             RecoveredWalRegistrySlotV1::None,
         )
     }
-
     /// Verify the complete post-repair startup registry: one exact recovered
     /// WAL authority plus every live Ready-Fetch row and no other carrier.
     pub(super) fn exactly_covers_recovered_ready_fetches_and_wal_authority(
@@ -1695,7 +1664,6 @@ impl ConcreteLifecycleWorkRegistry {
         !matches!(sign, RecoveredWalRegistrySlotV1::None)
             && self.exactly_covers_recovered_ready_fetches_with_extra(coordinator, sign)
     }
-
     fn exactly_covers_recovered_ready_fetches_with_extra(
         &self,
         coordinator: &LifecycleCoordinator,
@@ -1762,7 +1730,6 @@ impl ConcreteLifecycleWorkRegistry {
                 })
             })
     }
-
     fn serve_and_producer_carrier_count(&self) -> usize {
         self.entries
             .values()
@@ -1775,7 +1742,6 @@ impl ConcreteLifecycleWorkRegistry {
             })
             .count()
     }
-
     /// Verify exact startup coverage for every live durable Fetch, Serve, and
     /// ProducerTurn row, with no additional concrete carrier.
     pub(super) fn exactly_covers_recovered_ready_work(
@@ -1787,7 +1753,6 @@ impl ConcreteLifecycleWorkRegistry {
             RecoveredWalRegistrySlotV1::None,
         )
     }
-
     /// Verify exact startup coverage beside the one recovered-WAL authority.
     pub(super) fn exactly_covers_recovered_ready_work_and_wal_authority(
         &self,
@@ -1799,7 +1764,6 @@ impl ConcreteLifecycleWorkRegistry {
         !matches!(sign, RecoveredWalRegistrySlotV1::None)
             && self.exactly_covers_recovered_ready_work_with_extra(coordinator, sign)
     }
-
     fn exactly_covers_recovered_ready_work_with_extra(
         &self,
         coordinator: &LifecycleCoordinator,
@@ -1826,7 +1790,6 @@ impl ConcreteLifecycleWorkRegistry {
         };
         self.exactly_covers_ready_work_with_extra(coordinator, extra, None, true)
     }
-
     fn exactly_covers_ready_work_with_extra(
         &self,
         coordinator: &LifecycleCoordinator,
@@ -1926,7 +1889,6 @@ impl ConcreteLifecycleWorkRegistry {
                 })
             })
     }
-
     fn exactly_covers_active_certified_serve_lease(
         &self,
         coordinator: &LifecycleCoordinator,
@@ -1943,7 +1905,6 @@ impl ConcreteLifecycleWorkRegistry {
         };
         self.exactly_covers_ready_work_with_extra(coordinator, sign, Some(lease), false)
     }
-
     /// Prove the complete private registry and exact active Serve lease without
     /// consulting caller-supplied request material.
     pub(super) fn preflight_certified_serve_terminal_owner_state(
@@ -1998,7 +1959,6 @@ impl ConcreteLifecycleWorkRegistry {
                 )
         )
     }
-
     /// Join an exact signed request only after the complete owner-private state
     /// has independently passed preflight.
     pub(super) fn preflight_certified_serve_terminal_settlement(
@@ -2026,7 +1986,6 @@ impl ConcreteLifecycleWorkRegistry {
                 .replay_authority
                 .exactly_matches_certified_serve_request(authenticated)
     }
-
     /// Close one post-fsync terminal replay family over the already-preflighted
     /// active Serve and adjacent Producer carriers.
     pub(super) fn prepare_certified_serve_terminal_transition(
@@ -2074,7 +2033,6 @@ impl ConcreteLifecycleWorkRegistry {
             terminal_replay_evidence: Arc::new(terminal_replay_evidence),
         })
     }
-
     fn exact_optional_recovered_wal_authority(
         &self,
         coordinator: &LifecycleCoordinator,
@@ -2301,7 +2259,6 @@ impl ConcreteLifecycleWorkRegistry {
             }
         }
     }
-
     /// Install one work value without overwriting an incumbent address.
     ///
     /// Failure returns the move-only value to the caller so a higher-level
@@ -2330,7 +2287,6 @@ impl ConcreteLifecycleWorkRegistry {
         self.entries.insert(address, work);
         Ok(())
     }
-
     /// Install exact work, invoke durable publication, and synchronously undo
     /// the installation when publication fails or unwinds.
     ///
@@ -2364,7 +2320,6 @@ impl ConcreteLifecycleWorkRegistry {
             }
         }
     }
-
     /// Replace one exact address before invoking a reversible publication.
     ///
     /// The incumbent remains recoverable until the callback succeeds. A
@@ -2450,7 +2405,6 @@ impl ConcreteLifecycleWorkRegistry {
                 replacement,
             ));
         }
-
         let incumbent = self
             .entries
             .insert(address, replacement)
@@ -2470,7 +2424,6 @@ impl ConcreteLifecycleWorkRegistry {
             }
         }
     }
-
     /// Prepare an exact incumbent-to-completion conversion without mutation.
     ///
     /// The sealed selector capability is borrowed only for equality validation.
@@ -2508,7 +2461,6 @@ impl ConcreteLifecycleWorkRegistry {
         {
             return Err(CertifiedFetchCompletionError::ResponseFamilyMismatch);
         }
-
         let incumbent = self
             .entries
             .get(&address)
@@ -2548,7 +2500,6 @@ impl ConcreteLifecycleWorkRegistry {
             incumbent_effect,
         )
         .ok_or(CertifiedFetchCompletionError::InvalidReplayEvidence)?;
-
         Ok(PreparedCertifiedFetchCompletion {
             registry: self,
             location,
@@ -2562,7 +2513,6 @@ impl ConcreteLifecycleWorkRegistry {
             replay_origin,
         })
     }
-
     /// Prepare execution of one exact closed certified-Fetch completion.
     ///
     /// The lease must name the completion's immutable owner, record ordinal,
@@ -2585,7 +2535,6 @@ impl ConcreteLifecycleWorkRegistry {
         {
             return Err(CertifiedFetchExecutionError::InvalidLeaseShape);
         }
-
         let address = self
             .validated_lease_address(lease, slot)
             .map_err(CertifiedFetchExecutionError::Registry)?;
@@ -2619,13 +2568,11 @@ impl ConcreteLifecycleWorkRegistry {
         if !completion.validates(work.digest) {
             return Err(CertifiedFetchExecutionError::InvalidCompletionShape);
         }
-
         Ok(PreparedCertifiedFetchExecution {
             registry: self,
             address,
         })
     }
-
     /// Prepare execution of one exact closed durable Store carrier.
     ///
     /// In addition to the address and digest checks shared by all registry
@@ -2653,7 +2600,6 @@ impl ConcreteLifecycleWorkRegistry {
         {
             return Err(DurableStoreExecutionError::InvalidLeaseShape);
         }
-
         let address = self
             .validated_lease_address(lease, slot)
             .map_err(DurableStoreExecutionError::Registry)?;
@@ -2667,7 +2613,6 @@ impl ConcreteLifecycleWorkRegistry {
         if !store.validates(work.digest) {
             return Err(DurableStoreExecutionError::InvalidStoreShape);
         }
-
         let candidate = store
             .project_candidate(verified)
             .map_err(DurableStoreExecutionError::Projection)?;
@@ -2696,13 +2641,11 @@ impl ConcreteLifecycleWorkRegistry {
         {
             return Err(DurableStoreExecutionError::InvalidProjection);
         }
-
         Ok(PreparedDurableStoreExecution {
             registry: self,
             address,
         })
     }
-
     /// Prepare execution of one exact closed durable Validate carrier.
     ///
     /// The lease, installed carrier, verified projection, and normalized
@@ -2728,7 +2671,6 @@ impl ConcreteLifecycleWorkRegistry {
         {
             return Err(DurableValidateExecutionError::InvalidLeaseShape);
         }
-
         let address = self
             .validated_lease_address(lease, slot)
             .map_err(DurableValidateExecutionError::Registry)?;
@@ -2742,7 +2684,6 @@ impl ConcreteLifecycleWorkRegistry {
         if !validate.validates(work.digest) {
             return Err(DurableValidateExecutionError::InvalidValidateShape);
         }
-
         let candidate = validate
             .project_candidate(verified)
             .map_err(DurableValidateExecutionError::Projection)?;
@@ -2774,7 +2715,6 @@ impl ConcreteLifecycleWorkRegistry {
         {
             return Err(DurableValidateExecutionError::InvalidProjection);
         }
-
         Ok(PreparedDurableValidateExecution {
             registry: self,
             address,
@@ -2782,7 +2722,6 @@ impl ConcreteLifecycleWorkRegistry {
             lifecycle_stage: lease.stage(),
         })
     }
-
     /// Classify one exact Ready Validate carrier without granting scheduler authority.
     ///
     /// The caller supplies coordinator-owned address and digest coordinates.
@@ -2875,7 +2814,6 @@ impl ConcreteLifecycleWorkRegistry {
             }
         }
     }
-
     /// Attest one exact Ready recovered Decision Apply without exposing its carrier.
     ///
     /// This is a read-only join over the coordinator's complete logical row,
@@ -2990,7 +2928,6 @@ impl ConcreteLifecycleWorkRegistry {
             _seal: ReadyRecoveredDecisionApplyAttestationSeal,
         })
     }
-
     /// Project one exact claimed recovered Decision Apply into its dedicated worker task.
     ///
     /// The coordinator must still retain the sole active lease and the registry
@@ -3062,7 +2999,6 @@ impl ConcreteLifecycleWorkRegistry {
             key,
         })
     }
-
     /// Bind one guarded Applied worker result to the exact in-flight carrier.
     pub(super) fn prepare_recovered_decision_apply_terminal_transition(
         &self,
@@ -3112,7 +3048,6 @@ impl ConcreteLifecycleWorkRegistry {
             authority,
         ))
     }
-
     /// Publish one exact recovered Apply terminal around LedgerV1 fsync.
     ///
     /// Every logical and physical check occurs before `publish`. Success is
@@ -3139,7 +3074,6 @@ impl ConcreteLifecycleWorkRegistry {
             && work.validates_at(prepared.address)
             && apply.dispatch_key == Some(prepared.dispatch_key)
             && apply.matches_claimed_record(prepared.address, prepared.digest, current, lease);
-
         let mut expected = current.stage_durable_transaction();
         expected.reduce_settle_turn(lease.clone(), super::TurnOutcome::Advanced, None);
         let same_ledger_target = matches!(
@@ -3193,7 +3127,6 @@ impl ConcreteLifecycleWorkRegistry {
             )),
         }
     }
-
     /// Prepare execution of one exact Ready durable Validate completion.
     ///
     /// The claimed lease must retain the original independent Validate
@@ -3221,7 +3154,6 @@ impl ConcreteLifecycleWorkRegistry {
         {
             return Err(ReadyDurableValidateExecutionError::InvalidLeaseShape);
         }
-
         let address = self
             .validated_lease_address(lease, slot)
             .map_err(ReadyDurableValidateExecutionError::Registry)?;
@@ -3258,7 +3190,6 @@ impl ConcreteLifecycleWorkRegistry {
         {
             return Err(ReadyDurableValidateExecutionError::InvalidCompletionShape);
         }
-
         let outcome_kind = match (
             completion.outcome.validated_receipt(),
             completion.outcome.rejection_identity(),
@@ -3289,7 +3220,6 @@ impl ConcreteLifecycleWorkRegistry {
         {
             return Err(ReadyDurableValidateExecutionError::InvalidLeaseShape);
         }
-
         let candidate = completion
             .incumbent
             .project_candidate(verified)
@@ -3320,7 +3250,6 @@ impl ConcreteLifecycleWorkRegistry {
         {
             return Err(ReadyDurableValidateExecutionError::InvalidProjection);
         }
-
         Ok(PreparedReadyDurableValidateExecution {
             registry: self,
             address,
@@ -3328,7 +3257,6 @@ impl ConcreteLifecycleWorkRegistry {
             lease: lease.clone(),
         })
     }
-
     /// Reattach one executed Validate outcome only if its original closed row
     /// remains byte-for-byte authoritative at the exact address and digest.
     ///
@@ -3419,13 +3347,11 @@ impl ConcreteLifecycleWorkRegistry {
         if let Err(error) = exact {
             return Err((error, executed));
         }
-
         Ok(PreparedDurableValidateCompletion {
             _registry: self,
             executed,
         })
     }
-
     /// Reattach the complete executed dispatch and its exact wake authority.
     ///
     /// This is the sole registry entry to volatile Validate completion. Every
@@ -3542,7 +3468,6 @@ impl ConcreteLifecycleWorkRegistry {
             authority,
         })
     }
-
     /// Borrow the still-pending adapter effect advertised by one lease slot.
     /// Closed carriers fail rather than re-executing their retained effects.
     pub(super) fn borrow_for_lease(
@@ -3560,7 +3485,6 @@ impl ConcreteLifecycleWorkRegistry {
         }
         Ok(work.effect())
     }
-
     /// Consume the complete still-pending adapter work advertised by one lease slot once.
     ///
     /// Returning the sealed pending authority together with the effect is
@@ -3587,7 +3511,6 @@ impl ConcreteLifecycleWorkRegistry {
             .remove(&address)
             .expect("validated lease address remains present"))
     }
-
     /// Remove only the exact digest installed by a failed outer transaction.
     pub(super) fn rollback_exact(
         &mut self,
@@ -3609,7 +3532,6 @@ impl ConcreteLifecycleWorkRegistry {
             .remove(&address)
             .expect("validated rollback address remains present"))
     }
-
     fn validated_lease_address(
         &self,
         lease: &TurnLease,
@@ -3633,12 +3555,10 @@ impl ConcreteLifecycleWorkRegistry {
         }
         Ok(address)
     }
-
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.entries.len()
     }
-
     #[cfg(test)]
     pub(super) fn certified_serve_and_producer_carrier_counts(&self) -> (usize, usize) {
         self.entries
@@ -3649,7 +3569,6 @@ impl ConcreteLifecycleWorkRegistry {
                 _ => counts,
             })
     }
-
     #[cfg(test)]
     pub(super) fn one_certified_serve_pair_shares_replay_family(&self) -> bool {
         let serves = self
@@ -3673,7 +3592,6 @@ impl ConcreteLifecycleWorkRegistry {
         };
         Arc::ptr_eq(&serve.replay_evidence, &producer.replay_evidence)
     }
-
     #[cfg(test)]
     /// Remove one exact Serve carrier to exercise owner-private census faults.
     pub(super) fn remove_one_certified_serve_carrier_for_test(&mut self) -> bool {
@@ -3686,7 +3604,6 @@ impl ConcreteLifecycleWorkRegistry {
         });
         address.is_some_and(|address| self.entries.remove(&address).is_some())
     }
-
     #[cfg(test)]
     pub(super) fn exactly_contains(
         &self,
@@ -3698,7 +3615,6 @@ impl ConcreteLifecycleWorkRegistry {
             .is_some_and(|work| work.validates_at(address) && work.effect() == effect)
     }
 }
-
 #[allow(dead_code)]
 impl<'a> PreparedCertifiedFetchExecution<'a> {
     /// Return the exact reducer tag and authenticated manifest accepted by the
@@ -3722,7 +3638,6 @@ impl<'a> PreparedCertifiedFetchExecution<'a> {
             )
             .expect("prepared certified-Fetch completion retains exact durable replay inputs")
     }
-
     /// Borrow the durable body proof retained by the exact completion.
     ///
     /// The receipt remains nested and non-decomposable; callers may use it only
@@ -3738,7 +3653,6 @@ impl<'a> PreparedCertifiedFetchExecution<'a> {
         };
         &completion.durable_receipt
     }
-
     /// Seal the ordinal-free pending binding for the exact Store effect emitted
     /// by the direct adapter preview.
     ///
@@ -3812,7 +3726,6 @@ impl<'a> PreparedCertifiedFetchExecution<'a> {
                 replay_evidence,
             )
         };
-
         Ok(PreparedCertifiedFetchStoreSuccessor {
             _registry: self.registry,
             _completion_address: self.address,
@@ -3825,7 +3738,6 @@ impl<'a> PreparedCertifiedFetchExecution<'a> {
         })
     }
 }
-
 #[allow(dead_code)]
 impl<'a> PreparedDurableStoreExecution<'a> {
     fn durable_store(&self) -> &DurableStoreBody {
@@ -3839,7 +3751,6 @@ impl<'a> PreparedDurableStoreExecution<'a> {
         };
         store
     }
-
     /// Return the exact reducer coordinates accepted by the direct
     /// `BodyStored` adapter preview.
     pub(super) fn adapter_preview_inputs(
@@ -3855,17 +3766,14 @@ impl<'a> PreparedDurableStoreExecution<'a> {
         };
         (*tag, *round, *subject)
     }
-
     /// Borrow the exact post-fsync body receipt retained by the Store carrier.
     pub(super) fn durable_body_receipt(&self) -> &DurableBodyReceipt {
         &self.durable_store().durable_receipt
     }
-
     /// Return the manifest hash transferred independently from the parent response.
     pub(super) fn expected_manifest_hash(&self) -> HashOf<wire::PayloadManifest> {
         self.durable_store().expected_manifest_hash
     }
-
     /// Seal the ordinal-free pending binding for the exact Validate effect
     /// emitted by the direct `BodyStored` adapter preview.
     ///
@@ -3932,7 +3840,6 @@ impl<'a> PreparedDurableStoreExecution<'a> {
                 replay_evidence,
             )
         };
-
         Ok(PreparedDurableStoreValidateSuccessor {
             _registry: self.registry,
             _store_address: self.address,

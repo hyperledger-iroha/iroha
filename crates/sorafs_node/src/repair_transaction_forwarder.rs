@@ -5,13 +5,11 @@
 //! transaction ingress, and finalized-ledger reconciliation worker. PDP, PoR,
 //! and PoTR use the same native repair handoff so no process-local scheduler
 //! can become authoritative in production.
-
 use std::{
     collections::BTreeSet,
     path::Path,
     sync::{Arc, Mutex},
 };
-
 use iroha_data_model::{
     ChainId, NetworkId,
     account::AccountId,
@@ -33,12 +31,10 @@ use iroha_data_model::{
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::{RepairReportV1, RepairSlashProposalV1, RepairTicketId};
 use thiserror::Error;
-
 use crate::durable_transaction_forwarder::{
     self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
     DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
 };
-
 /// Durable repair-transaction checkpoint schema version.
 pub const REPAIR_TRANSACTION_FORWARDER_CHECKPOINT_VERSION_V1: u8 = 1;
 /// Canonical repair-transaction checkpoint file.
@@ -52,7 +48,6 @@ pub const REPAIR_TRANSACTION_FORWARDER_MAX_SCAN_ITEMS_V1: usize = 1_000;
 pub const REPAIR_TRANSACTION_MAX_CANONICAL_BYTES_V1: usize = 10 * 1024 * 1024;
 /// Maximum UTF-8 byte length of the exact active chain identifier.
 pub const REPAIR_TRANSACTION_MAX_CHAIN_ID_BYTES_V1: usize = 128;
-
 const CHECKPOINT_LOCK_FILE_NAME: &str = "repair-transaction-forwarder-state.lock";
 const OPERATION_ID_DOMAIN_V1: &[u8] = b"sorafs.repair.transaction-forwarder.operation.v1\0";
 const SEMANTIC_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.repair.transaction-forwarder.semantic.v1\0";
@@ -64,7 +59,6 @@ const TRANSACTION_ELEMENT_AMPLIFICATION_LIMIT: usize = 8;
 const TRANSACTION_ALLOCATION_AMPLIFICATION_LIMIT: usize = 20;
 const TRANSACTION_ALLOCATION_FIXED_OVERHEAD_BYTES: usize = 512 * 1024;
 const TRANSACTION_MAX_NESTING_DEPTH: usize = 128;
-
 /// Bounded persistence and retry policy for native repair operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RepairTransactionForwarderPolicyV1 {
@@ -81,7 +75,6 @@ pub struct RepairTransactionForwarderPolicyV1 {
     /// Maximum canonical checkpoint bytes.
     pub checkpoint_max_bytes: u64,
 }
-
 impl RepairTransactionForwarderPolicyV1 {
     /// Validate all first-release resource bounds.
     pub fn validate(self) -> Result<(), RepairTransactionForwarderError> {
@@ -98,7 +91,6 @@ impl RepairTransactionForwarderPolicyV1 {
         Ok(())
     }
 }
-
 /// Finalized chain context used to admit one native repair operation.
 ///
 /// Callers must obtain `finalized_cursor` from the exact network named by
@@ -113,7 +105,6 @@ pub struct RepairTransactionContextV1 {
     /// Finalized block anchor used for semantic reconciliation.
     pub finalized_cursor: RepairFinalizedCursorV1,
 }
-
 impl RepairTransactionContextV1 {
     pub(crate) fn validate(&self) -> Result<(), RepairTransactionForwarderError> {
         validate_finalized_cursor(self.finalized_cursor)?;
@@ -125,7 +116,6 @@ impl RepairTransactionContextV1 {
         Ok(())
     }
 }
-
 /// Native repair instruction kind retained by the forwarder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepairTransactionKindV1 {
@@ -136,7 +126,6 @@ pub enum RepairTransactionKindV1 {
     /// Commit one provider-owner appeal.
     Appeal,
 }
-
 /// Bounded native repair operation retained for isolated external signing.
 ///
 /// The forwarder validates the operation, its embedded canonical payloads, and
@@ -151,7 +140,6 @@ pub enum RepairOperationV1 {
     /// Commit one provider-owner appeal.
     Appeal(SubmitSorafsRepairAppeal),
 }
-
 impl RepairOperationV1 {
     /// Return the native repair instruction kind.
     #[must_use]
@@ -162,7 +150,6 @@ impl RepairOperationV1 {
             Self::Appeal(_) => RepairTransactionKindV1::Appeal,
         }
     }
-
     fn identity(&self) -> (StoredRepairIdentityScopeV1, [u8; 32]) {
         match self {
             Self::Submit(instruction) => (
@@ -186,7 +173,6 @@ impl RepairOperationV1 {
         }
     }
 }
-
 impl From<RepairOperationV1> for InstructionBox {
     fn from(operation: RepairOperationV1) -> Self {
         match operation {
@@ -196,7 +182,6 @@ impl From<RepairOperationV1> for InstructionBox {
         }
     }
 }
-
 /// Exact signer work item returned after a durable signing claim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepairTransactionSigningRequestV1 {
@@ -211,7 +196,6 @@ pub struct RepairTransactionSigningRequestV1 {
     /// Exact validated native operation that the signed envelope must retain.
     pub operation: RepairOperationV1,
 }
-
 /// Durable enqueue result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepairTransactionEnqueueResultV1 {
@@ -226,7 +210,6 @@ pub enum RepairTransactionEnqueueResultV1 {
         operation_id: [u8; 32],
     },
 }
-
 impl RepairTransactionEnqueueResultV1 {
     /// Return the stable semantic operation identity.
     #[must_use]
@@ -236,7 +219,6 @@ impl RepairTransactionEnqueueResultV1 {
         }
     }
 }
-
 /// Runtime-visible crash state for one repair transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepairTransactionDeliveryStateV1 {
@@ -251,7 +233,6 @@ pub enum RepairTransactionDeliveryStateV1 {
     /// The exact transaction is known pending or applied.
     Submitted,
 }
-
 impl From<StoredDeliveryStateV1> for RepairTransactionDeliveryStateV1 {
     fn from(value: StoredDeliveryStateV1) -> Self {
         match value {
@@ -263,7 +244,6 @@ impl From<StoredDeliveryStateV1> for RepairTransactionDeliveryStateV1 {
         }
     }
 }
-
 /// Exact pending repair delivery returned to a future worker.
 #[derive(Debug, Clone)]
 pub struct RepairTransactionPendingV1 {
@@ -294,7 +274,6 @@ pub struct RepairTransactionPendingV1 {
     /// Exact canonical signed transaction bytes, absent before external signing completes.
     pub signed_transaction_bytes: Option<Vec<u8>>,
 }
-
 /// Payload-free terminal reason retained for operator reconciliation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepairTransactionDeadLetterReasonV1 {
@@ -305,7 +284,6 @@ pub enum RepairTransactionDeadLetterReasonV1 {
     /// Bounded retries were exhausted after finalized absence.
     RetryExhausted,
 }
-
 /// Payload-free terminal repair delivery.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepairTransactionDeadLetterV1 {
@@ -324,7 +302,6 @@ pub struct RepairTransactionDeadLetterV1 {
     /// Finalized hash paired with the observed height.
     pub observed_finalized_block_hash: [u8; 32],
 }
-
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
 )]
@@ -332,7 +309,6 @@ enum StoredRepairIdentityScopeV1 {
     TaskSource,
     TaskMutation,
 }
-
 impl StoredRepairIdentityScopeV1 {
     const fn tag(self) -> u8 {
         match self {
@@ -341,14 +317,12 @@ impl StoredRepairIdentityScopeV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredDeadLetterReasonV1 {
     FinalizedConflict,
     TransactionRejected,
     RetryExhausted,
 }
-
 impl From<StoredDeadLetterReasonV1> for RepairTransactionDeadLetterReasonV1 {
     fn from(value: StoredDeadLetterReasonV1) -> Self {
         match value {
@@ -358,7 +332,6 @@ impl From<StoredDeadLetterReasonV1> for RepairTransactionDeadLetterReasonV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredPendingRepairTransactionV1 {
     sequence: u64,
@@ -376,7 +349,6 @@ struct StoredPendingRepairTransactionV1 {
     baseline_finalized_block_hash: [u8; 32],
     signed_transaction_bytes: Option<Vec<u8>>,
 }
-
 impl StoredPendingRepairTransactionV1 {
     fn snapshot(&self) -> RepairTransactionPendingV1 {
         RepairTransactionPendingV1 {
@@ -399,51 +371,39 @@ impl StoredPendingRepairTransactionV1 {
         }
     }
 }
-
 impl DeliveryRecord for StoredPendingRepairTransactionV1 {
     type Transaction = Vec<u8>;
-
     fn delivery_state(&self) -> StoredDeliveryStateV1 {
         self.state
     }
-
     fn set_delivery_state(&mut self, state: StoredDeliveryStateV1) {
         self.state = state;
     }
-
     fn attempts(&self) -> u32 {
         self.attempts
     }
-
     fn set_attempts(&mut self, attempts: u32) {
         self.attempts = attempts;
     }
-
     fn baseline_finalized_height(&self) -> u64 {
         self.baseline_finalized_height
     }
-
     fn set_baseline_finalized_height(&mut self, height: u64) {
         self.baseline_finalized_height = height;
     }
-
     fn baseline_finalized_block_hash(&self) -> [u8; 32] {
         self.baseline_finalized_block_hash
     }
-
     fn set_baseline_finalized_block_hash(&mut self, block_hash: [u8; 32]) {
         self.baseline_finalized_block_hash = block_hash;
     }
-
     fn signed_transaction(&self) -> Option<&Self::Transaction> {
         self.signed_transaction_bytes.as_ref()
     }
-
     fn set_signed_transaction(&mut self, transaction: Option<Self::Transaction>) {
         self.signed_transaction_bytes = transaction;
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredCompletedRepairTransactionV1 {
     operation_id: [u8; 32],
@@ -453,7 +413,6 @@ struct StoredCompletedRepairTransactionV1 {
     finalized_height: u64,
     finalized_block_hash: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredDeadRepairTransactionV1 {
     operation_id: [u8; 32],
@@ -469,7 +428,6 @@ struct StoredDeadRepairTransactionV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RepairTransactionForwarderCheckpointV1 {
     version: u8,
@@ -478,7 +436,6 @@ struct RepairTransactionForwarderCheckpointV1 {
     completed: Vec<StoredCompletedRepairTransactionV1>,
     dead_letters: Vec<StoredDeadRepairTransactionV1>,
 }
-
 impl Default for RepairTransactionForwarderCheckpointV1 {
     fn default() -> Self {
         Self {
@@ -490,14 +447,12 @@ impl Default for RepairTransactionForwarderCheckpointV1 {
         }
     }
 }
-
 #[derive(Debug)]
 struct DurableState {
     checkpoint: RepairTransactionForwarderCheckpointV1,
     fingerprint: Option<[u8; 32]>,
     durability_failure: bool,
 }
-
 /// Durable bounded forwarder for unsigned intents and externally signed repair transactions.
 #[derive(Debug, Clone)]
 pub struct RepairTransactionForwarder {
@@ -505,7 +460,6 @@ pub struct RepairTransactionForwarder {
     state: Arc<Mutex<DurableState>>,
     store: Option<Arc<AtomicCheckpointStore>>,
 }
-
 impl RepairTransactionForwarder {
     /// Construct a bounded non-persistent forwarder for unit tests.
     #[cfg(test)]
@@ -523,7 +477,6 @@ impl RepairTransactionForwarder {
             store: None,
         })
     }
-
     /// Open or create a durable forwarder below `state_dir`.
     pub fn open(
         state_dir: &Path,
@@ -561,7 +514,6 @@ impl RepairTransactionForwarder {
         }
         Ok(forwarder)
     }
-
     /// Validate and durably accept one unsigned native repair operation.
     ///
     /// The operation is persisted in `Ready` state with its reviewed finalized
@@ -583,7 +535,6 @@ impl RepairTransactionForwarder {
         )?;
         self.enqueue_prepared(prepared, None, context.finalized_cursor)
     }
-
     /// Validate and durably accept one exact canonical signed repair transaction.
     ///
     /// The exact input bytes are retained unchanged. A semantic replay returns
@@ -606,7 +557,6 @@ impl RepairTransactionForwarder {
             context.finalized_cursor,
         )
     }
-
     fn enqueue_prepared(
         &self,
         prepared: PreparedRepairOperation,
@@ -676,7 +626,6 @@ impl RepairTransactionForwarder {
         self.commit_candidate(&mut state, candidate)?;
         Ok(RepairTransactionEnqueueResultV1::Inserted { operation_id })
     }
-
     /// Return pending entries in stable sequence order.
     pub fn pending(
         &self,
@@ -684,7 +633,6 @@ impl RepairTransactionForwarder {
     ) -> Result<Vec<RepairTransactionPendingV1>, RepairTransactionForwarderError> {
         self.pending_after(None, limit)
     }
-
     /// Return a circular page of pending entries after an immutable sequence cursor.
     ///
     /// Entries newer than `after_sequence` are returned first, followed by the
@@ -714,7 +662,6 @@ impl RepairTransactionForwarder {
             .map(StoredPendingRepairTransactionV1::snapshot)
             .collect())
     }
-
     /// Return the exact validated authority and operation without changing delivery state.
     ///
     /// Finalized-state reconcilers use this accessor for every crash state,
@@ -739,7 +686,6 @@ impl RepairTransactionForwarder {
             operation: entry.operation.clone(),
         })
     }
-
     /// Return payload-free dead letters in stable operation order.
     pub fn dead_letters(
         &self,
@@ -768,7 +714,6 @@ impl RepairTransactionForwarder {
             })
             .collect())
     }
-
     /// Atomically claim a ready operation for isolated external signing.
     ///
     /// The transition consumes one bounded attempt before the request is
@@ -792,7 +737,6 @@ impl RepairTransactionForwarder {
         self.commit_candidate(&mut state, candidate)?;
         Ok(request)
     }
-
     /// Persist exact signed bytes for the claimed authority and semantic operation.
     pub fn store_signed_transaction(
         &self,
@@ -824,7 +768,6 @@ impl RepairTransactionForwarder {
         self.commit_candidate(&mut state, candidate)?;
         Ok(digest)
     }
-
     /// Release a signing claim after an isolated signer failure.
     ///
     /// The retained operation and finalized cursor are unchanged, and the
@@ -837,7 +780,6 @@ impl RepairTransactionForwarder {
             release_signing_claim(entry).map_err(Into::into)
         })
     }
-
     /// Mark exact bytes ambiguous before exposing them to a transaction submitter.
     pub fn begin_submission(
         &self,
@@ -850,7 +792,6 @@ impl RepairTransactionForwarder {
         self.commit_candidate(&mut state, candidate)?;
         Ok(bytes)
     }
-
     /// Record that the exact transaction is pending or applied.
     pub fn mark_submitted(
         &self,
@@ -860,7 +801,6 @@ impl RepairTransactionForwarder {
             durable::mark_submitted(entry).map_err(Into::into)
         })
     }
-
     /// Record a failure proven to have happened before queue submission.
     pub fn mark_not_submitted(
         &self,
@@ -870,7 +810,6 @@ impl RepairTransactionForwarder {
             durable::mark_not_submitted(entry).map_err(Into::into)
         })
     }
-
     /// Retry the same exact bytes only after finalized absence is proven.
     pub fn mark_finalized_absent(
         &self,
@@ -895,7 +834,6 @@ impl RepairTransactionForwarder {
         }
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Reconcile exact finalized success and retain a bounded semantic tombstone.
     pub fn mark_finalized(
         &self,
@@ -921,7 +859,6 @@ impl RepairTransactionForwarder {
         }
         self.commit_finalized_operation(&mut state, candidate, position, finalized_cursor)
     }
-
     /// Reconcile exact semantic success committed by this or another ingress.
     ///
     /// This transition is valid before local signing: the operation identity
@@ -940,7 +877,6 @@ impl RepairTransactionForwarder {
         let position = pending_position(&candidate, operation_id)?;
         self.commit_finalized_operation(&mut state, candidate, position, finalized_cursor)
     }
-
     fn commit_finalized_operation(
         &self,
         state: &mut DurableState,
@@ -974,7 +910,6 @@ impl RepairTransactionForwarder {
             .sort_by_key(|completed| completed.operation_id);
         self.commit_candidate(state, candidate)
     }
-
     /// Atomically dead-letter an operation that conflicts with finalized state.
     pub fn mark_finalized_conflict(
         &self,
@@ -992,7 +927,6 @@ impl RepairTransactionForwarder {
         )?;
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Clear a terminally rejected envelope for bounded replacement signing.
     pub fn mark_transaction_rejected(
         &self,
@@ -1030,7 +964,6 @@ impl RepairTransactionForwarder {
         }
         self.commit_candidate(&mut state, candidate)
     }
-
     fn mutate_entry(
         &self,
         operation_id: [u8; 32],
@@ -1043,7 +976,6 @@ impl RepairTransactionForwarder {
         mutate(find_pending_mut(&mut candidate, operation_id)?)?;
         self.commit_candidate(&mut state, candidate)
     }
-
     fn move_to_dead_letter(
         &self,
         checkpoint: &mut RepairTransactionForwarderCheckpointV1,
@@ -1075,7 +1007,6 @@ impl RepairTransactionForwarder {
             .sort_by_key(|dead| dead.operation_id);
         Ok(())
     }
-
     fn lock_state(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, DurableState>, RepairTransactionForwarderError> {
@@ -1088,7 +1019,6 @@ impl RepairTransactionForwarder {
         }
         Ok(state)
     }
-
     fn commit_candidate(
         &self,
         state: &mut DurableState,
@@ -1112,7 +1042,6 @@ impl RepairTransactionForwarder {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone)]
 struct PreparedRepairOperation {
     identity_scope: StoredRepairIdentityScopeV1,
@@ -1123,7 +1052,6 @@ struct PreparedRepairOperation {
     authority: AccountId,
     operation: RepairOperationV1,
 }
-
 impl PreparedRepairOperation {
     fn new(
         network_id: NetworkId,
@@ -1152,7 +1080,6 @@ impl PreparedRepairOperation {
             operation,
         })
     }
-
     fn new_bounded(
         network_id: NetworkId,
         chain_id: ChainId,
@@ -1180,7 +1107,6 @@ impl PreparedRepairOperation {
         }
         Ok(prepared)
     }
-
     fn decode_signed_transaction(
         bytes: &[u8],
         expected_network_id: &NetworkId,
@@ -1245,7 +1171,6 @@ impl PreparedRepairOperation {
         )
     }
 }
-
 fn validate_operation(
     operation: &RepairOperationV1,
     authority: &AccountId,
@@ -1319,7 +1244,6 @@ fn validate_operation(
     }
     Ok(())
 }
-
 fn validate_idempotency_key(key: &str) -> Result<(), RepairTransactionForwarderError> {
     if key.is_empty()
         || key != key.trim()
@@ -1330,14 +1254,12 @@ fn validate_idempotency_key(key: &str) -> Result<(), RepairTransactionForwarderE
     }
     Ok(())
 }
-
 fn validate_lease_duration(duration_ms: u64) -> Result<(), RepairTransactionForwarderError> {
     if !(REPAIR_LEDGER_MIN_LEASE_MS_V1..=REPAIR_LEDGER_MAX_LEASE_MS_V1).contains(&duration_ms) {
         return Err(RepairTransactionForwarderError::InvalidRepairOperation);
     }
     Ok(())
 }
-
 pub(crate) fn decode_repair_report(
     bytes: &[u8],
 ) -> Result<RepairReportV1, RepairTransactionForwarderError> {
@@ -1359,7 +1281,6 @@ pub(crate) fn decode_repair_report(
     }
     Ok(report)
 }
-
 pub(crate) fn decode_slash_proposal(
     bytes: &[u8],
 ) -> Result<RepairSlashProposalV1, RepairTransactionForwarderError> {
@@ -1381,7 +1302,6 @@ pub(crate) fn decode_slash_proposal(
     }
     Ok(proposal)
 }
-
 fn semantic_digest(
     network_id: &NetworkId,
     chain_id: &ChainId,
@@ -1409,7 +1329,6 @@ fn semantic_digest(
     hasher.update(&operation);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn operation_id(prepared: &PreparedRepairOperation) -> [u8; 32] {
     operation_id_from_parts(
         prepared.identity_scope,
@@ -1417,7 +1336,6 @@ fn operation_id(prepared: &PreparedRepairOperation) -> [u8; 32] {
         prepared.semantic_digest,
     )
 }
-
 fn operation_id_from_parts(
     identity_scope: StoredRepairIdentityScopeV1,
     identity_digest: [u8; 32],
@@ -1430,11 +1348,9 @@ fn operation_id_from_parts(
     hasher.update(&semantic_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn transaction_digest(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()
 }
-
 fn validate_repair_delivery(entry: &StoredPendingRepairTransactionV1, max_attempts: u32) -> bool {
     let has_baseline =
         entry.baseline_finalized_height != 0 && entry.baseline_finalized_block_hash != [0; 32];
@@ -1451,7 +1367,6 @@ fn validate_repair_delivery(entry: &StoredPendingRepairTransactionV1, max_attemp
     };
     has_baseline && state_is_valid && entry.attempts <= max_attempts
 }
-
 fn recover_interrupted_signing(entry: &mut StoredPendingRepairTransactionV1) -> bool {
     if entry.state != StoredDeliveryStateV1::Signing {
         return false;
@@ -1459,7 +1374,6 @@ fn recover_interrupted_signing(entry: &mut StoredPendingRepairTransactionV1) -> 
     entry.state = StoredDeliveryStateV1::Ready;
     true
 }
-
 fn claim_for_signing(
     entry: &mut StoredPendingRepairTransactionV1,
     max_attempts: u32,
@@ -1481,7 +1395,6 @@ fn claim_for_signing(
     entry.state = StoredDeliveryStateV1::Signing;
     Ok(())
 }
-
 fn store_signed_transaction(
     entry: &mut StoredPendingRepairTransactionV1,
     signed_transaction_bytes: Vec<u8>,
@@ -1496,7 +1409,6 @@ fn store_signed_transaction(
     entry.state = StoredDeliveryStateV1::Signed;
     Ok(())
 }
-
 fn release_signing_claim(
     entry: &mut StoredPendingRepairTransactionV1,
 ) -> Result<(), DeliveryTransitionError> {
@@ -1509,7 +1421,6 @@ fn release_signing_claim(
     entry.state = StoredDeliveryStateV1::Ready;
     Ok(())
 }
-
 fn find_pending_mut(
     checkpoint: &mut RepairTransactionForwarderCheckpointV1,
     operation_id: [u8; 32],
@@ -1520,7 +1431,6 @@ fn find_pending_mut(
         .find(|entry| entry.operation_id == operation_id)
         .ok_or(RepairTransactionForwarderError::UnknownOperation)
 }
-
 fn pending_position(
     checkpoint: &RepairTransactionForwarderCheckpointV1,
     operation_id: [u8; 32],
@@ -1531,7 +1441,6 @@ fn pending_position(
         .position(|entry| entry.operation_id == operation_id)
         .ok_or(RepairTransactionForwarderError::UnknownOperation)
 }
-
 fn validate_checkpoint(
     checkpoint: &RepairTransactionForwarderCheckpointV1,
     policy: RepairTransactionForwarderPolicyV1,
@@ -1677,7 +1586,6 @@ fn validate_checkpoint(
     }
     Ok(())
 }
-
 fn decode_checkpoint(
     bytes: &[u8],
     policy: RepairTransactionForwarderPolicyV1,
@@ -1703,20 +1611,17 @@ fn decode_checkpoint(
     validate_checkpoint(&checkpoint, policy)?;
     Ok(checkpoint)
 }
-
 fn validate_finalized_cursor(
     cursor: RepairFinalizedCursorV1,
 ) -> Result<(), RepairTransactionForwarderError> {
     durable::validate_finalized_cursor(finalized_cursor(cursor)).map_err(Into::into)
 }
-
 const fn finalized_cursor(cursor: RepairFinalizedCursorV1) -> FinalizedCursorV1 {
     FinalizedCursorV1 {
         height: cursor.height,
         block_hash: cursor.block_hash,
     }
 }
-
 fn checkpoint_decode_limits(
     encoded_bytes: usize,
 ) -> Result<norito::DecodeLimits, RepairTransactionForwarderError> {
@@ -1729,7 +1634,6 @@ fn checkpoint_decode_limits(
         CHECKPOINT_MAX_NESTING_DEPTH,
     )
 }
-
 fn transaction_decode_limits(
     encoded_bytes: usize,
     max_transaction_bytes: usize,
@@ -1743,14 +1647,12 @@ fn transaction_decode_limits(
         TRANSACTION_MAX_NESTING_DEPTH,
     )
 }
-
 fn embedded_decode_limits(
     encoded_bytes: usize,
     max_bytes: usize,
 ) -> Result<norito::DecodeLimits, RepairTransactionForwarderError> {
     decode_limits(encoded_bytes, max_bytes, 6, 16, 64 * 1024, 64)
 }
-
 fn decode_limits(
     encoded_bytes: usize,
     max_bytes: usize,
@@ -1777,7 +1679,6 @@ fn decode_limits(
         max_depth,
     ))
 }
-
 /// Durable repair-transaction forwarding error.
 #[derive(Debug, Error)]
 pub enum RepairTransactionForwarderError {
@@ -1860,7 +1761,6 @@ pub enum RepairTransactionForwarderError {
     #[error("repair transaction runtime lock is poisoned")]
     RuntimePoisoned,
 }
-
 impl From<DeliveryTransitionError> for RepairTransactionForwarderError {
     fn from(error: DeliveryTransitionError) -> Self {
         match error {
@@ -1870,7 +1770,6 @@ impl From<DeliveryTransitionError> for RepairTransactionForwarderError {
         }
     }
 }
-
 impl From<CheckpointStoreError> for RepairTransactionForwarderError {
     fn from(error: CheckpointStoreError) -> Self {
         match error {
@@ -1883,7 +1782,6 @@ impl From<CheckpointStoreError> for RepairTransactionForwarderError {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1893,10 +1791,8 @@ mod tests {
         thread,
         time::Duration,
     };
-
     #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt as _;
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         ChainId, Level, NetworkId,
@@ -1913,9 +1809,7 @@ mod tests {
         RepairManualCauseV1,
     };
     use tempfile::TempDir;
-
     use super::*;
-
     fn write_private_checkpoint(path: &Path, bytes: &[u8]) {
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true);
@@ -1927,7 +1821,6 @@ mod tests {
         file.write_all(bytes)
             .expect("write private checkpoint fixture");
     }
-
     fn policy() -> RepairTransactionForwarderPolicyV1 {
         RepairTransactionForwarderPolicyV1 {
             max_pending: 8,
@@ -1938,24 +1831,20 @@ mod tests {
             checkpoint_max_bytes: 4 * 1024 * 1024,
         }
     }
-
     fn cursor(height: u64, hash_byte: u8) -> RepairFinalizedCursorV1 {
         RepairFinalizedCursorV1 {
             height,
             block_hash: [hash_byte; 32],
         }
     }
-
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; 32]),
         ))
     }
-
     fn test_network_id() -> NetworkId {
         network_id(0xA1)
     }
-
     fn context(height: u64, hash_byte: u8) -> RepairTransactionContextV1 {
         RepairTransactionContextV1 {
             network_id: test_network_id(),
@@ -1963,11 +1852,9 @@ mod tests {
             finalized_cursor: cursor(height, hash_byte),
         }
     }
-
     fn key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap()
     }
-
     fn report(authority: &AccountId, ticket_id: &str) -> RepairReportV1 {
         RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
@@ -1988,7 +1875,6 @@ mod tests {
             notes: None,
         }
     }
-
     fn report_payloads_at_ledger_boundary(report: &RepairReportV1) -> (Vec<u8>, Vec<u8>) {
         let encode_with_padding = |padding: usize| {
             let mut candidate = report.clone();
@@ -1998,7 +1884,6 @@ mod tests {
                 .expect("boundary repair report remains semantically valid");
             norito::to_bytes(&candidate).expect("encode boundary repair report")
         };
-
         let mut largest_accepted_padding = 0_usize;
         let mut first_rejected_padding = REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1;
         while encode_with_padding(first_rejected_padding).len()
@@ -2019,7 +1904,6 @@ mod tests {
                 first_rejected_padding = candidate_padding;
             }
         }
-
         let largest_accepted = encode_with_padding(largest_accepted_padding);
         let first_rejected = encode_with_padding(first_rejected_padding);
         assert_eq!(
@@ -2031,7 +1915,6 @@ mod tests {
         assert!(first_rejected.len() > REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1);
         (largest_accepted, first_rejected)
     }
-
     fn submit_instruction(
         signer: &KeyPair,
         source_identity: [u8; 32],
@@ -2043,7 +1926,6 @@ mod tests {
             norito::to_bytes(&report(&authority, ticket_id)).unwrap(),
         )
     }
-
     fn claim_instruction(
         ticket_id: &str,
         expected_revision: u64,
@@ -2058,7 +1940,6 @@ mod tests {
             }),
         )
     }
-
     fn signed_bytes(
         signer: &KeyPair,
         authority: AccountId,
@@ -2075,7 +1956,6 @@ mod tests {
         let transaction = builder.try_sign(signer.private_key()).unwrap();
         norito::to_bytes(&transaction).unwrap()
     }
-
     fn signed_repair_bytes(
         signer: &KeyPair,
         instruction: impl Into<InstructionBox>,
@@ -2088,11 +1968,9 @@ mod tests {
             creation_time_ms,
         )
     }
-
     #[test]
     fn accepts_all_native_repair_kinds_and_exact_replay() {
         let signer = key(1);
-
         let submit = signed_repair_bytes(
             &signer,
             submit_instruction(&signer, [0x31; 32], "REP-SUBMIT"),
@@ -2114,7 +1992,6 @@ mod tests {
                 .unwrap(),
             submit
         );
-
         let action = signed_repair_bytes(
             &signer,
             claim_instruction("REP-ACTION", 1, "claim-action"),
@@ -2127,7 +2004,6 @@ mod tests {
                 .unwrap(),
             RepairTransactionEnqueueResultV1::Inserted { .. }
         ));
-
         let appeal = signed_repair_bytes(
             &signer,
             SubmitSorafsRepairAppeal::new(
@@ -2147,7 +2023,6 @@ mod tests {
             RepairTransactionEnqueueResultV1::Inserted { .. }
         ));
     }
-
     #[test]
     fn signed_ingress_rejects_a_foreign_network_before_persistence() {
         let signer = key(22);
@@ -2172,7 +2047,6 @@ mod tests {
         ));
         assert!(forwarder.pending(8).unwrap().is_empty());
     }
-
     #[test]
     fn unsigned_operations_claim_exact_signing_material_without_consuming_enqueue_attempt() {
         let signer = key(13);
@@ -2197,7 +2071,6 @@ mod tests {
                 "unsigned-appeal".to_owned(),
             )),
         ];
-
         for (index, operation) in operations.into_iter().enumerate() {
             let index_u64 = u64::try_from(index).unwrap();
             let index_u8 = u8::try_from(index).unwrap();
@@ -2225,7 +2098,6 @@ mod tests {
             assert_eq!(pending.baseline_finalized_height, baseline.height);
             assert_eq!(pending.baseline_finalized_block_hash, baseline.block_hash);
             assert!(pending.signed_transaction_bytes.is_none());
-
             let reconciliation = forwarder
                 .operation_for_reconciliation(operation_id)
                 .unwrap();
@@ -2240,7 +2112,6 @@ mod tests {
                 .unwrap();
             assert_eq!(still_ready.state, RepairTransactionDeliveryStateV1::Ready);
             assert_eq!(still_ready.attempts, 0);
-
             let request = forwarder.claim_for_signing(operation_id).unwrap();
             assert_eq!(request.operation_id, operation_id);
             assert_eq!(request.authority, authority);
@@ -2254,7 +2125,6 @@ mod tests {
             assert_eq!(claimed.state, RepairTransactionDeliveryStateV1::Signing);
             assert_eq!(claimed.attempts, 1);
             assert!(claimed.signed_transaction_bytes.is_none());
-
             let signed = signed_repair_bytes(&signer, request.operation, 100 + index_u64);
             assert_eq!(
                 forwarder
@@ -2291,7 +2161,6 @@ mod tests {
             assert_eq!(still_signed.attempts, 1);
         }
     }
-
     #[test]
     fn pending_after_advances_and_wraps_without_starving_older_entries() {
         let signer = key(21);
@@ -2310,7 +2179,6 @@ mod tests {
                 )
                 .unwrap();
         }
-
         let all = forwarder.pending(8).unwrap();
         assert_eq!(all.len(), 3);
         let after_first = forwarder.pending_after(Some(all[0].sequence), 2).unwrap();
@@ -2330,7 +2198,6 @@ mod tests {
             vec![all[0].sequence, all[1].sequence]
         );
     }
-
     #[test]
     fn semantic_finalization_before_signing_retains_exact_replay_tombstone() {
         let signer = key(22);
@@ -2342,7 +2209,6 @@ mod tests {
             .enqueue_unsigned_operation(authority.clone(), operation.clone(), &context(1, 1))
             .unwrap()
             .operation_id();
-
         forwarder
             .mark_semantic_finalized(operation_id, cursor(2, 2))
             .unwrap();
@@ -2355,7 +2221,6 @@ mod tests {
                 operation_id: replay_id
             } if replay_id == operation_id
         ));
-
         let conflicting = RepairOperationV1::Submit(submit_instruction(
             &signer,
             [0xD1; 32],
@@ -2366,7 +2231,6 @@ mod tests {
             Err(RepairTransactionForwarderError::IdentityConflict)
         ));
     }
-
     #[test]
     fn por_source_collision_rejects_different_canonical_report() {
         let signer = key(23);
@@ -2394,7 +2258,6 @@ mod tests {
             conflicting_intent.source_identity(),
             "the negative must reuse the same challenge-derived source identity"
         );
-
         let forwarder = RepairTransactionForwarder::in_memory(policy()).unwrap();
         let first_operation = RepairOperationV1::Submit(SubmitSorafsRepairTask::new(
             first_intent.source_identity(),
@@ -2412,7 +2275,6 @@ mod tests {
             Err(RepairTransactionForwarderError::IdentityConflict)
         ));
     }
-
     #[test]
     fn public_operation_preserves_checkpoint_v1_payload_shape() {
         #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -2421,7 +2283,6 @@ mod tests {
             Action(ApplySorafsRepairTaskAction),
             Appeal(SubmitSorafsRepairAppeal),
         }
-
         let signer = key(20);
         let pairs = [
             (
@@ -2468,7 +2329,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn unsigned_enqueue_validates_auditor_deduplicates_and_rejects_identity_rotation() {
         let signer = key(14);
@@ -2476,7 +2336,6 @@ mod tests {
         let authority = AccountId::new(signer.public_key().clone());
         let rotated_authority = AccountId::new(rotated_signer.public_key().clone());
         let forwarder = RepairTransactionForwarder::in_memory(policy()).unwrap();
-
         let cursor_operation =
             RepairOperationV1::Action(claim_instruction("REP-UNSIGNED-CURSOR", 1, "cursor"));
         assert!(matches!(
@@ -2487,7 +2346,6 @@ mod tests {
             ),
             Err(RepairTransactionForwarderError::InvalidFinalizedCursor)
         ));
-
         let mismatched_submit = RepairOperationV1::Submit(SubmitSorafsRepairTask::new(
             [0x93; 32],
             norito::to_bytes(&report(&rotated_authority, "REP-UNSIGNED-MISMATCH")).unwrap(),
@@ -2500,7 +2358,6 @@ mod tests {
             ),
             Err(RepairTransactionForwarderError::AuditorAuthorityMismatch)
         ));
-
         let operation =
             RepairOperationV1::Action(claim_instruction("REP-UNSIGNED-ID", 1, "stable-identity"));
         let operation_id = forwarder
@@ -2515,7 +2372,6 @@ mod tests {
                 operation_id: existing
             } if existing == operation_id
         ));
-
         let conflicting =
             RepairOperationV1::Action(claim_instruction("REP-UNSIGNED-ID", 2, "stable-identity"));
         assert!(matches!(
@@ -2526,7 +2382,6 @@ mod tests {
             forwarder.enqueue_unsigned_operation(rotated_authority, operation, &context(2, 2)),
             Err(RepairTransactionForwarderError::IdentityConflict)
         ));
-
         let mut tiny_policy = policy();
         tiny_policy.max_transaction_bytes = 1;
         let tiny_forwarder = RepairTransactionForwarder::in_memory(tiny_policy).unwrap();
@@ -2539,7 +2394,6 @@ mod tests {
             Err(RepairTransactionForwarderError::ResourceLimitExceeded)
         ));
     }
-
     #[test]
     fn concurrent_unsigned_claim_has_exactly_one_durable_winner() {
         let signer = key(16);
@@ -2585,7 +2439,6 @@ mod tests {
         assert_eq!(pending[0].attempts, 1);
         assert!(pending[0].signed_transaction_bytes.is_none());
     }
-
     #[test]
     fn unsigned_signing_crash_recovers_ready_without_refunding_attempt() {
         let dir = TempDir::new().unwrap();
@@ -2605,7 +2458,6 @@ mod tests {
             operation
         );
         drop(forwarder);
-
         let restored = RepairTransactionForwarder::open(dir.path(), bounded).unwrap();
         let pending = restored.pending(8).unwrap();
         assert_eq!(pending[0].state, RepairTransactionDeliveryStateV1::Ready);
@@ -2626,7 +2478,6 @@ mod tests {
             Err(RepairTransactionForwarderError::RetryExhausted)
         ));
     }
-
     #[test]
     fn signer_worker_rotation_preserves_request_and_rejects_wrong_authority_or_operation() {
         let signer = key(18);
@@ -2645,12 +2496,10 @@ mod tests {
             .enqueue_unsigned_operation(authority.clone(), operation.clone(), &context(1, 1))
             .unwrap()
             .operation_id();
-
         let first_worker = forwarder.claim_for_signing(operation_id).unwrap();
         forwarder.release_signing_claim(operation_id).unwrap();
         let rotated_worker = forwarder.claim_for_signing(operation_id).unwrap();
         assert_eq!(rotated_worker, first_worker);
-
         let wrong_authority_bytes = signed_bytes(
             &wrong_signer,
             wrong_authority,
@@ -2681,20 +2530,17 @@ mod tests {
         );
         assert_eq!(still_claimed[0].attempts, 2);
         assert!(still_claimed[0].signed_transaction_bytes.is_none());
-
         let exact = signed_repair_bytes(&signer, rotated_worker.operation, 3);
         forwarder
             .store_signed_transaction(operation_id, &exact)
             .unwrap();
         assert_eq!(forwarder.begin_submission(operation_id).unwrap(), exact);
     }
-
     #[test]
     fn rejects_wrong_executable_multiple_instructions_and_invalid_signature() {
         let signer = key(2);
         let authority = AccountId::new(signer.public_key().clone());
         let forwarder = RepairTransactionForwarder::in_memory(policy()).unwrap();
-
         let wrong = signed_bytes(
             &signer,
             authority.clone(),
@@ -2708,7 +2554,6 @@ mod tests {
             forwarder.enqueue_signed_transaction(&wrong, &context(1, 1)),
             Err(RepairTransactionForwarderError::InvalidSignedTransaction)
         ));
-
         let first = submit_instruction(&signer, [0x51; 32], "REP-MULTI-1");
         let second = submit_instruction(&signer, [0x52; 32], "REP-MULTI-2");
         let multiple = signed_bytes(
@@ -2721,7 +2566,6 @@ mod tests {
             forwarder.enqueue_signed_transaction(&multiple, &context(1, 1)),
             Err(RepairTransactionForwarderError::InvalidSignedTransaction)
         ));
-
         let wrong_signer = key(3);
         let mut invalid_builder = TransactionBuilder::new(
             test_network_id(),
@@ -2755,7 +2599,6 @@ mod tests {
             Err(RepairTransactionForwarderError::InvalidSignedTransaction)
         ));
     }
-
     #[test]
     fn rejects_auditor_authority_mismatch_and_noncanonical_embedded_report() {
         let signer = key(4);
@@ -2763,7 +2606,6 @@ mod tests {
         let signer_authority = AccountId::new(signer.public_key().clone());
         let other_authority = AccountId::new(other.public_key().clone());
         let forwarder = RepairTransactionForwarder::in_memory(policy()).unwrap();
-
         let mismatch = SubmitSorafsRepairTask::new(
             [0x61; 32],
             norito::to_bytes(&report(&other_authority, "REP-AUDITOR-MISMATCH")).unwrap(),
@@ -2773,7 +2615,6 @@ mod tests {
             forwarder.enqueue_signed_transaction(&mismatch, &context(1, 1)),
             Err(RepairTransactionForwarderError::AuditorAuthorityMismatch)
         ));
-
         let compressed_report = norito::to_compressed_bytes(
             &report(&signer_authority, "REP-COMPRESSED"),
             Some(norito::CompressionConfig::default()),
@@ -2789,14 +2630,12 @@ mod tests {
             Err(RepairTransactionForwarderError::InvalidRepairOperation)
         ));
     }
-
     #[test]
     fn report_preflight_matches_the_native_canonical_payload_boundary() {
         let signer = key(18);
         let authority = AccountId::new(signer.public_key().clone());
         let (largest_accepted, first_rejected) =
             report_payloads_at_ledger_boundary(&report(&authority, "REP-PAYLOAD-BOUNDARY"));
-
         decode_repair_report(&largest_accepted)
             .expect("largest in-bound canonical report passes forwarder preflight");
         assert!(matches!(
@@ -2824,7 +2663,6 @@ mod tests {
             decode_slash_proposal(&oversized_slash),
             Err(RepairTransactionForwarderError::InvalidRepairOperation)
         ));
-
         let unsigned_forwarder = RepairTransactionForwarder::in_memory(policy()).unwrap();
         assert!(matches!(
             unsigned_forwarder
@@ -2850,7 +2688,6 @@ mod tests {
             ),
             Err(RepairTransactionForwarderError::InvalidRepairOperation)
         ));
-
         let signed_forwarder = RepairTransactionForwarder::in_memory(policy()).unwrap();
         let accepted_transaction = signed_repair_bytes(
             &signer,
@@ -2873,7 +2710,6 @@ mod tests {
             Err(RepairTransactionForwarderError::InvalidRepairOperation)
         ));
     }
-
     #[test]
     fn semantic_replay_preserves_first_exact_envelope_and_rejects_conflict() {
         let signer = key(6);
@@ -2898,7 +2734,6 @@ mod tests {
                 .as_deref(),
             Some(first.as_slice())
         );
-
         let conflicting =
             signed_repair_bytes(&signer, claim_instruction("REP-REPLAY", 2, "stable-key"), 3);
         assert!(matches!(
@@ -2907,7 +2742,6 @@ mod tests {
         ));
         assert_eq!(forwarder.pending(8).unwrap()[0].operation_id, operation_id);
     }
-
     #[test]
     fn crash_recovery_preserves_ambiguous_bytes_and_resets_only_signing() {
         let dir = TempDir::new().unwrap();
@@ -2938,7 +2772,6 @@ mod tests {
             .unwrap();
         forwarder.claim_for_signing(signing).unwrap();
         drop(forwarder);
-
         let restored = RepairTransactionForwarder::open(dir.path(), policy()).unwrap();
         let pending = restored.pending(8).unwrap();
         let ambiguous = pending
@@ -2957,7 +2790,6 @@ mod tests {
         assert_eq!(signing.state, RepairTransactionDeliveryStateV1::Ready);
         assert!(signing.signed_transaction_bytes.is_none());
     }
-
     #[test]
     fn finalized_absence_deadletters_exact_bytes_atomically_across_restart() {
         let dir = TempDir::new().unwrap();
@@ -2976,7 +2808,6 @@ mod tests {
             .mark_finalized_absent(operation, cursor(2, 2))
             .unwrap();
         drop(forwarder);
-
         let restored = RepairTransactionForwarder::open(dir.path(), bounded).unwrap();
         assert!(restored.pending(8).unwrap().is_empty());
         let dead = restored.dead_letters(8).unwrap();
@@ -2995,7 +2826,6 @@ mod tests {
             Some(bytes.as_slice())
         );
     }
-
     #[test]
     fn deadletter_capacity_failure_keeps_pending_exact_bytes() {
         let mut bounded = policy();
@@ -3036,7 +2866,6 @@ mod tests {
             Some(second_bytes.as_slice())
         );
     }
-
     #[test]
     fn bounded_preflight_rejects_oversized_transaction_and_corrupt_checkpoint() {
         let forwarder = RepairTransactionForwarder::in_memory(policy()).unwrap();
@@ -3046,7 +2875,6 @@ mod tests {
             Err(RepairTransactionForwarderError::InvalidSignedTransaction)
         ));
         assert!(forwarder.pending(8).unwrap().is_empty());
-
         let compressed_transaction = {
             let signer = key(10);
             let instruction = submit_instruction(&signer, [0x71; 32], "REP-COMPRESSED-TX");
@@ -3068,7 +2896,6 @@ mod tests {
             forwarder.enqueue_signed_transaction(&compressed_transaction, &context(1, 1)),
             Err(RepairTransactionForwarderError::InvalidSignedTransaction)
         ));
-
         let dir = TempDir::new().unwrap();
         write_private_checkpoint(
             &dir.path()
@@ -3080,7 +2907,6 @@ mod tests {
             Err(RepairTransactionForwarderError::InvalidCheckpoint)
         ));
     }
-
     #[test]
     fn replacement_rejects_semantic_substitution_and_preserves_new_exact_bytes() {
         let signer = key(11);
@@ -3095,7 +2921,6 @@ mod tests {
             .mark_transaction_rejected(operation, cursor(2, 2))
             .unwrap();
         forwarder.claim_for_signing(operation).unwrap();
-
         let substituted = signed_repair_bytes(
             &signer,
             ApplySorafsRepairTaskAction::new(
@@ -3113,7 +2938,6 @@ mod tests {
             forwarder.store_signed_transaction(operation, &substituted),
             Err(RepairTransactionForwarderError::InvalidSignedTransaction)
         ));
-
         let replacement =
             signed_repair_bytes(&signer, claim_instruction("REP-REPLACE", 1, "replace"), 3);
         let digest = forwarder
@@ -3122,7 +2946,6 @@ mod tests {
         assert_eq!(digest, transaction_digest(&replacement));
         assert_eq!(forwarder.begin_submission(operation).unwrap(), replacement);
     }
-
     #[test]
     fn finalized_reconciliation_requires_the_exact_active_transaction_digest() {
         let signer = key(12);

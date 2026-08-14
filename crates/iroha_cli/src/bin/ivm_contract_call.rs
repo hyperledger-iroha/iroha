@@ -1,13 +1,11 @@
 //! Submit a deployed IVM contract call as a raw signed transaction.
 #![allow(clippy::too_many_arguments)]
-
 use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
     time::{Duration, Instant},
 };
-
 use clap::Parser;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
@@ -38,9 +36,7 @@ use iroha_torii_shared::FeeQuoteResponse;
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use sorafs_orchestrator::AnonymityPolicy;
 use url::Url;
-
 const DEFAULT_CHAIN_DISCRIMINANT_TAIRA: u16 = 369;
-
 #[derive(Parser, Debug)]
 struct Args {
     #[arg(long)]
@@ -79,7 +75,6 @@ struct Args {
     #[arg(long, default_value_t = 300_000)]
     torii_request_timeout_ms: u64,
 }
-
 fn default_alias_cache_policy() -> AliasCachePolicy {
     AliasCachePolicy::new(
         Duration::from_secs(torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
@@ -92,15 +87,12 @@ fn default_alias_cache_policy() -> AliasCachePolicy {
         Duration::from_secs(torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
     )
 }
-
 fn default_anonymity_policy() -> AnonymityPolicy {
     AnonymityPolicy::parse(DEFAULT_ANONYMITY_POLICY).unwrap_or(AnonymityPolicy::GuardPq)
 }
-
 fn default_rollout_phase() -> SorafsRolloutPhase {
     SorafsRolloutPhase::parse(DEFAULT_ROLLOUT_PHASE).unwrap_or_default()
 }
-
 fn make_client(
     torii_url: &str,
     chain_id: &str,
@@ -137,7 +129,6 @@ fn make_client(
     };
     Ok(Client::new(config))
 }
-
 fn insert_string_metadata(
     metadata: &mut Metadata,
     key: &str,
@@ -146,7 +137,6 @@ fn insert_string_metadata(
     metadata.insert(Name::from_str(key)?, Json::new(value.into()));
     Ok(())
 }
-
 fn insert_gov_manifest_approvers(metadata: &mut Metadata, approvers: &[String]) -> Result<()> {
     let mut accounts = Vec::new();
     for (index, raw) in approvers.iter().enumerate() {
@@ -164,7 +154,6 @@ fn insert_gov_manifest_approvers(metadata: &mut Metadata, approvers: &[String]) 
     }
     Ok(())
 }
-
 fn parse_payload(payload_json: Option<&str>, payload_file: Option<&Path>) -> Result<Option<Json>> {
     match (payload_json, payload_file) {
         (Some(raw), None) => norito::json::from_str::<norito::json::Value>(raw)
@@ -185,7 +174,6 @@ fn parse_payload(payload_json: Option<&str>, payload_file: Option<&Path>) -> Res
         )),
     }
 }
-
 fn resolve_contract_target(
     client: &Client,
     contract_address: Option<&str>,
@@ -241,7 +229,6 @@ fn resolve_contract_target(
         )),
     }
 }
-
 fn contract_call_metadata(
     contract_address: &ContractAddress,
     expected_code_hash: &Hash,
@@ -267,7 +254,6 @@ fn contract_call_metadata(
     insert_gov_manifest_approvers(&mut metadata, gov_manifest_approvers)?;
     Ok(metadata)
 }
-
 fn contract_call_executable(
     contract_address: ContractAddress,
     expected_code_hash: Hash,
@@ -285,7 +271,6 @@ fn contract_call_executable(
         arguments,
     }))
 }
-
 fn encode_contract_arguments(
     client: &Client,
     contract_address: &ContractAddress,
@@ -320,7 +305,6 @@ fn encode_contract_arguments(
                 .find(|candidate| candidate.name == entrypoint)
         })
         .ok_or_else(|| eyre!("deployed contract has no entrypoint `{entrypoint}`"))?;
-
     let arguments = match (descriptor.argument_schema.as_ref(), payload) {
         (None, None) => None,
         (None, Some(_)) => Err(eyre!(
@@ -335,12 +319,10 @@ fn encode_contract_arguments(
     };
     Ok((expected_code_hash, arguments))
 }
-
 fn payload_digest_hex(payload: Option<&Json>) -> String {
     let payload_json = payload.map_or("", |payload| payload.get().as_str());
     hex::encode(blake3::hash(payload_json.as_bytes()).as_bytes())
 }
-
 fn load_fee_payment(path: &Path) -> Result<FeePaymentIntent> {
     let bytes = fs::read(path).wrap_err_with(|| format!("read {}", path.display()))?;
     let fee_payment: FeePaymentIntent =
@@ -352,7 +334,6 @@ fn load_fee_payment(path: &Path) -> Result<FeePaymentIntent> {
         .wrap_err("contract calls require a signature-bound gas limit from `/v1/fees/quote`")?;
     Ok(fee_payment)
 }
-
 fn quote_and_sign_contract_call(
     client: &Client,
     executable: Executable,
@@ -378,11 +359,9 @@ fn quote_and_sign_contract_call(
         iroha::data_model::transaction::require_transaction_gas_limit(&fee_quote.intent)?;
     Ok((transaction, fee_quote, gas_limit))
 }
-
 fn main() -> Result<()> {
     let args = Args::parse();
     let fee_payment = load_fee_payment(&args.fee_payment_json)?;
-
     let authority = parse_account_address(&args.authority, Some(args.chain_discriminant))
         .wrap_err("failed to parse --authority as canonical account address")?
         .address
@@ -437,7 +416,6 @@ fn main() -> Result<()> {
     let tx_hash = tx.hash();
     let entrypoint_hash = tx.hash_as_entrypoint();
     client.submit_transaction_blocking(&tx)?;
-
     let operation_receipt = norito::json!({
         "operation_kind": ("contract_call"),
         "status": ("committed"),
@@ -477,11 +455,9 @@ fn main() -> Result<()> {
     println!("{}", norito::json::to_json_pretty(&result)?);
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn payload_digest_hex_hashes_empty_payload_when_absent() {
         assert_eq!(
@@ -489,17 +465,14 @@ mod tests {
             hex::encode(blake3::hash(b"").as_bytes())
         );
     }
-
     #[test]
     fn payload_digest_hex_hashes_json_payload_contents() {
         let payload = Json::new(norito::json!({"action": "call"}));
-
         assert_eq!(
             payload_digest_hex(Some(&payload)),
             hex::encode(blake3::hash(payload.get().as_bytes()).as_bytes())
         );
     }
-
     #[test]
     fn contract_call_metadata_never_duplicates_the_argument_record_as_json() {
         let address: ContractAddress =
@@ -510,7 +483,6 @@ mod tests {
         let expected_code_hash_literal = expected_code_hash.to_string();
         let metadata = contract_call_metadata(&address, &expected_code_hash, None, "submit", &[])
             .expect("contract call metadata");
-
         assert!(metadata.get("contract_payload").is_none());
         assert_eq!(
             metadata

@@ -1,12 +1,9 @@
 //! Fail-closed declaration, type, and call resolution for spanned Kotodama AST.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
-
 use iroha_primitives::bigint::BigInt;
-
 use crate::{
     ast::{
         Block, Expr, FunctionKind, HirId, Item, Pattern, PatternBinding, Program, Statement,
@@ -20,19 +17,15 @@ use crate::{
         DeclarationKind, NodeId, SpannedProgram, TypeUseFact,
     },
 };
-
 /// Stable identity of one resolved source declaration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SymbolId(u32);
-
 /// Stable identity of a lexical scope in resolved HIR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ScopeId(u32);
-
 /// Stable identity of a parameter or local binding in resolved HIR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BindingId(u32);
-
 /// Declaration role retained by the resolved symbol arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResolvedSymbolKind {
@@ -51,7 +44,6 @@ pub enum ResolvedSymbolKind {
     /// A trigger declaration.
     Trigger,
 }
-
 /// Resolved declaration retained before semantic typing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedSymbol {
@@ -66,7 +58,6 @@ pub struct ResolvedSymbol {
     /// Declaration role.
     pub kind: ResolvedSymbolKind,
 }
-
 /// Lexical binding role retained before type checking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResolvedBindingKind {
@@ -81,7 +72,6 @@ pub enum ResolvedBindingKind {
     /// List-comprehension item declaration.
     Comprehension,
 }
-
 /// One parameter or local declaration with a stable lexical identity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedBinding {
@@ -100,7 +90,6 @@ pub struct ResolvedBinding {
     /// Whether assignment is permitted.
     pub mutable: bool,
 }
-
 /// Target selected for one value-name use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResolvedValueTarget {
@@ -119,7 +108,6 @@ pub enum ResolvedValueTarget {
     /// Constant supplied by an explicitly typed standalone-test target.
     ExternalConst,
 }
-
 /// Target selected for one source type reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResolvedTypeTarget {
@@ -130,7 +118,6 @@ pub enum ResolvedTypeTarget {
     /// Struct supplied by an explicitly typed standalone-test target.
     ExternalStruct,
 }
-
 /// One resolved named type use.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedTypeUse {
@@ -145,7 +132,6 @@ pub struct ResolvedTypeUse {
     /// Bound type declaration.
     pub target: ResolvedTypeTarget,
 }
-
 /// Target selected for one source call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResolvedCallTarget {
@@ -162,7 +148,6 @@ pub enum ResolvedCallTarget {
     /// Explicit import-alias call whose export is bound by the typed linker.
     External,
 }
-
 /// Authoritative target attached to one resolved-HIR node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResolvedTarget {
@@ -179,7 +164,6 @@ pub enum ResolvedTarget {
     /// Simple named assignment target.
     Assignment(ResolvedValueTarget),
 }
-
 /// Coarse resolved-HIR node category.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResolvedNodeKind {
@@ -190,7 +174,6 @@ pub enum ResolvedNodeKind {
     /// Expression.
     Expression,
 }
-
 /// One stable node in the native resolved-HIR arena.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedNode {
@@ -209,7 +192,6 @@ pub struct ResolvedNode {
     /// Bindings declared by this node, in source order.
     pub bindings: Vec<BindingId>,
 }
-
 /// One lexical scope in resolved HIR.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedScope {
@@ -218,7 +200,6 @@ pub struct ResolvedScope {
     /// Enclosing scope, absent for the source-unit root.
     pub parent: Option<ScopeId>,
 }
-
 /// Immutable resolver output consulted by semantic typing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ResolvedArena {
@@ -228,38 +209,31 @@ pub(crate) struct ResolvedArena {
     bindings: Vec<ResolvedBinding>,
     symbols: Vec<ResolvedSymbol>,
 }
-
 impl ResolvedArena {
     pub(crate) const fn source(&self) -> crate::source::SourceId {
         self.source
     }
-
     pub(crate) fn node(&self, id: HirId) -> Option<&ResolvedNode> {
         self.nodes
             .get(usize::try_from(id.0).ok()?)
             .filter(|node| node.id == id)
     }
-
     pub(crate) fn binding(&self, id: BindingId) -> Option<&ResolvedBinding> {
         self.bindings
             .get(usize::try_from(id.0).ok()?)
             .filter(|binding| binding.id == id)
     }
-
     pub(crate) fn nodes(&self) -> impl ExactSizeIterator<Item = &ResolvedNode> {
         self.nodes.iter()
     }
-
     pub(crate) fn bindings(&self) -> impl ExactSizeIterator<Item = &ResolvedBinding> {
         self.bindings.iter()
     }
-
     pub(crate) fn symbol(&self, id: SymbolId) -> Option<&ResolvedSymbol> {
         self.symbols
             .get(usize::try_from(id.0).ok()?)
             .filter(|symbol| symbol.id == id)
     }
-
     pub(crate) fn binding_visible_at(&self, binding: BindingId, node: HirId) -> bool {
         let Some(binding) = self.binding(binding) else {
             return false;
@@ -284,7 +258,6 @@ impl ResolvedArena {
         false
     }
 }
-
 /// One resolved source call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedCall {
@@ -303,7 +276,6 @@ pub struct ResolvedCall {
     /// Bound call target.
     pub target: ResolvedCallTarget,
 }
-
 /// Distinct resolved HIR consumed by canonical semantic typing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedProgram {
@@ -315,56 +287,46 @@ pub struct ResolvedProgram {
     calls: Vec<ResolvedCall>,
     arena: Arc<ResolvedArena>,
 }
-
 impl ResolvedProgram {
     /// Return the source AST after fail-closed resolution.
     #[must_use]
     pub const fn program(&self) -> &Program {
         &self.program
     }
-
     /// Return the stable source-node arena.
     #[must_use]
     pub const fn source_map(&self) -> &AstSourceMap {
         &self.facts.source_map
     }
-
     /// Return the immutable target/scope/binding arena required by typing.
     pub(crate) fn arena(&self) -> Arc<ResolvedArena> {
         Arc::clone(&self.arena)
     }
-
     /// Return resolved declarations.
     pub fn symbols(&self) -> impl ExactSizeIterator<Item = &ResolvedSymbol> {
         self.symbols.iter()
     }
-
     /// Return resolved named type uses.
     pub fn types(&self) -> impl ExactSizeIterator<Item = &ResolvedTypeUse> {
         self.types.iter()
     }
-
     /// Return resolved source calls.
     pub fn calls(&self) -> impl ExactSizeIterator<Item = &ResolvedCall> {
         self.calls.iter()
     }
-
     /// Return the immutable source file that owns every resolver-produced range.
     pub(crate) const fn source_file(&self) -> &SourceFile {
         &self.source_file
     }
-
     /// Convert one resolver-owned source range into the canonical diagnostic span.
     pub(crate) fn source_span(&self, range: SourceRange) -> Option<SourceSpan> {
         (range.source == self.source_file.id())
             .then(|| SourceSpan::from_range(&self.source_file, range.range))
     }
-
     /// Return stable parameter/local bindings in resolver allocation order.
     pub fn bindings(&self) -> impl ExactSizeIterator<Item = &ResolvedBinding> {
         self.arena.bindings()
     }
-
     /// Return the exact declared parameter-name range for one source function.
     pub(crate) fn parameter_name_source(
         &self,
@@ -387,7 +349,6 @@ impl ResolvedProgram {
             })
             .and_then(|fact| self.facts.source_map.source_range(fact.name_node))
     }
-
     /// Return the exact lifecycle-name range for the source `hajimari` declaration.
     pub(crate) fn hajimari_name_source(&self) -> Option<SourceRange> {
         let name = self.program.items.iter().find_map(|item| {
@@ -402,7 +363,6 @@ impl ResolvedProgram {
             .find(|fact| fact.kind == DeclarationKind::Function && &fact.name == name)
             .and_then(|fact| self.facts.source_map.source_range(fact.name_node))
     }
-
     /// Return the exact `state` keyword range of the first scalar state declaration.
     pub(crate) fn first_scalar_state_keyword_source(&self) -> Option<SourceRange> {
         let name = self.program.items.iter().find_map(|item| {
@@ -426,13 +386,11 @@ impl ResolvedProgram {
         (keyword.end <= declaration.range.end && self.source_file.slice(keyword) == Some("state"))
             .then_some(SourceRange::new(declaration.source, keyword))
     }
-
     pub(crate) fn into_program(self) -> Program {
         let mut program = self.program;
         crate::ast::strip_program_provenance(&mut program);
         program
     }
-
     pub(crate) fn attach_sources(&self, typed: &mut crate::semantic::TypedProgram) {
         typed
             .source_files
@@ -465,7 +423,6 @@ impl ResolvedProgram {
                 .and_then(|fact| self.facts.source_map.source_range(fact.node));
         }
     }
-
     pub(crate) fn span_for_location(
         &self,
         source: &SourceFile,
@@ -487,11 +444,9 @@ impl ResolvedProgram {
             })
     }
 }
-
 fn symbol_id(index: usize) -> SymbolId {
     SymbolId(u32::try_from(index).expect("symbol budget fits u32"))
 }
-
 fn symbol_kind(kind: DeclarationKind) -> Option<ResolvedSymbolKind> {
     Some(match kind {
         DeclarationKind::SourceUnit => ResolvedSymbolKind::SourceUnit,
@@ -504,7 +459,6 @@ fn symbol_kind(kind: DeclarationKind) -> Option<ResolvedSymbolKind> {
         DeclarationKind::Parameter => return None,
     })
 }
-
 fn declaration_span(
     ast: &SpannedProgram,
     source: &SourceFile,
@@ -512,7 +466,6 @@ fn declaration_span(
 ) -> Option<SourceSpan> {
     ast.facts.source_map.source_span(source, fact.name_node)
 }
-
 fn duplicate_diagnostic(
     ast: &SpannedProgram,
     source: &SourceFile,
@@ -537,17 +490,14 @@ fn duplicate_diagnostic(
     }
     diagnostic
 }
-
 fn builtin_type(name: &str) -> bool {
     crate::semantic::V1_SOURCE_TYPE_NAMES.contains(&name)
 }
-
 fn explicit_import_call(name: &str) -> bool {
     name.split_once("::").is_some_and(|(alias, symbol)| {
         !alias.is_empty() && !symbol.is_empty() && !symbol.contains("::")
     })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -556,7 +506,6 @@ mod tests {
         source::{FrontendBudget, SourceId},
         spanned_ast::AstNodeKind,
     };
-
     fn primary_spellings(source: &SourceFile, diagnostics: &DiagnosticBundle) -> Vec<String> {
         diagnostics
             .diagnostics
@@ -575,7 +524,6 @@ mod tests {
             })
             .collect()
     }
-
     #[test]
     fn import_call_shape_accepts_exactly_two_identifier_segments() {
         for accepted in ["math::add", "math_v1::add_2"] {
@@ -585,7 +533,6 @@ mod tests {
             assert!(!explicit_import_call(rejected), "{rejected}");
         }
     }
-
     #[test]
     fn identical_spellings_keep_distinct_cst_ranges() {
         let text = r#"
@@ -602,7 +549,6 @@ seiyaku Same {
         let (ast, _) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())
             .expect("the adversarial source is syntactically valid");
         assert_eq!(ast.facts.source_map.source(), SourceId(37));
-
         let diagnostics = resolve(ast, &source).expect_err("resolution must fail closed");
         assert_eq!(
             primary_spellings(&source, &diagnostics),
@@ -610,7 +556,6 @@ seiyaku Same {
                 "Missing", "Missing", "Missing", "first", "absent", "absent", "repeated"
             ]
         );
-
         let missing_ranges = diagnostics
             .diagnostics
             .iter()
@@ -629,7 +574,6 @@ seiyaku Same {
                 .windows(2)
                 .all(|ranges| ranges[0] < ranges[1])
         );
-
         let absent_ranges = diagnostics
             .diagnostics
             .iter()
@@ -645,7 +589,6 @@ seiyaku Same {
         assert_eq!(absent_ranges.len(), 2);
         assert_ne!(absent_ranges[0], absent_ranges[1]);
     }
-
     #[test]
     fn diagnostic_targets_bind_to_exact_nested_source_nodes() {
         let text = r#"
@@ -664,7 +607,6 @@ module Origins {
         let Item::Function(function) = &ast.program.items[0] else {
             panic!("function item")
         };
-
         let Statement::AssignExpr { target, .. } = function.body.statements[0].kind() else {
             panic!("indexed assignment")
         };
@@ -708,7 +650,6 @@ module Origins {
             .node(receiver_id)
             .expect("lvalue receiver node");
         assert_eq!(source.slice(receiver_node.range), Some("values"));
-
         let Statement::Let {
             value: read_index, ..
         } = function.body.statements[1].kind()
@@ -742,7 +683,6 @@ module Origins {
             )
             .expect("read receiver node");
         assert_eq!(source.slice(read_receiver_node.range), Some("values"));
-
         let Statement::Let { value: amount, .. } = function.body.statements[2].kind() else {
             panic!("quantity binding")
         };
@@ -752,7 +692,6 @@ module Origins {
         let amount_node = ast.facts.source_map.node(amount_id).expect("quantity node");
         assert_eq!(amount_node.kind, AstNodeKind::DecimalLiteral);
         assert_eq!(source.slice(amount_node.range), Some("1.250_0"));
-
         let Statement::Let {
             value: comprehension,
             ..
@@ -774,7 +713,6 @@ module Origins {
             Some("[item for item in values if true]")
         );
     }
-
     #[test]
     fn successful_resolution_retains_declarations_types_and_calls() {
         let text = r#"
@@ -790,7 +728,6 @@ module Origins {
         let (ast, _) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())
             .expect("Japanese declaration spellings parse");
         let resolved = resolve(ast, &source).expect("all named references resolve");
-
         assert_eq!(resolved.source_map().source(), SourceId(9));
         assert!(resolved.symbols().any(|symbol| symbol.name == "helper"));
         assert!(resolved.types().all(|ty| ty.name == "int"));
@@ -802,7 +739,6 @@ module Origins {
             .expect("parameter name source");
         assert_eq!(source.slice(parameter.range), Some("value"));
     }
-
     #[test]
     fn parser_binding_facts_have_direct_owners_and_exact_utf8_ranges() {
         let text = r#"
@@ -824,7 +760,6 @@ module Origins {
         let source = SourceFile::new(SourceId(75), "utf8-binding-facts.ko", text);
         let (ast, _) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())
             .expect("adversarial repeated-name source parses");
-
         let mut owner_ordinals = BTreeSet::new();
         let mut name_nodes = BTreeSet::new();
         let mut repeated_ranges = Vec::new();
@@ -866,7 +801,6 @@ module Origins {
                 }
             }
         }
-
         assert_eq!(repeated_ranges.len(), 5);
         repeated_ranges.sort_unstable();
         assert!(
@@ -883,7 +817,6 @@ module Origins {
             "the fixture must exercise UTF-8 byte offsets, not ASCII-only offsets"
         );
     }
-
     #[test]
     fn parenthesized_if_let_keeps_its_direct_binding_owner_when_becoming_a_statement() {
         let text = r#"
@@ -917,7 +850,6 @@ module Parenthesized {
         assert_eq!(source.slice(name.range), Some("payload"));
         resolve(ast, &source).expect("direct binding owner survives statement conversion");
     }
-
     fn binding_fact_fixture() -> (SourceFile, SpannedProgram) {
         let text = r#"
 誓約 BindingIntegrity {
@@ -935,7 +867,6 @@ module Parenthesized {
             .expect("binding-integrity fixture parses");
         (source, ast)
     }
-
     fn assert_binding_fact_corruption_fails(source: &SourceFile, ast: SpannedProgram) {
         let diagnostics = resolve(ast, source).expect_err("corrupt binding facts must fail closed");
         assert!(
@@ -946,44 +877,35 @@ module Parenthesized {
             "unexpected diagnostics: {diagnostics:?}"
         );
     }
-
     #[test]
     fn resolver_rejects_missing_duplicate_and_mismatched_binding_facts() {
         let (source, original) = binding_fact_fixture();
         resolve(original.clone(), &source).expect("uncorrupted binding facts resolve");
         assert!(original.facts.bindings.len() >= 5);
-
         let mut missing = original.clone();
         missing.facts.bindings.remove(0);
         assert_binding_fact_corruption_fails(&source, missing);
-
         let mut duplicate = original.clone();
         duplicate
             .facts
             .bindings
             .push(duplicate.facts.bindings[0].clone());
         assert_binding_fact_corruption_fails(&source, duplicate);
-
         let mut wrong_owner = original.clone();
         wrong_owner.facts.bindings[0].owner = wrong_owner.facts.declarations[0].node;
         assert_binding_fact_corruption_fails(&source, wrong_owner);
-
         let mut wrong_ordinal = original.clone();
         wrong_ordinal.facts.bindings[0].ordinal = u16::MAX;
         assert_binding_fact_corruption_fails(&source, wrong_ordinal);
-
         let mut wrong_role = original.clone();
         wrong_role.facts.bindings[0].kind = BindingFactKind::Iterator;
         assert_binding_fact_corruption_fails(&source, wrong_role);
-
         let mut wrong_spelling = original.clone();
         wrong_spelling.facts.bindings[0].name = "forged".to_owned();
         assert_binding_fact_corruption_fails(&source, wrong_spelling);
-
         let mut wrong_name_node = original.clone();
         wrong_name_node.facts.bindings[0].name_node = wrong_name_node.facts.bindings[0].owner;
         assert_binding_fact_corruption_fails(&source, wrong_name_node);
-
         let mut reused_name_node = original;
         let payload_indices = reused_name_node
             .facts
@@ -997,7 +919,6 @@ module Parenthesized {
             reused_name_node.facts.bindings[payload_indices[0]].name_node;
         assert_binding_fact_corruption_fails(&source, reused_name_node);
     }
-
     #[test]
     fn resolver_rejects_mismatched_source_identity_even_for_an_empty_module() {
         let parsed_source = SourceFile::new(SourceId(78), "empty.ko", "module Empty {}");
@@ -1009,7 +930,6 @@ module Parenthesized {
         assert_eq!(diagnostics.diagnostics.len(), 1);
         assert_eq!(diagnostics.diagnostics[0].code, "K2099");
     }
-
     #[test]
     fn shadowing_diagnostic_labels_both_exact_names_after_utf8_prefix() {
         let text = "誓約 Shadow { fn run(int value) { /* 雪 */ let int value = 1; } }";
@@ -1043,7 +963,6 @@ module Parenthesized {
             text.find("value").expect("parameter name byte offset")
         );
     }
-
     #[test]
     fn state_and_lifecycle_diagnostic_ranges_come_from_resolved_nodes() {
         let text = r#"
@@ -1057,7 +976,6 @@ seiyaku Init {
         let (ast, _) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())
             .expect("state source parses");
         let resolved = resolve(ast, &source).expect("state source resolves");
-
         let state = resolved
             .first_scalar_state_keyword_source()
             .expect("scalar state keyword source");
@@ -1067,7 +985,6 @@ seiyaku Init {
             .expect("hajimari name source");
         assert_eq!(source.slice(lifecycle.range), Some("始まり"));
     }
-
     fn resolved_local_program() -> (SourceFile, ResolvedProgram) {
         let text = r#"
 seiyaku Stable {
@@ -1086,7 +1003,6 @@ seiyaku Stable {
         let resolved = resolve(ast, &source).expect("stable local source resolves");
         (source, resolved)
     }
-
     fn helper_return(program: &mut ResolvedProgram) -> &mut Expr {
         let Item::Function(function) = &mut program.program.items[0] else {
             panic!("helper function")
@@ -1099,7 +1015,6 @@ seiyaku Stable {
         };
         expression
     }
-
     fn helper_statement(program: &mut ResolvedProgram, index: usize) -> &mut Statement {
         let Item::Function(function) = &mut program.program.items[0] else {
             panic!("helper function")
@@ -1110,7 +1025,6 @@ seiyaku Stable {
             .get_mut(index)
             .expect("helper statement index")
     }
-
     fn assert_internal_resolution_failure(program: &ResolvedProgram) {
         let failures = crate::semantic::SemanticContext::new()
             .analyze_resolved(program)
@@ -1123,7 +1037,6 @@ seiyaku Stable {
             "unexpected failures: {failures:?}"
         );
     }
-
     #[test]
     fn resolved_bindings_and_targets_survive_clone_and_move() {
         let (_source, resolved) = resolved_local_program();
@@ -1142,21 +1055,18 @@ seiyaku Stable {
             .expect("moved resolved HIR types without pointer rebinding");
         assert!(!typed.hir_nodes.is_empty());
     }
-
     #[test]
     fn semantic_rejects_corrupted_hir_id_kind_source_and_target() {
         let (_source, resolved) = resolved_local_program();
         let original_id = helper_return(&mut resolved.clone())
             .hir_id()
             .expect("return value HIR id");
-
         let mut missing_id = resolved.clone();
         let Expr::Resolved { id, .. } = helper_return(&mut missing_id) else {
             panic!("resolved expression")
         };
         *id = HirId(u32::MAX);
         assert_internal_resolution_failure(&missing_id);
-
         let mut wrong_kind = resolved.clone();
         Arc::make_mut(&mut wrong_kind.arena)
             .nodes
@@ -1164,7 +1074,6 @@ seiyaku Stable {
             .expect("return node")
             .kind = ResolvedNodeKind::Statement;
         assert_internal_resolution_failure(&wrong_kind);
-
         let mut wrong_source = resolved.clone();
         let Expr::Resolved { source, .. } = helper_return(&mut wrong_source) else {
             panic!("resolved expression")
@@ -1172,7 +1081,6 @@ seiyaku Stable {
         let range = source.as_mut().expect("source-backed return value");
         range.range.end = range.range.end.saturating_sub(1);
         assert_internal_resolution_failure(&wrong_source);
-
         let mut missing_target = resolved.clone();
         Arc::make_mut(&mut missing_target.arena)
             .nodes
@@ -1180,7 +1088,6 @@ seiyaku Stable {
             .expect("return node")
             .target = None;
         assert_internal_resolution_failure(&missing_target);
-
         let mut wrong_target = resolved;
         Arc::make_mut(&mut wrong_target.arena)
             .nodes
@@ -1189,11 +1096,9 @@ seiyaku Stable {
             .target = Some(ResolvedTarget::Call(ResolvedCallTarget::Intrinsic));
         assert_internal_resolution_failure(&wrong_target);
     }
-
     #[test]
     fn semantic_rejects_missing_or_corrupted_statement_hir_wrappers() {
         let (_source, resolved) = resolved_local_program();
-
         let mut missing_return = resolved.clone();
         let current = std::mem::replace(helper_statement(&mut missing_return, 1), Statement::Break);
         let Statement::Resolved { statement, .. } = current else {
@@ -1201,7 +1106,6 @@ seiyaku Stable {
         };
         *helper_statement(&mut missing_return, 1) = *statement;
         assert_internal_resolution_failure(&missing_return);
-
         let mut missing_let = resolved.clone();
         let current = std::mem::replace(helper_statement(&mut missing_let, 0), Statement::Break);
         let Statement::Resolved { statement, .. } = current else {
@@ -1209,14 +1113,12 @@ seiyaku Stable {
         };
         *helper_statement(&mut missing_let, 0) = *statement;
         assert_internal_resolution_failure(&missing_let);
-
         let mut wrong_id = resolved.clone();
         let Statement::Resolved { id, .. } = helper_statement(&mut wrong_id, 0) else {
             panic!("resolved let statement")
         };
         *id = HirId(u32::MAX);
         assert_internal_resolution_failure(&wrong_id);
-
         let let_id = helper_statement(&mut resolved.clone(), 0)
             .hir_id()
             .expect("let HIR id");
@@ -1227,7 +1129,6 @@ seiyaku Stable {
             .expect("let arena node")
             .kind = ResolvedNodeKind::Expression;
         assert_internal_resolution_failure(&wrong_kind);
-
         let mut wrong_source = resolved;
         let Statement::Resolved { source, .. } = helper_statement(&mut wrong_source, 0) else {
             panic!("resolved let statement")
@@ -1236,7 +1137,6 @@ seiyaku Stable {
         range.range.end = range.range.end.saturating_sub(1);
         assert_internal_resolution_failure(&wrong_source);
     }
-
     fn resolved_type_program() -> (SourceFile, ResolvedProgram) {
         let text = r#"
 module ResolvedTypes {
@@ -1249,7 +1149,6 @@ module ResolvedTypes {
         let resolved = resolve(ast, &source).expect("resolved type fixture resolves");
         (source, resolved)
     }
-
     fn parameter_type(program: &mut ResolvedProgram, index: usize) -> &mut TypeExpr {
         let Item::Function(function) = &mut program.program.items[0] else {
             panic!("type fixture function")
@@ -1259,7 +1158,6 @@ module ResolvedTypes {
             .as_mut()
             .expect("typed parameter annotation")
     }
-
     fn list_capacity_type(program: &mut ResolvedProgram) -> &mut TypeExpr {
         let TypeExpr::Resolved { ty, .. } = parameter_type(program, 1) else {
             panic!("resolved List type")
@@ -1269,11 +1167,9 @@ module ResolvedTypes {
         };
         &mut args[1]
     }
-
     #[test]
     fn semantic_rejects_missing_or_corrupted_tuple_and_const_type_wrappers() {
         let (_source, resolved) = resolved_type_program();
-
         let mut missing_tuple = resolved.clone();
         let current = std::mem::replace(parameter_type(&mut missing_tuple, 0), TypeExpr::Const(0));
         let TypeExpr::Resolved { ty, .. } = current else {
@@ -1281,14 +1177,12 @@ module ResolvedTypes {
         };
         *parameter_type(&mut missing_tuple, 0) = *ty;
         assert_internal_resolution_failure(&missing_tuple);
-
         let mut wrong_tuple_id = resolved.clone();
         let TypeExpr::Resolved { id, .. } = parameter_type(&mut wrong_tuple_id, 0) else {
             panic!("resolved tuple type")
         };
         *id = HirId(u32::MAX);
         assert_internal_resolution_failure(&wrong_tuple_id);
-
         let tuple_id = parameter_type(&mut resolved.clone(), 0)
             .hir_id()
             .expect("tuple HIR id");
@@ -1299,7 +1193,6 @@ module ResolvedTypes {
             .expect("tuple arena node")
             .kind = ResolvedNodeKind::Expression;
         assert_internal_resolution_failure(&wrong_tuple_kind);
-
         let mut wrong_tuple_source = resolved.clone();
         let TypeExpr::Resolved { source, .. } = parameter_type(&mut wrong_tuple_source, 0) else {
             panic!("resolved tuple type")
@@ -1307,7 +1200,6 @@ module ResolvedTypes {
         let range = source.as_mut().expect("source-backed tuple type");
         range.range.end = range.range.end.saturating_sub(1);
         assert_internal_resolution_failure(&wrong_tuple_source);
-
         let mut missing_const = resolved.clone();
         let current = std::mem::replace(list_capacity_type(&mut missing_const), TypeExpr::Const(0));
         let TypeExpr::Resolved { ty, .. } = current else {
@@ -1315,14 +1207,12 @@ module ResolvedTypes {
         };
         *list_capacity_type(&mut missing_const) = *ty;
         assert_internal_resolution_failure(&missing_const);
-
         let mut wrong_const_id = resolved.clone();
         let TypeExpr::Resolved { id, .. } = list_capacity_type(&mut wrong_const_id) else {
             panic!("resolved List capacity")
         };
         *id = HirId(u32::MAX);
         assert_internal_resolution_failure(&wrong_const_id);
-
         let const_id = list_capacity_type(&mut resolved.clone())
             .hir_id()
             .expect("capacity HIR id");
@@ -1333,7 +1223,6 @@ module ResolvedTypes {
             .expect("capacity arena node")
             .kind = ResolvedNodeKind::Statement;
         assert_internal_resolution_failure(&wrong_const_kind);
-
         let mut wrong_const_source = resolved;
         let TypeExpr::Resolved { source, .. } = list_capacity_type(&mut wrong_const_source) else {
             panic!("resolved List capacity")
@@ -1342,7 +1231,6 @@ module ResolvedTypes {
         range.range.end = range.range.end.saturating_sub(1);
         assert_internal_resolution_failure(&wrong_const_source);
     }
-
     #[test]
     fn resolver_reports_shadowing_and_multiple_unknown_values_with_locations() {
         let text = r#"
@@ -1375,7 +1263,6 @@ module BadLocals {
                 .is_some()
         }));
     }
-
     #[test]
     fn only_canonical_numeric_conversions_are_resolver_intrinsics() {
         for canonical in [
@@ -1397,7 +1284,6 @@ module BadLocals {
         }
     }
 }
-
 fn intrinsic_call(name: &str) -> bool {
     matches!(
         name,
@@ -1410,7 +1296,6 @@ fn intrinsic_call(name: &str) -> bool {
             | "decimal::from_quantity"
     )
 }
-
 fn resolve_type(
     ast: &SpannedProgram,
     source: &SourceFile,
@@ -1444,7 +1329,6 @@ fn resolve_type(
         target,
     })
 }
-
 #[derive(Clone)]
 struct GlobalTargets {
     all: BTreeMap<String, SymbolId>,
@@ -1460,7 +1344,6 @@ struct GlobalTargets {
     external_consts: BTreeSet<String>,
     external_error_codes: BTreeMap<String, u32>,
 }
-
 struct HirLowerer<'a> {
     source: &'a SourceFile,
     source_map: &'a AstSourceMap,
@@ -1472,13 +1355,11 @@ struct HirLowerer<'a> {
     arena: ResolvedArena,
     diagnostics: Vec<Diagnostic>,
 }
-
 #[derive(Clone, Copy)]
 struct BindingProperties {
     kind: ResolvedBindingKind,
     mutable: bool,
 }
-
 impl<'a> HirLowerer<'a> {
     fn new(
         source: &'a SourceFile,
@@ -1518,13 +1399,11 @@ impl<'a> HirLowerer<'a> {
             diagnostics: Vec::new(),
         }
     }
-
     fn source_span(&self, source: Option<SourceRange>) -> Option<SourceSpan> {
         source
             .filter(|range| range.source == self.source.id())
             .map(|range| SourceSpan::from_range(self.source, range.range))
     }
-
     fn validate_source_node(
         &mut self,
         node: NodeId,
@@ -1548,7 +1427,6 @@ impl<'a> HirLowerer<'a> {
             None
         }
     }
-
     fn new_scope(&mut self, parent: ScopeId) -> ScopeId {
         let id = ScopeId(u32::try_from(self.arena.scopes.len()).expect("scope budget fits u32"));
         self.arena.scopes.push(ResolvedScope {
@@ -1557,7 +1435,6 @@ impl<'a> HirLowerer<'a> {
         });
         id
     }
-
     fn alloc_node(
         &mut self,
         kind: ResolvedNodeKind,
@@ -1577,14 +1454,12 @@ impl<'a> HirLowerer<'a> {
         });
         id
     }
-
     fn node_mut(&mut self, id: HirId) -> &mut ResolvedNode {
         self.arena
             .nodes
             .get_mut(usize::try_from(id.0).expect("HIR id fits usize"))
             .expect("newly allocated HIR node exists")
     }
-
     fn binding_source_label(&self, binding: BindingId) -> Option<DiagnosticLabel> {
         self.arena
             .binding(binding)
@@ -1595,7 +1470,6 @@ impl<'a> HirLowerer<'a> {
                 message: "previous binding is declared here".to_owned(),
             })
     }
-
     fn binding_fact_kind(kind: ResolvedBindingKind) -> Option<BindingFactKind> {
         match kind {
             ResolvedBindingKind::Parameter => None,
@@ -1605,7 +1479,6 @@ impl<'a> HirLowerer<'a> {
             ResolvedBindingKind::Comprehension => Some(BindingFactKind::Comprehension),
         }
     }
-
     fn consume_binding_fact(
         &mut self,
         owner: Option<NodeId>,
@@ -1701,7 +1574,6 @@ impl<'a> HirLowerer<'a> {
         }
         (Some(fact.name_node), name_source)
     }
-
     fn diagnose_unconsumed_binding_facts(&mut self) {
         for facts in self.binding_facts.values() {
             for fact in facts {
@@ -1722,7 +1594,6 @@ impl<'a> HirLowerer<'a> {
             }
         }
     }
-
     fn declare_binding(
         &mut self,
         scope: ScopeId,
@@ -1783,7 +1654,6 @@ impl<'a> HirLowerer<'a> {
         });
         id
     }
-
     fn value_target(
         &mut self,
         name: &str,
@@ -1820,7 +1690,6 @@ impl<'a> HirLowerer<'a> {
         }
         target
     }
-
     fn type_target(
         &mut self,
         name: &str,
@@ -1838,7 +1707,6 @@ impl<'a> HirLowerer<'a> {
                 .map(ResolvedTypeTarget::Struct)
         }
     }
-
     fn call_target(
         &mut self,
         name: &str,
@@ -1863,7 +1731,6 @@ impl<'a> HirLowerer<'a> {
             None
         }
     }
-
     fn wrap_type(&mut self, ty: TypeExpr, scope: ScopeId) -> TypeExpr {
         let mut ty = ty;
         let mut source_node = None;
@@ -1929,7 +1796,6 @@ impl<'a> HirLowerer<'a> {
             ty: Box::new(ty),
         }
     }
-
     fn declare_pattern(
         &mut self,
         pattern: &Pattern,
@@ -1960,7 +1826,6 @@ impl<'a> HirLowerer<'a> {
             })
             .collect()
     }
-
     fn declare_sum_pattern(
         &mut self,
         pattern: &SumPattern,
@@ -1989,7 +1854,6 @@ impl<'a> HirLowerer<'a> {
             Some(PatternBinding::Wildcard) | None => Vec::new(),
         }
     }
-
     fn wrap_block(
         &mut self,
         block: &mut Block,
@@ -2004,7 +1868,6 @@ impl<'a> HirLowerer<'a> {
             block.tail = Some(Box::new(self.wrap_expr(*tail, scope, visible)));
         }
     }
-
     fn wrap_child_block(
         &mut self,
         block: &mut Block,
@@ -2015,7 +1878,6 @@ impl<'a> HirLowerer<'a> {
         let mut child_visible = visible.clone();
         self.wrap_block(block, scope, &mut child_visible);
     }
-
     fn wrap_statement(
         &mut self,
         statement: Statement,
@@ -2228,7 +2090,6 @@ impl<'a> HirLowerer<'a> {
             statement: Box::new(statement),
         }
     }
-
     fn wrap_expr(
         &mut self,
         expression: Expr,
@@ -2480,7 +2341,6 @@ impl<'a> HirLowerer<'a> {
             expression: Box::new(expression),
         }
     }
-
     fn lower_program(mut self, mut program: Program) -> (Program, ResolvedArena, Vec<Diagnostic>) {
         let root = ScopeId(0);
         let root_visible = BTreeMap::new();
@@ -2555,12 +2415,10 @@ impl<'a> HirLowerer<'a> {
                 }
             }
         }
-
         self.diagnose_unconsumed_binding_facts();
         (program, self.arena, self.diagnostics)
     }
 }
-
 /// Resolve one CST-derived spanned AST into named HIR.
 pub(crate) fn resolve(
     ast: SpannedProgram,
@@ -2569,7 +2427,6 @@ pub(crate) fn resolve(
     let external = ExternalResolutionEnvironment::default();
     resolve_with_imports_and_externals(ast, source, false, &external)
 }
-
 /// Resolve a module source while retaining import-shaped calls for the typed linker.
 pub(crate) fn resolve_with_imports(
     ast: SpannedProgram,
@@ -2582,7 +2439,6 @@ pub(crate) fn resolve_with_imports(
     // calls through an undeclared alias, so diagnostics retain the name span.
     resolve_with_imports_and_externals(ast, source, true, &external)
 }
-
 /// Names exported by one typed standalone-test target for fail-closed resolution.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ExternalResolutionEnvironment {
@@ -2592,7 +2448,6 @@ pub(crate) struct ExternalResolutionEnvironment {
     pub(crate) consts: BTreeSet<String>,
     pub(crate) error_codes: BTreeMap<String, u32>,
 }
-
 /// Resolve a standalone test source against its target's typed interface.
 pub(crate) fn resolve_with_external_environment(
     ast: SpannedProgram,
@@ -2601,7 +2456,6 @@ pub(crate) fn resolve_with_external_environment(
 ) -> Result<ResolvedProgram, DiagnosticBundle> {
     resolve_with_imports_and_externals(ast, source, false, external)
 }
-
 fn resolve_with_imports_and_externals(
     ast: SpannedProgram,
     source: &SourceFile,
@@ -2638,7 +2492,6 @@ fn resolve_with_imports_and_externals(
             // as well would emit two diagnostics for the same exact name token.
             continue;
         }
-
         let id = symbol_id(symbols.len());
         let reserved = if fact.kind.is_type_declaration() {
             crate::semantic::is_reserved_source_type_declaration(&fact.name)
@@ -2692,7 +2545,6 @@ fn resolve_with_imports_and_externals(
             kind: symbol_kind(fact.kind).expect("global declaration has a symbol kind"),
         });
     }
-
     let declaration_source = |name: &str, kind: DeclarationKind| {
         ast.facts
             .declarations
@@ -2744,7 +2596,6 @@ fn resolve_with_imports_and_externals(
             Item::Function(_) | Item::Const(_) | Item::State(_) | Item::Trigger(_) => {}
         }
     }
-
     let mut types = Vec::with_capacity(ast.facts.type_uses.len());
     for fact in &ast.facts.type_uses {
         match resolve_type(&ast, source, fact, &structs, &external.structs) {
@@ -2752,7 +2603,6 @@ fn resolve_with_imports_and_externals(
             Err(diagnostic) => diagnostics.push(*diagnostic),
         }
     }
-
     let mut calls = Vec::with_capacity(ast.facts.calls.len());
     for fact in &ast.facts.calls {
         let target = if fact.implicit_receiver {
@@ -2799,7 +2649,6 @@ fn resolve_with_imports_and_externals(
             ));
         }
     }
-
     let mut parameter_sources = BTreeMap::new();
     for item in &ast.program.items {
         let Item::Function(function) = item else {
@@ -2826,7 +2675,6 @@ fn resolve_with_imports_and_externals(
             }
         }
     }
-
     let global_targets = GlobalTargets {
         all: globals
             .iter()
@@ -2855,7 +2703,6 @@ fn resolve_with_imports_and_externals(
     .lower_program(program);
     arena.symbols = symbols.clone();
     diagnostics.extend(lower_diagnostics);
-
     for call in &calls {
         let matching = arena.nodes().filter(|node| {
             node.source == Some(call.source)
@@ -2873,7 +2720,6 @@ fn resolve_with_imports_and_externals(
             ));
         }
     }
-
     if diagnostics.is_empty() {
         Ok(ResolvedProgram {
             program,

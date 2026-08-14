@@ -6,9 +6,7 @@
 //! the exact finalized evidence identity while deliberately omitting the
 //! opaque approval request. After restart, callers must rederive that request
 //! from a fresh completed-row claim and lifecycle-leased bundle verification.
-
 use std::{collections::BTreeSet, fmt, sync::Arc, time::Duration};
-
 use iroha_config::parameters::{
     defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as provider_attestation_journal_defaults,
     is_production_runtime_handle,
@@ -33,7 +31,6 @@ use norito::{
     derive::{NoritoDeserialize, NoritoSerialize},
 };
 use thiserror::Error;
-
 use crate::{
     provider_attestation_clock::{
         MusubiProviderAttestationClockErrorV1, MusubiProviderAttestationClockScopeV1,
@@ -45,7 +42,6 @@ use crate::{
         ProviderIngestFutureV1, ProviderIngestMusubiAttestationApprovalRequestV1,
     },
 };
-
 const APPROVAL_SIGNER_QUALIFICATION_VERSION_V1: u8 = 1;
 const INVENTORY_RUNTIME_QUALIFICATION_VERSION_V1: u8 = 1;
 const JOURNAL_CHECKPOINT_VERSION_V1: u8 = 1;
@@ -69,7 +65,6 @@ pub const MUSUBI_PROVIDER_ATTESTATION_READY_PAGE_MAX_V1: usize = 256;
 /// Hard upper bound for one external signer or inventory operation.
 pub const MUSUBI_PROVIDER_ATTESTATION_EXTERNAL_TIMEOUT_MAX_MS_V1: u64 =
     provider_attestation_journal_defaults::EXTERNAL_TIMEOUT_MAX_MS;
-
 const JOURNAL_CHECKPOINT_MAX_SEQUENCE_LENGTH_V1: usize =
     MUSUBI_PROVIDER_ATTESTATION_JOURNAL_MAX_ENTRIES_V1;
 // Norito charges byte-vector members as elements, including controller keys and
@@ -81,7 +76,6 @@ const JOURNAL_ACTIVE_ENTRY_WRAPPER_MARGIN_BYTES_V1: usize =
     provider_attestation_journal_defaults::ACTIVE_ENTRY_WRAPPER_MARGIN_BYTES_V1;
 const JOURNAL_CHECKPOINT_HEADER_FOOTPRINT_BYTES_V1: usize =
     provider_attestation_journal_defaults::CHECKPOINT_HEADER_FOOTPRINT_BYTES_V1;
-
 const JOURNAL_CHECKPOINT_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     JOURNAL_CHECKPOINT_MAX_SEQUENCE_LENGTH_V1,
     MUSUBI_PROVIDER_ATTESTATION_JOURNAL_CHECKPOINT_MAX_BYTES_V1,
@@ -89,7 +83,6 @@ const JOURNAL_CHECKPOINT_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     MUSUBI_PROVIDER_ATTESTATION_JOURNAL_CHECKPOINT_MAX_BYTES_V1 * 4,
     128,
 );
-
 /// Payload-free public qualification of an approval-only attestation signer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MusubiProviderAttestationSignerQualificationV1 {
@@ -110,7 +103,6 @@ pub struct MusubiProviderAttestationSignerQualificationV1 {
     /// Non-zero digest of the adapter's exact public controller-key configuration.
     pub controller_policy_digest: [u8; 32],
 }
-
 impl MusubiProviderAttestationSignerQualificationV1 {
     /// Construct a first-release approval-only signer qualification.
     #[must_use]
@@ -130,19 +122,16 @@ impl MusubiProviderAttestationSignerQualificationV1 {
             controller_policy_digest,
         }
     }
-
     /// Return the deployment adapter revision fenced across approval.
     #[must_use]
     pub const fn adapter_revision(&self) -> u64 {
         self.adapter_revision
     }
-
     /// Return the independently governed deployment adapter policy digest.
     #[must_use]
     pub const fn adapter_policy_digest(&self) -> [u8; 32] {
         self.adapter_policy_digest
     }
-
     /// Validate bounded schema, revision, policy lineage, and key-set identity.
     ///
     /// # Errors
@@ -160,7 +149,6 @@ impl MusubiProviderAttestationSignerQualificationV1 {
         Ok(())
     }
 }
-
 /// Derive the canonical domain-separated digest of an authority controller.
 ///
 /// Signer adapters place this digest in their qualification so the coordinator
@@ -181,7 +169,6 @@ pub fn musubi_provider_attestation_controller_policy_digest_v1(
     }
     Ok(digest)
 }
-
 /// Invalid public binding exposed by an approval-only provider signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MusubiProviderAttestationSignerBindingErrorV1 {
@@ -192,7 +179,6 @@ pub enum MusubiProviderAttestationSignerBindingErrorV1 {
     #[error("Musubi provider-attestation signer qualification is invalid")]
     InvalidQualification,
 }
-
 /// Bounded failure returned by an isolated approval-only signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MusubiProviderAttestationSignerErrorV1 {
@@ -203,7 +189,6 @@ pub enum MusubiProviderAttestationSignerErrorV1 {
     #[error("Musubi provider-attestation request was rejected")]
     Rejected,
 }
-
 /// Isolated signer capable only of producing complete Musubi provider attestations.
 ///
 /// The trait intentionally has no transaction payload, signed transaction,
@@ -213,12 +198,10 @@ pub trait MusubiProviderAttestationSignerV1: Send + Sync + 'static {
     ///
     /// This getter must be a bounded, non-blocking local snapshot.
     fn runtime_handle(&self) -> &str;
-
     /// Return the provider-owner account controlled by this signer.
     ///
     /// This getter must be a bounded, non-blocking local snapshot.
     fn authority(&self) -> &AccountId;
-
     /// Return the deployment-qualified, payload-free adapter binding.
     ///
     /// This getter must be a bounded, non-blocking local snapshot; remote HSM
@@ -229,12 +212,10 @@ pub trait MusubiProviderAttestationSignerV1: Send + Sync + 'static {
         MusubiProviderAttestationSignerQualificationV1,
         MusubiProviderAttestationSignerErrorV1,
     >;
-
     /// Return the signer's configured governed policy identity.
     ///
     /// This getter must be a bounded, non-blocking local snapshot.
     fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1;
-
     /// Revalidate the locally maintained live eligibility snapshot.
     ///
     /// This must be a bounded, non-blocking read. The timed approval operation
@@ -242,7 +223,6 @@ pub trait MusubiProviderAttestationSignerV1: Send + Sync + 'static {
     fn current_eligibility(
         &self,
     ) -> Result<ProviderIngestCompletionSignerPolicyV1, MusubiProviderAttestationSignerErrorV1>;
-
     /// Approve only the supplied opaque, post-completion request.
     ///
     /// Repeating one exact request under an unchanged qualification must yield
@@ -260,7 +240,6 @@ pub trait MusubiProviderAttestationSignerV1: Send + Sync + 'static {
         >,
     >;
 }
-
 /// Coordinator-side failure while invoking an approval-only signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MusubiProviderAttestationApprovalErrorV1 {
@@ -289,7 +268,6 @@ pub enum MusubiProviderAttestationApprovalErrorV1 {
     #[error("Musubi provider-attestation signer returned invalid evidence")]
     InvalidAttestation,
 }
-
 /// Validate, invoke, and revalidate one approval-only provider signer.
 ///
 /// The coordinator checks the production handle, exact provider-owner
@@ -319,7 +297,6 @@ where
         return Err(MusubiProviderAttestationApprovalErrorV1::InvalidSignerHandle);
     }
     let qualification_before = qualified_signer_snapshot(signer, request)?;
-
     let signer_deadline = tokio::time::Instant::now()
         .checked_add(Duration::from_millis(timeout_ms))
         .ok_or(MusubiProviderAttestationApprovalErrorV1::InvalidRequest)?;
@@ -334,7 +311,6 @@ where
                 MusubiProviderAttestationApprovalErrorV1::SignerRejected
             }
         })?;
-
     let handle_after = signer.runtime_handle();
     if handle_after != handle_before || !is_production_runtime_handle(handle_after) {
         return Err(MusubiProviderAttestationApprovalErrorV1::EligibilityChanged);
@@ -356,7 +332,6 @@ where
     }
     Ok(attestation)
 }
-
 fn validate_approval_request(
     request: &ProviderIngestMusubiAttestationApprovalRequestV1,
 ) -> Result<(), MusubiProviderAttestationApprovalErrorV1> {
@@ -382,7 +357,6 @@ fn validate_approval_request(
     }
     Ok(())
 }
-
 fn qualified_signer_snapshot<Signer>(
     signer: &Signer,
     request: &ProviderIngestMusubiAttestationApprovalRequestV1,
@@ -425,43 +399,36 @@ where
     }
     Ok(qualification)
 }
-
 /// Stable domain-separated identity of one exact approval intent.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, NoritoSerialize, NoritoDeserialize,
 )]
 pub struct MusubiProviderAttestationApprovalIdV1([u8; 32]);
-
 impl MusubiProviderAttestationApprovalIdV1 {
     /// Return exact approval-identity bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
-
     fn is_valid(self) -> bool {
         self.0 != [0; 32]
     }
 }
-
 /// Stable domain-separated identity of one coordinator-inventory handoff.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, NoritoSerialize, NoritoDeserialize,
 )]
 pub struct MusubiProviderAttestationInventoryHandoffIdV1([u8; 32]);
-
 impl MusubiProviderAttestationInventoryHandoffIdV1 {
     /// Return exact inventory-handoff identity bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
-
     fn is_valid(self) -> bool {
         self.0 != [0; 32]
     }
 }
-
 /// Deployment and archive/order scope of a coordinator attestation inventory.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize)]
 pub struct MusubiProviderAttestationInventoryScopeV1 {
@@ -472,7 +439,6 @@ pub struct MusubiProviderAttestationInventoryScopeV1 {
     /// Exact replication order shared by the inventory.
     pub replication_order: ReplicationOrderId,
 }
-
 impl MusubiProviderAttestationInventoryScopeV1 {
     /// Derive the scope selected by one exact verified binding.
     #[must_use]
@@ -483,7 +449,6 @@ impl MusubiProviderAttestationInventoryScopeV1 {
             replication_order: binding.replication_order,
         }
     }
-
     /// Validate every scope identity component.
     ///
     /// # Errors
@@ -499,7 +464,6 @@ impl MusubiProviderAttestationInventoryScopeV1 {
         Ok(())
     }
 }
-
 /// One immutable full attestation prepared for idempotent coordinator handoff.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct MusubiProviderAttestationInventoryItemV1 {
@@ -509,7 +473,6 @@ pub struct MusubiProviderAttestationInventoryItemV1 {
     attestation: MusubiProviderBundleVerificationAttestationV1,
     handoff_id: MusubiProviderAttestationInventoryHandoffIdV1,
 }
-
 impl MusubiProviderAttestationInventoryItemV1 {
     /// Construct a canonical item from one complete verified attestation.
     ///
@@ -538,37 +501,31 @@ impl MusubiProviderAttestationInventoryItemV1 {
         item.validate()?;
         Ok(item)
     }
-
     /// Return the exact deployment/archive/order inventory scope.
     #[must_use]
     pub const fn scope(&self) -> &MusubiProviderAttestationInventoryScopeV1 {
         &self.scope
     }
-
     /// Return the immutable archive/order/provider key.
     #[must_use]
     pub const fn key(&self) -> MusubiProviderBundleAttestationKeyV1 {
         self.key
     }
-
     /// Return the digest of the complete canonical attestation.
     #[must_use]
     pub const fn attestation_digest(&self) -> MusubiProviderBundleAttestationDigestV1 {
         self.attestation_digest
     }
-
     /// Borrow the complete signed provider attestation.
     #[must_use]
     pub const fn attestation(&self) -> &MusubiProviderBundleVerificationAttestationV1 {
         &self.attestation
     }
-
     /// Return the stable idempotency identity for this handoff.
     #[must_use]
     pub const fn handoff_id(&self) -> MusubiProviderAttestationInventoryHandoffIdV1 {
         self.handoff_id
     }
-
     /// Validate scope, exact attestation projection, digest, and handoff identity.
     ///
     /// # Errors
@@ -601,7 +558,6 @@ impl MusubiProviderAttestationInventoryItemV1 {
         Ok(())
     }
 }
-
 /// One authenticated exact inventory read with its authoritative revision.
 ///
 /// The value is intentionally not a wire receipt and carries no authentication
@@ -614,7 +570,6 @@ pub struct MusubiProviderAttestationInventoryReadbackV1 {
     item: MusubiProviderAttestationInventoryItemV1,
     inventory_revision: u64,
 }
-
 impl MusubiProviderAttestationInventoryReadbackV1 {
     /// Construct one structurally validated inventory readback.
     ///
@@ -639,19 +594,16 @@ impl MusubiProviderAttestationInventoryReadbackV1 {
             inventory_revision,
         })
     }
-
     /// Borrow the exact immutable item returned by the inventory.
     #[must_use]
     pub const fn item(&self) -> &MusubiProviderAttestationInventoryItemV1 {
         &self.item
     }
-
     /// Return the authoritative revision paired with the exact item.
     #[must_use]
     pub const fn inventory_revision(&self) -> u64 {
         self.inventory_revision
     }
-
     fn matches(
         &self,
         item: &MusubiProviderAttestationInventoryItemV1,
@@ -663,7 +615,6 @@ impl MusubiProviderAttestationInventoryReadbackV1 {
             && self.item.validate().is_ok()
     }
 }
-
 /// Bounded opaque acknowledgement retained after a trusted inventory handoff.
 ///
 /// The receipt deliberately has neither a public constructor nor public
@@ -690,7 +641,6 @@ pub struct MusubiProviderAttestationInventoryReceiptV1 {
     handoff_id: MusubiProviderAttestationInventoryHandoffIdV1,
     inventory_revision: u64,
 }
-
 impl MusubiProviderAttestationInventoryReceiptV1 {
     /// Construct a crate-qualified acknowledgement bound to one exact item.
     ///
@@ -713,19 +663,16 @@ impl MusubiProviderAttestationInventoryReceiptV1 {
             inventory_revision,
         })
     }
-
     /// Return the stable handoff identity acknowledged by the inventory.
     #[must_use]
     pub const fn handoff_id(&self) -> MusubiProviderAttestationInventoryHandoffIdV1 {
         self.handoff_id
     }
-
     /// Return the coordinator inventory revision at acknowledgement.
     #[must_use]
     pub const fn inventory_revision(&self) -> u64 {
         self.inventory_revision
     }
-
     /// Return whether this receipt acknowledges exactly `item`.
     #[must_use]
     pub fn matches(&self, item: &MusubiProviderAttestationInventoryItemV1) -> bool {
@@ -737,7 +684,6 @@ impl MusubiProviderAttestationInventoryReceiptV1 {
             && item.validate().is_ok()
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredInventoryReceiptV1 {
     scope: MusubiProviderAttestationInventoryScopeV1,
@@ -746,7 +692,6 @@ struct StoredInventoryReceiptV1 {
     handoff_id: MusubiProviderAttestationInventoryHandoffIdV1,
     inventory_revision: u64,
 }
-
 impl StoredInventoryReceiptV1 {
     fn from_public(receipt: &MusubiProviderAttestationInventoryReceiptV1) -> Self {
         Self {
@@ -757,7 +702,6 @@ impl StoredInventoryReceiptV1 {
             inventory_revision: receipt.inventory_revision,
         }
     }
-
     fn matches(&self, item: &MusubiProviderAttestationInventoryItemV1) -> bool {
         self.inventory_revision != 0
             && self.scope == item.scope
@@ -767,14 +711,12 @@ impl StoredInventoryReceiptV1 {
             && item.validate().is_ok()
     }
 }
-
 /// Provider-sorted, duplicate-free inventory for one archive and replication order.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct MusubiProviderAttestationInventoryV1 {
     scope: MusubiProviderAttestationInventoryScopeV1,
     items: Vec<MusubiProviderAttestationInventoryItemV1>,
 }
-
 impl MusubiProviderAttestationInventoryV1 {
     /// Canonicalize an unordered bounded item set by provider identity.
     ///
@@ -795,19 +737,16 @@ impl MusubiProviderAttestationInventoryV1 {
         inventory.validate()?;
         Ok(inventory)
     }
-
     /// Return the common deployment/archive/order scope.
     #[must_use]
     pub const fn scope(&self) -> &MusubiProviderAttestationInventoryScopeV1 {
         &self.scope
     }
-
     /// Return provider-sorted immutable inventory items.
     #[must_use]
     pub fn items(&self) -> &[MusubiProviderAttestationInventoryItemV1] {
         &self.items
     }
-
     /// Validate the common scope and strict provider ordering.
     ///
     /// # Errors
@@ -834,7 +773,6 @@ impl MusubiProviderAttestationInventoryV1 {
         })
     }
 }
-
 /// Closed coordinator inventory or transport failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MusubiProviderAttestationInventoryErrorV1 {
@@ -857,7 +795,6 @@ pub enum MusubiProviderAttestationInventoryErrorV1 {
     #[error("Musubi provider-attestation inventory rejected the request")]
     Rejected,
 }
-
 /// Payload-free deployment qualification of a coordinator inventory adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MusubiProviderAttestationInventoryQualificationV1 {
@@ -868,7 +805,6 @@ pub struct MusubiProviderAttestationInventoryQualificationV1 {
     /// Non-zero digest of the adapter's independently governed public policy.
     pub policy_digest: [u8; 32],
 }
-
 impl MusubiProviderAttestationInventoryQualificationV1 {
     /// Construct a first-release inventory-adapter qualification.
     #[must_use]
@@ -879,19 +815,16 @@ impl MusubiProviderAttestationInventoryQualificationV1 {
             policy_digest,
         }
     }
-
     /// Return the adapter-local qualification revision.
     #[must_use]
     pub const fn adapter_revision(&self) -> u64 {
         self.adapter_revision
     }
-
     /// Return the independently governed public adapter-policy digest.
     #[must_use]
     pub const fn policy_digest(&self) -> [u8; 32] {
         self.policy_digest
     }
-
     /// Validate the V1 schema and non-zero deployment binding.
     ///
     /// # Errors
@@ -907,7 +840,6 @@ impl MusubiProviderAttestationInventoryQualificationV1 {
         Ok(())
     }
 }
-
 /// Invalid public deployment binding exposed by an inventory adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MusubiProviderAttestationInventoryBindingErrorV1 {
@@ -918,7 +850,6 @@ pub enum MusubiProviderAttestationInventoryBindingErrorV1 {
     #[error("Musubi provider-attestation inventory qualification is invalid")]
     InvalidQualification,
 }
-
 /// Payload-free failure returned by a qualified inventory runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MusubiProviderAttestationInventoryRuntimeErrorV1 {
@@ -929,7 +860,6 @@ pub enum MusubiProviderAttestationInventoryRuntimeErrorV1 {
     #[error("Musubi provider-attestation inventory runtime rejected qualification")]
     Rejected,
 }
-
 /// Idempotent trusted write boundary for the coordinator's immutable inventory.
 ///
 /// Implementations are deployment-qualified adapters. A successful response is
@@ -947,7 +877,6 @@ pub trait MusubiProviderAttestationInventorySinkV1: Send + Sync + 'static {
         item: MusubiProviderAttestationInventoryItemV1,
     ) -> ProviderIngestFutureV1<'a, Result<u64, MusubiProviderAttestationInventoryErrorV1>>;
 }
-
 /// Read-only boundary for exact and archive/order-scoped coordinator inventory.
 pub trait MusubiProviderAttestationInventoryReaderV1: Send + Sync + 'static {
     /// Read one exact immutable scope/key entry and its authoritative revision.
@@ -966,7 +895,6 @@ pub trait MusubiProviderAttestationInventoryReaderV1: Send + Sync + 'static {
             MusubiProviderAttestationInventoryErrorV1,
         >,
     >;
-
     /// Read the complete bounded provider-sorted inventory for one scope.
     fn inventory<'a>(
         &'a self,
@@ -979,7 +907,6 @@ pub trait MusubiProviderAttestationInventoryReaderV1: Send + Sync + 'static {
         >,
     >;
 }
-
 /// Deployment-qualified write/read boundary for coordinator inventory handoff.
 ///
 /// Implementations own authentication material and transport diagnostics. The
@@ -997,7 +924,6 @@ pub trait MusubiProviderAttestationInventoryRuntimeV1:
     ///
     /// This getter must be a bounded, non-blocking local snapshot.
     fn runtime_handle(&self) -> &str;
-
     /// Return the current payload-free adapter and public-policy binding.
     ///
     /// This getter must be a bounded, non-blocking local snapshot; remote
@@ -1008,7 +934,6 @@ pub trait MusubiProviderAttestationInventoryRuntimeV1:
         MusubiProviderAttestationInventoryQualificationV1,
         MusubiProviderAttestationInventoryRuntimeErrorV1,
     >;
-
     /// Perform a non-mutating authenticated readiness probe.
     ///
     /// The returned `Send` future is always polled under the journal's bounded
@@ -1017,7 +942,6 @@ pub trait MusubiProviderAttestationInventoryRuntimeV1:
         &'a self,
     ) -> ProviderIngestFutureV1<'a, Result<(), MusubiProviderAttestationInventoryRuntimeErrorV1>>;
 }
-
 /// Validate one credential-free inventory runtime binding.
 ///
 /// # Errors
@@ -1033,7 +957,6 @@ pub fn validate_musubi_provider_attestation_inventory_binding_v1(
     }
     qualification.validate()
 }
-
 #[derive(NoritoSerialize)]
 struct ApprovalIdPreimageV1 {
     key: MusubiProviderBundleAttestationKeyV1,
@@ -1041,14 +964,12 @@ struct ApprovalIdPreimageV1 {
     completion_claim_digest: [u8; 32],
     signer_policy: ProviderIngestCompletionSignerPolicyV1,
 }
-
 #[derive(NoritoSerialize)]
 struct InventoryHandoffIdPreimageV1 {
     scope: MusubiProviderAttestationInventoryScopeV1,
     key: MusubiProviderBundleAttestationKeyV1,
     attestation_digest: MusubiProviderBundleAttestationDigestV1,
 }
-
 /// Derive the approval identity from the exact key, payload hash, completed
 /// claim digest, and governed signer policy.
 ///
@@ -1066,7 +987,6 @@ pub fn musubi_provider_attestation_approval_id_v1(
         request.signer_policy(),
     )
 }
-
 fn derive_approval_id(
     payload: &MusubiProviderBundleVerificationPayloadV1,
     completion_claim_digest: [u8; 32],
@@ -1091,7 +1011,6 @@ fn derive_approval_id(
     }
     Ok(id)
 }
-
 /// Derive the idempotent coordinator handoff identity from exact scope, key,
 /// and complete attestation digest.
 ///
@@ -1126,7 +1045,6 @@ pub fn musubi_provider_attestation_inventory_handoff_id_v1(
     }
     Ok(id)
 }
-
 fn domain_hash_norito<T: norito::core::NoritoSerialize>(
     domain: &[u8],
     value: &T,
@@ -1141,7 +1059,6 @@ fn domain_hash_norito<T: norito::core::NoritoSerialize>(
     hasher.update(&canonical);
     Some(*hasher.finalize().as_bytes())
 }
-
 /// Bounded persistence, lease, retry, and CAS policy for the attestation journal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MusubiProviderAttestationJournalPolicyV1 {
@@ -1163,7 +1080,6 @@ pub struct MusubiProviderAttestationJournalPolicyV1 {
     /// Maximum CAS conflicts retried by one journal operation.
     pub max_cas_retries: u32,
 }
-
 #[derive(NoritoSerialize)]
 struct JournalPolicyDigestMaterialV1 {
     version: u8,
@@ -1176,7 +1092,6 @@ struct JournalPolicyDigestMaterialV1 {
     checkpoint_max_bytes: u64,
     max_cas_retries: u32,
 }
-
 impl Default for MusubiProviderAttestationJournalPolicyV1 {
     fn default() -> Self {
         Self {
@@ -1194,7 +1109,6 @@ impl Default for MusubiProviderAttestationJournalPolicyV1 {
         }
     }
 }
-
 impl MusubiProviderAttestationJournalPolicyV1 {
     /// Validate every hard and runtime bound.
     ///
@@ -1227,7 +1141,6 @@ impl MusubiProviderAttestationJournalPolicyV1 {
         }
         Ok(())
     }
-
     /// Return the canonical cross-hardware commitment to every journal bound.
     ///
     /// The checkpoint-head seal includes this digest in its deployment scope,
@@ -1258,11 +1171,9 @@ impl MusubiProviderAttestationJournalPolicyV1 {
             .ok_or(MusubiProviderAttestationJournalErrorV1::InvalidPolicy)
     }
 }
-
 /// Opaque non-zero runtime owner of one journal lease.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MusubiProviderAttestationClaimOwnerV1([u8; 32]);
-
 impl MusubiProviderAttestationClaimOwnerV1 {
     /// Construct an owner identity from runtime entropy.
     ///
@@ -1275,21 +1186,18 @@ impl MusubiProviderAttestationClaimOwnerV1 {
         }
         Ok(Self(bytes))
     }
-
     /// Return exact owner-identity bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
-
 /// Crate-internal snapshot returned by the qualified CAS store boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MusubiProviderAttestationJournalStoreSnapshotV1 {
     revision: Option<[u8; 32]>,
     checkpoint_bytes: Option<Vec<u8>>,
 }
-
 impl MusubiProviderAttestationJournalStoreSnapshotV1 {
     /// Construct the unique empty-store snapshot.
     #[must_use]
@@ -1299,7 +1207,6 @@ impl MusubiProviderAttestationJournalStoreSnapshotV1 {
             checkpoint_bytes: None,
         }
     }
-
     /// Construct a content-addressed snapshot from exact checkpoint bytes.
     ///
     /// # Errors
@@ -1320,19 +1227,16 @@ impl MusubiProviderAttestationJournalStoreSnapshotV1 {
             checkpoint_bytes: Some(checkpoint_bytes),
         })
     }
-
     /// Return the content-addressed revision, absent only for an empty store.
     #[must_use]
     pub(crate) const fn revision(&self) -> Option<[u8; 32]> {
         self.revision
     }
-
     /// Borrow exact checkpoint bytes, absent only for an empty store.
     #[must_use]
     pub(crate) fn checkpoint_bytes(&self) -> Option<&[u8]> {
         self.checkpoint_bytes.as_deref()
     }
-
     fn validate(&self) -> bool {
         match (&self.revision, &self.checkpoint_bytes) {
             (None, None) => true,
@@ -1346,7 +1250,6 @@ impl MusubiProviderAttestationJournalStoreSnapshotV1 {
         }
     }
 }
-
 /// Outcome of one content-addressed compare-and-swap operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MusubiProviderAttestationJournalCasOutcomeV1 {
@@ -1358,7 +1261,6 @@ pub(crate) enum MusubiProviderAttestationJournalCasOutcomeV1 {
     /// The expected revision was stale and no replacement occurred.
     Conflict,
 }
-
 /// Payload-free error returned by the abstract journal checkpoint store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub(crate) enum MusubiProviderAttestationJournalStoreErrorV1 {
@@ -1369,7 +1271,6 @@ pub(crate) enum MusubiProviderAttestationJournalStoreErrorV1 {
     #[error("Musubi provider-attestation journal store rejected the checkpoint")]
     Rejected,
 }
-
 /// Abstract content-addressed compare-and-swap checkpoint store.
 ///
 /// Implementations must durably persist replacement bytes before returning
@@ -1388,7 +1289,6 @@ pub(crate) trait MusubiProviderAttestationJournalStoreV1: Send + Sync + 'static 
             MusubiProviderAttestationJournalStoreErrorV1,
         >,
     >;
-
     /// Atomically replace the latest bytes only at `expected_revision`, or
     /// confirm an exact-current replacement as an idempotent no-op.
     fn compare_and_swap<'a>(
@@ -1403,7 +1303,6 @@ pub(crate) trait MusubiProviderAttestationJournalStoreV1: Send + Sync + 'static 
         >,
     >;
 }
-
 /// Derive the deterministic revision of exact canonical checkpoint bytes.
 #[must_use]
 pub(crate) fn musubi_provider_attestation_journal_checkpoint_revision_v1(
@@ -1419,7 +1318,6 @@ pub(crate) fn musubi_provider_attestation_journal_checkpoint_revision_v1(
     hasher.update(checkpoint_bytes);
     *hasher.finalize().as_bytes()
 }
-
 /// Exact serializable intent retained before approval.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MusubiProviderAttestationApprovalIntentV1 {
@@ -1431,20 +1329,17 @@ pub struct MusubiProviderAttestationApprovalIntentV1 {
     attestation_key: MusubiProviderBundleAttestationKeyV1,
     sequence: u64,
 }
-
 impl MusubiProviderAttestationApprovalIntentV1 {
     /// Return the stable approval identity.
     #[must_use]
     pub const fn approval_id(&self) -> MusubiProviderAttestationApprovalIdV1 {
         self.approval_id
     }
-
     /// Borrow the exact full unsigned attestation payload.
     #[must_use]
     pub const fn payload(&self) -> &MusubiProviderBundleVerificationPayloadV1 {
         &self.payload
     }
-
     /// Return the stable digest of finalized completed-row evidence.
     ///
     /// The observation cursor is retained separately so the same completed row
@@ -1453,31 +1348,26 @@ impl MusubiProviderAttestationApprovalIntentV1 {
     pub const fn completion_claim_digest(&self) -> [u8; 32] {
         self.completion_claim_digest
     }
-
     /// Return the finalized cursor at which the completed row was observed.
     #[must_use]
     pub const fn observed_finalized_cursor(&self) -> ProviderIngestFinalizedCursorV1 {
         self.observed_finalized_cursor
     }
-
     /// Return the exact governed signer policy.
     #[must_use]
     pub const fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
         self.signer_policy
     }
-
     /// Return the immutable archive/order/provider key.
     #[must_use]
     pub const fn attestation_key(&self) -> MusubiProviderBundleAttestationKeyV1 {
         self.attestation_key
     }
-
     /// Return the insertion sequence.
     #[must_use]
     pub const fn sequence(&self) -> u64 {
         self.sequence
     }
-
     /// Return whether a freshly rederived opaque request is exactly this intent.
     #[must_use]
     pub fn matches_request(
@@ -1501,7 +1391,6 @@ impl MusubiProviderAttestationApprovalIntentV1 {
             .is_ok_and(|approval_id| approval_id == self.approval_id)
     }
 }
-
 /// Public stage of one durable approval/handoff entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MusubiProviderAttestationJournalStageV1 {
@@ -1518,7 +1407,6 @@ pub enum MusubiProviderAttestationJournalStageV1 {
     /// The entry reached a terminal bounded failure.
     DeadLetter,
 }
-
 /// Read-only journal status for one approval identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MusubiProviderAttestationJournalStatusV1 {
@@ -1537,32 +1425,27 @@ pub struct MusubiProviderAttestationJournalStatusV1 {
     /// Durable UNIX epoch millisecond of the terminal transition.
     pub dead_lettered_at_unix_ms: Option<u64>,
 }
-
 /// Stable exclusive cursor and work identity for one deterministic journal scan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MusubiProviderAttestationJournalScanKeyV1 {
     sequence: u64,
     approval_id: MusubiProviderAttestationApprovalIdV1,
 }
-
 impl MusubiProviderAttestationJournalScanKeyV1 {
     /// Return the unique insertion sequence used as the primary scan cursor.
     #[must_use]
     pub const fn sequence(self) -> u64 {
         self.sequence
     }
-
     /// Return the approval identity discovered at this cursor.
     #[must_use]
     pub const fn approval_id(self) -> MusubiProviderAttestationApprovalIdV1 {
         self.approval_id
     }
-
     fn is_valid(self) -> bool {
         self.sequence != 0 && self.approval_id.is_valid()
     }
 }
-
 /// Exact approval lease returned to an isolated worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MusubiProviderAttestationApprovalClaimV1 {
@@ -1571,33 +1454,28 @@ pub struct MusubiProviderAttestationApprovalClaimV1 {
     generation: u64,
     lease_expires_at_ms: u64,
 }
-
 impl MusubiProviderAttestationApprovalClaimV1 {
     /// Borrow the persisted approval intent.
     #[must_use]
     pub const fn intent(&self) -> &MusubiProviderAttestationApprovalIntentV1 {
         &self.intent
     }
-
     /// Return the runtime lease owner.
     #[must_use]
     pub const fn owner(&self) -> MusubiProviderAttestationClaimOwnerV1 {
         self.owner
     }
-
     /// Return the fenced entry generation.
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
     }
-
     /// Return the lease expiry as durable UNIX epoch milliseconds.
     #[must_use]
     pub const fn lease_expires_at_ms(&self) -> u64 {
         self.lease_expires_at_ms
     }
 }
-
 /// Exact inventory-handoff lease returned after approval is durable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MusubiProviderAttestationHandoffClaimV1 {
@@ -1607,39 +1485,33 @@ pub struct MusubiProviderAttestationHandoffClaimV1 {
     generation: u64,
     lease_expires_at_ms: u64,
 }
-
 impl MusubiProviderAttestationHandoffClaimV1 {
     /// Return the originating approval identity.
     #[must_use]
     pub const fn approval_id(&self) -> MusubiProviderAttestationApprovalIdV1 {
         self.approval_id
     }
-
     /// Borrow the exact immutable inventory item.
     #[must_use]
     pub const fn item(&self) -> &MusubiProviderAttestationInventoryItemV1 {
         &self.item
     }
-
     /// Return the runtime lease owner.
     #[must_use]
     pub const fn owner(&self) -> MusubiProviderAttestationClaimOwnerV1 {
         self.owner
     }
-
     /// Return the fenced entry generation.
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
     }
-
     /// Return the lease expiry as durable UNIX epoch milliseconds.
     #[must_use]
     pub const fn lease_expires_at_ms(&self) -> u64 {
         self.lease_expires_at_ms
     }
 }
-
 /// Result of durably inserting or replaying an exact intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MusubiProviderAttestationEnqueueOutcomeV1 {
@@ -1654,7 +1526,6 @@ pub enum MusubiProviderAttestationEnqueueOutcomeV1 {
         approval_id: MusubiProviderAttestationApprovalIdV1,
     },
 }
-
 impl MusubiProviderAttestationEnqueueOutcomeV1 {
     /// Return the stable approval identity.
     #[must_use]
@@ -1664,7 +1535,6 @@ impl MusubiProviderAttestationEnqueueOutcomeV1 {
         }
     }
 }
-
 /// Read-only admission result before the journal's final enqueue CAS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MusubiProviderAttestationPreEnqueueProbeV1 {
@@ -1675,7 +1545,6 @@ pub(crate) enum MusubiProviderAttestationPreEnqueueProbeV1 {
     /// Neither the journal nor the exact coordinator inventory retains the request.
     Absent,
 }
-
 /// Result of persisting a complete approved attestation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MusubiProviderAttestationApprovalStoreOutcomeV1 {
@@ -1684,7 +1553,6 @@ pub enum MusubiProviderAttestationApprovalStoreOutcomeV1 {
     /// The same complete attestation was already durable.
     Existing,
 }
-
 /// Result of recording a stage failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MusubiProviderAttestationRetryOutcomeV1 {
@@ -1693,7 +1561,6 @@ pub enum MusubiProviderAttestationRetryOutcomeV1 {
     /// The entry moved to its bounded terminal dead-letter state.
     DeadLettered,
 }
-
 /// Result of persisting an exact inventory receipt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MusubiProviderAttestationDeliveryOutcomeV1 {
@@ -1702,7 +1569,6 @@ pub enum MusubiProviderAttestationDeliveryOutcomeV1 {
     /// The same receipt was already durable.
     Existing,
 }
-
 /// Runtime classification of an approval or handoff failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MusubiProviderAttestationFailureClassV1 {
@@ -1711,7 +1577,6 @@ pub enum MusubiProviderAttestationFailureClassV1 {
     /// Move immediately to a terminal dead letter.
     Permanent,
 }
-
 /// Payload-free reason retained for a terminal journal entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum MusubiProviderAttestationDeadLetterReasonV1 {
@@ -1724,7 +1589,6 @@ pub enum MusubiProviderAttestationDeadLetterReasonV1 {
     /// The coordinator inventory permanently rejected the item.
     HandoffRejected,
 }
-
 /// Journal validation, state-transition, or persistence failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MusubiProviderAttestationJournalErrorV1 {
@@ -1798,7 +1662,6 @@ pub enum MusubiProviderAttestationJournalErrorV1 {
     #[error("Musubi provider-attestation journal counter overflowed")]
     ArithmeticOverflow,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredApprovalIntentV1 {
     approval_id: MusubiProviderAttestationApprovalIdV1,
@@ -1809,7 +1672,6 @@ struct StoredApprovalIntentV1 {
     attestation_key: MusubiProviderBundleAttestationKeyV1,
     sequence: u64,
 }
-
 impl StoredApprovalIntentV1 {
     fn public(&self) -> MusubiProviderAttestationApprovalIntentV1 {
         MusubiProviderAttestationApprovalIntentV1 {
@@ -1822,7 +1684,6 @@ impl StoredApprovalIntentV1 {
             sequence: self.sequence,
         }
     }
-
     fn validate(&self) -> bool {
         let cursor = self.observed_finalized_cursor;
         let anchor = self.payload.binding.finalized_anchor;
@@ -1846,7 +1707,6 @@ impl StoredApprovalIntentV1 {
             .is_ok_and(|approval_id| approval_id == self.approval_id)
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredJournalStateV1 {
     AwaitingApproval {
@@ -1880,14 +1740,12 @@ enum StoredJournalStateV1 {
         dead_lettered_at_unix_ms: u64,
     },
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredJournalEntryV1 {
     intent: StoredApprovalIntentV1,
     generation: u64,
     state: StoredJournalStateV1,
 }
-
 impl StoredJournalEntryV1 {
     fn status(&self) -> MusubiProviderAttestationJournalStatusV1 {
         let (
@@ -1956,7 +1814,6 @@ impl StoredJournalEntryV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredJournalCheckpointV1 {
     version: u8,
@@ -1965,7 +1822,6 @@ struct StoredJournalCheckpointV1 {
     last_observed_unix_ms: u64,
     entries: Vec<StoredJournalEntryV1>,
 }
-
 impl StoredJournalCheckpointV1 {
     const fn empty() -> Self {
         Self {
@@ -1976,7 +1832,6 @@ impl StoredJournalCheckpointV1 {
             entries: Vec::new(),
         }
     }
-
     fn validate(&self, policy: MusubiProviderAttestationJournalPolicyV1) -> bool {
         if self.version != JOURNAL_CHECKPOINT_VERSION_V1
             || self.next_intent_sequence == 0
@@ -2012,7 +1867,6 @@ impl StoredJournalCheckpointV1 {
         if self.checkpoint_sequence < minimum_checkpoint_sequence {
             return false;
         }
-
         let mut keys = BTreeSet::new();
         let mut sequences = BTreeSet::new();
         for entry in &self.entries {
@@ -2029,7 +1883,6 @@ impl StoredJournalCheckpointV1 {
         true
     }
 }
-
 fn validate_stored_state(
     entry: &StoredJournalEntryV1,
     policy: MusubiProviderAttestationJournalPolicyV1,
@@ -2137,7 +1990,6 @@ fn validate_stored_state(
         }
     }
 }
-
 fn attestation_key(
     payload: &MusubiProviderBundleVerificationPayloadV1,
 ) -> MusubiProviderBundleAttestationKeyV1 {
@@ -2147,7 +1999,6 @@ fn attestation_key(
         provider_id: payload.binding.provider_id,
     }
 }
-
 fn finalized_cursor_is_same_or_later(
     candidate: ProviderIngestFinalizedCursorV1,
     retained: ProviderIngestFinalizedCursorV1,
@@ -2155,7 +2006,6 @@ fn finalized_cursor_is_same_or_later(
     candidate.height > retained.height
         || candidate.height == retained.height && candidate.block_hash == retained.block_hash
 }
-
 fn validate_scan_bounds(
     after: Option<MusubiProviderAttestationJournalScanKeyV1>,
     limit: usize,
@@ -2168,7 +2018,6 @@ fn validate_scan_bounds(
     }
     Ok(())
 }
-
 fn validate_observed_unix_time(
     checkpoint: &StoredJournalCheckpointV1,
     now_unix_ms: u64,
@@ -2178,7 +2027,6 @@ fn validate_observed_unix_time(
     }
     Ok(())
 }
-
 fn ordered_entry_page<Predicate>(
     checkpoint: &StoredJournalCheckpointV1,
     after: Option<MusubiProviderAttestationJournalScanKeyV1>,
@@ -2201,7 +2049,6 @@ where
     ready.sort_unstable();
     ready.into_iter().take(limit).collect()
 }
-
 fn retained_request_is_exact(
     checkpoint: &StoredJournalCheckpointV1,
     request: &ProviderIngestMusubiAttestationApprovalRequestV1,
@@ -2222,7 +2069,6 @@ fn retained_request_is_exact(
     }
     Err(MusubiProviderAttestationJournalErrorV1::IntentConflict)
 }
-
 fn intent_from_request(
     request: &ProviderIngestMusubiAttestationApprovalRequestV1,
     sequence: u64,
@@ -2244,7 +2090,6 @@ fn intent_from_request(
     }
     Ok(intent)
 }
-
 fn increment_generation(
     entry: &mut StoredJournalEntryV1,
 ) -> Result<u64, MusubiProviderAttestationJournalErrorV1> {
@@ -2254,7 +2099,6 @@ fn increment_generation(
         .ok_or(MusubiProviderAttestationJournalErrorV1::ArithmeticOverflow)?;
     Ok(entry.generation)
 }
-
 fn approval_claim_from_entry(
     entry: &StoredJournalEntryV1,
 ) -> Option<MusubiProviderAttestationApprovalClaimV1> {
@@ -2273,7 +2117,6 @@ fn approval_claim_from_entry(
         lease_expires_at_ms: *lease_expires_at_ms,
     })
 }
-
 fn handoff_claim_from_entry(
     entry: &StoredJournalEntryV1,
 ) -> Option<MusubiProviderAttestationHandoffClaimV1> {
@@ -2295,12 +2138,10 @@ fn handoff_claim_from_entry(
         lease_expires_at_ms: *lease_expires_at_ms,
     })
 }
-
 enum JournalMutationV1<T> {
     NoWrite(T),
     Write(T),
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExternalCoordinationPhaseV1 {
     Preflight,
@@ -2308,13 +2149,11 @@ enum ExternalCoordinationPhaseV1 {
     SealTime,
     Persist,
 }
-
 pub(crate) trait MusubiProviderAttestationJournalTimeV1: Send + Sync {
     fn now_unix_ms<'a>(
         &'a self,
     ) -> ProviderIngestFutureV1<'a, Result<u64, MusubiProviderAttestationJournalErrorV1>>;
 }
-
 impl MusubiProviderAttestationJournalTimeV1 for MusubiProviderAttestationSealedUnixClockV1 {
     fn now_unix_ms<'a>(
         &'a self,
@@ -2326,7 +2165,6 @@ impl MusubiProviderAttestationJournalTimeV1 for MusubiProviderAttestationSealedU
         })
     }
 }
-
 /// Durable bounded state machine for approval-only signing and inventory handoff.
 ///
 /// Every `now_unix_ms` argument is an absolute UNIX epoch millisecond supplied
@@ -2336,7 +2174,6 @@ pub(crate) struct MusubiProviderAttestationJournalV1 {
     store: Arc<dyn MusubiProviderAttestationJournalStoreV1>,
     policy: MusubiProviderAttestationJournalPolicyV1,
 }
-
 impl MusubiProviderAttestationJournalV1 {
     /// Bind the journal to one abstract durable CAS store and validated policy.
     ///
@@ -2350,13 +2187,11 @@ impl MusubiProviderAttestationJournalV1 {
         policy.validate()?;
         Ok(Self { store, policy })
     }
-
     /// Return the validated persistence and retry policy.
     #[must_use]
     pub(crate) const fn policy(&self) -> MusubiProviderAttestationJournalPolicyV1 {
         self.policy
     }
-
     /// Check retained intent first, then the authenticated exact inventory entry.
     ///
     /// This read-only probe never reserves journal capacity or manufactures a
@@ -2387,7 +2222,6 @@ impl MusubiProviderAttestationJournalV1 {
         if retained_request_is_exact(&checkpoint, request, requested_approval_id, requested_key)? {
             return Ok(MusubiProviderAttestationPreEnqueueProbeV1::RetainedExact);
         }
-
         let scope =
             MusubiProviderAttestationInventoryScopeV1::from_binding(&request.payload().binding);
         scope
@@ -2401,7 +2235,6 @@ impl MusubiProviderAttestationJournalV1 {
         {
             return Err(MusubiProviderAttestationJournalErrorV1::InvalidIntent);
         }
-
         let monotonic_deadline = tokio::time::Instant::now()
             .checked_add(Duration::from_millis(self.policy.handoff_timeout_ms))
             .ok_or(MusubiProviderAttestationJournalErrorV1::ArithmeticOverflow)?;
@@ -2432,7 +2265,6 @@ impl MusubiProviderAttestationJournalV1 {
         .await
         .map_err(|_| MusubiProviderAttestationJournalErrorV1::InventoryUnavailable)?
     }
-
     /// Insert or idempotently replay one exact opaque approval request.
     ///
     /// # Errors
@@ -2497,7 +2329,6 @@ impl MusubiProviderAttestationJournalV1 {
         })
         .await
     }
-
     /// Read one durable journal status without modifying its checkpoint.
     ///
     /// # Errors
@@ -2517,7 +2348,6 @@ impl MusubiProviderAttestationJournalV1 {
             .find(|entry| entry.intent.approval_id == approval_id)
             .map(StoredJournalEntryV1::status))
     }
-
     /// Return a deterministic bounded page of approval identities ready now.
     ///
     /// This restart-safe scan includes due awaiting entries and expired claims,
@@ -2557,7 +2387,6 @@ impl MusubiProviderAttestationJournalV1 {
             },
         ))
     }
-
     /// Return a deterministic bounded page of handoff identities ready now.
     ///
     /// This restart-safe scan includes due approved entries and expired
@@ -2596,7 +2425,6 @@ impl MusubiProviderAttestationJournalV1 {
             },
         ))
     }
-
     /// Return a deterministic bounded page of retained dead-letter identities.
     ///
     /// Operators can rediscover terminal work after restart without a second
@@ -2621,7 +2449,6 @@ impl MusubiProviderAttestationJournalV1 {
             matches!(&entry.state, StoredJournalStateV1::DeadLetter { .. })
         }))
     }
-
     /// Explicitly requeue one generation-fenced dead letter for operator repair.
     ///
     /// Approval dead letters return to approval. Handoff dead letters retain
@@ -2671,7 +2498,6 @@ impl MusubiProviderAttestationJournalV1 {
         })
         .await
     }
-
     /// Explicitly remove one inspected generation-fenced dead letter.
     ///
     /// This is the only dead-letter removal API. Normal capacity handling
@@ -2703,7 +2529,6 @@ impl MusubiProviderAttestationJournalV1 {
         })
         .await
     }
-
     /// Claim ready approval work or reclaim an expired approval lease.
     ///
     /// An unexpired claim owned by the same runtime replays exactly. Another
@@ -2783,7 +2608,6 @@ impl MusubiProviderAttestationJournalV1 {
         })
         .await
     }
-
     /// Return a claimed approval to retry or move it to a terminal dead letter.
     ///
     /// # Errors
@@ -2834,7 +2658,6 @@ impl MusubiProviderAttestationJournalV1 {
         })
         .await
     }
-
     /// Invoke the qualified approval-only signer and durably store its exact result.
     ///
     /// The signer timeout must fit wholly inside the retained approval lease.
@@ -2912,7 +2735,6 @@ impl MusubiProviderAttestationJournalV1 {
             }
         })?
     }
-
     /// Persist a complete signer-validated attestation under an exact live claim.
     ///
     /// A caller must supply the freshly rederived opaque request used for
@@ -2985,7 +2807,6 @@ impl MusubiProviderAttestationJournalV1 {
         })
         .await
     }
-
     /// Claim approved inventory work or reclaim an expired handoff lease.
     ///
     /// # Errors
@@ -3076,7 +2897,6 @@ impl MusubiProviderAttestationJournalV1 {
         })
         .await
     }
-
     /// Return a claimed inventory handoff to retry or dead-letter it.
     ///
     /// # Errors
@@ -3134,7 +2954,6 @@ impl MusubiProviderAttestationJournalV1 {
         })
         .await
     }
-
     /// Send one exact item through the trusted idempotent inventory boundary
     /// and durably retain its acknowledgement.
     ///
@@ -3230,7 +3049,6 @@ impl MusubiProviderAttestationJournalV1 {
             }
         })?
     }
-
     /// Durably record an exact idempotent coordinator inventory receipt.
     ///
     /// # Errors
@@ -3284,14 +3102,12 @@ impl MusubiProviderAttestationJournalV1 {
         })
         .await
     }
-
     async fn load_checkpoint(
         &self,
     ) -> Result<StoredJournalCheckpointV1, MusubiProviderAttestationJournalErrorV1> {
         let snapshot = self.store.load().await.map_err(map_store_error)?;
         decode_checkpoint(&snapshot, self.policy)
     }
-
     async fn preflight_approval_claim(
         &self,
         claim: &MusubiProviderAttestationApprovalClaimV1,
@@ -3319,7 +3135,6 @@ impl MusubiProviderAttestationJournalV1 {
         })
         .await
     }
-
     async fn preflight_handoff_claim(
         &self,
         claim: &MusubiProviderAttestationHandoffClaimV1,
@@ -3349,7 +3164,6 @@ impl MusubiProviderAttestationJournalV1 {
         })
         .await
     }
-
     async fn mutate_at<T, Transition>(
         &self,
         now_unix_ms: u64,
@@ -3373,7 +3187,6 @@ impl MusubiProviderAttestationJournalV1 {
         })
         .await
     }
-
     async fn mutate<T, Transition>(
         &self,
         mut transition: Transition,
@@ -3429,7 +3242,6 @@ impl MusubiProviderAttestationJournalV1 {
         Err(MusubiProviderAttestationJournalErrorV1::CasRetryExhausted)
     }
 }
-
 /// Daemon-facing journal which owns one qualified rollback-resistant clock.
 ///
 /// Timed operations deliberately expose no caller-supplied timestamp. The raw
@@ -3461,7 +3273,6 @@ pub struct MusubiProviderAttestationJournalRuntimeV1 {
     clock: Arc<MusubiProviderAttestationSealedUnixClockV1>,
     binding: MusubiProviderAttestationJournalRuntimeBindingV1,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MusubiProviderAttestationJournalRuntimeBindingV1 {
     network_id: NetworkId,
@@ -3471,7 +3282,6 @@ struct MusubiProviderAttestationJournalRuntimeBindingV1 {
     checkpoint_scope_digest: [u8; 32],
     opened_existing: bool,
 }
-
 impl fmt::Debug for MusubiProviderAttestationJournalRuntimeV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -3481,7 +3291,6 @@ impl fmt::Debug for MusubiProviderAttestationJournalRuntimeV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl MusubiProviderAttestationJournalRuntimeV1 {
     /// Bind a validated journal store to one already initialized qualified clock.
     ///
@@ -3496,7 +3305,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
     ) -> Result<Self, MusubiProviderAttestationJournalErrorV1> {
         Self::new(store, policy, clock, checkpoint_scope, false)
     }
-
     /// Bind a journal runtime only after ordinary open proved an existing H0.
     pub(crate) fn new_opened(
         store: Arc<dyn MusubiProviderAttestationJournalStoreV1>,
@@ -3506,7 +3314,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
     ) -> Result<Self, MusubiProviderAttestationJournalErrorV1> {
         Self::new(store, policy, clock, checkpoint_scope, true)
     }
-
     fn new(
         store: Arc<dyn MusubiProviderAttestationJournalStoreV1>,
         policy: MusubiProviderAttestationJournalPolicyV1,
@@ -3544,7 +3351,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
             },
         })
     }
-
     /// Check the complete private deployment scope without exposing it.
     pub(crate) fn matches_binding(
         &self,
@@ -3585,17 +3391,14 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
                     opened_existing: true,
                 }
     }
-
     pub(crate) const fn raw_journal(&self) -> &MusubiProviderAttestationJournalV1 {
         &self.journal
     }
-
     /// Return the validated persistence and retry policy.
     #[must_use]
     pub const fn policy(&self) -> MusubiProviderAttestationJournalPolicyV1 {
         self.journal.policy()
     }
-
     /// Insert or idempotently replay one exact opaque approval request.
     ///
     /// # Errors
@@ -3608,7 +3411,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
     {
         self.journal.enqueue(request).await
     }
-
     /// Read one durable journal status.
     ///
     /// # Errors
@@ -3623,7 +3425,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
     > {
         self.journal.status(approval_id).await
     }
-
     /// Return a bounded page of approvals ready at qualified sealed time.
     ///
     /// # Errors
@@ -3640,7 +3441,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
         let now = self.now_unix_ms().await?;
         self.journal.ready_approval_page(now, after, limit).await
     }
-
     /// Return a bounded page of handoffs ready at qualified sealed time.
     ///
     /// # Errors
@@ -3657,7 +3457,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
         let now = self.now_unix_ms().await?;
         self.journal.ready_handoff_page(now, after, limit).await
     }
-
     /// Return a bounded page of retained dead-letter identities.
     ///
     /// # Errors
@@ -3673,7 +3472,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
     > {
         self.journal.dead_letter_page(after, limit).await
     }
-
     /// Explicitly requeue one generation-fenced dead letter at sealed time.
     ///
     /// # Errors
@@ -3690,7 +3488,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
             .requeue_dead_letter(approval_id, expected_generation, now)
             .await
     }
-
     /// Remove one inspected generation-fenced dead letter.
     ///
     /// # Errors
@@ -3705,7 +3502,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
             .acknowledge_dead_letter(approval_id, expected_generation)
             .await
     }
-
     /// Claim approval work under a lease starting at sealed time.
     ///
     /// # Errors
@@ -3722,7 +3518,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
         let now = self.now_unix_ms().await?;
         self.journal.claim_approval(approval_id, owner, now).await
     }
-
     /// Return a claimed approval to retry or dead-letter it at sealed time.
     ///
     /// # Errors
@@ -3739,7 +3534,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
             .record_approval_failure(claim, now, failure)
             .await
     }
-
     /// Invoke one structurally qualified signer inside the live sealed-time lease.
     ///
     /// The standard daemon composer supplies a governed signer that fences the
@@ -3767,7 +3561,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
             .approve_claim_with_signer(claim, request, signer, self.clock.as_ref())
             .await
     }
-
     /// Claim inventory-handoff work under a lease starting at sealed time.
     ///
     /// # Errors
@@ -3784,7 +3577,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
         let now = self.now_unix_ms().await?;
         self.journal.claim_handoff(approval_id, owner, now).await
     }
-
     /// Return a claimed handoff to retry or dead-letter it at sealed time.
     ///
     /// # Errors
@@ -3801,7 +3593,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
             .record_handoff_failure(claim, now, failure)
             .await
     }
-
     // The standard daemon composer supplies a governed inventory that fences
     // configured handle, revision, policy, and local scope around readiness and
     // every fallible call. This operation additionally enforces structural
@@ -3819,12 +3610,10 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
             .handoff_claim_with_inventory(claim, inventory, self.clock.as_ref())
             .await
     }
-
     async fn now_unix_ms(&self) -> Result<u64, MusubiProviderAttestationJournalErrorV1> {
         self.clock.now_unix_ms().await.map_err(map_clock_error)
     }
 }
-
 fn map_clock_error(
     error: MusubiProviderAttestationClockErrorV1,
 ) -> MusubiProviderAttestationJournalErrorV1 {
@@ -3849,7 +3638,6 @@ fn map_clock_error(
         }
     }
 }
-
 fn claim_approval_entry(
     entry: &mut StoredJournalEntryV1,
     owner: MusubiProviderAttestationClaimOwnerV1,
@@ -3874,7 +3662,6 @@ fn claim_approval_entry(
     };
     Ok(JournalMutationV1::Write(approval_claim_from_entry(entry)))
 }
-
 fn claim_handoff_entry(
     entry: &mut StoredJournalEntryV1,
     owner: MusubiProviderAttestationClaimOwnerV1,
@@ -3903,7 +3690,6 @@ fn claim_handoff_entry(
         .ok_or(MusubiProviderAttestationJournalErrorV1::InvalidAttestation)?;
     Ok(JournalMutationV1::Write(Some(claim)))
 }
-
 fn validate_exact_approval_claim(
     entry: &StoredJournalEntryV1,
     claim: &MusubiProviderAttestationApprovalClaimV1,
@@ -3927,7 +3713,6 @@ fn validate_exact_approval_claim(
     }
     Ok(())
 }
-
 fn exact_approval_claim_entry<'a>(
     checkpoint: &'a mut StoredJournalCheckpointV1,
     claim: &MusubiProviderAttestationApprovalClaimV1,
@@ -3941,7 +3726,6 @@ fn exact_approval_claim_entry<'a>(
     validate_exact_approval_claim(entry, claim, now_ms)?;
     Ok(entry)
 }
-
 fn validate_exact_handoff_claim(
     entry: &StoredJournalEntryV1,
     claim: &MusubiProviderAttestationHandoffClaimV1,
@@ -3969,7 +3753,6 @@ fn validate_exact_handoff_claim(
     }
     Ok(())
 }
-
 fn exact_handoff_claim_entry<'a>(
     checkpoint: &'a mut StoredJournalCheckpointV1,
     claim: &MusubiProviderAttestationHandoffClaimV1,
@@ -3983,7 +3766,6 @@ fn exact_handoff_claim_entry<'a>(
     validate_exact_handoff_claim(entry, claim, now_ms)?;
     Ok(entry)
 }
-
 fn map_store_error(
     error: MusubiProviderAttestationJournalStoreErrorV1,
 ) -> MusubiProviderAttestationJournalErrorV1 {
@@ -3996,7 +3778,6 @@ fn map_store_error(
         }
     }
 }
-
 fn map_approval_error(
     error: MusubiProviderAttestationApprovalErrorV1,
 ) -> MusubiProviderAttestationJournalErrorV1 {
@@ -4017,7 +3798,6 @@ fn map_approval_error(
         }
     }
 }
-
 fn map_inventory_error(
     error: MusubiProviderAttestationInventoryErrorV1,
 ) -> MusubiProviderAttestationJournalErrorV1 {
@@ -4034,13 +3814,11 @@ fn map_inventory_error(
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct QualifiedInventoryRuntimeSnapshotV1 {
     runtime_handle: String,
     qualification: MusubiProviderAttestationInventoryQualificationV1,
 }
-
 async fn qualified_inventory_runtime_snapshot<Inventory>(
     inventory: &Inventory,
 ) -> Result<QualifiedInventoryRuntimeSnapshotV1, MusubiProviderAttestationJournalErrorV1>
@@ -4078,7 +3856,6 @@ where
         qualification: qualification_after,
     })
 }
-
 fn map_inventory_runtime_error(
     error: MusubiProviderAttestationInventoryRuntimeErrorV1,
 ) -> MusubiProviderAttestationJournalErrorV1 {
@@ -4091,7 +3868,6 @@ fn map_inventory_runtime_error(
         }
     }
 }
-
 fn decode_checkpoint(
     snapshot: &MusubiProviderAttestationJournalStoreSnapshotV1,
     policy: MusubiProviderAttestationJournalPolicyV1,
@@ -4113,7 +3889,6 @@ fn decode_checkpoint(
     }
     Ok(checkpoint)
 }
-
 /// Validate one nonempty canonical checkpoint and return its monotonic sequence.
 ///
 /// The file-store adapter uses this crate-private boundary to bind physical
@@ -4134,7 +3909,6 @@ pub(crate) fn validate_musubi_provider_attestation_journal_checkpoint_bytes_v1(
     )
     .map(|(checkpoint_sequence, _)| checkpoint_sequence)
 }
-
 /// Validate one canonical checkpoint and return its sequence and UNIX floor.
 ///
 /// The checkpoint-seal protocol uses this crate-private projection to prove
@@ -4167,7 +3941,6 @@ pub(crate) fn validate_musubi_provider_attestation_journal_checkpoint_metadata_v
         checkpoint.last_observed_unix_ms,
     ))
 }
-
 #[cfg(test)]
 /// Encode a valid entry-free checkpoint for file-store conformance tests.
 pub(crate) fn musubi_provider_attestation_journal_test_checkpoint_bytes_v1(
@@ -4188,7 +3961,6 @@ pub(crate) fn musubi_provider_attestation_journal_test_checkpoint_bytes_v1(
     assert!(checkpoint.validate(MusubiProviderAttestationJournalPolicyV1::default()));
     norito::encode_canonical(&checkpoint).expect("encode file-store test checkpoint")
 }
-
 fn encode_checkpoint(
     checkpoint: &StoredJournalCheckpointV1,
     policy: MusubiProviderAttestationJournalPolicyV1,
@@ -4214,7 +3986,6 @@ fn encode_checkpoint(
     }
     Ok(bytes)
 }
-
 fn encode_checkpoint_pruning_delivered(
     checkpoint: &mut StoredJournalCheckpointV1,
     policy: MusubiProviderAttestationJournalPolicyV1,
@@ -4242,7 +4013,6 @@ fn encode_checkpoint_pruning_delivered(
         }
     }
 }
-
 fn checkpoint_future_reserve_bytes(
     checkpoint: &StoredJournalCheckpointV1,
 ) -> Result<usize, MusubiProviderAttestationJournalErrorV1> {
@@ -4302,11 +4072,9 @@ fn checkpoint_future_reserve_bytes(
                 .ok_or(MusubiProviderAttestationJournalErrorV1::CapacityExceeded)
         })
 }
-
 // The daemon leaves the sealed two-slot file adapter inactive until qualified
 // HSM signer, combined time/head/blob durability, and coordinator-inventory
 // bindings are configured. A receipt remains an acknowledgement record, not
 // independently authenticated evidence.
-
 #[cfg(test)]
 mod tests;

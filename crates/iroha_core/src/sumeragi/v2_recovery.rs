@@ -5,12 +5,10 @@
 //! tip means application/finality for that exact height must resume, while a
 //! present sidecar authorizes construction of exactly one successor context.
 //! Context records are persisted before the height WAL is opened.
-
 use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
 };
-
 use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey};
 use iroha_data_model::{
     account::AccountId,
@@ -19,7 +17,6 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 use thiserror::Error;
-
 use super::{
     v2::{
         AdapterError, RecoveredLifecycleOwnerKuraBindingV1, RecoveredLifecycleStorageAuthorityV1,
@@ -51,7 +48,6 @@ use crate::{
         public_lane_validator_record_matches_key,
     },
 };
-
 /// Authenticated boundary between generic Kura replay and one recoverable v2 tip.
 ///
 /// Every full-body height through [`Self::complete_prefix_height`] has an exact WSV checkpoint,
@@ -67,7 +63,6 @@ pub struct V2StartupReplayPlan {
     complete_prefix_height: usize,
     pending_tip_height: Option<u64>,
 }
-
 impl PartialEq for V2StartupReplayPlan {
     fn eq(&self, other: &Self) -> bool {
         self.durable_height == other.durable_height
@@ -77,12 +72,9 @@ impl PartialEq for V2StartupReplayPlan {
             && self.pending_tip_height == other.pending_tip_height
     }
 }
-
 impl Eq for V2StartupReplayPlan {}
-
 const V2_STARTUP_REPLAY_BOUNDARY_HASH_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:startup-replay-boundary:v1\0";
-
 fn v2_startup_replay_boundary_hash(boundary: &ExactReplayBoundary) -> Hash {
     let count = boundary.count.to_le_bytes();
     let mut chunks = Vec::with_capacity(boundary.hashes.len().saturating_add(2));
@@ -91,7 +83,6 @@ fn v2_startup_replay_boundary_hash(boundary: &ExactReplayBoundary) -> Hash {
     chunks.extend(boundary.hashes.iter().map(|hash| hash.as_ref().as_slice()));
     Hash::new_from_chunks(&chunks)
 }
-
 /// Non-forgeable startup authorization for one exact imported snapshot lineage.
 ///
 /// Construction is private to the v2 boundary verifier. The token owns the retained bootstrap
@@ -104,14 +95,12 @@ pub struct AuthenticatedV2SnapshotStartup {
     block_hashes: Vec<HashOf<BlockHeader>>,
     first_height_context: PersistedHeightContext,
 }
-
 impl AuthenticatedV2SnapshotStartup {
     /// Frozen consensus mode authenticated by the retained bootstrap lineage.
     #[must_use]
     pub const fn mode(&self) -> wire::ConsensusMode {
         self.record.context.mode
     }
-
     /// Consume the authorization into the exact evidence verified by the boundary.
     pub(crate) fn into_parts(
         self,
@@ -123,20 +112,17 @@ impl AuthenticatedV2SnapshotStartup {
         (self.record, self.block_hashes, self.first_height_context)
     }
 }
-
 impl V2StartupReplayPlan {
     /// Total canonical height durably recorded by Kura.
     #[must_use]
     pub const fn durable_height(&self) -> usize {
         self.durable_height
     }
-
     /// Highest historical height supplied by the typed audited snapshot import.
     #[must_use]
     pub const fn audited_bootstrap_prefix_height(&self) -> usize {
         self.audited_bootstrap_prefix_height
     }
-
     /// First executable full-body height after an audited snapshot prefix, when present.
     #[must_use]
     pub fn first_full_body_height(&self) -> Option<u64> {
@@ -144,32 +130,27 @@ impl V2StartupReplayPlan {
             .then(|| self.audited_bootstrap_prefix_height.saturating_add(1))
             .and_then(|height| u64::try_from(height).ok())
     }
-
     /// Return whether every durable height belongs to the audited snapshot import.
     #[must_use]
     pub const fn is_entirely_audited_snapshot_import(&self) -> bool {
         self.durable_height > 0 && self.audited_bootstrap_prefix_height == self.durable_height
     }
-
     /// Return whether startup is about to cross the audited snapshot boundary from this state.
     #[must_use]
     pub const fn requires_snapshot_bootstrap_at(&self, state_height: usize) -> bool {
         self.audited_bootstrap_prefix_height > 0
             && state_height == self.audited_bootstrap_prefix_height
     }
-
     /// Highest height which generic replay is permitted to execute.
     #[must_use]
     pub const fn complete_prefix_height(&self) -> usize {
         self.complete_prefix_height
     }
-
     /// Sole incomplete durable tip which must resume through the v2 Apply service.
     #[must_use]
     pub const fn pending_tip_height(&self) -> Option<u64> {
         self.pending_tip_height
     }
-
     fn validate_exact_kura_boundary(&self, kura: &Kura) -> Result<(), V2StartupReplayError> {
         let binding =
             self.storage_binding
@@ -190,7 +171,6 @@ impl V2StartupReplayPlan {
         kura.validate_v2_startup_replay_storage_binding(binding)?;
         Ok(())
     }
-
     /// Validate that a restored WSV can be reconciled without skipping an incomplete height.
     ///
     /// # Errors
@@ -222,7 +202,6 @@ impl V2StartupReplayPlan {
         Ok(())
     }
 }
-
 /// Inspect every durable Kura height and select the only safe generic-replay boundary.
 ///
 /// Full bodies are trusted for generic replay only after all replay/finality sidecars form one
@@ -255,7 +234,6 @@ pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2Star
     }
     planned
 }
-
 fn plan_v2_startup_replay_inner(
     kura: &Kura,
     startup_verification: &V2StartupFinalityVerificationSession<'_>,
@@ -267,7 +245,6 @@ fn plan_v2_startup_replay_inner(
     let mut complete_prefix_height = 0_usize;
     let mut audited_bootstrap_prefix_height = 0_usize;
     let mut previous_finality: Option<(u64, Hash, Option<Hash>)> = None;
-
     for height_index in 1..=durable_height {
         let nonzero = NonZeroUsize::new(height_index)
             .expect("startup replay iteration begins at non-zero height");
@@ -289,11 +266,9 @@ fn plan_v2_startup_replay_inner(
                 reason: "zero-length unavailable body is outside the typed audited snapshot import",
             });
         }
-
         let checkpoint = startup_verification.wsv_checkpoint(height);
         let manifest = startup_verification.commit_manifest(height);
         let finality = startup_verification.finality_projection(height);
-
         match (checkpoint, manifest, finality) {
             (Some(_), Some(manifest), Some(finality)) => {
                 if startup_verification.commit_manifest_binding_state(height, manifest)
@@ -442,7 +417,6 @@ fn plan_v2_startup_replay_inner(
             }
         }
     }
-
     Ok(V2StartupReplayPlan {
         durable_height,
         durable_boundary_hash,
@@ -452,7 +426,6 @@ fn plan_v2_startup_replay_inner(
         pending_tip_height: None,
     })
 }
-
 /// Authenticate the first executable context after an audited snapshot import.
 ///
 /// This check must run after the audited snapshot has been authenticated and before generic Kura
@@ -492,9 +465,7 @@ pub fn authenticate_v2_snapshot_replay_boundary(
         authenticate_persisted_snapshot_boundary(kura, state, plan, record)?;
         return Ok(());
     }
-
     let _verified = authenticate_snapshot_bootstrap_record(kura, state, plan, record)?;
-
     // Compare every externally authenticated input before minting a publication capability. In
     // particular, a forged first artifact must not leave behind a context-store mutation.
     if let Some(first_full_height) = plan.first_full_body_height() {
@@ -522,10 +493,8 @@ pub fn authenticate_v2_snapshot_replay_boundary(
             authenticate_first_full_artifact(record, first_full_height, &artifact)?;
         }
     }
-
     Ok(())
 }
-
 /// Authenticate an imported snapshot startup and mint its single-use Kura authorization.
 ///
 /// Ordinary full-body startup returns `Ok(None)`. An imported hash-only prefix returns a token only
@@ -554,7 +523,7 @@ pub fn authenticate_v2_snapshot_startup(
     let record = payload.record().clone();
     let block_hashes = payload.block_hashes().to_vec();
     if state.authenticated_snapshot_v2_bootstrap() != Some(&record)
-        || state.committed_block_hashes_snapshot() != block_hashes
+        || !state.committed_block_hashes_match(&block_hashes)
     {
         return Err(snapshot_bootstrap_error(
             "outer snapshot authentication payload differs from the verified live State",
@@ -568,7 +537,6 @@ pub fn authenticate_v2_snapshot_startup(
         first_height_context: PersistedHeightContext::from_verified(&verified),
     }))
 }
-
 /// Return the authenticated frozen mode for a ledger with a durable hash-only history prefix.
 ///
 /// Both the original audited snapshot and every later signed snapshot retain the exact original
@@ -587,7 +555,6 @@ pub fn authenticated_v2_snapshot_startup_mode(
     authenticate_v2_snapshot_startup(kura, state, plan)
         .map(|authorization| authorization.map(|authorization| authorization.mode()))
 }
-
 fn authenticate_persisted_snapshot_boundary(
     kura: &Kura,
     state: &State,
@@ -664,7 +631,6 @@ fn authenticate_persisted_snapshot_boundary(
     authenticate_first_full_artifact(record, first_full_height, &artifact)?;
     Ok(verified)
 }
-
 fn authenticate_first_full_artifact(
     record: &wire::SnapshotV2BootstrapRecord,
     first_full_height: u64,
@@ -690,32 +656,19 @@ fn authenticate_first_full_artifact(
     }
     Ok(())
 }
-
 fn authenticate_snapshot_hash_vector(
     kura: &Kura,
     state: &State,
 ) -> Result<(), V2StartupReplayError> {
-    let state_hashes = state.committed_block_hashes_snapshot();
-    if state_hashes.len() != state.committed_height() {
-        return Err(snapshot_bootstrap_error(format!(
-            "restored WSV block-hash vector length {} differs from committed height {}",
-            state_hashes.len(),
-            state.committed_height()
-        )));
-    }
+    let state_height = state.committed_height();
     let durable_height = kura.exact_durable_blocks_count()?;
-    if state_hashes.len() > durable_height {
+    if state_height > durable_height {
         return Err(snapshot_bootstrap_error(format!(
             "restored WSV block-hash vector length {} exceeds Kura height {}",
-            state_hashes.len(),
-            durable_height
+            state_height, durable_height
         )));
     }
-    for (index, state_hash) in state_hashes.into_iter().enumerate() {
-        let height = index
-            .checked_add(1)
-            .and_then(NonZeroUsize::new)
-            .expect("enumerated block height is non-zero");
+    state.try_for_each_committed_block_hash(|height, state_hash| {
         let kura_hash = kura.get_durable_block_hash(height).ok_or_else(|| {
             snapshot_bootstrap_error(format!(
                 "Kura block-hash vector is missing restored WSV height {}",
@@ -728,10 +681,10 @@ fn authenticate_snapshot_hash_vector(
                 height.get()
             )));
         }
-    }
+        Ok(())
+    })?;
     Ok(())
 }
-
 fn authenticate_snapshot_bootstrap_record(
     kura: &Kura,
     state: &State,
@@ -826,7 +779,6 @@ fn authenticate_snapshot_bootstrap_record(
             record.context.execution_policy_hash
         )));
     }
-
     let commit_topology = state.commit_topology_snapshot();
     let roster_matches = commit_topology.len() == record.context.roster.len()
         && record
@@ -875,13 +827,11 @@ fn authenticate_snapshot_bootstrap_record(
     }
     Ok(verified)
 }
-
 fn snapshot_bootstrap_error(reason: impl Into<String>) -> V2StartupReplayError {
     V2StartupReplayError::SnapshotBootstrapAuthentication {
         reason: reason.into(),
     }
 }
-
 /// Fail-closed classification error for the startup replay boundary.
 #[derive(Debug, Error)]
 pub enum V2StartupReplayError {
@@ -942,7 +892,6 @@ pub enum V2StartupReplayError {
         reason: String,
     },
 }
-
 /// Fully verified active-height inputs selected before network ingress opens.
 pub(crate) struct RecoveredV2Height {
     verified_context: VerifiedHeightContext,
@@ -954,7 +903,6 @@ pub(crate) struct RecoveredV2Height {
     successor_activation: Option<RecoveredSuccessorActivationAuthority>,
     staged_genesis_nexus_amx_context: Option<StagedGenesisNexusAmxContext>,
 }
-
 /// Move-only permit proving recovery selected one exact Kura/context/policy tuple.
 ///
 /// Only this module can construct the permit. The lifecycle adapter may consume
@@ -967,7 +915,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleStorageMintPermitV1 {
     height: wire::Height,
     signature_policy: BlockSignaturePolicy,
 }
-
 impl RecoveredLifecycleStorageMintPermitV1 {
     fn new(
         kura: &Kura,
@@ -983,7 +930,6 @@ impl RecoveredLifecycleStorageMintPermitV1 {
             signature_policy: signature_policy.clone(),
         }
     }
-
     /// Consume the permit while comparing every recovery-authenticated input.
     pub(in crate::sumeragi) fn authorizes(
         self,
@@ -999,7 +945,6 @@ impl RecoveredLifecycleStorageMintPermitV1 {
             && &self.signature_policy == signature_policy
     }
 }
-
 /// Exact durable predecessor identity retained across successor construction.
 ///
 /// The artifact hash content-addresses the complete context, subject, CommitQC,
@@ -1012,7 +957,6 @@ pub(crate) struct DurableV2PredecessorIdentity {
     block_hash: HashOf<BlockHeader>,
     artifact_hash: HashOf<wire::finality::V2FinalityArtifact>,
 }
-
 fn successor_typed_identity<T>(
     domain: u8,
     kind: u8,
@@ -1020,7 +964,6 @@ fn successor_typed_identity<T>(
 ) -> CanonicalIdentityProjection {
     CanonicalIdentityProjection::from_bytes(domain, kind, *hash.as_ref())
 }
-
 /// Project all bits of an authenticated height-context identifier.
 pub(crate) fn successor_context_refinement_projection(
     context_id: wire::HeightContextId,
@@ -1031,7 +974,6 @@ pub(crate) fn successor_context_refinement_projection(
         context_id.0,
     )
 }
-
 /// Project all bits of a canonical predecessor or snapshot block hash.
 pub(crate) fn successor_block_refinement_projection(
     block_hash: HashOf<BlockHeader>,
@@ -1042,7 +984,6 @@ pub(crate) fn successor_block_refinement_projection(
         block_hash,
     )
 }
-
 /// Project all bits of an authenticated audited-snapshot bootstrap record.
 pub(crate) fn snapshot_record_refinement_projection(
     record_hash: HashOf<wire::SnapshotV2BootstrapRecord>,
@@ -1053,7 +994,6 @@ pub(crate) fn snapshot_record_refinement_projection(
         record_hash,
     )
 }
-
 impl DurableV2PredecessorIdentity {
     /// Authenticate the complete immutable projection shared by a finality artifact and receipt.
     pub(crate) fn authenticate(
@@ -1083,7 +1023,6 @@ impl DurableV2PredecessorIdentity {
         }
         Ok(identity)
     }
-
     /// Lossless primitive identity consumed by the shared production/Verus kernel.
     pub(crate) fn refinement_projection(self) -> ProductionDurablePredecessorIdentityProjection {
         ProductionDurablePredecessorIdentityProjection {
@@ -1100,12 +1039,10 @@ impl DurableV2PredecessorIdentity {
             ),
         }
     }
-
     /// Durable predecessor height.
     pub(crate) const fn height(self) -> wire::Height {
         self.height
     }
-
     /// Build a deterministic synthetic identity for runner ownership tests.
     #[cfg(test)]
     pub(crate) fn for_test(height: wire::Height, label: &[u8]) -> Self {
@@ -1120,30 +1057,25 @@ impl DurableV2PredecessorIdentity {
         }
     }
 }
-
 /// One-shot authority to publish a successor derived from a complete durable tip.
 #[derive(Debug)]
 pub(crate) struct DurableSuccessorActivationAuthority {
     predecessor: DurableV2PredecessorIdentity,
     successor_context_id: wire::HeightContextId,
 }
-
 impl DurableSuccessorActivationAuthority {
     /// Exact durable predecessor which owns this successor construction.
     pub(crate) const fn predecessor(&self) -> DurableV2PredecessorIdentity {
         self.predecessor
     }
-
     /// Frozen successor context authenticated from that predecessor.
     pub(crate) const fn successor_context_id(&self) -> wire::HeightContextId {
         self.successor_context_id
     }
-
     /// Consume the one-shot authority into its exact predecessor and successor context.
     pub(crate) const fn into_parts(self) -> (DurableV2PredecessorIdentity, wire::HeightContextId) {
         (self.predecessor, self.successor_context_id)
     }
-
     /// Build synthetic activation authority for runner boundary tests.
     #[cfg(test)]
     pub(crate) const fn for_test(
@@ -1156,7 +1088,6 @@ impl DurableSuccessorActivationAuthority {
         }
     }
 }
-
 /// Complete durable-tip evidence retained until predecessor retirement authorizes publication.
 ///
 /// Unlike [`DurableSuccessorActivationAuthority`], this recovery-only owner keeps the exact Kura
@@ -1173,7 +1104,6 @@ pub(crate) struct RecoveredCompleteTipActivationAuthority {
     lifecycle_storage: CanonicalCompleteTipLifecycleStorageV1,
     kura_identity: Option<KuraInstanceIdentity>,
 }
-
 impl std::fmt::Debug for RecoveredCompleteTipActivationAuthority {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let predecessor_signature_policy = match &self.predecessor_signature_policy {
@@ -1202,14 +1132,12 @@ impl std::fmt::Debug for RecoveredCompleteTipActivationAuthority {
             .finish_non_exhaustive()
     }
 }
-
 /// One Kura-derived, context-addressed lifecycle publication target.
 struct CanonicalLifecycleHeightStorageV1 {
     context_id: wire::HeightContextId,
     height: wire::Height,
     root: PathBuf,
 }
-
 impl CanonicalLifecycleHeightStorageV1 {
     fn from_kura(kura: &Kura, context_id: wire::HeightContextId, height: wire::Height) -> Self {
         Self {
@@ -1222,7 +1150,6 @@ impl CanonicalLifecycleHeightStorageV1 {
         }
     }
 }
-
 /// Kura-derived lifecycle publication targets for one CompleteTip rollover.
 ///
 /// Construction is private to recovery and derives both context-addressed roots
@@ -1235,7 +1162,6 @@ struct CanonicalCompleteTipLifecycleStorageV1 {
     successor: CanonicalLifecycleHeightStorageV1,
     body_store_root: PathBuf,
 }
-
 impl CanonicalCompleteTipLifecycleStorageV1 {
     fn from_kura(
         kura: &Kura,
@@ -1259,7 +1185,6 @@ impl CanonicalCompleteTipLifecycleStorageV1 {
         }
     }
 }
-
 impl RecoveredCompleteTipActivationAuthority {
     fn authenticate(
         artifact: wire::finality::V2FinalityArtifact,
@@ -1288,7 +1213,6 @@ impl RecoveredCompleteTipActivationAuthority {
             Some(kura.instance_identity()),
         )
     }
-
     fn authenticate_exact(
         artifact: wire::finality::V2FinalityArtifact,
         receipt: KuraV2CommitReceipt,
@@ -1327,17 +1251,14 @@ impl RecoveredCompleteTipActivationAuthority {
             kura_identity,
         })
     }
-
     /// Exact durable predecessor whose lifecycle ledger must retire before publication.
     pub(crate) const fn predecessor(&self) -> DurableV2PredecessorIdentity {
         self.activation.predecessor()
     }
-
     /// Frozen successor context authenticated by the retained predecessor evidence.
     pub(crate) const fn successor_context_id(&self) -> wire::HeightContextId {
         self.activation.successor_context_id()
     }
-
     /// Recheck the complete retained predecessor finality evidence against one
     /// exact lifecycle replay authority.
     ///
@@ -1356,7 +1277,6 @@ impl RecoveredCompleteTipActivationAuthority {
                 &self.artifact.commit_qc,
             )
     }
-
     /// Compare one opened lifecycle-ledger root with the exact Kura-bound
     /// predecessor target retained at CompleteTip authentication.
     pub(in crate::sumeragi) fn authorizes_predecessor_lifecycle_root(&self, root: &Path) -> bool {
@@ -1374,7 +1294,6 @@ impl RecoveredCompleteTipActivationAuthority {
             && self.verified_predecessor.proofs_of_possession()
                 == self.artifact.validator_set_pops.as_slice()
     }
-
     /// Compare one unopened successor target with the exact Kura-derived H+1 target.
     ///
     /// The caller supplies no roster or body authority: CompleteTip recovery
@@ -1392,7 +1311,6 @@ impl RecoveredCompleteTipActivationAuthority {
             && self.artifact.height.checked_add(1) == Some(context.height())
             && self.lifecycle_storage.predecessor.root != root
     }
-
     /// Reauthenticate one sealed verified H+1 context against CompleteTip.
     ///
     /// The context id fixes every wire field. The predecessor context, parent
@@ -1417,7 +1335,6 @@ impl RecoveredCompleteTipActivationAuthority {
             && verified.verified_predecessor_context() == Some(&self.artifact.height_context)
             && verified.proofs_of_possession() == expected_proofs
     }
-
     /// Compare the unlaunched H+1 body owner with the Kura-derived body root.
     pub(in crate::sumeragi) fn authorizes_successor_body_store(
         &self,
@@ -1431,7 +1348,6 @@ impl RecoveredCompleteTipActivationAuthority {
                 &BlockSignaturePolicy::RotatingLeader,
             )
     }
-
     /// Compare the successor lifecycle owner with the Kura that minted CompleteTip.
     pub(in crate::sumeragi) fn authorizes_successor_kura(
         &self,
@@ -1444,7 +1360,6 @@ impl RecoveredCompleteTipActivationAuthority {
             _ => false,
         }
     }
-
     /// Compare every caller-visible predecessor-storage input in one closed oracle.
     ///
     /// Only the local signer remains caller-selected. Roots, contexts, PoPs,
@@ -1467,7 +1382,6 @@ impl RecoveredCompleteTipActivationAuthority {
                 == verified_predecessor.proofs_of_possession()
             && &self.predecessor_signature_policy == signature_policy
     }
-
     /// Consume CompleteTip into the authenticated predecessor ledger/body/payload cut.
     ///
     /// The exact Kura-derived roots, predecessor context, and signature policy
@@ -1503,7 +1417,6 @@ impl RecoveredCompleteTipActivationAuthority {
             self,
         )
     }
-
     /// Build exact recovered complete-tip authority for runner boundary tests.
     #[cfg(test)]
     pub(crate) fn authenticate_for_test(
@@ -1540,7 +1453,6 @@ impl RecoveredCompleteTipActivationAuthority {
             None,
         )
     }
-
     /// Build exact CompleteTip authority bound to one test lifecycle root.
     #[cfg(test)]
     pub(in crate::sumeragi) fn authenticate_for_lifecycle_test(
@@ -1579,7 +1491,6 @@ impl RecoveredCompleteTipActivationAuthority {
             None,
         )
     }
-
     /// Build exact test authority using the same Kura-derived target pair as production.
     #[cfg(test)]
     pub(in crate::sumeragi) fn authenticate_for_canonical_lifecycle_test(
@@ -1610,7 +1521,6 @@ impl RecoveredCompleteTipActivationAuthority {
         )
     }
 }
-
 /// Distinct one-shot authority for the first executable height after an audited snapshot.
 ///
 /// Snapshot bootstrap has no historical CommitQC or Kura finality receipt. Keeping the complete
@@ -1623,7 +1533,6 @@ pub(crate) struct SnapshotSuccessorActivationAuthority {
     snapshot_block_hash: HashOf<BlockHeader>,
     successor_context_id: wire::HeightContextId,
 }
-
 impl SnapshotSuccessorActivationAuthority {
     fn new(record: &wire::SnapshotV2BootstrapRecord) -> Self {
         let anchor = record
@@ -1638,7 +1547,6 @@ impl SnapshotSuccessorActivationAuthority {
             successor_context_id: record.context.id(),
         }
     }
-
     /// Build exact synthetic snapshot authority for the status publication boundary.
     #[cfg(test)]
     pub(crate) const fn for_test(
@@ -1654,18 +1562,15 @@ impl SnapshotSuccessorActivationAuthority {
             successor_context_id,
         }
     }
-
     /// Imported snapshot height which anchors the first executable context.
     pub(crate) const fn snapshot_anchor_height(&self) -> wire::Height {
         self.snapshot_height
     }
-
     /// Frozen first executable context authenticated by the snapshot envelope.
     #[cfg(test)]
     pub(crate) const fn successor_context_id(&self) -> wire::HeightContextId {
         self.successor_context_id
     }
-
     /// Consume the exact record identity, imported anchor, and first executable context.
     pub(crate) const fn into_parts(
         self,
@@ -1683,7 +1588,6 @@ impl SnapshotSuccessorActivationAuthority {
         )
     }
 }
-
 /// Typed startup activation source selected before network ingress opens.
 #[derive(Debug)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
@@ -1693,21 +1597,18 @@ pub(crate) enum RecoveredSuccessorActivationAuthority {
     /// An authenticated hash-only snapshot boundary without historical finality authority.
     SnapshotBootstrap(SnapshotSuccessorActivationAuthority),
 }
-
 /// Verified successor plus the exact durable authority which derived it.
 pub(crate) struct VerifiedSuccessorHeight {
     verified_context: VerifiedHeightContext,
     activation: DurableSuccessorActivationAuthority,
     kura_identity: KuraInstanceIdentity,
 }
-
 impl VerifiedSuccessorHeight {
     /// Borrow the successor's frozen context in recovery fixtures.
     #[cfg(test)]
     pub(crate) const fn context(&self) -> &wire::HeightContext {
         self.verified_context.context()
     }
-
     /// Consume the successor into its runtime context and one-shot activation authority.
     pub(crate) fn into_parts(self) -> (VerifiedHeightContext, DurableSuccessorActivationAuthority) {
         (self.verified_context, self.activation)
@@ -1760,7 +1661,6 @@ impl VerifiedSuccessorHeight {
         Ok((verified_context, activation, lifecycle_storage_authority))
     }
 }
-
 /// Canonical Kura tip which WAL/body replay must bind before ingress opens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use]
@@ -1770,7 +1670,6 @@ pub(crate) struct PendingKuraApply {
     state_height: wire::Height,
     block_hash: HashOf<BlockHeader>,
 }
-
 impl PendingKuraApply {
     /// Construct a pending-tip expectation for boundary unit tests.
     #[cfg(test)]
@@ -1786,41 +1685,34 @@ impl PendingKuraApply {
             block_hash,
         }
     }
-
     /// Frozen context identifier expected from the replayed Decision record.
     pub(crate) const fn context_id(self) -> wire::HeightContextId {
         self.context_id
     }
-
     /// Interrupted application height.
     pub(crate) const fn height(self) -> wire::Height {
         self.height
     }
-
     /// Committed state height authenticated when recovery selected this tip.
     pub(crate) const fn state_height(self) -> wire::Height {
         self.state_height
     }
-
     /// Canonical block already durable in Kura.
     pub(crate) const fn block_hash(self) -> HashOf<BlockHeader> {
         self.block_hash
     }
 }
-
 impl RecoveredV2Height {
     /// Borrow the exact verified context selected for this process lifetime.
     #[cfg(test)]
     pub(crate) const fn verified_context(&self) -> &VerifiedHeightContext {
         &self.verified_context
     }
-
     /// Return the Kura tip which reducer/body replay must prove exact before
     /// the caller opens network ingress.
     pub(crate) const fn pending_kura_apply(&self) -> Option<PendingKuraApply> {
         self.pending_kura_apply
     }
-
     /// Return the typed startup activation source selected by recovery.
     #[cfg(test)]
     pub(crate) const fn successor_activation(
@@ -1828,7 +1720,6 @@ impl RecoveredV2Height {
     ) -> Option<&RecoveredSuccessorActivationAuthority> {
         self.successor_activation.as_ref()
     }
-
     /// Consume recovery output into the height runner's owned parts.
     pub(in crate::sumeragi) fn into_parts(
         self,
@@ -1852,7 +1743,6 @@ impl RecoveredV2Height {
         )
     }
 }
-
 /// Select and verify the only active v2 height after a fresh start or crash.
 ///
 /// The caller must invoke this before opening consensus ingress. A context is
@@ -1869,15 +1759,12 @@ pub(crate) fn recover_active_height(
     let replay_plan = plan_v2_startup_replay(kura)?;
     recover_active_height_with_plan(kura, state, fresh_genesis, genesis_public_key, replay_plan)
 }
-
 struct StartupFinalityInventoryCleanup<'a>(&'a Kura);
-
 impl Drop for StartupFinalityInventoryCleanup<'_> {
     fn drop(&mut self) {
         self.0.finish_v2_startup_finality_verification();
     }
 }
-
 /// Select the active height from the exact replay plan already authenticated
 /// by startup before the Sumeragi worker was launched.
 pub(crate) fn recover_active_height_with_plan(
@@ -1897,7 +1784,6 @@ pub(crate) fn recover_active_height_with_plan(
     let state_height = u64::try_from(state.committed_height())?;
     let genesis_account = AccountId::new(genesis_public_key.clone());
     replay_plan.validate_restored_state_height(state.committed_height())?;
-
     if durable_height == 0 {
         if state_height != 0 {
             return Err(V2RecoveryError::StateKuraMismatch {
@@ -1939,7 +1825,6 @@ pub(crate) fn recover_active_height_with_plan(
             staged_genesis_nexus_amx_context: Some(staged_genesis_nexus_amx_context),
         });
     }
-
     if state_height > durable_height || durable_height.saturating_sub(state_height) > 1 {
         return Err(V2RecoveryError::StateKuraMismatch {
             state_height,
@@ -1948,7 +1833,6 @@ pub(crate) fn recover_active_height_with_plan(
     }
     verify_state_kura_prefix(kura, state, state_height)?;
     authenticate_v2_snapshot_replay_boundary(kura, state, &replay_plan)?;
-
     // A ledger imported entirely as an audited hash-only snapshot has no historical v2
     // CommitQC from which to derive a successor. Its authenticated snapshot envelope is the sole
     // explicit trust root for the first executable height; freeze that exact record before any
@@ -2004,7 +1888,6 @@ pub(crate) fn recover_active_height_with_plan(
             staged_genesis_nexus_amx_context: None,
         });
     }
-
     if replay_plan.pending_tip_height().is_none() {
         if state_height != durable_height {
             return Err(V2RecoveryError::FinalityAheadOfState {
@@ -2070,7 +1953,6 @@ pub(crate) fn recover_active_height_with_plan(
             staged_genesis_nexus_amx_context: None,
         });
     }
-
     if replay_plan.pending_tip_height() != Some(durable_height) {
         return Err(V2RecoveryError::MissingRecoverableTip(durable_height));
     }
@@ -2087,7 +1969,6 @@ pub(crate) fn recover_active_height_with_plan(
             });
         }
     }
-
     // A pending canonical tip is the deliberate crash window either before
     // global finality publication or after global finality but before every
     // canonical lane ownership has its certificate and application receipt.
@@ -2138,7 +2019,6 @@ pub(crate) fn recover_active_height_with_plan(
         staged_genesis_nexus_amx_context: None,
     })
 }
-
 fn verify_state_kura_prefix(
     kura: &Kura,
     state: &State,
@@ -2148,9 +2028,7 @@ fn verify_state_kura_prefix(
         return Ok(());
     };
     let state_hash = state
-        .committed_block_hashes_snapshot()
-        .last()
-        .copied()
+        .committed_block_hash_at_height(state_height)
         .ok_or(V2RecoveryError::MissingStateTip(state_height))?;
     let kura_hash = kura
         .get_durable_block_hash(nonzero_height)
@@ -2164,7 +2042,6 @@ fn verify_state_kura_prefix(
     }
     Ok(())
 }
-
 /// Build or reopen the unique successor of one just-finalized height and
 /// persist its immutable context before its safety WAL is opened.
 pub(crate) fn build_verified_successor(
@@ -2177,7 +2054,7 @@ pub(crate) fn build_verified_successor(
     let parent_height = parent_artifact.height;
     let predecessor = DurableV2PredecessorIdentity::authenticate(parent_artifact, parent_receipt)?;
     let state_height = u64::try_from(state.committed_height())?;
-    let state_block_hash = state.committed_block_hashes_snapshot().last().copied();
+    let state_block_hash = state.committed_block_hash_at_height(state_height);
     if state_height != parent_height || state_block_hash != Some(predecessor.block_hash) {
         return Err(V2RecoveryError::FinalizedStatePredecessorMismatch {
             expected_height: parent_height,
@@ -2247,7 +2124,6 @@ pub(crate) fn build_verified_successor(
         kura_identity: state.kura().instance_identity(),
     })
 }
-
 fn verify_persisted_height(
     kura: &Kura,
     state: &State,
@@ -2263,7 +2139,6 @@ fn verify_persisted_height(
         )
         .map_err(Into::into);
     }
-
     if record.context().snapshot_bootstrap.is_some() {
         let bootstrap = wire::SnapshotV2BootstrapRecord {
             version: wire::SnapshotV2BootstrapRecord::VERSION,
@@ -2300,7 +2175,6 @@ fn verify_persisted_height(
         if bootstrap.context.network_id != *state.network_id_ref() {
             return Err(V2RecoveryError::SnapshotBootstrapContextMismatch(height));
         }
-
         let state_height = u64::try_from(state.committed_height())?;
         if state_height == anchor.snapshot_height {
             let authenticated = state
@@ -2321,7 +2195,6 @@ fn verify_persisted_height(
         }
         return Ok(verified);
     }
-
     let parent_height = height
         .checked_sub(1)
         .ok_or(V2RecoveryError::HeightOverflow)?;
@@ -2334,7 +2207,6 @@ fn verify_persisted_height(
     if parent_record.context() != &parent_artifact.height_context {
         return Err(V2RecoveryError::ParentContextMismatch(parent_height));
     }
-
     // Before state application, the successor projection is still
     // recomputable and must match the immutable record. After state application
     // the record is the only pre-state snapshot; the matching WAL, body marker,
@@ -2360,7 +2232,6 @@ fn verify_persisted_height(
     )
     .map_err(Into::into)
 }
-
 fn successor_proofs_of_possession(parent: &wire::finality::V2FinalityArtifact) -> Vec<Vec<u8>> {
     parent
         .height_context
@@ -2371,7 +2242,6 @@ fn successor_proofs_of_possession(parent: &wire::finality::V2FinalityArtifact) -
             |snapshot| snapshot.validator_set_pops.clone(),
         )
 }
-
 pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Hash {
     let view = state.view();
     let active_validators = view
@@ -2408,14 +2278,12 @@ pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Hash {
         &lane_lifecycle,
     )
 }
-
 pub(crate) fn committed_execution_policy_hash(state: &State) -> Result<Hash, V2RecoveryError> {
     state
         .execution_policy_digest_v1()
         .map(Hash::prehashed)
         .map_err(|error| V2RecoveryError::ExecutionPolicy(error.to_string()))
 }
-
 fn ensure_execution_policy_matches_context(
     state: &State,
     context: &wire::HeightContext,
@@ -2429,7 +2297,6 @@ fn ensure_execution_policy_matches_context(
     }
     Ok(())
 }
-
 /// Fail-closed active-height selection error.
 #[derive(Debug, Error)]
 pub(crate) enum V2RecoveryError {
@@ -2605,7 +2472,6 @@ pub(crate) enum V2RecoveryError {
     #[error("Sumeragi v2 height overflow")]
     HeightOverflow,
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -2614,7 +2480,6 @@ mod tests {
         path::{Path, PathBuf},
         sync::Arc,
     };
-
     use iroha_config::parameters::actual::LaneConfig;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
@@ -2630,7 +2495,6 @@ mod tests {
         transaction::{TransactionBuilder, signed::TransactionResultInner},
         trigger::DataTriggerSequence,
     };
-
     use super::{
         BlockSignaturePolicy, RecoveredCompleteTipActivationAuthority,
         RecoveredLifecycleStorageMintPermitV1, RecoveredSuccessorActivationAuthority,
@@ -2652,7 +2516,6 @@ mod tests {
             v2_context_store::{PersistedHeightContext, V2ContextStore},
         },
     };
-
     fn verified_context() -> (VerifiedHeightContext, Vec<KeyPair>) {
         let mut keys = (1_u8..=4)
             .map(|seed| {
@@ -2708,7 +2571,6 @@ mod tests {
             keys,
         )
     }
-
     #[test]
     fn lifecycle_storage_mint_permit_binds_kura_context_and_policy() {
         let (verified, keys) = verified_context();
@@ -2730,7 +2592,6 @@ mod tests {
             &genesis_account,
             exact,
         );
-
         let foreign = RecoveredLifecycleStorageMintPermitV1::new(
             kura.as_ref(),
             &verified,
@@ -2738,7 +2599,6 @@ mod tests {
             &genesis_account,
         );
         assert!(!foreign.authorizes(foreign_kura.as_ref(), &verified, &policy, &genesis_account,));
-
         let wrong_policy = BlockSignaturePolicy::GenesisAuthority(keys[0].public_key().clone());
         let substituted = RecoveredLifecycleStorageMintPermitV1::new(
             kura.as_ref(),
@@ -2749,7 +2609,6 @@ mod tests {
         assert!(
             !substituted.authorizes(kura.as_ref(), &verified, &wrong_policy, &genesis_account,)
         );
-
         let substituted = RecoveredLifecycleStorageMintPermitV1::new(
             kura.as_ref(),
             &verified,
@@ -2763,7 +2622,6 @@ mod tests {
             &foreign_genesis_account,
         ));
     }
-
     fn state_for(kura: &Arc<Kura>, network_id: iroha_data_model::NetworkId) -> State {
         State::new_with_chain_and_network_id_for_testing(
             World::new(),
@@ -2773,7 +2631,6 @@ mod tests {
             network_id,
         )
     }
-
     fn state_with_consensus_keys(
         kura: &Arc<Kura>,
         network_id: iroha_data_model::NetworkId,
@@ -2808,7 +2665,6 @@ mod tests {
             network_id,
         )
     }
-
     fn dummy_block(
         key: &KeyPair,
         height: u64,
@@ -2816,7 +2672,6 @@ mod tests {
     ) -> CommittedBlock {
         dummy_block_with_time(key, height, parent, height)
     }
-
     fn dummy_block_with_time(
         key: &KeyPair,
         height: u64,
@@ -2831,7 +2686,6 @@ mod tests {
         });
         valid.commit_unchecked().unpack(|_| {})
     }
-
     fn lane_owned_block_for_recovery(
         state: &State,
         context: &wire::HeightContext,
@@ -2903,7 +2757,6 @@ mod tests {
         ownership.payload_ownership_hash = replay.payload_ownership_hash;
         ownership.rbc_instance_hash = replay.rbc_instance_hash;
         ownership.lane_block_descriptor_hash = Some(replay.lane_block_descriptor_hash);
-
         let header = BlockHeader::new(
             NonZeroU64::new(context.height).expect("non-zero fixture height"),
             None,
@@ -2936,14 +2789,12 @@ mod tests {
             .expect("attach canonical transaction result");
         block
     }
-
     fn commit_to_state(state: &State, block: &CommittedBlock, context: &wire::HeightContext) {
         let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
         let mut state_block = state.block(block.as_ref().header());
         let _events = state_block.apply_without_execution(block, topology.as_ref().to_owned());
         state_block.commit().expect("commit synthetic state block");
     }
-
     fn execution_commitment(seed: u8) -> wire::ExecutionCommitment {
         wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new([seed, 1]),
@@ -2953,7 +2804,6 @@ mod tests {
             Hash::new([seed, 4]),
         )
     }
-
     fn authenticated_artifact_for(
         context: wire::HeightContext,
         block: &SignedBlock,
@@ -3020,7 +2870,6 @@ mod tests {
             .collect();
         wire::finality::V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops)
     }
-
     fn persist_checkpoint_and_manifest(
         kura: &Kura,
         state: &State,
@@ -3043,7 +2892,6 @@ mod tests {
         )
         .expect("persist checkpoint-bound v2 commit manifest");
     }
-
     fn persist_complete_height(
         kura: &Kura,
         state: &State,
@@ -3054,7 +2902,6 @@ mod tests {
             .store_v2_finality_artifact(artifact)
             .expect("persist authenticated v2 finality");
     }
-
     fn hash_only_snapshot_boundary(
         anchor_height: u64,
         install_record: bool,
@@ -3086,7 +2933,6 @@ mod tests {
                 .expect("fixture height is non-zero");
             assert!(kura.is_hash_only_block_height(index));
         }
-
         assert_eq!(
             state.commit_topology_snapshot(),
             record
@@ -3101,7 +2947,6 @@ mod tests {
         }
         (kura, state, record, keys)
     }
-
     fn snapshot_record_for_state(
         state: &State,
         genesis_context: &VerifiedHeightContext,
@@ -3137,7 +2982,6 @@ mod tests {
             .expect("fixture snapshot bootstrap is valid");
         record
     }
-
     fn complete_first_post_snapshot_height(
         kura: &Kura,
         state: &State,
@@ -3161,7 +3005,6 @@ mod tests {
         persist_complete_height(kura, state, &artifact);
         block
     }
-
     fn store_context(kura: &Kura, height: u64) -> PersistedHeightContext {
         V2ContextStore::open(kura.sumeragi_v2_storage_root())
             .expect("open context store")
@@ -3169,7 +3012,6 @@ mod tests {
             .expect("read context store")
             .expect("persisted context exists")
     }
-
     fn model_successful_snapshot_finalization(
         kura: &Kura,
         record: &wire::SnapshotV2BootstrapRecord,
@@ -3181,7 +3023,6 @@ mod tests {
             .persist(&PersistedHeightContext::from_verified(&verified))
             .expect("publish the exact token-owned first-height context");
     }
-
     fn storage_tree(root: &Path) -> Vec<(PathBuf, Option<Vec<u8>>)> {
         fn visit(root: &Path, directory: &Path, entries: &mut Vec<(PathBuf, Option<Vec<u8>>)>) {
             let Ok(read_dir) = std::fs::read_dir(directory) else {
@@ -3207,27 +3048,22 @@ mod tests {
                 }
             }
         }
-
         let mut entries = Vec::new();
         visit(root, root, &mut entries);
         entries
     }
-
     fn primary_lane_blocks_dir(kura: &Kura) -> PathBuf {
         LaneConfig::default()
             .primary()
             .blocks_dir(kura.store_root())
     }
-
     #[test]
     fn empty_chain_retry_binds_current_lane_auxiliary_storage() {
         let kura = Kura::blank_kura_for_testing();
         kura.finish_v2_startup_finality_verification();
         kura.reset_startup_replay_historical_payload_reads_for_test();
-
         let plan = plan_v2_startup_replay(kura.as_ref())
             .expect("empty-chain retry must bind current lane auxiliary storage");
-
         assert_eq!(plan.durable_height(), 0);
         assert_eq!(plan.complete_prefix_height(), 0);
         assert_eq!(plan.pending_tip_height(), None);
@@ -3239,7 +3075,6 @@ mod tests {
             "empty-chain refresh must not perform historical payload reads"
         );
     }
-
     #[test]
     fn all_hash_only_snapshot_recovers_exact_authenticated_successor() {
         let (kura, state, record, keys) = hash_only_snapshot_boundary(3, true);
@@ -3249,7 +3084,6 @@ mod tests {
             .expect("snapshot startup mints an authorization");
         assert_eq!(authorization.mode(), record.context.mode);
         model_successful_snapshot_finalization(kura.as_ref(), &record);
-
         let recovered =
             recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone())
                 .expect("authenticated all-hash-only snapshot must open its first context");
@@ -3281,7 +3115,6 @@ mod tests {
                 panic!("snapshot bootstrap must not masquerade as durable CommitQC authority")
             }
         }
-
         let store =
             V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
         let persisted = store
@@ -3291,7 +3124,6 @@ mod tests {
         assert_eq!(persisted.context(), &record.context);
         assert_eq!(persisted.proofs_of_possession(), record.validator_set_pops);
     }
-
     #[test]
     fn audited_snapshot_prefix_classifies_retained_legacy_bodies_without_sidecars() {
         let (genesis_context, keys) = verified_context();
@@ -3320,7 +3152,6 @@ mod tests {
         kura.install_authenticated_snapshot_prefix_for_testing(&payload)
             .expect("publish mixed retained/hash-only audited prefix");
         state.set_authenticated_snapshot_v2_bootstrap_for_testing(record.clone());
-
         assert_eq!(
             std::fs::read(&retained_body_path).expect("reread retained legacy body journal"),
             retained_body_bytes,
@@ -3338,7 +3169,6 @@ mod tests {
         assert_eq!(plan.audited_bootstrap_prefix_height(), 3);
         assert_eq!(plan.complete_prefix_height(), 3);
         assert_eq!(plan.pending_tip_height(), None);
-
         authenticate_v2_snapshot_startup(kura.as_ref(), &state, &plan)
             .expect("authenticate mixed imported prefix")
             .expect("snapshot startup requires finalization");
@@ -3346,7 +3176,6 @@ mod tests {
         recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone())
             .expect("retained bodies inside the typed import are historical, not executable");
     }
-
     #[test]
     fn untyped_zero_length_placeholder_is_never_a_replay_exemption() {
         let kura = Kura::blank_kura_for_testing();
@@ -3361,14 +3190,12 @@ mod tests {
             Err(V2StartupReplayError::InvalidReplayMetadata { height: 1, .. })
         ));
     }
-
     #[test]
     fn all_hash_only_snapshot_without_authenticated_record_fails_closed() {
         let (kura, state, _record, _keys) = hash_only_snapshot_boundary(2, false);
         let plan = plan_v2_startup_replay(kura.as_ref()).expect("plan snapshot import");
         let storage_root = kura.sumeragi_v2_storage_root();
         let tree_before = storage_tree(&storage_root);
-
         assert!(matches!(
             authenticate_v2_snapshot_startup(kura.as_ref(), &state, &plan),
             Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
@@ -3379,7 +3206,6 @@ mod tests {
             "failed token minting must leave the complete storage tree unchanged"
         );
     }
-
     #[test]
     fn arbitrary_self_signed_first_roster_is_rejected_before_state_or_context_mutation() {
         let (kura, state, record, _keys) = hash_only_snapshot_boundary(2, true);
@@ -3390,7 +3216,6 @@ mod tests {
             .snapshot_bootstrap
             .as_ref()
             .expect("fixture anchor");
-
         let mut attacker_keys = (81_u8..=84)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -3423,7 +3248,6 @@ mod tests {
             .expect("self-signed artifact is structurally complete but not snapshot-authorized");
         let storage_root = kura.sumeragi_v2_storage_root();
         let tree_before = storage_tree(&storage_root);
-
         assert!(matches!(
             authenticate_v2_snapshot_startup(kura.as_ref(), &state, &plan),
             Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
@@ -3439,7 +3263,6 @@ mod tests {
             "attacker artifact must be rejected before any storage publication"
         );
     }
-
     #[test]
     fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
         let (verified, current_keys) = verified_context();
@@ -3469,7 +3292,6 @@ mod tests {
         let transitioned_quorum =
             wire::DualQuorum::from_roster(&transitioned_roster).expect("transitioned quorum");
         let transitioned_leader_seed = [0x62; 32];
-
         let mut parent_context = verified.context().clone();
         parent_context.mode = wire::ConsensusMode::Npos;
         parent_context.epoch_end_height = 1;
@@ -3489,7 +3311,6 @@ mod tests {
         let parent_artifact =
             authenticated_artifact_for(parent_context.clone(), block_one.as_ref(), &current_keys);
         persist_complete_height(kura.as_ref(), &state, &parent_artifact);
-
         let mut attacker_keys = (81_u8..=84)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -3530,13 +3351,11 @@ mod tests {
         let child_artifact =
             authenticated_artifact_for(child_context, block_two.as_ref(), &attacker_keys);
         persist_complete_height(kura.as_ref(), &state, &child_artifact);
-
         assert!(matches!(
             plan_v2_startup_replay(kura.as_ref()),
             Err(V2StartupReplayError::FinalityAuthorityLineageMismatch { height: 2 })
         ));
     }
-
     #[test]
     fn anchor_snapshot_reopens_pending_first_full_block_without_parent_finality() {
         let (kura, state, record, keys) = hash_only_snapshot_boundary(2, true);
@@ -3551,7 +3370,6 @@ mod tests {
             .expect("authenticate first executable context")
             .expect("snapshot startup requires finalization");
         model_successful_snapshot_finalization(kura.as_ref(), &record);
-
         let block = dummy_block(
             &keys[0],
             record.context.height,
@@ -3559,7 +3377,6 @@ mod tests {
         );
         kura.store_block(block.clone())
             .expect("persist first post-snapshot block");
-
         let recovered =
             recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone())
                 .expect("anchor-height snapshot must reopen its exact pending first block");
@@ -3575,7 +3392,6 @@ mod tests {
             usize::try_from(anchor.snapshot_height).expect("fixture height fits usize")
         );
     }
-
     #[test]
     fn later_snapshot_before_first_full_finality_is_rejected_without_mutation() {
         let (kura, state, record, keys) = hash_only_snapshot_boundary(2, true);
@@ -3590,7 +3406,6 @@ mod tests {
             .expect("authenticate first executable context")
             .expect("snapshot startup requires finalization");
         model_successful_snapshot_finalization(kura.as_ref(), &record);
-
         let block = dummy_block(
             &keys[0],
             record.context.height,
@@ -3609,7 +3424,6 @@ mod tests {
             .load(record.context.height)
             .expect("read immutable context")
             .expect("authenticated context exists");
-
         assert!(matches!(
             recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone()),
             Err(V2RecoveryError::StartupReplay(
@@ -3636,7 +3450,6 @@ mod tests {
             "failed startup authentication must not publish missing finality"
         );
     }
-
     #[test]
     fn later_snapshot_requires_retained_original_bootstrap_lineage() {
         let (kura, state, record, keys) = hash_only_snapshot_boundary(2, false);
@@ -3649,7 +3462,6 @@ mod tests {
             .expect("persist original boundary context");
         complete_first_post_snapshot_height(kura.as_ref(), &state, &record, &keys);
         let plan = plan_v2_startup_replay(kura.as_ref()).expect("plan complete first height");
-
         assert!(matches!(
             authenticate_v2_snapshot_replay_boundary(kura.as_ref(), &state, &plan),
             Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
@@ -3659,7 +3471,6 @@ mod tests {
             Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
         ));
     }
-
     #[test]
     fn later_signed_lineage_without_immutable_first_context_fails_closed_read_only() {
         let (kura, state, record, keys) = hash_only_snapshot_boundary(2, true);
@@ -3676,7 +3487,6 @@ mod tests {
         let plan = plan_v2_startup_replay(kura.as_ref()).expect("plan complete first height");
         let storage_root = kura.sumeragi_v2_storage_root();
         let tree_before = storage_tree(&storage_root);
-
         assert!(matches!(
             authenticate_v2_snapshot_startup(kura.as_ref(), &state, &plan),
             Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
@@ -3689,7 +3499,6 @@ mod tests {
             "failed reauthentication must not publish an immutable first-height context"
         );
     }
-
     #[test]
     fn finalized_later_snapshot_rejects_a_missing_immutable_first_height_context() {
         let (kura, state, record, keys) = hash_only_snapshot_boundary(2, true);
@@ -3698,7 +3507,6 @@ mod tests {
             !kura.provisional_snapshot_bootstrap_pending(),
             "fixture must exercise the post-finalization trust boundary"
         );
-
         let mut parent = complete_first_post_snapshot_height(kura.as_ref(), &state, &record, &keys);
         let context_store =
             V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
@@ -3738,7 +3546,6 @@ mod tests {
         let hashes_before = state.committed_block_hashes_snapshot();
         let storage_root = kura.store_root();
         let storage_before = storage_tree(&storage_root);
-
         assert!(matches!(
             authenticate_v2_snapshot_replay_boundary(kura.as_ref(), &state, &plan),
             Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
@@ -3755,7 +3562,6 @@ mod tests {
             "post-eviction missing immutable context rejection must keep all Kura bytes read-only"
         );
     }
-
     #[test]
     fn later_snapshot_rejects_lineage_changed_from_immutable_first_height() {
         let (kura, mut state, record, keys) = hash_only_snapshot_boundary(2, true);
@@ -3766,14 +3572,12 @@ mod tests {
             .expect("snapshot startup requires finalization");
         model_successful_snapshot_finalization(kura.as_ref(), &record);
         complete_first_post_snapshot_height(kura.as_ref(), &state, &record, &keys);
-
         let mut substituted = record.clone();
         substituted.context.leader_seed[0] ^= 0x80;
         VerifiedHeightContext::snapshot_bootstrap(&substituted)
             .expect("substituted lineage is internally self-consistent");
         state.set_authenticated_snapshot_v2_bootstrap_for_testing(substituted);
         let plan = plan_v2_startup_replay(kura.as_ref()).expect("plan complete first height");
-
         assert!(matches!(
             authenticate_v2_snapshot_replay_boundary(kura.as_ref(), &state, &plan),
             Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
@@ -3784,7 +3588,6 @@ mod tests {
             "conflicting signed lineage must not replace the immutable original"
         );
     }
-
     #[test]
     fn later_snapshot_uses_historical_lineage_not_current_topology_or_anchor_wsv() {
         let (kura, mut state, record, keys) = hash_only_snapshot_boundary(2, true);
@@ -3795,7 +3598,6 @@ mod tests {
             .expect("snapshot startup requires finalization");
         model_successful_snapshot_finalization(kura.as_ref(), &record);
         complete_first_post_snapshot_height(kura.as_ref(), &state, &record, &keys);
-
         let changed_topology = (91_u8..=94)
             .map(|seed| {
                 let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -3829,7 +3631,6 @@ mod tests {
             "fixture must model a later WSV, not the original anchor WSV"
         );
         state.set_authenticated_snapshot_v2_bootstrap_for_testing(record.clone());
-
         let plan = plan_v2_startup_replay(kura.as_ref()).expect("plan complete first height");
         authenticate_v2_snapshot_replay_boundary(kura.as_ref(), &state, &plan)
             .expect("historical lineage is authenticated by its first full finality");
@@ -3839,7 +3640,6 @@ mod tests {
             Some(record.context.mode)
         );
     }
-
     #[test]
     fn hash_only_snapshot_rejects_an_intermediate_hash_vector_substitution() {
         let (genesis_context, keys) = verified_context();
@@ -3870,7 +3670,6 @@ mod tests {
         let plan = plan_v2_startup_replay(kura.as_ref()).expect("plan hash-only snapshot");
         let storage_root = kura.sumeragi_v2_storage_root();
         let tree_before = storage_tree(&storage_root);
-
         assert!(matches!(
             authenticate_v2_snapshot_startup(kura.as_ref(), &state, &plan),
             Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
@@ -3881,7 +3680,6 @@ mod tests {
             "hash-vector substitution must fail before any storage publication"
         );
     }
-
     #[test]
     fn replay_body_preflight_rejects_a_later_unavailable_evicted_body_without_partial_state() {
         let (mut verified, keys) = verified_context();
@@ -3936,7 +3734,6 @@ mod tests {
         let plan = plan_v2_startup_replay(kura.as_ref())
             .expect("verified sidecars keep the evicted height finality-complete");
         assert_eq!(plan.complete_prefix_height(), 4);
-
         for _ in 0..3 {
             state.block_hashes.block_and_revert().commit_for_tests();
         }
@@ -3962,13 +3759,11 @@ mod tests {
             state_wsv_before
         );
     }
-
     #[test]
     fn successor_pops_are_copied_only_from_the_durable_parent_artifact() {
         let (verified, current_keys) = verified_context();
         let current_context = verified.context().clone();
         let block = dummy_block(&current_keys[0], current_context.height, None);
-
         let parent =
             authenticated_artifact_for(current_context.clone(), block.as_ref(), &current_keys);
         parent.verify().expect("authenticated non-boundary parent");
@@ -3977,7 +3772,6 @@ mod tests {
             parent.validator_set_pops,
             "non-boundary recovery must retain the exact historical PoP bytes"
         );
-
         let mut next_keys = (21_u8..=24)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -3998,7 +3792,6 @@ mod tests {
                 iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("valid next-epoch PoP")
             })
             .collect::<Vec<_>>();
-
         let mut boundary_context = current_context;
         boundary_context.epoch_end_height = boundary_context.height;
         boundary_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
@@ -4026,7 +3819,6 @@ mod tests {
             "next-epoch PoPs must not be reconstructed from the current roster"
         );
     }
-
     #[test]
     fn durable_block_before_wsv_reopens_only_its_persisted_height_context() {
         let (verified, keys) = verified_context();
@@ -4041,7 +3833,6 @@ mod tests {
         store
             .persist(&PersistedHeightContext::from_verified(&verified))
             .expect("persist active context");
-
         let recovered =
             recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone())
                 .expect("resume interrupted height");
@@ -4059,7 +3850,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn durable_context_recovery_rejects_local_execution_policy_drift() {
         let (verified, keys) = verified_context();
@@ -4073,13 +3863,11 @@ mod tests {
             .expect("open context store")
             .persist(&PersistedHeightContext::from_verified(&verified))
             .expect("persist active context");
-
         assert!(matches!(
             recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone()),
             Err(V2RecoveryError::ExecutionPolicyMismatch { .. })
         ));
     }
-
     #[test]
     fn durable_context_recovery_rejects_local_autoscale_policy_drift() {
         let (verified, keys) = verified_context();
@@ -4105,13 +3893,11 @@ mod tests {
             .expect("open context store")
             .persist(&PersistedHeightContext::from_verified(&verified))
             .expect("persist active context");
-
         assert!(matches!(
             recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone()),
             Err(V2RecoveryError::ExecutionPolicyMismatch { .. })
         ));
     }
-
     #[test]
     fn checkpoint_before_finality_reopens_same_height_without_reapplying() {
         let (verified, keys) = verified_context();
@@ -4130,7 +3916,6 @@ mod tests {
         store
             .persist(&PersistedHeightContext::from_verified(&verified))
             .expect("persist active context");
-
         let recovered =
             recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone())
                 .expect("resume finality sidecar window");
@@ -4149,7 +3934,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn finality_complete_tip_with_incomplete_lane_completion_reopens_same_height() {
         let (verified, keys) = verified_context();
@@ -4168,7 +3952,6 @@ mod tests {
         store
             .persist(&PersistedHeightContext::from_verified(&verified))
             .expect("persist active context");
-
         assert!(
             kura.v2_finality_artifact_with_receipt(1)
                 .expect("read complete global finality")
@@ -4189,13 +3972,11 @@ mod tests {
                 .is_none(),
             "the fixture must stop before lane application receipt publication"
         );
-
         let plan = plan_v2_startup_replay(kura.as_ref())
             .expect("classify missing lane completion as an interrupted durable tip");
         assert_eq!(plan.durable_height(), 1);
         assert_eq!(plan.complete_prefix_height(), 0);
         assert_eq!(plan.pending_tip_height(), Some(1));
-
         let recovered =
             recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone())
                 .expect("reopen the exact finalized lane-owned tip");
@@ -4213,7 +3994,6 @@ mod tests {
             "recovery must not derive or persist a successor before lane completion"
         );
     }
-
     #[test]
     fn applied_tip_without_persisted_checkpoint_fails_closed() {
         let (verified, keys) = verified_context();
@@ -4229,13 +4009,11 @@ mod tests {
         store
             .persist(&PersistedHeightContext::from_verified(&verified))
             .expect("persist active context");
-
         assert!(matches!(
             recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone()),
             Err(V2RecoveryError::AppliedPendingTipWithoutCheckpoint(1))
         ));
     }
-
     #[test]
     fn finality_without_checkpoint_and_manifest_fails_closed() {
         let (verified, keys) = verified_context();
@@ -4249,7 +4027,6 @@ mod tests {
         let _receipt = kura
             .store_v2_finality_artifact(&artifact)
             .expect("persist finality");
-
         assert!(matches!(
             recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone(),),
             Err(V2RecoveryError::StartupReplay(
@@ -4257,7 +4034,6 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn parent_finality_and_immutable_context_mismatch_fails_closed() {
         let (verified, keys) = verified_context();
@@ -4270,7 +4046,6 @@ mod tests {
         commit_to_state(&state, &block, &context);
         let artifact = authenticated_artifact_for(context.clone(), block.as_ref(), &keys);
         persist_complete_height(kura.as_ref(), &state, &artifact);
-
         let mut different = context;
         different.leader_seed[0] ^= 0x80;
         let proofs = keys
@@ -4287,13 +4062,11 @@ mod tests {
         store
             .persist(&PersistedHeightContext::from_verified(&different))
             .expect("persist mismatching context");
-
         assert!(matches!(
             recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone(),),
             Err(V2RecoveryError::ParentContextMismatch(1))
         ));
     }
-
     #[test]
     fn missing_context_for_interrupted_durable_block_fails_closed() {
         let (verified, keys) = verified_context();
@@ -4302,13 +4075,11 @@ mod tests {
         let state = state_for(&kura, context.network_id);
         kura.store_block(dummy_block(&keys[0], 1, None))
             .expect("persist canonical block");
-
         assert!(matches!(
             recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone(),),
             Err(V2RecoveryError::MissingActiveContext(1))
         ));
     }
-
     #[test]
     fn equal_wsv_and_kura_heights_with_different_hashes_fail_closed() {
         let (verified, keys) = verified_context();
@@ -4321,13 +4092,11 @@ mod tests {
         commit_to_state(&state, &state_block, verified.context());
         kura.store_block(kura_block)
             .expect("persist conflicting Kura tip");
-
         assert!(matches!(
             recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone(),),
             Err(V2RecoveryError::StateKuraHashMismatch { height: 1, .. })
         ));
     }
-
     #[test]
     fn startup_plan_never_generic_replays_a_kura_first_tip() {
         let (verified, keys) = verified_context();
@@ -4340,11 +4109,9 @@ mod tests {
         commit_to_state(&state, &first, &context);
         let artifact = authenticated_artifact_for(context, first.as_ref(), &keys);
         persist_complete_height(kura.as_ref(), &state, &artifact);
-
         let second = dummy_block(&keys[0], 2, Some(first.as_ref().hash()));
         kura.store_block(second)
             .expect("persist Kura-first successor tip");
-
         let plan = plan_v2_startup_replay(kura.as_ref()).expect("classify exact pending tip");
         assert_eq!(plan.durable_height(), 2);
         assert_eq!(plan.complete_prefix_height(), 1);
@@ -4360,7 +4127,6 @@ mod tests {
             Err(V2StartupReplayError::StateHeightOutsidePlan { .. })
         ));
     }
-
     #[test]
     fn startup_audit_is_reused_by_planning_and_recovery_then_cleared() {
         let (verified, keys) = verified_context();
@@ -4377,7 +4143,6 @@ mod tests {
             .expect("open startup-audit context store")
             .persist(&PersistedHeightContext::from_verified(&verified))
             .expect("persist authenticated parent context");
-
         kura.clear_v2_finality_verification_cache_for_test();
         kura.reset_v2_finality_crypto_verifications_for_test();
         let first_plan =
@@ -4388,7 +4153,6 @@ mod tests {
             "the startup audit performs the sole cryptographic pass"
         );
         assert_eq!(kura.v2_startup_finality_inventory_len_for_test(), 1);
-
         kura.clear_v2_finality_verification_cache_for_test();
         kura.reset_startup_replay_historical_payload_reads_for_test();
         let second_plan =
@@ -4405,7 +4169,6 @@ mod tests {
             0,
             "replanning must consume the authenticated in-memory boundary, index, checkpoint, manifest, finality, and retained-record projections"
         );
-
         kura.clear_v2_finality_verification_cache_for_test();
         recover_active_height_with_plan(
             kura.as_ref(),
@@ -4426,7 +4189,6 @@ mod tests {
             "recovery consumes the O(H) startup inventory"
         );
     }
-
     #[test]
     fn recovery_rejects_post_plan_storage_identity_replacement_and_clears_inventory() {
         for replacement_target in [
@@ -4453,7 +4215,6 @@ mod tests {
                 !consensus_storage_root.exists(),
                 "fixture must begin without recovery-owned consensus storage"
             );
-
             let blocks_dir = primary_lane_blocks_dir(kura.as_ref());
             let path = match replacement_target {
                 "blocks.data" => blocks_dir.join("blocks.data"),
@@ -4476,7 +4237,6 @@ mod tests {
             .expect("write equal-byte replacement");
             std::fs::remove_file(&path).expect("unlink validated storage identity");
             std::fs::rename(&replacement, &path).expect("publish equal-byte replacement");
-
             assert!(matches!(
                 recover_active_height_with_plan(
                     kura.as_ref(),
@@ -4500,7 +4260,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn startup_plan_propagates_a_corrupt_exact_durable_index_count() {
         let (_verified, keys) = verified_context();
@@ -4516,13 +4275,11 @@ mod tests {
             .write_all(&[0xA5])
             .expect("append a partial index entry");
         index.sync_all().expect("sync corrupt durable index");
-
         assert!(matches!(
             plan_v2_startup_replay(kura.as_ref()),
             Err(V2StartupReplayError::Kura(_))
         ));
     }
-
     #[test]
     fn startup_plan_rejects_a_missing_canonical_file_on_an_empty_chain() {
         for name in [
@@ -4534,7 +4291,6 @@ mod tests {
             let kura = Kura::blank_kura_for_testing();
             let path = primary_lane_blocks_dir(kura.as_ref()).join(name);
             std::fs::remove_file(&path).expect("remove canonical journal file");
-
             assert!(matches!(
                 plan_v2_startup_replay(kura.as_ref()),
                 Err(V2StartupReplayError::Kura(crate::kura::Error::IO(error, failed_path)))
@@ -4553,7 +4309,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn startup_plan_rejects_an_incomplete_interior_height() {
         let (verified, keys) = verified_context();
@@ -4572,7 +4327,6 @@ mod tests {
         persist_checkpoint_and_manifest(kura.as_ref(), &state, &artifact);
         kura.store_block(dummy_block(&keys[0], 2, Some(first.as_ref().hash())))
             .expect("persist impossible later block");
-
         assert!(matches!(
             plan_v2_startup_replay(kura.as_ref()),
             Err(V2StartupReplayError::IncompleteInteriorHeight {
@@ -4581,7 +4335,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn startup_plan_accepts_each_post_checkpoint_crash_window_as_one_tip() {
         let (verified, keys) = verified_context();
@@ -4601,7 +4354,6 @@ mod tests {
             plan_v2_startup_replay(kura.as_ref()).expect("checkpoint-only tip is recoverable");
         assert_eq!(checkpoint_only.complete_prefix_height(), 0);
         assert_eq!(checkpoint_only.pending_tip_height(), Some(1));
-
         kura.store_commit_manifest(
             CommitManifest::new(1, block.as_ref().hash(), None, None, checkpoint, None)
                 .with_authenticated_v2_commit_authority(&artifact),
@@ -4611,7 +4363,6 @@ mod tests {
             plan_v2_startup_replay(kura.as_ref()).expect("manifest tip is recoverable");
         assert_eq!(manifest_only.complete_prefix_height(), 0);
         assert_eq!(manifest_only.pending_tip_height(), Some(1));
-
         let _commit_receipt = kura
             .store_v2_finality_artifact(&artifact)
             .expect("complete finality publication");
@@ -4619,7 +4370,6 @@ mod tests {
         assert_eq!(complete.complete_prefix_height(), 1);
         assert_eq!(complete.pending_tip_height(), None);
     }
-
     #[test]
     fn deferred_sidecar_recovery_requires_a_fresh_plan_and_snapshot_boundary_authentication() {
         let (kura, state, record, keys) = hash_only_snapshot_boundary(2, true);
@@ -4635,7 +4385,6 @@ mod tests {
         );
         kura.store_block(first_full.clone())
             .expect("persist interrupted first post-snapshot block");
-
         let prefinalization_plan =
             plan_v2_startup_replay(kura.as_ref()).expect("classify pre-finalization crash image");
         assert_eq!(prefinalization_plan.complete_prefix_height(), 2);
@@ -4644,7 +4393,6 @@ mod tests {
             authenticate_v2_snapshot_startup(kura.as_ref(), &state, &prefinalization_plan)
                 .expect("authenticate original snapshot boundary")
                 .expect("imported prefix mints a finalization authorization");
-
         // Model deferred stage recovery publishing a complete, internally valid sidecar tuple
         // after the token was minted. The recovered artifact preserves the snapshot anchor, so
         // replay planning alone accepts it, but substitutes another frozen first-height context.
@@ -4655,7 +4403,6 @@ mod tests {
         let substituted_artifact =
             authenticated_artifact_for(substituted_context, first_full.as_ref(), &keys);
         persist_complete_height(kura.as_ref(), &state, &substituted_artifact);
-
         let recovered_plan =
             plan_v2_startup_replay(kura.as_ref()).expect("reclassify recovered sidecar tuple");
         assert_eq!(recovered_plan.complete_prefix_height(), 3);
@@ -4670,7 +4417,6 @@ mod tests {
         ));
         drop(authorization);
     }
-
     #[test]
     fn startup_plan_rejects_finality_bound_to_an_unauthenticated_manifest() {
         let (verified, keys) = verified_context();
@@ -4698,13 +4444,11 @@ mod tests {
         let _commit_receipt = kura
             .store_v2_finality_artifact(&artifact)
             .expect("persist independently authenticated finality");
-
         assert!(matches!(
             plan_v2_startup_replay(kura.as_ref()),
             Err(V2StartupReplayError::InvalidReplayMetadata { height: 1, .. })
         ));
     }
-
     #[test]
     fn finalized_tip_derives_one_idempotent_successor_context() {
         let (verified, keys) = verified_context();
@@ -4722,7 +4466,6 @@ mod tests {
         store
             .persist(&PersistedHeightContext::from_verified(&verified))
             .expect("persist parent context");
-
         let first =
             recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone())
                 .expect("derive successor");
@@ -4794,7 +4537,6 @@ mod tests {
         }
         let first_context = first.verified_context().context().clone();
         drop(first);
-
         let repeated =
             recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone())
                 .expect("reopen identical successor");
@@ -4807,7 +4549,6 @@ mod tests {
                     && authority.successor_context_id() == first_context.id()
         ));
     }
-
     #[test]
     fn verified_successor_projects_only_its_exact_kura_lifecycle_storage() {
         let (verified, keys) = verified_context();
@@ -4865,7 +4606,6 @@ mod tests {
         store
             .persist(&PersistedHeightContext::from_verified(&verified))
             .expect("persist canonical predecessor context");
-
         let mut foreign = artifact.clone();
         let foreign_block_hash =
             HashOf::from_untyped_unchecked(Hash::new(b"foreign same-height predecessor block"));
@@ -4873,12 +4613,10 @@ mod tests {
         foreign.block_hash = foreign_block_hash;
         foreign.commit_qc.subject = foreign.subject;
         let foreign_receipt = crate::kura::KuraV2CommitReceipt::for_test(&foreign);
-
         assert!(matches!(
             build_verified_successor(&state, &store, &artifact, &foreign_receipt),
             Err(V2RecoveryError::DurablePredecessorAuthorityMismatch(1))
         ));
-
         let exact_successor = build_verified_successor(&state, &store, &artifact, &receipt)
             .expect("build exact successor before rejecting foreign receipt retention");
         let exact_successor_context_id = exact_successor.context().id();
@@ -4892,7 +4630,6 @@ mod tests {
             ),
             Err(V2RecoveryError::DurablePredecessorAuthorityMismatch(1))
         ));
-
         let exact_successor = build_verified_successor(&state, &store, &artifact, &receipt)
             .expect("build exact successor before rejecting foreign artifact retention");
         let (_, exact_activation) = exact_successor.into_parts();
@@ -4905,7 +4642,6 @@ mod tests {
             ),
             Err(V2RecoveryError::DurablePredecessorAuthorityMismatch(1))
         ));
-
         let foreign_activation = super::DurableSuccessorActivationAuthority::for_test(
             super::DurableV2PredecessorIdentity::for_test(1, b"foreign activation predecessor"),
             exact_successor_context_id,
@@ -4919,7 +4655,6 @@ mod tests {
             ),
             Err(V2RecoveryError::DurablePredecessorAuthorityMismatch(1))
         ));
-
         let exact_successor = build_verified_successor(&state, &store, &artifact, &receipt)
             .expect("build exact successor before rejecting changed successor binding");
         let (_, exact_activation) = exact_successor.into_parts();

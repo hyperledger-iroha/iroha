@@ -1,5 +1,4 @@
 //! Contains trigger-related types that are specialized for core-specific needs.
-
 use derive_more::Constructor;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
@@ -14,9 +13,7 @@ use iroha_logger::trace;
 use norito::json::native::Number as JsonNumber;
 #[cfg(feature = "json")]
 use norito::json::{self, JsonSerialize as JsonSerializeTrait, Value as JsonValue};
-
 use crate::smartcontracts::triggers::set::ExecutableRef;
-
 /// Same as [`iroha_data_model::trigger::action::Action`] but generic over the filter type
 ///
 /// This is used to split different action types to different collections
@@ -37,7 +34,6 @@ pub struct SpecializedAction<F> {
     /// Metadata used as persistent storage for trigger data.
     pub metadata: Metadata,
 }
-
 impl<F> SpecializedAction<F> {
     /// Construct a specialized action given `executable`, `repeats`, `authority` and `filter`.
     ///
@@ -66,7 +62,6 @@ impl<F> SpecializedAction<F> {
         })
     }
 }
-
 #[cfg(feature = "json")]
 fn parse_repeats(value: JsonValue) -> Result<Repeats, json::Error> {
     match value {
@@ -127,7 +122,6 @@ fn parse_repeats(value: JsonValue) -> Result<Repeats, json::Error> {
         }),
     }
 }
-
 #[cfg(feature = "json")]
 impl<F> json::FastJsonWrite for SpecializedAction<F>
 where
@@ -167,7 +161,6 @@ where
         out.push('}');
     }
 }
-
 #[cfg(feature = "json")]
 impl<F> json::JsonDeserialize for SpecializedAction<F>
 where
@@ -181,7 +174,6 @@ where
         let mut filter: Option<F> = None;
         let mut retry_policy: Option<Option<TimeTriggerRetryPolicy>> = None;
         let mut metadata: Option<Metadata> = None;
-
         while let Some(key) = visitor.next_key()? {
             match key.as_str() {
                 "executable" => {
@@ -226,16 +218,13 @@ where
                 }
             }
         }
-
         visitor.finish()?;
-
         let executable = executable.ok_or_else(|| json::MapVisitor::missing_field("executable"))?;
         let repeats = repeats.ok_or_else(|| json::MapVisitor::missing_field("repeats"))?;
         let authority = authority.ok_or_else(|| json::MapVisitor::missing_field("authority"))?;
         let filter = filter.ok_or_else(|| json::MapVisitor::missing_field("filter"))?;
         let retry_policy = retry_policy.unwrap_or(None);
         let metadata = metadata.ok_or_else(|| json::MapVisitor::missing_field("metadata"))?;
-
         let mut action = Self::new(executable, repeats, authority, filter)
             .map_err(|error| json::Error::Message(error.to_string()))?;
         action.retry_policy = retry_policy;
@@ -250,7 +239,6 @@ where
     F: Into<EventFilterBox>,
 {
     type Error = ActionValidationError;
-
     fn try_from(value: SpecializedAction<F>) -> Result<Self, Self::Error> {
         let SpecializedAction {
             executable,
@@ -268,7 +256,6 @@ where
         Ok(action)
     }
 }
-
 /// Same as [`iroha_data_model::trigger::Trigger`] but generic over the filter type
 #[derive(Constructor)]
 pub struct SpecializedTrigger<F> {
@@ -277,13 +264,11 @@ pub struct SpecializedTrigger<F> {
     /// Action to be performed when the trigger matches.
     pub action: SpecializedAction<F>,
 }
-
 macro_rules! impl_try_from_box {
     ($($variant:ident => $filter_type:ty),+ $(,)?) => {
         $(
             impl TryFrom<Trigger> for SpecializedTrigger<$filter_type> {
                 type Error = &'static str;
-
                 fn try_from(boxed: Trigger) -> Result<Self, Self::Error> {
                     if let EventFilterBox::$variant(concrete_filter) = boxed.action().filter().clone() {
                         let iroha_data_model::trigger::action::Action {
@@ -314,14 +299,12 @@ macro_rules! impl_try_from_box {
         )+
     };
 }
-
 impl_try_from_box! {
     Data => DataEventFilter,
     Pipeline => PipelineEventFilterBox,
     Time => TimeEventFilter,
     ExecuteTrigger => ExecuteTriggerEventFilter,
 }
-
 /// Same as [`iroha_data_model::trigger::action::Action`] but with
 /// a reference to a pre-loaded executable.
 #[derive(Clone, Debug)]
@@ -341,7 +324,6 @@ pub struct LoadedAction<F> {
     /// Arbitrary metadata stored for this trigger.
     pub metadata: Metadata,
 }
-
 impl<F> LoadedAction<F> {
     pub(super) fn extract_blob_hash(&self) -> Option<HashOf<IvmBytecode>> {
         match self.executable {
@@ -352,7 +334,6 @@ impl<F> LoadedAction<F> {
         }
     }
 }
-
 /// Internal retry runtime state for scheduled time triggers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct TimeTriggerRetryState {
@@ -361,24 +342,20 @@ pub struct TimeTriggerRetryState {
     /// Millisecond timestamp when the next retry becomes eligible.
     pub next_retry_at_ms: u64,
 }
-
 #[cfg(feature = "json")]
 impl json::JsonSerialize for TimeTriggerRetryState {
     fn json_serialize(&self, out: &mut String) {
         use base64::Engine as _;
-
         let bytes = norito::to_bytes(self)
             .expect("TimeTriggerRetryState Norito serialization must succeed");
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
         json::JsonSerialize::json_serialize(&encoded, out);
     }
 }
-
 #[cfg(feature = "json")]
 impl json::JsonDeserialize for TimeTriggerRetryState {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         use base64::Engine as _;
-
         let encoded = parser.parse_string()?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(encoded.as_str())
@@ -389,7 +366,6 @@ impl json::JsonDeserialize for TimeTriggerRetryState {
             .map_err(|err| json::Error::Message(err.to_string()))
     }
 }
-
 #[cfg(feature = "json")]
 impl<F> json::FastJsonWrite for LoadedAction<F>
 where
@@ -432,7 +408,6 @@ where
         out.push('}');
     }
 }
-
 #[cfg(feature = "json")]
 impl<F> json::JsonDeserialize for LoadedAction<F>
 where
@@ -451,7 +426,6 @@ where
                 });
             }
         };
-
         let retry_policy = map
             .remove("retry_policy")
             .map(json::from_value)
@@ -466,17 +440,14 @@ where
             map.remove(name)
                 .ok_or_else(|| json::Error::missing_field(name))
         };
-
         let executable = json::from_value(take_field("executable")?)?;
         let repeats = parse_repeats(take_field("repeats")?)?;
         let authority = json::from_value(take_field("authority")?)?;
         let filter = json::from_value(take_field("filter")?)?;
         let metadata = json::from_value(take_field("metadata")?)?;
-
         for (key, _) in map {
             trace!(%key, "ignoring unknown loaded trigger action field");
         }
-
         Ok(Self {
             executable,
             repeats,
@@ -488,66 +459,49 @@ where
         })
     }
 }
-
 /// Trait common for all `LoadedAction`s
 pub trait LoadedActionTrait {
     /// Get action executable
     fn executable(&self) -> &ExecutableRef;
-
     /// Get action repeats enum
     fn repeats(&self) -> &Repeats;
-
     /// Set action repeats
     fn set_repeats(&mut self, repeats: Repeats);
-
     /// Get action technical account
     fn authority(&self) -> &AccountId;
-
     /// Get action metadata
     fn metadata(&self) -> &Metadata;
-
     /// Get action metadata
     fn metadata_mut(&mut self) -> &mut Metadata;
-
     /// Check if action is mintable.
     fn mintable(&self) -> bool;
-
     /// Convert action to a boxed representation
     fn into_boxed(self) -> LoadedAction<EventFilterBox>;
-
     /// Same as [`into_boxed()`](LoadedActionTrait::into_boxed) but clones `self`
     fn clone_and_box(&self) -> LoadedAction<EventFilterBox>;
 }
-
 impl<F: EventFilter + Into<EventFilterBox> + Clone> LoadedActionTrait for LoadedAction<F> {
     fn executable(&self) -> &ExecutableRef {
         &self.executable
     }
-
     fn repeats(&self) -> &iroha_data_model::trigger::action::Repeats {
         &self.repeats
     }
-
     fn set_repeats(&mut self, repeats: iroha_data_model::trigger::action::Repeats) {
         self.repeats = repeats;
     }
-
     fn authority(&self) -> &AccountId {
         &self.authority
     }
-
     fn metadata(&self) -> &Metadata {
         &self.metadata
     }
-
     fn metadata_mut(&mut self) -> &mut Metadata {
         &mut self.metadata
     }
-
     fn mintable(&self) -> bool {
         self.filter.mintable()
     }
-
     fn into_boxed(self) -> LoadedAction<EventFilterBox> {
         let Self {
             executable,
@@ -558,7 +512,6 @@ impl<F: EventFilter + Into<EventFilterBox> + Clone> LoadedActionTrait for Loaded
             retry_state,
             metadata,
         } = self;
-
         LoadedAction {
             executable,
             repeats,
@@ -569,17 +522,14 @@ impl<F: EventFilter + Into<EventFilterBox> + Clone> LoadedActionTrait for Loaded
             metadata,
         }
     }
-
     fn clone_and_box(&self) -> LoadedAction<EventFilterBox> {
         self.clone().into_boxed()
     }
 }
-
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "json")]
     use std::num::{NonZeroU32, NonZeroU64};
-
     #[cfg(feature = "json")]
     use iroha_crypto::{Algorithm, KeyPair};
     #[cfg(feature = "json")]
@@ -588,20 +538,16 @@ mod tests {
     };
     #[cfg(feature = "json")]
     use iroha_primitives::const_vec::ConstVec;
-
     use super::*;
-
     #[cfg(feature = "json")]
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("specialized trigger fixture key generation should succeed")
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
-
     #[cfg(feature = "json")]
     fn test_executable() -> Executable {
         vec![InstructionBox::from(Log::new(
@@ -610,7 +556,6 @@ mod tests {
         ))]
         .into()
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn specialized_action_json_rejects_mismatched_authority() {
@@ -626,11 +571,9 @@ mod tests {
             retry_policy: None,
             metadata: Metadata::default(),
         };
-
         let encoded = norito::json::to_json(&invalid).expect("serialize invalid action fixture");
         let error = norito::json::from_json::<SpecializedAction<EventFilterBox>>(&encoded)
             .expect_err("mismatched specialized action authority must be rejected");
-
         assert!(
             error
                 .to_string()
@@ -638,7 +581,6 @@ mod tests {
             "unexpected error: {error}"
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn specialized_action_json_rejects_retry_on_non_scheduled_filter() {
@@ -654,11 +596,9 @@ mod tests {
             }),
             metadata: Metadata::default(),
         };
-
         let encoded = norito::json::to_json(&invalid).expect("serialize invalid retry fixture");
         let error = norito::json::from_json::<SpecializedAction<TimeEventFilter>>(&encoded)
             .expect_err("retry policy on a pre-commit action must be rejected");
-
         assert!(
             error
                 .to_string()
@@ -666,7 +606,6 @@ mod tests {
             "unexpected error: {error}"
         );
     }
-
     #[test]
     fn trigger_with_filterbox_can_be_unboxed() {
         /// Should fail to compile if a new variant will be added to `EventFilterBox`
@@ -695,7 +634,6 @@ mod tests {
             }
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn loaded_action_json_roundtrip() {
@@ -711,11 +649,9 @@ mod tests {
             retry_state: None,
             metadata: Metadata::default(),
         };
-
         let json = norito::json::to_json(&action).expect("serialize LoadedAction");
         let reparsed: LoadedAction<DataEventFilter> =
             norito::json::from_json(&json).expect("deserialize LoadedAction");
-
         assert_eq!(reparsed.repeats, action.repeats);
         assert_eq!(
             reparsed.authority.subject_id(),
@@ -725,7 +661,6 @@ mod tests {
         assert_eq!(reparsed.retry_policy, action.retry_policy);
         assert_eq!(reparsed.retry_state, action.retry_state);
         assert_eq!(reparsed.metadata, action.metadata);
-
         match reparsed.executable {
             ExecutableRef::Instructions(restored) => assert_eq!(restored, instructions),
             ExecutableRef::ContractCall(_) => panic!("expected instruction executable"),

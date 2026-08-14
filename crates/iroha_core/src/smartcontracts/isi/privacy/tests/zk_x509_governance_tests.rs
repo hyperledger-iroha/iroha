@@ -1,5 +1,4 @@
 use super::*;
-
 #[test]
 fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
     let state = state_with_activation(active_lifecycle());
@@ -23,7 +22,6 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         None,
         PrivacyZkX509RecordLifecycleV1::Active,
     );
-
     {
         let mut transaction = block.transaction();
         let error = RegisterPrivacyZkX509TrustAnchorV1::new(anchor_origin)
@@ -33,7 +31,6 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         assert_eq!(transaction.world.privacy_commitments.iter().count(), 0);
         assert_empty_and_unbudgeted(&transaction);
     }
-
     {
         let mut transaction = block.transaction();
         grant_governance(&mut transaction);
@@ -59,7 +56,6 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         assert_eq!(transaction.privacy_budget_for_testing().0, 1);
         transaction.apply();
     }
-
     {
         let mut transaction = block.transaction();
         RegisterPrivacyZkX509CertificatePolicyV1::new(policy_origin.clone())
@@ -73,7 +69,6 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         .expect("commit X.509 anchor and policy block");
     block_height += 1;
     block = state.block(test_header_at(block_height));
-
     {
         let mut transaction = block.transaction();
         RegisterPrivacyZkX509CrlV1::new(crl_origin)
@@ -102,7 +97,6 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         assert_eq!(snapshot.crl_record(), crl_origin);
         transaction.apply();
     }
-
     {
         let mut transaction = block.transaction();
         let budget_before = transaction.privacy_budget_for_testing();
@@ -127,7 +121,6 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         );
         assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
     }
-
     {
         let mut transaction = block.transaction();
         let budget_before = transaction.privacy_budget_for_testing();
@@ -154,7 +147,6 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         );
         assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
     }
-
     {
         let mut transaction = block.transaction();
         let budget_before = transaction.privacy_budget_for_testing();
@@ -177,7 +169,6 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
             smart_contract_parameter_message(&error).contains("freshness limit"),
             "{error:?}"
         );
-
         let future = x509_crl(
             1,
             1,
@@ -195,7 +186,6 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
             smart_contract_parameter_message(&error).contains("not current"),
             "{error:?}"
         );
-
         let mut digest_substitution = crl_origin;
         digest_substitution.crl_der_digest = PrivacyX509CrlDerDigestV1::new([0xEC; 32]);
         let error = RegisterPrivacyZkX509CrlV1::new(digest_substitution)
@@ -212,7 +202,6 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         assert_eq!(transaction.world.privacy_roots.iter().count(), root_count);
         assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
     }
-
     let anchor_rotation = x509_trust_anchor(
         2,
         0xD5,
@@ -289,7 +278,6 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         .expect("commit X.509 CRL and anchor-rotation block");
     block_height += 1;
     block = state.block(test_header_at(block_height));
-
     {
         let mut transaction = block.transaction();
         RotatePrivacyZkX509CertificatePolicyV1::new(
@@ -302,7 +290,6 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         assert_eq!(transaction.privacy_budget_for_testing().0, 1);
         transaction.apply();
     }
-
     {
         let mut transaction = block.transaction();
         let budget_before = transaction.privacy_budget_for_testing();
@@ -318,7 +305,6 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
             smart_contract_parameter_message(&error).contains("stale or substituted"),
             "{error:?}"
         );
-
         let mut record_substitution = crl_rotation;
         record_substitution.next_update_unix_seconds += 1;
         let error = RotatePrivacyZkX509CrlV1::new(crl_origin.record_digest, record_substitution)
@@ -335,7 +321,6 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         assert_eq!(transaction.world.privacy_roots.iter().count(), root_count);
         assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
     }
-
     {
         let mut transaction = block.transaction();
         RotatePrivacyZkX509CrlV1::new(crl_origin.record_digest, crl_rotation)
@@ -363,7 +348,6 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         .expect("commit X.509 policy and CRL-rotation block");
     block_height += 1;
     block = state.block(test_header_at(block_height));
-
     let anchor_revoked = x509_trust_anchor(
         3,
         0xD5,
@@ -440,7 +424,6 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         .expect("commit X.509 CRL and policy-revocation block");
     block_height += 1;
     block = state.block(test_header_at(block_height));
-
     {
         let mut transaction = block.transaction();
         RevokePrivacyZkX509TrustAnchorV1::new(anchor_rotation.record_digest, anchor_revoked)

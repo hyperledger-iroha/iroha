@@ -1,5 +1,4 @@
 // Exact-network and bounded-wire tests for provider VRF submissions.
-
 #[test]
 fn provider_vrf_submission_requires_exact_non_inert_ed25519_material() {
     let submission = provider_vrf_submission_fixture();
@@ -30,14 +29,12 @@ fn provider_vrf_submission_requires_exact_non_inert_ed25519_material() {
         ])
         .is_err()
     );
-
     let mut inert_network = submission.clone();
     inert_network.network_id.fill(0);
     assert_eq!(
         inert_network.validate(),
         Err(ProviderVrfSubmissionValidationError::InvalidNetworkId)
     );
-
     let mut short_key = submission.clone();
     short_key.signature.public_key.pop();
     assert_eq!(
@@ -49,7 +46,6 @@ fn provider_vrf_submission_requires_exact_non_inert_ed25519_material() {
             }
         )
     );
-
     let mut overlong_signature = submission.clone();
     overlong_signature.signature.signature.push(10);
     assert_eq!(
@@ -61,14 +57,12 @@ fn provider_vrf_submission_requires_exact_non_inert_ed25519_material() {
             }
         )
     );
-
     let mut inert = submission.clone();
     inert.signature.public_key.fill(0);
     assert_eq!(
         inert.validate(),
         Err(ProviderVrfSubmissionValidationError::InvalidSignature)
     );
-
     let mut reserved = submission;
     reserved.signature.algorithm = SignatureAlgorithm::MultiSig;
     assert_eq!(
@@ -76,7 +70,6 @@ fn provider_vrf_submission_requires_exact_non_inert_ed25519_material() {
         Err(ProviderVrfSubmissionValidationError::UnsupportedSignatureAlgorithm)
     );
 }
-
 #[test]
 fn provider_vrf_submission_signature_binds_exact_network_id() {
     let signing_key = SigningKey::from_bytes(&[0x47; 32]);
@@ -86,7 +79,6 @@ fn provider_vrf_submission_signature_binds_exact_network_id() {
         .signature_payload_bytes()
         .expect("encode provider VRF submission payload");
     submission.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
-
     submission
         .verify_signature_for_provider(&signing_key.verifying_key().to_bytes())
         .expect("exact-network provider signature");

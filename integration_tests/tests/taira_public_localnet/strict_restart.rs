@@ -1,5 +1,4 @@
 //! Fail-closed four-validator restart and exact catch-up qualification.
-
 use super::*;
 use iroha::{
     crypto::HashOf,
@@ -10,20 +9,17 @@ use iroha::{
         transaction::{FeePaymentIntent, SignedTransaction},
     },
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ExactCommittedBlock {
     height: u64,
     hash: HashOf<BlockHeader>,
     parent_hash: Option<HashOf<BlockHeader>>,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct TipObservation {
     block: ExactCommittedBlock,
     contains_transaction: bool,
 }
-
 fn query_tip(client: &Client, transaction: Option<&SignedTransaction>) -> Result<TipObservation> {
     let blocks = client
         .query(FindBlocks)
@@ -66,7 +62,6 @@ fn query_tip(client: &Client, transaction: Option<&SignedTransaction>) -> Result
         contains_transaction,
     })
 }
-
 async fn wait_for_all_common_tip(
     clients: &[Client],
     timeout: Duration,
@@ -113,7 +108,6 @@ async fn wait_for_all_common_tip(
         sleep(STATUS_POLL).await;
     }
 }
-
 async fn wait_for_all_signed_tip(
     clients: &[Client],
     transaction: &SignedTransaction,
@@ -173,7 +167,6 @@ async fn wait_for_all_signed_tip(
         sleep(STATUS_POLL).await;
     }
 }
-
 fn signed_probe(client: &Client, message: String) -> SignedTransaction {
     client.build_transaction(
         [InstructionBox::from(Log::new(Level::INFO, message))],
@@ -181,7 +174,6 @@ fn signed_probe(client: &Client, message: String) -> SignedTransaction {
         Metadata::default(),
     )
 }
-
 fn submit_signed(client: &Client, transaction: &SignedTransaction, context: &str) -> Result<()> {
     let submitted = client
         .submit_transaction_blocking(transaction)
@@ -192,7 +184,6 @@ fn submit_signed(client: &Client, transaction: &SignedTransaction, context: &str
     );
     Ok(())
 }
-
 async fn strict_process_restart_catchup(
     harness: &mut TairaHarness,
     restart_index: usize,
@@ -217,7 +208,6 @@ async fn strict_process_restart_catchup(
         .map(|(_, client)| client.clone())
         .collect::<Vec<_>>();
     ensure!(healthy.len() + 1 == harness.validator_clients.len());
-
     harness.localnet.stop_validator(restart_index)?;
     ensure!(
         get_status_with_retry(&harness.validator_clients[restart_index]).is_err(),
@@ -227,7 +217,6 @@ async fn strict_process_restart_catchup(
         collect_statuses(&healthy)?.len() == healthy.len(),
         "a live validator disappeared during the outage"
     );
-
     let sentinel = signed_probe(
         &healthy[0],
         format!("strict restart sentinel after height {}", baseline.height),
@@ -254,7 +243,6 @@ async fn strict_process_restart_catchup(
             && sentinel_block.parent_hash == Some(baseline.hash),
         "sentinel is not the exact successor of the common baseline: baseline={baseline:?}, sentinel={sentinel_block:?}"
     );
-
     harness.localnet.start_validator(restart_index)?;
     wait_for_status_ready(
         &harness.validator_clients[restart_index],
@@ -270,7 +258,6 @@ async fn strict_process_restart_catchup(
     )
     .await?;
     ensure!(recovered == sentinel_block);
-
     let successor = signed_probe(
         &healthy[0],
         format!(
@@ -300,12 +287,10 @@ async fn strict_process_restart_catchup(
     ensure!(successor_block.height > baseline.height);
     Ok(())
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn taira_localnet_restart_catchup_behavior() -> Result<()> {
     init_instruction_registry();
     let _guard = sandbox::serial_guard();
-
     let temp_dir = localnet_tempdir("taira-restart")?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
@@ -318,6 +303,5 @@ async fn taira_localnet_restart_catchup_behavior() -> Result<()> {
         strict_process_restart_catchup(&mut harness, restart_index).await
     }
     .await;
-
     result
 }

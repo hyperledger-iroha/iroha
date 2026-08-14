@@ -4,7 +4,6 @@ use quote::{format_ident, quote};
 use syn::{
     Attribute, Data, DeriveInput, Expr, ExprLit, Field, Fields, Lit, parse_quote, spanned::Spanned,
 };
-
 struct FieldInfo {
     ident: syn::Ident,
     ty: syn::Type,
@@ -13,7 +12,6 @@ struct FieldInfo {
     default: Option<Expr>,
     init: Option<Expr>,
 }
-
 fn parse_field(emitter: &mut Emitter, field: &Field) -> FieldInfo {
     let ident = field.ident.clone().expect("named fields");
     let ty = field.ty.clone();
@@ -26,7 +24,6 @@ fn parse_field(emitter: &mut Emitter, field: &Field) -> FieldInfo {
     let mut skip = false;
     let mut default = None;
     let mut init = None;
-
     for attr in &field.attrs {
         if !attr.path().is_ident("registrable_builder") {
             continue;
@@ -35,7 +32,6 @@ fn parse_field(emitter: &mut Emitter, field: &Field) -> FieldInfo {
             emit!(emitter, attr.span(), "{}", e);
         }
     }
-
     if skip && init.is_none() {
         emit!(
             emitter,
@@ -43,7 +39,6 @@ fn parse_field(emitter: &mut Emitter, field: &Field) -> FieldInfo {
             "`skip` fields must specify `init` expression"
         );
     }
-
     FieldInfo {
         ident,
         ty,
@@ -53,7 +48,6 @@ fn parse_field(emitter: &mut Emitter, field: &Field) -> FieldInfo {
         init,
     }
 }
-
 fn parse_registrable_attr(
     attr: &Attribute,
     skip: &mut bool,
@@ -78,7 +72,6 @@ fn parse_registrable_attr(
         }
     })
 }
-
 fn normalize_value_expr(expr: Expr) -> syn::Result<Expr> {
     if let Expr::Lit(ExprLit {
         lit: Lit::Str(lit), ..
@@ -89,12 +82,10 @@ fn normalize_value_expr(expr: Expr) -> syn::Result<Expr> {
         Ok(expr)
     }
 }
-
 #[allow(clippy::too_many_lines)]
 pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> TokenStream {
     let name = &input.ident;
     let builder_name = format_ident!("New{}", name);
-
     let mut item_attrs: Vec<Attribute> = input
         .attrs
         .iter()
@@ -105,7 +96,6 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
         &mut item_attrs,
         format!("Builder for `{name}` created by `RegistrableBuilder`."),
     );
-
     // Extract named fields; emit helpful diagnostics on mismatch.
     let fields_named = if let Data::Struct(data) = &input.data {
         if let Fields::Named(named) = &data.fields {
@@ -126,13 +116,11 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
         );
         return quote!();
     };
-
     let infos: Vec<FieldInfo> = fields_named
         .named
         .iter()
         .map(|f| parse_field(emitter, f))
         .collect();
-
     let builder_fields = infos
         .iter()
         .filter(|f| !f.skip)
@@ -152,7 +140,6 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
             quote! { #(#attrs)* pub #ident: #ty }
         })
         .collect::<Vec<_>>();
-
     let new_params = infos
         .iter()
         .filter(|f| !f.skip && f.default.is_none())
@@ -162,7 +149,6 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
             quote! { #ident: #ty }
         })
         .collect::<Vec<_>>();
-
     let new_inits = infos
         .iter()
         .filter(|f| !f.skip)
@@ -173,7 +159,6 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
                 .map_or_else(|| quote! { #ident }, |expr| quote! { #ident: #expr })
         })
         .collect::<Vec<_>>();
-
     let with_methods = infos
         .iter()
         .filter(|f| !f.skip)
@@ -192,7 +177,6 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
             }
         })
         .collect::<Vec<_>>();
-
     let build_fields = infos
         .iter()
         .map(|f| {
@@ -205,7 +189,6 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
             }
         })
         .collect::<Vec<_>>();
-
     let json_fields: Vec<_> = infos.iter().filter(|f| !f.skip).collect();
     let builder_fields_idents = json_fields
         .iter()
@@ -222,7 +205,6 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
             )
         })
         .collect::<Vec<_>>();
-
     quote! {
         #[derive(Debug, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
         #[cfg_attr(
@@ -236,17 +218,14 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
         pub struct #builder_name {
             #( #builder_fields, )*
         }
-
         #[cfg(feature = "json")]
         impl norito::json::JsonDeserialize for #builder_name {
             fn json_deserialize(
                 parser: &mut norito::json::Parser<'_>,
             ) -> Result<Self, norito::json::Error> {
                 use norito::json::{Error, KeyRef, MapVisitor};
-
                 let mut visitor = MapVisitor::new(parser)?;
                 #( let mut #builder_fields_idents: Option<#builder_fields_tys> = None; )*
-
                 while let Some(key) = visitor.next_key()? {
                     match key {
                         #(
@@ -265,9 +244,7 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
                         }
                     }
                 }
-
                 visitor.finish()?;
-
                 Ok(Self {
                     #(
                         #builder_fields_idents: #builder_json_inits,
@@ -275,13 +252,11 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
                 })
             }
         }
-
         impl core::fmt::Display for #builder_name {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 core::fmt::Debug::fmt(self, f)
             }
         }
-
         impl #builder_name {
             #[doc = concat!(
                 "Create a new `",
@@ -296,11 +271,9 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
             }
             #( #with_methods )*
         }
-
         impl Registered for #name {
             type With = #builder_name;
         }
-
         impl Registrable for #builder_name {
             type Target = #name;
             #[inline]
@@ -313,7 +286,6 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
         }
     }
 }
-
 fn add_doc_if_missing(attrs: &mut Vec<syn::Attribute>, default: impl AsRef<str>) {
     if attrs.iter().any(|attr| attr.path().is_ident("doc")) {
         return;

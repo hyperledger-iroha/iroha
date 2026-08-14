@@ -2983,6 +2983,14 @@ def test_local_runner_service_contract_rejects_disconnected_deadlock_obligation(
     ),
     (
         (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "begin_fetch",
+            "owner.matches_body_coordinates(round, subject)",
+            "false",
+            "ordinary Fetch admission must reject coordinates already owned by recovered Decision Fetch",
+            "begin_fetch",
+        ),
+        (
             "crates/iroha_core/src/sumeragi/v2_runtime.rs",
             "adopt_effect_ownership",
             "production_adapter_effect_candidate_binding(effect, Some(&retained_statement))?",

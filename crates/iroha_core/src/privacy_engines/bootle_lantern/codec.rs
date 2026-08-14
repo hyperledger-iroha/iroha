@@ -1,13 +1,10 @@
 //! Strict fixed-width Bootle/Lantern presentation and blind-issuance wires.
-
 use thiserror::Error;
-
 use super::params::{
     APPLICATION_RING_DEGREE_V1, CHALLENGE_OMEGA_V1, PROOF_MODULUS_V1, PROOF_RESIDUE_BYTES_V1,
 };
 use super::ring::ProofPolynomialV1;
 use super::transcript::challenge_eta_is_valid_v1;
-
 /// Proof wire magic.
 pub const PROOF_MAGIC_V1: [u8; 4] = *b"ILN1";
 /// Blind-issuance-request proof wire magic.
@@ -35,7 +32,6 @@ pub const BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1: usize = 320;
 /// Exact canonical `ILR1` issuer-response wire length.
 pub const BLIND_ISSUANCE_RESPONSE_BYTES_V1: usize =
     8 + 24 * APPLICATION_RING_DEGREE_V1 * 2 + 3 * 32;
-
 /// Polynomial counts in canonical proof order.
 pub const T_B_POLYNOMIALS_V1: usize = 12;
 /// Polynomial counts in canonical proof order.
@@ -54,7 +50,6 @@ pub const Z21_POLYNOMIALS_V1: usize = 44;
 pub const Z3_POLYNOMIALS_V1: usize = 4;
 /// Polynomial counts in canonical proof order.
 pub const Z4_POLYNOMIALS_V1: usize = 4;
-
 /// Total polynomial count.
 pub const PROOF_POLYNOMIALS_V1: usize = T_B_POLYNOMIALS_V1
     + H_POLYNOMIALS_V1
@@ -77,7 +72,6 @@ pub const BLIND_ISSUANCE_REQUEST_BYTES_V1: usize = BLIND_ISSUANCE_REQUEST_HEADER
         * 2
     + 6 * 32
     + PROOF_BYTES_V1;
-
 const T_B_START: usize = 0;
 const H_START: usize = T_B_START + T_B_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
 const T_A1_START: usize = H_START + H_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
@@ -88,21 +82,17 @@ const Z21_START: usize = Z1_START + Z1_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_
 const Z3_START: usize = Z21_START + Z21_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
 const Z4_START: usize = Z3_START + Z3_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
 const PROOF_END: usize = Z4_START + Z4_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
-
 const T_A1_RESIDUE_BOUND_V1: u64 = 1_u64 << 36;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ValidatedProofBodyV1 {
     coefficients: Box<[u64]>,
 }
-
 impl ValidatedProofBodyV1 {
     fn from_coefficients(coefficients: Box<[u64]>) -> Result<Self, ProofCodecErrorV1> {
         validate_coefficients(&coefficients)?;
         Ok(Self { coefficients })
     }
 }
-
 /// Strictly decoded canonical presentation proof.
 ///
 /// Coefficients are stored in one fixed-size logical array. The sole heap
@@ -112,7 +102,6 @@ impl ValidatedProofBodyV1 {
 pub struct BootleLanternPresentationProofV1 {
     body: ValidatedProofBodyV1,
 }
-
 impl BootleLanternPresentationProofV1 {
     /// Construct from an exact canonical flat coefficient vector.
     ///
@@ -125,7 +114,6 @@ impl BootleLanternPresentationProofV1 {
             body: ValidatedProofBodyV1::from_coefficients(coefficients)?,
         })
     }
-
     /// Decode exactly one fixed-width proof.
     ///
     /// # Errors
@@ -137,129 +125,108 @@ impl BootleLanternPresentationProofV1 {
             body: decode_exact_body_v1(bytes, max_bytes, ProofWirePurposeV1::Presentation)?,
         })
     }
-
     /// Encode the unique fixed-width representation.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         encode_body_v1(&self.body, ProofWirePurposeV1::Presentation)
     }
-
     /// Borrow all canonical residues in wire order.
     #[must_use]
     pub fn coefficients(&self) -> &[u64] {
         &self.body.coefficients
     }
-
     /// Borrow `tB`.
     #[must_use]
     pub fn t_b(&self) -> &[u64] {
         &self.body.coefficients[T_B_START..H_START]
     }
-
     /// Borrow `h`.
     #[must_use]
     pub fn h(&self) -> &[u64] {
         &self.body.coefficients[H_START..T_A1_START]
     }
-
     /// Borrow compressed `tA1`.
     #[must_use]
     pub fn t_a1(&self) -> &[u64] {
         &self.body.coefficients[T_A1_START..CHALLENGE_START]
     }
-
     /// Borrow the auto-stable challenge polynomial.
     #[must_use]
     pub fn challenge(&self) -> &[u64] {
         &self.body.coefficients[CHALLENGE_START..HINT_START]
     }
-
     /// Borrow the commitment hint.
     #[must_use]
     pub fn hint(&self) -> &[u64] {
         &self.body.coefficients[HINT_START..Z1_START]
     }
-
     /// Borrow `z1`.
     #[must_use]
     pub fn z1(&self) -> &[u64] {
         &self.body.coefficients[Z1_START..Z21_START]
     }
-
     /// Borrow `z21`.
     #[must_use]
     pub fn z21(&self) -> &[u64] {
         &self.body.coefficients[Z21_START..Z3_START]
     }
-
     /// Borrow `z3`.
     #[must_use]
     pub fn z3(&self) -> &[u64] {
         &self.body.coefficients[Z3_START..Z4_START]
     }
-
     /// Borrow `z4`.
     #[must_use]
     pub fn z4(&self) -> &[u64] {
         &self.body.coefficients[Z4_START..PROOF_END]
     }
-
     /// Return one typed `tB` polynomial.
     #[must_use]
     pub fn t_b_polynomial(&self, index: usize) -> Option<ProofPolynomialV1> {
         typed_polynomial(self.t_b(), index)
     }
-
     /// Return one typed `h` polynomial.
     #[must_use]
     pub fn h_polynomial(&self, index: usize) -> Option<ProofPolynomialV1> {
         typed_polynomial(self.h(), index)
     }
-
     /// Return one typed compressed `tA1` polynomial.
     #[must_use]
     pub fn t_a1_polynomial(&self, index: usize) -> Option<ProofPolynomialV1> {
         typed_polynomial(self.t_a1(), index)
     }
-
     /// Return the typed auto-stable challenge polynomial.
     #[must_use]
     pub fn challenge_polynomial(&self) -> ProofPolynomialV1 {
         typed_polynomial(self.challenge(), 0)
             .expect("validated proof contains exactly one challenge polynomial")
     }
-
     /// Return one typed reconciliation-hint polynomial.
     #[must_use]
     pub fn hint_polynomial(&self, index: usize) -> Option<ProofPolynomialV1> {
         typed_polynomial(self.hint(), index)
     }
-
     /// Return one typed `z1` polynomial.
     #[must_use]
     pub fn z1_polynomial(&self, index: usize) -> Option<ProofPolynomialV1> {
         typed_polynomial(self.z1(), index)
     }
-
     /// Return one typed `z21` polynomial.
     #[must_use]
     pub fn z21_polynomial(&self, index: usize) -> Option<ProofPolynomialV1> {
         typed_polynomial(self.z21(), index)
     }
-
     /// Return one typed `z3` polynomial.
     #[must_use]
     pub fn z3_polynomial(&self, index: usize) -> Option<ProofPolynomialV1> {
         typed_polynomial(self.z3(), index)
     }
-
     /// Return one typed `z4` polynomial.
     #[must_use]
     pub fn z4_polynomial(&self, index: usize) -> Option<ProofPolynomialV1> {
         typed_polynomial(self.z4(), index)
     }
 }
-
 /// Strictly decoded canonical blind-issuance-request proof.
 ///
 /// This nominal P1 type deliberately has no public conversion to or from
@@ -272,7 +239,6 @@ impl BootleLanternPresentationProofV1 {
 pub struct BootleLanternBlindIssuanceRequestProofV1 {
     validated_body: BootleLanternPresentationProofV1,
 }
-
 impl BootleLanternBlindIssuanceRequestProofV1 {
     /// Decode exactly one fixed-width blind-issuance-request proof.
     ///
@@ -292,7 +258,6 @@ impl BootleLanternBlindIssuanceRequestProofV1 {
             },
         })
     }
-
     /// Encode the unique fixed-width `ILB1` representation.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
@@ -301,24 +266,20 @@ impl BootleLanternBlindIssuanceRequestProofV1 {
             ProofWirePurposeV1::BlindIssuanceRequest,
         )
     }
-
     pub(super) fn from_validated_body_v1(body: BootleLanternPresentationProofV1) -> Self {
         Self {
             validated_body: body,
         }
     }
-
     pub(super) const fn validated_body_v1(&self) -> &BootleLanternPresentationProofV1 {
         &self.validated_body
     }
 }
-
 #[derive(Clone, Copy)]
 enum ProofWirePurposeV1 {
     Presentation,
     BlindIssuanceRequest,
 }
-
 impl ProofWirePurposeV1 {
     const fn magic(self) -> [u8; 4] {
         match self {
@@ -326,14 +287,12 @@ impl ProofWirePurposeV1 {
             Self::BlindIssuanceRequest => BLIND_ISSUANCE_REQUEST_PROOF_MAGIC_V1,
         }
     }
-
     const fn header_tag(self) -> u8 {
         match self {
             Self::Presentation => 0,
             Self::BlindIssuanceRequest => BLIND_ISSUANCE_REQUEST_PROOF_PURPOSE_TAG_V1,
         }
     }
-
     fn validate_header_tag(self, actual: u8) -> Result<(), ProofCodecErrorV1> {
         match self {
             Self::Presentation if actual != 0 => {
@@ -346,7 +305,6 @@ impl ProofWirePurposeV1 {
         }
     }
 }
-
 fn decode_exact_body_v1(
     bytes: &[u8],
     max_bytes: u32,
@@ -376,7 +334,6 @@ fn decode_exact_body_v1(
     if reserved != 0 {
         return Err(ProofCodecErrorV1::NonZeroReserved { reserved });
     }
-
     let mut coefficients = Vec::with_capacity(PROOF_COEFFICIENTS_V1);
     for (index, encoded) in bytes[PROOF_HEADER_BYTES_V1..]
         .chunks_exact(PROOF_RESIDUE_BYTES_V1)
@@ -401,7 +358,6 @@ fn decode_exact_body_v1(
     }
     ValidatedProofBodyV1::from_coefficients(coefficients.into_boxed_slice())
 }
-
 fn encode_body_v1(body: &ValidatedProofBodyV1, purpose: ProofWirePurposeV1) -> Vec<u8> {
     let mut encoded = Vec::with_capacity(PROOF_BYTES_V1);
     encoded.extend_from_slice(&purpose.magic());
@@ -414,7 +370,6 @@ fn encode_body_v1(body: &ValidatedProofBodyV1, purpose: ProofWirePurposeV1) -> V
     debug_assert_eq!(encoded.len(), PROOF_BYTES_V1);
     encoded
 }
-
 fn typed_polynomial(residues: &[u64], index: usize) -> Option<ProofPolynomialV1> {
     let start = index.checked_mul(APPLICATION_RING_DEGREE_V1)?;
     let end = start.checked_add(APPLICATION_RING_DEGREE_V1)?;
@@ -425,7 +380,6 @@ fn typed_polynomial(residues: &[u64], index: usize) -> Option<ProofPolynomialV1>
             .expect("strict proof decoder already established canonical residues"),
     )
 }
-
 fn validate_coefficients(coefficients: &[u64]) -> Result<(), ProofCodecErrorV1> {
     if coefficients.len() != PROOF_COEFFICIENTS_V1 {
         return Err(ProofCodecErrorV1::WrongCoefficientCount {
@@ -451,7 +405,6 @@ fn validate_coefficients(coefficients: &[u64]) -> Result<(), ProofCodecErrorV1> 
     }
     validate_challenge(&coefficients[CHALLENGE_START..HINT_START])
 }
-
 fn validate_challenge(challenge: &[u64]) -> Result<(), ProofCodecErrorV1> {
     debug_assert_eq!(challenge.len(), APPLICATION_RING_DEGREE_V1);
     for (index, residue) in challenge[..32].iter().copied().enumerate() {
@@ -490,7 +443,6 @@ fn validate_challenge(challenge: &[u64]) -> Result<(), ProofCodecErrorV1> {
     }
     Ok(())
 }
-
 fn center_residue(residue: u64) -> i64 {
     if residue <= PROOF_MODULUS_V1 / 2 {
         i64::try_from(residue).expect("proof residue fits i64")
@@ -499,7 +451,6 @@ fn center_residue(residue: u64) -> i64 {
             - i64::try_from(PROOF_MODULUS_V1).expect("proof modulus fits i64")
     }
 }
-
 fn negate_residue(residue: u64) -> u64 {
     if residue == 0 {
         0
@@ -507,7 +458,6 @@ fn negate_residue(residue: u64) -> u64 {
         PROOF_MODULUS_V1 - residue
     }
 }
-
 /// Strict proof-codec failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum ProofCodecErrorV1 {
@@ -611,11 +561,9 @@ pub enum ProofCodecErrorV1 {
     #[error("Bootle/Lantern challenge exceeds the exact integer-ring eta bound")]
     ChallengeEtaBoundExceeded,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn valid_proof() -> BootleLanternPresentationProofV1 {
         let mut coefficients = vec![0_u64; PROOF_COEFFICIENTS_V1];
         let challenge = &mut coefficients[CHALLENGE_START..HINT_START];
@@ -630,17 +578,14 @@ mod tests {
         BootleLanternPresentationProofV1::from_coefficients(coefficients.into_boxed_slice())
             .expect("canonical synthetic proof")
     }
-
     fn valid_blind_issuance_request_proof() -> BootleLanternBlindIssuanceRequestProofV1 {
         BootleLanternBlindIssuanceRequestProofV1::from_validated_body_v1(valid_proof())
     }
-
     fn write_residue(encoded: &mut [u8], index: usize, residue: u64) {
         let offset = PROOF_HEADER_BYTES_V1 + index * PROOF_RESIDUE_BYTES_V1;
         encoded[offset..offset + PROOF_RESIDUE_BYTES_V1]
             .copy_from_slice(&residue.to_le_bytes()[..PROOF_RESIDUE_BYTES_V1]);
     }
-
     #[test]
     fn exact_wire_roundtrips_and_component_ranges_partition_the_body() {
         let proof = valid_proof();
@@ -717,7 +662,6 @@ mod tests {
             proof.challenge()
         );
     }
-
     #[test]
     fn blind_issuance_wire_roundtrips_with_distinct_magic_and_purpose() {
         let proof = valid_blind_issuance_request_proof();
@@ -736,13 +680,11 @@ mod tests {
             proof
         );
     }
-
     #[test]
     fn p1_and_p2_cross_magic_and_partial_header_swaps_fail_closed() {
         let presentation = valid_proof().encode();
         let blind_issuance = valid_blind_issuance_request_proof().encode();
         let cap = u32::try_from(PROOF_BYTES_V1).expect("fixed proof length fits u32");
-
         assert_eq!(
             BootleLanternPresentationProofV1::decode_exact(&blind_issuance, cap),
             Err(ProofCodecErrorV1::InvalidMagic)
@@ -751,7 +693,6 @@ mod tests {
             BootleLanternBlindIssuanceRequestProofV1::decode_exact(&presentation, cap),
             Err(ProofCodecErrorV1::InvalidMagic)
         );
-
         // A magic-only substitution cannot turn the P1 header into P2: the
         // nonzero purpose tag is invalid in P2's zero-only flags byte.
         let mut p1_with_p2_magic = blind_issuance.clone();
@@ -762,7 +703,6 @@ mod tests {
                 flags: BLIND_ISSUANCE_REQUEST_PROOF_PURPOSE_TAG_V1
             })
         );
-
         // Conversely, an ILB1 magic substitution retains P2's zero flags and
         // therefore lacks the mandatory P1 purpose tag.
         let mut p2_with_p1_magic = presentation;
@@ -772,12 +712,10 @@ mod tests {
             Err(ProofCodecErrorV1::InvalidPurposeTag { purpose: 0 })
         );
     }
-
     #[test]
     fn blind_issuance_decoder_rejects_lengths_headers_and_noncanonical_body() {
         let canonical = valid_blind_issuance_request_proof().encode();
         let cap = u32::try_from(PROOF_BYTES_V1).expect("fixed proof length fits u32");
-
         for length in 0..PROOF_BYTES_V1 {
             assert!(matches!(
                 BootleLanternBlindIssuanceRequestProofV1::decode_exact(&canonical[..length], cap),
@@ -794,7 +732,6 @@ mod tests {
             BootleLanternBlindIssuanceRequestProofV1::decode_exact(&canonical, cap - 1),
             Err(ProofCodecErrorV1::TooLarge { .. })
         ));
-
         for magic_byte in 0..4 {
             for bit in 0..8 {
                 let mut malformed = canonical.clone();
@@ -836,7 +773,6 @@ mod tests {
                 Err(ProofCodecErrorV1::NonZeroReserved { reserved })
             );
         }
-
         let mut malformed = canonical.clone();
         write_residue(&mut malformed, 0, PROOF_MODULUS_V1);
         assert_eq!(
@@ -862,7 +798,6 @@ mod tests {
             Err(ProofCodecErrorV1::ChallengeCoefficientOutOfRange { index: 0, value: 9 })
         );
     }
-
     #[test]
     fn decoder_rejects_every_truncation_trailing_bytes_headers_and_ceiling() {
         let proof = valid_proof();
@@ -884,7 +819,6 @@ mod tests {
             BootleLanternPresentationProofV1::decode_exact(&encoded, cap - 1),
             Err(ProofCodecErrorV1::TooLarge { .. })
         ));
-
         let mut malformed = encoded.clone();
         malformed[0] ^= 1;
         assert_eq!(
@@ -910,12 +844,10 @@ mod tests {
             Err(ProofCodecErrorV1::NonZeroReserved { reserved: 256 })
         );
     }
-
     #[test]
     fn decoder_rejects_noncanonical_residues_compression_and_challenges() {
         let cap = u32::try_from(PROOF_BYTES_V1).expect("fixed proof length fits u32");
         let canonical = valid_proof().encode();
-
         for residue in [PROOF_MODULUS_V1, PROOF_MODULUS_V1 + 1, (1_u64 << 56) - 1] {
             let mut malformed = canonical.clone();
             write_residue(&mut malformed, 0, residue);
@@ -924,7 +856,6 @@ mod tests {
                 Err(ProofCodecErrorV1::NonCanonicalResidue { index: 0, .. })
             ));
         }
-
         let mut malformed = canonical.clone();
         write_residue(&mut malformed, T_A1_START, T_A1_RESIDUE_BOUND_V1);
         assert_eq!(
@@ -934,7 +865,6 @@ mod tests {
                 residue: T_A1_RESIDUE_BOUND_V1
             })
         );
-
         malformed = canonical.clone();
         write_residue(&mut malformed, CHALLENGE_START, 9);
         assert_eq!(
@@ -957,7 +887,6 @@ mod tests {
                 actual: 4
             })
         );
-
         let mut eta_exceeded = valid_proof().coefficients().to_vec();
         let challenge = &mut eta_exceeded[CHALLENGE_START..HINT_START];
         challenge[..32].fill(8);
@@ -971,7 +900,6 @@ mod tests {
             ),
             Err(ProofCodecErrorV1::ChallengeEtaBoundExceeded)
         );
-
         let mut encoded_eta_exceeded = valid_proof().encode();
         for (index, residue) in eta_exceeded[CHALLENGE_START..HINT_START]
             .iter()

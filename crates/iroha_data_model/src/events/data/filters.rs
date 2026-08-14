@@ -3,20 +3,15 @@
 //! For each event in [`super::events`], there's a corresponding filter type in this module. It can filter the events by origin id and event type.
 //!
 //! Event types are filtered with an `EventSet` type, allowing to filter for multiple event types at once.
-
 use std::fmt::Debug;
-
 pub use bridge_filters_model::BridgeEventFilter;
 use getset::Getters;
 use iroha_data_model_derive::model;
-
 pub use self::model::*;
 use super::*;
-
 #[model]
 mod model {
     use super::*;
-
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FromVariant, Decode, Encode, IntoSchema,
     )]
@@ -72,7 +67,6 @@ mod model {
         #[cfg(feature = "governance")]
         Governance(GovernanceEventFilter),
     }
-
     /// An event filter for [`super::proof::ProofEvent`] values.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -82,7 +76,6 @@ mod model {
         /// Matches only events from this set
         pub(super) event_set: super::proof::ProofEventSet,
     }
-
     /// An event filter for [`super::verifying_keys::VerifyingKeyEvent`] values.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -92,7 +85,6 @@ mod model {
         /// Matches only events from this set
         pub(super) event_set: super::verifying_keys::VerifyingKeyEventSet,
     }
-
     /// An event filter for [`super::runtime_upgrade::RuntimeUpgradeEvent`] values.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -102,7 +94,6 @@ mod model {
         /// Matches only events from this set
         pub(super) event_set: super::runtime_upgrade::RuntimeUpgradeEventSet,
     }
-
     /// An event filter for viral incentive lifecycle events.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -110,7 +101,6 @@ mod model {
         /// If specified, matches only events for this binding hash.
         pub(super) binding_matcher: Option<crate::oracle::KeyedHash>,
     }
-
     /// An event filter for [`super::soradns::SoradnsDirectoryEvent`] values.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -122,7 +112,6 @@ mod model {
         /// Matches only events from this set.
         pub(super) event_set: super::soradns::SoradnsDirectoryEventSet,
     }
-
     /// An event filter for [`super::sorafs::SorafsGatewayEvent`] values.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -138,7 +127,6 @@ mod model {
         /// Matches only events from this set.
         pub(super) event_set: super::sorafs::SorafsGatewayEventSet,
     }
-
     /// Exact structural filter for Musubi registry events.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -152,7 +140,6 @@ mod model {
         /// Closed set of accepted Musubi transition variants.
         pub(super) event_set: super::musubi::MusubiEventSet,
     }
-
     /// Filter for Space Directory manifest lifecycle events.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -164,7 +151,6 @@ mod model {
         /// Matches only events from this set.
         pub(super) event_set: super::space_directory::SpaceDirectoryEventSet,
     }
-
     /// Filter for native asset escrow lifecycle events.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -180,7 +166,6 @@ mod model {
         /// Matches only events from this set.
         pub(super) event_set: super::escrow::EscrowEventSet,
     }
-
     #[cfg(feature = "governance")]
     /// An event filter for [`super::governance::GovernanceEvent`] values.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
@@ -193,7 +178,6 @@ mod model {
         /// Matches only events from this set
         pub(super) event_set: super::governance::GovernanceEventSet,
     }
-
     /// An event filter for [`PeerEvent`]s
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -203,7 +187,6 @@ mod model {
         /// Matches only event from this set
         pub(super) event_set: PeerEventSet,
     }
-
     /// An event filter for [`DomainEvent`]s
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -213,7 +196,6 @@ mod model {
         /// Matches only event from this set
         pub(super) event_set: DomainEventSet,
     }
-
     /// An event filter for [`AccountEvent`]s
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -223,7 +205,6 @@ mod model {
         /// Matches only event from this set
         pub(super) event_set: AccountEventSet,
     }
-
     /// An event filter for [`AssetEvent`]s
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -239,7 +220,6 @@ mod model {
         /// Matches only event from this set
         pub(super) event_set: AssetEventSet,
     }
-
     /// An event filter for [`AssetDefinitionEvent`]s
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -249,7 +229,6 @@ mod model {
         /// Matches only event from this set
         pub(super) event_set: AssetDefinitionEventSet,
     }
-
     /// An event filter for [`NftEvent`]s
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -259,7 +238,6 @@ mod model {
         /// Matches only event from this set
         pub(super) event_set: NftEventSet,
     }
-
     /// An event filter for [`RwaEvent`]s
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -269,7 +247,6 @@ mod model {
         /// Matches only events from this set.
         pub(super) event_set: RwaEventSet,
     }
-
     /// An event filter for [`TriggerEvent`]s
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -279,7 +256,6 @@ mod model {
         /// Matches only event from this set
         pub(super) event_set: TriggerEventSet,
     }
-
     /// An event filter for [`RoleEvent`]s
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -289,7 +265,6 @@ mod model {
         /// Matches only event from this set
         pub(super) event_set: RoleEventSet,
     }
-
     /// An event filter for [`ConfigurationEvent`]s
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -297,7 +272,6 @@ mod model {
         /// Matches only event from this set
         pub(super) event_set: ConfigurationEventSet,
     }
-
     /// An event filter for [`ExecutorEvent`].
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -307,7 +281,6 @@ mod model {
         pub(super) event_set: ExecutorEventSet,
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(
     DataEventFilter,
@@ -328,10 +301,8 @@ impl_json_via_norito_bytes!(
     ExecutorEventFilter,
     EscrowEventFilter,
 );
-
 #[cfg(all(feature = "json", feature = "governance"))]
 impl_json_via_norito_bytes!(GovernanceEventFilter);
-
 impl PeerEventFilter {
     /// Creates a new [`PeerEventFilter`] accepting all [`PeerEvent`]s.
     pub const fn new() -> Self {
@@ -340,14 +311,12 @@ impl PeerEventFilter {
             event_set: PeerEventSet::all(),
         }
     }
-
     /// Modifies a [`PeerEventFilter`] to accept only [`PeerEvent`]s originating from ids matching `id_matcher`.
     #[must_use]
     pub fn for_peer(mut self, id_matcher: PeerId) -> Self {
         self.id_matcher = Some(id_matcher);
         self
     }
-
     /// Modifies a [`PeerEventFilter`] to accept only [`PeerEvent`]s of types contained in `event_set`.
     #[must_use]
     pub const fn for_events(mut self, event_set: PeerEventSet) -> Self {
@@ -355,7 +324,6 @@ impl PeerEventFilter {
         self
     }
 }
-
 impl ProofEventFilter {
     /// Creates a new [`ProofEventFilter`] accepting all [`super::proof::ProofEvent`] values.
     pub const fn new() -> Self {
@@ -364,14 +332,12 @@ impl ProofEventFilter {
             event_set: super::proof::ProofEventSet::all(),
         }
     }
-
     /// Filter by proof identifier.
     #[must_use]
     pub fn for_proof(mut self, id: crate::proof::ProofId) -> Self {
         self.id_matcher = Some(id);
         self
     }
-
     /// Filter by event kinds.
     #[must_use]
     pub const fn for_events(mut self, event_set: super::proof::ProofEventSet) -> Self {
@@ -379,7 +345,6 @@ impl ProofEventFilter {
         self
     }
 }
-
 impl VerifyingKeyEventFilter {
     /// Creates a new [`VerifyingKeyEventFilter`] accepting all [`super::verifying_keys::VerifyingKeyEvent`] values.
     pub const fn new() -> Self {
@@ -388,14 +353,12 @@ impl VerifyingKeyEventFilter {
             event_set: super::verifying_keys::VerifyingKeyEventSet::all(),
         }
     }
-
     /// Filter by verifying key identifier.
     #[must_use]
     pub fn for_verifying_key(mut self, id: crate::proof::VerifyingKeyId) -> Self {
         self.id_matcher = Some(id);
         self
     }
-
     /// Filter by event kinds.
     #[must_use]
     pub const fn for_events(
@@ -406,7 +369,6 @@ impl VerifyingKeyEventFilter {
         self
     }
 }
-
 impl RuntimeUpgradeEventFilter {
     /// Creates a new [`RuntimeUpgradeEventFilter`] accepting all runtime upgrade events.
     pub const fn new() -> Self {
@@ -415,14 +377,12 @@ impl RuntimeUpgradeEventFilter {
             event_set: super::runtime_upgrade::RuntimeUpgradeEventSet::all(),
         }
     }
-
     /// Filter by runtime upgrade identifier.
     #[must_use]
     pub fn for_runtime(mut self, id: crate::runtime::RuntimeUpgradeId) -> Self {
         self.id_matcher = Some(id);
         self
     }
-
     /// Filter by runtime upgrade event kinds.
     #[must_use]
     pub const fn for_events(
@@ -433,7 +393,6 @@ impl RuntimeUpgradeEventFilter {
         self
     }
 }
-
 impl SorafsGatewayEventFilter {
     /// Creates a new [`SorafsGatewayEventFilter`] accepting all gateway events.
     pub const fn new() -> Self {
@@ -445,14 +404,12 @@ impl SorafsGatewayEventFilter {
             event_set: super::sorafs::SorafsGatewayEventSet::all(),
         }
     }
-
     /// Filter by provider identifier.
     #[must_use]
     pub fn for_provider(mut self, provider: crate::sorafs::capacity::ProviderId) -> Self {
         self.provider_matcher = Some(provider);
         self
     }
-
     /// Filter by manifest digest.
     #[must_use]
     pub fn for_manifest_digest(
@@ -462,21 +419,18 @@ impl SorafsGatewayEventFilter {
         self.manifest_digest_matcher = Some(digest);
         self
     }
-
     /// Filter by policy classification.
     #[must_use]
     pub fn for_policy(mut self, policy: super::sorafs::SorafsGarPolicy) -> Self {
         self.policy_matcher = Some(policy);
         self
     }
-
     /// Filter by detailed outcome.
     #[must_use]
     pub fn for_detail(mut self, detail: super::sorafs::SorafsGarPolicyDetail) -> Self {
         self.detail_matcher = Some(detail);
         self
     }
-
     /// Filter by event variant set.
     #[must_use]
     pub const fn for_events(mut self, event_set: super::sorafs::SorafsGatewayEventSet) -> Self {
@@ -484,7 +438,6 @@ impl SorafsGatewayEventFilter {
         self
     }
 }
-
 impl MusubiEventFilter {
     /// Create a filter accepting every Musubi transition.
     pub const fn new() -> Self {
@@ -495,28 +448,24 @@ impl MusubiEventFilter {
             event_set: super::musubi::MusubiEventSet::all(),
         }
     }
-
     /// Match only events structurally associated with `package`.
     #[must_use]
     pub fn for_package(mut self, package: crate::musubi::MusubiPackageIdV1) -> Self {
         self.package_matcher = Some(package);
         self
     }
-
     /// Match only events structurally associated with `archive`.
     #[must_use]
     pub const fn for_archive(mut self, archive: crate::musubi::ArchiveId) -> Self {
         self.archive_matcher = Some(archive);
         self
     }
-
     /// Match only events structurally associated with `alias`.
     #[must_use]
     pub fn for_alias(mut self, alias: crate::musubi::MusubiAliasNameV1) -> Self {
         self.alias_matcher = Some(alias);
         self
     }
-
     /// Match only transition variants contained in `event_set`.
     #[must_use]
     pub const fn for_events(mut self, event_set: super::musubi::MusubiEventSet) -> Self {
@@ -524,7 +473,6 @@ impl MusubiEventFilter {
         self
     }
 }
-
 impl SoradnsDirectoryEventFilter {
     /// Creates a new [`SoradnsDirectoryEventFilter`] accepting all directory events.
     pub const fn new() -> Self {
@@ -534,21 +482,18 @@ impl SoradnsDirectoryEventFilter {
             event_set: super::soradns::SoradnsDirectoryEventSet::all(),
         }
     }
-
     /// Constrains the filter to a specific directory identifier.
     #[must_use]
     pub const fn for_directory(mut self, directory_id: crate::soradns::DirectoryId) -> Self {
         self.directory_matcher = Some(directory_id);
         self
     }
-
     /// Constrains the filter to a specific resolver identifier.
     #[must_use]
     pub const fn for_resolver(mut self, resolver_id: crate::soradns::ResolverId) -> Self {
         self.resolver_matcher = Some(resolver_id);
         self
     }
-
     /// Restricts the filter to the supplied set of events.
     #[must_use]
     pub const fn for_events(mut self, event_set: super::soradns::SoradnsDirectoryEventSet) -> Self {
@@ -556,7 +501,6 @@ impl SoradnsDirectoryEventFilter {
         self
     }
 }
-
 impl SpaceDirectoryEventFilter {
     /// Creates a new [`SpaceDirectoryEventFilter`] accepting all events.
     pub const fn new() -> Self {
@@ -566,21 +510,18 @@ impl SpaceDirectoryEventFilter {
             event_set: super::space_directory::SpaceDirectoryEventSet::all(),
         }
     }
-
     /// Filter by dataspace identifier.
     #[must_use]
     pub fn for_dataspace(mut self, dataspace: crate::nexus::DataSpaceId) -> Self {
         self.dataspace_matcher = Some(dataspace);
         self
     }
-
     /// Filter by UAID.
     #[must_use]
     pub fn for_uaid(mut self, uaid: crate::nexus::UniversalAccountId) -> Self {
         self.uaid_matcher = Some(uaid);
         self
     }
-
     /// Filter by event variants.
     #[must_use]
     pub const fn for_events(
@@ -591,7 +532,6 @@ impl SpaceDirectoryEventFilter {
         self
     }
 }
-
 impl EscrowEventFilter {
     /// Creates a new [`EscrowEventFilter`] accepting all escrow events.
     pub const fn new() -> Self {
@@ -603,35 +543,30 @@ impl EscrowEventFilter {
             event_set: super::escrow::EscrowEventSet::all(),
         }
     }
-
     /// Restricts matches to a specific escrow identifier.
     #[must_use]
     pub const fn for_escrow(mut self, escrow_id: crate::escrow::EscrowId) -> Self {
         self.escrow_matcher = Some(escrow_id);
         self
     }
-
     /// Restricts matches to escrows opened by the provided seller.
     #[must_use]
     pub fn for_seller(mut self, seller: crate::account::AccountId) -> Self {
         self.seller_matcher = Some(seller);
         self
     }
-
     /// Restricts matches to escrows accepted by the provided buyer.
     #[must_use]
     pub fn for_buyer(mut self, buyer: crate::account::AccountId) -> Self {
         self.buyer_matcher = Some(buyer);
         self
     }
-
     /// Restricts matches to records in the provided escrow status.
     #[must_use]
     pub const fn for_status(mut self, status: crate::escrow::AssetEscrowStatus) -> Self {
         self.status_matcher = Some(status);
         self
     }
-
     /// Restricts matches to the provided event-set.
     #[must_use]
     pub const fn for_events(mut self, event_set: super::escrow::EscrowEventSet) -> Self {
@@ -639,61 +574,51 @@ impl EscrowEventFilter {
         self
     }
 }
-
 impl Default for RuntimeUpgradeEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl Default for VerifyingKeyEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl Default for ProofEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl Default for SorafsGatewayEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl Default for MusubiEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl Default for SoradnsDirectoryEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl Default for SpaceDirectoryEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl Default for EscrowEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl Default for OracleEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 /// Filter for oracle feed aggregation events.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -710,7 +635,6 @@ pub struct OracleEventFilter {
     /// Matched event-set.
     pub(super) event_set: super::oracle::OracleEventSet,
 }
-
 impl OracleEventFilter {
     /// Creates a new [`OracleEventFilter`] accepting all events.
     #[must_use]
@@ -720,14 +644,12 @@ impl OracleEventFilter {
             event_set: super::oracle::OracleEventSet::all(),
         }
     }
-
     /// Restricts matches to the provided feed identifier.
     #[must_use]
     pub fn for_feed(mut self, feed_id: crate::oracle::FeedId) -> Self {
         self.feed_matcher = Some(feed_id);
         self
     }
-
     /// Restricts matches to the provided oracle event set.
     #[must_use]
     pub const fn for_events(mut self, event_set: super::oracle::OracleEventSet) -> Self {
@@ -735,7 +657,6 @@ impl OracleEventFilter {
         self
     }
 }
-
 impl SocialEventFilter {
     /// Creates a new [`SocialEventFilter`] accepting all viral incentive events.
     #[must_use]
@@ -744,7 +665,6 @@ impl SocialEventFilter {
             binding_matcher: None,
         }
     }
-
     /// Restricts matches to the provided binding hash.
     #[must_use]
     pub fn for_binding(mut self, binding: crate::oracle::KeyedHash) -> Self {
@@ -752,23 +672,19 @@ impl SocialEventFilter {
         self
     }
 }
-
 impl Default for SocialEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl Default for PeerEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for ProofEventFilter {
     type Event = super::proof::ProofEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         let id_ok = self
             .id_matcher
@@ -780,15 +696,12 @@ impl super::EventFilter for ProofEventFilter {
                     p.removed.iter().any(|rid| id_matcher == rid)
                 }
             });
-
         id_ok && self.event_set.matches(event)
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for VerifyingKeyEventFilter {
     type Event = super::verifying_keys::VerifyingKeyEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         let id_ok = self
             .id_matcher
@@ -800,11 +713,9 @@ impl super::EventFilter for VerifyingKeyEventFilter {
         id_ok && self.event_set.matches(event)
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for RuntimeUpgradeEventFilter {
     type Event = super::runtime_upgrade::RuntimeUpgradeEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         let id_ok = self
             .id_matcher
@@ -817,11 +728,9 @@ impl super::EventFilter for RuntimeUpgradeEventFilter {
         id_ok && self.event_set.matches(event)
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for OracleEventFilter {
     type Event = super::oracle::OracleEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         if let Some(feed_id) = self.feed_matcher.as_ref() {
             let feed_matches = match event {
@@ -846,25 +755,20 @@ impl super::EventFilter for OracleEventFilter {
                 super::oracle::OracleEvent::ChangeStageUpdated(_)
                 | super::oracle::OracleEvent::TwitterBindingRevoked(_) => false,
             };
-
             if !feed_matches {
                 return false;
             }
         }
-
         self.event_set.matches(event)
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for SoradnsDirectoryEventFilter {
     type Event = super::soradns::SoradnsDirectoryEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         if !self.event_set.matches(event) {
             return false;
         }
-
         if let Some(directory_id) = self.directory_matcher.as_ref() {
             let matches_directory = match event {
                 super::soradns::SoradnsDirectoryEvent::DraftSubmitted(payload) => {
@@ -879,7 +783,6 @@ impl super::EventFilter for SoradnsDirectoryEventFilter {
                 return false;
             }
         }
-
         if let Some(resolver_id) = self.resolver_matcher.as_ref() {
             let matches_resolver = match event {
                 super::soradns::SoradnsDirectoryEvent::Revoked(payload) => {
@@ -894,15 +797,12 @@ impl super::EventFilter for SoradnsDirectoryEventFilter {
                 return false;
             }
         }
-
         true
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for SorafsGatewayEventFilter {
     type Event = super::sorafs::SorafsGatewayEvent;
-
     #[expect(
         clippy::too_many_lines,
         reason = "the exhaustive SoraFS event/filter compatibility matrix stays together so new variants cannot silently inherit a matcher policy"
@@ -911,7 +811,6 @@ impl super::EventFilter for SorafsGatewayEventFilter {
         if !self.event_set.matches(event) {
             return false;
         }
-
         match event {
             super::sorafs::SorafsGatewayEvent::GarViolation(payload) => {
                 let provider_ok = self
@@ -921,7 +820,6 @@ impl super::EventFilter for SorafsGatewayEventFilter {
                 if !provider_ok {
                     return false;
                 }
-
                 let digest_ok = self
                     .manifest_digest_matcher
                     .as_ref()
@@ -929,7 +827,6 @@ impl super::EventFilter for SorafsGatewayEventFilter {
                 if !digest_ok {
                     return false;
                 }
-
                 let policy_ok = self
                     .policy_matcher
                     .as_ref()
@@ -937,7 +834,6 @@ impl super::EventFilter for SorafsGatewayEventFilter {
                 if !policy_ok {
                     return false;
                 }
-
                 self.detail_matcher
                     .as_ref()
                     .is_none_or(|expected| &payload.detail == expected)
@@ -1015,11 +911,9 @@ impl super::EventFilter for SorafsGatewayEventFilter {
         }
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for MusubiEventFilter {
     type Event = super::musubi::MusubiEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         self.event_set.matches(event)
             && self
@@ -1035,16 +929,13 @@ impl super::EventFilter for MusubiEventFilter {
                 .is_none_or(|alias| event.alias() == Some(alias))
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for SpaceDirectoryEventFilter {
     type Event = super::space_directory::SpaceDirectoryEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         if !self.event_set.matches(event) {
             return false;
         }
-
         let (dataspace, uaid) = match event {
             super::space_directory::SpaceDirectoryEvent::ManifestActivated(payload) => {
                 (payload.dataspace, payload.uaid)
@@ -1056,66 +947,53 @@ impl super::EventFilter for SpaceDirectoryEventFilter {
                 (payload.dataspace, payload.uaid)
             }
         };
-
         if let Some(expected) = self.dataspace_matcher
             && dataspace != expected
         {
             return false;
         }
-
         if let Some(expected) = self.uaid_matcher
             && uaid != expected
         {
             return false;
         }
-
         true
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for EscrowEventFilter {
     type Event = super::escrow::EscrowEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         if !self.event_set.matches(event) {
             return false;
         }
-
         let escrow = event.escrow();
-
         if let Some(expected) = self.escrow_matcher
             && escrow.id != expected
         {
             return false;
         }
-
         if let Some(expected) = self.seller_matcher.as_ref()
             && &escrow.seller != expected
         {
             return false;
         }
-
         if let Some(expected) = self.buyer_matcher.as_ref()
             && escrow.buyer.as_ref() != Some(expected)
         {
             return false;
         }
-
         if let Some(expected) = self.status_matcher
             && escrow.status != expected
         {
             return false;
         }
-
         true
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for SocialEventFilter {
     type Event = super::social::SocialEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         let binding_hash = match event {
             super::social::SocialEvent::RewardPaid(ev) => &ev.binding_hash,
@@ -1123,17 +1001,14 @@ impl super::EventFilter for SocialEventFilter {
             super::social::SocialEvent::EscrowReleased(ev) => &ev.escrow.binding_hash,
             super::social::SocialEvent::EscrowCancelled(ev) => &ev.escrow.binding_hash,
         };
-
         self.binding_matcher
             .as_ref()
             .is_none_or(|expected| expected == binding_hash)
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl EventFilter for PeerEventFilter {
     type Event = super::PeerEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         self.id_matcher
             .as_ref()
@@ -1141,7 +1016,6 @@ impl EventFilter for PeerEventFilter {
             && self.event_set.matches(event)
     }
 }
-
 impl DomainEventFilter {
     /// Creates a new [`DomainEventFilter`] accepting all [`DomainEvent`]s.
     pub const fn new() -> Self {
@@ -1150,14 +1024,12 @@ impl DomainEventFilter {
             event_set: DomainEventSet::all(),
         }
     }
-
     /// Modifies a [`DomainEventFilter`] to accept only [`DomainEvent`]s originating from ids matching `id_matcher`.
     #[must_use]
     pub fn for_domain(mut self, id_matcher: DomainId) -> Self {
         self.id_matcher = Some(id_matcher);
         self
     }
-
     /// Modifies a [`DomainEventFilter`] to accept only [`DomainEvent`]s of types contained in `event_set`.
     #[must_use]
     pub const fn for_events(mut self, event_set: DomainEventSet) -> Self {
@@ -1165,17 +1037,14 @@ impl DomainEventFilter {
         self
     }
 }
-
 impl Default for DomainEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl EventFilter for DomainEventFilter {
     type Event = super::DomainEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         self.id_matcher
             .as_ref()
@@ -1183,7 +1052,6 @@ impl EventFilter for DomainEventFilter {
             && self.event_set.matches(event)
     }
 }
-
 impl AccountEventFilter {
     /// Creates a new [`AccountEventFilter`] accepting all [`AccountEvent`]s.
     pub const fn new() -> Self {
@@ -1192,14 +1060,12 @@ impl AccountEventFilter {
             event_set: AccountEventSet::all(),
         }
     }
-
     /// Modifies a [`AccountEventFilter`] to accept only [`AccountEvent`]s originating from ids matching `id_matcher`.
     #[must_use]
     pub fn for_account(mut self, id_matcher: AccountId) -> Self {
         self.id_matcher = Some(id_matcher);
         self
     }
-
     /// Modifies a [`AccountEventFilter`] to accept only [`AccountEvent`]s of types contained in `event_set`.
     #[must_use]
     pub const fn for_events(mut self, event_set: AccountEventSet) -> Self {
@@ -1207,17 +1073,14 @@ impl AccountEventFilter {
         self
     }
 }
-
 impl Default for AccountEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for AccountEventFilter {
     type Event = super::AccountEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         self.id_matcher
             .as_ref()
@@ -1225,7 +1088,6 @@ impl super::EventFilter for AccountEventFilter {
             && self.event_set.matches(event)
     }
 }
-
 impl AssetEventFilter {
     /// Creates a new [`AssetEventFilter`] accepting all [`AssetEvent`]s.
     pub const fn new() -> Self {
@@ -1237,35 +1099,30 @@ impl AssetEventFilter {
             event_set: AssetEventSet::all(),
         }
     }
-
     /// Modifies a [`AssetEventFilter`] to accept only [`AssetEvent`]s originating from ids matching `id_matcher`.
     #[must_use]
     pub fn for_asset(mut self, id_matcher: AssetId) -> Self {
         self.id_matcher = Some(id_matcher);
         self
     }
-
     /// Modifies an [`AssetEventFilter`] to accept only [`AssetEvent`]s whose assets belong to `asset_definition_matcher`.
     #[must_use]
     pub fn for_asset_definition(mut self, asset_definition_matcher: AssetDefinitionId) -> Self {
         self.asset_definition_matcher = Some(asset_definition_matcher);
         self
     }
-
     /// Match only transfer events whose source belongs to `account`.
     #[must_use]
     pub fn for_transfer_source_account(mut self, account: AccountId) -> Self {
         self.transfer_source_account_matcher = Some(account);
         self
     }
-
     /// Match only transfer events whose destination belongs to `account`.
     #[must_use]
     pub fn for_transfer_destination_account(mut self, account: AccountId) -> Self {
         self.transfer_destination_account_matcher = Some(account);
         self
     }
-
     /// Modifies a [`AssetEventFilter`] to accept only [`AssetEvent`]s of types contained in `event_set`.
     #[must_use]
     pub const fn for_events(mut self, event_set: AssetEventSet) -> Self {
@@ -1273,17 +1130,14 @@ impl AssetEventFilter {
         self
     }
 }
-
 impl Default for AssetEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for AssetEventFilter {
     type Event = super::AssetEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         self.id_matcher
             .as_ref()
@@ -1314,7 +1168,6 @@ impl super::EventFilter for AssetEventFilter {
             && self.event_set.matches(event)
     }
 }
-
 impl AssetDefinitionEventFilter {
     /// Creates a new [`AssetDefinitionEventFilter`] accepting all [`AssetDefinitionEvent`]s.
     pub const fn new() -> Self {
@@ -1323,14 +1176,12 @@ impl AssetDefinitionEventFilter {
             event_set: AssetDefinitionEventSet::all(),
         }
     }
-
     /// Modifies a [`AssetDefinitionEventFilter`] to accept only [`AssetDefinitionEvent`]s originating from ids matching `id_matcher`.
     #[must_use]
     pub fn for_asset_definition(mut self, id_matcher: AssetDefinitionId) -> Self {
         self.id_matcher = Some(id_matcher);
         self
     }
-
     /// Modifies a [`AssetDefinitionEventFilter`] to accept only [`AssetDefinitionEvent`]s of types contained in `event_set`.
     #[must_use]
     pub const fn for_events(mut self, event_set: AssetDefinitionEventSet) -> Self {
@@ -1338,17 +1189,14 @@ impl AssetDefinitionEventFilter {
         self
     }
 }
-
 impl Default for AssetDefinitionEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for AssetDefinitionEventFilter {
     type Event = super::AssetDefinitionEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         self.id_matcher
             .as_ref()
@@ -1356,7 +1204,6 @@ impl super::EventFilter for AssetDefinitionEventFilter {
             && self.event_set.matches(event)
     }
 }
-
 impl NftEventFilter {
     /// Creates a new [`NftEventFilter`] accepting all [`NftEvent`]s.
     pub const fn new() -> Self {
@@ -1365,14 +1212,12 @@ impl NftEventFilter {
             event_set: NftEventSet::all(),
         }
     }
-
     /// Modifies a [`NftEventFilter`] to accept only [`NftEvent`]s originating from ids matching `id_matcher`.
     #[must_use]
     pub fn for_nft(mut self, id_matcher: NftId) -> Self {
         self.id_matcher = Some(id_matcher);
         self
     }
-
     /// Modifies a [`NftEventFilter`] to accept only [`NftEvent`]s of types contained in `event_set`.
     #[must_use]
     pub const fn for_events(mut self, event_set: NftEventSet) -> Self {
@@ -1380,17 +1225,14 @@ impl NftEventFilter {
         self
     }
 }
-
 impl Default for NftEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl EventFilter for NftEventFilter {
     type Event = NftEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         self.id_matcher
             .as_ref()
@@ -1398,7 +1240,6 @@ impl EventFilter for NftEventFilter {
             && self.event_set.matches(event)
     }
 }
-
 impl RwaEventFilter {
     /// Creates a new [`RwaEventFilter`] accepting all [`RwaEvent`]s.
     pub const fn new() -> Self {
@@ -1407,14 +1248,12 @@ impl RwaEventFilter {
             event_set: RwaEventSet::all(),
         }
     }
-
     /// Modifies a [`RwaEventFilter`] to accept only events originating from `id_matcher`.
     #[must_use]
     pub fn for_rwa(mut self, id_matcher: RwaId) -> Self {
         self.id_matcher = Some(id_matcher);
         self
     }
-
     /// Modifies a [`RwaEventFilter`] to accept only [`RwaEvent`]s in `event_set`.
     #[must_use]
     pub const fn for_events(mut self, event_set: RwaEventSet) -> Self {
@@ -1422,17 +1261,14 @@ impl RwaEventFilter {
         self
     }
 }
-
 impl Default for RwaEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl EventFilter for RwaEventFilter {
     type Event = RwaEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         self.id_matcher
             .as_ref()
@@ -1440,7 +1276,6 @@ impl EventFilter for RwaEventFilter {
             && self.event_set.matches(event)
     }
 }
-
 impl TriggerEventFilter {
     /// Creates a new [`TriggerEventFilter`] accepting all [`TriggerEvent`]s.
     pub const fn new() -> Self {
@@ -1449,14 +1284,12 @@ impl TriggerEventFilter {
             event_set: TriggerEventSet::all(),
         }
     }
-
     /// Modifies a [`TriggerEventFilter`] to accept only [`TriggerEvent`]s originating from ids matching `id_matcher`.
     #[must_use]
     pub fn for_trigger(mut self, id_matcher: TriggerId) -> Self {
         self.id_matcher = Some(id_matcher);
         self
     }
-
     /// Modifies a [`TriggerEventFilter`] to accept only [`TriggerEvent`]s of types matching `event_set`.
     #[must_use]
     pub const fn for_events(mut self, event_set: TriggerEventSet) -> Self {
@@ -1464,17 +1297,14 @@ impl TriggerEventFilter {
         self
     }
 }
-
 impl Default for TriggerEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for TriggerEventFilter {
     type Event = super::TriggerEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         self.id_matcher
             .as_ref()
@@ -1482,7 +1312,6 @@ impl super::EventFilter for TriggerEventFilter {
             && self.event_set.matches(event)
     }
 }
-
 impl RoleEventFilter {
     /// Creates a new [`RoleEventFilter`] accepting all [`RoleEvent`]s.
     pub const fn new() -> Self {
@@ -1491,14 +1320,12 @@ impl RoleEventFilter {
             event_set: RoleEventSet::all(),
         }
     }
-
     /// Modifies a [`RoleEventFilter`] to accept only [`RoleEvent`]s originating from ids matching `id_matcher`.
     #[must_use]
     pub fn for_role(mut self, id_matcher: RoleId) -> Self {
         self.id_matcher = Some(id_matcher);
         self
     }
-
     /// Modifies a [`RoleEventFilter`] to accept only [`RoleEvent`]s of types matching `event_set`.
     #[must_use]
     pub const fn for_events(mut self, event_set: RoleEventSet) -> Self {
@@ -1506,17 +1333,14 @@ impl RoleEventFilter {
         self
     }
 }
-
 impl Default for RoleEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for RoleEventFilter {
     type Event = super::RoleEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         self.id_matcher
             .as_ref()
@@ -1524,7 +1348,6 @@ impl super::EventFilter for RoleEventFilter {
             && self.event_set.matches(event)
     }
 }
-
 impl ConfigurationEventFilter {
     /// Creates a new [`ConfigurationEventFilter`] accepting all [`ConfigurationEvent`]s.
     pub const fn new() -> Self {
@@ -1532,7 +1355,6 @@ impl ConfigurationEventFilter {
             event_set: ConfigurationEventSet::all(),
         }
     }
-
     /// Modifies a [`ConfigurationEventFilter`] to accept only [`ConfigurationEvent`]s of types matching `event_set`.
     #[must_use]
     pub const fn for_events(mut self, event_set: ConfigurationEventSet) -> Self {
@@ -1540,22 +1362,18 @@ impl ConfigurationEventFilter {
         self
     }
 }
-
 impl Default for ConfigurationEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for ConfigurationEventFilter {
     type Event = super::ConfigurationEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         self.event_set.matches(event)
     }
 }
-
 impl ExecutorEventFilter {
     /// Creates a new [`ExecutorEventFilter`] accepting all [`ExecutorEvent`]s.
     pub const fn new() -> Self {
@@ -1563,7 +1381,6 @@ impl ExecutorEventFilter {
             event_set: ExecutorEventSet::all(),
         }
     }
-
     /// Modifies a [`ExecutorEventFilter`] to accept only [`ExecutorEvent`]s of types matching `event_set`.
     #[must_use]
     pub const fn for_events(mut self, event_set: ExecutorEventSet) -> Self {
@@ -1571,31 +1388,25 @@ impl ExecutorEventFilter {
         self
     }
 }
-
 impl Default for ExecutorEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for ExecutorEventFilter {
     type Event = super::ExecutorEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         self.event_set.matches(event)
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for BridgeEventFilter {
     type Event = crate::events::data::events::bridge::BridgeEvent;
-
     fn matches(&self, event: &Self::Event) -> bool {
         self.matches_event(event)
     }
 }
-
 #[cfg(feature = "governance")]
 impl GovernanceEventFilter {
     /// Creates a new [`GovernanceEventFilter`] accepting all governance events.
@@ -1606,21 +1417,18 @@ impl GovernanceEventFilter {
             event_set: super::governance::GovernanceEventSet::all(),
         }
     }
-
     /// Match only the provided event set.
     #[must_use]
     pub fn for_events(mut self, set: super::governance::GovernanceEventSet) -> Self {
         self.event_set = set;
         self
     }
-
     /// Filter by proposal id (applies to Proposal* variants only).
     #[must_use]
     pub fn for_proposal(mut self, id: [u8; 32]) -> Self {
         self.proposal_id = Some(id);
         self
     }
-
     /// Filter by referendum id (applies to `LockUpdated` only).
     #[must_use]
     pub fn for_referendum(mut self, rid: String) -> Self {
@@ -1628,18 +1436,15 @@ impl GovernanceEventFilter {
         self
     }
 }
-
 #[cfg(feature = "governance")]
 impl Default for GovernanceEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl EventFilter for DataEventFilter {
     type Event = DataEvent;
-
     fn matches(&self, event: &DataEvent) -> bool {
         match (self, event) {
             (DataEventFilter::Any, _) => true,
@@ -1733,28 +1538,23 @@ impl EventFilter for DataEventFilter {
         }
     }
 }
-
 #[cfg(all(feature = "transparent_api", feature = "governance"))]
 fn governance_matches(
     filter: &GovernanceEventFilter,
     event: &super::governance::GovernanceEvent,
 ) -> bool {
     use super::governance::GovernanceEvent;
-
     if !filter.event_set.matches(event) {
         return false;
     }
-
     let proposal_matches =
         |candidate: &[u8; 32]| filter.proposal_id.as_ref().is_none_or(|id| candidate == id);
-
     let referendum_matches = |candidate: &str| {
         filter
             .referendum_id
             .as_ref()
             .is_none_or(|rid| candidate == rid)
     };
-
     match event {
         GovernanceEvent::ProposalSubmitted(p) => proposal_matches(&p.id),
         GovernanceEvent::ProposalEnacted(p) => proposal_matches(&p.id),
@@ -1778,7 +1578,6 @@ fn governance_matches(
         GovernanceEvent::LockRestituted(ev) => referendum_matches(&ev.referendum_id),
     }
 }
-
 pub mod prelude {
     #[cfg(feature = "governance")]
     pub use super::GovernanceEventFilter;
@@ -1796,10 +1595,8 @@ pub mod prelude {
 mod tests {
     use iroha_crypto::{Hash, KeyPair};
     use iroha_primitives::numeric::Quantity;
-
     use super::*;
     use crate::nexus::UniversalAccountId;
-
     fn checked_random_account_id() -> AccountId {
         AccountId::new(
             KeyPair::try_random()
@@ -1808,7 +1605,6 @@ mod tests {
                 .0,
         )
     }
-
     #[test]
     #[cfg(feature = "transparent_api")]
     fn entity_scope() {
@@ -1821,7 +1617,6 @@ mod tests {
             );
         let asset_id = AssetId::new(definition_id, account_id.clone());
         let domain_owner_id = checked_random_account_id();
-
         let domain = Domain {
             id: domain_id.clone(),
             logo: None,
@@ -1830,7 +1625,6 @@ mod tests {
         };
         let account = Account::new(account_id.clone()).into_account();
         let asset = Asset::new(asset_id.clone(), 0_u32);
-
         // Explicit domain routing is carried by the scoped wrappers, never inferred from ids.
         let domain_created = DomainEvent::Created(domain).into();
         let account_created = DataEvent::account_in_domain(
@@ -1838,30 +1632,25 @@ mod tests {
             domain_id.clone(),
         );
         let asset_created = DataEvent::asset(AssetEvent::Created(asset), Some(domain_id.clone()));
-
         // test how the differently nested filters with with the events
         let domain_filter =
             DataEventFilter::Domain(DomainEventFilter::new().for_domain(domain_id.clone()));
         let account_filter =
             DataEventFilter::Account(AccountEventFilter::new().for_account(account_id));
         let asset_filter = DataEventFilter::Asset(AssetEventFilter::new().for_asset(asset_id));
-
         // domain filter matches all of those, because all of those events happened in the same domain
         assert!(domain_filter.matches(&domain_created));
         assert!(domain_filter.matches(&account_created));
         assert!(domain_filter.matches(&asset_created));
-
         // account event does not match the domain created event, as it is not an account event
         assert!(!account_filter.matches(&domain_created));
         assert!(account_filter.matches(&account_created));
         assert!(!account_filter.matches(&asset_created));
-
         // asset event matches only the domain->account->asset event
         assert!(!asset_filter.matches(&domain_created));
         assert!(!asset_filter.matches(&account_created));
         assert!(asset_filter.matches(&asset_created));
     }
-
     #[test]
     fn asset_filter_matches_by_asset_definition_only() {
         let account_id = checked_random_account_id();
@@ -1883,14 +1672,12 @@ mod tests {
             asset: other_asset,
             amount: 10_u32.into(),
         });
-
         let filter = AssetEventFilter::new()
             .for_events(AssetEventSet::Added)
             .for_asset_definition(matching_definition);
         assert!(filter.matches(&matching_event));
         assert!(!filter.matches(&other_event));
     }
-
     #[test]
     fn asset_filter_matches_by_asset_id_only() {
         let account_id = checked_random_account_id();
@@ -1908,14 +1695,12 @@ mod tests {
             asset: other_asset,
             amount: 5_u32.into(),
         });
-
         let filter = AssetEventFilter::new()
             .for_events(AssetEventSet::Added)
             .for_asset(matching_asset);
         assert!(filter.matches(&matching_event));
         assert!(!filter.matches(&other_event));
     }
-
     #[test]
     fn asset_filter_matches_with_asset_and_asset_definition_matchers() {
         let account_id = checked_random_account_id();
@@ -1937,7 +1722,6 @@ mod tests {
             asset: mismatched_asset,
             amount: 3_u32.into(),
         });
-
         let filter = AssetEventFilter::new()
             .for_events(AssetEventSet::Added)
             .for_asset(matching_asset)
@@ -1945,7 +1729,6 @@ mod tests {
         assert!(filter.matches(&matching_event));
         assert!(!filter.matches(&mismatched_event));
     }
-
     #[test]
     fn asset_filter_behavior_is_unchanged_without_asset_definition_matcher() {
         let account_id = checked_random_account_id();
@@ -1962,12 +1745,10 @@ mod tests {
             AssetId::new(definition, checked_random_account_id()),
             0_u32,
         ));
-
         let filter = AssetEventFilter::new().for_events(AssetEventSet::Added);
         assert!(filter.matches(&added));
         assert!(!filter.matches(&created));
     }
-
     #[test]
     fn asset_transfer_filter_matches_both_exact_participants() {
         let source = checked_random_account_id();
@@ -1982,7 +1763,6 @@ mod tests {
             destination: AssetId::new(definition.clone(), destination.clone()),
             amount: 7_u32.into(),
         });
-
         let matching = AssetEventFilter::new()
             .for_events(AssetEventSet::Transferred)
             .for_asset_definition(definition)
@@ -2004,7 +1784,6 @@ mod tests {
                 }))
         );
     }
-
     #[test]
     fn escrow_filter_matches_by_scope_status_and_event_kind() {
         let seller = checked_random_account_id();
@@ -2038,7 +1817,6 @@ mod tests {
         let event = DataEvent::Escrow(crate::events::data::escrow::EscrowEvent::PaymentSent(
             record,
         ));
-
         let filter = DataEventFilter::Escrow(
             EscrowEventFilter::new()
                 .for_escrow(escrow_id)
@@ -2048,14 +1826,12 @@ mod tests {
                 .for_events(crate::events::data::escrow::EscrowEventSet::PaymentSent),
         );
         assert!(filter.matches(&event));
-
         let wrong_kind = DataEventFilter::Escrow(
             EscrowEventFilter::new()
                 .for_events(crate::events::data::escrow::EscrowEventSet::Released),
         );
         assert!(!wrong_kind.matches(&event));
     }
-
     #[test]
     #[cfg(feature = "transparent_api")]
     fn verifying_key_filter_matches_by_id() {
@@ -2089,7 +1865,6 @@ mod tests {
         );
         assert!(!bad_filter.matches(&ev));
     }
-
     #[test]
     #[cfg(feature = "transparent_api")]
     fn proof_event_filter_matches_by_id_and_preset() {
@@ -2101,7 +1876,6 @@ mod tests {
             backend: "halo2/ipa".into(),
             proof_hash: h,
         };
-
         // Event: Verified with this id
         let ev_verified = DataEvent::Proof(ProofEvent::Verified(ProofVerified {
             id: pid.clone(),
@@ -2118,7 +1892,6 @@ mod tests {
             call_hash: None,
             envelope_hash: None,
         }));
-
         // Filter by id, only verified
         let f_only_verified = DataEventFilter::Proof(
             ProofEventFilter::new()
@@ -2127,7 +1900,6 @@ mod tests {
         );
         assert!(f_only_verified.matches(&ev_verified));
         assert!(!f_only_verified.matches(&ev_rejected));
-
         // Filter by id, only rejected
         let f_only_rejected = DataEventFilter::Proof(
             ProofEventFilter::new()
@@ -2136,7 +1908,6 @@ mod tests {
         );
         assert!(f_only_rejected.matches(&ev_rejected));
         assert!(!f_only_rejected.matches(&ev_verified));
-
         // Filter with different id should not match
         let mut h2 = [0u8; 32];
         h2[0] = 0xCD;
@@ -2151,7 +1922,6 @@ mod tests {
         );
         assert!(!f_other.matches(&ev_verified));
     }
-
     #[test]
     #[cfg(feature = "transparent_api")]
     fn nft_filter_matches_nested_events() {
@@ -2159,21 +1929,17 @@ mod tests {
         let domain_label = domain_id.to_string();
         let nft_id: NftId = format!("dragon${domain_label}").parse().unwrap();
         let other_nft_id: NftId = format!("phoenix${domain_label}").parse().unwrap();
-
         let nft_event = DataEvent::Domain(DomainEvent::Nft(NftEvent::Deleted(nft_id.clone())));
         let matching_filter = DataEventFilter::Nft(NftEventFilter::new().for_nft(nft_id.clone()));
         assert!(matching_filter.matches(&nft_event));
-
         let mismatching_filter =
             DataEventFilter::Nft(NftEventFilter::new().for_nft(other_nft_id.clone()));
         assert!(!mismatching_filter.matches(&nft_event));
-
         // Domain-level filter should still match the nested NFT event.
         let domain_filter =
             DataEventFilter::Domain(DomainEventFilter::new().for_domain(domain_id.clone()));
         assert!(domain_filter.matches(&nft_event));
     }
-
     #[test]
     fn asset_definition_filter_matches_standalone_opaque_event() {
         let domain_id: DomainId = DomainId::try_new("reward", "universal").unwrap();
@@ -2186,14 +1952,12 @@ mod tests {
             .parse()
             .expect("opaque canonical id");
         let event = DataEvent::from(AssetDefinitionEvent::Deleted(opaque_definition.clone()));
-
         let filter = DataEventFilter::AssetDefinition(
             AssetDefinitionEventFilter::new().for_asset_definition(opaque_definition),
         );
         assert!(filter.matches(&event));
         assert!(matches!(event, DataEvent::AssetDefinition(_)));
     }
-
     #[test]
     fn asset_filter_matches_standalone_opaque_event() {
         let domain_id: DomainId = DomainId::try_new("reward", "universal").unwrap();
@@ -2215,17 +1979,14 @@ mod tests {
             asset: asset_id.clone(),
             amount: 1_u32.into(),
         }));
-
         let asset_filter =
             DataEventFilter::Asset(AssetEventFilter::new().for_asset(asset_id.clone()));
         assert!(asset_filter.matches(&event));
         assert!(matches!(&event, DataEvent::Asset(_)));
-
         let domain_filter =
             DataEventFilter::Domain(DomainEventFilter::new().for_domain(domain_id.clone()));
         assert!(!domain_filter.matches(&event));
         assert!(event.domain().is_none());
-
         let scoped_event = DataEvent::asset(
             AssetEvent::Added(AssetChanged {
                 asset: asset_id,
@@ -2237,12 +1998,10 @@ mod tests {
         assert!(domain_filter.matches(&scoped_event));
         assert!(asset_filter.matches(&scoped_event));
     }
-
     #[test]
     #[cfg(feature = "transparent_api")]
     fn runtime_upgrade_filter_matches_by_id() {
         use crate::events::data::runtime_upgrade::{RuntimeUpgradeEvent, RuntimeUpgradeProposed};
-
         let upgrade_id = crate::runtime::RuntimeUpgradeId([0xAB; 32]);
         let event =
             DataEvent::RuntimeUpgrade(RuntimeUpgradeEvent::Proposed(RuntimeUpgradeProposed {
@@ -2251,25 +2010,21 @@ mod tests {
                 start_height: 10,
                 end_height: 20,
             }));
-
         let matching_filter = DataEventFilter::RuntimeUpgrade(
             RuntimeUpgradeEventFilter::new().for_runtime(upgrade_id),
         );
         assert!(matching_filter.matches(&event));
-
         let other_filter = DataEventFilter::RuntimeUpgrade(
             RuntimeUpgradeEventFilter::new()
                 .for_runtime(crate::runtime::RuntimeUpgradeId([0xAC; 32])),
         );
         assert!(!other_filter.matches(&event));
-
         let event_set_filter = DataEventFilter::RuntimeUpgrade(
             RuntimeUpgradeEventFilter::new()
                 .for_events(crate::events::data::runtime_upgrade::RuntimeUpgradeEventSet::all()),
         );
         assert!(event_set_filter.matches(&event));
     }
-
     #[test]
     #[cfg(feature = "transparent_api")]
     fn space_directory_filter_matches_scope() {
@@ -2288,18 +2043,15 @@ mod tests {
                 expiry_epoch: Some(20),
             },
         ));
-
         let matching = DataEventFilter::SpaceDirectory(
             SpaceDirectoryEventFilter::new().for_dataspace(dataspace),
         );
         assert!(matching.matches(&event));
-
         let mismatching = DataEventFilter::SpaceDirectory(
             SpaceDirectoryEventFilter::new().for_dataspace(DataSpaceId::new(7)),
         );
         assert!(!mismatching.matches(&event));
     }
-
     #[test]
     #[cfg(feature = "transparent_api")]
     fn oracle_filter_matches_feed_id() {
@@ -2307,7 +2059,6 @@ mod tests {
             events::data::oracle::OracleEvent,
             oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome},
         };
-
         let feed_id: crate::oracle::FeedId = "price_xor_usd".parse().unwrap();
         let event = DataEvent::Oracle(OracleEvent::FeedProcessed(
             crate::events::data::oracle::FeedEventRecord {
@@ -2322,16 +2073,13 @@ mod tests {
                 evidence_hashes: Vec::new(),
             },
         ));
-
         let matching = DataEventFilter::Oracle(OracleEventFilter::new().for_feed(feed_id.clone()));
         assert!(matching.matches(&event));
-
         let mismatching = DataEventFilter::Oracle(
             OracleEventFilter::new().for_feed("other_feed".parse().unwrap()),
         );
         assert!(!mismatching.matches(&event));
     }
-
     #[test]
     fn musubi_filter_matches_structural_package_and_archive() {
         use crate::{
@@ -2342,7 +2090,6 @@ mod tests {
             },
             nexus::DataSpaceId,
         };
-
         let package = MusubiPackageIdV1::new(
             DataSpaceId::new(7),
             MusubiPackageScopeV1::DataspaceRoot,
@@ -2358,7 +2105,6 @@ mod tests {
                 finalized_height: 9,
             },
         ));
-
         let matching = DataEventFilter::Musubi(
             MusubiEventFilter::new()
                 .for_package(package.clone())
@@ -2382,19 +2128,15 @@ mod tests {
         );
     }
 }
-
 #[allow(dead_code)]
 mod bridge_filters_model {
     use iroha_data_model_derive::model;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-
     use crate::events::data::events::HasOrigin;
-
     #[model]
     mod model {
         use super::*;
-
         /// An event filter for `BridgeEvent`
         #[derive(
             Debug,
@@ -2418,9 +2160,7 @@ mod bridge_filters_model {
             pub(super) event_set: crate::events::data::events::bridge::BridgeEventSet,
         }
     }
-
     pub use model::BridgeEventFilter;
-
     impl BridgeEventFilter {
         /// Creates a new [`BridgeEventFilter`] accepting all bridge events.
         pub fn new() -> Self {
@@ -2429,14 +2169,12 @@ mod bridge_filters_model {
                 event_set: crate::events::data::events::bridge::BridgeEventSet::all(),
             }
         }
-
         /// Restrict the filter to events originating from the provided lane id.
         #[must_use]
         pub fn for_lane(mut self, lane: crate::nexus::LaneId) -> Self {
             self.id_matcher = Some(lane);
             self
         }
-
         /// Restrict the filter to specific bridge event kinds.
         #[must_use]
         pub fn for_events(
@@ -2446,7 +2184,6 @@ mod bridge_filters_model {
             self.event_set = event_set;
             self
         }
-
         /// Check if a bridge event matches this filter.
         pub fn matches_event(
             &self,
@@ -2459,7 +2196,6 @@ mod bridge_filters_model {
             origin_ok && self.event_set.matches(event)
         }
     }
-
     impl Default for BridgeEventFilter {
         fn default() -> Self {
             Self::new()

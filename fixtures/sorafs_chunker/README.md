@@ -13,14 +13,21 @@ cross-language implementations (Rust/Go/TypeScript) and integration pipelines.
   canonical digest on-chain; this file mirrors the latest on-chain commitment for
   local regression tests.
 
-Regenerate the artifacts with:
+Regenerate the artifacts through a private external stage with an explicitly
+authorized signing-key file:
 
-```
-cargo run -p sorafs_chunker --features dev-tools --bin export_vectors
+```bash
+sf1_stage="$(mktemp -d "${TMPDIR:-/tmp}/iroha-sf1.XXXXXX")"
+sf1_stage="$(cd -- "$sf1_stage" && pwd -P)"
+chmod 700 "$sf1_stage"
+cargo run --locked -p sorafs_chunker --features dev-tools --bin export_vectors -- \
+  --write --staging-root "$sf1_stage" \
+  --signing-key-file /absolute/private/council-signing-key.hex
 ```
 
-Local runs typically pass `--allow-unsigned`; the canonical signature set comes
-from Parliament events fetched by the tooling helpers described in
-`specs/sorafs/signing_ceremony.md`. After an approval lands on-chain,
-rerun the generator to refresh the language fixtures and confirm that the
-BLAKE3 digest matches the Nexus record.
+The generator has no unsigned mode. It validates the complete staged tree and
+signature before publishing any checked-in path, and a changed manifest digest
+requires explicit signing authority. Use `--check` with a fresh private stage
+for a read-only replay. The canonical signature set comes from Parliament
+events fetched by the tooling helpers described in
+`specs/sorafs/signing_ceremony.md`.

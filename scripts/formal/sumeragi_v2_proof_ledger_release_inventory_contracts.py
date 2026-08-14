@@ -806,7 +806,6 @@ def _production_liveness_release_inventory_errors(
             successor_adapter_path.relative_to(repo_root).as_posix(),
             errors,
             "successor parent-binding regression source",
-            expanded_components=("tests/v2_adapter_activation_context.rs",),
         )
         for test_name, expected_sha256 in _SUCCESSOR_PARENT_BINDING_TEST_SHA256.items():
             successor_test = _require_rust_item(
@@ -1593,11 +1592,6 @@ def _production_liveness_release_inventory_errors(
                     f"{receipt_path}: Taira receipt tuple must equal the exact "
                     "six-test runner inventory"
                 )
-            if receipt_source.splitlines().count('                    "state::",') != 1:
-                errors.append(
-                    f"{receipt_path}: canonical receipt inventory parser must admit "
-                    "the exact state module namespace"
-                )
             expected_receipt_components = (
                 "write_sumeragi_v2_release_receipt_formal_artifacts.py",
                 "write_sumeragi_v2_release_receipt_corridor_log.py",
@@ -1622,7 +1616,7 @@ def _production_liveness_release_inventory_errors(
                     "0cc7e2a43479fb27305974559c331d4494df161cfc7c75fe9c51f324b09e058a"
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
-                    "f75a5f2df901408d028605ab11b09f01a77853ecd27deb10a6cdfbd08dda5bed"
+                    "d5f666eab695c3ca4668a3a3e1074a53b8fc63aac3d852036d0c20622e027b45"
                 ),
             }
             if assignments["_RELEASE_RECEIPT_COMPONENT_SHA256"] != [
@@ -1773,6 +1767,21 @@ def _production_liveness_release_inventory_errors(
                         f"{component_path}: release receipt component SHA-256 must "
                         f"equal {expected_receipt_component_sha256[component_name]}"
                     )
+            gate_evidence_path = receipt_path.with_name(
+                "write_sumeragi_v2_release_receipt_gate_evidence.py"
+            )
+            gate_evidence_source = (
+                gate_evidence_path.read_text(encoding="utf-8")
+                if gate_evidence_path.is_file() and not gate_evidence_path.is_symlink()
+                else ""
+            )
+            if gate_evidence_source.splitlines().count(
+                '                    "state::",'
+            ) != 1:
+                errors.append(
+                    f"{gate_evidence_path}: canonical receipt inventory parser must "
+                    "admit the exact state module namespace"
+                )
             expected_receipt_route = (
                 "if module in _DATA_MODEL_PRODUCTION_MODULES:\n"
                 "        return (\n"
@@ -1780,9 +1789,9 @@ def _production_liveness_release_inventory_errors(
                 '            f"{module} -- --test-threads=1"\n'
                 "        )"
             )
-            if receipt_source.count(expected_receipt_route) != 1:
+            if gate_evidence_source.count(expected_receipt_route) != 1:
                 errors.append(
-                    f"{receipt_path}: production data-model receipt legs must execute "
+                    f"{gate_evidence_path}: production data-model receipt legs must execute "
                     "against the iroha_data_model library"
                 )
 
@@ -1792,7 +1801,7 @@ def _production_liveness_release_inventory_errors(
     )
     expected_bootstrap_component_sha256 = {
         "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-            "d652f4c4c24b0d333ed76c1f07ff657d9fdd9c843f3082f18f4e63504d1019e7"
+            "a11e17139adf7257126328d7f0c9f2903a6911c9ff4a81e50bb2818362f2b39b"
         ),
     }
     expected_bootstrap_component_symbols = {

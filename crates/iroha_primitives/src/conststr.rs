@@ -16,21 +16,18 @@ use core::{
     slice::from_raw_parts,
     str::from_utf8_unchecked,
 };
-use std::{
-    borrow::ToOwned as _,
-    boxed::Box,
-    string::{String, ToString as _},
-};
-
 use derive_more::{Debug, Display};
 use iroha_schema::{Ident, IntoSchema, MetaMap, TypeId};
 use norito::{
     NoritoDeserialize, NoritoSerialize, core as ncore,
     json::{self, JsonDeserialize, JsonSerialize},
 };
-
+use std::{
+    borrow::ToOwned as _,
+    boxed::Box,
+    string::{String, ToString as _},
+};
 const MAX_INLINED_STRING_LEN: usize = 2 * size_of::<usize>() - 1;
-
 /// Immutable inlinable string.
 ///
 /// Strings shorter than 15/7/3 bytes (in 64/32/16-bit architecture) are inlined.
@@ -57,7 +54,6 @@ pub union ConstString {
     inlined: InlinedString,
     boxed: ManuallyDrop<BoxedString>,
 }
-
 impl ConstString {
     /// Return the length of this [`Self`], in bytes.
     #[inline]
@@ -68,13 +64,11 @@ impl ConstString {
             self.boxed().len()
         }
     }
-
     /// Return `true` if [`Self`] is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-
     /// Construct empty [`Self`].
     #[inline]
     pub const fn new() -> Self {
@@ -83,19 +77,64 @@ impl ConstString {
         }
     }
 
+    /// Retain one borrowed string under the active decode-allocation budget.
+    ///
+    /// Short values remain inline and allocate nothing. Longer values reserve
+    /// their exact byte length before using the fallible raw allocator, so
+    /// parser clients do not hide a source-sized `String` clone behind an
+    /// ordinary infallible conversion.
+    ///
+    /// # Errors
+    ///
+    /// Returns a resource-limit or allocation error when the exact retained
+    /// destination cannot be admitted.
+    #[doc(hidden)]
+    #[allow(unsafe_code)]
+    pub fn try_from_str_for_decode(value: &str) -> Result<Self, ncore::Error> {
+        if let Ok(inlined) = InlinedString::try_from(value) {
+            return Ok(Self { inlined });
+        }
+
+        let len = value.len();
+        ncore::reserve_decode_allocation(len)?;
+        let layout = std::alloc::Layout::array::<u8>(len)
+            .map_err(|_| ncore::Error::AllocationFailed { bytes: u64::MAX })?;
+        // SAFETY: `layout` is non-zero because every value that reaches this
+        // branch is longer than the inline capacity. Null is rejected before
+        // any write or ownership conversion.
+        let allocation = unsafe { std::alloc::alloc(layout) };
+        let allocation = NonNull::new(allocation).ok_or(ncore::Error::AllocationFailed {
+            bytes: u64::try_from(len).unwrap_or(u64::MAX),
+        })?;
+        // SAFETY: the allocation has exactly `len` writable bytes and the
+        // source slice has the same length. All bytes are initialized before
+        // converting the allocation into its unique boxed owner.
+        unsafe {
+            core::ptr::copy_nonoverlapping(value.as_ptr(), allocation.as_ptr(), len);
+        }
+        // SAFETY: `allocation` came from the global allocator with the exact
+        // `[u8]` layout above and is now fully initialized and uniquely owned.
+        let bytes = unsafe {
+            Box::from_raw(core::ptr::slice_from_raw_parts_mut(
+                allocation.as_ptr(),
+                len,
+            ))
+        };
+        Ok(Self {
+            boxed: ManuallyDrop::new(BoxedString::from_boxed_slice(bytes)),
+        })
+    }
     /// Return `true` if [`Self`] is inlined.
     #[inline]
     pub const fn is_inlined(&self) -> bool {
         self.inlined().is_inlined()
     }
-
     #[allow(unsafe_code)]
     #[inline]
     const fn inlined(&self) -> &InlinedString {
         // SAFETY: safe to access if `is_inlined` == `true`.
         unsafe { &self.inlined }
     }
-
     #[allow(unsafe_code)]
     #[inline]
     fn boxed(&self) -> &BoxedString {
@@ -103,7 +142,6 @@ impl ConstString {
         unsafe { &self.boxed }
     }
 }
-
 impl<T: ?Sized> AsRef<T> for ConstString
 where
     InlinedString: AsRef<T>,
@@ -118,36 +156,30 @@ where
         }
     }
 }
-
 impl Deref for ConstString {
     type Target = str;
-
     #[inline]
     fn deref(&self) -> &Self::Target {
         self.as_ref()
     }
 }
-
 impl Borrow<str> for ConstString {
     fn borrow(&self) -> &str {
         self.as_ref()
     }
 }
-
 impl Hash for ConstString {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         (**self).hash(state);
     }
 }
-
 impl Ord for ConstString {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
         Ord::cmp(&**self, &**other)
     }
 }
-
 /// Can't be derived.
 impl PartialOrd for ConstString {
     #[inline]
@@ -155,14 +187,12 @@ impl PartialOrd for ConstString {
         Some(self.cmp(other))
     }
 }
-
 impl PartialEq for ConstString {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
         PartialEq::eq(&**self, &**other)
     }
 }
-
 macro_rules! impl_eq {
     ($($ty:ty),*) => {$(
         impl PartialEq<$ty> for ConstString {
@@ -173,7 +203,6 @@ macro_rules! impl_eq {
                 PartialEq::eq(&self[..], &other[..])
             }
         }
-
         impl PartialEq<ConstString> for $ty {
             // Not possible to write macro uniformly for different types otherwise.
             #[allow(clippy::string_slice, clippy::deref_by_slicing)]
@@ -184,18 +213,14 @@ macro_rules! impl_eq {
         }
     )*};
 }
-
 impl_eq!(String, str, &str);
-
 /// Can't be derived.
 impl Eq for ConstString {}
-
 impl fmt::Debug for ConstString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
     }
 }
-
 impl<T> From<T> for ConstString
 where
     T: TryInto<InlinedString>,
@@ -211,7 +236,6 @@ where
         }
     }
 }
-
 impl Clone for ConstString {
     fn clone(&self) -> Self {
         if self.is_inlined() {
@@ -225,7 +249,6 @@ impl Clone for ConstString {
         }
     }
 }
-
 impl Drop for ConstString {
     #[allow(unsafe_code)]
     fn drop(&mut self) {
@@ -237,68 +260,62 @@ impl Drop for ConstString {
         }
     }
 }
-
 impl JsonSerialize for ConstString {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(self.as_ref(), out);
     }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(self.as_ref(), out)
+    }
 }
-
 impl JsonDeserialize for ConstString {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parser.parse_string().map(Into::into)
     }
 }
-
 impl NoritoSerialize for ConstString {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         <&str as NoritoSerialize>::serialize(&self.as_ref(), writer)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for ConstString {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
-
         if let Ok(value) = <&str as NoritoDeserialize>::try_deserialize(archived.cast::<&str>()) {
             return value.into();
         }
-
         if let Ok(value) = <String as NoritoDeserialize>::try_deserialize(archived.cast::<String>())
         {
             return value.as_str().into();
         }
-
         if let Ok(payload) = ncore::payload_slice_from_ptr(ptr)
             && let Ok((value, _used)) = ncore::decode_field_canonical::<String>(payload)
         {
             return value.as_str().into();
         }
-
         let string = String::deserialize(archived.cast::<String>());
         string.as_str().into()
     }
 }
-
 impl<'a> ncore::DecodeFromSlice<'a> for ConstString {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         let (decoded, used) = <String as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok((ConstString::from(decoded), used))
     }
 }
-
 // darling doesn't support unions, so this can't be derived
 impl TypeId for ConstString {
     fn id() -> Ident {
         "ConstString".to_string()
     }
 }
-
 impl IntoSchema for ConstString {
     fn type_name() -> Ident {
         "String".to_string()
     }
-
     fn update_schema_map(map: &mut MetaMap) {
         if !map.contains_key::<Self>() {
             if !map.contains_key::<String>() {
@@ -310,7 +327,6 @@ impl IntoSchema for ConstString {
         }
     }
 }
-
 #[derive(Debug)]
 #[debug("{:?}", &**self)]
 #[repr(C)]
@@ -321,7 +337,6 @@ struct BoxedString {
     #[cfg(target_endian = "big")]
     ptr: NonNull<u8>,
 }
-
 impl Default for BoxedString {
     fn default() -> Self {
         Self {
@@ -330,26 +345,22 @@ impl Default for BoxedString {
         }
     }
 }
-
 impl Default for ConstString {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl BoxedString {
     #[inline]
     const fn len(&self) -> usize {
         self.len
     }
-
     #[allow(unsafe_code)]
     #[inline]
     fn as_bytes(&self) -> &[u8] {
         // SAFETY: created from `Box<[u8]>`.
         unsafe { from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
-
     #[allow(unsafe_code)]
     #[inline]
     fn from_boxed_slice(slice: Box<[u8]>) -> Self {
@@ -359,7 +370,6 @@ impl BoxedString {
         Self { ptr, len }
     }
 }
-
 impl AsRef<str> for BoxedString {
     #[allow(unsafe_code)]
     #[inline]
@@ -368,23 +378,19 @@ impl AsRef<str> for BoxedString {
         unsafe { from_utf8_unchecked(self.as_bytes()) }
     }
 }
-
 impl Deref for BoxedString {
     type Target = str;
-
     #[inline]
     fn deref(&self) -> &Self::Target {
         self.as_ref()
     }
 }
-
 impl Clone for BoxedString {
     /// Properly clone [`Self`] into new allocation.
     fn clone(&self) -> Self {
         Self::from_boxed_slice(self.as_bytes().to_owned().into_boxed_slice())
     }
 }
-
 impl From<&str> for BoxedString {
     #[allow(unsafe_code)]
     #[inline]
@@ -392,14 +398,12 @@ impl From<&str> for BoxedString {
         Self::from_boxed_slice(value.as_bytes().to_owned().into_boxed_slice())
     }
 }
-
 impl From<String> for BoxedString {
     #[inline]
     fn from(value: String) -> Self {
         Self::from_boxed_slice(value.into_bytes().into_boxed_slice())
     }
 }
-
 impl Drop for BoxedString {
     #[allow(unsafe_code)]
     fn drop(&mut self) {
@@ -412,19 +416,16 @@ impl Drop for BoxedString {
         }
     }
 }
-
 /// `BoxedString` is `Send` because the data they
 /// reference is unaliased. Aliasing invariant is enforced by
 /// creation of `BoxedString`.
 #[allow(unsafe_code)]
 unsafe impl Send for BoxedString {}
-
 /// `BoxedString` is `Sync` because the data they
 /// reference is unaliased. Aliasing invariant is enforced by
 /// creation of `BoxedString`.
 #[allow(unsafe_code)]
 unsafe impl Sync for BoxedString {}
-
 #[derive(Clone, Copy)]
 #[repr(C)]
 struct InlinedString {
@@ -435,18 +436,15 @@ struct InlinedString {
     #[cfg(target_endian = "big")]
     payload: [u8; MAX_INLINED_STRING_LEN],
 }
-
 impl InlinedString {
     #[inline]
     const fn len(self) -> usize {
         (self.len - 128) as usize
     }
-
     #[inline]
     const fn is_inlined(self) -> bool {
         self.len >= 128
     }
-
     #[inline]
     const fn new() -> Self {
         Self {
@@ -456,7 +454,6 @@ impl InlinedString {
         }
     }
 }
-
 impl AsRef<str> for InlinedString {
     #[allow(unsafe_code)]
     #[inline]
@@ -465,10 +462,8 @@ impl AsRef<str> for InlinedString {
         unsafe { core::str::from_utf8_unchecked(&self.payload[..self.len()]) }
     }
 }
-
 impl<'value> TryFrom<&'value str> for InlinedString {
     type Error = &'value str;
-
     #[allow(clippy::cast_possible_truncation)]
     #[inline]
     fn try_from(value: &'value str) -> Result<Self, Self::Error> {
@@ -484,25 +479,19 @@ impl<'value> TryFrom<&'value str> for InlinedString {
         Ok(inlined)
     }
 }
-
 impl TryFrom<String> for InlinedString {
     type Error = String;
-
     #[inline]
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::try_from(value.as_str()).map_or_else(|_| Err(value.clone()), Ok)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     mod layout {
-        use core::mem::{align_of, size_of};
-
         use super::*;
-
+        use core::mem::{align_of, size_of};
         // Verify that `ConstString` occupies the same space as a boxed string.
         #[test]
         fn const_string_layout() {
@@ -510,10 +499,8 @@ mod tests {
             assert_eq!(align_of::<ConstString>(), align_of::<Box<str>>());
         }
     }
-
     mod api {
         use super::*;
-
         // Strings up to the inline limit should be stored without heap allocation.
         #[test]
         fn const_string_is_inlined() {
@@ -524,7 +511,6 @@ mod tests {
                 assert_eq!(const_string.is_inlined(), is_inlined, "with len {len}");
             });
         }
-
         // Length reported by `ConstString` should match the source string.
         #[test]
         fn const_string_len() {
@@ -534,7 +520,6 @@ mod tests {
                 assert_eq!(const_string.len(), len);
             });
         }
-
         // Dereferencing should yield the original string slice.
         #[test]
         fn const_string_deref() {
@@ -543,7 +528,6 @@ mod tests {
                 assert_eq!(&*const_string, &*string);
             });
         }
-
         // Conversion from `String` should preserve the value.
         #[test]
         fn const_string_from_string() {
@@ -552,7 +536,6 @@ mod tests {
                 assert_eq!(const_string, string);
             });
         }
-
         // Conversion from `&str` should preserve the value.
         #[test]
         fn const_string_from_str() {
@@ -562,6 +545,36 @@ mod tests {
             });
         }
 
+        #[test]
+        fn decode_constructor_inlines_or_charges_the_exact_retained_bytes() {
+            fn limits(bytes: usize) -> ncore::DecodeLimits {
+                ncore::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX)
+            }
+
+            let inline = "inline";
+            let (decoded, usage) = ncore::with_decode_limits_measured(limits(0), || {
+                ConstString::try_from_str_for_decode(inline)
+            });
+            assert_eq!(decoded.expect("inline string"), inline);
+            assert_eq!(usage.total_allocated_bytes(), 0);
+
+            let boxed = "x".repeat(MAX_INLINED_STRING_LEN + 1);
+            let (decoded, usage) = ncore::with_decode_limits_measured(limits(boxed.len()), || {
+                ConstString::try_from_str_for_decode(&boxed)
+            });
+            assert_eq!(decoded.expect("exact boxed string"), boxed);
+            assert_eq!(usage.total_allocated_bytes(), boxed.len());
+
+            let (rejected, usage) =
+                ncore::with_decode_limits_measured(limits(boxed.len() - 1), || {
+                    ConstString::try_from_str_for_decode(&boxed)
+                });
+            assert!(matches!(
+                rejected,
+                Err(ncore::Error::TotalAllocationExceeded { .. })
+            ));
+            assert_eq!(usage.total_allocated_bytes(), 0);
+        }
         // Cloning should produce an identical `ConstString`.
         #[test]
         #[allow(clippy::redundant_clone)]
@@ -573,14 +586,10 @@ mod tests {
             });
         }
     }
-
     mod integration {
-        use std::collections::hash_map::DefaultHasher;
-
-        use norito::codec::{Decode, Encode};
-
         use super::*;
-
+        use norito::codec::{Decode, Encode};
+        use std::collections::hash_map::DefaultHasher;
         // Hash output should match that of the original string.
         #[test]
         fn const_string_hash() {
@@ -593,7 +602,6 @@ mod tests {
                 assert_eq!(const_string_hasher.finish(), string_hasher.finish());
             });
         }
-
         // Comparison with `String` should behave symmetrically.
         #[test]
         fn const_string_eq_string() {
@@ -603,7 +611,6 @@ mod tests {
                 assert_eq!(string, const_string);
             });
         }
-
         // Comparison with `&str` should behave symmetrically.
         #[test]
         fn const_string_eq_str() {
@@ -613,7 +620,6 @@ mod tests {
                 assert_eq!(string.as_str(), const_string);
             });
         }
-
         // Two `ConstString` values from the same data should be equal.
         #[test]
         fn const_string_eq_const_string() {
@@ -624,7 +630,6 @@ mod tests {
                 assert_eq!(const_string_2, const_string_1);
             });
         }
-
         // Ordering between `ConstString`s should mirror ordering of source strings.
         #[test]
         fn const_string_cmp() {
@@ -643,7 +648,6 @@ mod tests {
                 });
             });
         }
-
         // Norito encoding then decoding should reproduce the original value.
         #[test]
         fn const_string_norito_roundtrip() {
@@ -653,7 +657,6 @@ mod tests {
                 assert_eq!(decoded, const_string);
             });
         }
-
         // Norito JSON serialization should match the plain string and round-trip.
         #[test]
         fn const_string_json_roundtrip() {
@@ -666,7 +669,6 @@ mod tests {
             });
         }
     }
-
     fn run_with_strings(f: impl Fn(String)) {
         [
             // 0-byte

@@ -2,7 +2,6 @@
 //!
 //! This module owns only public provider bindings and injected runtime adapters;
 //! it never loads credentials, private keys, or endpoint overrides.
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::protocol;
 use crate::{
@@ -14,12 +13,10 @@ use crate::{
     },
 };
 use std::{fmt, sync::Arc};
-
 const BROKER_LIFECYCLE_STARTING_V1: u8 = 0;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const BROKER_LIFECYCLE_READY_V1: u8 = 1;
 const BROKER_LIFECYCLE_STOPPING_V1: u8 = 2;
-
 /// One-shot lifecycle control shared by a broker launcher and serving thread.
 ///
 /// Readiness publication and shutdown are linearized through a bounded
@@ -33,7 +30,6 @@ pub struct RuntimeProviderBrokerLifecycleV1 {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     active_provider_calls: std::sync::atomic::AtomicUsize,
 }
-
 impl RuntimeProviderBrokerLifecycleV1 {
     /// Construct a fresh one-shot lifecycle in the starting state.
     #[must_use]
@@ -45,7 +41,6 @@ impl RuntimeProviderBrokerLifecycleV1 {
             active_provider_calls: std::sync::atomic::AtomicUsize::new(0),
         }
     }
-
     /// Request orderly shutdown without waiting for in-flight provider calls.
     ///
     /// The serving call closes accepted local transports and joins every
@@ -69,13 +64,11 @@ impl RuntimeProviderBrokerLifecycleV1 {
             std::sync::atomic::Ordering::SeqCst,
         );
     }
-
     /// Return whether orderly shutdown has been requested or begun.
     #[must_use]
     pub fn shutdown_requested(&self) -> bool {
         self.state.load(std::sync::atomic::Ordering::SeqCst) == BROKER_LIFECYCLE_STOPPING_V1
     }
-
     #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     pub(super) fn publish_ready<R>(&self, on_ready: R) -> bool
     where
@@ -89,7 +82,6 @@ impl RuntimeProviderBrokerLifecycleV1 {
             Err(never) => match never {},
         }
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) fn publish_ready_fallible<R, E>(&self, on_ready: R) -> Result<bool, E>
     where
@@ -115,7 +107,6 @@ impl RuntimeProviderBrokerLifecycleV1 {
         );
         Ok(true)
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) fn try_begin_qualification(
         self: &Arc<Self>,
@@ -134,7 +125,6 @@ impl RuntimeProviderBrokerLifecycleV1 {
             lifecycle: Arc::clone(self),
         })
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) fn try_begin_operation(
         self: &Arc<Self>,
@@ -153,25 +143,21 @@ impl RuntimeProviderBrokerLifecycleV1 {
             lifecycle: Arc::clone(self),
         })
     }
-
     #[cfg(all(any(target_os = "linux", target_os = "macos"), test))]
     pub(super) fn active_provider_call_count(&self) -> usize {
         self.active_provider_calls
             .load(std::sync::atomic::Ordering::Acquire)
     }
 }
-
 impl Default for RuntimeProviderBrokerLifecycleV1 {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) struct RuntimeProviderBrokerCallPermitV1 {
     lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl Drop for RuntimeProviderBrokerCallPermitV1 {
     fn drop(&mut self) {
@@ -180,14 +166,12 @@ impl Drop for RuntimeProviderBrokerCallPermitV1 {
             .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
     }
 }
-
 /// Stock platform-fixed runtime-provider registry used by `main_entry`.
 ///
 /// Construction performs no I/O. The registry connects to the fixed local
 /// endpoint only when the validated public binding catalog is non-empty.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct StockRuntimeProviderBrokerRegistryV1;
-
 impl StockRuntimeProviderBrokerRegistryV1 {
     /// Construct the stock registry without connecting to the broker.
     #[must_use]
@@ -195,13 +179,11 @@ impl StockRuntimeProviderBrokerRegistryV1 {
         Self
     }
 }
-
 const fn stock_runtime_provider_slot_is_supported(slot: IrohaRuntimeProviderSlotV1) -> bool {
     let wire_id = slot.wire_id();
     wire_id >= IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id()
         && wire_id <= IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id()
 }
-
 impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
     fn resolve(
         &self,
@@ -210,7 +192,6 @@ impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
         if bindings.is_empty() {
             return Ok(IrohaRuntimeDeps::default());
         }
-
         // The frozen V1 wire ids are a contiguous, exhaustively tested
         // whitelist. A future role outside that closed interval fails until
         // this registry and its bounded protocol surface are extended.
@@ -220,7 +201,6 @@ impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
         {
             return Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution);
         }
-
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             protocol::resolve(bindings)
@@ -232,22 +212,18 @@ impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
         }
     }
 }
-
 #[cfg(test)]
 mod stock_registry_tests {
     use super::*;
-
     #[test]
     fn standalone_registry_retains_exact_network_identity() {
         let chain_id = iroha_data_model::ChainId::from("standalone-governance-test");
         let network_id = crate::runtime_provider_registry::runtime_provider_test_network_id();
         let registry =
             StockGovernanceDagServiceRuntimeProviderRegistryV1::new(chain_id.clone(), network_id);
-
         assert_eq!(registry.chain_id, chain_id);
         assert_eq!(registry.network_id, network_id);
     }
-
     #[test]
     fn reserved_musubi_attestation_slots_fail_before_broker_connection() {
         let registry = StockRuntimeProviderBrokerRegistryV1::new();
@@ -272,7 +248,6 @@ mod stock_registry_tests {
                 1,
                 [0xA5; 32],
             );
-
             assert!(matches!(
                 registry.resolve(&bindings),
                 Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)
@@ -280,7 +255,6 @@ mod stock_registry_tests {
         }
     }
 }
-
 /// Stock broker-backed registry for the packaged Governance DAG service.
 ///
 /// The display chain and exact genesis-derived network identity participate in
@@ -290,7 +264,6 @@ pub struct StockGovernanceDagServiceRuntimeProviderRegistryV1 {
     chain_id: iroha_data_model::ChainId,
     network_id: iroha_data_model::NetworkId,
 }
-
 impl StockGovernanceDagServiceRuntimeProviderRegistryV1 {
     /// Construct a standalone-service registry for one exact network.
     #[must_use]
@@ -304,7 +277,6 @@ impl StockGovernanceDagServiceRuntimeProviderRegistryV1 {
         }
     }
 }
-
 impl sorafs_node::GovernanceDagServiceRuntimeProviderRegistryV1
     for StockGovernanceDagServiceRuntimeProviderRegistryV1
 {
@@ -343,12 +315,10 @@ impl sorafs_node::GovernanceDagServiceRuntimeProviderRegistryV1
         Ok(providers)
     }
 }
-
 fn map_governance_service_registry_error(
     error: IrohaRuntimeProviderRegistryErrorV1,
 ) -> sorafs_node::GovernanceDagServiceRuntimeProviderRegistryErrorV1 {
     use sorafs_node::GovernanceDagServiceRuntimeProviderRegistryErrorV1 as ServiceError;
-
     match error {
         IrohaRuntimeProviderRegistryErrorV1::Unavailable
         | IrohaRuntimeProviderRegistryErrorV1::MissingRegistry => ServiceError::Unavailable,
@@ -362,16 +332,13 @@ fn map_governance_service_registry_error(
         }
     }
 }
-
 #[cfg(test)]
 mod governance_service_registry_tests {
     use super::*;
     use sorafs_node::GovernanceDagServiceRuntimeProviderRegistryErrorV1 as ServiceError;
-
     #[test]
     fn stock_registry_whitelists_every_frozen_v1_slot() {
         use IrohaRuntimeProviderSlotV1 as Slot;
-
         let slots = [
             Slot::ModerationQuarantineKeyWrapper,
             Slot::PrivacyCyclePrfProvider,
@@ -435,7 +402,6 @@ mod governance_service_registry_tests {
             assert!(stock_runtime_provider_slot_is_supported(slot));
         }
     }
-
     #[test]
     fn registry_errors_map_to_payload_free_service_categories() {
         for error in [
@@ -469,7 +435,6 @@ mod governance_service_registry_tests {
         }
     }
 }
-
 /// Stable redacted failure from the private Bootle/Lantern issuer boundary.
 ///
 /// The broker deliberately exposes no backend-specific diagnostics, key
@@ -483,7 +448,6 @@ pub enum BootleLanternIssuanceBrokerBackendErrorV1 {
     /// The issuer key service or cryptographic randomness was unavailable.
     Unavailable,
 }
-
 /// Deployment-owned pure cryptographic boundary for brokered Bootle/Lantern issuance.
 ///
 /// Implementations hold the issuer trapdoor (or its protected runtime boundary) and opaque
@@ -493,7 +457,6 @@ pub enum BootleLanternIssuanceBrokerBackendErrorV1 {
 pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
     /// Exact stable production handle served by this backend.
     fn handle(&self) -> &str;
-
     /// Return the current independently administered public qualification.
     fn qualification(
         &self,
@@ -501,7 +464,6 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
         iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderQualificationV1,
         iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryErrorV1,
     >;
-
     /// Return the exact current public issuer, policy, and lifetime bindings.
     fn bindings(
         &self,
@@ -509,7 +471,6 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
         iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1,
         iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryErrorV1,
     >;
-
     /// Authenticate opaque bearer bytes for one exact action/body/height binding.
     fn authenticate(
         &self,
@@ -521,7 +482,6 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
         iroha_torii::privacy_issuance_api::BootleLanternIssuanceAuthenticatedPrincipalV1,
         iroha_torii::privacy_issuance_api::BootleLanternIssuanceAuthenticationErrorV1,
     >;
-
     /// Prepare one native canonical `ILA1` candidate without replay-state mutation.
     fn prepare_authorization(
         &self,
@@ -535,7 +495,6 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
         iroha_core::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceAuthorizationV1,
         BootleLanternIssuanceBrokerBackendErrorV1,
     >;
-
     /// Verify one canonical `ILQ1` against the injected issuer key without randomness or state mutation.
     ///
     /// Native implementations use core's
@@ -552,7 +511,6 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
         request_bytes: &[u8],
         current_height: u64,
     ) -> Result<[u8; 32], BootleLanternIssuanceBrokerBackendErrorV1>;
-
     /// Repeat validation and issue one canonical response after Torii's exact claim.
     fn issue_validated(
         &self,
@@ -568,7 +526,6 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
         BootleLanternIssuanceBrokerBackendErrorV1,
     >;
 }
-
 /// Runtime-only backends injected into the stock local broker server.
 ///
 /// The value contains no credential loader, key material, endpoint discovery,
@@ -733,7 +690,6 @@ pub struct RuntimeProviderBrokerBackendsV1 {
         Arc<dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>,
     >,
 }
-
 impl fmt::Debug for RuntimeProviderBrokerBackendsV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -951,7 +907,6 @@ impl fmt::Debug for RuntimeProviderBrokerBackendsV1 {
             .finish()
     }
 }
-
 impl RuntimeProviderBrokerBackendsV1 {
     /// Construct an empty injection set.
     ///
@@ -1017,7 +972,6 @@ impl RuntimeProviderBrokerBackendsV1 {
             soracloud_hf_inference_credential_provider: None,
         }
     }
-
     pub(crate) fn contains_external_software_signer_v1(&self) -> bool {
         self.governance_dag_signer.is_some()
             || self.stream_token_signer.is_some()
@@ -1031,7 +985,6 @@ impl RuntimeProviderBrokerBackendsV1 {
             || self.potr_provider_signer.is_some()
             || self.evidence_viewer_receipt_signer.is_some()
     }
-
     /// Attach the deployment-owned native Bootle/Lantern issuer and authenticator.
     #[must_use]
     pub fn with_bootle_lantern_issuance(
@@ -1041,7 +994,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.bootle_lantern_issuance = Some(backend);
         self
     }
-
     /// Attach the deployment-owned Soracloud transaction and provenance signer.
     #[must_use]
     pub fn with_soracloud_runtime_mutation_signer(
@@ -1051,7 +1003,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.soracloud_runtime_mutation_signer = Some(signer);
         self
     }
-
     /// Attach the deployment-owned authenticated HF credential provider.
     #[must_use]
     pub fn with_soracloud_hf_inference_credential_provider(
@@ -1061,7 +1012,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.soracloud_hf_inference_credential_provider = Some(provider);
         self
     }
-
     /// Attach the deployment-owned PKCS#11/KMS quarantine-DEK wrapper.
     #[must_use]
     pub fn with_moderation_quarantine_key_wrapper(
@@ -1071,7 +1021,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.moderation_quarantine_key_wrapper = Some(key_wrapper);
         self
     }
-
     /// Attach the deployment-owned threshold-PRF provider used for privacy cycles.
     #[must_use]
     pub fn with_privacy_cycle_prf_provider(
@@ -1081,7 +1030,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.privacy_cycle_prf_provider = Some(provider);
         self
     }
-
     /// Attach the independently administered finalized privacy-release anchor.
     #[must_use]
     pub fn with_privacy_release_anchor(
@@ -1091,7 +1039,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.privacy_release_anchor = Some(anchor);
         self
     }
-
     /// Attach the external sealed-CAS transparency leader-lease provider.
     #[must_use]
     pub fn with_transparency_leader_lease_provider(
@@ -1101,7 +1048,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.transparency_leader_lease_provider = Some(provider);
         self
     }
-
     /// Attach the deployment-owned fused privacy Governance target writer.
     #[must_use]
     pub fn with_fenced_privacy_publisher(
@@ -1111,7 +1057,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.fenced_privacy_publisher = Some(publisher);
         self
     }
-
     /// Attach the authenticated fused-privacy authoritative-head reader.
     #[must_use]
     pub fn with_fenced_privacy_head_reader(
@@ -1121,7 +1066,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.fenced_privacy_head_reader = Some(reader);
         self
     }
-
     /// Attach the deployment-owned authenticated external Governance DAG signer.
     #[must_use]
     pub fn with_governance_dag_signer(
@@ -1131,7 +1075,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.governance_dag_signer = Some(signer);
         self
     }
-
     /// Attach the deployment-owned Governance DAG IPFS request authenticator.
     #[must_use]
     pub fn with_governance_dag_ipfs_authenticator(
@@ -1141,7 +1084,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.governance_dag_ipfs_authenticator = Some(authenticator);
         self
     }
-
     /// Attach the independently administered signed-head request authenticator.
     #[must_use]
     pub fn with_governance_dag_head_authenticator(
@@ -1151,7 +1093,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.governance_dag_head_authenticator = Some(authenticator);
         self
     }
-
     /// Attach the deployment-owned Governance DAG sealed checkpoint store.
     #[must_use]
     pub fn with_governance_dag_checkpoint_store(
@@ -1161,7 +1102,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.governance_dag_checkpoint_store = Some(store);
         self
     }
-
     /// Attach the deployment-owned stream-token Ed25519 signer.
     #[must_use]
     pub fn with_stream_token_signer(
@@ -1171,7 +1111,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.stream_token_signer = Some(signer);
         self
     }
-
     /// Attach the deployment-owned stream-token quota, sealed-sequence, and
     /// ordered callback-outbox provider.
     #[must_use]
@@ -1182,7 +1121,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.stream_token_gateway_admission = Some(provider);
         self
     }
-
     /// Attach one independently administered appeal-finance transaction signer.
     ///
     /// Call this once for every configured signer handle. Server startup
@@ -1195,7 +1133,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.appeal_finance_transaction_signers.push(signer);
         self
     }
-
     /// Attach the appeal-finance external signer and sealed monotonic checkpoint store.
     #[must_use]
     pub fn with_appeal_finance_checkpoint(
@@ -1207,7 +1144,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.appeal_finance_checkpoint = Some(checkpoint);
         self
     }
-
     /// Attach the independently administered proof-outcome transaction signer.
     #[must_use]
     pub fn with_proof_outcome_transaction_signer(
@@ -1217,7 +1153,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.proof_outcome_transaction_signer = Some(signer);
         self
     }
-
     /// Attach the independently administered native repair transaction signer.
     #[must_use]
     pub fn with_repair_transaction_signer(
@@ -1227,7 +1162,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.repair_transaction_signer = Some(signer);
         self
     }
-
     /// Attach the independently administered reserve/rent transaction signer.
     #[must_use]
     pub fn with_reserve_transaction_signer(
@@ -1237,7 +1171,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.reserve_transaction_signer = Some(signer);
         self
     }
-
     /// Attach the independently administered orderbook transaction signer.
     #[must_use]
     pub fn with_orderbook_transaction_signer(
@@ -1247,7 +1180,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.orderbook_transaction_signer = Some(signer);
         self
     }
-
     /// Attach the independently administered moderation transaction signer.
     #[must_use]
     pub fn with_moderation_transaction_signer(
@@ -1259,7 +1191,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.moderation_transaction_signer = Some(signer);
         self
     }
-
     /// Attach the durable exactly-once moderation settlement boundary.
     #[must_use]
     pub fn with_moderation_settlement_handoff(
@@ -1271,7 +1202,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.moderation_settlement_handoff = Some(boundary);
         self
     }
-
     /// Attach the durable exactly-once moderation publication boundary.
     #[must_use]
     pub fn with_moderation_publication_handoff(
@@ -1283,7 +1213,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.moderation_publication_handoff = Some(boundary);
         self
     }
-
     /// Attach the durable payload-free moderation panel notification boundary.
     #[must_use]
     pub fn with_moderation_panel_notification(
@@ -1296,7 +1225,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.moderation_panel_notification = Some(boundary);
         self
     }
-
     /// Attach the deployment-owned sealed monotonic moderation checkpoint store.
     #[must_use]
     pub fn with_moderation_checkpoint_store(
@@ -1306,7 +1234,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.moderation_checkpoint_store = Some(store);
         self
     }
-
     /// Attach the authenticated governed provider-ingest source pool.
     #[must_use]
     pub fn with_provider_ingest_authenticated_source(
@@ -1318,7 +1245,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.provider_ingest_authenticated_source = Some(source);
         self
     }
-
     /// Attach the governed provider-ingest completion-signer resolver.
     #[must_use]
     pub fn with_provider_ingest_signer_resolver(
@@ -1331,7 +1257,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.provider_ingest_signer_resolver = Some(resolver);
         self
     }
-
     /// Attach the provider-ingest sealed monotonic checkpoint store.
     #[must_use]
     pub fn with_provider_ingest_checkpoint_store(
@@ -1341,7 +1266,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.provider_ingest_checkpoint_store = Some(store);
         self
     }
-
     /// Attach the provider-ingest finalized-archive retention authority.
     #[must_use]
     pub fn with_provider_ingest_retention_authority(
@@ -1354,7 +1278,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.provider_ingest_retention_authority = Some(authority);
         self
     }
-
     /// Attach the reputation finalized-archive sealed retention authority.
     #[must_use]
     pub fn with_reputation_finalized_archive_retention_authority(
@@ -1367,7 +1290,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.reputation_finalized_archive_retention_authority = Some(authority);
         self
     }
-
     /// Attach the runtime-only native reputation-journal transaction submitter.
     #[must_use]
     pub fn with_reputation_journal_transaction_submitter(
@@ -1379,7 +1301,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.reputation_journal_transaction_submitter = Some(submitter);
         self
     }
-
     /// Attach the externally sealed monotonic reputation-journal checkpoint provider.
     #[must_use]
     pub fn with_reputation_journal_checkpoint(
@@ -1389,7 +1310,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.reputation_journal_checkpoint = Some(checkpoint);
         self
     }
-
     /// Attach the independently administered reputation threshold signer.
     #[must_use]
     pub fn with_reputation_threshold_signer(
@@ -1399,7 +1319,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.reputation_threshold_signer = Some(signer);
         self
     }
-
     /// Attach the authenticated reputation Governance DAG publication/readback provider.
     #[must_use]
     pub fn with_reputation_governance_dag(
@@ -1409,7 +1328,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.reputation_governance_dag = Some(governance_dag);
         self
     }
-
     /// Attach the immutable finalized-ledger billing query.
     #[must_use]
     pub fn with_billing_finalized_query(
@@ -1419,7 +1337,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.billing_finalized_query = Some(query);
         self
     }
-
     /// Attach the consensus billing-journal proof verifier.
     #[must_use]
     pub fn with_billing_journal_verifier(
@@ -1429,7 +1346,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.billing_journal_verifier = Some(verifier);
         self
     }
-
     /// Attach the independently administered external billing statement signer.
     #[must_use]
     pub fn with_billing_statement_signer(
@@ -1439,7 +1355,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.billing_statement_signer = Some(signer);
         self
     }
-
     /// Attach the immutable billing statement publication/readback provider.
     #[must_use]
     pub fn with_billing_statement_publisher(
@@ -1449,7 +1364,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.billing_statement_publisher = Some(publisher);
         self
     }
-
     /// Attach the authenticated acknowledgement/reconciliation authority.
     #[must_use]
     pub fn with_billing_acknowledgement_authority(
@@ -1461,7 +1375,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.billing_acknowledgement_authority = Some(authority);
         self
     }
-
     /// Attach the sealed monotonic billing epoch-witness store.
     #[must_use]
     pub fn with_billing_epoch_witness_store(
@@ -1471,7 +1384,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.billing_epoch_witness_store = Some(store);
         self
     }
-
     /// Attach the deployment-owned PoP private-runtime provider registry.
     #[must_use]
     pub fn with_pop_credential_provider_registry(
@@ -1481,7 +1393,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.pop_credential_provider_registry = Some(registry);
         self
     }
-
     /// Attach the independently administered PoTR gateway Ed25519 signer.
     #[must_use]
     pub fn with_potr_gateway_signer(
@@ -1491,7 +1402,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.potr_gateway_signer = Some(signer);
         self
     }
-
     /// Attach the independently administered PoTR provider ML-DSA-65 signer.
     #[must_use]
     pub fn with_potr_provider_signer(
@@ -1501,7 +1411,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.potr_provider_signer = Some(signer);
         self
     }
-
     /// Attach the deployment-owned authenticated ACME client.
     #[must_use]
     pub fn with_gateway_acme_client(
@@ -1511,7 +1420,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.gateway_acme_client = Some(client);
         self
     }
-
     /// Attach the deployment-owned pinned DNS/HTTPS compliance-feed transport.
     #[must_use]
     pub fn with_gateway_compliance_feed_transport(
@@ -1521,7 +1429,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.gateway_compliance_feed_transport = Some(transport);
         self
     }
-
     /// Attach the deployment-owned authenticated finalized-PoR replay archive.
     #[must_use]
     pub fn with_por_finalized_replay_archive(
@@ -1531,7 +1438,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.por_finalized_replay_archive = Some(archive);
         self
     }
-
     /// Attach the deployment-owned evidence-viewer WebAuthn boundary.
     #[must_use]
     pub fn with_evidence_viewer_webauthn(
@@ -1541,7 +1447,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.evidence_viewer_webauthn = Some(boundary);
         self
     }
-
     /// Attach the deployment-owned evidence-viewer rotating-grant authority.
     #[must_use]
     pub fn with_evidence_viewer_grants(
@@ -1551,7 +1456,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.evidence_viewer_grants = Some(boundary);
         self
     }
-
     /// Attach the deployment-owned evidence-viewer receipt signer.
     #[must_use]
     pub fn with_evidence_viewer_receipt_signer(
@@ -1561,7 +1465,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.evidence_viewer_receipt_signer = Some(signer);
         self
     }
-
     /// Attach the deployment-owned evidence-viewer erasure boundary.
     #[must_use]
     pub fn with_evidence_viewer_erasure(
@@ -1571,7 +1474,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.evidence_viewer_erasure = Some(boundary);
         self
     }
-
     /// Attach the deployment-owned evidence-viewer authoritative checkpoint store.
     #[must_use]
     pub fn with_evidence_viewer_checkpoint_store(
@@ -1581,7 +1483,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.evidence_viewer_checkpoint_store = Some(store);
         self
     }
-
     /// Attach the deployment-owned evidence-viewer immutable compaction archive.
     #[must_use]
     pub fn with_evidence_viewer_compaction_archive(
@@ -1591,7 +1492,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.evidence_viewer_compaction_archive = Some(archive);
         self
     }
-
     /// Attach the deployment-owned immutable moderation notification archive.
     #[must_use]
     pub fn with_moderation_panel_notification_archive(
@@ -1603,7 +1503,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.moderation_panel_notification_archive = Some(archive);
         self
     }
-
     /// Attach the deployment-owned signed monotonic evidence transparency publisher.
     #[must_use]
     pub fn with_evidence_viewer_transparency_publisher(
@@ -1617,7 +1516,6 @@ impl RuntimeProviderBrokerBackendsV1 {
         self
     }
 }
-
 /// Payload-free stock broker-server startup or transport failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -1640,7 +1538,6 @@ pub enum RuntimeProviderBrokerServerErrorV1 {
     /// This platform lacks the authenticated V1 local transport.
     UnsupportedPlatform,
 }
-
 impl fmt::Display for RuntimeProviderBrokerServerErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -1661,9 +1558,7 @@ impl fmt::Display for RuntimeProviderBrokerServerErrorV1 {
         })
     }
 }
-
 impl std::error::Error for RuntimeProviderBrokerServerErrorV1 {}
-
 /// Fixed failure returned by a supervisor readiness callback.
 ///
 /// The callback retains transport-specific diagnostics inside the deployment
@@ -1671,15 +1566,12 @@ impl std::error::Error for RuntimeProviderBrokerServerErrorV1 {}
 /// [`RuntimeProviderBrokerServerErrorV1::ReadinessUnavailable`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuntimeProviderBrokerReadinessErrorV1;
-
 impl fmt::Display for RuntimeProviderBrokerReadinessErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("runtime-provider broker readiness publication failed")
     }
 }
-
 impl std::error::Error for RuntimeProviderBrokerReadinessErrorV1 {}
-
 /// Serve the exact qualified catalog on the platform-fixed
 /// service-UID-owned endpoint.
 ///
@@ -1711,7 +1603,6 @@ pub fn serve_runtime_provider_broker_v1(
         Err(RuntimeProviderBrokerServerErrorV1::UnsupportedPlatform)
     }
 }
-
 /// Serve the exact catalog until the caller requests an orderly shutdown.
 ///
 /// The caller retains a clone of `lifecycle` and requests shutdown through
@@ -1782,7 +1673,6 @@ where
         Err(RuntimeProviderBrokerServerErrorV1::UnsupportedPlatform)
     }
 }
-
 /// Serve the exact catalog with an infallible caller-owned readiness callback.
 ///
 /// This preserves the original callback contract as a wrapper around

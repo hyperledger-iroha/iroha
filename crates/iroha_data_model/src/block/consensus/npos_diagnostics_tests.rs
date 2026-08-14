@@ -6,14 +6,12 @@ fn npos_diagnostics_reject_zero_seed_and_invalid_windows() {
         value.validate(),
         Err("NPoS diagnostics epoch seed must be non-zero")
     );
-
     let mut value = npos_diagnostics();
     value.vrf_reveal_deadline_offset = value.vrf_commit_deadline_offset;
     assert_eq!(
         value.validate(),
         Err("NPoS diagnostics reveal deadline must follow commit deadline")
     );
-
     let mut value = npos_diagnostics();
     value.vrf_reveal_deadline_offset = NonZeroU64::new(101).unwrap();
     assert_eq!(
@@ -21,7 +19,6 @@ fn npos_diagnostics_reject_zero_seed_and_invalid_windows() {
         Err("NPoS diagnostics reveal deadline must not exceed epoch length")
     );
 }
-
 #[test]
 fn npos_diagnostics_json_rejects_zero_nonzero_fields() {
     let mut value =

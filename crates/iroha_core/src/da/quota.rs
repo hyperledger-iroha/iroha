@@ -1,24 +1,16 @@
 //! Deterministic consensus accounting for authenticated DA ingest.
-
 use std::{collections::BTreeMap, str::FromStr};
-
 use iroha_config::parameters::actual::Da as DaPolicy;
 use iroha_crypto::blake3_256;
-use iroha_data_model::{
-    account::AccountId, da::pin_intent::DaPinIntentBundle, state_path::StatePath,
-};
+use iroha_data_model::{account::AccountId, da::pin_intent::DaPinIntentBundle, state_path::StatePath};
 use mv::storage::StorageReadOnly;
 use norito::{Decode, Encode, decode_from_bytes, to_bytes};
-
 use super::DaPinIntentValidationError;
-
 const QUOTA_USAGE_KEY_PREFIX_V1: &str = "da_ingest_quota_v1/authority/";
 const QUOTA_USAGE_VERSION_V1: u8 = 1;
 const MAX_QUOTA_USAGE_BYTES: usize = 128;
-
 /// Transactional smart-contract-state writes prepared for one accepted block.
 pub(crate) type DaIngestQuotaWrites = BTreeMap<StatePath, Vec<u8>>;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 struct DaIngestQuotaUsageV1 {
     version: u8,
@@ -26,7 +18,6 @@ struct DaIngestQuotaUsageV1 {
     count: u64,
     bytes: u64,
 }
-
 impl DaIngestQuotaUsageV1 {
     const fn empty(window: u64) -> Self {
         Self {
@@ -37,7 +28,6 @@ impl DaIngestQuotaUsageV1 {
         }
     }
 }
-
 fn quota_key(owner: &AccountId) -> Result<StatePath, DaPinIntentValidationError> {
     let owner_bytes =
         to_bytes(owner).map_err(|error| DaPinIntentValidationError::QuotaStateCorrupt {
@@ -54,7 +44,6 @@ fn quota_key(owner: &AccountId) -> Result<StatePath, DaPinIntentValidationError>
         reason: format!("failed to construct quota state key: {error}"),
     })
 }
-
 fn decode_usage(
     owner: &AccountId,
     bytes: &[u8],
@@ -90,7 +79,6 @@ fn decode_usage(
     }
     Ok(usage)
 }
-
 fn charge(
     owner: &AccountId,
     usage: &mut DaIngestQuotaUsageV1,
@@ -123,7 +111,6 @@ fn charge(
     }
     Ok(())
 }
-
 fn prepare_with_lookup(
     bundle: &DaPinIntentBundle,
     block_height: u64,
@@ -141,7 +128,6 @@ fn prepare_with_lookup(
         }
     })? / policy.ingest_quota_window_blocks.get();
     let mut usages = BTreeMap::<AccountId, (StatePath, DaIngestQuotaUsageV1)>::new();
-
     for intent in &bundle.intents {
         let authorization = &intent.authorization;
         let owner = &authorization.owner;
@@ -174,7 +160,6 @@ fn prepare_with_lookup(
             .expect("owner usage was inserted immediately above");
         charge(owner, usage, authorization.payload_bytes, policy)?;
     }
-
     usages
         .into_iter()
         .map(|(owner, (key, usage))| {
@@ -188,7 +173,6 @@ fn prepare_with_lookup(
         })
         .collect()
 }
-
 /// Prepare deterministic per-account count and byte charges for one block.
 ///
 /// The returned writes must be committed through the same `WorldBlock` as the
@@ -202,11 +186,9 @@ pub(crate) fn prepare_ingest_quota_writes(
 ) -> Result<DaIngestQuotaWrites, DaPinIntentValidationError> {
     prepare_with_lookup(bundle, block_height, policy, |key| state.get(key).cloned())
 }
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         NetworkId,
@@ -219,9 +201,7 @@ mod tests {
         nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
-
     use super::*;
-
     fn authorized_intent(owner_seed: u8, sequence: u64, payload_bytes: u64) -> DaPinIntent {
         let key_pair = KeyPair::try_from_seed(vec![owner_seed; 32], Algorithm::Ed25519)
             .expect("valid deterministic key");
@@ -255,7 +235,6 @@ mod tests {
             authorization,
         )
     }
-
     #[test]
     fn quota_counts_all_intents_for_one_owner_transactionally() {
         let mut policy = DaPolicy::default();
@@ -266,7 +245,6 @@ mod tests {
         let writes = prepare_with_lookup(&bundle, 1, &policy, |_| None)
             .expect("exact count and byte ceilings are admitted");
         assert_eq!(writes.len(), 1);
-
         let mut exceeded = bundle.clone();
         exceeded.intents.push(authorized_intent(7, 3, 1));
         let error = prepare_with_lookup(&exceeded, 1, &policy, |_| None)
@@ -276,7 +254,6 @@ mod tests {
             DaPinIntentValidationError::QuotaExceeded { .. }
         ));
     }
-
     #[test]
     fn quota_window_rollover_resets_prior_usage() {
         let mut policy = DaPolicy::default();
@@ -294,7 +271,6 @@ mod tests {
         prepare_with_lookup(&second, 3, &policy, |key| writes.get(key).cloned())
             .expect("height three starts a fresh deterministic window");
     }
-
     #[test]
     fn quota_rejects_checked_counter_overflow() {
         let policy = DaPolicy::default();
@@ -313,7 +289,6 @@ mod tests {
             DaPinIntentValidationError::QuotaOverflow { .. }
         ));
     }
-
     #[test]
     fn quota_rejects_noncanonical_or_future_state() {
         let policy = DaPolicy::default();
@@ -325,7 +300,6 @@ mod tests {
             error,
             DaPinIntentValidationError::QuotaStateCorrupt { .. }
         ));
-
         let future = to_bytes(&DaIngestQuotaUsageV1 {
             version: QUOTA_USAGE_VERSION_V1,
             window: 1,

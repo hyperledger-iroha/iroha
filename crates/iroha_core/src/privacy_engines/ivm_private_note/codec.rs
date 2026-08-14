@@ -1,19 +1,15 @@
 //! Exact private-program bytecode codec.
-
 use super::relation::{
     IvmPrivateNoteRelationErrorV1, PRIVATE_PROGRAM_INSTRUCTION_BYTES_V1,
     PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1, PrivateInstructionV1, PrivateProgramV1,
 };
-
 const PRIVATE_PROGRAM_MAGIC_V1: [u8; 4] = *b"IPN1";
 const PRIVATE_PROGRAM_VERSION_V1: u16 = 1;
 const PRIVATE_PROGRAM_RESERVED_V1: u16 = 0;
 const PRIVATE_PROGRAM_HEADER_BYTES_V1: usize = 8;
-
 /// Exact byte length of the sole canonical first-release private program.
 pub(crate) const PRIVATE_PROGRAM_BYTES_V1: usize = PRIVATE_PROGRAM_HEADER_BYTES_V1
     + PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1 * PRIVATE_PROGRAM_INSTRUCTION_BYTES_V1;
-
 /// Encode one validated private program into its only canonical byte form.
 ///
 /// # Errors
@@ -36,7 +32,6 @@ pub(crate) fn encode_private_program_v1(
     }
     Ok(encoded)
 }
-
 /// Decode exactly one canonical private program.
 ///
 /// # Errors

@@ -1,6 +1,5 @@
 #![cfg(feature = "ivm_zk_tests")]
 use ivm::halo2::AddCarryCircuit;
-
 #[test]
 fn test_add_carry_circuit() {
     let c = AddCarryCircuit {

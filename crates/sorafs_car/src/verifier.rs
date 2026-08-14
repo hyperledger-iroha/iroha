@@ -4,25 +4,20 @@
 //! the Proof-of-Retrievability (PoR) tree so clients can validate responses
 //! from untrusted gateways. It supports both `dag-scope=full` downloads and
 //! `dag-scope=block` ranged responses.
-
 use std::{
     borrow::Cow,
     io::{self, Read, Write},
     ops::{Range, RangeInclusive},
 };
-
 use blake3::Hash;
 use sorafs_manifest::ManifestV1;
 use thiserror::Error;
-
 use crate::{
     BLAKE3_256_MULTIHASH_CODE, CarBuildPlan, CarChunk, CarPlanError, CarStreamingWriter,
     CarWriteError, CarWriteStats, ChunkProfile, ChunkStore, ChunkStoreError, DAG_CBOR_CODEC,
     FilePlan, HEADER_LEN, PRAGMA, RAW_CODEC, chunker_registry,
 };
-
 pub(crate) const MAX_CARV1_HEADER_SIZE: usize = 64 * 1024;
-
 /// Result returned after verifying a `dag-scope=full` CAR stream.
 #[derive(Debug)]
 pub struct CarVerificationReport {
@@ -31,7 +26,6 @@ pub struct CarVerificationReport {
     /// PoR-ready chunk metadata extracted from the archive.
     pub chunk_store: ChunkStore,
 }
-
 /// Canonical CAR whose complete plan, container bytes, and payload sections were verified.
 ///
 /// The retained parsed view lets security-sensitive consumers make repeated bounded passes over
@@ -41,20 +35,17 @@ pub struct VerifiedCanonicalCarV1<'a> {
     parsed: ParsedCar<'a>,
     stats: CarWriteStats,
 }
-
 impl VerifiedCanonicalCarV1<'_> {
     /// Return statistics reproduced from the verified plan and canonical CAR.
     #[must_use]
     pub const fn stats(&self) -> &CarWriteStats {
         &self.stats
     }
-
     /// Consume the retained view and return its reproduced writer statistics.
     #[must_use]
     pub fn into_stats(self) -> CarWriteStats {
         self.stats
     }
-
     /// Open a fresh reader over the authenticated raw payload sections.
     ///
     /// Each call starts at payload byte zero and borrows the immutable verified CAR bytes. The
@@ -63,7 +54,6 @@ impl VerifiedCanonicalCarV1<'_> {
         self.parsed.payload_reader()
     }
 }
-
 /// Outcome returned after verifying a `dag-scope=block` CAR stream.
 #[derive(Debug)]
 pub struct BlockVerificationReport {
@@ -76,11 +66,9 @@ pub struct BlockVerificationReport {
     /// BLAKE3-256 digest of the streamed payload.
     pub payload_digest: [u8; 32],
 }
-
 /// Trustless CAR verifier.
 #[derive(Debug, Default)]
 pub struct CarVerifier;
-
 impl CarVerifier {
     /// Verifies that `car_bytes` are the exact canonical CARv2 encoding of
     /// `plan` and returns statistics derived from the retained archive.
@@ -95,7 +83,6 @@ impl CarVerifier {
         Self::verify_canonical_car_with_plan_retained(plan, car_bytes)
             .map(VerifiedCanonicalCarV1::into_stats)
     }
-
     /// Verify a canonical multi-file CAR while retaining a zero-copy authenticated payload view.
     ///
     /// This performs the same complete plan, root, and byte-for-byte canonical-container checks as
@@ -108,7 +95,6 @@ impl CarVerifier {
         let parsed = ParsedCar::parse(car_bytes)?;
         validate_plan(plan, &parsed)?;
         ensure_plan_offsets(plan)?;
-
         let mut canonical_car = CanonicalCarComparator::new(car_bytes);
         let mut payload_reader = parsed.payload_reader();
         let stats = CarStreamingWriter::new(plan)
@@ -122,7 +108,6 @@ impl CarVerifier {
         }
         Ok(VerifiedCanonicalCarV1 { parsed, stats })
     }
-
     /// Verifies a canonical single-file `dag-scope=full` CAR response against
     /// the supplied manifest.
     ///
@@ -134,7 +119,6 @@ impl CarVerifier {
     ) -> Result<CarVerificationReport, CarVerifyError> {
         Self::verify_full_car_internal(manifest, None, car_bytes)
     }
-
     /// Verifies a `dag-scope=full` CAR response using an existing chunk plan.
     ///
     /// The supplied plan is cross-checked against the archive before rebuilding
@@ -146,7 +130,6 @@ impl CarVerifier {
     ) -> Result<CarVerificationReport, CarVerifyError> {
         Self::verify_full_car_internal(manifest, Some(plan), car_bytes)
     }
-
     /// Verifies a `dag-scope=block` (range) CAR response.
     ///
     /// The byte range derived from the plan must match `expected_range`
@@ -188,16 +171,13 @@ impl CarVerifier {
                 actual: plan.content_length,
             });
         }
-
         if parsed.chunk_sections().is_empty() {
             return Err(CarVerifyError::EmptyRange);
         }
-
         // Match the raw section sequence directly. Reordering the resulting
         // indices would turn a reversed or duplicated wire sequence into an
         // apparently valid contiguous range.
         let indices = match_ordered_chunk_range(plan, parsed.chunk_sections(), &expected_range)?;
-
         let first_index = *indices
             .first()
             .ok_or(CarVerifyError::InternalInvariant("empty chunk range"))?;
@@ -212,7 +192,6 @@ impl CarVerifier {
             .chunks
             .get(last_index)
             .ok_or(CarVerifyError::PlanChunkIndexOutOfRange { index: last_index })?;
-
         let actual_start = first_chunk.offset;
         let actual_end_inclusive = last_chunk
             .offset
@@ -222,7 +201,6 @@ impl CarVerifier {
                 "block range end overflowed u64",
             ))?;
         let actual_range = actual_start..=actual_end_inclusive;
-
         if expected_range != actual_range {
             return Err(CarVerifyError::ExpectedRangeMismatch {
                 expected_start: *expected_range.start(),
@@ -231,14 +209,12 @@ impl CarVerifier {
                 actual_end: actual_end_inclusive,
             });
         }
-
         if actual_end_inclusive >= manifest.content_length {
             return Err(CarVerifyError::RangeExceedsContentLength {
                 content_length: manifest.content_length,
                 range_end: actual_end_inclusive,
             });
         }
-
         let payload_bytes = parsed
             .chunk_sections()
             .iter()
@@ -253,7 +229,6 @@ impl CarVerifier {
                 "block payload length disagrees with raw sections",
             ));
         }
-
         let canonical_plan = canonical_block_plan(
             plan,
             &indices,
@@ -271,9 +246,7 @@ impl CarVerifier {
         if !canonical_car.matches_exactly() {
             return Err(CarVerifyError::NonCanonicalCar);
         }
-
         let payload_digest = hash_to_array(parsed.payload_digest());
-
         Ok(BlockVerificationReport {
             chunk_indices: indices,
             payload_range: actual_range,
@@ -281,7 +254,6 @@ impl CarVerifier {
             payload_digest,
         })
     }
-
     fn verify_full_car_internal(
         manifest: &ManifestV1,
         plan_opt: Option<&CarBuildPlan>,
@@ -290,9 +262,7 @@ impl CarVerifier {
         let parsed = ParsedCar::parse(car_bytes)?;
         ensure_manifest_constraints(manifest, &parsed)?;
         ensure_chunking_multihash(manifest)?;
-
         let profile = chunk_profile_from_manifest(manifest)?;
-
         let plan_for_store: Cow<'_, CarBuildPlan> = match plan_opt {
             Some(plan) => {
                 if plan.chunk_profile != profile {
@@ -307,9 +277,7 @@ impl CarVerifier {
                 Cow::Owned(generated)
             }
         };
-
         ensure_plan_offsets(plan_for_store.as_ref())?;
-
         let mut canonical_car = CanonicalCarComparator::new(car_bytes);
         let mut canonical_payload = parsed.payload_reader();
         let canonical_stats = CarStreamingWriter::new(plan_for_store.as_ref())
@@ -321,20 +289,17 @@ impl CarVerifier {
         if !canonical_car.matches_exactly() {
             return Err(CarVerifyError::NonCanonicalCar);
         }
-
         let mut chunk_store = ChunkStore::with_profile(plan_for_store.chunk_profile);
         let mut payload_reader = parsed.payload_reader();
         chunk_store
             .ingest_plan_stream(plan_for_store.as_ref(), &mut payload_reader)
             .map_err(CarVerifyError::ChunkStore)?;
-
         Ok(CarVerificationReport {
             stats: canonical_stats,
             chunk_store,
         })
     }
 }
-
 fn match_ordered_chunk_range(
     plan: &CarBuildPlan,
     sections: &[ParsedChunkSection],
@@ -344,7 +309,6 @@ fn match_ordered_chunk_range(
     if section_count == 0 || expected_range.is_empty() {
         return Err(CarVerifyError::EmptyRange);
     }
-
     let expected_start = *expected_range.start();
     let start = plan
         .chunks
@@ -357,7 +321,6 @@ fn match_ordered_chunk_range(
         .checked_add(section_count)
         .filter(|end| *end <= plan.chunks.len())
         .ok_or(CarVerifyError::UnexpectedChunkOrder)?;
-
     for (relative_index, (chunk, section)) in
         plan.chunks[start..end].iter().zip(sections).enumerate()
     {
@@ -373,7 +336,6 @@ fn match_ordered_chunk_range(
             });
         }
     }
-
     let actual = block_range_for_indices(plan, start, section_count).ok_or(
         CarVerifyError::InternalInvariant("matched block range could not be reconstructed"),
     )?;
@@ -385,13 +347,11 @@ fn match_ordered_chunk_range(
             actual_end: *actual.end(),
         });
     }
-
     let mut indices = Vec::new();
     try_reserve_verifier(&mut indices, section_count, "matched chunk indices")?;
     indices.extend(start..end);
     Ok(indices)
 }
-
 fn block_range_for_indices(
     plan: &CarBuildPlan,
     start: usize,
@@ -405,7 +365,6 @@ fn block_range_for_indices(
         .checked_sub(1)?;
     Some(first.offset..=end)
 }
-
 fn canonical_block_plan(
     plan: &CarBuildPlan,
     indices: &[usize],
@@ -440,7 +399,6 @@ fn canonical_block_plan(
             "canonical block plan length disagrees with payload",
         ));
     }
-
     Ok(CarBuildPlan {
         chunk_profile: plan.chunk_profile,
         payload_digest,
@@ -454,7 +412,6 @@ fn canonical_block_plan(
         }],
     })
 }
-
 fn plan_from_parsed_payload(
     parsed: &ParsedCar<'_>,
     profile: ChunkProfile,
@@ -462,7 +419,6 @@ fn plan_from_parsed_payload(
     if parsed.payload_len() == 0 {
         return Err(CarVerifyError::Plan(CarPlanError::EmptyInput));
     }
-
     let mut chunker = sorafs_chunker::Chunker::try_with_profile(profile)
         .map_err(|_| CarVerifyError::ChunkProfileMismatch)?;
     let expected_chunk_count = parsed.chunk_sections().len();
@@ -489,7 +445,6 @@ fn plan_from_parsed_payload(
             emitted_too_many = true;
         }
     });
-
     if emitted_too_many || derived_chunks.len() != expected_chunk_count {
         return Err(CarVerifyError::PlanChunkCountMismatch {
             expected: if emitted_too_many {
@@ -500,7 +455,6 @@ fn plan_from_parsed_payload(
             actual: expected_chunk_count,
         });
     }
-
     let mut chunks = Vec::new();
     try_reserve_verifier(&mut chunks, derived_chunks.len(), "verified CAR chunks")?;
     for (index, (derived, parsed_chunk)) in derived_chunks
@@ -526,7 +480,6 @@ fn plan_from_parsed_payload(
             taikai_segment_hint: None,
         });
     }
-
     Ok(CarBuildPlan {
         chunk_profile: profile,
         payload_digest: parsed.payload_digest(),
@@ -540,13 +493,11 @@ fn plan_from_parsed_payload(
         }],
     })
 }
-
 struct CanonicalCarComparator<'a> {
     expected: &'a [u8],
     written: usize,
     exact: bool,
 }
-
 impl<'a> CanonicalCarComparator<'a> {
     fn new(expected: &'a [u8]) -> Self {
         Self {
@@ -555,12 +506,10 @@ impl<'a> CanonicalCarComparator<'a> {
             exact: true,
         }
     }
-
     fn matches_exactly(&self) -> bool {
         self.exact && self.written == self.expected.len()
     }
 }
-
 impl Write for CanonicalCarComparator<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let end = self
@@ -573,12 +522,10 @@ impl Write for CanonicalCarComparator<'_> {
         self.written = end;
         Ok(buf.len())
     }
-
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
-
 fn ensure_manifest_constraints(
     manifest: &ManifestV1,
     parsed: &ParsedCar<'_>,
@@ -604,7 +551,6 @@ fn ensure_manifest_constraints(
     }
     Ok(())
 }
-
 fn ensure_chunking_multihash(manifest: &ManifestV1) -> Result<(), CarVerifyError> {
     if manifest.chunking.multihash_code != BLAKE3_256_MULTIHASH_CODE {
         return Err(CarVerifyError::ManifestMultihashMismatch(
@@ -613,7 +559,6 @@ fn ensure_chunking_multihash(manifest: &ManifestV1) -> Result<(), CarVerifyError
     }
     Ok(())
 }
-
 fn validate_plan(plan: &CarBuildPlan, parsed: &ParsedCar<'_>) -> Result<(), CarVerifyError> {
     if plan.chunks.len() != parsed.chunk_sections().len() {
         return Err(CarVerifyError::PlanChunkCountMismatch {
@@ -637,7 +582,6 @@ fn validate_plan(plan: &CarBuildPlan, parsed: &ParsedCar<'_>) -> Result<(), CarV
     }
     Ok(())
 }
-
 fn ensure_plan_offsets(plan: &CarBuildPlan) -> Result<(), CarVerifyError> {
     let mut expected_offset = 0u64;
     for (idx, chunk) in plan.chunks.iter().enumerate() {
@@ -660,7 +604,6 @@ fn ensure_plan_offsets(plan: &CarBuildPlan) -> Result<(), CarVerifyError> {
     }
     Ok(())
 }
-
 /// Verification errors surfaced while parsing or validating a CAR stream.
 #[derive(Debug, Error)]
 pub enum CarVerifyError {
@@ -779,7 +722,6 @@ pub enum CarVerifyError {
     #[error("failed to reconstruct plan: {0}")]
     Plan(#[from] CarPlanError),
 }
-
 #[derive(Debug)]
 pub(crate) struct ParsedCar<'a> {
     bytes: &'a [u8],
@@ -789,14 +731,12 @@ pub(crate) struct ParsedCar<'a> {
     payload_digest: Hash,
     total_len: u64,
 }
-
 #[derive(Debug)]
 pub(crate) struct ParsedChunkSection {
     pub(crate) digest: [u8; 32],
     pub(crate) length: u32,
     data_range: Range<usize>,
 }
-
 fn try_reserve_verifier<T>(
     values: &mut Vec<T>,
     additional: usize,
@@ -809,7 +749,6 @@ fn try_reserve_verifier<T>(
             requested: additional,
         })
 }
-
 impl<'a> ParsedCar<'a> {
     pub(crate) fn parse(bytes: &'a [u8]) -> Result<Self, CarVerifyError> {
         let total_len = u64::try_from(bytes.len()).map_err(|_| CarVerifyError::InvalidHeader)?;
@@ -819,7 +758,6 @@ impl<'a> ParsedCar<'a> {
         if bytes[..PRAGMA.len()] != PRAGMA {
             return Err(CarVerifyError::InvalidPragma);
         }
-
         let characteristics = &bytes[PRAGMA.len()..PRAGMA.len() + HEADER_LEN];
         let data_offset = u64::from_le_bytes(
             characteristics
@@ -842,7 +780,6 @@ impl<'a> ParsedCar<'a> {
                 .try_into()
                 .map_err(|_| CarVerifyError::InvalidHeader)?,
         );
-
         let header_start = PRAGMA.len() + HEADER_LEN;
         let (header_len, header_len_bytes) =
             decode_uleb128(&bytes[header_start..]).map_err(map_uleb128_error)?;
@@ -861,9 +798,7 @@ impl<'a> ParsedCar<'a> {
         if carv1_header_end > bytes.len() {
             return Err(CarVerifyError::HeaderTruncated);
         }
-
         let roots = parse_carv1_header(&bytes[carv1_header_start..carv1_header_end])?;
-
         if data_offset != u64::try_from(header_start).map_err(|_| CarVerifyError::InvalidHeader)? {
             return Err(CarVerifyError::InvalidHeader);
         }
@@ -882,13 +817,11 @@ impl<'a> ParsedCar<'a> {
         {
             return Err(CarVerifyError::InvalidIndexOffset);
         }
-
         let mut cursor = carv1_header_end;
         let mut chunk_sections = Vec::new();
         let mut payload_len = 0u64;
         let mut payload_hasher = blake3::Hasher::new();
         let mut section_index = 0usize;
-
         while cursor < data_end {
             let (section_len, len_bytes) =
                 decode_uleb128(&bytes[cursor..]).map_err(map_uleb128_error)?;
@@ -903,7 +836,6 @@ impl<'a> ParsedCar<'a> {
             if section_end > data_end {
                 return Err(CarVerifyError::TruncatedSection { section_index });
             }
-
             let (cid, cid_len) = decode_cid(&bytes[cursor..], section_index)?;
             cursor = cursor
                 .checked_add(cid_len)
@@ -917,7 +849,6 @@ impl<'a> ParsedCar<'a> {
                 .ok_or(CarVerifyError::TruncatedSection { section_index })?;
             let data_slice = &bytes[data_start..data_end];
             cursor = data_end;
-
             let digest = blake3::hash(data_slice);
             if cid.multihash != BLAKE3_256_MULTIHASH_CODE {
                 return Err(CarVerifyError::UnsupportedMultihash {
@@ -934,7 +865,6 @@ impl<'a> ParsedCar<'a> {
                     return Err(CarVerifyError::NodeDigestMismatch { section_index });
                 }
             }
-
             match cid.codec {
                 RAW_CODEC => {
                     let length = u32::try_from(data_len)
@@ -958,7 +888,6 @@ impl<'a> ParsedCar<'a> {
                     });
                 }
             }
-
             section_index =
                 section_index
                     .checked_add(1)
@@ -966,7 +895,6 @@ impl<'a> ParsedCar<'a> {
                         "CAR section count overflowed usize",
                     ))?;
         }
-
         Ok(Self {
             bytes,
             roots,
@@ -976,19 +904,15 @@ impl<'a> ParsedCar<'a> {
             total_len,
         })
     }
-
     pub(crate) fn total_len(&self) -> u64 {
         self.total_len
     }
-
     pub(crate) fn payload_len(&self) -> u64 {
         self.payload_len
     }
-
     pub(crate) fn payload_digest(&self) -> Hash {
         self.payload_digest
     }
-
     pub(crate) fn payload_reader(&self) -> ParsedPayloadReader<'_, 'a> {
         ParsedPayloadReader {
             parsed: self,
@@ -996,7 +920,6 @@ impl<'a> ParsedCar<'a> {
             section_offset: 0,
         }
     }
-
     #[cfg(feature = "cli")]
     pub(crate) fn payload_bytes(&self) -> Result<Vec<u8>, CarVerifyError> {
         let capacity = usize::try_from(self.payload_len)
@@ -1018,30 +941,24 @@ impl<'a> ParsedCar<'a> {
         }
         Ok(payload)
     }
-
     fn chunk_payload(&self, section: &ParsedChunkSection) -> &[u8] {
         &self.bytes[section.data_range.clone()]
     }
-
     pub(crate) fn chunk_sections(&self) -> &[ParsedChunkSection] {
         &self.chunk_sections
     }
-
     pub(crate) fn roots(&self) -> &[Vec<u8>] {
         &self.roots
     }
-
     pub(crate) fn car_archive_digest(&self) -> Hash {
         blake3::hash(self.bytes)
     }
 }
-
 pub(crate) struct ParsedPayloadReader<'parsed, 'bytes> {
     parsed: &'parsed ParsedCar<'bytes>,
     section_index: usize,
     section_offset: usize,
 }
-
 impl Read for ParsedPayloadReader<'_, '_> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         let mut written = 0usize;
@@ -1067,7 +984,6 @@ impl Read for ParsedPayloadReader<'_, '_> {
         Ok(written)
     }
 }
-
 pub(crate) fn decode_cid(
     data: &[u8],
     section_index: usize,
@@ -1117,13 +1033,11 @@ pub(crate) fn decode_cid(
         digest_end,
     ))
 }
-
 pub(crate) struct CidInfo {
     pub(crate) codec: u64,
     pub(crate) multihash: u64,
     pub(crate) digest: [u8; 32],
 }
-
 fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, CarVerifyError> {
     if manifest.chunking.profile_id.0 != 0 {
         let descriptor = chunker_registry::lookup(crate::ProfileId(manifest.chunking.profile_id.0))
@@ -1169,7 +1083,6 @@ fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, Ca
     }
     Ok(profile)
 }
-
 pub(crate) fn parse_carv1_header(bytes: &[u8]) -> Result<Vec<Vec<u8>>, CarVerifyError> {
     let (map_len, mut idx) = decode_cbor_map_len(bytes)?;
     if map_len != 2 {
@@ -1179,7 +1092,6 @@ pub(crate) fn parse_carv1_header(bytes: &[u8]) -> Result<Vec<Vec<u8>>, CarVerify
     }
     let mut roots: Option<Vec<Vec<u8>>> = None;
     let mut version: Option<u64> = None;
-
     for _ in 0..map_len {
         let (key, consumed_key) = decode_cbor_text(&bytes[idx..])?;
         idx += consumed_key;
@@ -1219,7 +1131,6 @@ pub(crate) fn parse_carv1_header(bytes: &[u8]) -> Result<Vec<Vec<u8>>, CarVerify
             _ => return Err(CarVerifyError::InvalidCarv1Header("unexpected header key")),
         }
     }
-
     if version != Some(1) {
         return Err(CarVerifyError::InvalidCarv1Header("unsupported version"));
     }
@@ -1230,7 +1141,6 @@ pub(crate) fn parse_carv1_header(bytes: &[u8]) -> Result<Vec<Vec<u8>>, CarVerify
     }
     roots.ok_or(CarVerifyError::InvalidCarv1Header("missing roots"))
 }
-
 /// Failure modes for canonical unsigned LEB128 decoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Uleb128Error {
@@ -1241,14 +1151,12 @@ pub(crate) enum Uleb128Error {
     /// The value used more bytes than its shortest representation.
     NonCanonical,
 }
-
 fn map_uleb128_error(error: Uleb128Error) -> CarVerifyError {
     match error {
         Uleb128Error::NonCanonical => CarVerifyError::NonCanonicalVarint,
         Uleb128Error::Truncated | Uleb128Error::Overflow => CarVerifyError::VarintOverflow,
     }
 }
-
 pub(crate) fn decode_uleb128(data: &[u8]) -> Result<(u64, usize), Uleb128Error> {
     let mut value = 0u64;
     for (idx, byte) in data.iter().enumerate() {
@@ -1269,19 +1177,15 @@ pub(crate) fn decode_uleb128(data: &[u8]) -> Result<(u64, usize), Uleb128Error> 
     }
     Err(Uleb128Error::Truncated)
 }
-
 pub(super) fn decode_cbor_map_len(data: &[u8]) -> Result<(u64, usize), CarVerifyError> {
     decode_cbor_len(5, data)
 }
-
 pub(super) fn decode_cbor_array_len(data: &[u8]) -> Result<(u64, usize), CarVerifyError> {
     decode_cbor_len(4, data)
 }
-
 pub(super) fn decode_cbor_uint(data: &[u8]) -> Result<(u64, usize), CarVerifyError> {
     decode_cbor_len(0, data)
 }
-
 pub(super) fn decode_cbor_text(data: &[u8]) -> Result<(&str, usize), CarVerifyError> {
     let (len, consumed) = decode_cbor_len(3, data)?;
     let start = consumed;
@@ -1297,7 +1201,6 @@ pub(super) fn decode_cbor_text(data: &[u8]) -> Result<(&str, usize), CarVerifyEr
         .map_err(|_| CarVerifyError::InvalidCarv1Header("text invalid utf8"))?;
     Ok((text, end))
 }
-
 pub(super) fn decode_cbor_bytes(data: &[u8]) -> Result<(Vec<u8>, usize), CarVerifyError> {
     let (len, consumed) = decode_cbor_len(2, data)?;
     let start = consumed;
@@ -1314,7 +1217,6 @@ pub(super) fn decode_cbor_bytes(data: &[u8]) -> Result<(Vec<u8>, usize), CarVeri
     value.extend_from_slice(&data[start..end]);
     Ok((value, end))
 }
-
 fn decode_cbor_len(expected_major: u8, data: &[u8]) -> Result<(u64, usize), CarVerifyError> {
     if data.is_empty() {
         return Err(CarVerifyError::InvalidCarv1Header("missing CBOR data"));
@@ -1383,21 +1285,17 @@ fn decode_cbor_len(expected_major: u8, data: &[u8]) -> Result<(u64, usize), CarV
         )),
     }
 }
-
 fn hash_to_array(hash: Hash) -> [u8; 32] {
     let mut arr = [0u8; 32];
     arr.copy_from_slice(hash.as_bytes());
     arr
 }
-
 #[cfg(test)]
 mod tests {
     use blake3::hash as blake3_hash;
     use sorafs_manifest::{DagCodecId, GovernanceProofs, ManifestBuilder, PinPolicy, StorageClass};
-
     use super::*;
     use crate::{CarChunk, CarWriter, ChunkProfile, FileEntry, FilePlan, encode_cid};
-
     fn sample_payload() -> Vec<u8> {
         let total_bytes = 512 * 1024; // ensure multiple chunks under the default profile
         let mut payload = Vec::with_capacity(total_bytes);
@@ -1406,7 +1304,6 @@ mod tests {
         }
         payload
     }
-
     fn build_manifest(plan: &CarBuildPlan, stats: &CarWriteStats) -> ManifestV1 {
         let mut car_digest = [0u8; 32];
         car_digest.copy_from_slice(stats.car_archive_digest.as_bytes());
@@ -1431,14 +1328,12 @@ mod tests {
             .build()
             .expect("manifest")
     }
-
     fn rebind_manifest_archive(manifest: &mut ManifestV1, car: &[u8]) {
         manifest.car_size = u64::try_from(car.len()).expect("fixture CAR length fits u64");
         manifest
             .car_digest
             .copy_from_slice(blake3_hash(car).as_bytes());
     }
-
     fn swap_carv1_header_entries(car: &mut [u8]) {
         let length_offset = PRAGMA.len() + HEADER_LEN;
         let (header_len, length_bytes) =
@@ -1458,7 +1353,6 @@ mod tests {
             header.len(),
             "version entry must terminate the canonical fixture header"
         );
-
         let roots_entry = header[1..version_offset].to_vec();
         let version_entry = header[version_offset..].to_vec();
         let mut swapped = Vec::with_capacity(header.len() - 1);
@@ -1466,14 +1360,12 @@ mod tests {
         swapped.extend_from_slice(&roots_entry);
         car[header_start + 1..header_end].copy_from_slice(&swapped);
     }
-
     fn chunk_payload(plan: &CarBuildPlan, payload: &[u8], index: usize) -> Vec<u8> {
         let chunk = &plan.chunks[index];
         let start = chunk.offset as usize;
         let end = start + chunk.length as usize;
         payload[start..end].to_vec()
     }
-
     fn block_car_for_indices(
         plan: &CarBuildPlan,
         payload: &[u8],
@@ -1515,7 +1407,6 @@ mod tests {
             .expect("write block CAR");
         car
     }
-
     fn first_distinct_adjacent_chunks(plan: &CarBuildPlan) -> usize {
         plan.chunks
             .windows(2)
@@ -1524,7 +1415,6 @@ mod tests {
             })
             .expect("fixture must contain adjacent distinct chunks")
     }
-
     fn bump_carv2_data_size_and_index(car: &mut [u8], delta: u64) {
         for field_offset in [24usize, 32] {
             let start = PRAGMA.len() + field_offset;
@@ -1537,7 +1427,6 @@ mod tests {
             car[start..end].copy_from_slice(&updated.to_le_bytes());
         }
     }
-
     #[test]
     fn full_car_verification_with_plan_succeeds() {
         let payload = sample_payload();
@@ -1554,7 +1443,6 @@ mod tests {
         assert_eq!(report.stats.chunk_count, plan.chunks.len());
         assert_eq!(report.chunk_store.payload_len(), plan.content_length);
     }
-
     #[test]
     fn canonical_car_verification_with_retained_plan_succeeds() {
         let payload = sample_payload();
@@ -1564,13 +1452,10 @@ mod tests {
             .expect("writer")
             .write_to(&mut car)
             .expect("write CAR");
-
         let actual = CarVerifier::verify_canonical_car_with_plan(&plan, &car)
             .expect("retained plan and CAR must verify");
-
         assert_eq!(actual, expected);
     }
-
     #[test]
     fn retained_canonical_car_reopens_the_exact_multifile_payload_without_cloning() {
         let (plan, payload) = CarBuildPlan::from_files(vec![
@@ -1589,7 +1474,6 @@ mod tests {
             .expect("writer")
             .write_to(&mut car)
             .expect("write CAR");
-
         let verified = CarVerifier::verify_canonical_car_with_plan_retained(&plan, &car)
             .expect("retain verified CAR");
         assert_eq!(verified.stats(), &expected);
@@ -1602,7 +1486,6 @@ mod tests {
             assert_eq!(reopened, payload);
         }
     }
-
     #[test]
     fn canonical_car_verification_rejects_substituted_plan_identity() {
         let payload = sample_payload();
@@ -1613,16 +1496,13 @@ mod tests {
             .write_to(&mut car)
             .expect("write CAR");
         plan.payload_digest = blake3_hash(b"substituted payload identity");
-
         let error = CarVerifier::verify_canonical_car_with_plan(&plan, &car)
             .expect_err("a substituted plan identity must fail");
-
         assert!(matches!(
             error,
             CarVerifyError::CanonicalCar(CarWriteError::PayloadDigestMismatch)
         ));
     }
-
     #[test]
     fn full_car_verification_reconstructs_plan_without_payload_clone() {
         let payload = sample_payload();
@@ -1634,12 +1514,10 @@ mod tests {
             .write_to(&mut car)
             .expect("write CAR");
         let manifest = build_manifest(&plan, &stats);
-
         let report = CarVerifier::verify_full_car(&manifest, &car).expect("verify full CAR");
         assert_eq!(report.stats, stats);
         assert_eq!(report.chunk_store.payload_len(), plan.content_length);
     }
-
     #[test]
     fn full_car_rejects_tampered_registered_profile_geometry() {
         let payload = sample_payload();
@@ -1652,12 +1530,10 @@ mod tests {
             .expect("write CAR");
         let mut manifest = build_manifest(&plan, &stats);
         manifest.chunking.max_size = manifest.chunking.max_size.saturating_sub(1);
-
         let error = CarVerifier::verify_full_car_with_plan(&manifest, &plan, &car)
             .expect_err("registered profile geometry mismatch must fail");
         assert!(matches!(error, CarVerifyError::ChunkProfileMismatch));
     }
-
     #[test]
     fn full_car_rejects_unknown_non_inline_profile_id() {
         let payload = sample_payload();
@@ -1670,12 +1546,10 @@ mod tests {
             .expect("write CAR");
         let mut manifest = build_manifest(&plan, &stats);
         manifest.chunking.profile_id = sorafs_manifest::ProfileId(u32::MAX);
-
         let error = CarVerifier::verify_full_car_with_plan(&manifest, &plan, &car)
             .expect_err("unknown registered profile must fail");
         assert!(matches!(error, CarVerifyError::ChunkProfileMismatch));
     }
-
     #[test]
     fn full_car_rejects_noncanonical_inline_profile_identity() {
         let payload = sample_payload();
@@ -1689,12 +1563,10 @@ mod tests {
         let mut manifest = build_manifest(&plan, &stats);
         manifest.chunking.profile_id = sorafs_manifest::ProfileId(0);
         manifest.chunking.namespace = "untrusted".to_owned();
-
         let error = CarVerifier::verify_full_car_with_plan(&manifest, &plan, &car)
             .expect_err("noncanonical inline identity must fail");
         assert!(matches!(error, CarVerifyError::ChunkProfileMismatch));
     }
-
     #[test]
     fn full_car_rejects_noncanonical_header_key_order_even_when_manifest_binds_it() {
         let payload = sample_payload();
@@ -1708,12 +1580,10 @@ mod tests {
         let mut manifest = build_manifest(&plan, &stats);
         swap_carv1_header_entries(&mut car);
         rebind_manifest_archive(&mut manifest, &car);
-
         let err = CarVerifier::verify_full_car_with_plan(&manifest, &plan, &car)
             .expect_err("noncanonical header ordering must fail");
         assert!(matches!(err, CarVerifyError::NonCanonicalCar));
     }
-
     #[test]
     fn full_car_rejects_noncanonical_reserved_header_bytes_even_when_manifest_binds_it() {
         let payload = sample_payload();
@@ -1727,12 +1597,10 @@ mod tests {
         let mut manifest = build_manifest(&plan, &stats);
         car[PRAGMA.len() + 1] ^= 1;
         rebind_manifest_archive(&mut manifest, &car);
-
         let err = CarVerifier::verify_full_car_with_plan(&manifest, &plan, &car)
             .expect_err("noncanonical reserved characteristics must fail");
         assert!(matches!(err, CarVerifyError::NonCanonicalCar));
     }
-
     #[test]
     fn full_car_rejects_modified_index_even_when_manifest_binds_it() {
         let payload = sample_payload();
@@ -1753,12 +1621,10 @@ mod tests {
         .expect("index offset fits usize");
         car[index_offset] ^= 1;
         rebind_manifest_archive(&mut manifest, &car);
-
         let err = CarVerifier::verify_full_car_with_plan(&manifest, &plan, &car)
             .expect_err("modified canonical index must fail");
         assert!(matches!(err, CarVerifyError::NonCanonicalCar));
     }
-
     #[test]
     fn full_car_rejects_trailing_junk_even_when_manifest_binds_it() {
         let payload = sample_payload();
@@ -1772,12 +1638,10 @@ mod tests {
         let mut manifest = build_manifest(&plan, &stats);
         car.extend_from_slice(b"manifest-bound-trailing-junk");
         rebind_manifest_archive(&mut manifest, &car);
-
         let err = CarVerifier::verify_full_car_with_plan(&manifest, &plan, &car)
             .expect_err("manifest-bound trailing bytes must fail");
         assert!(matches!(err, CarVerifyError::NonCanonicalCar));
     }
-
     #[test]
     fn parsed_payload_reader_reassembles_raw_sections() {
         let payload = sample_payload();
@@ -1794,11 +1658,9 @@ mod tests {
         reader
             .read_to_end(&mut reconstructed)
             .expect("read parsed payload");
-
         assert_eq!(reconstructed, payload);
         assert_eq!(parsed.payload_digest(), blake3_hash(&payload));
     }
-
     #[test]
     fn full_car_verification_detects_length_mismatch() {
         let payload = sample_payload();
@@ -1822,7 +1684,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn block_car_verification_succeeds() {
         let payload = sample_payload();
@@ -1834,7 +1695,6 @@ mod tests {
             .write_to(&mut full_car)
             .expect("write car");
         let manifest = build_manifest(&plan, &stats);
-
         let first_chunk = chunk_payload(&plan, &payload, 0);
         let chunk = &plan.chunks[0];
         let sub_plan = CarBuildPlan {
@@ -1854,13 +1714,11 @@ mod tests {
                 size: first_chunk.len() as u64,
             }],
         };
-
         let mut range_car = Vec::new();
         crate::CarWriter::new(&sub_plan, &first_chunk)
             .expect("writer")
             .write_to(&mut range_car)
             .expect("write range car");
-
         let expected_range = block_range_for_indices(&plan, 0, 1).expect("expected range");
         let report = CarVerifier::verify_block_car(&manifest, &plan, &range_car, expected_range)
             .expect("verify");
@@ -1875,7 +1733,6 @@ mod tests {
             hash_to_array(blake3_hash(&first_chunk))
         );
     }
-
     #[test]
     fn block_car_rejects_unaligned_expected_range() {
         let payload = sample_payload();
@@ -1890,7 +1747,6 @@ mod tests {
         let block_car = block_car_for_indices(&plan, &payload, &[0], Vec::new());
         let aligned = block_range_for_indices(&plan, 0, 1).expect("aligned range");
         let unaligned = aligned.start().checked_add(1).expect("unaligned start")..=*aligned.end();
-
         let err = CarVerifier::verify_block_car(&manifest, &plan, &block_car, unaligned)
             .expect_err("unaligned expected range must fail");
         assert!(matches!(
@@ -1898,7 +1754,6 @@ mod tests {
             CarVerifyError::ExpectedRangeNotChunkAligned { .. }
         ));
     }
-
     #[test]
     fn block_car_rejects_zero_length_plan_chunk() {
         let payload = sample_payload();
@@ -1913,7 +1768,6 @@ mod tests {
         let block_car = block_car_for_indices(&plan, &payload, &[0], Vec::new());
         let expected_range = block_range_for_indices(&plan, 0, 1).expect("expected range");
         plan.chunks[0].length = 0;
-
         let err = CarVerifier::verify_block_car(&manifest, &plan, &block_car, expected_range)
             .expect_err("zero-length plan chunk must fail");
         assert!(matches!(
@@ -1925,7 +1779,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn block_car_rejects_non_contiguous_range() {
         let payload = sample_payload();
@@ -1937,7 +1790,6 @@ mod tests {
             .write_to(&mut full_car)
             .expect("write car");
         let manifest = build_manifest(&plan, &stats);
-
         let chunk_count = plan.chunks.len();
         assert!(
             chunk_count >= 3,
@@ -1948,7 +1800,6 @@ mod tests {
         let mut concat = Vec::with_capacity(first.len() + third.len());
         concat.extend_from_slice(&first);
         concat.extend_from_slice(&third);
-
         let sub_plan = CarBuildPlan {
             chunk_profile: plan.chunk_profile,
             payload_digest: blake3_hash(&concat),
@@ -1974,19 +1825,16 @@ mod tests {
                 size: concat.len() as u64,
             }],
         };
-
         let mut range_car = Vec::new();
         crate::CarWriter::new(&sub_plan, &concat)
             .expect("writer")
             .write_to(&mut range_car)
             .expect("write car");
-
         let expected_range = block_range_for_indices(&plan, 0, 3).expect("expected range");
         let err = CarVerifier::verify_block_car(&manifest, &plan, &range_car, expected_range)
             .expect_err("err");
         assert!(matches!(err, CarVerifyError::UnexpectedChunkOrder));
     }
-
     #[test]
     fn block_car_rejects_wrong_root() {
         let payload = sample_payload();
@@ -2006,13 +1854,11 @@ mod tests {
             .expect("header root bytes");
         let last_root_byte = root_offset + root.len() - 1;
         block_car[last_root_byte] ^= 1;
-
         let expected_range = block_range_for_indices(&plan, 0, 1).expect("expected range");
         let err = CarVerifier::verify_block_car(&manifest, &plan, &block_car, expected_range)
             .expect_err("wrong root must fail");
         assert!(matches!(err, CarVerifyError::BlockRootMismatch));
     }
-
     #[test]
     fn block_car_rejects_reversed_raw_chunks() {
         let payload = sample_payload();
@@ -2027,12 +1873,10 @@ mod tests {
         let start = first_distinct_adjacent_chunks(&plan);
         let block_car = block_car_for_indices(&plan, &payload, &[start + 1, start], Vec::new());
         let expected_range = block_range_for_indices(&plan, start, 2).expect("expected range");
-
         let err = CarVerifier::verify_block_car(&manifest, &plan, &block_car, expected_range)
             .expect_err("reversed chunks must fail");
         assert!(matches!(err, CarVerifyError::UnexpectedChunkOrder));
     }
-
     #[test]
     fn block_car_rejects_duplicate_raw_chunks() {
         let payload = sample_payload();
@@ -2047,12 +1891,10 @@ mod tests {
         let start = first_distinct_adjacent_chunks(&plan);
         let block_car = block_car_for_indices(&plan, &payload, &[start, start], Vec::new());
         let expected_range = block_range_for_indices(&plan, start, 2).expect("expected range");
-
         let err = CarVerifier::verify_block_car(&manifest, &plan, &block_car, expected_range)
             .expect_err("duplicate chunks must fail");
         assert!(matches!(err, CarVerifyError::UnexpectedChunkOrder));
     }
-
     #[test]
     fn block_car_rejects_unauthorized_dag_shape() {
         let payload = sample_payload();
@@ -2083,13 +1925,11 @@ mod tests {
         let extra_len = u64::try_from(extra_section.len()).expect("extra section length fits u64");
         block_car.splice(index_offset..index_offset, extra_section);
         bump_carv2_data_size_and_index(&mut block_car, extra_len);
-
         let expected_range = block_range_for_indices(&plan, 0, 1).expect("expected range");
         let err = CarVerifier::verify_block_car(&manifest, &plan, &block_car, expected_range)
             .expect_err("extra DAG section must fail");
         assert!(matches!(err, CarVerifyError::NonCanonicalCar));
     }
-
     #[test]
     fn block_car_rejects_modified_index() {
         let payload = sample_payload();
@@ -2114,13 +1954,11 @@ mod tests {
             "fixture must contain an index"
         );
         block_car[index_offset] ^= 1;
-
         let expected_range = block_range_for_indices(&plan, 0, 1).expect("expected range");
         let err = CarVerifier::verify_block_car(&manifest, &plan, &block_car, expected_range)
             .expect_err("modified index must fail");
         assert!(matches!(err, CarVerifyError::NonCanonicalCar));
     }
-
     #[test]
     fn block_car_rejects_trailing_junk() {
         let payload = sample_payload();
@@ -2134,13 +1972,11 @@ mod tests {
         let manifest = build_manifest(&plan, &stats);
         let mut block_car = block_car_for_indices(&plan, &payload, &[0], Vec::new());
         block_car.extend_from_slice(b"trailing-junk");
-
         let expected_range = block_range_for_indices(&plan, 0, 1).expect("expected range");
         let err = CarVerifier::verify_block_car(&manifest, &plan, &block_car, expected_range)
             .expect_err("trailing bytes must fail");
         assert!(matches!(err, CarVerifyError::NonCanonicalCar));
     }
-
     #[test]
     fn block_car_rejects_nonminimal_header_varint() {
         let payload = sample_payload();
@@ -2163,13 +1999,11 @@ mod tests {
         block_car[header_len_offset] = header_len | 0x80;
         block_car.insert(header_len_offset + 1, 0);
         bump_carv2_data_size_and_index(&mut block_car, 1);
-
         let expected_range = block_range_for_indices(&plan, 0, 1).expect("expected range");
         let err = CarVerifier::verify_block_car(&manifest, &plan, &block_car, expected_range)
             .expect_err("nonminimal varint must fail");
         assert!(matches!(err, CarVerifyError::NonCanonicalVarint));
     }
-
     #[test]
     fn block_car_rejects_overflowing_header_varint() {
         let payload = sample_payload();
@@ -2187,13 +2021,11 @@ mod tests {
         overflow.push(0x02);
         block_car.splice(header_len_offset..=header_len_offset, overflow);
         bump_carv2_data_size_and_index(&mut block_car, 9);
-
         let expected_range = block_range_for_indices(&plan, 0, 1).expect("expected range");
         let err = CarVerifier::verify_block_car(&manifest, &plan, &block_car, expected_range)
             .expect_err("overflowing varint must fail");
         assert!(matches!(err, CarVerifyError::VarintOverflow));
     }
-
     #[test]
     fn block_car_rejects_nonminimal_cbor_length() {
         let payload = sample_payload();
@@ -2214,7 +2046,6 @@ mod tests {
             .checked_add(1)
             .expect("fixture header length");
         bump_carv2_data_size_and_index(&mut block_car, 1);
-
         let expected_range = block_range_for_indices(&plan, 0, 1).expect("expected range");
         let err = CarVerifier::verify_block_car(&manifest, &plan, &block_car, expected_range)
             .expect_err("nonminimal CBOR length must fail");
@@ -2223,7 +2054,6 @@ mod tests {
             CarVerifyError::InvalidCarv1Header("non-canonical CBOR length")
         ));
     }
-
     #[test]
     fn parser_rejects_oversized_carv1_header_before_buffering() {
         let payload = sample_payload();
@@ -2243,14 +2073,12 @@ mod tests {
             header_len_offset..header_len_offset + encoded_len,
             oversized,
         );
-
         let err = ParsedCar::parse(&car).expect_err("oversized header must fail");
         assert!(matches!(
             err,
             CarVerifyError::InvalidCarv1Header("header exceeds maximum size")
         ));
     }
-
     #[test]
     fn integer_decoders_reject_nonminimal_and_overflow_lengths() {
         assert_eq!(
@@ -2265,7 +2093,6 @@ mod tests {
             decode_uleb128(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01]),
             Ok((u64::MAX, 10))
         );
-
         for encoded in [
             vec![0x18, 0x17],
             vec![0x19, 0x00, 0xff],
@@ -2279,7 +2106,6 @@ mod tests {
                 ))
             ));
         }
-
         let mut overflowing_bytes = vec![0x5b];
         overflowing_bytes.extend_from_slice(&u64::MAX.to_be_bytes());
         assert!(matches!(

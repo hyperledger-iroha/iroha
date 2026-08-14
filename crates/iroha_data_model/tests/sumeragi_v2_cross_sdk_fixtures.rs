@@ -1,7 +1,5 @@
 //! Rust-authority checks for shared Sumeragi v2 SDK wire fixtures.
-
 use std::collections::BTreeMap;
-
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     NetworkId,
@@ -26,15 +24,12 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use norito::codec::{DecodeAll, Encode};
-
 const FIXTURES: &str = include_str!("../../../fixtures/sumeragi_v2/wire_v2.tsv");
-
 fn peer(seed: u8) -> PeerId {
     let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("derive deterministic fixture key");
     PeerId::new(key_pair.public_key().clone())
 }
-
 fn network_id(seed: u8) -> NetworkId {
     NetworkId::from_genesis_hash(
         HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
@@ -42,7 +37,6 @@ fn network_id(seed: u8) -> NetworkId {
         )),
     )
 }
-
 fn context() -> HeightContext {
     let mut peers = (1..=4).map(peer).collect::<Vec<_>>();
     peers.sort();
@@ -78,7 +72,6 @@ fn context() -> HeightContext {
         leader_seed: [0xa5; 32],
     }
 }
-
 fn round(context: &HeightContext, view: u64) -> ConsensusRound {
     ConsensusRound {
         context_id: context.id(),
@@ -86,7 +79,6 @@ fn round(context: &HeightContext, view: u64) -> ConsensusRound {
         view,
     }
 }
-
 fn subject(seed: u8) -> BlockSubject {
     BlockSubject {
         parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new([seed, 0]))),
@@ -94,7 +86,6 @@ fn subject(seed: u8) -> BlockSubject {
         payload_hash: Hash::new([seed, 2]),
     }
 }
-
 fn execution_commitment(seed: u8) -> ExecutionCommitment {
     ExecutionCommitment::new_without_merge_carrier(
         Hash::new([seed, 3]),
@@ -107,7 +98,6 @@ fn execution_commitment(seed: u8) -> ExecutionCommitment {
     )
     .expect("canonical fixture execution commitment")
 }
-
 fn qc(context: &HeightContext, view: u64, phase: GlobalPhase) -> QuorumCertificate {
     QuorumCertificate {
         round: round(context, view),
@@ -121,11 +111,9 @@ fn qc(context: &HeightContext, view: u64, phase: GlobalPhase) -> QuorumCertifica
         aggregate_signature: vec![0x5a; 48],
     }
 }
-
 fn merge_carrier_entry_hash() -> HashOf<MergeLedgerEntry> {
     HashOf::from_untyped_unchecked(Hash::new(b"sumeragi-v2-v4-merge-carrier-fixture"))
 }
-
 fn merge_carrier_execution_commitment(seed: u8) -> ExecutionCommitment {
     ExecutionCommitment::new_with_native_amx_application_manifest_and_merge_carrier(
         Hash::new([seed, 3]),
@@ -142,13 +130,11 @@ fn merge_carrier_execution_commitment(seed: u8) -> ExecutionCommitment {
     )
     .expect("canonical merge-carrier fixture execution commitment")
 }
-
 fn merge_carrier_qc(context: &HeightContext) -> QuorumCertificate {
     let mut certificate = qc(context, 4, GlobalPhase::Prepare);
     certificate.execution_commitment = merge_carrier_execution_commitment(5);
     certificate
 }
-
 fn fixture_rows() -> BTreeMap<(String, String), String> {
     FIXTURES
         .lines()
@@ -165,7 +151,6 @@ fn fixture_rows() -> BTreeMap<(String, String), String> {
         })
         .collect()
 }
-
 #[test]
 fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
     let context = context();
@@ -209,7 +194,6 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
         }),
         signature: vec![0x55; 48],
     };
-
     let mut messages = BTreeMap::new();
     let mut insert_message = |name: &str, payload| {
         messages.insert(name.to_owned(), ConsensusMessageV2::new(payload).encode());
@@ -276,7 +260,6 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
             signature: vec![3],
         }),
     );
-
     let commit_request = CommitCertificateRequest {
         protocol_version: PROTOCOL_VERSION,
         network_id: context.network_id,
@@ -327,7 +310,6 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
         "commit_certificate_response",
         ConsensusMessageV2Payload::CommitCertificateResponse(commit_response.clone()),
     );
-
     let status = SumeragiV2Status {
         protocol_version: PROTOCOL_VERSION,
         node_fingerprint: Hash::new(b"node"),
@@ -431,7 +413,6 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
     status
         .validate()
         .expect("canonical status fixture is valid");
-
     let rows = fixture_rows();
     let accepted_names = rows
         .keys()
@@ -464,7 +445,6 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
         Some(&hex::encode(commit_response.signature_preimage()))
     );
 }
-
 #[test]
 fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation() {
     let context = context();
@@ -477,7 +457,6 @@ fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation() {
         let mut cursor = bytes.as_slice();
         ConsensusMessageV2::decode_all(&mut cursor)
     };
-
     for name in [
         "truncated",
         "trailing_byte",
@@ -493,18 +472,15 @@ fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation() {
             "{name} unexpectedly decoded as canonical Rust wire"
         );
     }
-
     let wrong_version = decode("negative_message", "wrong_protocol_version")
         .expect("wrong outer version is structurally decodable");
     assert!(wrong_version.validate_version().is_err());
-
     let noncanonical = decode("negative_message", "noncanonical_signers")
         .expect("noncanonical signer order is structurally decodable");
     let ConsensusMessageV2Payload::QuorumCertificate(certificate) = noncanonical.payload else {
         panic!("noncanonical signer fixture used the wrong payload")
     };
     assert!(certificate.validate(&context).is_err());
-
     let merge_carrier_wrong_version = decode(
         "negative_message",
         "execution_commitment_merge_carrier_wrong_version",
@@ -516,14 +492,12 @@ fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation() {
         panic!("wrong merge-carrier version fixture used the wrong payload")
     };
     assert!(certificate.validate(&context).is_err());
-
     let overlapping = decode("negative_message", "overlapping_timeout_groups")
         .expect("overlapping groups are structurally decodable");
     let ConsensusMessageV2Payload::TimeoutCertificate(certificate) = overlapping.payload else {
         panic!("overlapping group fixture used the wrong payload")
     };
     assert!(certificate.validate(&context).is_err());
-
     for name in [
         "commit_request_wrong_nested_protocol",
         "commit_request_empty_signature",
@@ -538,7 +512,6 @@ fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation() {
             "{name} passed validation"
         );
     }
-
     for name in [
         "commit_response_empty_signature",
         "commit_response_prepare_certificate",
@@ -553,7 +526,6 @@ fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation() {
             "{name} passed validation"
         );
     }
-
     for name in [
         "commit_vote_split_round",
         "commit_quorum_certificate_split_round",
@@ -569,7 +541,6 @@ fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation() {
         };
         assert!(rejected, "{name} passed same-round validation");
     }
-
     let canonical_request =
         decode("message", "commit_certificate_request").expect("canonical request decodes");
     let ConsensusMessageV2Payload::CommitCertificateRequest(canonical_request) =
@@ -594,7 +565,6 @@ fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation() {
             "{name} passed exact-request validation"
         );
     }
-
     for name in ["wrong_protocol_version", "truncated"] {
         let encoded = rows
             .get(&("negative_status".to_owned(), name.to_owned()))

@@ -43,6 +43,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+try:
+    from iso_operator_evidence_secret_scan import (
+        _contains_secret_identifier_material,
+        _contains_secret_marker,
+        _contains_secret_material,
+        _secret_scan_values,
+    )
+except ModuleNotFoundError as error:
+    if error.name != "iso_operator_evidence_secret_scan":
+        raise
+    from scripts.iso_operator_evidence_secret_scan import (
+        _contains_secret_identifier_material,
+        _contains_secret_marker,
+        _contains_secret_material,
+        _secret_scan_values,
+    )
+
 
 EVIDENCE_VERSION = 1
 CANARY_SUMMARY_VERSION = 1
@@ -84,6 +101,7 @@ MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
 RAIL_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]*[A-Za-z0-9])?$")
 CLI_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
 JSON_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
+NETWORK_ID_RE = re.compile(r"hash:([0-9A-F]{64})#([0-9A-F]{4})")
 CLI_CANONICAL_NUMBER_RE = re.compile(
     r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?"
 )
@@ -111,6 +129,30 @@ def _is_negative_zero_number_text(value: str) -> bool:
         return False
     mantissa = re.split(r"[eE]", value[1:], maxsplit=1)[0]
     return all(ch in {"0", "."} for ch in mantissa)
+
+
+def _crc16_ccitt_false(payload: bytes) -> int:
+    checksum = 0xFFFF
+    for byte in payload:
+        checksum ^= byte << 8
+        for _ in range(8):
+            checksum = (
+                ((checksum << 1) ^ 0x1021) & 0xFFFF
+                if checksum & 0x8000
+                else (checksum << 1) & 0xFFFF
+            )
+    return checksum
+
+
+def _check_canonical_network_id(value: str, label: str) -> None:
+    match = NETWORK_ID_RE.fullmatch(value)
+    if match is None:
+        raise EvidenceError(f"{label} must be one canonical checksummed NetworkId")
+    identity = bytes.fromhex(match.group(1))
+    if identity[-1] & 1 == 0 or _crc16_ccitt_false(value[:69].encode("ascii")) != int(
+        match.group(2), 16
+    ):
+        raise EvidenceError(f"{label} must be one canonical checksummed NetworkId")
 LOCAL_PATH_ERROR_RE = re.compile(
     r"(?:^|[\s'\"(<:=])(?:[A-Za-z]:[\\/]|/[^/\s'\"<>]+|\.{1,2}/|~/)"
 )
@@ -269,11 +311,12 @@ EXPECTED_STAGE_FLAGS = {
     "rail": {
         "--allow-default-profile",
         "--allow-insecure-http",
-        "--bearer-token-file",
         "--dry-run",
         "--inbox-dir",
         "--max-payload-bytes",
         "--message",
+        "--network-id",
+        "--operator-private-key-file",
         "--receipt-dir",
         "--response-limit-bytes",
         "--timeout-secs",
@@ -368,6 +411,8 @@ STAGE_RECEIPT_PATH_FLAGS = {
 STAGE_REQUIRED_FLAGS = {
     "rail": {
         "--inbox-dir",
+        "--network-id",
+        "--operator-private-key-file",
         "--torii-base-url",
     },
     "notary": {
@@ -564,138 +609,6 @@ SECRET_KEY_EXACT = {
     "secret",
     "token",
 }
-SECRET_VALUE_PATTERNS = [
-    re.compile(r"\bauthorization\s*:", re.IGNORECASE),
-    re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
-    re.compile(
-        r"\b(?:token|secret|private[\s_./\\-]*key|password|passphrase|api[\s_./\\-]*key|access[\s_./\\-]*key|session[\s_./\\-]*key|client[\s_./\\-]*secret|cookie|set[\s_./\\-]*cookie)\s*[:=]\s*\S+",
-        re.IGNORECASE,
-    ),
-    re.compile(r"\bx[\s_./\\-]*iroha[\s_./\\-]*signature\s*:", re.IGNORECASE),
-]
-
-
-def _secret_scan_values(raw: str) -> tuple[str, ...]:
-    values = [raw]
-    decoded = raw
-    for _ in range(4):
-        if "%" not in decoded:
-            break
-        next_decoded = urllib.parse.unquote(decoded)
-        if next_decoded == decoded:
-            break
-        values.append(next_decoded)
-        decoded = next_decoded
-    return tuple(values)
-
-
-def _contains_secret_material(value: str) -> bool:
-    return any(
-        pattern.search(candidate)
-        for raw_candidate in _secret_scan_values(value)
-        for candidate in _secret_value_forms(raw_candidate)
-        for pattern in SECRET_VALUE_PATTERNS
-    )
-
-
-def _secret_value_forms(value: str) -> tuple[str, ...]:
-    return _secret_base_forms(value)
-
-
-def _secret_base_forms(value: str) -> tuple[str, ...]:
-    folded = value.casefold()
-    forms: list[str] = []
-    for candidate in (
-        folded,
-        unicodedata.normalize("NFKC", folded).casefold(),
-        unicodedata.normalize("NFKD", folded).casefold(),
-    ):
-        without_obfuscation = "".join(
-            ch for ch in candidate if not _is_secret_obfuscation_char(ch)
-        )
-        obfuscation_spaced = "".join(
-            " " if _is_secret_obfuscation_char(ch) else ch for ch in candidate
-        )
-        forms.extend((candidate, without_obfuscation, obfuscation_spaced))
-    return tuple(dict.fromkeys(forms))
-
-
-def _is_secret_obfuscation_char(ch: str) -> bool:
-    category = unicodedata.category(ch)
-    return category == "Cf" or category.startswith("M")
-
-
-def _secret_identifier_forms(value: str) -> tuple[str, ...]:
-    forms: list[str] = []
-    for candidate in _secret_base_forms(value):
-        forms.extend(
-            (
-                candidate,
-                re.sub(r"[\s_./\\-]+", " ", candidate).strip(),
-                re.sub(r"[\s_./\\-]+", "", candidate),
-            )
-        )
-    return tuple(dict.fromkeys(forms))
-
-
-def _contains_secret_marker(value: str, markers: tuple[str, ...]) -> bool:
-    candidate_forms = _secret_identifier_forms(value)
-    return any(
-        marker_form in candidate_form
-        for marker in markers
-        for marker_form in _secret_identifier_forms(marker)
-        for candidate_form in candidate_forms
-    )
-
-
-def _contains_secret_identifier_material(value: str) -> bool:
-    strong_markers = (
-        "private_key",
-        "private-key",
-        "private key",
-        "private.key",
-        "privatekey",
-        "password",
-        "passphrase",
-        "api_key",
-        "api-key",
-        "api key",
-        "api.key",
-        "apikey",
-        "access_key",
-        "access-key",
-        "access key",
-        "access.key",
-        "accesskey",
-        "session_key",
-        "session-key",
-        "session key",
-        "session.key",
-        "sessionkey",
-        "client_secret",
-        "client-secret",
-        "client secret",
-        "client.secret",
-        "clientsecret",
-        "set-cookie",
-        "set cookie",
-        "set.cookie",
-        "setcookie",
-        "x-iroha-signature",
-        "x_iroha_signature",
-        "x iroha signature",
-        "x.iroha.signature",
-        "xirohasignature",
-    )
-    paired_markers = ("authorization", "bearer", "token", "cookie")
-    return any(
-        _contains_secret_marker(candidate, strong_markers)
-        or (
-            _contains_secret_marker(candidate, ("secret",))
-            and _contains_secret_marker(candidate, paired_markers)
-        )
-        for candidate in _secret_scan_values(value)
-    )
 
 
 def _receipt_verifier_stderr_detail(stderr: str) -> str:
@@ -3381,7 +3294,7 @@ def _check_command_urls(
         raise EvidenceError(f"{label}.command --endpoint values must be sorted")
 
 
-def _check_redacted_bearer_files(command: list[str], label: str) -> None:
+def _check_redacted_secret_files(command: list[str], label: str) -> None:
     for offset, item in enumerate(command):
         if item == "--bearer-token-file":
             if offset + 1 >= len(command):
@@ -3398,6 +3311,27 @@ def _check_redacted_bearer_files(command: list[str], label: str) -> None:
                 raise EvidenceError(f"{label} has --bearer-token-file without a value")
             if value != "<runtime-token-file>":
                 raise EvidenceError(f"{label} contains an unredacted bearer-token file path")
+        if item == "--operator-private-key-file":
+            if offset + 1 >= len(command) or command[offset + 1].startswith("-"):
+                raise EvidenceError(
+                    f"{label} has --operator-private-key-file without a value"
+                )
+            if command[offset + 1] != "<runtime-private-key-file>":
+                raise EvidenceError(
+                    f"{label} contains an unredacted operator-private-key file path"
+                )
+            continue
+        prefix = "--operator-private-key-file="
+        if item.startswith(prefix):
+            value = item[len(prefix) :]
+            if not value or value.startswith("-"):
+                raise EvidenceError(
+                    f"{label} has --operator-private-key-file without a value"
+                )
+            if value != "<runtime-private-key-file>":
+                raise EvidenceError(
+                    f"{label} contains an unredacted operator-private-key file path"
+                )
 
 
 def _check_command_policy(
@@ -3421,7 +3355,7 @@ def _check_command_policy(
             raise EvidenceError(
                 f"{label}.command[{offset}] must not have surrounding whitespace"
             )
-    _check_redacted_bearer_files(command, label)
+    _check_redacted_secret_files(command, label)
     if _command_has_flag(command, "--dry-run") and not allow_dry_run:
         raise EvidenceError(f"{label} used --dry-run")
     if (
@@ -3544,6 +3478,9 @@ def _check_stage_command_flags(stage_name: str, command: list[str], label: str) 
     _check_numeric_command_flags(stage_name, command, label)
     _check_path_command_flags(stage_name, command, label)
     _check_required_command_flags(stage_name, command, label)
+    if stage_name == "rail":
+        offset, network_id = _command_flag_values(command, "--network-id", label)[0]
+        _check_canonical_network_id(network_id, f"{label}.command[{offset}]")
 
 
 def _check_receipt_dir_binding(command: list[str], receipt_dir: str, label: str) -> None:

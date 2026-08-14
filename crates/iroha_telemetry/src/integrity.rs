@@ -1,21 +1,21 @@
 //! Telemetry integrity helpers (hash chaining and optional keyed signatures).
-
-use std::path::{Path, PathBuf};
-
+use std::{
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+};
 use iroha_config::parameters::actual::TelemetryIntegrity as TelemetryIntegrityConfig;
 use norito::json::{Map, Value};
 use thiserror::Error;
-
 const STATE_VERSION: u64 = 1;
 const STATE_FILE_PREFIX: &str = "telemetry_integrity_";
-
+const STATE_FILE_MAX_BYTES: u64 = 4 * 1024;
 #[derive(Debug, Clone)]
 pub struct IntegrityConfig {
     pub enabled: bool,
     pub signing_key: Option<[u8; 32]>,
     pub signing_key_id: Option<String>,
 }
-
 impl From<TelemetryIntegrityConfig> for IntegrityConfig {
     fn from(config: TelemetryIntegrityConfig) -> Self {
         Self {
@@ -25,7 +25,6 @@ impl From<TelemetryIntegrityConfig> for IntegrityConfig {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 pub struct ChainState {
     config: IntegrityConfig,
@@ -33,7 +32,6 @@ pub struct ChainState {
     prev_hash: [u8; 32],
     state_path: Option<PathBuf>,
 }
-
 impl ChainState {
     pub fn new_with_state_path(
         config: TelemetryIntegrityConfig,
@@ -43,12 +41,10 @@ impl ChainState {
         chain.load_state();
         chain
     }
-
     pub fn new_with_kind(config: TelemetryIntegrityConfig, kind: &str) -> Self {
         let state_path = state_path_for(kind, config.state_dir.as_ref());
         Self::new_with_state_path(config, state_path)
     }
-
     pub fn from_config(config: IntegrityConfig, state_path: Option<PathBuf>) -> Self {
         Self {
             config,
@@ -57,12 +53,10 @@ impl ChainState {
             state_path,
         }
     }
-
     pub fn attach_chain(&mut self, map: &mut Map) -> Result<(), IntegrityError> {
         if !self.config.enabled {
             return Ok(());
         }
-
         let payload = norito::json::to_vec(map)?;
         let seq = self.seq;
         let prev_hash = self.prev_hash;
@@ -71,10 +65,8 @@ impl ChainState {
             .config
             .signing_key
             .map(|key| blake3::keyed_hash(&key, &hash).as_bytes().to_owned());
-
         self.prev_hash = hash;
         self.seq = self.seq.wrapping_add(1);
-
         let mut chain = Map::new();
         chain.insert("seq".into(), Value::from(seq));
         chain.insert("prev_hash".into(), Value::from(hex::encode(prev_hash)));
@@ -85,12 +77,10 @@ impl ChainState {
                 chain.insert("key_id".into(), Value::from(key_id));
             }
         }
-
         map.insert("chain".into(), Value::Object(chain));
         self.persist_state();
         Ok(())
     }
-
     fn load_state(&mut self) {
         if !self.config.enabled {
             return;
@@ -98,7 +88,6 @@ impl ChainState {
         let Some(path) = self.state_path.as_ref() else {
             return;
         };
-
         match load_state_snapshot(path) {
             Ok(Some(snapshot)) => {
                 self.seq = snapshot.seq;
@@ -114,12 +103,10 @@ impl ChainState {
             }
         }
     }
-
     fn persist_state(&self) {
         let Some(path) = self.state_path.as_ref() else {
             return;
         };
-
         if let Err(message) = persist_state_snapshot(path, self.seq, self.prev_hash) {
             iroha_logger::warn!(
                 path = %path.display(),
@@ -129,19 +116,16 @@ impl ChainState {
         }
     }
 }
-
 #[derive(Debug, Error)]
 pub enum IntegrityError {
     #[error("failed to serialize telemetry payload for integrity hash: {0}")]
     Serialize(#[from] norito::json::Error),
 }
-
 #[derive(Debug, Clone)]
 struct ChainStateSnapshot {
     seq: u64,
     prev_hash: [u8; 32],
 }
-
 fn compute_hash(prev_hash: [u8; 32], seq: u64, payload: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(&prev_hash);
@@ -149,20 +133,39 @@ fn compute_hash(prev_hash: [u8; 32], seq: u64, payload: &[u8]) -> [u8; 32] {
     hasher.update(payload);
     *hasher.finalize().as_bytes()
 }
-
 fn state_path_for(kind: &str, state_dir: Option<&PathBuf>) -> Option<PathBuf> {
     state_dir.map(|dir| dir.join(format!("{STATE_FILE_PREFIX}{kind}.json")))
 }
-
 fn load_state_snapshot(path: &Path) -> Result<Option<ChainStateSnapshot>, String> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
+    let file = match File::open(path) {
+        Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
-            return Err(format!("failed to read state file: {err}"));
+            return Err(format!("failed to open state file: {err}"));
         }
     };
-
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("failed to inspect state file: {err}"))?;
+    if !metadata.is_file() {
+        return Err("state path is not a regular file".to_string());
+    }
+    if metadata.len() > STATE_FILE_MAX_BYTES {
+        return Err(format!(
+            "state file is {} bytes, exceeding the {STATE_FILE_MAX_BYTES}-byte limit",
+            metadata.len()
+        ));
+    }
+    let mut bytes = Vec::new();
+    let mut limited = file.take(STATE_FILE_MAX_BYTES.saturating_add(1));
+    limited
+        .read_to_end(&mut bytes)
+        .map_err(|err| format!("failed to read state file: {err}"))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > STATE_FILE_MAX_BYTES {
+        return Err(format!(
+            "state file grew beyond the {STATE_FILE_MAX_BYTES}-byte limit while reading"
+        ));
+    }
     let value: Value = norito::json::from_slice(&bytes)
         .map_err(|err| format!("failed to decode state file: {err}"))?;
     let map = value
@@ -200,20 +203,17 @@ fn load_state_snapshot(path: &Path) -> Result<Option<ChainStateSnapshot>, String
     prev_hash.copy_from_slice(&decoded);
     Ok(Some(ChainStateSnapshot { seq, prev_hash }))
 }
-
 fn persist_state_snapshot(path: &Path, seq: u64, prev_hash: [u8; 32]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|err| format!("failed to create state directory: {err}"))?;
     }
-
     let mut map = Map::new();
     map.insert("version".into(), Value::from(STATE_VERSION));
     map.insert("seq".into(), Value::from(seq));
     map.insert("prev_hash".into(), Value::from(hex::encode(prev_hash)));
     let payload = norito::json::to_vec(&map)
         .map_err(|err| format!("failed to serialize state file: {err}"))?;
-
     let tmp_path = path.with_extension("tmp");
     std::fs::write(&tmp_path, &payload)
         .map_err(|err| format!("failed to write temp state file: {err}"))?;
@@ -224,16 +224,12 @@ fn persist_state_snapshot(path: &Path, seq: u64, prev_hash: [u8; 32]) -> Result<
             )
         })?;
     }
-
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
-
     use super::*;
-
     #[test]
     fn chain_increments_with_prev_hash() {
         let config = TelemetryIntegrityConfig {
@@ -245,10 +241,8 @@ mod tests {
         let mut chain = ChainState::new_with_state_path(config, None);
         let mut map = Map::new();
         map.insert("msg".into(), Value::from("hello"));
-
         let payload = norito::json::to_vec(&map).expect("payload");
         let expected_hash = compute_hash([0_u8; 32], 1, &payload);
-
         chain.attach_chain(&mut map).expect("attach chain");
         let chain_map = map
             .get("chain")
@@ -264,12 +258,10 @@ mod tests {
             chain_map.get("hash").and_then(Value::as_str),
             Some(expected_hash_hex.as_str())
         );
-
         let mut second = Map::new();
         second.insert("msg".into(), Value::from("world"));
         let payload = norito::json::to_vec(&second).expect("payload");
         let expected_hash = compute_hash(expected_hash, 2, &payload);
-
         chain.attach_chain(&mut second).expect("attach chain");
         let chain_map = second
             .get("chain")
@@ -282,7 +274,6 @@ mod tests {
             Some(expected_hash_hex.as_str())
         );
     }
-
     #[test]
     fn chain_includes_signature_when_keyed() {
         let key = [7_u8; 32];
@@ -295,11 +286,9 @@ mod tests {
         let mut chain = ChainState::new_with_state_path(config, None);
         let mut map = Map::new();
         map.insert("msg".into(), Value::from("signed"));
-
         let payload = norito::json::to_vec(&map).expect("payload");
         let hash = compute_hash([0_u8; 32], 1, &payload);
         let signature = blake3::keyed_hash(&key, &hash);
-
         chain.attach_chain(&mut map).expect("attach chain");
         let chain_map = map
             .get("chain")
@@ -315,7 +304,6 @@ mod tests {
             Some("primary")
         );
     }
-
     #[test]
     fn chain_state_persists_across_restarts() {
         let dir = std::env::temp_dir().join(format!(
@@ -327,23 +315,19 @@ mod tests {
         ));
         let _ = std::fs::create_dir_all(&dir);
         let state_path = dir.join("telemetry_integrity_ws.json");
-
         let config = TelemetryIntegrityConfig {
             enabled: true,
             state_dir: None,
             signing_key: None,
             signing_key_id: None,
         };
-
         let mut first = ChainState::new_with_state_path(config.clone(), Some(state_path.clone()));
         let mut map = Map::new();
         map.insert("msg".into(), Value::from("first"));
         let payload = norito::json::to_vec(&map).expect("payload");
         let expected_hash = compute_hash([0_u8; 32], 1, &payload);
-
         first.attach_chain(&mut map).expect("attach chain");
         assert!(state_path.exists());
-
         let mut second = ChainState::new_with_state_path(config, Some(state_path));
         let mut map = Map::new();
         map.insert("msg".into(), Value::from("second"));
@@ -358,7 +342,26 @@ mod tests {
             Some(hex::encode(expected_hash).as_str())
         );
     }
-
+    #[test]
+    fn oversized_state_file_is_rejected_before_json_decode() {
+        let dir = std::env::temp_dir().join(format!(
+            "iroha-telemetry-integrity-oversized-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temporary directory");
+        let state_path = dir.join("telemetry_integrity_ws.json");
+        std::fs::write(
+            &state_path,
+            vec![b' '; usize::try_from(STATE_FILE_MAX_BYTES).expect("limit fits") + 1],
+        )
+        .expect("write oversized state");
+        let error = load_state_snapshot(&state_path).expect_err("oversized state must fail");
+        assert!(error.contains("exceeding"), "unexpected error: {error}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
     #[test]
     fn state_path_for_kind_uses_prefix() {
         let dir = PathBuf::from("telemetry-state");

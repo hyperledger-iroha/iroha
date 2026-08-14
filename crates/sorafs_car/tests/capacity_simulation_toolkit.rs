@@ -1,11 +1,8 @@
 #![cfg(feature = "cli")]
-
 use std::{collections::HashMap, env, fs, path::PathBuf};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
 use tempfile::{Builder, TempDir};
-
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -14,23 +11,19 @@ fn repo_root() -> PathBuf {
         .expect("workspace has root")
         .to_path_buf()
 }
-
 fn example_dir() -> PathBuf {
     repo_root().join("fixtures/documentation/sorafs_capacity_simulation")
 }
-
 fn canonical_temp_base() -> PathBuf {
     env::temp_dir()
         .canonicalize()
         .expect("canonical system temp dir")
 }
-
 fn tempdir() -> Result<TempDir, std::io::Error> {
     Builder::new()
         .prefix("sorafs-capacity-simulation-")
         .tempdir_in(canonical_temp_base())
 }
-
 fn run_cli(args: &[String]) -> assert_cmd::assert::Assert {
     let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity");
@@ -39,15 +32,12 @@ fn run_cli(args: &[String]) -> assert_cmd::assert::Assert {
     }
     cmd.assert()
 }
-
 #[test]
 fn quota_negotiation_fixtures_are_consistent() {
     let temp = tempdir().expect("tempdir");
     let base = example_dir().join("scenarios/quota_negotiation");
-
     let declarations = [("alpha", 480_u64), ("beta", 320_u64), ("gamma", 240_u64)];
     let mut committed: HashMap<String, u64> = HashMap::new();
-
     for (alias, expected_committed) in declarations {
         let spec = base.join(format!("provider_{alias}_declaration.json"));
         let json_out = temp
@@ -60,7 +50,6 @@ fn quota_negotiation_fixtures_are_consistent() {
             "--quiet".to_owned(),
         ])
         .success();
-
         let summary_bytes = fs::read(&json_out).expect("read summary");
         let summary: Value = json::from_slice(&summary_bytes).expect("summary json parses");
         let committed_gib = summary
@@ -78,7 +67,6 @@ fn quota_negotiation_fixtures_are_consistent() {
             .to_string();
         committed.insert(provider_id, committed_gib);
     }
-
     let repl_spec = base.join("replication_order.json");
     let repl_summary = temp.path().join("replication_order_summary.json");
     run_cli(&[
@@ -88,10 +76,8 @@ fn quota_negotiation_fixtures_are_consistent() {
         "--quiet".to_owned(),
     ])
     .success();
-
     let repl_bytes = fs::read(&repl_summary).expect("read replication summary");
     let repl_value: Value = json::from_slice(&repl_bytes).expect("parse replication summary");
-
     let assignments = repl_value
         .get("assignments")
         .and_then(Value::as_array)
@@ -116,7 +102,6 @@ fn quota_negotiation_fixtures_are_consistent() {
             panic!("replication assignment references unknown provider {provider_id}");
         }
     }
-
     let target = repl_value
         .get("assignments")
         .and_then(Value::as_array)
@@ -126,26 +111,21 @@ fn quota_negotiation_fixtures_are_consistent() {
             })
         })
         .expect("total assignment sum");
-
     assert_eq!(
         total_assigned, target,
         "sum of assigned GiB should match computed total"
     );
 }
-
 #[test]
 fn failover_and_slashing_fixtures_validate() {
     let temp = tempdir().expect("tempdir");
     let failover_base = example_dir().join("scenarios/failover");
-
     let telemetry_cases = [
         ("alpha_primary", 0_u64, 99800_u64),
         ("alpha_outage", 7_u64, 72000_u64),
         ("beta_failover", 1_u64, 99500_u64),
     ];
-
     let mut summaries = HashMap::new();
-
     for (alias, expected_failed, expected_uptime) in telemetry_cases {
         let spec = failover_base.join(format!("telemetry_{alias}.json"));
         let json_out = temp.path().join(format!("telemetry_{alias}_summary.json"));
@@ -156,7 +136,6 @@ fn failover_and_slashing_fixtures_validate() {
             "--quiet".to_owned(),
         ])
         .success();
-
         let summary_bytes = fs::read(&json_out).expect("read telemetry summary");
         let summary: Value = json::from_slice(&summary_bytes).expect("telemetry summary json");
         let failed = summary
@@ -174,7 +153,6 @@ fn failover_and_slashing_fixtures_validate() {
         assert_eq!(uptime, expected_uptime, "{alias} uptime mismatch");
         summaries.insert(alias.to_owned(), summary);
     }
-
     let primary_uptime = summaries["alpha_primary"]
         .get("uptime_percent_milli")
         .and_then(Value::as_u64)
@@ -187,7 +165,6 @@ fn failover_and_slashing_fixtures_validate() {
         outage_uptime < primary_uptime,
         "alpha outage uptime should drop below primary snapshot"
     );
-
     // Slashing fixture
     let slashing_spec = example_dir().join("scenarios/slashing/capacity_dispute.json");
     let slashing_summary = temp.path().join("capacity_dispute_summary.json");
@@ -198,7 +175,6 @@ fn failover_and_slashing_fixtures_validate() {
         "--quiet".to_owned(),
     ])
     .success();
-
     let slashing_bytes = fs::read(&slashing_summary).expect("read slashing summary");
     let slashing: Value = json::from_slice(&slashing_bytes).expect("slashing summary json");
     assert_eq!(

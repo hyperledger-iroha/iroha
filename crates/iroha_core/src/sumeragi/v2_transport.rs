@@ -4,21 +4,16 @@
 //! module applies the same rule to payload chunks and certified body fetches:
 //! structural wire validation, transport identity binding, and cryptographic
 //! authentication all complete before an adapter may act on the payload.
-
 use core::fmt;
 use std::collections::{BTreeMap, btree_map::Entry};
-
 #[cfg(test)]
 use std::collections::BTreeSet;
-
 use iroha_crypto::{HashOf, Signature};
 use iroha_data_model::{
     block::{consensus_v2 as wire, decode_framed_signed_block},
     peer::PeerId,
 };
-
 use super::v2::{SumeragiV2Adapter, VerifiedHeightContext, verify_historical_quorum_certificate};
-
 /// Kind of signed transport payload rejected during authentication.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TransportSignatureKind {
@@ -33,7 +28,6 @@ pub(crate) enum TransportSignatureKind {
     /// A response carrying one historical height's durable CommitQC.
     CommitCertificateResponse,
 }
-
 /// Claimed identity whose binding to the authenticated outer peer failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TransportIdentityKind {
@@ -48,7 +42,6 @@ pub(crate) enum TransportIdentityKind {
     /// The current peer identity carried by a commit-certificate response.
     CommitCertificateResponder,
 }
-
 /// Authentication or outstanding-request tracking failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum V2TransportError {
@@ -120,7 +113,6 @@ pub(crate) enum V2TransportError {
     /// A commit-certificate response is unsolicited, late, or replayed.
     UnsolicitedCommitCertificateResponse(HashOf<wire::CommitCertificateRequest>),
 }
-
 impl fmt::Display for V2TransportError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -191,29 +183,24 @@ impl fmt::Display for V2TransportError {
         }
     }
 }
-
 impl std::error::Error for V2TransportError {}
-
 impl From<wire::ValidationError> for V2TransportError {
     fn from(error: wire::ValidationError) -> Self {
         Self::Wire(error)
     }
 }
-
 /// Payload chunk admitted through structural, identity, and signature checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use]
 pub(crate) struct AuthenticatedPayloadChunk {
     chunk: wire::PayloadChunk,
 }
-
 impl AuthenticatedPayloadChunk {
     /// Borrow the authenticated chunk.
     pub(crate) const fn chunk(&self) -> &wire::PayloadChunk {
         &self.chunk
     }
 }
-
 /// Certified-body request admitted through structural, identity, signature,
 /// and quorum-certificate checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -222,18 +209,15 @@ pub(crate) struct AuthenticatedCertifiedBodyRequest {
     request_hash: HashOf<wire::CertifiedBodyRequest>,
     request: wire::CertifiedBodyRequest,
 }
-
 impl AuthenticatedCertifiedBodyRequest {
     /// Hash of the exact signed request.
     pub(crate) const fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
         self.request_hash
     }
-
     /// Borrow the authenticated request.
     pub(crate) const fn request(&self) -> &wire::CertifiedBodyRequest {
         &self.request
     }
-
     /// Authenticate one response against this exact already-authenticated request.
     ///
     /// This request-scoped entry point lets a dedicated lifecycle owner retain
@@ -253,7 +237,6 @@ impl AuthenticatedCertifiedBodyRequest {
         )
     }
 }
-
 fn authenticate_certified_body_response_for_request(
     context: &wire::HeightContext,
     authenticated_request: &AuthenticatedCertifiedBodyRequest,
@@ -286,21 +269,18 @@ fn authenticate_certified_body_response_for_request(
     }
     Ok(AuthenticatedCertifiedBodyResponse { response })
 }
-
 /// Certified-body response admitted for one outstanding exact request.
 #[derive(Debug, PartialEq, Eq)]
 #[must_use]
 pub(crate) struct AuthenticatedCertifiedBodyResponse {
     response: wire::CertifiedBodyResponse,
 }
-
 impl AuthenticatedCertifiedBodyResponse {
     /// Borrow the authenticated response.
     pub(crate) const fn response(&self) -> &wire::CertifiedBodyResponse {
         &self.response
     }
 }
-
 /// Commit-certificate request admitted through structural, outer-identity,
 /// and requester-signature checks against one exact historical context.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -309,19 +289,16 @@ pub(crate) struct AuthenticatedCommitCertificateRequest {
     request_hash: HashOf<wire::CommitCertificateRequest>,
     request: wire::CommitCertificateRequest,
 }
-
 impl AuthenticatedCommitCertificateRequest {
     /// Hash of the exact signed request.
     pub(crate) const fn request_hash(&self) -> HashOf<wire::CommitCertificateRequest> {
         self.request_hash
     }
-
     /// Borrow the authenticated request.
     pub(crate) const fn request(&self) -> &wire::CommitCertificateRequest {
         &self.request
     }
 }
-
 /// Commit-certificate response authenticated for one outstanding exact request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use]
@@ -329,19 +306,16 @@ pub(crate) struct AuthenticatedCommitCertificateResponse {
     request_hash: HashOf<wire::CommitCertificateRequest>,
     response: wire::CommitCertificateResponse,
 }
-
 impl AuthenticatedCommitCertificateResponse {
     /// Hash of the outstanding request authenticated by this response.
     pub(crate) const fn request_hash(&self) -> HashOf<wire::CommitCertificateRequest> {
         self.request_hash
     }
-
     /// Consume the token and recover the response.
     pub(crate) fn into_inner(self) -> wire::CommitCertificateResponse {
         self.response
     }
 }
-
 /// Authenticate a payload chunk against one exact manifest and outer peer.
 ///
 /// # Errors
@@ -370,7 +344,6 @@ pub(crate) fn authenticate_payload_chunk(
     )?;
     Ok(AuthenticatedPayloadChunk { chunk })
 }
-
 /// Authenticate a certified-body request against the live adapter's frozen
 /// roster authority.
 ///
@@ -397,7 +370,6 @@ pub(crate) fn authenticate_certified_body_request_with_live_adapter(
         .map_err(|error| V2TransportError::CertificateRejected(error.to_string()))?;
     Ok(authenticated_certified_body_request(request))
 }
-
 /// Authenticate a certified-body request against an immutable historical
 /// roster and its exact BLS proofs of possession.
 ///
@@ -419,7 +391,6 @@ pub(crate) fn authenticate_certified_body_request_with_validator_pops(
         .map_err(|error| V2TransportError::CertificateRejected(error.to_string()))?;
     Ok(authenticated_certified_body_request(request))
 }
-
 /// Authenticate a certified-body request against one already verified height.
 ///
 /// # Errors
@@ -438,7 +409,6 @@ pub(crate) fn authenticate_certified_body_request_with_verified_height(
         authenticated_requester,
     )
 }
-
 /// Test-only request mint supporting deliberately synthetic certificate
 /// policies. Production code must use one of the fixed verifier-backed entry
 /// points above.
@@ -458,7 +428,6 @@ where
         .map_err(|error| V2TransportError::CertificateRejected(error.to_string()))?;
     Ok(authenticated_certified_body_request(request))
 }
-
 fn validate_certified_body_request(
     context: &wire::HeightContext,
     request: &wire::CertifiedBodyRequest,
@@ -467,7 +436,6 @@ fn validate_certified_body_request(
     request.validate(context)?;
     authenticate_certified_body_request_identity(request, authenticated_requester)
 }
-
 fn authenticated_certified_body_request(
     request: wire::CertifiedBodyRequest,
 ) -> AuthenticatedCertifiedBodyRequest {
@@ -476,7 +444,6 @@ fn authenticated_certified_body_request(
         request,
     }
 }
-
 /// Authenticate a certified-body requester before loading historical context
 /// or canonical body state from disk.
 pub(crate) fn authenticate_certified_body_request_identity(
@@ -496,7 +463,6 @@ pub(crate) fn authenticate_certified_body_request_identity(
     )?;
     Ok(())
 }
-
 /// Authenticate a commit-certificate request against the exact historical
 /// context named by the requester.
 ///
@@ -515,7 +481,6 @@ pub(crate) fn authenticate_commit_certificate_request(
         request,
     })
 }
-
 /// Authenticate the requester identity before a serving node performs a Kura
 /// lookup for the historical context.
 ///
@@ -546,7 +511,6 @@ pub(crate) fn authenticate_commit_certificate_request_identity(
     )?;
     Ok(())
 }
-
 /// Bounded set of exact certified-body requests awaiting a response.
 ///
 /// Authentication never consumes a request. The serialized executor retires
@@ -563,7 +527,6 @@ pub(crate) struct OutstandingCertifiedBodyRequests {
     response_claims:
         BTreeMap<HashOf<wire::CertifiedBodyRequest>, HashOf<wire::CertifiedBodyResponse>>,
 }
-
 /// Result of acquiring the one volatile response occurrence for an exact
 /// outstanding certified-body request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -573,7 +536,6 @@ pub(crate) enum CertifiedBodyResponseClaimDisposition {
     /// The exact same authenticated response already owns the slot.
     Coalesced,
 }
-
 /// Read-only state of the one volatile response occurrence for an exact
 /// outstanding certified-body request.
 ///
@@ -588,7 +550,6 @@ pub(crate) enum CertifiedBodyResponseClaimPreflight {
     /// The byte-for-byte authenticated response already owns the family.
     ExactRetransmission,
 }
-
 /// Borrow-bound response-family claim prepared before an external commit.
 ///
 /// The exclusive tracker borrow prevents request retirement, cancellation, or
@@ -603,26 +564,22 @@ pub(crate) struct PreparedCertifiedBodyResponseClaim<'a> {
     response_hash: HashOf<wire::CertifiedBodyResponse>,
     preflight: CertifiedBodyResponseClaimPreflight,
 }
-
 impl PreparedCertifiedBodyResponseClaim<'_> {
     /// Return the exact read-only family state frozen by this borrow.
     #[cfg(test)]
     pub(crate) const fn preflight(&self) -> CertifiedBodyResponseClaimPreflight {
         self.preflight
     }
-
     /// Return the exact signed request family frozen by this token.
     #[cfg(test)]
     pub(crate) const fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
         self.request_hash
     }
-
     /// Return the exact authenticated response occurrence frozen by this token.
     #[cfg(test)]
     pub(crate) const fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
         self.response_hash
     }
-
     /// Commit the already validated family claim without another lookup that
     /// can reject. Any violated assertion is an internal fail-stop invariant,
     /// never a retryable post-queue error.
@@ -653,7 +610,6 @@ impl PreparedCertifiedBodyResponseClaim<'_> {
         }
     }
 }
-
 /// Preflighted insertion into both exact certified-request indexes.
 ///
 /// The tracker is serialized by its executor owner. Planning performs every
@@ -666,7 +622,6 @@ pub(crate) struct CertifiedBodyRequestRegistrationPlan {
     identity: RequestIdentity,
     authenticated: AuthenticatedCertifiedBodyRequest,
 }
-
 /// Preflighted removal from both exact certified-request indexes.
 ///
 /// The exact logical identity is retained in the plan so commit needs no
@@ -677,7 +632,6 @@ pub(crate) struct CertifiedBodyRequestRetirementPlan {
     request_hash: HashOf<wire::CertifiedBodyRequest>,
     identity: RequestIdentity,
 }
-
 impl OutstandingCertifiedBodyRequests {
     /// Construct an empty tracker with an explicit non-zero capacity.
     ///
@@ -695,22 +649,18 @@ impl OutstandingCertifiedBodyRequests {
             response_claims: BTreeMap::new(),
         })
     }
-
     /// Number of currently outstanding exact requests.
     pub(crate) fn len(&self) -> usize {
         self.requests.len()
     }
-
     /// Whether the tracker has no outstanding requests.
     pub(crate) fn is_empty(&self) -> bool {
         self.requests.is_empty()
     }
-
     /// Whether one exact request hash is currently outstanding.
     pub(crate) fn contains(&self, hash: HashOf<wire::CertifiedBodyRequest>) -> bool {
         self.requests.contains_key(&hash)
     }
-
     /// Whether the ordinary tracker already owns the logical identity of one
     /// separately authenticated request.
     ///
@@ -725,7 +675,6 @@ impl OutstandingCertifiedBodyRequests {
         self.identities
             .contains_key(&RequestIdentity::from(authenticated.request()))
     }
-
     /// Validate the complete request, logical-identity, and response-claim cut.
     pub(crate) fn validate_exact_indexes(&self) -> bool {
         self.capacity != 0
@@ -752,19 +701,16 @@ impl OutstandingCertifiedBodyRequests {
                 .keys()
                 .all(|request_hash| self.requests.contains_key(request_hash))
     }
-
     /// Exact sorted set of outstanding signed-request hashes.
     #[cfg(test)]
     pub(crate) fn hashes(&self) -> BTreeSet<HashOf<wire::CertifiedBodyRequest>> {
         self.requests.keys().copied().collect()
     }
-
     /// Number of volatile authenticated response occurrences currently claimed.
     #[cfg(test)]
     pub(crate) fn response_claim_count(&self) -> usize {
         self.response_claims.len()
     }
-
     /// Exact response occurrence currently owning one request family.
     pub(crate) fn response_claim_hash(
         &self,
@@ -772,7 +718,6 @@ impl OutstandingCertifiedBodyRequests {
     ) -> Option<HashOf<wire::CertifiedBodyResponse>> {
         self.response_claims.get(&request_hash).copied()
     }
-
     /// Validate one registration without changing either bounded index.
     pub(crate) fn plan_registration(
         &self,
@@ -800,7 +745,6 @@ impl OutstandingCertifiedBodyRequests {
             authenticated,
         })
     }
-
     /// Install a previously validated exact registration.
     ///
     /// The serialized tracker owner must not mutate either index between
@@ -812,7 +756,6 @@ impl OutstandingCertifiedBodyRequests {
         self.requests.insert(plan.incoming, plan.authenticated);
         self.identities.insert(plan.identity, plan.incoming);
     }
-
     /// Validate exact removal from both bounded indexes without changing them.
     pub(crate) fn plan_retirement(
         &self,
@@ -832,7 +775,6 @@ impl OutstandingCertifiedBodyRequests {
             identity,
         })
     }
-
     /// Remove one previously preflighted request from both indexes.
     ///
     /// This is structurally infallible because the serialized executor does
@@ -844,7 +786,6 @@ impl OutstandingCertifiedBodyRequests {
         self.identities.remove(&plan.identity);
         self.response_claims.remove(&plan.request_hash);
     }
-
     /// Register an authenticated request without eviction.
     ///
     /// Exact repeats and logically conflicting reissues are distinguished from
@@ -862,7 +803,6 @@ impl OutstandingCertifiedBodyRequests {
         self.commit_registration(plan);
         Ok(())
     }
-
     /// Cancel one exact outstanding request and release its logical identity.
     ///
     /// View changes and locally recovered bodies can make a fetch unnecessary.
@@ -877,7 +817,6 @@ impl OutstandingCertifiedBodyRequests {
         self.commit_retirement(plan);
         true
     }
-
     /// Complete one exact request after its authenticated body entered the
     /// reducer queue.
     #[cfg(test)]
@@ -888,7 +827,6 @@ impl OutstandingCertifiedBodyRequests {
         self.commit_retirement(plan);
         true
     }
-
     /// Authenticate a response for an outstanding exact request without
     /// consuming the request.
     ///
@@ -915,7 +853,6 @@ impl OutstandingCertifiedBodyRequests {
             .ok_or(V2TransportError::UnsolicitedResponse(request_hash))?;
         authenticated_request.authenticate_response(context, response, authenticated_responder)
     }
-
     /// Check the one-response family without acquiring or replacing it.
     ///
     /// A vacant family and an exact retransmission remain eligible for the
@@ -944,7 +881,6 @@ impl OutstandingCertifiedBodyRequests {
             None => Ok(CertifiedBodyResponseClaimPreflight::Vacant),
         }
     }
-
     /// Freeze one authenticated response-family claim without changing it.
     ///
     /// The returned token owns the tracker's exclusive borrow. No safe caller
@@ -968,7 +904,6 @@ impl OutstandingCertifiedBodyRequests {
             preflight,
         })
     }
-
     /// Claim the one physical response occurrence for a fully authenticated
     /// outstanding request.
     ///
@@ -986,7 +921,6 @@ impl OutstandingCertifiedBodyRequests {
             .commit())
     }
 }
-
 /// Bounded exact-request tracker for CommitQC discovery.
 ///
 /// Responses are authenticated without consuming their request. The serialized
@@ -999,7 +933,6 @@ pub(crate) struct OutstandingCommitCertificateRequests {
         BTreeMap<HashOf<wire::CommitCertificateRequest>, AuthenticatedCommitCertificateRequest>,
     identities: BTreeMap<CommitCertificateRequestIdentity, HashOf<wire::CommitCertificateRequest>>,
 }
-
 impl OutstandingCommitCertificateRequests {
     /// Construct an empty bounded tracker.
     pub(crate) fn new(capacity: usize) -> Result<Self, V2TransportError> {
@@ -1012,18 +945,15 @@ impl OutstandingCommitCertificateRequests {
             identities: BTreeMap::new(),
         })
     }
-
     /// Number of outstanding requests.
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.requests.len()
     }
-
     /// Whether the exact request remains outstanding.
     pub(crate) fn contains(&self, request_hash: HashOf<wire::CommitCertificateRequest>) -> bool {
         self.requests.contains_key(&request_hash)
     }
-
     /// Borrow one exact outstanding request for deterministic retransmission.
     pub(crate) fn request(
         &self,
@@ -1033,7 +963,6 @@ impl OutstandingCommitCertificateRequests {
             .get(&request_hash)
             .map(AuthenticatedCommitCertificateRequest::request)
     }
-
     /// Register one fully authenticated signed request without eviction.
     pub(crate) fn register(
         &mut self,
@@ -1061,7 +990,6 @@ impl OutstandingCommitCertificateRequests {
         self.identities.insert(identity, incoming);
         Ok(())
     }
-
     /// Authenticate a response without consuming the outstanding request.
     ///
     /// Aggregate CommitQC authentication deliberately remains in the ordinary
@@ -1095,7 +1023,6 @@ impl OutstandingCommitCertificateRequests {
             response,
         })
     }
-
     /// Consume a request only after its certificate entered the reducer queue.
     pub(crate) fn complete(
         &mut self,
@@ -1110,7 +1037,6 @@ impl OutstandingCommitCertificateRequests {
         true
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct CommitCertificateRequestIdentity {
     protocol_version: u16,
@@ -1118,7 +1044,6 @@ struct CommitCertificateRequestIdentity {
     height: wire::Height,
     requester: PeerId,
 }
-
 impl From<&wire::CommitCertificateRequest> for CommitCertificateRequestIdentity {
     fn from(request: &wire::CommitCertificateRequest) -> Self {
         Self {
@@ -1129,14 +1054,12 @@ impl From<&wire::CommitCertificateRequest> for CommitCertificateRequestIdentity 
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct RequestIdentity {
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
     requester: PeerId,
 }
-
 impl From<&wire::CertifiedBodyRequest> for RequestIdentity {
     fn from(request: &wire::CertifiedBodyRequest) -> Self {
         Self {
@@ -1146,7 +1069,6 @@ impl From<&wire::CertifiedBodyRequest> for RequestIdentity {
         }
     }
 }
-
 fn roster_peer(
     context: &wire::HeightContext,
     index: wire::ValidatorIndex,
@@ -1158,7 +1080,6 @@ fn roster_peer(
         .map(|entry| &entry.validator)
         .ok_or_else(|| wire::ValidationError::SignerOutOfRange.into())
 }
-
 fn bind_outer_identity(
     kind: TransportIdentityKind,
     claimed: &PeerId,
@@ -1173,7 +1094,6 @@ fn bind_outer_identity(
     }
     Ok(())
 }
-
 fn verify_signature(
     kind: TransportSignatureKind,
     signer: &PeerId,
@@ -1193,26 +1113,20 @@ fn verify_signature(
             reason: error.to_string(),
         })
 }
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::NetworkId;
     use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
     use tempfile::TempDir;
-
     use crate::sumeragi::{v2_body_store::V2BodyStore, v2_chunks::encode_payload};
-
     use super::*;
-
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),
         ))
     }
-
     struct Fixture {
         context: wire::HeightContext,
         validators: Vec<KeyPair>,
@@ -1221,7 +1135,6 @@ mod tests {
         manifest: wire::PayloadManifest,
         chunks: Vec<Vec<u8>>,
     }
-
     impl Fixture {
         fn new() -> Self {
             let mut validators = (1_u8..=4)
@@ -1307,11 +1220,9 @@ mod tests {
                 chunks,
             }
         }
-
         fn peer(key: &KeyPair) -> PeerId {
             PeerId::new(key.public_key().clone())
         }
-
         fn signed_chunk(&self, sender: wire::ValidatorIndex) -> wire::PayloadChunk {
             let mut chunk = wire::PayloadChunk {
                 manifest_hash: HashOf::new(&self.manifest),
@@ -1329,7 +1240,6 @@ mod tests {
                 .to_vec();
             chunk
         }
-
         fn signed_request(&self) -> wire::CertifiedBodyRequest {
             let mut request = wire::CertifiedBodyRequest {
                 round: self.manifest.round,
@@ -1359,7 +1269,6 @@ mod tests {
                     .to_vec();
             request
         }
-
         fn signed_response(
             &self,
             request: &wire::CertifiedBodyRequest,
@@ -1379,7 +1288,6 @@ mod tests {
                     .to_vec();
             response
         }
-
         fn authenticate_request(
             &self,
             request: wire::CertifiedBodyRequest,
@@ -1392,7 +1300,6 @@ mod tests {
             )
         }
     }
-
     #[test]
     fn payload_chunk_binds_exact_manifest_outer_sender_and_signature() {
         let fixture = Fixture::new();
@@ -1402,7 +1309,6 @@ mod tests {
             authenticate_payload_chunk(&fixture.context, &fixture.manifest, chunk.clone(), &sender)
                 .expect("valid chunk");
         assert_eq!(authenticated.chunk(), &chunk);
-
         let spoof = Fixture::peer(&fixture.validators[1]);
         assert!(matches!(
             authenticate_payload_chunk(&fixture.context, &fixture.manifest, chunk.clone(), &spoof),
@@ -1411,7 +1317,6 @@ mod tests {
                 ..
             })
         ));
-
         let mut wrong_signature = chunk.clone();
         wrong_signature.signature = Signature::new(
             fixture.validators[1].private_key(),
@@ -1433,7 +1338,6 @@ mod tests {
                 ..
             })
         ));
-
         let mut other_manifest = fixture.manifest.clone();
         other_manifest.subject.block_hash =
             HashOf::from_untyped_unchecked(Hash::new(b"other transport block"));
@@ -1444,7 +1348,6 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn request_binds_outer_requester_signature_and_qc_verifier() {
         let fixture = Fixture::new();
@@ -1465,7 +1368,6 @@ mod tests {
         .expect("valid request");
         assert!(verifier_called);
         assert_eq!(authenticated.request(), &request);
-
         let spoof = Fixture::peer(&fixture.validators[0]);
         assert!(matches!(
             authenticate_certified_body_request(
@@ -1481,7 +1383,6 @@ mod tests {
                 ..
             })
         ));
-
         let mut wrong_signature = request.clone();
         wrong_signature.signature = Signature::new(
             fixture.validators[0].private_key(),
@@ -1503,7 +1404,6 @@ mod tests {
                 ..
             })
         ));
-
         assert_eq!(
             authenticate_certified_body_request(
                 &fixture.context,
@@ -1516,7 +1416,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn reproposal_commit_qc_authenticates_its_exact_same_round_body() {
         let fixture = Fixture::new();
@@ -1535,7 +1434,6 @@ mod tests {
         )
         .payload()
         .to_vec();
-
         let authenticated = fixture
             .authenticate_request(request.clone())
             .expect("reproposal CommitQC authorizes its exact same-round body");
@@ -1566,7 +1464,6 @@ mod tests {
                 &Fixture::peer(&fixture.validators[0]),
             )
             .expect("authenticate exact reproposal response");
-
         let mut body_after_finality = request;
         body_after_finality.round.view = body_after_finality
             .certificate
@@ -1587,7 +1484,6 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn response_authentication_never_consumes_before_explicit_completion() {
         let fixture = Fixture::new();
@@ -1601,7 +1497,6 @@ mod tests {
                     .expect("request"),
             )
             .expect("register request");
-
         let valid = fixture.signed_response(&request, 0);
         let valid_sender = Fixture::peer(&fixture.validators[0]);
         let spoof = Fixture::peer(&fixture.validators[1]);
@@ -1613,7 +1508,6 @@ mod tests {
             })
         ));
         assert!(tracker.contains(request_hash));
-
         let mut wrong_request = valid.clone();
         wrong_request.request_hash = HashOf::from_untyped_unchecked(Hash::new(b"not outstanding"));
         assert!(matches!(
@@ -1621,7 +1515,6 @@ mod tests {
             Err(V2TransportError::UnsolicitedResponse(_))
         ));
         assert!(tracker.contains(request_hash));
-
         let mut wrong_signature = valid.clone();
         wrong_signature.signature = Signature::new(
             fixture.validators[1].private_key(),
@@ -1637,7 +1530,6 @@ mod tests {
             })
         ));
         assert!(tracker.contains(request_hash));
-
         let mut tampered = valid.clone();
         tampered.body.push(0);
         assert!(matches!(
@@ -1647,7 +1539,6 @@ mod tests {
             ))
         ));
         assert!(tracker.contains(request_hash));
-
         let mut tampered_manifest = valid.clone();
         tampered_manifest.manifest.chunk_root = Hash::new(b"tampered chunk root");
         assert!(matches!(
@@ -1657,7 +1548,6 @@ mod tests {
             ))
         ));
         assert!(tracker.contains(request_hash));
-
         let archive_response = fixture.signed_response(&request, 3);
         let archive_sender = Fixture::peer(&fixture.validators[3]);
         let authenticated_archive = tracker
@@ -1684,7 +1574,6 @@ mod tests {
             tracker.response_claims.is_empty(),
             "authentication alone cannot pin the occurrence slot"
         );
-
         let admitted = tracker
             .authenticate_response(&fixture.context, valid.clone(), &valid_sender)
             .expect("valid certified response");
@@ -1721,7 +1610,6 @@ mod tests {
             }) if request == request_hash
         ));
         assert_eq!(tracker.response_claims.len(), 1);
-
         assert!(tracker.complete(request_hash));
         assert!(tracker.is_empty());
         assert!(tracker.response_claims.is_empty());
@@ -1731,7 +1619,6 @@ mod tests {
             Err(V2TransportError::UnsolicitedResponse(request_hash))
         );
     }
-
     #[test]
     fn authenticated_certified_fetch_body_is_durable_and_exactly_bound() {
         let fixture = Fixture::new();
@@ -1756,7 +1643,6 @@ mod tests {
                 &Fixture::peer(&fixture.validators[0]),
             )
             .expect("authenticate durable-body response");
-
         let directory = TempDir::new().expect("temporary durable-body directory");
         let mut body_store = V2BodyStore::open(directory.path(), fixture.context.clone())
             .expect("open durable-body store");
@@ -1769,12 +1655,10 @@ mod tests {
         assert_eq!(receipt.durable_body().round(), fixture.manifest.round);
         assert_eq!(receipt.durable_body().subject(), fixture.manifest.subject);
         assert_eq!(receipt.durable_body().manifest_hash(), manifest_hash);
-
         let repeated = body_store
             .persist_authenticated_certified_fetch_response(&authenticated)
             .expect("exact response repeat is idempotent");
         assert_eq!(repeated, receipt);
-
         // A second legitimate responder changes the authenticated transport
         // occurrence, but cannot replace the hash-bound body-store frame. A
         // genuinely different body under this same subject cannot pass
@@ -1795,7 +1679,6 @@ mod tests {
         assert_eq!(other_receipt.response_hash(), other_response_hash);
         assert_ne!(other_receipt.response_hash(), receipt.response_hash());
         assert_eq!(other_receipt.durable_body(), receipt.durable_body());
-
         let durable_body = receipt.durable_body().clone();
         drop(body_store);
         let reopened = V2BodyStore::open(directory.path(), fixture.context.clone())
@@ -1811,7 +1694,6 @@ mod tests {
             fixture.body
         );
     }
-
     #[test]
     fn prepared_response_claim_is_drop_safe_and_commits_without_repreflight() {
         let fixture = Fixture::new();
@@ -1832,7 +1714,6 @@ mod tests {
         let authenticated = tracker
             .authenticate_response(&fixture.context, response, &responder)
             .expect("authenticate prepared-claim response");
-
         let claims_before = tracker.response_claims.clone();
         let prepared = tracker
             .prepare_authenticated_response_claim(&authenticated)
@@ -1845,7 +1726,6 @@ mod tests {
         assert_eq!(prepared.response_hash(), response_hash);
         drop(prepared);
         assert_eq!(tracker.response_claims, claims_before);
-
         let disposition = tracker
             .prepare_authenticated_response_claim(&authenticated)
             .expect("unchanged vacant family prepares again")
@@ -1855,7 +1735,6 @@ mod tests {
             tracker.response_claim_hash(request_hash),
             Some(response_hash)
         );
-
         let retransmission = tracker
             .prepare_authenticated_response_claim(&authenticated)
             .expect("exact claimed response prepares as a retransmission");
@@ -1872,7 +1751,6 @@ mod tests {
             tracker.response_claim_hash(request_hash),
             Some(response_hash)
         );
-
         let identity = RequestIdentity::from(tracker.requests[&request_hash].request());
         let removed = tracker
             .identities
@@ -1887,7 +1765,6 @@ mod tests {
         tracker.identities.insert(identity, removed);
         assert!(tracker.validate_exact_indexes());
     }
-
     #[test]
     fn response_claim_is_bounded_by_request_and_reopens_only_after_restart() {
         let fixture = Fixture::new();
@@ -1914,7 +1791,6 @@ mod tests {
         );
         assert_eq!(first.len(), 1);
         assert_eq!(first.response_claims.len(), 1);
-
         let competing_response = fixture.signed_response(&request, 1);
         let competing_sender = Fixture::peer(&fixture.validators[1]);
         let competing_authenticated = first
@@ -1931,7 +1807,6 @@ mod tests {
                 ..
             }) if request == request_hash
         ));
-
         // Same-height recovery reconstructs the outstanding logical request,
         // but the unconsumed physical response occurrence is intentionally
         // volatile. A different certified responder may acquire it anew.
@@ -1957,7 +1832,6 @@ mod tests {
             Err(V2TransportError::UnsolicitedResponse(hash)) if hash == request_hash
         ));
     }
-
     #[test]
     fn certified_request_index_validation_rejects_missing_reverse_and_foreign_claim() {
         let fixture = Fixture::new();
@@ -1971,7 +1845,6 @@ mod tests {
             .register(authenticated)
             .expect("register exact request");
         assert!(tracker.validate_exact_indexes());
-
         let identity = RequestIdentity::from(&request);
         let request_hash = tracker
             .identities
@@ -1980,7 +1853,6 @@ mod tests {
         assert!(!tracker.validate_exact_indexes());
         tracker.identities.insert(identity, request_hash);
         assert!(tracker.validate_exact_indexes());
-
         let foreign_request =
             HashOf::from_untyped_unchecked(Hash::new(b"foreign request response-claim index"));
         let foreign_response =
@@ -1992,7 +1864,6 @@ mod tests {
         tracker.response_claims.remove(&foreign_request);
         assert!(tracker.validate_exact_indexes());
     }
-
     #[test]
     fn unsolicited_response_is_rejected_without_state() {
         let fixture = Fixture::new();
@@ -2005,7 +1876,6 @@ mod tests {
             Err(V2TransportError::UnsolicitedResponse(HashOf::new(&request)))
         );
     }
-
     #[test]
     fn cancellation_releases_both_capacity_and_logical_identity() {
         let fixture = Fixture::new();
@@ -2016,7 +1886,6 @@ mod tests {
             .expect("authenticate request");
         let mut tracker = OutstandingCertifiedBodyRequests::new(1).expect("positive capacity");
         tracker.register(authenticated).expect("register request");
-
         assert!(tracker.cancel(request_hash));
         assert!(tracker.is_empty());
         assert!(!tracker.cancel(request_hash));
@@ -2028,14 +1897,12 @@ mod tests {
             )
             .expect("cancelled logical identity can be reissued");
     }
-
     #[test]
     fn tracker_distinguishes_duplicates_conflicts_and_capacity() {
         assert!(matches!(
             OutstandingCertifiedBodyRequests::new(0),
             Err(V2TransportError::ZeroCapacity)
         ));
-
         let fixture = Fixture::new();
         let request = fixture.signed_request();
         let request_hash = HashOf::new(&request);
@@ -2056,7 +1923,6 @@ mod tests {
             ),
             Err(V2TransportError::DuplicateRequest(request_hash))
         );
-
         let mut conflicting = request.clone();
         conflicting.certificate.aggregate_signature = vec![0x5A; 48];
         conflicting.signature = Signature::new(
@@ -2077,7 +1943,6 @@ mod tests {
                 incoming: conflicting_hash,
             })
         );
-
         let mut second = request;
         second.round.view += 1;
         second.certificate.round = second.round;
@@ -2096,7 +1961,6 @@ mod tests {
         );
         assert_eq!(tracker.len(), 1);
     }
-
     #[test]
     fn registration_plan_is_exact_atomic_and_requires_one_commit() {
         let fixture = Fixture::new();
@@ -2108,26 +1972,22 @@ mod tests {
         let mut tracker = OutstandingCertifiedBodyRequests::new(2).expect("positive capacity");
         let empty_hashes = tracker.hashes();
         let empty_identities = tracker.identities.clone();
-
         let plan = tracker
             .plan_registration(authenticated.clone())
             .expect("plan exact registration");
         assert_eq!(tracker.hashes(), empty_hashes);
         assert_eq!(tracker.identities, empty_identities);
-
         tracker.commit_registration(plan);
         assert_eq!(tracker.hashes(), BTreeSet::from([request_hash]));
         assert_eq!(tracker.identities.len(), 1);
         let committed_hashes = tracker.hashes();
         let committed_identities = tracker.identities.clone();
-
         assert_eq!(
             tracker.plan_registration(authenticated),
             Err(V2TransportError::DuplicateRequest(request_hash))
         );
         assert_eq!(tracker.hashes(), committed_hashes);
         assert_eq!(tracker.identities, committed_identities);
-
         let mut conflicting = request.clone();
         conflicting.certificate.aggregate_signature = vec![0x5A; 48];
         conflicting.signature = Signature::new(
@@ -2150,7 +2010,6 @@ mod tests {
         );
         assert_eq!(tracker.hashes(), committed_hashes);
         assert_eq!(tracker.identities, committed_identities);
-
         let mut capacity_tracker =
             OutstandingCertifiedBodyRequests::new(1).expect("positive capacity");
         capacity_tracker

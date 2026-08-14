@@ -1,5 +1,4 @@
 //! Consolidated integration-test harness for data-model derives.
-
 #[path = "event_set.rs"]
 mod event_set;
 #[path = "has_origin.rs"]

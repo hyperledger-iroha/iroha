@@ -47,6 +47,8 @@ exec "${SCRIPT_DIR}/check_mcp_rollout.real.sh" \
   --require-all-validators \
   --expected-git-sha 490dacc287f00d490dacc287f00d490dacc287f0 \
   --expected-dpn-validator-release-commit dddddddddddddddddddddddddddddddddddddddd \
+  --operator-network-id hash:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#0000 \
+  --operator-private-key-file "${SCRIPT_DIR}/../../../state/operator-private-key" \
   ${onboarding_token_args[@]+"${onboarding_token_args[@]}"} \
   "$@"
 SH
@@ -54,6 +56,17 @@ SH
   printf '%s\n' '0123456789abcdef0123456789ABCDEF' \
     >"${root}/state/onboarding-token"
   chmod 600 "${root}/state/onboarding-token"
+  printf '%s\n' 'test-only-runtime-operator-private-key' \
+    >"${root}/state/operator-private-key"
+  chmod 600 "${root}/state/operator-private-key"
+
+  cat >"${root}/scripts/operator_http_headers.py" <<'PY'
+#!/usr/bin/env python3
+print("X-Iroha-Operator-Public-Key: ed0120" + "11" * 32)
+print("X-Iroha-Operator-Timestamp-Ms: 1800000000000")
+print("X-Iroha-Operator-Nonce: " + "22" * 16)
+print("X-Iroha-Operator-Signature: " + "33" * 64)
+PY
 
   printf '%s\n' 'Ready' >"${root}/state/readyz.txt"
 
@@ -164,6 +177,7 @@ connect_timeout=""
 max_time=""
 headers=()
 accept_header=""
+operator_header_names=" "
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -221,7 +235,21 @@ for header in "${headers[@]+"${headers[@]}"}"; do
     echo "rollout must not send the retired x-iroha-api-version header" >&2
     exit 92
   fi
+  operator_header_names+="${header_name} "
 done
+
+if [[ "$url" == */v1/sumeragi/status ]]; then
+  for required_header in \
+    x-iroha-operator-public-key \
+    x-iroha-operator-timestamp-ms \
+    x-iroha-operator-nonce \
+    x-iroha-operator-signature; do
+    if [[ "$operator_header_names" != *" ${required_header} "* ]]; then
+      echo "operator-protected status omitted ${required_header}" >&2
+      exit 94
+    fi
+  done
+fi
 
 if [[ "$url" == */health || "$url" == */readyz ]]; then
   if [[ "$accept_header" != "text/plain" ]]; then
@@ -710,11 +738,11 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/transactions/
     body='{"code":"route_not_found","message":"route not found"}'
   fi
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/musubi/queries/ordered-prefix" ]]; then
-  status="400"
-  body='{"error":"missing typed request"}'
+  status="401"
+  body='{"code":"canonical_authentication_required","message":"canonical account request authentication is required"}'
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/musubi/instructions/release-yank-set" ]]; then
-  status="400"
-  body='{"error":"missing typed instruction"}'
+  status="401"
+  body='{"code":"canonical_authentication_required","message":"canonical account request authentication is required"}'
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/contracts/deploy" ]]; then
   status="404"
   body='{"code":"route_not_found","message":"route not found"}'

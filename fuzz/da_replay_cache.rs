@@ -1,13 +1,9 @@
 #![no_main]
-
 use arbitrary::Arbitrary;
-use iroha_core::da::{
-    LaneEpoch, ReplayCache, ReplayCacheConfig, ReplayFingerprint, ReplayKey,
-};
+use iroha_core::da::{LaneEpoch, ReplayCache, ReplayCacheConfig, ReplayFingerprint, ReplayKey};
 use iroha_data_model::nexus::LaneId;
 use libfuzzer_sys::fuzz_target;
 use std::time::{Duration, Instant};
-
 #[derive(Debug, Arbitrary)]
 enum Action {
     Insert {
@@ -19,18 +15,15 @@ enum Action {
         advance_micros: u32,
     },
 }
-
 #[derive(Debug, Arbitrary)]
 struct Step {
     lane: u32,
     epoch: u64,
     action: Action,
 }
-
 fuzz_target!(|steps: Vec<Step>| {
     let mut now = Instant::now();
     let cache = ReplayCache::new(ReplayCacheConfig::new());
-
     for step in steps {
         let lane_epoch = LaneEpoch::new(LaneId::new(step.lane), step.epoch);
         match step.action {
@@ -44,11 +37,8 @@ fuzz_target!(|steps: Vec<Step>| {
                 {
                     now = next;
                 }
-                let key = ReplayKey::new(
-                    lane_epoch,
-                    sequence,
-                    ReplayFingerprint::from(fingerprint),
-                );
+                let key =
+                    ReplayKey::new(lane_epoch, sequence, ReplayFingerprint::from(fingerprint));
                 let _ = cache.insert(key, now);
             }
             Action::Clear { advance_micros } => {

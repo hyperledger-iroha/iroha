@@ -4,7 +4,6 @@
 //! validator-set checkpoints. Structural validation and durable hashing do **not** authenticate
 //! the legacy BLS certificate. Live first-release consensus, block sync, and startup recovery must
 //! use Kura's cryptographically verified Sumeragi-v2 finality artifacts instead.
-
 use std::{
     collections::{BTreeMap, btree_map::Entry},
     fs,
@@ -12,7 +11,6 @@ use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
 };
-
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     block::BlockHeader,
@@ -25,14 +23,11 @@ use norito::{
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-
 use crate::sumeragi::{
     consensus::{NPOS_TAG, PERMISSIONED_TAG, Phase},
     stake_snapshot::CommitStakeSnapshot,
 };
-
 static COMMIT_ROSTER_PUBLICATION_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
-
 /// Exact durable publication shape for truncating one commit-roster journal.
 ///
 /// The projection is intentionally serializable because canonical-prune recovery
@@ -55,7 +50,6 @@ pub(crate) struct CommitRosterJournalPruneProjectionV2 {
     /// Stable pointer growth retained after publication when `current` was absent.
     pub(crate) current_pointer_growth_bytes: u64,
 }
-
 impl CommitRosterJournalPruneProjectionV2 {
     /// Canonical projection for an absent in-memory-only journal.
     #[must_use]
@@ -70,7 +64,6 @@ impl CommitRosterJournalPruneProjectionV2 {
             current_pointer_growth_bytes: 0,
         }
     }
-
     /// Return whether every encoded byte count and identity has canonical shape.
     #[must_use]
     pub(crate) fn is_canonical(self) -> bool {
@@ -99,7 +92,6 @@ impl CommitRosterJournalPruneProjectionV2 {
                         && self.retained_payload_bytes <= CommitRosterJournal::MAX_PAYLOAD_BYTES))
         }
     }
-
     /// Return whether a recovery-time projection is an authorized pre- or post-publication state.
     #[must_use]
     pub(crate) fn authorizes(self, remaining: Self) -> bool {
@@ -122,7 +114,6 @@ impl CommitRosterJournalPruneProjectionV2 {
                 && remaining.retained_payload_bytes == self.retained_payload_bytes
         }
     }
-
     /// Exact additional physical peak for this publication followed by a sidecar rewrite.
     pub(crate) fn allocation_peak_with_sidecar(self, sidecar_peak_bytes: u64) -> Option<u64> {
         if !self.required {
@@ -137,7 +128,6 @@ impl CommitRosterJournalPruneProjectionV2 {
             })
     }
 }
-
 /// Persisted commit-roster journal payload.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct PersistedCommitRosters {
@@ -149,7 +139,6 @@ struct PersistedCommitRosters {
     /// Stored commit roster entries.
     entries: Vec<CommitRosterRecord>,
 }
-
 /// Persisted commit-roster entry.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct CommitRosterRecord {
@@ -170,7 +159,6 @@ struct CommitRosterRecord {
     #[norito(skip_serializing_if = "Option::is_none")]
     stake_snapshot: Option<CommitStakeSnapshot>,
 }
-
 /// Errors returned when loading or persisting commit rosters.
 #[derive(Debug, Error)]
 pub enum CommitRosterJournalError {
@@ -246,7 +234,6 @@ pub enum CommitRosterJournalError {
         reason: &'static str,
     },
 }
-
 /// Structurally validated archival projection of a legacy commit certificate and checkpoint.
 ///
 /// This value is not cryptographic finality authority. Consensus and recovery must use the
@@ -260,7 +247,6 @@ pub struct CommitRosterSnapshot {
     /// Optional stake snapshot aligned to the validator set.
     pub stake_snapshot: Option<CommitStakeSnapshot>,
 }
-
 /// Journal that records commit rosters derived from committed blocks.
 #[derive(Debug, Clone)]
 pub struct CommitRosterJournal {
@@ -278,11 +264,9 @@ pub struct CommitRosterJournal {
     #[cfg(test)]
     replace_current_before_gc_once: bool,
 }
-
 impl CommitRosterJournal {
     /// Extra non-genesis row retained for an authenticated successor before Kura commits it.
     const AUTHENTICATED_PRE_KURA_SUCCESSOR_RESERVE: usize = 1;
-
     /// Directory used for content-addressed commit-roster generations.
     pub const JOURNAL_FILE: &'static str = "commit-rosters";
     const LEGACY_JOURNAL_FILE: &'static str = "commit-rosters.norito";
@@ -293,7 +277,6 @@ impl CommitRosterJournal {
     const MAX_GENERATIONS: usize = 4096;
     const POINTER_BYTES: u64 = 65;
     const JOURNAL_VERSION: u32 = 2;
-
     /// Build the canonical journal path under the provided root.
     #[must_use]
     pub fn journal_path(root: &Path) -> PathBuf {
@@ -303,7 +286,6 @@ impl CommitRosterJournal {
             root.join(Self::JOURNAL_FILE)
         }
     }
-
     /// Construct a fresh journal with no entries.
     #[must_use]
     pub fn new(path: impl Into<PathBuf>, retention: NonZeroUsize) -> Self {
@@ -323,42 +305,35 @@ impl CommitRosterJournal {
             replace_current_before_gc_once: false,
         }
     }
-
     /// Inject one test-only persistence failure after the atomic rename and before directory sync.
     #[cfg(test)]
     pub(crate) fn fail_after_rename_once_for_tests(&mut self) {
         self.fail_after_rename_once = true;
     }
-
     /// Inject one test-only failure at the atomic pointer-persist boundary.
     #[cfg(test)]
     fn fail_pointer_persist_once_for_tests(&mut self) {
         self.fail_pointer_persist_once = true;
     }
-
     /// Inject one test-only failure after the generation temp is durable.
     #[cfg(test)]
     fn fail_generation_persist_once_for_tests(&mut self) {
         self.fail_generation_persist_once = true;
     }
-
     /// Inject one test-only current-pointer substitution immediately before GC validation.
     #[cfg(test)]
     fn replace_current_before_gc_once_for_tests(&mut self) {
         self.replace_current_before_gc_once = true;
     }
-
     /// Fence this process from using a journal whose durable namespace is ambiguous.
     pub(crate) fn mark_storage_unknown(&mut self) {
         self.storage_unknown = true;
     }
-
     /// Return whether journal access requires a process restart to recover durable state.
     #[must_use]
     pub(crate) fn storage_is_unknown(&self) -> bool {
         self.storage_unknown
     }
-
     /// Load a journal from disk, accepting only exact duplicate rows for one block subject.
     ///
     /// Missing files are treated as empty journals. Unsupported versions surface an error.
@@ -540,14 +515,12 @@ impl CommitRosterJournal {
         }
         let persisted = Self::decode_canonical_payload(&generation_path, &bytes)?;
         let read_path = generation_path;
-
         let PersistedCommitRosters {
             version: _,
             stake_snapshots,
             entries,
         } = persisted;
         let persisted_entry_count = entries.len();
-
         let mut decoded_entries = BTreeMap::new();
         for entry in entries {
             let snapshot = Self::validate_record(&read_path, entry, &stake_snapshots)?;
@@ -569,16 +542,13 @@ impl CommitRosterJournal {
                 }
             }
         }
-
         journal.entries = decoded_entries;
-
         // Duplicate rows and retention can make memory differ from disk. In that case the next
         // authorized archival durability boundary also repairs the journal payload.
         journal.dirty = journal.entries.len() != persisted_entry_count;
         journal.enforce_retention();
         Ok(journal)
     }
-
     fn decode_canonical_payload(
         path: &Path,
         bytes: &[u8],
@@ -603,7 +573,6 @@ impl CommitRosterJournal {
         }
         Ok(persisted)
     }
-
     fn read_current_digest(path: &Path) -> Result<String, CommitRosterJournalError> {
         let bytes =
             read_bound_roster_file(path, 65).map_err(|source| CommitRosterJournalError::Read {
@@ -633,28 +602,23 @@ impl CommitRosterJournal {
         }
         Ok(digest.to_owned())
     }
-
     fn digest_bytes(digest: &str) -> Option<[u8; 32]> {
         let bytes = hex::decode(digest).ok()?;
         bytes.try_into().ok()
     }
-
     fn digest_text(digest: [u8; 32]) -> String {
         hex::encode(digest)
     }
-
     fn generation_path_for_digest(&self, digest: [u8; 32]) -> PathBuf {
         self.path
             .join(Self::GENERATIONS_DIR)
             .join(format!("{}.norito", Self::digest_text(digest)))
     }
-
     fn generation_temp_path_for_digest(&self, digest: [u8; 32]) -> PathBuf {
         self.path
             .join(Self::GENERATIONS_DIR)
             .join(format!("{}.norito.tmp", Self::digest_text(digest)))
     }
-
     fn current_digest_bytes(&self) -> Result<Option<[u8; 32]>, CommitRosterJournalError> {
         let path = self.path.join(Self::CURRENT_FILE);
         match fs::symlink_metadata(&path) {
@@ -671,7 +635,6 @@ impl CommitRosterJournal {
             Err(source) => Err(CommitRosterJournalError::Read { path, source }),
         }
     }
-
     fn reconcile_publication_residues(path: &Path) -> Result<(), CommitRosterJournalError> {
         let root_identity = direct_roster_directory_identity(path).map_err(|source| {
             CommitRosterJournalError::Read {
@@ -829,7 +792,6 @@ impl CommitRosterJournal {
                 source,
             })?;
         }
-
         let current_temp = path.join(Self::CURRENT_TEMP_FILE);
         match fs::symlink_metadata(&current_temp) {
             Ok(_) => {
@@ -916,7 +878,6 @@ impl CommitRosterJournal {
             }
         })
     }
-
     fn validate_publication_namespace_is_clean(&self) -> Result<(), CommitRosterJournalError> {
         let root = match fs::symlink_metadata(&self.path) {
             Ok(metadata) => metadata,
@@ -1009,7 +970,6 @@ impl CommitRosterJournal {
         }
         Ok(())
     }
-
     fn gc_generations(
         &self,
         current_digest: &str,
@@ -1137,7 +1097,6 @@ impl CommitRosterJournal {
             source,
         })
     }
-
     fn validate_record(
         path: &Path,
         entry: CommitRosterRecord,
@@ -1278,7 +1237,6 @@ impl CommitRosterJournal {
             stake_snapshot,
         })
     }
-
     /// Insert an exact commit-roster tuple without replacing a prepared tuple for the same block.
     ///
     /// Returns `true` when the tuple was inserted or was an exact retry. Returns `false` when the
@@ -1311,14 +1269,12 @@ impl CommitRosterJournal {
         self.enforce_retention();
         accepted
     }
-
     /// Return whether a test journal has changes not yet acknowledged by persistence.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn needs_persistence(&self) -> bool {
         self.dirty
     }
-
     fn canonical_payload_bytes(&mut self) -> Result<Vec<u8>, CommitRosterJournalError> {
         // Ensure the persisted payload honours the configured retention window.
         self.enforce_retention();
@@ -1365,7 +1321,6 @@ impl CommitRosterJournal {
         }
         Ok(bytes)
     }
-
     /// Project an exact truncate publication without mutating journal memory or storage.
     pub(crate) fn project_truncate_to_height(
         &self,
@@ -1411,7 +1366,6 @@ impl CommitRosterJournal {
             }
             return Ok(projection);
         }
-
         let mut retained = self.clone();
         retained
             .entries
@@ -1465,7 +1419,6 @@ impl CommitRosterJournal {
         }
         Ok(projection)
     }
-
     /// Persist the journal to disk.
     ///
     /// # Errors
@@ -1477,7 +1430,6 @@ impl CommitRosterJournal {
     pub fn persist(&mut self) -> Result<(), CommitRosterJournalError> {
         self.persist_durable()
     }
-
     fn persist_durable(&mut self) -> Result<(), CommitRosterJournalError> {
         let _publication_guard = COMMIT_ROSTER_PUBLICATION_LOCK.lock();
         if self.storage_unknown {
@@ -1697,7 +1649,6 @@ impl CommitRosterJournal {
             path: generations.clone(),
             source,
         })?;
-
         let current_path = self.path.join(Self::CURRENT_FILE);
         let previous_digest = match fs::symlink_metadata(&current_path) {
             Ok(_) => Some(Self::read_current_digest(&current_path)?),
@@ -1881,7 +1832,6 @@ impl CommitRosterJournal {
         self.dirty = false;
         Ok(())
     }
-
     /// Drop entries above `height` and persist the updated journal.
     ///
     /// # Errors
@@ -1899,7 +1849,6 @@ impl CommitRosterJournal {
         self.dirty = true;
         self.persist()
     }
-
     /// Apply one prune-authorized truncation and require exact durable projection readback.
     pub(crate) fn truncate_to_height_with_projection(
         &mut self,
@@ -1929,7 +1878,6 @@ impl CommitRosterJournal {
         }
         Ok(())
     }
-
     /// Retrieve the structurally validated archival projection for `height`/`block_hash`.
     ///
     /// The returned value is not cryptographic finality authority.
@@ -1941,7 +1889,6 @@ impl CommitRosterJournal {
     ) -> Option<CommitRosterSnapshot> {
         self.entries.get(&(height, block_hash)).cloned()
     }
-
     /// Return whether a test-only archival snapshot satisfies the same structural invariants as a
     /// decoded journal entry.
     ///
@@ -1965,7 +1912,6 @@ impl CommitRosterJournal {
         };
         Self::validate_record(Path::new("commit-roster-sidecar"), record, &stake_snapshots).is_ok()
     }
-
     /// Re-open a test journal and require an exact tuple match.
     ///
     /// An empty path is reserved for in-memory unit-test journals, where no durable artifact
@@ -2006,13 +1952,11 @@ impl CommitRosterJournal {
                 && snapshot.stake_snapshot.as_ref() == stake_snapshot
         })
     }
-
     /// Return all stored snapshots in height/hash order.
     #[must_use]
     pub fn snapshots(&self) -> Vec<CommitRosterSnapshot> {
         self.entries.values().cloned().collect()
     }
-
     /// Return whether the durable journal state contains any entry above `height`.
     #[must_use]
     pub(crate) fn has_entries_above(&self, height: u64) -> bool {
@@ -2021,7 +1965,6 @@ impl CommitRosterJournal {
             .next_back()
             .is_some_and(|(entry_height, _)| *entry_height > height)
     }
-
     #[cfg(test)]
     pub(crate) fn empty_payload_bytes_for_version(version: u32) -> Vec<u8> {
         to_bytes(&PersistedCommitRosters {
@@ -2031,7 +1974,6 @@ impl CommitRosterJournal {
         })
         .expect("encode empty commit-roster test payload")
     }
-
     fn enforce_retention(&mut self) {
         // The configured window counts recent non-genesis *heights*, not rows. Every row at a
         // retained height must survive until restart authentication can detect independently valid
@@ -2061,44 +2003,36 @@ impl CommitRosterJournal {
         self.dirty |= self.entries.len() != before;
     }
 }
-
 #[cfg(unix)]
 type RosterFileIdentity = (u64, u64);
 #[cfg(windows)]
 type RosterFileIdentity = (Option<u32>, Option<u64>);
 #[cfg(not(any(unix, windows)))]
 type RosterFileIdentity = ();
-
 #[cfg(unix)]
 fn roster_file_identity(metadata: &fs::Metadata) -> RosterFileIdentity {
     use std::os::unix::fs::MetadataExt;
     (metadata.dev(), metadata.ino())
 }
-
 #[cfg(windows)]
 fn roster_file_identity(metadata: &fs::Metadata) -> RosterFileIdentity {
     use std::os::windows::fs::MetadataExt;
     (metadata.volume_serial_number(), metadata.file_index())
 }
-
 #[cfg(not(any(unix, windows)))]
 fn roster_file_identity(_metadata: &fs::Metadata) -> RosterFileIdentity {}
-
 #[cfg(unix)]
 const fn roster_file_identity_available(_identity: RosterFileIdentity) -> bool {
     true
 }
-
 #[cfg(windows)]
 const fn roster_file_identity_available(identity: RosterFileIdentity) -> bool {
     identity.0.is_some() && identity.1.is_some()
 }
-
 #[cfg(not(any(unix, windows)))]
 const fn roster_file_identity_available(_identity: RosterFileIdentity) -> bool {
     false
 }
-
 fn roster_file_is_single_link(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -2116,7 +2050,6 @@ fn roster_file_is_single_link(metadata: &fs::Metadata) -> bool {
         false
     }
 }
-
 fn direct_roster_directory_identity(path: &Path) -> io::Result<RosterFileIdentity> {
     let metadata = fs::symlink_metadata(path)?;
     let identity = roster_file_identity(&metadata);
@@ -2131,7 +2064,6 @@ fn direct_roster_directory_identity(path: &Path) -> io::Result<RosterFileIdentit
     }
     Ok(identity)
 }
-
 fn verify_roster_directory_identity(path: &Path, expected: RosterFileIdentity) -> io::Result<()> {
     if direct_roster_directory_identity(path)? != expected {
         return Err(io::Error::new(
@@ -2141,7 +2073,6 @@ fn verify_roster_directory_identity(path: &Path, expected: RosterFileIdentity) -
     }
     Ok(())
 }
-
 fn roster_file_same_object(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     let identity = roster_file_identity(left);
     roster_file_identity_available(identity)
@@ -2150,7 +2081,6 @@ fn roster_file_same_object(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && roster_file_is_single_link(right)
         && left.len() == right.len()
 }
-
 #[cfg(unix)]
 fn roster_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -2163,7 +2093,6 @@ fn roster_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> 
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(windows)]
 fn roster_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
@@ -2175,12 +2104,10 @@ fn roster_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> 
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn roster_file_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 fn read_bound_roster_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
     let path_before = fs::symlink_metadata(path)?;
     if path_before.file_type().is_symlink()
@@ -2237,12 +2164,10 @@ fn read_bound_roster_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-
 fn sync_dir(path: &Path) -> std::io::Result<()> {
     let file = fs::File::open(path)?;
     file.sync_all()
 }
-
 #[cfg(test)]
 mod tests {
     include!("commit_roster_journal/tests.rs");

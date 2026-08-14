@@ -1,11 +1,9 @@
 //! Governance selection state (parliament members + alternates per epoch/term).
-
 use iroha_data_model::{account::AccountId, isi::governance::CouncilDerivationKind};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     derive::{JsonDeserialize, JsonSerialize},
 };
-
 /// Parliament membership for a term/epoch.
 #[derive(
     Clone,
@@ -33,7 +31,6 @@ pub struct ParliamentTerm {
     #[norito(default)]
     pub derived_by: CouncilDerivationKind,
 }
-
 impl ParliamentTerm {
     /// Replace a missing member with the next alternate (if present).
     #[must_use]

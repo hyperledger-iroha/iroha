@@ -8,14 +8,12 @@
 //! Publicly disclosed attributes are removed from the witness matrix and
 //! accumulated in the public offset. This fixed-width zero-column technique
 //! preserves one canonical witness layout for every disclosure bitmap.
-
 use iroha_data_model::privacy::{
     BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternIssuerPolicyV1,
     IrohaBootleLanternAnoncredStatementV1,
 };
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
-
 use super::{
     params::{
         APPLICATION_ROWS_V1, APPLICATION_WITNESS_POLYNOMIALS_V1, RANDOMNESS_NORM_SQUARED_BOUND_V1,
@@ -24,18 +22,15 @@ use super::{
     ring::ApplicationPolynomialV1,
     transcript::{MatrixRoleV1, MatrixSeedV1, expand_application_matrix_v1},
 };
-
 const RANDOMNESS_POLYNOMIALS_V1: usize = 16;
 const TAG_POLYNOMIALS_V1: usize = 8;
 const SIGNATURE_HALF_POLYNOMIALS_V1: usize = 8;
 const ATTRIBUTE_POLYNOMIALS_V1: usize = 8;
-
 const RANDOMNESS_START_V1: usize = 0;
 const TAG_START_V1: usize = RANDOMNESS_START_V1 + RANDOMNESS_POLYNOMIALS_V1;
 const SIGNATURE_ONE_START_V1: usize = TAG_START_V1 + TAG_POLYNOMIALS_V1;
 const SIGNATURE_TWO_START_V1: usize = SIGNATURE_ONE_START_V1 + SIGNATURE_HALF_POLYNOMIALS_V1;
 const ATTRIBUTE_START_V1: usize = SIGNATURE_TWO_START_V1 + SIGNATURE_HALF_POLYNOMIALS_V1;
-
 /// Secret opening of one issued credential.
 ///
 /// Attributes retain their direct 64-bit form; conversion to binary ring
@@ -53,7 +48,6 @@ pub struct BootleLanternPresentationWitnessV1 {
     /// All eight direct credential attributes.
     pub attributes: [[u8; 8]; ATTRIBUTE_POLYNOMIALS_V1],
 }
-
 impl core::fmt::Debug for BootleLanternPresentationWitnessV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -62,7 +56,6 @@ impl core::fmt::Debug for BootleLanternPresentationWitnessV1 {
             .finish()
     }
 }
-
 impl Zeroize for BootleLanternPresentationWitnessV1 {
     fn zeroize(&mut self) {
         self.randomness.zeroize();
@@ -72,18 +65,15 @@ impl Zeroize for BootleLanternPresentationWitnessV1 {
         self.attributes.zeroize();
     }
 }
-
 impl Drop for BootleLanternPresentationWitnessV1 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 /// Canonical secret application witness, zeroized before heap release.
 pub(crate) struct CanonicalSecretWitnessVectorV1 {
     polynomials: Box<[ApplicationPolynomialV1; APPLICATION_WITNESS_POLYNOMIALS_V1]>,
 }
-
 impl CanonicalSecretWitnessVectorV1 {
     fn zero() -> Self {
         Self {
@@ -92,7 +82,6 @@ impl CanonicalSecretWitnessVectorV1 {
             ),
         }
     }
-
     /// Borrow the fixed canonical secret ordering.
     #[must_use]
     pub(crate) fn polynomials(
@@ -101,25 +90,21 @@ impl CanonicalSecretWitnessVectorV1 {
         &self.polynomials
     }
 }
-
 impl core::fmt::Debug for CanonicalSecretWitnessVectorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("CanonicalSecretWitnessVectorV1(<redacted>)")
     }
 }
-
 impl Zeroize for CanonicalSecretWitnessVectorV1 {
     fn zeroize(&mut self) {
         self.polynomials.as_mut().zeroize();
     }
 }
-
 impl Drop for CanonicalSecretWitnessVectorV1 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 /// Canonical public 8-by-48 application relation for one presentation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BootleLanternApplicationRelationV1 {
@@ -128,20 +113,17 @@ pub struct BootleLanternApplicationRelationV1 {
     disclosure_bitmap: u8,
     disclosed_attributes: [Option<[u8; 8]>; ATTRIBUTE_POLYNOMIALS_V1],
 }
-
 impl BootleLanternApplicationRelationV1 {
     /// Fixed row count.
     #[must_use]
     pub const fn rows(&self) -> usize {
         APPLICATION_ROWS_V1
     }
-
     /// Fixed witness-column count.
     #[must_use]
     pub const fn columns(&self) -> usize {
         APPLICATION_WITNESS_POLYNOMIALS_V1
     }
-
     /// Borrow one matrix polynomial.
     #[must_use]
     pub fn get(&self, row: usize, column: usize) -> Option<&ApplicationPolynomialV1> {
@@ -151,26 +133,22 @@ impl BootleLanternApplicationRelationV1 {
         self.matrix
             .get(row * APPLICATION_WITNESS_POLYNOMIALS_V1 + column)
     }
-
     /// Borrow the eight-polynomial public offset.
     #[must_use]
     pub const fn public_offset(&self) -> &[ApplicationPolynomialV1; APPLICATION_ROWS_V1] {
         &self.public_offset
     }
-
     /// Exact disclosure bitmap compiled into this relation.
     #[must_use]
     pub const fn disclosure_bitmap(&self) -> u8 {
         self.disclosure_bitmap
     }
-
     /// Public value at one disclosed index.
     #[must_use]
     pub fn disclosed_attribute(&self, index: usize) -> Option<[u8; 8]> {
         self.disclosed_attributes.get(index).copied().flatten()
     }
 }
-
 /// Compile trusted policy and typed statement into the unique public linear
 /// relation consumed by the Lantern proof system.
 ///
@@ -218,7 +196,6 @@ pub fn compile_application_relation_v1(
     let credential_scope_term = credential_scope
         .application_term()
         .map_err(|_| RelationErrorV1::InvalidCredentialScope)?;
-
     let mut disclosed_attributes = [None; ATTRIBUTE_POLYNOMIALS_V1];
     let mut disclosure_bitmap = 0_u8;
     let mut previous = None;
@@ -234,7 +211,6 @@ pub fn compile_application_relation_v1(
         let value = *disclosure.value.as_bytes();
         disclosed_attributes[index] = Some(value);
         disclosure_bitmap |= 1_u8 << index;
-
         let allowed = &policy.allowed_values[index].values;
         if !allowed.is_empty()
             && allowed
@@ -253,7 +229,6 @@ pub fn compile_application_relation_v1(
                 .expect("u8 bitmap position fits u8"),
         });
     }
-
     let ar = expand_application_matrix_v1(matrix_seed, MatrixRoleV1::ApplicationRandomness)
         .map_err(|_| RelationErrorV1::MatrixExpansion)?;
     let am = expand_application_matrix_v1(matrix_seed, MatrixRoleV1::ApplicationAttributes)
@@ -261,7 +236,6 @@ pub fn compile_application_relation_v1(
     let a_tau = expand_application_matrix_v1(matrix_seed, MatrixRoleV1::ApplicationTag)
         .map_err(|_| RelationErrorV1::MatrixExpansion)?;
     let issuer_matrix = decode_issuer_matrix(policy)?;
-
     let mut matrix = vec![
         ApplicationPolynomialV1::ZERO;
         APPLICATION_ROWS_V1 * APPLICATION_WITNESS_POLYNOMIALS_V1
@@ -269,7 +243,6 @@ pub fn compile_application_relation_v1(
     let mut public_offset = credential_scope_term;
     let minus_one = ApplicationPolynomialV1::constant(super::params::APPLICATION_MODULUS_V1 - 1)
         .map_err(|_| RelationErrorV1::InternalInvariant)?;
-
     for row in 0..APPLICATION_ROWS_V1 {
         for column in 0..RANDOMNESS_POLYNOMIALS_V1 {
             matrix[matrix_index(row, RANDOMNESS_START_V1 + column)] = *ar
@@ -308,7 +281,6 @@ pub fn compile_application_relation_v1(
             }
         }
     }
-
     Ok(BootleLanternApplicationRelationV1 {
         matrix: matrix.into_boxed_slice(),
         public_offset,
@@ -316,7 +288,6 @@ pub fn compile_application_relation_v1(
         disclosed_attributes,
     })
 }
-
 /// Compile the holder's blind-issuance request relation
 /// `A_r*r + A_m*m - t = 0` into the fixed 8-by-48 proof shape.
 pub(crate) fn compile_blind_issuance_request_relation_v1(
@@ -356,7 +327,6 @@ pub(crate) fn compile_blind_issuance_request_relation_v1(
         disclosed_attributes: [None; ATTRIBUTE_POLYNOMIALS_V1],
     })
 }
-
 /// Validate a complete credential witness against its compiled public
 /// relation and both exact squared-norm bounds.
 ///
@@ -384,7 +354,6 @@ pub fn validate_presentation_witness_v1(
             });
         }
     }
-
     let randomness_norm = Zeroizing::new(
         witness
             .randomness
@@ -406,7 +375,6 @@ pub fn validate_presentation_witness_v1(
     if *signature_norm > SIGNATURE_NORM_SQUARED_BOUND_V1 {
         return Err(RelationErrorV1::SignatureNormExceeded);
     }
-
     let witness_vector = canonical_witness_vector_v1(witness, relation.disclosure_bitmap);
     for row in 0..APPLICATION_ROWS_V1 {
         let mut equation = Zeroizing::new(relation.public_offset[row]);
@@ -425,7 +393,6 @@ pub fn validate_presentation_witness_v1(
     }
     Ok(())
 }
-
 /// Lift the canonical presentation witness into its fixed 48-polynomial
 /// application-relation order.
 ///
@@ -451,7 +418,6 @@ pub(crate) fn canonical_witness_vector_v1(
     }
     vector
 }
-
 fn decode_issuer_matrix(
     policy: &BootleLanternIssuerPolicyV1,
 ) -> Result<
@@ -475,11 +441,9 @@ fn decode_issuer_matrix(
     }
     Ok(matrix)
 }
-
 fn matrix_index(row: usize, column: usize) -> usize {
     row * APPLICATION_WITNESS_POLYNOMIALS_V1 + column
 }
-
 /// Fixed relation compilation or witness-validation failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum RelationErrorV1 {
@@ -559,11 +523,9 @@ pub enum RelationErrorV1 {
     #[error("Bootle/Lantern internal relation invariant failed")]
     InternalInvariant,
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::OnceLock;
-
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::privacy::{
         BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
@@ -575,7 +537,6 @@ mod tests {
     use iroha_data_model::{NetworkId, block::BlockHeader};
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha2::{Digest as _, Sha256};
-
     use super::*;
     use crate::privacy_engines::bootle_lantern::{
         issuer::{
@@ -586,36 +547,30 @@ mod tests {
         },
         transcript::matrix_seed_v1,
     };
-
     struct TestRng {
         seed: [u8; 32],
         counter: u64,
     }
-
     impl TestRng {
         const fn new(seed: [u8; 32]) -> Self {
             Self { seed, counter: 0 }
         }
     }
-
     impl RngCore for TestRng {
         fn next_u32(&mut self) -> u32 {
             let mut bytes = [0; 4];
             self.fill_bytes(&mut bytes);
             u32::from_be_bytes(bytes)
         }
-
         fn next_u64(&mut self) -> u64 {
             let mut bytes = [0; 8];
             self.fill_bytes(&mut bytes);
             u64::from_be_bytes(bytes)
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             self.try_fill_bytes(destination)
                 .expect("relation test RNG is infallible");
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             for chunk in destination.chunks_mut(32) {
                 let mut hash = Sha256::new();
@@ -629,27 +584,21 @@ mod tests {
             Ok(())
         }
     }
-
     impl CryptoRng for TestRng {}
-
     fn raw(seed: u8) -> [u8; 32] {
         [seed; 32]
     }
-
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed(raw(seed)),
         ))
     }
-
     fn matrix_seed() -> MatrixSeedV1 {
         matrix_seed_v1([0x31; 32]).expect("seed")
     }
-
     const fn genesis_hash() -> [u8; 32] {
         [0x32; 32]
     }
-
     fn context() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
             network_id: network_id(0x32),
@@ -662,7 +611,6 @@ mod tests {
             engine_manifest_digest: PrivacyEngineManifestDigestV1::new(raw(6)),
         }
     }
-
     fn statement(policy: &BootleLanternIssuerPolicyV1) -> IrohaBootleLanternAnoncredStatementV1 {
         IrohaBootleLanternAnoncredStatementV1 {
             context: context(),
@@ -678,12 +626,10 @@ mod tests {
             }],
         }
     }
-
     struct IssuedFixture {
         policy: BootleLanternIssuerPolicyV1,
         witness: BootleLanternPresentationWitnessV1,
     }
-
     fn issued_fixture() -> &'static IssuedFixture {
         static FIXTURE: OnceLock<IssuedFixture> = OnceLock::new();
         FIXTURE.get_or_init(|| {
@@ -764,20 +710,16 @@ mod tests {
             IssuedFixture { policy, witness }
         })
     }
-
     fn policy() -> BootleLanternIssuerPolicyV1 {
         issued_fixture().policy.clone()
     }
-
     fn valid_witness() -> BootleLanternPresentationWitnessV1 {
         issued_fixture().witness.clone()
     }
-
     fn redigest(policy: &mut BootleLanternIssuerPolicyV1) {
         policy.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
         policy.record_digest = policy.computed_record_digest().expect("policy digest");
     }
-
     #[test]
     fn canonical_relation_has_exact_shape_zeroed_public_column_and_offset() {
         let policy = policy();
@@ -808,7 +750,6 @@ mod tests {
         validate_presentation_witness_v1(&relation, &valid_witness())
             .expect("valid relation witness");
     }
-
     #[test]
     fn canonical_secret_vector_is_heap_backed_and_debug_redacted() {
         assert_eq!(
@@ -819,7 +760,6 @@ mod tests {
         let mut witness = valid_witness();
         witness.attributes[0] = [0xA5; 8];
         let vector = canonical_witness_vector_v1(&witness, 0b10);
-
         assert_ne!(
             vector.polynomials()[ATTRIBUTE_START_V1],
             ApplicationPolynomialV1::ZERO
@@ -833,7 +773,6 @@ mod tests {
             "CanonicalSecretWitnessVectorV1(<redacted>)"
         );
     }
-
     #[test]
     fn every_trusted_record_binding_fails_independently() {
         let policy = policy();
@@ -858,7 +797,6 @@ mod tests {
         changed = base;
         changed.issuer_parameter_digest = PrivacyParameterDigestV1::new(raw(25));
         variants.push((changed, RelationErrorV1::IssuerParameterDigestMismatch));
-
         for (changed, expected) in variants {
             assert_eq!(
                 compile_application_relation_v1(&changed, &policy, matrix_seed(), genesis_hash()),
@@ -866,7 +804,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn policy_disclosure_and_seed_attacks_fail_closed() {
         let policy = policy();
@@ -876,14 +813,12 @@ mod tests {
             compile_application_relation_v1(&changed, &policy, matrix_seed(), genesis_hash()),
             Err(RelationErrorV1::MissingRequiredDisclosure { index: 1 })
         );
-
         changed = statement(&policy);
         changed.disclosures[0].value = BootleLanternAttributeValueV1::new([2; 8]);
         assert_eq!(
             compile_application_relation_v1(&changed, &policy, matrix_seed(), genesis_hash()),
             Err(RelationErrorV1::DisclosedValueNotAllowed { index: 1 })
         );
-
         assert_eq!(
             compile_application_relation_v1(
                 &statement(&policy),
@@ -893,7 +828,6 @@ mod tests {
             ),
             Err(RelationErrorV1::MatrixParameterDigestMismatch)
         );
-
         let mut invalid_policy = policy.clone();
         invalid_policy.issuer_public_matrix.entries.clear();
         redigest(&mut invalid_policy);
@@ -907,7 +841,6 @@ mod tests {
             Err(RelationErrorV1::InvalidIssuerPolicy)
         );
     }
-
     #[test]
     fn witness_disclosure_binary_and_norm_attacks_fail_before_equations() {
         let policy = policy();
@@ -918,28 +851,24 @@ mod tests {
             genesis_hash(),
         )
         .expect("relation");
-
         let mut changed = valid_witness();
         changed.attributes[1][0] ^= 1;
         assert_eq!(
             validate_presentation_witness_v1(&relation, &changed),
             Err(RelationErrorV1::DisclosedAttributeMismatch { index: 1 })
         );
-
         changed = valid_witness();
         changed.tag[3] = ApplicationPolynomialV1::constant(2).expect("canonical");
         assert_eq!(
             validate_presentation_witness_v1(&relation, &changed),
             Err(RelationErrorV1::NonBinaryTag { index: 3 })
         );
-
         changed = valid_witness();
         changed.randomness[0] = ApplicationPolynomialV1::constant(110).expect("canonical");
         assert_eq!(
             validate_presentation_witness_v1(&relation, &changed),
             Err(RelationErrorV1::RandomnessNormExceeded)
         );
-
         changed = valid_witness();
         changed.signature_one[0] = ApplicationPolynomialV1::constant(5_834).expect("canonical");
         assert_eq!(
@@ -947,7 +876,6 @@ mod tests {
             Err(RelationErrorV1::SignatureNormExceeded)
         );
     }
-
     #[test]
     fn mutating_each_witness_family_breaks_the_application_equation() {
         let policy = policy();
@@ -959,7 +887,6 @@ mod tests {
         )
         .expect("relation");
         let one = ApplicationPolynomialV1::constant(1).expect("one");
-
         let mut variants = Vec::new();
         let mut changed = valid_witness();
         changed.randomness[0] = one;
@@ -976,7 +903,6 @@ mod tests {
         changed = valid_witness();
         changed.attributes[0][0] ^= 1;
         variants.push(changed);
-
         for changed in variants {
             assert!(matches!(
                 validate_presentation_witness_v1(&relation, &changed),

@@ -1,7 +1,5 @@
 //! Lane relay envelope regression tests.
-
 use std::num::NonZeroU64;
-
 use iroha_crypto::{Hash, HashOf, MerkleProof};
 use iroha_data_model::{
     block::{
@@ -16,7 +14,6 @@ use iroha_data_model::{
     },
 };
 use norito::core::NoritoDeserialize;
-
 fn sample_block_header(da_hash: Option<HashOf<commitment::DaCommitmentBundle>>) -> BlockHeader {
     let mut header = BlockHeader::new(
         NonZeroU64::new(5).expect("non-zero height"),
@@ -29,7 +26,6 @@ fn sample_block_header(da_hash: Option<HashOf<commitment::DaCommitmentBundle>>) 
     header.set_da_commitments_hash(da_hash);
     header
 }
-
 fn sample_settlement() -> LaneBlockCommitment {
     let receipt = LaneSettlementReceipt {
         source_id: [0xAA; 32],
@@ -39,7 +35,6 @@ fn sample_settlement() -> LaneBlockCommitment {
         xor_variance: "0.000002".parse().expect("valid settlement quantity"),
         timestamp_ms: 1_700_000_100,
     };
-
     LaneBlockCommitment {
         block_height: 5,
         lane_id: LaneId::new(1),
@@ -56,7 +51,6 @@ fn sample_settlement() -> LaneBlockCommitment {
         native_amx_receipts: Vec::new(),
     }
 }
-
 #[test]
 fn lane_relay_envelope_roundtrips_and_verifies_hash() {
     let da_hash = Some(HashOf::from_untyped_unchecked(Hash::prehashed(
@@ -77,7 +71,6 @@ fn lane_relay_envelope_roundtrips_and_verifies_hash() {
             ),
             statement_proof: MerkleProof::from_audit_path(0, Vec::new()),
         }));
-
     let bytes = norito::to_bytes(&envelope).expect("encode envelope");
     let archived = norito::from_bytes::<LaneRelayEnvelope>(&bytes).expect("archive envelope");
     let decoded: LaneRelayEnvelope =
@@ -91,27 +84,23 @@ fn lane_relay_envelope_roundtrips_and_verifies_hash() {
     );
     assert_eq!(manifest_root, decoded.manifest_root);
     decoded.verify().expect("envelope should verify");
-
     // DA hash mismatch should be rejected.
     let err = LaneRelayEnvelope::new(header, None, settlement.clone(), 0)
         .expect_err("da mismatch should fail");
     assert!(matches!(err, LaneRelayError::DaCommitmentHashMismatch));
 }
-
 #[test]
 fn lane_relay_envelope_distinguishes_lane_local_and_global_heights() {
     let header = sample_block_header(None);
     let mut settlement = sample_settlement();
     settlement.block_height = 1;
     assert_ne!(settlement.block_height, header.height().get());
-
     let envelope = LaneRelayEnvelope::new(header, None, settlement, 0)
         .expect("lane-local settlement height may differ from global proposal height");
     assert_eq!(envelope.block_height, 1);
     assert_eq!(envelope.block_header.height().get(), header.height().get());
     envelope.verify().expect("separate height domains verify");
 }
-
 #[test]
 fn lane_relay_envelope_rejects_finality_authority_height_mismatch() {
     let header = sample_block_header(None);
@@ -140,7 +129,6 @@ fn lane_relay_envelope_rejects_finality_authority_height_mismatch() {
         LaneRelayError::UnsupportedFinalityAuthorityVersion(2)
     );
 }
-
 #[test]
 fn lane_relay_envelope_detects_tampering_on_verify() {
     let da_hash = Some(HashOf::from_untyped_unchecked(Hash::prehashed(
@@ -150,7 +138,6 @@ fn lane_relay_envelope_detects_tampering_on_verify() {
     let settlement = sample_settlement();
     let envelope =
         LaneRelayEnvelope::new(header, da_hash, settlement, 2048).expect("construct envelope");
-
     // Settlement height tamper.
     let mut tampered = envelope.clone();
     tampered.settlement_commitment.block_height = tampered.block_height + 2;
@@ -158,7 +145,6 @@ fn lane_relay_envelope_detects_tampering_on_verify() {
         tampered.verify().unwrap_err(),
         LaneRelayError::SettlementBlockHeightMismatch
     );
-
     // Lane/dataspace tamper.
     let mut tampered = envelope.clone();
     tampered.lane_id = LaneId::new(tampered.lane_id.as_u32() + 1);
@@ -166,14 +152,12 @@ fn lane_relay_envelope_detects_tampering_on_verify() {
         tampered.verify().unwrap_err(),
         LaneRelayError::SettlementLaneMismatch
     );
-
     let mut tampered = envelope.clone();
     tampered.dataspace_id = DataSpaceId::new(tampered.dataspace_id.as_u64() + 1);
     assert_eq!(
         tampered.verify().unwrap_err(),
         LaneRelayError::SettlementDataspaceMismatch
     );
-
     // Settlement payload tamper (hash mismatch).
     let mut tampered = envelope;
     tampered.settlement_commitment.tx_count += 1;

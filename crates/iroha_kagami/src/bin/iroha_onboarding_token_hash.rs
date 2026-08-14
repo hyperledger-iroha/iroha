@@ -2,13 +2,10 @@
 //!
 //! The raw token is read only from standard input and is never echoed. A single trailing LF or
 //! CRLF from a private token file is ignored; every other byte is authenticated exactly.
-
 use std::io::{self, Read as _};
-
 const MIN_TOKEN_BYTES: usize = 32;
 const MAX_TOKEN_BYTES: usize = 256;
 const MAX_STDIN_BYTES: u64 = (MAX_TOKEN_BYTES + 3) as u64;
-
 fn canonical_token_bytes(input: &[u8]) -> Result<&[u8], &'static str> {
     let token = input
         .strip_suffix(b"\r\n")
@@ -25,7 +22,6 @@ fn canonical_token_bytes(input: &[u8]) -> Result<&[u8], &'static str> {
     }
     Ok(token)
 }
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut input = Vec::new();
     io::stdin().take(MAX_STDIN_BYTES).read_to_end(&mut input)?;
@@ -36,11 +32,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", blake3::hash(token).to_hex());
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn strips_one_file_line_ending_but_no_other_bytes() {
         let token = b"0123456789abcdef0123456789abcdef";
@@ -52,7 +46,6 @@ mod tests {
         assert_eq!(canonical_token_bytes(&lf), Ok(token.as_slice()));
         assert_eq!(canonical_token_bytes(&crlf), Ok(token.as_slice()));
     }
-
     #[test]
     fn rejects_short_multiline_and_whitespace_tokens() {
         assert!(canonical_token_bytes(b"too-short").is_err());

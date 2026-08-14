@@ -2,7 +2,6 @@
 //!
 //! Serves deterministic JSON responses backed by the seed OpenAPI/RBAC files so
 //! SDK/CLI integrations can exercise the shape before the real service lands.
-
 use std::{
     collections::HashMap,
     env,
@@ -10,7 +9,6 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-
 use axum::{
     Json, Router,
     extract::{Path as AxumPath, State},
@@ -26,11 +24,9 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
-
 const DEFAULT_LISTEN: &str = "127.0.0.1:18080";
 const DEFAULT_OPENAPI: &str = "specs/soranet/control_plane_openapi.yaml";
 const DEFAULT_RBAC: &str = "specs/soranet/control_plane_rbac.yaml";
-
 #[derive(Clone)]
 struct MockState {
     openapi_hash: String,
@@ -39,7 +35,6 @@ struct MockState {
     audit: Vec<AuditEvent>,
     analytics: Vec<AnalyticsPoint>,
 }
-
 #[derive(Clone, Serialize, Deserialize)]
 struct Domain {
     id: String,
@@ -49,7 +44,6 @@ struct Domain {
     status: String,
     cache_profile: String,
 }
-
 #[derive(Clone, Serialize, Deserialize)]
 struct AuditEvent {
     id: String,
@@ -58,14 +52,12 @@ struct AuditEvent {
     action: String,
     target: String,
 }
-
 #[derive(Clone, Serialize, Deserialize)]
 struct AnalyticsPoint {
     metric: String,
     ts: String,
     value: f64,
 }
-
 fn hash_file(path: &Path) -> eyre::Result<String> {
     let data =
         std::fs::read(path).wrap_err_with(|| eyre::eyre!("failed to read {}", path.display()))?;
@@ -73,7 +65,6 @@ fn hash_file(path: &Path) -> eyre::Result<String> {
     hasher.update(&data);
     Ok(hasher.finalize().to_hex().to_string())
 }
-
 fn build_state(openapi: &Path, rbac: &Path) -> eyre::Result<Arc<MockState>> {
     let openapi_hash = hash_file(openapi)?;
     let rbac_hash = hash_file(rbac)?;
@@ -107,7 +98,6 @@ fn build_state(openapi: &Path, rbac: &Path) -> eyre::Result<Arc<MockState>> {
         ts: "2026-11-20T12:00:00Z".to_owned(),
         value: 1337.0,
     }];
-
     Ok(Arc::new(MockState {
         openapi_hash,
         rbac_hash,
@@ -116,13 +106,11 @@ fn build_state(openapi: &Path, rbac: &Path) -> eyre::Result<Arc<MockState>> {
         analytics,
     }))
 }
-
 #[derive(Clone)]
 struct Tenant {
     org: String,
     project: Option<String>,
 }
-
 fn require_tenant(headers: &HeaderMap) -> Result<Tenant, (StatusCode, Json<Value>)> {
     let org = headers
         .get("X-SN-Org")
@@ -147,7 +135,6 @@ fn require_tenant(headers: &HeaderMap) -> Result<Tenant, (StatusCode, Json<Value
         .map(str::to_owned);
     Ok(Tenant { org, project })
 }
-
 fn router(state: Arc<MockState>) -> Router {
     Router::new()
         .route("/meta", get(meta))
@@ -157,14 +144,12 @@ fn router(state: Arc<MockState>) -> Router {
         .route("/v1/analytics/query", post(run_analytics))
         .with_state(state)
 }
-
 async fn meta(State(state): State<Arc<MockState>>) -> Json<Value> {
     Json(json!({
         "openapi_hash": state.openapi_hash,
         "rbac_hash": state.rbac_hash,
     }))
 }
-
 async fn list_domains(
     State(state): State<Arc<MockState>>,
     headers: HeaderMap,
@@ -172,7 +157,6 @@ async fn list_domains(
     let _tenant = require_tenant(&headers)?;
     Ok(Json(json!({ "items": state.domains })))
 }
-
 async fn create_domain(
     State(_state): State<Arc<MockState>>,
     headers: HeaderMap,
@@ -193,7 +177,6 @@ async fn create_domain(
     };
     Ok(Json(json!(domain)))
 }
-
 async fn purge_domain(
     AxumPath(domain_id): AxumPath<String>,
     headers: HeaderMap,
@@ -209,14 +192,12 @@ async fn purge_domain(
     });
     Ok((StatusCode::ACCEPTED, Json(response)))
 }
-
 #[derive(Deserialize)]
 struct PurgeRequest {
     kind: String,
     entries: Vec<String>,
     request_id: Option<String>,
 }
-
 async fn list_audit(
     State(state): State<Arc<MockState>>,
     headers: HeaderMap,
@@ -224,7 +205,6 @@ async fn list_audit(
     let _tenant = require_tenant(&headers)?;
     Ok(Json(json!({ "events": state.audit })))
 }
-
 async fn run_analytics(
     State(state): State<Arc<MockState>>,
     headers: HeaderMap,
@@ -232,7 +212,6 @@ async fn run_analytics(
     let _tenant = require_tenant(&headers)?;
     Ok(Json(json!({ "series": state.analytics })))
 }
-
 async fn serve(listen: SocketAddr, openapi: PathBuf, rbac: PathBuf) -> eyre::Result<()> {
     let state = build_state(&openapi, &rbac)?;
     let listener = TcpListener::bind(listen).await?;
@@ -241,7 +220,6 @@ async fn serve(listen: SocketAddr, openapi: PathBuf, rbac: PathBuf) -> eyre::Res
     axum::serve(listener, app).await?;
     Ok(())
 }
-
 fn run_cli(endpoint: &str, cli: CliCommand) -> eyre::Result<()> {
     let headers = default_cli_headers()?;
     let client = Client::builder()
@@ -277,20 +255,17 @@ fn run_cli(endpoint: &str, cli: CliCommand) -> eyre::Result<()> {
     }
     Ok(())
 }
-
 #[derive(Clone, Copy)]
 enum Mode {
     Serve,
     Cli(CliCommand),
 }
-
 #[derive(Clone, Copy)]
 enum CliCommand {
     Meta,
     Domains,
     Audit,
 }
-
 fn parse_args_from<I>(raw: I) -> eyre::Result<(Mode, SocketAddr, PathBuf, PathBuf, String)>
 where
     I: Iterator<Item = String>,
@@ -346,33 +321,27 @@ where
     }
     Ok((mode, listen, openapi, rbac, endpoint))
 }
-
 fn parse_args() -> eyre::Result<(Mode, SocketAddr, PathBuf, PathBuf, String)> {
     parse_args_from(env::args().skip(1))
 }
-
 fn default_cli_headers() -> eyre::Result<ReqwestHeaderMap> {
     let mut headers = ReqwestHeaderMap::new();
     headers.insert("X-SN-Org", HeaderValue::from_static("org-demo"));
     headers.insert("X-SN-Project", HeaderValue::from_static("project-default"));
     Ok(headers)
 }
-
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."))
 }
-
 fn default_openapi_path() -> PathBuf {
     workspace_root().join(DEFAULT_OPENAPI)
 }
-
 fn default_rbac_path() -> PathBuf {
     workspace_root().join(DEFAULT_RBAC)
 }
-
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> eyre::Result<()> {
     let (mode, listen, openapi, rbac, endpoint) = parse_args()?;
@@ -381,18 +350,14 @@ async fn main() -> eyre::Result<()> {
         Mode::Cli(cmd) => run_cli(&endpoint, cmd),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use axum::http::Request;
     use tower::ServiceExt as _;
-
     use super::*;
-
     fn fixture_state() -> Arc<MockState> {
         build_state(&default_openapi_path(), &default_rbac_path()).unwrap()
     }
-
     #[tokio::test]
     async fn hashes_openapi_and_rbac() {
         let state = fixture_state();
@@ -405,12 +370,10 @@ mod tests {
             "41073ac29e58a3227f0e2ecd7dc941825e8e8864f9140bbaf220ec463bd08aea"
         );
     }
-
     #[tokio::test]
     async fn router_exposes_meta_and_domains() {
         let state = fixture_state();
         let app = router(state);
-
         let meta = app
             .clone()
             .oneshot(
@@ -421,7 +384,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(meta.status(), StatusCode::OK);
-
         let domains = app
             .oneshot(
                 Request::get("/v1/domains")
@@ -434,12 +396,10 @@ mod tests {
             .unwrap();
         assert_eq!(domains.status(), StatusCode::OK);
     }
-
     #[tokio::test]
     async fn domains_require_tenant_headers() {
         let state = fixture_state();
         let app = router(state);
-
         let resp = app
             .clone()
             .oneshot(
@@ -450,7 +410,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
         let ok_resp = app
             .oneshot(
                 Request::get("/v1/domains")
@@ -463,7 +422,6 @@ mod tests {
             .unwrap();
         assert_eq!(ok_resp.status(), StatusCode::OK);
     }
-
     #[tokio::test]
     async fn purge_returns_accepted() {
         let state = fixture_state();
@@ -478,7 +436,6 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
     }
-
     #[test]
     fn parses_cli_mode_and_overrides() {
         let args = vec![
@@ -497,7 +454,6 @@ mod tests {
         assert!(rbac.ends_with("control_plane_rbac.yaml"));
         assert_eq!(endpoint, "http://localhost:9999");
     }
-
     #[tokio::test]
     async fn cli_fetches_meta_from_live_server() {
         let listener = match TcpListener::bind("127.0.0.1:0").await {
@@ -516,13 +472,11 @@ mod tests {
                 .await
                 .unwrap();
         });
-
         tokio::task::spawn_blocking(move || {
             run_cli(&format!("http://{addr}"), CliCommand::Meta).unwrap();
         })
         .await
         .unwrap();
-
         server.abort();
     }
 }

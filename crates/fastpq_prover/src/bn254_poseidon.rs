@@ -1,53 +1,43 @@
 //! BN254 Poseidon batch helpers for FASTPQ host-side transcript work.
-
 use std::sync::{
     OnceLock,
     atomic::{AtomicBool, Ordering},
 };
-
 #[cfg(feature = "fastpq-gpu")]
 use tracing::warn;
-
 #[cfg(feature = "fastpq-gpu")]
 use crate::backend::{self, GpuBackend};
-
 /// Offset metadata for one BN254 Poseidon word-hash input inside a flattened word buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bn254PoseidonBatchSlice {
     offset: usize,
     len: usize,
 }
-
 impl Bn254PoseidonBatchSlice {
     /// Create a slice from a flattened word offset and word length.
     #[must_use]
     pub const fn new(offset: usize, len: usize) -> Self {
         Self { offset, len }
     }
-
     /// Return the first word index in the flattened input buffer.
     #[must_use]
     pub const fn offset(self) -> usize {
         self.offset
     }
-
     /// Return the number of words belonging to this input.
     #[must_use]
     pub const fn len(self) -> usize {
         self.len
     }
-
     /// Return true when this slice has no words.
     #[must_use]
     pub const fn is_empty(self) -> bool {
         self.len == 0
     }
 }
-
 static BN254_POSEIDON_GPU_DISABLED: AtomicBool = AtomicBool::new(false);
 static BN254_POSEIDON_SELF_TEST: OnceLock<bool> = OnceLock::new();
 const BN254_POSEIDON_MAX_GPU_BATCH_SLICES: usize = 4_096;
-
 /// Try to hash flattened BN254 Poseidon word batches with the configured GPU backend.
 ///
 /// The input words are interpreted exactly like `iroha_zkp_halo2::poseidon::hash_words_bytes`:
@@ -60,7 +50,6 @@ pub fn try_hash_bn254_poseidon_word_batches(
 ) -> Option<Vec<[u8; 32]>> {
     try_submit_bn254_poseidon_word_batches(words, slices)?.wait()
 }
-
 /// Pending BN254 Poseidon word-batch GPU work.
 ///
 /// This is an opaque helper for host code that can submit transcript hashing
@@ -69,14 +58,12 @@ pub fn try_hash_bn254_poseidon_word_batches(
 pub struct PendingBn254PoseidonWordBatch {
     inner: PendingBn254PoseidonWordBatchInner,
 }
-
 enum PendingBn254PoseidonWordBatchInner {
     Ready(Vec<[u8; 32]>),
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     Metal(Box<crate::metal::PendingBn254PoseidonWords>),
     Chunked(Vec<PendingBn254PoseidonWordBatch>),
 }
-
 impl PendingBn254PoseidonWordBatch {
     /// Wait for completion and return digest bytes, or `None` when the GPU path failed.
     #[must_use]
@@ -106,7 +93,6 @@ impl PendingBn254PoseidonWordBatch {
         }
     }
 }
-
 /// Try to submit flattened BN254 Poseidon word batches on the configured GPU backend.
 ///
 /// Returns `None` when the accelerator is unavailable, disabled, or fails validation.
@@ -129,19 +115,16 @@ pub fn try_submit_bn254_poseidon_word_batches(
     if !bn254_poseidon_self_test_passed() {
         return None;
     }
-
     let pending = if slices.len() > BN254_POSEIDON_MAX_GPU_BATCH_SLICES {
         try_submit_bn254_poseidon_word_batches_chunked(words, slices)
     } else {
         try_submit_bn254_poseidon_word_batches_impl(words, slices)
     };
-
     pending.or_else(|| {
         disable_bn254_poseidon_gpu();
         None
     })
 }
-
 fn try_submit_bn254_poseidon_word_batches_chunked(
     words: &[u64],
     slices: &[Bn254PoseidonBatchSlice],
@@ -157,7 +140,6 @@ fn try_submit_bn254_poseidon_word_batches_chunked(
         inner: PendingBn254PoseidonWordBatchInner::Chunked(pending_chunks),
     })
 }
-
 fn compact_bn254_poseidon_slice_chunk(
     words: &[u64],
     slices: &[Bn254PoseidonBatchSlice],
@@ -176,7 +158,6 @@ fn compact_bn254_poseidon_slice_chunk(
     }
     Some((chunk_words, chunk_slices))
 }
-
 /// Preflight the configured BN254 Poseidon word-batch accelerator.
 ///
 /// This performs the same backend discovery and parity self-test that the first
@@ -197,7 +178,6 @@ pub fn preflight_bn254_poseidon_word_batches() -> bool {
         false
     }
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn try_submit_bn254_poseidon_word_batches_impl(
     words: &[u64],
@@ -238,7 +218,6 @@ fn try_submit_bn254_poseidon_word_batches_impl(
         _ => None,
     }
 }
-
 #[cfg(not(feature = "fastpq-gpu"))]
 fn try_submit_bn254_poseidon_word_batches_impl(
     _words: &[u64],
@@ -246,11 +225,9 @@ fn try_submit_bn254_poseidon_word_batches_impl(
 ) -> Option<PendingBn254PoseidonWordBatch> {
     None
 }
-
 fn disable_bn254_poseidon_gpu() {
     BN254_POSEIDON_GPU_DISABLED.store(true, Ordering::Release);
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn bn254_poseidon_backend_available() -> bool {
     match backend::current_gpu_backend() {
@@ -260,24 +237,19 @@ fn bn254_poseidon_backend_available() -> bool {
         _ => false,
     }
 }
-
 #[cfg(not(feature = "fastpq-gpu"))]
 fn bn254_poseidon_backend_available() -> bool {
     false
 }
-
 fn bn254_poseidon_self_test_passed() -> bool {
     *BN254_POSEIDON_SELF_TEST.get_or_init(run_bn254_poseidon_self_test)
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn run_bn254_poseidon_self_test() -> bool {
     let Some(backend) = backend::current_gpu_backend() else {
         return false;
     };
-
     let (words, slices) = bn254_poseidon_self_test_batch();
-
     let actual = match backend {
         GpuBackend::Cuda => crate::fastpq_cuda::fastpq_bn254_poseidon_hash_words(&words, &slices)
             .map_err(|error| error.to_string()),
@@ -319,7 +291,6 @@ fn run_bn254_poseidon_self_test() -> bool {
         }
     }
 }
-
 #[cfg(any(test, feature = "fastpq-gpu"))]
 fn bn254_poseidon_self_test_batch() -> (Vec<u64>, Vec<Bn254PoseidonBatchSlice>) {
     let cases: [&[u64]; 10] = [
@@ -343,7 +314,6 @@ fn bn254_poseidon_self_test_batch() -> (Vec<u64>, Vec<Bn254PoseidonBatchSlice>) 
     }
     (words, slices)
 }
-
 #[cfg(any(test, feature = "fastpq-gpu"))]
 fn expected_bn254_poseidon_word_hashes(
     words: &[u64],
@@ -354,7 +324,6 @@ fn expected_bn254_poseidon_word_hashes(
         .map(|slice| scalar_hash_words_u64(&words[slice.offset()..][..slice.len()]))
         .collect()
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn first_bn254_poseidon_mismatch(
     expected: &[[u8; 32]],
@@ -373,27 +342,22 @@ fn first_bn254_poseidon_mismatch(
             .map(|actual| (expected.len(), [0; 32], Some(*actual)))
     })
 }
-
 #[cfg(not(feature = "fastpq-gpu"))]
 fn run_bn254_poseidon_self_test() -> bool {
     false
 }
-
 #[cfg(any(test, feature = "fastpq-gpu"))]
 fn scalar_hash_words_u64(words: &[u64]) -> [u8; 32] {
     iroha_zkp_halo2::poseidon::hash_u64_words_bytes(words)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use halo2curves::bn256::Fr as Bn254Fr;
-
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     fn metal_backend_selected() -> bool {
         crate::backend::current_gpu_backend() == Some(crate::backend::GpuBackend::Metal)
     }
-
     #[cfg(feature = "fastpq-gpu")]
     fn generated_word_batch(batch_count: usize) -> (Vec<u64>, Vec<Bn254PoseidonBatchSlice>) {
         let mut words = Vec::new();
@@ -424,7 +388,6 @@ mod tests {
         }
         (words, slices)
     }
-
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     fn generated_fixed_word_batch(
         batch_count: usize,
@@ -442,7 +405,6 @@ mod tests {
         }
         (words, slices)
     }
-
     #[test]
     fn batch_slice_reports_offsets_and_lengths() {
         let slice = Bn254PoseidonBatchSlice::new(7, 3);
@@ -451,7 +413,6 @@ mod tests {
         assert!(!slice.is_empty());
         assert!(Bn254PoseidonBatchSlice::new(1, 0).is_empty());
     }
-
     #[test]
     fn scalar_word_hash_matches_poseidon_word_path() {
         let words = [1, 2, 3, u64::MAX];
@@ -461,7 +422,6 @@ mod tests {
             iroha_zkp_halo2::poseidon::hash_words_bytes(&fr_words)
         );
     }
-
     #[test]
     fn bn254_poseidon_self_test_batch_covers_edge_shapes() {
         let (words, slices) = bn254_poseidon_self_test_batch();
@@ -474,7 +434,6 @@ mod tests {
             slices.len()
         );
     }
-
     #[test]
     fn compact_slice_chunk_rebases_offsets_and_preserves_words() {
         let words = [10, 11, 12, 13, 14, 15, 16, 17, 18];
@@ -485,7 +444,6 @@ mod tests {
         ];
         let (chunk_words, chunk_slices) =
             compact_bn254_poseidon_slice_chunk(&words, &slices).expect("valid slices compact");
-
         assert_eq!(chunk_words, [12, 13, 14, 17, 18]);
         assert_eq!(
             chunk_slices,
@@ -496,21 +454,18 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn compact_slice_chunk_rejects_out_of_bounds_ranges() {
         let words = [1, 2, 3];
         let slices = [Bn254PoseidonBatchSlice::new(2, 2)];
         assert!(compact_bn254_poseidon_slice_chunk(&words, &slices).is_none());
     }
-
     #[test]
     fn compact_slice_chunk_rejects_overflowing_ranges() {
         let words = [1, 2, 3];
         let slices = [Bn254PoseidonBatchSlice::new(usize::MAX, 1)];
         assert!(compact_bn254_poseidon_slice_chunk(&words, &slices).is_none());
     }
-
     #[test]
     fn direct_gpu_batch_limit_covers_izanami_block_shape() {
         const {
@@ -520,7 +475,6 @@ mod tests {
             );
         };
     }
-
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn public_gpu_bn254_poseidon_word_batch_matches_cpu_self_test_cases() {
@@ -533,7 +487,6 @@ mod tests {
         let expected = expected_bn254_poseidon_word_hashes(&words, &slices);
         assert_eq!(actual, expected);
     }
-
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn public_gpu_bn254_poseidon_word_batches_match_cpu_large_shapes() {
@@ -551,7 +504,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn public_gpu_bn254_poseidon_repeated_word_batches_are_stable() {
@@ -569,7 +521,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     #[test]
     fn metal_bn254_poseidon_word_batch_matches_cpu_self_test_cases() {
@@ -583,7 +534,6 @@ mod tests {
         let expected = expected_bn254_poseidon_word_hashes(&words, &slices);
         assert_eq!(actual, expected);
     }
-
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     #[test]
     fn metal_bn254_poseidon_word_batches_match_cpu_large_shapes() {
@@ -602,7 +552,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     #[test]
     fn metal_bn254_poseidon_repeated_word_batches_are_stable() {
@@ -621,7 +570,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     #[test]
     fn public_gpu_bn254_poseidon_word_batches_handle_large_izanami_shape() {
@@ -634,7 +582,6 @@ mod tests {
         let expected = expected_bn254_poseidon_word_hashes(&words, &slices);
         assert_eq!(actual, expected);
     }
-
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     #[test]
     fn public_gpu_bn254_poseidon_word_batches_chunk_above_direct_limit() {
@@ -648,7 +595,6 @@ mod tests {
         let expected = expected_bn254_poseidon_word_hashes(&words, &slices);
         assert_eq!(actual, expected);
     }
-
     #[cfg(not(feature = "fastpq-gpu"))]
     #[test]
     fn preflight_reports_unavailable_without_gpu_feature() {

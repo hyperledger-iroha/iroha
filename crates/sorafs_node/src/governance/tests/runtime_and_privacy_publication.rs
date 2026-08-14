@@ -1,5 +1,4 @@
 // Runtime DAG provider, staging, filesystem, and signer regressions.
-
 #[test]
 fn filesystem_publisher_recovers_checkpoint_cas_applied_response_error() {
     let temp = tempdir().expect("tempdir");
@@ -47,7 +46,6 @@ fn filesystem_publisher_recovers_checkpoint_cas_applied_response_error() {
     );
     drop(publisher);
 }
-
 #[test]
 fn runtime_dag_producer_bounds_accept_exact_limits_and_reject_successors() {
     let index_limit = GOVERNANCE_MUTABLE_INDEX_MAX_BYTES;
@@ -134,7 +132,6 @@ fn runtime_dag_producer_bounds_accept_exact_limits_and_reject_successors() {
         "the bounded producer checkpoint must retain its small independent ceiling"
     );
 }
-
 #[test]
 fn runtime_dag_producer_intent_is_digest_only_and_stage_tamper_fails_closed() {
     let temp = tempdir().expect("tempdir");
@@ -170,7 +167,6 @@ fn runtime_dag_producer_intent_is_digest_only_and_stage_tamper_fails_closed() {
         intent.index.byte_len,
         u64::try_from(staged.index_bytes.len()).expect("staged index length fits u64")
     );
-
     let staging_store = open_runtime_dag_staging_store_v1(temp.path(), &root_guard)
         .expect("open typed staging store");
     let (mut state, snapshot) =
@@ -193,7 +189,6 @@ fn runtime_dag_producer_intent_is_digest_only_and_stage_tamper_fails_closed() {
         "substituted governance runtime DAG staging state",
     )
     .expect("install authenticated-store substitution for recovery test");
-
     let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
         .expect("reopen publisher root")
         .with_qualified_runtime_dag_providers(
@@ -213,7 +208,6 @@ fn runtime_dag_producer_intent_is_digest_only_and_stage_tamper_fails_closed() {
         "a failed staged readback must not erase the recovery intent"
     );
 }
-
 #[test]
 fn runtime_dag_checkpoint_wrapper_rejects_oversized_producer_records() {
     for slot in [
@@ -237,7 +231,6 @@ fn runtime_dag_checkpoint_wrapper_rejects_oversized_producer_records() {
         assert!(error.to_string().contains("oversized record"));
     }
 }
-
 #[test]
 fn runtime_dag_staging_store_is_created_through_the_retained_root() {
     let temp = tempdir().expect("tempdir");
@@ -260,7 +253,6 @@ fn runtime_dag_staging_store_is_created_through_the_retained_root() {
         "the retired mutable staging directory must not be recreated"
     );
 }
-
 #[test]
 fn authenticated_runtime_dag_reader_is_read_only_for_genesis_and_committed_state() {
     let genesis = tempdir().expect("genesis tempdir");
@@ -293,7 +285,6 @@ fn authenticated_runtime_dag_reader_is_read_only_for_genesis_and_committed_state
         genesis_inventory,
         "authenticated genesis read must not create or remove filesystem entries"
     );
-
     let committed = tempdir().expect("committed tempdir");
     let committed_publisher = signed_runtime_publisher(committed.path());
     let (settlement, encoded) = sample_settlement();
@@ -332,7 +323,6 @@ fn authenticated_runtime_dag_reader_is_read_only_for_genesis_and_committed_state
         "authenticated committed read must not create or remove filesystem entries"
     );
 }
-
 #[test]
 fn authenticated_runtime_dag_reader_rejects_active_intent_and_substitutions() {
     let temp = tempdir().expect("tempdir");
@@ -358,7 +348,6 @@ fn authenticated_runtime_dag_reader_rejects_active_intent_and_substitutions() {
     load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
         .expect("baseline authenticated read")
         .expect("baseline snapshot");
-
     let stable_checkpoint_record = checkpoint_provider
         .load(GovernanceDagSealedStateSlot::ProducerCheckpoint)
         .expect("load stable producer checkpoint")
@@ -374,7 +363,6 @@ fn authenticated_runtime_dag_reader_rejects_active_intent_and_substitutions() {
     let error = load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
         .expect_err("checkpoint A/B movement must fail closed");
     assert!(error.to_string().contains("changed during read"));
-
     let active_intent = GovernanceDagSealedStateRecord::new(
         GovernanceDagSealedStateSlot::ProducerPublishIntent,
         u64::MAX,
@@ -399,7 +387,6 @@ fn authenticated_runtime_dag_reader_rejects_active_intent_and_substitutions() {
         .records[TestRuntimeDagCheckpointStore::slot_index(
         GovernanceDagSealedStateSlot::ProducerPublishIntent,
     )] = None;
-
     let checkpoint_index =
         TestRuntimeDagCheckpointStore::slot_index(GovernanceDagSealedStateSlot::ProducerCheckpoint);
     let original_checkpoint_record = checkpoint_provider
@@ -430,7 +417,6 @@ fn authenticated_runtime_dag_reader_rejects_active_intent_and_substitutions() {
         .lock()
         .expect("lock checkpoint fixture")
         .records[checkpoint_index] = Some(original_checkpoint_record);
-
     let writer_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
         .expect("retain writer root for typed substitution fixture");
     let committed_store = open_runtime_dag_committed_store_v1(temp.path(), &writer_guard)
@@ -471,7 +457,6 @@ fn authenticated_runtime_dag_reader_rejects_active_intent_and_substitutions() {
     .expect("restore authenticated runtime DAG fixture");
     drop(committed_store);
     drop(writer_guard);
-
     let writer_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
         .expect("retain writer root for semantic substitution fixture");
     let committed_store = open_runtime_dag_committed_store_v1(temp.path(), &writer_guard)
@@ -548,7 +533,6 @@ fn authenticated_runtime_dag_reader_rejects_active_intent_and_substitutions() {
     .expect("restore semantic runtime DAG fixture");
     drop(committed_store);
     drop(writer_guard);
-
     let index = runtime_index(temp.path());
     let block_path = index
         .get("blocks")
@@ -584,7 +568,6 @@ fn authenticated_runtime_dag_reader_rejects_active_intent_and_substitutions() {
         format!("{}\n", blake3::hash(&original_json).to_hex()),
     )
     .expect("restore runtime JSON sidecar");
-
     let original_block = fs::read(&block_path).expect("read original runtime block");
     fs::write(&block_path, b"substituted runtime block")
         .expect("substitute immutable runtime block fixture");
@@ -595,7 +578,6 @@ fn authenticated_runtime_dag_reader_rejects_active_intent_and_substitutions() {
             || error.to_string().contains("block length or digest")
     );
     fs::write(&block_path, original_block).expect("restore runtime block fixture");
-
     signer_provider
         .qualification_revision
         .store(2, Ordering::SeqCst);
@@ -607,7 +589,6 @@ fn authenticated_runtime_dag_reader_rejects_active_intent_and_substitutions() {
             .contains("signer identity or policy changed after injection")
     );
 }
-
 #[test]
 fn authenticated_runtime_dag_genesis_rejects_orphan_immutable_inventory() {
     let temp = tempdir().expect("tempdir");
@@ -631,7 +612,6 @@ fn authenticated_runtime_dag_genesis_rejects_orphan_immutable_inventory() {
         .expect_err("orphan immutable inventory must fail closed");
     assert!(error.to_string().contains("unindexed immutable artifacts"));
 }
-
 #[test]
 fn authenticated_runtime_dag_genesis_authenticates_pre_block_provider_rotation() {
     let temp = tempdir().expect("tempdir");
@@ -667,7 +647,6 @@ fn authenticated_runtime_dag_genesis_authenticates_pre_block_provider_rotation()
             .expect("authenticate rotated genesis")
             .is_none()
     );
-
     let archives = temp
         .path()
         .join(GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVES_DIR);
@@ -681,7 +660,6 @@ fn authenticated_runtime_dag_genesis_authenticates_pre_block_provider_rotation()
         .expect_err("unindexed qualification inventory must fail closed");
     assert!(error.to_string().contains("unindexed"));
     fs::remove_dir_all(&archives).expect("remove unindexed archive fixture");
-
     fs::remove_dir_all(
         temp.path()
             .join(GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STORE_DIR_V1),
@@ -691,7 +669,6 @@ fn authenticated_runtime_dag_genesis_authenticates_pre_block_provider_rotation()
         .expect_err("missing rotated qualification history must fail closed");
     assert!(error.to_string().contains("authority lineage diverges"));
 }
-
 #[test]
 fn runtime_dag_staging_transaction_survives_ambiguous_cycle_and_clears_on_restart() {
     let temp = tempdir().expect("tempdir");
@@ -701,7 +678,6 @@ fn runtime_dag_staging_transaction_survives_ambiguous_cycle_and_clears_on_restar
     publisher
         .publish_deal_settlement(&first, &first_encoded)
         .expect("publish first staging cycle");
-
     let mut successor = first;
     successor.deal_id = [0xA6; 32];
     successor.ledger.deal_id = successor.deal_id;
@@ -719,7 +695,6 @@ fn runtime_dag_staging_transaction_survives_ambiguous_cycle_and_clears_on_restar
     publisher
         .publish_deal_settlement(&successor, &successor_encoded)
         .expect_err("retain the second sealed staging cycle");
-
     let intent_record = checkpoint_store
         .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
         .expect("load second-cycle intent")
@@ -739,7 +714,6 @@ fn runtime_dag_staging_transaction_survives_ambiguous_cycle_and_clears_on_restar
     );
     drop(staging_store);
     drop(publisher);
-
     let restarted = signed_runtime_publisher_with_store(temp.path(), Arc::clone(&checkpoint_store));
     let staging_store = open_runtime_dag_staging_store_v1(temp.path(), restarted.root_guard())
         .expect("reopen typed staging state after intent recovery");
@@ -771,12 +745,10 @@ fn runtime_dag_staging_transaction_survives_ambiguous_cycle_and_clears_on_restar
             .is_none()
     );
 }
-
 #[test]
 fn runtime_dag_payload_preflight_counts_without_allocating_dummy_envelopes() {
     let (settlement, encoded) = sample_settlement();
     let payload = GovernanceLogPayloadV1::DealSettlement(Box::new(settlement));
-
     assert_eq!(
         canonical_runtime_source_payload_len(&payload).expect("count canonical source"),
         encoded.len()
@@ -788,7 +760,6 @@ fn runtime_dag_payload_preflight_counts_without_allocating_dummy_envelopes() {
         "source-length substitution must fail before publication"
     );
 }
-
 #[test]
 fn runtime_dag_audit_rejects_substituted_generated_at_in_committed_state() {
     let temp = tempdir().expect("tempdir");
@@ -825,7 +796,6 @@ fn runtime_dag_audit_rejects_substituted_generated_at_in_committed_state() {
     )
     .expect("commit internally coherent but semantically substituted state");
     drop(store);
-
     let error = validate_existing_runtime_dag_root(
         temp.path(),
         publisher
@@ -840,7 +810,6 @@ fn runtime_dag_audit_rejects_substituted_generated_at_in_committed_state() {
     .expect_err("unchecked generated_at substitution must fail");
     assert!(error.to_string().contains("index and signed head"));
 }
-
 #[test]
 fn runtime_dag_store_rejects_legacy_atomic_temp_without_online_cleanup() {
     for legacy_name in [
@@ -869,7 +838,6 @@ fn runtime_dag_store_rejects_legacy_atomic_temp_without_online_cleanup() {
         );
     }
 }
-
 #[test]
 fn runtime_dag_store_rejects_legacy_staging_directory_without_online_cleanup() {
     let temp = tempdir().expect("tempdir");
@@ -879,17 +847,14 @@ fn runtime_dag_store_rejects_legacy_staging_directory_without_online_cleanup() {
     fs::create_dir(&legacy).expect("seed legacy staging directory");
     let root_guard =
         GovernanceFilesystemRootGuard::capture_writer(temp.path()).expect("retain producer root");
-
     let error = open_runtime_dag_staging_store_v1(temp.path(), &root_guard)
         .expect_err("legacy staging directory must fail closed");
-
     assert!(error.to_string().contains("legacy mutable"));
     assert!(
         legacy.is_dir(),
         "online startup must not delete the retired staging authority"
     );
 }
-
 #[test]
 fn runtime_dag_store_rejects_legacy_nested_head_generation_without_online_cleanup() {
     let temp = tempdir().expect("tempdir");
@@ -901,17 +866,14 @@ fn runtime_dag_store_rejects_legacy_nested_head_generation_without_online_cleanu
     fs::write(&legacy, b"legacy-head-generation").expect("seed retained legacy head");
     let root_guard =
         GovernanceFilesystemRootGuard::capture_writer(temp.path()).expect("retain producer root");
-
     let error = open_runtime_dag_committed_store_v1(temp.path(), &root_guard)
         .expect_err("legacy retained head must fail closed");
-
     assert!(error.to_string().contains("legacy"));
     assert!(
         legacy.is_file(),
         "online startup must not delete a retired head generation"
     );
 }
-
 #[test]
 fn qualification_store_rejects_legacy_history_without_online_cleanup() {
     let temp = tempdir().expect("tempdir");
@@ -919,17 +881,14 @@ fn qualification_store_rejects_legacy_history_without_online_cleanup() {
     fs::write(&legacy, b"legacy-qualification-history").expect("seed legacy qualification history");
     let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
         .expect("retain qualification root");
-
     let error = open_runtime_dag_qualification_store_v1(temp.path(), &root_guard)
         .expect_err("legacy qualification history must fail closed");
-
     assert!(error.to_string().contains("legacy mutable"));
     assert!(
         legacy.is_file(),
         "online startup must not delete retired qualification history"
     );
 }
-
 #[test]
 fn qualification_archive_adjacency_rejects_u64_exhaustion() {
     assert!(runtime_dag_generation_immediately_precedes(41, 42));
@@ -938,23 +897,19 @@ fn qualification_archive_adjacency_rejects_u64_exhaustion() {
         "an exhausted archived generation must not wrap into a valid successor"
     );
 }
-
 #[test]
 fn fenced_privacy_store_rejects_legacy_pending_state_without_online_cleanup() {
     let temp = tempdir().expect("tempdir");
     let legacy = fenced_privacy_pending_path(temp.path());
     fs::write(&legacy, b"legacy-pending-request").expect("seed legacy pending state");
-
     let error = open_fenced_privacy_store_v1(temp.path())
         .expect_err("legacy pending state must fail closed");
-
     assert!(error.to_string().contains("legacy mutable"));
     assert!(
         legacy.is_file(),
         "online startup must not delete retired privacy authority"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn filesystem_publisher_temp_recovery_never_follows_substituted_parent() {
@@ -991,7 +946,6 @@ fn filesystem_publisher_temp_recovery_never_follows_substituted_parent() {
     fs::write(&outside_temp, b"must-remain-outside").expect("seed outside temp");
     std::os::unix::fs::symlink(&outside, temp.path().join(GOVERNANCE_RUNTIME_DAG_DIR))
         .expect("substitute runtime parent");
-
     let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
         .expect("reopen publisher root")
         .with_qualified_runtime_dag_providers(
@@ -1012,7 +966,6 @@ fn filesystem_publisher_temp_recovery_never_follows_substituted_parent() {
         b"must-remain-outside"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn filesystem_publisher_root_lock_rejects_symlink() {
@@ -1021,7 +974,6 @@ fn filesystem_publisher_root_lock_rejects_symlink() {
     fs::write(&target, b"must remain untouched").expect("write lock target");
     std::os::unix::fs::symlink(&target, temp.path().join(GOVERNANCE_PUBLISHER_LOCK_FILE))
         .expect("create publisher lock symlink");
-
     let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
         .expect_err("publisher lock symlink must fail closed");
     assert!(error.to_string().contains("must not be a symlink"));
@@ -1030,7 +982,6 @@ fn filesystem_publisher_root_lock_rejects_symlink() {
         b"must remain untouched"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn filesystem_publisher_root_lock_rejects_hard_link() {
@@ -1039,7 +990,6 @@ fn filesystem_publisher_root_lock_rejects_hard_link() {
     fs::write(&target, b"must remain untouched").expect("write lock target");
     fs::hard_link(&target, temp.path().join(GOVERNANCE_PUBLISHER_LOCK_FILE))
         .expect("create publisher lock hard link");
-
     let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
         .expect_err("publisher lock hard link must fail closed");
     assert!(error.to_string().contains("exactly one hard link"));
@@ -1048,14 +998,12 @@ fn filesystem_publisher_root_lock_rejects_hard_link() {
         b"must remain untouched"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn governance_directory_policy_enforces_role_owner_and_sticky_ancestor_matrix() {
     let effective_uid = 42;
     let producer_uid = 77;
     let unrelated_uid = 99;
-
     assert!(governance_directory_policy_accepts(
         effective_uid,
         0o755,
@@ -1096,7 +1044,6 @@ fn governance_directory_policy_enforces_role_owner_and_sticky_ancestor_matrix() 
         producer_uid,
         false,
     ));
-
     for owner in [0, effective_uid, producer_uid] {
         assert!(governance_directory_policy_accepts(
             owner,
@@ -1132,7 +1079,6 @@ fn governance_directory_policy_enforces_role_owner_and_sticky_ancestor_matrix() 
         false,
     ));
 }
-
 #[cfg(unix)]
 #[test]
 fn governance_root_guard_accepts_exact_canonical_root_and_trusted_sticky_parent() {
@@ -1149,7 +1095,6 @@ fn governance_root_guard_accepts_exact_canonical_root_and_trusted_sticky_parent(
     source_guard
         .revalidate()
         .expect("source root remains pinned");
-
     let sticky = temp.path().join("sticky-parent");
     fs::create_dir(&sticky).expect("create sticky parent");
     fs::set_permissions(&sticky, fs::Permissions::from_mode(0o1777))
@@ -1162,7 +1107,6 @@ fn governance_root_guard_accepts_exact_canonical_root_and_trusted_sticky_parent(
         .revalidate()
         .expect("sticky-root identity remains pinned");
 }
-
 #[cfg(target_os = "macos")]
 #[test]
 fn governance_root_guard_rejects_descriptor_bound_acl_mutation_grant() {
@@ -1186,7 +1130,6 @@ fn governance_root_guard_rejects_descriptor_bound_acl_mutation_grant() {
         "unexpected ACL rejection: {error}"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn governance_root_guard_rejects_lexical_symlink_ancestor() {
@@ -1197,7 +1140,6 @@ fn governance_root_guard_rejects_lexical_symlink_ancestor() {
     let linked_parent = temp.path().join("linked-parent");
     std::os::unix::fs::symlink(&real_parent, &linked_parent)
         .expect("create lexical ancestor symlink");
-
     let error = GovernanceFilesystemRootGuard::capture_writer(&linked_parent.join("producer"))
         .expect_err("lexical symlink ancestor must fail closed");
     assert!(
@@ -1207,7 +1149,6 @@ fn governance_root_guard_rejects_lexical_symlink_ancestor() {
         "unexpected lexical-symlink error: {error}"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn filesystem_publisher_rejects_root_mode_drift_before_publication() {
@@ -1232,7 +1173,6 @@ fn filesystem_publisher_rejects_root_mode_drift_before_publication() {
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
         .expect("restore root mode for cleanup");
 }
-
 #[cfg(unix)]
 #[test]
 fn filesystem_publisher_rejects_root_rename_replacement_without_touching_replacement() {
@@ -1247,7 +1187,6 @@ fn filesystem_publisher_rejects_root_rename_replacement_without_touching_replace
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("secure replacement root");
     let marker = root.join("must-remain");
     fs::write(&marker, b"replacement").expect("seed replacement marker");
-
     let (settlement, encoded) = sample_settlement();
     let error = publisher
         .publish_deal_settlement(&settlement, &encoded)
@@ -1263,7 +1202,6 @@ fn filesystem_publisher_rejects_root_rename_replacement_without_touching_replace
     assert!(!root.join(GOVERNANCE_PUBLICATION_SOURCES_DIR).exists());
     assert!(!detached.join(GOVERNANCE_PUBLICATION_SOURCES_DIR).exists());
 }
-
 #[cfg(unix)]
 #[test]
 fn filesystem_publisher_rejects_ancestor_replacement_and_symlink_without_writing_target() {
@@ -1280,7 +1218,6 @@ fn filesystem_publisher_rejects_ancestor_replacement_and_symlink_without_writing
         .expect("substitute producer root symlink");
     let marker = detached.join("producer").join("must-remain");
     fs::write(&marker, b"detached").expect("seed detached marker");
-
     let (settlement, encoded) = sample_settlement();
     let error = publisher
         .publish_deal_settlement(&settlement, &encoded)
@@ -1297,7 +1234,6 @@ fn filesystem_publisher_rejects_ancestor_replacement_and_symlink_without_writing
     );
     assert!(!detached.join("producer/settlements").exists());
 }
-
 #[test]
 fn runtime_dag_signer_rejects_invalid_handle_and_oversized_identity() {
     let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
@@ -1307,7 +1243,6 @@ fn runtime_dag_signer_rejects_invalid_handle_and_oversized_identity() {
         0x31,
     ));
     let public_key = signer.public_key();
-
     validate_runtime_handle(
         "pkcs11:prod/governance-dag.primary-v1_slot-a",
         "governance runtime DAG signer",
@@ -1331,7 +1266,6 @@ fn runtime_dag_signer_rejects_invalid_handle_and_oversized_identity() {
         .expect_err("forbidden runtime-handle character must fail closed");
         assert!(error.to_string().contains("canonical credential-free"));
     }
-
     let error = GovernanceRuntimeDagSigner::try_new(
         signer.handle().to_owned(),
         vec![0x41; GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1 + 1],
@@ -1346,7 +1280,6 @@ fn runtime_dag_signer_rejects_invalid_handle_and_oversized_identity() {
             .contains("publisher peer id exceeds 128 bytes")
     );
 }
-
 #[test]
 fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
     let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
@@ -1364,7 +1297,6 @@ fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
     )
     .expect_err("test-marked configured handle must fail closed");
     assert!(error.to_string().contains("test-marked"));
-
     let mut stale = TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x31);
     stale.qualification_error = Some("hsm_token=must-never-escape".to_owned());
     let stale = Arc::new(stale);
@@ -1378,7 +1310,6 @@ fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
     .expect_err("stale provider must fail startup qualification");
     assert!(error.to_string().contains("stale"));
     assert!(!error.to_string().contains("must-never-escape"));
-
     let invalid = Arc::new(TestRuntimeDagSigner::new(
         "pkcs11:governance-dag:primary",
         &peer_id,
@@ -1394,7 +1325,6 @@ fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
     )
     .expect_err("zero provider revision must fail startup qualification");
     assert!(error.to_string().contains("invalid policy qualification"));
-
     for expected_qualification in [
         GovernanceDagRuntimeProviderQualificationV1::new(2, TEST_RUNTIME_DAG_SIGNER_POLICY_DIGEST),
         GovernanceDagRuntimeProviderQualificationV1::new(1, [0x72; 32]),
@@ -1418,7 +1348,6 @@ fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
                 .contains("does not match configured revision and digest")
         );
     }
-
     let drifting = Arc::new(TestRuntimeDagSigner::new(
         "pkcs11:governance-dag:primary",
         &peer_id,
@@ -1440,7 +1369,6 @@ fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
             .to_string()
             .contains("policy changed during startup qualification")
     );
-
     let signer = Arc::new(TestRuntimeDagSigner::new(
         "pkcs11:governance-dag:primary",
         &peer_id,
@@ -1463,7 +1391,6 @@ fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
         .expect_err("provider policy drift must fail closed");
     assert!(error.to_string().contains("policy changed"));
     assert_eq!(signer.observed_purpose(), None);
-
     let signer = Arc::new(TestRuntimeDagSigner::new(
         "pkcs11:governance-dag:primary",
         b"12D3KooWRuntimeDagPublisher",
@@ -1490,7 +1417,6 @@ fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
         Some(GovernanceDagSigningPurposeV1::LogNode)
     );
 }
-
 #[test]
 fn runtime_dag_signer_rejects_handle_peer_and_public_key_mismatch() {
     let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
@@ -1502,7 +1428,6 @@ fn runtime_dag_signer_rejects_handle_peer_and_public_key_mismatch() {
     let public_key = signer.public_key();
     let mismatched_public_key =
         TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x32).public_key();
-
     for (handle, peer, key, expected) in [
         (
             "pkcs11:governance-dag:other",
@@ -1534,7 +1459,6 @@ fn runtime_dag_signer_rejects_handle_peer_and_public_key_mismatch() {
         assert!(error.to_string().contains(expected), "{error}");
     }
 }
-
 #[test]
 fn runtime_dag_signer_rejects_malformed_and_weak_ed25519_keys() {
     let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
@@ -1563,7 +1487,6 @@ fn runtime_dag_signer_rejects_malformed_and_weak_ed25519_keys() {
         assert!(error.to_string().contains(expected), "{error}");
     }
 }
-
 #[test]
 fn runtime_dag_signer_redacts_provider_error_and_rejects_wrong_signature() {
     let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
@@ -1590,7 +1513,6 @@ fn runtime_dag_signer_redacts_provider_error_and_rejects_wrong_signature() {
         refusing.observed_purpose(),
         Some(GovernanceDagSigningPurposeV1::LogNode)
     );
-
     let mut corrupt = TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x31);
     corrupt.corrupt_signature = true;
     let corrupt = Arc::new(corrupt);
@@ -1614,11 +1536,9 @@ fn runtime_dag_signer_redacts_provider_error_and_rejects_wrong_signature() {
         Some(GovernanceDagSigningPurposeV1::LogNode)
     );
 }
-
 #[test]
 fn filesystem_publisher_serializes_concurrent_index_and_signed_head_updates() {
     const PUBLICATION_COUNT: usize = 16;
-
     let temp = tempdir().expect("tempdir");
     let publisher = Arc::new(signed_runtime_publisher(temp.path()));
     let (template, _) = sample_settlement();
@@ -1644,11 +1564,9 @@ fn filesystem_publisher_serializes_concurrent_index_and_signed_head_updates() {
             })
         })
         .collect::<Vec<_>>();
-
     for thread in threads {
         thread.join().expect("publisher thread");
     }
-
     let publish_index = read_publication_section_fixture(temp.path(), "publish_index");
     assert_eq!(
         publish_index.get("entry_count").and_then(JsonValue::as_u64),
@@ -1665,7 +1583,6 @@ fn filesystem_publisher_serializes_concurrent_index_and_signed_head_updates() {
             Some(expected_position as u64)
         );
     }
-
     let runtime_index = runtime_index(temp.path());
     assert_eq!(
         runtime_index.get("block_count").and_then(JsonValue::as_u64),
@@ -1679,7 +1596,6 @@ fn filesystem_publisher_serializes_concurrent_index_and_signed_head_updates() {
         Some(PUBLICATION_COUNT)
     );
 }
-
 #[test]
 fn filesystem_publisher_poisoned_transaction_lock_fails_before_writes() {
     let temp = tempdir().expect("tempdir");
@@ -1693,7 +1609,6 @@ fn filesystem_publisher_poisoned_transaction_lock_fails_before_writes() {
         panic!("poison publication transaction lock");
     }));
     assert!(poisoned.is_err());
-
     let (settlement, encoded) = sample_settlement();
     let error = publisher
         .publish_deal_settlement(&settlement, &encoded)

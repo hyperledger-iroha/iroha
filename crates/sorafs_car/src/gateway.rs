@@ -5,7 +5,6 @@
 //! context together with per-provider connection details (base URL + stream
 //! token) and receive a ready-to-use set of [`FetchProvider`] definitions plus
 //! an async fetcher that issues chunk requests with the correct headers.
-
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt,
@@ -19,7 +18,6 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
@@ -37,13 +35,11 @@ use sorafs_manifest::{
     STREAM_TOKEN_MAX_WIRE_BYTES_V1, StreamTokenV1, decode_manifest_v1_canonical,
 };
 use thiserror::Error;
-
 use crate::multi_fetch::{
     AttemptFailure, ChunkResponse, FetchOptions, FetchOutcome, FetchProvider, FetchRequest,
     MultiSourceError, PolicyBlockEvidence, ProviderMetadata, RangeCapability, StreamBudget,
     TransportHint,
 };
-
 const HEADER_SORA_NONCE: &str = "x-sorafs-nonce";
 const HEADER_SORA_CHUNKER: &str = "x-sorafs-chunker";
 const HEADER_SORA_STREAM_TOKEN: &str = "x-sorafs-stream-token";
@@ -73,14 +69,12 @@ const MAX_MANIFEST_CID_BYTES: usize = 128;
 const STREAM_TOKEN_CLOCK_SKEW_SECS: u64 = 60;
 const GATEWAY_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const GATEWAY_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// HTTP request issued by the gateway fetcher.
 pub(crate) struct HttpRequest {
     pub url: Url,
     pub headers: HeaderMap,
     pub max_response_bytes: usize,
 }
-
 /// HTTP response returned by the engine.
 #[derive(Clone)]
 pub(crate) struct HttpResponse {
@@ -88,7 +82,6 @@ pub(crate) struct HttpResponse {
     pub headers: HeaderMap,
     pub body: Vec<u8>,
 }
-
 /// Evidence returned by a gateway when a request is blocked by policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GatewayFailureEvidence {
@@ -101,14 +94,11 @@ pub struct GatewayFailureEvidence {
     /// Lowercase hexadecimal digest of the active governed catalog.
     pub catalog_digest_hex: String,
 }
-
 pub(crate) type HttpFuture = Pin<Box<dyn Future<Output = Result<HttpResponse, HttpError>> + Send>>;
-
 /// Minimal async HTTP client abstraction used by the fetcher.
 pub(crate) trait HttpEngine: Send + Sync {
     fn get(&self, request: HttpRequest) -> HttpFuture;
 }
-
 /// Errors surfaced by HTTP engines.
 #[derive(Debug)]
 pub(crate) enum HttpError {
@@ -120,17 +110,14 @@ pub(crate) enum HttpError {
     #[cfg(test)]
     TestEngine(String),
 }
-
 struct ReqwestEngine {
     client: Client,
 }
-
 impl ReqwestEngine {
     fn new(client: Client) -> Self {
         Self { client }
     }
 }
-
 impl HttpEngine for ReqwestEngine {
     fn get(&self, request: HttpRequest) -> HttpFuture {
         let client = self.client.clone();
@@ -177,7 +164,6 @@ impl HttpEngine for ReqwestEngine {
         })
     }
 }
-
 /// Provider configuration required to contact a Torii gateway.
 #[derive(Debug, Clone)]
 pub struct GatewayProviderInput {
@@ -197,7 +183,6 @@ pub struct GatewayProviderInput {
     /// Optional admin endpoint exposing `/privacy/events` for relay telemetry.
     pub privacy_events_url: Option<String>,
 }
-
 /// Shared manifest context supplied to the gateway fetcher.
 #[derive(Debug, Clone)]
 pub struct GatewayFetchConfig {
@@ -219,21 +204,18 @@ pub struct GatewayFetchConfig {
     /// Optional cache version to enforce on successful gateway responses.
     pub expected_cache_version: Option<String>,
 }
-
 impl GatewayFetchConfig {
     /// Normalise the manifest identifier for routing.
     fn manifest_id_normalised(&self) -> String {
         self.manifest_id_hex.trim().to_ascii_lowercase()
     }
 }
-
 /// Container bundling orchestrator providers with the HTTP fetcher.
 #[derive(Clone)]
 pub struct GatewayFetchContext {
     providers: Arc<[FetchProvider]>,
     fetcher: GatewayFetcher,
 }
-
 impl std::fmt::Debug for GatewayFetchContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GatewayFetchContext")
@@ -242,7 +224,6 @@ impl std::fmt::Debug for GatewayFetchContext {
             .finish()
     }
 }
-
 impl GatewayFetchContext {
     /// Build a gateway fetch context from the supplied manifest and provider inputs.
     ///
@@ -262,7 +243,6 @@ impl GatewayFetchContext {
             GATEWAY_REQUEST_TIMEOUT,
         )
     }
-
     /// Build a gateway fetch context with explicit connect and whole-request timeouts.
     ///
     /// This is intended for clients whose platform configuration owns a tighter
@@ -296,7 +276,6 @@ impl GatewayFetchContext {
         if inputs.is_empty() {
             return Err(GatewayBuildError::NoProviders);
         }
-
         let mut resolved_hosts = BTreeMap::<String, Vec<SocketAddr>>::new();
         for input in &inputs {
             let base_url = parse_base_url(&input.base_url).map_err(|source| {
@@ -316,7 +295,6 @@ impl GatewayFetchContext {
                 resolve_public_host(&privacy_url, &mut resolved_hosts)?;
             }
         }
-
         let mut client_builder = Client::builder()
             .no_proxy()
             .no_gzip()
@@ -335,7 +313,6 @@ impl GatewayFetchContext {
             .map_err(GatewayBuildError::ClientBuild)?;
         Self::build_with_engine(config, inputs, Arc::new(ReqwestEngine::new(client)))
     }
-
     pub(crate) fn build_with_engine(
         config: GatewayFetchConfig,
         providers: impl IntoIterator<Item = GatewayProviderInput>,
@@ -345,7 +322,6 @@ impl GatewayFetchContext {
         let mut provider_map = HashMap::new();
         let mut provider_ids = HashSet::new();
         let mut fetch_providers = Vec::new();
-
         for (index, input) in providers.into_iter().enumerate() {
             if index >= MAX_GATEWAY_PROVIDERS {
                 return Err(GatewayBuildError::TooManyProviders {
@@ -363,7 +339,6 @@ impl GatewayFetchContext {
         if fetch_providers.is_empty() {
             return Err(GatewayBuildError::NoProviders);
         }
-
         let fetcher = GatewayFetcher {
             inner: Arc::new(GatewayFetcherInner {
                 manifest_id_hex: config.manifest_id.clone(),
@@ -377,25 +352,21 @@ impl GatewayFetchContext {
                 providers: provider_map,
             }),
         };
-
         Ok(Self {
             providers: fetch_providers.into(),
             fetcher,
         })
     }
-
     /// Clone all provider descriptors for orchestrator scheduling.
     #[must_use]
     pub fn providers(&self) -> Vec<FetchProvider> {
         self.providers.to_vec()
     }
-
     /// Fetcher reference used to issue chunk requests.
     #[must_use]
     pub fn fetcher(&self) -> GatewayFetcher {
         self.fetcher.clone()
     }
-
     /// Convenience wrapper executing the orchestration end-to-end.
     pub async fn execute_plan(
         &self,
@@ -415,25 +386,21 @@ impl GatewayFetchContext {
         )
         .await
     }
-
     /// Fetch the manifest payload for this context using the configured providers.
     pub async fn fetch_manifest(&self) -> Result<GatewayFetchedManifest, GatewayManifestError> {
         self.fetcher.fetch_manifest().await
     }
 }
-
 /// Cloneable async fetcher issuing chunk requests to Torii gateways.
 #[derive(Clone)]
 pub struct GatewayFetcher {
     inner: Arc<GatewayFetcherInner>,
 }
-
 impl GatewayFetcher {
     /// Issue a single chunk request for the provided fetch metadata.
     pub async fn fetch(&self, request: FetchRequest) -> Result<ChunkResponse, GatewayFetchError> {
         self.inner.fetch(request).await
     }
-
     /// Expose the fetcher as a closure compatible with [`fetch_plan_parallel`].
     pub fn as_closure(
         &self,
@@ -444,17 +411,14 @@ impl GatewayFetcher {
             Box::pin(async move { fetcher.fetch(request).await })
         }
     }
-
     /// Fetch the manifest payload associated with this context.
     pub async fn fetch_manifest(&self) -> Result<GatewayFetchedManifest, GatewayManifestError> {
         self.inner.fetch_manifest().await
     }
 }
-
 /// Future returned by the gateway fetcher closure.
 pub type GatewayFetchFuture =
     Pin<Box<dyn Future<Output = Result<ChunkResponse, GatewayFetchError>> + Send>>;
-
 struct GatewayFetcherInner {
     engine: Arc<dyn HttpEngine>,
     manifest_id_hex: String,
@@ -466,7 +430,6 @@ struct GatewayFetcherInner {
     cache_version: Option<String>,
     providers: HashMap<String, Arc<ProviderRuntime>>,
 }
-
 impl GatewayFetcherInner {
     async fn fetch(&self, request: FetchRequest) -> Result<ChunkResponse, GatewayFetchError> {
         let provider_alias = request.provider.id().as_str().to_string();
@@ -477,7 +440,6 @@ impl GatewayFetcherInner {
                 provider: provider_alias.clone(),
             })?
             .clone();
-
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| GatewayFetchError::SystemClockBeforeUnixEpoch)?
@@ -487,7 +449,6 @@ impl GatewayFetcherInner {
                 provider: provider_alias,
             });
         }
-
         let digest_hex = hex::encode(request.spec.digest);
         let url = provider
             .base_url
@@ -499,7 +460,6 @@ impl GatewayFetcherInner {
                 provider: provider_alias.clone(),
                 source,
             })?;
-
         let nonce = provider.next_nonce(request.spec.chunk_index).map_err(|_| {
             GatewayFetchError::NonceExhausted {
                 provider: provider_alias.clone(),
@@ -551,7 +511,6 @@ impl GatewayFetcherInner {
                 })?,
             );
         }
-
         let max_response_bytes = usize::try_from(request.spec.length)
             .unwrap_or(usize::MAX)
             .saturating_add(MAX_GATEWAY_ERROR_BODY_BYTES)
@@ -583,7 +542,6 @@ impl GatewayFetcherInner {
                     message,
                 },
             })?;
-
         if !response.status.is_success() {
             if let Some(evidence) = extract_failure_evidence(&response) {
                 return Err(GatewayFetchError::PolicyBlocked {
@@ -613,19 +571,14 @@ impl GatewayFetcherInner {
                 status: response.status,
             });
         }
-
         Ok(ChunkResponse::new(response.body))
     }
-
     async fn fetch_manifest(&self) -> Result<GatewayFetchedManifest, GatewayManifestError> {
         if self.providers.is_empty() {
             return Err(GatewayManifestError::NoProviders);
         }
-
         let manifest_path = format!("v1/sorafs/storage/manifest/{}", self.manifest_id_hex);
-
         let mut last_error: Option<GatewayManifestError> = None;
-
         for (alias, runtime) in &self.providers {
             let url = match runtime.base_url.join(&manifest_path) {
                 Ok(url) => url,
@@ -637,7 +590,6 @@ impl GatewayFetcherInner {
                     continue;
                 }
             };
-
             let mut headers = HeaderMap::new();
             if let Some(envelope) = &self.manifest_envelope {
                 headers.insert(
@@ -660,7 +612,6 @@ impl GatewayFetcherInner {
                     );
                 }
             }
-
             let response = match self
                 .engine
                 .get(HttpRequest {
@@ -688,7 +639,6 @@ impl GatewayFetcherInner {
                     continue;
                 }
             };
-
             if !response.status.is_success() {
                 if let Some(evidence) = extract_failure_evidence(&response) {
                     let detail = format!(
@@ -717,7 +667,6 @@ impl GatewayFetcherInner {
                 });
                 continue;
             }
-
             let cache_version = observed_cache_version(&response.headers);
             if let Some(expected) = &self.cache_version
                 && cache_version.as_deref() != Some(expected.as_str())
@@ -730,7 +679,6 @@ impl GatewayFetcherInner {
                 });
                 continue;
             }
-
             match parse_manifest_response(
                 alias,
                 &self.manifest_id_hex,
@@ -741,15 +689,12 @@ impl GatewayFetcherInner {
                 Err(err) => last_error = Some(err),
             }
         }
-
         Err(last_error.unwrap_or(GatewayManifestError::NoProviders))
     }
 }
-
 fn header_value(value: impl AsRef<str>) -> Result<HeaderValue, InvalidHeaderValue> {
     HeaderValue::from_str(value.as_ref())
 }
-
 fn truncate(text: &str, max: usize) -> String {
     if text.len() <= max {
         return text.to_string();
@@ -758,7 +703,6 @@ fn truncate(text: &str, max: usize) -> String {
     truncated.push('…');
     truncated
 }
-
 fn observed_cache_version(headers: &HeaderMap) -> Option<String> {
     headers
         .get(HEADER_SORA_CACHE_VERSION)
@@ -766,7 +710,6 @@ fn observed_cache_version(headers: &HeaderMap) -> Option<String> {
         .filter(|value| !value.is_empty() && value.len() <= MAX_CACHE_VERSION_BYTES)
         .map(ToOwned::to_owned)
 }
-
 fn extract_failure_evidence(response: &HttpResponse) -> Option<GatewayFailureEvidence> {
     // Obsolete local-evidence headers make an otherwise valid body noncanonical.
     if response.status != StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS
@@ -796,13 +739,11 @@ fn extract_failure_evidence(response: &HttpResponse) -> Option<GatewayFailureEvi
         catalog_digest_hex: catalog_digest_hex.to_owned(),
     })
 }
-
 /// Return whether a governed decision source can deny a request in V1.
 pub(crate) fn is_canonical_gateway_compliance_source(source: &str) -> bool {
     source == GATEWAY_COMPLIANCE_SOURCE_BASELINE
         || source == GATEWAY_COMPLIANCE_SOURCE_LEGAL_SAFETY_HOLD
 }
-
 /// Return whether a catalog digest is exact lowercase 32-byte hexadecimal text.
 pub(crate) fn is_canonical_catalog_digest_hex(digest: &str) -> bool {
     digest.len() == 64
@@ -810,7 +751,6 @@ pub(crate) fn is_canonical_catalog_digest_hex(digest: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
-
 #[derive(Debug)]
 struct ProviderRuntime {
     base_url: Url,
@@ -821,7 +761,6 @@ struct ProviderRuntime {
     nonce: AtomicU64,
     _privacy_events_url: Option<Url>,
 }
-
 impl ProviderRuntime {
     fn next_nonce(&self, chunk_index: usize) -> Result<String, NonceExhausted> {
         let counter = self
@@ -837,15 +776,12 @@ impl ProviderRuntime {
         ))
     }
 }
-
 #[derive(Debug, Clone, Copy)]
 struct NonceExhausted;
-
 #[derive(Debug)]
 struct ProviderDescriptor {
     provider: FetchProvider,
 }
-
 #[derive(Debug)]
 struct NormalisedConfig {
     manifest_id: String,
@@ -858,7 +794,6 @@ struct NormalisedConfig {
     salt_epoch_header: Option<HeaderValue>,
     cache_version: Option<String>,
 }
-
 impl NormalisedConfig {
     fn from_config(config: GatewayFetchConfig) -> Result<Self, GatewayBuildError> {
         let manifest_id = config.manifest_id_normalised();
@@ -875,19 +810,16 @@ impl NormalisedConfig {
             salt_epoch,
             expected_cache_version,
         } = config;
-
         let chunker_handle = chunker_handle.trim().to_string();
         if chunker_handle.is_empty() || chunker_handle.len() > MAX_CHUNKER_HANDLE_BYTES {
             return Err(GatewayBuildError::EmptyChunkerHandle);
         }
-
         let chunker_header = HeaderValue::from_str(&chunker_handle).map_err(|_| {
             GatewayBuildError::InvalidHeader {
                 header: HEADER_SORA_CHUNKER,
                 reason: "chunker handle contains invalid ASCII",
             }
         })?;
-
         let manifest_envelope = if let Some(value) = manifest_envelope_b64 {
             let trimmed = value.trim();
             if trimmed != value
@@ -926,7 +858,6 @@ impl NormalisedConfig {
         } else {
             None
         };
-
         let client_header = if let Some(id) = client_id {
             let trimmed = id.trim();
             if trimmed.is_empty() || trimmed.len() > MAX_CLIENT_ID_BYTES {
@@ -944,7 +875,6 @@ impl NormalisedConfig {
         } else {
             None
         };
-
         let expected_manifest_cid_hex = match expected_manifest_cid_hex {
             Some(cid) => {
                 let normalised = cid.trim().to_ascii_lowercase();
@@ -958,7 +888,6 @@ impl NormalisedConfig {
             }
             None => None,
         };
-
         let (blinded_header, salt_epoch_header) = match (blinded_cid_b64, salt_epoch) {
             (Some(blinded), Some(epoch)) => {
                 let trimmed = blinded.trim();
@@ -1005,7 +934,6 @@ impl NormalisedConfig {
             (None, Some(_)) => return Err(GatewayBuildError::SaltEpochWithoutBlindedCid),
             (None, None) => (None, None),
         };
-
         let cache_version = if let Some(version) = expected_cache_version {
             let trimmed = version.trim();
             if trimmed.is_empty() || trimmed.len() > MAX_CACHE_VERSION_BYTES {
@@ -1018,7 +946,6 @@ impl NormalisedConfig {
         } else {
             None
         };
-
         Ok(Self {
             manifest_id,
             chunker_handle,
@@ -1032,7 +959,6 @@ impl NormalisedConfig {
         })
     }
 }
-
 impl ProviderDescriptor {
     fn from_input(
         config: &NormalisedConfig,
@@ -1066,16 +992,13 @@ impl ProviderDescriptor {
         if !provider_ids.insert(provider_id) {
             return Err(GatewayBuildError::DuplicateProviderId { provider_id_hex });
         }
-
         let gateway_public_key = decode_gateway_public_key(&input.gateway_public_key_hex)?;
-
         let base_url = parse_base_url(&input.base_url).map_err(|source| {
             GatewayBuildError::InvalidBaseUrl {
                 provider_id: provider_id_hex.clone(),
                 source,
             }
         })?;
-
         let privacy_events_url = match input.privacy_events_url.as_ref() {
             Some(raw) => Some(parse_privacy_url(raw).map_err(|source| {
                 GatewayBuildError::InvalidPrivacyUrl {
@@ -1085,7 +1008,6 @@ impl ProviderDescriptor {
             })?),
             None => None,
         };
-
         let token = decode_stream_token(&input.stream_token_b64).map_err(|source| {
             GatewayBuildError::InvalidStreamToken {
                 provider_id: provider_id_hex.clone(),
@@ -1098,7 +1020,6 @@ impl ProviderDescriptor {
                 source,
             }
         })?;
-
         if token.body.issued_at >= token.body.ttl_epoch
             || token.body.ttl_epoch - token.body.issued_at > STREAM_TOKEN_MAX_TTL_SECS_V1
         {
@@ -1147,14 +1068,12 @@ impl ProviderDescriptor {
                 provider_id: provider_id_hex.clone(),
             });
         }
-
         if token.body.provider_id != provider_id {
             return Err(GatewayBuildError::ProviderIdMismatch {
                 provider_id: provider_id_hex.clone(),
                 token_provider_id: hex::encode(token.body.provider_id),
             });
         }
-
         if token.body.profile_handle != config.chunker_handle {
             return Err(GatewayBuildError::ProfileMismatch {
                 provider_id: provider_id_hex.clone(),
@@ -1162,7 +1081,6 @@ impl ProviderDescriptor {
                 expected: config.chunker_handle.clone(),
             });
         }
-
         if let Some(expected_cid) = &config.expected_manifest_cid_hex {
             let token_cid = hex::encode(token.body.manifest_cid.as_slice());
             if token_cid != *expected_cid {
@@ -1173,14 +1091,12 @@ impl ProviderDescriptor {
                 });
             }
         }
-
         let max_streams = usize::from(token.body.max_streams);
         let capacity = NonZeroUsize::new(max_streams).ok_or_else(|| {
             GatewayBuildError::ZeroStreamCapacity {
                 provider_id: provider_id_hex.clone(),
             }
         })?;
-
         let mut metadata = ProviderMetadata::new();
         metadata.provider_id = Some(provider_id_hex.clone());
         metadata.profile_id = Some(config.chunker_handle.clone());
@@ -1207,11 +1123,9 @@ impl ProviderDescriptor {
             supports_merkle_proof: true,
         });
         metadata.profile_aliases.push(input.name.clone());
-
         let provider = FetchProvider::new(input.name.clone())
             .with_max_concurrent_chunks(capacity)
             .with_metadata(metadata);
-
         let mut nonce_prefix = [0u8; 16];
         let mut rng = OsRng;
         rng.try_fill_bytes(&mut nonce_prefix)
@@ -1223,7 +1137,6 @@ impl ProviderDescriptor {
                 message: "operating system returned an all-zero nonce prefix".to_owned(),
             });
         }
-
         let runtime = ProviderRuntime {
             base_url,
             stream_token: HeaderValue::from_str(input.stream_token_b64.trim()).map_err(|_| {
@@ -1238,13 +1151,10 @@ impl ProviderDescriptor {
             nonce: AtomicU64::new(0),
             _privacy_events_url: privacy_events_url,
         };
-
         providers.insert(input.name, Arc::new(runtime));
-
         Ok(Self { provider })
     }
 }
-
 fn decode_provider_id(value: &str) -> Result<[u8; 32], ProviderIdDecodeError> {
     let decoded = hex::decode(value).map_err(ProviderIdDecodeError::InvalidHex)?;
     let actual = decoded.len();
@@ -1262,7 +1172,6 @@ fn decode_provider_id(value: &str) -> Result<[u8; 32], ProviderIdDecodeError> {
         .try_into()
         .map_err(|_| ProviderIdDecodeError::InvalidLength { actual })
 }
-
 fn decode_gateway_public_key(value: &str) -> Result<VerifyingKey, GatewayBuildError> {
     let trimmed = value.trim();
     if trimmed != value
@@ -1284,7 +1193,6 @@ fn decode_gateway_public_key(value: &str) -> Result<VerifyingKey, GatewayBuildEr
     }
     Ok(key)
 }
-
 fn parse_base_url(value: &str) -> Result<Url, GatewayUrlError> {
     let url = parse_gateway_url(value)?;
     if url.path() != "/" {
@@ -1292,7 +1200,6 @@ fn parse_base_url(value: &str) -> Result<Url, GatewayUrlError> {
     }
     Ok(url)
 }
-
 fn parse_privacy_url(value: &str) -> Result<Url, GatewayUrlError> {
     let url = parse_gateway_url(value)?;
     if url.path() != "/privacy/events" {
@@ -1300,7 +1207,6 @@ fn parse_privacy_url(value: &str) -> Result<Url, GatewayUrlError> {
     }
     Ok(url)
 }
-
 fn parse_gateway_url(value: &str) -> Result<Url, GatewayUrlError> {
     if value != value.trim() || value.len() > 2_048 {
         return Err(GatewayUrlError::NonCanonical);
@@ -1337,7 +1243,6 @@ fn parse_gateway_url(value: &str) -> Result<Url, GatewayUrlError> {
     }
     Ok(url)
 }
-
 fn is_public_ip(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(address) => {
@@ -1373,7 +1278,6 @@ fn is_public_ip(address: IpAddr) -> bool {
         }
     }
 }
-
 fn resolve_public_host(
     url: &Url,
     resolved_hosts: &mut BTreeMap<String, Vec<SocketAddr>>,
@@ -1406,7 +1310,6 @@ fn resolve_public_host(
     resolved_hosts.insert(host.to_owned(), addresses);
     Ok(())
 }
-
 #[derive(Debug, Error)]
 pub enum GatewayUrlError {
     #[error("URL parse failed: {0}")]
@@ -1428,7 +1331,6 @@ pub enum GatewayUrlError {
     #[error("URL path is not the required canonical endpoint")]
     InvalidPath,
 }
-
 fn decode_stream_token(value: &str) -> Result<StreamTokenV1, StreamTokenDecodeError> {
     let trimmed = value.trim();
     if trimmed != value {
@@ -1461,7 +1363,6 @@ fn decode_stream_token(value: &str) -> Result<StreamTokenV1, StreamTokenDecodeEr
     }
     Ok(token)
 }
-
 /// Errors emitted while constructing the gateway fetcher.
 #[derive(Debug, Error)]
 pub enum GatewayBuildError {
@@ -1570,7 +1471,6 @@ pub enum GatewayBuildError {
         actual: String,
     },
 }
-
 /// Errors returned when decoding a fixed-width gateway provider identifier.
 #[derive(Debug, Clone, Copy, Error)]
 pub enum ProviderIdDecodeError {
@@ -1587,7 +1487,6 @@ pub enum ProviderIdDecodeError {
     #[error("identifier must be canonical lowercase hexadecimal without whitespace")]
     NonCanonical,
 }
-
 /// Errors surfaced while fetching manifests from gateways.
 #[derive(Debug, Error)]
 pub enum GatewayManifestError {
@@ -1641,7 +1540,6 @@ pub enum GatewayManifestError {
         actual: String,
     },
 }
-
 /// Parsed manifest details fetched from a gateway endpoint.
 #[derive(Debug, Clone)]
 pub struct GatewayFetchedManifest {
@@ -1662,7 +1560,6 @@ pub struct GatewayFetchedManifest {
     /// Cache version advertised by the gateway response.
     pub cache_version: Option<String>,
 }
-
 fn parse_manifest_response(
     provider: &str,
     expected_manifest_id_hex: &str,
@@ -1743,7 +1640,6 @@ fn parse_manifest_response(
             actual: computed_digest_hex,
         });
     }
-
     let payload_digest_hex = value
         .get("payload_digest_hex")
         .and_then(Value::as_str)
@@ -1775,7 +1671,6 @@ fn parse_manifest_response(
     let mut payload_digest_bytes = [0u8; 32];
     payload_digest_bytes.copy_from_slice(&payload_bytes);
     let payload_digest = blake3::Hash::from_bytes(payload_digest_bytes);
-
     let content_length = value
         .get("content_length")
         .and_then(Value::as_u64)
@@ -1814,7 +1709,6 @@ fn parse_manifest_response(
             error: "chunk_profile_handle does not match the decoded manifest".to_owned(),
         });
     }
-
     Ok(GatewayFetchedManifest {
         manifest_bytes,
         manifest,
@@ -1826,7 +1720,6 @@ fn parse_manifest_response(
         cache_version,
     })
 }
-
 /// Errors encountered while fetching chunks from a gateway.
 #[derive(Debug, Error)]
 pub enum GatewayFetchError {
@@ -1894,7 +1787,6 @@ pub enum GatewayFetchError {
     #[error("provider `{provider}` test-engine error: {message}")]
     TestEngine { provider: String, message: String },
 }
-
 impl From<GatewayFetchError> for AttemptFailure {
     fn from(error: GatewayFetchError) -> Self {
         let message = error.to_string();
@@ -1910,7 +1802,6 @@ impl From<GatewayFetchError> for AttemptFailure {
         }
     }
 }
-
 impl From<&GatewayFailureEvidence> for PolicyBlockEvidence {
     fn from(evidence: &GatewayFailureEvidence) -> Self {
         PolicyBlockEvidence {
@@ -1921,7 +1812,6 @@ impl From<&GatewayFailureEvidence> for PolicyBlockEvidence {
         }
     }
 }
-
 /// Stream token decoding errors surfaced during configuration.
 #[derive(Debug, Error)]
 pub enum StreamTokenDecodeError {
@@ -1936,7 +1826,6 @@ pub enum StreamTokenDecodeError {
     #[error("stream token payload is not the exact canonical Norito encoding")]
     NonCanonicalPayload,
 }
-
 impl fmt::Display for GatewayFetcher {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -1946,20 +1835,16 @@ impl fmt::Display for GatewayFetcher {
         )
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
         collections::HashMap,
         sync::{Arc, Mutex},
     };
-
     use ed25519_dalek::SigningKey;
     use sorafs_chunker::ChunkProfile;
     use sorafs_manifest::StreamTokenBodyV1;
-
     use super::*;
-
     #[test]
     fn request_header_value_rejects_control_characters_without_panicking() {
         assert!(header_value("valid-nonce").is_ok());
@@ -1967,11 +1852,9 @@ mod tests {
         assert!(header_value("invalid\0nonce").is_err());
     }
     use crate::{CarBuildPlan, ChunkFetchSpec, multi_fetch::FetchProvider};
-
     fn sample_payload(len: usize) -> Vec<u8> {
         (0..len).map(|idx| (idx % 251) as u8).collect()
     }
-
     fn sample_stream_token(
         manifest_cid_hex: &str,
         provider_id_hex: &str,
@@ -2003,36 +1886,28 @@ mod tests {
         )
         .expect("sign sample stream token")
     }
-
     fn encode_token_b64(token: &StreamTokenV1) -> String {
         let bytes = norito::to_bytes(token).expect("encode token");
         STANDARD.encode(bytes)
     }
-
     fn plan_for_payload(payload: &[u8]) -> CarBuildPlan {
         CarBuildPlan::single_file_with_profile(payload, ChunkProfile::DEFAULT).expect("build plan")
     }
-
     fn manifest_id_from_payload(payload: &[u8]) -> String {
         hex::encode(blake3::hash(payload).as_bytes())
     }
-
     fn provider_id_hex() -> String {
         "ab".repeat(32)
     }
-
     fn gateway_signing_key() -> SigningKey {
         SigningKey::from_bytes(&[0x42; 32])
     }
-
     fn gateway_public_key_hex() -> String {
         hex::encode(gateway_signing_key().verifying_key().to_bytes())
     }
-
     fn chunker_handle() -> String {
         "sorafs.sf1@1.0.0".to_string()
     }
-
     fn gateway_config(manifest_id_hex: &str, chunker_handle: &str) -> GatewayFetchConfig {
         GatewayFetchConfig {
             manifest_id_hex: manifest_id_hex.to_owned(),
@@ -2045,7 +1920,6 @@ mod tests {
             expected_cache_version: None,
         }
     }
-
     fn gateway_provider_input(token: &StreamTokenV1) -> GatewayProviderInput {
         GatewayProviderInput {
             name: "alpha".to_owned(),
@@ -2056,7 +1930,6 @@ mod tests {
             privacy_events_url: None,
         }
     }
-
     fn fixture_manifest_response() -> Value {
         let manifest_bytes =
             include_bytes!("../../../fixtures/sorafs_manifest/ci_sample/manifest.to").to_vec();
@@ -2088,7 +1961,6 @@ mod tests {
         object.insert("chunk_profile_handle".to_owned(), Value::String(profile));
         Value::Object(object)
     }
-
     #[test]
     fn manifest_response_requires_canonical_manifest_bound_metadata() {
         let canonical = fixture_manifest_response();
@@ -2100,12 +1972,10 @@ mod tests {
         let body = json::to_vec(&canonical).expect("response JSON");
         parse_manifest_response("alpha", &expected_manifest_id, &body, None)
             .expect("canonical response");
-
         assert!(matches!(
             parse_manifest_response("alpha", &"ff".repeat(32), &body, None),
             Err(GatewayManifestError::ManifestIdMismatch { .. })
         ));
-
         for (field, replacement) in [
             (
                 "manifest_digest_hex",
@@ -2134,7 +2004,6 @@ mod tests {
                 "tampered {field} must be rejected"
             );
         }
-
         let mut trailing = canonical.clone();
         let mut manifest_bytes = STANDARD
             .decode(
@@ -2154,7 +2023,6 @@ mod tests {
             parse_manifest_response("alpha", &expected_manifest_id, &body, None),
             Err(GatewayManifestError::Decode { .. })
         ));
-
         let mut oversized = canonical;
         oversized.as_object_mut().expect("object").insert(
             "manifest_b64".to_owned(),
@@ -2168,7 +2036,6 @@ mod tests {
             Err(GatewayManifestError::Decode { .. })
         ));
     }
-
     fn build_test_context(
         config: GatewayFetchConfig,
         providers: impl IntoIterator<Item = GatewayProviderInput>,
@@ -2179,7 +2046,6 @@ mod tests {
             Arc::new(MockHttpEngine::new(HashMap::new())),
         )
     }
-
     #[test]
     fn manifest_envelope_rejects_invalid_base64() {
         let config = GatewayFetchConfig {
@@ -2192,7 +2058,6 @@ mod tests {
             salt_epoch: None,
             expected_cache_version: None,
         };
-
         let err = NormalisedConfig::from_config(config).expect_err("manifest envelope should fail");
         match err {
             GatewayBuildError::InvalidHeader { header, reason } => {
@@ -2202,7 +2067,6 @@ mod tests {
             other => panic!("unexpected error: {other}"),
         }
     }
-
     #[test]
     fn provider_id_mismatch_is_rejected() {
         let payload = sample_payload(1024);
@@ -2212,7 +2076,6 @@ mod tests {
         let chunker = chunker_handle();
         let token = sample_stream_token(&manifest_id_hex, &token_provider_id, &chunker, 2);
         let token_b64 = encode_token_b64(&token);
-
         let config = GatewayFetchConfig {
             manifest_id_hex: manifest_id_hex.clone(),
             chunker_handle: chunker,
@@ -2231,7 +2094,6 @@ mod tests {
             stream_token_b64: token_b64,
             privacy_events_url: None,
         };
-
         let err = GatewayFetchContext::build_with_engine(
             config,
             vec![input],
@@ -2249,7 +2111,6 @@ mod tests {
             other => panic!("unexpected error: {other}"),
         }
     }
-
     #[test]
     fn provider_id_decoder_rejects_wrong_digest_sizes_without_panicking() {
         for actual in [0usize, 1, 31, 33, 64] {
@@ -2261,11 +2122,9 @@ mod tests {
                 Err(ProviderIdDecodeError::InvalidLength { actual: found }) if found == actual
             ));
         }
-
         let outcome = std::panic::catch_unwind(|| decode_provider_id("not-hex"));
         let result = outcome.expect("invalid provider-id hex must not panic");
         assert!(matches!(result, Err(ProviderIdDecodeError::InvalidHex(_))));
-
         assert!(matches!(
             decode_provider_id(&"AB".repeat(32)),
             Err(ProviderIdDecodeError::NonCanonical)
@@ -2275,7 +2134,6 @@ mod tests {
             Err(ProviderIdDecodeError::InvalidHex(_))
         ));
     }
-
     #[test]
     fn gateway_context_requires_at_least_one_provider() {
         let config = gateway_config(&"11".repeat(32), &chunker_handle());
@@ -2284,7 +2142,6 @@ mod tests {
             Err(GatewayBuildError::NoProviders)
         ));
     }
-
     #[test]
     fn gateway_context_rejects_invalid_explicit_timeouts_before_network_access() {
         let config = gateway_config(&"11".repeat(32), &chunker_handle());
@@ -2307,7 +2164,6 @@ mod tests {
             Err(GatewayBuildError::InvalidTimeouts)
         ));
     }
-
     #[test]
     fn provider_configuration_rejects_duplicate_canonical_provider_ids() {
         let manifest_id = "11".repeat(32);
@@ -2316,20 +2172,17 @@ mod tests {
         let first = gateway_provider_input(&token);
         let mut second = first.clone();
         second.name = "beta".to_owned();
-
         assert!(matches!(
             build_test_context(gateway_config(&manifest_id, &profile), [first, second]),
             Err(GatewayBuildError::DuplicateProviderId { .. })
         ));
     }
-
     #[test]
     fn provider_configuration_rejects_invalid_signature_and_key() {
         let manifest_id = "11".repeat(32);
         let profile = chunker_handle();
         let mut token = sample_stream_token(&manifest_id, &provider_id_hex(), &profile, 2);
         token.body.max_streams = 3;
-
         assert!(matches!(
             build_test_context(
                 gateway_config(&manifest_id, &profile),
@@ -2337,7 +2190,6 @@ mod tests {
             ),
             Err(GatewayBuildError::InvalidStreamTokenSignature { .. })
         ));
-
         let token = sample_stream_token(&manifest_id, &provider_id_hex(), &profile, 2);
         let mut wrong_key = gateway_provider_input(&token);
         wrong_key.gateway_public_key_hex = hex::encode(
@@ -2349,7 +2201,6 @@ mod tests {
             build_test_context(gateway_config(&manifest_id, &profile), [wrong_key]),
             Err(GatewayBuildError::InvalidStreamTokenSignature { .. })
         ));
-
         let mut weak_key = gateway_provider_input(&token);
         weak_key.gateway_public_key_hex = "00".repeat(32);
         assert!(matches!(
@@ -2357,7 +2208,6 @@ mod tests {
             Err(GatewayBuildError::InvalidGatewayPublicKey)
         ));
     }
-
     #[test]
     fn provider_nonces_are_process_unique_and_fail_closed_on_counter_exhaustion() {
         let manifest_id = "11".repeat(32);
@@ -2374,18 +2224,15 @@ mod tests {
             .providers
             .get("alpha")
             .expect("provider runtime");
-
         let first = runtime.next_nonce(7).expect("first nonce");
         let second = runtime.next_nonce(7).expect("second nonce");
         assert_ne!(first, second);
         assert!(first.ends_with("-7-0"));
         assert!(second.ends_with("-7-1"));
         assert_eq!(first.split('-').nth_back(2).map(str::len), Some(32));
-
         runtime.nonce.store(u64::MAX, Ordering::Relaxed);
         assert!(runtime.next_nonce(7).is_err());
     }
-
     #[test]
     fn provider_configuration_rejects_invalid_token_lifetimes() {
         let manifest_id = "11".repeat(32);
@@ -2395,7 +2242,6 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock after epoch")
             .as_secs();
-
         let mut maximum_body = sample.body.clone();
         maximum_body.issued_at = now;
         maximum_body.ttl_epoch = now + STREAM_TOKEN_MAX_TTL_SECS_V1;
@@ -2405,7 +2251,6 @@ mod tests {
             [gateway_provider_input(&maximum)],
         )
         .expect("the exact maximum token lifetime is accepted");
-
         let mut boundary_expired_body = sample.body.clone();
         boundary_expired_body.issued_at = now.saturating_sub(1);
         boundary_expired_body.ttl_epoch = now;
@@ -2418,7 +2263,6 @@ mod tests {
             ),
             Err(GatewayBuildError::ExpiredStreamToken { .. })
         ));
-
         let mut expired_body = sample.body.clone();
         expired_body.issued_at = now.saturating_sub(120);
         expired_body.ttl_epoch = now.saturating_sub(1);
@@ -2430,7 +2274,6 @@ mod tests {
             ),
             Err(GatewayBuildError::ExpiredStreamToken { .. })
         ));
-
         let mut future_body = sample.body.clone();
         future_body.issued_at = now.saturating_add(STREAM_TOKEN_CLOCK_SKEW_SECS + 1);
         future_body.ttl_epoch = future_body.issued_at.saturating_add(60);
@@ -2442,7 +2285,6 @@ mod tests {
             ),
             Err(GatewayBuildError::FutureStreamToken { .. })
         ));
-
         let mut inverted_body = sample.body;
         inverted_body.issued_at = now;
         inverted_body.ttl_epoch = now;
@@ -2454,7 +2296,6 @@ mod tests {
             ),
             Err(GatewayBuildError::InvalidStreamTokenLifetime { .. })
         ));
-
         let sample = sample_stream_token(&manifest_id, &provider_id_hex(), &profile, 2);
         let mut oversized_lifetime_body = sample.body;
         oversized_lifetime_body.issued_at = now;
@@ -2469,13 +2310,11 @@ mod tests {
             Err(GatewayBuildError::InvalidStreamTokenLifetime { .. })
         ));
     }
-
     #[test]
     fn provider_configuration_rejects_unbounded_or_noncanonical_token_fields() {
         let manifest_id = "11".repeat(32);
         let profile = chunker_handle();
         let sample = sample_stream_token(&manifest_id, &provider_id_hex(), &profile, 2);
-
         let mut empty_id_body = sample.body.clone();
         empty_id_body.token_id.clear();
         let empty_id = StreamTokenV1::sign(empty_id_body, &gateway_signing_key()).expect("sign");
@@ -2486,7 +2325,6 @@ mod tests {
             ),
             Err(GatewayBuildError::InvalidStreamTokenId { .. })
         ));
-
         let mut oversized_cid_body = sample.body.clone();
         oversized_cid_body.manifest_cid = vec![0x42; MAX_MANIFEST_CID_BYTES + 1];
         let oversized_cid =
@@ -2498,7 +2336,6 @@ mod tests {
             ),
             Err(GatewayBuildError::InvalidStreamTokenManifestCid { .. })
         ));
-
         for mutate in [
             |body: &mut StreamTokenBodyV1| body.token_pk_version = 0,
             |body: &mut StreamTokenBodyV1| body.rate_limit_bytes = 0,
@@ -2516,7 +2353,6 @@ mod tests {
                 Err(GatewayBuildError::InvalidStreamTokenBudget { .. })
             ));
         }
-
         let mut spaced_profile_body = sample.body;
         spaced_profile_body.profile_handle = format!(" {profile}");
         let spaced_profile =
@@ -2529,7 +2365,6 @@ mod tests {
             Err(GatewayBuildError::ProfileMismatch { .. })
         ));
     }
-
     #[test]
     fn gateway_urls_reject_downgrades_ambiguity_and_nonpublic_literals() {
         for invalid in [
@@ -2561,13 +2396,11 @@ mod tests {
                 "unsafe gateway URL was accepted: {invalid}"
             );
         }
-
         assert!(parse_base_url("https://gateway.example/").is_ok());
         assert!(parse_base_url("https://8.8.8.8/").is_ok());
         assert!(parse_privacy_url("https://gateway.example/privacy/events").is_ok());
         assert!(parse_privacy_url("https://gateway.example/").is_err());
     }
-
     #[test]
     fn token_and_header_inputs_are_bounded_and_canonical() {
         let token = sample_stream_token(&"11".repeat(32), &provider_id_hex(), &chunker_handle(), 2);
@@ -2597,14 +2430,12 @@ mod tests {
             decode_stream_token(&oversized_wire),
             Err(StreamTokenDecodeError::Oversized)
         ));
-
         let mut config = gateway_config(&"11".repeat(32), &chunker_handle());
         config.expected_manifest_cid_hex = Some("AB".repeat(32));
         assert!(matches!(
             NormalisedConfig::from_config(config),
             Err(GatewayBuildError::InvalidExpectedManifestCid)
         ));
-
         let mut config = gateway_config(&"11".repeat(32), &chunker_handle());
         config.client_id = Some("x".repeat(MAX_CLIENT_ID_BYTES + 1));
         assert!(matches!(
@@ -2615,7 +2446,6 @@ mod tests {
             })
         ));
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn gateway_fetcher_serves_chunk_successfully() {
         let payload = sample_payload(8 * 1024);
@@ -2626,7 +2456,6 @@ mod tests {
         let manifest_cid_hex = manifest_id_hex.clone();
         let token = sample_stream_token(&manifest_cid_hex, &provider_id, &chunker_handle, 4);
         let token_b64 = encode_token_b64(&token);
-
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
@@ -2648,7 +2477,6 @@ mod tests {
             },
         );
         let engine = Arc::new(MockHttpEngine::new(responses));
-
         let config = GatewayFetchConfig {
             manifest_id_hex: manifest_id_hex.clone(),
             chunker_handle: chunker_handle.clone(),
@@ -2667,11 +2495,9 @@ mod tests {
             stream_token_b64: token_b64.clone(),
             privacy_events_url: None,
         };
-
         let context =
             GatewayFetchContext::build_with_engine(config, [provider_input], engine.clone())
                 .expect("context");
-
         let outcome = context
             .execute_plan(&plan, FetchOptions::default())
             .await
@@ -2684,7 +2510,6 @@ mod tests {
             outcome.chunks[0],
             payload[0..plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].length as usize]
         );
-
         let requests = engine.recorded();
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
@@ -2725,7 +2550,6 @@ mod tests {
             Some("orchestrator")
         );
     }
-
     #[tokio::test]
     async fn gateway_fetcher_rechecks_token_expiry_before_dispatch() {
         let payload = sample_payload(1024);
@@ -2745,7 +2569,6 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock after epoch")
             .as_secs();
-
         let request = FetchRequest {
             provider: Arc::new(context.providers()[0].clone()),
             spec: plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].clone(),
@@ -2756,7 +2579,6 @@ mod tests {
             Err(GatewayFetchError::ExpiredStreamToken { .. })
         ));
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn gateway_fetcher_sets_blinded_headers() {
         let payload = sample_payload(2048);
@@ -2768,7 +2590,6 @@ mod tests {
         let token_b64 = encode_token_b64(&token);
         let blinded_b64 = URL_SAFE_NO_PAD.encode([0u8; 32]);
         let salt_epoch = 42u32;
-
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
@@ -2790,7 +2611,6 @@ mod tests {
             },
         );
         let engine = Arc::new(MockHttpEngine::new(responses));
-
         let config = GatewayFetchConfig {
             manifest_id_hex: manifest_id_hex.clone(),
             chunker_handle: chunker_handle.clone(),
@@ -2809,7 +2629,6 @@ mod tests {
             stream_token_b64: token_b64,
             privacy_events_url: None,
         };
-
         let context =
             GatewayFetchContext::build_with_engine(config, [provider_input], engine.clone())
                 .expect("context");
@@ -2817,7 +2636,6 @@ mod tests {
             .execute_plan(&plan, FetchOptions::default())
             .await
             .expect("fetch outcome");
-
         let requests = engine.recorded();
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
@@ -2847,7 +2665,6 @@ mod tests {
             .and_then(|value| value.to_str().ok());
         assert_eq!(req_nonce, sorafs_nonce);
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn gateway_fetcher_propagates_error_status() {
         let payload = sample_payload(1024);
@@ -2857,7 +2674,6 @@ mod tests {
         let chunker_handle = chunker_handle();
         let token = sample_stream_token(&manifest_id_hex, &provider_id, &chunker_handle, 2);
         let token_b64 = encode_token_b64(&token);
-
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
@@ -2877,7 +2693,6 @@ mod tests {
             },
         );
         let engine = Arc::new(MockHttpEngine::new(responses));
-
         let config = GatewayFetchConfig {
             manifest_id_hex: manifest_id_hex.clone(),
             chunker_handle: chunker_handle.clone(),
@@ -2902,13 +2717,11 @@ mod tests {
         let fetcher = context.fetcher();
         let provider: FetchProvider = context.providers()[0].clone();
         let spec: ChunkFetchSpec = plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].clone();
-
         let request = FetchRequest {
             provider: Arc::new(provider),
             spec,
             attempt: 1,
         };
-
         let error = fetcher.fetch(request).await.expect_err("should fail");
         match error {
             GatewayFetchError::UnexpectedStatus { status, body, .. } => {
@@ -2920,12 +2733,10 @@ mod tests {
             }
             other => panic!("unexpected error {other:?}"),
         }
-
         let recorded = engine.recorded();
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].path, path);
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn gateway_fetcher_surfaces_policy_block_evidence() {
         const CATALOG_DIGEST_HEX: &str =
@@ -2937,7 +2748,6 @@ mod tests {
         let chunker_handle = chunker_handle();
         let token = sample_stream_token(&manifest_id_hex, &provider_id, &chunker_handle, 2);
         let token_b64 = encode_token_b64(&token);
-
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
@@ -2960,7 +2770,6 @@ mod tests {
             },
         );
         let engine = Arc::new(MockHttpEngine::new(responses));
-
         let config = GatewayFetchConfig {
             manifest_id_hex: manifest_id_hex.clone(),
             chunker_handle: chunker_handle.clone(),
@@ -2979,7 +2788,6 @@ mod tests {
             stream_token_b64: token_b64,
             privacy_events_url: None,
         };
-
         let context =
             GatewayFetchContext::build_with_engine(config, [provider_input], engine.clone())
                 .expect("context");
@@ -2988,7 +2796,6 @@ mod tests {
             spec: plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].clone(),
             attempt: 1,
         };
-
         let error = context
             .fetcher()
             .fetch(request)
@@ -3007,7 +2814,6 @@ mod tests {
             other => panic!("unexpected error {other:?}"),
         }
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn gateway_fetcher_rejects_cache_version_mismatch() {
         let payload = sample_payload(512);
@@ -3017,7 +2823,6 @@ mod tests {
         let chunker_handle = chunker_handle();
         let token = sample_stream_token(&manifest_id_hex, &provider_id, &chunker_handle, 1);
         let token_b64 = encode_token_b64(&token);
-
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
@@ -3044,7 +2849,6 @@ mod tests {
             },
         );
         let engine = Arc::new(MockHttpEngine::new(responses));
-
         let config = GatewayFetchConfig {
             manifest_id_hex: manifest_id_hex.clone(),
             chunker_handle: chunker_handle.clone(),
@@ -3063,7 +2867,6 @@ mod tests {
             stream_token_b64: token_b64,
             privacy_events_url: None,
         };
-
         let context =
             GatewayFetchContext::build_with_engine(config, [provider_input], engine.clone())
                 .expect("context");
@@ -3072,7 +2875,6 @@ mod tests {
             spec: plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].clone(),
             attempt: 1,
         };
-
         let err = context
             .fetcher()
             .fetch(request)
@@ -3091,12 +2893,10 @@ mod tests {
             }
             other => panic!("unexpected error {other:?}"),
         }
-
         let recorded = engine.recorded();
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].path, path);
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn canonical_policy_denial_precedes_success_cache_validation() {
         const CATALOG_DIGEST_HEX: &str =
@@ -3113,7 +2913,6 @@ mod tests {
                 .digest
                 .as_slice(),
         );
-
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex, chunk_digest_hex
@@ -3136,7 +2935,6 @@ mod tests {
             },
         );
         let engine = Arc::new(MockHttpEngine::new(responses));
-
         let config = GatewayFetchConfig {
             manifest_id_hex: manifest_id_hex.clone(),
             chunker_handle: chunker_handle.clone(),
@@ -3155,7 +2953,6 @@ mod tests {
             stream_token_b64: token_b64,
             privacy_events_url: None,
         };
-
         let context = GatewayFetchContext::build_with_engine(config, [provider_input], engine)
             .expect("context");
         let request = FetchRequest {
@@ -3163,7 +2960,6 @@ mod tests {
             spec: plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].clone(),
             attempt: 1,
         };
-
         let err = context.fetcher().fetch(request).await.expect_err("blocked");
         match err {
             GatewayFetchError::PolicyBlocked { evidence, .. } => {
@@ -3172,7 +2968,6 @@ mod tests {
             other => panic!("unexpected error {other:?}"),
         }
     }
-
     #[test]
     fn failure_evidence_accepts_exact_canonical_denials() {
         const CATALOG_DIGEST_HEX: &str =
@@ -3189,7 +2984,6 @@ mod tests {
                 )
                 .into_bytes(),
             };
-
             let evidence = extract_failure_evidence(&response).expect("canonical evidence");
             assert_eq!(evidence.observed_status, response.status);
             assert_eq!(evidence.code, GATEWAY_COMPLIANCE_DENIED_CODE);
@@ -3197,7 +2991,6 @@ mod tests {
             assert_eq!(evidence.catalog_digest_hex, CATALOG_DIGEST_HEX);
         }
     }
-
     #[test]
     fn failure_evidence_rejects_noncanonical_status_body_and_sources() {
         const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -3293,7 +3086,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn legacy_headers_alone_do_not_create_policy_evidence() {
         let mut headers = HeaderMap::new();
@@ -3310,10 +3102,8 @@ mod tests {
             headers,
             body: Vec::new(),
         };
-
         assert!(extract_failure_evidence(&response).is_none());
     }
-
     #[test]
     fn legacy_token_headers_invalidate_canonical_body_evidence() {
         const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -3334,26 +3124,22 @@ mod tests {
                 )
                 .into_bytes(),
             };
-
             assert!(
                 extract_failure_evidence(&response).is_none(),
                 "legacy header {header} unexpectedly preserved policy evidence"
             );
         }
     }
-
     #[derive(Clone)]
     struct RecordedRequest {
         path: String,
         headers: HeaderMap,
         max_response_bytes: usize,
     }
-
     struct MockHttpEngine {
         responses: HashMap<String, HttpResponse>,
         recorded: Mutex<Vec<RecordedRequest>>,
     }
-
     impl MockHttpEngine {
         fn new(responses: HashMap<String, HttpResponse>) -> Self {
             Self {
@@ -3361,12 +3147,10 @@ mod tests {
                 recorded: Mutex::new(Vec::new()),
             }
         }
-
         fn recorded(&self) -> Vec<RecordedRequest> {
             self.recorded.lock().unwrap().clone()
         }
     }
-
     impl HttpEngine for MockHttpEngine {
         fn get(&self, request: HttpRequest) -> HttpFuture {
             let path = request.url.path().to_string();
@@ -3376,7 +3160,6 @@ mod tests {
                 headers,
                 max_response_bytes: request.max_response_bytes,
             });
-
             let maybe = self.responses.get(&path).cloned();
             let error_message = format!("no test response for {path}");
             Box::pin(
@@ -3384,7 +3167,6 @@ mod tests {
             )
         }
     }
-
     #[test]
     fn attempt_failure_preserves_policy_block_evidence() {
         let evidence = GatewayFailureEvidence {
@@ -3399,7 +3181,6 @@ mod tests {
             evidence: evidence.clone(),
         };
         let failure = AttemptFailure::from(error);
-
         match failure {
             AttemptFailure::Provider {
                 policy_block: Some(policy),

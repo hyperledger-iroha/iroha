@@ -1,19 +1,16 @@
 //! Iroha-like transaction/data benchmark for Norito sizes and speeds.
-
 #[cfg(feature = "bench-internal")]
 use criterion::Criterion;
 #[cfg(feature = "bench-internal")]
 use norito::codec as ncodec;
 #[cfg(feature = "bench-internal")]
 use norito::{self, CompressionConfig, NoritoDeserialize, NoritoSerialize};
-
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 struct DomainId {
     name: String,
 }
-
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -21,7 +18,6 @@ struct AccountId {
     name: String,
     domain: DomainId,
 }
-
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -29,7 +25,6 @@ struct AssetDefinitionId {
     name: String,
     domain: DomainId,
 }
-
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -37,7 +32,6 @@ struct RegisterAssetDefParams {
     id: AssetDefinitionId,
     precision: u8,
 }
-
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -46,7 +40,6 @@ struct MintAssetParams {
     quantity: u128,
     account: AccountId,
 }
-
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -56,7 +49,6 @@ struct TransferAssetParams {
     dst: AccountId,
     quantity: u128,
 }
-
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -65,7 +57,6 @@ struct SetKeyValueParams {
     key: String,
     value: String,
 }
-
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -75,7 +66,6 @@ enum Instruction {
     TransferAsset(TransferAssetParams),
     SetKeyValue(SetKeyValueParams),
 }
-
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -83,7 +73,6 @@ struct Signature {
     public_key: [u8; 32],
     signature: [u8; 64],
 }
-
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -91,7 +80,6 @@ struct MetadataEntry {
     key: String,
     value: String,
 }
-
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -103,7 +91,6 @@ struct SignedTransaction {
     metadata: Vec<MetadataEntry>,
     signatures: Vec<Signature>,
 }
-
 #[cfg(feature = "bench-internal")]
 fn fid(s: &str) -> DomainId {
     DomainId { name: s.into() }
@@ -122,7 +109,6 @@ fn adid(name: &str, dom: &DomainId) -> AssetDefinitionId {
         domain: dom.clone(),
     }
 }
-
 #[cfg(feature = "bench-internal")]
 fn sample_tx(n_instr: usize, n_meta: usize, n_sigs: usize) -> SignedTransaction {
     let dom = fid("wonderland");
@@ -185,7 +171,6 @@ fn sample_tx(n_instr: usize, n_meta: usize, n_sigs: usize) -> SignedTransaction 
         signatures,
     }
 }
-
 #[cfg(feature = "bench-internal")]
 fn report_sizes(label: &str, tx: &SignedTransaction) {
     let norito_raw = norito::to_bytes(tx).unwrap();
@@ -199,24 +184,20 @@ fn report_sizes(label: &str, tx: &SignedTransaction) {
         norito_zstd.len()
     );
 }
-
 #[cfg(feature = "bench-internal")]
 fn bench_iroha_like(c: &mut Criterion) {
     // Typical mid-size tx: ~10 instructions, ~3 metadata kvs, ~2 signatures.
     let tx = sample_tx(10, 3, 2);
     report_sizes("tx(10 instr, 3 meta, 2 sigs)", &tx);
-
     let norito_raw = norito::to_bytes(&tx).unwrap();
     let norito_zstd = norito::to_compressed_bytes(&tx, Some(CompressionConfig::default())).unwrap();
     let norito_bare = ncodec::Encode::encode(&tx);
-
     c.bench_function("iroha_tx_norito_encode", |b| {
         b.iter(|| {
             let bytes = norito::to_bytes(std::hint::black_box(&tx)).unwrap();
             std::hint::black_box(bytes);
         })
     });
-
     c.bench_function("iroha_tx_norito_decode", |b| {
         b.iter(|| {
             let v: SignedTransaction =
@@ -224,7 +205,6 @@ fn bench_iroha_like(c: &mut Criterion) {
             std::hint::black_box(v)
         })
     });
-
     c.bench_function("iroha_tx_norito_encode_zstd", |b| {
         b.iter(|| {
             let bytes = norito::to_compressed_bytes(
@@ -235,7 +215,6 @@ fn bench_iroha_like(c: &mut Criterion) {
             std::hint::black_box(bytes);
         })
     });
-
     c.bench_function("iroha_tx_norito_decode_zstd", |b| {
         b.iter(|| {
             let v: SignedTransaction =
@@ -243,14 +222,12 @@ fn bench_iroha_like(c: &mut Criterion) {
             std::hint::black_box(v)
         })
     });
-
     c.bench_function("iroha_tx_norito_codec_bare_encode", |b| {
         b.iter(|| {
             let bytes = ncodec::Encode::encode(std::hint::black_box(&tx));
             std::hint::black_box(bytes);
         })
     });
-
     c.bench_function("iroha_tx_norito_codec_bare_decode", |b| {
         b.iter(|| {
             let v: SignedTransaction =
@@ -258,19 +235,16 @@ fn bench_iroha_like(c: &mut Criterion) {
             std::hint::black_box(v)
         })
     });
-
     // Also report for a larger tx (more instructions/signatures).
     let tx_large = sample_tx(50, 5, 5);
     report_sizes("tx(50 instr, 5 meta, 5 sigs)", &tx_large);
 }
-
 #[cfg(feature = "bench-internal")]
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_iroha_like(&mut c);
     c.final_summary();
 }
-
 #[cfg(not(feature = "bench-internal"))]
 fn main() {
     eprintln!("Enable the `bench-internal` feature to run this benchmark.");

@@ -7,9 +7,7 @@
 //! Mutable node-local settings are relayed through [`tokio::sync::watch`] channels.
 //! Consensus-relevant settings, including confidential gas, are deliberately absent
 //! from the runtime update surface.
-
 use std::{num::NonZeroU32, time::Duration};
-
 use eyre::Result;
 use hex;
 use iroha_config::{
@@ -25,9 +23,7 @@ use iroha_config::{
 };
 use iroha_futures::supervisor::{Child, OnShutdown};
 use tokio::sync::{mpsc, oneshot, watch};
-
 const DEFAULT_CHANNEL_SIZE: usize = 32;
-
 /// Handle to work with the actor.
 ///
 /// The actor will shutdown when all its handles are dropped.
@@ -35,7 +31,6 @@ const DEFAULT_CHANNEL_SIZE: usize = 32;
 pub struct KisoHandle {
     actor: mpsc::Sender<Message>,
 }
-
 impl KisoHandle {
     /// Spawn a new actor
     pub fn start(state: Config) -> (Self, Child) {
@@ -65,7 +60,6 @@ impl KisoHandle {
             ),
         )
     }
-
     /// Fetch the [`ConfigGetDTO`] from the actor's state.
     ///
     /// # Errors
@@ -77,7 +71,6 @@ impl KisoHandle {
         let dto = rx.await?;
         Ok(dto)
     }
-
     /// Update the configuration state and notify subscribers.
     ///
     /// Works in a fire-and-forget way, i.e. completion of this task doesn't mean that updates are applied. However,
@@ -94,7 +87,6 @@ impl KisoHandle {
         let _ = self.actor.send(msg).await;
         rx.await?
     }
-
     /// Subscribe on updates of `logger.level` parameter.
     ///
     /// # Errors
@@ -108,7 +100,6 @@ impl KisoHandle {
         let receiver = rx.await?;
         Ok(receiver)
     }
-
     /// Subscribe on updates of network ACL settings.
     ///
     /// # Errors
@@ -122,7 +113,6 @@ impl KisoHandle {
         let receiver = rx.await?;
         Ok(receiver)
     }
-
     /// Subscribe on updates of the `SoraNet` handshake configuration.
     ///
     /// # Errors
@@ -136,7 +126,6 @@ impl KisoHandle {
         let receiver = rx.await?;
         Ok(receiver)
     }
-
     /// Lightweight mock handle used in tests to avoid spinning up the full actor and watchers.
     ///
     /// The mock serves `get_dto` requests from the provided configuration snapshot and acknowledges
@@ -166,7 +155,6 @@ impl KisoHandle {
         }
     }
 }
-
 async fn run_mock_actor(
     mut actor_receiver: mpsc::Receiver<Message>,
     logger: LoggerConfig,
@@ -217,7 +205,6 @@ async fn run_mock_actor(
         }
     }
 }
-
 enum Message {
     GetDTO {
         respond_to: oneshot::Sender<ConfigGetDTO>,
@@ -236,7 +223,6 @@ enum Message {
         respond_to: oneshot::Sender<watch::Receiver<ActualSoranetHandshake>>,
     },
 }
-
 /// Possible errors might occur while working with [`KisoHandle`]
 #[derive(thiserror::Error, displaydoc::Display, Debug)]
 pub enum Error {
@@ -245,7 +231,6 @@ pub enum Error {
     /// Configuration validation failed: {0}
     Validation(String),
 }
-
 struct Actor {
     handle: mpsc::Receiver<Message>,
     state: Config,
@@ -257,14 +242,12 @@ struct Actor {
     network_acl_update: watch::Sender<NetworkAcl>,
     soranet_handshake_update: watch::Sender<ActualSoranetHandshake>,
 }
-
 impl Actor {
     async fn run(&mut self) {
         while let Some(msg) = self.handle.recv().await {
             self.handle_message(msg)
         }
     }
-
     fn handle_message(&mut self, msg: Message) {
         match msg {
             Message::GetDTO { respond_to } => {
@@ -286,7 +269,6 @@ impl Actor {
             }
         }
     }
-
     #[allow(clippy::too_many_lines)]
     fn apply_config_update(&mut self, dto: ConfigUpdateDTO) -> Result<(), Error> {
         let ConfigUpdateDTO {
@@ -297,16 +279,13 @@ impl Actor {
             transport,
             compute_pricing,
         } = dto;
-
         // Stage updates on a clone to keep the config update atomic.
         let mut next = self.state.clone();
         let mut notify_network_acl = false;
         let mut notify_soranet_handshake = false;
-
         let Logger { level, filter } = logger;
         next.logger.level = level;
         next.logger.filter = filter;
-
         if let Some(acl) = network_acl {
             let iroha_config::client_api::NetworkAcl {
                 allowlist_only,
@@ -315,7 +294,6 @@ impl Actor {
                 allow_cidrs,
                 deny_cidrs,
             } = acl;
-
             if let Some(b) = allowlist_only {
                 next.network.allowlist_only = b;
             }
@@ -333,7 +311,6 @@ impl Actor {
             }
             notify_network_acl = true;
         }
-
         if let Some(network) = network {
             if let Some(value) = network.require_sm_handshake_match {
                 if !value {
@@ -362,7 +339,6 @@ impl Actor {
                 next.network.low_priority_rate_per_sec = limits.low_priority_rate_per_sec;
             }
         }
-
         if let Some(handshake_update) = soranet_handshake {
             Self::apply_soranet_handshake_update(
                 &mut next.network.soranet_handshake,
@@ -371,12 +347,10 @@ impl Actor {
             .map_err(Error::Validation)?;
             notify_soranet_handshake = true;
         }
-
         if let Some(transport_update) = transport {
             Self::apply_transport_update(&mut next.torii.transport, transport_update)
                 .map_err(Error::Validation)?;
         }
-
         if let Some(pricing_update) = compute_pricing {
             let mut compute = next.compute.clone();
             for (family, weights) in pricing_update.price_families {
@@ -394,7 +368,6 @@ impl Actor {
             }
             next.compute = compute;
         }
-
         self.state = next;
         let _ = self.logger_update.send_replace(self.state.logger.clone());
         if notify_network_acl {
@@ -406,10 +379,8 @@ impl Actor {
                 .soranet_handshake_update
                 .send_replace(self.state.network.soranet_handshake.clone());
         }
-
         Ok(())
     }
-
     fn apply_soranet_handshake_update(
         handshake: &mut ActualSoranetHandshake,
         update: SoranetHandshakeUpdate,
@@ -417,7 +388,6 @@ impl Actor {
         let decode_hex = |value: &str, field: &str| {
             hex::decode(value).map_err(|_| format!("invalid hex in {field}"))
         };
-
         if let Some(value) = update.descriptor_commit_hex {
             let bytes = decode_hex(&value, "descriptor_commit_hex")?;
             handshake.descriptor_commit = WithOrigin::inline(bytes);
@@ -448,10 +418,8 @@ impl Actor {
         if let Some(pow_update) = update.pow {
             Self::apply_pow_update(&mut handshake.pow, &pow_update)?;
         }
-
         Ok(())
     }
-
     fn apply_transport_update(
         transport: &mut iroha_config::parameters::actual::ToriiTransport,
         update: TransportUpdate,
@@ -478,7 +446,6 @@ impl Actor {
         }
         Ok(())
     }
-
     fn apply_pow_update(
         pow: &mut SoranetPow,
         update: &SoranetHandshakePowUpdate,
@@ -537,7 +504,6 @@ impl Actor {
                 ));
             }
         }
-
         if let Some(required) = update.required {
             pow.required = required;
         }
@@ -578,7 +544,6 @@ impl Actor {
         }
         Ok(())
     }
-
     fn snapshot_network_acl(state: &Config) -> NetworkAcl {
         NetworkAcl {
             allowlist_only: Some(state.network.allowlist_only),
@@ -589,7 +554,6 @@ impl Actor {
         }
     }
 }
-
 fn default_puzzle_params() -> SoranetPuzzle {
     SoranetPuzzle {
         memory_kib: NonZeroU32::new(64 * 1024).expect("non-zero memory"),
@@ -597,7 +561,6 @@ fn default_puzzle_params() -> SoranetPuzzle {
         lanes: NonZeroU32::new(1).expect("non-zero lanes"),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -605,7 +568,6 @@ mod tests {
         path::PathBuf,
         time::Duration,
     };
-
     use iroha_config::{
         base::WithOrigin,
         client_api::{
@@ -634,13 +596,10 @@ mod tests {
     };
     use iroha_logger::Level;
     use iroha_primitives::addr::socket_addr;
-
     use super::*;
-
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("Kiso fixture key generation should succeed")
     }
-
     fn checked_soranet_transport_keypair() -> KeyPair {
         KeyPair::try_from_seed(
             b"iroha:kiso:test:soranet-transport:v1".to_vec(),
@@ -648,16 +607,13 @@ mod tests {
         )
         .expect("Kiso SoraNet transport fixture key generation should succeed")
     }
-
     fn checked_public_key() -> iroha_crypto::PublicKey {
         checked_keypair().public_key().clone()
     }
-
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
-
     #[test]
     fn pow_updates_reject_unbounded_costs_before_mutating_state() {
         fn update(
@@ -681,7 +637,6 @@ mod tests {
                 signed_ticket_public_key_hex: None,
             }
         }
-
         let invalid = [
             (update(Some(0), None, None, None), "difficulty"),
             (
@@ -730,7 +685,6 @@ mod tests {
                 "lanes",
             ),
         ];
-
         for (update, field) in invalid {
             let mut pow = SoranetPow::default();
             let original_difficulty = pow.difficulty;
@@ -744,7 +698,6 @@ mod tests {
             assert_eq!(pow.puzzle, original_puzzle);
         }
     }
-
     #[allow(clippy::too_many_lines)]
     fn test_config() -> Root {
         // Minimal, self-contained config for testing Kiso subscriptions.
@@ -757,7 +710,6 @@ mod tests {
             key_pair.public_key(),
             "SoraNet transport and node-signing identities must be independent"
         );
-
         Root {
             common: Common {
                 chain: ChainId::from("test-chain"),
@@ -929,6 +881,11 @@ mod tests {
                 query_max_inflight: iroha_config::parameters::defaults::torii::QUERY_MAX_INFLIGHT,
                 query_heavy_max_inflight:
                     iroha_config::parameters::defaults::torii::QUERY_HEAVY_MAX_INFLIGHT,
+                query_fanout_max_retained_bytes:
+                    iroha_config::parameters::defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES,
+                app_api_routed_read_body_read_timeout: Duration::from_millis(
+                    iroha_config::parameters::defaults::torii::APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS,
+                ),
                 query_queue_timeout: Duration::from_millis(
                     iroha_config::parameters::defaults::torii::QUERY_QUEUE_TIMEOUT_MS,
                 ),
@@ -1017,6 +974,10 @@ mod tests {
                 zk_prover_enabled: false,
                 zk_prover_scan_period_secs: 60,
                 zk_prover_reports_ttl_secs: 3600,
+                zk_prover_reports_max_count:
+                    iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT,
+                zk_prover_reports_max_bytes:
+                    iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_BYTES,
                 zk_prover_max_inflight:
                     iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_INFLIGHT,
                 zk_prover_max_scan_bytes:
@@ -1833,26 +1794,21 @@ mod tests {
             },
         }
     }
-
     #[tokio::test]
     async fn subscription_on_log_level_works() {
         const INIT_LOG_LEVEL: Level = Level::WARN;
         const NEW_LOG_LEVEL: Level = Level::DEBUG;
         const WATCH_LAG_MILLIS: u64 = 30;
-
         let mut config = test_config();
         config.logger.level = INIT_LOG_LEVEL;
         let (kiso, _) = KisoHandle::start(config);
-
         let mut recv = kiso
             .subscribe_on_logger_updates()
             .await
             .expect("Subscription should be fine");
-
         let _err = tokio::time::timeout(Duration::from_millis(WATCH_LAG_MILLIS), recv.changed())
             .await
             .expect_err("Watcher should not be active initially");
-
         kiso.update_with_dto(ConfigUpdateDTO {
             logger: LoggerDTO {
                 level: NEW_LOG_LEVEL,
@@ -1866,21 +1822,17 @@ mod tests {
         })
         .await
         .expect("Update should work fine");
-
         let () = tokio::time::timeout(Duration::from_millis(WATCH_LAG_MILLIS), recv.changed())
             .await
             .expect("Watcher should resolve within timeout")
             .expect("Watcher should not be closed");
-
         let value = recv.borrow_and_update().clone();
         assert_eq!(value.level, NEW_LOG_LEVEL);
         assert_eq!(format!("{}", value.filter.unwrap()), "trace,trace,trace");
     }
-
     #[tokio::test]
     async fn confidential_gas_snapshot_is_unchanged_by_runtime_updates() {
         struct ResetConfidentialGas;
-
         impl Drop for ResetConfidentialGas {
             fn drop(&mut self) {
                 crate::gas::configure_confidential_gas(
@@ -1888,7 +1840,6 @@ mod tests {
                 );
             }
         }
-
         let _reset = ResetConfidentialGas;
         let mut config = test_config();
         config.confidential.gas.proof_base = 321_000;
@@ -1898,7 +1849,6 @@ mod tests {
         config.confidential.gas.per_commitment = 44;
         let expected_gas = config.confidential.gas;
         let (kiso, _) = KisoHandle::start(config);
-
         kiso.update_with_dto(ConfigUpdateDTO {
             logger: LoggerDTO {
                 level: iroha_logger::Level::DEBUG,
@@ -1912,7 +1862,6 @@ mod tests {
         })
         .await
         .expect("update should succeed");
-
         let dto = kiso.get_dto().await.expect("fetch updated dto");
         assert_eq!(dto.confidential_gas.proof_base, expected_gas.proof_base);
         assert_eq!(
@@ -1932,31 +1881,25 @@ mod tests {
             expected_gas.per_commitment
         );
     }
-
     #[tokio::test]
     async fn network_acl_updates_are_canonical_and_allow_clearing() {
         use iroha_logger::Level;
-
         const WATCH_LAG_MILLIS: u64 = 30;
-
         let initial_allow_keys = vec![checked_public_key()];
         let initial_deny_keys = vec![checked_public_key()];
         let initial_allow_cidrs = vec!["10.0.0.0/8".to_owned()];
         let initial_deny_cidrs = vec!["192.168.0.0/16".to_owned()];
-
         let mut config = test_config();
         config.network.allowlist_only = true;
         config.network.allow_keys.clone_from(&initial_allow_keys);
         config.network.deny_keys.clone_from(&initial_deny_keys);
         config.network.allow_cidrs.clone_from(&initial_allow_cidrs);
         config.network.deny_cidrs.clone_from(&initial_deny_cidrs);
-
         let (kiso, _) = KisoHandle::start(config);
         let mut recv = kiso
             .subscribe_on_network_acl_updates()
             .await
             .expect("subscription should succeed");
-
         let initial = recv.borrow().clone();
         assert_eq!(initial.allowlist_only, Some(true));
         assert_eq!(initial.allow_keys.clone().unwrap(), initial_allow_keys);
@@ -1972,7 +1915,6 @@ mod tests {
             initial.deny_cidrs.clone().unwrap(),
             initial_deny_cidrs.clone()
         );
-
         let replacement_key = checked_public_key();
         kiso.update_with_dto(ConfigUpdateDTO {
             logger: LoggerDTO {
@@ -1993,7 +1935,6 @@ mod tests {
         })
         .await
         .expect("update should succeed");
-
         tokio::time::timeout(Duration::from_millis(WATCH_LAG_MILLIS), recv.changed())
             .await
             .expect("watcher should resolve within timeout")
@@ -2007,7 +1948,6 @@ mod tests {
         assert_eq!(updated.deny_keys.clone().unwrap(), initial_deny_keys);
         assert_eq!(updated.allow_cidrs.clone().unwrap(), initial_allow_cidrs);
         assert_eq!(updated.deny_cidrs.clone().unwrap(), initial_deny_cidrs);
-
         kiso.update_with_dto(ConfigUpdateDTO {
             logger: LoggerDTO {
                 level: Level::INFO,
@@ -2027,7 +1967,6 @@ mod tests {
         })
         .await
         .expect("clearing update should succeed");
-
         tokio::time::timeout(Duration::from_millis(WATCH_LAG_MILLIS), recv.changed())
             .await
             .expect("watcher should resolve within timeout")
@@ -2039,23 +1978,19 @@ mod tests {
         assert!(cleared.allow_cidrs.as_ref().unwrap().is_empty());
         assert!(cleared.deny_cidrs.as_ref().unwrap().is_empty());
     }
-
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn soranet_handshake_update_applies() {
         let config = test_config();
         let (kiso, _) = KisoHandle::start(config);
-
         let descriptor_hex = "0123456789abcdef".to_string();
         let resume_hex = "feedface".to_string();
         let descriptor_bytes = hex::decode(&descriptor_hex).expect("descriptor hex");
         let resume_bytes = hex::decode(&resume_hex).expect("resume hex");
-
         let mut handshake_rx = kiso
             .subscribe_on_soranet_handshake_updates()
             .await
             .expect("subscribe handshake watcher");
-
         kiso.update_with_dto(ConfigUpdateDTO {
             logger: LoggerDTO {
                 level: Level::INFO,
@@ -2090,7 +2025,6 @@ mod tests {
         })
         .await
         .expect("handshake update should succeed");
-
         tokio::time::timeout(Duration::from_millis(30), handshake_rx.changed())
             .await
             .expect("handshake watcher should resolve within timeout")
@@ -2117,7 +2051,6 @@ mod tests {
         assert_eq!(puzzle_cfg.memory_kib.get(), 131_072);
         assert_eq!(puzzle_cfg.time_cost.get(), 3);
         assert_eq!(puzzle_cfg.lanes.get(), 2);
-
         let dto = kiso.get_dto().await.expect("fetch handshake dto");
         let handshake = dto.network.soranet_handshake;
         assert_eq!(handshake.descriptor_commit_hex, descriptor_hex);
@@ -2133,7 +2066,6 @@ mod tests {
         assert_eq!(puzzle.memory_kib, 131_072);
         assert_eq!(puzzle.time_cost, 3);
         assert_eq!(puzzle.lanes, 2);
-
         // Clear resume hash without touching other fields.
         kiso.update_with_dto(ConfigUpdateDTO {
             logger: LoggerDTO {
@@ -2156,10 +2088,8 @@ mod tests {
         })
         .await
         .expect("resume hash clear should succeed");
-
         let dto = kiso.get_dto().await.expect("fetch updated dto");
         assert_eq!(dto.network.soranet_handshake.resume_hash_hex, None);
-
         let dto_default = kiso
             .get_dto()
             .await
@@ -2168,7 +2098,6 @@ mod tests {
             dto_default.network.soranet_handshake.pow.puzzle.is_some(),
             "puzzle gate should be enabled by default"
         );
-
         let err = kiso
             .update_with_dto(ConfigUpdateDTO {
                 logger: LoggerDTO {
@@ -2203,7 +2132,6 @@ mod tests {
             err.to_string().contains("PoW admission is mandatory"),
             "unexpected error: {err}"
         );
-
         let err = kiso
             .update_with_dto(ConfigUpdateDTO {
                 logger: LoggerDTO {
@@ -2244,18 +2172,15 @@ mod tests {
                 .contains("Argon2 puzzle admission is mandatory"),
             "unexpected error: {err}"
         );
-
         let dto = kiso.get_dto().await.expect("fetch post-rejection dto");
         assert!(
             dto.network.soranet_handshake.pow.puzzle.is_some(),
             "rejected update must not disable the puzzle gate"
         );
     }
-
     #[tokio::test]
     async fn soranet_handshake_watch_updates_without_subscribers() {
         let (kiso, _) = KisoHandle::start(test_config());
-
         let updated_pow = SoranetHandshakePowUpdate {
             required: Some(true),
             difficulty: Some(9),
@@ -2270,7 +2195,6 @@ mod tests {
                 lanes: Some(2),
             }),
         };
-
         // Apply the update before any watchers are subscribed.
         kiso.update_with_dto(ConfigUpdateDTO {
             logger: LoggerDTO {
@@ -2293,23 +2217,19 @@ mod tests {
         })
         .await
         .expect("handshake update should succeed without subscribers");
-
         let rx = kiso
             .subscribe_on_soranet_handshake_updates()
             .await
             .expect("subscribe to handshake updates");
         let snapshot = rx.borrow().clone();
-
         assert_eq!(snapshot.pow.difficulty, 9);
         assert_eq!(snapshot.pow.ticket_ttl.as_secs(), 45);
         assert!(snapshot.pow.puzzle.is_some());
     }
-
     #[tokio::test]
     async fn soranet_sm_policy_update_rejects_relaxation() {
         let config = test_config();
         let (kiso, _) = KisoHandle::start(config);
-
         let err = kiso
             .update_with_dto(ConfigUpdateDTO {
                 logger: LoggerDTO {
@@ -2333,7 +2253,6 @@ mod tests {
                 .contains("SM handshake matching is mandatory"),
             "unexpected error: {err}"
         );
-
         let err = kiso
             .update_with_dto(ConfigUpdateDTO {
                 logger: LoggerDTO {
@@ -2357,12 +2276,10 @@ mod tests {
                 .contains("SM OpenSSL preview matching is mandatory"),
             "unexpected error: {err}"
         );
-
         let dto = kiso.get_dto().await.expect("fetch updated dto");
         assert!(dto.network.require_sm_handshake_match);
         assert!(dto.network.require_sm_openssl_preview_match);
     }
-
     #[test]
     fn config_update_is_atomic_on_handshake_error() {
         let config = test_config();
@@ -2377,7 +2294,6 @@ mod tests {
             network_acl_update: network_acl_tx,
             soranet_handshake_update: handshake_tx,
         };
-
         let initial_logger_level = actor.state.logger.level;
         let initial_allowlist_only = actor.state.network.allowlist_only;
         let initial_allow_keys = actor.state.network.allow_keys.clone();
@@ -2393,7 +2309,6 @@ mod tests {
             .to_vec();
         let initial_kem_id = actor.state.network.soranet_handshake.kem_id;
         let initial_sig_id = actor.state.network.soranet_handshake.sig_id;
-
         let replacement_key = checked_public_key();
         let err = actor
             .apply_config_update(ConfigUpdateDTO {
@@ -2425,7 +2340,6 @@ mod tests {
         assert!(
             matches!(err, Error::Validation(msg) if msg.contains("invalid hex in client_capabilities_hex"))
         );
-
         assert_eq!(actor.state.logger.level, initial_logger_level);
         assert_eq!(actor.state.network.allowlist_only, initial_allowlist_only);
         assert_eq!(actor.state.network.allow_keys, initial_allow_keys);
@@ -2443,7 +2357,6 @@ mod tests {
         );
         assert_eq!(actor.state.network.soranet_handshake.kem_id, initial_kem_id);
         assert_eq!(actor.state.network.soranet_handshake.sig_id, initial_sig_id);
-
         assert_eq!(logger_rx.borrow().level, initial_logger_level);
         assert!(logger_rx.borrow().filter.is_none());
         let acl_snapshot = network_acl_rx.borrow();
@@ -2469,7 +2382,6 @@ mod tests {
         assert_eq!(handshake_snapshot.kem_id, initial_kem_id);
         assert_eq!(handshake_snapshot.sig_id, initial_sig_id);
     }
-
     #[test]
     fn config_update_is_atomic_on_transport_error() {
         let config = test_config();
@@ -2484,7 +2396,6 @@ mod tests {
             network_acl_update: network_acl_tx,
             soranet_handshake_update: handshake_tx,
         };
-
         let initial_logger_level = actor.state.logger.level;
         let initial_allowlist_only = actor.state.network.allowlist_only;
         let initial_allow_keys = actor.state.network.allow_keys.clone();
@@ -2498,7 +2409,6 @@ mod tests {
             .allowed_clients
             .clone();
         let initial_transport_stage = actor.state.torii.transport.norito_rpc.stage;
-
         let err = actor
             .apply_config_update(ConfigUpdateDTO {
                 logger: LoggerDTO {
@@ -2528,7 +2438,6 @@ mod tests {
         assert!(
             matches!(err, Error::Validation(msg) if msg.contains("invalid transport.norito_rpc.stage"))
         );
-
         assert_eq!(actor.state.logger.level, initial_logger_level);
         assert_eq!(actor.state.network.allowlist_only, initial_allowlist_only);
         assert_eq!(actor.state.network.allow_keys, initial_allow_keys);
@@ -2548,7 +2457,6 @@ mod tests {
             actor.state.torii.transport.norito_rpc.stage,
             initial_transport_stage
         );
-
         assert_eq!(logger_rx.borrow().level, initial_logger_level);
         let acl_snapshot = network_acl_rx.borrow();
         assert_eq!(acl_snapshot.allowlist_only, Some(initial_allowlist_only));
@@ -2562,7 +2470,6 @@ mod tests {
             actor.state.network.soranet_handshake.kem_id
         );
     }
-
     #[test]
     fn compute_pricing_updates_enforce_delta_bounds() {
         let config = test_config();
@@ -2577,7 +2484,6 @@ mod tests {
             network_acl_update: network_acl_tx,
             soranet_handshake_update: handshake_tx,
         };
-
         let family = defaults::compute::default_price_family();
         let mut invalid = actor
             .state
@@ -2588,7 +2494,6 @@ mod tests {
             .expect("default price family present");
         invalid.cycles_per_unit =
             NonZeroU64::new(invalid.cycles_per_unit.get().saturating_mul(2)).expect("non-zero");
-
         let err = actor
             .apply_config_update(ConfigUpdateDTO {
                 logger: LoggerDTO {
@@ -2606,7 +2511,6 @@ mod tests {
             })
             .expect_err("delta beyond bounds should be rejected");
         assert!(matches!(err, Error::Validation(msg) if msg.contains("delta")));
-
         let mut ok = actor
             .state
             .compute
@@ -2620,7 +2524,6 @@ mod tests {
                 .saturating_add(ok.cycles_per_unit.get() / 10),
         )
         .expect("non-zero");
-
         actor
             .apply_config_update(ConfigUpdateDTO {
                 logger: LoggerDTO {

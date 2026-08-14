@@ -56,7 +56,7 @@ Use this runbook with `docs/settlement-router.md`, `specs/runbooks/nexus_lane_fi
 3. Run the smoke helper to double-check thresholds against the same metrics snapshot:
    ```bash
    scripts/nexus_lane_smoke.py \
-     --status-url https://torii.example.com/v1/sumeragi/status \
+     --lifecycle-url https://torii.example.com/v1/nexus/lifecycle \
      --metrics-url https://torii.example.com/metrics \
      --lane-alias payments \
      --max-oracle-staleness 75 \
@@ -67,7 +67,7 @@ Use this runbook with `docs/settlement-router.md`, `specs/runbooks/nexus_lane_fi
 
 ### Step 2 — Identify the Failing Feed
 
-- Use `iroha_cli sumeragi status --format json` to locate the affected lane/dataspace and confirm whether `lane_settlement_commitments` are paused.
+- Use `iroha --operator-private-key-file /absolute/runtime/operator.key --output-format json ops sumeragi status` to locate the affected lane/dataspace and confirm whether `lane_settlement_commitments` are paused. The explicit allow-listed operator key is bound to the exact client `network_id`; do not substitute the account key or a token.
 - Inspect the oracle service logs (e.g., `kubectl logs deployment/nexus-oracle-payments` or `journalctl -u iroha-oracle@payments`) for vendor API failures, signature errors, or stalled timers.
 - Verify vendor-side health by querying the governance-approved price feed or checking the most recent TWAP snapshot referenced in `specs/nexus_settlement_faq.md`.
 

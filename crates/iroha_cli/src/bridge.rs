@@ -1,10 +1,8 @@
 //! Bridge and exact first-release SCCP commands.
-
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-
 use base64::Engine as _;
 use clap::Subcommand;
 use eyre::{Result, WrapErr as _, eyre};
@@ -16,9 +14,7 @@ use iroha::{
     },
     data_model::{bridge::SccpRegistryV1, prelude::*},
 };
-
 use crate::{CliOutputFormat, Run, RunContext};
-
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Emit a bridge receipt as a typed event.
@@ -66,7 +62,6 @@ pub struct DetachedSubmitArgs {
     #[arg(long)]
     creation_time_ms: Option<u64>,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct SubmitDestinationProofArgs {
     /// File containing one canonical Norito SCCP Groth16 destination artifact.
@@ -75,7 +70,6 @@ pub struct SubmitDestinationProofArgs {
     #[command(flatten)]
     detached: DetachedSubmitArgs,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct SubmitNativeMessageArgs {
     /// File containing one canonical Norito protocol-native SCCP inbound proof.
@@ -84,7 +78,6 @@ pub struct SubmitNativeMessageArgs {
     #[command(flatten)]
     detached: DetachedSubmitArgs,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct EmitReceiptArgs {
     /// Bridge lane id (numeric).
@@ -112,14 +105,12 @@ pub struct EmitReceiptArgs {
     #[arg(long)]
     proof_hash: Option<String>,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct MessageArgs {
     /// Nonzero SCCP message id (hex, 32 bytes).
     #[arg(long, value_name = "HEX")]
     message_id: String,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct RecentArgs {
     /// Inclusive block height through which to scan backwards.
@@ -132,7 +123,6 @@ pub struct RecentArgs {
     #[arg(long)]
     limit: Option<u64>,
 }
-
 impl RecentArgs {
     fn query(&self) -> SccpRecentMessagesQuery {
         SccpRecentMessagesQuery {
@@ -142,7 +132,6 @@ impl RecentArgs {
         }
     }
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -161,7 +150,6 @@ impl Run for Command {
         }
     }
 }
-
 fn hex32(value: &str) -> Result<[u8; 32]> {
     let value = value
         .strip_prefix("0x")
@@ -177,7 +165,6 @@ fn hex32(value: &str) -> Result<[u8; 32]> {
     hex::decode_to_slice(value, &mut out)?;
     Ok(out)
 }
-
 fn emit_receipt(ctx: &mut impl RunContext, args: EmitReceiptArgs) -> Result<()> {
     let source_tx = hex32(&args.source_tx)?;
     let dest_tx = args.dest_tx.as_deref().map(hex32).transpose()?;
@@ -201,7 +188,6 @@ fn emit_receipt(ctx: &mut impl RunContext, args: EmitReceiptArgs) -> Result<()> 
         receipt,
     ))])
 }
-
 fn sccp_capabilities(ctx: &mut impl RunContext) -> Result<()> {
     let capabilities = ctx.client_from_config().get_sccp_capabilities()?;
     match ctx.output_format() {
@@ -209,7 +195,6 @@ fn sccp_capabilities(ctx: &mut impl RunContext) -> Result<()> {
         CliOutputFormat::Json => ctx.print_data(&capabilities),
     }
 }
-
 fn sccp_registry(ctx: &mut impl RunContext) -> Result<()> {
     let registry = ctx.client_from_config().get_sccp_registry()?;
     match ctx.output_format() {
@@ -217,7 +202,6 @@ fn sccp_registry(ctx: &mut impl RunContext) -> Result<()> {
         CliOutputFormat::Json => ctx.print_data(&registry),
     }
 }
-
 fn sccp_recent(ctx: &mut impl RunContext, args: RecentArgs) -> Result<()> {
     let query = args.query();
     match ctx.output_format() {
@@ -235,7 +219,6 @@ fn sccp_recent(ctx: &mut impl RunContext, args: RecentArgs) -> Result<()> {
         }
     }
 }
-
 fn sccp_bundle(ctx: &mut impl RunContext, args: MessageArgs) -> Result<()> {
     match ctx.output_format() {
         CliOutputFormat::Text => {
@@ -252,7 +235,6 @@ fn sccp_bundle(ctx: &mut impl RunContext, args: MessageArgs) -> Result<()> {
         }
     }
 }
-
 fn sccp_proof_request(ctx: &mut impl RunContext, args: MessageArgs) -> Result<()> {
     match ctx.output_format() {
         CliOutputFormat::Text => {
@@ -269,17 +251,14 @@ fn sccp_proof_request(ctx: &mut impl RunContext, args: MessageArgs) -> Result<()
         }
     }
 }
-
 const MAX_SCCP_TRANSACTION_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SCCP_DETACHED_SIGNATURE_BYTES: usize = 16 * 1024;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DetachedSubmitMaterial {
     transaction_payload_b64: Option<String>,
     signature_b64: Option<String>,
     creation_time_ms: Option<u64>,
 }
-
 fn read_bounded_binary_artifact(path: &Path, maximum: usize, label: &str) -> Result<Vec<u8>> {
     let metadata = fs::metadata(path)
         .wrap_err_with(|| format!("failed to inspect {label} file `{}`", path.display()))?;
@@ -297,7 +276,6 @@ fn read_bounded_binary_artifact(path: &Path, maximum: usize, label: &str) -> Res
     }
     Ok(bytes)
 }
-
 fn read_canonical_base64_file(path: &Path, maximum: usize, label: &str) -> Result<String> {
     let maximum_encoded = 4 * maximum.div_ceil(3);
     let metadata = fs::metadata(path)
@@ -334,7 +312,6 @@ fn read_canonical_base64_file(path: &Path, maximum: usize, label: &str) -> Resul
     }
     Ok(value)
 }
-
 fn validate_detached_signature_matches_payload(
     authority: &AccountId,
     transaction_payload_b64: &str,
@@ -360,7 +337,6 @@ fn validate_detached_signature_matches_payload(
             eyre!("detached signature does not verify the exact prepared transaction payload")
         })
 }
-
 fn load_detached_submit_material(
     args: &DetachedSubmitArgs,
     authority: &AccountId,
@@ -409,11 +385,9 @@ fn load_detached_submit_material(
         )),
     }
 }
-
 fn submit_sccp_once<T>(description: &str, submit: impl FnOnce() -> Result<T>) -> Result<T> {
     submit().wrap_err_with(|| format!("{description} failed without retrying or rebuilding"))
 }
-
 fn is_nonzero_lower_hex32(value: &str) -> bool {
     value.len() == 64
         && value.bytes().any(|byte| byte != b'0')
@@ -421,7 +395,6 @@ fn is_nonzero_lower_hex32(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
-
 fn validate_sccp_submit_response_state(response: &SccpBridgeSubmitResponse) -> Result<()> {
     if response.payload_kind != "transfer" {
         return Err(eyre!(
@@ -483,7 +456,6 @@ fn validate_sccp_submit_response_state(response: &SccpBridgeSubmitResponse) -> R
         )),
     }
 }
-
 fn render_sccp_submit_response(response: &SccpBridgeSubmitResponse) -> Result<String> {
     validate_sccp_submit_response_state(response)?;
     let prefix = format!(
@@ -519,7 +491,6 @@ fn render_sccp_submit_response(response: &SccpBridgeSubmitResponse) -> Result<St
             .expect("validated prepared response has a signing message"),
     ))
 }
-
 fn print_sccp_submit_response(
     ctx: &mut impl RunContext,
     response: &SccpBridgeSubmitResponse,
@@ -530,7 +501,6 @@ fn print_sccp_submit_response(
         CliOutputFormat::Json => ctx.print_data(response),
     }
 }
-
 fn sccp_submit_destination_proof(
     ctx: &mut impl RunContext,
     args: SubmitDestinationProofArgs,
@@ -557,7 +527,6 @@ fn sccp_submit_destination_proof(
     })?;
     print_sccp_submit_response(ctx, &response)
 }
-
 fn sccp_submit_native_message(
     ctx: &mut impl RunContext,
     args: SubmitNativeMessageArgs,
@@ -584,7 +553,6 @@ fn sccp_submit_native_message(
     })?;
     print_sccp_submit_response(ctx, &response)
 }
-
 fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
     format!(
         "sccp capabilities: version={} registry_revision={} registry={} bundle={} proof_request={} recent={} proof_submit={} native_submit={}\nregistry_limits: lanes={} live_total={} live_per_lane={} retained_routes_per_lane={} retained_anchors_per_lane={}\nresource_limits: outbound_messages_block={} outbound_payload_bytes={} pending_messages/pending_bytes={}/{} proofs_tx/block={}/{} proof_bytes_each/tx/block={}/{}/{} native_headers_tx/block={}/{} eth_updates_tx/block={}/{} native_bytes_tx/block={}/{} secp_tx/block={}/{} bls_checks_tx/block={}/{} bls_contributions_tx/block={}/{} bn254_tx/block={}/{}",
@@ -650,7 +618,6 @@ fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
         capabilities.resource_limits.bn254_pairing_checks_per_block,
     )
 }
-
 fn render_sccp_registry_summary(registry: &SccpRegistryV1) -> String {
     let route_count = registry
         .lanes
@@ -696,7 +663,6 @@ fn render_sccp_registry_summary(registry: &SccpRegistryV1) -> String {
     }
     lines.join("\n")
 }
-
 fn render_sccp_recent_messages_summary(messages: &SccpRecentMessages) -> String {
     let mut lines = vec![format!(
         "sccp recent messages: count={}",
@@ -729,7 +695,6 @@ fn render_sccp_recent_messages_summary(messages: &SccpRecentMessages) -> String 
     }
     lines.join("\n")
 }
-
 fn render_sccp_message_bundle_summary(bundle: &iroha_sccp::TairaSccpMessageProofV1) -> String {
     let projection = iroha_sccp::sccp_payload_projection(&bundle.payload)
         .map(|projection| render_sccp_payload_projection_summary(&projection))
@@ -755,7 +720,6 @@ fn render_sccp_message_bundle_summary(bundle: &iroha_sccp::TairaSccpMessageProof
         projection,
     )
 }
-
 fn render_sccp_proof_request_summary(
     request: &iroha_sccp::SccpGroth16Bn254ProofRequestV1,
 ) -> String {
@@ -775,7 +739,6 @@ fn render_sccp_proof_request_summary(
         hex::encode(request.sora_finality_anchor_hash),
     )
 }
-
 fn render_sccp_payload_projection_summary(
     projection: &iroha_sccp::SccpPayloadProjectionV1,
 ) -> String {
@@ -790,7 +753,6 @@ fn render_sccp_payload_projection_summary(
         render_sccp_normalized_codec_value(&transfer.route_id)
     )
 }
-
 fn render_sccp_normalized_codec_value(value: &iroha_sccp::SccpNormalizedCodecValueV1) -> String {
     match value {
         iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText { value } => {
@@ -807,29 +769,23 @@ fn render_sccp_normalized_codec_value(value: &iroha_sccp::SccpNormalizedCodecVal
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{cell::Cell, path::PathBuf};
-
     use clap::Parser as _;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use tempfile::tempdir;
-
     use super::*;
-
     #[derive(clap::Parser)]
     struct TestCli {
         #[command(subcommand)]
         command: Command,
     }
-
     fn detached_authority() -> (AccountId, KeyPair) {
         let key_pair = KeyPair::try_from_seed(vec![0x57; 32], Algorithm::Ed25519)
             .expect("detached CLI test key");
         (AccountId::new(key_pair.public_key().clone()), key_pair)
     }
-
     fn submit_response(
         submitted: bool,
         tx_hash_hex: Option<String>,
@@ -852,7 +808,6 @@ mod tests {
             signing_message_b64,
         }
     }
-
     #[test]
     fn sccp_submit_cli_rejects_mixed_and_legacy_signing_flags() {
         let prepared = TestCli::try_parse_from([
@@ -867,7 +822,6 @@ mod tests {
             prepared.command,
             Command::Sccp(SccpCommand::SubmitNativeMessage(_))
         ));
-
         let direct = TestCli::try_parse_from([
             "iroha",
             "sccp",
@@ -965,12 +919,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn bounded_sccp_artifact_reader_rejects_missing_empty_and_oversized_inputs() {
         let directory = tempdir().expect("temporary SCCP artifact directory");
         let path = directory.path().join("artifact.norito");
-
         assert!(read_bounded_binary_artifact(&path, 4, "SCCP test artifact").is_err());
         fs::write(&path, []).expect("write empty artifact");
         assert!(read_bounded_binary_artifact(&path, 4, "SCCP test artifact").is_err());
@@ -983,7 +935,6 @@ mod tests {
             vec![1_u8; 4]
         );
     }
-
     #[test]
     fn detached_submit_material_rejects_zero_missing_and_mixed_state() {
         let (authority, _) = detached_authority();
@@ -1024,7 +975,6 @@ mod tests {
                 .contains("creation-time-ms")
         );
     }
-
     #[test]
     fn detached_submit_files_bind_signature_to_exact_payload() {
         let directory = tempdir().expect("temporary SCCP signing directory");
@@ -1040,7 +990,6 @@ mod tests {
         fs::write(&payload_path, format!("{payload_b64}\n")).expect("write payload fixture");
         fs::write(&signature_path, format!("{signature_b64}\r\n"))
             .expect("write signature fixture");
-
         let args = DetachedSubmitArgs {
             transaction_payload_b64_file: Some(payload_path.clone()),
             signature_b64_file: Some(signature_path.clone()),
@@ -1056,7 +1005,6 @@ mod tests {
             material.signature_b64.as_deref(),
             Some(signature_b64.as_str())
         );
-
         let other_hash = iroha_crypto::Hash::new(b"different payload");
         let wrong_signature = Signature::try_new(key_pair.private_key(), other_hash.as_ref())
             .expect("sign different payload hash");
@@ -1068,12 +1016,10 @@ mod tests {
         let error = load_detached_submit_material(&args, &authority)
             .expect_err("payload/signature mismatch must reject");
         assert!(error.to_string().contains("does not verify"));
-
         fs::write(&payload_path, format!(" {payload_b64}"))
             .expect("replace payload fixture with whitespace");
         assert!(load_detached_submit_material(&args, &authority).is_err());
     }
-
     #[test]
     fn sccp_submit_is_attempted_once_even_for_ambiguous_errors() {
         let calls = Cell::new(0_u8);
@@ -1085,7 +1031,6 @@ mod tests {
         assert_eq!(calls.get(), 1);
         assert!(error.to_string().contains("without retrying or rebuilding"));
     }
-
     #[test]
     fn submit_response_renderer_exposes_exact_prepared_fields_and_rejects_mixed_state() {
         let payload = b"prepared payload";
@@ -1104,12 +1049,10 @@ mod tests {
         assert!(rendered.contains(&format!("transaction_payload_b64={payload_b64}")));
         assert!(rendered.contains(&format!("signing_message_b64={signing_message_b64}")));
         assert!(!rendered.contains("manifest_hash"));
-
         let submitted = submit_response(true, Some("33".repeat(32)), None, None);
         let rendered = render_sccp_submit_response(&submitted).expect("submitted response");
         assert!(rendered.contains("tx_hash_hex="));
         assert!(!rendered.contains("transaction_payload_b64="));
-
         for invalid in [
             submit_response(true, None, None, None),
             submit_response(true, Some("33".repeat(32)), Some(payload_b64.clone()), None),
@@ -1123,14 +1066,12 @@ mod tests {
         ] {
             assert!(validate_sccp_submit_response_state(&invalid).is_err());
         }
-
         let mut zero_creation = prepared.clone();
         zero_creation.creation_time_ms = 0;
         assert!(validate_sccp_submit_response_state(&zero_creation).is_err());
         let mut zero_route = prepared.clone();
         zero_route.route_configuration_hash_hex = "00".repeat(32);
         assert!(validate_sccp_submit_response_state(&zero_route).is_err());
-
         for invalid_tx_hash in ["00".repeat(32), "AA".repeat(32), "11".repeat(31)] {
             let invalid = submit_response(true, Some(invalid_tx_hash), None, None);
             assert!(validate_sccp_submit_response_state(&invalid).is_err());
@@ -1146,7 +1087,6 @@ mod tests {
         retired_payload_kind.payload_kind = "generic".to_owned();
         assert!(validate_sccp_submit_response_state(&retired_payload_kind).is_err());
     }
-
     #[test]
     fn capabilities_summary_names_only_exact_first_release_paths() {
         let summary = render_sccp_capabilities_summary(&SccpCapabilities {
@@ -1198,7 +1138,6 @@ mod tests {
             assert!(!summary.contains(retired));
         }
     }
-
     #[test]
     fn normalized_codec_summary_renders_solana_pubkey_bytes() {
         let value = iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes: [0x13; 32] };
@@ -1207,7 +1146,6 @@ mod tests {
             format!("solana_pubkey32:0x{}", "13".repeat(32))
         );
     }
-
     #[test]
     fn recent_query_enforces_closed_first_release_bounds() {
         let query = RecentArgs {
@@ -1240,7 +1178,6 @@ mod tests {
             assert!(query.validate().is_err());
         }
     }
-
     #[test]
     fn hex32_rejects_ambiguous_or_wrong_width_values() {
         for hostile in [
@@ -1257,7 +1194,6 @@ mod tests {
             [0xAB; 32]
         );
     }
-
     #[test]
     fn recent_summary_includes_both_governed_hash_roles() {
         let summary = render_sccp_recent_messages_summary(&SccpRecentMessages {

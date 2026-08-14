@@ -12,9 +12,7 @@
 //! The executable profile remains experimental: its complete `S_35`
 //! challenge distribution does not yet carry the distribution-wide theorem
 //! and extractor-loss evidence required by [`jindo_security_certificate_v1`].
-
 use core::{num::NonZeroU32, time::Duration};
-
 use iroha_crypto::{Hash, PrivateKey, PublicKey};
 use iroha_data_model::{
     isi::privacy::SubmitPrivacyProofV1,
@@ -34,7 +32,6 @@ use iroha_data_model::{
 };
 use rand_core_06::{CryptoRng, OsRng, RngCore};
 use thiserror::Error;
-
 #[cfg(test)]
 fn network_id_from_genesis_hash_bytes(hash: [u8; 32]) -> NetworkId {
     NetworkId::from_genesis_hash(
@@ -43,7 +40,6 @@ fn network_id_from_genesis_hash_bytes(hash: [u8; 32]) -> NetworkId {
         ),
     )
 }
-
 #[path = "jindo/codec.rs"]
 mod codec;
 #[path = "jindo/crs.rs"]
@@ -66,7 +62,6 @@ mod sampling;
 mod security;
 #[path = "jindo/transcript.rs"]
 mod transcript;
-
 pub use codec::{JindoProofCodecErrorV1, JindoProofSectionV1};
 pub use parameters::{JINDO_PARAMETER_MANIFEST_V1, JINDO_SOURCE_PROVENANCE_V1};
 pub use protocol::{
@@ -81,35 +76,26 @@ pub use security::{
     jindo_challenge_pair_has_unit_difference_v1, jindo_security_certificate_v1,
 };
 pub use transcript::JindoTranscriptErrorV1;
-
 /// Exact coefficient-field byte width in the first native Jindo profile.
 pub const JINDO_FIELD_ELEMENT_BYTES_V1: usize = IROHA_JINDO_FIELD_ELEMENT_BYTES_V1;
-
 /// CELPC/Jindo coefficient-encoding base `b`.
 pub const JINDO_ENCODING_BASE_V1: u64 = 3_611_623_616;
-
 /// CELPC/Jindo coefficient digit count `d/gamma` (`exp` in the oracle).
 pub const JINDO_ENCODING_EXPONENT_V1: usize = 8;
-
 /// Cyclotomic application-ring degree `d`.
 pub const JINDO_RING_DEGREE_V1: usize = IROHA_JINDO_RING_DEGREE_V1;
-
 /// Coefficient-encoding `gamma`, i.e. the number of field slots.
 pub const JINDO_ENCODING_SLOTS_V1: usize = JINDO_RING_DEGREE_V1 / JINDO_ENCODING_EXPONENT_V1;
-
 /// Maximum polynomial coefficient count in the fixed testnet profile.
 pub const JINDO_MAX_COEFFICIENTS_V1: usize = 256;
-
 /// Exact polynomial count in one first-release batched opening.
 pub const JINDO_MAX_BATCH_SIZE_V1: usize = IROHA_JINDO_MAX_POLYNOMIALS_V1 as usize;
-
 const _: () = {
     assert!(JINDO_FIELD_ELEMENT_BYTES_V1 == 32);
     assert!(JINDO_RING_DEGREE_V1 == 1024);
     assert!(JINDO_MAX_COEFFICIENTS_V1 == 256);
     assert!(JINDO_MAX_BATCH_SIZE_V1 == 4);
 };
-
 /// Internal reason why one coefficient vector is not the unique first-release
 /// encoding of a Jindo polynomial.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,7 +115,6 @@ enum JindoCanonicalPolynomialErrorV1 {
         polynomial_index: usize,
     },
 }
-
 /// Enforce the one accepted variable-length encoding of a degree-bounded
 /// polynomial before padding it to the native fixed-width representation.
 ///
@@ -166,7 +151,6 @@ fn validate_canonical_polynomial_v1(
     }
     Ok(())
 }
-
 /// Secret witness accepted by the canonical first-release Jindo action builder.
 ///
 /// This type intentionally implements neither `Debug`, `Clone`, nor a
@@ -176,7 +160,6 @@ pub struct JindoPrivacyActionWitnessV1 {
     polynomials: Vec<Vec<PrivacyJindoFieldElementV1>>,
     evaluation_point: PrivacyJindoFieldElementV1,
 }
-
 impl JindoPrivacyActionWitnessV1 {
     /// Validate and take ownership of one canonical Jindo witness.
     ///
@@ -200,7 +183,6 @@ impl JindoPrivacyActionWitnessV1 {
         witness.validate()?;
         Ok(witness)
     }
-
     fn validate(&self) -> Result<(), JindoPrivacyActionWitnessErrorV1> {
         if self.polynomials.len() != JINDO_MAX_BATCH_SIZE_V1 {
             return Err(JindoPrivacyActionWitnessErrorV1::InvalidPolynomialCount {
@@ -228,7 +210,6 @@ impl JindoPrivacyActionWitnessV1 {
         Ok(())
     }
 }
-
 impl Drop for JindoPrivacyActionWitnessV1 {
     fn drop(&mut self) {
         for polynomial in &mut self.polynomials {
@@ -239,7 +220,6 @@ impl Drop for JindoPrivacyActionWitnessV1 {
         self.evaluation_point.encoding.fill(0);
     }
 }
-
 /// Canonical witness validation failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum JindoPrivacyActionWitnessErrorV1 {
@@ -295,7 +275,6 @@ pub enum JindoPrivacyActionWitnessErrorV1 {
     #[error("Jindo witness evaluation point is non-canonical")]
     NonCanonicalEvaluationPoint,
 }
-
 impl From<JindoCanonicalPolynomialErrorV1> for JindoPrivacyActionWitnessErrorV1 {
     fn from(error: JindoCanonicalPolynomialErrorV1) -> Self {
         match error {
@@ -323,7 +302,6 @@ impl From<JindoCanonicalPolynomialErrorV1> for JindoPrivacyActionWitnessErrorV1 
         }
     }
 }
-
 /// Exact signature-bound transaction fields for one direct Jindo action.
 #[derive(Clone, Debug)]
 pub struct JindoPrivacyActionTransactionContextV1 {
@@ -342,7 +320,6 @@ pub struct JindoPrivacyActionTransactionContextV1 {
     /// Exact transaction metadata.
     pub metadata: Metadata,
 }
-
 /// Ledger-effect classification for a first-release Jindo action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JindoPrivacyActionEffectV1 {
@@ -350,7 +327,6 @@ pub enum JindoPrivacyActionEffectV1 {
     /// privacy pool, balance, nullifier set, or commitment tree.
     ActionVerificationAndFinalityOnly,
 }
-
 /// Pure proving output ready for transaction signing.
 ///
 /// Its payload is the final two-pass payload; callers cannot replace the
@@ -367,7 +343,6 @@ pub struct JindoPreparedPrivacyActionV1 {
     polynomial_count: u32,
     coefficient_counts: Vec<u32>,
 }
-
 impl core::fmt::Debug for JindoPreparedPrivacyActionV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -386,7 +361,6 @@ impl core::fmt::Debug for JindoPreparedPrivacyActionV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl JindoPreparedPrivacyActionV1 {
     /// Borrow the final, already revalidated payload for the isolated native
     /// release-evidence runner.
@@ -398,62 +372,52 @@ impl JindoPreparedPrivacyActionV1 {
     pub(crate) const fn release_evidence_payload_v1(&self) -> &TransactionPayload {
         &self.payload
     }
-
     /// Canonical transaction-intent digest bound into the statement.
     #[must_use]
     pub const fn transaction_intent_digest(&self) -> [u8; 32] {
         self.transaction_intent_digest
     }
-
     /// Canonical typed-statement digest.
     #[must_use]
     pub const fn statement_digest(&self) -> [u8; 32] {
         self.statement_digest
     }
-
     /// Hash of the exact canonical privacy proof envelope.
     #[must_use]
     pub const fn proof_envelope_hash(&self) -> [u8; 32] {
         self.proof_envelope_hash
     }
-
     /// Canonical encoded typed-statement byte count.
     #[must_use]
     pub const fn statement_bytes(&self) -> u32 {
         self.statement_bytes
     }
-
     /// Native proof byte count.
     #[must_use]
     pub const fn proof_bytes(&self) -> u32 {
         self.proof_bytes
     }
-
     /// Canonical encoded proof-envelope byte count.
     #[must_use]
     pub const fn encoded_proof_envelope_bytes(&self) -> u32 {
         self.encoded_proof_envelope_bytes
     }
-
     /// Number of committed polynomials.
     #[must_use]
     pub const fn polynomial_count(&self) -> u32 {
         self.polynomial_count
     }
-
     /// Canonical coefficient counts in commitment order.
     #[must_use]
     pub fn coefficient_counts(&self) -> &[u32] {
         &self.coefficient_counts
     }
-
     /// This component action has no inferred ledger mutation.
     #[must_use]
     pub const fn effect(&self) -> JindoPrivacyActionEffectV1 {
         JindoPrivacyActionEffectV1::ActionVerificationAndFinalityOnly
     }
 }
-
 /// Complete signed result produced by the canonical Jindo action path.
 pub struct SignedJindoPrivacyActionV1 {
     signed_transaction: SignedTransaction,
@@ -468,7 +432,6 @@ pub struct SignedJindoPrivacyActionV1 {
     polynomial_count: u32,
     coefficient_counts: Vec<u32>,
 }
-
 impl core::fmt::Debug for SignedJindoPrivacyActionV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -492,87 +455,73 @@ impl core::fmt::Debug for SignedJindoPrivacyActionV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl SignedJindoPrivacyActionV1 {
     /// Borrow the exact signed transaction.
     #[must_use]
     pub const fn signed_transaction(&self) -> &SignedTransaction {
         &self.signed_transaction
     }
-
     /// Consume the result and return the exact signed transaction.
     #[must_use]
     pub fn into_signed_transaction(self) -> SignedTransaction {
         self.signed_transaction
     }
-
     /// Canonical transaction hash computed from the signed transaction.
     #[must_use]
     pub const fn transaction_hash(&self) -> [u8; 32] {
         self.transaction_hash
     }
-
     /// Canonical adaptive signed-transaction byte count.
     #[must_use]
     pub const fn adaptive_signed_transaction_bytes(&self) -> u32 {
         self.adaptive_signed_transaction_bytes
     }
-
     /// Canonical transaction-intent digest bound into the statement.
     #[must_use]
     pub const fn transaction_intent_digest(&self) -> [u8; 32] {
         self.transaction_intent_digest
     }
-
     /// Canonical typed-statement digest.
     #[must_use]
     pub const fn statement_digest(&self) -> [u8; 32] {
         self.statement_digest
     }
-
     /// Hash of the exact canonical privacy proof envelope.
     #[must_use]
     pub const fn proof_envelope_hash(&self) -> [u8; 32] {
         self.proof_envelope_hash
     }
-
     /// Canonical encoded typed-statement byte count.
     #[must_use]
     pub const fn statement_bytes(&self) -> u32 {
         self.statement_bytes
     }
-
     /// Native proof byte count.
     #[must_use]
     pub const fn proof_bytes(&self) -> u32 {
         self.proof_bytes
     }
-
     /// Canonical encoded proof-envelope byte count.
     #[must_use]
     pub const fn encoded_proof_envelope_bytes(&self) -> u32 {
         self.encoded_proof_envelope_bytes
     }
-
     /// Number of committed polynomials.
     #[must_use]
     pub const fn polynomial_count(&self) -> u32 {
         self.polynomial_count
     }
-
     /// Canonical coefficient counts in commitment order.
     #[must_use]
     pub fn coefficient_counts(&self) -> &[u32] {
         &self.coefficient_counts
     }
-
     /// This component action has no inferred ledger mutation.
     #[must_use]
     pub const fn effect(&self) -> JindoPrivacyActionEffectV1 {
         JindoPrivacyActionEffectV1::ActionVerificationAndFinalityOnly
     }
 }
-
 /// Failure while preparing or signing the canonical Jindo privacy action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum JindoPrivacyActionBuildErrorV1 {
@@ -634,7 +583,6 @@ pub enum JindoPrivacyActionBuildErrorV1 {
     #[error("signed Jindo action intent differs from the prepared intent")]
     SignedIntentMismatch,
 }
-
 fn validate_transaction_context_v1(
     context: &JindoPrivacyActionTransactionContextV1,
 ) -> Result<(), JindoPrivacyActionBuildErrorV1> {
@@ -647,7 +595,6 @@ fn validate_transaction_context_v1(
     {
         return Err(JindoPrivacyActionBuildErrorV1::TimeToLiveOutOfRange);
     }
-
     let mut builder = TransactionBuilder::new(
         context.network_id,
         context.authority.clone(),
@@ -666,7 +613,6 @@ fn validate_transaction_context_v1(
         .map(|_| ())
         .map_err(|_| JindoPrivacyActionBuildErrorV1::InvalidTransactionContext)
 }
-
 fn validate_signing_authority_v1(
     authority: &AccountId,
     private_key: &PrivateKey,
@@ -680,7 +626,6 @@ fn validate_signing_authority_v1(
     }
     Ok(())
 }
-
 fn transaction_payload_v1(
     context: &JindoPrivacyActionTransactionContextV1,
     envelope: PrivacyProofEnvelopeV1,
@@ -703,7 +648,6 @@ fn transaction_payload_v1(
         .into_payload()
         .map_err(|_| JindoPrivacyActionBuildErrorV1::InvalidTransactionContext)
 }
-
 /// Derive the canonical proof-independent transaction intent for the first pass.
 ///
 /// The data-model projection canonically removes proof bytes and zeroes the
@@ -735,7 +679,6 @@ fn derive_canonical_transaction_intent_digest_v1(
         .privacy_transaction_intent_digest_v1()
         .map_err(|_| JindoPrivacyActionBuildErrorV1::TransactionIntent)
 }
-
 /// Prepare and prove one canonical direct Jindo action using caller-provided
 /// cryptographically secure randomness.
 ///
@@ -766,7 +709,6 @@ where
     }
     validate_transaction_context_v1(&context)?;
     witness.validate()?;
-
     let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
         PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
     )
@@ -781,7 +723,6 @@ where
                 .map_err(|_| JindoPrivacyActionBuildErrorV1::EncodedLengthOverflow)
         })
         .collect::<Result<Vec<_>, _>>()?;
-
     let claimed_evaluations = witness
         .polynomials
         .iter()
@@ -796,7 +737,6 @@ where
         commitments.push(commitment);
         openings.push(opening);
     }
-
     let native_statement = IrohaJindoPolynomialCommitmentStatementV1 {
         context: PrivacyStatementContextV1 {
             network_id: context.network_id,
@@ -816,7 +756,6 @@ where
         PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(native_statement.clone());
     let transaction_intent_digest =
         derive_canonical_transaction_intent_digest_v1(&context, profile, draft_statement)?;
-
     let mut final_statement = native_statement;
     final_statement.context.transaction_intent_digest = transaction_intent_digest;
     let typed_statement =
@@ -879,7 +818,6 @@ where
     if validated_intent != transaction_intent_digest {
         return Err(JindoPrivacyActionBuildErrorV1::FinalIntentBinding);
     }
-
     Ok(JindoPreparedPrivacyActionV1 {
         payload: final_payload,
         transaction_intent_digest: *transaction_intent_digest.as_bytes(),
@@ -892,7 +830,6 @@ where
         coefficient_counts,
     })
 }
-
 /// Prepare and prove one canonical direct Jindo action using operating-system
 /// randomness, without receiving a transaction signing key.
 ///
@@ -907,7 +844,6 @@ pub fn prepare_jindo_privacy_action_v1(
 ) -> Result<JindoPreparedPrivacyActionV1, JindoPrivacyActionBuildErrorV1> {
     prepare_jindo_privacy_action_with_rng_v1(context, witness, canonical_genesis_hash, &mut OsRng)
 }
-
 /// Sign a payload returned by the canonical pure Jindo prover.
 ///
 /// # Errors
@@ -951,7 +887,6 @@ pub fn sign_prepared_jindo_privacy_action_v1(
     let adaptive_signed_transaction_bytes =
         u32::try_from(norito::codec::encode_adaptive(&signed_transaction).len())
             .map_err(|_| JindoPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
-
     Ok(SignedJindoPrivacyActionV1 {
         signed_transaction,
         transaction_hash,
@@ -966,7 +901,6 @@ pub fn sign_prepared_jindo_privacy_action_v1(
         coefficient_counts: prepared.coefficient_counts,
     })
 }
-
 /// Build, prove, bind, and sign one canonical direct Jindo privacy action with
 /// caller-provided cryptographically secure randomness.
 ///
@@ -992,7 +926,6 @@ where
         prepare_jindo_privacy_action_with_rng_v1(context, witness, canonical_genesis_hash, rng)?;
     sign_prepared_jindo_privacy_action_v1(prepared, private_key)
 }
-
 /// Build, prove, bind, and sign one canonical direct Jindo privacy action using
 /// operating-system randomness.
 ///
@@ -1016,11 +949,9 @@ pub fn build_signed_privacy_action_v1(
         &mut OsRng,
     )
 }
-
 #[cfg(test)]
 mod tests {
     use core::num::{NonZeroU32, NonZeroU64};
-
     use iroha_crypto::PrivateKey;
     use iroha_data_model::{
         metadata::Metadata,
@@ -1029,22 +960,17 @@ mod tests {
         transaction::{Executable, FeePaymentIntent},
     };
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-
     use super::*;
-
     struct TestRng(u64);
-
     impl TestRng {
         const fn new(seed: u64) -> Self {
             Self(seed)
         }
     }
-
     impl RngCore for TestRng {
         fn next_u32(&mut self) -> u32 {
             self.next_u64() as u32
         }
-
         fn next_u64(&mut self) -> u64 {
             let mut value = self.0;
             value ^= value >> 12;
@@ -1053,50 +979,39 @@ mod tests {
             self.0 = value;
             value.wrapping_mul(0x2545_f491_4f6c_dd1d)
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             for chunk in destination.chunks_mut(8) {
                 let bytes = self.next_u64().to_le_bytes();
                 chunk.copy_from_slice(&bytes[..chunk.len()]);
             }
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             self.fill_bytes(destination);
             Ok(())
         }
     }
-
     impl CryptoRng for TestRng {}
-
     struct PanicRng;
-
     impl RngCore for PanicRng {
         fn next_u32(&mut self) -> u32 {
             panic!("invalid boundary input reached native randomness")
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("invalid boundary input reached native randomness")
         }
-
         fn fill_bytes(&mut self, _destination: &mut [u8]) {
             panic!("invalid boundary input reached native randomness")
         }
-
         fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
             panic!("invalid boundary input reached native randomness")
         }
     }
-
     impl CryptoRng for PanicRng {}
-
     fn field(value: u64) -> PrivacyJindoFieldElementV1 {
         let mut encoding = [0_u8; 32];
         encoding[..8].copy_from_slice(&value.to_le_bytes());
         PrivacyJindoFieldElementV1::new(encoding)
     }
-
     fn field_modulus() -> PrivacyJindoFieldElementV1 {
         let mut encoding = [0_u8; 32];
         for (chunk, limb) in encoding
@@ -1107,7 +1022,6 @@ mod tests {
         }
         PrivacyJindoFieldElementV1::new(encoding)
     }
-
     fn field_modulus_plus_one() -> PrivacyJindoFieldElementV1 {
         let mut value = field_modulus();
         value.encoding[0] = value.encoding[0]
@@ -1115,7 +1029,6 @@ mod tests {
             .expect("Jindo modulus low byte leaves room for one");
         value
     }
-
     fn authority() -> AccountId {
         AccountId::new(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -1123,19 +1036,16 @@ mod tests {
                 .expect("fixed public key"),
         )
     }
-
     fn private_key() -> PrivateKey {
         "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
             .parse()
             .expect("fixed private key")
     }
-
     fn foreign_private_key() -> PrivateKey {
         "802620AF3F96DEEF44348FEB516C057558972CEC4C75C4DB9C5B3AAC843668854BF828"
             .parse()
             .expect("fixed foreign private key")
     }
-
     fn action_context() -> JindoPrivacyActionTransactionContextV1 {
         JindoPrivacyActionTransactionContextV1 {
             network_id: network_id_from_genesis_hash_bytes([0xA7; 32]),
@@ -1147,7 +1057,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     fn action_witness() -> JindoPrivacyActionWitnessV1 {
         JindoPrivacyActionWitnessV1::try_new(
             vec![
@@ -1160,7 +1069,6 @@ mod tests {
         )
         .expect("canonical fixed witness")
     }
-
     fn witness_error(
         polynomials: Vec<Vec<PrivacyJindoFieldElementV1>>,
         evaluation_point: PrivacyJindoFieldElementV1,
@@ -1170,13 +1078,11 @@ mod tests {
             Err(error) => error,
         }
     }
-
     fn exact_batch_with_first(
         first: Vec<PrivacyJindoFieldElementV1>,
     ) -> Vec<Vec<PrivacyJindoFieldElementV1>> {
         vec![first, vec![field(101)], vec![field(102)], vec![field(103)]]
     }
-
     fn perturb_rns_polynomial(
         polynomial: &mut ring::JindoRnsPolynomialV1,
         delta: i128,
@@ -1189,7 +1095,6 @@ mod tests {
             moduli,
         );
     }
-
     #[test]
     fn fixed_profile_dimensions_are_self_consistent() {
         assert_eq!(JINDO_ENCODING_EXPONENT_V1, 8);
@@ -1199,7 +1104,6 @@ mod tests {
         assert!(JINDO_MAX_COEFFICIENTS_V1.is_power_of_two());
         assert_eq!(JINDO_MAX_BATCH_SIZE_V1, 4);
     }
-
     #[test]
     fn action_witness_rejects_noncanonical_and_ambiguous_representations() {
         assert!(matches!(
@@ -1295,7 +1199,6 @@ mod tests {
             "the exact coefficient cap remains valid when its leading coefficient is non-zero"
         );
     }
-
     #[test]
     fn action_builder_rejects_public_boundary_errors_before_randomness() {
         let zero_genesis = prepare_jindo_privacy_action_with_rng_v1(
@@ -1308,7 +1211,6 @@ mod tests {
             zero_genesis,
             Err(JindoPrivacyActionBuildErrorV1::ZeroGenesisHash)
         ));
-
         let mut oversized_time = action_context();
         oversized_time.creation_time = Duration::from_secs(u64::MAX);
         let oversized_time = prepare_jindo_privacy_action_with_rng_v1(
@@ -1321,7 +1223,6 @@ mod tests {
             oversized_time,
             Err(JindoPrivacyActionBuildErrorV1::CreationTimeOutOfRange)
         ));
-
         let wrong_key = build_signed_privacy_action_with_rng_v1(
             action_context(),
             action_witness(),
@@ -1334,7 +1235,6 @@ mod tests {
             Err(JindoPrivacyActionBuildErrorV1::AuthorityKeyMismatch)
         ));
     }
-
     #[test]
     fn deterministic_action_api_builds_one_bound_signed_component_action() {
         let prepared = prepare_jindo_privacy_action_with_rng_v1(
@@ -1344,7 +1244,6 @@ mod tests {
             &mut TestRng::new(0x6a6a_29d0_0044_0001),
         )
         .expect("deterministic Jindo action proving");
-
         assert_eq!(prepared.polynomial_count(), 4);
         assert_eq!(prepared.coefficient_counts(), &[4, 2, 2, 2]);
         assert_eq!(prepared.proof_bytes(), JINDO_NATIVE_PROOF_BYTES_V1 as u32);
@@ -1459,7 +1358,6 @@ mod tests {
                 PrivacyConsensusLimitsV1::taira_default().max_proof_bytes_per_action,
             )
             .expect("final envelope is bound to the compiled profile and exact CRS");
-
             let decoded = codec::JindoEvaluationProofV1::decode_exact(
                 proof.as_bytes(),
                 JINDO_MAX_BATCH_SIZE_V1,
@@ -1467,7 +1365,6 @@ mod tests {
             )
             .expect("the canonical proof wire decodes");
             let mut mutations = Vec::new();
-
             let mut mutated = decoded.clone();
             perturb_rns_polynomial(
                 &mut mutated.mask_commitments[0],
@@ -1475,12 +1372,10 @@ mod tests {
                 ring::JINDO_OUTER_MODULI_V1,
             );
             mutations.push(("aggregation-mask-commitment", mutated));
-
             let mut mutated = decoded.clone();
             mutated.mask_split_evaluation[0] =
                 mutated.mask_split_evaluation[0] + field::JindoFieldElementV1::ONE;
             mutations.push(("aggregation-mask-evaluation", mutated));
-
             let mut mutated = decoded.clone();
             perturb_rns_polynomial(
                 &mut mutated.partials[0],
@@ -1488,7 +1383,6 @@ mod tests {
                 ring::JINDO_INNER_MODULI_V1,
             );
             mutations.push(("quadratic-partial", mutated));
-
             let mut mutated = decoded.clone();
             perturb_rns_polynomial(
                 &mut mutated.encode_responses[0],
@@ -1496,7 +1390,6 @@ mod tests {
                 ring::JINDO_INNER_MODULI_V1,
             );
             mutations.push(("encoded-response", mutated));
-
             let mut mutated = decoded.clone();
             perturb_rns_polynomial(
                 &mut mutated.mlwe_responses[0],
@@ -1504,7 +1397,6 @@ mod tests {
                 ring::JINDO_INNER_MODULI_V1,
             );
             mutations.push(("mlwe-response", mutated));
-
             let mut mutated = decoded.clone();
             perturb_rns_polynomial(
                 &mut mutated.inner_commitments[0],
@@ -1512,17 +1404,14 @@ mod tests {
                 ring::JINDO_OUTER_MODULI_V1,
             );
             mutations.push(("inner-commitment", mutated));
-
             let mut mutated = decoded.clone();
             mutated.blind_evaluations[0] =
                 mutated.blind_evaluations[0] + field::JindoFieldElementV1::ONE;
             mutations.push(("split-blind-evaluation", mutated));
-
             let mut mutated = decoded;
             mutated.split_evaluations[0] =
                 mutated.split_evaluations[0] + field::JindoFieldElementV1::ONE;
             mutations.push(("split-evaluation", mutated));
-
             for (section, mutation) in mutations {
                 let mutation = mutation.encode();
                 codec::JindoEvaluationProofV1::decode_exact(
@@ -1546,7 +1435,6 @@ mod tests {
                 );
             }
         }
-
         let mut tampered_payload = prepared.payload.clone();
         tampered_payload.nonce = NonZeroU32::new(8);
         assert!(
@@ -1555,7 +1443,6 @@ mod tests {
                 .is_err(),
             "post-proof mutation must invalidate the two-pass intent"
         );
-
         let expected_intent = prepared.transaction_intent_digest();
         let expected_statement = prepared.statement_digest();
         let expected_statement_bytes = prepared.statement_bytes();

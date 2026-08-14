@@ -1,29 +1,23 @@
 //! CLI regression tests for the SoraFS manifest builder.
 #![cfg(feature = "cli")]
-
 use std::{env, fs, path::PathBuf};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use tempfile::{Builder, TempDir};
-
 fn canonical_temp_base() -> PathBuf {
     env::temp_dir()
         .canonicalize()
         .expect("canonical system temp dir")
 }
-
 fn tempdir() -> Result<TempDir, std::io::Error> {
     Builder::new()
         .prefix("sorafs-manifest-builder-cli-")
         .tempdir_in(canonical_temp_base())
 }
-
 #[test]
 fn manifest_builder_rejects_noncanonical_operator_inputs() {
     let temp = tempdir().expect("tempdir");
     let payload_path = temp.path().join("payload.bin");
     fs::write(&payload_path, b"manifest-builder parser boundary").expect("write payload");
-
     for (arg, expected) in [
         ("--dag-codec=0X71", "canonical unsigned"),
         ("--car-size=000", "canonical unsigned"),
@@ -41,7 +35,6 @@ fn manifest_builder_rejects_noncanonical_operator_inputs() {
             .arg(arg)
             .output()
             .expect("run manifest builder");
-
         assert!(!output.status.success(), "{arg} should fail");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
@@ -50,13 +43,11 @@ fn manifest_builder_rejects_noncanonical_operator_inputs() {
         );
     }
 }
-
 #[test]
 fn manifest_builder_requires_one_positive_retention_epoch() {
     let temp = tempdir().expect("tempdir");
     let payload_path = temp.path().join("payload.bin");
     fs::write(&payload_path, b"manifest retention policy").expect("write payload");
-
     for (args, expected) in [
         (Vec::new(), "missing required option --retention-epoch"),
         (
@@ -73,7 +64,6 @@ fn manifest_builder_requires_one_positive_retention_epoch() {
             .args(args)
             .output()
             .expect("run manifest builder");
-
         assert!(
             !output.status.success(),
             "invalid retention policy should fail"
@@ -85,7 +75,6 @@ fn manifest_builder_requires_one_positive_retention_epoch() {
         );
     }
 }
-
 #[test]
 fn provider_admission_proposal_rejects_noncanonical_operator_inputs() {
     for (arg, expected) in [
@@ -141,7 +130,6 @@ fn provider_admission_proposal_rejects_noncanonical_operator_inputs() {
             .arg(arg)
             .output()
             .expect("run provider-admission proposal");
-
         assert!(!output.status.success(), "{arg} should fail");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(

@@ -1,11 +1,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level regression tests for `/v1/configuration`.
-
 #[path = "fixtures.rs"]
 mod fixtures;
 #[path = "common/norito_rpc_harness.rs"]
 mod norito_rpc_harness;
-
 use axum::http::Request;
 use http::StatusCode;
 use http_body_util::BodyExt as _;
@@ -15,7 +13,6 @@ use iroha_config::{
 };
 use norito_rpc_harness::NoritoRpcHarness;
 use tower::ServiceExt as _;
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn configuration_endpoint_includes_transport_summary() {
@@ -37,7 +34,6 @@ async fn configuration_endpoint_includes_transport_summary() {
         .to_string();
     let expected_allowlist = cfg.torii.transport.norito_rpc.allowed_clients.len();
     let expected_access_kind = cfg.streaming.soranet.access_kind.as_str();
-
     let mut req = fixtures::operator_signed_request(
         &harness.cfg.common.key_pair,
         Request::builder()
@@ -50,7 +46,6 @@ async fn configuration_endpoint_includes_transport_summary() {
         .insert(norito_rpc_harness::loopback_connect_info());
     let response = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let dto: ConfigGetDTO = norito::json::from_slice(&body).expect("valid configuration payload");
     let summary = dto.transport.norito_rpc;
@@ -64,7 +59,6 @@ async fn configuration_endpoint_includes_transport_summary() {
         summary.canary_allowlist_size, expected_allowlist,
         "allowlist size must match config"
     );
-
     let streaming = &dto.transport.streaming.soranet;
     assert_eq!(
         streaming.enabled, cfg.streaming.soranet.enabled,

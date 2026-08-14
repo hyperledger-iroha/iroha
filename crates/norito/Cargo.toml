@@ -220,3 +220,12 @@ path = "tests/grouped/group_05.rs"
 [[test]]
 name = "norito_group_06"
 path = "tests/grouped/group_06.rs"
+
+[[test]]
+name = "exact_field_streaming_allocations"
+path = "tests/exact_field_streaming_allocations.rs"
+
+[[test]]
+name = "json_parse_string_allocations"
+path = "tests/json_parse_string_allocations.rs"
+required-features = ["json"]

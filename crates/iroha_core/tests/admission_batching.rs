@@ -3,10 +3,8 @@
 #![allow(clippy::cast_possible_truncation)]
 //! These exercise grouping + bisection in `ValidBlock::validate_static` using
 //! one intentionally bad signature per batch.
-
 use core::time::Duration;
 use std::{sync::Arc, time::SystemTime};
-
 use iroha_core::{
     block::ValidBlock,
     governance::manifest::LaneManifestRegistry,
@@ -19,13 +17,10 @@ use iroha_crypto::Signature;
 use iroha_crypto::{Algorithm, HashOf, KeyPair, PrivateKey, SignatureOf};
 use iroha_data_model::prelude::*;
 use nonzero_ext::nonzero;
-
 fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, KeyPair) {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let kp = checked_random_keypair_with_algorithm(algo);
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -51,16 +46,13 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, Ke
     state.set_crypto(crypto_cfg);
     (state, account_id, network_id, kp)
 }
-
 fn checked_random_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked admission batching keypair")
 }
-
 fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
     KeyPair::try_random_with_algorithm(algorithm)
         .expect("generate checked admission batching keypair for requested algorithm")
 }
-
 #[test]
 fn admission_batching_fixture_key_generation_preserves_algorithm() {
     for algorithm in [Algorithm::Ed25519, Algorithm::Secp256k1, Algorithm::MlDsa] {
@@ -72,37 +64,31 @@ fn admission_batching_fixture_key_generation_preserves_algorithm() {
         default_key_pair.public_key().algorithm(),
         Algorithm::Ed25519
     );
-
     #[cfg(feature = "bls")]
     {
         let key_pair = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
         assert_eq!(key_pair.public_key().algorithm(), Algorithm::BlsNormal);
     }
-
     #[cfg(feature = "sm")]
     {
         let key_pair = checked_random_keypair_with_algorithm(Algorithm::Sm2);
         assert_eq!(key_pair.public_key().algorithm(), Algorithm::Sm2);
     }
 }
-
 fn checked_signature_of<T: norito::codec::Encode>(
     private_key: &PrivateKey,
     payload: &T,
 ) -> SignatureOf<T> {
     SignatureOf::try_new(private_key, payload).expect("test fixture signing should succeed")
 }
-
 fn checked_signature_from_hash<T>(private_key: &PrivateKey, hash: HashOf<T>) -> SignatureOf<T> {
     SignatureOf::try_from_hash(private_key, hash).expect("test fixture hash signing should succeed")
 }
-
 fn set_default_da_policy_hash(header: &mut BlockHeader) {
     let lane_cfg = iroha_config::parameters::actual::LaneConfig::default();
     let hash = iroha_core::da::proof_policy_bundle_hash(&lane_cfg);
     header.set_da_proof_policies_hash(Some(hash));
 }
-
 fn build_block_with_txs(
     good_kp: &KeyPair,
     bad_kp: &KeyPair,
@@ -143,7 +129,6 @@ fn build_block_with_txs(
     let sig = BlockSignature::new(0, checked_signature_from_hash(leader_sk, header.hash()));
     SignedBlock::presigned(sig, header, txs)
 }
-
 #[cfg(feature = "bls")]
 fn bls_pop_metadata(kp: &KeyPair) -> iroha_data_model::Metadata {
     let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("BLS PoP");
@@ -154,7 +139,6 @@ fn bls_pop_metadata(kp: &KeyPair) -> iroha_data_model::Metadata {
     );
     metadata
 }
-
 #[cfg(feature = "bls")]
 fn mk_tx_with_creation_time(
     network_id: &NetworkId,
@@ -181,7 +165,6 @@ fn mk_tx_with_creation_time(
     )));
     tx
 }
-
 #[cfg(feature = "bls")]
 fn presigned_block_with_creation_after_txs(
     leader: &KeyPair,
@@ -195,7 +178,6 @@ fn presigned_block_with_creation_after_txs(
             raw as u64
         }
     }
-
     let block_ct = txs
         .iter()
         .map(creation_ms)
@@ -216,7 +198,6 @@ fn presigned_block_with_creation_after_txs(
     );
     SignedBlock::presigned(sig, header, txs)
 }
-
 #[cfg(feature = "bls")]
 fn enable_bls_batching(state: &mut iroha_core::state::State) {
     let cfg = iroha_config::parameters::actual::Pipeline {
@@ -280,7 +261,6 @@ fn enable_bls_batching(state: &mut iroha_core::state::State) {
     };
     state.set_pipeline(cfg);
 }
-
 /// BLS same-message group duplicate payloads: constructing two identical transactions
 /// is rejected by admission (duplicate payload). This still exercises same-message
 /// grouping path in signature preverification before the duplicate check.
@@ -291,12 +271,10 @@ fn bls_same_message_group_duplicate_rejected() {
     let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_bls_batching(&mut state);
     let leader = good.clone();
-
     // Two transactions with identical payloads (same creation_time and instructions), both signed correctly
     let ct = 1_651_234_567u64;
     let tx1 = mk_tx_with_creation_time(&network_id, &authority, "same", ct, &good, &good);
     let tx2 = mk_tx_with_creation_time(&network_id, &authority, "same", ct, &good, &good);
-
     let ct_ms = u64::max(
         tx1.creation_time().as_millis() as u64,
         tx2.creation_time().as_millis() as u64,
@@ -310,7 +288,6 @@ fn bls_same_message_group_duplicate_rejected() {
     let block = SignedBlock::presigned(sig, header, vec![tx1, tx2]);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-
     let result = ValidBlock::validate(
         block,
         &topology,
@@ -331,7 +308,6 @@ fn bls_same_message_group_duplicate_rejected() {
         assert_eq!(det, 0, "unexpected deterministic count");
     }
 }
-
 /// BLS mixed micro-batch: includes a same-message group (two identical valid txs)
 /// and two distinct singletons. Signature preverification should run the fast-aggregate
 /// for the group and exact multi-message verification for the singletons. The overall
@@ -343,21 +319,17 @@ fn bls_mixed_group_and_singletons_duplicate_rejected() {
     let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_bls_batching(&mut state);
     let leader = good.clone();
-
     // Two identical valid transactions (same payload) form the same-message group
     let ct = 1_651_234_567u64;
     let tx_same1 = mk_tx_with_creation_time(&network_id, &authority, "same", ct, &good, &good);
     let tx_same2 = mk_tx_with_creation_time(&network_id, &authority, "same", ct, &good, &good);
-
     // Two distinct valid transactions (different payloads) serve as singletons
     let tx_s1 = mk_tx_with_creation_time(&network_id, &authority, "s1", ct + 1, &good, &good);
     let tx_s2 = mk_tx_with_creation_time(&network_id, &authority, "s2", ct + 2, &good, &good);
-
     let block =
         presigned_block_with_creation_after_txs(&leader, vec![tx_same1, tx_same2, tx_s1, tx_s2]);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-
     let result = ValidBlock::validate(
         block,
         &topology,
@@ -378,7 +350,6 @@ fn bls_mixed_group_and_singletons_duplicate_rejected() {
         assert_eq!(det, 0, "unexpected deterministic count");
     }
 }
-
 /// BLS same-message group bisection: one of two identical payloads is signed by a wrong key.
 #[cfg(feature = "bls")]
 #[test]
@@ -387,16 +358,13 @@ fn bls_same_message_group_bisect_bad() {
     enable_bls_batching(&mut state);
     let bad = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
     let leader = good.clone();
-
     let ct = 1_651_234_567u64;
     let tx_good = mk_tx_with_creation_time(&network_id, &authority, "same", ct, &good, &good);
     // Same payload but signed with a key that does not match the authority
     let tx_bad = mk_tx_with_creation_time(&network_id, &authority, "same", ct, &bad, &good);
-
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx_good, tx_bad]);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-
     let result = ValidBlock::validate(
         block,
         &topology,
@@ -420,7 +388,6 @@ fn bls_same_message_group_bisect_bad() {
         assert_eq!(det, 0, "unexpected deterministic count");
     }
 }
-
 /// BLS multi-message verification across distinct messages: two valid BLS txs with
 /// different payloads should be accepted when batching is enabled.
 #[cfg(feature = "bls")]
@@ -429,7 +396,6 @@ fn bls_multi_message_verification_ok() {
     let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_bls_batching(&mut state);
     let leader = good.clone();
-
     // Two distinct messages with current creation time (avoid TTL rejection)
     let tx1 = TransactionBuilder::new(
         network_id,
@@ -447,11 +413,9 @@ fn bls_multi_message_verification_ok() {
     .with_instructions([Log::new(Level::INFO, "m2".to_string())])
     .with_metadata(bls_pop_metadata(&good))
     .sign(good.private_key());
-
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx1, tx2]);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-
     let result = ValidBlock::validate(
         block,
         &topology,
@@ -471,7 +435,6 @@ fn bls_multi_message_verification_ok() {
         assert!(multi >= 1, "expected multi-message verification to be used");
         assert_eq!(det, 0, "unexpected deterministic count");
     }
-
     #[cfg(feature = "sm")]
     #[test]
     fn sm2_transactions_rejected_when_sm_disabled() {
@@ -480,7 +443,6 @@ fn bls_multi_message_verification_ok() {
         let block = build_block_with_txs(&signer, &signer, &leader, &authority, &network_id);
         let peer = PeerId::from(leader.public_key().clone());
         let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-
         let result = ValidBlock::validate(
             block,
             &topology,
@@ -494,7 +456,6 @@ fn bls_multi_message_verification_ok() {
             "SM2 block should be rejected when SM is disabled"
         );
     }
-
     #[cfg(feature = "sm")]
     #[test]
     fn sm2_transactions_accepted() {
@@ -503,7 +464,6 @@ fn bls_multi_message_verification_ok() {
         let block = build_block_with_txs(&signer, &signer, &leader, &authority, &network_id);
         let peer = PeerId::from(leader.public_key().clone());
         let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-
         let result = ValidBlock::validate(
             block,
             &topology,
@@ -518,7 +478,6 @@ fn bls_multi_message_verification_ok() {
         );
     }
 }
-
 /// Distinct-message admission must preserve the validity of each transaction
 /// signature, rather than relying on a verdict over their combined point.
 #[cfg(feature = "bls")]
@@ -527,7 +486,6 @@ fn bls_multi_message_rejects_balancing_altered_transaction_signatures() {
     let (mut state, authority, network_id, signer) = setup_world_with_account(Algorithm::BlsNormal);
     enable_bls_batching(&mut state);
     let leader = signer.clone();
-
     let mut tx1 = TransactionBuilder::new(
         network_id,
         authority.clone(),
@@ -550,7 +508,6 @@ fn bls_multi_message_rejects_balancing_altered_transaction_signatures() {
     )])
     .with_metadata(bls_pop_metadata(&signer))
     .sign(signer.private_key());
-
     let sig1 = tx1.signature().0.payload().to_vec();
     let sig2 = tx2.signature().0.payload().to_vec();
     let delta = Signature::try_new(signer.private_key(), b"admission balancing point")
@@ -562,7 +519,6 @@ fn bls_multi_message_rejects_balancing_altered_transaction_signatures() {
     // In the canonical compressed BLS12-381 encoding, negation flips the
     // lexicographic-sort flag while retaining the same x-coordinate.
     negative_delta[0] ^= 0x20;
-
     let altered_sig1 =
         iroha_crypto::bls_normal_aggregate_signatures(&[sig1.as_slice(), delta.as_slice()])
             .expect("first altered signature remains canonical");
@@ -577,12 +533,10 @@ fn bls_multi_message_rejects_balancing_altered_transaction_signatures() {
     tx2.set_signature(TransactionSignature(SignatureOf::from_signature(
         Signature::from_bytes(&altered_sig2),
     )));
-
     tx1.verify_signature()
         .expect_err("first altered transaction signature must fail independently");
     tx2.verify_signature()
         .expect_err("second altered transaction signature must fail independently");
-
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx1, tx2]);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
@@ -594,13 +548,11 @@ fn bls_multi_message_rejects_balancing_altered_transaction_signatures() {
         &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
     )
     .unpack(|_| {});
-
     assert!(
         result.is_err(),
         "block admission must reject individually invalid BLS signatures"
     );
 }
-
 /// BLS multi-message verification: one of two distinct payloads is signed by a wrong key
 /// and should trigger an exact-verification failure plus telemetry bookkeeping.
 #[cfg(feature = "bls")]
@@ -610,15 +562,12 @@ fn bls_multi_message_verification_fails_and_counts() {
     enable_bls_batching(&mut state);
     let bad = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
     let leader = good.clone();
-
     let ct = 1_751_234_567u64;
     let tx_valid = mk_tx_with_creation_time(&network_id, &authority, "m1", ct, &good, &good);
     let tx_bad = mk_tx_with_creation_time(&network_id, &authority, "m2", ct + 1, &bad, &good);
-
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx_valid, tx_bad]);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-
     let result = ValidBlock::validate(
         block,
         &topology,
@@ -631,7 +580,6 @@ fn bls_multi_message_verification_fails_and_counts() {
         result.is_err(),
         "block must be rejected when multi-message verification finds a bad signature"
     );
-
     #[cfg(feature = "telemetry")]
     {
         let ((same_success, same_failure), (multi_success, multi_failure)) =
@@ -651,7 +599,6 @@ fn bls_multi_message_verification_fails_and_counts() {
         );
     }
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn bls_batch_bisection_finds_bad_sig() {
@@ -662,7 +609,6 @@ fn bls_batch_bisection_finds_bad_sig() {
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-
     // Validate statically; expect rejection due to bad signature
     let result = ValidBlock::validate(
         block,
@@ -677,7 +623,6 @@ fn bls_batch_bisection_finds_bad_sig() {
         "block with one bad BLS signature must be rejected"
     );
 }
-
 #[test]
 fn mldsa_batch_bisection_finds_bad_sig() {
     // ML‑DSA (Dilithium3)
@@ -687,7 +632,6 @@ fn mldsa_batch_bisection_finds_bad_sig() {
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-
     let result = ValidBlock::validate(
         block,
         &topology,
@@ -701,7 +645,6 @@ fn mldsa_batch_bisection_finds_bad_sig() {
         "block with one bad ML‑DSA signature must be rejected"
     );
 }
-
 #[test]
 fn ed25519_batch_bisection_finds_bad_sig() {
     let (state, authority, network_id, good) = setup_world_with_account(Algorithm::Ed25519);
@@ -710,7 +653,6 @@ fn ed25519_batch_bisection_finds_bad_sig() {
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-
     let result = ValidBlock::validate(
         block,
         &topology,
@@ -724,7 +666,6 @@ fn ed25519_batch_bisection_finds_bad_sig() {
         "block with one bad Ed25519 signature must be rejected"
     );
 }
-
 #[test]
 fn secp256k1_batch_bisection_finds_bad_sig() {
     let (state, authority, network_id, good) = setup_world_with_account(Algorithm::Secp256k1);
@@ -733,7 +674,6 @@ fn secp256k1_batch_bisection_finds_bad_sig() {
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &network_id);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-
     let result = ValidBlock::validate(
         block,
         &topology,
@@ -747,7 +687,6 @@ fn secp256k1_batch_bisection_finds_bad_sig() {
         "block with one bad secp256k1 signature must be rejected"
     );
 }
-
 #[test]
 fn rejects_transaction_signed_with_disallowed_algorithm() {
     let (state, authority, network_id, secp) = setup_world_with_account(Algorithm::Secp256k1);
@@ -768,7 +707,6 @@ fn rejects_transaction_signed_with_disallowed_algorithm() {
     )
     .with_instructions([Log::new(Level::INFO, "secp attempt".to_owned())])
     .sign(secp.private_key());
-
     let mut crypto_cfg = (*state.crypto()).clone();
     crypto_cfg
         .allowed_signing
@@ -790,7 +728,6 @@ fn rejects_transaction_signed_with_disallowed_algorithm() {
         other => panic!("expected SignatureVerification failure, got {other:?}"),
     }
 }
-
 #[test]
 fn accepts_transaction_once_algorithm_whitelisted() {
     let (state, authority, network_id, secp) = setup_world_with_account(Algorithm::Secp256k1);
@@ -811,7 +748,6 @@ fn accepts_transaction_once_algorithm_whitelisted() {
     )
     .with_instructions([Log::new(Level::INFO, "secp allowed".to_owned())])
     .sign(secp.private_key());
-
     let mut crypto_cfg = (*state.crypto()).clone();
     if !crypto_cfg.allowed_signing.contains(&Algorithm::Secp256k1) {
         crypto_cfg.allowed_signing.push(Algorithm::Secp256k1);
@@ -819,11 +755,9 @@ fn accepts_transaction_once_algorithm_whitelisted() {
         crypto_cfg.allowed_signing.dedup();
     }
     state.set_crypto(crypto_cfg.clone());
-
     AcceptedTransaction::accept(tx, &network_id, max_clock_drift, tx_limits, &crypto_cfg)
         .expect("transaction should be accepted after whitelisting");
 }
-
 #[test]
 fn rejects_transaction_when_ttl_expired() {
     let (state, authority, network_id, kp) = setup_world_with_account(Algorithm::Ed25519);
@@ -837,7 +771,6 @@ fn rejects_transaction_when_ttl_expired() {
         default_limits.max_decompressed_bytes(),
         default_limits.max_metadata_depth(),
     );
-
     let mut builder = TransactionBuilder::new(
         network_id,
         authority.clone(),
@@ -847,14 +780,12 @@ fn rejects_transaction_when_ttl_expired() {
     builder.set_creation_time(Duration::from_secs(0));
     builder.set_ttl(Duration::from_secs(1));
     let tx = builder.sign(kp.private_key());
-
     let crypto_cfg = (*state.crypto()).clone();
     match AcceptedTransaction::accept(tx, &network_id, max_clock_drift, tx_limits, &crypto_cfg) {
         Err(AcceptTransactionFail::TransactionExpired { .. }) => {}
         other => panic!("expected TransactionExpired failure, got {other:?}"),
     }
 }
-
 #[test]
 fn accepts_transaction_with_valid_ttl() {
     let (state, authority, network_id, kp) = setup_world_with_account(Algorithm::Ed25519);
@@ -868,12 +799,10 @@ fn accepts_transaction_with_valid_ttl() {
         default_limits.max_decompressed_bytes(),
         default_limits.max_metadata_depth(),
     );
-
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0));
     let creation_time = now.saturating_sub(Duration::from_secs(1));
-
     let mut builder = TransactionBuilder::new(
         network_id,
         authority.clone(),
@@ -883,7 +812,6 @@ fn accepts_transaction_with_valid_ttl() {
     builder.set_creation_time(creation_time);
     builder.set_ttl(Duration::from_secs(10));
     let tx = builder.sign(kp.private_key());
-
     let crypto_cfg = (*state.crypto()).clone();
     AcceptedTransaction::accept(tx, &network_id, max_clock_drift, tx_limits, &crypto_cfg)
         .expect("transaction with unexpired TTL should be accepted");

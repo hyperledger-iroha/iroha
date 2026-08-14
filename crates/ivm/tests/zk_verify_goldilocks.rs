@@ -1,8 +1,6 @@
 #![cfg(feature = "ivm_zk_tests")]
-
 use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
 use ivm::{IVMHost, gas::ZkGasScheduleV1, syscalls};
-
 fn canonical_goldilocks_envelope() -> OpenVerifyEnvelope {
     OpenVerifyEnvelope::new(
         BackendTag::Stark,
@@ -12,7 +10,6 @@ fn canonical_goldilocks_envelope() -> OpenVerifyEnvelope {
         vec![4, 5, 6],
     )
 }
-
 fn tlv_from_payload(payload: &[u8]) -> Vec<u8> {
     let mut tlv = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
     tlv.extend_from_slice(&u16::to_be_bytes(ivm::PointerType::NoritoBytes as u16));
@@ -23,7 +20,6 @@ fn tlv_from_payload(payload: &[u8]) -> Vec<u8> {
     tlv.extend_from_slice(&hash);
     tlv
 }
-
 fn run_default_host(envelope: &OpenVerifyEnvelope, curve: Option<&str>) -> (u64, u64, u64) {
     let payload = norito::to_bytes(envelope).expect("encode canonical envelope");
     let tlv = tlv_from_payload(&payload);
@@ -41,7 +37,6 @@ fn run_default_host(envelope: &OpenVerifyEnvelope, curve: Option<&str>) -> (u64,
     assert_eq!(gas, expected);
     (vm.register(10), vm.register(11), gas)
 }
-
 #[test]
 fn zk_verify_ballot_goldilocks_requires_registered_backend() {
     let (verified, status, _) =
@@ -49,7 +44,6 @@ fn zk_verify_ballot_goldilocks_requires_registered_backend() {
     assert_eq!(verified, 0);
     assert_eq!(status, ivm::host::ERR_BACKEND);
 }
-
 #[test]
 fn zk_verify_ballot_goldilocks_default_host_fails_closed() {
     let (verified, status, _) = run_default_host(&canonical_goldilocks_envelope(), None);

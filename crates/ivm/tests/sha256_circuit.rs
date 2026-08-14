@@ -1,7 +1,6 @@
 #![cfg(feature = "ivm_zk_tests")]
 use ivm::halo2::Sha256BlockCircuit;
 use rand_core::{OsRng, TryRngCore};
-
 fn sha256_compress_ref(state: [u32; 8], block: &[u8; 64]) -> [u32; 8] {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
@@ -66,7 +65,6 @@ fn sha256_compress_ref(state: [u32; 8], block: &[u8; 64]) -> [u32; 8] {
     out[7] = state[7].wrapping_add(h);
     out
 }
-
 #[test]
 fn test_sha256block_circuit_known_vector() {
     let block = [0u8; 64];
@@ -82,7 +80,6 @@ fn test_sha256block_circuit_known_vector() {
     };
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_sha256block_circuit_random() {
     let mut rng = OsRng;
@@ -103,7 +100,6 @@ fn test_sha256block_circuit_random() {
     };
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_sha256block_circuit_bad_witness() {
     let block = [0u8; 64];
@@ -120,7 +116,6 @@ fn test_sha256block_circuit_bad_witness() {
     };
     assert!(circuit.verify().is_err());
 }
-
 #[test]
 fn test_sha256_ch_maj() {
     fn ch(x: u32, y: u32, z: u32) -> u32 {
@@ -134,7 +129,6 @@ fn test_sha256_ch_maj() {
     assert_eq!(maj(0xffff_ffff, 0, 0), 0);
     assert_eq!(maj(0xffff_ffff, 0xffff_ffff, 0), 0xffff_ffff);
 }
-
 #[test]
 fn test_addition_wraparound() {
     let a: u32 = 0xffff_ffff;

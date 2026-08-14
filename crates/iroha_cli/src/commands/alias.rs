@@ -3,7 +3,6 @@
 //! Setup planning is a canonical-account-signed read. Apply verifies the exact
 //! plan frames locally and submits one ordinary transaction; neither command
 //! accepts inline tokens or private keys.
-
 use crate::cli_output::print_with_optional_text;
 use crate::{Run, RunContext};
 use eyre::{Result, WrapErr, eyre};
@@ -25,12 +24,10 @@ use std::{
     io::Write as _,
     path::{Path, PathBuf},
 };
-
 #[cfg(test)]
 use iroha::client::AccountAliasListItemV1;
 #[cfg(test)]
 use iroha_i18n::{Bundle, Language, Localizer};
-
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Inspect authenticated account-onboarding readiness.
@@ -51,7 +48,6 @@ pub enum Command {
     /// List aliases bound to a canonical account id.
     ByAccount(ByAccountArgs),
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -65,7 +61,6 @@ impl Run for Command {
         }
     }
 }
-
 /// Explicit alias lease lifecycle commands.
 #[derive(clap::Subcommand, Debug)]
 pub enum LeaseCommand {
@@ -73,7 +68,6 @@ pub enum LeaseCommand {
     #[command(subcommand)]
     Renew(LeaseRenewCommand),
 }
-
 impl Run for LeaseCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -81,7 +75,6 @@ impl Run for LeaseCommand {
         }
     }
 }
-
 /// Guarded alias lease renewal workflow.
 #[derive(clap::Subcommand, Debug)]
 pub enum LeaseRenewCommand {
@@ -90,7 +83,6 @@ pub enum LeaseRenewCommand {
     /// Verify, locally sign, and submit one exact renewal plan.
     Apply(LeaseRenewApplyArgs),
 }
-
 impl Run for LeaseRenewCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -99,7 +91,6 @@ impl Run for LeaseRenewCommand {
         }
     }
 }
-
 /// Owner-only alias auto-renew configuration workflow.
 #[derive(clap::Subcommand, Debug)]
 pub enum AutoRenewCommand {
@@ -108,7 +99,6 @@ pub enum AutoRenewCommand {
     /// Verify, locally sign, and submit one exact configuration plan.
     Apply(AutoRenewApplyArgs),
 }
-
 impl Run for AutoRenewCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -117,7 +107,6 @@ impl Run for AutoRenewCommand {
         }
     }
 }
-
 /// Declarative alias setup workflow.
 #[derive(clap::Subcommand, Debug)]
 pub enum SetupCommand {
@@ -126,7 +115,6 @@ pub enum SetupCommand {
     /// Verify, locally sign, and submit one exact plan as a normal transaction.
     Apply(SetupApplyArgs),
 }
-
 impl Run for SetupCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -135,7 +123,6 @@ impl Run for SetupCommand {
         }
     }
 }
-
 /// Arguments for `iroha app alias setup plan`.
 #[derive(clap::Args, Debug)]
 pub struct SetupPlanArgs {
@@ -146,7 +133,6 @@ pub struct SetupPlanArgs {
     #[arg(long, value_name = "PATH")]
     pub plan_file: Option<PathBuf>,
 }
-
 impl Run for SetupPlanArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request: AliasSetupPlanRequestV1 =
@@ -156,7 +142,6 @@ impl Run for SetupPlanArgs {
                 "alias setup intent must contain at least one resource"
             ));
         }
-
         let client = context.client_from_config();
         let plan = client.plan_alias_setup(&request)?;
         if let Some(path) = &self.plan_file {
@@ -166,7 +151,6 @@ impl Run for SetupPlanArgs {
         print_with_optional_text(context, Some(text), &plan)
     }
 }
-
 /// Arguments for `iroha app alias setup apply`.
 #[derive(clap::Args, Debug)]
 pub struct SetupApplyArgs {
@@ -174,7 +158,6 @@ pub struct SetupApplyArgs {
     #[arg(long, value_name = "PATH")]
     pub plan_file: PathBuf,
 }
-
 impl Run for SetupApplyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         if context.input_instructions() || context.output_instructions() {
@@ -186,7 +169,6 @@ impl Run for SetupApplyArgs {
             read_secret_free_json_file(&self.plan_file, "alias setup plan")?;
         let client = context.client_from_config();
         let instructions = client.verify_alias_setup_plan(&plan)?;
-
         // `finish` constructs exactly one ordinary transaction from this full
         // ordered vector, quotes only its normal transaction fee, signs with the
         // configured client key, and submits through the existing transaction
@@ -194,7 +176,6 @@ impl Run for SetupApplyArgs {
         context.finish(instructions)
     }
 }
-
 /// Arguments for `iroha app alias lease renew plan`.
 #[derive(clap::Args, Debug)]
 pub struct LeaseRenewPlanArgs {
@@ -205,7 +186,6 @@ pub struct LeaseRenewPlanArgs {
     #[arg(long, value_name = "PATH")]
     pub plan_file: Option<PathBuf>,
 }
-
 impl Run for LeaseRenewPlanArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request: AliasLeaseRenewPlanRequestV1 =
@@ -223,7 +203,6 @@ impl Run for LeaseRenewPlanArgs {
         print_with_optional_text(context, Some(text), &plan)
     }
 }
-
 /// Arguments for `iroha app alias lease renew apply`.
 #[derive(clap::Args, Debug)]
 pub struct LeaseRenewApplyArgs {
@@ -231,7 +210,6 @@ pub struct LeaseRenewApplyArgs {
     #[arg(long, value_name = "PATH")]
     pub plan_file: PathBuf,
 }
-
 impl Run for LeaseRenewApplyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         ensure_standalone_alias_apply(context, "alias lease renew apply")?;
@@ -252,7 +230,6 @@ impl Run for LeaseRenewApplyArgs {
         context.finish([instruction])
     }
 }
-
 /// Arguments for `iroha app alias auto-renew plan`.
 #[derive(clap::Args, Debug)]
 pub struct AutoRenewPlanArgs {
@@ -263,7 +240,6 @@ pub struct AutoRenewPlanArgs {
     #[arg(long, value_name = "PATH")]
     pub plan_file: Option<PathBuf>,
 }
-
 impl Run for AutoRenewPlanArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request: AliasAutoRenewPlanRequestV1 =
@@ -278,7 +254,6 @@ impl Run for AutoRenewPlanArgs {
         print_with_optional_text(context, Some(text), &plan)
     }
 }
-
 /// Arguments for `iroha app alias auto-renew apply`.
 #[derive(clap::Args, Debug)]
 pub struct AutoRenewApplyArgs {
@@ -286,7 +261,6 @@ pub struct AutoRenewApplyArgs {
     #[arg(long, value_name = "PATH")]
     pub plan_file: PathBuf,
 }
-
 impl Run for AutoRenewApplyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         ensure_standalone_alias_apply(context, "alias auto-renew apply")?;
@@ -308,7 +282,6 @@ impl Run for AutoRenewApplyArgs {
         context.finish([instruction])
     }
 }
-
 /// Arguments for `iroha app alias doctor`.
 #[derive(clap::Args, Debug)]
 pub struct DoctorArgs {
@@ -316,7 +289,6 @@ pub struct DoctorArgs {
     #[arg(long, value_name = "PATH")]
     pub token_file: PathBuf,
 }
-
 impl Run for DoctorArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let token = read_onboarding_token_file(&self.token_file)?;
@@ -333,9 +305,7 @@ impl Run for DoctorArgs {
         }
     }
 }
-
 const MAX_ALIAS_SETUP_FILE_BYTES: u64 = 16 * 1024 * 1024;
-
 fn ensure_standalone_alias_apply<C: RunContext>(context: &C, label: &str) -> Result<()> {
     if context.input_instructions() || context.output_instructions() {
         return Err(eyre!(
@@ -344,7 +314,6 @@ fn ensure_standalone_alias_apply<C: RunContext>(context: &C, label: &str) -> Res
     }
     Ok(())
 }
-
 fn read_secret_free_json_file<T>(path: &Path, label: &str) -> Result<T>
 where
     T: norito::json::JsonDeserialize,
@@ -369,7 +338,6 @@ where
     norito::json::from_value(value)
         .wrap_err_with(|| format!("failed to decode typed {label} `{}`", path.display()))
 }
-
 fn reject_secret_fields(value: &norito::json::Value, label: &str) -> Result<()> {
     match value {
         norito::json::Value::Array(values) => {
@@ -405,7 +373,6 @@ fn reject_secret_fields(value: &norito::json::Value, label: &str) -> Result<()> 
     }
     Ok(())
 }
-
 fn write_secret_free_plan_file<T>(path: &Path, plan: &T) -> Result<()>
 where
     T: norito::json::JsonSerialize,
@@ -419,7 +386,6 @@ where
     let mut bytes =
         norito::json::to_vec_pretty(plan).wrap_err("failed to encode alias setup plan JSON")?;
     bytes.push(b'\n');
-
     let mut options = fs::OpenOptions::new();
     options.create(true).truncate(true).write(true);
     #[cfg(unix)]
@@ -442,7 +408,6 @@ where
     }
     Ok(())
 }
-
 fn render_alias_setup_plan_text(plan: &AliasTransactionPlanV1, output: Option<&Path>) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "alias setup plan verified: {}", plan.plan_hash);
@@ -456,7 +421,6 @@ fn render_alias_setup_plan_text(plan: &AliasTransactionPlanV1, output: Option<&P
     }
     out
 }
-
 fn render_alias_lifecycle_plan_text(
     label: &str,
     plan: &AliasLifecycleTransactionPlanV1,
@@ -487,7 +451,6 @@ fn render_alias_lifecycle_plan_text(
     }
     out
 }
-
 fn read_onboarding_token_file(path: &Path) -> Result<String> {
     let metadata = fs::symlink_metadata(path).wrap_err_with(|| {
         format!(
@@ -521,7 +484,6 @@ fn read_onboarding_token_file(path: &Path) -> Result<String> {
     }
     Ok(token.to_owned())
 }
-
 fn render_alias_doctor_text(report: &iroha::data_model::alias_setup::AliasSetupReportV1) -> String {
     let mut out = String::new();
     let status = match report.status {
@@ -544,7 +506,6 @@ fn render_alias_doctor_text(report: &iroha::data_model::alias_setup::AliasSetupR
     }
     out
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ResolveArgs {
     /// Alias name to resolve.
@@ -554,7 +515,6 @@ pub struct ResolveArgs {
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
 }
-
 impl Run for ResolveArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         alias_resolve_with(
@@ -565,14 +525,12 @@ impl Run for ResolveArgs {
         )
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ResolveIndexArgs {
     /// Alias Merkle index to resolve.
     #[arg(long)]
     pub index: u64,
 }
-
 impl Run for ResolveIndexArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         alias_resolve_index_with(
@@ -582,7 +540,6 @@ impl Run for ResolveIndexArgs {
         )
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ByAccountArgs {
     /// Canonical I105 account id.
@@ -595,7 +552,6 @@ pub struct ByAccountArgs {
     #[arg(long)]
     pub domain: Option<String>,
 }
-
 impl Run for ByAccountArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         alias_by_account_with(
@@ -607,7 +563,6 @@ impl Run for ByAccountArgs {
         )
     }
 }
-
 fn alias_resolve_with<C, F>(context: &mut C, alias: &str, dry_run: bool, call: F) -> Result<()>
 where
     C: RunContext,
@@ -625,13 +580,11 @@ where
         let text = "alias resolve dry-run completed".to_string();
         return print_with_optional_text(context, Some(text), &output);
     }
-
     let client = context.client_from_config();
     let dto = call(&client, &alias)?.ok_or_else(|| eyre!("alias `{canonical_alias}` not found"))?;
     let text = render_alias_resolve_text(&dto);
     print_with_optional_text(context, Some(text), &dto)
 }
-
 fn alias_resolve_index_with<C, F>(context: &mut C, index: u64, call: F) -> Result<()>
 where
     C: RunContext,
@@ -644,7 +597,6 @@ where
     let text = render_alias_resolve_index_text(&dto);
     print_with_optional_text(context, Some(text), &dto)
 }
-
 fn alias_by_account_with<C, F>(
     context: &mut C,
     account_id: &str,
@@ -668,14 +620,12 @@ where
     }
     let account = parsed.into_account_id();
     let request = AccountAliasesByAccountRequestV1::try_new(&account, dataspace, domain)?;
-
     let client = context.client_from_config();
     let dto = call(&client, &request)?
         .ok_or_else(|| eyre!("no visible aliases found for account `{account_id}`"))?;
     let text = render_alias_by_account_text(&dto);
     print_with_optional_text(context, Some(text), &dto)
 }
-
 fn render_alias_resolve_text(dto: &AccountAliasResolutionV1) -> String {
     let mut out = String::new();
     let _ = writeln!(
@@ -692,7 +642,6 @@ fn render_alias_resolve_text(dto: &AccountAliasResolutionV1) -> String {
     }
     out
 }
-
 fn render_alias_resolve_index_text(dto: &AccountAliasIndexResolutionV1) -> String {
     let mut out = String::new();
     let _ = writeln!(
@@ -707,7 +656,6 @@ fn render_alias_resolve_index_text(dto: &AccountAliasIndexResolutionV1) -> Strin
     }
     out
 }
-
 fn render_alias_by_account_text(dto: &AccountAliasesByAccountV1) -> String {
     let mut out = String::new();
     let _ = writeln!(
@@ -729,7 +677,6 @@ fn render_alias_by_account_text(dto: &AccountAliasesByAccountV1) -> String {
     }
     out
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -746,19 +693,15 @@ mod tests {
     use norito::json::JsonSerialize;
     use std::fmt::Display;
     use url::Url;
-
     #[derive(Parser, Debug)]
     struct Wrapper {
         #[command(subcommand)]
         command: Command,
     }
-
     const SAMPLE_ACCOUNT_ID: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
-
     fn checked_alias_key_fixture() -> KeyPair {
         KeyPair::try_random().expect("generate checked alias fixture key")
     }
-
     #[test]
     fn alias_fixture_uses_checked_default_key_generation() {
         let key_pair = checked_alias_key_fixture();
@@ -766,10 +709,8 @@ mod tests {
             .public_key()
             .try_algorithm()
             .expect("alias fixture key advertises a valid algorithm");
-
         assert_eq!(actual, Algorithm::default());
     }
-
     #[test]
     fn parse_by_account_args() {
         let wrapper = Wrapper::parse_from([
@@ -791,7 +732,6 @@ mod tests {
             _ => panic!("unexpected command"),
         }
     }
-
     #[test]
     fn parse_alias_setup_plan_and_apply_files() {
         let wrapper = Wrapper::parse_from([
@@ -810,7 +750,6 @@ mod tests {
             }
             _ => panic!("unexpected command"),
         }
-
         let wrapper = Wrapper::parse_from(["iroha", "setup", "apply", "--plan-file", "plan.json"]);
         match wrapper.command {
             Command::Setup(SetupCommand::Apply(args)) => {
@@ -819,7 +758,6 @@ mod tests {
             _ => panic!("unexpected command"),
         }
     }
-
     #[test]
     fn parse_alias_lifecycle_and_doctor_files() {
         let wrapper = Wrapper::parse_from([
@@ -839,7 +777,6 @@ mod tests {
             }
             _ => panic!("unexpected command"),
         }
-
         let wrapper = Wrapper::parse_from([
             "iroha",
             "auto-renew",
@@ -853,7 +790,6 @@ mod tests {
             }
             _ => panic!("unexpected command"),
         }
-
         let wrapper = Wrapper::parse_from(["iroha", "doctor", "--token-file", "onboarding.token"]);
         match wrapper.command {
             Command::Doctor(args) => {
@@ -862,7 +798,6 @@ mod tests {
             _ => panic!("unexpected command"),
         }
     }
-
     #[test]
     fn alias_setup_commands_do_not_accept_inline_keys_or_tokens() {
         assert!(
@@ -916,7 +851,6 @@ mod tests {
         );
         assert!(Wrapper::try_parse_from(["iroha", "doctor", "--token", "secret",]).is_err());
     }
-
     #[test]
     fn doctor_token_file_accepts_one_line_and_rejects_control_characters() {
         let directory = tempfile::tempdir().expect("temporary token directory");
@@ -926,11 +860,9 @@ mod tests {
             read_onboarding_token_file(&token_path).expect("read one-line token"),
             "runtime-only-token"
         );
-
         fs::write(&token_path, "two\nlines\n").expect("write invalid token fixture");
         assert!(read_onboarding_token_file(&token_path).is_err());
     }
-
     #[test]
     fn alias_setup_file_guard_rejects_secret_fields_but_allows_digests() {
         let error = reject_secret_fields(
@@ -943,7 +875,6 @@ mod tests {
         )
         .expect_err("private key field must fail");
         assert!(error.to_string().contains("forbidden field `private_key`"));
-
         reject_secret_fields(
             &norito::json!({
                 "token_hash": "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -952,14 +883,12 @@ mod tests {
         )
         .expect("digests are not secret token values");
     }
-
     struct TestContext {
         cfg: Config,
         printed: Vec<String>,
         i18n: Localizer,
         output_format: CliOutputFormat,
     }
-
     impl TestContext {
         fn new(output_format: CliOutputFormat) -> Self {
             let kp = checked_alias_key_fixture();
@@ -994,32 +923,25 @@ mod tests {
             }
         }
     }
-
     impl RunContext for TestContext {
         fn config(&self) -> &Config {
             &self.cfg
         }
-
         fn transaction_metadata(&self) -> Option<&Metadata> {
             None
         }
-
         fn input_instructions(&self) -> bool {
             false
         }
-
         fn output_instructions(&self) -> bool {
             false
         }
-
         fn i18n(&self) -> &Localizer {
             &self.i18n
         }
-
         fn output_format(&self) -> crate::CliOutputFormat {
             self.output_format
         }
-
         fn print_data<T>(&mut self, data: &T) -> Result<()>
         where
             T: JsonSerialize + ?Sized,
@@ -1029,19 +951,16 @@ mod tests {
             self.printed.push(out);
             Ok(())
         }
-
         fn println(&mut self, data: impl Display) -> Result<()> {
             self.printed.push(data.to_string());
             Ok(())
         }
     }
-
     fn sample_account_id() -> AccountId {
         AccountId::parse_encoded(SAMPLE_ACCOUNT_ID)
             .expect("canonical sample account")
             .into_account_id()
     }
-
     #[test]
     fn resolve_helper_prints_result() {
         let mut ctx = TestContext::new(CliOutputFormat::Json);
@@ -1059,7 +978,6 @@ mod tests {
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains(SAMPLE_ACCOUNT_ID));
     }
-
     #[test]
     fn resolve_text_includes_source() {
         let dto = AccountAliasResolutionV1::try_new(
@@ -1074,7 +992,6 @@ mod tests {
         let text = render_alias_resolve_text(&dto);
         assert!(text.contains("source: iso_bridge"));
     }
-
     #[test]
     fn resolve_helper_handles_not_found() {
         let mut ctx = TestContext::new(CliOutputFormat::Json);
@@ -1085,7 +1002,6 @@ mod tests {
                 .contains("alias `alice@centralbank` not found")
         );
     }
-
     #[test]
     fn resolve_index_helper_handles_not_implemented() {
         let mut ctx = TestContext::new(CliOutputFormat::Json);
@@ -1093,7 +1009,6 @@ mod tests {
             .expect_err("expected error");
         assert!(err.to_string().contains("not ready"));
     }
-
     #[test]
     fn resolve_index_helper_prints_result() {
         let mut ctx = TestContext::new(CliOutputFormat::Json);
@@ -1111,7 +1026,6 @@ mod tests {
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("merchant@centralbank"));
     }
-
     #[test]
     fn resolve_index_text_mentions_account() {
         let dto = AccountAliasIndexResolutionV1::try_new(
@@ -1126,7 +1040,6 @@ mod tests {
         let text = render_alias_resolve_index_text(&dto);
         assert!(text.contains(&format!("account_id: {SAMPLE_ACCOUNT_ID}")));
     }
-
     #[test]
     fn alias_by_account_helper_prints_result() {
         let mut ctx = TestContext::new(CliOutputFormat::Json);
@@ -1152,7 +1065,6 @@ mod tests {
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("merchant@banka.centralbank"));
     }
-
     #[test]
     fn alias_by_account_text_mentions_total() {
         let dto = AccountAliasesByAccountV1::try_new(

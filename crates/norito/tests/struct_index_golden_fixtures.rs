@@ -1,10 +1,7 @@
 //! Validate struct index against on-disk golden fixtures (.json + .tape).
 #![cfg(feature = "json")]
-
 use std::{fs, path::Path};
-
 use norito::json::build_struct_index;
-
 fn load_tape(path: &Path) -> Vec<u32> {
     let s = fs::read_to_string(path).expect("read tape");
     s.lines()
@@ -18,7 +15,6 @@ fn load_tape(path: &Path) -> Vec<u32> {
         })
         .collect()
 }
-
 #[test]
 fn fixtures_parity() {
     // Use crate-relative path so tests work regardless of CWD

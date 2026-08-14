@@ -1,7 +1,5 @@
 //! Helpers for loading invalid Wycheproof SM4 test vectors used by regression tests.
-
 use norito::json::{self, Value};
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 /// SM4 AEAD mode exposed by the Wycheproof fixtures.
 pub enum Sm4WycheproofMode {
@@ -10,7 +8,6 @@ pub enum Sm4WycheproofMode {
     /// SM4-CCM vectors.
     Ccm,
 }
-
 #[derive(Clone, Debug)]
 /// A single invalid Wycheproof SM4 test case.
 pub struct Sm4WycheproofCase {
@@ -31,24 +28,20 @@ pub struct Sm4WycheproofCase {
     /// Authentication tag bytes.
     pub tag: Vec<u8>,
 }
-
 /// Load all invalid Wycheproof SM4 cases from the embedded JSON fixture.
 pub fn load_sm4_wycheproof_cases() -> Vec<Sm4WycheproofCase> {
     let raw = include_str!("fixtures/wycheproof_sm4.json");
     let root: Value = json::from_str(raw).expect("parse wycheproof_sm4.json");
-
     let groups = root
         .as_object()
         .and_then(|object| object.get("testGroups"))
         .and_then(Value::as_array)
         .expect("Wycheproof SM4 fixture missing testGroups array");
-
     let mut cases = Vec::new();
     for group in groups {
         let group_obj = group
             .as_object()
             .expect("Wycheproof SM4 group must be an object");
-
         let mode = group_obj
             .get("mode")
             .and_then(Value::as_str)
@@ -58,17 +51,14 @@ pub fn load_sm4_wycheproof_cases() -> Vec<Sm4WycheproofCase> {
             "ccm" => Sm4WycheproofMode::Ccm,
             other => panic!("unknown Wycheproof SM4 mode {other}"),
         };
-
         let tests = group_obj
             .get("tests")
             .and_then(Value::as_array)
             .expect("Wycheproof SM4 group missing tests array");
-
         for test_value in tests {
             let test = test_value
                 .as_object()
                 .expect("Wycheproof SM4 test must be an object");
-
             let result = test
                 .get("result")
                 .and_then(Value::as_str)
@@ -76,7 +66,6 @@ pub fn load_sm4_wycheproof_cases() -> Vec<Sm4WycheproofCase> {
             if result != "invalid" {
                 continue;
             }
-
             let tc_id = u32::try_from(
                 test.get("tcId")
                     .and_then(Value::as_u64)
@@ -107,7 +96,6 @@ pub fn load_sm4_wycheproof_cases() -> Vec<Sm4WycheproofCase> {
                 .get("tag")
                 .and_then(Value::as_str)
                 .expect("Wycheproof SM4 test missing tag");
-
             cases.push(Sm4WycheproofCase {
                 mode,
                 tc_id,
@@ -120,14 +108,12 @@ pub fn load_sm4_wycheproof_cases() -> Vec<Sm4WycheproofCase> {
             });
         }
     }
-
     assert!(
         !cases.is_empty(),
         "Wycheproof SM4 fixture must contain at least one invalid case"
     );
     cases
 }
-
 /// Decode a hexadecimal string into a byte vector.
 fn hex_to_vec(input: &str) -> Vec<u8> {
     if input.is_empty() {
@@ -136,7 +122,6 @@ fn hex_to_vec(input: &str) -> Vec<u8> {
         hex::decode(input).unwrap_or_else(|err| panic!("invalid hex {input}: {err}"))
     }
 }
-
 /// Decode a hexadecimal string into a fixed-size byte array.
 fn hex_to_array<const N: usize>(input: &str) -> [u8; N] {
     let bytes = hex_to_vec(input);

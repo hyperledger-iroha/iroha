@@ -5,12 +5,10 @@
 //! finalized native [`PinManifestFinalizedRecordV1`]. Config is sourced from
 //! the gateway verifier TOML used in the SNNet-15 pack so operators and CI
 //! share the same thresholds.
-
 use std::{
     fs, io,
     path::{Path, PathBuf},
 };
-
 use hex::encode as hex_encode;
 use iroha_data_model::sorafs::pin_registry::{PinManifestFinalizedRecordV1, PinStatus};
 use norito::{
@@ -20,9 +18,7 @@ use norito::{
 use sorafs_manifest::ManifestV1;
 use thiserror::Error;
 use toml::Value as TomlValue;
-
 use crate::{CarVerificationReport, CarVerifier, StoredChunk};
-
 /// Configuration used to guide trustless verification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustlessVerifierConfig {
@@ -53,7 +49,6 @@ pub struct TrustlessVerifierConfig {
     /// Toggle for emitting metrics.
     pub logging_emit_metrics: bool,
 }
-
 impl TrustlessVerifierConfig {
     /// Parse a verifier config from TOML text.
     pub fn from_toml_str(input: &str) -> Result<Self, TrustlessConfigError> {
@@ -67,7 +62,6 @@ impl TrustlessVerifierConfig {
         let sdr = read_table(root, "sdr")?;
         let pipeline = read_table(root, "pipeline")?;
         let logging = read_table(root, "logging")?;
-
         Ok(Self {
             version,
             merkle_chunk_window: read_u32(merkle, "chunk_window")?,
@@ -90,7 +84,6 @@ impl TrustlessVerifierConfig {
             logging_emit_metrics: read_bool(logging, "emit_metrics")?,
         })
     }
-
     /// Load a verifier config from the provided path.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, TrustlessConfigError> {
         let path_ref = path.as_ref();
@@ -101,7 +94,6 @@ impl TrustlessVerifierConfig {
         Self::from_toml_str(&contents)
     }
 }
-
 /// Errors surfaced while parsing the trustless verifier config.
 #[derive(Debug, Error)]
 pub enum TrustlessConfigError {
@@ -128,7 +120,6 @@ pub enum TrustlessConfigError {
         source: io::Error,
     },
 }
-
 /// Errors surfaced while verifying trustless gateway payloads.
 #[derive(Debug, Error)]
 pub enum TrustlessVerificationError {
@@ -175,7 +166,6 @@ pub enum TrustlessVerificationError {
     #[error("finalized pin content length mismatch (expected {expected}, found {found})")]
     FinalizedPinContentLengthMismatch { expected: u64, found: u64 },
 }
-
 /// Output of a trustless verification run.
 #[derive(Debug)]
 pub struct TrustlessVerificationOutcome {
@@ -187,44 +177,37 @@ pub struct TrustlessVerificationOutcome {
     /// Underlying CAR verification output.
     pub report: CarVerificationReport,
 }
-
 impl TrustlessVerificationOutcome {
     /// Hex-encoded manifest digest.
     #[must_use]
     pub fn manifest_digest_hex(&self) -> String {
         hex_encode(self.manifest_digest)
     }
-
     /// Hex-encoded CAR archive digest (already validated against the manifest).
     #[must_use]
     pub fn car_digest_hex(&self) -> String {
         hex_encode(self.report.stats.car_archive_digest.as_bytes())
     }
-
     /// Hex-encoded payload digest.
     #[must_use]
     pub fn payload_digest_hex(&self) -> String {
         hex_encode(self.report.chunk_store.payload_digest().as_bytes())
     }
-
     /// Hex-encoded chunk plan digest (SHA3-256).
     #[must_use]
     pub fn chunk_plan_digest_hex(&self) -> String {
         hex_encode(self.chunk_plan_digest)
     }
-
     /// Hex-encoded PoR root.
     #[must_use]
     pub fn por_root_hex(&self) -> String {
         hex_encode(self.por_root)
     }
-
     /// Canonical chunk profile handle (namespace.name@semver).
     #[must_use]
     pub fn profile_handle(&self) -> &str {
         &self.profile_handle
     }
-
     /// Serialize a short JSON summary of the verification outcome.
     #[must_use]
     pub fn to_summary_json(&self) -> Value {
@@ -261,7 +244,6 @@ impl TrustlessVerificationOutcome {
         root.insert("car_size".into(), Value::from(self.report.stats.car_size));
         Value::Object(root)
     }
-
     /// Validate the outcome against an approved, finalized native pin record.
     ///
     /// This comparison does not authenticate record provenance. Callers must
@@ -288,7 +270,6 @@ impl TrustlessVerificationOutcome {
                 found: pin.manifest.status,
             });
         }
-
         let expected_manifest_digest_hex = self.manifest_digest_hex();
         let found_manifest_digest_hex = hex_encode(pin.manifest.digest.as_bytes());
         if pin.manifest.digest.as_bytes() != &self.manifest_digest {
@@ -299,7 +280,6 @@ impl TrustlessVerificationOutcome {
                 },
             );
         }
-
         let expected_cid_hex = hex_encode(&self.manifest_cid);
         let found_cid_hex = hex_encode(pin.manifest.root_cid.as_bytes());
         if pin.manifest.root_cid.as_bytes().as_slice() != self.manifest_cid {
@@ -310,7 +290,6 @@ impl TrustlessVerificationOutcome {
                 },
             );
         }
-
         let found_profile_handle = pin.manifest.chunker.to_handle();
         if found_profile_handle != self.profile_handle {
             return Err(TrustlessVerificationError::FinalizedPinProfileMismatch {
@@ -318,7 +297,6 @@ impl TrustlessVerificationOutcome {
                 found: found_profile_handle,
             });
         }
-
         let expected_plan_hex = self.chunk_plan_digest_hex();
         let found_plan_hex = hex_encode(pin.manifest.chunk_digest_sha3_256);
         if pin.manifest.chunk_digest_sha3_256 != self.chunk_plan_digest {
@@ -327,7 +305,6 @@ impl TrustlessVerificationOutcome {
                 found: found_plan_hex,
             });
         }
-
         let expected_root_hex = self.por_root_hex();
         let found_root_hex = hex_encode(pin.manifest.por_root);
         if pin.manifest.por_root != self.por_root {
@@ -336,7 +313,6 @@ impl TrustlessVerificationOutcome {
                 found: found_root_hex,
             });
         }
-
         if pin.manifest.content_length != self.report.stats.payload_bytes {
             return Err(
                 TrustlessVerificationError::FinalizedPinContentLengthMismatch {
@@ -345,24 +321,20 @@ impl TrustlessVerificationOutcome {
                 },
             );
         }
-
         Ok(())
     }
 }
-
 /// Trustless CAR verifier wrapper that enforces the gateway config.
 #[derive(Debug)]
 pub struct TrustlessVerifier {
     config: TrustlessVerifierConfig,
 }
-
 impl TrustlessVerifier {
     /// Construct a verifier using the supplied config.
     #[must_use]
     pub fn new(config: TrustlessVerifierConfig) -> Self {
         Self { config }
     }
-
     /// Verify a full CAR stream against the given manifest.
     pub fn verify_full(
         &self,
@@ -375,14 +347,12 @@ impl TrustlessVerifier {
                 found: self.config.version,
             });
         }
-
         let manifest_digest = manifest.digest()?;
         let report = CarVerifier::verify_full_car(manifest, car_bytes)?;
         let por_root = *report.chunk_store.por_tree().root();
         if por_root.iter().all(|&byte| byte == 0) {
             return Err(TrustlessVerificationError::MissingPorRoot);
         }
-
         let chunk_plan_digest = chunk_plan_digest_sha3(report.chunk_store.chunks());
         if chunk_plan_digest != manifest.chunk_digest_sha3_256 {
             return Err(TrustlessVerificationError::ManifestChunkPlanMismatch {
@@ -400,7 +370,6 @@ impl TrustlessVerifier {
             "{}.{}@{}",
             manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
         );
-
         Ok(TrustlessVerificationOutcome {
             manifest_digest: *manifest_digest.as_bytes(),
             manifest_cid: manifest.root_cid.clone(),
@@ -411,7 +380,6 @@ impl TrustlessVerifier {
         })
     }
 }
-
 fn chunk_plan_digest_sha3(chunks: &[StoredChunk]) -> [u8; 32] {
     sorafs_chunker::compute_chunk_plan_digest_sha3(
         chunks
@@ -419,7 +387,6 @@ fn chunk_plan_digest_sha3(chunks: &[StoredChunk]) -> [u8; 32] {
             .map(|chunk| (chunk.offset, u64::from(chunk.length), chunk.blake3)),
     )
 }
-
 fn read_table<'a>(
     table: &'a toml::map::Map<String, TomlValue>,
     key: &'static str,
@@ -429,7 +396,6 @@ fn read_table<'a>(
         .and_then(TomlValue::as_table)
         .ok_or(TrustlessConfigError::MissingField(key))
 }
-
 fn read_u32(
     table: &toml::map::Map<String, TomlValue>,
     key: &'static str,
@@ -445,7 +411,6 @@ fn read_u32(
             })
         })
 }
-
 fn read_bool(
     table: &toml::map::Map<String, TomlValue>,
     key: &'static str,
@@ -455,7 +420,6 @@ fn read_bool(
         .and_then(TomlValue::as_bool)
         .ok_or(TrustlessConfigError::MissingField(key))
 }
-
 fn read_string(
     table: &toml::map::Map<String, TomlValue>,
     key: &'static str,
@@ -472,7 +436,6 @@ fn read_string(
     }
     Ok(value.to_owned())
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_data_model::{
@@ -483,9 +446,7 @@ mod tests {
             PinManifestRecord, PinPolicy,
         },
     };
-
     use super::*;
-
     #[test]
     fn parses_gateway_config() {
         let config = TrustlessVerifierConfig::from_toml_str(
@@ -516,7 +477,6 @@ emit_metrics = true
 "#,
         )
         .expect("config parses");
-
         assert_eq!(config.version, 1);
         assert_eq!(config.merkle_chunk_window, 16);
         assert_eq!(config.merkle_max_parallel_streams, 4);
@@ -531,7 +491,6 @@ emit_metrics = true
         assert_eq!(config.logging_level, "info");
         assert!(config.logging_emit_metrics);
     }
-
     #[test]
     fn finalized_pin_validation_reports_mismatch() {
         let manifest_cid = sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]);
@@ -556,7 +515,6 @@ emit_metrics = true
                 chunk_store: crate::ChunkStore::new(),
             },
         };
-
         let mut manifest = PinManifestRecord::new(
             ManifestDigest::new(outcome.manifest_digest),
             ManifestRootCid::try_from(manifest_cid).expect("canonical root CID"),
@@ -589,7 +547,6 @@ emit_metrics = true
             },
             manifest,
         };
-
         pin.finalized_cursor.height = 0;
         let err = outcome
             .validate_finalized_pin(&pin)
@@ -599,7 +556,6 @@ emit_metrics = true
             TrustlessVerificationError::FinalizedPinCursorInvalid { .. }
         ));
         pin.finalized_cursor.height = 7;
-
         pin.manifest.status = PinStatus::Pending;
         let err = outcome
             .validate_finalized_pin(&pin)
@@ -609,7 +565,6 @@ emit_metrics = true
             TrustlessVerificationError::FinalizedPinStatusInvalid { .. }
         ));
         pin.manifest.approve(2, None);
-
         pin.manifest.digest = ManifestDigest::new([0xCC; 32]);
         let err = outcome
             .validate_finalized_pin(&pin)
@@ -619,7 +574,6 @@ emit_metrics = true
             TrustlessVerificationError::FinalizedPinManifestDigestMismatch { .. }
         ));
         pin.manifest.digest = ManifestDigest::new(outcome.manifest_digest);
-
         // Manifest CID mismatch should be surfaced first.
         pin.manifest.root_cid =
             ManifestRootCid::try_from(sorafs_manifest::canonical_manifest_root_cid([0xCC; 32]))
@@ -631,7 +585,6 @@ emit_metrics = true
             err,
             TrustlessVerificationError::FinalizedPinManifestCidMismatch { .. }
         ));
-
         // Fix manifest, break profile handle.
         pin.manifest.root_cid =
             ManifestRootCid::try_from(outcome.manifest_cid.clone()).expect("canonical root CID");
@@ -643,7 +596,6 @@ emit_metrics = true
             err,
             TrustlessVerificationError::FinalizedPinProfileMismatch { .. }
         ));
-
         // Fix profile, break chunk plan digest.
         pin.manifest.chunker.name = "sf1".to_owned();
         pin.manifest.chunk_digest_sha3_256 = [0x55; 32];
@@ -654,7 +606,6 @@ emit_metrics = true
             err,
             TrustlessVerificationError::FinalizedPinChunkPlanMismatch { .. }
         ));
-
         // Fix plan, break PoR.
         pin.manifest.chunk_digest_sha3_256 = outcome.chunk_plan_digest;
         pin.manifest.por_root = [0x99; 32];
@@ -665,7 +616,6 @@ emit_metrics = true
             err,
             TrustlessVerificationError::FinalizedPinPorRootMismatch { .. }
         ));
-
         // Content length remains bound to the verified CAR.
         pin.manifest.por_root = outcome.por_root;
         pin.manifest.content_length = 1;
@@ -676,7 +626,6 @@ emit_metrics = true
             err,
             TrustlessVerificationError::FinalizedPinContentLengthMismatch { .. }
         ));
-
         // Restore and ensure the happy path succeeds.
         pin.manifest.content_length = outcome.report.stats.payload_bytes;
         let result = outcome.validate_finalized_pin(&pin);

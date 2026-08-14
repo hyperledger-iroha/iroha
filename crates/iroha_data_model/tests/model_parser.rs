@@ -1,7 +1,5 @@
 //! Tests for model parser module
-
 mod support;
-
 #[test]
 fn parse_model_module_extracts_public_items() {
     let src = r"

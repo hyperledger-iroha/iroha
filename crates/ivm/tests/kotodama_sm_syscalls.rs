@@ -1,18 +1,14 @@
 //! Kotodama integration tests for SM3/SM2 syscalls.
-
 use std::collections::BTreeMap;
-
 use hex::decode;
 use iroha_crypto::{Hash, Sm2PrivateKey, Sm2PublicKey, Sm3Digest};
 use iroha_data_model::prelude::Name;
 use iroha_primitives::json::Json;
 use ivm::{IVM, PointerType, ProgramMetadata, kotodama::compiler::Compiler as KotodamaCompiler};
 mod common;
-
 fn new_sm_host() -> ivm::host::DefaultHost {
     ivm::host::DefaultHost::new().with_sm_enabled(true)
 }
-
 fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -23,7 +19,6 @@ fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 fn install_sm_entrypoint(
     vm: &mut IVM,
     program: &[u8],
@@ -70,7 +65,6 @@ fn install_sm_entrypoint(
     vm.load_program(program).expect("load SM contract artifact");
     common::select_kotodama_entrypoint(vm, program, entrypoint_name);
 }
-
 #[test]
 fn kotodama_sm3_hash_returns_expected_digest() {
     let src = r#"
@@ -83,15 +77,11 @@ fn kotodama_sm3_hash_returns_expected_digest() {
     let code = KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile sm3 hash contract");
-
     let message = b"kotodama-sm3";
     let expected = Sm3Digest::hash(message);
-
     let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(&mut vm, &code, "sm_hash", &[("msg", message)], &[]);
-
     vm.run().expect("vm run");
-
     let out_ptr = vm.register(10);
     assert_ne!(out_ptr, 0, "crypto::sm3 should return a bytes pointer");
     let tlv = vm
@@ -101,7 +91,6 @@ fn kotodama_sm3_hash_returns_expected_digest() {
     assert_eq!(tlv.type_id, PointerType::Blob);
     assert_eq!(tlv.payload, expected.as_bytes());
 }
-
 fn compile_sm2_verify() -> Vec<u8> {
     let src = r#"
         seiyaku Sm2Verify {
@@ -114,7 +103,6 @@ fn compile_sm2_verify() -> Vec<u8> {
         .compile_source(src)
         .expect("compile sm2 verify contract")
 }
-
 fn compile_sm2_verify_with_distid() -> Vec<u8> {
     let src = r#"
         seiyaku Sm2VerifyWithDistid {
@@ -127,7 +115,6 @@ fn compile_sm2_verify_with_distid() -> Vec<u8> {
         .compile_source(src)
         .expect("compile sm2 verify with distid contract")
 }
-
 fn compile_sm4_gcm_seal() -> Vec<u8> {
     let src = r#"
         seiyaku Sm4GcmSeal {
@@ -140,7 +127,6 @@ fn compile_sm4_gcm_seal() -> Vec<u8> {
         .compile_source(src)
         .expect("compile sm4 gcm seal contract")
 }
-
 fn compile_sm4_gcm_open() -> Vec<u8> {
     let src = r#"
         seiyaku Sm4GcmOpen {
@@ -153,7 +139,6 @@ fn compile_sm4_gcm_open() -> Vec<u8> {
         .compile_source(src)
         .expect("compile sm4 gcm open contract")
 }
-
 fn compile_sm4_ccm_seal() -> Vec<u8> {
     let src = r#"
         seiyaku Sm4CcmSeal {
@@ -166,7 +151,6 @@ fn compile_sm4_ccm_seal() -> Vec<u8> {
         .compile_source(src)
         .expect("compile sm4 ccm seal contract")
 }
-
 fn compile_sm4_ccm_open() -> Vec<u8> {
     let src = r#"
         seiyaku Sm4CcmOpen {
@@ -179,7 +163,6 @@ fn compile_sm4_ccm_open() -> Vec<u8> {
         .compile_source(src)
         .expect("compile sm4 ccm open contract")
 }
-
 fn new_sm2_key() -> (Sm2PrivateKey, Sm2PublicKey) {
     let secret = [0x42u8; 32];
     let private =
@@ -187,16 +170,13 @@ fn new_sm2_key() -> (Sm2PrivateKey, Sm2PublicKey) {
     let public = private.public_key();
     (private, public)
 }
-
 #[test]
 fn kotodama_sm2_verify_accepts_valid_signature() {
     let code = compile_sm2_verify();
     let (private, public) = new_sm2_key();
-
     let message = b"kotodama-sm2";
     let sig_bytes = private.sign(message).to_bytes();
     let pk_bytes = public.to_sec1_bytes(false);
-
     let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
@@ -209,21 +189,17 @@ fn kotodama_sm2_verify_accepts_valid_signature() {
         ],
         &[],
     );
-
     vm.run().expect("vm run");
     assert_eq!(vm.register(10), 1, "crypto::sm2::verify should succeed");
 }
-
 #[test]
 fn kotodama_sm2_verify_rejects_malformed_signature() {
     let code = compile_sm2_verify();
     let (private, public) = new_sm2_key();
-
     let message = b"kotodama-sm2";
     let mut sig_bytes = private.sign(message).to_bytes();
     sig_bytes[0] ^= 0xFF;
     let pk_bytes = public.to_sec1_bytes(false);
-
     let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
@@ -236,21 +212,17 @@ fn kotodama_sm2_verify_rejects_malformed_signature() {
         ],
         &[],
     );
-
     vm.run().expect("vm run");
     assert_eq!(vm.register(10), 0, "malformed signature must fail");
 }
-
 #[test]
 fn kotodama_sm2_verify_rejects_signature_for_other_message() {
     let code = compile_sm2_verify();
     let (private, public) = new_sm2_key();
-
     let message = b"kotodama-sm2";
     let sig_bytes = private.sign(message).to_bytes();
     let pk_bytes = public.to_sec1_bytes(false);
     let other_message = b"kotodama-sm2-nonce-reuse";
-
     let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
@@ -263,7 +235,6 @@ fn kotodama_sm2_verify_rejects_signature_for_other_message() {
         ],
         &[],
     );
-
     vm.run().expect("vm run");
     assert_eq!(
         vm.register(10),
@@ -271,7 +242,6 @@ fn kotodama_sm2_verify_rejects_signature_for_other_message() {
         "signature tied to different message must be rejected"
     );
 }
-
 #[test]
 fn kotodama_sm2_verify_with_distid_enforces_identifier() {
     let code = compile_sm2_verify_with_distid();
@@ -279,13 +249,11 @@ fn kotodama_sm2_verify_with_distid_enforces_identifier() {
     let private =
         Sm2PrivateKey::new(distid.to_string(), [0x24u8; 32]).expect("construct private key");
     let public = private.public_key();
-
     let message = b"kotodama-sm2-dist";
     let sig_bytes = private.sign(message).to_bytes();
     let pk_bytes = public.to_sec1_bytes(false);
     let dist_bytes = distid.as_bytes();
     let wrong_dist = b"other-dist";
-
     // Success with matching distid
     let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
@@ -300,10 +268,8 @@ fn kotodama_sm2_verify_with_distid_enforces_identifier() {
         ],
         &[],
     );
-
     vm.run().expect("vm run");
     assert_eq!(vm.register(10), 1, "matching distid should verify");
-
     // Failure with mismatched distid
     let mut vm_fail = IVM::new(u64::MAX);
     install_sm_entrypoint(
@@ -318,7 +284,6 @@ fn kotodama_sm2_verify_with_distid_enforces_identifier() {
         ],
         &[],
     );
-
     vm_fail.run().expect("vm run");
     assert_eq!(
         vm_fail.register(10),
@@ -326,7 +291,6 @@ fn kotodama_sm2_verify_with_distid_enforces_identifier() {
         "mismatched distid must cause verification failure"
     );
 }
-
 #[test]
 fn kotodama_sm4_gcm_seal_matches_vector() {
     let code = compile_sm4_gcm_seal();
@@ -336,7 +300,6 @@ fn kotodama_sm4_gcm_seal_matches_vector() {
     let plaintext = decode("d9313225f88406e5a55909c5aff5269a").expect("hex plaintext");
     let expected_cipher = decode("6468017fde4979a107326ee77d8a265c").expect("hex cipher");
     let expected_tag = decode("cadf422b1af7ec6df46004dc8d3ba855").expect("hex tag");
-
     let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
@@ -350,9 +313,7 @@ fn kotodama_sm4_gcm_seal_matches_vector() {
         ],
         &[],
     );
-
     vm.run().expect("vm run");
-
     let out_ptr = vm.register(10);
     assert_ne!(out_ptr, 0, "seal should produce output blob");
     let tlv = vm
@@ -369,7 +330,6 @@ fn kotodama_sm4_gcm_seal_matches_vector() {
         expected_tag.as_slice()
     );
 }
-
 #[test]
 fn kotodama_sm4_gcm_open_returns_plaintext() {
     let code = compile_sm4_gcm_open();
@@ -381,7 +341,6 @@ fn kotodama_sm4_gcm_open_returns_plaintext() {
     let tag = decode("cadf422b1af7ec6df46004dc8d3ba855").expect("hex tag");
     let mut cipher_tag = cipher.clone();
     cipher_tag.extend_from_slice(&tag);
-
     let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
@@ -395,9 +354,7 @@ fn kotodama_sm4_gcm_open_returns_plaintext() {
         ],
         &[],
     );
-
     vm.run().expect("vm run");
-
     let out_ptr = vm.register(10);
     assert_ne!(out_ptr, 0, "open should return plaintext blob");
     let tlv = vm
@@ -407,7 +364,6 @@ fn kotodama_sm4_gcm_open_returns_plaintext() {
     assert_eq!(tlv.type_id, PointerType::Blob);
     assert_eq!(tlv.payload, plaintext.as_slice());
 }
-
 #[test]
 fn kotodama_sm4_gcm_open_rejects_bad_tag() {
     let code = compile_sm4_gcm_open();
@@ -419,7 +375,6 @@ fn kotodama_sm4_gcm_open_rejects_bad_tag() {
     tag[0] ^= 0xFF;
     let mut cipher_tag = cipher.clone();
     cipher_tag.extend_from_slice(&tag);
-
     let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
@@ -433,11 +388,9 @@ fn kotodama_sm4_gcm_open_rejects_bad_tag() {
         ],
         &[],
     );
-
     vm.run().expect("vm run");
     assert_eq!(vm.register(10), 0, "open must fail for tampered tag");
 }
-
 #[test]
 fn kotodama_sm4_ccm_seal_matches_vector() {
     let code = compile_sm4_ccm_seal();
@@ -447,7 +400,6 @@ fn kotodama_sm4_ccm_seal_matches_vector() {
     let plaintext = decode("202122232425262728292a2b2c2d2e2f").expect("hex plaintext");
     let expected_cipher = decode("a9550cebab5f227d9590e8979caafd1f").expect("hex cipher");
     let expected_tag = decode("03a1f305").expect("hex tag");
-
     let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
@@ -464,9 +416,7 @@ fn kotodama_sm4_ccm_seal_matches_vector() {
             i64::try_from(expected_tag.len()).expect("tag length fits i64"),
         )],
     );
-
     vm.run().expect("vm run");
-
     let out_ptr = vm.register(10);
     assert_ne!(out_ptr, 0, "seal should produce output blob");
     let tlv = vm
@@ -483,7 +433,6 @@ fn kotodama_sm4_ccm_seal_matches_vector() {
         expected_tag.as_slice()
     );
 }
-
 #[test]
 fn kotodama_sm4_ccm_open_returns_plaintext() {
     let code = compile_sm4_ccm_open();
@@ -495,7 +444,6 @@ fn kotodama_sm4_ccm_open_returns_plaintext() {
     let tag = decode("03a1f305").expect("hex tag");
     let mut cipher_tag = cipher.clone();
     cipher_tag.extend_from_slice(&tag);
-
     let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
@@ -512,9 +460,7 @@ fn kotodama_sm4_ccm_open_returns_plaintext() {
             i64::try_from(tag.len()).expect("tag length fits i64"),
         )],
     );
-
     vm.run().expect("vm run");
-
     let out_ptr = vm.register(10);
     assert_ne!(out_ptr, 0, "open should produce plaintext blob");
     let tlv = vm
@@ -524,7 +470,6 @@ fn kotodama_sm4_ccm_open_returns_plaintext() {
     assert_eq!(tlv.type_id, PointerType::Blob);
     assert_eq!(tlv.payload, plaintext.as_slice());
 }
-
 #[test]
 fn kotodama_sm4_ccm_open_rejects_bad_tag() {
     let code = compile_sm4_ccm_open();
@@ -536,7 +481,6 @@ fn kotodama_sm4_ccm_open_rejects_bad_tag() {
     tag[0] ^= 0x01;
     let mut cipher_tag = cipher.clone();
     cipher_tag.extend_from_slice(&tag);
-
     let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
@@ -553,7 +497,6 @@ fn kotodama_sm4_ccm_open_rejects_bad_tag() {
             i64::try_from(tag.len()).expect("tag length fits i64"),
         )],
     );
-
     vm.run().expect("vm run");
     assert_eq!(
         vm.register(10),

@@ -1,7 +1,6 @@
 //! Trybuild UI tests for `iroha_derive`.
 #![cfg(all(feature = "trybuild-tests", not(coverage)))]
 use trybuild::TestCases;
-
 #[test]
 fn ui() {
     let test_cases = TestCases::new();

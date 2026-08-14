@@ -13,6 +13,11 @@ internal object TransportSecurity {
         "x-iroha-signature",
         "x-iroha-timestamp-ms",
         "x-iroha-nonce",
+        "x-iroha-witness",
+        "x-iroha-operator-public-key",
+        "x-iroha-operator-timestamp-ms",
+        "x-iroha-operator-nonce",
+        "x-iroha-operator-signature",
     )
 
     private val sensitiveBodyFields = listOf(

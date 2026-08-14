@@ -1,5 +1,4 @@
 // Autonomous lifecycle recovery and canonical lane-artifact regressions.
-
 #[test]
 fn unfinalized_merge_carrier_tip_rebuilds_post_wsv_reservation_on_restart() {
     let temp_dir = TempDir::new().expect("unfinalized carrier temp dir");
@@ -43,7 +42,6 @@ fn unfinalized_merge_carrier_tip_rebuilds_post_wsv_reservation_on_restart() {
         "ordinary carrier lookup must remain unavailable before finality",
     );
     drop(kura);
-
     let (reopened, _) = Kura::new(&config, &lane_config)
         .expect("restart accepts the exact unfinalized carrier tip");
     assert_eq!(
@@ -70,7 +68,6 @@ fn unfinalized_merge_carrier_tip_rebuilds_post_wsv_reservation_on_restart() {
         Some(carrier.hash()),
     );
 }
-
 #[test]
 fn autonomous_startup_rejects_a_view_removed_after_pointer_publication() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -93,13 +90,11 @@ fn autonomous_startup_rejects_a_view_removed_after_pointer_publication() {
     );
     fs::remove_file(view_path).expect("remove view after pointer and claim publication");
     drop(kura);
-
     assert!(
         Kura::new(&config, &lane_config).is_err(),
         "startup must not reconstruct a view whose later durability boundaries prove it once existed",
     );
 }
-
 #[test]
 fn autonomous_startup_rejects_an_unretired_same_height_orphan_successor() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -145,13 +140,11 @@ fn autonomous_startup_rejects_an_unretired_same_height_orphan_successor() {
         .expect("stage a crash-orphaned successor attempt");
     }
     drop(kura);
-
     assert!(
         Kura::new(&config, &lane_config).is_err(),
         "startup must not select a successor until the prior attempt is durably retired",
     );
 }
-
 #[test]
 fn autonomous_startup_rejects_an_aggregate_oversized_attempt_namespace() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -162,7 +155,6 @@ fn autonomous_startup_rejects_an_aggregate_oversized_attempt_namespace() {
     let artifact_dir = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
     fs::create_dir_all(&artifact_dir).expect("create lane artifact directory");
     drop(kura);
-
     let file_len = u64::try_from(MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES)
         .expect("autonomous source limit fits u64");
     let file_count = AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES
@@ -182,13 +174,11 @@ fn autonomous_startup_rejects_an_aggregate_oversized_attempt_namespace() {
             .set_len(file_len)
             .expect("extend sparse autonomous view");
     }
-
     assert!(
         Kura::new(&config, &lane_config).is_err(),
         "startup must reject a namespace whose individually bounded files exceed the aggregate byte budget",
     );
 }
-
 #[test]
 fn finalized_release_allows_a_later_proposal_attempt_at_the_same_lane_height() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -256,7 +246,6 @@ fn finalized_release_allows_a_later_proposal_attempt_at_the_same_lane_height() {
         successor,
     );
 }
-
 #[test]
 fn autonomous_route_latest_snapshot_rejects_runtime_index_corruption() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -270,7 +259,6 @@ fn autonomous_route_latest_snapshot_rejects_runtime_index_corruption() {
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
-
     let route_latest_path =
         Kura::autonomous_lane_route_latest_attempt_path_for_entry(lane, temp_dir.path());
     fs::write(&route_latest_path, [0xFF, 0x00, 0xAA])
@@ -281,7 +269,6 @@ fn autonomous_route_latest_snapshot_rejects_runtime_index_corruption() {
         "runtime hydration must fail closed instead of hiding durable queue ownership",
     );
 }
-
 #[test]
 fn old_reservation_retirement_remains_exactly_addressable_after_same_height_reproposal() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -314,7 +301,6 @@ fn old_reservation_retirement_remains_exactly_addressable_after_same_height_repr
         .expect("finalize first attempt release");
     kura.persist_lane_executable_payload(&successor, network_id, epoch)
         .expect("persist successor attempt");
-
     assert_eq!(
         kura.autonomous_lane_retirement_matching_reservation(
             &first.reservation_keys[0],
@@ -347,7 +333,6 @@ fn old_reservation_retirement_remains_exactly_addressable_after_same_height_repr
         Some(retirement),
     );
 }
-
 #[test]
 fn autonomous_payload_duplicate_requires_exact_producer_authenticated_bytes() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -358,7 +343,6 @@ fn autonomous_payload_duplicate_requires_exact_producer_authenticated_bytes() {
     let second_signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, template) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &first_signer);
-
     let mut proposal = template.origin_proposal.clone();
     let mut validator_set = vec![
         PeerId::new(first_signer.public_key().clone()),
@@ -377,7 +361,6 @@ fn autonomous_payload_duplicate_requires_exact_producer_authenticated_bytes() {
     proposal.descriptor.min_quorum = min_quorum;
     proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
     proposal.proposal_hash = proposal.computed_proposal_hash();
-
     let mut reservation_keys = template.reservation_keys.clone();
     for reservation in &mut reservation_keys {
         reservation.proposal_identity_hash = proposal.proposal_hash;
@@ -416,7 +399,6 @@ fn autonomous_payload_duplicate_requires_exact_producer_authenticated_bytes() {
         Err(crate::lane_consensus::LaneAutonomousArtifactError::ProducerNotDeterministicAuthor),
         "another committee member must fail before its bytes reach Kura",
     );
-
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first);
     kura.persist_lane_executable_payload(&first, network_id, epoch)
@@ -433,7 +415,6 @@ fn autonomous_payload_duplicate_requires_exact_producer_authenticated_bytes() {
         first
     );
 }
-
 #[test]
 fn autonomous_entrypoint_claim_rejects_replay_after_restart_and_recovers_temp() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -468,7 +449,6 @@ fn autonomous_entrypoint_claim_rejects_replay_after_restart_and_recovers_temp() 
         b"claim-recreated-lane-incarnation",
         &signer,
     );
-
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
@@ -482,7 +462,6 @@ fn autonomous_entrypoint_claim_rejects_replay_after_restart_and_recovers_temp() 
             "another live lane execution domain must not claim the entrypoint"
         );
     }
-
     let claim_path = Kura::autonomous_lane_entrypoint_claim_path(
         temp_dir.path(),
         &network_id,
@@ -490,7 +469,6 @@ fn autonomous_entrypoint_claim_rejects_replay_after_restart_and_recovers_temp() 
     );
     assert!(claim_path.is_file(), "durable exact-key claim is missing");
     drop(kura);
-
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
     for replay in [&cross_lane, &later_height, &recreated_incarnation] {
         assert!(
@@ -500,7 +478,6 @@ fn autonomous_entrypoint_claim_rejects_replay_after_restart_and_recovers_temp() 
             "restart must retain cross-session entrypoint ownership"
         );
     }
-
     let claim_temp = Kura::autonomous_lane_entrypoint_claim_temp_path(&claim_path);
     fs::rename(&claim_path, &claim_temp).expect("simulate claim promotion crash");
     drop(reopened);
@@ -514,7 +491,6 @@ fn autonomous_entrypoint_claim_rejects_replay_after_restart_and_recovers_temp() 
             .is_err(),
         "recovered claim must reject a delayed conflicting lane payload"
     );
-
     let orphan_entrypoint_hash = Hash::new(b"orphan-startup-entrypoint-claim");
     let orphan_claim = AutonomousLaneEntrypointClaimV3::new(&later_height, orphan_entrypoint_hash);
     let orphan_path = Kura::autonomous_lane_entrypoint_claim_path(
@@ -535,7 +511,6 @@ fn autonomous_entrypoint_claim_rejects_replay_after_restart_and_recovers_temp() 
         Kura::new(&config, &lane_config).expect("startup discards an unpublished claim temp");
     assert!(!orphan_path.exists());
     assert!(!orphan_temp.exists());
-
     fs::write(&claim_path, [0xFF, 0x00, 0xAA]).expect("corrupt claim");
     assert!(
         recovered
@@ -544,12 +519,10 @@ fn autonomous_entrypoint_claim_rejects_replay_after_restart_and_recovers_temp() 
         "a present malformed claim must fail closed"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn autonomous_claim_startup_rejects_symlinks_and_multiple_links_without_following_them() {
     use std::os::unix::fs::symlink;
-
     for corruption in ["symlink", "hardlink"] {
         let temp_dir = TempDir::new().expect("temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -594,7 +567,6 @@ fn autonomous_claim_startup_rejects_symlinks_and_multiple_links_without_followin
             "failed live preflight must not stage a replacement claim",
         );
         drop(kura);
-
         assert!(
             Kura::new(&config, &lane_config).is_err(),
             "{corruption} claim must fail startup closed",
@@ -606,7 +578,6 @@ fn autonomous_claim_startup_rejects_symlinks_and_multiple_links_without_followin
         );
     }
 }
-
 #[test]
 fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -633,7 +604,6 @@ fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
             .is_err(),
         "an executable payload at the incarnation activation height must be rejected",
     );
-
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first);
     kura.persist_lane_executable_payload(&first, network_id, epoch)
         .expect("persist first marker-bound incarnation");
@@ -675,7 +645,6 @@ fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
     let first_direct_snapshot =
         kura.active_direct_lane_block_application_receipts_structural_snapshot();
     assert_eq!(first_direct_snapshot.len(), 1);
-
     let recreated = rebind_autonomous_lane_payload_for_kura(
         &first,
         lane_entry.lane_id,
@@ -684,7 +653,6 @@ fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
         b"kura-autonomous-recreated-incarnation",
         &signer,
     );
-
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &recreated);
     assert!(
         !kura.active_direct_lane_block_application_receipts_match_structural_snapshot(
@@ -811,7 +779,6 @@ fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
         vec![recreated.origin_proposal.clone()],
     );
     drop(kura);
-
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
     assert!(
         reopened
@@ -855,7 +822,6 @@ fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
         recreated.origin_proposal,
     );
 }
-
 fn assert_lane_artifact_files_absent_or_empty(
     lane_entry: &LaneConfigEntry,
     store_root: &std::path::Path,
@@ -871,7 +837,6 @@ fn assert_lane_artifact_files_absent_or_empty(
         }
     }
 }
-
 #[test]
 fn lane_block_artifact_persists_under_lane_segment_and_reloads() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -893,22 +858,18 @@ fn lane_block_artifact_persists_under_lane_segment_and_reloads() {
         .first()
         .expect("lane ownership")
         .clone();
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(Arc::clone(&block))
         .expect("store block with lane artifact");
-
     let artifact = kura
         .read_lane_block_artifact(lane_id, lane_block_height)
         .expect("lane block artifact");
     assert_eq!(artifact.format_label(), "lane.block_artifact");
     assert_eq!(artifact.proposal_block_hash, block_hash);
     assert_eq!(artifact.ownership, expected_ownership);
-
     let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
     assert!(data_path.is_file(), "lane artifact data file missing");
     assert!(index_path.is_file(), "lane artifact index file missing");
-
     drop(kura);
     let (reloaded, _) = Kura::new(&config, &lane_config).expect("reopen kura");
     assert_eq!(
@@ -916,7 +877,6 @@ fn lane_block_artifact_persists_under_lane_segment_and_reloads() {
         Some(artifact)
     );
 }
-
 #[test]
 fn latest_lane_block_artifact_scan_counts_sparse_and_malformed_slots_exactly() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -937,7 +897,6 @@ fn latest_lane_block_artifact_scan_counts_sparse_and_malformed_slots_exactly() {
     let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
     let boundary_height =
         u64::try_from(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET).expect("scan budget fits u64");
-
     assert!(Kura::append_indexed_sidecar(
         &data_path,
         &index_path,
@@ -953,7 +912,6 @@ fn latest_lane_block_artifact_scan_counts_sparse_and_malformed_slots_exactly() {
         Some(active.clone()),
         "one malformed slot, every absent gap, and the active slot fit exactly in the budget",
     );
-
     assert!(Kura::append_indexed_sidecar(
         &data_path,
         &index_path,
@@ -974,7 +932,6 @@ fn latest_lane_block_artifact_scan_counts_sparse_and_malformed_slots_exactly() {
         "bounded latest lookup must not mutate the canonical low slot",
     );
 }
-
 #[test]
 fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_history_scan() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1000,7 +957,6 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
     );
     let first_incarnation = first_artifact.ownership.lane_incarnation;
     let recreated_incarnation = Hash::new(b"recreated-lane-ownership-sidecar-incarnation");
-
     let mut second = generator.next().as_ref().clone();
     let mut second_ownership = sample_lane_payload_ownership_for_kura(
         &second,
@@ -1025,7 +981,6 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
     let second = Arc::new(second);
     let second_artifact = LaneBlockArtifact::new(second.hash(), second_ownership.clone());
     let second_proposal = lane_block_proposal_from_ownership(&second_ownership);
-
     let (kura, _) = Kura::new(&config, &lane_config).expect("init Kura");
     assert!(
         kura.store_block(Arc::clone(&first)).is_err(),
@@ -1049,7 +1004,6 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
         kura.read_lane_block_artifact(lane_id, lane_block_height),
         Some(first_artifact.clone())
     );
-
     kura.install_lane_incarnation_marker_for_test(
         lane_entry,
         recreated_incarnation,
@@ -1072,7 +1026,6 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
         .is_empty(),
         "canonical recovery must not hydrate retired ownership into a recreated lane",
     );
-
     kura.store_block(Arc::clone(&second))
         .expect("recreated lane may replace the retired canonical slot");
     assert_eq!(
@@ -1091,7 +1044,6 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
         kura.store_block(first).is_err(),
         "a delayed old-incarnation block replay must fail closed"
     );
-
     let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
     let mut malformed_active = second_artifact.clone();
     malformed_active.ownership.accepted_transaction_hashes[0] =
@@ -1120,7 +1072,6 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
             .artifact,
         second_artifact,
     );
-
     let retired_payload = first_artifact
         .encode_framed()
         .expect("encode retired ownership artifact");
@@ -1148,7 +1099,6 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
         Some(second_artifact.clone()),
         "canonical repair must replace a retired same-slot artifact"
     );
-
     for stale_height in 2..=u64::try_from(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET)
         .expect("scan budget fits u64")
         .saturating_add(1)
@@ -1182,7 +1132,6 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
         vec![second_artifact.clone()],
         "all-artifact replay must exclude retired incarnation history"
     );
-
     drop(kura);
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
     reopened.replace_lane_storage_entries_for_test(&lane_config);
@@ -1229,7 +1178,6 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
         vec![second_artifact]
     );
 }
-
 #[test]
 fn lane_block_artifact_canonical_validation_releases_sidecar_before_block_data() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1246,7 +1194,6 @@ fn lane_block_artifact_canonical_validation_releases_sidecar_before_block_data()
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
-
     let block_data_guard = kura.block_data.lock();
     kura.canonical_read_kinds_after_prune_check
         .store(0, Ordering::Release);
@@ -1258,7 +1205,6 @@ fn lane_block_artifact_canonical_validation_releases_sidecar_before_block_data()
         let artifact = reader_kura.read_lane_block_artifact(lane_id, lane_block_height);
         result_tx.send(artifact).expect("report lane artifact read");
     });
-
     let deadline = Instant::now() + Duration::from_secs(5);
     while (kura
         .canonical_read_kinds_after_prune_check
@@ -1275,7 +1221,6 @@ fn lane_block_artifact_canonical_validation_releases_sidecar_before_block_data()
         }
         thread::yield_now();
     }
-
     let sidecar_guard = kura
         .sidecar_lock
         .try_lock()
@@ -1293,7 +1238,6 @@ fn lane_block_artifact_canonical_validation_releases_sidecar_before_block_data()
     );
     reader.join().expect("lane artifact reader");
 }
-
 #[test]
 fn lane_block_payload_availability_recovers_entrypoints_from_canonical_block() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1333,11 +1277,9 @@ fn lane_block_payload_availability_recovers_entrypoints_from_canonical_block() {
         ),
         "an ownership from another canonical height must not satisfy artifact recovery"
     );
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
-
     assert_eq!(
         kura.lane_block_payload_availability(&proposal),
         LaneBlockPayloadAvailability::Available
@@ -1349,7 +1291,6 @@ fn lane_block_payload_availability_recovers_entrypoints_from_canonical_block() {
     assert_eq!(recovered.artifact.ownership, ownership);
     assert_eq!(recovered.entrypoints, vec![expected_entrypoint]);
 }
-
 #[test]
 fn lane_block_payload_availability_rebuilds_missing_artifact_sidecar_from_canonical_block() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1375,7 +1316,6 @@ fn lane_block_payload_availability_rebuilds_missing_artifact_sidecar_from_canoni
         .next()
         .expect("dummy block entrypoint");
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
@@ -1397,7 +1337,6 @@ fn lane_block_payload_availability_rebuilds_missing_artifact_sidecar_from_canoni
             "test setup should force recovery through durable block rehydration"
         );
     }
-
     assert_eq!(
         kura.lane_block_payload_availability(&proposal),
         LaneBlockPayloadAvailability::Available
@@ -1415,7 +1354,6 @@ fn lane_block_payload_availability_rebuilds_missing_artifact_sidecar_from_canoni
         ownership
     );
 }
-
 #[test]
 fn canonical_height_recovery_applies_lifecycle_filter_before_sidecar_write() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1425,14 +1363,12 @@ fn canonical_height_recovery_applies_lifecycle_filter_before_sidecar_write() {
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let block = dummy_block_with_lane_payload_ownership(lane_id, lane_entry.dataspace_id, 1);
     let proposal_height = block.header().height().get();
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
     let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
     std::fs::remove_file(&data_path).expect("remove lane artifact data sidecar");
     std::fs::remove_file(&index_path).expect("remove lane artifact index sidecar");
-
     assert!(
         kura.canonical_lane_block_artifacts_at_proposal_height_matching(proposal_height, 8, |_| {
             false
@@ -1452,7 +1388,6 @@ fn canonical_height_recovery_applies_lifecycle_filter_before_sidecar_write() {
     );
     assert!(kura.read_lane_block_artifact(lane_id, 1).is_some());
 }
-
 #[test]
 fn lane_block_payload_availability_rejects_ownership_from_wrong_global_height() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1490,7 +1425,6 @@ fn lane_block_payload_availability_rejects_ownership_from_wrong_global_height() 
         )])
         .with_lane_payload_ownerships(vec![ownership]),
     ));
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(canonical_proposal_block)
         .expect("store canonical proposal-height block");
@@ -1501,7 +1435,6 @@ fn lane_block_payload_availability_rejects_ownership_from_wrong_global_height() 
             .is_none(),
         "a sidecar anchored to the wrong global block must not be canonical"
     );
-
     assert_eq!(
         kura.lane_block_payload_availability(&proposal),
         LaneBlockPayloadAvailability::MissingLaneArtifact,

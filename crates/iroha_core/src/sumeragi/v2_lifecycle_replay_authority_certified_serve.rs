@@ -7,7 +7,6 @@
 struct CertifiedServeStorageReplayFamilyV1 {
     source: CertifiedServeStorageSourceV1,
 }
-
 /// Opaque replay evidence for one exact post-fsync Certified-Serve record.
 #[derive(Debug, PartialEq, Eq)]
 #[must_use = "Certified-Serve replay evidence must remain with its reserved producer turn"]
@@ -15,7 +14,6 @@ struct CertifiedServeReplayEvidenceV1 {
     family: Arc<CertifiedServeStorageReplayFamilyV1>,
     payload: ReplayPayloadBindingV1,
 }
-
 /// Opaque replay evidence for the dormant ProducerTurn reserved beside one
 /// exact Certified-Serve request.
 #[derive(Debug, PartialEq, Eq)]
@@ -23,7 +21,6 @@ struct CertifiedServeReplayEvidenceV1 {
 struct CertifiedServeProducerTurnReplayEvidenceV1 {
     family: Arc<CertifiedServeStorageReplayFamilyV1>,
 }
-
 /// Closed pair preserving one common post-fsync storage origin across the
 /// Certified-Serve record and its reserved ProducerTurn.
 #[derive(Debug, PartialEq, Eq)]
@@ -32,7 +29,6 @@ pub(super) struct CertifiedServeReplayEvidencePairV1 {
     serve: CertifiedServeReplayEvidenceV1,
     producer: CertifiedServeProducerTurnReplayEvidenceV1,
 }
-
 /// One move-only terminal replay-family replacement for an adjacent
 /// Certified-Serve/ProducerTurn pair.
 ///
@@ -47,13 +43,11 @@ pub(super) struct CertifiedServeTerminalReplayAuthorityPairV1 {
     serve: LifecycleReplayAuthorityV1,
     producer: LifecycleReplayAuthorityV1,
 }
-
 impl CertifiedServeTerminalReplayAuthorityPairV1 {
     /// Return the terminal tombstone bound by this sealed pair.
     pub(super) const fn terminal_outcome(&self) -> TerminalOutcome {
         self.terminal_outcome
     }
-
     /// Clone this still-sealed terminal family into one whole concrete-carrier
     /// proof. No serve/producer authority or raw frame hash leaves the replay
     /// module; the registry may install the returned pair only through its
@@ -79,7 +73,6 @@ impl CertifiedServeTerminalReplayAuthorityPairV1 {
             && evidence.producer.exactly_matches_authority(&self.producer))
         .then_some(evidence)
     }
-
     /// Rebind one live Pending pair from an exact post-fsync completion
     /// receipt.
     pub(super) fn from_completed_receipt(
@@ -118,7 +111,6 @@ impl CertifiedServeTerminalReplayAuthorityPairV1 {
             receipt.payload_hash(),
         )
     }
-
     /// Rebind one live Pending pair from an exact post-fsync negative receipt.
     pub(super) fn from_negative_receipt(
         active_context: LifecycleContext,
@@ -166,7 +158,6 @@ impl CertifiedServeTerminalReplayAuthorityPairV1 {
             receipt.payload_hash(),
         )
     }
-
     /// Seal the terminal replay pair recovered from one authenticated payload
     /// frame and its independently reconstructed admission candidate.
     pub(super) fn from_authenticated_recovery(
@@ -215,7 +206,6 @@ impl CertifiedServeTerminalReplayAuthorityPairV1 {
             .pending_candidate_matches_terminal_family(active_context, candidate)
             .then_some(sealed)
     }
-
     #[allow(clippy::too_many_arguments)]
     fn from_terminal_frame(
         active_context: LifecycleContext,
@@ -266,7 +256,6 @@ impl CertifiedServeTerminalReplayAuthorityPairV1 {
             )
             .then_some(sealed)
     }
-
     /// Construct a synthetic terminal-frame transition for pure reducer tests.
     /// Production paths have no raw-hash constructor and must use a durable
     /// receipt or authenticated recovery record.
@@ -306,7 +295,6 @@ impl CertifiedServeTerminalReplayAuthorityPairV1 {
             Hash::new(preimage),
         )
     }
-
     /// Prove the sole permitted payload-store-ahead transition: one exact
     /// Pending ledger pair advances to this authenticated terminal frame while
     /// request, certificate, local retainer, keys, and stages remain fixed.
@@ -336,7 +324,6 @@ impl CertifiedServeTerminalReplayAuthorityPairV1 {
             &producer_metadata.replay_authority,
         )
     }
-
     /// Match a Pending logical pair after both authorities have already been
     /// rebound to this exact terminal frame family but before the terminal
     /// payload/tombstone is installed.
@@ -382,7 +369,6 @@ impl CertifiedServeTerminalReplayAuthorityPairV1 {
             )
             && self.serve.same_persisted_family(&self.producer)
     }
-
     /// Apply the transition-only oracle to decoded ledger coordinates without
     /// exposing either encoded authority outside the lifecycle subsystem.
     #[allow(clippy::too_many_arguments)]
@@ -454,7 +440,6 @@ impl CertifiedServeTerminalReplayAuthorityPairV1 {
             &self.serve.source,
         )
     }
-
     /// Match the exact terminal candidate reconstructed from the same
     /// authenticated recovery frame.
     pub(super) fn exactly_matches_recovered_candidate(
@@ -472,7 +457,6 @@ impl CertifiedServeTerminalReplayAuthorityPairV1 {
             && producer.replay_authority == self.producer
             && self.serve.same_persisted_family(&self.producer)
     }
-
     /// Replace the Pending projection fields with the exact terminal payload
     /// and authority derived from the same authenticated recovery frame.
     pub(super) fn bind_recovered_candidate(
@@ -487,7 +471,6 @@ impl CertifiedServeTerminalReplayAuthorityPairV1 {
         candidate.replay_authority = self.serve.clone();
         self.exactly_matches_recovered_candidate(active_context, candidate)
     }
-
     fn pending_candidate_matches_terminal_family(
         &self,
         active_context: LifecycleContext,
@@ -510,7 +493,6 @@ impl CertifiedServeTerminalReplayAuthorityPairV1 {
             && producer.replay_authority == self.producer
             && self.serve.same_persisted_family(&self.producer)
     }
-
     /// Consume the authenticated frame transition into the exact terminal
     /// payload, outcome, and separately encoded adjacent authorities.
     pub(super) fn consume_terminal_rebind(
@@ -529,7 +511,6 @@ impl CertifiedServeTerminalReplayAuthorityPairV1 {
         )
     }
 }
-
 fn certified_serve_sources_share_origin_except_frame(
     pending: &LifecycleReplaySourceV1,
     terminal: &LifecycleReplaySourceV1,
@@ -543,10 +524,8 @@ fn certified_serve_sources_share_origin_except_frame(
     };
     pending.request == terminal.request && pending.local_retainer == terminal.local_retainer
 }
-
 // The pair is consumed only by the fixed adjacent CandidateAdmission factory;
 // its decoded ledger descendants remain inert and cannot reconstruct this pair.
-
 impl CertifiedServeReplayEvidencePairV1 {
     /// Seal one exact freshly persisted Pending request and its ProducerTurn.
     pub(super) fn from_post_fsync_pending(
@@ -578,7 +557,6 @@ impl CertifiedServeReplayEvidencePairV1 {
             .exactly_matches_post_fsync_pending(active_context, authenticated, receipt)
             .then_some(evidence)
     }
-
     /// Reconstruct the same closed pair only from a fully authenticated
     /// payload-store recovery record.
     pub(super) fn from_authenticated_recovery(
@@ -606,7 +584,6 @@ impl CertifiedServeReplayEvidencePairV1 {
             .exactly_matches_recovered(active_context, recovered)
             .then_some(evidence)
     }
-
     /// Project one exact shared storage family into the adjacent durable
     /// admission pair without consuming the runtime-only family. Semantic keys,
     /// stages, payloads, authorities, slots, and physical digests are all
@@ -717,7 +694,6 @@ impl CertifiedServeReplayEvidencePairV1 {
             )),
         ))
     }
-
     /// Compare the retained Serve evidence with one exact logical record and
     /// its independently retained payload-store frame hash.
     pub(super) fn exactly_matches_serve_record(
@@ -737,7 +713,6 @@ impl CertifiedServeReplayEvidencePairV1 {
                 storage_payload_hash,
             )
     }
-
     /// Match one exact terminal Serve row without inventing an executable
     /// physical carrier. Steady terminal Ledger rows reopen with empty geometry,
     /// while payload-store-ahead reconciliation may retain the former Pending
@@ -770,7 +745,6 @@ impl CertifiedServeReplayEvidencePairV1 {
                 .serve
                 .exactly_matches_authority(&metadata.replay_authority)
     }
-
     /// Compare the retained ProducerTurn evidence with one exact dormant
     /// logical record while retaining the same payload-store origin.
     pub(super) fn exactly_matches_producer_record(
@@ -790,11 +764,9 @@ impl CertifiedServeReplayEvidencePairV1 {
                 storage_payload_hash,
             )
     }
-
     fn shares_exact_storage_origin(&self) -> bool {
         Arc::ptr_eq(&self.serve.family, &self.producer.family)
     }
-
     /// Match the exact one-slot Serve carrier without exposing the payload-store
     /// frame hash retained by this family.
     pub(super) fn exactly_matches_serve_carrier(
@@ -817,7 +789,6 @@ impl CertifiedServeReplayEvidencePairV1 {
             )
             && self.serve.exactly_matches_authority(replay_authority)
     }
-
     /// Match the exact one-slot ProducerTurn carrier while retaining the same
     /// opaque payload-store family as its Serve origin.
     pub(super) fn exactly_matches_producer_carrier(
@@ -840,11 +811,9 @@ impl CertifiedServeReplayEvidencePairV1 {
             )
             && self.producer.exactly_matches_authority(replay_authority)
     }
-
     fn producer_physical_digest(&self) -> LifecycleDigest {
         certified_serve_producer_physical_digest(&self.serve.family.source)
     }
-
     fn exactly_matches_post_fsync_pending(
         &self,
         active_context: LifecycleContext,
@@ -877,7 +846,6 @@ impl CertifiedServeReplayEvidencePairV1 {
                         == HashOf::new(&authenticated.request().certificate)
             })
     }
-
     fn exactly_matches_recovered(
         &self,
         active_context: LifecycleContext,
@@ -910,7 +878,6 @@ impl CertifiedServeReplayEvidencePairV1 {
             })
     }
 }
-
 impl CertifiedServeReplayEvidenceV1 {
     fn exactly_matches_record(
         &self,
@@ -940,7 +907,6 @@ impl CertifiedServeReplayEvidenceV1 {
             )
             .is_ok()
     }
-
     fn exactly_matches_authority(&self, authority: &LifecycleReplayAuthorityV1) -> bool {
         authority
             == &LifecycleReplayAuthorityV1 {
@@ -950,7 +916,6 @@ impl CertifiedServeReplayEvidenceV1 {
             }
     }
 }
-
 impl CertifiedServeProducerTurnReplayEvidenceV1 {
     fn exactly_matches_record(
         &self,
@@ -980,7 +945,6 @@ impl CertifiedServeProducerTurnReplayEvidenceV1 {
             )
             .is_ok()
     }
-
     fn exactly_matches_authority(&self, authority: &LifecycleReplayAuthorityV1) -> bool {
         authority
             == &LifecycleReplayAuthorityV1 {
@@ -990,7 +954,6 @@ impl CertifiedServeProducerTurnReplayEvidenceV1 {
             }
     }
 }
-
 fn certified_serve_producer_physical_digest(
     source: &CertifiedServeStorageSourceV1,
 ) -> LifecycleDigest {
@@ -1001,7 +964,6 @@ fn certified_serve_producer_physical_digest(
     append_field(&mut projection, request_hash.as_ref());
     digest_from_hash(&Hash::new(projection))
 }
-
 fn exact_certified_serve_storage_replay_family(
     active_context: LifecycleContext,
     authenticated: &AuthenticatedCertifiedBodyRequest,
@@ -1047,7 +1009,6 @@ fn exact_certified_serve_storage_replay_family(
     }
     Some(Arc::new(CertifiedServeStorageReplayFamilyV1 { source }))
 }
-
 fn certified_serve_pending_payload(
     authenticated: &AuthenticatedCertifiedBodyRequest,
 ) -> ReplayPayloadBindingV1 {
@@ -1056,7 +1017,6 @@ fn certified_serve_pending_payload(
         certificate: *HashOf::new(&authenticated.request().certificate).as_ref(),
     }
 }
-
 fn recovered_certified_serve_payload(
     recovered: &AuthenticatedRecoveredCertifiedServePayload,
 ) -> Option<ReplayPayloadBindingV1> {

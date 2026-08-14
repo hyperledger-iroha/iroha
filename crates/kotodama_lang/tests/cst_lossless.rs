@@ -1,10 +1,8 @@
 //! Lossless CST coverage for trivia, Unicode, and recovery tokens.
-
 use kotodama_lang::{
     source::{FrontendBudget, SourceFile, SourceId},
     syntax::{SyntaxKind, parse},
 };
-
 #[test]
 fn valid_source_round_trips_with_unicode_in_trivia_and_strings() {
     let text = r##"/* leading comment */
@@ -18,7 +16,6 @@ seiyaku Words {
 "##;
     let source = SourceFile::new(SourceId(7), "unicode.ko", text);
     let output = parse(&source, FrontendBudget::v1());
-
     assert_eq!(output.tree.text(&source), text);
     assert!(output.is_ok(), "{:?}", output.diagnostics.diagnostics);
     let kinds = output
@@ -31,13 +28,11 @@ seiyaku Words {
     assert!(kinds.contains(&SyntaxKind::LineComment));
     assert!(kinds.contains(&SyntaxKind::BlockComment));
 }
-
 #[test]
 fn non_ascii_identifier_characters_are_lossless_errors() {
     let text = "seiyaku Café { view fn ping() { return; } }";
     let source = SourceFile::new(SourceId(8), "non-ascii-ident.ko", text);
     let output = parse(&source, FrontendBudget::v1());
-
     assert_eq!(output.tree.text(&source), text);
     assert!(!output.is_ok());
     assert!(output.tree.tokens().into_iter().any(|token| {
@@ -50,13 +45,11 @@ fn non_ascii_identifier_characters_are_lossless_errors() {
                 .contains("non-ASCII identifier outside the branded Japanese keyword set")
     }));
 }
-
 #[test]
 fn malformed_text_remains_lossless_as_error_tokens() {
     let text = "seiyaku Demo { fn f() { let x = 1; @ let y = 2; } }";
     let source = SourceFile::new(SourceId(1), "error-token.ko", text);
     let output = parse(&source, FrontendBudget::v1());
-
     assert_eq!(output.tree.text(&source), text);
     assert!(output.tree.tokens().into_iter().any(|token| {
         token.kind == SyntaxKind::ErrorToken && source.slice(token.range) == Some("@")
@@ -69,26 +62,22 @@ fn malformed_text_remains_lossless_as_error_tokens() {
             .any(|diagnostic| diagnostic.phase.as_str() == "lex")
     );
 }
-
 #[test]
 fn unsuffixed_decimal_fraction_is_preserved_by_v1_lexer() {
     let text = "seiyaku Demo { fn f() { let value = 1_234.50_0; } }";
     let source = SourceFile::new(SourceId(9), "decimal-fraction.ko", text);
     let output = parse(&source, FrontendBudget::v1());
-
     assert_eq!(output.tree.text(&source), text);
     assert!(output.is_ok(), "{:#?}", output.diagnostics.diagnostics);
     assert!(output.tree.tokens().into_iter().any(|token| {
         token.kind == SyntaxKind::Decimal && source.slice(token.range) == Some("1_234.50_0")
     }));
 }
-
 #[test]
 fn parser_inserts_zero_width_missing_tokens_without_changing_text() {
     let text = "seiyaku Demo { fn f() { let int value = ; return; } }";
     let source = SourceFile::new(SourceId(2), "missing.ko", text);
     let output = parse(&source, FrontendBudget::v1());
-
     assert_eq!(output.tree.text(&source), text);
     let missing = output
         .tree
@@ -100,7 +89,6 @@ fn parser_inserts_zero_width_missing_tokens_without_changing_text() {
     assert!(missing.iter().all(|token| token.range.is_empty()));
     assert!(missing.iter().all(|token| token.expected.is_some()));
 }
-
 #[test]
 fn local_test_units_are_accepted_without_rewriting() {
     let text = r#"module Tests {
@@ -111,7 +99,6 @@ fn local_test_units_are_accepted_without_rewriting() {
     }"#;
     let source = SourceFile::new(SourceId(3), "contract.test.ko", text);
     let output = parse(&source, FrontendBudget::v1());
-
     assert_eq!(output.tree.text(&source), text);
     assert!(output.is_ok(), "{:?}", output.diagnostics.diagnostics);
 }

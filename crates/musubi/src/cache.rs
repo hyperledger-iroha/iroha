@@ -14,7 +14,6 @@
 //! intentionally unavailable on every platform. Safe `std` does not expose an atomic
 //! handle-relative compare-and-delete operation, so explicit prune fails before isolation and
 //! install failures retain their private staging and payload residue for inspection.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
@@ -25,7 +24,6 @@ use std::{
     str::FromStr,
     sync::atomic::{AtomicU64, Ordering},
 };
-
 use iroha_data_model::musubi::{
     ArchiveId, MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1, MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1,
     MUSUBI_MAX_FILES_V1, MusubiArchiveCommitmentV1, MusubiArtifactDescriptorV1,
@@ -39,16 +37,13 @@ use sorafs_car::{
     streaming_verifier::{StreamingCarVerifier, StreamingVerifierConfig},
 };
 use sorafs_manifest::{DagCodecId, GovernanceProofs, ManifestBuilder, PinPolicy, StorageClass};
-
 use crate::workspace::MAX_MANIFEST_BYTES;
-
 #[cfg(unix)]
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt as _;
-
 const REGISTRY_DIRECTORY: &str = "registry-v1";
 const SOURCE_DIRECTORY: &str = "src";
 const RELEASE_PATH: &str = ".musubi/semantic-release.norito";
@@ -82,16 +77,13 @@ const MUSUBI_CACHE_CHUNK_STORE_HEAP_LIMIT_BYTES: usize = 24 * 1024 * 1024;
 const FILE_SHARE_READ: u32 = 0x1;
 #[cfg(windows)]
 const FILE_SHARE_WRITE: u32 = 0x2;
-
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
 #[cfg(all(test, unix))]
 const CACHE_INSTALL_CRASH_CUT_ENV_V1: &str = "IROHA_MUSUBI_TEST_CACHE_INSTALL_CRASH_CUT_V1";
 #[cfg(all(test, unix))]
 const CACHE_INSTALL_CRASH_ROOT_ENV_V1: &str = "IROHA_MUSUBI_TEST_CACHE_INSTALL_CRASH_ROOT_V1";
 #[cfg(all(test, unix))]
 const CACHE_INSTALL_CRASH_EXIT_CODE_V1: i32 = 86;
-
 /// Test-only abrupt process cuts at cache-install mutation and durability boundaries.
 #[cfg(all(test, unix))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,7 +98,6 @@ enum CacheInstallCrashCutV1 {
     SourceTreePublished,
     ArchiveDirectorySynced,
 }
-
 #[cfg(all(test, unix))]
 impl CacheInstallCrashCutV1 {
     #[cfg(unix)]
@@ -121,7 +112,6 @@ impl CacheInstallCrashCutV1 {
         Self::SourceTreePublished,
         Self::ArchiveDirectorySynced,
     ];
-
     const fn label(self) -> &'static str {
         match self {
             Self::VerifiedPayloadWritten => "verified_payload_written",
@@ -136,7 +126,6 @@ impl CacheInstallCrashCutV1 {
         }
     }
 }
-
 #[cfg(all(test, unix))]
 fn crash_cache_install_at(cut: CacheInstallCrashCutV1) {
     if std::env::var_os(CACHE_INSTALL_CRASH_CUT_ENV_V1)
@@ -147,7 +136,6 @@ fn crash_cache_install_at(cut: CacheInstallCrashCutV1) {
         std::process::exit(CACHE_INSTALL_CRASH_EXIT_CODE_V1);
     }
 }
-
 /// Return the one platform-derived user cache root shared by fetch and compiler workflows.
 ///
 /// The returned root is `~/Library/Caches/Iroha/musubi` on macOS,
@@ -192,7 +180,6 @@ pub fn platform_cache_root_v1() -> Result<PathBuf, CacheError> {
         ))
     }
 }
-
 fn derive_platform_cache_root(
     base: Option<PathBuf>,
     components: &[&str],
@@ -210,7 +197,6 @@ fn derive_platform_cache_root(
     }
     Ok(root)
 }
-
 /// A cache rooted below an explicit user-owned directory.
 #[derive(Debug, Clone)]
 pub struct MusubiCache {
@@ -219,7 +205,6 @@ pub struct MusubiCache {
     registry_root: PathBuf,
     registry_identity: DirectoryIdentity,
 }
-
 /// A verified immutable cache entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CacheEntry {
@@ -228,7 +213,6 @@ pub struct CacheEntry {
     /// Immutable extracted source directory.
     pub source_path: PathBuf,
 }
-
 /// Authenticated bundle metadata and source root accepted for compiler input.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CachedCompilerPackageV1 {
@@ -243,7 +227,6 @@ pub struct CachedCompilerPackageV1 {
     /// Publisher-supplied exact proof lock embedded in the bundle.
     pub publication_lock: MusubiVerificationLockV1,
 }
-
 /// One immutable Kotodama source copied out of a verified cache tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CachedKotodamaSourceV1 {
@@ -252,7 +235,6 @@ pub struct CachedKotodamaSourceV1 {
     /// Complete UTF-8 source text.
     pub source: String,
 }
-
 /// Result of installing an archive.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InstallOutcome {
@@ -261,7 +243,6 @@ pub enum InstallOutcome {
     /// An identical, healthy entry was already present.
     AlreadyPresent(CacheEntry),
 }
-
 /// Result of checking and repairing one cache entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RepairOutcome {
@@ -275,14 +256,12 @@ pub enum RepairOutcome {
         path: PathBuf,
     },
 }
-
 /// Summary of a cache prune operation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PruneReport {
     /// Archive identities removed from the cache.
     pub removed: Vec<ArchiveId>,
 }
-
 /// Errors raised by the immutable cache.
 #[derive(Debug)]
 pub enum CacheError {
@@ -308,7 +287,6 @@ pub enum CacheError {
     /// A repair or prune candidate contains a descendant that cannot be safely mutated.
     UnsafeDescendant(PathBuf),
 }
-
 impl fmt::Display for CacheError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -340,7 +318,6 @@ impl fmt::Display for CacheError {
         }
     }
 }
-
 impl Error for CacheError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
@@ -349,7 +326,6 @@ impl Error for CacheError {
         }
     }
 }
-
 impl MusubiCache {
     /// Open or create `registry-v1` below an explicit user cache root.
     ///
@@ -368,7 +344,6 @@ impl MusubiCache {
             // single-link, no-follow, and handle-relative no-replace abstraction is available.
             return Err(CacheError::UnsupportedPlatform);
         }
-
         let requested = absolute_path(user_root.as_ref())?;
         let existed = requested
             .try_exists()
@@ -393,13 +368,11 @@ impl MusubiCache {
                 "user cache root changed during canonicalization".to_owned(),
             ));
         }
-
         let registry_root = root.join(REGISTRY_DIRECTORY);
         create_or_validate_private_directory(&registry_root)?;
         sync_directory(&root).map_err(|source| io_error("sync user cache root", &root, source))?;
         let registry_metadata = fs::symlink_metadata(&registry_root)
             .map_err(|source| io_error("inspect registry cache root", &registry_root, source))?;
-
         Ok(Self {
             root,
             root_identity: DirectoryIdentity::capture(&canonical_metadata),
@@ -407,19 +380,16 @@ impl MusubiCache {
             registry_identity: DirectoryIdentity::capture(&registry_metadata),
         })
     }
-
     /// Return the trusted user cache root.
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
-
     /// Derive the immutable source path for an archive identity.
     #[must_use]
     pub fn source_path(&self, archive_id: &ArchiveId) -> PathBuf {
         self.archive_directory(archive_id).join(SOURCE_DIRECTORY)
     }
-
     /// Enumerate canonical archive identities currently owned by this cache.
     ///
     /// Fixed non-archive files, temporary siblings, resolver-index snapshots,
@@ -467,7 +437,6 @@ impl MusubiCache {
         archive_ids.dedup();
         Ok(archive_ids)
     }
-
     /// Re-authenticate one immutable cached bundle for compiler consumption.
     ///
     /// This boundary does not trust permissions or a consumer lock as cache
@@ -506,7 +475,6 @@ impl MusubiCache {
             publication_lock,
         })
     }
-
     /// Verify and atomically install a canonical CAR stream.
     ///
     /// The reader is consumed to EOF. Any trailing byte, malformed section,
@@ -540,13 +508,11 @@ impl MusubiCache {
                 .verify(commitment, plan)
                 .map(InstallOutcome::AlreadyPresent);
         }
-
         let (staging_path, _staging_metadata, staging_pin) =
             create_staging_directory(&archive_dir)?;
         let (payload_path, mut payload_file, _payload_metadata) =
             create_temporary_file(&archive_dir, ".payload")?;
         let _residue = RetainedInstallResidue::new(staging_path.clone(), payload_path.clone());
-
         stream_and_verify_car(reader, commitment, plan, &mut payload_file)?;
         #[cfg(all(test, unix))]
         crash_cache_install_at(CacheInstallCrashCutV1::VerifiedPayloadWritten);
@@ -570,7 +536,6 @@ impl MusubiCache {
         // behavior retains operation-owned residue on both success and failure.
         #[cfg(all(test, unix))]
         crash_cache_install_at(CacheInstallCrashCutV1::VerifiedPayloadRetained);
-
         verify_tree(&staging_path, commitment, plan)?;
         #[cfg(all(test, unix))]
         crash_cache_install_at(CacheInstallCrashCutV1::SourceTreeVerified);
@@ -617,7 +582,6 @@ impl MusubiCache {
         let entry = self.verify(commitment, plan)?;
         Ok(InstallOutcome::Installed(entry))
     }
-
     /// Verify an extracted entry against every archive and bundle commitment.
     ///
     /// # Errors
@@ -634,7 +598,6 @@ impl MusubiCache {
         validate_plan_commitment(commitment, plan)?;
         self.verify_validated(commitment, plan)
     }
-
     fn verify_validated(
         &self,
         commitment: &MusubiArchiveCommitmentV1,
@@ -651,7 +614,6 @@ impl MusubiCache {
             source_path,
         })
     }
-
     /// Verify an entry and quarantine it only when every descendant is safe.
     ///
     /// The finalized commitment and file plan are validated before local cache
@@ -701,7 +663,6 @@ impl MusubiCache {
             .map_err(|source| io_error("sync archive cache directory", &archive_dir, source))?;
         Ok(RepairOutcome::Quarantined { path: quarantine })
     }
-
     /// Remove only the exact archive identities authorized by a finalized retention query.
     ///
     /// First-release safe `std` cannot atomically compare and delete a retained filesystem object.
@@ -728,11 +689,9 @@ impl MusubiCache {
         }
         Err(destructive_cache_removal_unsupported(&self.registry_root))
     }
-
     fn archive_directory(&self, archive_id: &ArchiveId) -> PathBuf {
         self.registry_root.join(hex::encode(archive_id.as_bytes()))
     }
-
     fn ensure_archive_directory(&self, archive_id: &ArchiveId) -> Result<PathBuf, CacheError> {
         self.validate_anchors()?;
         let path = self.archive_directory(archive_id);
@@ -741,7 +700,6 @@ impl MusubiCache {
             .map_err(|source| io_error("sync registry cache root", &self.registry_root, source))?;
         Ok(path)
     }
-
     fn validate_existing_archive_directory(
         &self,
         archive_id: &ArchiveId,
@@ -752,14 +710,12 @@ impl MusubiCache {
         validate_private_directory(&path, &metadata)?;
         Ok(path)
     }
-
     fn validate_anchors(&self) -> Result<(), CacheError> {
         validate_directory_identity(&self.root, &self.root_identity)?;
         validate_directory_identity(&self.registry_root, &self.registry_identity)?;
         Ok(())
     }
 }
-
 #[derive(Clone, Debug)]
 struct DirectoryIdentity {
     #[cfg(unix)]
@@ -767,7 +723,6 @@ struct DirectoryIdentity {
     #[cfg(unix)]
     inode: u64,
 }
-
 impl DirectoryIdentity {
     fn capture(metadata: &fs::Metadata) -> Self {
         #[cfg(unix)]
@@ -783,7 +738,6 @@ impl DirectoryIdentity {
             Self {}
         }
     }
-
     fn matches(&self, metadata: &fs::Metadata) -> bool {
         #[cfg(unix)]
         {
@@ -796,13 +750,11 @@ impl DirectoryIdentity {
         }
     }
 }
-
 #[derive(Debug)]
 struct DirectoryPin {
     path: PathBuf,
     identity: DirectoryIdentity,
 }
-
 impl DirectoryPin {
     fn capture(path: &Path) -> Result<Self, CacheError> {
         let metadata = fs::symlink_metadata(path)
@@ -815,7 +767,6 @@ impl DirectoryPin {
         pin.validate()?;
         Ok(pin)
     }
-
     fn capture_expected(path: &Path, expected: &fs::Metadata) -> Result<Self, CacheError> {
         let pin = Self::capture(path)?;
         if !pin.identity.matches(expected) {
@@ -823,16 +774,13 @@ impl DirectoryPin {
         }
         Ok(pin)
     }
-
     fn validate(&self) -> Result<(), CacheError> {
         self.validate_at(&self.path)
     }
-
     fn validate_at(&self, path: &Path) -> Result<(), CacheError> {
         validate_directory_identity(path, &self.identity)
     }
 }
-
 fn absolute_path(path: &Path) -> Result<PathBuf, CacheError> {
     if path.as_os_str().is_empty() {
         return Err(CacheError::UnsafeRoot(
@@ -847,7 +795,6 @@ fn absolute_path(path: &Path) -> Result<PathBuf, CacheError> {
             .map_err(|source| io_error("resolve user cache root", path, source))
     }
 }
-
 fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -859,7 +806,6 @@ fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
         true
     }
 }
-
 fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -871,13 +817,11 @@ fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
         false
     }
 }
-
 fn metadata_is_safe_regular_file(metadata: &fs::Metadata) -> bool {
     metadata.is_file()
         && !metadata_is_link_or_reparse(metadata)
         && metadata_has_one_hard_link(metadata)
 }
-
 fn validate_private_directory(path: &Path, metadata: &fs::Metadata) -> Result<(), CacheError> {
     if metadata_is_link_or_reparse(metadata) || !metadata.is_dir() {
         return Err(CacheError::UnsafeRoot(format!(
@@ -894,7 +838,6 @@ fn validate_private_directory(path: &Path, metadata: &fs::Metadata) -> Result<()
     }
     Ok(())
 }
-
 fn create_or_validate_private_directory(path: &Path) -> Result<(), CacheError> {
     let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
@@ -908,7 +851,6 @@ fn create_or_validate_private_directory(path: &Path) -> Result<(), CacheError> {
         .map_err(|source| io_error("inspect private cache directory", path, source))?;
     validate_private_directory(path, &metadata)
 }
-
 fn validate_directory_identity(
     path: &Path,
     identity: &DirectoryIdentity,
@@ -924,7 +866,6 @@ fn validate_directory_identity(
     }
     Ok(())
 }
-
 fn validate_plan_commitment(
     commitment: &MusubiArchiveCommitmentV1,
     plan: &CarBuildPlan,
@@ -966,7 +907,6 @@ fn validate_plan_commitment(
             "chunker handle does not identify the plan profile".to_owned(),
         ));
     }
-
     let mut source_count = 0usize;
     let mut release_count = 0usize;
     let mut descriptor_count = 0usize;
@@ -1000,7 +940,6 @@ fn validate_plan_commitment(
     }
     Ok(())
 }
-
 fn validate_musubi_plan_memory(plan: &CarBuildPlan) -> Result<(), CacheError> {
     if plan
         .chunks
@@ -1021,13 +960,11 @@ fn validate_musubi_plan_memory(plan: &CarBuildPlan) -> Result<(), CacheError> {
     }
     validate_musubi_ingest_memory(plan, MUSUBI_CACHE_CHUNK_STORE_HEAP_LIMIT_BYTES)
 }
-
 fn validate_musubi_ingest_memory(plan: &CarBuildPlan, heap_limit: usize) -> Result<(), CacheError> {
     plan.validate_for_ingest_with_limit(heap_limit)
         .map_err(|error| CacheError::InvalidPlan(error.to_string()))?;
     Ok(())
 }
-
 fn retained_plan_heap_bytes(plan: &CarBuildPlan) -> Option<usize> {
     let mut retained = plan
         .chunks
@@ -1050,7 +987,6 @@ fn retained_plan_heap_bytes(plan: &CarBuildPlan) -> Option<usize> {
     }
     Some(retained)
 }
-
 fn bounded_musubi_chunk_store(plan: &CarBuildPlan) -> Result<ChunkStore, CacheError> {
     ChunkStore::with_profile_and_heap_limit(
         plan.chunk_profile,
@@ -1058,7 +994,6 @@ fn bounded_musubi_chunk_store(plan: &CarBuildPlan) -> Result<ChunkStore, CacheEr
     )
     .map_err(|error| CacheError::InvalidPlan(error.to_string()))
 }
-
 fn manifest_for_commitment(
     commitment: &MusubiArchiveCommitmentV1,
     plan: &CarBuildPlan,
@@ -1081,7 +1016,6 @@ fn manifest_for_commitment(
         .build()
         .map_err(|error| CacheError::InvalidPlan(error.to_string()))
 }
-
 fn stream_and_verify_car<R: Read>(
     reader: R,
     commitment: &MusubiArchiveCommitmentV1,
@@ -1110,7 +1044,6 @@ fn stream_and_verify_car<R: Read>(
         ));
     }
     let data_end = index_offset;
-
     let (carv1_header_len, _) = stream.read_varint()?;
     if carv1_header_len > CAR_MAX_HEADER_BYTES {
         return Err(CacheError::InvalidArchive(
@@ -1119,7 +1052,6 @@ fn stream_and_verify_car<R: Read>(
     }
     ensure_within_data(&stream, carv1_header_len, data_end)?;
     stream.copy_exact(carv1_header_len, None)?;
-
     let mut raw_chunk_index = 0usize;
     while stream.position < data_end {
         let section_start = stream.position;
@@ -1182,7 +1114,6 @@ fn stream_and_verify_car<R: Read>(
     stream.copy_exact(index_bytes, None)?;
     stream.finish()
 }
-
 fn ensure_within_data<R: Read>(
     stream: &VerifiedCarStream<R>,
     additional: u64,
@@ -1199,20 +1130,17 @@ fn ensure_within_data<R: Read>(
     }
     Ok(())
 }
-
 fn decode_u64(bytes: &[u8]) -> u64 {
     let mut value = [0u8; 8];
     value.copy_from_slice(bytes);
     u64::from_le_bytes(value)
 }
-
 struct VerifiedCarStream<R> {
     reader: R,
     verifier: StreamingCarVerifier,
     position: u64,
     expected_size: u64,
 }
-
 impl<R: Read> VerifiedCarStream<R> {
     fn new(reader: R, verifier: StreamingCarVerifier, expected_size: u64) -> Self {
         Self {
@@ -1222,7 +1150,6 @@ impl<R: Read> VerifiedCarStream<R> {
             expected_size,
         }
     }
-
     fn read_exact(&mut self, bytes: &mut [u8]) -> Result<(), CacheError> {
         let count = u64::try_from(bytes.len())
             .map_err(|_| CacheError::InvalidArchive("host byte count exceeds u64".to_owned()))?;
@@ -1253,7 +1180,6 @@ impl<R: Read> VerifiedCarStream<R> {
             .ok_or_else(|| CacheError::InvalidArchive("CAR position overflow".to_owned()))?;
         Ok(())
     }
-
     fn read_varint(&mut self) -> Result<(u64, usize), CacheError> {
         let mut value = 0u64;
         for index in 0..10usize {
@@ -1276,7 +1202,6 @@ impl<R: Read> VerifiedCarStream<R> {
         }
         Err(CacheError::InvalidArchive("varint overflow".to_owned()))
     }
-
     fn copy_exact(
         &mut self,
         mut remaining: u64,
@@ -1299,7 +1224,6 @@ impl<R: Read> VerifiedCarStream<R> {
         }
         Ok(())
     }
-
     fn finish(mut self) -> Result<(), CacheError> {
         if self.position != self.expected_size {
             return Err(CacheError::InvalidArchive(format!(
@@ -1323,7 +1247,6 @@ impl<R: Read> VerifiedCarStream<R> {
             .map_err(|error| CacheError::InvalidArchive(error.to_string()))
     }
 }
-
 #[derive(Debug)]
 struct SourceTreeSink {
     root: PathBuf,
@@ -1333,7 +1256,6 @@ struct SourceTreeSink {
     current: Option<OpenTarget>,
     directory_pins: Vec<DirectoryPin>,
 }
-
 #[derive(Debug)]
 struct OpenTarget {
     file_index: usize,
@@ -1341,7 +1263,6 @@ struct OpenTarget {
     file: File,
     written: u64,
 }
-
 impl SourceTreeSink {
     fn new(root: PathBuf, root_pin: DirectoryPin) -> Self {
         Self {
@@ -1353,7 +1274,6 @@ impl SourceTreeSink {
             directory_pins: vec![root_pin],
         }
     }
-
     fn create_target(&self, file_index: usize) -> Result<OpenTarget, ChunkStoreError> {
         validate_directory_pins_io(&self.directory_pins)?;
         let plan = self.files.get(file_index).ok_or_else(|| {
@@ -1368,7 +1288,6 @@ impl SourceTreeSink {
             written: 0,
         })
     }
-
     fn finish_target(&mut self) -> Result<(), ChunkStoreError> {
         let Some(mut target) = self.current.take() else {
             return Ok(());
@@ -1397,10 +1316,8 @@ impl SourceTreeSink {
         Ok(())
     }
 }
-
 impl ChunkSink for SourceTreeSink {
     type Output = Vec<DirectoryPin>;
-
     fn prepare(&mut self, plan: &CarBuildPlan) -> Result<(), ChunkStoreError> {
         plan.validate().map_err(ChunkStoreError::InvalidPlan)?;
         let root_metadata = fs::symlink_metadata(&self.root).map_err(ChunkStoreError::Io)?;
@@ -1421,7 +1338,6 @@ impl ChunkSink for SourceTreeSink {
                 "source-tree staging root is not empty",
             )));
         }
-
         self.files.clone_from(&plan.files);
         self.chunk_files = vec![usize::MAX; plan.chunks.len()];
         let mut directories = BTreeSet::<Vec<String>>::new();
@@ -1457,7 +1373,6 @@ impl ChunkSink for SourceTreeSink {
                 "source-tree plan does not cover every chunk",
             )));
         }
-
         for components in directories {
             validate_directory_pins_io(&self.directory_pins)?;
             let path = join_components(&self.root, &components);
@@ -1493,7 +1408,6 @@ impl ChunkSink for SourceTreeSink {
         }
         Ok(())
     }
-
     fn write_chunk(
         &mut self,
         index: usize,
@@ -1540,7 +1454,6 @@ impl ChunkSink for SourceTreeSink {
         }
         Ok(())
     }
-
     fn finish(mut self) -> Result<Self::Output, ChunkStoreError> {
         self.finish_target()?;
         if self.next_chunk != self.chunk_files.len() {
@@ -1554,7 +1467,6 @@ impl ChunkSink for SourceTreeSink {
         Ok(self.directory_pins)
     }
 }
-
 fn validate_directory_pins_io(pins: &[DirectoryPin]) -> Result<(), ChunkStoreError> {
     for pin in pins {
         pin.validate()
@@ -1562,7 +1474,6 @@ fn validate_directory_pins_io(pins: &[DirectoryPin]) -> Result<(), ChunkStoreErr
     }
     Ok(())
 }
-
 fn verify_tree(
     source_path: &Path,
     commitment: &MusubiArchiveCommitmentV1,
@@ -1570,7 +1481,6 @@ fn verify_tree(
 ) -> Result<(), CacheError> {
     let inventory = inventory_tree(source_path)?;
     compare_inventory(plan, &inventory.files)?;
-
     let mut payload = DirectoryPayload::new(source_path, &plan.files)
         .map_err(|source| io_error("open cached source payload", source_path, source))?;
     let mut store = bounded_musubi_chunk_store(plan)?;
@@ -1579,7 +1489,6 @@ fn verify_tree(
         .map_err(|error| CacheError::CorruptEntry(error.to_string()))?;
     verify_por(commitment, &store)?;
     drop(payload);
-
     let mut canonical_payload = DirectoryPayload::new(source_path, &plan.files)
         .map_err(|source| io_error("reopen cached source payload", source_path, source))?;
     let mut reader = SequentialPayloadReader {
@@ -1606,13 +1515,11 @@ fn verify_tree(
     }
     verify_bundle_commitments(source_path, commitment, &inventory.files)
 }
-
 struct SequentialPayloadReader<'a> {
     source: &'a mut DirectoryPayload,
     offset: u64,
     length: u64,
 }
-
 impl Read for SequentialPayloadReader<'_> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         if self.offset == self.length || buffer.is_empty() {
@@ -1627,7 +1534,6 @@ impl Read for SequentialPayloadReader<'_> {
         Ok(count)
     }
 }
-
 fn verify_por(
     commitment: &MusubiArchiveCommitmentV1,
     store: &ChunkStore,
@@ -1639,21 +1545,18 @@ fn verify_por(
     }
     Ok(())
 }
-
 #[derive(Clone, Debug)]
 struct FileInventory {
     path: String,
     size: u64,
     digest: [u8; 32],
 }
-
 struct TreeInventory {
     files: Vec<FileInventory>,
     // Retained until all commitment consumers have finished so qualified Unix callers revalidate
     // the same directory identities between inventory, hashing, and compiler/archive verification.
     _directory_pins: Vec<DirectoryPin>,
 }
-
 fn validate_portable_cache_component(component: &str) -> Result<(), CacheError> {
     if component.is_empty()
         || component == "."
@@ -1674,7 +1577,6 @@ fn validate_portable_cache_component(component: &str) -> Result<(), CacheError> 
     }
     Ok(())
 }
-
 fn normalize_nfc_cache_component(component: &str) -> Result<String, ()> {
     let mut output = String::with_capacity(component.len());
     let mut segment = String::new();
@@ -1698,11 +1600,9 @@ fn normalize_nfc_cache_component(component: &str) -> Result<String, ()> {
     flush(&mut segment, &mut output)?;
     Ok(output)
 }
-
 fn portable_cache_component_key(component: &str) -> String {
     component.chars().flat_map(char::to_lowercase).collect()
 }
-
 fn is_reserved_windows_component(component: &str) -> bool {
     let basename = component.split('.').next().unwrap_or(component);
     if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"]
@@ -1718,7 +1618,6 @@ fn is_reserved_windows_component(component: &str) -> bool {
     }
     false
 }
-
 fn is_bidi_control(character: char) -> bool {
     matches!(
         character,
@@ -1729,7 +1628,6 @@ fn is_bidi_control(character: char) -> bool {
             | '\u{2066}'..='\u{2069}'
     )
 }
-
 fn inventory_tree(root: &Path) -> Result<TreeInventory, CacheError> {
     let metadata = fs::symlink_metadata(root)
         .map_err(|source| io_error("inspect cached source root", root, source))?;
@@ -1758,7 +1656,6 @@ fn inventory_tree(root: &Path) -> Result<TreeInventory, CacheError> {
         _directory_pins: directory_pins,
     })
 }
-
 fn inventory_directory(
     root: &Path,
     directory: &Path,
@@ -1855,7 +1752,6 @@ fn inventory_directory(
     }
     Ok(())
 }
-
 fn decode_cached_artifact_descriptor_v1(
     bytes: &[u8],
 ) -> Result<MusubiArtifactDescriptorV1, CacheError> {
@@ -1865,7 +1761,6 @@ fn decode_cached_artifact_descriptor_v1(
         )
     })
 }
-
 fn decode_cached_semantic_release_v1(
     bytes: &[u8],
 ) -> Result<MusubiSemanticReleaseManifestV1, CacheError> {
@@ -1875,7 +1770,6 @@ fn decode_cached_semantic_release_v1(
         )
     })
 }
-
 fn decode_cached_verification_lock_v1(
     bytes: &[u8],
 ) -> Result<MusubiVerificationLockV1, CacheError> {
@@ -1885,7 +1779,6 @@ fn decode_cached_verification_lock_v1(
         )
     })
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "compiler admission deliberately verifies every bound bundle transcript and cross-reference in one fail-closed sequence"
@@ -1916,7 +1809,6 @@ fn verify_compiler_bundle(
             "bundle compiler metadata exceeds its verification bound".to_owned(),
         ));
     }
-
     let source_files = files
         .iter()
         .filter(|file| !file.path.starts_with(".musubi/"))
@@ -1939,7 +1831,6 @@ fn verify_compiler_bundle(
             "consumer node source digest does not match the cached tree".to_owned(),
         ));
     }
-
     let descriptor_bytes = read_regular_file_bounded(
         &root.join(DESCRIPTOR_PATH),
         MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1,
@@ -1953,19 +1844,16 @@ fn verify_compiler_bundle(
             "artifact descriptor does not match the cached source tree".to_owned(),
         ));
     }
-
     let release_bytes = read_regular_file_bounded(
         &root.join(RELEASE_PATH),
         MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1,
     )?;
     let semantic_release = decode_cached_semantic_release_v1(&release_bytes)?;
-
     let lock_bytes = read_regular_file_bounded(
         &root.join(VERIFICATION_LOCK_PATH),
         MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1,
     )?;
     let publication_lock = decode_cached_verification_lock_v1(&lock_bytes)?;
-
     let semantic_requirements = node
         .dependencies
         .iter()
@@ -2012,7 +1900,6 @@ fn verify_compiler_bundle(
     }
     Ok((semantic_release, publication_lock))
 }
-
 fn load_compiler_sources(
     root: &Path,
     files: &[FileInventory],
@@ -2033,7 +1920,6 @@ fn load_compiler_sources(
     }
     let manifest = String::from_utf8(manifest_bytes)
         .map_err(|_| CacheError::CorruptEntry("cached Musubi.toml is not UTF-8".to_owned()))?;
-
     let mut sources = Vec::new();
     let mut source_bytes = 0u64;
     for entry in files.iter().filter(|entry| {
@@ -2067,7 +1953,6 @@ fn load_compiler_sources(
     }
     Ok((manifest, sources))
 }
-
 fn compare_inventory(plan: &CarBuildPlan, files: &[FileInventory]) -> Result<(), CacheError> {
     if plan.files.len() != files.len() {
         return Err(CacheError::CorruptEntry(format!(
@@ -2087,7 +1972,6 @@ fn compare_inventory(plan: &CarBuildPlan, files: &[FileInventory]) -> Result<(),
     }
     Ok(())
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "bundle verification deliberately keeps all canonical transcript fields and cross-commitments in one auditable fail-closed sequence"
@@ -2119,7 +2003,6 @@ fn verify_bundle_commitments(
     let descriptor_bytes =
         read_regular_file_bounded(&descriptor_path, MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1)?;
     let descriptor = decode_cached_artifact_descriptor_v1(&descriptor_bytes)?;
-
     let source_files = files
         .iter()
         .filter(|file| !file.path.starts_with(".musubi/"))
@@ -2139,7 +2022,6 @@ fn verify_bundle_commitments(
             "artifact descriptor source inventory mismatch".to_owned(),
         ));
     }
-
     let source_material_len = source_material_length(&source_files)?;
     let mut source_hasher = blake3::Hasher::new();
     source_hasher.update(SOURCE_TREE_DOMAIN);
@@ -2153,7 +2035,6 @@ fn verify_bundle_commitments(
             "normalized source-tree digest mismatch".to_owned(),
         ));
     }
-
     let descriptor_material = framed_descriptor_material(&descriptor_bytes)?;
     let descriptor_digest = domain_digest_bytes(ARTIFACT_DESCRIPTOR_DOMAIN, &descriptor_material);
     if commitment.descriptor_digest.as_bytes() != &descriptor_digest {
@@ -2161,7 +2042,6 @@ fn verify_bundle_commitments(
             "artifact descriptor digest mismatch".to_owned(),
         ));
     }
-
     if release.size > MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1
         || verification_lock.size > MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1
     {
@@ -2190,7 +2070,6 @@ fn verify_bundle_commitments(
             "normalized verification-lock digest mismatch".to_owned(),
         ));
     }
-
     let bundle_material_len = frame_length(BUNDLE_DOMAIN.len() as u64)?
         .checked_add(frame_length(release.size)?)
         .and_then(|value| value.checked_add(frame_length(descriptor_material.len() as u64).ok()?))
@@ -2216,7 +2095,6 @@ fn verify_bundle_commitments(
     }
     Ok(())
 }
-
 fn source_material_length(files: &[&FileInventory]) -> Result<u64, CacheError> {
     files.iter().try_fold(
         frame_length(SOURCE_TREE_DOMAIN.len() as u64)? + 4,
@@ -2230,7 +2108,6 @@ fn source_material_length(files: &[&FileInventory]) -> Result<u64, CacheError> {
         },
     )
 }
-
 fn update_source_material(hasher: &mut blake3::Hasher, files: &[&FileInventory]) {
     update_frame_bytes(hasher, SOURCE_TREE_DOMAIN);
     hasher.update(
@@ -2244,7 +2121,6 @@ fn update_source_material(hasher: &mut blake3::Hasher, files: &[&FileInventory])
         hasher.update(&file.digest);
     }
 }
-
 fn framed_descriptor_material(bytes: &[u8]) -> Result<Vec<u8>, CacheError> {
     let capacity = usize::try_from(
         frame_length(ARTIFACT_DESCRIPTOR_DOMAIN.len() as u64)?
@@ -2261,7 +2137,6 @@ fn framed_descriptor_material(bytes: &[u8]) -> Result<Vec<u8>, CacheError> {
     output.extend_from_slice(bytes);
     Ok(output)
 }
-
 fn domain_digest_bytes(domain: &[u8], material: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
@@ -2269,24 +2144,20 @@ fn domain_digest_bytes(domain: &[u8], material: &[u8]) -> [u8; 32] {
     hasher.update(material);
     *hasher.finalize().as_bytes()
 }
-
 fn update_frame_bytes(hasher: &mut blake3::Hasher, bytes: &[u8]) {
     hasher.update(&(bytes.len() as u64).to_be_bytes());
     hasher.update(bytes);
 }
-
 fn frame_length(length: u64) -> Result<u64, CacheError> {
     length
         .checked_add(8)
         .ok_or_else(|| CacheError::CorruptEntry("commitment frame length overflow".to_owned()))
 }
-
 fn hash_regular_file(path: &Path) -> Result<(u64, [u8; 32]), CacheError> {
     let mut hasher = blake3::Hasher::new();
     let size = hash_file_into(path, &mut hasher)?;
     Ok((size, *hasher.finalize().as_bytes()))
 }
-
 fn hash_file_into(path: &Path, hasher: &mut blake3::Hasher) -> Result<u64, CacheError> {
     let (mut file, before) = open_regular_file_no_follow(path)?;
     let mut total = 0u64;
@@ -2316,7 +2187,6 @@ fn hash_file_into(path: &Path, hasher: &mut blake3::Hasher) -> Result<u64, Cache
     }
     Ok(total)
 }
-
 fn read_regular_file_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, CacheError> {
     let (mut file, before) = open_regular_file_no_follow(path)?;
     if before.len() > maximum {
@@ -2343,7 +2213,6 @@ fn read_regular_file_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, Cache
     }
     Ok(bytes)
 }
-
 fn open_regular_file_no_follow(path: &Path) -> Result<(File, fs::Metadata), CacheError> {
     let linked = fs::symlink_metadata(path)
         .map_err(|source| io_error("inspect cached source file", path, source))?;
@@ -2378,7 +2247,6 @@ fn open_regular_file_no_follow(path: &Path) -> Result<(File, fs::Metadata), Cach
     }
     Ok((file, opened))
 }
-
 fn open_new_regular_file(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).write(true).create_new(true);
@@ -2391,7 +2259,6 @@ fn open_new_regular_file(path: &Path) -> io::Result<File> {
     validate_open_regular_file(path, &file)?;
     Ok(file)
 }
-
 fn validate_open_regular_file(path: &Path, file: &File) -> io::Result<()> {
     let linked = fs::symlink_metadata(path)?;
     let opened = file.metadata()?;
@@ -2406,7 +2273,6 @@ fn validate_open_regular_file(path: &Path, file: &File) -> io::Result<()> {
     }
     Ok(())
 }
-
 fn create_staging_directory(
     parent: &Path,
 ) -> Result<(PathBuf, fs::Metadata, DirectoryPin), CacheError> {
@@ -2437,7 +2303,6 @@ fn create_staging_directory(
         source: io::Error::new(io::ErrorKind::AlreadyExists, "temporary name collision"),
     })
 }
-
 fn create_temporary_file(
     parent: &Path,
     prefix: &str,
@@ -2463,7 +2328,6 @@ fn create_temporary_file(
         source: io::Error::new(io::ErrorKind::AlreadyExists, "temporary name collision"),
     })
 }
-
 fn allocate_absent_path(parent: &Path, prefix: &str) -> Result<PathBuf, CacheError> {
     for _ in 0..TEMP_RETRIES {
         let candidate = allocate_candidate(parent, prefix, "entry");
@@ -2485,7 +2349,6 @@ fn allocate_absent_path(parent: &Path, prefix: &str) -> Result<PathBuf, CacheErr
         source: io::Error::new(io::ErrorKind::AlreadyExists, "temporary name collision"),
     })
 }
-
 fn allocate_candidate(parent: &Path, prefix: &str, suffix: &str) -> PathBuf {
     let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     parent.join(format!(
@@ -2493,7 +2356,6 @@ fn allocate_candidate(parent: &Path, prefix: &str, suffix: &str) -> PathBuf {
         std::process::id()
     ))
 }
-
 // TODO: Replace retained install residue with automatic cleanup only after the workspace exposes
 // a safe handle-relative atomic compare-and-delete primitive. Neither pathname identity checks nor
 // a retained handle followed by pathname unlink closes the same-UID substitution race.
@@ -2501,7 +2363,6 @@ struct RetainedInstallResidue {
     _staging_path: PathBuf,
     _payload_path: PathBuf,
 }
-
 impl RetainedInstallResidue {
     fn new(staging_path: PathBuf, payload_path: PathBuf) -> Self {
         Self {
@@ -2510,7 +2371,6 @@ impl RetainedInstallResidue {
         }
     }
 }
-
 fn destructive_cache_removal_unsupported(path: &Path) -> CacheError {
     CacheError::Io {
         operation: "remove cache tree",
@@ -2521,13 +2381,11 @@ fn destructive_cache_removal_unsupported(path: &Path) -> CacheError {
         ),
     }
 }
-
 struct ValidatedMutableTree {
     root: PathBuf,
     directories: Vec<DirectoryPin>,
     files: BTreeMap<PathBuf, DirectoryIdentity>,
 }
-
 impl ValidatedMutableTree {
     fn root_pin(&self) -> Result<&DirectoryPin, CacheError> {
         self.directories
@@ -2535,7 +2393,6 @@ impl ValidatedMutableTree {
             .find(|pin| pin.path == self.root)
             .ok_or_else(|| CacheError::UnsafeDescendant(self.root.clone()))
     }
-
     fn validate(&self) -> Result<(), CacheError> {
         for pin in &self.directories {
             pin.validate()?;
@@ -2549,7 +2406,6 @@ impl ValidatedMutableTree {
         }
         self.validate_exact_inventory()
     }
-
     fn validate_exact_inventory(&self) -> Result<(), CacheError> {
         let directory_paths = self
             .directories
@@ -2573,7 +2429,6 @@ impl ValidatedMutableTree {
         Ok(())
     }
 }
-
 fn validate_mutable_tree(root: &Path) -> Result<ValidatedMutableTree, CacheError> {
     let metadata = fs::symlink_metadata(root)
         .map_err(|source| io_error("inspect cache mutation root", root, source))?;
@@ -2589,7 +2444,6 @@ fn validate_mutable_tree(root: &Path) -> Result<ValidatedMutableTree, CacheError
     tree.validate()?;
     Ok(tree)
 }
-
 fn validate_mutable_directory(
     directory: &Path,
     tree: &mut ValidatedMutableTree,
@@ -2620,7 +2474,6 @@ fn validate_mutable_directory(
     }
     Ok(())
 }
-
 fn make_tree_immutable_and_sync(root: &Path) -> Result<(), CacheError> {
     let mut directories = Vec::new();
     collect_directories(root, &mut directories)?;
@@ -2636,7 +2489,6 @@ fn make_tree_immutable_and_sync(root: &Path) -> Result<(), CacheError> {
     }
     Ok(())
 }
-
 fn sync_tree_directories(root: &Path) -> io::Result<()> {
     let mut directories = Vec::new();
     collect_directories_io(root, &mut directories)?;
@@ -2646,12 +2498,10 @@ fn sync_tree_directories(root: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-
 fn collect_directories(root: &Path, output: &mut Vec<PathBuf>) -> Result<(), CacheError> {
     collect_directories_io(root, output)
         .map_err(|source| io_error("inventory source directories", root, source))
 }
-
 fn collect_directories_io(root: &Path, output: &mut Vec<PathBuf>) -> io::Result<()> {
     let metadata = fs::symlink_metadata(root)?;
     if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
@@ -2681,7 +2531,6 @@ fn collect_directories_io(root: &Path, output: &mut Vec<PathBuf>) -> io::Result<
     }
     Ok(())
 }
-
 fn join_components(root: &Path, components: &[String]) -> PathBuf {
     let mut path = root.to_path_buf();
     for component in components {
@@ -2689,7 +2538,6 @@ fn join_components(root: &Path, components: &[String]) -> PathBuf {
     }
     path
 }
-
 fn decode_archive_directory_name(name: &str) -> Option<ArchiveId> {
     if name.len() != 64
         || name
@@ -2702,7 +2550,6 @@ fn decode_archive_directory_name(name: &str) -> Option<ArchiveId> {
     hex::decode_to_slice(name, &mut bytes).ok()?;
     Some(ArchiveId::new(bytes))
 }
-
 fn sync_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -2717,7 +2564,6 @@ fn sync_directory(path: &Path) -> io::Result<()> {
         ))
     }
 }
-
 fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -2729,7 +2575,6 @@ fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         false
     }
 }
-
 fn same_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -2748,19 +2593,16 @@ fn same_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         false
     }
 }
-
 fn set_no_follow(options: &mut OpenOptions) {
     #[cfg(unix)]
     options.custom_flags(platform_no_follow_flag());
     #[cfg(not(unix))]
     let _ = options;
 }
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const fn platform_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -2776,7 +2618,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -2793,7 +2634,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0
 }
-
 fn rename_no_replace(
     source: &Path,
     destination: &Path,
@@ -2887,7 +2727,6 @@ fn rename_no_replace(
     let unlock = File::unlock(&lock);
     result.and(unlock)
 }
-
 #[cfg(unix)]
 fn platform_rename_no_replace(
     source: &Path,
@@ -2900,7 +2739,6 @@ fn platform_rename_no_replace(
     // standard library exposes one for directories on every supported Unix target.
     fs::rename(source, destination)
 }
-
 #[cfg(not(unix))]
 fn platform_rename_no_replace(
     _source: &Path,
@@ -2914,7 +2752,6 @@ fn platform_rename_no_replace(
         "atomic cache directory publication is unsupported on this platform",
     ))
 }
-
 fn io_error(operation: &'static str, path: &Path, source: io::Error) -> CacheError {
     CacheError::Io {
         operation,
@@ -2922,11 +2759,9 @@ fn io_error(operation: &'static str, path: &Path, source: io::Error) -> CacheErr
         source,
     }
 }
-
 #[cfg(all(test, unix))]
 mod tests {
     use std::{io::Cursor, path::Path};
-
     use iroha_data_model::{
         musubi::{
             MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiContentDigestV1,
@@ -2939,16 +2774,13 @@ mod tests {
     };
     use norito::codec::Encode as _;
     use tempfile::TempDir;
-
     use super::*;
     use crate::package::{PackageCar, PackageLayout, plan_package};
-
     struct Fixture {
         car: PackageCar,
         commitment: MusubiArchiveCommitmentV1,
         semantic: MusubiSemanticReleaseManifestV1,
     }
-
     #[test]
     fn platform_cache_root_derivation_requires_an_absolute_base() {
         assert_eq!(
@@ -2964,7 +2796,6 @@ mod tests {
             Err(CacheError::UnsafeRoot(_))
         ));
     }
-
     #[test]
     fn platform_cache_root_never_falls_back_to_the_project_directory() {
         match platform_cache_root_v1() {
@@ -2973,11 +2804,9 @@ mod tests {
             Err(error) => panic!("unexpected platform cache-root error: {error}"),
         }
     }
-
     fn fixture(temp: &TempDir, name: &str) -> Fixture {
         fixture_at(temp.path(), name)
     }
-
     fn fixture_at(root: &Path, name: &str) -> Fixture {
         let package_root = root.join(name);
         fs::create_dir_all(package_root.join("src")).expect("create fixture source tree");
@@ -3051,11 +2880,9 @@ mod tests {
             semantic,
         }
     }
-
     fn cache(temp: &TempDir) -> MusubiCache {
         MusubiCache::open(temp.path().join("user-cache")).expect("open fixture cache")
     }
-
     #[test]
     fn cache_metadata_decoders_use_fixed_payload_free_corruption_reasons() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -3068,7 +2895,6 @@ mod tests {
             root_dependencies: Vec::new(),
             nodes: Vec::new(),
         };
-
         assert_eq!(
             decode_cached_artifact_descriptor_v1(&descriptor.encode())
                 .expect("canonical descriptor"),
@@ -3084,7 +2910,6 @@ mod tests {
                 .expect("canonical verification lock"),
             lock
         );
-
         let mut trailing_semantic = fixture.semantic.encode();
         trailing_semantic.push(0);
         let error = decode_cached_semantic_release_v1(&trailing_semantic)
@@ -3094,7 +2919,6 @@ mod tests {
             CacheError::CorruptEntry(ref reason)
                 if reason == "semantic release bundle metadata is invalid or out of bounds"
         ));
-
         let error = decode_cached_verification_lock_v1(&[u8::MAX; 32])
             .expect_err("declared-length bomb must fail");
         assert!(matches!(
@@ -3102,7 +2926,6 @@ mod tests {
             CacheError::CorruptEntry(ref reason)
                 if reason == "verification lock bundle metadata is invalid or out of bounds"
         ));
-
         let oversized_descriptor =
             vec![0; MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1 as usize + 1].into_boxed_slice();
         let error = decode_cached_artifact_descriptor_v1(&oversized_descriptor)
@@ -3113,7 +2936,6 @@ mod tests {
                 if reason == "artifact descriptor bundle metadata is invalid or out of bounds"
         ));
     }
-
     fn launch_max_sf1_geometry_plan() -> CarBuildPlan {
         let profile = sorafs_car::chunker_registry::default_descriptor().profile;
         let content_length = iroha_data_model::musubi::MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1;
@@ -3127,7 +2949,6 @@ mod tests {
         let mut chunks = Vec::new();
         let mut files = Vec::new();
         let mut offset = 0_u64;
-
         for file_index in 0..file_count {
             let first_chunk = chunks.len();
             let mut file_size = 1_u64;
@@ -3166,7 +2987,6 @@ mod tests {
             files,
         }
     }
-
     fn push_geometry_chunk(
         chunks: &mut Vec<sorafs_car::CarChunk>,
         offset: &mut u64,
@@ -3180,13 +3000,11 @@ mod tests {
         });
         *offset += u64::try_from(length).expect("registered chunk length fits u64");
     }
-
     #[test]
     fn launch_max_sf1_geometry_fits_musubi_cache_accounting() {
         let plan = launch_max_sf1_geometry_plan();
         let validation = plan.validate().expect("valid launch-max SF1 geometry");
         let retained = retained_plan_heap_bytes(&plan).expect("checked retained plan geometry");
-
         assert_eq!(
             plan.content_length,
             iroha_data_model::musubi::MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1
@@ -3203,7 +3021,6 @@ mod tests {
         );
         validate_musubi_plan_memory(&plan).expect("launch-max geometry fits cache accounting");
     }
-
     #[test]
     fn musubi_cache_uses_its_fetch_specific_ingest_heap_ceiling() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -3213,7 +3030,6 @@ mod tests {
             .validate()
             .expect("valid fixture plan")
             .estimated_ingest_heap_bytes();
-
         validate_musubi_plan_memory(plan).expect("fixture fits Musubi cache ceiling");
         assert!(estimate <= MUSUBI_CACHE_CHUNK_STORE_HEAP_LIMIT_BYTES);
         assert!(matches!(
@@ -3227,7 +3043,6 @@ mod tests {
             MUSUBI_CACHE_CHUNK_STORE_HEAP_LIMIT_BYTES
         );
     }
-
     #[test]
     fn overcapacity_plan_is_rejected_before_archive_bytes_are_read() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -3243,7 +3058,6 @@ mod tests {
             retained_plan_heap_bytes(&plan).expect("checked retained plan geometry")
                 > MUSUBI_MAX_RETAINED_PLAN_HEAP_BYTES
         );
-
         let error = cache(&temp)
             .install(&fixture.commitment, &plan, Cursor::new(Vec::<u8>::new()))
             .expect_err("overcapacity plan must fail before the empty reader is consumed");
@@ -3252,7 +3066,6 @@ mod tests {
             CacheError::InvalidPlan(reason) if reason.contains("retained CAR plan requires")
         ));
     }
-
     #[test]
     fn taikai_hint_plan_is_rejected_before_archive_bytes_are_read() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -3266,7 +3079,6 @@ mod tests {
             payload_len: None,
             payload_digest: None,
         });
-
         let error = cache(&temp)
             .install(&fixture.commitment, &plan, Cursor::new(Vec::<u8>::new()))
             .expect_err("Musubi plan hints must fail before the empty reader is consumed");
@@ -3275,7 +3087,6 @@ mod tests {
             CacheError::InvalidPlan(reason) if reason.contains("Taikai segment hints")
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn installs_under_archive_id_and_is_idempotent() {
@@ -3288,7 +3099,6 @@ mod tests {
             .join(REGISTRY_DIRECTORY)
             .join(hex::encode(archive_id.as_bytes()))
             .join(SOURCE_DIRECTORY);
-
         let outcome = cache
             .install(
                 &fixture.commitment,
@@ -3321,7 +3131,6 @@ mod tests {
             })
         );
     }
-
     #[cfg(unix)]
     #[test]
     #[ignore = "subprocess-only abrupt cache-install worker"]
@@ -3339,7 +3148,6 @@ mod tests {
         );
         panic!("configured abrupt cache-install cut was not reached: {outcome:?}");
     }
-
     #[cfg(unix)]
     #[test]
     fn abrupt_install_cuts_never_publish_a_partial_tree_and_retry_converges() {
@@ -3362,7 +3170,6 @@ mod tests {
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr),
             );
-
             let cache = cache(&temp);
             let source = cache.source_path(&fixture.commitment.archive_id());
             match fs::symlink_metadata(&source) {
@@ -3376,7 +3183,6 @@ mod tests {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => panic!("cut {cut:?} left an unreadable source boundary: {error}"),
             }
-
             let retry = cache
                 .install(
                     &fixture.commitment,
@@ -3395,7 +3201,6 @@ mod tests {
                 });
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn compiler_load_reauthenticates_consumer_node_and_rejects_tampering() {
@@ -3429,7 +3234,6 @@ mod tests {
             abi: fixture.semantic.abi,
             dependencies: Vec::new(),
         };
-
         let loaded = cache
             .load_compiler_package(&node)
             .expect("load authenticated compiler package");
@@ -3439,7 +3243,6 @@ mod tests {
         assert!(loaded.manifest.starts_with("manifest-version = 1"));
         assert_eq!(loaded.kotodama_sources.len(), 1);
         assert_eq!(loaded.kotodama_sources[0].path, "src/lib.ko");
-
         let source = loaded.source_path.join("src/lib.ko");
         make_writable(&source);
         fs::write(&source, b"fn substituted() {}\n").expect("tamper compiler source");
@@ -3448,7 +3251,6 @@ mod tests {
             .expect_err("tampered source digest must fail closed");
         assert!(matches!(error, CacheError::CorruptEntry(_)));
     }
-
     #[test]
     fn rejects_corrupt_car_without_publishing_source() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -3457,14 +3259,12 @@ mod tests {
         let mut bytes = fixture.car.bytes().to_vec();
         let last = bytes.last_mut().expect("nonempty CAR");
         *last ^= 0x80;
-
         let error = cache
             .install(&fixture.commitment, fixture.car.plan(), Cursor::new(bytes))
             .expect_err("corrupt archive must fail");
         assert!(matches!(error, CacheError::InvalidArchive(_)));
         assert!(!cache.source_path(&fixture.commitment.archive_id()).exists());
     }
-
     #[test]
     fn rejects_plan_traversal_before_reading_archive() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -3472,14 +3272,12 @@ mod tests {
         let cache = cache(&temp);
         let mut plan = fixture.car.plan().clone();
         plan.files[0].path = vec!["..".to_owned(), "escape".to_owned()];
-
         let error = cache
             .install(&fixture.commitment, &plan, Cursor::new(Vec::<u8>::new()))
             .expect_err("traversing plan must fail before extraction");
         assert!(matches!(error, CacheError::InvalidPlan(_)));
         assert!(!cache.root().join("escape").exists());
     }
-
     #[cfg(unix)]
     #[test]
     fn repair_quarantines_only_structurally_safe_corruption() {
@@ -3497,7 +3295,6 @@ mod tests {
         let target = source.join("src/lib.ko");
         make_writable(&target);
         fs::write(&target, b"corrupt").expect("corrupt cached source");
-
         let RepairOutcome::Quarantined { path } = cache
             .repair(&fixture.commitment, fixture.car.plan())
             .expect("quarantine safe corruption")
@@ -3507,7 +3304,6 @@ mod tests {
         assert!(!source.exists());
         assert!(path.exists());
     }
-
     #[cfg(unix)]
     #[test]
     fn repair_rejects_an_invalid_plan_without_quarantining_a_healthy_entry() {
@@ -3524,23 +3320,19 @@ mod tests {
         let source = cache.source_path(&fixture.commitment.archive_id());
         let mut invalid_plan = fixture.car.plan().clone();
         invalid_plan.files[0].path = vec!["..".to_owned(), "substitute".to_owned()];
-
         let error = cache
             .repair(&fixture.commitment, &invalid_plan)
             .expect_err("invalid plan must fail before cache mutation");
-
         assert!(matches!(error, CacheError::InvalidPlan(_)));
         assert!(source.exists(), "healthy cache entry must remain published");
         cache
             .verify(&fixture.commitment, fixture.car.plan())
             .expect("healthy cache entry remains verifiable");
     }
-
     #[cfg(unix)]
     #[test]
     fn repair_refuses_symlink_descendant() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("tempdir");
         let fixture = fixture(&temp, "echo");
         let cache = cache(&temp);
@@ -3557,14 +3349,12 @@ mod tests {
         let target = source_dir.join("lib.ko");
         fs::remove_file(&target).expect("remove cached target");
         symlink(temp.path().join("outside"), &target).expect("create hostile symlink");
-
         let error = cache
             .repair(&fixture.commitment, fixture.car.plan())
             .expect_err("unsafe descendant must remain untouched");
         assert!(matches!(error, CacheError::UnsafeDescendant(path) if path == target));
         assert!(source.exists());
     }
-
     #[test]
     fn prune_exact_fails_before_isolating_a_real_candidate() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -3574,11 +3364,9 @@ mod tests {
         fs::create_dir(&archive).expect("create archive candidate");
         let sentinel = archive.join("sentinel");
         fs::write(&sentinel, b"retained candidate").expect("write candidate sentinel");
-
         let error = cache
             .prune_exact(&BTreeSet::from([archive_id]))
             .expect_err("destructive prune must fail closed");
-
         assert!(matches!(
             error,
             CacheError::Io { source, .. } if source.kind() == io::ErrorKind::Unsupported
@@ -3597,12 +3385,10 @@ mod tests {
                     .starts_with(".prune."))
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn prune_exact_does_not_touch_a_symlink_substitution_or_outside_sentinel() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("tempdir");
         let cache = cache(&temp);
         let archive_id = ArchiveId::new([0x32; 32]);
@@ -3617,11 +3403,9 @@ mod tests {
             .mode()
             & 0o777;
         symlink(&outside, &archive).expect("substitute archive symlink");
-
         let error = cache
             .prune_exact(&BTreeSet::from([archive_id]))
             .expect_err("destructive prune must fail before inspecting the candidate");
-
         assert!(matches!(
             error,
             CacheError::Io { source, .. } if source.kind() == io::ErrorKind::Unsupported
@@ -3645,7 +3429,6 @@ mod tests {
             outside_mode
         );
     }
-
     #[test]
     fn failed_install_retains_private_staging_and_payload_residue() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -3653,11 +3436,9 @@ mod tests {
         let cache = cache(&temp);
         let mut bytes = fixture.car.bytes().to_vec();
         *bytes.last_mut().expect("nonempty CAR") ^= 0x80;
-
         let error = cache
             .install(&fixture.commitment, fixture.car.plan(), Cursor::new(bytes))
             .expect_err("corrupt archive must fail");
-
         assert!(matches!(error, CacheError::InvalidArchive(_)));
         let archive = cache.archive_directory(&fixture.commitment.archive_id());
         let (staging, payloads) = install_residue_paths(&archive);
@@ -3675,14 +3456,12 @@ mod tests {
         );
         assert!(!cache.source_path(&fixture.commitment.archive_id()).exists());
     }
-
     #[cfg(unix)]
     #[test]
     fn successful_install_retains_verified_payload_residue() {
         let temp = tempfile::tempdir().expect("tempdir");
         let fixture = fixture(&temp, "retained-success-residue");
         let cache = cache(&temp);
-
         cache
             .install(
                 &fixture.commitment,
@@ -3690,7 +3469,6 @@ mod tests {
                 Cursor::new(fixture.car.bytes()),
             )
             .expect("install fixture");
-
         let archive = cache.archive_directory(&fixture.commitment.archive_id());
         let (staging, payloads) = install_residue_paths(&archive);
         assert!(staging.is_empty(), "published staging tree moved to `src`");
@@ -3704,12 +3482,10 @@ mod tests {
             .verify(&fixture.commitment, fixture.car.plan())
             .expect("published tree remains exact");
     }
-
     #[cfg(unix)]
     #[test]
     fn dropping_retained_install_residue_never_touches_substitutions() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("tempdir");
         let staging = temp.path().join("staging");
         let payload = temp.path().join("payload");
@@ -3731,9 +3507,7 @@ mod tests {
             & 0o777;
         symlink(&outside, &staging).expect("substitute staging symlink");
         symlink(&sentinel, &payload).expect("substitute payload symlink");
-
         drop(residue);
-
         assert!(displaced_staging.is_dir());
         assert_eq!(
             fs::read(&displaced_payload).expect("read displaced payload"),
@@ -3764,7 +3538,6 @@ mod tests {
             outside_mode
         );
     }
-
     fn install_residue_paths(archive: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
         let mut staging = Vec::new();
         let mut payloads = Vec::new();
@@ -3782,13 +3555,11 @@ mod tests {
         payloads.sort();
         (staging, payloads)
     }
-
     fn make_writable(path: &Path) {
         #[cfg(unix)]
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))
             .expect("make fixture writable");
     }
-
     #[test]
     fn portable_cache_component_policy_rejects_windows_aliases_and_collisions() {
         for rejected in ["CON", "con.txt", "LPT9.log", "name.", "name ", "a:b"] {
@@ -3806,18 +3577,14 @@ mod tests {
         assert!(validate_portable_cache_component("source.ko").is_ok());
     }
 }
-
 #[cfg(all(test, not(unix)))]
 mod unsupported_platform_tests {
     use super::{CacheError, MusubiCache};
-
     #[test]
     fn cache_open_fails_before_inspecting_or_creating_the_requested_root() {
         let parent = tempfile::tempdir().expect("temporary parent");
         let requested = parent.path().join("must-remain-absent");
-
         let error = MusubiCache::open(&requested).expect_err("non-Unix cache access must fail");
-
         assert!(matches!(error, CacheError::UnsupportedPlatform));
         assert!(!requested.exists());
     }

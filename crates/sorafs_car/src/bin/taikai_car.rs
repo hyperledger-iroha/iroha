@@ -1,12 +1,10 @@
 //! CLI for building deterministic SoraFS Taikai CAR bundles and envelopes.
-
 use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
     str::FromStr,
 };
-
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::{
@@ -22,10 +20,8 @@ use sorafs_car::taikai::{
     BundleRequest, BundleSummary, RehydrateRequest, bundle_segment, load_extra_metadata,
     rehydrate_from_car,
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
-
 #[derive(Parser, Debug)]
 #[command(
     name = "taikai_car",
@@ -124,14 +120,12 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     metadata_json: Option<PathBuf>,
 }
-
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum CliTrackKind {
     Video,
     Audio,
     Data,
 }
-
 impl From<CliTrackKind> for TaikaiTrackKind {
     fn from(value: CliTrackKind) -> Self {
         match value {
@@ -141,7 +135,6 @@ impl From<CliTrackKind> for TaikaiTrackKind {
         }
     }
 }
-
 impl CliTrackKind {
     fn as_str(&self) -> &'static str {
         match self {
@@ -151,10 +144,8 @@ impl CliTrackKind {
         }
     }
 }
-
 impl FromStr for CliTrackKind {
     type Err = eyre::Report;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "video" => Ok(Self::Video),
@@ -164,13 +155,11 @@ impl FromStr for CliTrackKind {
         }
     }
 }
-
 #[derive(Debug)]
 enum InputSource {
     Payload(PathBuf),
     Car(PathBuf),
 }
-
 #[derive(Debug)]
 struct BundleMetadata {
     manifest_hash: BlobDigest,
@@ -194,7 +183,6 @@ struct BundleMetadata {
     live_edge_drift_ms: Option<i32>,
     ingest_node_id: Option<String>,
 }
-
 #[derive(Debug)]
 struct BundleInputs {
     input: InputSource,
@@ -206,7 +194,6 @@ struct BundleInputs {
     metadata: BundleMetadata,
     extra_metadata: Option<ExtraMetadata>,
 }
-
 #[derive(Debug, Default)]
 struct SummarySeed {
     manifest_hash: Option<String>,
@@ -227,16 +214,13 @@ struct SummarySeed {
     live_edge_drift_ms: Option<i32>,
     ingest_node_id: Option<String>,
 }
-
 fn main() -> Result<()> {
     let args = Args::parse();
     run(args)
 }
-
 fn run(args: Args) -> Result<()> {
     let inputs = resolve_inputs(args)?;
     let metadata = &inputs.metadata;
-
     let summary = match &inputs.input {
         InputSource::Payload(payload) => bundle_segment(&BundleRequest {
             payload_path: payload,
@@ -282,7 +266,6 @@ fn run(args: Args) -> Result<()> {
             extra_metadata: inputs.extra_metadata.clone(),
         })?,
     };
-
     println!("Taikai segment bundle generated");
     println!("car_cid (multibase): {}", summary.car_pointer.cid_multibase);
     println!(
@@ -310,7 +293,6 @@ fn run(args: Args) -> Result<()> {
     }
     Ok(())
 }
-
 fn resolve_inputs(args: Args) -> Result<BundleInputs> {
     let summary_entry = args
         .summary_entry
@@ -321,9 +303,7 @@ fn resolve_inputs(args: Args) -> Result<BundleInputs> {
         Some(path) => Some(load_summary_seed(path, summary_entry)?),
         None => None,
     };
-
     let input = resolve_input_source(args.payload, args.car_in)?;
-
     let manifest_hash_str = resolve_required_owned(
         "manifest-hash",
         args.manifest_hash,
@@ -333,7 +313,6 @@ fn resolve_inputs(args: Args) -> Result<BundleInputs> {
     )?;
     let manifest_hash = parse_blob_digest(&manifest_hash_str, "manifest-hash")?;
     let manifest_hash_hex = hex::encode(manifest_hash.as_bytes());
-
     let storage_ticket_str = resolve_required_owned(
         "storage-ticket",
         args.storage_ticket,
@@ -343,7 +322,6 @@ fn resolve_inputs(args: Args) -> Result<BundleInputs> {
     )?;
     let storage_ticket = StorageTicketId::new(parse_hex_32(&storage_ticket_str, "storage-ticket")?);
     let storage_ticket_hex = hex::encode(storage_ticket.as_ref());
-
     let event_id_literal = resolve_required_owned(
         "event-id",
         args.event_id,
@@ -363,7 +341,6 @@ fn resolve_inputs(args: Args) -> Result<BundleInputs> {
             .as_ref()
             .and_then(|seed| seed.rendition_id.clone()),
     )?;
-
     let track_kind = resolve_required(
         "track-kind",
         args.track_kind,
@@ -380,7 +357,6 @@ fn resolve_inputs(args: Args) -> Result<BundleInputs> {
         summary_seed.as_ref().and_then(|seed| seed.bitrate_kbps),
     )?;
     let bitrate_kbps = require_positive_u32("bitrate-kbps", bitrate_kbps)?;
-
     let resolution = resolve_optional_owned(
         args.resolution,
         summary_seed
@@ -393,7 +369,6 @@ fn resolve_inputs(args: Args) -> Result<BundleInputs> {
             .as_ref()
             .and_then(|seed| seed.audio_layout.clone()),
     );
-
     let track_metadata = build_track_metadata(
         track_kind,
         &codec_label,
@@ -401,7 +376,6 @@ fn resolve_inputs(args: Args) -> Result<BundleInputs> {
         resolution.as_deref(),
         audio_layout.as_deref(),
     )?;
-
     let segment_sequence = resolve_required_u64(
         "segment-sequence",
         args.segment_sequence,
@@ -427,7 +401,6 @@ fn resolve_inputs(args: Args) -> Result<BundleInputs> {
             .as_ref()
             .and_then(|seed| seed.wallclock_unix_ms),
     )?;
-
     let ingest_latency_ms = resolve_optional_u32(
         "ingest-latency-ms",
         args.ingest_latency_ms,
@@ -448,16 +421,13 @@ fn resolve_inputs(args: Args) -> Result<BundleInputs> {
             .as_ref()
             .and_then(|seed| seed.ingest_node_id.clone()),
     );
-
     let event_name = parse_name(&event_id_literal, "event-id")?;
     let stream_name = parse_name(&stream_id_literal, "stream-id")?;
     let rendition_name = parse_name(&rendition_id_literal, "rendition-id")?;
-
     let extra_metadata = match args.metadata_json {
         Some(path) => Some(load_extra_metadata(&path)?),
         None => None,
     };
-
     Ok(BundleInputs {
         input,
         car_out: args.car_out,
@@ -490,7 +460,6 @@ fn resolve_inputs(args: Args) -> Result<BundleInputs> {
         extra_metadata,
     })
 }
-
 fn resolve_input_source(payload: Option<PathBuf>, car_in: Option<PathBuf>) -> Result<InputSource> {
     match (payload, car_in) {
         (Some(path), None) => Ok(InputSource::Payload(path)),
@@ -501,33 +470,28 @@ fn resolve_input_source(payload: Option<PathBuf>, car_in: Option<PathBuf>) -> Re
         )),
     }
 }
-
 fn resolve_required_owned<T: Clone>(field: &str, cli: Option<T>, seed: Option<T>) -> Result<T> {
     cli.or(seed).ok_or_else(|| {
         eyre!("missing required `{field}` (pass the flag or supply it via --summary-in)")
     })
 }
-
 fn resolve_required<T: Copy>(field: &str, cli: Option<T>, seed: Option<T>) -> Result<T> {
     cli.or(seed).ok_or_else(|| {
         eyre!("missing required `{field}` (pass the flag or supply it via --summary-in)")
     })
 }
-
 fn resolve_required_u64(field: &str, cli: Option<String>, seed: Option<u64>) -> Result<u64> {
     match cli {
         Some(raw) => parse_u64_arg(field, &raw),
         None => resolve_required(field, seed, None),
     }
 }
-
 fn resolve_required_u32(field: &str, cli: Option<String>, seed: Option<u32>) -> Result<u32> {
     match cli {
         Some(raw) => parse_u32_arg(field, &raw),
         None => resolve_required(field, seed, None),
     }
 }
-
 fn resolve_optional_u32(
     field: &str,
     cli: Option<String>,
@@ -538,7 +502,6 @@ fn resolve_optional_u32(
         None => Ok(seed),
     }
 }
-
 fn resolve_optional_i32(
     field: &str,
     cli: Option<String>,
@@ -549,11 +512,9 @@ fn resolve_optional_i32(
         None => Ok(seed),
     }
 }
-
 fn resolve_optional_owned<T: Clone>(cli: Option<T>, seed: Option<T>) -> Option<T> {
     cli.or(seed)
 }
-
 fn load_summary_seed(path: &Path, entry: Option<usize>) -> Result<SummarySeed> {
     let contents = fs::read_to_string(path)
         .wrap_err_with(|| format!("failed to read summary seed `{}`", path.display()))?;
@@ -561,15 +522,12 @@ fn load_summary_seed(path: &Path, entry: Option<usize>) -> Result<SummarySeed> {
     if trimmed.is_empty() {
         return Err(eyre!("summary seed `{}` is empty", path.display()));
     }
-
     let value = match json::from_str::<Value>(&contents) {
         Ok(value) => pick_summary_value(value, entry, path)?,
         Err(_) => load_ndjson_entry(&contents, entry, path)?,
     };
-
     summary_seed_from_value(&value, path)
 }
-
 fn pick_summary_value(value: Value, entry: Option<usize>, path: &Path) -> Result<Value> {
     match value {
         Value::Array(entries) => {
@@ -605,7 +563,6 @@ fn pick_summary_value(value: Value, entry: Option<usize>, path: &Path) -> Result
         )),
     }
 }
-
 fn load_ndjson_entry(contents: &str, entry: Option<usize>, path: &Path) -> Result<Value> {
     let lines: Vec<&str> = contents
         .lines()
@@ -614,7 +571,6 @@ fn load_ndjson_entry(contents: &str, entry: Option<usize>, path: &Path) -> Resul
     if lines.is_empty() {
         return Err(eyre!("summary seed `{}` is empty", path.display()));
     }
-
     let idx = match (entry, lines.len()) {
         (Some(idx), len) if idx < len => idx,
         (Some(idx), len) => {
@@ -631,7 +587,6 @@ fn load_ndjson_entry(contents: &str, entry: Option<usize>, path: &Path) -> Resul
             ));
         }
     };
-
     let value: Value = json::from_str(lines[idx]).wrap_err_with(|| {
         format!(
             "failed to parse summary entry {idx} from `{}`",
@@ -640,7 +595,6 @@ fn load_ndjson_entry(contents: &str, entry: Option<usize>, path: &Path) -> Resul
     })?;
     pick_summary_value(value, None, path)
 }
-
 fn summary_seed_from_value(value: &Value, path: &Path) -> Result<SummarySeed> {
     let obj = value.as_object().ok_or_else(|| {
         eyre!(
@@ -664,7 +618,6 @@ fn summary_seed_from_value(value: &Value, path: &Path) -> Result<SummarySeed> {
             path.display()
         )
     })?;
-
     let event_id = ingest
         .get("event_id")
         .and_then(Value::as_str)
@@ -747,7 +700,6 @@ fn summary_seed_from_value(value: &Value, path: &Path) -> Result<SummarySeed> {
         .get("ingest_node_id")
         .and_then(Value::as_str)
         .map(str::to_owned);
-
     let track_kind = track
         .get("kind")
         .and_then(Value::as_str)
@@ -777,7 +729,6 @@ fn summary_seed_from_value(value: &Value, path: &Path) -> Result<SummarySeed> {
         .get("audio_layout")
         .and_then(Value::as_str)
         .map(str::to_owned);
-
     Ok(SummarySeed {
         manifest_hash,
         storage_ticket,
@@ -798,7 +749,6 @@ fn summary_seed_from_value(value: &Value, path: &Path) -> Result<SummarySeed> {
         ingest_node_id,
     })
 }
-
 fn describe_value_kind(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
@@ -809,7 +759,6 @@ fn describe_value_kind(value: &Value) -> &'static str {
         Value::Object(_) => "object",
     }
 }
-
 fn build_track_metadata(
     track_kind: CliTrackKind,
     codec: &str,
@@ -841,40 +790,33 @@ fn build_track_metadata(
         CliTrackKind::Data => Ok(TaikaiTrackMetadata::data(codec, bitrate_kbps)),
     }
 }
-
 fn parse_name(value: &str, field: &str) -> Result<Name> {
     Name::from_str(value).map_err(|err| eyre!("invalid {field} `{value}`: {err}"))
 }
-
 fn parse_u64_arg(field: &str, raw: &str) -> Result<u64> {
     require_canonical_unsigned(field, raw)?;
     raw.parse::<u64>()
         .map_err(|err| eyre!("invalid {field} `{raw}`: {err}"))
 }
-
 fn parse_u32_arg(field: &str, raw: &str) -> Result<u32> {
     let parsed = parse_u64_arg(field, raw)?;
     u32::try_from(parsed).map_err(|_| eyre!("{field} value {parsed} exceeds u32 range"))
 }
-
 fn parse_usize_arg(field: &str, raw: &str) -> Result<usize> {
     let parsed = parse_u64_arg(field, raw)?;
     usize::try_from(parsed).map_err(|_| eyre!("{field} value {parsed} exceeds usize range"))
 }
-
 fn parse_i32_arg(field: &str, raw: &str) -> Result<i32> {
     require_canonical_signed(field, raw)?;
     raw.parse::<i32>()
         .map_err(|err| eyre!("invalid {field} `{raw}`: {err}"))
 }
-
 fn require_positive_u32(field: &str, value: u32) -> Result<u32> {
     if value == 0 {
         return Err(eyre!("{field} must be greater than zero"));
     }
     Ok(value)
 }
-
 fn require_canonical_unsigned(field: &str, raw: &str) -> Result<()> {
     if raw.is_empty() {
         return Err(eyre!("{field} must not be empty"));
@@ -895,7 +837,6 @@ fn require_canonical_unsigned(field: &str, raw: &str) -> Result<()> {
     }
     Ok(())
 }
-
 fn require_canonical_signed(field: &str, raw: &str) -> Result<()> {
     if raw.is_empty() {
         return Err(eyre!("{field} must not be empty"));
@@ -906,7 +847,6 @@ fn require_canonical_signed(field: &str, raw: &str) -> Result<()> {
     if raw.starts_with('+') {
         return Err(eyre!("{field} must not use an explicit plus sign"));
     }
-
     let digits = raw.strip_prefix('-').unwrap_or(raw);
     if digits.is_empty() {
         return Err(eyre!("{field} must include decimal digits"));
@@ -924,12 +864,10 @@ fn require_canonical_signed(field: &str, raw: &str) -> Result<()> {
     }
     Ok(())
 }
-
 fn parse_blob_digest(value: &str, field: &str) -> Result<BlobDigest> {
     let bytes = parse_hex_32(value, field)?;
     Ok(BlobDigest::new(bytes))
 }
-
 fn parse_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
     if value.is_empty() {
         return Err(eyre!("{field} hex must not be empty"));
@@ -966,7 +904,6 @@ fn parse_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
     }
     Ok(out)
 }
-
 fn render_summary_value(inputs: &BundleInputs, summary: &BundleSummary) -> Value {
     let meta = &inputs.metadata;
     let mut ingest = Map::new();
@@ -1015,7 +952,6 @@ fn render_summary_value(inputs: &BundleInputs, summary: &BundleSummary) -> Value
     if let Some(node_id) = &meta.ingest_node_id {
         ingest.insert("ingest_node_id".into(), Value::from(node_id.clone()));
     }
-
     let mut track = Map::new();
     track.insert("kind".into(), Value::from(meta.track_kind.as_str()));
     track.insert("codec".into(), Value::from(meta.codec_label.clone()));
@@ -1026,7 +962,6 @@ fn render_summary_value(inputs: &BundleInputs, summary: &BundleSummary) -> Value
     if let Some(layout) = &meta.audio_layout {
         track.insert("audio_layout".into(), Value::from(layout.clone()));
     }
-
     let mut car = Map::new();
     car.insert(
         "cid_multibase".into(),
@@ -1040,14 +975,12 @@ fn render_summary_value(inputs: &BundleInputs, summary: &BundleSummary) -> Value
         "size_bytes".into(),
         Value::from(summary.car_pointer.car_size_bytes),
     );
-
     let mut chunk = Map::new();
     chunk.insert(
         "root_blake3_hex".into(),
         Value::from(hex::encode(summary.chunk_root.as_bytes())),
     );
     chunk.insert("count".into(), Value::from(summary.chunk_count));
-
     let mut outputs = Map::new();
     outputs.insert(
         "car".into(),
@@ -1069,7 +1002,6 @@ fn render_summary_value(inputs: &BundleInputs, summary: &BundleSummary) -> Value
             Value::from(path.to_string_lossy().into_owned()),
         );
     }
-
     let mut root = Map::new();
     root.insert("ingest".into(), Value::Object(ingest));
     root.insert("track".into(), Value::Object(track));
@@ -1084,22 +1016,18 @@ fn render_summary_value(inputs: &BundleInputs, summary: &BundleSummary) -> Value
         "ingest_metadata".into(),
         Value::Object(summary.ingest_metadata.clone()),
     );
-
     Value::Object(root)
 }
-
 fn write_summary_json(path: &Path, value: &Value) -> Result<()> {
     let rendered = json::to_json_pretty(value)
         .map_err(|err| eyre!("failed to render bundle summary JSON: {err}"))?;
     write_output_bytes(path, "bundle summary", rendered.as_bytes())
 }
-
 fn write_output_bytes(path: &Path, label: &str, bytes: &[u8]) -> Result<()> {
     let mut file = open_output_file(path, label)?;
     file.write_all(bytes)
         .wrap_err_with(|| format!("failed to write {label} `{}`", path.display()))
 }
-
 fn open_output_file(path: &Path, label: &str) -> Result<fs::File> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -1121,7 +1049,6 @@ fn open_output_file(path: &Path, label: &str) -> Result<fs::File> {
     }
     Ok(file)
 }
-
 fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -1132,7 +1059,6 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 fn validate_output_path(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -1151,7 +1077,6 @@ fn validate_output_path(path: &Path) -> Result<()> {
             ));
         }
     }
-
     if let Some(parent) = path.parent() {
         for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
             if ancestor.as_os_str().is_empty() {
@@ -1184,20 +1109,16 @@ fn validate_output_path(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut fs::OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -1213,7 +1134,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -1230,7 +1150,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0
 }
-
 fn render_indexes_map(indexes: &iroha_data_model::taikai::TaikaiEnvelopeIndexes) -> Map {
     let mut time_key = Map::new();
     time_key.insert(
@@ -1249,7 +1168,6 @@ fn render_indexes_map(indexes: &iroha_data_model::taikai::TaikaiEnvelopeIndexes)
         "segment_start_pts".into(),
         Value::from(indexes.time_key.segment_start_pts.as_micros()),
     );
-
     let mut cid_key = Map::new();
     cid_key.insert(
         "event_id".into(),
@@ -1267,32 +1185,26 @@ fn render_indexes_map(indexes: &iroha_data_model::taikai::TaikaiEnvelopeIndexes)
         "cid_multibase".into(),
         Value::from(indexes.cid_key.cid_multibase.clone()),
     );
-
     let mut rendered = Map::new();
     rendered.insert("time_key".into(), Value::Object(time_key));
     rendered.insert("cid_key".into(), Value::Object(cid_key));
     rendered
 }
-
 #[cfg(test)]
 mod tests {
     use tempfile::{TempDir, tempdir};
-
     use super::*;
-
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");
         (temp, path)
     }
-
     #[test]
     fn numeric_arg_parsers_reject_noncanonical_values() {
         assert_eq!(parse_u64_arg("segment-sequence", "0").expect("zero"), 0);
         assert_eq!(parse_u64_arg("segment-sequence", "42").expect("u64"), 42);
         assert_eq!(parse_i32_arg("live-edge-drift-ms", "-7").expect("i32"), -7);
         assert_eq!(parse_i32_arg("live-edge-drift-ms", "0").expect("zero"), 0);
-
         for value in ["", " 1", "1 ", "+1", "-1", "01", "0x1", "1_000"] {
             let err = parse_u64_arg("segment-sequence", value)
                 .expect_err("noncanonical unsigned must fail");
@@ -1306,7 +1218,6 @@ mod tests {
                 "unexpected unsigned error for {value:?}: {message}"
             );
         }
-
         for value in ["", " -1", "+1", "-01", "-0", "01", "1.5"] {
             let err = parse_i32_arg("live-edge-drift-ms", value)
                 .expect_err("noncanonical signed value must fail");
@@ -1321,7 +1232,6 @@ mod tests {
                 "unexpected signed error for {value:?}: {message}"
             );
         }
-
         let err = parse_u32_arg("bitrate-kbps", "4294967296").expect_err("u32 overflow must fail");
         assert!(
             err.to_string().contains("u32 range"),
@@ -1334,14 +1244,12 @@ mod tests {
             "unexpected positive error: {err}"
         );
     }
-
     #[test]
     fn parse_hex_32_rejects_noncanonical_or_zero_values() {
         assert_eq!(
             parse_hex_32(&"11".repeat(32), "manifest-hash").expect("hex"),
             [0x11; 32]
         );
-
         let cases = vec![
             String::new(),
             "00".repeat(32),
@@ -1365,7 +1273,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn summary_seed_rejects_overflowing_ingest_latency() {
         let mut ingest = Map::new();
@@ -1376,7 +1283,6 @@ mod tests {
         let mut root = Map::new();
         root.insert("ingest".into(), Value::Object(ingest));
         root.insert("track".into(), Value::Object(Map::new()));
-
         let err = summary_seed_from_value(&Value::Object(root), Path::new("summary.json"))
             .expect_err("overflowing ingest latency must fail");
         let message = err.to_string();
@@ -1385,23 +1291,19 @@ mod tests {
             "unexpected overflow error: {message}"
         );
     }
-
     #[test]
     fn write_summary_json_creates_parent_and_writes_document() {
         let (_temp, temp_path) = canonical_tempdir();
         let summary_path = temp_path.join("nested").join("summary.json");
         let mut value = Map::new();
         value.insert("schema".into(), Value::from("taikai.summary.v1"));
-
         write_summary_json(&summary_path, &Value::Object(value)).expect("write summary");
-
         let text = fs::read_to_string(&summary_path).expect("read summary");
         assert!(
             text.contains("taikai.summary.v1"),
             "summary JSON missing marker: {text}"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn write_summary_json_rejects_symlink_output() {
@@ -1410,18 +1312,15 @@ mod tests {
         fs::write(&target_path, b"unchanged\n").expect("write target");
         let summary_path = temp_path.join("summary.json");
         std::os::unix::fs::symlink(&target_path, &summary_path).expect("create symlink");
-
         let err = write_summary_json(&summary_path, &Value::Object(Map::new()))
             .expect_err("reject symlink output");
         let message = err.to_string();
-
         assert!(
             message.contains("must not be a symlink"),
             "unexpected error: {message}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
     }
-
     #[cfg(unix)]
     #[test]
     fn write_summary_json_rejects_symlink_parent() {
@@ -1431,11 +1330,9 @@ mod tests {
         let linked_dir = temp_path.join("linked");
         std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
         let summary_path = linked_dir.join("summary.json");
-
         let err = write_summary_json(&summary_path, &Value::Object(Map::new()))
             .expect_err("reject symlink parent");
         let message = err.to_string();
-
         assert!(
             message.contains("parent") && message.contains("must not be a symlink"),
             "unexpected error: {message}"

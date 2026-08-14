@@ -1,11 +1,9 @@
 //! Volatility bucketing derived from oracle signals.
-
 use derive_more::Display;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     json::{JsonDeserialize, JsonSerialize},
 };
-
 /// Rolling-volatility classification that drives extra settlement margin.
 #[derive(
     Clone,
@@ -33,7 +31,6 @@ pub enum VolatilityBucket {
     #[display("dislocated")]
     Dislocated,
 }
-
 impl VolatilityBucket {
     /// Additional safety margin expressed in basis points (25 bps steps).
     #[must_use]
@@ -44,7 +41,6 @@ impl VolatilityBucket {
             Self::Dislocated => 50,
         }
     }
-
     /// Maximum total epsilon (base + bucket) expressed in basis points.
     #[must_use]
     pub const fn max_total_margin_bps() -> u16 {

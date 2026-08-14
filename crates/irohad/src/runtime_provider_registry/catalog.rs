@@ -1,24 +1,18 @@
 //! Canonical, secret-free handoff artifact for deployment-owned provider brokers.
-
 use std::{cmp::Ordering, fmt};
-
 use norito::codec::{Decode, Encode};
-
 use super::*;
-
 /// Hard byte ceiling for one canonical V1 runtime-provider catalog artifact.
 ///
 /// The ceiling covers the complete first-release slot inventory, including
 /// bounded public keys and policy material, while keeping untrusted decode
 /// allocation proportional to a small, deployment-owned input.
 pub const RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1: usize = 256 * 1024;
-
 const RUNTIME_PROVIDER_CATALOG_MAGIC_V1: [u8; 8] = *b"IRPCAT01";
 const RUNTIME_PROVIDER_CATALOG_VERSION_V1: u16 = 1;
 const RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1: usize = 1024;
 const EVIDENCE_VIEWER_ARCHIVE_MAX_BYTES_V1: u64 =
     sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_CHECKPOINT_BYTES_V1 + 16 * 1024;
-
 /// Failure while exporting or loading a canonical public provider catalog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -42,7 +36,6 @@ pub enum IrohaRuntimeProviderCatalogErrorV1 {
     /// A binding is malformed, zero-qualified, substituted, or test-marked.
     InvalidBinding,
 }
-
 impl fmt::Display for IrohaRuntimeProviderCatalogErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -60,9 +53,7 @@ impl fmt::Display for IrohaRuntimeProviderCatalogErrorV1 {
         })
     }
 }
-
 impl std::error::Error for IrohaRuntimeProviderCatalogErrorV1 {}
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct RuntimeProviderCatalogWireV1 {
     magic: [u8; 8],
@@ -71,7 +62,6 @@ struct RuntimeProviderCatalogWireV1 {
     network_id: NetworkId,
     bindings: Vec<RuntimeProviderBindingWireV1>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct RuntimeProviderBindingWireV1 {
     slot: u16,
@@ -112,7 +102,6 @@ struct RuntimeProviderBindingWireV1 {
     moderation_panel_notification_archive_binding:
         Option<ModerationPanelNotificationArchiveBindingWireV1>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 struct GovernanceRequestIngressBindingWireV1 {
     scope: u8,
@@ -122,7 +111,6 @@ struct GovernanceRequestIngressBindingWireV1 {
     max_envelope_lifetime_secs: u64,
     max_future_skew_secs: u64,
 }
-
 impl From<sorafs_node::GovernanceDagRequestIngressBindingV1>
     for GovernanceRequestIngressBindingWireV1
 {
@@ -141,7 +129,6 @@ impl From<sorafs_node::GovernanceDagRequestIngressBindingV1>
         }
     }
 }
-
 impl GovernanceRequestIngressBindingWireV1 {
     fn try_into_binding(
         self,
@@ -163,7 +150,6 @@ impl GovernanceRequestIngressBindingWireV1 {
         .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 struct ModerationPanelNotificationArchiveBindingWireV1 {
     archive_id: [u8; 32],
@@ -172,7 +158,6 @@ struct ModerationPanelNotificationArchiveBindingWireV1 {
     max_bytes: u64,
     max_records: u64,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct AppealFinanceSignerBindingWireV1 {
     authority: iroha_data_model::account::AccountId,
@@ -180,12 +165,10 @@ struct AppealFinanceSignerBindingWireV1 {
     valid_from_block_height: u64,
     revoked_at_block_height: Option<u64>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct AppealFinanceCheckpointBindingWireV1 {
     public_key: iroha_crypto::PublicKey,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct PopCredentialRuntimeBindingWireV1 {
     issuer_policy_digest: [u8; 32],
@@ -198,13 +181,11 @@ struct PopCredentialRuntimeBindingWireV1 {
     wallet_recipient_public_key_digest: [u8; 32],
     wallet_wrapping_key_id: String,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 struct PorReplayArchiveProofLimitsWireV1 {
     max_successor_receipts: u32,
     max_successor_proof_bytes: u64,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 struct PotrAdmissionPolicyBindingWireV1 {
     provider_id: [u8; 32],
@@ -215,7 +196,6 @@ struct PotrAdmissionPolicyBindingWireV1 {
     finalized_block_hash: [u8; 32],
     admission_envelope_digest: [u8; 32],
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct PotrRuntimeBindingWireV1 {
     gateway_handle: String,
@@ -232,21 +212,18 @@ struct PotrRuntimeBindingWireV1 {
     resolver_id: [u8; 32],
     baseline_admission_policy: PotrAdmissionPolicyBindingWireV1,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct NativeTransactionSignerBindingWireV1 {
     role: u8,
     authority: iroha_data_model::account::AccountId,
     public_key: iroha_crypto::PublicKey,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct EvidenceViewerWebAuthnBindingWireV1 {
     rp_id: String,
     allowed_origins: Vec<String>,
     challenge_ttl_ms: u64,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 struct ProviderIngestSourceLimitsWireV1 {
     operation_timeout_ms: u64,
@@ -254,7 +231,6 @@ struct ProviderIngestSourceLimitsWireV1 {
     max_source_providers: u32,
     max_concurrent_streams: u32,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct ProviderIngestSignerBindingWireV1 {
     runtime_handle: String,
@@ -266,7 +242,6 @@ struct ProviderIngestSignerBindingWireV1 {
     algorithm: u8,
     public_key: Vec<u8>,
 }
-
 impl IrohaRuntimeProviderBindingsV1 {
     /// Export this sanitized provider projection as an exact canonical V1
     /// broker handoff artifact.
@@ -291,7 +266,6 @@ impl IrohaRuntimeProviderBindingsV1 {
         }
         Ok(bytes)
     }
-
     /// Load an exact canonical V1 broker handoff artifact without receiving
     /// or reconstructing the daemon's complete configuration.
     ///
@@ -320,7 +294,6 @@ impl IrohaRuntimeProviderBindingsV1 {
         wire.try_into_bindings()
     }
 }
-
 impl RuntimeProviderCatalogWireV1 {
     fn try_from_bindings(
         bindings: &IrohaRuntimeProviderBindingsV1,
@@ -349,7 +322,6 @@ impl RuntimeProviderCatalogWireV1 {
         }
         Ok(wire)
     }
-
     fn try_into_bindings(
         self,
     ) -> Result<IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderCatalogErrorV1> {
@@ -379,7 +351,6 @@ impl RuntimeProviderCatalogWireV1 {
         Ok(reconstructed)
     }
 }
-
 fn validate_chain_id(chain_id: &str) -> Result<(), IrohaRuntimeProviderCatalogErrorV1> {
     let parsed = chain_id
         .parse::<iroha_data_model::ChainId>()
@@ -389,13 +360,11 @@ fn validate_chain_id(chain_id: &str) -> Result<(), IrohaRuntimeProviderCatalogEr
     }
     Ok(())
 }
-
 trait CatalogSlotResultV1 {
     fn into_catalog_slot(
         self,
     ) -> Result<IrohaRuntimeProviderSlotV1, IrohaRuntimeProviderCatalogErrorV1>;
 }
-
 impl CatalogSlotResultV1 for IrohaRuntimeProviderSlotV1 {
     fn into_catalog_slot(
         self,
@@ -403,7 +372,6 @@ impl CatalogSlotResultV1 for IrohaRuntimeProviderSlotV1 {
         Ok(self)
     }
 }
-
 impl CatalogSlotResultV1
     for Result<IrohaRuntimeProviderSlotV1, IrohaRuntimeProviderCatalogErrorV1>
 {
@@ -413,7 +381,6 @@ impl CatalogSlotResultV1
         self
     }
 }
-
 fn validate_binding_sequence<S>(
     slots: impl IntoIterator<Item = S>,
 ) -> Result<(), IrohaRuntimeProviderCatalogErrorV1>
@@ -443,12 +410,10 @@ where
     }
     Ok(())
 }
-
 fn validate_catalog_relationships(
     catalog: &IrohaRuntimeProviderBindingsV1,
 ) -> Result<(), IrohaRuntimeProviderCatalogErrorV1> {
     let find = |slot| catalog.iter().find(|binding| binding.slot() == slot);
-
     let appeal_signers = catalog
         .iter()
         .filter(|binding| {
@@ -505,7 +470,6 @@ fn validate_catalog_relationships(
             }
         }
     }
-
     let potr_gateway = find(IrohaRuntimeProviderSlotV1::PotrGatewaySigner);
     let potr_provider = find(IrohaRuntimeProviderSlotV1::PotrProviderSigner);
     match (potr_gateway, potr_provider) {
@@ -537,7 +501,6 @@ fn validate_catalog_relationships(
         }
         _ => return Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding),
     }
-
     let fenced_publisher = find(IrohaRuntimeProviderSlotV1::FencedPrivacyPublisher);
     let fenced_reader = find(IrohaRuntimeProviderSlotV1::FencedPrivacyHeadReader);
     match (fenced_publisher, fenced_reader) {
@@ -548,7 +511,6 @@ fn validate_catalog_relationships(
                 && publisher.policy_digest() == reader.policy_digest() => {}
         _ => return Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding),
     }
-
     let provider_source = find(IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource);
     let provider_resolver =
         find(IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver);
@@ -591,7 +553,6 @@ fn validate_catalog_relationships(
             return Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding);
         }
     }
-
     let moderation_checkpoint = find(IrohaRuntimeProviderSlotV1::ModerationCheckpointStore);
     let moderation_archive = find(IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive);
     if let (Some(checkpoint), Some(archive)) = (moderation_checkpoint, moderation_archive) {
@@ -609,7 +570,6 @@ fn validate_catalog_relationships(
             return Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding);
         }
     }
-
     let evidence_checkpoint = find(IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore);
     let evidence_archive = find(IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive);
     if let (Some(checkpoint), Some(archive)) = (evidence_checkpoint, evidence_archive) {
@@ -623,7 +583,6 @@ fn validate_catalog_relationships(
             return Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding);
         }
     }
-
     let governance_ipfs = find(IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator);
     let governance_head = find(IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator);
     if let (Some(ipfs), Some(head)) = (governance_ipfs, governance_head) {
@@ -639,10 +598,8 @@ fn validate_catalog_relationships(
             return Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding);
         }
     }
-
     Ok(())
 }
-
 fn compare_wire_bindings(
     left: &RuntimeProviderBindingWireV1,
     right: &RuntimeProviderBindingWireV1,
@@ -653,7 +610,6 @@ fn compare_wire_bindings(
         .then_with(|| left.revision.cmp(&right.revision))
         .then_with(|| left.policy_digest.cmp(&right.policy_digest))
 }
-
 fn validate_wire_order(
     bindings: &[RuntimeProviderBindingWireV1],
 ) -> Result<(), IrohaRuntimeProviderCatalogErrorV1> {
@@ -665,7 +621,6 @@ fn validate_wire_order(
     }
     Ok(())
 }
-
 impl RuntimeProviderBindingWireV1 {
     fn try_from_binding(
         binding: &IrohaRuntimeProviderBindingV1,
@@ -776,7 +731,6 @@ impl RuntimeProviderBindingWireV1 {
                 ),
         })
     }
-
     fn try_into_binding(
         self,
     ) -> Result<IrohaRuntimeProviderBindingV1, IrohaRuntimeProviderCatalogErrorV1> {
@@ -798,7 +752,6 @@ impl RuntimeProviderBindingWireV1 {
             Some(policy_digest),
         )
         .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?;
-
         match slot {
             IrohaRuntimeProviderSlotV1::GovernanceDagSigner => {
                 let peer_id = self
@@ -1145,14 +1098,12 @@ impl RuntimeProviderBindingWireV1 {
             }
             _ => {}
         }
-
         if RuntimeProviderBindingWireV1::try_from_binding(&binding)? != expected {
             return Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding);
         }
         Ok(binding)
     }
 }
-
 fn exact_qualification(
     revision: Option<u64>,
     policy_digest: Option<[u8; 32]>,
@@ -1164,11 +1115,9 @@ fn exact_qualification(
         _ => Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding),
     }
 }
-
 fn valid_ed25519(public_key: [u8; 32]) -> bool {
     public_key != [0; 32] && iroha_crypto::ed25519_parse_public_key(&public_key).is_ok()
 }
-
 fn validate_pop_binding(
     binding: &PopCredentialRuntimeBindingWireV1,
 ) -> Result<(), IrohaRuntimeProviderCatalogErrorV1> {
@@ -1190,7 +1139,6 @@ fn validate_pop_binding(
     }
     Ok(())
 }
-
 fn validate_por_binding(
     handle: &str,
     revision: u64,
@@ -1225,7 +1173,6 @@ fn validate_por_binding(
     }
     Ok(())
 }
-
 fn validate_moderation_archive(
     archive: ModerationPanelNotificationArchiveBindingWireV1,
 ) -> Result<(), IrohaRuntimeProviderCatalogErrorV1> {
@@ -1246,7 +1193,6 @@ fn validate_moderation_archive(
     }
     Ok(())
 }
-
 fn validate_webauthn(
     binding: &EvidenceViewerWebAuthnBindingWireV1,
 ) -> Result<(), IrohaRuntimeProviderCatalogErrorV1> {
@@ -1269,7 +1215,6 @@ fn validate_webauthn(
     }
     Ok(())
 }
-
 impl From<&PopCredentialRuntimeBindingV1> for PopCredentialRuntimeBindingWireV1 {
     fn from(binding: &PopCredentialRuntimeBindingV1) -> Self {
         Self {
@@ -1285,7 +1230,6 @@ impl From<&PopCredentialRuntimeBindingV1> for PopCredentialRuntimeBindingWireV1 
         }
     }
 }
-
 impl From<PorReplayArchiveProofLimitsV1> for PorReplayArchiveProofLimitsWireV1 {
     fn from(limits: PorReplayArchiveProofLimitsV1) -> Self {
         Self {
@@ -1294,7 +1238,6 @@ impl From<PorReplayArchiveProofLimitsV1> for PorReplayArchiveProofLimitsWireV1 {
         }
     }
 }
-
 impl From<&iroha_config::parameters::actual::SorafsPotrRuntimeBinding>
     for PotrRuntimeBindingWireV1
 {
@@ -1325,7 +1268,6 @@ impl From<&iroha_config::parameters::actual::SorafsPotrRuntimeBinding>
         }
     }
 }
-
 impl PotrRuntimeBindingWireV1 {
     fn to_binding(&self) -> iroha_config::parameters::actual::SorafsPotrRuntimeBinding {
         iroha_config::parameters::actual::SorafsPotrRuntimeBinding {
@@ -1360,7 +1302,6 @@ impl PotrRuntimeBindingWireV1 {
         }
     }
 }
-
 const fn native_role_to_wire(role: iroha_torii::SorafsNativeTransactionSignerRoleV1) -> u8 {
     match role {
         iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome => 1,
@@ -1369,7 +1310,6 @@ const fn native_role_to_wire(role: iroha_torii::SorafsNativeTransactionSignerRol
         iroha_torii::SorafsNativeTransactionSignerRoleV1::Orderbook => 4,
     }
 }
-
 fn native_role_from_slot(
     slot: IrohaRuntimeProviderSlotV1,
 ) -> Option<iroha_torii::SorafsNativeTransactionSignerRoleV1> {
@@ -1382,7 +1322,6 @@ fn native_role_from_slot(
         _ => None,
     }
 }
-
 impl NativeTransactionSignerBindingWireV1 {
     fn from_native(binding: &iroha_torii::SorafsNativeTransactionSignerBindingV1) -> Self {
         Self {
@@ -1391,7 +1330,6 @@ impl NativeTransactionSignerBindingWireV1 {
             public_key: binding.public_key().clone(),
         }
     }
-
     fn from_soracloud(
         binding: &crate::soracloud_runtime_signer::SoracloudRuntimeSignerBindingV1,
     ) -> Self {
@@ -1401,7 +1339,6 @@ impl NativeTransactionSignerBindingWireV1 {
             public_key: binding.public_key().clone(),
         }
     }
-
     fn to_native_binding(
         &self,
         slot: IrohaRuntimeProviderSlotV1,
@@ -1427,7 +1364,6 @@ impl NativeTransactionSignerBindingWireV1 {
         .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)
     }
 }
-
 impl From<&EvidenceViewerWebAuthnBindingV1> for EvidenceViewerWebAuthnBindingWireV1 {
     fn from(binding: &EvidenceViewerWebAuthnBindingV1) -> Self {
         Self {
@@ -1437,7 +1373,6 @@ impl From<&EvidenceViewerWebAuthnBindingV1> for EvidenceViewerWebAuthnBindingWir
         }
     }
 }
-
 impl From<ProviderIngestSourceLimitsV1> for ProviderIngestSourceLimitsWireV1 {
     fn from(limits: ProviderIngestSourceLimitsV1) -> Self {
         Self {
@@ -1448,7 +1383,6 @@ impl From<ProviderIngestSourceLimitsV1> for ProviderIngestSourceLimitsWireV1 {
         }
     }
 }
-
 impl From<ProviderIngestSourceLimitsWireV1> for ProviderIngestSourceLimitsV1 {
     fn from(limits: ProviderIngestSourceLimitsWireV1) -> Self {
         Self {
@@ -1459,7 +1393,6 @@ impl From<ProviderIngestSourceLimitsWireV1> for ProviderIngestSourceLimitsV1 {
         }
     }
 }
-
 impl ProviderIngestSignerBindingWireV1 {
     fn try_from_binding(
         binding: &sorafs_node::ProviderIngestCompletionSignerBindingV1,
@@ -1491,7 +1424,6 @@ impl ProviderIngestSignerBindingWireV1 {
             public_key: public_key.to_vec(),
         })
     }
-
     fn to_binding(
         &self,
     ) -> Result<
@@ -1532,7 +1464,6 @@ impl ProviderIngestSignerBindingWireV1 {
         Ok(binding)
     }
 }
-
 const fn provider_ingest_algorithm_to_wire(algorithm: iroha_crypto::Algorithm) -> Option<u8> {
     match algorithm {
         iroha_crypto::Algorithm::Ed25519 => Some(1),
@@ -1540,7 +1471,6 @@ const fn provider_ingest_algorithm_to_wire(algorithm: iroha_crypto::Algorithm) -
         _ => None,
     }
 }
-
 const fn provider_ingest_algorithm_from_wire(wire: u8) -> Option<iroha_crypto::Algorithm> {
     match wire {
         1 => Some(iroha_crypto::Algorithm::Ed25519),
@@ -1548,11 +1478,9 @@ const fn provider_ingest_algorithm_from_wire(wire: u8) -> Option<iroha_crypto::A
         _ => None,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[derive(Encode)]
     struct RetiredRuntimeProviderCatalogWireV1 {
         magic: [u8; 8],
@@ -1561,7 +1489,6 @@ mod tests {
         network_id: Option<NetworkId>,
         bindings: Vec<RuntimeProviderBindingWireV1>,
     }
-
     fn generic_catalog() -> IrohaRuntimeProviderBindingsV1 {
         IrohaRuntimeProviderBindingsV1::qualified_for_test(
             "sorafs-catalog-test",
@@ -1571,12 +1498,10 @@ mod tests {
             [0x31; 32],
         )
     }
-
     fn canonical_wire() -> RuntimeProviderCatalogWireV1 {
         RuntimeProviderCatalogWireV1::try_from_bindings(&generic_catalog())
             .expect("project canonical test catalog")
     }
-
     fn webauthn_wire(
         rp_id: &str,
         allowed_origins: impl IntoIterator<Item = &'static str>,
@@ -1594,14 +1519,12 @@ mod tests {
         });
         wire
     }
-
     fn load_wire(
         wire: &RuntimeProviderCatalogWireV1,
     ) -> Result<IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderCatalogErrorV1> {
         let bytes = norito::encode_canonical(wire).expect("encode catalog fixture");
         IrohaRuntimeProviderBindingsV1::load_canonical_v1(&bytes)
     }
-
     fn catalog_from_bindings(
         mut bindings: Vec<IrohaRuntimeProviderBindingV1>,
     ) -> IrohaRuntimeProviderBindingsV1 {
@@ -1618,14 +1541,12 @@ mod tests {
             bindings,
         }
     }
-
     fn wire_from_bindings(
         bindings: Vec<IrohaRuntimeProviderBindingV1>,
     ) -> RuntimeProviderCatalogWireV1 {
         RuntimeProviderCatalogWireV1::try_from_bindings(&catalog_from_bindings(bindings))
             .expect("project valid relationship fixture")
     }
-
     fn assert_invalid_wire(wire: &RuntimeProviderCatalogWireV1) {
         let bytes = norito::encode_canonical(wire).expect("encode canonical negative fixture");
         assert_eq!(
@@ -1633,13 +1554,11 @@ mod tests {
             Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)
         );
     }
-
     fn assert_valid_wire(wire: &RuntimeProviderCatalogWireV1) {
         let bytes = norito::encode_canonical(wire).expect("encode canonical positive fixture");
         IrohaRuntimeProviderBindingsV1::load_canonical_v1(&bytes)
             .expect("load canonical positive fixture");
     }
-
     fn wire_binding_mut(
         wire: &mut RuntimeProviderCatalogWireV1,
         slot: IrohaRuntimeProviderSlotV1,
@@ -1649,14 +1568,12 @@ mod tests {
             .find(|binding| binding.slot == slot.wire_id())
             .expect("wire fixture contains requested slot")
     }
-
     fn ed25519_key(seed: u8) -> iroha_crypto::PublicKey {
         iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("derive deterministic Ed25519 fixture")
             .public_key()
             .clone()
     }
-
     fn ed25519_bytes(seed: u8) -> [u8; 32] {
         ed25519_key(seed)
             .to_bytes()
@@ -1664,7 +1581,6 @@ mod tests {
             .try_into()
             .expect("Ed25519 fixture key width")
     }
-
     fn appeal_signer(
         seed: u8,
         handle: &str,
@@ -1686,7 +1602,6 @@ mod tests {
         )
         .expect("construct appeal-finance signer fixture")
     }
-
     fn appeal_checkpoint(seed: u8) -> IrohaRuntimeProviderBindingV1 {
         IrohaRuntimeProviderBindingV1::try_new_appeal_finance_checkpoint(
             &iroha_config::parameters::actual::SorafsAppealFinanceCheckpointBinding {
@@ -1699,7 +1614,6 @@ mod tests {
         )
         .expect("construct appeal-finance checkpoint fixture")
     }
-
     fn valid_potr_runtime() -> iroha_config::parameters::actual::SorafsPotrRuntimeBinding {
         iroha_config::parameters::actual::SorafsPotrRuntimeBinding {
             gateway_signer: iroha_config::parameters::actual::SorafsPotrRuntimeSignerBinding {
@@ -1730,7 +1644,6 @@ mod tests {
                 },
         }
     }
-
     fn potr_wire() -> RuntimeProviderCatalogWireV1 {
         let runtime = valid_potr_runtime();
         wire_from_bindings(
@@ -1746,7 +1659,6 @@ mod tests {
             .collect(),
         )
     }
-
     fn provider_ingest_wire() -> RuntimeProviderCatalogWireV1 {
         let signer = sorafs_node::ProviderIngestCompletionSignerBindingV1::new(
             "software://sorafs/provider-ingest/signer-primary",
@@ -1804,7 +1716,6 @@ mod tests {
             .expect("construct provider-ingest checkpoint fixture"),
         ])
     }
-
     fn moderation_wire() -> RuntimeProviderCatalogWireV1 {
         let checkpoint_key = ed25519_bytes(0x41);
         let archive_key = ed25519_bytes(0x42);
@@ -1831,7 +1742,6 @@ mod tests {
         archive.moderation_panel_notification_archive_max_records = Some(128);
         wire_from_bindings(vec![checkpoint, archive])
     }
-
     fn evidence_wire() -> RuntimeProviderCatalogWireV1 {
         let checkpoint_max_bytes = 4 * 1024 * 1024;
         let mut checkpoint = IrohaRuntimeProviderBindingV1::try_new(
@@ -1854,7 +1764,6 @@ mod tests {
         archive.evidence_viewer_archive_max_bytes = Some(checkpoint_max_bytes + 16 * 1024);
         wire_from_bindings(vec![checkpoint, archive])
     }
-
     #[test]
     fn canonical_catalog_roundtrip_is_byte_stable() {
         let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
@@ -1881,7 +1790,6 @@ mod tests {
             .expect("export same-label catalog for another network");
         assert_ne!(first, other_network);
         assert!(first.len() <= RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1);
-
         let decoded = IrohaRuntimeProviderBindingsV1::load_canonical_v1(&first)
             .expect("load canonical catalog");
         assert_eq!(decoded, catalog);
@@ -1893,7 +1801,6 @@ mod tests {
             first
         );
     }
-
     #[test]
     fn native_public_identity_roundtrips_without_private_material() {
         let keypair =
@@ -1916,7 +1823,6 @@ mod tests {
                 native,
             )],
         );
-
         let bytes = catalog
             .export_canonical_v1()
             .expect("export native signer catalog");
@@ -1926,7 +1832,6 @@ mod tests {
             catalog
         );
     }
-
     #[test]
     fn loader_rejects_invalid_appeal_finance_relationships() {
         let valid = || {
@@ -1948,13 +1853,11 @@ mod tests {
                 appeal_checkpoint(0x22),
             ])
         };
-
         let mut missing_checkpoint = valid();
         missing_checkpoint.bindings.retain(|binding| {
             binding.slot != IrohaRuntimeProviderSlotV1::AppealFinanceCheckpoint.wire_id()
         });
         assert_invalid_wire(&missing_checkpoint);
-
         let mut duplicate_handle = valid();
         let signer_handle = duplicate_handle
             .bindings
@@ -1975,7 +1878,6 @@ mod tests {
             .expect("second appeal signer")
             .handle = signer_handle;
         assert_invalid_wire(&duplicate_handle);
-
         let mut overlapping_windows = valid();
         overlapping_windows
             .bindings
@@ -1988,7 +1890,6 @@ mod tests {
             .expect("second appeal signer metadata")
             .valid_from_block_height = 9;
         assert_invalid_wire(&overlapping_windows);
-
         let mut reused_checkpoint_handle = valid();
         wire_binding_mut(
             &mut reused_checkpoint_handle,
@@ -1996,7 +1897,6 @@ mod tests {
         )
         .handle = "software://sorafs/appeal-finance/signer-a".to_owned();
         assert_invalid_wire(&reused_checkpoint_handle);
-
         let mut reused_checkpoint_key = valid();
         let signer_key = reused_checkpoint_key
             .bindings
@@ -2015,7 +1915,6 @@ mod tests {
         .public_key = signer_key;
         assert_invalid_wire(&reused_checkpoint_key);
     }
-
     #[test]
     fn loader_rejects_invalid_potr_and_fenced_relationships() {
         let mut missing_potr_peer = potr_wire();
@@ -2023,7 +1922,6 @@ mod tests {
             binding.slot != IrohaRuntimeProviderSlotV1::PotrProviderSigner.wire_id()
         });
         assert_invalid_wire(&missing_potr_peer);
-
         let mut mismatched_potr_metadata = potr_wire();
         wire_binding_mut(
             &mut mismatched_potr_metadata,
@@ -2034,7 +1932,6 @@ mod tests {
         .expect("PoTR provider metadata")
         .reader_id = [0x56; 32];
         assert_invalid_wire(&mismatched_potr_metadata);
-
         let mut reused_potr_identity = potr_wire();
         for binding in &mut reused_potr_identity.bindings {
             let runtime = binding
@@ -2044,7 +1941,6 @@ mod tests {
             runtime.reader_id = runtime.gateway_signer_id;
         }
         assert_invalid_wire(&reused_potr_identity);
-
         let fenced_binding = |slot| {
             IrohaRuntimeProviderBindingV1::try_new(
                 slot,
@@ -2063,7 +1959,6 @@ mod tests {
         let mut missing_fenced_peer = valid_fenced();
         missing_fenced_peer.bindings.pop();
         assert_invalid_wire(&missing_fenced_peer);
-
         let mut substituted_fenced_peer = valid_fenced();
         wire_binding_mut(
             &mut substituted_fenced_peer,
@@ -2072,7 +1967,6 @@ mod tests {
         .policy_digest = Some([0x72; 32]);
         assert_invalid_wire(&substituted_fenced_peer);
     }
-
     #[test]
     fn loader_rejects_invalid_provider_ingest_relationships() {
         let mut incomplete = provider_ingest_wire();
@@ -2080,7 +1974,6 @@ mod tests {
             binding.slot != IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore.wire_id()
         });
         assert_invalid_wire(&incomplete);
-
         let mut mismatched_signer = provider_ingest_wire();
         wire_binding_mut(
             &mut mismatched_signer,
@@ -2091,7 +1984,6 @@ mod tests {
         .expect("provider-ingest resolver signer metadata")
         .runtime_handle = "software://sorafs/provider-ingest/signer-secondary".to_owned();
         assert_invalid_wire(&mismatched_signer);
-
         let mut mismatched_bound = provider_ingest_wire();
         wire_binding_mut(
             &mut mismatched_bound,
@@ -2100,7 +1992,6 @@ mod tests {
         .provider_ingest_max_signed_transaction_bytes =
             Some(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN * 2);
         assert_invalid_wire(&mismatched_bound);
-
         let mut transaction_exceeds_checkpoint = provider_ingest_wire();
         wire_binding_mut(
             &mut transaction_exceeds_checkpoint,
@@ -2110,7 +2001,6 @@ mod tests {
             Some(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN - 1);
         assert_invalid_wire(&transaction_exceeds_checkpoint);
     }
-
     #[test]
     fn loader_rejects_cross_service_bound_and_identity_substitution() {
         let mut moderation_handle_collision = moderation_wire();
@@ -2120,7 +2010,6 @@ mod tests {
         )
         .handle = "sealed://sorafs/moderation/checkpoint-primary".to_owned();
         assert_invalid_wire(&moderation_handle_collision);
-
         let mut moderation_key_collision = moderation_wire();
         let checkpoint_key = wire_binding_mut(
             &mut moderation_key_collision,
@@ -2137,7 +2026,6 @@ mod tests {
         .expect("moderation archive metadata")
         .bootstrap_public_key = checkpoint_key;
         assert_invalid_wire(&moderation_key_collision);
-
         let mut evidence_bound = evidence_wire();
         wire_binding_mut(
             &mut evidence_bound,
@@ -2145,7 +2033,6 @@ mod tests {
         )
         .evidence_viewer_archive_max_bytes = Some(4 * 1024 * 1024 + 16 * 1024 + 1);
         assert_invalid_wire(&evidence_bound);
-
         let governance_key = ed25519_bytes(0x70);
         let governance = |slot, max_body_bytes| {
             let scope = match slot {
@@ -2198,7 +2085,6 @@ mod tests {
             1024 * 1024,
         )]);
         assert_valid_wire(&ipns_request);
-
         let mut missing_ingress = ipns_request.clone();
         wire_binding_mut(
             &mut missing_ingress,
@@ -2206,7 +2092,6 @@ mod tests {
         )
         .governance_request_ingress_binding = None;
         assert_invalid_wire(&missing_ingress);
-
         let mut substituted_scope = ipns_request;
         wire_binding_mut(
             &mut substituted_scope,
@@ -2217,7 +2102,6 @@ mod tests {
         .expect("Governance IPFS ingress binding")
         .scope = 2;
         assert_invalid_wire(&substituted_scope);
-
         wire_binding_mut(
             &mut governance_bound,
             IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
@@ -2228,7 +2112,6 @@ mod tests {
         .max_future_skew_secs = 6;
         assert_invalid_wire(&governance_bound);
     }
-
     #[test]
     fn catalog_bounds_match_config_validation() {
         let mut appeal = wire_from_bindings(vec![
@@ -2264,7 +2147,6 @@ mod tests {
             .appeal_finance_checkpoint_max_bytes = Some(invalid);
             assert_invalid_wire(&appeal);
         }
-
         let mut moderation = moderation_wire();
         for valid in [
             moderation_defaults::PANEL_NOTIFICATION_ARCHIVE_MIN_BYTES_V1,
@@ -2294,7 +2176,6 @@ mod tests {
             .max_bytes = invalid;
             assert_invalid_wire(&moderation);
         }
-
         let mut provider = provider_ingest_wire();
         let source = wire_binding_mut(
             &mut provider,
@@ -2330,7 +2211,6 @@ mod tests {
         limits.max_source_providers = 1_025;
         assert_invalid_wire(&provider);
     }
-
     #[test]
     fn exporter_rejects_projection_loss() {
         let mut partial_archive = IrohaRuntimeProviderBindingV1::try_new(
@@ -2345,7 +2225,6 @@ mod tests {
             catalog_from_bindings(vec![partial_archive]).export_canonical_v1(),
             Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)
         );
-
         let native_key = ed25519_key(0x51);
         let native = iroha_torii::SorafsNativeTransactionSignerBindingV1::try_new(
             iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome,
@@ -2377,7 +2256,6 @@ mod tests {
             Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)
         );
     }
-
     #[test]
     fn loader_rejects_trailing_bytes_and_oversized_input() {
         let mut trailing = generic_catalog()
@@ -2388,14 +2266,12 @@ mod tests {
             IrohaRuntimeProviderBindingsV1::load_canonical_v1(&trailing),
             Err(IrohaRuntimeProviderCatalogErrorV1::NonCanonicalEncoding)
         );
-
         let oversized = vec![0; RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1 + 1];
         assert_eq!(
             IrohaRuntimeProviderBindingsV1::load_canonical_v1(&oversized),
             Err(IrohaRuntimeProviderCatalogErrorV1::ArtifactTooLarge)
         );
     }
-
     #[test]
     fn loader_rejects_wrong_magic_and_version() {
         let mut wrong_magic = canonical_wire();
@@ -2405,7 +2281,6 @@ mod tests {
             IrohaRuntimeProviderBindingsV1::load_canonical_v1(&bytes),
             Err(IrohaRuntimeProviderCatalogErrorV1::InvalidMagic)
         );
-
         let mut wrong_version = canonical_wire();
         wrong_version.version = 2;
         let bytes = norito::encode_canonical(&wrong_version).expect("encode wrong version fixture");
@@ -2414,7 +2289,6 @@ mod tests {
             Err(IrohaRuntimeProviderCatalogErrorV1::UnsupportedVersion)
         );
     }
-
     #[test]
     fn loader_rejects_retired_optional_network_catalog_schema() {
         let wire = canonical_wire();
@@ -2434,7 +2308,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn loader_rejects_empty_duplicate_and_noncanonical_order() {
         let empty = RuntimeProviderCatalogWireV1 {
@@ -2454,7 +2327,6 @@ mod tests {
                 .export_canonical_v1(),
             Err(IrohaRuntimeProviderCatalogErrorV1::EmptyCatalog)
         );
-
         let mut duplicate = canonical_wire();
         duplicate.bindings.push(duplicate.bindings[0].clone());
         let bytes = norito::encode_canonical(&duplicate).expect("encode duplicate fixture");
@@ -2462,7 +2334,6 @@ mod tests {
             IrohaRuntimeProviderBindingsV1::load_canonical_v1(&bytes),
             Err(IrohaRuntimeProviderCatalogErrorV1::InvalidOrder)
         );
-
         let first = RuntimeProviderBindingWireV1::try_from_binding(
             &IrohaRuntimeProviderBindingV1::try_new(
                 IrohaRuntimeProviderSlotV1::BillingFinalizedQuery,
@@ -2496,7 +2367,6 @@ mod tests {
             Err(IrohaRuntimeProviderCatalogErrorV1::InvalidOrder)
         );
     }
-
     #[test]
     fn loader_rejects_test_marked_and_substituted_metadata() {
         let mut test_marked = canonical_wire();
@@ -2506,7 +2376,6 @@ mod tests {
             IrohaRuntimeProviderBindingsV1::load_canonical_v1(&bytes),
             Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)
         );
-
         let mut substituted = canonical_wire();
         substituted.bindings[0].stream_token_signer_public_key = Some([0x72; 32]);
         let bytes = norito::encode_canonical(&substituted).expect("encode substituted fixture");
@@ -2515,7 +2384,6 @@ mod tests {
             Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)
         );
     }
-
     #[test]
     fn loader_enforces_canonical_webauthn_rp_and_origin_fields() {
         load_wire(&webauthn_wire(
@@ -2523,7 +2391,6 @@ mod tests {
             ["https://login.review.example:8443"],
         ))
         .expect("canonical WebAuthn catalog");
-
         for rp_id in ["Review.example", "localhost", "127.0.0.1"] {
             assert_eq!(
                 load_wire(&webauthn_wire(rp_id, ["https://review.example"])),
@@ -2531,7 +2398,6 @@ mod tests {
                 "{rp_id:?} must fail closed"
             );
         }
-
         for origin in [
             "http://review.example",
             "https://operator:secret@review.example",

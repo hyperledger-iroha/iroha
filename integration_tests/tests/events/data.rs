@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for event data produced by instruction and IVM execution.
 use std::collections::BTreeSet;
-
 use eyre::{Result, WrapErr, eyre};
 use futures_util::StreamExt;
 use integration_tests::{sandbox, sync::get_status_with_retry_async};
@@ -24,9 +23,7 @@ use iroha_executor_data_model::permission::{
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use tokio::{task::spawn_blocking, time::Instant};
-
 const SNS_LEASE_PAYMENT_ASSET_DEFINITION: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
-
 fn produce_instructions(
     prefix: &str,
     owner: &AccountId,
@@ -44,7 +41,6 @@ fn produce_instructions(
         .collect::<Result<Vec<_>>>()?;
     Ok((instructions, expected))
 }
-
 fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
     const NEEDLES: [&str; 3] = [
         "haven't got tx confirmation within",
@@ -56,11 +52,9 @@ fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
         NEEDLES.iter().any(|needle| text.contains(needle))
     })
 }
-
 fn genesis_account_id() -> AccountId {
     AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone())
 }
-
 fn genesis_client(network: &Network) -> Client {
     network
         .peers()
@@ -71,7 +65,6 @@ fn genesis_client(network: &Network) -> Client {
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
         )
 }
-
 fn genesis_alias_payment_bootstrap() -> Result<Vec<InstructionBox>> {
     let genesis_id = genesis_account_id();
     let payment_asset_definition =
@@ -85,7 +78,6 @@ fn genesis_alias_payment_bootstrap() -> Result<Vec<InstructionBox>> {
         .into(),
     ])
 }
-
 async fn transaction_execution_should_produce_events(
     context: &'static str,
     network: &Network,
@@ -107,7 +99,6 @@ async fn transaction_execution_should_produce_events(
     )
     .await
     .wrap_err_with(|| format!("{context}: timed out opening domain event stream"))??;
-
     let result = async {
         {
             let client = client.clone();
@@ -123,14 +114,11 @@ async fn transaction_execution_should_produce_events(
                 }
             }
         }
-
         network
             .ensure_blocks_with(|h| h.non_empty > baseline_non_empty)
             .await?;
-
         let mut unexpected_domains = Vec::new();
         let deadline = Instant::now() + network.sync_timeout();
-
         while !expected_domains.is_empty() {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -166,29 +154,24 @@ async fn transaction_execution_should_produce_events(
                 }
             }
         }
-
         Ok(())
     }
     .await;
-
     events_stream.close().await;
     result
 }
-
 fn unwrap_data_event(event: EventBox) -> DataEvent {
     match event {
         EventBox::Data(shared) => shared.as_ref().clone(),
         other => panic!("expected Data event, got {other:?}"),
     }
 }
-
 #[allow(clippy::too_many_lines)]
 async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
     let status = get_status_with_retry_async(&network.client())
         .await
         .map_err(|err| err.wrap_err("produce_multiple_events: wait for status"))?;
     let baseline_non_empty = status.blocks_non_empty;
-
     // Register role
     let role_id = "TEST_ROLE_EVENTS".parse::<RoleId>()?;
     let wonderland_domain: DomainId = DomainId::try_new("wonderland", "universal")?;
@@ -202,14 +185,11 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
         .add_permission(permission_1.clone())
         .add_permission(permission_2.clone());
     let register_role = Register::role(role.clone());
-
     // Grant the role to Bob
     let bob_id = BOB_ID.clone();
     let grant_role = Grant::account_role(role_id.clone(), BOB_ID.clone());
-
     // Unregister the role
     let unregister_role = Unregister::role(role_id.clone());
-
     let account_event_set = AccountEventSet::RoleGranted | AccountEventSet::RoleRevoked;
     let mut events_stream = tokio::time::timeout(
         network.sync_timeout(),
@@ -233,7 +213,6 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
     )
     .await
     .wrap_err("produce_multiple_events: timed out opening event stream")??;
-
     {
         let client = network.client();
         spawn_blocking(move || {
@@ -248,11 +227,9 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
         })
         .await??;
     }
-
     network
         .ensure_blocks_with(|h| h.non_empty > baseline_non_empty)
         .await?;
-
     let mut pending_grants: BTreeSet<AccountId> =
         [ALICE_ID.clone(), bob_id.clone()].into_iter().collect();
     let mut pending_revokes = pending_grants.clone();
@@ -260,7 +237,6 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
     let mut saw_role_deleted = false;
     let mut unexpected_events = Vec::new();
     let deadline = Instant::now() + network.sync_timeout();
-
     let result = async {
         while !(saw_role_created
             && saw_role_deleted
@@ -303,7 +279,6 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
                     );
                 }
             };
-
             match unwrap_data_event(event) {
                 DataEvent::Role(RoleEvent::Created(created_role)) => {
                     if created_role.id() != role.id() {
@@ -371,15 +346,12 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
                 other => unexpected_events.push(format!("unexpected event: {other:?}")),
             }
         }
-
         Ok(())
     }
     .await;
-
     events_stream.close().await;
     result
 }
-
 #[tokio::test]
 #[allow(clippy::large_futures, clippy::too_many_lines)]
 async fn data_event_scenarios() -> Result<()> {
@@ -388,7 +360,6 @@ async fn data_event_scenarios() -> Result<()> {
         produce_instructions("instr", &genesis_id)?;
     let (ivm_instructions, ivm_expected) = produce_instructions("ivm", &genesis_id)?;
     let payment_bootstrap = genesis_alias_payment_bootstrap()?;
-
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
             .with_peers(4)
@@ -400,7 +371,6 @@ async fn data_event_scenarios() -> Result<()> {
         return Ok(());
     };
     let submit_client = genesis_client(&network);
-
     if sandbox::handle_result(
         transaction_execution_should_produce_events(
             stringify!(instruction_execution_should_produce_events),
@@ -416,7 +386,6 @@ async fn data_event_scenarios() -> Result<()> {
     {
         return Ok(());
     }
-
     if sandbox::handle_result(
         transaction_execution_should_produce_events(
             stringify!(ivm_execution_should_produce_events),
@@ -432,7 +401,6 @@ async fn data_event_scenarios() -> Result<()> {
     {
         return Ok(());
     }
-
     if sandbox::handle_result(
         produce_multiple_events_scenario(&network).await,
         stringify!(produce_multiple_events),
@@ -441,6 +409,5 @@ async fn data_event_scenarios() -> Result<()> {
     {
         return Ok(());
     }
-
     Ok(())
 }

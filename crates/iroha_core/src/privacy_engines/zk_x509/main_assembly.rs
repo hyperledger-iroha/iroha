@@ -9,12 +9,10 @@
 //! Assembly is not proof verification. Native reference validation here is a
 //! prover-side differential invariant; the independent aggregate verifier
 //! enforces the committed numeric constraints.
-
 use iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1;
 use p256::ecdsa::Signature as P256Signature;
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
-
 use super::{
     accumulator_air::{
         ZkX509AccumulatorAirErrorV1, ZkX509CaAccumulatorStatementV1, ZkX509CaAccumulatorTraceV1,
@@ -71,11 +69,9 @@ use super::{
     verifier_profile::rfc_statement_with_crl_number_v1,
 };
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
-
 const P256_SIGNATURES_V1: usize = 5;
 const PROJECTION_SHA_CALLS_V1: usize = 7;
 const PROJECTION_SHARED_PREFIX_BASE_CHANNELS_V1: usize = 5;
-
 /// Challenge-independent byte-memory material committed by MAIN.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ZkX509MainIoBaseMaterialV1 {
@@ -90,7 +86,6 @@ pub(crate) struct ZkX509MainIoBaseMaterialV1 {
     /// Exact address-sorted byte events.
     pub(crate) sorted: Vec<IoAccessV1>,
 }
-
 /// Complete challenge-independent native material for one MAIN proof.
 pub(crate) struct ZkX509MainTraceAssemblyV1 {
     /// Successful native differential projection.
@@ -120,7 +115,6 @@ pub(crate) struct ZkX509MainTraceAssemblyV1 {
     /// Complete verifier-owned registration and fixed-preprocessing profile.
     pub(crate) verifier_profile: ZkX509MainVerifierProfileV1,
 }
-
 impl ZkX509MainTraceAssemblyV1 {
     /// Recursively overwrite all source and derived private material.
     ///
@@ -179,7 +173,6 @@ impl ZkX509MainTraceAssemblyV1 {
         self.io.execution.clear();
         self.io.sorted.clear();
     }
-
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
         self.relation_output.ownership_challenge_digest == [0; 32]
@@ -215,13 +208,11 @@ impl ZkX509MainTraceAssemblyV1 {
             && self.io.sorted.is_empty()
     }
 }
-
 impl Drop for ZkX509MainTraceAssemblyV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 /// Canonical MAIN material construction failure.
 #[derive(Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509MainAssemblyErrorV1 {
@@ -271,13 +262,11 @@ pub(crate) enum ZkX509MainAssemblyErrorV1 {
     #[error("zk-X509 MAIN assembly resource envelope is exceeded")]
     Resource,
 }
-
 impl From<ZkX509StarkErrorV1> for ZkX509MainAssemblyErrorV1 {
     fn from(_: ZkX509StarkErrorV1) -> Self {
         Self::Registration
     }
 }
-
 fn projection_witness_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     trace: &ZkX509Rfc5280TraceV1,
@@ -324,7 +313,6 @@ fn projection_witness_v1(
         attribute_salts,
     })
 }
-
 fn sha_witness_v1(
     schedule: &ZkX509ShaCallScheduleV1,
     call: usize,
@@ -338,7 +326,6 @@ fn sha_witness_v1(
         digest,
     })
 }
-
 fn projection_sha_messages_v1(
     disclosed_attributes: usize,
     trace: &ZkX509ProjectionTraceV1,
@@ -421,7 +408,6 @@ fn projection_sha_messages_v1(
     }
     Ok(messages)
 }
-
 fn build_sha_witnesses_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     governance: ZkX509GovernanceV1<'_>,
@@ -487,7 +473,6 @@ fn build_sha_witnesses_v1(
     validate_zk_x509_sha_call_witnesses_v1(schedule, &calls)?;
     Ok(calls)
 }
-
 fn strict_signature_words_v1(
     encoded: &[u8],
 ) -> Result<([u8; 32], [u8; 32]), ZkX509MainAssemblyErrorV1> {
@@ -501,7 +486,6 @@ fn strict_signature_words_v1(
         signature.s().to_bytes().into(),
     ))
 }
-
 fn public_key_words_v1(encoded: &[u8]) -> Result<([u8; 32], [u8; 32]), ZkX509MainAssemblyErrorV1> {
     if encoded.len() != 65 || encoded.first() != Some(&4) {
         return Err(ZkX509MainAssemblyErrorV1::Source);
@@ -512,7 +496,6 @@ fn public_key_words_v1(encoded: &[u8]) -> Result<([u8; 32], [u8; 32]), ZkX509Mai
     y.copy_from_slice(&encoded[33..65]);
     Ok((x, y))
 }
-
 fn p256_witness_v1(
     public_key: &[u8],
     signature_der: &[u8],
@@ -528,7 +511,6 @@ fn p256_witness_v1(
         digest_be,
     })
 }
-
 fn p256_witness_rs_v1(
     public_key: &[u8],
     signature_rs: &[u8; 64],
@@ -545,7 +527,6 @@ fn p256_witness_rs_v1(
         digest_be,
     })
 }
-
 fn build_p256_material_v1(
     witness: &ZkX509WitnessV1,
     trace: &ZkX509Rfc5280TraceV1,
@@ -600,7 +581,6 @@ fn build_p256_material_v1(
     let optional_certificate_selection =
         select_zk_x509_optional_certificate_p256_witness_v1(slot_2_active, slot_2_real)?;
     selected.push(optional_certificate_selection.selected);
-
     let issuer = trace
         .certificates
         .get(1)
@@ -622,7 +602,6 @@ fn build_p256_material_v1(
     let selected: [P256EcdsaWitnessV1; P256_SIGNATURES_V1] = selected
         .try_into()
         .map_err(|_| ZkX509MainAssemblyErrorV1::Source)?;
-
     let mut materials = Vec::new();
     materials
         .try_reserve_exact(P256_SIGNATURES_V1)
@@ -640,7 +619,6 @@ fn build_p256_material_v1(
         .map_err(|_| ZkX509MainAssemblyErrorV1::Source)?;
     Ok((selected, materials, optional_certificate_selection))
 }
-
 fn build_io_material_v1(
     plan: &ZkX509MainIoDeclarationsV1,
     rfc_trace: &ZkX509Rfc5280TraceV1,
@@ -683,7 +661,6 @@ fn build_io_material_v1(
         sorted,
     })
 }
-
 /// Build the sole canonical challenge-independent MAIN trace assembly.
 pub(crate) fn build_zk_x509_main_trace_assembly_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
@@ -701,7 +678,6 @@ pub(crate) fn build_zk_x509_main_trace_assembly_v1(
         &witness.crl_der,
         rfc_statement_with_crl_number_v1(statement, governance.crl.crl_number),
     )?;
-
     let mut documents = witness
         .certificate_chain_der
         .iter()
@@ -713,7 +689,6 @@ pub(crate) fn build_zk_x509_main_trace_assembly_v1(
     documents.push(&witness.crl_der);
     let der_base = build_zk_x509_der_stark_base_v1(&documents)?;
     let rfc_base = build_zk_x509_rfc5280_stark_base_material_v1(&rfc_trace)?;
-
     let projection_trace = build_zk_x509_projection_trace_v1(
         statement,
         &projection_witness_v1(statement, &rfc_trace, witness)?,
@@ -772,14 +747,12 @@ pub(crate) fn build_zk_x509_main_trace_assembly_v1(
         verifier_profile,
     })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::privacy_engines::zk_x509::{
         main_io::tests::statement_with_disclosures_v1, relation::tests::fixture,
     };
-
     fn synthetic_witnesses_for_plan_v1(
         plan: &ZkX509MainIoDeclarationsV1,
     ) -> Vec<ZkX509IoChannelWitnessV1> {
@@ -804,7 +777,6 @@ mod tests {
             })
             .collect()
     }
-
     #[test]
     fn verifier_plan_and_witness_declarations_match_for_every_disclosure_count() {
         for disclosures in 0..=iroha_data_model::privacy::ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1 {
@@ -821,7 +793,6 @@ mod tests {
             assert_eq!(sorted.len(), plan.logical_active_rows);
         }
     }
-
     #[test]
     fn verifier_plan_rejects_reordered_missing_extra_and_mutated_witness_metadata() {
         let statement = statement_with_disclosures_v1(4);
@@ -829,35 +800,27 @@ mod tests {
             compile_zk_x509_main_io_declarations_v1(&statement).expect("valid verifier-owned plan");
         let canonical = synthetic_witnesses_for_plan_v1(&plan);
         let mut mutations = Vec::new();
-
         let mut changed = canonical.clone();
         changed.swap(0, 1);
         mutations.push(changed);
-
         let mut changed = canonical.clone();
         changed.pop();
         mutations.push(changed);
-
         let mut changed = canonical.clone();
         changed.push(canonical[0].clone());
         mutations.push(changed);
-
         let mut changed = canonical.clone();
         changed[0].declaration.channel += 1;
         mutations.push(changed);
-
         let mut changed = canonical.clone();
         changed[0].declaration.producer.role = ZkX509IoSegmentRoleV1::Sha256;
         mutations.push(changed);
-
         let mut changed = canonical.clone();
         changed[0].declaration.consumers[0].role = ZkX509IoSegmentRoleV1::P256;
         mutations.push(changed);
-
         let mut changed = canonical.clone();
         changed[0].declaration.byte_len += 1;
         mutations.push(changed);
-
         let mut changed = canonical.clone();
         changed
             .iter_mut()
@@ -868,7 +831,6 @@ mod tests {
             .as_mut()
             .expect("public value")[0] ^= 1;
         mutations.push(changed);
-
         for mutation in mutations {
             assert_eq!(
                 plan.validate_witness_declarations_v1(&mutation),
@@ -876,7 +838,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn complete_main_assembly_scrub_is_recursive_idempotent_and_preserves_public_topology() {
         let fixture = fixture();
@@ -897,7 +858,6 @@ mod tests {
             &fixture.witness,
         )
         .expect("canonical MAIN assembly");
-
         assert!(!assembly.rfc_trace.private_is_zeroized_v1());
         assert!(!assembly.der_base.private_is_zeroized_v1());
         assert!(!assembly.rfc_base.private_is_zeroized_v1());
@@ -927,7 +887,6 @@ mod tests {
         assert!(!assembly.io.sorted.is_empty());
         assert_eq!(assembly.io.logical_active_rows, assembly.io.execution.len());
         assert_eq!(assembly.io.logical_active_rows, assembly.io.sorted.len());
-
         // Poison top-level byte leaves, including otherwise-empty optional
         // preimages, so the test cannot pass merely because a fixture field
         // happened to start at zero.
@@ -986,7 +945,6 @@ mod tests {
             access.value = F(0xa5);
             access.is_write = F::ONE;
         }
-
         let public_relation = (
             assembly.relation_output.subject_public_key_digest,
             assembly.relation_output.certificate_nullifier,
@@ -1002,12 +960,10 @@ mod tests {
             .map(|material| (material.role, material.assigned));
         let verifier_profile = assembly.verifier_profile;
         let io_logical_active_rows = assembly.io.logical_active_rows;
-
         assembly.zeroize_private_v1();
         assert!(assembly.private_is_zeroized_v1());
         assembly.zeroize_private_v1();
         assert!(assembly.private_is_zeroized_v1());
-
         assert_eq!(
             (
                 assembly.relation_output.subject_public_key_digest,

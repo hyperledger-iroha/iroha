@@ -18,7 +18,6 @@
 //!   To implement that, we need a formal actor system, i.e. actors with a unified lifecycle,
 //!   messaging system, and, most importantly, address registry
 //!   (for reference, see [Registry - Elixir](https://hexdocs.pm/elixir/1.17.0-rc.1/Registry.html)).
-
 use std::{
     future::Future,
     sync::{
@@ -27,7 +26,6 @@ use std::{
     },
     time::Duration,
 };
-
 use error_stack::Report;
 use iroha_logger::{InstrumentFutures, prelude::Span};
 use tokio::{
@@ -36,31 +34,26 @@ use tokio::{
     time::timeout,
 };
 use tokio_util::sync::CancellationToken;
-
 /// Supervisor for tokio tasks.
 #[derive(Debug, Default)]
 pub struct Supervisor {
     children: Vec<Child>,
     shutdown_signal: ShutdownSignal,
 }
-
 impl Supervisor {
     /// Constructor
     pub fn new() -> Self {
         Self::default()
     }
-
     /// Get a copy of the supervisor's shutdown signal
     pub fn shutdown_signal(&self) -> ShutdownSignal {
         self.shutdown_signal.clone()
     }
-
     /// Monitor a given [`Child`]
     #[track_caller]
     pub fn monitor(&mut self, child: impl Into<Child>) {
         self.children.push(child.into());
     }
-
     /// Spawns a task that will initiate supervisor shutdown on operating-system signals.
     ///
     /// Unix builds listen for SIGINT and SIGTERM. Windows builds listen for Ctrl-C.
@@ -69,18 +62,15 @@ impl Supervisor {
     pub fn setup_shutdown_on_os_signals(&mut self) -> Result<()> {
         setup_shutdown_on_os_signals(self)
     }
-
     /// Spawns a task that will shut down the supervisor once the external
     /// [`ShutdownSignal`] is sent.
     pub fn shutdown_on_external_signal(&mut self, external_signal: ShutdownSignal) {
         let self_signal = self.shutdown_signal();
-
         self.monitor(tokio::spawn(async move {
             external_signal.receive().await;
             self_signal.send();
         }))
     }
-
     /// Start actual supervision and wait until all children terminate.
     ///
     /// Returns [`Ok`] if all children exited/aborted as expected after shutdown
@@ -93,7 +83,6 @@ impl Supervisor {
         if self.children.is_empty() {
             return Ok(());
         }
-
         LoopBuilder::new(self.shutdown_signal)
             .monitor(self.children)
             .into_loop()
@@ -101,16 +90,13 @@ impl Supervisor {
             .await
     }
 }
-
 #[cfg(unix)]
 fn setup_shutdown_on_os_signals(supervisor: &mut Supervisor) -> Result<()> {
     use tokio::signal;
-
     let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
         .map_err(|err| Report::new(Error::from(err)).expand())?;
     let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
         .map_err(|err| Report::new(Error::from(err)).expand())?;
-
     let shutdown_signal = supervisor.shutdown_signal();
     supervisor.monitor(tokio::spawn(async move {
         tokio::select! {
@@ -121,13 +107,10 @@ fn setup_shutdown_on_os_signals(supervisor: &mut Supervisor) -> Result<()> {
                 iroha_logger::info!("SIGTERM received, shutting down...");
             },
         }
-
         shutdown_signal.send();
     }));
-
     Ok(())
 }
-
 #[cfg(windows)]
 fn setup_shutdown_on_os_signals(supervisor: &mut Supervisor) -> Result<()> {
     let shutdown_signal = supervisor.shutdown_signal();
@@ -138,25 +121,20 @@ fn setup_shutdown_on_os_signals(supervisor: &mut Supervisor) -> Result<()> {
                 iroha_logger::error!(%err, "Ctrl-C listener failed, shutting down...");
             }
         }
-
         shutdown_signal.send();
     }));
-
     Ok(())
 }
-
 #[cfg(not(any(unix, windows)))]
 fn setup_shutdown_on_os_signals(_supervisor: &mut Supervisor) -> Result<()> {
     iroha_logger::warn!("OS signal shutdown handling is not supported on this platform");
     Ok(())
 }
-
 #[derive(Clone, Debug, Default)]
 struct NotifyOnce {
     notify: Arc<Notify>,
     is_notified: Arc<AtomicBool>,
 }
-
 impl NotifyOnce {
     fn new() -> Self {
         Self {
@@ -164,19 +142,16 @@ impl NotifyOnce {
             is_notified: Arc::new(AtomicBool::new(false)),
         }
     }
-
     fn notify(&self) {
         self.is_notified.store(true, Ordering::Release);
         self.notify.notify_waiters();
     }
-
     async fn notified(&self) {
         if !self.is_notified.load(Ordering::Acquire) {
             self.notify.notified().await;
         }
     }
 }
-
 struct LoopBuilder {
     set: JoinSet<()>,
     shutdown_signal: ShutdownSignal,
@@ -185,7 +160,6 @@ struct LoopBuilder {
         mpsc::Receiver<ChildExitResult>,
     ),
 }
-
 impl LoopBuilder {
     fn new(shutdown_signal: ShutdownSignal) -> Self {
         Self {
@@ -194,14 +168,12 @@ impl LoopBuilder {
             exit: mpsc::channel(256),
         }
     }
-
     fn monitor(mut self, children: impl IntoIterator<Item = Child>) -> Self {
         for child in children {
             self.monitor_single(child);
         }
         self
     }
-
     fn monitor_single(
         &mut self,
         Child {
@@ -212,7 +184,6 @@ impl LoopBuilder {
     ) {
         let exit_tx = self.exit.0.clone();
         let task_abort_handle = task.abort_handle();
-
         let exit_signal = NotifyOnce::new();
         let exit_signal_task = exit_signal.clone();
         let monitor_abort_handle = self.set.spawn(
@@ -240,7 +211,6 @@ impl LoopBuilder {
             }
             .instrument(span.clone()),
         );
-
         // task to handle graceful shutdown
         let shutdown_signal = self.shutdown_signal.clone();
         let exit_wait1 = exit_signal.clone();
@@ -266,12 +236,10 @@ impl LoopBuilder {
                             }
                         }
                     }
-
                }
            }
         }.instrument(span));
     }
-
     fn into_loop(self) -> SupervisorLoop {
         let Self {
             set,
@@ -287,7 +255,6 @@ impl LoopBuilder {
         }
     }
 }
-
 struct SupervisorLoop {
     set: JoinSet<()>,
     shutdown_signal: ShutdownSignal,
@@ -295,7 +262,6 @@ struct SupervisorLoop {
     caught_panic: bool,
     caught_unexpected_exit: bool,
 }
-
 impl SupervisorLoop {
     async fn run(mut self) -> Result<()> {
         loop {
@@ -308,17 +274,14 @@ impl SupervisorLoop {
                         iroha_logger::error!(?err, "Supervisor-spawned task panicked; it is probably a bug");
                     }
                 }
-
                 // this should finish when all task monitors finish
                 Some(result) = self.exit.recv() => {
                     iroha_logger::debug!(?result, "Child exited");
                     self.handle_child_exit(result);
                 }
-
                 else => break,
             }
         }
-
         let mut report: Option<Report<[Error]>> = if self.caught_panic {
             Some(Report::new(Error::ChildPanicked).expand())
         } else {
@@ -332,7 +295,6 @@ impl SupervisorLoop {
         }
         report.map_or(Ok(()), Err)
     }
-
     fn handle_child_exit(&mut self, result: ChildExitResult) {
         iroha_logger::warn!(
             ?result,
@@ -354,42 +316,35 @@ impl SupervisorLoop {
         }
     }
 }
-
 #[derive(Copy, Clone, Debug)]
 enum ChildExitResult {
     Ok,
     Panic,
     Cancel,
 }
-
 /// Signal indicating system shutdown. Could be cloned around.
 ///
 /// It is effectively a wrap around [`CancellationToken`], but with different naming.
 #[derive(Clone, Debug, Default)]
 pub struct ShutdownSignal(CancellationToken);
-
 impl ShutdownSignal {
     /// Constructor
     pub fn new() -> Self {
         Self::default()
     }
-
     /// Send the shutdown signal, resolving all [`Self::receive`] futures.
     pub fn send(&self) {
         self.0.cancel();
     }
-
     /// Receive the shutdown signal. Resolves after [`Self::send`].
     pub async fn receive(&self) {
         self.0.cancelled().await
     }
-
     /// Sync check whether the shutdown signal was sent
     pub fn is_sent(&self) -> bool {
         self.0.is_cancelled()
     }
 }
-
 /// Spawn [`std::thread`] as a future that finishes when the thread finishes and panics
 /// when the thread panics.
 ///
@@ -446,7 +401,6 @@ where
         .expect("should spawn thread normally")
         .await;
 }
-
 /// Synchronously spawn an OS thread and return its completion future.
 ///
 /// Unlike [`spawn_os_thread_as_future`], thread creation happens before this
@@ -467,22 +421,18 @@ where
     F: Send + 'static,
 {
     let (complete_tx, complete_rx) = oneshot::channel();
-
     // we are okay to drop the handle; thread will continue running in a detached way
     let _handle: std::thread::JoinHandle<_> = builder.spawn(move || {
         f();
-
         // the receiver might be dropped
         let _ = complete_tx.send(());
     })?;
-
     Ok(async move {
         complete_rx
             .await
             .expect("thread completion notifier was dropped; thread probably panicked");
     })
 }
-
 /// Supervisor child.
 #[derive(Debug)]
 pub struct Child {
@@ -490,14 +440,12 @@ pub struct Child {
     task: JoinHandle<()>,
     on_shutdown: OnShutdown,
 }
-
 impl Child {
     /// Create a new supervisor child
     #[track_caller]
     pub fn new(task: JoinHandle<()>, on_shutdown: OnShutdown) -> Self {
         let caller_location = std::panic::Location::caller().to_string();
         let span = iroha_logger::debug_span!("supervisor_child_monitor", %caller_location);
-
         Self {
             span,
             task,
@@ -505,14 +453,12 @@ impl Child {
         }
     }
 }
-
 impl From<JoinHandle<()>> for Child {
     #[track_caller]
     fn from(value: JoinHandle<()>) -> Self {
         Self::new(value, OnShutdown::Abort)
     }
 }
-
 /// Supervisor errors.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -526,10 +472,8 @@ pub enum Error {
     #[error("IO error")]
     IO(#[from] std::io::Error),
 }
-
 /// Result type returned by supervisor methods.
 pub type Result<T> = core::result::Result<T, Report<[Error]>>;
-
 /// Specifies supervisor action regarding a [`Child`] when shutdown happens.
 #[derive(Default, Copy, Clone, Debug)]
 pub enum OnShutdown {
@@ -539,27 +483,22 @@ pub enum OnShutdown {
     /// Wait until the child exits/aborts on its own; abort if it takes too long
     Wait(Duration),
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     };
-
     use tokio::{
         sync::{mpsc, oneshot},
         time::sleep,
     };
-
     use super::*;
-
     const TICK_TIMEOUT: Duration = Duration::from_millis(10);
     /// For some reason, when all tests are run simultaneously, tests with OS spawns take longer
     /// than just [`TICK_TIMEOUT`]
     const OS_THREAD_SPAWN_TICK: Duration = Duration::from_millis(500);
     const SHUTDOWN_WITHIN_TICK: OnShutdown = OnShutdown::Wait(TICK_TIMEOUT);
-
     #[tokio::test]
     async fn empty_supervisor_just_exits() {
         timeout(TICK_TIMEOUT, Supervisor::new().start())
@@ -567,7 +506,6 @@ mod tests {
             .expect("should exit immediately")
             .expect("should not emit error");
     }
-
     #[tokio::test]
     async fn happy_graceful_shutdown() {
         #[derive(Debug)]
@@ -575,12 +513,9 @@ mod tests {
             Ping { pong: oneshot::Sender<()> },
             Stopped,
         }
-
         let mut sup = Supervisor::new();
-
         let (tx_into, mut rx_into) = mpsc::channel(1);
         let (tx_out, rx_out) = oneshot::channel();
-
         {
             let shutdown = sup.shutdown_signal();
             sup.monitor(Child::new(
@@ -600,7 +535,6 @@ mod tests {
                 SHUTDOWN_WITHIN_TICK,
             ));
         }
-
         // ensure task is spinning
         timeout(TICK_TIMEOUT, async {
             let (tx, rx) = oneshot::channel();
@@ -609,10 +543,8 @@ mod tests {
         })
         .await
         .unwrap();
-
         let shutdown = sup.shutdown_signal();
         let sup_handle = tokio::spawn(sup.start());
-
         // send shutdown signal
         shutdown.send();
         timeout(TICK_TIMEOUT, async {
@@ -622,7 +554,6 @@ mod tests {
         })
         .await
         .unwrap();
-
         // we can now expect supervisor to stop without errors
         timeout(TICK_TIMEOUT, sup_handle)
             .await
@@ -630,15 +561,12 @@ mod tests {
             .expect("supervisor run should not panic")
             .expect("supervisor should not find any nested panics");
     }
-
     #[tokio::test]
     async fn supervisor_catches_panic_of_a_monitored_task() {
         let mut sup = Supervisor::new();
-
         sup.monitor(tokio::spawn(async {
             panic!("my panic should not be unnoticed")
         }));
-
         let err = timeout(TICK_TIMEOUT, sup.start())
             .await
             .expect("should finish almost immediately")
@@ -647,14 +575,11 @@ mod tests {
         let first = contexts.next().expect("at least one context");
         assert!(matches!(first, Error::ChildPanicked));
     }
-
     #[tokio::test]
     async fn supervisor_sends_shutdown_when_some_task_exits() {
         let mut sup = Supervisor::new();
-
         // exits immediately, not expected
         sup.monitor(tokio::spawn(async {}));
-
         // some task that needs shutdown gracefully
         let signal = sup.shutdown_signal();
         let (graceful_tx, graceful_rx) = oneshot::channel();
@@ -665,14 +590,11 @@ mod tests {
             }),
             SHUTDOWN_WITHIN_TICK,
         ));
-
         let sup_handle = tokio::spawn(sup.start());
-
         timeout(TICK_TIMEOUT, graceful_rx)
             .await
             .expect("should shutdown everything immediately")
             .expect("should receive message fine");
-
         let err = timeout(TICK_TIMEOUT, sup_handle)
             .await
             .unwrap()
@@ -683,13 +605,11 @@ mod tests {
                 .any(|ctx| matches!(ctx, Error::UnexpectedExit))
         );
     }
-
     #[tokio::test]
     async fn graceful_shutdown_when_some_task_panics() {
         let mut sup = Supervisor::new();
         let signal = sup.shutdown_signal();
         sup.monitor(tokio::spawn(async { panic!() }));
-
         let err = timeout(TICK_TIMEOUT, sup.start())
             .await
             .expect("should finish immediately")
@@ -698,17 +618,14 @@ mod tests {
             err.current_contexts()
                 .any(|ctx| matches!(ctx, Error::ChildPanicked))
         );
-
         assert!(signal.is_sent());
     }
-
     fn spawn_task_with_graceful_shutdown(
         sup: &mut Supervisor,
         shutdown_time: Duration,
         timeout: Duration,
     ) -> Arc<AtomicBool> {
         let graceful = Arc::new(AtomicBool::new(false));
-
         let signal = sup.shutdown_signal();
         let graceful_clone = graceful.clone();
         sup.monitor(Child::new(
@@ -719,20 +636,16 @@ mod tests {
             }),
             OnShutdown::Wait(timeout),
         ));
-
         graceful
     }
-
     #[tokio::test]
     async fn actually_waits_for_shutdown() {
         const ACTUAL_SHUTDOWN: Duration = Duration::from_millis(50);
         const TIMEOUT: Duration = Duration::from_millis(100);
-
         let mut sup = Supervisor::new();
         let signal = sup.shutdown_signal();
         let graceful = spawn_task_with_graceful_shutdown(&mut sup, ACTUAL_SHUTDOWN, TIMEOUT);
         let sup_fut = tokio::spawn(sup.start());
-
         signal.send();
         timeout(ACTUAL_SHUTDOWN + TICK_TIMEOUT, sup_fut)
             .await
@@ -741,18 +654,15 @@ mod tests {
             .expect("supervisor should exit fine");
         assert!(graceful.load(Ordering::Relaxed));
     }
-
     #[tokio::test]
     async fn aborts_task_if_shutdown_takes_long() {
         const ACTUAL_SHUTDOWN: Duration = Duration::from_millis(100);
         const TIMEOUT: Duration = Duration::from_millis(50);
-
         // Start system
         let mut sup = Supervisor::new();
         let signal = sup.shutdown_signal();
         let graceful = spawn_task_with_graceful_shutdown(&mut sup, ACTUAL_SHUTDOWN, TIMEOUT);
         let sup_fut = tokio::spawn(sup.start());
-
         // Initiate shutdown
         signal.send();
         timeout(TIMEOUT + TICK_TIMEOUT, sup_fut)
@@ -764,12 +674,10 @@ mod tests {
         sleep(ACTUAL_SHUTDOWN + TICK_TIMEOUT).await;
         assert!(!graceful.load(Ordering::Relaxed));
     }
-
     #[tokio::test]
     async fn can_monitor_os_thread_shutdown() {
         const LOOP_SLEEP: Duration = Duration::from_millis(5);
         const TIMEOUT: Duration = Duration::from_millis(50);
-
         let mut sup = Supervisor::new();
         let signal = sup.shutdown_signal();
         let signal2 = sup.shutdown_signal();
@@ -796,7 +704,6 @@ mod tests {
         // need to yield so that it can actually start the thread
         tokio::task::yield_now().await;
         let sup_fut = tokio::spawn(sup.start());
-
         timeout(OS_THREAD_SPAWN_TICK, ready.notified())
             .await
             .expect("thread should start by now");
@@ -809,7 +716,6 @@ mod tests {
             .expect("should shutdown without errors");
         assert!(graceful2.load(Ordering::Relaxed));
     }
-
     #[tokio::test]
     async fn can_catch_os_thread_panic() {
         let mut sup = Supervisor::new();
@@ -826,19 +732,16 @@ mod tests {
                 .any(|ctx| matches!(ctx, Error::ChildPanicked))
         );
     }
-
     #[tokio::test]
     async fn aggregates_multiple_errors() {
         let mut sup = Supervisor::new();
         // one child panics and another exits unexpectedly
         sup.monitor(tokio::spawn(async {}));
         sup.monitor(tokio::spawn(async { panic!("boom") }));
-
         let err = timeout(TICK_TIMEOUT, sup.start())
             .await
             .expect("should terminate quickly")
             .expect_err("should report errors");
-
         let mut frame_count = 0;
         let mut seen_panic = false;
         let mut seen_exit = false;

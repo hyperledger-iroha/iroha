@@ -16,8 +16,10 @@ python3 scripts/iso_operator_canary.py \
 ```
 
 Before a live canary, copy the relevant template into an operator runbook
-location, replace endpoints and paths, place bearer tokens in runtime-only
-files, populate the rail inbox with XML plus `*.xml.json` sidecars, and point
+location, replace endpoints and paths, set `rail.network_id` to the exact
+genesis-derived runtime identity, place the rail operator private key and any
+notary bearer token in runtime-only files, populate the rail inbox with XML plus
+`*.xml.json` sidecars, and point
 `notary.export_dir` at Torii's configured `iso_bridge.audit_export_dir`.
 When running with `--require-explicit-policy`, keep list-valued runbook fields
 explicit as arrays, including `verify.receipt_dirs: []` and
@@ -25,16 +27,21 @@ explicit as arrays, including `verify.receipt_dirs: []` and
 receipts. Also set `rail.receipt_dir` and `notary.receipt_dir` explicitly and
 keep them separate from `rail.inbox_dir` and `notary.export_dir`; production
 policy rejects receipt directories that overlap those source roots.
-Receipt directories must also stay separate from configured rail/notary
-bearer-token file paths before execution, so runtime-only token files are never
-inside generated receipt roots or treated as receipt-root ancestors.
-Bearer-token files must also stay outside `rail.inbox_dir` and
-`notary.export_dir`; those source roots are for message/audit evidence only.
+Receipt directories must also stay separate from the rail operator-private-key
+file and notary bearer-token file before execution, so runtime-only secrets are
+never inside generated receipt roots or treated as receipt-root ancestors.
+The operator key must stay outside `rail.inbox_dir`, and the notary bearer-token
+file must stay outside `notary.export_dir`; those source roots are for
+message/audit evidence only.
 Direct rail/notary adapter runs additionally reject receipt directories that
-overlap explicit rail XML/sidecar source files, rail/notary bearer-token files,
-directories containing those token files, or notary anchor/index source files,
-and reject bearer-token files under the source roots before source loading or
-network delivery.
+overlap explicit rail XML/sidecar source files, the rail operator key, the
+notary bearer-token file, directories containing those secrets, or notary
+anchor/index source files, and reject secret files under the source roots before
+source loading or network delivery. The rail stage has no bearer-token fallback:
+each submission uses a fresh exact-network operator signature bound to the
+method, path, sorted query, and raw XML body. Receipt and evidence replay require
+an explicit rail profile to appear as the single canonical `profile` query and
+reject omitted, duplicated, encoded, unknown, or substituted query values.
 If `--summary-out` is supplied, the canary runner checks the summary target and
 existing ancestors without creating missing parent directories before runbook
 JSON parsing; after planning, the same output must still remain separate from

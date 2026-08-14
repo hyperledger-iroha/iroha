@@ -1,17 +1,13 @@
 //! Tests for compute economics governance bounds and sponsor caps.
-
 use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr};
-
 use iroha_config::parameters::{actual::ComputeEconomics, defaults};
 use iroha_data_model::{
     compute::{ComputeGovernanceError, ComputePriceWeights},
     name::Name,
 };
-
 fn default_price_families() -> BTreeMap<Name, ComputePriceWeights> {
     defaults::compute::price_families()
 }
-
 fn default_economics() -> ComputeEconomics {
     ComputeEconomics {
         max_cu_per_call: defaults::compute::max_cu_per_call(),
@@ -24,13 +20,11 @@ fn default_economics() -> ComputeEconomics {
         price_amplifiers: defaults::compute::price_amplifiers(),
     }
 }
-
 #[test]
 fn price_update_respects_bounds() {
     let mut families = default_price_families();
     let economics = default_economics();
     let family = Name::from_str("default").expect("family");
-
     // Within the balanced bounds (15%).
     let ok_weights = ComputePriceWeights {
         cycles_per_unit: NonZeroU64::new(1_100_000).expect("cycles"),
@@ -41,7 +35,6 @@ fn price_update_respects_bounds() {
         .apply_price_update(&family, ok_weights.clone(), &mut families)
         .expect("within bounds");
     assert_eq!(Some(&ok_weights), families.get(&family));
-
     // Exceeds the balanced bounds for cycles.
     let err = economics
         .apply_price_update(
@@ -59,11 +52,9 @@ fn price_update_respects_bounds() {
         ComputeGovernanceError::CyclesDeltaExceeded { .. }
     ));
 }
-
 #[test]
 fn sponsor_caps_enforced() {
     let economics = default_economics();
-
     economics
         .validate_sponsor_allocation(5_000)
         .expect("under cap");

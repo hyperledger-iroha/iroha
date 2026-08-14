@@ -1333,6 +1333,63 @@ def test_retired_rotating_leader_facade_theorem_is_rejected() -> None:
     assert any("proofless theorems must equal" in error for error in errors), errors
 
 
+def _current_async_partition_sources(module) -> dict[str, str]:
+    sources = {
+        name: (module.FORMAL_DIR / f"{name}.tla").read_text(encoding="utf-8")
+        for name, _ in module.ASYNC_LIVENESS_SHARDS
+    }
+    sources[module.ASYNC_LIVENESS_FACADE] = (
+        module.FORMAL_DIR / f"{module.ASYNC_LIVENESS_FACADE}.tla"
+    ).read_text(encoding="utf-8")
+    return sources
+
+
+def test_async_partition_exact_body_seal_rejects_one_provider_mutation() -> None:
+    module = load_checker()
+    sources = _current_async_partition_sources(module)
+    errors, _ = module._async_liveness_shard_contract(sources)
+    assert errors == []
+    provider = module.ASYNC_LIVENESS_SHARDS[0][0]
+    source = sources[provider]
+    assert source.count("ModelResponsiveValidators") >= 1
+    sources[provider] = source.replace(
+        "ModelResponsiveValidators", "ModelResponsiveValidatorsMutated", 1
+    )
+    errors, _ = module._async_liveness_shard_contract(sources)
+    assert any("mechanical partition of the reviewed pre-split body" in error for error in errors)
+
+
+def test_async_partition_semantics_survive_digest_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_checker()
+    sources = _current_async_partition_sources(module)
+    corrected = (
+        "  \\A source \\in AsyncCurrentResponsiveVoters,\n"
+        "     recipient \\in CurrentVoters:\n"
+        "    \\A minimumView:\n"
+        "      ResponsiveViewCertificateAuthority(source, minimumView)\n"
+        "        => TcFrontier(recipient, minimumView)"
+    )
+    grouped = (
+        "  \\A source \\in AsyncCurrentResponsiveVoters,\n"
+        "     recipient \\in CurrentVoters, minimumView:\n"
+        "    ResponsiveViewCertificateAuthority(source, minimumView)\n"
+        "      => TcFrontier(recipient, minimumView)"
+    )
+    providers = [name for name, source in sources.items() if corrected in source]
+    assert len(providers) == 1
+    sources[providers[0]] = sources[providers[0]].replace(corrected, grouped, 1)
+    bodies, framing_errors = module._async_liveness_shard_bodies(sources)
+    assert framing_errors == []
+    monkeypatch.setattr(
+        module,
+        "ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256",
+        hashlib.sha256("".join(bodies).encode("utf-8")).hexdigest(),
+    )
+    errors, _ = module._async_liveness_shard_contract(sources)
+    assert any("corrected nested" in error for error in errors), errors
+    assert not any("mechanical partition" in error for error in errors), errors
+
+
 @pytest.mark.parametrize(
     ("target_module", "reviewed_limit"),
     (

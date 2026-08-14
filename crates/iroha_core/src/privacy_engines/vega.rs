@@ -3,12 +3,9 @@
 //! The proof system follows Microsoft `vega-prover` commit
 //! `c0ee259053cd12eaf43ed71b5cde375452b3ee4d` (MIT). The application relation
 //! is the paper's Figure 9 mDL circuit, closed to one first-release profile.
-
 mod cbor;
 mod mdl;
-
 use core::{fmt, num::NonZeroU32, time::Duration};
-
 use iroha_crypto::{Hash, PrivateKey, PublicKey as IrohaPublicKey};
 use iroha_data_model::{
     isi::privacy::SubmitPrivacyProofV1,
@@ -50,7 +47,6 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use time::{Date, Month, OffsetDateTime};
 use zeroize::Zeroizing;
-
 #[cfg(test)]
 fn network_id_from_genesis_hash_bytes(hash: [u8; 32]) -> NetworkId {
     NetworkId::from_genesis_hash(
@@ -59,14 +55,11 @@ fn network_id_from_genesis_hash_bytes(hash: [u8; 32]) -> NetworkId {
         ),
     )
 }
-
 use super::prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1};
-
 pub use mdl::{
     VegaEcdsaWitnessV1, VegaMdlLookupTableV1, VegaMdlValidatedWitnessV1, VegaMdlWitnessV1,
     validate_mdl_witness,
 };
-
 /// Pinned upstream source revision implemented by this engine.
 pub const VEGA_PINNED_SOURCE_COMMIT_V1: &[u8] = b"c0ee259053cd12eaf43ed71b5cde375452b3ee4d";
 /// Canonical Figure 9 public-input count.
@@ -84,7 +77,6 @@ pub const VEGA_MDL_NAMESPACE_V1: &[u8] = b"org.iso.18013.5.1";
 pub const VEGA_PRIVACY_ACTION_INDEX_V1: u32 = VEGA_MDL_ACTION_INDEX_V1;
 /// Deterministic commitment worker count used by the first-release action API.
 pub const VEGA_PRIVACY_ACTION_PROVER_WORKERS_V1: usize = 1;
-
 /// Exact signature-bound transaction fields for one direct Vega action.
 #[derive(Clone, Debug)]
 pub struct VegaPrivacyActionTransactionContextV1 {
@@ -103,7 +95,6 @@ pub struct VegaPrivacyActionTransactionContextV1 {
     /// Exact transaction metadata.
     pub metadata: Metadata,
 }
-
 /// Public Vega action inputs that are independent of transaction-derived fields.
 ///
 /// The statement context, transaction intent, and device-authentication digest
@@ -122,7 +113,6 @@ pub struct VegaPrivacyActionPublicInputV1 {
     /// Digest of the canonical ISO 18013-5 session transcript.
     pub session_transcript_digest: PrivacySessionTranscriptDigestV1,
 }
-
 /// Private document material needed before the final device signature exists.
 ///
 /// The holder-device signature is intentionally absent because `H_dev`
@@ -135,7 +125,6 @@ pub struct VegaPrivacyActionWitnessMaterialV1 {
     birth_date_issuer_signed_item: Zeroizing<Vec<u8>>,
     issuer_signature: Zeroizing<[u8; 64]>,
 }
-
 impl fmt::Debug for VegaPrivacyActionWitnessMaterialV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -156,7 +145,6 @@ impl fmt::Debug for VegaPrivacyActionWitnessMaterialV1 {
             .finish()
     }
 }
-
 impl VegaPrivacyActionWitnessMaterialV1 {
     /// Construct exact-shape private material for one Vega action.
     ///
@@ -211,7 +199,6 @@ impl VegaPrivacyActionWitnessMaterialV1 {
             issuer_signature: issuer_signature_bytes,
         })
     }
-
     fn witness_with_device_signature(
         &self,
         device_signature: Zeroizing<[u8; 64]>,
@@ -225,14 +212,12 @@ impl VegaPrivacyActionWitnessMaterialV1 {
         )
     }
 }
-
 /// Ledger-effect classification for a first-release Vega action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VegaPrivacyActionEffectV1 {
     /// The chain verifies and finalizes the action without a ledger mutation.
     ActionVerificationAndFinalityOnly,
 }
-
 /// Pure Vega proving output ready for transaction signing.
 ///
 /// Its payload is the final two-pass payload. Public callers cannot replace
@@ -247,7 +232,6 @@ pub struct VegaPreparedPrivacyActionV1 {
     proof_bytes: u32,
     encoded_proof_envelope_bytes: u32,
 }
-
 impl fmt::Debug for VegaPreparedPrivacyActionV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -264,7 +248,6 @@ impl fmt::Debug for VegaPreparedPrivacyActionV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl VegaPreparedPrivacyActionV1 {
     /// Borrow the final, already revalidated payload for the isolated native
     /// release-evidence runner.
@@ -275,50 +258,42 @@ impl VegaPreparedPrivacyActionV1 {
     pub(crate) const fn release_evidence_payload_v1(&self) -> &TransactionPayload {
         &self.payload
     }
-
     /// Canonical transaction-intent digest bound into the statement.
     #[must_use]
     pub const fn transaction_intent_digest(&self) -> [u8; 32] {
         self.transaction_intent_digest
     }
-
     /// Canonical typed-statement digest.
     #[must_use]
     pub const fn statement_digest(&self) -> [u8; 32] {
         self.statement_digest
     }
-
     /// Hash of the exact canonical privacy proof envelope.
     #[must_use]
     pub const fn proof_envelope_hash(&self) -> [u8; 32] {
         self.proof_envelope_hash
     }
-
     /// Canonical encoded typed-statement byte count.
     #[must_use]
     pub const fn statement_bytes(&self) -> u32 {
         self.statement_bytes
     }
-
     /// Native proof byte count.
     #[must_use]
     pub const fn proof_bytes(&self) -> u32 {
         self.proof_bytes
     }
-
     /// Canonical encoded proof-envelope byte count.
     #[must_use]
     pub const fn encoded_proof_envelope_bytes(&self) -> u32 {
         self.encoded_proof_envelope_bytes
     }
-
     /// This component action has no inferred ledger mutation.
     #[must_use]
     pub const fn effect(&self) -> VegaPrivacyActionEffectV1 {
         VegaPrivacyActionEffectV1::ActionVerificationAndFinalityOnly
     }
 }
-
 /// Complete signed result produced by the canonical Vega action path.
 pub struct SignedVegaPrivacyActionV1 {
     signed_transaction: SignedTransaction,
@@ -331,7 +306,6 @@ pub struct SignedVegaPrivacyActionV1 {
     proof_bytes: u32,
     encoded_proof_envelope_bytes: u32,
 }
-
 impl fmt::Debug for SignedVegaPrivacyActionV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -353,75 +327,63 @@ impl fmt::Debug for SignedVegaPrivacyActionV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl SignedVegaPrivacyActionV1 {
     /// Borrow the exact signed transaction.
     #[must_use]
     pub const fn signed_transaction(&self) -> &SignedTransaction {
         &self.signed_transaction
     }
-
     /// Consume the result and return the exact signed transaction.
     #[must_use]
     pub fn into_signed_transaction(self) -> SignedTransaction {
         self.signed_transaction
     }
-
     /// Canonical transaction hash computed from the signed transaction.
     #[must_use]
     pub const fn transaction_hash(&self) -> [u8; 32] {
         self.transaction_hash
     }
-
     /// Canonical adaptive signed-transaction byte count.
     #[must_use]
     pub const fn adaptive_signed_transaction_bytes(&self) -> u32 {
         self.adaptive_signed_transaction_bytes
     }
-
     /// Canonical transaction-intent digest bound into the statement.
     #[must_use]
     pub const fn transaction_intent_digest(&self) -> [u8; 32] {
         self.transaction_intent_digest
     }
-
     /// Canonical typed-statement digest.
     #[must_use]
     pub const fn statement_digest(&self) -> [u8; 32] {
         self.statement_digest
     }
-
     /// Hash of the exact canonical privacy proof envelope.
     #[must_use]
     pub const fn proof_envelope_hash(&self) -> [u8; 32] {
         self.proof_envelope_hash
     }
-
     /// Canonical encoded typed-statement byte count.
     #[must_use]
     pub const fn statement_bytes(&self) -> u32 {
         self.statement_bytes
     }
-
     /// Native proof byte count.
     #[must_use]
     pub const fn proof_bytes(&self) -> u32 {
         self.proof_bytes
     }
-
     /// Canonical encoded proof-envelope byte count.
     #[must_use]
     pub const fn encoded_proof_envelope_bytes(&self) -> u32 {
         self.encoded_proof_envelope_bytes
     }
-
     /// This component action has no inferred ledger mutation.
     #[must_use]
     pub const fn effect(&self) -> VegaPrivacyActionEffectV1 {
         VegaPrivacyActionEffectV1::ActionVerificationAndFinalityOnly
     }
 }
-
 /// Consensus field whose duplicated binding did not match the public
 /// statement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -441,7 +403,6 @@ pub enum VegaBindingFieldV1 {
     /// Engine-manifest digest.
     EngineManifestDigest,
 }
-
 /// ECDSA role used by a Vega witness diagnostic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VegaSignatureRoleV1 {
@@ -450,7 +411,6 @@ pub enum VegaSignatureRoleV1 {
     /// Holder-device authentication.
     Device,
 }
-
 /// Failure returned by the closed Vega mDL engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum VegaMdlError {
@@ -614,7 +574,6 @@ pub enum VegaMdlError {
     #[error(transparent)]
     Proof(#[from] VegaMdlProofErrorV1),
 }
-
 /// Failure while preparing or signing the canonical Vega privacy action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum VegaPrivacyActionBuildErrorV1 {
@@ -685,25 +644,21 @@ pub enum VegaPrivacyActionBuildErrorV1 {
     #[error("signed Vega action intent differs from the prepared intent")]
     SignedIntentMismatch,
 }
-
 impl From<cbor::CborError> for VegaMdlError {
     fn from(_: cbor::CborError) -> Self {
         Self::InvalidCanonicalCbor
     }
 }
-
 impl From<VegaFieldError> for VegaMdlError {
     fn from(_: VegaFieldError) -> Self {
         Self::InvalidPublicInputScalar
     }
 }
-
 impl From<VegaMdlFigure9ErrorV1> for VegaMdlError {
     fn from(_: VegaMdlFigure9ErrorV1) -> Self {
         Self::InvalidClosedProfileEncoding
     }
 }
-
 /// Duplicated consensus values required to bind a public Vega statement to the
 /// active chain and governed artifacts.
 #[derive(Clone, Copy, Debug)]
@@ -725,7 +680,6 @@ pub struct VegaMdlConsensusBindingV1<'a> {
     /// Digest of the native engine manifest admitted by governance.
     pub engine_manifest_digest: [u8; 32],
 }
-
 impl<'a> VegaMdlConsensusBindingV1<'a> {
     /// Build a binding from a statement context plus the independently trusted
     /// genesis hash.
@@ -742,7 +696,6 @@ impl<'a> VegaMdlConsensusBindingV1<'a> {
             engine_manifest_digest: *context.engine_manifest_digest.as_bytes(),
         }
     }
-
     /// Borrow the exact consensus frame used by the native proof transcript.
     #[must_use]
     pub const fn proof_context(&self) -> VegaMdlProofContextV1<'a> {
@@ -759,7 +712,6 @@ impl<'a> VegaMdlConsensusBindingV1<'a> {
             engine_manifest_digest: self.engine_manifest_digest,
         }
     }
-
     fn validate(&self, statement: &VegaExistingCredentialStatementV1) -> Result<(), VegaMdlError> {
         if self.network_id != &self.genesis_hash {
             return Err(VegaMdlError::NetworkGenesisMismatch);
@@ -823,13 +775,11 @@ impl<'a> VegaMdlConsensusBindingV1<'a> {
         Ok(())
     }
 }
-
 /// Exact ordered T256 scalar public inputs for the Figure 9 relation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VegaMdlPublicInputsV1 {
     elements: [VegaT256ScalarV1; VEGA_MDL_PUBLIC_INPUT_COUNT_V1],
 }
-
 impl VegaMdlPublicInputsV1 {
     /// Translate a typed public statement without reducing any 256-bit value.
     ///
@@ -866,18 +816,15 @@ impl VegaMdlPublicInputsV1 {
         elements[13] = VegaT256ScalarV1::from_u64(u64::from(statement.minimum_age_years));
         Ok(Self { elements })
     }
-
     /// Borrow the exact ordered public-input vector.
     #[must_use]
     pub const fn as_array(&self) -> &[VegaT256ScalarV1; VEGA_MDL_PUBLIC_INPUT_COUNT_V1] {
         &self.elements
     }
 }
-
 struct CoreVegaRandomSource<'a, R> {
     source: HealthCheckedCryptoRngV1<'a, R>,
 }
-
 impl<'a, R> CoreVegaRandomSource<'a, R>
 where
     R: RngCore + CryptoRng,
@@ -890,7 +837,6 @@ where
         Ok(Self { source })
     }
 }
-
 impl<R: RngCore + CryptoRng> VegaRandomSourceV1 for CoreVegaRandomSource<'_, R> {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), VegaRandomSourceErrorV1> {
         self.source
@@ -898,7 +844,6 @@ impl<R: RngCore + CryptoRng> VegaRandomSourceV1 for CoreVegaRandomSource<'_, R> 
             .map_err(|_| VegaRandomSourceErrorV1::Unavailable)
     }
 }
-
 /// Preflight and prove the complete closed Figure 9 mDL relation.
 ///
 /// The public statement is checked against the independently supplied
@@ -939,7 +884,6 @@ pub fn prove_mdl_figure9_v1<R: RngCore + CryptoRng>(
     .map_err(|_| VegaMdlError::ProverSelfCheckFailed)?;
     Ok(proof)
 }
-
 /// Verify one canonical Figure 9 proof against consensus and trusted time.
 ///
 /// Verification independently reconstructs the fourteen typed public inputs
@@ -967,7 +911,6 @@ pub fn verify_mdl_figure9_v1(
     verify_vega_mdl_figure9_v1(&binding.proof_context(), public_inputs.as_array(), proof)
         .map_err(VegaMdlError::from)
 }
-
 fn validate_vega_transaction_context_v1(
     context: &VegaPrivacyActionTransactionContextV1,
 ) -> Result<(), VegaPrivacyActionBuildErrorV1> {
@@ -983,7 +926,6 @@ fn validate_vega_transaction_context_v1(
     {
         return Err(VegaPrivacyActionBuildErrorV1::TimeToLiveOutOfRange);
     }
-
     let mut builder = TransactionBuilder::new(
         context.network_id,
         context.authority.clone(),
@@ -1002,7 +944,6 @@ fn validate_vega_transaction_context_v1(
         .map(|_| ())
         .map_err(|_| VegaPrivacyActionBuildErrorV1::InvalidTransactionContext)
 }
-
 fn validate_vega_public_input_v1(
     input: VegaPrivacyActionPublicInputV1,
 ) -> Result<(), VegaPrivacyActionBuildErrorV1> {
@@ -1015,7 +956,6 @@ fn validate_vega_public_input_v1(
     }
     Ok(())
 }
-
 fn vega_statement_context_v1(
     context: &VegaPrivacyActionTransactionContextV1,
     profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
@@ -1032,7 +972,6 @@ fn vega_statement_context_v1(
         engine_manifest_digest: profile.engine_manifest_digest,
     }
 }
-
 fn vega_statement_v1(
     context: PrivacyStatementContextV1,
     input: VegaPrivacyActionPublicInputV1,
@@ -1056,7 +995,6 @@ fn vega_statement_v1(
         session_transcript_digest: input.session_transcript_digest,
     }
 }
-
 fn vega_transaction_payload_v1(
     context: &VegaPrivacyActionTransactionContextV1,
     envelope: PrivacyProofEnvelopeV1,
@@ -1079,7 +1017,6 @@ fn vega_transaction_payload_v1(
         .into_payload()
         .map_err(|_| VegaPrivacyActionBuildErrorV1::InvalidTransactionContext)
 }
-
 fn derive_vega_transaction_intent_digest_v1(
     context: &VegaPrivacyActionTransactionContextV1,
     profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
@@ -1104,7 +1041,6 @@ fn derive_vega_transaction_intent_digest_v1(
         .privacy_transaction_intent_digest_v1()
         .map_err(|_| VegaPrivacyActionBuildErrorV1::TransactionIntent)
 }
-
 fn validate_vega_signing_authority_v1(
     authority: &AccountId,
     private_key: &PrivateKey,
@@ -1118,7 +1054,6 @@ fn validate_vega_signing_authority_v1(
     }
     Ok(())
 }
-
 #[derive(Clone, Copy)]
 struct VegaPrivacyActionIntegrityV1 {
     transaction_intent_digest: [u8; 32],
@@ -1128,7 +1063,6 @@ struct VegaPrivacyActionIntegrityV1 {
     proof_bytes: u32,
     encoded_proof_envelope_bytes: u32,
 }
-
 impl VegaPreparedPrivacyActionV1 {
     const fn integrity(&self) -> VegaPrivacyActionIntegrityV1 {
         VegaPrivacyActionIntegrityV1 {
@@ -1141,7 +1075,6 @@ impl VegaPreparedPrivacyActionV1 {
         }
     }
 }
-
 fn validate_vega_payload_integrity_v1(
     payload: &TransactionPayload,
     expected: VegaPrivacyActionIntegrityV1,
@@ -1202,7 +1135,6 @@ fn validate_vega_payload_integrity_v1(
     }
     Ok(())
 }
-
 /// Prepare and prove one canonical direct Vega action using caller-provided
 /// cryptographically secure proof randomness.
 ///
@@ -1241,7 +1173,6 @@ where
         PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
     )
     .map_err(|_| VegaPrivacyActionBuildErrorV1::CompiledProfileUnavailable)?;
-
     let draft_statement = vega_statement_v1(
         vega_statement_context_v1(
             &context,
@@ -1263,7 +1194,6 @@ where
         derive_device_authentication_digest_v1(&final_statement, &binding)?
     };
     final_statement.device_authentication_digest = device_authentication_digest;
-
     let device_signature: Zeroizing<[u8; 64]> = Zeroizing::new({
         let signature: P256Signature = device_signing_key
             .sign_prehash(device_authentication_digest.as_bytes())
@@ -1332,7 +1262,6 @@ where
     if validated_intent != transaction_intent_digest {
         return Err(VegaPrivacyActionBuildErrorV1::FinalIntentBinding);
     }
-
     let prepared = VegaPreparedPrivacyActionV1 {
         payload: final_payload,
         transaction_intent_digest: *transaction_intent_digest.as_bytes(),
@@ -1346,7 +1275,6 @@ where
         .map_err(|_| VegaPrivacyActionBuildErrorV1::PreparedPayloadDrift)?;
     Ok(prepared)
 }
-
 /// Prepare and prove one canonical direct Vega action using operating-system
 /// randomness, without receiving a transaction signing key.
 ///
@@ -1372,7 +1300,6 @@ pub fn prepare_vega_privacy_action_v1(
         &mut OsRng,
     )
 }
-
 /// Sign a payload returned by the canonical pure Vega prover.
 ///
 /// The sealed statement, proof, envelope encoding, and intent are recomputed
@@ -1412,7 +1339,6 @@ pub fn sign_prepared_vega_privacy_action_v1(
     let adaptive_signed_transaction_bytes =
         u32::try_from(norito::codec::encode_adaptive(&signed_transaction).len())
             .map_err(|_| VegaPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
-
     Ok(SignedVegaPrivacyActionV1 {
         signed_transaction,
         transaction_hash,
@@ -1425,7 +1351,6 @@ pub fn sign_prepared_vega_privacy_action_v1(
         encoded_proof_envelope_bytes: integrity.encoded_proof_envelope_bytes,
     })
 }
-
 /// Build, prove, bind, and sign one canonical direct Vega privacy action with
 /// caller-provided cryptographically secure proof randomness.
 ///
@@ -1462,7 +1387,6 @@ where
     )?;
     sign_prepared_vega_privacy_action_v1(prepared, private_key)
 }
-
 /// Build, prove, bind, and sign one canonical direct Vega privacy action using
 /// operating-system proof randomness.
 ///
@@ -1491,7 +1415,6 @@ pub fn build_signed_vega_privacy_action_v1(
         &mut OsRng,
     )
 }
-
 /// Construct the exact length-delimited device-authentication consensus frame.
 ///
 /// # Errors
@@ -1504,7 +1427,6 @@ pub fn device_authentication_frame_v1(
 ) -> Result<Vec<u8>, VegaMdlError> {
     binding.validate(statement)?;
     validate_public_statement(statement)?;
-
     let mut frame = Vec::with_capacity(768);
     append_frame_field(
         &mut frame,
@@ -1595,7 +1517,6 @@ pub fn device_authentication_frame_v1(
     )?;
     Ok(frame)
 }
-
 /// Derive `H_dev` from the exact Iroha consensus frame.
 ///
 /// # Errors
@@ -1611,7 +1532,6 @@ pub fn derive_device_authentication_digest_v1(
         Sha256::digest(frame).into(),
     ))
 }
-
 /// Require the statement's public date to equal the trusted block timestamp's
 /// UTC date.
 ///
@@ -1639,7 +1559,6 @@ pub fn validate_trusted_presentation_date_v1(
     }
     Ok(())
 }
-
 pub(super) fn validate_date(
     date: PrivacyVegaMdlDateV1,
     field: &'static str,
@@ -1648,7 +1567,6 @@ pub(super) fn validate_date(
     Date::from_calendar_date(i32::from(date.year), month, date.day)
         .map_err(|_| VegaMdlError::InvalidDate { field })
 }
-
 fn validate_public_statement(
     statement: &VegaExistingCredentialStatementV1,
 ) -> Result<(), VegaMdlError> {
@@ -1695,7 +1613,6 @@ fn validate_public_statement(
     let _ = p256_affine_coordinates(statement.issuer_public_key)?;
     Ok(())
 }
-
 fn p256_affine_coordinates(
     encoded: PrivacyP256PointV1,
 ) -> Result<([u8; 32], [u8; 32]), VegaMdlError> {
@@ -1717,7 +1634,6 @@ fn p256_affine_coordinates(
     y_bytes.copy_from_slice(y);
     Ok((x_bytes, y_bytes))
 }
-
 fn append_frame_field(frame: &mut Vec<u8>, label: &[u8], value: &[u8]) -> Result<(), VegaMdlError> {
     let label_len = u16::try_from(label.len()).map_err(|_| VegaMdlError::FrameFieldTooLarge)?;
     let value_len = u32::try_from(value.len()).map_err(|_| VegaMdlError::FrameFieldTooLarge)?;
@@ -1727,11 +1643,9 @@ fn append_frame_field(frame: &mut Vec<u8>, label: &[u8], value: &[u8]) -> Result
     frame.extend_from_slice(value);
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use core::num::NonZeroU64;
-
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::{MultisigMember, MultisigPolicy},
@@ -1742,31 +1656,23 @@ mod tests {
         },
     };
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-
     use super::*;
-
     struct PanicRng;
-
     impl RngCore for PanicRng {
         fn next_u32(&mut self) -> u32 {
             panic!("invalid Vega action boundary reached proof randomness")
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("invalid Vega action boundary reached proof randomness")
         }
-
         fn fill_bytes(&mut self, _destination: &mut [u8]) {
             panic!("invalid Vega action boundary reached proof randomness")
         }
-
         fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
             panic!("invalid Vega action boundary reached proof randomness")
         }
     }
-
     impl CryptoRng for PanicRng {}
-
     #[derive(Clone, Copy)]
     enum VegaEntropyModeV1 {
         Healthy,
@@ -1775,13 +1681,11 @@ mod tests {
         PartialError { request: usize },
         Panic { request: usize },
     }
-
     struct VegaEntropySourceV1 {
         mode: VegaEntropyModeV1,
         cursor: usize,
         requests: Vec<usize>,
     }
-
     impl VegaEntropySourceV1 {
         fn new(mode: VegaEntropyModeV1) -> Self {
             Self {
@@ -1790,11 +1694,9 @@ mod tests {
                 requests: Vec::new(),
             }
         }
-
         fn healthy_byte(index: usize) -> u8 {
             u8::try_from(index % 251).expect("stream byte is reduced below 251")
         }
-
         fn stream_byte(&self, index: usize) -> u8 {
             match self.mode {
                 VegaEntropyModeV1::Constant(byte) => byte,
@@ -1807,20 +1709,16 @@ mod tests {
             }
         }
     }
-
     impl RngCore for VegaEntropySourceV1 {
         fn next_u32(&mut self) -> u32 {
             panic!("Vega must use the fallible RNG interface")
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("Vega must use the fallible RNG interface")
         }
-
         fn fill_bytes(&mut self, _destination: &mut [u8]) {
             panic!("Vega must use the fallible RNG interface")
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             self.requests.push(destination.len());
             let request = self.requests.len();
@@ -1856,14 +1754,11 @@ mod tests {
             Ok(())
         }
     }
-
     impl CryptoRng for VegaEntropySourceV1 {}
-
     fn transaction_key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixed Vega transaction key")
     }
-
     fn action_context() -> VegaPrivacyActionTransactionContextV1 {
         let key_pair = transaction_key(0x41);
         VegaPrivacyActionTransactionContextV1 {
@@ -1876,7 +1771,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     fn action_public_input(
         lifecycle: PrivacyVegaIssuerRecordLifecycleV1,
     ) -> VegaPrivacyActionPublicInputV1 {
@@ -1914,7 +1808,6 @@ mod tests {
             session_transcript_digest: PrivacySessionTranscriptDigestV1::new([0x32; 32]),
         }
     }
-
     fn witness_material() -> VegaPrivacyActionWitnessMaterialV1 {
         VegaPrivacyActionWitnessMaterialV1::new(
             vec![0; VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1],
@@ -1924,11 +1817,9 @@ mod tests {
         )
         .expect("exact-shape boundary witness material")
     }
-
     fn device_signing_key() -> P256SigningKey {
         P256SigningKey::from_bytes((&[2_u8; 32]).into()).expect("fixed device key")
     }
-
     #[test]
     fn vega_random_source_rejects_unavailable_constant_and_periodic_prefixes() {
         let mut unavailable =
@@ -1938,14 +1829,12 @@ mod tests {
             Err(VegaMdlError::RandomnessUnavailable)
         ));
         assert_eq!(unavailable.requests, [64]);
-
         let mut constant = VegaEntropySourceV1::new(VegaEntropyModeV1::Constant(0xA5));
         assert!(matches!(
             CoreVegaRandomSource::new(&mut constant),
             Err(VegaMdlError::RandomnessHealthCheckFailed)
         ));
         assert_eq!(constant.requests, [64]);
-
         for period in [1, 2, 4, 8, 16, 32] {
             let mut periodic = VegaEntropySourceV1::new(VegaEntropyModeV1::Periodic(period));
             assert!(matches!(
@@ -1955,7 +1844,6 @@ mod tests {
             assert_eq!(periodic.requests, [64]);
         }
     }
-
     #[test]
     fn vega_random_source_uses_only_fixed_source_blocks_and_preserves_stream_order() {
         let mut source = VegaEntropySourceV1::new(VegaEntropyModeV1::Healthy);
@@ -1977,7 +1865,6 @@ mod tests {
         assert_eq!(actual, expected);
         assert_eq!(source.requests, [64, 64, 64]);
     }
-
     #[test]
     fn vega_random_source_partial_error_zeroizes_and_prevents_reentry() {
         let mut source = VegaEntropySourceV1::new(VegaEntropyModeV1::PartialError { request: 2 });
@@ -1999,7 +1886,6 @@ mod tests {
         }
         assert_eq!(source.requests, [64, 64]);
     }
-
     #[test]
     fn vega_random_source_unwind_zeroizes_and_permanently_poisons_session() {
         let mut source = VegaEntropySourceV1::new(VegaEntropyModeV1::Panic { request: 2 });
@@ -2023,7 +1909,6 @@ mod tests {
         }
         assert_eq!(source.requests, [64, 64]);
     }
-
     #[test]
     fn action_witness_material_rejects_every_noncanonical_length() {
         let short_issuer_structure = VegaPrivacyActionWitnessMaterialV1::new(
@@ -2039,7 +1924,6 @@ mod tests {
                 ..
             })
         ));
-
         let long_mso = VegaPrivacyActionWitnessMaterialV1::new(
             vec![0; VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1],
             vec![0; VEGA_MDL_MSO_PAYLOAD_BYTES_V1 + 1],
@@ -2053,7 +1937,6 @@ mod tests {
                 ..
             })
         ));
-
         let short_birth_item = VegaPrivacyActionWitnessMaterialV1::new(
             vec![0; VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1],
             vec![0; VEGA_MDL_MSO_PAYLOAD_BYTES_V1],
@@ -2067,7 +1950,6 @@ mod tests {
                 ..
             })
         ));
-
         let short_signature = VegaPrivacyActionWitnessMaterialV1::new(
             vec![0; VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1],
             vec![0; VEGA_MDL_MSO_PAYLOAD_BYTES_V1],
@@ -2081,12 +1963,10 @@ mod tests {
                 ..
             })
         ));
-
         let debug = format!("{:?}", witness_material());
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("issuer_signature:"));
     }
-
     #[test]
     fn action_builder_rejects_public_boundaries_before_proof_randomness() {
         let zero_genesis = prepare_vega_privacy_action_with_rng_v1(
@@ -2102,7 +1982,6 @@ mod tests {
             zero_genesis,
             Err(VegaPrivacyActionBuildErrorV1::ZeroGenesisHash)
         ));
-
         let mut oversized_creation_time = action_context();
         oversized_creation_time.creation_time = Duration::from_secs(u64::MAX);
         let oversized_creation_time = prepare_vega_privacy_action_with_rng_v1(
@@ -2118,7 +1997,6 @@ mod tests {
             oversized_creation_time,
             Err(VegaPrivacyActionBuildErrorV1::CreationTimeOutOfRange)
         ));
-
         let mut oversized_ttl = action_context();
         oversized_ttl.time_to_live = Some(Duration::from_secs(u64::MAX));
         let oversized_ttl = prepare_vega_privacy_action_with_rng_v1(
@@ -2134,7 +2012,6 @@ mod tests {
             oversized_ttl,
             Err(VegaPrivacyActionBuildErrorV1::TimeToLiveOutOfRange)
         ));
-
         let multisig_key = transaction_key(0x41);
         let multisig_member = MultisigMember::new(multisig_key.public_key().clone(), 1)
             .expect("fixed multisig member");
@@ -2155,7 +2032,6 @@ mod tests {
             multisig,
             Err(VegaPrivacyActionBuildErrorV1::UnsupportedAuthority)
         ));
-
         let revoked_issuer = prepare_vega_privacy_action_with_rng_v1(
             action_context(),
             action_public_input(PrivacyVegaIssuerRecordLifecycleV1::Revoked),
@@ -2169,7 +2045,6 @@ mod tests {
             revoked_issuer,
             Err(VegaPrivacyActionBuildErrorV1::InvalidIssuerRecord)
         ));
-
         let mut tampered_issuer_input =
             action_public_input(PrivacyVegaIssuerRecordLifecycleV1::Active);
         let mut tampered_record_digest =
@@ -2190,7 +2065,6 @@ mod tests {
             tampered_issuer,
             Err(VegaPrivacyActionBuildErrorV1::InvalidIssuerRecord)
         ));
-
         let foreign_key = transaction_key(0x42);
         let wrong_transaction_key = build_signed_vega_privacy_action_with_rng_v1(
             action_context(),

@@ -1,7 +1,5 @@
 //! Multi-version append-only key value storage for transactions
-
 #![allow(clippy::disallowed_types)]
-
 use std::{
     borrow::Borrow,
     collections::{BTreeMap, HashSet},
@@ -12,7 +10,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-
 use arc_swap::ArcSwapOption;
 use dashmap::DashMap;
 use iroha_crypto::HashOf;
@@ -23,11 +20,9 @@ use norito::json::{
     JsonSerialize as JsonSerializeTrait,
 };
 use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
-
 type Key = HashOf<SignedTransaction>;
 type Value = NonZeroUsize;
 type DirectGeneration = u64;
-
 /// Multi-version append-only key value storage for transactions
 /// This is analogue of [`mv::storage::Storage`] or `HashMap<Key, Value>`.
 /// Contains hashes of transactions mapped onto block height where they are stored.
@@ -53,7 +48,6 @@ pub struct TransactionsStorage {
     direct_commit_generation: AtomicU64,
     write_lock: Mutex<()>,
 }
-
 #[derive(crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
 struct BlockInfo {
     /// Transactions added in the block
@@ -61,13 +55,11 @@ struct BlockInfo {
     /// Height of the block.
     height: NonZeroUsize,
 }
-
 #[derive(Clone, Copy)]
 struct DirectMembership {
     height: Value,
     generation: DirectGeneration,
 }
-
 impl TransactionsStorage {
     /// Construct new [`Self`]
     #[allow(clippy::new_without_default)]
@@ -80,7 +72,6 @@ impl TransactionsStorage {
             write_lock: Mutex::new(()),
         }
     }
-
     /// Create persistent view of storage at certain point in time
     pub fn view(&self) -> TransactionsView<'_> {
         TransactionsView {
@@ -90,7 +81,6 @@ impl TransactionsStorage {
             direct_generation: self.direct_commit_generation.load(Ordering::Acquire),
         }
     }
-
     /// Return the latest committed block height recorded by transaction storage.
     pub(crate) fn latest_height(&self) -> usize {
         self.latest_block
@@ -98,7 +88,6 @@ impl TransactionsStorage {
             .as_ref()
             .map_or(0, |block| block.height.get())
     }
-
     /// Record transaction hashes committed by a non-canonical state application.
     ///
     /// Direct standalone lane-block application mutates WSV without appending a
@@ -126,17 +115,14 @@ impl TransactionsStorage {
                 .store(generation, Ordering::Release);
         }
     }
-
     /// Create block to aggregate updates
     pub fn block(&self) -> TransactionsBlock<'_> {
         self.block_impl(false)
     }
-
     /// Create block to aggregate updates and revert changes created in the latest block
     pub fn block_and_revert(&self) -> TransactionsBlock<'_> {
         self.block_impl(true)
     }
-
     fn block_impl(&self, revert: bool) -> TransactionsBlock<'_> {
         let guard = self.write_lock.lock();
         TransactionsBlock {
@@ -150,7 +136,6 @@ impl TransactionsStorage {
         }
     }
 }
-
 /// Persistent view of storage at certain point in time
 pub trait TransactionsReadOnly {
     /// Read entry from the storage
@@ -159,11 +144,9 @@ pub trait TransactionsReadOnly {
         Key: Borrow<Q>,
         Q: Hash + Eq + ?Sized;
 }
-
 /// Module for [`TransactionsView`] and it's related impls
 mod view {
     use super::*;
-
     pub(super) fn get_direct_committed<Q>(
         direct_committed: &DashMap<Key, DirectMembership>,
         direct_generation: DirectGeneration,
@@ -177,7 +160,6 @@ mod view {
             (membership.generation <= direct_generation).then_some(membership.height)
         })
     }
-
     /// Consistent view of the storage at the certain version
     #[derive(Clone)]
     pub struct TransactionsView<'storage> {
@@ -188,7 +170,6 @@ mod view {
         pub(super) direct_committed: &'storage DashMap<Key, DirectMembership>,
         pub(super) direct_generation: DirectGeneration,
     }
-
     impl TransactionsReadOnly for TransactionsView<'_> {
         fn get<Q>(&self, key: &Q) -> Option<Value>
         where
@@ -200,7 +181,6 @@ mod view {
                 if block.transactions.contains(key) {
                     return Some(block_height);
                 }
-
                 if let Some(height) = self
                     .blocks
                     .get(key)
@@ -210,11 +190,9 @@ mod view {
                     return Some(height);
                 }
             }
-
             get_direct_committed(self.direct_committed, self.direct_generation, key)
         }
     }
-
     #[cfg(any(test, feature = "iroha-core-tests"))]
     impl TransactionsView<'_> {
         /// Test helper: return the latest committed block height (0 when empty).
@@ -226,12 +204,10 @@ mod view {
     }
 }
 pub use view::TransactionsView;
-
 /// Module for [`TransactionsBlock`] and it's related impls
 mod block {
     use super::view::get_direct_committed;
     use super::*;
-
     /// Batched update to the storage that can be reverted later.
     ///
     /// The block aggregates transaction hashes for a particular block height.
@@ -263,7 +239,6 @@ mod block {
         /// Certified merge admission changed before the block could commit
         MergeAdmission,
     }
-
     /// Batched update to the storage that can be reverted later
     pub struct TransactionsBlock<'storage> {
         /// References to [`TransactionsStorage`] struct
@@ -272,18 +247,15 @@ mod block {
         pub(super) direct_committed_ref: &'storage DashMap<Key, DirectMembership>,
         pub(super) direct_generation: DirectGeneration,
         pub(super) _guard: MutexGuard<'storage, RawMutex, ()>,
-
         /// Own fields
         pub(super) revert: bool,
         pub(super) current_block: Option<Arc<BlockInfo>>,
     }
-
     impl TransactionsBlock<'_> {
         /// Return whether a canonical block membership update was staged.
         pub(crate) fn has_staged_block(&self) -> bool {
             self.current_block.is_some()
         }
-
         /// Return whether the staged canonical carrier has the exact height and
         /// no ordinary transaction membership.
         pub(crate) fn has_exact_empty_staged_block(&self, height: NonZeroUsize) -> bool {
@@ -291,7 +263,6 @@ mod block {
                 .as_ref()
                 .is_some_and(|block| block.height == height && block.transactions.is_empty())
         }
-
         /// Register transactions belonging to the block.
         ///
         /// This method **must** be called before [`commit`].
@@ -311,20 +282,17 @@ mod block {
                 );
                 return;
             }
-
             let block_info = BlockInfo {
                 transactions,
                 height,
             };
             self.current_block = Some(Arc::new(block_info));
         }
-
         #[cfg(test)]
         pub fn insert_block_with_single_tx(&mut self, tx: Key, height: Value) {
             let transactions = [tx].into_iter().collect();
             self.insert_block(transactions, height);
         }
-
         /// Apply aggregated changes to the storage.
         ///
         /// # Errors
@@ -336,7 +304,6 @@ mod block {
             self.validate_commit()?;
             self.commit_unchecked()
         }
-
         /// Validate that this block can be committed without mutating the storage.
         ///
         /// This lets callers perform other fallible commit preparation after the
@@ -345,11 +312,9 @@ mod block {
         pub(crate) fn validate_commit(&self) -> Result<(), TransactionsBlockError> {
             let previous_block = &self.latest_block_ref.load();
             let previous_block = previous_block.as_ref();
-
             let previous_height = previous_block.map_or(0, |b| b.height.get());
             let addition = usize::from(!self.revert);
             let expected_current_height = previous_height + addition;
-
             let Some(current_block) = self.current_block.as_ref() else {
                 return Err(TransactionsBlockError::MissingInsertBlock);
             };
@@ -368,18 +333,14 @@ mod block {
                     actual_current_height: current_height,
                 });
             }
-
             Ok(())
         }
-
         fn commit_unchecked(self) -> Result<(), TransactionsBlockError> {
             let previous_block = &self.latest_block_ref.load();
             let previous_block = previous_block.as_ref();
-
             let Some(current_block) = self.current_block else {
                 return Err(TransactionsBlockError::MissingInsertBlock);
             };
-
             if self.revert {
                 // Rolling back the latest block must not drop historical entries from
                 // earlier heights; we only prune versions that no longer fall strictly
@@ -391,12 +352,10 @@ mod block {
                     self.blocks_ref.insert(transaction, previous_block.height);
                 }
             }
-
             self.latest_block_ref.store(Some(current_block));
             Ok(())
         }
     }
-
     impl TransactionsReadOnly for TransactionsBlock<'_> {
         fn get<Q>(&self, key: &Q) -> Option<Value>
         where
@@ -410,14 +369,12 @@ mod block {
             {
                 return Some(height);
             }
-
             let latest_block = self.latest_block_ref.load();
             if let Some(block) = latest_block.as_ref().as_ref()
                 && block.transactions.contains(key)
             {
                 return Some(block.height);
             }
-
             self.blocks_ref.get(key).map(|height| *height).or_else(|| {
                 get_direct_committed(self.direct_committed_ref, self.direct_generation, key)
             })
@@ -426,11 +383,9 @@ mod block {
 }
 #[allow(unused_imports)]
 pub use block::{TransactionsBlock, TransactionsBlockError};
-
 /// Module with serialization and deserialization of [`TransactionsStorage`]
 mod serialization {
     use super::*;
-
     fn write_transactions_view_json(view: &TransactionsView<'_>, out: &mut String) {
         out.push('{');
         json::write_json_string("latest_block", out);
@@ -462,7 +417,6 @@ mod serialization {
         JsonSerializeTrait::json_serialize(&direct_map, out);
         out.push('}');
     }
-
     fn write_transactions_block_json(
         block: &TransactionsBlock<'_>,
         direct_transactions: &HashSet<Key>,
@@ -516,19 +470,16 @@ mod serialization {
         JsonSerializeTrait::json_serialize(&direct_map, out);
         out.push('}');
     }
-
     impl JsonSerializeTrait for TransactionsStorage {
         fn json_serialize(&self, out: &mut String) {
             write_transactions_view_json(&self.view(), out)
         }
     }
-
     impl JsonSerializeTrait for TransactionsBlock<'_> {
         fn json_serialize(&self, out: &mut String) {
             write_transactions_block_json(self, &HashSet::new(), None, out)
         }
     }
-
     impl TransactionsBlock<'_> {
         pub(crate) fn json_serialize_after_commit(
             &self,
@@ -544,13 +495,11 @@ mod serialization {
             );
         }
     }
-
     impl FastJsonWrite for TransactionsView<'_> {
         fn write_json(&self, out: &mut String) {
             write_transactions_view_json(self, out)
         }
     }
-
     impl JsonDeserializeTrait for TransactionsStorage {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
             let json::Value::Object(mut map) = json::Value::json_deserialize(parser)? else {
@@ -559,7 +508,6 @@ mod serialization {
                     message: "expected object".into(),
                 });
             };
-
             let latest_block_value = map
                 .remove("latest_block")
                 .ok_or_else(|| json::Error::missing_field("latest_block"))?;
@@ -567,7 +515,6 @@ mod serialization {
                 .remove("blocks")
                 .ok_or_else(|| json::Error::missing_field("blocks"))?;
             let direct_committed_value = map.remove("direct_committed");
-
             let latest_block = match latest_block_value {
                 json::Value::Null => None,
                 other => {
@@ -575,7 +522,6 @@ mod serialization {
                     Some(Arc::new(block))
                 }
             };
-
             let dash = DashMap::new();
             let json::Value::Object(entries) = blocks_value else {
                 return Err(json::Error::InvalidField {
@@ -590,14 +536,12 @@ mod serialization {
                 let value: Value = json::value::from_value(value_value)?;
                 dash.insert(key, value);
             }
-
             if let Some(block) = &latest_block {
                 let latest_height = block.height;
                 dash.retain(|_, height| *height < latest_height);
             } else {
                 dash.clear();
             }
-
             let direct_dash = DashMap::new();
             if let Some(direct_committed_value) = direct_committed_value {
                 let json::Value::Object(entries) = direct_committed_value else {
@@ -623,7 +567,6 @@ mod serialization {
                 }
             }
             let direct_generation = u64::from(!direct_dash.is_empty());
-
             Ok(TransactionsStorage {
                 latest_block: ArcSwapOption::from(latest_block),
                 blocks: dash,
@@ -634,15 +577,11 @@ mod serialization {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
-
     use super::*;
-
     static NEXT_TEST_HASH: AtomicU64 = AtomicU64::new(1);
-
     fn random_hash() -> Key {
         let counter = NEXT_TEST_HASH.fetch_add(1, Ordering::Relaxed);
         let mut bytes = [0_u8; iroha_crypto::Hash::LENGTH];
@@ -650,11 +589,9 @@ mod tests {
         let hash = iroha_crypto::Hash::prehashed(bytes);
         HashOf::from_untyped_unchecked(hash)
     }
-
     fn get_keys<const N: usize>() -> [Key; N] {
         [(); N].map(|()| random_hash())
     }
-
     fn get_values<const N: usize>() -> [Value; N] {
         let mut i = 0;
         [(); N].map(|()| {
@@ -662,131 +599,107 @@ mod tests {
             NonZeroUsize::new(i).unwrap()
         })
     }
-
     fn insert_keys(block: &mut TransactionsBlock, keys: &[Key], value: Value) {
         let keys = keys.iter().copied().collect();
         block.insert_block(keys, value);
     }
-
     #[test]
     fn get() {
         let [k0, k1, k2, k3, k4] = get_keys();
         let [v1, v2, v3] = get_values();
-
         let storage = TransactionsStorage::new();
         let view0 = storage.view();
-
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[k0, k1, k2], v1);
             block.commit().unwrap()
         }
         let view1 = storage.view();
-
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[k0, k1, k3], v2);
             block.commit().unwrap()
         }
         let view2 = storage.view();
-
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[k1, k4], v3);
             block.commit().unwrap()
         }
         let view3 = storage.view();
-
         assert_eq!(view0.get(&k0), None);
         assert_eq!(view0.get(&k1), None);
         assert_eq!(view0.get(&k2), None);
         assert_eq!(view0.get(&k3), None);
-
         assert_eq!(view1.get(&k0), Some(v1));
         assert_eq!(view1.get(&k1), Some(v1));
         assert_eq!(view1.get(&k2), Some(v1));
         assert_eq!(view1.get(&k3), None);
-
         assert_eq!(view2.get(&k0), Some(v2));
         assert_eq!(view2.get(&k1), Some(v2));
         assert_eq!(view2.get(&k2), Some(v1));
         assert_eq!(view2.get(&k3), Some(v2));
         assert_eq!(view2.get(&k4), None);
-
         assert_eq!(view3.get(&k0), Some(v2));
         assert_eq!(view3.get(&k1), Some(v3));
         assert_eq!(view3.get(&k2), Some(v1));
         assert_eq!(view3.get(&k3), Some(v2));
         assert_eq!(view3.get(&k4), Some(v3));
     }
-
     #[test]
     fn revert() {
         let [k0] = get_keys();
         let [v1, v2] = get_values();
-
         let storage = TransactionsStorage::new();
-
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[k0], v1);
             block.commit().unwrap()
         }
-
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[k0], v2);
             block.commit().unwrap()
         }
         let view1 = storage.view();
-
         {
             let mut block = storage.block_and_revert();
             block.insert_block(HashSet::new(), v2);
             block.commit().unwrap();
         }
         let view2 = storage.view();
-
         // View is persistent so revert is not visible
         assert_eq!(view1.get(&k0), Some(v2));
         // Revert is visible in the view created after revert was applied
         assert_eq!(view2.get(&k0), Some(v1));
     }
-
     #[test]
     fn revert_drops_discarded_transactions() {
         let [tx_a, tx_b, tx_b_prime] = get_keys();
         let [height_a, height_b] = get_values();
-
         let storage = TransactionsStorage::new();
-
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[tx_a], height_a);
             block.commit().unwrap();
         }
-
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[tx_b], height_b);
             block.commit().unwrap();
         }
-
         let view_before_revert = storage.view();
         assert_eq!(view_before_revert.get(&tx_b), Some(height_b));
-
         {
             let mut block = storage.block_and_revert();
             block.insert_block(HashSet::from([tx_b_prime]), height_b);
             block.commit().unwrap();
         }
-
         let view_after_revert = storage.view();
         assert_eq!(view_after_revert.get(&tx_a), Some(height_a));
         assert_eq!(view_after_revert.get(&tx_b_prime), Some(height_b));
         assert_eq!(view_after_revert.get(&tx_b), None);
     }
-
     #[cfg(not(debug_assertions))]
     #[test]
     fn commit_succeeds_in_release() {
@@ -797,7 +710,6 @@ mod tests {
         insert_keys(&mut block, &[key], height);
         assert!(block.commit().is_ok());
     }
-
     #[test]
     fn serialization() {
         fn assert_views_equal(view1: &TransactionsView, view2: &TransactionsView, keys: &[Key]) {
@@ -818,17 +730,13 @@ mod tests {
                 check_view(view, keys);
             }
         }
-
         let keys = get_keys();
         let [k0, k1, k2, k3, k4] = keys;
         let [v1, v2, v3] = get_values();
-
         let mut views = Vec::new();
-
         let storage = TransactionsStorage::new();
         views.push(storage.view());
         check_views(&views, &keys);
-
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[k0, k1, k2], v1);
@@ -836,7 +744,6 @@ mod tests {
         }
         views.push(storage.view());
         check_views(&views, &keys);
-
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[k0, k1, k3], v2);
@@ -844,7 +751,6 @@ mod tests {
         }
         views.push(storage.view());
         check_views(&views, &keys);
-
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[k1, k4], v3);
@@ -852,7 +758,6 @@ mod tests {
         }
         views.push(storage.view());
         check_views(&views, &keys);
-
         {
             let mut block = storage.block_and_revert();
             insert_keys(&mut block, &[k2], v3);
@@ -861,7 +766,6 @@ mod tests {
         views.push(storage.view());
         check_views(&views, &keys);
     }
-
     #[test]
     fn commit_without_insert_block_fails() {
         let storage = TransactionsStorage::new();
@@ -871,16 +775,13 @@ mod tests {
             Err(TransactionsBlockError::MissingInsertBlock)
         );
     }
-
     #[test]
     fn validate_commit_height_mismatch_does_not_mutate_storage() {
         let [key] = get_keys();
         let storage = TransactionsStorage::new();
         let mut block = storage.block();
         let wrong_height = NonZeroUsize::new(2).unwrap();
-
         block.insert_block(HashSet::from([key]), wrong_height);
-
         assert_eq!(
             block.validate_commit(),
             Err(TransactionsBlockError::HeightMismatch {
@@ -892,20 +793,17 @@ mod tests {
         drop(block);
         assert_eq!(storage.latest_height(), 0);
     }
-
     #[cfg(not(debug_assertions))]
     #[test]
     fn commit_height_mismatch_fails_in_release() {
         let [first_key, second_key] = get_keys();
         let [first_height, _] = get_values();
         let storage = TransactionsStorage::new();
-
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[first_key], first_height);
             block.commit().unwrap();
         }
-
         let mut block = storage.block();
         let transactions = HashSet::from([second_key]);
         let wrong_height = NonZeroUsize::new(first_height.get() + 2).unwrap();
@@ -919,7 +817,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn commit_with_insert_block_succeeds() {
         let [key] = get_keys();
@@ -929,55 +826,42 @@ mod tests {
         insert_keys(&mut block, &[key], value);
         block.commit().unwrap();
     }
-
     #[test]
     fn latest_height_tracks_committed_block() {
         let [key] = get_keys();
         let [value] = get_values();
         let storage = TransactionsStorage::new();
-
         assert_eq!(storage.latest_height(), 0);
-
         let mut block = storage.block();
         insert_keys(&mut block, &[key], value);
         block.commit().unwrap();
-
         assert_eq!(storage.latest_height(), value.get());
     }
-
     #[test]
     fn direct_committed_membership_is_visible_without_canonical_height() {
         let [key] = get_keys();
         let [height] = get_values();
         let storage = TransactionsStorage::new();
-
         storage.record_direct_committed_membership([key], height);
-
         assert_eq!(storage.latest_height(), 0);
         assert_eq!(storage.view().get(&key), Some(height));
     }
-
     #[test]
     fn direct_committed_membership_preserves_existing_view_snapshot() {
         let [key] = get_keys();
         let [height] = get_values();
         let storage = TransactionsStorage::new();
         let view_before_direct_commit = storage.view();
-
         storage.record_direct_committed_membership([key], height);
-
         assert_eq!(view_before_direct_commit.get(&key), None);
         assert_eq!(storage.view().get(&key), Some(height));
     }
-
     #[test]
     fn direct_committed_membership_survives_canonical_revert() {
         let [direct_key, canonical_key, reverted_key, replacement_key] = get_keys();
         let [height1, height2] = get_values();
         let storage = TransactionsStorage::new();
-
         storage.record_direct_committed_membership([direct_key], height2);
-
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[canonical_key], height1);
@@ -993,38 +877,30 @@ mod tests {
             insert_keys(&mut block, &[replacement_key], height2);
             block.commit().unwrap();
         }
-
         let view = storage.view();
         assert_eq!(view.get(&direct_key), Some(height2));
         assert_eq!(view.get(&canonical_key), Some(height1));
         assert_eq!(view.get(&replacement_key), Some(height2));
         assert_eq!(view.get(&reverted_key), None);
     }
-
     #[test]
     fn direct_committed_membership_roundtrips_through_json() {
         let [key] = get_keys();
         let [height] = get_values();
         let storage = TransactionsStorage::new();
-
         storage.record_direct_committed_membership([key], height);
-
         let json = norito::json::to_json(&storage.view()).unwrap();
         let restored: TransactionsStorage = norito::json::from_str(&json).unwrap();
-
         assert_eq!(restored.latest_height(), 0);
         assert_eq!(restored.view().get(&key), Some(height));
     }
-
     #[test]
     fn direct_committed_membership_defaults_empty_for_legacy_json() {
         let storage: TransactionsStorage =
             norito::json::from_str(r#"{"latest_block":null,"blocks":{}}"#).unwrap();
-
         assert_eq!(storage.latest_height(), 0);
         assert!(storage.view().direct_committed.is_empty());
     }
-
     #[test]
     fn insert_block_allowed_twice_for_same_payload() {
         let [key] = get_keys();
@@ -1032,34 +908,27 @@ mod tests {
         let storage = TransactionsStorage::new();
         let mut block = storage.block();
         let payload: HashSet<_> = HashSet::from([key]);
-
         block.insert_block(payload.clone(), value);
         block.insert_block(payload, value);
-
         block.commit().unwrap();
     }
-
     #[test]
     fn commit_same_block_twice_is_idempotent() {
         let [key] = get_keys();
         let [value] = get_values();
         let storage = TransactionsStorage::new();
-
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[key], value);
             block.commit().unwrap();
         }
-
         {
             let mut block = storage.block();
             insert_keys(&mut block, &[key], value);
             block.commit().unwrap();
         }
-
         assert_eq!(storage.view().get(&key), Some(value));
     }
-
     #[test]
     #[should_panic(
         expected = "`TransactionsBlock::insert_block()` called multiple times with different height"
@@ -1070,11 +939,9 @@ mod tests {
         let storage = TransactionsStorage::new();
         let mut block = storage.block();
         let payload = HashSet::from([key]);
-
         block.insert_block(payload.clone(), value1);
         block.insert_block(payload, value2);
     }
-
     #[test]
     #[should_panic(
         expected = "`TransactionsBlock::insert_block()` called multiple times with different transactions"
@@ -1084,7 +951,6 @@ mod tests {
         let [value] = get_values();
         let storage = TransactionsStorage::new();
         let mut block = storage.block();
-
         block.insert_block(HashSet::from([key1]), value);
         block.insert_block(HashSet::from([key2]), value);
     }

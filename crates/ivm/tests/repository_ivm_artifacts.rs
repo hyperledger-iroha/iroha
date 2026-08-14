@@ -1,22 +1,18 @@
 //! Repository-wide ownership and freshness guard for checked-in IVM artifacts.
-
 use std::{
     collections::BTreeSet,
     fs,
     path::{Component, Path, PathBuf},
     process::Command,
 };
-
 const INVENTORY: &str = include_str!("../../../scripts/ivm_artifacts.tsv");
 const EXPECTED_ARTIFACTS: usize = 59;
-
 #[derive(Debug)]
 struct Artifact<'a> {
     owner: &'a str,
     source_or_tag: &'a str,
     path: &'a str,
 }
-
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -24,7 +20,6 @@ fn repository_root() -> PathBuf {
         .expect("IVM crate belongs to the workspace")
         .to_path_buf()
 }
-
 fn safe_relative_path(raw: &str, extension: &str) -> PathBuf {
     let path = PathBuf::from(raw);
     assert!(
@@ -37,7 +32,6 @@ fn safe_relative_path(raw: &str, extension: &str) -> PathBuf {
     );
     path
 }
-
 fn inventory() -> Vec<Artifact<'static>> {
     let mut artifacts = Vec::new();
     let mut paths = BTreeSet::new();
@@ -80,7 +74,6 @@ fn inventory() -> Vec<Artifact<'static>> {
     );
     artifacts
 }
-
 fn tracked_ivm_artifacts(root: &Path) -> BTreeSet<PathBuf> {
     let output = Command::new("git")
         .args(["-C", root.to_str().expect("UTF-8 repository root")])
@@ -103,7 +96,6 @@ fn tracked_ivm_artifacts(root: &Path) -> BTreeSet<PathBuf> {
         })
         .collect()
 }
-
 #[test]
 fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
     let root = repository_root();
@@ -117,7 +109,6 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
         declared,
         "tracked IVM artifacts and scripts/ivm_artifacts.tsv must match exactly"
     );
-
     let expected_abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
     let compiler = ivm::KotodamaCompiler::new();
     let zk_compiler =
@@ -126,7 +117,6 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
             ..ivm::kotodama::compiler::CompilerOptions::default()
         });
     let predecoder = ivm::predecoder_fixtures::generated_predecoder_mixed_artifacts();
-
     for artifact in inventory {
         let relative = safe_relative_path(artifact.path, "to");
         let path = root.join(&relative);
@@ -150,7 +140,6 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
         ivm::IVM::new(parsed.metadata.max_cycles.max(1))
             .load_program(&bytes)
             .unwrap_or_else(|error| panic!("{} does not load: {error}", path.display()));
-
         let rebuilt = match artifact.owner {
             "kotodama-standard" | "kotodama-zk" => {
                 let source = safe_relative_path(artifact.source_or_tag, "ko");

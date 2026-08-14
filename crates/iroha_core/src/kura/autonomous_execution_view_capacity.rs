@@ -2,7 +2,6 @@ struct LaneBlockExecutionInputPublicationPlan {
     namespace: BoundProgressNamespace,
     additional_physical_peak_bytes: u64,
 }
-
 impl Kura {
     /// Recover every active lane's execution-input append/prepend protocol to
     /// a durable fixed point before startup can replay historical seals.
@@ -47,7 +46,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Persist verified recovered payload input for a certified standalone lane block.
     ///
     /// # Errors
@@ -71,7 +69,6 @@ impl Kura {
             pending_canonical_bytes,
         )
     }
-
     /// Persist one verified execution input while the caller continuously
     /// holds `prune_lock`. Historical recovery uses this seam after its whole
     /// batch has acquired the outer prune fence.
@@ -159,7 +156,6 @@ impl Kura {
         )?;
         Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted)
     }
-
     fn write_lane_block_execution_input_artifact(
         &self,
         artifact: &LaneBlockExecutionInputArtifact,
@@ -211,13 +207,11 @@ impl Kura {
                 "lane execution input height must be non-zero",
             ));
         }
-
         let observed_existing =
             self.read_lane_block_execution_input_for_write_observation(lane_id, lane_block_height);
         let observed_existing_is_canonical = observed_existing.as_ref().is_some_and(|existing| {
             self.lane_block_execution_input_matches_canonical_payload(existing, false)
         });
-
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
         self.require_active_lane_artifact(&entry, descriptor)?;
@@ -287,7 +281,6 @@ impl Kura {
                 "overwriting stale lane execution input sidecar with recovered canonical payload"
             );
         }
-
         let payload = artifact.encode_framed()?;
         let payload_len = u64::try_from(payload.len())?;
         let publication = self.preflight_lane_block_execution_input_publication_locked(
@@ -379,7 +372,6 @@ impl Kura {
         self.note_committed_lane_status_change();
         Ok(())
     }
-
     /// Capture the exact decodable execution-input bytes for the writer's
     /// optimistic concurrency check, including structurally stale payloads.
     ///
@@ -409,7 +401,6 @@ impl Kura {
         )
     }
 }
-
 impl Kura {
     /// Bind an execution-input pair at a read-only fixed point and reserve the
     /// complete physical publication peak before the append journal, data, or
@@ -469,7 +460,6 @@ impl Kura {
                 ));
             }
         };
-
         let append_intent_max = u64::try_from(BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES)?;
         let transient_bytes = if layout.is_based() && lane_block_height < layout.base_height {
             let prepend = layout
@@ -543,7 +533,6 @@ impl Kura {
             additional_physical_peak_bytes: transient_bytes,
         })
     }
-
     fn autonomous_view_state_inventory_with_allowed_temp_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -556,7 +545,6 @@ impl Kura {
             allowed_temp,
         )
     }
-
     fn validate_autonomous_view_state_namespace_peak(
         inventory: &AutonomousLaneAttemptInventoryBudget,
         additional_files: usize,
@@ -578,7 +566,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Preflight promotion of a valid named view-state temp. The named temp is
     /// retained until the atomic replacement has synced, so both files and the
     /// additional `.kura-sidecar-*` temp coexist at the physical peak.
@@ -607,7 +594,6 @@ impl Kura {
             Some(temp_path),
         )
     }
-
     /// Preflight an ordinary view-state CAS. A present named temp is removed
     /// first, so its exact bytes are credited before the atomic replacement
     /// temp is materialized. No file is removed until every namespace and

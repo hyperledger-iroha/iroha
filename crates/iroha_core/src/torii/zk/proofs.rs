@@ -1,10 +1,7 @@
 //! Proof registry query helpers shared with Torii.
-
 use iroha_data_model::proof::{ProofId, ProofRecord, ProofStatus};
 use mv::storage::StorageReadOnly;
-
 use crate::state::{State, WorldReadOnly};
-
 /// Filters applied when querying proof records.
 #[derive(Debug, Clone)]
 pub struct ProofFilters<'a> {
@@ -25,7 +22,6 @@ pub struct ProofFilters<'a> {
     /// Maximum `verified_at_height` (inclusive).
     pub max_height: Option<u64>,
 }
-
 /// Pagination controls for proof listings.
 #[derive(Debug, Clone)]
 pub struct ProofListParams<'a> {
@@ -38,7 +34,6 @@ pub struct ProofListParams<'a> {
     /// Optional limit applied after offset (server-side cap enforced at 1000).
     pub limit: Option<u32>,
 }
-
 /// Materialised proof entry returned by the listing helper.
 #[derive(Debug, Clone)]
 pub struct ProofListItem {
@@ -47,7 +42,6 @@ pub struct ProofListItem {
     /// Stored proof metadata (status, VK references, height).
     pub record: ProofRecord,
 }
-
 /// List proof records using the supplied filters and pagination controls.
 pub fn list_proofs(state: &State, params: &ProofListParams<'_>) -> Vec<ProofListItem> {
     let world = state.world_view();
@@ -72,13 +66,11 @@ pub fn list_proofs(state: &State, params: &ProofListParams<'_>) -> Vec<ProofList
     };
     entries[start..end].to_vec()
 }
-
 /// Count proof records matching the supplied filters (ignores pagination controls).
 pub fn count_proofs(state: &State, filters: &ProofFilters<'_>) -> u64 {
     let world = state.world_view();
     filtered_proofs(&world, filters).count() as u64
 }
-
 fn collect_filtered(world: &impl WorldReadOnly, filters: &ProofFilters<'_>) -> Vec<ProofListItem> {
     filtered_proofs(world, filters)
         .map(|(id, record)| ProofListItem {
@@ -87,7 +79,6 @@ fn collect_filtered(world: &impl WorldReadOnly, filters: &ProofFilters<'_>) -> V
         })
         .collect()
 }
-
 fn filtered_proofs<'a, W>(
     world: &'a W,
     filters: &'a ProofFilters<'a>,
@@ -98,7 +89,6 @@ where
     candidate_proofs(world, filters)
         .filter(move |(id, record)| proof_matches_filters(id, record, filters))
 }
-
 fn candidate_proofs<'a, W>(
     world: &'a W,
     filters: &'a ProofFilters<'a>,
@@ -116,7 +106,6 @@ where
         }
         return Box::new(std::iter::empty());
     }
-
     if let Some(backend) = filters.backend {
         Box::new(world.proofs_by_backend_iter(backend))
     } else if let Some(status) = filters.status.as_ref() {
@@ -125,7 +114,6 @@ where
         Box::new(world.proofs().iter())
     }
 }
-
 fn proof_matches_filters(id: &ProofId, record: &ProofRecord, filters: &ProofFilters<'_>) -> bool {
     if let Some(backend) = filters.backend
         && id.backend != backend
@@ -168,7 +156,6 @@ fn proof_matches_filters(id: &ProofId, record: &ProofRecord, filters: &ProofFilt
     }
     true
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_data_model::{
@@ -179,20 +166,17 @@ mod tests {
         proof::{ProofId, ProofRecord, ProofStatus},
     };
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
     };
-
     fn blank_state() -> State {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         State::new(World::new(), kura, query)
     }
-
     fn list_for_filters(state: &State, filters: ProofFilters<'_>) -> Vec<ProofListItem> {
         list_proofs(
             state,
@@ -204,7 +188,6 @@ mod tests {
             },
         )
     }
-
     fn bridge_proof_record(
         range: BridgeProofRange,
         payload: BridgeProofPayload,
@@ -217,7 +200,6 @@ mod tests {
             size_bytes,
         }
     }
-
     fn bridge_record(
         backend: &str,
         proof_hash: [u8; 32],
@@ -238,7 +220,6 @@ mod tests {
         };
         (id, record)
     }
-
     fn plain_record(
         backend: &str,
         proof_hash: [u8; 32],
@@ -259,7 +240,6 @@ mod tests {
         };
         (id, record)
     }
-
     #[tokio::test]
     async fn list_and_count_filter_by_tag_and_status() {
         let state = blank_state();
@@ -268,7 +248,6 @@ mod tests {
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let id_verified = ProofId {
             backend: backend.into(),
             proof_hash: [0x11; 32],
@@ -288,7 +267,6 @@ mod tests {
         stx.world
             .proofs_by_tag
             .insert(*b"PROF", vec![id_verified.clone()]);
-
         let id_rejected = ProofId {
             backend: backend.into(),
             proof_hash: [0x22; 32],
@@ -304,7 +282,6 @@ mod tests {
         stx.world.insert_proof_record(rec_rejected);
         stx.apply();
         block.commit().expect("commit proof registry snapshot");
-
         let filters = ProofFilters {
             backend: Some(backend),
             status: Some(ProofStatus::Verified),
@@ -325,11 +302,9 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, id_verified);
         assert_eq!(rows[0].record.status, ProofStatus::Verified);
-
         let total = count_proofs(&state, &params.filters);
         assert_eq!(total, 1);
     }
-
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn list_filters_respect_height_ranges() {
@@ -339,7 +314,6 @@ mod tests {
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         // Proof with verified height 10
         let id_early = ProofId {
             backend: backend.into(),
@@ -354,7 +328,6 @@ mod tests {
             bridge: None,
         };
         stx.world.insert_proof_record(rec_early);
-
         // Proof with verified height 25
         let id_late = ProofId {
             backend: backend.into(),
@@ -369,7 +342,6 @@ mod tests {
             bridge: None,
         };
         stx.world.insert_proof_record(rec_late);
-
         // Submitted proof (no height) should only appear when no bounds are requested.
         let id_submitted = ProofId {
             backend: backend.into(),
@@ -386,7 +358,6 @@ mod tests {
         stx.world.insert_proof_record(rec_submitted);
         stx.apply();
         block.commit().expect("commit proof registry snapshot");
-
         // Filter proofs verified at or above height 20 -> should only include id_late
         let filters_min_only = ProofFilters {
             backend: Some(backend),
@@ -407,7 +378,6 @@ mod tests {
         let rows_min = list_proofs(&state, &params_min);
         assert_eq!(rows_min.len(), 1);
         assert_eq!(rows_min[0].id, id_late);
-
         // Filter proofs verified at or below height 12 -> should only include id_early
         let filters_max_only = ProofFilters {
             backend: Some(backend),
@@ -428,7 +398,6 @@ mod tests {
         let rows_max = list_proofs(&state, &params_max);
         assert_eq!(rows_max.len(), 1);
         assert_eq!(rows_max[0].id, id_early);
-
         // Narrow window should exclude submitted proof with no height.
         let filters_window = ProofFilters {
             backend: Some(backend),
@@ -449,7 +418,6 @@ mod tests {
         let rows_window = list_proofs(&state, &params_window);
         assert_eq!(rows_window.len(), 1);
         assert_eq!(rows_window[0].id, id_early);
-
         // Count helper should reflect the same filtering.
         let count = count_proofs(
             &state,
@@ -466,24 +434,20 @@ mod tests {
         );
         assert_eq!(count, 2);
     }
-
     #[tokio::test]
     async fn bridge_filters_only_bridge_records() {
         use iroha_data_model::proof::{ProofBox, ProofStatus};
-
         let state = blank_state();
         let backend = "bridge/test";
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let payload = BridgeProofPayload::TransparentZk(BridgeTransparentProof {
             verifier_manifest_hash: [0x11; 32],
             proof: ProofBox::new(backend.into(), vec![0xAA, 0xBB]),
             recursion_depth: Some(1),
         });
-
         // Early bridge proof.
         let bridge_proof = bridge_proof_record(
             BridgeProofRange {
@@ -496,7 +460,6 @@ mod tests {
         );
         let (_, rec_bridge) = bridge_record(backend, [0x01; 32], bridge_proof, 5);
         stx.world.insert_proof_record(rec_bridge);
-
         // Bridge proof with a later range.
         let later_proof = bridge_proof_record(
             BridgeProofRange {
@@ -509,13 +472,11 @@ mod tests {
         );
         let (id_later, rec_later) = bridge_record(backend, [0x02; 32], later_proof, 6);
         stx.world.insert_proof_record(rec_later);
-
         // Non-bridge proof should be filtered out.
         let (_, plain) = plain_record("halo2/ipa", [0x03; 32], ProofStatus::Verified, Some(7));
         stx.world.insert_proof_record(plain);
         stx.apply();
         block.commit().expect("commit bridge filter snapshot");
-
         let rows = list_for_filters(
             &state,
             ProofFilters {
@@ -531,7 +492,6 @@ mod tests {
         );
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|row| row.record.bridge.is_some()));
-
         let range_filtered = list_for_filters(
             &state,
             ProofFilters {

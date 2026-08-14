@@ -22,7 +22,6 @@
 //! protocol lifecycle record; deployment still requires explicit governed
 //! admission after the release gates pass. There is no legacy proof or
 //! ciphertext codec.
-
 mod air;
 mod codec;
 mod facade;
@@ -31,10 +30,8 @@ mod fixture;
 mod relation;
 mod stark;
 mod wallet;
-
 #[cfg(test)]
 mod tests;
-
 pub(crate) use air::IVM_PRIVATE_NOTE_AGGREGATE_AIR_DESCRIPTOR_V1;
 pub(crate) use codec::PRIVATE_PROGRAM_BYTES_V1;
 #[cfg(test)]
@@ -71,7 +68,6 @@ pub use wallet::{
     encrypt_ivm_private_wallet_note_with_os_rng_v1, ivm_private_recipient_public_key_v1,
     validate_ivm_private_encrypted_output_v1,
 };
-
 #[cfg(test)]
 pub(crate) fn private_note_statement_fixture_v1() -> (
     iroha_data_model::privacy::IrohaIvmPrivateNoteStarkStatementV1,

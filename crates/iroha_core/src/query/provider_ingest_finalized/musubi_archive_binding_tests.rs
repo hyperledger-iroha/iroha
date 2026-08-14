@@ -1,5 +1,4 @@
 use iroha_data_model::musubi::{MusubiArchiveCommitmentV1, MusubiContentDigestV1};
-
 fn bind_musubi_archive(archived: &mut ProviderIngestFinalizedArchivedOrderV1, seed: u8) {
     let commitment = MusubiArchiveCommitmentV1 {
         root_cid: archived.pin_manifest.root_cid.clone(),
@@ -22,7 +21,6 @@ fn bind_musubi_archive(archived: &mut ProviderIngestFinalizedArchivedOrderV1, se
         commitment,
     ));
 }
-
 #[test]
 fn first_projection_rejects_conflicting_provider_archive_bindings_for_one_order() {
     let mut projection = projection(7);
@@ -41,7 +39,6 @@ fn first_projection_rejects_conflicting_provider_archive_bindings_for_one_order(
             bind_musubi_archive(archived, seed);
         }
     }
-
     assert!(matches!(
         projection.validate(bounds()),
         Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
@@ -49,7 +46,6 @@ fn first_projection_rejects_conflicting_provider_archive_bindings_for_one_order(
         })
     ));
 }
-
 #[test]
 fn archive_preserves_musubi_binding_and_rejects_late_or_substituted_binding() {
     let directory = physical_tempdir().expect("archive tempdir");
@@ -77,7 +73,6 @@ fn archive_preserves_musubi_binding_and_rejects_late_or_substituted_binding() {
         binding.replication_order,
         page.rows[0].replication_order.order_id
     );
-
     let mut removed = advance_projection(&first, 8);
     for provider in &mut removed.providers {
         for archived in &mut provider.orders {
@@ -91,7 +86,6 @@ fn archive_preserves_musubi_binding_and_rejects_late_or_substituted_binding() {
         archive.insert(removed),
         Err(ProviderIngestFinalizedArchiveErrorV1::OrderSubstitution { .. })
     ));
-
     let mut substituted = advance_projection(&first, 8);
     for provider in &mut substituted.providers {
         for archived in &mut provider.orders {
@@ -107,7 +101,6 @@ fn archive_preserves_musubi_binding_and_rejects_late_or_substituted_binding() {
         archive.insert(substituted),
         Err(ProviderIngestFinalizedArchiveErrorV1::OrderSubstitution { .. })
     ));
-
     let mut mismatched = projection(9);
     for provider in &mut mismatched.providers {
         for archived in &mut provider.orders {

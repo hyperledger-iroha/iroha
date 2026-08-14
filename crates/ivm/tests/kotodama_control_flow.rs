@@ -1,8 +1,6 @@
 //! Kotodama control-flow codegen coverage for `break`/`continue`.
-
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 mod common;
-
 #[test]
 fn break_exits_bounded_for_loop() {
     let src = r#"
@@ -29,7 +27,6 @@ fn break_exits_bounded_for_loop() {
     vm.run().expect("execute break program");
     assert_eq!(common::decode_i64_register(&vm, 10), 3);
 }
-
 #[test]
 fn continue_skips_range_iteration() {
     let src = r#"

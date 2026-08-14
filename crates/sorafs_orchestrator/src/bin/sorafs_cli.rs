@@ -19,10 +19,8 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-
 use base64::{
     Engine,
     engine::general_purpose::{
@@ -77,7 +75,6 @@ use reqwest::{
 };
 #[cfg(test)]
 use rust_decimal::Decimal;
-use sha2::Sha256;
 use sha3::{Digest, Sha3_256};
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarStreamingWriter, CarVerifier, CarWriteError, ChunkFetchSpec,
@@ -136,10 +133,8 @@ use sorafs_orchestrator::{
     taikai_cache::{TaikaiCacheConfig, TaikaiCacheStatsSnapshot, TaikaiPullQueueStats},
 };
 use tokio::runtime::Runtime;
-
 const SORAFS_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 use url::{Url, form_urlencoded::Serializer};
-
 const DEFAULT_CHUNKER_HANDLE: &str = "sorafs.sf1@1.0.0";
 const CONTEXT_APPEAL_QUOTE: &str = "sorafs_cli appeal quote";
 const CONTEXT_APPEAL_SETTLE: &str = "sorafs_cli appeal settle";
@@ -177,31 +172,26 @@ const REPUTATION_HEADER_ACCOUNT: &str = "X-Iroha-Account";
 const REPUTATION_HEADER_SIGNATURE: &str = "X-Iroha-Signature";
 const REPUTATION_HEADER_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
 const REPUTATION_HEADER_NONCE: &str = "X-Iroha-Nonce";
-
 fn parse_u32_arg(flag: &str, raw: &str, context: &str) -> Result<u32, String> {
     require_canonical_unsigned_decimal(flag, raw, context)?;
     raw.parse::<u32>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
-
 fn parse_u64_arg(flag: &str, raw: &str, context: &str) -> Result<u64, String> {
     require_canonical_unsigned_decimal(flag, raw, context)?;
     raw.parse::<u64>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
-
 fn parse_u16_arg(flag: &str, raw: &str, context: &str) -> Result<u16, String> {
     require_canonical_unsigned_decimal(flag, raw, context)?;
     raw.parse::<u16>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
-
 fn parse_i32_arg(flag: &str, raw: &str, context: &str) -> Result<i32, String> {
     require_canonical_signed_decimal(flag, raw, context)?;
     raw.parse::<i32>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
-
 #[cfg(test)]
 fn parse_decimal_arg(flag: &str, raw: &str, context: &str) -> Result<Decimal, String> {
     require_canonical_decimal_token(flag, raw, context)?;
@@ -215,7 +205,6 @@ fn parse_decimal_arg(flag: &str, raw: &str, context: &str) -> Result<Decimal, St
     }
     Ok(value)
 }
-
 fn require_canonical_unsigned_decimal(flag: &str, raw: &str, context: &str) -> Result<(), String> {
     let digits = raw.as_bytes();
     if digits.is_empty()
@@ -228,7 +217,6 @@ fn require_canonical_unsigned_decimal(flag: &str, raw: &str, context: &str) -> R
     }
     Ok(())
 }
-
 fn require_canonical_signed_decimal(flag: &str, raw: &str, context: &str) -> Result<(), String> {
     if raw.is_empty() || raw.trim() != raw || raw.starts_with('+') {
         return Err(format!(
@@ -248,7 +236,6 @@ fn require_canonical_signed_decimal(flag: &str, raw: &str, context: &str) -> Res
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn require_canonical_decimal_token(flag: &str, raw: &str, context: &str) -> Result<(), String> {
     if raw.is_empty() || raw.trim() != raw || raw.starts_with('+') {
@@ -256,7 +243,6 @@ fn require_canonical_decimal_token(flag: &str, raw: &str, context: &str) -> Resu
             "failed to parse `{flag}` for `{context}`: value must be a canonical decimal"
         ));
     }
-
     let body = raw.strip_prefix('-').unwrap_or(raw);
     let (integer, fractional) = match body.split_once('.') {
         Some((integer, fractional)) => {
@@ -270,7 +256,6 @@ fn require_canonical_decimal_token(flag: &str, raw: &str, context: &str) -> Resu
         }
         None => (body, None),
     };
-
     if integer.is_empty()
         || !integer.as_bytes().iter().all(u8::is_ascii_digit)
         || (integer.len() > 1 && integer.as_bytes()[0] == b'0')
@@ -283,7 +268,6 @@ fn require_canonical_decimal_token(flag: &str, raw: &str, context: &str) -> Resu
     }
     Ok(())
 }
-
 fn infer_i105_network_prefix(raw: &str) -> Option<u16> {
     let trimmed = raw.trim();
     if trimmed.starts_with("sora") {
@@ -299,7 +283,6 @@ fn infer_i105_network_prefix(raw: &str) -> Option<u16> {
         .strip_prefix('n')
         .and_then(|digits| digits.parse::<u16>().ok())
 }
-
 fn parse_account_id_arg(flag: &str, raw: &str, context: &str) -> Result<AccountId, String> {
     let trimmed = raw.trim();
     if let Some(prefix) = infer_i105_network_prefix(trimmed)
@@ -318,7 +301,6 @@ fn parse_account_id_arg(flag: &str, raw: &str, context: &str) -> Result<AccountI
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| format!("failed to parse `{flag}` for `{context}` as account id: {err}"))
 }
-
 fn parse_account_id_arg_with_prefix(
     flag: &str,
     raw: &str,
@@ -335,16 +317,13 @@ fn parse_account_id_arg_with_prefix(
             format!("failed to decode `{flag}` for `{context}` as account id: {err}")
         });
     }
-
     if expected_prefix.is_none() {
         return parse_account_id_arg(flag, trimmed, context);
     }
-
     AccountId::parse_encoded(trimmed)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| format!("failed to parse `{flag}` for `{context}` as account id: {err}"))
 }
-
 fn authority_payload_literal(
     authority: &AccountId,
     network_prefix: Option<u16>,
@@ -358,7 +337,6 @@ fn authority_payload_literal(
             .map_err(|err| format!("failed to encode authority for payload: {err}")),
     }
 }
-
 fn parse_appeal_verdict(value: &str) -> Result<AppealVerdict, String> {
     value.parse::<AppealVerdict>().map_err(|_| {
         format!(
@@ -366,20 +344,17 @@ fn parse_appeal_verdict(value: &str) -> Result<AppealVerdict, String> {
         )
     })
 }
-
 fn main() {
     if let Err(err) = run() {
         eprintln!("error: {err}");
         process::exit(1);
     }
 }
-
 fn run() -> Result<(), String> {
     let mut args = env::args().skip(1);
     let Some(first) = args.next() else {
         return Err(usage());
     };
-
     match first.as_str() {
         "car" => {
             let Some(sub) = args.next() else {
@@ -551,7 +526,6 @@ fn car_pack(raw_args: Vec<String>) -> Result<(), String> {
     let mut car_out: Option<PathBuf> = None;
     let mut plan_out: Option<PathBuf> = None;
     let mut summary_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
@@ -569,7 +543,6 @@ fn car_pack(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let input_path = input
         .ok_or_else(|| "missing required `--input=PATH` for `sorafs_cli car pack`".to_string())?;
     let car_path = car_out
@@ -578,11 +551,9 @@ fn car_pack(raw_args: Vec<String>) -> Result<(), String> {
         .as_deref()
         .unwrap_or(DEFAULT_CHUNKER_HANDLE)
         .trim();
-
     let descriptor = chunker_registry::lookup_by_handle(handle).ok_or_else(|| {
         format!("unknown chunker profile handle `{handle}`; see `sorafs_manifest_builder --list-chunker-profiles` for options")
     })?;
-
     let metadata =
         fs::metadata(&input_path).map_err(|err| format!("failed to stat input: {err}"))?;
     if metadata.is_dir() {
@@ -610,7 +581,6 @@ fn car_pack(raw_args: Vec<String>) -> Result<(), String> {
         ))
     }
 }
-
 struct DeployClientConfig {
     torii_url: Option<String>,
     public_key: PublicKey,
@@ -618,7 +588,6 @@ struct DeployClientConfig {
     network_id: NetworkId,
     chain_discriminant: u16,
 }
-
 struct DeployPackArtifacts {
     manifest: ManifestV1,
     manifest_digest_hex: String,
@@ -628,20 +597,17 @@ struct DeployPackArtifacts {
     payload_kind: &'static str,
     payload_digest_hex: String,
 }
-
 #[derive(Clone, Debug)]
 struct GatewayExpectation {
     path: Option<Vec<String>>,
     bytes: u64,
     blake3_hex: String,
 }
-
 struct PublishPeerDiscovery {
     gateway_base_url: Option<String>,
     status: Option<u16>,
     error: Option<String>,
 }
-
 struct ManifestRegisterSubmission {
     endpoint_requested: String,
     endpoint_used: String,
@@ -650,7 +616,6 @@ struct ManifestRegisterSubmission {
     response_value: Value,
     submission_mode: &'static str,
 }
-
 struct ManifestSubmitRequest<'a> {
     client: &'a HttpClient,
     torii_base_url: &'a Url,
@@ -659,7 +624,6 @@ struct ManifestSubmitRequest<'a> {
     private_key: &'a PrivateKey,
     alias_inputs: Option<&'a AliasInputs>,
 }
-
 fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let mut payload_path: Option<PathBuf> = None;
     let mut client_config_path: Option<PathBuf> = None;
@@ -669,7 +633,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let mut gateway_base_url_override: Option<String> = None;
     let mut peer_discovery_enabled = true;
     let mut summary_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         if arg == "--no-peer-discovery" {
             peer_discovery_enabled = false;
@@ -693,7 +656,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let payload_path = payload_path
         .ok_or_else(|| "missing required `--payload=PATH` for `sorafs_cli deploy`".to_string())?;
     let client_config_path = client_config_path.ok_or_else(|| {
@@ -724,14 +686,12 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let receipt_path = summary_out
         .clone()
         .unwrap_or_else(|| out_dir.join(format!("{deploy_name}.deploy.receipt.json")));
-
     let car_path = out_dir.join(format!("{deploy_name}.car"));
     let plan_path = out_dir.join(format!("{deploy_name}.plan.json"));
     let pack_summary_path = out_dir.join(format!("{deploy_name}.pack.json"));
     let manifest_path = out_dir.join(format!("{deploy_name}.manifest.to"));
     let manifest_json_path = out_dir.join(format!("{deploy_name}.manifest.json"));
     let register_response_path = out_dir.join(format!("{deploy_name}.pin-register.response.json"));
-
     let mut errors: Vec<String> = Vec::new();
     let client = HttpClient::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -745,7 +705,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         &manifest_path,
         &manifest_json_path,
     );
-
     let mut receipt = Map::new();
     receipt.insert("name".into(), Value::from(deploy_name.clone()));
     receipt.insert(
@@ -762,7 +721,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         "receipt_path".into(),
         Value::from(receipt_path.display().to_string()),
     );
-
     let artifacts = match artifacts {
         Ok(artifacts) => artifacts,
         Err(err) => {
@@ -776,7 +734,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             return Err("deploy failed while building local artifacts".to_string());
         }
     };
-
     receipt.insert(
         "cid_hex".into(),
         Value::from(artifacts.root_cid_hex.clone()),
@@ -798,7 +755,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         Value::from(artifacts.manifest.content_length),
     );
     receipt.insert("payload_kind".into(), Value::from(artifacts.payload_kind));
-
     let mut artifact_paths = Map::new();
     artifact_paths.insert("car".into(), Value::from(car_path.display().to_string()));
     artifact_paths.insert(
@@ -822,11 +778,9 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         Value::from(register_response_path.display().to_string()),
     );
     receipt.insert("artifacts".into(), Value::Object(artifact_paths));
-
     let authority = AccountId::new(client_config.public_key.clone());
     let authority_literal =
         authority_payload_literal(&authority, Some(client_config.chain_discriminant))?;
-
     let submit_request = ManifestSubmitRequest {
         client: &client,
         torii_base_url: &torii_base_url,
@@ -836,7 +790,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         alias_inputs: None,
     };
     let registration = submit_pin_register(&submit_request, &artifacts.manifest, None);
-
     let mut registration_summary = Map::new();
     registration_summary.insert("authority".into(), Value::from(authority_literal));
     registration_summary.insert(
@@ -880,7 +833,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     };
     receipt.insert("registration".into(), Value::Object(registration_summary));
     receipt.insert("paid_pin_fee".into(), paid_pin_fee);
-
     let discovery = if peer_discovery_enabled {
         discover_publish_peers(&client, &torii_base_url)
     } else {
@@ -909,7 +861,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         discovery_json.insert("warning".into(), Value::from(err.clone()));
     }
     receipt.insert("peer_discovery".into(), Value::Object(discovery_json));
-
     receipt.insert(
         "provider_ingest".into(),
         Value::Object(Map::from_iter([
@@ -921,7 +872,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             ("direct_http_ingest".into(), Value::from(false)),
         ])),
     );
-
     let gateway_verification = verify_gateway_deploy(
         &client,
         &gateway_base_url,
@@ -939,7 +889,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     if !gateway_success {
         errors.push("gateway verification failed".to_string());
     }
-
     let success = errors.is_empty();
     receipt.insert("success".into(), Value::from(success));
     receipt.insert(
@@ -947,14 +896,12 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         Value::Array(errors.iter().cloned().map(Value::from).collect()),
     );
     write_deploy_receipt_and_stdout(&receipt_path, &Value::Object(receipt))?;
-
     if success {
         Ok(())
     } else {
         Err("deploy failed; see receipt for details".to_string())
     }
 }
-
 fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> {
     let raw = fs::read_to_string(path)
         .map_err(|err| format!("failed to read client config `{}`: {err}", path.display()))?;
@@ -1000,7 +947,6 @@ fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> 
         chain_discriminant,
     })
 }
-
 fn resolve_deploy_chain_id(root: &toml::Table, chain_discriminant: u16) -> Result<ChainId, String> {
     let literal = root
         .get("chain")
@@ -1019,7 +965,6 @@ fn resolve_deploy_chain_id(root: &toml::Table, chain_discriminant: u16) -> Resul
         .parse()
         .map_err(|err| format!("failed to parse client config chain `{literal}`: {err}"))
 }
-
 fn known_chain_id_for_discriminant(chain_discriminant: u16) -> Option<&'static str> {
     match chain_discriminant {
         369 => Some("fc56984b-2be7-431d-840e-21514d1883f0"),
@@ -1032,7 +977,6 @@ fn known_chain_id_for_discriminant(chain_discriminant: u16) -> Option<&'static s
         _ => None,
     }
 }
-
 fn resolve_deploy_chain_discriminant(
     root: &toml::Table,
     account: &toml::Table,
@@ -1045,7 +989,6 @@ fn resolve_deploy_chain_discriminant(
             "client config `[account].chain_discriminant` must fit in u16".to_string()
         });
     }
-
     let chain = root
         .get("chain")
         .and_then(toml::Value::as_str)
@@ -1059,7 +1002,6 @@ fn resolve_deploy_chain_discriminant(
         )
     })
 }
-
 fn known_deploy_chain_discriminant(chain: &str) -> Option<u16> {
     match chain.trim() {
         "iroha3-taira" | "fc56984b-2be7-431d-840e-21514d1883f0" => Some(369),
@@ -1070,7 +1012,6 @@ fn known_deploy_chain_discriminant(chain: &str) -> Option<u16> {
         _ => None,
     }
 }
-
 fn build_deploy_artifacts(
     payload_path: &Path,
     car_path: &Path,
@@ -1118,7 +1059,6 @@ fn build_deploy_artifacts(
                 payload_path.display()
             ));
         };
-
     let car_file = open_output_file(car_path)?;
     let mut writer = BufWriter::new(car_file);
     let mut payload_reader = payload_cursor;
@@ -1130,14 +1070,12 @@ fn build_deploy_artifacts(
     writer
         .flush()
         .map_err(|err| format!("failed to flush `{}`: {err}", car_path.display()))?;
-
     let plan_specs = plan
         .try_chunk_fetch_specs()
         .map_err(|err| format!("failed to derive chunk fetch plan: {err}"))?;
     let plan_json = chunk_fetch_plan_to_string(&plan)
         .map_err(|err| format!("failed to render chunk plan JSON: {err}"))?;
     write_text(plan_path, plan_json.as_bytes())?;
-
     let pack_summary = render_summary(
         &input_summary,
         descriptor,
@@ -1150,7 +1088,6 @@ fn build_deploy_artifacts(
     let pack_rendered = to_string_pretty(&pack_summary)
         .map_err(|err| format!("failed to render pack summary JSON: {err}"))?;
     write_text(pack_summary_path, pack_rendered.as_bytes())?;
-
     let root_cid = stats
         .root_cids
         .first()
@@ -1188,7 +1125,6 @@ fn build_deploy_artifacts(
     )
     .map_err(|err| format!("failed to render manifest JSON: {err}"))?;
     write_text(manifest_json_path, manifest_json.as_bytes())?;
-
     let manifest_digest = manifest
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
@@ -1200,7 +1136,6 @@ fn build_deploy_artifacts(
     let root_cid_hex = hex_encode(&root_cid);
     let root_cid_base32 = encode_content_cid_base32(&root_cid);
     plan.chunks.shrink_to_fit();
-
     Ok(DeployPackArtifacts {
         manifest,
         manifest_digest_hex: hex_encode(manifest_digest.as_bytes()),
@@ -1211,7 +1146,6 @@ fn build_deploy_artifacts(
         payload_digest_hex,
     })
 }
-
 fn build_gateway_expectations(
     payload_path: &Path,
     files: Option<&[StorageFileEntryOwned]>,
@@ -1225,7 +1159,6 @@ fn build_gateway_expectations(
         {
             expectations.push(read_gateway_expectation(payload_path, None, index)?);
         }
-
         let mut ordered = entries.to_vec();
         ordered.sort_by(|left, right| left.path.cmp(&right.path));
         for entry in ordered.iter().take(32) {
@@ -1237,14 +1170,12 @@ fn build_gateway_expectations(
         }
         return Ok(expectations);
     }
-
     Ok(vec![GatewayExpectation {
         path: None,
         bytes: payload_bytes.len() as u64,
         blake3_hex: hex_encode(blake3_hash(payload_bytes).as_bytes()),
     }])
 }
-
 fn read_gateway_expectation(
     root: &Path,
     gateway_path: Option<Vec<String>>,
@@ -1266,7 +1197,6 @@ fn read_gateway_expectation(
         blake3_hex: hex_encode(blake3_hash(&bytes).as_bytes()),
     })
 }
-
 fn submit_pin_register(
     request: &ManifestSubmitRequest<'_>,
     manifest: &ManifestV1,
@@ -1299,7 +1229,6 @@ fn submit_pin_register(
         .bytes()
         .map_err(|err| format!("failed to read Torii response: {err}"))?
         .to_vec();
-
     if status.is_success() {
         return Ok(ManifestRegisterSubmission {
             endpoint_requested: requested_endpoint.clone(),
@@ -1310,13 +1239,11 @@ fn submit_pin_register(
             submission_mode: "pin_register_http",
         });
     }
-
     let body_text = String::from_utf8_lossy(&response_bytes);
     Err(format!(
         "Torii pin-register route returned {status}; generic transaction fallback is not supported: {body_text}"
     ))
 }
-
 fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishPeerDiscovery {
     let endpoint = match torii_base_url.join("v1/sorafs/storage/peers") {
         Ok(endpoint) => endpoint,
@@ -1384,7 +1311,6 @@ fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishP
         error: None,
     }
 }
-
 fn verify_gateway_deploy(
     client: &HttpClient,
     gateway_base_url: &str,
@@ -1404,7 +1330,6 @@ fn verify_gateway_deploy(
             ]));
         }
     };
-
     let mut checks = Vec::new();
     for expectation in expectations {
         let (url, label) = match expectation.path.as_ref() {
@@ -1432,7 +1357,6 @@ fn verify_gateway_deploy(
             ),
         ])));
     }
-
     let success = checks
         .iter()
         .all(|check| check.get("success").and_then(Value::as_bool) == Some(true));
@@ -1446,7 +1370,6 @@ fn verify_gateway_deploy(
     map.insert("checks".into(), Value::Array(checks));
     Value::Object(map)
 }
-
 fn fetch_gateway_check(
     client: &HttpClient,
     url: &str,
@@ -1497,7 +1420,6 @@ fn fetch_gateway_check(
     }
     Value::Object(map)
 }
-
 fn gateway_url_for_cid(gateway_base_url: &str, cid_base32: &str) -> Result<String, String> {
     let base = Url::parse(gateway_base_url)
         .map_err(|err| format!("invalid gateway base URL `{gateway_base_url}`: {err}"))?;
@@ -1506,7 +1428,6 @@ fn gateway_url_for_cid(gateway_base_url: &str, cid_base32: &str) -> Result<Strin
         .map_err(|err| format!("failed to build gateway CID URL: {err}"))?
         .to_string())
 }
-
 fn gateway_url_for_file(
     gateway_base_url: &str,
     cid_base32: &str,
@@ -1525,7 +1446,6 @@ fn gateway_url_for_file(
     }
     Ok(url.to_string())
 }
-
 fn paid_pin_fee_from_register_response(response: &Value) -> Value {
     let mut map = Map::new();
     if let Some(value) = response.get("pin_fee_nano") {
@@ -1543,14 +1463,12 @@ fn paid_pin_fee_from_register_response(response: &Value) -> Value {
         Value::Object(map)
     }
 }
-
 fn write_deploy_receipt_and_stdout(path: &Path, value: &Value) -> Result<(), String> {
     let rendered =
         to_string_pretty(value).map_err(|err| format!("failed to render deploy receipt: {err}"))?;
     println!("{rendered}");
     write_text(path, rendered.as_bytes())
 }
-
 fn sanitize_deploy_name(raw: &str) -> String {
     let sanitized: String = raw
         .chars()
@@ -1569,7 +1487,6 @@ fn sanitize_deploy_name(raw: &str) -> String {
         trimmed.to_string()
     }
 }
-
 fn encode_content_cid_base32(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
     if bytes.is_empty() {
@@ -1594,7 +1511,6 @@ fn encode_content_cid_base32(bytes: &[u8]) -> String {
     }
     String::from_utf8(out).expect("CID base32 alphabet is valid UTF-8")
 }
-
 fn taikai_bundle(raw_args: Vec<String>) -> Result<(), String> {
     let mut payload: Option<PathBuf> = None;
     let mut car_out: Option<PathBuf> = None;
@@ -1620,7 +1536,6 @@ fn taikai_bundle(raw_args: Vec<String>) -> Result<(), String> {
     let mut live_edge_drift_ms: Option<i32> = None;
     let mut ingest_node_id: Option<String> = None;
     let mut metadata_json: Option<PathBuf> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(taikai_usage());
@@ -1709,7 +1624,6 @@ fn taikai_bundle(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let payload_path = payload.ok_or_else(|| {
         "missing required `--payload=PATH` for `sorafs_cli taikai bundle`".to_string()
     })?;
@@ -1756,17 +1670,14 @@ fn taikai_bundle(raw_args: Vec<String>) -> Result<(), String> {
     let storage_ticket_hex = storage_ticket_hex.ok_or_else(|| {
         "missing required `--storage-ticket=HEX` for `sorafs_cli taikai bundle`".to_string()
     })?;
-
     let event_name = Name::from_str(&event_raw)
         .map_err(|err| format!("invalid `--event-id` value `{event_raw}`: {err}"))?;
     let stream_name = Name::from_str(&stream_raw)
         .map_err(|err| format!("invalid `--stream-id` value `{stream_raw}`: {err}"))?;
     let rendition_name = Name::from_str(&rendition_raw)
         .map_err(|err| format!("invalid `--rendition-id` value `{rendition_raw}`: {err}"))?;
-
     let manifest_digest = parse_blob_digest_field(&manifest_hex, "--manifest-hash")?;
     let storage_ticket = parse_storage_ticket_field(&storage_ticket_hex, "--storage-ticket")?;
-
     let parsed_kind = parse_taikai_track_kind(&track_kind_label)?;
     let metadata = build_taikai_track_metadata(
         parsed_kind,
@@ -1775,7 +1686,6 @@ fn taikai_bundle(raw_args: Vec<String>) -> Result<(), String> {
         resolution.as_deref(),
         audio_layout.as_deref(),
     )?;
-
     let extra_metadata =
         if let Some(path) = metadata_json.as_ref() {
             Some(load_extra_metadata(path).map_err(|err| {
@@ -1784,7 +1694,6 @@ fn taikai_bundle(raw_args: Vec<String>) -> Result<(), String> {
         } else {
             None
         };
-
     let bundle_inputs = TaikaiBundleInputs {
         event_id: event_raw,
         stream_id: stream_raw,
@@ -1804,7 +1713,6 @@ fn taikai_bundle(raw_args: Vec<String>) -> Result<(), String> {
         live_edge_drift_ms,
         ingest_node_id: ingest_node_id.clone(),
     };
-
     let summary = bundle_segment(&BundleRequest {
         payload_path: &payload_path,
         payload_bytes: None,
@@ -1828,7 +1736,6 @@ fn taikai_bundle(raw_args: Vec<String>) -> Result<(), String> {
         extra_metadata,
     })
     .map_err(|err| format!("failed to bundle Taikai segment: {err}"))?;
-
     println!("Taikai segment bundle generated");
     println!("car_cid (multibase): {}", summary.car_pointer.cid_multibase);
     println!(
@@ -1849,16 +1756,13 @@ fn taikai_bundle(raw_args: Vec<String>) -> Result<(), String> {
     if let Some(path) = summary.ingest_metadata_out.as_ref() {
         println!("ingest_metadata_out: {}", path.display());
     }
-
     if let Some(path) = summary_out.as_ref() {
         let summary_value = render_taikai_summary_value(&bundle_inputs, &summary);
         write_summary_json(path, &summary_value)?;
         println!("summary_out: {}", path.display());
     }
-
     Ok(())
 }
-
 struct TaikaiBundleInputs {
     event_id: String,
     stream_id: String,
@@ -1878,14 +1782,12 @@ struct TaikaiBundleInputs {
     live_edge_drift_ms: Option<i32>,
     ingest_node_id: Option<String>,
 }
-
 #[derive(Clone, Copy, Debug)]
 enum TaikaiCliTrackKind {
     Video,
     Audio,
     Data,
 }
-
 impl TaikaiCliTrackKind {
     fn as_str(&self) -> &'static str {
         match self {
@@ -1895,7 +1797,6 @@ impl TaikaiCliTrackKind {
         }
     }
 }
-
 fn parse_taikai_track_kind(value: &str) -> Result<TaikaiCliTrackKind, String> {
     match value {
         "video" => Ok(TaikaiCliTrackKind::Video),
@@ -1909,7 +1810,6 @@ fn parse_taikai_track_kind(value: &str) -> Result<TaikaiCliTrackKind, String> {
         )),
     }
 }
-
 fn build_taikai_track_metadata(
     kind: TaikaiCliTrackKind,
     codec_label: &str,
@@ -1939,19 +1839,16 @@ fn build_taikai_track_metadata(
         TaikaiCliTrackKind::Data => Ok(TaikaiTrackMetadata::data(codec, bitrate_kbps)),
     }
 }
-
 fn parse_blob_digest_field(value: &str, flag: &str) -> Result<BlobDigest, String> {
     let digest = parse_taikai_digest_hex(value, flag)
         .map_err(|err| format!("invalid `{flag}` value `{value}`: {err}"))?;
     Ok(BlobDigest::new(digest))
 }
-
 fn parse_storage_ticket_field(value: &str, flag: &str) -> Result<StorageTicketId, String> {
     let bytes = parse_taikai_digest_hex(value, flag)
         .map_err(|err| format!("invalid `{flag}` value `{value}`: {err}"))?;
     Ok(StorageTicketId::new(bytes))
 }
-
 fn parse_taikai_digest_hex(value: &str, flag: &str) -> Result<[u8; 32], String> {
     if value.is_empty() {
         return Err(format!("`{flag}` must not be empty"));
@@ -1981,7 +1878,6 @@ fn parse_taikai_digest_hex(value: &str, flag: &str) -> Result<[u8; 32], String> 
     }
     Ok(digest)
 }
-
 fn render_taikai_summary_value(inputs: &TaikaiBundleInputs, summary: &BundleSummary) -> Value {
     let mut ingest = Map::new();
     ingest.insert("event_id".into(), Value::from(inputs.event_id.clone()));
@@ -2023,7 +1919,6 @@ fn render_taikai_summary_value(inputs: &TaikaiBundleInputs, summary: &BundleSumm
     if let Some(node) = inputs.ingest_node_id.as_ref() {
         ingest.insert("ingest_node_id".into(), Value::from(node.clone()));
     }
-
     let mut track = Map::new();
     track.insert("kind".into(), Value::from(inputs.track_kind.clone()));
     track.insert("codec".into(), Value::from(inputs.codec.clone()));
@@ -2034,7 +1929,6 @@ fn render_taikai_summary_value(inputs: &TaikaiBundleInputs, summary: &BundleSumm
     if let Some(layout) = inputs.audio_layout.as_ref() {
         track.insert("audio_layout".into(), Value::from(layout.clone()));
     }
-
     let mut car = Map::new();
     car.insert(
         "cid_multibase".into(),
@@ -2048,14 +1942,12 @@ fn render_taikai_summary_value(inputs: &TaikaiBundleInputs, summary: &BundleSumm
         "size_bytes".into(),
         Value::from(summary.car_pointer.car_size_bytes),
     );
-
     let mut chunk = Map::new();
     chunk.insert(
         "root_blake3_hex".into(),
         Value::from(hex::encode(summary.chunk_root.as_bytes())),
     );
     chunk.insert("count".into(), Value::from(summary.chunk_count));
-
     let mut outputs = Map::new();
     outputs.insert(
         "car_out".into(),
@@ -2077,44 +1969,36 @@ fn render_taikai_summary_value(inputs: &TaikaiBundleInputs, summary: &BundleSumm
             Value::from(path.display().to_string()),
         );
     }
-
     let mut root = Map::new();
     root.insert("ingest".into(), Value::Object(ingest));
     root.insert("track".into(), Value::Object(track));
     root.insert("car".into(), Value::Object(car));
     root.insert("chunk".into(), Value::Object(chunk));
     root.insert("outputs".into(), Value::Object(outputs));
-
     if let Ok(value) = to_value(&summary.indexes) {
         root.insert("indexes".into(), value);
     }
-
     Value::Object(root)
 }
-
 fn write_summary_json(path: &Path, value: &Value) -> Result<(), String> {
     let rendered =
         to_string_pretty(value).map_err(|err| format!("failed to render summary JSON: {err}"))?;
     write_text(path, rendered.as_bytes())
 }
-
 enum StatusOutputFormat {
     Table,
     Json,
 }
-
 enum ReportOutputFormat {
     Markdown,
     Json,
 }
-
 const POR_STATUS_RESPONSE_ENVELOPE_MAX_BYTES_V1: usize = 64 * 1024;
 const POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1: usize = 512;
 const POR_STATUS_DECODE_MAX_TOTAL_ELEMENTS_V1: usize =
     POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 * 64;
 const POR_STATUS_DECODE_ALLOCATION_MULTIPLIER_V1: usize = 4;
 const POR_STATUS_DECODE_MAX_NESTING_DEPTH_V1: usize = 32;
-
 #[derive(Clone, Copy)]
 struct PorStatusResponseBoundsV1 {
     response_max_bytes: usize,
@@ -2122,7 +2006,6 @@ struct PorStatusResponseBoundsV1 {
     response_read_limit: u64,
     decode_limits: norito::DecodeLimits,
 }
-
 fn por_status_response_bounds(canonical_record_bytes: usize) -> Option<PorStatusResponseBoundsV1> {
     if canonical_record_bytes == 0
         || canonical_record_bytes > POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1
@@ -2149,7 +2032,6 @@ fn por_status_response_bounds(canonical_record_bytes: usize) -> Option<PorStatus
         decode_limits,
     })
 }
-
 #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
 struct ToriiPorStatusPageV1 {
     version: u8,
@@ -2163,7 +2045,6 @@ struct ToriiPorStatusPageV1 {
     next_cursor: Option<String>,
     statuses: Vec<PorChallengeStatusV1>,
 }
-
 #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
 struct ToriiPorStatusExportPageV1 {
     version: u8,
@@ -2173,7 +2054,6 @@ struct ToriiPorStatusExportPageV1 {
     end_epoch: Option<u64>,
     page: ToriiPorStatusPageV1,
 }
-
 #[derive(Debug, Clone, Copy, Default)]
 struct RequestedPorStatusFilter {
     manifest_digest: Option<[u8; 32]>,
@@ -2181,7 +2061,6 @@ struct RequestedPorStatusFilter {
     epoch_id: Option<u64>,
     outcome: Option<PorChallengeOutcome>,
 }
-
 fn validate_sorafs_por_cursor(cursor: &str, context: &str) -> Result<PorStatusCursorV1, String> {
     PorStatusCursorV1::decode_opaque(cursor)
         .map_err(|error| {
@@ -2190,7 +2069,6 @@ fn validate_sorafs_por_cursor(cursor: &str, context: &str) -> Result<PorStatusCu
             )
         })
 }
-
 fn validate_torii_por_status_page(
     page: &ToriiPorStatusPageV1,
     expected_limit: usize,
@@ -2220,7 +2098,6 @@ fn validate_torii_por_status_page(
             return Err("PoR status page next_cursor does not bind the response generation".into());
         }
     }
-
     let mut canonical_bytes = 0usize;
     for (index, status) in page.statuses.iter().enumerate() {
         status
@@ -2239,7 +2116,6 @@ fn validate_torii_por_status_page(
     }
     Ok(())
 }
-
 fn validate_por_status_order(
     statuses: &[PorChallengeStatusV1],
     epoch_ordered: bool,
@@ -2257,7 +2133,6 @@ fn validate_por_status_order(
     }
     Ok(())
 }
-
 fn validate_por_status_filter_membership(
     statuses: &[PorChallengeStatusV1],
     filter: RequestedPorStatusFilter,
@@ -2298,7 +2173,6 @@ fn validate_por_status_filter_membership(
     }
     Ok(())
 }
-
 fn por_status(raw_args: Vec<String>) -> Result<(), String> {
     let mut torii_url: Option<String> = None;
     let mut manifest_hex: Option<String> = None;
@@ -2309,7 +2183,6 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
     let mut max_bytes: Option<usize> = None;
     let mut cursor: Option<String> = None;
     let mut format_label: String = "table".to_string();
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(por_usage());
@@ -2364,7 +2237,6 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let torii_url = torii_url.ok_or_else(|| {
         "missing required `--torii-url=URL` for `sorafs_cli por status`".to_string()
     })?;
@@ -2377,7 +2249,6 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
             ));
         }
     };
-
     let manifest_filter = manifest_hex
         .as_deref()
         .map(|hex| {
@@ -2420,12 +2291,10 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
         ));
     }
     let effective_max_bytes = max_bytes.unwrap_or(POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1);
-
     let mut endpoint = Url::parse(&torii_url)
         .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
         .join("v1/sorafs/por/status")
         .map_err(|err| format!("failed to resolve PoR status endpoint: {err}"))?;
-
     let mut serializer = Serializer::new(String::new());
     if let Some(hex) = manifest_hex {
         serializer.append_pair("manifest", hex.trim());
@@ -2448,7 +2317,6 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
     if !query.is_empty() {
         endpoint.set_query(Some(&query));
     }
-
     let client = HttpClient::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -2498,7 +2366,6 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
     validate_por_status_filter_membership(&page.statuses, response_filter)?;
     let next_cursor = page.next_cursor;
     let statuses = page.statuses;
-
     match output_format {
         StatusOutputFormat::Table => {
             let rendered = render_status_table(&statuses);
@@ -2517,7 +2384,6 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn por_export(raw_args: Vec<String>) -> Result<(), String> {
     let mut torii_url: Option<String> = None;
     let mut out_path: Option<PathBuf> = None;
@@ -2526,7 +2392,6 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
     let mut limit: usize = POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1;
     let mut max_bytes: usize = POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1;
     let mut cursor: Option<String> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(por_usage());
@@ -2585,7 +2450,6 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let torii_url = torii_url.ok_or_else(|| {
         "missing required `--torii-url=URL` for `sorafs_cli por export`".to_string()
     })?;
@@ -2599,7 +2463,6 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
     {
         return Err("`--start-epoch` must not exceed `--end-epoch`".into());
     }
-
     let mut endpoint = Url::parse(&torii_url)
         .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
         .join("v1/sorafs/por/export")
@@ -2687,12 +2550,10 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn por_report(raw_args: Vec<String>) -> Result<(), String> {
     let mut torii_url: Option<String> = None;
     let mut week_label: Option<String> = None;
     let mut format_label: String = "markdown".to_string();
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(por_usage());
@@ -2711,7 +2572,6 @@ fn por_report(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let torii_url = torii_url.ok_or_else(|| {
         "missing required `--torii-url=URL` for `sorafs_cli por report`".to_string()
     })?;
@@ -2719,7 +2579,6 @@ fn por_report(raw_args: Vec<String>) -> Result<(), String> {
         "missing required `--week=YYYY-Www` for `sorafs_cli por report`".to_string()
     })?;
     let iso_week = parse_iso_week_arg(&week_label)?;
-
     let output_format = match format_label.trim().to_ascii_lowercase().as_str() {
         "markdown" => ReportOutputFormat::Markdown,
         "json" => ReportOutputFormat::Json,
@@ -2729,7 +2588,6 @@ fn por_report(raw_args: Vec<String>) -> Result<(), String> {
             ));
         }
     };
-
     let endpoint = Url::parse(&torii_url)
         .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
         .join(&format!("v1/sorafs/por/report/{iso_week}"))
@@ -2779,10 +2637,12 @@ fn por_report(raw_args: Vec<String>) -> Result<(), String> {
     }
     let report: PorWeeklyReportV1 = decode_por_weekly_report_v1(&body)
         .map_err(|err| format!("failed to decode PoR weekly report: {err}"))?;
+    report
+        .validate()
+        .map_err(|err| format!("weekly report failed validation: {err}"))?;
     if report.cycle != iso_week {
         return Err("PoR weekly report cycle does not match the requested week".into());
     }
-
     match output_format {
         ReportOutputFormat::Markdown => {
             let rendered = render_report_markdown(&report);
@@ -2798,7 +2658,6 @@ fn por_report(raw_args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn build_from_file(
     input: &Path,
     descriptor: &ChunkerProfileDescriptor,
@@ -2825,7 +2684,6 @@ fn build_from_file(
         summary_out,
     )
 }
-
 fn build_from_directory(
     input: &Path,
     descriptor: &ChunkerProfileDescriptor,
@@ -2850,7 +2708,6 @@ fn build_from_directory(
         summary_out,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 fn emit_car_and_artifacts(
     input: InputSummary,
@@ -2872,31 +2729,25 @@ fn emit_car_and_artifacts(
     writer
         .flush()
         .map_err(|err| format!("failed to flush `{}`: {err}", car_out.display()))?;
-
     if stats.chunk_profile != descriptor.profile {
         return Err("emitted CAR used unexpected chunk profile".to_string());
     }
-
     if let Some(plan_path) = plan_out {
         let spec_json = chunk_fetch_plan_to_string(&plan)
             .map_err(|err| format!("failed to render chunk plan: {err}"))?;
         write_text(plan_path, spec_json.as_bytes())?;
     }
-
     let summary = render_summary(&input, descriptor, handle, &plan, &stats, por_root, car_out)?;
     let rendered =
         to_string_pretty(&summary).map_err(|err| format!("failed to render summary: {err}"))?;
     println!("{rendered}");
-
     if let Some(summary_path) = summary_out {
         write_text(summary_path, rendered.as_bytes())?;
     }
-
     // Drop payload bytes held in the plan to free memory before returning.
     plan.chunks.shrink_to_fit();
     Ok(())
 }
-
 fn render_summary(
     input: &InputSummary,
     descriptor: &ChunkerProfileDescriptor,
@@ -2971,7 +2822,6 @@ fn render_summary(
     }
     Ok(Value::Object(obj))
 }
-
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -2982,7 +2832,6 @@ fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn anonymity_policy_label(policy: AnonymityPolicy) -> &'static str {
     match policy {
         AnonymityPolicy::GuardPq => "anon-guard-pq",
@@ -2990,17 +2839,14 @@ fn anonymity_policy_label(policy: AnonymityPolicy) -> &'static str {
         AnonymityPolicy::StrictPq => "anon-strict-pq",
     }
 }
-
 fn write_text(path: &Path, bytes: &[u8]) -> Result<(), String> {
     write_bytes(path, bytes)
 }
-
 fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut file = open_output_file(path)?;
     file.write_all(bytes)
         .map_err(|err| format!("failed to write `{}`: {err}", path.display()))
 }
-
 fn open_output_file(path: &Path) -> Result<File, String> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -3022,7 +2868,6 @@ fn open_output_file(path: &Path) -> Result<File, String> {
     }
     Ok(file)
 }
-
 fn validate_output_path(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -3044,7 +2889,6 @@ fn validate_output_path(path: &Path) -> Result<(), String> {
             ));
         }
     }
-
     if let Some(parent) = path.parent() {
         for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
             if ancestor.as_os_str().is_empty() {
@@ -3077,20 +2921,16 @@ fn validate_output_path(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut OpenOptions) {}
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -3106,7 +2946,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -3123,14 +2962,12 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0
 }
-
 fn format_car_error(err: CarWriteError) -> String {
     match err {
         CarWriteError::Io(io_err) => format!("streaming payload failed: {io_err}"),
         other => format!("failed to emit CAR: {other}"),
     }
 }
-
 fn usage() -> String {
     "Usage:
   sorafs_cli norito build --source=PATH --bytecode-out=PATH [--summary-out=PATH]
@@ -3144,9 +2981,9 @@ fn usage() -> String {
   sorafs_cli proof stream --manifest=PATH (--torii-url=HTTPS_ORIGIN | --gateway-url=HTTPS_URL) --provider-id-hex=HEX32 --bearer-token-env=VAR [--proof-kind=por|pdp|potr] [--challenge-id-hex=HEX32] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX16] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
   sorafs_cli pdp enqueue|next|submit|status|export --torii-url=HTTPS_ORIGIN --network-id=GENESIS_HASH --operator-private-key-file=PATH [operation options; run `sorafs_cli pdp` for details]
-  sorafs_cli reputation snapshot --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
-  sorafs_cli reputation fetch --torii-url=URL --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
-  sorafs_cli reputation watch --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
+  sorafs_cli reputation snapshot --torii-url=URL --network-id=GENESIS_HASH --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
+  sorafs_cli reputation fetch --torii-url=URL --network-id=GENESIS_HASH --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
+  sorafs_cli reputation watch --torii-url=URL --network-id=GENESIS_HASH --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
   sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID --proof=PATH] [--summary-out=PATH]
   sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=awaiting_proof|proof_submitted|verified|failed|repaired] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE] [--format=table|json]
   sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N --end-epoch=N] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE]
@@ -3187,44 +3024,37 @@ fn usage() -> String {
 }
 fn reputation_usage() -> String {
     "Usage:
-  sorafs_cli reputation snapshot --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
-  sorafs_cli reputation fetch --torii-url=URL --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
-  sorafs_cli reputation watch --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
+  sorafs_cli reputation snapshot --torii-url=URL --network-id=GENESIS_HASH --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
+  sorafs_cli reputation fetch --torii-url=URL --network-id=GENESIS_HASH --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
+  sorafs_cli reputation watch --torii-url=URL --network-id=GENESIS_HASH --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
   sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID --proof=PATH] [--summary-out=PATH]"
         .to_string()
 }
-
 fn fetch_usage() -> String {
     "Usage:
   sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION]"
         .to_string()
 }
-
 fn taikai_usage() -> String {
     "Usage:
   sorafs_cli taikai bundle --payload=PATH --car-out=PATH --envelope-out=PATH --event-id=NAME --stream-id=NAME --rendition-id=NAME --track-kind=video|audio|data --codec=CODEC --bitrate-kbps=KBPS --segment-sequence=N --segment-start-pts=N --segment-duration=N --wallclock-unix-ms=N --manifest-hash=HEX --storage-ticket=HEX [--indexes-out=PATH] [--ingest-metadata-out=PATH] [--summary-out=PATH] [--resolution=WxH] [--audio-layout=mono|stereo|5.1|7.1|custom:<label>] [--ingest-latency-ms=N] [--live-edge-drift-ms=N] [--ingest-node-id=ID] [--metadata-json=PATH]"
         .to_string()
 }
-
 #[derive(Clone, Copy)]
 struct GatewayProviderCounts {
     direct: usize,
     gateway: usize,
 }
-
 impl GatewayProviderCounts {
     const fn new(direct: usize, gateway: usize) -> Self {
         Self { direct, gateway }
     }
-
     fn direct_u64(self) -> u64 {
         u64::try_from(self.direct).unwrap_or(u64::MAX)
     }
-
     fn gateway_u64(self) -> u64 {
         u64::try_from(self.gateway).unwrap_or(u64::MAX)
     }
-
     fn mix_label(self) -> &'static str {
         match (self.direct > 0, self.gateway > 0) {
             (true, true) => "mixed",
@@ -3234,7 +3064,6 @@ impl GatewayProviderCounts {
         }
     }
 }
-
 struct GatewayScoreboardMetadataInput<'a> {
     provider_counts: GatewayProviderCounts,
     max_peers: Option<usize>,
@@ -3250,13 +3079,11 @@ struct GatewayScoreboardMetadataInput<'a> {
     scoreboard_now: Option<u64>,
     telemetry_source: Option<&'a str>,
 }
-
 #[derive(Clone, Copy)]
 enum FetchCacheProfile {
     Warm,
     Cold,
 }
-
 impl FetchCacheProfile {
     fn parse(raw: &str) -> Option<Self> {
         match raw {
@@ -3265,7 +3092,6 @@ impl FetchCacheProfile {
             _ => None,
         }
     }
-
     const fn label(self) -> &'static str {
         match self {
             Self::Warm => "warm",
@@ -3273,13 +3099,11 @@ impl FetchCacheProfile {
         }
     }
 }
-
 struct CliPolicyLabels {
     effective_label: &'static str,
     override_flag: bool,
     override_label: Option<&'static str>,
 }
-
 fn summarise_policy<T>(
     requested: Option<T>,
     override_policy: Option<T>,
@@ -3295,28 +3119,24 @@ where
         override_label: override_policy.map(label_fn),
     }
 }
-
 fn summarise_transport_policy(
     requested: Option<TransportPolicy>,
     override_policy: Option<TransportPolicy>,
 ) -> CliPolicyLabels {
     summarise_policy(requested, override_policy, TransportPolicy::label)
 }
-
 fn summarise_anonymity_policy(
     requested: Option<AnonymityPolicy>,
     override_policy: Option<AnonymityPolicy>,
 ) -> CliPolicyLabels {
     summarise_policy(requested, override_policy, AnonymityPolicy::label)
 }
-
 fn option_usize_to_value(value: Option<usize>) -> Value {
     value
         .and_then(|val| u64::try_from(val).ok())
         .map(Value::from)
         .unwrap_or(Value::Null)
 }
-
 fn build_gateway_scoreboard_metadata(input: &GatewayScoreboardMetadataInput<'_>) -> Value {
     let mut metadata = Map::new();
     metadata.insert("version".into(), Value::from(SORAFS_CLI_VERSION));
@@ -3361,7 +3181,6 @@ fn build_gateway_scoreboard_metadata(input: &GatewayScoreboardMetadataInput<'_>)
         "gateway_manifest_provided".into(),
         Value::from(input.manifest_envelope_present),
     );
-
     let transport_labels =
         summarise_transport_policy(input.transport_policy, input.transport_policy_override);
     metadata.insert(
@@ -3378,7 +3197,6 @@ fn build_gateway_scoreboard_metadata(input: &GatewayScoreboardMetadataInput<'_>)
             .override_label
             .map_or(Value::Null, Value::from),
     );
-
     let anonymity_labels =
         summarise_anonymity_policy(input.anonymity_policy, input.anonymity_policy_override);
     metadata.insert(
@@ -3400,10 +3218,8 @@ fn build_gateway_scoreboard_metadata(input: &GatewayScoreboardMetadataInput<'_>)
         "write_mode_enforces_pq".into(),
         Value::from(input.write_mode.enforces_pq_only()),
     );
-
     Value::Object(metadata)
 }
-
 fn insert_telemetry_source(summary: &mut Value, telemetry_source: Option<&str>) {
     if let Some(label) = telemetry_source
         && let Some(obj) = summary.as_object_mut()
@@ -3411,7 +3227,6 @@ fn insert_telemetry_source(summary: &mut Value, telemetry_source: Option<&str>) 
         obj.insert("telemetry_source".into(), Value::from(label));
     }
 }
-
 fn por_usage() -> String {
     "Usage:
   sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=awaiting_proof|proof_submitted|verified|failed|repaired] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE] [--format=table|json]
@@ -3419,13 +3234,11 @@ fn por_usage() -> String {
   sorafs_cli por report --torii-url=URL --week=YYYY-Www [--format=markdown|json]"
         .to_string()
 }
-
 fn proxy_usage() -> String {
     "Usage:
   sorafs_cli proxy set-mode --orchestrator-config=PATH --mode=bridge|metadata-only [--json-out=PATH] [--config-out=PATH] [--dry-run]"
         .to_string()
 }
-
 fn appeal_usage() -> String {
     "Usage:
   sorafs_cli appeal quote --class=content|access|fraud|other [--backlog=N] [--evidence-mb=N] [--urgency=normal|high] [--panel-size=N] [--format=table|json] [--config=PATH|-]
@@ -3433,7 +3246,6 @@ fn appeal_usage() -> String {
   sorafs_cli appeal disburse --deposit=XOR --outcome=uphold|overturn|modify|withdrawn_before_panel|withdrawn_after_panel|frivolous|escalated --refund-account=ID --treasury-account=ID --escrow-account=ID --juror=ID [--juror=ID...] [--no-show=ID...] [--panel-size=N] [--format=table|json] [--config=PATH|-]"
         .to_string()
 }
-
 fn governance_usage() -> String {
     "Usage:
   sorafs_cli governance dag list --root=DIR [--format=table|json] [--summary-out=PATH]
@@ -3450,7 +3262,6 @@ fn governance_usage() -> String {
   sorafs_cli governance dag mirror-query --index=PATH (--head | --block-cid=CID|hex:HEX | --node-cid=CID|hex:HEX) [--format=table|json]"
         .to_string()
 }
-
 fn moderation_usage() -> String {
     "Usage:
   sorafs_cli moderation validate-repro --manifest=PATH [--format=json|norito]
@@ -3474,12 +3285,10 @@ fn moderation_usage() -> String {
 Validates internally signed AI moderation reproducibility manifests and adversarial corpus registries before a separate governance trust policy admits them. `run-signed-local` is the production trust-boundary path: it verifies external governance anchors, signs a fresh result with a policy-authorized runner key, and atomically appends the complete result to a tamper-evident provenance segment. `committee-authenticated-run` verifies distinct authorized runner signatures, freshness, revocation, and policy quorum before persisting the deterministic aggregate. `run-local`, `runner-serve`, `runner-grpc-serve`, `committee-run`, and `committee-serve` are unsigned diagnostic/foundation paths and must not be used as production trust boundaries."
         .to_string()
 }
-
 fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     if raw_args.is_empty() {
         return Err(fetch_usage());
     }
-
     let mut plan_source: Option<JsonSource> = None;
     let mut manifest_id_hex: Option<String> = None;
     let mut chunker_handle_hint: Option<String> = None;
@@ -3511,7 +3320,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     let mut scoreboard_now: Option<u64> = None;
     let mut telemetry_source_label: Option<String> = None;
     let mut cache_profile: Option<FetchCacheProfile> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(fetch_usage());
@@ -3682,7 +3490,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
             ));
         }
     }
-
     let plan_source = plan_source
         .ok_or_else(|| "missing required `--plan=PATH` for `sorafs_cli fetch`".to_string())?;
     let manifest_id_hex = manifest_id_hex
@@ -3698,7 +3505,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     if provider_specs.is_empty() {
         return Err("provide at least one `--provider` entry".to_string());
     }
-
     let manifest_report = if let Some(source) = manifest_report_source.take() {
         Some(source.read()?)
     } else {
@@ -3717,12 +3523,10 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
             manifest_cid_hex = Some(cid.trim().to_ascii_lowercase());
         }
     }
-
     let plan_json = plan_source.read()?;
     let plan_with_handle = build_plan_from_specs(&plan_json, chunker_handle_hint.as_deref())?;
     let plan = plan_with_handle.plan;
     let chunker_handle = plan_with_handle.chunker_handle;
-
     let gateway_config = GatewayFetchConfig {
         manifest_id_hex: manifest_id_hex.clone(),
         chunker_handle: chunker_handle.clone(),
@@ -3733,7 +3537,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         salt_epoch: None,
         expected_cache_version: expected_cache_version.clone(),
     };
-
     let provider_inputs: Vec<GatewayProviderInput> = provider_specs
         .iter()
         .map(|spec| GatewayProviderInput {
@@ -3745,15 +3548,12 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
             privacy_events_url: spec.privacy_events_url.clone(),
         })
         .collect();
-
     let context = GatewayFetchContext::new(gateway_config.clone(), provider_inputs.clone())
         .map_err(|err| format!("failed to construct gateway context: {err}"))?;
-
     let context_providers = context.providers();
     if context_providers.is_empty() {
         return Err("gateway context did not expose any providers".to_string());
     }
-
     let metadata: Vec<ProviderMetadata> = context_providers
         .iter()
         .map(|provider| {
@@ -3787,7 +3587,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
             meta
         })
         .collect();
-
     let telemetry_snapshot = TelemetrySnapshot::default();
     let mut orchestrator_config = if let Some(source) = orchestrator_config_source {
         let value = source.read()?;
@@ -3940,7 +3739,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         &orchestrator_config.scoreboard,
     )
     .map_err(|err| format!("failed to build provider scoreboard: {err}"))?;
-
     let eligible_count = scoreboard
         .entries()
         .iter()
@@ -3949,7 +3747,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     if eligible_count == 0 {
         return Err("no eligible providers available after capability checks".to_string());
     }
-
     let ineligible_providers: Vec<Value> = scoreboard
         .entries()
         .iter()
@@ -3966,7 +3763,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
             Eligibility::Eligible => None,
         })
         .collect();
-
     if let Some(limit) = max_peers {
         let limit = limit.max(1);
         fetch_options.global_parallel_limit = Some(
@@ -4001,7 +3797,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         orchestrator_config.policy_override.transport_policy = Some(policy);
     }
     let requested_anonymity_override = anonymity_policy_override;
-
     let rollout_phase = orchestrator_config.rollout_phase;
     let write_mode = orchestrator_config.write_mode;
     let runtime =
@@ -4016,14 +3811,11 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
             max_peers,
         ))
         .map_err(|err| format!("fetch failed: {err}"))?;
-
     let outcome = &session.outcome;
-
     if let Some(path) = output_path {
         let assembled = outcome.assemble_payload();
         write_bytes(&path, &assembled)?;
     }
-
     let mut summary = build_fetch_summary(
         manifest_id_hex.as_str(),
         &chunker_handle,
@@ -4095,21 +3887,17 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     if let Some(path) = json_out {
         write_text(&path, summary_text.as_bytes())?;
     }
-
     Ok(())
 }
-
 fn proxy_set_mode(raw_args: Vec<String>) -> Result<(), String> {
     if raw_args.is_empty() {
         return Err(proxy_usage());
     }
-
     let mut config_path: Option<PathBuf> = None;
     let mut requested_mode: Option<ProxyMode> = None;
     let mut json_out: Option<PathBuf> = None;
     let mut config_out: Option<PathBuf> = None;
     let mut dry_run = false;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(proxy_usage());
@@ -4151,12 +3939,10 @@ fn proxy_set_mode(raw_args: Vec<String>) -> Result<(), String> {
             ));
         }
     }
-
     let config_path =
         config_path.ok_or_else(|| "missing required `--orchestrator-config=PATH`".to_string())?;
     let requested_mode = requested_mode
         .ok_or_else(|| "missing required `--mode=bridge|metadata-only`".to_string())?;
-
     let config_bytes = fs::read_to_string(&config_path)
         .map_err(|err| format!("failed to read `{}`: {err}", config_path.display()))?;
     let config_value: Value = norito::json::from_str(&config_bytes)
@@ -4181,7 +3967,6 @@ fn proxy_set_mode(raw_args: Vec<String>) -> Result<(), String> {
         .expect("local proxy must be present")
         .proxy_mode
         .clone();
-
     let target_config_path = config_out.as_ref().unwrap_or(&config_path);
     if !dry_run {
         let config_value = orchestrator_config_to_json(&orchestrator_config);
@@ -4189,7 +3974,6 @@ fn proxy_set_mode(raw_args: Vec<String>) -> Result<(), String> {
             .map_err(|err| format!("failed to render orchestrator config JSON: {err}"))?;
         write_text(target_config_path, config_json.as_bytes())?;
     }
-
     let mut summary = Map::new();
     summary.insert(
         "mode_previous".into(),
@@ -4223,23 +4007,18 @@ fn proxy_set_mode(raw_args: Vec<String>) -> Result<(), String> {
     if let Some(guard_key) = guard_cache_key_hex {
         summary.insert("guard_cache_key_hex".into(), Value::String(guard_key));
     }
-
     let summary_json = norito::json::to_json_pretty(&Value::Object(summary))
         .map_err(|err| format!("failed to render summary JSON: {err}"))?;
-
     if let Some(path) = json_out {
         write_text(&path, summary_json.as_bytes())?;
     } else {
         println!("{summary_json}");
     }
-
     Ok(())
 }
-
 fn moderation_validate_repro(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut format = String::from("json");
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -4257,13 +4036,11 @@ fn moderation_validate_repro(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli moderation validate-repro`".to_string()
     })?;
     let bytes = fs::read(&manifest_path)
         .map_err(|err| format!("failed to read `{}`: {err}", manifest_path.display()))?;
-
     let manifest: ModerationReproManifestV1 = match format.as_str() {
         "json" => norito::json::from_slice(&bytes).map_err(|err| {
             format!(
@@ -4283,11 +4060,9 @@ fn moderation_validate_repro(raw_args: Vec<String>) -> Result<(), String> {
             ));
         }
     };
-
     let summary = manifest
         .validate()
         .map_err(|err| format!("manifest validation failed: {err}"))?;
-
     println!(
         "reproducibility manifest {} validated (models={}, signers={}, issued_at={})",
         hex_encode(summary.manifest_id),
@@ -4295,14 +4070,11 @@ fn moderation_validate_repro(raw_args: Vec<String>) -> Result<(), String> {
         summary.signer_count,
         summary.issued_at_unix
     );
-
     Ok(())
 }
-
 fn moderation_validate_corpus(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut format = String::from("json");
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -4320,13 +4092,11 @@ fn moderation_validate_corpus(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli moderation validate-corpus`".to_string()
     })?;
     let bytes = fs::read(&manifest_path)
         .map_err(|err| format!("failed to read `{}`: {err}", manifest_path.display()))?;
-
     let manifest: AdversarialCorpusManifestV1 = match format.as_str() {
         "json" => norito::json::from_slice(&bytes).map_err(|err| {
             format!(
@@ -4346,11 +4116,9 @@ fn moderation_validate_corpus(raw_args: Vec<String>) -> Result<(), String> {
             ));
         }
     };
-
     manifest
         .validate()
         .map_err(|err| format!("manifest validation failed: {err}"))?;
-
     let family_count = manifest.families.len();
     let variant_count: usize = manifest
         .families
@@ -4362,17 +4130,14 @@ fn moderation_validate_corpus(raw_args: Vec<String>) -> Result<(), String> {
         "adversarial corpus manifest validated (issued_at={}, cohort={}, families={}, variants={})",
         manifest.issued_at_unix, cohort, family_count, variant_count
     );
-
     Ok(())
 }
-
 #[derive(Clone, Debug, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationRegistryPersistedSnapshot {
     schema_version: u16,
     repro_manifests: Vec<ModerationRegistryReproRecord>,
     adversarial_corpora: Vec<ModerationRegistryCorpusRecord>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationRegistryReproRecord {
     manifest_id: [u8; 16],
@@ -4383,7 +4148,6 @@ struct ModerationRegistryReproRecord {
     model_count: u32,
     signer_count: u32,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationRegistryCorpusRecord {
     corpus_digest: [u8; 32],
@@ -4392,20 +4156,17 @@ struct ModerationRegistryCorpusRecord {
     family_count: u32,
     variant_count: u32,
 }
-
 struct ModerationRegistryService {
     state_path: PathBuf,
     state: Mutex<ModerationRegistryPersistedSnapshot>,
     max_body_bytes: usize,
     snapshot_limit: usize,
 }
-
 fn moderation_registry_serve(raw_args: Vec<String>) -> Result<(), String> {
     let mut state_path: Option<PathBuf> = None;
     let mut listen = String::from(MODERATION_REGISTRY_DEFAULT_LISTEN);
     let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
     let mut snapshot_limit = 500_usize;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -4452,13 +4213,11 @@ fn moderation_registry_serve(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let state_path = state_path.ok_or_else(|| {
         "missing required `--state=PATH` for `sorafs_cli moderation registry-serve`".to_string()
     })?;
     let state = moderation_registry_load_state(&state_path)?;
     moderation_registry_save_state(&state_path, &state)?;
-
     let listen_addr =
         validate_moderation_loopback_listen(&listen, "sorafs_cli moderation registry-serve")?;
     let listener = TcpListener::bind(listen_addr).map_err(|err| {
@@ -4478,7 +4237,6 @@ fn moderation_registry_serve(raw_args: Vec<String>) -> Result<(), String> {
     let rendered = to_string_pretty(&status)
         .map_err(|err| format!("failed to render model registry service status JSON: {err}"))?;
     println!("{rendered}");
-
     let active_connections = Arc::new(AtomicUsize::new(0));
     for incoming in listener.incoming() {
         match incoming {
@@ -4509,10 +4267,8 @@ fn moderation_registry_serve(raw_args: Vec<String>) -> Result<(), String> {
             Err(err) => eprintln!("sorafs moderation model registry accept failed: {err}"),
         }
     }
-
     Ok(())
 }
-
 fn moderation_registry_load_state(
     path: &Path,
 ) -> Result<ModerationRegistryPersistedSnapshot, String> {
@@ -4544,7 +4300,6 @@ fn moderation_registry_load_state(
     moderation_registry_normalize_snapshot(&mut snapshot)?;
     Ok(snapshot)
 }
-
 fn moderation_registry_save_state(
     path: &Path,
     state: &ModerationRegistryPersistedSnapshot,
@@ -4565,7 +4320,6 @@ fn moderation_registry_save_state(
         )
     })
 }
-
 fn moderation_registry_normalize_snapshot(
     snapshot: &mut ModerationRegistryPersistedSnapshot,
 ) -> Result<(), String> {
@@ -4630,7 +4384,6 @@ fn moderation_registry_normalize_snapshot(
     }
     Ok(())
 }
-
 fn moderation_http_hard_limit(max_body_bytes: usize, service: &str) -> io::Result<usize> {
     max_body_bytes
         .checked_add(MODERATION_RUNNER_MAX_HEADER_BYTES)
@@ -4642,7 +4395,6 @@ fn moderation_http_hard_limit(max_body_bytes: usize, service: &str) -> io::Resul
             )
         })
 }
-
 fn moderation_registry_handle_stream(
     mut stream: TcpStream,
     service: &ModerationRegistryService,
@@ -4685,7 +4437,6 @@ fn moderation_registry_handle_stream(
     stream.write_all(&response)?;
     stream.flush()
 }
-
 fn moderation_registry_http_response(
     service: &ModerationRegistryService,
     request: &[u8],
@@ -4696,7 +4447,6 @@ fn moderation_registry_http_response(
         Err(response) => response,
     }
 }
-
 fn moderation_registry_route_request(
     service: &ModerationRegistryService,
     request: &ModerationRunnerHttpRequest<'_>,
@@ -4742,7 +4492,6 @@ fn moderation_registry_route_request(
         ),
     }
 }
-
 fn moderation_registry_admit_repro_request_json(
     service: &ModerationRegistryService,
     body: &[u8],
@@ -4757,7 +4506,6 @@ fn moderation_registry_admit_repro_request_json(
     let (record, created) = moderation_registry_insert_repro(service, record)?;
     Ok(moderation_registry_repro_admission_json(&record, created))
 }
-
 fn moderation_registry_admit_corpus_request_json(
     service: &ModerationRegistryService,
     body: &[u8],
@@ -4772,7 +4520,6 @@ fn moderation_registry_admit_corpus_request_json(
     let (record, created) = moderation_registry_insert_corpus(service, record)?;
     Ok(moderation_registry_corpus_admission_json(&record, created))
 }
-
 fn moderation_registry_manifest_bytes_from_request(
     body: &[u8],
     context: &str,
@@ -4797,7 +4544,6 @@ fn moderation_registry_manifest_bytes_from_request(
     }
     Ok(bytes)
 }
-
 fn moderation_registry_repro_record_from_manifest(
     manifest: &ModerationReproManifestV1,
 ) -> Result<ModerationRegistryReproRecord, String> {
@@ -4814,7 +4560,6 @@ fn moderation_registry_repro_record_from_manifest(
         signer_count: summary.signer_count,
     })
 }
-
 fn moderation_registry_corpus_record_from_manifest(
     manifest: &AdversarialCorpusManifestV1,
 ) -> Result<ModerationRegistryCorpusRecord, String> {
@@ -4838,7 +4583,6 @@ fn moderation_registry_corpus_record_from_manifest(
         variant_count,
     })
 }
-
 fn moderation_registry_insert_repro(
     service: &ModerationRegistryService,
     record: ModerationRegistryReproRecord,
@@ -4865,7 +4609,6 @@ fn moderation_registry_insert_repro(
         }
     }
 }
-
 fn moderation_registry_insert_corpus(
     service: &ModerationRegistryService,
     record: ModerationRegistryCorpusRecord,
@@ -4888,7 +4631,6 @@ fn moderation_registry_insert_corpus(
         }
     }
 }
-
 fn moderation_registry_status_json(
     service: &ModerationRegistryService,
     status: &str,
@@ -4938,7 +4680,6 @@ fn moderation_registry_status_json(
     );
     Ok(Value::Object(output))
 }
-
 fn moderation_registry_snapshot_response_json(
     service: &ModerationRegistryService,
 ) -> Result<Value, String> {
@@ -4948,7 +4689,6 @@ fn moderation_registry_snapshot_response_json(
         .map_err(|_| "moderation model registry state lock poisoned".to_string())?;
     moderation_registry_snapshot_json(&state, service.snapshot_limit)
 }
-
 fn moderation_registry_state_digest_hex(
     state: &ModerationRegistryPersistedSnapshot,
 ) -> Result<String, String> {
@@ -4956,7 +4696,6 @@ fn moderation_registry_state_digest_hex(
         .map_err(|err| format!("failed to encode model registry state for digest: {err}"))?;
     Ok(hex_encode(blake3_hash(&bytes).as_bytes()))
 }
-
 fn moderation_registry_snapshot_json(
     state: &ModerationRegistryPersistedSnapshot,
     limit: usize,
@@ -5014,7 +4753,6 @@ fn moderation_registry_snapshot_json(
     );
     Ok(Value::Object(output))
 }
-
 fn moderation_registry_repro_admission_json(
     record: &ModerationRegistryReproRecord,
     created: bool,
@@ -5032,7 +4770,6 @@ fn moderation_registry_repro_admission_json(
     );
     Value::Object(output)
 }
-
 fn moderation_registry_corpus_admission_json(
     record: &ModerationRegistryCorpusRecord,
     created: bool,
@@ -5050,7 +4787,6 @@ fn moderation_registry_corpus_admission_json(
     );
     Value::Object(output)
 }
-
 fn moderation_registry_repro_record_json(record: &ModerationRegistryReproRecord) -> Value {
     let mut output = Map::new();
     output.insert(
@@ -5080,7 +4816,6 @@ fn moderation_registry_repro_record_json(record: &ModerationRegistryReproRecord)
     );
     Value::Object(output)
 }
-
 fn moderation_registry_corpus_record_json(record: &ModerationRegistryCorpusRecord) -> Value {
     let mut output = Map::new();
     output.insert(
@@ -5106,12 +4841,10 @@ fn moderation_registry_corpus_record_json(record: &ModerationRegistryCorpusRecor
     );
     Value::Object(output)
 }
-
 fn moderation_registry_json_response(status: u16, reason: &str, value: &Value) -> Vec<u8> {
     let body = to_vec(value).unwrap_or_else(|_| b"{\"error\":\"json_render_failed\"}".to_vec());
     moderation_runner_http_response_bytes(status, reason, "application/json", &body)
 }
-
 fn moderation_registry_error_response(status: u16, reason: &str, message: &str) -> Vec<u8> {
     let mut body = Map::new();
     body.insert(
@@ -5122,12 +4855,10 @@ fn moderation_registry_error_response(status: u16, reason: &str, message: &str) 
     body.insert("message".into(), Value::from(message.to_string()));
     moderation_registry_json_response(status, reason, &Value::Object(body))
 }
-
 fn moderation_run_local(raw_args: Vec<String>) -> Result<(), String> {
     if raw_args.is_empty() {
         return Err(moderation_usage());
     }
-
     let mut manifest_path: Option<PathBuf> = None;
     let mut artifact_root: Option<PathBuf> = None;
     let mut format = String::from("json");
@@ -5137,7 +4868,6 @@ fn moderation_run_local(raw_args: Vec<String>) -> Result<(), String> {
     let mut notes: Option<String> = None;
     let mut json_out: Option<PathBuf> = None;
     let mut max_payload_bytes = MODERATION_RUNNER_DEFAULT_MAX_PAYLOAD_BYTES;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -5185,7 +4915,6 @@ fn moderation_run_local(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli moderation run-local`".to_string()
     })?;
@@ -5205,11 +4934,9 @@ fn moderation_run_local(raw_args: Vec<String>) -> Result<(), String> {
     if screened_at_unix == 0 {
         return Err("`--screened-at` must be greater than zero".to_string());
     }
-
     let manifest =
         load_moderation_repro_manifest(&manifest_path, &format, "sorafs_cli moderation run-local")?;
     let runner = load_moderation_runner_for_current_executable(manifest, &artifact_root)?;
-
     let payload = read_file_bounded(
         &payload_path,
         u64::from(max_payload_bytes),
@@ -5218,7 +4945,6 @@ fn moderation_run_local(raw_args: Vec<String>) -> Result<(), String> {
     if payload.is_empty() {
         return Err("`--payload` file must not be empty".to_string());
     }
-
     let output = moderation_local_runner_screening_json(
         &runner,
         &payload,
@@ -5229,16 +4955,13 @@ fn moderation_run_local(raw_args: Vec<String>) -> Result<(), String> {
     )?;
     let rendered = to_string_pretty(&output)
         .map_err(|err| format!("failed to render local runner JSON: {err}"))?;
-
     if let Some(path) = json_out {
         write_text(&path, format!("{rendered}\n").as_bytes())?;
     } else {
         println!("{rendered}");
     }
-
     Ok(())
 }
-
 fn moderation_run_signed_local(raw_args: Vec<String>) -> Result<(), String> {
     if raw_args.is_empty() {
         return Err(moderation_usage());
@@ -5260,7 +4983,6 @@ fn moderation_run_signed_local(raw_args: Vec<String>) -> Result<(), String> {
     let mut notes = None;
     let mut norito_out = None;
     let mut json_out = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -5325,7 +5047,6 @@ fn moderation_run_signed_local(raw_args: Vec<String>) -> Result<(), String> {
             _ => return Err(format!("unrecognised option `{key}` for `{context}`")),
         }
     }
-
     let manifest_path = manifest_path
         .ok_or_else(|| format!("missing required `--manifest=PATH` for `{context}`"))?;
     let artifact_root = artifact_root
@@ -5353,7 +5074,6 @@ fn moderation_run_signed_local(raw_args: Vec<String>) -> Result<(), String> {
     if provenance_log_id == [0; 16] {
         return Err("`--provenance-log-id` must be non-zero".to_string());
     }
-
     let now_unix = moderation_trusted_now_unix()?;
     let manifest = load_moderation_repro_manifest(&manifest_path, &format, context)?;
     let policy = load_moderation_trust_policy(&trust_policy_path, &trust_policy_format, context)?;
@@ -5413,7 +5133,6 @@ fn moderation_run_signed_local(raw_args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn moderation_trusted_now_unix() -> Result<u64, String> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -5424,7 +5143,6 @@ fn moderation_trusted_now_unix() -> Result<u64, String> {
     }
     Ok(now)
 }
-
 fn moderation_runner_serve(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut artifact_root: Option<PathBuf> = None;
@@ -5432,7 +5150,6 @@ fn moderation_runner_serve(raw_args: Vec<String>) -> Result<(), String> {
     let mut listen = String::from(MODERATION_RUNNER_DEFAULT_LISTEN);
     let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
     let mut max_payload_bytes = MODERATION_RUNNER_DEFAULT_MAX_PAYLOAD_BYTES;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -5468,7 +5185,6 @@ fn moderation_runner_serve(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli moderation runner-serve`".to_string()
     })?;
@@ -5482,7 +5198,6 @@ fn moderation_runner_serve(raw_args: Vec<String>) -> Result<(), String> {
         "sorafs_cli moderation runner-serve",
     )?;
     let runner = load_moderation_runner_for_current_executable(manifest, &artifact_root)?;
-
     let listen_addr =
         validate_moderation_loopback_listen(&listen, "sorafs_cli moderation runner-serve")?;
     let listener = TcpListener::bind(listen_addr)
@@ -5502,7 +5217,6 @@ fn moderation_runner_serve(raw_args: Vec<String>) -> Result<(), String> {
     let rendered = to_string_pretty(&status)
         .map_err(|err| format!("failed to render runner service status JSON: {err}"))?;
     println!("{rendered}");
-
     let active_connections = Arc::new(AtomicUsize::new(0));
     for incoming in listener.incoming() {
         match incoming {
@@ -5533,10 +5247,8 @@ fn moderation_runner_serve(raw_args: Vec<String>) -> Result<(), String> {
             Err(err) => eprintln!("sorafs moderation runner accept failed: {err}"),
         }
     }
-
     Ok(())
 }
-
 fn moderation_runner_signed_serve(raw_args: Vec<String>) -> Result<(), String> {
     if raw_args.is_empty() {
         return Err(moderation_usage());
@@ -5555,7 +5267,6 @@ fn moderation_runner_signed_serve(raw_args: Vec<String>) -> Result<(), String> {
     let mut listen = String::from(MODERATION_RUNNER_DEFAULT_LISTEN);
     let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
     let mut max_payload_bytes = MODERATION_RUNNER_DEFAULT_MAX_PAYLOAD_BYTES;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -5608,7 +5319,6 @@ fn moderation_runner_signed_serve(raw_args: Vec<String>) -> Result<(), String> {
             _ => return Err(format!("unrecognised option `{key}` for `{context}`")),
         }
     }
-
     let manifest_path = manifest_path
         .ok_or_else(|| format!("missing required `--manifest=PATH` for `{context}`"))?;
     let artifact_root = artifact_root
@@ -5632,7 +5342,6 @@ fn moderation_runner_signed_serve(raw_args: Vec<String>) -> Result<(), String> {
     if provenance_log_id == [0; 16] {
         return Err("`--provenance-log-id` must be non-zero".to_string());
     }
-
     let listen_addr = validate_moderation_loopback_listen(&listen, context)?;
     let now_unix = moderation_trusted_now_unix()?;
     let manifest = load_moderation_repro_manifest(&manifest_path, &format, context)?;
@@ -5675,7 +5384,6 @@ fn moderation_runner_signed_serve(raw_args: Vec<String>) -> Result<(), String> {
     let rendered = to_string_pretty(&status)
         .map_err(|error| format!("failed to render signed runner status: {error}"))?;
     println!("{rendered}");
-
     let active_connections = Arc::new(AtomicUsize::new(0));
     for incoming in listener.incoming() {
         match incoming {
@@ -5708,17 +5416,14 @@ fn moderation_runner_signed_serve(raw_args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-
 struct ModerationActivePermit {
     active: Arc<AtomicUsize>,
 }
-
 impl Drop for ModerationActivePermit {
     fn drop(&mut self) {
         self.active.fetch_sub(1, AtomicOrdering::AcqRel);
     }
 }
-
 fn moderation_try_acquire_permit(
     active: &Arc<AtomicUsize>,
     limit: usize,
@@ -5732,7 +5437,6 @@ fn moderation_try_acquire_permit(
         active: Arc::clone(active),
     })
 }
-
 fn moderation_runner_grpc_serve(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut artifact_root: Option<PathBuf> = None;
@@ -5740,7 +5444,6 @@ fn moderation_runner_grpc_serve(raw_args: Vec<String>) -> Result<(), String> {
     let mut listen = String::from(MODERATION_RUNNER_GRPC_DEFAULT_LISTEN);
     let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
     let mut max_payload_bytes = MODERATION_RUNNER_DEFAULT_MAX_PAYLOAD_BYTES;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -5778,7 +5481,6 @@ fn moderation_runner_grpc_serve(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli moderation runner-grpc-serve`"
             .to_string()
@@ -5795,7 +5497,6 @@ fn moderation_runner_grpc_serve(raw_args: Vec<String>) -> Result<(), String> {
     let runner = load_moderation_runner_for_current_executable(manifest, &artifact_root)?;
     let addr =
         validate_moderation_loopback_listen(&listen, "sorafs_cli moderation runner-grpc-serve")?;
-
     let service = Arc::new(ModerationRunnerService {
         runner,
         signed: None,
@@ -5807,7 +5508,6 @@ fn moderation_runner_grpc_serve(raw_args: Vec<String>) -> Result<(), String> {
     let rendered = to_string_pretty(&status)
         .map_err(|err| format!("failed to render runner gRPC service status JSON: {err}"))?;
     println!("{rendered}");
-
     let max_decoding_message_size = max_body_bytes
         .checked_add(MODERATION_RUNNER_MAX_GRPC_ENVELOPE_BYTES)
         .ok_or_else(|| "runner gRPC decoding limit overflows usize".to_owned())?;
@@ -5830,12 +5530,10 @@ fn moderation_runner_grpc_serve(raw_args: Vec<String>) -> Result<(), String> {
                 .map_err(|err| format!("runner gRPC service failed: {err}"))
         })
 }
-
 fn moderation_runner_bundle(raw_args: Vec<String>) -> Result<(), String> {
     if raw_args.is_empty() {
         return Err(moderation_usage());
     }
-
     let mut manifest_path: Option<PathBuf> = None;
     let mut artifact_root: Option<PathBuf> = None;
     let mut format = String::from("json");
@@ -5847,7 +5545,6 @@ fn moderation_runner_bundle(raw_args: Vec<String>) -> Result<(), String> {
     let mut service_name = String::from("sorafs-moderation-runner");
     let mut service_user = String::from("sorafs");
     let mut service_group = String::from("sorafs");
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -5904,7 +5601,6 @@ fn moderation_runner_bundle(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     validate_runner_bundle_service_name(&service_name)?;
     validate_moderation_loopback_listen(&listen, "sorafs_cli moderation runner-bundle")?;
     let manifest_path = manifest_path.ok_or_else(|| {
@@ -5927,7 +5623,6 @@ fn moderation_runner_bundle(raw_args: Vec<String>) -> Result<(), String> {
     let verified_artifacts = verified_runner
         .canonical_artifacts()
         .map_err(|error| format!("failed to prepare verified bundle artefacts: {error}"))?;
-
     write_moderation_runner_bundle(ModerationRunnerBundleSpec {
         manifest,
         manifest_source: manifest_path,
@@ -5943,7 +5638,6 @@ fn moderation_runner_bundle(raw_args: Vec<String>) -> Result<(), String> {
         service_group,
     })
 }
-
 struct ModerationRunnerBundleSpec {
     manifest: ModerationReproManifestV1,
     manifest_source: PathBuf,
@@ -5958,7 +5652,6 @@ struct ModerationRunnerBundleSpec {
     service_user: String,
     service_group: String,
 }
-
 fn encode_moderation_manifest_for_bundle(
     manifest: &ModerationReproManifestV1,
     format: &str,
@@ -5975,7 +5668,6 @@ fn encode_moderation_manifest_for_bundle(
         )),
     }
 }
-
 fn write_moderation_runner_bundle(spec: ModerationRunnerBundleSpec) -> Result<(), String> {
     fs::create_dir_all(&spec.bundle_out).map_err(|err| {
         format!(
@@ -6029,7 +5721,6 @@ fn write_moderation_runner_bundle(spec: ModerationRunnerBundleSpec) -> Result<()
         observed_runner_hash,
     )
     .map_err(|error| format!("bundled moderation artefacts failed verification: {error}"))?;
-
     let env_path = bundle_dir.join("runner.env");
     let run_path = bundle_dir.join("run.sh");
     let systemd_unit_name = format!("{}.service", spec.service_name);
@@ -6038,7 +5729,6 @@ fn write_moderation_runner_bundle(spec: ModerationRunnerBundleSpec) -> Result<()
     let launchd_path = bundle_dir.join(&launchd_plist_name);
     let metadata_path = bundle_dir.join("bundle.json");
     let readme_path = bundle_dir.join("README.md");
-
     let env = moderation_runner_bundle_env(&spec);
     write_text(&env_path, env.as_bytes())?;
     let run_script = moderation_runner_bundle_run_script(manifest_copy_name, &spec.manifest_format);
@@ -6055,7 +5745,6 @@ fn write_moderation_runner_bundle(spec: ModerationRunnerBundleSpec) -> Result<()
         &launchd_plist_name,
     );
     write_text(&readme_path, readme.as_bytes())?;
-
     let summary = moderation_runner_bundle_summary_json(
         &spec,
         &bundle_dir,
@@ -6077,7 +5766,6 @@ fn write_moderation_runner_bundle(spec: ModerationRunnerBundleSpec) -> Result<()
     println!("{rendered}");
     Ok(())
 }
-
 fn moderation_runner_bundle_env(spec: &ModerationRunnerBundleSpec) -> String {
     format!(
         "SORAFS_CLI={}\nSORAFS_RUNNER_LISTEN={}\nSORAFS_RUNNER_MAX_BODY_BYTES={}\nSORAFS_RUNNER_MAX_PAYLOAD_BYTES={}\n",
@@ -6087,7 +5775,6 @@ fn moderation_runner_bundle_env(spec: &ModerationRunnerBundleSpec) -> String {
         shell_single_quote(&spec.max_payload_bytes.to_string())
     )
 }
-
 fn moderation_runner_bundle_run_script(manifest_copy_name: &str, format: &str) -> String {
     format!(
         "#!/usr/bin/env sh\nset -eu\nSCRIPT_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nif [ -f \"$SCRIPT_DIR/runner.env\" ]; then\n  . \"$SCRIPT_DIR/runner.env\"\nfi\n: \"${{SORAFS_CLI:=sorafs_cli}}\"\n: \"${{SORAFS_RUNNER_LISTEN:={}}}\"\n: \"${{SORAFS_RUNNER_MAX_BODY_BYTES:={}}}\"\n: \"${{SORAFS_RUNNER_MAX_PAYLOAD_BYTES:={}}}\"\nexec \"$SORAFS_CLI\" moderation runner-serve \\\n  --manifest=\"$SCRIPT_DIR/{}\" \\\n  --artifact-root=\"$SCRIPT_DIR/artifacts\" \\\n  --format={} \\\n  --listen=\"$SORAFS_RUNNER_LISTEN\" \\\n  --max-body-bytes=\"$SORAFS_RUNNER_MAX_BODY_BYTES\" \\\n  --max-payload-bytes=\"$SORAFS_RUNNER_MAX_PAYLOAD_BYTES\"\n",
@@ -6098,7 +5785,6 @@ fn moderation_runner_bundle_run_script(manifest_copy_name: &str, format: &str) -
         format
     )
 }
-
 fn moderation_runner_bundle_systemd_unit(
     spec: &ModerationRunnerBundleSpec,
     bundle_dir: &Path,
@@ -6116,7 +5802,6 @@ fn moderation_runner_bundle_systemd_unit(
         systemd_quote(&bundle_dir.display().to_string())
     )
 }
-
 fn moderation_runner_bundle_launchd_plist(
     spec: &ModerationRunnerBundleSpec,
     bundle_dir: &Path,
@@ -6131,7 +5816,6 @@ fn moderation_runner_bundle_launchd_plist(
         xml_escape(&bundle_dir.join("runner.err.log").display().to_string())
     )
 }
-
 fn moderation_runner_bundle_readme(
     spec: &ModerationRunnerBundleSpec,
     manifest_copy_name: &str,
@@ -6152,7 +5836,6 @@ fn moderation_runner_bundle_readme(
         launchd_plist_name
     )
 }
-
 fn moderation_runner_bundle_summary_json(
     spec: &ModerationRunnerBundleSpec,
     bundle_dir: &Path,
@@ -6226,12 +5909,10 @@ fn moderation_runner_bundle_summary_json(
     );
     Value::Object(summary)
 }
-
 fn moderation_committee_bundle(raw_args: Vec<String>) -> Result<(), String> {
     if raw_args.is_empty() {
         return Err(moderation_usage());
     }
-
     let mut manifest_path: Option<PathBuf> = None;
     let mut format = String::from("json");
     let mut quorum: Option<usize> = None;
@@ -6242,7 +5923,6 @@ fn moderation_committee_bundle(raw_args: Vec<String>) -> Result<(), String> {
     let mut service_name = String::from("sorafs-moderation-committee");
     let mut service_user = String::from("sorafs");
     let mut service_group = String::from("sorafs");
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -6305,7 +5985,6 @@ fn moderation_committee_bundle(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     validate_runner_bundle_service_name(&service_name)?;
     validate_moderation_loopback_listen(&listen, "sorafs_cli moderation committee-bundle")?;
     let manifest_path = manifest_path.ok_or_else(|| {
@@ -6328,7 +6007,6 @@ fn moderation_committee_bundle(raw_args: Vec<String>) -> Result<(), String> {
         .validate()
         .map_err(|err| format!("manifest validation failed: {err}"))?;
     validate_moderation_local_runner_manifest(&manifest)?;
-
     write_moderation_committee_bundle(ModerationCommitteeBundleSpec {
         manifest,
         manifest_source: manifest_path,
@@ -6343,7 +6021,6 @@ fn moderation_committee_bundle(raw_args: Vec<String>) -> Result<(), String> {
         service_group,
     })
 }
-
 struct ModerationCommitteeBundleSpec {
     manifest: ModerationReproManifestV1,
     manifest_source: PathBuf,
@@ -6357,7 +6034,6 @@ struct ModerationCommitteeBundleSpec {
     service_user: String,
     service_group: String,
 }
-
 fn write_moderation_committee_bundle(spec: ModerationCommitteeBundleSpec) -> Result<(), String> {
     fs::create_dir_all(&spec.bundle_out).map_err(|err| {
         format!(
@@ -6385,7 +6061,6 @@ fn write_moderation_committee_bundle(spec: ModerationCommitteeBundleSpec) -> Res
         "committee bundle",
     )?;
     write_text(&manifest_copy_path, &manifest_bytes)?;
-
     let env_path = bundle_dir.join("committee.env");
     let run_path = bundle_dir.join("run.sh");
     let systemd_unit_name = format!("{}.service", spec.service_name);
@@ -6394,7 +6069,6 @@ fn write_moderation_committee_bundle(spec: ModerationCommitteeBundleSpec) -> Res
     let launchd_path = bundle_dir.join(&launchd_plist_name);
     let metadata_path = bundle_dir.join("bundle.json");
     let readme_path = bundle_dir.join("README.md");
-
     let env = moderation_committee_bundle_env(&spec);
     write_text(&env_path, env.as_bytes())?;
     let run_script =
@@ -6413,7 +6087,6 @@ fn write_moderation_committee_bundle(spec: ModerationCommitteeBundleSpec) -> Res
         &launchd_plist_name,
     );
     write_text(&readme_path, readme.as_bytes())?;
-
     let summary = moderation_committee_bundle_summary_json(
         &spec,
         &bundle_dir,
@@ -6434,7 +6107,6 @@ fn write_moderation_committee_bundle(spec: ModerationCommitteeBundleSpec) -> Res
     println!("{rendered}");
     Ok(())
 }
-
 fn moderation_committee_bundle_env(spec: &ModerationCommitteeBundleSpec) -> String {
     format!(
         "SORAFS_CLI={}\nSORAFS_COMMITTEE_LISTEN={}\nSORAFS_COMMITTEE_QUORUM={}\nSORAFS_COMMITTEE_MAX_BODY_BYTES={}\n",
@@ -6444,7 +6116,6 @@ fn moderation_committee_bundle_env(spec: &ModerationCommitteeBundleSpec) -> Stri
         shell_single_quote(&spec.max_body_bytes.to_string())
     )
 }
-
 fn moderation_committee_bundle_run_script(manifest_copy_name: &str, format: &str) -> String {
     format!(
         "#!/usr/bin/env sh\nset -eu\nSCRIPT_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nif [ -f \"$SCRIPT_DIR/committee.env\" ]; then\n  . \"$SCRIPT_DIR/committee.env\"\nfi\n: \"${{SORAFS_CLI:=sorafs_cli}}\"\n: \"${{SORAFS_COMMITTEE_LISTEN:={}}}\"\n: \"${{SORAFS_COMMITTEE_QUORUM:=1}}\"\n: \"${{SORAFS_COMMITTEE_MAX_BODY_BYTES:={}}}\"\nexec \"$SORAFS_CLI\" moderation committee-serve \\\n  --manifest=\"$SCRIPT_DIR/{}\" \\\n  --format={} \\\n  --quorum=\"$SORAFS_COMMITTEE_QUORUM\" \\\n  --listen=\"$SORAFS_COMMITTEE_LISTEN\" \\\n  --max-body-bytes=\"$SORAFS_COMMITTEE_MAX_BODY_BYTES\"\n",
@@ -6454,7 +6125,6 @@ fn moderation_committee_bundle_run_script(manifest_copy_name: &str, format: &str
         format
     )
 }
-
 fn moderation_committee_bundle_systemd_unit(
     spec: &ModerationCommitteeBundleSpec,
     bundle_dir: &Path,
@@ -6472,7 +6142,6 @@ fn moderation_committee_bundle_systemd_unit(
         systemd_quote(&bundle_dir.display().to_string())
     )
 }
-
 fn moderation_committee_bundle_launchd_plist(
     spec: &ModerationCommitteeBundleSpec,
     bundle_dir: &Path,
@@ -6487,7 +6156,6 @@ fn moderation_committee_bundle_launchd_plist(
         xml_escape(&bundle_dir.join("committee.err.log").display().to_string())
     )
 }
-
 fn moderation_committee_bundle_readme(
     spec: &ModerationCommitteeBundleSpec,
     manifest_copy_name: &str,
@@ -6508,7 +6176,6 @@ fn moderation_committee_bundle_readme(
         launchd_plist_name
     )
 }
-
 fn moderation_committee_bundle_summary_json(
     spec: &ModerationCommitteeBundleSpec,
     bundle_dir: &Path,
@@ -6580,7 +6247,6 @@ fn moderation_committee_bundle_summary_json(
     );
     Value::Object(summary)
 }
-
 fn validate_runner_bundle_value<'a>(flag: &str, raw: &'a str) -> Result<&'a str, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -6591,7 +6257,6 @@ fn validate_runner_bundle_value<'a>(flag: &str, raw: &'a str) -> Result<&'a str,
     }
     Ok(trimmed)
 }
-
 fn validate_runner_bundle_service_name(value: &str) -> Result<(), String> {
     if value.is_empty()
         || !value
@@ -6605,14 +6270,12 @@ fn validate_runner_bundle_service_name(value: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn shell_single_quote(value: &str) -> String {
     if value.is_empty() {
         return "''".to_string();
     }
     format!("'{}'", value.replace('\'', "'\\''"))
 }
-
 fn systemd_quote(value: &str) -> String {
     let mut out = String::from("\"");
     for ch in value.chars() {
@@ -6625,7 +6288,6 @@ fn systemd_quote(value: &str) -> String {
     out.push('"');
     out
 }
-
 fn xml_escape(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -6640,7 +6302,6 @@ fn xml_escape(value: &str) -> String {
     }
     out
 }
-
 fn set_executable_if_supported(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
@@ -6654,14 +6315,12 @@ fn set_executable_if_supported(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 #[derive(Clone, Debug)]
 struct ModerationCanaryDeploymentContext {
     generated_at_unix: u64,
     deployment_id: String,
     environment: String,
 }
-
 fn moderation_canary_deployment_id(value: &str) -> Result<String, String> {
     let trimmed = value.trim();
     let bytes = trimmed.as_bytes();
@@ -6681,7 +6340,6 @@ fn moderation_canary_deployment_id(value: &str) -> Result<String, String> {
     }
     Ok(trimmed.to_string())
 }
-
 fn moderation_canary_environment(value: &str) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed != value || !matches!(trimmed, "prod" | "production" | "release" | "staging") {
@@ -6691,7 +6349,6 @@ fn moderation_canary_environment(value: &str) -> Result<String, String> {
     }
     Ok(trimmed.to_string())
 }
-
 #[derive(Debug)]
 struct ModerationCanaryHttpProbe {
     method: &'static str,
@@ -6703,7 +6360,6 @@ struct ModerationCanaryHttpProbe {
     response_body_blake3: [u8; 32],
     response: Value,
 }
-
 fn moderation_canary_probe_json(name: &str, probe: &ModerationCanaryHttpProbe) -> Value {
     let mut output = Map::new();
     output.insert("name".into(), Value::from(name.to_string()));
@@ -6728,12 +6384,10 @@ fn moderation_canary_probe_json(name: &str, probe: &ModerationCanaryHttpProbe) -
     output.insert("private_payloads_included".into(), Value::from(false));
     Value::Object(output)
 }
-
 fn moderation_runner_canary(raw_args: Vec<String>) -> Result<(), String> {
     if raw_args.is_empty() {
         return Err(moderation_usage());
     }
-
     let mut manifest_path: Option<PathBuf> = None;
     let mut format = String::from("json");
     let mut runner_url: Option<String> = None;
@@ -6752,7 +6406,6 @@ fn moderation_runner_canary(raw_args: Vec<String>) -> Result<(), String> {
     let mut notes: Option<String> = None;
     let mut timeout_ms = 30_000_u64;
     let mut json_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -6885,7 +6538,6 @@ fn moderation_runner_canary(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli moderation runner-canary`".to_string()
     })?;
@@ -7021,7 +6673,6 @@ fn moderation_runner_canary(raw_args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-
 struct ModerationRunnerCanaryEvidenceInput<'a> {
     manifest: &'a ModerationReproManifestV1,
     runner_url: &'a str,
@@ -7037,14 +6688,12 @@ struct ModerationRunnerCanaryEvidenceInput<'a> {
     status_probe: ModerationCanaryHttpProbe,
     screening_probe: ModerationCanaryHttpProbe,
 }
-
 #[derive(Clone, Copy)]
 struct ModerationProcessIsolationEvidence {
     enforcement: &'static str,
     attestation_digest: [u8; 32],
     verified_at_unix: u64,
 }
-
 impl ModerationProcessIsolationEvidence {
     fn validate(self, generated_at_unix: u64, context: &str) -> Result<(), String> {
         if !matches!(
@@ -7070,18 +6719,15 @@ impl ModerationProcessIsolationEvidence {
         Ok(())
     }
 }
-
 fn moderation_digest_is_placeholder(digest: &[u8; 32]) -> bool {
     digest.iter().all(|byte| *byte == digest[0]) || digest[..16] == digest[16..]
 }
-
 fn moderation_runner_canary_endpoint(base_url: &Url, path: &str) -> Result<Url, String> {
     let mut endpoint = base_url.as_str().trim_end_matches('/').to_string();
     endpoint.push_str(path);
     Url::parse(&endpoint)
         .map_err(|err| format!("failed to build runner endpoint `{endpoint}`: {err}"))
 }
-
 fn read_moderation_canary_response_bounded(
     response: reqwest::blocking::Response,
     context: &str,
@@ -7116,7 +6762,6 @@ fn read_moderation_canary_response_bounded(
     }
     Ok((status, bytes))
 }
-
 fn moderation_runner_canary_get_json(
     client: &HttpClient,
     url: &Url,
@@ -7148,7 +6793,6 @@ fn moderation_runner_canary_get_json(
         response,
     })
 }
-
 fn moderation_runner_canary_post_json(
     client: &HttpClient,
     url: &Url,
@@ -7194,7 +6838,6 @@ fn moderation_runner_canary_post_json(
         response,
     })
 }
-
 fn moderation_runner_canary_screen_request_json(
     payload: &[u8],
     subject: &str,
@@ -7216,7 +6859,6 @@ fn moderation_runner_canary_screen_request_json(
     );
     Value::Object(request)
 }
-
 fn moderation_runner_canary_evidence_json(
     input: ModerationRunnerCanaryEvidenceInput<'_>,
 ) -> Result<Value, String> {
@@ -7237,12 +6879,10 @@ fn moderation_runner_canary_evidence_json(
     {
         return Err("runner canary evidence responses must not contain `payload_b64`".to_string());
     }
-
     let probes = Value::Array(vec![
         moderation_canary_probe_json("status", &input.status_probe),
         moderation_canary_probe_json("screen", &input.screening_probe),
     ]);
-
     let mut output = Map::new();
     output.insert(
         "schema".into(),
@@ -7346,14 +6986,12 @@ fn moderation_runner_canary_evidence_json(
     output.insert("screening_result".into(), input.screening_probe.response);
     Ok(Value::Object(output))
 }
-
 struct ModerationRunnerCanaryScreening {
     combined_score_bps: u16,
     verdict: String,
     evidence_digest: [u8; 32],
     policy_digest: [u8; 32],
 }
-
 fn validate_moderation_runner_status_response(
     manifest: &ModerationReproManifestV1,
     value: &Value,
@@ -7417,7 +7055,6 @@ fn validate_moderation_runner_status_response(
     }
     Ok(())
 }
-
 fn validate_moderation_runner_screening_response(
     manifest: &ModerationReproManifestV1,
     subject: &str,
@@ -7497,7 +7134,6 @@ fn validate_moderation_runner_screening_response(
         policy_digest,
     })
 }
-
 fn json_contains_key(value: &Value, key: &str) -> bool {
     match value {
         Value::Object(fields) => fields
@@ -7507,7 +7143,6 @@ fn json_contains_key(value: &Value, key: &str) -> bool {
         _ => false,
     }
 }
-
 #[derive(Clone, Debug)]
 struct ModerationCommitteeInput {
     source_path: PathBuf,
@@ -7522,19 +7157,16 @@ struct ModerationCommitteeInput {
     policy_digest: Option<[u8; 32]>,
     notes: Option<String>,
 }
-
 fn moderation_committee_run(raw_args: Vec<String>) -> Result<(), String> {
     if raw_args.is_empty() {
         return Err(moderation_usage());
     }
-
     let mut manifest_path: Option<PathBuf> = None;
     let mut format = String::from("json");
     let mut quorum: Option<usize> = None;
     let mut result_paths: Vec<PathBuf> = Vec::new();
     let mut notes: Option<String> = None;
     let mut json_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -7577,7 +7209,6 @@ fn moderation_committee_run(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli moderation committee-run`".to_string()
     })?;
@@ -7598,7 +7229,6 @@ fn moderation_committee_run(raw_args: Vec<String>) -> Result<(), String> {
             result_paths.len()
         ));
     }
-
     let manifest = load_moderation_repro_manifest(
         &manifest_path,
         &format,
@@ -7608,7 +7238,6 @@ fn moderation_committee_run(raw_args: Vec<String>) -> Result<(), String> {
         .validate()
         .map_err(|err| format!("manifest validation failed: {err}"))?;
     validate_moderation_local_runner_manifest(&manifest)?;
-
     let mut inputs = Vec::new();
     inputs
         .try_reserve_exact(result_paths.len())
@@ -7617,20 +7246,16 @@ fn moderation_committee_run(raw_args: Vec<String>) -> Result<(), String> {
         inputs.push(load_moderation_committee_input(path, &manifest)?);
     }
     inputs.sort_by_key(|input| input.source_path.display().to_string());
-
     let output = moderation_committee_aggregate_json(&manifest, &inputs, quorum, notes.as_deref())?;
     let rendered = to_string_pretty(&output)
         .map_err(|err| format!("failed to render committee aggregate JSON: {err}"))?;
-
     if let Some(path) = json_out {
         write_text(&path, format!("{rendered}\n").as_bytes())?;
     } else {
         println!("{rendered}");
     }
-
     Ok(())
 }
-
 fn moderation_committee_authenticated_run(raw_args: Vec<String>) -> Result<(), String> {
     if raw_args.is_empty() {
         return Err(moderation_usage());
@@ -7647,7 +7272,6 @@ fn moderation_committee_authenticated_run(raw_args: Vec<String>) -> Result<(), S
     let mut provenance_log_id = None;
     let mut norito_out = None;
     let mut json_out = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -7702,7 +7326,6 @@ fn moderation_committee_authenticated_run(raw_args: Vec<String>) -> Result<(), S
             _ => return Err(format!("unrecognised option `{key}` for `{context}`")),
         }
     }
-
     let manifest_path = manifest_path
         .ok_or_else(|| format!("missing required `--manifest=PATH` for `{context}`"))?;
     let trust_policy_path = trust_policy_path
@@ -7727,7 +7350,6 @@ fn moderation_committee_authenticated_run(raw_args: Vec<String>) -> Result<(), S
     if provenance_log_id == [0; 16] {
         return Err("`--provenance-log-id` must be non-zero".to_string());
     }
-
     let now_unix = moderation_trusted_now_unix()?;
     let manifest = load_moderation_repro_manifest(&manifest_path, &format, context)?;
     let policy = load_moderation_trust_policy(&trust_policy_path, &trust_policy_format, context)?;
@@ -7783,7 +7405,6 @@ fn moderation_committee_authenticated_run(raw_args: Vec<String>) -> Result<(), S
     }
     Ok(())
 }
-
 fn load_moderation_committee_input(
     path: &Path,
     manifest: &ModerationReproManifestV1,
@@ -7801,7 +7422,6 @@ fn load_moderation_committee_input(
     })?;
     parse_moderation_committee_input_value(&path.display().to_string(), &value, manifest)
 }
-
 fn parse_moderation_committee_input_value(
     source_label: &str,
     value: &Value,
@@ -7816,7 +7436,6 @@ fn parse_moderation_committee_input_value(
             "{context} must be payload-free screening-result JSON, found `payload_b64`"
         ));
     }
-
     let subject = required_json_string(fields, "subject", &context)?.to_string();
     validate_moderation_request_text(
         &subject,
@@ -7864,7 +7483,6 @@ fn parse_moderation_committee_input_value(
             "{context} verdict `{verdict}` does not match score-derived verdict `{expected_verdict}`"
         ));
     }
-
     let notes = optional_json_string(fields, "notes", &context)?.map(ToOwned::to_owned);
     if let Some(notes) = notes.as_deref() {
         validate_moderation_request_text(
@@ -7873,7 +7491,6 @@ fn parse_moderation_committee_input_value(
             "moderation committee result `notes`",
         )?;
     }
-
     Ok(ModerationCommitteeInput {
         source_path: PathBuf::from(source_label),
         subject,
@@ -7888,7 +7505,6 @@ fn parse_moderation_committee_input_value(
         notes,
     })
 }
-
 fn moderation_committee_aggregate_json(
     manifest: &ModerationReproManifestV1,
     inputs: &[ModerationCommitteeInput],
@@ -7919,7 +7535,6 @@ fn moderation_committee_aggregate_json(
             "moderation committee `notes`",
         )?;
     }
-
     let first = &inputs[0];
     for input in inputs.iter().skip(1) {
         if input.subject != first.subject {
@@ -7949,7 +7564,6 @@ fn moderation_committee_aggregate_json(
             ));
         }
     }
-
     let median_score_bps = moderation_committee_median_score(
         inputs
             .iter()
@@ -7969,7 +7583,6 @@ fn moderation_committee_aggregate_json(
         .iter()
         .map(moderation_committee_member_result_json)
         .collect();
-
     let mut output = Map::new();
     output.insert(
         "schema".into(),
@@ -8013,10 +7626,8 @@ fn moderation_committee_aggregate_json(
             .unwrap_or(Value::Null),
     );
     output.insert("member_results".into(), Value::Array(member_results));
-
     Ok(Value::Object(output))
 }
-
 fn moderation_committee_median_score(mut scores: Vec<u16>) -> u16 {
     debug_assert!(!scores.is_empty());
     scores.sort_unstable();
@@ -8027,7 +7638,6 @@ fn moderation_committee_median_score(mut scores: Vec<u16>) -> u16 {
         (u32::from(scores[mid - 1]) + u32::from(scores[mid])).div_ceil(2) as u16
     }
 }
-
 fn moderation_committee_member_result_json(input: &ModerationCommitteeInput) -> Value {
     let mut result = Map::new();
     result.insert(
@@ -8072,18 +7682,15 @@ fn moderation_committee_member_result_json(input: &ModerationCommitteeInput) -> 
     );
     Value::Object(result)
 }
-
 fn moderation_committee_serve(raw_args: Vec<String>) -> Result<(), String> {
     if raw_args.is_empty() {
         return Err(moderation_usage());
     }
-
     let mut manifest_path: Option<PathBuf> = None;
     let mut format = String::from("json");
     let mut quorum: Option<usize> = None;
     let mut listen = String::from(MODERATION_COMMITTEE_DEFAULT_LISTEN);
     let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -8125,7 +7732,6 @@ fn moderation_committee_serve(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli moderation committee-serve`".to_string()
     })?;
@@ -8141,7 +7747,6 @@ fn moderation_committee_serve(raw_args: Vec<String>) -> Result<(), String> {
         .validate()
         .map_err(|err| format!("manifest validation failed: {err}"))?;
     validate_moderation_local_runner_manifest(&manifest)?;
-
     let listen_addr =
         validate_moderation_loopback_listen(&listen, "sorafs_cli moderation committee-serve")?;
     let listener = TcpListener::bind(listen_addr).map_err(|err| {
@@ -8162,7 +7767,6 @@ fn moderation_committee_serve(raw_args: Vec<String>) -> Result<(), String> {
     let rendered = to_string_pretty(&status)
         .map_err(|err| format!("failed to render committee service status JSON: {err}"))?;
     println!("{rendered}");
-
     let active_connections = Arc::new(AtomicUsize::new(0));
     for incoming in listener.incoming() {
         match incoming {
@@ -8193,10 +7797,8 @@ fn moderation_committee_serve(raw_args: Vec<String>) -> Result<(), String> {
             Err(err) => eprintln!("sorafs moderation committee accept failed: {err}"),
         }
     }
-
     Ok(())
 }
-
 fn moderation_committee_authenticated_serve(raw_args: Vec<String>) -> Result<(), String> {
     if raw_args.is_empty() {
         return Err(moderation_usage());
@@ -8212,7 +7814,6 @@ fn moderation_committee_authenticated_serve(raw_args: Vec<String>) -> Result<(),
     let mut provenance_log_id = None;
     let mut listen = String::from(MODERATION_COMMITTEE_DEFAULT_LISTEN);
     let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -8260,7 +7861,6 @@ fn moderation_committee_authenticated_serve(raw_args: Vec<String>) -> Result<(),
             _ => return Err(format!("unrecognised option `{key}` for `{context}`")),
         }
     }
-
     let manifest_path = manifest_path
         .ok_or_else(|| format!("missing required `--manifest=PATH` for `{context}`"))?;
     let trust_policy_path = trust_policy_path
@@ -8280,7 +7880,6 @@ fn moderation_committee_authenticated_serve(raw_args: Vec<String>) -> Result<(),
     if provenance_log_id == [0; 16] {
         return Err("`--provenance-log-id` must be non-zero".to_string());
     }
-
     let listen_addr = validate_moderation_loopback_listen(&listen, context)?;
     let now_unix = moderation_trusted_now_unix()?;
     let manifest = load_moderation_repro_manifest(&manifest_path, &format, context)?;
@@ -8321,7 +7920,6 @@ fn moderation_committee_authenticated_serve(raw_args: Vec<String>) -> Result<(),
     let rendered = to_string_pretty(&status)
         .map_err(|error| format!("failed to render authenticated committee status: {error}"))?;
     println!("{rendered}");
-
     let active_connections = Arc::new(AtomicUsize::new(0));
     for incoming in listener.incoming() {
         match incoming {
@@ -8354,7 +7952,6 @@ fn moderation_committee_authenticated_serve(raw_args: Vec<String>) -> Result<(),
     }
     Ok(())
 }
-
 struct ModerationCommitteeService {
     manifest: ModerationReproManifestV1,
     authenticated: Option<ModerationAuthenticatedCommitteeState>,
@@ -8362,7 +7959,6 @@ struct ModerationCommitteeService {
     quorum: usize,
     max_body_bytes: usize,
 }
-
 struct ModerationAuthenticatedCommitteeState {
     trust_policy: ModerationTrustPolicyV1,
     trust_anchors: BTreeSet<PublicKey>,
@@ -8370,7 +7966,6 @@ struct ModerationAuthenticatedCommitteeState {
     provenance: ModerationProvenanceStoreV1,
     transaction_guard: Mutex<()>,
 }
-
 fn moderation_committee_handle_stream(
     mut stream: TcpStream,
     service: &ModerationCommitteeService,
@@ -8408,7 +8003,6 @@ fn moderation_committee_handle_stream(
     stream.write_all(&response)?;
     stream.flush()
 }
-
 fn moderation_committee_http_response(
     service: &ModerationCommitteeService,
     request: &[u8],
@@ -8419,7 +8013,6 @@ fn moderation_committee_http_response(
         Err(response) => response,
     }
 }
-
 fn moderation_committee_route_request(
     service: &ModerationCommitteeService,
     request: &ModerationRunnerHttpRequest<'_>,
@@ -8487,14 +8080,12 @@ fn moderation_committee_route_request(
         ),
     }
 }
-
 #[derive(Debug)]
 enum ModerationAuthenticatedCommitteeRequestError {
     BadRequest(String),
     Unavailable(String),
     Internal(String),
 }
-
 fn moderation_committee_authenticated_request_json(
     service: &ModerationCommitteeService,
     body: &[u8],
@@ -8590,7 +8181,6 @@ fn moderation_committee_authenticated_request_json(
                 .map_err(bad_request)?,
         );
     }
-
     let state = service.authenticated.as_ref().ok_or_else(|| {
         ModerationAuthenticatedCommitteeRequestError::Internal(
             "authenticated committee state disappeared after route selection".to_string(),
@@ -8666,7 +8256,6 @@ fn moderation_committee_authenticated_request_json(
     moderation_authenticated_aggregate_summary_json(&aggregate, &canonical, provenance_head)
         .map_err(ModerationAuthenticatedCommitteeRequestError::Internal)
 }
-
 fn moderation_committee_aggregate_request_json(
     service: &ModerationCommitteeService,
     body: &[u8],
@@ -8717,7 +8306,6 @@ fn moderation_committee_aggregate_request_json(
     inputs.sort_by_key(|input| input.source_path.display().to_string());
     moderation_committee_aggregate_json(&service.manifest, &inputs, service.quorum, notes)
 }
-
 fn moderation_committee_status_json(
     service: &ModerationCommitteeService,
     status: &str,
@@ -8837,12 +8425,10 @@ fn moderation_committee_status_json(
     );
     Value::Object(output)
 }
-
 fn moderation_committee_json_response(status: u16, reason: &str, value: &Value) -> Vec<u8> {
     let body = to_vec(value).unwrap_or_else(|_| b"{\"error\":\"json_render_failed\"}".to_vec());
     moderation_runner_http_response_bytes(status, reason, "application/json", &body)
 }
-
 fn moderation_committee_error_response(status: u16, reason: &str, message: &str) -> Vec<u8> {
     let mut body = Map::new();
     body.insert(
@@ -8853,12 +8439,10 @@ fn moderation_committee_error_response(status: u16, reason: &str, message: &str)
     body.insert("message".into(), Value::from(message.to_string()));
     moderation_committee_json_response(status, reason, &Value::Object(body))
 }
-
 fn moderation_committee_canary(raw_args: Vec<String>) -> Result<(), String> {
     if raw_args.is_empty() {
         return Err(moderation_usage());
     }
-
     let mut manifest_path: Option<PathBuf> = None;
     let mut format = String::from("json");
     let mut committee_url: Option<String> = None;
@@ -8876,7 +8460,6 @@ fn moderation_committee_canary(raw_args: Vec<String>) -> Result<(), String> {
     let mut notes: Option<String> = None;
     let mut timeout_ms = 30_000_u64;
     let mut json_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -9015,7 +8598,6 @@ fn moderation_committee_canary(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli moderation committee-canary`"
             .to_string()
@@ -9105,7 +8687,6 @@ fn moderation_committee_canary(raw_args: Vec<String>) -> Result<(), String> {
         .validate()
         .map_err(|err| format!("manifest validation failed: {err}"))?;
     validate_moderation_local_runner_manifest(&manifest)?;
-
     let mut result_values = Vec::new();
     result_values
         .try_reserve_exact(result_paths.len())
@@ -9125,7 +8706,6 @@ fn moderation_committee_canary(raw_args: Vec<String>) -> Result<(), String> {
         result_values.push(result.value);
         result_fingerprints.push(result.fingerprint);
     }
-
     let expected_aggregate = moderation_committee_expected_aggregate_from_values(
         &manifest,
         &result_values,
@@ -9173,7 +8753,6 @@ fn moderation_committee_canary(raw_args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-
 struct ModerationCommitteeCanaryEvidenceInput<'a> {
     manifest: &'a ModerationReproManifestV1,
     committee_url: &'a str,
@@ -9189,13 +8768,11 @@ struct ModerationCommitteeCanaryEvidenceInput<'a> {
     status_probe: ModerationCanaryHttpProbe,
     aggregate_probe: ModerationCanaryHttpProbe,
 }
-
 struct ModerationCommitteeCanaryResult {
     value: Value,
     body_blake3: [u8; 32],
     fingerprint: Value,
 }
-
 fn load_moderation_committee_result_value(
     path: &Path,
     manifest: &ModerationReproManifestV1,
@@ -9242,7 +8819,6 @@ fn load_moderation_committee_result_value(
         fingerprint: Value::Object(fingerprint),
     })
 }
-
 fn moderation_committee_expected_aggregate_from_values(
     manifest: &ModerationReproManifestV1,
     result_values: &[Value],
@@ -9268,7 +8844,6 @@ fn moderation_committee_expected_aggregate_from_values(
     inputs.sort_by_key(|input| input.source_path.display().to_string());
     moderation_committee_aggregate_json(manifest, &inputs, quorum, notes)
 }
-
 fn moderation_committee_canary_aggregate_request_json(
     result_values: &[Value],
     notes: Option<&str>,
@@ -9283,7 +8858,6 @@ fn moderation_committee_canary_aggregate_request_json(
     );
     Value::Object(request)
 }
-
 fn moderation_committee_canary_get_json(
     client: &HttpClient,
     url: &Url,
@@ -9317,7 +8891,6 @@ fn moderation_committee_canary_get_json(
         response,
     })
 }
-
 fn moderation_committee_canary_post_json(
     client: &HttpClient,
     url: &Url,
@@ -9365,7 +8938,6 @@ fn moderation_committee_canary_post_json(
         response,
     })
 }
-
 fn moderation_committee_canary_evidence_json(
     input: ModerationCommitteeCanaryEvidenceInput<'_>,
 ) -> Result<Value, String> {
@@ -9391,7 +8963,6 @@ fn moderation_committee_canary_evidence_json(
             "committee canary evidence responses must not contain `payload_b64`".to_string(),
         );
     }
-
     let aggregate = input
         .aggregate_probe
         .response
@@ -9424,12 +8995,10 @@ fn moderation_committee_canary_evidence_json(
             "committee result fingerprint count does not match aggregate result_count".to_string(),
         );
     }
-
     let probes = Value::Array(vec![
         moderation_canary_probe_json("status", &input.status_probe),
         moderation_canary_probe_json("aggregate", &input.aggregate_probe),
     ]);
-
     let mut output = Map::new();
     output.insert(
         "schema".into(),
@@ -9522,7 +9091,6 @@ fn moderation_committee_canary_evidence_json(
     output.insert("committee_aggregate".into(), input.aggregate_probe.response);
     Ok(Value::Object(output))
 }
-
 fn validate_moderation_committee_status_response(
     manifest: &ModerationReproManifestV1,
     quorum: usize,
@@ -9602,7 +9170,6 @@ fn validate_moderation_committee_status_response(
     }
     Ok(())
 }
-
 fn validate_moderation_committee_aggregate_response(
     manifest: &ModerationReproManifestV1,
     quorum: usize,
@@ -9688,7 +9255,6 @@ fn validate_moderation_committee_aggregate_response(
     }
     Ok(())
 }
-
 struct ModerationRunnerService {
     runner: LoadedModerationRunnerV1,
     signed: Option<ModerationSignedRunnerState>,
@@ -9696,7 +9262,6 @@ struct ModerationRunnerService {
     max_body_bytes: usize,
     max_payload_bytes: u32,
 }
-
 struct ModerationSignedRunnerState {
     signing_runner: LoadedModerationSigningRunnerV1,
     provenance: ModerationProvenanceStoreV1,
@@ -9704,16 +9269,13 @@ struct ModerationSignedRunnerState {
     minimum_governance_quorum: u16,
     transaction_guard: Mutex<()>,
 }
-
 impl ModerationRunnerService {
     fn manifest(&self) -> &ModerationReproManifestV1 {
         self.runner.manifest()
     }
 }
-
 #[derive(Clone, PartialEq, prost::Message)]
 struct ModerationRunnerStatusRequest {}
-
 #[derive(Clone, PartialEq, prost::Message)]
 struct ModerationRunnerStatusResponse {
     #[prost(string, tag = "1")]
@@ -9753,7 +9315,6 @@ struct ModerationRunnerStatusResponse {
     #[prost(uint64, tag = "18")]
     max_grpc_response_bytes: u64,
 }
-
 #[derive(Clone, PartialEq, prost::Message)]
 struct ModerationRunnerScreenRequest {
     #[prost(string, tag = "1")]
@@ -9765,7 +9326,6 @@ struct ModerationRunnerScreenRequest {
     #[prost(string, optional, tag = "4")]
     notes: Option<String>,
 }
-
 #[derive(Clone, PartialEq, prost::Message)]
 struct ModerationRunnerScreenResponse {
     #[prost(string, tag = "1")]
@@ -9791,7 +9351,6 @@ struct ModerationRunnerScreenResponse {
     #[prost(message, repeated, tag = "11")]
     model_scores: Vec<ModerationRunnerModelScore>,
 }
-
 #[derive(Clone, PartialEq, prost::Message)]
 struct ModerationRunnerModelScore {
     #[prost(string, tag = "1")]
@@ -9801,14 +9360,12 @@ struct ModerationRunnerModelScore {
     #[prost(uint32, tag = "3")]
     score_bps: u32,
 }
-
 #[derive(Clone)]
 struct ModerationRunnerGrpcHandler {
     service: Arc<ModerationRunnerService>,
     listen: String,
     in_flight: Arc<AtomicUsize>,
 }
-
 #[tonic::async_trait]
 impl moderation_runner_grpc::runner_server::Runner for ModerationRunnerGrpcHandler {
     async fn status(
@@ -9821,7 +9378,6 @@ impl moderation_runner_grpc::runner_server::Runner for ModerationRunnerGrpcHandl
             Some(&self.listen),
         )))
     }
-
     async fn screen(
         &self,
         request: tonic::Request<ModerationRunnerScreenRequest>,
@@ -9836,40 +9392,32 @@ impl moderation_runner_grpc::runner_server::Runner for ModerationRunnerGrpcHandl
             .map_err(tonic::Status::invalid_argument)
     }
 }
-
 mod moderation_runner_grpc {
     use std::{convert::Infallible, sync::Arc, task::Poll};
-
     use tonic::codegen::*;
-
     use super::{
         ModerationRunnerScreenRequest, ModerationRunnerScreenResponse,
         ModerationRunnerStatusRequest, ModerationRunnerStatusResponse,
     };
-
     pub mod runner_server {
         use super::*;
-
         #[tonic::async_trait]
         pub trait Runner: Send + Sync + 'static {
             async fn status(
                 &self,
                 request: tonic::Request<ModerationRunnerStatusRequest>,
             ) -> Result<tonic::Response<ModerationRunnerStatusResponse>, tonic::Status>;
-
             async fn screen(
                 &self,
                 request: tonic::Request<ModerationRunnerScreenRequest>,
             ) -> Result<tonic::Response<ModerationRunnerScreenResponse>, tonic::Status>;
         }
-
         #[derive(Debug)]
         pub struct RunnerServer<T> {
             inner: Arc<T>,
             max_decoding_message_size: Option<usize>,
             max_encoding_message_size: Option<usize>,
         }
-
         impl<T> RunnerServer<T> {
             pub fn new(inner: T) -> Self {
                 Self {
@@ -9878,18 +9426,15 @@ mod moderation_runner_grpc {
                     max_encoding_message_size: None,
                 }
             }
-
             pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
                 self.max_decoding_message_size = Some(limit);
                 self
             }
-
             pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
                 self.max_encoding_message_size = Some(limit);
                 self
             }
         }
-
         impl<T: Runner> Clone for RunnerServer<T> {
             fn clone(&self) -> Self {
                 Self {
@@ -9899,7 +9444,6 @@ mod moderation_runner_grpc {
                 }
             }
         }
-
         impl<T, B> Service<http::Request<B>> for RunnerServer<T>
         where
             T: Runner,
@@ -9909,24 +9453,20 @@ mod moderation_runner_grpc {
             type Response = http::Response<tonic::body::Body>;
             type Error = Infallible;
             type Future = BoxFuture<Self::Response, Self::Error>;
-
             fn poll_ready(
                 &mut self,
                 _cx: &mut std::task::Context<'_>,
             ) -> Poll<Result<(), Self::Error>> {
                 Poll::Ready(Ok(()))
             }
-
             fn call(&mut self, req: http::Request<B>) -> Self::Future {
                 match req.uri().path() {
                     "/sorafs.moderation.runner.v1.Runner/Status" => {
                         #[allow(non_camel_case_types)]
                         struct StatusSvc<T: Runner>(pub Arc<T>);
-
                         impl<T: Runner> tonic::server::UnaryService<ModerationRunnerStatusRequest> for StatusSvc<T> {
                             type Response = ModerationRunnerStatusResponse;
                             type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
-
                             fn call(
                                 &mut self,
                                 request: tonic::Request<ModerationRunnerStatusRequest>,
@@ -9936,7 +9476,6 @@ mod moderation_runner_grpc {
                                 Box::pin(fut)
                             }
                         }
-
                         let inner = Arc::clone(&self.inner);
                         let max_decoding_message_size = self.max_decoding_message_size;
                         let max_encoding_message_size = self.max_encoding_message_size;
@@ -9958,11 +9497,9 @@ mod moderation_runner_grpc {
                     "/sorafs.moderation.runner.v1.Runner/Screen" => {
                         #[allow(non_camel_case_types)]
                         struct ScreenSvc<T: Runner>(pub Arc<T>);
-
                         impl<T: Runner> tonic::server::UnaryService<ModerationRunnerScreenRequest> for ScreenSvc<T> {
                             type Response = ModerationRunnerScreenResponse;
                             type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
-
                             fn call(
                                 &mut self,
                                 request: tonic::Request<ModerationRunnerScreenRequest>,
@@ -9972,7 +9509,6 @@ mod moderation_runner_grpc {
                                 Box::pin(fut)
                             }
                         }
-
                         let inner = Arc::clone(&self.inner);
                         let max_decoding_message_size = self.max_decoding_message_size;
                         let max_encoding_message_size = self.max_encoding_message_size;
@@ -10002,13 +9538,11 @@ mod moderation_runner_grpc {
                 }
             }
         }
-
         impl<T: Runner> tonic::server::NamedService for RunnerServer<T> {
             const NAME: &'static str = "sorafs.moderation.runner.v1.Runner";
         }
     }
 }
-
 fn moderation_runner_handle_stream(
     mut stream: TcpStream,
     service: &ModerationRunnerService,
@@ -10046,7 +9580,6 @@ fn moderation_runner_handle_stream(
     stream.write_all(&response)?;
     stream.flush()
 }
-
 fn moderation_runner_http_response(
     service: &ModerationRunnerService,
     request: &[u8],
@@ -10057,13 +9590,11 @@ fn moderation_runner_http_response(
         Err(response) => response,
     }
 }
-
 struct ModerationRunnerHttpRequest<'a> {
     method: &'a str,
     path: &'a str,
     body: &'a [u8],
 }
-
 fn moderation_runner_parse_http_request<'a>(
     request: &'a [u8],
     max_body_bytes: usize,
@@ -10229,7 +9760,6 @@ fn moderation_runner_parse_http_request<'a>(
         body: &request[body_start..body_end],
     })
 }
-
 fn is_valid_http_header_name(name: &str) -> bool {
     !name.is_empty()
         && name.is_ascii()
@@ -10254,7 +9784,6 @@ fn is_valid_http_header_name(name: &str) -> bool {
                 )
         })
 }
-
 fn moderation_runner_request_lengths(request: &[u8]) -> Option<(usize, usize)> {
     let header_end = find_http_header_end(request)?;
     if header_end > MODERATION_RUNNER_MAX_HEADER_BYTES {
@@ -10281,11 +9810,9 @@ fn moderation_runner_request_lengths(request: &[u8]) -> Option<(usize, usize)> {
     }
     Some((header_end + 4, content_length.unwrap_or(0)))
 }
-
 fn find_http_header_end(request: &[u8]) -> Option<usize> {
     request.windows(4).position(|window| window == b"\r\n\r\n")
 }
-
 fn moderation_runner_route_request(
     service: &ModerationRunnerService,
     request: &ModerationRunnerHttpRequest<'_>,
@@ -10353,14 +9880,12 @@ fn moderation_runner_route_request(
         ),
     }
 }
-
 #[derive(Debug)]
 enum ModerationSignedRunnerRequestError {
     BadRequest(String),
     Unavailable(String),
     Internal(String),
 }
-
 fn moderation_runner_signed_screen_request_json(
     service: &ModerationRunnerService,
     body: &[u8],
@@ -10451,7 +9976,6 @@ fn moderation_runner_signed_screen_request_json(
             "signed moderation `payload_b64` must decode to non-empty bytes".to_string(),
         ));
     }
-
     let state = service.signed.as_ref().ok_or_else(|| {
         ModerationSignedRunnerRequestError::Internal(
             "signed runner state disappeared after route selection".to_string(),
@@ -10522,7 +10046,6 @@ fn moderation_runner_signed_screen_request_json(
     moderation_signed_result_summary_json(&result, &canonical, provenance_head)
         .map_err(ModerationSignedRunnerRequestError::Internal)
 }
-
 fn moderation_runner_screen_request_json(
     service: &ModerationRunnerService,
     body: &[u8],
@@ -10609,7 +10132,6 @@ fn moderation_runner_screen_request_json(
         service.max_payload_bytes,
     )
 }
-
 fn moderation_runner_screen_request_proto(
     service: &ModerationRunnerService,
     request: ModerationRunnerScreenRequest,
@@ -10656,7 +10178,6 @@ fn moderation_runner_screen_request_proto(
     )?;
     moderation_runner_screen_proto_from_json(&value)
 }
-
 fn moderation_runner_status_json(
     service: &ModerationRunnerService,
     status: &str,
@@ -10814,7 +10335,6 @@ fn moderation_runner_status_json(
     );
     Value::Object(output)
 }
-
 fn moderation_runner_status_proto(
     service: &ModerationRunnerService,
     status: &str,
@@ -10845,7 +10365,6 @@ fn moderation_runner_status_proto(
             .expect("runner gRPC response limit fits u64"),
     }
 }
-
 fn moderation_runner_screen_proto_from_json(
     value: &Value,
 ) -> Result<ModerationRunnerScreenResponse, String> {
@@ -10933,12 +10452,10 @@ fn moderation_runner_screen_proto_from_json(
         model_scores,
     })
 }
-
 fn moderation_runner_json_response(status: u16, reason: &str, value: &Value) -> Vec<u8> {
     let body = to_vec(value).unwrap_or_else(|_| b"{\"error\":\"json_render_failed\"}".to_vec());
     moderation_runner_http_response_bytes(status, reason, "application/json", &body)
 }
-
 fn moderation_runner_error_response(status: u16, reason: &str, message: &str) -> Vec<u8> {
     let mut body = Map::new();
     body.insert(
@@ -10949,7 +10466,6 @@ fn moderation_runner_error_response(status: u16, reason: &str, message: &str) ->
     body.insert("message".into(), Value::from(message.to_string()));
     moderation_runner_json_response(status, reason, &Value::Object(body))
 }
-
 fn moderation_runner_http_response_bytes(
     status: u16,
     reason: &str,
@@ -10965,7 +10481,6 @@ fn moderation_runner_http_response_bytes(
     response.extend_from_slice(body);
     response
 }
-
 fn required_json_string<'a>(fields: &'a Map, key: &str, context: &str) -> Result<&'a str, String> {
     let value = fields
         .get(key)
@@ -10977,7 +10492,6 @@ fn required_json_string<'a>(fields: &'a Map, key: &str, context: &str) -> Result
     }
     Ok(value)
 }
-
 fn optional_json_string<'a>(
     fields: &'a Map,
     key: &str,
@@ -10995,7 +10509,6 @@ fn optional_json_string<'a>(
         Some(_) => Err(format!("{context} optional `{key}` must be a string")),
     }
 }
-
 fn optional_json_u64(fields: &Map, key: &str, context: &str) -> Result<Option<u64>, String> {
     match fields.get(key) {
         None | Some(Value::Null) => Ok(None),
@@ -11005,7 +10518,6 @@ fn optional_json_u64(fields: &Map, key: &str, context: &str) -> Result<Option<u6
             .map(Some),
     }
 }
-
 fn optional_json_fixed_hex<const N: usize>(
     fields: &Map,
     key: &str,
@@ -11017,7 +10529,6 @@ fn optional_json_fixed_hex<const N: usize>(
         Some(_) => Err(format!("{context} optional `{key}` must be a string")),
     }
 }
-
 fn parse_fixed_hex<const N: usize>(
     raw: &str,
     label: &str,
@@ -11040,7 +10551,6 @@ fn parse_fixed_hex<const N: usize>(
     out.copy_from_slice(&bytes);
     Ok(out)
 }
-
 fn parse_moderation_max_payload_bytes(raw: &str, context: &str) -> Result<u32, String> {
     let parsed = parse_u32_arg("--max-payload-bytes", raw, context)?;
     if parsed == 0 || parsed > MODERATION_MODEL_MAX_INPUT_BYTES_V1 {
@@ -11050,7 +10560,6 @@ fn parse_moderation_max_payload_bytes(raw: &str, context: &str) -> Result<u32, S
     }
     Ok(parsed)
 }
-
 fn parse_moderation_max_body_bytes(raw: &str, context: &str) -> Result<usize, String> {
     let parsed = parse_u64_arg("--max-body-bytes", raw, context)?;
     let parsed = usize::try_from(parsed)
@@ -11062,7 +10571,6 @@ fn parse_moderation_max_body_bytes(raw: &str, context: &str) -> Result<usize, St
     }
     Ok(parsed)
 }
-
 fn validate_moderation_loopback_listen(value: &str, context: &str) -> Result<SocketAddr, String> {
     let address = value.parse::<SocketAddr>().map_err(|error| {
         format!("`--listen={value}` is not a socket address for {context}: {error}")
@@ -11074,7 +10582,6 @@ fn validate_moderation_loopback_listen(value: &str, context: &str) -> Result<Soc
     }
     Ok(address)
 }
-
 fn validate_moderation_request_text(
     value: &str,
     maximum: usize,
@@ -11091,7 +10598,6 @@ fn validate_moderation_request_text(
     }
     Ok(())
 }
-
 fn read_file_bounded(path: &Path, maximum: u64, label: &str) -> Result<Vec<u8>, String> {
     let before = fs::symlink_metadata(path)
         .map_err(|error| format!("failed to inspect {label} `{}`: {error}", path.display()))?;
@@ -11161,7 +10667,6 @@ fn read_file_bounded(path: &Path, maximum: u64, label: &str) -> Result<Vec<u8>, 
     }
     Ok(bytes)
 }
-
 fn moderation_runner_current_executable_hash() -> Result<[u8; 32], String> {
     let executable = env::current_exe()
         .map_err(|error| format!("failed to locate current moderation runner binary: {error}"))?;
@@ -11238,7 +10743,6 @@ fn moderation_runner_current_executable_hash() -> Result<[u8; 32], String> {
     }
     Ok(*hasher.finalize().as_bytes())
 }
-
 #[cfg(unix)]
 fn moderation_file_identity(metadata: &FsMetadata) -> (u64, u64, u64, i64, i64) {
     (
@@ -11249,12 +10753,10 @@ fn moderation_file_identity(metadata: &FsMetadata) -> (u64, u64, u64, i64, i64) 
         metadata.mtime_nsec(),
     )
 }
-
 #[cfg(not(unix))]
 fn moderation_file_identity(metadata: &FsMetadata) -> (u64, Option<SystemTime>) {
     (metadata.len(), metadata.modified().ok())
 }
-
 fn load_moderation_runner_for_current_executable(
     manifest: ModerationReproManifestV1,
     artifact_root: &Path,
@@ -11263,7 +10765,6 @@ fn load_moderation_runner_for_current_executable(
     LoadedModerationRunnerV1::load_verified(manifest, artifact_root, observed_runner_hash)
         .map_err(|error| format!("failed to load verified moderation runner: {error}"))
 }
-
 fn load_moderation_repro_manifest(
     manifest_path: &Path,
     format: &str,
@@ -11274,7 +10775,6 @@ fn load_moderation_repro_manifest(
         MODERATION_RUNNER_MAX_MANIFEST_BYTES,
         "moderation manifest",
     )?;
-
     match format {
         "json" => norito::json::from_slice(&bytes).map_err(|err| {
             format!(
@@ -11301,7 +10801,6 @@ fn load_moderation_repro_manifest(
         )),
     }
 }
-
 fn load_moderation_trust_policy(
     policy_path: &Path,
     format: &str,
@@ -11348,7 +10847,6 @@ fn load_moderation_trust_policy(
         )),
     }
 }
-
 fn parse_moderation_trust_anchor(value: &str, context: &str) -> Result<PublicKey, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -11359,7 +10857,6 @@ fn parse_moderation_trust_anchor(value: &str, context: &str) -> Result<PublicKey
     PublicKey::from_str(trimmed)
         .map_err(|error| format!("invalid `--trust-anchor` for `{context}`: {error}"))
 }
-
 fn load_moderation_signing_key(path: &Path, context: &str) -> Result<PrivateKey, String> {
     #[cfg(not(unix))]
     {
@@ -11418,7 +10915,6 @@ fn load_moderation_signing_key(path: &Path, context: &str) -> Result<PrivateKey,
     })?;
     parse_private_key_inline(text)
 }
-
 fn load_moderation_signed_result(
     path: &Path,
     context: &str,
@@ -11430,7 +10926,6 @@ fn load_moderation_signed_result(
     )?;
     decode_moderation_signed_result(&bytes, &format!("`{}` for `{context}`", path.display()))
 }
-
 fn decode_moderation_signed_result(
     bytes: &[u8],
     context: &str,
@@ -11460,7 +10955,6 @@ fn decode_moderation_signed_result(
     }
     Ok(result)
 }
-
 fn moderation_signed_result_summary_json(
     result: &ModerationSignedScreeningResultV1,
     canonical_bytes: &[u8],
@@ -11507,7 +11001,6 @@ fn moderation_signed_result_summary_json(
     output.insert("payload_bytes_included".into(), Value::from(false));
     Ok(Value::Object(output))
 }
-
 fn moderation_authenticated_aggregate_summary_json(
     aggregate: &ModerationCommitteeAggregateV1,
     canonical_bytes: &[u8],
@@ -11549,7 +11042,6 @@ fn moderation_authenticated_aggregate_summary_json(
     output.insert("payload_bytes_included".into(), Value::from(false));
     Ok(Value::Object(output))
 }
-
 fn validate_moderation_local_runner_manifest(
     manifest: &ModerationReproManifestV1,
 ) -> Result<(), String> {
@@ -11572,7 +11064,6 @@ fn validate_moderation_local_runner_manifest(
             thresholds.quarantine, thresholds.escalate
         ));
     }
-
     let mut has_positive_weight = false;
     for model in &manifest.body.models {
         let weight = model.weight.unwrap_or(10_000);
@@ -11588,10 +11079,8 @@ fn validate_moderation_local_runner_manifest(
     if !has_positive_weight {
         return Err("manifest must include at least one positive model weight".to_string());
     }
-
     Ok(())
 }
-
 fn moderation_local_runner_screening_json(
     runner: &LoadedModerationRunnerV1,
     payload: &[u8],
@@ -11624,7 +11113,6 @@ fn moderation_local_runner_screening_json(
             policy_digest: &policy_digest,
             model_scores: &model_scores,
         });
-
     let mut output = Map::new();
     output.insert("subject".into(), Value::from(subject.to_string()));
     output.insert(
@@ -11665,10 +11153,8 @@ fn moderation_local_runner_screening_json(
             .map(|value| Value::from(value.to_string()))
             .unwrap_or(Value::Null),
     );
-
     Ok(Value::Object(output))
 }
-
 fn moderation_model_score_json(score: &ModerationModelScoreV1) -> Value {
     let mut output = Map::new();
     output.insert(
@@ -11682,7 +11168,6 @@ fn moderation_model_score_json(score: &ModerationModelScoreV1) -> Value {
     output.insert("score_bps".into(), Value::from(u64::from(score.score_bps)));
     Value::Object(output)
 }
-
 fn moderation_score_verdict(score: u16, thresholds: ModerationThresholdsV1) -> &'static str {
     if score >= thresholds.escalate {
         "escalate"
@@ -11692,7 +11177,6 @@ fn moderation_score_verdict(score: u16, thresholds: ModerationThresholdsV1) -> &
         "pass"
     }
 }
-
 fn moderation_local_runner_policy_digest(
     manifest: &ModerationReproManifestV1,
 ) -> Result<[u8; 32], String> {
@@ -11703,7 +11187,6 @@ fn moderation_local_runner_policy_digest(
     hasher.update(&body_bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 struct ModerationLocalRunnerEvidenceInput<'a> {
     manifest: &'a ModerationReproManifestV1,
     subject: &'a str,
@@ -11714,7 +11197,6 @@ struct ModerationLocalRunnerEvidenceInput<'a> {
     policy_digest: &'a [u8; 32],
     model_scores: &'a [ModerationModelScoreV1],
 }
-
 fn moderation_local_runner_evidence_digest(
     input: ModerationLocalRunnerEvidenceInput<'_>,
 ) -> [u8; 32] {
@@ -11740,17 +11222,14 @@ fn moderation_local_runner_evidence_digest(
     }
     *hasher.finalize().as_bytes()
 }
-
 fn update_hash_string(hasher: &mut blake3::Hasher, value: &str) {
     hasher.update(&(value.len() as u64).to_le_bytes());
     hasher.update(value.as_bytes());
 }
-
 fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
     if raw_args.is_empty() {
         return Err(moderation_usage());
     }
-
     let mut manifest_id_hex: Option<String> = None;
     let mut chunker_handle = DEFAULT_CHUNKER_HANDLE.to_string();
     let mut expected_catalog_digest_hex: Option<String> = None;
@@ -11758,7 +11237,6 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
     let mut provider_specs: Vec<GatewayProviderSpec> = Vec::new();
     let mut json_out: Option<PathBuf> = None;
     let mut markdown_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(moderation_usage());
@@ -11802,7 +11280,6 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
             return Err(moderation_usage());
         }
     }
-
     let manifest_id_hex = manifest_id_hex.ok_or_else(|| {
         "missing required `--manifest-id` for `sorafs_cli moderation honey-audit`".to_string()
     })?;
@@ -11815,7 +11292,6 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
     if provider_specs.is_empty() {
         return Err("provide at least one `--provider` entry".to_string());
     }
-
     let mut specs = Vec::with_capacity(honey_digests.len());
     for (idx, digest_hex) in honey_digests.iter().enumerate() {
         let digest = hex::decode(digest_hex.trim())
@@ -11835,7 +11311,6 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
             taikai_segment_hint: None,
         });
     }
-
     let gateway_config = GatewayFetchConfig {
         manifest_id_hex: manifest_id_hex.clone(),
         chunker_handle: chunker_handle.clone(),
@@ -11846,7 +11321,6 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
         salt_epoch: None,
         expected_cache_version: None,
     };
-
     let provider_inputs: Vec<GatewayProviderInput> = provider_specs
         .iter()
         .map(|spec| GatewayProviderInput {
@@ -11858,23 +11332,19 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
             privacy_events_url: spec.privacy_events_url.clone(),
         })
         .collect();
-
     let context = GatewayFetchContext::new(gateway_config, provider_inputs)
         .map_err(|err| format!("failed to construct gateway context: {err}"))?;
     let providers = context.providers();
     if providers.is_empty() {
         return Err("gateway context did not expose any providers".to_string());
     }
-
     let validator = expected_catalog_digest_hex
         .as_deref()
         .map_or_else(PolicyEvidenceValidator::new, |digest| {
             PolicyEvidenceValidator::new().with_expected_catalog_digest(digest)
         });
-
     let runtime =
         Runtime::new().map_err(|err| format!("failed to initialise Tokio runtime: {err}"))?;
-
     let mut digest_reports = Vec::new();
     for spec in &specs {
         let reports = runtime
@@ -11892,7 +11362,6 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
             })?;
         digest_reports.push((spec.clone(), reports));
     }
-
     for (spec, reports) in &digest_reports {
         println!("digest {}:", hex::encode(spec.digest));
         for report in reports {
@@ -11907,7 +11376,6 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
             );
         }
     }
-
     if let Some(path) = json_out {
         let digests: Vec<Value> = digest_reports
             .iter()
@@ -11937,7 +11405,6 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
                 Value::Object(digest_map)
             })
             .collect();
-
         let mut summary = Map::new();
         summary.insert(
             "manifest_id_hex".into(),
@@ -11958,7 +11425,6 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
             to_string_pretty(&summary).map_err(|err| format!("failed to render JSON: {err}"))?;
         write_text(&path, format!("{rendered}\n").as_bytes())?;
     }
-
     if let Some(path) = markdown_out {
         let mut md = String::from("# Honey Audit Report\n\n");
         md.push_str(&format!(
@@ -11987,10 +11453,8 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
         }
         write_text(&path, md.as_bytes())?;
     }
-
     Ok(())
 }
-
 fn appeal_quote(raw_args: Vec<String>) -> Result<(), String> {
     let mut class: Option<AppealClass> = None;
     let mut backlog: u32 = 0;
@@ -11999,7 +11463,6 @@ fn appeal_quote(raw_args: Vec<String>) -> Result<(), String> {
     let mut urgency = AppealUrgency::Normal;
     let mut format = String::from("table");
     let mut config_source: Option<JsonSource> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(appeal_usage());
@@ -12041,7 +11504,6 @@ fn appeal_quote(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let config = if let Some(source) = config_source {
         let value = source.read()?;
         AppealPricingConfig::from_manifest_value(&value)
@@ -12068,7 +11530,6 @@ fn appeal_quote(raw_args: Vec<String>) -> Result<(), String> {
         .class_config(class)
         .expect("quoted class must have a configuration entry");
     let valid_until_unix = compute_valid_until(config.quote_ttl_secs());
-
     let context = AppealQuoteInputs {
         config: &config,
         class,
@@ -12079,7 +11540,6 @@ fn appeal_quote(raw_args: Vec<String>) -> Result<(), String> {
         quote: &quote,
         valid_until_unix,
     };
-
     match format.as_str() {
         "json" => print_appeal_quote_json(&context),
         "table" | "text" | "" => {
@@ -12091,14 +11551,12 @@ fn appeal_quote(raw_args: Vec<String>) -> Result<(), String> {
         )),
     }
 }
-
 fn appeal_settle(raw_args: Vec<String>) -> Result<(), String> {
     let mut deposit: Option<Quantity> = None;
     let mut verdict: Option<AppealVerdict> = None;
     let mut panel_size_override: Option<u32> = None;
     let mut format = String::from("table");
     let mut config_source: Option<JsonSource> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(appeal_usage());
@@ -12134,7 +11592,6 @@ fn appeal_settle(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let config = if let Some(source) = config_source {
         let value = source.read()?;
         AppealSettlementConfig::from_manifest_value(&value)
@@ -12159,7 +11616,6 @@ fn appeal_settle(raw_args: Vec<String>) -> Result<(), String> {
             | AppealSettlementError::DecimalProduct(_)
             | AppealSettlementError::Arithmetic(_) => err.to_string(),
         })?;
-
     let context = AppealSettlementInputs {
         config: &config,
         deposit_xor: deposit,
@@ -12167,7 +11623,6 @@ fn appeal_settle(raw_args: Vec<String>) -> Result<(), String> {
         verdict,
         breakdown,
     };
-
     match format.as_str() {
         "json" => print_appeal_settlement_json(&context),
         "table" | "text" | "" => {
@@ -12179,7 +11634,6 @@ fn appeal_settle(raw_args: Vec<String>) -> Result<(), String> {
         )),
     }
 }
-
 fn appeal_disburse(raw_args: Vec<String>) -> Result<(), String> {
     let mut deposit: Option<Quantity> = None;
     let mut verdict: Option<AppealVerdict> = None;
@@ -12191,7 +11645,6 @@ fn appeal_disburse(raw_args: Vec<String>) -> Result<(), String> {
     let mut escrow_account: Option<AccountId> = None;
     let mut jurors: Vec<AccountId> = Vec::new();
     let mut no_shows: Vec<AccountId> = Vec::new();
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(appeal_usage());
@@ -12262,7 +11715,6 @@ fn appeal_disburse(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let config = if let Some(source) = config_source {
         let value = source.read()?;
         AppealSettlementConfig::from_manifest_value(&value)
@@ -12290,7 +11742,6 @@ fn appeal_disburse(raw_args: Vec<String>) -> Result<(), String> {
         ));
     }
     let panel_size = panel_size_override.unwrap_or_else(|| config.default_panel_size());
-
     let plan = config
         .disburse(AppealDisbursementInput {
             deposit_xor: deposit,
@@ -12308,7 +11759,6 @@ fn appeal_disburse(raw_args: Vec<String>) -> Result<(), String> {
             }) => format!("settlement config is missing a rule for `{decision}`"),
             other => other.to_string(),
         })?;
-
     let context = AppealDisbursementInputs {
         config: &config,
         plan,
@@ -12324,7 +11774,6 @@ fn appeal_disburse(raw_args: Vec<String>) -> Result<(), String> {
         )),
     }
 }
-
 fn compute_valid_until(ttl_secs: u64) -> Option<u64> {
     if ttl_secs == 0 {
         return None;
@@ -12332,7 +11781,6 @@ fn compute_valid_until(ttl_secs: u64) -> Option<u64> {
     let expiry = SystemTime::now().checked_add(Duration::from_secs(ttl_secs))?;
     Some(expiry.duration_since(UNIX_EPOCH).ok()?.as_secs())
 }
-
 struct AppealQuoteInputs<'a> {
     config: &'a AppealPricingConfig,
     class: AppealClass,
@@ -12343,7 +11791,6 @@ struct AppealQuoteInputs<'a> {
     quote: &'a AppealQuote,
     valid_until_unix: Option<u64>,
 }
-
 struct AppealSettlementInputs<'a> {
     config: &'a AppealSettlementConfig,
     deposit_xor: Quantity,
@@ -12351,12 +11798,10 @@ struct AppealSettlementInputs<'a> {
     verdict: AppealVerdict,
     breakdown: AppealSettlementBreakdown,
 }
-
 struct AppealDisbursementInputs<'a> {
     config: &'a AppealSettlementConfig,
     plan: AppealDisbursementPlan,
 }
-
 fn print_appeal_quote_table(class_cfg: &AppealClassConfig, ctx: &AppealQuoteInputs<'_>) {
     println!("Appeal deposit quote ({})", ctx.config.version());
     println!("  class: {:<8} urgency: {}", ctx.class, ctx.urgency);
@@ -12397,7 +11842,6 @@ fn print_appeal_quote_table(class_cfg: &AppealClassConfig, ctx: &AppealQuoteInpu
         println!("  valid until (unix): {expiry}");
     }
 }
-
 fn print_appeal_quote_json(ctx: &AppealQuoteInputs<'_>) -> Result<(), String> {
     let mut breakdown = Map::new();
     breakdown.insert(
@@ -12436,7 +11880,6 @@ fn print_appeal_quote_json(ctx: &AppealQuoteInputs<'_>) -> Result<(), String> {
         "max_deposit_xor".into(),
         Value::String(format_exact(&ctx.quote.breakdown.max_deposit_xor)),
     );
-
     let mut root = Map::new();
     root.insert(
         "version".into(),
@@ -12481,13 +11924,11 @@ fn print_appeal_quote_json(ctx: &AppealQuoteInputs<'_>) -> Result<(), String> {
         );
     }
     root.insert("breakdown".into(), Value::Object(breakdown));
-
     let json = to_string_pretty(&Value::Object(root))
         .map_err(|err| format!("failed to render JSON quote: {err}"))?;
     println!("{json}");
     Ok(())
 }
-
 fn print_appeal_settlement_table(ctx: &AppealSettlementInputs<'_>) {
     println!("Appeal settlement ({})", ctx.config.version());
     println!("  outcome: {}", ctx.verdict);
@@ -12508,7 +11949,6 @@ fn print_appeal_settlement_table(ctx: &AppealSettlementInputs<'_>) {
         format_exact(&ctx.breakdown.panel_reward_total_xor)
     );
 }
-
 fn print_appeal_settlement_json(ctx: &AppealSettlementInputs<'_>) -> Result<(), String> {
     let mut root = Map::new();
     root.insert(
@@ -12549,7 +11989,6 @@ fn print_appeal_settlement_json(ctx: &AppealSettlementInputs<'_>) -> Result<(), 
     println!("{json}");
     Ok(())
 }
-
 fn print_appeal_disbursement_table(ctx: &AppealDisbursementInputs<'_>) {
     println!("Appeal disbursement ({})", ctx.config.version());
     println!("  outcome: {}", ctx.plan.verdict);
@@ -12598,7 +12037,6 @@ fn print_appeal_disbursement_table(ctx: &AppealDisbursementInputs<'_>) {
         }
     }
 }
-
 fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<(), String> {
     let mut root = Map::new();
     root.insert(
@@ -12617,7 +12055,6 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
         "panel_size".into(),
         Value::Number(Number::from(u64::from(ctx.plan.panel_size))),
     );
-
     let mut refund = Map::new();
     refund.insert(
         "account".into(),
@@ -12628,7 +12065,6 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
         Value::String(format_exact(&ctx.plan.settlement.refund_xor)),
     );
     root.insert("refund".into(), Value::Object(refund));
-
     let mut treasury = Map::new();
     treasury.insert(
         "account".into(),
@@ -12647,7 +12083,6 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
         Value::String(format_exact(&ctx.plan.total_treasury_xor)),
     );
     root.insert("treasury".into(), Value::Object(treasury));
-
     let mut held = Map::new();
     held.insert(
         "account".into(),
@@ -12658,7 +12093,6 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
         Value::String(format_exact(&ctx.plan.settlement.held_xor)),
     );
     root.insert("held".into(), Value::Object(held));
-
     let mut rewards = Map::new();
     rewards.insert(
         "available_xor".into(),
@@ -12712,17 +12146,14 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
         .collect();
     rewards.insert("participants".into(), Value::Array(participants));
     root.insert("rewards".into(), Value::Object(rewards));
-
     let json = to_string_pretty(&Value::Object(root))
         .map_err(|err| format!("failed to render JSON disbursement: {err}"))?;
     println!("{json}");
     Ok(())
 }
-
 fn format_exact(value: &impl std::fmt::Display) -> String {
     value.to_string()
 }
-
 #[cfg(test)]
 mod manifest_tests {
     use ed25519_dalek::SigningKey;
@@ -12732,9 +12163,7 @@ mod manifest_tests {
     use norito::json::{Map, Value};
     use sorafs_orchestrator::proxy::LocalQuicProxyConfig;
     use tempfile::TempDir;
-
     use super::*;
-
     fn account_string(label: u8) -> String {
         let seed = [label; ed25519_dalek::SECRET_KEY_LENGTH];
         let signer = SigningKey::from_bytes(&seed);
@@ -12743,25 +12172,20 @@ mod manifest_tests {
             PublicKey::from_bytes(Algorithm::Ed25519, pk_bytes.as_slice()).expect("public key");
         AccountId::new(pk).to_string()
     }
-
     fn canonical_temp_path(temp: &TempDir) -> std::path::PathBuf {
         temp.path().canonicalize().expect("canonical tempdir")
     }
-
     #[test]
     fn write_text_creates_parent_and_writes_bytes() {
         let temp = TempDir::new().expect("tempdir");
         let temp_path = temp.path().canonicalize().expect("canonical tempdir");
         let output_path = temp_path.join("nested").join("summary.json");
-
         write_text(&output_path, br#"{"ok":true}"#).expect("write text");
-
         assert_eq!(
             fs::read(&output_path).expect("read output"),
             br#"{"ok":true}"#
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn write_text_rejects_symlink_output() {
@@ -12771,16 +12195,13 @@ mod manifest_tests {
         fs::write(&target_path, b"unchanged").expect("write target");
         let output_path = temp_path.join("output.txt");
         std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
-
         let err = write_text(&output_path, b"changed").expect_err("reject symlink output");
-
         assert!(
             err.contains("must not be a symlink"),
             "unexpected error: {err}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged");
     }
-
     #[cfg(unix)]
     #[test]
     fn write_text_rejects_symlink_parent() {
@@ -12791,9 +12212,7 @@ mod manifest_tests {
         let linked_dir = temp_path.join("linked");
         std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
         let output_path = linked_dir.join("output.txt");
-
         let err = write_text(&output_path, b"changed").expect_err("reject symlink parent");
-
         assert!(
             err.contains("parent") && err.contains("must not be a symlink"),
             "unexpected error: {err}"
@@ -12803,7 +12222,6 @@ mod manifest_tests {
             "symlink parent should not receive output"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn moderation_bounded_reader_rejects_symlink_input() {
@@ -12812,19 +12230,16 @@ mod manifest_tests {
         let linked = temp.path().join("linked");
         fs::write(&target, b"manifest").expect("write target");
         std::os::unix::fs::symlink(&target, &linked).expect("create symlink");
-
         let error = read_file_bounded(&linked, 1024, "test input")
             .expect_err("symlink input must be rejected");
         assert!(error.contains("non-symlink"), "unexpected error: {error}");
     }
-
     #[test]
     fn proxy_set_mode_updates_config_file() {
         let temp = TempDir::new().expect("tempdir");
         let root = canonical_temp_path(&temp);
         let config_path = root.join("orchestrator.json");
         let json_out_path = root.join("summary.json");
-
         let config = OrchestratorConfig {
             local_proxy: Some(LocalQuicProxyConfig {
                 bind_addr: "127.0.0.1:0".into(),
@@ -12837,14 +12252,12 @@ mod manifest_tests {
         let config_value = orchestrator_config_to_json(&config);
         let config_json = norito::json::to_json_pretty(&config_value).expect("render config json");
         fs::write(&config_path, config_json).expect("write config");
-
         proxy_set_mode(vec![
             format!("--orchestrator-config={}", config_path.display()),
             "--mode=metadata-only".into(),
             format!("--json-out={}", json_out_path.display()),
         ])
         .expect("proxy set mode succeeds");
-
         let updated_json = fs::read_to_string(&config_path).expect("read updated config file");
         let updated_value: Value =
             norito::json::from_str(&updated_json).expect("parse updated config");
@@ -12858,7 +12271,6 @@ mod manifest_tests {
                 .proxy_mode,
             ProxyMode::MetadataOnly
         );
-
         let summary_json = fs::read_to_string(&json_out_path).expect("read summary json");
         let summary_value: Value =
             norito::json::from_str(&summary_json).expect("parse summary json");
@@ -12872,7 +12284,6 @@ mod manifest_tests {
             Some("bridge")
         );
     }
-
     #[test]
     fn moderation_validate_corpus_accepts_valid_manifest() {
         let manifest = adversarial_corpus_manifest_fixture();
@@ -12880,17 +12291,14 @@ mod manifest_tests {
         let manifest_path = temp.path().join("corpus.json");
         let manifest_json = norito::json::to_json_pretty(&manifest).expect("render manifest json");
         fs::write(&manifest_path, manifest_json).expect("write manifest json");
-
         moderation_validate_corpus(vec![format!("--manifest={}", manifest_path.display())])
             .expect("corpus manifest validated");
     }
-
     fn adversarial_corpus_manifest_fixture() -> AdversarialCorpusManifestV1 {
         use iroha_data_model::sorafs::moderation::{
             ADVERSARIAL_CORPUS_VERSION_V1, AdversarialPerceptualFamilyV1,
             AdversarialPerceptualVariantV1,
         };
-
         AdversarialCorpusManifestV1 {
             schema_version: ADVERSARIAL_CORPUS_VERSION_V1,
             issued_at_unix: 1_740_000_000,
@@ -12910,13 +12318,11 @@ mod manifest_tests {
             }],
         }
     }
-
     fn signed_moderation_repro_manifest_fixture() -> ModerationReproManifestV1 {
         use iroha_data_model::sorafs::moderation::{
             MODERATION_REPRO_MANIFEST_VERSION_V1, ModerationReproBodyV1,
             ModerationReproSignatureV1, ModerationSeedMaterialV1,
         };
-
         let (models, _) = moderation_model_artifacts_fixture();
         let mut body = ModerationReproBodyV1 {
             schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
@@ -12953,7 +12359,6 @@ mod manifest_tests {
             }],
         }
     }
-
     fn moderation_model_artifacts_fixture()
     -> (Vec<ModerationModelFingerprintV1>, Vec<(String, Vec<u8>)>) {
         use iroha_data_model::sorafs::moderation::{
@@ -12963,7 +12368,6 @@ mod manifest_tests {
             moderation_model_required_operations_v1,
         };
         use sorafs_orchestrator::moderation_runner::fingerprint_model_artifact;
-
         let mut fingerprints = Vec::new();
         let mut files = Vec::new();
         for (model_id, filename, feature, signed_weight, ensemble_weight) in [
@@ -13003,14 +12407,12 @@ mod manifest_tests {
         }
         (fingerprints, files)
     }
-
     fn write_moderation_model_artifacts_fixture(root: &Path) {
         fs::create_dir_all(root).expect("create fixture artifact root");
         for (path, bytes) in moderation_model_artifacts_fixture().1 {
             fs::write(root.join(path), bytes).expect("write fixture model artifact");
         }
     }
-
     fn resign_moderation_repro_manifest(manifest: &mut ModerationReproManifestV1) {
         manifest
             .body
@@ -13022,7 +12424,6 @@ mod manifest_tests {
             .expect("re-sign moderation fixture body");
         manifest.signatures[0].signature = signature;
     }
-
     fn moderation_registry_fixture_service(state_path: &Path) -> ModerationRegistryService {
         let state = moderation_registry_load_state(state_path).expect("load registry state");
         ModerationRegistryService {
@@ -13032,7 +12433,6 @@ mod manifest_tests {
             snapshot_limit: 25,
         }
     }
-
     fn moderation_registry_manifest_request<T: norito::core::NoritoSerialize>(
         manifest: &T,
     ) -> Vec<u8> {
@@ -13042,7 +12442,6 @@ mod manifest_tests {
         }))
         .expect("registry request JSON")
     }
-
     #[test]
     fn moderation_run_local_emits_torii_screening_request_json() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -13060,7 +12459,6 @@ mod manifest_tests {
         )
         .expect("write manifest");
         fs::write(&payload_path, payload).expect("write payload");
-
         moderation_run_local(vec![
             format!("--manifest={}", manifest_path.display()),
             format!("--artifact-root={}", artifact_root.display()),
@@ -13071,7 +12469,6 @@ mod manifest_tests {
             format!("--json-out={}", out_path.display()),
         ])
         .expect("local runner succeeds");
-
         let rendered = fs::read_to_string(&out_path).expect("read runner output");
         let value: Value = norito::json::from_str(&rendered).expect("parse runner output");
         let expected_runner = LoadedModerationRunnerV1::load_verified(
@@ -13090,7 +12487,6 @@ mod manifest_tests {
         )
         .expect("direct local runner output");
         assert_eq!(value, expected);
-
         let object = value.as_object().expect("runner output object");
         assert_eq!(
             object.get("subject").and_then(Value::as_str),
@@ -13134,7 +12530,6 @@ mod manifest_tests {
             64
         );
     }
-
     fn moderation_runner_fixture_service(
         manifest: ModerationReproManifestV1,
     ) -> ModerationRunnerService {
@@ -13155,7 +12550,6 @@ mod manifest_tests {
             max_payload_bytes: 4096,
         }
     }
-
     fn signed_trust_policy_fixture(
         manifest: &ModerationReproManifestV1,
         governance: &iroha_crypto::KeyPair,
@@ -13167,7 +12561,6 @@ mod manifest_tests {
             MODERATION_TRUST_POLICY_VERSION_V1, ModerationTrustPolicyBodyV1,
             ModerationTrustPolicySignatureV1, ModerationTrustedSignerV1,
         };
-
         let mut trusted_signers = runner_keys
             .iter()
             .enumerate()
@@ -13209,7 +12602,6 @@ mod manifest_tests {
             body,
         }
     }
-
     fn moderation_signed_runner_fixture_service()
     -> (ModerationRunnerService, TempDir, ModerationReproManifestV1) {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -13245,7 +12637,6 @@ mod manifest_tests {
         });
         (service, provenance_root, manifest)
     }
-
     fn moderation_runner_http_request(method: &str, path: &str, body: &[u8]) -> Vec<u8> {
         let mut request = format!(
             "{method} {path} HTTP/1.1\r\nHost: runner.local\r\nContent-Length: {}\r\n\r\n",
@@ -13255,7 +12646,6 @@ mod manifest_tests {
         request.extend_from_slice(body);
         request
     }
-
     fn moderation_runner_response_parts(response: &[u8]) -> (&str, Value) {
         let header_end = find_http_header_end(response).expect("response header terminator");
         let header = std::str::from_utf8(&response[..header_end]).expect("response headers");
@@ -13263,7 +12653,6 @@ mod manifest_tests {
         let json: Value = norito::json::from_slice(body).expect("response body JSON");
         (header, json)
     }
-
     #[test]
     fn moderation_registry_service_admits_and_persists_manifests() {
         let repro_manifest = signed_moderation_repro_manifest_fixture();
@@ -13276,7 +12665,6 @@ mod manifest_tests {
             &service.state.lock().expect("registry lock").clone(),
         )
         .expect("write empty registry state");
-
         let repro_body = moderation_registry_manifest_request(&repro_manifest);
         let repro_request = moderation_runner_http_request(
             "POST",
@@ -13295,7 +12683,6 @@ mod manifest_tests {
             repro_json.get("created").and_then(Value::as_bool),
             Some(true)
         );
-
         let corpus_body = moderation_registry_manifest_request(&corpus_manifest);
         let corpus_request = moderation_runner_http_request(
             "POST",
@@ -13314,7 +12701,6 @@ mod manifest_tests {
             corpus_json.get("created").and_then(Value::as_bool),
             Some(true)
         );
-
         let snapshot_request =
             moderation_runner_http_request("GET", "/v1/sorafs/moderation/model-registry", &[]);
         let snapshot_response =
@@ -13334,7 +12720,6 @@ mod manifest_tests {
             Some(1)
         );
         assert!(state_path.exists(), "registry service should persist state");
-
         let reloaded = moderation_registry_fixture_service(&state_path);
         let reloaded_response = moderation_registry_http_response(
             &reloaded,
@@ -13355,7 +12740,6 @@ mod manifest_tests {
             Some(1)
         );
     }
-
     #[test]
     fn moderation_registry_service_rejects_conflicting_manifest_id() {
         let repro_manifest = signed_moderation_repro_manifest_fixture();
@@ -13365,7 +12749,6 @@ mod manifest_tests {
         let temp = TempDir::new().expect("tempdir");
         let state_path = temp.path().join("registry-state.to");
         let service = moderation_registry_fixture_service(&state_path);
-
         let original_body = moderation_registry_manifest_request(&repro_manifest);
         let original_request = moderation_runner_http_request(
             "POST",
@@ -13376,7 +12759,6 @@ mod manifest_tests {
             moderation_registry_http_response(&service, &original_request, service.max_body_bytes);
         let (header, _) = moderation_runner_response_parts(&original_response);
         assert!(header.starts_with("HTTP/1.1 200 OK"));
-
         let conflict_body = moderation_registry_manifest_request(&conflicting_manifest);
         let conflict_request = moderation_runner_http_request(
             "POST",
@@ -13394,7 +12776,6 @@ mod manifest_tests {
                 .contains("conflicts with registry")
         );
     }
-
     fn moderation_committee_fixture_service(
         manifest: ModerationReproManifestV1,
         quorum: usize,
@@ -13407,7 +12788,6 @@ mod manifest_tests {
             max_body_bytes: 4096,
         }
     }
-
     #[test]
     fn signed_runner_endpoint_uses_server_time_and_persists_verified_result() {
         let (service, _provenance_root, manifest) = moderation_signed_runner_fixture_service();
@@ -13457,7 +12837,6 @@ mod manifest_tests {
         let provenance = state.provenance.snapshot().expect("provenance snapshot");
         assert_eq!(provenance.entries.len(), 1);
         provenance.validate_chain().expect("valid provenance chain");
-
         let status = moderation_runner_status_json(&service, "ready", None);
         assert_eq!(
             status.get("signed_results").and_then(Value::as_bool),
@@ -13468,7 +12847,6 @@ mod manifest_tests {
             Some(1)
         );
     }
-
     #[test]
     fn signed_runner_rejects_client_time_unsigned_route_and_unknown_fields() {
         let (service, _provenance_root, _) = moderation_signed_runner_fixture_service();
@@ -13492,7 +12870,6 @@ mod manifest_tests {
                 .0
                 .starts_with("HTTP/1.1 400 Bad Request")
         );
-
         let unsigned_request =
             moderation_runner_http_request("POST", "/v1/sorafs/moderation/runner/screen", b"{}");
         let unsigned_response =
@@ -13515,7 +12892,6 @@ mod manifest_tests {
             0
         );
     }
-
     #[test]
     fn signed_runner_fails_fast_when_signing_transaction_is_busy() {
         let (service, _provenance_root, _) = moderation_signed_runner_fixture_service();
@@ -13535,7 +12911,6 @@ mod manifest_tests {
             ModerationSignedRunnerRequestError::Unavailable(_)
         ));
     }
-
     fn moderation_authenticated_committee_fixture_service() -> (
         ModerationCommitteeService,
         TempDir,
@@ -13605,7 +12980,6 @@ mod manifest_tests {
             vec![result_a, result_b],
         )
     }
-
     fn authenticated_committee_request(results: &[ModerationSignedScreeningResultV1]) -> Vec<u8> {
         let encoded = results
             .iter()
@@ -13621,7 +12995,6 @@ mod manifest_tests {
         )])))
         .expect("committee request JSON")
     }
-
     #[test]
     fn authenticated_committee_endpoint_verifies_quorum_and_persists_full_provenance() {
         let (service, _provenance_root, results) =
@@ -13669,7 +13042,6 @@ mod manifest_tests {
             )
         ));
     }
-
     #[test]
     fn authenticated_committee_rejects_duplicate_signer_payload_bytes_and_legacy_route() {
         let (service, _provenance_root, results) =
@@ -13691,7 +13063,6 @@ mod manifest_tests {
                 .0
                 .starts_with("HTTP/1.1 400 Bad Request")
         );
-
         let payload_body = to_vec(&Value::Object(Map::from_iter([
             ("signed_results_norito_b64".into(), Value::Array(Vec::new())),
             ("payload_b64".into(), Value::from("c2VjcmV0")),
@@ -13702,7 +13073,6 @@ mod manifest_tests {
                 .expect_err("payload bytes forbidden"),
             ModerationAuthenticatedCommitteeRequestError::BadRequest(_)
         ));
-
         let legacy_request = moderation_runner_http_request(
             "POST",
             "/v1/sorafs/moderation/committee/aggregate",
@@ -13728,7 +13098,6 @@ mod manifest_tests {
             0
         );
     }
-
     fn moderation_runner_canary_fixture_server(
         manifest: ModerationReproManifestV1,
     ) -> (String, std::thread::JoinHandle<()>) {
@@ -13744,7 +13113,6 @@ mod manifest_tests {
         });
         (format!("http://{addr}"), handle)
     }
-
     fn moderation_committee_canary_fixture_server(
         manifest: ModerationReproManifestV1,
         quorum: usize,
@@ -13763,7 +13131,6 @@ mod manifest_tests {
         });
         (format!("http://{addr}"), handle)
     }
-
     fn moderation_canary_test_context(generated_at_unix: u64) -> ModerationCanaryDeploymentContext {
         ModerationCanaryDeploymentContext {
             generated_at_unix,
@@ -13771,7 +13138,6 @@ mod manifest_tests {
             environment: "production".to_string(),
         }
     }
-
     fn moderation_canary_test_probe(
         method: &'static str,
         url: &str,
@@ -13790,7 +13156,6 @@ mod manifest_tests {
             response,
         }
     }
-
     fn moderation_canary_test_result_fingerprint(index: u8) -> Value {
         let digest = [index; 32];
         Value::Object(Map::from_iter([
@@ -13807,7 +13172,6 @@ mod manifest_tests {
             ("private_payloads_included".into(), Value::from(false)),
         ]))
     }
-
     fn moderation_committee_result_fixture(
         manifest: &ModerationReproManifestV1,
         payload: &[u8],
@@ -13853,22 +13217,18 @@ mod manifest_tests {
         );
         value
     }
-
     fn write_moderation_json(path: &Path, value: &Value) {
         let rendered = to_string_pretty(value).expect("render moderation JSON");
         fs::write(path, format!("{rendered}\n")).expect("write moderation JSON");
     }
-
     #[test]
     fn moderation_runner_status_endpoint_reports_locked_manifest() {
         let manifest = signed_moderation_repro_manifest_fixture();
         let service = moderation_runner_fixture_service(manifest.clone());
         let request =
             moderation_runner_http_request("GET", "/v1/sorafs/moderation/runner/status", &[]);
-
         let response = moderation_runner_http_response(&service, &request, service.max_body_bytes);
         let (header, body) = moderation_runner_response_parts(&response);
-
         assert!(header.starts_with("HTTP/1.1 200 OK"));
         assert_eq!(
             body.get("schema").and_then(Value::as_str),
@@ -13883,7 +13243,6 @@ mod manifest_tests {
             Some("model_engine_none_process_policy_required")
         );
     }
-
     #[test]
     fn moderation_runner_screen_endpoint_matches_local_runner() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -13898,7 +13257,6 @@ mod manifest_tests {
         .expect("screen request JSON");
         let request =
             moderation_runner_http_request("POST", "/v1/sorafs/moderation/runner/screen", &body);
-
         let response = moderation_runner_http_response(&service, &request, service.max_body_bytes);
         let (header, actual) = moderation_runner_response_parts(&response);
         let expected = moderation_local_runner_screening_json(
@@ -13910,7 +13268,6 @@ mod manifest_tests {
             service.max_payload_bytes,
         )
         .expect("expected runner output");
-
         assert!(header.starts_with("HTTP/1.1 200 OK"));
         assert_eq!(actual, expected);
         assert_eq!(
@@ -13918,14 +13275,11 @@ mod manifest_tests {
             Some(hex_encode(blake3_hash(payload).as_bytes()).as_str())
         );
     }
-
     #[test]
     fn moderation_runner_grpc_status_reports_locked_manifest() {
         let manifest = signed_moderation_repro_manifest_fixture();
         let service = moderation_runner_fixture_service(manifest.clone());
-
         let response = moderation_runner_status_proto(&service, "ready", Some("127.0.0.1:9199"));
-
         assert_eq!(response.schema, "sorafs.moderation.runner.status.v1");
         assert_eq!(response.status, "ready");
         assert_eq!(
@@ -13950,13 +13304,11 @@ mod manifest_tests {
             u64::try_from(MODERATION_RUNNER_MAX_GRPC_RESPONSE_BYTES).expect("limit fits u64")
         );
     }
-
     #[test]
     fn moderation_runner_grpc_screen_matches_local_runner() {
         let manifest = signed_moderation_repro_manifest_fixture();
         let service = moderation_runner_fixture_service(manifest.clone());
         let payload = b"runner grpc moderation payload".to_vec();
-
         let response = moderation_runner_screen_request_proto(
             &service,
             ModerationRunnerScreenRequest {
@@ -13979,7 +13331,6 @@ mod manifest_tests {
             .expect("local runner output"),
         )
         .expect("expected proto output");
-
         assert_eq!(response.subject, expected.subject);
         assert_eq!(response.subject_digest_hex, expected.subject_digest_hex);
         assert_eq!(response.manifest_id_hex, expected.manifest_id_hex);
@@ -13997,13 +13348,11 @@ mod manifest_tests {
         );
         assert_eq!(response.notes.as_deref(), Some("grpc fixture"));
     }
-
     #[test]
     fn moderation_runner_grpc_screen_rejects_payload_over_limit() {
         let manifest = signed_moderation_repro_manifest_fixture();
         let mut service = moderation_runner_fixture_service(manifest);
         service.max_body_bytes = 4;
-
         let error = match moderation_runner_screen_request_proto(
             &service,
             ModerationRunnerScreenRequest {
@@ -14016,10 +13365,8 @@ mod manifest_tests {
             Ok(_) => panic!("oversized payload should fail"),
             Err(error) => error,
         };
-
         assert!(error.contains("payload exceeds configured maximum"));
     }
-
     #[test]
     fn moderation_runner_grpc_maximum_text_response_fits_the_transport_cap() {
         let service = moderation_runner_fixture_service(signed_moderation_repro_manifest_fixture());
@@ -14033,13 +13380,11 @@ mod manifest_tests {
             },
         )
         .expect("maximum bounded text response");
-
         assert!(
             <ModerationRunnerScreenResponse as prost::Message>::encoded_len(&response)
                 < MODERATION_RUNNER_MAX_GRPC_RESPONSE_BYTES
         );
     }
-
     #[test]
     fn moderation_runner_screen_requires_explicit_timestamp() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -14051,10 +13396,8 @@ mod manifest_tests {
         .expect("screen request JSON");
         let request =
             moderation_runner_http_request("POST", "/v1/sorafs/moderation/runner/screen", &body);
-
         let response = moderation_runner_http_response(&service, &request, service.max_body_bytes);
         let (header, body) = moderation_runner_response_parts(&response);
-
         assert!(header.starts_with("HTTP/1.1 400 Bad Request"));
         assert!(
             body.get("message")
@@ -14063,7 +13406,6 @@ mod manifest_tests {
                 .contains("screened_at_unix")
         );
     }
-
     #[test]
     fn moderation_runner_rejects_body_over_limit() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -14073,14 +13415,11 @@ mod manifest_tests {
             "/v1/sorafs/moderation/runner/screen",
             b"0123456789",
         );
-
         let response = moderation_runner_http_response(&service, &request, 4);
         let (header, body) = moderation_runner_response_parts(&response);
-
         assert!(header.starts_with("HTTP/1.1 413 Payload Too Large"));
         assert_eq!(body.get("status").and_then(Value::as_str), Some("error"));
     }
-
     #[test]
     fn moderation_http_limits_are_exact_bounded_and_overflow_safe() {
         assert_eq!(
@@ -14105,7 +13444,6 @@ mod manifest_tests {
             .is_err()
         );
     }
-
     #[test]
     fn moderation_runner_http_parser_rejects_smuggling_and_malformed_frames() {
         let service = moderation_runner_fixture_service(signed_moderation_repro_manifest_fixture());
@@ -14135,7 +13473,6 @@ mod manifest_tests {
                 String::from_utf8_lossy(request)
             );
         }
-
         let mut oversized_header =
             b"GET /healthz HTTP/1.1\r\nHost: runner.local\r\nX-Fill: ".to_vec();
         oversized_header.extend(vec![b'a'; MODERATION_RUNNER_MAX_HEADER_BYTES]);
@@ -14143,7 +13480,6 @@ mod manifest_tests {
         let response = moderation_runner_http_response(&service, &oversized_header, 4096);
         assert!(response.starts_with(b"HTTP/1.1 431 Request Header Fields Too Large"));
     }
-
     #[test]
     fn moderation_runner_rejects_noncanonical_request_text() {
         let service = moderation_runner_fixture_service(signed_moderation_repro_manifest_fixture());
@@ -14160,7 +13496,6 @@ mod manifest_tests {
             .expect("request JSON");
             assert!(moderation_runner_screen_request_json(&service, &body).is_err());
         }
-
         let oversized_subject = "x".repeat(MODERATION_RUNNER_MAX_SUBJECT_BYTES + 1);
         let body = norito::json::to_vec(&norito::json!({
             "subject": oversized_subject,
@@ -14169,7 +13504,6 @@ mod manifest_tests {
         }))
         .expect("request JSON");
         assert!(moderation_runner_screen_request_json(&service, &body).is_err());
-
         let body = norito::json::to_vec(&norito::json!({
             "subject": "subject",
             "payload_b64": (BASE64_STANDARD.encode(b"payload")),
@@ -14178,7 +13512,6 @@ mod manifest_tests {
         }))
         .expect("request JSON");
         assert!(moderation_runner_screen_request_json(&service, &body).is_err());
-
         let body = norito::json::to_vec(&norito::json!({
             "subject": "subject",
             "payload_b64": ("A".repeat(8192)),
@@ -14188,7 +13521,6 @@ mod manifest_tests {
         let error = moderation_runner_screen_request_json(&service, &body)
             .expect_err("oversized decoded payload estimate must fail before allocation");
         assert!(error.contains("can decode beyond"));
-
         let body = norito::json::to_vec(&norito::json!({
             "subject": "subject",
             "payload_b64": (BASE64_STANDARD.encode(b"payload")),
@@ -14196,7 +13528,6 @@ mod manifest_tests {
         }))
         .expect("request JSON");
         assert!(moderation_runner_screen_request_json(&service, &body).is_err());
-
         let body = norito::json::to_vec(&norito::json!({
             "subject": "subject",
             "payload_b64": (BASE64_STANDARD.encode(b"payload")),
@@ -14205,7 +13536,6 @@ mod manifest_tests {
         }))
         .expect("request JSON");
         assert!(moderation_runner_screen_request_json(&service, &body).is_err());
-
         assert!(
             moderation_runner_screen_request_proto(
                 &service,
@@ -14219,7 +13549,6 @@ mod manifest_tests {
             .is_err()
         );
     }
-
     #[test]
     fn moderation_runner_connection_admission_is_bounded() {
         let active = Arc::new(AtomicUsize::new(0));
@@ -14250,7 +13579,6 @@ mod manifest_tests {
         drop(permits);
         assert_eq!(active.load(AtomicOrdering::Acquire), 0);
     }
-
     #[test]
     fn moderation_runner_grpc_rejects_work_above_the_in_flight_limit() {
         let in_flight = Arc::new(AtomicUsize::new(MODERATION_RUNNER_MAX_GRPC_IN_FLIGHT));
@@ -14267,7 +13595,6 @@ mod manifest_tests {
             screened_at_unix: 1,
             notes: None,
         });
-
         let result = Runtime::new().expect("Tokio runtime").block_on(
             moderation_runner_grpc::runner_server::Runner::screen(&handler, request),
         );
@@ -14275,7 +13602,6 @@ mod manifest_tests {
             Ok(_) => panic!("saturated gRPC runner must fail closed"),
             Err(error) => error,
         };
-
         assert_eq!(error.code(), tonic::Code::ResourceExhausted);
         assert_eq!(
             in_flight.load(AtomicOrdering::Acquire),
@@ -14283,7 +13609,6 @@ mod manifest_tests {
             "a rejected call must not perturb the active-work counter"
         );
     }
-
     #[test]
     fn moderation_runner_bundle_emits_supervised_artifacts() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -14297,7 +13622,6 @@ mod manifest_tests {
             norito::json::to_json_pretty(&manifest).expect("render manifest json"),
         )
         .expect("write manifest");
-
         moderation_runner_bundle(vec![
             format!("--manifest={}", manifest_path.display()),
             format!("--artifact-root={}", artifact_root.display()),
@@ -14310,7 +13634,6 @@ mod manifest_tests {
             "--service-group=sorafs-runner".to_string(),
         ])
         .expect("runner bundle succeeds");
-
         let manifest_copy = bundle_dir.join("manifest.json");
         let env = fs::read_to_string(bundle_dir.join("runner.env")).expect("runner env");
         let run_script = fs::read_to_string(bundle_dir.join("run.sh")).expect("run script");
@@ -14323,7 +13646,6 @@ mod manifest_tests {
             &fs::read_to_string(bundle_dir.join("bundle.json")).expect("bundle metadata"),
         )
         .expect("parse bundle metadata");
-
         assert!(manifest_copy.exists());
         assert!(bundle_dir.join("artifacts/model-11.norito").exists());
         assert!(bundle_dir.join("artifacts/model-44.norito").exists());
@@ -14372,7 +13694,6 @@ mod manifest_tests {
             assert_ne!(mode & 0o111, 0, "run.sh should be executable");
         }
     }
-
     #[test]
     fn moderation_runner_bundle_rejects_invalid_service_name() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -14383,7 +13704,6 @@ mod manifest_tests {
             norito::json::to_json_pretty(&manifest).expect("render manifest json"),
         )
         .expect("write manifest");
-
         let err = moderation_runner_bundle(vec![
             format!("--manifest={}", manifest_path.display()),
             format!(
@@ -14393,10 +13713,8 @@ mod manifest_tests {
             "--service-name=bad/name".to_string(),
         ])
         .expect_err("invalid service name rejected");
-
         assert!(err.contains("--service-name"), "unexpected error: {err}");
     }
-
     #[test]
     fn moderation_runner_canary_emits_payload_free_rollout_evidence() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -14413,7 +13731,6 @@ mod manifest_tests {
         .expect("write manifest");
         fs::write(&payload_path, payload).expect("write payload");
         let (runner_url, handle) = moderation_runner_canary_fixture_server(manifest.clone());
-
         moderation_runner_canary(vec![
             format!("--manifest={}", manifest_path.display()),
             format!("--runner-url={runner_url}"),
@@ -14435,7 +13752,6 @@ mod manifest_tests {
         ])
         .expect("runner canary succeeds");
         handle.join().expect("runner canary fixture exits");
-
         let rendered = fs::read_to_string(&out_path).expect("read canary output");
         assert!(!rendered.contains("payload_b64"));
         let value: Value = norito::json::from_str(&rendered).expect("parse canary output");
@@ -14517,7 +13833,6 @@ mod manifest_tests {
         assert!(object.get("runner_status").is_some());
         assert!(object.get("screening_result").is_some());
     }
-
     fn runner_canary_args_without_process_isolation() -> Vec<String> {
         vec![
             "--manifest=/nonexistent/repro.json".to_owned(),
@@ -14531,25 +13846,21 @@ mod manifest_tests {
             "--deployment-context-reviewed=true".to_owned(),
         ]
     }
-
     #[test]
     fn moderation_runner_canary_rejects_missing_or_forged_isolation_evidence() {
         let error = moderation_runner_canary(runner_canary_args_without_process_isolation())
             .expect_err("missing isolation enforcement must fail before I/O");
         assert!(error.contains("--process-isolation-enforcement"));
-
         let error = moderation_runner_canary(vec![
             "--process-isolation-enforcement=application_claim".to_owned(),
         ])
         .expect_err("unsupported isolation enforcement must fail");
         assert!(error.contains("must be one of"));
-
         let error = moderation_runner_canary(vec![
             "--process-isolation-attestation-digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
         ])
         .expect_err("repeated placeholder attestation must fail");
         assert!(error.contains("placeholder"));
-
         let mut args = runner_canary_args_without_process_isolation();
         args.extend([
             "--process-isolation-enforcement=systemd_ip_filter".to_owned(),
@@ -14561,7 +13872,6 @@ mod manifest_tests {
             .expect_err("future-dated isolation attestation must fail before I/O");
         assert!(error.contains("must not be after"));
     }
-
     #[test]
     fn moderation_canary_response_reader_enforces_declared_and_streamed_caps() {
         fn response_with_body(
@@ -14594,14 +13904,12 @@ mod manifest_tests {
                 .expect("fixture response");
             (response, handle)
         }
-
         let (response, handle) =
             response_with_body(Some(MODERATION_CANARY_MAX_RESPONSE_BYTES + 1), 0);
         let error = read_moderation_canary_response_bounded(response, "declared oversized")
             .expect_err("oversized Content-Length must fail before body allocation");
         handle.join().expect("fixture server exits");
         assert!(error.contains("declared a response larger"));
-
         let streamed_len = usize::try_from(MODERATION_CANARY_MAX_RESPONSE_BYTES + 1)
             .expect("fixture cap fits usize");
         let (response, handle) = response_with_body(None, streamed_len);
@@ -14610,7 +13918,6 @@ mod manifest_tests {
         handle.join().expect("fixture server exits");
         assert!(error.contains("response exceeded"));
     }
-
     #[test]
     fn moderation_runner_canary_rejects_manifest_mismatch() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -14636,7 +13943,6 @@ mod manifest_tests {
             "http://127.0.0.1:9194/v1/sorafs/moderation/runner/screen",
             screening_response,
         );
-
         let err = moderation_runner_canary_evidence_json(ModerationRunnerCanaryEvidenceInput {
             manifest: &expected_manifest,
             runner_url: "http://127.0.0.1:9194",
@@ -14659,21 +13965,17 @@ mod manifest_tests {
             screening_probe,
         })
         .expect_err("runner hash mismatch rejected");
-
         assert!(err.contains("runner hash"), "unexpected error: {err}");
     }
-
     #[test]
     fn moderation_committee_status_endpoint_reports_locked_manifest() {
         let manifest = signed_moderation_repro_manifest_fixture();
         let service = moderation_committee_fixture_service(manifest.clone(), 2);
         let request =
             moderation_runner_http_request("GET", "/v1/sorafs/moderation/committee/status", &[]);
-
         let response =
             moderation_committee_http_response(&service, &request, service.max_body_bytes);
         let (header, body) = moderation_runner_response_parts(&response);
-
         assert!(header.starts_with("HTTP/1.1 200 OK"));
         assert_eq!(
             body.get("schema").and_then(Value::as_str),
@@ -14693,7 +13995,6 @@ mod manifest_tests {
             Some("network_capable_process_policy_required")
         );
     }
-
     #[test]
     fn moderation_committee_aggregate_endpoint_matches_local_aggregation() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -14718,7 +14019,6 @@ mod manifest_tests {
             "/v1/sorafs/moderation/committee/aggregate",
             &body,
         );
-
         let response =
             moderation_committee_http_response(&service, &request, service.max_body_bytes);
         let (header, actual) = moderation_runner_response_parts(&response);
@@ -14737,7 +14037,6 @@ mod manifest_tests {
             Some("service aggregate"),
         )
         .expect("expected aggregate");
-
         assert!(header.starts_with("HTTP/1.1 200 OK"));
         assert_eq!(actual, expected);
         assert_eq!(
@@ -14749,7 +14048,6 @@ mod manifest_tests {
             Some("quarantine")
         );
     }
-
     #[test]
     fn moderation_committee_aggregate_endpoint_rejects_payload_bytes() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -14773,11 +14071,9 @@ mod manifest_tests {
             "/v1/sorafs/moderation/committee/aggregate",
             &body,
         );
-
         let response =
             moderation_committee_http_response(&service, &request, service.max_body_bytes);
         let (header, body) = moderation_runner_response_parts(&response);
-
         assert!(header.starts_with("HTTP/1.1 400 Bad Request"));
         assert!(
             body.get("message")
@@ -14786,7 +14082,6 @@ mod manifest_tests {
                 .contains("payload-free")
         );
     }
-
     #[test]
     fn moderation_committee_bundle_emits_supervised_artifacts() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -14798,7 +14093,6 @@ mod manifest_tests {
             norito::json::to_json_pretty(&manifest).expect("render manifest json"),
         )
         .expect("write manifest");
-
         moderation_committee_bundle(vec![
             format!("--manifest={}", manifest_path.display()),
             "--quorum=2".to_string(),
@@ -14811,7 +14105,6 @@ mod manifest_tests {
             "--service-group=sorafs-committee".to_string(),
         ])
         .expect("committee bundle succeeds");
-
         let manifest_copy = bundle_dir.join("manifest.json");
         let env = fs::read_to_string(bundle_dir.join("committee.env")).expect("committee env");
         let run_script = fs::read_to_string(bundle_dir.join("run.sh")).expect("run script");
@@ -14824,7 +14117,6 @@ mod manifest_tests {
             &fs::read_to_string(bundle_dir.join("bundle.json")).expect("bundle metadata"),
         )
         .expect("parse bundle metadata");
-
         assert!(manifest_copy.exists());
         assert!(env.contains("SORAFS_CLI='/opt/sora/bin/sorafs_cli'"));
         assert!(env.contains("SORAFS_COMMITTEE_LISTEN='127.0.0.1:9197'"));
@@ -14882,7 +14174,6 @@ mod manifest_tests {
             assert_ne!(mode & 0o111, 0, "run.sh should be executable");
         }
     }
-
     #[test]
     fn moderation_committee_canary_emits_payload_free_rollout_evidence() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -14914,7 +14205,6 @@ mod manifest_tests {
         );
         let (committee_url, handle) =
             moderation_committee_canary_fixture_server(manifest.clone(), 2);
-
         moderation_committee_canary(vec![
             format!("--manifest={}", manifest_path.display()),
             format!("--committee-url={committee_url}"),
@@ -14937,7 +14227,6 @@ mod manifest_tests {
         ])
         .expect("committee canary succeeds");
         handle.join().expect("committee canary fixture exits");
-
         let rendered = fs::read_to_string(&out_path).expect("read canary output");
         assert!(!rendered.contains("payload_b64"));
         let value: Value = norito::json::from_str(&rendered).expect("parse canary output");
@@ -15029,7 +14318,6 @@ mod manifest_tests {
         assert!(object.get("committee_status").is_some());
         assert!(object.get("committee_aggregate").is_some());
     }
-
     #[test]
     fn moderation_committee_rejects_excessive_result_count_and_file_size() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -15041,7 +14329,6 @@ mod manifest_tests {
         let error = moderation_committee_aggregate_request_json(&service, &body)
             .expect_err("committee result inventory above the cap must fail");
         assert!(error.contains("accepts at most"));
-
         let temp = TempDir::new().expect("tempdir");
         let oversized = temp.path().join("oversized-result.json");
         fs::write(
@@ -15057,7 +14344,6 @@ mod manifest_tests {
             .expect_err("oversized committee result file must fail before parsing");
         assert!(error.contains("maximum"));
     }
-
     fn committee_canary_args_without_process_isolation() -> Vec<String> {
         vec![
             "--manifest=/nonexistent/repro.json".to_owned(),
@@ -15070,25 +14356,21 @@ mod manifest_tests {
             "--deployment-context-reviewed=true".to_owned(),
         ]
     }
-
     #[test]
     fn moderation_committee_canary_rejects_missing_or_forged_isolation_evidence() {
         let error = moderation_committee_canary(committee_canary_args_without_process_isolation())
             .expect_err("missing isolation enforcement must fail before I/O");
         assert!(error.contains("--process-isolation-enforcement"));
-
         let error = moderation_committee_canary(vec![
             "--process-isolation-enforcement=application_claim".to_owned(),
         ])
         .expect_err("unsupported isolation enforcement must fail");
         assert!(error.contains("must be one of"));
-
         let error = moderation_committee_canary(vec![
             "--process-isolation-attestation-digest=abababababababababababababababababababababababababababababababab".to_owned(),
         ])
         .expect_err("repeated-half placeholder attestation must fail");
         assert!(error.contains("placeholder"));
-
         let mut args = committee_canary_args_without_process_isolation();
         args.extend([
             "--process-isolation-enforcement=host_firewall".to_owned(),
@@ -15100,7 +14382,6 @@ mod manifest_tests {
             .expect_err("future-dated isolation attestation must fail before I/O");
         assert!(error.contains("must not be after"));
     }
-
     #[test]
     fn moderation_committee_canary_rejects_manifest_mismatch() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -15132,7 +14413,6 @@ mod manifest_tests {
             "http://127.0.0.1:9196/v1/sorafs/moderation/committee/aggregate",
             aggregate_response,
         );
-
         let err =
             moderation_committee_canary_evidence_json(ModerationCommitteeCanaryEvidenceInput {
                 manifest: &expected_manifest,
@@ -15159,10 +14439,8 @@ mod manifest_tests {
                 aggregate_probe,
             })
             .expect_err("runner hash mismatch rejected");
-
         assert!(err.contains("runner hash"), "unexpected error: {err}");
     }
-
     #[test]
     fn moderation_committee_run_aggregates_runner_results() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -15192,7 +14470,6 @@ mod manifest_tests {
             &result_c,
             &moderation_committee_result_fixture(&manifest, payload, subject, 8_700, 1_800_003_003),
         );
-
         moderation_committee_run(vec![
             format!("--manifest={}", manifest_path.display()),
             "--quorum=2".to_string(),
@@ -15203,7 +14480,6 @@ mod manifest_tests {
             format!("--json-out={}", out_path.display()),
         ])
         .expect("committee aggregate succeeds");
-
         let rendered = fs::read_to_string(&out_path).expect("read committee output");
         assert!(!rendered.contains("payload_b64"));
         let value: Value = norito::json::from_str(&rendered).expect("parse committee output");
@@ -15244,7 +14520,6 @@ mod manifest_tests {
         };
         assert_eq!(member_results.len(), 3);
     }
-
     #[test]
     fn moderation_committee_run_rejects_manifest_mismatch() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -15269,7 +14544,6 @@ mod manifest_tests {
             Value::from(hex_encode([0xFF; 16])),
         );
         write_moderation_json(&result_path, &result);
-
         let err = moderation_committee_run(vec![
             format!("--manifest={}", manifest_path.display()),
             "--quorum=1".to_string(),
@@ -15277,10 +14551,8 @@ mod manifest_tests {
             format!("--json-out={}", out_path.display()),
         ])
         .expect_err("manifest mismatch rejected");
-
         assert!(err.contains("manifest_id_hex"), "unexpected error: {err}");
     }
-
     #[test]
     fn moderation_committee_run_rejects_insufficient_quorum() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -15313,7 +14585,6 @@ mod manifest_tests {
                 1_800_003_021,
             ),
         );
-
         let err = moderation_committee_run(vec![
             format!("--manifest={}", manifest_path.display()),
             "--quorum=3".to_string(),
@@ -15321,10 +14592,8 @@ mod manifest_tests {
             format!("--result={}", result_b.display()),
         ])
         .expect_err("insufficient quorum rejected");
-
         assert!(err.contains("quorum 3"), "unexpected error: {err}");
     }
-
     #[test]
     fn moderation_local_runner_rejects_inverted_thresholds() {
         let mut manifest = signed_moderation_repro_manifest_fixture();
@@ -15332,16 +14601,13 @@ mod manifest_tests {
             quarantine: 9_000,
             escalate: 8_000,
         };
-
         let err = validate_moderation_local_runner_manifest(&manifest)
             .expect_err("inverted thresholds rejected");
-
         assert!(
             err.contains("quarantine threshold 9000 exceeds escalate threshold 8000"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn taikai_cache_override_accepts_raw_object() {
         let value = sample_taikai_cache_value();
@@ -15350,7 +14616,6 @@ mod manifest_tests {
         assert_eq!(config.hot_capacity_bytes, 8_388_608);
         assert_eq!(config.qos.priority_rate_bps, 83_886_080);
     }
-
     #[test]
     fn taikai_cache_override_accepts_wrapped_object() {
         let raw = sample_taikai_cache_value();
@@ -15359,13 +14624,11 @@ mod manifest_tests {
         let parsed = parse_taikai_cache_override(Value::Object(map)).expect("wrapped cache parses");
         assert!(parsed.is_some());
     }
-
     #[test]
     fn taikai_cache_override_allows_null() {
         let parsed = parse_taikai_cache_override(Value::Null).expect("null parses");
         assert!(parsed.is_none());
     }
-
     #[test]
     fn taikai_cache_override_rejects_invalid_payload() {
         let invalid = norito::json::from_str(r#"{"hot_capacity_bytes": 1}"#).expect("parse");
@@ -15375,7 +14638,6 @@ mod manifest_tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn appeal_disburse_requires_juror_list() {
         let refund_account = account_string(10);
@@ -15394,7 +14656,6 @@ mod manifest_tests {
             "unexpected error: {err}"
         );
     }
-
     fn sample_taikai_cache_value() -> Value {
         norito::json::from_str(
             r#"{
@@ -15415,12 +14676,10 @@ mod manifest_tests {
         .expect("sample Taikai cache JSON parses")
     }
 }
-
 enum InputSummary {
     File { path: PathBuf, bytes: u64 },
     Directory { path: PathBuf, file_count: u64 },
 }
-
 #[derive(Clone, Debug)]
 struct GatewayProviderSpec {
     name: String,
@@ -15430,12 +14689,10 @@ struct GatewayProviderSpec {
     stream_token_b64: String,
     privacy_events_url: Option<String>,
 }
-
 struct PlanWithHandle {
     plan: CarBuildPlan,
     chunker_handle: String,
 }
-
 fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
     let mut summary_source: Option<JsonSource> = None;
     let mut manifest_out: Option<PathBuf> = None;
@@ -15444,7 +14701,6 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
     let mut pin_storage_class: Option<StorageClass> = None;
     let mut pin_retention_epoch: Option<u64> = None;
     let mut metadata_entries: Vec<(String, String)> = Vec::new();
-
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
@@ -15479,19 +14735,16 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let summary_source = summary_source.ok_or_else(|| {
         "missing required `--summary=PATH` for `sorafs_cli manifest build`".to_string()
     })?;
     let manifest_out = manifest_out.ok_or_else(|| {
         "missing required `--manifest-out=PATH` for `sorafs_cli manifest build`".to_string()
     })?;
-
     let summary_json = summary_source.read()?;
     let summary_obj = summary_json
         .as_object()
         .ok_or_else(|| "summary must be a JSON object".to_string())?;
-
     let chunker_handle = summary_obj
         .get("chunker_handle")
         .and_then(Value::as_str)
@@ -15502,7 +14755,6 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
                 "summary references unknown chunker handle `{chunker_handle}`; refresh the registry"
             )
         })?;
-
     let content_length = summary_obj
         .get("payload_bytes")
         .and_then(Value::as_u64)
@@ -15529,7 +14781,6 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
         .ok_or_else(|| "summary missing `por_root_hex`".to_string())?;
     let por_root = parse_digest_hex(por_root_hex)
         .map_err(|err| format!("invalid `por_root_hex` in summary: {err}"))?;
-
     let root_cids = summary_obj
         .get("root_cids_hex")
         .and_then(Value::as_array)
@@ -15540,14 +14791,12 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
         .ok_or_else(|| "summary `root_cids_hex` array is empty".to_string())?;
     let root_cid = parse_hex_vec(first_root_hex)
         .map_err(|err| format!("invalid root CID hex `{first_root_hex}`: {err}"))?;
-
     let chunking_profile = ChunkingProfileV1::from_descriptor(descriptor);
     let pin_policy = PinPolicy {
         min_replicas: pin_min_replicas.unwrap_or(1),
         storage_class: pin_storage_class.unwrap_or_default(),
         retention_epoch: pin_retention_epoch.unwrap_or(86_400),
     };
-
     let mut builder = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
@@ -15558,17 +14807,14 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
         .car_digest(car_digest)
         .car_size(car_size)
         .pin_policy(pin_policy);
-
     if !metadata_entries.is_empty() {
         builder = builder.extend_metadata(metadata_entries.clone());
     }
-
     let manifest = builder.build().map_err(format_manifest_error)?;
     let manifest_bytes = manifest
         .encode()
         .map_err(|err| format!("failed to encode manifest: {err}"))?;
     write_bytes(&manifest_out, &manifest_bytes)?;
-
     if let Some(json_path) = manifest_json_out.as_ref() {
         let rendered = to_string_pretty(
             &norito::json::to_value(&manifest)
@@ -15577,11 +14823,9 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to render manifest JSON: {err}"))?;
         write_text(json_path, rendered.as_bytes())?;
     }
-
     let manifest_digest = manifest
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
-
     let mut summary = Map::new();
     summary.insert(
         "manifest_path".into(),
@@ -15622,18 +14866,15 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
             ),
         );
     }
-
     let rendered = to_string_pretty(&Value::Object(summary))
         .map_err(|err| format!("failed to render manifest summary: {err}"))?;
     println!("{rendered}");
     Ok(())
 }
-
 fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
     let mut source_spec: Option<String> = None;
     let mut bytecode_out: Option<PathBuf> = None;
     let mut summary_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
@@ -15649,7 +14890,6 @@ fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let source_spec = source_spec.ok_or_else(|| {
         "missing required `--source=PATH` for `sorafs_cli norito build`".to_string()
     })?;
@@ -15668,7 +14908,6 @@ fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
             .map_err(|err| format!("failed to read Kotodama source `{}`: {err}", path.display()))?;
         (contents, Some(path))
     };
-
     let source_name = source_path
         .as_ref()
         .map(|path| path.display().to_string())
@@ -15689,9 +14928,7 @@ fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("compiler produced invalid Kotodama artifact: {err}"))?
         .metadata
         .abi_version;
-
     write_bytes(&bytecode_out, &bytecode)?;
-
     let mut summary = Map::new();
     summary.insert(
         "bytecode_path".into(),
@@ -15715,7 +14952,6 @@ fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
             summary.insert("source_kind".into(), Value::from("stdin"));
         }
     }
-
     let summary_value = Value::Object(summary);
     let rendered = to_string_pretty(&summary_value)
         .map_err(|err| format!("failed to render summary: {err}"))?;
@@ -15725,7 +14961,6 @@ fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut chunk_plan_source: Option<JsonSource> = None;
@@ -15743,7 +14978,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let mut successor_hex: Option<String> = None;
     let mut summary_out: Option<PathBuf> = None;
     let mut response_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
@@ -15802,7 +15036,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli manifest submit`".to_string()
     })?;
@@ -15817,7 +15050,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     })?;
     authority_network_prefix =
         authority_network_prefix.or_else(|| infer_i105_network_prefix(&authority_str));
-
     let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
         format!(
             "failed to read manifest `{}`: {err}",
@@ -15830,10 +15062,8 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
     let manifest_digest_hex = hex_encode(manifest_digest.as_bytes());
-
     let torii_base_url =
         Url::parse(&torii_url).map_err(|err| format!("invalid `--torii-url` value: {err}"))?;
-
     let plan_specs = if let Some(source) = chunk_plan_source {
         let value = source.read()?;
         Some(
@@ -15844,7 +15074,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     } else {
         None
     };
-
     let plan_chunk_count = plan_specs.as_ref().map(|specs| specs.len() as u64);
     let plan_digest = plan_specs
         .as_ref()
@@ -15905,9 +15134,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
             );
         }
     };
-
     let alias_inputs = alias_inputs_from_flags(alias_namespace, alias_name, alias_proof_path)?;
-
     let successor_digest = match successor_hex.as_ref() {
         Some(hex) => Some(
             parse_digest_hex(hex)
@@ -15919,7 +15146,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
-
     let submission = submit_pin_register(
         &ManifestSubmitRequest {
             client: &client,
@@ -15932,11 +15158,9 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         &manifest,
         successor_digest,
     )?;
-
     if let Some(path) = response_out {
         write_bytes(&path, &submission.response_bytes)?;
     }
-
     let mut summary = Map::new();
     summary.insert("torii_url".into(), Value::from(torii_url));
     summary.insert(
@@ -15997,7 +15221,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         summary.insert("successor_of_hex".into(), Value::from(hex.clone()));
     }
     summary.insert("torii_response".into(), submission.response_value);
-
     let rendered = to_string_pretty(&Value::Object(summary))
         .map_err(|err| format!("failed to render summary: {err}"))?;
     println!("{rendered}");
@@ -16006,21 +15229,17 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StorageFileEntryOwned {
     path: Vec<String>,
     size: u64,
 }
-
 type StoragePinPayload = (Vec<u8>, Option<Vec<StorageFileEntryOwned>>, &'static str);
-
 fn manifest_root_cid_hex(manifest: &ManifestV1) -> Result<String, String> {
     let root_cid = ManifestRootCid::try_from_slice(&manifest.root_cid)
         .map_err(|err| format!("manifest root_cid is not canonical: {err}"))?;
     Ok(hex_encode(root_cid.as_bytes()))
 }
-
 fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, String> {
     if manifest.chunking.profile_id.0 != 0 {
         let descriptor =
@@ -16050,7 +15269,6 @@ fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, St
         }
         return Ok(profile);
     }
-
     if manifest.chunking.namespace != "inline"
         || manifest.chunking.name != "inline"
         || manifest.chunking.semver != "0.0.0"
@@ -16075,14 +15293,12 @@ fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, St
     }
     Ok(profile)
 }
-
 fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut payload_path: Option<PathBuf> = None;
     let mut payload_out: Option<PathBuf> = None;
     let mut files_out: Option<PathBuf> = None;
     let mut summary_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
@@ -16100,7 +15316,6 @@ fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli storage prepare`".to_string()
     })?;
@@ -16113,7 +15328,6 @@ fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
     let files_out = files_out.ok_or_else(|| {
         "missing required `--files-out=PATH` for `sorafs_cli storage prepare`".to_string()
     })?;
-
     let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
         format!(
             "failed to read manifest `{}`: {err}",
@@ -16127,21 +15341,17 @@ fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
     let manifest_digest_hex = hex_encode(manifest_digest.as_bytes());
     let manifest_id_hex = manifest_root_cid_hex(&manifest)?;
-
     let (payload_bytes, files, payload_kind) = load_storage_pin_payload(&payload_path, &manifest)?;
     let payload_bytes_len = u64::try_from(payload_bytes.len())
         .map_err(|_| "payload exceeds host limits".to_string())?;
     let payload_file_count = files.as_ref().map_or(0_u64, |entries| {
         u64::try_from(entries.len()).unwrap_or(u64::MAX)
     });
-
     write_bytes(&payload_out, &payload_bytes)?;
-
     let files_value = storage_files_to_json_value(files.as_deref());
     let files_rendered = to_string_pretty(&files_value)
         .map_err(|err| format!("failed to render storage files JSON: {err}"))?;
     write_text(&files_out, files_rendered.as_bytes())?;
-
     let mut summary = Map::new();
     summary.insert(
         "manifest_path".into(),
@@ -16174,24 +15384,20 @@ fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
             manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
         )),
     );
-
     let rendered = to_string_pretty(&Value::Object(summary))
         .map_err(|err| format!("failed to render summary: {err}"))?;
     println!("{rendered}");
     if let Some(path) = summary_out {
         write_text(&path, rendered.as_bytes())?;
     }
-
     Ok(())
 }
-
 fn load_storage_pin_payload(
     input: &Path,
     manifest: &ManifestV1,
 ) -> Result<StoragePinPayload, String> {
     let metadata = fs::metadata(input)
         .map_err(|err| format!("failed to access payload `{}`: {err}", input.display()))?;
-
     if metadata.is_dir() {
         let profile = chunk_profile_from_manifest(manifest)?;
         let (plan, payload) = CarBuildPlan::from_directory_with_profile(input, profile)
@@ -16206,16 +15412,13 @@ fn load_storage_pin_payload(
             .collect();
         return Ok((payload, Some(files), "directory"));
     }
-
     if metadata.is_file() {
         let payload = fs::read(input)
             .map_err(|err| format!("failed to read payload `{}`: {err}", input.display()))?;
         return Ok((payload, None, "file"));
     }
-
     Err("payload input must be a file or directory".to_string())
 }
-
 fn storage_files_to_json_value(files: Option<&[StorageFileEntryOwned]>) -> Value {
     match files {
         Some(entries) => Value::Array(
@@ -16235,14 +15438,12 @@ fn storage_files_to_json_value(files: Option<&[StorageFileEntryOwned]>) -> Value
         None => Value::Null,
     }
 }
-
 fn decode_response_value_or_text(response: &[u8]) -> Value {
     match from_slice(response) {
         Ok(value) => value,
         Err(_) => Value::from(String::from_utf8_lossy(response).to_string()),
     }
 }
-
 fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut chunk_plan_source: Option<JsonSource> = None;
@@ -16251,7 +15452,6 @@ fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
     let mut successor_hex: Option<String> = None;
     let mut alias_hint: Option<String> = None;
     let mut proposal_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
@@ -16273,14 +15473,12 @@ fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli manifest proposal`".to_string()
     })?;
     let proposal_out = proposal_out.ok_or_else(|| {
         "missing required `--proposal-out=PATH` for `sorafs_cli manifest proposal`".to_string()
     })?;
-
     let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
         format!(
             "failed to read manifest `{}`: {err}",
@@ -16292,7 +15490,6 @@ fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
     let manifest_digest = manifest
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
-
     let plan_specs = if let Some(source) = chunk_plan_source {
         let value = source.read()?;
         Some(
@@ -16303,7 +15500,6 @@ fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
     } else {
         None
     };
-
     let chunk_digest = match (chunk_digest_hex_arg, plan_specs.as_ref()) {
         (Some(hex), Some(specs)) => {
             let parsed =
@@ -16328,7 +15524,6 @@ fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
             )
         }
     };
-
     let successor_bytes = match successor_hex {
         Some(hex) => Some(
             parse_digest_hex(&hex)
@@ -16336,7 +15531,6 @@ fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
         ),
         None => None,
     };
-
     let proposal_value = build_manifest_proposal_summary(ManifestProposalSummary {
         manifest_path: &manifest_path,
         manifest: &manifest,
@@ -16346,7 +15540,6 @@ fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
         alias_hint: alias_hint.as_deref(),
         successor_bytes,
     })?;
-
     let mut rendered = to_string_pretty(&proposal_value)
         .map_err(|err| format!("failed to render proposal JSON: {err}"))?;
     if !rendered.ends_with('\n') {
@@ -16357,14 +15550,12 @@ fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
     println!("wrote {}", proposal_out.display());
     Ok(())
 }
-
 fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut car_path: Option<PathBuf> = None;
     let mut chunk_plan_source: Option<JsonSource> = None;
     let mut chunk_plan_label: Option<String> = None;
     let mut summary_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
@@ -16384,13 +15575,11 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli proof verify`".to_string()
     })?;
     let car_path = car_path
         .ok_or_else(|| "missing required `--car=PATH` for `sorafs_cli proof verify`".to_string())?;
-
     let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
         format!(
             "failed to read manifest `{}`: {err}",
@@ -16402,7 +15591,6 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
     let manifest_digest = manifest
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
-
     let car_bytes = fs::read(&car_path)
         .map_err(|err| format!("failed to read CAR archive `{}`: {err}", car_path.display()))?;
     let resolved_plan = if let Some(source) = chunk_plan_source {
@@ -16418,13 +15606,11 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
         CarVerifier::verify_full_car(&manifest, &car_bytes)
     }
     .map_err(|err| format!("failed to verify CAR archive: {err}"))?;
-
     let payload_digest_hex = hex_encode(report.chunk_store.payload_digest().as_bytes());
     let chunk_digest_sha3 = chunk_digest_sha3_from_chunks(report.chunk_store.chunks());
     let chunk_digest_hex = hex_encode(chunk_digest_sha3);
     let car_payload_digest_hex = hex_encode(report.stats.car_payload_digest.as_bytes());
     let car_digest_hex = hex_encode(report.stats.car_archive_digest.as_bytes());
-
     let mut summary = Map::new();
     summary.insert(
         "manifest_path".into(),
@@ -16501,7 +15687,6 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
         "car_payload_bytes".into(),
         Value::from(report.stats.payload_bytes),
     );
-
     let summary_value = Value::Object(summary);
     let rendered = to_string_pretty(&summary_value)
         .map_err(|err| format!("failed to render summary: {err}"))?;
@@ -16511,25 +15696,24 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-
 struct ReputationRequestAuth {
-    account_literal: String,
+    account_header_value: String,
+    network_id: NetworkId,
     key_pair: KeyPair,
 }
-
-struct ReputationRequestHeaders {
-    account_literal: String,
+struct ReputationRequestHeaders<'a> {
+    account_header_value: &'a str,
     signature_base64: String,
     timestamp_ms: u64,
     nonce: String,
 }
-
 fn parse_reputation_auth_option(
     key: &str,
     value: &str,
     context: &str,
     account_literal: &mut Option<String>,
     private_key_path: &mut Option<PathBuf>,
+    network_id: &mut Option<NetworkId>,
 ) -> Result<bool, String> {
     match key {
         "--auth-account" => {
@@ -16546,13 +15730,19 @@ fn parse_reputation_auth_option(
             }
             Ok(true)
         }
+        "--network-id" => {
+            *network_id = Some(value.parse().map_err(|_| {
+                format!("`--network-id` must be a canonical genesis hash for `{context}`")
+            })?);
+            Ok(true)
+        }
         _ => Ok(false),
     }
 }
-
 fn load_reputation_request_auth(
     account_literal: Option<String>,
     private_key_path: Option<PathBuf>,
+    network_id: Option<NetworkId>,
     context: &str,
 ) -> Result<ReputationRequestAuth, String> {
     let account_literal = account_literal
@@ -16560,12 +15750,13 @@ fn load_reputation_request_auth(
     let private_key_path = private_key_path.ok_or_else(|| {
         format!("missing required `--auth-private-key-file=PATH` for `{context}`")
     })?;
+    let network_id = network_id
+        .ok_or_else(|| format!("missing required `--network-id=GENESIS_HASH` for `{context}`"))?;
     if private_key_path.as_os_str().is_empty() {
         return Err(format!(
             "`--auth-private-key-file` must not be empty for `{context}`"
         ));
     }
-
     let account = parse_reputation_auth_account(&account_literal, context)?;
     let private_key = load_reputation_auth_private_key(&private_key_path, context)?;
     let key_pair = KeyPair::from_private_key(private_key).map_err(|_| {
@@ -16579,13 +15770,15 @@ fn load_reputation_request_auth(
             "`--auth-private-key-file` does not control `--auth-account` for `{context}`"
         ));
     }
-
+    let account_header_value = account
+        .to_canonical_hex()
+        .map_err(|_| format!("failed to encode `--auth-account` for `{context}`"))?;
     Ok(ReputationRequestAuth {
-        account_literal,
+        account_header_value,
+        network_id,
         key_pair,
     })
 }
-
 fn parse_reputation_auth_account(raw: &str, context: &str) -> Result<AccountId, String> {
     if raw.is_empty() || raw.trim() != raw {
         return Err(format!(
@@ -16617,44 +15810,35 @@ fn parse_reputation_auth_account(raw: &str, context: &str) -> Result<AccountId, 
     }
     Ok(account)
 }
-
 #[cfg(unix)]
 type ReputationAuthFileIdentity = (u64, u64);
 #[cfg(windows)]
 type ReputationAuthFileIdentity = (Option<u32>, Option<u64>);
 #[cfg(not(any(unix, windows)))]
 type ReputationAuthFileIdentity = ();
-
 #[cfg(unix)]
 fn reputation_auth_file_identity(metadata: &FsMetadata) -> ReputationAuthFileIdentity {
     (metadata.dev(), metadata.ino())
 }
-
 #[cfg(windows)]
 fn reputation_auth_file_identity(metadata: &FsMetadata) -> ReputationAuthFileIdentity {
     use std::os::windows::fs::MetadataExt as _;
-
     (metadata.volume_serial_number(), metadata.file_index())
 }
-
 #[cfg(not(any(unix, windows)))]
 fn reputation_auth_file_identity(_metadata: &FsMetadata) -> ReputationAuthFileIdentity {}
-
 #[cfg(unix)]
 const fn reputation_auth_file_identity_available(_identity: ReputationAuthFileIdentity) -> bool {
     true
 }
-
 #[cfg(windows)]
 const fn reputation_auth_file_identity_available(identity: ReputationAuthFileIdentity) -> bool {
     identity.0.is_some() && identity.1.is_some()
 }
-
 #[cfg(not(any(unix, windows)))]
 const fn reputation_auth_file_identity_available(_identity: ReputationAuthFileIdentity) -> bool {
     false
 }
-
 fn reputation_auth_file_is_single_link(metadata: &FsMetadata) -> bool {
     #[cfg(unix)]
     {
@@ -16663,7 +15847,6 @@ fn reputation_auth_file_is_single_link(metadata: &FsMetadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt as _;
-
         metadata.number_of_links() == Some(1)
     }
     #[cfg(not(any(unix, windows)))]
@@ -16672,24 +15855,19 @@ fn reputation_auth_file_is_single_link(metadata: &FsMetadata) -> bool {
         false
     }
 }
-
 #[cfg(windows)]
 fn reputation_auth_file_is_reparse_point(metadata: &FsMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
-
 #[cfg(not(windows))]
 fn reputation_auth_file_is_reparse_point(_metadata: &FsMetadata) -> bool {
     false
 }
-
 fn reputation_auth_file_is_indirect(metadata: &FsMetadata) -> bool {
     metadata.file_type().is_symlink() || reputation_auth_file_is_reparse_point(metadata)
 }
-
 fn validate_reputation_auth_file_metadata(metadata: &FsMetadata) -> Result<(), String> {
     if reputation_auth_file_is_indirect(metadata)
         || !metadata.file_type().is_file()
@@ -16714,7 +15892,6 @@ fn validate_reputation_auth_file_metadata(metadata: &FsMetadata) -> Result<(), S
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn reputation_auth_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
     reputation_auth_file_identity(left) == reputation_auth_file_identity(right)
@@ -16729,11 +15906,9 @@ fn reputation_auth_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> 
         && left.uid() == right.uid()
         && left.gid() == right.gid()
 }
-
 #[cfg(windows)]
 fn reputation_auth_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     reputation_auth_file_identity_available(reputation_auth_file_identity(left))
         && reputation_auth_file_identity(left) == reputation_auth_file_identity(right)
         && left.number_of_links() == Some(1)
@@ -16743,12 +15918,10 @@ fn reputation_auth_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> 
         && left.creation_time() == right.creation_time()
         && left.file_attributes() == right.file_attributes()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn reputation_auth_metadata_unchanged(_left: &FsMetadata, _right: &FsMetadata) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn open_reputation_auth_private_key(path: &Path) -> Result<File, String> {
     let mut options = OpenOptions::new();
@@ -16758,7 +15931,6 @@ fn open_reputation_auth_private_key(path: &Path) -> Result<File, String> {
         .open(path)
         .map_err(|_| "failed to securely open reputation authentication private key".to_owned())
 }
-
 #[cfg(windows)]
 fn open_reputation_auth_private_key(path: &Path) -> Result<File, String> {
     use std::os::windows::fs::OpenOptionsExt as _;
@@ -16772,7 +15944,6 @@ fn open_reputation_auth_private_key(path: &Path) -> Result<File, String> {
         .open(path)
         .map_err(|_| "failed to securely open reputation authentication private key".to_owned())
 }
-
 #[cfg(not(any(unix, windows)))]
 fn open_reputation_auth_private_key(_path: &Path) -> Result<File, String> {
     Err(
@@ -16780,7 +15951,6 @@ fn open_reputation_auth_private_key(_path: &Path) -> Result<File, String> {
             .to_owned(),
     )
 }
-
 fn read_reputation_auth_private_key(path: &Path) -> Result<Vec<u8>, String> {
     let before = fs::symlink_metadata(path)
         .map_err(|_| "failed to inspect reputation authentication private key".to_owned())?;
@@ -16793,7 +15963,6 @@ fn read_reputation_auth_private_key(path: &Path) -> Result<Vec<u8>, String> {
     let expected_len = usize::try_from(before.len()).map_err(|_| {
         "reputation authentication private key length is not representable on this host".to_owned()
     })?;
-
     let mut file = open_reputation_auth_private_key(path)?;
     let opened = file
         .metadata()
@@ -16804,7 +15973,6 @@ fn read_reputation_auth_private_key(path: &Path) -> Result<Vec<u8>, String> {
             "reputation authentication private key changed between inspection and open".to_owned(),
         );
     }
-
     let mut bytes = vec![0_u8; expected_len];
     file.read_exact(&mut bytes).map_err(|error| {
         if error.kind() == io::ErrorKind::UnexpectedEof {
@@ -16823,7 +15991,6 @@ fn read_reputation_auth_private_key(path: &Path) -> Result<Vec<u8>, String> {
             "reputation authentication private key changed length while being read".to_owned(),
         );
     }
-
     let after_file = file.metadata().map_err(|_| {
         "failed to re-inspect opened reputation authentication private key".to_owned()
     })?;
@@ -16839,7 +16006,6 @@ fn read_reputation_auth_private_key(path: &Path) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
-
 fn load_reputation_auth_private_key(path: &Path, context: &str) -> Result<PrivateKey, String> {
     let mut bytes = read_reputation_auth_private_key(path)?;
     let parsed = (|| {
@@ -16867,39 +16033,7 @@ fn load_reputation_auth_private_key(path: &Path, context: &str) -> Result<Privat
     bytes.fill(0);
     parsed
 }
-
-fn canonical_reputation_query(raw: Option<&str>) -> String {
-    let Some(raw) = raw else {
-        return String::new();
-    };
-    if raw.is_empty() {
-        return String::new();
-    }
-    let mut pairs: Vec<(String, String)> = url::form_urlencoded::parse(raw.as_bytes())
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect();
-    pairs.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
-    let mut serializer = Serializer::new(String::new());
-    for (key, value) in pairs {
-        serializer.append_pair(&key, &value);
-    }
-    serializer.finish()
-}
-
-fn canonical_reputation_request_message(endpoint: &Url, timestamp_ms: u64, nonce: &str) -> Vec<u8> {
-    let query = canonical_reputation_query(endpoint.query());
-    let body_hash = Sha256::digest([]);
-    format!(
-        "GET\n{}\n{}\n{}\n{}\n{}",
-        endpoint.path(),
-        query,
-        hex_encode(body_hash),
-        timestamp_ms,
-        nonce
-    )
-    .into_bytes()
-}
-
+include!("sorafs_cli/reputation_canonical_request.rs");
 fn reputation_request_timestamp_ms_at(now: SystemTime) -> Result<u64, String> {
     let elapsed = now.duration_since(UNIX_EPOCH).map_err(|_| {
         "system clock is before the Unix epoch; cannot sign reputation request".to_owned()
@@ -16909,7 +16043,6 @@ fn reputation_request_timestamp_ms_at(now: SystemTime) -> Result<u64, String> {
         .try_into()
         .map_err(|_| "system clock does not fit the reputation timestamp field".to_owned())
 }
-
 fn reputation_request_nonce_with_rng<R>(rng: &mut R) -> Result<String, String>
 where
     R: rand::rand_core::TryCryptoRng + ?Sized,
@@ -16919,33 +16052,32 @@ where
         .map_err(|_| "OS RNG failed while signing reputation request".to_owned())?;
     Ok(BASE64_URL_SAFE_NO_PAD.encode(nonce))
 }
-
-fn reputation_request_headers_with_rng_at<R>(
-    auth: &ReputationRequestAuth,
+fn reputation_request_headers_with_rng_at<'a, R>(
+    auth: &'a ReputationRequestAuth,
     endpoint: &Url,
     now: SystemTime,
     rng: &mut R,
-) -> Result<ReputationRequestHeaders, String>
+) -> Result<ReputationRequestHeaders<'a>, String>
 where
     R: rand::rand_core::TryCryptoRng + ?Sized,
 {
     let timestamp_ms = reputation_request_timestamp_ms_at(now)?;
     let nonce = reputation_request_nonce_with_rng(rng)?;
-    let message = canonical_reputation_request_message(endpoint, timestamp_ms, &nonce);
+    let message =
+        canonical_reputation_request_message(&auth.network_id, endpoint, timestamp_ms, &nonce)?;
     let signature = Signature::try_new(auth.key_pair.private_key(), &message)
         .map_err(|_| "failed to sign reputation request".to_owned())?;
     Ok(ReputationRequestHeaders {
-        account_literal: auth.account_literal.clone(),
+        account_header_value: &auth.account_header_value,
         signature_base64: BASE64_STANDARD.encode(signature.payload()),
         timestamp_ms,
         nonce,
     })
 }
-
-fn reputation_request_headers(
-    auth: &ReputationRequestAuth,
+fn reputation_request_headers<'a>(
+    auth: &'a ReputationRequestAuth,
     endpoint: &Url,
-) -> Result<ReputationRequestHeaders, String> {
+) -> Result<ReputationRequestHeaders<'a>, String> {
     reputation_request_headers_with_rng_at(
         auth,
         endpoint,
@@ -16953,7 +16085,6 @@ fn reputation_request_headers(
         &mut rand::rngs::OsRng,
     )
 }
-
 fn reputation_http_client() -> Result<HttpClient, String> {
     HttpClient::builder()
         .timeout(Duration::from_secs(30))
@@ -16968,7 +16099,6 @@ fn reputation_http_client() -> Result<HttpClient, String> {
         .build()
         .map_err(|err| format!("failed to construct reputation HTTP client: {err}"))
 }
-
 fn send_reputation_request(
     client: &HttpClient,
     endpoint: &Url,
@@ -16979,7 +16109,7 @@ fn send_reputation_request(
         .get(endpoint.clone())
         .header("Accept", "application/json")
         .header(ACCEPT_ENCODING, "identity")
-        .header(REPUTATION_HEADER_ACCOUNT, headers.account_literal)
+        .header(REPUTATION_HEADER_ACCOUNT, headers.account_header_value)
         .header(REPUTATION_HEADER_SIGNATURE, headers.signature_base64)
         .header(
             REPUTATION_HEADER_TIMESTAMP_MS,
@@ -16989,7 +16119,6 @@ fn send_reputation_request(
         .send()
         .map_err(|_| "reputation request failed".to_owned())
 }
-
 fn reject_duplicate_reputation_option(
     seen: &mut BTreeSet<String>,
     key: &str,
@@ -17001,7 +16130,6 @@ fn reject_duplicate_reputation_option(
         Err(format!("duplicate `{key}` for `{context}`"))
     }
 }
-
 fn parse_reputation_provider_id(raw: &str) -> Result<String, String> {
     let bytes = raw.as_bytes();
     if bytes.is_empty()
@@ -17018,17 +16146,15 @@ fn parse_reputation_provider_id(raw: &str) -> Result<String, String> {
     }
     Ok(raw.to_owned())
 }
-
 fn reputation_snapshot(raw_args: Vec<String>) -> Result<(), String> {
     const CONTEXT: &str = "sorafs_cli reputation snapshot";
-
     let mut torii_url: Option<String> = None;
     let mut output: Option<PathBuf> = None;
     let mut summary_out: Option<PathBuf> = None;
     let mut auth_account: Option<String> = None;
     let mut auth_private_key_path: Option<PathBuf> = None;
+    let mut network_id: Option<NetworkId> = None;
     let mut seen_options = BTreeSet::new();
-
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
@@ -17040,6 +16166,7 @@ fn reputation_snapshot(raw_args: Vec<String>) -> Result<(), String> {
             CONTEXT,
             &mut auth_account,
             &mut auth_private_key_path,
+            &mut network_id,
         )? {
             continue;
         }
@@ -17054,11 +16181,11 @@ fn reputation_snapshot(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let torii_url = torii_url.ok_or_else(|| {
         "missing required `--torii-url=URL` for `sorafs_cli reputation snapshot`".to_string()
     })?;
-    let auth = load_reputation_request_auth(auth_account, auth_private_key_path, CONTEXT)?;
+    let auth =
+        load_reputation_request_auth(auth_account, auth_private_key_path, network_id, CONTEXT)?;
     let client = reputation_http_client()?;
     let endpoint = reputation_endpoint(&torii_url, "v1/sorafs/reputation/latest")?;
     let response = send_reputation_request(&client, &endpoint, &auth)
@@ -17067,18 +16194,16 @@ fn reputation_snapshot(raw_args: Vec<String>) -> Result<(), String> {
     let output_path = output.as_deref().or(summary_out.as_deref());
     emit_reputation_json(value, output_path)
 }
-
 fn reputation_fetch(raw_args: Vec<String>) -> Result<(), String> {
     const CONTEXT: &str = "sorafs_cli reputation fetch";
-
     let mut torii_url: Option<String> = None;
     let mut provider_id: Option<String> = None;
     let mut format = ReputationFetchFormat::Table;
     let mut summary_out: Option<PathBuf> = None;
     let mut auth_account: Option<String> = None;
     let mut auth_private_key_path: Option<PathBuf> = None;
+    let mut network_id: Option<NetworkId> = None;
     let mut seen_options = BTreeSet::new();
-
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
@@ -17090,6 +16215,7 @@ fn reputation_fetch(raw_args: Vec<String>) -> Result<(), String> {
             CONTEXT,
             &mut auth_account,
             &mut auth_private_key_path,
+            &mut network_id,
         )? {
             continue;
         }
@@ -17105,7 +16231,6 @@ fn reputation_fetch(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let torii_url = torii_url.ok_or_else(|| {
         "missing required `--torii-url=URL` for `sorafs_cli reputation fetch`".to_string()
     })?;
@@ -17114,7 +16239,8 @@ fn reputation_fetch(raw_args: Vec<String>) -> Result<(), String> {
             "missing required `--provider-id=ID` for `sorafs_cli reputation fetch`".to_string()
         })
         .and_then(|value| parse_reputation_provider_id(&value))?;
-    let auth = load_reputation_request_auth(auth_account, auth_private_key_path, CONTEXT)?;
+    let auth =
+        load_reputation_request_auth(auth_account, auth_private_key_path, network_id, CONTEXT)?;
     let client = reputation_http_client()?;
     let route = format!("v1/sorafs/reputation/providers/{provider_id}");
     let endpoint = reputation_endpoint(&torii_url, &route)?;
@@ -17136,10 +16262,8 @@ fn reputation_fetch(raw_args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn reputation_watch(raw_args: Vec<String>) -> Result<(), String> {
     const CONTEXT: &str = "sorafs_cli reputation watch";
-
     let mut torii_url: Option<String> = None;
     let mut since: Option<u64> = None;
     let mut limit: Option<u32> = None;
@@ -17148,8 +16272,8 @@ fn reputation_watch(raw_args: Vec<String>) -> Result<(), String> {
     let mut summary_out: Option<PathBuf> = None;
     let mut auth_account: Option<String> = None;
     let mut auth_private_key_path: Option<PathBuf> = None;
+    let mut network_id: Option<NetworkId> = None;
     let mut seen_options = BTreeSet::new();
-
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
@@ -17161,6 +16285,7 @@ fn reputation_watch(raw_args: Vec<String>) -> Result<(), String> {
             CONTEXT,
             &mut auth_account,
             &mut auth_private_key_path,
+            &mut network_id,
         )? {
             continue;
         }
@@ -17196,11 +16321,11 @@ fn reputation_watch(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let torii_url = torii_url.ok_or_else(|| {
         "missing required `--torii-url=URL` for `sorafs_cli reputation watch`".to_string()
     })?;
-    let auth = load_reputation_request_auth(auth_account, auth_private_key_path, CONTEXT)?;
+    let auth =
+        load_reputation_request_auth(auth_account, auth_private_key_path, network_id, CONTEXT)?;
     let client = reputation_http_client()?;
     let final_value = run_reputation_watch(
         &torii_url,
@@ -17219,7 +16344,6 @@ fn reputation_watch(raw_args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn run_reputation_watch<F>(
     torii_url: &str,
     since: Option<u64>,
@@ -17249,13 +16373,11 @@ where
         thread::sleep(Duration::from_millis(poll_interval_ms));
     }
 }
-
 #[derive(Clone, Copy)]
 enum ReputationFetchFormat {
     Table,
     Json,
 }
-
 impl ReputationFetchFormat {
     fn parse(raw: &str) -> Result<Self, String> {
         match raw {
@@ -17265,7 +16387,6 @@ impl ReputationFetchFormat {
         }
     }
 }
-
 fn read_reputation_snapshot(path: &Path) -> Result<ReputationSnapshotV1, String> {
     let snapshot_bytes = fs::read(path).map_err(|err| {
         format!(
@@ -17280,7 +16401,6 @@ fn read_reputation_snapshot(path: &Path) -> Result<ReputationSnapshotV1, String>
         .map_err(|_| "invalid reputation snapshot".to_owned())?;
     Ok(snapshot)
 }
-
 fn reputation_endpoint(torii_url: &str, route: &str) -> Result<Url, String> {
     if torii_url.is_empty() || torii_url.trim() != torii_url {
         return Err("`--torii-url` must be an exact canonical URL without padding".to_owned());
@@ -17321,7 +16441,6 @@ fn reputation_endpoint(torii_url: &str, route: &str) -> Result<Url, String> {
         .join(route)
         .map_err(|_| "failed to build reputation endpoint URL".to_owned())
 }
-
 fn reputation_events_endpoint(
     torii_url: &str,
     since: Option<u64>,
@@ -17341,7 +16460,6 @@ fn reputation_events_endpoint(
     }
     Ok(endpoint)
 }
-
 fn read_reputation_response_bounded(
     response: reqwest::blocking::Response,
     context: &str,
@@ -17424,7 +16542,6 @@ fn read_reputation_response_bounded(
     }
     Ok((status, body))
 }
-
 fn read_json_response(
     response: reqwest::blocking::Response,
     context: &str,
@@ -17435,7 +16552,6 @@ fn read_json_response(
     }
     from_slice(&body).map_err(|_| format!("failed to decode Torii {context} JSON"))
 }
-
 fn emit_reputation_json(value: Value, output: Option<&Path>) -> Result<(), String> {
     let rendered = to_string_pretty(&value)
         .map_err(|err| format!("failed to render reputation JSON: {err}"))?;
@@ -17445,13 +16561,11 @@ fn emit_reputation_json(value: Value, output: Option<&Path>) -> Result<(), Strin
     }
     Ok(())
 }
-
 fn write_reputation_json(path: &Path, value: &Value) -> Result<(), String> {
     let rendered = to_string_pretty(value)
         .map_err(|err| format!("failed to render reputation JSON: {err}"))?;
     write_text(path, rendered.as_bytes())
 }
-
 fn reputation_provider_table(value: &Value) -> Result<String, String> {
     let provider = value
         .get("provider")
@@ -17496,16 +16610,13 @@ fn reputation_provider_table(value: &Value) -> Result<String, String> {
         "provider_id\tscore_bps\tleaf_index\tleaf_count\tproof_siblings\tmerkle_root_hex\n{provider_id}\t{score_bps}\t{leaf_index}\t{leaf_count}\t{sibling_count}\t{merkle_root}"
     ))
 }
-
 fn reputation_verify(raw_args: Vec<String>) -> Result<(), String> {
     const CONTEXT: &str = "sorafs_cli reputation verify";
-
     let mut snapshot_path: Option<PathBuf> = None;
     let mut provider_id: Option<String> = None;
     let mut proof_path: Option<PathBuf> = None;
     let mut summary_out: Option<PathBuf> = None;
     let mut seen_options = BTreeSet::new();
-
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
@@ -17523,7 +16634,6 @@ fn reputation_verify(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let snapshot_path = snapshot_path.ok_or_else(|| {
         "missing required `--snapshot=PATH` for `sorafs_cli reputation verify`".to_string()
     })?;
@@ -17536,9 +16646,7 @@ fn reputation_verify(raw_args: Vec<String>) -> Result<(), String> {
                 .to_string(),
         );
     }
-
     let snapshot = read_reputation_snapshot(&snapshot_path)?;
-
     let mut summary = Map::new();
     summary.insert(
         "snapshot_path".into(),
@@ -17575,7 +16683,6 @@ fn reputation_verify(raw_args: Vec<String>) -> Result<(), String> {
         Value::from(u64::from(snapshot.current_score_weight_bps)),
     );
     summary.insert("valid".into(), Value::from(true));
-
     if let (Some(provider_id), Some(proof_path)) = (provider_id, proof_path) {
         let provider = snapshot
             .providers
@@ -17595,7 +16702,6 @@ fn reputation_verify(raw_args: Vec<String>) -> Result<(), String> {
         proof
             .verify(provider, snapshot.merkle_root)
             .map_err(|_| "invalid reputation proof".to_owned())?;
-
         summary.insert(
             "provider_id".into(),
             Value::from(provider.provider_id.clone()),
@@ -17618,7 +16724,6 @@ fn reputation_verify(raw_args: Vec<String>) -> Result<(), String> {
         );
         summary.insert("proof_verified".into(), Value::from(true));
     }
-
     let summary_value = Value::Object(summary);
     let rendered = to_string_pretty(&summary_value)
         .map_err(|err| format!("failed to render reputation summary: {err}"))?;
@@ -17628,21 +16733,18 @@ fn reputation_verify(raw_args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-
 const PROOF_STREAM_ROUTE_V1: &str = "/v1/sorafs/proof/stream";
 const PIN_MANIFEST_ROUTE_PREFIX_V1: &str = "/v1/sorafs/pin/";
 const PIN_MANIFEST_RESPONSE_MAX_BYTES: u64 = 1024 * 1024;
 const PROOF_STREAM_HTTP_TIMEOUT: Duration = Duration::from_secs(120);
 const PROOF_STREAM_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const PROOF_STREAM_BEARER_TOKEN_MAX_BYTES: usize = 8 * 1024;
-
 #[derive(Clone, Copy, Debug)]
 struct ValidatedPinManifestV1 {
     finalized_height: u64,
     finalized_block_hash: [u8; 32],
     por_root: [u8; 32],
 }
-
 fn proof_stream_endpoint(
     torii_url: Option<&str>,
     gateway_url: Option<&str>,
@@ -17705,7 +16807,6 @@ fn proof_stream_endpoint(
     }
     Ok(parsed)
 }
-
 fn proof_stream_pin_manifest_endpoint(stream_endpoint: &Url, manifest_digest_hex: &str) -> Url {
     let mut endpoint = stream_endpoint.clone();
     endpoint.set_path(&format!(
@@ -17713,7 +16814,6 @@ fn proof_stream_pin_manifest_endpoint(stream_endpoint: &Url, manifest_digest_hex
     ));
     endpoint
 }
-
 fn redacted_endpoint(endpoint: &Url) -> String {
     format!(
         "{}{}",
@@ -17721,7 +16821,6 @@ fn redacted_endpoint(endpoint: &Url) -> String {
         endpoint.path()
     )
 }
-
 fn is_canonical_proof_stream_bearer_token(token: &str) -> bool {
     if token.is_empty()
         || token.len() > PROOF_STREAM_BEARER_TOKEN_MAX_BYTES
@@ -17756,7 +16855,6 @@ fn is_canonical_proof_stream_bearer_token(token: &str) -> bool {
     }
     saw_token_byte
 }
-
 fn proof_stream_bearer_token_from_env(env_name: &str) -> Result<String, String> {
     let name_bytes = env_name.as_bytes();
     if name_bytes.is_empty()
@@ -17779,7 +16877,6 @@ fn proof_stream_bearer_token_from_env(env_name: &str) -> Result<String, String> 
     }
     Ok(token)
 }
-
 fn proof_stream_http_client() -> Result<HttpClient, String> {
     HttpClient::builder()
         .https_only(true)
@@ -17796,7 +16893,6 @@ fn proof_stream_http_client() -> Result<HttpClient, String> {
         .build()
         .map_err(|error| format!("failed to construct hardened proof-stream HTTP client: {error}"))
 }
-
 fn fetch_finalized_pin_manifest(
     client: &HttpClient,
     endpoint: &Url,
@@ -17856,7 +16952,6 @@ fn fetch_finalized_pin_manifest(
     from_slice(&body)
         .map_err(|_| "failed to decode finalized native pin-manifest record".to_string())
 }
-
 fn validate_finalized_pin_manifest(
     local_manifest: &ManifestV1,
     local_manifest_digest: &[u8; 32],
@@ -17913,7 +17008,6 @@ fn validate_finalized_pin_manifest(
         por_root: record.por_root,
     })
 }
-
 fn payload_free_proof_stream_event(item: &ProofStreamItem) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -17980,7 +17074,6 @@ fn payload_free_proof_stream_event(item: &ProofStreamItem) -> Value {
     }
     Value::Object(map)
 }
-
 fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut torii_url: Option<String> = None;
@@ -17999,7 +17092,6 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let mut evidence_dir: Option<PathBuf> = None;
     let mut emit_events = false;
     let mut seen_options = BTreeSet::new();
-
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
@@ -18051,12 +17143,10 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli proof stream`".to_string()
     })?;
     let endpoint = proof_stream_endpoint(torii_url.as_deref(), endpoint_url.as_deref())?;
-
     let provider_id = if let Some(raw_hex) = provider_id_hex {
         let bytes = parse_digest_hex(&raw_hex)
             .map_err(|err| format!("invalid `--provider-id-hex` value: {err}"))?;
@@ -18072,7 +17162,6 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             "missing required `--provider-id-hex=HEX32` for `sorafs_cli proof stream`".to_string(),
         );
     };
-
     let proof_kind = proof_kind_arg
         .as_deref()
         .map(|raw| {
@@ -18184,7 +17273,6 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             "`--orchestrator-job-id-hex=HEX16` is required when `--proof-kind=potr`".to_string(),
         );
     }
-
     let manifest_byte_limit = u64::try_from(MAX_MANIFEST_ENCODED_BYTES)
         .map_err(|_| "manifest byte limit does not fit u64".to_string())?;
     let manifest_bytes = read_file_bounded(&manifest_path, manifest_byte_limit, "manifest")?;
@@ -18216,7 +17304,6 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         ProofKind::Por => Some(validated_pin.por_root),
         ProofKind::Pdp | ProofKind::Potr => None,
     };
-
     let nonce = if let Some(encoded) = nonce_b64 {
         decode_nonce_b64(&encoded)?
     } else {
@@ -18229,7 +17316,6 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             Some(&provider_id),
         )
     };
-
     let request_model = ProofStreamRequestV1 {
         manifest_digest: *manifest_digest.as_bytes(),
         provider_id: parse_digest_hex(&provider_id)
@@ -18258,14 +17344,12 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|error| format!("invalid proof stream request: {error}"))?;
     let request_body = to_vec(&request)
         .map_err(|error| format!("failed to encode canonical proof stream request: {error}"))?;
-
     let builder = client
         .post(endpoint.clone())
         .bearer_auth(&bearer_token)
         .header(CONTENT_TYPE, "application/json")
         .header("Accept", "application/x-ndjson")
         .header(ACCEPT_ENCODING, "identity");
-
     let response = builder
         .body(request_body)
         .send()
@@ -18295,11 +17379,9 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             "gateway ignored `Accept-Encoding: identity` for the proof stream response".to_string(),
         );
     }
-
     let reader = BufReader::new(response);
     let mut metrics = ProofStreamMetrics::default();
     let mut pending_events = Vec::new();
-
     for item in ProofStreamNdjsonReader::new(reader, &verification_context) {
         let item =
             item.map_err(|err| format!("gateway returned an invalid proof stream: {err}"))?;
@@ -18319,7 +17401,6 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             metrics.failure_total
         ));
     }
-
     let mut summary_map = Map::new();
     let endpoint_label = redacted_endpoint(&endpoint);
     summary_map.insert("endpoint".into(), Value::from(endpoint_label.clone()));
@@ -18396,7 +17477,6 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         );
         summary_map.insert("verification_failures".into(), Value::from(0_u64));
     }
-
     let summary_value = Value::Object(summary_map);
     let rendered = to_string_pretty(&summary_value)
         .map_err(|err| format!("failed to render proof stream summary: {err}"))?;
@@ -18417,10 +17497,8 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             &endpoint_label,
         )?;
     }
-
     Ok(())
 }
-
 fn write_proof_stream_evidence(
     dir: &Path,
     manifest_path: &Path,
@@ -18433,7 +17511,6 @@ fn write_proof_stream_evidence(
     let summary_file_name = "proof_stream_summary.json";
     let summary_path = dir.join(summary_file_name);
     write_text(&summary_path, summary_json.as_bytes())?;
-
     let manifest_copy_name = manifest_path
         .file_name()
         .map(|value| value.to_string_lossy().into_owned())
@@ -18441,12 +17518,10 @@ fn write_proof_stream_evidence(
         .unwrap_or_else(|| "manifest.norito".to_string());
     let manifest_copy_path = dir.join(&manifest_copy_name);
     write_bytes(&manifest_copy_path, manifest_bytes)?;
-
     let captured_at_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0))
         .as_millis() as u64;
-
     let mut metadata = Map::new();
     metadata.insert("captured_at_unix_ms".into(), Value::from(captured_at_ms));
     metadata.insert("sorafs_cli_version".into(), Value::from(SORAFS_CLI_VERSION));
@@ -18466,7 +17541,6 @@ fn write_proof_stream_evidence(
     write_text(&dir.join("metadata.json"), metadata_json.as_bytes())?;
     Ok(())
 }
-
 fn prepare_clean_dir(dir: &Path) -> Result<(), String> {
     if dir.exists() {
         if !dir.is_dir() {
@@ -18489,13 +17563,11 @@ fn prepare_clean_dir(dir: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GovernanceDagOutputFormat {
     Table,
     Json,
 }
-
 impl GovernanceDagOutputFormat {
     fn parse(raw: &str) -> Result<Self, String> {
         match raw {
@@ -18507,7 +17579,6 @@ impl GovernanceDagOutputFormat {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 struct GovernanceDagArtifact {
     path: PathBuf,
@@ -18521,7 +17592,6 @@ struct GovernanceDagArtifact {
     decode_error: Option<String>,
     outcome: Option<ValidationOutcomeV1>,
 }
-
 #[derive(Debug, Clone)]
 struct GovernanceDagNodeSummary {
     node_cid: Vec<u8>,
@@ -18536,7 +17606,6 @@ struct GovernanceDagNodeSummary {
     submission_origin: Option<&'static str>,
     payload_kind: &'static str,
 }
-
 fn governance_submission_summary(
     node: &GovernanceLogNodeV1,
 ) -> (Option<String>, Option<&'static str>) {
@@ -18549,7 +17618,6 @@ fn governance_submission_summary(
             )
         })
 }
-
 fn insert_governance_submission_summary(
     object: &mut Map,
     publisher_account_digest_hex: Option<&str>,
@@ -18564,24 +17632,20 @@ fn insert_governance_submission_summary(
         origin.map_or(Value::Null, Value::from),
     );
 }
-
 fn insert_governance_node_submission_summary(object: &mut Map, node: &GovernanceLogNodeV1) {
     let (publisher_account_digest_hex, origin) = governance_submission_summary(node);
     insert_governance_submission_summary(object, publisher_account_digest_hex.as_deref(), origin);
 }
-
 #[derive(Debug, Clone)]
 struct GovernanceDagVerifyOptions {
     require_chain: bool,
     require_sidecars: bool,
     expected_head_cid: Option<Vec<u8>>,
 }
-
 fn governance_dag_list(raw_args: Vec<String>) -> Result<(), String> {
     let mut root: Option<PathBuf> = None;
     let mut format = GovernanceDagOutputFormat::Table;
     let mut summary_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(governance_usage());
@@ -18600,7 +17664,6 @@ fn governance_dag_list(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let root = root.ok_or_else(|| {
         "missing required `--root=DIR` for `sorafs_cli governance dag list`".to_string()
     })?;
@@ -18617,12 +17680,10 @@ fn governance_dag_list(raw_args: Vec<String>) -> Result<(), String> {
         }
     }
 }
-
 fn governance_dag_show(raw_args: Vec<String>) -> Result<(), String> {
     let mut node: Option<PathBuf> = None;
     let mut format = GovernanceDagOutputFormat::Table;
     let mut summary_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(governance_usage());
@@ -18641,7 +17702,6 @@ fn governance_dag_show(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let node = node.ok_or_else(|| {
         "missing required `--node=PATH` for `sorafs_cli governance dag show`".to_string()
     })?;
@@ -18659,14 +17719,12 @@ fn governance_dag_show(raw_args: Vec<String>) -> Result<(), String> {
         }
     }
 }
-
 fn governance_dag_verify(raw_args: Vec<String>) -> Result<(), String> {
     let mut root: Option<PathBuf> = None;
     let mut require_chain = false;
     let mut require_sidecars = false;
     let mut head_cid: Option<Vec<u8>> = None;
     let mut summary_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(governance_usage());
@@ -18696,7 +17754,6 @@ fn governance_dag_verify(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let root = root.ok_or_else(|| {
         "missing required `--root=DIR` for `sorafs_cli governance dag verify`".to_string()
     })?;
@@ -18720,14 +17777,12 @@ fn governance_dag_verify(raw_args: Vec<String>) -> Result<(), String> {
         Err("governance DAG verification failed".to_string())
     }
 }
-
 fn governance_dag_export(raw_args: Vec<String>) -> Result<(), String> {
     let mut root: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut require_chain = false;
     let mut require_sidecars = false;
     let mut head_cid: Option<Vec<u8>> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(governance_usage());
@@ -18757,7 +17812,6 @@ fn governance_dag_export(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let root = root.ok_or_else(|| {
         "missing required `--root=DIR` for `sorafs_cli governance dag export`".to_string()
     })?;
@@ -18778,7 +17832,6 @@ fn governance_dag_export(raw_args: Vec<String>) -> Result<(), String> {
         print_governance_dag_json(&verify_summary)?;
         return Err("governance DAG export refused invalid archive".to_string());
     }
-
     prepare_clean_dir(&out)?;
     let nodes_root = out.join("nodes");
     let mut exported_files = Vec::new();
@@ -18800,7 +17853,6 @@ fn governance_dag_export(raw_args: Vec<String>) -> Result<(), String> {
         let mut sidecar = artifact.blake3_hex.clone();
         sidecar.push('\n');
         write_text(&sidecar_path, sidecar.as_bytes())?;
-
         let mut file = Map::new();
         file.insert(
             "path".into(),
@@ -18819,7 +17871,6 @@ fn governance_dag_export(raw_args: Vec<String>) -> Result<(), String> {
         }
         exported_files.push(Value::Object(file));
     }
-
     let mut manifest = Map::new();
     manifest.insert(
         "schema".into(),
@@ -18839,7 +17890,6 @@ fn governance_dag_export(raw_args: Vec<String>) -> Result<(), String> {
     write_governance_dag_json(&out.join("manifest.json"), &manifest_value)?;
     print_governance_dag_json(&manifest_value)
 }
-
 fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
     let mut root: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
@@ -18853,7 +17903,6 @@ fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
     let mut car_out: Option<PathBuf> = None;
     let mut car_plan_out: Option<PathBuf> = None;
     let mut car_chunker_handle: Option<String> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(governance_usage());
@@ -18902,7 +17951,6 @@ fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let root = root.ok_or_else(|| {
         "missing required `--root=DIR` for `sorafs_cli governance dag build`".to_string()
     })?;
@@ -18928,7 +17976,6 @@ fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
     let seed = load_governance_dag_build_seed(key_hex.as_deref(), key_path.as_deref())?;
     let signing_key = SigningKey::from_bytes(&seed);
     let generated_at = generated_at.unwrap_or_else(governance_dag_now_secs);
-
     let artifacts = load_governance_dag_inventory(&root)?;
     let (ok, verify_summary, node_indices) = verify_governance_dag_inventory(
         &root,
@@ -18943,13 +17990,11 @@ fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
         print_governance_dag_json(&verify_summary)?;
         return Err("governance DAG build refused invalid node archive".to_string());
     }
-
     let ordered_indices = governance_dag_build_order(&artifacts, &node_indices);
     prepare_clean_dir(&out)?;
     let blocks_dir = out.join("blocks");
     fs::create_dir_all(&blocks_dir)
         .map_err(|err| format!("failed to create `{}`: {err}", blocks_dir.display()))?;
-
     let mut blocks = Vec::<GovernanceDagBlockV1>::with_capacity(ordered_indices.len());
     let mut block_files = Vec::<Value>::new();
     let mut car_files = Vec::<FileEntry>::new();
@@ -18978,7 +18023,6 @@ fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
             block_signature: empty_governance_dag_ed25519_signature(),
         };
         sign_governance_dag_block_cli(&mut block, &signing_key)?;
-
         let block_bytes = to_bytes(&block)
             .map_err(|err| format!("failed to encode governance DAG block: {err}"))?;
         let block_file_name = format!("{sequence:020}-{}.to", hex_encode(&block.block_cid));
@@ -18994,7 +18038,6 @@ fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
             &format!("{block_rel_path}.blake3"),
             block_sidecar_bytes,
         )?);
-
         let mut block_value = Map::new();
         block_value.insert("path".into(), Value::from(block_rel_path));
         block_value.insert("sequence".into(), Value::from(sequence));
@@ -19032,11 +18075,9 @@ fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
             Value::from(hex_encode(blake3_hash(&block_bytes).as_bytes())),
         );
         block_files.push(Value::Object(block_value));
-
         prev_block_cid = Some(block.block_cid.clone());
         blocks.push(block);
     }
-
     let head_block_cid = prev_block_cid.ok_or_else(|| {
         "governance DAG build found no validated governance nodes to build".to_string()
     })?;
@@ -19052,7 +18093,6 @@ fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
     sign_governance_dag_head_cli(&mut head, &signing_key)?;
     validate_governance_dag_head_against_chain_v1(&head, &blocks)
         .map_err(|err| format!("built governance DAG head failed validation: {err}"))?;
-
     let head_bytes =
         to_bytes(&head).map_err(|err| format!("failed to encode governance DAG head: {err}"))?;
     let head_path = out.join("head.to");
@@ -19063,7 +18103,6 @@ fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
         "head.to.blake3",
         head_sidecar_bytes,
     )?);
-
     let car_archive_summary = if let Some(car_path) = car_out.as_deref() {
         let handle = car_chunker_handle
             .as_deref()
@@ -19078,7 +18117,6 @@ fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
     } else {
         None
     };
-
     let mut summary = Map::new();
     summary.insert(
         "schema".into(),
@@ -19126,13 +18164,11 @@ fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
     }
     print_governance_dag_json(&summary_value)
 }
-
 fn governance_dag_verify_build(raw_args: Vec<String>) -> Result<(), String> {
     let mut root: Option<PathBuf> = None;
     let mut require_sidecars = false;
     let mut head_cid: Option<Vec<u8>> = None;
     let mut summary_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(governance_usage());
@@ -19155,7 +18191,6 @@ fn governance_dag_verify_build(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let root = root.ok_or_else(|| {
         "missing required `--root=DIR` for `sorafs_cli governance dag verify-build`".to_string()
     })?;
@@ -19171,7 +18206,6 @@ fn governance_dag_verify_build(raw_args: Vec<String>) -> Result<(), String> {
         Err("governance DAG build verification failed".to_string())
     }
 }
-
 fn governance_dag_rebuild_head(raw_args: Vec<String>) -> Result<(), String> {
     let mut root: Option<PathBuf> = None;
     let mut head_out: Option<PathBuf> = None;
@@ -19182,7 +18216,6 @@ fn governance_dag_rebuild_head(raw_args: Vec<String>) -> Result<(), String> {
     let mut checkpoint_cid: Option<Vec<u8>> = None;
     let mut require_sidecars = false;
     let mut summary_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(governance_usage());
@@ -19222,7 +18255,6 @@ fn governance_dag_rebuild_head(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let root = root.ok_or_else(|| {
         "missing required `--root=DIR` for `sorafs_cli governance dag rebuild-head`".to_string()
     })?;
@@ -19237,7 +18269,6 @@ fn governance_dag_rebuild_head(raw_args: Vec<String>) -> Result<(), String> {
     let seed = load_governance_dag_build_seed(key_hex.as_deref(), key_path.as_deref())?;
     let signing_key = SigningKey::from_bytes(&seed);
     let generated_at = generated_at.unwrap_or_else(governance_dag_now_secs);
-
     let (blocks, block_records, warnings) =
         load_governance_dag_block_snapshot(&root, require_sidecars)?;
     let head_block_cid = governance_dag_head_cid_from_blocks(&blocks)?;
@@ -19253,12 +18284,10 @@ fn governance_dag_rebuild_head(raw_args: Vec<String>) -> Result<(), String> {
     sign_governance_dag_head_cli(&mut head, &signing_key)?;
     validate_governance_dag_head_against_chain_v1(&head, &blocks)
         .map_err(|err| format!("rebuilt governance DAG head failed validation: {err}"))?;
-
     let head_bytes = to_bytes(&head)
         .map_err(|err| format!("failed to encode rebuilt governance DAG head: {err}"))?;
     write_text(&head_out, &head_bytes)?;
     write_governance_blake3_sidecar(&head_out, &head_bytes)?;
-
     let mut summary = Map::new();
     summary.insert(
         "schema".into(),
@@ -19308,7 +18337,6 @@ fn governance_dag_rebuild_head(raw_args: Vec<String>) -> Result<(), String> {
     }
     print_governance_dag_json(&summary_value)
 }
-
 fn governance_dag_checkpoint(raw_args: Vec<String>) -> Result<(), String> {
     let mut root: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
@@ -19317,7 +18345,6 @@ fn governance_dag_checkpoint(raw_args: Vec<String>) -> Result<(), String> {
     let mut require_sidecars = false;
     let mut head_cid: Option<Vec<u8>> = None;
     let mut generated_at: Option<u64> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(governance_usage());
@@ -19349,21 +18376,18 @@ fn governance_dag_checkpoint(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let root = root.ok_or_else(|| {
         "missing required `--root=DIR` for `sorafs_cli governance dag checkpoint`".to_string()
     })?;
     let out = out.ok_or_else(|| {
         "missing required `--out=PATH` for `sorafs_cli governance dag checkpoint`".to_string()
     })?;
-
     let (ok, verification) =
         verify_governance_dag_build_snapshot(&root, require_sidecars, head_cid.as_deref());
     if !ok {
         print_governance_dag_json(&verification)?;
         return Err("governance DAG checkpoint refused invalid build snapshot".to_string());
     }
-
     let head_path = root.join("head.to");
     let (head_bytes, head_len, head_blake3_hex) =
         governance_dag_read_digest_file(&head_path, "governance DAG checkpoint head")?;
@@ -19373,7 +18397,6 @@ fn governance_dag_checkpoint(raw_args: Vec<String>) -> Result<(), String> {
             head_path.display()
         )
     })?;
-
     let mut head_value = Map::new();
     head_value.insert("path".into(), Value::from("head.to"));
     head_value.insert(
@@ -19403,7 +18426,6 @@ fn governance_dag_checkpoint(raw_args: Vec<String>) -> Result<(), String> {
             .map(hex_encode)
             .map_or(Value::Null, Value::from),
     );
-
     let car_value = if let Some(path) = car_path.as_deref() {
         let (_, encoded_len, blake3_hex) =
             governance_dag_read_digest_file(path, "governance DAG checkpoint CAR")?;
@@ -19416,7 +18438,6 @@ fn governance_dag_checkpoint(raw_args: Vec<String>) -> Result<(), String> {
     } else {
         None
     };
-
     let mirror_index_value = if let Some(path) = mirror_index_path.as_deref() {
         let (bytes, encoded_len, blake3_hex) =
             governance_dag_read_digest_file(path, "governance DAG checkpoint mirror index")?;
@@ -19465,7 +18486,6 @@ fn governance_dag_checkpoint(raw_args: Vec<String>) -> Result<(), String> {
                 head.block_count
             ));
         }
-
         let mut value = Map::new();
         value.insert("path".into(), Value::from(path.display().to_string()));
         value.insert("encoded_len".into(), Value::from(encoded_len));
@@ -19483,7 +18503,6 @@ fn governance_dag_checkpoint(raw_args: Vec<String>) -> Result<(), String> {
     } else {
         None
     };
-
     let mut summary = Map::new();
     summary.insert(
         "schema".into(),
@@ -19529,7 +18548,6 @@ fn governance_dag_checkpoint(raw_args: Vec<String>) -> Result<(), String> {
     write_governance_dag_json(&out, &summary_value)?;
     print_governance_dag_json(&summary_value)
 }
-
 fn governance_dag_checkpoint_verify(raw_args: Vec<String>) -> Result<(), String> {
     let mut checkpoint_path: Option<PathBuf> = None;
     let mut root_override: Option<PathBuf> = None;
@@ -19537,7 +18555,6 @@ fn governance_dag_checkpoint_verify(raw_args: Vec<String>) -> Result<(), String>
     let mut mirror_index_override: Option<PathBuf> = None;
     let mut require_sidecars = false;
     let mut summary_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(governance_usage());
@@ -19562,7 +18579,6 @@ fn governance_dag_checkpoint_verify(raw_args: Vec<String>) -> Result<(), String>
             }
         }
     }
-
     let checkpoint_path = checkpoint_path.ok_or_else(|| {
         "missing required `--checkpoint=PATH` for `sorafs_cli governance dag checkpoint-verify`"
             .to_string()
@@ -19575,7 +18591,6 @@ fn governance_dag_checkpoint_verify(raw_args: Vec<String>) -> Result<(), String>
             checkpoint_path.display()
         )
     })?;
-
     let mut errors = Vec::<Value>::new();
     if checkpoint.get("schema").and_then(Value::as_str)
         != Some("sorafs.governance_dag.checkpoint.v1")
@@ -19586,7 +18601,6 @@ fn governance_dag_checkpoint_verify(raw_args: Vec<String>) -> Result<(), String>
             "checkpoint manifest has unsupported schema",
         ));
     }
-
     let mut checkpoint_file_value = Map::new();
     checkpoint_file_value.insert(
         "path".into(),
@@ -19594,7 +18608,6 @@ fn governance_dag_checkpoint_verify(raw_args: Vec<String>) -> Result<(), String>
     );
     checkpoint_file_value.insert("encoded_len".into(), Value::from(checkpoint_len));
     checkpoint_file_value.insert("blake3".into(), Value::from(checkpoint_blake3_hex));
-
     let expected_head_cid_hex = checkpoint
         .get("head")
         .and_then(|head| head.get("head_block_cid_hex"))
@@ -19621,7 +18634,6 @@ fn governance_dag_checkpoint_verify(raw_args: Vec<String>) -> Result<(), String>
             None
         }
     };
-
     let root_path = match root_override {
         Some(path) => Some(path),
         None => checkpoint
@@ -19666,7 +18678,6 @@ fn governance_dag_checkpoint_verify(raw_args: Vec<String>) -> Result<(), String>
         ));
     }
     root_value.insert("verification".into(), root_verification);
-
     let car_check = governance_dag_checkpoint_optional_artifact_check(
         &checkpoint,
         car_override.as_deref(),
@@ -19692,7 +18703,6 @@ fn governance_dag_checkpoint_verify(raw_args: Vec<String>) -> Result<(), String>
             &mut errors,
         );
     }
-
     let mut summary = Map::new();
     summary.insert(
         "schema".into(),
@@ -19725,7 +18735,6 @@ fn governance_dag_checkpoint_verify(raw_args: Vec<String>) -> Result<(), String>
         Err("governance DAG checkpoint verification failed".to_string())
     }
 }
-
 fn governance_dag_checkpoint_recover(raw_args: Vec<String>) -> Result<(), String> {
     let mut checkpoint_path: Option<PathBuf> = None;
     let mut root: Option<PathBuf> = None;
@@ -19733,7 +18742,6 @@ fn governance_dag_checkpoint_recover(raw_args: Vec<String>) -> Result<(), String
     let mut car_path: Option<PathBuf> = None;
     let mut require_sidecars = false;
     let mut summary_out: Option<PathBuf> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(governance_usage());
@@ -19758,7 +18766,6 @@ fn governance_dag_checkpoint_recover(raw_args: Vec<String>) -> Result<(), String
             }
         }
     }
-
     let checkpoint_path = checkpoint_path.ok_or_else(|| {
         "missing required `--checkpoint=PATH` for `sorafs_cli governance dag checkpoint-recover`"
             .to_string()
@@ -19771,7 +18778,6 @@ fn governance_dag_checkpoint_recover(raw_args: Vec<String>) -> Result<(), String
         "missing required `--out=PATH` for `sorafs_cli governance dag checkpoint-recover`"
             .to_string()
     })?;
-
     let (checkpoint_bytes, checkpoint_len, checkpoint_blake3_hex) =
         governance_dag_read_digest_file(&checkpoint_path, "governance DAG checkpoint manifest")?;
     let checkpoint: Value = from_slice(&checkpoint_bytes).map_err(|err| {
@@ -19780,7 +18786,6 @@ fn governance_dag_checkpoint_recover(raw_args: Vec<String>) -> Result<(), String
             checkpoint_path.display()
         )
     })?;
-
     let mut errors = Vec::<Value>::new();
     if checkpoint.get("schema").and_then(Value::as_str)
         != Some("sorafs.governance_dag.checkpoint.v1")
@@ -19791,7 +18796,6 @@ fn governance_dag_checkpoint_recover(raw_args: Vec<String>) -> Result<(), String
             "checkpoint manifest has unsupported schema",
         ));
     }
-
     let mut checkpoint_file_value = Map::new();
     checkpoint_file_value.insert(
         "path".into(),
@@ -19799,7 +18803,6 @@ fn governance_dag_checkpoint_recover(raw_args: Vec<String>) -> Result<(), String
     );
     checkpoint_file_value.insert("encoded_len".into(), Value::from(checkpoint_len));
     checkpoint_file_value.insert("blake3".into(), Value::from(checkpoint_blake3_hex));
-
     let expected_head_cid_hex = checkpoint
         .get("head")
         .and_then(|head| head.get("head_block_cid_hex"))
@@ -19826,7 +18829,6 @@ fn governance_dag_checkpoint_recover(raw_args: Vec<String>) -> Result<(), String
             None
         }
     };
-
     let (root_ok, root_verification) =
         verify_governance_dag_build_snapshot(&root, require_sidecars, expected_head_cid.as_deref());
     if !root_ok {
@@ -19855,7 +18857,6 @@ fn governance_dag_checkpoint_recover(raw_args: Vec<String>) -> Result<(), String
         &["encoded_len", "car_size"],
         &mut errors,
     )?;
-
     let mut summary = Map::new();
     summary.insert(
         "schema".into(),
@@ -19878,7 +18879,6 @@ fn governance_dag_checkpoint_recover(raw_args: Vec<String>) -> Result<(), String
     if let Some((_, value)) = car_check {
         summary.insert("car_archive".into(), value);
     }
-
     if errors.is_empty() {
         let index = governance_dag_mirror_index_value(
             &root,
@@ -19919,7 +18919,6 @@ fn governance_dag_checkpoint_recover(raw_args: Vec<String>) -> Result<(), String
         );
         summary.insert("recovered_mirror_index".into(), Value::Object(recovered));
     }
-
     summary.insert("ok".into(), Value::from(errors.is_empty()));
     summary.insert("errors".into(), Value::Array(errors.clone()));
     let summary_value = Value::Object(summary);
@@ -19933,13 +18932,11 @@ fn governance_dag_checkpoint_recover(raw_args: Vec<String>) -> Result<(), String
         Err("governance DAG checkpoint recovery failed".to_string())
     }
 }
-
 fn governance_dag_mirror_build(raw_args: Vec<String>) -> Result<(), String> {
     let mut root: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut require_sidecars = false;
     let mut head_cid: Option<Vec<u8>> = None;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(governance_usage());
@@ -19962,7 +18959,6 @@ fn governance_dag_mirror_build(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let root = root.ok_or_else(|| {
         "missing required `--root=DIR` for `sorafs_cli governance dag mirror-build`".to_string()
     })?;
@@ -19975,23 +18971,19 @@ fn governance_dag_mirror_build(raw_args: Vec<String>) -> Result<(), String> {
         print_governance_dag_json(&verification)?;
         return Err("governance DAG mirror index refused invalid build snapshot".to_string());
     }
-
     let index = governance_dag_mirror_index_value(&root, require_sidecars, head_cid.as_deref())?;
     write_governance_dag_json(&out, &index)?;
     print_governance_dag_json(&index)
 }
-
 enum GovernanceDagMirrorQuery {
     Head,
     BlockCid(Vec<u8>),
     NodeCid(Vec<u8>),
 }
-
 fn governance_dag_mirror_query(raw_args: Vec<String>) -> Result<(), String> {
     let mut index_path: Option<PathBuf> = None;
     let mut query: Option<GovernanceDagMirrorQuery> = None;
     let mut format = GovernanceDagOutputFormat::Table;
-
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
             return Err(governance_usage());
@@ -20021,7 +19013,6 @@ fn governance_dag_mirror_query(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
-
     let index_path = index_path.ok_or_else(|| {
         "missing required `--index=PATH` for `sorafs_cli governance dag mirror-query`".to_string()
     })?;
@@ -20047,7 +19038,6 @@ fn governance_dag_mirror_query(raw_args: Vec<String>) -> Result<(), String> {
         Err("governance DAG mirror query returned no match".to_string())
     }
 }
-
 fn set_governance_dag_mirror_query(
     slot: &mut Option<GovernanceDagMirrorQuery>,
     value: GovernanceDagMirrorQuery,
@@ -20061,7 +19051,6 @@ fn set_governance_dag_mirror_query(
     *slot = Some(value);
     Ok(())
 }
-
 fn governance_dag_mirror_index_value(
     root: &Path,
     require_sidecars: bool,
@@ -20081,7 +19070,6 @@ fn governance_dag_mirror_index_value(
             head_path.display()
         )
     })?;
-
     let blocks_dir = root.join("blocks");
     let mut block_paths = Vec::<PathBuf>::new();
     collect_governance_dag_to_files(&blocks_dir, &mut block_paths)?;
@@ -20143,7 +19131,6 @@ fn governance_dag_mirror_index_value(
             cid_display(&head.head_block_cid)
         ));
     }
-
     let mut by_block_cid_hex = Map::new();
     let mut by_node_cid_hex = Map::new();
     let mut block_values = Vec::<Value>::new();
@@ -20152,7 +19139,6 @@ fn governance_dag_mirror_index_value(
         let node_cid_hex = hex_encode(&block.node.node_cid);
         by_block_cid_hex.insert(block_cid_hex.clone(), Value::from(position as u64));
         by_node_cid_hex.insert(node_cid_hex.clone(), Value::from(position as u64));
-
         let mut block_value = Map::new();
         block_value.insert("position".into(), Value::from(position as u64));
         block_value.insert("path".into(), Value::from(path.clone()));
@@ -20189,7 +19175,6 @@ fn governance_dag_mirror_index_value(
         block_value.insert("sidecar_status".into(), Value::from(sidecar_status.clone()));
         block_values.push(Value::Object(block_value));
     }
-
     let mut head_value = Map::new();
     head_value.insert("path".into(), Value::from("head.to"));
     head_value.insert(
@@ -20214,7 +19199,6 @@ fn governance_dag_mirror_index_value(
             .map(hex_encode)
             .map_or(Value::Null, Value::from),
     );
-
     let mut root_value = Map::new();
     root_value.insert(
         "schema".into(),
@@ -20236,7 +19220,6 @@ fn governance_dag_mirror_index_value(
     root_value.insert("by_node_cid_hex".into(), Value::Object(by_node_cid_hex));
     Ok(Value::Object(root_value))
 }
-
 fn governance_dag_mirror_query_value(
     index_path: &Path,
     index: &Value,
@@ -20251,7 +19234,6 @@ fn governance_dag_mirror_query_value(
         "index".into(),
         Value::from(index_path.display().to_string()),
     );
-
     match query {
         GovernanceDagMirrorQuery::Head => {
             result.insert("query".into(), Value::from("head"));
@@ -20285,7 +19267,6 @@ fn governance_dag_mirror_query_value(
         }
     }
 }
-
 fn governance_dag_mirror_lookup_block(
     index: &Value,
     map_name: &str,
@@ -20307,13 +19288,11 @@ fn governance_dag_mirror_lookup_block(
         .map_err(|_| "governance DAG mirror block position exceeds host limits".to_string())?;
     Ok(blocks.get(position).cloned().unwrap_or(Value::Null))
 }
-
 fn read_governance_dag_json_file(path: &Path) -> Result<Value, String> {
     let bytes =
         fs::read(path).map_err(|err| format!("failed to read `{}`: {err}", path.display()))?;
     from_slice(&bytes).map_err(|err| format!("failed to parse `{}` as JSON: {err}", path.display()))
 }
-
 fn governance_dag_read_digest_file(
     path: &Path,
     label: &str,
@@ -20324,7 +19303,6 @@ fn governance_dag_read_digest_file(
     let blake3_hex = hex_encode(blake3_hash(&bytes).as_bytes());
     Ok((bytes, encoded_len, blake3_hex))
 }
-
 fn governance_dag_checkpoint_file_check(
     artifact: &str,
     path: &Path,
@@ -20338,7 +19316,6 @@ fn governance_dag_checkpoint_file_check(
         Ok((_, encoded_len, blake3_hex)) => {
             value.insert("encoded_len".into(), Value::from(encoded_len));
             value.insert("blake3".into(), Value::from(blake3_hex.clone()));
-
             let expected_blake3 = expected.get("blake3").and_then(Value::as_str);
             value.insert(
                 "expected_blake3".into(),
@@ -20353,7 +19330,6 @@ fn governance_dag_checkpoint_file_check(
                     "checkpoint artifact BLAKE3 digest does not match recorded value",
                 ));
             }
-
             let expected_len = size_fields
                 .iter()
                 .find_map(|field| expected.get(*field).and_then(Value::as_u64));
@@ -20384,7 +19360,6 @@ fn governance_dag_checkpoint_file_check(
     }
     Value::Object(value)
 }
-
 fn governance_dag_checkpoint_optional_artifact_check(
     checkpoint: &Value,
     override_path: Option<&Path>,
@@ -20420,7 +19395,6 @@ fn governance_dag_checkpoint_optional_artifact_check(
         }
         return Ok(None);
     }
-
     let path = if let Some(path) = override_path {
         path.to_path_buf()
     } else {
@@ -20449,7 +19423,6 @@ fn governance_dag_checkpoint_optional_artifact_check(
     }
     Ok(Some((path, value)))
 }
-
 fn governance_dag_checkpoint_validate_mirror_index(
     path: &Path,
     check_value: &Value,
@@ -20498,7 +19471,6 @@ fn governance_dag_checkpoint_validate_mirror_index(
         ));
     }
 }
-
 fn print_governance_dag_mirror_query_table(value: &Value) {
     let found = value.get("found").and_then(Value::as_bool).unwrap_or(false);
     println!("found: {found}");
@@ -20563,9 +19535,7 @@ fn print_governance_dag_mirror_query_table(value: &Value) {
         _ => {}
     }
 }
-
 type GovernanceDagBlockSnapshot = (Vec<GovernanceDagBlockV1>, Vec<Value>, Vec<Value>);
-
 fn load_governance_dag_block_snapshot(
     root: &Path,
     require_sidecars: bool,
@@ -20586,7 +19556,6 @@ fn load_governance_dag_block_snapshot(
             blocks_dir.display()
         ));
     }
-
     let mut warnings = Vec::<Value>::new();
     let mut decoded = Vec::<(String, String, String, GovernanceDagBlockV1)>::new();
     for path in block_paths {
@@ -20629,7 +19598,6 @@ fn load_governance_dag_block_snapshot(
         })?;
         decoded.push((rel_path, blake3_hex, sidecar_status, block));
     }
-
     decoded.sort_by(|left, right| {
         left.3
             .sequence
@@ -20680,7 +19648,6 @@ fn load_governance_dag_block_snapshot(
     }
     Ok((blocks, records, warnings))
 }
-
 fn governance_dag_head_cid_from_blocks(blocks: &[GovernanceDagBlockV1]) -> Result<Vec<u8>, String> {
     if blocks.is_empty() {
         return Err("governance DAG head rebuild requires at least one block".to_string());
@@ -20702,7 +19669,6 @@ fn governance_dag_head_cid_from_blocks(blocks: &[GovernanceDagBlockV1]) -> Resul
         )),
     }
 }
-
 fn governance_dag_car_file(rel_path: &str, data: Vec<u8>) -> Result<FileEntry, String> {
     let path = rel_path.split('/').map(str::to_string).collect::<Vec<_>>();
     if path.is_empty() || path.iter().any(|component| component.is_empty()) {
@@ -20712,7 +19678,6 @@ fn governance_dag_car_file(rel_path: &str, data: Vec<u8>) -> Result<FileEntry, S
     }
     Ok(FileEntry { path, data })
 }
-
 fn write_governance_dag_car_archive(
     snapshot_root: &Path,
     car_out: &Path,
@@ -20727,7 +19692,6 @@ fn write_governance_dag_car_archive(
     })?;
     let (plan, payload) = CarBuildPlan::from_files_with_profile(files, descriptor.profile)
         .map_err(|err| format!("failed to build governance DAG CAR plan: {err}"))?;
-
     let car_file = open_output_file(car_out)?;
     let mut writer = BufWriter::new(car_file);
     let mut payload_reader = Cursor::new(payload);
@@ -20737,17 +19701,14 @@ fn write_governance_dag_car_archive(
     writer
         .flush()
         .map_err(|err| format!("failed to flush `{}`: {err}", car_out.display()))?;
-
     if stats.chunk_profile != descriptor.profile {
         return Err("emitted governance DAG CAR used unexpected chunk profile".to_string());
     }
-
     if let Some(plan_path) = car_plan_out {
         let plan_json = chunk_fetch_plan_to_string(&plan)
             .map_err(|err| format!("failed to render governance DAG CAR chunk plan: {err}"))?;
         write_text(plan_path, plan_json.as_bytes())?;
     }
-
     let files = plan
         .files
         .iter()
@@ -20760,7 +19721,6 @@ fn write_governance_dag_car_archive(
             Value::Object(obj)
         })
         .collect::<Vec<_>>();
-
     let mut summary = Map::new();
     summary.insert("schema".into(), Value::from("sorafs.governance_dag.car.v1"));
     summary.insert(
@@ -20821,7 +19781,6 @@ fn write_governance_dag_car_archive(
     }
     Ok(Value::Object(summary))
 }
-
 fn verify_governance_dag_build_snapshot(
     root: &Path,
     require_sidecars: bool,
@@ -20833,7 +19792,6 @@ fn verify_governance_dag_build_snapshot(
     let mut block_values = Vec::<Value>::new();
     let mut decoded_head: Option<GovernanceDagHeadV1> = None;
     let mut decoded_blocks = Vec::<(String, GovernanceDagBlockV1)>::new();
-
     if !root.is_dir() {
         errors.push(governance_dag_problem(
             root.to_string_lossy().as_ref(),
@@ -20841,7 +19799,6 @@ fn verify_governance_dag_build_snapshot(
             "governance DAG build root must be a directory",
         ));
     }
-
     let head_path = root.join("head.to");
     let head_rel = governance_dag_relative_path(root, &head_path);
     head_value.insert("path".into(), Value::from(head_rel.clone()));
@@ -20874,7 +19831,6 @@ fn verify_governance_dag_build_snapshot(
                 &mut warnings,
                 &mut errors,
             );
-
             match decode_from_bytes::<GovernanceDagHeadV1>(&bytes) {
                 Ok(head) => {
                     head_value.insert("version".into(), Value::from(head.version));
@@ -20914,7 +19870,6 @@ fn verify_governance_dag_build_snapshot(
             errors.push(governance_dag_problem(&head_rel, "head", message));
         }
     }
-
     let blocks_dir = root.join("blocks");
     let mut block_paths = Vec::<PathBuf>::new();
     if blocks_dir.is_dir() {
@@ -20933,7 +19888,6 @@ fn verify_governance_dag_build_snapshot(
         ));
     }
     block_paths.sort();
-
     if block_paths.is_empty() {
         errors.push(governance_dag_problem(
             &governance_dag_relative_path(root, &blocks_dir),
@@ -20941,7 +19895,6 @@ fn verify_governance_dag_build_snapshot(
             "no GovernanceDagBlockV1 `.to` payloads found",
         ));
     }
-
     for block_path in &block_paths {
         let rel_path = governance_dag_relative_path(root, block_path);
         let mut block_value = Map::new();
@@ -20975,7 +19928,6 @@ fn verify_governance_dag_build_snapshot(
                     &mut warnings,
                     &mut errors,
                 );
-
                 match decode_from_bytes::<GovernanceDagBlockV1>(&bytes) {
                     Ok(block) => {
                         block_value.insert("version".into(), Value::from(block.version));
@@ -21033,7 +19985,6 @@ fn verify_governance_dag_build_snapshot(
         }
         block_values.push(Value::Object(block_value));
     }
-
     decoded_blocks.sort_by(|left, right| {
         left.1
             .sequence
@@ -21066,7 +20017,6 @@ fn verify_governance_dag_build_snapshot(
             ));
         }
     }
-
     let mut summary = Map::new();
     summary.insert(
         "schema".into(),
@@ -21098,7 +20048,6 @@ fn verify_governance_dag_build_snapshot(
     summary.insert("errors".into(), Value::Array(errors.clone()));
     (errors.is_empty(), Value::Object(summary))
 }
-
 fn load_governance_dag_inventory(root: &Path) -> Result<Vec<GovernanceDagArtifact>, String> {
     if !root.is_dir() {
         return Err(format!(
@@ -21114,7 +20063,6 @@ fn load_governance_dag_inventory(root: &Path) -> Result<Vec<GovernanceDagArtifac
         .map(|path| read_governance_dag_artifact(root, path))
         .collect()
 }
-
 fn collect_governance_dag_to_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries = fs::read_dir(root).map_err(|err| {
         format!(
@@ -21145,14 +20093,12 @@ fn collect_governance_dag_to_files(root: &Path, out: &mut Vec<PathBuf>) -> Resul
     }
     Ok(())
 }
-
 fn governance_dag_relative_path(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
 }
-
 fn read_governance_dag_artifact(root: &Path, path: &Path) -> Result<GovernanceDagArtifact, String> {
     let bytes = fs::read(path).map_err(|err| {
         format!(
@@ -21165,7 +20111,6 @@ fn read_governance_dag_artifact(root: &Path, path: &Path) -> Result<GovernanceDa
     let rel_path = governance_dag_relative_path(root, path);
     let (sidecar_status, sidecar_value, sidecar_error) =
         governance_dag_sidecar_status(path, &blake3_hex);
-
     let (node, decode_error, outcome) = match decode_from_bytes::<GovernanceLogNodeV1>(&bytes) {
         Ok(node) => {
             let summary = GovernanceDagNodeSummary::from_node(&node);
@@ -21179,7 +20124,6 @@ fn read_governance_dag_artifact(root: &Path, path: &Path) -> Result<GovernanceDa
         }
         Err(err) => (None, Some(err.to_string()), None),
     };
-
     Ok(GovernanceDagArtifact {
         path: path.to_path_buf(),
         rel_path,
@@ -21193,7 +20137,6 @@ fn read_governance_dag_artifact(root: &Path, path: &Path) -> Result<GovernanceDa
         outcome,
     })
 }
-
 fn read_governance_log_node_file(path: &Path) -> Result<GovernanceLogNodeV1, String> {
     let bytes = fs::read(path).map_err(|err| {
         format!(
@@ -21208,7 +20151,6 @@ fn read_governance_log_node_file(path: &Path) -> Result<GovernanceLogNodeV1, Str
         )
     })
 }
-
 fn governance_dag_build_order(
     artifacts: &[GovernanceDagArtifact],
     node_indices: &[usize],
@@ -21231,7 +20173,6 @@ fn governance_dag_build_order(
     });
     ordered
 }
-
 fn load_governance_dag_build_seed(
     key_hex: Option<&str>,
     key_path: Option<&Path>,
@@ -21272,7 +20213,6 @@ fn load_governance_dag_build_seed(
         )
     })
 }
-
 fn empty_governance_dag_ed25519_signature() -> GovernanceLogSignatureV1 {
     GovernanceLogSignatureV1 {
         algorithm: GovernanceSignatureAlgorithm::Ed25519,
@@ -21280,7 +20220,6 @@ fn empty_governance_dag_ed25519_signature() -> GovernanceLogSignatureV1 {
         signature: Vec::new(),
     }
 }
-
 fn sign_governance_dag_block_cli(
     block: &mut GovernanceDagBlockV1,
     signing_key: &SigningKey,
@@ -21296,7 +20235,6 @@ fn sign_governance_dag_block_cli(
     };
     Ok(())
 }
-
 fn sign_governance_dag_head_cli(
     head: &mut GovernanceDagHeadV1,
     signing_key: &SigningKey,
@@ -21312,7 +20250,6 @@ fn sign_governance_dag_head_cli(
     };
     Ok(())
 }
-
 fn write_governance_blake3_sidecar(path: &Path, bytes: &[u8]) -> Result<Vec<u8>, String> {
     let sidecar_path = path.with_extension("to.blake3");
     let mut digest = hex_encode(blake3_hash(bytes).as_bytes());
@@ -21321,7 +20258,6 @@ fn write_governance_blake3_sidecar(path: &Path, bytes: &[u8]) -> Result<Vec<u8>,
     write_text(&sidecar_path, &sidecar_bytes)?;
     Ok(sidecar_bytes)
 }
-
 impl GovernanceDagNodeSummary {
     fn from_node(node: &GovernanceLogNodeV1) -> Self {
         let (submission_publisher_account_digest_hex, submission_origin) =
@@ -21341,7 +20277,6 @@ impl GovernanceDagNodeSummary {
         }
     }
 }
-
 fn governance_dag_sidecar_status(
     path: &Path,
     blake3_hex: &str,
@@ -21361,7 +20296,6 @@ fn governance_dag_sidecar_status(
         Err(err) => ("error".to_string(), None, Some(err.to_string())),
     }
 }
-
 fn push_governance_dag_sidecar_problem(
     path: &str,
     status: &str,
@@ -21397,7 +20331,6 @@ fn push_governance_dag_sidecar_problem(
         _ => {}
     }
 }
-
 fn governance_payload_kind_cli(payload: &GovernanceLogPayloadV1) -> &'static str {
     match payload {
         GovernanceLogPayloadV1::ProviderAdvert(_) => "provider_advert",
@@ -21419,7 +20352,6 @@ fn governance_payload_kind_cli(payload: &GovernanceLogPayloadV1) -> &'static str
         GovernanceLogPayloadV1::PorWeeklyReport(_) => "por_weekly_report",
     }
 }
-
 fn verify_governance_dag_inventory(
     root: &Path,
     artifacts: &[GovernanceDagArtifact],
@@ -21430,7 +20362,6 @@ fn verify_governance_dag_inventory(
     let mut node_indices = Vec::<usize>::new();
     let mut node_by_cid = BTreeMap::<Vec<u8>, usize>::new();
     let mut referenced_prev = BTreeSet::<Vec<u8>>::new();
-
     for (index, artifact) in artifacts.iter().enumerate() {
         match artifact.sidecar_status.as_str() {
             "mismatch" | "error" => errors.push(governance_dag_problem(
@@ -21450,7 +20381,6 @@ fn verify_governance_dag_inventory(
             )),
             _ => {}
         }
-
         if let Some(node) = &artifact.node {
             node_indices.push(index);
             if let Some(existing) = node_by_cid.insert(node.node_cid.clone(), index) {
@@ -21481,7 +20411,6 @@ fn verify_governance_dag_inventory(
             }
         }
     }
-
     if node_indices.is_empty() {
         errors.push(governance_dag_problem(
             root.to_string_lossy().as_ref(),
@@ -21489,7 +20418,6 @@ fn verify_governance_dag_inventory(
             "no GovernanceLogNodeV1 `.to` payloads found",
         ));
     }
-
     if options.require_chain {
         for index in &node_indices {
             let artifact = &artifacts[*index];
@@ -21510,7 +20438,6 @@ fn verify_governance_dag_inventory(
             }
         }
     }
-
     let mut heads = Vec::<Vec<u8>>::new();
     for index in &node_indices {
         let Some(node) = &artifacts[*index].node else {
@@ -21521,7 +20448,6 @@ fn verify_governance_dag_inventory(
         }
     }
     heads.sort();
-
     if options.require_chain && heads.len() != 1 {
         errors.push(governance_dag_problem(
             root.to_string_lossy().as_ref(),
@@ -21544,7 +20470,6 @@ fn verify_governance_dag_inventory(
             ),
         ));
     }
-
     let mut summary = governance_dag_inventory_value(root, artifacts);
     if let Value::Object(ref mut obj) = summary {
         obj.insert("ok".into(), Value::from(errors.is_empty()));
@@ -21584,10 +20509,8 @@ fn verify_governance_dag_inventory(
         obj.insert("warnings".into(), Value::Array(warnings));
         obj.insert("errors".into(), Value::Array(errors.clone()));
     }
-
     (errors.is_empty(), summary, node_indices)
 }
-
 fn governance_dag_problem(
     path: &str,
     kind: impl Into<String>,
@@ -21599,7 +20522,6 @@ fn governance_dag_problem(
     obj.insert("message".into(), Value::from(message.into()));
     Value::Object(obj)
 }
-
 fn governance_dag_inventory_value(root: &Path, artifacts: &[GovernanceDagArtifact]) -> Value {
     let node_count = artifacts
         .iter()
@@ -21622,7 +20544,6 @@ fn governance_dag_inventory_value(root: &Path, artifacts: &[GovernanceDagArtifac
         .iter()
         .filter(|artifact| artifact.sidecar_status == "missing")
         .count();
-
     let mut obj = Map::new();
     obj.insert(
         "schema".into(),
@@ -21654,7 +20575,6 @@ fn governance_dag_inventory_value(root: &Path, artifacts: &[GovernanceDagArtifac
     );
     Value::Object(obj)
 }
-
 fn governance_dag_artifact_value(artifact: &GovernanceDagArtifact, include_outcome: bool) -> Value {
     let mut obj = Map::new();
     obj.insert("path".into(), Value::from(artifact.rel_path.clone()));
@@ -21698,7 +20618,6 @@ fn governance_dag_artifact_value(artifact: &GovernanceDagArtifact, include_outco
     }
     Value::Object(obj)
 }
-
 fn governance_dag_node_value(node: &GovernanceDagNodeSummary) -> Value {
     let mut obj = Map::new();
     obj.insert("node_cid".into(), Value::from(node.node_cid_label.clone()));
@@ -21727,7 +20646,6 @@ fn governance_dag_node_value(node: &GovernanceDagNodeSummary) -> Value {
     obj.insert("payload_kind".into(), Value::from(node.payload_kind));
     Value::Object(obj)
 }
-
 fn print_governance_dag_inventory_table(root: &Path, artifacts: &[GovernanceDagArtifact]) {
     println!("root: {}", root.display());
     println!(
@@ -21766,7 +20684,6 @@ fn print_governance_dag_inventory_table(root: &Path, artifacts: &[GovernanceDagA
         );
     }
 }
-
 fn print_governance_dag_artifact_table(artifact: &GovernanceDagArtifact) {
     println!("path: {}", artifact.rel_path);
     println!("encoded_len: {}", artifact.encoded_len);
@@ -21802,20 +20719,17 @@ fn print_governance_dag_artifact_table(artifact: &GovernanceDagArtifact) {
         println!("decode_error: {error}");
     }
 }
-
 fn write_governance_dag_json(path: &Path, value: &Value) -> Result<(), String> {
     let rendered = to_string_pretty(value)
         .map_err(|err| format!("failed to render governance DAG JSON: {err}"))?;
     write_text(path, rendered.as_bytes())
 }
-
 fn print_governance_dag_json(value: &Value) -> Result<(), String> {
     let rendered = to_string_pretty(value)
         .map_err(|err| format!("failed to render governance DAG JSON: {err}"))?;
     println!("{rendered}");
     Ok(())
 }
-
 fn parse_governance_cid_arg(raw: &str) -> Result<Vec<u8>, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -21831,7 +20745,6 @@ fn parse_governance_cid_arg(raw: &str) -> Result<Vec<u8>, String> {
     }
     Ok(trimmed.as_bytes().to_vec())
 }
-
 fn cid_display(cid: &[u8]) -> String {
     match std::str::from_utf8(cid) {
         Ok(value) if !value.is_empty() && value.chars().all(|ch| !ch.is_control()) => {
@@ -21840,14 +20753,12 @@ fn cid_display(cid: &[u8]) -> String {
         _ => format!("hex:{}", hex_encode(cid)),
     }
 }
-
 fn governance_dag_now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0))
         .as_secs()
 }
-
 fn generate_proof_stream_nonce(
     manifest_digest: &[u8],
     proof_kind: ProofKind,
@@ -21881,7 +20792,6 @@ fn generate_proof_stream_nonce(
     nonce.copy_from_slice(&digest.as_bytes()[..16]);
     nonce
 }
-
 fn decode_nonce_b64(input: &str) -> Result<[u8; 16], String> {
     if input.is_empty() {
         return Err("`--nonce-b64` may not be empty".to_string());
@@ -21905,14 +20815,12 @@ fn decode_nonce_b64(input: &str) -> Result<[u8; 16], String> {
     }
     Ok(out)
 }
-
 #[derive(Debug, Clone)]
 struct AliasInputs {
     namespace: String,
     name: String,
     proof: Vec<u8>,
 }
-
 fn parse_private_key_inline(value: &str) -> Result<PrivateKey, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -21920,7 +20828,6 @@ fn parse_private_key_inline(value: &str) -> Result<PrivateKey, String> {
     }
     PrivateKey::from_str(trimmed).map_err(|err| format!("failed to parse private key: {err}"))
 }
-
 fn load_private_key_from_file(path: &Path) -> Result<PrivateKey, String> {
     let contents = fs::read_to_string(path).map_err(|err| {
         format!(
@@ -21930,7 +20837,6 @@ fn load_private_key_from_file(path: &Path) -> Result<PrivateKey, String> {
     })?;
     parse_private_key_inline(&contents)
 }
-
 fn alias_inputs_from_flags(
     namespace: Option<String>,
     name: Option<String>,
@@ -21956,7 +20862,6 @@ fn alias_inputs_from_flags(
         ),
     }
 }
-
 fn build_pin_register_transaction(
     network_id: &NetworkId,
     authority: &AccountId,
@@ -21992,7 +20897,6 @@ fn build_pin_register_transaction(
     .try_sign(private_key)
     .map_err(|err| format!("failed to sign pin-register transaction locally: {err}"))
 }
-
 struct ManifestProposalSummary<'a> {
     manifest_path: &'a Path,
     manifest: &'a ManifestV1,
@@ -22002,7 +20906,6 @@ struct ManifestProposalSummary<'a> {
     alias_hint: Option<&'a str>,
     successor_bytes: Option<[u8; 32]>,
 }
-
 fn build_manifest_proposal_summary(summary: ManifestProposalSummary<'_>) -> Result<Value, String> {
     let ManifestProposalSummary {
         manifest_path,
@@ -22022,7 +20925,6 @@ fn build_manifest_proposal_summary(summary: ManifestProposalSummary<'_>) -> Resu
         &policy_dm,
         successor_bytes,
     );
-
     let mut map = Map::new();
     map.insert("proposal_version".into(), Value::from(1_u64));
     map.insert(
@@ -22057,7 +20959,6 @@ fn build_manifest_proposal_summary(summary: ManifestProposalSummary<'_>) -> Resu
     map.insert("register_instruction".into(), register_value);
     Ok(Value::Object(map))
 }
-
 fn chunker_handle_from_profile(profile: &ChunkingProfileV1) -> ChunkerProfileHandle {
     ChunkerProfileHandle {
         profile_id: profile.profile_id.0,
@@ -22067,7 +20968,6 @@ fn chunker_handle_from_profile(profile: &ChunkingProfileV1) -> ChunkerProfileHan
         multihash_code: profile.multihash_code,
     }
 }
-
 fn convert_pin_policy(policy: &sorafs_manifest::PinPolicy) -> RegistryPinPolicy {
     RegistryPinPolicy {
         min_replicas: policy.min_replicas,
@@ -22075,7 +20975,6 @@ fn convert_pin_policy(policy: &sorafs_manifest::PinPolicy) -> RegistryPinPolicy 
         retention_epoch: policy.retention_epoch,
     }
 }
-
 fn convert_storage_class(class: &sorafs_manifest::StorageClass) -> RegistryStorageClass {
     match class {
         sorafs_manifest::StorageClass::Hot => RegistryStorageClass::Hot,
@@ -22083,7 +20982,6 @@ fn convert_storage_class(class: &sorafs_manifest::StorageClass) -> RegistryStora
         sorafs_manifest::StorageClass::Cold => RegistryStorageClass::Cold,
     }
 }
-
 fn build_register_instruction_value(
     manifest_digest: &blake3::Hash,
     chunker_handle: &ChunkerProfileHandle,
@@ -22110,7 +21008,6 @@ fn build_register_instruction_value(
     }
     Value::Object(register_map)
 }
-
 fn registry_pin_policy_to_value(policy: &RegistryPinPolicy) -> Value {
     let mut map = Map::new();
     map.insert("min_replicas".into(), Value::from(policy.min_replicas));
@@ -22128,11 +21025,9 @@ fn registry_pin_policy_to_value(policy: &RegistryPinPolicy) -> Value {
     );
     Value::Object(map)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{fs, path::Path};
-
     use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
     use iroha_data_model::{
         metadata::Metadata,
@@ -22147,11 +21042,8 @@ mod tests {
     };
     use sorafs_orchestrator::{PolicyReport, PolicyStatus};
     use tempfile::tempdir;
-
     use super::*;
-
     include!("sorafs_cli/appeal_verdict_parser_tests.rs");
-
     fn sample_manifest() -> ManifestV1 {
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
         ManifestBuilder::new()
@@ -22175,16 +21067,13 @@ mod tests {
             .build()
             .expect("manifest build")
     }
-
     fn fixture_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive SoraFS CLI fixture key")
     }
-
     fn fixture_account(seed: u8) -> AccountId {
         AccountId::new(fixture_keypair(seed).public_key().clone())
     }
-
     #[test]
     fn sorafs_por_cursor_validation_is_strictly_canonical() {
         let cursor = PorStatusCursorV1 {
@@ -22214,7 +21103,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn sorafs_por_response_decode_field_bound_is_exact() {
         assert!(por_status_response_bounds(0).is_none());
@@ -22251,7 +21139,6 @@ mod tests {
             limits.max_nesting_depth(),
             POR_STATUS_DECODE_MAX_NESTING_DEPTH_V1
         );
-
         let exact = u64::try_from(response_max_bytes)
             .expect("response bound fits u64")
             .to_le_bytes();
@@ -22259,7 +21146,6 @@ mod tests {
             norito::core::read_len_from_slice_with_flags(&exact, 0).map(|_| ())
         })
         .expect("the exact protocol field bound is accepted");
-
         let above = u64::try_from(response_max_bytes + 1)
             .expect("response bound plus one fits u64")
             .to_le_bytes();
@@ -22274,7 +21160,6 @@ mod tests {
                     && limit == u64::try_from(response_max_bytes).expect("bound fits u64")
         ));
     }
-
     #[test]
     fn sorafs_por_status_filter_membership_is_exact() {
         let status = PorChallengeStatusV1 {
@@ -22302,7 +21187,6 @@ mod tests {
         };
         validate_por_status_filter_membership(std::slice::from_ref(&status), exact)
             .expect("exact status selection");
-
         for (filter, expected_field) in [
             (
                 RequestedPorStatusFilter {
@@ -22339,30 +21223,35 @@ mod tests {
             assert!(error.contains(expected_field), "unexpected error: {error}");
         }
     }
-
     fn fixture_reputation_auth(seed: u8, discriminant: u16) -> ReputationRequestAuth {
         let key_pair = fixture_keypair(seed);
-        let account_literal = AccountId::new(key_pair.public_key().clone())
+        let account = AccountId::new(key_pair.public_key().clone());
+        account
             .to_i105_for_discriminant(discriminant)
             .expect("encode reputation authentication account");
         ReputationRequestAuth {
-            account_literal,
+            account_header_value: account
+                .to_canonical_hex()
+                .expect("encode reputation authentication header"),
+            network_id: fixture_reputation_network_id(),
             key_pair,
         }
     }
-
+    fn fixture_reputation_network_id() -> NetworkId {
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+            .parse()
+            .expect("canonical reputation network identity")
+    }
     fn write_reputation_private_key(path: &Path, key_pair: &KeyPair) {
         let exposed = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
         fs::write(path, format!("{exposed}\n")).expect("write private key fixture");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             fs::set_permissions(path, fs::Permissions::from_mode(0o600))
                 .expect("secure private key permissions");
         }
     }
-
     fn reputation_response_fixture(
         status: &str,
         content_type: Option<&str>,
@@ -22413,136 +21302,51 @@ mod tests {
         });
         (address, handle)
     }
-
     #[derive(Debug)]
     struct ReputationTestRngError;
-
     impl std::fmt::Display for ReputationTestRngError {
         fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             formatter.write_str("reputation test RNG failure")
         }
     }
-
     impl std::error::Error for ReputationTestRngError {}
-
     struct IncrementingReputationRng {
         next: u8,
     }
-
     impl rand::rand_core::TryRngCore for IncrementingReputationRng {
         type Error = ReputationTestRngError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             let value = self.next;
             self.next = self.next.wrapping_add(1);
             Ok(u32::from(value))
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             let value = self.next;
             self.next = self.next.wrapping_add(1);
             Ok(u64::from(value))
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             destination.fill(self.next);
             self.next = self.next.wrapping_add(1);
             Ok(())
         }
     }
-
     impl rand::rand_core::TryCryptoRng for IncrementingReputationRng {}
-
     struct FailingReputationRng;
-
     impl rand::rand_core::TryRngCore for FailingReputationRng {
         type Error = ReputationTestRngError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(ReputationTestRngError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(ReputationTestRngError)
         }
-
         fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
             Err(ReputationTestRngError)
         }
     }
-
     impl rand::rand_core::TryCryptoRng for FailingReputationRng {}
-
-    #[test]
-    fn reputation_auth_headers_match_the_exact_canonical_preimage() {
-        let auth = fixture_reputation_auth(0x31, 369);
-        let endpoint = Url::parse(
-            "http://127.0.0.1/v1/sorafs/reputation/events?z=%2B&b=two+words&a=%7E&a=first",
-        )
-        .expect("endpoint");
-        let now = UNIX_EPOCH + Duration::from_millis(1_725_000_000_123);
-        let mut rng = IncrementingReputationRng { next: 0x11 };
-
-        let headers = reputation_request_headers_with_rng_at(&auth, &endpoint, now, &mut rng)
-            .expect("signed headers");
-        let expected_nonce = BASE64_URL_SAFE_NO_PAD.encode([0x11_u8; 12]);
-        let expected_message = format!(
-            "GET\n/v1/sorafs/reputation/events\na=first&a=%7E&b=two+words&z=%2B\n{}\n1725000000123\n{expected_nonce}",
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        )
-        .into_bytes();
-
-        assert_eq!(headers.account_literal, auth.account_literal);
-        assert_eq!(headers.timestamp_ms, 1_725_000_000_123);
-        assert_eq!(headers.nonce, expected_nonce);
-        assert_eq!(
-            canonical_reputation_request_message(&endpoint, headers.timestamp_ms, &headers.nonce),
-            expected_message
-        );
-        let signature_bytes = BASE64_STANDARD
-            .decode(&headers.signature_base64)
-            .expect("standard base64 signature");
-        assert_eq!(
-            BASE64_STANDARD.encode(&signature_bytes),
-            headers.signature_base64
-        );
-        let signature =
-            Signature::try_from_bytes(&signature_bytes).expect("admissible signature payload");
-        signature
-            .verify(auth.key_pair.public_key(), &expected_message)
-            .expect("signature verifies exact canonical request");
-
-        let mutated_path =
-            Url::parse("http://127.0.0.1/v1/sorafs/reputation/latest").expect("mutated path");
-        let mutated_query = Url::parse("http://127.0.0.1/v1/sorafs/reputation/events?limit=2")
-            .expect("mutated query");
-        for mutated in [
-            canonical_reputation_request_message(
-                &mutated_path,
-                headers.timestamp_ms,
-                &headers.nonce,
-            ),
-            canonical_reputation_request_message(
-                &mutated_query,
-                headers.timestamp_ms,
-                &headers.nonce,
-            ),
-            canonical_reputation_request_message(
-                &endpoint,
-                headers.timestamp_ms + 1,
-                &headers.nonce,
-            ),
-            canonical_reputation_request_message(&endpoint, headers.timestamp_ms, "mutated-nonce"),
-        ] {
-            assert!(
-                signature
-                    .verify(auth.key_pair.public_key(), &mutated)
-                    .is_err(),
-                "signature must bind every canonical request component"
-            );
-        }
-    }
-
+    include!("sorafs_cli/reputation_canonical_request_tests.rs");
     #[test]
     fn reputation_provider_id_parser_matches_the_exact_route_contract() {
         let valid = [
@@ -22561,7 +21365,6 @@ mod tests {
                 provider_id
             );
         }
-
         let secret_marker = "provider-private-key-marker";
         let invalid = [
             String::new(),
@@ -22588,7 +21391,6 @@ mod tests {
             assert!(!error.contains(secret_marker));
         }
     }
-
     #[test]
     fn reputation_commands_reject_duplicate_scalar_options_without_values() {
         let secret_first = "provider-private-key-first";
@@ -22618,11 +21420,9 @@ mod tests {
             assert!(!error.contains(secret_second));
         }
     }
-
     #[test]
     fn reputation_response_reader_enforces_identity_and_exact_size_cap() {
         let client = reputation_http_client().expect("hardened reputation client");
-
         let (address, handle) = reputation_response_fixture(
             "200 OK",
             Some("application/json"),
@@ -22639,7 +21439,6 @@ mod tests {
             .expect_err("oversized declared response must fail");
         handle.join().expect("declared-size fixture exits");
         assert!(error.contains("declared more than"));
-
         let streamed_size = usize::try_from(REPUTATION_RESPONSE_MAX_BYTES + 1)
             .expect("reputation response cap fits usize");
         let (address, handle) = reputation_response_fixture(
@@ -22658,7 +21457,6 @@ mod tests {
             .expect_err("oversized streamed response must fail");
         handle.join().expect("streamed-size fixture exits");
         assert!(error.contains("response exceeded"));
-
         let exact_size = usize::try_from(REPUTATION_RESPONSE_MAX_BYTES)
             .expect("reputation response cap fits usize");
         let mut exact_success = vec![b' '; exact_size];
@@ -22679,7 +21477,6 @@ mod tests {
             read_json_response(response, "reputation test").expect("exact cap must be accepted");
         handle.join().expect("exact success fixture exits");
         assert!(value.as_object().is_some());
-
         let secret_provider = "provider-private-key-error-body";
         let mut exact_error = vec![b'x'; exact_size];
         exact_error[..secret_provider.len()].copy_from_slice(secret_provider.as_bytes());
@@ -22700,7 +21497,6 @@ mod tests {
         handle.join().expect("exact error fixture exits");
         assert!(error.contains("500 Internal Server Error"));
         assert!(!error.contains(secret_provider));
-
         let (address, handle) = reputation_response_fixture(
             "200 OK",
             Some("application/json"),
@@ -22718,7 +21514,6 @@ mod tests {
         handle.join().expect("encoded fixture exits");
         assert!(error.contains("identity content encoding"));
     }
-
     #[test]
     fn reputation_response_reader_requires_canonical_http_metadata() {
         let client = reputation_http_client().expect("hardened reputation client");
@@ -22765,7 +21560,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn reputation_endpoint_requires_a_canonical_secure_origin() {
         let secure = reputation_endpoint("https://torii.example/", "v1/sorafs/reputation/latest")
@@ -22780,7 +21574,6 @@ mod tests {
             loopback.as_str(),
             "http://127.0.0.1:8080/v1/sorafs/reputation/latest"
         );
-
         let secret_marker = "runtime-private-marker";
         for invalid in [
             "http://torii.example",
@@ -22798,7 +21591,6 @@ mod tests {
             assert!(!error.contains(secret_marker));
         }
     }
-
     #[test]
     fn reputation_requests_advertise_identity_encoding_only() {
         let (address, handle) = reputation_response_fixture(
@@ -22813,7 +21605,6 @@ mod tests {
             .expect("fixture endpoint");
         let client = reputation_http_client().expect("hardened reputation client");
         let auth = fixture_reputation_auth(0x36, 369);
-
         let response =
             send_reputation_request(&client, &endpoint, &auth).expect("signed fixture request");
         read_json_response(response, "reputation test").expect("fixture JSON");
@@ -22824,35 +21615,36 @@ mod tests {
                 .contains("\r\naccept-encoding: identity\r\n")
         );
     }
-
     #[test]
-    fn reputation_reqwest_header_preserves_kana_i105_utf8_bytes() {
-        let literal = fixture_account(0x34)
+    fn reputation_account_header_uses_ascii_canonical_address_hex() {
+        let account = fixture_account(0x34);
+        let literal = account
             .to_i105_for_discriminant(753)
             .expect("Kana-bearing canonical I105");
         assert!(
             !literal.is_ascii(),
             "fixture must exercise I105 Kana bytes: {literal}"
         );
-
+        let parsed = parse_reputation_auth_account(&literal, "test reputation request")
+            .expect("parse canonical I105 account");
+        let header_value = parsed
+            .to_canonical_hex()
+            .expect("encode canonical account header");
+        assert!(header_value.is_ascii());
+        assert!(header_value.starts_with("0x"));
+        assert_eq!(parsed, account);
         let client = reputation_http_client().expect("hardened reputation client");
         let request = client
             .get("http://127.0.0.1/v1/sorafs/reputation/latest")
-            .header(REPUTATION_HEADER_ACCOUNT, literal.clone())
+            .header(REPUTATION_HEADER_ACCOUNT, header_value.clone())
             .build()
-            .expect("reqwest accepts the canonical I105 header");
+            .expect("reqwest accepts the canonical ASCII account header");
         let header = request
             .headers()
             .get(REPUTATION_HEADER_ACCOUNT)
             .expect("account header");
-
-        assert_eq!(header.as_bytes(), literal.as_bytes());
-        assert_eq!(
-            std::str::from_utf8(header.as_bytes()).expect("header remains exact UTF-8"),
-            literal
-        );
+        assert_eq!(header.as_bytes(), header_value.as_bytes());
     }
-
     #[test]
     fn reputation_auth_uses_fresh_nonce_and_signature_for_each_poll() {
         let auth = fixture_reputation_auth(0x32, 369);
@@ -22864,18 +21656,15 @@ mod tests {
                 .expect("second endpoint");
         let now = UNIX_EPOCH + Duration::from_millis(1_725_000_000_123);
         let mut rng = IncrementingReputationRng { next: 0x21 };
-
         let first = reputation_request_headers_with_rng_at(&auth, &first_endpoint, now, &mut rng)
             .expect("first signed poll");
         let second = reputation_request_headers_with_rng_at(&auth, &second_endpoint, now, &mut rng)
             .expect("second signed poll");
-
         assert_ne!(first.nonce, second.nonce);
         assert_ne!(first.signature_base64, second.signature_base64);
-        assert_eq!(first.account_literal, auth.account_literal);
-        assert_eq!(second.account_literal, auth.account_literal);
+        assert_eq!(first.account_header_value, auth.account_header_value);
+        assert_eq!(second.account_header_value, auth.account_header_value);
     }
-
     #[test]
     fn reputation_auth_fails_closed_on_rng_and_clock_failures() {
         let auth = fixture_reputation_auth(0x33, 369);
@@ -22890,7 +21679,6 @@ mod tests {
         .err()
         .expect("RNG failure must abort signing");
         assert!(rng_error.contains("OS RNG failed"));
-
         let clock_error = reputation_request_timestamp_ms_at(
             UNIX_EPOCH
                 .checked_sub(Duration::from_millis(1))
@@ -22899,7 +21687,6 @@ mod tests {
         .expect_err("pre-epoch time must fail");
         assert!(clock_error.contains("before the Unix epoch"));
     }
-
     #[test]
     fn reputation_watch_issues_exactly_one_fetch_per_poll() {
         let mut endpoints = Vec::new();
@@ -22920,7 +21707,6 @@ mod tests {
             },
         )
         .expect("bounded watch");
-
         assert_eq!(endpoints.len(), 3);
         assert_eq!(endpoints[0].query(), Some("since=7&limit=12"));
         assert_eq!(endpoints[1].query(), Some("since=8&limit=12"));
@@ -22930,7 +21716,6 @@ mod tests {
             Some(10)
         );
     }
-
     #[test]
     fn reputation_http_client_never_follows_redirects() {
         let redirect_listener = TcpListener::bind("127.0.0.1:0").expect("bind redirect listener");
@@ -22945,7 +21730,6 @@ mod tests {
             )
             .expect("write redirect");
         });
-
         let client = reputation_http_client().expect("hardened reputation client");
         let response = client
             .get(format!("http://{redirect_address}/initial"))
@@ -22953,7 +21737,6 @@ mod tests {
             .expect("receive redirect without following it");
         assert_eq!(response.status(), StatusCode::FOUND);
         server.join().expect("redirect server");
-
         target_listener
             .set_nonblocking(true)
             .expect("nonblocking target listener");
@@ -22962,7 +21745,6 @@ mod tests {
             .expect_err("redirect target must not receive a request");
         assert_eq!(target_error.kind(), io::ErrorKind::WouldBlock);
     }
-
     #[test]
     fn reputation_live_reads_require_only_the_hard_cut_auth_flags() {
         for error in [
@@ -22978,7 +21760,6 @@ mod tests {
         ] {
             assert!(error.contains("missing required `--auth-account=I105`"));
         }
-
         let account_literal = fixture_account(0x35)
             .to_i105_for_discriminant(369)
             .expect("canonical auth account");
@@ -22988,7 +21769,6 @@ mod tests {
         ])
         .expect_err("private key file is mandatory");
         assert!(error.contains("missing required `--auth-private-key-file=PATH`"));
-
         let inline_secret = "secret-inline-value";
         let error = reputation_snapshot(vec![
             "--torii-url=http://127.0.0.1:9/".to_owned(),
@@ -22997,7 +21777,6 @@ mod tests {
         .expect_err("inline authentication secrets are retired");
         assert!(error.contains("unrecognised option `--auth-private-key`"));
         assert!(!error.contains(inline_secret));
-
         let witness_secret = "secret-witness-value";
         let error = reputation_snapshot(vec![
             "--torii-url=http://127.0.0.1:9/".to_owned(),
@@ -23006,7 +21785,6 @@ mod tests {
         .expect_err("witness compatibility is retired");
         assert!(error.contains("unrecognised option `--auth-witness`"));
         assert!(!error.contains(witness_secret));
-
         let error = reputation_snapshot(vec![
             "--torii-url=http://127.0.0.1:9/".to_owned(),
             "--auth-account=merchant@paynet".to_owned(),
@@ -23015,7 +21793,6 @@ mod tests {
         .expect_err("account aliases are retired");
         assert!(error.contains("exact canonical I105 literal"));
     }
-
     #[test]
     fn reputation_auth_private_key_must_match_the_account() {
         let directory = tempdir().expect("tempdir");
@@ -23026,18 +21803,16 @@ mod tests {
         let account_literal = AccountId::new(account_key.public_key().clone())
             .to_i105_for_discriminant(369)
             .expect("account literal");
-
         let error = load_reputation_request_auth(
             Some(account_literal),
             Some(path),
+            Some(fixture_reputation_network_id()),
             "sorafs_cli reputation snapshot",
         )
         .err()
         .expect("mismatched private key must fail");
-
         assert!(error.contains("does not control"));
     }
-
     #[test]
     fn reputation_auth_private_key_rejects_malformed_oversize_and_leaking_errors() {
         let directory = tempdir().expect("tempdir");
@@ -23047,7 +21822,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             fs::set_permissions(&malformed_path, fs::Permissions::from_mode(0o600))
                 .expect("secure malformed fixture");
         }
@@ -23055,20 +21829,17 @@ mod tests {
             load_reputation_auth_private_key(&malformed_path, "test").expect_err("malformed key");
         assert!(error.contains("malformed"));
         assert!(!error.contains(secret));
-
         let utf8_path = directory.path().join("invalid-utf8.key");
         fs::write(&utf8_path, [0xff_u8]).expect("write invalid UTF-8 key");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             fs::set_permissions(&utf8_path, fs::Permissions::from_mode(0o600))
                 .expect("secure UTF-8 fixture");
         }
         let error =
             load_reputation_auth_private_key(&utf8_path, "test").expect_err("invalid UTF-8 key");
         assert!(error.contains("not valid UTF-8"));
-
         let oversize_path = directory.path().join("oversize.key");
         fs::write(
             &oversize_path,
@@ -23078,7 +21849,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             fs::set_permissions(&oversize_path, fs::Permissions::from_mode(0o600))
                 .expect("secure oversize fixture");
         }
@@ -23086,42 +21856,35 @@ mod tests {
             load_reputation_auth_private_key(&oversize_path, "test").expect_err("oversize key");
         assert!(error.contains("between 1 and"));
     }
-
     #[cfg(unix)]
     #[test]
     fn reputation_auth_private_key_rejects_symlinks_hardlinks_and_open_permissions() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-
         let directory = tempdir().expect("tempdir");
         let key_pair = fixture_keypair(0x43);
         let target = directory.path().join("target.key");
         write_reputation_private_key(&target, &key_pair);
-
         let symlink_path = directory.path().join("symlink.key");
         symlink(&target, &symlink_path).expect("create symlink fixture");
         let error =
             load_reputation_auth_private_key(&symlink_path, "test").expect_err("symlink key");
         assert!(error.contains("non-symlink"));
-
         let hardlink = directory.path().join("hardlink.key");
         fs::hard_link(&target, &hardlink).expect("create hardlink fixture");
         let error = load_reputation_auth_private_key(&target, "test").expect_err("hardlinked key");
         assert!(error.contains("exactly one hard link"));
         fs::remove_file(hardlink).expect("remove hardlink fixture");
-
         fs::set_permissions(&target, fs::Permissions::from_mode(0o640))
             .expect("make key group-readable");
         let error =
             load_reputation_auth_private_key(&target, "test").expect_err("insecure key mode");
         assert!(error.contains("group or world permissions"));
     }
-
     #[test]
     fn gateway_cli_usage_exposes_only_canonical_denial_audit_inputs() {
         let fetch = fetch_usage();
         assert!(fetch.contains("--expected-cache-version=VERSION"));
         assert!(!fetch.contains("--moderation-key-b64"));
-
         let moderation = moderation_usage();
         assert!(moderation.contains("--expected-catalog-digest=HEX"));
         for retired in [
@@ -23135,7 +21898,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn honey_audit_rejects_retired_local_denial_proof_flags() {
         for retired in [
@@ -23147,14 +21909,12 @@ mod tests {
             assert_eq!(error, moderation_usage());
         }
     }
-
     #[test]
     fn honey_audit_expected_catalog_digest_is_exact_lowercase_hex() {
         let valid = "ab".repeat(32);
         let accepted = moderation_honey_audit(vec![format!("--expected-catalog-digest={valid}")])
             .expect_err("manifest is still required");
         assert!(accepted.contains("missing required `--manifest-id`"));
-
         for invalid in [
             String::new(),
             "01".repeat(31),
@@ -23172,7 +21932,6 @@ mod tests {
             );
         }
     }
-
     fn finalized_pin_for_manifest(manifest: &ManifestV1) -> PinManifestFinalizedRecordV1 {
         let digest = manifest.digest().expect("manifest digest");
         let mut record = PinManifestRecord::new(
@@ -23199,7 +21958,6 @@ mod tests {
             manifest: record,
         }
     }
-
     #[test]
     fn proof_stream_endpoint_policy_requires_one_exact_https_origin() {
         let endpoint = proof_stream_endpoint(Some("https://torii.sora.example"), None)
@@ -23220,7 +21978,6 @@ mod tests {
                 "ab".repeat(32)
             )
         );
-
         let direct = proof_stream_endpoint(
             None,
             Some("https://regional.sora.example/v1/sorafs/proof/stream"),
@@ -23230,7 +21987,6 @@ mod tests {
             direct,
             endpoint_with_host(&endpoint, "regional.sora.example")
         );
-
         for (torii, gateway) in [
             (Some("http://torii.sora.example"), None),
             (Some("https://user@torii.sora.example"), None),
@@ -23257,13 +22013,11 @@ mod tests {
             .is_err()
         );
     }
-
     fn endpoint_with_host(endpoint: &Url, host: &str) -> Url {
         let mut expected = endpoint.clone();
         expected.set_host(Some(host)).expect("replace fixture host");
         expected
     }
-
     #[test]
     fn proof_stream_bearer_token_syntax_is_bounded_and_header_safe() {
         for valid in [
@@ -23289,7 +22043,6 @@ mod tests {
             &"a".repeat(PROOF_STREAM_BEARER_TOKEN_MAX_BYTES + 1)
         ));
     }
-
     #[test]
     fn finalized_pin_validation_binds_every_manifest_commitment_and_cursor() {
         let manifest = sample_manifest();
@@ -23300,7 +22053,6 @@ mod tests {
         assert_eq!(validated.finalized_height, 17);
         assert_eq!(validated.finalized_block_hash, [0x66; 32]);
         assert_eq!(validated.por_root, manifest.por_root);
-
         let mut pending = finalized.clone();
         pending.manifest.status = PinStatus::Pending;
         assert!(
@@ -23309,7 +22061,6 @@ mod tests {
                 .expect("pending record must fail")
                 .contains("Approved")
         );
-
         let mut wrong_digest = finalized.clone();
         wrong_digest.manifest.digest = ManifestDigest::new([0xA1; 32]);
         assert!(
@@ -23354,7 +22105,6 @@ mod tests {
         zero_hash.finalized_cursor.block_hash = [0; 32];
         assert!(validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &zero_hash).is_err());
     }
-
     #[test]
     fn proof_stream_events_are_request_bound_and_payload_free_after_eof() {
         let payload = (0_u16..512)
@@ -23428,7 +22178,6 @@ mod tests {
             .expect("request-bound stream verifies through EOF");
         assert_eq!(items.len(), 1);
         assert!(items[0].to_json().get("proof").is_some());
-
         let projection = payload_free_proof_stream_event(&items[0]);
         let object = projection.as_object().expect("event projection object");
         let expected_request_digest = hex_encode(context.request_digest());
@@ -23454,10 +22203,8 @@ mod tests {
             );
         }
     }
-
     include!("sorafs_cli/canonical_argument_tests.rs");
 }
-
 fn chunk_digest_sha3_from_specs(specs: &[ChunkFetchSpec]) -> [u8; 32] {
     let mut ordered = specs.to_vec();
     ordered.sort_by_key(|spec| spec.chunk_index);
@@ -23469,7 +22216,6 @@ fn chunk_digest_sha3_from_specs(specs: &[ChunkFetchSpec]) -> [u8; 32] {
     }
     hasher.finalize().into()
 }
-
 fn chunk_digest_sha3_from_chunks(chunks: &[StoredChunk]) -> [u8; 32] {
     let mut hasher = Sha3_256::new();
     for chunk in chunks {
@@ -23479,7 +22225,6 @@ fn chunk_digest_sha3_from_chunks(chunks: &[StoredChunk]) -> [u8; 32] {
     }
     hasher.finalize().into()
 }
-
 fn parse_bool_flag(value: &str, flag: &str) -> Result<bool, String> {
     match value.to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" | "on" => Ok(true),
@@ -23487,7 +22232,6 @@ fn parse_bool_flag(value: &str, flag: &str) -> Result<bool, String> {
         _ => Err(format!("{flag} expects a boolean value (true|false)")),
     }
 }
-
 fn build_plan_from_specs(
     plan_json: &Value,
     chunker_handle_hint: Option<&str>,
@@ -23499,7 +22243,6 @@ fn build_plan_from_specs(
     if chunk_specs.is_empty() {
         return Err("chunk fetch plan contained no entries".into());
     }
-
     chunk_specs.sort_by_key(|spec| spec.chunk_index);
     for (idx, spec) in chunk_specs.iter().enumerate() {
         if spec.chunk_index != idx {
@@ -23509,13 +22252,11 @@ fn build_plan_from_specs(
             ));
         }
     }
-
     let content_length = chunk_specs
         .iter()
         .map(|spec| spec.offset + u64::from(spec.length))
         .max()
         .ok_or_else(|| "failed to derive content length from chunk fetch specs".to_string())?;
-
     let (chunk_profile, resolved_handle) = if let Some(handle) = chunker_handle_hint {
         let trimmed = handle.trim();
         let descriptor = chunker_registry::lookup_by_handle(trimmed).ok_or_else(|| {
@@ -23538,7 +22279,6 @@ fn build_plan_from_specs(
     } else {
         (ChunkProfile::DEFAULT, DEFAULT_CHUNKER_HANDLE.to_string())
     };
-
     let plan = CarBuildPlan {
         chunk_profile,
         payload_digest,
@@ -23559,20 +22299,17 @@ fn build_plan_from_specs(
             size: content_length,
         }],
     };
-
     Ok(PlanWithHandle {
         plan,
         chunker_handle: resolved_handle,
     })
 }
-
 struct FetchSummaryOptions<'a> {
     client_id: Option<&'a str>,
     rollout_phase: RolloutPhase,
     write_mode: WriteModeHint,
     cache_profile: Option<FetchCacheProfile>,
 }
-
 fn build_fetch_summary(
     manifest_id_hex: &str,
     chunker_handle: &str,
@@ -23606,7 +22343,6 @@ fn build_fetch_summary(
     root.insert("content_length".into(), Value::from(plan.content_length));
     let assembled_bytes: u64 = outcome.chunks.iter().map(|chunk| chunk.len() as u64).sum();
     root.insert("assembled_bytes".into(), Value::from(assembled_bytes));
-
     let provider_reports = outcome
         .provider_reports
         .iter()
@@ -23623,7 +22359,6 @@ fn build_fetch_summary(
         })
         .collect();
     root.insert("provider_reports".into(), Value::Array(provider_reports));
-
     let receipts = outcome
         .chunk_receipts
         .iter()
@@ -23704,7 +22439,6 @@ fn build_fetch_summary(
             Value::Array(governance_signatures),
         );
         root.insert("manifest_governance".into(), Value::Object(governance_obj));
-
         let mut car_obj = Map::new();
         car_obj.insert("size".into(), Value::from(verification.car_stats.car_size));
         car_obj.insert(
@@ -23741,7 +22475,6 @@ fn build_fetch_summary(
         );
         root.insert("car_archive".into(), Value::Object(car_obj));
     }
-
     root.insert(
         "anonymity_policy".into(),
         Value::from(anonymity_policy_label(policy_report.policy).to_string()),
@@ -23798,10 +22531,8 @@ fn build_fetch_summary(
         "anonymity_uses_classical".into(),
         Value::from(policy_report.uses_classical()),
     );
-
     Value::Object(root)
 }
-
 fn taikai_cache_stats_to_value(stats: TaikaiCacheStatsSnapshot) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -23845,7 +22576,6 @@ fn taikai_cache_stats_to_value(stats: TaikaiCacheStatsSnapshot) -> Value {
     );
     Value::Object(map)
 }
-
 fn taikai_cache_queue_to_value(stats: TaikaiPullQueueStats) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -23875,7 +22605,6 @@ fn taikai_cache_queue_to_value(stats: TaikaiPullQueueStats) -> Value {
     map.insert("open_circuits".into(), Value::from(stats.open_circuits));
     Value::Object(map)
 }
-
 fn tier_counts_value(hot: u64, warm: u64, cold: u64) -> Value {
     let mut map = Map::new();
     map.insert("hot".into(), Value::from(hot));
@@ -23883,14 +22612,12 @@ fn tier_counts_value(hot: u64, warm: u64, cold: u64) -> Value {
     map.insert("cold".into(), Value::from(cold));
     Value::Object(map)
 }
-
 fn reason_counts_value(expired: u64, capacity: u64) -> Value {
     let mut map = Map::new();
     map.insert("expired".into(), Value::from(expired));
     map.insert("capacity".into(), Value::from(capacity));
     Value::Object(map)
 }
-
 fn promotion_counts_value(warm_to_hot: u64, cold_to_warm: u64, cold_to_hot: u64) -> Value {
     let mut map = Map::new();
     map.insert("warm_to_hot".into(), Value::from(warm_to_hot));
@@ -23898,7 +22625,6 @@ fn promotion_counts_value(warm_to_hot: u64, cold_to_warm: u64, cold_to_hot: u64)
     map.insert("cold_to_hot".into(), Value::from(cold_to_hot));
     Value::Object(map)
 }
-
 fn qos_counts_value(priority: u64, standard: u64, bulk: u64) -> Value {
     let mut map = Map::new();
     map.insert("priority".into(), Value::from(priority));
@@ -23906,7 +22632,6 @@ fn qos_counts_value(priority: u64, standard: u64, bulk: u64) -> Value {
     map.insert("bulk".into(), Value::from(bulk));
     Value::Object(map)
 }
-
 fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, String> {
     let mut name: Option<String> = None;
     let mut provider_id: Option<String> = None;
@@ -23914,7 +22639,6 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
     let mut base_url: Option<String> = None;
     let mut stream_token: Option<String> = None;
     let mut privacy_events_url: Option<String> = None;
-
     for pair in value.split(',') {
         let pair = pair.trim();
         if pair.is_empty() {
@@ -23964,7 +22688,6 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
             other => return Err(format!("unknown key `{other}` in --provider argument")),
         }
     }
-
     let name = name.ok_or_else(|| "--provider requires a `name=` entry".to_string())?;
     let provider_id_hex =
         provider_id.ok_or_else(|| "--provider requires a `provider-id=` entry".to_string())?;
@@ -23973,7 +22696,6 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
     let base_url = base_url.ok_or_else(|| "--provider requires a `base-url=` entry".to_string())?;
     let stream_token_b64 =
         stream_token.ok_or_else(|| "--provider requires a `stream-token=` entry".to_string())?;
-
     Ok(GatewayProviderSpec {
         name,
         provider_id_hex,
@@ -23983,13 +22705,11 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
         privacy_events_url,
     })
 }
-
 fn parse_usize(raw: &str, flag: &str) -> Result<usize, String> {
     raw.trim()
         .parse::<usize>()
         .map_err(|err| format!("invalid {flag} value `{raw}`: {err}"))
 }
-
 fn parse_taikai_cache_override(value: Value) -> Result<Option<TaikaiCacheConfig>, String> {
     if value.is_null() {
         return Ok(None);
@@ -24010,7 +22730,6 @@ fn parse_taikai_cache_override(value: Value) -> Result<Option<TaikaiCacheConfig>
         .map_err(|err| format!("failed to parse Taikai cache config: {err}"))?;
     Ok(parsed.taikai_cache)
 }
-
 fn parse_storage_class(value: &str) -> Result<StorageClass, String> {
     match value.to_ascii_lowercase().as_str() {
         "hot" => Ok(StorageClass::Hot),
@@ -24021,7 +22740,6 @@ fn parse_storage_class(value: &str) -> Result<StorageClass, String> {
         )),
     }
 }
-
 fn parse_iso_week_arg(raw: &str) -> Result<PorReportIsoWeek, String> {
     let trimmed = raw.trim();
     let (year_part, week_part) = if let Some((year, week)) = trimmed.split_once("-W") {
@@ -24047,7 +22765,6 @@ fn parse_iso_week_arg(raw: &str) -> Result<PorReportIsoWeek, String> {
         .map_err(|err| format!("invalid ISO week `{trimmed}`: {err}"))?;
     Ok(week_id)
 }
-
 fn render_status_table(entries: &[PorChallengeStatusV1]) -> String {
     if entries.is_empty() {
         return "No PoR challenges found.".to_string();
@@ -24082,7 +22799,6 @@ fn render_status_table(entries: &[PorChallengeStatusV1]) -> String {
     }
     out
 }
-
 fn render_report_markdown(report: &PorWeeklyReportV1) -> String {
     let mut out = String::new();
     let _ = writeln!(&mut out, "# PoR Weekly Health — {}", report.cycle);
@@ -24108,7 +22824,6 @@ fn render_report_markdown(report: &PorWeeklyReportV1) -> String {
     if let Some(p95) = report.p95_latency_ms {
         let _ = writeln!(&mut out, "- P95 latency: {p95} ms");
     }
-
     if !report.top_offenders.is_empty() {
         let _ = writeln!(&mut out, "\n## Provider Summaries");
         let _ = writeln!(
@@ -24150,14 +22865,12 @@ fn render_report_markdown(report: &PorWeeklyReportV1) -> String {
             );
         }
     }
-
     if !report.providers_missing_vrf.is_empty() {
         let _ = writeln!(&mut out, "\n## Providers Missing VRF");
         for provider in &report.providers_missing_vrf {
             let _ = writeln!(&mut out, "- {}", hex_prefix(provider, 12));
         }
     }
-
     if !report.slashing_events.is_empty() {
         let _ = writeln!(&mut out, "\n## Slashing Events");
         for event in &report.slashing_events {
@@ -24170,13 +22883,11 @@ fn render_report_markdown(report: &PorWeeklyReportV1) -> String {
             );
         }
     }
-
     if let Some(notes) = report.notes.as_deref() {
         let _ = writeln!(&mut out, "\n## Notes\n{}", notes.trim());
     }
     out
 }
-
 fn truncate_with_ellipsis(value: &str, max_len: usize) -> String {
     if value.len() <= max_len {
         value.to_string()
@@ -24186,17 +22897,14 @@ fn truncate_with_ellipsis(value: &str, max_len: usize) -> String {
         format!("{}...", &value[..max_len - 3])
     }
 }
-
 fn bool_label(flag: bool) -> &'static str {
     if flag { "yes" } else { "no" }
 }
-
 fn hex_prefix(bytes: &[u8], len: usize) -> String {
     let full = hex_encode(bytes);
     let end = len.min(full.len());
     full[..end].to_string()
 }
-
 fn body_snippet(body: &[u8]) -> String {
     if body.is_empty() {
         return "empty response body".to_string();
@@ -24208,11 +22916,9 @@ fn body_snippet(body: &[u8]) -> String {
         format!("{} bytes (binary payload)", body.len())
     }
 }
-
 fn parse_digest_hex(input: &str) -> Result<[u8; 32], String> {
     parse_fixed_hex_bytes::<32>(input, "digest")
 }
-
 fn parse_fixed_hex_bytes<const N: usize>(input: &str, field: &str) -> Result<[u8; N], String> {
     let bytes = parse_hex_vec(input)?;
     if bytes.len() != N {
@@ -24230,7 +22936,6 @@ fn parse_fixed_hex_bytes<const N: usize>(input: &str, field: &str) -> Result<[u8
     }
     Ok(out)
 }
-
 fn parse_hex_vec(input: &str) -> Result<Vec<u8>, String> {
     if !input.len().is_multiple_of(2) {
         return Err("hex string must contain an even number of characters".into());
@@ -24244,7 +22949,6 @@ fn parse_hex_vec(input: &str) -> Result<Vec<u8>, String> {
     }
     Ok(out)
 }
-
 fn hex_value(byte: u8) -> Result<u8, String> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),
@@ -24253,7 +22957,6 @@ fn hex_value(byte: u8) -> Result<u8, String> {
         _ => Err(format!("invalid hex digit `{}`", byte as char)),
     }
 }
-
 fn format_manifest_error(err: ManifestBuildError) -> String {
     match err {
         ManifestBuildError::MissingField(field) => {
@@ -24261,7 +22964,6 @@ fn format_manifest_error(err: ManifestBuildError) -> String {
         }
     }
 }
-
 fn pin_policy_json(policy: &PinPolicy) -> Map {
     let mut obj = Map::new();
     let label = match policy.storage_class {
@@ -24280,12 +22982,10 @@ fn pin_policy_json(policy: &PinPolicy) -> Map {
     );
     obj
 }
-
 enum JsonSource {
     Stdin,
     File(PathBuf),
 }
-
 impl JsonSource {
     fn from_arg(arg: &str) -> Result<Self, String> {
         if arg == "-" {
@@ -24294,7 +22994,6 @@ impl JsonSource {
             Ok(Self::File(PathBuf::from(arg)))
         }
     }
-
     fn read(self) -> Result<Value, String> {
         match self {
             JsonSource::Stdin => {

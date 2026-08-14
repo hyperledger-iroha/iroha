@@ -1,5 +1,4 @@
 //! Norito roundtrip for the canonical V1 `BallotProof`.
-
 #[test]
 fn ballot_proof_roundtrip() {
     use iroha_data_model::isi::governance::BallotProof;

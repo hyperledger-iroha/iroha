@@ -1,6 +1,5 @@
 //! Contract manifest trigger registration tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -41,7 +40,6 @@ use iroha_executor_data_model::permission::account::{
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
 fn contract_artifact(entrypoints: Vec<EntrypointDescriptor>) -> (Vec<u8>, ContractManifest) {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
@@ -88,16 +86,13 @@ fn contract_artifact(entrypoints: Vec<EntrypointDescriptor>) -> (Vec<u8>, Contra
     let verified = ivm::verify_contract_artifact(&out).expect("valid test contract artifact");
     (out, verified.manifest)
 }
-
 fn checked_random_contract_manifest_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked contract manifest signer keypair")
 }
-
 #[test]
 fn contract_manifest_trigger_fixture_uses_checked_randomness() {
     let _key_pair = checked_random_contract_manifest_keypair();
 }
-
 fn setup_state() -> (State, AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -110,7 +105,6 @@ fn setup_state() -> (State, AccountId, KeyPair) {
     let state = State::new_for_testing(world, kura, query_handle);
     (state, account_id, kp)
 }
-
 fn opaque_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::from_uuid_bytes([
         0x68, 0x72, 0x45, 0x4e, 0x9c, 0x04, 0x46, 0x41, 0xaa, 0x58, 0x1e, 0xc5, 0xf3, 0x80, 0x16,
@@ -118,7 +112,6 @@ fn opaque_asset_definition_id() -> AssetDefinitionId {
     ])
     .expect("opaque asset definition id")
 }
-
 fn contract_address(
     authority: &AccountId,
     deploy_nonce: u64,
@@ -133,7 +126,6 @@ fn contract_address(
     )
     .expect("contract address")
 }
-
 fn assert_contract_trigger_metadata(
     metadata: &Metadata,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -173,7 +165,6 @@ fn assert_contract_trigger_metadata(
     let user_name: Name = user_key.parse().expect("user metadata key");
     assert_eq!(metadata.get(&user_name), Some(&Json::from(user_value)));
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn activate_registers_manifest_triggers_and_deactivate_removes() {
@@ -183,7 +174,6 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let register_perm: permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
     Grant::account_permission(register_perm, authority.clone())
@@ -194,7 +184,6 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     Grant::account_permission(enact_perm, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant CanEnactGovernance");
-
     let trigger_id: TriggerId = "wake".parse().expect("trigger id");
     let mut descriptor_metadata = Metadata::default();
     descriptor_metadata.insert("tag".parse::<Name>().expect("tag key"), Json::from("alpha"));
@@ -225,19 +214,16 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     };
     let (program, manifest) = contract_artifact(vec![entrypoint]);
     let code_hash = manifest.code_hash.expect("manifest code hash");
-
     RegisterSmartContractBytes {
         code_hash,
         code: program,
     }
     .execute(&authority, &mut stx)
     .expect("register contract bytes");
-
     let manifest = manifest.signed(&kp);
     RegisterSmartContractCode { manifest }
         .execute(&authority, &mut stx)
         .expect("register manifest");
-
     let missing_subject_error = ActivateContractInstance {
         contract_address: contract_address.clone(),
         code_hash,
@@ -252,7 +238,6 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
         stx.world.triggers().ids().get(&trigger_id).is_none(),
         "failed activation registered the manifest trigger"
     );
-
     Register::account(Account::new(contract_subject.clone()))
         .execute(&authority, &mut stx)
         .expect("register the non-signable contract-subject account");
@@ -260,14 +245,12 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
         !stx.can_register_trigger_for(&authority, &contract_subject),
         "the activation authority must not receive persistent trigger-registration permission"
     );
-
     ActivateContractInstance {
         contract_address: contract_address.clone(),
         code_hash,
     }
     .execute(&authority, &mut stx)
     .expect("activate");
-
     let action = stx
         .world
         .triggers()
@@ -309,17 +292,14 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     assert_eq!(metadata.get(&key_trigger), Some(&trigger_id_json));
     let tag_key: Name = "tag".parse().expect("tag key");
     assert_eq!(metadata.get(&tag_key), Some(&Json::from("alpha")));
-
     DeactivateContractInstance {
         contract_address: contract_address.clone(),
         reason: None,
     }
     .execute(&authority, &mut stx)
     .expect("deactivate");
-
     assert!(stx.world.triggers().ids().get(&trigger_id).is_none());
 }
-
 #[test]
 fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
     let (state, authority, kp) = setup_state();
@@ -334,7 +314,6 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let register_perm: permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
     Grant::account_permission(register_perm, authority.clone())
@@ -343,7 +322,6 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
     Register::account(Account::new(contract_subject))
         .execute(&authority, &mut stx)
         .expect("register the non-signable contract-subject account");
-
     let trigger_id: TriggerId = "foreign_wake".parse().expect("trigger id");
     let trigger = TriggerDescriptor {
         id: trigger_id.clone(),
@@ -383,7 +361,6 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
     }
     .execute(&authority, &mut stx)
     .expect("register manifest");
-
     let error = ActivateContractInstance {
         contract_address: contract_address.clone(),
         code_hash,
@@ -412,7 +389,6 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
         "failed activation bound a contract instance"
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes_them() {
@@ -421,7 +397,6 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let register_perm: permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
     Grant::account_permission(register_perm, authority.clone())
@@ -432,11 +407,9 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     Grant::account_permission(enact_perm, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant CanEnactGovernance");
-
     let asset_definition = opaque_asset_definition_id();
     let data_trigger_id: TriggerId = "asset_added".parse().expect("data trigger id");
     let pipeline_trigger_id: TriggerId = "block_seen".parse().expect("pipeline trigger id");
-
     let mut data_metadata = Metadata::default();
     data_metadata.insert("tag".parse::<Name>().expect("tag key"), Json::from("data"));
     let data_trigger = TriggerDescriptor {
@@ -454,7 +427,6 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
             entrypoint: "run".to_string(),
         },
     };
-
     let mut pipeline_metadata = Metadata::default();
     pipeline_metadata.insert(
         "tag".parse::<Name>().expect("tag key"),
@@ -473,7 +445,6 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
             entrypoint: "run".to_string(),
         },
     };
-
     let entrypoint = EntrypointDescriptor {
         name: "run".to_string(),
         kind: EntryPointKind::Kotoage,
@@ -490,14 +461,12 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     };
     let (program, manifest) = contract_artifact(vec![entrypoint]);
     let code_hash = manifest.code_hash.expect("manifest code hash");
-
     RegisterSmartContractBytes {
         code_hash,
         code: program,
     }
     .execute(&authority, &mut stx)
     .expect("register contract bytes");
-
     let manifest = manifest.signed(&kp);
     RegisterSmartContractCode { manifest }
         .execute(&authority, &mut stx)
@@ -505,14 +474,12 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     Register::account(Account::new(contract_address.subject_id()))
         .execute(&authority, &mut stx)
         .expect("register the non-signable contract-subject account");
-
     ActivateContractInstance {
         contract_address: contract_address.clone(),
         code_hash,
     }
     .execute(&authority, &mut stx)
     .expect("activate");
-
     let data_action = stx
         .world
         .triggers()
@@ -536,7 +503,6 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
         "tag",
         "data",
     );
-
     let pipeline_action = stx
         .world
         .triggers()
@@ -556,14 +522,12 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
         "tag",
         "pipeline",
     );
-
     DeactivateContractInstance {
         contract_address: contract_address.clone(),
         reason: None,
     }
     .execute(&authority, &mut stx)
     .expect("deactivate");
-
     assert!(
         stx.world
             .triggers()
@@ -587,7 +551,6 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
             .is_none()
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn activate_registers_cross_contract_manifest_trigger_callback() {
@@ -597,7 +560,6 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let register_perm: permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
     Grant::account_permission(register_perm, authority.clone())
@@ -615,7 +577,6 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     Grant::account_permission(alias_manage_permission, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant universal-dataspace account-alias management");
-
     let target_entrypoint = EntrypointDescriptor {
         name: "run".to_string(),
         kind: EntryPointKind::Kotoage,
@@ -654,7 +615,6 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     SetContractAlias::bind(target_address.clone(), target_alias.clone(), None)
         .execute(&authority, &mut stx)
         .expect("bind target alias");
-
     let trigger_id: TriggerId = "wake".parse().expect("trigger id");
     let mut descriptor_metadata = Metadata::default();
     descriptor_metadata.insert(
@@ -702,14 +662,12 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     Register::account(Account::new(source_address.subject_id()))
         .execute(&authority, &mut stx)
         .expect("register the non-signable source contract-subject account");
-
     ActivateContractInstance {
         contract_address: source_address.clone(),
         code_hash: source_code_hash,
     }
     .execute(&authority, &mut stx)
     .expect("activate source");
-
     let action = stx
         .world
         .triggers()
@@ -747,7 +705,6 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
         other => panic!("unexpected trigger executable: {other:?}"),
     }
 }
-
 #[test]
 fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
     let (state, authority, kp) = setup_state();
@@ -755,7 +712,6 @@ fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let register_perm: permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
     Grant::account_permission(register_perm, authority.clone())
@@ -766,7 +722,6 @@ fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
     Grant::account_permission(enact_perm, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant CanEnactGovernance");
-
     let trigger = TriggerDescriptor {
         id: "wake".parse().expect("trigger id"),
         repeats: Repeats::Indefinitely,
@@ -805,7 +760,6 @@ fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
     }
     .execute(&authority, &mut stx)
     .expect("register source manifest");
-
     let err = ActivateContractInstance {
         contract_address: source_address,
         code_hash: source_code_hash,
@@ -817,14 +771,12 @@ fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
         "unexpected error: {err:?}"
     );
 }
-
 #[test]
 fn activate_registers_kotodama_compiled_manifest_triggers_from_source() {
     let (state, authority, kp) = setup_state();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let register_perm: permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
     Grant::account_permission(register_perm, authority.clone())
@@ -835,7 +787,6 @@ fn activate_registers_kotodama_compiled_manifest_triggers_from_source() {
     Grant::account_permission(enact_perm, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant CanEnactGovernance");
-
     let authority_literal = authority.to_string();
     let asset_definition = opaque_asset_definition_id();
     let source = format!(
@@ -860,7 +811,6 @@ seiyaku Test {{
 }}
 "#
     );
-
     let (program, manifest) = ivm::KotodamaCompiler::new()
         .compile_source_with_manifest(&source)
         .expect("compile source with manifest");
@@ -869,31 +819,26 @@ seiyaku Test {{
     Register::account(Account::new(contract_address.subject_id()))
         .execute(&authority, &mut stx)
         .expect("register the non-signable contract-subject account");
-
     RegisterSmartContractBytes {
         code_hash,
         code: program,
     }
     .execute(&authority, &mut stx)
     .expect("register contract bytes");
-
     RegisterSmartContractCode {
         manifest: manifest.signed(&kp),
     }
     .execute(&authority, &mut stx)
     .expect("register manifest");
-
     ActivateContractInstance {
         contract_address: contract_address.clone(),
         code_hash,
     }
     .execute(&authority, &mut stx)
     .expect("activate");
-
     let data_trigger_id: TriggerId = "asset_added".parse().expect("data trigger id");
     let pipeline_trigger_id: TriggerId = "block_seen".parse().expect("pipeline trigger id");
     let asset_definition = opaque_asset_definition_id();
-
     let data_action = stx
         .world
         .triggers()
@@ -918,7 +863,6 @@ seiyaku Test {{
         "tag",
         "data",
     );
-
     let pipeline_action = stx
         .world
         .triggers()

@@ -1,5 +1,4 @@
 use std::{fs, path::Path};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use blake3::Hasher as Blake3;
 use ed25519_dalek::SigningKey;
@@ -17,7 +16,6 @@ use iroha_data_model::{
 use norito::json::{self, Value};
 use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
 use tempfile::tempdir;
-
 #[test]
 fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
     let temp = tempdir().expect("tempdir");
@@ -25,10 +23,8 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("workspace root");
-
     let pq_bundle = temp.path().join("sample_srcv2.cbor");
     write_sample_srcv2(&pq_bundle);
-
     let tls_dir = temp.path().join("tls");
     fs::create_dir_all(&tls_dir).expect("tls dir");
     fs::write(tls_dir.join("fullchain.pem"), "CERT").expect("fullchain");
@@ -38,7 +34,6 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
         r#"{"ech_config_b64":"ZWNobWFyay1zYW1wbGU="}"#,
     )
     .expect("ech");
-
     let receipts_dir = temp.path().join("receipts");
     fs::create_dir_all(&receipts_dir).expect("receipts dir");
     let receipt = GarEnforcementReceiptV1 {
@@ -63,7 +58,6 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
     let receipt_path = receipts_dir.join("receipt.json");
     let receipt_file = fs::File::create(&receipt_path).expect("receipt file");
     norito::json::to_writer_pretty(receipt_file, &receipt).expect("write receipt");
-
     let acks_dir = temp.path().join("acks");
     fs::create_dir_all(&acks_dir).expect("acks dir");
     let ack = norito::json!({
@@ -75,7 +69,6 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
     let ack_path = acks_dir.join("ack.json");
     let ack_file = fs::File::create(&ack_path).expect("ack file");
     norito::json::to_writer_pretty(ack_file, &ack).expect("write ack");
-
     let sbom_path = temp.path().join("sbom.json");
     fs::write(&sbom_path, r#"{"sbom":"ok"}"#).expect("sbom");
     let vuln_report = temp.path().join("vuln.txt");
@@ -84,12 +77,10 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
     fs::write(&hsm_policy, "YubiHSM policy").expect("hsm");
     let sandbox_profile = temp.path().join("sandbox.json");
     fs::write(&sandbox_profile, r#"{"profile":"cgroup"}"#).expect("sandbox");
-
     let descriptor = workspace_root
         .join("fixtures")
         .join("soranet_pop")
         .join("lab_pop.json");
-
     let trustless_config = workspace_root
         .join("configs")
         .join("soranet")
@@ -110,7 +101,6 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
         .join("soranet")
         .join("gateway_m0")
         .join("billing_guardrails.json");
-
     let config = norito::json!({
         "pops": [{
             "name": "soranet-sjc01",
@@ -145,7 +135,6 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
     let config_path = temp.path().join("gateway_m2_config.json");
     let config_file = fs::File::create(&config_path).expect("config file");
     norito::json::to_writer_pretty(config_file, &config).expect("write config");
-
     let mut cmd = cargo_bin_cmd!("xtask");
     let output = cmd
         .current_dir(workspace_root)
@@ -166,7 +155,6 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
     let summary_path = out_dir.join("gateway_m2_summary.json");
     let summary_bytes = fs::read(&summary_path).expect("summary exists");
     let summary: Value = json::from_slice(&summary_bytes).expect("summary parses");
@@ -197,13 +185,11 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
         out_dir.join(compliance_path).is_file(),
         "compliance summary missing"
     );
-
     let ga_dir = temp.path().join("gateway_m3");
     let autoscale_plan = temp.path().join("autoscale.json");
     fs::write(&autoscale_plan, r#"{"scale":"m3"}"#).expect("autoscale");
     let worker_pack = temp.path().join("worker.wasm");
     fs::write(&worker_pack, b"worker-bytes").expect("worker pack");
-
     let mut ga_cmd = cargo_bin_cmd!("xtask");
     let ga_output = ga_cmd
         .current_dir(workspace_root)
@@ -230,7 +216,6 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
         String::from_utf8_lossy(&ga_output.stdout),
         String::from_utf8_lossy(&ga_output.stderr)
     );
-
     let ga_summary_path = ga_dir.join("gateway_m3_summary.json");
     let ga_bytes = fs::read(&ga_summary_path).expect("ga summary exists");
     let ga_summary: Value = json::from_slice(&ga_bytes).expect("ga summary parses");
@@ -243,7 +228,6 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
     assert_eq!(autoscale_hex, blake3_hex(&autoscale_plan));
     assert_eq!(worker_hex, blake3_hex(&worker_pack));
 }
-
 fn write_sample_srcv2(path: &Path) {
     let signing_key = SigningKey::from_bytes(&[0x11; 32]);
     let mldsa_keys = generate_mldsa_keypair_from_seed(
@@ -252,7 +236,6 @@ fn write_sample_srcv2(path: &Path) {
         b"xtask:soranet-gateway-m2:srcv2",
     )
     .expect("mldsa keypair");
-
     let certificate = RelayCertificateV2 {
         relay_id: signing_key.verifying_key().to_bytes(),
         identity_ed25519: signing_key.verifying_key().to_bytes(),
@@ -303,7 +286,6 @@ fn write_sample_srcv2(path: &Path) {
     let bytes = bundle.to_cbor();
     fs::write(path, bytes).expect("write cbor");
 }
-
 fn blake3_hex(path: &Path) -> String {
     let mut hasher = Blake3::new();
     let mut file = fs::File::open(path).expect("open file");

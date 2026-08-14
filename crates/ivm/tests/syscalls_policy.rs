@@ -1,7 +1,5 @@
 //! ABI policy regression tests for syscall allowlist behavior.
-
 use ivm::{self, SyscallPolicy};
-
 #[test]
 fn baseline_policy_allows_known_surface_numbers() {
     use ivm::syscalls::*;
@@ -32,7 +30,6 @@ fn baseline_policy_allows_known_surface_numbers() {
         );
     }
 }
-
 #[test]
 fn invocation_local_u64_nullifier_is_not_an_abi_v1_syscall() {
     assert!(!ivm::syscalls::is_syscall_allowed(
@@ -40,7 +37,6 @@ fn invocation_local_u64_nullifier_is_not_an_abi_v1_syscall() {
         ivm::syscalls::SYSCALL_USE_NULLIFIER
     ));
 }
-
 #[test]
 fn unknown_numbers_rejected() {
     let list = ivm::syscalls::abi_syscall_list();
@@ -57,13 +53,11 @@ fn unknown_numbers_rejected() {
         nums.push(tail_candidate);
         tail_candidate = tail_candidate.saturating_add(1);
     }
-
     for &n in &nums {
         assert!(!list.contains(&n), "test picked known syscall 0x{n:x}");
         assert!(!ivm::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, n));
     }
 }
-
 #[test]
 fn abi_hash_is_stable_for_policy() {
     use ivm::syscalls::compute_abi_hash;

@@ -2,7 +2,6 @@
 #![allow(clippy::size_of_ref)]
 use iroha_schema::IntoSchema;
 use norito::{NoritoDeserialize, from_bytes, to_bytes};
-
 #[derive(
     IntoSchema, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq,
 )]
@@ -10,7 +9,6 @@ struct TuplePayload {
     value: u64,
     text: String,
 }
-
 #[derive(
     IntoSchema, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq,
 )]
@@ -19,7 +17,6 @@ struct StructPayload {
     data: Vec<u8>,
     tag: [u8; 4],
 }
-
 #[derive(
     IntoSchema, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq,
 )]
@@ -28,7 +25,6 @@ enum AoSEnum {
     Tuple(TuplePayload),
     Struct(StructPayload),
 }
-
 #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq)]
 #[norito(decode_from_slice)]
 enum AoSNamedEnum {
@@ -39,7 +35,6 @@ enum AoSNamedEnum {
     },
     Unit,
 }
-
 #[derive(
     IntoSchema, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq,
 )]
@@ -47,19 +42,16 @@ enum AoSU8ArrayEnum {
     Unit,
     Bytes([u8; 12]),
 }
-
 #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq)]
 enum NamedArrayEnum {
     Raw { prefix: i32, bytes: [u8; 32] },
 }
-
 #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq)]
 struct NestedNamedArray {
     first: String,
     value: NamedArrayEnum,
     last: String,
 }
-
 #[test]
 fn aos_enum_roundtrip_unit() {
     let v = AoSEnum::Unit;
@@ -68,7 +60,6 @@ fn aos_enum_roundtrip_unit() {
     let back = <AoSEnum as NoritoDeserialize>::deserialize(arch);
     assert_eq!(v, back);
 }
-
 #[test]
 fn aos_enum_roundtrip_tuple() {
     let v = AoSEnum::Tuple(TuplePayload {
@@ -80,7 +71,6 @@ fn aos_enum_roundtrip_tuple() {
     let back = <AoSEnum as NoritoDeserialize>::deserialize(arch);
     assert_eq!(v, back);
 }
-
 #[test]
 fn aos_enum_roundtrip_struct() {
     let v = AoSEnum::Struct(StructPayload {
@@ -93,7 +83,6 @@ fn aos_enum_roundtrip_struct() {
     let back = <AoSEnum as NoritoDeserialize>::deserialize(arch);
     assert_eq!(v, back);
 }
-
 #[test]
 fn aos_enum_roundtrip_named_variant() {
     let v = AoSNamedEnum::StructLike {
@@ -106,7 +95,6 @@ fn aos_enum_roundtrip_named_variant() {
     let back: AoSNamedEnum = view.decode().expect("decode named enum");
     assert_eq!(v, back);
 }
-
 #[test]
 fn aos_enum_roundtrip_u8_array_unpacked() {
     let _guard = norito::core::DecodeFlagsGuard::enter(0);
@@ -116,7 +104,6 @@ fn aos_enum_roundtrip_u8_array_unpacked() {
     let back = <AoSU8ArrayEnum as NoritoDeserialize>::deserialize(arch);
     assert_eq!(v, back);
 }
-
 #[test]
 fn aos_nested_named_variant_with_u8_array_roundtrips() {
     let v = NestedNamedArray {

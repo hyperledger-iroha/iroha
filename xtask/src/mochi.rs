@@ -7,19 +7,15 @@ use std::{
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
-
 use norito::json::{self, Map, Value};
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
-
 use crate::workspace_root;
-
 const MOCHI_UI_MANIFEST_REL: &str = "mochi/mochi-ui-egui/Cargo.toml";
 const MOCHI_BIN_NAME: &str = "mochi";
 const MOCHI_UI_FEATURE: &str = "gui";
 const MOCHI_HELP_HEADER: &str = "MOCHI usage:";
 const MOCHI_SANDBOX_HELP: &str = "mochi sandbox serve [options]";
-
 #[derive(Debug, Clone)]
 pub(crate) struct MochiBundleResult {
     pub target: String,
@@ -30,7 +26,6 @@ pub(crate) struct MochiBundleResult {
     pub manifest_path: PathBuf,
     pub archive_path: Option<PathBuf>,
 }
-
 pub(crate) fn bundle_mochi(
     output_root: &Path,
     profile: &str,
@@ -38,35 +33,28 @@ pub(crate) fn bundle_mochi(
     kagami_override: Option<&Path>,
 ) -> Result<MochiBundleResult, Box<dyn Error>> {
     build_mochi_ui(profile)?;
-
     if !output_root.exists() {
         fs::create_dir_all(output_root)?;
     }
-
     let host = format!("{}-{}", env::consts::OS, env::consts::ARCH);
     let bundle_name = format!("mochi-{host}-{profile}");
     let bundle_root = output_root.join(&bundle_name);
-
     if bundle_root.exists() {
         fs::remove_dir_all(&bundle_root)?;
     }
-
     fs::create_dir_all(bundle_root.join("bin"))?;
     fs::create_dir_all(bundle_root.join("config"))?;
     fs::create_dir_all(bundle_root.join("docs"))?;
-
     let binary_path = resolve_binary_path(profile)?;
     let binary_target = bundle_root
         .join("bin")
         .join(format!("mochi{}", env::consts::EXE_SUFFIX));
     fs::copy(binary_path, &binary_target)?;
-
     let kagami_path = resolve_kagami_path(profile, kagami_override)?;
     let kagami_target = bundle_root
         .join("bin")
         .join(format!("kagami{}", env::consts::EXE_SUFFIX));
     fs::copy(kagami_path, &kagami_target)?;
-
     copy_into_bundle("LICENSE", &bundle_root.join("LICENSE"))?;
     copy_into_bundle(
         "mochi/BUNDLE_README.md",
@@ -76,19 +64,16 @@ pub(crate) fn bundle_mochi(
         "mochi/sample-config.toml",
         &bundle_root.join("config/sample.toml"),
     )?;
-
     let manifest = generate_manifest_json(&bundle_root, profile)?;
     let manifest_path = bundle_root.join("manifest.json");
     let mut manifest_text = json::to_string_pretty(&manifest)?;
     manifest_text.push('\n');
     fs::write(&manifest_path, manifest_text)?;
-
     let archive_path = if archive {
         Some(create_archive(output_root, &bundle_name, &bundle_root)?)
     } else {
         None
     };
-
     Ok(MochiBundleResult {
         target: host,
         profile: profile.to_owned(),
@@ -99,7 +84,6 @@ pub(crate) fn bundle_mochi(
         archive_path,
     })
 }
-
 pub(crate) fn run_bundle_smoke(result: &MochiBundleResult) -> Result<(), Box<dyn Error>> {
     let mochi_bin = result
         .bundle_root
@@ -108,7 +92,6 @@ pub(crate) fn run_bundle_smoke(result: &MochiBundleResult) -> Result<(), Box<dyn
     if !mochi_bin.exists() {
         return Err(format!("missing mochi binary at {}", mochi_bin.display()).into());
     }
-
     let output = Command::new(&mochi_bin)
         .args(["sandbox", "serve", "--help"])
         .env("MOCHI_DATA_ROOT", result.bundle_root.join(".smoke"))
@@ -134,7 +117,6 @@ pub(crate) fn run_bundle_smoke(result: &MochiBundleResult) -> Result<(), Box<dyn
         Ok(())
     }
 }
-
 fn validate_mochi_help_output(stdout: &str) -> Result<(), String> {
     if !stdout.contains(MOCHI_HELP_HEADER) {
         return Err(format!("missing `{MOCHI_HELP_HEADER}`"));
@@ -144,7 +126,6 @@ fn validate_mochi_help_output(stdout: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 pub(crate) fn update_bundle_matrix(
     result: &MochiBundleResult,
     matrix_path: &Path,
@@ -153,13 +134,11 @@ pub(crate) fn update_bundle_matrix(
     if let Some(parent) = matrix_path.parent() {
         fs::create_dir_all(parent)?;
     }
-
     let timestamp_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
     let timestamp = u64::try_from(timestamp_ms).unwrap_or(u64::MAX);
-
     let mut root_map = if matrix_path.exists() {
         let raw = fs::read_to_string(matrix_path)?;
         let value: Value = json::from_str(&raw)?;
@@ -167,12 +146,10 @@ pub(crate) fn update_bundle_matrix(
     } else {
         Map::new()
     };
-
     if !root_map.contains_key("generated_unix_ms") {
         root_map.insert("generated_unix_ms".into(), Value::from(timestamp));
     }
     root_map.insert("updated_unix_ms".into(), Value::from(timestamp));
-
     let mut entries = match root_map.remove("entries") {
         Some(Value::Array(entries)) => entries,
         Some(other) => {
@@ -184,7 +161,6 @@ pub(crate) fn update_bundle_matrix(
         }
         None => Vec::new(),
     };
-
     let target_value = Value::from(result.target.clone());
     let profile_value = Value::from(result.profile.clone());
     entries.retain(|entry| {
@@ -197,10 +173,8 @@ pub(crate) fn update_bundle_matrix(
             })
             .unwrap_or(true)
     });
-
     let manifest_bytes = fs::read(&result.manifest_path)?;
     let manifest_sha256 = sha256_hex(&manifest_bytes);
-
     let mut entry = Map::new();
     entry.insert("target".into(), Value::from(result.target.clone()));
     entry.insert("profile".into(), Value::from(result.profile.clone()));
@@ -227,21 +201,17 @@ pub(crate) fn update_bundle_matrix(
     entry.insert("generated_unix_ms".into(), Value::from(timestamp));
     entry.insert("smoke_passed".into(), Value::from(smoke_passed));
     entries.push(Value::Object(entry));
-
     root_map.insert("entries".into(), Value::Array(entries));
-
     let mut text = json::to_string_pretty(&Value::Object(root_map))?;
     text.push('\n');
     fs::write(matrix_path, text)?;
     Ok(())
 }
-
 pub(crate) fn stage_bundle(
     result: &MochiBundleResult,
     stage_root: &Path,
 ) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(stage_root)?;
-
     let staged_bundle_root = stage_root.join(&result.bundle_name);
     if staged_bundle_root.starts_with(&result.bundle_root)
         && staged_bundle_root != result.bundle_root
@@ -259,7 +229,6 @@ pub(crate) fn stage_bundle(
         }
         copy_directory(&result.bundle_root, &staged_bundle_root)?;
     }
-
     if let Some(archive) = &result.archive_path {
         if let Some(file_name) = archive.file_name() {
             let staged_archive = stage_root.join(file_name);
@@ -277,10 +246,8 @@ pub(crate) fn stage_bundle(
             .into());
         }
     }
-
     Ok(())
 }
-
 fn copy_directory(source: &Path, destination: &Path) -> Result<(), Box<dyn Error>> {
     for entry in WalkDir::new(source).into_iter().filter_map(Result::ok) {
         let path = entry.path();
@@ -290,7 +257,6 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<(), Box<dyn Error
         if relative.as_os_str().is_empty() {
             continue;
         }
-
         let target = destination.join(relative);
         if entry.file_type().is_dir() {
             fs::create_dir_all(&target)?;
@@ -301,10 +267,8 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<(), Box<dyn Error
             fs::copy(path, &target)?;
         }
     }
-
     Ok(())
 }
-
 fn build_mochi_ui(profile: &str) -> Result<(), Box<dyn Error>> {
     let mut command = Command::new("cargo");
     command.args(mochi_ui_build_args(profile));
@@ -318,7 +282,6 @@ fn build_mochi_ui(profile: &str) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn mochi_ui_build_args(profile: &str) -> Vec<OsString> {
     let mut args = vec![OsString::from("build")];
     if profile == "release" {
@@ -336,11 +299,9 @@ fn mochi_ui_build_args(profile: &str) -> Vec<OsString> {
     ]);
     args
 }
-
 fn mochi_ui_manifest_path() -> PathBuf {
     workspace_root().join(MOCHI_UI_MANIFEST_REL)
 }
-
 fn build_kagami(profile: &str) -> Result<(), Box<dyn Error>> {
     let mut command = Command::new("cargo");
     command.arg("build");
@@ -357,7 +318,6 @@ fn build_kagami(profile: &str) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn profile_directory(profile: &str) -> &str {
     match profile {
         "release" => "release",
@@ -365,7 +325,6 @@ fn profile_directory(profile: &str) -> &str {
         other => other,
     }
 }
-
 fn resolve_binary_path(profile: &str) -> Result<PathBuf, Box<dyn Error>> {
     let profile_dir = profile_directory(profile);
     let binary = cargo_target_dir()
@@ -376,7 +335,6 @@ fn resolve_binary_path(profile: &str) -> Result<PathBuf, Box<dyn Error>> {
     }
     Ok(binary)
 }
-
 pub(crate) fn resolve_kagami_path(
     profile: &str,
     override_path: Option<&Path>,
@@ -390,7 +348,6 @@ pub(crate) fn resolve_kagami_path(
         }
         return Ok(path.to_path_buf());
     }
-
     let profile_dir = profile_directory(profile);
     let candidate = cargo_target_dir()
         .join(profile_dir)
@@ -398,7 +355,6 @@ pub(crate) fn resolve_kagami_path(
     if candidate.exists() {
         return Ok(candidate);
     }
-
     build_kagami(profile)?;
     if candidate.exists() {
         Ok(candidate)
@@ -410,7 +366,6 @@ pub(crate) fn resolve_kagami_path(
         .into())
     }
 }
-
 fn copy_into_bundle(source_rel: &str, destination: &Path) -> Result<(), Box<dyn Error>> {
     let source = workspace_root().join(source_rel);
     if !source.exists() {
@@ -422,7 +377,6 @@ fn copy_into_bundle(source_rel: &str, destination: &Path) -> Result<(), Box<dyn 
     fs::copy(&source, destination)?;
     Ok(())
 }
-
 fn cargo_target_dir() -> PathBuf {
     if let Ok(dir) = env::var("CARGO_TARGET_DIR") {
         let path = PathBuf::from(dir);
@@ -435,7 +389,6 @@ fn cargo_target_dir() -> PathBuf {
         workspace_root().join("target")
     }
 }
-
 fn generate_manifest_json(bundle_root: &Path, profile: &str) -> Result<Value, Box<dyn Error>> {
     let mut files = Vec::new();
     for entry in WalkDir::new(bundle_root)
@@ -463,13 +416,11 @@ fn generate_manifest_json(bundle_root: &Path, profile: &str) -> Result<Value, Bo
             Value::Object(entry)
         })
         .collect();
-
     let timestamp_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
     let generated_unix_ms = u64::try_from(timestamp_ms).unwrap_or(u64::MAX);
-
     let mut manifest = norito::json::Map::new();
     manifest.insert("generated_unix_ms".into(), Value::from(generated_unix_ms));
     manifest.insert(
@@ -480,13 +431,11 @@ fn generate_manifest_json(bundle_root: &Path, profile: &str) -> Result<Value, Bo
     manifest.insert("files".into(), Value::Array(files));
     Ok(Value::Object(manifest))
 }
-
 fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     hex::encode(hasher.finalize())
 }
-
 fn create_archive(
     output_root: &Path,
     bundle_name: &str,
@@ -496,7 +445,6 @@ fn create_archive(
     if archive_path.exists() {
         fs::remove_file(&archive_path)?;
     }
-
     let bundle_parent = bundle_root.parent().ok_or_else(|| {
         format!(
             "bundle root `{}` does not have a parent directory",
@@ -511,7 +459,6 @@ fn create_archive(
         )
         .into());
     }
-
     let status = Command::new("tar")
         .arg("-czf")
         .arg(&archive_path)
@@ -529,7 +476,6 @@ fn create_archive(
     }
     Ok(archive_path)
 }
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -538,19 +484,15 @@ mod tests {
         validate_mochi_help_output,
     };
     use std::{ffi::OsString, fs, process::Command};
-
     use tempfile::tempdir;
-
     #[test]
     fn mochi_ui_manifest_path_declares_packaged_binary() {
         let manifest_path = mochi_ui_manifest_path();
-
         assert!(
             manifest_path.ends_with(MOCHI_UI_MANIFEST_REL),
             "unexpected MOCHI UI manifest path: {}",
             manifest_path.display()
         );
-
         let manifest = fs::read_to_string(&manifest_path)
             .unwrap_or_else(|_| panic!("missing manifest {}", manifest_path.display()));
         assert!(
@@ -559,7 +501,6 @@ mod tests {
             "MOCHI UI manifest must declare the packaged `{MOCHI_BIN_NAME}` binary"
         );
     }
-
     #[test]
     fn mochi_ui_build_args_enable_gui_for_the_packaged_binary() {
         let args = mochi_ui_build_args("debug");
@@ -569,18 +510,15 @@ mod tests {
             OsString::from("--bin"),
             OsString::from(MOCHI_BIN_NAME),
         ];
-
         assert_eq!(args.first(), Some(&OsString::from("build")));
         assert_eq!(
             args.get(args.len() - expected_tail.len()..),
             Some(expected_tail.as_slice())
         );
     }
-
     #[test]
     fn mochi_ui_build_args_preserve_named_profiles() {
         let args = mochi_ui_build_args("profiling");
-
         assert_eq!(
             args.get(0..3),
             Some(
@@ -593,42 +531,33 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn mochi_ui_build_args_preserve_release_profile() {
         let args = mochi_ui_build_args("release");
-
         assert_eq!(
             args.get(0..2),
             Some([OsString::from("build"), OsString::from("--release")].as_slice())
         );
     }
-
     #[test]
     fn mochi_help_validation_accepts_headless_cli_usage() {
         let stdout = format!("{MOCHI_HELP_HEADER}\n  {MOCHI_SANDBOX_HELP}\n");
-
         assert_eq!(validate_mochi_help_output(&stdout), Ok(()));
     }
-
     #[test]
     fn mochi_help_validation_rejects_default_feature_stub() {
         let error = validate_mochi_help_output(
             "MOCHI GUI is not enabled in the default workspace build.\n",
         )
         .expect_err("default-feature stub must not pass bundle smoke");
-
         assert_eq!(error, format!("missing `{MOCHI_HELP_HEADER}`"));
     }
-
     #[test]
     fn mochi_help_validation_requires_sandbox_command() {
         let error = validate_mochi_help_output(MOCHI_HELP_HEADER)
             .expect_err("generic help without the sandbox command must fail");
-
         assert_eq!(error, format!("missing `{MOCHI_SANDBOX_HELP}`"));
     }
-
     #[test]
     fn create_archive_packages_bundle_directory() {
         let tempdir = tempdir().expect("tempdir");
@@ -637,12 +566,9 @@ mod tests {
         let bundle_root = output_root.join(bundle_name);
         fs::create_dir_all(bundle_root.join("bin")).expect("bundle dir");
         fs::write(bundle_root.join("bin").join("mochi"), b"binary").expect("bundle file");
-
         let archive_path =
             create_archive(output_root, bundle_name, &bundle_root).expect("archive builds");
-
         assert!(archive_path.exists(), "archive should exist");
-
         let listing = Command::new("tar")
             .arg("-tzf")
             .arg(&archive_path)

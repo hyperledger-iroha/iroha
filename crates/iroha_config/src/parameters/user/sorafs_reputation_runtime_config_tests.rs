@@ -1,12 +1,9 @@
 //! Focused parser tests for the SoraFS reputation runtime policy.
-
 use super::*;
-
 fn publisher_public_key_hex() -> String {
     let key = KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519).expect("test keypair");
     hex::encode(key.public_key().to_bytes().1)
 }
-
 fn absolute_state_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
@@ -17,7 +14,6 @@ fn absolute_state_dir() -> PathBuf {
         PathBuf::from("/var/lib/iroha/sorafs/reputation")
     }
 }
-
 fn absolute_trust_policy_path() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
@@ -28,7 +24,6 @@ fn absolute_trust_policy_path() -> PathBuf {
         PathBuf::from("/etc/iroha/reputation-trust-policy.to")
     }
 }
-
 fn valid_config() -> SorafsReputationRuntimeConfig {
     SorafsReputationRuntimeConfig {
         enabled: true,
@@ -53,7 +48,6 @@ fn valid_config() -> SorafsReputationRuntimeConfig {
         ..SorafsReputationRuntimeConfig::default()
     }
 }
-
 #[test]
 fn disabled_default_is_inert() {
     let mut emitter = Emitter::new();
@@ -64,7 +58,6 @@ fn disabled_default_is_inert() {
     );
     assert!(emitter.into_result().is_ok());
 }
-
 #[test]
 fn enabled_policy_parses_without_credentials() {
     let mut emitter = Emitter::new();
@@ -131,7 +124,6 @@ fn enabled_policy_parses_without_credentials() {
         10_000
     );
 }
-
 #[test]
 fn enabled_policy_rejects_missing_or_nonproduction_dependencies() {
     let mut config = valid_config();
@@ -145,12 +137,10 @@ fn enabled_policy_rejects_missing_or_nonproduction_dependencies() {
     config.max_pages_per_batch = 516;
     config.poll_interval_ms = 0;
     config.repair_breach_bps = 999;
-
     let mut emitter = Emitter::new();
     assert!(config.parse(false, None, &mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn enabled_policy_rejects_omitted_zero_and_noncanonical_qualification_bindings() {
     let trust_policy_path = absolute_trust_policy_path();
@@ -168,7 +158,6 @@ fn enabled_policy_rejects_omitted_zero_and_noncanonical_qualification_bindings()
     uppercase_digest.threshold_signer_policy_digest_hex = Some("A2".repeat(32));
     let mut short_digest = valid_config();
     short_digest.governance_dag_policy_digest_hex = Some("63".repeat(31));
-
     for config in [
         omitted_revision,
         omitted_checkpoint_revision,
@@ -187,7 +176,6 @@ fn enabled_policy_rejects_omitted_zero_and_noncanonical_qualification_bindings()
         assert!(emitter.into_result().is_err());
     }
 }
-
 #[test]
 fn enabled_policy_rejects_invalid_finalized_archive_bounds_without_clamping() {
     let mut zero_record = valid_config();
@@ -205,7 +193,6 @@ fn enabled_policy_rejects_invalid_finalized_archive_bounds_without_clamping() {
             defaults::sorafs::storage::reputation_runtime::FINALIZED_ARCHIVE_MAX_KURA_TIP_LAG_BLOCKS_LIMIT
                 + 1;
     let trust_policy_path = absolute_trust_policy_path();
-
     for config in [
         zero_record,
         zero_entries,
@@ -222,7 +209,6 @@ fn enabled_policy_rejects_invalid_finalized_archive_bounds_without_clamping() {
         assert!(emitter.into_result().is_err());
     }
 }
-
 #[test]
 fn enabled_retention_requires_and_projects_exact_public_authority_binding() {
     let mut config = valid_config();
@@ -233,7 +219,6 @@ fn enabled_retention_requires_and_projects_exact_public_authority_binding() {
     config.finalized_archive_retention_authority_policy_digest_hex = Some("51".repeat(32));
     let trust_policy_path = absolute_trust_policy_path();
     let mut emitter = Emitter::new();
-
     let parsed = config
         .parse(true, Some(trust_policy_path.as_path()), &mut emitter)
         .expect("enabled retention authority");
@@ -245,31 +230,26 @@ fn enabled_retention_requires_and_projects_exact_public_authority_binding() {
     assert_eq!(authority.revision, 7);
     assert_eq!(authority.policy_digest, [0x51; 32]);
 }
-
 #[test]
 fn retention_rejects_missing_test_marked_stale_or_noncanonical_bindings() {
     let trust_policy_path = absolute_trust_policy_path();
     let mut missing = valid_config();
     missing.finalized_archive_retention_enabled = true;
-
     let mut test_marked = valid_config();
     test_marked.finalized_archive_retention_enabled = true;
     test_marked.finalized_archive_retention_authority_handle =
         Some("sealed.reputation.archive.test".to_owned());
     test_marked.finalized_archive_retention_authority_revision = Some(1);
     test_marked.finalized_archive_retention_authority_policy_digest_hex = Some("51".repeat(32));
-
     let mut stale = valid_config();
     stale.finalized_archive_retention_enabled = true;
     stale.finalized_archive_retention_authority_handle =
         Some("sealed.reputation.archive.primary".to_owned());
     stale.finalized_archive_retention_authority_revision = Some(0);
     stale.finalized_archive_retention_authority_policy_digest_hex = Some("00".repeat(32));
-
     let mut dormant = valid_config();
     dormant.finalized_archive_retention_authority_handle =
         Some("sealed.reputation.archive.primary".to_owned());
-
     for config in [missing, test_marked, stale, dormant] {
         let mut emitter = Emitter::new();
         let parsed = config.parse(true, Some(trust_policy_path.as_path()), &mut emitter);
@@ -277,7 +257,6 @@ fn retention_rejects_missing_test_marked_stale_or_noncanonical_bindings() {
         assert!(parsed.is_none() || emitted_error);
     }
 }
-
 #[test]
 fn disabled_policy_rejects_stale_authority_claims() {
     let mut config = SorafsReputationRuntimeConfig::default();
@@ -286,13 +265,11 @@ fn disabled_policy_rejects_stale_authority_claims() {
     assert!(config.parse(false, None, &mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn disabled_policy_rejects_nondefault_finalized_archive_claims() {
     let mut config = SorafsReputationRuntimeConfig::default();
     config.finalized_archive_max_entries -= 1;
     let mut emitter = Emitter::new();
-
     assert!(config.parse(false, None, &mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }

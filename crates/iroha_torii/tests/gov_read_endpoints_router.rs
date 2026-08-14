@@ -2,9 +2,7 @@
 //! Router-level test for governance read endpoint wiring (`/v1/gov/proposals/{id}`).
 #![allow(clippy::similar_names)]
 #![cfg(feature = "app_api")]
-
 use std::sync::Arc;
-
 use axum::{Router, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -16,7 +14,6 @@ use iroha_data_model::governance::types::{
     AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
 };
 use tower::ServiceExt as _; // for Router::oneshot
-
 fn checked_router_proposer_fixture() -> iroha_data_model::account::AccountId {
     iroha_data_model::account::AccountId::of(
         iroha_crypto::KeyPair::try_random()
@@ -25,7 +22,6 @@ fn checked_router_proposer_fixture() -> iroha_data_model::account::AccountId {
             .clone(),
     )
 }
-
 #[test]
 fn gov_router_proposer_fixture_uses_checked_ed25519_key_generation() {
     let proposer = checked_router_proposer_fixture();
@@ -33,17 +29,14 @@ fn gov_router_proposer_fixture_uses_checked_ed25519_key_generation() {
         .expect_single_signatory()
         .try_algorithm()
         .expect("fixture governance router proposer public key has a valid algorithm");
-
     assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
 }
-
 #[tokio::test]
 async fn gov_proposal_get_router_mapping() {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
         eprintln!("Skipping: gov proposal-get router test gated. Set IROHA_RUN_IGNORED=1 to run.");
         return;
     }
-
     // Minimal in-memory state and a single proposal record
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -82,7 +75,6 @@ async fn gov_proposal_get_router_mapping() {
         enacted_at_height: None,
     };
     iroha_core::query::insert_gov_proposal_for_test(&mut raw_state, id_bytes, rec);
-
     // Wire only the GET route under the shared URI constant
     let state = Arc::new(raw_state);
     let app = Router::new().route(
@@ -94,7 +86,6 @@ async fn gov_proposal_get_router_mapping() {
             }
         }),
     );
-
     let request = http::Request::builder()
         .method("GET")
         .uri(format!("/v1/gov/proposals/{id_hex}"))

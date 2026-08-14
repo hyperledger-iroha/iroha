@@ -1,5 +1,4 @@
 //! Orchestration layer that wires configuration, workload generation, and fault injection together.
-
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -14,7 +13,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
 use color_eyre::{
     Result,
     eyre::{WrapErr, eyre},
@@ -52,7 +50,6 @@ use tokio::{
 };
 use toml::{Table, Value as TomlValue};
 use tracing::{debug, info, warn};
-
 use crate::{
     config::{ChaosConfig, WorkloadProfile},
     faults::{
@@ -63,7 +60,6 @@ use crate::{
         self, AccountRecord, PlanUpdate, PreparedChaos, TransactionPlan, WorkloadEngine,
     },
 };
-
 const IZANAMI_SUMERAGI_QUEUE_COMMANDS: i64 = 4_096;
 const IZANAMI_SUMERAGI_QUEUE_BODIES: i64 = 512;
 const IZANAMI_SUMERAGI_QUEUE_CHUNKS: i64 = 4_096;
@@ -141,13 +137,11 @@ const IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS: u64 = 150;
 // DA-enabled 4-peer steady-state envelope. The aspirational sub-1s target remains available via
 // explicit `--latency-p95-threshold`, but the default gate should match the observed healthy run.
 const IZANAMI_SHARED_HOST_SOAK_LATENCY_P95_THRESHOLD_SECS: u64 = 3;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SubmissionConfirmationMode {
     BlockingApplied,
     AcceptedByIngress,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct IngressEndpointPoolConfig {
     max_attempts: usize,
@@ -155,7 +149,6 @@ struct IngressEndpointPoolConfig {
     unhealthy_cooldown: Duration,
     reprobe_interval: Duration,
 }
-
 impl Default for IngressEndpointPoolConfig {
     fn default() -> Self {
         Self {
@@ -166,27 +159,23 @@ impl Default for IngressEndpointPoolConfig {
         }
     }
 }
-
 #[derive(Default)]
 struct IngressStats {
     failover_total: AtomicU64,
     endpoint_unhealthy_total: AtomicU64,
     endpoint_stats: StdMutex<Vec<IngressEndpointStats>>,
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct IngressStatsSnapshot {
     failover_total: u64,
     endpoint_unhealthy_total: u64,
 }
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct IngressEndpointStats {
     endpoint: String,
     failover_total: u64,
     unhealthy_total: u64,
 }
-
 impl IngressStats {
     fn ensure_endpoints(&self, labels: &[String]) {
         if let Ok(mut guard) = self.endpoint_stats.lock() {
@@ -203,7 +192,6 @@ impl IngressStats {
             }
         }
     }
-
     fn record_failover(&self, endpoint_idx: usize) {
         self.failover_total.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut guard) = self.endpoint_stats.lock()
@@ -212,7 +200,6 @@ impl IngressStats {
             endpoint.failover_total = endpoint.failover_total.saturating_add(1);
         }
     }
-
     fn record_endpoint_unhealthy(&self, endpoint_idx: usize) {
         self.endpoint_unhealthy_total
             .fetch_add(1, Ordering::Relaxed);
@@ -222,14 +209,12 @@ impl IngressStats {
             endpoint.unhealthy_total = endpoint.unhealthy_total.saturating_add(1);
         }
     }
-
     fn snapshot(&self) -> IngressStatsSnapshot {
         IngressStatsSnapshot {
             failover_total: self.failover_total.load(Ordering::Relaxed),
             endpoint_unhealthy_total: self.endpoint_unhealthy_total.load(Ordering::Relaxed),
         }
     }
-
     fn endpoint_snapshots(&self) -> Vec<IngressEndpointStats> {
         self.endpoint_stats
             .lock()
@@ -237,7 +222,6 @@ impl IngressStats {
             .unwrap_or_default()
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum IngressEndpointState {
     Healthy,
@@ -250,7 +234,6 @@ enum IngressEndpointState {
         next_probe_window: Instant,
     },
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct EndpointHealthState {
     consecutive_failures: u32,
@@ -260,7 +243,6 @@ struct EndpointHealthState {
     sticky_unhealthy_until: Option<Instant>,
     endpoint_state: IngressEndpointState,
 }
-
 impl Default for EndpointHealthState {
     fn default() -> Self {
         Self {
@@ -273,14 +255,12 @@ impl Default for EndpointHealthState {
         }
     }
 }
-
 #[derive(Clone, Debug)]
 struct IngressLagSnapshot {
     quorum_min_height: u64,
     peer_heights: Vec<Option<u64>>,
     observed_at: Instant,
 }
-
 #[derive(Clone)]
 struct EndpointHealthPool {
     labels: Arc<Vec<String>>,
@@ -291,7 +271,6 @@ struct EndpointHealthPool {
     config: IngressEndpointPoolConfig,
     ingress_stats: Arc<IngressStats>,
 }
-
 impl EndpointHealthPool {
     fn new(
         labels: Vec<String>,
@@ -310,13 +289,11 @@ impl EndpointHealthPool {
             ingress_stats,
         }
     }
-
     fn update_lag_snapshot(&self, snapshot: IngressLagSnapshot) {
         if let Ok(mut guard) = self.lag_snapshot.lock() {
             *guard = Some(snapshot);
         }
     }
-
     fn run_with_failover_preferred<T, F>(
         &self,
         op_name: &'static str,
@@ -333,7 +310,6 @@ impl EndpointHealthPool {
             operation,
         )
     }
-
     fn run_with_failover_excluding<T, F>(
         &self,
         op_name: &'static str,
@@ -350,7 +326,6 @@ impl EndpointHealthPool {
             operation,
         )
     }
-
     fn select_endpoint_preferred(
         &self,
         op_name: &'static str,
@@ -362,12 +337,10 @@ impl EndpointHealthPool {
             Instant::now(),
         )
     }
-
     #[cfg(test)]
     fn select_endpoint_at(&self, op_name: &'static str, now: Instant) -> Result<usize> {
         self.select_endpoint_at_with_preference(op_name, None, now)
     }
-
     fn select_endpoint_at_with_preference(
         &self,
         op_name: &'static str,
@@ -379,7 +352,6 @@ impl EndpointHealthPool {
             .next()
             .ok_or_else(|| eyre!("no ingress endpoints available for operation `{op_name}`"))
     }
-
     fn run_on_endpoint<T, F>(
         &self,
         op_name: &'static str,
@@ -391,7 +363,6 @@ impl EndpointHealthPool {
     {
         self.run_on_endpoint_at(op_name, endpoint_idx, Instant::now(), operation)
     }
-
     fn run_on_endpoint_at<T, F>(
         &self,
         op_name: &'static str,
@@ -462,7 +433,6 @@ impl EndpointHealthPool {
             }
         }
     }
-
     #[cfg(test)]
     fn run_with_failover_at<T, F>(
         &self,
@@ -475,7 +445,6 @@ impl EndpointHealthPool {
     {
         self.run_with_failover_at_with_preference(op_name, None, now, operation)
     }
-
     fn run_with_failover_at_with_preference<T, F>(
         &self,
         op_name: &'static str,
@@ -577,7 +546,6 @@ impl EndpointHealthPool {
             )),
         }
     }
-
     fn run_with_failover_until_some_at_with_preference_and_limit<T, F>(
         &self,
         op_name: &'static str,
@@ -688,7 +656,6 @@ impl EndpointHealthPool {
             )),
         }
     }
-
     fn run_with_failover_excluding_at<T, F>(
         &self,
         op_name: &'static str,
@@ -796,13 +763,11 @@ impl EndpointHealthPool {
             )),
         }
     }
-
     fn probe_due_at(&self, state: &EndpointHealthState, now: Instant) -> bool {
         state
             .last_probe_at
             .is_none_or(|last| now.saturating_duration_since(last) >= self.config.reprobe_interval)
     }
-
     fn all_unhealthy_probe_slot_available(&self, now: Instant, reserve: bool) -> bool {
         let Ok(mut guard) = self.all_unhealthy_probe_at.lock() else {
             return true;
@@ -814,7 +779,6 @@ impl EndpointHealthPool {
         }
         due
     }
-
     fn lagging_flags_at(&self, now: Instant, len: usize) -> Vec<bool> {
         let lag_snapshot = self
             .lag_snapshot
@@ -841,7 +805,6 @@ impl EndpointHealthPool {
             })
             .unwrap_or_else(|| vec![false; len])
     }
-
     fn attempt_order_with_state(
         &self,
         state: &mut [EndpointHealthState],
@@ -956,11 +919,9 @@ impl EndpointHealthPool {
         healthy.extend(probes);
         healthy
     }
-
     fn attempt_order_preview_at(&self, now: Instant) -> Vec<usize> {
         self.attempt_order_preview_at_with_preference(now, None)
     }
-
     fn attempt_order_preview_at_with_preference(
         &self,
         now: Instant,
@@ -986,7 +947,6 @@ impl EndpointHealthPool {
             false,
         )
     }
-
     fn submission_backpressure_delay_at(&self, now: Instant) -> Option<Duration> {
         if !self.attempt_order_preview_at(now).is_empty() {
             return None;
@@ -1018,11 +978,9 @@ impl EndpointHealthPool {
                 .max(Duration::from_millis(1)),
         )
     }
-
     fn attempt_order_at(&self, now: Instant) -> Vec<usize> {
         self.attempt_order_at_with_preference(now, None)
     }
-
     fn attempt_order_at_with_preference(
         &self,
         now: Instant,
@@ -1040,7 +998,6 @@ impl EndpointHealthPool {
             .expect("endpoint health state mutex should not be poisoned");
         self.attempt_order_with_state(guard.as_mut_slice(), &lagging_flags, now, base_idx, true)
     }
-
     fn base_index(
         &self,
         len: usize,
@@ -1061,7 +1018,6 @@ impl EndpointHealthPool {
         let base_idx_u64 = base % u64::try_from(len).unwrap_or(1);
         usize::try_from(base_idx_u64).unwrap_or(0)
     }
-
     fn mark_success_at(&self, endpoint_idx: usize, now: Instant) {
         if let Ok(mut guard) = self.state.lock() {
             let all_endpoints_unhealthy = guard
@@ -1096,7 +1052,6 @@ impl EndpointHealthPool {
             }
         }
     }
-
     fn mark_failure_at(
         &self,
         endpoint_idx: usize,
@@ -1141,7 +1096,6 @@ impl EndpointHealthPool {
         }
         !was_unhealthy
     }
-
     fn mark_endpoint_sticky_unhealthy_until(&self, endpoint_idx: usize, until: Instant) {
         let Ok(mut guard) = self.state.lock() else {
             return;
@@ -1157,7 +1111,6 @@ impl EndpointHealthPool {
             next_probe_window: until,
         };
     }
-
     #[cfg(test)]
     fn endpoint_state(&self, endpoint_idx: usize) -> EndpointHealthState {
         self.state
@@ -1168,13 +1121,11 @@ impl EndpointHealthPool {
             .unwrap_or_default()
     }
 }
-
 #[derive(Clone)]
 struct IngressEndpoint {
     peer: NetworkPeer,
     label: String,
 }
-
 #[derive(Clone)]
 struct IngressEndpointPool {
     endpoints: Arc<Vec<IngressEndpoint>>,
@@ -1183,7 +1134,6 @@ struct IngressEndpointPool {
     submit_request_timeout: Duration,
     health: EndpointHealthPool,
 }
-
 impl IngressEndpointPool {
     fn from_peers(
         peers: &[NetworkPeer],
@@ -1223,7 +1173,6 @@ impl IngressEndpointPool {
             health,
         }
     }
-
     fn reserve_fault_target_ingress_until(
         &self,
         peers: &[NetworkPeer],
@@ -1252,7 +1201,6 @@ impl IngressEndpointPool {
             );
         }
     }
-
     fn update_lag_snapshot(
         &self,
         quorum_min_height: u64,
@@ -1273,7 +1221,6 @@ impl IngressEndpointPool {
             observed_at: sampled_at,
         });
     }
-
     fn run_with_failover_preferred_with_endpoint<T, F>(
         &self,
         op_name: &'static str,
@@ -1296,7 +1243,6 @@ impl IngressEndpointPool {
             },
         )
     }
-
     async fn run_with_failover_preferred_with_endpoint_async<T, F, Fut>(
         &self,
         op_name: &'static str,
@@ -1316,7 +1262,6 @@ impl IngressEndpointPool {
                 "no ingress endpoints available for operation `{op_name}`"
             ));
         }
-
         let max_attempts = self
             .health
             .config
@@ -1411,7 +1356,6 @@ impl IngressEndpointPool {
             )),
         }
     }
-
     fn run_with_failover_excluding<T, F>(
         &self,
         op_name: &'static str,
@@ -1433,7 +1377,6 @@ impl IngressEndpointPool {
             },
         )
     }
-
     fn select_endpoint_preferred(
         &self,
         op_name: &'static str,
@@ -1443,7 +1386,6 @@ impl IngressEndpointPool {
         self.health
             .select_endpoint_preferred(op_name, preferred_endpoint_idx)
     }
-
     fn run_on_endpoint<T, F>(
         &self,
         op_name: &'static str,
@@ -1462,7 +1404,6 @@ impl IngressEndpointPool {
                 operation(&endpoint.peer)
             })
     }
-
     fn cached_submit_client_for(
         &self,
         endpoint_idx: usize,
@@ -1475,7 +1416,6 @@ impl IngressEndpointPool {
         {
             return Ok(client.clone());
         }
-
         let endpoint = self
             .endpoints
             .get(endpoint_idx)
@@ -1492,32 +1432,26 @@ impl IngressEndpointPool {
         }
         Ok(client)
     }
-
     fn endpoint_count(&self) -> usize {
         self.endpoints.len()
     }
-
     fn submission_backpressure_delay(&self, now: Instant) -> Option<Duration> {
         self.health.submission_backpressure_delay_at(now)
     }
-
     fn preferred_endpoint_index(&self, submitter_idx: usize) -> Option<usize> {
         (!self.endpoints.is_empty()).then_some(submitter_idx % self.endpoints.len())
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum IngressFailureClass {
     NonRetryable,
     Retryable,
     QueuePressure,
 }
-
 impl IngressFailureClass {
     const fn is_retryable(self) -> bool {
         !matches!(self, Self::NonRetryable)
     }
-
     const fn as_str(self) -> &'static str {
         match self {
             Self::NonRetryable => "non_retryable",
@@ -1526,13 +1460,11 @@ impl IngressFailureClass {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum IngressOperationClass {
     Submit,
     StatusRead,
 }
-
 fn classify_ingress_operation(op_name: &str) -> IngressOperationClass {
     if op_name.contains("query") || op_name.contains("confirmation") || op_name.contains("precheck")
     {
@@ -1541,14 +1473,12 @@ fn classify_ingress_operation(op_name: &str) -> IngressOperationClass {
         IngressOperationClass::Submit
     }
 }
-
 fn ingress_failure_affects_submit_health(op_name: &str) -> bool {
     matches!(
         classify_ingress_operation(op_name),
         IngressOperationClass::Submit
     )
 }
-
 fn should_log_ingress_retry_at_debug(
     op_name: &str,
     failure_class: IngressFailureClass,
@@ -1560,7 +1490,6 @@ fn should_log_ingress_retry_at_debug(
             IngressOperationClass::StatusRead
         ) || matches!(failure_class, IngressFailureClass::QueuePressure))
 }
-
 fn is_shutdown_noise_status_read_failure(
     op_name: &str,
     error: &color_eyre::Report,
@@ -1576,37 +1505,30 @@ fn is_shutdown_noise_status_read_failure(
             message.contains("connection refused") || message.contains("transaction did not reach")
         }
 }
-
 fn is_audit_confirmation_window_elapsed(error: &color_eyre::Report) -> bool {
     let message = ingress_error_message(error);
     message.contains("transaction did not reach")
         && message.contains("applied, rejected, expired")
         && message.contains("within")
 }
-
 fn ingress_error_message(error: &color_eyre::Report) -> String {
     format!("{error:#}").to_ascii_lowercase()
 }
-
 fn is_route_unavailable_message(message: &str) -> bool {
     message.contains("route_unavailable")
 }
-
 fn is_route_unavailable_error(error: &color_eyre::Report) -> bool {
     is_route_unavailable_message(&ingress_error_message(error))
 }
-
 fn is_idempotent_duplicate_submission_message(message: &str) -> bool {
     message.contains("repeated instruction")
         || message.contains("repetition of")
         || message.contains("already exists")
 }
-
 fn is_idempotent_duplicate_submission(error: &color_eyre::Report) -> bool {
     let message = ingress_error_message(error);
     is_idempotent_duplicate_submission_message(&message)
 }
-
 fn is_ingress_queue_pressure_message(message: &str) -> bool {
     message.contains("transaction queued for too long")
         || message.contains("transaction did not reach")
@@ -1614,11 +1536,9 @@ fn is_ingress_queue_pressure_message(message: &str) -> bool {
         || message.contains("haven't got tx confirmation within")
         || contains_http_429_status(message)
 }
-
 fn is_ingress_endpoint_backpressure_message(message: &str) -> bool {
     message.contains("no ingress endpoints available for operation")
 }
-
 fn classify_ingress_failure(error: &color_eyre::Report) -> IngressFailureClass {
     let message = ingress_error_message(error);
     if is_ingress_queue_pressure_message(&message) {
@@ -1638,18 +1558,15 @@ fn classify_ingress_failure(error: &color_eyre::Report) -> IngressFailureClass {
         IngressFailureClass::NonRetryable
     }
 }
-
 #[cfg(test)]
 fn is_ingress_failover_retryable(error: &color_eyre::Report) -> bool {
     classify_ingress_failure(error).is_retryable()
 }
-
 fn is_ingress_queue_timeout_retryable(error: &color_eyre::Report) -> bool {
     let message = ingress_error_message(error);
     is_ingress_queue_pressure_message(&message)
         || is_ingress_endpoint_backpressure_message(&message)
 }
-
 #[cfg(test)]
 fn queue_timeout_retry_delay(
     backoff: Duration,
@@ -1665,7 +1582,6 @@ fn queue_timeout_retry_delay(
         backoff
     }
 }
-
 #[cfg(test)]
 fn run_with_queue_timeout_retry_with_policy<F>(
     plan_label: &'static str,
@@ -1684,7 +1600,6 @@ where
         submit,
     )
 }
-
 #[cfg(test)]
 fn run_with_queue_timeout_retry_with_policy_and_delay<F, G>(
     plan_label: &'static str,
@@ -1767,7 +1682,6 @@ where
         }
     }
 }
-
 fn run_with_queue_timeout_retry_with_policy_and_delay_result<T, F, G>(
     plan_label: &'static str,
     max_retry_attempts: u32,
@@ -1847,7 +1761,6 @@ where
         }
     }
 }
-
 async fn run_with_queue_timeout_retry_with_policy_and_delay_result_async<T, F, Fut, G>(
     plan_label: &'static str,
     max_retry_attempts: u32,
@@ -1930,7 +1843,6 @@ where
         }
     }
 }
-
 fn contains_http_5xx_status(message: &str) -> bool {
     (500..=599).any(|status| {
         let code = status.to_string();
@@ -1940,14 +1852,12 @@ fn contains_http_5xx_status(message: &str) -> bool {
             || message.contains(&format!(" {code} "))
     })
 }
-
 fn contains_http_429_status(message: &str) -> bool {
     message.contains("429 too many requests")
         || message.contains("status code: 429")
         || message.contains("status: 429")
         || message.contains("http 429")
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct NposGenesisPreflightSummary {
     peer_with_pop_count: usize,
@@ -1956,19 +1866,16 @@ struct NposGenesisPreflightSummary {
     min_self_bond: Quantity,
     stake_distribution: Vec<(Quantity, usize)>,
 }
-
 fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis())
         .unwrap_or(u64::MAX)
         .max(1)
 }
-
 fn latency_gate_soft_target_blocks(duration: Duration, threshold: Duration) -> u64 {
     duration_ms(duration)
         .div_ceil(duration_ms(threshold))
         .max(1)
 }
-
 fn default_nexus_pipeline_time() -> Duration {
     let block_ms =
         u64::try_from(IZANAMI_NPOS_BLOCK_TIME_MS).expect("izanami block time must be non-negative");
@@ -1976,21 +1883,17 @@ fn default_nexus_pipeline_time() -> Duration {
         .expect("izanami commit time must be non-negative");
     Duration::from_millis(block_ms.saturating_add(commit_ms))
 }
-
 fn default_izanami_pipeline_time() -> Duration {
     default_nexus_pipeline_time()
 }
-
 fn sumeragi_phase_operator_keypair() -> KeyPair {
     Signatory::Peer.key_pair().clone()
 }
-
 fn izanami_npos_parameters(peer_count: usize) -> SumeragiNposParameters {
     let mut params = SumeragiNposParameters::default();
     params.max_validators = u32::try_from(peer_count.max(1)).unwrap_or(u32::MAX);
     params
 }
-
 fn npos_min_self_bond_from_genesis(genesis: &GenesisBlock) -> Quantity {
     let mut params = Parameters::default();
     for tx in genesis.0.transactions_vec() {
@@ -2012,7 +1915,6 @@ fn npos_min_self_bond_from_genesis(genesis: &GenesisBlock) -> Quantity {
         .min_self_bond()
         .clone()
 }
-
 fn instruction_registers_peer_with_pop(instruction: &InstructionBox) -> bool {
     if instruction
         .as_any()
@@ -2026,7 +1928,6 @@ fn instruction_registers_peer_with_pop(instruction: &InstructionBox) -> bool {
         Some(RegisterBox::Peer(_))
     )
 }
-
 #[allow(single_use_lifetimes)]
 fn audit_npos_preflight_instructions<'a>(
     instructions: impl IntoIterator<Item = &'a InstructionBox>,
@@ -2042,7 +1943,6 @@ fn audit_npos_preflight_instructions<'a>(
     let mut activate_validator_count = 0usize;
     let mut validator_stakes = BTreeMap::<(LaneId, AccountId), Quantity>::new();
     let mut activated_validators = BTreeSet::<(LaneId, AccountId)>::new();
-
     for instruction in instructions {
         if instruction_registers_peer_with_pop(instruction) {
             peer_with_pop_count = peer_with_pop_count.saturating_add(1);
@@ -2080,7 +1980,6 @@ fn audit_npos_preflight_instructions<'a>(
             activated_validators.insert((activate.lane_id, activate.validator.clone()));
         }
     }
-
     if peer_with_pop_count != expected_peers {
         return Err(eyre!(
             "Izanami NPoS preflight failed: RegisterPeerWithPop count={} expected={}",
@@ -2102,7 +2001,6 @@ fn audit_npos_preflight_instructions<'a>(
             expected_bootstrap_bindings
         ));
     }
-
     let registered_validators: BTreeSet<_> = validator_stakes.keys().cloned().collect();
     let missing_activation: Vec<_> = registered_validators
         .difference(&activated_validators)
@@ -2124,7 +2022,6 @@ fn audit_npos_preflight_instructions<'a>(
             unexpected_activation.len()
         ));
     }
-
     let mut stake_distribution = BTreeMap::<Quantity, usize>::new();
     for stake in validator_stakes.values().cloned() {
         *stake_distribution.entry(stake).or_insert(0) += 1;
@@ -2135,7 +2032,6 @@ fn audit_npos_preflight_instructions<'a>(
             stake_distribution
         ));
     }
-
     Ok(NposGenesisPreflightSummary {
         peer_with_pop_count,
         register_validator_count,
@@ -2144,7 +2040,6 @@ fn audit_npos_preflight_instructions<'a>(
         stake_distribution: stake_distribution.into_iter().collect(),
     })
 }
-
 fn audit_npos_genesis_preflight(
     genesis: &GenesisBlock,
     peer_count: usize,
@@ -2165,21 +2060,18 @@ fn audit_npos_genesis_preflight(
         &min_self_bond,
     )
 }
-
 fn is_shared_host_stable_soak(config: &ChaosConfig) -> bool {
     matches!(config.workload_profile, WorkloadProfile::Stable)
         && config.faulty_peers <= 1
         && config.peer_count >= 4
         && config.duration >= Duration::from_secs(IZANAMI_SHARED_HOST_SOAK_MIN_DURATION_SECS)
 }
-
 fn is_severe_stopping_recovery_run(config: &ChaosConfig) -> bool {
     matches!(config.workload_profile, WorkloadProfile::Stable)
         && config.peer_count >= 4
         && config.faults.crash_restart()
         && config.faulty_peers.saturating_mul(3) >= config.peer_count.saturating_mul(2)
 }
-
 fn submission_confirmation_mode(config: &ChaosConfig) -> SubmissionConfirmationMode {
     if matches!(config.workload_profile, WorkloadProfile::Stable) {
         SubmissionConfirmationMode::AcceptedByIngress
@@ -2187,7 +2079,6 @@ fn submission_confirmation_mode(config: &ChaosConfig) -> SubmissionConfirmationM
         SubmissionConfirmationMode::BlockingApplied
     }
 }
-
 fn effective_submission_max_inflight(config: &ChaosConfig) -> usize {
     if matches!(
         submission_confirmation_mode(config),
@@ -2208,7 +2099,6 @@ fn effective_submission_max_inflight(config: &ChaosConfig) -> usize {
         config.max_inflight.max(1)
     }
 }
-
 fn effective_submission_tps(config: &ChaosConfig) -> f64 {
     if matches!(
         submission_confirmation_mode(config),
@@ -2220,7 +2110,6 @@ fn effective_submission_tps(config: &ChaosConfig) -> f64 {
         config.tps
     }
 }
-
 fn effective_network_queue_capacity(config: &ChaosConfig) -> i64 {
     let stress_capacity = if config.prebuild_tx_buffer > 0
         && config.tps > IZANAMI_STRESS_STABLE_INGRESS_CAP_BYPASS_TPS
@@ -2232,7 +2121,6 @@ fn effective_network_queue_capacity(config: &ChaosConfig) -> i64 {
     let capacity = stress_capacity.max(usize::try_from(IZANAMI_QUEUE_CAPACITY).expect("positive"));
     i64::try_from(capacity).unwrap_or(i64::MAX)
 }
-
 fn effective_ingress_request_timeout(config: &ChaosConfig) -> Duration {
     let baseline = Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS);
     if config.prebuild_tx_buffer > 0 && config.tps > IZANAMI_STRESS_STABLE_INGRESS_CAP_BYPASS_TPS {
@@ -2241,18 +2129,15 @@ fn effective_ingress_request_timeout(config: &ChaosConfig) -> Duration {
         baseline
     }
 }
-
 fn apply_shared_host_stable_soak_profile(config: &mut ChaosConfig) {
     if !is_shared_host_stable_soak(config) {
         return;
     }
-
     let original_tps = config.tps;
     let original_max_inflight = config.max_inflight;
     let original_progress_timeout = config.progress_timeout;
     let original_pipeline_time = config.pipeline_time;
     let original_latency_p95_threshold = config.latency_p95_threshold;
-
     // Preserve operator-selected stress settings while enforcing a minimum load floor
     // for shared-host soaks so runs remain comparable at low load.
     config.tps = config.tps.max(IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR);
@@ -2278,7 +2163,6 @@ fn apply_shared_host_stable_soak_profile(config: &mut ChaosConfig) {
             IZANAMI_SHARED_HOST_SOAK_LATENCY_P95_THRESHOLD_SECS,
         ));
     }
-
     if (config.tps - original_tps).abs() > f64::EPSILON
         || config.max_inflight != original_max_inflight
         || config.progress_timeout != original_progress_timeout
@@ -2314,7 +2198,6 @@ fn apply_shared_host_stable_soak_profile(config: &mut ChaosConfig) {
         );
     }
 }
-
 fn consensus_mode_label(config: &ChaosConfig) -> &'static str {
     if config.nexus.is_some() {
         "npos"
@@ -2322,7 +2205,6 @@ fn consensus_mode_label(config: &ChaosConfig) -> &'static str {
         "permissioned"
     }
 }
-
 fn log_effective_consensus_soak_overrides(config: &ChaosConfig) {
     let latency_p95_gate_ms = config
         .latency_p95_threshold
@@ -2351,7 +2233,6 @@ fn log_effective_consensus_soak_overrides(config: &ChaosConfig) {
         "effective first-release Sumeragi v2 soak profile"
     );
 }
-
 fn workload_account_count(config: &ChaosConfig) -> usize {
     let baseline = config.peer_count.saturating_mul(3).max(6);
     if config.tps >= IZANAMI_HIGH_TPS_ACCOUNT_THRESHOLD || config.prebuild_tx_buffer > baseline {
@@ -2365,14 +2246,13 @@ fn workload_account_count(config: &ChaosConfig) -> usize {
         baseline
     }
 }
-
+#[cfg(test)]
 fn make_network_builder(
     config: &ChaosConfig,
     genesis: Vec<Vec<InstructionBox>>,
 ) -> Result<NetworkBuilder> {
     make_network_builder_with_sorafs(config, genesis, BTreeMap::new())
 }
-
 fn make_network_builder_with_sorafs(
     config: &ChaosConfig,
     genesis: Vec<Vec<InstructionBox>>,
@@ -2677,7 +2557,6 @@ fn make_network_builder_with_sorafs(
                 IZANAMI_NEXUS_FUSION_EXIT_TEU,
             );
     });
-
     let genesis_len = genesis.len();
     for (idx, transaction) in genesis.into_iter().enumerate() {
         for isi in transaction {
@@ -2687,10 +2566,8 @@ fn make_network_builder_with_sorafs(
             builder = builder.next_genesis_transaction();
         }
     }
-
     Ok(builder)
 }
-
 fn extract_nexus_bootstrap_post_topology(
     genesis: &mut Vec<Vec<InstructionBox>>,
     peer_count: usize,
@@ -2716,7 +2593,6 @@ fn extract_nexus_bootstrap_post_topology(
     let mut fee_tx = Vec::new();
     let mut stake_grant_tx = Vec::new();
     let mut fee_grant_tx = Vec::new();
-
     for tx in genesis.iter_mut() {
         let mut retained = Vec::with_capacity(tx.len());
         for instruction in tx.drain(..) {
@@ -2759,12 +2635,10 @@ fn extract_nexus_bootstrap_post_topology(
     }
     Ok(bootstrap)
 }
-
 fn compact_nexus_retained_genesis(genesis: &mut Vec<Vec<InstructionBox>>) {
     if genesis.len() <= 1 {
         return;
     }
-
     let mut compacted: Vec<Vec<InstructionBox>> = Vec::with_capacity(genesis.len());
     for transaction in genesis.drain(..) {
         if is_universal_dataspace_grant_transaction(&transaction) && !compacted.is_empty() {
@@ -2778,7 +2652,6 @@ fn compact_nexus_retained_genesis(genesis: &mut Vec<Vec<InstructionBox>>) {
     }
     *genesis = compacted;
 }
-
 fn is_universal_dataspace_grant_transaction(transaction: &[InstructionBox]) -> bool {
     !transaction.is_empty()
         && transaction.iter().all(|instruction| {
@@ -2797,7 +2670,6 @@ fn is_universal_dataspace_grant_transaction(transaction: &[InstructionBox]) -> b
                 })
         })
 }
-
 #[allow(clippy::too_many_arguments)]
 fn classify_nexus_bootstrap_instruction(
     instruction: &InstructionBox,
@@ -2836,7 +2708,6 @@ fn classify_nexus_bootstrap_instruction(
             _ => None,
         };
     }
-
     if let Some(mint) = instruction.as_any().downcast_ref::<MintBox>() {
         return match mint {
             MintBox::Asset(asset) if asset.destination.definition() == stake_asset => {
@@ -2848,7 +2719,6 @@ fn classify_nexus_bootstrap_instruction(
             _ => None,
         };
     }
-
     if let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() {
         return match grant {
             GrantBox::Permission(permission)
@@ -2872,10 +2742,8 @@ fn classify_nexus_bootstrap_instruction(
             _ => None,
         };
     }
-
     None
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NexusBootstrapTxKind {
     Neutral,
@@ -2884,7 +2752,6 @@ enum NexusBootstrapTxKind {
     StakeGrant,
     FeeGrant,
 }
-
 /// Deterministically select which peers should receive fault injection tasks.
 fn select_fault_targets(peers_len: usize, faulty_peers: usize, rng: &mut StdRng) -> Vec<usize> {
     if peers_len == 0 || faulty_peers == 0 {
@@ -2895,7 +2762,6 @@ fn select_fault_targets(peers_len: usize, faulty_peers: usize, rng: &mut StdRng)
     indices.shuffle(rng);
     indices.into_iter().take(target_count).collect()
 }
-
 fn uses_sumeragi_leader_fault_targeting(config: &ChaosConfig) -> bool {
     let leader_network_fault = (config.faults.network_partition()
         && !config.faults.network_packet_loss())
@@ -2909,7 +2775,6 @@ fn uses_sumeragi_leader_fault_targeting(config: &ChaosConfig) -> bool {
         && !config.faults.cpu_stress()
         && !config.faults.disk_saturation()
 }
-
 fn fault_config_for(config: &ChaosConfig) -> FaultConfig {
     let toggles = config.faults;
     FaultConfig {
@@ -2935,20 +2800,17 @@ fn fault_config_for(config: &ChaosConfig) -> FaultConfig {
             .then_some(DiskSaturationConfig::default()),
     }
 }
-
 fn parse_sumeragi_leader_index(value: norito::json::Value) -> Option<usize> {
     let norito::json::Value::Object(root) = value else {
         return None;
     };
     root.get("leader_index")?.as_u64()?.try_into().ok()
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SumeragiLeaderTarget {
     peer_index: usize,
     sampled_from_peer_index: usize,
 }
-
 async fn sample_sumeragi_leader_target(
     peers: Arc<Vec<NetworkPeer>>,
 ) -> Result<SumeragiLeaderTarget, String> {
@@ -2988,14 +2850,12 @@ async fn sample_sumeragi_leader_target(
     .await
     .map_err(|err| format!("leader sampling task failed: {err}"))?
 }
-
 #[derive(Clone)]
 struct RunControl {
     stop: Arc<AtomicBool>,
     stop_notify: Arc<Notify>,
     deadline: Instant,
 }
-
 impl RunControl {
     fn new(deadline: Instant) -> Self {
         Self {
@@ -3004,29 +2864,23 @@ impl RunControl {
             deadline,
         }
     }
-
     fn deadline(&self) -> Instant {
         self.deadline
     }
-
     fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
         self.stop_notify.notify_waiters();
     }
-
     fn stop_requested(&self) -> bool {
         self.stop.load(Ordering::Relaxed)
     }
-
     fn should_stop(&self) -> bool {
         self.stop.load(Ordering::Relaxed) || Instant::now() >= self.deadline
     }
-
     fn stop_notifier(&self) -> Arc<Notify> {
         Arc::clone(&self.stop_notify)
     }
 }
-
 fn fault_window_start_at(
     config: &ChaosConfig,
     run_started_at: Instant,
@@ -3037,7 +2891,6 @@ fn fault_window_start_at(
         .and_then(|offset| run_started_at.checked_add(offset))
         .map_or(run_started_at, |start| start.min(run_deadline))
 }
-
 fn fault_window_end_at(
     config: &ChaosConfig,
     run_started_at: Instant,
@@ -3048,7 +2901,6 @@ fn fault_window_end_at(
         .and_then(|offset| run_started_at.checked_add(offset))
         .map_or(run_deadline, |end| end.min(run_deadline))
 }
-
 async fn wait_for_fault_window_start(
     stop: &AtomicBool,
     stop_notify: &Notify,
@@ -3069,7 +2921,6 @@ async fn wait_for_fault_window_start(
     }
     !stop.load(Ordering::Relaxed) && Instant::now() < run_deadline
 }
-
 pub struct IzanamiRunner {
     config: ChaosConfig,
     network: Network,
@@ -3077,13 +2928,11 @@ pub struct IzanamiRunner {
     workload: Arc<WorkloadEngine>,
     base_domain: DomainId,
 }
-
 impl IzanamiRunner {
     pub async fn new(config: ChaosConfig) -> Result<Self> {
         let mut config = config;
         apply_shared_host_stable_soak_profile(&mut config);
         log_effective_consensus_soak_overrides(&config);
-
         if !config.allow_net {
             return Err(eyre!(
                 "allow_net=false: enable networking via --allow-net or persisted configuration"
@@ -3103,9 +2952,7 @@ impl IzanamiRunner {
             config.allow_contract_deploy_in_stable,
         )?;
         let base_domain = state.base_domain().clone();
-
         let builder = make_network_builder_with_sorafs(&config, genesis, sorafs_provider_owners)?;
-
         let network = builder.start().await?;
         if config.nexus.is_some() {
             let genesis = network.genesis();
@@ -3131,7 +2978,6 @@ impl IzanamiRunner {
         }
         let peers = network.peers().clone();
         let workload = Arc::new(WorkloadEngine::new(state, recipes));
-
         Ok(Self {
             config,
             network,
@@ -3140,7 +2986,6 @@ impl IzanamiRunner {
             base_domain,
         })
     }
-
     pub async fn run(self) -> Result<()> {
         let mut rng = self.seeded_rng()?;
         let config_layers = Arc::new(
@@ -3173,7 +3018,6 @@ impl IzanamiRunner {
                 submission_confirmation,
             )
             .await;
-
         let sumeragi_status_start = sample_sumeragi_status_digest(&self.peers).await.ok();
         let run_started_at = Instant::now();
         let deadline = run_started_at + self.config.duration;
@@ -3207,7 +3051,6 @@ impl IzanamiRunner {
         } else {
             (None, None)
         };
-
         let faulty_handles = self.spawn_fault_tasks(
             &config_layers,
             &genesis,
@@ -3229,7 +3072,6 @@ impl IzanamiRunner {
             confirmation_audit_wait_options.clone(),
         );
         drop(confirmation_audit_tx);
-
         let soft_target_kpi =
             self.config.target_blocks.is_some() && is_shared_host_stable_soak(&self.config);
         let fault_start_at = fault_window_start_at(&self.config, run_started_at, deadline);
@@ -3285,7 +3127,6 @@ impl IzanamiRunner {
             )
             .await
         };
-
         let mut run_error = None;
         let mut progress_snapshot = None;
         match target_result {
@@ -3321,15 +3162,12 @@ impl IzanamiRunner {
                 run_error = Some(err);
             }
         }
-
         run_control.stop();
-
         if run_error.is_some() {
             // Cut off peer services first on fatal progress failure so blocking submitters
             // terminate quickly instead of draining through long status timeouts.
             self.network.shutdown().await;
         }
-
         let shutdown_timeout = if run_error.is_some() {
             Duration::from_secs(IZANAMI_WORKER_FAILURE_SHUTDOWN_TIMEOUT_SECS)
         } else {
@@ -3372,7 +3210,6 @@ impl IzanamiRunner {
                 );
             }
         }
-
         let snapshot = metrics.snapshot();
         let ingress_snapshot = ingress_stats.snapshot();
         let ingress_endpoint_stats = ingress_stats.endpoint_snapshots();
@@ -3497,11 +3334,9 @@ impl IzanamiRunner {
             Ok(())
         }
     }
-
     fn seeded_rng(&self) -> Result<StdRng> {
         seeded_rng_from_seed(self.config.seed)
     }
-
     fn spawn_fault_tasks(
         &self,
         config_layers: &Arc<Vec<Table>>,
@@ -3587,7 +3422,6 @@ impl IzanamiRunner {
         }
         handles
     }
-
     #[allow(clippy::too_many_arguments)]
     fn spawn_sumeragi_leader_fault_task(
         &self,
@@ -3639,7 +3473,6 @@ impl IzanamiRunner {
                     .as_millis(),
                 "leader-targeted fault worker entering timed injection window"
             );
-
             let mut rng = StdRng::seed_from_u64(seed);
             while Instant::now() < fault_deadline && !stop.load(Ordering::Relaxed) {
                 let target = match sample_sumeragi_leader_target(Arc::clone(&peers)).await {
@@ -3705,7 +3538,6 @@ impl IzanamiRunner {
                         );
                     }
                 }
-
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
@@ -3724,7 +3556,6 @@ impl IzanamiRunner {
             }
         })]
     }
-
     async fn prebuild_transaction_pool(
         &self,
         metrics: &Arc<Metrics>,
@@ -3748,7 +3579,6 @@ impl IzanamiRunner {
             );
             return None;
         }
-
         let worker_count = effective_prebuild_tx_workers(&self.config);
         if worker_count == 0 || ingress_pool.endpoint_count() == 0 {
             warn!(
@@ -3759,7 +3589,6 @@ impl IzanamiRunner {
             );
             return None;
         }
-
         metrics.configure_prebuilt_tx_buffer(buffer_capacity, worker_count);
         info!(
             target: "izanami::prebuild",
@@ -3767,7 +3596,6 @@ impl IzanamiRunner {
             worker_count,
             "warming prebuilt transaction buffer before load window"
         );
-
         let (tx, mut rx) = mpsc::channel(worker_count.saturating_mul(4).max(1));
         let built_count = Arc::new(AtomicU64::new(0));
         let attempt_count = Arc::new(AtomicU64::new(0));
@@ -3870,7 +3698,6 @@ impl IzanamiRunner {
             }));
         }
         drop(tx);
-
         let mut prepared = Vec::with_capacity(buffer_capacity);
         while prepared.len() < buffer_capacity {
             let Some(submission) = rx.recv().await else {
@@ -3892,7 +3719,6 @@ impl IzanamiRunner {
             let _ = handle.await;
         }
         prepared.sort_by_key(|submission| submission.order);
-
         if prepared.len() < buffer_capacity {
             warn!(
                 target: "izanami::prebuild",
@@ -3908,10 +3734,8 @@ impl IzanamiRunner {
                 "prebuilt transaction warmup complete"
             );
         }
-
         Some(PrebuiltTransactionPool::new(prepared))
     }
-
     fn spawn_load_supervisors(
         &self,
         metrics: &Arc<Metrics>,
@@ -4082,7 +3906,6 @@ impl IzanamiRunner {
                             }
                             continue;
                         }
-
                         let plan = match workload.next_plan(&mut load_rng).await {
                             Ok(plan) => plan,
                             Err(err) => {
@@ -4159,7 +3982,6 @@ impl IzanamiRunner {
             }));
         handles
     }
-
     fn spawn_confirmation_audit_worker(
         &self,
         metrics: &Arc<Metrics>,
@@ -4238,27 +4060,23 @@ impl IzanamiRunner {
         })
     }
 }
-
 async fn wait_until_deadline_or_stop(stop_notify: &Notify, deadline: Instant) {
     tokio::select! {
         () = stop_notify.notified() => {},
         () = time::sleep_until(deadline.into()) => {},
     }
 }
-
 fn drain_ready_submissions(submissions: &mut JoinSet<()>) {
     while let Some(result) = submissions.try_join_next() {
         let _ = result;
     }
 }
-
 fn record_submit_plan_shutdown_skip_once(metrics: &Metrics, recorded: &mut bool) {
     if !*recorded {
         metrics.record_submit_plan_shutdown_skipped();
         *recorded = true;
     }
 }
-
 async fn drain_submissions_for_shutdown(submissions: &mut JoinSet<()>, timeout: Duration) -> u64 {
     if submissions.is_empty() {
         return 0;
@@ -4289,13 +4107,11 @@ async fn drain_submissions_for_shutdown(submissions: &mut JoinSet<()>, timeout: 
     }
     aborted
 }
-
 fn submission_backlog_limit(max_inflight: usize) -> usize {
     max_inflight
         .max(1)
         .saturating_mul(IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER)
 }
-
 fn effective_prebuild_tx_workers(config: &ChaosConfig) -> usize {
     if config.prebuild_tx_buffer == 0 {
         return 0;
@@ -4308,7 +4124,6 @@ fn effective_prebuild_tx_workers(config: &ChaosConfig) -> usize {
         .unwrap_or(1);
     host_parallelism.min(config.submitters.max(1)).max(1)
 }
-
 fn effective_prebuilt_submit_batch_size(submission_tps: f64) -> usize {
     if submission_tps >= IZANAMI_STRESS_STABLE_INGRESS_CAP_BYPASS_TPS as f64 {
         IZANAMI_PREBUILT_SUBMIT_BATCH_SIZE
@@ -4316,7 +4131,6 @@ fn effective_prebuilt_submit_batch_size(submission_tps: f64) -> usize {
         1
     }
 }
-
 fn prebuild_attempt_limit(buffer_capacity: usize, worker_count: usize) -> u64 {
     buffer_capacity
         .saturating_mul(IZANAMI_PREBUILD_ATTEMPT_MULTIPLIER)
@@ -4324,7 +4138,6 @@ fn prebuild_attempt_limit(buffer_capacity: usize, worker_count: usize) -> u64 {
         .max(worker_count)
         .min(u64::MAX as usize) as u64
 }
-
 fn plan_is_prebuild_safe(
     plan: &TransactionPlan,
     submission_confirmation: SubmissionConfirmationMode,
@@ -4336,14 +4149,12 @@ fn plan_is_prebuild_safe(
         )
         && plan.state_updates.is_empty()
 }
-
 const fn should_run_trigger_precheck(submission_confirmation: SubmissionConfirmationMode) -> bool {
     matches!(
         submission_confirmation,
         SubmissionConfirmationMode::BlockingApplied
     )
 }
-
 fn state_updates_require_applied_confirmation(state_updates: &[PlanUpdate]) -> bool {
     state_updates.iter().any(|update| {
         matches!(
@@ -4361,7 +4172,6 @@ fn state_updates_require_applied_confirmation(state_updates: &[PlanUpdate]) -> b
         )
     })
 }
-
 fn effective_submission_confirmation(
     submission_confirmation: SubmissionConfirmationMode,
     state_updates: &[PlanUpdate],
@@ -4376,19 +4186,16 @@ fn effective_submission_confirmation(
         submission_confirmation
     }
 }
-
 fn tracked_repeatable_trigger(state_updates: &[PlanUpdate]) -> Option<TriggerId> {
     state_updates.iter().find_map(|update| match update {
         PlanUpdate::TrackRepeatableTrigger(trigger_id) => Some(trigger_id.clone()),
         _ => None,
     })
 }
-
 fn is_trigger_not_found_error(error: &color_eyre::Report) -> bool {
     let message = ingress_error_message(error);
     message.contains("trigger with id") && message.contains("not found")
 }
-
 async fn wait_for_submission_capacity(
     submissions: &mut JoinSet<()>,
     backlog_limit: usize,
@@ -4411,7 +4218,6 @@ async fn wait_for_submission_capacity(
     }
     true
 }
-
 fn tune_ingress_client(
     mut client: Client,
     mode: SubmissionConfirmationMode,
@@ -4430,14 +4236,12 @@ fn tune_ingress_client(
     }
     client
 }
-
 fn mark_data_model_submit_compatible(state: &Arc<StdMutex<DataModelCompatibility>>) {
     // Izanami owns both the test nodes and clients, so repeated compatibility
     // probes would measure Torii throttle pressure rather than Sumeragi progress.
     *state.lock().expect("data model compatibility lock") =
         DataModelCompatibility::SubmitCompatible;
 }
-
 async fn await_worker_shutdown_with_timeout(
     handles: Vec<JoinHandle<()>>,
     worker_kind: &'static str,
@@ -4461,14 +4265,12 @@ async fn await_worker_shutdown_with_timeout(
         }
     }
 }
-
 fn seeded_rng_from_seed(seed: Option<u64>) -> Result<StdRng> {
     seed.map_or_else(
         || StdRng::try_from_os_rng().wrap_err("failed to seed Izanami chaos RNG from OS"),
         |seed| Ok(StdRng::seed_from_u64(seed)),
     )
 }
-
 fn sampled_peer_heights_with_ids(peers: &[NetworkPeer]) -> Vec<(PeerId, u64)> {
     peers
         .iter()
@@ -4482,7 +4284,6 @@ fn sampled_peer_heights_with_ids(peers: &[NetworkPeer]) -> Vec<(PeerId, u64)> {
         })
         .collect()
 }
-
 async fn sampled_peer_txs_approved(peers: &[NetworkPeer]) -> Vec<u64> {
     let mut approved = Vec::with_capacity(peers.len());
     for peer in peers {
@@ -4513,7 +4314,6 @@ async fn sampled_peer_txs_approved(peers: &[NetworkPeer]) -> Vec<u64> {
     }
     approved
 }
-
 fn tolerated_peer_failures(peer_count: usize) -> usize {
     if peer_count < 4 {
         0
@@ -4521,11 +4321,9 @@ fn tolerated_peer_failures(peer_count: usize) -> usize {
         peer_count.saturating_sub(1) / 3
     }
 }
-
 fn effective_tolerated_peer_failures(peer_count: usize, configured_faulty_peers: usize) -> usize {
     tolerated_peer_failures(peer_count).min(configured_faulty_peers)
 }
-
 fn quorum_min_height_from_samples(mut heights: Vec<u64>, tolerated_failures: usize) -> u64 {
     if heights.is_empty() {
         return 0;
@@ -4534,7 +4332,6 @@ fn quorum_min_height_from_samples(mut heights: Vec<u64>, tolerated_failures: usi
     let index = tolerated_failures.min(heights.len().saturating_sub(1));
     heights[index]
 }
-
 fn strict_divergence_reference_height_from_samples(
     mut heights: Vec<u64>,
     tolerated_failures: usize,
@@ -4548,7 +4345,6 @@ fn strict_divergence_reference_height_from_samples(
         .saturating_sub(tolerated_failures.saturating_add(1));
     heights[index]
 }
-
 fn strict_divergence_lagging_peer_count(
     heights: &[u64],
     reference_height: u64,
@@ -4559,11 +4355,9 @@ fn strict_divergence_lagging_peer_count(
         .filter(|height| reference_height.saturating_sub(**height) > max_allowed_divergence)
         .count()
 }
-
 fn should_enforce_strict_progress_timeout(lagging_peers: usize, tolerated_failures: usize) -> bool {
     lagging_peers == 0 || lagging_peers > tolerated_failures
 }
-
 fn strict_progress_stall_scope_message(
     lagging_peers: usize,
     tolerated_failures: usize,
@@ -4576,12 +4370,10 @@ fn strict_progress_stall_scope_message(
         "strict block height is stalled under tolerated outlier lag; continuing with quorum progress"
     }
 }
-
 struct ProgressState {
     last_height: u64,
     last_progress_at: Instant,
 }
-
 impl ProgressState {
     fn new(now: Instant) -> Self {
         Self {
@@ -4589,7 +4381,6 @@ impl ProgressState {
             last_progress_at: now,
         }
     }
-
     fn update(&mut self, now: Instant, height: u64) -> Option<(u64, Duration)> {
         if height > self.last_height {
             let blocks_advanced = height.saturating_sub(self.last_height);
@@ -4601,31 +4392,26 @@ impl ProgressState {
             None
         }
     }
-
     fn stalled(&self, now: Instant, timeout: Duration) -> bool {
         now.duration_since(self.last_progress_at) >= timeout
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct WeightedIntervalSample {
     interval_ms: u64,
     weight: u64,
 }
-
 #[derive(Default)]
 struct BlockIntervalTracker {
     samples: Vec<WeightedIntervalSample>,
     total_weight: u64,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct BlockIntervalSummary {
     p50_ms: u64,
     p95_ms: u64,
     samples: u64,
 }
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct SumeragiStatusDigest {
     protocol_version: u64,
@@ -4653,7 +4439,6 @@ struct SumeragiStatusDigest {
     detached_fallback_total: u64,
     quarantine_executed_total: u64,
 }
-
 impl SumeragiStatusDigest {
     fn from_json(value: &norito::json::Value) -> Self {
         let present = |key: &str| {
@@ -4755,7 +4540,6 @@ impl SumeragiStatusDigest {
         self.detached_fallback_total = detached_fallback_total;
         self.quarantine_executed_total = quarantine_executed_total;
     }
-
     fn delta_from(self, start: Self) -> Self {
         Self {
             committed_height_advance: self
@@ -4787,14 +4571,12 @@ impl SumeragiStatusDigest {
         }
     }
 }
-
 fn json_u64(value: &norito::json::Value, key: &str) -> u64 {
     value
         .get(key)
         .and_then(norito::json::Value::as_u64)
         .unwrap_or_default()
 }
-
 fn json_string(value: &norito::json::Value, key: &str) -> String {
     value
         .get(key)
@@ -4802,14 +4584,12 @@ fn json_string(value: &norito::json::Value, key: &str) -> String {
         .unwrap_or_default()
         .to_owned()
 }
-
 fn object_u64(object: &norito::json::Map, key: &str) -> u64 {
     object
         .get(key)
         .and_then(norito::json::Value::as_u64)
         .unwrap_or_default()
 }
-
 async fn sample_sumeragi_status_digest(
     peers: &[NetworkPeer],
 ) -> Result<SumeragiStatusDigest, String> {
@@ -4846,7 +4626,6 @@ async fn sample_sumeragi_status_digest(
     .await
     .map_err(|err| format!("status sampling task failed: {err}"))?
 }
-
 fn copy_network_diagnostics(
     network: &Network,
     peers: &[NetworkPeer],
@@ -4861,7 +4640,6 @@ fn copy_network_diagnostics(
     let source_root = network.env_dir();
     let copied_root = diagnostic_dir.join("test-network");
     copy_selected_diagnostic_files(source_root, source_root, &copied_root)?;
-
     let mut index = fs::File::create(diagnostic_dir.join("peer-log-index.tsv"))
         .wrap_err("failed to create peer diagnostic log index")?;
     writeln!(
@@ -4892,7 +4670,6 @@ fn copy_network_diagnostics(
     }
     Ok(())
 }
-
 fn copy_selected_diagnostic_files(
     source_root: &Path,
     current: &Path,
@@ -4921,7 +4698,6 @@ fn copy_selected_diagnostic_files(
     }
     Ok(())
 }
-
 fn copy_diagnostic_file(source_root: &Path, source: &Path, copied_root: &Path) -> Result<()> {
     if !source.is_file() {
         return Ok(());
@@ -4950,7 +4726,6 @@ fn copy_diagnostic_file(source_root: &Path, source: &Path, copied_root: &Path) -
     })?;
     Ok(())
 }
-
 fn diagnostic_file_should_copy(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
@@ -4967,7 +4742,6 @@ fn diagnostic_file_should_copy(path: &Path) -> bool {
         Some("log" | "toml" | "json" | "nrt")
     )
 }
-
 fn should_skip_diagnostic_dir(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
@@ -4977,7 +4751,6 @@ fn should_skip_diagnostic_dir(path: &Path) -> bool {
         "storage" | "store" | "kura" | "blocks" | "blockstore" | "pipeline_sidecars"
     )
 }
-
 fn bounded_sumeragi_status_sample_request_timeout(current: Duration) -> Duration {
     let status_sample_timeout = Duration::from_millis(IZANAMI_STATUS_SAMPLE_REQUEST_TIMEOUT_MS);
     if current.is_zero() || current > status_sample_timeout {
@@ -4986,7 +4759,6 @@ fn bounded_sumeragi_status_sample_request_timeout(current: Duration) -> Duration
         current
     }
 }
-
 impl BlockIntervalTracker {
     fn record(&mut self, blocks_advanced: u64, elapsed: Duration) -> Option<u64> {
         if blocks_advanced == 0 {
@@ -5003,7 +4775,6 @@ impl BlockIntervalTracker {
         self.total_weight = self.total_weight.saturating_add(blocks_advanced);
         Some(interval_ms)
     }
-
     fn summary(&self) -> Option<BlockIntervalSummary> {
         if self.total_weight == 0 {
             return None;
@@ -5014,7 +4785,6 @@ impl BlockIntervalTracker {
             samples: self.total_weight,
         })
     }
-
     fn quantile_ms(&self, quantile: f64) -> u64 {
         debug_assert!((0.0..=1.0).contains(&quantile));
         if self.total_weight == 0 {
@@ -5035,18 +4805,15 @@ impl BlockIntervalTracker {
         0
     }
 }
-
 struct HeightDivergenceState {
     first_seen_above_threshold: Option<Instant>,
 }
-
 impl HeightDivergenceState {
     fn new() -> Self {
         Self {
             first_seen_above_threshold: None,
         }
     }
-
     fn observe(
         &mut self,
         now: Instant,
@@ -5063,13 +4830,11 @@ impl HeightDivergenceState {
         }
         false
     }
-
     fn violated(&self, now: Instant, max_window: Duration) -> bool {
         self.first_seen_above_threshold
             .is_some_and(|started| now.saturating_duration_since(started) >= max_window)
     }
 }
-
 #[derive(Clone, Copy, Debug, Default)]
 struct TargetProgressResult {
     target_reached: bool,
@@ -5088,7 +4853,6 @@ struct TargetProgressResult {
     first_progress_after_fault_start_height: Option<u64>,
     first_progress_after_fault_end_height: Option<u64>,
 }
-
 impl TargetProgressResult {
     fn attach_txs_approved_samples(&mut self, samples: &[u64], tolerated_failures: usize) {
         self.quorum_min_txs_approved =
@@ -5096,7 +4860,6 @@ impl TargetProgressResult {
         self.strict_min_txs_approved = samples.iter().copied().min().unwrap_or(0);
         self.max_peer_txs_approved_skew = max_peer_height_skew_from_samples(samples);
     }
-
     fn attach_block_interval_summaries(
         &mut self,
         quorum_summary: Option<BlockIntervalSummary>,
@@ -5114,7 +4877,6 @@ impl TargetProgressResult {
         }
     }
 }
-
 fn duration_deadline_progress_result(
     heights: &[u64],
     tolerated_failures: usize,
@@ -5140,7 +4902,6 @@ fn duration_deadline_progress_result(
         first_progress_after_fault_end_height: None,
     }
 }
-
 fn max_peer_height_skew_from_samples(heights: &[u64]) -> u64 {
     let Some(min_height) = heights.iter().copied().min() else {
         return 0;
@@ -5152,7 +4913,6 @@ fn max_peer_height_skew_from_samples(heights: &[u64]) -> u64 {
         .unwrap_or(min_height)
         .saturating_sub(min_height)
 }
-
 async fn wait_for_duration_deadline(
     run_control: &RunControl,
     peers: &[NetworkPeer],
@@ -5203,7 +4963,6 @@ async fn wait_for_duration_deadline(
         },
     }
 }
-
 fn enforce_latency_p95_gate(
     block_intervals: &BlockIntervalTracker,
     strict_block_intervals: &BlockIntervalTracker,
@@ -5262,7 +5021,6 @@ fn enforce_latency_p95_gate(
     }
     Ok(())
 }
-
 async fn wait_for_target_blocks(
     peers: &[NetworkPeer],
     target_blocks: u64,
@@ -5514,7 +5272,6 @@ async fn wait_for_target_blocks(
                 "target_blocks KPI reached; continuing until soak deadline"
             );
         }
-
         if let Some((blocks_advanced, elapsed)) = strict_progress.update(now, strict_min_height) {
             let interval_ms = strict_block_intervals
                 .record(blocks_advanced, elapsed)
@@ -5602,7 +5359,6 @@ async fn wait_for_target_blocks(
                 strict_tolerated_stall_logged_at = Some(now);
             }
         }
-
         if let Some((blocks_advanced, elapsed)) = progress.update(now, min_height) {
             if now >= fault_start_at && first_progress_after_fault_start_height.is_none() {
                 first_progress_after_fault_start_height = Some(min_height);
@@ -5708,9 +5464,7 @@ async fn wait_for_target_blocks(
         time::sleep(progress_interval.min(remaining)).await;
     }
 }
-
 static SUBMISSION_METADATA_KEY: OnceLock<Name> = OnceLock::new();
-
 fn submission_metadata(counter: &AtomicU64) -> Metadata {
     let key = SUBMISSION_METADATA_KEY
         .get_or_init(|| "izanami_submission_id".parse().expect("valid metadata key"));
@@ -5718,7 +5472,6 @@ fn submission_metadata(counter: &AtomicU64) -> Metadata {
     metadata.insert(key.clone(), counter.fetch_add(1, Ordering::Relaxed));
     metadata
 }
-
 #[derive(Clone)]
 struct SubmissionAuditCandidate {
     endpoint_idx: usize,
@@ -5726,19 +5479,16 @@ struct SubmissionAuditCandidate {
     hash: HashOf<SignedTransaction>,
     plan_label: &'static str,
 }
-
 struct PreparedTransactionSubmission {
     order: u64,
     plan: TransactionPlan,
     payload: PreparedTransactionPayload,
 }
-
 #[derive(Clone)]
 struct PrebuiltTransactionPool {
     queue: Arc<StdMutex<VecDeque<PreparedTransactionSubmission>>>,
     target_len: u64,
 }
-
 impl PrebuiltTransactionPool {
     fn new(submissions: Vec<PreparedTransactionSubmission>) -> Self {
         let target_len = u64::try_from(submissions.len()).unwrap_or(u64::MAX);
@@ -5747,22 +5497,18 @@ impl PrebuiltTransactionPool {
             target_len,
         }
     }
-
     fn try_pop(&self) -> Option<PreparedTransactionSubmission> {
         self.queue.lock().ok()?.pop_front()
     }
-
     fn target_len(&self) -> u64 {
         self.target_len
     }
 }
-
 #[derive(Clone, Copy)]
 struct SubmissionAuditBudget {
     window_started_at: Option<Instant>,
     confirmations_in_window: u32,
 }
-
 impl SubmissionAuditBudget {
     fn acquire_at(&mut self, now: Instant) -> bool {
         match self.window_started_at {
@@ -5785,7 +5531,6 @@ impl SubmissionAuditBudget {
         true
     }
 }
-
 impl Default for SubmissionAuditBudget {
     fn default() -> Self {
         Self {
@@ -5794,12 +5539,10 @@ impl Default for SubmissionAuditBudget {
         }
     }
 }
-
 struct SubmissionOutcome {
     endpoint_idx: usize,
     hash: HashOf<SignedTransaction>,
 }
-
 fn should_audit_throughput_confirmation(
     confirmation_mode: SubmissionConfirmationMode,
     expect_success: bool,
@@ -5810,16 +5553,13 @@ fn should_audit_throughput_confirmation(
             SubmissionConfirmationMode::AcceptedByIngress
         )
 }
-
 fn should_sample_throughput_confirmation(hash: &HashOf<SignedTransaction>, seed: u64) -> bool {
     should_sample_throughput_confirmation_bytes(hash.as_ref(), seed)
 }
-
 fn should_sample_throughput_confirmation_bytes(hash_bytes: &[u8], seed: u64) -> bool {
     throughput_confirmation_sample_bucket(hash_bytes, seed)
         < IZANAMI_THROUGHPUT_CONFIRMATION_SAMPLE_PERCENT
 }
-
 fn throughput_confirmation_sample_bucket(hash_bytes: &[u8], seed: u64) -> u64 {
     let mut mixed = seed ^ 0x9E37_79B9_7F4A_7C15;
     for chunk in hash_bytes.chunks(8) {
@@ -5830,7 +5570,6 @@ fn throughput_confirmation_sample_bucket(hash_bytes: &[u8], seed: u64) -> u64 {
     }
     mixed % 100
 }
-
 fn try_schedule_submission_audit(
     confirmation_audit_tx: &mpsc::Sender<SubmissionAuditCandidate>,
     metrics: &Metrics,
@@ -5898,21 +5637,18 @@ fn try_schedule_submission_audit(
         }
     }
 }
-
 fn repetitions_from_repeats(repeats: Repeats) -> Option<u32> {
     match repeats {
         Repeats::Exactly(count) => Some(count),
         Repeats::Indefinitely => None,
     }
 }
-
 #[derive(Debug, PartialEq, Eq)]
 enum MintPrecheck {
     Proceed { on_chain: u32 },
     SkipMissing,
     SkipQueryFailed,
 }
-
 fn evaluate_mint_precheck<E>(result: Result<Option<u32>, E>) -> MintPrecheck {
     match result {
         Ok(Some(0)) | Ok(None) => MintPrecheck::SkipMissing,
@@ -5920,7 +5656,6 @@ fn evaluate_mint_precheck<E>(result: Result<Option<u32>, E>) -> MintPrecheck {
         Err(_) => MintPrecheck::SkipQueryFailed,
     }
 }
-
 #[derive(Debug, PartialEq, Eq)]
 enum BurnPrecheck {
     Proceed { on_chain: u32 },
@@ -5928,7 +5663,6 @@ enum BurnPrecheck {
     SkipInsufficient { on_chain: u32 },
     SkipQueryFailed,
 }
-
 fn evaluate_burn_precheck<E>(result: Result<Option<u32>, E>, burn_amount: u32) -> BurnPrecheck {
     match result {
         Ok(None) => BurnPrecheck::SkipMissing,
@@ -5939,7 +5673,6 @@ fn evaluate_burn_precheck<E>(result: Result<Option<u32>, E>, burn_amount: u32) -
         Err(_) => BurnPrecheck::SkipQueryFailed,
     }
 }
-
 fn query_trigger_repetitions(client: &Client, trigger_id: &TriggerId) -> Result<Option<u32>> {
     let iter = client.query(FindTriggers::new()).execute()?;
     for trigger in iter {
@@ -5950,7 +5683,6 @@ fn query_trigger_repetitions(client: &Client, trigger_id: &TriggerId) -> Result<
     }
     Ok(None)
 }
-
 fn record_plan_skip(
     metrics: &Metrics,
     plan_label: &'static str,
@@ -5969,7 +5701,6 @@ fn record_plan_skip(
         metrics.record_expected_failure();
     }
 }
-
 struct PrebuiltLoadSupervisor {
     metrics: Arc<Metrics>,
     ingress_pool: Arc<IngressEndpointPool>,
@@ -5986,7 +5717,6 @@ struct PrebuiltLoadSupervisor {
     confirmation_audit_wait_options: TransactionWaitOptions,
     shutdown_drain_timeout: Duration,
 }
-
 fn spawn_prebuilt_load_supervisor(args: PrebuiltLoadSupervisor) -> JoinHandle<()> {
     tokio::spawn(async move {
         let PrebuiltLoadSupervisor {
@@ -6015,7 +5745,6 @@ fn spawn_prebuilt_load_supervisor(args: PrebuiltLoadSupervisor) -> JoinHandle<()
         let mut submissions = JoinSet::new();
         let mut launched = 0_u64;
         let mut shutdown_skip_recorded = false;
-
         loop {
             drain_ready_submissions(&mut submissions);
             let now = Instant::now();
@@ -6087,7 +5816,6 @@ fn spawn_prebuilt_load_supervisor(args: PrebuiltLoadSupervisor) -> JoinHandle<()
                     .await;
                 });
             }
-
             let now = Instant::now();
             if run_control.stop_requested() || now >= deadline {
                 record_submit_plan_shutdown_skip_once(&metrics, &mut shutdown_skip_recorded);
@@ -6108,7 +5836,6 @@ fn spawn_prebuilt_load_supervisor(args: PrebuiltLoadSupervisor) -> JoinHandle<()
                 },
             }
         }
-
         let aborted =
             drain_submissions_for_shutdown(&mut submissions, shutdown_drain_timeout).await;
         if aborted > 0 {
@@ -6122,7 +5849,6 @@ fn spawn_prebuilt_load_supervisor(args: PrebuiltLoadSupervisor) -> JoinHandle<()
         }
     })
 }
-
 async fn submit_prebuilt_plan(
     ingress_pool: &Arc<IngressEndpointPool>,
     prepared: PreparedTransactionSubmission,
@@ -6159,7 +5885,6 @@ async fn submit_prebuilt_plan(
         workload.record_result(&plan, false).await;
         return;
     }
-
     let permit = match semaphore.acquire_owned().await {
         Ok(permit) => permit,
         Err(_) => {
@@ -6180,7 +5905,6 @@ async fn submit_prebuilt_plan(
     };
     metrics.record_inflight_acquired();
     let _inflight_guard = InflightGuard::new(Arc::clone(metrics), permit);
-
     let ingress_pool_for_submit = Arc::clone(ingress_pool);
     let ingress_pool_for_retry_delay = Arc::clone(ingress_pool);
     let signer_for_submit = signer.clone();
@@ -6232,7 +5956,6 @@ async fn submit_prebuilt_plan(
         },
     )
     .await;
-
     match submission_result {
         Ok(submission_outcome) => {
             workload.record_result(&plan, true).await;
@@ -6263,7 +5986,6 @@ async fn submit_prebuilt_plan(
         }
     }
 }
-
 async fn submit_prebuilt_batch(
     ingress_pool: &Arc<IngressEndpointPool>,
     mut batch: Vec<PreparedTransactionSubmission>,
@@ -6296,7 +6018,6 @@ async fn submit_prebuilt_batch(
         }
         return;
     }
-
     let batch_len = batch.len();
     let permit_count = u32::try_from(batch_len).unwrap_or(u32::MAX);
     let permit = match semaphore.clone().acquire_many_owned(permit_count).await {
@@ -6321,7 +6042,6 @@ async fn submit_prebuilt_batch(
     };
     metrics.record_inflight_acquired_many(u64::try_from(batch_len).unwrap_or(u64::MAX));
     let _inflight_guard = InflightBatchGuard::new(Arc::clone(metrics), permit, batch_len);
-
     let signer_for_submit = batch[0].plan.signer.clone();
     let payloads = Arc::new(
         batch
@@ -6333,7 +6053,6 @@ async fn submit_prebuilt_batch(
         .iter()
         .map(PreparedTransactionPayload::hash)
         .collect::<Vec<_>>();
-
     let ingress_pool_for_submit = Arc::clone(ingress_pool);
     let ingress_pool_for_retry_delay = Arc::clone(ingress_pool);
     let started_at = Instant::now();
@@ -6397,7 +6116,6 @@ async fn submit_prebuilt_batch(
             metrics.record_ingress_accepted();
         }
     }
-
     let endpoint_idx = submission_result
         .as_ref()
         .ok()
@@ -6428,7 +6146,6 @@ async fn submit_prebuilt_batch(
         }
     }
 }
-
 async fn submit_plan(
     ingress_pool: &Arc<IngressEndpointPool>,
     plan: TransactionPlan,
@@ -6494,7 +6211,6 @@ async fn submit_plan(
     } else {
         None
     };
-
     if run_trigger_precheck && let Some((trigger_id, burn_amount)) = burn_target.clone() {
         let endpoint_idx =
             pinned_trigger_endpoint.expect("repeatable trigger plan should pin ingress");
@@ -6564,7 +6280,6 @@ async fn submit_plan(
             }
         }
     }
-
     if run_trigger_precheck && let Some((trigger_id, _mint_amount)) = mint_target.clone() {
         let endpoint_idx =
             pinned_trigger_endpoint.expect("repeatable trigger plan should pin ingress");
@@ -6619,7 +6334,6 @@ async fn submit_plan(
             }
         }
     }
-
     let permit = match semaphore.acquire_owned().await {
         Ok(permit) => permit,
         Err(_) => {
@@ -6640,7 +6354,6 @@ async fn submit_plan(
     };
     metrics.record_inflight_acquired();
     let _inflight_guard = InflightGuard::new(Arc::clone(&metrics), permit);
-
     let submission_result: Result<SubmissionOutcome> = if let Some(endpoint_idx) =
         pinned_trigger_endpoint
     {
@@ -6813,7 +6526,6 @@ async fn submit_plan(
         )
         .await
     };
-
     match submission_result {
         Ok(submission_outcome) => {
             pinned_trigger_endpoint = Some(submission_outcome.endpoint_idx);
@@ -6873,7 +6585,6 @@ async fn submit_plan(
         }
     }
 }
-
 async fn query_trigger_repetitions_on_endpoint(
     ingress_pool: &Arc<IngressEndpointPool>,
     endpoint_idx: usize,
@@ -6922,7 +6633,6 @@ async fn query_trigger_repetitions_on_endpoint(
         Err(err) => Err(err.into()),
     }
 }
-
 fn submit_repeatable_trigger_plan_on_endpoint(
     ingress_pool: &IngressEndpointPool,
     endpoint_idx: usize,
@@ -6988,7 +6698,6 @@ fn submit_repeatable_trigger_plan_on_endpoint(
     }
     Ok(submission)
 }
-
 async fn reconcile_repeatable_trigger_with_endpoint(
     workload: &Arc<WorkloadEngine>,
     ingress_pool: &Arc<IngressEndpointPool>,
@@ -7024,7 +6733,6 @@ async fn reconcile_repeatable_trigger_with_endpoint(
         }
     }
 }
-
 fn terminal_confirmation_wait_options() -> TransactionWaitOptions {
     TransactionWaitOptions {
         timeout: Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS),
@@ -7036,7 +6744,6 @@ fn terminal_confirmation_wait_options() -> TransactionWaitOptions {
         ],
     }
 }
-
 fn confirmation_wait_options_with_timeout(timeout: Duration) -> TransactionWaitOptions {
     TransactionWaitOptions {
         timeout,
@@ -7048,17 +6755,14 @@ fn confirmation_wait_options_with_timeout(timeout: Duration) -> TransactionWaitO
         ],
     }
 }
-
 fn throughput_confirmation_wait_options() -> TransactionWaitOptions {
     confirmation_wait_options_with_timeout(Duration::from_millis(
         IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS,
     ))
 }
-
 fn npos_extended_confirmation_window_needed(config: &ChaosConfig) -> bool {
     config.nexus.is_some()
 }
-
 fn throughput_confirmation_wait_options_for(config: &ChaosConfig) -> TransactionWaitOptions {
     if npos_extended_confirmation_window_needed(config) {
         confirmation_wait_options_with_timeout(Duration::from_millis(
@@ -7068,7 +6772,6 @@ fn throughput_confirmation_wait_options_for(config: &ChaosConfig) -> Transaction
         throughput_confirmation_wait_options()
     }
 }
-
 fn confirmation_audit_has_deadline_budget(
     now: Instant,
     deadline: Instant,
@@ -7078,7 +6781,6 @@ fn confirmation_audit_has_deadline_budget(
         .checked_duration_since(now)
         .is_some_and(|remaining| remaining > options.timeout.saturating_add(options.poll_interval))
 }
-
 fn submission_deadline_budget(mode: SubmissionConfirmationMode) -> Duration {
     let request_budget = Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS)
         .saturating_mul(IZANAMI_INGRESS_MAX_ATTEMPTS as u32)
@@ -7098,7 +6800,6 @@ fn submission_deadline_budget(mode: SubmissionConfirmationMode) -> Duration {
         request_budget
     }
 }
-
 fn submission_has_deadline_budget(
     now: Instant,
     deadline: Instant,
@@ -7108,14 +6809,12 @@ fn submission_has_deadline_budget(
         .checked_duration_since(now)
         .is_some_and(|remaining| remaining > submission_deadline_budget(mode))
 }
-
 fn pipeline_status_kind_is_supported(kind: &str) -> bool {
     matches!(
         kind,
         "Queued" | "Approved" | "Committed" | "Applied" | "Rejected" | "Expired"
     )
 }
-
 fn pipeline_status_kind_is_wait_terminal(
     kind: &str,
     terminal_statuses: &[TransactionWaitTerminalStatus],
@@ -7125,11 +6824,9 @@ fn pipeline_status_kind_is_wait_terminal(
             .iter()
             .any(|status| status.as_str().eq_ignore_ascii_case(kind))
 }
-
 fn elapsed_ms_u64(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
-
 fn transaction_wait_target_description(
     terminal_statuses: &[TransactionWaitTerminalStatus],
 ) -> String {
@@ -7139,7 +6836,6 @@ fn transaction_wait_target_description(
         .collect::<Vec<_>>()
         .join(", ")
 }
-
 fn wait_for_transaction_terminal_status_with_failover(
     ingress_pool: &IngressEndpointPool,
     op_name: &'static str,
@@ -7169,7 +6865,6 @@ fn wait_for_transaction_terminal_status_with_failover(
     let mut attempts = 0_u64;
     let mut last_error = None;
     let mut last_observed_statuses: Vec<String> = Vec::new();
-
     loop {
         attempts = attempts.saturating_add(1);
         let mut observed_statuses = Vec::new();
@@ -7244,7 +6939,6 @@ fn wait_for_transaction_terminal_status_with_failover(
             }
             Err(err) => last_error = Some(err),
         }
-
         let elapsed = start.elapsed();
         if elapsed >= timeout {
             let observed = if last_observed_statuses.is_empty() {
@@ -7268,7 +6962,6 @@ fn wait_for_transaction_terminal_status_with_failover(
         std::thread::sleep(poll_interval.min(timeout.saturating_sub(elapsed)));
     }
 }
-
 async fn audit_submitted_transaction(
     ingress_pool: &Arc<IngressEndpointPool>,
     run_control: &Arc<RunControl>,
@@ -7359,7 +7052,6 @@ async fn audit_submitted_transaction(
         }
     }
 }
-
 async fn run_submission_result<T, F>(
     plan_label: &'static str,
     expect_success: bool,
@@ -7386,7 +7078,6 @@ where
     );
     result
 }
-
 async fn run_submission_future_result<T, Fut>(
     plan_label: &'static str,
     expect_success: bool,
@@ -7409,7 +7100,6 @@ where
     );
     result
 }
-
 fn record_submission_result_metrics<T>(
     plan_label: &'static str,
     expect_success: bool,
@@ -7449,7 +7139,6 @@ fn record_submission_result_metrics<T>(
         );
     }
 }
-
 #[allow(dead_code)] // Retained for workload helpers that need success-only submission semantics.
 async fn run_submission<F>(
     plan_label: &'static str,
@@ -7470,7 +7159,6 @@ where
     .await
     .is_ok()
 }
-
 #[derive(Default)]
 struct Metrics {
     offered: AtomicU64,
@@ -7505,127 +7193,100 @@ struct Metrics {
     backlog_peak: AtomicU64,
     submitters: AtomicU64,
 }
-
 impl Metrics {
     fn set_submitters(&self, count: usize) {
         self.submitters.store(count as u64, Ordering::Relaxed);
     }
-
     fn record_submit_plan_started(&self) {
         self.submit_plans_started.fetch_add(1, Ordering::Relaxed);
         self.offered.fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_submit_plan_shutdown_skipped(&self) {
         self.submit_plans_shutdown_skipped
             .fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_submit_tasks_shutdown_aborted(&self, count: u64) {
         self.submit_tasks_shutdown_aborted
             .fetch_add(count, Ordering::Relaxed);
     }
-
     fn record_submit_latency(&self, latency: Duration) {
         let latency_ms = u64::try_from(latency.as_millis()).unwrap_or(u64::MAX);
         if let Ok(mut samples) = self.submit_latency_ms.lock() {
             samples.push(latency_ms);
         }
     }
-
     fn configure_prebuilt_tx_buffer(&self, capacity: usize, workers: usize) {
         self.prebuilt_tx_buffer_capacity
             .store(capacity as u64, Ordering::Relaxed);
         self.prebuilt_tx_workers
             .store(workers as u64, Ordering::Relaxed);
     }
-
     fn record_prebuilt_tx_built(&self) {
         self.prebuilt_tx_built.fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_prebuilt_tx_used(&self) {
         self.prebuilt_tx_used.fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_prebuilt_tx_fallback(&self) {
         self.prebuilt_tx_fallback.fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_prebuilt_tx_skipped(&self) {
         self.prebuilt_tx_skipped.fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_prebuilt_tx_build_failure(&self) {
         self.prebuilt_tx_build_failures
             .fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_ingress_accepted(&self) {
         self.ingress_accepted.fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_blocking_applied_success(&self) {
         self.blocking_applied_success
             .fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_confirmation_audit_sampled(&self) {
         self.confirmation_sampled.fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_confirmation_audit_applied(&self) {
         self.confirmation_applied.fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_confirmation_audit_rejected(&self) {
         self.confirmation_rejected.fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_confirmation_audit_expired(&self) {
         self.confirmation_expired.fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_confirmation_audit_failed(&self) {
         self.confirmation_failed.fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_confirmation_audit_budget_skipped(&self) {
         self.confirmation_budget_skipped
             .fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_confirmation_audit_queue_dropped(&self) {
         self.confirmation_queue_dropped
             .fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_confirmation_audit_shutdown_noise(&self) {
         self.confirmation_shutdown_noise
             .fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_success(&self) {
         self.successes.fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_failure(&self) {
         self.failures.fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_expected_failure(&self) {
         self.expected_failures.fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_unexpected_success(&self) {
         self.unexpected_successes.fetch_add(1, Ordering::Relaxed);
     }
-
     fn record_inflight_acquired(&self) {
         let current = self.inflight_current.fetch_add(1, Ordering::Relaxed) + 1;
         update_peak(&self.inflight_peak, current);
     }
-
     fn record_inflight_acquired_many(&self, count: u64) {
         if count == 0 {
             return;
@@ -7633,26 +7294,21 @@ impl Metrics {
         let current = self.inflight_current.fetch_add(count, Ordering::Relaxed) + count;
         update_peak(&self.inflight_peak, current);
     }
-
     fn record_inflight_released(&self) {
         self.inflight_current.fetch_sub(1, Ordering::Relaxed);
     }
-
     fn record_inflight_released_many(&self, count: u64) {
         if count > 0 {
             self.inflight_current.fetch_sub(count, Ordering::Relaxed);
         }
     }
-
     fn record_backlog_spawn(&self) {
         let current = self.backlog_depth.fetch_add(1, Ordering::Relaxed) + 1;
         update_peak(&self.backlog_peak, current);
     }
-
     fn record_backlog_complete(&self) {
         self.backlog_depth.fetch_sub(1, Ordering::Relaxed);
     }
-
     fn snapshot(&self) -> MetricsSnapshot {
         let submit_latency = self
             .submit_latency_ms
@@ -7703,34 +7359,28 @@ impl Metrics {
         }
     }
 }
-
 fn update_peak(peak: &AtomicU64, candidate: u64) {
     let _ = peak.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         (candidate > current).then_some(candidate)
     });
 }
-
 struct BacklogGuard {
     metrics: Arc<Metrics>,
 }
-
 impl BacklogGuard {
     fn new(metrics: Arc<Metrics>) -> Self {
         Self { metrics }
     }
 }
-
 impl Drop for BacklogGuard {
     fn drop(&mut self) {
         self.metrics.record_backlog_complete();
     }
 }
-
 struct InflightGuard {
     metrics: Arc<Metrics>,
     _permit: OwnedSemaphorePermit,
 }
-
 impl InflightGuard {
     fn new(metrics: Arc<Metrics>, permit: OwnedSemaphorePermit) -> Self {
         Self {
@@ -7739,19 +7389,16 @@ impl InflightGuard {
         }
     }
 }
-
 impl Drop for InflightGuard {
     fn drop(&mut self) {
         self.metrics.record_inflight_released();
     }
 }
-
 struct InflightBatchGuard {
     metrics: Arc<Metrics>,
     count: u64,
     _permit: OwnedSemaphorePermit,
 }
-
 impl InflightBatchGuard {
     fn new(metrics: Arc<Metrics>, permit: OwnedSemaphorePermit, count: usize) -> Self {
         let count = u64::try_from(count).unwrap_or(u64::MAX);
@@ -7762,13 +7409,11 @@ impl InflightBatchGuard {
         }
     }
 }
-
 impl Drop for InflightBatchGuard {
     fn drop(&mut self) {
         self.metrics.record_inflight_released_many(self.count);
     }
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct LatencySummary {
     samples: u64,
@@ -7777,7 +7422,6 @@ struct LatencySummary {
     p99_ms: u64,
     max_ms: u64,
 }
-
 impl LatencySummary {
     fn from_samples(samples: &[u64]) -> Self {
         if samples.is_empty() {
@@ -7794,7 +7438,6 @@ impl LatencySummary {
         }
     }
 }
-
 fn percentile_from_sorted(sorted: &[u64], percentile: f64) -> u64 {
     debug_assert!(!sorted.is_empty());
     debug_assert!((0.0..=1.0).contains(&percentile));
@@ -7802,7 +7445,6 @@ fn percentile_from_sorted(sorted: &[u64], percentile: f64) -> u64 {
     let rank = (len * percentile).ceil().clamp(1.0, len) as usize;
     sorted[rank.saturating_sub(1)]
 }
-
 #[derive(Clone, Copy, Default)]
 struct MetricsSnapshot {
     offered: u64,
@@ -7841,17 +7483,14 @@ struct MetricsSnapshot {
     backlog_peak: u64,
     submitters: u64,
 }
-
 #[cfg(test)]
 mod tests {
     use std::{env, io};
-
     use color_eyre::eyre::{WrapErr, eyre};
     use iroha_crypto::Hash;
     use iroha_data_model::isi::SetParameter;
     use iroha_test_network::init_instruction_registry;
     use tokio::time::timeout;
-
     use super::*;
     use crate::config::{
         DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
@@ -7859,7 +7498,6 @@ mod tests {
         FaultArgs, FaultToggles, IzanamiArgs, NexusProfile, WorkloadProfile,
     };
     use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
-
     fn allow_net_for_tests() -> bool {
         std::env::var("IZANAMI_ALLOW_NET")
             .or_else(|_| std::env::var("IROHA_ALLOW_NET"))
@@ -7872,12 +7510,10 @@ mod tests {
             })
             .unwrap_or(false)
     }
-
     fn checked_izanami_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
             .expect("generate checked Izanami Ed25519 key fixture")
     }
-
     #[test]
     fn izanami_fixture_uses_checked_ed25519_key_generation() {
         let key_pair = checked_izanami_ed25519_key_fixture();
@@ -7885,10 +7521,8 @@ mod tests {
             .public_key()
             .try_algorithm()
             .expect("Izanami fixture key advertises a valid algorithm");
-
         assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
     }
-
     fn synthetic_audit_candidate(byte: u8) -> SubmissionAuditCandidate {
         let key_pair = checked_izanami_ed25519_key_fixture();
         SubmissionAuditCandidate {
@@ -7902,12 +7536,10 @@ mod tests {
             plan_label: "synthetic_audit",
         }
     }
-
     struct EnvGuard {
         key: &'static str,
         original: Option<String>,
     }
-
     impl EnvGuard {
         #[allow(unsafe_code)]
         fn set(key: &'static str, value: &str) -> Self {
@@ -7919,7 +7551,6 @@ mod tests {
             Self { key, original }
         }
     }
-
     impl Drop for EnvGuard {
         #[allow(unsafe_code)]
         fn drop(&mut self) {
@@ -7936,7 +7567,6 @@ mod tests {
             }
         }
     }
-
     fn synthetic_npos_preflight_instructions(
         peer_count: usize,
         bootstrap_public_lanes: &[LaneId],
@@ -7986,17 +7616,14 @@ mod tests {
         }
         instructions
     }
-
     #[test]
     fn repetitions_from_repeats_exactly_returns_value() {
         assert_eq!(repetitions_from_repeats(Repeats::Exactly(7)), Some(7));
     }
-
     #[test]
     fn repetitions_from_repeats_indefinitely_returns_none() {
         assert_eq!(repetitions_from_repeats(Repeats::Indefinitely), None);
     }
-
     #[test]
     fn evaluate_mint_precheck_handles_trigger_states() {
         assert_eq!(
@@ -8016,7 +7643,6 @@ mod tests {
             MintPrecheck::SkipQueryFailed
         );
     }
-
     #[test]
     fn evaluate_burn_precheck_handles_trigger_states() {
         assert_eq!(
@@ -8040,7 +7666,6 @@ mod tests {
             BurnPrecheck::SkipQueryFailed
         );
     }
-
     #[test]
     fn progress_state_update_reports_advanced_blocks_and_elapsed() {
         let start = Instant::now();
@@ -8052,7 +7677,6 @@ mod tests {
         assert_eq!(advanced.0, 3);
         assert!(advanced.1 >= Duration::from_millis(120));
     }
-
     #[test]
     fn block_interval_tracker_reports_weighted_quantiles() {
         let mut tracker = BlockIntervalTracker::default();
@@ -8069,7 +7693,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn target_progress_result_records_block_interval_summaries() {
         let mut quorum_tracker = BlockIntervalTracker::default();
@@ -8082,10 +7705,8 @@ mod tests {
             strict_tracker.record(1, Duration::from_millis(2_500)),
             Some(2_500)
         );
-
         let mut result = TargetProgressResult::default();
         result.attach_block_interval_summaries(quorum_tracker.summary(), strict_tracker.summary());
-
         assert_eq!(result.quorum_block_interval_p50_ms, Some(2_000));
         assert_eq!(result.quorum_block_interval_p95_ms, Some(2_000));
         assert_eq!(result.quorum_block_interval_samples, Some(2));
@@ -8093,7 +7714,6 @@ mod tests {
         assert_eq!(result.strict_block_interval_p95_ms, Some(2_500));
         assert_eq!(result.strict_block_interval_samples, Some(1));
     }
-
     #[test]
     fn latency_gate_soft_target_blocks_rounds_duration_up_to_threshold() {
         assert_eq!(
@@ -8105,7 +7725,6 @@ mod tests {
             41
         );
     }
-
     #[test]
     fn latency_p95_gate_requires_duration_deadline_samples() {
         let err = enforce_latency_p95_gate(
@@ -8123,7 +7742,6 @@ mod tests {
             "unexpected latency gate error: {err}"
         );
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn npos_network_progresses() -> Result<()> {
         if !allow_net_for_tests() {
@@ -8133,7 +7751,6 @@ mod tests {
         crate::config::init_tracing_with_filter("warn");
         init_instruction_registry();
         let nexus = NexusProfile::sora_defaults()?;
-
         let config = ChaosConfig {
             allow_net: true,
             peer_count: 4,
@@ -8165,7 +7782,6 @@ mod tests {
             nexus: Some(nexus),
             diagnostic_dir: None,
         };
-
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos {
             state: _,
@@ -8180,7 +7796,6 @@ mod tests {
             config.allow_contract_deploy_in_stable,
         )?;
         let builder = make_network_builder(&config, genesis)?;
-
         let network = match builder.start().await {
             Ok(network) => network,
             Err(err) => {
@@ -8201,10 +7816,8 @@ mod tests {
             .await
             .wrap_err("NPoS network failed to reach expected height")?;
         network.shutdown().await;
-
         Ok(())
     }
-
     #[test]
     fn npos_preflight_audit_passes_for_generated_genesis() -> Result<()> {
         init_instruction_registry();
@@ -8240,7 +7853,6 @@ mod tests {
             nexus: Some(profile),
             diagnostic_dir: None,
         };
-
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos { genesis, .. } = instructions::prepare_state(
             account_qty,
@@ -8280,7 +7892,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn generated_npos_genesis_bootstraps_stake_assets_before_validator_activation() -> Result<()> {
         init_instruction_registry();
@@ -8316,7 +7927,6 @@ mod tests {
             nexus: Some(profile.clone()),
             diagnostic_dir: None,
         };
-
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos { genesis, .. } = instructions::prepare_state(
             account_qty,
@@ -8326,7 +7936,6 @@ mod tests {
             config.allow_contract_deploy_in_stable,
         )?;
         let network = make_network_builder(&config, genesis)?.build();
-
         let mut bootstrap_tx_index = None;
         let mut validator_tx_index = None;
         let mut tx_index = 0usize;
@@ -8361,7 +7970,6 @@ mod tests {
             }
             tx_index = tx_index.saturating_add(1);
         }
-
         let bootstrap_tx_index = bootstrap_tx_index.expect("bootstrap asset tx should exist");
         let validator_tx_index = validator_tx_index.expect("validator bootstrap tx should exist");
         assert!(
@@ -8370,7 +7978,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn generated_npos_genesis_registers_each_bootstrap_asset_definition_once() -> Result<()> {
         init_instruction_registry();
@@ -8406,7 +8013,6 @@ mod tests {
             nexus: Some(profile.clone()),
             diagnostic_dir: None,
         };
-
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos { genesis, .. } = instructions::prepare_state(
             account_qty,
@@ -8416,7 +8022,6 @@ mod tests {
             config.allow_contract_deploy_in_stable,
         )?;
         let network = make_network_builder(&config, genesis)?.build();
-
         let mut registrations = BTreeMap::<AssetDefinitionId, Vec<usize>>::new();
         let mut tx_asset_registrations = BTreeMap::<usize, Vec<AssetDefinitionId>>::new();
         for (tx_index, tx) in network
@@ -8446,7 +8051,6 @@ mod tests {
                     .push(definition.object.id.clone());
             }
         }
-
         for asset_id in [&profile.stake_asset_id, &profile.fee_asset_id] {
             let txs = registrations.get(asset_id).cloned().unwrap_or_default();
             let tx_details: Vec<_> = txs
@@ -8473,7 +8077,6 @@ mod tests {
         }
         Ok(())
     }
-
     #[test]
     fn npos_preflight_audit_fails_on_missing_activation() {
         init_instruction_registry();
@@ -8498,7 +8101,6 @@ mod tests {
             "unexpected error message: {message}"
         );
     }
-
     #[test]
     fn npos_preflight_audit_fails_on_missing_pop() {
         init_instruction_registry();
@@ -8523,7 +8125,6 @@ mod tests {
             "unexpected error message: {message}"
         );
     }
-
     #[test]
     fn npos_preflight_audit_fails_on_unequal_initial_stake() {
         init_instruction_registry();
@@ -8556,7 +8157,6 @@ mod tests {
             "unexpected error message: {message}"
         );
     }
-
     #[test]
     fn shared_host_stable_soak_profile_caps_load_and_timeout() {
         let mut config = ChaosConfig {
@@ -8590,10 +8190,8 @@ mod tests {
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
             diagnostic_dir: None,
         };
-
         assert!(is_shared_host_stable_soak(&config));
         apply_shared_host_stable_soak_profile(&mut config);
-
         assert_eq!(
             config.tps, 5.0,
             "shared-host soak should preserve canonical 5 TPS pacing"
@@ -8622,7 +8220,6 @@ mod tests {
             "shared-host soak should default the quorum latency gate to the DA steady-state envelope when unset"
         );
     }
-
     #[test]
     fn shared_host_stable_soak_profile_applies_to_permissioned_long_run() {
         let mut config = ChaosConfig {
@@ -8656,7 +8253,6 @@ mod tests {
             nexus: None,
             diagnostic_dir: None,
         };
-
         assert!(is_shared_host_stable_soak(&config));
         apply_shared_host_stable_soak_profile(&mut config);
         assert_eq!(
@@ -8680,7 +8276,6 @@ mod tests {
                 >= Duration::from_secs(IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS)
         );
     }
-
     #[test]
     fn shared_host_stable_soak_profile_pins_canonical_load_shape() {
         let mut config = ChaosConfig {
@@ -8714,10 +8309,8 @@ mod tests {
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
             diagnostic_dir: None,
         };
-
         assert!(is_shared_host_stable_soak(&config));
         apply_shared_host_stable_soak_profile(&mut config);
-
         assert_eq!(
             config.tps, IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR,
             "shared-host soak should enforce canonical minimum TPS for deterministic pilots"
@@ -8727,7 +8320,6 @@ mod tests {
             "shared-host soak should enforce max_inflight floor derived from canonical TPS floor"
         );
     }
-
     #[test]
     fn shared_host_stable_soak_profile_does_not_touch_non_soak_runs() {
         let mut config = ChaosConfig {
@@ -8761,16 +8353,13 @@ mod tests {
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
             diagnostic_dir: None,
         };
-
         assert!(!is_shared_host_stable_soak(&config));
         apply_shared_host_stable_soak_profile(&mut config);
-
         assert!((config.tps - 5.0).abs() <= f64::EPSILON);
         assert_eq!(config.max_inflight, 8);
         assert_eq!(config.progress_timeout, Duration::from_secs(300));
         assert_eq!(config.pipeline_time, None);
     }
-
     #[test]
     fn shared_host_stable_soak_profile_applies_with_single_frozen_peer() {
         let mut config = ChaosConfig {
@@ -8804,13 +8393,11 @@ mod tests {
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
             diagnostic_dir: None,
         };
-
         assert!(
             is_shared_host_stable_soak(&config),
             "single frozen peer should still use shared-host stable soak policy"
         );
         apply_shared_host_stable_soak_profile(&mut config);
-
         assert_eq!(config.tps, IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR);
         assert_eq!(
             config.pipeline_time,
@@ -8825,7 +8412,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn submission_confirmation_mode_uses_ingress_acceptance_for_stable_no_faults() {
         let config = ChaosConfig {
@@ -8859,13 +8445,11 @@ mod tests {
             nexus: None,
             diagnostic_dir: None,
         };
-
         assert_eq!(
             submission_confirmation_mode(&config),
             SubmissionConfirmationMode::AcceptedByIngress
         );
     }
-
     #[test]
     fn submission_confirmation_mode_uses_ingress_acceptance_for_stable_fault_runs() {
         let mut config = ChaosConfig {
@@ -8899,7 +8483,6 @@ mod tests {
             nexus: None,
             diagnostic_dir: None,
         };
-
         assert_eq!(
             submission_confirmation_mode(&config),
             SubmissionConfirmationMode::AcceptedByIngress
@@ -8911,7 +8494,6 @@ mod tests {
             SubmissionConfirmationMode::BlockingApplied
         );
     }
-
     #[test]
     fn stable_ingress_effective_max_inflight_is_capped() {
         let mut config = ChaosConfig {
@@ -8945,22 +8527,18 @@ mod tests {
             nexus: None,
             diagnostic_dir: None,
         };
-
         assert_eq!(
             effective_submission_max_inflight(&config),
             IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP
         );
-
         config.max_inflight = IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP / 2;
         assert_eq!(
             effective_submission_max_inflight(&config),
             IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP / 2
         );
-
         config.max_inflight = 0;
         assert_eq!(effective_submission_max_inflight(&config), 1);
     }
-
     #[test]
     fn severe_stopping_stable_ingress_pacing_is_capped() {
         let mut config = ChaosConfig {
@@ -8996,7 +8574,6 @@ mod tests {
             nexus: None,
             diagnostic_dir: None,
         };
-
         assert!(is_severe_stopping_recovery_run(&config));
         assert_eq!(
             effective_submission_max_inflight(&config),
@@ -9006,13 +8583,11 @@ mod tests {
             (effective_submission_tps(&config) - IZANAMI_STABLE_SEVERE_STOPPING_TPS_CAP).abs()
                 <= f64::EPSILON
         );
-
         config.tps = 0.5;
         config.max_inflight = 4;
         assert_eq!(effective_submission_max_inflight(&config), 4);
         assert!((effective_submission_tps(&config) - 0.5).abs() <= f64::EPSILON);
     }
-
     #[test]
     fn non_stopping_stable_ingress_pacing_keeps_configured_rate() {
         let mut config = ChaosConfig {
@@ -9048,23 +8623,19 @@ mod tests {
             nexus: None,
             diagnostic_dir: None,
         };
-
         assert!(!is_severe_stopping_recovery_run(&config));
         assert_eq!(
             effective_submission_max_inflight(&config),
             IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP
         );
         assert!((effective_submission_tps(&config) - 200.0).abs() <= f64::EPSILON);
-
         config.tps = 400.0;
         assert_eq!(effective_submission_max_inflight(&config), 512);
         assert!((effective_submission_tps(&config) - 400.0).abs() <= f64::EPSILON);
-
         config.workload_profile = WorkloadProfile::Chaos;
         assert_eq!(effective_submission_max_inflight(&config), 512);
         assert!((effective_submission_tps(&config) - 400.0).abs() <= f64::EPSILON);
     }
-
     #[test]
     fn prebuilt_stress_queue_capacity_scales_to_buffer() {
         let mut config = ChaosConfig {
@@ -9098,7 +8669,6 @@ mod tests {
             nexus: None,
             diagnostic_dir: None,
         };
-
         assert_eq!(effective_network_queue_capacity(&config), 2_400_000);
         assert_eq!(
             workload_account_count(&config),
@@ -9115,7 +8685,6 @@ mod tests {
             effective_ingress_request_timeout(&config),
             Duration::from_secs(120)
         );
-
         config.tps = 100.0;
         assert_eq!(
             effective_network_queue_capacity(&config),
@@ -9125,7 +8694,6 @@ mod tests {
             effective_ingress_request_timeout(&config),
             Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS)
         );
-
         config.prebuild_tx_buffer = 0;
         config.tps = 20_000.0;
         assert_eq!(
@@ -9140,15 +8708,12 @@ mod tests {
             effective_ingress_request_timeout(&config),
             Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS)
         );
-
         config.tps = 100.0;
         assert_eq!(workload_account_count(&config), config.peer_count * 3);
     }
-
     #[test]
     fn status_sample_request_timeout_is_short_and_bounded() {
         let sample_timeout = Duration::from_millis(IZANAMI_STATUS_SAMPLE_REQUEST_TIMEOUT_MS);
-
         assert_eq!(
             bounded_sumeragi_status_sample_request_timeout(Duration::ZERO),
             sample_timeout
@@ -9162,7 +8727,6 @@ mod tests {
             Duration::from_millis(250)
         );
     }
-
     #[test]
     fn blocking_ingress_effective_max_inflight_preserves_configured_limit() {
         let config = ChaosConfig {
@@ -9196,13 +8760,11 @@ mod tests {
             nexus: None,
             diagnostic_dir: None,
         };
-
         assert_eq!(
             effective_submission_max_inflight(&config),
             IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP * 8
         );
     }
-
     #[test]
     fn trigger_precheck_runs_only_for_blocking_confirmation() {
         assert!(should_run_trigger_precheck(
@@ -9212,7 +8774,6 @@ mod tests {
             SubmissionConfirmationMode::AcceptedByIngress
         ));
     }
-
     #[test]
     fn trigger_state_updates_force_blocking_confirmation() {
         let updates = vec![PlanUpdate::TrackRepeatableTrigger(
@@ -9226,7 +8787,6 @@ mod tests {
             SubmissionConfirmationMode::BlockingApplied
         );
     }
-
     #[test]
     fn asset_and_account_state_updates_force_blocking_confirmation() {
         let key_pair = checked_izanami_ed25519_key_fixture();
@@ -9255,7 +8815,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn non_trigger_state_updates_keep_ingress_confirmation() {
         let updates = Vec::<PlanUpdate>::new();
@@ -9267,7 +8826,6 @@ mod tests {
             SubmissionConfirmationMode::AcceptedByIngress
         );
     }
-
     #[test]
     fn stable_transfer_plan_never_escalates_to_blocking_applied() {
         let PreparedChaos { mut state, .. } =
@@ -9285,7 +8843,6 @@ mod tests {
             SubmissionConfirmationMode::AcceptedByIngress
         );
     }
-
     #[test]
     fn stable_transfer_plan_is_prebuild_safe() {
         let PreparedChaos { mut state, .. } =
@@ -9295,13 +8852,11 @@ mod tests {
         let plan = state
             .produce_plan_for_test(instructions::RecipeKind::TransferAsset, &mut rng)
             .expect("transfer plan");
-
         assert!(plan_is_prebuild_safe(
             &plan,
             SubmissionConfirmationMode::AcceptedByIngress
         ));
     }
-
     #[test]
     fn stateful_plans_are_not_prebuild_safe() {
         let PreparedChaos { mut state, .. } =
@@ -9311,13 +8866,11 @@ mod tests {
         let plan = state
             .produce_plan_for_test(instructions::RecipeKind::RegisterAccount, &mut rng)
             .expect("register account plan");
-
         assert!(!plan_is_prebuild_safe(
             &plan,
             SubmissionConfirmationMode::AcceptedByIngress
         ));
     }
-
     #[test]
     fn prebuild_worker_count_uses_auto_parallelism_when_enabled() {
         let mut config = ChaosConfig {
@@ -9351,18 +8904,14 @@ mod tests {
             nexus: None,
             diagnostic_dir: None,
         };
-
         let workers = effective_prebuild_tx_workers(&config);
         assert!(workers >= 1);
         assert!(workers <= config.submitters);
-
         config.prebuild_tx_workers = 11;
         assert_eq!(effective_prebuild_tx_workers(&config), 11);
-
         config.prebuild_tx_buffer = 0;
         assert_eq!(effective_prebuild_tx_workers(&config), 0);
     }
-
     #[test]
     fn prebuild_attempt_limit_allows_skips_without_unbounded_warmup() {
         assert_eq!(
@@ -9371,14 +8920,12 @@ mod tests {
         );
         assert_eq!(prebuild_attempt_limit(0, 8), 8);
     }
-
     #[test]
     fn tracked_repeatable_trigger_extracts_registration_target() {
         let trigger_id: TriggerId = "repeat_trigger_test".parse().expect("valid trigger id");
         let updates = vec![PlanUpdate::TrackRepeatableTrigger(trigger_id.clone())];
         assert_eq!(tracked_repeatable_trigger(&updates), Some(trigger_id));
     }
-
     #[test]
     fn trigger_not_found_error_is_detected() {
         let err = eyre!("Trigger with id repeat_trigger_7 not found");
@@ -9387,7 +8934,6 @@ mod tests {
             "repeatable trigger drift should classify missing-trigger errors"
         );
     }
-
     #[test]
     fn endpoint_pool_can_pin_and_reuse_same_endpoint() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -9434,7 +8980,6 @@ mod tests {
             "repeatable trigger precheck and submit must stay on the pinned endpoint"
         );
     }
-
     #[test]
     fn endpoint_pool_failover_excluding_skips_pinned_endpoint() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -9473,7 +9018,6 @@ mod tests {
             "alternate failover should skip the pinned endpoint that just returned route_unavailable"
         );
     }
-
     #[test]
     fn route_unavailable_error_is_detected() {
         let err = eyre!(
@@ -9484,7 +9028,6 @@ mod tests {
             "route_unavailable should trigger repeatable-trigger repinning"
         );
     }
-
     #[test]
     fn shared_host_stable_soak_profile_keeps_higher_pipeline_time() {
         let mut config = ChaosConfig {
@@ -9518,13 +9061,11 @@ mod tests {
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
             diagnostic_dir: None,
         };
-
         assert!(is_shared_host_stable_soak(&config));
         apply_shared_host_stable_soak_profile(&mut config);
         assert_eq!(config.pipeline_time, Some(Duration::from_millis(1_200)));
         assert_eq!(config.latency_p95_threshold, Some(Duration::from_secs(2)));
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn nexus_status_reports_teu_metrics() -> Result<()> {
         if !allow_net_for_tests() {
@@ -9532,7 +9073,6 @@ mod tests {
         }
         crate::config::init_tracing_with_filter("warn");
         init_instruction_registry();
-
         let nexus = NexusProfile::sora_defaults().expect("nexus profile");
         let config = ChaosConfig {
             allow_net: true,
@@ -9565,7 +9105,6 @@ mod tests {
             nexus: Some(nexus.clone()),
             diagnostic_dir: None,
         };
-
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos {
             state: _, genesis, ..
@@ -9577,7 +9116,6 @@ mod tests {
             config.allow_contract_deploy_in_stable,
         )?;
         let builder = make_network_builder(&config, genesis)?;
-
         let network = match builder.start().await {
             Ok(network) => network,
             Err(err) => {
@@ -9591,7 +9129,6 @@ mod tests {
                 return Err(err);
             }
         };
-
         let status = match network.peer().status().await {
             Ok(status) => status,
             Err(err) => {
@@ -9605,7 +9142,6 @@ mod tests {
                 return Err(err);
             }
         };
-
         let expected_lanes = nexus.lane_catalog.lane_count().get() as usize;
         assert!(
             status.teu_lane_commit.len() >= expected_lanes,
@@ -9615,24 +9151,20 @@ mod tests {
             status.teu_dataspace_backlog.len() >= nexus.dataspace_catalog.entries().len(),
             "dataspace backlog telemetry should be populated"
         );
-
         network.shutdown().await;
         Ok(())
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_submission_records_success() {
         let metrics = Arc::new(Metrics::default());
         let succeeded = run_submission("success", true, Arc::clone(&metrics), || Ok(())).await;
         assert!(succeeded);
-
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.successes, 1);
         assert_eq!(snapshot.failures, 0);
         assert_eq!(snapshot.expected_failures, 0);
         assert_eq!(snapshot.unexpected_successes, 0);
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_submission_records_failure() {
         let metrics = Arc::new(Metrics::default());
@@ -9641,14 +9173,12 @@ mod tests {
         })
         .await;
         assert!(!succeeded);
-
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.successes, 0);
         assert_eq!(snapshot.failures, 1);
         assert_eq!(snapshot.expected_failures, 0);
         assert_eq!(snapshot.unexpected_successes, 0);
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_submission_records_expected_failure() {
         let metrics = Arc::new(Metrics::default());
@@ -9657,28 +9187,24 @@ mod tests {
         })
         .await;
         assert!(!succeeded);
-
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.successes, 0);
         assert_eq!(snapshot.failures, 0);
         assert_eq!(snapshot.expected_failures, 1);
         assert_eq!(snapshot.unexpected_successes, 0);
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_submission_records_unexpected_success() {
         let metrics = Arc::new(Metrics::default());
         let succeeded =
             run_submission("unexpected_success", false, Arc::clone(&metrics), || Ok(())).await;
         assert!(succeeded);
-
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.successes, 0);
         assert_eq!(snapshot.failures, 0);
         assert_eq!(snapshot.expected_failures, 0);
         assert_eq!(snapshot.unexpected_successes, 1);
     }
-
     #[test]
     fn run_with_queue_timeout_retry_retries_and_succeeds() {
         let attempts = AtomicU64::new(0);
@@ -9698,7 +9224,6 @@ mod tests {
             "helper should perform one retry before succeeding"
         );
     }
-
     #[tokio::test]
     async fn async_queue_timeout_retry_retries_and_succeeds() {
         let attempts = Arc::new(AtomicU64::new(0));
@@ -9721,7 +9246,6 @@ mod tests {
             },
         )
         .await;
-
         assert_eq!(
             result.expect("async queue-timeout retry should recover"),
             "accepted"
@@ -9732,7 +9256,6 @@ mod tests {
             "async helper should perform one retry before succeeding"
         );
     }
-
     #[test]
     fn run_with_queue_timeout_retry_retries_on_no_endpoint_backpressure() {
         let attempts = AtomicU64::new(0);
@@ -9761,7 +9284,6 @@ mod tests {
             "helper should perform one retry before succeeding after no-endpoint backpressure"
         );
     }
-
     #[test]
     fn queue_timeout_retry_delay_uses_dynamic_floor_for_no_endpoint_backpressure() {
         let backoff = Duration::from_millis(250);
@@ -9782,7 +9304,6 @@ mod tests {
             "non-endpoint retryable failures should keep exponential backoff pacing"
         );
     }
-
     #[test]
     fn run_with_queue_timeout_retry_stops_on_non_retryable_error() {
         let attempts = AtomicU64::new(0);
@@ -9802,7 +9323,6 @@ mod tests {
             "non-retryable failures must not be retried"
         );
     }
-
     #[test]
     fn run_with_queue_timeout_retry_treats_duplicate_rejection_as_success() {
         let attempts = AtomicU64::new(0);
@@ -9827,7 +9347,6 @@ mod tests {
             "idempotent duplicate should not trigger extra retries"
         );
     }
-
     #[test]
     fn ingress_failover_marks_queue_timeout_retryable() {
         let err = eyre!("transaction queued for too long");
@@ -9836,7 +9355,6 @@ mod tests {
             "queue timeout errors should trigger endpoint failover"
         );
     }
-
     #[test]
     fn ingress_failover_marks_transaction_wait_timeout_retryable() {
         let err = eyre!("transaction did not reach Applied within 20000 ms");
@@ -9845,7 +9363,6 @@ mod tests {
             "transaction wait timeouts should trigger endpoint failover"
         );
     }
-
     #[test]
     fn ingress_failover_marks_http_429_retryable() {
         let err = eyre!("Failed to get pipeline transaction status: 429 Too Many Requests");
@@ -9854,7 +9371,6 @@ mod tests {
             "HTTP 429 should be treated as queue-pressure backpressure"
         );
     }
-
     #[test]
     fn ingress_failover_marks_closed_send_request_retryable() {
         let err = eyre!("client error (SendRequest): connection closed before message completed");
@@ -9863,7 +9379,6 @@ mod tests {
             "closed transport sends should trigger endpoint failover"
         );
     }
-
     #[test]
     fn ingress_failover_marks_local_port_exhaustion_retryable() {
         let err = eyre!("tcp connect error: Can't assign requested address (os error 49)");
@@ -9872,7 +9387,6 @@ mod tests {
             "local port exhaustion is transient driver pressure, not a payload failure"
         );
     }
-
     #[test]
     fn retryable_status_and_queue_pressure_failures_log_at_debug() {
         assert!(should_log_ingress_retry_at_debug(
@@ -9891,7 +9405,6 @@ mod tests {
             false,
         ));
     }
-
     #[test]
     fn ingress_queue_timeout_retryable_for_no_endpoint_backpressure() {
         let err = eyre!(
@@ -9902,13 +9415,11 @@ mod tests {
             "no-endpoint ingress backpressure should be retryable for submit helper"
         );
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn await_worker_shutdown_returns_for_completed_tasks() {
         let handle = tokio::spawn(async {});
         await_worker_shutdown_with_timeout(vec![handle], "test", Duration::from_millis(100)).await;
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn await_worker_shutdown_aborts_hung_tasks() {
         let handle = tokio::spawn(async {
@@ -9916,7 +9427,6 @@ mod tests {
                 time::sleep(Duration::from_secs(60)).await;
             }
         });
-
         timeout(
             Duration::from_secs(1),
             await_worker_shutdown_with_timeout(vec![handle], "test", Duration::from_millis(10)),
@@ -9924,7 +9434,6 @@ mod tests {
         .await
         .expect("worker shutdown should return after aborting hung tasks");
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shutdown_submission_drain_counts_aborted_tasks() {
         let mut submissions = JoinSet::new();
@@ -9934,18 +9443,15 @@ mod tests {
                 time::sleep(Duration::from_secs(60)).await;
             }
         });
-
         let aborted = timeout(
             Duration::from_secs(1),
             drain_submissions_for_shutdown(&mut submissions, Duration::from_millis(10)),
         )
         .await
         .expect("submission drain should return after aborting hung submissions");
-
         assert_eq!(aborted, 1);
         assert!(submissions.is_empty());
     }
-
     #[test]
     fn endpoint_pool_rotates_on_retryable_failure() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -9982,7 +9488,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn endpoint_pool_query_confirmation_fails_over() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -10016,7 +9521,6 @@ mod tests {
         );
         assert_eq!(attempts, vec![0, 1]);
     }
-
     #[test]
     fn endpoint_pool_status_read_prefers_hint_then_fails_over() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -10052,7 +9556,6 @@ mod tests {
         assert_eq!(result.expect("status read should fail over"), 2);
         assert_eq!(attempts, vec![1, 2]);
     }
-
     #[test]
     fn endpoint_pool_status_fanout_continues_after_empty_response() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -10093,7 +9596,6 @@ mod tests {
         );
         assert_eq!(attempts, vec![0, 1]);
     }
-
     #[test]
     fn endpoint_pool_status_fanout_can_override_submit_attempt_cap() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -10135,7 +9637,6 @@ mod tests {
         );
         assert_eq!(attempts, vec![0, 1, 2, 3]);
     }
-
     #[test]
     fn endpoint_pool_status_query_429_does_not_mark_endpoint_unhealthy() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -10175,7 +9676,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn endpoint_pool_submit_queue_pressure_marks_endpoint_unhealthy() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -10213,7 +9713,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn endpoint_pool_respects_cooldown_then_reprobes() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -10243,7 +9742,6 @@ mod tests {
             pool.endpoint_state(0).unhealthy_until.is_some(),
             "first endpoint should enter cooldown after retryable failure"
         );
-
         let mut attempts_before_reprobe = Vec::new();
         let second: Result<&'static str> =
             pool.run_with_failover_at("submit", start + Duration::from_secs(1), |idx, _| {
@@ -10259,7 +9757,6 @@ mod tests {
             vec![1],
             "cooldown should suppress early reprobes"
         );
-
         let mut attempts_after_reprobe = Vec::new();
         let third: Result<&'static str> =
             pool.run_with_failover_at("submit", start + Duration::from_secs(3), |idx, _| {
@@ -10280,7 +9777,6 @@ mod tests {
             "reprobe should include the unhealthy endpoint after the interval"
         );
     }
-
     #[test]
     fn ingress_pool_excludes_lagging_endpoint_when_healthy_alternatives_exist() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -10304,7 +9800,6 @@ mod tests {
             peer_heights: vec![Some(180), Some(220), Some(221)],
             observed_at: now,
         });
-
         let mut attempts = Vec::new();
         let result: Result<&'static str> = pool.run_with_failover_at("submit", now, |idx, _| {
             attempts.push(idx);
@@ -10320,7 +9815,6 @@ mod tests {
             "lagging endpoint should be excluded while healthy non-lagging alternatives exist"
         );
     }
-
     #[test]
     fn ingress_pool_forced_probe_when_all_endpoints_excluded_or_unhealthy() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -10358,7 +9852,6 @@ mod tests {
             peer_heights: vec![Some(250), Some(300), Some(301)],
             observed_at: start,
         });
-
         let mut attempts = Vec::new();
         let result: Result<&'static str> =
             pool.run_with_failover_at("submit", start + Duration::from_secs(1), |idx, _| {
@@ -10375,7 +9868,6 @@ mod tests {
             "when all non-lagging endpoints are unavailable, forced probe should use the excluded lagging endpoint"
         );
     }
-
     #[test]
     fn queue_pressure_sticky_cooldown_blocks_early_reprobe_after_threshold() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -10424,7 +9916,6 @@ mod tests {
             ),
             "queue-pressure endpoint should become unhealthy once threshold is reached"
         );
-
         let mut attempts = Vec::new();
         let second: Result<&'static str> =
             pool.run_with_failover_at("submit", start + Duration::from_secs(1), |idx, _| {
@@ -10438,22 +9929,18 @@ mod tests {
             "sticky queue-pressure endpoint should not be reprobed early while healthy alternatives exist"
         );
     }
-
     #[test]
     fn ingress_fsm_excludes_lagging_when_healthy_alternative_exists() {
         ingress_pool_excludes_lagging_endpoint_when_healthy_alternatives_exist();
     }
-
     #[test]
     fn ingress_fsm_forced_probe_when_all_excluded_or_unhealthy() {
         ingress_pool_forced_probe_when_all_endpoints_excluded_or_unhealthy();
     }
-
     #[test]
     fn ingress_queue_pressure_cooldown_blocks_early_reprobe_once_threshold_reached() {
         queue_pressure_sticky_cooldown_blocks_early_reprobe_after_threshold();
     }
-
     #[test]
     fn ingress_submission_backpressure_defers_when_all_endpoints_recently_probed_and_unhealthy() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -10482,7 +9969,6 @@ mod tests {
                 endpoint_state.last_probe_at = Some(start);
             }
         }
-
         let now = start + Duration::from_millis(100);
         let attempt_order = pool.attempt_order_at(now);
         assert!(
@@ -10501,7 +9987,6 @@ mod tests {
             "backpressure should be bounded by reprobe interval under cooldown saturation"
         );
     }
-
     #[test]
     fn all_unhealthy_pool_promotes_successful_probe_to_healthy_endpoint() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -10523,7 +10008,6 @@ mod tests {
         assert!(pool.mark_failure_at(0, start, IngressFailureClass::QueuePressure));
         assert!(pool.mark_failure_at(1, start, IngressFailureClass::QueuePressure));
         assert!(pool.mark_failure_at(2, start, IngressFailureClass::QueuePressure));
-
         let mut first_attempts = Vec::new();
         let first: Result<&'static str> =
             pool.run_with_failover_at("submit", start + Duration::from_secs(1), |idx, _| {
@@ -10536,7 +10020,6 @@ mod tests {
             1,
             "all-unhealthy path should probe only one endpoint per interval"
         );
-
         let mut second_attempts = Vec::new();
         let second: Result<&'static str> =
             pool.run_with_failover_at("submit", start + Duration::from_secs(1), |idx, _| {
@@ -10552,7 +10035,6 @@ mod tests {
             1,
             "after successful probe promotion, a single healthy endpoint should serve follow-up requests"
         );
-
         let mut third_attempts = Vec::new();
         let third: Result<&'static str> =
             pool.run_with_failover_at("submit", start + Duration::from_secs(3), |idx, _| {
@@ -10569,7 +10051,6 @@ mod tests {
             "reopened all-unhealthy interval should still probe exactly one endpoint"
         );
     }
-
     #[test]
     fn ingress_submission_backpressure_is_disabled_when_endpoint_is_ready() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -10594,7 +10075,6 @@ mod tests {
             "healthy endpoint availability should disable submit backpressure"
         );
     }
-
     #[test]
     fn endpoint_pool_queue_timeout_respects_unhealthy_failure_threshold() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -10618,7 +10098,6 @@ mod tests {
             state_after_first_failure.unhealthy_until.is_none(),
             "first queue-timeout failure should stay below unhealthy threshold"
         );
-
         let second_result: Result<()> =
             pool.run_with_failover_at("submit", now + Duration::from_millis(10), |_idx, _| {
                 Err(eyre!("transaction queued for too long"))
@@ -10632,7 +10111,6 @@ mod tests {
             state_after_second_failure.unhealthy_until.is_none(),
             "second queue-timeout failure should stay below unhealthy threshold"
         );
-
         let third_result: Result<()> =
             pool.run_with_failover_at("submit", now + Duration::from_millis(20), |_idx, _| {
                 Err(eyre!("transaction queued for too long"))
@@ -10651,7 +10129,6 @@ mod tests {
             "queue-timeout unhealthy state should use sticky cooldown tracking"
         );
     }
-
     #[test]
     fn endpoint_pool_queue_timeout_sticky_cooldown_clears_on_success_when_all_endpoints_unhealthy()
     {
@@ -10679,7 +10156,6 @@ mod tests {
             cooldown_until > start,
             "cooldown should extend beyond initial failure timestamp"
         );
-
         let early = start + Duration::from_secs(1);
         let second: Result<&'static str> =
             pool.run_with_failover_at("submit", early, |_idx, _| Ok("ok"));
@@ -10692,7 +10168,6 @@ mod tests {
             state_after_early_success.unhealthy_until.is_none(),
             "successful probe should immediately clear sticky cooldown when all endpoints were unhealthy"
         );
-
         let after_expiry = cooldown_until + Duration::from_millis(1);
         let third: Result<&'static str> =
             pool.run_with_failover_at("submit", after_expiry, |_idx, _| Ok("ok"));
@@ -10705,7 +10180,6 @@ mod tests {
             "sticky queue-timeout cooldown should clear after expiry"
         );
     }
-
     #[test]
     fn endpoint_pool_queue_timeout_cooldown_uses_configured_unhealthy_cooldown() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -10737,35 +10211,28 @@ mod tests {
             "queue-timeout cooldown should not be stretched to status-timeout floor"
         );
     }
-
     #[test]
     fn seeded_rng_is_deterministic_for_same_seed() {
         let mut rng_a = seeded_rng_from_seed(Some(777)).expect("seeded RNG A");
         let mut rng_b = seeded_rng_from_seed(Some(777)).expect("seeded RNG B");
-
         let sample_a: [u64; 3] = [rng_a.next_u64(), rng_a.next_u64(), rng_a.next_u64()];
         let sample_b: [u64; 3] = [rng_b.next_u64(), rng_b.next_u64(), rng_b.next_u64()];
-
         assert_eq!(
             sample_a, sample_b,
             "identical seeds must yield same sequence"
         );
     }
-
     #[test]
     fn seeded_rng_diverges_for_different_seeds() {
         let mut rng_a = seeded_rng_from_seed(Some(1)).expect("seeded RNG A");
         let mut rng_b = seeded_rng_from_seed(Some(2)).expect("seeded RNG B");
-
         let sample_a: [u64; 3] = [rng_a.next_u64(), rng_a.next_u64(), rng_a.next_u64()];
         let sample_b: [u64; 3] = [rng_b.next_u64(), rng_b.next_u64(), rng_b.next_u64()];
-
         assert_ne!(
             sample_a, sample_b,
             "different seeds should produce different sequences"
         );
     }
-
     #[test]
     fn progress_state_tracks_stalls() {
         let start = Instant::now();
@@ -10777,26 +10244,22 @@ mod tests {
         assert!(!state.stalled(start + Duration::from_secs(6), Duration::from_secs(5)));
         assert!(state.stalled(start + Duration::from_secs(9), Duration::from_secs(5)));
     }
-
     #[test]
     fn divergence_state_trips_after_sustained_window() {
         let start = Instant::now();
         let mut state = HeightDivergenceState::new();
         let threshold = 2;
         let window = Duration::from_secs(30);
-
         assert!(state.observe(start, 3, threshold));
         assert!(!state.violated(start + Duration::from_secs(29), window));
         assert!(state.violated(start + Duration::from_secs(30), window));
     }
-
     #[test]
     fn divergence_state_resets_when_converged() {
         let start = Instant::now();
         let mut state = HeightDivergenceState::new();
         let threshold = 2;
         let window = Duration::from_secs(30);
-
         assert!(state.observe(start, 4, threshold));
         assert!(!state.observe(start + Duration::from_secs(10), 1, threshold));
         assert!(!state.violated(start + Duration::from_secs(40), window));
@@ -10807,7 +10270,6 @@ mod tests {
         assert!(!state.violated(start + Duration::from_secs(60), window));
         assert!(state.violated(start + Duration::from_secs(71), window));
     }
-
     #[test]
     fn tolerated_peer_failures_matches_bft_window() {
         assert_eq!(tolerated_peer_failures(0), 0);
@@ -10816,7 +10278,6 @@ mod tests {
         assert_eq!(tolerated_peer_failures(4), 1);
         assert_eq!(tolerated_peer_failures(7), 2);
     }
-
     #[test]
     fn effective_tolerated_peer_failures_honors_configured_fault_budget() {
         assert_eq!(effective_tolerated_peer_failures(4, 0), 0);
@@ -10832,7 +10293,6 @@ mod tests {
             "configured budget must still remain bounded by protocol tolerance"
         );
     }
-
     #[test]
     fn quorum_min_height_respects_effective_tolerance() {
         assert_eq!(quorum_min_height_from_samples(vec![], 0), 0);
@@ -10852,7 +10312,6 @@ mod tests {
         );
         assert_eq!(quorum_min_height_from_samples(vec![9, 10, 11], 0), 9);
     }
-
     #[test]
     fn strict_divergence_reference_height_trims_only_effectively_tolerated_outliers() {
         assert_eq!(
@@ -10880,7 +10339,6 @@ mod tests {
             "single leading outlier should not raise the strict divergence reference"
         );
     }
-
     #[test]
     fn strict_divergence_lagging_peer_count_respects_threshold() {
         let strict_reference = 149_u64;
@@ -10895,7 +10353,6 @@ mod tests {
             "lag above threshold should be counted"
         );
     }
-
     #[test]
     fn strict_divergence_guard_requires_more_than_tolerated_outliers() {
         let heights_one_outlier = vec![120_u64, 149, 149, 149];
@@ -10908,7 +10365,6 @@ mod tests {
             lagging_one <= tolerated_peer_failures(heights_one_outlier.len()),
             "a single outlier in a 4-peer run should stay within tolerated failures"
         );
-
         let heights_two_outliers = vec![120_u64, 121, 149, 149];
         let strict_reference_two =
             strict_divergence_reference_height_from_samples(heights_two_outliers.clone(), 1);
@@ -10924,7 +10380,6 @@ mod tests {
             "strict divergence guard should activate once outliers exceed tolerated failures"
         );
     }
-
     #[test]
     fn strict_progress_timeout_enforcement_respects_bft_tolerance() {
         assert!(
@@ -10940,13 +10395,11 @@ mod tests {
             "strict-timeout should be enforced once lagging peers exceed BFT tolerance"
         );
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn drain_ready_submissions_clears_completed_tasks() {
         let mut set = JoinSet::new();
         set.spawn(async {});
         set.spawn(async {});
-
         let deadline = Instant::now() + Duration::from_secs(1);
         while set.len() > 0 && Instant::now() < deadline {
             tokio::task::yield_now().await;
@@ -10958,7 +10411,6 @@ mod tests {
             "drain should clear completed submissions within timeout"
         );
     }
-
     #[test]
     fn submission_backlog_limit_scales_from_max_inflight() {
         assert_eq!(
@@ -10970,7 +10422,6 @@ mod tests {
             IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER
         );
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn submission_permit_scope_does_not_block_precheck_phase() {
         let semaphore = Arc::new(Semaphore::new(1));
@@ -10981,7 +10432,6 @@ mod tests {
             .expect("must acquire permit");
         let precheck_started = Arc::new(Notify::new());
         let submit_started = Arc::new(Notify::new());
-
         let semaphore_for_task = Arc::clone(&semaphore);
         let precheck_for_task = Arc::clone(&precheck_started);
         let submit_for_task = Arc::clone(&submit_started);
@@ -10994,7 +10444,6 @@ mod tests {
             submit_for_task.notify_one();
             drop(permit);
         });
-
         timeout(Duration::from_millis(200), precheck_started.notified())
             .await
             .expect("precheck phase should proceed even when submit permits are saturated");
@@ -11004,14 +10453,12 @@ mod tests {
                 .is_err(),
             "submit stage should remain blocked while permits are saturated"
         );
-
         drop(saturated);
         timeout(Duration::from_secs(1), submit_started.notified())
             .await
             .expect("submit stage should proceed after permit release");
         task.await.expect("permit-scope task should finish");
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn wait_for_submission_capacity_enforces_backlog_bound() {
         let backlog_limit = submission_backlog_limit(1);
@@ -11024,7 +10471,6 @@ mod tests {
             });
         }
         assert_eq!(submissions.len(), backlog_limit);
-
         let stop_notify = Notify::new();
         let deadline = Instant::now() + Duration::from_secs(2);
         {
@@ -11035,16 +10481,13 @@ mod tests {
                 deadline,
             );
             tokio::pin!(wait_future);
-
             assert!(
                 timeout(Duration::from_millis(100), &mut wait_future)
                     .await
                     .is_err(),
                 "capacity wait should block while backlog remains saturated"
             );
-
             gate.notify_one();
-
             assert!(
                 timeout(Duration::from_secs(1), &mut wait_future)
                     .await
@@ -11056,7 +10499,6 @@ mod tests {
             submissions.len() < backlog_limit,
             "draining one completed submission should reduce backlog below the cap"
         );
-
         let gate_for_new_submission = Arc::clone(&gate);
         submissions.spawn(async move {
             gate_for_new_submission.notified().await;
@@ -11065,13 +10507,11 @@ mod tests {
             submissions.len() <= backlog_limit,
             "queued submissions should stay bounded by max_inflight * backlog multiplier"
         );
-
         submissions.abort_all();
         while let Some(result) = submissions.join_next().await {
             let _ = result;
         }
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn wait_for_target_blocks_reaches_target() -> Result<()> {
         if !allow_net_for_tests() {
@@ -11079,7 +10519,6 @@ mod tests {
         }
         crate::config::init_tracing_with_filter("warn");
         init_instruction_registry();
-
         let config = ChaosConfig {
             allow_net: true,
             peer_count: 4,
@@ -11111,7 +10550,6 @@ mod tests {
             nexus: None,
             diagnostic_dir: None,
         };
-
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos {
             state: _,
@@ -11126,7 +10564,6 @@ mod tests {
             config.allow_contract_deploy_in_stable,
         )?;
         let builder = make_network_builder(&config, genesis)?;
-
         let network = match builder.start().await {
             Ok(network) => network,
             Err(err) => {
@@ -11140,7 +10577,6 @@ mod tests {
                 return Err(err);
             }
         };
-
         let run_control = RunControl::new(Instant::now() + Duration::from_secs(20));
         let progress = wait_for_target_blocks(
             network.peers(),
@@ -11159,10 +10595,8 @@ mod tests {
         .await?;
         assert!(progress.target_reached);
         network.shutdown().await;
-
         Ok(())
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn wait_for_target_blocks_soft_kpi_allows_duration_completion_without_target()
     -> Result<()> {
@@ -11171,7 +10605,6 @@ mod tests {
         }
         crate::config::init_tracing_with_filter("warn");
         init_instruction_registry();
-
         let config = ChaosConfig {
             allow_net: true,
             peer_count: 4,
@@ -11203,7 +10636,6 @@ mod tests {
             nexus: None,
             diagnostic_dir: None,
         };
-
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos {
             state: _,
@@ -11218,7 +10650,6 @@ mod tests {
             config.allow_contract_deploy_in_stable,
         )?;
         let builder = make_network_builder(&config, genesis)?;
-
         let network = match builder.start().await {
             Ok(network) => network,
             Err(err) => {
@@ -11232,7 +10663,6 @@ mod tests {
                 return Err(err);
             }
         };
-
         let run_control = RunControl::new(Instant::now() + Duration::from_secs(3));
         let target_blocks = 10_000;
         let progress = wait_for_target_blocks(
@@ -11259,10 +10689,8 @@ mod tests {
             "expected unmet target for soft-KPI duration test"
         );
         network.shutdown().await;
-
         Ok(())
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn wait_for_target_blocks_soft_kpi_enforces_latency_gate_at_duration_end() -> Result<()> {
         if !allow_net_for_tests() {
@@ -11270,7 +10698,6 @@ mod tests {
         }
         crate::config::init_tracing_with_filter("warn");
         init_instruction_registry();
-
         let config = ChaosConfig {
             allow_net: true,
             peer_count: 4,
@@ -11302,7 +10729,6 @@ mod tests {
             nexus: None,
             diagnostic_dir: None,
         };
-
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos {
             state: _,
@@ -11317,7 +10743,6 @@ mod tests {
             config.allow_contract_deploy_in_stable,
         )?;
         let builder = make_network_builder(&config, genesis)?;
-
         let network = match builder.start().await {
             Ok(network) => network,
             Err(err) => {
@@ -11331,7 +10756,6 @@ mod tests {
                 return Err(err);
             }
         };
-
         let run_control = RunControl::new(Instant::now() + Duration::from_secs(3));
         let target_blocks = 10_000;
         let result = wait_for_target_blocks(
@@ -11350,7 +10774,6 @@ mod tests {
         )
         .await;
         network.shutdown().await;
-
         let err = result.expect_err(
             "soft-KPI runs should fail when the latency p95 gate is exceeded at duration end",
         );
@@ -11359,10 +10782,8 @@ mod tests {
                 && err.to_string().contains("checkpoint duration_deadline"),
             "expected duration-end latency gate error, got: {err}"
         );
-
         Ok(())
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn wait_for_target_blocks_explicit_stop_is_error_even_in_soft_kpi_mode() {
         let run_control = RunControl::new(Instant::now() + Duration::from_secs(30));
@@ -11389,7 +10810,6 @@ mod tests {
             "unexpected stop error: {err}"
         );
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn allow_net_false_rejects_runner() {
         let config = ChaosConfig {
@@ -11423,7 +10843,6 @@ mod tests {
             nexus: None,
             diagnostic_dir: None,
         };
-
         let err = IzanamiRunner::new(config)
             .await
             .err()
@@ -11433,32 +10852,25 @@ mod tests {
             "error should mention allow_net guard: {err:?}"
         );
     }
-
     #[test]
     fn ingress_clients_mark_submit_compatibility_without_capability_probe() {
         let state = Arc::new(StdMutex::new(DataModelCompatibility::Unchecked));
-
         mark_data_model_submit_compatible(&state);
-
         let cached = state.lock().expect("data model compatibility lock").clone();
         assert!(
             matches!(cached, DataModelCompatibility::SubmitCompatible),
             "Izanami hot-path clients should skip repeated /v1/node/capabilities probes"
         );
     }
-
     #[test]
     fn fault_target_selection_is_deterministic() {
         let mut rng_a = StdRng::seed_from_u64(5);
         let mut rng_b = StdRng::seed_from_u64(5);
-
         let first = select_fault_targets(7, 2, &mut rng_a);
         let second = select_fault_targets(7, 2, &mut rng_b);
-
         assert_eq!(first, second, "same seed must yield same targets");
         assert_eq!(first.len(), 2);
     }
-
     #[test]
     fn sumeragi_leader_targeting_detects_leader_isolation_profile() {
         let mut args = IzanamiArgs::defaults();
@@ -11475,13 +10887,11 @@ mod tests {
             disk_saturation: false,
         };
         let config = ChaosConfig::try_from(args).expect("leader-isolation profile should parse");
-
         assert!(
             uses_sumeragi_leader_fault_targeting(&config),
             "single-peer partition-only faults should follow Sumeragi leader telemetry"
         );
     }
-
     #[test]
     fn sumeragi_leader_targeting_does_not_capture_packet_loss_profile() {
         let mut args = IzanamiArgs::defaults();
@@ -11499,13 +10909,11 @@ mod tests {
             disk_saturation: false,
         };
         let config = ChaosConfig::try_from(args).expect("packet-loss profile should parse");
-
         assert!(
             !uses_sumeragi_leader_fault_targeting(&config),
             "multi-peer packet-loss runs must keep their configured fault target set"
         );
     }
-
     #[test]
     fn sumeragi_leader_targeting_detects_packet_loss_leader_profile() {
         let mut args = IzanamiArgs::defaults();
@@ -11522,13 +10930,11 @@ mod tests {
             disk_saturation: false,
         };
         let config = ChaosConfig::try_from(args).expect("leader packet-loss profile should parse");
-
         assert!(
             uses_sumeragi_leader_fault_targeting(&config),
             "single-peer packet-loss faults should follow Sumeragi leader telemetry"
         );
     }
-
     #[test]
     fn fault_config_uses_configured_packet_loss_percent() {
         let mut args = IzanamiArgs::defaults();
@@ -11546,9 +10952,7 @@ mod tests {
         };
         args.packet_loss_percent = 25;
         let config = ChaosConfig::try_from(args).expect("packet-loss profile should parse");
-
         let fault_config = fault_config_for(&config);
-
         assert_eq!(
             fault_config
                 .network_packet_loss
@@ -11557,7 +10961,6 @@ mod tests {
             25..=25
         );
     }
-
     #[test]
     fn parses_sumeragi_leader_index_from_status_payload() {
         let value = norito::json!({
@@ -11568,18 +10971,14 @@ mod tests {
                 "epoch_seed": "abcd",
             },
         });
-
         assert_eq!(parse_sumeragi_leader_index(value), Some(3));
     }
-
     #[test]
     fn fault_target_selection_diverges_with_different_seeds() {
         let mut rng_a = StdRng::seed_from_u64(11);
         let mut rng_b = StdRng::seed_from_u64(19);
-
         let first = select_fault_targets(8, 3, &mut rng_a);
         let second = select_fault_targets(8, 3, &mut rng_b);
-
         assert_eq!(first.len(), 3);
         assert_eq!(second.len(), 3);
         assert_ne!(
@@ -11587,7 +10986,6 @@ mod tests {
             "different seeds should produce different fault targets"
         );
     }
-
     #[test]
     fn metrics_snapshot_accumulates_counts() {
         let metrics = Metrics::default();
@@ -11623,7 +11021,6 @@ mod tests {
         metrics.record_unexpected_success();
         metrics.record_inflight_released();
         metrics.record_backlog_complete();
-
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.offered, 1);
         assert_eq!(snapshot.submit_plans_started, 1);
@@ -11661,7 +11058,6 @@ mod tests {
         assert_eq!(snapshot.backlog_peak, 1);
         assert_eq!(snapshot.submitters, 3);
     }
-
     #[test]
     fn sumeragi_status_digest_tracks_v2_progress_and_lane_local_execution() {
         let start_json = norito::json!({
@@ -11703,12 +11099,10 @@ mod tests {
                 "quarantine_executed_total": 2
             }
         });
-
         let start = SumeragiStatusDigest::from_json(&start_json);
         let mut end = SumeragiStatusDigest::from_json(&end_json);
         end.apply_json_extras(&end_json);
         let delta = end.delta_from(start);
-
         assert_eq!(delta.protocol_version, 4);
         assert_eq!(delta.persisted_height, 13);
         assert_eq!(delta.persisted_view, 4);
@@ -11725,7 +11119,6 @@ mod tests {
         assert_eq!(delta.lane_rbc_bytes_total, 3_072);
         assert_eq!(delta.detached_merged_total, 6);
     }
-
     #[test]
     fn diagnostic_copy_preserves_logs_configs_and_genesis_payloads() -> Result<()> {
         let unique = format!(
@@ -11746,9 +11139,7 @@ mod tests {
         fs::write(peer_dir.join("run-1-config.toml"), b"extends = []")?;
         fs::write(peer_dir.join("run-1-genesis.nrt"), b"genesis")?;
         fs::write(storage_dir.join("large-store.log"), b"skip")?;
-
         copy_selected_diagnostic_files(&source, &source, &destination)?;
-
         assert!(destination.join("peer-0/run-1-stdout.log").exists());
         assert!(destination.join("peer-0/run-1-stderr.log").exists());
         assert!(destination.join("peer-0/run-1-config.toml").exists());
@@ -11757,18 +11148,15 @@ mod tests {
         fs::remove_dir_all(env::temp_dir().join(unique))?;
         Ok(())
     }
-
     #[test]
     fn latency_summary_uses_ceil_rank_percentiles() {
         let summary = LatencySummary::from_samples(&[100, 10, 20, 30, 40, 50, 60, 70, 80, 90]);
-
         assert_eq!(summary.samples, 10);
         assert_eq!(summary.p50_ms, 50);
         assert_eq!(summary.p95_ms, 100);
         assert_eq!(summary.p99_ms, 100);
         assert_eq!(summary.max_ms, 100);
     }
-
     #[test]
     fn throughput_confirmation_sampling_is_deterministic_for_seed() {
         let hash = [0x5Au8; 32];
@@ -11783,14 +11171,12 @@ mod tests {
             "sample bucket must stay within the fixed percentage range"
         );
     }
-
     #[test]
     fn confirmation_audit_scheduler_skips_when_deadline_budget_is_gone() {
         let metrics = Metrics::default();
         let (tx, _rx) = mpsc::channel(1);
         let run_control = RunControl::new(Instant::now() + Duration::from_millis(1));
         let wait_options = throughput_confirmation_wait_options();
-
         try_schedule_submission_audit(
             &tx,
             &metrics,
@@ -11798,14 +11184,12 @@ mod tests {
             &run_control,
             &wait_options,
         );
-
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.confirmation_sampled, 0);
         assert_eq!(snapshot.confirmation_budget_skipped, 1);
         assert_eq!(snapshot.confirmation_queue_dropped, 0);
         assert_eq!(snapshot.confirmation_failed, 0);
     }
-
     #[test]
     fn confirmation_audit_scheduler_counts_full_queue_as_drop() {
         let metrics = Metrics::default();
@@ -11814,7 +11198,6 @@ mod tests {
             .expect("seeded audit queue should have capacity");
         let run_control = RunControl::new(Instant::now() + Duration::from_secs(300));
         let wait_options = throughput_confirmation_wait_options();
-
         try_schedule_submission_audit(
             &tx,
             &metrics,
@@ -11822,14 +11205,12 @@ mod tests {
             &run_control,
             &wait_options,
         );
-
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.confirmation_sampled, 0);
         assert_eq!(snapshot.confirmation_budget_skipped, 0);
         assert_eq!(snapshot.confirmation_queue_dropped, 1);
         assert_eq!(snapshot.confirmation_failed, 0);
     }
-
     #[test]
     fn confirmation_audit_scheduler_marks_early_channel_close_as_failure() {
         let metrics = Metrics::default();
@@ -11837,7 +11218,6 @@ mod tests {
         drop(rx);
         let run_control = RunControl::new(Instant::now() + Duration::from_secs(300));
         let wait_options = throughput_confirmation_wait_options();
-
         try_schedule_submission_audit(
             &tx,
             &metrics,
@@ -11845,14 +11225,12 @@ mod tests {
             &run_control,
             &wait_options,
         );
-
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.confirmation_sampled, 0);
         assert_eq!(snapshot.confirmation_budget_skipped, 0);
         assert_eq!(snapshot.confirmation_queue_dropped, 0);
         assert_eq!(snapshot.confirmation_failed, 1);
     }
-
     #[test]
     fn submission_audit_budget_caps_then_resets() {
         let mut budget = SubmissionAuditBudget::default();
@@ -11874,7 +11252,6 @@ mod tests {
             "budget should reset after the window expires"
         );
     }
-
     #[test]
     fn terminal_confirmation_wait_options_require_applied_terminal_status() {
         let options = terminal_confirmation_wait_options();
@@ -11898,7 +11275,6 @@ mod tests {
                 .contains(&TransactionWaitTerminalStatus::Expired)
         );
     }
-
     #[test]
     fn throughput_confirmation_wait_options_use_extended_audit_timeout() {
         let options = throughput_confirmation_wait_options();
@@ -11916,7 +11292,6 @@ mod tests {
                 .contains(&TransactionWaitTerminalStatus::Applied)
         );
     }
-
     fn chaos_config_for_audit_window(
         nexus: bool,
         faulty_peers: usize,
@@ -11954,17 +11329,14 @@ mod tests {
             diagnostic_dir: None,
         }
     }
-
     #[test]
     fn fault_window_uses_run_bounds_when_unset() {
         let config = chaos_config_for_audit_window(false, 1, FaultToggles::default());
         let started = Instant::now();
         let deadline = started + Duration::from_secs(120);
-
         assert_eq!(fault_window_start_at(&config, started, deadline), started);
         assert_eq!(fault_window_end_at(&config, started, deadline), deadline);
     }
-
     #[test]
     fn fault_window_resolves_paper_offsets() {
         let mut config = chaos_config_for_audit_window(false, 1, FaultToggles::default());
@@ -11973,7 +11345,6 @@ mod tests {
         config.fault_window_end = Some(Duration::from_secs(266));
         let started = Instant::now();
         let deadline = started + config.duration;
-
         assert_eq!(
             fault_window_start_at(&config, started, deadline),
             started + Duration::from_secs(133)
@@ -11983,13 +11354,11 @@ mod tests {
             started + Duration::from_secs(266)
         );
     }
-
     #[tokio::test]
     async fn fault_window_wait_stops_when_run_control_stops() {
         let stop = AtomicBool::new(true);
         let notify = Notify::new();
         let now = Instant::now();
-
         assert!(
             !wait_for_fault_window_start(
                 &stop,
@@ -12000,7 +11369,6 @@ mod tests {
             .await
         );
     }
-
     #[test]
     fn npos_crash_restart_faults_use_extended_confirmation_window() {
         let config = chaos_config_for_audit_window(
@@ -12009,7 +11377,6 @@ mod tests {
             FaultToggles::from_explicit_array([true, false, false, false, false, false, false]),
         );
         let options = throughput_confirmation_wait_options_for(&config);
-
         assert!(npos_extended_confirmation_window_needed(&config));
         assert_eq!(
             options.timeout,
@@ -12020,7 +11387,6 @@ mod tests {
             "NPoS restart recovery audits need a longer terminal-status window"
         );
     }
-
     #[test]
     fn npos_targeted_load_uses_extended_confirmation_window() {
         let config = chaos_config_for_audit_window(
@@ -12029,14 +11395,12 @@ mod tests {
             FaultToggles::from_explicit_array([false, false, false, false, false, false, false]),
         );
         let options = throughput_confirmation_wait_options_for(&config);
-
         assert!(npos_extended_confirmation_window_needed(&config));
         assert_eq!(
             options.timeout,
             Duration::from_millis(IZANAMI_NPOS_RECOVERY_CONFIRMATION_TIMEOUT_MS)
         );
     }
-
     #[test]
     fn npos_packet_loss_uses_extended_confirmation_window() {
         let config = chaos_config_for_audit_window(
@@ -12047,14 +11411,12 @@ mod tests {
             ]),
         );
         let options = throughput_confirmation_wait_options_for(&config);
-
         assert!(npos_extended_confirmation_window_needed(&config));
         assert_eq!(
             options.timeout,
             Duration::from_millis(IZANAMI_NPOS_RECOVERY_CONFIRMATION_TIMEOUT_MS)
         );
     }
-
     #[test]
     fn permissioned_faults_keep_baseline_confirmation_window() {
         let config = chaos_config_for_audit_window(
@@ -12063,14 +11425,12 @@ mod tests {
             FaultToggles::from_explicit_array([true, false, false, false, false, false, false]),
         );
         let options = throughput_confirmation_wait_options_for(&config);
-
         assert!(!npos_extended_confirmation_window_needed(&config));
         assert_eq!(
             options.timeout,
             Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS)
         );
     }
-
     #[test]
     fn worker_shutdown_timeout_covers_confirmation_audit_window() {
         assert!(
@@ -12079,7 +11439,6 @@ mod tests {
             "audit workers need enough shutdown grace to finish an in-flight confirmation wait"
         );
     }
-
     #[test]
     fn confirmation_audit_deadline_budget_requires_full_wait_window() {
         let options = throughput_confirmation_wait_options();
@@ -12095,46 +11454,38 @@ mod tests {
             &options
         ));
     }
-
     #[test]
     fn audit_confirmation_window_elapsed_is_not_a_hard_failure_marker() {
         let timeout =
             eyre!("transaction did not reach Applied, Rejected, Expired within 150000 ms");
         let route_error = eyre!("route_unavailable: no reachable authoritative peers");
-
         assert!(is_audit_confirmation_window_elapsed(&timeout));
         assert!(!is_audit_confirmation_window_elapsed(&route_error));
     }
-
     #[test]
     fn submission_deadline_budget_covers_ingress_retries() {
         let budget = submission_deadline_budget(SubmissionConfirmationMode::AcceptedByIngress);
         let minimum_retry_window = Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS)
             .saturating_mul(IZANAMI_INGRESS_MAX_ATTEMPTS as u32);
-
         assert!(
             budget >= minimum_retry_window,
             "submitter deadline guard must cover the configured ingress retry window"
         );
     }
-
     #[test]
     fn blocking_submission_deadline_budget_covers_terminal_wait() {
         let accepted = submission_deadline_budget(SubmissionConfirmationMode::AcceptedByIngress);
         let blocking = submission_deadline_budget(SubmissionConfirmationMode::BlockingApplied);
         let wait_options = terminal_confirmation_wait_options();
-
         assert!(
             blocking >= accepted.saturating_add(wait_options.timeout),
             "blocking submissions need enough budget to finish terminal-status confirmation"
         );
     }
-
     #[test]
     fn submission_deadline_budget_requires_full_wait_window() {
         let now = Instant::now();
         let budget = submission_deadline_budget(SubmissionConfirmationMode::AcceptedByIngress);
-
         assert!(submission_has_deadline_budget(
             now,
             now + budget + Duration::from_millis(1),
@@ -12146,7 +11497,6 @@ mod tests {
             SubmissionConfirmationMode::AcceptedByIngress
         ));
     }
-
     #[tokio::test]
     async fn wait_for_duration_deadline_completes_when_no_target_blocks_are_set() {
         let run_control = RunControl::new(Instant::now() + Duration::from_millis(5));
@@ -12164,11 +11514,9 @@ mod tests {
         assert_eq!(result.first_progress_after_fault_start_height, None);
         assert_eq!(result.first_progress_after_fault_end_height, None);
     }
-
     #[test]
     fn duration_deadline_progress_result_does_not_infer_post_fault_progress() {
         let result = duration_deadline_progress_result(&[5, 7, 8, 8], 1);
-
         assert!(!result.target_reached);
         assert_eq!(result.quorum_min_height, 7);
         assert_eq!(result.strict_min_height, 5);
@@ -12178,7 +11526,6 @@ mod tests {
         assert_eq!(result.first_progress_after_fault_start_height, None);
         assert_eq!(result.first_progress_after_fault_end_height, None);
     }
-
     #[tokio::test]
     async fn wait_for_duration_deadline_reports_explicit_stop() {
         let run_control = RunControl::new(Instant::now() + Duration::from_secs(60));
@@ -12192,7 +11539,6 @@ mod tests {
             "unexpected duration wait error: {err}"
         );
     }
-
     #[test]
     fn shutdown_noise_only_applies_to_status_reads_after_stop() {
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -12223,7 +11569,6 @@ mod tests {
             "submit-path failures must remain visible during shutdown"
         );
     }
-
     #[test]
     fn endpoint_pool_preferred_endpoint_round_robins_submitters() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -12241,7 +11586,6 @@ mod tests {
             },
             ingress_stats,
         );
-
         assert_eq!(
             pool.select_endpoint_preferred("submit", 0)
                 .expect("submitter 0 should resolve a preferred endpoint"),
@@ -12263,7 +11607,6 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn endpoint_pool_skips_reserved_fault_target_when_alternate_is_healthy() {
         let ingress_stats = Arc::new(IngressStats::default());
@@ -12282,9 +11625,7 @@ mod tests {
             ingress_stats,
         );
         let now = Instant::now();
-
         pool.mark_endpoint_sticky_unhealthy_until(0, now + Duration::from_secs(60));
-
         assert_eq!(
             pool.attempt_order_preview_at_with_preference(now, Some(0)),
             vec![1, 2]
@@ -12294,7 +11635,6 @@ mod tests {
             vec![0, 1, 2]
         );
     }
-
     #[test]
     fn submission_metadata_increments_counter() {
         let counter = AtomicU64::new(0);
@@ -12313,7 +11653,6 @@ mod tests {
             .expect("second metadata entry should decode");
         assert_ne!(value_a, value_b, "each submission should be unique");
     }
-
     #[test]
     fn make_network_builder_emits_only_strict_sumeragi_v2_config() -> Result<()> {
         init_instruction_registry();
@@ -12349,7 +11688,6 @@ mod tests {
             nexus: None,
             diagnostic_dir: None,
         };
-
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos { genesis, .. } = instructions::prepare_state(
             account_qty,
@@ -12359,7 +11697,6 @@ mod tests {
             config.allow_contract_deploy_in_stable,
         )?;
         let network = make_network_builder(&config, genesis)?.build();
-
         assert_eq!(network.block_cadence(), pipeline_time);
         let layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
         let lookup = |path: &[&str]| {
@@ -12375,7 +11712,6 @@ mod tests {
                 None
             })
         };
-
         assert!(lookup(&["sumeragi", "round_timeout_ms"]).is_none());
         let cadence_ms = u64::try_from(pipeline_time.as_millis()).expect("cadence fits u64");
         assert_eq!(
@@ -12425,7 +11761,6 @@ mod tests {
                 .and_then(TomlValue::as_str),
             Some("bls_normal")
         );
-
         for layer in &layers {
             let Some(sumeragi) = layer.get("sumeragi").and_then(TomlValue::as_table) else {
                 continue;
@@ -12448,7 +11783,6 @@ mod tests {
         }
         Ok(())
     }
-
     #[test]
     fn make_network_builder_forwards_rust_log_and_sets_peer_base_level() -> Result<()> {
         init_instruction_registry();
@@ -12484,7 +11818,6 @@ mod tests {
             nexus: None,
             diagnostic_dir: None,
         };
-
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos { genesis, .. } = instructions::prepare_state(
             account_qty,
@@ -12510,7 +11843,6 @@ mod tests {
                 std::panic::resume_unwind(payload);
             }
         };
-
         let layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
         let read_str = |layer: &Table, path: &[&str]| -> Option<String> {
             let mut current = layer;
@@ -12533,10 +11865,8 @@ mod tests {
             .rev()
             .find_map(|layer| read_str(layer, &["logger", "level"]));
         assert_eq!(level.as_deref(), Some(IZANAMI_PEER_LOG_BASE_LEVEL));
-
         Ok(())
     }
-
     #[test]
     fn make_network_builder_derives_nexus_keys() -> Result<()> {
         init_instruction_registry();
@@ -12572,7 +11902,6 @@ mod tests {
             nexus: Some(profile),
             diagnostic_dir: None,
         };
-
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos { genesis, .. } = instructions::prepare_state(
             account_qty,
@@ -12584,7 +11913,6 @@ mod tests {
         let _builder = make_network_builder(&config, genesis)?;
         Ok(())
     }
-
     #[test]
     fn make_network_builder_injects_npos_parameters() -> Result<()> {
         init_instruction_registry();
@@ -12620,7 +11948,6 @@ mod tests {
             nexus: Some(profile),
             diagnostic_dir: None,
         };
-
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos { genesis, .. } = instructions::prepare_state(
             account_qty,
@@ -12646,7 +11973,6 @@ mod tests {
                 std::panic::resume_unwind(payload);
             }
         };
-
         let mut params = Parameters::default();
         for tx in network.genesis_isi() {
             for isi in tx {
@@ -12656,7 +11982,6 @@ mod tests {
                 params.set_parameter(set_param.inner().clone());
             }
         }
-
         assert_eq!(
             network.block_cadence(),
             default_nexus_pipeline_time(),
@@ -12701,7 +12026,6 @@ mod tests {
         }
         Ok(())
     }
-
     #[test]
     fn make_network_builder_npos_genesis_stays_within_transaction_cap() -> Result<()> {
         init_instruction_registry();
@@ -12737,7 +12061,6 @@ mod tests {
             nexus: Some(profile),
             diagnostic_dir: None,
         };
-
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos { genesis, .. } = instructions::prepare_state(
             account_qty,
@@ -12763,7 +12086,6 @@ mod tests {
                 std::panic::resume_unwind(payload);
             }
         };
-
         let tx_count = network.genesis().0.transactions_vec().len();
         assert!(
             (1..=16).contains(&tx_count),
@@ -12771,7 +12093,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn make_network_builder_uses_fast_pipeline_default_without_nexus() -> Result<()> {
         init_instruction_registry();
@@ -12834,7 +12155,6 @@ mod tests {
         assert_eq!(network.block_cadence(), default_izanami_pipeline_time());
         Ok(())
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn runner_respects_deadline_and_shuts_down() -> Result<()> {
         if !allow_net_for_tests() {
@@ -12842,7 +12162,6 @@ mod tests {
         }
         crate::config::init_tracing_with_filter("warn");
         init_instruction_registry();
-
         let config = ChaosConfig {
             allow_net: true,
             peer_count: 4,
@@ -12874,7 +12193,6 @@ mod tests {
             nexus: None,
             diagnostic_dir: None,
         };
-
         let runner = match IzanamiRunner::new(config).await {
             Ok(runner) => runner,
             Err(err) => {
@@ -12888,13 +12206,11 @@ mod tests {
                 return Err(err);
             }
         };
-
         timeout(Duration::from_secs(20), runner.run())
             .await
             .map_err(|_| eyre!("runner timed out before deadline"))??;
         Ok(())
     }
-
     #[test]
     fn nexus_profile_keeps_da_out_of_node_local_sumeragi_config() -> Result<()> {
         init_instruction_registry();
@@ -12930,7 +12246,6 @@ mod tests {
             nexus: Some(nexus.clone()),
             diagnostic_dir: None,
         };
-
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos { genesis, .. } = instructions::prepare_state(
             account_qty,
@@ -12956,7 +12271,6 @@ mod tests {
                 std::panic::resume_unwind(payload);
             }
         };
-
         let layers: Vec<_> = network.config_layers().collect();
         assert!(
             layers.len() >= 2,
@@ -13009,7 +12323,6 @@ mod tests {
             !missing_metadata,
             "nexus lane_catalog entries must include metadata"
         );
-
         Ok(())
     }
 }

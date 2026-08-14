@@ -4,7 +4,6 @@
 //! council-verified admission records, while the runtime owns canonical replay
 //! protection, deadline enforcement, exhaustive proof verification, durable
 //! terminal handoff state, and deterministic queue ordering.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
@@ -15,13 +14,11 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-
 #[cfg(unix)]
 use std::os::unix::{
     fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
     io::AsRawFd as _,
 };
-
 use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::{
@@ -39,11 +36,7 @@ use sorafs_manifest::{
     },
 };
 use thiserror::Error;
-
-pub use sorafs_manifest::pdp::{
-    PdpGovernanceArchiveV1, PdpRejectionReasonV1, PdpTerminalDecisionV1,
-};
-
+pub use sorafs_manifest::pdp::{PdpGovernanceArchiveV1, PdpRejectionReasonV1, PdpTerminalDecisionV1};
 /// PDP provider protocol policy schema version.
 pub const PDP_PROVIDER_POLICY_VERSION_V1: u8 = 1;
 /// PDP provider durable checkpoint schema version.
@@ -54,7 +47,6 @@ pub const PDP_NEXT_CHALLENGE_VERSION_V1: u8 = 1;
 pub const PDP_PROVIDER_CHECKPOINT_FILE_NAME_V1: &str = "pdp-provider-state.to";
 /// Maximum records returned by one bounded PDP status export.
 pub const PDP_STATUS_EXPORT_MAX_RECORDS_V1: usize = 1_000;
-
 const HANDOFF_IDEMPOTENCY_DOMAIN_V1: &[u8] = b"sorafs.pdp.terminal-handoff.v1\0";
 const DEFAULT_MAX_PENDING: u32 = 4_096;
 const DEFAULT_MAX_TERMINAL: u32 = 65_536;
@@ -66,7 +58,6 @@ const DEFAULT_TERMINAL_RETENTION_SECS: u64 = 24 * 60 * 60;
 const CHECKPOINT_LOCK_FILE_NAME: &str = "pdp-provider-state.lock";
 static CHECKPOINT_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static CHECKPOINT_PROCESS_LOCK: Mutex<()> = Mutex::new(());
-
 #[cfg(unix)]
 const LOCK_EXCLUSIVE_NONBLOCKING: std::os::raw::c_int = 2 | 4;
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -83,12 +74,10 @@ const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0x0000_0100 | 0x0100_0000;
     ))
 ))]
 const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0;
-
 #[cfg(unix)]
 unsafe extern "C" {
     fn flock(fd: std::os::raw::c_int, operation: std::os::raw::c_int) -> std::os::raw::c_int;
 }
-
 /// Governance-controlled resource and timing bounds for the embedded PDP runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PdpProviderProtocolPolicyV1 {
@@ -113,7 +102,6 @@ pub struct PdpProviderProtocolPolicyV1 {
     /// Minimum age before compact terminal replay records may be pruned.
     pub terminal_retention_secs: u64,
 }
-
 impl Default for PdpProviderProtocolPolicyV1 {
     fn default() -> Self {
         Self {
@@ -130,7 +118,6 @@ impl Default for PdpProviderProtocolPolicyV1 {
         }
     }
 }
-
 impl PdpProviderProtocolPolicyV1 {
     /// Validate all bounded first-release policy invariants.
     pub fn validate(&self) -> Result<(), PdpProviderProtocolError> {
@@ -179,7 +166,6 @@ impl PdpProviderProtocolPolicyV1 {
         Ok(())
     }
 }
-
 /// Compact terminal response retained after external handoffs complete.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PdpTerminalOutcomeV1 {
@@ -210,7 +196,6 @@ pub struct PdpTerminalOutcomeV1 {
     #[norito(default)]
     pub repair_receipt_digest: Option<[u8; 32]>,
 }
-
 /// Deterministic response returned by the provider's `next` operation.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PdpNextChallengeV1 {
@@ -223,7 +208,6 @@ pub struct PdpNextChallengeV1 {
     /// Server admission timestamp.
     pub enqueued_at_unix: u64,
 }
-
 /// Public lifecycle state for one retained PDP challenge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum PdpChallengeLifecycleV1 {
@@ -234,7 +218,6 @@ pub enum PdpChallengeLifecycleV1 {
     /// Governance archive and any repair handoff completed.
     Terminal,
 }
-
 /// Compact bounded status for one retained PDP challenge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PdpChallengeStatusV1 {
@@ -260,7 +243,6 @@ pub struct PdpChallengeStatusV1 {
     #[norito(default)]
     pub proof_digest: Option<[u8; 32]>,
 }
-
 /// Result of enqueueing a governed PDP challenge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PdpChallengeEnqueueOutcome {
@@ -275,7 +257,6 @@ pub enum PdpChallengeEnqueueOutcome {
         sequence: u64,
     },
 }
-
 /// Payload-free telemetry snapshot for the provider protocol.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PdpProviderTelemetrySnapshot {
@@ -296,7 +277,6 @@ pub struct PdpProviderTelemetrySnapshot {
     /// Durable checkpoint failures.
     pub checkpoint_failures: u64,
 }
-
 #[derive(Debug, Default)]
 struct PdpProviderTelemetry {
     challenges_enqueued: AtomicU64,
@@ -308,7 +288,6 @@ struct PdpProviderTelemetry {
     repair_failures: AtomicU64,
     checkpoint_failures: AtomicU64,
 }
-
 impl PdpProviderTelemetry {
     fn snapshot(&self) -> PdpProviderTelemetrySnapshot {
         PdpProviderTelemetrySnapshot {
@@ -323,12 +302,10 @@ impl PdpProviderTelemetry {
         }
     }
 }
-
 /// Error returned by an external governance or repair handoff sink.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("{0}")]
 pub struct PdpExternalHandoffError(pub String);
-
 /// Idempotent external effects required before a PDP result becomes terminal.
 pub trait PdpTerminalHandoff: Send + Sync + std::fmt::Debug {
     /// Archive the canonical verdict/proof payload and return a non-zero receipt digest.
@@ -340,7 +317,6 @@ pub trait PdpTerminalHandoff: Send + Sync + std::fmt::Debug {
         idempotency_key: [u8; 32],
         payload: &PdpGovernanceArchiveV1,
     ) -> Result<[u8; 32], PdpExternalHandoffError>;
-
     /// Enqueue the canonical `pdp_failure` repair report and return a non-zero receipt digest.
     fn repair(
         &self,
@@ -348,14 +324,12 @@ pub trait PdpTerminalHandoff: Send + Sync + std::fmt::Debug {
         report: &RepairReportV1,
     ) -> Result<[u8; 32], PdpExternalHandoffError>;
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct ChallengeScope {
     provider_id: [u8; 32],
     manifest_digest: [u8; 32],
     epoch_id: u64,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PendingChallengeV1 {
     sequence: u64,
@@ -367,7 +341,6 @@ struct PendingChallengeV1 {
     admitted_retention_epoch: u64,
     enqueued_at_unix: u64,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct HandoffPendingV1 {
     pending: PendingChallengeV1,
@@ -379,7 +352,6 @@ struct HandoffPendingV1 {
     #[norito(default)]
     repair_receipt_digest: Option<[u8; 32]>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(tag = "state", content = "record")]
 #[expect(
@@ -391,7 +363,6 @@ enum StoredChallengeV1 {
     HandoffPending(HandoffPendingV1),
     Terminal(PdpTerminalOutcomeV1),
 }
-
 impl StoredChallengeV1 {
     fn sequence(&self) -> u64 {
         match self {
@@ -400,7 +371,6 @@ impl StoredChallengeV1 {
             Self::Terminal(record) => record.sequence,
         }
     }
-
     fn challenge_id(&self) -> [u8; 32] {
         match self {
             Self::Pending(record) => record.challenge.challenge_id,
@@ -408,7 +378,6 @@ impl StoredChallengeV1 {
             Self::Terminal(record) => record.challenge_id,
         }
     }
-
     fn scope(&self) -> ChallengeScope {
         match self {
             Self::Pending(record) => challenge_scope(&record.challenge),
@@ -420,7 +389,6 @@ impl StoredChallengeV1 {
             },
         }
     }
-
     fn challenge_payload_digest(&self) -> [u8; 32] {
         match self {
             Self::Pending(record) => record.challenge_payload_digest,
@@ -429,7 +397,6 @@ impl StoredChallengeV1 {
         }
     }
 }
-
 fn stored_challenge_status(record: &StoredChallengeV1) -> PdpChallengeStatusV1 {
     match record {
         StoredChallengeV1::Pending(pending) => PdpChallengeStatusV1 {
@@ -467,21 +434,18 @@ fn stored_challenge_status(record: &StoredChallengeV1) -> PdpChallengeStatusV1 {
         },
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PdpProviderCheckpointV1 {
     version: u8,
     next_sequence: u64,
     records: Vec<StoredChallengeV1>,
 }
-
 #[derive(Debug, Clone)]
 struct RuntimeState {
     next_sequence: u64,
     records: BTreeMap<[u8; 32], StoredChallengeV1>,
     scopes: BTreeMap<ChallengeScope, [u8; 32]>,
 }
-
 impl Default for RuntimeState {
     fn default() -> Self {
         Self {
@@ -491,7 +455,6 @@ impl Default for RuntimeState {
         }
     }
 }
-
 impl RuntimeState {
     fn checkpoint(&self) -> PdpProviderCheckpointV1 {
         let mut records = self.records.values().cloned().collect::<Vec<_>>();
@@ -502,7 +465,6 @@ impl RuntimeState {
             records,
         }
     }
-
     fn from_checkpoint(
         checkpoint: PdpProviderCheckpointV1,
         policy: PdpProviderProtocolPolicyV1,
@@ -527,14 +489,12 @@ impl RuntimeState {
             scopes,
         })
     }
-
     fn pending_count(&self) -> usize {
         self.records
             .values()
             .filter(|record| !matches!(record, StoredChallengeV1::Terminal(_)))
             .count()
     }
-
     fn terminal_count(&self) -> usize {
         self.records
             .values()
@@ -542,14 +502,12 @@ impl RuntimeState {
             .count()
     }
 }
-
 #[derive(Debug)]
 struct DurableState {
     runtime: RuntimeState,
     fingerprint: Option<[u8; 32]>,
     durability_failure: Option<String>,
 }
-
 /// Durable, deterministic PDP challenge queue and proof-submission service.
 #[derive(Debug, Clone)]
 pub struct PdpProviderProtocol {
@@ -558,7 +516,6 @@ pub struct PdpProviderProtocol {
     checkpoint_store: Option<Arc<PdpCheckpointStore>>,
     telemetry: Arc<PdpProviderTelemetry>,
 }
-
 impl PdpProviderProtocol {
     /// Construct a non-persistent runtime for focused composition tests.
     #[cfg(test)]
@@ -575,7 +532,6 @@ impl PdpProviderProtocol {
             telemetry: Arc::new(PdpProviderTelemetry::default()),
         })
     }
-
     /// Open or create a durable runtime below the configured storage directory.
     pub fn open(
         policy: PdpProviderProtocolPolicyV1,
@@ -599,13 +555,11 @@ impl PdpProviderProtocol {
             telemetry: Arc::new(PdpProviderTelemetry::default()),
         })
     }
-
     /// Return current payload-free telemetry counters.
     #[must_use]
     pub fn telemetry(&self) -> PdpProviderTelemetrySnapshot {
         self.telemetry.snapshot()
     }
-
     /// Enqueue one exact council-admitted challenge for the expected epoch.
     pub fn enqueue_challenge(
         &self,
@@ -671,7 +625,6 @@ impl PdpProviderProtocol {
             .fetch_add(1, Ordering::Relaxed);
         Ok(PdpChallengeEnqueueOutcome::Inserted { sequence })
     }
-
     /// Return the oldest non-expired challenge for one provider.
     pub fn next_challenge(
         &self,
@@ -710,7 +663,6 @@ impl PdpProviderProtocol {
             enqueued_at_unix: pending.enqueued_at_unix,
         }))
     }
-
     /// Submit exact canonical proof bytes for one authenticated challenge identity.
     ///
     /// Malformed, cross-challenge, wrong-signer, and otherwise invalid proof
@@ -755,7 +707,6 @@ impl PdpProviderProtocol {
             handoff,
         )
     }
-
     /// Mark a pending challenge rejected because its active admission was revoked.
     pub fn reject_revoked(
         &self,
@@ -770,7 +721,6 @@ impl PdpProviderProtocol {
             handoff,
         )
     }
-
     /// Mark a pending challenge rejected because retained proof material is unavailable.
     pub fn reject_storage_unavailable(
         &self,
@@ -785,7 +735,6 @@ impl PdpProviderProtocol {
             handoff,
         )
     }
-
     /// Expire a pending challenge after its response deadline.
     pub fn expire_challenge(
         &self,
@@ -806,7 +755,6 @@ impl PdpProviderProtocol {
         self.telemetry.expired.fetch_add(1, Ordering::Relaxed);
         Ok(outcome)
     }
-
     /// Retry every durable terminal handoff in queue sequence order.
     pub fn resume_handoffs(
         &self,
@@ -840,7 +788,6 @@ impl PdpProviderProtocol {
         }
         Ok(outcomes)
     }
-
     /// Prune sufficiently old compact terminal records in deterministic order.
     pub fn prune_terminal(
         &self,
@@ -873,7 +820,6 @@ impl PdpProviderProtocol {
         self.commit_candidate(&mut durable, candidate)?;
         Ok(candidates.len())
     }
-
     /// Return a retained terminal outcome, when present.
     pub fn terminal_outcome(
         &self,
@@ -885,7 +831,6 @@ impl PdpProviderProtocol {
             _ => None,
         })
     }
-
     /// Return compact status for one retained challenge identity.
     pub fn challenge_status(
         &self,
@@ -901,7 +846,6 @@ impl PdpProviderProtocol {
             .get(challenge_id)
             .map(stored_challenge_status))
     }
-
     /// Export a bounded sequence-ordered page of retained challenge statuses.
     pub fn export_statuses(
         &self,
@@ -926,7 +870,6 @@ impl PdpProviderProtocol {
         statuses.truncate(limit);
         Ok(statuses)
     }
-
     fn submit_proof(
         &self,
         proof: PdpProofV1,
@@ -960,12 +903,10 @@ impl PdpProviderProtocol {
                 None => return Err(PdpProviderProtocolError::UnknownChallenge),
             }
         }
-
         let pending = self.pending_record(proof.challenge_id)?;
         validate_active_admission(&pending, active_admission)?;
         let signature_authorized = proof.signature.public_key == pending.admitted_provider_key
             && proof.verify_signature().is_ok();
-
         let future_limit = now_unix
             .checked_add(self.policy.max_future_skew_secs)
             .ok_or(PdpProviderProtocolError::TimestampOverflow)?;
@@ -1015,7 +956,6 @@ impl PdpProviderProtocol {
         )?;
         self.drive_handoff(proof.challenge_id, handoff)
     }
-
     fn reject_without_proof(
         &self,
         challenge_id: [u8; 32],
@@ -1055,7 +995,6 @@ impl PdpProviderProtocol {
         )?;
         self.drive_handoff(challenge_id, handoff)
     }
-
     fn prepare_handoff(
         &self,
         pending: PendingChallengeV1,
@@ -1126,7 +1065,6 @@ impl PdpProviderProtocol {
         );
         self.commit_candidate(&mut durable, candidate)
     }
-
     fn drive_handoff(
         &self,
         challenge_id: [u8; 32],
@@ -1226,7 +1164,6 @@ impl PdpProviderProtocol {
         }
         Ok(outcome)
     }
-
     fn pending_record(
         &self,
         challenge_id: [u8; 32],
@@ -1238,7 +1175,6 @@ impl PdpProviderProtocol {
             None => Err(PdpProviderProtocolError::UnknownChallenge),
         }
     }
-
     fn lock_state(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, DurableState>, PdpProviderProtocolError> {
@@ -1251,7 +1187,6 @@ impl PdpProviderProtocol {
         }
         Ok(guard)
     }
-
     fn commit_candidate(
         &self,
         durable: &mut DurableState,
@@ -1279,7 +1214,6 @@ impl PdpProviderProtocol {
         Ok(())
     }
 }
-
 impl PdpTerminalOutcomeV1 {
     fn scope(&self) -> ChallengeScope {
         ChallengeScope {
@@ -1289,7 +1223,6 @@ impl PdpTerminalOutcomeV1 {
         }
     }
 }
-
 #[derive(Debug)]
 struct PdpCheckpointStore {
     root: PathBuf,
@@ -1297,7 +1230,6 @@ struct PdpCheckpointStore {
     lock_path: PathBuf,
     policy: PdpProviderProtocolPolicyV1,
 }
-
 impl PdpCheckpointStore {
     fn new(
         root: &Path,
@@ -1311,7 +1243,6 @@ impl PdpCheckpointStore {
             policy,
         })
     }
-
     fn load(
         &self,
     ) -> Result<(Option<PdpProviderCheckpointV1>, Option<[u8; 32]>), PdpProviderProtocolError> {
@@ -1342,7 +1273,6 @@ impl PdpCheckpointStore {
         validate_checkpoint(&checkpoint, self.policy)?;
         Ok((Some(checkpoint), Some(fingerprint)))
     }
-
     fn commit(
         &self,
         checkpoint: &PdpProviderCheckpointV1,
@@ -1360,7 +1290,6 @@ impl PdpCheckpointStore {
                 limit: usize::try_from(self.policy.checkpoint_max_bytes).unwrap_or(usize::MAX),
             });
         }
-
         let _writer = CheckpointWriterGuard::acquire(&self.lock_path)?;
         let current =
             read_checkpoint_bytes(&self.checkpoint_path, self.policy.checkpoint_max_bytes)?;
@@ -1371,7 +1300,6 @@ impl PdpCheckpointStore {
         if current_fingerprint != expected_fingerprint {
             return Err(PdpProviderProtocolError::StaleCheckpoint);
         }
-
         let temp_path = self.root.join(format!(
             ".{PDP_PROVIDER_CHECKPOINT_FILE_NAME_V1}.{}.{}.tmp",
             std::process::id(),
@@ -1420,12 +1348,10 @@ impl PdpCheckpointStore {
         Ok(*blake3::hash(&bytes).as_bytes())
     }
 }
-
 struct CheckpointWriterGuard {
     _process_guard: std::sync::MutexGuard<'static, ()>,
     _file: File,
 }
-
 impl CheckpointWriterGuard {
     fn acquire(path: &Path) -> Result<Self, PdpProviderProtocolError> {
         let process_guard = CHECKPOINT_PROCESS_LOCK
@@ -1459,7 +1385,6 @@ impl CheckpointWriterGuard {
         })
     }
 }
-
 fn ensure_private_state_directory(path: &Path) -> Result<(), PdpProviderProtocolError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -1504,7 +1429,6 @@ fn ensure_private_state_directory(path: &Path) -> Result<(), PdpProviderProtocol
     })?;
     Ok(())
 }
-
 fn read_checkpoint_bytes(
     path: &Path,
     max_bytes: u64,
@@ -1577,7 +1501,6 @@ fn read_checkpoint_bytes(
     }
     Ok(Some(bytes))
 }
-
 fn validate_open_regular_file(
     path: &Path,
     file: &File,
@@ -1613,7 +1536,6 @@ fn validate_open_regular_file(
     }
     Ok(())
 }
-
 fn write_checkpoint_temp(path: &Path, bytes: &[u8]) -> Result<(), PdpProviderProtocolError> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -1655,7 +1577,6 @@ fn write_checkpoint_temp(path: &Path, bytes: &[u8]) -> Result<(), PdpProviderPro
     }
     Ok(())
 }
-
 fn sync_directory(path: &Path) -> Result<(), PdpProviderProtocolError> {
     File::open(path)
         .and_then(|directory| directory.sync_all())
@@ -1665,13 +1586,11 @@ fn sync_directory(path: &Path) -> Result<(), PdpProviderProtocolError> {
             ))
         })
 }
-
 struct PreparedEnqueue {
     commitment: PdpCommitmentV1,
     challenge: PdpChallengeV1,
     challenge_payload_digest: [u8; 32],
 }
-
 fn validate_enqueue(
     policy: PdpProviderProtocolPolicyV1,
     commitment: PdpCommitmentV1,
@@ -1751,7 +1670,6 @@ fn validate_enqueue(
         challenge_payload_digest: *blake3::hash(&canonical).as_bytes(),
     })
 }
-
 fn validate_active_admission(
     pending: &PendingChallengeV1,
     admission: &AdmissionRecord,
@@ -1770,7 +1688,6 @@ fn validate_active_admission(
     }
     Ok(())
 }
-
 /// Build and sign a canonical PDP proof from verified storage witnesses.
 pub fn build_signed_pdp_proof_v1(
     challenge: &PdpChallengeV1,
@@ -1821,7 +1738,6 @@ pub fn build_signed_pdp_proof_v1(
         .map_err(|error| PdpProofBuildError::Signing(error.to_string()))?;
     Ok(proof)
 }
-
 /// Errors while constructing a provider-signed proof from storage witnesses.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PdpProofBuildError {
@@ -1841,7 +1757,6 @@ pub enum PdpProofBuildError {
     #[error("PDP proof signing failed: {0}")]
     Signing(String),
 }
-
 fn challenge_scope(challenge: &PdpChallengeV1) -> ChallengeScope {
     ChallengeScope {
         provider_id: challenge.provider_id,
@@ -1849,7 +1764,6 @@ fn challenge_scope(challenge: &PdpChallengeV1) -> ChallengeScope {
         epoch_id: challenge.epoch_id,
     }
 }
-
 fn challenge_hot_leaf_count(challenge: &PdpChallengeV1) -> Result<u16, PdpProviderProtocolError> {
     let count = challenge
         .samples
@@ -1863,7 +1777,6 @@ fn challenge_hot_leaf_count(challenge: &PdpChallengeV1) -> Result<u16, PdpProvid
     }
     u16::try_from(count).map_err(|_| PdpProviderProtocolError::SampleCountOverflow)
 }
-
 fn build_repair_report(
     archive: &PdpGovernanceArchiveV1,
     reason: PdpRejectionReasonV1,
@@ -1907,7 +1820,6 @@ fn build_repair_report(
         .map_err(|error| PdpProviderProtocolError::RepairReport(error.to_string()))?;
     Ok(report)
 }
-
 fn validate_archive(
     archive: &PdpGovernanceArchiveV1,
     policy: PdpProviderProtocolPolicyV1,
@@ -1977,7 +1889,6 @@ fn validate_archive(
     }
     Ok(())
 }
-
 fn validate_terminal(outcome: &PdpTerminalOutcomeV1) -> Result<(), PdpProviderProtocolError> {
     if outcome.sequence == 0
         || outcome.challenge_id == [0; 32]
@@ -1999,7 +1910,6 @@ fn validate_terminal(outcome: &PdpTerminalOutcomeV1) -> Result<(), PdpProviderPr
     }
     Ok(())
 }
-
 fn validate_pending(
     pending: &PendingChallengeV1,
     policy: PdpProviderProtocolPolicyV1,
@@ -2037,7 +1947,6 @@ fn validate_pending(
     }
     Ok(())
 }
-
 fn validate_checkpoint(
     checkpoint: &PdpProviderCheckpointV1,
     policy: PdpProviderProtocolPolicyV1,
@@ -2111,7 +2020,6 @@ fn validate_checkpoint(
     }
     Ok(())
 }
-
 fn handoff_idempotency_key(
     archive: &PdpGovernanceArchiveV1,
 ) -> Result<[u8; 32], PdpProviderProtocolError> {
@@ -2122,7 +2030,6 @@ fn handoff_idempotency_key(
     hasher.update(&digest);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn governance_archive_digest(
     archive: &PdpGovernanceArchiveV1,
 ) -> Result<[u8; 32], PdpProviderProtocolError> {
@@ -2132,7 +2039,6 @@ fn governance_archive_digest(
         ))
     })
 }
-
 fn proof_decode_limits(max_bytes: usize) -> norito::DecodeLimits {
     // A canonical proof's nested owned vectors require slightly more than
     // twice the wire length after decoding. Keep the allocation budget a hard
@@ -2141,7 +2047,6 @@ fn proof_decode_limits(max_bytes: usize) -> norito::DecodeLimits {
     let allocation = max_bytes.saturating_mul(4);
     norito::DecodeLimits::new(max_bytes.max(1), max_bytes, max_bytes, allocation, 64)
 }
-
 fn checkpoint_decode_limits(policy: PdpProviderProtocolPolicyV1) -> norito::DecodeLimits {
     let max_bytes = usize::try_from(policy.checkpoint_max_bytes).unwrap_or(usize::MAX);
     norito::DecodeLimits::new(
@@ -2152,7 +2057,6 @@ fn checkpoint_decode_limits(policy: PdpProviderProtocolPolicyV1) -> norito::Deco
         64,
     )
 }
-
 fn decode_canonical_challenge(
     bytes: &[u8],
     max_bytes: usize,
@@ -2182,7 +2086,6 @@ fn decode_canonical_challenge(
     }
     Ok(challenge)
 }
-
 fn decode_canonical_proof(
     bytes: &[u8],
     max_bytes: usize,
@@ -2212,7 +2115,6 @@ fn decode_canonical_proof(
     }
     Ok(proof)
 }
-
 /// Provider protocol errors, classified for deterministic transport mapping.
 #[derive(Debug, Error)]
 pub enum PdpProviderProtocolError {
@@ -2383,7 +2285,6 @@ pub enum PdpProviderProtocolError {
     #[error("PDP provider runtime durability is poisoned: {0}")]
     DurabilityPoisoned(String),
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -2392,7 +2293,6 @@ mod tests {
         sync::{Arc, Barrier, atomic::AtomicU64},
         thread,
     };
-
     use ed25519_dalek::{Signer as _, SigningKey};
     use sorafs_manifest::{
         AdvertEndpoint, AvailabilityTier, CapabilityTlv, CapabilityType, ChunkingProfileV1,
@@ -2405,19 +2305,15 @@ mod tests {
         sign_pdp_proof_ed25519_v1, verify_pdp_bundle_v1,
     };
     use tempfile::TempDir;
-
     use crate::{
         NodeHandle, NodeInitError, config::StorageConfig,
         proof_outcome_forwarder::PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1,
     };
-
     use super::*;
-
     const PROVIDER_ID: [u8; 32] = [0x31; 32];
     const MANIFEST_DIGEST: [u8; 32] = [0x42; 32];
     const ISSUED_AT: u64 = 1_000;
     const DEADLINE: u64 = 1_300;
-
     struct Fixture {
         payload: Vec<u8>,
         tree: PdpMerkleTreeV1,
@@ -2428,18 +2324,15 @@ mod tests {
         admission: AdmissionRecord,
         envelope: ProviderAdmissionEnvelopeV1,
     }
-
     fn canonical_profile() -> ChunkingProfileV1 {
         ChunkingProfileV1::from_descriptor(
             sorafs_manifest::chunker_registry::lookup(ProfileId(1)).expect("SF1 profile"),
         )
     }
-
     fn provider_key() -> KeyPair {
         KeyPair::try_from_seed(vec![0x21; 32], Algorithm::Ed25519)
             .expect("deterministic provider key")
     }
-
     fn synthetic_admission(
         provider_id: [u8; 32],
         advert_key: [u8; 32],
@@ -2552,7 +2445,6 @@ mod tests {
         let admission = AdmissionRecord::new(envelope.clone(), &policy).expect("admission");
         (admission, envelope)
     }
-
     fn fixture(epoch_id: u64) -> Fixture {
         let payload = (0..(PDP_SEGMENT_SIZE_V1 as usize + PDP_HOT_LEAF_SIZE_V1 as usize + 37))
             .map(|index| ((index.wrapping_mul(131).wrapping_add(17)) % 251) as u8)
@@ -2612,18 +2504,14 @@ mod tests {
             envelope,
         }
     }
-
     fn resign(fixture: &Fixture, proof: &mut PdpProofV1) {
         *proof = sign_pdp_proof_ed25519_v1(proof.clone(), &fixture.dalek_provider_key)
             .expect("re-sign proof");
     }
-
     fn rebind_challenge(challenge: &mut PdpChallengeV1) {
         challenge.challenge_id = challenge.derived_challenge_id().expect("challenge id");
     }
-
     type RecordedHandoffReceipts = BTreeMap<[u8; 32], ([u8; 32], [u8; 32])>;
-
     #[derive(Debug, Default)]
     struct RecordingHandoff {
         archives: Mutex<RecordedHandoffReceipts>,
@@ -2633,7 +2521,6 @@ mod tests {
         fail_archives: AtomicU64,
         fail_repairs: AtomicU64,
     }
-
     impl RecordingHandoff {
         fn failing(archive_failures: u64, repair_failures: u64) -> Self {
             Self {
@@ -2642,16 +2529,13 @@ mod tests {
                 ..Self::default()
             }
         }
-
         fn archive_count(&self) -> u64 {
             self.archive_calls.load(Ordering::Relaxed)
         }
-
         fn repair_count(&self) -> u64 {
             self.repair_calls.load(Ordering::Relaxed)
         }
     }
-
     fn consume_failure(counter: &AtomicU64) -> bool {
         counter
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -2659,7 +2543,6 @@ mod tests {
             })
             .is_ok()
     }
-
     fn receipt(tag: &[u8], key: [u8; 32], payload_digest: [u8; 32]) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
         hasher.update(tag);
@@ -2667,7 +2550,6 @@ mod tests {
         hasher.update(&payload_digest);
         *hasher.finalize().as_bytes()
     }
-
     impl PdpTerminalHandoff for RecordingHandoff {
         fn archive(
             &self,
@@ -2696,7 +2578,6 @@ mod tests {
                 }
             }
         }
-
         fn repair(
             &self,
             idempotency_key: [u8; 32],
@@ -2732,7 +2613,6 @@ mod tests {
             }
         }
     }
-
     fn enqueue(protocol: &PdpProviderProtocol, fixture: &Fixture) -> PdpChallengeEnqueueOutcome {
         protocol
             .enqueue_challenge(
@@ -2744,7 +2624,6 @@ mod tests {
             )
             .expect("enqueue challenge")
     }
-
     #[test]
     fn policy_rejects_inert_or_inconsistent_bounds() {
         let mut policy = PdpProviderProtocolPolicyV1::default();
@@ -2762,7 +2641,6 @@ mod tests {
             u64::from(policy.challenge_max_bytes) + u64::from(policy.proof_max_bytes) - 1;
         assert!(policy.validate().is_err());
     }
-
     #[test]
     fn proof_builder_is_admission_bound_and_verifies_both_roots() {
         let fixture = fixture(7);
@@ -2779,7 +2657,6 @@ mod tests {
         assert_eq!(verified.sampled_segments(), 2);
         assert_eq!(verified.sampled_hot_leaves(), 4);
     }
-
     #[test]
     fn durable_happy_path_is_ordered_idempotent_and_restart_safe() {
         let dir = TempDir::new().expect("tempdir");
@@ -2800,7 +2677,6 @@ mod tests {
             .expect("pending challenge");
         assert_eq!(next.sequence, 1);
         assert_eq!(next.challenge, fixture.challenge);
-
         let sink = RecordingHandoff::default();
         let proof_bytes = norito::to_bytes(&fixture.proof).expect("proof bytes");
         let accepted = protocol
@@ -2821,7 +2697,6 @@ mod tests {
                 .expect("next")
                 .is_none()
         );
-
         drop(protocol);
         let restored = PdpProviderProtocol::open(policy, dir.path()).expect("restart runtime");
         assert_eq!(
@@ -2844,7 +2719,6 @@ mod tests {
         );
         assert_eq!(sink.archive_count(), 1);
     }
-
     #[test]
     fn enqueue_rejects_untrusted_wrong_epoch_future_expired_and_scope_grinding() {
         let protocol =
@@ -2912,7 +2786,6 @@ mod tests {
             Err(PdpProviderProtocolError::ChallengeScopeReplay)
         ));
     }
-
     #[test]
     fn authenticated_wrong_manifest_provider_epoch_and_samples_are_terminal_failures() {
         type Mutation = fn(&mut PdpProofV1);
@@ -2950,7 +2823,6 @@ mod tests {
             assert_eq!(sink.repair_count(), 1);
         }
     }
-
     #[test]
     fn wrong_key_malformed_noncanonical_and_oversized_inputs_converge_to_repair() {
         let mut policy = PdpProviderProtocolPolicyV1::default();
@@ -2996,7 +2868,6 @@ mod tests {
             assert_eq!(sink.repair_count(), 1);
         }
     }
-
     #[test]
     fn explicit_challenge_identity_blocks_cross_challenge_proof_consumption() {
         let first = fixture(80);
@@ -3006,7 +2877,6 @@ mod tests {
         enqueue(&protocol, &first);
         enqueue(&protocol, &second);
         let sink = RecordingHandoff::default();
-
         let first_outcome = protocol
             .submit_proof_for_challenge_bytes(
                 first.challenge.challenge_id,
@@ -3029,7 +2899,6 @@ mod tests {
             PdpChallengeLifecycleV1::Pending,
             "a proof naming the second challenge must not consume it through the first endpoint"
         );
-
         let second_outcome = protocol
             .submit_proof_for_challenge_bytes(
                 second.challenge.challenge_id,
@@ -3043,7 +2912,6 @@ mod tests {
         assert_eq!(sink.archive_count(), 2);
         assert_eq!(sink.repair_count(), 1);
     }
-
     #[test]
     fn status_export_is_bounded_ordered_and_exposes_pending_handoff_and_terminal_states() {
         let pending = fixture(82);
@@ -3066,7 +2934,6 @@ mod tests {
             ),
             Err(PdpProviderProtocolError::ArchiveHandoff(_))
         ));
-
         let statuses = protocol.export_statuses(0, 2).expect("bounded export");
         assert_eq!(statuses.len(), 2);
         assert!(statuses[0].sequence < statuses[1].sequence);
@@ -3089,7 +2956,6 @@ mod tests {
             protocol.export_statuses(0, PDP_STATUS_EXPORT_MAX_RECORDS_V1 + 1),
             Err(PdpProviderProtocolError::InvalidExportLimit { .. })
         ));
-
         protocol
             .resume_handoffs(&sink, 1)
             .expect("finish durable handoff");
@@ -3107,7 +2973,6 @@ mod tests {
             failing.challenge.challenge_id
         );
     }
-
     #[test]
     fn overlapping_proof_race_has_one_terminal_winner_and_one_replay_rejection() {
         let fixture = Arc::new(fixture(84));
@@ -3122,7 +2987,6 @@ mod tests {
         invalid.manifest_digest = [0x77; 32];
         resign(&fixture, &mut invalid);
         let invalid_bytes = norito::to_bytes(&invalid).expect("invalid proof bytes");
-
         let handles = [valid_bytes, invalid_bytes].map(|proof_bytes| {
             let fixture = Arc::clone(&fixture);
             let protocol = Arc::clone(&protocol);
@@ -3170,7 +3034,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn late_and_future_signed_proofs_are_rejected_and_repaired() {
         let late = fixture(30);
@@ -3191,7 +3054,6 @@ mod tests {
             outcome.decision,
             PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::SubmissionLate)
         );
-
         let future = fixture(31);
         let protocol =
             PdpProviderProtocol::in_memory(PdpProviderProtocolPolicyV1::default()).unwrap();
@@ -3213,7 +3075,6 @@ mod tests {
             PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::FutureTimestamp)
         );
     }
-
     #[test]
     fn expiry_and_revocation_create_repair_bound_terminal_outcomes() {
         let expiry_fixture = fixture(40);
@@ -3232,7 +3093,6 @@ mod tests {
             expired.decision,
             PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::DeadlineExpired)
         );
-
         let revocation_fixture = fixture(41);
         let protocol =
             PdpProviderProtocol::in_memory(PdpProviderProtocolPolicyV1::default()).unwrap();
@@ -3246,7 +3106,6 @@ mod tests {
         );
         assert_eq!(sink.repair_count(), 2);
     }
-
     #[test]
     fn archive_and_repair_failures_resume_without_premature_terminal_ack() {
         let dir = TempDir::new().expect("tempdir");
@@ -3275,7 +3134,6 @@ mod tests {
                 .is_none()
         );
         drop(protocol);
-
         let restored =
             PdpProviderProtocol::open(policy, dir.path()).expect("restart after archive");
         assert!(matches!(
@@ -3285,7 +3143,6 @@ mod tests {
         assert_eq!(sink.archive_count(), 2);
         assert_eq!(sink.repair_count(), 1);
         drop(restored);
-
         let restored = PdpProviderProtocol::open(policy, dir.path()).expect("restart after repair");
         let outcomes = restored.resume_handoffs(&sink, 10).expect("resume repair");
         assert_eq!(outcomes.len(), 1);
@@ -3296,7 +3153,6 @@ mod tests {
         assert_eq!(sink.archive_count(), 2, "archive receipt prevented replay");
         assert_eq!(sink.repair_count(), 2);
     }
-
     #[test]
     fn node_startup_defers_pdp_handoff_until_an_explicit_adapter_is_available() {
         fn persist_archive_handoff_pending(
@@ -3340,7 +3196,6 @@ mod tests {
             drop(protocol);
             fixture
         }
-
         let happy_dir = TempDir::new().expect("happy-path tempdir");
         let happy_root = happy_dir.path().canonicalize().expect("canonical tempdir");
         let happy_config = StorageConfig::builder()
@@ -3348,7 +3203,6 @@ mod tests {
             .data_dir(happy_root.join("storage"))
             .build();
         let happy_fixture = persist_archive_handoff_pending(&happy_config, 51, false);
-
         let first_restart = NodeHandle::try_new(happy_config.clone())
             .expect("startup must leave the PDP handoff durable");
         assert!(
@@ -3392,7 +3246,6 @@ mod tests {
         let operation_id = first_pending[0].operation_id;
         let outcome_digest = first_pending[0].outcome_digest;
         drop(first_restart);
-
         let second_restart =
             NodeHandle::try_new(happy_config).expect("second startup remains idempotent");
         let second_pending = second_restart
@@ -3406,7 +3259,6 @@ mod tests {
         assert_eq!(second_pending[0].operation_id, operation_id);
         assert_eq!(second_pending[0].outcome_digest, outcome_digest);
         drop(second_restart);
-
         let repair_dir = TempDir::new().expect("repair-required tempdir");
         let repair_root = repair_dir.path().canonicalize().expect("canonical tempdir");
         let repair_config = StorageConfig::builder()
@@ -3453,7 +3305,6 @@ mod tests {
             PdpChallengeLifecycleV1::HandoffPending
         );
         drop(repair_second_restart);
-
         let poisoned_dir = TempDir::new().expect("poisoned-path tempdir");
         let poisoned_root = poisoned_dir
             .path()
@@ -3471,7 +3322,6 @@ mod tests {
             b"poisoned proof outcome checkpoint",
         )
         .expect("write poisoned outbox checkpoint");
-
         assert!(matches!(
             NodeHandle::try_new(poisoned_config.clone()),
             Err(NodeInitError::ProofOutcomeOutbox { .. })
@@ -3494,7 +3344,6 @@ mod tests {
             "untrusted outbox durability must abort startup before terminal acknowledgement"
         );
     }
-
     #[test]
     fn pending_and_terminal_limits_fail_closed_until_safe_prune() {
         let mut policy = PdpProviderProtocolPolicyV1::default();
@@ -3552,7 +3401,6 @@ mod tests {
             PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::SubmissionLate)
         ));
     }
-
     #[test]
     fn checkpoint_rejects_corruption_symlinks_hardlinks_and_stale_writers() {
         let policy = PdpProviderProtocolPolicyV1::default();
@@ -3572,7 +3420,6 @@ mod tests {
             ),
             Err(PdpProviderProtocolError::StaleCheckpoint)
         ));
-
         let checkpoint = dir.path().join(PDP_PROVIDER_CHECKPOINT_FILE_NAME_V1);
         let hardlink = dir.path().join("checkpoint-hardlink");
         fs::hard_link(&checkpoint, &hardlink).expect("hardlink checkpoint");
@@ -3584,17 +3431,14 @@ mod tests {
             Err(PdpProviderProtocolError::InvalidCheckpoint(_))
                 | Err(PdpProviderProtocolError::CheckpointIo(_))
         ));
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
-
             let target = TempDir::new().expect("target");
             let parent = TempDir::new().expect("parent");
             let linked_root = parent.path().join("linked-root");
             symlink(target.path(), &linked_root).expect("symlink root");
             assert!(PdpProviderProtocol::open(policy, &linked_root).is_err());
-
             let root = TempDir::new().expect("checkpoint root");
             let external = root.path().join("external");
             fs::write(&external, [1, 2, 3]).expect("external file");

@@ -3,13 +3,11 @@ fn feed_transport_response_debug_is_payload_free() {
     let mut response = fetch_response(b"PRIVATE-FEED-BODY".to_vec());
     response.redirect_location = Some("https://feed.example/PRIVATE-REDIRECT".into());
     let debug = format!("{response:?}");
-
     assert!(debug.contains("body_bytes"));
     assert!(debug.contains("redirect_location_bytes"));
     assert!(!debug.contains("PRIVATE-FEED-BODY"));
     assert!(!debug.contains("PRIVATE-REDIRECT"));
 }
-
 #[test]
 fn feed_fetch_rejects_private_dns_and_rebinding() {
     let policy = feed_policy();
@@ -28,7 +26,6 @@ fn feed_fetch_rejects_private_dns_and_rebinding() {
         ),
         Err(GatewayComplianceError::NonPublicAddress)
     ));
-
     let rebinding = ScriptedTransport {
         resolutions: Mutex::new(VecDeque::from([
             vec!["93.184.216.34".parse().expect("public IP")],
@@ -46,7 +43,6 @@ fn feed_fetch_rejects_private_dns_and_rebinding() {
         Err(GatewayComplianceError::DnsRebinding)
     ));
 }
-
 #[test]
 fn feed_fetch_rejects_wrong_trust_pin_and_decompression_bomb() {
     let policy = feed_policy();
@@ -67,7 +63,6 @@ fn feed_fetch_rejects_wrong_trust_pin_and_decompression_bomb() {
         ),
         Err(GatewayComplianceError::TrustPinMismatch)
     ));
-
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(&vec![0x41; 4_096]).expect("gzip write");
     let compressed = encoder.finish().expect("gzip finish");
@@ -76,7 +71,6 @@ fn feed_fetch_rejects_wrong_trust_pin_and_decompression_bomb() {
         Err(GatewayComplianceError::ResourceLimit { .. })
     ));
 }
-
 #[test]
 fn feed_fetch_rejects_redirect_outside_exact_allowlist() {
     let policy = feed_policy();

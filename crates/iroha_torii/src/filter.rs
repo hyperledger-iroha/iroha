@@ -6,25 +6,19 @@
 //! - Validate operators vs value types and field path form.
 //! - Map to an internal validated form; mapping to typed predicates is left for
 //!   endpoint-specific adapters.
-
-use std::collections::BTreeSet;
-
 use norito::{
     Error as NoritoError,
     codec::{Decode, Encode},
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize, Map, Value},
 };
-
 /// A field path such as `authority`, `timestamp_ms`, or `metadata.display_name`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldPath(pub String);
-
 impl JsonSerialize for FieldPath {
     fn json_serialize(&self, out: &mut String) {
         self.0.json_serialize(out);
     }
 }
-
 impl JsonDeserialize for FieldPath {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -33,7 +27,6 @@ impl JsonDeserialize for FieldPath {
         Ok(FieldPath(inner))
     }
 }
-
 /// Filter expression AST.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilterExpr {
@@ -64,7 +57,6 @@ pub enum FilterExpr {
     /// Field value is null predicate.
     IsNull(FieldPath),
 }
-
 impl JsonDeserialize for FilterExpr {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -72,23 +64,19 @@ impl JsonDeserialize for FilterExpr {
         parse_filter_expr(parser)
     }
 }
-
 impl FastJsonWrite for FilterExpr {
     fn write_json(&self, out: &mut String) {
         filter_expr_to_value(self).json_serialize(out);
     }
 }
-
 /// Selector (projection) definition as a flat list of field paths.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Selector(pub Vec<FieldPath>);
-
 impl JsonSerialize for Selector {
     fn json_serialize(&self, out: &mut String) {
         self.0.json_serialize(out);
     }
 }
-
 impl JsonDeserialize for Selector {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -96,7 +84,6 @@ impl JsonDeserialize for Selector {
         Vec::<FieldPath>::json_deserialize(parser).map(Self)
     }
 }
-
 /// Sorting key descriptor.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SortKey {
@@ -106,7 +93,6 @@ pub struct SortKey {
     #[norito(default = "default_order")]
     pub order: Order,
 }
-
 /// Sort direction for a single key.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Order {
@@ -115,7 +101,6 @@ pub enum Order {
     /// Sort values in descending order.
     Desc,
 }
-
 impl JsonSerialize for Order {
     fn json_serialize(&self, out: &mut String) {
         let value = match self {
@@ -125,7 +110,6 @@ impl JsonSerialize for Order {
         norito::json::write_json_string(value, out);
     }
 }
-
 impl JsonDeserialize for Order {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -139,11 +123,9 @@ impl JsonDeserialize for Order {
         }
     }
 }
-
 fn default_order() -> Order {
     Order::Asc
 }
-
 /// Aggregate function applied in aggregate query mode.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AggregateFn {
@@ -160,7 +142,6 @@ pub enum AggregateFn {
     /// Count distinct values for the referenced field.
     DistinctCount,
 }
-
 impl JsonSerialize for AggregateFn {
     fn json_serialize(&self, out: &mut String) {
         let value = match self {
@@ -174,7 +155,6 @@ impl JsonSerialize for AggregateFn {
         norito::json::write_json_string(value, out);
     }
 }
-
 impl JsonDeserialize for AggregateFn {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -192,7 +172,6 @@ impl JsonDeserialize for AggregateFn {
         }
     }
 }
-
 /// One metric definition in aggregate query mode.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct AggregateMetric {
@@ -205,7 +184,6 @@ pub struct AggregateMetric {
     #[norito(default)]
     pub field: Option<FieldPath>,
 }
-
 /// Aggregate grouping and metric specification.
 #[derive(Debug, Clone, PartialEq, JsonSerialize, JsonDeserialize, Default)]
 pub struct AggregateSpec {
@@ -220,7 +198,6 @@ pub struct AggregateSpec {
     #[norito(with = "filter_expr_option")]
     pub having: Option<FilterExpr>,
 }
-
 fn order_parse_error(parser: &norito::json::Parser<'_>, start: usize) -> norito::json::Error {
     const MSG: &str = "expected \"asc\" or \"desc\"";
     let input = parser.input();
@@ -242,21 +219,38 @@ fn order_parse_error(parser: &norito::json::Parser<'_>, start: usize) -> norito:
         col,
     }
 }
-
 fn parse_filter_expr(
     parser: &mut norito::json::Parser<'_>,
 ) -> Result<FilterExpr, norito::json::Error> {
     let val = Value::json_deserialize(parser)?;
     filter_expr_from_value(val)
 }
-
+#[allow(unsafe_code)]
+fn admitted_filter_vec<T>(capacity: usize) -> Result<Vec<T>, norito::json::Error> {
+    let requested = capacity
+        .checked_mul(core::mem::size_of::<T>())
+        .ok_or(norito::json::Error::DecodeResourceLimit)?;
+    norito::core::reserve_decode_allocation(requested)
+        .map_err(norito::json::Error::from_decode_resource)?;
+    if requested == 0 {
+        return Ok(Vec::new());
+    }
+    let layout = std::alloc::Layout::array::<T>(capacity)
+        .map_err(|_| norito::json::Error::AllocationFailed)?;
+    // SAFETY: the complete exact layout was admitted before allocation. Null
+    // is rejected before ownership, and the returned vector starts empty so
+    // only later successful pushes create initialized elements for `Drop`.
+    let allocation = unsafe { std::alloc::alloc(layout) };
+    let allocation =
+        core::ptr::NonNull::new(allocation).ok_or(norito::json::Error::AllocationFailed)?;
+    Ok(unsafe { Vec::from_raw_parts(allocation.as_ptr().cast::<T>(), 0, capacity) })
+}
 fn parse_filter_expr_option(
     parser: &mut norito::json::Parser<'_>,
 ) -> Result<Option<FilterExpr>, norito::json::Error> {
     let opt_val = Option::<Value>::json_deserialize(parser)?;
     opt_val.map(filter_expr_from_value).transpose()
 }
-
 /// Maximum nesting accepted in an app-facing filter expression.
 pub(crate) const FILTER_EXPR_MAX_DEPTH: usize = 10;
 /// Maximum operator nodes accepted in an app-facing filter expression.
@@ -265,13 +259,11 @@ pub(crate) const FILTER_EXPR_MAX_NODES: usize = 1_024;
 pub(crate) const FILTER_EXPR_MAX_MEMBERSHIP_VALUES: usize = 1_024;
 /// Maximum membership literals accepted across one expression tree.
 pub(crate) const FILTER_EXPR_MAX_TOTAL_MEMBERSHIP_VALUES: usize = 4_096;
-
 #[derive(Default)]
 struct FilterExprBudget {
     nodes: usize,
     membership_values: usize,
 }
-
 impl FilterExprBudget {
     fn enter(&mut self, depth: usize) -> Result<(), norito::json::Error> {
         if depth > FILTER_EXPR_MAX_DEPTH {
@@ -283,7 +275,6 @@ impl FilterExprBudget {
         }
         Ok(())
     }
-
     fn add_membership(&mut self, count: usize) -> Result<(), norito::json::Error> {
         if count == 0 {
             return Err(filter_expr_error(
@@ -304,11 +295,9 @@ impl FilterExprBudget {
         Ok(())
     }
 }
-
 fn filter_expr_from_value(val: Value) -> Result<FilterExpr, norito::json::Error> {
     filter_expr_from_value_inner(val, 0, &mut FilterExprBudget::default())
 }
-
 fn filter_expr_from_value_inner(
     val: Value,
     depth: usize,
@@ -336,7 +325,7 @@ fn filter_expr_from_value_inner(
                         if values.len() > FILTER_EXPR_MAX_NODES.saturating_sub(budget.nodes) {
                             return Err(filter_expr_error("filter expression exceeds node limit"));
                         }
-                        let mut out = Vec::with_capacity(values.len());
+                        let mut out = admitted_filter_vec(values.len())?;
                         for value in values {
                             out.push(filter_expr_from_value_inner(value, depth + 1, budget)?);
                         }
@@ -349,7 +338,7 @@ fn filter_expr_from_value_inner(
                         if values.len() > FILTER_EXPR_MAX_NODES.saturating_sub(budget.nodes) {
                             return Err(filter_expr_error("filter expression exceeds node limit"));
                         }
-                        let mut out = Vec::with_capacity(values.len());
+                        let mut out = admitted_filter_vec(values.len())?;
                         for value in values {
                             out.push(filter_expr_from_value_inner(value, depth + 1, budget)?);
                         }
@@ -361,6 +350,8 @@ fn filter_expr_from_value_inner(
                     Value::Array(mut values) if values.len() == 1 => {
                         let inner =
                             filter_expr_from_value_inner(values.remove(0), depth + 1, budget)?;
+                        norito::core::reserve_decode_box_allocation::<FilterExpr>()
+                            .map_err(norito::json::Error::from_decode_resource)?;
                         Ok(FilterExpr::Not(Box::new(inner)))
                     }
                     _ => Err(filter_expr_error(
@@ -415,7 +406,6 @@ fn filter_expr_from_value_inner(
         _ => Err(filter_expr_error("filter expression must be an object")),
     }
 }
-
 fn parse_field_arg(arg: Value) -> Result<FieldPath, norito::json::Error> {
     match arg {
         Value::Array(mut values) if values.len() == 1 => match values.remove(0) {
@@ -425,7 +415,6 @@ fn parse_field_arg(arg: Value) -> Result<FieldPath, norito::json::Error> {
         _ => Err(filter_expr_error("filter field must be string")),
     }
 }
-
 fn parse_binop_args(args: Value) -> Result<(FieldPath, Value), norito::json::Error> {
     match args {
         Value::Array(values) if values.len() == 2 => {
@@ -441,7 +430,6 @@ fn parse_binop_args(args: Value) -> Result<(FieldPath, Value), norito::json::Err
         _ => Err(filter_expr_error("binary operator expects [field, value]")),
     }
 }
-
 fn parse_membership_args(args: Value) -> Result<(FieldPath, Vec<Value>), norito::json::Error> {
     let (field, values) = parse_binop_args(args)?;
     match values {
@@ -468,20 +456,12 @@ fn parse_membership_args(args: Value) -> Result<(FieldPath, Vec<Value>), norito:
         )),
     }
 }
-
 fn membership_values_are_unique(values: &[Value]) -> bool {
-    let mut seen = BTreeSet::new();
-    for value in values {
-        let Ok(canonical) = json::to_json(value) else {
-            return false;
-        };
-        if !seen.insert(canonical) {
-            return false;
-        }
-    }
-    true
+    values
+        .iter()
+        .enumerate()
+        .all(|(index, value)| !values[index + 1..].contains(value))
 }
-
 fn filter_expr_error(msg: &'static str) -> norito::json::Error {
     norito::json::Error::WithPos {
         msg,
@@ -490,7 +470,6 @@ fn filter_expr_error(msg: &'static str) -> norito::json::Error {
         col: 1,
     }
 }
-
 /// Convert a filter expression into its JSON representation used on the wire.
 pub fn filter_expr_to_value(expr: &FilterExpr) -> Value {
     fn binop(op: &str, field: &FieldPath, rhs: &Value) -> Value {
@@ -502,7 +481,6 @@ pub fn filter_expr_to_value(expr: &FilterExpr) -> Value {
         );
         Value::Object(m)
     }
-
     fn listop(op: &str, items: &[FilterExpr]) -> Value {
         let mut m = Map::new();
         m.insert("op".into(), Value::from(op));
@@ -512,7 +490,6 @@ pub fn filter_expr_to_value(expr: &FilterExpr) -> Value {
         );
         Value::Object(m)
     }
-
     match expr {
         FilterExpr::And(list) => listop("and", list),
         FilterExpr::Or(list) => listop("or", list),
@@ -575,26 +552,20 @@ pub fn filter_expr_to_value(expr: &FilterExpr) -> Value {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use norito::json;
-
     use super::*;
     use crate::{json_array, json_object, json_value};
-
     fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
         json_object(pairs)
     }
-
     fn arr(values: Vec<Value>) -> Value {
         json_array(values)
     }
-
     fn val<T: JsonSerialize + ?Sized>(value: &T) -> Value {
         json_value(value)
     }
-
     #[test]
     fn order_serializes_as_lowercase() {
         let asc = norito::json::to_json(&Order::Asc).unwrap();
@@ -604,7 +575,6 @@ mod tests {
         assert_eq!(Order::Asc, norito::json::from_str(&asc).unwrap());
         assert_eq!(Order::Desc, norito::json::from_str(&desc).unwrap());
     }
-
     #[test]
     fn aggregate_function_serializes_as_lowercase() {
         let count = norito::json::to_json(&AggregateFn::Count).unwrap();
@@ -617,7 +587,6 @@ mod tests {
             norito::json::from_str(&distinct).unwrap()
         );
     }
-
     #[test]
     fn filter_expr_serialization_matches_expected_value() {
         let expr = FilterExpr::Eq(
@@ -636,11 +605,9 @@ mod tests {
             ),
         ]);
         assert_eq!(value, expected);
-
         let roundtrip: FilterExpr = norito::json::from_value(value).unwrap();
         assert_eq!(roundtrip, expr);
     }
-
     #[test]
     fn parse_and_validate_simple_filter() {
         let json = obj(vec![
@@ -678,7 +645,6 @@ mod tests {
         let expr: FilterExpr = json::from_value(json).expect("parse");
         validate_filter(&expr).expect("validate");
     }
-
     #[test]
     fn filter_expr_rejects_unknown_fields_empty_sets_and_malformed_logical_arity() {
         let invalid = [
@@ -690,7 +656,6 @@ mod tests {
             norito::json!({"op": "nin", "args": ["result_ok", [true, true]]}),
             norito::json!({"op": "exists", "args": "result_ok"}),
         ];
-
         for value in invalid {
             assert!(
                 json::from_value::<FilterExpr>(value).is_err(),
@@ -698,7 +663,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn filter_expr_presence_roundtrip_uses_canonical_single_argument_array() {
         for expr in [
@@ -710,7 +674,6 @@ mod tests {
             assert_eq!(decoded, expr);
         }
     }
-
     #[test]
     fn filter_expr_binary_wire_roundtrips_and_rejects_noncanonical_json_replay() {
         let expr = FilterExpr::Eq(FieldPath("result_ok".into()), Value::Bool(true));
@@ -719,16 +682,13 @@ mod tests {
             norito::decode_from_bytes::<FilterExpr>(&bytes).expect("decode valid FilterExpr"),
             expr
         );
-
         let canonical = json::to_string(&filter_expr_to_value(&expr)).expect("canonical filter");
         let replay = format!(" {canonical}");
         let (payload, flags) = norito::codec::encode_with_header_flags(&replay);
         let framed = norito::core::frame_bare_with_header_flags::<FilterExpr>(&payload, flags)
             .expect("frame replayed FilterExpr string");
-
         assert!(norito::decode_from_bytes::<FilterExpr>(&framed).is_err());
     }
-
     #[test]
     fn filter_expr_parser_enforces_depth_node_and_membership_budgets() {
         let mut deep = norito::json!({"op": "eq", "args": ["result_ok", true]});
@@ -736,7 +696,6 @@ mod tests {
             deep = norito::json!({"op": "not", "args": [deep]});
         }
         assert!(json::from_value::<FilterExpr>(deep).is_err());
-
         let nodes = Value::Array(
             (0..FILTER_EXPR_MAX_NODES)
                 .map(|_| norito::json!({"op": "eq", "args": ["result_ok", true]}))
@@ -746,7 +705,6 @@ mod tests {
         root.insert("op".into(), Value::String("and".into()));
         root.insert("args".into(), nodes);
         assert!(json::from_value::<FilterExpr>(Value::Object(root)).is_err());
-
         let oversized = Value::Array(
             (0..=FILTER_EXPR_MAX_MEMBERSHIP_VALUES)
                 .map(|value| Value::from(value as u64))
@@ -760,14 +718,35 @@ mod tests {
         );
         assert!(json::from_value::<FilterExpr>(Value::Object(membership)).is_err());
     }
-
+    #[test]
+    fn filter_expr_destination_is_charged_before_exact_allocation() {
+        const ENTRIES: usize = 17;
+        let bytes = ENTRIES * core::mem::size_of::<u64>();
+        let limits = |allocated| {
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocated, usize::MAX)
+        };
+        let (values, usage) = norito::core::with_decode_limits_measured(limits(bytes), || {
+            admitted_filter_vec::<u64>(ENTRIES)
+        });
+        let values = values.expect("exact filter destination budget");
+        assert_eq!(values.capacity(), ENTRIES);
+        assert_eq!(usage.total_allocated_bytes(), bytes);
+        let (rejected, usage) =
+            norito::core::with_decode_limits_measured(limits(bytes - 1), || {
+                admitted_filter_vec::<u64>(ENTRIES)
+            });
+        assert!(matches!(
+            rejected,
+            Err(norito::json::Error::DecodeResourceLimit)
+        ));
+        assert_eq!(usage.total_allocated_bytes(), 0);
+    }
     #[test]
     fn query_envelope_rejects_empty_negative_membership_instead_of_passing() {
         let envelope = norito::json!({
             "filter": {"op": "nin", "args": ["result_ok", []]}
         });
         assert!(json::from_value::<QueryEnvelope>(envelope).is_err());
-
         let programmatic = FilterExpr::Nin(FieldPath("result_ok".into()), Vec::new());
         assert!(matches!(
             validate_filter(&programmatic),
@@ -775,7 +754,6 @@ mod tests {
         ));
         assert!(norito::to_bytes(&programmatic).is_err());
     }
-
     #[test]
     fn reject_unsupported_field_path() {
         let json = obj(vec![
@@ -786,7 +764,6 @@ mod tests {
         let err = validate_filter(&expr).unwrap_err();
         assert!(matches!(err, ValidateError::UnsupportedField(_)));
     }
-
     #[test]
     fn reject_type_mismatch_for_numeric_ops() {
         // lt with a non-number should fail
@@ -797,7 +774,6 @@ mod tests {
         let expr: FilterExpr = json::from_value(json).expect("parse");
         let err = validate_filter(&expr).unwrap_err();
         assert!(matches!(err, ValidateError::TypeMismatch(_)));
-
         // in with mixed types should fail
         let json2 = obj(vec![
             ("op", val("in")),
@@ -810,7 +786,6 @@ mod tests {
         let err2 = validate_filter(&expr2).unwrap_err();
         assert!(matches!(err2, ValidateError::TypeMismatch(_)));
     }
-
     #[test]
     fn query_envelope_parses_aggregate_mode() {
         let json = obj(vec![
@@ -867,7 +842,6 @@ mod tests {
         assert_eq!(envelope.sort[0].key.0, "primary_alias_domain");
         assert_eq!(envelope.sort[0].order, Order::Asc);
     }
-
     #[test]
     fn query_envelope_parses_nested_sort_keys() {
         let json = obj(vec![(
@@ -882,7 +856,6 @@ mod tests {
         assert_eq!(envelope.sort[0].key.0, "alias_binding.bound_at_ms");
         assert_eq!(envelope.sort[0].order, Order::Desc);
     }
-
     #[test]
     fn query_envelope_parses_and_serializes_selector_array() {
         let raw = r#"{"select":["authority","metadata.amount"]}"#;
@@ -894,7 +867,6 @@ mod tests {
                 FieldPath("metadata.amount".into()),
             ]))
         );
-
         let encoded = json::to_json(&envelope).expect("serialize query envelope");
         let value: Value = json::from_str(&encoded).expect("parse serialized query envelope");
         assert_eq!(
@@ -902,7 +874,6 @@ mod tests {
             Some(&arr(vec![val("authority"), val("metadata.amount")]))
         );
     }
-
     #[test]
     fn query_envelope_json_roundtrip_preserves_nested_sort_keys() {
         let envelope = QueryEnvelope {
@@ -926,22 +897,18 @@ mod tests {
         assert_eq!(decoded.sort, envelope.sort);
     }
 }
-
 mod filter_expr_option {
     use super::*;
-
     #[allow(clippy::ref_option)]
     pub fn serialize(value: &Option<FilterExpr>, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(value, out);
     }
-
     pub fn deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Option<FilterExpr>, norito::json::Error> {
         parse_filter_expr_option(parser)
     }
 }
-
 /// Query parameters supplied alongside filter/selector.
 #[derive(Debug, Clone, PartialEq, JsonSerialize, JsonDeserialize, Default)]
 pub struct QueryEnvelope {
@@ -971,7 +938,6 @@ pub struct QueryEnvelope {
     #[norito(default)]
     pub count_mode: Option<String>,
 }
-
 const _: () = {
     fn assert_send_sync<T: Send + Sync>() {}
     fn check() {
@@ -979,14 +945,12 @@ const _: () = {
     }
     let _ = check;
 };
-
 impl crate::utils::extractors::SupportsNoritoDecode for QueryEnvelope {
     fn decode_norito(bytes: &[u8]) -> Result<Self, NoritoError> {
         norito::json::from_slice::<Self>(bytes)
             .map_err(|e| NoritoError::Message(format!("invalid QueryEnvelope: {e}")))
     }
 }
-
 /// Pagination controls for list and query endpoints.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize, Default)]
 pub struct Pagination {
@@ -996,7 +960,6 @@ pub struct Pagination {
     #[norito(default)]
     pub offset: u64,
 }
-
 /// Errors produced during filter validation.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, displaydoc::Display)]
 pub enum ValidateError {
@@ -1005,7 +968,6 @@ pub enum ValidateError {
     /// type mismatch at field: {0}
     TypeMismatch(String),
 }
-
 /// The set of allowed field prefixes: top-level and `metadata.<key>`.
 fn is_supported_field(path: &str) -> bool {
     if path.is_empty() {
@@ -1018,7 +980,6 @@ fn is_supported_field(path: &str) -> bool {
     // Allow simple top-level; further item-type specific checks are endpoint-specific
     !path.contains('.')
 }
-
 /// Validate a filter expression structurally.
 ///
 /// Ensures field paths use supported prefixes; logical and membership operands
@@ -1116,13 +1077,11 @@ pub fn validate_filter(expr: &FilterExpr) -> Result<(), ValidateError> {
     let mut membership_values = 0;
     validate_rec(expr, 0, &mut nodes, &mut membership_values)
 }
-
 impl norito::core::NoritoSerialize for FieldPath {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <String as norito::core::NoritoSerialize>::serialize(&self.0, writer)
     }
 }
-
 impl<'de> norito::core::NoritoDeserialize<'de> for FieldPath {
     fn try_deserialize(
         archived: &'de norito::core::Archived<FieldPath>,
@@ -1131,19 +1090,16 @@ impl<'de> norito::core::NoritoDeserialize<'de> for FieldPath {
         let inner = <String as norito::core::NoritoDeserialize>::try_deserialize(archived_str)?;
         Ok(FieldPath(inner))
     }
-
     fn deserialize(archived: &'de norito::core::Archived<FieldPath>) -> Self {
         Self::try_deserialize(archived)
             .expect("FieldPath should deserialize from a valid Norito string")
     }
 }
-
 impl norito::core::NoritoSerialize for Selector {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <Vec<FieldPath> as norito::core::NoritoSerialize>::serialize(&self.0, writer)
     }
 }
-
 impl<'de> norito::core::NoritoDeserialize<'de> for Selector {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Selector>,
@@ -1153,12 +1109,10 @@ impl<'de> norito::core::NoritoDeserialize<'de> for Selector {
             <Vec<FieldPath> as norito::core::NoritoDeserialize>::try_deserialize(archived_inner)?;
         Ok(Selector(inner))
     }
-
     fn deserialize(archived: &'de norito::core::Archived<Selector>) -> Self {
         Self::try_deserialize(archived).expect("Selector should decode from a Norito sequence")
     }
 }
-
 impl norito::core::NoritoSerialize for Order {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let tag = match self {
@@ -1168,7 +1122,6 @@ impl norito::core::NoritoSerialize for Order {
         <u8 as norito::core::NoritoSerialize>::serialize(&tag, writer)
     }
 }
-
 impl<'de> norito::core::NoritoDeserialize<'de> for Order {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Order>,
@@ -1183,19 +1136,16 @@ impl<'de> norito::core::NoritoDeserialize<'de> for Order {
             ))),
         }
     }
-
     fn deserialize(archived: &'de norito::core::Archived<Order>) -> Self {
         Self::try_deserialize(archived).expect("Order should decode from variant tag")
     }
 }
-
 impl norito::core::NoritoSerialize for SortKey {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (self.key.clone(), self.order);
         <(FieldPath, Order) as norito::core::NoritoSerialize>::serialize(&payload, writer)
     }
 }
-
 impl<'de> norito::core::NoritoDeserialize<'de> for SortKey {
     fn try_deserialize(
         archived: &'de norito::core::Archived<SortKey>,
@@ -1207,12 +1157,10 @@ impl<'de> norito::core::NoritoDeserialize<'de> for SortKey {
             )?;
         Ok(SortKey { key, order })
     }
-
     fn deserialize(archived: &'de norito::core::Archived<SortKey>) -> Self {
         Self::try_deserialize(archived).expect("SortKey should decode from (FieldPath, Order)")
     }
 }
-
 impl norito::core::NoritoSerialize for FilterExpr {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         validate_filter(self)
@@ -1222,7 +1170,6 @@ impl norito::core::NoritoSerialize for FilterExpr {
         <String as norito::core::NoritoSerialize>::serialize(&json, writer)
     }
 }
-
 impl<'de> norito::core::NoritoDeserialize<'de> for FilterExpr {
     fn try_deserialize(
         archived: &'de norito::core::Archived<FilterExpr>,
@@ -1242,7 +1189,6 @@ impl<'de> norito::core::NoritoDeserialize<'de> for FilterExpr {
         }
         Ok(expr)
     }
-
     fn deserialize(archived: &'de norito::core::Archived<FilterExpr>) -> Self {
         Self::try_deserialize(archived)
             .expect("FilterExpr should deserialize from canonical JSON form")

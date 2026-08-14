@@ -174,3 +174,7 @@ path = "tests/grouped/group_01.rs"
 [[test]]
 name = "iroha_data_model_group_02"
 path = "tests/grouped/group_02.rs"
+
+[[test]]
+name = "query_serialization_allocations"
+path = "tests/query_serialization_allocations.rs"

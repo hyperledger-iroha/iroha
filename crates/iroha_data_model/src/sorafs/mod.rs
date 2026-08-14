@@ -14,46 +14,32 @@
 //! moderation ledger payloads/proofs for public SFM-4c verifiers. The
 //! `pop_registry` module defines the consensus-owned, payload-free credential
 //! issuer commitments and signed root/revocation publications used by SFM-4b1.
-
 /// Capacity marketplace records (provider declarations, telemetry, fees).
 pub mod capacity;
-
 /// Gateway Authorization Record policy payload types.
 pub mod gar;
-
 /// Moderation reproducibility manifests, `SoraFS` ballot payloads, and helpers.
 pub mod moderation;
-
 /// Authoritative on-chain moderation commit/reveal policy and records.
 pub mod moderation_ledger;
-
 /// Authoritative orderbook policy and on-chain audit records.
 pub mod orderbook;
-
 /// Strict client-side inspection for signed orderbook submissions and receipts.
 pub mod orderbook_submission;
-
 /// Pin registry manifest metadata and lifecycle records.
 pub mod pin_registry;
-
 /// Authoritative proof-of-personhood issuer and registry records.
 pub mod pop_registry;
-
 /// Finalized chain-authoritative PDP and PoTR outcome projections.
 pub mod proof_ledger;
-
 /// Chain-authoritative PoR, provider-dispute, and stream-token reputation journal.
 pub mod reputation;
-
 /// Governance-controlled pricing schedule and credit policy.
 pub mod pricing;
-
 /// Reserve + rent policy and lifecycle quoting.
 pub mod reserve;
-
 /// Transparency ledger entries, cycle headers, and inclusion proofs.
 pub mod transparency;
-
 /// Re-export commonly used `SoraFS` types.
 pub mod prelude {
     pub use super::{

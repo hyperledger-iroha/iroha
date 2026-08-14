@@ -1,9 +1,7 @@
 //! Scaffold tests for ZK asset registration and authenticated commitment-tree state.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
-
 use std::{num::NonZeroU64, str::FromStr};
-
 use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
@@ -26,9 +24,7 @@ use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
 const HALO2_IPA_BACKEND: &str = "halo2/ipa";
-
 fn set_confidential_policy_mode(
     state_transaction: &mut StateTransaction<'_, '_>,
     asset_definition_id: &AssetDefinitionId,
@@ -42,7 +38,6 @@ fn set_confidential_policy_mode(
     policy.mode = mode;
     asset_definition.set_confidential_policy(policy);
 }
-
 #[test]
 fn register_zk_asset_writes_policy_metadata() {
     // Minimal state and transaction
@@ -52,7 +47,6 @@ fn register_zk_asset_writes_policy_metadata() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     // Setup: domain and asset def
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId =
@@ -78,7 +72,6 @@ fn register_zk_asset_writes_policy_metadata() {
             .execute_instruction(&mut stx, &owner, instr)
             .unwrap();
     }
-
     // Register zk policy
     let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None);
     let ib: InstructionBox = reg.into();
@@ -89,7 +82,6 @@ fn register_zk_asset_writes_policy_metadata() {
         .unwrap();
     stx.apply();
     block.commit().expect("commit setup block");
-
     // Verify metadata key exists
     let view_policy = state.view();
     let def = view_policy
@@ -123,7 +115,6 @@ fn register_zk_asset_writes_policy_metadata() {
         hex::encode(def.confidential_policy().features_digest().as_ref())
     );
 }
-
 #[test]
 fn register_zk_asset_without_shielding_sets_transparent_policy() {
     let kura = Kura::blank_kura_for_testing();
@@ -132,7 +123,6 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -157,7 +147,6 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
             .execute_instruction(&mut stx, &owner, instr)
             .unwrap();
     }
-
     let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None);
     stx.world
         .executor()
@@ -166,7 +155,6 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
         .unwrap();
     stx.apply();
     block.commit().expect("commit setup block");
-
     let view_policy = state.view();
     let def = view_policy
         .world
@@ -198,7 +186,6 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
         hex::encode(def.confidential_policy().features_digest().as_ref())
     );
 }
-
 #[test]
 fn register_zk_asset_rejects_noncanonical_shield_verifier() {
     let kura = Kura::blank_kura_for_testing();
@@ -207,7 +194,6 @@ fn register_zk_asset_rejects_noncanonical_shield_verifier() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let domain_id = DomainId::try_new("zkd", "universal").expect("domain id");
     let asset_def_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
@@ -218,7 +204,6 @@ fn register_zk_asset_rejects_noncanonical_shield_verifier() {
     let wrong_vk_id = VerifyingKeyId::new(HALO2_IPA_BACKEND, wrong_vk_name);
     let wrong_vk_record = confidential_v2::confidential_transfer_v2_vk_record(wrong_vk_name, 1)
         .expect("canonical transfer verifier");
-
     for instruction in [
         Register::domain(Domain::new(domain_id)).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
@@ -246,7 +231,6 @@ fn register_zk_asset_rejects_noncanonical_shield_verifier() {
             .execute_instruction(&mut stx, &owner, instruction)
             .expect("set up verifier-binding fixture");
     }
-
     let registration = iroha_data_model::isi::zk::RegisterZkAsset::new(
         asset_def_id.clone(),
         None,
@@ -267,7 +251,6 @@ fn register_zk_asset_rejects_noncanonical_shield_verifier() {
         "failed registration must not create confidential state"
     );
 }
-
 #[test]
 fn schedule_confidential_policy_transition_records_pending() {
     let kura = Kura::blank_kura_for_testing();
@@ -276,7 +259,6 @@ fn schedule_confidential_policy_transition_records_pending() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     // Setup base entities.
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId =
@@ -302,7 +284,6 @@ fn schedule_confidential_policy_transition_records_pending() {
             .execute_instruction(&mut stx, &owner, instr)
             .unwrap();
     }
-
     // Register asset with convertible policy (allow shield/unshield).
     let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None);
     stx.world
@@ -313,13 +294,11 @@ fn schedule_confidential_policy_transition_records_pending() {
     set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
     block.commit().expect("commit setup block");
-
     // New block for scheduling the transition.
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
-
     let delay = defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS;
     let window_blocks = defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS;
     let effective_height = stx2.block_height() + delay + window_blocks;
@@ -338,7 +317,6 @@ fn schedule_confidential_policy_transition_records_pending() {
         .unwrap();
     stx2.apply();
     block2.commit().expect("commit schedule block");
-
     let view = state.view();
     let def = view
         .world
@@ -356,7 +334,6 @@ fn schedule_confidential_policy_transition_records_pending() {
     assert_eq!(pending.new_mode(), ConfidentialPolicyMode::ShieldedOnly);
     assert_eq!(pending.effective_height(), effective_height);
     assert_eq!(pending.transition_id(), &transition_id);
-
     let policy_key = Name::from_str("zk.policy").unwrap();
     let policy_json: norito::json::Value = def
         .metadata()
@@ -372,7 +349,6 @@ fn schedule_confidential_policy_transition_records_pending() {
         "metadata should capture pending transition summary"
     );
 }
-
 #[test]
 fn stale_confidential_downgrade_is_discarded_and_metadata_remains_coherent() {
     let state = State::new_for_testing(
@@ -407,7 +383,6 @@ fn stale_confidential_downgrade_is_discarded_and_metadata_remains_coherent() {
             .execute_instruction(&mut stx, &owner, instruction)
             .expect("setup instruction succeeds");
     }
-
     let transition = ConfidentialPolicyTransition {
         new_mode: ConfidentialPolicyMode::TransparentOnly,
         effective_height: 2,
@@ -427,14 +402,12 @@ fn stale_confidential_downgrade_is_discarded_and_metadata_remains_coherent() {
     );
     stx.apply();
     block.commit().expect("commit stale pending transition");
-
     let transition_header =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     state
         .block(transition_header)
         .commit()
         .expect("commit defensive transition sweep");
-
     let view = state.view();
     let definition = view
         .world
@@ -473,7 +446,6 @@ fn stale_confidential_downgrade_is_discarded_and_metadata_remains_coherent() {
         "persisted metadata must clear the rejected transition"
     );
 }
-
 #[test]
 fn confidential_policy_transition_applies_at_effective_height() {
     let kura = Kura::blank_kura_for_testing();
@@ -482,7 +454,6 @@ fn confidential_policy_transition_applies_at_effective_height() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -516,7 +487,6 @@ fn confidential_policy_transition_applies_at_effective_height() {
     set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
     block.commit().expect("commit setup block");
-
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
@@ -539,7 +509,6 @@ fn confidential_policy_transition_applies_at_effective_height() {
         .unwrap();
     stx2.apply();
     block2.commit().expect("commit schedule block");
-
     // New block at the scheduled effective height.
     let header3 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(effective_height).unwrap(),
@@ -567,7 +536,6 @@ fn confidential_policy_transition_applies_at_effective_height() {
         .unwrap();
     stx3.apply();
     block3.commit().expect("commit effective block");
-
     let view = state.view();
     let def = view
         .world
@@ -587,7 +555,6 @@ fn confidential_policy_transition_applies_at_effective_height() {
     assert_eq!(pending.transition_id(), &transition_id_2);
     assert_eq!(pending.effective_height(), next_effective);
 }
-
 #[test]
 fn cancel_confidential_policy_transition_clears_pending() {
     let kura = Kura::blank_kura_for_testing();
@@ -596,7 +563,6 @@ fn cancel_confidential_policy_transition_clears_pending() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -630,7 +596,6 @@ fn cancel_confidential_policy_transition_clears_pending() {
     set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
     block.commit().expect("commit setup block");
-
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
@@ -651,7 +616,6 @@ fn cancel_confidential_policy_transition_clears_pending() {
         .clone()
         .execute_instruction(&mut stx2, &owner, schedule.into())
         .unwrap();
-
     let cancel = iroha_data_model::isi::zk::CancelConfidentialPolicyTransition::new(
         asset_def_id.clone(),
         transition_id.clone(),
@@ -663,7 +627,6 @@ fn cancel_confidential_policy_transition_clears_pending() {
         .unwrap();
     stx2.apply();
     block2.commit().expect("commit cancel block");
-
     let view = state.view();
     let def = view
         .world
@@ -690,7 +653,6 @@ fn cancel_confidential_policy_transition_clears_pending() {
         "pending transition metadata should be cleared"
     );
 }
-
 #[test]
 fn zk_roots_are_bounded_in_world_state() {
     use iroha_config::parameters::{actual as cfg, defaults};
@@ -700,7 +662,6 @@ fn zk_roots_are_bounded_in_world_state() {
         state::{State, World},
     };
     use nonzero_ext::nonzero;
-
     // Create state and set a small ZK cap
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -781,12 +742,10 @@ fn zk_roots_are_bounded_in_world_state() {
             },
         })
         .expect("empty SCCP outbox accepts bounded-roots test configuration");
-
     // Begin block/transaction
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     // Setup domain/account/asset and mint
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId =
@@ -815,7 +774,6 @@ fn zk_roots_are_bounded_in_world_state() {
             .execute_instruction(&mut stx, &owner, instr)
             .unwrap();
     }
-
     // Seed many authenticated commitment transitions to exceed the root-history cap.
     let mut zk_state = stx
         .world
@@ -834,14 +792,12 @@ fn zk_roots_are_bounded_in_world_state() {
     stx.world.zk_assets.insert(asset_def_id.clone(), zk_state);
     stx.apply();
     block.commit().expect("commit bounded root-history fixture");
-
     // Assert bounded roots in world state
     let view = state.view();
     let zk_state = view.world.zk_assets().get(&asset_def_id).expect("zk state");
     assert!(zk_state.root_history.len() <= 4);
     assert_eq!(zk_state.root_history.len(), 4);
 }
-
 #[test]
 fn frontier_checkpoints_respect_reorg_depth_bound() {
     use iroha_config::parameters::{actual as cfg, defaults};
@@ -851,11 +807,9 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
         state::{State, World},
     };
     use nonzero_ext::nonzero;
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::new(), kura, query);
-
     state
         .set_zk(cfg::Zk {
             halo2: cfg::Halo2 {
@@ -931,7 +885,6 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
             },
         })
         .expect("empty SCCP outbox accepts checkpoint test configuration");
-
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -939,7 +892,6 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
             "zcoin".parse().unwrap(),
         );
     let (owner, _owner_key) = gen_account_in("zkd");
-
     // Block 1: bootstrap domain/account/asset and register policy.
     {
         let header =
@@ -970,7 +922,6 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
         stx.apply();
         block.commit().expect("commit setup block");
     }
-
     // Subsequent blocks append one authenticated commitment and advance frontiers.
     for h in 2_u64..=8 {
         let header = iroha_data_model::block::BlockHeader::new(
@@ -1002,7 +953,6 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
         stx.apply();
         block.commit().expect("commit frontier checkpoint block");
     }
-
     let view = state.view();
     let zk_state = view.world.zk_assets().get(&asset_def_id).expect("zk state");
     assert_eq!(zk_state.frontier_checkpoints.len(), 4);

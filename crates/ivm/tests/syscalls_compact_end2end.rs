@@ -1,13 +1,10 @@
 use ivm::{IVM, syscalls};
-
 mod common;
 use common::assemble_syscalls;
-
 #[test]
 fn compact_proof_decodes_and_verifies() {
     use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree};
     use sha2::{Digest, Sha256};
-
     let mut vm = IVM::new(u64::MAX);
     // Write 8 bytes into the second 32-byte chunk.
     let addr = ivm::Memory::HEAP_START + 32;
@@ -15,7 +12,6 @@ fn compact_proof_decodes_and_verifies() {
         .store_u64(addr, 0xDEAD_BEEF_DEAD_BEEFu64)
         .expect("store");
     vm.memory.commit();
-
     // Request a compact proof with depth cap 16 and also request root.
     let out_ptr = ivm::Memory::OUTPUT_START;
     let root_ptr = ivm::Memory::OUTPUT_START + 4096;
@@ -23,11 +19,9 @@ fn compact_proof_decodes_and_verifies() {
     vm.set_register(11, out_ptr);
     vm.set_register(12, 16);
     vm.set_register(13, root_ptr);
-
     let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT as u8]);
     vm.load_program(&prog).expect("load");
     vm.run().expect("run");
-
     // Read header to determine total length
     let mut hdr = [0u8; 1 + 4 + 4];
     vm.memory.load_bytes(out_ptr, &mut hdr).expect("load hdr");
@@ -35,10 +29,8 @@ fn compact_proof_decodes_and_verifies() {
     let total_len = 1 + 4 + 4 + depth * 32;
     let mut buf = vec![0u8; total_len];
     vm.memory.load_bytes(out_ptr, &mut buf).expect("load body");
-
     let (compact, used) = ivm::merkle_utils::decode_compact_proof_bytes(&buf).expect("decode");
     assert_eq!(used, total_len);
-
     // Reconstruct leaf typed hash (SHA-256(chunk), prehashed) and root typed hash
     let chunk_base = (addr / 32) * 32;
     let mut chunk = [0u8; 32];
@@ -54,7 +46,6 @@ fn compact_proof_decodes_and_verifies() {
         .load_bytes(root_ptr, &mut root_bytes)
         .expect("load root");
     let root = HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(root_bytes));
-
     // A depth-capped syscall root is a path-fragment root, not a full-tree
     // membership commitment. Expand the self-contained direction bitset and
     // reconstruct exactly that partial root.
@@ -69,17 +60,14 @@ fn compact_proof_decodes_and_verifies() {
         .expect("proof height equals compact depth");
     assert_eq!(computed, root);
 }
-
 #[test]
 fn compact_proof_dir_flip_fails() {
     use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleTree};
     use sha2::{Digest, Sha256};
-
     let mut vm = IVM::new(u64::MAX);
     let addr = ivm::Memory::HEAP_START + 32;
     vm.memory.store_u32(addr, 0xDEAD_BEEF).unwrap();
     vm.memory.commit();
-
     // Request compact proof
     let out_ptr = ivm::Memory::OUTPUT_START;
     let root_ptr = ivm::Memory::OUTPUT_START + 4096;
@@ -90,7 +78,6 @@ fn compact_proof_dir_flip_fails() {
     let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT as u8]);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
-
     // Decode proof
     let mut hdr = [0u8; 9];
     vm.memory.load_bytes(out_ptr, &mut hdr).unwrap();
@@ -99,7 +86,6 @@ fn compact_proof_dir_flip_fails() {
     let mut buf = vec![0u8; total];
     vm.memory.load_bytes(out_ptr, &mut buf).unwrap();
     let (cp, _) = ivm::merkle_utils::decode_compact_proof_bytes(&buf).unwrap();
-
     // Build leaf and root
     let base = (addr / 32) * 32;
     let mut chunk = [0u8; 32];
@@ -112,7 +98,6 @@ fn compact_proof_dir_flip_fails() {
     vm.memory.load_bytes(root_ptr, &mut root_bytes).unwrap();
     let partial_root =
         HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(root_bytes));
-
     let full = cp
         .clone()
         .try_into_full()
@@ -121,7 +106,6 @@ fn compact_proof_dir_flip_fails() {
         full.compute_partial_root_sha256(&leaf, usize::from(cp.depth())),
         Some(partial_root.clone())
     );
-
     // Flip the lowest direction/index bit and ensure it cannot reconstruct the
     // syscall's partial root.
     let flipped = CompactMerkleProof::from_parts(cp.depth(), cp.dirs() ^ 1, cp.siblings().to_vec());
@@ -133,14 +117,12 @@ fn compact_proof_dir_flip_fails() {
         Some(partial_root)
     );
 }
-
 #[test]
 fn compact_depth_cap_uses_the_full_protocol_register() {
     let mut vm = IVM::new(u64::MAX);
     let addr = ivm::Memory::HEAP_START + 32;
     vm.memory.store_u32(addr, 0xDEAD_BEEF).expect("store");
     vm.memory.commit();
-
     vm.set_register(10, addr);
     vm.set_register(11, ivm::Memory::OUTPUT_START);
     // On a 32-bit host, an unchecked usize cast aliases this value to one.
@@ -151,6 +133,5 @@ fn compact_depth_cap_uses_the_full_protocol_register() {
     let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT as u8]);
     vm.load_program(&prog).expect("load program");
     vm.run().expect("run");
-
     assert!(vm.register(10) > 1);
 }

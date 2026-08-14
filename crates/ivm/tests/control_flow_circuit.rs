@@ -1,6 +1,5 @@
 #![cfg(feature = "ivm_zk_tests")]
 use ivm::halo2::{BranchCircuit, HaltCircuit, JalCircuit, JumpCircuit, JumpRegCircuit};
-
 #[test]
 fn test_jump_circuit() {
     let c = JumpCircuit {
@@ -11,7 +10,6 @@ fn test_jump_circuit() {
     };
     assert!(c.verify().is_ok());
 }
-
 #[test]
 fn test_jal_circuit() {
     let c = JalCircuit {
@@ -23,7 +21,6 @@ fn test_jal_circuit() {
     };
     assert!(c.verify().is_ok());
 }
-
 #[test]
 fn test_jump_reg_circuit() {
     let c = JumpRegCircuit {
@@ -36,7 +33,6 @@ fn test_jump_reg_circuit() {
     };
     assert!(c.verify().is_ok());
 }
-
 #[test]
 fn test_branch_circuit_taken() {
     let c = BranchCircuit {
@@ -48,7 +44,6 @@ fn test_branch_circuit_taken() {
     };
     assert!(c.verify().is_ok());
 }
-
 #[test]
 fn test_branch_circuit_not_taken() {
     let c = BranchCircuit {
@@ -60,7 +55,6 @@ fn test_branch_circuit_not_taken() {
     };
     assert!(c.verify().is_ok());
 }
-
 #[test]
 fn test_halt_circuit() {
     let c = HaltCircuit { pc: 8, next_pc: 12 };

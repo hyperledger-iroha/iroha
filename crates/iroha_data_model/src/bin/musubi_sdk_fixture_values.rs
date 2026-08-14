@@ -1,14 +1,12 @@
 //! Typed construction of the shared Musubi SDK V1 fixture.
-
 use std::fmt::Debug;
-
 use iroha_crypto::SignatureOf;
 use iroha_data_model::{
     account::AccountId,
     musubi::{
         ArchiveId, MUSUBI_MIN_HEALTHY_REPLICAS_V1, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1,
         MusubiAliasHistoryActionV1, MusubiAliasHistoryEntryV1, MusubiAliasHistoryPageV1,
-        MusubiAliasPricingPolicyV1, MusubiAliasQueryV1, MusubiAliasRecordV1,
+        MusubiAliasNameV1, MusubiAliasPricingPolicyV1, MusubiAliasQueryV1, MusubiAliasRecordV1,
         MusubiArchiveAvailabilityV1, MusubiArchiveCommitmentV1, MusubiArchiveLocationPageV1,
         MusubiArchiveLocationQueryV1, MusubiArchiveRecordV1, MusubiArchiveRetentionDecisionV1,
         MusubiArchiveRetentionDispositionV1, MusubiArchiveRetentionPageV1,
@@ -46,15 +44,12 @@ use iroha_data_model::{
     },
 };
 use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
-
 use crate::musubi_fixture_values::{account, fixture_network_id, keypair};
-
 // Public test material only. Every non-zero Ed25519 seed has one fixture role.
 const SDK_PUBLISHER_SEED: u8 = 0x31;
 const SDK_RECEIPT_BROKER_SEED: u8 = 0x32;
 const SDK_PROVIDER_OWNER_SEED: u8 = 0x33;
 const SDK_PACKAGE_OWNER_SEED: u8 = 0x34;
-
 fn package() -> MusubiPackageIdV1 {
     MusubiPackageIdV1::new(
         DataSpaceId::new(7),
@@ -62,7 +57,6 @@ fn package() -> MusubiPackageIdV1 {
         MusubiPackageNameV1::new("math-utils").expect("SDK fixture package name"),
     )
 }
-
 fn release() -> MusubiReleaseIdV1 {
     MusubiReleaseIdV1::new(
         package(),
@@ -71,7 +65,6 @@ fn release() -> MusubiReleaseIdV1 {
             .expect("SDK fixture release version"),
     )
 }
-
 fn snapshot() -> MusubiRegistrySnapshotV1 {
     MusubiRegistrySnapshotV1 {
         finalized_height: 50,
@@ -79,14 +72,12 @@ fn snapshot() -> MusubiRegistrySnapshotV1 {
         index_revision: 9,
     }
 }
-
 fn page_request() -> MusubiPageRequestV1 {
     MusubiPageRequestV1 {
         limit: 50,
         cursor: None,
     }
 }
-
 fn archive_commitment() -> MusubiArchiveCommitmentV1 {
     let commitment = MusubiArchiveCommitmentV1 {
         root_cid: ManifestRootCid::from_blake3_digest([1; 32]).expect("SDK fixture root CID"),
@@ -113,7 +104,6 @@ fn archive_commitment() -> MusubiArchiveCommitmentV1 {
         .expect("SDK fixture archive commitment");
     commitment
 }
-
 fn release_metadata() -> MusubiReleaseMetadataV1 {
     let mut metadata = MusubiReleaseMetadataV1 {
         description: Some(
@@ -149,7 +139,6 @@ fn release_metadata() -> MusubiReleaseMetadataV1 {
     metadata.validate().expect("SDK fixture metadata");
     metadata
 }
-
 fn release_manifest(commitment: &MusubiArchiveCommitmentV1) -> MusubiReleaseManifestV1 {
     let manifest = MusubiReleaseManifestV1 {
         release: release(),
@@ -165,7 +154,6 @@ fn release_manifest(commitment: &MusubiArchiveCommitmentV1) -> MusubiReleaseMani
     manifest.validate().expect("SDK fixture release manifest");
     manifest
 }
-
 fn release_record(
     manifest: &MusubiReleaseManifestV1,
     publisher: &AccountId,
@@ -193,7 +181,6 @@ fn release_record(
     record.validate().expect("SDK fixture release record");
     record
 }
-
 fn signed_seed_receipt(
     commitment: &MusubiArchiveCommitmentV1,
     manifest: &MusubiReleaseManifestV1,
@@ -228,7 +215,6 @@ fn signed_seed_receipt(
         .expect("SDK seed-ingress receipt signature");
     receipt
 }
-
 fn signed_provider_attestation(
     commitment: &MusubiArchiveCommitmentV1,
     manifest: &MusubiReleaseManifestV1,
@@ -282,7 +268,6 @@ fn signed_provider_attestation(
         .expect("SDK provider attestation signature");
     attestation
 }
-
 fn typed_value<T>(value: &T, label: &str) -> Value
 where
     T: Debug + PartialEq + JsonDeserialize + JsonSerialize,
@@ -296,7 +281,6 @@ where
     assert_eq!(reencoded, encoded, "{label} canonical typed JSON");
     encoded
 }
-
 fn route<T, U>(id: &str, request: &T, response: &U) -> Value
 where
     T: Debug + PartialEq + JsonDeserialize + JsonSerialize,
@@ -309,7 +293,6 @@ where
         "response": (typed_value(response, "SDK route response")),
     })
 }
-
 fn canonical_vectors() -> Value {
     let namespace = "sora"
         .parse::<MusubiNamespaceV1>()
@@ -376,7 +359,6 @@ fn canonical_vectors() -> Value {
             })
         })
         .collect::<Vec<_>>();
-
     norito::json!({
         "namespace": (typed_value(&namespace, "SDK namespace")),
         "package_name": (typed_value(&package_name, "SDK package name")),
@@ -388,7 +370,6 @@ fn canonical_vectors() -> Value {
         "requirement_matches": requirement_matches,
     })
 }
-
 fn routes() -> Vec<Value> {
     let network_id = fixture_network_id();
     let snapshot = snapshot();
@@ -438,7 +419,6 @@ fn routes() -> Vec<Value> {
     exact_release
         .validate_for(&exact_release_query)
         .expect("SDK exact-release route");
-
     let package_record = MusubiPackageRecordV1 {
         package: package.clone(),
         claimed_namespace: "sora".parse().expect("SDK claimed namespace"),
@@ -453,7 +433,6 @@ fn routes() -> Vec<Value> {
         },
     };
     package_record.validate().expect("SDK exact package record");
-
     let provider_attestation = signed_provider_attestation(&commitment, &manifest);
     let provider_key = provider_attestation.key();
     let provider_record = MusubiProviderBundleAttestationRecordV1 {
@@ -470,7 +449,6 @@ fn routes() -> Vec<Value> {
         .attestation
         .verify(&provider_record.attestation.payload.binding)
         .expect("SDK provider attestation remains signed");
-
     let resolver_query = MusubiResolverIndexQueryV1 {
         package: package.clone(),
         requirement: Some(
@@ -490,7 +468,6 @@ fn routes() -> Vec<Value> {
     resolver_page
         .validate_for(&resolver_query)
         .expect("SDK resolver page");
-
     let package_page_query = MusubiPackagePageQueryV1 {
         package: package.clone(),
         page: page_request(),
@@ -538,7 +515,6 @@ fn routes() -> Vec<Value> {
     maintainer_page
         .validate_for(&package_page_query)
         .expect("SDK maintainer page");
-
     let receipt = signed_seed_receipt(&commitment, &manifest);
     let archive_record = MusubiArchiveRecordV1 {
         archive_id: commitment.archive_id(),
@@ -562,7 +538,6 @@ fn routes() -> Vec<Value> {
         snapshot,
     };
     archive_page.validate().expect("SDK archive-location page");
-
     let retention_ids = [0x10, 0x20, 0x30, 0x40].map(|byte| ArchiveId::new([byte; 32]));
     let retention_query = MusubiArchiveRetentionQueryV1 {
         archive_ids: retention_ids.to_vec(),
@@ -638,8 +613,9 @@ fn routes() -> Vec<Value> {
         finalized_time_ms: 1_700_000_000_000,
     };
     retention_page.validate().expect("SDK retention page");
-
-    let alias = "math".parse().expect("SDK fixture alias");
+    let alias = "math"
+        .parse::<MusubiAliasNameV1>()
+        .expect("SDK fixture alias");
     let alias_query = MusubiAliasQueryV1 {
         alias: alias.clone(),
         page: page_request(),
@@ -672,7 +648,6 @@ fn routes() -> Vec<Value> {
     alias_history_page
         .validate_for(&alias_query)
         .expect("SDK alias-history page");
-
     let ordered_query = MusubiOrderedPrefixQueryV1 {
         prefix: MusubiOrderedPrefixV1::new("sora/").expect("SDK ordered prefix"),
         page: page_request(),
@@ -702,7 +677,6 @@ fn routes() -> Vec<Value> {
     ordered_page
         .validate_for(&ordered_query)
         .expect("SDK ordered-prefix page");
-
     let search_query = MusubiSearchQueryV1 {
         query: "arithmetic math".to_owned(),
         page: MusubiSearchPageRequestV1 {
@@ -729,7 +703,6 @@ fn routes() -> Vec<Value> {
     search_page
         .validate_for(&search_query)
         .expect("SDK search page");
-
     vec![
         route(
             "exact-package",
@@ -759,7 +732,6 @@ fn routes() -> Vec<Value> {
         route("search", &search_query, &search_page),
     ]
 }
-
 fn rejection_vectors() -> Value {
     const NAMES: [&str; 5] = ["", "Upper", "leading-", "two--hyphens", "has/slash"];
     const VERSIONS: [&str; 7] = [
@@ -804,7 +776,6 @@ fn rejection_vectors() -> Value {
         "requirements": (REQUIREMENTS.to_vec()),
     })
 }
-
 /// Construct the complete SDK fixture from concrete request and response types.
 #[must_use]
 pub(crate) fn sdk_document() -> Value {
@@ -817,20 +788,16 @@ pub(crate) fn sdk_document() -> Value {
         "reject": (rejection_vectors()),
     })
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{NetworkId, block::BlockHeader};
-
     use super::*;
-
     fn substituted_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0xA7; Hash::LENGTH]),
         ))
     }
-
     #[test]
     fn stale_seed_receipt_signature_rejects_network_substitution() {
         let commitment = archive_commitment();
@@ -842,7 +809,6 @@ mod tests {
             "changing NetworkId without resigning must invalidate the receipt"
         );
     }
-
     #[test]
     fn stale_provider_signature_rejects_network_substitution() {
         let commitment = archive_commitment();

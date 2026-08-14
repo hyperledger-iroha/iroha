@@ -453,20 +453,21 @@ def _serviced_candidate_production_source_fidelity_errors(
         description: str,
     ) -> RustItem | None:
         discriminator_tokens = rust_code_tokens(discriminator)
+        candidates = rust_function_items_from_structural(
+            sources[source_key], structural[source_key], item_name
+        )
+        discriminator_counts = tuple(
+            _token_sequence_count(rust_code_tokens(item.source), discriminator_tokens)
+            for item in candidates
+        )
         items = [
-            item
-            for item in rust_function_items_from_structural(
-                sources[source_key], structural[source_key], item_name
-            )
-            if _token_sequence_count(
-                rust_code_tokens(item.source), discriminator_tokens
-            )
-            == 1
+            item for item, count in zip(candidates, discriminator_counts) if count == 1
         ]
         if len(items) != 1:
             errors.append(
                 f"{paths[source_key]}: require exactly one parsed {description} "
-                f"function named {item_name}; found {len(items)}"
+                f"function named {item_name}; found {len(items)}; "
+                f"discriminator_counts={discriminator_counts!r}"
             )
             return None
         return items[0]
@@ -545,6 +546,18 @@ def _serviced_candidate_production_source_fidelity_errors(
             "open",
             "BoundSafetyWalDirectory::bind(&parent)",
             "SafetyWal open",
+        ),
+        "safety_open_bound": select_item(
+            "safety_wal",
+            "open_bound",
+            "recover_wal_stream(&mut file, &path, identity, WAL_RETENTION_LIMITS)",
+            "bound SafetyWal open",
+        ),
+        "stream_recovery": select_item(
+            "safety_wal",
+            "recover_wal_stream",
+            "let file_len = file.metadata()",
+            "bounded streaming SafetyWal recovery",
         ),
         "adjacent_read": select_item(
             "safety_wal",
@@ -795,12 +808,12 @@ if !opened.is_file()
         )
         if item is None:
             continue
-        if "snapshot storage is unsupported on this platform" not in item.source:
+        literal_source = mask_rust_comments(item.source)
+        if literal_source.count("snapshot storage is unsupported on this platform") != 1:
             errors.append(
                 f"{paths['safety_wal']}:{item.line}: non-Unix adjacent "
                 "storage operation cannot fall back to path I/O"
             )
-    safety_open = safety_items["safety_open"]
     require_item_monotone_order(
         "safety_wal",
         safety_items,
@@ -808,20 +821,35 @@ if !opened.is_file()
         (
             "fs::create_dir_all(&parent)",
             "BoundSafetyWalDirectory::bind(&parent)",
+            "Self::open_bound(",
+        ),
+        "SafetyWal fixture opening must bind its directory before delegating to the shared opener",
+    )
+    safety_open_bound = safety_items["safety_open_bound"]
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "safety_open_bound",
+        (
             "directory.open_wal_leaf(&wal_name)",
             "directory.verify_leaf(&file, &wal_name)",
             "let read_metadata_before = file.metadata()",
-            "file.read_to_end(&mut bytes)",
+            "recover_wal_stream(&mut file, &path, identity, WAL_RETENTION_LIMITS)?",
             "let read_metadata_after = file.metadata()",
             "wal_metadata_revision_unchanged(&read_metadata_before, &read_metadata_after)",
-            "recover_wal_file(&bytes, identity, &frame_hash)",
+            "if recovery.incomplete_tail",
+            "file.set_len(valid_prefix_len)",
+            "wal_metadata_revision_unchanged(&truncated_before, &truncated_after)",
+            "file.seek(SeekFrom::End(0))",
+            "directory.verify_leaf(&file, &wal_name)",
+            "WalAppendState::from_verified_stream_recovery(",
         ),
         "SafetyWal recovery must bind before opening and bracket exact bytes with revisions",
     )
     for sequence, description in (
         (
-            "wal_metadata_revision_unchanged(&read_metadata_before, &read_metadata_after) || read_metadata_after.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)",
-            "WAL recovery must reject revision or exact-length drift",
+            "if !wal_metadata_revision_unchanged(&read_metadata_before, &read_metadata_after)",
+            "WAL recovery must reject opened-file revision drift",
         ),
         (
             "file.set_len(valid_prefix_len).and_then(|()| file.sync_data())",
@@ -829,8 +857,34 @@ if !opened.is_file()
         ),
     ):
         _require_rust_token_sequence(
-            paths["safety_wal"], safety_open, sequence, description, errors
+            paths["safety_wal"], safety_open_bound, sequence, description, errors
         )
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "stream_recovery",
+        (
+            "let file_len = file.metadata()",
+            "file.seek(SeekFrom::Start(0))",
+            "read_up_to(file, &mut file_header)",
+            "if header_len < FILE_HEADER_LEN",
+            "recover_wal_file(&file_header, identity, &frame_hash)",
+            "while valid_prefix_len < file_len",
+            "read_up_to(file, &mut frame_header)",
+            "if frame_header_len < FRAME_HEADER_LEN",
+            "if payload_len > MAX_RECORD_BYTES",
+            "if encoded_previous != previous_hash",
+            "enforce_retention_limits(path, records.len(), payload_bytes, payload_len, limits)",
+            "let mut scratch = vec![0_u8; SAFETY_WAL_RECOVERY_SCRATCH_BYTES]",
+            "file.read_exact(&mut encoded_hash)",
+            "if encoded_hash != calculated_hash",
+            "let (_, next_payload_total) = retention?",
+            "records.push(RecoveredRecord",
+            "valid_prefix_len = frame_start.checked_add(frame_len)",
+            "Ok(StreamingWalRecovery",
+        ),
+        "streaming WAL recovery must bound allocation, authenticate every frame, and retain only validated records",
+    )
 
     for struct_name, storage_type in (
         ("ServicedCandidateStore", "SafetyWalServicedCandidateStoreAuthority"),
@@ -2124,7 +2178,13 @@ def _effect_capacity_fetch_owner_source_fidelity_errors(
             f"{adapter_path}: durable producer tombstone source must be a regular file"
         )
     else:
-        adapter_source = adapter_path.read_text(encoding="utf-8")
+        repo_root = effects_path.parents[4]
+        _loaded_path, adapter_source = _read_reviewed_rust_source(
+            repo_root,
+            adapter_path.relative_to(repo_root).as_posix(),
+            errors,
+            "durable producer tombstone source",
+        )
         deferred_exact_owners = _require_rust_item(
             adapter_path,
             adapter_source,
@@ -2628,6 +2688,17 @@ Err(error) => return Err(error),
         "source-faithful certified-request capacity deferral method",
         errors,
         expected_attributes=("#[allow(clippy::too_many_arguments)]",),
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+self.recovered_decision_fetches
+    .values()
+    .any(|owner| owner.matches_body_coordinates(round, subject))
+""",
+        "ordinary Fetch admission must reject coordinates already owned by recovered Decision Fetch",
+        errors,
     )
     _require_rust_token_sequence(
         effects_path,

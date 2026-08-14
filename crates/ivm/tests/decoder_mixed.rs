@@ -1,5 +1,4 @@
 use ivm::{Memory, VMError, decode, encoding, instruction};
-
 #[test]
 fn zero_word_decodes_as_32bit() {
     let mut mem = Memory::new(4);
@@ -8,7 +7,6 @@ fn zero_word_decodes_as_32bit() {
     assert_eq!(len, 4);
     assert_eq!(inst, 0);
 }
-
 #[test]
 fn wide_halt_decodes() {
     let halt = encoding::wide::encode_halt();
@@ -18,7 +16,6 @@ fn wide_halt_decodes() {
     assert_eq!(len, 4);
     assert_eq!((inst >> 24) as u8, instruction::wide::control::HALT);
 }
-
 #[test]
 fn misaligned_pc_is_error() {
     let mut mem = Memory::new(4);
@@ -29,7 +26,6 @@ fn misaligned_pc_is_error() {
         VMError::MemoryAccessViolation { addr: 1, .. }
     ));
 }
-
 #[test]
 fn misaligned_pc_various_odd_addresses() {
     let mut mem = Memory::new(12);
@@ -41,7 +37,6 @@ fn misaligned_pc_various_odd_addresses() {
         assert!(matches!(err, VMError::MemoryAccessViolation { addr, .. } if addr as u64 == pc));
     }
 }
-
 #[test]
 fn decode_oob_reports_violation() {
     let mut mem = Memory::new(4);
@@ -49,7 +44,6 @@ fn decode_oob_reports_violation() {
     let err = decode(&mem, 4).unwrap_err();
     assert!(matches!(err, VMError::MemoryAccessViolation { .. }));
 }
-
 #[test]
 fn decode_tail_requires_full_word() {
     let mut mem = Memory::new(3);

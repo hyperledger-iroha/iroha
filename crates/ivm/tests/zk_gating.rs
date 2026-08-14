@@ -1,7 +1,5 @@
 //! Tests for header feature gating of ZK instructions.
-
 use ivm::{IVM, ProgramMetadata, VMError, encoding, instruction};
-
 fn build_prog_with_assert(zk_mode: bool) -> Vec<u8> {
     let mut code = Vec::new();
     let word = encoding::wide::encode_rr(instruction::wide::zk::ASSERT, 0, 1, 0);
@@ -17,7 +15,6 @@ fn build_prog_with_assert(zk_mode: bool) -> Vec<u8> {
     out.extend_from_slice(&code);
     out
 }
-
 #[test]
 fn zk_ops_rejected_without_header_bit() {
     let prog = build_prog_with_assert(false);
@@ -27,7 +24,6 @@ fn zk_ops_rejected_without_header_bit() {
     let err = vm.run().unwrap_err();
     assert!(matches!(err, VMError::ZkExtensionDisabled));
 }
-
 #[test]
 fn zk_ops_allowed_with_header_bit() {
     let prog = build_prog_with_assert(true);

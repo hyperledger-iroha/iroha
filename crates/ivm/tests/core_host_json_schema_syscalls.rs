@@ -1,5 +1,4 @@
 //! CoreHost JSON encode/decode and schema encode/decode helpers.
-
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     nexus::DataSpaceId,
@@ -12,7 +11,6 @@ use ivm::{
     EmbeddedStateType, IVM, PointerType, ProgramMetadata, encoding, instruction::wide, syscalls,
 };
 mod common;
-
 fn tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let payload = common::payload_for_type(pty, payload);
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
@@ -24,7 +22,6 @@ fn tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v.extend_from_slice(&h);
     v
 }
-
 fn alloc_heap_tlv(vm: &mut IVM, bytes: &[u8]) -> u64 {
     let addr = vm.memory.alloc(bytes.len() as u64).expect("alloc heap tlv");
     vm.memory
@@ -32,7 +29,6 @@ fn alloc_heap_tlv(vm: &mut IVM, bytes: &[u8]) -> u64 {
         .expect("store heap direct tlv");
     addr
 }
-
 fn state_map_interface(name: &str, key: EmbeddedStateType) -> EmbeddedContractInterfaceV1 {
     EmbeddedContractInterfaceV1 {
         seiyaku_name: "DirectMapKeyFixture".to_owned(),
@@ -66,7 +62,6 @@ fn state_map_interface(name: &str, key: EmbeddedStateType) -> EmbeddedContractIn
         error_codes: Vec::new(),
     }
 }
-
 fn assemble_state_map_syscall(number: u32, name: &str, key: EmbeddedStateType) -> Vec<u8> {
     let mut program = ProgramMetadata::default().encode();
     program.extend_from_slice(&state_map_interface(name, key).encode_section());
@@ -80,7 +75,6 @@ fn assemble_state_map_syscall(number: u32, name: &str, key: EmbeddedStateType) -
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     program
 }
-
 fn assemble_state_map_syscall_with_literals(
     number: u32,
     name: &str,
@@ -103,7 +97,6 @@ fn assemble_state_map_syscall_with_literals(
             .expect("literal offset remains bounded");
     }
     let post_pad = (4 - ((section.len() + 16 + offsets_len + data.len()) % 4)) % 4;
-
     let mut program = ProgramMetadata::default().encode();
     program.extend_from_slice(&section);
     program.extend_from_slice(&ivm_abi::metadata::LITERAL_SECTION_MAGIC);
@@ -146,7 +139,6 @@ fn assemble_state_map_syscall_with_literals(
         .collect();
     (program, literal_ptrs)
 }
-
 fn unwrap_some_word(vm: &IVM) -> u64 {
     let layout = ivm::sum::SumLayoutV1::option(1).expect("Option layout");
     let (is_some, words) =
@@ -155,7 +147,6 @@ fn unwrap_some_word(vm: &IVM) -> u64 {
     assert_eq!(words.len(), 1);
     words[0]
 }
-
 fn checked_contract_authority_fixture() -> AccountId {
     AccountId::new(
         KeyPair::try_random()
@@ -164,7 +155,6 @@ fn checked_contract_authority_fixture() -> AccountId {
             .clone(),
     )
 }
-
 #[test]
 fn contract_authority_fixture_uses_checked_ed25519_key_generation() {
     let authority = checked_contract_authority_fixture();
@@ -172,10 +162,8 @@ fn contract_authority_fixture_uses_checked_ed25519_key_generation() {
         .expect_single_signatory()
         .try_algorithm()
         .expect("fixture authority public key has a valid algorithm");
-
     assert_eq!(algorithm, Algorithm::Ed25519);
 }
-
 #[test]
 fn json_encode_decode_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
@@ -223,7 +211,6 @@ fn json_encode_decode_roundtrip() {
     let tlv_j = vm.memory.validate_tlv(p_out).unwrap();
     assert_eq!(tlv_j.type_id, PointerType::Json);
 }
-
 #[test]
 fn json_decode_rejects_retired_blob_carrier() {
     let mut vm = IVM::new(u64::MAX);
@@ -248,12 +235,10 @@ fn json_decode_rejects_retired_blob_carrier() {
     assert_eq!(vm.run(), Err(ivm::VMError::NoritoInvalid));
     assert_eq!(vm.register(10), p_blob);
 }
-
 #[test]
 fn json_get_blob_hex_accepts_canonical_lowercase_hex() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
-
     let hash = iroha_crypto::Hash::new(b"settlement");
     let hash_hex = hex::encode(hash.as_ref());
     let json = format!(r#"{{"settlement_hash":"0x{hash_hex}"}}"#);
@@ -263,19 +248,16 @@ fn json_get_blob_hex_accepts_canonical_lowercase_hex() {
     let p_key = vm
         .alloc_input_tlv(&tlv(PointerType::Name, b"settlement_hash"))
         .unwrap();
-
     let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_BLOB_HEX as u8]);
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
-
     let out_ptr = unwrap_some_word(&vm);
     let tlv_out = vm.memory.validate_tlv(out_ptr).unwrap();
     assert_eq!(tlv_out.type_id, PointerType::Blob);
     assert_eq!(tlv_out.payload, hash.as_ref());
 }
-
 #[test]
 fn json_get_blob_hex_rejects_noncanonical_and_malformed_spellings() {
     for invalid in ["deadbeef", "hash:deadbeef", "0xDEADBEEF", "0xabc", "0xzz"] {
@@ -293,7 +275,6 @@ fn json_get_blob_hex_rejects_noncanonical_and_malformed_spellings() {
         vm.set_register(11, p_key);
         vm.load_program(&program).expect("load blob getter");
         vm.run().expect("noncanonical values return Option::none");
-
         let layout = ivm::sum::SumLayoutV1::option(1).expect("Option layout");
         let (is_some, words) =
             ivm::sum::read_words(&vm, vm.register(10), layout).expect("read blob getter Option");
@@ -301,24 +282,20 @@ fn json_get_blob_hex_rejects_noncanonical_and_malformed_spellings() {
         assert!(words.is_empty());
     }
 }
-
 #[test]
 fn json_get_asset_definition_id_reads_address_literals() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
-
     let json = br#"{"asset_definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM"}"#;
     let p_json = vm.alloc_input_tlv(&tlv(PointerType::Json, json)).unwrap();
     let p_key = vm
         .alloc_input_tlv(&tlv(PointerType::Name, b"asset_definition_id"))
         .unwrap();
-
     let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID as u8]);
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
-
     let out_ptr = unwrap_some_word(&vm);
     let tlv_out = vm.memory.validate_tlv(out_ptr).unwrap();
     assert_eq!(tlv_out.type_id, PointerType::AssetDefinitionId);
@@ -328,7 +305,6 @@ fn json_get_asset_definition_id_reads_address_literals() {
         AssetDefinitionId::parse_address_literal("62Fk4FPcMuLvW5QjDGNF2a4jAmjM").unwrap()
     );
 }
-
 #[test]
 fn schema_encode_decode_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
@@ -370,7 +346,6 @@ fn schema_encode_decode_roundtrip() {
     let tlv_j = vm.memory.validate_tlv(p_out).unwrap();
     assert_eq!(tlv_j.type_id, PointerType::Json);
 }
-
 #[test]
 fn schema_decode_rejects_blob() {
     let mut vm = IVM::new(u64::MAX);
@@ -396,7 +371,6 @@ fn schema_decode_rejects_blob() {
     let p_blob_alt = vm
         .alloc_input_tlv(&tlv(PointerType::Blob, encoded.payload))
         .unwrap();
-
     let dec = common::assemble(
         &[
             encoding::wide::encode_sys(wide::system::SCALL, syscalls::SYSCALL_SCHEMA_DECODE as u8)
@@ -411,7 +385,6 @@ fn schema_decode_rejects_blob() {
     let err = vm.run().unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }
-
 #[test]
 fn schema_unknown_and_malformed_inputs_fail_closed() {
     let generic_json = iroha_primitives::json::Json::from_str_norito(r#"{"value":1}"#)
@@ -446,7 +419,6 @@ fn schema_unknown_and_malformed_inputs_fail_closed() {
         assert_eq!(vm.register(10), p_schema);
         assert_eq!(vm.register(11), p_bytes);
     }
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let p_schema = vm
@@ -470,7 +442,6 @@ fn schema_unknown_and_malformed_inputs_fail_closed() {
     assert_eq!(vm.register(10), p_schema);
     assert_eq!(vm.register(11), p_json);
 }
-
 #[test]
 fn schema_info_resolves_only_explicit_families() {
     let known = [
@@ -482,7 +453,6 @@ fn schema_info_resolves_only_explicit_families() {
         ("QueryRequest", "QueryRequest", 1usize),
         ("QueryResponse", "QueryResponse", 1usize),
     ];
-
     for (schema, expected_current, expected_versions) in known {
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(CoreHost::new());
@@ -510,7 +480,6 @@ fn schema_info_resolves_only_explicit_families() {
             "version count for {schema}"
         );
     }
-
     for schema in ["UnknownSchema", "OrderV2", "TradeV3", "Query"] {
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(CoreHost::new());
@@ -524,7 +493,6 @@ fn schema_info_resolves_only_explicit_families() {
         assert_eq!(vm.register(10), p_schema);
     }
 }
-
 #[test]
 fn json_get_quantity_reads_canonical_decimal_strings() {
     let mut vm = IVM::new(u64::MAX);
@@ -534,13 +502,11 @@ fn json_get_quantity_reads_canonical_decimal_strings() {
     let p_key = vm
         .alloc_input_tlv(&tlv(PointerType::Name, b"amount"))
         .unwrap();
-
     let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_QUANTITY]);
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
-
     let tlv = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
     assert_eq!(tlv.type_id, PointerType::Quantity);
     let value = QuantityValueV1::decode_frame(tlv.payload)
@@ -548,13 +514,11 @@ fn json_get_quantity_reads_canonical_decimal_strings() {
         .into_quantity();
     assert_eq!(value, "0.00001".parse::<Quantity>().expect("quantity"));
 }
-
 #[test]
 fn json_get_quantity_accepts_input_heap_and_literal_pointers() {
     let json_tlv = tlv(PointerType::Json, br#"{"amount":"0.00001"}"#);
     let key_tlv = tlv(PointerType::Name, b"amount");
     let canonical_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_QUANTITY]);
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let p_json = vm.alloc_input_tlv(&json_tlv).expect("alloc input json");
@@ -569,7 +533,6 @@ fn json_get_quantity_accepts_input_heap_and_literal_pointers() {
         .expect("decode input quantity")
         .into_quantity();
     assert_eq!(value, "0.00001".parse::<Quantity>().expect("quantity"));
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let p_json = alloc_heap_tlv(&mut vm, &json_tlv);
@@ -584,14 +547,12 @@ fn json_get_quantity_accepts_input_heap_and_literal_pointers() {
         .expect("decode heap quantity")
         .into_quantity();
     assert_eq!(value, "0.00001".parse::<Quantity>().expect("quantity"));
-
     let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
         &[syscalls::SYSCALL_JSON_GET_QUANTITY],
         &[json_tlv.as_slice(), key_tlv.as_slice()],
     );
     let json_addr = literal_ptrs[0];
     let key_addr = literal_ptrs[1];
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&literal_prog).unwrap();
@@ -605,12 +566,10 @@ fn json_get_quantity_accepts_input_heap_and_literal_pointers() {
         .into_quantity();
     assert_eq!(value, "0.00001".parse::<Quantity>().expect("quantity"));
 }
-
 #[test]
 fn schema_info_accepts_input_heap_and_literal_pointers() {
     let schema_tlv = tlv(PointerType::Name, b"Order");
     let canonical_prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_INFO as u8]);
-
     let decode_schema_info = |vm: &IVM| {
         let tlv = vm
             .memory
@@ -624,7 +583,6 @@ fn schema_info_accepts_input_heap_and_literal_pointers() {
         assert!(value.get("current").is_some());
         assert!(value.get("versions").is_some());
     };
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let p_schema = vm.alloc_input_tlv(&schema_tlv).expect("alloc input schema");
@@ -632,7 +590,6 @@ fn schema_info_accepts_input_heap_and_literal_pointers() {
     vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_schema_info(&vm);
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let p_schema = alloc_heap_tlv(&mut vm, &schema_tlv);
@@ -640,13 +597,11 @@ fn schema_info_accepts_input_heap_and_literal_pointers() {
     vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_schema_info(&vm);
-
     let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
         &[syscalls::SYSCALL_SCHEMA_INFO as u8],
         &[schema_tlv.as_slice()],
     );
     let schema_addr = literal_ptrs[0];
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&literal_prog).unwrap();
@@ -654,13 +609,11 @@ fn schema_info_accepts_input_heap_and_literal_pointers() {
     vm.run().unwrap();
     decode_schema_info(&vm);
 }
-
 #[test]
 fn json_set_i64_accepts_input_heap_and_literal_pointers() {
     let json_tlv = tlv(PointerType::Json, br#"{}"#);
     let key_tlv = tlv(PointerType::Name, b"bucket_id");
     let canonical_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_SET_I64 as u8]);
-
     let decode_bucket_id = |vm: &IVM| {
         let tlv = vm
             .memory
@@ -674,7 +627,6 @@ fn json_set_i64_accepts_input_heap_and_literal_pointers() {
             Some(2)
         );
     };
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let p_json = vm.alloc_input_tlv(&json_tlv).expect("alloc input json");
@@ -685,7 +637,6 @@ fn json_set_i64_accepts_input_heap_and_literal_pointers() {
     vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_bucket_id(&vm);
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let p_json = alloc_heap_tlv(&mut vm, &json_tlv);
@@ -696,14 +647,12 @@ fn json_set_i64_accepts_input_heap_and_literal_pointers() {
     vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_bucket_id(&vm);
-
     let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
         &[syscalls::SYSCALL_JSON_SET_I64 as u8],
         &[json_tlv.as_slice(), key_tlv.as_slice()],
     );
     let json_addr = literal_ptrs[0];
     let key_addr = literal_ptrs[1];
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&literal_prog).unwrap();
@@ -713,7 +662,6 @@ fn json_set_i64_accepts_input_heap_and_literal_pointers() {
     vm.run().unwrap();
     decode_bucket_id(&vm);
 }
-
 #[test]
 fn json_set_account_id_accepts_input_heap_and_literal_pointers() {
     let owner_literal = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
@@ -725,7 +673,6 @@ fn json_set_account_id_accepts_input_heap_and_literal_pointers() {
     let key_tlv = tlv(PointerType::Name, b"owner");
     let owner_tlv = tlv(PointerType::AccountId, owner_literal.as_bytes());
     let canonical_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_SET_ACCOUNT_ID as u8]);
-
     let decode_owner = |vm: &IVM| {
         let tlv = vm
             .memory
@@ -739,7 +686,6 @@ fn json_set_account_id_accepts_input_heap_and_literal_pointers() {
             Some(expected_owner.as_str())
         );
     };
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let p_json = vm.alloc_input_tlv(&json_tlv).expect("alloc input json");
@@ -751,7 +697,6 @@ fn json_set_account_id_accepts_input_heap_and_literal_pointers() {
     vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_owner(&vm);
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let p_json = alloc_heap_tlv(&mut vm, &json_tlv);
@@ -763,7 +708,6 @@ fn json_set_account_id_accepts_input_heap_and_literal_pointers() {
     vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_owner(&vm);
-
     let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
         &[syscalls::SYSCALL_JSON_SET_ACCOUNT_ID as u8],
         &[
@@ -775,7 +719,6 @@ fn json_set_account_id_accepts_input_heap_and_literal_pointers() {
     let json_addr = literal_ptrs[0];
     let key_addr = literal_ptrs[1];
     let owner_addr = literal_ptrs[2];
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&literal_prog).unwrap();
@@ -785,7 +728,6 @@ fn json_set_account_id_accepts_input_heap_and_literal_pointers() {
     vm.run().unwrap();
     decode_owner(&vm);
 }
-
 #[test]
 fn build_path_key_norito_accepts_input_heap_and_literal_pointers() {
     let base_tlv = tlv(PointerType::Name, b"entries");
@@ -797,7 +739,6 @@ fn build_path_key_norito_accepts_input_heap_and_literal_pointers() {
         EmbeddedStateType::Bytes,
     );
     let expected_path = format!("entries/{}", hex::encode(&key_payload));
-
     let decode_path = |vm: &IVM| {
         let tlv = vm
             .memory
@@ -808,7 +749,6 @@ fn build_path_key_norito_accepts_input_heap_and_literal_pointers() {
             norito::decode_from_bytes(tlv.payload).expect("decode canonical StatePath");
         assert_eq!(path.as_ref(), expected_path);
     };
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let p_base = vm.alloc_input_tlv(&base_tlv).expect("alloc input base");
@@ -818,7 +758,6 @@ fn build_path_key_norito_accepts_input_heap_and_literal_pointers() {
     vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_path(&vm);
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let p_base = alloc_heap_tlv(&mut vm, &base_tlv);
@@ -828,7 +767,6 @@ fn build_path_key_norito_accepts_input_heap_and_literal_pointers() {
     vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_path(&vm);
-
     let (literal_prog, literal_ptrs) = assemble_state_map_syscall_with_literals(
         syscalls::SYSCALL_BUILD_PATH_KEY_NORITO,
         "entries",
@@ -837,7 +775,6 @@ fn build_path_key_norito_accepts_input_heap_and_literal_pointers() {
     );
     let base_addr = literal_ptrs[0];
     let key_addr = literal_ptrs[1];
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&literal_prog).unwrap();
@@ -846,12 +783,10 @@ fn build_path_key_norito_accepts_input_heap_and_literal_pointers() {
     vm.run().unwrap();
     decode_path(&vm);
 }
-
 #[test]
 fn json_object_builders_roundtrip_i64_and_account_id() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
-
     let p_bucket_key = vm
         .alloc_input_tlv(&tlv(PointerType::Name, b"bucket_id"))
         .unwrap();
@@ -862,14 +797,12 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
     let p_owner = vm
         .alloc_input_tlv(&tlv(PointerType::AccountId, owner_literal.as_bytes()))
         .unwrap();
-
     vm.load_program(&common::assemble_syscalls(&[
         syscalls::SYSCALL_JSON_OBJECT as u8
     ]))
     .unwrap();
     vm.run().unwrap();
     let p_payload = vm.register(10);
-
     vm.set_register(10, p_payload);
     vm.set_register(11, p_bucket_key);
     vm.set_register(12, 2);
@@ -879,7 +812,6 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
     .unwrap();
     vm.run().unwrap();
     let p_payload = vm.register(10);
-
     vm.set_register(10, p_payload);
     vm.set_register(11, p_owner_key);
     vm.set_register(12, p_owner);
@@ -889,7 +821,6 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
     .unwrap();
     vm.run().unwrap();
     let p_payload = vm.register(10);
-
     vm.set_register(10, p_payload);
     vm.set_register(11, p_owner_key);
     vm.load_program(&common::assemble_syscalls(&[
@@ -897,7 +828,6 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
     ]))
     .unwrap();
     vm.run().unwrap();
-
     let tlv_out = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
     assert_eq!(tlv_out.type_id, PointerType::AccountId);
     let owner: AccountId = norito::decode_from_bytes(tlv_out.payload).expect("decode account");
@@ -908,12 +838,10 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
             .into_account_id()
     );
 }
-
 #[test]
 fn json_get_account_id_rejects_noncanonical_contract_address_literal() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
-
     let authority = checked_contract_authority_fixture();
     let contract_address = ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -931,13 +859,11 @@ fn json_get_account_id_rejects_noncanonical_contract_address_literal() {
     let p_key = vm
         .alloc_input_tlv(&tlv(PointerType::Name, b"controller"))
         .unwrap();
-
     let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_ACCOUNT_ID as u8]);
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
-
     assert_eq!(
         ivm::sum::read_words(
             &vm,

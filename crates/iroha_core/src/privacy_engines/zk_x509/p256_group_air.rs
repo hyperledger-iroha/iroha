@@ -6,17 +6,14 @@
 //! bits.  Every field operation is emitted through
 //! [`P256BaseFieldCircuitV1`], whose production implementation links each
 //! value to the exact integer arithmetic trace and its value-copy bus.
-
 /// Exact arithmetic-operation count for one `[u1]G + [u2]Q` execution,
 /// including the fourteen-addition variable-base table.
 pub(crate) const P256_TWO_SCALAR_ARITHMETIC_OPERATIONS_V1: usize = 14 * 43 + 64 * (4 * 34 + 2 * 43);
-
 /// P-256 curve coefficient `b`, in canonical big-endian form.
 pub(crate) const P256_CURVE_B_BE_V1: [u8; 32] = [
     0x5a, 0xc6, 0x35, 0xd8, 0xaa, 0x3a, 0x93, 0xe7, 0xb3, 0xeb, 0xbd, 0x55, 0x76, 0x98, 0x86, 0xbc,
     0x65, 0x1d, 0x06, 0xb0, 0xcc, 0x53, 0xb0, 0xf6, 0x3b, 0xce, 0x3c, 0x3e, 0x27, 0xd2, 0x60, 0x4b,
 ];
-
 const ZERO_BE_V1: [u8; 32] = [0; 32];
 const ONE_BE_V1: [u8; 32] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
@@ -24,7 +21,6 @@ const ONE_BE_V1: [u8; 32] = [
 const THREE_BE_V1: [u8; 32] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3,
 ];
-
 /// A homogeneous projective point with affine coordinates `(x/z, y/z)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256ProjectiveValueV1<V> {
@@ -35,7 +31,6 @@ pub(crate) struct P256ProjectiveValueV1<V> {
     /// Homogeneous denominator; zero denotes the identity.
     pub(crate) z: V,
 }
-
 /// Exact base-field operations required by the group layer.
 ///
 /// A production implementation must emit a newly written value for every
@@ -46,38 +41,31 @@ pub(crate) trait P256BaseFieldCircuitV1 {
     type Value: Copy;
     /// Bounded circuit-construction failure.
     type Error;
-
     /// Allocate a verifier-fixed canonical constant.
     fn constant_v1(&mut self, value: [u8; 32]) -> Result<Self::Value, Self::Error>;
-
     /// Emit `left + right (mod p)`.
     fn add_v1(&mut self, left: Self::Value, right: Self::Value)
     -> Result<Self::Value, Self::Error>;
-
     /// Emit `left - right (mod p)`.
     fn subtract_v1(
         &mut self,
         left: Self::Value,
         right: Self::Value,
     ) -> Result<Self::Value, Self::Error>;
-
     /// Emit `left * right (mod p)`.
     fn multiply_v1(
         &mut self,
         left: Self::Value,
         right: Self::Value,
     ) -> Result<Self::Value, Self::Error>;
-
     /// Constrain two assigned values to be identical.
     fn assert_equal_v1(&mut self, left: Self::Value, right: Self::Value)
     -> Result<(), Self::Error>;
-
     /// Allocate `value^-1` and constrain `value * inverse = 1`.
     ///
     /// Construction must fail when `value` is zero.
     fn inverse_nonzero_v1(&mut self, value: Self::Value) -> Result<Self::Value, Self::Error>;
 }
-
 /// Fixed four-bit point lookup used by the two-scalar multiplication layer.
 ///
 /// The production implementation is a 16-candidate one-hot AIR with a
@@ -86,7 +74,6 @@ pub(crate) trait P256BaseFieldCircuitV1 {
 pub(crate) trait P256WindowCircuitV1: P256BaseFieldCircuitV1 {
     /// One algebraically constrained scalar bit.
     type Bit: Copy;
-
     /// Select exactly one of sixteen projective points from four big-endian
     /// nibble bits.
     fn select_window_v1(
@@ -95,7 +82,6 @@ pub(crate) trait P256WindowCircuitV1: P256BaseFieldCircuitV1 {
         bits_be: [Self::Bit; 4],
     ) -> Result<P256ProjectiveValueV1<Self::Value>, Self::Error>;
 }
-
 /// Allocate the canonical projective identity `(0 : 1 : 0)`.
 pub(crate) fn p256_projective_identity_v1<C: P256BaseFieldCircuitV1>(
     circuit: &mut C,
@@ -106,7 +92,6 @@ pub(crate) fn p256_projective_identity_v1<C: P256BaseFieldCircuitV1>(
         z: circuit.constant_v1(ZERO_BE_V1)?,
     })
 }
-
 /// Emit complete projective addition for P-256.
 ///
 /// This is Algorithm 4 of Renes-Costello-Batina (2015), specialized to
@@ -118,36 +103,30 @@ pub(crate) fn p256_complete_add_v1<C: P256BaseFieldCircuitV1>(
     right: P256ProjectiveValueV1<C::Value>,
 ) -> Result<P256ProjectiveValueV1<C::Value>, C::Error> {
     let curve_b = circuit.constant_v1(P256_CURVE_B_BE_V1)?;
-
     let xx = circuit.multiply_v1(left.x, right.x)?;
     let yy = circuit.multiply_v1(left.y, right.y)?;
     let zz = circuit.multiply_v1(left.z, right.z)?;
-
     let left_xy = circuit.add_v1(left.x, left.y)?;
     let right_xy = circuit.add_v1(right.x, right.y)?;
     let xy_product = circuit.multiply_v1(left_xy, right_xy)?;
     let xx_plus_yy = circuit.add_v1(xx, yy)?;
     let xy_pairs = circuit.subtract_v1(xy_product, xx_plus_yy)?;
-
     let left_yz = circuit.add_v1(left.y, left.z)?;
     let right_yz = circuit.add_v1(right.y, right.z)?;
     let yz_product = circuit.multiply_v1(left_yz, right_yz)?;
     let yy_plus_zz = circuit.add_v1(yy, zz)?;
     let yz_pairs = circuit.subtract_v1(yz_product, yy_plus_zz)?;
-
     let left_xz = circuit.add_v1(left.x, left.z)?;
     let right_xz = circuit.add_v1(right.x, right.z)?;
     let xz_product = circuit.multiply_v1(left_xz, right_xz)?;
     let xx_plus_zz = circuit.add_v1(xx, zz)?;
     let xz_pairs = circuit.subtract_v1(xz_product, xx_plus_zz)?;
-
     let b_times_zz = circuit.multiply_v1(curve_b, zz)?;
     let bzz_part = circuit.subtract_v1(xz_pairs, b_times_zz)?;
     let bzz_twice = circuit.add_v1(bzz_part, bzz_part)?;
     let bzz3_part = circuit.add_v1(bzz_twice, bzz_part)?;
     let yy_minus_bzz3 = circuit.subtract_v1(yy, bzz3_part)?;
     let yy_plus_bzz3 = circuit.add_v1(yy, bzz3_part)?;
-
     let zz_twice = circuit.add_v1(zz, zz)?;
     let zz3 = circuit.add_v1(zz_twice, zz)?;
     let b_times_xz = circuit.multiply_v1(curve_b, xz_pairs)?;
@@ -158,22 +137,17 @@ pub(crate) fn p256_complete_add_v1<C: P256BaseFieldCircuitV1>(
     let xx_twice = circuit.add_v1(xx, xx)?;
     let xx3 = circuit.add_v1(xx_twice, xx)?;
     let xx3_minus_zz3 = circuit.subtract_v1(xx3, zz3)?;
-
     let x_left = circuit.multiply_v1(yy_plus_bzz3, xy_pairs)?;
     let x_right = circuit.multiply_v1(yz_pairs, bxz3_part)?;
     let x = circuit.subtract_v1(x_left, x_right)?;
-
     let y_left = circuit.multiply_v1(yy_plus_bzz3, yy_minus_bzz3)?;
     let y_right = circuit.multiply_v1(xx3_minus_zz3, bxz3_part)?;
     let y = circuit.add_v1(y_left, y_right)?;
-
     let z_left = circuit.multiply_v1(yy_minus_bzz3, yz_pairs)?;
     let z_right = circuit.multiply_v1(xy_pairs, xx3_minus_zz3)?;
     let z = circuit.add_v1(z_left, z_right)?;
-
     Ok(P256ProjectiveValueV1 { x, y, z })
 }
-
 /// Emit exception-free projective doubling for P-256.
 ///
 /// This is Algorithm 6 of Renes-Costello-Batina (2015), specialized to
@@ -183,7 +157,6 @@ pub(crate) fn p256_complete_double_v1<C: P256BaseFieldCircuitV1>(
     point: P256ProjectiveValueV1<C::Value>,
 ) -> Result<P256ProjectiveValueV1<C::Value>, C::Error> {
     let curve_b = circuit.constant_v1(P256_CURVE_B_BE_V1)?;
-
     let xx = circuit.multiply_v1(point.x, point.x)?;
     let yy = circuit.multiply_v1(point.y, point.y)?;
     let zz = circuit.multiply_v1(point.z, point.z)?;
@@ -191,7 +164,6 @@ pub(crate) fn p256_complete_double_v1<C: P256BaseFieldCircuitV1>(
     let xy2 = circuit.add_v1(xy, xy)?;
     let xz = circuit.multiply_v1(point.x, point.z)?;
     let xz2 = circuit.add_v1(xz, xz)?;
-
     let b_times_zz = circuit.multiply_v1(curve_b, zz)?;
     let bzz_part = circuit.subtract_v1(b_times_zz, xz2)?;
     let bzz_twice = circuit.add_v1(bzz_part, bzz_part)?;
@@ -200,7 +172,6 @@ pub(crate) fn p256_complete_double_v1<C: P256BaseFieldCircuitV1>(
     let yy_plus_bzz3 = circuit.add_v1(yy, bzz3_part)?;
     let y_fragment = circuit.multiply_v1(yy_plus_bzz3, yy_minus_bzz3)?;
     let x_fragment = circuit.multiply_v1(yy_minus_bzz3, xy2)?;
-
     let zz_twice = circuit.add_v1(zz, zz)?;
     let zz3 = circuit.add_v1(zz_twice, zz)?;
     let b_times_xz2 = circuit.multiply_v1(curve_b, xz2)?;
@@ -211,7 +182,6 @@ pub(crate) fn p256_complete_double_v1<C: P256BaseFieldCircuitV1>(
     let xx_twice = circuit.add_v1(xx, xx)?;
     let xx3 = circuit.add_v1(xx_twice, xx)?;
     let xx3_minus_zz3 = circuit.subtract_v1(xx3, zz3)?;
-
     let y_right = circuit.multiply_v1(xx3_minus_zz3, bxz6_part)?;
     let y = circuit.add_v1(y_fragment, y_right)?;
     let yz = circuit.multiply_v1(point.y, point.z)?;
@@ -221,10 +191,8 @@ pub(crate) fn p256_complete_double_v1<C: P256BaseFieldCircuitV1>(
     let z_product = circuit.multiply_v1(yz2, yy)?;
     let z_twice = circuit.add_v1(z_product, z_product)?;
     let z = circuit.add_v1(z_twice, z_twice)?;
-
     Ok(P256ProjectiveValueV1 { x, y, z })
 }
-
 /// Build the variable-base table `[0]P, [1]P, ..., [15]P`.
 ///
 /// The topology is fixed at fourteen complete additions. `table[0]` is the
@@ -241,7 +209,6 @@ pub(crate) fn p256_variable_window_table_v1<C: P256BaseFieldCircuitV1>(
     }
     Ok(table)
 }
-
 /// Emit fixed-topology Straus multiplication `[u1]G + [u2]Q`.
 ///
 /// Both scalars are consumed as 256 big-endian bits. Each of 64 rounds emits
@@ -285,7 +252,6 @@ pub(crate) fn p256_two_scalar_linear_combination_v1<C: P256WindowCircuitV1>(
     }
     Ok(accumulator)
 }
-
 /// Constrain a homogeneous point to the P-256 curve.
 ///
 /// For affine coordinates `(X/Z, Y/Z)`, the exact homogeneous equation is
@@ -296,7 +262,6 @@ pub(crate) fn constrain_p256_projective_on_curve_v1<C: P256BaseFieldCircuitV1>(
 ) -> Result<(), C::Error> {
     let curve_b = circuit.constant_v1(P256_CURVE_B_BE_V1)?;
     let three = circuit.constant_v1(THREE_BE_V1)?;
-
     let y_squared = circuit.multiply_v1(point.y, point.y)?;
     let left = circuit.multiply_v1(y_squared, point.z)?;
     let x_squared = circuit.multiply_v1(point.x, point.x)?;
@@ -310,7 +275,6 @@ pub(crate) fn constrain_p256_projective_on_curve_v1<C: P256BaseFieldCircuitV1>(
     let right = circuit.add_v1(x_part, b_z_cubed)?;
     circuit.assert_equal_v1(left, right)
 }
-
 /// Constrain an affine input point `(x : y : 1)` to P-256.
 pub(crate) fn constrain_p256_affine_on_curve_v1<C: P256BaseFieldCircuitV1>(
     circuit: &mut C,
@@ -325,7 +289,6 @@ pub(crate) fn constrain_p256_affine_on_curve_v1<C: P256BaseFieldCircuitV1>(
     constrain_p256_projective_on_curve_v1(circuit, point)?;
     Ok(point)
 }
-
 /// Constrain a projective point to be non-identity and return affine `(x,y)`.
 pub(crate) fn normalize_p256_nonidentity_v1<C: P256BaseFieldCircuitV1>(
     circuit: &mut C,
@@ -336,7 +299,6 @@ pub(crate) fn normalize_p256_nonidentity_v1<C: P256BaseFieldCircuitV1>(
     let y = circuit.multiply_v1(point.y, z_inverse)?;
     Ok((x, y))
 }
-
 #[cfg(test)]
 mod tests {
     use p256::{
@@ -344,16 +306,13 @@ mod tests {
         elliptic_curve::{group::Group as _, sec1::ToEncodedPoint as _},
     };
     use thiserror::Error;
-
     use super::*;
     use crate::privacy_engines::zk_x509::p256_air::{
         P256_BASE_MODULUS_BE_V1, ZkX509P256ArithmeticKindV1, ZkX509P256ArithmeticOperationV1,
         ZkX509P256ModulusV1, build_zk_x509_p256_arithmetic_trace_v1,
     };
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct TestValue(usize);
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
     enum TestCircuitError {
         #[error("test circuit received a non-canonical value")]
@@ -363,13 +322,11 @@ mod tests {
         #[error("test circuit equality constraint failed")]
         Equality,
     }
-
     #[derive(Default)]
     struct RecordingCircuit {
         values: Vec<[u8; 32]>,
         operations: Vec<ZkX509P256ArithmeticOperationV1>,
     }
-
     impl RecordingCircuit {
         fn input(&mut self, value: [u8; 32]) -> Result<TestValue, TestCircuitError> {
             if value >= P256_BASE_MODULUS_BE_V1 {
@@ -379,18 +336,15 @@ mod tests {
             self.values.push(value);
             Ok(id)
         }
-
         fn bytes(&self, value: TestValue) -> [u8; 32] {
             self.values[value.0]
         }
-
         fn field(&self, value: TestValue) -> Result<FieldElement, TestCircuitError> {
             Option::<FieldElement>::from(FieldElement::from_bytes(&FieldBytes::from(
                 self.bytes(value),
             )))
             .ok_or(TestCircuitError::NonCanonical)
         }
-
         fn push_operation(
             &mut self,
             kind: ZkX509P256ArithmeticKindV1,
@@ -410,15 +364,12 @@ mod tests {
             value
         }
     }
-
     impl P256BaseFieldCircuitV1 for RecordingCircuit {
         type Value = TestValue;
         type Error = TestCircuitError;
-
         fn constant_v1(&mut self, value: [u8; 32]) -> Result<Self::Value, Self::Error> {
             self.input(value)
         }
-
         fn add_v1(
             &mut self,
             left: Self::Value,
@@ -427,7 +378,6 @@ mod tests {
             let result = (self.field(left)? + self.field(right)?).to_bytes().into();
             Ok(self.push_operation(ZkX509P256ArithmeticKindV1::Add, left, right, result))
         }
-
         fn subtract_v1(
             &mut self,
             left: Self::Value,
@@ -436,7 +386,6 @@ mod tests {
             let result = (self.field(left)? - self.field(right)?).to_bytes().into();
             Ok(self.push_operation(ZkX509P256ArithmeticKindV1::Subtract, left, right, result))
         }
-
         fn multiply_v1(
             &mut self,
             left: Self::Value,
@@ -445,7 +394,6 @@ mod tests {
             let result = (self.field(left)? * self.field(right)?).to_bytes().into();
             Ok(self.push_operation(ZkX509P256ArithmeticKindV1::Multiply, left, right, result))
         }
-
         fn assert_equal_v1(
             &mut self,
             left: Self::Value,
@@ -456,7 +404,6 @@ mod tests {
             }
             Ok(())
         }
-
         fn inverse_nonzero_v1(&mut self, value: Self::Value) -> Result<Self::Value, Self::Error> {
             let inverse = Option::<FieldElement>::from(self.field(value)?.invert())
                 .ok_or(TestCircuitError::ZeroInverse)?;
@@ -467,10 +414,8 @@ mod tests {
             Ok(inverse)
         }
     }
-
     impl P256WindowCircuitV1 for RecordingCircuit {
         type Bit = bool;
-
         fn select_window_v1(
             &mut self,
             table: &[P256ProjectiveValueV1<Self::Value>; 16],
@@ -482,7 +427,6 @@ mod tests {
             Ok(table[index])
         }
     }
-
     fn assigned_point(
         circuit: &mut RecordingCircuit,
         point: ProjectivePoint,
@@ -501,7 +445,6 @@ mod tests {
             z: circuit.input(ONE_BE_V1).expect("canonical one"),
         }
     }
-
     fn normalized_encoding(
         circuit: &mut RecordingCircuit,
         point: P256ProjectiveValueV1<TestValue>,
@@ -514,12 +457,10 @@ mod tests {
             false,
         )
     }
-
     fn scalar_bits_be(scalar: Scalar) -> [bool; 256] {
         let bytes: [u8; 32] = scalar.to_bytes().into();
         core::array::from_fn(|bit| (bytes[bit / 8] >> (7 - bit % 8)) & 1 == 1)
     }
-
     fn assigned_generator_table(
         circuit: &mut RecordingCircuit,
     ) -> [P256ProjectiveValueV1<TestValue>; 16] {
@@ -530,7 +471,6 @@ mod tests {
             )
         })
     }
-
     #[test]
     fn complete_formulas_have_fixed_exact_operation_counts() {
         let mut add_circuit = RecordingCircuit::default();
@@ -545,7 +485,6 @@ mod tests {
                 .to_affine()
                 .to_encoded_point(false)
         );
-
         let mut double_circuit = RecordingCircuit::default();
         let generator = assigned_point(&mut double_circuit, ProjectivePoint::GENERATOR);
         let doubled =
@@ -558,7 +497,6 @@ mod tests {
                 .to_encoded_point(false)
         );
     }
-
     #[test]
     fn complete_addition_differential_covers_exceptional_and_random_pairs() {
         let generator = ProjectivePoint::GENERATOR;
@@ -578,7 +516,6 @@ mod tests {
                 ));
             }
         }
-
         for (left, right) in pairs {
             let expected = left + right;
             let mut circuit = RecordingCircuit::default();
@@ -602,7 +539,6 @@ mod tests {
                 .expect("exact arithmetic trace");
         }
     }
-
     #[test]
     fn complete_doubling_differential_covers_identity_and_random_points() {
         for scalar in 0_u64..=192 {
@@ -628,7 +564,6 @@ mod tests {
                 .expect("exact arithmetic trace");
         }
     }
-
     #[test]
     fn fixed_window_two_scalar_multiplication_is_exact_and_budgeted() {
         let cases = [
@@ -646,7 +581,6 @@ mod tests {
             let u2 = Scalar::from(u2_raw);
             let public_key = ProjectivePoint::GENERATOR * Scalar::from(key_raw);
             let expected = ProjectivePoint::GENERATOR * u1 + public_key * u2;
-
             let mut circuit = RecordingCircuit::default();
             let generator_table = assigned_generator_table(&mut circuit);
             let assigned_public_key = assigned_point(&mut circuit, public_key);
@@ -671,7 +605,6 @@ mod tests {
                     expected.to_affine().to_encoded_point(false)
                 );
             }
-
             for operation in circuit.operations.iter().step_by(137) {
                 build_zk_x509_p256_arithmetic_trace_v1(&[*operation])
                     .expect("sampled exact window arithmetic")
@@ -680,7 +613,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn affine_curve_constraint_rejects_every_single_bit_coordinate_mutation() {
         let encoded = ProjectivePoint::GENERATOR
@@ -690,7 +622,6 @@ mod tests {
         let mut y = [0_u8; 32];
         x.copy_from_slice(encoded.x().expect("x"));
         y.copy_from_slice(encoded.y().expect("y"));
-
         for coordinate in 0..2 {
             for bit in 0..256 {
                 let mut changed_x = x;
@@ -715,7 +646,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn normalization_rejects_identity() {
         let mut circuit = RecordingCircuit::default();

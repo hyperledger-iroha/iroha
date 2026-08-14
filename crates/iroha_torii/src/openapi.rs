@@ -4,21 +4,16 @@
 //! artifact. Torii parses it once with Norito JSON, then removes only operations
 //! disabled by the compiled route catalog. This keeps every feature profile
 //! aligned with the mounted router without compiling a second schema builder.
-
 use std::{collections::BTreeSet, sync::LazyLock};
-
 use iroha_torii_shared::route_catalog::{
     CATALOGED_ROUTES, CatalogProjection, EnabledFeatures, HttpMethod as CatalogHttpMethod,
     RouteCatalog,
 };
 use norito::json::{Map, Value};
-
 /// OpenAPI operation extension consumed by the MCP policy bridge.
 pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
-
 /// Package-local, release-provenance-bound mirror of `artifacts/openapi/torii.json`.
 const CANONICAL_OPENAPI_JSON: &str = include_str!("../assets/openapi/torii.json");
-
 static COMPILED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
     let mut document: Value = norito::json::from_str(CANONICAL_OPENAPI_JSON)
         .expect("package-local Torii OpenAPI authority must be valid Norito JSON");
@@ -30,7 +25,6 @@ static COMPILED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
     retain_catalog_openapi_operations(paths, crate::router::builder::compiled_route_features());
     document
 });
-
 #[cfg(not(all(
     feature = "app_api",
     feature = "telemetry",
@@ -45,10 +39,8 @@ static COMPILED_OPENAPI_JSON: LazyLock<String> = LazyLock::new(|| {
     norito::json::to_string_pretty(compiled_spec())
         .expect("compiled Torii OpenAPI authority must serialize as Norito JSON")
 });
-
 fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledFeatures<'_>) {
     const OPERATION_METHODS: [&str; 5] = ["get", "post", "put", "patch", "delete"];
-
     let enabled: BTreeSet<(String, &'static str)> = RouteCatalog::new(CATALOGED_ROUTES)
         .project(CatalogProjection::OpenApi, enabled_features)
         .into_iter()
@@ -64,7 +56,6 @@ fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledF
             Some((route.path().replace("{*", "{"), method))
         })
         .collect();
-
     for (path, path_item) in paths.iter_mut() {
         let Some(methods) = path_item.as_object_mut() else {
             continue;
@@ -83,13 +74,11 @@ fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledF
         })
     });
 }
-
 /// Borrow the feature-pruned OpenAPI document cached for this binary.
 #[must_use]
 pub(crate) fn compiled_spec() -> &'static Value {
     LazyLock::force(&COMPILED_OPENAPI_SPEC)
 }
-
 /// Borrow the exact JSON response cached for this binary.
 ///
 /// The complete release profile serves the checked-in authority bytes directly.
@@ -109,7 +98,6 @@ pub(crate) fn compiled_spec_json() -> &'static str {
     let _ = compiled_spec();
     CANONICAL_OPENAPI_JSON
 }
-
 /// Borrow the exact JSON response cached for this binary.
 #[cfg(not(all(
     feature = "app_api",
@@ -125,18 +113,15 @@ pub(crate) fn compiled_spec_json() -> &'static str {
 pub(crate) fn compiled_spec_json() -> &'static str {
     LazyLock::force(&COMPILED_OPENAPI_JSON).as_str()
 }
-
 /// Return the feature-pruned OpenAPI document for compatibility with callers
 /// that need an owned Norito JSON value.
 #[must_use]
 pub fn generate_spec() -> Value {
     compiled_spec().clone()
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeSet, VecDeque};
-
     use iroha_torii_shared::{
         route_catalog::{ApiSurface, musubi as musubi_routes},
         sorafs_hedging_billing_api::{
@@ -151,10 +136,8 @@ mod tests {
         uri,
     };
     use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
-
     use super::*;
     use crate::utils;
-
     const SORACLOUD_HF_DEPLOY_CONTRACT_EXTENSION: &str = "x-iroha-soracloud-hf-deploy-contract";
     const SORACLOUD_HF_DEPLOY_CONTRACT_V1: &str = "cap-bound-local-signing-v1";
     const GOVERNANCE_HASH_LITERAL_PATTERN: &str =
@@ -174,7 +157,6 @@ mod tests {
         "18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|",
         "1844674407370955161[0-4]|18446744073709551615)$"
     );
-
     const OFFLINE_COMMAND_COMMON_BAD_REQUEST_REJECT_CODES: &[&str] = &[
         "idempotency_key_invalid",
         "idempotency_key_missing",
@@ -261,7 +243,6 @@ mod tests {
         "offline_operation_index_inconsistent",
         "offline_topup_finality_proof_unavailable",
     ];
-
     fn offline_command_bad_request_reject_codes(operation_id: &str) -> Vec<&'static str> {
         let mut codes = OFFLINE_COMMAND_COMMON_BAD_REQUEST_REJECT_CODES.to_vec();
         match operation_id {
@@ -272,40 +253,33 @@ mod tests {
         codes.extend_from_slice(TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES);
         codes
     }
-
     fn transaction_submission_bad_request_reject_codes() -> Vec<&'static str> {
         let mut codes = vec!["invalid_transaction_payload"];
         codes.extend_from_slice(TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES);
         codes
     }
-
     fn canonical_document() -> Value {
         norito::json::from_str(CANONICAL_OPENAPI_JSON)
             .expect("package-local OpenAPI authority must parse")
     }
-
     fn openapi_schemas() -> Map {
         component_schemas(&canonical_document()).clone()
     }
-
     fn sccp_schemas() -> Map {
         openapi_schemas()
             .into_iter()
             .filter(|(name, _)| name.starts_with("Sccp"))
             .collect()
     }
-
     fn schema_ref(name: &str) -> Value {
         norito::json!({ "$ref": (format!("#/components/schemas/{name}")) })
     }
-
     fn tags_section() -> Value {
         canonical_document()
             .get("tags")
             .cloned()
             .expect("package-local OpenAPI authority must contain tags")
     }
-
     fn subscription_paths() -> Map {
         canonical_document()
             .get("paths")
@@ -316,7 +290,6 @@ mod tests {
             .map(|(path, item)| (path.clone(), item.clone()))
             .collect()
     }
-
     fn subscription_schemas(schemas: &mut Map) {
         schemas.extend(
             openapi_schemas()
@@ -324,7 +297,6 @@ mod tests {
                 .filter(|(name, _)| name.starts_with("Subscription")),
         );
     }
-
     const OFFLINE_TYPED_SCHEMA_ROOTS: [&str; 9] = [
         "OfflineTopUpRequest",
         "OfflineRedeemRequest",
@@ -337,7 +309,6 @@ mod tests {
         "ErrorEnvelope",
     ];
     const COMPONENT_SCHEMA_REF_PREFIX: &str = "#/components/schemas/";
-
     fn documented_reject_codes<'a>(responses: &'a Map, status: &str) -> Vec<&'a str> {
         responses
             .get(status)
@@ -355,7 +326,6 @@ mod tests {
             .map(|code| code.as_str().expect("reject-code enum value"))
             .collect()
     }
-
     fn response_documents_reject_code(responses: &Map, status: &str) -> bool {
         responses
             .get(status)
@@ -364,7 +334,6 @@ mod tests {
             .and_then(Value::as_object)
             .is_some_and(|headers| headers.contains_key("x-iroha-reject-code"))
     }
-
     fn component_schemas(document: &Value) -> &Map {
         document
             .get("components")
@@ -373,7 +342,6 @@ mod tests {
             .and_then(Value::as_object)
             .expect("component schemas")
     }
-
     fn openapi_operation<'a>(document: &'a Value, path: &str, method: &str) -> &'a Map {
         document
             .get("paths")
@@ -384,7 +352,6 @@ mod tests {
             .and_then(Value::as_object)
             .unwrap_or_else(|| panic!("{method} {path} operation"))
     }
-
     fn assert_canonical_auth_required_response(
         operation: &Map,
         path: &str,
@@ -412,11 +379,9 @@ mod tests {
             .and_then(Value::as_str);
         assert_eq!(challenge, Some("Signature"), "POST {path} challenge");
     }
-
     fn assert_alias_auth_required_response(operation: &Map, path: &str) {
         assert_canonical_auth_required_response(operation, path, "alias_auth_required");
     }
-
     fn operation_request_schema_ref<'a>(operation: &'a Map, path: &str) -> &'a str {
         operation
             .get("requestBody")
@@ -431,7 +396,6 @@ mod tests {
             .and_then(Value::as_str)
             .unwrap_or_else(|| panic!("request schema for {path}"))
     }
-
     fn operation_response_schema_ref<'a>(operation: &'a Map, status: &str, path: &str) -> &'a str {
         operation
             .get("responses")
@@ -448,7 +412,6 @@ mod tests {
             .and_then(Value::as_str)
             .unwrap_or_else(|| panic!("HTTP {status} response schema for {path}"))
     }
-
     fn assert_strict_object_schema(
         schemas: &Map,
         name: &str,
@@ -473,7 +436,6 @@ mod tests {
             .collect::<BTreeSet<_>>();
         let expected_required = required_fields.iter().copied().collect::<BTreeSet<_>>();
         assert_eq!(actual_required, expected_required, "{name} required fields");
-
         let actual_properties = schema
             .get("properties")
             .and_then(Value::as_object)
@@ -488,7 +450,6 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert_eq!(actual_properties, expected_properties, "{name} properties");
     }
-
     fn catalog_openapi_route_enabled(method: CatalogHttpMethod, path: &str) -> bool {
         RouteCatalog::new(CATALOGED_ROUTES)
             .project(
@@ -498,7 +459,6 @@ mod tests {
             .into_iter()
             .any(|route| route.method() == method && route.path() == path)
     }
-
     fn expected_operation_effect(method: &str, path: &str) -> &'static str {
         if expected_operator_operation(method, path) {
             return "operator";
@@ -511,7 +471,6 @@ mod tests {
         }
         "write"
     }
-
     fn expected_operator_operation(method: &str, path: &str) -> bool {
         let catalog_method = match method {
             "get" => Some(CatalogHttpMethod::Get),
@@ -546,7 +505,6 @@ mod tests {
                     | "/v1/gov/protected-namespaces"
             )
     }
-
     fn expected_read_operation(method: &str, path: &str) -> bool {
         matches!(method, "get" | "head" | "options")
             || (method == "post" && path.starts_with("/v1/musubi/queries/"))
@@ -596,7 +554,6 @@ mod tests {
                         | "/v1/zk/vote/tally"
                 ))
     }
-
     fn operation_header_requirements(operation: &Map) -> Vec<(String, bool)> {
         operation
             .get("parameters")
@@ -619,7 +576,6 @@ mod tests {
             })
             .collect()
     }
-
     fn assert_no_retired_vpn_fee_fields(value: &Value, location: &str) {
         match value {
             Value::Array(values) => {
@@ -642,7 +598,6 @@ mod tests {
             _ => {}
         }
     }
-
     fn assert_component_schema_refs_resolve(
         value: &Value,
         schemas: &Map,
@@ -699,7 +654,6 @@ mod tests {
             _ => {}
         }
     }
-
     fn component_properties<'a>(schemas: &'a Map, name: &str) -> &'a Map {
         schemas
             .get(name)
@@ -708,7 +662,6 @@ mod tests {
             .and_then(Value::as_object)
             .unwrap_or_else(|| panic!("{name} properties"))
     }
-
     fn component_required<'a>(schemas: &'a Map, name: &str) -> Vec<&'a str> {
         schemas
             .get(name)
@@ -720,7 +673,6 @@ mod tests {
             .map(|field| field.as_str().expect("required field name"))
             .collect()
     }
-
     fn property_ref<'a>(schemas: &'a Map, owner: &str, property: &str) -> &'a str {
         component_properties(schemas, owner)
             .get(property)
@@ -729,7 +681,6 @@ mod tests {
             .and_then(Value::as_str)
             .unwrap_or_else(|| panic!("{owner}.{property} schema reference"))
     }
-
     fn property_integer_bounds(schemas: &Map, owner: &str, property: &str) -> (u64, u64) {
         let schema = component_properties(schemas, owner)
             .get(property)
@@ -751,7 +702,6 @@ mod tests {
                 .unwrap_or_else(|| panic!("{owner}.{property} maximum")),
         )
     }
-
     fn property_array_bounds(schemas: &Map, owner: &str, property: &str) -> (u64, u64) {
         let schema = component_properties(schemas, owner)
             .get(property)
@@ -773,7 +723,6 @@ mod tests {
                 .unwrap_or_else(|| panic!("{owner}.{property} maxItems")),
         )
     }
-
     fn nullable_property_ref<'a>(schemas: &'a Map, owner: &str, property: &str) -> &'a str {
         let schema = component_properties(schemas, owner)
             .get(property)
@@ -807,7 +756,6 @@ mod tests {
             .and_then(Value::as_str)
             .unwrap_or_else(|| panic!("{owner}.{property} typed nullable reference"))
     }
-
     fn collect_component_refs(value: &Value, refs: &mut BTreeSet<String>) {
         match value {
             Value::Array(values) => {
@@ -831,14 +779,12 @@ mod tests {
             _ => {}
         }
     }
-
     fn reachable_offline_components(schemas: &Map) -> BTreeSet<String> {
         let mut pending = OFFLINE_TYPED_SCHEMA_ROOTS
             .into_iter()
             .map(str::to_owned)
             .collect::<VecDeque<_>>();
         let mut reachable = BTreeSet::new();
-
         while let Some(name) = pending.pop_front() {
             if !reachable.insert(name.clone()) {
                 continue;
@@ -866,10 +812,8 @@ mod tests {
                 }
             }
         }
-
         reachable
     }
-
     fn is_shared_sumeragi_consensus_component(name: &str) -> bool {
         matches!(
             name,
@@ -882,7 +826,6 @@ mod tests {
                 | "SumeragiV2Bytes32"
         )
     }
-
     fn assert_no_internal_offline_name(value: &Value, component: &str) {
         match value {
             Value::String(text) => {
@@ -917,21 +860,17 @@ mod tests {
             _ => {}
         }
     }
-
     #[test]
     fn generated_openapi_has_only_resolvable_component_schema_refs() {
         let document = generate_spec();
         let schemas = component_schemas(&document);
         let mut reference_count = 0;
-
         assert_component_schema_refs_resolve(&document, schemas, "$", &mut reference_count);
-
         assert!(
             reference_count > 0,
             "generated OpenAPI document unexpectedly contains no schema references"
         );
     }
-
     #[test]
     fn package_openapi_authority_is_canonical_norito_json() {
         let parsed = canonical_document();
@@ -943,7 +882,6 @@ mod tests {
             "package-local OpenAPI authority must use canonical pretty Norito JSON bytes"
         );
     }
-
     #[cfg(all(
         feature = "node-api",
         feature = "ws_integration_tests",
@@ -961,7 +899,6 @@ mod tests {
         let current = include_str!("../../../artifacts/openapi/versions/current/torii.json");
         let package = CANONICAL_OPENAPI_JSON;
         let served = compiled_spec_json();
-
         assert_eq!(
             latest.as_bytes(),
             current.as_bytes(),
@@ -983,7 +920,6 @@ mod tests {
             "compiled/served document drift"
         );
     }
-
     #[test]
     fn transaction_payload_schema_requires_closed_network_domain_and_positive_ttl() {
         let document = canonical_document();
@@ -1002,7 +938,6 @@ mod tests {
             ],
             &["nonce", "attachments"],
         );
-
         let properties = schemas["TransactionPayload"]["properties"]
             .as_object()
             .expect("TransactionPayload properties");
@@ -1028,7 +963,6 @@ mod tests {
                 .and_then(Value::as_str),
             Some("#/components/schemas/Hash")
         );
-
         let variants = schemas["TransactionDomain"]["oneOf"]
             .as_array()
             .expect("TransactionDomain variants");
@@ -1059,12 +993,10 @@ mod tests {
         );
         assert!(variants[1]["properties"].get("value").is_none());
     }
-
     #[test]
     fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
         let document = canonical_document();
         let schemas = component_schemas(&document);
-
         for (name, network_property, retired_property, target) in [
             (
                 "OfflineTransitionProofBundle",
@@ -1139,7 +1071,6 @@ mod tests {
                 .expect("OfflineUnshieldPublicInputs properties")
                 .contains_key("chain_tag")
         );
-
         for name in [
             "ConnectSessionCreateRequest",
             "ConnectSessionCreateResponse",
@@ -1169,7 +1100,6 @@ mod tests {
             12
         );
         assert_eq!(protocols["items"].as_bool(), Some(false));
-
         let details = openapi_operation(&document, "/v1/pipeline/transactions/details", "post");
         assert_eq!(
             operation_request_schema_ref(details, "transaction details"),
@@ -1183,7 +1113,6 @@ mod tests {
             details.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
             Some("read")
         );
-
         let connect = openapi_operation(&document, "/v1/connect/session", "post");
         assert_eq!(
             operation_request_schema_ref(connect, "Connect session"),
@@ -1193,7 +1122,6 @@ mod tests {
             operation_response_schema_ref(connect, "200", "Connect session"),
             "#/components/schemas/ConnectSessionCreateResponse"
         );
-
         for (path, request_schema) in [
             (
                 "/v1/gov/ballots/zk-v1",
@@ -1222,7 +1150,6 @@ mod tests {
                 "POST {path} must publish account authentication"
             );
         }
-
         let pin = openapi_operation(&document, "/v1/sorafs/pin", "get");
         let pin_parameters = pin["parameters"]
             .as_array()
@@ -1245,7 +1172,6 @@ mod tests {
             operation_response_schema_ref(pin, "200", "pin list"),
             "#/components/schemas/PinManifestPageV1"
         );
-
         let axt_properties = schemas["AxtErrorDetails"]["properties"]
             .as_object()
             .expect("AXT error details properties");
@@ -1254,7 +1180,6 @@ mod tests {
         assert!(!axt_properties.contains_key("next_min_handle_era"));
         assert!(!axt_properties.contains_key("next_min_sub_nonce"));
     }
-
     #[test]
     fn static_account_operations_publish_exact_auth_and_private_responses() {
         let document = canonical_document();
@@ -1340,7 +1265,6 @@ mod tests {
                 );
             }
         }
-
         for (path, method) in [
             ("/v1/runtime/abi/hash", "get"),
             ("/v1/gov/finalize", "post"),
@@ -1355,7 +1279,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn musubi_provider_bundle_attestation_and_exact_release_contract_is_static() {
         const PROVIDER_ATTESTATION_WIRE_ID: &str =
@@ -1363,7 +1286,6 @@ mod tests {
         const PROVIDER_QUERY_PATH: &str = "/v1/musubi/queries/provider-bundle-attestation";
         const PROVIDER_REGISTER_PATH: &str =
             "/v1/musubi/instructions/provider-bundle-attestation-register";
-
         let document = canonical_document();
         let schemas = component_schemas(&document);
         for (name, required, properties) in [
@@ -1441,7 +1363,6 @@ mod tests {
                 );
             }
         }
-
         for (path, request_type, response_type, effect) in [
             (
                 PROVIDER_REGISTER_PATH,
@@ -1512,7 +1433,6 @@ mod tests {
                 Some(format!("{COMPONENT_SCHEMA_REF_PREFIX}{response_type}").as_str())
             );
         }
-
         let wire_ids = component_properties(schemas, "MusubiInstructionEnvelopeV1")
             .get("wire_id")
             .and_then(Value::as_object)
@@ -1541,7 +1461,6 @@ mod tests {
             wire_ids.get(provider_index + 1),
             Some(&"iroha.musubi.v1.archive_location.add")
         );
-
         let preview_variants = schemas
             .get("MusubiInstructionPreviewV1")
             .and_then(Value::as_object)
@@ -1569,7 +1488,6 @@ mod tests {
             Some("#/components/schemas/RegisterMusubiProviderBundleAttestationV1")
         );
     }
-
     #[test]
     fn static_authority_is_the_complete_catalog_projection_with_exact_effects() {
         fn method_name(method: CatalogHttpMethod) -> &'static str {
@@ -1584,7 +1502,6 @@ mod tests {
                 }
             }
         }
-
         let document = canonical_document();
         let paths = document
             .get("paths")
@@ -1618,7 +1535,6 @@ mod tests {
             actual, expected,
             "static OpenAPI authority must be the feature-independent catalog superset"
         );
-
         for (path, method) in actual {
             let operation = paths
                 .get(&path)
@@ -1633,7 +1549,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn sccp_schema_serialization_excludes_retired_and_secret_fields() {
         assert_eq!(
@@ -1653,7 +1568,6 @@ mod tests {
                 "outbound material must not advertise `{forbidden}`"
             );
         }
-
         let serialized =
             norito::json::to_string(&Value::Object(schemas)).expect("serialize SCCP schemas");
         for forbidden in [
@@ -1670,7 +1584,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn production_constants_embedded_in_openapi_remain_frozen() {
         fn at<'a>(mut value: &'a Value, path: &[&str]) -> &'a Value {
@@ -1681,13 +1594,11 @@ mod tests {
             }
             value
         }
-
         fn u64_at(value: &Value, path: &[&str]) -> u64 {
             at(value, path)
                 .as_u64()
                 .unwrap_or_else(|| panic!("OpenAPI authority path {path:?} is not a u64"))
         }
-
         let document = canonical_document();
         let schema_length = |name: &str| {
             u64_at(
@@ -1837,22 +1748,18 @@ mod tests {
             crate::routing::MULTISIG_PROPOSALS_MAX_PAGE_LIMIT
         );
     }
-
     // Textual inclusion preserves the original OpenAPI test-module paths.
     include!("openapi/tests/sorafs_contracts.rs");
-
     #[test]
     fn openapi_operations_equal_the_enabled_catalog_projection() {
         use iroha_torii_shared::route_catalog::{
             CATALOGED_ROUTES, CatalogProjection, HttpMethod, RouteCatalog,
         };
-
         fn openapi_path(path: &str) -> String {
             // Axum marks a wildcard parameter with `*`; OpenAPI path templates
             // use the same parameter name without the router-specific marker.
             path.replace("{*", "{")
         }
-
         fn method_name(method: HttpMethod) -> &'static str {
             match method {
                 HttpMethod::Get => "get",
@@ -1865,7 +1772,6 @@ mod tests {
                 }
             }
         }
-
         let expected: BTreeSet<_> = RouteCatalog::new(CATALOGED_ROUTES)
             .project(
                 CatalogProjection::OpenApi,
@@ -1879,7 +1785,6 @@ mod tests {
                 )
             })
             .collect();
-
         #[cfg(all(
             feature = "app_api",
             feature = "telemetry",
@@ -1895,7 +1800,6 @@ mod tests {
             442,
             "the supported full Torii documentation profile must remain exactly 442 cataloged operations"
         );
-
         let spec = generate_spec();
         let paths = spec
             .get("paths")
@@ -1912,7 +1816,6 @@ mod tests {
                 })
             })
             .collect();
-
         let missing: Vec<_> = expected.difference(&actual).cloned().collect();
         let undocumented_catalog_extras: Vec<_> = actual.difference(&expected).cloned().collect();
         assert!(
@@ -1920,7 +1823,6 @@ mod tests {
             "OpenAPI/catalog projection mismatch; missing from OpenAPI: {missing:#?}; absent from enabled catalog projection: {undocumented_catalog_extras:#?}"
         );
     }
-
     #[test]
     fn every_operation_uses_one_declared_top_level_tag() {
         let document = generate_spec();
@@ -1944,7 +1846,6 @@ mod tests {
                 .len(),
             "top-level tag names must be unique"
         );
-
         let paths = document
             .get("paths")
             .and_then(Value::as_object)
@@ -1970,7 +1871,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent() {
         let document = generate_spec();
@@ -1987,7 +1887,6 @@ mod tests {
             assert_eq!(schema.get("pattern").and_then(Value::as_str), Some(pattern));
             assert_eq!(schema.get("maxLength").and_then(Value::as_u64), Some(155));
         }
-
         let paths = document
             .get("paths")
             .and_then(Value::as_object)
@@ -2029,7 +1928,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(feature = "app_api")]
     #[test]
     fn retired_sorafs_economics_surface_is_absent() {
@@ -2050,7 +1948,6 @@ mod tests {
                 "retired process-local economics path leaked into OpenAPI: {path}"
             );
         }
-
         let schemas = component_schemas(&document);
         for schema in [
             "SorafsEconomicsPricingAdmissionResponse",
@@ -2068,12 +1965,10 @@ mod tests {
             );
         }
     }
-
     #[cfg(feature = "app_api")]
     #[test]
     fn converted_catalog_families_have_exact_openapi_operations() {
         use iroha_torii_shared::route_catalog::{self, HttpMethod};
-
         let spec = generate_spec();
         let paths = spec
             .get("paths")
@@ -2114,7 +2009,6 @@ mod tests {
                 descriptor.path()
             );
         }
-
         for unsupported_path in [
             "/v1/aliases/resolve_index",
             "/v1/aliases/by_account",
@@ -2131,12 +2025,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn canonical_stream_operations_publish_fail_closed_contract() {
         let document = generate_spec();
         let paths = document["paths"].as_object().expect("paths");
-
         for path in ["/v1/events/sse", "/v1/contracts/events/sse"] {
             let get = paths[path]["get"].as_object().expect("SSE GET operation");
             assert_eq!(
@@ -2152,7 +2044,6 @@ mod tests {
             assert!(responses.contains_key("200"));
             assert!(responses.contains_key("400"));
         }
-
         for path in [uri::SUBSCRIPTION, uri::BLOCKS_STREAM] {
             let get = paths[path]["get"]
                 .as_object()
@@ -2174,7 +2065,6 @@ mod tests {
             assert!(responses.contains_key("401"));
         }
     }
-
     #[test]
     fn retired_alias_voprf_surface_does_not_reappear() {
         fn assert_absent(surface: &str, source: &str, forbidden: &[&str]) {
@@ -2185,7 +2075,6 @@ mod tests {
                 );
             }
         }
-
         assert_absent(
             "Torii runtime",
             include_str!("lib.rs"),
@@ -2201,11 +2090,9 @@ mod tests {
             ],
         );
     }
-
     #[test]
     fn content_route_documents_conditional_cache_and_auth_contract() {
         const PATH: &str = "/v1/content/{bundle}/{path}";
-
         let document = generate_spec();
         let operation = openapi_operation(&document, PATH, "get");
         let description = operation
@@ -2228,7 +2115,6 @@ mod tests {
                 "content operation must document `{phrase}`"
             );
         }
-
         let parameters = operation
             .get("parameters")
             .and_then(Value::as_array)
@@ -2256,7 +2142,6 @@ mod tests {
                 ("X-Iroha-Witness", Some(false)),
             ])
         );
-
         let responses = operation
             .get("responses")
             .and_then(Value::as_object)
@@ -2302,7 +2187,6 @@ mod tests {
                 "content response must document the {name} boundary"
             );
         }
-
         let unauthorized = responses
             .get("401")
             .and_then(Value::as_object)
@@ -2319,11 +2203,9 @@ mod tests {
         assert!(not_found.contains("unknown or expired"));
         assert!(not_found.contains("authenticate and authorize before revealing"));
     }
-
     #[test]
     fn ledger_executed_block_wire_cached_loading_is_safe_from_256_kib_callers() {
         const SMALL_CALLER_STACK_BYTES: usize = 256 * 1024;
-
         let caller = std::thread::Builder::new()
             .name("openapi-small-stack-regression".to_owned())
             .stack_size(SMALL_CALLER_STACK_BYTES)
@@ -2332,7 +2214,6 @@ mod tests {
                 let rendered = compiled_spec_json();
                 let reparsed: Value =
                     norito::json::from_str(rendered).expect("cached OpenAPI JSON must parse");
-
                 assert_eq!(reparsed, compiled);
                 for (variant, document) in [("owned", &compiled), ("borrowed", compiled_spec())] {
                     let operation = openapi_operation(document, "/v1/ledger/block/{height}", "get");
@@ -2342,7 +2223,6 @@ mod tests {
                         "missing canonical executed-block operation in {variant} OpenAPI",
                     );
                 }
-
                 #[cfg(feature = "app_api")]
                 {
                     for (variant, document) in [("owned", &compiled), ("borrowed", compiled_spec())]
@@ -2363,7 +2243,6 @@ mod tests {
             std::panic::resume_unwind(payload);
         }
     }
-
     #[test]
     fn generated_spec_includes_documented_paths() {
         let doc = generate_spec();
@@ -2923,7 +2802,6 @@ mod tests {
         assert!(accepted_headers.contains_key("Location"));
         assert!(accepted_headers.contains_key("Retry-After"));
     }
-
     #[test]
     fn generated_spec_documents_strict_typed_offline_request_schemas_and_states() {
         let doc = generate_spec();
@@ -3437,7 +3315,6 @@ mod tests {
             Some(3)
         );
     }
-
     #[test]
     fn generated_spec_exposes_only_the_closed_verifier_backend_registry_v1() {
         let doc = generate_spec();
@@ -3472,7 +3349,6 @@ mod tests {
             "stark/fri/poseidon2-goldilocks",
             "stark/fri/sha256_goldilocks.v1",
         ]);
-
         assert_eq!(
             labels.len(),
             expected.len(),
@@ -3503,13 +3379,11 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn generated_spec_offline_typed_graph_is_closed_and_publicly_named() {
         let doc = generate_spec();
         let schemas = component_schemas(&doc);
         let reachable = reachable_offline_components(schemas);
-
         assert!(
             !reachable.contains("JsonValue"),
             "typed Offline DTOs must not regain an arbitrary JSON escape hatch"
@@ -3558,7 +3432,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn offline_json_adapter_schemas_match_actual_norito_serializers() {
         use iroha_crypto::{MerkleProof, privacy::LaneCommitmentId};
@@ -3570,7 +3443,6 @@ mod tests {
             },
             proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         };
-
         assert_eq!(
             norito::json::to_value(&KagemushaRecursiveSpendBranchV2::Recipient)
                 .expect("serialize spend branch"),
@@ -3581,7 +3453,6 @@ mod tests {
                 .expect("serialize lane commitment id"),
             norito::json!([7])
         );
-
         let branch_claim = KagemushaRecursiveSpendBranchClaimV2 {
             path: KagemushaRecursiveSpendBranchPathV2 {
                 lineage_root: [7; 32],
@@ -3615,7 +3486,6 @@ mod tests {
                 .map(Vec::len),
             Some(8)
         );
-
         let lane_witness = LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
             leaf: [7; 32],
             proof: MerkleProof::from_audit_path_bytes(0, vec![[9; 32]]),
@@ -3639,7 +3509,6 @@ mod tests {
                 .map(Vec::len),
             Some(32)
         );
-
         let attachment = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
@@ -3660,7 +3529,6 @@ mod tests {
             "canonical ProofBox JSON must remain a byte array"
         );
     }
-
     #[test]
     fn generated_spec_matches_offline_negotiation_and_operation_lifecycle() {
         let doc = generate_spec();
@@ -3711,7 +3579,6 @@ mod tests {
                 .and_then(|schema| schema.get("$ref"))
                 .and_then(Value::as_str);
             assert_eq!(schema_ref, Some("#/components/schemas/ErrorEnvelope"));
-
             for status in ["429"] {
                 let headers = responses
                     .get(status)
@@ -3727,7 +3594,6 @@ mod tests {
                 }
             }
         }
-
         for path in [
             "/v1/offline/receiver-lineage",
             "/v1/offline/top-up",
@@ -3755,7 +3621,6 @@ mod tests {
                 );
             }
         }
-
         let readiness_responses = paths
             .get("/v1/offline/readiness")
             .and_then(Value::as_object)
@@ -3774,7 +3639,6 @@ mod tests {
             !response_documents_reject_code(readiness_responses, "429"),
             "generic readiness ingress throttling must not advertise an application reject code"
         );
-
         let status_responses = paths
             .get("/v1/offline/operations/{operation_id}")
             .and_then(Value::as_object)
@@ -3802,7 +3666,6 @@ mod tests {
                 "offline operation {status} must not claim a canonical application reject code"
             );
         }
-
         for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
             let responses = paths
                 .get(path)
@@ -3878,7 +3741,6 @@ mod tests {
                 "offline read has no authenticated authorization-denial path: {path}"
             );
         }
-
         let schemas = doc
             .get("components")
             .and_then(Value::as_object)
@@ -3922,7 +3784,6 @@ mod tests {
                 .is_some_and(|schema| schema.contains_key("not"))
         );
     }
-
     #[test]
     fn musubi_v1_openapi_matches_the_complete_catalog_and_declares_models() {
         let document = generate_spec();
@@ -3942,7 +3803,6 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert_eq!(musubi_routes::ROUTES.len(), 31);
         assert_eq!(actual, expected);
-
         let mut schema_roots = BTreeSet::new();
         for route in musubi_routes::ROUTES {
             let path = route.path();
@@ -4024,7 +3884,6 @@ mod tests {
                 "{path} tool effect"
             );
         }
-
         let mut pending = schema_roots.into_iter().collect::<VecDeque<_>>();
         let mut visited = BTreeSet::new();
         while let Some(schema_name) = pending.pop_front() {
@@ -4070,13 +3929,11 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn musubi_instruction_previews_discriminate_equal_payload_shapes_by_wire_id() {
         use iroha_data_model::isi::musubi::{
             AcceptMusubiPackageMaintainerV1, RevokeMusubiPackageMaintainerInvitationV1,
         };
-
         let document = generate_spec();
         let schemas = component_schemas(&document);
         let variants = schemas
@@ -4086,7 +3943,6 @@ mod tests {
             .and_then(Value::as_array)
             .expect("Musubi instruction preview variants");
         assert_eq!(variants.len(), 19);
-
         let mut bindings = BTreeSet::new();
         let mut wire_ids = BTreeSet::new();
         for variant in variants {
@@ -4120,7 +3976,6 @@ mod tests {
                 "preview variants must use distinct wire ids"
             );
         }
-
         assert!(bindings.contains(&(
             AcceptMusubiPackageMaintainerV1::WIRE_ID.to_owned(),
             format!("{COMPONENT_SCHEMA_REF_PREFIX}AcceptMusubiPackageMaintainerV1"),
@@ -4148,7 +4003,6 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert_eq!(envelope_wire_ids, wire_ids);
     }
-
     #[test]
     fn musubi_crypto_text_schemas_do_not_impose_single_key_size_limits() {
         let document = generate_spec();
@@ -4161,7 +4015,6 @@ mod tests {
             !account.contains_key("maxLength"),
             "native multisignature AccountIds are bounded by their enclosing body"
         );
-
         let approval = schemas
             .get("MusubiControllerApprovalV1")
             .and_then(Value::as_object)
@@ -4185,7 +4038,6 @@ mod tests {
                 .and_then(Value::as_str),
             Some("^(?:[0-9A-Fa-f]{2})+$")
         );
-
         let provider_id = schemas
             .get("MusubiProviderIdV1")
             .and_then(Value::as_object)
@@ -4197,7 +4049,6 @@ mod tests {
             Some("^[0-9A-Fa-f]{64}$")
         );
     }
-
     #[test]
     fn musubi_cursor_and_ordered_prefix_bounds_match_the_wire_types() {
         let document = generate_spec();
@@ -4217,7 +4068,6 @@ mod tests {
                     .expect("cursor-key bound fits u64")
             )
         );
-
         let ordered_prefix = schemas
             .get("MusubiOrderedPrefixV1")
             .and_then(Value::as_object)
@@ -4230,7 +4080,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn musubi_chunker_text_bounds_match_the_wire_type() {
         let document = generate_spec();
@@ -4253,7 +4102,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn generated_operations_declare_tool_effects() {
         let doc = generate_spec();
@@ -4279,7 +4127,6 @@ mod tests {
                 );
             }
         }
-
         let query = paths
             .get(uri::QUERY)
             .and_then(Value::as_object)
@@ -4290,7 +4137,6 @@ mod tests {
             query.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
             Some("read")
         );
-
         for path in [
             "/v1/multisig/proposals/query",
             "/v1/multisig/proposals/resolve",
@@ -4310,7 +4156,6 @@ mod tests {
         assert!(!paths.contains_key("/v1/multisig/proposals/list"));
         assert!(!paths.contains_key("/v1/multisig/proposals/get"));
         assert!(!paths.contains_key("/v1/multisig/proposals/search"));
-
         let protected_namespaces = paths
             .get("/v1/gov/protected-namespaces")
             .and_then(Value::as_object)
@@ -4323,7 +4168,6 @@ mod tests {
                 .and_then(Value::as_str),
             Some("operator")
         );
-
         for path in ["/v1/sumeragi/pacemaker", "/v1/sumeragi/phases"] {
             let operation = paths
                 .get(path)
@@ -4344,7 +4188,6 @@ mod tests {
                 );
             }
         }
-
         for route in RouteCatalog::new(CATALOGED_ROUTES)
             .project(
                 iroha_torii_shared::route_catalog::CatalogProjection::OpenApi,
@@ -4368,7 +4211,6 @@ mod tests {
                 route.path()
             );
         }
-
         let musubi_publish = paths
             .get("/v1/musubi/instructions/release-publish")
             .and_then(Value::as_object)
@@ -4410,7 +4252,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn retired_sumeragi_mutation_surfaces_are_absent() {
         let doc = generate_spec();
@@ -4433,7 +4274,6 @@ mod tests {
                 "retired Sumeragi mutation path remains documented: {retired_path}"
             );
         }
-
         let schemas = doc
             .get("components")
             .and_then(Value::as_object)
@@ -4447,18 +4287,15 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn pipeline_fastpq_recovery_documents_operator_auth_and_bounds() {
         use iroha_torii_shared::route_catalog::{ApiSurface, AuthenticationPolicy};
-
         let route = iroha_torii_shared::route_catalog::pipeline::RECOVERY_FASTPQ_PROOFS;
         assert_eq!(route.surface(), ApiSurface::Operator);
         assert_eq!(
             route.authentication(),
             AuthenticationPolicy::OperatorSignature
         );
-
         let document = generate_spec();
         let operation = openapi_operation(
             &document,
@@ -4511,7 +4348,6 @@ mod tests {
                 })
         );
     }
-
     #[test]
     fn signed_transaction_submission_documents_exact_preadmission_contract() {
         let document = generate_spec();
@@ -4525,7 +4361,6 @@ mod tests {
             .and_then(|post| post.get("responses"))
             .and_then(Value::as_object)
             .expect("signed transaction submission responses");
-
         assert_eq!(
             documented_reject_codes(responses, "400"),
             transaction_submission_bad_request_reject_codes()
@@ -4564,12 +4399,10 @@ mod tests {
             "a duplicate response must be documented as existing admission state"
         );
     }
-
     #[test]
     fn signed_transaction_reject_code_inventory_matches_runtime_metadata() {
         use iroha_core::{queue::Error as QueueError, tx::SignatureRejectionCode};
         use iroha_data_model::{ValidationFail, transaction::error::TransactionRejectionReason};
-
         let mut acceptance_codes = vec!["transaction_rejected", "PRTRY:NTS_UNHEALTHY"];
         acceptance_codes.extend(
             [
@@ -4600,7 +4433,6 @@ mod tests {
             OFFLINE_COMMAND_RATE_LIMIT_REJECT_CODES,
             TRANSACTION_SUBMISSION_RATE_LIMIT_REJECT_CODES
         );
-
         let forbidden = [
             QueueError::GovernanceNotPermitted {
                 alias: "lane".to_owned(),
@@ -4630,7 +4462,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             TRANSACTION_SUBMISSION_FORBIDDEN_REJECT_CODES
         );
-
         for (errors, expected) in [
             (
                 vec![QueueError::InBlockchain, QueueError::IsInQueue],
@@ -4654,7 +4485,6 @@ mod tests {
             );
         }
     }
-
     fn openapi_schemas_include_system_keys() {
         let schemas = openapi_schemas();
         for key in [
@@ -4762,10 +4592,8 @@ mod tests {
             assert!(schemas.contains_key(key), "schema missing {key}");
         }
     }
-
+    include!("openapi/tests/diagnostics_schemas.rs");
     include!("openapi/tests/finality_app_contracts.rs");
-
     include!("openapi/tests/iso20022_auth.rs");
-
     include!("openapi/tests/vpn_da.rs");
 }

@@ -4,7 +4,6 @@
 //! End-to-end test for the native STARK (FRI single-fold) verifier.
 
 #![cfg(feature = "zk-stark")]
-
 use expect_test::expect;
 use fastpq_prover::{hash_field_elements, pack_bytes};
 use iroha_core::{
@@ -18,13 +17,10 @@ use iroha_core::{
     },
 };
 use sha2::{Digest, Sha256};
-
 const MOD_P: u128 = (1u128 << 64) - (1u128 << 32) + 1;
-
 fn checked_zk_stark_keypair() -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random().expect("generate checked ZK STARK keypair")
 }
-
 #[test]
 fn zk_stark_fixture_uses_checked_ed25519_keypair() {
     let key_pair = checked_zk_stark_keypair();
@@ -33,17 +29,14 @@ fn zk_stark_fixture_uses_checked_ed25519_keypair() {
         iroha_crypto::Algorithm::Ed25519
     );
 }
-
 fn field_add(a: u64, b: u64) -> u64 {
     let sum = (a as u128) + (b as u128);
     (sum % MOD_P) as u64
 }
-
 fn field_mul(a: u64, b: u64) -> u64 {
     let prod = (a as u128) * (b as u128);
     (prod % MOD_P) as u64
 }
-
 fn field_sub(a: u64, b: u64) -> u64 {
     if a >= b {
         a - b
@@ -51,7 +44,6 @@ fn field_sub(a: u64, b: u64) -> u64 {
         ((a as u128 + MOD_P) - b as u128) as u64
     }
 }
-
 fn field_pow(mut base: u64, mut exponent: u128) -> u64 {
     let mut acc = 1u64;
     while exponent > 0 {
@@ -63,49 +55,41 @@ fn field_pow(mut base: u64, mut exponent: u128) -> u64 {
     }
     acc
 }
-
 fn field_inv(value: u64) -> Option<u64> {
     (value != 0).then(|| field_pow(value, MOD_P - 2))
 }
-
 fn field_two_inv() -> u64 {
     ((MOD_P + 1) / 2) as u64
 }
-
 fn domain_x_for_pair(layer_domain: usize, pair_index: usize) -> u64 {
     assert!(layer_domain >= 2 && layer_domain.is_power_of_two());
     assert!(pair_index < layer_domain / 2);
     let root = field_pow(7, (MOD_P - 1) / layer_domain as u128);
     field_pow(root, pair_index as u128)
 }
-
 fn fri_fold_pair_for_test(y0: u64, y1: u64, beta: u64, x: u64) -> u64 {
     let even = field_mul(field_add(y0, y1), field_two_inv());
     let inv_2x = field_inv(field_mul(2, x)).expect("non-zero domain element");
     let odd = field_mul(field_sub(y0, y1), inv_2x);
     field_add(even, field_mul(beta, odd))
 }
-
 fn leaf_hash_u64(v: u64) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(b"LEAF");
     h.update(&v.to_le_bytes());
     h.finalize().into()
 }
-
 fn node_hash(l: &[u8; 32], r: &[u8; 32]) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(l);
     h.update(r);
     h.finalize().into()
 }
-
 fn u64_to_digest_le(val: u64) -> [u8; 32] {
     let mut out = [0u8; 32];
     out[..8].copy_from_slice(&val.to_le_bytes());
     out
 }
-
 fn digest_le_to_u64(bytes: &[u8; 32]) -> u64 {
     assert!(
         bytes[8..].iter().all(|b| *b == 0),
@@ -113,7 +97,6 @@ fn digest_le_to_u64(bytes: &[u8; 32]) -> u64 {
     );
     u64::from_le_bytes(bytes[..8].try_into().expect("slice len = 8"))
 }
-
 fn poseidon_domain_hash_u64(domain: &[u8], values: &[u64]) -> u64 {
     let packed = pack_bytes(domain);
     let len_field = u64::try_from(packed.length).unwrap_or(u64::MAX);
@@ -123,17 +106,14 @@ fn poseidon_domain_hash_u64(domain: &[u8], values: &[u64]) -> u64 {
     limbs.extend_from_slice(values);
     hash_field_elements(&limbs)
 }
-
 fn leaf_hash_poseidon_u64(v: u64) -> [u8; 32] {
     u64_to_digest_le(poseidon_domain_hash_u64(b"iroha:zk:stark:leaf:v1", &[v]))
 }
-
 fn node_hash_poseidon(l: &[u8; 32], r: &[u8; 32]) -> [u8; 32] {
     let l = digest_le_to_u64(l);
     let r = digest_le_to_u64(r);
     u64_to_digest_le(poseidon_domain_hash_u64(b"iroha:zk:stark:node:v1", &[l, r]))
 }
-
 fn merkle_root_from_leaves(mut leaves: Vec<[u8; 32]>) -> ([u8; 32], Vec<Vec<[u8; 32]>>) {
     // Build full binary tree and return root and per-level nodes
     let mut levels = Vec::new();
@@ -148,7 +128,6 @@ fn merkle_root_from_leaves(mut leaves: Vec<[u8; 32]>) -> ([u8; 32], Vec<Vec<[u8;
     }
     (leaves[0], levels)
 }
-
 fn merkle_root_from_leaves_poseidon(mut leaves: Vec<[u8; 32]>) -> ([u8; 32], Vec<Vec<[u8; 32]>>) {
     let mut levels = Vec::new();
     levels.push(leaves.clone());
@@ -162,7 +141,6 @@ fn merkle_root_from_leaves_poseidon(mut leaves: Vec<[u8; 32]>) -> ([u8; 32], Vec
     }
     (leaves[0], levels)
 }
-
 fn path_for(index: usize, levels: &[Vec<[u8; 32]>]) -> MerklePath {
     let mut dirs = Vec::new();
     let mut siblings = Vec::new();
@@ -181,7 +159,6 @@ fn path_for(index: usize, levels: &[Vec<[u8; 32]>]) -> MerklePath {
     }
     MerklePath { dirs, siblings }
 }
-
 fn derive_query_index_for_test(
     label: &str,
     params: &StarkFriParamsV1,
@@ -212,7 +189,6 @@ fn derive_query_index_for_test(
     let domain = 1usize << params.n_log2;
     (u64::from_le_bytes(w) % (domain as u64)) as usize
 }
-
 fn poseidon_hash_bytes(preimage: &[u8]) -> u64 {
     let packed = pack_bytes(preimage);
     let len_field = u64::try_from(packed.length).unwrap_or(u64::MAX);
@@ -221,7 +197,6 @@ fn poseidon_hash_bytes(preimage: &[u8]) -> u64 {
     limbs.extend_from_slice(&packed.limbs);
     hash_field_elements(&limbs)
 }
-
 fn derive_query_index_for_test_poseidon(
     label: &str,
     params: &StarkFriParamsV1,
@@ -250,7 +225,6 @@ fn derive_query_index_for_test_poseidon(
     let domain = 1usize << params.n_log2;
     (digest % (domain as u64)) as usize
 }
-
 fn challenge_u64(label: &str, bytes: &[u8]) -> u64 {
     let mut h = Sha256::new();
     h.update(label.as_bytes());
@@ -262,7 +236,6 @@ fn challenge_u64(label: &str, bytes: &[u8]) -> u64 {
     let v = u64::from_le_bytes(w);
     (v as u128 % MOD_P) as u64
 }
-
 fn challenge_poseidon_u64(label: &str, bytes: &[u8]) -> u64 {
     let mut preimage = Vec::with_capacity(label.len() + 1 + bytes.len());
     preimage.extend_from_slice(label.as_bytes());
@@ -270,7 +243,6 @@ fn challenge_poseidon_u64(label: &str, bytes: &[u8]) -> u64 {
     preimage.extend_from_slice(bytes);
     poseidon_hash_bytes(&preimage)
 }
-
 fn stark_open_verify_domain_tag_current(
     backend: &str,
     circuit_id: &str,
@@ -297,7 +269,6 @@ fn stark_open_verify_domain_tag_current(
     let digest = Sha256::digest(&preimage);
     hex::encode(digest)
 }
-
 #[allow(clippy::too_many_lines)]
 fn build_sample_envelope_with_domain_tag(domain_tag: String) -> StarkVerifyEnvelopeV1 {
     // Domain size 8, degree-1 poly f(x) = 3x+5 over u64 (no modular wrap for small x)
@@ -308,7 +279,6 @@ fn build_sample_envelope_with_domain_tag(domain_tag: String) -> StarkVerifyEnvel
         .collect();
     let leaves0: Vec<[u8; 32]> = evals.iter().map(|&v| leaf_hash_u64(v)).collect();
     let (root0, levels0) = merkle_root_from_leaves(leaves0.clone());
-
     let params = StarkFriParamsV1 {
         version: 1,
         n_log2,
@@ -319,7 +289,6 @@ fn build_sample_envelope_with_domain_tag(domain_tag: String) -> StarkVerifyEnvel
         hash_fn: STARK_HASH_SHA256_V1,
         domain_tag,
     };
-
     let build_transcript = |root: &[u8; 32]| {
         let mut tb = Vec::new();
         tb.extend_from_slice(b"TEST-STARK");
@@ -337,10 +306,8 @@ fn build_sample_envelope_with_domain_tag(domain_tag: String) -> StarkVerifyEnvel
         tb.extend_from_slice(root);
         tb
     };
-
     // Transcript-derived r (mirror the verifier logic)
     let r0 = challenge_u64("stark:fri:r:k", &build_transcript(&root0));
-
     // Layer 1 with r0
     let layer1: Vec<u64> = (0..n / 2)
         .map(|j| {
@@ -349,10 +316,8 @@ fn build_sample_envelope_with_domain_tag(domain_tag: String) -> StarkVerifyEnvel
         .collect();
     let leaves1: Vec<[u8; 32]> = layer1.iter().map(|&v| leaf_hash_u64(v)).collect();
     let (root1, levels1) = merkle_root_from_leaves(leaves1.clone());
-
     // Derive r1 from label+params+root1
     let r1 = challenge_u64("stark:fri:r:k", &build_transcript(&root1));
-
     // Derive r2 from label+params+root2 (will be used for next fold)
     // Layer 2 with r1
     let layer2: Vec<u64> = (0..n / 4)
@@ -367,9 +332,7 @@ fn build_sample_envelope_with_domain_tag(domain_tag: String) -> StarkVerifyEnvel
         .collect();
     let leaves2: Vec<[u8; 32]> = layer2.iter().map(|&v| leaf_hash_u64(v)).collect();
     let (root2, levels2) = merkle_root_from_leaves(leaves2.clone());
-
     let r2 = challenge_u64("stark:fri:r:k", &build_transcript(&root2));
-
     // Layer 3 with r2 (final layer size = 1); only j=0 valid
     let layer3: Vec<u64> = (0..n / 8)
         .map(|j| {
@@ -383,7 +346,6 @@ fn build_sample_envelope_with_domain_tag(domain_tag: String) -> StarkVerifyEnvel
         .collect();
     let leaves3: Vec<[u8; 32]> = layer3.iter().map(|&v| leaf_hash_u64(v)).collect();
     let (root3, levels3) = merkle_root_from_leaves(leaves3.clone());
-
     // Prepare a single query chain (j0 = 0) covering three folds (layers 0->1->2->3)
     let commitments_roots = vec![root0, root1, root2, root3];
     let base_index = derive_query_index_for_test("TEST-STARK", &params, &commitments_roots, 0);
@@ -415,7 +377,6 @@ fn build_sample_envelope_with_domain_tag(domain_tag: String) -> StarkVerifyEnvel
         domain /= fold;
     }
     let queries: Vec<Vec<FoldDecommitV1>> = vec![chain];
-
     // Richer composition: comp_value = c + a0 * z_final + sum coeff_i * aux_i
     let comp_constant = 7u64;
     let comp_z_coeff = 2u64;
@@ -457,7 +418,6 @@ fn build_sample_envelope_with_domain_tag(domain_tag: String) -> StarkVerifyEnvel
         aux_terms: comp_aux_terms,
         path: path_for(0, &comp_levels),
     }]);
-
     StarkVerifyEnvelopeV1 {
         params,
         proof: StarkProofV1 {
@@ -474,7 +434,6 @@ fn build_sample_envelope_with_domain_tag(domain_tag: String) -> StarkVerifyEnvel
         transcript_label: "TEST-STARK".to_string(),
     }
 }
-
 #[allow(clippy::too_many_lines)]
 fn build_sample_envelope_poseidon2_with_domain_tag(domain_tag: String) -> StarkVerifyEnvelopeV1 {
     let n_log2 = 3u8;
@@ -484,7 +443,6 @@ fn build_sample_envelope_poseidon2_with_domain_tag(domain_tag: String) -> StarkV
         .collect();
     let leaves0: Vec<[u8; 32]> = evals.iter().map(|&v| leaf_hash_poseidon_u64(v)).collect();
     let (root0, levels0) = merkle_root_from_leaves_poseidon(leaves0.clone());
-
     let params = StarkFriParamsV1 {
         version: 1,
         n_log2,
@@ -495,7 +453,6 @@ fn build_sample_envelope_poseidon2_with_domain_tag(domain_tag: String) -> StarkV
         hash_fn: STARK_HASH_POSEIDON2_V1,
         domain_tag,
     };
-
     let build_transcript = |root: &[u8; 32]| {
         let mut tb = Vec::new();
         tb.extend_from_slice(b"TEST-STARK");
@@ -513,9 +470,7 @@ fn build_sample_envelope_poseidon2_with_domain_tag(domain_tag: String) -> StarkV
         tb.extend_from_slice(root);
         tb
     };
-
     let r0 = challenge_poseidon_u64("stark:fri:r:k", &build_transcript(&root0));
-
     let layer1: Vec<u64> = (0..n / 2)
         .map(|j| {
             fri_fold_pair_for_test(evals[2 * j], evals[2 * j + 1], r0, domain_x_for_pair(n, j))
@@ -523,9 +478,7 @@ fn build_sample_envelope_poseidon2_with_domain_tag(domain_tag: String) -> StarkV
         .collect();
     let leaves1: Vec<[u8; 32]> = layer1.iter().map(|&v| leaf_hash_poseidon_u64(v)).collect();
     let (root1, levels1) = merkle_root_from_leaves_poseidon(leaves1.clone());
-
     let r1 = challenge_poseidon_u64("stark:fri:r:k", &build_transcript(&root1));
-
     let layer2: Vec<u64> = (0..n / 4)
         .map(|j| {
             fri_fold_pair_for_test(
@@ -538,9 +491,7 @@ fn build_sample_envelope_poseidon2_with_domain_tag(domain_tag: String) -> StarkV
         .collect();
     let leaves2: Vec<[u8; 32]> = layer2.iter().map(|&v| leaf_hash_poseidon_u64(v)).collect();
     let (root2, levels2) = merkle_root_from_leaves_poseidon(leaves2.clone());
-
     let r2 = challenge_poseidon_u64("stark:fri:r:k", &build_transcript(&root2));
-
     let layer3: Vec<u64> = (0..n / 8)
         .map(|j| {
             fri_fold_pair_for_test(
@@ -553,7 +504,6 @@ fn build_sample_envelope_poseidon2_with_domain_tag(domain_tag: String) -> StarkV
         .collect();
     let leaves3: Vec<[u8; 32]> = layer3.iter().map(|&v| leaf_hash_poseidon_u64(v)).collect();
     let (root3, levels3) = merkle_root_from_leaves_poseidon(leaves3.clone());
-
     let commitments_roots = vec![root0, root1, root2, root3];
     let base_index =
         derive_query_index_for_test_poseidon("TEST-STARK", &params, &commitments_roots, 0);
@@ -585,7 +535,6 @@ fn build_sample_envelope_poseidon2_with_domain_tag(domain_tag: String) -> StarkV
         domain /= fold;
     }
     let queries: Vec<Vec<FoldDecommitV1>> = vec![chain];
-
     let comp_constant = 7u64;
     let comp_z_coeff = 2u64;
     let aux_wire0 = layer2[0];
@@ -626,7 +575,6 @@ fn build_sample_envelope_poseidon2_with_domain_tag(domain_tag: String) -> StarkV
         aux_terms: comp_aux_terms,
         path: path_for(0, &comp_levels),
     }]);
-
     StarkVerifyEnvelopeV1 {
         params,
         proof: StarkProofV1 {
@@ -643,11 +591,9 @@ fn build_sample_envelope_poseidon2_with_domain_tag(domain_tag: String) -> StarkV
         transcript_label: "TEST-STARK".to_string(),
     }
 }
-
 fn build_sample_envelope() -> StarkVerifyEnvelopeV1 {
     build_sample_envelope_with_domain_tag("fastpq:v1:fri".to_string())
 }
-
 fn sample_air_params(domain_tag: String, hash_fn: u8) -> StarkFriParamsV1 {
     StarkFriParamsV1 {
         version: 1,
@@ -660,7 +606,6 @@ fn sample_air_params(domain_tag: String, hash_fn: u8) -> StarkFriParamsV1 {
         domain_tag,
     }
 }
-
 fn build_sample_air_envelope_with_domain_tag(
     domain_tag: String,
     hash_fn: u8,
@@ -679,11 +624,9 @@ fn build_sample_air_envelope_with_domain_tag(
     .expect("build sample AIR envelope");
     norito::decode_from_bytes(&bytes).expect("decode sample AIR envelope")
 }
-
 fn build_sample_air_envelope_poseidon2() -> StarkVerifyEnvelopeV1 {
     build_sample_air_envelope_with_domain_tag("fastpq:v1:fri".to_string(), STARK_HASH_POSEIDON2_V1)
 }
-
 fn sample_composition_terms() -> Vec<StarkCompositionTermV1> {
     vec![
         StarkCompositionTermV1 {
@@ -698,7 +641,6 @@ fn sample_composition_terms() -> Vec<StarkCompositionTermV1> {
         },
     ]
 }
-
 fn build_sample_air_composition_envelope_with_domain_tag(
     domain_tag: String,
 ) -> StarkVerifyEnvelopeV1 {
@@ -712,11 +654,9 @@ fn build_sample_air_composition_envelope_with_domain_tag(
     .expect("build sample AIR composition envelope");
     norito::decode_from_bytes(&bytes).expect("decode sample AIR composition envelope")
 }
-
 fn build_sample_air_composition_envelope() -> StarkVerifyEnvelopeV1 {
     build_sample_air_composition_envelope_with_domain_tag("fastpq:v1:fri".to_string())
 }
-
 fn build_stark_open_verify_envelope_bytes_for_columns(
     backend: &str,
     circuit_id: &str,
@@ -725,7 +665,6 @@ fn build_stark_open_verify_envelope_bytes_for_columns(
     public_inputs: Vec<Vec<[u8; 32]>>,
 ) -> Vec<u8> {
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
-
     let domain_tag = stark_open_verify_domain_tag_current(
         backend,
         circuit_id,
@@ -751,7 +690,6 @@ fn build_stark_open_verify_envelope_bytes_for_columns(
     };
     norito::to_bytes(&env).expect("encode OpenVerifyEnvelope")
 }
-
 fn derive_ballot_nullifier_for_test(
     domain_tag: &str,
     network_id: &iroha_data_model::NetworkId,
@@ -759,7 +697,6 @@ fn derive_ballot_nullifier_for_test(
     commit: &[u8; 32],
 ) -> [u8; 32] {
     use blake2::{Blake2b512, Digest as _};
-
     let mut input = Vec::with_capacity(
         domain_tag.len() + network_id.as_bytes().len() + election_id.len() + commit.len() + 24,
     );
@@ -779,7 +716,6 @@ fn derive_ballot_nullifier_for_test(
     out.copy_from_slice(&digest[..32]);
     out
 }
-
 fn sample_stark_vk_box(
     backend: &str,
     circuit_id: &str,
@@ -798,15 +734,12 @@ fn sample_stark_vk_box(
     let bytes = norito::to_bytes(&payload).expect("encode STARK verifying key payload");
     iroha_data_model::proof::VerifyingKeyBox::new(backend.into(), bytes)
 }
-
 #[test]
 fn stark_single_fold_roundtrip_ok_and_fail() {
     let env = build_sample_air_composition_envelope();
-
     let bytes = norito::to_bytes(&env).expect("encode");
     let native_ok = iroha_core::zk_stark::verify_stark_fri_envelope(&bytes);
     assert!(native_ok, "native STARK verifier rejected sample envelope");
-
     // Tamper auxiliary term and expect rejection
     let mut env_bad_comp = env.clone();
     if let Some(ref mut entries) = env_bad_comp.proof.comp_values {
@@ -817,7 +750,6 @@ fn stark_single_fold_roundtrip_ok_and_fail() {
         !verify_stark_fri_envelope(&bytes_bad_comp),
         "tampered composition term should fail"
     );
-
     // Tamper with the derived index and expect rejection
     let mut env_bad_index = env.clone();
     env_bad_index.proof.queries[0][0].j = env_bad_index.proof.queries[0][0].j.wrapping_add(1);
@@ -826,7 +758,6 @@ fn stark_single_fold_roundtrip_ok_and_fail() {
         !verify_stark_fri_envelope(&bytes_bad_index),
         "tampered query index should fail"
     );
-
     // Corrupt one z1 value and expect failure
     let mut env_bad = env.clone();
     env_bad.proof.queries[0][1].z = env_bad.proof.queries[0][1].z.wrapping_add(1);
@@ -835,7 +766,6 @@ fn stark_single_fold_roundtrip_ok_and_fail() {
         !verify_stark_fri_envelope(&bytes_bad),
         "tampered STARK proof should fail"
     );
-
     // Non-canonical field encoding should be rejected (value equal to modulus)
     let mut env_bad_field = env.clone();
     env_bad_field.proof.queries[0][0].y0 = 0xFFFF_FFFF_0000_0001u64;
@@ -844,7 +774,6 @@ fn stark_single_fold_roundtrip_ok_and_fail() {
         !verify_stark_fri_envelope(&bytes_bad_field),
         "non-canonical Goldilocks encoding must fail"
     );
-
     // Wrong root should fail deterministically
     let mut env_bad_root = env.clone();
     env_bad_root.proof.commits.roots[0][0] ^= 0x01;
@@ -853,7 +782,6 @@ fn stark_single_fold_roundtrip_ok_and_fail() {
         !verify_stark_fri_envelope(&bytes_bad_root),
         "tampered root must fail"
     );
-
     // Broken Merkle path should fail
     let mut env_bad_path = env.clone();
     env_bad_path.proof.queries[0][0].path_y0.siblings[0][0] ^= 0x02;
@@ -862,7 +790,6 @@ fn stark_single_fold_roundtrip_ok_and_fail() {
         !verify_stark_fri_envelope(&bytes_bad_path),
         "broken Merkle path should fail"
     );
-
     // Round-count/roots mismatch should fail
     let mut env_bad_rounds = env.clone();
     env_bad_rounds.proof.commits.roots.pop();
@@ -872,7 +799,6 @@ fn stark_single_fold_roundtrip_ok_and_fail() {
         !verify_stark_fri_envelope(&bytes_bad_rounds),
         "mismatched round count should fail validation"
     );
-
     // Query-count/header mismatch should fail
     let mut env_bad_query_header = env.clone();
     env_bad_query_header.params.queries = 2;
@@ -881,7 +807,6 @@ fn stark_single_fold_roundtrip_ok_and_fail() {
         !verify_stark_fri_envelope(&bytes_bad_query_header),
         "mismatched query count in params should fail"
     );
-
     // Unsupported hash selector should be rejected
     let mut env_bad_hash = env.clone();
     env_bad_hash.params.hash_fn = 3;
@@ -891,7 +816,6 @@ fn stark_single_fold_roundtrip_ok_and_fail() {
         "unsupported hash selector must fail"
     );
 }
-
 #[test]
 fn stark_rejects_duplicate_auxiliary_composition_wires() {
     let mut env = build_sample_air_composition_envelope();
@@ -902,14 +826,12 @@ fn stark_rejects_duplicate_auxiliary_composition_wires() {
         .expect("sample composition envelope has composition values");
     let first_wire = comp_values[0].aux_terms[0].wire_index;
     comp_values[0].aux_terms[1].wire_index = first_wire;
-
     let bytes = norito::to_bytes(&env).expect("encode duplicate auxiliary wires");
     assert!(
         !verify_stark_fri_envelope(&bytes),
         "duplicate auxiliary composition wires must be rejected"
     );
 }
-
 #[test]
 fn stark_rejects_auxiliary_composition_wire_retarget_without_digest_match() {
     let mut env = build_sample_air_composition_envelope();
@@ -920,14 +842,12 @@ fn stark_rejects_auxiliary_composition_wire_retarget_without_digest_match() {
         .expect("sample composition envelope has composition values");
     comp_values[0].aux_terms[1].wire_index =
         comp_values[0].aux_terms[1].wire_index.saturating_add(1);
-
     let bytes = norito::to_bytes(&env).expect("encode retargeted auxiliary wire");
     assert!(
         !verify_stark_fri_envelope(&bytes),
         "auxiliary wire-index retargeting must remain bound to the AIR public digest"
     );
 }
-
 #[test]
 fn stark_composition_constructor_requires_strict_auxiliary_wire_order() {
     let params = sample_air_params("fastpq:v1:fri".to_string(), STARK_HASH_SHA256_V1);
@@ -955,7 +875,6 @@ fn stark_composition_constructor_requires_strict_auxiliary_wire_order() {
         duplicate_err.contains("strictly ordered"),
         "unexpected duplicate-wire error: {duplicate_err}"
     );
-
     let unsorted_terms = vec![
         StarkCompositionTermV1 {
             wire_index: 2,
@@ -981,7 +900,6 @@ fn stark_composition_constructor_requires_strict_auxiliary_wire_order() {
         "unexpected unsorted-wire error: {unsorted_err}"
     );
 }
-
 #[test]
 fn stark_low_level_envelope_requires_air_section() {
     let env = build_sample_envelope();
@@ -991,7 +909,6 @@ fn stark_low_level_envelope_requires_air_section() {
         "native STARK verifier must reject V1 envelopes without AIR openings"
     );
 }
-
 #[test]
 fn stark_poseidon2_roundtrip_ok() {
     let env = build_sample_air_envelope_poseidon2();
@@ -1001,7 +918,6 @@ fn stark_poseidon2_roundtrip_ok() {
         "native STARK verifier rejected poseidon2 envelope"
     );
 }
-
 #[test]
 fn stark_rejects_mismatched_merkle_indices() {
     let mut env =
@@ -1014,7 +930,6 @@ fn stark_rejects_mismatched_merkle_indices() {
         "index-mismatched Merkle openings must be rejected"
     );
 }
-
 #[test]
 fn stark_rejects_unbound_air_composition_root() {
     let mut env = build_sample_air_composition_envelope();
@@ -1029,7 +944,6 @@ fn stark_rejects_unbound_air_composition_root() {
         "AIR composition root must match FRI layer zero"
     );
 }
-
 #[test]
 fn stark_rejects_tampered_air_trace_root() {
     let mut env = build_sample_air_composition_envelope();
@@ -1040,7 +954,6 @@ fn stark_rejects_tampered_air_trace_root() {
         "AIR trace root must authenticate sampled trace rows"
     );
 }
-
 #[test]
 fn stark_rejects_tampered_air_public_digest() {
     let mut env = build_sample_air_composition_envelope();
@@ -1051,7 +964,6 @@ fn stark_rejects_tampered_air_public_digest() {
         "AIR public digest must remain bound to sampled rows and composition openings"
     );
 }
-
 #[test]
 fn stark_rejects_air_trace_width_mismatch() {
     let mut env = build_sample_air_composition_envelope();
@@ -1063,7 +975,6 @@ fn stark_rejects_air_trace_width_mismatch() {
         "AIR trace width must match the V1 AIR layout"
     );
 }
-
 #[test]
 fn stark_rejects_air_opening_count_mismatch() {
     let mut env = build_sample_air_composition_envelope();
@@ -1076,7 +987,6 @@ fn stark_rejects_air_opening_count_mismatch() {
         "AIR opening count must match verifier query count"
     );
 }
-
 #[test]
 fn stark_air_width_limit_is_enforced() {
     let env = build_sample_air_composition_envelope();
@@ -1090,24 +1000,19 @@ fn stark_air_width_limit_is_enforced() {
         "AIR trace width must respect verifier limits"
     );
 }
-
 #[test]
 fn stark_open_verify_envelope_rejects_synthetic_air_proof() {
     use iroha_data_model::{
         proof::ProofBox,
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
-
     let backend = "stark/fri/sha256-goldilocks";
     let circuit_id = "ivm-execution-v1";
-
     let vk_box = sample_stark_vk_box(backend, circuit_id, STARK_HASH_SHA256_V1);
     let vk_hash = iroha_core::zk::hash_vk(&vk_box);
-
     // Two columns, one row each (matches the instance-column shape used by other backends).
     let public_inputs = vec![vec![[0xAA; 32]], vec![[0xBB; 32]]];
     let env_public_inputs = b"schema:test".to_vec();
-
     let domain_tag = stark_open_verify_domain_tag_current(
         backend,
         circuit_id,
@@ -1117,14 +1022,12 @@ fn stark_open_verify_envelope_rejects_synthetic_air_proof() {
     );
     let inner = build_sample_envelope_with_domain_tag(domain_tag);
     let envelope_bytes = norito::to_bytes(&inner).expect("encode stark envelope");
-
     let open = StarkFriOpenProofV1 {
         version: 1,
         public_inputs: public_inputs.clone(),
         envelope_bytes,
     };
     let proof_bytes = norito::to_bytes(&open).expect("encode open proof");
-
     let env = OpenVerifyEnvelope {
         backend: BackendTag::Stark,
         circuit_id: circuit_id.to_string(),
@@ -1133,7 +1036,6 @@ fn stark_open_verify_envelope_rejects_synthetic_air_proof() {
         proof_bytes,
         aux: Vec::new(),
     };
-
     let proof = ProofBox::new(
         backend.into(),
         norito::to_bytes(&env).expect("encode OpenVerifyEnvelope"),
@@ -1142,7 +1044,6 @@ fn stark_open_verify_envelope_rejects_synthetic_air_proof() {
         !verify_backend(backend, &proof, Some(&vk_box)),
         "wrapped STARK OpenVerifyEnvelope must fail closed when the AIR section is missing"
     );
-
     // Changing circuit_id without updating the inner envelope's `domain_tag` must fail.
     let mut env_bad = env;
     env_bad.circuit_id = "other-circuit".to_string();
@@ -1155,20 +1056,16 @@ fn stark_open_verify_envelope_rejects_synthetic_air_proof() {
         "STARK OpenVerifyEnvelope must bind circuit_id via domain_tag"
     );
 }
-
 #[test]
 fn stark_open_verify_envelope_poseidon2_variant_rejects_synthetic_air_proof() {
     use iroha_data_model::{
         proof::ProofBox,
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
-
     let backend = "stark/fri/poseidon2-goldilocks";
     let circuit_id = "ivm-execution-v1";
-
     let vk_box = sample_stark_vk_box(backend, circuit_id, STARK_HASH_POSEIDON2_V1);
     let vk_hash = iroha_core::zk::hash_vk(&vk_box);
-
     let public_inputs = vec![vec![[0x11; 32]], vec![[0x22; 32]]];
     let env_public_inputs = b"schema:test".to_vec();
     let domain_tag = stark_open_verify_domain_tag_current(
@@ -1180,14 +1077,12 @@ fn stark_open_verify_envelope_poseidon2_variant_rejects_synthetic_air_proof() {
     );
     let inner = build_sample_envelope_poseidon2_with_domain_tag(domain_tag);
     let envelope_bytes = norito::to_bytes(&inner).expect("encode stark envelope");
-
     let open = StarkFriOpenProofV1 {
         version: 1,
         public_inputs: public_inputs.clone(),
         envelope_bytes,
     };
     let proof_bytes = norito::to_bytes(&open).expect("encode open proof");
-
     let env = OpenVerifyEnvelope {
         backend: BackendTag::Stark,
         circuit_id: circuit_id.to_string(),
@@ -1205,7 +1100,6 @@ fn stark_open_verify_envelope_poseidon2_variant_rejects_synthetic_air_proof() {
         "wrapped STARK OpenVerifyEnvelope must fail closed when the AIR section is missing"
     );
 }
-
 fn hash_to_u64_limbs_le(hash: &iroha_crypto::Hash) -> [u64; 4] {
     let bytes: &[u8; 32] = hash.as_ref();
     let mut limbs = [0u64; 4];
@@ -1216,13 +1110,11 @@ fn hash_to_u64_limbs_le(hash: &iroha_crypto::Hash) -> [u64; 4] {
     }
     limbs
 }
-
 fn limb_as_instance_bytes(limb: u64) -> [u8; 32] {
     let mut out = [0u8; 32];
     out[..8].copy_from_slice(&limb.to_le_bytes());
     out
 }
-
 fn expected_ivm_exec_public_inputs(
     code_hash: iroha_crypto::Hash,
     overlay_hash: iroha_crypto::Hash,
@@ -1241,11 +1133,9 @@ fn expected_ivm_exec_public_inputs(
         .map(limb_as_instance_bytes)
         .collect()
 }
-
 #[test]
 fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
     use std::sync::Arc;
-
     use iroha_crypto::Hash;
     use iroha_data_model::{
         Registrable,
@@ -1259,10 +1149,8 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
         transaction::{Executable, IvmProved},
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
-
     let backend = "stark/fri/sha256-goldilocks";
     let circuit_id = "ivm-execution-v1";
-
     // Minimal ZK-mode IVM program: metadata + `HALT`.
     let meta = ivm::ProgramMetadata {
         max_cycles: 1,
@@ -1272,20 +1160,16 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
     let mut program = meta.encode();
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let bytecode = IvmBytecode::from_compiled(program);
-
     let kp = checked_zk_stark_keypair();
     let authority = AccountId::new(kp.public_key().clone());
     let domain_id: iroha_data_model::domain::DomainId =
         iroha_data_model::domain::DomainId::try_new("wonderland", "universal").unwrap();
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
-
     let world = iroha_core::state::World::with([domain], [account], []);
-
     let vk_id = VerifyingKeyId::new(backend, "ivm_execution_stark");
     let vk_box = sample_stark_vk_box(backend, circuit_id, STARK_HASH_SHA256_V1);
     let vk_hash = iroha_core::zk::hash_vk(&vk_box);
-
     let mut vk_record = VerifyingKeyRecord::new(
         1,
         format!("{backend}:{circuit_id}"),
@@ -1298,7 +1182,6 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
     vk_record.gas_schedule_id = Some("sched_0".to_owned());
     vk_record.max_proof_bytes = 8 * 1024 * 1024;
     vk_record.key = Some(vk_box.clone());
-
     {
         let mut wb = world.block();
         wb.verifying_keys_mut_for_testing()
@@ -1309,14 +1192,12 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
         );
         wb.commit();
     }
-
     let kura = Arc::new(iroha_core::kura::Kura::blank_kura_for_testing());
     let query = iroha_core::query::store::LiveQueryStore::start_test();
     let mut state = iroha_core::state::State::new_for_testing(world, Arc::clone(&kura), query);
     state.zk.halo2.enabled = false;
     state.zk.stark.enabled = true;
     const TEST_GAS_LIMIT: u64 = 50_000_000;
-
     // Derive the proved payload by executing the IVM program once.
     let tx = TransactionBuilder::new(
         *state.network_id_ref(),
@@ -1334,7 +1215,6 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
         &vk_record,
     )
     .expect("derive proved payload");
-
     // Compute the ivm-execution-v1 public inputs and package them as STARK wrapper columns.
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let summary = ivm_cache
@@ -1351,11 +1231,9 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
         proved.gas_policy_commitment,
     );
     let public_inputs = inputs.into_iter().map(|v| vec![v]).collect::<Vec<_>>();
-
     // Public-input schema descriptor is the same for both Halo2 and STARK wrappers.
     let env_public_inputs =
         iroha_core::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
-
     let domain_tag = stark_open_verify_domain_tag_current(
         backend,
         circuit_id,
@@ -1379,7 +1257,6 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
         proof_bytes,
         aux: Vec::new(),
     };
-
     let proof_box = ProofBox::new(
         backend.into(),
         norito::to_bytes(&env).expect("encode OpenVerifyEnvelope"),
@@ -1387,7 +1264,6 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
     let attachment = ProofAttachment::new_ref(backend.into(), proof_box, vk_id);
     let attachments = ProofAttachmentList::try_from(vec![attachment])
         .expect("one attachment is a valid bounded proof list");
-
     let tx_proved = TransactionBuilder::new(
         *state.network_id_ref(),
         authority,
@@ -1404,7 +1280,6 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
     }))
     .with_attachments(attachments)
     .sign(kp.private_key());
-
     let err =
         iroha_core::pipeline::overlay::build_overlay_for_transaction(&tx_proved, &state.view())
             .expect_err("synthetic STARK proved execution must be rejected");
@@ -1414,11 +1289,9 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
         "unexpected proved execution rejection: {err:?}"
     );
 }
-
 #[test]
 fn create_election_rejects_generic_stark_vote_role_labels() {
     use core::num::NonZeroU64;
-
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
@@ -1439,13 +1312,11 @@ fn create_election_rejects_generic_stark_vote_role_labels() {
     use iroha_executor_data_model::permission::governance::CanManageParliament;
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
-
     let backend = "stark/fri/sha256-goldilocks";
     let ballot_circuit_id = "stark/fri/sha256-goldilocks:vote-ballot";
     let tally_circuit_id = "stark/fri/sha256-goldilocks:vote-tally";
     let election_id = "stark-vote-e2e".to_string();
     let nullifier_domain = "gov:ballot:v1";
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let domain_id: iroha_data_model::domain::DomainId =
@@ -1459,7 +1330,6 @@ fn create_election_rejects_generic_stark_vote_role_labels() {
     state.zk.verify_timeout = std::time::Duration::ZERO;
     state.gov.citizenship_bond_amount = 0_u64.into();
     state.gov.min_bond_amount = 0_u64.into();
-
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero"),
         None,
@@ -1470,7 +1340,6 @@ fn create_election_rejects_generic_stark_vote_role_labels() {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm_vk, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
@@ -1501,7 +1370,6 @@ fn create_election_rejects_generic_stark_vote_role_labels() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register ballot vk");
-
     let tally_vk_id = VerifyingKeyId::new(backend, "vote_tally");
     let tally_vk_box = sample_stark_vk_box(backend, tally_circuit_id, STARK_HASH_SHA256_V1);
     let tally_vk_hash = iroha_core::zk::hash_vk(&tally_vk_box);
@@ -1524,7 +1392,6 @@ fn create_election_rejects_generic_stark_vote_role_labels() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register tally vk");
-
     let eligible_root = [0x22; 32];
     let err = CreateElection {
         election_id: election_id.clone(),
@@ -1544,14 +1411,10 @@ fn create_election_rejects_generic_stark_vote_role_labels() {
         "unexpected generic STARK vote-role rejection: {err:?}"
     );
 }
-
 #[test]
 fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
     use core::num::NonZeroU64;
-
-    use iroha_core::{
-        kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State,
-    };
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State};
     use iroha_data_model::{
         Registrable,
         account::Account,
@@ -1566,13 +1429,11 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
     use iroha_executor_data_model::permission::governance::CanManageParliament;
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
-
     let backend = "stark/fri/sha256-goldilocks";
     let bad_ballot_circuit_id = "stark/fri/sha256-goldilocks:not-a-ballot-circuit";
     let tally_circuit_id = "stark/fri/sha256-goldilocks:vote-tally";
     let ballot_schema_hash: [u8; 32] = iroha_crypto::Hash::new(b"gov:vote:ballot:schema:v1").into();
     let tally_schema_hash: [u8; 32] = iroha_crypto::Hash::new(b"gov:vote:tally:schema:v1").into();
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let domain_id: iroha_data_model::domain::DomainId =
@@ -1587,7 +1448,6 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
     state.zk.stark.enabled = true;
     state.zk.halo2.enabled = false;
     state.zk.verify_timeout = std::time::Duration::ZERO;
-
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero"),
         None,
@@ -1598,7 +1458,6 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm_vk, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
@@ -1607,7 +1466,6 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
     Grant::account_permission(perm_parliament, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant CanManageParliament");
-
     let ballot_vk_id = VerifyingKeyId::new(backend, "bad_vote_ballot");
     let ballot_vk_box = sample_stark_vk_box(backend, bad_ballot_circuit_id, STARK_HASH_SHA256_V1);
     let mut ballot_vk_record = VerifyingKeyRecord::new(
@@ -1627,7 +1485,6 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register bad ballot vk");
-
     let tally_vk_id = VerifyingKeyId::new(backend, "vote_tally");
     let tally_vk_box = sample_stark_vk_box(backend, tally_circuit_id, STARK_HASH_SHA256_V1);
     let mut tally_vk_record = VerifyingKeyRecord::new(
@@ -1647,7 +1504,6 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register tally vk");
-
     let err = CreateElection {
         election_id: "stark-vote-role-check".to_owned(),
         options: 2,
@@ -1666,14 +1522,10 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
         "unexpected error: {err:?}"
     );
 }
-
 #[test]
 fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
     use core::num::NonZeroU64;
-
-    use iroha_core::{
-        kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State,
-    };
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State};
     use iroha_data_model::{
         Registrable,
         account::Account,
@@ -1688,13 +1540,11 @@ fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
     use iroha_executor_data_model::permission::governance::CanManageParliament;
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
-
     let backend = "stark/fri/sha256-goldilocks";
     let ballot_circuit_id = "stark/fri/sha256-goldilocks:vote-ballot";
     let bad_tally_circuit_id = "stark/fri/sha256-goldilocks:not-a-tally-circuit";
     let ballot_schema_hash: [u8; 32] = iroha_crypto::Hash::new(b"gov:vote:ballot:schema:v1").into();
     let tally_schema_hash: [u8; 32] = iroha_crypto::Hash::new(b"gov:vote:tally:schema:v1").into();
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let domain_id: iroha_data_model::domain::DomainId =
@@ -1709,7 +1559,6 @@ fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
     state.zk.stark.enabled = true;
     state.zk.halo2.enabled = false;
     state.zk.verify_timeout = std::time::Duration::ZERO;
-
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero"),
         None,
@@ -1720,7 +1569,6 @@ fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm_vk, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
@@ -1729,7 +1577,6 @@ fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
     Grant::account_permission(perm_parliament, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant CanManageParliament");
-
     let ballot_vk_id = VerifyingKeyId::new(backend, "vote_ballot");
     let ballot_vk_box = sample_stark_vk_box(backend, ballot_circuit_id, STARK_HASH_SHA256_V1);
     let mut ballot_vk_record = VerifyingKeyRecord::new(
@@ -1749,7 +1596,6 @@ fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register ballot vk");
-
     let tally_vk_id = VerifyingKeyId::new(backend, "bad_vote_tally");
     let tally_vk_box = sample_stark_vk_box(backend, bad_tally_circuit_id, STARK_HASH_SHA256_V1);
     let mut tally_vk_record = VerifyingKeyRecord::new(
@@ -1769,7 +1615,6 @@ fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register bad tally vk");
-
     let err = CreateElection {
         election_id: "stark-vote-role-check-tally".to_owned(),
         options: 2,
@@ -1788,12 +1633,10 @@ fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
         "unexpected error: {err:?}"
     );
 }
-
 #[test]
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     use core::num::NonZeroU64;
-
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
@@ -1821,7 +1664,6 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
     use mv::storage::StorageReadOnly;
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let domain_id: iroha_data_model::domain::DomainId =
@@ -1835,7 +1677,6 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     state.zk.verify_timeout = std::time::Duration::ZERO;
     state.gov.citizenship_bond_amount = 0_u64.into();
     state.gov.min_bond_amount = 0_u64.into();
-
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero"),
         None,
@@ -1846,7 +1687,6 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm_vk, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
@@ -1855,7 +1695,6 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     Grant::account_permission(perm_parliament, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant CanManageParliament");
-
     let halo2_election_id = "mixed-backend-halo2".to_string();
     let stark_election_id = "mixed-backend-stark".to_string();
     let perm_halo2_ballot: Permission = CanSubmitGovernanceBallot {
@@ -1872,7 +1711,6 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     Grant::account_permission(perm_stark_ballot, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant stark ballot permission");
-
     // Register a Halo2 VK/circuit pair and submit a valid Halo2 ballot.
     let halo2_backend = "halo2/ipa";
     let halo2_circuit_id = "halo2/ipa:tiny-add2inst-public";
@@ -1901,7 +1739,6 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register halo2 ballot vk");
-
     let mut halo2_commit = [0u8; 32];
     halo2_commit.copy_from_slice(&halo2_fixture.public_inputs[..32]);
     let mut halo2_root = [0u8; 32];
@@ -1918,7 +1755,6 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("create halo2 election");
-
     let halo2_ballot_attachment = ProofAttachment::new_ref(
         halo2_backend.to_string(),
         ProofBox::new(halo2_backend.to_string(), halo2_fixture.proof_bytes.clone()),
@@ -1938,7 +1774,6 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("submit halo2 ballot");
-
     // Register a STARK VK/circuit pair and reject a synthetic STARK ballot.
     let stark_backend = "stark/fri/sha256-goldilocks";
     let stark_ballot_circuit_id = "stark/fri/sha256-goldilocks:vote-ballot";
@@ -1966,7 +1801,6 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register stark ballot vk");
-
     let stark_tally_vk_id = VerifyingKeyId::new(stark_backend, "mixed_stark_tally");
     let stark_tally_vk_box =
         sample_stark_vk_box(stark_backend, stark_tally_circuit_id, STARK_HASH_SHA256_V1);
@@ -1990,7 +1824,6 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register stark tally vk");
-
     let stark_commit = [0x11; 32];
     let stark_root = [0x22; 32];
     CreateElection {
@@ -2005,7 +1838,6 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("create stark election");
-
     let stark_ballot_proof_bytes = build_stark_open_verify_envelope_bytes_for_columns(
         stark_backend,
         stark_ballot_circuit_id,
@@ -2037,7 +1869,6 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
         err_text.contains("invalid ballot proof"),
         "unexpected stark ballot rejection: {err:?}"
     );
-
     let halo2_election = stx
         .world
         .elections()
@@ -2061,7 +1892,6 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
         "synthetic stark ballot must be rejected"
     );
 }
-
 #[test]
 fn stark_envelope_respects_limits() {
     let env = build_sample_air_composition_envelope();
@@ -2070,13 +1900,10 @@ fn stark_envelope_respects_limits() {
         verify_stark_fri_envelope(&bytes),
         "default limits should accept the sample envelope"
     );
-
     let default_limits = StarkVerifierLimits::default();
-
     // Apply a stricter domain-tag limit to force rejection.
     let mut tight_limits = default_limits;
     tight_limits.max_domain_tag_len = 4;
-
     let mut env_bad_tag = env.clone();
     env_bad_tag.params.domain_tag = "TOO-LONG-TAG".into();
     let bytes_bad_tag = norito::to_bytes(&env_bad_tag).expect("encode");
@@ -2084,25 +1911,21 @@ fn stark_envelope_respects_limits() {
         !verify_stark_fri_envelope_with_limits(&bytes_bad_tag, &tight_limits),
         "envelope with oversized domain tag must fail under stricter limits"
     );
-
     // Apply envelope byte budget lower than payload size to confirm size guard triggers.
     tight_limits.max_envelope_bytes = bytes.len().saturating_sub(1);
     assert!(
         !verify_stark_fri_envelope_with_limits(&bytes, &tight_limits),
         "envelope larger than allowed byte budget must fail"
     );
-
     let mut relaxed_limits = default_limits;
     relaxed_limits.max_domain_tag_len = default_limits.max_domain_tag_len + 1;
     relaxed_limits.max_transcript_label_len = default_limits.max_transcript_label_len + 1;
     relaxed_limits.max_envelope_bytes = default_limits.max_envelope_bytes + 1;
-
     let oversized_envelope_bytes = vec![0_u8; default_limits.max_envelope_bytes + 1];
     assert!(
         !verify_stark_fri_envelope_with_limits(&oversized_envelope_bytes, &relaxed_limits),
         "raised public limits must not relax the native encoded-envelope byte cap"
     );
-
     let over_canonical_domain_tag = "d".repeat(default_limits.max_domain_tag_len + 1);
     let err = prove_stark_fri_composition_envelope_bytes(
         sample_air_params(over_canonical_domain_tag.clone(), STARK_HASH_SHA256_V1),
@@ -2116,7 +1939,6 @@ fn stark_envelope_respects_limits() {
         err.contains("domain tag"),
         "domain-tag rejection should be explicit, got: {err}"
     );
-
     let over_canonical_transcript_label = "T".repeat(default_limits.max_transcript_label_len + 1);
     let err = prove_stark_fri_composition_envelope_bytes(
         sample_air_params("fastpq:v1:fri".to_string(), STARK_HASH_SHA256_V1),
@@ -2130,7 +1952,6 @@ fn stark_envelope_respects_limits() {
         err.contains("transcript label"),
         "transcript-label rejection should be explicit, got: {err}"
     );
-
     let mut env_over_canonical_tag = env.clone();
     env_over_canonical_tag.params.domain_tag = over_canonical_domain_tag;
     let bytes_over_canonical_tag =
@@ -2139,7 +1960,6 @@ fn stark_envelope_respects_limits() {
         !verify_stark_fri_envelope_with_limits(&bytes_over_canonical_tag, &relaxed_limits),
         "raised public limits must not relax the canonical domain-tag cap"
     );
-
     let mut env_over_canonical_label = env;
     env_over_canonical_label.transcript_label = over_canonical_transcript_label;
     let bytes_over_canonical_label = norito::to_bytes(&env_over_canonical_label)
@@ -2149,7 +1969,6 @@ fn stark_envelope_respects_limits() {
         "raised public limits must not relax the canonical transcript-label cap"
     );
 }
-
 #[test]
 fn stark_single_fold_envelope_golden_vector() {
     let env = build_sample_air_composition_envelope();

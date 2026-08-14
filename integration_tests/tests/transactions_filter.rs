@@ -1,11 +1,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! JSON filter DSL server-side predicates test for transactions endpoint.
-
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_test_network::NetworkBuilder;
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<()> {
@@ -20,7 +18,6 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
     };
     let client = network.client();
     let alice_id_str = format!("{}", *iroha_test_samples::ALICE_ID);
-
     // Submit a tx (registering a dummy asset def) to ensure at least one Alice-authored tx exists
     tokio::task::spawn_blocking({
         let client = client.clone();
@@ -44,7 +41,6 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
     })
     .await?;
     network.ensure_blocks(2).await?;
-
     // Build filter: authority == ALICE_ID (canonical encoded literal) AND timestamp_ms >= 0
     let eq_filter = norito::json::object([
         (
@@ -105,7 +101,6 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
         ),
     ])
     .expect("serialize request envelope");
-
     // POST to the endpoint
     let url = client
         .torii_url
@@ -144,6 +139,5 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
         };
         assert_eq!(auth, alice_id_str);
     }
-
     Ok(())
 }

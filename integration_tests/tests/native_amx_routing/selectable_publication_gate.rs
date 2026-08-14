@@ -1,9 +1,6 @@
 //! Selectable Native AMX phase-cut qualification and replay evidence.
-
 use iroha_test_network::NativeAmxFaultPhase;
-
 use super::*;
-
 fn musubi_selectable_fault_localnet_builder() -> NetworkBuilder {
     let treasury = gas_account()
         .canonical_i105()
@@ -25,7 +22,6 @@ fn musubi_selectable_fault_localnet_builder() -> NetworkBuilder {
             );
         })
 }
-
 async fn run_selectable_musubi_publication_phase_cut(
     phase: NativeAmxFaultPhase,
     phase_label: &str,
@@ -37,7 +33,6 @@ async fn run_selectable_musubi_publication_phase_cut(
     else {
         return Ok(false);
     };
-
     let result: Result<()> = async {
         let config_layers: Vec<ConfigLayer> = network
             .config_layers()
@@ -50,7 +45,6 @@ async fn run_selectable_musubi_publication_phase_cut(
         );
         let submitter = peers[0].client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
         let fixture = prepare_selectable_musubi_publication(&network, &submitter, &context).await?;
-
         let mut pre_cut_snapshot = None;
         for (index, peer) in peers.iter().enumerate() {
             let snapshot = assert_selectable_musubi_archive_without_release(
@@ -67,7 +61,6 @@ async fn run_selectable_musubi_publication_phase_cut(
                 pre_cut_snapshot = Some(snapshot);
             }
         }
-
         // Fresh Native AMX PrepareQC/CommitQC assembly runs only on the
         // deterministic autonomous coordinator-lane author. Derive that peer
         // from the exact durable universal-lane frontier and its embedded
@@ -149,7 +142,6 @@ async fn run_selectable_musubi_publication_phase_cut(
             .await
             .map_err(|error| eyre!("{context}: publication submit task failed: {error}"))?
             .wrap_err_with(|| format!("{context}: submit exact publication"))?;
-
         let ack = target_control
             .wait_for_native_amx_fault(revision, phase, source_id, STATUS_WAIT_TIMEOUT)
             .await
@@ -158,7 +150,6 @@ async fn run_selectable_musubi_publication_phase_cut(
             ack.revision == revision && ack.phase == phase && ack.source_id == source_id,
             "{context}: durable phase acknowledgement did not bind the exact publication"
         );
-
         let publish_entrypoint = fixture.transaction.hash_as_entrypoint();
         let mut recovery_heartbeat = None;
         let live_block_before_restart = if phase == NativeAmxFaultPhase::BeforeWorldCommit {
@@ -215,7 +206,6 @@ async fn run_selectable_musubi_publication_phase_cut(
                     &format!("{context}: live peer {index} before author restart"),
                 )?;
             }
-
             let heartbeat_deadline = Instant::now() + STATUS_WAIT_TIMEOUT;
             let heartbeat = loop {
                 let mut canonical = None;
@@ -275,7 +265,6 @@ async fn run_selectable_musubi_publication_phase_cut(
                 );
                 sleep(STATUS_POLL_INTERVAL).await;
             };
-
             for (index, peer) in peers
                 .iter()
                 .enumerate()
@@ -290,7 +279,6 @@ async fn run_selectable_musubi_publication_phase_cut(
                     "{context}: live peer {index} did not expose height-only recovery progress: before_non_empty={pre_cut_blocks_non_empty}, status={status:?}"
                 );
             }
-
             // Keep the author down for ten signed cadences, two retransmission
             // intervals, and two DA commit-quorum windows. The owner-scoped
             // heartbeat is one-shot: it must not turn the stalled publication
@@ -330,7 +318,6 @@ async fn run_selectable_musubi_publication_phase_cut(
             recovery_heartbeat = Some(heartbeat);
             None
         };
-
         ensure!(
             target.shutdown_if_started().await,
             "{context}: aborted target peer had no reapable run"
@@ -339,7 +326,6 @@ async fn run_selectable_musubi_publication_phase_cut(
             .start_checked(config_layers.iter().cloned(), None)
             .await
             .wrap_err_with(|| format!("{context}: restart phase-cut target"))?;
-
         let live_block = match live_block_before_restart {
             Some(block) => block,
             None => {
@@ -353,7 +339,6 @@ async fn run_selectable_musubi_publication_phase_cut(
                 block
             }
         };
-
         let barrier_transaction = live_submitter.build_transaction(
             [InstructionBox::from(Log::new(
                 Level::INFO,
@@ -369,7 +354,6 @@ async fn run_selectable_musubi_publication_phase_cut(
             &format!("{context}: post-restart visibility barrier"),
         )
         .await?;
-
         // The barrier proves the restarted peer caught the same canonical
         // publication block, rather than executing a second copy locally.
         ensure!(
@@ -378,7 +362,6 @@ async fn run_selectable_musubi_publication_phase_cut(
                 .any(|hash| hash == publish_entrypoint),
             "{context}: selected publication block lost the exact entrypoint"
         );
-
         let mut canonical_snapshot = None;
         let mut canonical_publication_block = None;
         for (index, peer) in peers.iter().enumerate() {
@@ -396,7 +379,6 @@ async fn run_selectable_musubi_publication_phase_cut(
             } else {
                 canonical_snapshot = Some(snapshot);
             }
-
             let blocks = client.query(FindBlocks).execute_all()?;
             let empty_successors = blocks
                 .iter()
@@ -471,12 +453,10 @@ async fn run_selectable_musubi_publication_phase_cut(
         Ok(())
     }
     .await;
-
     network.shutdown().await;
     result?;
     Ok(true)
 }
-
 pub(super) async fn run() -> Result<()> {
     init_instruction_registry();
     let context = stringify!(musubi_selectable_publication_phase_cut_matrix_is_atomic_after_replay);

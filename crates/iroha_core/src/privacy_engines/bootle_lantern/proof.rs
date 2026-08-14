@@ -8,9 +8,7 @@
 //! self-verification. It also owns the sealed two-pass presentation transaction
 //! builder so no proof, statement, genesis, policy, or intent binding can be
 //! replaced between proving and signing.
-
 use core::{num::NonZeroU32, time::Duration};
-
 use iroha_crypto::{Hash, PrivateKey, PublicKey};
 use iroha_data_model::{
     account::AccountId,
@@ -32,7 +30,6 @@ use iroha_data_model::{
 use rand_core_06::{CryptoRng, OsRng, RngCore};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
-
 use super::{
     bounds::{ResponseBoundErrorV1, validate_public_response_bounds_v1},
     codec::{
@@ -69,12 +66,10 @@ use super::{
         BlindIssuanceRequestTranscriptV1, PresentationTranscriptV1, ProofTranscriptCoreV1,
     },
 };
-
 const PROJECTION_R_STAGE_V1: &[u8] = b"projection-r-v1";
 const PROJECTION_R_PRIME_STAGE_V1: &[u8] = b"projection-r-prime-v1";
 const SCHWARTZ_WEIGHT_STAGE_V1: &[u8] = b"schwartz-weights-v1";
 const EQUATION_MULTIPLIER_STAGE_V1: &[u8] = b"quadratic-equation-multipliers-v1";
-
 const Y3_MESSAGE_START_V1: usize = 0;
 const Y4_MESSAGE_START_V1: usize = 4;
 const BETA_MESSAGE_INDEX_V1: usize = 8;
@@ -85,7 +80,6 @@ const PROVER_PRECOMPUTED_QUADRATIC_EVALUATIONS_V1: usize = 2;
 #[cfg(test)]
 const PROVER_QUADRATIC_EVALUATIONS_PER_MASK_RETRY_V1: usize = 3;
 const VERIFIER_QUADRATIC_EVALUATIONS_V1: usize = 3;
-
 #[cfg(test)]
 const MAX_QUADRATIC_EVALUATIONS_PER_PROVE_ATTEMPT_V1: usize =
     PROVER_PRECOMPUTED_QUADRATIC_EVALUATIONS_V1
@@ -105,26 +99,22 @@ const MIN_RESPONSE_CONTEXTS_AT_GLOBAL_BUDGET_V1: usize = (MAX_PROOF_SAMPLING_ATT
 const MAX_TOP_LEVEL_QUADRATIC_EVALUATIONS_V1: usize = 3 * MAX_PROOF_SAMPLING_ATTEMPTS_V1 as usize
     - MIN_RESPONSE_CONTEXTS_AT_GLOBAL_BUDGET_V1
     + VERIFIER_QUADRATIC_EVALUATIONS_V1;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProofRejectionStageV1 {
     Projection,
     ResponseMask,
 }
-
 #[derive(Default, PartialEq, Eq)]
 struct ProofRejectionStatsV1 {
     projection: u32,
     response_sampling: u32,
     response_norm: u32,
 }
-
 impl core::fmt::Debug for ProofRejectionStatsV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ProofRejectionStatsV1(<redacted>)")
     }
 }
-
 impl Zeroize for ProofRejectionStatsV1 {
     fn zeroize(&mut self) {
         self.projection.zeroize();
@@ -132,13 +122,11 @@ impl Zeroize for ProofRejectionStatsV1 {
         self.response_norm.zeroize();
     }
 }
-
 impl Drop for ProofRejectionStatsV1 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 impl ProofRejectionStatsV1 {
     fn increment(counter: &mut u32) {
         *counter = counter
@@ -146,20 +134,17 @@ impl ProofRejectionStatsV1 {
             .expect("a rejection count cannot exceed the shared u32 draw budget");
     }
 }
-
 struct ProofRejectionBudgetV1 {
     remaining: u32,
     projection_draws: u32,
     response_mask_draws: u32,
     rejections: ProofRejectionStatsV1,
 }
-
 impl core::fmt::Debug for ProofRejectionBudgetV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ProofRejectionBudgetV1(<redacted>)")
     }
 }
-
 impl Zeroize for ProofRejectionBudgetV1 {
     fn zeroize(&mut self) {
         self.remaining.zeroize();
@@ -168,13 +153,11 @@ impl Zeroize for ProofRejectionBudgetV1 {
         self.rejections.zeroize();
     }
 }
-
 impl Drop for ProofRejectionBudgetV1 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 impl ProofRejectionBudgetV1 {
     const fn new(limit: u32) -> Self {
         Self {
@@ -188,7 +171,6 @@ impl ProofRejectionBudgetV1 {
             },
         }
     }
-
     fn reserve(&mut self, stage: ProofRejectionStageV1) -> bool {
         let Some(remaining) = self.remaining.checked_sub(1) else {
             return false;
@@ -203,74 +185,60 @@ impl ProofRejectionBudgetV1 {
             .expect("draw count cannot exceed its u32 budget");
         true
     }
-
     #[cfg(test)]
     const fn remaining(&self) -> u32 {
         self.remaining
     }
-
     const fn is_exhausted(&self) -> bool {
         self.remaining == 0
     }
-
     fn total_draws(&self) -> u32 {
         self.projection_draws
             .checked_add(self.response_mask_draws)
             .expect("stage draws cannot exceed their shared u32 budget")
     }
-
     fn record_projection_rejection(&mut self) {
         ProofRejectionStatsV1::increment(&mut self.rejections.projection);
     }
-
     fn record_response_sampling_rejection(&mut self) {
         ProofRejectionStatsV1::increment(&mut self.rejections.response_sampling);
     }
-
     fn record_response_norm_rejection(&mut self) {
         ProofRejectionStatsV1::increment(&mut self.rejections.response_norm);
     }
-
     fn exhaustion_error(&self) -> PresentationProofErrorV1 {
         PresentationProofErrorV1::SamplingBudgetExhausted
     }
 }
-
 struct SecretPolynomialVectorV1<const N: usize> {
     polynomials: Box<[ProofPolynomialV1; N]>,
 }
-
 impl<const N: usize> SecretPolynomialVectorV1<N> {
     fn zero() -> Self {
         Self {
             polynomials: boxed_zero_polynomial_array_v1(),
         }
     }
-
     fn from_polynomials(polynomials: Box<[ProofPolynomialV1; N]>) -> Self {
         Self { polynomials }
     }
 }
-
 impl<const N: usize> core::fmt::Debug for SecretPolynomialVectorV1<N> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("SecretPolynomialVectorV1(<redacted>)")
     }
 }
-
 impl<const N: usize> Drop for SecretPolynomialVectorV1<N> {
     fn drop(&mut self) {
         self.polynomials.as_mut().zeroize();
     }
 }
-
 struct ProjectionProofV1 {
     projection_r: Box<[i8]>,
     projection_r_prime: Box<[i8]>,
     z3: SecretPolynomialVectorV1<PROJECTION_POLYNOMIALS_V1>,
     z4: SecretPolynomialVectorV1<PROJECTION_POLYNOMIALS_V1>,
 }
-
 /// Prove one validated anonymous-credential presentation.
 ///
 /// The transcript must carry `application_relation_digest_v1(relation)`.
@@ -303,7 +271,6 @@ pub fn prove_presentation_v1<R: CryptoRng + RngCore>(
         MAX_PROOF_SAMPLING_ATTEMPTS_V1,
     )
 }
-
 pub(crate) fn prove_blind_issuance_request_v1<R: CryptoRng + RngCore>(
     relation: &BootleLanternApplicationRelationV1,
     witness: &BootleLanternPresentationWitnessV1,
@@ -319,7 +286,6 @@ pub(crate) fn prove_blind_issuance_request_v1<R: CryptoRng + RngCore>(
     )?;
     Ok(BootleLanternBlindIssuanceRequestProofV1::from_validated_body_v1(body))
 }
-
 #[cfg(test)]
 fn prove_presentation_with_rejection_limit_v1<R: CryptoRng + RngCore>(
     relation: &BootleLanternApplicationRelationV1,
@@ -336,7 +302,6 @@ fn prove_presentation_with_rejection_limit_v1<R: CryptoRng + RngCore>(
         rejection_draw_limit,
     )
 }
-
 fn prove_with_transcript_core_v1<R: CryptoRng + RngCore>(
     relation: &BootleLanternApplicationRelationV1,
     witness: &BootleLanternPresentationWitnessV1,
@@ -354,7 +319,6 @@ fn prove_with_transcript_core_v1<R: CryptoRng + RngCore>(
         ProofRandomnessV1::from_rng(rng).map_err(PresentationProofErrorV1::Sampling)?;
     let matrices =
         InternalMatricesV1::expand(&transcript).map_err(PresentationProofErrorV1::Toolbox)?;
-
     let mut rejection_budget = ProofRejectionBudgetV1::new(rejection_draw_limit);
     while !rejection_budget.is_exhausted() {
         let draws_before = rejection_budget.total_draws();
@@ -379,7 +343,6 @@ fn prove_with_transcript_core_v1<R: CryptoRng + RngCore>(
     }
     Err(rejection_budget.exhaustion_error())
 }
-
 /// Verify one strictly decoded presentation proof.
 ///
 /// # Errors
@@ -394,7 +357,6 @@ pub fn verify_presentation_v1(
 ) -> Result<(), PresentationProofErrorV1> {
     verify_with_transcript_core_v1(relation, transcript.proof_core(), proof)
 }
-
 pub(crate) fn verify_blind_issuance_request_v1(
     relation: &BootleLanternApplicationRelationV1,
     transcript: BlindIssuanceRequestTranscriptV1,
@@ -402,7 +364,6 @@ pub(crate) fn verify_blind_issuance_request_v1(
 ) -> Result<(), PresentationProofErrorV1> {
     verify_with_transcript_core_v1(relation, transcript.proof_core(), proof.validated_body_v1())
 }
-
 fn verify_with_transcript_core_v1(
     relation: &BootleLanternApplicationRelationV1,
     transcript: ProofTranscriptCoreV1,
@@ -410,7 +371,6 @@ fn verify_with_transcript_core_v1(
 ) -> Result<(), PresentationProofErrorV1> {
     require_relation_digest(relation, transcript)?;
     validate_public_response_bounds_v1(proof).map_err(PresentationProofErrorV1::ResponseBound)?;
-
     let t_b = proof_polynomial_array::<T_B_POLYNOMIALS_V1>(|index| proof.t_b_polynomial(index))?;
     let h = proof_polynomial_array::<H_POLYNOMIALS_V1>(|index| proof.h_polynomial(index))?;
     let t_a1 = proof_polynomial_array::<T_A1_POLYNOMIALS_V1>(|index| proof.t_a1_polynomial(index))?;
@@ -420,7 +380,6 @@ fn verify_with_transcript_core_v1(
     let z3 = proof_polynomial_array::<Z3_POLYNOMIALS_V1>(|index| proof.z3_polynomial(index))?;
     let z4 = proof_polynomial_array::<Z4_POLYNOMIALS_V1>(|index| proof.z4_polynomial(index))?;
     let challenge = proof.challenge_polynomial();
-
     require_schwartz_commitment_shape(&h)?;
     let matrices =
         InternalMatricesV1::expand(&transcript).map_err(PresentationProofErrorV1::Toolbox)?;
@@ -438,10 +397,8 @@ fn verify_with_transcript_core_v1(
         multipliers,
     )
     .map_err(PresentationProofErrorV1::Toolbox)?;
-
     let recovered_w1 = recover_gamma_high(&matrices, &z1, &z21, &t_a1, challenge, &hint)?;
     validate_compressed_response_bound(&matrices, &z1, &z21, &t_a1, challenge, &recovered_w1)?;
-
     let b_z21 = matrix_vector_product_v1(&matrices.b_prime, z21.as_ref())
         .map_err(PresentationProofErrorV1::Toolbox)?;
     let variables = QuadraticVariablesV1 {
@@ -472,7 +429,6 @@ fn verify_with_transcript_core_v1(
         .add(challenge.multiply(linear_z))
         .add(challenge.multiply(challenge).multiply(q0))
         .sub(f);
-
     let pre_challenge = pre_challenge_wire(&t_b, &h, &t_a1, &z3, &z4, &recovered_w1, recovered_v)?;
     let expected = transcript
         .derive_final_challenge(&pre_challenge)
@@ -482,7 +438,6 @@ fn verify_with_transcript_core_v1(
     }
     Ok(())
 }
-
 fn prove_attempt(
     relation: &BootleLanternApplicationRelationV1,
     short: &super::toolbox::ShortWitnessV1,
@@ -494,7 +449,6 @@ fn prove_attempt(
     let s2 = sample_ternary_vector::<TBOX_M2_V1>(randomness, b"s2")?;
     let (t_a1, t_a2) = commit_short_witness(matrices, short.polynomials(), &s2.polynomials)?;
     let mut messages = SecretPolynomialVectorV1::<TBOX_LEXT_V1>::zero();
-
     let projection = match prove_projected_responses(
         relation,
         short.polynomials(),
@@ -508,7 +462,6 @@ fn prove_attempt(
         Some(projection) => projection,
         None => return Ok(None),
     };
-
     messages.polynomials[G_MESSAGE_START_V1] = sample_uniform_g(randomness, b"schwartz-g0")?;
     messages.polynomials[G_MESSAGE_START_V1 + 1] = sample_uniform_g(randomness, b"schwartz-g1")?;
     let mut t_b = Zeroizing::new(
@@ -519,7 +472,6 @@ fn prove_attempt(
         )
         .map_err(PresentationProofErrorV1::Toolbox)?,
     );
-
     let weights = derive_schwartz_weights(transcript, &*t_b)?;
     let variables = QuadraticVariablesV1 {
         short: short
@@ -577,7 +529,6 @@ fn prove_attempt(
     )
     .map_err(PresentationProofErrorV1::Toolbox)?;
     let b_s21_linearization = Zeroizing::new(b_s21[LINEARIZATION_MESSAGE_INDEX_V1]);
-
     for _ in 0..MAX_RESPONSE_SAMPLING_ATTEMPTS_PER_PROVE_ATTEMPT_V1 {
         if !rejection_budget.reserve(ProofRejectionStageV1::ResponseMask) {
             return Ok(None);
@@ -598,7 +549,6 @@ fn prove_attempt(
         )?;
         let t_candidate = Zeroizing::new(t_candidate);
         t_b[LINEARIZATION_MESSAGE_INDEX_V1] = *t_candidate;
-
         let (w1, w0) = decompose_mask_commitment(
             matrices,
             &y1.polynomials,
@@ -612,7 +562,6 @@ fn prove_attempt(
             .map_err(|error| {
                 PresentationProofErrorV1::Toolbox(ToolboxErrorV1::Transcript(error))
             })?;
-
         let c_short = SecretPolynomialVectorV1::from_polynomials(multiply_vector_by_polynomial(
             short.polynomials(),
             challenge,
@@ -651,7 +600,6 @@ fn prove_attempt(
             rejection_budget.record_response_sampling_rejection();
             continue;
         }
-
         let c_t_a2 = SecretPolynomialVectorV1::from_polynomials(multiply_vector_by_polynomial(
             &t_a2.polynomials,
             challenge,
@@ -672,7 +620,6 @@ fn prove_attempt(
             &w1,
             array_suffix::<TBOX_KMSIS_V1, TBOX_M2_V1>(&z2.polynomials),
         )?;
-
         let proof = construct_proof(
             &*t_b,
             &h,
@@ -690,7 +637,6 @@ fn prove_attempt(
     }
     Ok(None)
 }
-
 fn prove_projected_responses(
     relation: &BootleLanternApplicationRelationV1,
     short: &[ProofPolynomialV1; TBOX_M1_V1],
@@ -719,7 +665,6 @@ fn prove_projected_responses(
     }
     let s3_coefficients = Zeroizing::new(centered_vector(s3.as_ref()));
     let s4_coefficients = Zeroizing::new(centered_vector(s4.as_ref()));
-
     for _ in 0..MAX_PROJECTION_SAMPLING_ATTEMPTS_PER_PROVE_ATTEMPT_V1 {
         if !rejection_budget.reserve(ProofRejectionStageV1::Projection) {
             return Ok(None);
@@ -743,7 +688,6 @@ fn prove_projected_responses(
         beta_coefficients[APPLICATION_RING_DEGREE_V1 / 2] = beta4;
         messages[BETA_MESSAGE_INDEX_V1] =
             ProofPolynomialV1::from_centered_coefficients(beta_coefficients);
-
         let t_b = commit_extended_messages_v1(
             &matrices.b_prime,
             array_prefix::<S21_POLYNOMIALS_V1, TBOX_M2_V1>(s2),
@@ -831,7 +775,6 @@ fn prove_projected_responses(
     }
     Ok(None)
 }
-
 fn derive_projection_matrices(
     transcript: ProofTranscriptCoreV1,
     t_b: &[ProofPolynomialV1; TBOX_LEXT_V1],
@@ -854,7 +797,6 @@ fn derive_projection_matrices(
     .map_err(PresentationProofErrorV1::Toolbox)?;
     Ok((projection_r, projection_r_prime))
 }
-
 fn derive_schwartz_weights(
     transcript: ProofTranscriptCoreV1,
     t_b: &[ProofPolynomialV1; TBOX_LEXT_V1],
@@ -869,7 +811,6 @@ fn derive_schwartz_weights(
         .map(Vec::into_boxed_slice)
         .map_err(|error| PresentationProofErrorV1::Toolbox(ToolboxErrorV1::Transcript(error)))
 }
-
 fn derive_equation_multipliers(
     transcript: ProofTranscriptCoreV1,
     t_b: &[ProofPolynomialV1; TBOX_LEXT_V1],
@@ -898,7 +839,6 @@ fn derive_equation_multipliers(
         .try_into()
         .map_err(|_| PresentationProofErrorV1::InternalInvariant)
 }
-
 fn commit_short_witness(
     matrices: &InternalMatricesV1,
     short: &[ProofPolynomialV1; TBOX_M1_V1],
@@ -936,7 +876,6 @@ fn commit_short_witness(
     }
     Ok((high, low))
 }
-
 fn quadratic_linearization(
     equation: &QuadraticEquationV1<'_>,
     secret: &QuadraticVariablesV1,
@@ -968,7 +907,6 @@ fn quadratic_linearization(
     let v = quadratic_mask.add(b_y21[LINEARIZATION_MESSAGE_INDEX_V1]);
     Ok((t, v))
 }
-
 fn decompose_signed_quadratic_evaluations(
     q0: ProofPolynomialV1,
     q_positive: ProofPolynomialV1,
@@ -985,7 +923,6 @@ fn decompose_signed_quadratic_evaluations(
         .map_err(|_| PresentationProofErrorV1::InternalInvariant)?;
     Ok((linear, quadratic))
 }
-
 fn decompose_mask_quadratic_evaluations(
     secret: &QuadraticVariablesV1,
     mask: &QuadraticVariablesV1,
@@ -1005,7 +942,6 @@ fn decompose_mask_quadratic_evaluations(
         decompose_signed_quadratic_evaluations(q0, *q_mask, *q_negative_mask)?;
     Ok((bilinear, linear, quadratic))
 }
-
 fn decompose_mask_commitment(
     matrices: &InternalMatricesV1,
     y1: &[ProofPolynomialV1; TBOX_M1_V1],
@@ -1040,7 +976,6 @@ fn decompose_mask_commitment(
     }
     Ok((high, low))
 }
-
 fn make_hint(
     w1: &[ProofPolynomialV1; TBOX_KMSIS_V1],
     adjusted_z22: &[ProofPolynomialV1; TBOX_KMSIS_V1],
@@ -1071,7 +1006,6 @@ fn make_hint(
     }
     Ok(*hints)
 }
-
 fn recover_gamma_high(
     matrices: &InternalMatricesV1,
     z1: &[ProofPolynomialV1; Z1_POLYNOMIALS_V1],
@@ -1094,7 +1028,6 @@ fn recover_gamma_high(
     }
     Ok(recovered)
 }
-
 fn compressed_response_residue(
     matrices: &InternalMatricesV1,
     z1: &[ProofPolynomialV1; Z1_POLYNOMIALS_V1],
@@ -1113,7 +1046,6 @@ fn compressed_response_residue(
             .sub(shifted_challenge.multiply(t_a1[index]))
     }))
 }
-
 fn validate_compressed_response_bound(
     matrices: &InternalMatricesV1,
     z1: &[ProofPolynomialV1; Z1_POLYNOMIALS_V1],
@@ -1139,7 +1071,6 @@ fn validate_compressed_response_bound(
     }
     Ok(())
 }
-
 fn construct_proof(
     t_b: &[ProofPolynomialV1; T_B_POLYNOMIALS_V1],
     h: &[ProofPolynomialV1; H_POLYNOMIALS_V1],
@@ -1171,7 +1102,6 @@ fn construct_proof(
     BootleLanternPresentationProofV1::from_coefficients(coefficients.into_boxed_slice())
         .map_err(PresentationProofErrorV1::Codec)
 }
-
 fn pre_challenge_wire(
     t_b: &[ProofPolynomialV1; T_B_POLYNOMIALS_V1],
     h: &[ProofPolynomialV1; H_POLYNOMIALS_V1],
@@ -1202,7 +1132,6 @@ fn pre_challenge_wire(
     }
     Ok(output)
 }
-
 fn require_relation_digest(
     relation: &BootleLanternApplicationRelationV1,
     transcript: ProofTranscriptCoreV1,
@@ -1212,7 +1141,6 @@ fn require_relation_digest(
     }
     Ok(())
 }
-
 fn require_schwartz_commitment_shape(
     h: &[ProofPolynomialV1; H_POLYNOMIALS_V1],
 ) -> Result<(), PresentationProofErrorV1> {
@@ -1224,7 +1152,6 @@ fn require_schwartz_commitment_shape(
     }
     Ok(())
 }
-
 fn sample_ternary_vector<const N: usize>(
     randomness: &mut ProofRandomnessV1,
     domain: &[u8],
@@ -1237,7 +1164,6 @@ fn sample_ternary_vector<const N: usize>(
     }
     Ok(output)
 }
-
 fn sample_gaussian_vector<const N: usize>(
     randomness: &mut ProofRandomnessV1,
     profile: BootleSamplingProfileV1,
@@ -1255,7 +1181,6 @@ fn sample_gaussian_vector<const N: usize>(
     }
     Ok(output)
 }
-
 fn sample_uniform_g(
     randomness: &mut ProofRandomnessV1,
     domain: &[u8],
@@ -1268,7 +1193,6 @@ fn sample_uniform_g(
     coefficients[APPLICATION_RING_DEGREE_V1 / 2] = 0;
     ProofPolynomialV1::new(coefficients).map_err(|_| PresentationProofErrorV1::InternalInvariant)
 }
-
 fn project_centered(
     matrix: &[i8],
     columns: usize,
@@ -1301,7 +1225,6 @@ fn project_centered(
     }
     Ok(output)
 }
-
 fn polynomials_from_centered_projection(
     coefficients: &[i64],
 ) -> Box<[ProofPolynomialV1; PROJECTION_POLYNOMIALS_V1]> {
@@ -1313,21 +1236,18 @@ fn polynomials_from_centered_projection(
         ProofPolynomialV1::from_centered_coefficients(array)
     })
 }
-
 fn multiply_vector_by_polynomial<const N: usize>(
     vector: &[ProofPolynomialV1; N],
     scalar: ProofPolynomialV1,
 ) -> Box<[ProofPolynomialV1; N]> {
     boxed_polynomial_array_from_fn_v1(|index| scalar.multiply(vector[index]))
 }
-
 fn add_arrays<const N: usize>(
     lhs: &[ProofPolynomialV1; N],
     rhs: &[ProofPolynomialV1; N],
 ) -> Box<[ProofPolynomialV1; N]> {
     boxed_polynomial_array_from_fn_v1(|index| lhs[index].add(rhs[index]))
 }
-
 fn centered_vector(polynomials: &[ProofPolynomialV1]) -> Vec<i64> {
     let mut output = Vec::with_capacity(polynomials.len() * APPLICATION_RING_DEGREE_V1);
     for polynomial in polynomials {
@@ -1337,7 +1257,6 @@ fn centered_vector(polynomials: &[ProofPolynomialV1]) -> Vec<i64> {
     }
     output
 }
-
 fn centered_squared_norm(
     polynomials: &[ProofPolynomialV1],
 ) -> Result<u128, PresentationProofErrorV1> {
@@ -1349,7 +1268,6 @@ fn centered_squared_norm(
     }
     Ok(norm)
 }
-
 fn proof_polynomial_array<const N: usize>(
     mut polynomial: impl FnMut(usize) -> Option<ProofPolynomialV1>,
 ) -> Result<Box<[ProofPolynomialV1; N]>, PresentationProofErrorV1> {
@@ -1362,7 +1280,6 @@ fn proof_polynomial_array<const N: usize>(
         .try_into()
         .map_err(|_| PresentationProofErrorV1::InternalInvariant)
 }
-
 fn array_prefix<const N: usize, const M: usize>(
     input: &[ProofPolynomialV1; M],
 ) -> &[ProofPolynomialV1; N] {
@@ -1370,7 +1287,6 @@ fn array_prefix<const N: usize, const M: usize>(
         .try_into()
         .expect("fixed profile prefix shape is valid")
 }
-
 fn array_suffix<const N: usize, const M: usize>(
     input: &[ProofPolynomialV1; M],
 ) -> &[ProofPolynomialV1; N] {
@@ -1378,7 +1294,6 @@ fn array_suffix<const N: usize, const M: usize>(
         .try_into()
         .expect("fixed profile suffix shape is valid")
 }
-
 /// Complete native presentation proof failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PresentationProofErrorV1 {
@@ -1434,13 +1349,10 @@ pub enum PresentationProofErrorV1 {
     #[error("Bootle/Lantern presentation internal invariant failed")]
     InternalInvariant,
 }
-
 // INTEGER_ONLY_PROOF_PRODUCTION_END
-
 /// Sole privacy-action index in a canonical first-release Bootle/Lantern
 /// presentation transaction.
 pub const BOOTLE_LANTERN_PRESENTATION_PRIVACY_ACTION_INDEX_V1: u32 = 0;
-
 /// Exact signature-bound transaction fields for one direct Bootle/Lantern
 /// presentation.
 #[derive(Clone, Debug)]
@@ -1460,7 +1372,6 @@ pub struct BootleLanternPresentationPrivacyActionTransactionContextV1 {
     /// Exact transaction metadata.
     pub metadata: Metadata,
 }
-
 /// Exact ledger effect certified by a first-release Bootle/Lantern
 /// presentation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1469,7 +1380,6 @@ pub enum BootleLanternPresentationPrivacyActionEffectV1 {
     /// balance, nullifier, or credential-registry mutation.
     PresentationVerificationAndFinalityOnly,
 }
-
 /// Pure Bootle/Lantern proving output ready for transaction signing.
 ///
 /// The final payload, canonical genesis binding, and exact governed issuer
@@ -1489,7 +1399,6 @@ pub struct BootleLanternPreparedPresentationPrivacyActionV1 {
     proof_bytes: u32,
     encoded_proof_envelope_bytes: u32,
 }
-
 impl core::fmt::Debug for BootleLanternPreparedPresentationPrivacyActionV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1507,7 +1416,6 @@ impl core::fmt::Debug for BootleLanternPreparedPresentationPrivacyActionV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl BootleLanternPreparedPresentationPrivacyActionV1 {
     /// Borrow the final revalidated payload for the isolated native release
     /// runner.
@@ -1515,56 +1423,47 @@ impl BootleLanternPreparedPresentationPrivacyActionV1 {
     pub(crate) const fn release_evidence_payload_v1(&self) -> &TransactionPayload {
         &self.payload
     }
-
     /// Exact state effect certified by the prepared presentation.
     #[must_use]
     pub const fn effect(&self) -> BootleLanternPresentationPrivacyActionEffectV1 {
         BootleLanternPresentationPrivacyActionEffectV1::PresentationVerificationAndFinalityOnly
     }
-
     /// Hash of the exact canonical governed issuer-policy encoding.
     #[must_use]
     pub const fn issuer_policy_hash(&self) -> [u8; 32] {
         self.issuer_policy_hash
     }
-
     /// Canonical proof-independent transaction-intent digest.
     #[must_use]
     pub const fn transaction_intent_digest(&self) -> [u8; 32] {
         self.transaction_intent_digest
     }
-
     /// Canonical complete typed-statement digest.
     #[must_use]
     pub const fn statement_digest(&self) -> [u8; 32] {
         self.statement_digest
     }
-
     /// Hash of the exact canonical proof envelope.
     #[must_use]
     pub const fn proof_envelope_hash(&self) -> [u8; 32] {
         self.proof_envelope_hash
     }
-
     /// Canonical encoded typed-statement byte count.
     #[must_use]
     pub const fn statement_bytes(&self) -> u32 {
         self.statement_bytes
     }
-
     /// Exact fixed-profile native presentation proof byte count.
     #[must_use]
     pub const fn proof_bytes(&self) -> u32 {
         self.proof_bytes
     }
-
     /// Canonical encoded proof-envelope byte count.
     #[must_use]
     pub const fn encoded_proof_envelope_bytes(&self) -> u32 {
         self.encoded_proof_envelope_bytes
     }
 }
-
 /// Complete signed result produced by the canonical Bootle/Lantern
 /// presentation path.
 pub struct SignedBootleLanternPresentationPrivacyActionV1 {
@@ -1579,7 +1478,6 @@ pub struct SignedBootleLanternPresentationPrivacyActionV1 {
     proof_bytes: u32,
     encoded_proof_envelope_bytes: u32,
 }
-
 impl core::fmt::Debug for SignedBootleLanternPresentationPrivacyActionV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1602,81 +1500,68 @@ impl core::fmt::Debug for SignedBootleLanternPresentationPrivacyActionV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl SignedBootleLanternPresentationPrivacyActionV1 {
     /// Borrow the exact signed transaction.
     #[must_use]
     pub const fn signed_transaction(&self) -> &SignedTransaction {
         &self.signed_transaction
     }
-
     /// Consume the result and return the exact signed transaction.
     #[must_use]
     pub fn into_signed_transaction(self) -> SignedTransaction {
         self.signed_transaction
     }
-
     /// Canonical transaction hash.
     #[must_use]
     pub const fn transaction_hash(&self) -> [u8; 32] {
         self.transaction_hash
     }
-
     /// Canonical adaptive signed-transaction byte count.
     #[must_use]
     pub const fn adaptive_signed_transaction_bytes(&self) -> u32 {
         self.adaptive_signed_transaction_bytes
     }
-
     /// Exact state effect certified by the signed presentation.
     #[must_use]
     pub const fn effect(&self) -> BootleLanternPresentationPrivacyActionEffectV1 {
         BootleLanternPresentationPrivacyActionEffectV1::PresentationVerificationAndFinalityOnly
     }
-
     /// Hash of the exact canonical governed issuer-policy encoding.
     #[must_use]
     pub const fn issuer_policy_hash(&self) -> [u8; 32] {
         self.issuer_policy_hash
     }
-
     /// Canonical proof-independent transaction-intent digest.
     #[must_use]
     pub const fn transaction_intent_digest(&self) -> [u8; 32] {
         self.transaction_intent_digest
     }
-
     /// Canonical complete typed-statement digest.
     #[must_use]
     pub const fn statement_digest(&self) -> [u8; 32] {
         self.statement_digest
     }
-
     /// Hash of the exact canonical proof envelope.
     #[must_use]
     pub const fn proof_envelope_hash(&self) -> [u8; 32] {
         self.proof_envelope_hash
     }
-
     /// Canonical encoded typed-statement byte count.
     #[must_use]
     pub const fn statement_bytes(&self) -> u32 {
         self.statement_bytes
     }
-
     /// Exact fixed-profile native presentation proof byte count.
     #[must_use]
     pub const fn proof_bytes(&self) -> u32 {
         self.proof_bytes
     }
-
     /// Canonical encoded proof-envelope byte count.
     #[must_use]
     pub const fn encoded_proof_envelope_bytes(&self) -> u32 {
         self.encoded_proof_envelope_bytes
     }
 }
-
 /// Failure while constructing or validating a canonical Bootle/Lantern
 /// presentation transaction intent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -1709,7 +1594,6 @@ pub enum BootleLanternPresentationPrivacyActionIntentErrorV1 {
     #[error("the locally produced Bootle/Lantern presentation payload failed intent validation")]
     FinalIntentBinding,
 }
-
 /// Closed failure for the canonical prove-then-sign Bootle/Lantern
 /// presentation path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -1765,7 +1649,6 @@ pub enum BootleLanternPresentationPrivacyActionBuildErrorV1 {
     #[error("signed Bootle/Lantern presentation differs from the prepared action")]
     SignedIntentMismatch,
 }
-
 fn validate_bootle_lantern_presentation_transaction_context_v1(
     context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
 ) -> Result<(), BootleLanternPresentationPrivacyActionIntentErrorV1> {
@@ -1778,7 +1661,6 @@ fn validate_bootle_lantern_presentation_transaction_context_v1(
     {
         return Err(BootleLanternPresentationPrivacyActionIntentErrorV1::TimeToLiveOutOfRange);
     }
-
     let mut builder = TransactionBuilder::new(
         context.network_id,
         context.authority.clone(),
@@ -1797,7 +1679,6 @@ fn validate_bootle_lantern_presentation_transaction_context_v1(
         .map(|_| ())
         .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::InvalidTransactionContext)
 }
-
 fn validate_bootle_lantern_active_issuer_policy_v1(
     policy: &BootleLanternIssuerPolicyV1,
 ) -> Result<(), BootleLanternPresentationPrivacyActionIntentErrorV1> {
@@ -1809,7 +1690,6 @@ fn validate_bootle_lantern_active_issuer_policy_v1(
     }
     Ok(())
 }
-
 fn bootle_lantern_presentation_statement_context_v1(
     context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
     profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
@@ -1826,7 +1706,6 @@ fn bootle_lantern_presentation_statement_context_v1(
         engine_manifest_digest: profile.engine_manifest_digest,
     }
 }
-
 fn bootle_lantern_presentation_statement_v1(
     context: PrivacyStatementContextV1,
     policy: &BootleLanternIssuerPolicyV1,
@@ -1843,7 +1722,6 @@ fn bootle_lantern_presentation_statement_v1(
         disclosures,
     }
 }
-
 fn bootle_lantern_presentation_transaction_payload_v1(
     context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
     envelope: PrivacyProofEnvelopeV1,
@@ -1866,7 +1744,6 @@ fn bootle_lantern_presentation_transaction_payload_v1(
         .into_payload()
         .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::InvalidTransactionContext)
 }
-
 fn bootle_lantern_presentation_envelope_v1(
     profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
     statement: IrohaBootleLanternAnoncredStatementV1,
@@ -1887,7 +1764,6 @@ fn bootle_lantern_presentation_envelope_v1(
         proof: PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(proof)),
     }
 }
-
 fn bootle_lantern_statement_matches_policy_v1(
     statement: &IrohaBootleLanternAnoncredStatementV1,
     policy: &BootleLanternIssuerPolicyV1,
@@ -1899,7 +1775,6 @@ fn bootle_lantern_statement_matches_policy_v1(
         && statement.issuer_parameter_id == policy.issuer_parameter_id
         && statement.issuer_parameter_digest == policy.issuer_parameter_digest
 }
-
 /// Construct the canonical single-action Bootle/Lantern statement and derive
 /// its proof-independent transaction-intent digest.
 ///
@@ -1952,7 +1827,6 @@ pub fn prepare_bootle_lantern_presentation_transaction_intent_v1(
     }
     Ok(statement)
 }
-
 /// Validate a prepared Bootle/Lantern statement against its exact direct
 /// transaction context and active governed issuer policy.
 ///
@@ -2002,7 +1876,6 @@ pub fn validate_bootle_lantern_presentation_transaction_intent_v1(
     }
     Ok(validated)
 }
-
 #[derive(Clone, Copy)]
 struct BootleLanternPresentationPrivacyActionIntegrityV1 {
     canonical_genesis_hash: [u8; 32],
@@ -2014,7 +1887,6 @@ struct BootleLanternPresentationPrivacyActionIntegrityV1 {
     proof_bytes: u32,
     encoded_proof_envelope_bytes: u32,
 }
-
 impl BootleLanternPreparedPresentationPrivacyActionV1 {
     const fn integrity(&self) -> BootleLanternPresentationPrivacyActionIntegrityV1 {
         BootleLanternPresentationPrivacyActionIntegrityV1 {
@@ -2029,7 +1901,6 @@ impl BootleLanternPreparedPresentationPrivacyActionV1 {
         }
     }
 }
-
 fn bootle_lantern_issuer_policy_hash_v1(
     policy: &BootleLanternIssuerPolicyV1,
 ) -> Result<[u8; 32], BootleLanternPresentationPrivacyActionBuildErrorV1> {
@@ -2037,7 +1908,6 @@ fn bootle_lantern_issuer_policy_hash_v1(
         .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::IssuerPolicyEncoding)?;
     Ok(*Hash::new(&encoding).as_ref())
 }
-
 fn validate_bootle_lantern_presentation_signing_authority_v1(
     authority: &AccountId,
     private_key: &PrivateKey,
@@ -2051,7 +1921,6 @@ fn validate_bootle_lantern_presentation_signing_authority_v1(
     }
     Ok(())
 }
-
 fn validate_bootle_lantern_presentation_payload_integrity_v1(
     payload: &TransactionPayload,
     policy: &BootleLanternIssuerPolicyV1,
@@ -2154,7 +2023,6 @@ fn validate_bootle_lantern_presentation_payload_integrity_v1(
     }
     Ok(())
 }
-
 fn finalize_bootle_lantern_prepared_presentation_privacy_action_v1(
     context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
     issuer_policy: BootleLanternIssuerPolicyV1,
@@ -2228,7 +2096,6 @@ fn finalize_bootle_lantern_prepared_presentation_privacy_action_v1(
     .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::PreparedPayloadDrift)?;
     Ok(prepared)
 }
-
 /// Prepare and prove one canonical Bootle/Lantern presentation with
 /// caller-provided cryptographically secure randomness.
 ///
@@ -2281,7 +2148,6 @@ where
         canonical_genesis_hash,
     )
 }
-
 /// Prepare and prove one canonical Bootle/Lantern presentation with operating
 /// system randomness.
 ///
@@ -2308,7 +2174,6 @@ pub fn prepare_bootle_lantern_presentation_privacy_action_v1(
         &mut OsRng,
     )
 }
-
 /// Consume and sign a payload returned by the canonical Bootle/Lantern
 /// presentation prover.
 ///
@@ -2385,7 +2250,6 @@ pub fn sign_prepared_bootle_lantern_presentation_privacy_action_v1(
         encoded_proof_envelope_bytes: integrity.encoded_proof_envelope_bytes,
     })
 }
-
 /// Build, prove, bind, and sign one canonical Bootle/Lantern presentation with
 /// caller-provided cryptographically secure randomness.
 ///
@@ -2420,7 +2284,6 @@ where
     )?;
     sign_prepared_bootle_lantern_presentation_privacy_action_v1(prepared, private_key)
 }
-
 /// Build, prove, bind, and sign one canonical Bootle/Lantern presentation with
 /// operating-system randomness.
 ///
@@ -2449,12 +2312,10 @@ pub fn build_signed_bootle_lantern_presentation_privacy_action_v1(
         &mut OsRng,
     )
 }
-
 #[cfg(test)]
 mod tests {
     use core::num::NonZeroU64;
     use std::sync::OnceLock;
-
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::privacy::{
         BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
@@ -2467,7 +2328,6 @@ mod tests {
     };
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha3::{Digest, Sha3_256};
-
     use super::*;
     use crate::privacy_engines::bootle_lantern::{
         BOOTLE_LANTERN_FULL_ENGINE_AVAILABLE_V1, BoundPresentationEncodedErrorV1,
@@ -2493,7 +2353,6 @@ mod tests {
         },
         verify_bound_presentation_encoded_v1, verify_bound_presentation_v1,
     };
-
     const H_START_TEST: usize = T_B_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
     const T_A1_START_TEST: usize = H_START_TEST + H_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
     const CHALLENGE_START_TEST: usize =
@@ -2503,36 +2362,28 @@ mod tests {
     const Z21_START_TEST: usize = Z1_START_TEST + Z1_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
     const Z3_START_TEST: usize = Z21_START_TEST + Z21_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
     const Z4_START_TEST: usize = Z3_START_TEST + Z3_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
-
     struct TestRng {
         state: u64,
         fail: bool,
         stuck: Option<u8>,
         period: Option<u8>,
     }
-
     struct PanicRng;
-
     impl RngCore for PanicRng {
         fn next_u32(&mut self) -> u32 {
             panic!("Bootle/Lantern public preflight reached the random source")
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("Bootle/Lantern public preflight reached the random source")
         }
-
         fn fill_bytes(&mut self, _destination: &mut [u8]) {
             panic!("Bootle/Lantern public preflight reached the random source")
         }
-
         fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
             panic!("Bootle/Lantern public preflight reached the random source")
         }
     }
-
     impl CryptoRng for PanicRng {}
-
     impl TestRng {
         const fn healthy(seed: u64) -> Self {
             Self {
@@ -2542,7 +2393,6 @@ mod tests {
                 period: None,
             }
         }
-
         const fn failed() -> Self {
             Self {
                 state: 1,
@@ -2551,7 +2401,6 @@ mod tests {
                 period: None,
             }
         }
-
         const fn stuck(byte: u8) -> Self {
             Self {
                 state: 1,
@@ -2560,7 +2409,6 @@ mod tests {
                 period: None,
             }
         }
-
         const fn periodic(period: u8) -> Self {
             Self {
                 state: 1,
@@ -2570,25 +2418,21 @@ mod tests {
             }
         }
     }
-
     impl RngCore for TestRng {
         fn next_u32(&mut self) -> u32 {
             let mut bytes = [0_u8; 4];
             self.fill_bytes(&mut bytes);
             u32::from_le_bytes(bytes)
         }
-
         fn next_u64(&mut self) -> u64 {
             let mut bytes = [0_u8; 8];
             self.fill_bytes(&mut bytes);
             u64::from_le_bytes(bytes)
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             self.try_fill_bytes(destination)
                 .expect("infallible test invocation");
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             if self.fail {
                 return Err(RngError::new("injected Bootle/Lantern RNG failure"));
@@ -2614,9 +2458,7 @@ mod tests {
             Ok(())
         }
     }
-
     impl CryptoRng for TestRng {}
-
     struct Fixture {
         policy: BootleLanternIssuerPolicyV1,
         statement: IrohaBootleLanternAnoncredStatementV1,
@@ -2625,22 +2467,18 @@ mod tests {
         witness: BootleLanternPresentationWitnessV1,
         transcript: PresentationTranscriptV1,
     }
-
     fn raw(seed: u8) -> [u8; 32] {
         [seed; 32]
     }
-
     fn compiled_bootle_lantern_profile() -> crate::privacy_profiles::CompiledPrivacyProfileV1 {
         crate::privacy_profiles::compiled_privacy_profile_v1(
             PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
         )
         .expect("compiled Bootle/Lantern profile")
     }
-
     fn matrix_seed() -> MatrixSeedV1 {
         matrix_seed_v1([0x31; 32]).expect("valid governed matrix seed")
     }
-
     fn statement_context() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
             network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
@@ -2657,7 +2495,6 @@ mod tests {
             engine_manifest_digest: PrivacyEngineManifestDigestV1::new(raw(6)),
         }
     }
-
     fn statement(policy: &BootleLanternIssuerPolicyV1) -> IrohaBootleLanternAnoncredStatementV1 {
         IrohaBootleLanternAnoncredStatementV1 {
             context: statement_context(),
@@ -2673,7 +2510,6 @@ mod tests {
             }],
         }
     }
-
     struct IssuedFixture {
         policy: BootleLanternIssuerPolicyV1,
         statement: IrohaBootleLanternAnoncredStatementV1,
@@ -2682,7 +2518,6 @@ mod tests {
         p1_transcript: BlindIssuanceRequestTranscriptV1,
         p1_proof: BootleLanternBlindIssuanceRequestProofV1,
     }
-
     fn issued_fixture() -> &'static IssuedFixture {
         static FIXTURE: OnceLock<IssuedFixture> = OnceLock::new();
         FIXTURE.get_or_init(|| {
@@ -2773,13 +2608,11 @@ mod tests {
             }
         })
     }
-
     struct SealedIssuedFixture {
         policy: BootleLanternIssuerPolicyV1,
         statement: IrohaBootleLanternAnoncredStatementV1,
         witness: BootleLanternPresentationWitnessV1,
     }
-
     fn sealed_statement_context() -> PrivacyStatementContextV1 {
         let profile = compiled_bootle_lantern_profile();
         PrivacyStatementContextV1 {
@@ -2797,7 +2630,6 @@ mod tests {
             engine_manifest_digest: profile.engine_manifest_digest,
         }
     }
-
     fn sealed_issued_fixture() -> &'static SealedIssuedFixture {
         static FIXTURE: OnceLock<SealedIssuedFixture> = OnceLock::new();
         FIXTURE.get_or_init(|| {
@@ -2885,11 +2717,9 @@ mod tests {
             }
         })
     }
-
     fn valid_witness() -> BootleLanternPresentationWitnessV1 {
         issued_fixture().witness.clone()
     }
-
     fn fixture() -> Fixture {
         let issued = issued_fixture();
         let policy = issued.policy.clone();
@@ -2924,7 +2754,6 @@ mod tests {
             transcript,
         }
     }
-
     fn proof_from_mutation(
         proof: &BootleLanternPresentationProofV1,
         mutate: impl FnOnce(&mut [u64]),
@@ -2934,16 +2763,13 @@ mod tests {
         BootleLanternPresentationProofV1::from_coefficients(coefficients.into_boxed_slice())
             .expect("mutation remains a canonical proof encoding")
     }
-
     fn alternate_residue(residue: u64) -> u64 {
         if residue == 0 { 1 } else { 0 }
     }
-
     fn presentation_action_signer(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive Bootle/Lantern presentation signer")
     }
-
     fn presentation_action_context(
         signer: &KeyPair,
     ) -> BootleLanternPresentationPrivacyActionTransactionContextV1 {
@@ -2961,7 +2787,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     fn presentation_action_statement(
         context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
         policy: &BootleLanternIssuerPolicyV1,
@@ -2973,7 +2798,6 @@ mod tests {
         )
         .expect("derive canonical Bootle/Lantern presentation transaction intent")
     }
-
     fn clone_prepared_for_adversary(
         prepared: &BootleLanternPreparedPresentationPrivacyActionV1,
     ) -> BootleLanternPreparedPresentationPrivacyActionV1 {
@@ -2990,7 +2814,6 @@ mod tests {
             encoded_proof_envelope_bytes: prepared.encoded_proof_envelope_bytes,
         }
     }
-
     fn replace_prepared_envelope_for_adversary(
         prepared: &mut BootleLanternPreparedPresentationPrivacyActionV1,
         context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
@@ -3008,7 +2831,6 @@ mod tests {
         prepared.payload = bootle_lantern_presentation_transaction_payload_v1(context, envelope)
             .expect("adversarial payload remains structurally constructible");
     }
-
     #[test]
     fn sealed_presentation_builder_preflights_public_failures_before_randomness() {
         let signer = presentation_action_signer(90);
@@ -3026,7 +2848,6 @@ mod tests {
             ),
             Err(BootleLanternPresentationPrivacyActionBuildErrorV1::ZeroGenesisHash)
         ));
-
         let signer = presentation_action_signer(90);
         let context = presentation_action_context(&signer);
         let policy = sealed_issued_fixture().policy.clone();
@@ -3042,7 +2863,6 @@ mod tests {
             ),
             Err(BootleLanternPresentationPrivacyActionBuildErrorV1::NetworkIdMismatch)
         ));
-
         let signer = presentation_action_signer(90);
         let foreign = presentation_action_signer(91);
         let context = presentation_action_context(&signer);
@@ -3060,7 +2880,6 @@ mod tests {
             ),
             Err(BootleLanternPresentationPrivacyActionBuildErrorV1::AuthorityKeyMismatch)
         ));
-
         let signer = presentation_action_signer(90);
         let context = presentation_action_context(&signer);
         let mut revoked_policy = sealed_issued_fixture().policy.clone();
@@ -3084,7 +2903,6 @@ mod tests {
                 BootleLanternPresentationPrivacyActionIntentErrorV1::InvalidIssuerPolicy
             ))
         ));
-
         let signer = presentation_action_signer(90);
         let context = presentation_action_context(&signer);
         let policy = sealed_issued_fixture().policy.clone();
@@ -3108,7 +2926,6 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn sealed_presentation_builder_revalidates_every_binding_before_and_after_signing() {
         let signer = presentation_action_signer(90);
@@ -3162,7 +2979,6 @@ mod tests {
         assert!(!prepared_debug.contains("TransactionPayload"));
         assert!(!prepared_debug.contains("issuer_policy:"));
         assert!(!prepared_debug.contains("canonical_genesis_hash"));
-
         let expected_intent = prepared.transaction_intent_digest();
         let expected_statement = prepared.statement_digest();
         let expected_envelope = prepared.proof_envelope_hash();
@@ -3189,7 +3005,6 @@ mod tests {
             u32::try_from(norito::codec::encode_adaptive(signed.signed_transaction()).len())
                 .expect("bounded signed Bootle/Lantern transaction")
         );
-
         let assert_drift = |candidate| {
             assert!(matches!(
                 sign_prepared_bootle_lantern_presentation_privacy_action_v1(
@@ -3199,19 +3014,15 @@ mod tests {
                 Err(BootleLanternPresentationPrivacyActionBuildErrorV1::PreparedPayloadDrift)
             ));
         };
-
         let mut nonce_substitution = clone_prepared_for_adversary(&prepared);
         nonce_substitution.payload.nonce = NonZeroU32::new(18);
         assert_drift(nonce_substitution);
-
         let mut genesis_substitution = clone_prepared_for_adversary(&prepared);
         genesis_substitution.canonical_genesis_hash[0] ^= 1;
         assert_drift(genesis_substitution);
-
         let mut payload_substitution = clone_prepared_for_adversary(&prepared);
         payload_substitution.payload.instructions = Executable::Instructions(Vec::new().into());
         assert_drift(payload_substitution);
-
         let mut statement_substitution = clone_prepared_for_adversary(&prepared);
         replace_prepared_envelope_for_adversary(
             &mut statement_substitution,
@@ -3229,13 +3040,11 @@ mod tests {
             },
         );
         assert_drift(statement_substitution);
-
         let mut envelope_substitution = clone_prepared_for_adversary(&prepared);
         replace_prepared_envelope_for_adversary(&mut envelope_substitution, &context, |envelope| {
             envelope.engine_manifest_digest = PrivacyEngineManifestDigestV1::new([0xE1; 32]);
         });
         assert_drift(envelope_substitution);
-
         let mut proof_substitution = clone_prepared_for_adversary(&prepared);
         replace_prepared_envelope_for_adversary(&mut proof_substitution, &context, |envelope| {
             let PrivacyProofV1::IrohaBootleLanternAnoncredV1(proof) = &envelope.proof else {
@@ -3247,7 +3056,6 @@ mod tests {
                 PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(bytes));
         });
         assert_drift(proof_substitution);
-
         let mut policy_substitution = clone_prepared_for_adversary(&prepared);
         policy_substitution.issuer_policy.epoch = policy_substitution
             .issuer_policy
@@ -3255,12 +3063,10 @@ mod tests {
             .checked_add(1)
             .expect("fixture policy epoch increment");
         assert_drift(policy_substitution);
-
         let mut integrity_substitution = clone_prepared_for_adversary(&prepared);
         integrity_substitution.proof_envelope_hash[0] ^= 1;
         assert_drift(integrity_substitution);
     }
-
     #[test]
     fn blind_issuance_and_presentation_purposes_derive_distinct_challenges() {
         let seed = matrix_seed();
@@ -3304,7 +3110,6 @@ mod tests {
             "P1 and P2 must not share a Fiat--Shamir challenge namespace"
         );
     }
-
     fn quadratic_test_variables(
         x: ProofPolynomialV1,
         y: ProofPolynomialV1,
@@ -3314,7 +3119,6 @@ mod tests {
         variables.message[0] = y;
         variables
     }
-
     fn quadratic_test_map(variables: &QuadraticVariablesV1) -> ProofPolynomialV1 {
         // Q(x, y) = 3x² - 5xy + 2y² + 7x - 11y - 13.
         let x = variables.short[0];
@@ -3327,7 +3131,6 @@ mod tests {
             .add(y.scale_centered(-11))
             .add(ProofPolynomialV1::constant_centered(-13))
     }
-
     fn actual_quadratic_equation<'a>(fixture: &'a Fixture) -> QuadraticEquationV1<'a> {
         let t_b = boxed_polynomial_array_from_fn_v1::<TBOX_LEXT_V1>(|polynomial| {
             ProofPolynomialV1::from_centered_coefficients(core::array::from_fn(|coefficient| {
@@ -3380,7 +3183,6 @@ mod tests {
         )
         .expect("fully compiled actual quadratic equation")
     }
-
     fn actual_quadratic_variables() -> QuadraticVariablesV1 {
         let short = boxed_polynomial_array_from_fn_v1::<TBOX_M1_V1>(|polynomial| {
             ProofPolynomialV1::new(core::array::from_fn(|coefficient| {
@@ -3417,7 +3219,6 @@ mod tests {
         message[BETA_MESSAGE_INDEX_V1] = ProofPolynomialV1::from_centered_coefficients(beta);
         QuadraticVariablesV1 { short, message }
     }
-
     fn scale_quadratic_variables(
         variables: &QuadraticVariablesV1,
         scalar: ProofPolynomialV1,
@@ -3431,7 +3232,6 @@ mod tests {
             }),
         }
     }
-
     fn actual_quadratic_parts(
         equation: &QuadraticEquationV1<'_>,
         variables: &QuadraticVariablesV1,
@@ -3446,7 +3246,6 @@ mod tests {
         decompose_signed_quadratic_evaluations(q0, positive, negative)
             .expect("fixed inverse of two")
     }
-
     fn autostable_challenges() -> [ProofPolynomialV1; 3] {
         let sparse = {
             let mut coefficients = [0_i64; APPLICATION_RING_DEGREE_V1];
@@ -3478,7 +3277,6 @@ mod tests {
         }
         [sparse, boundary, patterned]
     }
-
     fn adversarial_quadratic_inputs() -> [(
         ProofPolynomialV1,
         ProofPolynomialV1,
@@ -3527,7 +3325,6 @@ mod tests {
             ),
         ]
     }
-
     #[test]
     fn verifier_quadratic_reuse_matches_legacy_formulas_at_adversarial_residues() {
         for (x, y, _, _) in adversarial_quadratic_inputs() {
@@ -3536,7 +3333,6 @@ mod tests {
             let q0 = quadratic_test_map(&zero);
             let q_positive = quadratic_test_map(&variables);
             let q_negative = quadratic_test_map(&variables.negate());
-
             let (linear, quadratic) =
                 decompose_signed_quadratic_evaluations(q0, q_positive, q_negative)
                     .expect("fixed inverse of two");
@@ -3549,7 +3345,6 @@ mod tests {
                 .sub(q0.scale_centered(2))
                 .scale_canonical(PROOF_INVERSE_TWO_V1)
                 .expect("fixed inverse of two");
-
             assert_eq!(linear, legacy_linear);
             assert_eq!(quadratic, legacy_quadratic);
             assert_eq!(linear, x.scale_centered(7).add(y.scale_centered(-11)));
@@ -3563,7 +3358,6 @@ mod tests {
             assert_eq!(q_positive, quadratic.add(linear).add(q0));
         }
     }
-
     #[test]
     fn prover_mask_reuse_is_exactly_three_evaluations_and_matches_legacy_formulas() {
         for (secret_x, secret_y, mask_x, mask_y) in adversarial_quadratic_inputs() {
@@ -3579,7 +3373,6 @@ mod tests {
                 quadratic_test_map(&expected_inputs[2]),
             ];
             let mut calls = 0_usize;
-
             let (bilinear, linear, quadratic) =
                 decompose_mask_quadratic_evaluations(&secret, &mask, q0, q_secret, |variables| {
                     assert!(
@@ -3593,7 +3386,6 @@ mod tests {
                 })
                 .expect("fixed inverse of two");
             assert_eq!(calls, PROVER_QUADRATIC_EVALUATIONS_PER_MASK_RETRY_V1);
-
             let [q_mask, q_negative_mask, q_sum] = evaluations;
             let legacy_bilinear = q_sum.sub(q_secret).sub(q_mask).add(q0);
             let legacy_linear = q_mask
@@ -3608,7 +3400,6 @@ mod tests {
             assert_eq!(bilinear, legacy_bilinear);
             assert_eq!(linear, legacy_linear);
             assert_eq!(quadratic, legacy_quadratic);
-
             let expected_bilinear = secret_x
                 .multiply(mask_x)
                 .scale_centered(6)
@@ -3634,7 +3425,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn prover_mask_reuse_fails_closed_at_each_black_box_evaluation() {
         let secret = QuadraticVariablesV1::zero();
@@ -3664,7 +3454,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn actual_zq_compiler_checked_coefficients_match_scalar_oracle() {
         let fixture = fixture();
@@ -3690,7 +3479,6 @@ mod tests {
         let masked = equation
             .schwartz_polynomials(&variables)
             .expect("masked Zq-to-Rq compiler");
-
         assert_eq!(masked[0].coefficients()[0], scalar[0]);
         assert_eq!(
             masked[0].coefficients()[APPLICATION_RING_DEGREE_V1 / 2],
@@ -3702,12 +3490,10 @@ mod tests {
             scalar[3]
         );
     }
-
     #[test]
     fn actual_zq_compiler_matches_augmented_oracle_for_adversarial_beta_shape_noise() {
         let fixture = fixture();
         let equation = actual_quadratic_equation(&fixture);
-
         for (index, noise) in [(1, 7_i64), (17, -11), (31, 19), (47, -23), (63, 29)] {
             let mut variables = actual_quadratic_variables();
             let mut beta = core::array::from_fn(|coefficient| {
@@ -3716,7 +3502,6 @@ mod tests {
             beta[index] = noise;
             variables.message[BETA_MESSAGE_INDEX_V1] =
                 ProofPolynomialV1::from_centered_coefficients(beta);
-
             let canonical_constraints = equation
                 .constraints(&variables)
                 .expect("canonical coefficient constraints");
@@ -3737,7 +3522,6 @@ mod tests {
                     .any(|(canonical, lifted)| canonical != lifted),
                 "shape noise must exercise the augmented projection lift"
             );
-
             let lifted = equation
                 .lifted_schwartz_accumulators(&variables)
                 .expect("cfg(test) homogeneous-lift oracle");
@@ -3756,14 +3540,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn actual_quadratic_equation_is_equivariant_for_adversarial_autostable_challenges() {
         let fixture = fixture();
         let equation = actual_quadratic_equation(&fixture);
         let variables = actual_quadratic_variables();
         let (linear, quadratic) = actual_quadratic_parts(&equation, &variables);
-
         for challenge in autostable_challenges() {
             let scaled = scale_quadratic_variables(&variables, challenge);
             let (scaled_linear, scaled_quadratic) = actual_quadratic_parts(&equation, &scaled);
@@ -3779,7 +3561,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn quadratic_evaluation_budgets_are_fixed_and_bounded() {
         assert_eq!(PROVER_PRECOMPUTED_QUADRATIC_EVALUATIONS_V1, 2);
@@ -3795,7 +3576,6 @@ mod tests {
         assert_eq!(MIN_RESPONSE_CONTEXTS_AT_GLOBAL_BUDGET_V1, 4);
         assert_eq!(MAX_TOP_LEVEL_QUADRATIC_EVALUATIONS_V1, 12_287);
     }
-
     #[test]
     fn native_secret_workspaces_are_heap_backed_for_validator_worker_stacks() {
         assert_eq!(
@@ -3813,7 +3593,6 @@ mod tests {
             core::mem::size_of::<Box<[ProofPolynomialV1; TBOX_M1_V1]>>()
         );
     }
-
     #[test]
     fn shared_rejection_budget_exhausts_projection_stage_exactly() {
         let mut budget = ProofRejectionBudgetV1::new(7);
@@ -3832,7 +3611,6 @@ mod tests {
             PresentationProofErrorV1::SamplingBudgetExhausted
         );
     }
-
     #[test]
     fn shared_rejection_budget_exhausts_response_stage_exactly() {
         let mut budget = ProofRejectionBudgetV1::new(7);
@@ -3851,7 +3629,6 @@ mod tests {
             PresentationProofErrorV1::SamplingBudgetExhausted
         );
     }
-
     #[test]
     fn shared_rejection_budget_cannot_multiply_across_stages() {
         let mut budget = ProofRejectionBudgetV1::new(MAX_PROOF_SAMPLING_ATTEMPTS_V1);
@@ -3873,7 +3650,6 @@ mod tests {
             Some(MAX_PROOF_SAMPLING_ATTEMPTS_V1)
         );
     }
-
     #[test]
     fn rejection_accounting_preserves_each_actual_failure_boundary() {
         let mut budget = ProofRejectionBudgetV1::new(3);
@@ -3892,7 +3668,6 @@ mod tests {
             PresentationProofErrorV1::SamplingBudgetExhausted
         );
     }
-
     #[test]
     fn secret_rejection_diagnostics_are_invariant_and_fully_redacted() {
         let untouched = ProofRejectionBudgetV1::new(4_095);
@@ -3902,7 +3677,6 @@ mod tests {
         assert!(exercised.reserve(ProofRejectionStageV1::ResponseMask));
         exercised.record_response_sampling_rejection();
         exercised.record_response_norm_rejection();
-
         assert_eq!(
             format!("{untouched:?}"),
             "ProofRejectionBudgetV1(<redacted>)"
@@ -3921,7 +3695,6 @@ mod tests {
             "Bootle/Lantern sampling exhausted the shared proof work budget"
         );
     }
-
     #[test]
     #[ignore = "explicit short-budget diagnostic for the expensive native prover"]
     fn short_budget_reports_the_first_native_rejection_boundary() {
@@ -3942,7 +3715,6 @@ mod tests {
             Err(error) => eprintln!("short-budget diagnostic: {error:?}"),
         }
     }
-
     #[test]
     fn complete_native_proof_round_trip_and_adversarial_matrix() {
         assert!(
@@ -3968,7 +3740,6 @@ mod tests {
             &proof,
         )
         .expect("governed native proof verifies");
-
         let encoded = proof.encode();
         assert_eq!(encoded.len(), PROOF_BYTES_V1);
         assert_eq!(
@@ -3991,7 +3762,6 @@ mod tests {
             u32::try_from(encoded.len()).expect("proof length fits u32"),
         )
         .expect("strictly decoded governed proof verifies");
-
         let issued = issued_fixture();
         let p1_encoded = issued.p1_proof.encode();
         let proof_cap = u32::try_from(PROOF_BYTES_V1).expect("fixed proof length fits u32");
@@ -4013,7 +3783,6 @@ mod tests {
             BootleLanternBlindIssuanceRequestProofV1::decode_exact(&encoded, proof_cap),
             Err(ProofCodecErrorV1::InvalidMagic)
         );
-
         // Replacing the complete nominal header makes either shared-layout
         // body structurally decodable as the other protocol. The respective
         // transcript-bound verifier must still reject the substitution.
@@ -4045,7 +3814,6 @@ mod tests {
             .is_err(),
             "a P1 body with a P2 header must fail the P2 purpose over the same relation"
         );
-
         let mut p2_body_with_p1_header = encoded.clone();
         p2_body_with_p1_header[..PROOF_HEADER_BYTES_V1]
             .copy_from_slice(&p1_encoded[..PROOF_HEADER_BYTES_V1]);
@@ -4078,7 +3846,6 @@ mod tests {
             .is_err(),
             "a P2 body with a P1 header must fail the P1 purpose over the same relation"
         );
-
         let proof_ceiling =
             u32::try_from(encoded.len() - 1).expect("fixed proof length minus one fits u32");
         assert!(matches!(
@@ -4137,7 +3904,6 @@ mod tests {
                 ProofCodecErrorV1::NonCanonicalResidue { index: 0, .. }
             ))
         ));
-
         let mut bad_magic = encoded.clone();
         bad_magic[0] ^= 1;
         assert!(matches!(
@@ -4152,7 +3918,6 @@ mod tests {
                 ProofCodecErrorV1::InvalidMagic
             ))
         ));
-
         assert!(matches!(
             verify_bound_presentation_v1(&fixture.statement, &fixture.policy, [0x33; 32], &proof,),
             Err(BoundPresentationErrorV1::Proof(_))
@@ -4232,7 +3997,6 @@ mod tests {
             ),
             Err(BoundPresentationErrorV1::Relation(_))
         ));
-
         // Every canonical proof section is transcript- or equation-bound.
         for index in [
             0,
@@ -4252,7 +4016,6 @@ mod tests {
                 "mutation at flat coefficient {index} must fail"
             );
         }
-
         // Keep the challenge encoding canonical while changing its value.
         let challenge_changed = proof_from_mutation(&proof, |coefficients| {
             let current = proof.challenge_polynomial().centered_coefficient(0);
@@ -4267,7 +4030,6 @@ mod tests {
             verify_presentation_v1(&fixture.relation, fixture.transcript, &challenge_changed)
                 .is_err()
         );
-
         let invalid_h = proof_from_mutation(&proof, |coefficients| {
             coefficients[H_START_TEST] = 1;
         });
@@ -4275,7 +4037,6 @@ mod tests {
             verify_presentation_v1(&fixture.relation, fixture.transcript, &invalid_h),
             Err(PresentationProofErrorV1::InvalidSchwartzCommitment)
         ));
-
         let excessive_z1 = proof_from_mutation(&proof, |coefficients| {
             coefficients[Z1_START_TEST] = proof_residue_from_centered_v1(1_040_728_452);
         });
@@ -4285,7 +4046,6 @@ mod tests {
                 ResponseBoundErrorV1::Z1NormExceeded
             ))
         ));
-
         let invalid_hint = proof_from_mutation(&proof, |coefficients| {
             coefficients[HINT_START_TEST] = proof_residue_from_centered_v1(
                 i64::try_from(COMPRESSION_MODULUS_V1 / 2 + 1).expect("hint bound fits i64"),
@@ -4297,7 +4057,6 @@ mod tests {
                 ResponseBoundErrorV1::HintOutOfRange
             ))
         ));
-
         let excessive_z3 = proof_from_mutation(&proof, |coefficients| {
             coefficients[Z3_START_TEST] = proof_residue_from_centered_v1(10_661_921);
         });
@@ -4307,7 +4066,6 @@ mod tests {
                 ResponseBoundErrorV1::Z3NormExceeded
             ))
         ));
-
         let excessive_z4 = proof_from_mutation(&proof, |coefficients| {
             coefficients[Z4_START_TEST] = proof_residue_from_centered_v1(
                 i64::try_from(Z4_INFINITY_NORM_BOUND_V1 + 1).expect("z4 bound fits i64"),
@@ -4319,7 +4077,6 @@ mod tests {
                 ResponseBoundErrorV1::Z4InfinityNormExceeded
             ))
         ));
-
         // A replay under another public statement or transaction intent fails.
         for changed_binding in [
             PresentationChallengeBindingV1 {
@@ -4347,7 +4104,6 @@ mod tests {
             .expect("changed transcript remains structurally valid");
             assert!(verify_presentation_v1(&fixture.relation, changed_transcript, &proof).is_err());
         }
-
         let wrong_relation_transcript = PresentationTranscriptV1::new(
             fixture.transcript.binding(),
             fixture.transcript.matrix_seed(),
@@ -4358,7 +4114,6 @@ mod tests {
             verify_presentation_v1(&fixture.relation, wrong_relation_transcript, &proof),
             Err(PresentationProofErrorV1::RelationDigestMismatch)
         ));
-
         // The all-zero algebraic forgery is canonical on the wire but invalid.
         let zero_forgery = BootleLanternPresentationProofV1::from_coefficients(
             vec![0_u64; PROOF_COEFFICIENTS_V1].into_boxed_slice(),
@@ -4368,7 +4123,6 @@ mod tests {
             verify_presentation_v1(&fixture.relation, fixture.transcript, &zero_forgery).is_err()
         );
     }
-
     #[test]
     fn prover_rejects_rng_failure_health_sentinels_and_invalid_witnesses() {
         let fixture = fixture();
@@ -4391,7 +4145,6 @@ mod tests {
                 ))
             ));
         }
-
         let mut invalid = valid_witness();
         invalid.signature_one[0] = ApplicationPolynomialV1::constant(APPLICATION_MODULUS_V1 / 2)
             .expect("canonical application coefficient");
@@ -4401,7 +4154,6 @@ mod tests {
             Err(PresentationProofErrorV1::Toolbox(_))
         ));
     }
-
     #[test]
     fn proof_constructor_rejects_noncanonical_residues_before_verification() {
         let mut coefficients = vec![0_u64; PROOF_COEFFICIENTS_V1];

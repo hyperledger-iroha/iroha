@@ -5,10 +5,8 @@ use std::{
     path::PathBuf,
     sync::Once,
 };
-
 use iroha_config::parameters::{actual::Root as ActualConfig, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader};
-
 fn fixtures_dir() -> PathBuf {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
@@ -17,7 +15,6 @@ fn fixtures_dir() -> PathBuf {
     });
     PathBuf::from("tests/fixtures")
 }
-
 fn load_with_env(env: MockEnv) -> ActualConfig {
     ConfigReader::new()
         .with_env(env)
@@ -28,7 +25,6 @@ fn load_with_env(env: MockEnv) -> ActualConfig {
         .parse()
         .expect("config should parse")
 }
-
 #[test]
 fn metal_queue_overrides_parse_from_env() {
     let env = MockEnv::with_map(HashMap::from([
@@ -46,7 +42,6 @@ fn metal_queue_overrides_parse_from_env() {
         ("FASTPQ_DEBUG_METAL_ENUM".to_string(), "1".to_string()),
         ("FASTPQ_DEBUG_FUSED".to_string(), "on".to_string()),
     ]));
-
     let cfg = load_with_env(env);
     assert_eq!(cfg.zk.fastpq.metal_queue_fanout, Some(3));
     assert_eq!(cfg.zk.fastpq.metal_queue_column_threshold, Some(24));
@@ -79,7 +74,6 @@ fn metal_queue_overrides_parse_from_env() {
         iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES
     );
 }
-
 #[test]
 fn metal_queue_overrides_reject_invalid_values() {
     let bad_fanout = MockEnv::with_map(HashMap::from([(
@@ -98,12 +92,10 @@ fn metal_queue_overrides_reject_invalid_values() {
         "FASTPQ_METAL_THREADGROUP".to_string(),
         "0".to_string(),
     )]));
-
     let fanout_panic = panic::catch_unwind(AssertUnwindSafe(|| {
         let _ = load_with_env(bad_fanout);
     }));
     assert!(fanout_panic.is_err(), "fanout <1 must be rejected");
-
     let threshold_panic = panic::catch_unwind(AssertUnwindSafe(|| {
         let _ = load_with_env(bad_threshold);
     }));
@@ -111,7 +103,6 @@ fn metal_queue_overrides_reject_invalid_values() {
         threshold_panic.is_err(),
         "column threshold <=0 must be rejected"
     );
-
     let max_in_flight_panic = panic::catch_unwind(AssertUnwindSafe(|| {
         let _ = load_with_env(bad_max_in_flight);
     }));
@@ -119,7 +110,6 @@ fn metal_queue_overrides_reject_invalid_values() {
         max_in_flight_panic.is_err(),
         "max_in_flight <=0 must be rejected"
     );
-
     let threadgroup_panic = panic::catch_unwind(AssertUnwindSafe(|| {
         let _ = load_with_env(bad_threadgroup);
     }));

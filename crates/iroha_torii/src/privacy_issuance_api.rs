@@ -4,7 +4,6 @@
 //! `ILR1` wires. Issuer keys and authentication policy are supplied by an
 //! explicitly qualified deployment runtime provider and never enter node
 //! configuration or response diagnostics.
-
 use std::{
     collections::BTreeSet,
     fmt,
@@ -13,7 +12,6 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -59,7 +57,6 @@ use iroha_data_model::privacy::{
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-
 /// Canonical authorization endpoint.
 pub const BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_PATH_V1: &str =
     "/v1/privacy/bootle-lantern/issuance/authorize";
@@ -75,7 +72,6 @@ pub const BOOTLE_LANTERN_ISSUANCE_AUTHORIZATION_RESPONSE_BYTES_V1: usize = 320;
 pub const BOOTLE_LANTERN_ISSUANCE_ISSUE_REQUEST_BYTES_V1: usize = 71_896;
 /// Exact `ILR1` response length exposed by the issue endpoint.
 pub const BOOTLE_LANTERN_ISSUANCE_ISSUE_RESPONSE_BYTES_V1: usize = 3_176;
-
 const _: () = assert!(
     BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1
         == BOOTLE_LANTERN_ISSUANCE_AUTHORIZATION_RESPONSE_BYTES_V1
@@ -86,13 +82,11 @@ const _: () = assert!(
 );
 const _: () =
     assert!(BLIND_ISSUANCE_RESPONSE_BYTES_V1 == BOOTLE_LANTERN_ISSUANCE_ISSUE_RESPONSE_BYTES_V1);
-
 const AUTHORIZE_BINDING_DOMAIN_V1: &[u8] =
     b"iroha.privacy.bootle-lantern.issuance-authorize-api.v1";
 const ISSUE_BINDING_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.issuance-issue-api.v1";
 const CONTEXT_INTENT_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.issuance-context-intent.v1";
 const WWW_AUTHENTICATE_VALUE_V1: &str = "Bearer realm=\"iroha-bootle-lantern-issuance\"";
-
 /// Non-secret, config-backed runtime policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BootleLanternIssuanceRuntimeConfigV1 {
@@ -119,7 +113,6 @@ pub struct BootleLanternIssuanceRuntimeConfigV1 {
     /// Exact non-zero provider policy digest.
     pub runtime_provider_registry_policy_digest: [u8; 32],
 }
-
 impl BootleLanternIssuanceRuntimeConfigV1 {
     /// Validate every public input before resolving private providers or opening state.
     ///
@@ -156,7 +149,6 @@ impl BootleLanternIssuanceRuntimeConfigV1 {
         self.store_config()?;
         Ok(())
     }
-
     fn store_config(
         &self,
     ) -> Result<BootleLanternIssuanceStoreConfigV1, BootleLanternIssuanceApiErrorV1> {
@@ -168,7 +160,6 @@ impl BootleLanternIssuanceRuntimeConfigV1 {
         .map_err(|_| BootleLanternIssuanceApiErrorV1::ConfigurationInvalid)
     }
 }
-
 impl From<&iroha_config::parameters::actual::ToriiBootleLanternIssuer>
     for BootleLanternIssuanceRuntimeConfigV1
 {
@@ -188,7 +179,6 @@ impl From<&iroha_config::parameters::actual::ToriiBootleLanternIssuer>
         }
     }
 }
-
 /// Exact public inputs projected to the deployment provider registry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BootleLanternIssuanceRuntimeProviderBindingsV1 {
@@ -196,7 +186,6 @@ pub struct BootleLanternIssuanceRuntimeProviderBindingsV1 {
     policy_id: PrivacyPolicyIdV1,
     authorization_lifetime_blocks: u64,
 }
-
 impl BootleLanternIssuanceRuntimeProviderBindingsV1 {
     /// Construct validated public bindings.
     ///
@@ -221,7 +210,6 @@ impl BootleLanternIssuanceRuntimeProviderBindingsV1 {
             authorization_lifetime_blocks,
         })
     }
-
     fn from_config(
         config: &BootleLanternIssuanceRuntimeConfigV1,
     ) -> Result<Self, BootleLanternIssuanceApiErrorV1> {
@@ -231,26 +219,22 @@ impl BootleLanternIssuanceRuntimeProviderBindingsV1 {
             config.authorization_lifetime_blocks,
         )
     }
-
     /// Exact governed issuer identity.
     #[must_use]
     pub const fn issuer_id(&self) -> PrivacyIssuerIdV1 {
         self.issuer_id
     }
-
     /// Exact governed policy identity.
     #[must_use]
     pub const fn policy_id(&self) -> PrivacyPolicyIdV1 {
         self.policy_id
     }
-
     /// Exact authorization lifetime.
     #[must_use]
     pub const fn authorization_lifetime_blocks(&self) -> u64 {
         self.authorization_lifetime_blocks
     }
 }
-
 /// Public identity of one independently administered provider policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BootleLanternIssuanceRuntimeProviderQualificationV1 {
@@ -259,7 +243,6 @@ pub struct BootleLanternIssuanceRuntimeProviderQualificationV1 {
     /// Non-zero digest of the exact provider policy.
     pub policy_digest: [u8; 32],
 }
-
 impl BootleLanternIssuanceRuntimeProviderQualificationV1 {
     /// Construct a public provider qualification.
     #[must_use]
@@ -269,12 +252,10 @@ impl BootleLanternIssuanceRuntimeProviderQualificationV1 {
             policy_digest,
         }
     }
-
     fn is_valid(self) -> bool {
         self.revision != 0 && self.policy_digest != [0; 32]
     }
 }
-
 /// Stable redacted provider-registry failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BootleLanternIssuanceRuntimeProviderRegistryErrorV1 {
@@ -285,7 +266,6 @@ pub enum BootleLanternIssuanceRuntimeProviderRegistryErrorV1 {
     /// Exact public bindings were rejected.
     RejectedBindings,
 }
-
 /// Authenticated issuance action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BootleLanternIssuanceActionV1 {
@@ -294,7 +274,6 @@ pub enum BootleLanternIssuanceActionV1 {
     /// Consume one `ILA1` with one `ILQ1` request.
     Issue,
 }
-
 /// Stable authenticated principal decision returned by the private provider.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BootleLanternIssuanceAuthenticatedPrincipalV1 {
@@ -305,7 +284,6 @@ pub struct BootleLanternIssuanceAuthenticatedPrincipalV1 {
     /// Inclusive last committed height at which this decision is valid.
     pub expires_at_height: u64,
 }
-
 /// Stable redacted authentication failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BootleLanternIssuanceAuthenticationErrorV1 {
@@ -314,7 +292,6 @@ pub enum BootleLanternIssuanceAuthenticationErrorV1 {
     /// Authentication authority is unavailable.
     Unavailable,
 }
-
 /// Runtime-only action- and body-bound authentication authority.
 pub trait BootleLanternIssuanceAuthenticatorV1: Send + Sync {
     /// Authenticate opaque bearer bytes for one exact request binding.
@@ -329,7 +306,6 @@ pub trait BootleLanternIssuanceAuthenticatorV1: Send + Sync {
         BootleLanternIssuanceAuthenticationErrorV1,
     >;
 }
-
 /// Stable redacted native issuer-cryptography-provider failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BootleLanternIssuerCryptoProviderErrorV1 {
@@ -340,7 +316,6 @@ pub enum BootleLanternIssuerCryptoProviderErrorV1 {
     /// Issuer randomness or key service is unavailable.
     Unavailable,
 }
-
 impl From<BootleLanternIssuanceErrorV1> for BootleLanternIssuerCryptoProviderErrorV1 {
     fn from(error: BootleLanternIssuanceErrorV1) -> Self {
         use BootleLanternIssuanceErrorV1 as CoreError;
@@ -358,7 +333,6 @@ impl From<BootleLanternIssuanceErrorV1> for BootleLanternIssuerCryptoProviderErr
         }
     }
 }
-
 /// Runtime-only native issuer cryptography boundary.
 ///
 /// Implementations hold the issuer trapdoor or its HSM boundary but never a
@@ -367,10 +341,8 @@ impl From<BootleLanternIssuanceErrorV1> for BootleLanternIssuerCryptoProviderErr
 pub trait BootleLanternIssuerCryptoProviderV1: Send + Sync {
     /// Exact stable issuer identity served by this provider.
     fn issuer_id(&self) -> PrivacyIssuerIdV1;
-
     /// Exact stable policy identity served by this provider.
     fn policy_id(&self) -> PrivacyPolicyIdV1;
-
     /// Generate one native `ILA1` candidate without replay-state mutation.
     fn prepare_authorization(
         &self,
@@ -381,7 +353,6 @@ pub trait BootleLanternIssuerCryptoProviderV1: Send + Sync {
         issued_at_height: u64,
         expires_at_height: u64,
     ) -> Result<BootleLanternIssuanceAuthorizationV1, BootleLanternIssuerCryptoProviderErrorV1>;
-
     /// Verify the exact request and issuer-key binding without randomness.
     fn validate_request(
         &self,
@@ -392,7 +363,6 @@ pub trait BootleLanternIssuerCryptoProviderV1: Send + Sync {
         request_bytes: &[u8],
         current_height: u64,
     ) -> Result<[u8; 32], BootleLanternIssuerCryptoProviderErrorV1>;
-
     /// Independently revalidate and issue one `ILR1` after Torii's exact claim.
     fn issue_validated(
         &self,
@@ -404,7 +374,6 @@ pub trait BootleLanternIssuerCryptoProviderV1: Send + Sync {
         current_height: u64,
     ) -> Result<BootleLanternBlindIssuanceResponseV1, BootleLanternIssuerCryptoProviderErrorV1>;
 }
-
 /// Runtime-only private dependencies returned by one coherent registry resolve.
 pub struct BootleLanternIssuanceRuntimeSecretsV1 {
     /// Native issuer cryptography provider holding the trapdoor or HSM boundary.
@@ -412,18 +381,15 @@ pub struct BootleLanternIssuanceRuntimeSecretsV1 {
     /// Opaque bearer authentication authority.
     pub authenticator: Arc<dyn BootleLanternIssuanceAuthenticatorV1>,
 }
-
 impl fmt::Debug for BootleLanternIssuanceRuntimeSecretsV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("BootleLanternIssuanceRuntimeSecretsV1([REDACTED])")
     }
 }
-
 /// Deployment-owned factory for the complete private issuance dependency set.
 pub trait BootleLanternIssuanceRuntimeProviderRegistryV1: Send + Sync + fmt::Debug {
     /// Exact stable non-secret registry handle.
     fn handle(&self) -> &str;
-
     /// Current independently administered public qualification.
     fn qualification(
         &self,
@@ -431,7 +397,6 @@ pub trait BootleLanternIssuanceRuntimeProviderRegistryV1: Send + Sync + fmt::Deb
         BootleLanternIssuanceRuntimeProviderQualificationV1,
         BootleLanternIssuanceRuntimeProviderRegistryErrorV1,
     >;
-
     /// Resolve one coherent secret set for exact public bindings.
     fn resolve(
         &self,
@@ -441,14 +406,12 @@ pub trait BootleLanternIssuanceRuntimeProviderRegistryV1: Send + Sync + fmt::Deb
         BootleLanternIssuanceRuntimeProviderRegistryErrorV1,
     >;
 }
-
 #[derive(Clone)]
 struct QualifiedProviderRegistryV1 {
     handle: String,
     qualification: BootleLanternIssuanceRuntimeProviderQualificationV1,
     inner: Arc<dyn BootleLanternIssuanceRuntimeProviderRegistryV1>,
 }
-
 impl fmt::Debug for QualifiedProviderRegistryV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -458,7 +421,6 @@ impl fmt::Debug for QualifiedProviderRegistryV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl QualifiedProviderRegistryV1 {
     fn resolve(
         config: &BootleLanternIssuanceRuntimeConfigV1,
@@ -495,7 +457,6 @@ impl QualifiedProviderRegistryV1 {
         qualified.assert_current()?;
         Ok((qualified, secrets))
     }
-
     fn assert_current(&self) -> Result<(), BootleLanternIssuanceApiErrorV1> {
         let observed_handle = catch_unwind(AssertUnwindSafe(|| self.inner.handle().to_owned()))
             .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderUnavailable)?;
@@ -508,7 +469,6 @@ impl QualifiedProviderRegistryV1 {
         Ok(())
     }
 }
-
 /// Stable failure categories for runtime construction and operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum BootleLanternIssuanceApiErrorV1 {
@@ -555,7 +515,6 @@ pub enum BootleLanternIssuanceApiErrorV1 {
     #[error("Bootle/Lantern issuance authorization state conflicts")]
     StateConflict,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CommittedIssuanceSnapshotV1 {
     committed_height: u64,
@@ -563,12 +522,10 @@ struct CommittedIssuanceSnapshotV1 {
     context: PrivacyStatementContextV1,
     policy: BootleLanternIssuerPolicyV1,
 }
-
 struct IssuanceLinearizationGuardV1<'a> {
     provider_registry: &'a QualifiedProviderRegistryV1,
     committed_state: Option<(&'a CoreState, &'a BootleLanternIssuanceRuntimeConfigV1)>,
 }
-
 impl<'a> IssuanceLinearizationGuardV1<'a> {
     fn runtime(
         provider_registry: &'a QualifiedProviderRegistryV1,
@@ -580,7 +537,6 @@ impl<'a> IssuanceLinearizationGuardV1<'a> {
             committed_state: Some((state, config)),
         }
     }
-
     #[cfg(test)]
     fn provider_only(provider_registry: &'a QualifiedProviderRegistryV1) -> Self {
         Self {
@@ -588,7 +544,6 @@ impl<'a> IssuanceLinearizationGuardV1<'a> {
             committed_state: None,
         }
     }
-
     fn assert_current(
         &self,
         expected: &CommittedIssuanceSnapshotV1,
@@ -625,18 +580,15 @@ impl<'a> IssuanceLinearizationGuardV1<'a> {
         Ok(current_height)
     }
 }
-
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct IssuanceValidationLeaseKeyV1 {
     authorization_id: [u8; 32],
     authorization_digest: [u8; 32],
 }
-
 struct IssuanceValidationLeaseRegistryV1 {
     max_entries: usize,
     entries: Mutex<BTreeSet<IssuanceValidationLeaseKeyV1>>,
 }
-
 impl IssuanceValidationLeaseRegistryV1 {
     fn try_acquire(
         self: &Arc<Self>,
@@ -659,7 +611,6 @@ impl IssuanceValidationLeaseRegistryV1 {
             key,
         })
     }
-
     #[cfg(test)]
     fn active_count(&self) -> usize {
         self.entries
@@ -668,12 +619,10 @@ impl IssuanceValidationLeaseRegistryV1 {
             .len()
     }
 }
-
 struct IssuanceValidationLeaseV1 {
     registry: Arc<IssuanceValidationLeaseRegistryV1>,
     key: IssuanceValidationLeaseKeyV1,
 }
-
 impl fmt::Debug for IssuanceValidationLeaseV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -682,7 +631,6 @@ impl fmt::Debug for IssuanceValidationLeaseV1 {
             .finish()
     }
 }
-
 impl Drop for IssuanceValidationLeaseV1 {
     fn drop(&mut self) {
         let mut entries = self
@@ -693,12 +641,10 @@ impl Drop for IssuanceValidationLeaseV1 {
         entries.remove(&self.key);
     }
 }
-
 struct IssuanceAdmissionV1 {
     inflight: Arc<Semaphore>,
     validation_leases: Arc<IssuanceValidationLeaseRegistryV1>,
 }
-
 impl IssuanceAdmissionV1 {
     fn new(max_inflight: usize) -> Self {
         Self {
@@ -709,13 +655,11 @@ impl IssuanceAdmissionV1 {
             }),
         }
     }
-
     fn try_acquire_global(&self) -> Result<OwnedSemaphorePermit, BootleLanternIssuanceApiErrorV1> {
         Arc::clone(&self.inflight)
             .try_acquire_owned()
             .map_err(|_| BootleLanternIssuanceApiErrorV1::TooManyRequests)
     }
-
     fn try_acquire_validation(
         &self,
         _global_permit: &OwnedSemaphorePermit,
@@ -724,7 +668,6 @@ impl IssuanceAdmissionV1 {
         self.validation_leases.try_acquire(key)
     }
 }
-
 fn validation_lease_key_v1(
     authorization: &BootleLanternIssuanceAuthorizationV1,
 ) -> IssuanceValidationLeaseKeyV1 {
@@ -733,7 +676,6 @@ fn validation_lease_key_v1(
         authorization_digest: authorization.authorization_digest(),
     }
 }
-
 fn bind_authenticated_issue_and_acquire_validation_lease_v1(
     admission: &IssuanceAdmissionV1,
     global_permit: &OwnedSemaphorePermit,
@@ -769,7 +711,6 @@ fn bind_authenticated_issue_and_acquire_validation_lease_v1(
         admission.try_acquire_validation(global_permit, validation_lease_key_v1(authorization))?;
     Ok((principal, lease))
 }
-
 /// Torii-owned native issuance runtime.
 pub struct BootleLanternIssuanceToriiRuntimeV1 {
     config: BootleLanternIssuanceRuntimeConfigV1,
@@ -780,7 +721,6 @@ pub struct BootleLanternIssuanceToriiRuntimeV1 {
     store: Arc<BootleLanternFileIssuanceStoreV1>,
     admission: IssuanceAdmissionV1,
 }
-
 impl fmt::Debug for BootleLanternIssuanceToriiRuntimeV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -793,7 +733,6 @@ impl fmt::Debug for BootleLanternIssuanceToriiRuntimeV1 {
             .finish()
     }
 }
-
 impl BootleLanternIssuanceToriiRuntimeV1 {
     /// Validate governance and provider identity, then open and recover the durable store.
     ///
@@ -848,13 +787,11 @@ impl BootleLanternIssuanceToriiRuntimeV1 {
             admission,
         })
     }
-
     /// Exact non-secret configuration used by this runtime.
     #[must_use]
     pub fn config(&self) -> &BootleLanternIssuanceRuntimeConfigV1 {
         &self.config
     }
-
     fn authenticate(
         &self,
         credential: &BootleLanternIssuanceCredentialV1,
@@ -875,7 +812,6 @@ impl BootleLanternIssuanceToriiRuntimeV1 {
         validate_authenticated_principal_v1(principal, committed_height)?;
         Ok(principal)
     }
-
     fn authorize(
         &self,
         credential: &BootleLanternIssuanceCredentialV1,
@@ -920,7 +856,6 @@ impl BootleLanternIssuanceToriiRuntimeV1 {
             principal.expires_at_height,
         )
     }
-
     fn issue(
         &self,
         credential: &BootleLanternIssuanceCredentialV1,
@@ -972,7 +907,6 @@ impl BootleLanternIssuanceToriiRuntimeV1 {
         )
     }
 }
-
 fn prepare_and_register_authorization_v1(
     guard: &IssuanceLinearizationGuardV1<'_>,
     issuer_provider: &dyn BootleLanternIssuerCryptoProviderV1,
@@ -1059,7 +993,6 @@ fn prepare_and_register_authorization_v1(
     }
     Err(BootleLanternIssuanceApiErrorV1::ProviderUnavailable)
 }
-
 fn issue_registered_request_v1(
     guard: &IssuanceLinearizationGuardV1<'_>,
     issuer_provider: &dyn BootleLanternIssuerCryptoProviderV1,
@@ -1080,7 +1013,6 @@ fn issue_registered_request_v1(
     let request = BootleLanternBlindIssuanceRequestV1::decode_exact(request_bytes, request_max)
         .map_err(|_| BootleLanternIssuanceApiErrorV1::InvalidRequest)?;
     let request_digest = request.request_digest();
-
     match store.preflight_v1(
         authorization.authorization_id(),
         authorization.authorization_digest(),
@@ -1100,7 +1032,6 @@ fn issue_registered_request_v1(
         Ok(BootleLanternIssuancePreflightV1::Fresh) => {}
         Err(error) => return Err(map_store_replay_error_v1(error)),
     }
-
     let locally_validated_digest = issuer_validate_blind_issuance_request_encoded_v1(
         &snapshot.context,
         snapshot.canonical_genesis_hash,
@@ -1113,7 +1044,6 @@ fn issue_registered_request_v1(
     if !constant_time_equal_32_v1(locally_validated_digest, request_digest) {
         return Err(BootleLanternIssuanceApiErrorV1::InvalidRequest);
     }
-
     current_height = guard.assert_current(
         snapshot,
         current_height,
@@ -1139,7 +1069,6 @@ fn issue_registered_request_v1(
     if !constant_time_equal_32_v1(provider_validated_digest, request_digest) {
         return Err(BootleLanternIssuanceApiErrorV1::ProviderUnavailable);
     }
-
     current_height = guard.assert_current(
         snapshot,
         current_height,
@@ -1165,7 +1094,6 @@ fn issue_registered_request_v1(
         Ok(BootleLanternIssuanceClaimV1::Fresh) => {}
         Err(error) => return Err(map_store_replay_error_v1(error)),
     }
-
     let issue_height = match guard.assert_current(
         snapshot,
         current_height,
@@ -1294,7 +1222,6 @@ fn issue_registered_request_v1(
     )?;
     Ok(bytes)
 }
-
 fn fail_claim_or_durable_v1(
     store: &dyn BootleLanternIssuanceStoreV1,
     authorization: &BootleLanternIssuanceAuthorizationV1,
@@ -1312,7 +1239,6 @@ fn fail_claim_or_durable_v1(
         Err(_) => BootleLanternIssuanceApiErrorV1::DurableStateUnavailable,
     }
 }
-
 fn committed_snapshot_v1(
     state: &CoreState,
     config: &BootleLanternIssuanceRuntimeConfigV1,
@@ -1399,7 +1325,6 @@ fn committed_snapshot_v1(
         policy,
     })
 }
-
 fn context_intent_digest_v1(
     network_id: &[u8; 32],
     canonical_genesis_hash: [u8; 32],
@@ -1416,7 +1341,6 @@ fn context_intent_digest_v1(
     }
     Ok(digest)
 }
-
 fn request_binding_v1(
     domain: &[u8],
     body: &[u8],
@@ -1434,7 +1358,6 @@ fn request_binding_v1(
     }
     Ok(digest)
 }
-
 fn hash_frame_v1(hasher: &mut Sha256, value: &[u8]) -> Result<(), BootleLanternIssuanceApiErrorV1> {
     let length =
         u64::try_from(value.len()).map_err(|_| BootleLanternIssuanceApiErrorV1::InvalidRequest)?;
@@ -1442,7 +1365,6 @@ fn hash_frame_v1(hasher: &mut Sha256, value: &[u8]) -> Result<(), BootleLanternI
     hasher.update(value);
     Ok(())
 }
-
 fn constant_time_equal_32_v1(left: [u8; 32], right: [u8; 32]) -> bool {
     let mut difference = 0_u8;
     for index in 0..32 {
@@ -1450,7 +1372,6 @@ fn constant_time_equal_32_v1(left: [u8; 32], right: [u8; 32]) -> bool {
     }
     difference == 0
 }
-
 fn validate_authenticated_principal_v1(
     principal: BootleLanternIssuanceAuthenticatedPrincipalV1,
     committed_height: u64,
@@ -1465,7 +1386,6 @@ fn validate_authenticated_principal_v1(
     }
     Ok(())
 }
-
 fn validate_authorization_output_fields_v1(
     actual_principal_digest: [u8; 32],
     actual_issued_at_height: u64,
@@ -1482,7 +1402,6 @@ fn validate_authorization_output_fields_v1(
     }
     Ok(())
 }
-
 fn call_issuer_provider_v1<T>(
     operation: impl FnOnce() -> Result<T, BootleLanternIssuerCryptoProviderErrorV1>,
 ) -> Result<T, BootleLanternIssuanceApiErrorV1> {
@@ -1490,7 +1409,6 @@ fn call_issuer_provider_v1<T>(
         .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderUnavailable)?
         .map_err(map_provider_error_v1)
 }
-
 fn call_authenticator_v1(
     authenticator: &dyn BootleLanternIssuanceAuthenticatorV1,
     opaque_credential: &[u8],
@@ -1511,7 +1429,6 @@ fn call_authenticator_v1(
         }
     })
 }
-
 fn map_provider_error_v1(
     error: BootleLanternIssuerCryptoProviderErrorV1,
 ) -> BootleLanternIssuanceApiErrorV1 {
@@ -1527,7 +1444,6 @@ fn map_provider_error_v1(
         }
     }
 }
-
 fn map_public_request_error_v1(
     error: BootleLanternIssuanceErrorV1,
 ) -> BootleLanternIssuanceApiErrorV1 {
@@ -1551,7 +1467,6 @@ fn map_public_request_error_v1(
         _ => BootleLanternIssuanceApiErrorV1::InvalidRequest,
     }
 }
-
 fn map_store_replay_error_v1(
     error: BootleLanternIssuanceStoreErrorV1,
 ) -> BootleLanternIssuanceApiErrorV1 {
@@ -1574,7 +1489,6 @@ fn map_store_replay_error_v1(
         }
     }
 }
-
 fn validate_cached_response_bytes_v1(
     snapshot: &CommittedIssuanceSnapshotV1,
     authorization: &BootleLanternIssuanceAuthorizationV1,
@@ -1601,38 +1515,31 @@ fn validate_cached_response_bytes_v1(
     }
     Ok(canonical)
 }
-
 struct BootleLanternIssuanceCredentialV1 {
     bytes: Vec<u8>,
 }
-
 impl BootleLanternIssuanceCredentialV1 {
     fn new(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }
-
     fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 }
-
 impl fmt::Debug for BootleLanternIssuanceCredentialV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("BootleLanternIssuanceCredentialV1([REDACTED])")
     }
 }
-
 impl Drop for BootleLanternIssuanceCredentialV1 {
     fn drop(&mut self) {
         erase_bytes_v1(&mut self.bytes);
     }
 }
-
 fn erase_bytes_v1(bytes: &mut [u8]) {
     bytes.fill(0);
     black_box(bytes);
 }
-
 fn mark_authorization_sensitive_v1(headers: &mut HeaderMap) {
     for (name, value) in headers.iter_mut() {
         if name == AUTHORIZATION {
@@ -1640,7 +1547,6 @@ fn mark_authorization_sensitive_v1(headers: &mut HeaderMap) {
         }
     }
 }
-
 fn parse_bearer_v1(
     headers: &HeaderMap,
 ) -> Result<BootleLanternIssuanceCredentialV1, BootleLanternIssuanceApiErrorV1> {
@@ -1663,7 +1569,6 @@ fn parse_bearer_v1(
     {
         return Err(BootleLanternIssuanceApiErrorV1::Unauthorized);
     }
-
     // Decode into a fixed, pre-zeroed allocation so even a decoder error over
     // a valid secret prefix is explicitly erased instead of being dropped in
     // an opaque base64-owned temporary.
@@ -1680,7 +1585,6 @@ fn parse_bearer_v1(
         erase_bytes_v1(&mut decoded);
         return Err(BootleLanternIssuanceApiErrorV1::Unauthorized);
     }
-
     // `base64` correctly validates the alphabet and padding policy, while the
     // round trip below rejects alternate trailing-bit representations. The
     // re-encoded credential is secret too, so erase its scratch allocation on
@@ -1705,7 +1609,6 @@ fn parse_bearer_v1(
     }
     Ok(BootleLanternIssuanceCredentialV1::new(decoded))
 }
-
 fn validate_transport_headers_v1(
     headers: &HeaderMap,
     exact_body_bytes: usize,
@@ -1720,7 +1623,6 @@ fn validate_transport_headers_v1(
     if !exact_content_type || headers.get_all(CONTENT_ENCODING).iter().next().is_some() {
         return Err(BootleLanternIssuanceApiErrorV1::UnsupportedMediaType);
     }
-
     let mut accepts = headers.get_all(ACCEPT).iter();
     let exact_accept = accepts
         .next()
@@ -1731,7 +1633,6 @@ fn validate_transport_headers_v1(
     if !exact_accept {
         return Err(BootleLanternIssuanceApiErrorV1::NotAcceptable);
     }
-
     if headers.get_all(TRANSFER_ENCODING).iter().next().is_some() {
         return Err(BootleLanternIssuanceApiErrorV1::InvalidRequest);
     }
@@ -1765,7 +1666,6 @@ fn validate_transport_headers_v1(
     }
     Ok(())
 }
-
 async fn collect_exact_body_v1(
     body: Body,
     exact_bytes: usize,
@@ -1787,7 +1687,6 @@ async fn collect_exact_body_v1(
     }
     Ok(bytes)
 }
-
 fn hardened_response_v1(mut response: Response) -> Response {
     response.headers_mut().insert(
         CACHE_CONTROL,
@@ -1801,7 +1700,6 @@ fn hardened_response_v1(mut response: Response) -> Response {
         .insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     response
 }
-
 fn success_response_v1(bytes: Vec<u8>) -> Response {
     let (content_length, expected_magic) = match bytes.len() {
         BOOTLE_LANTERN_ISSUANCE_AUTHORIZATION_RESPONSE_BYTES_V1 => {
@@ -1827,7 +1725,6 @@ fn success_response_v1(bytes: Vec<u8>) -> Response {
         .insert(CONTENT_LENGTH, content_length);
     hardened_response_v1(response)
 }
-
 fn error_response_v1(error: BootleLanternIssuanceApiErrorV1) -> Response {
     let (status, code) = match error {
         BootleLanternIssuanceApiErrorV1::Unauthorized => {
@@ -1887,7 +1784,6 @@ fn error_response_v1(error: BootleLanternIssuanceApiErrorV1) -> Response {
     }
     hardened_response_v1(response)
 }
-
 /// Return the hardened fail-closed response used when issuance is not configured.
 ///
 /// Keeping the canonical routes mounted while returning this response avoids
@@ -1896,7 +1792,6 @@ fn error_response_v1(error: BootleLanternIssuanceApiErrorV1) -> Response {
 pub fn bootle_lantern_issuance_unavailable_response_v1() -> Response {
     error_response_v1(BootleLanternIssuanceApiErrorV1::ProviderUnavailable)
 }
-
 async fn execute_admitted_blocking_v1<F>(
     permit: OwnedSemaphorePermit,
     operation: F,
@@ -1910,7 +1805,6 @@ where
         .await
         .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderUnavailable)?
 }
-
 /// Handle `POST` authorization requests with an exact empty body.
 pub async fn handle_post_bootle_lantern_issuance_authorize(
     State(runtime): State<Arc<BootleLanternIssuanceToriiRuntimeV1>>,
@@ -1940,7 +1834,6 @@ pub async fn handle_post_bootle_lantern_issuance_authorize(
         Err(error) => error_response_v1(error),
     }
 }
-
 /// Handle `POST` issue requests containing exactly `ILA1 || ILQ1`.
 pub async fn handle_post_bootle_lantern_issuance_issue(
     State(runtime): State<Arc<BootleLanternIssuanceToriiRuntimeV1>>,
@@ -1979,7 +1872,6 @@ pub async fn handle_post_bootle_lantern_issuance_issue(
         Err(error) => error_response_v1(error),
     }
 }
-
 /// Build the complete canonical issuance router with its own runtime state.
 #[must_use]
 pub fn bootle_lantern_issuance_router_v1(
@@ -1996,7 +1888,6 @@ pub fn bootle_lantern_issuance_router_v1(
         )
         .with_state(runtime)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -2008,7 +1899,6 @@ mod tests {
         },
         time::Duration,
     };
-
     use http_body_util::BodyExt as _;
     use iroha_core::privacy_engines::bootle_lantern::issuer::{
         BootleLanternInMemoryIssuanceStoreV1, BootleLanternIssuerKeyPairV1,
@@ -2024,13 +1914,10 @@ mod tests {
     };
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha2::Digest as _;
-
     use super::*;
-
     fn raw(byte: u8) -> [u8; 32] {
         [byte; 32]
     }
-
     fn fixture_pattern_v1(length: usize, magics: &[(usize, &[u8])]) -> Vec<u8> {
         let mut bytes = (0..length)
             .map(|index| u8::try_from(index % 256).expect("index modulo 256 fits u8"))
@@ -2046,33 +1933,27 @@ mod tests {
         }
         bytes
     }
-
     struct TestRng(u64);
-
     impl TestRng {
         const fn seeded(seed: u64) -> Self {
             Self(seed)
         }
     }
-
     impl RngCore for TestRng {
         fn next_u32(&mut self) -> u32 {
             let mut bytes = [0_u8; 4];
             self.fill_bytes(&mut bytes);
             u32::from_le_bytes(bytes)
         }
-
         fn next_u64(&mut self) -> u64 {
             let mut bytes = [0_u8; 8];
             self.fill_bytes(&mut bytes);
             u64::from_le_bytes(bytes)
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             self.try_fill_bytes(destination)
                 .expect("infallible deterministic test RNG");
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             for byte in destination {
                 self.0 ^= self.0 << 13;
@@ -2083,9 +1964,7 @@ mod tests {
             Ok(())
         }
     }
-
     impl CryptoRng for TestRng {}
-
     fn valid_config() -> BootleLanternIssuanceRuntimeConfigV1 {
         BootleLanternIssuanceRuntimeConfigV1 {
             state_dir: PathBuf::from("/var/lib/iroha/privacy-bootle-lantern"),
@@ -2101,19 +1980,16 @@ mod tests {
             runtime_provider_registry_policy_digest: raw(3),
         }
     }
-
     fn provider_bindings() -> BootleLanternIssuanceRuntimeProviderBindingsV1 {
         BootleLanternIssuanceRuntimeProviderBindingsV1::from_config(&valid_config())
             .expect("valid bindings")
     }
-
     struct NativeOperationFixture {
         issuer: Arc<BootleLanternIssuerKeyPairV1>,
         snapshot: CommittedIssuanceSnapshotV1,
         authorization: BootleLanternIssuanceAuthorizationV1,
         request_bytes: Vec<u8>,
     }
-
     fn native_operation_fixture() -> &'static NativeOperationFixture {
         static FIXTURE: OnceLock<NativeOperationFixture> = OnceLock::new();
         FIXTURE.get_or_init(|| {
@@ -2195,7 +2071,6 @@ mod tests {
             }
         })
     }
-
     struct NativeTestIssuerProvider {
         issuer: Arc<BootleLanternIssuerKeyPairV1>,
         authorization: BootleLanternIssuanceAuthorizationV1,
@@ -2209,7 +2084,6 @@ mod tests {
         panic_issue: AtomicBool,
         return_wrong_validation_digest: AtomicBool,
     }
-
     impl NativeTestIssuerProvider {
         fn from_fixture(fixture: &NativeOperationFixture) -> Self {
             Self {
@@ -2227,16 +2101,13 @@ mod tests {
             }
         }
     }
-
     impl BootleLanternIssuerCryptoProviderV1 for NativeTestIssuerProvider {
         fn issuer_id(&self) -> PrivacyIssuerIdV1 {
             self.issuer_id
         }
-
         fn policy_id(&self) -> PrivacyPolicyIdV1 {
             self.policy_id
         }
-
         fn prepare_authorization(
             &self,
             _context: &PrivacyStatementContextV1,
@@ -2250,7 +2121,6 @@ mod tests {
             self.prepare_calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.authorization.clone())
         }
-
         fn validate_request(
             &self,
             context: &PrivacyStatementContextV1,
@@ -2276,7 +2146,6 @@ mod tests {
             }
             Ok(digest)
         }
-
         fn issue_validated(
             &self,
             context: &PrivacyStatementContextV1,
@@ -2308,13 +2177,11 @@ mod tests {
             .map_err(BootleLanternIssuerCryptoProviderErrorV1::from)
         }
     }
-
     struct OperationRegistry {
         handle: String,
         qualifications: Mutex<VecDeque<BootleLanternIssuanceRuntimeProviderQualificationV1>>,
         fallback: BootleLanternIssuanceRuntimeProviderQualificationV1,
     }
-
     impl fmt::Debug for OperationRegistry {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -2323,12 +2190,10 @@ mod tests {
                 .finish_non_exhaustive()
         }
     }
-
     impl BootleLanternIssuanceRuntimeProviderRegistryV1 for OperationRegistry {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -2342,7 +2207,6 @@ mod tests {
                 .pop_front()
                 .unwrap_or(self.fallback))
         }
-
         fn resolve(
             &self,
             _bindings: &BootleLanternIssuanceRuntimeProviderBindingsV1,
@@ -2353,7 +2217,6 @@ mod tests {
             panic!("operation tests construct an already-qualified registry")
         }
     }
-
     fn operation_registry(
         qualifications: impl IntoIterator<Item = BootleLanternIssuanceRuntimeProviderQualificationV1>,
     ) -> QualifiedProviderRegistryV1 {
@@ -2372,7 +2235,6 @@ mod tests {
             }),
         }
     }
-
     fn register_fixture_authorization(
         store: &BootleLanternInMemoryIssuanceStoreV1,
         fixture: &NativeOperationFixture,
@@ -2386,18 +2248,14 @@ mod tests {
             )
             .expect("register fixture authorization");
     }
-
     struct PanicIssuerProvider;
-
     impl BootleLanternIssuerCryptoProviderV1 for PanicIssuerProvider {
         fn issuer_id(&self) -> PrivacyIssuerIdV1 {
             valid_config().issuer_id
         }
-
         fn policy_id(&self) -> PrivacyPolicyIdV1 {
             valid_config().policy_id
         }
-
         fn prepare_authorization(
             &self,
             _context: &PrivacyStatementContextV1,
@@ -2410,7 +2268,6 @@ mod tests {
         {
             panic!("issuer provider must not be reached during registry preflight tests")
         }
-
         fn validate_request(
             &self,
             _context: &PrivacyStatementContextV1,
@@ -2422,7 +2279,6 @@ mod tests {
         ) -> Result<[u8; 32], BootleLanternIssuerCryptoProviderErrorV1> {
             panic!("issuer provider must not be reached during registry preflight tests")
         }
-
         fn issue_validated(
             &self,
             _context: &PrivacyStatementContextV1,
@@ -2436,9 +2292,7 @@ mod tests {
             panic!("issuer provider must not be reached during registry preflight tests")
         }
     }
-
     struct PanicAuthenticator;
-
     impl BootleLanternIssuanceAuthenticatorV1 for PanicAuthenticator {
         fn authenticate(
             &self,
@@ -2453,7 +2307,6 @@ mod tests {
             panic!("authenticator must not be reached during registry preflight tests")
         }
     }
-
     struct StartupRegistry {
         handle: String,
         qualifications: Mutex<VecDeque<BootleLanternIssuanceRuntimeProviderQualificationV1>>,
@@ -2461,15 +2314,12 @@ mod tests {
         resolve_calls: AtomicUsize,
         allow_resolve: bool,
     }
-
     #[derive(Debug)]
     struct PanicHandleRegistry;
-
     impl BootleLanternIssuanceRuntimeProviderRegistryV1 for PanicHandleRegistry {
         fn handle(&self) -> &str {
             panic!("injected registry handle panic")
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -2478,7 +2328,6 @@ mod tests {
         > {
             panic!("qualification must not follow a handle panic")
         }
-
         fn resolve(
             &self,
             _bindings: &BootleLanternIssuanceRuntimeProviderBindingsV1,
@@ -2489,7 +2338,6 @@ mod tests {
             panic!("resolve must not follow a handle panic")
         }
     }
-
     impl fmt::Debug for StartupRegistry {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -2499,7 +2347,6 @@ mod tests {
                 .finish()
         }
     }
-
     impl StartupRegistry {
         fn new(
             handle: impl Into<String>,
@@ -2517,12 +2364,10 @@ mod tests {
             }
         }
     }
-
     impl BootleLanternIssuanceRuntimeProviderRegistryV1 for StartupRegistry {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -2537,7 +2382,6 @@ mod tests {
                 .pop_front()
                 .expect("qualification must not be queried unexpectedly"))
         }
-
         fn resolve(
             &self,
             _bindings: &BootleLanternIssuanceRuntimeProviderBindingsV1,
@@ -2553,7 +2397,6 @@ mod tests {
             })
         }
     }
-
     fn exact_transport_headers(body_bytes: usize) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -2570,7 +2413,6 @@ mod tests {
         );
         headers
     }
-
     fn bearer_headers(value: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -2579,7 +2421,6 @@ mod tests {
         );
         headers
     }
-
     #[test]
     fn runtime_config_requires_a_nonzero_hard_bounded_inflight_limit() {
         assert_eq!(valid_config().validate(), Ok(()));
@@ -2598,7 +2439,6 @@ mod tests {
             Err(BootleLanternIssuanceApiErrorV1::ConfigurationInvalid)
         );
     }
-
     #[test]
     fn transport_headers_require_exact_media_and_unambiguous_fixed_length_framing() {
         let headers = exact_transport_headers(0);
@@ -2611,7 +2451,6 @@ mod tests {
             ),
             Ok(())
         );
-
         for malformed in [
             "Application/X-Norito",
             "application/x-norito; charset=binary",
@@ -2628,7 +2467,6 @@ mod tests {
                 );
             }
         }
-
         let mut duplicate = exact_transport_headers(0);
         duplicate.append(
             CONTENT_TYPE,
@@ -2638,14 +2476,12 @@ mod tests {
             validate_transport_headers_v1(&duplicate, 0),
             Err(BootleLanternIssuanceApiErrorV1::UnsupportedMediaType)
         );
-
         let mut encoded = exact_transport_headers(0);
         encoded.insert(CONTENT_ENCODING, HeaderValue::from_static("identity"));
         assert_eq!(
             validate_transport_headers_v1(&encoded, 0),
             Err(BootleLanternIssuanceApiErrorV1::UnsupportedMediaType)
         );
-
         for malformed in [
             "*/*",
             "application/x-norito;q=1",
@@ -2677,7 +2513,6 @@ mod tests {
             validate_transport_headers_v1(&duplicate_accept, 0),
             Err(BootleLanternIssuanceApiErrorV1::NotAcceptable)
         );
-
         for malformed in ["00", "+0", " 0", "0, 0", "-1"] {
             let mut headers = exact_transport_headers(0);
             if let Ok(value) = HeaderValue::from_str(malformed) {
@@ -2707,7 +2542,6 @@ mod tests {
             validate_transport_headers_v1(&ambiguous_framing, 0),
             Err(BootleLanternIssuanceApiErrorV1::InvalidRequest)
         );
-
         let mut oversized_authorize = exact_transport_headers(0);
         oversized_authorize.insert(CONTENT_LENGTH, HeaderValue::from_static("1"));
         assert_eq!(
@@ -2753,7 +2587,6 @@ mod tests {
             Err(BootleLanternIssuanceApiErrorV1::PayloadTooLarge)
         );
     }
-
     #[test]
     fn missing_or_wrong_accept_is_rejected_before_any_protected_work() {
         let protected_work_calls = AtomicUsize::new(0);
@@ -2773,7 +2606,6 @@ mod tests {
         }
         assert_eq!(protected_work_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn bearer_parser_accepts_only_one_canonical_nonempty_base64url_value() {
         let mut canonical = bearer_headers("Bearer YQ");
@@ -2789,7 +2621,6 @@ mod tests {
             format!("{credential:?}"),
             "BootleLanternIssuanceCredentialV1([REDACTED])"
         );
-
         for malformed in [
             "Bearer ",
             "bearer YQ",
@@ -2804,7 +2635,6 @@ mod tests {
                 "accepted malformed bearer {malformed:?}"
             );
         }
-
         let encoded_max = BOOTLE_LANTERN_ISSUANCE_AUTHENTICATION_MAX_BYTES_V1
             .div_ceil(3)
             .saturating_mul(4);
@@ -2813,7 +2643,6 @@ mod tests {
             parse_bearer_v1(&bearer_headers(&oversized)).unwrap_err(),
             BootleLanternIssuanceApiErrorV1::Unauthorized
         );
-
         let mut duplicate = bearer_headers("Bearer YQ");
         duplicate.append(AUTHORIZATION, HeaderValue::from_static("Bearer Yg"));
         mark_authorization_sensitive_v1(&mut duplicate);
@@ -2828,7 +2657,6 @@ mod tests {
             BootleLanternIssuanceApiErrorV1::Unauthorized
         );
     }
-
     #[tokio::test]
     async fn exact_body_collector_rejects_every_truncation_and_extension() {
         assert!(collect_exact_body_v1(Body::empty(), 0).await.is_ok());
@@ -2838,7 +2666,6 @@ mod tests {
                 .unwrap_err(),
             BootleLanternIssuanceApiErrorV1::PayloadTooLarge
         );
-
         let exact = vec![0xA5; BOOTLE_LANTERN_ISSUANCE_ISSUE_REQUEST_BYTES_V1];
         assert_eq!(
             collect_exact_body_v1(
@@ -2870,7 +2697,6 @@ mod tests {
             BootleLanternIssuanceApiErrorV1::PayloadTooLarge
         );
     }
-
     #[test]
     fn disabled_response_is_stable_and_hardened() {
         let response = bootle_lantern_issuance_unavailable_response_v1();
@@ -2891,7 +2717,6 @@ mod tests {
         );
         assert!(response.headers().get(RETRY_AFTER).is_none());
     }
-
     #[tokio::test]
     async fn success_and_protocol_errors_use_the_documented_exact_status_and_length() {
         let mut authorization_bytes =
@@ -2960,7 +2785,6 @@ mod tests {
             norito::decode_from_bytes(&throttled_bytes)
                 .expect("decode throttled privacy issuance error");
         assert!(throttled_envelope.details.is_none());
-
         let typed = error_response_v1(BootleLanternIssuanceApiErrorV1::InvalidRequest);
         assert_eq!(
             typed.headers().get(CONTENT_TYPE),
@@ -2975,14 +2799,12 @@ mod tests {
         let envelope: iroha_torii_shared::ErrorEnvelope =
             norito::decode_from_bytes(&bytes).expect("decode typed privacy issuance error");
         assert_eq!(envelope.code(), "privacy_issuance_invalid_request");
-
         let unacceptable = error_response_v1(BootleLanternIssuanceApiErrorV1::NotAcceptable);
         assert_eq!(
             unacceptable.headers().get(CONTENT_TYPE),
             Some(&HeaderValue::from_static("application/json"))
         );
     }
-
     #[test]
     fn cross_sdk_fixture_bodies_bind_exact_lengths_magics_and_hashes() {
         let fixture: norito::json::Value = norito::json::from_str(include_str!(
@@ -3047,7 +2869,6 @@ mod tests {
             );
         }
     }
-
     #[tokio::test]
     async fn error_responses_match_cross_sdk_fixture_byte_for_byte() {
         let fixture: norito::json::Value = norito::json::from_str(include_str!(
@@ -3074,7 +2895,6 @@ mod tests {
             .and_then(norito::json::Value::as_array)
             .expect("fixture error responses");
         assert_eq!(rows.len(), 8);
-
         for row in rows {
             let status = row
                 .get("status")
@@ -3147,7 +2967,6 @@ mod tests {
                 (status == 401).then_some(fixture_www_authenticate),
                 "only 401 may carry the canonical issuance challenge",
             );
-
             let actual_body = response
                 .into_body()
                 .collect()
@@ -3168,7 +2987,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn admission_is_bounded_rejects_same_authorization_fanout_and_allows_distinct_authorizations() {
         let admission = IssuanceAdmissionV1::new(2);
@@ -3180,7 +2998,6 @@ mod tests {
             admission.try_acquire_global().unwrap_err(),
             BootleLanternIssuanceApiErrorV1::TooManyRequests
         );
-
         let fixture = native_operation_fixture();
         let first_key = validation_lease_key_v1(&fixture.authorization);
         let first_lease = admission
@@ -3192,7 +3009,6 @@ mod tests {
                 .unwrap_err(),
             BootleLanternIssuanceApiErrorV1::StateConflict
         );
-
         let mut second_authorization_rng = TestRng::seeded(0x243f_6a88_85a3_08d3);
         let second_authorization =
             issuer_prepare_blind_issuance_authorization_candidate_with_rng_v1(
@@ -3217,12 +3033,10 @@ mod tests {
             )
             .expect("different authorizations may validate concurrently");
         assert_eq!(admission.validation_leases.active_count(), 2);
-
         drop((first_lease, second_lease, first_permit, second_permit));
         assert_eq!(admission.validation_leases.active_count(), 0);
         assert!(admission.try_acquire_global().is_ok());
     }
-
     #[test]
     fn one_authorization_lease_rejects_distinct_candidate_request_digests() {
         let fixture = native_operation_fixture();
@@ -3244,7 +3058,6 @@ mod tests {
         )
         .expect("second canonical candidate request");
         assert_ne!(first.request_digest(), second.request_digest());
-
         let admission = IssuanceAdmissionV1::new(2);
         let first_permit = admission.try_acquire_global().expect("first permit");
         let second_permit = admission.try_acquire_global().expect("second permit");
@@ -3260,7 +3073,6 @@ mod tests {
             "request-digest substitution must not bypass the per-authorization lease"
         );
     }
-
     #[test]
     fn denied_authentication_cannot_reserve_or_block_an_authorization_lease() {
         let fixture = native_operation_fixture();
@@ -3279,7 +3091,6 @@ mod tests {
             BootleLanternIssuanceApiErrorV1::Unauthorized
         );
         assert_eq!(admission.validation_leases.active_count(), 0);
-
         let principal = BootleLanternIssuanceAuthenticatedPrincipalV1 {
             principal_digest: fixture.authorization.requester_authorization_digest(),
             issued_at_height: fixture.snapshot.committed_height,
@@ -3314,12 +3125,10 @@ mod tests {
         drop(lease);
         assert_eq!(admission.validation_leases.active_count(), 0);
     }
-
     #[test]
     fn validation_lease_is_removed_on_error_and_unwind() {
         let admission = Arc::new(IssuanceAdmissionV1::new(1));
         let key = validation_lease_key_v1(&native_operation_fixture().authorization);
-
         let permit = admission.try_acquire_global().expect("error-path permit");
         let result: Result<(), BootleLanternIssuanceApiErrorV1> = (|| {
             let _lease = admission.try_acquire_validation(&permit, key)?;
@@ -3331,7 +3140,6 @@ mod tests {
         );
         assert_eq!(admission.validation_leases.active_count(), 0);
         drop(permit);
-
         let unwind_admission = Arc::clone(&admission);
         let unwind = catch_unwind(AssertUnwindSafe(move || {
             let permit = unwind_admission
@@ -3346,7 +3154,6 @@ mod tests {
         assert_eq!(admission.validation_leases.active_count(), 0);
         assert!(admission.try_acquire_global().is_ok());
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancelled_waiter_cannot_release_capacity_while_blocking_crypto_continues() {
         let admission = Arc::new(IssuanceAdmissionV1::new(1));
@@ -3367,7 +3174,6 @@ mod tests {
             BootleLanternIssuanceApiErrorV1::TooManyRequests,
             "request cancellation must not detach capacity from running crypto"
         );
-
         release_tx.send(()).expect("release blocking operation");
         let _reacquired = tokio::time::timeout(Duration::from_secs(30), async {
             loop {
@@ -3383,7 +3189,6 @@ mod tests {
         .await
         .expect("completed crypto must release capacity");
     }
-
     #[tokio::test]
     async fn blocking_panic_is_contained_and_releases_global_capacity() {
         let admission = IssuanceAdmissionV1::new(1);
@@ -3398,7 +3203,6 @@ mod tests {
         );
         assert!(admission.try_acquire_global().is_ok());
     }
-
     #[test]
     fn registry_startup_rejects_missing_unexpected_and_stale_providers_before_resolve() {
         let config = valid_config();
@@ -3408,7 +3212,6 @@ mod tests {
                 .expect_err("missing registry"),
             BootleLanternIssuanceApiErrorV1::ProviderMissing
         );
-
         let unexpected = Arc::new(StartupRegistry::new(
             "hsm://iroha/privacy/unexpected-primary",
             [],
@@ -3421,7 +3224,6 @@ mod tests {
         );
         assert_eq!(unexpected.qualification_calls.load(Ordering::SeqCst), 0);
         assert_eq!(unexpected.resolve_calls.load(Ordering::SeqCst), 0);
-
         let stale = Arc::new(StartupRegistry::new(
             config.runtime_provider_registry_handle.clone(),
             [BootleLanternIssuanceRuntimeProviderQualificationV1::new(
@@ -3438,7 +3240,6 @@ mod tests {
         assert_eq!(stale.qualification_calls.load(Ordering::SeqCst), 1);
         assert_eq!(stale.resolve_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn registry_qualification_and_resolve_panics_are_contained() {
         let config = valid_config();
@@ -3462,7 +3263,6 @@ mod tests {
                 .expect_err("qualification panic must be contained"),
             BootleLanternIssuanceApiErrorV1::ProviderUnavailable
         );
-
         let expected = BootleLanternIssuanceRuntimeProviderQualificationV1::new(
             config.runtime_provider_registry_revision,
             config.runtime_provider_registry_policy_digest,
@@ -3478,7 +3278,6 @@ mod tests {
             BootleLanternIssuanceApiErrorV1::ProviderUnavailable
         );
     }
-
     #[test]
     fn registry_startup_detects_qualification_drift_after_resolve() {
         let config = valid_config();
@@ -3507,7 +3306,6 @@ mod tests {
         assert_eq!(registry.qualification_calls.load(Ordering::SeqCst), 2);
         assert_eq!(registry.resolve_calls.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn authorization_collision_retries_are_exactly_bounded_and_leave_existing_state_untouched() {
         let fixture = native_operation_fixture();
@@ -3515,7 +3313,6 @@ mod tests {
         let store = BootleLanternInMemoryIssuanceStoreV1::new();
         register_fixture_authorization(&store, fixture);
         let registry = operation_registry([]);
-
         assert_eq!(
             prepare_and_register_authorization_v1(
                 &IssuanceLinearizationGuardV1::provider_only(&registry),
@@ -3544,7 +3341,6 @@ mod tests {
             Ok(BootleLanternIssuancePreflightV1::Fresh)
         );
     }
-
     #[test]
     fn native_issue_completes_once_and_expired_retry_never_reenters_provider() {
         let fixture = native_operation_fixture();
@@ -3566,7 +3362,6 @@ mod tests {
                 .expect("canonical registered authorization"),
             fixture.authorization
         );
-
         let first = issue_registered_request_v1(
             &IssuanceLinearizationGuardV1::provider_only(&registry),
             &provider,
@@ -3580,7 +3375,6 @@ mod tests {
         assert_eq!(first.len(), BOOTLE_LANTERN_ISSUANCE_ISSUE_RESPONSE_BYTES_V1);
         assert_eq!(provider.validate_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider.issue_calls.load(Ordering::SeqCst), 1);
-
         let expired_snapshot = CommittedIssuanceSnapshotV1 {
             committed_height: fixture.authorization.expires_at_height() + 100,
             canonical_genesis_hash: fixture.snapshot.canonical_genesis_hash,
@@ -3601,7 +3395,6 @@ mod tests {
         assert_eq!(provider.validate_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider.issue_calls.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn cached_response_is_not_returned_across_provider_qualification_drift() {
         let fixture = native_operation_fixture();
@@ -3620,7 +3413,6 @@ mod tests {
         )
         .expect("initial completed response");
         assert_eq!(first.len(), BOOTLE_LANTERN_ISSUANCE_ISSUE_RESPONSE_BYTES_V1);
-
         let config = valid_config();
         let expected = BootleLanternIssuanceRuntimeProviderQualificationV1::new(
             config.runtime_provider_registry_revision,
@@ -3647,7 +3439,6 @@ mod tests {
         assert_eq!(provider.validate_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider.issue_calls.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn provider_validation_digest_substitution_fails_before_claim_and_rng() {
         let fixture = native_operation_fixture();
@@ -3658,7 +3449,6 @@ mod tests {
         let store = BootleLanternInMemoryIssuanceStoreV1::new();
         register_fixture_authorization(&store, fixture);
         let registry = operation_registry([]);
-
         assert_eq!(
             issue_registered_request_v1(
                 &IssuanceLinearizationGuardV1::provider_only(&registry),
@@ -3689,7 +3479,6 @@ mod tests {
             Ok(BootleLanternIssuancePreflightV1::Fresh)
         );
     }
-
     #[test]
     fn every_provider_failure_after_claim_is_irreversible() {
         let fixture = native_operation_fixture();
@@ -3698,7 +3487,6 @@ mod tests {
         let store = BootleLanternInMemoryIssuanceStoreV1::new();
         register_fixture_authorization(&store, fixture);
         let registry = operation_registry([]);
-
         assert_eq!(
             issue_registered_request_v1(
                 &IssuanceLinearizationGuardV1::provider_only(&registry),
@@ -3714,7 +3502,6 @@ mod tests {
         );
         assert_eq!(provider.validate_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider.issue_calls.load(Ordering::SeqCst), 1);
-
         assert_eq!(
             issue_registered_request_v1(
                 &IssuanceLinearizationGuardV1::provider_only(&registry),
@@ -3731,7 +3518,6 @@ mod tests {
         assert_eq!(provider.validate_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider.issue_calls.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn issuer_provider_panic_after_claim_is_contained_and_terminal() {
         let fixture = native_operation_fixture();
@@ -3740,7 +3526,6 @@ mod tests {
         let store = BootleLanternInMemoryIssuanceStoreV1::new();
         register_fixture_authorization(&store, fixture);
         let registry = operation_registry([]);
-
         assert_eq!(
             issue_registered_request_v1(
                 &IssuanceLinearizationGuardV1::provider_only(&registry),
@@ -3770,7 +3555,6 @@ mod tests {
         );
         assert_eq!(provider.issue_calls.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn provider_qualification_drift_after_claim_fails_without_issuer_rng() {
         let fixture = native_operation_fixture();
@@ -3787,7 +3571,6 @@ mod tests {
             raw(0xD2),
         );
         let registry = operation_registry([expected, expected, expected, expected, drifted]);
-
         assert_eq!(
             issue_registered_request_v1(
                 &IssuanceLinearizationGuardV1::provider_only(&registry),
@@ -3803,7 +3586,6 @@ mod tests {
         );
         assert_eq!(provider.validate_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider.issue_calls.load(Ordering::SeqCst), 0);
-
         assert_eq!(
             issue_registered_request_v1(
                 &IssuanceLinearizationGuardV1::provider_only(&operation_registry([])),
@@ -3818,7 +3600,6 @@ mod tests {
             BootleLanternIssuanceApiErrorV1::StateConflict
         );
     }
-
     #[test]
     fn corrupt_completed_response_is_never_returned_or_reissued() {
         let fixture = native_operation_fixture();
@@ -3866,7 +3647,6 @@ mod tests {
                 fixture.snapshot.committed_height,
             )
             .expect("store accepts structurally canonical request-bound response bytes");
-
         assert_eq!(
             issue_registered_request_v1(
                 &IssuanceLinearizationGuardV1::provider_only(&operation_registry([])),
@@ -3883,7 +3663,6 @@ mod tests {
         assert_eq!(provider.validate_calls.load(Ordering::SeqCst), 0);
         assert_eq!(provider.issue_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn authenticated_principal_height_and_digest_bounds_fail_closed() {
         let valid = BootleLanternIssuanceAuthenticatedPrincipalV1 {
@@ -3892,7 +3671,6 @@ mod tests {
             expires_at_height: 11,
         };
         assert_eq!(validate_authenticated_principal_v1(valid, 10), Ok(()));
-
         for invalid in [
             BootleLanternIssuanceAuthenticatedPrincipalV1 {
                 principal_digest: [0; 32],
@@ -3922,7 +3700,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn linearization_guard_rechecks_height_and_both_lifetimes_at_every_boundary() {
         let fixture = native_operation_fixture();
@@ -3965,7 +3742,6 @@ mod tests {
             Err(BootleLanternIssuanceApiErrorV1::StateConflict)
         );
     }
-
     #[test]
     fn authenticator_panic_is_contained_without_exposing_the_credential() {
         let credential = BootleLanternIssuanceCredentialV1::new(b"runtime-secret".to_vec());
@@ -3985,7 +3761,6 @@ mod tests {
             "BootleLanternIssuanceCredentialV1([REDACTED])"
         );
     }
-
     #[test]
     fn provider_authorization_output_must_match_every_expected_field() {
         let principal = raw(0x81);
@@ -4006,7 +3781,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn replay_conflict_and_substitution_errors_have_closed_mappings() {
         for error in [
@@ -4039,7 +3813,6 @@ mod tests {
             BootleLanternIssuanceApiErrorV1::PolicyUnavailable
         );
     }
-
     #[test]
     fn request_bindings_are_action_body_height_and_genesis_separated() {
         let authorize = request_binding_v1(AUTHORIZE_BINDING_DOMAIN_V1, &[], 10, raw(1))

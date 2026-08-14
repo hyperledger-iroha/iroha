@@ -4,10 +4,8 @@
 //! deterministic mock proofs so that unit and integration tests can exercise
 //! privacy-mode workflows. Production builds wire into the canonical verifier
 //! pipeline to validate Halo2 envelopes against the configured roster circuit.
-
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 use std::str::FromStr;
-
 use iroha_config::parameters::actual::VerifyingKeyRef;
 use iroha_crypto::Hash;
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
@@ -30,12 +28,10 @@ use kaigi_zk::{
 };
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 use mv::storage::StorageReadOnly;
-
 use super::{Error, privacy_error};
 use crate::state::StateTransaction;
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 use crate::zk;
-
 /// Information supplied with a privacy-mode join/leave request.
 #[derive(Debug)]
 pub struct PrivacyArtifacts<'a> {
@@ -52,7 +48,6 @@ pub struct PrivacyArtifacts<'a> {
     /// Raw proof bytes (Norito-encoded `OpenVerifyEnvelope`).
     pub proof: Option<&'a [u8]>,
 }
-
 /// Information supplied with a privacy-mode host action.
 #[derive(Debug)]
 pub struct HostPrivacyArtifacts<'a> {
@@ -65,7 +60,6 @@ pub struct HostPrivacyArtifacts<'a> {
     /// Raw proof bytes (Norito-encoded `OpenVerifyEnvelope`).
     pub proof: Option<&'a [u8]>,
 }
-
 /// Ensure that a transparent Kaigi does not receive privacy-artifact payloads.
 pub fn ensure_transparent_payload(artifacts: &PrivacyArtifacts<'_>) -> Result<(), Error> {
     if artifacts.commitment.is_some()
@@ -79,7 +73,6 @@ pub fn ensure_transparent_payload(artifacts: &PrivacyArtifacts<'_>) -> Result<()
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "kaigi_privacy_mocks"))]
 fn verify_roster_stub(artifacts: &PrivacyArtifacts<'_>, expected_root: &Hash) -> Result<(), Error> {
     let commitment = artifacts
@@ -88,7 +81,6 @@ fn verify_roster_stub(artifacts: &PrivacyArtifacts<'_>, expected_root: &Hash) ->
     artifacts
         .nullifier
         .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
-
     if commitment
         .alias_tag
         .as_deref()
@@ -96,28 +88,23 @@ fn verify_roster_stub(artifacts: &PrivacyArtifacts<'_>, expected_root: &Hash) ->
     {
         return Err(privacy_error("commitment alias_tag exceeds 64 characters"));
     }
-
     if artifacts.host == artifacts.subject {
         return Err(privacy_error("host must not re-enter privacy roster"));
     }
-
     let proof = artifacts
         .proof
         .ok_or_else(|| privacy_error("privacy mode requires proof"))?;
     if proof.is_empty() {
         return Err(privacy_error("privacy proof payload must be non-empty"));
     }
-
     let Some(advertised_root) = artifacts.roster_root else {
         return Err(privacy_error("privacy mode requires roster root"));
     };
     if advertised_root != expected_root {
         return Err(privacy_error("roster root mismatch"));
     }
-
     Ok(())
 }
-
 #[cfg(any(test, feature = "kaigi_privacy_mocks"))]
 fn verify_usage_stub(proof: Option<&[u8]>) -> Result<(), Error> {
     let proof_bytes = proof.ok_or_else(|| privacy_error("privacy mode requires proof"))?;
@@ -126,7 +113,6 @@ fn verify_usage_stub(proof: Option<&[u8]>) -> Result<(), Error> {
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "kaigi_privacy_mocks"))]
 fn verify_host_stub(
     artifacts: &HostPrivacyArtifacts<'_>,
@@ -139,7 +125,6 @@ fn verify_host_stub(
     let nullifier = artifacts
         .nullifier
         .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
-
     if commitment
         .alias_tag
         .as_deref()
@@ -147,34 +132,28 @@ fn verify_host_stub(
     {
         return Err(privacy_error("commitment alias_tag exceeds 64 characters"));
     }
-
     if let Some(expected_commitment) = expected_commitment
         && commitment.commitment != expected_commitment.commitment
     {
         return Err(privacy_error("host commitment mismatch"));
     }
-
     let proof = artifacts
         .proof
         .ok_or_else(|| privacy_error("privacy mode requires proof"))?;
     if proof.is_empty() {
         return Err(privacy_error("privacy proof payload must be non-empty"));
     }
-
     let Some(advertised_root) = artifacts.roster_root else {
         return Err(privacy_error("privacy mode requires roster root"));
     };
     if advertised_root != expected_root {
         return Err(privacy_error("roster root mismatch"));
     }
-
     if nullifier.digest == Hash::prehashed([0u8; Hash::LENGTH]) {
         return Err(privacy_error("privacy nullifier must be non-zero"));
     }
-
     Ok(())
 }
-
 pub fn verify_roster_join(
     state_transaction: &mut StateTransaction<'_, '_>,
     artifacts: &PrivacyArtifacts<'_>,
@@ -185,18 +164,15 @@ pub fn verify_roster_join(
         let _ = state_transaction;
         return verify_roster_stub(artifacts, expected_root);
     }
-
     #[cfg(not(any(test, feature = "kaigi_privacy_mocks")))]
     {
         let proof_bytes = validate_roster_artifacts(artifacts, expected_root)?;
         let vk_cfg = state_transaction.zk.kaigi_roster_join_vk.clone();
         return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi roster join");
     }
-
     #[allow(unreachable_code)]
     Err(privacy_error("kaigi privacy mode unavailable"))
 }
-
 pub fn verify_usage_commitment(
     state_transaction: &mut StateTransaction<'_, '_>,
     proof: Option<&[u8]>,
@@ -207,7 +183,6 @@ pub fn verify_usage_commitment(
         let _ = (state_transaction, expected_commitment);
         return verify_usage_stub(proof);
     }
-
     #[cfg(not(any(test, feature = "kaigi_privacy_mocks")))]
     {
         let proof_bytes = proof.ok_or_else(|| privacy_error("privacy mode requires proof"))?;
@@ -223,15 +198,12 @@ pub fn verify_usage_commitment(
         let instance_cols = crate::zk::extract_pasta_fp_instances(&envelope.proof_bytes)
             .ok_or_else(|| privacy_error("failed to parse usage privacy proof instances"))?;
         verify_usage_public_input(&instance_cols, expected_commitment)?;
-
         let vk_cfg = state_transaction.zk.kaigi_usage_vk.clone();
         return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi usage");
     }
-
     #[allow(unreachable_code)]
     Err(privacy_error("kaigi privacy mode unavailable"))
 }
-
 pub fn verify_host_create(
     state_transaction: &mut StateTransaction<'_, '_>,
     artifacts: &HostPrivacyArtifacts<'_>,
@@ -242,18 +214,15 @@ pub fn verify_host_create(
         let _ = state_transaction;
         return verify_host_stub(artifacts, expected_root, None);
     }
-
     #[cfg(not(any(test, feature = "kaigi_privacy_mocks")))]
     {
         let proof_bytes = validate_host_artifacts(artifacts, expected_root, None)?;
         let vk_cfg = state_transaction.zk.kaigi_roster_join_vk.clone();
         return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi host create");
     }
-
     #[allow(unreachable_code)]
     Err(privacy_error("kaigi privacy mode unavailable"))
 }
-
 pub fn verify_host_action(
     state_transaction: &mut StateTransaction<'_, '_>,
     artifacts: &HostPrivacyArtifacts<'_>,
@@ -265,7 +234,6 @@ pub fn verify_host_action(
         let _ = state_transaction;
         return verify_host_stub(artifacts, expected_root, Some(expected_commitment));
     }
-
     #[cfg(not(any(test, feature = "kaigi_privacy_mocks")))]
     {
         let proof_bytes =
@@ -277,11 +245,9 @@ pub fn verify_host_action(
             .or_else(|| state_transaction.zk.kaigi_roster_join_vk.clone());
         return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi host action");
     }
-
     #[allow(unreachable_code)]
     Err(privacy_error("kaigi privacy mode unavailable"))
 }
-
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 #[allow(dead_code)]
 fn validate_roster_artifacts<'a>(
@@ -294,7 +260,6 @@ fn validate_roster_artifacts<'a>(
     let nullifier = artifacts
         .nullifier
         .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
-
     if commitment
         .alias_tag
         .as_deref()
@@ -302,25 +267,21 @@ fn validate_roster_artifacts<'a>(
     {
         return Err(privacy_error("commitment alias_tag exceeds 64 characters"));
     }
-
     if artifacts.host == artifacts.subject {
         return Err(privacy_error("host must not re-enter privacy roster"));
     }
-
     let proof_bytes = artifacts
         .proof
         .ok_or_else(|| privacy_error("privacy mode requires proof"))?;
     if proof_bytes.is_empty() {
         return Err(privacy_error("privacy proof payload must be non-empty"));
     }
-
     let Some(advertised_root) = artifacts.roster_root else {
         return Err(privacy_error("privacy mode requires roster root"));
     };
     if advertised_root != expected_root {
         return Err(privacy_error("roster root mismatch"));
     }
-
     let envelope = decode_privacy_proof_envelope(proof_bytes)?;
     if envelope.circuit_id != KAIGI_ROSTER_BACKEND {
         return Err(privacy_error(
@@ -335,10 +296,8 @@ fn validate_roster_artifacts<'a>(
         &commitment.commitment,
         &nullifier.digest,
     )?;
-
     Ok(proof_bytes)
 }
-
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 #[allow(dead_code)]
 fn validate_host_artifacts<'a>(
@@ -352,7 +311,6 @@ fn validate_host_artifacts<'a>(
     let nullifier = artifacts
         .nullifier
         .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
-
     if commitment
         .alias_tag
         .as_deref()
@@ -360,27 +318,23 @@ fn validate_host_artifacts<'a>(
     {
         return Err(privacy_error("commitment alias_tag exceeds 64 characters"));
     }
-
     if let Some(expected_commitment) = expected_commitment
         && commitment.commitment != expected_commitment.commitment
     {
         return Err(privacy_error("host commitment mismatch"));
     }
-
     let proof_bytes = artifacts
         .proof
         .ok_or_else(|| privacy_error("privacy mode requires proof"))?;
     if proof_bytes.is_empty() {
         return Err(privacy_error("privacy proof payload must be non-empty"));
     }
-
     let Some(advertised_root) = artifacts.roster_root else {
         return Err(privacy_error("privacy mode requires roster root"));
     };
     if advertised_root != expected_root {
         return Err(privacy_error("roster root mismatch"));
     }
-
     let envelope = decode_privacy_proof_envelope(proof_bytes)?;
     if envelope.circuit_id != KAIGI_ROSTER_BACKEND {
         return Err(privacy_error(
@@ -395,10 +349,8 @@ fn validate_host_artifacts<'a>(
         &commitment.commitment,
         &nullifier.digest,
     )?;
-
     Ok(proof_bytes)
 }
-
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 #[allow(clippy::needless_pass_by_value)]
 #[allow(dead_code)]
@@ -411,14 +363,12 @@ fn verify_with_config(
     let Some(vk_cfg) = vk_cfg.as_ref() else {
         return Err(privacy_error(format!("{purpose} verifier not configured")));
     };
-
     let backend_tag = vk_cfg.backend.clone();
     let circuit_name = vk_cfg.name.clone();
     let vk_id = VerifyingKeyId::new(backend_tag.clone(), circuit_name.clone());
     let Some(record) = state_transaction.world.verifying_keys.get(&vk_id) else {
         return Err(privacy_error(format!("{purpose} verifier not registered")));
     };
-
     if record.status != ConfidentialStatus::Active {
         return Err(privacy_error(format!("{purpose} verifier is not active")));
     }
@@ -427,14 +377,11 @@ fn verify_with_config(
             "{purpose} verifier missing gas schedule reference"
         )));
     }
-
     let record_backend = record.backend;
     let record_circuit_id = record.circuit_id.clone();
     let record_commitment = record.commitment;
     let record_key = record.key.clone();
-
     let envelope = decode_privacy_proof_envelope(proof_bytes)?;
-
     validate_privacy_proof_envelope_metadata(
         &envelope,
         backend_tag.as_str(),
@@ -442,9 +389,7 @@ fn verify_with_config(
         &record_circuit_id,
         record_commitment,
     )?;
-
     state_transaction.register_confidential_proof(proof_bytes.len())?;
-
     let backend_ident = Ident::from_str(backend_tag.as_str())
         .map_err(|_| privacy_error("invalid verifier backend identifier"))?;
     let proof_box = ProofBox::new(backend_ident, proof_bytes.to_vec());
@@ -454,7 +399,6 @@ fn verify_with_config(
         record_key.as_ref(),
         &state_transaction.zk,
     );
-
     #[cfg(feature = "telemetry")]
     {
         let status = if report.ok {
@@ -470,14 +414,11 @@ fn verify_with_config(
             latency_ms,
         );
     }
-
     if !report.ok {
         return Err(privacy_error("privacy proof verification failed"));
     }
-
     Ok(())
 }
-
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 fn decode_privacy_proof_envelope(proof_bytes: &[u8]) -> Result<OpenVerifyEnvelope, Error> {
     norito::decode_canonical(proof_bytes).map_err(|err| {
@@ -486,7 +427,6 @@ fn decode_privacy_proof_envelope(proof_bytes: &[u8]) -> Result<OpenVerifyEnvelop
         ))
     })
 }
-
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 fn validate_privacy_proof_envelope_metadata(
     envelope: &OpenVerifyEnvelope,
@@ -524,7 +464,6 @@ fn validate_privacy_proof_envelope_metadata(
     }
     Ok(())
 }
-
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 fn verify_roster_public_inputs(
     instance_cols: &[Vec<halo2_proofs::halo2curves::pasta::Fp>],
@@ -538,10 +477,8 @@ fn verify_roster_public_inputs(
             "privacy proof must expose exactly commitment, nullifier, and four roster root limbs",
         ));
     }
-
     verify_hash_public_input(&instance_cols[0], expected_commitment, "commitment")?;
     verify_hash_public_input(&instance_cols[1], expected_nullifier, "nullifier")?;
-
     let expected_limbs = roster_root_limb_values(expected_root);
     for (idx, expected) in expected_limbs.iter().enumerate() {
         let column = &instance_cols[OFFSET + idx];
@@ -558,7 +495,6 @@ fn verify_roster_public_inputs(
     }
     Ok(())
 }
-
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 fn verify_hash_public_input(
     column: &[halo2_proofs::halo2curves::pasta::Fp],
@@ -582,7 +518,6 @@ fn verify_hash_public_input(
     }
     Ok(())
 }
-
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 fn verify_usage_public_input(
     instance_cols: &[Vec<halo2_proofs::halo2curves::pasta::Fp>],
@@ -595,11 +530,9 @@ fn verify_usage_public_input(
     }
     verify_hash_public_input(&instance_cols[0], expected_commitment, "usage commitment")
 }
-
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 fn scalar_le_u64(value: halo2_proofs::halo2curves::pasta::Fp) -> Option<u64> {
     use halo2_proofs::halo2curves::ff::PrimeField as _;
-
     let repr = value.to_repr();
     let (lo, hi) = repr.as_ref().split_at(8);
     if hi.iter().any(|&b| b != 0) {
@@ -609,7 +542,6 @@ fn scalar_le_u64(value: halo2_proofs::halo2curves::pasta::Fp) -> Option<u64> {
     chunk.copy_from_slice(lo);
     Some(u64::from_le_bytes(chunk))
 }
-
 #[cfg(all(test, not(feature = "kaigi_privacy_mocks")))]
 mod tests {
     use halo2_proofs::halo2curves::pasta::Fp;
@@ -617,9 +549,7 @@ mod tests {
         compute_commitment_hash, compute_nullifier_hash, compute_usage_commitment_hash,
         empty_roster_root_hash,
     };
-
     use super::*;
-
     #[test]
     fn roster_public_input_validation_binds_every_instruction_artifact() {
         let root = empty_roster_root_hash();
@@ -633,41 +563,34 @@ mod tests {
             columns.push(vec![Fp::from(limb)]);
         }
         assert!(verify_roster_public_inputs(&columns, &root, &commitment, &nullifier).is_ok());
-
         let mut wrong_commitment = columns.clone();
         wrong_commitment[0][0] += Fp::from(1u64);
         assert!(
             verify_roster_public_inputs(&wrong_commitment, &root, &commitment, &nullifier).is_err()
         );
-
         let mut wrong_nullifier = columns.clone();
         wrong_nullifier[1][0] += Fp::from(1u64);
         assert!(
             verify_roster_public_inputs(&wrong_nullifier, &root, &commitment, &nullifier).is_err()
         );
-
         let mut wrong_root = columns.clone();
         wrong_root[2][0] = Fp::from(999u64);
         assert!(verify_roster_public_inputs(&wrong_root, &root, &commitment, &nullifier).is_err());
-
         let mut extra_column = columns;
         extra_column.push(vec![Fp::from(0u64)]);
         assert!(
             verify_roster_public_inputs(&extra_column, &root, &commitment, &nullifier).is_err()
         );
     }
-
     #[test]
     fn usage_public_input_validation_binds_the_instruction_commitment() {
         let commitment = compute_usage_commitment_hash(1_200, 345, 2);
         let scalar = scalar_from_hash(&commitment).expect("canonical usage commitment");
         assert!(verify_usage_public_input(&[vec![scalar]], &commitment).is_ok());
-
         assert!(verify_usage_public_input(&[vec![scalar + Fp::from(1u64)]], &commitment).is_err());
         let extra_column = [vec![scalar], vec![Fp::from(0u64)]];
         assert!(verify_usage_public_input(&extra_column, &commitment).is_err());
     }
-
     #[test]
     fn privacy_proof_envelope_metadata_rejects_zero_verifier_hash() {
         let commitment = Hash::new(b"kaigi-privacy-verifier-key");
@@ -690,7 +613,6 @@ mod tests {
             )
             .is_ok()
         );
-
         let err = validate_privacy_proof_envelope_metadata(
             &envelope,
             "halo2/ipa:production-ready",
@@ -709,7 +631,6 @@ mod tests {
             message.contains("native verifier registry"),
             "unexpected error: {message}"
         );
-
         let err = validate_privacy_proof_envelope_metadata(
             &envelope,
             "stark/fri/sha256-goldilocks",
@@ -728,7 +649,6 @@ mod tests {
             message.contains("backend tag mismatch"),
             "unexpected error: {message}"
         );
-
         envelope.vk_hash = [0u8; Hash::LENGTH];
         let err = validate_privacy_proof_envelope_metadata(
             &envelope,
@@ -746,7 +666,6 @@ mod tests {
         };
         assert!(message.contains("non-zero"), "unexpected error: {message}");
     }
-
     #[test]
     fn privacy_proof_admission_rejects_alternate_norito_layout() {
         let envelope = OpenVerifyEnvelope {
@@ -764,7 +683,6 @@ mod tests {
                 .expect("canonical privacy envelope must decode"),
             envelope
         );
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate = {

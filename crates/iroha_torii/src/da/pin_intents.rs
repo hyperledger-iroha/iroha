@@ -3,9 +3,7 @@
 //! These endpoints operate on the in-memory pin intent index populated during
 //! block application. Durable WSV plumbing can replace the backing store once
 //! available without changing the handler surface.
-
 use std::num::{NonZeroU64, NonZeroUsize};
-
 use axum::extract::State;
 use iroha_config::parameters::actual::Nexus;
 use iroha_core::{
@@ -22,10 +20,8 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::ManifestDigest,
 };
-
 use super::commitments::{DaListSnapshot, list_snapshot_for_state};
 use crate::{Error, JsonBody, NoritoJson, SharedAppState};
-
 const ENDPOINT_DA_PIN_INTENTS: &str = "/v1/da/pin-intents";
 const ENDPOINT_DA_PIN_INTENTS_PROVE: &str = "/v1/da/pin-intents/prove";
 const ENDPOINT_DA_PIN_INTENTS_VERIFY: &str = "/v1/da/pin-intents/verify";
@@ -33,7 +29,6 @@ const ENDPOINT_DA_PIN_INTENTS_VERIFY: &str = "/v1/da/pin-intents/verify";
 pub(crate) const DA_PIN_INTENT_REQUEST_MAX_BYTES: usize = 64 * 1024;
 const DEFAULT_PIN_INTENT_PAGE_SIZE: usize = 100;
 const MAX_PIN_INTENT_PAGE_SIZE: usize = 1_000;
-
 /// Forward-only cursor for canonically ordered DA pin intents.
 #[derive(
     Debug,
@@ -52,7 +47,6 @@ pub struct DaPinIntentListCursor {
     /// Last raw pin intent examined in canonical block-location order.
     pub after: iroha_data_model::da::commitment::DaCommitmentLocation,
 }
-
 /// Request payload for bounded DA pin-intent traversal.
 #[derive(
     Debug,
@@ -71,7 +65,6 @@ pub struct DaPinIntentListRequest {
     #[norito(default)]
     pub cursor: Option<DaPinIntentListCursor>,
 }
-
 /// Exact selector used to generate one DA pin-intent proof.
 #[derive(
     Debug,
@@ -96,7 +89,6 @@ pub struct DaPinIntentQueryRequest {
     #[norito(default)]
     pub sequence: Option<u64>,
 }
-
 /// Response surface for bounded DA pin-intent traversal.
 #[derive(
     Debug,
@@ -113,7 +105,6 @@ pub struct DaPinIntentListResponse {
     #[norito(default)]
     pub next_cursor: Option<DaPinIntentListCursor>,
 }
-
 /// Verification response for indexed DA pin intent location data.
 #[derive(
     Debug,
@@ -129,7 +120,6 @@ pub struct DaPinIntentVerifyResponse {
     #[norito(default)]
     pub error: Option<String>,
 }
-
 /// HTTP handler for `/v1/da/pin-intents`.
 pub async fn handler_list_pin_intents(
     State(app): State<SharedAppState>,
@@ -153,7 +143,6 @@ pub async fn handler_list_pin_intents(
         next_cursor: page.next_cursor,
     }))
 }
-
 /// HTTP handler for `/v1/da/pin-intents/prove`.
 pub async fn handler_prove_pin_intent(
     State(app): State<SharedAppState>,
@@ -165,7 +154,6 @@ pub async fn handler_prove_pin_intent(
     let proof = build_active_proof_from_state(&request, &nexus, app.state.as_ref());
     Ok(JsonBody(proof))
 }
-
 /// HTTP handler for `/v1/da/pin-intents/verify`.
 pub async fn handler_verify_pin_intent(
     State(app): State<SharedAppState>,
@@ -176,7 +164,6 @@ pub async fn handler_verify_pin_intent(
     let response = verify_against_kura_block(&proof, app.state.as_ref());
     Ok(JsonBody(response))
 }
-
 fn list_active_from_store(
     store: &DaPinStore,
     request: &DaPinIntentListRequest,
@@ -188,7 +175,6 @@ fn list_active_from_store(
         pin_intent_lane_is_active(&policy_context, entry)
     })
 }
-
 fn validate_pin_intent_query_request(request: &DaPinIntentQueryRequest) -> Result<(), Error> {
     let Some(alias) = request.alias.as_ref() else {
         return Ok(());
@@ -204,14 +190,12 @@ fn validate_pin_intent_query_request(request: &DaPinIntentQueryRequest) -> Resul
         ),
     })
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DaPinIntentCursorError {
     NonCanonicalSnapshot,
     StaleSnapshot,
     UnknownLocation,
 }
-
 fn pin_cursor_error(error: DaPinIntentCursorError) -> Error {
     let (code, message) = match error {
         DaPinIntentCursorError::NonCanonicalSnapshot => (
@@ -232,13 +216,11 @@ fn pin_cursor_error(error: DaPinIntentCursorError) -> Error {
         message: message.to_owned(),
     }
 }
-
 #[derive(Debug)]
 struct DaPinIntentPage {
     intents: Vec<DaPinIntentWithLocation>,
     next_cursor: Option<DaPinIntentListCursor>,
 }
-
 fn list_page_from_store(
     store: &DaPinStore,
     request: &DaPinIntentListRequest,
@@ -251,7 +233,6 @@ fn list_page_from_store(
         .and_then(|n| usize::try_from(n).ok())
         .unwrap_or(DEFAULT_PIN_INTENT_PAGE_SIZE)
         .min(MAX_PIN_INTENT_PAGE_SIZE);
-
     let after = request.cursor.map(|cursor| {
         if !cursor.snapshot.is_canonical() {
             return Err(DaPinIntentCursorError::NonCanonicalSnapshot);
@@ -265,7 +246,6 @@ fn list_page_from_store(
         Ok(cursor.after)
     });
     let after = after.transpose()?;
-
     let mut ordered = store.all_sorted_after(after);
     let mut intents = Vec::with_capacity(limit);
     let mut last_examined = None;
@@ -280,13 +260,11 @@ fn list_page_from_store(
     } else {
         None
     };
-
     Ok(DaPinIntentPage {
         intents,
         next_cursor,
     })
 }
-
 fn find_active_in_store(
     store: &DaPinStore,
     request: &DaPinIntentQueryRequest,
@@ -294,7 +272,6 @@ fn find_active_in_store(
 ) -> Option<DaPinIntentWithLocation> {
     find_in_store(store, request).filter(|entry| pin_intent_lane_is_active(policy_context, entry))
 }
-
 fn find_in_store(
     store: &DaPinStore,
     request: &DaPinIntentQueryRequest,
@@ -303,30 +280,25 @@ fn find_in_store(
         let target = store.get_by_ticket(&ticket)?.clone();
         return request_matches_pin_intent(&target, request).then_some(target);
     }
-
     if let Some(alias) = &request.alias {
         let target = store
             .get_by_alias(alias)
             .map(|(_, record)| record.clone())?;
         return request_matches_pin_intent(&target, request).then_some(target);
     }
-
     if let Some(manifest) = request.manifest_hash {
         let target = store.get_by_manifest(&manifest)?.clone();
         return request_matches_pin_intent(&target, request).then_some(target);
     }
-
     let (Some(lane_id), Some(epoch), Some(sequence)) =
         (request.lane_id, request.epoch, request.sequence)
     else {
         return None;
     };
-
     store
         .get_by_lane_epoch_sequence(lane_id, epoch, sequence)
         .cloned()
 }
-
 fn request_matches_pin_intent(
     target: &DaPinIntentWithLocation,
     request: &DaPinIntentQueryRequest,
@@ -370,7 +342,6 @@ fn request_matches_pin_intent(
     }
     true
 }
-
 fn pin_intent_lane_is_active(
     policy_context: &ActiveLaneProofPolicyContext<'_>,
     proof: &DaPinIntentWithLocation,
@@ -379,7 +350,6 @@ fn pin_intent_lane_is_active(
         .policy_at_height(proof.intent.lane_id, proof.location.block_height)
         .is_ok()
 }
-
 fn build_active_proof_from_state(
     request: &DaPinIntentQueryRequest,
     nexus: &Nexus,
@@ -400,7 +370,6 @@ fn build_active_proof_from_state(
     }
     build_da_pin_intent_proof(bundle, target.location.block_height, index)
 }
-
 fn verify_against_kura_block(
     proof: &DaPinIntentProof,
     state: &iroha_core::state::State,
@@ -446,14 +415,12 @@ fn verify_against_kura_block(
         },
     }
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
     use std::{
         num::{NonZeroU32, NonZeroU64},
         sync::Arc,
     };
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         NetworkId,
@@ -470,9 +437,7 @@ mod tests {
             LaneConfig as ModelLaneConfig, LaneId,
         },
     };
-
     use super::*;
-
     fn sample_authorization(lane: LaneId, epoch: u64, sequence: u64) -> DaIngestAuthorizationV1 {
         let key_pair = KeyPair::try_from_seed(vec![0xD5; 32], Algorithm::Ed25519)
             .expect("valid deterministic DA query key");
@@ -496,7 +461,6 @@ mod tests {
         });
         authorization
     }
-
     fn sample_intent(lane: u32, epoch: u64, sequence: u64) -> DaPinIntent {
         DaPinIntent::new(
             LaneId::new(lane),
@@ -507,7 +471,6 @@ mod tests {
             sample_authorization(LaneId::new(lane), epoch, sequence),
         )
     }
-
     fn store_with_records() -> DaPinStore {
         let intents = vec![
             DaPinIntentWithLocation {
@@ -534,14 +497,12 @@ mod tests {
         ];
         DaPinStore::from_intents(&intents)
     }
-
     fn list_request(limit: Option<u64>) -> DaPinIntentListRequest {
         DaPinIntentListRequest {
             limit: limit.and_then(NonZeroU64::new),
             cursor: None,
         }
     }
-
     #[test]
     fn pin_intent_query_rejects_alias_over_utf8_byte_bound() {
         let accepted = DaPinIntentQueryRequest {
@@ -550,7 +511,6 @@ mod tests {
         };
         validate_pin_intent_query_request(&accepted)
             .expect("alias at the exact UTF-8 byte bound must be accepted");
-
         let rejected = DaPinIntentQueryRequest {
             alias: Some("é".repeat(MAX_DA_PIN_INTENT_ALIAS_BYTES / 2 + 1)),
             ..DaPinIntentQueryRequest::default()
@@ -565,7 +525,6 @@ mod tests {
             }
         ));
     }
-
     fn lane_catalog_with_lane_ids(lane_ids: &[u32]) -> LaneCatalog {
         let max_lane = lane_ids.iter().copied().max().unwrap_or(0);
         let lane_count = NonZeroU32::new(max_lane.saturating_add(1)).expect("lane count");
@@ -582,7 +541,6 @@ mod tests {
         lanes.dedup_by_key(|lane| lane.id.as_u32());
         LaneCatalog::new(lane_count, lanes).expect("lane catalog")
     }
-
     fn nexus_with_lane_ids(lane_ids: &[u32]) -> Nexus {
         let lane_catalog = lane_catalog_with_lane_ids(lane_ids);
         Nexus {
@@ -592,7 +550,6 @@ mod tests {
             ..Nexus::default()
         }
     }
-
     fn enable_nexus_with_lane_ids(app: &mut crate::SharedAppState, lane_ids: &[u32]) {
         let app = std::sync::Arc::get_mut(app).expect("unique app state");
         let state = std::sync::Arc::get_mut(&mut app.state).expect("unique core state");
@@ -601,11 +558,9 @@ mod tests {
             .set_nexus(nexus_cfg)
             .expect("enable Nexus lane catalog for tests");
     }
-
     fn enable_nexus(app: &mut crate::SharedAppState) {
         enable_nexus_with_lane_ids(app, &[0]);
     }
-
     fn install_stale_runtime_lane_geometry(app: &crate::SharedAppState, stale_lane: LaneId) {
         let authoritative_catalog = lane_catalog_with_lane_ids(&[0]);
         let stale_geometry_catalog = lane_catalog_with_lane_ids(&[0, stale_lane.as_u32()]);
@@ -619,7 +574,6 @@ mod tests {
             "fixture must retain stale runtime geometry for the removed lane"
         );
     }
-
     fn install_future_created_autoscale_lane(
         app: &crate::SharedAppState,
         lane_id: LaneId,
@@ -652,14 +606,12 @@ mod tests {
             iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
         nexus.lane_catalog = lane_catalog;
     }
-
     fn seed_pin_store(app: &mut crate::SharedAppState, store: DaPinStore) {
         let app = std::sync::Arc::get_mut(app).expect("unique app state");
         let state = std::sync::Arc::get_mut(&mut app.state).expect("unique core state");
         drop(state.da_pin_intents());
         *state.da_pin_intents.write() = store;
     }
-
     fn app_with_pin_intent_bundle(intents: Vec<DaPinIntent>) -> crate::SharedAppState {
         let lane_ids = intents
             .iter()
@@ -668,7 +620,6 @@ mod tests {
             .collect::<Vec<_>>();
         let mut app = crate::mk_app_state_for_tests();
         enable_nexus_with_lane_ids(&mut app, &lane_ids);
-
         let bundle = DaPinIntentBundle::new(intents);
         let bundle_for_store = bundle.clone();
         let keypair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
@@ -693,7 +644,6 @@ mod tests {
         block_hashes.push_for_tests(block_hash);
         block_hashes.commit_for_tests();
         app.state.update_latest_block_header_cache_for_tests(header);
-
         let entries = bundle_for_store
             .intents
             .iter()
@@ -710,7 +660,6 @@ mod tests {
         seed_pin_store(&mut app, DaPinStore::from_intents(&entries));
         app
     }
-
     #[test]
     fn list_uses_forward_only_keyset_cursor() {
         let store = store_with_records();
@@ -725,7 +674,6 @@ mod tests {
         assert_eq!(first.intents[1].location.block_height, 6);
         let cursor = first.next_cursor.expect("third row requires continuation");
         assert_eq!(cursor.after, first.intents[1].location);
-
         let second = list_page_from_store(
             &store,
             &DaPinIntentListRequest {
@@ -740,7 +688,6 @@ mod tests {
         assert_eq!(second.intents[0].location.block_height, 7);
         assert!(second.next_cursor.is_none());
     }
-
     #[test]
     fn list_overlarge_limit_is_hard_capped() {
         let entries = (0_u64..=MAX_PIN_INTENT_PAGE_SIZE as u64)
@@ -778,7 +725,6 @@ mod tests {
         assert!(page.intents.len() < store.len());
         assert!(page.next_cursor.is_some());
     }
-
     #[test]
     fn list_cursor_rejects_unknown_location_and_stale_snapshot() {
         let store = store_with_records();
@@ -801,7 +747,6 @@ mod tests {
                 .expect_err("foreign location must fail closed"),
             DaPinIntentCursorError::UnknownLocation
         );
-
         let stale = DaPinIntentListRequest {
             limit: NonZeroU64::new(1),
             cursor: Some(DaPinIntentListCursor {
@@ -822,7 +767,6 @@ mod tests {
             DaPinIntentCursorError::StaleSnapshot
         );
     }
-
     #[test]
     fn list_cursor_rejects_noncanonical_snapshot() {
         let store = store_with_records();
@@ -850,11 +794,9 @@ mod tests {
             DaPinIntentCursorError::NonCanonicalSnapshot
         );
     }
-
     #[test]
     fn inactive_rows_cannot_amplify_the_raw_scan_budget() {
         use std::cell::Cell;
-
         let store = store_with_records();
         let snapshot = DaListSnapshot {
             block_height: 0,
@@ -866,7 +808,6 @@ mod tests {
             false
         })
         .expect("bounded filtered page");
-
         assert!(page.intents.is_empty());
         assert_eq!(examined.get(), 2, "visibility work is bounded by limit");
         assert!(
@@ -874,7 +815,6 @@ mod tests {
             "an empty visible page must still permit deterministic traversal"
         );
     }
-
     #[test]
     fn prove_uses_lane_epoch_sequence() {
         let store = store_with_records();
@@ -884,12 +824,10 @@ mod tests {
             sequence: Some(5),
             ..DaPinIntentQueryRequest::default()
         };
-
         let proof = find_in_store(&store, &request).expect("proof should exist");
         assert_eq!(proof.location.index_in_bundle, 2);
         assert_eq!(proof.location.block_height, 7);
     }
-
     #[test]
     fn prove_rejects_conflicting_ticket_and_tuple_selectors() {
         let store = store_with_records();
@@ -900,10 +838,8 @@ mod tests {
             sequence: Some(5),
             ..DaPinIntentQueryRequest::default()
         };
-
         assert!(find_in_store(&store, &request).is_none());
     }
-
     #[test]
     fn verify_rejects_mismatched_ticket() {
         let bundle = DaPinIntentBundle::new(vec![sample_intent(1, 1, 1)]);
@@ -924,7 +860,6 @@ mod tests {
             Err(iroha_core::da::DaPinIntentProofVerificationError::PathMismatch)
         ));
     }
-
     #[tokio::test]
     async fn handlers_reject_when_nexus_disabled() {
         let app = crate::mk_app_state_for_tests();
@@ -945,7 +880,6 @@ mod tests {
             other => panic!("unexpected error variant: {other:?}"),
         }
     }
-
     #[tokio::test]
     async fn handler_succeeds_when_nexus_enabled() {
         let mut app = crate::mk_app_state_for_tests();
@@ -959,7 +893,6 @@ mod tests {
         assert!(page.intents.is_empty());
         assert!(page.next_cursor.is_none());
     }
-
     #[tokio::test]
     async fn list_handler_rejects_cursor_bound_to_another_tip() {
         let app = app_with_pin_intent_bundle(vec![sample_intent(1, 1, 1), sample_intent(2, 1, 2)]);
@@ -970,7 +903,6 @@ mod tests {
         let mut cursor = first.next_cursor.expect("second row requires continuation");
         cursor.snapshot.block_hash =
             Some(HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32])));
-
         let error = super::handler_list_pin_intents(
             State(app),
             NoritoJson(DaPinIntentListRequest {
@@ -988,7 +920,6 @@ mod tests {
             }
         ));
     }
-
     #[tokio::test]
     async fn handler_prove_and_verify_roundtrip_indexed_pin_intent() {
         let app = app_with_pin_intent_bundle(vec![
@@ -996,7 +927,6 @@ mod tests {
             sample_intent(2, 2, 0),
             sample_intent(3, 1, 5),
         ]);
-
         let JsonBody(proof) = super::handler_prove_pin_intent(
             State(app.clone()),
             NoritoJson(DaPinIntentQueryRequest {
@@ -1009,16 +939,13 @@ mod tests {
         .await
         .expect("pin intent proof lookup should succeed");
         let proof = proof.expect("indexed pin intent should be present");
-
         assert_eq!(proof.intent.manifest_hash, ManifestDigest::new([5; 32]));
         assert_eq!(proof.location.block_height, 1);
-
         let JsonBody(response) = super::handler_verify_pin_intent(State(app), NoritoJson(proof))
             .await
             .expect("pin intent verification should succeed");
         assert!(response.valid);
     }
-
     #[tokio::test]
     async fn handler_verify_rejects_tampered_indexed_pin_intent() {
         let app = app_with_pin_intent_bundle(vec![
@@ -1026,7 +953,6 @@ mod tests {
             sample_intent(2, 2, 0),
             sample_intent(3, 1, 5),
         ]);
-
         let JsonBody(proof) = super::handler_prove_pin_intent(
             State(app.clone()),
             NoritoJson(DaPinIntentQueryRequest {
@@ -1038,13 +964,11 @@ mod tests {
         .expect("pin intent proof lookup should succeed");
         let mut proof = proof.expect("indexed pin intent should be present");
         proof.location.index_in_bundle += 1;
-
         let JsonBody(response) = super::handler_verify_pin_intent(State(app), NoritoJson(proof))
             .await
             .expect("pin intent verification should succeed");
         assert!(!response.valid);
     }
-
     #[tokio::test]
     async fn handler_prove_rejects_projection_location_drift_from_kura() {
         let intent = sample_intent(1, 1, 1);
@@ -1060,7 +984,6 @@ mod tests {
                 },
             }]);
         }
-
         let JsonBody(proof) = super::handler_prove_pin_intent(
             State(app),
             NoritoJson(DaPinIntentQueryRequest {
@@ -1075,12 +998,10 @@ mod tests {
             "an index projection may select an intent but cannot redefine its Kura position"
         );
     }
-
     #[tokio::test]
     async fn handler_verify_uses_historical_header_after_lane_removal() {
         let intent = sample_intent(1, 3, 7);
         let app = app_with_pin_intent_bundle(vec![intent.clone()]);
-
         let JsonBody(proof) = super::handler_prove_pin_intent(
             State(app.clone()),
             NoritoJson(DaPinIntentQueryRequest {
@@ -1091,9 +1012,7 @@ mod tests {
         .await
         .expect("pin intent proof lookup should succeed");
         let proof = proof.expect("indexed pin intent should be present before lane removal");
-
         install_stale_runtime_lane_geometry(&app, intent.lane_id);
-
         let JsonBody(response) = super::handler_verify_pin_intent(State(app), NoritoJson(proof))
             .await
             .expect("pin intent verification should succeed");
@@ -1103,7 +1022,6 @@ mod tests {
         );
         assert!(response.error.is_none());
     }
-
     #[tokio::test]
     async fn handler_list_and_prove_ignore_stale_runtime_lane_geometry() {
         let mut app = crate::mk_app_state_for_tests();
@@ -1120,7 +1038,6 @@ mod tests {
             DaPinStore::from_intents(std::slice::from_ref(&stale)),
         );
         install_stale_runtime_lane_geometry(&app, stale.intent.lane_id);
-
         let JsonBody(page) = super::handler_list_pin_intents(
             State(app.clone()),
             NoritoJson(DaPinIntentListRequest::default()),
@@ -1131,7 +1048,6 @@ mod tests {
             page.intents.is_empty(),
             "stale runtime-only lane pin intents must not be listed"
         );
-
         let JsonBody(proof) = super::handler_prove_pin_intent(
             State(app),
             NoritoJson(DaPinIntentQueryRequest {
@@ -1146,7 +1062,6 @@ mod tests {
             "stale runtime-only lane pin intents must not produce proofs"
         );
     }
-
     #[tokio::test]
     async fn handlers_use_current_visibility_but_historical_verification() {
         let intent = sample_intent(1, 5, 9);
@@ -1162,9 +1077,7 @@ mod tests {
         .expect("pin intent proof lookup should succeed");
         let historical_proof =
             historical_proof.expect("proof must exist before current lane visibility changes");
-
         install_future_created_autoscale_lane(&app, intent.lane_id, 7);
-
         let JsonBody(page) = super::handler_list_pin_intents(
             State(app.clone()),
             NoritoJson(DaPinIntentListRequest::default()),
@@ -1175,7 +1088,6 @@ mod tests {
             page.intents.is_empty(),
             "future-created autoscale lane pin intents must not be listed before creation height"
         );
-
         let JsonBody(proof) = super::handler_prove_pin_intent(
             State(app.clone()),
             NoritoJson(DaPinIntentQueryRequest {
@@ -1189,7 +1101,6 @@ mod tests {
             proof.is_none(),
             "future-created autoscale lane pin intents must not produce public proofs"
         );
-
         let JsonBody(response) =
             super::handler_verify_pin_intent(State(app), NoritoJson(historical_proof))
                 .await
@@ -1200,7 +1111,6 @@ mod tests {
         );
         assert!(response.error.is_none());
     }
-
     #[tokio::test]
     async fn pin_intent_post_routes_reject_oversized_bodies() {
         use axum::{
@@ -1211,7 +1121,6 @@ mod tests {
             routing::post,
         };
         use tower::ServiceExt as _;
-
         let app = crate::mk_app_state_for_tests();
         let router = Router::new()
             .route(
@@ -1230,7 +1139,6 @@ mod tests {
                     .layer(DefaultBodyLimit::max(DA_PIN_INTENT_REQUEST_MAX_BYTES)),
             )
             .with_state(app);
-
         for path in [
             ENDPOINT_DA_PIN_INTENTS,
             ENDPOINT_DA_PIN_INTENTS_PROVE,

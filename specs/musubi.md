@@ -540,14 +540,16 @@ exact same index revision. Until finalized query responses carry portable
 consensus inclusion proofs, the cache remains rooted in the validated online
 read and private cache identity.
 
-Local and read-only commands do not load a signer. Mutation credentials come
-only from explicit or platform Iroha configuration. Secrets and stream tokens
-are rejected on argv and are never persisted. Human output has deterministic
-stdout/stderr separation; JSON output is one document with a stable schema and
-error code.
+Purely local commands do not load a signer. Every network registry read requires the exact
+`NetworkId`, canonical account, and matching private key from explicit or platform Iroha
+configuration; it signs the exact raw POST body/path with fresh one-shot authentication. Mutation
+credentials use the same configuration boundary. Secrets and stream tokens are rejected on argv
+and are never persisted. Human output has deterministic stdout/stderr separation; JSON output is
+one document with a stable schema and error code.
 
-Rust, Kotlin, Java, and Swift public-query clients apply a Musubi-specific
-32 MiB response ceiling. An exact-release JSON response repeats the bounded
+Rust, Kotlin, Java, and Swift authenticated-query clients reject caller-injected legacy witness
+proofs, disable redirect/retry replay, and apply a Musubi-specific 32 MiB response ceiling. An
+exact-release JSON response repeats the bounded
 dependency vector in the authoritative home record and the universal resolver
 row, so a consensus-legal publication admitted by the default 10 MiB
 transaction corridor can exceed the retired 8 MiB client limit. The 32 MiB
@@ -633,15 +635,17 @@ global content-addressed cache hit remains registry-independent because the
 exact bundle is revalidated against every locked node that consumes it.
 On qualified Unix, online resolution anchors the selected `client.toml` path
 once, then reads one bounded, singly linked image through a nonblocking,
-no-follow stable descriptor and parses both the public registry context and the
+no-follow stable descriptor and parses both the authenticated registry signer/context and the
 secret-free fetch configuration from those exact bytes. Other targets fail
-closed before that read. Provider token files, DNS answers, and HTTP clients
-are loaded only after an immutable-cache miss; the raw configuration image is
-not retained in the graph.
+closed before that read. The fetch subtree requires the exact `NetworkId` plus
+each provider's canonical operator public key and a private-key file; legacy
+API-token and bearer fields are rejected. Bounded 0600, no-follow operator-key
+files, DNS answers, and redirect-free HTTP clients are loaded only after an
+immutable-cache miss; the raw configuration image is not retained in the graph.
 Fresh publication retains only process-local, nonserializable provenance for
 that anchored image. After clean-package validation it securely rereads the
-file, compares a domain-separated digest before parsing any signer or mutation
-runtime fields, and constructs the registry reader, signer, and publication
+file, compares a domain-separated digest before reconstructing any signer or mutation runtime
+fields, and constructs the registry reader, signer, and publication
 services from the matching bytes. Resume has no earlier resolver image to bind
 and constructs those three boundaries from one current secure read; neither
 path persists or reports configuration bytes, paths, or digests.

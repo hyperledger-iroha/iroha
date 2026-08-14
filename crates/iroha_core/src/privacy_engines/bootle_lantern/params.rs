@@ -1,5 +1,4 @@
 //! Closed consensus parameters for the first Bootle/Lantern profile.
-
 /// Application ring degree.
 pub const APPLICATION_RING_DEGREE_V1: usize = 64;
 /// Application ring modulus.
@@ -10,7 +9,6 @@ pub const APPLICATION_ROWS_V1: usize = 8;
 pub const ATTRIBUTE_COUNT_V1: usize = 8;
 /// Number of application witness polynomials before norm padding.
 pub const APPLICATION_WITNESS_POLYNOMIALS_V1: usize = 48;
-
 /// Internal Lantern/LNP22 proof modulus.
 pub const PROOF_MODULUS_V1: u64 = 1_125_899_906_843_221;
 /// Canonical inverse of two modulo the internal proof modulus.
@@ -32,7 +30,6 @@ pub const DECOMPOSITION_BITS_V1: u8 = 15;
 pub const COMPRESSION_GAMMA_V1: u64 = 16_531_490;
 /// Compression modulus.
 pub const COMPRESSION_MODULUS_V1: u64 = 68_106_378;
-
 /// Internal short-message dimension including two norm-padding polynomials.
 pub const TBOX_M1_V1: usize = 50;
 /// Internal mask dimension.
@@ -59,7 +56,6 @@ pub const LAMBDA_V1: usize = 4;
 /// coefficient. Both transcript row expansion and whole-matrix allocation
 /// enforce this same cap before performing size arithmetic or reserving memory.
 pub(crate) const MAX_PROJECTION_COLUMNS_V1: usize = TBOX_M1_V1 * APPLICATION_RING_DEGREE_V1;
-
 /// Challenge coefficient magnitude.
 pub const CHALLENGE_OMEGA_V1: i64 = 8;
 /// Conservative base-two challenge-set size used by the proof theorem.
@@ -74,7 +70,6 @@ pub const CHALLENGE_ETA_V1: u16 = 140;
 pub const MAX_UNIFORM_REJECTION_ATTEMPTS_V1: u32 = 4_096;
 /// Maximum complete challenge candidates read sequentially from one XOF.
 pub const MAX_CHALLENGE_CANDIDATE_ATTEMPTS_V1: u32 = 4_096;
-
 /// Exact squared bound on the credential randomness vector.
 pub const RANDOMNESS_NORM_SQUARED_BOUND_V1: u64 = 11_881;
 /// Exact squared bound on the signature preimage.
@@ -88,16 +83,13 @@ pub const Z1_NORM_SQUARED_BOUND_V1: u64 = 1_083_115_710_382_604_288;
 pub const Z3_NORM_SQUARED_BOUND_V1: u64 = 113_676_554_463_109;
 /// `z4` infinity-norm bound.
 pub const Z4_INFINITY_NORM_BOUND_V1: u64 = 13_314_398_617;
-
 /// Exact truncation bounds `20 * sigma = 31 * 2^k` for native sampling.
 pub const GAUSSIAN_TRUNCATION_BOUNDS_V1: [i64; 4] =
     [260_046_848, 126_976, 8_126_464, 16_642_998_272];
-
 /// Exact Gaussian numerator in `sigma = 31 * 2^k / 20`.
 pub const GAUSSIAN_SIGMA_NUMERATOR_V1: u64 = 31;
 /// Exact Gaussian denominator in `sigma = 31 * 2^k / 20`.
 pub const GAUSSIAN_SIGMA_DENOMINATOR_V1: u64 = 20;
-
 /// Little-endian limbs of `ceil(M * 2^256)` for the four rejection decisions.
 ///
 /// The constants were generated at 600 decimal digits from the exact profile
@@ -136,7 +128,6 @@ pub const REJECTION_M_Q256_LIMBS_V1: [[u64; 5]; 4] = [
         1,
     ],
 ];
-
 /// Internal CRT primes. These are an implementation optimization and never
 /// appear on the wire or define consensus residues.
 pub const INTERNAL_CRT_PRIMES_V1: [u64; 3] = [
@@ -170,7 +161,6 @@ pub const INTERNAL_CRT_FIRST_TWO_PRODUCT_MOD_PROOF_MODULUS_V1: u64 = 7_842_192;
 /// `(p0 * p1 * p2) mod q`, used when the centered CRT representative is
 /// negative.
 pub const INTERNAL_CRT_PRODUCT_MOD_PROOF_MODULUS_V1: u64 = 1_125_856_084_674_325;
-
 /// Shared maximum number of projection- and response-mask rejection draws
 /// across one top-level proof invocation.
 ///
@@ -189,7 +179,6 @@ pub const MAX_PROJECTION_SAMPLING_ATTEMPTS_PER_PROVE_ATTEMPT_V1: u32 = 64;
 pub const MAX_RESPONSE_SAMPLING_ATTEMPTS_PER_PROVE_ATTEMPT_V1: u32 = 1_024;
 /// Maximum Gaussian proposal attempts for one coefficient.
 pub const MAX_GAUSSIAN_COEFFICIENT_ATTEMPTS_V1: u32 = 4_096;
-
 /// Pinned mathematical and implementation source profile.
 ///
 /// The issuer is a concrete Falcon-512/NTRU specialization of the BLNS
@@ -200,18 +189,14 @@ pub const MAX_GAUSSIAN_COEFFICIENT_ATTEMPTS_V1: u32 = 4_096;
 /// workspace revision; the holder sampler and Lantern proof relation follow the pinned
 /// LaZeR revision.
 pub const SOURCE_PROFILE_V1: &[u8] = b"BLNS-specialization-no-main-construction-reduction:eprint-2023-560|LaZeR-10eafeca4cd53ff4fc54193dce904dbd0026fefd|rust-fn-dsa-workspace-0.3-daf14859b5aa3f8d75c42966ba7de83e6eb59997-Unlicense|portable-safe-rust-no-SIMD";
-
 #[cfg(test)]
 mod tests {
     use p256::elliptic_curve::bigint::{U512, U1024};
-
     use super::*;
-
     fn rejection_m_q256(index: usize) -> U512 {
         let [a, b, c, d, e] = REJECTION_M_Q256_LIMBS_V1[index];
         U512::from_words([a, b, c, d, e, 0, 0, 0])
     }
-
     fn joint_acceptance_exceeds(
         first: usize,
         second: usize,
@@ -226,7 +211,6 @@ mod tests {
         let rhs = U1024::from_u64(denominator).shl_vartime(512);
         lhs < rhs
     }
-
     #[test]
     fn modular_inverse_constants_are_exact() {
         assert_eq!(
@@ -244,7 +228,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn compression_identity_is_exact() {
         assert_eq!(
@@ -252,7 +235,6 @@ mod tests {
             u128::from(PROOF_MODULUS_V1)
         );
     }
-
     #[test]
     fn profile_dimensions_are_internally_consistent() {
         assert_eq!(APPLICATION_ROWS_V1, EXACT_RELATIONS_V1);
@@ -270,7 +252,6 @@ mod tests {
         assert!(MAX_UNIFORM_REJECTION_ATTEMPTS_V1 > 0);
         assert!(MAX_CHALLENGE_CANDIDATE_ATTEMPTS_V1 > 0);
     }
-
     #[test]
     fn rejection_constants_use_exact_inputs_and_one_sided_q256_rounding() {
         // Rounding the exact-input M3 constant back to Q128 gives these
@@ -288,13 +269,11 @@ mod tests {
             [7_569_140_089_676_268_920, 652_277_607_672_955_118, 1]
         );
     }
-
     #[test]
     fn local_rejection_caps_have_integer_proved_failure_margins() {
         const DENOMINATOR: u64 = 1_000_000;
         const PROJECTION_ACCEPTANCE_NUMERATOR: u64 = 947_168;
         const RESPONSE_ACCEPTANCE_NUMERATOR: u64 = 159_109;
-
         assert!(joint_acceptance_exceeds(
             2,
             3,
@@ -307,12 +286,10 @@ mod tests {
             RESPONSE_ACCEPTANCE_NUMERATOR,
             DENOMINATOR
         ));
-
         // Projection rejection is below 52,832 / 1,000,000 < 1/16.
         let projection_rejection_numerator = DENOMINATOR - PROJECTION_ACCEPTANCE_NUMERATOR;
         assert!(16_u128 * u128::from(projection_rejection_numerator) < u128::from(DENOMINATOR));
         assert_eq!(MAX_PROJECTION_SAMPLING_ATTEMPTS_PER_PROVE_ATTEMPT_V1, 64);
-
         // Response rejection is below 840,891 / 1,000,000, whose fourth
         // power is below 1/2.  Thus 1,024 failures are below 2^-256.
         let response_rejection_numerator = DENOMINATOR - RESPONSE_ACCEPTANCE_NUMERATOR;

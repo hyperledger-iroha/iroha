@@ -5,16 +5,13 @@
 //! manifest, CAR commitments, and playback descriptors. Hosts and clients use
 //! the envelope to anchor CMAF ladders, enforce policy, and build viewer
 //! dashboards without re-deriving ingest metadata.
-
 use core::{fmt, str::FromStr};
 use std::collections::{BTreeMap, BTreeSet};
-
 use derive_more::Display;
 use iroha_crypto::{PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
@@ -26,7 +23,6 @@ use crate::{
         pin_registry::{ManifestAliasBinding, StorageClass},
     },
 };
-
 /// Identifier assigned to a Taikai event (e.g., a live stream or conference day).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[repr(transparent)]
@@ -40,27 +36,23 @@ use crate::{
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct TaikaiEventId(pub Name);
-
 impl TaikaiEventId {
     /// Construct a new Taikai event identifier.
     #[must_use]
     pub fn new(name: Name) -> Self {
         Self(name)
     }
-
     /// Access the underlying [`Name`].
     #[must_use]
     pub fn as_name(&self) -> &Name {
         &self.0
     }
 }
-
 impl fmt::Display for TaikaiEventId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
-
 /// Identifier assigned to a logical stream within an event (e.g., stage feed).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[repr(transparent)]
@@ -74,27 +66,23 @@ impl fmt::Display for TaikaiEventId {
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct TaikaiStreamId(pub Name);
-
 impl TaikaiStreamId {
     /// Construct a new stream identifier.
     #[must_use]
     pub fn new(name: Name) -> Self {
         Self(name)
     }
-
     /// Access the underlying [`Name`].
     #[must_use]
     pub fn as_name(&self) -> &Name {
         &self.0
     }
 }
-
 impl fmt::Display for TaikaiStreamId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
-
 /// Identifier assigned to a rendition (ladder rung) within a stream.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[repr(transparent)]
@@ -108,30 +96,25 @@ impl fmt::Display for TaikaiStreamId {
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct TaikaiRenditionId(pub Name);
-
 impl TaikaiRenditionId {
     /// Construct a new rendition identifier.
     #[must_use]
     pub fn new(name: Name) -> Self {
         Self(name)
     }
-
     /// Access the underlying [`Name`].
     #[must_use]
     pub fn as_name(&self) -> &Name {
         &self.0
     }
 }
-
 impl fmt::Display for TaikaiRenditionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
-
 /// Alias binding wrapper reused by Taikai manifests.
 pub type TaikaiAliasBinding = ManifestAliasBinding;
-
 /// Presentation timestamp offset for the start of a segment, expressed in microseconds.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
@@ -147,21 +130,18 @@ pub type TaikaiAliasBinding = ManifestAliasBinding;
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SegmentTimestamp(pub u64);
-
 impl SegmentTimestamp {
     /// Construct a timestamp in microseconds.
     #[must_use]
     pub const fn new(micros: u64) -> Self {
         Self(micros)
     }
-
     /// Retrieve the timestamp value in microseconds.
     #[must_use]
     pub const fn as_micros(&self) -> u64 {
         self.0
     }
 }
-
 /// Presentation duration for a segment expressed in microseconds.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
@@ -177,21 +157,18 @@ impl SegmentTimestamp {
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SegmentDuration(pub u32);
-
 impl SegmentDuration {
     /// Construct a duration in microseconds.
     #[must_use]
     pub const fn new(micros: u32) -> Self {
         Self(micros)
     }
-
     /// Retrieve the duration in microseconds.
     #[must_use]
     pub const fn as_micros(&self) -> u32 {
         self.0
     }
 }
-
 /// Errors encountered while parsing Taikai metadata fields from textual representations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaikaiParseError {
@@ -206,7 +183,6 @@ pub enum TaikaiParseError {
     /// Audio layout `custom:<channels>` payload is invalid.
     InvalidAudioLayoutChannels(String),
 }
-
 impl fmt::Display for TaikaiParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -228,9 +204,7 @@ impl fmt::Display for TaikaiParseError {
         }
     }
 }
-
 impl std::error::Error for TaikaiParseError {}
-
 /// Supported track kinds for Taikai segments.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
@@ -249,10 +223,8 @@ pub enum TaikaiTrackKind {
     /// Ancillary data track (subtitles, timed metadata, etc.).
     Data,
 }
-
 impl FromStr for TaikaiTrackKind {
     type Err = TaikaiParseError;
-
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let trimmed = value.trim();
         if trimmed.eq_ignore_ascii_case("video") {
@@ -266,7 +238,6 @@ impl FromStr for TaikaiTrackKind {
         }
     }
 }
-
 /// Video resolution in pixels.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
@@ -278,7 +249,6 @@ pub struct TaikaiResolution {
     /// Vertical pixel count.
     pub height: u16,
 }
-
 impl TaikaiResolution {
     /// Construct a resolution descriptor.
     #[must_use]
@@ -286,10 +256,8 @@ impl TaikaiResolution {
         Self { width, height }
     }
 }
-
 impl FromStr for TaikaiResolution {
     type Err = TaikaiParseError;
-
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let trimmed = value.trim();
         let Some((width_str, height_str)) = trimmed.split_once(['x', 'X']) else {
@@ -309,7 +277,6 @@ impl FromStr for TaikaiResolution {
         Ok(Self::new(width, height))
     }
 }
-
 /// Audio channel layout descriptor.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
@@ -332,10 +299,8 @@ pub enum TaikaiAudioLayout {
     /// Custom channel count approved by governance.
     Custom(u8),
 }
-
 impl FromStr for TaikaiAudioLayout {
     type Err = TaikaiParseError;
-
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let trimmed = value.trim();
         if trimmed.eq_ignore_ascii_case("mono") {
@@ -367,7 +332,6 @@ impl FromStr for TaikaiAudioLayout {
         }
     }
 }
-
 /// Codec enumeration recognised by the Taikai pipeline.
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
@@ -392,10 +356,8 @@ pub enum TaikaiCodec {
     /// Governance-approved custom codec identified by name.
     Custom(String),
 }
-
 impl FromStr for TaikaiCodec {
     type Err = TaikaiParseError;
-
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let trimmed = value.trim();
         if trimmed.eq_ignore_ascii_case("avc-high") {
@@ -419,7 +381,6 @@ impl FromStr for TaikaiCodec {
         }
     }
 }
-
 /// Metadata associated with a Taikai track.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -437,7 +398,6 @@ pub struct TaikaiTrackMetadata {
     #[norito(default)]
     pub audio_layout: Option<TaikaiAudioLayout>,
 }
-
 impl TaikaiTrackMetadata {
     /// Build metadata for a video track.
     #[must_use]
@@ -450,7 +410,6 @@ impl TaikaiTrackMetadata {
             audio_layout: None,
         }
     }
-
     /// Build metadata for an audio track.
     #[must_use]
     pub fn audio(codec: TaikaiCodec, bitrate_kbps: u32, layout: TaikaiAudioLayout) -> Self {
@@ -462,7 +421,6 @@ impl TaikaiTrackMetadata {
             audio_layout: Some(layout),
         }
     }
-
     /// Build metadata for a data track.
     #[must_use]
     pub fn data(codec: TaikaiCodec, bitrate_kbps: u32) -> Self {
@@ -475,7 +433,6 @@ impl TaikaiTrackMetadata {
         }
     }
 }
-
 /// CAR commitment pointer linking a segment to its deterministic archive.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -487,7 +444,6 @@ pub struct TaikaiCarPointer {
     /// Total CAR length in bytes.
     pub car_size_bytes: u64,
 }
-
 impl TaikaiCarPointer {
     /// Construct a CAR pointer descriptor.
     #[must_use]
@@ -503,7 +459,6 @@ impl TaikaiCarPointer {
         }
     }
 }
-
 /// Pointer to the canonical DA manifest generated during ingest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -519,7 +474,6 @@ pub struct TaikaiIngestPointer {
     /// Pointer to the CAR archive containing the segment payload.
     pub car: TaikaiCarPointer,
 }
-
 impl TaikaiIngestPointer {
     /// Build an ingest pointer from manifest metadata.
     #[must_use]
@@ -540,7 +494,6 @@ impl TaikaiIngestPointer {
         }
     }
 }
-
 /// Optional instrumentation hints recorded at ingest time.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -555,7 +508,6 @@ pub struct TaikaiInstrumentation {
     #[norito(default)]
     pub ingest_node_id: Option<String>,
 }
-
 /// Versioned Taikai Segment Envelope binding a broadcast segment to its DA artefacts.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -587,7 +539,6 @@ pub struct TaikaiSegmentEnvelopeV1 {
     #[norito(default)]
     pub metadata: ExtraMetadata,
 }
-
 /// Time-ordered index key for Taikai envelopes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -601,7 +552,6 @@ pub struct TaikaiTimeIndexKey {
     /// Segment presentation timestamp used for ordering.
     pub segment_start_pts: SegmentTimestamp,
 }
-
 /// CAR lookup index key for Taikai envelopes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -615,7 +565,6 @@ pub struct TaikaiCidIndexKey {
     /// Multibase-encoded CID pointing to the CAR archive.
     pub cid_multibase: String,
 }
-
 /// Bundle containing both deterministic index keys for a Taikai envelope.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -625,11 +574,9 @@ pub struct TaikaiEnvelopeIndexes {
     /// CAR lookup key derived from the envelope.
     pub cid_key: TaikaiCidIndexKey,
 }
-
 impl TaikaiSegmentEnvelopeV1 {
     /// Current Taikai Segment Envelope version.
     pub const VERSION: u16 = 1;
-
     /// Construct a new envelope with the provided metadata.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
@@ -659,7 +606,6 @@ impl TaikaiSegmentEnvelopeV1 {
             metadata: ExtraMetadata::default(),
         }
     }
-
     /// Derive deterministic index keys for anchoring and lookups.
     #[must_use]
     pub fn indexes(&self) -> TaikaiEnvelopeIndexes {
@@ -679,10 +625,8 @@ impl TaikaiSegmentEnvelopeV1 {
         }
     }
 }
-
 /// Schema version for [`CekRotationReceiptV1`].
 pub const CEK_ROTATION_RECEIPT_VERSION_V1: u16 = 1;
-
 /// Receipt proving that a Content Encryption Key rotation completed for a stream.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -701,7 +645,7 @@ pub struct CekRotationReceiptV1 {
     #[norito(default)]
     pub previous_wrap_key_label: Option<String>,
     /// HKDF salt recorded for the rotation in BLAKE3-256 form.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub hkdf_salt: [u8; 32],
     /// Segment number where the new CEK becomes active.
     pub effective_segment_sequence: u64,
@@ -711,10 +655,8 @@ pub struct CekRotationReceiptV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 /// Schema version for [`ReplicationProofTokenV1`].
 pub const REPLICATION_PROOF_TOKEN_VERSION_V1: u16 = 1;
-
 /// Norito envelope linking GAR, CEK receipts, and rollout evidence.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -728,13 +670,13 @@ pub struct ReplicationProofTokenV1 {
     /// Rendition covered by the attestation.
     pub rendition_id: TaikaiRenditionId,
     /// Digest of the GAR payload recorded for the rollout.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub gar_digest: [u8; 32],
     /// Digest of the CEK rotation receipt referenced by the rollout.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub cek_receipt_digest: [u8; 32],
     /// Digest of the rollout evidence bundle (archives/logs).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub distribution_bundle_digest: [u8; 32],
     /// Canonical telemetry labels enforced during the attested window.
     #[norito(default)]
@@ -747,7 +689,6 @@ pub struct ReplicationProofTokenV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 /// Inclusive sequence window used for Taikai routing manifests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -757,7 +698,6 @@ pub struct TaikaiSegmentWindow {
     /// Last sequence value covered by the window (inclusive).
     pub end_sequence: u64,
 }
-
 impl TaikaiSegmentWindow {
     /// Construct a new inclusive window.
     #[must_use]
@@ -767,13 +707,11 @@ impl TaikaiSegmentWindow {
             end_sequence,
         }
     }
-
     /// Returns `true` when the supplied sequence lies within the window.
     #[must_use]
     pub const fn contains(&self, sequence: u64) -> bool {
         sequence >= self.start_sequence && sequence <= self.end_sequence
     }
-
     /// Validate the inclusive range encoded by this window.
     ///
     /// # Errors
@@ -789,13 +727,11 @@ impl TaikaiSegmentWindow {
         Ok(())
     }
 }
-
 impl fmt::Display for TaikaiSegmentWindow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}..={}", self.start_sequence, self.end_sequence)
     }
 }
-
 /// Errors that can occur while validating a [`TaikaiSegmentWindow`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum TaikaiSegmentWindowError {
@@ -808,7 +744,6 @@ pub enum TaikaiSegmentWindowError {
         end_sequence: u64,
     },
 }
-
 /// Identifier referencing a `SoraNet` guard directory circuit.
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
@@ -816,7 +751,6 @@ pub enum TaikaiSegmentWindowError {
 #[repr(transparent)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct GuardDirectoryId(pub String);
-
 impl GuardDirectoryId {
     /// Construct a new guard directory identifier.
     #[must_use]
@@ -824,7 +758,6 @@ impl GuardDirectoryId {
         Self(id.into())
     }
 }
-
 /// Guard policy describing the `SoraNet` circuit and quorum requirements.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -839,7 +772,6 @@ pub struct TaikaiGuardPolicy {
     #[cfg_attr(feature = "json", norito(default))]
     pub lane_labels: Vec<String>,
 }
-
 impl TaikaiGuardPolicy {
     /// Build a guard policy descriptor.
     #[must_use]
@@ -857,7 +789,6 @@ impl TaikaiGuardPolicy {
         }
     }
 }
-
 /// Availability class used for Taikai rendition routing (mirrors `SoraFS` storage tiers).
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Default, PartialOrd, Ord,
@@ -873,7 +804,6 @@ pub enum TaikaiAvailabilityClass {
     /// Cold storage tier.
     Cold,
 }
-
 impl From<TaikaiAvailabilityClass> for StorageClass {
     fn from(value: TaikaiAvailabilityClass) -> Self {
         match value {
@@ -883,7 +813,6 @@ impl From<TaikaiAvailabilityClass> for StorageClass {
         }
     }
 }
-
 impl From<StorageClass> for TaikaiAvailabilityClass {
     fn from(value: StorageClass) -> Self {
         match value {
@@ -893,7 +822,6 @@ impl From<StorageClass> for TaikaiAvailabilityClass {
         }
     }
 }
-
 /// Per-rendition routing record describing replication, CAR commitments, and guard data.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -914,7 +842,6 @@ pub struct TaikaiRenditionRouteV1 {
     /// Sequence range covered by the current signing manifest(s).
     pub ssm_range: TaikaiSegmentWindow,
 }
-
 impl TaikaiRenditionRouteV1 {
     /// Returns true when the supplied sequence belongs to this route window.
     #[must_use]
@@ -922,7 +849,6 @@ impl TaikaiRenditionRouteV1 {
         self.ssm_range.contains(sequence)
     }
 }
-
 /// Routing manifest tying renditions, guard policy, and alias bindings together.
 ///
 /// Torii persists each manifest alongside the Taikai envelope payloads
@@ -949,17 +875,14 @@ pub struct TaikaiRoutingManifestV1 {
     /// Optional metadata (policy directives, rollout annotations).
     pub metadata: ExtraMetadata,
 }
-
 impl TaikaiRoutingManifestV1 {
     /// Current routing manifest format version.
     pub const VERSION: u16 = 1;
-
     /// Check whether the manifest window covers a particular sequence.
     #[must_use]
     pub const fn covers_sequence(&self, sequence: u64) -> bool {
         self.segment_window.contains(sequence)
     }
-
     /// Validate manifest invariants:
     /// - windows are ordered
     /// - rendition ranges fall within the manifest window
@@ -995,7 +918,6 @@ impl TaikaiRoutingManifestV1 {
         Ok(())
     }
 }
-
 /// Errors emitted when validating a [`TaikaiRoutingManifestV1`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum TaikaiRoutingManifestValidationError {
@@ -1021,7 +943,6 @@ pub enum TaikaiRoutingManifestValidationError {
         rendition_id: TaikaiRenditionId,
     },
 }
-
 /// Payload describing the data signed by publishers for every Taikai segment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1047,7 +968,6 @@ pub struct TaikaiSegmentSigningBodyV1 {
     /// Optional policy metadata.
     pub metadata: ExtraMetadata,
 }
-
 impl TaikaiSegmentSigningBodyV1 {
     /// Construct a signing body descriptor.
     #[allow(clippy::too_many_arguments)]
@@ -1078,7 +998,6 @@ impl TaikaiSegmentSigningBodyV1 {
         }
     }
 }
-
 /// Signed manifest tying a Taikai segment envelope to its publisher attestation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1088,7 +1007,6 @@ pub struct TaikaiSegmentSigningManifestV1 {
     /// Signature authenticating the payload.
     pub signature: SignatureOf<TaikaiSegmentSigningBodyV1>,
 }
-
 impl TaikaiSegmentSigningManifestV1 {
     /// Construct a signed manifest from the provided payload and signature.
     #[must_use]
@@ -1098,14 +1016,12 @@ impl TaikaiSegmentSigningManifestV1 {
     ) -> Self {
         Self { body, signature }
     }
-
     /// Borrow the signer account.
     #[must_use]
     pub fn signer(&self) -> &AccountId {
         &self.body.publisher_account
     }
 }
-
 /// `QoS` token bucket configuration captured by Taikai cache profiles.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1119,7 +1035,6 @@ pub struct TaikaiCacheQosConfigV1 {
     /// Burst multiplier applied to every bucket.
     pub burst_multiplier: u32,
 }
-
 impl TaikaiCacheQosConfigV1 {
     fn validate(&self) -> Result<(), TaikaiCacheProfileError> {
         TaikaiCacheProfileError::ensure_positive(self.priority_rate_bps, "qos.priority_rate_bps")?;
@@ -1133,7 +1048,6 @@ impl TaikaiCacheQosConfigV1 {
         Ok(())
     }
 }
-
 /// Cache capacity/retention knobs used by SNNet-14.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1153,7 +1067,6 @@ pub struct TaikaiCacheConfigV1 {
     /// `QoS` rate/burst configuration.
     pub qos: TaikaiCacheQosConfigV1,
 }
-
 impl TaikaiCacheConfigV1 {
     /// Validate the cache configuration to ensure positive capacities and durations.
     ///
@@ -1170,7 +1083,6 @@ impl TaikaiCacheConfigV1 {
         Ok(())
     }
 }
-
 /// Rollout stage describing where a Taikai cache profile is permitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Display)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1189,7 +1101,6 @@ pub enum TaikaiCacheRolloutStage {
     #[display("emergency")]
     Emergency,
 }
-
 impl TaikaiCacheRolloutStage {
     /// Resolve the canonical string label for this rollout stage.
     #[must_use]
@@ -1202,10 +1113,8 @@ impl TaikaiCacheRolloutStage {
         }
     }
 }
-
 impl FromStr for TaikaiCacheRolloutStage {
     type Err = TaikaiCacheRolloutStageParseError;
-
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let normalised = value.trim().to_ascii_lowercase();
         match normalised.as_str() {
@@ -1219,19 +1128,16 @@ impl FromStr for TaikaiCacheRolloutStage {
         }
     }
 }
-
 /// Error surfaced when parsing a rollout stage label fails.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub struct TaikaiCacheRolloutStageParseError {
     value: String,
 }
-
 impl fmt::Display for TaikaiCacheRolloutStageParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "unknown Taikai cache rollout stage `{}`", self.value)
     }
 }
-
 /// Governance-approved cache profile stored in the `SoraFS` governance DAG.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1249,7 +1155,6 @@ pub struct TaikaiCacheProfileV1 {
     #[cfg_attr(feature = "json", norito(rename = "taikai_cache"))]
     pub config: TaikaiCacheConfigV1,
 }
-
 impl TaikaiCacheProfileV1 {
     /// Validate the profile metadata and cache configuration.
     ///
@@ -1265,7 +1170,6 @@ impl TaikaiCacheProfileV1 {
         self.config.validate()
     }
 }
-
 /// Validation errors surfaced when processing Taikai cache profiles.
 #[derive(Copy, Clone, Debug, Error, PartialEq, Eq)]
 pub enum TaikaiCacheProfileError {
@@ -1282,7 +1186,6 @@ pub enum TaikaiCacheProfileError {
         field: &'static str,
     },
 }
-
 impl TaikaiCacheProfileError {
     fn ensure_positive(value: u64, field: &'static str) -> Result<(), Self> {
         if value == 0 {
@@ -1292,13 +1195,10 @@ impl TaikaiCacheProfileError {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeMap, str::FromStr};
-
     use iroha_crypto::{Algorithm, KeyPair};
-
     use super::*;
     use crate::{
         da::types::{
@@ -1306,26 +1206,22 @@ mod tests {
         },
         domain::DomainId,
     };
-
     fn digest_from(value: u8) -> BlobDigest {
         let mut bytes = [0u8; 32];
         bytes.fill(value);
         BlobDigest::new(bytes)
     }
-
     #[test]
     fn event_id_wrapper_round_trip() {
         let name = Name::from_str("launch-stream").expect("valid name");
         let event_id = TaikaiEventId::new(name.clone());
         assert_eq!(event_id.as_name(), &name);
     }
-
     #[test]
     fn segment_timestamp_helpers() {
         let timestamp = SegmentTimestamp::new(90_000);
         assert_eq!(timestamp.as_micros(), 90_000);
     }
-
     #[test]
     fn track_metadata_builders_cover_variants() {
         let video_meta = TaikaiTrackMetadata::video(
@@ -1335,21 +1231,17 @@ mod tests {
         );
         assert_eq!(video_meta.kind, TaikaiTrackKind::Video);
         assert_eq!(video_meta.resolution.unwrap().width, 1920);
-
         let audio_meta =
             TaikaiTrackMetadata::audio(TaikaiCodec::AacLc, 192, TaikaiAudioLayout::Stereo);
         assert_eq!(audio_meta.kind, TaikaiTrackKind::Audio);
         assert_eq!(audio_meta.audio_layout.unwrap(), TaikaiAudioLayout::Stereo);
-
         let data_meta = TaikaiTrackMetadata::data(TaikaiCodec::Custom("id3".into()), 32);
         assert_eq!(data_meta.kind, TaikaiTrackKind::Data);
         assert!(data_meta.resolution.is_none());
     }
-
     #[test]
     fn envelope_encodes_and_decodes() {
         use std::str::FromStr;
-
         let event_id = TaikaiEventId::new(Name::from_str("global-keynote").unwrap());
         let stream_id = TaikaiStreamId::new(Name::from_str("stage-a").unwrap());
         let rendition_id = TaikaiRenditionId::new(Name::from_str("1080p").unwrap());
@@ -1382,7 +1274,6 @@ mod tests {
         );
         envelope.metadata = metadata.clone();
         envelope.instrumentation.encoder_to_ingest_latency_ms = Some(120);
-
         let encoded = envelope.encode();
         let mut cursor = std::io::Cursor::new(encoded);
         let decoded: TaikaiSegmentEnvelopeV1 =
@@ -1394,7 +1285,6 @@ mod tests {
             Some(120)
         );
     }
-
     #[test]
     fn envelope_indexes_reflect_fields() {
         let event_id = TaikaiEventId::new(Name::from_str("global-keynote").unwrap());
@@ -1424,7 +1314,6 @@ mod tests {
             1_702_560_000_000,
             ingest,
         );
-
         let indexes = envelope.indexes();
         assert_eq!(indexes.time_key.event_id, event_id);
         assert_eq!(indexes.time_key.stream_id, stream_id);
@@ -1432,11 +1321,9 @@ mod tests {
         assert_eq!(indexes.cid_key.rendition_id, rendition_id);
         assert_eq!(indexes.cid_key.cid_multibase, "zbafyqra");
     }
-
     #[test]
     fn parsing_helpers_cover_supported_values() {
         use std::str::FromStr;
-
         assert_eq!(
             TaikaiTrackKind::from_str("Video").expect("track kind"),
             TaikaiTrackKind::Video
@@ -1456,7 +1343,6 @@ mod tests {
         assert!(TaikaiCodec::from_str("custom:").is_err());
         assert!(TaikaiResolution::from_str("1920").is_err());
     }
-
     fn sample_alias_binding() -> TaikaiAliasBinding {
         TaikaiAliasBinding {
             name: "docs".into(),
@@ -1464,7 +1350,6 @@ mod tests {
             proof: vec![0xAA, 0xBB, 0xCC],
         }
     }
-
     fn sample_guard_policy() -> TaikaiGuardPolicy {
         TaikaiGuardPolicy::new(
             GuardDirectoryId::new("soranet/demo"),
@@ -1473,7 +1358,6 @@ mod tests {
             vec!["lane-a".into(), "lane-b".into()],
         )
     }
-
     fn sample_routing_manifest() -> TaikaiRoutingManifestV1 {
         let event_id = TaikaiEventId::new(Name::from_str("global-keynote").unwrap());
         let stream_id = TaikaiStreamId::new(Name::from_str("stage-a").unwrap());
@@ -1498,7 +1382,6 @@ mod tests {
             metadata: ExtraMetadata::default(),
         }
     }
-
     fn sample_cek_receipt() -> CekRotationReceiptV1 {
         CekRotationReceiptV1 {
             schema_version: CEK_ROTATION_RECEIPT_VERSION_V1,
@@ -1513,7 +1396,6 @@ mod tests {
             notes: Some("ticket SN13-E".into()),
         }
     }
-
     fn sample_replication_proof_token() -> ReplicationProofTokenV1 {
         ReplicationProofTokenV1 {
             schema_version: REPLICATION_PROOF_TOKEN_VERSION_V1,
@@ -1529,7 +1411,6 @@ mod tests {
             notes: Some("GAR v2 rollout".into()),
         }
     }
-
     #[test]
     fn routing_manifest_round_trips() {
         let manifest = sample_routing_manifest();
@@ -1552,7 +1433,6 @@ mod tests {
         );
         decoded.validate().expect("manifest validates");
     }
-
     #[test]
     fn routing_manifest_covers_sequence_respects_bounds() {
         let manifest = sample_routing_manifest();
@@ -1564,7 +1444,6 @@ mod tests {
         if start > 0 {
             assert!(!manifest.covers_sequence(start - 1));
         }
-
         let route = &manifest.renditions[0];
         let route_start = route.ssm_range.start_sequence;
         let route_end = route.ssm_range.end_sequence;
@@ -1575,7 +1454,6 @@ mod tests {
             assert!(!route.covers_sequence(route_start - 1));
         }
     }
-
     #[test]
     fn segment_signing_manifest_round_trips() {
         let kp = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519)
@@ -1609,7 +1487,6 @@ mod tests {
         assert_eq!(decoded.body, body);
         assert_eq!(decoded.signature, signature);
     }
-
     fn sample_cache_profile() -> TaikaiCacheProfileV1 {
         TaikaiCacheProfileV1 {
             profile_id: "balanced-canary".to_string(),
@@ -1635,7 +1512,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn taikai_cache_profile_round_trips() {
         let profile = sample_cache_profile();
@@ -1645,7 +1521,6 @@ mod tests {
         assert_eq!(decoded, profile);
         decoded.validate().expect("profile validates");
     }
-
     #[test]
     fn taikai_cache_profile_validation_rejects_zero_values() {
         let mut profile = sample_cache_profile();
@@ -1658,7 +1533,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn taikai_cache_rollout_stage_parses_labels() {
         let stage = TaikaiCacheRolloutStage::from_str("RAMP").expect("stage parsed");
@@ -1669,29 +1543,24 @@ mod tests {
             "unknown Taikai cache rollout stage `unknown`"
         );
     }
-
     #[test]
     fn cek_rotation_receipt_round_trips() {
         let receipt = sample_cek_receipt();
         assert_eq!(receipt.schema_version, CEK_ROTATION_RECEIPT_VERSION_V1);
-
         let encoded = norito::to_bytes(&receipt).expect("encode receipt");
         let decoded =
             norito::decode_from_bytes::<CekRotationReceiptV1>(&encoded).expect("receipt decodes");
         assert_eq!(decoded, receipt);
     }
-
     #[test]
     fn replication_proof_token_round_trips() {
         let token = sample_replication_proof_token();
         assert_eq!(token.schema_version, REPLICATION_PROOF_TOKEN_VERSION_V1);
-
         let encoded = norito::to_bytes(&token).expect("encode token");
         let decoded =
             norito::decode_from_bytes::<ReplicationProofTokenV1>(&encoded).expect("token decodes");
         assert_eq!(decoded, token);
     }
-
     #[test]
     fn segment_window_validation_rejects_invalid_range() {
         let window = TaikaiSegmentWindow::new(10, 5);
@@ -1704,7 +1573,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn routing_manifest_validation_rejects_out_of_range_rendition() {
         let mut manifest = sample_routing_manifest();
@@ -1716,7 +1584,6 @@ mod tests {
             TaikaiRoutingManifestValidationError::RenditionWindowOutOfRange { .. }
         ));
     }
-
     #[test]
     fn routing_manifest_validation_rejects_duplicate_renditions() {
         let mut manifest = sample_routing_manifest();
@@ -1728,7 +1595,6 @@ mod tests {
             TaikaiRoutingManifestValidationError::DuplicateRendition { .. }
         ));
     }
-
     #[test]
     fn routing_manifest_validation_rejects_invalid_segment_window() {
         let mut manifest = sample_routing_manifest();

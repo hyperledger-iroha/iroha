@@ -1,7 +1,6 @@
 //! Tests for experimental Norito Column Blocks (NCB) prototype.
 #![allow(clippy::needless_borrows_for_generic_args)]
 #![allow(clippy::needless_range_loop)]
-
 use norito::{
     columnar::{
         encode_ncb_u64_str_bool, encode_ncb_u64_str_bool_force_dict,
@@ -10,7 +9,6 @@ use norito::{
     },
     core,
 };
-
 #[test]
 fn ncb_roundtrip_u64_str_bool() {
     let rows: Vec<(u64, String, bool)> = vec![
@@ -22,23 +20,19 @@ fn ncb_roundtrip_u64_str_bool() {
     ];
     let tuples: Vec<(u64, &str, bool)> =
         rows.iter().map(|(i, s, b)| (*i, s.as_str(), *b)).collect();
-
     // Encode NCB and create a view
     let bytes = encode_ncb_u64_str_bool(&tuples);
     let view = view_ncb_u64_str_bool(&bytes).expect("view");
-
     assert_eq!(view.len(), rows.len());
     for i in 0..rows.len() {
         assert_eq!(view.id(i), rows[i].0);
         assert_eq!(view.name(i).unwrap(), rows[i].1.as_str());
         assert_eq!(view.flag(i), rows[i].2);
     }
-
     // Materialize back into owned tuples
     let owned = materialize_ncb(view).expect("materialize");
     assert_eq!(owned, rows);
 }
-
 #[test]
 fn ncb_threshold_heuristic() {
     let h = core::heuristics::get();
@@ -58,7 +52,6 @@ fn ncb_threshold_heuristic() {
         "rows beyond threshold should enable columnar auto-selection"
     );
 }
-
 #[test]
 fn ncb_column_iterators_offsets() {
     let rows: Vec<(u64, &str, bool)> = vec![
@@ -79,7 +72,6 @@ fn ncb_column_iterators_offsets() {
     let flags: Vec<bool> = view.iter_flags().collect();
     assert_eq!(flags, rows.iter().map(|r| r.2).collect::<Vec<_>>());
 }
-
 #[test]
 fn ncb_column_iterators_dict() {
     let rows: Vec<(u64, &str, bool)> = vec![
@@ -94,7 +86,6 @@ fn ncb_column_iterators_dict() {
     let names: Vec<&str> = view.iter_names().collect();
     assert_eq!(names, rows.iter().map(|r| r.1).collect::<Vec<_>>());
 }
-
 #[test]
 fn ncb_column_iterators_flag_true() {
     let rows: Vec<(u64, &str, bool)> = vec![
@@ -126,7 +117,6 @@ fn ncb_column_iterators_flag_true() {
     let names_dense64a: Vec<&str> = view.iter_names_flag_true_popcount64_aligned().collect();
     assert_eq!(names_dense64a, names_rowwise);
 }
-
 #[test]
 fn ncb_true_positions_popcount_matches_simple() {
     // Construct rows with irregular flags to exercise both paths

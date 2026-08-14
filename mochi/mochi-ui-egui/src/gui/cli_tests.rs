@@ -4,19 +4,15 @@ use std::{
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
-
 use super::*;
-
 fn cli_env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
 }
-
 struct CliEnvGuard {
     key: &'static str,
     prev: Option<String>,
 }
-
 impl CliEnvGuard {
     fn set(key: &'static str, value: &str) -> Self {
         let prev = env::var(key).ok();
@@ -25,7 +21,6 @@ impl CliEnvGuard {
         Self { key, prev }
     }
 }
-
 impl Drop for CliEnvGuard {
     fn drop(&mut self) {
         if let Some(prev) = self.prev.as_ref() {
@@ -37,7 +32,6 @@ impl Drop for CliEnvGuard {
         }
     }
 }
-
 #[test]
 fn parse_cli_kagami_override_sets_path() {
     let args = vec![OsString::from("--kagami"), OsString::from("/tmp/kagami")];
@@ -48,7 +42,6 @@ fn parse_cli_kagami_override_sets_path() {
         Some(Path::new("/tmp/kagami"))
     );
 }
-
 #[test]
 fn parse_cli_config_override_sets_path() {
     let args = vec![
@@ -61,13 +54,11 @@ fn parse_cli_config_override_sets_path() {
         Some(Path::new("/tmp/mochi.toml"))
     );
 }
-
 #[test]
 fn parse_cli_help_flag_short_circuits() {
     let parsed = parse_cli_overrides_from(vec![OsString::from("--help")]).expect("parse help flag");
     assert!(parsed.help, "help flag should be detected");
 }
-
 #[test]
 fn parse_cli_sandbox_serve_command_and_workspace_root() {
     let parsed = parse_cli_overrides_from(vec![
@@ -83,7 +74,6 @@ fn parse_cli_sandbox_serve_command_and_workspace_root() {
         Some(Path::new("/tmp/workspace"))
     );
 }
-
 #[test]
 fn parse_cli_sandbox_wipe_rehearsal_command_and_data_root() {
     let parsed = parse_cli_overrides_from(vec![
@@ -99,14 +89,12 @@ fn parse_cli_sandbox_wipe_rehearsal_command_and_data_root() {
         Some(Path::new("/tmp/disposable-mochi"))
     );
 }
-
 #[test]
 fn parse_cli_chain_id_override_sets_value() {
     let args = vec![OsString::from("--chain-id"), OsString::from("demo-chain")];
     let parsed = parse_cli_overrides_from(args).expect("parse CLI");
     assert_eq!(parsed.overrides.chain_id.as_deref(), Some("demo-chain"));
 }
-
 #[test]
 fn parse_cli_genesis_profile_sets_value() {
     let args = vec![
@@ -119,7 +107,6 @@ fn parse_cli_genesis_profile_sets_value() {
         Some(GenesisProfile::Iroha3Dev)
     );
 }
-
 #[test]
 fn parse_cli_profile_inline_table_sets_custom_profile() {
     let args = vec![
@@ -132,7 +119,6 @@ fn parse_cli_profile_inline_table_sets_custom_profile() {
     assert_eq!(profile.topology.peer_count, 7);
     assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Permissioned);
 }
-
 #[test]
 fn parse_cli_profile_inline_table_sets_genesis_profile() {
     let args = vec![
@@ -147,7 +133,6 @@ fn parse_cli_profile_inline_table_sets_genesis_profile() {
         Some(GenesisProfile::Iroha3Dev)
     );
 }
-
 #[test]
 fn parse_cli_profile_genesis_conflict_errors() {
     let args = vec![
@@ -164,14 +149,12 @@ fn parse_cli_profile_genesis_conflict_errors() {
         "unexpected error message: {err}"
     );
 }
-
 #[test]
 fn parse_cli_vrf_seed_sets_value() {
     let args = vec![OsString::from("--vrf-seed-hex"), OsString::from("abcd")];
     let parsed = parse_cli_overrides_from(args).expect("parse CLI");
     assert_eq!(parsed.overrides.vrf_seed_hex.as_deref(), Some("abcd"));
 }
-
 #[test]
 fn parse_cli_nexus_config_sets_table() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -199,7 +182,6 @@ lane_count = 2
         Some(2)
     );
 }
-
 #[test]
 fn parse_cli_nexus_flags_set_overrides() {
     let args = vec![
@@ -211,14 +193,12 @@ fn parse_cli_nexus_flags_set_overrides() {
     assert_eq!(parsed.overrides.nexus_enabled, Some(true));
     assert_eq!(parsed.overrides.nexus_lane_count, Some(3));
 }
-
 #[test]
 fn parse_cli_rejects_retired_da_flags() {
     let error = parse_cli_overrides_from(vec![OsString::from("--disable-da")])
         .expect_err("retired DA toggle must be rejected");
     assert!(error.to_string().contains("unknown option"));
 }
-
 #[test]
 fn parse_cli_restart_mode_never_sets_policy() {
     let args = vec![OsString::from("--restart-mode"), OsString::from("never")];
@@ -228,7 +208,6 @@ fn parse_cli_restart_mode_never_sets_policy() {
         Some(RestartPolicy::Never)
     ));
 }
-
 #[test]
 fn parse_cli_restart_on_failure_overrides_attempts() {
     let args = vec![
@@ -249,35 +228,30 @@ fn parse_cli_restart_on_failure_overrides_attempts() {
         RestartPolicy::Never => panic!("expected on-failure policy"),
     }
 }
-
 #[test]
 fn parse_cli_build_binaries_flag_enables_auto_build() {
     let parsed =
         parse_cli_overrides_from(vec![OsString::from("--build-binaries")]).expect("parse CLI");
     assert_eq!(parsed.overrides.build_binaries, Some(true));
 }
-
 #[test]
 fn parse_cli_no_build_binaries_flag_disables_auto_build() {
     let parsed =
         parse_cli_overrides_from(vec![OsString::from("--no-build-binaries")]).expect("parse CLI");
     assert_eq!(parsed.overrides.build_binaries, Some(false));
 }
-
 #[test]
 fn parse_cli_disable_smoke_flag_disables_readiness_smoke() {
     let parsed =
         parse_cli_overrides_from(vec![OsString::from("--disable-smoke")]).expect("parse CLI");
     assert_eq!(parsed.overrides.readiness_smoke, Some(false));
 }
-
 #[test]
 fn parse_cli_enable_smoke_flag_enables_readiness_smoke() {
     let parsed =
         parse_cli_overrides_from(vec![OsString::from("--enable-smoke")]).expect("parse CLI");
     assert_eq!(parsed.overrides.readiness_smoke, Some(true));
 }
-
 #[test]
 fn parse_cli_readiness_timeout_applies_to_cold_start() {
     let parsed = parse_cli_overrides_from(vec![
@@ -293,14 +267,12 @@ fn parse_cli_readiness_timeout_applies_to_cold_start() {
     assert_eq!(options.timeout, Duration::from_secs(300));
     assert_eq!(options.poll_interval, READINESS_POLL_INTERVAL);
 }
-
 #[test]
 fn sandbox_readiness_timeout_defaults_to_cold_start_budget() {
     let options = configured_readiness_options_for(&CliOverrides::default());
     assert_eq!(options.timeout, SANDBOX_READINESS_TIMEOUT);
     assert_eq!(options.poll_interval, READINESS_POLL_INTERVAL);
 }
-
 #[test]
 fn parse_cli_readiness_timeout_rejects_zero() {
     let error = parse_cli_overrides_from(vec![
@@ -310,7 +282,6 @@ fn parse_cli_readiness_timeout_rejects_zero() {
     .expect_err("zero readiness timeout must be rejected");
     assert!(error.to_string().contains("greater than zero"));
 }
-
 #[test]
 fn parse_cli_unknown_flag_errors() {
     let err = parse_cli_overrides_from(vec![OsString::from("--unknown")])
@@ -320,7 +291,6 @@ fn parse_cli_unknown_flag_errors() {
         "unexpected error message: {err}"
     );
 }
-
 #[test]
 fn env_profile_override_applies() {
     let _guard = cli_env_lock().lock().expect("env lock");
@@ -331,7 +301,6 @@ fn env_profile_override_applies() {
         Some(NetworkProfile::from_preset(ProfilePreset::FourPeerBft))
     );
 }
-
 #[test]
 fn env_workspace_root_override_applies() {
     let _guard = cli_env_lock().lock().expect("env lock");
@@ -342,7 +311,6 @@ fn env_workspace_root_override_applies() {
         Some(Path::new("/tmp/workspace"))
     );
 }
-
 #[test]
 fn should_default_workspace_root_when_no_paths_are_configured() {
     assert!(should_default_workspace_root(
@@ -350,7 +318,6 @@ fn should_default_workspace_root_when_no_paths_are_configured() {
         None
     ));
 }
-
 #[test]
 fn should_not_default_workspace_root_when_data_root_is_configured() {
     let config = ResolvedBundleConfig {
@@ -360,18 +327,15 @@ fn should_not_default_workspace_root_when_data_root_is_configured() {
         },
         path: PathBuf::from("/tmp/mochi.toml"),
     };
-
     assert!(!should_default_workspace_root(
         &CliOverrides::default(),
         Some(&config),
     ));
 }
-
 #[test]
 fn resolved_build_binaries_defaults_to_true() {
     assert!(resolved_build_binaries(&CliOverrides::default(), None));
 }
-
 #[test]
 fn resolved_build_binaries_honors_explicit_config_disable() {
     let config = ResolvedBundleConfig {
@@ -381,13 +345,11 @@ fn resolved_build_binaries_honors_explicit_config_disable() {
         },
         path: PathBuf::from("/tmp/mochi.toml"),
     };
-
     assert!(!resolved_build_binaries(
         &CliOverrides::default(),
         Some(&config),
     ));
 }
-
 #[test]
 fn env_build_binaries_override_applies() {
     let _guard = cli_env_lock().lock().expect("env lock");
@@ -395,7 +357,6 @@ fn env_build_binaries_override_applies() {
     let overrides = parse_env_overrides().expect("parse env overrides");
     assert_eq!(overrides.build_binaries, Some(true));
 }
-
 #[test]
 fn env_readiness_smoke_override_applies() {
     let _guard = cli_env_lock().lock().expect("env lock");
@@ -403,7 +364,6 @@ fn env_readiness_smoke_override_applies() {
     let overrides = parse_env_overrides().expect("parse env overrides");
     assert_eq!(overrides.readiness_smoke, Some(false));
 }
-
 #[test]
 fn env_readiness_timeout_override_applies() {
     let _guard = cli_env_lock().lock().expect("env lock");
@@ -411,7 +371,6 @@ fn env_readiness_timeout_override_applies() {
     let overrides = parse_env_overrides().expect("parse env overrides");
     assert_eq!(overrides.readiness_timeout, Some(Duration::from_secs(45)));
 }
-
 #[test]
 fn cli_readiness_timeout_overrides_environment() {
     let env_overrides = CliOverrides {
@@ -425,30 +384,25 @@ fn cli_readiness_timeout_overrides_environment() {
     let merged = merge_overrides(env_overrides, cli_overrides);
     assert_eq!(merged.readiness_timeout, Some(Duration::from_secs(300)));
 }
-
 #[test]
 fn cli_flags_override_env_values() {
     let _guard = cli_env_lock().lock().expect("env lock");
     let _profile = CliEnvGuard::set("MOCHI_PROFILE", "four-peer-bft");
     let env_overrides = parse_env_overrides().expect("parse env overrides");
-
     let cli = parse_cli_overrides_from(vec![
         OsString::from("--profile"),
         OsString::from("single-peer"),
     ])
     .expect("parse CLI");
-
     let merged = merge_overrides(env_overrides, cli.overrides);
     assert_eq!(
         merged.profile,
         Some(NetworkProfile::from_preset(ProfilePreset::SinglePeer))
     );
 }
-
 #[cfg(unix)]
 fn write_kagami_override_stub(root: &Path) -> (PathBuf, PathBuf) {
     use std::os::unix::fs::PermissionsExt;
-
     let script_path = root.join("kagami_cli_override.sh");
     let log_path = root.join("kagami_cli_override.log");
     let script = r#"#!/bin/sh
@@ -471,7 +425,6 @@ JSON
     std::fs::set_permissions(&script_path, perms).expect("set override stub permissions");
     (script_path, log_path)
 }
-
 #[cfg(unix)]
 #[test]
 fn cli_overrides_apply_kagami_path_to_supervisor_builder() {
@@ -481,16 +434,13 @@ fn cli_overrides_apply_kagami_path_to_supervisor_builder() {
     }
     let temp = tempfile::tempdir().expect("temp dir");
     let (script_path, log_path) = write_kagami_override_stub(temp.path());
-
     let mut overrides = CliOverrides::default();
     overrides.binaries.kagami = Some(script_path.clone());
-
     let builder = SupervisorBuilder::new(ProfilePreset::SinglePeer).data_root(temp.path());
     overrides
         .apply_to(builder)
         .build()
         .expect("build supervisor with CLI overrides");
-
     let log = std::fs::read_to_string(&log_path).expect("read CLI override kagami log");
     assert!(
         log.contains("--genesis-public-key"),

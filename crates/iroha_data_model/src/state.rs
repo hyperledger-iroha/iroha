@@ -11,9 +11,7 @@
 //! - The advisory access set is optional and never authoritative; executors
 //!   must enforce actual access at runtime. Supersets are safe; subsets may be
 //!   rejected or routed to a quarantine lane by policy.
-
 use std::{string::String, vec::Vec};
-
 #[cfg(feature = "json")]
 use base64::engine::general_purpose::STANDARD;
 use derive_more::Constructor;
@@ -22,7 +20,6 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-
 use crate::{
     account::AccountId,
     asset::id::{AssetDefinitionId, AssetId},
@@ -34,23 +31,21 @@ use crate::{
     transaction::signed::SignedTransaction,
     trigger::TriggerId,
 };
-
 #[cfg(feature = "json")]
 macro_rules! impl_state_json_via_norito_bytes {
     ($($ty:path),+ $(,)?) => {
         $(
             impl JsonSerialize for $ty {
                 fn json_serialize(&self, out: &mut String) {
-                    let bytes = norito::encode_canonical(self)
-                        .expect("canonical Norito serialization must succeed");
-                    let encoded = base64::Engine::encode(
-                        &STANDARD,
-                        bytes,
-                    );
-                    JsonSerialize::json_serialize(&encoded, out);
+                    norito::json::write_canonical_base64_json(self, out);
+                }
+                fn json_serialize_to(
+                    &self,
+                    out: &mut dyn norito::json::JsonWriteSink,
+                ) -> Result<(), norito::json::BoundedJsonError> {
+                    norito::json::write_canonical_base64_json_to(self, out)
                 }
             }
-
             impl JsonDeserialize for $ty {
                 fn json_deserialize(
                     parser: &mut json::Parser<'_>,
@@ -68,7 +63,6 @@ macro_rules! impl_state_json_via_norito_bytes {
         )+
     };
 }
-
 /// Metadata entry key for a Domain.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 pub struct DomainMetadataKey {
@@ -77,7 +71,6 @@ pub struct DomainMetadataKey {
     /// Metadata entry name scoped within the domain.
     pub key: Name,
 }
-
 /// Metadata entry key for an Account.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 pub struct AccountMetadataKey {
@@ -86,7 +79,6 @@ pub struct AccountMetadataKey {
     /// Metadata entry name scoped within the account.
     pub key: Name,
 }
-
 /// Metadata entry key for an `AssetDefinition`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 pub struct AssetDefinitionMetadataKey {
@@ -95,7 +87,6 @@ pub struct AssetDefinitionMetadataKey {
     /// Metadata entry name scoped within the asset definition.
     pub key: Name,
 }
-
 /// Metadata entry key for an Asset.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 pub struct AssetMetadataKey {
@@ -104,7 +95,6 @@ pub struct AssetMetadataKey {
     /// Metadata entry name scoped within the asset.
     pub key: Name,
 }
-
 /// Metadata entry key for an NFT.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 pub struct NftMetadataKey {
@@ -113,7 +103,6 @@ pub struct NftMetadataKey {
     /// Metadata entry name scoped within the NFT.
     pub key: Name,
 }
-
 /// Metadata entry key for an RWA.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 pub struct RwaMetadataKey {
@@ -122,7 +111,6 @@ pub struct RwaMetadataKey {
     /// Metadata entry name scoped within the RWA.
     pub key: Name,
 }
-
 /// Metadata entry key for a Trigger.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 pub struct TriggerMetadataKey {
@@ -131,7 +119,6 @@ pub struct TriggerMetadataKey {
     /// Metadata entry name scoped within the trigger.
     pub key: Name,
 }
-
 /// Role membership binding for an account.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 pub struct AccountRoleKey {
@@ -140,14 +127,12 @@ pub struct AccountRoleKey {
     /// Role identifier granted to the account.
     pub role: RoleId,
 }
-
 /// Pending or queued transaction identified by its hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 pub struct TxQueueKey {
     /// Hash of the queued transaction.
     pub hash: HashOf<SignedTransaction>,
 }
-
 /// Canonical key for addressing items in the World State View.
 ///
 /// The Norito encoding of this enum value is the canonical byte sequence used
@@ -192,14 +177,12 @@ pub enum CanonicalStateKey {
     /// Trigger metadata entry `(trigger_id, key)`.
     TriggerMetadata(TriggerMetadataKey),
 }
-
 impl CanonicalStateKey {
     /// Produce canonical bytes for this key using Norito encoding.
     pub fn to_canonical_bytes(&self) -> Vec<u8> {
         Encode::encode(self)
     }
 }
-
 /// Advisory read/write access set for a transaction or sub-transaction.
 ///
 /// - `reads`: keys that may be read.
@@ -215,7 +198,6 @@ pub struct StateAccessSetAdvisory {
     /// Canonical keys that may be written (and therefore read) during execution.
     pub writes: Vec<CanonicalStateKey>,
 }
-
 #[cfg(feature = "json")]
 impl_state_json_via_norito_bytes!(
     DomainMetadataKey,
@@ -230,7 +212,6 @@ impl_state_json_via_norito_bytes!(
     CanonicalStateKey,
     StateAccessSetAdvisory,
 );
-
 impl StateAccessSetAdvisory {
     /// Sort keys by canonical bytes and deduplicate within reads and writes.
     ///
@@ -244,7 +225,6 @@ impl StateAccessSetAdvisory {
         }
         sort_dedup(&mut self.reads) + sort_dedup(&mut self.writes)
     }
-
     /// Merge another advisory set into `self` and canonicalize the result.
     pub fn extend_and_canonicalize(&mut self, other: StateAccessSetAdvisory) {
         self.reads.extend(other.reads);
@@ -252,19 +232,15 @@ impl StateAccessSetAdvisory {
         self.canonicalize();
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Hash, KeyPair};
-
     use super::*;
     use crate::{prelude::*, role::RoleId};
-
     fn checked_account_id() -> AccountId {
         let keypair = KeyPair::try_random().expect("generate checked state fixture keypair");
         AccountId::new(keypair.public_key().clone())
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn state_key_json_is_canonical_and_ambient_independent() {
@@ -272,6 +248,15 @@ mod tests {
             DomainId::try_new("wonderland", "universal").expect("domain id"),
         );
         let canonical_json = norito::json::to_json(&key).expect("encode canonical state-key JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(&key, canonical_json.len())
+                .expect("encode state key at exact JSON bound"),
+            canonical_json
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&key, canonical_json.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         {
@@ -282,7 +267,6 @@ mod tests {
                 canonical_json
             );
         }
-
         let alternate_frame = {
             let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             norito::to_bytes(&key).expect("encode alternate-layout state key")
@@ -293,7 +277,6 @@ mod tests {
         norito::json::from_json::<CanonicalStateKey>(&alternate_json)
             .expect_err("alternate-layout state-key JSON must be rejected");
     }
-
     #[test]
     fn key_roundtrip_and_ordering() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -316,7 +299,6 @@ mod tests {
         let role_id: RoleId = "auditor".parse().unwrap();
         let queue_hash =
             HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([2; Hash::LENGTH]));
-
         let mut keys = vec![
             CanonicalStateKey::Account(alice.clone()),
             CanonicalStateKey::Domain(domain.clone()),
@@ -361,7 +343,6 @@ mod tests {
                 key: key.clone(),
             }),
         ];
-
         // Ensure bare Norito codec roundtrips remain aligned with canonical bytes.
         for original in &keys {
             let bytes = Encode::encode(original);
@@ -377,7 +358,6 @@ mod tests {
                 "bare Norito roundtrip must preserve the canonical key"
             );
         }
-
         // Sorting by canonical bytes is stable and total
         keys.sort_by_key(super::CanonicalStateKey::to_canonical_bytes);
         for pair in keys.windows(2) {
@@ -386,14 +366,12 @@ mod tests {
             assert!(a.to_canonical_bytes() <= b.to_canonical_bytes());
         }
     }
-
     #[test]
     fn advisory_set_canonicalization_dedups() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let key: Name = "k".parse().unwrap();
         let a = CanonicalStateKey::Domain(domain.clone());
         let b = CanonicalStateKey::DomainMetadata(DomainMetadataKey { id: domain, key });
-
         let mut set =
             StateAccessSetAdvisory::new(vec![a.clone(), a.clone()], vec![b.clone(), b.clone()]);
         let removed = set.canonicalize();

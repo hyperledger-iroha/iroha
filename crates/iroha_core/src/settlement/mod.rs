@@ -6,9 +6,7 @@
 //! serialization details (Norito receipts, decimal arithmetic) from the rest of
 //! the code base.  Integration with Kura buffers and swap execution will be
 //! layered on top in follow-up patches.
-
 use std::collections::BTreeMap;
-
 use iroha_config::parameters::actual as config;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
@@ -30,10 +28,8 @@ use settlement_router::{
     receipt::SettlementReceipt,
 };
 use time::Duration as TimeDuration;
-
 #[cfg(any(feature = "telemetry", test))]
 const SETTLEMENT_MICRO_SCALE: u32 = 6;
-
 /// Convert a bounded legacy micro-unit scalar into its exact canonical quantity.
 #[cfg(test)]
 pub(crate) fn quantity_from_micro_units(value: u128) -> Quantity {
@@ -42,7 +38,6 @@ pub(crate) fn quantity_from_micro_units(value: u128) -> Quantity {
     Quantity::try_from_numeric(numeric)
         .expect("a non-negative micro-unit scalar is always a valid quantity")
 }
-
 /// Convert an exact quantity to micro-units without rounding or truncation.
 #[cfg(any(feature = "telemetry", test))]
 pub(crate) fn quantity_to_micro_units(value: &Quantity) -> Result<u128, &'static str> {
@@ -70,7 +65,6 @@ pub(crate) fn quantity_to_micro_units(value: &Quantity) -> Result<u128, &'static
         .parse::<u128>()
         .map_err(|_| "quantity exceeds u128 micro-unit bounds")
 }
-
 /// Project a settlement quantity into the legacy telemetry domain.
 ///
 /// Telemetry is deliberately non-consensus: values that cannot be represented
@@ -79,7 +73,6 @@ pub(crate) fn quantity_to_micro_units(value: &Quantity) -> Result<u128, &'static
 pub(crate) fn quantity_to_micro_units_saturating_for_telemetry(value: &Quantity) -> u128 {
     quantity_to_micro_units(value).unwrap_or(u128::MAX)
 }
-
 /// Error returned when quoting settlement amounts fails.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum QuoteError {
@@ -90,7 +83,6 @@ pub enum QuoteError {
     #[error(transparent)]
     Receipt(#[from] SettlementReceiptError),
 }
-
 /// Result of a settlement quote.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SettlementQuote {
@@ -103,14 +95,12 @@ pub struct SettlementQuote {
     /// Effective safety margin (base + volatility) in basis points.
     pub effective_epsilon_bps: u16,
 }
-
 /// Deterministic XOR settlement engine.
 #[derive(Debug, Clone)]
 pub struct SettlementEngine {
     calculator: ShadowPriceCalculator,
     buffer_policy: BufferPolicy,
 }
-
 fn duration_from_std(duration: std::time::Duration) -> TimeDuration {
     let secs = i64::try_from(duration.as_secs()).unwrap_or(i64::MAX);
     let mut converted = TimeDuration::seconds(secs);
@@ -119,7 +109,6 @@ fn duration_from_std(duration: std::time::Duration) -> TimeDuration {
     }
     converted
 }
-
 impl SettlementEngine {
     /// Create an engine using roadmap defaults (60s TWAP, 25 bps margin,
     /// 72 h buffer horizon).  Used primarily in tests.
@@ -127,7 +116,6 @@ impl SettlementEngine {
     pub fn new_roadmap_default() -> Self {
         Self::from_router_config(&config::Router::default())
     }
-
     /// Create an engine from configuration provided via `iroha_config`.
     #[must_use]
     pub fn from_router_config(router: &config::Router) -> Self {
@@ -147,13 +135,11 @@ impl SettlementEngine {
             buffer_policy,
         }
     }
-
     /// Access the current buffer policy thresholds.
     #[must_use]
     pub const fn buffer_policy(&self) -> &BufferPolicy {
         &self.buffer_policy
     }
-
     /// Evaluate the remaining buffer against the configured guard rails.
     pub fn evaluate_buffer(
         &self,
@@ -162,13 +148,11 @@ impl SettlementEngine {
     ) -> Result<BufferStatus, BufferPolicyError> {
         self.buffer_policy.evaluate(remaining, capacity)
     }
-
     /// Access the current settlement configuration used by this engine.
     #[must_use]
     pub const fn config(&self) -> &SettlementConfig {
         self.calculator.config()
     }
-
     /// Quote a settlement from an exact local gas-token amount, a positive
     /// local-token-per-XOR TWAP, and the conversion path's liquidity profile.
     ///
@@ -193,14 +177,12 @@ impl SettlementEngine {
             volatility,
         )?;
         let effective_epsilon_bps = self.calculator.effective_epsilon_bps(volatility);
-
         let receipt = SettlementReceipt::new_with_timestamp_ms(
             source_id,
             local_amount,
             &shadow,
             timestamp_ms,
         )?;
-
         Ok(SettlementQuote {
             xor_due: shadow.xor_due,
             xor_after_haircut: shadow.xor_with_haircut,
@@ -209,7 +191,6 @@ impl SettlementEngine {
         })
     }
 }
-
 /// Pending settlement record keyed by transaction hash.
 #[derive(Debug, Clone)]
 pub struct PendingSettlement {
@@ -240,7 +221,6 @@ pub struct PendingSettlement {
     /// UTC timestamp for the oracle price sample used during quoting (milliseconds).
     pub oracle_timestamp_ms: u64,
 }
-
 /// Nexus fee receipt staged during transaction execution before lane routing is known.
 #[derive(Debug, Clone)]
 pub struct PendingNexusFeeReceipt {
@@ -259,7 +239,6 @@ pub struct PendingNexusFeeReceipt {
     /// Fee schedule inputs used to compute [`Self::fee_amount`].
     pub schedule: NexusFeeScheduleInputs,
 }
-
 impl PendingNexusFeeReceipt {
     /// Bind the pending receipt to the finalized lane block coordinates.
     #[must_use]
@@ -284,7 +263,6 @@ impl PendingNexusFeeReceipt {
         }
     }
 }
-
 impl PendingSettlement {
     /// Convert the pending record into a lane-level settlement receipt.
     #[must_use]
@@ -299,20 +277,17 @@ impl PendingSettlement {
         }
     }
 }
-
 /// Accumulates settlement receipts for transactions processed in the current block.
 #[derive(Debug, Default, Clone)]
 pub struct SettlementAccumulator {
     records: BTreeMap<HashOf<SignedTransaction>, PendingSettlement>,
     nexus_fee_records: BTreeMap<HashOf<SignedTransaction>, PendingNexusFeeReceipt>,
 }
-
 impl SettlementAccumulator {
     /// Record a settlement receipt for the given transaction hash.
     pub fn record(&mut self, tx_hash: HashOf<SignedTransaction>, record: PendingSettlement) {
         self.records.insert(tx_hash, record);
     }
-
     /// Record a Nexus fee receipt for the given transaction hash.
     pub fn record_nexus_fee(
         &mut self,
@@ -321,43 +296,35 @@ impl SettlementAccumulator {
     ) {
         self.nexus_fee_records.insert(tx_hash, record);
     }
-
     /// Iterate accumulated Nexus fee receipts without draining them.
     pub fn nexus_fee_records(
         &self,
     ) -> impl Iterator<Item = (&HashOf<SignedTransaction>, &PendingNexusFeeReceipt)> {
         self.nexus_fee_records.iter()
     }
-
     /// Drain the accumulated receipts, returning ownership of the internal map.
     pub fn drain(&mut self) -> BTreeMap<HashOf<SignedTransaction>, PendingSettlement> {
         core::mem::take(&mut self.records)
     }
-
     /// Drain accumulated Nexus fee receipts.
     pub fn drain_nexus_fees(
         &mut self,
     ) -> BTreeMap<HashOf<SignedTransaction>, PendingNexusFeeReceipt> {
         core::mem::take(&mut self.nexus_fee_records)
     }
-
     /// Whether the accumulator currently stores no receipts.
     pub fn is_empty(&self) -> bool {
         self.records.is_empty() && self.nexus_fee_records.is_empty()
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::Hash;
     use iroha_data_model::domain::DomainId;
-
     use super::*;
-
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
     }
-
     #[test]
     fn quote_roadmap_defaults() {
         let engine = SettlementEngine::new_roadmap_default();
@@ -371,23 +338,19 @@ mod tests {
                 1,
             )
             .expect("quote must succeed");
-
         assert!(quote.xor_due > XorQuantity::zero());
         assert!(quote.xor_after_haircut <= quote.xor_due);
         assert_eq!(quote.receipt.local_amount, Quantity::from(2_000_000_u64));
         assert_eq!(quote.effective_epsilon_bps, 25);
     }
-
     #[test]
     fn micro_unit_quantity_conversion_is_exact_and_canonical() {
         let quantity = quantity_from_micro_units(2_000_000);
         assert_eq!(quantity, "2".parse().expect("valid quantity"));
         assert_eq!(quantity_to_micro_units(&quantity), Ok(2_000_000));
-
         let fractional: Quantity = "0.000001".parse().expect("valid quantity");
         assert_eq!(quantity_to_micro_units(&fractional), Ok(1));
     }
-
     #[test]
     fn micro_unit_projection_rejects_sub_micro_and_overflow() {
         let sub_micro: Quantity = "0.0000001".parse().expect("valid quantity");
@@ -395,7 +358,6 @@ mod tests {
             quantity_to_micro_units(&sub_micro),
             Err("quantity has precision below one micro-unit")
         );
-
         let too_large: Quantity = "340282366920938463463374607431768211456"
             .parse()
             .expect("bounded quantity exceeds u128 but fits 512 bits");
@@ -404,7 +366,6 @@ mod tests {
             Err("quantity exceeds u128 micro-unit bounds")
         );
     }
-
     #[test]
     fn telemetry_micro_unit_projection_saturates_inexact_and_wide_values() {
         let sub_micro: Quantity = "0.0000001".parse().expect("valid quantity");
@@ -412,7 +373,6 @@ mod tests {
             quantity_to_micro_units_saturating_for_telemetry(&sub_micro),
             u128::MAX
         );
-
         let too_large: Quantity = "340282366920938463463374607431768211456"
             .parse()
             .expect("bounded quantity exceeds u128 but fits 512 bits");
@@ -421,7 +381,6 @@ mod tests {
             u128::MAX
         );
     }
-
     #[test]
     fn non_positive_twap_errors() {
         let engine = SettlementEngine::new_roadmap_default();
@@ -439,7 +398,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn accumulator_records_and_drains() {
         let mut accumulator = SettlementAccumulator::default();
@@ -477,12 +435,10 @@ mod tests {
         assert_eq!(receipt.source_id, record_copy.source_id);
         assert_eq!(receipt.xor_variance, record_copy.xor_variance);
     }
-
     #[test]
     fn evaluate_buffer_matches_policy_thresholds() {
         let engine = SettlementEngine::new_roadmap_default();
         let capacity = xor("1000000");
-
         assert_eq!(
             engine.evaluate_buffer(&xor("2000000"), &capacity),
             Ok(BufferStatus::Normal)
@@ -504,7 +460,6 @@ mod tests {
             Ok(BufferStatus::Halt)
         );
     }
-
     #[test]
     fn engine_from_router_config_applies_knobs() {
         let router = config::Router {
@@ -516,7 +471,6 @@ mod tests {
             twap_window: std::time::Duration::from_secs(90),
             buffer_horizon_hours: 96,
         };
-
         let engine = SettlementEngine::from_router_config(&router);
         assert_eq!(engine.config().epsilon.as_u16(), 75);
         assert_eq!(

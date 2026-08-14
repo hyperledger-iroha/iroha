@@ -4,9 +4,10 @@
 //! so that runtime components can verify `KeyUpdate`/`ContentKeyUpdate` frames,
 //! derive transport keys, and unwrap Group Content Keys (GCKs) while enforcing
 //! the monotonic counter and suite invariants mandated by the spec.
-
-use std::{cmp, convert::TryInto, fmt};
-
+use crate::{
+    Algorithm, KeyPair, PrivateKey, PublicKey, SessionKey, Signature,
+    kex::is_x25519_low_order_public_key, signature::ed25519::Ed25519Sha512,
+};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     core::DecodeFromSlice,
@@ -26,15 +27,10 @@ use sha3::{Digest, Sha3_256};
 use soranet_pq::{
     MlKemError, MlKemSuite, decapsulate_mlkem, encapsulate_mlkem_from_os, validate_mlkem_key_pair,
 };
+use std::{cmp, convert::TryInto, fmt};
 use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
-
-use crate::{
-    Algorithm, KeyPair, PrivateKey, PublicKey, SessionKey, Signature,
-    kex::is_x25519_low_order_public_key, signature::ed25519::Ed25519Sha512,
-};
-
 const SNAPSHOT_KEY_DOMAIN: &[u8] = b"iroha.streaming.snapshot-key";
 const FEEDBACK_FP_SHIFT: u32 = 16;
 const FEEDBACK_ALPHA_FP: u32 = 13_107;
@@ -47,7 +43,6 @@ const FEEDBACK_MAX_LOSS_Q16: u32 = 1u32 << FEEDBACK_FP_SHIFT;
 const GROUP_CONTENT_KEY_LEN: usize = 32;
 /// Default ML-KEM suite used for streaming key material when no explicit override is configured.
 pub const STREAMING_DEFAULT_KEM_SUITE: MlKemSuite = MlKemSuite::MlKem768;
-
 fn mlkem_suite_to_id(suite: MlKemSuite) -> u8 {
     match suite {
         MlKemSuite::MlKem512 => 0,
@@ -55,7 +50,6 @@ fn mlkem_suite_to_id(suite: MlKemSuite) -> u8 {
         MlKemSuite::MlKem1024 => 2,
     }
 }
-
 fn mlkem_suite_from_id(id: u8) -> Option<MlKemSuite> {
     match id {
         0 => Some(MlKemSuite::MlKem512),
@@ -64,7 +58,6 @@ fn mlkem_suite_from_id(id: u8) -> Option<MlKemSuite> {
         _ => None,
     }
 }
-
 /// Errors that can occur while processing streaming handshake frames.
 #[derive(Debug, Error)]
 pub enum HandshakeError {
@@ -196,9 +189,7 @@ pub enum HandshakeError {
     #[error("key update signing failed")]
     Signing(#[source] crate::Error),
 }
-
 const KYBER_FINGERPRINT_DOMAIN: &[u8] = b"nsc_kyber_pk";
-
 /// Errors that can occur while preparing local streaming key material.
 #[derive(Debug, Error)]
 pub enum KeyMaterialError {
@@ -234,7 +225,6 @@ pub enum KeyMaterialError {
     #[error(transparent)]
     Handshake(HandshakeError),
 }
-
 impl From<HandshakeError> for KeyMaterialError {
     fn from(err: HandshakeError) -> Self {
         match err {
@@ -251,7 +241,6 @@ impl From<HandshakeError> for KeyMaterialError {
         }
     }
 }
-
 fn key_material_error_from_mlkem(err: &MlKemError) -> KeyMaterialError {
     match err {
         MlKemError::KeyPairMismatch { .. } | MlKemError::KeyPairPublicHashMismatch { .. } => {
@@ -264,7 +253,6 @@ fn key_material_error_from_mlkem(err: &MlKemError) -> KeyMaterialError {
         | MlKemError::Rng(_) => KeyMaterialError::InvalidKyberSecretKey,
     }
 }
-
 fn handshake_error_from_mlkem(err: &MlKemError) -> HandshakeError {
     match err {
         MlKemError::KeyPairMismatch { .. } | MlKemError::KeyPairPublicHashMismatch { .. } => {
@@ -277,7 +265,6 @@ fn handshake_error_from_mlkem(err: &MlKemError) -> HandshakeError {
         | MlKemError::Rng(_) => HandshakeError::InvalidKyberSecretKey,
     }
 }
-
 /// Runtime-owned key material used to drive the control-plane handshake.
 #[derive(Clone, Debug)]
 pub struct StreamingKeyMaterial {
@@ -287,7 +274,6 @@ pub struct StreamingKeyMaterial {
     kyber_fingerprint: Option<Hash>,
     kem_suite: MlKemSuite,
 }
-
 impl StreamingKeyMaterial {
     /// Construct a new key-material bundle from an identity key pair.
     ///
@@ -309,12 +295,10 @@ impl StreamingKeyMaterial {
             kem_suite: STREAMING_DEFAULT_KEM_SUITE,
         })
     }
-
     /// Return the configured Ed25519 identity key pair.
     pub fn identity(&self) -> &KeyPair {
         &self.identity
     }
-
     /// Record the Kyber key pair used for HPKE interactions.
     ///
     /// # Errors
@@ -338,7 +322,6 @@ impl StreamingKeyMaterial {
             .map_err(|_| KeyMaterialError::InvalidKyberPublicKey)?;
         validate_kyber_public_not_all_zero(public_key)
             .map_err(|()| KeyMaterialError::InvalidKyberPublicKey)?;
-
         let expected_secret = self.kem_suite.secret_key_len();
         if secret_key.len() != expected_secret {
             return Err(KeyMaterialError::InvalidKyberSecretKeyLength {
@@ -353,35 +336,29 @@ impl StreamingKeyMaterial {
             .map_err(|()| KeyMaterialError::InvalidKyberSecretKey)?;
         validate_mlkem_key_pair(self.kem_suite, public_key, secret_key)
             .map_err(|err| key_material_error_from_mlkem(&err))?;
-
         let fingerprint = fingerprint_kyber_public(public_key, self.kem_suite);
         self.kyber_fingerprint = Some(fingerprint);
         self.kyber_public = Some(public_key.to_vec());
         self.kyber_secret = Some(Zeroizing::new(secret_key.to_vec()));
         Ok(())
     }
-
     /// Return the configured Kyber public key bytes, if present.
     pub fn kyber_public(&self) -> Option<&[u8]> {
         self.kyber_public.as_deref()
     }
-
     /// Return the configured Kyber secret key bytes, if present.
     pub fn kyber_secret(&self) -> Option<&[u8]> {
         self.kyber_secret.as_ref().map(|secret| secret.as_slice())
     }
-
     /// Return the fingerprint associated with the configured Kyber public key.
     pub fn kyber_fingerprint(&self) -> Option<Hash> {
         self.kyber_fingerprint
     }
-
     /// Return the ML-KEM suite configured for streaming HPKE.
     #[must_use]
     pub fn kem_suite(&self) -> MlKemSuite {
         self.kem_suite
     }
-
     /// Override the ML-KEM suite used for streaming HPKE. Existing key material is cleared when
     /// the suite changes so callers must provide fresh public/secret bytes for the new profile.
     pub fn set_kem_suite(&mut self, suite: MlKemSuite) {
@@ -392,7 +369,6 @@ impl StreamingKeyMaterial {
         }
         self.kem_suite = suite;
     }
-
     /// Install local key material onto a [`StreamingSession`], enabling HPKE decapsulation.
     ///
     /// Sessions that do not require Kyber support can call this without previously configuring
@@ -420,7 +396,6 @@ impl StreamingKeyMaterial {
         }
         Ok(())
     }
-
     /// Convenience wrapper around [`StreamingSession::build_key_update`] using the stored identity.
     ///
     /// # Errors
@@ -444,7 +419,6 @@ impl StreamingKeyMaterial {
             self.identity.private_key(),
         )
     }
-
     /// Derive the symmetric session key used to encrypt streaming snapshots.
     #[must_use]
     pub fn snapshot_session_key(&self) -> SessionKey {
@@ -456,7 +430,6 @@ impl StreamingKeyMaterial {
         SessionKey::from_zeroizing_vec(Zeroizing::new(hasher.finalize().to_vec()))
     }
 }
-
 /// Compute the Kyber fingerprint advertised inside `EncryptionSuite::Kyber768XChaCha20Poly1305`.
 ///
 /// # Errors
@@ -466,7 +439,6 @@ impl StreamingKeyMaterial {
 pub fn kyber_public_fingerprint(public_key: &[u8]) -> Result<Hash, KeyMaterialError> {
     kyber_public_fingerprint_with_suite(public_key, STREAMING_DEFAULT_KEM_SUITE)
 }
-
 /// Compute the Kyber fingerprint for the provided suite.
 ///
 /// # Errors
@@ -491,7 +463,6 @@ pub fn kyber_public_fingerprint_with_suite(
         .map_err(|()| KeyMaterialError::InvalidKyberPublicKey)?;
     Ok(fingerprint_kyber_public(public_key, suite))
 }
-
 fn fingerprint_kyber_public(bytes: &[u8], _suite: MlKemSuite) -> Hash {
     let mut hasher = Sha3_256::new();
     hasher.update(KYBER_FINGERPRINT_DOMAIN);
@@ -501,32 +472,27 @@ fn fingerprint_kyber_public(bytes: &[u8], _suite: MlKemSuite) -> Hash {
     out.copy_from_slice(&digest);
     out
 }
-
 fn validate_kyber_public_not_all_zero(public_key: &[u8]) -> Result<(), ()> {
     if public_key.iter().all(|&byte| byte == 0) {
         return Err(());
     }
     Ok(())
 }
-
 fn validate_kyber_secret_not_all_zero(secret_key: &[u8]) -> Result<(), ()> {
     if secret_key.iter().all(|&byte| byte == 0) {
         return Err(());
     }
     Ok(())
 }
-
 #[derive(Clone)]
 enum EphemeralState {
     X25519(X25519Ephemeral),
 }
-
 #[derive(Clone, Copy)]
 enum EphemeralMechanism<'suite> {
     X25519,
     Kyber768 { fingerprint: &'suite Hash },
 }
-
 fn suite_ephemeral_mechanism(
     suite: &EncryptionSuite,
 ) -> Result<EphemeralMechanism<'_>, StreamingCryptoError> {
@@ -538,16 +504,13 @@ fn suite_ephemeral_mechanism(
         Err(StreamingCryptoError::UnsupportedSuite)
     }
 }
-
 #[derive(Clone)]
 struct X25519Ephemeral {
     secret: StaticSecret,
     public: [u8; 32],
 }
-
 type EphemeralSharedSecret = Zeroizing<[u8; 32]>;
 type OutboundEphemeralMaterial = (Vec<u8>, Option<EphemeralSharedSecret>);
-
 fn fill_random_streaming<R>(
     rng: &mut R,
     operation: &'static str,
@@ -563,7 +526,6 @@ where
     }
     Ok(())
 }
-
 fn random_gck_nonce_from_rng<R>(rng: &mut R, nonce_len: usize) -> Result<Vec<u8>, HandshakeError>
 where
     R: TryRngCore<Error = OsError>,
@@ -572,12 +534,10 @@ where
     fill_random_streaming(rng, "GCK wrap nonce", &mut nonce)?;
     Ok(nonce)
 }
-
 impl X25519Ephemeral {
     fn new_random() -> Result<Self, HandshakeError> {
         Self::new_random_from_rng(&mut OsRng)
     }
-
     fn new_random_from_rng<R>(rng: &mut R) -> Result<Self, HandshakeError>
     where
         R: TryRngCore<Error = OsError>,
@@ -587,12 +547,10 @@ impl X25519Ephemeral {
         let secret = StaticSecret::from(*secret_bytes);
         Ok(Self::from_secret(secret))
     }
-
     fn from_secret(secret: StaticSecret) -> Self {
         let public = X25519PublicKey::from(&secret).to_bytes();
         Self { secret, public }
     }
-
     fn shared_secret(
         &self,
         peer: &X25519PublicKey,
@@ -606,7 +564,6 @@ impl X25519Ephemeral {
         Ok(out)
     }
 }
-
 fn decode_x25519_ephemeral_public_key(bytes: [u8; 32]) -> Result<X25519PublicKey, HandshakeError> {
     let public_key = X25519PublicKey::from(bytes);
     if is_x25519_low_order_public_key(&public_key) {
@@ -614,7 +571,6 @@ fn decode_x25519_ephemeral_public_key(bytes: [u8; 32]) -> Result<X25519PublicKey
     }
     Ok(public_key)
 }
-
 /// In-memory state machine for a single NSC control-stream pairing.
 #[derive(Clone)]
 pub struct StreamingSession {
@@ -641,7 +597,6 @@ pub struct StreamingSession {
     kyber_local_secret: Option<Zeroizing<Vec<u8>>>,
     kem_suite: MlKemSuite,
 }
-
 /// Persistable view of the resolved transport capabilities.
 #[derive(Copy, Clone, Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct TransportCapabilityResolutionSnapshot {
@@ -656,7 +611,6 @@ pub struct TransportCapabilityResolutionSnapshot {
     /// Privacy bucket granularity advertised for telemetry.
     pub privacy_bucket_granularity: PrivacyBucketGranularity,
 }
-
 impl From<&TransportCapabilityResolution> for TransportCapabilityResolutionSnapshot {
     fn from(resolution: &TransportCapabilityResolution) -> Self {
         Self {
@@ -668,7 +622,6 @@ impl From<&TransportCapabilityResolution> for TransportCapabilityResolutionSnaps
         }
     }
 }
-
 impl From<TransportCapabilityResolutionSnapshot> for TransportCapabilityResolution {
     fn from(snapshot: TransportCapabilityResolutionSnapshot) -> Self {
         Self {
@@ -680,13 +633,11 @@ impl From<TransportCapabilityResolutionSnapshot> for TransportCapabilityResoluti
         }
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for TransportCapabilityResolutionSnapshot {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
         norito::core::decode_field_canonical::<TransportCapabilityResolutionSnapshot>(bytes)
     }
 }
-
 /// Minimal persistence snapshot for resuming streaming sessions after restarts.
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct StreamingSessionSnapshot {
@@ -725,17 +676,14 @@ pub struct StreamingSessionSnapshot {
     #[norito(default)]
     pub kyber_local_fingerprint: Option<Hash>,
 }
-
 impl<'a> DecodeFromSlice<'a> for StreamingSessionSnapshot {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
         norito::core::decode_field_canonical::<StreamingSessionSnapshot>(bytes)
     }
 }
-
 #[cfg(test)]
 mod snapshot_tests {
     use super::*;
-
     #[test]
     fn streaming_session_snapshot_decode_roundtrip() {
         let snapshot = StreamingSessionSnapshot {
@@ -762,7 +710,6 @@ mod snapshot_tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, snapshot);
     }
-
     #[test]
     fn streaming_session_snapshot_rejects_invalid_payload() {
         let err = StreamingSessionSnapshot::decode_from_slice(b"invalid payload")
@@ -773,7 +720,6 @@ mod snapshot_tests {
         ));
     }
 }
-
 /// Snapshot of feedback-processing state captured for telemetry/reporting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FeedbackStateSnapshot {
@@ -798,7 +744,6 @@ pub struct FeedbackStateSnapshot {
     /// Latest RTT observation reported by the viewer (milliseconds).
     pub observed_rtt_ms: u16,
 }
-
 #[derive(Clone, Debug, Default)]
 struct FeedbackState {
     stream_id: Option<Hash>,
@@ -814,7 +759,6 @@ struct FeedbackState {
     latency_gradient_q16: i32,
     observed_rtt_ms: u16,
 }
-
 /// Persisted view of the session rekey cadence.
 #[derive(Clone, Copy, Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct SessionCadenceSnapshot {
@@ -823,26 +767,22 @@ pub struct SessionCadenceSnapshot {
     /// Total payload bytes transmitted since session start.
     pub total_payload_bytes: u64,
 }
-
 impl<'a> DecodeFromSlice<'a> for SessionCadenceSnapshot {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
         norito::core::decode_field_canonical::<SessionCadenceSnapshot>(bytes)
     }
 }
-
 /// Deterministic cadence tracker used to decide when rekeys must be emitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SessionCadence {
     started_at_ms: u64,
     total_payload_bytes: u64,
 }
-
 impl SessionCadence {
     /// Maximum payload budget per HPKE key (64 MiB).
     pub const PAYLOAD_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
     /// Maximum wall-clock budget per HPKE key (5 minutes).
     pub const DURATION_BUDGET_MS: u64 = 300_000;
-
     /// Construct a new cadence tracker starting at the given millisecond timestamp.
     #[must_use]
     pub const fn new(started_at_ms: u64) -> Self {
@@ -851,29 +791,24 @@ impl SessionCadence {
             total_payload_bytes: 0,
         }
     }
-
     /// Return the session start timestamp the cadence is anchored to.
     #[must_use]
     pub const fn started_at_ms(&self) -> u64 {
         self.started_at_ms
     }
-
     /// Return the cumulative payload bytes accounted for by this cadence.
     #[must_use]
     pub const fn total_payload_bytes(&self) -> u64 {
         self.total_payload_bytes
     }
-
     /// Record additional payload bytes emitted while using the current transport keys.
     pub fn record_payload_bytes(&mut self, bytes: u64) {
         self.total_payload_bytes = self.total_payload_bytes.saturating_add(bytes);
     }
-
     /// Overwrite the cumulative payload counter (e.g., after snapshot restoration).
     pub fn set_total_payload_bytes(&mut self, total: u64) {
         self.total_payload_bytes = total;
     }
-
     /// Compute the minimum `KeyUpdate.key_counter` required at `now_ms`.
     ///
     /// The counter grows whenever the cumulative payload crosses a 64 MiB boundary or the
@@ -885,7 +820,6 @@ impl SessionCadence {
         let time_rekeys = Self::div_ceil(elapsed_ms, Self::DURATION_BUDGET_MS);
         cmp::max(1, payload_rekeys.max(time_rekeys))
     }
-
     /// Produce a snapshot suitable for persistence.
     #[must_use]
     pub const fn snapshot(&self) -> SessionCadenceSnapshot {
@@ -894,7 +828,6 @@ impl SessionCadence {
             total_payload_bytes: self.total_payload_bytes,
         }
     }
-
     /// Reconstruct a cadence tracker from a previously recorded snapshot.
     #[must_use]
     pub const fn from_snapshot(snapshot: SessionCadenceSnapshot) -> Self {
@@ -903,7 +836,6 @@ impl SessionCadence {
             total_payload_bytes: snapshot.total_payload_bytes,
         }
     }
-
     const fn div_ceil(value: u64, divisor: u64) -> u64 {
         debug_assert!(divisor > 0, "cadence divisor must be non-zero");
         if value == 0 {
@@ -913,7 +845,6 @@ impl SessionCadence {
         }
     }
 }
-
 impl fmt::Debug for StreamingSession {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StreamingSession")
@@ -946,7 +877,6 @@ impl fmt::Debug for StreamingSession {
             .finish()
     }
 }
-
 impl StreamingSession {
     /// Create a new session state machine for the given endpoint role.
     pub fn new(role: CapabilityRole) -> Self {
@@ -973,7 +903,6 @@ impl StreamingSession {
             kem_suite: STREAMING_DEFAULT_KEM_SUITE,
         }
     }
-
     /// Override the ML-KEM suite used when negotiating HPKE material for this session.
     pub fn set_kem_suite(&mut self, suite: MlKemSuite) {
         if self.kem_suite != suite {
@@ -985,7 +914,6 @@ impl StreamingSession {
         }
         self.kem_suite = suite;
     }
-
     fn reset_for_new_session(&mut self) {
         self.session_id = None;
         self.key_state = KeyUpdateState::default();
@@ -1000,37 +928,30 @@ impl StreamingSession {
         self.negotiated_capabilities = None;
         self.feedback = FeedbackState::default();
     }
-
     /// Return the endpoint role associated with this session.
     pub fn role(&self) -> CapabilityRole {
         self.role
     }
-
     /// Return the negotiated encryption suite, if one has been recorded.
     pub fn negotiated_suite(&self) -> Option<&EncryptionSuite> {
         self.suite.as_ref()
     }
-
     /// Return the derived transport keys, if the handshake has completed.
     pub fn transport_keys(&self) -> Option<&TransportKeys> {
         self.transport_keys.as_ref()
     }
-
     /// Return the negotiated transport capability resolution, if recorded.
     pub fn transport_capabilities(&self) -> Option<&TransportCapabilityResolution> {
         self.transport_resolution.as_ref()
     }
-
     /// Return the hash of the negotiated transport capabilities.
     pub fn transport_capabilities_hash(&self) -> Option<Hash> {
         self.transport_capabilities_hash
     }
-
     /// Return the negotiated feature flags for this session, if any.
     pub fn capabilities(&self) -> Option<CapabilityFlags> {
         self.negotiated_capabilities
     }
-
     /// Record the resolved transport capability negotiation.
     ///
     /// # Errors
@@ -1047,22 +968,18 @@ impl StreamingSession {
         self.transport_resolution = Some(resolution);
         Ok(())
     }
-
     /// Record the accepted capability feature flags.
     pub fn record_capabilities(&mut self, capabilities: CapabilityFlags) {
         self.negotiated_capabilities = Some(capabilities);
     }
-
     /// Return the Session Transport Secret (STS) root derived from the last key update.
     pub fn sts_root(&self) -> Option<&[u8; 32]> {
         self.sts_root.as_ref()
     }
-
     /// Return the most recently unwrapped Group Content Key (GCK), if available.
     pub fn latest_gck(&self) -> Option<&[u8]> {
         self.latest_gck.as_deref()
     }
-
     /// Record a feedback hint and update EWMA/loss state.
     ///
     /// # Errors
@@ -1091,7 +1008,6 @@ impl StreamingSession {
         );
         Ok(())
     }
-
     /// Record a receiver report and return the parity decision for the current window.
     ///
     /// # Errors
@@ -1109,7 +1025,6 @@ impl StreamingSession {
         feedback.last_delivered_sequence = Some(report.delivered_sequence);
         feedback.latest_parity_applied = Some(report.parity_applied.min(MAX_PARITY_CHUNKS));
         feedback.latest_fec_budget = Some(report.fec_budget.min(MAX_PARITY_CHUNKS));
-
         let loss_fp = feedback
             .loss_ewma_q16
             .or_else(|| loss_percent_to_q16(report.loss_percent_x100))
@@ -1123,12 +1038,10 @@ impl StreamingSession {
         feedback.parity_chunks = feedback.parity_chunks.max(parity);
         Ok(parity)
     }
-
     /// Return the latest parity derived from feedback state.
     pub fn latest_feedback_parity(&self) -> Option<u8> {
         self.feedback.latest_parity
     }
-
     /// Produce a snapshot of the feedback state for persistence/telemetry.
     pub fn feedback_snapshot(&self) -> Option<FeedbackStateSnapshot> {
         if self.feedback.hints_received == 0
@@ -1140,22 +1053,18 @@ impl StreamingSession {
             Some(self.feedback.snapshot())
         }
     }
-
     /// Return the cadence tracker associated with this session, if one is installed.
     pub fn cadence(&self) -> Option<&SessionCadence> {
         self.cadence.as_ref()
     }
-
     /// Return a mutable reference to the cadence tracker, if one is installed.
     pub fn cadence_mut(&mut self) -> Option<&mut SessionCadence> {
         self.cadence.as_mut()
     }
-
     /// Replace the cadence tracker for this session.
     pub fn set_cadence(&mut self, cadence: SessionCadence) {
         self.cadence = Some(cadence);
     }
-
     /// Capture the current handshake state so it can be persisted and restored later.
     pub fn snapshot_state(&self) -> Option<StreamingSessionSnapshot> {
         let session_id = self.session_id?;
@@ -1184,7 +1093,6 @@ impl StreamingSession {
             kyber_local_fingerprint: self.kyber_local_fingerprint,
         })
     }
-
     /// Restore a previously snapshotted handshake state, replacing the current context.
     ///
     /// # Errors
@@ -1214,14 +1122,12 @@ impl StreamingSession {
             kyber_local_public,
             kyber_local_fingerprint,
         } = snapshot;
-
         if role != self.role {
             return Err(HandshakeError::RoleMismatch {
                 expected: self.role,
                 found: role,
             });
         }
-
         Self::validate_snapshot_key_counter(key_counter)?;
         Self::validate_snapshot_content_key_fields(
             latest_gck.as_deref(),
@@ -1272,7 +1178,6 @@ impl StreamingSession {
         let transport_capabilities_hash = transport_resolution
             .as_ref()
             .map(TransportCapabilityResolution::capabilities_hash);
-
         self.reset_for_new_session();
         self.session_id = Some(session_id);
         self.key_state.restore(Some(key_counter), Some(suite))?;
@@ -1293,7 +1198,6 @@ impl StreamingSession {
         self.kyber_local_fingerprint = restored_kyber_local_fingerprint;
         Ok(())
     }
-
     fn validate_snapshot_key_counter(key_counter: u64) -> Result<(), HandshakeError> {
         if key_counter == 0 {
             return Err(HandshakeError::InvalidSnapshot(
@@ -1302,7 +1206,6 @@ impl StreamingSession {
         }
         Ok(())
     }
-
     fn validate_snapshot_content_key_fields(
         latest_gck: Option<&[u8]>,
         last_content_key_id: Option<u64>,
@@ -1321,7 +1224,6 @@ impl StreamingSession {
             "content key metadata must be all present or all absent",
         ))
     }
-
     fn validate_snapshot_transport_capabilities(
         snapshot: Option<TransportCapabilityResolutionSnapshot>,
     ) -> Result<Option<TransportCapabilityResolution>, HandshakeError> {
@@ -1337,7 +1239,6 @@ impl StreamingSession {
         .map_err(HandshakeError::InvalidSnapshot)?;
         Ok(Some(resolution))
     }
-
     fn validate_transport_capabilities(
         resolution: TransportCapabilityResolution,
     ) -> Result<(), HandshakeError> {
@@ -1348,7 +1249,6 @@ impl StreamingSession {
         )
         .map_err(HandshakeError::InvalidTransportCapabilities)
     }
-
     fn validate_transport_capability_shape(
         resolution: TransportCapabilityResolution,
         datagram_without_size: &'static str,
@@ -1363,7 +1263,6 @@ impl StreamingSession {
         }
         Ok(())
     }
-
     fn validate_group_content_key_len(gck: &[u8]) -> Result<(), HandshakeError> {
         if gck.len() != GROUP_CONTENT_KEY_LEN {
             return Err(HandshakeError::InvalidGroupContentKeyLength {
@@ -1373,7 +1272,6 @@ impl StreamingSession {
         }
         Ok(())
     }
-
     fn validate_snapshot_kyber_remote_fields(
         kem_suite: MlKemSuite,
         kyber_remote_public: Option<Vec<u8>>,
@@ -1386,7 +1284,6 @@ impl StreamingSession {
             "kyber remote metadata must be all present or all absent",
         )
     }
-
     fn validate_snapshot_kyber_local_fields(
         kem_suite: MlKemSuite,
         kyber_local_public: Option<Vec<u8>>,
@@ -1399,7 +1296,6 @@ impl StreamingSession {
             "kyber local metadata must be all present or all absent",
         )
     }
-
     fn validate_snapshot_kyber_key_fields(
         kem_suite: MlKemSuite,
         kyber_public: Option<Vec<u8>>,
@@ -1433,7 +1329,6 @@ impl StreamingSession {
             _ => Err(HandshakeError::InvalidSnapshot(partial_error)),
         }
     }
-
     fn validate_snapshot_kyber_local_secret_binding(
         kem_suite: MlKemSuite,
         kyber_local: Option<&(Vec<u8>, Hash)>,
@@ -1447,7 +1342,6 @@ impl StreamingSession {
             .map_err(|err| handshake_error_from_mlkem(&err))?;
         Ok(())
     }
-
     fn validate_snapshot_suite_kem_binding(
         suite: &EncryptionSuite,
         kem_suite: MlKemSuite,
@@ -1476,7 +1370,6 @@ impl StreamingSession {
         }
         Ok(())
     }
-
     /// Return the local ephemeral public key for the negotiated suite, generating it if needed.
     ///
     /// For Kyber suites this returns the encapsulation ciphertext only. It does
@@ -1496,7 +1389,6 @@ impl StreamingSession {
         let (public, _shared_secret) = self.outbound_ephemeral_material(suite)?;
         Ok(public)
     }
-
     fn outbound_ephemeral_material(
         &mut self,
         suite: &EncryptionSuite,
@@ -1512,7 +1404,6 @@ impl StreamingSession {
             }
         }
     }
-
     /// Override the locally generated X25519 ephemeral key with a deterministic value.
     ///
     /// Returns the derived public key so callers can advertise it in outbound `KeyUpdate`
@@ -1537,7 +1428,6 @@ impl StreamingSession {
         self.local_ephemeral = Some(EphemeralState::X25519(eph));
         Ok(public)
     }
-
     /// Configure the remote Kyber public key expected for HPKE handshakes.
     ///
     /// # Errors
@@ -1574,7 +1464,6 @@ impl StreamingSession {
         self.kyber_remote_fingerprint = Some(fingerprint);
         Ok(())
     }
-
     /// Configure the local Kyber secret key used to decapsulate remote HPKE payloads.
     ///
     /// # Errors
@@ -1599,7 +1488,6 @@ impl StreamingSession {
         self.kyber_local_secret = Some(Zeroizing::new(secret_key.to_vec()));
         Ok(())
     }
-
     /// Configure the local Kyber key pair used for outbound identity binding and decapsulation.
     ///
     /// # Errors
@@ -1624,7 +1512,6 @@ impl StreamingSession {
         validate_kyber_public_not_all_zero(public_key)
             .map_err(|()| HandshakeError::InvalidKyberPublicKey)?;
         let fingerprint = fingerprint_kyber_public(public_key, self.kem_suite);
-
         let expected_secret_len = self.kem_suite.secret_key_len();
         if secret_key.len() != expected_secret_len {
             return Err(HandshakeError::InvalidKyberSecretKeyLength {
@@ -1639,13 +1526,11 @@ impl StreamingSession {
             .map_err(|()| HandshakeError::InvalidKyberSecretKey)?;
         validate_mlkem_key_pair(self.kem_suite, public_key, secret_key)
             .map_err(|err| handshake_error_from_mlkem(&err))?;
-
         self.kyber_local_public = Some(public_key.to_vec());
         self.kyber_local_fingerprint = Some(fingerprint);
         self.kyber_local_secret = Some(Zeroizing::new(secret_key.to_vec()));
         Ok(())
     }
-
     /// Construct a signed `KeyUpdate` frame for the provided session parameters.
     ///
     /// # Errors
@@ -1678,7 +1563,6 @@ impl StreamingSession {
         let transcript = key_update_transcript_bytes(&frame)?;
         let signature = Signature::try_new(signer, &transcript).map_err(HandshakeError::Signing)?;
         frame.signature.copy_from_slice(signature.payload());
-
         let transport_material = shared_secret
             .as_ref()
             .map(|shared| {
@@ -1688,7 +1572,6 @@ impl StreamingSession {
                 Ok::<_, HandshakeError>((sts_root, transport))
             })
             .transpose()?;
-
         self.record_outbound_key_update(session_id, suite, key_counter)?;
         if let Some((sts_root, transport)) = transport_material {
             self.sts_root = Some(sts_root);
@@ -1696,7 +1579,6 @@ impl StreamingSession {
         }
         Ok(frame)
     }
-
     fn record_outbound_key_update(
         &mut self,
         session_id: Hash,
@@ -1713,7 +1595,6 @@ impl StreamingSession {
         self.suite = Some(*suite);
         Ok(())
     }
-
     fn validate_outbound_key_counter(
         &self,
         session_id: Hash,
@@ -1734,7 +1615,6 @@ impl StreamingSession {
         }
         Ok(())
     }
-
     fn validate_key_update_protocol_version(protocol_version: u16) -> Result<(), HandshakeError> {
         if protocol_version == 0 {
             return Err(StreamingCryptoError::InvalidProtocolVersion {
@@ -1744,7 +1624,6 @@ impl StreamingSession {
         }
         Ok(())
     }
-
     /// Process a remote `KeyUpdate` frame, verifying its signature and updating transport keys.
     ///
     /// # Errors
@@ -1768,7 +1647,6 @@ impl StreamingSession {
             Ed25519Sha512::parse_public_key(pk_bytes).map_err(|_| HandshakeError::BadSignature)?;
         Ed25519Sha512::verify(&message, frame.signature.as_slice(), &verifying_key)
             .map_err(|_| HandshakeError::BadSignature)?;
-
         let session_changed = self.session_id != Some(frame.session_id);
         let suite = frame.suite;
         let mut next_key_state = if session_changed {
@@ -1779,7 +1657,6 @@ impl StreamingSession {
         next_key_state
             .record(frame)
             .map_err(Self::map_key_update_state_error)?;
-
         let shared_secret_bytes = match suite_ephemeral_mechanism(&suite)? {
             EphemeralMechanism::X25519 => {
                 const X25519_PUBLIC_LEN: usize = 32;
@@ -1797,11 +1674,9 @@ impl StreamingSession {
             EphemeralMechanism::Kyber768 { fingerprint } => self
                 .kyber_shared_secret_from_ciphertext(fingerprint, frame.pub_ephemeral.as_slice())?,
         };
-
         let sts_root = streaming_crypto::derive_sts_root(shared_secret_bytes.as_ref())?;
         let transport =
             streaming_crypto::derive_transport_keys_from_sts_root(&sts_root, self.role)?;
-
         if session_changed {
             self.reset_for_new_session();
             self.session_id = Some(frame.session_id);
@@ -1810,10 +1685,8 @@ impl StreamingSession {
         self.suite = Some(suite);
         self.sts_root = Some(sts_root);
         let transport = self.transport_keys.insert(transport);
-
         Ok(&*transport)
     }
-
     /// Process a remote `ContentKeyUpdate` frame, enforcing counter monotonicity and returning the
     /// decrypted GCK bytes.
     ///
@@ -1841,7 +1714,6 @@ impl StreamingSession {
             });
         }
         self.validate_content_key_progression(frame)?;
-
         let (nonce, ciphertext) = frame.gck_wrapped.split_at(nonce_len);
         let gck = streaming_crypto::unwrap_gck(
             &suite,
@@ -1857,7 +1729,6 @@ impl StreamingSession {
         self.latest_gck = Some(gck.clone());
         Ok(gck)
     }
-
     /// Construct a `ContentKeyUpdate` for the provided plaintext GCK and rotation metadata.
     ///
     /// # Errors
@@ -1898,14 +1769,12 @@ impl StreamingSession {
         self.latest_gck = Some(gck_plaintext.to_vec());
         Ok(update)
     }
-
     fn validate_content_key_progression(
         &self,
         frame: &ContentKeyUpdate,
     ) -> Result<(), HandshakeError> {
         self.validate_content_key_progression_values(frame.content_key_id, frame.valid_from_segment)
     }
-
     fn validate_content_key_progression_values(
         &self,
         content_key_id: u64,
@@ -1931,7 +1800,6 @@ impl StreamingSession {
         }
         Ok(())
     }
-
     fn map_group_content_key_error(err: StreamingCryptoError) -> HandshakeError {
         match err {
             StreamingCryptoError::InvalidGroupContentKeyLength { expected, found } => {
@@ -1940,7 +1808,6 @@ impl StreamingSession {
             other => other.into(),
         }
     }
-
     fn map_key_update_state_error(err: StreamingCryptoError) -> HandshakeError {
         match err {
             StreamingCryptoError::InvalidEphemeralPublicKey { expected, found } => {
@@ -1949,7 +1816,6 @@ impl StreamingSession {
             other => other.into(),
         }
     }
-
     fn ensure_x25519_ephemeral(&mut self) -> Result<&mut X25519Ephemeral, HandshakeError> {
         if self.local_ephemeral.is_none() {
             self.local_ephemeral = Some(EphemeralState::X25519(X25519Ephemeral::new_random()?));
@@ -1961,7 +1827,6 @@ impl StreamingSession {
             )),
         }
     }
-
     fn kyber_encapsulate(
         &self,
         _fingerprint: &Hash,
@@ -1987,7 +1852,6 @@ impl StreamingSession {
         secret_bytes.copy_from_slice(shared_secret.as_bytes());
         Ok((ciphertext.as_bytes().to_vec(), secret_bytes))
     }
-
     fn kyber_shared_secret_from_ciphertext(
         &self,
         fingerprint: &Hash,
@@ -2028,7 +1892,6 @@ impl StreamingSession {
         Ok(out)
     }
 }
-
 impl FeedbackState {
     fn record_stream_id(&mut self, stream_id: Hash) -> Result<(), HandshakeError> {
         match self.stream_id {
@@ -2045,7 +1908,6 @@ impl FeedbackState {
             }
         }
     }
-
     fn snapshot(&self) -> FeedbackStateSnapshot {
         FeedbackStateSnapshot {
             parity_chunks: self.parity_chunks,
@@ -2061,7 +1923,6 @@ impl FeedbackState {
         }
     }
 }
-
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn ewma_update(current: u32, sample: u32) -> u32 {
     if current == sample {
@@ -2076,11 +1937,9 @@ fn ewma_update(current: u32, sample: u32) -> u32 {
     }
     next.clamp(0, i64::from(u32::MAX)) as u32
 }
-
 fn clamp_feedback_loss_q16(loss_q16: u32) -> u32 {
     loss_q16.min(FEEDBACK_MAX_LOSS_Q16)
 }
-
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn loss_percent_to_q16(loss_percent_x100: u16) -> Option<u32> {
     let bounded_loss = loss_percent_x100.min(MAX_LOSS_PERCENT_X100);
@@ -2097,7 +1956,6 @@ fn loss_percent_to_q16(loss_percent_x100: u16) -> Option<u32> {
         Some(scaled as u32)
     }
 }
-
 #[allow(clippy::cast_possible_truncation)]
 fn parity_from_loss_fp(loss_fp: u32) -> u8 {
     let scaled = (u64::from(loss_fp) * 5) / 4;
@@ -2106,7 +1964,6 @@ fn parity_from_loss_fp(loss_fp: u32) -> u8 {
         .min(u64::from(MAX_PARITY_CHUNKS));
     parity as u8
 }
-
 /// Canonical Norito transcript used for signing and verifying `KeyUpdate` frames.
 #[derive(Clone, norito::derive::NoritoSerialize)]
 struct KeyUpdateTranscript {
@@ -2116,7 +1973,6 @@ struct KeyUpdateTranscript {
     pub_ephemeral: Vec<u8>,
     key_counter: u64,
 }
-
 /// Produce the canonical byte representation of a `KeyUpdate` frame used for signing.
 ///
 /// # Errors
@@ -2132,36 +1988,28 @@ pub fn key_update_transcript_bytes(frame: &KeyUpdate) -> Result<Vec<u8>, norito:
     };
     norito::to_bytes(&payload)
 }
-
 #[cfg(test)]
 mod key_update_tests {
-    use soranet_pq::generate_mlkem_keypair_from_os;
-
     use super::*;
-
+    use soranet_pq::generate_mlkem_keypair_from_os;
     fn mlkem_secret_embedded_public_range(suite: MlKemSuite) -> core::ops::Range<usize> {
         const PUBLIC_HASH_AND_REJECTION_SEED_BYTES: usize = 64;
-
         let start =
             suite.secret_key_len() - suite.public_key_len() - PUBLIC_HASH_AND_REJECTION_SEED_BYTES;
         start..start + suite.public_key_len()
     }
-
     fn mlkem_secret_embedded_public_hash_range(suite: MlKemSuite) -> core::ops::Range<usize> {
         const PUBLIC_KEY_HASH_BYTES: usize = 32;
         const PUBLIC_HASH_AND_REJECTION_SEED_BYTES: usize = 64;
-
         let start = suite.secret_key_len() - PUBLIC_HASH_AND_REJECTION_SEED_BYTES;
         start..start + PUBLIC_KEY_HASH_BYTES
     }
-
     fn mlkem_public_key_hash(public_key: &[u8]) -> [u8; 32] {
         let digest = Sha3_256::digest(public_key);
         let mut out = [0u8; 32];
         out.copy_from_slice(&digest);
         out
     }
-
     fn mlkem_secret_with_zero_embedded_public_key(secret_key: &[u8]) -> Vec<u8> {
         let suite = STREAMING_DEFAULT_KEM_SUITE;
         let mut mutated = secret_key.to_vec();
@@ -2171,11 +2019,9 @@ mod key_update_tests {
         mutated[mlkem_secret_embedded_public_hash_range(suite)].copy_from_slice(&public_hash);
         mutated
     }
-
     struct FixedTryRng {
         byte: u8,
     }
-
     const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
         0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
@@ -2188,40 +2034,31 @@ mod key_update_tests {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80,
     ];
-
     impl TryRngCore for FixedTryRng {
         type Error = OsError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Ok(u64::from_le_bytes([self.byte; 8]))
         }
-
         fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
             dest.fill(self.byte);
             Ok(())
         }
     }
-
     #[test]
     fn x25519_ephemeral_new_random_derives_nonzero_public_key() {
         let ephemeral = X25519Ephemeral::new_random().expect("random x25519 ephemeral");
-
         assert_ne!(ephemeral.public, [0u8; 32]);
     }
-
     #[test]
     fn x25519_ephemeral_new_random_rejects_all_zero_secret_material() {
         let mut rng = FixedTryRng { byte: 0 };
-
         let err = match X25519Ephemeral::new_random_from_rng(&mut rng) {
             Ok(_) => panic!("all-zero X25519 ephemeral secret must fail"),
             Err(err) => err,
         };
-
         match err {
             HandshakeError::InertRandomMaterial { operation } => {
                 assert_eq!(operation, "X25519 ephemeral secret");
@@ -2229,15 +2066,12 @@ mod key_update_tests {
             other => panic!("expected inert random material error, got {other:?}"),
         }
     }
-
     #[test]
     fn set_local_ephemeral_x25519_rejects_all_zero_secret_material() {
         let mut session = StreamingSession::new(CapabilityRole::Viewer);
-
         let err = session
             .set_local_ephemeral_x25519([0_u8; 32])
             .expect_err("all-zero deterministic X25519 ephemeral secret must fail");
-
         match err {
             HandshakeError::InertRandomMaterial { operation } => {
                 assert_eq!(operation, "X25519 ephemeral secret");
@@ -2246,16 +2080,13 @@ mod key_update_tests {
         }
         assert!(session.local_ephemeral.is_none());
     }
-
     #[test]
     fn random_gck_nonce_rejects_all_zero_material() {
         let mut rng = FixedTryRng { byte: 0 };
-
         let err = match random_gck_nonce_from_rng(&mut rng, 24) {
             Ok(_) => panic!("all-zero GCK nonce must fail"),
             Err(err) => err,
         };
-
         match err {
             HandshakeError::InertRandomMaterial { operation } => {
                 assert_eq!(operation, "GCK wrap nonce");
@@ -2263,27 +2094,22 @@ mod key_update_tests {
             other => panic!("expected inert random material error, got {other:?}"),
         }
     }
-
     #[test]
     fn snapshot_session_key_is_deterministic_and_domain_separated() {
         let identity = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
             .expect("seeded streaming identity");
         let material = StreamingKeyMaterial::new(identity).expect("streaming key material");
-
         let first = material.snapshot_session_key();
         let second = material.snapshot_session_key();
-
         let (_, private_bytes) = material.identity().private_key().to_bytes();
         let private = Zeroizing::new(private_bytes);
         let mut hasher = Sha3_256::new();
         hasher.update(SNAPSHOT_KEY_DOMAIN);
         hasher.update(&*private);
         let expected = hasher.finalize().to_vec();
-
         assert_eq!(first.payload(), second.payload());
         assert_eq!(first.payload(), expected.as_slice());
     }
-
     #[test]
     fn x25519_content_key_update_roundtrips_after_key_exchange() {
         let publisher_keys = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
@@ -2292,7 +2118,6 @@ mod key_update_tests {
             .expect("seeded viewer Ed25519 keypair");
         let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x42; 32]);
         let session_id = [0xC7; 32];
-
         let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
         publisher_session
             .set_local_ephemeral_x25519([0x11; 32])
@@ -2300,7 +2125,6 @@ mod key_update_tests {
         let publisher_update = publisher_session
             .build_key_update(session_id, &suite, 1, 1, publisher_keys.private_key())
             .expect("publisher key update");
-
         let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
         viewer_session
             .set_local_ephemeral_x25519([0x22; 32])
@@ -2308,14 +2132,12 @@ mod key_update_tests {
         viewer_session
             .process_remote_key_update(&publisher_update, publisher_keys.public_key())
             .expect("viewer transport keys");
-
         let viewer_update = viewer_session
             .build_key_update(session_id, &suite, 1, 2, viewer_keys.private_key())
             .expect("viewer key update");
         publisher_session
             .process_remote_key_update(&viewer_update, viewer_keys.public_key())
             .expect("publisher transport keys");
-
         let gck_plaintext = [0xAB; GROUP_CONTENT_KEY_LEN];
         let content_update = publisher_session
             .build_content_key_update(&gck_plaintext, 1, 1)
@@ -2323,7 +2145,6 @@ mod key_update_tests {
         let decrypted_gck = viewer_session
             .process_content_key_update(&content_update)
             .expect("decrypted group content key");
-
         assert_eq!(decrypted_gck, gck_plaintext);
         assert_eq!(
             publisher_session.latest_gck(),
@@ -2331,7 +2152,6 @@ mod key_update_tests {
         );
         assert_eq!(viewer_session.latest_gck(), Some(gck_plaintext.as_slice()));
     }
-
     #[test]
     fn kyber_content_key_update_roundtrips_after_key_exchange() {
         let publisher_keys = KeyPair::try_from_seed(vec![0x6B; 32], Algorithm::Ed25519)
@@ -2342,7 +2162,6 @@ mod key_update_tests {
             kyber_public_fingerprint(&viewer_kyber.public_key).expect("viewer kyber fingerprint");
         let suite = EncryptionSuite::Kyber768XChaCha20Poly1305(viewer_fingerprint);
         let session_id = [0xD7; 32];
-
         let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
         publisher_session
             .set_kyber_remote_public(viewer_fingerprint, &viewer_kyber.public_key)
@@ -2350,7 +2169,6 @@ mod key_update_tests {
         let publisher_update = publisher_session
             .build_key_update(session_id, &suite, 1, 1, publisher_keys.private_key())
             .expect("publisher key update");
-
         let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
         viewer_session
             .set_kyber_remote_public(viewer_fingerprint, &viewer_kyber.public_key)
@@ -2361,7 +2179,6 @@ mod key_update_tests {
         viewer_session
             .process_remote_key_update(&publisher_update, publisher_keys.public_key())
             .expect("viewer transport keys");
-
         let gck_plaintext = [0xCD; GROUP_CONTENT_KEY_LEN];
         let content_update = publisher_session
             .build_content_key_update(&gck_plaintext, 1, 1)
@@ -2369,7 +2186,6 @@ mod key_update_tests {
         let decrypted_gck = viewer_session
             .process_content_key_update(&content_update)
             .expect("decrypted group content key");
-
         assert_eq!(decrypted_gck, gck_plaintext);
         assert_eq!(
             publisher_session.latest_gck(),
@@ -2377,17 +2193,13 @@ mod key_update_tests {
         );
         assert_eq!(viewer_session.latest_gck(), Some(gck_plaintext.as_slice()));
     }
-
     #[test]
     fn kyber_public_fingerprint_rejects_all_zero_public_key() {
         let all_zero_public = vec![0_u8; STREAMING_DEFAULT_KEM_SUITE.public_key_len()];
-
         let err = kyber_public_fingerprint(&all_zero_public)
             .expect_err("all-zero Kyber public key must not get a fingerprint");
-
         assert!(matches!(err, KeyMaterialError::InvalidKyberPublicKey));
     }
-
     #[test]
     fn streaming_key_material_rejects_all_zero_kyber_material() {
         let identity = KeyPair::try_from_seed(vec![0x92; 32], Algorithm::Ed25519)
@@ -2398,28 +2210,24 @@ mod key_update_tests {
         let all_zero_secret = vec![0_u8; STREAMING_DEFAULT_KEM_SUITE.secret_key_len()];
         let embedded_public_zero_secret =
             mlkem_secret_with_zero_embedded_public_key(kyber_pair.secret_key.as_slice());
-
         let mut material =
             StreamingKeyMaterial::new(identity.clone()).expect("streaming key material");
         let err = material
             .set_kyber_keys(&all_zero_public, kyber_pair.secret_key.as_ref())
             .expect_err("all-zero Kyber public key must be rejected");
         assert!(matches!(err, KeyMaterialError::InvalidKyberPublicKey));
-
         let mut material =
             StreamingKeyMaterial::new(identity.clone()).expect("streaming key material");
         let err = material
             .set_kyber_keys(&kyber_pair.public_key, &all_zero_secret)
             .expect_err("all-zero Kyber secret key must be rejected");
         assert!(matches!(err, KeyMaterialError::InvalidKyberSecretKey));
-
         let mut material = StreamingKeyMaterial::new(identity).expect("streaming key material");
         let err = material
             .set_kyber_keys(&kyber_pair.public_key, &embedded_public_zero_secret)
             .expect_err("all-zero embedded Kyber public key must be rejected");
         assert!(matches!(err, KeyMaterialError::InvalidKyberSecretKey));
     }
-
     #[test]
     fn streaming_session_rejects_all_zero_kyber_material() {
         let kyber_pair = generate_mlkem_keypair_from_os(STREAMING_DEFAULT_KEM_SUITE)
@@ -2429,44 +2237,37 @@ mod key_update_tests {
         let embedded_public_zero_secret =
             mlkem_secret_with_zero_embedded_public_key(kyber_pair.secret_key.as_slice());
         let fingerprint = fingerprint_kyber_public(&all_zero_public, STREAMING_DEFAULT_KEM_SUITE);
-
         let mut session = StreamingSession::new(CapabilityRole::Viewer);
         let err = session
             .set_kyber_remote_public(fingerprint, &all_zero_public)
             .expect_err("all-zero remote Kyber public key must be rejected");
         assert!(matches!(err, HandshakeError::InvalidKyberPublicKey));
-
         let mut session = StreamingSession::new(CapabilityRole::Viewer);
         let err = session
             .set_kyber_local_secret(&all_zero_secret)
             .expect_err("all-zero local Kyber secret key must be rejected");
         assert!(matches!(err, HandshakeError::InvalidKyberSecretKey));
-
         let mut session = StreamingSession::new(CapabilityRole::Viewer);
         let err = session
             .set_kyber_local_secret(&embedded_public_zero_secret)
             .expect_err("all-zero embedded Kyber public key must be rejected");
         assert!(matches!(err, HandshakeError::InvalidKyberSecretKey));
-
         let mut session = StreamingSession::new(CapabilityRole::Viewer);
         let err = session
             .set_kyber_local_key_pair(&all_zero_public, kyber_pair.secret_key.as_ref())
             .expect_err("all-zero local Kyber public key must be rejected");
         assert!(matches!(err, HandshakeError::InvalidKyberPublicKey));
-
         let mut session = StreamingSession::new(CapabilityRole::Viewer);
         let err = session
             .set_kyber_local_key_pair(&kyber_pair.public_key, &all_zero_secret)
             .expect_err("all-zero local Kyber secret key must be rejected");
         assert!(matches!(err, HandshakeError::InvalidKyberSecretKey));
-
         let mut session = StreamingSession::new(CapabilityRole::Viewer);
         let err = session
             .set_kyber_local_key_pair(&kyber_pair.public_key, &embedded_public_zero_secret)
             .expect_err("all-zero embedded Kyber public key must be rejected");
         assert!(matches!(err, HandshakeError::InvalidKyberSecretKey));
     }
-
     #[test]
     fn kyber_inert_material_validators_reject_all_zero_keys() {
         assert!(validate_kyber_public_not_all_zero(&[0_u8; 32]).is_err());
@@ -2474,13 +2275,11 @@ mod key_update_tests {
         assert!(validate_kyber_public_not_all_zero(&[0_u8, 1]).is_ok());
         assert!(validate_kyber_secret_not_all_zero(&[0_u8, 1]).is_ok());
     }
-
     #[test]
     fn process_remote_key_update_rejects_malformed_remote_identity_without_state_change() {
         let publisher_keys = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
             .expect("seeded Ed25519 keypair");
         let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x42; 32]);
-
         let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
         publisher_session
             .set_local_ephemeral_x25519([0x11; 32])
@@ -2488,10 +2287,8 @@ mod key_update_tests {
         let update = publisher_session
             .build_key_update([0xC7; 32], &suite, 1, 1, publisher_keys.private_key())
             .expect("key update");
-
         let malformed_identity =
             crate::PublicKey(crate::PublicKeyCompact::new(Algorithm::Ed25519, &[]));
-
         let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
         viewer_session
             .set_local_ephemeral_x25519([0x22; 32])
@@ -2499,18 +2296,15 @@ mod key_update_tests {
         let err = viewer_session
             .process_remote_key_update(&update, &malformed_identity)
             .expect_err("malformed identity must fail before signature verification");
-
         assert!(matches!(err, HandshakeError::BadSignature));
         assert!(viewer_session.transport_keys().is_none());
         assert!(viewer_session.negotiated_suite().is_none());
     }
-
     #[test]
     fn process_remote_key_update_rejects_inert_or_weak_remote_identity_without_state_change() {
         let publisher_keys = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
             .expect("seeded Ed25519 keypair");
         let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x42; 32]);
-
         let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
         publisher_session
             .set_local_ephemeral_x25519([0x11; 32])
@@ -2518,7 +2312,6 @@ mod key_update_tests {
         let update = publisher_session
             .build_key_update([0xC7; 32], &suite, 1, 1, publisher_keys.private_key())
             .expect("key update");
-
         for remote_identity in [
             [0u8; 32],
             ED25519_SMALL_ORDER_POINT,
@@ -2528,7 +2321,6 @@ mod key_update_tests {
                 Algorithm::Ed25519,
                 &remote_identity,
             ));
-
             let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
             viewer_session
                 .set_local_ephemeral_x25519([0x22; 32])
@@ -2536,19 +2328,16 @@ mod key_update_tests {
             let err = viewer_session
                 .process_remote_key_update(&update, &remote_identity)
                 .expect_err("invalid identity must fail before state mutation");
-
             assert!(matches!(err, HandshakeError::BadSignature));
             assert!(viewer_session.transport_keys().is_none());
             assert!(viewer_session.negotiated_suite().is_none());
         }
     }
-
     #[test]
     fn process_remote_key_update_rejects_malformed_signature_r_without_state_change() {
         let publisher_keys = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
             .expect("seeded Ed25519 keypair");
         let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x42; 32]);
-
         let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
         publisher_session
             .set_local_ephemeral_x25519([0x11; 32])
@@ -2556,11 +2345,9 @@ mod key_update_tests {
         let update = publisher_session
             .build_key_update([0xC7; 32], &suite, 1, 1, publisher_keys.private_key())
             .expect("key update");
-
         for invalid_r in [ED25519_SMALL_ORDER_POINT, ED25519_NONCANONICAL_IDENTITY] {
             let mut tampered = update.clone();
             tampered.signature[..32].copy_from_slice(&invalid_r);
-
             let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
             viewer_session
                 .set_local_ephemeral_x25519([0x22; 32])
@@ -2568,7 +2355,6 @@ mod key_update_tests {
             let err = viewer_session
                 .process_remote_key_update(&tampered, publisher_keys.public_key())
                 .expect_err("malformed signature R must fail before state mutation");
-
             assert!(matches!(err, HandshakeError::BadSignature));
             assert!(viewer_session.transport_keys().is_none());
             assert!(viewer_session.negotiated_suite().is_none());

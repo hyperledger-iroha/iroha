@@ -3,9 +3,7 @@
 //! The collectors in this module deliberately receive only the validated
 //! configuration and the payload-free binding catalog. They never resolve
 //! credentials, private keys, tokens, or any other runtime-only secret.
-
 use super::*;
-
 /// Append every configured provider binding in the canonical projection order.
 pub(super) fn collect_configured_bindings(
     config: &Config,
@@ -23,13 +21,11 @@ pub(super) fn collect_configured_bindings(
     collect_soracloud_hf_credential_provider_binding(config, bindings)?;
     collect_musubi_provider_attestation_bindings(config, bindings)
 }
-
 fn collect_musubi_provider_attestation_bindings(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
     use IrohaRuntimeProviderSlotV1 as Slot;
-
     let Some(journal) = config
         .torii
         .sorafs_storage
@@ -66,7 +62,6 @@ fn collect_musubi_provider_attestation_bindings(
     bindings.extend(projected);
     Ok(())
 }
-
 fn collect_bootle_lantern_issuance_binding(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
@@ -95,7 +90,6 @@ fn collect_bootle_lantern_issuance_binding(
     );
     Ok(())
 }
-
 fn collect_soracloud_runtime_signer_binding(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
@@ -112,7 +106,6 @@ fn collect_soracloud_runtime_signer_binding(
     }
     Ok(())
 }
-
 fn collect_soracloud_hf_credential_provider_binding(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
@@ -134,7 +127,6 @@ fn collect_soracloud_hf_credential_provider_binding(
     }
     Ok(())
 }
-
 fn append_binding(
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
     slot: IrohaRuntimeProviderSlotV1,
@@ -150,7 +142,6 @@ fn append_binding(
     )?);
     Ok(())
 }
-
 pub(super) fn governance_request_ingress_binding_from_service(
     service: &iroha_config::parameters::actual::SorafsGovernanceDagService,
     scope: sorafs_node::GovernanceDagAuthenticationScope,
@@ -190,7 +181,6 @@ pub(super) fn governance_request_ingress_binding_from_service(
     )
     .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))
 }
-
 fn collect_storage_security_bindings(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
@@ -450,7 +440,6 @@ fn collect_storage_security_bindings(
     }
     Ok(())
 }
-
 /// Append one required authenticated Governance DAG request binding.
 pub(super) fn append_required_governance_request_auth_binding(
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
@@ -476,7 +465,6 @@ pub(super) fn append_required_governance_request_auth_binding(
     );
     Ok(())
 }
-
 /// Append one required qualified Governance DAG service binding.
 pub(super) fn append_required_governance_service_binding(
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
@@ -491,7 +479,6 @@ pub(super) fn append_required_governance_service_binding(
     };
     append_binding(bindings, slot, handle, Some(revision), Some(policy_digest))
 }
-
 fn collect_appeal_finance_bindings(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
@@ -517,13 +504,11 @@ fn collect_appeal_finance_bindings(
     }
     Ok(())
 }
-
 fn collect_native_transaction_signer_bindings(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
     use iroha_torii::SorafsNativeTransactionSignerRoleV1 as Role;
-
     let configured = &config.torii.sorafs_storage.native_transaction_signers;
     for (slot, role, binding) in [
         (
@@ -574,7 +559,6 @@ fn collect_native_transaction_signer_bindings(
     }
     Ok(())
 }
-
 fn collect_moderation_viewer_bindings(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
@@ -647,7 +631,6 @@ fn collect_moderation_viewer_bindings(
     }
     Ok(())
 }
-
 fn validate_moderation_strict_ingress_binding(
     runtime: &iroha_config::parameters::actual::SorafsModerationOrchestrator,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
@@ -655,7 +638,6 @@ fn validate_moderation_strict_ingress_binding(
         ModerationRuntimeProviderQualificationErrorV1 as Error,
         ModerationRuntimeProviderQualificationV1,
     };
-
     let configured_qualification = ModerationRuntimeProviderQualificationV1::new(
         runtime.strict_ingress_revision,
         runtime.strict_ingress_policy_digest,
@@ -680,7 +662,6 @@ fn validate_moderation_strict_ingress_binding(
         | Error::ArchivePublicKeyChanged => IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked,
     })
 }
-
 fn collect_pop_potr_gateway_bindings(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
@@ -719,7 +700,6 @@ fn collect_pop_potr_gateway_bindings(
     }
     Ok(())
 }
-
 fn collect_reputation_billing_bindings(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
@@ -815,7 +795,6 @@ fn collect_reputation_billing_bindings(
     }
     Ok(())
 }
-
 fn collect_provider_ingest_bindings(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,

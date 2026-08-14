@@ -1,21 +1,17 @@
 use crate::bitstream::{BitWriter, BitstreamError};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FseError {
     InvalidTable,
     InvalidSymbol,
     Bitstream(BitstreamError),
 }
-
 impl From<BitstreamError> for FseError {
     fn from(err: BitstreamError) -> Self {
         FseError::Bitstream(err)
     }
 }
-
 const MAX_SYMBOLS: usize = 256;
 const MAX_TABLE_LOG: u8 = 12;
-
 #[derive(Clone)]
 pub(crate) struct FseCTable {
     pub(crate) table_log: u8,
@@ -23,26 +19,22 @@ pub(crate) struct FseCTable {
     pub(crate) state_table: Vec<u16>,
     pub(crate) symbol_tt: Vec<SymbolTransform>,
 }
-
 #[derive(Clone, Copy)]
 pub(crate) struct SymbolTransform {
     pub(crate) delta_find_state: i32,
     pub(crate) delta_nb_bits: u32,
 }
-
 #[derive(Clone)]
 pub(crate) struct FseDTable {
     pub(crate) table_log: u8,
     pub(crate) decode: Vec<DecodeEntry>,
 }
-
 #[derive(Clone, Copy)]
 pub(crate) struct DecodeEntry {
     pub(crate) symbol: u16,
     pub(crate) nb_bits: u8,
     pub(crate) new_state: u32,
 }
-
 pub(crate) fn normalize_counts(counts: &[u32], table_log: u8) -> Result<Vec<i16>, FseError> {
     if table_log > MAX_TABLE_LOG {
         return Err(FseError::InvalidTable);
@@ -107,7 +99,6 @@ pub(crate) fn normalize_counts(counts: &[u32], table_log: u8) -> Result<Vec<i16>
     }
     Ok(norm)
 }
-
 pub(crate) fn build_tables(
     normalized: &[i16],
     max_symbol: usize,
@@ -140,7 +131,6 @@ pub(crate) fn build_tables(
     if cumul[max_symbol + 1] != table_size {
         return Err(FseError::InvalidTable);
     }
-
     let mut position = 0u32;
     for (symbol, &count) in normalized.iter().enumerate().take(max_symbol + 1) {
         if count <= 0 {
@@ -157,7 +147,6 @@ pub(crate) fn build_tables(
     if position != 0 {
         return Err(FseError::InvalidTable);
     }
-
     let mut state_table = vec![0u16; table_size as usize];
     let mut cumul_pos = cumul.clone();
     for (u, &symbol) in table_symbol.iter().enumerate().take(table_size as usize) {
@@ -166,7 +155,6 @@ pub(crate) fn build_tables(
         state_table[pos] = (table_size as u16).wrapping_add(u as u16);
         cumul_pos[symbol] += 1;
     }
-
     let mut symbol_tt = vec![
         SymbolTransform {
             delta_find_state: 0,
@@ -195,7 +183,6 @@ pub(crate) fn build_tables(
         symbol_tt[s].delta_find_state = total as i32 - count as i32;
         total += count;
     }
-
     let mut symbol_next: Vec<u32> = vec![0; max_symbol + 1];
     for s in 0..=max_symbol {
         symbol_next[s] = if normalized[s] == -1 {
@@ -224,7 +211,6 @@ pub(crate) fn build_tables(
             new_state,
         };
     }
-
     Ok((
         FseCTable {
             table_log,
@@ -235,7 +221,6 @@ pub(crate) fn build_tables(
         FseDTable { table_log, decode },
     ))
 }
-
 pub(crate) fn encode_symbols(symbols: &[u16], ct: &FseCTable) -> Result<Vec<u8>, FseError> {
     if symbols.is_empty() {
         return Ok(0u32.to_le_bytes().to_vec());
@@ -281,7 +266,6 @@ pub(crate) fn encode_symbols(symbols: &[u16], ct: &FseCTable) -> Result<Vec<u8>,
     out.extend_from_slice(&payload);
     Ok(out)
 }
-
 pub(crate) fn decode_symbols(
     encoded: &[u8],
     out_len: usize,
@@ -313,12 +297,10 @@ pub(crate) fn decode_symbols(
     }
     Ok(output)
 }
-
 struct BitReaderRev<'a> {
     data: &'a [u8],
     bit_pos: u32,
 }
-
 impl<'a> BitReaderRev<'a> {
     fn new(data: &'a [u8], bit_len: u32) -> Self {
         Self {
@@ -326,7 +308,6 @@ impl<'a> BitReaderRev<'a> {
             bit_pos: bit_len,
         }
     }
-
     fn read_bits(&mut self, bits: u32) -> Result<u64, BitstreamError> {
         if bits > 56 {
             return Err(BitstreamError::InvalidBits);
@@ -349,15 +330,12 @@ impl<'a> BitReaderRev<'a> {
         Ok(value)
     }
 }
-
 fn highbit(value: u32) -> u32 {
     31 - value.leading_zeros()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn fse_roundtrip() {
         let symbols = vec![0u16, 1, 2, 3, 2, 1, 0, 3, 3, 2, 1];
@@ -371,7 +349,6 @@ mod tests {
         let decoded = decode_symbols(&encoded, symbols.len(), &dt).expect("decode");
         assert_eq!(decoded, symbols);
     }
-
     #[test]
     fn fse_empty_payload_is_header_only() {
         let counts = vec![1u32, 1, 1, 1];

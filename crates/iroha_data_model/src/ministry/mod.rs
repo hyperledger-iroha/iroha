@@ -4,21 +4,16 @@
 //! (dashboards, release automation) and the governance ledger. The
 //! `TransparencyReleaseV1` struct captures the canonical metadata required to
 //! anchor a quarterly transparency bundle in the governance DAG.
-
 #![allow(clippy::module_name_repetitions)]
-
 mod jury;
 use std::{collections::BTreeSet, string::String, vec::Vec};
-
 use iroha_schema::IntoSchema;
 pub use jury::*;
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
 use crate::{Decode, Encode};
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-
 /// Governance payload describing a Ministry transparency release bundle.
 ///
 /// Releases refer to the signed `transparency_manifest.json` artefact emitted by
@@ -42,10 +37,8 @@ pub struct TransparencyReleaseV1 {
     /// Optional operator note recorded with the release (e.g., manual redactions).
     pub note: Option<String>,
 }
-
 /// Schema version for [`AgendaProposalV1`].
 pub const AGENDA_PROPOSAL_VERSION_V1: u16 = 1;
-
 /// Citizen agenda proposal submitted to the Ministry of Information.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -60,7 +53,7 @@ pub struct AgendaProposalV1 {
     /// BCP‑47 language tag for the human-readable summary.
     pub language: String,
     /// Requested action (e.g., add/remove entry, amend policy).
-    #[cfg_attr(feature = "json", norito(with = "crate::ministry::json::action"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::ministry::json::action"))]
     pub action: AgendaProposalAction,
     /// Human-readable summary text.
     pub summary: AgendaProposalSummary,
@@ -79,7 +72,6 @@ pub struct AgendaProposalV1 {
     #[norito(default)]
     pub duplicates: Vec<String>,
 }
-
 impl AgendaProposalV1 {
     /// Validate basic invariants for an agenda proposal.
     ///
@@ -198,7 +190,6 @@ impl AgendaProposalV1 {
         Ok(())
     }
 }
-
 /// Persisted Ministry agenda submission record keyed by `proposal_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -212,7 +203,6 @@ pub struct AgendaProposalRecordV1 {
     /// Block height at which the submission was recorded.
     pub submitted_height: u64,
 }
-
 /// Agenda proposal action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -225,7 +215,6 @@ pub enum AgendaProposalAction {
     /// Request to amend Ministry policy or enforcement procedures.
     AmendPolicy,
 }
-
 /// Human-readable summary metadata for the proposal.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -238,7 +227,6 @@ pub struct AgendaProposalSummary {
     /// Expected impact assessment.
     pub expected_impact: String,
 }
-
 /// Target entry referenced by the proposal (e.g., perceptual hash digest).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -253,7 +241,6 @@ pub struct AgendaProposalTarget {
     /// Reason/rationale for including this target.
     pub reason: String,
 }
-
 impl AgendaProposalTarget {
     /// Deterministic fingerprint combining hash family and digest.
     pub fn fingerprint_key(&self) -> String {
@@ -264,7 +251,6 @@ impl AgendaProposalTarget {
         )
     }
 }
-
 /// Evidence attachment supporting the proposal.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -273,7 +259,7 @@ pub struct AgendaEvidenceAttachment {
     /// Evidence kind (URL, `SoraFS` CID, Torii case, etc.).
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::ministry::json::evidence_kind")
+        norito(json = "crate::ministry::json::evidence_kind")
     )]
     pub kind: AgendaEvidenceKind,
     /// URI or identifier for the evidence.
@@ -285,7 +271,6 @@ pub struct AgendaEvidenceAttachment {
     #[norito(default)]
     pub description: Option<String>,
 }
-
 impl AgendaEvidenceAttachment {
     fn requires_digest(&self) -> bool {
         matches!(
@@ -294,7 +279,6 @@ impl AgendaEvidenceAttachment {
         )
     }
 }
-
 /// Evidence categories supported by the validator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -309,7 +293,6 @@ pub enum AgendaEvidenceKind {
     /// Discrete attachment tracked by digest (e.g., offline files).
     Attachment,
 }
-
 /// Submitter metadata recorded with the proposal.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -326,7 +309,6 @@ pub struct AgendaProposalSubmitter {
     #[norito(default)]
     pub pgp_fingerprint: Option<String>,
 }
-
 /// Validation errors surfaced by [`AgendaProposalV1::validate`].
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AgendaProposalValidationError {
@@ -443,7 +425,6 @@ pub enum AgendaProposalValidationError {
         value: String,
     },
 }
-
 const ALLOWED_TAGS: &[&str] = &[
     "csam",
     "malware",
@@ -454,15 +435,12 @@ const ALLOWED_TAGS: &[&str] = &[
     "terrorism",
     "spam",
 ];
-
 fn is_allowed_tag(tag: &str) -> bool {
     ALLOWED_TAGS.contains(&tag)
 }
-
 fn is_hex(value: &str) -> bool {
     !value.is_empty() && value.chars().all(|c| c.is_ascii_hexdigit())
 }
-
 fn is_valid_hash_family(value: &str) -> bool {
     let trimmed = value.trim();
     trimmed == value
@@ -472,7 +450,6 @@ fn is_valid_hash_family(value: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
-
 fn is_valid_language_tag(value: &str) -> bool {
     let trimmed = value.trim();
     if trimmed != value || trimmed.len() < 2 || trimmed.len() > 32 {
@@ -482,7 +459,6 @@ fn is_valid_language_tag(value: &str) -> bool {
         .split('-')
         .all(|segment| segment.chars().all(|c| c.is_ascii_alphanumeric()))
 }
-
 /// Return whether `value` is an exact first-release Ministry agenda proposal identifier.
 ///
 /// The accepted grammar is `AC-YYYY-###`; case, whitespace, and width aliases are rejected.
@@ -495,7 +471,6 @@ pub fn is_valid_agenda_proposal_id(value: &str) -> bool {
         && bytes[7] == b'-'
         && bytes[8..11].iter().all(u8::is_ascii_digit)
 }
-
 fn is_valid_brief_id(value: &str) -> bool {
     if !value.starts_with("VB-") {
         return false;
@@ -506,14 +481,11 @@ fn is_valid_brief_id(value: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-')
 }
-
 fn parse_rfc3339_timestamp(value: &str) -> bool {
     OffsetDateTime::parse(value.trim(), &Rfc3339).is_ok()
 }
-
 /// Schema version for [`VolunteerBriefV1`].
 pub const VOLUNTEER_BRIEF_VERSION_V1: u16 = 1;
-
 /// Structured volunteer brief describing a stance for/against a blacklist change (MINFO-3).
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -543,7 +515,6 @@ pub struct VolunteerBriefV1 {
     #[norito(default)]
     pub moderation: VolunteerBriefModeration,
 }
-
 impl VolunteerBriefV1 {
     /// Validate the volunteer brief according to the MINFO-3 contract.
     ///
@@ -601,7 +572,6 @@ impl VolunteerBriefV1 {
         Ok(())
     }
 }
-
 /// Volunteer stance labels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -620,7 +590,6 @@ pub enum VolunteerBriefStance {
     #[cfg_attr(feature = "json", norito(rename = "context"))]
     Context,
 }
-
 /// Author metadata associated with a volunteer brief.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -636,7 +605,6 @@ pub struct VolunteerBriefAuthor {
     #[norito(default)]
     pub no_conflicts_certified: bool,
 }
-
 impl VolunteerBriefAuthor {
     fn validate(&self) -> Result<(), VolunteerBriefValidationError> {
         if self.name.trim().is_empty() {
@@ -648,7 +616,6 @@ impl VolunteerBriefAuthor {
         Ok(())
     }
 }
-
 /// Summary presented alongside the fact table.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -661,7 +628,6 @@ pub struct VolunteerBriefSummary {
     /// Requested governance action.
     pub requested_action: String,
 }
-
 impl VolunteerBriefSummary {
     fn validate(&self) -> Result<(), VolunteerBriefValidationError> {
         if self.title.trim().is_empty() {
@@ -684,7 +650,6 @@ impl VolunteerBriefSummary {
         Ok(())
     }
 }
-
 /// Fact row describing a claim, status, and supporting evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -704,7 +669,6 @@ pub struct VolunteerFactRow {
     #[norito(default)]
     pub evidence_digest: Option<String>,
 }
-
 impl VolunteerFactRow {
     fn validate(&self, index: usize) -> Result<(), VolunteerBriefValidationError> {
         if self.claim_id.trim().is_empty() {
@@ -738,7 +702,6 @@ impl VolunteerFactRow {
         Ok(())
     }
 }
-
 /// Fact status enumeration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -757,7 +720,6 @@ pub enum VolunteerFactStatus {
     #[cfg_attr(feature = "json", norito(rename = "context-only"))]
     ContextOnly,
 }
-
 /// Impact categories referenced by fact rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -779,7 +741,6 @@ pub enum VolunteerFactImpact {
     #[cfg_attr(feature = "json", norito(rename = "community"))]
     Community,
 }
-
 /// Conflict disclosure entry.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -797,7 +758,6 @@ pub struct VolunteerDisclosure {
     #[norito(default)]
     pub evidence: Option<String>,
 }
-
 impl VolunteerDisclosure {
     fn validate(&self, index: usize) -> Result<(), VolunteerBriefValidationError> {
         if self.entity.trim().is_empty() {
@@ -829,7 +789,6 @@ impl VolunteerDisclosure {
         Ok(())
     }
 }
-
 /// Disclosure type enumeration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -854,7 +813,6 @@ pub enum VolunteerDisclosureType {
     #[cfg_attr(feature = "json", norito(rename = "other"))]
     Other,
 }
-
 /// Moderation metadata capturing off-topic or triage notes.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -869,7 +827,6 @@ pub struct VolunteerBriefModeration {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 impl VolunteerBriefModeration {
     fn validate(&self) -> Result<(), VolunteerBriefValidationError> {
         if let Some(notes) = &self.notes {
@@ -881,7 +838,6 @@ impl VolunteerBriefModeration {
         Ok(())
     }
 }
-
 /// Moderation tags available to reviewers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -909,7 +865,6 @@ pub enum VolunteerModerationTag {
     #[cfg_attr(feature = "json", norito(rename = "policy-escalation"))]
     PolicyEscalation,
 }
-
 /// Validation errors returned by [`VolunteerBriefV1::validate`].
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum VolunteerBriefValidationError {
@@ -1019,10 +974,8 @@ pub enum VolunteerBriefValidationError {
         length: usize,
     },
 }
-
 /// Schema version for [`ReviewPanelSummaryV1`].
 pub const REVIEW_PANEL_SUMMARY_VERSION_V1: u16 = 1;
-
 /// Neutral referendum summary emitted by the review panel workflow (MINFO-4a).
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1054,7 +1007,6 @@ pub struct ReviewPanelSummaryV1 {
     #[norito(default)]
     pub warnings: Vec<String>,
 }
-
 /// Summary text emitted by the review panel.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1066,7 +1018,6 @@ pub struct ReviewPanelOverview {
     /// Notes about how the panel expects the policy jury to proceed.
     pub decision_context: String,
 }
-
 /// Count of briefs/fact rows per stance (support/oppose/context).
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1078,7 +1029,6 @@ pub struct ReviewPanelStanceCount {
     /// Number of fact rows collected for this stance.
     pub fact_row_count: u32,
 }
-
 /// Highlight summarising a specific fact row or evidence bundle.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1095,7 +1045,6 @@ pub struct ReviewPanelHighlight {
     #[norito(default)]
     pub citations: Vec<ReviewPanelCitation>,
 }
-
 /// Citation referencing volunteer facts, AI manifests, or proposal evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1108,7 +1057,6 @@ pub struct ReviewPanelCitation {
     #[norito(default)]
     pub uri: Option<String>,
 }
-
 /// Citation kinds used in review panel summaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1121,13 +1069,12 @@ pub enum ReviewPanelCitationKind {
     /// Citation references an evidence attachment from the proposal.
     ProposalEvidence,
 }
-
 /// Reference to the reproducibility manifest used by the panel.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ReviewPanelAiEvidence {
     /// Manifest UUID referenced by the panel.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub manifest_id: [u8; 16],
     /// Runner version string.
     pub runtime_version: String,
@@ -1138,7 +1085,6 @@ pub struct ReviewPanelAiEvidence {
     /// Escalation threshold used by the AI committee (basis points).
     pub escalate_threshold: u16,
 }
-
 /// Metadata about volunteer briefs feeding the neutral summary.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1154,10 +1100,8 @@ pub struct ReviewPanelVolunteerReference {
     /// Number of fact rows that included citations.
     pub cited_rows: u32,
 }
-
 /// Schema version for [`ReferendumPacketV1`].
 pub const REFERENDUM_PACKET_VERSION_V1: u16 = 1;
-
 /// Complete referendum dossier emitted after the review panel workflow (MINFO-4).
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1176,7 +1120,6 @@ pub struct ReferendumPacketV1 {
     /// Hash-family impact summary derived from the duplicate registry + policy snapshot.
     pub impact_summary: ReferendumImpactSummary,
 }
-
 /// Evidence describing the panel sortition draw.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1196,7 +1139,6 @@ pub struct ReferendumSortitionEvidence {
     /// Number of eligible members considered by the draw.
     pub eligible_members: u32,
 }
-
 /// Selected panelist plus the data required to audit their slot.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1231,7 +1173,6 @@ pub struct ReferendumPanelist {
     #[norito(default)]
     pub merkle_proof: Vec<String>,
 }
-
 /// Impact summary derived from `cargo xtask ministry-agenda impact`.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1251,7 +1192,6 @@ pub struct ReferendumImpactSummary {
     #[norito(default)]
     pub conflicts: Vec<ReferendumImpactConflict>,
 }
-
 /// Aggregate impact stats for a single hash family.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1265,7 +1205,6 @@ pub struct ReferendumImpactHashFamily {
     /// Policy conflicts for the family.
     pub policy_conflicts: u32,
 }
-
 /// Detailed conflict row mirroring the impact report structure.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1283,7 +1222,6 @@ pub struct ReferendumImpactConflict {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
-
 /// Conflict source enumeration mirrored from the impact report helper.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1295,7 +1233,6 @@ pub enum ReferendumImpactConflictSource {
     /// Fingerprint already exists within the policy snapshot.
     PolicySnapshot,
 }
-
 /// Re-export commonly used ministry types.
 pub mod prelude {
     pub use super::{
@@ -1312,16 +1249,12 @@ pub mod prelude {
         VolunteerFactImpact, VolunteerFactRow, VolunteerFactStatus, VolunteerModerationTag,
     };
 }
-
 #[cfg(feature = "json")]
 mod json {
-    use norito::json::{self, JsonSerialize, Parser};
-
+    use norito::json::{self, BoundedJsonError, JsonSerialize, JsonWriteSink, Parser};
     use super::{AgendaEvidenceKind, AgendaProposalAction};
-
     pub mod action {
         use super::*;
-
         #[allow(clippy::trivially_copy_pass_by_ref)] // Norito serializer signature
         pub fn serialize(value: &AgendaProposalAction, out: &mut String) {
             let label = match value {
@@ -1331,7 +1264,18 @@ mod json {
             };
             JsonSerialize::json_serialize(label, out);
         }
-
+        #[allow(clippy::trivially_copy_pass_by_ref)]
+        pub fn serialize_bounded(
+            value: &AgendaProposalAction,
+            out: &mut dyn JsonWriteSink,
+        ) -> Result<(), BoundedJsonError> {
+            let label = match value {
+                AgendaProposalAction::AddToDenylist => "add-to-denylist",
+                AgendaProposalAction::RemoveFromDenylist => "remove-from-denylist",
+                AgendaProposalAction::AmendPolicy => "amend-policy",
+            };
+            label.json_serialize_to(out)
+        }
         pub fn deserialize(parser: &mut Parser<'_>) -> Result<AgendaProposalAction, json::Error> {
             let label = parser.parse_string()?;
             match label.as_str() {
@@ -1342,10 +1286,8 @@ mod json {
             }
         }
     }
-
     pub mod evidence_kind {
         use super::*;
-
         #[allow(clippy::trivially_copy_pass_by_ref)] // Norito serializer signature
         pub fn serialize(value: &AgendaEvidenceKind, out: &mut String) {
             let label = match value {
@@ -1356,7 +1298,19 @@ mod json {
             };
             JsonSerialize::json_serialize(label, out);
         }
-
+        #[allow(clippy::trivially_copy_pass_by_ref)]
+        pub fn serialize_bounded(
+            value: &AgendaEvidenceKind,
+            out: &mut dyn JsonWriteSink,
+        ) -> Result<(), BoundedJsonError> {
+            let label = match value {
+                AgendaEvidenceKind::Url => "url",
+                AgendaEvidenceKind::ToriiCase => "torii-case",
+                AgendaEvidenceKind::SorafsCid => "sorafs-cid",
+                AgendaEvidenceKind::Attachment => "attachment",
+            };
+            label.json_serialize_to(out)
+        }
         pub fn deserialize(parser: &mut Parser<'_>) -> Result<AgendaEvidenceKind, json::Error> {
             let label = parser.parse_string()?;
             match label.as_str() {
@@ -1369,13 +1323,10 @@ mod json {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use norito::{decode_from_bytes, json, to_bytes};
-
     use super::*;
-
     fn sample_review_summary() -> ReviewPanelSummaryV1 {
         ReviewPanelSummaryV1 {
             version: REVIEW_PANEL_SUMMARY_VERSION_V1,
@@ -1431,7 +1382,6 @@ mod tests {
             warnings: vec!["context briefs missing".into()],
         }
     }
-
     #[test]
     fn transparency_release_roundtrips() {
         let payload = TransparencyReleaseV1 {
@@ -1447,7 +1397,6 @@ mod tests {
             decode_from_bytes(&bytes).expect("decode transparency payload");
         assert_eq!(payload, decoded);
     }
-
     fn sample_proposal() -> AgendaProposalV1 {
         AgendaProposalV1 {
             version: AGENDA_PROPOSAL_VERSION_V1,
@@ -1492,13 +1441,24 @@ mod tests {
             duplicates: vec!["AC-2025-014".into()],
         }
     }
-
     #[test]
     fn agenda_proposal_validate_succeeds() {
         let proposal = sample_proposal();
         assert!(proposal.validate().is_ok());
+        #[cfg(feature = "json")]
+        {
+            let ordinary = json::to_json(&proposal).expect("serialize agenda proposal JSON");
+            assert_eq!(
+                json::to_json_bounded(&proposal, ordinary.len())
+                    .expect("serialize proposal at exact JSON limit"),
+                ordinary
+            );
+            assert_eq!(
+                json::to_json_bounded(&proposal, ordinary.len() - 1),
+                Err(json::BoundedJsonError::BodyTooLarge)
+            );
+        }
     }
-
     #[test]
     fn agenda_proposal_requires_exact_id_and_canonical_labels() {
         assert!(is_valid_agenda_proposal_id("AC-2026-001"));
@@ -1511,7 +1471,6 @@ mod tests {
                 Err(AgendaProposalValidationError::InvalidProposalIdFormat { .. })
             ));
         }
-
         let mut proposal = sample_proposal();
         proposal.tags = vec![" CSAM ".to_owned()];
         assert!(matches!(
@@ -1525,7 +1484,6 @@ mod tests {
             Err(AgendaProposalValidationError::InvalidLanguageTag { .. })
         ));
     }
-
     #[test]
     fn agenda_proposal_rejects_duplicate_targets() {
         let mut proposal = sample_proposal();
@@ -1536,7 +1494,6 @@ mod tests {
             AgendaProposalValidationError::DuplicateTarget { .. }
         ));
     }
-
     #[test]
     fn agenda_proposal_json_matches_external_schema() {
         let proposal = sample_proposal();
@@ -1548,7 +1505,6 @@ mod tests {
             norito::json::from_str(&json).expect("deserialize agenda proposal JSON");
         assert_eq!(decoded, proposal);
     }
-
     #[test]
     fn agenda_proposal_json_rejects_unknown_top_level_and_nested_fields() {
         let proposal = sample_proposal();
@@ -1558,7 +1514,6 @@ mod tests {
             .expect("agenda proposal object")
             .insert("private_key".to_owned(), json::Value::from("secret"));
         assert!(json::from_value::<AgendaProposalV1>(top_level).is_err());
-
         let mut nested = json::to_value(&proposal).expect("agenda proposal JSON value");
         nested
             .as_object_mut()
@@ -1568,7 +1523,6 @@ mod tests {
             .insert("privateKey".to_owned(), json::Value::from("secret"));
         assert!(json::from_value::<AgendaProposalV1>(nested).is_err());
     }
-
     #[test]
     fn review_panel_summary_roundtrips() {
         let summary = sample_review_summary();
@@ -1577,7 +1531,6 @@ mod tests {
             decode_from_bytes(&bytes).expect("decode review panel summary");
         assert_eq!(summary, decoded);
     }
-
     fn sample_volunteer_brief() -> VolunteerBriefV1 {
         VolunteerBriefV1 {
             version: VOLUNTEER_BRIEF_VERSION_V1,
@@ -1632,13 +1585,11 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn volunteer_brief_validation_succeeds() {
         let brief = sample_volunteer_brief();
         assert!(brief.validate().is_ok());
     }
-
     #[test]
     fn volunteer_brief_requires_disclosure_or_certification() {
         let mut brief = sample_volunteer_brief();
@@ -1650,7 +1601,6 @@ mod tests {
             VolunteerBriefValidationError::MissingDisclosureOrCertification
         ));
     }
-
     #[test]
     fn volunteer_brief_rejects_duplicate_claim_ids() {
         let mut brief = sample_volunteer_brief();
@@ -1665,7 +1615,6 @@ mod tests {
             VolunteerBriefValidationError::DuplicateFactClaimId { .. }
         ));
     }
-
     fn sample_referendum_packet() -> ReferendumPacketV1 {
         ReferendumPacketV1 {
             version: REFERENDUM_PACKET_VERSION_V1,
@@ -1743,7 +1692,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn referendum_packet_roundtrips() {
         let packet = sample_referendum_packet();

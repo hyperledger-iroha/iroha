@@ -5,23 +5,18 @@
 //! aggregate-state schema for the corresponding flattened VM words. This lets
 //! the host recursively convert bounded Lists and active-only Options without
 //! guessing runtime types or serializing an intermediate projection.
-
 use std::collections::BTreeSet;
-
 use norito::{Decode, Encode};
-
 use crate::state_value::{
     MAX_STATE_VALUE_NODES, MAX_STATE_VALUE_SCHEMA_BYTES, MAX_STATE_VALUE_WORDS, StateValueKindV1,
     StateValueNodeV1, StateValueSchemaV1,
 };
-
 /// Maximum number of construction nodes accepted by the V1 JSON builder.
 pub const MAX_JSON_CONSTRUCTION_NODES_V1: usize = 256;
 /// Maximum number of statically declared fields or elements in one JSON node.
 pub const MAX_JSON_LITERAL_ITEMS_V1: usize = 64;
 /// Maximum canonical encoded construction-schema size.
 pub const MAX_JSON_CONSTRUCTION_SCHEMA_BYTES_V1: usize = MAX_STATE_VALUE_SCHEMA_BYTES;
-
 /// One preorder node in a compiler-emitted native JSON construction schema.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum JsonConstructionNodeV1 {
@@ -41,32 +36,27 @@ pub enum JsonConstructionNodeV1 {
         schema: StateValueSchemaV1,
     },
 }
-
 /// Compiler-owned schema for one native `json { ... }` or `json [ ... ]` expression.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct JsonConstructionSchemaV1 {
     /// Preorder construction tree.
     pub nodes: Vec<JsonConstructionNodeV1>,
 }
-
 impl JsonConstructionSchemaV1 {
     /// Validate tree shape, duplicate keys, collection bounds, and source-value types.
     #[must_use]
     pub fn validate(&self) -> bool {
         self.analyze().is_some()
     }
-
     /// Return the exact number of flattened VM words consumed by this schema.
     #[must_use]
     pub fn word_count(&self) -> Option<usize> {
         self.analyze().map(|analysis| analysis.words)
     }
-
     fn analyze(&self) -> Option<JsonConstructionAnalysisV1> {
         if self.nodes.is_empty() || self.nodes.len() > MAX_JSON_CONSTRUCTION_NODES_V1 {
             return None;
         }
-
         let mut pending_depths = vec![1_usize];
         let mut analysis = JsonConstructionAnalysisV1 {
             nodes: 0,
@@ -108,21 +98,18 @@ impl JsonConstructionSchemaV1 {
                 pending_depths.extend(std::iter::repeat_n(child_depth, child_count));
             }
         }
-
         (pending_depths.is_empty()
             && analysis.nodes <= MAX_JSON_CONSTRUCTION_NODES_V1
             && analysis.words <= MAX_STATE_VALUE_WORDS)
             .then_some(analysis)
     }
 }
-
 #[derive(Clone, Copy)]
 struct JsonConstructionAnalysisV1 {
     nodes: usize,
     words: usize,
     depth: usize,
 }
-
 /// Return whether an aggregate-state schema belongs to the nested
 /// JSON-convertible V1 subset.
 #[must_use]
@@ -146,7 +133,6 @@ pub fn json_value_schema_is_supported(schema: &StateValueSchemaV1) -> bool {
                 | StateValueKindV1::DataSpaceId
         )
     }
-
     if !schema.validate() {
         return false;
     }
@@ -201,19 +187,15 @@ pub fn json_value_schema_is_supported(schema: &StateValueSchemaV1) -> bool {
     }
     true
 }
-
 #[cfg(test)]
 mod tests {
     use norito::{decode_from_bytes, to_bytes};
-
     use super::*;
-
     fn leaf(kind: StateValueKindV1) -> StateValueSchemaV1 {
         StateValueSchemaV1 {
             nodes: vec![StateValueNodeV1::Leaf(kind)],
         }
     }
-
     fn nested_list_schema(wrappers: usize) -> StateValueSchemaV1 {
         let mut schema = leaf(StateValueKindV1::Bool);
         for _ in 0..wrappers {
@@ -226,13 +208,11 @@ mod tests {
         }
         schema
     }
-
     fn nested_option_schema(wrappers: usize) -> StateValueSchemaV1 {
         let mut nodes = vec![StateValueNodeV1::Option; wrappers];
         nodes.push(StateValueNodeV1::Leaf(StateValueKindV1::Bool));
         StateValueSchemaV1 { nodes }
     }
-
     #[test]
     fn construction_schema_counts_words_and_rejects_duplicate_keys() {
         let schema = JsonConstructionSchemaV1 {
@@ -254,7 +234,6 @@ mod tests {
         };
         assert!(schema.validate());
         assert_eq!(schema.word_count(), Some(3));
-
         let duplicate = JsonConstructionSchemaV1 {
             nodes: vec![
                 JsonConstructionNodeV1::Object {
@@ -271,7 +250,6 @@ mod tests {
         assert!(!duplicate.validate());
         assert_eq!(duplicate.word_count(), None);
     }
-
     #[test]
     fn supported_values_allow_nested_options_and_lists_but_reject_products_and_results() {
         let option_list = StateValueSchemaV1 {
@@ -284,7 +262,6 @@ mod tests {
             ],
         };
         assert!(json_value_schema_is_supported(&option_list));
-
         for rejected in [
             StateValueSchemaV1 {
                 nodes: vec![
@@ -305,7 +282,6 @@ mod tests {
             assert!(!json_value_schema_is_supported(&rejected));
         }
     }
-
     #[test]
     fn supported_value_walker_honours_the_256_node_boundary_on_a_small_stack() {
         std::thread::Builder::new()
@@ -314,10 +290,8 @@ mod tests {
             .spawn(|| {
                 let lists = nested_list_schema(MAX_STATE_VALUE_NODES - 1);
                 assert!(json_value_schema_is_supported(&lists));
-
                 let options = nested_option_schema(MAX_STATE_VALUE_NODES - 1);
                 assert!(json_value_schema_is_supported(&options));
-
                 let too_deep = nested_list_schema(MAX_STATE_VALUE_NODES);
                 assert!(!json_value_schema_is_supported(&too_deep));
                 assert!(!json_value_schema_is_supported(&StateValueSchemaV1 {
@@ -328,7 +302,6 @@ mod tests {
             .join()
             .expect("small-stack JSON schema test");
     }
-
     #[test]
     fn construction_schema_analyzer_honours_the_256_node_boundary_on_a_small_stack() {
         std::thread::Builder::new()
@@ -346,7 +319,6 @@ mod tests {
                 let boundary = JsonConstructionSchemaV1 { nodes };
                 assert!(boundary.validate());
                 assert_eq!(boundary.word_count(), Some(1));
-
                 let mut too_many_nodes = Vec::with_capacity(MAX_JSON_CONSTRUCTION_NODES_V1 + 1);
                 too_many_nodes.extend(
                     (0..MAX_JSON_CONSTRUCTION_NODES_V1)
@@ -365,7 +337,6 @@ mod tests {
             .join()
             .expect("small-stack JSON construction-schema test");
     }
-
     #[test]
     fn construction_schema_roundtrips_canonically() {
         let schema = JsonConstructionSchemaV1 {

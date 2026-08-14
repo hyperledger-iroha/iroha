@@ -1,9 +1,7 @@
 //! Build script configuring dynamic linker flags for the JS host crate.
-
 fn emit_source_revision_rerun() {
     println!("cargo:rerun-if-env-changed=IROHA_GIT_COMMIT_HASH");
 }
-
 #[cfg(target_os = "macos")]
 fn main() {
     emit_source_revision_rerun();
@@ -12,7 +10,6 @@ fn main() {
     println!("cargo:rustc-link-arg=-undefined");
     println!("cargo:rustc-link-arg=dynamic_lookup");
 }
-
 #[cfg(all(target_family = "unix", not(target_os = "macos")))]
 fn main() {
     emit_source_revision_rerun();
@@ -21,7 +18,6 @@ fn main() {
     // can satisfy N-API imports at runtime, matching the macOS behaviour above.
     println!("cargo:rustc-link-arg=-Wl,--unresolved-symbols=ignore-all");
 }
-
 #[cfg(not(target_family = "unix"))]
 fn main() {
     emit_source_revision_rerun();

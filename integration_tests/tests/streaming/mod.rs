@@ -1,9 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Norito Streaming integration test helpers and vectors.
-
 use core::convert::TryFrom;
 use std::path::PathBuf;
-
 use hex::encode as hex_encode;
 use iroha_config::parameters::actual;
 use iroha_core::streaming::{StreamingHandle, StreamingProcessError};
@@ -24,14 +22,12 @@ use norito::{
     },
     to_bytes,
 };
-
 /// Default capability mask used by streaming integration tests.
 pub const BASE_CAPABILITIES: CapabilityFlags = CapabilityFlags::from_bits(
     CapabilityFlags::FEATURE_FEEDBACK_HINTS
         | CapabilityFlags::FEATURE_PRIVACY_PROVIDER
         | CapabilityFlags::FEATURE_ENTROPY_BUNDLED,
 );
-
 /// Deterministic Norito Streaming vector exercised by the end-to-end integration test.
 #[derive(Clone)]
 pub struct StreamingTestVector {
@@ -52,7 +48,6 @@ pub struct StreamingTestVector {
     /// Revocation payload matching the canonical ticket.
     pub ticket_revocation: TicketRevocation,
 }
-
 impl StreamingTestVector {
     /// Return the maximum chunk length inside the vector.
     #[must_use]
@@ -63,7 +58,6 @@ impl StreamingTestVector {
             .max()
             .unwrap_or_default()
     }
-
     /// Encode the manifest after capability stamping into bytes.
     ///
     /// # Errors
@@ -72,7 +66,6 @@ impl StreamingTestVector {
     pub fn manifest_wire_bytes(manifest: &ManifestV1) -> Result<Vec<u8>, norito::Error> {
         to_bytes(manifest)
     }
-
     /// Build a JSON snapshot describing the template vector contents.
     ///
     /// The string is suitable for sharing with partner SDKs as a canonical reference, and it
@@ -89,7 +82,6 @@ impl StreamingTestVector {
         let chunk_payloads: Vec<String> = self.chunk_payloads.iter().map(hex_encode).collect();
         let storage_commitment_hex = hex_encode(self.storage_commitment);
         let da_root_hex = hex_encode(self.da_root);
-
         let mut map = norito::json::Map::new();
         map.insert(
             "manifest_template_hex".into(),
@@ -115,7 +107,6 @@ impl StreamingTestVector {
         json::to_string_pretty(&json_value).map_err(norito::Error::from)
     }
 }
-
 fn ticket_json_value(ticket: &StreamingTicket) -> Result<norito::json::Value, norito::Error> {
     let mut map = norito::json::Map::new();
     map.insert(
@@ -167,7 +158,6 @@ fn ticket_json_value(ticket: &StreamingTicket) -> Result<norito::json::Value, no
     map.insert("ticket_id".into(), hex_value(ticket.ticket_id));
     Ok(norito::json::Value::Object(map))
 }
-
 fn ticket_policy_json(policy: Option<&TicketPolicy>) -> Result<norito::json::Value, norito::Error> {
     let Some(policy) = policy else {
         return Ok(norito::json::Value::Null);
@@ -187,7 +177,6 @@ fn ticket_policy_json(policy: Option<&TicketPolicy>) -> Result<norito::json::Val
     );
     Ok(norito::json::Value::Object(map))
 }
-
 fn ticket_revocation_json_value(revocation: &TicketRevocation) -> norito::json::Value {
     let mut map = norito::json::Map::new();
     map.insert("nullifier".into(), hex_value(revocation.nullifier));
@@ -202,18 +191,15 @@ fn ticket_revocation_json_value(revocation: &TicketRevocation) -> norito::json::
     map.insert("ticket_id".into(), hex_value(revocation.ticket_id));
     norito::json::Value::Object(map)
 }
-
 fn hex_value(bytes: impl AsRef<[u8]>) -> norito::json::Value {
     norito::json::Value::from(hex_encode(bytes.as_ref()))
 }
-
 fn u128_json_value(value: u128) -> norito::json::Value {
     u64::try_from(value).map_or_else(
         |_| norito::json::Value::from(value.to_string()),
         norito::json::Value::from,
     )
 }
-
 /// Construct a deterministic baseline segment and the encoder configuration used to produce it.
 #[must_use]
 pub fn baseline_segment(
@@ -227,7 +213,6 @@ pub fn baseline_segment(
     for _ in 0..frame_count {
         frames.push(RawFrame::new(dims, base_luma.clone()).expect("valid frame"));
     }
-
     let config = BaselineEncoderConfig {
         frame_dimensions: dims,
         frame_duration_ns,
@@ -236,18 +221,14 @@ pub fn baseline_segment(
         quantizer: 0,
         ..BaselineEncoderConfig::default()
     };
-
     let mut encoder = BaselineEncoder::new(config.clone());
     let segment = encoder
         .encode_segment(5, 1_000_000, 3, &frames, None)
         .expect("encode baseline segment");
-
     (config, segment, frames)
 }
-
 fn vector_from_segment(segment: &EncodedSegment) -> StreamingTestVector {
     let manifest = build_manifest(segment);
-
     let chunk_refs: Vec<(u16, &[u8])> = segment
         .descriptors
         .iter()
@@ -255,7 +236,6 @@ fn vector_from_segment(segment: &EncodedSegment) -> StreamingTestVector {
         .map(|(descriptor, chunk)| (descriptor.chunk_id, chunk.as_slice()))
         .collect();
     let chunk_commitments = chunk::chunk_commitments(segment.header.segment_number, &chunk_refs);
-
     let chunk_ids: Vec<_> = segment
         .descriptors
         .iter()
@@ -275,7 +255,6 @@ fn vector_from_segment(segment: &EncodedSegment) -> StreamingTestVector {
         &chunk_ids,
     )
     .expect("da root");
-
     let manifest_bytes = to_bytes(&manifest).expect("serialize manifest template");
     let capabilities = TicketCapabilities::from_bits(
         TicketCapabilities::LIVE | TicketCapabilities::HDR | TicketCapabilities::SPATIAL_AUDIO,
@@ -307,14 +286,12 @@ fn vector_from_segment(segment: &EncodedSegment) -> StreamingTestVector {
         nullifier: fill_hash(0x48),
         proof_id: fill_hash(0x49),
     };
-
     let ticket_revocation = TicketRevocation {
         ticket_id: ticket.ticket_id,
         nullifier: ticket.nullifier,
         reason_code: 17,
         revocation_signature: fill_signature(0xCC),
     };
-
     StreamingTestVector {
         manifest,
         manifest_bytes,
@@ -326,20 +303,17 @@ fn vector_from_segment(segment: &EncodedSegment) -> StreamingTestVector {
         ticket_revocation,
     }
 }
-
 /// Construct a deterministic baseline streaming vector for integration testing.
 #[must_use]
 pub fn baseline_test_vector() -> StreamingTestVector {
     baseline_test_vector_with_frames(2)
 }
-
 /// Construct a deterministic baseline streaming vector with the requested frame count.
 #[must_use]
 pub fn baseline_test_vector_with_frames(frame_count: usize) -> StreamingTestVector {
     let (_config, segment, _frames) = baseline_segment(frame_count);
     vector_from_segment(&segment)
 }
-
 /// Construct a bundled segment using the repository bundle tables.
 #[must_use]
 pub fn bundled_segment(
@@ -359,12 +333,10 @@ pub fn bundled_segment(
     for _ in 0..frame_count {
         frames.push(RawFrame::new(dims, base_luma.clone()).expect("valid frame"));
     }
-
     let bundle_tables = load_bundle_tables_from_toml(repo_rans_tables_path())
         .expect("load bundle tables from repository fixture");
     let max_width = bundle_tables.max_width().max(2);
     let configured_width = bundle_width.clamp(2, max_width);
-
     let config = BaselineEncoderConfig {
         frame_dimensions: dims,
         frame_duration_ns,
@@ -376,7 +348,6 @@ pub fn bundled_segment(
         bundle_tables: bundle_tables.clone(),
         ..BaselineEncoderConfig::default()
     };
-
     let mut encoder = BaselineEncoder::new(config.clone());
     let segment = encoder
         .encode_segment(6, 2_000_000, 9, &frames, None)
@@ -385,16 +356,13 @@ pub fn bundled_segment(
         .bundled_telemetry()
         .cloned()
         .expect("bundled telemetry recorded");
-
     (config, segment, frames, telemetry)
 }
-
 /// Construct a bundled streaming vector with deterministic frames.
 #[must_use]
 pub fn bundled_test_vector() -> StreamingTestVector {
     bundled_test_vector_with_frames(2, 4)
 }
-
 /// Construct a bundled streaming vector with the desired frame count and bundle width.
 #[must_use]
 pub fn bundled_test_vector_with_frames(
@@ -404,10 +372,8 @@ pub fn bundled_test_vector_with_frames(
     let (_config, segment, _frames, _telemetry) = bundled_segment(frame_count, bundle_width);
     vector_from_segment(&segment)
 }
-
 fn build_manifest(segment: &EncodedSegment) -> ManifestV1 {
     use norito::streaming::{FecScheme, Multiaddr, StreamMetadata};
-
     let params = BaselineManifestParams {
         stream_id: fill_hash(0x31),
         protocol_version: 1,
@@ -426,18 +392,14 @@ fn build_manifest(segment: &EncodedSegment) -> ManifestV1 {
         neural_bundle: None,
         transport_capabilities_hash: [0u8; 32],
     };
-
     segment.build_manifest(params)
 }
-
 fn fill_hash(byte: u8) -> Hash {
     [byte; 32]
 }
-
 fn fill_signature(byte: u8) -> norito::streaming::Signature {
     [byte; 64]
 }
-
 fn workspace_root() -> PathBuf {
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !dir.join("Cargo.lock").exists() {
@@ -448,18 +410,15 @@ fn workspace_root() -> PathBuf {
     }
     dir
 }
-
 fn repo_rans_tables_path() -> PathBuf {
     workspace_root().join("codec/rans/tables/rans_seed0.toml")
 }
-
 /// Construct a deterministic [`Peer`] for the supplied key pair and port.
 #[must_use]
 pub fn make_peer(key_pair: &KeyPair, port: u16) -> Peer {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     Peer::new(SocketAddr::from(addr), key_pair.public_key().clone())
 }
-
 /// Create a streaming handle with default capabilities suited for the tests.
 #[must_use]
 pub fn streaming_handle() -> StreamingHandle {
@@ -471,13 +430,11 @@ pub fn streaming_handle() -> StreamingHandle {
         .with_codec_config(&codec)
         .expect("codec config defaults must load bundle tables")
 }
-
 /// Create a streaming handle configured for bundled rANS mode with the specified width.
 #[must_use]
 pub fn bundled_streaming_handle(bundle_width: u8) -> StreamingHandle {
     bundled_streaming_handle_with_accel(bundle_width, actual::BundleAcceleration::None)
 }
-
 /// Create a bundled streaming handle that advertises the requested acceleration mode.
 #[must_use]
 pub fn bundled_streaming_handle_with_accel(
@@ -498,7 +455,6 @@ pub fn bundled_streaming_handle_with_accel(
         .with_codec_config(&codec)
         .expect("bundled codec config must load bundle tables")
 }
-
 /// Generate deterministic key material for the publisher and viewer roles.
 #[must_use]
 pub fn test_keypairs() -> (KeyPair, KeyPair) {
@@ -508,7 +464,6 @@ pub fn test_keypairs() -> (KeyPair, KeyPair) {
         KeyPair::try_random().expect("generate checked streaming viewer keypair"),
     )
 }
-
 /// Build a manifest announce frame after stamping capabilities for the provided viewer.
 ///
 /// # Errors
@@ -522,7 +477,6 @@ pub fn manifest_announce_for_viewer(
     handle.apply_manifest_transport_capabilities(viewer.id(), &mut manifest)?;
     Ok(ManifestAnnounceFrame { manifest })
 }
-
 /// Record transport capabilities and negotiated bits for a viewer peer, returning the resolution.
 pub fn seed_viewer_negotiation(
     handle: &StreamingHandle,
@@ -545,7 +499,6 @@ pub fn seed_viewer_negotiation(
         .expect("record viewer negotiated capabilities");
     resolution
 }
-
 #[cfg(test)]
 mod tests {
     use norito::{
@@ -555,9 +508,7 @@ mod tests {
             TransportCapabilityResolution,
         },
     };
-
     use super::*;
-
     fn expect_u64_field(map: &norito::json::Map, key: &str) -> u64 {
         match map.get(key) {
             Some(Value::Number(value)) => value
@@ -566,7 +517,6 @@ mod tests {
             _ => panic!("{key} must be a number"),
         }
     }
-
     #[test]
     fn baseline_snapshot_matches_golden_fixture() {
         let vector = baseline_test_vector();
@@ -599,7 +549,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn bundled_snapshot_matches_golden_fixture() {
         let vector = bundled_test_vector();
@@ -632,7 +581,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn snapshot_json_encodes_ticket_fields() {
@@ -678,7 +626,6 @@ mod tests {
             _ => panic!("proof_id must be a string"),
         };
         assert_eq!(proof_id, &hex_encode(vector.ticket.proof_id));
-
         let owner = match ticket_map.get("owner") {
             Some(Value::String(value)) => value,
             _ => panic!("owner must be a string"),
@@ -732,7 +679,6 @@ mod tests {
             max_relays,
             u64::from(vector.ticket.policy.as_ref().unwrap().max_relays)
         );
-
         let revocation = root
             .get("ticket_revocation")
             .expect("ticket_revocation field present");
@@ -763,7 +709,6 @@ mod tests {
             u64::from(vector.ticket_revocation.reason_code)
         );
     }
-
     #[test]
     fn snapshot_json_uses_string_for_large_prepaid_teu() {
         let mut vector = baseline_test_vector();
@@ -784,7 +729,6 @@ mod tests {
         };
         assert_eq!(prepaid_teu, &vector.ticket.prepaid_teu.to_string());
     }
-
     #[test]
     fn helper_functions_remain_consistent() {
         let vector = baseline_test_vector_with_frames(2);
@@ -796,17 +740,14 @@ mod tests {
             .max()
             .unwrap_or_default();
         assert_eq!(vector.max_chunk_len(), expected_max);
-
         // Manifest wire bytes should match template serialization.
         let manifest_bytes = StreamingTestVector::manifest_wire_bytes(&vector.manifest)
             .expect("manifest serializes");
         assert_eq!(manifest_bytes, vector.manifest_bytes);
-
         // Construct peer/network fixtures and ensure manifest announce succeeds.
         let handle = streaming_handle();
         let (_publisher, viewer) = test_keypairs();
         let viewer_peer = make_peer(&viewer, 12_345);
-
         // Seed negotiated capability state to mirror the runtime handshake.
         let max_datagram = u16::try_from(vector.max_chunk_len()).unwrap_or(u16::MAX);
         let resolution = TransportCapabilityResolution {
@@ -822,12 +763,10 @@ mod tests {
         handle
             .record_negotiated_capabilities(&viewer_peer, CapabilityRole::Viewer, BASE_CAPABILITIES)
             .expect("record viewer negotiated capabilities");
-
         let announce = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
             .expect("announce manifest");
         assert_eq!(announce.manifest.chunk_root, vector.manifest.chunk_root);
     }
-
     #[test]
     fn bundled_handle_negotiation_smoke() {
         let handle = bundled_streaming_handle(4);
@@ -841,7 +780,6 @@ mod tests {
             u16::try_from(max_chunk_len).unwrap_or(u16::MAX)
         );
     }
-
     #[test]
     fn bundled_vector_includes_entropy_metadata() {
         let vector = bundled_test_vector();
@@ -862,7 +800,6 @@ mod tests {
             "bundled harness should emit chunk payloads"
         );
     }
-
     #[test]
     fn bundled_manifest_rejected_without_viewer_entropy_flag() {
         let handle = bundled_streaming_handle(4);
@@ -871,7 +808,6 @@ mod tests {
         let vector = bundled_test_vector();
         let negotiated = BASE_CAPABILITIES.remove(CapabilityFlags::FEATURE_ENTROPY_BUNDLED);
         seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
-
         let err = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
             .expect_err("viewer lacking bundled bit must be rejected");
         assert!(matches!(
@@ -879,7 +815,6 @@ mod tests {
             StreamingProcessError::ManifestEntropyModeNotNegotiated { .. }
         ));
     }
-
     #[test]
     fn bundled_manifest_rejected_without_viewer_acceleration_flag() {
         let handle = bundled_streaming_handle_with_accel(4, actual::BundleAcceleration::CpuSimd);
@@ -888,7 +823,6 @@ mod tests {
         let vector = bundled_test_vector();
         let negotiated = BASE_CAPABILITIES;
         seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
-
         let err = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
             .expect_err("viewer lacking acceleration bit must be rejected");
         assert!(matches!(
@@ -896,7 +830,6 @@ mod tests {
             StreamingProcessError::ManifestAccelerationNotNegotiated { .. }
         ));
     }
-
     #[test]
     fn bundled_manifest_sets_acceleration_bits_when_supported() {
         let handle = bundled_streaming_handle_with_accel(4, actual::BundleAcceleration::CpuSimd);
@@ -905,7 +838,6 @@ mod tests {
         let vector = bundled_test_vector();
         let negotiated = BASE_CAPABILITIES.insert(CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD);
         seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
-
         let announce = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
             .expect("viewer advertising bundled + accel bits should succeed");
         let capabilities = announce.manifest.capabilities;
@@ -918,7 +850,6 @@ mod tests {
             "manifest must advertise the negotiated acceleration bit",
         );
     }
-
     #[test]
     fn bundled_manifest_rejected_without_viewer_gpu_flag() {
         if !BUNDLED_RANS_GPU_BUILD_AVAILABLE {
@@ -933,7 +864,6 @@ mod tests {
         let vector = bundled_test_vector();
         let negotiated = BASE_CAPABILITIES;
         seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
-
         let err = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
             .expect_err("viewer lacking GPU acceleration bit must be rejected");
         assert!(matches!(
@@ -941,7 +871,6 @@ mod tests {
             StreamingProcessError::ManifestAccelerationNotNegotiated { .. }
         ));
     }
-
     #[test]
     fn bundled_manifest_rejected_when_viewer_only_advertises_gpu_for_cpu_handle() {
         let handle = bundled_streaming_handle_with_accel(4, actual::BundleAcceleration::CpuSimd);
@@ -950,7 +879,6 @@ mod tests {
         let vector = bundled_test_vector();
         let negotiated = BASE_CAPABILITIES.insert(CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU);
         seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
-
         let err = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
             .expect_err("CPU-only handle must reject GPU-only viewers");
         assert!(matches!(
@@ -958,7 +886,6 @@ mod tests {
             StreamingProcessError::ManifestAccelerationNotNegotiated { .. }
         ));
     }
-
     #[test]
     fn bundled_manifest_sets_gpu_acceleration_bit_when_supported() {
         if !BUNDLED_RANS_GPU_BUILD_AVAILABLE {
@@ -973,7 +900,6 @@ mod tests {
         let vector = bundled_test_vector();
         let negotiated = BASE_CAPABILITIES.insert(CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU);
         seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
-
         let announce = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
             .expect("GPU viewers advertising bundled + acceleration bits should succeed");
         assert!(
@@ -991,7 +917,6 @@ mod tests {
             "GPU manifests must not leak CPU-specific capability bits",
         );
     }
-
     #[test]
     fn bundled_manifest_strips_gpu_bit_for_cpu_handle() {
         let handle = bundled_streaming_handle_with_accel(4, actual::BundleAcceleration::CpuSimd);
@@ -1003,7 +928,6 @@ mod tests {
                 | CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU,
         );
         seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
-
         let announce = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
             .expect("CPU handle should normalize viewer GPU bits");
         assert!(
@@ -1021,7 +945,6 @@ mod tests {
             "CPU manifests must drop GPU acceleration bits"
         );
     }
-
     #[test]
     fn bundled_manifest_strips_cpu_bit_for_gpu_handle() {
         if !BUNDLED_RANS_GPU_BUILD_AVAILABLE {
@@ -1039,7 +962,6 @@ mod tests {
                 | CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU,
         );
         seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
-
         let announce = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
             .expect("GPU handle should normalize viewer CPU bits");
         assert!(
@@ -1057,14 +979,12 @@ mod tests {
             "GPU manifests must drop CPU acceleration bits"
         );
     }
-
     #[test]
     fn bundled_manifest_handles_hybrid_viewers() {
         let handle = bundled_streaming_handle_with_accel(4, actual::BundleAcceleration::CpuSimd);
         let vector = bundled_test_vector();
         let (_publisher, hybrid_viewer) = test_keypairs();
         let hybrid_peer = make_peer(&hybrid_viewer, 12_356);
-
         let negotiated_hybrid = BASE_CAPABILITIES.insert(
             CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD
                 | CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU,
@@ -1092,12 +1012,10 @@ mod tests {
                 .contains(CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU),
             "CPU handle must normalize away GPU-only bits"
         );
-
         // Ensure subsequent announcements for the hybrid viewer remain valid.
         manifest_announce_for_viewer(&handle, &hybrid_peer, vector.manifest.clone())
             .expect("hybrid viewer must continue to receive normalized manifests");
     }
-
     #[test]
     fn bundled_gpu_handle_rejects_cpu_viewers() {
         if !BUNDLED_RANS_GPU_BUILD_AVAILABLE {
@@ -1112,7 +1030,6 @@ mod tests {
         let (_publisher2, cpu_viewer) = test_keypairs();
         let gpu_peer = make_peer(&gpu_viewer, 12_358);
         let cpu_peer = make_peer(&cpu_viewer, 12_359);
-
         let negotiated_gpu = BASE_CAPABILITIES.insert(CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU);
         seed_viewer_negotiation(&handle, &gpu_peer, negotiated_gpu, vector.max_chunk_len());
         let gpu_manifest =
@@ -1132,7 +1049,6 @@ mod tests {
                 .contains(CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD),
             "GPU manifests must not leak CPU acceleration bits"
         );
-
         let cpu_caps = BASE_CAPABILITIES.insert(CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD);
         seed_viewer_negotiation(&handle, &cpu_peer, cpu_caps, vector.max_chunk_len());
         let err = manifest_announce_for_viewer(&handle, &cpu_peer, vector.manifest.clone())
@@ -1141,11 +1057,9 @@ mod tests {
             err,
             StreamingProcessError::ManifestAccelerationNotNegotiated { .. }
         ));
-
         manifest_announce_for_viewer(&handle, &gpu_peer, vector.manifest.clone())
             .expect("GPU viewer must continue to receive manifests after CPU rejection");
     }
-
     #[test]
     fn bundled_telemetry_invariants_hold() {
         let (config, _segment, _frames, telemetry) = bundled_segment(2, 4);

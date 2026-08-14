@@ -18,7 +18,6 @@ async fn gossip_accepts_restricted_route_match() {
     let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
     let live_query = LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
-
     let restricted_dataspace = DataSpaceId::new(7);
     let restricted_lane = LaneId::new(1);
     let lane_catalog = LaneCatalog::new(
@@ -64,12 +63,10 @@ async fn gossip_accepts_restricted_route_match() {
         nexus.routing_policy.default_dataspace = restricted_dataspace;
     }
     assert!(state.is_lane_active_for_authority(restricted_lane));
-
     let queue = Arc::new(Queue::test(
         QueueConfig::default(),
         &TimeSource::new_system(),
     ));
-
     let now = Instant::now();
     let gossiper = TransactionGossiper {
         gossip_period: Duration::from_millis(50),
@@ -92,7 +89,6 @@ async fn gossip_accepts_restricted_route_match() {
         public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
         restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
     };
-
     let (signed, _) = build_transaction("restricted-route");
     let route = GossipRoute {
         lane_id: restricted_lane,
@@ -117,6 +113,5 @@ async fn gossip_accepts_restricted_route_match() {
         plans: vec![plan_for_route(route)],
         plane: GossipPlane::Restricted,
     }));
-
     assert_eq!(queue.queued_len(), 1);
 }

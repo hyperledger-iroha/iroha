@@ -1,7 +1,5 @@
 //! Runtime coverage for Kotodama VRF request transport normalization.
-
 use std::collections::BTreeMap;
-
 use blstrs::{G1Projective, G2Projective, Scalar};
 use group::{Curve, Group};
 use iroha_crypto::Hash;
@@ -13,9 +11,7 @@ use ivm::{
     pointer_abi::PointerType,
     vrf::{VrfVerifyBatchRequest, VrfVerifyRequest},
 };
-
 mod common;
-
 fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -29,7 +25,6 @@ fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(Hash::new(payload).as_ref());
     out
 }
-
 fn argument_record_tlv(entrypoint: &ivm::EmbeddedEntrypointDescriptor, payload: &Json) -> Vec<u8> {
     let schema = entrypoint
         .argument_schema
@@ -39,7 +34,6 @@ fn argument_record_tlv(entrypoint: &ivm::EmbeddedEntrypointDescriptor, payload: 
         ivm::encode_argument_record_from_json(schema, payload).expect("encode argument record");
     tlv(PointerType::NoritoBytes, &record)
 }
-
 fn compile_and_run(source: &str, arguments: Option<&Json>) -> IVM {
     let code = ivm::kotodama::compiler::Compiler::new()
         .compile_source(source)
@@ -54,7 +48,6 @@ fn compile_and_run(source: &str, arguments: Option<&Json>) -> IVM {
         .find(|entrypoint| entrypoint.name == "run")
         .expect("run entrypoint descriptor");
     let entry_pc = u64::try_from(parsed.prefix_len()).expect("prefix fits u64") + run.entry_pc;
-
     let host = if let Some(arguments) = arguments {
         let key: Name = "trigger_event_json".parse().expect("public input key");
         DefaultHost::new()
@@ -71,10 +64,8 @@ fn compile_and_run(source: &str, arguments: Option<&Json>) -> IVM {
     vm.run().expect("execute VRF transport contract");
     vm
 }
-
 fn valid_vrf_request() -> (Vec<u8>, [u8; 32]) {
     const DST: &[u8] = b"BLS12381G2_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";
-
     let mut seed = [0_u8; 32];
     for (index, byte) in seed.iter_mut().enumerate() {
         *byte = u8::try_from(index + 1).expect("fixture index fits u8");
@@ -94,7 +85,6 @@ fn valid_vrf_request() -> (Vec<u8>, [u8; 32]) {
     let proof = (G2Projective::hash_to_curve(&message, DST, &[]) * secret)
         .to_affine()
         .to_compressed();
-
     let mut output_preimage = Vec::new();
     output_preimage.extend_from_slice(b"iroha:vrf:v1:output");
     output_preimage.extend_from_slice(&proof);
@@ -111,7 +101,6 @@ fn valid_vrf_request() -> (Vec<u8>, [u8; 32]) {
         expected,
     )
 }
-
 #[test]
 fn vrf_verify_accepts_entrypoint_bytes_and_returns_expected_blob() {
     let source = r#"
@@ -127,14 +116,12 @@ seiyaku VrfEntrypointBytes {
         "request": request_hex,
     }));
     let vm = compile_and_run(source, Some(&arguments));
-
     let output = vm
         .validate_tlv(vm.register(10))
         .expect("VRF output pointer");
     assert_eq!(output.type_id, PointerType::Blob);
     assert_eq!(output.payload, expected);
 }
-
 #[test]
 fn vrf_verify_batch_rejects_empty_entrypoint_bytes() {
     let source = r#"
@@ -151,12 +138,10 @@ seiyaku VrfBatchEntrypointBytes {
         "batch": request_hex,
     }));
     let vm = compile_and_run(source, Some(&arguments));
-
     assert_eq!(vm.register(10), 0);
     assert_eq!(vm.register(11), 9, "empty batch bound status");
     assert_eq!(vm.register(12), u64::MAX);
 }
-
 #[test]
 fn malformed_vrf_bytes_literal_reaches_decode_error() {
     let source = r#"
@@ -167,7 +152,6 @@ seiyaku MalformedVrfLiteral {
 }
 "#;
     let vm = compile_and_run(source, None);
-
     assert_eq!(vm.register(10), 0);
     assert_eq!(vm.register(11), 2, "malformed Norito request status");
     assert_ne!(

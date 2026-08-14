@@ -34,6 +34,20 @@ def read_source(path: Path) -> str:
     return source
 
 
+def docs_with_literal(docs_source_dir: Path, literal: str) -> list[str]:
+    """Return canonical SoraFS documentation paths containing ``literal``."""
+    repo_root = docs_source_dir.parent
+    canonical_docs = [
+        *sorted((docs_source_dir / "sorafs").rglob("*.md")),
+        *sorted(docs_source_dir.glob("sorafs_*.md")),
+    ]
+    return [
+        str(path.relative_to(repo_root))
+        for path in canonical_docs
+        if literal in read_source(path)
+    ]
+
+
 def function_source(path: Path, function_name: str) -> str:
     """Return one top-level Python function from a composed source."""
     source_text = read_source(path)

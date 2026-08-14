@@ -1,11 +1,9 @@
 //! Canonical Anonymous-PGC encrypted account-state root derivation.
-
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
     PrivacyNamespaceV1, PrivacyPgcAccountV1, PrivacyProtocolIdV1, PrivacyRootV1,
 };
 use thiserror::Error;
-
 /// Failure deriving one canonical Anonymous-PGC encrypted account-state root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyPgcAccountStateRootErrorV1 {
@@ -43,7 +41,6 @@ pub enum PrivacyPgcAccountStateRootErrorV1 {
     #[error("privacy PGC account-root derivation produced the reserved zero root")]
     ZeroRoot,
 }
-
 /// Deterministically derive one complete PGC encrypted account-state root.
 ///
 /// This is the public wallet/validator boundary for predicting the exact
@@ -93,7 +90,6 @@ pub fn derive_privacy_pgc_account_state_root_v1(
                 .map_err(|_| PrivacyPgcAccountStateRootErrorV1::InvalidPoint)?;
         }
     }
-
     let namespace_bytes = norito::to_bytes(&namespace)
         .map_err(|_| PrivacyPgcAccountStateRootErrorV1::NamespaceEncoding)?;
     let namespace_len = u64::try_from(namespace_bytes.len())
@@ -116,7 +112,6 @@ pub fn derive_privacy_pgc_account_state_root_v1(
     }
     Ok(root)
 }
-
 pub(crate) fn compute_privacy_pgc_account_state_root_v1(
     namespace: PrivacyNamespaceV1,
     epoch: u64,

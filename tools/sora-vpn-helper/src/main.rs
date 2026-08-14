@@ -1,12 +1,12 @@
 #![allow(unexpected_cfgs)]
-
+//! Runs the privileged Sora VPN helper and its authenticated control protocol.
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::{
     env,
     ffi::OsStr,
     fs,
-    io::{self, Read as _, Write as _},
+    io::{self, Write as _},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Stdio},
@@ -18,7 +18,6 @@ use std::{
 };
 #[cfg(target_os = "linux")]
 use std::{ffi::CStr, os::fd::FromRawFd};
-
 use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use clap::{Parser, Subcommand};
 use hex::FromHexError;
@@ -71,7 +70,6 @@ use tokio::{
     signal::unix::{SignalKind, signal},
     time::timeout,
 };
-
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -82,6 +80,31 @@ const CONTROLLER_KIND: &str = "linux-helperd";
 const PACKET_LEN_PREFIX_BYTES: usize = 2;
 const CONNECT_PAYLOAD_FRAME_MAGIC: &[u8; 8] = b"SVPNCP1\0";
 const STATE_FILE_FRAME_MAGIC: &[u8; 8] = b"SVPNST1\0";
+// The first-release worker protocol is local-only, but the hidden subcommands can still be
+// invoked with an arbitrary pipe. One MiB leaves room for the complete route policy while
+// preventing a privileged helper from buffering an unbounded stdin stream.
+const MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1: usize = 1024 * 1024;
+const MAX_CONNECT_PAYLOAD_FIELD_BYTES_V1: usize = 64 * 1024;
+const MAX_CONNECT_PAYLOAD_SEQUENCE_ELEMENTS_V1: usize = 4_096;
+const MAX_CONNECT_PAYLOAD_TOTAL_ELEMENTS_V1: usize = 4 * 4_096;
+const MAX_CONNECT_PAYLOAD_DECODE_ALLOCATION_BYTES_V1: usize = 4 * 1024 * 1024;
+const MAX_CONNECT_PAYLOAD_DECODE_DEPTH_V1: usize = 8;
+// Persisted state can additionally contain one captured pre-VPN route for every excluded route.
+// Bound it independently so a corrupt state file cannot turn startup/status into an OOM path.
+const MAX_STATE_FRAME_BYTES_V1: usize = 8 * 1024 * 1024;
+const MAX_STATE_FIELD_BYTES_V1: usize = 64 * 1024;
+const MAX_STATE_SEQUENCE_ELEMENTS_V1: usize = 4_096;
+const MAX_STATE_TOTAL_ELEMENTS_V1: usize = 8 * 1024 * 1024;
+const MAX_STATE_DECODE_ALLOCATION_BYTES_V1: usize = 16 * 1024 * 1024;
+const MAX_STATE_DECODE_DEPTH_V1: usize = 16;
+const MAX_RESOLV_CONF_BYTES_V1: usize = 1024 * 1024;
+const MAX_SESSION_ID_BYTES_V1: usize = 256;
+const MAX_RELAY_ENDPOINT_BYTES_V1: usize = 2_048;
+const MAX_EXIT_CLASS_BYTES_V1: usize = 64;
+const MAX_TLS_SERVER_NAME_BYTES_V1: usize = 253;
+const MAX_HELPER_TICKET_HEX_BYTES_V1: usize = 64 * 1024;
+const MAX_NETWORK_POLICY_ENTRIES_V1: usize = 4_096;
+const MAX_NETWORK_POLICY_ENTRY_BYTES_V1: usize = 256;
 const DEFAULT_ROUTE_CMD: &str = "ip";
 const DEFAULT_ROUTE_SHOW_PREFIX: [&str; 2] = ["-o", "route"];
 const DEFAULT_USAGE_VOUCHER_INTERVAL_MS: u64 = 1_000;
@@ -94,7 +117,6 @@ const LINUX_IFF_TUN: nix::libc::c_short = 0x0001;
 const LINUX_IFF_NO_PI: nix::libc::c_short = 0x1000;
 #[cfg(target_os = "linux")]
 const LINUX_TUNSETIFF: nix::libc::c_ulong = 0x4004_54ca;
-
 fn record_stream_context(stream_id: StreamId) -> RecordStreamContext {
     let initiator = match stream_id.initiator() {
         Side::Client => RecordEndpoint::Client,
@@ -106,11 +128,9 @@ fn record_stream_context(stream_id: StreamId) -> RecordStreamContext {
     };
     RecordStreamContext::new(initiator, kind, stream_id.index())
 }
-
 fn default_usage_voucher_interval_ms() -> u64 {
     DEFAULT_USAGE_VOUCHER_INTERVAL_MS
 }
-
 #[derive(Debug, Parser)]
 #[command(name = "sora-vpn-controller")]
 struct Cli {
@@ -119,7 +139,6 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 }
-
 #[derive(Debug, Subcommand)]
 enum Command {
     InstallCheck,
@@ -134,8 +153,8 @@ enum Command {
     #[command(hide = true)]
     RunPacketEngine,
 }
-
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
+#[norito(decode_from_slice)]
 struct State {
     installed: bool,
     active: bool,
@@ -153,7 +172,6 @@ struct State {
     relay_endpoint: Option<String>,
     applied_network: Option<AppliedNetworkState>,
 }
-
 impl Default for State {
     fn default() -> Self {
         Self {
@@ -175,8 +193,8 @@ impl Default for State {
         }
     }
 }
-
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
+#[norito(decode_from_slice)]
 struct ConnectPayload {
     session_id: String,
     relay_endpoint: String,
@@ -198,35 +216,33 @@ struct ConnectPayload {
     metering_private_key_seed_hex: Option<String>,
     usage_voucher_interval_ms: u64,
 }
-
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq, Default)]
+#[norito(decode_from_slice)]
 struct AppliedNetworkState {
     interface_name: String,
     dns_backend: Option<DnsBackendState>,
     excluded_route_snapshots: Vec<ExcludedRouteSnapshot>,
 }
-
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
+#[norito(decode_from_slice)]
 enum DnsBackendState {
     Resolved { interface_name: String },
     ResolvConf { backup_path: String },
 }
-
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
+#[norito(decode_from_slice)]
 struct ExcludedRouteSnapshot {
     cidr: String,
     family: IpFamily,
     previous_route: Option<String>,
 }
-
 type RouteViaDev = (Option<String>, Option<String>);
-
 #[derive(Debug, Clone, Copy, Encode, Decode, PartialEq, Eq)]
+#[norito(decode_from_slice)]
 enum IpFamily {
     V4,
     V6,
 }
-
 impl IpFamily {
     const fn flag(self) -> &'static str {
         match self {
@@ -234,14 +250,12 @@ impl IpFamily {
             Self::V6 => "-6",
         }
     }
-
     const fn max_prefix(self) -> u8 {
         match self {
             Self::V4 => 32,
             Self::V6 => 128,
         }
     }
-
     const fn as_json_label(self) -> &'static str {
         match self {
             Self::V4 => "V4",
@@ -249,7 +263,6 @@ impl IpFamily {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ParsedMultiaddrHost {
     Ip(IpAddr),
@@ -258,26 +271,22 @@ enum ParsedMultiaddrHost {
         address_family: DnsAddressFamily,
     },
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DnsAddressFamily {
     Any,
     V4,
     V6,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedMultiaddr {
     host: ParsedMultiaddrHost,
     port: u16,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ParsedCidr {
     address: IpAddr,
     prefix: u8,
 }
-
 impl ParsedCidr {
     const fn family(self) -> IpFamily {
         match self.address {
@@ -286,13 +295,11 @@ impl ParsedCidr {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TunnelShutdown {
     repair_required: bool,
     message: String,
 }
-
 struct PreparedTunnel {
     device: Arc<LinuxTunDevice>,
     interface_name: String,
@@ -300,7 +307,6 @@ struct PreparedTunnel {
     applied_network: AppliedNetworkState,
     packet_read_mtu: usize,
 }
-
 #[derive(Clone, Copy)]
 struct TunnelTrafficConfig {
     circuit_id: [u8; 16],
@@ -308,27 +314,22 @@ struct TunnelTrafficConfig {
     padding_budget_ms: u16,
     packet_read_mtu: usize,
 }
-
 struct LinuxTunDevice {
     file: AsyncFd<fs::File>,
     name: String,
 }
-
 #[derive(Debug, Clone, Default)]
 struct UsageVoucherCounters {
     ingress_bytes: Arc<AtomicU64>,
     egress_bytes: Arc<AtomicU64>,
 }
-
 impl UsageVoucherCounters {
     fn add_ingress(&self, bytes: u64) {
         self.ingress_bytes.fetch_add(bytes, Ordering::Relaxed);
     }
-
     fn add_egress(&self, bytes: u64) {
         self.egress_bytes.fetch_add(bytes, Ordering::Relaxed);
     }
-
     fn snapshot(&self) -> (u64, u64) {
         (
             self.ingress_bytes.load(Ordering::Relaxed),
@@ -336,7 +337,6 @@ impl UsageVoucherCounters {
         )
     }
 }
-
 struct UsageVoucherSigner {
     key_pair: KeyPair,
     ticket: VpnHelperTicketV1,
@@ -345,13 +345,11 @@ struct UsageVoucherSigner {
     last_emitted_at: Instant,
     interval: Duration,
 }
-
 #[derive(Debug, Default)]
 struct PacketStreamDecoder {
     buffer: Vec<u8>,
     expected_len: Option<usize>,
 }
-
 #[derive(Debug, Error)]
 enum ControllerError {
     #[error("connect payload is required")]
@@ -385,7 +383,6 @@ enum ControllerError {
     #[error("state error: {0}")]
     State(String),
 }
-
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
@@ -396,7 +393,6 @@ fn main() -> ExitCode {
         }
     }
 }
-
 fn run(cli: Cli) -> Result<(), ControllerError> {
     match cli.command {
         Command::InstallCheck => {
@@ -436,14 +432,12 @@ fn run(cli: Cli) -> Result<(), ControllerError> {
         }
     }
 }
-
 fn connect_command(raw_payload: Option<&str>) -> Result<(), ControllerError> {
     let payload = parse_connect_payload(raw_payload)?;
     if let Some(existing_pid) = current_state().pid {
         terminate_pid(existing_pid)?;
         let _ = wait_for_pid_exit(existing_pid, Duration::from_secs(2));
     }
-
     let mut state = State {
         message: "starting".to_owned(),
         session_id: Some(payload.session_id.clone()),
@@ -451,9 +445,8 @@ fn connect_command(raw_payload: Option<&str>) -> Result<(), ControllerError> {
         ..State::default()
     };
     persist_state(&state)?;
-
     let current_exe = env::current_exe()?;
-    let payload_frame = encode_connect_payload_frame(&payload);
+    let payload_frame = encode_connect_payload_frame(&payload)?;
     let mut child = ProcessCommand::new(current_exe)
         .arg("run-tunnel")
         .stdin(Stdio::piped())
@@ -468,7 +461,6 @@ fn connect_command(raw_payload: Option<&str>) -> Result<(), ControllerError> {
     let child_pid = child.id();
     state.pid = Some(child_pid);
     persist_state(&state)?;
-
     for _ in 0..CONNECT_POLL_ATTEMPTS {
         sleep_blocking(CONNECT_POLL_INTERVAL);
         let state = current_state();
@@ -480,14 +472,12 @@ fn connect_command(raw_payload: Option<&str>) -> Result<(), ControllerError> {
             return Err(ControllerError::State(state.message));
         }
     }
-
     terminate_pid(child_pid)?;
     let _ = wait_for_pid_exit(child_pid, Duration::from_secs(2));
     Err(ControllerError::State(
         "timed out waiting for VPN tunnel worker to report readiness".to_owned(),
     ))
 }
-
 fn disconnect_command(message: &str) -> Result<(), ControllerError> {
     let mut state = current_state();
     if let Some(pid) = state.pid {
@@ -503,7 +493,6 @@ fn disconnect_command(message: &str) -> Result<(), ControllerError> {
     print_state(&state)?;
     Ok(())
 }
-
 fn repair_command() -> Result<(), ControllerError> {
     let mut state = current_state();
     if let Some(pid) = state.pid {
@@ -519,7 +508,6 @@ fn repair_command() -> Result<(), ControllerError> {
     print_state(&state)?;
     Ok(())
 }
-
 async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerError> {
     let pid = std::process::id();
     let mut state = current_state();
@@ -533,7 +521,6 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
     state.message = "connecting".to_owned();
     state.applied_network = None;
     persist_state(&state)?;
-
     let (endpoint, connection, record_layer) = match connect_and_handshake(&payload).await {
         Ok(result) => result,
         Err(error) => {
@@ -548,7 +535,6 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
             return Err(error);
         }
     };
-
     let (mut send, mut recv) = match timeout(CONNECT_TIMEOUT, connection.open_bi()).await {
         Ok(Ok(streams)) => streams,
         Ok(Err(error)) => {
@@ -601,7 +587,6 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
             return Err(failure);
         }
     };
-
     let prepared = match prepare_tunnel(&payload) {
         Ok(prepared) => prepared,
         Err(error) => {
@@ -619,7 +604,6 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
             return Err(error);
         }
     };
-
     state = current_state();
     state.active = true;
     state.repair_required = false;
@@ -628,7 +612,6 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
     state.applied_network = Some(prepared.applied_network.clone());
     state.message = "connected".to_owned();
     persist_state(&state)?;
-
     let circuit_id = relay_session_id_from_session_id(payload.session_id.as_str());
     let flow_label = vpn_flow_label_from_session_id(circuit_id)?;
     let voucher_signer = UsageVoucherSigner::from_payload(&payload)?;
@@ -649,7 +632,6 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
         voucher_counters,
     )
     .await;
-
     let cleanup_result = cleanup_tunnel(prepared);
     let (repair_required, message) = match shutdown {
         Ok(exit) => {
@@ -667,7 +649,6 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
             }
         }
     };
-
     let _ = protected_send.shutdown().await;
     drop(protected_send);
     drop(protected_recv);
@@ -684,7 +665,6 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
     )?;
     Ok(())
 }
-
 async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), ControllerError> {
     let pid = std::process::id();
     let (endpoint, connection, record_layer) = connect_and_handshake(&payload).await?;
@@ -709,7 +689,6 @@ async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), Contro
     let record_stream = record_layer
         .stream(record_stream_context(send.id()))
         .map_err(|error| ControllerError::Handshake(error.to_string()))?;
-
     update_terminal_state(
         true,
         false,
@@ -723,7 +702,6 @@ async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), Contro
             "failed to persist packet engine connected state: {error}"
         ))
     })?;
-
     let circuit_id = relay_session_id_from_session_id(payload.session_id.as_str());
     let flow_label = vpn_flow_label_from_session_id(circuit_id)?;
     let voucher_signer = UsageVoucherSigner::from_payload(&payload)?;
@@ -744,7 +722,6 @@ async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), Contro
         Ok(exit) => (exit.repair_required, exit.message),
         Err(error) => (false, error.to_string()),
     };
-
     let _ = protected_send.shutdown().await;
     drop(protected_send);
     drop(protected_recv);
@@ -766,7 +743,6 @@ async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), Contro
     })?;
     Ok(())
 }
-
 async fn connect_and_handshake(
     payload: &ConnectPayload,
 ) -> Result<(Endpoint, Connection, Arc<RecordLayer>), ControllerError> {
@@ -798,7 +774,6 @@ async fn connect_and_handshake(
             "failed to build packet engine QUIC client config: {error}"
         ))
     })?);
-
     let connect = endpoint
         .connect(relay_addr, payload.tls_server_name.as_str())
         .map_err(|error| {
@@ -815,13 +790,11 @@ async fn connect_and_handshake(
             ));
         }
     };
-
     let session = perform_helper_handshake(&connection, payload, helper_ticket).await?;
     let record_layer = RecordLayer::new(&session.session_key, RecordEndpoint::Client)
         .map_err(|error| ControllerError::Handshake(error.to_string()))?;
     Ok((endpoint, connection, Arc::new(record_layer)))
 }
-
 async fn resolve_multiaddr_socket_addr(
     relay: &ParsedMultiaddr,
 ) -> Result<SocketAddr, ControllerError> {
@@ -844,7 +817,6 @@ async fn resolve_multiaddr_socket_addr(
             }),
     }
 }
-
 fn build_client_config(relay_tls_spki_sha256: [u8; 32]) -> Result<ClientConfig, ControllerError> {
     let tls_config = Arc::new(build_tls_client_config(relay_tls_spki_sha256));
     let crypto = QuinnRustlsClientConfig::try_from(tls_config)
@@ -861,7 +833,6 @@ fn build_client_config(relay_tls_spki_sha256: [u8; 32]) -> Result<ClientConfig, 
     client_config.transport_config(Arc::new(transport));
     Ok(client_config)
 }
-
 fn build_tls_client_config(relay_tls_spki_sha256: [u8; 32]) -> rustls::ClientConfig {
     let verifier: Arc<dyn ServerCertVerifier> = Arc::new(PinnedSpkiVerifier {
         relay_tls_spki_sha256,
@@ -876,7 +847,6 @@ fn build_tls_client_config(relay_tls_spki_sha256: [u8; 32]) -> rustls::ClientCon
     tls_config.alpn_protocols = vec![SORANET_QUIC_ALPN.to_vec()];
     tls_config
 }
-
 async fn perform_helper_handshake(
     connection: &Connection,
     payload: &ConnectPayload,
@@ -891,9 +861,7 @@ async fn perform_helper_handshake(
             ));
         }
     };
-
     write_handshake_frame(&mut send, &helper_ticket).await?;
-
     let relay_id = parse_canonical_nonzero_hex_32(payload.relay_id_hex.as_str(), "relayIdHex")?;
     let relay_identity = PublicKey::from_bytes(Algorithm::Ed25519, &relay_id).map_err(|error| {
         ControllerError::InvalidPayload(format!("relayIdHex is not a valid Ed25519 key: {error}"))
@@ -917,7 +885,6 @@ async fn perform_helper_handshake(
     let (client_hello, client_state) = build_client_hello(&params, &mut rng)
         .map_err(|error| ControllerError::Handshake(error.to_string()))?;
     write_handshake_frame(&mut send, &client_hello).await?;
-
     let relay_hello = read_handshake_frame(&mut recv).await?;
     let (client_finish, session) = client_handle_relay_hello(
         client_state,
@@ -933,7 +900,6 @@ async fn perform_helper_handshake(
     send.finish()?;
     Ok(session)
 }
-
 fn helper_ticket_handshake_binding(
     payload: &ConnectPayload,
     helper_ticket: &[u8],
@@ -942,7 +908,6 @@ fn helper_ticket_handshake_binding(
         hasher.update(&(value.len() as u64).to_be_bytes());
         hasher.update(value);
     }
-
     let relay_id = parse_canonical_nonzero_hex_32(payload.relay_id_hex.as_str(), "relayIdHex")?;
     let descriptor_commit = parse_canonical_nonzero_hex_32(
         payload.descriptor_commit_hex.as_str(),
@@ -977,7 +942,6 @@ fn helper_ticket_handshake_binding(
     }
     Ok(*hasher.finalize().as_bytes())
 }
-
 async fn read_handshake_frame(recv: &mut RecvStream) -> Result<Vec<u8>, ControllerError> {
     let mut len_buf = [0u8; 2];
     recv.read_exact(&mut len_buf).await?;
@@ -986,7 +950,6 @@ async fn read_handshake_frame(recv: &mut RecvStream) -> Result<Vec<u8>, Controll
     recv.read_exact(&mut payload).await?;
     Ok(payload)
 }
-
 async fn write_handshake_frame(
     send: &mut SendStream,
     payload: &[u8],
@@ -1001,7 +964,6 @@ async fn write_handshake_frame(
     send.write_all(payload).await?;
     Ok(())
 }
-
 fn prepare_tunnel(payload: &ConnectPayload) -> Result<PreparedTunnel, ControllerError> {
     let interface_name = desired_interface_name(payload.session_id.as_str())?;
     let mtu = normalize_mtu(payload.mtu_bytes)?;
@@ -1012,19 +974,16 @@ fn prepare_tunnel(payload: &ConnectPayload) -> Result<PreparedTunnel, Controller
         dns_backend: None,
         excluded_route_snapshots: Vec::new(),
     };
-
     if let Err(error) =
         apply_tunnel_link_config(&applied_network.interface_name, mtu, &tunnel_addresses)
     {
         let _ = cleanup_network(&applied_network);
         return Err(error);
     }
-
     if let Err(error) = apply_route_pushes(&applied_network.interface_name, &payload.route_pushes) {
         let _ = cleanup_network(&applied_network);
         return Err(error);
     }
-
     match apply_excluded_routes(&payload.excluded_routes) {
         Ok(snapshots) => {
             applied_network.excluded_route_snapshots = snapshots;
@@ -1034,7 +993,6 @@ fn prepare_tunnel(payload: &ConnectPayload) -> Result<PreparedTunnel, Controller
             return Err(error);
         }
     }
-
     let dns_backend = match apply_dns(&applied_network.interface_name, &payload.dns_servers) {
         Ok(backend) => backend,
         Err(error) => {
@@ -1043,7 +1001,6 @@ fn prepare_tunnel(payload: &ConnectPayload) -> Result<PreparedTunnel, Controller
         }
     };
     applied_network.dns_backend = dns_backend.clone();
-
     Ok(PreparedTunnel {
         device,
         interface_name: applied_network.interface_name.clone(),
@@ -1052,13 +1009,11 @@ fn prepare_tunnel(payload: &ConnectPayload) -> Result<PreparedTunnel, Controller
         packet_read_mtu: usize::from(mtu),
     })
 }
-
 fn cleanup_tunnel(prepared: PreparedTunnel) -> Result<(), ControllerError> {
     cleanup_network(&prepared.applied_network)?;
     drop(prepared);
     Ok(())
 }
-
 async fn tunnel_packet_loop<W, R>(
     device: Arc<LinuxTunDevice>,
     send: &mut W,
@@ -1083,7 +1038,6 @@ where
     let downstream = vpn_to_tun_loop(device, recv, voucher_counters);
     tokio::pin!(upstream);
     tokio::pin!(downstream);
-
     tokio::select! {
         _ = sigterm.recv() => Ok(TunnelShutdown {
             repair_required: false,
@@ -1109,7 +1063,6 @@ where
         },
     }
 }
-
 async fn packet_engine_loop<W, R>(
     send: &mut W,
     recv: &mut R,
@@ -1144,7 +1097,6 @@ where
     let downstream = vpn_to_packet_engine_loop(recv, voucher_counters);
     tokio::pin!(upstream);
     tokio::pin!(downstream);
-
     tokio::select! {
         _ = sigterm.recv() => Ok(TunnelShutdown {
             repair_required: false,
@@ -1170,7 +1122,6 @@ where
         },
     }
 }
-
 async fn tun_to_vpn_loop<W>(
     device: Arc<LinuxTunDevice>,
     send: &mut W,
@@ -1254,7 +1205,6 @@ where
         }
     }
 }
-
 async fn packet_engine_to_vpn_loop<W>(
     send: &mut W,
     circuit_id: [u8; 16],
@@ -1342,7 +1292,6 @@ where
         add_traffic_bytes(0, packet.len() as u64)?;
     }
 }
-
 async fn read_exact_or_eof<R>(reader: &mut R, buffer: &mut [u8]) -> io::Result<bool>
 where
     R: AsyncRead + Unpin,
@@ -1367,7 +1316,6 @@ where
     }
     Ok(true)
 }
-
 async fn vpn_to_tun_loop<R>(
     device: Arc<LinuxTunDevice>,
     recv: &mut R,
@@ -1378,7 +1326,6 @@ where
 {
     let mut decoder = PacketStreamDecoder::default();
     let mut frame = [0u8; VPN_CELL_LEN];
-
     loop {
         match read_exact_or_eof(recv, &mut frame).await {
             Ok(true) => {
@@ -1404,7 +1351,6 @@ where
         }
     }
 }
-
 async fn vpn_to_packet_engine_loop<R>(
     recv: &mut R,
     voucher_counters: UsageVoucherCounters,
@@ -1415,7 +1361,6 @@ where
     let mut decoder = PacketStreamDecoder::default();
     let mut frame = [0u8; VPN_CELL_LEN];
     let mut writer = tokio_io::stdout();
-
     loop {
         match read_exact_or_eof(recv, &mut frame).await {
             Ok(true) => {
@@ -1447,7 +1392,6 @@ where
         }
     }
 }
-
 impl UsageVoucherSigner {
     fn from_payload(payload: &ConnectPayload) -> Result<Option<Self>, ControllerError> {
         let Some(seed_hex) = payload.metering_private_key_seed_hex.as_deref() else {
@@ -1482,11 +1426,9 @@ impl UsageVoucherSigner {
             interval: Duration::from_millis(payload.usage_voucher_interval_ms.max(1)),
         }))
     }
-
     fn should_emit(&self) -> bool {
         self.last_emitted_at.elapsed() >= self.interval
     }
-
     fn build_envelope(
         &mut self,
         counters: &UsageVoucherCounters,
@@ -1527,7 +1469,6 @@ impl UsageVoucherSigner {
         })
     }
 }
-
 async fn send_usage_voucher_control_cell<W>(
     send: &mut W,
     circuit_id: [u8; 16],
@@ -1573,14 +1514,12 @@ where
     *sequence = (*sequence).saturating_add(1);
     Ok(())
 }
-
 fn decode_helper_ticket_metadata(hex_ticket: &str) -> Result<VpnHelperTicketV1, ControllerError> {
     let bytes = decode_hex(hex_ticket)?;
     VpnHelperTicketV1::decode_unverified(&bytes).map_err(|error| {
         ControllerError::InvalidPayload(format!("helperTicketHex has invalid v1 metadata: {error}"))
     })
 }
-
 fn unix_now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1588,7 +1527,6 @@ fn unix_now_ms() -> u64 {
         .as_millis()
         .min(u128::from(u64::MAX)) as u64
 }
-
 impl PacketStreamDecoder {
     fn ingest(&mut self, bytes: &[u8]) -> Result<Vec<Vec<u8>>, ControllerError> {
         self.buffer.extend_from_slice(bytes);
@@ -1602,7 +1540,6 @@ impl PacketStreamDecoder {
                 self.buffer.drain(..PACKET_LEN_PREFIX_BYTES);
                 self.expected_len = Some(len);
             }
-
             let Some(expected_len) = self.expected_len else {
                 break;
             };
@@ -1616,7 +1553,6 @@ impl PacketStreamDecoder {
         Ok(packets)
     }
 }
-
 impl LinuxTunDevice {
     #[cfg(target_os = "linux")]
     fn create(requested_name: &str) -> Result<Self, ControllerError> {
@@ -1626,7 +1562,6 @@ impl LinuxTunDevice {
                 "invalid Linux interface name {requested_name}"
             )));
         }
-
         let fd = unsafe {
             nix::libc::open(
                 c"/dev/net/tun".as_ptr() as *const _,
@@ -1636,7 +1571,6 @@ impl LinuxTunDevice {
         if fd < 0 {
             return Err(ControllerError::Io(io::Error::last_os_error()));
         }
-
         let mut req = unsafe { std::mem::zeroed::<nix::libc::ifreq>() };
         unsafe {
             std::ptr::copy_nonoverlapping(
@@ -1646,7 +1580,6 @@ impl LinuxTunDevice {
             );
             req.ifr_ifru.ifru_flags = (LINUX_IFF_TUN | LINUX_IFF_NO_PI) as _;
         }
-
         let ioctl_result = unsafe { nix::libc::ioctl(fd, LINUX_TUNSETIFF as _, &req) };
         if ioctl_result < 0 {
             let error = io::Error::last_os_error();
@@ -1655,7 +1588,6 @@ impl LinuxTunDevice {
             }
             return Err(ControllerError::Io(error));
         }
-
         let name = unsafe { CStr::from_ptr(req.ifr_name.as_ptr()) }
             .to_string_lossy()
             .into_owned();
@@ -1663,18 +1595,15 @@ impl LinuxTunDevice {
         let file = AsyncFd::new(file)?;
         Ok(Self { file, name })
     }
-
     #[cfg(not(target_os = "linux"))]
     fn create(_requested_name: &str) -> Result<Self, ControllerError> {
         Err(ControllerError::State(
             "Linux system tunnels can only be created on Linux hosts.".to_owned(),
         ))
     }
-
     fn name(&self) -> &str {
         &self.name
     }
-
     async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
             let mut guard = self.file.readable().await?;
@@ -1687,7 +1616,6 @@ impl LinuxTunDevice {
             }
         }
     }
-
     async fn send(&self, buf: &[u8]) -> io::Result<usize> {
         loop {
             let mut guard = self.file.writable().await?;
@@ -1701,7 +1629,6 @@ impl LinuxTunDevice {
         }
     }
 }
-
 fn encode_packet_stream_frame(packet: &[u8]) -> Result<Vec<u8>, ControllerError> {
     let packet_len = u16::try_from(packet.len()).map_err(|_| {
         ControllerError::State(format!(
@@ -1714,7 +1641,6 @@ fn encode_packet_stream_frame(packet: &[u8]) -> Result<Vec<u8>, ControllerError>
     encoded.extend_from_slice(packet);
     Ok(encoded)
 }
-
 async fn read_packet_from_stream<R>(reader: &mut R) -> Result<Option<Vec<u8>>, ControllerError>
 where
     R: AsyncRead + Unpin,
@@ -1730,7 +1656,6 @@ where
     reader.read_exact(&mut packet).await?;
     Ok(Some(packet))
 }
-
 async fn write_packet_to_stream<W>(writer: &mut W, packet: &[u8]) -> Result<(), ControllerError>
 where
     W: AsyncWrite + Unpin,
@@ -1746,7 +1671,6 @@ where
     writer.flush().await?;
     Ok(())
 }
-
 fn add_traffic_bytes(bytes_in: u64, bytes_out: u64) -> Result<(), ControllerError> {
     if bytes_in == 0 && bytes_out == 0 {
         return Ok(());
@@ -1755,7 +1679,6 @@ fn add_traffic_bytes(bytes_in: u64, bytes_out: u64) -> Result<(), ControllerErro
     PENDING_BYTES_OUT.fetch_add(bytes_out, Ordering::Relaxed);
     flush_traffic_bytes_if_due(false)
 }
-
 fn flush_traffic_bytes_if_due(force: bool) -> Result<(), ControllerError> {
     let now_ms = unix_now_ms();
     let last_ms = LAST_TRAFFIC_FLUSH_MS.load(Ordering::Relaxed);
@@ -1779,11 +1702,9 @@ fn flush_traffic_bytes_if_due(force: bool) -> Result<(), ControllerError> {
     LAST_TRAFFIC_FLUSH_MS.store(now_ms, Ordering::Relaxed);
     Ok(())
 }
-
 fn flush_traffic_bytes() -> Result<(), ControllerError> {
     flush_traffic_bytes_if_due(true)
 }
-
 fn cleanup_persisted_network(state: &mut State) -> Result<(), ControllerError> {
     if let Some(applied) = state.applied_network.take() {
         cleanup_network(&applied)?;
@@ -1791,7 +1712,6 @@ fn cleanup_persisted_network(state: &mut State) -> Result<(), ControllerError> {
     state.network_service = None;
     Ok(())
 }
-
 fn cleanup_network(applied: &AppliedNetworkState) -> Result<(), ControllerError> {
     if let Some(dns_backend) = &applied.dns_backend {
         cleanup_dns(dns_backend)?;
@@ -1801,7 +1721,6 @@ fn cleanup_network(applied: &AppliedNetworkState) -> Result<(), ControllerError>
     }
     Ok(())
 }
-
 fn apply_tunnel_link_config(
     interface_name: &str,
     mtu: u16,
@@ -1819,7 +1738,6 @@ fn apply_tunnel_link_config(
             "up".to_owned(),
         ],
     )?;
-
     for address in tunnel_addresses {
         run_command(
             DEFAULT_ROUTE_CMD,
@@ -1835,7 +1753,6 @@ fn apply_tunnel_link_config(
     }
     Ok(())
 }
-
 fn apply_route_pushes(interface_name: &str, routes: &[String]) -> Result<(), ControllerError> {
     for route in routes {
         let parsed = parse_cidr(route)?;
@@ -1853,7 +1770,6 @@ fn apply_route_pushes(interface_name: &str, routes: &[String]) -> Result<(), Con
     }
     Ok(())
 }
-
 fn apply_excluded_routes(routes: &[String]) -> Result<Vec<ExcludedRouteSnapshot>, ControllerError> {
     let mut snapshots = Vec::with_capacity(routes.len());
     for route in routes {
@@ -1870,7 +1786,6 @@ fn apply_excluded_routes(routes: &[String]) -> Result<Vec<ExcludedRouteSnapshot>
                 }
             )));
         };
-
         let mut args = vec![
             parsed.family().flag().to_owned(),
             "route".to_owned(),
@@ -1894,7 +1809,6 @@ fn apply_excluded_routes(routes: &[String]) -> Result<Vec<ExcludedRouteSnapshot>
     }
     Ok(snapshots)
 }
-
 fn capture_default_route(family: IpFamily) -> Result<Option<RouteViaDev>, ControllerError> {
     let output = run_command(
         DEFAULT_ROUTE_CMD,
@@ -1910,7 +1824,6 @@ fn capture_default_route(family: IpFamily) -> Result<Option<RouteViaDev>, Contro
     };
     Ok(Some(parse_route_via_dev(line)))
 }
-
 fn capture_existing_route(family: IpFamily, cidr: &str) -> Result<Option<String>, ControllerError> {
     let output = run_command(
         DEFAULT_ROUTE_CMD,
@@ -1926,7 +1839,6 @@ fn capture_existing_route(family: IpFamily, cidr: &str) -> Result<Option<String>
         .find(|line| !line.trim().is_empty())
         .map(|line| line.trim().to_owned()))
 }
-
 fn restore_excluded_route(snapshot: &ExcludedRouteSnapshot) -> Result<(), ControllerError> {
     if let Some(previous_route) = &snapshot.previous_route {
         let mut args = vec![
@@ -1938,7 +1850,6 @@ fn restore_excluded_route(snapshot: &ExcludedRouteSnapshot) -> Result<(), Contro
         run_command(DEFAULT_ROUTE_CMD, args)?;
         return Ok(());
     }
-
     let args = vec![
         snapshot.family.flag().to_owned(),
         "route".to_owned(),
@@ -1957,7 +1868,6 @@ fn restore_excluded_route(snapshot: &ExcludedRouteSnapshot) -> Result<(), Contro
         Err(error) => Err(error),
     }
 }
-
 fn apply_dns(
     interface_name: &str,
     dns_servers: &[String],
@@ -1965,7 +1875,6 @@ fn apply_dns(
     if dns_servers.is_empty() {
         return Ok(None);
     }
-
     if command_exists("resolvectl") {
         let mut dns_args = vec!["dns".to_owned(), interface_name.to_owned()];
         dns_args.extend(dns_servers.iter().map(|item| item.trim().to_owned()));
@@ -1990,14 +1899,17 @@ fn apply_dns(
             interface_name: interface_name.to_owned(),
         }));
     }
-
     let backup_path = resolv_conf_backup_path();
-    let backup_bytes = fs::read("/etc/resolv.conf").unwrap_or_default();
+    let backup_bytes = read_stable_regular_file_bounded(
+        Path::new("/etc/resolv.conf"),
+        MAX_RESOLV_CONF_BYTES_V1,
+        "resolver configuration",
+    )
+    .unwrap_or_default();
     if let Some(parent) = backup_path.parent() {
         fs::create_dir_all(parent)?;
     }
     write_private_file(&backup_path, &backup_bytes)?;
-
     let mut rendered = String::from("# sora-vpn-controller managed resolv.conf\n");
     for server in dns_servers {
         rendered.push_str("nameserver ");
@@ -2009,7 +1921,6 @@ fn apply_dns(
         backup_path: backup_path.to_string_lossy().into_owned(),
     }))
 }
-
 fn cleanup_dns(backend: &DnsBackendState) -> Result<(), ControllerError> {
     match backend {
         DnsBackendState::Resolved { interface_name } => {
@@ -2020,32 +1931,32 @@ fn cleanup_dns(backend: &DnsBackendState) -> Result<(), ControllerError> {
         }
         DnsBackendState::ResolvConf { backup_path } => {
             let backup = PathBuf::from(backup_path);
-            let bytes = fs::read(&backup)?;
+            let bytes = read_stable_regular_file_bounded(
+                &backup,
+                MAX_RESOLV_CONF_BYTES_V1,
+                "resolver configuration backup",
+            )?;
             write_private_file(Path::new("/etc/resolv.conf"), &bytes)?;
             let _ = fs::remove_file(backup);
         }
     }
     Ok(())
 }
-
 fn dns_backend_label(backend: &DnsBackendState) -> String {
     match backend {
         DnsBackendState::Resolved { .. } => "resolvectl".to_owned(),
         DnsBackendState::ResolvConf { .. } => "resolv.conf".to_owned(),
     }
 }
-
 fn resolv_conf_backup_path() -> PathBuf {
     state_path()
         .parent()
         .unwrap_or_else(|| Path::new("/tmp"))
         .join("resolv.conf.backup")
 }
-
 fn command_exists(program: &str) -> bool {
     resolve_trusted_command(program).is_some()
 }
-
 fn run_command<I, S>(program: &str, args: I) -> Result<String, ControllerError>
 where
     I: IntoIterator<Item = S>,
@@ -2077,7 +1988,6 @@ where
         collected.join(" ")
     )))
 }
-
 fn resolve_trusted_command(program: &str) -> Option<PathBuf> {
     if program.contains('/') {
         let path = PathBuf::from(program);
@@ -2088,7 +1998,6 @@ fn resolve_trusted_command(program: &str) -> Option<PathBuf> {
         .map(|dir| Path::new(dir).join(program))
         .find(|candidate| candidate.exists())
 }
-
 fn normalize_mtu(value: u64) -> Result<u16, ControllerError> {
     if value == 0 || value > u64::from(u16::MAX) {
         return Err(ControllerError::InvalidPayload(format!(
@@ -2100,11 +2009,9 @@ fn normalize_mtu(value: u64) -> Result<u16, ControllerError> {
         ControllerError::InvalidPayload(format!("mtuBytes {value} does not fit into u16"))
     })
 }
-
 fn parse_tunnel_addresses(values: &[String]) -> Result<Vec<ParsedCidr>, ControllerError> {
     values.iter().map(|value| parse_cidr(value)).collect()
 }
-
 fn parse_cidr(value: &str) -> Result<ParsedCidr, ControllerError> {
     let trimmed = value.trim();
     let Some((address, prefix)) = trimmed.split_once('/') else {
@@ -2125,7 +2032,6 @@ fn parse_cidr(value: &str) -> Result<ParsedCidr, ControllerError> {
     }
     Ok(ParsedCidr { address, prefix })
 }
-
 fn desired_interface_name(session_id: &str) -> Result<String, ControllerError> {
     if let Some(name) = current_interface_name() {
         return Ok(name);
@@ -2150,21 +2056,18 @@ fn desired_interface_name(session_id: &str) -> Result<String, ControllerError> {
     }
     Ok(name)
 }
-
 fn relay_session_id_from_session_id(session_id: &str) -> [u8; 16] {
     let digest = blake3_hash(session_id.as_bytes());
     let mut session_key = [0u8; 16];
     session_key.copy_from_slice(&digest.as_bytes()[..16]);
     session_key
 }
-
 fn vpn_flow_label_from_session_id(session_id: [u8; 16]) -> Result<VpnFlowLabelV1, ControllerError> {
     let value = (u32::from(session_id[0]) << 16)
         | (u32::from(session_id[1]) << 8)
         | u32::from(session_id[2]);
     VpnFlowLabelV1::from_u32(value).map_err(ControllerError::from)
 }
-
 fn parse_route_via_dev(line: &str) -> (Option<String>, Option<String>) {
     let tokens = line.split_whitespace().collect::<Vec<_>>();
     let mut via = None;
@@ -2185,7 +2088,6 @@ fn parse_route_via_dev(line: &str) -> (Option<String>, Option<String>) {
     }
     (via, dev)
 }
-
 fn update_terminal_state(
     active: bool,
     repair_required: bool,
@@ -2209,88 +2111,205 @@ fn update_terminal_state(
     persist_state(&state)?;
     Ok(())
 }
-
 fn current_state() -> State {
     let mut state = load_state();
     hydrate_runtime_fields(&mut state);
     scrub_stale_process(&mut state);
     state
 }
-
+fn read_bounded<R: io::Read>(
+    reader: &mut R,
+    max_bytes: usize,
+    label: &str,
+) -> Result<Vec<u8>, ControllerError> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 8 * 1024];
+    while bytes.len() < max_bytes {
+        let remaining = max_bytes - bytes.len();
+        let read_len = remaining.min(chunk.len());
+        let count = loop {
+            match reader.read(&mut chunk[..read_len]) {
+                Ok(count) => break count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error.into()),
+            }
+        };
+        if count == 0 {
+            return Ok(bytes);
+        }
+        bytes.try_reserve_exact(count).map_err(|error| {
+            ControllerError::InvalidPayload(format!(
+                "failed to reserve storage while reading {label}: {error}"
+            ))
+        })?;
+        bytes.extend_from_slice(&chunk[..count]);
+    }
+    let mut growth_probe = [0_u8; 1];
+    let extra = loop {
+        match reader.read(&mut growth_probe) {
+            Ok(count) => break count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        }
+    };
+    if extra != 0 {
+        return Err(ControllerError::InvalidPayload(format!(
+            "{label} exceeds the v1 limit of {max_bytes} bytes"
+        )));
+    }
+    Ok(bytes)
+}
+fn read_stable_regular_file_bounded(
+    path: &Path,
+    max_bytes: usize,
+    label: &str,
+) -> Result<Vec<u8>, ControllerError> {
+    let mut file = fs::File::open(path)?;
+    let before = file.metadata()?;
+    if !before.file_type().is_file() {
+        return Err(ControllerError::State(format!(
+            "{label} {} is not a regular file",
+            path.display()
+        )));
+    }
+    if before.len() > max_bytes as u64 {
+        return Err(ControllerError::State(format!(
+            "{label} {} exceeds the v1 limit of {max_bytes} bytes",
+            path.display()
+        )));
+    }
+    let bytes = read_bounded(&mut file, max_bytes, label).map_err(|error| {
+        ControllerError::State(format!(
+            "failed to read {label} {}: {error}",
+            path.display()
+        ))
+    })?;
+    let after = file.metadata()?;
+    if before.len() != after.len() || after.len() != bytes.len() as u64 {
+        return Err(ControllerError::State(format!(
+            "{label} {} changed while it was being read",
+            path.display()
+        )));
+    }
+    Ok(bytes)
+}
 fn load_state() -> State {
     let path = state_path();
-    let Ok(bytes) = fs::read(path) else {
+    let Ok(bytes) = read_stable_regular_file_bounded(&path, MAX_STATE_FRAME_BYTES_V1, "state file")
+    else {
         return State::default();
     };
     decode_state_frame(&bytes).unwrap_or_default()
 }
-
 fn persist_state(state: &State) -> Result<(), ControllerError> {
     let path = state_path();
     if let Some(parent) = Path::new(&path).parent() {
         fs::create_dir_all(parent)?;
     }
-    let bytes = encode_state_frame(state);
+    let bytes = encode_state_frame(state)?;
     write_private_file(path.as_path(), &bytes)?;
     Ok(())
 }
-
 fn print_state(state: &State) -> Result<(), ControllerError> {
     let rendered = json::to_json(&state_json_value(state))
         .map_err(|error| ControllerError::State(format!("failed to render state: {error}")))?;
     println!("{rendered}");
     Ok(())
 }
-
-fn encode_state_frame(state: &State) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(STATE_FILE_FRAME_MAGIC.len() + 256);
+fn encode_state_frame(state: &State) -> Result<Vec<u8>, ControllerError> {
+    let payload_len = state.encoded_len();
+    let frame_len = STATE_FILE_FRAME_MAGIC
+        .len()
+        .checked_add(payload_len)
+        .ok_or_else(|| ControllerError::State("state frame length overflow".to_owned()))?;
+    if frame_len > MAX_STATE_FRAME_BYTES_V1 {
+        return Err(ControllerError::State(format!(
+            "state frame exceeds the v1 limit of {MAX_STATE_FRAME_BYTES_V1} bytes"
+        )));
+    }
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(frame_len).map_err(|error| {
+        ControllerError::State(format!("failed to reserve state frame storage: {error}"))
+    })?;
     bytes.extend_from_slice(STATE_FILE_FRAME_MAGIC);
-    bytes.extend_from_slice(&state.encode());
-    bytes
+    state.encode_to(&mut bytes);
+    debug_assert_eq!(bytes.len(), frame_len);
+    Ok(bytes)
 }
-
 fn decode_state_frame(bytes: &[u8]) -> Result<State, ControllerError> {
+    if bytes.len() > MAX_STATE_FRAME_BYTES_V1 {
+        return Err(ControllerError::State(format!(
+            "state frame exceeds the v1 limit of {MAX_STATE_FRAME_BYTES_V1} bytes"
+        )));
+    }
     if !bytes.starts_with(STATE_FILE_FRAME_MAGIC) {
         return Err(ControllerError::State(
             "state file is not a v1 Norito state frame".to_owned(),
         ));
     }
-    let mut payload = &bytes[STATE_FILE_FRAME_MAGIC.len()..];
-    let state = State::decode(&mut payload)
-        .map_err(|error| ControllerError::State(format!("failed to decode state: {error}")))?;
-    if !payload.is_empty() {
-        return Err(ControllerError::State(
-            "state file has trailing bytes after Norito payload".to_owned(),
-        ));
+    let limits = norito::DecodeLimits::new(
+        MAX_STATE_SEQUENCE_ELEMENTS_V1,
+        MAX_STATE_FIELD_BYTES_V1,
+        MAX_STATE_TOTAL_ELEMENTS_V1,
+        MAX_STATE_DECODE_ALLOCATION_BYTES_V1,
+        MAX_STATE_DECODE_DEPTH_V1,
+    );
+    norito::codec::decode_exact_from_slice_with_limits(
+        &bytes[STATE_FILE_FRAME_MAGIC.len()..],
+        limits,
+    )
+    .map_err(|error| ControllerError::State(format!("failed to decode state: {error}")))
+}
+fn encode_connect_payload_frame(payload: &ConnectPayload) -> Result<Vec<u8>, ControllerError> {
+    validate_connect_payload_ref(payload)?;
+    let payload_len = payload.encoded_len();
+    let frame_len = CONNECT_PAYLOAD_FRAME_MAGIC
+        .len()
+        .checked_add(payload_len)
+        .ok_or_else(|| {
+            ControllerError::InvalidPayload("connect frame length overflow".to_owned())
+        })?;
+    if frame_len > MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1 {
+        return Err(ControllerError::InvalidPayload(format!(
+            "connect frame exceeds the v1 limit of {MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1} bytes"
+        )));
     }
-    Ok(state)
-}
-
-fn encode_connect_payload_frame(payload: &ConnectPayload) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(CONNECT_PAYLOAD_FRAME_MAGIC.len() + 512);
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(frame_len).map_err(|error| {
+        ControllerError::InvalidPayload(format!("failed to reserve connect frame storage: {error}"))
+    })?;
     bytes.extend_from_slice(CONNECT_PAYLOAD_FRAME_MAGIC);
-    bytes.extend_from_slice(&payload.encode());
-    bytes
+    payload.encode_to(&mut bytes);
+    debug_assert_eq!(bytes.len(), frame_len);
+    Ok(bytes)
 }
-
 fn decode_connect_payload_frame(bytes: &[u8]) -> Result<ConnectPayload, ControllerError> {
+    if bytes.len() > MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1 {
+        return Err(ControllerError::InvalidPayload(format!(
+            "connect frame exceeds the v1 limit of {MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1} bytes"
+        )));
+    }
     if !bytes.starts_with(CONNECT_PAYLOAD_FRAME_MAGIC) {
         return Err(ControllerError::InvalidPayload(
             "worker stdin is not a v1 Norito connect-payload frame".to_owned(),
         ));
     }
-    let mut payload = &bytes[CONNECT_PAYLOAD_FRAME_MAGIC.len()..];
-    let decoded = ConnectPayload::decode(&mut payload).map_err(|error| {
+    let limits = norito::DecodeLimits::new(
+        MAX_CONNECT_PAYLOAD_SEQUENCE_ELEMENTS_V1,
+        MAX_CONNECT_PAYLOAD_FIELD_BYTES_V1,
+        MAX_CONNECT_PAYLOAD_TOTAL_ELEMENTS_V1,
+        MAX_CONNECT_PAYLOAD_DECODE_ALLOCATION_BYTES_V1,
+        MAX_CONNECT_PAYLOAD_DECODE_DEPTH_V1,
+    );
+    let decoded = norito::codec::decode_exact_from_slice_with_limits(
+        &bytes[CONNECT_PAYLOAD_FRAME_MAGIC.len()..],
+        limits,
+    )
+    .map_err(|error| {
         ControllerError::InvalidPayload(format!("failed to decode connect payload: {error}"))
     })?;
-    if !payload.is_empty() {
-        return Err(ControllerError::InvalidPayload(
-            "connect-payload frame has trailing bytes".to_owned(),
-        ));
-    }
     validate_connect_payload(decoded)
 }
-
 fn state_json_value(state: &State) -> JsonValue {
     let mut map = JsonMap::new();
     insert_bool(&mut map, "installed", state.installed);
@@ -2330,7 +2349,6 @@ fn state_json_value(state: &State) -> JsonValue {
     );
     JsonValue::Object(map)
 }
-
 fn applied_network_json_value(state: &AppliedNetworkState) -> JsonValue {
     let mut map = JsonMap::new();
     insert_string(&mut map, "interface_name", &state.interface_name);
@@ -2354,7 +2372,6 @@ fn applied_network_json_value(state: &AppliedNetworkState) -> JsonValue {
     );
     JsonValue::Object(map)
 }
-
 fn dns_backend_json_value(state: &DnsBackendState) -> JsonValue {
     let mut map = JsonMap::new();
     match state {
@@ -2369,7 +2386,6 @@ fn dns_backend_json_value(state: &DnsBackendState) -> JsonValue {
     }
     JsonValue::Object(map)
 }
-
 fn excluded_route_snapshot_json_value(snapshot: &ExcludedRouteSnapshot) -> JsonValue {
     let mut map = JsonMap::new();
     insert_string(&mut map, "cidr", &snapshot.cidr);
@@ -2381,11 +2397,9 @@ fn excluded_route_snapshot_json_value(snapshot: &ExcludedRouteSnapshot) -> JsonV
     );
     JsonValue::Object(map)
 }
-
 fn insert_string(map: &mut JsonMap, key: &str, value: &str) {
     map.insert(key.to_owned(), JsonValue::String(value.to_owned()));
 }
-
 fn insert_string_option(map: &mut JsonMap, key: &str, value: Option<&str>) {
     map.insert(
         key.to_owned(),
@@ -2394,21 +2408,17 @@ fn insert_string_option(map: &mut JsonMap, key: &str, value: Option<&str>) {
             .unwrap_or(JsonValue::Null),
     );
 }
-
 fn insert_bool(map: &mut JsonMap, key: &str, value: bool) {
     map.insert(key.to_owned(), JsonValue::Bool(value));
 }
-
 fn insert_u64(map: &mut JsonMap, key: &str, value: u64) {
     map.insert(key.to_owned(), JsonValue::Number(JsonNumber::from(value)));
 }
-
 fn state_path() -> PathBuf {
     env::var("SORANET_VPN_STATE_FILE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| default_state_path())
 }
-
 fn default_state_path() -> PathBuf {
     if let Some(runtime_dir) = env::var_os("XDG_RUNTIME_DIR") {
         return PathBuf::from(runtime_dir).join("sora-vpn-controller/state.norito");
@@ -2418,7 +2428,6 @@ fn default_state_path() -> PathBuf {
     }
     PathBuf::from("/var/lib/sora-vpn-controller/state.norito")
 }
-
 fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut options = fs::OpenOptions::new();
     options.create(true).truncate(true).write(true);
@@ -2427,7 +2436,6 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut file = options.open(path)?;
     file.write_all(bytes)
 }
-
 fn hydrate_runtime_fields(state: &mut State) {
     state.installed = true;
     if state.controller_kind.trim().is_empty() {
@@ -2443,24 +2451,20 @@ fn hydrate_runtime_fields(state: &mut State) {
         state.interface_name = current_interface_name();
     }
 }
-
 fn current_interface_name() -> Option<String> {
     env::var("SORANET_VPN_INTERFACE")
         .ok()
         .and_then(|value| trim_to_option(value.as_str()))
 }
-
 fn current_controller_path() -> Option<String> {
     env::current_exe()
         .ok()
         .and_then(|path| path.to_str().map(ToOwned::to_owned))
 }
-
 fn trim_to_option(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
-
 fn scrub_stale_process(state: &mut State) {
     let Some(pid) = state.pid else {
         return;
@@ -2476,7 +2480,6 @@ fn scrub_stale_process(state: &mut State) {
         state.message = "tunnel worker exited".to_owned();
     }
 }
-
 fn process_alive(pid: u32) -> bool {
     let Ok(raw_pid) = i32::try_from(pid) else {
         return false;
@@ -2488,7 +2491,6 @@ fn process_alive(pid: u32) -> bool {
         Err(_) => false,
     }
 }
-
 fn terminate_pid(pid: u32) -> Result<(), ControllerError> {
     if !process_alive(pid) {
         return Ok(());
@@ -2498,7 +2500,6 @@ fn terminate_pid(pid: u32) -> Result<(), ControllerError> {
     signal::kill(Pid::from_raw(raw_pid), Signal::SIGTERM)
         .map_err(|error| ControllerError::State(format!("failed to terminate pid {pid}: {error}")))
 }
-
 fn wait_for_pid_exit(pid: u32, timeout_limit: Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout_limit;
     while process_alive(pid) && std::time::Instant::now() < deadline {
@@ -2506,11 +2507,9 @@ fn wait_for_pid_exit(pid: u32, timeout_limit: Duration) -> bool {
     }
     !process_alive(pid)
 }
-
 fn sleep_blocking(duration: Duration) {
     std::thread::sleep(duration);
 }
-
 fn decode_hex(value: &str) -> Result<Vec<u8>, ControllerError> {
     let trimmed = value.trim();
     let normalized = trimmed
@@ -2524,7 +2523,6 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, ControllerError> {
     }
     Ok(hex::decode(normalized)?)
 }
-
 fn parse_fixed_hex_32(value: &str, label: &str) -> Result<[u8; 32], ControllerError> {
     let decoded = decode_hex(value)?;
     let bytes: [u8; 32] = decoded.try_into().map_err(|bytes: Vec<u8>| {
@@ -2535,7 +2533,6 @@ fn parse_fixed_hex_32(value: &str, label: &str) -> Result<[u8; 32], ControllerEr
     })?;
     Ok(bytes)
 }
-
 fn parse_canonical_nonzero_hex_32(value: &str, label: &str) -> Result<[u8; 32], ControllerError> {
     if value.len() != 64
         || !value
@@ -2558,7 +2555,6 @@ fn parse_canonical_nonzero_hex_32(value: &str, label: &str) -> Result<[u8; 32], 
     }
     Ok(bytes)
 }
-
 fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, ControllerError> {
     let raw_payload = raw_payload.ok_or(ControllerError::MissingPayload)?;
     let value: JsonValue = json::from_str(raw_payload)
@@ -2637,8 +2633,43 @@ fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, Co
     };
     validate_connect_payload(payload)
 }
-
 fn validate_connect_payload(payload: ConnectPayload) -> Result<ConnectPayload, ControllerError> {
+    validate_connect_payload_ref(&payload)?;
+    Ok(payload)
+}
+fn validate_connect_payload_ref(payload: &ConnectPayload) -> Result<(), ControllerError> {
+    validate_text_field(
+        payload.session_id.as_str(),
+        "sessionId",
+        MAX_SESSION_ID_BYTES_V1,
+    )?;
+    validate_text_field(
+        payload.relay_endpoint.as_str(),
+        "relayEndpoint",
+        MAX_RELAY_ENDPOINT_BYTES_V1,
+    )?;
+    validate_text_field(
+        payload.exit_class.as_str(),
+        "exitClass",
+        MAX_EXIT_CLASS_BYTES_V1,
+    )?;
+    validate_text_field(
+        payload.helper_ticket_hex.as_str(),
+        "helperTicketHex",
+        MAX_HELPER_TICKET_HEX_BYTES_V1,
+    )?;
+    validate_text_field(
+        payload.tls_server_name.as_str(),
+        "tlsServerName",
+        MAX_TLS_SERVER_NAME_BYTES_V1,
+    )?;
+    if let Some(seed) = payload.metering_private_key_seed_hex.as_deref() {
+        validate_text_field(seed, "meteringPrivateKeySeedHex", 64)?;
+    }
+    validate_network_policy_entries(&payload.route_pushes, "routePushes")?;
+    validate_network_policy_entries(&payload.excluded_routes, "excludedRoutes")?;
+    validate_network_policy_entries(&payload.dns_servers, "dnsServers")?;
+    validate_network_policy_entries(&payload.tunnel_addresses, "tunnelAddresses")?;
     if payload.session_id.trim().is_empty() {
         return Err(ControllerError::InvalidPayload(
             "sessionId must not be empty".to_owned(),
@@ -2701,19 +2732,43 @@ fn validate_connect_payload(payload: ConnectPayload) -> Result<ConnectPayload, C
             "mtuBytes must be greater than zero".to_owned(),
         ));
     }
-    Ok(payload)
+    Ok(())
 }
-
+fn validate_text_field(value: &str, label: &str, max_bytes: usize) -> Result<(), ControllerError> {
+    if value.len() > max_bytes {
+        return Err(ControllerError::InvalidPayload(format!(
+            "{label} exceeds the v1 limit of {max_bytes} bytes"
+        )));
+    }
+    Ok(())
+}
+fn validate_network_policy_entries(entries: &[String], label: &str) -> Result<(), ControllerError> {
+    if entries.len() > MAX_NETWORK_POLICY_ENTRIES_V1 {
+        return Err(ControllerError::InvalidPayload(format!(
+            "{label} exceeds the v1 limit of {MAX_NETWORK_POLICY_ENTRIES_V1} entries"
+        )));
+    }
+    for (index, entry) in entries.iter().enumerate() {
+        if entry.len() > MAX_NETWORK_POLICY_ENTRY_BYTES_V1 {
+            return Err(ControllerError::InvalidPayload(format!(
+                "{label}[{index}] exceeds the v1 limit of {MAX_NETWORK_POLICY_ENTRY_BYTES_V1} bytes"
+            )));
+        }
+    }
+    Ok(())
+}
 fn read_connect_payload_from_stdin() -> Result<ConnectPayload, ControllerError> {
-    let mut raw_payload = Vec::new();
-    io::stdin().read_to_end(&mut raw_payload)?;
+    let mut stdin = io::stdin().lock();
+    let raw_payload = read_bounded(
+        &mut stdin,
+        MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1,
+        "worker stdin connect frame",
+    )?;
     decode_connect_payload_frame(&raw_payload)
 }
-
 fn json_field<'a>(object: &'a JsonMap, keys: &[&str]) -> Option<&'a JsonValue> {
     keys.iter().find_map(|key| object.get(*key))
 }
-
 fn require_json_string(
     object: &JsonMap,
     keys: &[&str],
@@ -2723,7 +2778,6 @@ fn require_json_string(
         ControllerError::InvalidPayload(format!("{label} must be a string and must be present"))
     })
 }
-
 fn optional_json_string(
     object: &JsonMap,
     keys: &[&str],
@@ -2739,19 +2793,16 @@ fn optional_json_string(
         .map(|value| Some(value.to_owned()))
         .ok_or_else(|| ControllerError::InvalidPayload(format!("{} must be a string", keys[0])))
 }
-
 fn require_json_u16(object: &JsonMap, keys: &[&str], label: &str) -> Result<u16, ControllerError> {
     let value = require_json_u64(object, keys, label)?;
     u16::try_from(value)
         .map_err(|_| ControllerError::InvalidPayload(format!("{label} must fit into a u16")))
 }
-
 fn require_json_u64(object: &JsonMap, keys: &[&str], label: &str) -> Result<u64, ControllerError> {
     optional_json_u64(object, keys)?.ok_or_else(|| {
         ControllerError::InvalidPayload(format!("{label} must be an unsigned integer and present"))
     })
 }
-
 fn optional_json_u64(object: &JsonMap, keys: &[&str]) -> Result<Option<u64>, ControllerError> {
     let Some(value) = json_field(object, keys) else {
         return Ok(None);
@@ -2775,7 +2826,6 @@ fn optional_json_u64(object: &JsonMap, keys: &[&str]) -> Result<Option<u64>, Con
         keys[0]
     )))
 }
-
 fn optional_json_string_array(
     object: &JsonMap,
     keys: &[&str],
@@ -2802,7 +2852,6 @@ fn optional_json_string_array(
         })
         .collect()
 }
-
 fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr, ControllerError> {
     validate_quic_multiaddr(addr)
         .map_err(|error| ControllerError::InvalidMultiaddr(error.to_string()))?;
@@ -2847,7 +2896,6 @@ fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr, ControllerError> {
         }
         other => return Err(ControllerError::InvalidMultiaddr(other.to_owned())),
     };
-
     let transport = parts
         .next()
         .ok_or_else(|| ControllerError::InvalidMultiaddr(addr.to_owned()))?;
@@ -2877,12 +2925,10 @@ fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr, ControllerError> {
     }
     Ok(ParsedMultiaddr { host, port })
 }
-
 #[derive(Debug)]
 struct PinnedSpkiVerifier {
     relay_tls_spki_sha256: [u8; 32],
 }
-
 impl ServerCertVerifier for PinnedSpkiVerifier {
     fn verify_server_cert(
         &self,
@@ -2908,7 +2954,6 @@ impl ServerCertVerifier for PinnedSpkiVerifier {
             now,
         )
     }
-
     fn verify_tls12_signature(
         &self,
         message: &[u8],
@@ -2917,7 +2962,6 @@ impl ServerCertVerifier for PinnedSpkiVerifier {
     ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
         verifier_for_signature_cert(cert)?.verify_tls12_signature(message, cert, dss)
     }
-
     fn verify_tls13_signature(
         &self,
         message: &[u8],
@@ -2926,7 +2970,6 @@ impl ServerCertVerifier for PinnedSpkiVerifier {
     ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
         verifier_for_signature_cert(cert)?.verify_tls13_signature(message, cert, dss)
     }
-
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
         vec![
             rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
@@ -2937,7 +2980,6 @@ impl ServerCertVerifier for PinnedSpkiVerifier {
         ]
     }
 }
-
 fn verifier_for_signature_cert(
     cert: &CertificateDer<'_>,
 ) -> Result<Arc<WebPkiServerVerifier>, rustls::Error> {
@@ -2947,28 +2989,23 @@ fn verifier_for_signature_cert(
         .build()
         .map_err(|error| rustls::Error::General(format!("TLS verifier config error: {error}")))
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_data_model::{
         prelude::{Numeric, Quantity},
         soranet::vpn::{VPN_HELPER_TICKET_MAGIC, VpnTariffV1},
     };
-
     use super::*;
-
     const HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET: usize =
         VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32;
     const SMALL_ORDER_ED25519_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     fn quantity_nanos(value: u64) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(value, 9))
             .expect("u64 nano-XOR test value fits Quantity")
     }
-
     fn test_relay_id() -> [u8; 32] {
         let keys = KeyPair::try_from_seed(vec![0x44; 32], Algorithm::Ed25519)
             .expect("derive relay fixture key");
@@ -2978,7 +3015,6 @@ mod tests {
             .try_into()
             .expect("Ed25519 relay identity is 32 bytes")
     }
-
     fn test_helper_ticket(session_id: &str) -> VpnHelperTicketV1 {
         let metering_keys = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
             .expect("derive metering fixture key");
@@ -2998,7 +3034,6 @@ mod tests {
             expires_at_ms: unix_now_ms().saturating_add(60_000),
         }
     }
-
     fn test_connect_payload_json(
         session_id: &str,
         ticket: &VpnHelperTicketV1,
@@ -3017,13 +3052,11 @@ mod tests {
             "42".repeat(32),
         )
     }
-
     fn test_connect_payload(session_id: &str) -> ConnectPayload {
         let ticket = test_helper_ticket(session_id);
         let json = test_connect_payload_json(session_id, &ticket, None);
         parse_connect_payload(Some(&json)).expect("valid connect payload fixture")
     }
-
     #[test]
     fn parse_multiaddr_accepts_ipv4_quic() {
         let parsed = parse_multiaddr("/ip4/127.0.0.1/udp/7777/quic").expect("parse");
@@ -3035,7 +3068,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn parse_multiaddr_accepts_ipv6_quic() {
         let parsed = parse_multiaddr("/ip6/::1/udp/7777/quic").expect("parse");
@@ -3047,7 +3079,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn parse_multiaddr_accepts_dns_quic() {
         let parsed = parse_multiaddr("/dns/torii/udp/9443/quic").expect("parse");
@@ -3062,7 +3093,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn parse_multiaddr_preserves_dns_address_family() {
         for (protocol, expected) in [
@@ -3080,13 +3110,11 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_multiaddr_rejects_non_udp_transport() {
         let err = parse_multiaddr("/ip4/127.0.0.1/tcp/7777/quic").expect_err("must fail");
         assert!(err.to_string().contains("unsupported transport"));
     }
-
     #[test]
     fn connect_payload_deserializes_camel_case() {
         let payload = test_connect_payload("session-1");
@@ -3095,19 +3123,16 @@ mod tests {
         assert_eq!(1280, payload.mtu_bytes);
         assert_eq!(15, payload.padding_budget_ms);
     }
-
     #[test]
     fn connect_payload_worker_frame_roundtrips_as_norito() {
         let payload = test_connect_payload("session-1");
-        let frame = encode_connect_payload_frame(&payload);
-
+        let frame = encode_connect_payload_frame(&payload).expect("encode frame");
         assert!(frame.starts_with(CONNECT_PAYLOAD_FRAME_MAGIC));
         assert_eq!(
             decode_connect_payload_frame(&frame).expect("decode frame"),
             payload
         );
     }
-
     #[test]
     fn state_frame_roundtrips_as_norito() {
         let state = State {
@@ -3118,18 +3143,50 @@ mod tests {
             bytes_out: 9,
             ..State::default()
         };
-        let frame = encode_state_frame(&state);
-
+        let frame = encode_state_frame(&state).expect("encode state");
         assert!(frame.starts_with(STATE_FILE_FRAME_MAGIC));
         assert_eq!(decode_state_frame(&frame).expect("decode state"), state);
     }
-
+    #[test]
+    fn bounded_reader_accepts_exact_connect_frame_limit() {
+        let input = vec![0xA5; MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1];
+        let mut reader = input.as_slice();
+        let read = read_bounded(
+            &mut reader,
+            MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1,
+            "test connect frame",
+        )
+        .expect("exact limit is accepted");
+        assert_eq!(read.len(), MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1);
+        assert_eq!(read.first(), Some(&0xA5));
+        assert_eq!(read.last(), Some(&0xA5));
+    }
+    #[test]
+    fn bounded_reader_rejects_connect_frame_limit_plus_one() {
+        let input = vec![0xA5; MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1 + 1];
+        let mut reader = input.as_slice();
+        let error = read_bounded(
+            &mut reader,
+            MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1,
+            "test connect frame",
+        )
+        .expect_err("limit plus one must be rejected");
+        assert!(error.to_string().contains("exceeds the v1 limit"));
+    }
+    #[test]
+    fn connect_payload_rejects_network_policy_count_before_encoding() {
+        let mut payload = test_connect_payload("session-1");
+        payload.route_pushes = vec!["10.0.0.0/8".to_owned(); MAX_NETWORK_POLICY_ENTRIES_V1 + 1];
+        let error = encode_connect_payload_frame(&payload)
+            .expect_err("producer must enforce the route-count limit");
+        assert!(error.to_string().contains("routePushes"));
+        assert!(error.to_string().contains("4096 entries"));
+    }
     #[test]
     fn decode_hex_accepts_prefixed_values() {
         let decoded = decode_hex("0x0A0b").expect("hex");
         assert_eq!(decoded, vec![0x0A, 0x0B]);
     }
-
     #[test]
     fn helper_ticket_handshake_binding_is_nonzero_and_credential_bound() {
         let payload = test_connect_payload("session-1");
@@ -3144,7 +3201,6 @@ mod tests {
             helper_ticket_handshake_binding(&payload, b"first helper ticket")
                 .expect("repeat binding")
         );
-
         let mut different_trust = payload;
         different_trust.descriptor_commit_hex = "ce".repeat(32);
         assert_ne!(
@@ -3153,7 +3209,6 @@ mod tests {
                 .expect("trust-bound binding")
         );
     }
-
     #[test]
     fn connect_payload_rejects_noncanonical_trust_hex() {
         let mut payload = test_connect_payload("session-1");
@@ -3165,7 +3220,6 @@ mod tests {
                 .contains("exactly 64 lowercase hexadecimal characters")
         );
     }
-
     #[test]
     fn packet_engine_quic_disables_tls_early_data() {
         let tls_config = build_tls_client_config([0x55; 32]);
@@ -3174,7 +3228,6 @@ mod tests {
             "helper authentication must complete before application data"
         );
     }
-
     #[test]
     fn helper_ticket_metadata_decodes_without_secret() {
         let metering_keys = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
@@ -3197,10 +3250,8 @@ mod tests {
         };
         let encoded = ticket.to_hex(&[0xAA; 32]);
         let decoded = decode_helper_ticket_metadata(&encoded).expect("ticket metadata");
-
         assert_eq!(decoded, ticket);
     }
-
     #[test]
     fn helper_ticket_metadata_rejects_inert_metering_public_key_material() {
         let metering_keys = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
@@ -3220,7 +3271,6 @@ mod tests {
             },
             expires_at_ms: 99_000,
         };
-
         for (label, public_key) in [
             ("all-zero", [0u8; 32]),
             ("small-order", SMALL_ORDER_ED25519_POINT),
@@ -3230,7 +3280,6 @@ mod tests {
                 ..HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET + 32]
                 .copy_from_slice(&public_key);
             let encoded = hex::encode(bytes);
-
             match decode_helper_ticket_metadata(&encoded) {
                 Err(ControllerError::InvalidPayload(message)) => {
                     assert!(
@@ -3242,7 +3291,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn usage_voucher_signer_builds_signed_cumulative_voucher() {
         let session_id = "f69c894aa32726fe586fab520f88ae42d1fbb4ebf3083df057f4e40ca0a11111";
@@ -3264,11 +3312,9 @@ mod tests {
         let counters = UsageVoucherCounters::default();
         counters.add_ingress(10);
         counters.add_egress(20);
-
         let envelope = signer
             .build_envelope(&counters)
             .expect("usage voucher should sign");
-
         envelope.voucher.verify().expect("voucher signature");
         assert_eq!(envelope.voucher.body.session_id, ticket.session_id);
         assert_eq!(envelope.voucher.body.quote_id, ticket.quote_id);
@@ -3283,7 +3329,6 @@ mod tests {
                 .expect("bounded fixture fee")
         );
     }
-
     #[test]
     fn usage_voucher_signer_rejects_wrong_metering_seed() {
         let session_id = "f69c894aa32726fe586fab520f88ae42d1fbb4ebf3083df057f4e40ca0a11111";
@@ -3292,19 +3337,16 @@ mod tests {
         let raw_payload =
             test_connect_payload_json(session_id, &ticket, Some(wrong_metering_seed.as_str()));
         let payload = parse_connect_payload(Some(&raw_payload)).expect("payload");
-
         let error = match UsageVoucherSigner::from_payload(&payload) {
             Ok(_) => panic!("wrong seed must fail"),
             Err(error) => error,
         };
-
         assert!(
             error
                 .to_string()
                 .contains("metering private key does not match helper ticket public key")
         );
     }
-
     #[test]
     fn parse_cidr_accepts_ipv4() {
         let parsed = parse_cidr("10.208.0.2/32").expect("cidr");
@@ -3316,7 +3358,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn parse_cidr_accepts_ipv6() {
         let parsed = parse_cidr("2001:db8::2/64").expect("cidr");
@@ -3328,13 +3369,11 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn parse_cidr_rejects_out_of_range_prefix() {
         let error = parse_cidr("10.0.0.1/40").expect_err("must fail");
         assert!(error.to_string().contains("invalid cidr"));
     }
-
     #[test]
     fn packet_stream_round_trips_fragmented_payload() {
         let packet = vec![0xAB; 1500];
@@ -3345,7 +3384,6 @@ mod tests {
         let second = decoder.ingest(&encoded[700..]).expect("second fragment");
         assert_eq!(second, vec![packet]);
     }
-
     #[test]
     fn decoder_handles_multiple_packets_in_single_chunk() {
         let first = encode_packet_stream_frame(&[1, 2, 3]).expect("first");
@@ -3356,7 +3394,6 @@ mod tests {
             .expect("decode");
         assert_eq!(packets, vec![vec![1, 2, 3], vec![4, 5]]);
     }
-
     #[test]
     fn parse_route_via_dev_extracts_gateway_and_device() {
         let parsed =
@@ -3366,7 +3403,6 @@ mod tests {
             (Some("192.168.1.1".to_owned()), Some("enp0s31f6".to_owned()))
         );
     }
-
     #[test]
     fn desired_interface_name_prefers_env_override() {
         let original = env::var_os("SORANET_VPN_INTERFACE");
@@ -3385,7 +3421,6 @@ mod tests {
         }
         assert_eq!(derived, "vpncustom0");
     }
-
     #[test]
     fn relay_session_id_matches_torii_derivation() {
         let session_id = "f69c894aa32726fe586fab520f88ae42d1fbb4ebf3083df057f4e40ca0a11111";
@@ -3393,7 +3428,6 @@ mod tests {
         assert_eq!(derived.len(), 16);
         assert_ne!(derived, [0u8; 16]);
     }
-
     #[test]
     fn cli_accepts_connect_payload_after_subcommand() {
         let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280}"#;
@@ -3405,7 +3439,6 @@ mod tests {
             other => panic!("unexpected command: {other:?}"),
         }
     }
-
     #[test]
     fn cli_rejects_run_packet_engine_payload_argument() {
         let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"stateFilePath":"/tmp/state.norito","packetEnginePath":"/tmp/engine","appGroupId":"group.org.sora.wallet.demo.vpn"}"#;

@@ -4,27 +4,22 @@
 //! streaming NDJSON proof items. This module centralises the decompression
 //! logic so callers (CLI, orchestrator, tests) can share a hardened
 //! implementation.
-
 use std::{
     fmt,
     io::{BufRead, Cursor, Read},
     str,
 };
-
 use flate2::read::{DeflateDecoder, GzDecoder};
 use thiserror::Error;
-
 use crate::proof_stream::{
     ProofStreamItem, ProofStreamSequenceVerifier, ProofStreamVerificationContext,
 };
-
 /// Maximum compressed or decoded bytes accepted for one proof-stream response.
 pub const MAX_PROOF_STREAM_TRANSPORT_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum bytes accepted for one proof-stream NDJSON record, excluding newline.
 pub const MAX_PROOF_STREAM_LINE_BYTES: usize = 256 * 1024;
 /// Maximum proof records accepted in one response.
 pub const MAX_PROOF_STREAM_ITEMS: usize = 1_024;
-
 /// Supported HTTP content-encoding values exposed by proof stream transports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContentEncoding {
@@ -37,7 +32,6 @@ pub enum ContentEncoding {
     /// `zstd` compression.
     Zstd,
 }
-
 impl ContentEncoding {
     /// Parse a raw `Content-Encoding` header value into a [`ContentEncoding`].
     pub fn parse(label: &str) -> Result<Self, ProofStreamTransportError> {
@@ -52,7 +46,6 @@ impl ContentEncoding {
         }
     }
 }
-
 /// Errors surfaced while decoding proof stream transport payloads.
 #[derive(Debug, Error)]
 pub enum ProofStreamTransportError {
@@ -136,13 +129,11 @@ pub enum ProofStreamTransportError {
         message: String,
     },
 }
-
 /// Wrapper reporting per-item decoding errors with context.
 #[derive(Debug)]
 pub struct ItemDecodeError {
     message: String,
 }
-
 impl ItemDecodeError {
     fn new(line: usize, message: &str) -> Self {
         Self {
@@ -150,15 +141,12 @@ impl ItemDecodeError {
         }
     }
 }
-
 impl fmt::Display for ItemDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
     }
 }
-
 impl std::error::Error for ItemDecodeError {}
-
 /// Incremental, resource-bounded decoder for canonical proof-stream NDJSON.
 ///
 /// The reader consumes an already decoded transport. It rejects oversized
@@ -175,7 +163,6 @@ pub struct ProofStreamNdjsonReader<R> {
     line_number: usize,
     finished: bool,
 }
-
 impl<R: BufRead> ProofStreamNdjsonReader<R> {
     /// Wrap an already decoded proof-stream response in its exact verification scope.
     pub fn new(inner: R, context: &ProofStreamVerificationContext) -> Self {
@@ -189,11 +176,9 @@ impl<R: BufRead> ProofStreamNdjsonReader<R> {
             finished: false,
         }
     }
-
     fn read_next(&mut self) -> Result<Option<ProofStreamItem>, ProofStreamTransportError> {
         let mut line_bytes = Vec::new();
         let next_line = self.line_number + 1;
-
         loop {
             let (consumed, found_newline) = {
                 let available = self
@@ -210,7 +195,6 @@ impl<R: BufRead> ProofStreamNdjsonReader<R> {
                     self.finished = true;
                     return Err(ProofStreamTransportError::MissingFinalNewline);
                 }
-
                 let newline = available.iter().position(|byte| *byte == b'\n');
                 let content_len = newline.unwrap_or(available.len());
                 let consumed = newline.map_or(available.len(), |index| index + 1);
@@ -239,10 +223,8 @@ impl<R: BufRead> ProofStreamNdjsonReader<R> {
                 line_bytes.extend_from_slice(&available[..content_len]);
                 (consumed, newline.is_some())
             };
-
             self.total_bytes += consumed;
             self.inner.consume(consumed);
-
             if !found_newline {
                 continue;
             }
@@ -261,7 +243,6 @@ impl<R: BufRead> ProofStreamNdjsonReader<R> {
                     limit: request_limit,
                 });
             }
-
             let text = str::from_utf8(&line_bytes)
                 .map_err(|source| ProofStreamTransportError::InvalidUtf8 { source })?;
             let trimmed = text.trim_matches(|ch: char| ch.is_ascii_whitespace());
@@ -281,10 +262,8 @@ impl<R: BufRead> ProofStreamNdjsonReader<R> {
         }
     }
 }
-
 impl<R: BufRead> Iterator for ProofStreamNdjsonReader<R> {
     type Item = Result<ProofStreamItem, ProofStreamTransportError>;
-
     fn next(&mut self) -> Option<Self::Item> {
         if self.finished {
             return None;
@@ -299,7 +278,6 @@ impl<R: BufRead> Iterator for ProofStreamNdjsonReader<R> {
         }
     }
 }
-
 /// Decompress a proof stream payload according to the advertised encoding.
 pub fn decode_transport_payload(
     encoding: Option<&str>,
@@ -350,7 +328,6 @@ pub fn decode_transport_payload(
         },
     }
 }
-
 fn checked_decoded_payload(payload: Vec<u8>) -> Result<Vec<u8>, ProofStreamTransportError> {
     if payload.len() > MAX_PROOF_STREAM_TRANSPORT_BYTES {
         return Err(ProofStreamTransportError::PayloadTooLarge {
@@ -359,7 +336,6 @@ fn checked_decoded_payload(payload: Vec<u8>) -> Result<Vec<u8>, ProofStreamTrans
     }
     Ok(payload)
 }
-
 /// Decode proof stream items from a (possibly compressed) transport payload.
 ///
 /// The payload is decompressed according to `encoding`, split on newline
@@ -372,20 +348,16 @@ pub fn decode_transport_items(
     let decompressed = decode_transport_payload(encoding, payload)?;
     ProofStreamNdjsonReader::new(Cursor::new(decompressed), context).collect()
 }
-
 #[cfg(test)]
 mod tests {
     use std::io::Write;
-
     use flate2::{
         Compression,
         write::{DeflateEncoder, GzEncoder},
     };
-
     use super::*;
     use crate::proof_stream::{ProofKind, ProofStreamItem};
     use sorafs_manifest::ProofStreamRequestV1;
-
     fn sample_por_fixture(
         request: &ProofStreamRequestV1,
     ) -> (Vec<(usize, crate::PorProof)>, [u8; 32]) {
@@ -413,7 +385,6 @@ mod tests {
             .expect("sample canonical PoR transport fixture");
         (samples, trusted_root)
     }
-
     fn por_request(sample_count: u32) -> ProofStreamRequestV1 {
         ProofStreamRequestV1 {
             manifest_digest: [0xaa; 32],
@@ -430,7 +401,6 @@ mod tests {
             tier: None,
         }
     }
-
     fn sample_items_for(
         request: ProofStreamRequestV1,
     ) -> (ProofStreamVerificationContext, Vec<ProofStreamItem>) {
@@ -470,11 +440,9 @@ mod tests {
             .collect();
         (context, items)
     }
-
     fn sample_items() -> (ProofStreamVerificationContext, Vec<ProofStreamItem>) {
         sample_items_for(por_request(1))
     }
-
     fn encode_items_ndjson(items: &[ProofStreamItem]) -> Vec<u8> {
         let mut buffer = Vec::new();
         for item in items {
@@ -485,7 +453,6 @@ mod tests {
         }
         buffer
     }
-
     #[test]
     fn identity_encoding_roundtrips() {
         let (context, items) = sample_items();
@@ -494,7 +461,6 @@ mod tests {
             decode_transport_items(None, &payload, &context).expect("decode identity stream");
         assert_eq!(decoded.len(), items.len());
     }
-
     #[test]
     fn gzip_encoding_roundtrips() {
         let (context, items) = sample_items();
@@ -506,7 +472,6 @@ mod tests {
             .expect("decode gzip transport");
         assert_eq!(decoded.len(), items.len());
     }
-
     #[test]
     fn deflate_encoding_roundtrips() {
         let (context, items) = sample_items();
@@ -518,7 +483,6 @@ mod tests {
             .expect("decode deflate stream");
         assert_eq!(decoded.len(), items.len());
     }
-
     #[test]
     fn zstd_encoding_roundtrips() {
         let (context, items) = sample_items();
@@ -529,7 +493,6 @@ mod tests {
             .expect("decode zstd transport");
         assert_eq!(decoded.len(), items.len());
     }
-
     #[test]
     fn por_transport_enforces_exact_request_bound_schedule() {
         let (context, items) = sample_items_for(por_request(3));
@@ -538,7 +501,6 @@ mod tests {
         let decoded = decode_transport_items(None, &payload, &context)
             .expect("exact deterministic PoR schedule must verify");
         assert_eq!(decoded.len(), 3);
-
         let truncated = encode_items_ndjson(&items[..2]);
         assert!(matches!(
             decode_transport_items(None, &truncated, &context),
@@ -548,14 +510,12 @@ mod tests {
             decode_transport_items(None, b"", &context),
             Err(ProofStreamTransportError::InvalidSequence { .. })
         ));
-
         let mut reordered = items.clone();
         reordered.swap(0, 1);
         assert!(matches!(
             decode_transport_items(None, &encode_items_ndjson(&reordered), &context),
             Err(ProofStreamTransportError::InvalidSequence { .. })
         ));
-
         let mut duplicated = items;
         duplicated[1] = duplicated[0].clone();
         assert!(matches!(
@@ -563,7 +523,6 @@ mod tests {
             Err(ProofStreamTransportError::InvalidSequence { .. })
         ));
     }
-
     #[test]
     fn por_transport_uses_nonce_seed_and_authenticated_population() {
         let request = por_request(3);
@@ -577,7 +536,6 @@ mod tests {
         let trusted_root = *context
             .trusted_por_root()
             .expect("PoR context has an authenticated root");
-
         let wrong_context = (1u8..=u8::MAX)
             .find_map(|nonce_byte| {
                 let mut changed = request;
@@ -598,7 +556,6 @@ mod tests {
             decode_transport_items(None, &payload, &wrong_context),
             Err(ProofStreamTransportError::ItemDecode { .. })
         ));
-
         let mut request_by_first_index =
             vec![None; usize::try_from(leaf_count).expect("fixture population fits usize")];
         let (replayed_request, replay_context) = (1u8..=u8::MAX)
@@ -629,7 +586,6 @@ mod tests {
                 .expect_err("request digest must reject same-schedule response replay")
                 .to_string();
         assert!(replay_error.contains("request digest does not match"));
-
         let mut item_map = items[0]
             .to_json()
             .as_object()
@@ -653,7 +609,6 @@ mod tests {
             "unauthenticated leaf population must fail closed"
         );
     }
-
     #[test]
     fn por_transport_cardinality_is_minimum_of_request_and_leaf_population() {
         let (context, items) = sample_items_for(por_request(10));
@@ -669,12 +624,10 @@ mod tests {
             .expect("population-truncated exact PoR response");
         assert_eq!(decoded.len(), leaf_count);
     }
-
     #[test]
     fn transport_rejects_attacker_root_and_wrong_request_context() {
         let (context, items) = sample_items();
         let payload = encode_items_ndjson(&items);
-
         let mut attacker_root = *context
             .trusted_por_root()
             .expect("PoR transport context has a trusted root");
@@ -686,7 +639,6 @@ mod tests {
             .expect_err("transport must authenticate PoR proofs against the trusted root")
             .to_string();
         assert!(error.contains("trusted manifest root"));
-
         let mut wrong_request = *context.request();
         wrong_request.provider_id = [0xbc; 32];
         let wrong_context =
@@ -697,7 +649,6 @@ mod tests {
             .to_string();
         assert!(error.contains("provider does not match"));
     }
-
     #[test]
     fn content_encoding_rejects_retired_aliases_and_normalization() {
         for invalid in ["", "x-gzip", "zst", "GZIP", " gzip", "gzip "] {
@@ -707,7 +658,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn decoded_compression_bomb_is_rejected_at_the_fixed_bound() {
         let expanded = vec![b'x'; MAX_PROOF_STREAM_TRANSPORT_BYTES + 1];
@@ -715,7 +665,6 @@ mod tests {
         encoder.write_all(&expanded).expect("write bomb payload");
         let compressed = encoder.finish().expect("finish bomb payload");
         assert!(compressed.len() < MAX_PROOF_STREAM_TRANSPORT_BYTES);
-
         let error = decode_transport_payload(Some("gzip"), &compressed)
             .expect_err("decoded transport bomb must be rejected");
         assert!(matches!(
@@ -723,7 +672,6 @@ mod tests {
             ProofStreamTransportError::PayloadTooLarge { .. }
         ));
     }
-
     #[test]
     fn transport_rejects_noncanonical_lines_and_missing_final_newline() {
         let (context, items) = sample_items();
@@ -733,7 +681,6 @@ mod tests {
             decode_transport_items(None, without_newline, &context),
             Err(ProofStreamTransportError::MissingFinalNewline)
         ));
-
         let mut padded = vec![b' '];
         padded.extend_from_slice(&item);
         assert!(matches!(
@@ -741,7 +688,6 @@ mod tests {
             Err(ProofStreamTransportError::NonCanonicalLine { line: 1 })
         ));
     }
-
     #[test]
     fn transport_rejects_item_and_count_bombs() {
         let (context, items) = sample_items();
@@ -752,7 +698,6 @@ mod tests {
             decode_transport_items(None, &oversized_payload, &context),
             Err(ProofStreamTransportError::ItemTooLarge { line: 1, .. })
         ));
-
         let one_item = encode_items_ndjson(&items);
         let mut too_many = Vec::with_capacity(one_item.len() * 2);
         for _ in 0..2 {
@@ -763,7 +708,6 @@ mod tests {
             Err(ProofStreamTransportError::TooManyItems { limit: 1 })
         ));
     }
-
     #[test]
     fn item_decode_errors_do_not_echo_response_payloads() {
         let (context, _) = sample_items();

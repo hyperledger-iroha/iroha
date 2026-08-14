@@ -1,7 +1,5 @@
 //! Grouped IVM integration tests.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 #[path = "../dynamic_memory.rs"]
 mod dynamic_memory;
 #[path = "../ecadd_circuit.rs"]

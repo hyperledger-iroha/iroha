@@ -1,13 +1,9 @@
 //! Exhaustive signed-boundary checks for trapping IVM arithmetic opcodes.
-
 use ivm::{IVM, VMError, encoding, instruction};
-
 mod common;
-
 const HALT_WORD: u32 = encoding::wide::encode_halt();
 const DESTINATION_SENTINEL: u64 = 0xCAFE_BABE_DEAD_BEEF;
 const BOUNDARY_VALUES: [i64; 7] = [i64::MIN, i64::MIN + 1, -1, 0, 1, i64::MAX - 1, i64::MAX];
-
 fn assemble_words(words: &[u32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(words.len() * 4);
     for word in words {
@@ -15,14 +11,12 @@ fn assemble_words(words: &[u32]) -> Vec<u8> {
     }
     common::assemble(&bytes)
 }
-
 fn vm_with_instruction(instruction: u32) -> IVM {
     let program = assemble_words(&[instruction, HALT_WORD]);
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&program).expect("load boundary program");
     vm
 }
-
 fn execute_binary(vm: &mut IVM, left: i64, right: i64) -> (Result<(), VMError>, u64) {
     vm.reset();
     vm.set_register(1, left as u64);
@@ -31,7 +25,6 @@ fn execute_binary(vm: &mut IVM, left: i64, right: i64) -> (Result<(), VMError>, 
     let result = vm.run();
     (result, vm.register(3))
 }
-
 fn execute_abs(vm: &mut IVM, value: i64) -> (Result<(), VMError>, u64) {
     vm.reset();
     vm.set_register(1, value as u64);
@@ -39,7 +32,6 @@ fn execute_abs(vm: &mut IVM, value: i64) -> (Result<(), VMError>, u64) {
     let result = vm.run();
     (result, vm.register(3))
 }
-
 fn assert_checked_result(
     operation: &str,
     operands: (i64, Option<i64>),
@@ -73,21 +65,18 @@ fn assert_checked_result(
         }
     }
 }
-
 fn checked_div_oracle(left: i64, right: i64) -> Option<i64> {
     if right == 0 {
         return None;
     }
     i64::try_from(i128::from(left) / i128::from(right)).ok()
 }
-
 fn checked_rem_oracle(left: i64, right: i64) -> Option<i64> {
     if right == 0 || (left == i64::MIN && right == -1) {
         return None;
     }
     i64::try_from(i128::from(left) % i128::from(right)).ok()
 }
-
 fn checked_div_ceil_oracle(left: i64, right: i64) -> Option<i64> {
     if right == 0 {
         return None;
@@ -103,7 +92,6 @@ fn checked_div_ceil_oracle(left: i64, right: i64) -> Option<i64> {
     };
     i64::try_from(rounded).ok()
 }
-
 #[test]
 fn signed_division_traps_on_zero_and_overflow_across_boundaries() {
     let mut vm = vm_with_instruction(encoding::wide::encode_rr(
@@ -123,7 +111,6 @@ fn signed_division_traps_on_zero_and_overflow_across_boundaries() {
         }
     }
 }
-
 #[test]
 fn signed_remainder_traps_on_zero_and_overflow_across_boundaries() {
     let mut vm = vm_with_instruction(encoding::wide::encode_rr(
@@ -143,7 +130,6 @@ fn signed_remainder_traps_on_zero_and_overflow_across_boundaries() {
         }
     }
 }
-
 #[test]
 fn signed_div_ceil_traps_on_zero_and_overflow_across_boundaries() {
     let mut vm = vm_with_instruction(encoding::wide::encode_rr(
@@ -163,7 +149,6 @@ fn signed_div_ceil_traps_on_zero_and_overflow_across_boundaries() {
         }
     }
 }
-
 #[test]
 fn signed_abs_traps_only_for_min_across_boundaries() {
     let mut vm = vm_with_instruction(encoding::wide::encode_rr(

@@ -8,7 +8,6 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-
 use super::*;
 use axum::{
     extract::State,
@@ -61,15 +60,12 @@ use iroha_test_samples::ALICE_ID;
 #[cfg(feature = "app_api")]
 use jsonwebtoken::EncodingKey;
 use nonzero_ext::nonzero;
-
 const PREBUILT_QUARANTINE_PROVIDER_HANDLE: &str = "kms://moderation/quarantine/primary";
 const PREBUILT_QUARANTINE_PROVIDER_QUALIFICATION:
     sorafs_node::ModerationQuarantineKeyProviderQualificationV1 =
     sorafs_node::ModerationQuarantineKeyProviderQualificationV1::new(1, [0x51; 32]);
-
 async fn assert_default_body_limit_boundary(limit: usize) {
     use tower::ServiceExt as _;
-
     let router = axum::Router::new().route(
         "/probe",
         axum::routing::post(move |body: Bytes| async move {
@@ -92,7 +88,6 @@ async fn assert_default_body_limit_boundary(limit: usize) {
             .status(),
         StatusCode::NO_CONTENT
     );
-
     let one_over = Request::builder()
         .method(Method::POST)
         .uri("/probe")
@@ -107,7 +102,6 @@ async fn assert_default_body_limit_boundary(limit: usize) {
         StatusCode::PAYLOAD_TOO_LARGE
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn sorafs_protocol_body_limits_admit_boundary_and_reject_one_over() {
@@ -122,7 +116,6 @@ async fn sorafs_protocol_body_limits_admit_boundary_and_reject_one_over() {
         assert_default_body_limit_boundary(limit).await;
     }
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn bodyless_por_and_orderbook_get_mounts_have_zero_body_limits() {
@@ -179,15 +172,12 @@ fn bodyless_por_and_orderbook_get_mounts_have_zero_body_limits() {
         );
     }
 }
-
 #[derive(Debug)]
 struct PrebuiltQuarantineKeyWrapper;
-
 impl sorafs_node::ModerationQuarantineKeyWrapper for PrebuiltQuarantineKeyWrapper {
     fn provider_handle(&self) -> &str {
         PREBUILT_QUARANTINE_PROVIDER_HANDLE
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -196,11 +186,9 @@ impl sorafs_node::ModerationQuarantineKeyWrapper for PrebuiltQuarantineKeyWrappe
     > {
         Ok(PREBUILT_QUARANTINE_PROVIDER_QUALIFICATION)
     }
-
     fn active_key_id(&self) -> &str {
         "kms:test/torii-prebuilt-quarantine"
     }
-
     fn wrap_dek(
         &self,
         _context_digest: [u8; 32],
@@ -208,7 +196,6 @@ impl sorafs_node::ModerationQuarantineKeyWrapper for PrebuiltQuarantineKeyWrappe
     ) -> Result<Vec<u8>, sorafs_node::ModerationQuarantineKeyOperationErrorV1> {
         Err(sorafs_node::ModerationQuarantineKeyOperationErrorV1::Rejected)
     }
-
     fn unwrap_dek(
         &self,
         _key_id: &str,
@@ -218,7 +205,6 @@ impl sorafs_node::ModerationQuarantineKeyWrapper for PrebuiltQuarantineKeyWrappe
         Err(sorafs_node::ModerationQuarantineKeyOperationErrorV1::Rejected)
     }
 }
-
 fn prebuilt_quarantine_provider_config(
     qualification: sorafs_node::ModerationQuarantineKeyProviderQualificationV1,
 ) -> actual::SorafsModerationQuarantineKeyProviderBinding {
@@ -228,7 +214,6 @@ fn prebuilt_quarantine_provider_config(
         policy_digest: qualification.policy_digest(),
     }
 }
-
 #[test]
 #[should_panic(
     expected = "injected SoraFS node quarantine-key provider binding does not match torii.sorafs.storage"
@@ -254,7 +239,6 @@ fn prebuilt_sorafs_node_rejects_mismatched_quarantine_key_provider_binding() {
     )
     .expect("start prebuilt SoraFS node with exact provider binding");
     assert!(node.uses_moderation_quarantine_key_wrapper(&key_wrapper));
-
     let substituted_config = sorafs_node::config::StorageConfig::builder()
         .enabled(true)
         .data_dir(root.join("storage"))
@@ -264,7 +248,6 @@ fn prebuilt_sorafs_node_rejects_mismatched_quarantine_key_provider_binding() {
         .build();
     assert_prebuilt_sorafs_quarantine_key_provider_binding(&node, &substituted_config);
 }
-
 const PREBUILT_PRIVACY_PRF_HANDLE: &str = "threshold-prf:transparency:primary";
 const PREBUILT_PRIVACY_ANCHOR_HANDLE: &str = "governance-dag:transparency:primary";
 const PREBUILT_TRANSPARENCY_LEADER_LEASE_HANDLE: &str = "sealed-cas:transparency:leader-primary";
@@ -276,18 +259,15 @@ const PREBUILT_GOVERNANCE_SIGNER_POLICY_DIGEST: [u8; 32] = [0x97; 32];
 const PREBUILT_GOVERNANCE_CHECKPOINT_STORE_HANDLE: &str =
     "sealed:governance:producer-checkpoint-primary";
 const PREBUILT_GOVERNANCE_CHECKPOINT_STORE_POLICY_DIGEST: [u8; 32] = [0x96; 32];
-
 #[derive(Debug)]
 struct PrebuiltGovernanceDagSigner {
     key_pair: KeyPair,
     last_purpose: Mutex<Option<sorafs_node::GovernanceDagSigningPurposeV1>>,
 }
-
 impl PrebuiltGovernanceDagSigner {
     fn new() -> Self {
         Self::from_seed(0x97)
     }
-
     fn from_seed(seed: u8) -> Self {
         Self {
             key_pair: KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -295,7 +275,6 @@ impl PrebuiltGovernanceDagSigner {
             last_purpose: Mutex::new(None),
         }
     }
-
     fn public_key_bytes(&self) -> [u8; 32] {
         let (algorithm, bytes) = self
             .key_pair
@@ -305,17 +284,14 @@ impl PrebuiltGovernanceDagSigner {
         assert_eq!(algorithm, Algorithm::Ed25519);
         bytes.try_into().expect("Ed25519 public key width")
     }
-
     fn observed_purpose(&self) -> Option<sorafs_node::GovernanceDagSigningPurposeV1> {
         *self.last_purpose.lock().expect("signing purpose lock")
     }
 }
-
 impl sorafs_node::GovernanceDagRuntimeSigner for PrebuiltGovernanceDagSigner {
     fn handle(&self) -> &str {
         PREBUILT_GOVERNANCE_SIGNER_HANDLE
     }
-
     fn qualification(
         &self,
     ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
@@ -326,15 +302,12 @@ impl sorafs_node::GovernanceDagRuntimeSigner for PrebuiltGovernanceDagSigner {
             ),
         )
     }
-
     fn publisher_peer_id(&self) -> &[u8] {
         PREBUILT_GOVERNANCE_SIGNER_PEER_ID
     }
-
     fn public_key(&self) -> [u8; 32] {
         self.public_key_bytes()
     }
-
     fn sign(
         &self,
         purpose: sorafs_node::GovernanceDagSigningPurposeV1,
@@ -348,7 +321,6 @@ impl sorafs_node::GovernanceDagRuntimeSigner for PrebuiltGovernanceDagSigner {
             .map_err(|_| "prebuilt Governance DAG signature width changed".to_owned())
     }
 }
-
 #[test]
 fn prebuilt_governance_signer_receives_the_exact_purpose() {
     let signer = PrebuiltGovernanceDagSigner::new();
@@ -363,13 +335,11 @@ fn prebuilt_governance_signer_receives_the_exact_purpose() {
         Some(sorafs_node::GovernanceDagSigningPurposeV1::DagHead)
     );
 }
-
 #[derive(Debug)]
 struct PrebuiltGovernanceDagCheckpointStoreState {
     records: [Option<sorafs_node::GovernanceDagSealedStateRecord>; 6],
     generation_floors: [u64; 6],
 }
-
 impl Default for PrebuiltGovernanceDagCheckpointStoreState {
     fn default() -> Self {
         Self {
@@ -378,7 +348,6 @@ impl Default for PrebuiltGovernanceDagCheckpointStoreState {
         }
     }
 }
-
 #[derive(Debug)]
 struct PrebuiltGovernanceDagCheckpointStore {
     handle: &'static str,
@@ -386,7 +355,6 @@ struct PrebuiltGovernanceDagCheckpointStore {
     state: Mutex<PrebuiltGovernanceDagCheckpointStoreState>,
     qualification_refuse: AtomicBool,
 }
-
 impl PrebuiltGovernanceDagCheckpointStore {
     fn exact() -> Self {
         Self::with_binding(
@@ -397,7 +365,6 @@ impl PrebuiltGovernanceDagCheckpointStore {
             ),
         )
     }
-
     fn with_binding(
         handle: &'static str,
         qualification: sorafs_node::GovernanceDagRuntimeProviderQualificationV1,
@@ -409,7 +376,6 @@ impl PrebuiltGovernanceDagCheckpointStore {
             qualification_refuse: AtomicBool::new(false),
         }
     }
-
     const fn slot_index(slot: sorafs_node::GovernanceDagSealedStateSlot) -> usize {
         match slot {
             sorafs_node::GovernanceDagSealedStateSlot::Checkpoint => 0,
@@ -420,18 +386,15 @@ impl PrebuiltGovernanceDagCheckpointStore {
             sorafs_node::GovernanceDagSealedStateSlot::SignedHeadRequestReplay => 5,
         }
     }
-
     fn refuse_qualification(&self) {
         self.qualification_refuse
             .store(true, AtomicOrdering::SeqCst);
     }
 }
-
 impl sorafs_node::GovernanceDagSealedCheckpointStore for PrebuiltGovernanceDagCheckpointStore {
     fn handle(&self) -> &str {
         self.handle
     }
-
     fn qualification(
         &self,
     ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
@@ -440,7 +403,6 @@ impl sorafs_node::GovernanceDagSealedCheckpointStore for PrebuiltGovernanceDagCh
         }
         Ok(self.qualification)
     }
-
     fn load(
         &self,
         slot: sorafs_node::GovernanceDagSealedStateSlot,
@@ -448,7 +410,6 @@ impl sorafs_node::GovernanceDagSealedCheckpointStore for PrebuiltGovernanceDagCh
         let state = self.state.lock().map_err(|_| "poisoned".to_owned())?;
         Ok(state.records[Self::slot_index(slot)].clone())
     }
-
     fn compare_and_swap(
         &self,
         slot: sorafs_node::GovernanceDagSealedStateSlot,
@@ -470,7 +431,6 @@ impl sorafs_node::GovernanceDagSealedCheckpointStore for PrebuiltGovernanceDagCh
         state.records[index] = Some(next);
         Ok(())
     }
-
     fn delete(
         &self,
         slot: sorafs_node::GovernanceDagSealedStateSlot,
@@ -485,9 +445,7 @@ impl sorafs_node::GovernanceDagSealedCheckpointStore for PrebuiltGovernanceDagCh
         Ok(())
     }
 }
-
 struct PrebuiltPrivacyPrfProvider;
-
 impl sorafs_node::PrivacyCyclePrfProviderV1 for PrebuiltPrivacyPrfProvider {
     fn derive_cycle_output(
         &self,
@@ -498,21 +456,17 @@ impl sorafs_node::PrivacyCyclePrfProviderV1 for PrebuiltPrivacyPrfProvider {
             .map_err(|_| sorafs_node::PrivacyCyclePrfProviderErrorV1::Internal)
     }
 }
-
 impl sorafs_node::ProductionTransparencyRuntimeProviderV1 for PrebuiltPrivacyPrfProvider {
     fn handle(&self) -> &str {
         PREBUILT_PRIVACY_PRF_HANDLE
     }
-
     fn qualification(
         &self,
     ) -> Result<sorafs_node::TransparencyRuntimeProviderQualificationV1, String> {
         Ok(sorafs_node::TransparencyRuntimeProviderQualificationV1::new(1, [0xC7; 32]))
     }
 }
-
 struct PrebuiltPrivacyReleaseAnchor;
-
 impl sorafs_node::PrivacyReleaseAnchorV1 for PrebuiltPrivacyReleaseAnchor {
     fn finalized_head(
         &self,
@@ -521,7 +475,6 @@ impl sorafs_node::PrivacyReleaseAnchorV1 for PrebuiltPrivacyReleaseAnchor {
     {
         Ok(sorafs_node::PrivacyReleaseAnchorHeadV1::genesis(query_id))
     }
-
     fn compare_and_set_finalized_head(
         &self,
         _expected: sorafs_node::PrivacyReleaseAnchorHeadV1,
@@ -531,21 +484,17 @@ impl sorafs_node::PrivacyReleaseAnchorV1 for PrebuiltPrivacyReleaseAnchor {
         Ok(())
     }
 }
-
 impl sorafs_node::ProductionTransparencyRuntimeProviderV1 for PrebuiltPrivacyReleaseAnchor {
     fn handle(&self) -> &str {
         PREBUILT_PRIVACY_ANCHOR_HANDLE
     }
-
     fn qualification(
         &self,
     ) -> Result<sorafs_node::TransparencyRuntimeProviderQualificationV1, String> {
         Ok(sorafs_node::TransparencyRuntimeProviderQualificationV1::new(1, [0xD7; 32]))
     }
 }
-
 struct PrebuiltTransparencyLeaderLeaseProvider;
-
 impl sorafs_node::TransparencyLeaderLeaseProviderV1 for PrebuiltTransparencyLeaderLeaseProvider {
     fn acquire(
         &self,
@@ -556,7 +505,6 @@ impl sorafs_node::TransparencyLeaderLeaseProviderV1 for PrebuiltTransparencyLead
     > {
         Err(sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)
     }
-
     fn renew(
         &self,
         _request: &sorafs_node::TransparencyLeaderLeaseRenewRequestV1,
@@ -566,7 +514,6 @@ impl sorafs_node::TransparencyLeaderLeaseProviderV1 for PrebuiltTransparencyLead
     > {
         Err(sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)
     }
-
     fn release(
         &self,
         _request: &sorafs_node::TransparencyLeaderLeaseReleaseRequestV1,
@@ -577,29 +524,24 @@ impl sorafs_node::TransparencyLeaderLeaseProviderV1 for PrebuiltTransparencyLead
         Err(sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)
     }
 }
-
 impl sorafs_node::ProductionTransparencyRuntimeProviderV1
     for PrebuiltTransparencyLeaderLeaseProvider
 {
     fn handle(&self) -> &str {
         PREBUILT_TRANSPARENCY_LEADER_LEASE_HANDLE
     }
-
     fn qualification(
         &self,
     ) -> Result<sorafs_node::TransparencyRuntimeProviderQualificationV1, String> {
         Ok(sorafs_node::TransparencyRuntimeProviderQualificationV1::new(1, [0xE7; 32]))
     }
 }
-
 #[derive(Debug)]
 struct PrebuiltFencedTransparencyProvider;
-
 impl sorafs_node::FencedTransparencyPublisherV1 for PrebuiltFencedTransparencyProvider {
     fn handle(&self) -> &str {
         PREBUILT_FENCED_PRIVACY_HANDLE
     }
-
     fn qualification(
         &self,
     ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
@@ -610,7 +552,6 @@ impl sorafs_node::FencedTransparencyPublisherV1 for PrebuiltFencedTransparencyPr
             ),
         )
     }
-
     fn compare_and_append_privacy(
         &self,
         _request: &sorafs_node::FencedPrivacyPublicationRequestV1,
@@ -621,14 +562,12 @@ impl sorafs_node::FencedTransparencyPublisherV1 for PrebuiltFencedTransparencyPr
         Err(sorafs_node::FencedTransparencyPublishErrorV1::Rejected)
     }
 }
-
 impl sorafs_node::FencedTransparencyAuthoritativeHeadReaderV1
     for PrebuiltFencedTransparencyProvider
 {
     fn handle(&self) -> &str {
         PREBUILT_FENCED_PRIVACY_HANDLE
     }
-
     fn qualification(
         &self,
     ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
@@ -639,7 +578,6 @@ impl sorafs_node::FencedTransparencyAuthoritativeHeadReaderV1
             ),
         )
     }
-
     fn read_authoritative_head_with_ancestry(
         &self,
         required_ancestors: &[sorafs_node::FencedTransparencyTargetHeadV1],
@@ -660,17 +598,14 @@ impl sorafs_node::FencedTransparencyAuthoritativeHeadReaderV1
         .map_err(|_| "fresh fused privacy target returned a malformed genesis proof".to_owned())
     }
 }
-
 #[derive(Debug)]
 struct SubstitutedFencedTransparencyHeadReader;
-
 impl sorafs_node::FencedTransparencyAuthoritativeHeadReaderV1
     for SubstitutedFencedTransparencyHeadReader
 {
     fn handle(&self) -> &str {
         PREBUILT_FENCED_PRIVACY_HANDLE
     }
-
     fn qualification(
         &self,
     ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
@@ -681,7 +616,6 @@ impl sorafs_node::FencedTransparencyAuthoritativeHeadReaderV1
             ),
         )
     }
-
     fn read_authoritative_head_with_ancestry(
         &self,
         required_ancestors: &[sorafs_node::FencedTransparencyTargetHeadV1],
@@ -704,7 +638,6 @@ impl sorafs_node::FencedTransparencyAuthoritativeHeadReaderV1
         })
     }
 }
-
 fn prebuilt_privacy_runtime_deps_without_fenced_target() -> sorafs_node::NodeRuntimeDeps {
     sorafs_node::NodeRuntimeDeps::default()
         .with_privacy_cycle_prf_provider(Arc::new(PrebuiltPrivacyPrfProvider))
@@ -713,16 +646,13 @@ fn prebuilt_privacy_runtime_deps_without_fenced_target() -> sorafs_node::NodeRun
         .with_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
         .with_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store())
 }
-
 fn prebuilt_governance_dag_runtime_signer() -> Arc<dyn sorafs_node::GovernanceDagRuntimeSigner> {
     Arc::new(PrebuiltGovernanceDagSigner::new())
 }
-
 fn prebuilt_governance_dag_checkpoint_store()
 -> Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore> {
     Arc::new(PrebuiltGovernanceDagCheckpointStore::exact())
 }
-
 fn prebuilt_fenced_transparency_runtime() -> (
     Arc<dyn sorafs_node::FencedTransparencyPublisherV1>,
     Arc<dyn sorafs_node::FencedTransparencyAuthoritativeHeadReaderV1>,
@@ -732,14 +662,12 @@ fn prebuilt_fenced_transparency_runtime() -> (
     let head_reader: Arc<dyn sorafs_node::FencedTransparencyAuthoritativeHeadReaderV1> = provider;
     (publisher, head_reader)
 }
-
 fn prebuilt_privacy_runtime_deps() -> sorafs_node::NodeRuntimeDeps {
     let (publisher, head_reader) = prebuilt_fenced_transparency_runtime();
     prebuilt_privacy_runtime_deps_without_fenced_target()
         .with_fenced_transparency_publisher(publisher)
         .with_fenced_transparency_head_reader(head_reader)
 }
-
 fn prebuilt_privacy_storage_config(
     data_dir: PathBuf,
     prf_revision: u64,
@@ -753,7 +681,6 @@ fn prebuilt_privacy_storage_config(
         fenced_publisher_revision,
     )
 }
-
 fn prebuilt_privacy_storage_config_with_governance_dir(
     data_dir: PathBuf,
     governance_dir: PathBuf,
@@ -822,7 +749,6 @@ fn prebuilt_privacy_storage_config_with_governance_dir(
     };
     sorafs_node::config::StorageConfig::from(&storage)
 }
-
 fn prebuilt_governance_storage_config(data_dir: PathBuf) -> sorafs_node::config::StorageConfig {
     let governance_signer = PrebuiltGovernanceDagSigner::new();
     sorafs_node::config::StorageConfig::builder()
@@ -854,7 +780,6 @@ fn prebuilt_governance_storage_config(data_dir: PathBuf) -> sorafs_node::config:
         )))
         .build()
 }
-
 #[test]
 fn prebuilt_sorafs_node_accepts_exact_privacy_provider_bindings() {
     let temp_dir = tempfile::tempdir().expect("create prebuilt privacy temp dir");
@@ -877,7 +802,6 @@ fn prebuilt_sorafs_node_accepts_exact_privacy_provider_bindings() {
         &node, &config, false, false, false, false, false,
     );
 }
-
 #[test]
 fn fused_privacy_preflight_rejects_substituted_signed_governance_root() {
     let temp_dir = tempfile::tempdir().expect("create signed-root preflight temp dir");
@@ -898,19 +822,16 @@ fn fused_privacy_preflight_rejects_substituted_signed_governance_root() {
         1,
         1,
     );
-
     let error = preflight_sorafs_fenced_privacy_runtime(
         &substituted_config,
         &ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled()).with_sorafs_node(node),
     )
     .expect_err("prebuilt signed Governance root substitution must fail preflight");
-
     assert!(
         error.contains("signed Governance root and signer binding does not match"),
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn fused_privacy_preflight_live_qualifies_exact_raw_pair() {
     let temp_dir = tempfile::tempdir().expect("create raw privacy preflight temp dir");
@@ -928,7 +849,6 @@ fn fused_privacy_preflight_live_qualifies_exact_raw_pair() {
     preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect("live-qualify the exact raw fused privacy pair");
 }
-
 #[test]
 fn fused_privacy_preflight_requires_raw_governance_signer() {
     let temp_dir = tempfile::tempdir().expect("create signer preflight temp dir");
@@ -942,16 +862,13 @@ fn fused_privacy_preflight_requires_raw_governance_signer() {
         .with_sorafs_fenced_transparency_publisher(publisher)
         .with_sorafs_fenced_transparency_head_reader(head_reader)
         .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
-
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("standalone signed Governance publication must require its raw signer");
-
     assert!(
         error.contains("requires a raw runtime HSM signer"),
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn fused_privacy_preflight_rejects_substituted_raw_governance_signer() {
     let temp_dir = tempfile::tempdir().expect("create signer substitution temp dir");
@@ -968,16 +885,13 @@ fn fused_privacy_preflight_rejects_substituted_raw_governance_signer() {
         .with_sorafs_fenced_transparency_head_reader(head_reader)
         .with_sorafs_governance_dag_signer(substituted_signer)
         .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
-
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("substituted raw Governance signer must fail preflight");
-
     assert!(
         error.contains("does not match the exact configured binding"),
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn governance_checkpoint_preflight_rejects_missing_raw_store() {
     let temp_dir = tempfile::tempdir().expect("create checkpoint preflight temp dir");
@@ -988,16 +902,13 @@ fn governance_checkpoint_preflight_rejects_missing_raw_store() {
     let config = prebuilt_governance_storage_config(root.join("storage"));
     let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
         .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer());
-
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("configured producer must require its raw sealed checkpoint store");
-
     assert!(
         error.contains("requires a raw sealed checkpoint store"),
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn governance_checkpoint_preflight_rejects_substituted_raw_store() {
     let temp_dir = tempfile::tempdir().expect("create checkpoint substitution temp dir");
@@ -1017,17 +928,14 @@ fn governance_checkpoint_preflight_rejects_substituted_raw_store() {
     let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
         .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer())
         .with_sorafs_governance_dag_checkpoint_store(substituted_store);
-
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("substituted raw checkpoint store must fail preflight");
-
     assert!(
         error
             .contains("checkpoint-store qualification does not match the exact configured binding"),
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn governance_checkpoint_preflight_rejects_ambiguous_prebuilt_and_raw_store() {
     let temp_dir = tempfile::tempdir().expect("create checkpoint ambiguity temp dir");
@@ -1046,16 +954,13 @@ fn governance_checkpoint_preflight_rejects_ambiguous_prebuilt_and_raw_store() {
     let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
         .with_sorafs_node(node)
         .with_sorafs_governance_dag_checkpoint_store(prebuilt_governance_dag_checkpoint_store());
-
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("prebuilt node and raw checkpoint store must be mutually exclusive");
-
     assert!(
         error.contains("must not also receive a raw Governance DAG checkpoint store"),
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn standalone_node_retains_and_live_revalidates_raw_governance_checkpoint_store() {
     let temp_dir = tempfile::tempdir().expect("create checkpoint retention temp dir");
@@ -1085,10 +990,8 @@ fn standalone_node_retains_and_live_revalidates_raw_governance_checkpoint_store(
                 .as_ref()
                 .expect("raw checkpoint store retained"),
         ));
-
     let node = sorafs_node::NodeHandle::try_new_with_runtime_deps(config, node_runtime_deps)
         .expect("standalone node retains exact checkpoint provider");
-
     assert_eq!(
         node.governance_dag_checkpoint_store_binding(),
         Some((
@@ -1110,7 +1013,6 @@ fn standalone_node_retains_and_live_revalidates_raw_governance_checkpoint_store(
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn fused_privacy_preflight_rejects_missing_raw_pair() {
     let temp_dir = tempfile::tempdir().expect("create raw privacy preflight temp dir");
@@ -1129,7 +1031,6 @@ fn fused_privacy_preflight_rejects_missing_raw_pair() {
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn fused_privacy_preflight_rejects_substituted_raw_writer() {
     let temp_dir = tempfile::tempdir().expect("create raw privacy preflight temp dir");
@@ -1151,7 +1052,6 @@ fn fused_privacy_preflight_rejects_substituted_raw_writer() {
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn fused_privacy_preflight_rejects_substituted_raw_head_reader() {
     let temp_dir = tempfile::tempdir().expect("create raw privacy preflight temp dir");
@@ -1175,7 +1075,6 @@ fn fused_privacy_preflight_rejects_substituted_raw_head_reader() {
         "unexpected error: {error}"
     );
 }
-
 #[test]
 #[should_panic(
     expected = "injected SoraFS node threshold-PRF provider binding does not match torii.sorafs.storage"
@@ -1203,7 +1102,6 @@ fn prebuilt_sorafs_node_rejects_mismatched_privacy_provider_binding() {
         false,
     );
 }
-
 #[test]
 #[should_panic(
     expected = "injected SoraFS node fused privacy publisher binding does not match torii.sorafs.storage"
@@ -1231,7 +1129,6 @@ fn prebuilt_sorafs_node_rejects_substituted_fenced_privacy_binding() {
         false,
     );
 }
-
 #[test]
 #[should_panic(
     expected = "a prebuilt SoraFS node must not also receive a raw threshold-PRF provider through Torii"
@@ -1252,7 +1149,6 @@ fn prebuilt_sorafs_node_rejects_ambiguous_raw_privacy_provider() {
         &node, &config, true, false, false, false, false,
     );
 }
-
 #[test]
 #[should_panic(
     expected = "a prebuilt SoraFS node must not also receive a raw fused privacy publisher through Torii"
@@ -1273,7 +1169,6 @@ fn prebuilt_sorafs_node_rejects_ambiguous_raw_fenced_privacy_publisher() {
         &node, &config, false, false, false, true, false,
     );
 }
-
 #[test]
 #[should_panic(
     expected = "a prebuilt SoraFS node must not also receive a raw authenticated privacy-head reader through Torii"
@@ -1294,7 +1189,6 @@ fn prebuilt_sorafs_node_rejects_ambiguous_raw_fenced_privacy_head_reader() {
         &node, &config, false, false, false, false, true,
     );
 }
-
 #[test]
 fn fused_privacy_preflight_rejects_prebuilt_and_raw_ambiguity() {
     let temp_dir = tempfile::tempdir().expect("create prebuilt privacy temp dir");
@@ -1319,7 +1213,6 @@ fn fused_privacy_preflight_rejects_prebuilt_and_raw_ambiguity() {
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn fused_privacy_preflight_rejects_prebuilt_and_raw_governance_signer() {
     let temp_dir = tempfile::tempdir().expect("create prebuilt signer temp dir");
@@ -1336,16 +1229,13 @@ fn fused_privacy_preflight_rejects_prebuilt_and_raw_governance_signer() {
     let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
         .with_sorafs_node(node)
         .with_sorafs_governance_dag_signer(prebuilt_governance_dag_runtime_signer());
-
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("prebuilt node and raw Governance signer must be mutually exclusive");
-
     assert!(
         error.contains("prebuilt SoraFS node is mutually exclusive"),
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn standalone_sorafs_node_rejects_incomplete_fenced_privacy_pairs() {
     for (label, inject_publisher, inject_reader, expected) in [
@@ -1404,7 +1294,6 @@ fn standalone_sorafs_node_rejects_incomplete_fenced_privacy_pairs() {
         );
     }
 }
-
 #[test]
 fn standalone_sorafs_node_rejects_unexpected_fenced_privacy_pair() {
     let temp_dir = tempfile::tempdir().expect("create standalone privacy temp dir");
@@ -1439,7 +1328,6 @@ fn standalone_sorafs_node_rejects_unexpected_fenced_privacy_pair() {
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn torii_runtime_deps_retain_fenced_privacy_pair() {
     let (publisher, reader) = prebuilt_fenced_transparency_runtime();
@@ -1461,7 +1349,6 @@ fn torii_runtime_deps_retain_fenced_privacy_pair() {
             .is_some()
     );
 }
-
 #[tokio::test]
 #[should_panic(
     expected = "invalid SoraFS node runtime preflight: standalone fused privacy runtime requires the raw writer and authenticated-head reader as one complete pair"
@@ -1488,7 +1375,6 @@ async fn new_with_handle_preflights_fused_privacy_before_startup() {
     let (publisher, _) = prebuilt_fenced_transparency_runtime();
     let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
         .with_sorafs_fenced_transparency_publisher(publisher);
-
     let _ = Torii::new_with_handle(
         ChainId::from("fused-privacy-preflight-test"),
         signed_query_test_network_id(),
@@ -1505,7 +1391,6 @@ async fn new_with_handle_preflights_fused_privacy_before_startup() {
         runtime_deps,
     );
 }
-
 fn proof_json_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -1514,7 +1399,6 @@ fn proof_json_headers() -> HeaderMap {
     );
     headers
 }
-
 fn query_conversion_message(error: &Error) -> Option<&str> {
     match error {
         Error::Query(ValidationFail::QueryFailed(
@@ -1523,42 +1407,31 @@ fn query_conversion_message(error: &Error) -> Option<&str> {
         _ => None,
     }
 }
-
 struct FailingZkJobIdRng;
-
 #[derive(Debug)]
 struct FailingZkJobIdRngError;
-
 impl std::fmt::Display for FailingZkJobIdRngError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("failing zk job-id RNG")
     }
 }
-
 impl rand::rand_core::TryRngCore for FailingZkJobIdRng {
     type Error = FailingZkJobIdRngError;
-
     fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
         Err(FailingZkJobIdRngError)
     }
-
     fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
         Err(FailingZkJobIdRngError)
     }
-
     fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> std::result::Result<(), Self::Error> {
         Err(FailingZkJobIdRngError)
     }
 }
-
 impl rand::rand_core::TryCryptoRng for FailingZkJobIdRng {}
-
 #[test]
 fn zk_ivm_prove_job_id_reports_rng_failure() {
     let mut rng = FailingZkJobIdRng;
-
     let error = zk_ivm_prove_job_id_with_rng(&mut rng).expect_err("RNG failure must be reported");
-
     match error {
         Error::Query(ValidationFail::InternalError(message)) => {
             assert!(message.contains("zk IVM prove job-id OS RNG failed"));
@@ -1567,7 +1440,6 @@ fn zk_ivm_prove_job_id_reports_rng_failure() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[tokio::test]
 async fn zk_ivm_job_routes_reject_noncanonical_ids_before_lookup_or_echo() {
     let app = mk_ivm_prove_app_state_for_tests();
@@ -1588,7 +1460,6 @@ async fn zk_ivm_job_routes_reject_noncanonical_ids_before_lookup_or_echo() {
             !message.contains(job_id),
             "invalid id must not be reflected"
         );
-
         let delete_error = match call_zk_ivm_prove_delete(app.clone(), job_id.to_owned()).await {
             Ok(_) => panic!("DELETE accepted and echoed invalid job id"),
             Err(error) => error,
@@ -1602,7 +1473,6 @@ async fn zk_ivm_job_routes_reject_noncanonical_ids_before_lookup_or_echo() {
     }
     validate_zk_ivm_prove_job_id("0123456789abcdef0123456789abcdef").expect("canonical id");
 }
-
 #[cfg(feature = "push")]
 use crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_push;
 #[cfg(feature = "telemetry")]
@@ -1623,7 +1493,6 @@ use crate::{
     },
 };
 use iroha_core::smartcontracts::Execute;
-
 #[test]
 fn stark_fri_backend_labels_require_non_empty_profile() {
     assert!(is_stark_fri_v1_backend("stark/fri"));
@@ -1642,7 +1511,6 @@ fn stark_fri_backend_labels_require_non_empty_profile() {
     assert!(!is_stark_fri_v1_backend("stark/fri/mock-proof"));
     assert!(!is_stark_fri_v1_backend("stark/fri-v2"));
 }
-
 #[test]
 fn parse_pipeline_status_scope_defaults_to_global_and_trims_case() {
     assert_eq!(
@@ -1666,7 +1534,6 @@ fn parse_pipeline_status_scope_defaults_to_global_and_trims_case() {
         PipelineStatusReadScope::Global
     );
 }
-
 #[test]
 fn parse_pipeline_status_scope_rejects_injected_values() {
     for raw in [
@@ -1683,7 +1550,6 @@ fn parse_pipeline_status_scope_rejects_injected_values() {
         );
     }
 }
-
 fn bind_asset_alias_for_test(
     app: &SharedAppState,
     authority: &AccountId,
@@ -1713,7 +1579,6 @@ fn bind_asset_alias_for_test(
     tx.apply();
     block.commit().expect("commit asset alias for test");
 }
-
 fn sample_iso_bridge_config(alias: &str, account_id: &AccountId) -> actual::IsoBridge {
     let signer_keypair =
         checked_torii_test_ed25519_keypair(0x80, "derive ISO bridge signer fixture key");
@@ -1741,11 +1606,9 @@ fn sample_iso_bridge_config(alias: &str, account_id: &AccountId) -> actual::IsoB
         reference_data: actual::IsoReferenceData::default(),
     }
 }
-
 fn local_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
     axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
 }
-
 #[tokio::test]
 async fn iso_audit_messages_endpoint_exports_digest_bound_manifest() {
     let app = mk_app_state_for_tests_with_iso_bridge(Some(sample_iso_bridge_config(
@@ -1754,7 +1617,6 @@ async fn iso_audit_messages_endpoint_exports_digest_bound_manifest() {
     )));
     let runtime = app.iso_bridge.as_ref().expect("iso bridge enabled");
     runtime.mark_accepted("handler-audit", "handler-tx");
-
     let (status, JsonBody(body)) =
         handler_iso_audit_messages(State(app), HeaderMap::new(), local_connect_info())
             .await
@@ -1783,7 +1645,6 @@ async fn iso_audit_messages_endpoint_exports_digest_bound_manifest() {
         Some("handler-audit")
     );
 }
-
 #[tokio::test]
 async fn iso_audit_messages_endpoint_rejects_disabled_bridge() {
     let err = handler_iso_audit_messages(
@@ -1802,7 +1663,6 @@ async fn iso_audit_messages_endpoint_rejects_disabled_bridge() {
         "unexpected error: {err:?}"
     );
 }
-
 pub(crate) fn test_inrou_manifest() -> iroha_data_model::soracloud::SoraInrouManifestV1 {
     iroha_data_model::soracloud::SoraInrouManifestV1 {
         schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
@@ -1833,7 +1693,6 @@ pub(crate) fn test_inrou_manifest() -> iroha_data_model::soracloud::SoraInrouMan
         ssh_authorized_keys: vec!["ssh-ed25519 test-key torii-tests".to_owned()],
     }
 }
-
 fn sample_identifier_policy(
     owner: &AccountId,
     signer: &KeyPair,
@@ -1846,7 +1705,6 @@ fn sample_identifier_policy(
         RamLfeBackend::BfvAffineSha3_256V1,
     )
 }
-
 fn sample_programmed_identifier_policy(
     owner: &AccountId,
     signer: &KeyPair,
@@ -1859,7 +1717,6 @@ fn sample_programmed_identifier_policy(
         RamLfeBackend::BfvProgrammedSha3_256V1,
     )
 }
-
 fn sample_identifier_policy_with_backend(
     owner: &AccountId,
     signer: &KeyPair,
@@ -1929,7 +1786,6 @@ fn sample_identifier_policy_with_backend(
     );
     (policy, program_policy)
 }
-
 fn sample_program_id(policy_id: &IdentifierPolicyId) -> RamLfeProgramId {
     policy_id
         .to_string()
@@ -1937,11 +1793,9 @@ fn sample_program_id(policy_id: &IdentifierPolicyId) -> RamLfeProgramId {
         .parse()
         .expect("program id")
 }
-
 fn sample_identifier_bfv_parameters(_backend: RamLfeBackend) -> BfvParameters {
     ram_lfe_bfv_parameters_v1()
 }
-
 fn encrypted_identifier_ciphertext(
     program_policy: &RamLfeProgramPolicy,
     input: &[u8],
@@ -1951,7 +1805,6 @@ fn encrypted_identifier_ciphertext(
         .expect("decode BFV public parameters");
     encrypt_identifier_from_seed(&public_parameters, input, seed).expect("encrypt identifier")
 }
-
 fn encrypted_identifier_hex(
     program_policy: &RamLfeProgramPolicy,
     input: &[u8],
@@ -1966,7 +1819,6 @@ fn encrypted_identifier_hex(
         .expect("encode encrypted identifier"),
     )
 }
-
 fn output_opening_for_ciphertext(
     resolver: &identifier_resolution::IdentifierResolutionService,
     program_policy: &RamLfeProgramPolicy,
@@ -1993,7 +1845,6 @@ fn output_opening_for_ciphertext(
         payload,
     }
 }
-
 fn dummy_output_opening_for_access_test() -> RamLfeOutputOpening {
     let signer =
         checked_torii_test_ed25519_keypair(0x81, "derive RAM-LFE dummy output opening fixture key");
@@ -2014,7 +1865,6 @@ fn dummy_output_opening_for_access_test() -> RamLfeOutputOpening {
         payload,
     }
 }
-
 fn shared_sdk_identifier_bfv_public_parameters(
     policy_id: &IdentifierPolicyId,
 ) -> BfvIdentifierPublicParameters {
@@ -2029,7 +1879,6 @@ fn shared_sdk_identifier_bfv_public_parameters(
     .expect("derive shared SDK BFV public parameters");
     derived
 }
-
 fn sample_identifier_policy_with_public_parameters(
     owner: &AccountId,
     signer: &KeyPair,
@@ -2079,7 +1928,6 @@ fn sample_identifier_policy_with_public_parameters(
     let policy = IdentifierPolicy::new(policy_id.clone(), owner.clone(), normalization, program_id);
     (policy, program_policy)
 }
-
 fn register_and_activate_identifier_policy_bundle(
     authority: &AccountId,
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
@@ -2107,7 +1955,6 @@ fn register_and_activate_identifier_policy_bundle(
     .execute(authority, tx)
     .expect("activate policy");
 }
-
 fn register_and_activate_program_policy(
     authority: &AccountId,
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
@@ -2124,7 +1971,6 @@ fn register_and_activate_program_policy(
     .execute(authority, tx)
     .expect("activate program policy");
 }
-
 fn seed_proof_record_at_height(
     app: &SharedAppState,
     backend: &str,
@@ -2168,22 +2014,18 @@ fn seed_proof_record_at_height(
         .expect("seed proof block commit should succeed");
     id.to_string()
 }
-
 fn seed_proof_record(app: &SharedAppState, backend: &str, proof_hash: [u8; 32]) -> String {
     seed_proof_record_at_height(app, backend, proof_hash, 1)
 }
-
 fn current_block_height(app: &SharedAppState) -> u64 {
     app.state
         .transactions_latest_height_for_testing()
         .try_into()
         .expect("height should fit into u64")
 }
-
 fn next_block_height(app: &SharedAppState) -> u64 {
     current_block_height(app).saturating_add(1).max(1)
 }
-
 #[cfg(feature = "app_api")]
 fn sample_tx_history_jwt_claims(subject: &str) -> Value {
     let mut claims = Map::new();
@@ -2200,7 +2042,6 @@ fn sample_tx_history_jwt_claims(subject: &str) -> Value {
     claims.insert("aud".to_string(), Value::from("pk-cbdc"));
     Value::Object(claims)
 }
-
 #[cfg(feature = "app_api")]
 fn sign_tx_history_jwt_claims(secret: &str, claims: Value) -> String {
     let mut header = Map::new();
@@ -2223,12 +2064,10 @@ fn sign_tx_history_jwt_claims(secret: &str, claims: Value) -> String {
     .expect("sample tx-history jwt should sign");
     format!("{message}.{signature}")
 }
-
 #[cfg(feature = "app_api")]
 fn sample_tx_history_jwt(secret: &str) -> String {
     sign_tx_history_jwt_claims(secret, sample_tx_history_jwt_claims("operator1@banka"))
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn tx_history_jwt_claims_accept_valid_hmac_token() {
@@ -2240,14 +2079,11 @@ fn tx_history_jwt_claims_accept_valid_hmac_token() {
         issuer: Some("pk-cbdc-dev".to_string()),
         audience: Some("pk-cbdc".to_string()),
     };
-
     let claims = decode_tx_history_jwt_claims(&format!("Bearer {token}"), &jwt)
         .expect("valid tx-history token should decode");
-
     assert_eq!(claims.sub.as_deref(), Some("operator1@banka"));
     assert_eq!(claims.dataspace_id.as_deref(), Some("banka"));
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn tx_history_jwt_claims_reject_invalid_hmac_signature() {
@@ -2258,12 +2094,10 @@ fn tx_history_jwt_claims_reject_invalid_hmac_signature() {
         issuer: Some("pk-cbdc-dev".to_string()),
         audience: Some("pk-cbdc".to_string()),
     };
-
     let err = decode_tx_history_jwt_claims(&format!("Bearer {token}"), &jwt)
         .expect_err("mismatched secret must fail");
     assert_eq!(err, "invalid JWT");
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn tx_history_alias_resolution_reject_maps_duplicate_bindings_to_conflict() {
@@ -2273,10 +2107,8 @@ fn tx_history_alias_resolution_reject_maps_duplicate_bindings_to_conflict() {
             "account alias `operator1@banka` is bound to multiple accounts: account-a and account-b"
                 .to_string(),
     });
-
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn tx_history_alias_resolution_reject_maps_invalid_alias_literals_to_bad_request() {
@@ -2287,10 +2119,8 @@ fn tx_history_alias_resolution_reject_maps_invalid_alias_literals_to_bad_request
             ),
         ),
     ));
-
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn normalize_tx_history_alias_preserves_on_chain_literals() {
@@ -2311,7 +2141,6 @@ fn normalize_tx_history_alias_preserves_on_chain_literals() {
         "operator1@banka.dataspace"
     );
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn canonical_tx_history_subject_alias_accepts_canonical_literals() {
@@ -2341,7 +2170,6 @@ fn canonical_tx_history_subject_alias_accepts_canonical_literals() {
         Some("operator1@branch.banka".to_string())
     );
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn canonical_tx_history_subject_alias_rejects_bare_subjects() {
@@ -2361,7 +2189,6 @@ fn canonical_tx_history_subject_alias_rejects_bare_subjects() {
         None
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn tx_history_viewer_from_headers_rejects_bare_subject_aliases() {
@@ -2378,7 +2205,6 @@ async fn tx_history_viewer_from_headers_rejects_bare_subject_aliases() {
         }),
         ..TxHistoryAccessPolicy::default()
     });
-
     let mut headers = HeaderMap::new();
     headers.insert(
         axum::http::header::AUTHORIZATION,
@@ -2386,12 +2212,10 @@ async fn tx_history_viewer_from_headers_rejects_bare_subject_aliases() {
             .parse()
             .expect("authorization header"),
     );
-
     let response = tx_history_viewer_from_headers(&app, &headers)
         .expect_err("bare subject aliases must be rejected");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
-
 #[cfg(feature = "zk-stark")]
 fn sample_stark_vk_box(
     backend: &str,
@@ -2411,20 +2235,16 @@ fn sample_stark_vk_box(
     let bytes = norito::to_bytes(&vk_payload).expect("encode stark vk payload");
     iroha_data_model::proof::VerifyingKeyBox::new(backend.to_owned(), bytes)
 }
-
 fn sample_ivm_prove_authority_keypair() -> KeyPair {
     checked_torii_test_ed25519_keypair(0x83, "derive ZK IVM prove authority fixture key")
 }
-
 fn sample_ivm_prove_authority() -> AccountId {
     AccountId::new(sample_ivm_prove_authority_keypair().public_key().clone())
 }
-
 fn mk_ivm_prove_app_state_for_tests() -> SharedAppState {
     let authority = sample_ivm_prove_authority();
     mk_app_state_for_tests_with_world(world_with_account(&authority))
 }
-
 fn signed_ivm_prove_headers(
     method: &axum::http::Method,
     uri: &axum::http::Uri,
@@ -2439,7 +2259,6 @@ fn signed_ivm_prove_headers(
     );
     headers
 }
-
 async fn call_zk_ivm_prove(
     app: SharedAppState,
     body: axum::body::Bytes,
@@ -2458,7 +2277,6 @@ async fn call_zk_ivm_prove(
     .await
     .map(IntoResponse::into_response)
 }
-
 async fn call_zk_ivm_prove_get(app: SharedAppState, job_id: String) -> Result<AxResponse, Error> {
     let method = axum::http::Method::GET;
     let uri: axum::http::Uri = format!("/v1/zk/ivm/prove/{job_id}")
@@ -2476,7 +2294,6 @@ async fn call_zk_ivm_prove_get(app: SharedAppState, job_id: String) -> Result<Ax
     .await
     .map(IntoResponse::into_response)
 }
-
 async fn call_zk_ivm_prove_delete(
     app: SharedAppState,
     job_id: String,
@@ -2497,23 +2314,19 @@ async fn call_zk_ivm_prove_delete(
     .await
     .map(IntoResponse::into_response)
 }
-
 fn sample_ivm_fee_payment() -> iroha_data_model::transaction::FeePaymentIntent {
     iroha_data_model::transaction::FeePaymentIntent::authority(
         Vec::new(),
         NonZeroU64::new(50_000_000),
     )
 }
-
 #[test]
 fn zk_ivm_fee_payment_requires_typed_gas_bound_and_rejects_legacy_metadata() {
     let metadata = iroha_data_model::metadata::Metadata::default();
     let missing_gas = iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
     assert!(validate_zk_ivm_fee_payment(&missing_gas, &metadata).is_err());
-
     let valid = sample_ivm_fee_payment();
     validate_zk_ivm_fee_payment(&valid, &metadata).expect("typed gas bound should validate");
-
     let mut legacy = metadata;
     legacy.insert(
         Name::from_str("gas_limit").expect("static legacy metadata key"),
@@ -2521,7 +2334,6 @@ fn zk_ivm_fee_payment_requires_typed_gas_bound_and_rejects_legacy_metadata() {
     );
     assert!(validate_zk_ivm_fee_payment(&valid, &legacy).is_err());
 }
-
 fn make_ivm_prove_request(
     vk_ref: VerifyingKeyId,
     bytecode: IvmBytecode,
@@ -2536,7 +2348,6 @@ fn make_ivm_prove_request(
         proved,
     }
 }
-
 fn set_latest_block_height(app: &SharedAppState, height: u64) {
     let mut current_height = current_block_height(app);
     while current_height < height {
@@ -2560,7 +2371,6 @@ fn set_latest_block_height(app: &SharedAppState, height: u64) {
         current_height = next_height;
     }
 }
-
 fn grant_alias_resolve_permissions(
     app: &SharedAppState,
     account_id: &AccountId,
@@ -2597,7 +2407,6 @@ fn grant_alias_resolve_permissions(
         .commit()
         .expect("commit should persist alias resolve permission");
 }
-
 fn signed_alias_resolve_headers_for_test(
     app: &SharedAppState,
     account_id: &AccountId,
@@ -2612,7 +2421,6 @@ fn signed_alias_resolve_headers_for_test(
         .expect("alias resolve test URI");
     signed_app_headers(account_id, keypair, &method, &uri, body)
 }
-
 fn grant_alias_resolve_dataspace_permission(
     app: &SharedAppState,
     account_id: &AccountId,
@@ -2644,22 +2452,18 @@ fn grant_alias_resolve_dataspace_permission(
         .commit()
         .expect("commit should persist alias dataspace resolve permission");
 }
-
 fn recipient_lookup_sbp_dataspace_for_test() -> DataSpaceId {
     DataSpaceId::new(20)
 }
-
 fn recipient_lookup_cbuae_dataspace_for_test() -> DataSpaceId {
     DataSpaceId::new(10)
 }
-
 fn recipient_lookup_aed_definition_for_test() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("fx", "universal").expect("FX domain"),
         "aed".parse().expect("AED name"),
     )
 }
-
 fn recipient_lookup_world_for_test(caller: &AccountId, target: &AccountId) -> World {
     let definition_id = recipient_lookup_aed_definition_for_test();
     let definition_domain = DomainId::try_new("fx", "universal").expect("FX domain");
@@ -2687,7 +2491,6 @@ fn recipient_lookup_world_for_test(caller: &AccountId, target: &AccountId) -> Wo
         [],
     )
 }
-
 fn configure_recipient_lookup_sbp_dataspace_for_test(
     app: &mut SharedAppState,
     visibility: iroha_data_model::nexus::LaneVisibility,
@@ -2739,14 +2542,12 @@ fn configure_recipient_lookup_sbp_dataspace_for_test(
         dataspace_catalog,
         ..actual::Nexus::default()
     };
-
     let app_state = Arc::get_mut(app).expect("unique app state");
     let state = Arc::get_mut(&mut app_state.state).expect("unique state");
     state.set_nexus(nexus.clone()).expect("apply nexus config");
     let state_view = app_state.state.view();
     app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
 }
-
 fn onboarding_alias_test_app(authority: &AccountId, domain_owner: &AccountId) -> SharedAppState {
     let mut accounts = vec![Account::new(authority.clone()).build(authority)];
     if domain_owner != authority {
@@ -2781,7 +2582,6 @@ fn onboarding_alias_test_app(authority: &AccountId, domain_owner: &AccountId) ->
     );
     app
 }
-
 fn install_account_alias_policy_for_test(world: &mut World, authority: &AccountId) {
     let mut policy = iroha_data_model::sns::fixtures::default_policy();
     policy.suffix_id = iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID;
@@ -2797,7 +2597,6 @@ fn install_account_alias_policy_for_test(world: &mut World, authority: &AccountI
         norito::codec::Encode::encode(&policy),
     );
 }
-
 fn install_onboarding_parent_leases_for_test(world: &mut World, owner: &AccountId) {
     let controller = iroha_data_model::sns::NameControllerV1::account(
         &AccountAddress::from_account_id(owner).expect("parent lease owner address"),
@@ -2826,7 +2625,6 @@ fn install_onboarding_parent_leases_for_test(world: &mut World, owner: &AccountI
         iroha_core::sns::record_storage_key(&dataspace_selector),
         norito::codec::Encode::encode(&dataspace_record),
     );
-
     for name in ["hbl", "ubl"] {
         let domain = DomainId::try_new(name, "sbp").expect("onboarding parent domain");
         let selector = iroha_core::sns::selector_for_domain(&domain).expect("domain selector");
@@ -2847,7 +2645,6 @@ fn install_onboarding_parent_leases_for_test(world: &mut World, owner: &AccountI
         );
     }
 }
-
 fn grant_account_permissions_for_test(
     app: &SharedAppState,
     authority: &AccountId,
@@ -2877,26 +2674,22 @@ fn grant_account_permissions_for_test(
         .commit()
         .expect("commit should persist onboarding permissions");
 }
-
 fn onboarding_credential_domain_permissions(domain: &DomainId) -> [Permission; 1] {
     [Permission::from(CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Domain(domain.clone()),
     })]
 }
-
 fn onboarding_fee_sponsor_program_for_test(account: &AccountId) -> FeeSponsorProgramId {
     FeeSponsorProgramId::new(
         account.clone(),
         "retail".parse().expect("retail fee sponsor program name"),
     )
 }
-
 fn onboarding_fee_sponsor_enrollment_permission(program_id: &FeeSponsorProgramId) -> Permission {
     Permission::from(CanEnrollFeeSponsorProgram {
         program_id: program_id.clone(),
     })
 }
-
 fn register_fee_sponsor_program_for_test(app: &SharedAppState, program_id: FeeSponsorProgramId) {
     let height = next_block_height(app);
     let header = BlockHeader::new(
@@ -2921,7 +2714,6 @@ fn register_fee_sponsor_program_for_test(app: &SharedAppState, program_id: FeeSp
     );
     block.commit().expect("commit fee sponsor program fixture");
 }
-
 fn onboarding_alias_test_app_with_role_permissions(
     authority: &AccountId,
     domain_owner: &AccountId,
@@ -2976,7 +2768,6 @@ fn onboarding_alias_test_app_with_role_permissions(
     );
     app
 }
-
 fn onboarding_alias_signer_for_test(key_pair: &KeyPair) -> AccountOnboardingSigner {
     AccountOnboardingSigner {
         authority: AccountId::new(key_pair.public_key().clone()),

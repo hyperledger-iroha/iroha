@@ -1,24 +1,19 @@
 //! Compute and print shielded Merkle golden vectors (hex, uppercase).
-
 use iroha_crypto::{Hash, MerkleTree};
-
 fn hex(h: &Hash) -> String {
     hex::encode_upper(h.as_ref())
 }
-
 fn main() {
     // Empty roots
     for d in [0u8, 1, 4] {
         let r = MerkleTree::<[u8; 32]>::shielded_empty_root(d);
         println!("EMPTY_DEPTH_{} {}", d, hex(&Hash::prehashed(r)));
     }
-
     // 1-leaf (cm=0)
     let l0 = MerkleTree::<[u8; 32]>::shielded_leaf_from_commitment([0u8; 32]);
     let t1: MerkleTree<[u8; 32]> = [l0].into_iter().collect();
     let r1 = t1.root().expect("root");
     println!("ROOT_1 {}", hex(&Hash::from(r1)));
-
     // 2-leaf (cm=0, cm=1)
     let l1 = MerkleTree::<[u8; 32]>::shielded_leaf_from_commitment([1u8; 32]);
     let t2: MerkleTree<[u8; 32]> = [l0, l1].into_iter().collect();
@@ -43,7 +38,6 @@ fn main() {
         }
     }
     println!();
-
     // 5-leaf (cm=0..=4), print root and proof for idx 3
     let l2 = MerkleTree::<[u8; 32]>::shielded_leaf_from_commitment([2u8; 32]);
     let l3 = MerkleTree::<[u8; 32]>::shielded_leaf_from_commitment([3u8; 32]);

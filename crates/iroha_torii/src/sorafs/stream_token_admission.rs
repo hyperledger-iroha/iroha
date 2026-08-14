@@ -7,9 +7,7 @@
 //! outcome; [`StreamTokenAdmissionCaptureV1`] passes it unchanged to the
 //! committed reputation runtime and acknowledges the external row only after
 //! that callback succeeds.
-
 use std::{fmt, sync::Arc};
-
 use iroha_config::parameters::is_production_runtime_handle;
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
@@ -25,10 +23,8 @@ use sorafs_node::reputation::runtime::{
     StreamTokenReputationAdmissionOutcomeV1,
 };
 use thiserror::Error;
-
 /// Hard V1 ceiling for one reconciliation call.
 pub const STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1: u32 = 1_024;
-
 /// Exact public identity of a deployment-owned admission provider.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayAdmissionQualificationV1 {
@@ -45,7 +41,6 @@ pub struct StreamTokenGatewayAdmissionQualificationV1 {
     /// Exact maximum lifetime for one cross-replica concurrency lease.
     pub lease_ttl_ms: u64,
 }
-
 impl StreamTokenGatewayAdmissionQualificationV1 {
     /// Validate non-inert public qualification material.
     ///
@@ -69,7 +64,6 @@ impl StreamTokenGatewayAdmissionQualificationV1 {
         Ok(())
     }
 }
-
 /// Signed token quota inputs admitted atomically with one callback row.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayQuotaRequestV1 {
@@ -88,7 +82,6 @@ pub struct StreamTokenGatewayQuotaRequestV1 {
     /// Authenticated observation time in seconds since Unix epoch.
     pub observed_at_epoch: u64,
 }
-
 impl StreamTokenGatewayQuotaRequestV1 {
     fn validate(&self) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
         if self.token_id.len() != 32
@@ -108,7 +101,6 @@ impl StreamTokenGatewayQuotaRequestV1 {
         Ok(())
     }
 }
-
 /// Complete payload-free input to one external gateway admission transaction.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayAdmissionRequestV1 {
@@ -125,7 +117,6 @@ pub struct StreamTokenGatewayAdmissionRequestV1 {
     /// Exact signed quota material, present when a canonical token body exists.
     pub quota: Option<StreamTokenGatewayQuotaRequestV1>,
 }
-
 impl StreamTokenGatewayAdmissionRequestV1 {
     /// Validate canonical request material before it crosses the provider boundary.
     ///
@@ -176,7 +167,6 @@ impl StreamTokenGatewayAdmissionRequestV1 {
         Ok(())
     }
 }
-
 /// One externally committed, ordered callback row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayAdmissionRecordV1 {
@@ -194,7 +184,6 @@ pub struct StreamTokenGatewayAdmissionRecordV1 {
     /// with an accepted lease.
     pub lease_token_expires_at_epoch: Option<u64>,
 }
-
 impl StreamTokenGatewayAdmissionRecordV1 {
     /// Validate one retained pending/lease record against the live provider.
     ///
@@ -262,7 +251,6 @@ impl StreamTokenGatewayAdmissionRecordV1 {
         }
         Ok(())
     }
-
     /// Verify that an external record is the exact result of `request` under
     /// `qualification`.
     ///
@@ -292,7 +280,6 @@ impl StreamTokenGatewayAdmissionRecordV1 {
         {
             return Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome);
         }
-
         let status_is_valid = self.outcome.status == request.status
             || matches!(
                 (request.status, self.outcome.status),
@@ -330,7 +317,6 @@ impl StreamTokenGatewayAdmissionRecordV1 {
         Ok(())
     }
 }
-
 fn exact_lease_expiry_unix_ms(
     validated_at_unix_ms: u64,
     token_expires_at_epoch: u64,
@@ -348,7 +334,6 @@ fn exact_lease_expiry_unix_ms(
     }
     Ok(expires_at_unix_ms)
 }
-
 /// Provider-authenticated state of the exact row returned by `admit`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StreamTokenGatewayAdmissionDeliveryStateV1 {
@@ -365,7 +350,6 @@ pub enum StreamTokenGatewayAdmissionDeliveryStateV1 {
         acknowledged_through_sequence: u64,
     },
 }
-
 /// Exact atomic result of one deployment-owned admission transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayAdmissionResultV1 {
@@ -374,7 +358,6 @@ pub struct StreamTokenGatewayAdmissionResultV1 {
     /// Provider-authenticated delivery state at the linearization point.
     pub delivery_state: StreamTokenGatewayAdmissionDeliveryStateV1,
 }
-
 impl StreamTokenGatewayAdmissionResultV1 {
     /// Validate the exact retained row and its authenticated delivery state.
     ///
@@ -399,7 +382,6 @@ impl StreamTokenGatewayAdmissionResultV1 {
         }
     }
 }
-
 /// Authenticated oldest-pending readback with contiguous sequence proofs.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayAdmissionReadbackV1 {
@@ -410,7 +392,6 @@ pub struct StreamTokenGatewayAdmissionReadbackV1 {
     /// Oldest pending contiguous prefix after `acknowledged_through_sequence`.
     pub records: Vec<StreamTokenGatewayAdmissionRecordV1>,
 }
-
 impl StreamTokenGatewayAdmissionReadbackV1 {
     /// Validate an authenticated contiguous pending-prefix readback.
     ///
@@ -458,7 +439,6 @@ impl StreamTokenGatewayAdmissionReadbackV1 {
         Ok(())
     }
 }
-
 /// Durable acknowledgement result for one external callback row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StreamTokenGatewayAdmissionAckV1 {
@@ -467,7 +447,6 @@ pub enum StreamTokenGatewayAdmissionAckV1 {
     /// The exact row was already acknowledged.
     ExactReplay,
 }
-
 /// Payload-free production provider failure.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum StreamTokenGatewayAdmissionErrorV1 {
@@ -499,12 +478,10 @@ pub enum StreamTokenGatewayAdmissionErrorV1 {
     #[error("stream-token reputation callback failed")]
     ReputationCallback,
 }
-
 /// Deployment-owned quota, sealed sequence, and ordered-outbox boundary.
 pub trait StreamTokenGatewayAdmissionProviderV1: Send + Sync + fmt::Debug {
     /// Return the stable credential-free provider handle.
     fn handle(&self) -> &str;
-
     /// Return the live public qualification.
     ///
     /// # Errors
@@ -513,7 +490,6 @@ pub trait StreamTokenGatewayAdmissionProviderV1: Send + Sync + fmt::Debug {
     fn qualification(
         &self,
     ) -> Result<StreamTokenGatewayAdmissionQualificationV1, StreamTokenGatewayAdmissionErrorV1>;
-
     /// Atomically apply quota, allocate a sealed monotonic sequence, and append
     /// one ordered pending callback row.
     ///
@@ -523,19 +499,16 @@ pub trait StreamTokenGatewayAdmissionProviderV1: Send + Sync + fmt::Debug {
         &self,
         request: &StreamTokenGatewayAdmissionRequestV1,
     ) -> Result<StreamTokenGatewayAdmissionResultV1, StreamTokenGatewayAdmissionErrorV1>;
-
     /// Return the oldest pending callback rows in gateway-sequence order.
     fn pending(
         &self,
         max_items: u32,
     ) -> Result<StreamTokenGatewayAdmissionReadbackV1, StreamTokenGatewayAdmissionErrorV1>;
-
     /// Durably acknowledge one callback only after reputation admission succeeds.
     fn acknowledge(
         &self,
         record: StreamTokenGatewayAdmissionRecordV1,
     ) -> Result<StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1>;
-
     /// Idempotently release one accepted cross-replica concurrency lease.
     ///
     /// A crashed caller need not run this method: the deployment provider must
@@ -546,7 +519,6 @@ pub trait StreamTokenGatewayAdmissionProviderV1: Send + Sync + fmt::Debug {
         record: StreamTokenGatewayAdmissionRecordV1,
     ) -> Result<StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1>;
 }
-
 /// Qualified Torii capture boundary combining external admission with the
 /// committed reputation callback.
 #[derive(Clone)]
@@ -557,7 +529,6 @@ pub struct StreamTokenAdmissionCaptureV1 {
     expected_qualification: StreamTokenGatewayAdmissionQualificationV1,
     reconcile_max_items: u32,
 }
-
 impl fmt::Debug for StreamTokenAdmissionCaptureV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -568,7 +539,6 @@ impl fmt::Debug for StreamTokenAdmissionCaptureV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl StreamTokenAdmissionCaptureV1 {
     /// Construct and live-qualify the strict production capture boundary.
     ///
@@ -612,7 +582,6 @@ impl StreamTokenAdmissionCaptureV1 {
         capture.ensure_binding()?;
         Ok(capture)
     }
-
     /// Revalidate this capture against an independently derived launch binding.
     ///
     /// # Errors
@@ -634,7 +603,6 @@ impl StreamTokenAdmissionCaptureV1 {
         }
         self.ensure_binding()
     }
-
     /// Commit one admission and synchronously deliver its exact typed outcome.
     ///
     /// The external row remains pending if reputation admission or durable
@@ -659,7 +627,6 @@ impl StreamTokenAdmissionCaptureV1 {
         }
         Ok(admission.record)
     }
-
     /// Replay the oldest durable callback suffix after a crash or outage.
     ///
     /// # Errors
@@ -670,7 +637,6 @@ impl StreamTokenAdmissionCaptureV1 {
         self.reconcile_one_batch(None)
             .map(|outcome| outcome.delivered)
     }
-
     /// Release an accepted external concurrency lease idempotently.
     ///
     /// # Errors
@@ -690,7 +656,6 @@ impl StreamTokenAdmissionCaptureV1 {
         self.ensure_binding()?;
         Ok(released)
     }
-
     fn reconcile_until(
         &self,
         required_record: Option<StreamTokenGatewayAdmissionRecordV1>,
@@ -712,7 +677,6 @@ impl StreamTokenAdmissionCaptureV1 {
             }
         }
     }
-
     fn reconcile_one_batch(
         &self,
         required_record: Option<StreamTokenGatewayAdmissionRecordV1>,
@@ -761,7 +725,6 @@ impl StreamTokenAdmissionCaptureV1 {
             required_record_delivered,
         })
     }
-
     fn deliver_acknowledged_replay(
         &self,
         record: StreamTokenGatewayAdmissionRecordV1,
@@ -774,7 +737,6 @@ impl StreamTokenAdmissionCaptureV1 {
         }
         self.ensure_binding()
     }
-
     fn deliver_record(
         &self,
         record: StreamTokenGatewayAdmissionRecordV1,
@@ -788,7 +750,6 @@ impl StreamTokenAdmissionCaptureV1 {
         self.ensure_binding()?;
         Ok(admitted)
     }
-
     fn ensure_binding(&self) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
         if self.provider.handle() != self.expected_handle.as_ref()
             || self.provider.qualification()? != self.expected_qualification
@@ -798,13 +759,11 @@ impl StreamTokenAdmissionCaptureV1 {
         Ok(())
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct StreamTokenReconcileBatchV1 {
     delivered: u32,
     required_record_delivered: bool,
 }
-
 #[cfg(test)]
 #[path = "stream_token_admission/tests.rs"]
 mod tests;

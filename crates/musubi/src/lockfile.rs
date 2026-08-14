@@ -3,7 +3,6 @@
 //! The lock records only stable registry identities and immutable commitments.
 //! It deliberately contains no cache paths, provider URLs, source plans,
 //! timestamps, credentials, or bearer material.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
@@ -11,7 +10,6 @@ use std::{
     io,
     path::Path,
 };
-
 use iroha_data_model::{
     NetworkId,
     musubi::{
@@ -25,12 +23,10 @@ use iroha_data_model::{
     },
     nexus::DataSpaceId,
 };
-
 use crate::{
     atomic_io::{AtomicWriteError, AtomicWriteRoot},
     local_file::read_bounded_single_link_regular_file_v1,
 };
-
 /// Canonical schema label required in every first-release lock.
 pub const LOCK_SCHEMA: &str = "musubi-lock";
 /// The only supported consumer lock version.
@@ -57,7 +53,6 @@ pub const MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1: usize = 257;
 /// backtracking within 512 edge-bearing frames plus one terminal frame and
 /// bounds its structurally shared metadata.
 pub const MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1: usize = 512;
-
 const ROOT_KEYS: &[&str] = &[
     "schema",
     "version",
@@ -93,7 +88,6 @@ const EDGE_KEYS: &[&str] = &[
     "requirement",
     "selected-version",
 ];
-
 /// One selected or recursively reachable local root and its parent-local exact edges.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LockedRootV1 {
@@ -102,7 +96,6 @@ pub struct LockedRootV1 {
     /// Sorted normal and root-local development dependency edges with unique parent-local aliases.
     pub dependencies: Vec<MusubiExactDependencyEdgeV1>,
 }
-
 impl LockedRootV1 {
     /// Validate the full root identity, edge bounds, order, and requirements.
     pub fn validate(&self) -> Result<(), LockfileError> {
@@ -112,7 +105,6 @@ impl LockedRootV1 {
         validate_edges(&self.dependencies, true, "workspace root")
     }
 }
-
 /// A complete consumer-owned exact dependency graph.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LockfileV1 {
@@ -129,7 +121,6 @@ pub struct LockfileV1 {
     /// Sorted exact immutable registry nodes. Parallel package versions are allowed.
     pub nodes: Vec<MusubiVerificationNodeV1>,
 }
-
 impl LockfileV1 {
     /// Construct, canonicalize, and validate a first-release lock.
     pub fn new(
@@ -151,7 +142,6 @@ impl LockfileV1 {
         lock.validate()?;
         Ok(lock)
     }
-
     /// Sort every set-like collection without erasing duplicates.
     pub fn canonicalize(&mut self) {
         for root in &mut self.roots {
@@ -165,7 +155,6 @@ impl LockfileV1 {
         self.nodes
             .sort_by(|left, right| left.release.cmp(&right.release));
     }
-
     /// Validate the schema, identities, immutable nodes, exact edges, cycles, and bounds.
     pub fn validate(&self) -> Result<(), LockfileError> {
         if self.schema != LOCK_SCHEMA || self.version != LOCK_VERSION {
@@ -214,7 +203,6 @@ impl LockfileV1 {
         }
         validate_graph(&self.roots, &self.nodes)
     }
-
     /// Parse a strict first-release lock document.
     ///
     /// The UTF-8 document must be no larger than
@@ -226,14 +214,12 @@ impl LockfileV1 {
         let table = document
             .parse::<toml::Table>()
             .map_err(LockfileError::Toml)?;
-
         if optional_string(&table, "schema")? != Some(LOCK_SCHEMA)
             || optional_integer(&table, "version")? != Some(i64::from(LOCK_VERSION))
         {
             return Err(LockfileError::Legacy);
         }
         reject_unknown(&table, ROOT_KEYS, "lock document")?;
-
         let network_id = required_string(&table, "network-id")?
             .parse::<NetworkId>()
             .map_err(|error| LockfileError::invalid(error.to_string()))?;
@@ -255,7 +241,6 @@ impl LockfileV1 {
             .collect::<Result<Vec<_>, _>>()?;
         Self::new(network_id, snapshot, roots, nodes)
     }
-
     /// Load and strictly parse a lock document.
     ///
     /// The final component must be one bounded, single-link regular file and
@@ -271,7 +256,6 @@ impl LockfileV1 {
         })?;
         Self::parse(&document)
     }
-
     /// Render the unique canonical TOML representation.
     ///
     /// Root, node, and aggregate-edge counts are rejected before full semantic
@@ -282,7 +266,6 @@ impl LockfileV1 {
     pub fn render(&self) -> Result<String, LockfileError> {
         validate_consumer_lock_collection_counts(&self.roots, &self.nodes)?;
         self.validate()?;
-
         let mut output = BoundedLockDocumentV1::new();
         writeln!(output, "schema = {}", quote(LOCK_SCHEMA)).expect("write to string");
         writeln!(output, "version = {LOCK_VERSION}").expect("write to string");
@@ -310,7 +293,6 @@ impl LockfileV1 {
             quote(&self.snapshot.index_revision.to_string())
         )
         .expect("write to string");
-
         for root in &self.roots {
             if output.is_exhausted() {
                 break;
@@ -335,7 +317,6 @@ impl LockfileV1 {
         }
         output.finish()
     }
-
     /// Durably and atomically replace a root-relative lockfile.
     pub fn write_atomic(
         &self,
@@ -347,7 +328,6 @@ impl LockfileV1 {
             .replace(relative_path, document.as_bytes())
             .map_err(LockfileError::Atomic)
     }
-
     /// Produce the normalized publication verification lock for `workspace_root`.
     ///
     /// Root-local development edges and nodes reachable only through them are
@@ -407,7 +387,6 @@ impl LockfileV1 {
         Ok(lock)
     }
 }
-
 /// Render the normalized, publication-only exact graph packaged with a release.
 ///
 /// The document intentionally uses the same first-release schema/version marker
@@ -418,14 +397,12 @@ impl LockfileV1 {
 pub fn render_verification_lock(lock: &MusubiVerificationLockV1) -> Result<String, LockfileError> {
     render_verification_lock_with_limit(lock, MUSUBI_MAX_VERIFICATION_LOCK_BYTES_V1)
 }
-
 fn render_verification_lock_with_limit(
     lock: &MusubiVerificationLockV1,
     limit: u64,
 ) -> Result<String, LockfileError> {
     lock.validate()
         .map_err(|error| LockfileError::invalid(error.reason()))?;
-
     let mut output = BoundedLockDocumentV1::with_limit(limit);
     writeln!(output, "schema = {}", quote(LOCK_SCHEMA)).expect("write to string");
     writeln!(output, "version = {LOCK_VERSION}").expect("write to string");
@@ -454,7 +431,6 @@ fn render_verification_lock_with_limit(
     }
     output.finish_with_bound("verification lock", limit)
 }
-
 /// Stable lockfile failure categories.
 #[derive(Debug)]
 pub enum LockfileError {
@@ -469,13 +445,11 @@ pub enum LockfileError {
     /// Durable atomic replacement failed.
     Atomic(AtomicWriteError),
 }
-
 impl LockfileError {
     fn invalid(message: impl Into<String>) -> Self {
         Self::Invalid(message.into())
     }
 }
-
 impl fmt::Display for LockfileError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -488,7 +462,6 @@ impl fmt::Display for LockfileError {
         }
     }
 }
-
 impl std::error::Error for LockfileError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -499,7 +472,6 @@ impl std::error::Error for LockfileError {
         }
     }
 }
-
 fn validate_edges(
     edges: &[MusubiExactDependencyEdgeV1],
     allow_development: bool,
@@ -524,7 +496,6 @@ fn validate_edges(
     }
     Ok(())
 }
-
 fn validate_graph(
     roots: &[LockedRootV1],
     nodes: &[MusubiVerificationNodeV1],
@@ -565,7 +536,6 @@ fn validate_graph(
         complete.insert(release);
         Ok(())
     }
-
     let by_release = nodes
         .iter()
         .map(|node| (&node.release, node))
@@ -582,7 +552,6 @@ fn validate_graph(
             )));
         }
     }
-
     let mut visiting = BTreeSet::new();
     let mut complete = BTreeSet::new();
     for root in roots {
@@ -597,7 +566,6 @@ fn validate_graph(
     }
     Ok(())
 }
-
 fn parse_root(value: &toml::Value) -> Result<LockedRootV1, LockfileError> {
     let table = value
         .as_table()
@@ -615,7 +583,6 @@ fn parse_root(value: &toml::Value) -> Result<LockedRootV1, LockfileError> {
         dependencies,
     })
 }
-
 fn parse_node(value: &toml::Value) -> Result<MusubiVerificationNodeV1, LockfileError> {
     let table = value
         .as_table()
@@ -656,7 +623,6 @@ fn parse_node(value: &toml::Value) -> Result<MusubiVerificationNodeV1, LockfileE
         dependencies,
     })
 }
-
 fn parse_edge(value: &toml::Value) -> Result<MusubiExactDependencyEdgeV1, LockfileError> {
     let table = value
         .as_table()
@@ -686,7 +652,6 @@ fn parse_edge(value: &toml::Value) -> Result<MusubiExactDependencyEdgeV1, Lockfi
         ),
     })
 }
-
 fn parse_package(table: &toml::Table) -> Result<MusubiPackageIdV1, LockfileError> {
     let home_dataspace = parse_u64_string(table, "home-dataspace")?;
     let scope = match required_string(table, "scope")? {
@@ -718,7 +683,6 @@ fn parse_package(table: &toml::Table) -> Result<MusubiPackageIdV1, LockfileError
         name,
     ))
 }
-
 fn render_edge(output: &mut impl fmt::Write, edge: &MusubiExactDependencyEdgeV1) {
     writeln!(output, "alias = {}", quote(edge.alias.as_ref())).expect("write to string");
     let kind = match edge.kind {
@@ -740,7 +704,6 @@ fn render_edge(output: &mut impl fmt::Write, edge: &MusubiExactDependencyEdgeV1)
     )
     .expect("write to string");
 }
-
 fn render_node(output: &mut impl fmt::Write, node: &MusubiVerificationNodeV1, edge_table: &str) {
     render_package(output, &node.release.package);
     writeln!(
@@ -785,7 +748,6 @@ fn render_node(output: &mut impl fmt::Write, node: &MusubiVerificationNodeV1, ed
         render_edge(output, edge);
     }
 }
-
 fn render_package(output: &mut impl fmt::Write, package: &MusubiPackageIdV1) {
     writeln!(
         output,
@@ -804,7 +766,6 @@ fn render_package(output: &mut impl fmt::Write, package: &MusubiPackageIdV1) {
     }
     writeln!(output, "name = {}", quote(package.name.as_str())).expect("write to string");
 }
-
 fn reject_unknown(
     table: &toml::Table,
     allowed: &[&str],
@@ -817,12 +778,10 @@ fn reject_unknown(
     }
     Ok(())
 }
-
 fn required_string<'a>(table: &'a toml::Table, key: &str) -> Result<&'a str, LockfileError> {
     optional_string(table, key)?
         .ok_or_else(|| LockfileError::invalid(format!("missing string field `{key}`")))
 }
-
 fn optional_string<'a>(
     table: &'a toml::Table,
     key: &str,
@@ -836,12 +795,10 @@ fn optional_string<'a>(
         })
         .transpose()
 }
-
 fn required_integer(table: &toml::Table, key: &str) -> Result<i64, LockfileError> {
     optional_integer(table, key)?
         .ok_or_else(|| LockfileError::invalid(format!("missing integer field `{key}`")))
 }
-
 fn optional_integer(table: &toml::Table, key: &str) -> Result<Option<i64>, LockfileError> {
     table
         .get(key)
@@ -852,7 +809,6 @@ fn optional_integer(table: &toml::Table, key: &str) -> Result<Option<i64>, Lockf
         })
         .transpose()
 }
-
 fn parse_u64_string(table: &toml::Table, key: &str) -> Result<u64, LockfileError> {
     let raw = required_string(table, key)?;
     let value = raw.parse::<u64>().map_err(|_| {
@@ -865,7 +821,6 @@ fn parse_u64_string(table: &toml::Table, key: &str) -> Result<u64, LockfileError
     }
     Ok(value)
 }
-
 fn parse_table_array<'a>(
     table: &'a toml::Table,
     key: &str,
@@ -876,12 +831,10 @@ fn parse_table_array<'a>(
         })
     })
 }
-
 fn parse_version(raw: &str) -> Result<MusubiVersionV1, LockfileError> {
     raw.parse()
         .map_err(|error: iroha_data_model::ParseError| LockfileError::invalid(error.reason()))
 }
-
 fn parse_digest(raw: &str) -> Result<[u8; 32], LockfileError> {
     if raw.len() != 64 || raw.bytes().any(|byte| !byte.is_ascii_hexdigit()) {
         return Err(LockfileError::invalid(
@@ -899,15 +852,12 @@ fn parse_digest(raw: &str) -> Result<[u8; 32], LockfileError> {
         .try_into()
         .map_err(|_| LockfileError::invalid("digest must decode to 32 bytes"))
 }
-
 fn hex_digest(bytes: [u8; 32]) -> String {
     hex::encode(bytes)
 }
-
 fn quote(value: &str) -> String {
     toml::Value::String(value.to_owned()).to_string()
 }
-
 fn validate_consumer_lock_document_bytes(byte_len: usize) -> Result<(), LockfileError> {
     let byte_len = u64::try_from(byte_len).unwrap_or(u64::MAX);
     if byte_len > MUSUBI_MAX_CONSUMER_LOCK_BYTES_V1 {
@@ -917,7 +867,6 @@ fn validate_consumer_lock_document_bytes(byte_len: usize) -> Result<(), Lockfile
     }
     Ok(())
 }
-
 fn validate_consumer_lock_collection_counts(
     roots: &[LockedRootV1],
     nodes: &[MusubiVerificationNodeV1],
@@ -945,7 +894,6 @@ fn validate_consumer_lock_collection_counts(
     }
     Ok(())
 }
-
 fn validate_serialized_consumer_lock_collection_counts(
     roots: &[toml::Value],
     nodes: &[toml::Value],
@@ -975,21 +923,17 @@ fn validate_serialized_consumer_lock_collection_counts(
     }
     Ok(())
 }
-
 struct BoundedLockDocumentV1 {
     output: String,
     limit: usize,
     exceeded: bool,
     allocation_failed: bool,
 }
-
 impl BoundedLockDocumentV1 {
     const RESERVE_CHUNK_BYTES: usize = 64 * 1024;
-
     fn new() -> Self {
         Self::with_limit(MUSUBI_MAX_CONSUMER_LOCK_BYTES_V1)
     }
-
     fn with_limit(limit: u64) -> Self {
         Self {
             output: String::new(),
@@ -998,17 +942,14 @@ impl BoundedLockDocumentV1 {
             allocation_failed: false,
         }
     }
-
     fn is_exhausted(&self) -> bool {
         self.exceeded || self.allocation_failed
     }
-
     fn finish(self) -> Result<String, LockfileError> {
         let output = self.finish_with_bound("consumer lock", MUSUBI_MAX_CONSUMER_LOCK_BYTES_V1)?;
         validate_consumer_lock_document_bytes(output.len())?;
         Ok(output)
     }
-
     fn finish_with_bound(
         self,
         document: &'static str,
@@ -1027,7 +968,6 @@ impl BoundedLockDocumentV1 {
         Ok(self.output)
     }
 }
-
 impl fmt::Write for BoundedLockDocumentV1 {
     fn write_str(&mut self, value: &str) -> fmt::Result {
         if self.exceeded || self.allocation_failed {
@@ -1059,21 +999,16 @@ impl fmt::Write for BoundedLockDocumentV1 {
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::fs::{self, File};
-
     use tempfile::tempdir;
-
     use super::*;
-
     fn network_id() -> NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             .parse()
             .expect("network id")
     }
-
     fn package(dataspace: u64, name: &str) -> MusubiPackageIdV1 {
         MusubiPackageIdV1::new(
             DataSpaceId::new(dataspace),
@@ -1081,13 +1016,11 @@ mod tests {
             name.parse().expect("package name"),
         )
     }
-
     fn root_selector(index: usize) -> MusubiPackageSelectorV1 {
         format!("test/app{index}")
             .parse()
             .expect("root package selector")
     }
-
     fn edge(
         alias: &str,
         package: MusubiPackageIdV1,
@@ -1103,7 +1036,6 @@ mod tests {
             kind,
         }
     }
-
     fn node(
         package: MusubiPackageIdV1,
         version: &str,
@@ -1120,7 +1052,6 @@ mod tests {
             dependencies,
         }
     }
-
     fn lock() -> LockfileV1 {
         let leaf = package(2, "leaf");
         let parent = package(1, "parent");
@@ -1156,7 +1087,6 @@ mod tests {
         )
         .expect("lock")
     }
-
     #[test]
     fn canonical_roundtrip_is_stable_and_secret_free() {
         let lock = lock();
@@ -1176,7 +1106,6 @@ mod tests {
             assert!(!first.contains(forbidden));
         }
     }
-
     #[test]
     fn render_rejects_mutated_noncanonical_or_oversized_fields_without_repair() {
         let mut noncanonical = lock();
@@ -1187,7 +1116,6 @@ mod tests {
         ));
         noncanonical.canonicalize();
         noncanonical.render().expect("explicit canonicalization");
-
         let mut oversized_nested = lock();
         oversized_nested.nodes[0].release.version.prerelease = vec![
             iroha_data_model::musubi::MusubiPrereleaseIdentifierV1::AlphaNumeric(
@@ -1198,7 +1126,6 @@ mod tests {
             oversized_nested.render(),
             Err(LockfileError::Invalid(reason)) if reason.contains("prerelease")
         ));
-
         let mut oversized_schema = lock();
         oversized_schema.schema = "x".repeat(1024 * 1024);
         assert!(matches!(
@@ -1206,7 +1133,6 @@ mod tests {
             Err(LockfileError::Legacy)
         ));
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -1220,7 +1146,6 @@ mod tests {
             validate_consumer_lock_document_bytes(exact_max + 1),
             Err(LockfileError::Invalid(reason)) if reason.contains("byte bound")
         ));
-
         let mut exact_roots = lock();
         let root_dependencies = exact_roots.roots[0].dependencies.clone();
         exact_roots.roots = (0..MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1)
@@ -1231,7 +1156,6 @@ mod tests {
             .collect();
         exact_roots.canonicalize();
         exact_roots.validate().expect("exact root-count bound");
-
         let mut too_many_roots = exact_roots;
         too_many_roots.roots.push(LockedRootV1 {
             package: root_selector(MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1),
@@ -1246,7 +1170,6 @@ mod tests {
             too_many_roots.render(),
             Err(LockfileError::Invalid(reason)) if reason.contains("workspace roots")
         ));
-
         let mut exact_edges = lock();
         let parent_package = exact_edges
             .nodes
@@ -1287,7 +1210,6 @@ mod tests {
             MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1
         );
         exact_edges.validate().expect("exact total-edge bound");
-
         let mut too_many_edges = exact_edges;
         too_many_edges.roots[1].dependencies.push(edge(
             "d255",
@@ -1301,7 +1223,6 @@ mod tests {
             too_many_edges.validate(),
             Err(LockfileError::Invalid(reason)) if reason.contains("total consumer-lock bound")
         ));
-
         let mut bounded = BoundedLockDocumentV1 {
             output: String::new(),
             limit: 4,
@@ -1315,7 +1236,6 @@ mod tests {
             bounded.finish_with_bound("test lock", 4),
             Err(LockfileError::Invalid(reason)) if reason.contains("byte bound")
         ));
-
         let mut too_many_serialized_roots = lock().render().expect("render fixture");
         for _ in 0..MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1 {
             too_many_serialized_roots.push_str("\n[[root]]\n");
@@ -1325,7 +1245,6 @@ mod tests {
             Err(LockfileError::Invalid(reason)) if reason.contains("workspace roots")
         ));
     }
-
     #[test]
     fn read_rejects_an_oversized_sparse_consumer_lock_before_parsing() {
         let temporary = tempdir().expect("temporary directory");
@@ -1333,17 +1252,14 @@ mod tests {
         let expected = lock();
         fs::write(&path, expected.render().expect("render lock")).expect("write valid lock");
         assert_eq!(LockfileV1::read(&path).expect("read valid lock"), expected);
-
         let file = File::create(&path).expect("create sparse lock");
         file.set_len(MUSUBI_MAX_CONSUMER_LOCK_BYTES_V1 + 1)
             .expect("size sparse lock");
-
         assert!(matches!(
             LockfileV1::read(&path),
             Err(LockfileError::Io(error)) if error.kind() == io::ErrorKind::InvalidData
         ));
     }
-
     #[test]
     fn read_rejects_invalid_utf8_as_invalid_data() {
         let temporary = tempdir().expect("temporary directory");
@@ -1354,7 +1270,6 @@ mod tests {
             Err(LockfileError::Io(error)) if error.kind() == io::ErrorKind::InvalidData
         ));
     }
-
     #[test]
     fn old_missing_and_future_schemas_require_regeneration() {
         for document in [
@@ -1369,7 +1284,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn unknown_and_duplicate_fields_are_rejected() {
         let document = lock().render().expect("render");
@@ -1384,7 +1298,6 @@ mod tests {
             Err(LockfileError::Toml(_))
         ));
     }
-
     #[test]
     fn noncanonical_decimal_identifiers_are_rejected() {
         let document = lock().render().expect("render");
@@ -1402,7 +1315,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn development_edges_never_propagate() {
         let mut lock = lock();
@@ -1417,7 +1329,6 @@ mod tests {
         lock.nodes[0].dependencies.sort();
         assert!(matches!(lock.validate(), Err(LockfileError::Invalid(_))));
     }
-
     #[test]
     fn consumer_roots_reject_duplicate_aliases_across_dependency_kinds() {
         let mut locked = lock();
@@ -1430,19 +1341,16 @@ mod tests {
             MusubiDependencyKindV1::Normal,
         ));
         root.dependencies.sort();
-
         let error = root
             .validate()
             .expect_err("one parent-local alias cannot name normal and development edges");
         assert!(error.to_string().contains("reuse an alias"));
     }
-
     #[test]
     fn cycles_and_missing_nodes_are_rejected() {
         let mut missing = lock();
         missing.nodes.pop();
         assert!(matches!(missing.validate(), Err(LockfileError::Invalid(_))));
-
         let mut cyclic = lock();
         let leaf_index = cyclic
             .nodes
@@ -1470,7 +1378,6 @@ mod tests {
         );
         assert!(matches!(cyclic.validate(), Err(LockfileError::Invalid(_))));
     }
-
     #[test]
     fn multiple_versions_of_one_package_are_preserved() {
         let mut lock = lock();
@@ -1503,7 +1410,6 @@ mod tests {
             2
         );
     }
-
     #[test]
     fn publication_verification_lock_omits_root_development_graph() {
         let lock = lock();
@@ -1516,7 +1422,6 @@ mod tests {
             .expect("verification lock");
         assert!(verification.nodes.is_empty());
     }
-
     #[test]
     fn publication_verification_toml_is_structural_and_snapshot_free() {
         let mut lock = lock();
@@ -1531,7 +1436,6 @@ mod tests {
             .verification_lock(&"test/app".parse().expect("root package"), published)
             .expect("verification lock");
         let rendered = render_verification_lock(&verification).expect("render verification lock");
-
         assert!(rendered.starts_with(
             "schema = \"musubi-lock\"\nversion = 1\nkind = \"verification\"\n\n[root]\n"
         ));
@@ -1546,7 +1450,6 @@ mod tests {
             render_verification_lock(&verification).expect("repeat render")
         );
     }
-
     #[test]
     fn publication_verification_toml_honors_its_aggregate_byte_bound() {
         let mut lock = lock();
@@ -1563,7 +1466,6 @@ mod tests {
             .expect("verification lock");
         let rendered = render_verification_lock(&verification).expect("bounded render");
         let exact = u64::try_from(rendered.len()).expect("rendered length fits u64");
-
         assert_eq!(
             render_verification_lock_with_limit(&verification, exact)
                 .expect("exact verification-lock byte bound"),
@@ -1575,7 +1477,6 @@ mod tests {
                 if reason.contains("verification lock") && reason.contains("byte bound")
         ));
     }
-
     #[test]
     fn roots_with_the_same_name_in_distinct_namespaces_remain_distinct() {
         let mut lock = lock();

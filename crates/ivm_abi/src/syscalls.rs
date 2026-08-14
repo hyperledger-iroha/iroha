@@ -11,7 +11,6 @@
 //! generation and verification, Merkle path queries and hardware feature
 //! discovery. Additional concurrency primitives may be added in future core
 //! releases without changing the fixed ABI v1 surface in this release.
-
 use iroha_data_model::prelude::{
     DECIMAL_SCHEMA_HASH_V1, DECIMAL_SCHEMA_NAME_V1, INT_SCHEMA_HASH_V1, INT_SCHEMA_NAME_V1,
     MAX_DECIMAL_ENVELOPE_BYTES_V1, MAX_DECIMAL_FRAME_BYTES_V1, MAX_INT_ENVELOPE_BYTES_V1,
@@ -19,10 +18,8 @@ use iroha_data_model::prelude::{
     NUMERIC_FRAME_HEADER_BYTES_V1, NUMERIC_POINTER_ENVELOPE_OVERHEAD_V1, QUANTITY_SCHEMA_HASH_V1,
     QUANTITY_SCHEMA_NAME_V1,
 };
-
 /// Debug helper for development; part of the ABI v1 surface.
 pub const SYSCALL_DEBUG_PRINT: u32 = 0;
-
 /// Lifecycle and utility syscalls.
 /// Gracefully terminate the program and return a value.
 pub const SYSCALL_EXIT: u32 = 0x01;
@@ -32,20 +29,17 @@ pub const SYSCALL_ABORT: u32 = 0x02;
 pub const SYSCALL_DEBUG_LOG: u32 = 0x03;
 /// Abort execution with a declared application error code in `r10`.
 pub const SYSCALL_CONTRACT_ABORT: u32 = 0x04;
-
 /// Helper syscalls for inputs/outputs; part of the ABI v1 surface.
 /// Retrieve a piece of public input provided by the host.
 pub const SYSCALL_GET_PUBLIC_INPUT: u32 = 0xF1;
 /// Allocate heap memory.
 pub const SYSCALL_ALLOC: u32 = 0xF0;
-
 /// Domain and peer management.
 pub const SYSCALL_REGISTER_DOMAIN: u32 = 0x10;
 pub const SYSCALL_UNREGISTER_DOMAIN: u32 = 0x11;
 pub const SYSCALL_TRANSFER_DOMAIN: u32 = 0x12;
 pub const SYSCALL_REGISTER_PEER: u32 = 0x15;
 pub const SYSCALL_UNREGISTER_PEER: u32 = 0x16;
-
 /// Account management.
 pub const SYSCALL_REGISTER_ACCOUNT: u32 = 0x13;
 pub const SYSCALL_UNREGISTER_ACCOUNT: u32 = 0x14;
@@ -56,7 +50,6 @@ pub const SYSCALL_REMOVE_SIGNATORY: u32 = 0x18;
 /// Update account quorum.
 pub const SYSCALL_SET_ACCOUNT_QUORUM: u32 = 0x19;
 pub const SYSCALL_SET_ACCOUNT_DETAIL: u32 = 0x1A;
-
 /// Asset definitions.
 pub const SYSCALL_REGISTER_ASSET: u32 = 0x20;
 pub const SYSCALL_UNREGISTER_ASSET: u32 = 0x21;
@@ -72,13 +65,11 @@ pub const SYSCALL_TRANSFER_V1_BATCH_END: u32 = 0x2A;
 pub const SYSCALL_TRANSFER_V1_BATCH_APPLY: u32 = 0x2B;
 /// Transfer a numeric asset balance within an explicit dataspace scope.
 pub const SYSCALL_TRANSFER_ASSET_SCOPED: u32 = 0x2C;
-
 /// Non‑fungible asset (NFT) operations (canonical names).
 pub const SYSCALL_NFT_MINT_ASSET: u32 = 0x25;
 pub const SYSCALL_NFT_TRANSFER_ASSET: u32 = 0x26;
 pub const SYSCALL_NFT_SET_METADATA: u32 = 0x27;
 pub const SYSCALL_NFT_BURN_ASSET: u32 = 0x28;
-
 /// Smart-contract durable state (key-value by path).
 ///
 /// Pointer-ABI arguments: paths use
@@ -187,7 +178,6 @@ pub const SYSCALL_DECODE_INT: u32 = 0x53;
 /// Args: r10 = &TLV
 /// Ret:  r10 = payload length (u64)
 pub const SYSCALL_TLV_LEN: u32 = 0x77;
-
 /// JSON object field getters.
 ///
 /// All JSON_GET_* syscalls return a compiler-owned `Option<T>` sum handle.
@@ -222,7 +212,6 @@ pub const SYSCALL_JSON_SET_I64: u32 = 0x82;
 /// Args: r10 = &Json object, r11 = &Name key, r12 = &AccountId
 /// Ret:  r10 = host-owned &Json
 pub const SYSCALL_JSON_SET_ACCOUNT_ID: u32 = 0x83;
-
 /// Permanently retired pre-release decimal-i64 path helper number.
 ///
 /// V1 adaptive numeric map keys use [`SYSCALL_BUILD_PATH_KEY_NORITO`] with a
@@ -276,7 +265,6 @@ pub const SYSCALL_POINTER_FROM_NORITO: u32 = 0x5E;
 /// Args: r10 = &TLV, r11 = &TLV
 /// Ret:  r10 = 1 if equal, 0 if not
 pub const SYSCALL_TLV_EQ: u32 = 0x5F;
-
 /// Roles and permissions.
 pub const SYSCALL_CREATE_ROLE: u32 = 0x30;
 pub const SYSCALL_DELETE_ROLE: u32 = 0x31;
@@ -292,7 +280,6 @@ pub const SYSCALL_GRANT_CONTRACT_ENTRYPOINT: u32 = 0x36;
 ///
 /// Args: r10 = &AccountId, r11 = &Blob (UTF-8 canonical entrypoint selector).
 pub const SYSCALL_REVOKE_CONTRACT_ENTRYPOINT: u32 = 0x37;
-
 /// Triggers.
 pub const SYSCALL_CREATE_TRIGGER: u32 = 0x40;
 pub const SYSCALL_REMOVE_TRIGGER: u32 = 0x41;
@@ -307,7 +294,6 @@ pub const SYSCALL_REGISTER_SMART_CONTRACT_CODE: u32 = 0x45;
 pub const SYSCALL_REGISTER_SMART_CONTRACT_BYTES: u32 = 0x46;
 /// Governance activation of a contract instance binding.
 pub const SYSCALL_ACTIVATE_CONTRACT_INSTANCE: u32 = 0x47;
-
 /// Zero-knowledge mode helpers.
 /// Commit two opaque typed private numeric inputs without truncating either
 /// projection or the compressed Pedersen point.
@@ -330,7 +316,6 @@ pub const SYSCALL_VERIFY_SIGNATURE: u32 = 0xFC;
 /// Ret: r10 = opaque private `&Int|&Decimal|&Quantity` HEAP TLV.
 pub const SYSCALL_GET_PRIVATE_INPUT: u32 = 0xFD;
 pub const SYSCALL_COMMIT_OUTPUT: u32 = 0xFE;
-
 // ZK verification and state-read syscalls (pointer-ABI NoritoBytes payloads)
 /// Verify a ballot proof for an election (no state mutation).
 pub const SYSCALL_ZK_VOTE_VERIFY_BALLOT: u32 = 0x60;
@@ -342,7 +327,6 @@ pub const SYSCALL_ZK_ROOTS_GET: u32 = 0x62;
 pub const SYSCALL_ZK_VOTE_GET_TALLY: u32 = 0x63;
 /// Batch verification of Halo2 OpenVerify envelopes.
 pub const SYSCALL_ZK_VERIFY_BATCH: u32 = 0x64;
-
 /// Verify a BLS-based VRF proof and return the 32-byte output in a Blob TLV.
 ///
 /// Args:
@@ -363,7 +347,6 @@ pub const SYSCALL_VRF_VERIFY_BATCH: u32 = 0x67;
 /// Args: `r10 = &NoritoBytes(VrfEpochSeedRequest)`
 /// Return: `r10 = ptr (&NoritoBytes(VrfEpochSeedResponse)), r11 = status:u64`
 pub const SYSCALL_VRF_EPOCH_SEED: u32 = 0x7E;
-
 /// Hardware and proof generation helpers.
 /// Return a deterministic Norito-encoded execution-proof summary.
 pub const SYSCALL_PROVE_EXECUTION: u32 = 0xF4;
@@ -384,7 +367,6 @@ pub const SYSCALL_GET_MERKLE_COMPACT: u32 = 0xFA;
 /// at `x11` using the same layout as `GET_MERKLE_COMPACT`. If `x12 != 0`, cap
 /// depth; if `x13 != 0`, write the 32-byte register Merkle root to `x13`.
 pub const SYSCALL_GET_REGISTER_MERKLE_COMPACT: u32 = 0xFF;
-
 /// Compute SM3 hash of a blob (`&Blob` -> `&Blob`).
 pub const SYSCALL_SM3_HASH: u32 = 0x90;
 /// Verify an SM2 signature (`&Blob` message, `&Blob` signature, `&Blob` public key, optional `&Blob` distid).
@@ -414,7 +396,6 @@ pub const SYSCALL_IROHA_HASH: u32 = 0x9A;
 /// space remains, otherwise allocated HEAP). Stack/output, private, unallocated, malformed, and
 /// ABI-disallowed envelopes are rejected.
 pub const SYSCALL_INPUT_PUBLISH_TLV: u32 = 0xE0;
-
 // Smart-contract host shims (development API)
 /// Execute an operation-tagged instruction from canonical `&NoritoBytes(InstructionBox)`.
 pub const SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION: u32 = 0xA0;
@@ -455,7 +436,6 @@ pub const SYSCALL_AXT_COMMIT: u32 = 0xB2;
 pub const SYSCALL_VERIFY_DS_PROOF: u32 = 0xB3;
 /// Use a capability handle granted by an asset DS inside an AXT.
 pub const SYSCALL_USE_ASSET_HANDLE: u32 = 0xB4;
-
 /// Return whether `number` is one of the state-backed AXT envelope syscalls.
 ///
 /// AXT remains available to both contract and generic ABI V1 programs when
@@ -473,7 +453,6 @@ pub const fn is_axt_syscall(number: u32) -> bool {
             | SYSCALL_USE_ASSET_HANDLE
     )
 }
-
 /// Open and fund a native asset escrow.
 pub const SYSCALL_ESCROW_OPEN_OFFER: u32 = 0xB8;
 /// Accept an open native asset escrow.
@@ -489,7 +468,6 @@ pub const SYSCALL_ESCROW_OPEN_DISPUTE: u32 = 0xBD;
 /// Resolve a disputed escrow with a buyer/seller split.
 pub const SYSCALL_ESCROW_RESOLVE_DISPUTE: u32 = 0xBE;
 // ID 0xBF is intentionally unassigned.
-
 /// Soracloud runtime host surface.
 /// Read committed service-state metadata for handler-local execution.
 pub const SYSCALL_SORACLOUD_READ_COMMITTED_STATE: u32 = 0xC0;
@@ -511,7 +489,6 @@ pub const SYSCALL_SORACLOUD_EGRESS_FETCH: u32 = 0xC7;
 pub const SYSCALL_SORACLOUD_READ_CONFIG: u32 = 0xC8;
 /// Read authoritative service secret envelopes exposed through the Soracloud host.
 pub const SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE: u32 = 0xC9;
-
 /// Execute an arbitrary Norito-encoded read-only query request.
 pub const SYSCALL_QUERY_EXECUTE_NORITO: u32 = 0x01_0000;
 /// Read one projected core-ledger entity by stable [`CoreQueryEntityTagV1`].
@@ -529,7 +506,6 @@ pub const SYSCALL_QUERY_GET_PARAMETER: u32 = 0x01_0006;
 pub const SYSCALL_QUERY_GET_CONTRACT_MANIFEST: u32 = 0x01_0007;
 /// Read one contract instance from `r10=&NoritoBytes(ContractAddress)` or `r10=&Name(alias)`.
 pub const SYSCALL_QUERY_GET_CONTRACT_INSTANCE: u32 = 0x01_0008;
-
 /// Return the current chain id as a pointer-ABI `Blob` TLV.
 pub const SYSCALL_SYSVAR_CHAIN_ID: u32 = 0x01_0020;
 /// Return the current block height in `r10`.
@@ -574,7 +550,6 @@ pub const SYSCALL_CALL_CONTRACT_QUANTITY2: u32 = 0x01_0029;
 /// declaration-ordered flattened words, which contain sum tags, canonical
 /// scalar bits, or validated pointer-ABI addresses.
 pub const SYSCALL_DECODE_ARGUMENT_RECORD: u32 = 0x01_0026;
-
 /// Atomically set native incoming/outgoing availability for one account/asset pair.
 ///
 /// Args: `r10 = &AccountId`, `r11 = &AssetDefinitionId`, `r12 = expected revision`,
@@ -607,11 +582,9 @@ pub const SYSCALL_ACCOUNT_RECOVERY_CANCEL: u32 = 0x01_0212;
 ///
 /// Args: `r10 = &Blob(alias literal)`.
 pub const SYSCALL_ACCOUNT_RECOVERY_FINALIZE: u32 = 0x01_0213;
-
 // Kotodama V1 exact numeric families. These numbers are deliberately grouped
 // by value domain so admission, host dispatch, and generated SDK tables can
 // classify them without depending on source-language spellings.
-
 /// Construct an `int` from the two's-complement bits of an `i64` in `r10`.
 pub const SYSCALL_INT_FROM_I64: u32 = 0x01_0100;
 /// Construct an `int` from a `u64` in `r10`.
@@ -652,7 +625,6 @@ pub const SYSCALL_INT_WRAP_ADD: u32 = 0x01_0111;
 pub const SYSCALL_INT_WRAP_SUB: u32 = 0x01_0112;
 /// Integer multiplication modulo `2^512`, interpreted in the signed domain.
 pub const SYSCALL_INT_WRAP_MUL: u32 = 0x01_0113;
-
 /// Convert an `int` to an exact scale-zero `decimal`.
 pub const SYSCALL_DECIMAL_FROM_INT: u32 = 0x01_0120;
 /// Checked decimal negation.
@@ -685,7 +657,6 @@ pub const SYSCALL_DECIMAL_TRY_TO_INT_EXACT: u32 = 0x01_012D;
 pub const SYSCALL_DECIMAL_TO_INT_TRUNC: u32 = 0x01_012E;
 /// Convert a decimal to `int` using an explicit rounding mode.
 pub const SYSCALL_DECIMAL_TO_INT_ROUND: u32 = 0x01_012F;
-
 /// Convert a non-negative `int` to nominal `quantity`.
 pub const SYSCALL_QUANTITY_TRY_FROM_INT: u32 = 0x01_0140;
 /// Convert a non-negative canonical `decimal` to nominal `quantity`.
@@ -718,27 +689,23 @@ pub const SYSCALL_QUANTITY_LE: u32 = 0x01_014D;
 pub const SYSCALL_QUANTITY_GT: u32 = 0x01_014E;
 /// Numeric quantity greater-or-equal comparison.
 pub const SYSCALL_QUANTITY_GE: u32 = 0x01_014F;
-
 /// Parse a canonical base-10 JSON string into an exact `int` pointer.
 pub const SYSCALL_JSON_GET_INT: u32 = 0x01_0160;
 /// Parse a canonical base-10 JSON string into an exact `decimal` pointer.
 pub const SYSCALL_JSON_GET_DECIMAL: u32 = 0x01_0161;
 /// Parse a canonical non-negative base-10 JSON string into a `quantity` pointer.
 pub const SYSCALL_JSON_GET_QUANTITY: u32 = 0x01_0162;
-
 /// Return whether `number` belongs to the exact Kotodama V1 numeric surface.
 #[must_use]
 pub const fn is_numeric_v1_syscall(number: u32) -> bool {
     matches!(number, 0x01_0100..=0x01_0113 | 0x01_0120..=0x01_012F | 0x01_0140..=0x01_014F)
 }
-
 /// Construct one native JSON value from a compiler-emitted schema and flattened words.
 ///
 /// Args: r10 = `&NoritoBytes(JsonConstructionSchemaV1)`, r11 = aligned public
 /// word-table address, r12 = exact word count.
 /// Ret: r10 = `&Json`.
 pub const SYSCALL_JSON_BUILD: u32 = 0x01_004E;
-
 /// Return whether `number` is one of the canonical typed JSON getters.
 #[must_use]
 pub const fn is_json_getter_syscall(number: u32) -> bool {
@@ -755,7 +722,6 @@ pub const fn is_json_getter_syscall(number: u32) -> bool {
             | SYSCALL_JSON_GET_QUANTITY
     )
 }
-
 /// Kotodama test-runner helper: resolve a fixture actor alias to an `AccountId` TLV.
 ///
 /// These host-private helpers are intentionally outside [`abi_syscall_list`].
@@ -770,7 +736,6 @@ pub const SYSCALL_KOTO_TEST_ACTOR_SIGN: u32 = 0x00FE_0003;
 pub const SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS: u32 = 0x00FE_0004;
 /// Kotodama test-runner helper: assert that an actor entrypoint invocation rejects.
 pub const SYSCALL_KOTO_TEST_EXPECT_REJECT_AS: u32 = 0x00FE_0005;
-
 /// Return whether `number` belongs to the host-private Kotodama test surface.
 pub const fn is_koto_test_syscall(number: u32) -> bool {
     matches!(
@@ -782,7 +747,6 @@ pub const fn is_koto_test_syscall(number: u32) -> bool {
             | SYSCALL_KOTO_TEST_EXPECT_REJECT_AS
     )
 }
-
 /// Returns whether a syscall number is allowed for the given ABI policy.
 ///
 /// This function centralizes the mapping between `ProgramMetadata.abi_version`
@@ -793,7 +757,6 @@ pub const fn is_koto_test_syscall(number: u32) -> bool {
 pub fn is_syscall_allowed(policy: crate::SyscallPolicy, number: u32) -> bool {
     syscalls_for_policy(policy).binary_search(&number).is_ok()
 }
-
 /// ABI V1 syscalls that require an authenticated contract identity or its
 /// durable-state namespace and are therefore unavailable to generic programs.
 ///
@@ -822,7 +785,6 @@ pub const GENERIC_PROGRAM_DENIED_SYSCALLS_V1: &[u32] = &[
     SYSCALL_STATE_LEN,
     SYSCALL_STATE_COUNT,
 ];
-
 /// Return whether an ABI syscall is available to a contract-less program.
 ///
 /// The result is false both for syscalls outside the selected ABI and for the
@@ -837,7 +799,6 @@ pub fn is_generic_program_syscall_allowed(policy: crate::SyscallPolicy, number: 
                 .is_err(),
         }
 }
-
 /// Host-state access conservatively implied by an ABI syscall.
 ///
 /// This classification is intentionally independent of compiler metadata. It
@@ -858,7 +819,6 @@ pub enum SyscallAccess {
     /// Nested, opaque, or externally routed access; serialize conservatively.
     Dynamic,
 }
-
 /// Return the explicitly registered host-state access class for a syscall.
 ///
 /// Unlike [`syscall_access`], this function has no conservative fallback. Host
@@ -1072,7 +1032,6 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
     }
     None
 }
-
 /// Return the conservative host-state access class for an ABI v1 syscall.
 ///
 /// The fallback is [`SyscallAccess::Dynamic`]. New or unknown syscalls
@@ -1086,7 +1045,6 @@ pub const fn syscall_access(number: u32) -> SyscallAccess {
         None => SyscallAccess::Dynamic,
     }
 }
-
 /// Return the sorted syscall-number component of the ABI hash descriptor.
 ///
 /// The complete hash also binds pointer types and the typed V1 query,
@@ -1096,7 +1054,6 @@ pub const fn syscall_access(number: u32) -> SyscallAccess {
 pub fn abi_syscall_list() -> &'static [u32] {
     syscalls_for_policy(crate::SyscallPolicy::AbiV1)
 }
-
 const ABI_V1_SYSCALL_METADATA: &[(u32, &str)] = &[
     (SYSCALL_DEBUG_PRINT, "DEBUG_PRINT"),
     (SYSCALL_EXIT, "EXIT"),
@@ -1405,9 +1362,7 @@ const ABI_V1_SYSCALL_METADATA: &[(u32, &str)] = &[
         "ACCOUNT_RECOVERY_FINALIZE",
     ),
 ];
-
 const ABI_V1_SYSCALL_COUNT: usize = ABI_V1_SYSCALL_METADATA.len();
-
 const fn abi_v1_syscall_numbers() -> [u32; ABI_V1_SYSCALL_COUNT] {
     let mut numbers = [0; ABI_V1_SYSCALL_COUNT];
     let mut index = 0;
@@ -1417,15 +1372,12 @@ const fn abi_v1_syscall_numbers() -> [u32; ABI_V1_SYSCALL_COUNT] {
     }
     numbers
 }
-
 const ABI_V1_SYSCALL_NUMBERS: [u32; ABI_V1_SYSCALL_COUNT] = abi_v1_syscall_numbers();
-
 /// Return the canonical syscall list for the first-release ABI policy.
 pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
     let crate::SyscallPolicy::AbiV1 = policy;
     &ABI_V1_SYSCALL_NUMBERS
 }
-
 /// Return a symbolic name for a syscall number, when known.
 /// This is used for documentation/tests; hosts should match on numbers directly.
 pub fn syscall_name(number: u32) -> Option<&'static str> {
@@ -1444,7 +1396,6 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
     }
     None
 }
-
 /// Render a minimal syscall list as markdown lines `- 0xNN NAME`.
 pub fn render_syscalls_min_list() -> String {
     let mut nums: Vec<u32> = abi_syscall_list().to_vec();
@@ -1459,7 +1410,6 @@ pub fn render_syscalls_min_list() -> String {
     }
     out
 }
-
 /// Structured doc row for a syscall.
 pub struct SyscallDoc {
     pub number: u32,
@@ -1467,19 +1417,16 @@ pub struct SyscallDoc {
     pub ret: &'static str,
     pub gas: &'static str,
 }
-
 // Use the generated syscall docs table if present (preferred). This file is
 // produced by the `gen_syscalls_doc` helper. It must define
 // `pub static DOCS: &[SyscallDoc]`.
 #[path = "syscalls_doc_gen.rs"]
 mod syscalls_doc_gen;
-
 // Use the generated gas asset table if present (preferred). This file is
 // produced by the `gen_syscalls_doc` helper. It must define `GasAsset` and
 // `pub static GAS_ASSETS: &[GasAsset]`.
 #[path = "gas_spec.rs"]
 pub mod gas_spec;
-
 /// Render a markdown table with columns: Number, Name, Args, Return, Gas.
 pub fn render_syscalls_markdown_table() -> String {
     let mut nums: Vec<u32> = abi_syscall_list().to_vec();
@@ -1502,10 +1449,8 @@ pub fn render_syscalls_markdown_table() -> String {
     }
     out
 }
-
 /// Re-export generated gas assets for tests/docs.
 pub use gas_spec as _gas_spec_placeholder;
-
 /// Render a markdown table with ABI policy names and their hashes.
 ///
 /// The table is used in docs to surface the canonical `abi_hash` values
@@ -1519,9 +1464,7 @@ pub fn render_abi_hashes_markdown_table() -> String {
         }
         s
     }
-
     let items: &[(&str, crate::SyscallPolicy)] = &[("ABI v1", crate::SyscallPolicy::AbiV1)];
-
     let mut out = String::new();
     out.push_str("| Policy | abi_hash (hex) |\n");
     out.push_str("|---|---|\n");
@@ -1532,7 +1475,6 @@ pub fn render_abi_hashes_markdown_table() -> String {
     }
     out
 }
-
 const ABI_V1_SURFACE_DOMAIN: &[u8] = b"IVM_ABI_V1_FULL_SURFACE\0";
 const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 8;
 const ABI_V1_NORITO_ENCODE_FLAGS: u8 = norito::core::header_flags::COMPACT_LEN;
@@ -1544,14 +1486,12 @@ const NUMERIC_FRAME_LAYOUT_V1: &str = "canonical-norito-v1-header=40;uncompresse
 const NUMERIC_POINTER_ENVELOPE_LAYOUT_V1: &str =
     "u16be-type+u8-version(1)+u32be-frame-length+frame+iroha-hash32(frame);exact-length";
 const NUMERIC_ERROR_PRECEDENCE_V1: &str = "operands-in-register-order:pointer-provenance,type-policy,expected-type,version,capped-length,range,snapshot,hash,frame,schema,canonical;then-scale-pointer;then-required-zero-registers-and-rounding-and-failure-tags-in-syscall-contract-order;then-divisor-zero;then-arithmetic;result-domain=scale-before-mantissa-before-quantity-sign;quantity-sub-negative=underflow";
-
 // This is the base for invalid-surface sentinels. They cannot be emitted by
 // `iroha_crypto::Hash::new`: every valid Iroha hash has the low bit of its final
 // byte set. Returning an unmistakable sentinel is safer than silently hashing
 // an incomplete generated registry, while release tests require the compiled
 // surface to validate successfully.
 const INVALID_ABI_SURFACE_HASH: [u8; 32] = [0; 32];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AbiSyscallSurface {
     number: u32,
@@ -1559,20 +1499,17 @@ struct AbiSyscallSurface {
     ret: &'static str,
     access: SyscallAccess,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiNamedTypeSurface {
     name: &'static str,
     ty: &'static str,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiCoreQueryProjectionSurface {
     name: &'static str,
     entity_tag: u64,
     fields: Vec<AbiNamedTypeSurface>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiQueryPageSurface {
     name: &'static str,
@@ -1581,7 +1518,6 @@ struct AbiQueryPageSurface {
     next_offset_semantics: &'static str,
     item_ordering: &'static str,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiEntrypointSurface {
     schema_version: u8,
@@ -1600,25 +1536,21 @@ struct AbiEntrypointSurface {
     max_schema_nodes: u64,
     max_schema_depth: u64,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiNumericRoundingSurface {
     name: &'static str,
     tag: u64,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiNumericFaultSurface {
     name: &'static str,
     tag: u64,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiNumericRuleSurface {
     name: &'static str,
     specification: &'static str,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiNumericOperatorSurface {
     operator: &'static str,
@@ -1628,7 +1560,6 @@ struct AbiNumericOperatorSurface {
     result: &'static str,
     semantics: &'static str,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiNumericJsonSurface {
     type_name: &'static str,
@@ -1636,7 +1567,6 @@ struct AbiNumericJsonSurface {
     decoded_string_grammar: &'static str,
     validation: &'static str,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiNumericSurface {
     semantics_descriptor_version: u8,
@@ -1678,7 +1608,6 @@ struct AbiNumericSurface {
     faults: Vec<AbiNumericFaultSurface>,
     pointer_faults: Vec<AbiNumericFaultSurface>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiPrivateInputKindSurface {
     name: &'static str,
@@ -1686,7 +1615,6 @@ struct AbiPrivateInputKindSurface {
     pointer_type_id: u16,
     payload_schema: &'static str,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiPrivateInputSurface {
     abi_version: u16,
@@ -1710,7 +1638,6 @@ struct AbiPrivateInputSurface {
     valcom_result: &'static str,
     privacy_rule: &'static str,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiIndexedLiteralSurface {
     opcode: u8,
@@ -1719,7 +1646,6 @@ struct AbiIndexedLiteralSurface {
     payload_layout: &'static str,
     result: &'static str,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiStateValueKindSurface {
     name: &'static str,
@@ -1728,14 +1654,12 @@ struct AbiStateValueKindSurface {
     pointer_type_id_or_zero: u16,
     resource_handle: bool,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiTaggedLayoutSurface {
     name: &'static str,
     tag: u32,
     layout: &'static str,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiEmbeddedStateTypeSurface {
     name: &'static str,
@@ -1743,7 +1667,6 @@ struct AbiEmbeddedStateTypeSurface {
     layout: &'static str,
     canonical_sample_frame: Vec<u8>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiTypedStateValueSurface {
     wire_format_version: u8,
@@ -1785,7 +1708,6 @@ struct AbiTypedStateValueSurface {
     decoded_table_offset: u16,
     decoded_word_bytes: u16,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiDurableStateSurface {
     semantics_version: u8,
@@ -1829,7 +1751,6 @@ struct AbiDurableStateSurface {
     state_value_validation: &'static str,
     typed_value: AbiTypedStateValueSurface,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiGenericProgramSurface {
     semantics_version: u8,
@@ -1841,7 +1762,6 @@ struct AbiGenericProgramSurface {
     durable_state: &'static str,
     reserved_transaction_metadata: &'static str,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiSurface {
     descriptor_format_version: u16,
@@ -1858,7 +1778,6 @@ struct AbiSurface {
     generic_program: AbiGenericProgramSurface,
     durable_state: AbiDurableStateSurface,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AbiSurfaceError {
     EmptySyscallSurface,
@@ -1872,7 +1791,6 @@ enum AbiSurfaceError {
     EmptyReturn(u32),
     SurfaceTooLarge,
 }
-
 fn invalid_abi_surface_hash(error: AbiSurfaceError) -> [u8; 32] {
     let (tag, first, second) = match error {
         AbiSurfaceError::EmptySyscallSurface => (1, 0, 0),
@@ -1894,7 +1812,6 @@ fn invalid_abi_surface_hash(error: AbiSurfaceError) -> [u8; 32] {
     sentinel[5..9].copy_from_slice(&second.to_le_bytes());
     sentinel
 }
-
 const fn syscall_access_tag(access: SyscallAccess) -> u8 {
     match access {
         SyscallAccess::None => 0,
@@ -1905,14 +1822,12 @@ const fn syscall_access_tag(access: SyscallAccess) -> u8 {
         SyscallAccess::Dynamic => 5,
     }
 }
-
 fn append_abi_field(bytes: &mut Vec<u8>, value: &[u8]) -> Result<(), AbiSurfaceError> {
     let len = u64::try_from(value.len()).map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
     bytes.extend_from_slice(&len.to_le_bytes());
     bytes.extend_from_slice(value);
     Ok(())
 }
-
 /// Canonical encoder for the ABI hash descriptor.
 ///
 /// Every value is paired with a stable field name and both byte strings are
@@ -1924,37 +1839,29 @@ fn append_abi_field(bytes: &mut Vec<u8>, value: &[u8]) -> Result<(), AbiSurfaceE
 struct AbiDescriptorEncoder {
     bytes: Vec<u8>,
 }
-
 impl AbiDescriptorEncoder {
     fn field(&mut self, name: &str, value: &[u8]) -> Result<(), AbiSurfaceError> {
         append_abi_field(&mut self.bytes, name.as_bytes())?;
         append_abi_field(&mut self.bytes, value)
     }
-
     fn text(&mut self, name: &str, value: &str) -> Result<(), AbiSurfaceError> {
         self.field(name, value.as_bytes())
     }
-
     fn bool(&mut self, name: &str, value: bool) -> Result<(), AbiSurfaceError> {
         self.field(name, &[u8::from(value)])
     }
-
     fn u8(&mut self, name: &str, value: u8) -> Result<(), AbiSurfaceError> {
         self.field(name, &[value])
     }
-
     fn u16(&mut self, name: &str, value: u16) -> Result<(), AbiSurfaceError> {
         self.field(name, &value.to_le_bytes())
     }
-
     fn u32(&mut self, name: &str, value: u32) -> Result<(), AbiSurfaceError> {
         self.field(name, &value.to_le_bytes())
     }
-
     fn u64(&mut self, name: &str, value: u64) -> Result<(), AbiSurfaceError> {
         self.field(name, &value.to_le_bytes())
     }
-
     fn record(
         &mut self,
         name: &str,
@@ -1964,7 +1871,6 @@ impl AbiDescriptorEncoder {
         encode(&mut record)?;
         self.field(name, &record.bytes)
     }
-
     fn sequence<T>(
         &mut self,
         name: &str,
@@ -1980,15 +1886,12 @@ impl AbiDescriptorEncoder {
             Ok(())
         })
     }
-
     fn finish(self) -> Vec<u8> {
         self.bytes
     }
 }
-
 fn core_query_projection_surface_v1() -> Vec<AbiCoreQueryProjectionSurface> {
     use crate::core_query::CoreQueryEntityTagV1 as Tag;
-
     vec![
         AbiCoreQueryProjectionSurface {
             name: "AccountView",
@@ -2086,13 +1989,11 @@ fn core_query_projection_surface_v1() -> Vec<AbiCoreQueryProjectionSurface> {
         },
     ]
 }
-
 fn numeric_operator_surface_v1() -> Vec<AbiNumericOperatorSurface> {
     const TYPES: [&str; 3] = ["int", "decimal", "quantity"];
     const ARITHMETIC: [&str; 5] = ["+", "-", "*", "/", "%"];
     const COMPARISONS: [&str; 6] = ["==", "!=", "<", "<=", ">", ">="];
     const INVALID: (&str, &str) = ("invalid", "compile-time-error:operator-not-defined");
-
     let mut rows = Vec::with_capacity(102);
     for ty in TYPES {
         let (allowed, result, semantics) = match ty {
@@ -2118,7 +2019,6 @@ fn numeric_operator_surface_v1() -> Vec<AbiNumericOperatorSurface> {
             semantics,
         });
     }
-
     for operator in ARITHMETIC {
         for lhs in TYPES {
             for rhs in TYPES {
@@ -2186,7 +2086,6 @@ fn numeric_operator_surface_v1() -> Vec<AbiNumericOperatorSurface> {
             }
         }
     }
-
     for operator in COMPARISONS {
         for lhs in TYPES {
             for rhs in TYPES {
@@ -2212,7 +2111,6 @@ fn numeric_operator_surface_v1() -> Vec<AbiNumericOperatorSurface> {
     debug_assert_eq!(rows.len(), 102);
     rows
 }
-
 fn semantic_abi_surface_v1() -> Result<
     (
         Vec<AbiCoreQueryProjectionSurface>,
@@ -2230,7 +2128,6 @@ fn semantic_abi_surface_v1() -> Result<
         },
         pointer_abi::PointerType,
     };
-
     let query_page_capacity =
         u8::try_from(QUERY_PAGE_CAPACITY_V1).map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
     let max_schema_nodes = u64::try_from(MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES)
@@ -2240,7 +2137,6 @@ fn semantic_abi_surface_v1() -> Result<
     let int_pointer_type_id = PointerType::Int as u16;
     let decimal_pointer_type_id = PointerType::Decimal as u16;
     let quantity_pointer_type_id = PointerType::Quantity as u16;
-
     Ok((
         core_query_projection_surface_v1(),
         AbiQueryPageSurface {
@@ -2555,7 +2451,6 @@ fn semantic_abi_surface_v1() -> Result<
         },
     ))
 }
-
 fn private_input_surface_v1() -> Result<AbiPrivateInputSurface, AbiSurfaceError> {
     use crate::private_input::{
         MAX_PRIVATE_INPUT_RECORD_BYTES_V1, MAX_PRIVATE_INPUT_TRANSPORT_BYTES_V1,
@@ -2564,7 +2459,6 @@ fn private_input_surface_v1() -> Result<AbiPrivateInputSurface, AbiSurfaceError>
         PRIVATE_NUMERIC_VALCOM_H_COMPRESSED_V1, PRIVATE_NUMERIC_VALCOM_H_DST_V1,
         PRIVATE_NUMERIC_VALCOM_H_MESSAGE_V1, PrivateInputKindV1, PrivateInputRecordV1,
     };
-
     let kind = |value: PrivateInputKindV1, name: &'static str, payload_schema: &'static str| {
         AbiPrivateInputKindSurface {
             name,
@@ -2603,7 +2497,6 @@ fn private_input_surface_v1() -> Result<AbiPrivateInputSurface, AbiSurfaceError>
         privacy_rule: "Secret<int|decimal|quantity>-only-source-operands;same-private-visibility;opaque-input-TLV-bytes-cannot-be-loaded-by-guest;no-public-return-log-state-key-state-value-host-write-or-control-flow-before-full-width-valcom",
     })
 }
-
 fn collect_abi_syscall_surface(
     syscalls: &[u32],
     docs: &[SyscallDoc],
@@ -2622,7 +2515,6 @@ fn collect_abi_syscall_surface(
             return Err(AbiSurfaceError::UnexpectedSignature(doc.number));
         }
     }
-
     let mut surface = Vec::with_capacity(syscalls.len());
     for &number in syscalls {
         let mut rows = docs.iter().filter(|doc| doc.number == number);
@@ -2647,7 +2539,6 @@ fn collect_abi_syscall_surface(
     }
     Ok(surface)
 }
-
 fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> {
     if surface.syscalls.is_empty() {
         return Err(AbiSurfaceError::EmptySyscallSurface);
@@ -2675,7 +2566,6 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
             current: pair[1],
         });
     }
-
     for syscall in &surface.syscalls {
         if syscall.args.is_empty() {
             return Err(AbiSurfaceError::EmptyArguments(syscall.number));
@@ -2684,7 +2574,6 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
             return Err(AbiSurfaceError::EmptyReturn(syscall.number));
         }
     }
-
     let mut descriptor = AbiDescriptorEncoder::default();
     descriptor.field("domain", ABI_V1_SURFACE_DOMAIN)?;
     descriptor.u16(
@@ -3171,10 +3060,8 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
     })?;
     Ok(descriptor.finish())
 }
-
 fn embedded_state_type_surface_v1() -> Result<Vec<AbiEmbeddedStateTypeSurface>, AbiSurfaceError> {
     use crate::metadata::{EmbeddedStateFieldDescriptor as Field, EmbeddedStateType as Type};
-
     let samples = vec![
         ("Int", Type::Int, "u8-tag"),
         ("Decimal", Type::Decimal, "u8-tag"),
@@ -3242,7 +3129,6 @@ fn embedded_state_type_surface_v1() -> Result<Vec<AbiEmbeddedStateTypeSurface>, 
             "u8-tag+owned(element)+u8(capacity);capacity=1..64;no-StateMap-descendant",
         ),
     ];
-
     samples
         .into_iter()
         .map(|(name, value, layout)| {
@@ -3258,7 +3144,6 @@ fn embedded_state_type_surface_v1() -> Result<Vec<AbiEmbeddedStateTypeSurface>, 
         })
         .collect()
 }
-
 fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfaceError> {
     use crate::state_value::{
         DECODED_STATE_VALUE_TABLE_OFFSET, DECODED_STATE_VALUE_WORD_BYTES,
@@ -3273,7 +3158,6 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
         StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1,
         StateValueSchemaV1,
     };
-
     let kind = |value: StateValueKindV1, name: &'static str, word_layout: &'static str| {
         AbiStateValueKindSurface {
             name,
@@ -3382,7 +3266,6 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
             "one-u64-pointer-word;complete-canonical-TLV",
         ),
     ];
-
     let nodes = vec![
         AbiTaggedLayoutSurface {
             name: "Struct",
@@ -3437,7 +3320,6 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
             layout: "KRV1-u8-tag+u8(item-count-0..64)+each-item-as-u16le(atom-count-1..256)+inline-active-only-element-atom-stream;items-in-order",
         },
     ];
-
     Ok(AbiTypedStateValueSurface {
         wire_format_version: 1,
         norito_header_bytes: u16::try_from(norito::core::Header::SIZE)
@@ -3487,7 +3369,6 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
             .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
     })
 }
-
 fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSurfaceError> {
     let crate::SyscallPolicy::AbiV1 = policy;
     let syscalls =
@@ -3599,14 +3480,11 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         durable_state,
     })
 }
-
 fn build_abi_surface_descriptor(policy: crate::SyscallPolicy) -> Result<Vec<u8>, AbiSurfaceError> {
     encode_abi_surface(&collect_abi_surface(policy)?)
 }
-
 fn abi_surface_descriptor(policy: crate::SyscallPolicy) -> Result<&'static [u8], AbiSurfaceError> {
     use std::sync::OnceLock;
-
     static ABI_V1: OnceLock<Result<Vec<u8>, AbiSurfaceError>> = OnceLock::new();
     let crate::SyscallPolicy::AbiV1 = policy;
     match ABI_V1.get_or_init(|| build_abi_surface_descriptor(policy)) {
@@ -3614,7 +3492,6 @@ fn abi_surface_descriptor(policy: crate::SyscallPolicy) -> Result<&'static [u8],
         Err(error) => Err(*error),
     }
 }
-
 /// Compute the stable first-release ABI hash for the complete allowed surface.
 ///
 /// The domain-separated, versioned, length-prefixed descriptor binds the
@@ -3644,15 +3521,12 @@ pub fn compute_abi_hash(policy: crate::SyscallPolicy) -> [u8; 32] {
         Err(error) => invalid_abi_surface_hash(error),
     }
 }
-
 #[cfg(test)]
 #[path = "syscalls/access_profile_tests.rs"]
 mod access_profile_tests;
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn durable_state_frame_bounds_cover_exact_text_maxima() {
         let path: iroha_data_model::state_path::StatePath = "p"
@@ -3661,7 +3535,6 @@ mod tests {
             .expect("maximum StatePath");
         let path_frame = norito::to_bytes(&path).expect("encode maximum StatePath");
         assert!(path_frame.len() <= STATE_MAX_PATH_FRAME_BYTES);
-
         let base: iroha_data_model::name::Name = "b"
             .repeat(STATE_MAP_MAX_BASE_BYTES)
             .parse()
@@ -3677,11 +3550,9 @@ mod tests {
             iroha_data_model::name::MAX_NAME_BYTES
         );
     }
-
     fn canonical_surface() -> AbiSurface {
         collect_abi_surface(crate::SyscallPolicy::AbiV1).expect("canonical ABI-v1 surface")
     }
-
     #[test]
     fn numeric_v1_ranges_are_complete_and_legacy_numbers_fail_closed() {
         let policy = crate::SyscallPolicy::AbiV1;
@@ -3696,7 +3567,6 @@ mod tests {
             assert_eq!(registered_syscall_access(number), Some(SyscallAccess::None));
             assert!(syscall_name(number).is_some());
         }
-
         for retired in core::iter::once(RETIRED_SYSCALL_BUILD_PATH_MAP_KEY)
             .chain([0x65, 0x68])
             .chain(0x69..=0x76)
@@ -3708,12 +3578,10 @@ mod tests {
             assert_eq!(syscall_name(retired), None);
         }
     }
-
     fn descriptor_hash(surface: &AbiSurface) -> [u8; 32] {
         let descriptor = encode_abi_surface(surface).expect("test surface is canonical");
         *iroha_crypto::Hash::new(descriptor).as_ref()
     }
-
     fn assert_surface_mutation_changes_hash(mutator: impl FnOnce(&mut AbiSurface)) {
         let canonical_surface = canonical_surface();
         let canonical_hash = descriptor_hash(&canonical_surface);
@@ -3721,21 +3589,18 @@ mod tests {
         mutator(&mut changed);
         assert_ne!(descriptor_hash(&changed), canonical_hash);
     }
-
     #[test]
     fn removed_syscall_numbers_are_unknown() {
         let removed = [
             0x85, 0x86, 0x87, 0x88, 0x89, 0x8B, 0x8C, 0x8D, 0x8E, 0x8F, 0xAA, 0xAB, 0xAC, 0xAD,
             0xAE, 0xAF, 0xBF, 0xD0, 0xD1, 0x01_0163, 0x01_0164, 0x01_0165,
         ];
-
         for number in removed {
             assert!(!is_syscall_allowed(crate::SyscallPolicy::AbiV1, number));
             assert_eq!(registered_syscall_access(number), None);
             assert_eq!(syscall_name(number), None);
         }
     }
-
     #[test]
     fn koto_test_syscalls_are_host_private() {
         let private = [
@@ -3745,14 +3610,12 @@ mod tests {
             SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
             SYSCALL_KOTO_TEST_EXPECT_REJECT_AS,
         ];
-
         for syscall in private {
             assert!(is_koto_test_syscall(syscall));
             assert!(!is_syscall_allowed(crate::SyscallPolicy::AbiV1, syscall));
             assert!(syscall > u8::MAX as u32);
         }
     }
-
     #[test]
     fn generic_program_syscall_profile_is_sorted_complete_and_fail_closed() {
         assert!(
@@ -3814,7 +3677,6 @@ mod tests {
             u32::MAX
         ));
     }
-
     #[test]
     fn axt_syscall_classifier_is_exact() {
         for syscall in [
@@ -3830,7 +3692,6 @@ mod tests {
             assert!(!is_axt_syscall(syscall));
         }
     }
-
     #[test]
     fn syscall_access_classification_is_conservative() {
         assert_eq!(syscall_access(SYSCALL_STATE_GET), SyscallAccess::StateRead);
@@ -3873,7 +3734,6 @@ mod tests {
         );
         assert_eq!(syscall_access(SYSCALL_SHA256_HASH), SyscallAccess::None);
         assert_eq!(syscall_access(0x00ff_fffe), SyscallAccess::Dynamic);
-
         for number in abi_syscall_list() {
             assert!(
                 syscall_name(*number).is_some(),
@@ -3881,7 +3741,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn abi_v1_has_one_canonical_signature_per_allowed_syscall() {
         let allowed = abi_syscall_list();
@@ -3902,7 +3761,6 @@ mod tests {
             assert!(!row.args.is_empty());
             assert!(!row.ret.is_empty());
         }
-
         let surface = collect_abi_syscall_surface(allowed, syscalls_doc_gen::DOCS)
             .expect("the compiled ABI-v1 registry must be valid");
         assert_eq!(surface.len(), allowed.len());
@@ -3912,13 +3770,11 @@ mod tests {
         assert_ne!(hash, INVALID_ABI_SURFACE_HASH);
         assert_eq!(hash[hash.len() - 1] & 1, 1, "valid Iroha hash marker");
     }
-
     #[test]
     fn abi_hash_descriptor_binds_every_semantic_surface_component() {
         let surface = canonical_surface();
         let canonical = descriptor_hash(&surface);
         assert_eq!(canonical, compute_abi_hash(crate::SyscallPolicy::AbiV1));
-
         assert_surface_mutation_changes_hash(|changed| {
             changed.descriptor_format_version += 1;
         });
@@ -3963,13 +3819,11 @@ mod tests {
             let _ = changed.pointer_type_ids.pop();
         });
     }
-
     #[test]
     fn abi_hash_uses_the_documented_iroha_hash_v1_commitment() {
         let descriptor = abi_surface_descriptor(crate::SyscallPolicy::AbiV1)
             .expect("the canonical ABI-v1 descriptor must be available");
         let hash = compute_abi_hash(crate::SyscallPolicy::AbiV1);
-
         assert_eq!(hash, *iroha_crypto::Hash::new(descriptor).as_ref());
         assert_ne!(
             hash,
@@ -3982,7 +3836,6 @@ mod tests {
             "Iroha Hash v1 must set the final-byte marker bit"
         );
     }
-
     #[test]
     fn abi_descriptor_ignores_ambient_norito_layout_flags() {
         let canonical = build_abi_surface_descriptor(crate::SyscallPolicy::AbiV1)
@@ -3990,10 +3843,8 @@ mod tests {
         let _ambient = norito::core::DecodeFlagsGuard::enter(0);
         let under_noncanonical_ambient = build_abi_surface_descriptor(crate::SyscallPolicy::AbiV1)
             .expect("build ABI descriptor under alternate ambient flags");
-
         assert_eq!(under_noncanonical_ambient, canonical);
     }
-
     #[test]
     fn abi_hash_binds_typed_private_input_and_full_width_commitment_semantics() {
         use crate::private_input::{
@@ -4003,7 +3854,6 @@ mod tests {
             PRIVATE_NUMERIC_VALCOM_H_COMPRESSED_V1, PRIVATE_NUMERIC_VALCOM_H_DST_V1,
             PRIVATE_NUMERIC_VALCOM_H_MESSAGE_V1,
         };
-
         let private = canonical_surface().private_input;
         assert_eq!(private.abi_version, PRIVATE_INPUT_ABI_VERSION_V1);
         assert_eq!(private.kinds.len(), 3);
@@ -4033,7 +3883,6 @@ mod tests {
             private.valcom_h_compressed,
             PRIVATE_NUMERIC_VALCOM_H_COMPRESSED_V1
         );
-
         assert_surface_mutation_changes_hash(|changed| changed.private_input.abi_version += 1);
         assert_surface_mutation_changes_hash(|changed| changed.private_input.kinds[0].tag ^= 1);
         assert_surface_mutation_changes_hash(|changed| {
@@ -4049,7 +3898,6 @@ mod tests {
             changed.private_input.valcom_result = "truncated-u64";
         });
     }
-
     #[test]
     fn abi_hash_descriptor_binds_every_durable_state_semantic() {
         use crate::state_value::{
@@ -4064,7 +3912,6 @@ mod tests {
             STATE_VALUE_SCHEMA_NODE_TAG_BYTES_V1, STATE_VALUE_SCHEMA_PAYLOAD_MAGIC_V1,
             StateValueRecordV1, StateValueSchemaV1,
         };
-
         let state = canonical_surface().durable_state;
         assert_eq!(state.semantics_version, 5);
         assert_eq!(
@@ -4312,7 +4159,6 @@ mod tests {
             typed.decoded_word_bytes,
             u16::try_from(DECODED_STATE_VALUE_WORD_BYTES).expect("positive word width")
         );
-
         assert_surface_mutation_changes_hash(|changed| {
             changed.durable_state.semantics_version += 1
         });
@@ -4611,7 +4457,6 @@ mod tests {
             changed.durable_state.typed_value.decoded_word_bytes += 1;
         });
     }
-
     #[test]
     fn abi_hash_descriptor_binds_generic_program_semantics() {
         let generic = canonical_surface().generic_program;
@@ -4630,7 +4475,6 @@ mod tests {
                 .reserved_transaction_metadata
                 .contains("contract_payload")
         );
-
         assert_surface_mutation_changes_hash(|changed| {
             changed.generic_program.semantics_version += 1;
         });
@@ -4656,11 +4500,9 @@ mod tests {
             changed.generic_program.reserved_transaction_metadata = "accept-all";
         });
     }
-
     #[test]
     fn abi_hash_descriptor_binds_core_query_tags_projection_shapes_and_page_semantics() {
         use crate::core_query::{CoreQueryEntityTagV1 as Tag, QUERY_PAGE_CAPACITY_V1};
-
         let surface = canonical_surface();
         assert_eq!(
             surface
@@ -4743,7 +4585,6 @@ mod tests {
             surface.query_page.next_offset_semantics,
             "present-iff-another-canonical-page-exists;some-requires-nonempty-items;nonnegative;not-less-than-item-count;from-window=offset+item-count-with-checked-i64"
         );
-
         for projection_index in 0..surface.core_query_projections.len() {
             assert_surface_mutation_changes_hash(|changed| {
                 changed.core_query_projections[projection_index].entity_tag += 10;
@@ -4791,7 +4632,6 @@ mod tests {
             changed.query_page.item_ordering = "host-insertion-order";
         });
     }
-
     #[test]
     fn abi_hash_descriptor_binds_entrypoint_numeric_and_recursive_list_semantics() {
         use crate::{
@@ -4801,7 +4641,6 @@ mod tests {
             },
             pointer_abi::PointerType,
         };
-
         let surface = canonical_surface();
         assert_eq!(surface.entrypoint.int_kind, "Int");
         assert_eq!(surface.entrypoint.decimal_kind, "Decimal");
@@ -4834,7 +4673,6 @@ mod tests {
             surface.entrypoint.max_schema_depth,
             u64::try_from(MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH).expect("depth limit fits u64")
         );
-
         assert_surface_mutation_changes_hash(|changed| {
             changed.entrypoint.schema_version += 1;
         });
@@ -4872,11 +4710,9 @@ mod tests {
             changed.entrypoint.list_max_capacity -= 1;
         });
     }
-
     #[test]
     fn abi_hash_descriptor_binds_numeric_pointer_rules_and_rounding_tags() {
         use crate::pointer_abi::PointerType;
-
         let surface = canonical_surface();
         for expected in [
             PointerType::Int,
@@ -5020,7 +4856,6 @@ mod tests {
                 ("noncanonical", 11),
             ]
         );
-
         assert_surface_mutation_changes_hash(|changed| {
             changed
                 .pointer_type_ids
@@ -5218,20 +5053,16 @@ mod tests {
             });
         }
     }
-
     #[test]
     fn abi_descriptor_framing_distinguishes_ambiguous_byte_partitions() {
         let mut first = AbiDescriptorEncoder::default();
         first.field("ab", b"c").expect("small descriptor field");
         first.field("d", b"ef").expect("small descriptor field");
-
         let mut second = AbiDescriptorEncoder::default();
         second.field("a", b"bc").expect("small descriptor field");
         second.field("de", b"f").expect("small descriptor field");
-
         assert_ne!(first.finish(), second.finish());
     }
-
     #[test]
     fn abi_registry_validation_rejects_missing_duplicate_and_extra_rows() {
         let number = SYSCALL_EXIT;
@@ -5239,7 +5070,6 @@ mod tests {
             collect_abi_syscall_surface(&[number], &[]),
             Err(AbiSurfaceError::MissingSignature(number))
         );
-
         let row = SyscallDoc {
             number,
             args: "r10=status:u64",
@@ -5264,7 +5094,6 @@ mod tests {
             collect_abi_syscall_surface(&[number], &duplicate),
             Err(AbiSurfaceError::DuplicateSignature(number))
         );
-
         let extra = SyscallDoc {
             number: SYSCALL_ABORT,
             args: "-",
@@ -5280,7 +5109,6 @@ mod tests {
             Err(AbiSurfaceError::SyscallsNotStrictlySorted { .. })
         ));
     }
-
     #[test]
     fn invalid_surface_sentinels_cannot_be_mistaken_for_iroha_hashes() {
         let errors = [
@@ -5306,7 +5134,6 @@ mod tests {
         sentinels.sort_unstable();
         assert!(sentinels.windows(2).all(|pair| pair[0] != pair[1]));
     }
-
     #[test]
     fn pointer_policy_hash_input_is_sorted_complete_and_unique() {
         let policy = crate::SyscallPolicy::AbiV1;

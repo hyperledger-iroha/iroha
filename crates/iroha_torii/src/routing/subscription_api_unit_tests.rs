@@ -7,7 +7,6 @@ fn derive_trigger_id_is_deterministic() {
     assert_eq!(bill, bill2);
     assert_ne!(bill, usage);
 }
-
 #[test]
 fn default_charge_ms_fixed_period_respects_bill_for() {
     let billing = SubscriptionBilling {
@@ -20,14 +19,12 @@ fn default_charge_ms_fixed_period_respects_bill_for() {
         grace_ms: 0,
     };
     assert_eq!(default_charge_ms(10_000, billing).unwrap(), 11_000);
-
     let billing_next = SubscriptionBilling {
         bill_for: SubscriptionBillFor::NextPeriod,
         ..billing
     };
     assert_eq!(default_charge_ms(10_000, billing_next).unwrap(), 10_000);
 }
-
 #[test]
 fn initial_period_fixed_period_matches_charge_window() {
     let billing = SubscriptionBilling {
@@ -42,7 +39,6 @@ fn initial_period_fixed_period_matches_charge_window() {
     let (start, end) = initial_period_for_charge(billing, 10_000).unwrap();
     assert_eq!(start, 8_000);
     assert_eq!(end, 10_000);
-
     let billing_next = SubscriptionBilling {
         bill_for: SubscriptionBillFor::NextPeriod,
         ..billing
@@ -51,7 +47,6 @@ fn initial_period_fixed_period_matches_charge_window() {
     assert_eq!(start, 10_000);
     assert_eq!(end, 12_000);
 }
-
 #[test]
 fn parse_subscription_status_filter_accepts_known_values() {
     assert_eq!(
@@ -64,7 +59,6 @@ fn parse_subscription_status_filter_accepts_known_values() {
     );
     assert!(parse_subscription_status_filter("unknown").is_err());
 }
-
 #[test]
 fn subscription_plan_from_metadata_roundtrips() {
     let plan = SubscriptionPlan {
@@ -93,7 +87,6 @@ fn subscription_plan_from_metadata_roundtrips() {
         .expect("plan metadata present");
     assert_eq!(parsed, plan);
 }
-
 #[test]
 fn subscription_state_and_invoice_from_metadata_roundtrip() {
     let billing_trigger_id: TriggerId = "billing_trigger".parse().unwrap();
@@ -139,7 +132,6 @@ fn subscription_state_and_invoice_from_metadata_roundtrip() {
     assert_eq!(parsed_state, subscription);
     assert_eq!(parsed_invoice, invoice);
 }
-
 #[test]
 fn resolve_charge_ms_prefers_explicit() {
     let billing = SubscriptionBilling {
@@ -153,7 +145,6 @@ fn resolve_charge_ms_prefers_explicit() {
     };
     assert_eq!(resolve_charge_ms(billing, Some(42_000)).unwrap(), 42_000);
 }
-
 #[test]
 fn resolve_trigger_id_prefers_explicit() {
     let subscription_id: NftId = "sub2$wonderland.universal".parse().unwrap();
@@ -162,13 +153,11 @@ fn resolve_trigger_id_prefers_explicit() {
         resolve_trigger_id("sub_bill_", &subscription_id, Some(explicit.clone())).unwrap();
     assert_eq!(resolved, explicit);
 }
-
 #[test]
 fn network_time_ms_is_nonzero() {
     let now = network_time_ms().unwrap();
     assert!(now > 0);
 }
-
 #[test]
 fn ivm_syscall_program_emits_bytecode() {
     let configured_limit = NonZeroU64::new(17).expect("non-zero test cycle limit");
@@ -190,7 +179,6 @@ fn ivm_syscall_program_emits_bytecode() {
         iroha_core::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(_)
     ));
 }
-
 #[test]
 fn build_billing_trigger_attaches_metadata_and_schedule() {
     use iroha_data_model::events::{EventFilterBox, time::ExecutionTime};
@@ -223,7 +211,6 @@ fn build_billing_trigger_attaches_metadata_and_schedule() {
     }
     assert_eq!(trigger.action().authority(), &authority);
 }
-
 #[test]
 fn build_usage_trigger_uses_execute_filter() {
     use iroha_data_model::events::{EventFilterBox, execute_trigger::ExecuteTriggerEventFilter};

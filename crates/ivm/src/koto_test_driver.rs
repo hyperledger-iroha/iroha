@@ -1,5 +1,4 @@
 //! In-process Kotodama V1 test runner shared by the unified CLI and SDK tools.
-
 use std::{
     any::Any,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
@@ -9,7 +8,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-
 #[cfg(test)]
 use crate::ProgramMetadata;
 use crate::{
@@ -51,7 +49,6 @@ use ivm_abi::state_value::{
 };
 use norito::codec::Encode;
 use norito::json::{self, Value};
-
 const DEFAULT_CALLER: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const ENTRYPOINT_IMPL_PREFIX: &str = "__entrypoint_impl__";
 const TEST_SYSCALL_ACTOR_ACCOUNT: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT;
@@ -61,13 +58,11 @@ const TEST_SYSCALL_INVOKE_ENTRYPOINT_AS: u32 =
     crate::syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS;
 const TEST_SYSCALL_EXPECT_REJECT_AS: u32 = crate::syscalls::SYSCALL_KOTO_TEST_EXPECT_REJECT_AS;
 const TEST_MAX_RETURN_VALUES: usize = 13;
-
 #[derive(Clone)]
 struct FixtureActor {
     account: AccountId,
     seed: Option<[u8; 32]>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Command {
     Run,
@@ -75,7 +70,6 @@ enum Command {
     Profile,
     List,
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum TestOutputFormat {
     #[default]
@@ -83,7 +77,6 @@ enum TestOutputFormat {
     Json,
     Junit,
 }
-
 #[derive(Clone, Debug)]
 struct TestOptions {
     command: Command,
@@ -97,14 +90,12 @@ struct TestOptions {
     output: TestOutputFormat,
     output_path: Option<PathBuf>,
 }
-
 #[derive(Clone, Debug)]
 struct TestCase {
     name: String,
     fixture: Option<String>,
     line: usize,
 }
-
 struct DiscoveredSuite {
     target_path: PathBuf,
     target_source: String,
@@ -113,19 +104,16 @@ struct DiscoveredSuite {
     tests: Vec<TestCase>,
     fixtures: HashMap<String, FixtureDecl>,
 }
-
 struct DiscoveredTestModule {
     path: PathBuf,
     source: String,
     program: Program,
 }
-
 struct CompiledArtifact {
     program: crate::PreparedContract,
     report: CompileReport,
     pc_base: u64,
 }
-
 struct CompiledSuite {
     suite: CompiledArtifact,
     runtime: Option<CompiledArtifact>,
@@ -134,20 +122,17 @@ struct CompiledSuite {
     fixtures: HashMap<String, FixtureDecl>,
     coverage_functions: Vec<CoverageFunction>,
 }
-
 impl CompiledSuite {
     fn profile_artifact(&self) -> &CompiledArtifact {
         self.runtime.as_ref().unwrap_or(&self.suite)
     }
 }
-
 #[derive(Clone)]
 struct RuntimeEntrypoint {
     pc: u64,
     argument_schema: Option<EntrypointArgumentSchemaV1>,
     permission: Option<String>,
 }
-
 #[derive(Clone)]
 struct CompiledTestCase {
     name: String,
@@ -155,7 +140,6 @@ struct CompiledTestCase {
     line: usize,
     pc: u64,
 }
-
 #[derive(Clone)]
 struct CoverageFunction {
     display_name: String,
@@ -163,7 +147,6 @@ struct CoverageFunction {
     pc_start: u64,
     pc_end: u64,
 }
-
 struct TestRunResult {
     name: String,
     line: usize,
@@ -173,7 +156,6 @@ struct TestRunResult {
     trace_pcs: Vec<u64>,
     delta_trace: Vec<crate::zk::DeltaEntry>,
 }
-
 /// One deterministic request for the non-printing Kotodama V1 test runner.
 ///
 /// The runner never writes to stdout or stderr. Frontends retain sole ownership
@@ -195,7 +177,6 @@ pub struct KotoTestRunRequestV1 {
     /// Enable the Kotodama ZK compilation surface.
     pub zk_enabled: bool,
 }
-
 impl KotoTestRunRequestV1 {
     /// Construct a canonical single-worker request for `target`.
     #[must_use]
@@ -211,7 +192,6 @@ impl KotoTestRunRequestV1 {
         }
     }
 }
-
 /// Exact external module graph visible to one declared Kotodama test root.
 ///
 /// Import aliases are parent-local and every package identity must be the exact
@@ -224,7 +204,6 @@ pub struct KotoTestModuleGraphV1 {
     /// Complete locked package graph, including transitive modules.
     pub packages: Vec<SourcePackageUnit>,
 }
-
 /// Stable stage at which a structured Kotodama test request failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KotoTestRunPhaseV1 {
@@ -237,7 +216,6 @@ pub enum KotoTestRunPhaseV1 {
     /// VM preparation or test execution failed before a case outcome existed.
     Execution,
 }
-
 /// Structured failure returned by the non-printing Kotodama test runner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KotoTestRunErrorV1 {
@@ -246,7 +224,6 @@ pub struct KotoTestRunErrorV1 {
     /// Human-readable diagnostic detail suitable for a frontend error record.
     pub message: String,
 }
-
 impl KotoTestRunErrorV1 {
     fn new(phase: KotoTestRunPhaseV1, message: impl Into<String>) -> Self {
         Self {
@@ -255,15 +232,12 @@ impl KotoTestRunErrorV1 {
         }
     }
 }
-
 impl std::fmt::Display for KotoTestRunErrorV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.message)
     }
 }
-
 impl std::error::Error for KotoTestRunErrorV1 {}
-
 /// Deterministic logical outcome of one Kotodama test case.
 ///
 /// Wall-clock timing and VM trace data are intentionally absent: neither is a
@@ -280,7 +254,6 @@ pub struct KotoTestCaseOutcomeV1 {
     /// Stable rendered VM diagnostic for a failed case.
     pub failure: Option<String>,
 }
-
 /// One complete, deterministically ordered Kotodama test report.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KotoTestRunReportV1 {
@@ -291,27 +264,23 @@ pub struct KotoTestRunReportV1 {
     /// Case outcomes in deterministic execution order.
     pub cases: Vec<KotoTestCaseOutcomeV1>,
 }
-
 impl KotoTestRunReportV1 {
     /// Return the number of successful cases.
     #[must_use]
     pub fn passed(&self) -> usize {
         self.cases.iter().filter(|case| case.passed).count()
     }
-
     /// Return the number of failed cases.
     #[must_use]
     pub fn failed(&self) -> usize {
         self.cases.len().saturating_sub(self.passed())
     }
-
     /// Return whether every selected case passed.
     #[must_use]
     pub fn is_success(&self) -> bool {
         self.failed() == 0
     }
 }
-
 /// Discover, compile, and run one Kotodama V1 test suite without writing output.
 ///
 /// Case failures are successful report values with `passed = false`. Only an
@@ -331,7 +300,6 @@ pub fn run_tests_structured_v1(
         .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Discovery, error))?;
     run_discovered_suite_structured(request, suite, None)
 }
-
 /// Run one explicitly declared test root against an exact locked module graph.
 ///
 /// Unlike [`run_tests_structured_v1`], this entry point performs no sibling or
@@ -351,7 +319,6 @@ pub fn run_tests_structured_with_modules_v1(
         .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Discovery, error))?;
     run_discovered_suite_structured(request, suite, Some(modules))
 }
-
 /// Run one caller-supplied test root against an exact locked module graph.
 ///
 /// This is the structured source-set boundary for package managers and other
@@ -376,7 +343,6 @@ pub fn run_tests_structured_source_with_modules_v1(
         .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Discovery, error))?;
     run_discovered_suite_structured(request, suite, Some(modules))
 }
-
 /// Discover test names from one explicitly declared root without ambient files.
 ///
 /// # Errors
@@ -387,7 +353,6 @@ pub fn discover_declared_test_names_v1(path: &Path) -> Result<Vec<String>, Strin
     let suite = discover_declared_suite(path)?;
     Ok(suite.tests.into_iter().map(|test| test.name).collect())
 }
-
 /// Discover test names from one explicitly supplied direct root.
 ///
 /// No path is opened and no ambient source is discovered. The source name is
@@ -404,7 +369,6 @@ pub fn discover_declared_test_names_source_v1(
     let suite = discover_declared_suite_from_source(root)?;
     Ok(suite.tests.into_iter().map(|test| test.name).collect())
 }
-
 fn run_discovered_suite_structured(
     request: &KotoTestRunRequestV1,
     mut suite: DiscoveredSuite,
@@ -457,7 +421,6 @@ fn run_discovered_suite_structured(
         cases,
     })
 }
-
 fn validate_structured_request(request: &KotoTestRunRequestV1) -> Result<(), KotoTestRunErrorV1> {
     if request.jobs == 0 {
         return Err(KotoTestRunErrorV1::new(
@@ -479,7 +442,6 @@ fn validate_structured_request(request: &KotoTestRunRequestV1) -> Result<(), Kot
     }
     Ok(())
 }
-
 fn validate_structured_source_request(
     request: &KotoTestRunRequestV1,
     root: &SourceModuleUnit,
@@ -494,7 +456,6 @@ fn validate_structured_source_request(
     }
     Ok(())
 }
-
 fn validate_structured_source(root: &SourceModuleUnit) -> Result<(), String> {
     if root.source_name.is_empty()
         || root.source_name.len() > MAX_LOGICAL_SOURCE_PATH_BYTES
@@ -524,7 +485,6 @@ fn validate_structured_source(root: &SourceModuleUnit) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn filter_and_order_structured_tests(tests: &mut Vec<TestCase>, request: &KotoTestRunRequestV1) {
     if let Some(filter) = request.filter.as_deref() {
         tests.retain(|test| {
@@ -548,7 +508,6 @@ fn filter_and_order_structured_tests(tests: &mut Vec<TestCase>, request: &KotoTe
         }
     });
 }
-
 struct KotoTestHost {
     inner: WsvHost,
     actors: HashMap<String, FixtureActor>,
@@ -560,7 +519,6 @@ struct KotoTestHost {
     supplemental_trace_pcs: Vec<u64>,
     supplemental_delta_trace: Vec<crate::zk::DeltaEntry>,
 }
-
 /// Run the VM-backed Kotodama test harness for the unified `koto test` command.
 pub fn run_cli(args: Vec<String>) -> Result<(), String> {
     let options = parse_args(args)?;
@@ -606,7 +564,6 @@ pub fn run_cli(args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-
 /// Discover the Kotodama test names contributed by one target or standalone
 /// test source.
 ///
@@ -616,7 +573,6 @@ pub fn discover_test_names(path: &Path) -> Result<Vec<String>, String> {
     let suite = discover_suite(path)?;
     Ok(suite.tests.into_iter().map(|test| test.name).collect())
 }
-
 fn parse_args(args: Vec<String>) -> Result<TestOptions, String> {
     let mut command = Command::Run;
     let mut path = None;
@@ -734,7 +690,6 @@ fn parse_args(args: Vec<String>) -> Result<TestOptions, String> {
         output_path,
     })
 }
-
 fn parse_chain_discriminant(raw: &str) -> Result<u16, String> {
     if raw.is_empty()
         || (raw.len() > 1 && raw.starts_with('0'))
@@ -754,7 +709,6 @@ fn parse_chain_discriminant(raw: &str) -> Result<u16, String> {
     }
     Ok(value)
 }
-
 fn filter_and_order_tests(tests: &mut Vec<TestCase>, options: &TestOptions) {
     if let Some(filter) = options.filter.as_deref() {
         tests.retain(|test| {
@@ -769,14 +723,12 @@ fn filter_and_order_tests(tests: &mut Vec<TestCase>, options: &TestOptions) {
         tests.sort_by_key(|test| seeded_test_key(options.seed, &test.name));
     }
 }
-
 fn seeded_test_key(seed: u64, name: &str) -> u64 {
     name.bytes()
         .fold(seed ^ 0xcbf2_9ce4_8422_2325, |hash, byte| {
             (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
         })
 }
-
 fn discover_suite(path: &Path) -> Result<DiscoveredSuite, String> {
     let input_path = fs::canonicalize(path)
         .map_err(|err| format!("failed to resolve {}: {err}", path.display()))?;
@@ -787,7 +739,6 @@ fn discover_suite(path: &Path) -> Result<DiscoveredSuite, String> {
         discover_suite_from_target(&input_path, input_source, input_program)
     }
 }
-
 fn discover_declared_suite(path: &Path) -> Result<DiscoveredSuite, String> {
     let input_path = fs::canonicalize(path)
         .map_err(|err| format!("failed to resolve {}: {err}", path.display()))?;
@@ -800,7 +751,6 @@ fn discover_declared_suite(path: &Path) -> Result<DiscoveredSuite, String> {
     }
     finalize_suite(input_path, source, program, Vec::new())
 }
-
 fn discover_declared_suite_from_source(root: &SourceModuleUnit) -> Result<DiscoveredSuite, String> {
     validate_structured_source(root)?;
     let program =
@@ -818,7 +768,6 @@ fn discover_declared_suite_from_source(root: &SourceModuleUnit) -> Result<Discov
         Vec::new(),
     )
 }
-
 fn discover_suite_from_target(
     path: &Path,
     target_source: String,
@@ -835,7 +784,6 @@ fn discover_suite_from_target(
         standalone_tests,
     )
 }
-
 fn discover_suite_from_standalone_test(
     test_path: &Path,
     test_source: String,
@@ -861,7 +809,6 @@ fn discover_suite_from_standalone_test(
         }],
     )
 }
-
 fn finalize_suite(
     target_path: PathBuf,
     target_source: String,
@@ -901,14 +848,12 @@ fn finalize_suite(
         fixtures,
     })
 }
-
 fn parse_program_file(path: &Path) -> Result<(String, Program), String> {
     let src = read_source_file(path)
         .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
     let program = parser::parse(&src).map_err(|err| format!("{}: {err}", path.display()))?;
     Ok((src, program))
 }
-
 fn resolve_target_path(test_file: &Path, raw_target: &str) -> Result<PathBuf, String> {
     let parent = test_file
         .parent()
@@ -921,7 +866,6 @@ fn resolve_target_path(test_file: &Path, raw_target: &str) -> Result<PathBuf, St
         )
     })
 }
-
 fn discover_standalone_tests_for_target(
     target_path: &Path,
 ) -> Result<Vec<DiscoveredTestModule>, String> {
@@ -929,7 +873,6 @@ fn discover_standalone_tests_for_target(
         .parent()
         .ok_or_else(|| format!("{} has no parent directory", target_path.display()))?;
     let mut paths = BTreeSet::new();
-
     for entry in fs::read_dir(base_dir)
         .map_err(|err| format!("failed to read {}: {err}", base_dir.display()))?
     {
@@ -952,12 +895,10 @@ fn discover_standalone_tests_for_target(
             );
         }
     }
-
     let tests_dir = base_dir.join("tests");
     if tests_dir.exists() {
         collect_ko_files(&tests_dir, &mut paths)?;
     }
-
     let mut discovered = Vec::new();
     for test_path in paths {
         let (source, program) = parse_program_file(&test_path)?;
@@ -974,7 +915,6 @@ fn discover_standalone_tests_for_target(
     }
     Ok(discovered)
 }
-
 fn collect_ko_files(dir: &Path, out: &mut BTreeSet<PathBuf>) -> Result<(), String> {
     for entry in
         fs::read_dir(dir).map_err(|err| format!("failed to read {}: {err}", dir.display()))?
@@ -995,7 +935,6 @@ fn collect_ko_files(dir: &Path, out: &mut BTreeSet<PathBuf>) -> Result<(), Strin
     }
     Ok(())
 }
-
 fn validate_standalone_test_program(
     test_path: &Path,
     target_path: &Path,
@@ -1044,7 +983,6 @@ fn validate_standalone_test_program(
     }
     Ok(())
 }
-
 fn collect_tests_into(
     program: &Program,
     names: &mut HashSet<String>,
@@ -1068,7 +1006,6 @@ fn collect_tests_into(
     }
     Ok(())
 }
-
 fn build_fixture_map(fixtures: &[FixtureDecl]) -> Result<HashMap<String, FixtureDecl>, String> {
     let mut map = HashMap::new();
     for fixture in fixtures {
@@ -1079,7 +1016,6 @@ fn build_fixture_map(fixtures: &[FixtureDecl]) -> Result<HashMap<String, Fixture
     }
     Ok(map)
 }
-
 #[cfg(test)]
 fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSuite, String> {
     compile_suite_for_chain(
@@ -1088,7 +1024,6 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
         iroha_data_model::account::address::chain_discriminant(),
     )
 }
-
 fn compile_suite_for_chain(
     suite: &DiscoveredSuite,
     zk_enabled: bool,
@@ -1118,7 +1053,6 @@ fn compile_suite_for_chain(
         .map_err(|diagnostics| diagnostics.render_human())?;
     prepare_compiled_suite(suite, outputs)
 }
-
 fn compile_suite_with_modules_for_chain(
     suite: &DiscoveredSuite,
     modules: &KotoTestModuleGraphV1,
@@ -1152,7 +1086,6 @@ fn compile_suite_with_modules_for_chain(
         .map_err(|diagnostics| diagnostics.render_human())?;
     prepare_compiled_suite(suite, outputs)
 }
-
 fn prepare_compiled_suite(
     suite: &DiscoveredSuite,
     outputs: TestCompileOutput,
@@ -1178,7 +1111,6 @@ fn prepare_compiled_suite(
         report: test_report,
         pc_base: test_pc_base,
     };
-
     let (runtime, runtime_entrypoints) = if let Some(runtime_output) = outputs.runtime {
         let runtime_report = runtime_output.report;
         let runtime_program = crate::prepare_contract(Arc::from(runtime_output.artifact))
@@ -1220,14 +1152,12 @@ fn prepare_compiled_suite(
     } else {
         (None, HashMap::new())
     };
-
     let mut test_pcs = HashMap::new();
     for entry in &suite_artifact.report.budget_report {
         test_pcs
             .entry(entry.function_name.clone())
             .or_insert(test_pc_base.saturating_add(entry.pc_start));
     }
-
     let tests = suite
         .tests
         .iter()
@@ -1244,14 +1174,12 @@ fn prepare_compiled_suite(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-
     let profile_artifact = runtime.as_ref().unwrap_or(&suite_artifact);
     let coverage_functions = build_coverage_functions(
         &suite.target_program,
         &profile_artifact.report,
         profile_artifact.pc_base,
     );
-
     Ok(CompiledSuite {
         suite: suite_artifact,
         runtime,
@@ -1261,7 +1189,6 @@ fn prepare_compiled_suite(
         coverage_functions,
     })
 }
-
 fn build_coverage_functions(
     program: &Program,
     report: &CompileReport,
@@ -1275,14 +1202,12 @@ fn build_coverage_functions(
             _ => None,
         })
         .collect::<HashSet<_>>();
-
     let implementation_bases = report
         .budget_report
         .iter()
         .filter_map(|entry| entry.function_name.strip_prefix(ENTRYPOINT_IMPL_PREFIX))
         .map(ToOwned::to_owned)
         .collect::<HashSet<_>>();
-
     let mut functions = report
         .budget_report
         .iter()
@@ -1302,11 +1227,9 @@ fn build_coverage_functions(
             })
         })
         .collect::<Vec<_>>();
-
     functions.sort_by_key(|function| (function.line, function.display_name.clone()));
     functions
 }
-
 fn normalize_user_function_name(name: &str) -> Option<&str> {
     if let Some(base) = name.strip_prefix(ENTRYPOINT_IMPL_PREFIX) {
         return Some(base);
@@ -1316,7 +1239,6 @@ fn normalize_user_function_name(name: &str) -> Option<&str> {
     }
     Some(name)
 }
-
 #[cfg(test)]
 fn execute_suite(
     compiled: &CompiledSuite,
@@ -1330,7 +1252,6 @@ fn execute_suite(
         iroha_data_model::account::address::chain_discriminant(),
     )
 }
-
 fn execute_suite_for_chain(
     compiled: &CompiledSuite,
     trace_mode: TraceMode,
@@ -1351,7 +1272,6 @@ fn execute_suite_for_chain(
             .map(|test| execute_test(compiled, test, trace_mode, suite_return_pc))
             .collect();
     }
-
     let joined = std::thread::scope(|scope| {
         let mut workers = Vec::with_capacity(worker_count);
         for worker in 0..worker_count {
@@ -1382,7 +1302,6 @@ fn execute_suite_for_chain(
     indexed.sort_by_key(|(index, _)| *index);
     Ok(indexed.into_iter().map(|(_, result)| result).collect())
 }
-
 fn execute_test(
     compiled: &CompiledSuite,
     test: &CompiledTestCase,
@@ -1397,7 +1316,6 @@ fn execute_test(
     vm.set_program_counter(test.pc)
         .map_err(|err| format!("failed to jump to test `{}`: {err:?}", test.name))?;
     vm.set_trace_mode(trace_mode);
-
     let started = Instant::now();
     let outcome = vm.run_with_host(&mut host);
     let elapsed = started.elapsed();
@@ -1409,7 +1327,6 @@ fn execute_test(
     trace_pcs.extend_from_slice(host.supplemental_trace_pcs());
     let mut delta_trace = vm.delta_register_trace().to_vec();
     delta_trace.extend_from_slice(host.supplemental_delta_trace());
-
     Ok(TestRunResult {
         name: test.name.clone(),
         line: test.line,
@@ -1420,7 +1337,6 @@ fn execute_test(
         delta_trace,
     })
 }
-
 fn build_host_for_fixture(
     compiled: &CompiledSuite,
     fixture_name: Option<&str>,
@@ -1450,7 +1366,6 @@ fn build_host_for_fixture(
     host.inner_mut().set_public_inputs(public_inputs);
     Ok(host)
 }
-
 fn apply_fixture_action(
     action: &FixtureAction,
     host: &mut KotoTestHost,
@@ -1668,7 +1583,6 @@ fn apply_fixture_action(
         other => Err(format!("unknown fixture action `{other}`")),
     }
 }
-
 struct KotoTestHostSnapshot {
     inner: Box<dyn Any + Send>,
     actors: HashMap<String, FixtureActor>,
@@ -1676,7 +1590,6 @@ struct KotoTestHostSnapshot {
     supplemental_trace_pcs: Vec<u64>,
     supplemental_delta_trace: Vec<crate::zk::DeltaEntry>,
 }
-
 impl KotoTestHost {
     fn new(
         inner: WsvHost,
@@ -1708,27 +1621,21 @@ impl KotoTestHost {
             supplemental_delta_trace: Vec::new(),
         }
     }
-
     fn inner_mut(&mut self) -> &mut WsvHost {
         &mut self.inner
     }
-
     fn caller_subject(&self) -> AccountId {
         self.inner.caller_subject()
     }
-
     fn set_caller_subject(&mut self, caller: AccountId) {
         self.inner.set_caller_subject(caller);
     }
-
     fn contract_subject(&self) -> AccountId {
         self.contract_address.subject_id()
     }
-
     fn actor_account(&self, alias: &str) -> Option<AccountId> {
         self.actors.get(alias).map(|actor| actor.account.clone())
     }
-
     fn register_actor(&mut self, alias: String, account: AccountId) -> Result<(), String> {
         if self.actors.contains_key(&alias) {
             return Err(format!("duplicate actor `{alias}`"));
@@ -1743,7 +1650,6 @@ impl KotoTestHost {
         );
         Ok(())
     }
-
     fn set_actor_seed(&mut self, alias: &str, seed: [u8; 32]) -> Result<(), String> {
         let signing_key = SigningKey::from_bytes(&seed);
         let public_key = iroha_crypto::PublicKey::from_bytes(
@@ -1765,33 +1671,26 @@ impl KotoTestHost {
         actor.seed = Some(seed);
         Ok(())
     }
-
     fn last_test_error(&self) -> Option<&str> {
         self.last_test_error.as_deref()
     }
-
     fn supplemental_trace_pcs(&self) -> &[u64] {
         &self.supplemental_trace_pcs
     }
-
     fn supplemental_delta_trace(&self) -> &[crate::zk::DeltaEntry] {
         &self.supplemental_delta_trace
     }
-
     fn clear_test_error(&mut self) {
         self.last_test_error = None;
     }
-
     fn restore_public_inputs(&mut self) {
         self.inner
             .set_public_inputs(self.base_public_inputs.clone());
     }
-
     fn fail_test<T>(&mut self, message: impl Into<String>) -> Result<T, crate::VMError> {
         self.last_test_error = Some(message.into());
         Err(crate::VMError::AssertionFailed)
     }
-
     fn decode_alias_arg(vm: &IVM, reg: usize, label: &str) -> Result<String, crate::VMError> {
         let ptr = vm.register(reg);
         if ptr == 0 {
@@ -1813,7 +1712,6 @@ impl KotoTestHost {
             }
         }
     }
-
     fn decode_json_arg(vm: &IVM, reg: usize) -> Result<Json, crate::VMError> {
         let ptr = vm.register(reg);
         if ptr == 0 {
@@ -1827,7 +1725,6 @@ impl KotoTestHost {
             _ => Err(crate::VMError::NoritoInvalid),
         }
     }
-
     fn decode_bytes_arg(vm: &IVM, reg: usize) -> Result<Vec<u8>, crate::VMError> {
         let ptr = vm.register(reg);
         if ptr == 0 {
@@ -1839,7 +1736,6 @@ impl KotoTestHost {
             _ => Err(crate::VMError::NoritoInvalid),
         }
     }
-
     fn alloc_pointer_result(
         vm: &mut IVM,
         pointer_type: PointerType,
@@ -1848,14 +1744,12 @@ impl KotoTestHost {
         let tlv = make_tlv(pointer_type, payload);
         vm.alloc_host_tlv(&tlv)
     }
-
     fn record_nested_trace(&mut self, nested_vm: &IVM) {
         self.supplemental_trace_pcs
             .extend_from_slice(nested_vm.trace_pcs());
         self.supplemental_delta_trace
             .extend_from_slice(nested_vm.delta_register_trace());
     }
-
     fn nested_failure_message(
         actor_alias: &str,
         entrypoint: &str,
@@ -1869,7 +1763,6 @@ impl KotoTestHost {
             render_failure(nested_vm, None, err)
         )
     }
-
     fn invoke_entrypoint(
         &mut self,
         vm: &mut IVM,
@@ -1931,7 +1824,6 @@ impl KotoTestHost {
                 "runtime public or lifecycle target `{entrypoint}` has no compiled runtime artifact"
             ));
         };
-
         let mut nested_inputs = self.base_public_inputs.clone();
         if let Some(schema) = runtime_entrypoint.argument_schema.as_ref() {
             let trigger_name: Name = "trigger_event_json"
@@ -1956,7 +1848,6 @@ impl KotoTestHost {
                 make_tlv(PointerType::NoritoBytes, &encoded_payload),
             );
         }
-
         let mut nested_vm = IVM::new(u64::MAX);
         nested_vm.reset();
         let clear = [0u8; 7 + iroha_crypto::Hash::LENGTH];
@@ -1970,7 +1861,6 @@ impl KotoTestHost {
         nested_vm.set_program_counter(runtime_entrypoint.pc)?;
         nested_vm.set_trace_mode(vm.trace_mode());
         nested_vm.set_max_cycles(0);
-
         let rollback = self
             .inner
             .checkpoint()
@@ -1986,7 +1876,6 @@ impl KotoTestHost {
         self.inner.set_public_inputs(nested_inputs);
         let nested_outcome = nested_vm.run_with_host(&mut self.inner);
         self.record_nested_trace(&nested_vm);
-
         match nested_outcome {
             Ok(()) if expect_reject => {
                 let _ = self.inner.restore(rollback.as_ref());
@@ -2029,7 +1918,6 @@ impl KotoTestHost {
         }
     }
 }
-
 impl IVMHost for KotoTestHost {
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, crate::VMError> {
         if crate::syscalls::is_koto_test_syscall(number) {
@@ -2038,7 +1926,6 @@ impl IVMHost for KotoTestHost {
             self.inner.prepare_syscall(number, vm)
         }
     }
-
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, crate::VMError> {
         match number {
             TEST_SYSCALL_ACTOR_ACCOUNT => {
@@ -2096,34 +1983,28 @@ impl IVMHost for KotoTestHost {
             _ => self.inner.syscall(number, vm),
         }
     }
-
     fn allows_syscall(&self, policy: crate::SyscallPolicy, number: u32) -> bool {
         crate::syscalls::is_koto_test_syscall(number)
             || crate::syscalls::is_syscall_allowed(policy, number)
     }
-
     fn as_any(&mut self) -> &mut dyn Any
     where
         Self: 'static,
     {
         self
     }
-
     fn supports_concurrent_blocks(&self) -> bool {
         self.inner.supports_concurrent_blocks()
     }
-
     fn begin_tx(
         &mut self,
         declared: &crate::parallel::StateAccessSet,
     ) -> Result<(), crate::VMError> {
         self.inner.begin_tx(declared)
     }
-
     fn finish_tx(&mut self) -> Result<crate::host::AccessLog, crate::VMError> {
         self.inner.finish_tx()
     }
-
     fn checkpoint(&self) -> Option<Box<dyn Any + Send>> {
         let inner = self.inner.checkpoint()?;
         Some(Box::new(KotoTestHostSnapshot {
@@ -2134,7 +2015,6 @@ impl IVMHost for KotoTestHost {
             supplemental_delta_trace: self.supplemental_delta_trace.clone(),
         }))
     }
-
     fn restore(&mut self, snapshot: &dyn Any) -> bool {
         let Some(snapshot) = snapshot.downcast_ref::<KotoTestHostSnapshot>() else {
             return false;
@@ -2148,12 +2028,10 @@ impl IVMHost for KotoTestHost {
         self.supplemental_delta_trace = snapshot.supplemental_delta_trace.clone();
         true
     }
-
     fn access_logging_supported(&self) -> bool {
         self.inner.access_logging_supported()
     }
 }
-
 fn expect_arg_count(action: &FixtureAction, expected: usize) -> Result<(), String> {
     if action.args.len() == expected {
         return Ok(());
@@ -2165,14 +2043,12 @@ fn expect_arg_count(action: &FixtureAction, expected: usize) -> Result<(), Strin
         action.args.len()
     ))
 }
-
 fn eval_actor_alias_expr(expr: &Expr) -> Result<String, String> {
     match expr {
         Expr::String(raw) | Expr::Ident(raw) => Ok(raw.clone()),
         other => Err(format!("expected actor alias expression, got {other:?}")),
     }
 }
-
 fn eval_fixture_account_or_actor(expr: &Expr, host: &KotoTestHost) -> Result<AccountId, String> {
     if matches!(expr, Expr::String(raw) | Expr::Ident(raw) if raw == "seiyaku_subject") {
         return Ok(host.contract_subject());
@@ -2184,7 +2060,6 @@ fn eval_fixture_account_or_actor(expr: &Expr, host: &KotoTestHost) -> Result<Acc
     }
     eval_account_expr(expr)
 }
-
 fn decode_hex_or_raw_bytes(raw: &str) -> Result<Vec<u8>, String> {
     if let Some(hex) = raw.strip_prefix("0x") {
         if hex.len() % 2 != 0 {
@@ -2204,7 +2079,6 @@ fn decode_hex_or_raw_bytes(raw: &str) -> Result<Vec<u8>, String> {
     }
     Ok(raw.as_bytes().to_vec())
 }
-
 fn eval_seed_expr(expr: &Expr) -> Result<[u8; 32], String> {
     let bytes = match expr {
         Expr::Bytes(bytes) => bytes.clone(),
@@ -2214,7 +2088,6 @@ fn eval_seed_expr(expr: &Expr) -> Result<[u8; 32], String> {
     <[u8; 32]>::try_from(bytes.as_slice())
         .map_err(|_| format!("actor seed must be exactly 32 bytes, got {}", bytes.len()))
 }
-
 fn eval_account_expr(expr: &Expr) -> Result<AccountId, String> {
     match expr {
         Expr::String(raw) | Expr::Ident(raw) => parse_account_literal(raw),
@@ -2228,7 +2101,6 @@ fn eval_account_expr(expr: &Expr) -> Result<AccountId, String> {
         other => Err(format!("expected account expression, got {other:?}")),
     }
 }
-
 fn eval_domain_expr(expr: &Expr) -> Result<DomainId, String> {
     match expr {
         Expr::String(raw) | Expr::Ident(raw) => parse_domain_literal(raw),
@@ -2242,7 +2114,6 @@ fn eval_domain_expr(expr: &Expr) -> Result<DomainId, String> {
         other => Err(format!("expected domain expression, got {other:?}")),
     }
 }
-
 fn eval_asset_definition_expr(expr: &Expr) -> Result<AssetDefinitionId, String> {
     match expr {
         Expr::String(raw) | Expr::Ident(raw) => AssetDefinitionId::parse_address_literal(raw)
@@ -2260,7 +2131,6 @@ fn eval_asset_definition_expr(expr: &Expr) -> Result<AssetDefinitionId, String> 
         )),
     }
 }
-
 fn eval_name_expr(expr: &Expr) -> Result<Name, String> {
     match expr {
         Expr::String(raw) | Expr::Ident(raw) => {
@@ -2276,7 +2146,6 @@ fn eval_name_expr(expr: &Expr) -> Result<Name, String> {
         other => Err(format!("expected name expression, got {other:?}")),
     }
 }
-
 fn eval_string_expr(expr: &Expr) -> Result<String, String> {
     match expr {
         Expr::String(raw) | Expr::Ident(raw) | Expr::DecimalLiteral(raw) => Ok(raw.clone()),
@@ -2285,7 +2154,6 @@ fn eval_string_expr(expr: &Expr) -> Result<String, String> {
         other => Err(format!("expected string-like expression, got {other:?}")),
     }
 }
-
 fn eval_numeric_expr(expr: &Expr) -> Result<Numeric, String> {
     match expr {
         Expr::IntLiteral(value) if !value.is_negative() => Ok(Numeric::new(value.clone(), 0)),
@@ -2297,13 +2165,11 @@ fn eval_numeric_expr(expr: &Expr) -> Result<Numeric, String> {
         other => Err(format!("expected numeric expression, got {other:?}")),
     }
 }
-
 fn eval_quantity_expr(expr: &Expr) -> Result<Quantity, String> {
     let numeric = eval_numeric_expr(expr)?;
     Quantity::try_from_numeric(numeric)
         .map_err(|error| format!("balance must be a non-negative quantity: {error}"))
 }
-
 fn eval_u64_expr(expr: &Expr) -> Result<u64, String> {
     let raw = eval_string_expr(expr)?;
     let value = raw
@@ -2316,7 +2182,6 @@ fn eval_u64_expr(expr: &Expr) -> Result<u64, String> {
     }
     Ok(value)
 }
-
 fn eval_mintable_expr(expr: &Expr) -> Result<Mintable, String> {
     let raw = eval_string_expr(expr)?.to_ascii_lowercase();
     match raw.as_str() {
@@ -2326,7 +2191,6 @@ fn eval_mintable_expr(expr: &Expr) -> Result<Mintable, String> {
         other => Err(format!("unsupported mintability `{other}`")),
     }
 }
-
 fn eval_permission_expr(expr: &Expr) -> Result<PermissionToken, String> {
     match expr {
         Expr::String(raw) | Expr::Ident(raw) => parse_permission_token_name(raw),
@@ -2340,7 +2204,6 @@ fn eval_permission_expr(expr: &Expr) -> Result<PermissionToken, String> {
         other => Err(format!("expected permission expression, got {other:?}")),
     }
 }
-
 fn eval_detail_bytes(expr: &Expr) -> Result<Vec<u8>, String> {
     match expr {
         Expr::String(raw) => Ok(raw.as_bytes().to_vec()),
@@ -2353,7 +2216,6 @@ fn eval_detail_bytes(expr: &Expr) -> Result<Vec<u8>, String> {
         other => Err(format!("unsupported account detail value `{other:?}`")),
     }
 }
-
 fn eval_state_payload_expr(expr: &Expr) -> Result<Vec<u8>, String> {
     let (kind, atom) = match expr {
         Expr::Bool(value) => (StateValueKindV1::Bool, StateValueAtomV1::Bool(*value)),
@@ -2411,7 +2273,6 @@ fn eval_state_payload_expr(expr: &Expr) -> Result<Vec<u8>, String> {
     };
     encode_state_leaf(kind, atom)
 }
-
 fn encode_state_leaf(kind: StateValueKindV1, atom: StateValueAtomV1) -> Result<Vec<u8>, String> {
     let schema = StateValueSchemaV1 {
         nodes: vec![StateValueNodeV1::Leaf(kind)],
@@ -2427,7 +2288,6 @@ fn encode_state_leaf(kind: StateValueKindV1, atom: StateValueAtomV1) -> Result<V
     })
     .map_err(|error| format!("failed to encode state fixture record: {error}"))
 }
-
 fn eval_envelope_expr(expr: &Expr) -> Result<Vec<u8>, String> {
     match expr {
         Expr::Bool(value) => make_norito_envelope(value),
@@ -2490,7 +2350,6 @@ fn eval_envelope_expr(expr: &Expr) -> Result<Vec<u8>, String> {
         other => Err(format!("unsupported fixture value expression `{other:?}`")),
     }
 }
-
 fn eval_json_payload(args: &[Expr]) -> Result<String, String> {
     if args.len() != 1 {
         return Err("`Json::parse` expects exactly one argument".to_string());
@@ -2502,13 +2361,11 @@ fn eval_json_payload(args: &[Expr]) -> Result<String, String> {
         )),
     }
 }
-
 fn make_norito_envelope<T: Encode>(value: &T) -> Result<Vec<u8>, String> {
     let bytes = norito::encode_canonical(value)
         .map_err(|err| format!("failed to encode canonical Norito value: {err}"))?;
     Ok(make_tlv(PointerType::NoritoBytes, &bytes))
 }
-
 fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -2519,7 +2376,6 @@ fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&hash);
     out
 }
-
 fn parse_account_literal(raw: &str) -> Result<AccountId, String> {
     AccountId::parse_encoded(raw)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
@@ -2530,12 +2386,10 @@ fn parse_account_literal(raw: &str) -> Result<AccountId, String> {
         .or_else(|_| raw.parse::<iroha_crypto::PublicKey>().map(AccountId::new))
         .map_err(|_| format!("invalid account id `{raw}`"))
 }
-
 fn default_caller_account() -> Result<AccountId, String> {
     let _chain_discriminant = ChainDiscriminantGuard::enter(753);
     parse_account_literal(DEFAULT_CALLER)
 }
-
 fn parse_domain_literal(raw: &str) -> Result<DomainId, String> {
     if raw.contains('.') {
         return DomainId::parse_fully_qualified(raw)
@@ -2543,7 +2397,6 @@ fn parse_domain_literal(raw: &str) -> Result<DomainId, String> {
     }
     DomainId::try_new(raw, "universal").map_err(|_| format!("invalid domain id `{raw}`"))
 }
-
 fn parse_permission_token_name(raw: &str) -> Result<PermissionToken, String> {
     if raw == "register_domain" {
         return Ok(PermissionToken::RegisterDomain);
@@ -2610,7 +2463,6 @@ fn parse_permission_token_name(raw: &str) -> Result<PermissionToken, String> {
         _ => Err("permission name must not be empty".to_string()),
     }
 }
-
 fn parse_permission_token_json(raw: &str) -> Result<PermissionToken, String> {
     let value: Value =
         json::from_str(raw).map_err(|err| format!("invalid permission json: {err}"))?;
@@ -2755,7 +2607,6 @@ fn parse_permission_token_json(raw: &str) -> Result<PermissionToken, String> {
         other => Err(format!("unsupported permission type `{other}`")),
     }
 }
-
 fn render_failure(vm: &IVM, extra_detail: Option<&str>, err: &crate::VMError) -> String {
     let mut message = format!("{err:?}");
     if let Some(diag) = vm.last_diagnostic() {
@@ -2780,7 +2631,6 @@ fn render_failure(vm: &IVM, extra_detail: Option<&str>, err: &crate::VMError) ->
     }
     message
 }
-
 fn print_run_summary(target_path: &Path, results: &[TestRunResult]) {
     println!("koto_test target: {}", target_path.display());
     for result in results {
@@ -2808,7 +2658,6 @@ fn print_run_summary(target_path: &Path, results: &[TestRunResult]) {
         results.len().saturating_sub(passed)
     );
 }
-
 fn print_test_list(suite: &DiscoveredSuite, format: TestOutputFormat) -> Result<(), String> {
     match format {
         TestOutputFormat::Text => {
@@ -2857,7 +2706,6 @@ fn print_test_list(suite: &DiscoveredSuite, format: TestOutputFormat) -> Result<
     }
     Ok(())
 }
-
 fn emit_test_results(
     target_path: &Path,
     results: &[TestRunResult],
@@ -2881,7 +2729,6 @@ fn emit_test_results(
     }
     Ok(())
 }
-
 fn render_test_json(
     target_path: &Path,
     results: &[TestRunResult],
@@ -2923,10 +2770,8 @@ fn render_test_json(
     .map_err(|error| format!("build test JSON: {error}"))?;
     json::to_string_pretty(&value).map_err(|error| format!("serialize test JSON: {error}"))
 }
-
 fn render_test_junit(target_path: &Path, results: &[TestRunResult], seed: u64) -> String {
     use std::fmt::Write as _;
-
     let failed = results.iter().filter(|result| !result.passed).count();
     let duration = results
         .iter()
@@ -2962,7 +2807,6 @@ fn render_test_junit(target_path: &Path, results: &[TestRunResult], seed: u64) -
     output.push_str("</testsuite>\n");
     output
 }
-
 fn escape_xml(raw: &str) -> String {
     let mut escaped = String::with_capacity(raw.len());
     for character in raw.chars() {
@@ -2977,13 +2821,11 @@ fn escape_xml(raw: &str) -> String {
     }
     escaped
 }
-
 fn print_coverage_report(compiled: &CompiledSuite, results: &[TestRunResult]) {
     let mut executed_pcs = HashSet::new();
     for result in results {
         executed_pcs.extend(result.trace_pcs.iter().copied());
     }
-
     let total_functions = compiled.coverage_functions.len();
     let covered_functions = compiled
         .coverage_functions
@@ -3001,7 +2843,6 @@ fn print_coverage_report(compiled: &CompiledSuite, results: &[TestRunResult]) {
         .filter(|function| function_hit(function, &executed_pcs))
         .map(|function| function.pc_end.saturating_sub(function.pc_start))
         .sum::<u64>();
-
     let function_pct = percentage(covered_functions as u64, total_functions as u64);
     let byte_pct = percentage(covered_bytes, total_bytes);
     println!(
@@ -3020,13 +2861,11 @@ fn print_coverage_report(compiled: &CompiledSuite, results: &[TestRunResult]) {
         );
     }
 }
-
 fn function_hit(function: &CoverageFunction, executed_pcs: &HashSet<u64>) -> bool {
     executed_pcs
         .iter()
         .any(|pc| function.pc_start <= *pc && *pc < function.pc_end)
 }
-
 fn percentage(numerator: u64, denominator: u64) -> f64 {
     if denominator == 0 {
         100.0
@@ -3034,7 +2873,6 @@ fn percentage(numerator: u64, denominator: u64) -> f64 {
         (numerator as f64 / denominator as f64) * 100.0
     }
 }
-
 fn print_profile_report(compiled: &CompiledSuite, results: &[TestRunResult]) -> Result<(), String> {
     println!("\nprofile:");
     let profile_artifact = compiled.profile_artifact();
@@ -3089,7 +2927,6 @@ fn print_profile_report(compiled: &CompiledSuite, results: &[TestRunResult]) -> 
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     include!("koto_test_driver_tests.rs");

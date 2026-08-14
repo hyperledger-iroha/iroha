@@ -1,8 +1,6 @@
 //! Tests for NCB enum layout and optional string column utilities.
 #![allow(clippy::needless_range_loop)]
-
 use norito::columnar as ncb;
-
 #[test]
 fn ncb_enum_roundtrip() {
     // Build a small mixed dataset
@@ -24,7 +22,6 @@ fn ncb_enum_roundtrip() {
             }
         })
         .collect();
-
     let bytes = ncb::encode_ncb_u64_enum_bool(
         &rows_borrowed,
         /*id-delta*/ false,
@@ -33,7 +30,6 @@ fn ncb_enum_roundtrip() {
     );
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     assert_eq!(view.len(), rows_borrowed.len());
-
     // Validate ids, tags, payloads, flags
     for i in 0..view.len() {
         assert_eq!(view.id(i), rows_borrowed[i].0);
@@ -45,7 +41,6 @@ fn ncb_enum_roundtrip() {
         assert_eq!(view.flag(i), rows_borrowed[i].2);
     }
 }
-
 #[test]
 fn ncb_enum_indexed_vs_fast_iter_match() {
     // Build a mixed dataset
@@ -64,7 +59,6 @@ fn ncb_enum_indexed_vs_fast_iter_match() {
         .collect();
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, false, false, false);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
-
     // Collect names where flag==true via fast popcount+tag check
     let mut a: Vec<&str> = view.iter_names_flag_true_fast().collect();
     // Collect names via indexed intersection
@@ -73,7 +67,6 @@ fn ncb_enum_indexed_vs_fast_iter_match() {
     b.sort_unstable();
     assert_eq!(a, b);
 }
-
 #[test]
 fn ncb_enum_codes_indexed_vs_fast_iter_match() {
     let rows: Vec<(u64, ncb::EnumBorrow<'_>, bool)> = (0..2048u64)
@@ -89,14 +82,12 @@ fn ncb_enum_codes_indexed_vs_fast_iter_match() {
         .collect();
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, false, false, false);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
-
     let mut a: Vec<u32> = view.iter_codes_flag_true_fast().collect();
     let mut b: Vec<u32> = view.iter_codes_flag_true_indexed().collect();
     a.sort_unstable();
     b.sort_unstable();
     assert_eq!(a, b);
 }
-
 #[test]
 fn ncb_enum_delta_ids() {
     let mut rows = Vec::new();
@@ -117,7 +108,6 @@ fn ncb_enum_delta_ids() {
         assert_eq!(view.id(i), rows[i].0);
     }
 }
-
 #[test]
 fn ncb_enum_codes_delta() {
     let mut rows = Vec::new();
@@ -146,7 +136,6 @@ fn ncb_enum_codes_delta() {
         }
     }
 }
-
 #[test]
 fn ncb_enum_dict_names() {
     // Build repeated names to exercise dictionary
@@ -177,7 +166,6 @@ fn ncb_enum_dict_names() {
         }
     }
 }
-
 #[test]
 fn ncb_enum_dict_codes_out_of_range_rejected() {
     let rows = vec![
@@ -214,7 +202,6 @@ fn ncb_enum_dict_codes_out_of_range_rejected() {
     let res = ncb::view_ncb_u64_enum_bool(&bytes);
     assert!(res.is_err());
 }
-
 #[test]
 fn ncb_enum_dict_names_codes_delta() {
     // Mix Name(Code by dict) and Code(u32) with code delta enabled
@@ -244,7 +231,6 @@ fn ncb_enum_dict_names_codes_delta() {
         }
     }
 }
-
 #[test]
 fn ncb_enum_dense_iters_match() {
     // Mixed dataset
@@ -296,7 +282,6 @@ fn ncb_enum_dense_iters_match() {
         .collect();
     assert_eq!(dense_codes2, row_codes2);
 }
-
 #[test]
 fn opt_str_column_basic() {
     let data = vec![Some("a"), None, Some("bb"), Some("ccc"), None];
@@ -313,7 +298,6 @@ fn opt_str_column_basic() {
         }
     }
 }
-
 #[test]
 fn opt_str_column_rejects_non_monotonic_offsets() {
     let data = vec![Some("a"), Some("bb"), Some("ccc")];
@@ -334,7 +318,6 @@ fn opt_str_column_rejects_non_monotonic_offsets() {
     let res = ncb::view_opt_str_column(&bytes, n_rows);
     assert!(res.is_err());
 }
-
 #[test]
 fn opt_u32_column_basic() {
     let data = vec![Some(1u32), None, Some(2u32), None, Some(3u32), Some(4u32)];

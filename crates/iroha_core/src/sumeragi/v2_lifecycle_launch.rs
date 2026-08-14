@@ -1,15 +1,13 @@
 //! Sealed production launch from recovered lifecycle ownership into live I/O.
-
+use iroha_crypto::KeyPair;
+use iroha_data_model::{
+    block::{CertifiedMergeLedgerReference, consensus_v2 as wire},
+    peer::PeerId,
+};
 use std::{
     collections::BTreeSet,
     sync::Arc,
     time::{Duration, Instant},
-};
-
-use iroha_crypto::{HashOf, KeyPair};
-use iroha_data_model::{
-    block::{CertifiedMergeLedgerReference, consensus_v2 as wire},
-    peer::PeerId,
 };
 use thiserror::Error;
 
@@ -21,19 +19,6 @@ mod turn_driver;
 #[cfg(test)]
 #[path = "v2_lifecycle_turn_driver_tests.rs"]
 mod turn_driver_tests;
-
-#[cfg(test)]
-use preactivation::ProductionLifecyclePreActivationFailStopScopeV1;
-pub(in crate::sumeragi) use preactivation::{
-    ProductionLifecyclePreActivationErrorV1, ProductionPendingKuraApplyInstallErrorV1,
-};
-#[cfg(test)]
-pub(in crate::sumeragi) use turn_driver::ProductionPreparedCertifiedServeTestSettlementV1;
-pub(in crate::sumeragi) use turn_driver::{
-    ProductionLifecycleCompletionSelectionV1, ProductionLifecycleCompletionTurnV1,
-    ProductionLifecycleIngressSelectionV1, ProductionLifecycleIngressTurnV1,
-    ProductionPreparedOrdinaryIngressTurnV1, ProductionRecoveredLifecycleSignCompletionSelectionV1,
-};
 
 use super::{
     PreparedLifecycleIngressSelector, ProductionLifecycleOwnerV1,
@@ -48,13 +33,15 @@ use super::{
     ingress_position::{FairIngressTurnContextCut, FairIngressTurnCut},
     work_registry::RecoveredDecisionApplyTerminalPublicationError,
 };
+use crate::sumeragi::v2_runner::LifecycleCurrentRunnerTurn;
+#[cfg(test)]
+use crate::sumeragi::v2_runner::LifecycleRunnerRankSnapshot;
 use crate::{
     IrohaNetwork,
     kura::{Kura, KuraV2CommitReceipt},
     state::State,
     sumeragi::{
-        FairV2Ingress, FairV2IngressDequeueDisposition, FairV2IngressOwnershipEvidence,
-        InboundBlockMessage,
+        FairV2Ingress, FairV2IngressDequeueDisposition, InboundBlockMessage,
         output_guard::ConsensusOutputGuard,
         serviced_candidate_store::{LeaderWireLifecycleRestore, LeaderWireLifecycleStoreGate},
         v2_apply::RecoveredDecisionApplyWorkerResultV1,
@@ -66,9 +53,9 @@ use crate::{
         },
         v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig, SerializedV2Runtime},
         v2_worker::{
-            CertifiedServeAdmission, CertifiedServeIngressGate, CertifiedServeNegativeOutcome,
-            CertifiedServePrepareError, DurableExactOutputServiceOwner,
-            KuraReplicaAdvertRefreshOwner, PreparedRecoveredDecisionApplyCompletionV1,
+            CertifiedServeIngressGate, CertifiedServeNegativeOutcome, CertifiedServePrepareError,
+            DurableExactOutputServiceOwner, KuraReplicaAdvertRefreshOwner,
+            PreparedRecoveredDecisionApplyCompletionV1,
             PreparedRecoveredDecisionFetchBodyCompletionV1,
             PreparedRecoveredLifecycleSignCompletionV1, ProductionV2Services,
             RecoveredDecisionApplyDeferredRetryV1, RecoveredLifecycleCompletionTakeV1,
@@ -76,11 +63,18 @@ use crate::{
         },
     },
 };
-
-use crate::sumeragi::v2_runner::LifecycleCurrentRunnerTurn;
 #[cfg(test)]
-use crate::sumeragi::v2_runner::LifecycleRunnerRankSnapshot;
-
+use preactivation::ProductionLifecyclePreActivationFailStopScopeV1;
+pub(in crate::sumeragi) use preactivation::{
+    ProductionLifecyclePreActivationErrorV1, ProductionPendingKuraApplyInstallErrorV1,
+};
+#[cfg(test)]
+pub(in crate::sumeragi) use turn_driver::ProductionPreparedCertifiedServeTestSettlementV1;
+pub(in crate::sumeragi) use turn_driver::{
+    ProductionLifecycleCompletionSelectionV1, ProductionLifecycleCompletionTurnV1,
+    ProductionLifecycleIngressSelectionV1, ProductionLifecycleIngressTurnV1,
+    ProductionPreparedOrdinaryIngressTurnV1, ProductionRecoveredLifecycleSignCompletionSelectionV1,
+};
 /// All non-lifecycle dependencies consumed by one production height launch.
 ///
 /// The immutable height context, roster proofs, adapter, and body store are not
@@ -106,7 +100,6 @@ pub(in crate::sumeragi) struct ProductionLifecycleLaunchInputsV1 {
     kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
     exact_output_handoff_owner: DurableExactOutputServiceOwner,
 }
-
 impl ProductionLifecycleLaunchInputsV1 {
     /// Bind the runner-owned service dependencies for one consuming launch.
     #[allow(clippy::too_many_arguments)]
@@ -152,7 +145,6 @@ impl ProductionLifecycleLaunchInputsV1 {
         }
     }
 }
-
 /// RAII owner of both exact durable ingress gates installed for this launch.
 ///
 /// Leader-wire recovery binds before runtime and service construction. The
@@ -165,7 +157,6 @@ struct ProductionLeaderWireIngressBindingV1 {
     gate: Option<Arc<LeaderWireLifecycleStoreGate>>,
     certified_serve_gate: Option<CertifiedServeIngressGate>,
 }
-
 impl ProductionLeaderWireIngressBindingV1 {
     fn bind(
         ingress: Arc<FairV2Ingress>,
@@ -191,7 +182,6 @@ impl ProductionLeaderWireIngressBindingV1 {
             certified_serve_gate: None,
         })
     }
-
     /// Join the exact service-owned Serve gate to the retained leader gate.
     fn bind_certified_serve(mut self, gate: CertifiedServeIngressGate) -> Result<Self, String> {
         if self.gate.is_none() || self.certified_serve_gate.is_some() {
@@ -205,7 +195,6 @@ impl ProductionLeaderWireIngressBindingV1 {
         self.certified_serve_gate = Some(gate);
         Ok(self)
     }
-
     fn retire(&mut self) -> Result<(), String> {
         match (self.gate.as_ref(), self.certified_serve_gate.as_ref()) {
             (None, None) => Ok(()),
@@ -240,7 +229,6 @@ impl ProductionLeaderWireIngressBindingV1 {
         }
     }
 }
-
 impl Drop for ProductionLeaderWireIngressBindingV1 {
     fn drop(&mut self) {
         if let Err(error) = self.retire() {
@@ -251,7 +239,6 @@ impl Drop for ProductionLeaderWireIngressBindingV1 {
         }
     }
 }
-
 /// Opaque running stack produced by the sole consuming lifecycle launch.
 ///
 /// Construction does not publish status or open ingress. The separate
@@ -291,7 +278,6 @@ pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {
     #[allow(dead_code)]
     leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1,
 }
-
 /// Result of draining one dedicated recovered Apply worker completion.
 #[allow(variant_size_differences)]
 #[must_use = "a deferred recovered Apply completion must remain retained"]
@@ -303,7 +289,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyCompletionV1 {
     /// A guarded missing-sidecar result awaits exact fetch progress or queue re-entry.
     Deferred(RetainedRecoveredDecisionApplyDeferredV1),
 }
-
 /// Result of settling one lifecycle-owned recovered Decision Fetch body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "recovered Decision Fetch settlement result must be observed"]
@@ -317,7 +302,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchStoreSettlementV1 {
     /// Fetch, Store, ingress, request, adapter, registry, and worker owners advanced.
     Applied,
 }
-
 /// Pre-publication adapter preparation for a recovered signed Broadcast.
 ///
 /// This bounded seam proves the exact single-Broadcast reducer shape but does
@@ -332,7 +316,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignBroadcastPreparatio
     /// The completion or reducer successor is outside the single-Broadcast cut.
     Retry,
 }
-
 /// Result of durably settling one recovered Sign into its exact Broadcast child.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "recovered Sign Broadcast settlement result must be observed"]
@@ -349,7 +332,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignBroadcastSettlement
     /// separate restart-safe refanout transaction.
     Applied,
 }
-
 /// Result of atomically settling a recovered Proposal into Broadcast plus Sign.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "recovered Proposal two-child settlement result must be observed"]
@@ -365,7 +347,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleProposalBroadcastAndSig
     /// Ledger, coordinator, registry, adapter, worker, and exact output advanced.
     Applied,
 }
-
 /// Result of settling one recovered Prepare Vote into Broadcast plus Commit Sign.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "recovered Vote two-child settlement result must be observed"]
@@ -380,7 +361,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleVoteBroadcastAndSignSet
     /// The Ready Broadcast remains the durable source for typed refanout.
     Applied,
 }
-
 /// Stable pre-fsync settlement diagnostic; it contains no completion parts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchStoreSettlementFailureV1 {
@@ -399,7 +379,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchStoreSettlementFail
     /// Consensus output was already closed before publication.
     OutputClosed,
 }
-
 /// Opaque guarded missing-sidecar result.
 ///
 /// There is intentionally no parts or acknowledgement API. The sole retry
@@ -410,13 +389,11 @@ pub(in crate::sumeragi) struct RetainedRecoveredDecisionApplyDeferredV1 {
     completion: PreparedRecoveredDecisionApplyCompletionV1,
     sidecar: RecoveredDecisionApplySidecarWaitV1,
 }
-
 struct RecoveredDecisionApplySidecarWaitV1 {
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
     reference: CertifiedMergeLedgerReference,
 }
-
 impl RecoveredDecisionApplySidecarWaitV1 {
     fn register(
         &self,
@@ -429,7 +406,6 @@ impl RecoveredDecisionApplySidecarWaitV1 {
         )
     }
 }
-
 /// Result of retrying one exact recovered Apply after its merge sidecar arrives.
 #[allow(variant_size_differences)]
 #[must_use = "an unavailable retry still owns the recovered Apply completion"]
@@ -441,7 +417,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyRetryV1 {
     /// The dedicated worker index changed and consensus was closed for restart.
     RestartRequired,
 }
-
 impl RetainedRecoveredDecisionApplyDeferredV1 {
     /// Retry only after the exact authenticated sidecar is locally durable.
     ///
@@ -469,7 +444,6 @@ impl RetainedRecoveredDecisionApplyDeferredV1 {
         }
     }
 }
-
 /// Fail-stop class while durably terminalizing a recovered Apply completion.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyCompletionErrorV1 {
@@ -492,7 +466,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyCompletionErrorV1 {
     #[error("recovered Apply terminal LedgerV1 publication failed")]
     Ledger,
 }
-
 /// Move-only authority reserved for the final one-shot runner activation.
 ///
 /// Launch construction retains this authority, but only this launch module
@@ -503,13 +476,10 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyCompletionErrorV1 {
 pub(in crate::sumeragi) struct ProductionV2CompletionObserverActivationPermitV1 {
     _seal: ProductionV2CompletionObserverActivationPermitSealV1,
 }
-
 struct ProductionV2CompletionObserverActivationPermitSealV1;
-
 impl Drop for ProductionV2CompletionObserverActivationPermitSealV1 {
     fn drop(&mut self) {}
 }
-
 /// Move-only authority for refreshing the live Certified-Serve retirement cut.
 ///
 /// Only the lifecycle finalization transaction can mint this value. The
@@ -564,7 +534,6 @@ impl ProductionLifecycleServeRetirementAuthenticationPermitV1 {
         }
     }
 }
-
 impl LaunchedProductionLifecycleV1 {
     /// Sign, reserve, claim, and publish the recovered Decision Fetch request.
     #[cfg(not(test))]
@@ -578,7 +547,6 @@ impl LaunchedProductionLifecycleV1 {
         self.owner
             .dispatch_recovered_decision_fetch(&self.services, &mut self.executor, runner)
     }
-
     /// Exercise recovered Decision Fetch request dispatch with a fixture cursor.
     #[cfg(test)]
     pub(in crate::sumeragi) fn dispatch_recovered_decision_fetch(
@@ -591,7 +559,6 @@ impl LaunchedProductionLifecycleV1 {
         self.owner
             .dispatch_recovered_decision_fetch(&self.services, &mut self.executor, runner)
     }
-
     /// Persist one selected recovered Decision Fetch response at the current Ingress cursor.
     #[cfg(not(test))]
     #[allow(clippy::result_large_err)]
@@ -610,7 +577,6 @@ impl LaunchedProductionLifecycleV1 {
             runner,
         )
     }
-
     /// Exercise recovered Decision Fetch Phase A with a fixture Ingress cursor.
     #[cfg(test)]
     #[allow(clippy::result_large_err)]
@@ -629,7 +595,6 @@ impl LaunchedProductionLifecycleV1 {
             runner,
         )
     }
-
     /// Park at most one guarded durable recovered Decision Fetch body.
     /// No raw completion or acknowledgement surface exists; the fixed Store
     /// settlement below is the only consuming transaction.
@@ -648,7 +613,6 @@ impl LaunchedProductionLifecycleV1 {
         self.recovered_decision_fetch_body_completion = Some(completion);
         Ok(true)
     }
-
     /// Settle the parked recovered Decision Fetch into one durable Store successor.
     ///
     /// Every semantic, owner, and exact-queue check precedes LedgerV1 fsync.
@@ -670,7 +634,6 @@ impl LaunchedProductionLifecycleV1 {
         let Some(completion) = recovered_decision_fetch_body_completion.take() else {
             return ProductionRecoveredDecisionFetchStoreSettlementV1::None;
         };
-
         macro_rules! retry {
             ($failure:expr) => {{
                 assert!(recovered_decision_fetch_body_completion.is_none());
@@ -678,7 +641,6 @@ impl LaunchedProductionLifecycleV1 {
                 return ProductionRecoveredDecisionFetchStoreSettlementV1::Retry($failure);
             }};
         }
-
         if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
             retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Owner);
         }
@@ -691,7 +653,6 @@ impl LaunchedProductionLifecycleV1 {
         let Some(body) = completion.completion().project_store_body_authority() else {
             retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Body);
         };
-
         let selector = match executor.prepare_lifecycle_ingress_selector(
             &leader_wire_ingress_binding.ingress,
             physical_ordinal,
@@ -773,7 +734,6 @@ impl LaunchedProductionLifecycleV1 {
             drop(locked_dequeue);
             retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::OutputClosed);
         };
-
         if transition.persist_exact_successor().is_err() {
             drop(transition);
             owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
@@ -783,7 +743,6 @@ impl LaunchedProductionLifecycleV1 {
             drop(operation);
             return ProductionRecoveredDecisionFetchStoreSettlementV1::RestartRequired;
         }
-
         transition.commit_after_publication();
         executor.commit_recovered_decision_fetch_owner_retirement(retirement);
         locked_dequeue.commit();
@@ -791,7 +750,6 @@ impl LaunchedProductionLifecycleV1 {
         operation.complete();
         ProductionRecoveredDecisionFetchStoreSettlementV1::Applied
     }
-
     /// Reserve, claim, and queue one recovered Sign at the current Completion cursor.
     #[cfg(not(test))]
     pub(in crate::sumeragi) fn dispatch_recovered_lifecycle_sign(
@@ -804,7 +762,6 @@ impl LaunchedProductionLifecycleV1 {
         self.owner
             .dispatch_recovered_lifecycle_sign(&self.services, &self.executor, runner)
     }
-
     /// Exercise recovered Sign dispatch with a fixture-owned Completion cursor.
     #[cfg(test)]
     pub(in crate::sumeragi) fn dispatch_recovered_lifecycle_sign(
@@ -817,7 +774,6 @@ impl LaunchedProductionLifecycleV1 {
         self.owner
             .dispatch_recovered_lifecycle_sign(&self.services, &self.executor, runner)
     }
-
     /// Park at most one guarded recovered Sign completion under this owner.
     ///
     /// Repeated calls retain the existing token and generic completion drains
@@ -836,7 +792,6 @@ impl LaunchedProductionLifecycleV1 {
         self.recovered_lifecycle_sign_completion = Some(completion);
         Ok(true)
     }
-
     /// Preflight the parked Sign's exact adapter successor.
     ///
     /// This deliberately drops the publication-inert preview before returning.
@@ -868,7 +823,6 @@ impl LaunchedProductionLifecycleV1 {
         drop(preview);
         ProductionRecoveredLifecycleSignBroadcastPreparationV1::Prepared
     }
-
     /// Settle the parked recovered Sign into one durable signed Broadcast.
     ///
     /// The claimed Sign carrier, adapter preview, and Broadcast child remain
@@ -891,7 +845,6 @@ impl LaunchedProductionLifecycleV1 {
         let Some(completion) = recovered_lifecycle_sign_completion.take() else {
             return ProductionRecoveredLifecycleSignBroadcastSettlementV1::None;
         };
-
         macro_rules! retry {
             () => {{
                 assert!(recovered_lifecycle_sign_completion.is_none());
@@ -906,7 +859,6 @@ impl LaunchedProductionLifecycleV1 {
                 return ProductionRecoveredLifecycleSignBroadcastSettlementV1::RestartRequired;
             }};
         }
-
         if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
             restart!();
         }
@@ -955,7 +907,6 @@ impl LaunchedProductionLifecycleV1 {
             drop(transition);
             restart!();
         };
-
         if transition.persist_exact_successor().is_err() {
             drop(transition);
             owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
@@ -964,13 +915,11 @@ impl LaunchedProductionLifecycleV1 {
             drop(operation);
             return ProductionRecoveredLifecycleSignBroadcastSettlementV1::RestartRequired;
         }
-
         transition.commit_after_publication();
         completion.acknowledge_after_publication();
         operation.complete();
         ProductionRecoveredLifecycleSignBroadcastSettlementV1::Applied
     }
-
     /// Settle a recovered Prepare Vote into Broadcast plus Commit Sign.
     ///
     /// The next Vote body/WAL authority and both registry children remain
@@ -991,7 +940,6 @@ impl LaunchedProductionLifecycleV1 {
         let Some(completion) = recovered_lifecycle_sign_completion.take() else {
             return ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::None;
         };
-
         macro_rules! retry {
             () => {{
                 assert!(recovered_lifecycle_sign_completion.is_none());
@@ -1009,7 +957,6 @@ impl LaunchedProductionLifecycleV1 {
                 return ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::RestartRequired;
             }};
         }
-
         if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
             restart!();
         }
@@ -1065,13 +1012,11 @@ impl LaunchedProductionLifecycleV1 {
             drop(operation);
             return ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::RestartRequired;
         }
-
         transition.commit_after_publication();
         completion.acknowledge_after_publication();
         operation.complete();
         ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::Applied
     }
-
     /// Fsync an initial Proposal `PrepareIntent`, then publish both successors.
     ///
     /// The Proposal control message and canonical chunks are reserved before
@@ -1093,7 +1038,6 @@ impl LaunchedProductionLifecycleV1 {
         let Some(completion) = recovered_lifecycle_sign_completion.take() else {
             return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::None;
         };
-
         macro_rules! restart {
             () => {{
                 owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
@@ -1104,7 +1048,6 @@ impl LaunchedProductionLifecycleV1 {
                 return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired;
             }};
         }
-
         if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
             restart!();
         }
@@ -1154,7 +1097,6 @@ impl LaunchedProductionLifecycleV1 {
                 restart!();
             }
         };
-
         let Some(wal_permit) = output.prepare_wal_append_permit() else {
             drop(body);
             drop(preview);
@@ -1205,13 +1147,11 @@ impl LaunchedProductionLifecycleV1 {
             drop(completion);
             return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired;
         }
-
         transition.commit_after_publication();
         completion.acknowledge_after_publication();
         output.commit_after_publication();
         ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied
     }
-
     /// Settle a recovered Proposal into one Broadcast and one WAL-backed Sign.
     ///
     /// The signed Proposal and its canonical chunks reserve one aggregate
@@ -1234,7 +1174,6 @@ impl LaunchedProductionLifecycleV1 {
         let Some(completion) = recovered_lifecycle_sign_completion.take() else {
             return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::None;
         };
-
         macro_rules! retry {
             () => {{
                 assert!(recovered_lifecycle_sign_completion.is_none());
@@ -1252,7 +1191,6 @@ impl LaunchedProductionLifecycleV1 {
                 return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired;
             }};
         }
-
         if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
             restart!();
         }
@@ -1329,7 +1267,6 @@ impl LaunchedProductionLifecycleV1 {
                 retry!();
             }
         };
-
         if transition.persist_exact_successor().is_err() {
             drop(transition);
             owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
@@ -1338,13 +1275,11 @@ impl LaunchedProductionLifecycleV1 {
             drop(output);
             return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired;
         }
-
         transition.commit_after_publication();
         completion.acknowledge_after_publication();
         output.commit_after_publication();
         ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied
     }
-
     /// Refanout one durable recovered signed Broadcast at the Completion cursor.
     ///
     /// Success parks only the live coordinator row. LedgerV1 deliberately
@@ -1361,7 +1296,6 @@ impl LaunchedProductionLifecycleV1 {
         self.owner
             .refanout_recovered_lifecycle_signed_broadcast(&self.services, runner)
     }
-
     /// Exercise durable recovered Broadcast refanout with a fixture-owned cursor.
     #[cfg(test)]
     pub(in crate::sumeragi) fn refanout_recovered_lifecycle_signed_broadcast(
@@ -1374,7 +1308,6 @@ impl LaunchedProductionLifecycleV1 {
         self.owner
             .refanout_recovered_lifecycle_signed_broadcast(&self.services, runner)
     }
-
     /// Reserve, claim, and queue the recovered Apply at the live Completion cursor.
     #[cfg(not(test))]
     pub(in crate::sumeragi) fn dispatch_recovered_decision_apply(
@@ -1387,7 +1320,6 @@ impl LaunchedProductionLifecycleV1 {
         self.owner
             .dispatch_recovered_decision_apply(&self.services, &self.executor, runner)
     }
-
     /// Drive and retry one exact missing-sidecar recovered Apply owner.
     ///
     /// The completion token no longer borrows the whole service owner: its
@@ -1433,7 +1365,6 @@ impl LaunchedProductionLifecycleV1 {
             }
         }
     }
-
     /// Exercise recovered Apply dispatch with a fixture-owned runner observation.
     #[cfg(test)]
     pub(in crate::sumeragi) fn dispatch_recovered_decision_apply(
@@ -1446,7 +1377,6 @@ impl LaunchedProductionLifecycleV1 {
         self.owner
             .dispatch_recovered_decision_apply(&self.services, &self.executor, runner)
     }
-
     /// Drain and durably terminalize one lifecycle-owned recovered Apply.
     ///
     /// Applied results are rejoined to the exact claimed carrier before the
@@ -1486,14 +1416,12 @@ impl LaunchedProductionLifecycleV1 {
         let owner = &mut self.owner;
         let executor = &mut self.executor;
         let services = &mut self.services;
-
         macro_rules! restart {
             ($failure:expr) => {{
                 owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
                 return Err($failure);
             }};
         }
-
         if let RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference } =
             completion.result()
         {
@@ -1528,7 +1456,6 @@ impl LaunchedProductionLifecycleV1 {
         let RecoveredDecisionApplyWorkerResultV1::Applied(applied) = completion.result() else {
             unreachable!("recovered Apply result variants are exhausted above")
         };
-
         if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
             restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Owner);
         }
@@ -1572,7 +1499,6 @@ impl LaunchedProductionLifecycleV1 {
                 restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Ledger);
             }
         }
-
         owner.coordinator = staged;
         let finality = adapter.commit_after_durable_settlement();
         let status = executor.commit_recovered_decision_apply_finality(finality);
@@ -1585,7 +1511,6 @@ impl LaunchedProductionLifecycleV1 {
         Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied)
     }
 }
-
 /// Fail-stop failure while consuming the recovered lifecycle owner into I/O.
 #[derive(Debug, Error)]
 #[must_use = "a failed consuming launch requires process restart"]
@@ -1612,7 +1537,6 @@ pub(in crate::sumeragi) enum ProductionLifecycleLaunchErrorV1 {
     #[error("launched lifecycle stack lost exact process ownership")]
     OwnershipMismatch,
 }
-
 /// Fail-stop failure while crossing the one-shot live-height boundary.
 #[derive(Debug, Error)]
 #[must_use = "failed lifecycle activation requires process restart"]
@@ -2314,7 +2238,6 @@ impl ProductionLifecycleCleanupReadyV1 {
         }
     }
 }
-
 impl ProductionLifecycleOwnerV1 {
     fn launch_local_identity_matches(
         roster: &[wire::ValidatorPower],
@@ -2331,7 +2254,6 @@ impl ProductionLifecycleOwnerV1 {
             .and_then(|position| u32::try_from(position).ok());
         local_validator.is_none_or(|observed| roster_position == Some(observed))
     }
-
     /// Consume the sealed adapter and exact body store into one running stack.
     ///
     /// One armed fail-stop operation spans runtime, executor, and worker
@@ -2426,7 +2348,6 @@ impl ProductionLifecycleOwnerV1 {
             context.height,
         )
         .map_err(ProductionLifecycleLaunchErrorV1::LeaderWire)?;
-
         let adapter_startup = self
             .adapter_startup
             .take()
@@ -2542,19 +2463,16 @@ impl ProductionLifecycleOwnerV1 {
         })
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Hash, HashOf};
-    use tempfile::TempDir;
-
     use super::*;
     use crate::sumeragi::{
         v2::LocalProposalDirective,
         v2_lifecycle_coordinator::reviewed_lifecycle_ledger_source_for_test,
         v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
     };
-
+    use iroha_crypto::{Hash, HashOf};
+    use tempfile::TempDir;
     #[test]
     fn preactivation_fail_stop_scope_closes_on_drop_and_disarms_on_complete() {
         let dropped_guard = ConsensusOutputGuard::isolated();
@@ -2665,7 +2583,6 @@ mod tests {
             &observer_key,
         ));
     }
-
     fn empty_leader_wire_gate_for_binding_test(
         directory: &TempDir,
         filename: &str,
@@ -2702,7 +2619,6 @@ mod tests {
         )
         .expect("open empty leader-wire binding fixture")
     }
-
     #[test]
     fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failure() {
         const HEIGHT: wire::Height = 7;
@@ -2718,7 +2634,6 @@ mod tests {
         ingress.require_certified_serve_gate();
         ingress.require_leader_wire_lifecycle_gate();
         ingress.state.lock().leader_wire_max_chunk_count = 2;
-
         let (first_serve_gate, first_ordinals) =
             crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
         let (first_gate, first_restore) = empty_leader_wire_gate_for_binding_test(
@@ -2824,7 +2739,6 @@ mod tests {
                 "a failed joint join must drop the retained leader binding"
             );
         }
-
         let (incumbent_gate, incumbent_restore) = empty_leader_wire_gate_for_binding_test(
             &directory,
             "incumbent.wal",
@@ -2874,7 +2788,6 @@ mod tests {
             .unbind_height_ingress_gates(&incumbent_serve_gate, &incumbent_gate)
             .expect("clean up both incumbent bindings");
     }
-
     #[test]
     fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         let source = concat!(
@@ -2914,7 +2827,6 @@ mod tests {
             .split_once("// COMPLETE_TIP_BOUND_SUCCESSOR_LAUNCH_END")
             .expect("the bound CompleteTip launch region has one end")
             .0;
-
         let bind = bound_launch
             .find("impl BoundRecoveredCompleteTipSuccessorOwnerV1")
             .expect("the bound H+1 owner has one launch implementation");
@@ -2987,7 +2899,6 @@ mod tests {
             );
         }
         assert_eq!(bound_launch.matches("owner.launch(inputs)?").count(), 1);
-
         assert!(source.contains("authenticated_genesis: Option<AuthenticatedGenesisBodyV1>,"));
         assert_eq!(
             source
@@ -3026,7 +2937,6 @@ mod tests {
                 "launch inputs expose caller-selected durable authority {forbidden}"
             );
         }
-
         let launch = source
             .split_once("pub(in crate::sumeragi) fn launch(")
             .expect("the owner has one consuming launch")
@@ -3050,6 +2960,9 @@ mod tests {
         let registry_check = launch
             .find("exactly_covers_recovered_ready_work(&self.coordinator)")
             .unwrap();
+        let apply_service_check = launch
+            .find("self.apply_service.as_ref().is_some_and(|service| {")
+            .expect("launch rejoins the retained Apply service to the recovered lifecycle");
         let storage_paths = launch
             .find("binding.storage_paths_for_launch(inputs.kura.as_ref())")
             .expect("launch derives paths from the exact recovery-owned Kura seal");
@@ -3124,7 +3037,8 @@ mod tests {
                 && apply_identity < registry_check
         );
         assert!(
-            apply_identity < storage_paths
+            kura_check < apply_service_check
+                && apply_service_check < storage_paths
                 && storage_paths < adapter_wal
                 && adapter_wal < restore_ordinals
                 && restore_ordinals < producer_high_water
@@ -3207,7 +3121,6 @@ mod tests {
         assert!(safety_open < kura_open && kura_open < fixture_open);
         assert!(fixture_open < serviced_mint && serviced_mint < serviced_open);
         assert!(serviced_open < wal_replay);
-
         for capability in [
             "SafetyWalServicedCandidateStoreAuthority",
             "SafetyWalLeaderWireStoreAuthority",
@@ -3315,6 +3228,8 @@ mod tests {
                 && worker < identity
                 && identity < complete
         );
+        assert!(launch.contains("inputs.kura,\n            apply_service,"));
+        assert!(!launch.contains("V2ApplyService::new("));
         assert!(take_apply < worker_permit && worker_permit < worker);
         assert!(!launch.contains("inputs.block_cadence"));
         assert!(!launch.contains("genesis_account_for_launch"));
@@ -4536,7 +4451,6 @@ mod tests {
         assert!(!source.contains("fn adapter("));
         assert!(!source.contains("debug_assert!(startup_effects.is_empty())"));
     }
-
     #[test]
     fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
         let scheduler_source = include_str!("v2_lifecycle_scheduler_inputs.rs");
@@ -4545,7 +4459,6 @@ mod tests {
         let worker_source = include_str!("v2_worker.rs");
         let launch_source = include_str!("v2_lifecycle_launch.rs");
         let effects_source = include_str!("v2_effects.rs");
-
         let dispatch = scheduler_source
             .split_once("fn dispatch_recovered_lifecycle_sign_with_runner_debt(")
             .expect("production owner has one recovered Sign dispatch transaction")
@@ -4627,7 +4540,6 @@ mod tests {
                 "recovered Sign dispatch exposes forbidden raw authority {forbidden}"
             );
         }
-
         let phase_carrier = registry_source
             .split_once("impl DurableRecoveredWalSignWork {")
             .expect("PhaseVote carrier has one exactness implementation")
@@ -4663,7 +4575,6 @@ mod tests {
                 "PhaseVote parent rejoin omitted {required}"
             );
         }
-
         let identity = registry_source
             .split_once("impl RecoveredLifecycleSignDispatchIdentityV1 {")
             .expect("recovered Sign identity has one sealed implementation")
@@ -4675,7 +4586,6 @@ mod tests {
         assert!(identity.contains("request: request.clone()"));
         assert!(!identity.contains("tag.view() =="));
         assert!(!identity.contains("vote.round.view"));
-
         let task = worker_source
             .split_once("pub(in crate::sumeragi) struct RecoveredLifecycleSignTaskV1 {")
             .expect("worker has one opaque recovered Sign task")
@@ -4761,7 +4671,6 @@ mod tests {
             .0;
         assert_eq!(capacity.matches("operation.complete()").count(), 5);
         assert!(!capacity.contains("drop(operation)"));
-
         let rollback = coordinator_source
             .split_once("fn rollback_unpublished_turn(&mut self, lease: &TurnLease) -> bool {")
             .expect("coordinator has one unpublished-claim rollback")
@@ -4772,7 +4681,6 @@ mod tests {
         assert!(rollback.contains("lease.output_reservation.is_some()"));
         assert!(rollback.contains("assert!(\n            inserted,"));
         assert!(!rollback.contains("debug_assert!"));
-
         for regression in [
             "fn recovered_lifecycle_signing_is_exact_and_class_sensitive_for_all_three_families()",
             "fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction()",
@@ -4791,7 +4699,6 @@ mod tests {
         assert!(effects_source.contains(
             "a non-Completion runner cursor cannot claim or mutate a recovered Sign owner"
         ));
-
         let settlement = launch_source
             .split_once("pub(in crate::sumeragi) fn settle_recovered_lifecycle_sign_broadcast(")
             .expect("recovered Sign has one durable Broadcast settlement")
@@ -4841,7 +4748,6 @@ mod tests {
         let tail = &settlement[coordinator_commit..];
         assert!(!tail.contains("return "));
         assert!(!tail.contains(".is_err()"));
-
         let refanout = scheduler_source
             .split_once("fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(")
             .expect("durable Broadcast has one typed refanout transaction")
@@ -4902,7 +4808,6 @@ mod tests {
         assert!(!refanout.contains("exact_ready.len() != 2"));
         assert!(!refanout.contains("persist_exact_successor"));
         assert!(!refanout.contains("TurnOutcome::Terminal"));
-
         let launched = launch_source
             .split_once("pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {")
             .expect("launched stack has one retained-owner declaration")
@@ -4924,7 +4829,6 @@ mod tests {
         assert_recovered_proposal_prepare_wal_settlement_is_restart_closed();
         assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart_closed();
     }
-
     fn assert_recovered_vote_broadcast_and_sign_settlement_is_restart_closed() {
         let source = include_str!("v2_lifecycle_launch.rs");
         let settlement = source
@@ -4987,7 +4891,6 @@ mod tests {
         assert!(!tail.contains(".is_err()"));
         assert!(!tail.contains('?'));
     }
-
     fn assert_recovered_proposal_prepare_wal_settlement_is_restart_closed() {
         let source = include_str!("v2_lifecycle_launch.rs");
         let settlement = source
@@ -5067,7 +4970,6 @@ mod tests {
         assert!(!tail.contains(".is_err()"));
         assert!(!tail.contains('?'));
     }
-
     fn assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart_closed() {
         let source = include_str!("v2_lifecycle_launch.rs");
         let settlement = source
@@ -5138,7 +5040,6 @@ mod tests {
         assert!(!tail.contains(".is_err()"));
         assert!(!tail.contains("?"));
     }
-
     #[test]
     fn recovered_decision_fetch_dispatch_reserves_capacity_before_claim_and_failures_leave_no_mutation()
      {
@@ -5166,7 +5067,6 @@ mod tests {
         assert!(dispatch.contains("output.abort_before_claim();"));
         assert!(dispatch.contains("rollback_unpublished_turn(&lease)"));
     }
-
     #[test]
     fn recovered_decision_fetch_queue_parks_generic_drain_and_extracts_only_dedicated_completion() {
         let worker = include_str!("v2_worker.rs");
@@ -5191,7 +5091,6 @@ mod tests {
         assert!(worker.contains("tracked.state = V2IoWorkState::CompletionPending;"));
         assert!(worker.contains("drain_recovered_decision_fetch_body_completion"));
     }
-
     #[test]
     fn recovered_decision_fetch_phase_a_rejects_foreign_ingress_cursor_before_mutation() {
         let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
@@ -5215,7 +5114,6 @@ mod tests {
         assert!(!wrapper[..handoff].contains("capture_lifecycle_capacity_rank"));
         assert!(!wrapper[..handoff].contains("prepare_recovered_decision_fetch_response_claim"));
     }
-
     #[test]
     fn recovered_decision_fetch_response_claim_precedes_assertion_only_queue_publication() {
         let effects = include_str!("v2_effects.rs");
@@ -5245,7 +5143,6 @@ mod tests {
         assert!(queue_commit.contains("assert!("));
         assert!(!queue_commit.contains("return Err"));
     }
-
     #[test]
     fn recovered_decision_fetch_store_settlement_is_restart_closed_and_tail_infallible() {
         let launch = include_str!("v2_lifecycle_launch.rs");
@@ -5317,7 +5214,6 @@ mod tests {
         assert!(!tail.contains("return "));
         assert!(!tail.contains("Result<"));
         assert!(!tail.contains(".is_err()"));
-
         let worker = include_str!("v2_worker.rs");
         let guarded = worker
             .split_once("impl GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1 {")
@@ -5343,7 +5239,6 @@ mod tests {
             .find("self.guarded.acknowledge_after_publication();")
             .expect("restart guard is disarmed after index removal");
         assert!(index < disarm);
-
         let ledger = include_str!("v2_lifecycle_ledger.rs");
         let open = include_str!("v2_lifecycle_open.rs");
         let registry_source = include_str!("v2_lifecycle_work_registry_validate_recovery.rs");

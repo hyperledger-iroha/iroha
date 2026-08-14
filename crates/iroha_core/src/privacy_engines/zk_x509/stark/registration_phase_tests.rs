@@ -1,5 +1,4 @@
 // Lexically included by `zk_x509::stark::tests` to preserve the existing libtest paths.
-
 #[test]
 fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
     let (statement, _, proof) = projection_fixture();
@@ -35,23 +34,19 @@ fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
         "update only when the canonical projection proof protocol intentionally changes"
     );
 }
-
 #[test]
 fn aggregate_proof_shape_rejects_empty_duplicate_and_reordered_group_material() {
     let mut changed = decode_fixture();
     changed.trace_groups.clear();
     assert_rejected(&changed);
-
     changed = decode_fixture();
     let duplicate_group = changed.trace_groups[0].clone();
     changed.trace_groups.push(duplicate_group);
     assert_rejected(&changed);
-
     let mut layout = fixture_aggregate_layout();
     layout.registered_segments.clear();
     assert!(layout.validate().is_err());
 }
-
 #[test]
 fn deterministic_proof_roundtrips_and_has_unique_post_grinding_queries() {
     let (statement, proof) = fixture();
@@ -97,7 +92,6 @@ fn deterministic_proof_roundtrips_and_has_unique_post_grinding_queries() {
         "update only when the canonical proof protocol intentionally changes"
     );
 }
-
 #[test]
 fn witness_and_entropy_failures_are_rejected_before_emission() {
     let statement = fixture_statement();
@@ -108,7 +102,6 @@ fn witness_and_entropy_failures_are_rejected_before_emission() {
         prove_zk_x509_io_segmented_stark_v1_with_rng(&statement, &changed, &mut rng),
         Err(ZkX509StarkErrorV1::IoWitness)
     ));
-
     let mut changed = fixture_witnesses();
     changed[1]
         .declaration
@@ -119,7 +112,6 @@ fn witness_and_entropy_failures_are_rejected_before_emission() {
         prove_zk_x509_io_segmented_stark_v1_with_rng(&statement, &changed, &mut rng),
         Err(ZkX509StarkErrorV1::WitnessStatementMismatch)
     ));
-
     assert!(matches!(
         prove_zk_x509_io_segmented_stark_v1_with_rng(
             &statement,
@@ -129,7 +121,6 @@ fn witness_and_entropy_failures_are_rejected_before_emission() {
         Err(ZkX509StarkErrorV1::RandomnessUnavailable)
     ));
 }
-
 #[test]
 fn exact_wire_rejects_truncation_trailing_magic_version_and_counts() {
     let (statement, proof) = fixture();
@@ -172,7 +163,6 @@ fn exact_wire_rejects_truncation_trailing_magic_version_and_counts() {
         Err(ZkX509StarkErrorV1::ProofTooLarge)
     ));
 }
-
 #[test]
 fn every_committed_column_family_and_opening_family_is_bound() {
     let mut changed = decode_fixture();
@@ -227,7 +217,6 @@ fn every_committed_column_family_and_opening_family_is_bound() {
     changed.trace_groups[0].aux_frontier[0][0] ^= 1;
     assert_rejected(&changed);
 }
-
 #[test]
 fn every_deep_value_order_omission_and_replay_is_rejected() {
     let canonical = decode_fixture();
@@ -254,7 +243,6 @@ fn every_deep_value_order_omission_and_replay_is_rejected() {
             assert_rejected(&changed);
         }
     }
-
     let mut reordered = canonical.clone();
     let group = &mut reordered.deep.trace_groups[0];
     core::mem::swap(&mut group.base_current, &mut group.base_next);
@@ -263,7 +251,6 @@ fn every_deep_value_order_omission_and_replay_is_rejected() {
     let group = &mut reordered.deep.trace_groups[0];
     core::mem::swap(&mut group.aux_current, &mut group.aux_next);
     assert_rejected(&reordered);
-
     let mut omitted = canonical.clone();
     omitted.deep.trace_groups[0].base_current.pop();
     assert!(matches!(
@@ -277,7 +264,6 @@ fn every_deep_value_order_omission_and_replay_is_rejected() {
         encode_zk_x509_segmented_stark_proof_v1(&duplicated, &fixture_aggregate_layout()),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
-
     let mut replay_rng = StdRng::from_seed([0xC7; 32]);
     let replay_bytes = prove_zk_x509_io_segmented_stark_v1_with_rng(
         &fixture().0,
@@ -292,7 +278,6 @@ fn every_deep_value_order_omission_and_replay_is_rejected() {
     spliced.deep = replay.deep;
     assert_rejected(&spliced);
 }
-
 #[test]
 fn every_projection_committed_column_and_opening_family_is_bound() {
     let mut changed = decode_projection_fixture();
@@ -347,47 +332,40 @@ fn every_projection_committed_column_and_opening_family_is_bound() {
     changed.trace_groups[0].aux_frontier[0][0] ^= 1;
     assert_projection_rejected(&changed);
 }
-
 #[test]
 fn invalid_projection_witnesses_and_entropy_fail_before_emission() {
     let (statement, witness) = crate::privacy_engines::zk_x509::projection_air::tests::fixture();
     let mut rng = StdRng::from_seed([0x31; 32]);
-
     let mut changed = witness.clone();
     changed.chain_spki_der[0][0] ^= 1;
     assert!(matches!(
         prove_zk_x509_projection_segmented_stark_v1_with_rng(&statement, &changed, &mut rng),
         Err(ZkX509StarkErrorV1::ProjectionWitness)
     ));
-
     let mut changed = witness.clone();
     changed.leaf_serial[0] ^= 1;
     assert!(matches!(
         prove_zk_x509_projection_segmented_stark_v1_with_rng(&statement, &changed, &mut rng),
         Err(ZkX509StarkErrorV1::ProjectionWitness)
     ));
-
     let mut changed = witness.clone();
     changed.disclosed_attribute_values[0][0] ^= 1;
     assert!(matches!(
         prove_zk_x509_projection_segmented_stark_v1_with_rng(&statement, &changed, &mut rng),
         Err(ZkX509StarkErrorV1::ProjectionWitness)
     ));
-
     let mut changed = witness.clone();
     changed.attribute_salts[0][0] ^= 1;
     assert!(matches!(
         prove_zk_x509_projection_segmented_stark_v1_with_rng(&statement, &changed, &mut rng),
         Err(ZkX509StarkErrorV1::ProjectionWitness)
     ));
-
     let mut changed = witness.clone();
     changed.chain_spki_der.pop();
     assert!(matches!(
         prove_zk_x509_projection_segmented_stark_v1_with_rng(&statement, &changed, &mut rng),
         Err(ZkX509StarkErrorV1::ProjectionWitness)
     ));
-
     assert!(matches!(
         prove_zk_x509_projection_segmented_stark_v1_with_rng(
             &statement,
@@ -397,40 +375,32 @@ fn invalid_projection_witnesses_and_entropy_fail_before_emission() {
         Err(ZkX509StarkErrorV1::RandomnessUnavailable)
     ));
 }
-
 #[test]
 fn multiproof_frontiers_reject_nonminimal_duplicate_reordered_and_superfluous_siblings() {
     let mut changed = decode_fixture();
     changed.trace_groups[0].base_frontier.pop();
     assert_rejected(&changed);
-
     changed = decode_fixture();
     let duplicate = changed.trace_groups[0].base_frontier[0];
     changed.trace_groups[0].base_frontier.push(duplicate);
     assert_rejected(&changed);
-
     changed = decode_fixture();
     changed.trace_groups[0].base_frontier[1] = changed.trace_groups[0].base_frontier[0];
     assert_rejected(&changed);
-
     changed = decode_fixture();
     changed.trace_groups[0].base_frontier.swap(0, 1);
     assert_rejected(&changed);
-
     changed = decode_fixture();
     let superfluous = changed.trace_groups[0].aux_frontier[0];
     changed.trace_groups[0].aux_frontier.insert(0, superfluous);
     assert_rejected(&changed);
-
     changed = decode_fixture();
     changed.composition_frontiers[0].swap(0, 1);
     assert_rejected(&changed);
-
     changed = decode_fixture();
     changed.fri_lanes[0].round_frontiers[0].swap(0, 1);
     assert_rejected(&changed);
 }
-
 #[test]
 fn query_reordering_duplication_grinding_and_composition_mutations_reject() {
     let mut changed = decode_fixture();
@@ -449,7 +419,6 @@ fn query_reordering_duplication_grinding_and_composition_mutations_reject() {
     changed.fri_lanes[0].roots[0][0] ^= 1;
     assert_rejected(&changed);
 }
-
 #[test]
 fn noncanonical_fields_and_terminal_high_degree_reject() {
     let mut changed = decode_fixture();
@@ -459,7 +428,6 @@ fn noncanonical_fields_and_terminal_high_degree_reject() {
         encode_zk_x509_segmented_stark_proof_v1(&changed, &fixture_aggregate_layout()),
         Err(ZkX509StarkErrorV1::NonCanonicalField)
     ));
-
     changed = decode_fixture();
     changed.deep.trace_groups[0].base_current[0][0] =
         crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
@@ -467,7 +435,6 @@ fn noncanonical_fields_and_terminal_high_degree_reject() {
         encode_zk_x509_segmented_stark_proof_v1(&changed, &fixture_aggregate_layout()),
         Err(ZkX509StarkErrorV1::NonCanonicalField)
     ));
-
     changed = decode_fixture();
     changed.fri_lanes[0].terminal_values[TERMINAL_SIZE - 1][0] ^= 1;
     let terminal =
@@ -483,7 +450,6 @@ fn noncanonical_fields_and_terminal_high_degree_reject() {
         Err(ZkX509StarkErrorV1::FriDegree)
     ));
 }
-
 #[test]
 fn every_public_topology_and_public_byte_change_rejects_replay() {
     let proof = &fixture().1;
@@ -491,23 +457,19 @@ fn every_public_topology_and_public_byte_change_rejects_replay() {
     declarations[1].public_value.as_mut().expect("public")[0] ^= 1;
     let statement = ZkX509IoStarkStatementV1::new(declarations).expect("valid changed public");
     assert!(verify_zk_x509_io_segmented_stark_v1(&statement, proof).is_err());
-
     let mut declarations = fixture().0.declarations.clone();
     declarations[0].producer.instance += 1;
     let statement = ZkX509IoStarkStatementV1::new(declarations).expect("valid changed producer");
     assert!(verify_zk_x509_io_segmented_stark_v1(&statement, proof).is_err());
-
     let mut declarations = fixture().0.declarations.clone();
     declarations[0].consumers[0].instance += 1;
     let statement = ZkX509IoStarkStatementV1::new(declarations).expect("valid changed consumer");
     assert!(verify_zk_x509_io_segmented_stark_v1(&statement, proof).is_err());
 }
-
 #[test]
 fn every_projection_public_field_and_output_rejects_proof_replay() {
     let (baseline, _, proof) = projection_fixture();
     let mut mutations = Vec::<(&str, IrohaZkX509StarkP256StatementV1)>::new();
-
     let mut changed = baseline.clone();
     changed.context.network_id = NetworkId::from_genesis_hash(
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x92; 32])),
@@ -534,7 +496,6 @@ fn every_projection_public_field_and_output_rejects_proof_replay() {
     let mut changed = baseline.clone();
     changed.context.engine_manifest_digest = PrivacyEngineManifestDigestV1::new([0x86; 32]);
     mutations.push(("context.engine_manifest_digest", changed));
-
     let mut changed = baseline.clone();
     changed.trust_anchor_id = PrivacyIssuerIdV1::new([0x87; 32]);
     mutations.push(("trust_anchor_id", changed));
@@ -560,7 +521,6 @@ fn every_projection_public_field_and_output_rejects_proof_replay() {
     let mut changed = baseline.clone();
     changed.crl_record_epoch += 1;
     mutations.push(("crl_record_epoch", changed));
-
     let mut changed = baseline.clone();
     changed.subject_public_key_digest = PrivacyCertificateKeyDigestV1::new([0x8C; 32]);
     mutations.push(("subject_public_key_digest", changed));
@@ -589,7 +549,6 @@ fn every_projection_public_field_and_output_rejects_proof_replay() {
         .extended_key_usages
         .insert(1, PrivacyX509ExtendedKeyUsageV1::DocumentSigning);
     mutations.push(("extended_key_usages", changed));
-
     for disclosure in 0..baseline.disclosed_attributes.len() {
         let mut changed = baseline.clone();
         changed.disclosed_attributes[disclosure].index = match disclosure {
@@ -605,7 +564,6 @@ fn every_projection_public_field_and_output_rejects_proof_replay() {
     let mut changed = baseline.clone();
     changed.disclosed_attributes.clear();
     mutations.push(("disclosed_attributes.length", changed));
-
     let mut changed = baseline.clone();
     changed.presentation_not_before_unix_seconds += 1;
     mutations.push(("presentation_not_before_unix_seconds", changed));
@@ -621,7 +579,6 @@ fn every_projection_public_field_and_output_rejects_proof_replay() {
     let mut changed = baseline.clone();
     changed.certificate_nullifier = PrivacyNullifierV1::new([0x97; 32]);
     mutations.push(("certificate_nullifier", changed));
-
     for (field, statement) in mutations {
         assert!(
             verify_zk_x509_projection_segmented_stark_v1(&statement, proof).is_err(),
@@ -629,7 +586,6 @@ fn every_projection_public_field_and_output_rejects_proof_replay() {
         );
     }
 }
-
 #[test]
 fn compact_ca_registration_is_single_fixed_capacity_and_fail_closed() {
     assert_eq!(
@@ -698,7 +654,6 @@ fn compact_ca_registration_is_single_fixed_capacity_and_fail_closed() {
         .is_err(),
         "compact-CA must not be accepted under the MAIN mask and terminal profile"
     );
-
     let layout = accumulator_aggregate_layout();
     layout
         .validate_accumulator_registration_v1()
@@ -724,7 +679,6 @@ fn compact_ca_registration_is_single_fixed_capacity_and_fail_closed() {
         layout.trace_groups[0].column_chunks,
         ZK_X509_CA_ACCUMULATOR_CHUNKS_V1
     );
-
     let mut mutations = Vec::new();
     let mut changed = layout.clone();
     changed.registered_segments[0].segment.instance = 1;
@@ -772,11 +726,9 @@ fn compact_ca_registration_is_single_fixed_capacity_and_fail_closed() {
         );
     }
 }
-
 #[test]
 fn main_provider_registry_is_exactly_six_closed_ordered_groups() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
-
     {
         let mut a = MockMainTraceGroupSourceV1::default();
         let mut b = MockMainTraceGroupSourceV1::default();
@@ -905,7 +857,6 @@ fn main_provider_registry_is_exactly_six_closed_ordered_groups() {
         ));
     }
 }
-
 #[test]
 fn main_provider_routes_every_group_column_through_verifier_owned_slices() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
@@ -922,7 +873,6 @@ fn main_provider_routes_every_group_column_through_verifier_owned_slices() {
         ]),
     )
     .expect("exact MAIN providers");
-
     for group_index in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
         for kind in [MainTraceColumnKindV1::Base, MainTraceColumnKindV1::Aux] {
             let width = match kind {
@@ -980,7 +930,6 @@ fn main_provider_routes_every_group_column_through_verifier_owned_slices() {
             )
             .is_err()
     );
-
     drop(providers);
     log19.short_base_column = true;
     let mut providers = MainTraceProviderSetV1::new_v1(
@@ -995,7 +944,6 @@ fn main_provider_routes_every_group_column_through_verifier_owned_slices() {
             .native_group_column_v1(5, MainTraceColumnKindV1::Base, 0)
             .is_err()
     );
-
     drop(providers);
     log19.short_base_column = false;
     log19.noncanonical_aux_column = true;
@@ -1012,7 +960,6 @@ fn main_provider_routes_every_group_column_through_verifier_owned_slices() {
             .is_err()
     );
 }
-
 #[test]
 fn main_projection_source_matches_every_direct_native_column() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
@@ -1027,7 +974,6 @@ fn main_projection_source_matches_every_direct_native_column() {
             .expect("direct projection aux");
     let mut projection = MainProjectionTraceGroupSourceV1::for_main_v1(&layout, &statement, &trace)
         .expect("production projection source");
-
     assert!(
         projection.native_aux_column_v1(registration, 0).is_err(),
         "auxiliary columns must remain unavailable before challenge binding"
@@ -1081,7 +1027,6 @@ fn main_projection_source_matches_every_direct_native_column() {
             .native_base_column_v1(io_registration, 0)
             .is_err()
     );
-
     let mut log5 = MockMainTraceGroupSourceV1::default();
     let mut log8 = MockMainTraceGroupSourceV1::default();
     let mut log16 = MockMainTraceGroupSourceV1::default();
@@ -1145,7 +1090,6 @@ fn main_projection_source_matches_every_direct_native_column() {
         projection.aux.is_none(),
         "challenge-bound auxiliary copies are zeroized before release"
     );
-
     let mut changed_trace = trace.clone();
     changed_trace.fixed.rows.swap(0, 1);
     assert!(
@@ -1153,7 +1097,6 @@ fn main_projection_source_matches_every_direct_native_column() {
         "prover-native fixed material must equal the verifier compiler"
     );
 }
-
 #[test]
 fn main_projection_fixed_rows_and_residues_match_direct_common_domain_adapter() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
@@ -1206,7 +1149,6 @@ fn main_projection_fixed_rows_and_residues_match_direct_common_domain_adapter() 
         let expected_next = evaluate_fixed(next_query_index);
         assert_eq!(fixed.current.as_slice(), expected_current.as_slice());
         assert_eq!(fixed.next.as_slice(), expected_next.as_slice());
-
         let base_current = (0..registration.segment.base_width)
             .map(|column| F(u64::try_from(column + 3).expect("small base")))
             .collect::<Vec<_>>();
@@ -1239,7 +1181,6 @@ fn main_projection_fixed_rows_and_residues_match_direct_common_domain_adapter() 
         )
         .expect("direct projection residues");
         assert_eq!(production, direct);
-
         assert!(
             source
                 .constraint_residues_v1(
@@ -1253,7 +1194,6 @@ fn main_projection_fixed_rows_and_residues_match_direct_common_domain_adapter() 
             "query coordinate and common-domain point cannot diverge"
         );
     }
-
     assert!(
         source
             .verifier_fixed_opening_v1(registration, layout.common_lde_size(), 0,)
@@ -1273,7 +1213,6 @@ fn main_projection_fixed_rows_and_residues_match_direct_common_domain_adapter() 
             .verifier_fixed_opening_v1(io_registration, 0, next_stride)
             .is_err()
     );
-
     let wrap_query = layout.common_lde_size() - next_stride;
     let wrap_fixed = source
         .verifier_fixed_opening_v1(registration, wrap_query, 0)
@@ -1281,7 +1220,6 @@ fn main_projection_fixed_rows_and_residues_match_direct_common_domain_adapter() 
     assert_eq!(wrap_fixed.next_query_index, 0);
     let expected_wrapped_next = evaluate_fixed(0);
     assert_eq!(wrap_fixed.next.as_slice(), expected_wrapped_next.as_slice());
-
     let base = vec![F::ZERO; registration.segment.base_width];
     let aux = vec![F::ZERO; registration.segment.aux_width];
     let opening = RegisteredOpenedRowsV1 {
@@ -1372,7 +1310,6 @@ fn main_projection_fixed_rows_and_residues_match_direct_common_domain_adapter() 
             );
         }
     }
-
     let mut changed_registration = source
         .verifier_fixed_opening_v1(registration, 0, next_stride)
         .expect("opaque fixed rows");
@@ -1408,7 +1345,6 @@ fn main_projection_fixed_rows_and_residues_match_direct_common_domain_adapter() 
         "a fixed opening is query-tagged"
     );
 }
-
 #[test]
 fn main_projection_verifier_cache_reuses_caps_and_rejects_the_117th_opening() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
@@ -1423,7 +1359,6 @@ fn main_projection_verifier_cache_reuses_caps_and_rejects_the_117th_opening() {
     let next_stride = layout.trace_groups[registration.trace_group]
         .next_stride(layout.common_lde_log2)
         .expect("projection next stride");
-
     let first = source
         .verifier_fixed_opening_v1(registration, 0, next_stride)
         .expect("first two sampled openings");
@@ -1434,7 +1369,6 @@ fn main_projection_verifier_cache_reuses_caps_and_rejects_the_117th_opening() {
     assert_eq!(source.fixed_openings.len(), 2);
     assert_eq!(first.current, repeated.current);
     assert_eq!(first.next, repeated.next);
-
     let mut candidate = 1_usize;
     while source.fixed_openings.len() < VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1 {
         if candidate != next_stride * 2 {
@@ -1474,7 +1408,6 @@ fn main_projection_verifier_cache_reuses_caps_and_rejects_the_117th_opening() {
         "a rejected opening cannot mutate the verifier cache"
     );
 }
-
 #[test]
 fn main_projection_concrete_verifier_routes_through_the_closed_provider_set() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
@@ -1529,7 +1462,6 @@ fn main_projection_concrete_verifier_routes_through_the_closed_provider_set() {
         2,
         "provider-set routing must mint verifier-owned fixed openings"
     );
-
     let mut forged = registration;
     forged.base_start += 1;
     let mut providers = MainOpenedProviderSetV1::new_v1(
@@ -1551,7 +1483,6 @@ fn main_projection_concrete_verifier_routes_through_the_closed_provider_set() {
         "caller-spliced registration slices fail before provider dispatch"
     );
 }
-
 #[test]
 fn main_projection_prover_streams_fixed_polynomials_without_verifier_cache() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
@@ -1580,7 +1511,6 @@ fn main_projection_prover_streams_fixed_polynomials_without_verifier_cache() {
         })
         .expect("one-at-a-time fixed polynomial stream");
     assert_eq!(seen, ZK_X509_PROJECTION_STARK_FIXED_WIDTH_V1);
-
     let base = vec![F::ZERO; registration.segment.base_width];
     let aux = vec![F::ZERO; registration.segment.aux_width];
     let opening = RegisteredOpenedRowsV1 {
@@ -1602,13 +1532,11 @@ fn main_projection_prover_streams_fixed_polynomials_without_verifier_cache() {
             )
             .expect("prover composition is independent of verifier cache capacity");
     }
-
     let mut copied = copied_array_column_v1(&fixed_rows, 0).expect("zeroizing copied fixed column");
     assert!(copied.iter().any(|value| *value != F::ZERO));
     copied.zeroize_private_v1();
     assert!(copied.is_empty());
 }
-
 #[test]
 fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
@@ -1620,7 +1548,6 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
         .collect::<Vec<_>>();
     let query_index = 123_456;
     let lane = 0;
-
     let mut log5 = MockMainTraceGroupSourceV1::default();
     let mut log8 = MockMainTraceGroupSourceV1::default();
     let mut log15 = MockMainTraceGroupSourceV1::default();
@@ -1637,7 +1564,6 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     let direct =
         main_opened_composition_value_v1(&mut providers, query_index, lane, &trace_groups, &alphas)
             .expect("direct MAIN row composition");
-
     let lde_root =
         goldilocks_primitive_root_v1(layout.common_lde_log2).expect("canonical MAIN LDE root");
     let x = F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(query_index as u128));
@@ -1668,7 +1594,6 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
         })
         .expect("independent registered quotient sum");
     assert_eq!(direct, independently_expected);
-
     let evaluated = {
         let mut evaluator = MainOpenedRowEvaluatorV1 {
             providers: &mut providers,
@@ -1712,7 +1637,6 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             .expect("composition mix"),
     );
     assert_eq!(evaluated.fri_base, expected_fri);
-
     let mut changed_rows = trace_groups.clone();
     changed_rows[0].base_current[0] = changed_rows[0].base_current[0].add(F::ONE);
     assert_ne!(
@@ -1726,7 +1650,6 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             .expect("semantic row mutation"),
             direct
         );
-
     let mut short_rows = trace_groups.clone();
     short_rows[0].base_current.pop();
     assert!(
@@ -1800,7 +1723,6 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
         )
         .is_err()
     );
-
     let mut short_mix = mixes.clone();
     short_mix[0][lane].base.pop();
     let mut evaluator = MainOpenedRowEvaluatorV1 {
@@ -1874,7 +1796,6 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
         .is_err()
     );
     drop(evaluator);
-
     drop(providers);
     log5.short_residues = true;
     let mut providers = MainOpenedProviderSetV1::new_v1(
@@ -1894,7 +1815,6 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             )
             .is_err()
         );
-
     drop(providers);
     log5.short_residues = false;
     log5.noncanonical_residues = true;
@@ -1915,7 +1835,6 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             )
             .is_err()
         );
-
     drop(providers);
     log5.noncanonical_residues = false;
     log5.short_fixed_row = true;
@@ -1936,7 +1855,6 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             )
             .is_err()
         );
-
     drop(providers);
     log5.short_fixed_row = false;
     log5.noncanonical_fixed_row = true;
@@ -1958,13 +1876,11 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             .is_err()
         );
 }
-
 #[test]
 fn main_base_commitment_session_mints_pre_aux_only_after_canonical_six_group_chronology() {
     fn root(group: usize) -> [u8; 32] {
         [u8::try_from(0x41 + group).expect("six groups"); 32]
     }
-
     let mut session = main_base_commitment_session_fixture_v1();
     let streamed = aggregate::StreamingRowCommitmentResultV1 {
         commitment: aggregate::StreamingMerkleCommitmentV1 {
@@ -2001,13 +1917,11 @@ fn main_base_commitment_session_mints_pre_aux_only_after_canonical_six_group_chr
     derive_zk_x509_credential_pre_aux_binding_v1(pre_aux, [0xC1; 32], [0xD1; 32], [0xE1; 32])
         .expect("X5B1 begins only from session-minted MAIN pre-aux");
 }
-
 #[test]
 fn main_base_commitment_session_rejects_omission_reorder_duplicate_wrong_log_zero_and_excess() {
     fn root(group: usize) -> [u8; 32] {
         [u8::try_from(group + 1).expect("six groups"); 32]
     }
-
     for omitted_after in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
         let mut session = main_base_commitment_session_fixture_v1();
         for (group, native_log) in MAIN_BASE_COMMITMENT_NATIVE_LOGS_V1
@@ -2024,7 +1938,6 @@ fn main_base_commitment_session_rejects_omission_reorder_duplicate_wrong_log_zer
             "a {omitted_after}-root prefix must not complete"
         );
     }
-
     let mut zero = main_base_commitment_session_fixture_v1();
     assert!(matches!(
         zero.accept_base_root_v1(0, 5, [0_u8; 32]),
@@ -2051,7 +1964,6 @@ fn main_base_commitment_session_rejects_omission_reorder_duplicate_wrong_log_zer
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     ));
     assert_eq!(zero.next_group, 0);
-
     let mut session = main_base_commitment_session_fixture_v1();
     assert!(matches!(
         session.accept_base_root_v1(1, 8, root(1)),
@@ -2092,7 +2004,6 @@ fn main_base_commitment_session_rejects_omission_reorder_duplicate_wrong_log_zer
         .complete_v1()
         .expect("exactly six roots complete once");
 }
-
 #[test]
 fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_state_tampering() {
     fn group(root: [u8; 32]) -> TraceGroupProofV1 {
@@ -2103,7 +2014,6 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
             aux_frontier: Vec::new(),
         }
     }
-
     let unpinned_profile = unpinned_main_verifier_profile_fixture_v1();
     let canonical_layout =
         AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
@@ -2111,7 +2021,6 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
         ZkX509MainBaseCommitmentSessionV1::new_v1(&canonical_layout, [0xB1; 32], unpinned_profile,),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
-
     let isolated =
         AggregateProofLayoutV1::for_segments(&[SegmentLayoutV1::for_full_io().expect("full I/O")])
             .expect("isolated I/O layout");
@@ -2123,7 +2032,6 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
         ),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
-
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     let mut wrong_layout = layout.clone();
     wrong_layout.trace_groups.swap(0, 1);
@@ -2149,7 +2057,6 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
         ),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
-
     let canonical_groups = (0..FULL_PROFILE_TRACE_GROUPS_V1)
         .map(|index| group([u8::try_from(index + 1).expect("six groups"); 32]))
         .collect::<Vec<_>>();
@@ -2187,7 +2094,6 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
     session
         .finish_pre_aux_v1()
         .expect("decoded canonical roots mint pre-aux");
-
     let mut partial = main_base_commitment_session_fixture_v1();
     partial
         .accept_base_root_v1(0, 5, [0x11; 32])
@@ -2196,7 +2102,6 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
         partial.accept_decoded_base_groups_v1(&canonical_groups),
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     ));
-
     let mut corrupted = main_base_commitment_session_fixture_v1();
     corrupted.recorded[0] = true;
     assert!(matches!(
@@ -2241,7 +2146,6 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
 }
-
 #[test]
 fn main_trace_phase_root_recorder_rejects_every_reorder_duplicate_omission_zero_and_excess() {
     fn commitment(seed: u8) -> aggregate::StreamingRowCommitmentResultV1 {
@@ -2253,7 +2157,6 @@ fn main_trace_phase_root_recorder_rejects_every_reorder_duplicate_omission_zero_
             opened_rows: BTreeMap::new(),
         }
     }
-
     let mut groups = Vec::new();
     assert!(matches!(
         record_main_group_commitment_v1(
@@ -2281,7 +2184,6 @@ fn main_trace_phase_root_recorder_rejects_every_reorder_duplicate_omission_zero_
         groups.is_empty(),
         "the zero-root sentinel cannot mutate state"
     );
-
     record_main_group_commitment_v1(0, MainTraceColumnKindV1::Base, &commitment(1), &mut groups)
         .expect("first canonical base root");
     assert!(matches!(
@@ -2304,7 +2206,6 @@ fn main_trace_phase_root_recorder_rejects_every_reorder_duplicate_omission_zero_
     ));
     assert_eq!(groups.len(), 1, "aux cannot start before all six bases");
     assert_eq!(groups[0].aux_root, [0_u8; 32]);
-
     for group in 1..FULL_PROFILE_TRACE_GROUPS_V1 {
         record_main_group_commitment_v1(
             group,
@@ -2333,7 +2234,6 @@ fn main_trace_phase_root_recorder_rejects_every_reorder_duplicate_omission_zero_
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     ));
     assert_eq!(groups, base_snapshot, "a zero aux root is transactional");
-
     for group in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
         record_main_group_commitment_v1(
             group,
@@ -2367,7 +2267,6 @@ fn main_trace_phase_root_recorder_rejects_every_reorder_duplicate_omission_zero_
         assert_eq!(groups, complete);
     }
 }
-
 fn tiny_authenticated_main_polynomial_fixture_v1(
     seed: u8,
 ) -> aggregate::MaskedTracePolynomialSetV1 {
@@ -2387,7 +2286,6 @@ fn tiny_authenticated_main_polynomial_fixture_v1(
     .expect("tiny authenticated masked polynomials");
     polynomials
 }
-
 #[test]
 fn main_polynomial_set_fails_closed_on_count_shape_and_phase_lifecycle() {
     assert!(core::mem::needs_drop::<MainTracePolynomialSetV1>());
@@ -2395,7 +2293,6 @@ fn main_polynomial_set_fails_closed_on_count_shape_and_phase_lifecycle() {
         ZkX509MainAwaitingCredentialBindingV1<'static>,
     >());
     assert!(core::mem::needs_drop::<ZkX509MainCompositionPhaseV1<'static>>());
-
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     for hostile_count in [
         FULL_PROFILE_TRACE_GROUPS_V1 - 1,
@@ -2417,7 +2314,6 @@ fn main_polynomial_set_fails_closed_on_count_shape_and_phase_lifecycle() {
             Err(ZkX509StarkErrorV1::TranscriptMismatch)
         ));
     }
-
     // Six authenticated polynomial sets are still rejected when any
     // native/commitment-domain shape is not the verifier-fixed MAIN shape.
     // The consuming constructor owns the vector, so every retained secret
@@ -2434,7 +2330,6 @@ fn main_polynomial_set_fails_closed_on_count_shape_and_phase_lifecycle() {
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     ));
 }
-
 #[test]
 fn main_phase_source_has_no_root_only_or_reconstruction_commit_path() {
     let source = include_str!("main_aggregate.rs");
@@ -2457,7 +2352,6 @@ fn main_phase_source_has_no_root_only_or_reconstruction_commit_path() {
             && !helper.contains("replay_masked_trace_columns_via_encrypted_scratch_v1"),
         "MAIN must not discard its committed polynomials or reconstruct them from native witness"
     );
-
     let phase_start = source
         .find("pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng")
         .expect("typed MAIN phase one");
@@ -2490,13 +2384,11 @@ fn main_phase_source_has_no_root_only_or_reconstruction_commit_path() {
         "cross-phase provenance must fail before transcript or child mutation"
     );
 }
-
 fn empty_main_composition_chunks_v1() -> Vec<Vec<Vec<E>>> {
     (0..SECURITY_LANES)
         .map(|_| (0..COMPOSITION_DEGREE_CHUNKS).map(|_| Vec::new()).collect())
         .collect()
 }
-
 #[test]
 fn main_coefficient_accumulator_is_bounded_transactional_and_order_independent() {
     let coefficient_cap = 8;
@@ -2508,7 +2400,6 @@ fn main_coefficient_accumulator_is_bounded_transactional_and_order_independent()
     second[0][0] = vec![value(4), value(5)];
     second[0][1] = vec![value(7), value(8), value(9), value(10)];
     second[0][2] = vec![value(9).neg()];
-
     let mut first_then_second = empty_main_composition_chunks_v1();
     add_main_composition_coefficient_chunks_v1(&mut first_then_second, &first, coefficient_cap)
         .expect("first contribution");
@@ -2524,7 +2415,6 @@ fn main_coefficient_accumulator_is_bounded_transactional_and_order_independent()
         first_then_second[0][2].is_empty(),
         "exact cancellation must remove the retained tail"
     );
-
     let canonical = first_then_second.clone();
     let mut wrong_lanes = second.clone();
     wrong_lanes.pop();
@@ -2537,7 +2427,6 @@ fn main_coefficient_accumulator_is_bounded_transactional_and_order_independent()
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
     assert_eq!(first_then_second, canonical);
-
     let mut wrong_chunks = second.clone();
     wrong_chunks[0].pop();
     assert!(matches!(
@@ -2549,7 +2438,6 @@ fn main_coefficient_accumulator_is_bounded_transactional_and_order_independent()
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
     assert_eq!(first_then_second, canonical);
-
     let mut oversized = second.clone();
     oversized[0][0].resize(coefficient_cap + 1, E::ONE);
     assert!(matches!(
@@ -2567,7 +2455,6 @@ fn main_coefficient_accumulator_is_bounded_transactional_and_order_independent()
     ));
     assert_eq!(first_then_second, canonical);
 }
-
 #[test]
 fn composition_chunk_split_rejects_hidden_high_degree_coefficients() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
@@ -2588,7 +2475,6 @@ fn composition_chunk_split_rejects_hidden_high_degree_coefficients() {
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
 }
-
 #[test]
 fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() {
     let source = include_str!("main_aggregate.rs");
@@ -2626,7 +2512,6 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
             "MAIN finish must not use {forbidden}"
         );
     }
-
     let verifier_start = source
         .find("pub(crate) fn verify_zk_x509_main_aggregate_stark_v1")
         .expect("complete MAIN verifier");
@@ -2646,7 +2531,6 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
         FULL_PROFILE_TRACE_GROUPS_V1
     );
     assert!(verifier.contains("verify_opened_query_relations_with_deep_v1"));
-
     let engine = include_str!("../engine.rs");
     let engine_production = &engine[..engine
         .find("#[cfg(test)]")
@@ -2656,7 +2540,6 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
     assert!(engine_production.contains("validate_cross_subproof_binding_v1"));
     assert!(!engine_production.contains("ConsensusVerifierUnavailable"));
 }
-
 #[test]
 fn main_local_transcript_separates_binding_before_base_after_aux_and_wrong_outer_root() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
@@ -2691,7 +2574,6 @@ fn main_local_transcript_separates_binding_before_base_after_aux_and_wrong_outer
     )
     .expect("binding under a hostile log19 root");
     let claims = main_log19_terminal_claims_fixture_v1();
-
     let alpha = |order: u8, binding: ZkX509CredentialPreAuxBindingV1| {
         let mut transcript = new_main_transcript_after_profile_validation_v1(
             &[0x81; 32],
@@ -2719,7 +2601,6 @@ fn main_local_transcript_separates_binding_before_base_after_aux_and_wrong_outer
         absorb_zk_x509_main_terminal_claims_v1(&mut transcript, claims).expect("terminal claims");
         derive_constraint_alphas_v1(&mut transcript, &layout).expect("alphas")[0][0][0]
     };
-
     let canonical = alpha(0, binding);
     assert_ne!(
         canonical,
@@ -2737,7 +2618,6 @@ fn main_local_transcript_separates_binding_before_base_after_aux_and_wrong_outer
         "changing only the outer-bound log19 root must separate"
     );
 }
-
 #[test]
 fn full_profile_layout_is_constant_exact_and_rejects_registration_splices() {
     let sha_layout = AggregateProofLayoutV1::for_equal_log_buckets_v1(
@@ -2815,7 +2695,6 @@ fn full_profile_layout_is_constant_exact_and_rejects_registration_splices() {
             Some((signature, 0))
         );
     }
-
     let mut mutations = Vec::new();
     let mut changed = layout.clone();
     changed.registered_segments.remove(0);
@@ -2859,7 +2738,6 @@ fn full_profile_layout_is_constant_exact_and_rejects_registration_splices() {
         );
     }
 }
-
 #[test]
 fn projection_challenge_labels_are_explicit_and_pairwise_distinct() {
     let labels = ZK_X509_PROJECTION_CHALLENGE_LABELS_V1

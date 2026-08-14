@@ -3,23 +3,17 @@
 //! Client and server code must use these shared types directly. Duplicating a
 //! structurally identical Norito type under another Rust name changes its
 //! schema hash unless an explicit schema name is retained.
-
 use std::{error::Error, fmt};
-
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
-
 /// Stable Norito schema name for one billing acknowledgement proof.
 pub const BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1: &str =
     "iroha.torii.v1.sorafs.billing.acknowledgement_proof";
-
 /// Lowercase hash of [`BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1`] under the
 /// Norito V1 type-name schema domain.
 pub const BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_HEX_V1: &str =
     "fe75acabe03d788012f2e7c556319997";
-
 /// Maximum external authentication-proof bytes accepted by the V1 route.
 pub const BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1: usize = 64 * 1024;
-
 /// Canonical owner proof submitted when acknowledging one published statement.
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(schema_name = "iroha.torii.v1.sorafs.billing.acknowledgement_proof")]
@@ -30,7 +24,6 @@ pub struct BillingAcknowledgementProofV1 {
     /// Bounded proof over the service's proof-independent request digest.
     pub authentication_proof: Vec<u8>,
 }
-
 impl BillingAcknowledgementProofV1 {
     /// Construct a canonical proof from a lowercase hexadecimal request nonce.
     ///
@@ -54,7 +47,6 @@ impl BillingAcknowledgementProofV1 {
             .map_err(|_| BillingAcknowledgementProofErrorV1::InvalidRequestNonce)?;
         Self::try_new(request_nonce, authentication_proof)
     }
-
     /// Construct a canonical proof from an exact binary request nonce.
     ///
     /// # Errors
@@ -72,7 +64,6 @@ impl BillingAcknowledgementProofV1 {
         proof.validate()?;
         Ok(proof)
     }
-
     /// Validate the complete V1 request body.
     ///
     /// # Errors
@@ -95,7 +86,6 @@ impl BillingAcknowledgementProofV1 {
         Ok(())
     }
 }
-
 impl fmt::Debug for BillingAcknowledgementProofV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -105,7 +95,6 @@ impl fmt::Debug for BillingAcknowledgementProofV1 {
             .finish()
     }
 }
-
 /// Canonical-construction failure for a billing acknowledgement proof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BillingAcknowledgementProofErrorV1 {
@@ -117,7 +106,6 @@ pub enum BillingAcknowledgementProofErrorV1 {
         actual: usize,
     },
 }
-
 impl fmt::Display for BillingAcknowledgementProofErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -131,13 +119,10 @@ impl fmt::Display for BillingAcknowledgementProofErrorV1 {
         }
     }
 }
-
 impl Error for BillingAcknowledgementProofErrorV1 {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn stable_schema_name_and_roundtrip_are_exact() {
         assert_eq!(
@@ -169,7 +154,6 @@ mod tests {
             "framed bytes must remain deterministic"
         );
     }
-
     #[test]
     fn construction_is_strict_and_debug_redacts_proof() {
         for nonce in [
@@ -191,7 +175,6 @@ mod tests {
             )
             .is_err()
         );
-
         let proof = BillingAcknowledgementProofV1::try_new([0x22; 32], vec![0xa5; 32])
             .expect("canonical proof");
         let debug = format!("{proof:?}");

@@ -60,6 +60,18 @@ def _base64url(value: Any, length: int, context: str) -> Tuple[str, bytes]:
     return encoded, decoded
 
 
+def canonical_connect_sid(value: Any, context: str = "Connect session sid") -> str:
+    """Return a canonical unpadded base64url 32-byte session identifier."""
+
+    return _base64url(value, 32, context)[0]
+
+
+def canonical_connect_token(value: Any, context: str) -> str:
+    """Return a canonical unpadded base64url 32-byte Connect bearer token."""
+
+    return _base64url(value, 32, context)[0]
+
+
 def normalize_connect_session_request(
     payload: Mapping[str, Any],
     *,
@@ -205,6 +217,25 @@ def parse_connect_session(
     if not isinstance(payload, Mapping):
         raise RuntimeError(f"{context} response must be a JSON object")
     record = payload
+    known = {
+        "sid",
+        "network_id",
+        "app_pk",
+        "nonce",
+        "wallet_uri",
+        "app_uri",
+        "token_app",
+        "token_wallet",
+        "token_management",
+        "token_relay",
+    }
+    if set(record) != known:
+        missing = sorted(known.difference(record))
+        unsupported = sorted(set(record).difference(known))
+        raise ValueError(
+            f"{context} response has an inexact field set; "
+            f"missing={missing}, unsupported={unsupported}"
+        )
     identity = normalize_connect_session_request(
         {
             "sid": record.get("sid"),
@@ -224,19 +255,6 @@ def parse_connect_session(
         record.get("token_management"), 32, f"{context}.token_management"
     )[0]
     token_relay = _base64url(record.get("token_relay"), 32, f"{context}.token_relay")[0]
-    known = {
-        "sid",
-        "network_id",
-        "app_pk",
-        "nonce",
-        "wallet_uri",
-        "app_uri",
-        "token_app",
-        "token_wallet",
-        "token_management",
-        "token_relay",
-    }
-    extra = {key: value for key, value in record.items() if key not in known}
     session = ConnectSessionInfo(
         sid=identity["sid"],
         network_id=identity["network_id"],
@@ -248,7 +266,6 @@ def parse_connect_session(
         token_wallet=token_wallet,
         token_management=token_management,
         token_relay=token_relay,
-        extra=extra,
     )
     wallet_query = _session_uri_query(
         wallet_uri,

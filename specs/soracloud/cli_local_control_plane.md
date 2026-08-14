@@ -19,6 +19,19 @@ or with `X-Iroha-Witness`. The mutation provenance signer must be one of the
 verified request signers. Torii then returns an unsigned instruction skeleton;
 account private keys stay in the client wallet.
 
+Aggregate, status, config, secret, health, training, model, host, and agent
+GETs use the same exact-network canonical account boundary. The CLI signs the
+final method, path, sorted query, and empty body with its configured NetworkId
+and local account key before dispatch, does not follow redirects or retry an
+ambiguous transport failure, and fails before network I/O when that signer is
+unavailable. A listener API token may be sent in addition, but never replaces
+the account proof.
+
+Only the exact service discovery object, exact service-revision discovery
+object, and current upload encryption-recipient object remain public. Each is
+a single-object read with a 64 KiB encoded-JSON response cap; aggregate or
+sensitive Soracloud state is not part of the public discovery surface.
+
 ## Runtime Scope
 
 - Use `HttpService + Inrou` for collector-heavy, SSE, cache-backed, or
@@ -434,10 +447,37 @@ The embedded Hugging Face importer and inference bridge use separate bounded
 response policies. `soracloud_runtime.hf.import_max_files`,
 `import_max_file_bytes`, and `import_max_total_bytes` must be non-zero, must not
 exceed 128 files, 512 MiB per file, and 4 GiB per source respectively, and the
-per-file limit must fit inside the aggregate limit. Model metadata and inference
-responses are capped by `model_info_max_response_bytes` (8 MiB by default,
-16 MiB hard maximum) and `inference_max_response_bytes` (64 MiB default and hard
-maximum). Oversized or misreported HTTP bodies are rejected while streaming.
+per-file limit must fit inside the aggregate limit. Both Torii resource-profile
+derivation and the runtime importer cap model metadata with
+`model_info_max_response_bytes` (8 MiB by default, 16 MiB hard maximum);
+`inference_max_response_bytes` caps inference responses at 64 MiB by default and
+at the hard maximum. Oversized or misreported HTTP bodies are rejected before
+decode through a Content-Length preflight and a streamed max-plus-one check.
+Torii also deduplicates selected model-weight paths and rejects metadata whose
+unique weight count exceeds the same `import_max_files` runtime import policy.
+Selected Hub files are streamed into exclusive atomic cache files and hashed
+from disk; their configured 512 MiB ceiling is a disk-transfer limit, not an
+instruction to reserve or retain that much daemon memory. The resident local
+runner also admits only one response frame at a time, bounds the frame to the
+configured inference response limit plus fixed protocol overhead, and closes
+the worker pipe on unsolicited queued output. In the runtime importer,
+model-info tag and sibling lists have fixed count and string-size ceilings
+before they are copied into the local import manifest.
+
+Committed local single-file SoraFS artifacts are resolved only through the
+bounded set of ledger-committed replication sources and copied into the runtime
+cache in 8 MiB chunks; reconciliation no longer clones the node's complete
+manifest catalogue or retains all hydrated payloads through the pass. Canonical
+remote payload verification and multi-file guest-image materialization still
+require one contiguous payload, so those paths have an unconditional 256 MiB
+in-memory admission ceiling. Larger single-file artifacts remain eligible
+through the streaming local-store path.
+
+Persisted runtime snapshots, HF import manifests, hosted-HTTP runtime state,
+apartment autonomy summaries, uploaded-model key material, and Inrou bootstrap
+overlays are opened without following links and checked against fixed byte
+ceilings before decoding or retaining them. Cache pruning similarly refuses to
+materialize more than 65,536 candidates from any one cache directory.
 Separately, startup does not publish a runtime handle when persisted snapshot
 restore or the initial authoritative reconciliation fails.
 

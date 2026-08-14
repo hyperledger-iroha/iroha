@@ -1,12 +1,10 @@
 use ivm::IVM;
-
 #[test]
 fn memory_compact_bundle_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     let addr = ivm::Memory::HEAP_START + 128;
     vm.memory.store_u64(addr, 0xAA55_AA55_AA55_AA55).unwrap();
     vm.memory.commit();
-
     let bundle = ivm::merkle_utils::memory_compact_bundle(&mut vm.memory, addr, Some(16));
     let (cp, root) = vm.memory.merkle_compact(addr, Some(16));
     let cp2 = bundle.to_compact_proof();
@@ -15,7 +13,6 @@ fn memory_compact_bundle_roundtrip() {
     assert_eq!(bundle.root, *root.as_ref());
     assert_eq!(cp2.depth(), cp.depth());
     assert_eq!(cp2.dirs(), cp.dirs());
-
     // Also expand the self-contained bundle and reconstruct its partial root.
     use iroha_crypto::{Hash, HashOf, MerkleError};
     use sha2::Digest as _;
@@ -42,7 +39,6 @@ fn memory_compact_bundle_roundtrip() {
         wrong_sibling_count.try_into_full_proof(),
         Err(MerkleError::NonCanonicalCompactProof)
     ));
-
     let full = bundle
         .try_into_full_proof()
         .expect("helper emitted a canonical compact proof");
@@ -53,12 +49,10 @@ fn memory_compact_bundle_roundtrip() {
         .expect("memory proof should produce a root");
     assert_eq!(computed, root_t, "memory compact bundle root mismatch");
 }
-
 #[test]
 fn registers_compact_bundle_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_register(3, 0xDEADBEEF);
-
     let bundle = ivm::merkle_utils::registers_compact_bundle(&vm.registers, 3, Some(16));
     let (cp, root) = vm.registers.merkle_compact(3, Some(16));
     let cp2 = bundle.to_compact_proof();
@@ -67,10 +61,8 @@ fn registers_compact_bundle_roundtrip() {
     assert_eq!(bundle.root, *root.as_ref());
     assert_eq!(cp2.depth(), cp.depth());
     assert_eq!(cp2.dirs(), cp.dirs());
-
     // The uncapped 8-level register proof has a fixed, authenticated count.
     use std::num::NonZeroU64;
-
     use iroha_crypto::{Hash, HashOf, MerkleTreeCommitment};
     use sha2::Digest as _;
     let val = vm.register(3);

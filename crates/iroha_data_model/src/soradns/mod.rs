@@ -5,24 +5,19 @@
 //! SoraDNS roadmap. These types are shared between governance tooling, Torii
 //! APIs, SDKs, and the resolver implementation so all components agree on the
 //! canonical Norito encoding.
-
 use iroha_crypto::{PublicKey, Signature};
 use iroha_primitives::soradns::GatewayHostBindings;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 use crate::{account::AccountId, ipfs::IpfsPath};
-
 /// Current RAD schema version identifier.
 pub const RAD_VERSION_V1: u8 = 1;
 /// Current directory record schema version identifier.
 pub const DIRECTORY_RECORD_VERSION_V1: u16 = 1;
-
 /// Canonical resolver identifier (BLAKE3 hash of resolver public key + FQDN).
 pub type ResolverId = [u8; 32];
 /// Canonical resolver directory identifier (Merkle root of the RAD set).
 pub type DirectoryId = [u8; 32];
-
 /// Deterministic host bindings derived from a resolver's canonical FQDN.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -39,7 +34,6 @@ pub struct GatewayHostSet {
     /// Pretty host (`<fqdn>.gw.sora.name`).
     pub pretty_host: String,
 }
-
 impl GatewayHostSet {
     /// Returns `true` if the supplied hostname matches the canonical or pretty host.
     #[must_use]
@@ -48,7 +42,6 @@ impl GatewayHostSet {
         candidate == self.canonical_host || candidate == self.pretty_host
     }
 }
-
 impl From<&GatewayHostBindings> for GatewayHostSet {
     fn from(bindings: &GatewayHostBindings) -> Self {
         Self {
@@ -59,7 +52,6 @@ impl From<&GatewayHostBindings> for GatewayHostSet {
         }
     }
 }
-
 /// Transport capabilities and endpoints exposed by a resolver.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -82,7 +74,6 @@ pub struct ResolverTransportBundle {
     /// Padding configuration advertised to clients.
     pub padding_policy: PaddingPolicyV1,
 }
-
 /// HTTP-based DNS transport metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -99,7 +90,6 @@ pub struct HttpTransportV1 {
     /// Maximum response size (bytes) advertised for padding heuristics.
     pub max_response_bytes: u32,
 }
-
 /// TLS-based DNS transport metadata (`DoT`/`DoH3`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -114,7 +104,6 @@ pub struct TlsTransportV1 {
     /// Supported cipher suites (IANA names).
     pub cipher_suites: Vec<String>,
 }
-
 /// QUIC-based DNS transport metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -129,7 +118,6 @@ pub struct QuicTransportV1 {
     /// Optional congestion-control profile identifier.
     pub congestion_profile: Option<String>,
 }
-
 /// Oblivious `DoH` relay preview metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -144,7 +132,6 @@ pub struct OdohRelayV1 {
     /// `ODoH` public key material (HPKE).
     pub public_key: Vec<u8>,
 }
-
 /// Configuration for bridging requests over `SoraNet` circuits.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -157,7 +144,6 @@ pub struct SoranetBridgeConfigV1 {
     /// Policy label describing required guard/pinning behaviour.
     pub circuit_policy: String,
 }
-
 /// Padding configuration applied to DNS responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -172,7 +158,6 @@ pub struct PaddingPolicyV1 {
     /// Alignment boundary applied after padding.
     pub pad_to_block: u16,
 }
-
 /// TLS provisioning material associated with a resolver.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -189,7 +174,6 @@ pub struct ResolverTlsBundle {
     /// Timestamp (unix seconds) when the certificate chain expires.
     pub not_after_unix: u64,
 }
-
 /// Supported TLS provisioning strategies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -205,7 +189,6 @@ pub enum TlsProvisioningProfile {
     /// Custom provisioning (manually issued certificates).
     Custom,
 }
-
 /// Rotation policy attached to a resolver attestation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -220,7 +203,6 @@ pub struct RotationPolicyV1 {
     /// Whether dual signatures (operator + governance) are mandatory.
     pub require_dual_signatures: bool,
 }
-
 /// Resolver Attestation Document (RAD) signed by the operator and governance.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -261,7 +243,6 @@ pub struct ResolverAttestationDocumentV1 {
     /// Optional telemetry endpoint for health reporting.
     pub telemetry_endpoint: Option<String>,
 }
-
 /// Directory record anchoring the active RAD set in the ledger.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -293,7 +274,6 @@ pub struct ResolverDirectoryRecordV1 {
     /// Release engineer signature over the canonical record payload.
     pub builder_signature: Signature,
 }
-
 /// Pending resolver directory draft awaiting council publication.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -314,7 +294,6 @@ pub struct PendingDirectoryDraftV1 {
     /// Submission timestamp recorded by the host (unix milliseconds).
     pub submitted_at_ms: u64,
 }
-
 /// Record describing a resolver revocation hotfix entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -329,7 +308,6 @@ pub struct ResolverRevocationRecordV1 {
     /// Unix timestamp in milliseconds when the revocation was recorded.
     pub revoked_at_ms: u64,
 }
-
 /// Rotation policy enforced for directory publishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -346,7 +324,6 @@ pub struct DirectoryRotationPolicyV1 {
     /// Minimum number of council signatures required to publish.
     pub council_threshold: u16,
 }
-
 impl Default for DirectoryRotationPolicyV1 {
     fn default() -> Self {
         Self {
@@ -357,7 +334,6 @@ impl Default for DirectoryRotationPolicyV1 {
         }
     }
 }
-
 /// Pub/sub events emitted whenever the resolver directory changes.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -381,7 +357,6 @@ pub enum ResolverDirectoryEventV1 {
     /// Rotation policy updated by governance.
     PolicyUpdated(DirectoryPolicyUpdatedEventV1),
 }
-
 /// Reasons for revoking a RAD entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -397,7 +372,6 @@ pub enum RadRevokeReason {
     /// Certificate or manifest mismatch detected.
     IntegrityViolation,
 }
-
 /// Payload for `ResolverDirectoryEventV1::DraftSubmitted`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -412,7 +386,6 @@ pub struct DirectoryDraftSubmittedEventV1 {
     /// Builder public key that authored the draft.
     pub builder_public_key: PublicKey,
 }
-
 /// Payload for `ResolverDirectoryEventV1::Published`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -431,7 +404,6 @@ pub struct DirectoryPublishedEventV1 {
     /// Block height in which the publish occurred.
     pub block_height: u64,
 }
-
 /// Payload for `ResolverDirectoryEventV1::Revoked`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -446,7 +418,6 @@ pub struct DirectoryRevokedEventV1 {
     /// Block height in which the revocation was recorded.
     pub block_height: u64,
 }
-
 /// Payload for `ResolverDirectoryEventV1::Unrevoked`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -459,7 +430,6 @@ pub struct DirectoryUnrevokedEventV1 {
     /// Block height in which the unrevocation was recorded.
     pub block_height: u64,
 }
-
 /// Payload for release signer modifications.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -470,7 +440,6 @@ pub struct DirectoryReleaseSignerEventV1 {
     /// Public key that was added or removed.
     pub public_key: PublicKey,
 }
-
 /// Payload for `ResolverDirectoryEventV1::PolicyUpdated`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -494,13 +463,10 @@ pub mod prelude {
         TlsTransportV1,
     };
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_primitives::soradns::derive_gateway_hosts;
-
     use super::*;
-
     #[test]
     fn gateway_host_set_matches_bindings() {
         let bindings = derive_gateway_hosts("docs.sora").expect("derive hosts");

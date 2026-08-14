@@ -1,5 +1,4 @@
 use super::*;
-
 isi! {
     /// Open a ledger-managed numeric asset escrow.
     pub struct OpenAssetEscrow {
@@ -14,7 +13,6 @@ isi! {
         pub evidence_hashes: Vec<iroha_crypto::Hash>,
     }
 }
-
 impl OpenAssetEscrow {
     /// Construct an escrow-opening instruction without initial evidence.
     #[must_use]
@@ -30,7 +28,6 @@ impl OpenAssetEscrow {
             evidence_hashes: Vec::new(),
         }
     }
-
     /// Construct an escrow-opening instruction with evidence hashes attached.
     #[must_use]
     pub fn with_evidence_hashes(
@@ -47,7 +44,6 @@ impl OpenAssetEscrow {
         }
     }
 }
-
 isi! {
     /// Accept an open asset escrow as its buyer.
     pub struct AcceptAssetEscrow {
@@ -55,7 +51,6 @@ isi! {
         pub escrow_id: crate::escrow::EscrowId,
     }
 }
-
 impl AcceptAssetEscrow {
     /// Construct an escrow-acceptance instruction.
     #[must_use]
@@ -63,7 +58,6 @@ impl AcceptAssetEscrow {
         Self { escrow_id }
     }
 }
-
 isi! {
     /// Mark an accepted asset escrow as paid off-chain.
     pub struct MarkEscrowPaymentSent {
@@ -71,7 +65,6 @@ isi! {
         pub escrow_id: crate::escrow::EscrowId,
     }
 }
-
 impl MarkEscrowPaymentSent {
     /// Construct an instruction that marks off-chain payment as sent.
     #[must_use]
@@ -79,7 +72,6 @@ impl MarkEscrowPaymentSent {
         Self { escrow_id }
     }
 }
-
 isi! {
     /// Release a paid escrow to its accepted buyer.
     pub struct ReleaseAssetEscrow {
@@ -87,7 +79,6 @@ isi! {
         pub escrow_id: crate::escrow::EscrowId,
     }
 }
-
 impl ReleaseAssetEscrow {
     /// Construct an instruction that releases escrowed funds to the buyer.
     #[must_use]
@@ -95,7 +86,6 @@ impl ReleaseAssetEscrow {
         Self { escrow_id }
     }
 }
-
 isi! {
     /// Cancel an open or accepted escrow before payment is marked.
     pub struct CancelAssetEscrow {
@@ -103,7 +93,6 @@ isi! {
         pub escrow_id: crate::escrow::EscrowId,
     }
 }
-
 impl CancelAssetEscrow {
     /// Construct an instruction that refunds an escrow before payment is marked.
     #[must_use]
@@ -111,7 +100,6 @@ impl CancelAssetEscrow {
         Self { escrow_id }
     }
 }
-
 isi! {
     /// Open a dispute for court moderation.
     pub struct OpenEscrowDispute {
@@ -122,7 +110,6 @@ isi! {
         pub evidence_hashes: Vec<iroha_crypto::Hash>,
     }
 }
-
 impl OpenEscrowDispute {
     /// Construct an instruction that opens an escrow dispute without new evidence.
     #[must_use]
@@ -132,7 +119,6 @@ impl OpenEscrowDispute {
             evidence_hashes: Vec::new(),
         }
     }
-
     /// Construct an instruction that opens an escrow dispute with evidence hashes.
     #[must_use]
     pub fn with_evidence_hashes(
@@ -145,7 +131,6 @@ impl OpenEscrowDispute {
         }
     }
 }
-
 isi! {
     /// Resolve a disputed escrow by splitting funds between buyer and seller.
     pub struct ResolveEscrowDispute {
@@ -160,7 +145,6 @@ isi! {
         pub evidence_hashes: Vec<iroha_crypto::Hash>,
     }
 }
-
 impl ResolveEscrowDispute {
     /// Construct a dispute-resolution instruction without additional evidence.
     #[must_use]
@@ -176,7 +160,6 @@ impl ResolveEscrowDispute {
             evidence_hashes: Vec::new(),
         }
     }
-
     /// Construct a dispute-resolution instruction with evidence or judgement hashes.
     #[must_use]
     pub fn with_evidence_hashes(
@@ -193,7 +176,6 @@ impl ResolveEscrowDispute {
         }
     }
 }
-
 isi! {
     /// Open a generic ledger-managed asset lock.
     pub struct OpenAssetLock {
@@ -216,7 +198,6 @@ isi! {
         pub evidence_hashes: Vec<iroha_crypto::Hash>,
     }
 }
-
 impl OpenAssetLock {
     /// Construct a generic asset lock without initial evidence.
     #[must_use]
@@ -236,7 +217,6 @@ impl OpenAssetLock {
             evidence_hashes: Vec::new(),
         }
     }
-
     /// Construct a generic asset lock with optional authority, expiry, and evidence.
     #[must_use]
     pub fn with_options(
@@ -259,7 +239,6 @@ impl OpenAssetLock {
         }
     }
 }
-
 isi! {
     /// Open an attestor-bound conditional escrow with ordered all-of release semantics.
     #[cfg_attr(
@@ -284,7 +263,6 @@ isi! {
         pub evidence_hashes: Vec<iroha_crypto::Hash>,
     }
 }
-
 impl OpenConditionalEscrow {
     /// Construct a native ordered all-of conditional escrow.
     #[must_use]
@@ -306,7 +284,6 @@ impl OpenConditionalEscrow {
             evidence_hashes: Vec::new(),
         }
     }
-
     /// Construct a native conditional escrow with opening evidence.
     #[must_use]
     pub fn with_evidence_hashes(
@@ -329,7 +306,6 @@ impl OpenConditionalEscrow {
         }
     }
 }
-
 isi! {
     /// Attest the next ordered predicate of one native conditional escrow.
     #[cfg_attr(
@@ -347,7 +323,6 @@ isi! {
         pub evidence_hash: Option<iroha_crypto::Hash>,
     }
 }
-
 impl AttestEscrowCondition {
     /// Construct an ordered conditional-escrow attestation.
     #[must_use]
@@ -365,7 +340,6 @@ impl AttestEscrowCondition {
         }
     }
 }
-
 isi! {
     /// Refund a native conditional escrow whose authoritative deadline has passed.
     #[cfg_attr(
@@ -377,7 +351,6 @@ isi! {
         pub escrow_id: crate::escrow::EscrowId,
     }
 }
-
 impl ExpireConditionalEscrow {
     /// Construct a conditional-escrow expiry instruction.
     #[must_use]
@@ -385,7 +358,6 @@ impl ExpireConditionalEscrow {
         Self { escrow_id }
     }
 }
-
 isi! {
     /// Draw down funds from an active generic asset lock.
     pub struct DrawdownAssetLock {
@@ -401,7 +373,6 @@ isi! {
         pub expected_remaining_amount: iroha_primitives::numeric::Quantity,
     }
 }
-
 impl DrawdownAssetLock {
     /// Construct a generic asset lock drawdown instruction.
     #[must_use]
@@ -417,7 +388,6 @@ impl DrawdownAssetLock {
         }
     }
 }
-
 isi! {
     /// Cancel an active generic asset lock and refund remaining custody.
     #[cfg_attr(
@@ -435,7 +405,6 @@ isi! {
         pub expected_remaining_amount: iroha_primitives::numeric::Quantity,
     }
 }
-
 impl CancelAssetLock {
     /// Construct a generic asset lock cancellation with an exact remaining-amount precondition.
     #[must_use]
@@ -449,7 +418,6 @@ impl CancelAssetLock {
         }
     }
 }
-
 isi! {
     /// Expire a generic asset lock whose deadline has passed.
     pub struct ExpireAssetLock {
@@ -457,7 +425,6 @@ isi! {
         pub escrow_id: crate::escrow::EscrowId,
     }
 }
-
 impl ExpireAssetLock {
     /// Construct a generic asset lock expiry instruction.
     #[must_use]
@@ -465,7 +432,6 @@ impl ExpireAssetLock {
         Self { escrow_id }
     }
 }
-
 impl crate::seal::Instruction for OpenAssetEscrow {}
 impl crate::seal::Instruction for AcceptAssetEscrow {}
 impl crate::seal::Instruction for MarkEscrowPaymentSent {}
@@ -480,11 +446,9 @@ impl crate::seal::Instruction for ExpireConditionalEscrow {}
 impl crate::seal::Instruction for DrawdownAssetLock {}
 impl crate::seal::Instruction for CancelAssetLock {}
 impl crate::seal::Instruction for ExpireAssetLock {}
-
 fn escrow_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 macro_rules! impl_escrow_decode_from_slice {
     ($ty:ty { $($field:ident : $field_ty:ty),+ $(,)? }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -493,7 +457,6 @@ macro_rules! impl_escrow_decode_from_slice {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 $(
                     let $field = super::decode_aos_canonical_field::<$field_ty>(
@@ -510,42 +473,34 @@ macro_rules! impl_escrow_decode_from_slice {
         }
     };
 }
-
 impl_escrow_decode_from_slice!(OpenAssetEscrow {
     escrow_id: crate::escrow::EscrowId,
     asset_definition: crate::asset::AssetDefinitionId,
     amount: iroha_primitives::numeric::Quantity,
     evidence_hashes: Vec<iroha_crypto::Hash>,
 });
-
 impl_escrow_decode_from_slice!(AcceptAssetEscrow {
     escrow_id: crate::escrow::EscrowId,
 });
-
 impl_escrow_decode_from_slice!(MarkEscrowPaymentSent {
     escrow_id: crate::escrow::EscrowId,
 });
-
 impl_escrow_decode_from_slice!(ReleaseAssetEscrow {
     escrow_id: crate::escrow::EscrowId,
 });
-
 impl_escrow_decode_from_slice!(CancelAssetEscrow {
     escrow_id: crate::escrow::EscrowId,
 });
-
 impl_escrow_decode_from_slice!(OpenEscrowDispute {
     escrow_id: crate::escrow::EscrowId,
     evidence_hashes: Vec<iroha_crypto::Hash>,
 });
-
 impl_escrow_decode_from_slice!(ResolveEscrowDispute {
     escrow_id: crate::escrow::EscrowId,
     buyer_amount: iroha_primitives::numeric::Quantity,
     seller_amount: iroha_primitives::numeric::Quantity,
     evidence_hashes: Vec<iroha_crypto::Hash>,
 });
-
 impl_escrow_decode_from_slice!(OpenAssetLock {
     escrow_id: crate::escrow::EscrowId,
     asset_definition: crate::asset::AssetDefinitionId,
@@ -555,7 +510,6 @@ impl_escrow_decode_from_slice!(OpenAssetLock {
     expires_at_ms: Option<u64>,
     evidence_hashes: Vec<iroha_crypto::Hash>,
 });
-
 impl_escrow_decode_from_slice!(OpenConditionalEscrow {
     escrow_id: crate::escrow::EscrowId,
     asset_definition: crate::asset::AssetDefinitionId,
@@ -565,45 +519,36 @@ impl_escrow_decode_from_slice!(OpenConditionalEscrow {
     expires_at_ms: u64,
     evidence_hashes: Vec<iroha_crypto::Hash>,
 });
-
 impl_escrow_decode_from_slice!(AttestEscrowCondition {
     escrow_id: crate::escrow::EscrowId,
     condition_id: crate::name::Name,
     value: crate::escrow::ConditionalEscrowValue,
     evidence_hash: Option<iroha_crypto::Hash>,
 });
-
 impl_escrow_decode_from_slice!(ExpireConditionalEscrow {
     escrow_id: crate::escrow::EscrowId,
 });
-
 impl_escrow_decode_from_slice!(DrawdownAssetLock {
     escrow_id: crate::escrow::EscrowId,
     amount: iroha_primitives::numeric::Quantity,
     expected_remaining_amount: iroha_primitives::numeric::Quantity,
 });
-
 impl_escrow_decode_from_slice!(CancelAssetLock {
     escrow_id: crate::escrow::EscrowId,
     expected_remaining_amount: iroha_primitives::numeric::Quantity,
 });
-
 impl_escrow_decode_from_slice!(ExpireAssetLock {
     escrow_id: crate::escrow::EscrowId,
 });
-
 #[cfg(test)]
 mod tests {
     use core::num::{NonZeroU32, NonZeroU64};
-
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::codec::Encode;
     use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::{domain::DomainId, name::Name};
-
     #[derive(Encode)]
     struct ForgedOpenAssetEscrow {
         escrow_id: crate::escrow::EscrowId,
@@ -611,28 +556,23 @@ mod tests {
         amount: Numeric,
         evidence_hashes: Vec<iroha_crypto::Hash>,
     }
-
     fn escrow_id() -> crate::escrow::EscrowId {
         crate::escrow::EscrowId::new(Hash::new("escrow-slice"))
     }
-
     fn asset_definition_id() -> crate::asset::AssetDefinitionId {
         crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse::<Name>().unwrap(),
         )
     }
-
     fn account(seed: u8) -> crate::account::AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked escrow fixture account keypair");
         crate::account::AccountId::new(key_pair.public_key().clone())
     }
-
     fn evidence_hashes() -> Vec<Hash> {
         vec![Hash::new("escrow-slice-evidence")]
     }
-
     fn conditional_conditions(
         attestor: crate::account::AccountId,
     ) -> Vec<crate::escrow::ConditionalEscrowCondition> {
@@ -655,7 +595,6 @@ mod tests {
             ),
         ]
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -666,7 +605,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, value: T)
     where
         T: crate::isi::Instruction
@@ -684,7 +622,6 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn escrow_instruction_constructors_fill_expected_fields() {
@@ -696,7 +633,6 @@ mod tests {
         let evidence = vec![Hash::new("evidence")];
         let destination = account(0xA1);
         let release_authority = account(0xA2);
-
         assert_eq!(
             OpenAssetEscrow::new(escrow_id, asset_definition.clone(), Quantity::from(10_u64)),
             OpenAssetEscrow {
@@ -782,7 +718,6 @@ mod tests {
         assert_eq!(cancel.expected_remaining_amount, Quantity::from(20_u64));
         assert_eq!(ExpireAssetLock::new(escrow_id).escrow_id, escrow_id);
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn escrow_decode_from_slice_roundtrips() {
@@ -791,7 +726,6 @@ mod tests {
         let evidence = evidence_hashes();
         let destination = account(0xB1);
         let release_authority = account(0xB2);
-
         assert_slice_roundtrip(OpenAssetEscrow::with_evidence_hashes(
             escrow_id,
             asset_definition.clone(),
@@ -829,7 +763,6 @@ mod tests {
         assert_slice_roundtrip(CancelAssetLock::new(escrow_id, Quantity::from(20_u64)));
         assert_slice_roundtrip(ExpireAssetLock::new(escrow_id));
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn cancel_asset_lock_v1_fixtures_enforce_the_two_field_hard_cut() {
@@ -840,7 +773,6 @@ mod tests {
                 panic!("read CancelAssetLock fixture `{relative}`: {error}")
             })
         };
-
         let canonical_json = read("cancel_asset_lock_v1.json");
         let canonical_from_json: CancelAssetLock = norito::json::from_slice(&canonical_json)
             .expect("canonical CancelAssetLock JSON must decode");
@@ -857,7 +789,6 @@ mod tests {
             .as_bytes(),
             canonical_json
         );
-
         let canonical_norito = read("cancel_asset_lock_v1.to");
         let canonical_from_norito: CancelAssetLock = norito::decode_from_bytes(&canonical_norito)
             .expect("canonical CancelAssetLock Norito must decode");
@@ -867,7 +798,6 @@ mod tests {
                 .expect("serialize canonical CancelAssetLock Norito"),
             canonical_norito
         );
-
         for path in [
             "negative/cancel_asset_lock_legacy_missing_expected_v1.json",
             "negative/cancel_asset_lock_noncanonical_quantity_v1.json",
@@ -886,7 +816,6 @@ mod tests {
                 "noncanonical CancelAssetLock Norito fixture `{path}` must be rejected"
             );
         }
-
         let zero_json: CancelAssetLock =
             norito::json::from_slice(&read("negative/cancel_asset_lock_zero_expected_v1.json"))
                 .expect("zero expected amount remains structurally valid JSON");
@@ -899,7 +828,6 @@ mod tests {
             "the native execution boundary, not the codec, rejects zero"
         );
     }
-
     #[test]
     fn negative_numeric_payload_cannot_decode_as_native_escrow_instruction_quantity() {
         let forged = ForgedOpenAssetEscrow {
@@ -908,13 +836,11 @@ mod tests {
             amount: Numeric::new(-1_i32, 0),
             evidence_hashes: Vec::new(),
         };
-
         assert!(
             OpenAssetEscrow::decode_from_slice(&forged.encode()).is_err(),
             "a negative signed payload must not decode as a native escrow instruction"
         );
     }
-
     #[test]
     fn conditional_escrow_instructions_roundtrip_and_decode_from_default_registry() {
         let registry = crate::isi::registry::default();
@@ -935,7 +861,6 @@ mod tests {
             Some(Hash::new("signed-delivery-evidence")),
         );
         let expire = ExpireConditionalEscrow::new(escrow_id);
-
         assert_slice_roundtrip(open.clone());
         assert_slice_roundtrip(attest.clone());
         assert_slice_roundtrip(expire.clone());
@@ -943,7 +868,6 @@ mod tests {
         assert_registry_decodes(&registry, attest);
         assert_registry_decodes(&registry, expire);
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn conditional_escrow_json_preserves_typed_conditions() {
@@ -955,11 +879,9 @@ mod tests {
             conditional_conditions(account(0xC6)),
             120_000,
         );
-
         let json = norito::json::to_json(&open).expect("serialize conditional escrow");
         let decoded: OpenConditionalEscrow =
             norito::json::from_str(&json).expect("deserialize conditional escrow");
-
         assert_eq!(decoded, open);
         assert!(matches!(
             decoded.conditions[0],
@@ -970,7 +892,6 @@ mod tests {
             crate::escrow::ConditionalEscrowCondition::Within(_)
         ));
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn escrow_default_registry_decodes_type_names() {
@@ -980,7 +901,6 @@ mod tests {
         let evidence = evidence_hashes();
         let destination = account(0xC1);
         let release_authority = account(0xC2);
-
         assert_registry_decodes(
             &registry,
             OpenAssetEscrow::with_evidence_hashes(

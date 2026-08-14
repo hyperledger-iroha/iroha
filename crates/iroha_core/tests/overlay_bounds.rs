@@ -3,16 +3,13 @@
 //! Ensures validation rejects transactions whose overlays exceed configured
 //! `overlay_max_instructions` or `overlay_max_bytes`, and other transactions in
 //! the same block still apply (non-forking semantics).
-
 use std::{borrow::Cow, str::FromStr, sync::Arc};
-
 use iroha_core::{
     block::BlockBuilder, governance::manifest::LaneManifestRegistry, smartcontracts::Execute,
     state::StateReadOnly,
 };
 use iroha_data_model::prelude::*;
 use norito::codec::Encode as NoritoEncode;
-
 fn build_min_world() -> (
     iroha_core::state::State,
     NetworkId,
@@ -36,17 +33,14 @@ fn build_min_world() -> (
     ));
     (state, network_id, authority_id, kp)
 }
-
 #[test]
 fn overlay_instruction_cap_rejects_and_rest_apply() {
     let (mut state, network_id, authority_id, kp) = build_min_world();
-
     // Set strict instruction cap: at most 1 instruction per overlay
     let mut cfg = state.view().pipeline().clone();
     cfg.overlay_max_instructions = 1;
     cfg.overlay_max_bytes = 0; // unlimited
     state.set_pipeline(cfg);
-
     // tx_a: two instructions → should be rejected by instruction cap
     let tx_a = TransactionBuilder::new(
         network_id,
@@ -66,20 +60,17 @@ fn overlay_instruction_cap_rejects_and_rest_apply() {
     )
     .with_instructions([Log::new(Level::INFO, "b1".to_string())])
     .sign(kp.private_key());
-
     let a = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx_a));
     let b = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx_b));
     let new_block = BlockBuilder::new(vec![a, b])
         .chain(0, None)
         .sign(kp.private_key())
         .unpack(|_| {});
-
     let mut sb = state.block(new_block.header());
     let vb = new_block
         .validate_and_record_transactions(&mut sb)
         .unpack(|_| {});
     let _ = sb.commit();
-
     // Expect first tx rejected with NotPermitted("overlay exceeds max instructions: ...") and second approved
     let block = vb.as_ref();
     let errors = [block.error(0), block.error(1)];
@@ -100,11 +91,9 @@ fn overlay_instruction_cap_rejects_and_rest_apply() {
         "at least one tx should be approved; got {errors:?}"
     );
 }
-
 #[test]
 fn overlay_bytes_cap_rejects_and_rest_apply() {
     let (mut state, network_id, authority_id, kp) = build_min_world();
-
     // Choose a strict byte cap so that the small overlay passes but the big one is rejected.
     let small_instr: InstructionBox = Log::new(Level::INFO, "ok".to_string()).into();
     let small_bytes = NoritoEncode::encode(&small_instr).len() as u64;
@@ -118,12 +107,10 @@ fn overlay_bytes_cap_rejects_and_rest_apply() {
         big_bytes > small_bytes,
         "expected big instruction to exceed small: {big_bytes} > {small_bytes}"
     );
-
     let mut cfg = state.view().pipeline().clone();
     cfg.overlay_max_instructions = 0; // unlimited instruction count
     cfg.overlay_max_bytes = small_bytes;
     state.set_pipeline(cfg);
-
     let tx_big = TransactionBuilder::new(
         network_id,
         authority_id.clone(),
@@ -139,20 +126,17 @@ fn overlay_bytes_cap_rejects_and_rest_apply() {
     )
     .with_instructions([small_instr])
     .sign(kp.private_key());
-
     let big = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx_big));
     let small = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx_small));
     let new_block = BlockBuilder::new(vec![big, small])
         .chain(0, None)
         .sign(kp.private_key())
         .unpack(|_| {});
-
     let mut sb = state.block(new_block.header());
     let vb = new_block
         .validate_and_record_transactions(&mut sb)
         .unpack(|_| {});
     let _ = sb.commit();
-
     // Expect first tx rejected with NotPermitted("overlay exceeds max bytes: ...") and second approved
     let block = vb.as_ref();
     let errors = [block.error(0), block.error(1)];
@@ -179,11 +163,9 @@ fn overlay_bytes_cap_rejects_and_rest_apply() {
         "at least one tx should be approved; got {errors:?}"
     );
 }
-
 #[test]
 fn expired_transaction_is_rejected_during_stateless_prepass() {
     let (state, network_id, authority_id, kp) = build_min_world();
-
     // Require expiry checks based on block height via SetParameter
     {
         let header = iroha_data_model::block::BlockHeader::new(
@@ -201,7 +183,6 @@ fn expired_transaction_is_rejected_during_stateless_prepass() {
         iroha_data_model::isi::Grant::account_permission(perm, authority_id.clone())
             .execute(&authority_id, &mut stx)
             .expect("grant set parameters");
-
         iroha_data_model::isi::SetParameter::new(Parameter::Transaction(
             iroha_data_model::parameter::system::TransactionParameter::RequireHeightTtl(true),
         ))
@@ -210,7 +191,6 @@ fn expired_transaction_is_rejected_during_stateless_prepass() {
         stx.apply();
         blk.commit().expect("commit param block");
     }
-
     // tx_expired: creation time far in the past with short TTL → should be rejected
     let tx_expired = TransactionBuilder::new(
         network_id,
@@ -225,7 +205,6 @@ fn expired_transaction_is_rejected_during_stateless_prepass() {
         md
     })
     .sign(kp.private_key());
-
     // tx_ok: current creation time without TTL → should be approved
     let tx_ok = TransactionBuilder::new(
         network_id,
@@ -234,20 +213,17 @@ fn expired_transaction_is_rejected_during_stateless_prepass() {
     )
     .with_instructions([Log::new(Level::INFO, "ok".to_string())])
     .sign(kp.private_key());
-
     let expired = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx_expired));
     let ok = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx_ok));
     let new_block = BlockBuilder::new(vec![expired, ok])
         .chain(0, None)
         .sign(kp.private_key())
         .unpack(|_| {});
-
     let mut sb = state.block(new_block.header());
     let vb = new_block
         .validate_and_record_transactions(&mut sb)
         .unpack(|_| {});
     let _ = sb.commit();
-
     let block = vb.as_ref();
     eprintln!("errors ttl: {:?}", [block.error(0), block.error(1)]);
     // TTL enforcement is currently configuration-dependent; ensure at least one tx succeeds.

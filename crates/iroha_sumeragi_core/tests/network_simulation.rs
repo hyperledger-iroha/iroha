@@ -6,9 +6,7 @@
 //! scheduler. The accelerated chain-prefix gate instead queues every local
 //! completion and injects deterministic WAL/replay interruptions; its QCs and
 //! TCs are externally supplied fixtures, so it does not claim quorum formation.
-
 use std::collections::{BTreeSet, VecDeque};
-
 use iroha_sumeragi_core::{
     BodyState, CertificateRef, ConsensusMessageV2, ContextId, Digest, DurableCommitReceipt, Effect,
     EquivocationKind, Event, EventTag, Generation, HeightContext, IgnoreReason, NetworkId,
@@ -17,14 +15,12 @@ use iroha_sumeragi_core::{
     TimeoutCertificate, TimeoutSignatureGroup, Validator, ValidatorId, Vote, VotingMode,
     VotingPower, WalEntry, WalRecord,
 };
-
 const HEIGHT: u64 = 42;
 const ACCELERATED_CHAOS_HEIGHTS: u64 = 100_000;
 const ACCELERATED_CHAOS_SMOKE_HEIGHTS: u64 = 320;
 const ACCELERATED_RESTART_INTERVAL: u64 = 64;
 const ACCELERATED_DUPLICATE_INTERVAL: u64 = 32;
 const ACCELERATED_UNDER_QUORUM_INTERVAL: u64 = 97;
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct AcceleratedChaosStats {
     completed_heights: u64,
@@ -48,7 +44,6 @@ struct AcceleratedChaosStats {
     count_only_qcs: u64,
     power_only_qcs: u64,
 }
-
 impl AcceleratedChaosStats {
     fn merge(&mut self, other: Self) {
         self.completed_heights += other.completed_heights;
@@ -73,7 +68,6 @@ impl AcceleratedChaosStats {
         self.power_only_qcs += other.power_only_qcs;
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AcceleratedRestartPoint {
     WalAppended,
@@ -82,13 +76,11 @@ enum AcceleratedRestartPoint {
     ValidationPending,
     ApplicationPending,
 }
-
 struct AcceleratedNode {
     reducer: Reducer,
     wal: Vec<WalEntry>,
     pending: VecDeque<Effect>,
 }
-
 #[derive(Clone)]
 struct Envelope {
     from: usize,
@@ -97,7 +89,6 @@ struct Envelope {
     copy: u8,
     impair_first_copy: bool,
 }
-
 struct Node {
     reducer: Reducer,
     wal: Vec<WalEntry>,
@@ -106,7 +97,6 @@ struct Node {
     corrupt_fetches_remaining: usize,
     dropped_signatures_remaining: usize,
 }
-
 #[derive(Default)]
 struct NetworkStats {
     impaired_drops: usize,
@@ -120,7 +110,6 @@ struct NetworkStats {
     withheld_commit_messages: usize,
     crashed_signatures: usize,
 }
-
 struct Simulation {
     context: HeightContext,
     nodes: Vec<Node>,
@@ -133,7 +122,6 @@ struct Simulation {
     withhold_commit_traffic: bool,
     stats: NetworkStats,
 }
-
 impl Simulation {
     fn new(validator_count: usize, mode: VotingMode, offline: Option<usize>) -> Self {
         let context = context(validator_count, mode);
@@ -164,7 +152,6 @@ impl Simulation {
             stats: NetworkStats::default(),
         }
     }
-
     fn online_indices(&self) -> Vec<usize> {
         self.nodes
             .iter()
@@ -172,7 +159,6 @@ impl Simulation {
             .filter_map(|(index, node)| node.online.then_some(index))
             .collect()
     }
-
     fn dispatch(&mut self, index: usize, event: Event) -> StepDisposition {
         let outcome = self.nodes[index]
             .reducer
@@ -186,7 +172,6 @@ impl Simulation {
         self.assert_agreement();
         disposition
     }
-
     #[allow(clippy::too_many_lines)]
     fn drive_effects(&mut self, index: usize, effects: Vec<Effect>) {
         let mut pending: VecDeque<_> = effects.into();
@@ -309,7 +294,6 @@ impl Simulation {
             pending.extend(follow_up);
         }
     }
-
     fn enqueue_broadcast(&mut self, from: usize, message: &ConsensusMessageV2) {
         let broadcast = self.broadcasts;
         self.broadcasts += 1;
@@ -331,7 +315,6 @@ impl Simulation {
             }
         }
     }
-
     fn drain_network(&mut self) {
         let mut remaining_budget = 200_000_usize;
         while !self.network.is_empty() {
@@ -393,7 +376,6 @@ impl Simulation {
             self.dispatch(envelope.to, event);
         }
     }
-
     fn timeout_all_online(&mut self) {
         for index in self.online_indices() {
             let tag = self.nodes[index].reducer.current_tag();
@@ -402,24 +384,20 @@ impl Simulation {
         self.drain_network();
         self.retransmit_all_online(5);
     }
-
     fn install_partition(&mut self, groups: Vec<usize>) {
         assert_eq!(groups.len(), self.nodes.len());
         self.partition = Some(groups);
     }
-
     fn install_directed_partition(
         &mut self,
         dropped_links: impl IntoIterator<Item = (usize, usize)>,
     ) {
         self.directed_partition_drops = dropped_links.into_iter().collect();
     }
-
     fn heal_partition(&mut self) {
         self.partition = None;
         self.directed_partition_drops.clear();
     }
-
     fn restart(&mut self, index: usize) {
         let validator = self.nodes[index]
             .reducer
@@ -450,7 +428,6 @@ impl Simulation {
         self.nodes[index].online = true;
         self.drive_effects(index, effects);
     }
-
     fn retransmit_all_online(&mut self, rounds: usize) {
         for _ in 0..rounds {
             for index in self.online_indices() {
@@ -460,7 +437,6 @@ impl Simulation {
             self.drain_network();
         }
     }
-
     fn inject_vote_equivocation(&mut self, signer: ValidatorId, subject: Subject) {
         let round = Round::new(self.context.height(), self.current_online_view());
         let conflicting = Subject::repeat(subject.as_bytes()[0].wrapping_add(0x40));
@@ -482,14 +458,12 @@ impl Simulation {
             }
         }
     }
-
     fn propose(&mut self, subject: Subject) -> u64 {
         let (view, _leader_index) = self.begin_proposal(subject);
         self.drain_network();
         self.retransmit_all_online(5);
         view
     }
-
     fn begin_proposal(&mut self, subject: Subject) -> (u64, usize) {
         let view = self.current_online_view();
         let leader = self.context.leader(view);
@@ -509,7 +483,6 @@ impl Simulation {
         );
         (view, leader_index)
     }
-
     fn install_tc(&mut self, index: usize, certificate: TimeoutCertificate) {
         let tag = self.nodes[index].reducer.current_tag();
         self.dispatch(
@@ -517,12 +490,10 @@ impl Simulation {
             Event::TimeoutCertificateReceived { tag, certificate },
         );
     }
-
     fn deliver_commit_qc(&mut self, index: usize, certificate: QuorumCertificate) {
         let tag = self.nodes[index].reducer.current_tag();
         self.dispatch(index, Event::QuorumCertificateReceived { tag, certificate });
     }
-
     fn current_online_view(&self) -> u64 {
         let mut views = self
             .nodes
@@ -536,7 +507,6 @@ impl Simulation {
         );
         first
     }
-
     fn assert_agreement(&self) {
         let mut decided = self.nodes.iter().filter_map(|node| {
             node.reducer
@@ -551,7 +521,6 @@ impl Simulation {
             );
         }
     }
-
     fn assert_online_committed(&self, expected: Subject) {
         for (index, node) in self
             .nodes
@@ -572,7 +541,6 @@ impl Simulation {
         self.assert_agreement();
     }
 }
-
 #[test]
 fn lossy_offline_leader_simulations_commit_for_4_7_and_10_validators() {
     for validator_count in [4, 7, 10] {
@@ -588,7 +556,6 @@ fn lossy_offline_leader_simulations_commit_for_4_7_and_10_validators() {
                     matches!(entry.record(), WalRecord::InstallTimeout(certificate) if certificate.round().view() == 0)
                 }));
             }
-
             let subject = Subject::repeat(
                 0x20 + u8::try_from(validator_count).expect("fixture size fits in u8")
                     + u8::from(mode == VotingMode::Npos),
@@ -598,7 +565,6 @@ fn lossy_offline_leader_simulations_commit_for_4_7_and_10_validators() {
             // conflicting quorum certificates.
             simulation.inject_vote_equivocation(validator_id(2), subject);
             let successful_view = simulation.propose(subject);
-
             simulation.assert_online_committed(subject);
             assert!(successful_view <= validator_count as u64);
             assert!(simulation.stats.impaired_drops > 0);
@@ -610,12 +576,10 @@ fn lossy_offline_leader_simulations_commit_for_4_7_and_10_validators() {
         }
     }
 }
-
 #[test]
 fn two_by_two_partition_cannot_advance_but_healing_retransmits_tc_and_commits() {
     let mut simulation = Simulation::new(4, VotingMode::Npos, None);
     simulation.install_partition(vec![0, 0, 1, 1]);
-
     simulation.timeout_all_online();
     assert_eq!(
         simulation
@@ -633,7 +597,6 @@ fn two_by_two_partition_cannot_advance_but_healing_retransmits_tc_and_commits() 
                 |entry| matches!(entry.record(), WalRecord::TimeoutIntent(vote) if vote.round().view() == 0),
             )
     }));
-
     simulation.heal_partition();
     simulation.retransmit_all_online(5);
     assert_eq!(simulation.current_online_view(), 1);
@@ -642,12 +605,10 @@ fn two_by_two_partition_cannot_advance_but_healing_retransmits_tc_and_commits() 
             |entry| matches!(entry.record(), WalRecord::InstallTimeout(certificate) if certificate.round().view() == 0),
         )
     }));
-
     let subject = Subject::repeat(0x6d);
     simulation.propose(subject);
     simulation.assert_online_committed(subject);
 }
-
 #[test]
 fn historical_prepare_qc_uses_current_consumer_tag_after_timeout_install() {
     let mut simulation = Simulation::new(4, VotingMode::Permissioned, None);
@@ -664,7 +625,6 @@ fn historical_prepare_qc_uses_current_consumer_tag_after_timeout_install() {
         StepDisposition::Applied
     );
     assert_eq!(simulation.nodes[0].reducer.current_tag().view(), 1);
-
     let subject = Subject::repeat(0x6f);
     let historical = certificate(&simulation.context, 0, Phase::Prepare, subject);
     let event = network_event(
@@ -689,7 +649,6 @@ fn historical_prepare_qc_uses_current_consumer_tag_after_timeout_install() {
             .highest_prepare(),
         Some(&historical)
     );
-
     let retransmit_tag = simulation.nodes[0].reducer.current_tag();
     simulation.dispatch(
         0,
@@ -706,7 +665,6 @@ fn historical_prepare_qc_uses_current_consumer_tag_after_timeout_install() {
             )
     }));
 }
-
 #[test]
 fn responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc() {
     for mode in [VotingMode::Permissioned, VotingMode::Npos] {
@@ -714,11 +672,9 @@ fn responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc() {
         let source = 0;
         let lagger = 1;
         let timeout = grouped_timeout(&simulation.context, 0, None);
-
         simulation.install_tc(source, timeout.clone());
         assert_eq!(simulation.nodes[source].reducer.current_tag().view(), 1);
         assert_eq!(simulation.nodes[lagger].reducer.current_tag().view(), 0);
-
         let subject = Subject::repeat(0x70);
         let prepare = certificate(&simulation.context, 1, Phase::Prepare, subject);
         let source_event = network_event(
@@ -750,7 +706,6 @@ fn responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc() {
                         if certificate == &prepare
                 ))
         );
-
         let lagger_before = simulation.nodes[lagger].reducer.clone();
         let lagger_wal_len = simulation.nodes[lagger].wal.len();
         let future_event = network_event(
@@ -763,7 +718,6 @@ fn responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc() {
         );
         assert_eq!(&simulation.nodes[lagger].reducer, &lagger_before);
         assert_eq!(simulation.nodes[lagger].wal.len(), lagger_wal_len);
-
         let queued_before = simulation.network.len();
         let lagger_tag = simulation.nodes[lagger].reducer.current_tag();
         assert_eq!(
@@ -775,7 +729,6 @@ fn responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc() {
             queued_before,
             "the ignored future QC must not acquire retransmission ownership"
         );
-
         simulation.install_tc(lagger, timeout);
         assert_eq!(simulation.nodes[lagger].reducer.current_tag().view(), 1);
         assert!(
@@ -785,7 +738,6 @@ fn responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc() {
                 .highest_prepare()
                 .is_none()
         );
-
         let source_tag = simulation.nodes[source].reducer.current_tag();
         assert_eq!(
             simulation.dispatch(source, Event::RetransmitElapsed { tag: source_tag }),
@@ -801,7 +753,6 @@ fn responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc() {
                 )
         }));
         simulation.drain_network();
-
         assert_eq!(
             simulation.nodes[lagger]
                 .reducer
@@ -823,7 +774,6 @@ fn responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc() {
                         if certificate == &prepare
                 ))
         );
-
         let lagger_tag = simulation.nodes[lagger].reducer.current_tag();
         assert_eq!(
             simulation.dispatch(lagger, Event::RetransmitElapsed { tag: lagger_tag }),
@@ -844,17 +794,14 @@ fn responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc() {
         )));
     }
 }
-
 #[test]
 fn asymmetric_partition_stalls_without_dual_quorum_then_heals_and_applies() {
     let mut simulation = Simulation::new(4, VotingMode::Npos, None);
     simulation.install_directed_partition([(2, 0), (2, 1), (3, 0), (3, 1)]);
-
     let subject = Subject::repeat(0x6e);
     simulation.begin_proposal(subject);
     simulation.drain_network();
     simulation.retransmit_all_online(6);
-
     assert!(
         simulation
             .nodes
@@ -862,12 +809,10 @@ fn asymmetric_partition_stalls_without_dual_quorum_then_heals_and_applies() {
             .all(|node| node.reducer.durable_state().decision().is_none())
     );
     assert!(simulation.stats.partition_drops > 0);
-
     simulation.heal_partition();
     simulation.retransmit_all_online(6);
     simulation.assert_online_committed(subject);
 }
-
 #[test]
 fn leader_crash_after_proposal_broadcast_does_not_block_the_remaining_quorum() {
     for mode in [VotingMode::Permissioned, VotingMode::Npos] {
@@ -875,18 +820,15 @@ fn leader_crash_after_proposal_broadcast_does_not_block_the_remaining_quorum() {
         let subject = Subject::repeat(0x79 + u8::from(mode == VotingMode::Npos));
         let (view, leader_index) = simulation.begin_proposal(subject);
         assert_eq!(view, 0);
-
         // The leader completed its durable proposal intent and broadcast, then
         // crashed before receiving its own proposal or contributing a Prepare.
         simulation.nodes[leader_index].online = false;
         simulation.drain_network();
         simulation.retransmit_all_online(5);
-
         simulation.assert_online_committed(subject);
         assert!(simulation.stats.offline_drops > 0);
     }
 }
-
 #[test]
 fn leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum() {
     for (validator_count, mode) in [(4, VotingMode::Permissioned), (7, VotingMode::Npos)] {
@@ -896,12 +838,10 @@ fn leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum() 
                 + u8::from(mode == VotingMode::Npos),
         );
         simulation.withhold_commit_traffic = true;
-
         let (locked_view, leader_index) = simulation.begin_proposal(subject);
         assert_eq!(locked_view, 0);
         simulation.drain_network();
         simulation.retransmit_all_online(5);
-
         let locked_round = Round::new(simulation.context.height(), locked_view);
         assert!(simulation.nodes.iter().all(|node| {
             node.reducer
@@ -914,7 +854,6 @@ fn leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum() 
                 && node.applied.is_empty()
         }));
         assert!(simulation.stats.withheld_commit_messages > 0);
-
         // The original leader crashes only after it has the same durable lock
         // and body pipeline as its peers. The responsive dual quorum must be
         // able to install a TC without it while Commit traffic is still held.
@@ -934,7 +873,6 @@ fn leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum() 
                     == Some(subject)
                     && node.reducer.body_state(locked_round, subject) == BodyState::Validated)
         );
-
         // Healing only the Commit lane models the exact reset-boundary
         // regression: retransmitted old-round votes must repopulate each new
         // volatile pool and finish the already locked body without the leader.
@@ -943,7 +881,6 @@ fn leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum() 
         simulation.assert_online_committed(subject);
     }
 }
-
 #[test]
 fn corrupted_chunks_and_withheld_commit_evidence_recover_by_bounded_retransmission() {
     for validator_count in [4, 7, 10] {
@@ -965,7 +902,6 @@ fn corrupted_chunks_and_withheld_commit_evidence_recover_by_bounded_retransmissi
                 0x90 + u8::try_from(validator_count).expect("fixture size fits u8")
                     + u8::from(mode == VotingMode::Npos),
             );
-
             simulation.begin_proposal(subject);
             simulation.drain_network();
             simulation.retransmit_all_online(4);
@@ -979,14 +915,12 @@ fn corrupted_chunks_and_withheld_commit_evidence_recover_by_bounded_retransmissi
             );
             assert_eq!(simulation.stats.corrupted_chunks, validator_count - 1);
             assert!(simulation.stats.withheld_commit_messages > 0);
-
             simulation.withhold_commit_traffic = false;
             simulation.retransmit_all_online(6);
             simulation.assert_online_committed(subject);
         }
     }
 }
-
 #[test]
 fn crash_after_proposal_wal_before_signature_replays_exact_intent() {
     for mode in [VotingMode::Permissioned, VotingMode::Npos] {
@@ -1000,14 +934,12 @@ fn crash_after_proposal_wal_before_signature_replays_exact_intent() {
         simulation.nodes[leader_index].dropped_signatures_remaining = 1;
         let old_tag = simulation.nodes[leader_index].reducer.current_tag();
         let subject = Subject::repeat(0xb0 + u8::from(mode == VotingMode::Npos));
-
         simulation.begin_proposal(subject);
         assert_eq!(simulation.stats.crashed_signatures, 1);
         assert!(simulation.nodes[leader_index].wal.iter().any(|entry| {
             matches!(entry.record(), WalRecord::ProposalIntent(proposal) if proposal.manifest().subject() == subject)
         }));
         assert!(simulation.network.is_empty());
-
         simulation.nodes[leader_index].online = false;
         simulation.restart(leader_index);
         assert!(matches!(
@@ -1025,7 +957,6 @@ fn crash_after_proposal_wal_before_signature_replays_exact_intent() {
         simulation.assert_online_committed(subject);
     }
 }
-
 #[test]
 fn taira_divergent_views_converge_and_commit_within_one_rotation() {
     let mut simulation = Simulation::new(4, VotingMode::Npos, None);
@@ -1034,7 +965,6 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
     let tc0 = grouped_timeout(&simulation.context, 0, Some(prepare.clone()));
     let tc1 = grouped_timeout(&simulation.context, 1, Some(prepare.clone()));
     let tc2 = grouped_timeout(&simulation.context, 2, Some(prepare.clone()));
-
     // Recreate the captured incident shape at height H+1: one validator still
     // reports view 0 without the QC, another has installed view 1, and a third
     // is at view 2. The QC is carried by the grouped TCs rather than reacquired
@@ -1056,7 +986,6 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
             .highest_prepare()
             .is_none()
     );
-
     // A single verified TC for the highest observed view is sufficient to
     // converge every lower view, including validators that never saw the QC.
     for index in 0..simulation.nodes.len() {
@@ -1072,7 +1001,6 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
             Some(prepare.reference())
         );
     }
-
     // One node receives a delayed CommitQC from view zero after advancing to
     // view three. It finalizes immediately; the remaining dual quorum safely
     // commits the TC-selected subject in view three.
@@ -1091,7 +1019,6 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
     assert_eq!(successful_view, 3);
     assert!(successful_view <= simulation.context.roster().len() as u64);
 }
-
 #[test]
 fn accelerated_chain_chaos_smoke_preserves_prefix() {
     for mode in [VotingMode::Permissioned, VotingMode::Npos] {
@@ -1112,7 +1039,6 @@ fn accelerated_chain_chaos_smoke_preserves_prefix() {
         }
     }
 }
-
 #[test]
 #[ignore = "explicit release gate: executes 100,000 certificate-supplied reducer heights"]
 fn accelerated_100_000_block_chaos_preserves_chain_prefix() {
@@ -1145,7 +1071,6 @@ fn accelerated_100_000_block_chaos_preserves_chain_prefix() {
         ACCELERATED_UNDER_QUORUM_INTERVAL,
     );
 }
-
 fn run_accelerated_chain_chaos(height_count: u64, mode: VotingMode) -> AcceleratedChaosStats {
     let mut parent = None;
     let mut stats = AcceleratedChaosStats::default();
@@ -1187,7 +1112,6 @@ fn run_accelerated_chain_chaos(height_count: u64, mode: VotingMode) -> Accelerat
     );
     stats
 }
-
 #[allow(clippy::too_many_lines)]
 fn run_accelerated_height(
     context: &HeightContext,
@@ -1212,7 +1136,6 @@ fn run_accelerated_height(
         })
         .collect::<Vec<_>>();
     let mut signature_sequence = chaos_sequence;
-
     if certified_view > 0 {
         let timeout = grouped_timeout(context, certified_view - 1, None);
         let order = accelerated_delivery_order(nodes.len(), chaos_sequence);
@@ -1257,7 +1180,6 @@ fn run_accelerated_height(
             ));
         }
     }
-
     if chaos_sequence.is_multiple_of(ACCELERATED_UNDER_QUORUM_INTERVAL) {
         assert_under_quorum_decision_is_transactional(
             &mut nodes[0].reducer,
@@ -1313,7 +1235,6 @@ fn run_accelerated_height(
         &mut signature_sequence,
         stats,
     );
-
     if chaos_sequence.is_multiple_of(ACCELERATED_DUPLICATE_INTERVAL) {
         let index = usize::try_from(
             chaos_sequence % u64::try_from(nodes.len()).expect("four nodes fit in u64"),
@@ -1334,7 +1255,6 @@ fn run_accelerated_height(
         assert!(outcome.effects().is_empty());
         stats.duplicate_commit_qcs += 1;
     }
-
     for node in nodes {
         let durable_decision = node
             .reducer
@@ -1369,7 +1289,6 @@ fn run_accelerated_height(
     }
     stats.completed_heights += 1;
 }
-
 fn enqueue_accelerated_event(node: &mut AcceleratedNode, event: Event) -> StepDisposition {
     let outcome = node
         .reducer
@@ -1379,7 +1298,6 @@ fn enqueue_accelerated_event(node: &mut AcceleratedNode, event: Event) -> StepDi
     node.pending.extend(outcome.into_effects());
     disposition
 }
-
 #[allow(clippy::too_many_lines)]
 fn drain_accelerated_effects(
     nodes: &mut [AcceleratedNode],
@@ -1529,7 +1447,6 @@ fn drain_accelerated_effects(
         "scheduled restart point must be reached exactly once"
     );
 }
-
 fn assert_under_quorum_decision_is_transactional(
     reducer: &mut Reducer,
     context: &HeightContext,
@@ -1576,7 +1493,6 @@ fn assert_under_quorum_decision_is_transactional(
     ));
     assert_eq!(reducer, &before);
 }
-
 fn accelerated_effect_matches_restart(effect: &Effect, point: AcceleratedRestartPoint) -> bool {
     match (effect, point) {
         (Effect::Persist { entry, .. }, AcceleratedRestartPoint::WalAppended) => {
@@ -1589,7 +1505,6 @@ fn accelerated_effect_matches_restart(effect: &Effect, point: AcceleratedRestart
         _ => false,
     }
 }
-
 #[allow(clippy::too_many_lines)]
 fn restart_accelerated_node(
     node: &mut AcceleratedNode,
@@ -1659,7 +1574,6 @@ fn restart_accelerated_node(
         }
         _ => panic!("restart plan matched a non-interruptible accelerated effect"),
     };
-
     let local_validator = node
         .reducer
         .local_validator()
@@ -1687,7 +1601,6 @@ fn restart_accelerated_node(
     node.reducer = recovered;
     node.pending.clear();
     node.pending.extend(resume.into_effects());
-
     let stale = node
         .reducer
         .step(stale_event)
@@ -1699,7 +1612,6 @@ fn restart_accelerated_node(
     assert!(stale.effects().is_empty());
     stats.stale_generation_rejections += 1;
 }
-
 fn accelerated_restart_plan(
     sequence: u64,
     node_count: usize,
@@ -1724,7 +1636,6 @@ fn accelerated_restart_plan(
     .expect("restart target fits in usize");
     Some((index, point))
 }
-
 fn expected_accelerated_chaos_stats(height_count: u64, mode: VotingMode) -> AcceleratedChaosStats {
     let mut expected = AcceleratedChaosStats::default();
     for height in 1..=height_count {
@@ -1735,7 +1646,6 @@ fn expected_accelerated_chaos_stats(height_count: u64, mode: VotingMode) -> Acce
         expected.deferred_store_completions += 4;
         expected.deferred_validation_completions += 4;
         expected.deferred_application_completions += 4;
-
         if height % 4 != 0 {
             expected.supplied_tcs += 1;
             expected.reordered_tc_batches += 1;
@@ -1778,11 +1688,9 @@ fn expected_accelerated_chaos_stats(height_count: u64, mode: VotingMode) -> Acce
     }
     expected
 }
-
 fn is_canonical_delivery_order(order: &[usize]) -> bool {
     order.iter().copied().eq(0..order.len())
 }
-
 fn accelerated_delivery_order(length: usize, sequence: u64) -> Vec<usize> {
     let mut order = (0..length).collect::<Vec<_>>();
     if sequence % 2 == 1 {
@@ -1795,7 +1703,6 @@ fn accelerated_delivery_order(length: usize, sequence: u64) -> Vec<usize> {
     }
     order
 }
-
 fn accelerated_context(
     height: u64,
     parent: Option<CertificateRef>,
@@ -1827,14 +1734,12 @@ fn accelerated_context(
     )
     .expect("accelerated context preserves parent and frozen-roster invariants")
 }
-
 fn accelerated_id(domain: u8, sequence: u64) -> Subject {
     let mut bytes = [domain; 32];
     bytes[..8].copy_from_slice(&sequence.to_le_bytes());
     bytes[8..16].copy_from_slice(&sequence.rotate_left(17).to_le_bytes());
     Subject::new(bytes)
 }
-
 fn context(validator_count: usize, mode: VotingMode) -> HeightContext {
     let roster = (1..=validator_count)
         .map(|index| {
@@ -1865,11 +1770,9 @@ fn context(validator_count: usize, mode: VotingMode) -> HeightContext {
     )
     .expect("simulation context is valid")
 }
-
 fn validator_id(index: usize) -> ValidatorId {
     ValidatorId::repeat(u8::try_from(index).expect("fixture size fits in u8"))
 }
-
 fn manifest(subject: Subject) -> PayloadManifest {
     PayloadManifest::new(
         subject,
@@ -1879,7 +1782,6 @@ fn manifest(subject: Subject) -> PayloadManifest {
         4,
     )
 }
-
 fn certificate(
     context: &HeightContext,
     view: u64,
@@ -1902,7 +1804,6 @@ fn certificate(
         signatures,
     )
 }
-
 fn grouped_timeout(
     context: &HeightContext,
     view: u64,
@@ -1939,7 +1840,6 @@ fn grouped_timeout(
         .expect("fixture TC meets count and voting-power quorums");
     certificate
 }
-
 fn simulator_signature(
     signer: ValidatorId,
     sequence: u64,
@@ -1953,7 +1853,6 @@ fn simulator_signature(
     };
     OpaqueSignature::new(vec![signer.as_bytes()[0], kind, sequence.to_le_bytes()[0]])
 }
-
 fn network_event(message: &ConsensusMessageV2, current: EventTag) -> Event {
     match message {
         ConsensusMessageV2::Proposal(proposal) => Event::ProposalReceived {
@@ -2003,7 +1902,6 @@ fn network_event(message: &ConsensusMessageV2, current: EventTag) -> Event {
         }
     }
 }
-
 fn message_tag(current: EventTag, round: Round) -> EventTag {
     EventTag::new(round.height(), round.view(), current.generation())
 }

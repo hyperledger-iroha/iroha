@@ -2,7 +2,6 @@
 mod certified_merge_inclusion_tests {
     use iroha_crypto::{Hash, HashOf, KeyPair, MerkleProof, MerkleTree};
     use norito::codec::DecodeAll as _;
-
     use super::*;
     use crate::{
         account::AccountId,
@@ -15,14 +14,12 @@ mod certified_merge_inclusion_tests {
         },
         trigger::DataTriggerSequence,
     };
-
     fn assert_committed_transaction_roundtrip(committed: &CommittedTransaction) {
         let encoded = committed.encode();
         let decoded = CommittedTransaction::decode_all(&mut encoded.as_slice())
             .expect("canonical committed transaction must decode");
         assert_eq!(decoded, *committed);
     }
-
     fn test_network_id() -> crate::NetworkId {
         crate::NetworkId::from_genesis_hash(
             HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
@@ -30,7 +27,6 @@ mod certified_merge_inclusion_tests {
             )),
         )
     }
-
     fn certified_merge_fixture() -> (CertifiedMergeLedgerReference, CommittedTransaction) {
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());
@@ -100,14 +96,11 @@ mod certified_merge_inclusion_tests {
         };
         (reference, committed)
     }
-
     #[test]
     fn certified_merge_inclusion_verifies_exact_reference_and_parallel_proofs() {
         let (reference, committed) = certified_merge_fixture();
-
         assert!(committed.verify_certified_merge_inclusion(&reference));
         assert_committed_transaction_roundtrip(&committed);
-
         let mut ordinary = committed.clone();
         ordinary.merge_inclusion = None;
         assert_committed_transaction_roundtrip(&ordinary);
@@ -115,7 +108,6 @@ mod certified_merge_inclusion_tests {
             !ordinary.verify_certified_merge_inclusion(&reference),
             "ordinary transactions must not verify as certified merge inclusions"
         );
-
         #[cfg(feature = "transparent_api")]
         {
             let carrier_header = BlockHeader::new(
@@ -136,7 +128,6 @@ mod certified_merge_inclusion_tests {
             block_bound.block_hash = carrier.hash();
             assert!(block_bound.verify_certified_merge_inclusion_in_block(&carrier));
             assert!(block_bound.verify_inclusion_in_block(&carrier));
-
             let other_header = BlockHeader::new(
                 core::num::NonZeroU64::new(5).expect("non-zero carrier height"),
                 Some(HashOf::from_untyped_unchecked(Hash::new(b"carrier-parent"))),
@@ -157,11 +148,9 @@ mod certified_merge_inclusion_tests {
             );
             assert!(!block_bound.verify_inclusion_in_block(&other_carrier));
         }
-
         let mut wrong_reference = reference.clone();
         wrong_reference.entrypoint_count = Some(2);
         assert!(!committed.verify_certified_merge_inclusion(&wrong_reference));
-
         let mut ambiguous_count_reference = reference.clone();
         ambiguous_count_reference.entrypoint_count = Some(2);
         let mut ambiguous_count = committed.clone();
@@ -174,7 +163,6 @@ mod certified_merge_inclusion_tests {
             !ambiguous_count.verify_certified_merge_inclusion(&ambiguous_count_reference),
             "a one-leaf proof must not be rebound to a two-leaf certified count"
         );
-
         let oversized_leaf_count = (1_u64 << u32::BITS) + 1;
         let mut oversized_reference = reference.clone();
         oversized_reference.entrypoint_count = Some(oversized_leaf_count);
@@ -188,16 +176,13 @@ mod certified_merge_inclusion_tests {
             !oversized.verify_certified_merge_inclusion(&oversized_reference),
             "certified merge proofs must reject counts outside the u32 block-proof index space"
         );
-
         let mut wrong_version = reference.clone();
         wrong_version.version = 2;
         assert!(!committed.verify_certified_merge_inclusion(&wrong_version));
-
         let mut misaligned = committed;
         misaligned.result_proof = MerkleProof::from_audit_path(1, Vec::new());
         assert!(!misaligned.verify_certified_merge_inclusion(&reference));
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn ordinary_committed_transaction_verifies_against_exact_carrier_block() {
@@ -231,13 +216,10 @@ mod certified_merge_inclusion_tests {
             result: carrier.results().next().cloned().expect("result"),
             merge_inclusion: None,
         };
-
         assert!(ordinary.verify_inclusion_in_block(&carrier));
-
         let mut wrong_hash = ordinary.clone();
         wrong_hash.entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong-entrypoint"));
         assert!(!wrong_hash.verify_inclusion_in_block(&carrier));
-
         let other_header = BlockHeader::new(
             core::num::NonZeroU64::new(1).expect("non-zero height"),
             None,
@@ -251,13 +233,10 @@ mod certified_merge_inclusion_tests {
         assert!(!ordinary.verify_inclusion_in_block(&other_carrier));
     }
 }
-
 #[cfg(all(test, feature = "fault_injection"))]
 mod fault_injection_tests {
     use std::str::FromStr;
-
     use iroha_crypto::{Hash, HashOf, MerkleProof};
-
     use super::*;
     use crate::{
         AssetDefinitionId, Level,
@@ -266,12 +245,10 @@ mod fault_injection_tests {
         prelude::{DataTriggerSequence, Quantity, TimeTriggerEntrypoint, TransactionResult},
         trigger::TriggerId,
     };
-
     fn zero_hash<T>() -> HashOf<T> {
         let zero = [0u8; 32];
         HashOf::from_untyped_unchecked(Hash::prehashed(zero))
     }
-
     fn make_time_committed_tx() -> CommittedTransaction {
         let entry = TransactionEntrypoint::Time(TimeTriggerEntrypoint {
             id: TriggerId::from_str("fault_trigger").expect("valid trigger id"),
@@ -282,7 +259,6 @@ mod fault_injection_tests {
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect("valid authority"),
         });
-
         let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         CommittedTransaction {
             block_hash: zero_hash(),
@@ -295,25 +271,20 @@ mod fault_injection_tests {
             merge_inclusion: None,
         }
     }
-
     #[test]
     fn time_entrypoint_injection_appends_instructions() {
         let mut tx = make_time_committed_tx();
         let original_hash = tx.entrypoint_hash;
-
         let injected: InstructionBox = Log {
             level: Level::WARN,
             msg: "timer tamper".into(),
         }
         .into();
-
         tx.inject_instructions([injected.clone()]);
-
         assert_ne!(
             tx.entrypoint_hash, original_hash,
             "entrypoint hash must reflect injected instructions"
         );
-
         let instructions = match &tx.entrypoint {
             TransactionEntrypoint::Time(entry) => entry.instructions.0.clone().into_vec(),
             _ => panic!("expected time entrypoint"),
@@ -321,7 +292,6 @@ mod fault_injection_tests {
         assert_eq!(instructions.len(), 1);
         assert_eq!(instructions[0], injected);
     }
-
     #[test]
     fn result_swap_preserves_independent_batch_receipts() {
         let mut tx = make_time_committed_tx();
@@ -345,11 +315,9 @@ mod fault_injection_tests {
         };
         tx.result.set_batch_transfer_outcomes(vec![outcome.clone()]);
         tx.result_hash = tx.result.hash();
-
         let original_result_hash = tx.result_hash.clone();
         let original_result_proof = tx.result_proof.clone();
         tx.swap_result();
-
         assert!(tx.result.0.is_err());
         assert_eq!(tx.result.batch_transfer_outcomes(), &[outcome]);
         assert_eq!(tx.result_hash, tx.result.hash());
@@ -357,20 +325,15 @@ mod fault_injection_tests {
         assert_eq!(tx.result_proof, original_result_proof);
     }
 }
-
 #[cfg(all(test, feature = "json"))]
 mod tests {
     use std::num::NonZeroU64;
-
     use iroha_crypto::KeyPair;
     use norito::json;
-
     use super::*;
-
     #[test]
     fn proof_backend_query_payload_roundtrips() {
         use norito::codec::{Decode, Encode};
-
         let query =
             proof::prelude::FindProofRecordsByBackend::new("test/nonexistent-proof-backend".into());
         let encoded = query.encode();
@@ -378,14 +341,12 @@ mod tests {
             !encoded.is_empty(),
             "backend query payload must carry the backend identifier"
         );
-
         let mut bytes = encoded.as_slice();
         let decoded =
             proof::prelude::FindProofRecordsByBackend::decode(&mut bytes).expect("decode query");
         assert!(bytes.is_empty(), "decoder must consume the whole payload");
         assert_eq!(decoded.backend, query.backend);
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -393,7 +354,6 @@ mod tests {
     )]
     fn sorafs_authoritative_singular_query_payloads_roundtrip() {
         use norito::codec::{Decode, Encode};
-
         let juror = AccountId::new(KeyPair::random().public_key().clone());
         let orderbook_cursor = crate::sorafs::orderbook::OrderbookFinalizedCursorV1 {
             height: 7,
@@ -643,7 +603,6 @@ mod tests {
             )
             .into(),
         ];
-
         for query in queries {
             let encoded = query.encode();
             let mut bytes = encoded.as_slice();
@@ -652,21 +611,17 @@ mod tests {
             assert_eq!(decoded, query);
         }
     }
-
     #[test]
     fn query_output_batch_box_json_roundtrip() {
         let batch = QueryOutputBatchBox::String(vec!["hello".to_owned()]);
-
         let as_value = json::to_value(&batch).expect("serialize batch");
         assert_eq!(
             as_value,
             norito::json!({ "kind": "String", "content": ["hello"] })
         );
-
         let decoded: QueryOutputBatchBox = json::from_value(as_value).expect("deserialize batch");
         assert_eq!(decoded, batch);
     }
-
     #[test]
     fn query_response_iterable_json_roundtrip() {
         let cursor = parameters::ForwardCursor {
@@ -683,12 +638,10 @@ mod tests {
             continue_cursor: Some(cursor),
         };
         let response = QueryResponse::Iterable(output.clone());
-
         let as_value = json::to_value(&response).expect("serialize response");
         let decoded: QueryResponse =
             json::from_value(as_value.clone()).expect("deserialize response");
         assert_eq!(decoded, response);
-
         // Ensure JSON structure exposes iterable wrapper with batch payload.
         match as_value {
             json::Value::Object(map) => {

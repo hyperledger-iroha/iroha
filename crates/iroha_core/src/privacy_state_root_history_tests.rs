@@ -5,7 +5,6 @@ fn compiled_limits_keep_bounded_root_history() {
         2_048
     );
 }
-
 #[test]
 fn root_history_prunes_independently_per_namespace() {
     let mut roots = Storage::new();
@@ -32,11 +31,9 @@ fn root_history_prunes_independently_per_namespace() {
             record,
         );
     }
-
     let added = x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 2_049, 43);
     let removals =
         plan_privacy_root_history_update_v1(&roots.view(), &[added], 2_048).expect("valid plan");
-
     assert_eq!(
         removals,
         vec![x509_root_key(
@@ -61,7 +58,6 @@ fn root_history_prunes_independently_per_namespace() {
         "planning one namespace must not prune another namespace"
     );
 }
-
 #[test]
 fn root_history_rejects_replays_epoch_conflicts_and_stale_epochs() {
     let mut roots = Storage::new();
@@ -69,13 +65,11 @@ fn root_history_rejects_replays_epoch_conflicts_and_stale_epochs() {
         x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 7, 70),
         root_provenance(),
     );
-
     let exact_replay = x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 7, 70);
     assert!(matches!(
         plan_privacy_root_history_update_v1(&roots.view(), &[exact_replay], 8),
         Err(PrivacyRootHistoryErrorV1::ExistingRoot { key }) if key == exact_replay
     ));
-
     assert!(matches!(
         plan_privacy_root_history_update_v1(
             &roots.view(),
@@ -88,7 +82,6 @@ fn root_history_rejects_replays_epoch_conflicts_and_stale_epochs() {
         ),
         Err(PrivacyRootHistoryErrorV1::EpochConflict { epoch: 7, .. })
     ));
-
     assert!(matches!(
         plan_privacy_root_history_update_v1(
             &roots.view(),
@@ -106,7 +99,6 @@ fn root_history_rejects_replays_epoch_conflicts_and_stale_epochs() {
         })
     ));
 }
-
 #[test]
 fn root_history_rejects_duplicate_and_over_capacity_effects() {
     let roots = Storage::new();
@@ -115,7 +107,6 @@ fn root_history_rejects_duplicate_and_over_capacity_effects() {
         plan_privacy_root_history_update_v1(&roots.view(), &[duplicate, duplicate], 8),
         Err(PrivacyRootHistoryErrorV1::DuplicateAddedRoot { key }) if key == duplicate
     ));
-
     let additions = [
         x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 1, 10),
         x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 2, 20),

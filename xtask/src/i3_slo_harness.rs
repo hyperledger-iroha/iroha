@@ -4,15 +4,12 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
 use crate::i3_bench_suite::{I3BenchOptions, I3BenchReport, run_i3_bench_suite};
-
 /// Options for the Iroha 3 SLO harness.
 #[derive(Clone, Debug)]
 pub struct SloHarnessOptions {
@@ -24,12 +21,10 @@ pub struct SloHarnessOptions {
     pub allow_overwrite: bool,
     pub flamegraph_hint: bool,
 }
-
 #[derive(Clone, Debug, JsonDeserialize)]
 struct SloBudgetFile {
     targets: Vec<SloTarget>,
 }
-
 #[derive(Clone, Debug, JsonDeserialize)]
 struct SloTarget {
     id: String,
@@ -40,7 +35,6 @@ struct SloTarget {
     burn_rate_fast: Option<f64>,
     burn_rate_slow: Option<f64>,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct SloOutcome {
     id: String,
@@ -54,7 +48,6 @@ struct SloOutcome {
     burn_rate_slow: Option<f64>,
     note: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct SloReport {
     timestamp: String,
@@ -63,14 +56,12 @@ struct SloReport {
     sample_size: u32,
     outcomes: Vec<SloOutcome>,
 }
-
 /// Run the SLO harness by invoking the I3 bench suite, then mapping results to SLO objectives.
 pub fn run_i3_slo_harness(options: SloHarnessOptions) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(&options.out_dir)?;
     let bench_json = options.out_dir.join("bench_report.json");
     let bench_csv = options.out_dir.join("bench_report.csv");
     let bench_md = options.out_dir.join("bench_report.md");
-
     let bench_opts = I3BenchOptions {
         iterations: options.iterations,
         sample_size: options.sample_size,
@@ -81,31 +72,25 @@ pub fn run_i3_slo_harness(options: SloHarnessOptions) -> Result<(), Box<dyn Erro
         threshold: Some(options.threshold.clone()),
         flamegraph_hint: options.flamegraph_hint,
     };
-
     let bench_report = run_i3_bench_suite(bench_opts)?;
     let budgets = load_budgets(&options.budgets)?;
     let slo_report = evaluate_slos(&bench_report, budgets);
-
     let slo_json = options.out_dir.join("slo_report.json");
     let slo_md = options.out_dir.join("slo_report.md");
     write_json(&slo_report, &slo_json, options.allow_overwrite)?;
     write_markdown(&slo_report, &slo_md, options.allow_overwrite)?;
-
     Ok(())
 }
-
 fn load_budgets(path: &Path) -> Result<SloBudgetFile, Box<dyn Error>> {
     let contents = fs::read_to_string(path)?;
     let budgets: SloBudgetFile = json::from_str(&contents)?;
     Ok(budgets)
 }
-
 fn evaluate_slos(report: &I3BenchReport, budgets: SloBudgetFile) -> SloReport {
     let mut by_name: HashMap<&str, &crate::i3_bench_suite::ScenarioResult> = HashMap::new();
     for scenario in &report.scenarios {
         by_name.insert(scenario.name.as_str(), scenario);
     }
-
     let mut outcomes = Vec::with_capacity(budgets.targets.len());
     for target in budgets.targets {
         let observed = by_name.get(target.scenario.as_str());
@@ -133,7 +118,6 @@ fn evaluate_slos(report: &I3BenchReport, budgets: SloBudgetFile) -> SloReport {
             note: target.description,
         });
     }
-
     SloReport {
         timestamp: OffsetDateTime::now_utc()
             .format(&Rfc3339)
@@ -144,7 +128,6 @@ fn evaluate_slos(report: &I3BenchReport, budgets: SloBudgetFile) -> SloReport {
         outcomes,
     }
 }
-
 fn write_json(
     report: &SloReport,
     path: &Path,
@@ -161,7 +144,6 @@ fn write_json(
     fs::write(path, payload)?;
     Ok(())
 }
-
 fn write_markdown(
     report: &SloReport,
     path: &Path,
@@ -202,11 +184,9 @@ fn write_markdown(
     fs::write(path, out)?;
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn sample_report() -> I3BenchReport {
         I3BenchReport {
             timestamp: "2026-11-20T00:00:00Z".to_string(),
@@ -234,7 +214,6 @@ mod tests {
             ],
         }
     }
-
     #[test]
     fn evaluate_marks_pass_and_fail() {
         let budgets = SloBudgetFile {
@@ -268,7 +247,6 @@ mod tests {
                 },
             ],
         };
-
         let report = evaluate_slos(&sample_report(), budgets);
         assert_eq!(report.outcomes.len(), 3);
         assert_eq!(report.outcomes[0].status, "pass");

@@ -91,7 +91,7 @@ Coverage:
 
 | Component | Task | Owner(s) |
 |-----------|------|----------|
-| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest_hex}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication`. The pin-list route executes `FindSorafsPinManifests` and returns `PinManifestPageV1`; the detail route returns exact native `PinManifestFinalizedRecordV1` JSON. Both accept only an optional paired expected finalized height/hash precondition. Each replication-order projection includes `assignment_revision`; each retained completion includes the accepted revision, nested owner/signer-policy identity, and nested finalized height/hash anchor. | Networking TL / Core Infra |
+| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest_hex}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication`. The pin-list route executes `FindSorafsPinManifests` and returns `PinManifestPageV1`; the detail route returns exact native `PinManifestFinalizedRecordV1` JSON. Both accept only an optional paired expected finalized height/hash precondition. The legacy alias/replication projections require canonical-account request signatures because their response pagination follows authoritative-inventory materialization. Each replication-order projection includes `assignment_revision`; each retained completion includes the accepted revision, nested owner/signer-policy identity, and nested finalized height/hash anchor. | Networking TL / Core Infra |
 | Finality binding | Every pin page and detail response carries the height/hash from the same immutable finalized view. Clients continue a page with the returned non-zero `next_after_digest` as an exclusive `after_digest_hex` key and repeat that finalized pair; a stale requested cursor fails with HTTP 409. There is no offset or live-list compatibility mode. | Core Infra |
 | CLI | `iroha app sorafs pin register`, `pin list`, `pin show`, `alias list`, and `replication list` wrap the REST and ISI surfaces for operator audits. | Tooling WG |
 | SDK | Rust request builders and the Kotlin/mirrored-Java, JavaScript, Python, Swift, and C# guard lanes mirror the signed `RegisterPinManifest` hard cut. Lifecycle event epochs are readback evidence only, never builder inputs. | SDK Teams |
@@ -111,7 +111,9 @@ Operations:
   bounded native `manifest`. The retired `limit`, attestation, embedded
   alias/order arrays, counts, truncation fields, and list paging selectors are
   absent; callers use
-  `/v1/sorafs/aliases` and `/v1/sorafs/replication` for bounded list queries.
+  `/v1/sorafs/aliases` and `/v1/sorafs/replication` for authenticated legacy
+  list queries. Their returned pages are bounded, but the current handlers
+  materialize the authoritative inventory before applying the page.
 - `GET /v1/sorafs/replication` accepts bounded `limit`/`offset` pagination plus
   `status` and `manifest_digest` filters. Each order emits
   `assignment_revision`. Every `provider_completions[]` entry emits
@@ -207,9 +209,11 @@ manifest readback:
 - `GET /v1/sorafs/pin/{digest_hex}` returns exact
   `PinManifestFinalizedRecordV1` JSON with the finalized cursor and native
   bounded manifest record.
-- `GET /v1/sorafs/aliases` and `GET /v1/sorafs/replication` expose the active
-  alias catalogue and replication order backlog with consistent pagination and
-  status filters.
+- Canonical-account-signed `GET /v1/sorafs/aliases` and
+  `GET /v1/sorafs/replication` expose the active alias catalogue and replication
+  order backlog with consistent response pagination and status filters. They
+  are classified as expensive compute until pagination can precede full
+  authoritative-inventory materialization.
 
 The CLI wraps these calls (`iroha app sorafs pin list`, `pin show`, `alias list`,
 `replication list`) so operators can script registry audits without touching

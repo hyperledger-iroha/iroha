@@ -3,7 +3,6 @@
 //! This module owns the fixture bytes, schema-hash validation, and SDK manifest
 //! parity checks. Repository-facing command wrappers should delegate here so
 //! every caller exercises the same implementation.
-
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
 #[cfg(windows)]
@@ -17,7 +16,6 @@ use std::{
     path::{Component, Path, PathBuf},
     time::Duration,
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake2::{Blake2bVar, digest::VariableOutput};
 use eyre::{Context, Result, bail, eyre};
@@ -49,7 +47,6 @@ use norito::{
 use sha2::{Digest as ShaDigest, Sha256};
 use tempfile::{NamedTempFile, tempdir};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
 const CANONICAL_FIXTURE_DIRECTORY: &str = "fixtures/norito_rpc";
 const CANONICAL_PAYLOADS: &str = "fixtures/norito_rpc/transaction_payloads.json";
 const ALIAS_SETUP_FIXTURE_V1: &str = "fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json";
@@ -67,14 +64,12 @@ enum LocalBlobPolicy {
     Canonical,
     SwiftPrefixed,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct SdkFixtureDirectory {
     label: &'static str,
     relative_directory: &'static str,
     local_blobs: LocalBlobPolicy,
 }
-
 const SDK_FIXTURE_DIRECTORIES: &[SdkFixtureDirectory] = &[
     SdkFixtureDirectory {
         label: "python",
@@ -92,7 +87,6 @@ const SDK_FIXTURE_DIRECTORIES: &[SdkFixtureDirectory] = &[
         local_blobs: LocalBlobPolicy::SwiftPrefixed,
     },
 ];
-
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -100,7 +94,6 @@ fn workspace_root() -> PathBuf {
         .expect("exporter resides under the workspace tools directory")
         .to_path_buf()
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct NoritoRpcVerificationReport {
     generated_at: String,
@@ -110,7 +103,6 @@ struct NoritoRpcVerificationReport {
     schema_manifest: ManifestDigestReport,
     sdk_manifests: Vec<SdkManifestReport>,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct ManifestDigestReport {
     path: String,
@@ -118,13 +110,11 @@ struct ManifestDigestReport {
     blake3: String,
     bytes: u64,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct SdkManifestReport {
     sdk: String,
     manifest: ManifestDigestReport,
 }
-
 /// Destination for the optional Norito RPC verification report.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JsonOutput {
@@ -133,13 +123,11 @@ pub enum JsonOutput {
     /// Write the report to the provided file, creating parent directories.
     File(PathBuf),
 }
-
 /// Canonical JSON bytes for the independently typed V1 alias-setup fixture.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AliasSetupFixtureBytes {
     bytes: Vec<u8>,
 }
-
 impl AliasSetupFixtureBytes {
     /// Validate canonical publication framing and retired identity-key absence.
     ///
@@ -150,24 +138,20 @@ impl AliasSetupFixtureBytes {
         validate_alias_setup_fixture_bytes(&bytes)?;
         Ok(Self { bytes })
     }
-
     fn as_slice(&self) -> &[u8] {
         &self.bytes
     }
 }
-
 /// Root receiving the complete canonical and SDK fixture publication.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FixtureOptions {
     output_root: Option<PathBuf>,
 }
-
 impl FixtureOptions {
     /// Create fixture-generation options rooted at an optional staging tree.
     pub fn new(output_root: Option<PathBuf>) -> Self {
         Self { output_root }
     }
-
     fn resolve_paths(&self) -> Result<ResolvedFixtureOptions> {
         let requested_root = self.output_root.clone().unwrap_or_else(workspace_root);
         reject_ambiguous_root(&requested_root)?;
@@ -201,12 +185,10 @@ impl FixtureOptions {
         })
     }
 }
-
 struct ResolvedFixtureOptions {
     output_root: PathBuf,
     fixtures_json: PathBuf,
 }
-
 fn reject_ambiguous_root(path: &Path) -> Result<()> {
     if path.as_os_str().is_empty()
         || path == Path::new(".")
@@ -218,7 +200,6 @@ fn reject_ambiguous_root(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 fn ensure_safe_owned_path(root: &Path, target: &Path) -> Result<()> {
     let relative = target.strip_prefix(root).with_context(|| {
         format!(
@@ -234,7 +215,6 @@ fn ensure_safe_owned_path(root: &Path, target: &Path) -> Result<()> {
     {
         bail!("invalid fixture output path: {}", target.display());
     }
-
     let mut current = root.to_path_buf();
     for component in relative.components() {
         current.push(component.as_os_str());
@@ -255,7 +235,6 @@ fn ensure_safe_owned_path(root: &Path, target: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 fn validate_alias_setup_fixture_bytes(bytes: &[u8]) -> Result<()> {
     let Some(body) = bytes.strip_suffix(b"\n") else {
         bail!("alias-setup fixture JSON must end with exactly one newline");
@@ -286,7 +265,6 @@ fn validate_alias_setup_fixture_bytes(bytes: &[u8]) -> Result<()> {
         bail!("alias-setup fixture schema_version must be exactly 1");
     }
     reject_alias_setup_secret_and_retired_keys(&value, "alias-setup fixture")?;
-
     let onboarding = root
         .get("account_onboarding_receipt_vector")
         .and_then(Value::as_object)
@@ -306,7 +284,6 @@ fn validate_alias_setup_fixture_bytes(bytes: &[u8]) -> Result<()> {
     }
     Ok(())
 }
-
 fn reject_alias_setup_secret_and_retired_keys(value: &Value, context: &str) -> Result<()> {
     const FORBIDDEN_KEYS: &[&str] = &[
         "chain",
@@ -336,7 +313,6 @@ fn reject_alias_setup_secret_and_retired_keys(value: &Value, context: &str) -> R
     }
     Ok(())
 }
-
 fn write_alias_setup_fixture(
     publication_root: &Path,
     fixture: &AliasSetupFixtureBytes,
@@ -350,20 +326,17 @@ fn write_alias_setup_fixture(
     fs::write(&path, fixture.as_slice())
         .with_context(|| format!("failed to write {}", path.display()))
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct SchemaHashManifest {
     version: u32,
     entries: Vec<SchemaHashEntry>,
 }
-
 impl SchemaHashManifest {
     fn load(path: &Path) -> Result<Self> {
         let bytes = fs::read(path)?;
         Ok(json::from_slice(&bytes)?)
     }
-
     fn new_current() -> Self {
         Self {
             version: 1,
@@ -377,12 +350,10 @@ impl SchemaHashManifest {
                 .collect(),
         }
     }
-
     fn validate(&self) -> Result<()> {
         verify_schema_hash_manifest(self)
     }
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, PartialEq, Eq)]
 #[norito(deny_unknown_fields)]
 struct SchemaHashEntry {
@@ -390,13 +361,11 @@ struct SchemaHashEntry {
     alias: String,
     schema_hash: String,
 }
-
 struct SchemaTarget {
     type_name: &'static str,
     alias: &'static str,
     schema_hash: [u8; 16],
 }
-
 impl SchemaTarget {
     fn of<T: NoritoSerialize>() -> Self {
         let type_name = std::any::type_name::<T>();
@@ -408,7 +377,6 @@ impl SchemaTarget {
         }
     }
 }
-
 fn schema_targets() -> Vec<SchemaTarget> {
     let mut targets = vec![
         SchemaTarget::of::<SignedTransaction>(),
@@ -422,7 +390,6 @@ fn schema_targets() -> Vec<SchemaTarget> {
     targets.sort_by(|a, b| a.alias.cmp(b.alias));
     targets
 }
-
 fn write_schema_hash_manifest(path: &Path) -> Result<()> {
     let manifest = SchemaHashManifest::new_current();
     let json = json::to_json_pretty(&manifest)?;
@@ -430,7 +397,6 @@ fn write_schema_hash_manifest(path: &Path) -> Result<()> {
         .with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
 }
-
 fn verify_schema_hash_manifest(manifest: &SchemaHashManifest) -> Result<()> {
     if manifest.version != 1 {
         bail!(
@@ -446,7 +412,6 @@ fn verify_schema_hash_manifest(manifest: &SchemaHashManifest) -> Result<()> {
             expected.len()
         );
     }
-
     for (entry, target) in manifest.entries.iter().zip(expected.iter()) {
         if entry.type_name != target.type_name {
             bail!(
@@ -473,14 +438,11 @@ fn verify_schema_hash_manifest(manifest: &SchemaHashManifest) -> Result<()> {
             );
         }
     }
-
     Ok(())
 }
-
 fn format_schema_hash(bytes: [u8; 16]) -> String {
     format!("0x{}", hex::encode(bytes))
 }
-
 fn parse_schema_hash_hex(input: &str) -> Result<[u8; 16]> {
     let trimmed = input.strip_prefix("0x").unwrap_or(input);
     let bytes = hex::decode(trimmed)?;
@@ -494,19 +456,16 @@ fn parse_schema_hash_hex(input: &str) -> Result<[u8; 16]> {
     out.copy_from_slice(&bytes);
     Ok(out)
 }
-
 /// Verify canonical fixture bytes, schema hashes, and SDK manifest parity.
 pub fn run_verify(
     alias_setup_fixture: &AliasSetupFixtureBytes,
     json_out: Option<JsonOutput>,
 ) -> Result<()> {
     let report = build_verification_report(alias_setup_fixture)?;
-
     println!(
         "norito-rpc fixtures verified ({} entries)",
         report.fixture_count
     );
-
     if let Some(target) = json_out {
         let value = json::to_value(&report)
             .map_err(|err| eyre!("failed to encode verification report: {err}"))?;
@@ -515,7 +474,6 @@ pub fn run_verify(
     }
     Ok(())
 }
-
 fn write_json_output(value: &Value, target: JsonOutput) -> Result<()> {
     let mut json_text = json::to_string_pretty(value)?;
     json_text.push('\n');
@@ -530,7 +488,6 @@ fn write_json_output(value: &Value, target: JsonOutput) -> Result<()> {
     }
     Ok(())
 }
-
 fn build_verification_report(
     alias_setup_fixture: &AliasSetupFixtureBytes,
 ) -> Result<NoritoRpcVerificationReport> {
@@ -548,7 +505,6 @@ fn build_verification_report(
         &owned_publication_paths(&expected.fixtures)?,
     )?;
     verify_all_blob_policies(&root, &expected.fixtures, true)?;
-
     let canonical_path = root.join(CANONICAL_MANIFEST);
     let canonical = Manifest::load(&canonical_path)
         .with_context(|| format!("failed to read {}", canonical_path.display()))?;
@@ -564,7 +520,6 @@ fn build_verification_report(
         .expect("manifest file should have parent directory")
         .join(COMPACT_HASH_VECTOR_BASENAME);
     verify_compact_hash_vector(&compact_hash_vector_path, &canonical.fixtures)?;
-
     let canonical_manifest_bytes = fs::read(&canonical_path)?;
     let canonical_payloads_path = root.join(CANONICAL_PAYLOADS);
     let canonical_payloads_bytes = fs::read(&canonical_payloads_path)?;
@@ -602,21 +557,18 @@ fn build_verification_report(
             manifest: manifest_digest(&manifest_path, &root)?,
         });
     }
-
     let schema_manifest_path = root.join(SCHEMA_HASH_MANIFEST);
     let schema_manifest = SchemaHashManifest::load(&schema_manifest_path)
         .with_context(|| format!("failed to read {}", schema_manifest_path.display()))?;
     schema_manifest
         .validate()
         .context("schema hash manifest validation failed")?;
-
     let canonical_manifest = manifest_digest(&canonical_path, &root)?;
     let schema_manifest = manifest_digest(&schema_manifest_path, &root)?;
     let alias_setup_fixture = manifest_digest(&root.join(ALIAS_SETUP_FIXTURE_V1), &root)?;
     let timestamp = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .expect("timestamp formatting must succeed");
-
     Ok(NoritoRpcVerificationReport {
         generated_at: timestamp,
         fixture_count: canonical.fixtures.len(),
@@ -626,7 +578,6 @@ fn build_verification_report(
         sdk_manifests,
     })
 }
-
 /// Regenerate canonical Norito RPC fixtures from the configured source JSON.
 pub fn generate_fixtures(
     options: FixtureOptions,
@@ -651,7 +602,6 @@ pub fn generate_fixtures(
             verify_all_blob_policies(&resolved.output_root, &generated.fixtures, true)
         },
     )?;
-
     println!(
         "norito-rpc fixtures regenerated: {} entries written to {}",
         generated.fixtures.len(),
@@ -659,7 +609,6 @@ pub fn generate_fixtures(
     );
     Ok(())
 }
-
 fn render_fixture_publication(
     fixtures_json: &Path,
     alias_setup_fixture: &AliasSetupFixtureBytes,
@@ -670,7 +619,6 @@ fn render_fixture_publication(
         .with_context(|| format!("failed to create {}", canonical_dir.display()))?;
     generate_fixture_artifacts(fixtures_json, &canonical_dir)?;
     write_alias_setup_fixture(publication_root, alias_setup_fixture)?;
-
     let manifest_path = canonical_dir.join(MANIFEST_BASENAME);
     let manifest = Manifest::load(&manifest_path).with_context(|| {
         format!(
@@ -681,7 +629,6 @@ fn render_fixture_publication(
     manifest
         .validate(Some(&canonical_dir))
         .map_err(|error| eyre!("generated manifest failed validation: {error}"))?;
-
     let compact_hash_vector = render_compact_hash_vector(&manifest.fixtures)?;
     let schema_path = canonical_dir.join(SCHEMA_HASH_MANIFEST_BASENAME);
     write_schema_hash_manifest(&schema_path)
@@ -689,7 +636,6 @@ fn render_fixture_publication(
     let compact_hash_vector_path = canonical_dir.join(COMPACT_HASH_VECTOR_BASENAME);
     fs::write(&compact_hash_vector_path, compact_hash_vector)
         .with_context(|| format!("failed to generate {}", compact_hash_vector_path.display()))?;
-
     let manifest_json = json::to_json_pretty(&manifest)?;
     sync_sdk_fixture_mirrors(
         publication_root,
@@ -700,7 +646,6 @@ fn render_fixture_publication(
     verify_all_blob_policies(publication_root, &manifest.fixtures, true)?;
     Ok(manifest)
 }
-
 fn generate_fixture_artifacts(fixtures_json: &Path, out_dir: &Path) -> Result<()> {
     let fixtures_text = fs::read_to_string(fixtures_json)
         .with_context(|| format!("failed to read {}", fixtures_json.display()))?;
@@ -708,12 +653,10 @@ fn generate_fixture_artifacts(fixtures_json: &Path, out_dir: &Path) -> Result<()
         json::from_str(&fixtures_text).context("invalid transaction_payloads fixtures JSON")?;
     let raw_fixtures = parse_payload_fixtures(&fixtures_value)?;
     let keypair = signing_keypair()?;
-
     let mut fixtures = Vec::with_capacity(raw_fixtures.len());
     for raw in &raw_fixtures {
         fixtures.push(raw.generate_fixture(&keypair)?);
     }
-
     fs::create_dir_all(out_dir)
         .with_context(|| format!("failed to create {}", out_dir.display()))?;
     for fixture in &fixtures {
@@ -721,7 +664,6 @@ fn generate_fixture_artifacts(fixtures_json: &Path, out_dir: &Path) -> Result<()
         fs::write(&norito_path, &fixture.payload_bytes)
             .with_context(|| format!("failed to write {}", norito_path.display()))?;
     }
-
     let manifest = Manifest {
         fixtures: fixtures.iter().map(Fixture::to_entry).collect(),
     };
@@ -731,25 +673,20 @@ fn generate_fixture_artifacts(fixtures_json: &Path, out_dir: &Path) -> Result<()
         format!("{manifest_json}\n"),
     )
     .context("failed to write generated fixture manifest")?;
-
     // Render refreshed generated hints into the private publication tree.
     let updated_payloads = build_payload_fixtures_json(&raw_fixtures, &fixtures)?;
     let payloads_json = json::to_json_pretty(&updated_payloads)?;
     let rendered_payloads = out_dir.join(PAYLOADS_BASENAME);
     fs::write(&rendered_payloads, format!("{payloads_json}\n"))
         .with_context(|| format!("failed to write {}", rendered_payloads.display()))?;
-
     Ok(())
 }
-
 const SIGNING_SEED_HEX: &str = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
-
 fn signing_keypair() -> Result<KeyPair> {
     let seed = hex::decode(SIGNING_SEED_HEX).context("invalid signing seed hex")?;
     KeyPair::try_from_seed(seed, Algorithm::Ed25519)
         .map_err(|err| eyre!("failed to derive Norito RPC fixture signing key: {err}"))
 }
-
 #[derive(Clone)]
 struct RawPayloadFixture {
     name: String,
@@ -761,7 +698,6 @@ struct RawPayloadFixture {
     ttl_ms_hint: u64,
     nonce_hint: Option<u32>,
 }
-
 #[derive(Clone)]
 struct RawPayload {
     network_id: String,
@@ -773,7 +709,6 @@ struct RawPayload {
     fee_payment: FeePaymentIntent,
     metadata: Vec<(Name, Json)>,
 }
-
 #[derive(Clone)]
 enum RawExecutable {
     Ivm(Vec<u8>),
@@ -781,7 +716,6 @@ enum RawExecutable {
     ContractCall(ContractInvocation),
     Batch(Vec<RawBatchItem>),
 }
-
 impl RawExecutable {
     fn requires_transaction_gas_limit(&self) -> bool {
         match self {
@@ -793,32 +727,27 @@ impl RawExecutable {
         }
     }
 }
-
 #[derive(Clone)]
 enum RawBatchItem {
     Instruction(RawInstruction),
     ContractCall(ContractInvocation),
 }
-
 #[derive(Clone)]
 struct RawInstruction {
     wire_name: String,
     payload_base64: String,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum InstructionSourceSlot {
     Instructions(usize),
     Batch(usize),
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SemanticInstructionSource {
     fixture_name: &'static str,
     slot: InstructionSourceSlot,
     wire_name: &'static str,
 }
-
 const SEMANTIC_INSTRUCTION_SOURCES: &[SemanticInstructionSource] = &[
     SemanticInstructionSource {
         fixture_name: "mixed_executable_batch",
@@ -836,14 +765,12 @@ const SEMANTIC_INSTRUCTION_SOURCES: &[SemanticInstructionSource] = &[
         wire_name: "iroha.register",
     },
 ];
-
 struct Fixture {
     name: String,
     payload_bytes: Vec<u8>,
     signed_bytes: Vec<u8>,
     summary: PayloadSummary,
 }
-
 struct PayloadSummary {
     network_id: String,
     authority: String,
@@ -855,12 +782,10 @@ struct PayloadSummary {
     payload_hash_hex: String,
     signed_hash_hex: String,
 }
-
 struct WireInstructionPayload {
     wire_name: String,
     payload_base64: String,
 }
-
 impl RawPayloadFixture {
     fn generate_fixture(&self, keypair: &KeyPair) -> Result<Fixture> {
         if self.network_id_hint != self.payload.network_id {
@@ -904,7 +829,6 @@ impl RawPayloadFixture {
                 self.payload.nonce
             );
         }
-
         let builder = self.payload.to_builder(&self.name).map_err(|err| {
             eyre!(
                 "failed to build Norito RPC fixture '{}': {err:#}",
@@ -940,12 +864,10 @@ impl RawPayloadFixture {
         }
         let payload_bytes = payload_value.encode();
         let payload_base64 = BASE64.encode(&payload_bytes);
-
         let signed_bytes = signed.encode();
         let signed_base64 = BASE64.encode(&signed_bytes);
         let payload_hash_hex = blake2b256_hex(&payload_bytes);
         let signed_hash_hex = signed_transaction_entrypoint_hash_hex(&signed_bytes)?;
-
         Ok(Fixture {
             name: self.name.clone(),
             payload_bytes,
@@ -967,13 +889,11 @@ impl RawPayloadFixture {
         })
     }
 }
-
 impl RawPayload {
     fn to_builder(&self, fixture_name: &str) -> Result<TransactionBuilder> {
         let network_id = parse_network_id(&self.network_id)?;
         let authority = parse_account_id(&self.authority)
             .with_context(|| format!("invalid authority id '{}'", self.authority))?;
-
         let mut builder = TransactionBuilder::new(network_id, authority, self.fee_payment.clone());
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
         builder.set_ttl(Duration::from_millis(self.ttl_ms));
@@ -981,13 +901,11 @@ impl RawPayload {
             let nz = NonZeroU32::new(nonce).ok_or_else(|| eyre!("nonce must be > 0"))?;
             builder.set_nonce(nz);
         }
-
         let mut metadata = Metadata::default();
         for (key, value) in &self.metadata {
             metadata.insert(key.clone(), value.clone());
         }
         builder = builder.with_metadata(metadata);
-
         validate_semantic_instruction_shape(fixture_name, &self.executable)?;
         builder = match &self.executable {
             RawExecutable::Ivm(bytes) => {
@@ -1032,11 +950,9 @@ impl RawPayload {
                 builder.with_executable_batch(items)
             }
         };
-
         Ok(builder)
     }
 }
-
 impl Fixture {
     fn to_entry(&self) -> FixtureEntry {
         FixtureEntry {
@@ -1056,7 +972,6 @@ impl Fixture {
         }
     }
 }
-
 fn parse_payload_fixtures(value: &Value) -> Result<Vec<RawPayloadFixture>> {
     let arr = value
         .as_array()
@@ -1074,7 +989,6 @@ fn parse_payload_fixtures(value: &Value) -> Result<Vec<RawPayloadFixture>> {
     }
     Ok(fixtures)
 }
-
 fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
     let obj = value
         .as_object()
@@ -1109,7 +1023,6 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
     let payload_json = payload_value.clone();
     let payload = parse_payload(payload_value)
         .with_context(|| format!("invalid payload for fixture '{name}'"))?;
-
     let network_id_hint = expect_string(obj, "network_id")?.to_owned();
     let authority_hint = expect_string(obj, "authority")?.to_owned();
     let creation_time_ms_hint = expect_u64(obj, "creation_time_ms")?;
@@ -1117,7 +1030,6 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
         .with_context(|| format!("invalid top-level lifetime for fixture '{name}'"))?;
     let nonce_hint = parse_optional_u32(obj, "nonce")
         .with_context(|| format!("invalid top-level nonce for fixture '{name}'"))?;
-
     Ok(RawPayloadFixture {
         name,
         payload,
@@ -1129,7 +1041,6 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
         nonce_hint,
     })
 }
-
 fn parse_payload(value: &Value) -> Result<RawPayload> {
     let obj = value
         .as_object()
@@ -1176,7 +1087,6 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
         obj.get("metadata")
             .expect("exact payload field validation requires metadata"),
     )?;
-
     Ok(RawPayload {
         network_id,
         authority,
@@ -1188,7 +1098,6 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
         metadata,
     })
 }
-
 fn parse_executable(value: &Value) -> Result<RawExecutable> {
     let obj = value
         .as_object()
@@ -1254,7 +1163,6 @@ fn parse_executable(value: &Value) -> Result<RawExecutable> {
         _ => bail!("unknown executable variant '{variant}'"),
     }
 }
-
 fn parse_contract_invocation(value: &Value, label: &str) -> Result<ContractInvocation> {
     let object = value
         .as_object()
@@ -1273,7 +1181,6 @@ fn parse_contract_invocation(value: &Value, label: &str) -> Result<ContractInvoc
         .map_err(|err| eyre!(err.to_string()))
         .with_context(|| format!("invalid {label}"))
 }
-
 fn parse_instruction(value: &Value) -> Result<RawInstruction> {
     let obj = value
         .as_object()
@@ -1299,7 +1206,6 @@ fn parse_instruction(value: &Value) -> Result<RawInstruction> {
         payload_base64,
     })
 }
-
 fn parse_metadata_object(value: &Value) -> Result<Vec<(Name, Json)>> {
     let obj = value
         .as_object()
@@ -1313,7 +1219,6 @@ fn parse_metadata_object(value: &Value) -> Result<Vec<(Name, Json)>> {
     }
     Ok(entries)
 }
-
 fn observed_instruction_sources(executable: &RawExecutable) -> Vec<(InstructionSourceSlot, &str)> {
     match executable {
         RawExecutable::Instructions(raws) => raws
@@ -1339,7 +1244,6 @@ fn observed_instruction_sources(executable: &RawExecutable) -> Vec<(InstructionS
         RawExecutable::Ivm(_) | RawExecutable::ContractCall(_) => Vec::new(),
     }
 }
-
 fn validate_semantic_instruction_shape(
     fixture_name: &str,
     executable: &RawExecutable,
@@ -1347,7 +1251,6 @@ fn validate_semantic_instruction_shape(
     let observed = observed_instruction_sources(executable);
     validate_semantic_instruction_observations(fixture_name, &observed)
 }
-
 fn validate_semantic_instruction_observations(
     fixture_name: &str,
     observed: &[(InstructionSourceSlot, &str)],
@@ -1367,7 +1270,6 @@ fn validate_semantic_instruction_observations(
     }
     Ok(())
 }
-
 fn semantic_register_asset_definition() -> Result<Register<AssetDefinition>> {
     let id = "6pEP9RjNoZ7beWkT3pLfKoM1dyfi"
         .parse()
@@ -1379,7 +1281,6 @@ fn semantic_register_asset_definition() -> Result<Register<AssetDefinition>> {
         None,
     )))
 }
-
 fn build_fixture_instruction(
     fixture_name: &str,
     slot: InstructionSourceSlot,
@@ -1406,7 +1307,6 @@ fn build_fixture_instruction(
     }
     build_instruction(raw)
 }
-
 fn build_instruction(raw: &RawInstruction) -> Result<InstructionBox> {
     let payload_bytes = BASE64
         .decode(raw.payload_base64.as_bytes())
@@ -1418,7 +1318,6 @@ fn build_instruction(raw: &RawInstruction) -> Result<InstructionBox> {
         .map_err(|err| eyre!(err.to_string()))
         .with_context(|| format!("failed to decode wire instruction '{}'", raw.wire_name))
 }
-
 fn parse_account_id(value: &str) -> Result<AccountId> {
     let account = AccountId::parse_encoded(value)
         .map(|parsed| parsed.into_account_id())
@@ -1430,7 +1329,6 @@ fn parse_account_id(value: &str) -> Result<AccountId> {
     }
     Ok(account)
 }
-
 fn parse_network_id(value: &str) -> Result<NetworkId> {
     let encoded = Value::String(value.to_owned());
     let network_id = json::from_value::<NetworkId>(encoded.clone())
@@ -1442,14 +1340,12 @@ fn parse_network_id(value: &str) -> Result<NetworkId> {
     }
     Ok(network_id)
 }
-
 fn optional_u32_value(value: Option<u32>) -> Value {
     match value {
         Some(v) => Value::Number(Number::U64(v as u64)),
         None => Value::Null,
     }
 }
-
 fn build_payload_fixtures_json(
     raw_fixtures: &[RawPayloadFixture],
     fixtures: &[Fixture],
@@ -1458,14 +1354,12 @@ fn build_payload_fixtures_json(
         .iter()
         .map(|fixture| (fixture.name.as_str(), fixture))
         .collect();
-
     let mut out = Vec::with_capacity(raw_fixtures.len());
     for raw in raw_fixtures {
         let fixture = fixtures_by_name
             .get(raw.name.as_str())
             .copied()
             .ok_or_else(|| eyre!("fixture '{}' missing generated payload", raw.name))?;
-
         let mut entry = Map::new();
         entry.insert("name".to_owned(), Value::String(fixture.name.clone()));
         entry.insert(
@@ -1504,7 +1398,6 @@ fn build_payload_fixtures_json(
             "signed_hash".to_owned(),
             Value::String(fixture.summary.signed_hash_hex.clone()),
         );
-
         let mut payload = raw.payload_json.clone();
         if let Some(payload_obj) = payload.as_object_mut() {
             payload_obj.insert(
@@ -1517,13 +1410,10 @@ fn build_payload_fixtures_json(
             apply_wire_payloads_to_payload_json(&mut payload, &wire_payloads)?;
         }
         entry.insert("payload".to_owned(), payload);
-
         out.push(Value::Object(entry));
     }
-
     Ok(Value::Array(out))
 }
-
 fn wire_payloads_from_encoded(encoded: &[u8]) -> Result<Vec<WireInstructionPayload>> {
     let mut cursor = encoded;
     let payload = TransactionPayload::decode(&mut cursor).context("decode TransactionPayload")?;
@@ -1545,7 +1435,6 @@ fn wire_payloads_from_encoded(encoded: &[u8]) -> Result<Vec<WireInstructionPaylo
     }
     Ok(out)
 }
-
 fn apply_wire_payloads_to_payload_json(
     payload: &mut Value,
     wire_payloads: &[WireInstructionPayload],
@@ -1575,7 +1464,6 @@ fn apply_wire_payloads_to_payload_json(
         }
         return Ok(());
     }
-
     let items = executable_obj
         .get_mut("Batch")
         .ok_or_else(|| eyre!("payload executable missing Instructions or Batch"))?
@@ -1605,7 +1493,6 @@ fn apply_wire_payloads_to_payload_json(
     }
     Ok(())
 }
-
 fn apply_wire_payload_to_instruction(
     entry: &mut Value,
     wire: &WireInstructionPayload,
@@ -1623,13 +1510,11 @@ fn apply_wire_payload_to_instruction(
     );
     Ok(())
 }
-
 fn expect_string<'a>(obj: &'a Map, key: &str) -> Result<&'a str> {
     obj.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| eyre!("missing '{key}' string"))
 }
-
 fn require_exact_fields(obj: &Map, expected: &[&str], label: &str) -> Result<()> {
     for field in expected {
         if !obj.contains_key(*field) {
@@ -1643,7 +1528,6 @@ fn require_exact_fields(obj: &Map, expected: &[&str], label: &str) -> Result<()>
     }
     Ok(())
 }
-
 fn decode_canonical_base64(encoded: &str, label: &str) -> Result<Vec<u8>> {
     let decoded = BASE64
         .decode(encoded.as_bytes())
@@ -1653,13 +1537,11 @@ fn decode_canonical_base64(encoded: &str, label: &str) -> Result<Vec<u8>> {
     }
     Ok(decoded)
 }
-
 fn expect_u64(obj: &Map, key: &str) -> Result<u64> {
     obj.get(key)
         .and_then(Value::as_u64)
         .ok_or_else(|| eyre!("missing '{key}' integer"))
 }
-
 fn expect_nonzero_u64(obj: &Map, key: &str) -> Result<u64> {
     let value = expect_u64(obj, key)?;
     if value == 0 {
@@ -1667,7 +1549,6 @@ fn expect_nonzero_u64(obj: &Map, key: &str) -> Result<u64> {
     }
     Ok(value)
 }
-
 fn parse_optional_u32(obj: &Map, key: &str) -> Result<Option<u32>> {
     match obj.get(key) {
         None | Some(Value::Null) => Ok(None),
@@ -1685,7 +1566,6 @@ fn parse_optional_u32(obj: &Map, key: &str) -> Result<Option<u32>> {
         Some(other) => bail!("'{key}' must be an integer or null, got {other:?}"),
     }
 }
-
 fn validate_fixture_name(name: &str) -> Result<()> {
     let mut bytes = name.bytes();
     let Some(first) = bytes.next() else {
@@ -1703,7 +1583,6 @@ fn validate_fixture_name(name: &str) -> Result<()> {
     }
     Ok(())
 }
-
 fn validate_fixture_identity(name: &str, encoded_file: &str) -> Result<()> {
     validate_fixture_name(name)?;
     let expected = format!("{name}.norito");
@@ -1712,7 +1591,6 @@ fn validate_fixture_identity(name: &str, encoded_file: &str) -> Result<()> {
     }
     Ok(())
 }
-
 fn sync_norito_files(
     fixtures: &[FixtureEntry],
     source_dir: &Path,
@@ -1735,7 +1613,6 @@ fn sync_norito_files(
     }
     Ok(())
 }
-
 fn sync_sdk_fixture_mirrors(
     publication_root: &Path,
     canonical_dir: &Path,
@@ -1760,7 +1637,6 @@ fn sync_sdk_fixture_mirrors(
     }
     Ok(())
 }
-
 fn owned_publication_paths(fixtures: &[FixtureEntry]) -> Result<Vec<PathBuf>> {
     let canonical_dir = PathBuf::from(CANONICAL_FIXTURE_DIRECTORY);
     let mut paths = vec![
@@ -1792,7 +1668,6 @@ fn owned_publication_paths(fixtures: &[FixtureEntry]) -> Result<Vec<PathBuf>> {
     }
     Ok(paths)
 }
-
 fn preflight_publication(
     destination_root: &Path,
     fixtures: &[FixtureEntry],
@@ -1804,7 +1679,6 @@ fn preflight_publication(
     let previous_owned = load_previous_owned_blobs(destination_root)?;
     plan_retired_publication(destination_root, fixtures, &previous_owned)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FileIdentity {
     len: u64,
@@ -1825,32 +1699,27 @@ struct FileIdentity {
     #[cfg(windows)]
     last_write_time: u64,
 }
-
 #[derive(Clone, Debug)]
 struct GuardedFile {
     identity: FileIdentity,
     bytes: Vec<u8>,
 }
-
 #[derive(Debug)]
 struct GuardedRemoval {
     relative: PathBuf,
     preimage: GuardedFile,
 }
-
 #[derive(Debug)]
 struct PublicationMutation {
     relative: PathBuf,
     preimage: Option<GuardedFile>,
     postimage: Option<Vec<u8>>,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct AppliedMutation {
     index: usize,
     post_identity: Option<FileIdentity>,
 }
-
 fn load_previous_owned_blobs(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
     let manifest_path = root.join(CANONICAL_MANIFEST);
     match fs::symlink_metadata(&manifest_path) {
@@ -1895,7 +1764,6 @@ fn load_previous_owned_blobs(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> 
         }
     }
 }
-
 fn plan_retired_publication(
     root: &Path,
     fixtures: &[FixtureEntry],
@@ -1917,7 +1785,6 @@ fn plan_retired_publication(
             sdk.label,
         )
     }));
-
     let mut removals = Vec::new();
     for (relative_directory, policy, label) in directories {
         let directory = root.join(&relative_directory);
@@ -1958,7 +1825,6 @@ fn plan_retired_publication(
     removals.sort_by(|left, right| left.relative.cmp(&right.relative));
     Ok(removals)
 }
-
 fn blob_allowed_by_policy(
     relative: &Path,
     expected: &BTreeSet<PathBuf>,
@@ -1976,7 +1842,6 @@ fn blob_allowed_by_policy(
         }
     }
 }
-
 #[cfg(unix)]
 fn file_identity(metadata: &fs::Metadata, path: &Path) -> Result<FileIdentity> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -1999,7 +1864,6 @@ fn file_identity(metadata: &fs::Metadata, path: &Path) -> Result<FileIdentity> {
         change_time_nanoseconds: metadata.ctime_nsec(),
     })
 }
-
 #[cfg(windows)]
 fn file_identity(metadata: &fs::Metadata, path: &Path) -> Result<FileIdentity> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -2038,7 +1902,6 @@ fn file_identity(metadata: &fs::Metadata, path: &Path) -> Result<FileIdentity> {
         last_write_time: metadata.last_write_time(),
     })
 }
-
 #[cfg(not(any(unix, windows)))]
 fn file_identity(_metadata: &fs::Metadata, path: &Path) -> Result<FileIdentity> {
     bail!(
@@ -2046,7 +1909,6 @@ fn file_identity(_metadata: &fs::Metadata, path: &Path) -> Result<FileIdentity> 
         path.display()
     )
 }
-
 fn read_guarded_file(path: &Path, expected_identity: FileIdentity) -> Result<Vec<u8>> {
     let path_identity = file_identity(&fs::symlink_metadata(path)?, path)?;
     if path_identity != expected_identity {
@@ -2075,7 +1937,6 @@ fn read_guarded_file(path: &Path, expected_identity: FileIdentity) -> Result<Vec
     }
     Ok(bytes)
 }
-
 fn capture_optional_guarded_file(path: &Path) -> Result<Option<GuardedFile>> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -2089,7 +1950,6 @@ fn capture_optional_guarded_file(path: &Path) -> Result<Option<GuardedFile>> {
     let bytes = read_guarded_file(path, identity)?;
     Ok(Some(GuardedFile { identity, bytes }))
 }
-
 fn verify_preimage(path: &Path, expected: Option<&GuardedFile>) -> Result<()> {
     match expected {
         Some(expected) => {
@@ -2123,7 +1983,6 @@ fn verify_preimage(path: &Path, expected: Option<&GuardedFile>) -> Result<()> {
     }
     Ok(())
 }
-
 fn guarded_remove_with_commit<F>(path: &Path, preimage: &GuardedFile, committed: F) -> Result<()>
 where
     F: FnOnce(),
@@ -2142,11 +2001,9 @@ where
         ),
     }
 }
-
 fn guarded_remove(path: &Path, preimage: &GuardedFile) -> Result<()> {
     guarded_remove_with_commit(path, preimage, || {})
 }
-
 #[cfg(test)]
 fn remove_retired_publication(root: &Path, removals: &[GuardedRemoval]) -> Result<()> {
     for removal in removals {
@@ -2161,7 +2018,6 @@ fn remove_retired_publication(root: &Path, removals: &[GuardedRemoval]) -> Resul
     }
     Ok(())
 }
-
 fn publication_commit_rank(relative: &Path) -> u8 {
     if relative == Path::new(CANONICAL_MANIFEST) {
         return 2;
@@ -2175,7 +2031,6 @@ fn publication_commit_rank(relative: &Path) -> u8 {
     }
     0
 }
-
 fn prepare_publication_mutations(
     rendered_root: &Path,
     destination_root: &Path,
@@ -2195,7 +2050,6 @@ fn prepare_publication_mutations(
             bail!("duplicate generated fixture output {}", relative.display());
         }
     }
-
     let mut guarded_removals = BTreeMap::new();
     for removal in removals {
         if guarded_removals
@@ -2214,7 +2068,6 @@ fn prepare_publication_mutations(
             );
         }
     }
-
     let mut mutations = Vec::with_capacity(planned.len());
     for (relative, postimage) in planned {
         let destination = destination_root.join(&relative);
@@ -2255,7 +2108,6 @@ fn prepare_publication_mutations(
     });
     Ok(mutations)
 }
-
 fn atomic_publish_bytes_with_commit<F>(
     root: &Path,
     path: &Path,
@@ -2273,13 +2125,11 @@ where
     ensure_safe_owned_path(root, parent)?;
     fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
     ensure_safe_owned_path(root, path)?;
-
     let mut temporary = NamedTempFile::new_in(parent)
         .with_context(|| format!("failed to stage {}", path.display()))?;
     temporary.write_all(bytes)?;
     temporary.flush()?;
     temporary.as_file().sync_all()?;
-
     verify_preimage(path, preimage)?;
     ensure_safe_owned_path(root, path)?;
     let published = temporary.persist(path).map_err(|error| {
@@ -2298,7 +2148,6 @@ where
     }
     Ok(post_identity)
 }
-
 fn atomic_publish_bytes(
     root: &Path,
     path: &Path,
@@ -2307,7 +2156,6 @@ fn atomic_publish_bytes(
 ) -> Result<FileIdentity> {
     atomic_publish_bytes_with_commit(root, path, preimage, bytes, |_| {})
 }
-
 fn apply_publication_mutation<F>(
     root: &Path,
     mutation: &PublicationMutation,
@@ -2338,7 +2186,6 @@ where
         }
     }
 }
-
 fn rollback_publication_mutation(
     root: &Path,
     mutation: &PublicationMutation,
@@ -2376,7 +2223,6 @@ fn rollback_publication_mutation(
     }
     Ok(())
 }
-
 fn rollback_publication_mutations(
     root: &Path,
     mutations: &[PublicationMutation],
@@ -2401,7 +2247,6 @@ fn rollback_publication_mutations(
         )
     }
 }
-
 fn execute_publication_mutations<F>(
     root: &Path,
     mutations: &[PublicationMutation],
@@ -2441,7 +2286,6 @@ where
         }
         validate().context("fixture publication validation failed")
     })();
-
     match outcome {
         Ok(()) => Ok(()),
         Err(error) => match rollback_publication_mutations(root, mutations, &applied) {
@@ -2452,7 +2296,6 @@ where
         },
     }
 }
-
 fn publish_owned_publication<F>(
     rendered_root: &Path,
     destination_root: &Path,
@@ -2467,7 +2310,6 @@ where
         prepare_publication_mutations(rendered_root, destination_root, owned_paths, removals)?;
     execute_publication_mutations(destination_root, &mutations, None, validate)
 }
-
 fn compare_owned_publication(
     rendered_root: &Path,
     destination_root: &Path,
@@ -2491,7 +2333,6 @@ fn compare_owned_publication(
     }
     Ok(())
 }
-
 fn verify_all_blob_policies(
     publication_root: &Path,
     fixtures: &[FixtureEntry],
@@ -2513,7 +2354,6 @@ fn verify_all_blob_policies(
     }
     Ok(())
 }
-
 fn verify_blob_policy(
     directory: &Path,
     fixtures: &[FixtureEntry],
@@ -2525,7 +2365,6 @@ fn verify_blob_policy(
         .iter()
         .map(|fixture| PathBuf::from(&fixture.encoded_file))
         .collect();
-
     match policy {
         LocalBlobPolicy::None if !actual.is_empty() => {
             bail!(
@@ -2576,7 +2415,6 @@ fn verify_blob_policy(
     }
     Ok(())
 }
-
 fn collect_norito_paths(directory: &Path) -> Result<BTreeSet<PathBuf>> {
     if !directory.is_dir() {
         bail!("fixture directory missing: {}", directory.display());
@@ -2619,7 +2457,6 @@ fn collect_norito_paths(directory: &Path) -> Result<BTreeSet<PathBuf>> {
     }
     Ok(found)
 }
-
 fn collect_norito_paths_if_present(directory: &Path) -> Result<BTreeSet<PathBuf>> {
     match fs::symlink_metadata(directory) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeSet::new()),
@@ -2635,7 +2472,6 @@ fn collect_norito_paths_if_present(directory: &Path) -> Result<BTreeSet<PathBuf>
         Ok(_) => collect_norito_paths(directory),
     }
 }
-
 fn manifest_digest(path: &Path, root: &Path) -> Result<ManifestDigestReport> {
     let digest = compute_file_digest(path)?;
     Ok(ManifestDigestReport {
@@ -2645,13 +2481,11 @@ fn manifest_digest(path: &Path, root: &Path) -> Result<ManifestDigestReport> {
         bytes: digest.bytes,
     })
 }
-
 struct FileDigest {
     sha256: String,
     blake3: String,
     bytes: u64,
 }
-
 fn compute_file_digest(path: &Path) -> Result<FileDigest> {
     let mut file = File::open(path)
         .with_context(|| format!("failed to open {} for digesting", path.display()))?;
@@ -2674,20 +2508,17 @@ fn compute_file_digest(path: &Path) -> Result<FileDigest> {
         bytes: total,
     })
 }
-
 fn relative_path(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()
         .into_owned()
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct Manifest {
     fixtures: Vec<FixtureEntry>,
 }
-
 impl Manifest {
     fn load(path: &Path) -> Result<Self> {
         let bytes = fs::read(path)?;
@@ -2695,7 +2526,6 @@ impl Manifest {
         validate_manifest_shape(&value)?;
         Ok(json::from_value(value)?)
     }
-
     fn validate(&self, base_dir: Option<&Path>) -> Result<()> {
         let mut names = HashSet::with_capacity(self.fixtures.len());
         let mut encoded_files = HashSet::with_capacity(self.fixtures.len());
@@ -2742,7 +2572,6 @@ impl Manifest {
         Ok(())
     }
 }
-
 fn validate_manifest_shape(value: &Value) -> Result<()> {
     let root = value
         .as_object()
@@ -2779,7 +2608,6 @@ fn validate_manifest_shape(value: &Value) -> Result<()> {
     }
     Ok(())
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct FixtureEntry {
@@ -2797,7 +2625,6 @@ struct FixtureEntry {
     nonce: Option<u32>,
     time_to_live_ms: u64,
 }
-
 impl FixtureEntry {
     fn validate(&self, base_dir: Option<&Path>) -> Result<()> {
         validate_fixture_identity(&self.name, &self.encoded_file)?;
@@ -2827,7 +2654,6 @@ impl FixtureEntry {
                 payload_hash
             );
         }
-
         let signed_bytes = BASE64
             .decode(&self.signed_base64)
             .with_context(|| format!("fixture '{}' signed base64 invalid", self.name))?;
@@ -2863,7 +2689,6 @@ impl FixtureEntry {
                 self.name
             )
         })?;
-
         let actual_creation_time_ms =
             u64::try_from(signed.creation_time().as_millis()).map_err(|_| {
                 eyre!(
@@ -2894,7 +2719,6 @@ impl FixtureEntry {
                 self.name
             );
         }
-
         if let Some(dir) = base_dir {
             let path = dir.join(&self.encoded_file);
             let file_bytes =
@@ -2907,11 +2731,9 @@ impl FixtureEntry {
                 );
             }
         }
-
         Ok(())
     }
 }
-
 fn blake2b256_hex(bytes: &[u8]) -> String {
     let mut hasher = Blake2bVar::new(32).expect("32-byte BLAKE2b digest");
     blake2::digest::Update::update(&mut hasher, bytes);
@@ -2922,14 +2744,12 @@ fn blake2b256_hex(bytes: &[u8]) -> String {
     out[out.len() - 1] |= 1;
     hex_encode(out)
 }
-
 fn signed_transaction_entrypoint_hash_hex(
     canonical_bare_signed_transaction: &[u8],
 ) -> Result<String> {
     let signed = decode_canonical_signed_transaction(canonical_bare_signed_transaction)?;
     Ok(hex_encode(signed.hash_as_entrypoint().as_ref()))
 }
-
 fn decode_canonical_signed_transaction(
     canonical_bare_signed_transaction: &[u8],
 ) -> Result<SignedTransaction> {
@@ -2942,7 +2762,6 @@ fn decode_canonical_signed_transaction(
     }
     Ok(signed)
 }
-
 fn render_compact_hash_vector(fixtures: &[FixtureEntry]) -> Result<String> {
     let source = fixtures
         .iter()
@@ -2956,7 +2775,6 @@ fn render_compact_hash_vector(fixtures: &[FixtureEntry]) -> Result<String> {
     source
         .validate(None)
         .context("compact hash vector source fixture failed validation")?;
-
     let bare = BASE64
         .decode(&source.signed_base64)
         .context("compact hash vector signed bytes are not valid base64")?;
@@ -2993,11 +2811,9 @@ fn render_compact_hash_vector(fixtures: &[FixtureEntry]) -> Result<String> {
     if payload_hash != source.payload_hash {
         bail!("compact hash vector payload does not match the manifest payload hash");
     }
-
     let mut versioned = Vec::with_capacity(1 + bare.len());
     versioned.push(SIGNED_TRANSACTION_V1);
     versioned.extend_from_slice(&bare);
-
     Ok(format!(
         concat!(
             "schema.version=2\n",
@@ -3022,7 +2838,6 @@ fn render_compact_hash_vector(fixtures: &[FixtureEntry]) -> Result<String> {
         versioned_base64 = BASE64.encode(versioned),
     ))
 }
-
 fn verify_compact_hash_vector(path: &Path, fixtures: &[FixtureEntry]) -> Result<()> {
     let expected = render_compact_hash_vector(fixtures)?;
     let actual = fs::read_to_string(path)
@@ -3035,26 +2850,20 @@ fn verify_compact_hash_vector(path: &Path, fixtures: &[FixtureEntry]) -> Result<
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use std::fs;
-
     use iroha_data_model::asset::Mintable;
     use iroha_primitives::numeric::NumericSpec;
     use norito::core::DecodeFromSlice;
-
     use super::*;
-
     const TEST_NETWORK_ID: &str =
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
-
     fn checked_in_alias_setup_fixture() -> AliasSetupFixtureBytes {
         let path = workspace_root().join(ALIAS_SETUP_FIXTURE_V1);
         AliasSetupFixtureBytes::try_new(fs::read(&path).expect("read alias-setup fixture"))
             .expect("validate alias-setup fixture")
     }
-
     #[test]
     fn register_asset_definition_fixture_source_is_current_and_semantic() {
         let register = semantic_register_asset_definition().expect("semantic register source");
@@ -3070,13 +2879,11 @@ mod tests {
             AssetBalancePolicy::Global
         );
         assert!(register.object.owning_domain.is_none());
-
         let value = json::to_value(&register.object).expect("serialize semantic source");
         let object = value.as_object().expect("NewAssetDefinition JSON object");
         assert_eq!(object.get("owning_domain"), Some(&Value::Null));
         assert!(!object.contains_key("confidential_policy"));
     }
-
     #[test]
     fn register_asset_definition_semantic_owner_table_is_exact() {
         assert_eq!(
@@ -3110,13 +2917,11 @@ mod tests {
                 .expect("non-owned fixtures retain strict framed decoding");
         }
     }
-
     #[test]
     fn register_asset_definition_semantic_source_rejects_wrong_wire_or_ordinal() {
         let exact = [(InstructionSourceSlot::Instructions(0), "iroha.register")];
         validate_semantic_instruction_observations("register_asset_definition", &exact)
             .expect("exact source identity");
-
         for malformed in [
             Vec::new(),
             vec![(InstructionSourceSlot::Instructions(0), "iroha.transfer")],
@@ -3129,7 +2934,6 @@ mod tests {
             validate_semantic_instruction_observations("register_asset_definition", &malformed)
                 .expect_err("semantic source shape must fail closed");
         }
-
         let shifted_batch = [
             (InstructionSourceSlot::Batch(0), "iroha.register"),
             (InstructionSourceSlot::Batch(1), "iroha.register"),
@@ -3137,7 +2941,6 @@ mod tests {
         validate_semantic_instruction_observations("mixed_executable_batch", &shifted_batch)
             .expect_err("mixed-batch semantic instruction slots are exact");
     }
-
     #[test]
     fn generated_register_asset_definition_roundtrips_current_register_box() {
         let instruction: InstructionBox = semantic_register_asset_definition()
@@ -3151,13 +2954,11 @@ mod tests {
         assert_eq!(Instruction::id(&*decoded), type_name);
         assert_eq!(Instruction::dyn_encode(&*decoded), payload);
     }
-
     fn sample_manifest() -> Manifest {
         Manifest {
             fixtures: vec![fixture("alpha"), fixture("beta"), fixture("gamma")],
         }
     }
-
     fn fixture(name: &str) -> FixtureEntry {
         FixtureEntry {
             name: name.to_string(),
@@ -3175,12 +2976,10 @@ mod tests {
             time_to_live_ms: 1,
         }
     }
-
     #[test]
     fn canonical_manifest_schema_is_closed_and_nonce_is_explicit() {
         let canonical = json::to_value(&sample_manifest()).expect("serialize sample manifest");
         validate_manifest_shape(&canonical).expect("canonical manifest shape");
-
         let mut unknown_root = canonical.clone();
         unknown_root
             .as_object_mut()
@@ -3189,7 +2988,6 @@ mod tests {
         let error = validate_manifest_shape(&unknown_root)
             .expect_err("unknown manifest root fields must fail closed");
         assert!(error.to_string().contains("unknown field 'legacy_schema'"));
-
         let mut missing_nonce = canonical.clone();
         missing_nonce
             .as_object_mut()
@@ -3202,7 +3000,6 @@ mod tests {
         let error = validate_manifest_shape(&missing_nonce)
             .expect_err("manifest nonce must be present even when null");
         assert!(error.to_string().contains("missing required field 'nonce'"));
-
         let mut legacy_chain = canonical.clone();
         legacy_chain
             .as_object_mut()
@@ -3215,7 +3012,6 @@ mod tests {
         let error = validate_manifest_shape(&legacy_chain)
             .expect_err("the legacy manifest chain field must fail closed");
         assert!(error.to_string().contains("unknown field 'chain'"));
-
         let mut unknown_entry = canonical;
         unknown_entry
             .as_object_mut()
@@ -3229,7 +3025,6 @@ mod tests {
             .expect_err("unknown manifest entry fields must fail closed");
         assert!(error.to_string().contains("unknown field 'encoded'"));
     }
-
     fn canonical_descriptor_fixture(name: &str) -> Value {
         let source = fs::read_to_string(workspace_root().join(CANONICAL_PAYLOADS))
             .expect("canonical payload descriptor");
@@ -3248,7 +3043,6 @@ mod tests {
             .unwrap_or_else(|| panic!("canonical fixture {name:?}"))
             .clone()
     }
-
     #[test]
     fn mixed_batch_fixture_parser_preserves_item_order() {
         let mut instruction = Map::new();
@@ -3288,7 +3082,6 @@ mod tests {
                 Value::Object(contract_item),
             ]),
         );
-
         let parsed = parse_executable(&Value::Object(executable)).expect("parse mixed batch");
         let RawExecutable::Batch(items) = parsed else {
             panic!("expected mixed batch");
@@ -3296,7 +3089,6 @@ mod tests {
         assert!(matches!(items[0], RawBatchItem::Instruction(_)));
         assert!(matches!(items[1], RawBatchItem::ContractCall(_)));
     }
-
     #[test]
     fn mixed_batch_fixture_parser_rejects_empty_batch() {
         let mut executable = Map::new();
@@ -3306,7 +3098,6 @@ mod tests {
         };
         assert!(err.to_string().contains("at least one item"));
     }
-
     #[test]
     fn signed_hash_uses_compact_external_entrypoint_domain() {
         let keypair = signing_keypair().expect("fixture signing key");
@@ -3333,7 +3124,6 @@ mod tests {
             blake2b256_hex(&signed_bytes)
         );
     }
-
     #[test]
     fn compact_hash_vector_is_descriptor_owned_and_deterministic() {
         let root = workspace_root();
@@ -3354,7 +3144,6 @@ mod tests {
             first,
             "checked-in compact vector must be generated from the canonical manifest"
         );
-
         let properties: BTreeMap<_, _> = first
             .lines()
             .map(|line| line.split_once('=').expect("generated property"))
@@ -3391,7 +3180,6 @@ mod tests {
             "ea55e9ccd91a2a4910245a7747b856af27b2262f4278b8c0efd3166603612d71"
         );
     }
-
     #[test]
     fn compact_hash_vector_requires_the_canonical_source_fixture() {
         let error = render_compact_hash_vector(&sample_manifest().fixtures)
@@ -3401,7 +3189,6 @@ mod tests {
             "error must identify the missing source fixture: {error}"
         );
     }
-
     #[test]
     fn manifest_validation_rejects_duplicate_fixture_names() {
         let manifest = Manifest {
@@ -3415,7 +3202,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn manifest_validation_rejects_noncanonical_encoded_file() {
         let mut entry = fixture("alpha");
@@ -3432,7 +3218,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn fixture_names_reject_path_and_nonportable_forms() {
         for name in [
@@ -3454,7 +3239,6 @@ mod tests {
             validate_fixture_name(name).expect("portable fixture name");
         }
     }
-
     #[test]
     fn retired_fixture_publication_prunes_only_previous_owner_blobs() {
         let temp = tempdir().expect("fixture publication root");
@@ -3472,7 +3256,6 @@ mod tests {
         }
         fs::write(root.join(&swift).join("swift_owned.norito"), b"swift")
             .expect("write Swift-owned blob");
-
         let previous_owned = [
             (PathBuf::from("active.norito"), b"active.norito".to_vec()),
             (PathBuf::from("retired.norito"), b"retired.norito".to_vec()),
@@ -3483,7 +3266,6 @@ mod tests {
             .expect("plan guarded retirement");
         assert_eq!(removals.len(), 6);
         remove_retired_publication(root, &removals).expect("remove guarded retired blobs");
-
         assert!(root.join(&canonical).join("active.norito").is_file());
         assert!(root.join(&java).join("active.norito").is_file());
         for directory in [&canonical, &java, &python, &swift] {
@@ -3493,7 +3275,6 @@ mod tests {
         assert!(!root.join(&swift).join("active.norito").exists());
         assert!(root.join(&swift).join("swift_owned.norito").is_file());
     }
-
     #[test]
     fn retired_fixture_publication_rejects_unknown_or_changed_blobs() {
         let temp = tempdir().expect("fixture publication root");
@@ -3504,7 +3285,6 @@ mod tests {
         let error = plan_retired_publication(root, &[], &BTreeMap::new())
             .expect_err("unknown blobs must fail closed");
         assert!(error.to_string().contains("unowned Norito blob"));
-
         fs::remove_file(canonical.join("unknown.norito")).expect("remove unknown test blob");
         let python = root.join("python/iroha_python/tests/fixtures");
         fs::create_dir_all(&python).expect("create Python fixture directory");
@@ -3522,7 +3302,6 @@ mod tests {
         );
         assert!(python.join("retired.norito").is_file());
         fs::remove_file(python.join("retired.norito")).expect("remove divergent test blob");
-
         fs::write(canonical.join("retired.norito"), b"before").expect("write retired blob");
         let previous_owned = [(PathBuf::from("retired.norito"), b"before".to_vec())]
             .into_iter()
@@ -3535,7 +3314,6 @@ mod tests {
         assert!(error.to_string().contains("preimage changed"));
         assert!(canonical.join("retired.norito").is_file());
     }
-
     #[test]
     fn retired_fixture_publication_rejects_same_byte_replacement() {
         let temp = tempdir().expect("fixture publication root");
@@ -3549,7 +3327,6 @@ mod tests {
             .collect();
         let removals =
             plan_retired_publication(root, &[], &previous_owned).expect("plan guarded retirement");
-
         let displaced = canonical.join("retired.preimage");
         fs::rename(&retired, &displaced).expect("preserve original inode");
         fs::write(&retired, b"same bytes").expect("write same-byte replacement");
@@ -3561,7 +3338,6 @@ mod tests {
             b"same bytes"
         );
     }
-
     #[test]
     fn publication_transaction_rolls_back_injected_failure_and_is_retry_safe() {
         let rendered = tempdir().expect("rendered publication root");
@@ -3589,7 +3365,6 @@ mod tests {
             .expect("write published SDK manifest");
         fs::write(destination.path().join(&manifest), b"old manifest")
             .expect("write published manifest");
-
         let removal = GuardedRemoval {
             relative: retired.clone(),
             preimage: capture_optional_guarded_file(&destination.path().join(&retired))
@@ -3614,7 +3389,6 @@ mod tests {
             ],
             "ordinary mutations and SDK manifests precede the canonical manifest commit"
         );
-
         let error =
             execute_publication_mutations(destination.path(), &mutations, Some(3), || Ok(()))
                 .expect_err("injected failure must abort publication");
@@ -3639,7 +3413,6 @@ mod tests {
             fs::read(destination.path().join(&manifest)).expect("manifest preserved"),
             b"old manifest"
         );
-
         let removal = GuardedRemoval {
             relative: retired.clone(),
             preimage: capture_optional_guarded_file(&destination.path().join(&retired))
@@ -3671,7 +3444,6 @@ mod tests {
             b"new manifest"
         );
     }
-
     #[test]
     fn manifest_validation_rejects_renamed_cloned_payloads() {
         let first = fixture("alpha");
@@ -3692,7 +3464,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn manifest_validation_rejects_noncanonical_base64() {
         for malformed in ["YQ!!", "Y Q==", "YQ=", "YQ===", "YR=="] {
@@ -3711,7 +3482,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn schema_targets_are_sorted_and_unique() {
         let targets = schema_targets();
@@ -3734,7 +3504,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn schema_targets_exclude_retired_sns_mutation_requests() {
         let aliases = schema_targets()
@@ -3758,13 +3527,11 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn schema_manifest_round_trip_validates() {
         let manifest = SchemaHashManifest::new_current();
         manifest.validate().expect("generated manifest validates");
     }
-
     #[test]
     fn schema_manifest_generation_is_deterministic() {
         let first =
@@ -3777,7 +3544,6 @@ mod tests {
             "checked-in schema manifests must not contain wall-clock state"
         );
     }
-
     #[test]
     fn schema_hash_hex_round_trip() {
         let target_binding = schema_targets();
@@ -3786,7 +3552,6 @@ mod tests {
         let decoded = parse_schema_hash_hex(&encoded).expect("decode succeeds");
         assert_eq!(decoded, target.schema_hash);
     }
-
     #[test]
     fn workspace_root_points_to_repository() {
         let root = workspace_root();
@@ -3794,21 +3559,17 @@ mod tests {
         assert!(root.join("xtask/Cargo.toml").is_file());
         assert!(root.join(CANONICAL_MANIFEST).is_file());
     }
-
     #[test]
     fn json_report_writer_creates_parent_directory() {
         let temp_dir = tempdir().expect("temp dir");
         let output = temp_dir.path().join("nested/report.json");
         let value = Value::String("fixture-report".to_owned());
-
         write_json_output(&value, JsonOutput::File(output.clone())).expect("write JSON report");
-
         assert_eq!(
             fs::read_to_string(output).expect("read JSON report"),
             "\"fixture-report\"\n"
         );
     }
-
     #[test]
     fn generated_transaction_fixture_uses_checked_signing() {
         let keypair = signing_keypair().expect("checked signing keypair");
@@ -3832,19 +3593,16 @@ mod tests {
             ttl_ms_hint: 60_000,
             nonce_hint: Some(1),
         };
-
         let fixture = raw
             .generate_fixture(&keypair)
             .expect("generate checked signed fixture");
         let (signed, used) = SignedTransaction::decode_from_slice(&fixture.signed_bytes)
             .expect("decode checked signed fixture");
-
         assert_eq!(used, fixture.signed_bytes.len());
         signed
             .verify_signature()
             .expect("checked fixture transaction signature verifies");
     }
-
     #[test]
     fn raw_payload_rejects_invalid_network_id() {
         let payload = RawPayload {
@@ -3857,7 +3615,6 @@ mod tests {
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Vec::new(),
         };
-
         let error = payload
             .to_builder("invalid-network-id")
             .err()
@@ -3869,7 +3626,6 @@ mod tests {
             "unexpected network id error: {error}"
         );
     }
-
     #[test]
     fn network_id_parser_requires_exact_canonical_hash_encoding() {
         let parsed = parse_network_id(TEST_NETWORK_ID).expect("canonical network id");
@@ -3877,7 +3633,6 @@ mod tests {
             json::to_value(&parsed).expect("render canonical network id"),
             Value::String(TEST_NETWORK_ID.to_owned())
         );
-
         for rejected in [
             TEST_NETWORK_ID.to_ascii_lowercase(),
             TEST_NETWORK_ID[5..69].to_owned(),
@@ -3889,7 +3644,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn payload_ttl_is_required_and_nonzero() {
         for value in [None, Some(Value::Null), Some(Value::from(0_u64))] {
@@ -3904,7 +3658,6 @@ mod tests {
                 "unexpected lifetime error: {error}"
             );
         }
-
         let mut object = Map::new();
         object.insert("time_to_live_ms".to_owned(), Value::from(100_000_u64));
         assert_eq!(
@@ -3912,7 +3665,6 @@ mod tests {
             100_000
         );
     }
-
     #[test]
     fn payload_descriptor_rejects_the_encoded_alias() {
         let mut fixture = canonical_descriptor_fixture("typed_fee_payment_gas_limit");
@@ -3935,7 +3687,6 @@ mod tests {
             "unexpected alias error: {error}"
         );
     }
-
     #[test]
     fn payload_descriptor_requires_exact_top_level_and_payload_fields() {
         let mut fixture = canonical_descriptor_fixture("typed_fee_payment_gas_limit");
@@ -3943,14 +3694,12 @@ mod tests {
             .as_object_mut()
             .expect("fixture descriptor entry is an object");
         entry.remove("encoded");
-
         let mut unknown_top_level = entry.clone();
         unknown_top_level.insert("legacy_hint".to_owned(), Value::Null);
         let Err(error) = parse_payload_fixture(&Value::Object(unknown_top_level)) else {
             panic!("unknown top-level fields must fail closed");
         };
         assert!(error.to_string().contains("unknown field 'legacy_hint'"));
-
         let mut missing_top_level = entry.clone();
         missing_top_level.remove("network_id");
         let Err(error) = parse_payload_fixture(&Value::Object(missing_top_level)) else {
@@ -3961,14 +3710,12 @@ mod tests {
                 .to_string()
                 .contains("missing required field 'network_id'")
         );
-
         let mut legacy_top_level = entry.clone();
         legacy_top_level.insert("chain".to_owned(), Value::String("legacy".to_owned()));
         let Err(error) = parse_payload_fixture(&Value::Object(legacy_top_level)) else {
             panic!("the legacy top-level chain field must fail closed");
         };
         assert!(error.to_string().contains("unknown field 'chain'"));
-
         let mut unknown_payload = entry
             .get("payload")
             .and_then(Value::as_object)
@@ -3983,7 +3730,6 @@ mod tests {
                 .to_string()
                 .contains("unknown field 'legacy_metadata'")
         );
-
         let mut legacy_payload = entry
             .get("payload")
             .and_then(Value::as_object)
@@ -3994,7 +3740,6 @@ mod tests {
             panic!("the legacy payload chain field must fail closed");
         };
         assert!(error.to_string().contains("unknown field 'chain'"));
-
         let mut missing_payload = entry
             .get("payload")
             .and_then(Value::as_object)
@@ -4010,7 +3755,6 @@ mod tests {
                 .contains("missing required field 'metadata'")
         );
     }
-
     #[test]
     fn executable_and_instruction_objects_are_closed_and_unambiguous() {
         let mut ambiguous = Map::new();
@@ -4020,7 +3764,6 @@ mod tests {
             panic!("multiple executable variants must fail closed");
         };
         assert!(error.to_string().contains("exactly one variant"));
-
         let mut unknown = Map::new();
         unknown.insert("Legacy".to_owned(), Value::Null);
         let Err(error) = parse_executable(&Value::Object(unknown)) else {
@@ -4031,7 +3774,6 @@ mod tests {
                 .to_string()
                 .contains("unknown executable variant 'Legacy'")
         );
-
         let mut instruction = Map::new();
         instruction.insert(
             "wire_name".to_owned(),
@@ -4047,7 +3789,6 @@ mod tests {
         };
         assert!(error.to_string().contains("unknown field 'kind'"));
     }
-
     #[test]
     fn direct_contract_call_is_supported_and_requires_signed_gas() {
         let fixture = canonical_descriptor_fixture("mixed_executable_batch");
@@ -4067,7 +3808,6 @@ mod tests {
             .and_then(|item| item.get("ContractCall"))
             .expect("mixed fixture contract call")
             .clone();
-
         let mut unknown_invocation = invocation.clone();
         unknown_invocation
             .as_object_mut()
@@ -4083,7 +3823,6 @@ mod tests {
                 .to_string()
                 .contains("unknown field 'legacy_gas_limit'")
         );
-
         let mut missing_invocation = invocation.clone();
         missing_invocation
             .as_object_mut()
@@ -4099,18 +3838,15 @@ mod tests {
                 .to_string()
                 .contains("missing required field 'arguments'")
         );
-
         let mut executable = Map::new();
         executable.insert("ContractCall".to_owned(), invocation);
         payload
             .as_object_mut()
             .expect("payload object")
             .insert("executable".to_owned(), Value::Object(executable));
-
         let parsed = parse_payload(&payload).expect("direct contract call fixture parses");
         assert!(matches!(parsed.executable, RawExecutable::ContractCall(_)));
         assert!(parsed.executable.requires_transaction_gas_limit());
-
         payload
             .as_object_mut()
             .and_then(|object| object.get_mut("fee_payment"))
@@ -4128,7 +3864,6 @@ mod tests {
                 .contains("require an explicit fee_payment gas_limit")
         );
     }
-
     #[test]
     fn runtime_executable_fixtures_require_signed_gas_bounds() {
         for name in ["typed_fee_payment_gas_limit", "mixed_executable_batch"] {
@@ -4146,7 +3881,6 @@ mod tests {
                 .and_then(Value::as_object_mut)
                 .expect("authority fee payment")
                 .remove("gas_limit");
-
             let Err(error) = parse_payload(&payload) else {
                 panic!("gasless runtime fixture {name:?} must be rejected");
             };
@@ -4158,7 +3892,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn canonical_runtime_fixture_is_active_and_exactly_gas_bounded() {
         let source = fs::read_to_string(workspace_root().join(CANONICAL_PAYLOADS))
@@ -4178,7 +3911,6 @@ mod tests {
                 }),
             "the gasless compatibility-only ivm_transfer fixture must be absent"
         );
-
         let fixture = canonical_descriptor_fixture("typed_fee_payment_gas_limit");
         let payload = fixture
             .as_object()
@@ -4235,7 +3967,6 @@ mod tests {
             "gas authorization must be signed in fee_payment, not legacy metadata"
         );
     }
-
     #[test]
     fn fixture_manifest_requires_explicit_ttl() {
         let manifest = Manifest {
@@ -4243,7 +3974,6 @@ mod tests {
         };
         let encoded = json::to_json_pretty(&manifest).expect("serialize fixture manifest");
         let base: Value = json::from_str(&encoded).expect("parse fixture manifest value");
-
         for replacement in [None, Some(Value::Null)] {
             let mut candidate = base.clone();
             let entry = candidate
@@ -4258,11 +3988,9 @@ mod tests {
             } else {
                 entry.remove("time_to_live_ms");
             }
-
             json::from_value::<Manifest>(candidate)
                 .expect_err("missing and null fixture lifetimes must be rejected");
         }
-
         let mut zero = base;
         zero.as_object_mut()
             .and_then(|object| object.get_mut("fixtures"))
@@ -4276,7 +4004,6 @@ mod tests {
             .validate(None)
             .expect_err("zero fixture lifetime must be rejected");
     }
-
     #[test]
     fn verification_report_lists_expected_sdks() {
         let alias_setup_fixture = checked_in_alias_setup_fixture();
@@ -4295,7 +4022,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn manifest_validation_checks_encoded_files_with_base_dir() {
         let root = workspace_root();
@@ -4306,7 +4032,6 @@ mod tests {
             .first()
             .expect("at least one fixture in canonical manifest")
             .clone();
-
         // Happy path: write the fixture at its identity-bound canonical basename.
         let temp_dir = tempdir().expect("temp dir");
         let entry = template.clone();
@@ -4321,7 +4046,6 @@ mod tests {
         manifest
             .validate(Some(temp_dir.path()))
             .expect("validation succeeds when encoded file matches payload");
-
         // Corrupt the file and ensure validation fails.
         fs::write(&encoded_path, b"corrupt-payload").expect("corrupt encoded payload");
         let err = manifest
@@ -4331,7 +4055,6 @@ mod tests {
             err.to_string().contains("differs from manifest payload"),
             "error should mention payload mismatch: {err}"
         );
-
         // Remove the file entirely to verify missing file errors.
         fs::remove_file(&encoded_path).expect("remove encoded payload");
         let err = manifest
@@ -4342,7 +4065,6 @@ mod tests {
             "error should mention missing encoded file name: {err}"
         );
     }
-
     #[test]
     fn manifest_validation_rejects_ttl_summary_drift() {
         let root = workspace_root();
@@ -4357,7 +4079,6 @@ mod tests {
             .time_to_live_ms
             .checked_add(1)
             .expect("fixture lifetime can be incremented");
-
         let error = Manifest {
             fixtures: vec![entry],
         }

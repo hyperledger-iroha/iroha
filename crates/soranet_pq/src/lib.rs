@@ -2,10 +2,8 @@
 //!
 //! This crate exposes ML-KEM and ML-DSA helpers plus the hedged RNG and HKDF
 //! utilities needed by the `SoraNet` handshake.
-
 #![allow(unsafe_code)]
 #![deny(missing_docs)]
-
 #[cfg(feature = "pqc")]
 pub mod ffi;
 mod hkdf;
@@ -16,7 +14,6 @@ mod mlkem;
 mod rng;
 #[cfg(not(feature = "pqc"))]
 mod wire;
-
 pub use crate::{
     hkdf::{HkdfDomain, HkdfSuite, derive_labeled_hkdf},
     rng::{
@@ -25,7 +22,6 @@ pub use crate::{
         hedged_chacha20_rng_from_rng,
     },
 };
-
 #[cfg(feature = "pqc")]
 pub use crate::mldsa::{
     MlDsaError, MlDsaKeyPair, MlDsaSignature, MlDsaSuite, generate_mldsa_keypair,
@@ -44,6 +40,5 @@ pub use crate::mlkem::{
     try_generate_mlkem_keypair_from_seed, validate_mlkem_ciphertext, validate_mlkem_key_pair,
     validate_mlkem_public_key, validate_mlkem_secret_key,
 };
-
 #[cfg(not(feature = "pqc"))]
 pub use crate::wire::{MlDsaSuite, UnsupportedPqcError};

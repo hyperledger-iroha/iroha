@@ -1,7 +1,5 @@
 //! Asset identifiers.
-
 use std::{array, fmt, format, str::FromStr, string::String};
-
 use getset::{CopyGetters, Getters};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
@@ -9,14 +7,11 @@ use norito::{
     NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
 };
-
 pub use self::model::*;
 use crate::{Name, account::prelude::*, domain::prelude::*, error::ParseError, nexus::DataSpaceId};
-
 #[model]
 mod model {
     use super::*;
-
     /// Canonical public asset identifier.
     ///
     /// Textual form is an unprefixed Base58 address over canonical `UUIDv4` bytes
@@ -29,7 +24,6 @@ mod model {
         #[getset(get_copy = "pub")]
         pub aid_bytes: [u8; 16],
     }
-
     /// Balance partition used for a concrete asset ownership bucket.
     #[derive(
         Debug,
@@ -58,7 +52,6 @@ mod model {
         /// Dataspace-restricted bucket keyed by a specific dataspace identifier.
         Dataspace(DataSpaceId),
     }
-
     /// Internal balance-bucket identifier for a concrete owner/scope bucket.
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Getters, Decode, Encode, IntoSchema)]
     #[getset(get = "pub")]
@@ -73,32 +66,25 @@ mod model {
         pub scope: AssetBalanceScope,
     }
 }
-
 string_id!(AssetDefinitionId);
-
 const ASSET_DEFINITION_ADDRESS_VERSION: u8 = 1;
 const ASSET_DEFINITION_ADDRESS_LEN: usize = 1 + 16 + 4;
-
 impl NoritoSerialize for AssetDefinitionId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <[u8; 16] as NoritoSerialize>::serialize(&self.aid_bytes, writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         <[u8; 16] as NoritoSerialize>::encoded_len_hint(&self.aid_bytes)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         <[u8; 16] as NoritoSerialize>::encoded_len_exact(&self.aid_bytes)
     }
 }
-
 impl<'de> NoritoDeserialize<'de> for AssetDefinitionId {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         let aid_bytes = <[u8; 16] as NoritoDeserialize>::deserialize(archived.cast());
         Self::from_uuid_bytes_unchecked(aid_bytes)
     }
-
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -107,15 +93,19 @@ impl<'de> NoritoDeserialize<'de> for AssetDefinitionId {
             .map_err(|err| norito::core::Error::Message(err.to_string()))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for AssetId {
     fn write_json(&self, out: &mut String) {
         let literal = self.canonical_literal();
         norito::json::JsonSerialize::json_serialize(&literal, out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(&self.canonical_literal(), out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for AssetId {
     fn json_deserialize(
@@ -125,7 +115,6 @@ impl norito::json::JsonDeserialize for AssetId {
         AssetId::parse_literal(&value).map_err(|err| norito::json::Error::Message(err.to_string()))
     }
 }
-
 impl AssetId {
     /// Create a new [`AssetId`]
     pub fn new(definition: AssetDefinitionId, account: AccountId) -> Self {
@@ -135,12 +124,10 @@ impl AssetId {
             scope: AssetBalanceScope::Global,
         }
     }
-
     /// Convenience alias for [`Self::new`]
     pub fn of(definition: AssetDefinitionId, account: AccountId) -> Self {
         Self::new(definition, account)
     }
-
     /// Create an [`AssetId`] with an explicit balance scope.
     pub fn with_scope(
         definition: AssetDefinitionId,
@@ -153,7 +140,6 @@ impl AssetId {
             scope,
         }
     }
-
     /// Render this identifier in the canonical internal balance-bucket literal form.
     ///
     /// Public asset ids remain bare Base58 asset-definition ids. Global balance
@@ -169,7 +155,6 @@ impl AssetId {
             }
         }
     }
-
     /// Parse the canonical internal balance-bucket literal.
     ///
     /// # Errors
@@ -184,7 +169,6 @@ impl AssetId {
                 "Asset balance bucket literal must not be empty",
             ));
         }
-
         let mut parts = trimmed.split('#');
         let definition_literal = parts.next().ok_or_else(|| {
             ParseError::new("Asset balance bucket literal must include an asset definition id")
@@ -198,7 +182,6 @@ impl AssetId {
                 "Asset balance bucket literal must use `<base58-asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>` suffix; canonical asset-definition ids are Base58",
             ));
         }
-
         let definition = AssetDefinitionId::parse_address_literal(definition_literal)?;
         let account = AccountId::parse_encoded(account_literal)
             .map(ParsedAccountId::into_account_id)
@@ -221,7 +204,6 @@ impl AssetId {
         Ok(Self::with_scope(definition, account, scope))
     }
 }
-
 impl AssetDefinitionId {
     /// Construct an identifier from canonical `UUIDv4` bytes.
     ///
@@ -236,12 +218,10 @@ impl AssetDefinitionId {
         }
         Ok(Self { aid_bytes })
     }
-
     /// Construct from trusted UUID bytes already validated by the decoder.
     fn from_uuid_bytes_unchecked(aid_bytes: [u8; 16]) -> Self {
         Self { aid_bytes }
     }
-
     /// Deterministically derive canonical UUID bytes from component labels.
     ///
     /// The labels are only a deterministic seed. They are not retained and confer no ownership,
@@ -263,14 +243,12 @@ impl AssetDefinitionId {
         aid_bytes[8] = (aid_bytes[8] & 0x3f) | 0x80;
         Self { aid_bytes }
     }
-
     /// Canonical textual address (unprefixed Base58 with version and checksum).
     #[must_use]
     pub fn canonical_address(&self) -> String {
         let payload = self.address_payload();
         bs58::encode(payload).into_string()
     }
-
     /// Parse the canonical unprefixed Base58 address.
     ///
     /// # Errors
@@ -306,7 +284,6 @@ impl AssetDefinitionId {
         let aid_bytes = array::from_fn(|index| payload[index + 1]);
         Self::from_uuid_bytes(aid_bytes)
     }
-
     fn address_payload(&self) -> [u8; ASSET_DEFINITION_ADDRESS_LEN] {
         let checksum = address_checksum(&[
             ASSET_DEFINITION_ADDRESS_VERSION,
@@ -352,28 +329,23 @@ impl AssetDefinitionId {
         ]
     }
 }
-
 fn is_uuid_v4_bytes(bytes: &[u8; 16]) -> bool {
     (bytes[6] >> 4) == 0b0100 && (bytes[8] & 0b1100_0000) == 0b1000_0000
 }
-
 fn address_checksum(payload: &[u8]) -> [u8; 4] {
     let digest = blake3::hash(payload);
     let mut checksum = [0_u8; 4];
     checksum.copy_from_slice(&digest.as_bytes()[..4]);
     checksum
 }
-
 impl fmt::Display for AssetDefinitionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.canonical_address())
     }
 }
-
 /// Asset definition identifier textual representation.
 impl FromStr for AssetDefinitionId {
     type Err = ParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let trimmed = s.trim();
         if trimmed.is_empty() {
@@ -382,38 +354,30 @@ impl FromStr for AssetDefinitionId {
         Self::parse_address_literal(trimmed)
     }
 }
-
 impl fmt::Display for AssetId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.canonical_literal())
     }
 }
-
 impl fmt::Debug for AssetId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.canonical_literal())
     }
 }
-
 impl FromStr for AssetId {
     type Err = ParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse_literal(s)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::KeyPair;
-
     use super::*;
     use crate::account::AccountId;
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked asset id fixture keypair")
     }
-
     #[test]
     fn debug_formats_without_recursion() {
         let kp = checked_random_keypair();
@@ -425,7 +389,6 @@ mod tests {
         let s = format!("{id:?}");
         assert_eq!(s, id.canonical_literal());
     }
-
     #[test]
     fn asset_definition_id_parses_canonical_aid() {
         let expected = AssetDefinitionId::from_uuid_bytes([
@@ -438,24 +401,20 @@ mod tests {
         assert_eq!(parsed, expected);
         assert_eq!(parsed.to_string(), literal);
     }
-
     #[test]
     fn asset_definition_id_rejects_non_v4_uuid_bytes() {
         assert!(AssetDefinitionId::from_uuid_bytes([0_u8; 16]).is_err());
-
         let mut wrong_variant = [0_u8; 16];
         wrong_variant[6] = 0x40;
         wrong_variant[8] = 0x40;
         assert!(AssetDefinitionId::from_uuid_bytes(wrong_variant).is_err());
     }
-
     #[test]
     fn unchecked_asset_definition_constructor_is_not_public() {
         let source = include_str!("id.rs");
         let forbidden = ["pub fn ", "from_uuid_bytes_unchecked"].concat();
         assert!(!source.contains(&forbidden));
     }
-
     #[test]
     fn component_derivation_produces_canonical_opaque_id() {
         let derived = AssetDefinitionId::derive_from_components(
@@ -466,7 +425,6 @@ mod tests {
             .expect("derived address parses");
         assert_eq!(reparsed, derived);
     }
-
     #[test]
     fn asset_id_parse_literal_roundtrips_global() {
         let kp = checked_random_keypair();
@@ -476,12 +434,10 @@ mod tests {
             "xor".parse().expect("name"),
         );
         let literal = format!("{definition}#{account}");
-
         let parsed = AssetId::parse_literal(&literal).expect("text literal should parse");
         assert_eq!(parsed, AssetId::new(definition, account));
         assert_eq!(parsed.to_string(), literal);
     }
-
     #[test]
     fn asset_id_parse_literal_roundtrips_scoped() {
         let kp = checked_random_keypair();
@@ -491,7 +447,6 @@ mod tests {
             "xor".parse().expect("name"),
         );
         let literal = format!("{definition}#{account}#dataspace:7");
-
         let parsed = AssetId::parse_literal(&literal).expect("scoped literal should parse");
         assert_eq!(
             parsed,
@@ -503,14 +458,12 @@ mod tests {
         );
         assert_eq!(parsed.to_string(), literal);
     }
-
     #[test]
     fn asset_balance_scope_dataspace_encoding_shape() {
         let encoded =
             norito::codec::encode_adaptive(&AssetBalanceScope::Dataspace(DataSpaceId::new(42)));
         assert_eq!(hex::encode(encoded), "0100000009082a00000000000000");
     }
-
     #[test]
     fn asset_id_parse_literal_rejects_malformed_colon_literal() {
         let err =
@@ -520,7 +473,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn asset_definition_id_parse_address_rejects_non_canonical_literals() {
         assert!(AssetDefinitionId::parse_address_literal("usd#wonderland").is_err());
@@ -529,7 +481,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn asset_definition_id_from_str_rejects_textual_seed_literal() {
         let err = "usd#wonderland"
@@ -540,7 +491,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn asset_definition_id_rejects_invalid_checksum() {
         let mut literal = AssetDefinitionId::derive_from_components(
@@ -552,7 +502,6 @@ mod tests {
         let last = literal.len() - 1;
         literal[last] = if literal[last] == b'1' { b'2' } else { b'1' };
         let literal = String::from_utf8(literal).expect("utf8");
-
         let err = literal
             .parse::<AssetDefinitionId>()
             .expect_err("checksum must fail");
@@ -561,7 +510,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn asset_definition_id_rejects_prefixed_literal() {
         let err =

@@ -3,22 +3,17 @@
 //! This module implements the TLV parsing and negotiation rules documented in
 //! `specs/soranet_handshake.md`. It is intentionally deterministic so
 //! transcript hashes computed by clients and relays match byte-for-byte.
-
 use std::fmt;
-
 use hex::FromHex;
 pub use iroha_crypto::soranet::handshake::CapabilityWarning;
 use thiserror::Error;
-
 use crate::{
     config::PaddingConfig,
     constant_rate::CONSTANT_RATE_CELL_BYTES,
     scheduler::{Cell, CellClass},
 };
-
 /// Maximum capability vector size we accept during negotiation.
 pub const MAX_CAP_VECTOR_LEN: usize = 4096;
-
 /// `snnet.pqkem` TLV type.
 pub const TYPE_PQ_KEM: u16 = 0x0101;
 /// `snnet.pqsig` TLV type.
@@ -31,10 +26,8 @@ pub const TYPE_ROLE: u16 = 0x0201;
 pub const TYPE_PADDING: u16 = 0x0202;
 /// `snnet.constant_rate` TLV type.
 pub const TYPE_CONSTANT_RATE: u16 = 0x0203;
-
 const REQUIRED_FLAG: u8 = 0x01;
 const CONSTANT_RATE_FLAG_STRICT: u8 = 0x01;
-
 /// Recognised ML-KEM variants exchanged during capability negotiation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KemId {
@@ -45,7 +38,6 @@ pub enum KemId {
     /// Kyber1024 (ML-KEM-1024).
     MlKem1024,
 }
-
 impl KemId {
     /// Return the wire code associated with this KEM identifier.
     pub const fn code(self) -> u8 {
@@ -55,7 +47,6 @@ impl KemId {
             Self::MlKem1024 => 0x02,
         }
     }
-
     /// Convert a wire code into a [`KemId`], rejecting unknown codes.
     pub const fn from_code(code: u8) -> Option<Self> {
         match code {
@@ -66,7 +57,6 @@ impl KemId {
         }
     }
 }
-
 /// Recognised signature variants exchanged during capability negotiation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignatureId {
@@ -77,7 +67,6 @@ pub enum SignatureId {
     /// Falcon-512 (optional PQ signature).
     Falcon512,
 }
-
 impl SignatureId {
     /// Return the wire code associated with this signature identifier.
     pub const fn code(self) -> u8 {
@@ -87,7 +76,6 @@ impl SignatureId {
             Self::Falcon512 => 0x02,
         }
     }
-
     /// Convert a wire code into a [`SignatureId`], rejecting unknown codes.
     pub const fn from_code(code: u8) -> Option<Self> {
         match code {
@@ -98,14 +86,12 @@ impl SignatureId {
         }
     }
 }
-
 /// Desired behavior when negotiating constant-rate transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConstantRateMode {
     BestEffort,
     Strict,
 }
-
 impl ConstantRateMode {
     /// Decode a mode from the constant-rate flags byte.
     pub const fn from_flags(flags: u8) -> Self {
@@ -115,7 +101,6 @@ impl ConstantRateMode {
             Self::BestEffort
         }
     }
-
     /// Encode the mode into the flags byte.
     pub const fn flags(self) -> u8 {
         match self {
@@ -124,7 +109,6 @@ impl ConstantRateMode {
         }
     }
 }
-
 impl ConstantRateCapability {
     /// Serialize the capability into the TLV payload used in the handshake.
     pub fn encode_value(&self) -> Vec<u8> {
@@ -142,7 +126,6 @@ impl ConstantRateCapability {
         value
     }
 }
-
 /// `constant-rate-v1` capability parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConstantRateCapability {
@@ -153,7 +136,6 @@ pub struct ConstantRateCapability {
     /// Cell size advertised in the capability.
     pub cell_bytes: u16,
 }
-
 /// GREASE TLV entry preserved during the handshake.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GreaseEntry {
@@ -162,7 +144,6 @@ pub struct GreaseEntry {
     /// Raw GREASE payload bytes.
     pub value: Vec<u8>,
 }
-
 /// KEM advertisement (id + required bit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KemAdvertisement {
@@ -171,7 +152,6 @@ pub struct KemAdvertisement {
     /// Whether the KEM is required for the session.
     pub required: bool,
 }
-
 /// Signature advertisement (id + required bit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SignatureAdvertisement {
@@ -180,7 +160,6 @@ pub struct SignatureAdvertisement {
     /// Whether the signature is required for the session.
     pub required: bool,
 }
-
 /// Parsed capability vector supplied by a client.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ClientAdvertisement {
@@ -197,7 +176,6 @@ pub struct ClientAdvertisement {
     /// Vendor/unknown GREASE TLVs preserved during parsing.
     pub grease: Vec<GreaseEntry>,
 }
-
 /// Relay-side capabilities advertised in the configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerCapabilities {
@@ -214,7 +192,6 @@ pub struct ServerCapabilities {
     /// Optional constant-rate capability supported by the relay.
     pub constant_rate: Option<ConstantRateCapability>,
 }
-
 impl ServerCapabilities {
     pub fn new(
         kem: Vec<KemAdvertisement>,
@@ -235,7 +212,6 @@ impl ServerCapabilities {
         }
     }
 }
-
 /// Negotiated capability selection echoed back to the client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NegotiatedCapabilities {
@@ -252,7 +228,6 @@ pub struct NegotiatedCapabilities {
     /// Constant-rate capability agreed for the session.
     pub constant_rate: Option<ConstantRateCapability>,
 }
-
 /// Errors surfaced while parsing or negotiating capability vectors.
 #[derive(Debug, Error)]
 pub enum CapabilityError {
@@ -305,7 +280,6 @@ pub enum CapabilityError {
     #[error("capability TLV {ty:#06x} value length {length} exceeds u16::MAX")]
     CapabilityValueTooLarge { ty: u16, length: usize },
 }
-
 /// Parse a capability vector into structured fields.
 pub fn parse_client_advertisement(bytes: &[u8]) -> Result<ClientAdvertisement, CapabilityError> {
     if bytes.len() > MAX_CAP_VECTOR_LEN {
@@ -313,7 +287,6 @@ pub fn parse_client_advertisement(bytes: &[u8]) -> Result<ClientAdvertisement, C
     }
     let mut cursor = 0usize;
     let mut advert = ClientAdvertisement::default();
-
     while cursor + 4 <= bytes.len() {
         let ty = u16::from_be_bytes([bytes[cursor], bytes[cursor + 1]]);
         let len = u16::from_be_bytes([bytes[cursor + 2], bytes[cursor + 3]]) as usize;
@@ -323,7 +296,6 @@ pub fn parse_client_advertisement(bytes: &[u8]) -> Result<ClientAdvertisement, C
         }
         let value = &bytes[cursor..cursor + len];
         cursor += len;
-
         match ty {
             TYPE_PQ_KEM => {
                 if value.len() != 2 {
@@ -386,14 +358,11 @@ pub fn parse_client_advertisement(bytes: &[u8]) -> Result<ClientAdvertisement, C
             }
         }
     }
-
     if cursor != bytes.len() {
         return Err(CapabilityError::Truncated);
     }
-
     Ok(advert)
 }
-
 fn parse_constant_rate_capability(value: &[u8]) -> Result<ConstantRateCapability, CapabilityError> {
     if value.len() < 4 {
         return Err(CapabilityError::ConstantRateInvalidLen);
@@ -427,14 +396,12 @@ fn parse_constant_rate_capability(value: &[u8]) -> Result<ConstantRateCapability
         cell_bytes,
     })
 }
-
 /// Attempt to parse a 32-byte descriptor commit from a hex string.
 pub fn parse_descriptor_commit_hex(hex_str: &str) -> Result<[u8; 32], CapabilityError> {
     let bytes =
         <[u8; 32]>::from_hex(hex_str).map_err(|_| CapabilityError::InvalidTranscriptCommitLen)?;
     Ok(bytes)
 }
-
 /// Negotiate the handshake capabilities with a client.
 pub fn negotiate_capabilities(
     client: &ClientAdvertisement,
@@ -447,7 +414,6 @@ pub fn negotiate_capabilities(
             None => return Err(CapabilityError::TranscriptCommitMissing),
         }
     }
-
     let mut selected_kem = None;
     for server_pref in &server.kem {
         if let Some(client_entry) = client.kem.iter().find(|entry| entry.id == server_pref.id) {
@@ -458,7 +424,6 @@ pub fn negotiate_capabilities(
             break;
         }
     }
-
     for required in client.kem.iter().filter(|entry| entry.required) {
         if !server
             .kem
@@ -468,11 +433,9 @@ pub fn negotiate_capabilities(
             return Err(CapabilityError::RequiredKemMissing(required.id));
         }
     }
-
     let Some(kem) = selected_kem else {
         return Err(CapabilityError::NoMutualKem);
     };
-
     let mut selected_sigs = Vec::new();
     for server_pref in &server.signatures {
         if let Some(client_entry) = client
@@ -486,7 +449,6 @@ pub fn negotiate_capabilities(
             });
         }
     }
-
     for required in client.signatures.iter().filter(|entry| entry.required) {
         if !server
             .signatures
@@ -496,11 +458,9 @@ pub fn negotiate_capabilities(
             return Err(CapabilityError::RequiredSignatureMissing(required.id));
         }
     }
-
     if selected_sigs.is_empty() {
         return Err(CapabilityError::NoMutualSignature);
     }
-
     if let Some(requested_padding) = client.padding
         && requested_padding != server.padding
     {
@@ -509,7 +469,6 @@ pub fn negotiate_capabilities(
             supported: server.padding,
         });
     }
-
     let negotiated_constant_rate = match (client.constant_rate, server.constant_rate) {
         (Some(request), Some(supported)) => {
             if request.version != supported.version {
@@ -549,7 +508,6 @@ pub fn negotiate_capabilities(
         (None, Some(supported)) => Some(supported),
         (None, None) => None,
     };
-
     Ok(NegotiatedCapabilities {
         kem,
         signatures: selected_sigs,
@@ -559,7 +517,6 @@ pub fn negotiate_capabilities(
         constant_rate: negotiated_constant_rate,
     })
 }
-
 /// Encode the relay response capability vector reflecting the negotiated values.
 pub fn encode_relay_advertisement(
     negotiated: &NegotiatedCapabilities,
@@ -571,7 +528,6 @@ pub fn encode_relay_advertisement(
         TYPE_PQ_KEM,
         &[negotiated.kem.id.code(), flag_byte(negotiated.kem.required)],
     )?;
-
     for sig in &negotiated.signatures {
         push_tlv(
             &mut out,
@@ -579,29 +535,23 @@ pub fn encode_relay_advertisement(
             &[sig.id.code(), flag_byte(sig.required)],
         )?;
     }
-
     if let Some(commit) = negotiated.descriptor_commit {
         push_tlv(&mut out, TYPE_TRANSCRIPT_COMMIT, &commit)?;
     }
-
     push_tlv(&mut out, TYPE_ROLE, &[role_bits])?;
     push_tlv(&mut out, TYPE_PADDING, &negotiated.padding.to_le_bytes())?;
     if let Some(constant_rate) = negotiated.constant_rate {
         let value = constant_rate.encode_value();
         push_tlv(&mut out, TYPE_CONSTANT_RATE, &value)?;
     }
-
     for grease in &negotiated.grease {
         push_tlv(&mut out, grease.ty, &grease.value)?;
     }
-
     Ok(out)
 }
-
 fn flag_byte(required: bool) -> u8 {
     if required { REQUIRED_FLAG } else { 0 }
 }
-
 fn push_tlv(buffer: &mut Vec<u8>, ty: u16, value: &[u8]) -> Result<(), CapabilityError> {
     buffer.extend_from_slice(&ty.to_be_bytes());
     let len = u16::try_from(value.len()).map_err(|_| CapabilityError::CapabilityValueTooLarge {
@@ -612,7 +562,6 @@ fn push_tlv(buffer: &mut Vec<u8>, ty: u16, value: &[u8]) -> Result<(), Capabilit
     buffer.extend_from_slice(value);
     Ok(())
 }
-
 impl fmt::Display for KemId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -622,7 +571,6 @@ impl fmt::Display for KemId {
         }
     }
 }
-
 impl fmt::Display for SignatureId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -632,11 +580,9 @@ impl fmt::Display for SignatureId {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn sample_constant_rate(mode: ConstantRateMode) -> ConstantRateCapability {
         ConstantRateCapability {
             version: 1,
@@ -644,7 +590,6 @@ mod tests {
             cell_bytes: CONSTANT_RATE_CELL_BYTES as u16,
         }
     }
-
     fn sample_client_vector() -> Vec<u8> {
         let mut bytes = Vec::new();
         push_tlv(
@@ -666,7 +611,6 @@ mod tests {
         push_tlv(&mut bytes, 0x7F10, &[0xDE, 0xAD, 0xBE, 0xEF]).expect("GREASE TLV");
         bytes
     }
-
     fn sample_server_caps() -> ServerCapabilities {
         ServerCapabilities::new(
             vec![KemAdvertisement {
@@ -683,7 +627,6 @@ mod tests {
             Some(sample_constant_rate(ConstantRateMode::Strict)),
         )
     }
-
     #[test]
     fn parse_and_negotiate_capabilities() {
         let bytes = sample_client_vector();
@@ -697,7 +640,6 @@ mod tests {
         );
         assert_eq!(client.grease.len(), 1);
         assert_eq!(client.transcript_commit, Some([0xAA; 32]));
-
         let negotiated =
             negotiate_capabilities(&client, &sample_server_caps()).expect("negotiate capabilities");
         assert_eq!(negotiated.kem.id, KemId::MlKem768);
@@ -709,7 +651,6 @@ mod tests {
             negotiated.constant_rate,
             Some(sample_constant_rate(ConstantRateMode::Strict))
         );
-
         let relay_bytes = encode_relay_advertisement(&negotiated, 0x01).expect("relay caps");
         assert!(!relay_bytes.is_empty());
         assert!(
@@ -718,7 +659,6 @@ mod tests {
                 .any(|window| window == [0x02, 0x02, 0x00, 0x02, 0x00, 0x04])
         );
     }
-
     #[test]
     fn required_kem_missing_fails() {
         let mut bytes = Vec::new();
@@ -735,12 +675,10 @@ mod tests {
         )
         .expect("pqsig TLV");
         push_tlv(&mut bytes, TYPE_TRANSCRIPT_COMMIT, &[0xAA; 32]).expect("commit TLV");
-
         let client = parse_client_advertisement(&bytes).expect("parse client");
         let err = negotiate_capabilities(&client, &sample_server_caps()).unwrap_err();
         matches!(err, CapabilityError::RequiredKemMissing(KemId::MlKem1024));
     }
-
     #[test]
     fn transcript_commit_mismatch_detected() {
         let mut client = parse_client_advertisement(&sample_client_vector()).expect("parse");
@@ -748,7 +686,6 @@ mod tests {
         let err = negotiate_capabilities(&client, &sample_server_caps()).unwrap_err();
         matches!(err, CapabilityError::TranscriptCommitMismatch);
     }
-
     #[test]
     fn server_capabilities_clamp_padding_to_mtu_limit() {
         let max = PaddingConfig::max_cell_size_bytes();
@@ -756,7 +693,6 @@ mod tests {
             ServerCapabilities::new(vec![], vec![], max.saturating_add(42), None, 0x01, None);
         assert_eq!(caps.padding, max);
     }
-
     #[test]
     fn constant_rate_strict_requires_server_support() {
         let mut client = parse_client_advertisement(&sample_client_vector()).expect("parse");
@@ -778,7 +714,6 @@ mod tests {
         let err = negotiate_capabilities(&client, &server).unwrap_err();
         matches!(err, CapabilityError::ConstantRateStrictRequired);
     }
-
     #[test]
     fn constant_rate_version_mismatch_rejected() {
         let mut client = parse_client_advertisement(&sample_client_vector()).expect("parse");
@@ -788,7 +723,6 @@ mod tests {
         let err = negotiate_capabilities(&client, &sample_server_caps()).unwrap_err();
         matches!(err, CapabilityError::ConstantRateUnsupportedVersion(2));
     }
-
     #[test]
     fn constant_rate_best_effort_allows_degraded_session() {
         let client = parse_client_advertisement(&sample_client_vector()).expect("parse");
@@ -809,7 +743,6 @@ mod tests {
         let negotiated = negotiate_capabilities(&client, &server).expect("negotiate");
         assert!(negotiated.constant_rate.is_none());
     }
-
     #[test]
     fn constant_rate_strict_request_rejected_when_server_disabled() {
         let mut client = parse_client_advertisement(&sample_client_vector()).expect("parse");
@@ -831,19 +764,16 @@ mod tests {
         let err = negotiate_capabilities(&client, &server).unwrap_err();
         assert!(matches!(err, CapabilityError::ConstantRateUnsupported));
     }
-
     #[test]
     fn constant_rate_server_enforces_profile_when_client_omits_tlv() {
         let mut client = parse_client_advertisement(&sample_client_vector()).expect("parse");
         client.constant_rate = None;
-
         let negotiated = negotiate_capabilities(&client, &sample_server_caps()).expect("negotiate");
         assert_eq!(
             negotiated.constant_rate,
             Some(sample_constant_rate(ConstantRateMode::Strict)),
             "server should enforce its configured constant-rate profile even if the viewer omits the TLV",
         );
-
         let relay_vector = encode_relay_advertisement(&negotiated, 0x01).expect("relay caps");
         assert!(
             relay_vector.windows(8).any(|window| {
@@ -862,7 +792,6 @@ mod tests {
             "relay advertisement must include the strict constant-rate TLV"
         );
     }
-
     #[test]
     fn encode_relay_advertisement_rejects_oversized_tlv_value_without_truncation() {
         let mut negotiated = negotiate_capabilities(
@@ -874,7 +803,6 @@ mod tests {
             ty: 0x7F12,
             value: vec![0xAA; usize::from(u16::MAX) + 1],
         });
-
         let err = encode_relay_advertisement(&negotiated, 0x01)
             .expect_err("oversized TLV value must fail");
         assert!(matches!(

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-
 use iroha_crypto::{Hash, PublicKey};
 use iroha_primitives::numeric::Quantity;
 use ivm::{
@@ -10,10 +9,8 @@ use ivm::{
     syscalls,
 };
 use norito::to_bytes;
-
 mod common;
 use common::assemble_syscalls;
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
         .map(|pty| common::payload_for_type(pty, payload))
@@ -27,16 +24,13 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 fn make_quantity_tlv(amount: impl Into<Quantity>) -> Vec<u8> {
     ivm::numeric_tlv::encode_quantity(&amount.into()).expect("encode quantity pointer envelope")
 }
-
 fn make_account_tlv(account: &AccountId) -> Vec<u8> {
     let account = account.to_string();
     make_tlv(PointerType::AccountId as u16, account.as_bytes())
 }
-
 fn make_account_norito_tlv(account: &AccountId) -> Vec<u8> {
     let payload = to_bytes(account).expect("encode account into Norito");
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
@@ -48,7 +42,6 @@ fn make_account_norito_tlv(account: &AccountId) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 fn make_asset_definition_norito_tlv(asset_definition: &AssetDefinitionId) -> Vec<u8> {
     let payload = to_bytes(asset_definition).expect("encode asset definition into Norito");
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
@@ -60,11 +53,9 @@ fn make_asset_definition_norito_tlv(asset_definition: &AssetDefinitionId) -> Vec
     out.extend_from_slice(&h);
     out
 }
-
 fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
     AccountId::new(public_key)
 }
-
 #[test]
 fn unregister_flow_with_opaque_asset_definition_dependencies() {
     let alice_domain: DomainId =
@@ -85,7 +76,6 @@ fn unregister_flow_with_opaque_asset_definition_dependencies() {
             iroha_data_model::DomainId::try_new("wonder", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
-
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     // Grant required permissions
@@ -94,11 +84,9 @@ fn unregister_flow_with_opaque_asset_definition_dependencies() {
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&alice, PermissionToken::MintAsset(rose.clone()));
     wsv.grant_permission(&alice, PermissionToken::BurnAsset(rose.clone()));
-
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     // Register domain wonder
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
@@ -106,7 +94,6 @@ fn unregister_flow_with_opaque_asset_definition_dependencies() {
     let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
-
     // Register the recipient account
     let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
@@ -114,7 +101,6 @@ fn unregister_flow_with_opaque_asset_definition_dependencies() {
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
     vm.load_program(&prog_acc).unwrap();
     vm.run().expect("register account");
-
     // Register asset def rose#wonder
     let ad = make_asset_definition_norito_tlv(&rose);
     vm.memory.preload_input(0, &ad).expect("preload input");
@@ -122,7 +108,6 @@ fn unregister_flow_with_opaque_asset_definition_dependencies() {
     let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET as u8]);
     vm.load_program(&prog_ad).unwrap();
     vm.run().expect("register asset def");
-
     // Mint 7 units of rose to bob
     let tlv_bob = make_account_tlv(&bob);
     let tlv_rose = make_asset_definition_norito_tlv(&rose);
@@ -141,7 +126,6 @@ fn unregister_flow_with_opaque_asset_definition_dependencies() {
     let prog_mint = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET as u8]);
     vm.load_program(&prog_mint).unwrap();
     vm.run().expect("mint asset");
-
     // Opaque canonical asset definition ids do not carry a domain projection,
     // so the domain can be unregistered even while the asset definition and its
     // balances still exist.
@@ -151,7 +135,6 @@ fn unregister_flow_with_opaque_asset_definition_dependencies() {
     let prog_udom = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_DOMAIN as u8]);
     vm.load_program(&prog_udom).unwrap();
     vm.run().expect("unregister opaque domain");
-
     // Attempt to unregister asset def -> should fail (balances exist)
     let ad = make_asset_definition_norito_tlv(&rose);
     vm.memory.preload_input(0, &ad).expect("preload input");
@@ -159,7 +142,6 @@ fn unregister_flow_with_opaque_asset_definition_dependencies() {
     let prog_uad = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_ASSET as u8]);
     vm.load_program(&prog_uad).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
-
     // Burn 7 units from bob to clear balances
     let tlv_bob = make_account_tlv(&bob);
     let tlv_rose = make_asset_definition_norito_tlv(&rose);
@@ -178,14 +160,12 @@ fn unregister_flow_with_opaque_asset_definition_dependencies() {
     let prog_burn = assemble_syscalls(&[syscalls::SYSCALL_BURN_ASSET as u8]);
     vm.load_program(&prog_burn).unwrap();
     vm.run().expect("burn asset");
-
     // Now unregister asset def -> success
     let ad = make_asset_definition_norito_tlv(&rose);
     vm.memory.preload_input(0, &ad).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.load_program(&prog_uad).unwrap();
     vm.run().expect("unregister asset def");
-
     // Unregister account bob -> success
     let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");

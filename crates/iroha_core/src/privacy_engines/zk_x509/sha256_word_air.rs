@@ -13,26 +13,19 @@
 //! proof must still bind input/output words to the DER, accumulator, and
 //! projection segments and commit the main trace before deriving the copy
 //! challenges.
-
 use thiserror::Error;
-
 use super::air::{U32RangeAirRowV1, ZkX509AirErrorV1};
 #[cfg(test)]
-use super::io_air::{
-    ZkX509IoChallengesV1, ZkX509IoEndpointV1, ZkX509IoSegmentRoleV1, ZkX509IoTraceV1,
-};
+use super::io_air::{ZkX509IoChallengesV1, ZkX509IoEndpointV1, ZkX509IoSegmentRoleV1, ZkX509IoTraceV1};
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
-
 /// Manifest descriptor for the resource-bounded local SHA-256 chip.
 pub(crate) const ZK_X509_SHA256_WORD_AIR_DESCRIPTOR_V1: &[u8] = b"sha256-word-air-v1-incompatible:u32-range-row=packed-plus32bits:sigma-degree3:choose-degree2:majority-degree3:add-up-to5-plus-u32-constant:carry-3bits:local-rows-per-block=1728:local-initial-rows=8:word-copy=four-independent-transcript-challenged-address-value-write-grand-products:sorted-address-step-0-or1:exactly-one-write-per-address:read-value-equals-write:memory-rows-per-block=2136:memory-fixed-rows=16:fixed-canonical-topology:physical-segment-offset-and-copy-product-continuations:shared-sha-call-bus-binding-required";
-
 /// Native rows in each verifier-fixed SHA batch segment.
 pub(crate) const SHA256_WORD_FIXED_BATCH_SEGMENT_ROWS_V1: usize = 1 << 19;
 /// Verifier-fixed number of SHA batch segments.
 pub(crate) const SHA256_WORD_FIXED_BATCH_SEGMENT_COUNT_V1: usize = 5;
-
 const SHA256_INITIAL_STATE_V1: [u32; 8] = [
     0x6a09_e667,
     0xbb67_ae85,
@@ -43,7 +36,6 @@ const SHA256_INITIAL_STATE_V1: [u32; 8] = [
     0x1f83_d9ab,
     0x5be0_cd19,
 ];
-
 const SHA256_ROUND_CONSTANTS_V1: [u32; 64] = [
     0x428a_2f98,
     0x7137_4491,
@@ -110,7 +102,6 @@ const SHA256_ROUND_CONSTANTS_V1: [u32; 64] = [
     0xbef9_a3f7,
     0xc671_78f2,
 ];
-
 #[cfg(test)]
 const WORD_AIR_ROWS_PER_BLOCK_V1: usize = 1_728;
 #[cfg(test)]
@@ -120,14 +111,12 @@ const WORD_MEMORY_ROWS_PER_BLOCK_V1: usize = 2_136;
 #[cfg(test)]
 const FIXED_WORD_MEMORY_ROWS_V1: usize = 16;
 pub(crate) const WORD_MEMORY_PERMUTATION_LANES_V1: usize = 4;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WordMemoryAccessV1 {
     pub(crate) address: F,
     pub(crate) value: F,
     pub(crate) is_write: F,
 }
-
 impl WordMemoryAccessV1 {
     fn read(address: WordIdV1, value: F) -> Result<Self, ZkX509Sha256WordAirErrorV1> {
         Ok(Self {
@@ -138,7 +127,6 @@ impl WordMemoryAccessV1 {
             is_write: F::ZERO,
         })
     }
-
     fn write(address: WordIdV1, value: F) -> Result<Self, ZkX509Sha256WordAirErrorV1> {
         Ok(Self {
             address: F(
@@ -148,7 +136,6 @@ impl WordMemoryAccessV1 {
             is_write: F::ONE,
         })
     }
-
     fn validate(self, word_count: usize) -> Result<(), ZkX509Sha256WordAirErrorV1> {
         let word_count =
             u64::try_from(word_count).map_err(|_| ZkX509Sha256WordAirErrorV1::InputTooLarge)?;
@@ -161,7 +148,6 @@ impl WordMemoryAccessV1 {
         Ok(())
     }
 }
-
 /// One independent tuple-compression lane for the word-copy argument.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509WordMemoryLaneChallengesV1 {
@@ -170,7 +156,6 @@ pub(crate) struct ZkX509WordMemoryLaneChallengesV1 {
     pub(crate) value: F,
     pub(crate) is_write: F,
 }
-
 /// Four independently sampled lanes for the word-copy argument.
 ///
 /// The main and address-sorted word traces must already be committed before
@@ -181,7 +166,6 @@ pub(crate) struct ZkX509WordMemoryLaneChallengesV1 {
 pub(crate) struct ZkX509WordMemoryChallengesV1 {
     pub(crate) lanes: [ZkX509WordMemoryLaneChallengesV1; WORD_MEMORY_PERMUTATION_LANES_V1],
 }
-
 #[cfg(test)]
 impl ZkX509WordMemoryChallengesV1 {
     fn validate(self) -> Result<(), ZkX509Sha256WordAirErrorV1> {
@@ -205,7 +189,6 @@ impl ZkX509WordMemoryChallengesV1 {
         Ok(())
     }
 }
-
 /// Derive the four word-copy lanes from a transcript after trace commitment.
 pub(crate) fn derive_sha256_word_memory_challenges_v1(
     transcript: &mut TransparentTranscriptV1,
@@ -229,13 +212,11 @@ pub(crate) fn derive_sha256_word_memory_challenges_v1(
         }),
     })
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WordMemoryTraceV1 {
     pub(crate) execution: Vec<WordMemoryAccessV1>,
     pub(crate) sorted: Vec<WordMemoryAccessV1>,
 }
-
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WordMemoryPermutationRowV1 {
@@ -246,13 +227,11 @@ pub(crate) struct WordMemoryPermutationRowV1 {
     pub(crate) execution_product_after: [F; WORD_MEMORY_PERMUTATION_LANES_V1],
     pub(crate) sorted_product_after: [F; WORD_MEMORY_PERMUTATION_LANES_V1],
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WordMemoryPermutationArgumentV1 {
     pub(crate) rows: Vec<WordMemoryPermutationRowV1>,
 }
-
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Sha256WordSegmentContinuationV1 {
@@ -268,7 +247,6 @@ pub(crate) struct Sha256WordSegmentContinuationV1 {
     pub(crate) sorted_product_start: [F; WORD_MEMORY_PERMUTATION_LANES_V1],
     pub(crate) sorted_product_end: [F; WORD_MEMORY_PERMUTATION_LANES_V1],
 }
-
 /// Challenge-dependent auxiliary copy trace plus every physical-segment
 /// continuation value.
 #[cfg(test)]
@@ -277,16 +255,13 @@ pub(crate) struct ZkX509Sha256WordSegmentedTraceV1 {
     pub(crate) copy_argument: WordMemoryPermutationArgumentV1,
     pub(crate) segments: Vec<Sha256WordSegmentContinuationV1>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WordIdV1(pub(crate) usize);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SigmaThirdV1 {
     Rotate(u8),
     Shift(u8),
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum WordOperationV1 {
     Sigma {
@@ -317,7 +292,6 @@ pub(crate) enum WordOperationV1 {
         carry_bits: [F; 3],
     },
 }
-
 impl WordOperationV1 {
     pub(crate) fn same_topology(&self, other: &Self) -> bool {
         match (self, other) {
@@ -386,7 +360,6 @@ impl WordOperationV1 {
         }
     }
 }
-
 /// Local word-chip construction or constraint failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509Sha256WordAirErrorV1 {
@@ -428,13 +401,11 @@ pub(crate) enum ZkX509Sha256WordAirErrorV1 {
     #[error("zk-X509 word SHA-256 AIR digest is invalid")]
     Digest,
 }
-
 impl From<ZkX509AirErrorV1> for ZkX509Sha256WordAirErrorV1 {
     fn from(_: ZkX509AirErrorV1) -> Self {
         Self::WordRange
     }
 }
-
 /// Complete local word-oriented SHA-256 witness.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Sha256WordCircuitV1 {
@@ -446,43 +417,35 @@ pub(crate) struct ZkX509Sha256WordCircuitV1 {
     message_len: usize,
     digest: [u8; 32],
 }
-
 impl ZkX509Sha256WordCircuitV1 {
     /// Constrained SHA-256 digest.
     pub(crate) const fn digest(&self) -> [u8; 32] {
         self.digest
     }
-
     /// Borrow the canonical word definitions for the segmented STARK builder.
     pub(crate) fn stark_words_v1(&self) -> &[U32RangeAirRowV1] {
         &self.words
     }
-
     /// Borrow the canonical operation schedule for the segmented STARK builder.
     pub(crate) fn stark_operations_v1(&self) -> &[WordOperationV1] {
         &self.operations
     }
-
     /// Canonical padded-message word identifiers in byte-stream order.
     pub(crate) fn stark_input_words_v1(&self) -> &[WordIdV1] {
         &self.input_words
     }
-
     /// Exact output word identifiers in digest order.
     pub(crate) const fn stark_output_words_v1(&self) -> [WordIdV1; 8] {
         self.output_words
     }
-
     /// Exact unpadded private message length.
     pub(crate) const fn stark_message_len_v1(&self) -> usize {
         self.message_len
     }
-
     /// Borrow the native execution and address-sorted word-memory tables.
     pub(crate) const fn stark_memory_v1(&self) -> &WordMemoryTraceV1 {
         &self.memory
     }
-
     /// Conceptual base rows after splitting wide bitwise rows to 64 columns.
     #[cfg(test)]
     pub(crate) fn air_rows(&self) -> usize {
@@ -496,13 +459,11 @@ impl ZkX509Sha256WordCircuitV1 {
                 })
                 .sum::<usize>()
     }
-
     /// Exact global word-copy rows for this message.
     #[cfg(test)]
     pub(crate) fn word_memory_rows(&self) -> usize {
         self.memory.execution.len()
     }
-
     /// Exact local plus global-copy rows for this message.
     #[cfg(test)]
     pub(crate) fn total_air_rows(&self) -> Result<usize, ZkX509Sha256WordAirErrorV1> {
@@ -510,7 +471,6 @@ impl ZkX509Sha256WordCircuitV1 {
             .checked_add(self.word_memory_rows())
             .ok_or(ZkX509Sha256WordAirErrorV1::InputTooLarge)
     }
-
     /// Validate every local identity and the exact compiled topology.
     pub(crate) fn validate(&self) -> Result<(), ZkX509Sha256WordAirErrorV1> {
         for word in &self.words {
@@ -547,7 +507,6 @@ impl ZkX509Sha256WordCircuitV1 {
             return Err(ZkX509Sha256WordAirErrorV1::Topology);
         }
         drop(canonical);
-
         for operation in &self.operations {
             self.validate_operation(operation)?;
         }
@@ -557,7 +516,6 @@ impl ZkX509Sha256WordCircuitV1 {
         }
         Ok(())
     }
-
     /// Validate local identities plus the transcript-challenged global copy
     /// argument used by the segmented proof.
     #[cfg(test)]
@@ -568,7 +526,6 @@ impl ZkX509Sha256WordCircuitV1 {
         let segmented = self.build_segmented_trace_v1(challenges)?;
         self.validate_segmented_trace_v1(challenges, &segmented)
     }
-
     /// Build the copy auxiliary trace and exact compiled physical-segment
     /// continuation states.
     #[cfg(test)]
@@ -579,7 +536,6 @@ impl ZkX509Sha256WordCircuitV1 {
         let (segment_rows, max_segments) = compiled_sha_segment_shape_v1();
         self.build_segmented_trace_with_shape_v1(challenges, segment_rows, max_segments)
     }
-
     /// Validate every copy row and every boundary under the compiled shape.
     #[cfg(test)]
     pub(crate) fn validate_segmented_trace_v1(
@@ -590,7 +546,6 @@ impl ZkX509Sha256WordCircuitV1 {
         let (segment_rows, max_segments) = compiled_sha_segment_shape_v1();
         self.validate_segmented_trace_with_shape_v1(challenges, trace, segment_rows, max_segments)
     }
-
     #[cfg(test)]
     fn build_segmented_trace_with_shape_v1(
         &self,
@@ -614,7 +569,6 @@ impl ZkX509Sha256WordCircuitV1 {
             segments,
         })
     }
-
     #[cfg(test)]
     fn validate_segmented_trace_with_shape_v1(
         &self,
@@ -634,7 +588,6 @@ impl ZkX509Sha256WordCircuitV1 {
             max_segments,
         )
     }
-
     /// Bind this invocation's exact unpadded input and digest bytes to the
     /// global DER/accumulator byte-channel argument.
     #[cfg(test)]
@@ -665,7 +618,6 @@ impl ZkX509Sha256WordCircuitV1 {
             .validate_endpoint_bytes(digest_channel, endpoint, true, &self.digest)
             .map_err(|_| ZkX509Sha256WordAirErrorV1::IoBinding)
     }
-
     fn validate_memory_shape(&self) -> Result<(), ZkX509Sha256WordAirErrorV1> {
         let expected = word_memory_execution_v1(&self.words, &self.operations, &self.output_words)?;
         if self.memory.execution != expected {
@@ -673,7 +625,6 @@ impl ZkX509Sha256WordCircuitV1 {
         }
         validate_sorted_word_memory_v1(&self.memory.sorted, self.words.len())
     }
-
     #[cfg(test)]
     fn build_word_memory_argument_v1(
         &self,
@@ -716,7 +667,6 @@ impl ZkX509Sha256WordCircuitV1 {
         }
         Ok(WordMemoryPermutationArgumentV1 { rows })
     }
-
     #[cfg(test)]
     fn validate_word_memory_argument_v1(
         &self,
@@ -758,7 +708,6 @@ impl ZkX509Sha256WordCircuitV1 {
         }
         Ok(())
     }
-
     fn input_bytes(&self) -> Result<Vec<u8>, ZkX509Sha256WordAirErrorV1> {
         if self.input_words.is_empty() || self.input_words.len() % 16 != 0 {
             return Err(ZkX509Sha256WordAirErrorV1::Topology);
@@ -772,7 +721,6 @@ impl ZkX509Sha256WordCircuitV1 {
         }
         Ok(bytes)
     }
-
     fn validate_operation(
         &self,
         operation: &WordOperationV1,
@@ -871,13 +819,11 @@ impl ZkX509Sha256WordCircuitV1 {
         Ok(())
     }
 }
-
 struct WordBuilderV1 {
     words: Vec<U32RangeAirRowV1>,
     input_words: Vec<WordIdV1>,
     operations: Vec<WordOperationV1>,
 }
-
 impl WordBuilderV1 {
     fn new() -> Self {
         Self {
@@ -886,23 +832,19 @@ impl WordBuilderV1 {
             operations: Vec::new(),
         }
     }
-
     fn allocate(&mut self, value: u32) -> WordIdV1 {
         let id = WordIdV1(self.words.len());
         self.words.push(U32RangeAirRowV1::from_u32(value));
         id
     }
-
     fn value(&self, id: WordIdV1) -> u32 {
         self.words[id.0].value.0 as u32
     }
-
     fn input(&mut self, value: u32) -> WordIdV1 {
         let id = self.allocate(value);
         self.input_words.push(id);
         id
     }
-
     fn sigma(
         &mut self,
         input: WordIdV1,
@@ -929,7 +871,6 @@ impl WordBuilderV1 {
         });
         output
     }
-
     fn choose(&mut self, x: WordIdV1, y: WordIdV1, z: WordIdV1) -> WordIdV1 {
         let output =
             self.allocate((self.value(x) & self.value(y)) ^ (!self.value(x) & self.value(z)));
@@ -937,7 +878,6 @@ impl WordBuilderV1 {
             .push(WordOperationV1::Choose { x, y, z, output });
         output
     }
-
     fn majority(&mut self, x: WordIdV1, y: WordIdV1, z: WordIdV1) -> WordIdV1 {
         let output = self.allocate(
             (self.value(x) & self.value(y))
@@ -948,7 +888,6 @@ impl WordBuilderV1 {
             .push(WordOperationV1::Majority { x, y, z, output });
         output
     }
-
     fn add(&mut self, inputs: &[WordIdV1], constant: u32) -> WordIdV1 {
         debug_assert!(!inputs.is_empty() && inputs.len() <= 5);
         let sum = inputs.iter().fold(u64::from(constant), |sum, id| {
@@ -969,7 +908,6 @@ impl WordBuilderV1 {
         output
     }
 }
-
 /// Build and validate the resource-bounded SHA-256 word chip.
 pub(crate) fn build_sha256_word_circuit_v1(
     message: &[u8],
@@ -978,7 +916,6 @@ pub(crate) fn build_sha256_word_circuit_v1(
     circuit.validate()?;
     Ok(circuit)
 }
-
 /// Exact conceptual local rows for one message length.
 #[cfg(test)]
 pub(crate) fn sha256_word_air_rows_for_message_len_v1(
@@ -991,7 +928,6 @@ pub(crate) fn sha256_word_air_rows_for_message_len_v1(
         .and_then(|rows| rows.checked_add(INITIAL_WORD_AIR_ROWS_V1))
         .ok_or(ZkX509Sha256WordAirErrorV1::InputTooLarge)
 }
-
 /// Exact global word-copy rows for one message length.
 #[cfg(test)]
 pub(crate) fn sha256_word_memory_rows_for_message_len_v1(
@@ -1004,7 +940,6 @@ pub(crate) fn sha256_word_memory_rows_for_message_len_v1(
         .and_then(|rows| rows.checked_add(FIXED_WORD_MEMORY_ROWS_V1))
         .ok_or(ZkX509Sha256WordAirErrorV1::InputTooLarge)
 }
-
 /// Exact local plus global-copy rows for one message length.
 #[cfg(test)]
 pub(crate) fn sha256_word_total_rows_for_message_len_v1(
@@ -1014,14 +949,12 @@ pub(crate) fn sha256_word_total_rows_for_message_len_v1(
         .checked_add(sha256_word_memory_rows_for_message_len_v1(message_len)?)
         .ok_or(ZkX509Sha256WordAirErrorV1::InputTooLarge)
 }
-
 fn build_sha256_word_circuit_unchecked_v1(
     message: &[u8],
 ) -> Result<ZkX509Sha256WordCircuitV1, ZkX509Sha256WordAirErrorV1> {
     let padded = sha256_padding_v1(message)?;
     let mut builder = WordBuilderV1::new();
     let mut state = SHA256_INITIAL_STATE_V1.map(|word| builder.allocate(word));
-
     for block in padded.chunks_exact(64) {
         let mut schedule = Vec::with_capacity(64);
         for bytes in block.chunks_exact(4) {
@@ -1042,7 +975,6 @@ fn build_sha256_word_circuit_unchecked_v1(
                 0,
             ));
         }
-
         let original = state;
         let mut work = state;
         for round in 0..64 {
@@ -1063,7 +995,6 @@ fn build_sha256_word_circuit_unchecked_v1(
         }
         state = core::array::from_fn(|index| builder.add(&[original[index], work[index]], 0));
     }
-
     let digest = digest_from_words_v1(&builder.words, &state)?;
     let memory = build_word_memory_trace_v1(&builder.words, &builder.operations, &state)?;
     Ok(ZkX509Sha256WordCircuitV1 {
@@ -1076,7 +1007,6 @@ fn build_sha256_word_circuit_unchecked_v1(
         digest,
     })
 }
-
 fn build_word_memory_trace_v1(
     words: &[U32RangeAirRowV1],
     operations: &[WordOperationV1],
@@ -1097,7 +1027,6 @@ fn build_word_memory_trace_v1(
     validate_sorted_word_memory_v1(&sorted, words.len())?;
     Ok(WordMemoryTraceV1 { execution, sorted })
 }
-
 fn word_memory_execution_v1(
     words: &[U32RangeAirRowV1],
     operations: &[WordOperationV1],
@@ -1122,7 +1051,6 @@ fn word_memory_execution_v1(
     accesses
         .try_reserve_exact(capacity)
         .map_err(|_| ZkX509Sha256WordAirErrorV1::InputTooLarge)?;
-
     for (address, word) in words.iter().enumerate() {
         accesses.push(WordMemoryAccessV1::write(WordIdV1(address), word.value)?);
     }
@@ -1154,7 +1082,6 @@ fn word_memory_execution_v1(
     }
     Ok(accesses)
 }
-
 fn push_word_read_v1(
     accesses: &mut Vec<WordMemoryAccessV1>,
     words: &[U32RangeAirRowV1],
@@ -1166,7 +1093,6 @@ fn push_word_read_v1(
     )?);
     Ok(())
 }
-
 fn validate_sorted_word_memory_v1(
     sorted: &[WordMemoryAccessV1],
     word_count: usize,
@@ -1201,7 +1127,6 @@ fn validate_sorted_word_memory_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn compress_word_memory_access_v1(
     access: WordMemoryAccessV1,
@@ -1213,7 +1138,6 @@ fn compress_word_memory_access_v1(
         .add(challenges.value.mul(access.value))
         .add(challenges.is_write.mul(access.is_write))
 }
-
 #[cfg(test)]
 const fn compiled_sha_segment_shape_v1() -> (usize, usize) {
     (
@@ -1221,7 +1145,6 @@ const fn compiled_sha_segment_shape_v1() -> (usize, usize) {
         SHA256_WORD_FIXED_BATCH_SEGMENT_COUNT_V1,
     )
 }
-
 #[cfg(test)]
 fn build_sha256_segment_continuations_v1(
     local_rows: usize,
@@ -1281,7 +1204,6 @@ fn build_sha256_segment_continuations_v1(
     }
     Ok(segments)
 }
-
 #[cfg(test)]
 fn validate_sha256_segment_continuations_v1(
     local_rows: usize,
@@ -1341,7 +1263,6 @@ fn validate_sha256_segment_continuations_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn word_copy_products_at_v1(
     argument: &WordMemoryPermutationArgumentV1,
@@ -1365,7 +1286,6 @@ fn word_copy_products_at_v1(
         .ok_or(ZkX509Sha256WordAirErrorV1::SegmentContinuation)?;
     Ok((row.execution_product_after, row.sorted_product_after))
 }
-
 fn xor_three_v1(x: F, y: F, z: F) -> F {
     let xy = x.mul(y);
     let xz = x.mul(z);
@@ -1375,14 +1295,12 @@ fn xor_three_v1(x: F, y: F, z: F) -> F {
         .sub(F(2).mul(xy.add(xz).add(yz)))
         .add(F(4).mul(xy.mul(z)))
 }
-
 fn word_row_v1(
     words: &[U32RangeAirRowV1],
     id: WordIdV1,
 ) -> Result<&U32RangeAirRowV1, ZkX509Sha256WordAirErrorV1> {
     words.get(id.0).ok_or(ZkX509Sha256WordAirErrorV1::Topology)
 }
-
 fn word_value_v1(
     words: &[U32RangeAirRowV1],
     id: WordIdV1,
@@ -1390,7 +1308,6 @@ fn word_value_v1(
     u32::try_from(word_row_v1(words, id)?.value.0)
         .map_err(|_| ZkX509Sha256WordAirErrorV1::WordRange)
 }
-
 fn digest_from_words_v1(
     words: &[U32RangeAirRowV1],
     output: &[WordIdV1; 8],
@@ -1402,7 +1319,6 @@ fn digest_from_words_v1(
     }
     Ok(digest)
 }
-
 fn sha256_padded_len_v1(message_len: usize) -> Result<usize, ZkX509Sha256WordAirErrorV1> {
     let with_marker = message_len
         .checked_add(1)
@@ -1418,7 +1334,6 @@ fn sha256_padded_len_v1(message_len: usize) -> Result<usize, ZkX509Sha256WordAir
         .and_then(|length| length.checked_add(8))
         .ok_or(ZkX509Sha256WordAirErrorV1::InputTooLarge)
 }
-
 fn sha256_padding_v1(message: &[u8]) -> Result<Vec<u8>, ZkX509Sha256WordAirErrorV1> {
     let bit_length = u64::try_from(message.len())
         .ok()
@@ -1435,11 +1350,9 @@ fn sha256_padding_v1(message: &[u8]) -> Result<Vec<u8>, ZkX509Sha256WordAirError
     padded.extend_from_slice(&bit_length.to_be_bytes());
     Ok(padded)
 }
-
 #[cfg(test)]
 mod tests {
     use sha2::{Digest as _, Sha256};
-
     use super::*;
     use crate::privacy_engines::zk_x509::io_air::{
         ZkX509IoAirErrorV1, ZkX509IoChannelDeclarationV1, ZkX509IoChannelWitnessV1,
@@ -1448,7 +1361,6 @@ mod tests {
     use crate::privacy_engines::zk_x509::profile::{
         ZK_X509_MAX_CRL_BYTES_V1, ZK_X509_TARGET_SOUNDNESS_BITS_V1,
     };
-
     fn word_memory_challenges() -> ZkX509WordMemoryChallengesV1 {
         ZkX509WordMemoryChallengesV1 {
             lanes: [
@@ -1479,11 +1391,9 @@ mod tests {
             ],
         }
     }
-
     fn io_endpoint(role: ZkX509IoSegmentRoleV1, instance: u16) -> ZkX509IoEndpointV1 {
         ZkX509IoEndpointV1 { role, instance }
     }
-
     fn io_challenges() -> ZkX509IoChallengesV1 {
         let mut transcript =
             TransparentTranscriptV1::new(b"zk-x509-sha-io-test", &[0x61; 32], &[0x62; 32])
@@ -1496,7 +1406,6 @@ mod tests {
             .expect("I/O trace commitments");
         derive_zk_x509_io_challenges_v1(&mut transcript).expect("I/O challenges")
     }
-
     fn io_witness(
         channel: u32,
         producer: ZkX509IoEndpointV1,
@@ -1516,7 +1425,6 @@ mod tests {
             consumer_values: vec![value.to_vec()],
         }
     }
-
     #[test]
     fn word_chip_matches_sha256_and_exact_row_schedule() {
         for message in [
@@ -1554,7 +1462,6 @@ mod tests {
                 .expect("valid compiled segment continuations");
         }
     }
-
     #[test]
     fn word_chip_and_copy_argument_fit_the_compiled_crl_sha_row_envelope() {
         let local_rows =
@@ -1574,7 +1481,6 @@ mod tests {
         assert_eq!(segment_rows, 524_288);
         assert_eq!(max_segments, 5);
         assert_eq!(total_rows.div_ceil(segment_rows), 1);
-
         // For a nonzero multiset-difference polynomial, Schwartz-Zippel gives
         // at most N/p per independent lane. Here N < 2^20, Goldilocks p >
         // 2^63, and four transcript-independent lanes therefore contribute
@@ -1587,32 +1493,27 @@ mod tests {
                 > usize::from(ZK_X509_TARGET_SOUNDNESS_BITS_V1)
         );
     }
-
     #[test]
     fn word_topology_range_bitwise_addition_and_digest_mutations_fail_closed() {
         let circuit = build_sha256_word_circuit_v1(b"adversarial").expect("word circuit");
-
         let mut changed = circuit.clone();
         changed.output_words[0] = WordIdV1(0);
         assert_eq!(
             changed.validate(),
             Err(ZkX509Sha256WordAirErrorV1::Topology)
         );
-
         let mut changed = circuit.clone();
         changed.words[0] = U32RangeAirRowV1::from_u32(SHA256_INITIAL_STATE_V1[0] ^ 1);
         assert_eq!(
             changed.validate(),
             Err(ZkX509Sha256WordAirErrorV1::Topology)
         );
-
         let mut changed = circuit.clone();
         changed.words[37].bits[5] = F(2);
         assert_eq!(
             changed.validate(),
             Err(ZkX509Sha256WordAirErrorV1::WordRange)
         );
-
         let mut changed = circuit.clone();
         let sigma_output = match changed.operations[0] {
             WordOperationV1::Sigma { output, .. } => output,
@@ -1630,7 +1531,6 @@ mod tests {
         }
         changed.words[sigma_output.0].value = packed;
         assert_eq!(changed.validate(), Err(ZkX509Sha256WordAirErrorV1::Bitwise));
-
         let mut changed = circuit.clone();
         let add = changed
             .operations
@@ -1646,7 +1546,6 @@ mod tests {
             changed.validate(),
             Err(ZkX509Sha256WordAirErrorV1::Addition)
         );
-
         let mut changed = circuit.clone();
         let read = changed
             .memory
@@ -1659,7 +1558,6 @@ mod tests {
             changed.validate(),
             Err(ZkX509Sha256WordAirErrorV1::WordMemory)
         );
-
         let mut changed = circuit.clone();
         let target_address = changed.memory.sorted[0].address;
         for access in changed
@@ -1677,14 +1575,12 @@ mod tests {
             changed.validate_with_word_memory_v1(word_memory_challenges()),
             Err(ZkX509Sha256WordAirErrorV1::WordMemoryPermutation)
         );
-
         let mut changed = circuit.clone();
         changed.memory.sorted[1].is_write = F::ONE;
         assert_eq!(
             changed.validate(),
             Err(ZkX509Sha256WordAirErrorV1::WordMemory)
         );
-
         let challenges = word_memory_challenges();
         let mut argument = circuit
             .build_word_memory_argument_v1(challenges)
@@ -1695,12 +1591,10 @@ mod tests {
             circuit.validate_word_memory_argument_v1(challenges, &argument),
             Err(ZkX509Sha256WordAirErrorV1::WordMemoryPermutation)
         );
-
         let mut changed = circuit;
         changed.digest[0] ^= 1;
         assert_eq!(changed.validate(), Err(ZkX509Sha256WordAirErrorV1::Digest));
     }
-
     #[test]
     fn word_memory_challenges_are_commitment_bound_and_fail_closed() {
         let profile = [0x11; 32];
@@ -1718,7 +1612,6 @@ mod tests {
         let sampled = derive_sha256_word_memory_challenges_v1(&mut transcript)
             .expect("word-memory challenges");
         sampled.validate().expect("valid sampled challenges");
-
         let mut changed_root = main_root;
         changed_root[0] ^= 1;
         let mut changed = TransparentTranscriptV1::new(b"zk-x509-test-suite", &profile, &public)
@@ -1734,14 +1627,12 @@ mod tests {
             derive_sha256_word_memory_challenges_v1(&mut changed)
                 .expect("changed word-memory challenges")
         );
-
         let mut invalid = word_memory_challenges();
         invalid.lanes[0].beta = F::ZERO;
         assert_eq!(
             invalid.validate(),
             Err(ZkX509Sha256WordAirErrorV1::WordMemoryChallenge)
         );
-
         let mut duplicate = word_memory_challenges();
         duplicate.lanes[2] = duplicate.lanes[1];
         assert_eq!(
@@ -1749,7 +1640,6 @@ mod tests {
             Err(ZkX509Sha256WordAirErrorV1::WordMemoryChallenge)
         );
     }
-
     #[test]
     fn every_physical_segment_boundary_field_and_product_lane_is_bound() {
         let circuit =
@@ -1764,7 +1654,6 @@ mod tests {
         circuit
             .validate_segmented_trace_with_shape_v1(challenges, &trace, segment_rows, max_segments)
             .expect("valid tiny segment continuations");
-
         let assert_rejected = |changed: &ZkX509Sha256WordSegmentedTraceV1| {
             assert_eq!(
                 validate_sha256_segment_continuations_v1(
@@ -1778,66 +1667,54 @@ mod tests {
                 Err(ZkX509Sha256WordAirErrorV1::SegmentContinuation)
             );
         };
-
         for segment in 0..trace.segments.len() {
             let mut changed = trace.clone();
             changed.segments[segment].segment_index =
                 changed.segments[segment].segment_index.wrapping_add(1);
             assert_rejected(&changed);
-
             let mut changed = trace.clone();
             changed.segments[segment].global_row_start =
                 changed.segments[segment].global_row_start.wrapping_add(1);
             assert_rejected(&changed);
-
             let mut changed = trace.clone();
             changed.segments[segment].global_row_end =
                 changed.segments[segment].global_row_end.wrapping_add(1);
             assert_rejected(&changed);
-
             let mut changed = trace.clone();
             changed.segments[segment].local_row_start =
                 changed.segments[segment].local_row_start.wrapping_add(1);
             assert_rejected(&changed);
-
             let mut changed = trace.clone();
             changed.segments[segment].local_row_end =
                 changed.segments[segment].local_row_end.wrapping_add(1);
             assert_rejected(&changed);
-
             let mut changed = trace.clone();
             changed.segments[segment].memory_row_start =
                 changed.segments[segment].memory_row_start.wrapping_add(1);
             assert_rejected(&changed);
-
             let mut changed = trace.clone();
             changed.segments[segment].memory_row_end =
                 changed.segments[segment].memory_row_end.wrapping_add(1);
             assert_rejected(&changed);
-
             for lane in 0..WORD_MEMORY_PERMUTATION_LANES_V1 {
                 let mut changed = trace.clone();
                 changed.segments[segment].execution_product_start[lane] =
                     changed.segments[segment].execution_product_start[lane].add(F::ONE);
                 assert_rejected(&changed);
-
                 let mut changed = trace.clone();
                 changed.segments[segment].execution_product_end[lane] =
                     changed.segments[segment].execution_product_end[lane].add(F::ONE);
                 assert_rejected(&changed);
-
                 let mut changed = trace.clone();
                 changed.segments[segment].sorted_product_start[lane] =
                     changed.segments[segment].sorted_product_start[lane].add(F::ONE);
                 assert_rejected(&changed);
-
                 let mut changed = trace.clone();
                 changed.segments[segment].sorted_product_end[lane] =
                     changed.segments[segment].sorted_product_end[lane].add(F::ONE);
                 assert_rejected(&changed);
             }
         }
-
         assert_eq!(
             circuit.build_segmented_trace_with_shape_v1(
                 challenges,
@@ -1851,7 +1728,6 @@ mod tests {
             Err(ZkX509Sha256WordAirErrorV1::SegmentContinuation)
         );
     }
-
     #[test]
     fn strict_der_sha_crl_commitment_and_public_digest_endpoints_are_bound() {
         let message = b"exact private CRL DER";
@@ -1875,7 +1751,6 @@ mod tests {
         trace
             .validate_public_channel(2, &digest)
             .expect("bound public CRL commitment digest");
-
         let mut wrong_input = witnesses.clone();
         wrong_input[0].producer_value[0] ^= 1;
         wrong_input[0].consumer_values[0][0] ^= 1;
@@ -1885,7 +1760,6 @@ mod tests {
             circuit.validate_cross_segment_io_v1(challenges, &trace, 0, 1, 7),
             Err(ZkX509Sha256WordAirErrorV1::IoBinding)
         );
-
         let mut wrong_digest = witnesses.clone();
         wrong_digest[1].producer_value[3] ^= 1;
         wrong_digest[1].consumer_values[0][3] ^= 1;
@@ -1895,7 +1769,6 @@ mod tests {
             circuit.validate_cross_segment_io_v1(challenges, &trace, 0, 1, 7),
             Err(ZkX509Sha256WordAirErrorV1::IoBinding)
         );
-
         let mut wrong_public = witnesses;
         wrong_public[2]
             .declaration

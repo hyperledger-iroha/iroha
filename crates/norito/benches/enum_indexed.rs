@@ -1,6 +1,5 @@
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use norito::columnar::{EnumBorrow, encode_ncb_u64_enum_bool, view_ncb_u64_enum_bool};
-
 fn gen_enum_rows(n: usize) -> Vec<(u64, EnumBorrow<'static>, bool)> {
     let mut v = Vec::with_capacity(n);
     for i in 0..n as u64 {
@@ -14,12 +13,10 @@ fn gen_enum_rows(n: usize) -> Vec<(u64, EnumBorrow<'static>, bool)> {
     }
     v
 }
-
 fn bench_enum_indexed(c: &mut Criterion) {
     let rows = gen_enum_rows(50_000);
     let bytes = encode_ncb_u64_enum_bool(&rows, false, false, false);
     let view = view_ncb_u64_enum_bool(&bytes).expect("view");
-
     c.bench_function("enum_names_flag_true_fast", |b| {
         b.iter_batched(
             || (),
@@ -33,7 +30,6 @@ fn bench_enum_indexed(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("enum_names_flag_true_indexed", |b| {
         b.iter_batched(
             || (),
@@ -47,7 +43,6 @@ fn bench_enum_indexed(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("enum_codes_flag_true_fast", |b| {
         b.iter_batched(
             || (),
@@ -61,7 +56,6 @@ fn bench_enum_indexed(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("enum_codes_flag_true_indexed", |b| {
         b.iter_batched(
             || (),
@@ -76,6 +70,5 @@ fn bench_enum_indexed(c: &mut Criterion) {
         )
     });
 }
-
 criterion_group!(benches, bench_enum_indexed);
 criterion_main!(benches);

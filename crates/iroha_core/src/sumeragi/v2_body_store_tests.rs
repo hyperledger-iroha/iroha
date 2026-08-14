@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests {
     use std::{cell::Cell, fs, num::NonZeroU64, path::Path};
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
         NetworkId,
@@ -13,7 +12,6 @@ mod tests {
         peer::PeerId,
     };
     use tempfile::TempDir;
-
     use super::{
         BlockSignaturePolicy, BodyValidationCompletion, BodyValidationError,
         BodyValidationRejectionIdentity, QuarantinedValidationOutcome,
@@ -22,24 +20,20 @@ mod tests {
         VALIDATION_OUTCOME_MARKER_VERSION, ValidatedBodyReceipt, ValidationOutcomeMarker,
         ValidationOutcomeMarkerKind, write_validation_outcome_marker,
     };
-
     use crate::sumeragi::{
         v2::RecoveredValidationAuthority, v2_apply::VerifiedRecoveredFinalitySubject,
         v2_chunks::encode_payload, v2_effects::BodyValidationTask,
     };
-
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x94; Hash::LENGTH]),
         ))
     }
-
     #[derive(Debug)]
     enum FixtureValidationError {
         MissingMergeSidecar(CertifiedMergeLedgerReference),
         Invalid(&'static str),
     }
-
     impl std::fmt::Display for FixtureValidationError {
         fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
@@ -50,7 +44,6 @@ mod tests {
             }
         }
     }
-
     impl BodyValidationError for FixtureValidationError {
         fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
             match self {
@@ -59,7 +52,6 @@ mod tests {
             }
         }
     }
-
     fn context_and_keys() -> (wire::HeightContext, Vec<KeyPair>) {
         let mut keys = (1_u8..=4)
             .map(|seed| {
@@ -101,7 +93,6 @@ mod tests {
         };
         (context, keys)
     }
-
     fn missing_merge_reference(
         receipt: &super::DurableBodyReceipt,
     ) -> CertifiedMergeLedgerReference {
@@ -136,7 +127,6 @@ mod tests {
             ),
         }
     }
-
     fn body_and_manifest(
         context: &wire::HeightContext,
         keys: &[KeyPair],
@@ -155,7 +145,6 @@ mod tests {
             u64::from(leader),
         )
     }
-
     fn body_and_manifest_with_signature(
         context: &wire::HeightContext,
         signing_key: &KeyPair,
@@ -163,7 +152,6 @@ mod tests {
     ) -> (Vec<u8>, wire::PayloadManifest) {
         body_and_manifest_with_signature_and_views(context, signing_key, signature_index, 0, 0)
     }
-
     fn body_and_manifest_with_signature_and_views(
         context: &wire::HeightContext,
         signing_key: &KeyPair,
@@ -203,7 +191,6 @@ mod tests {
             .clone();
         (canonical_wire, manifest)
     }
-
     #[test]
     fn body_store_instance_identity_distinguishes_a_same_path_reopen() {
         let directory = TempDir::new().expect("temporary identity body store");
@@ -212,7 +199,6 @@ mod tests {
             .expect("open first body-store instance");
         let first = store.instance_identity();
         assert!(first.same_instance(&store.instance_identity()));
-
         let reopened = V2BodyStore::open(directory.path(), context)
             .expect("reopen the same body-store path independently");
         assert!(
@@ -220,7 +206,6 @@ mod tests {
             "path and context equality cannot substitute for move-only instance ownership"
         );
     }
-
     fn store_with_promoted_terminal_outcomes(
         directory: &Path,
         context: &wire::HeightContext,
@@ -237,7 +222,6 @@ mod tests {
         let _validated = store
             .persist_validated_receipt(&validated_receipt, commitment)
             .expect("promote terminal success");
-
         let rejected_view = 1;
         let rejected_leader = context.leader(rejected_view);
         let rejected_leader_index =
@@ -261,7 +245,6 @@ mod tests {
             .expect("promote terminal rejection");
         store
     }
-
     fn durable_files_snapshot(root: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
         fn visit(root: &Path, directory: &Path, files: &mut Vec<(std::path::PathBuf, Vec<u8>)>) {
             let mut entries = fs::read_dir(directory)
@@ -282,12 +265,10 @@ mod tests {
                 }
             }
         }
-
         let mut files = Vec::new();
         visit(root, root, &mut files);
         files
     }
-
     #[test]
     fn durable_body_roundtrips_and_reopens_idempotently() {
         let directory = TempDir::new().expect("temporary directory");
@@ -326,7 +307,6 @@ mod tests {
                 .expect("idempotent store returns same receipt"),
             receipt
         );
-
         drop(store);
         let mut reopened = V2BodyStore::open(directory.path(), context).expect("replay store");
         assert_eq!(
@@ -370,7 +350,6 @@ mod tests {
             Some(execution_commitment),
         );
     }
-
     #[test]
     fn recovered_marker_cannot_restore_vote_authority_without_semantic_replay() {
         let directory = TempDir::new().expect("temporary directory");
@@ -382,7 +361,6 @@ mod tests {
         let _validated = store
             .persist_validated_receipt(&receipt, expected)
             .expect("persist legitimate validation marker");
-
         let forged = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"forged parent root"),
             Hash::new(b"forged post root"),
@@ -406,7 +384,6 @@ mod tests {
         )
         .expect("substitute a checksum-valid local marker");
         drop(store);
-
         let mut reopened = V2BodyStore::open(directory.path(), context)
             .expect("structurally read substituted marker");
         assert!(reopened.validated_recovery_catalog().is_empty());
@@ -422,7 +399,6 @@ mod tests {
             Err(V2BodyStoreError::UnrevalidatedValidationMarkers)
         ));
     }
-
     #[test]
     fn recovered_marker_missing_sidecar_retires_authority_without_losing_body() {
         let directory = TempDir::new().expect("temporary directory");
@@ -438,7 +414,6 @@ mod tests {
             .persist_validated_receipt(&receipt, execution_commitment)
             .expect("persist validation marker");
         drop(store);
-
         let mut reopened = V2BodyStore::open(directory.path(), context).expect("reopen store");
         assert!(matches!(
             reopened.revalidate_recovered_markers(|_| {
@@ -452,7 +427,6 @@ mod tests {
             reopened.ensure_recovered_markers_revalidated(),
             Err(V2BodyStoreError::UnrevalidatedValidationMarkers)
         ));
-
         let reference = missing_merge_reference(&receipt);
         reopened
             .revalidate_recovered_markers(|_| {
@@ -472,7 +446,6 @@ mod tests {
                 .expect("inspect retained exact body"),
             Some((manifest, receipt.clone()))
         );
-
         let task = BodyValidationTask::for_test(43, receipt.clone());
         let deferred = reopened
             .execute_validation_task(&task, |_| {
@@ -489,7 +462,6 @@ mod tests {
             } if deferred_reference == reference
         ));
         assert!(reopened.validated_recovery_catalog().is_empty());
-
         let validated = reopened
             .execute_validation_task(&task, |_| {
                 Ok::<_, FixtureValidationError>(execution_commitment)
@@ -503,7 +475,6 @@ mod tests {
         );
         assert!(reopened.retired_revalidation.is_empty());
     }
-
     #[test]
     fn wal_frontier_bounds_many_view_restart_validation_work() {
         let directory = TempDir::new().expect("temporary directory");
@@ -528,7 +499,6 @@ mod tests {
             receipts.push((receipt, commitment));
         }
         drop(store);
-
         let mut reopened =
             V2BodyStore::open(directory.path(), context.clone()).expect("reopen view catalog");
         let selected = [receipts[7].0.clone(), receipts[31].0.clone()];
@@ -542,7 +512,6 @@ mod tests {
         reopened
             .retain_recovered_markers_for_authority(authority)
             .expect("WAL frontier belongs to the exact body context");
-
         let callback_count = Cell::new(0_usize);
         reopened
             .revalidate_recovered_markers(|block| {
@@ -566,7 +535,6 @@ mod tests {
             "superseded markers lose authority without deleting DA body evidence"
         );
     }
-
     #[test]
     fn wal_frontier_capability_cannot_cross_height_contexts() {
         let directory = TempDir::new().expect("temporary directory");
@@ -579,7 +547,6 @@ mod tests {
             .persist_validated_receipt(&receipt, commitment)
             .expect("persist validation marker");
         drop(store);
-
         let mut reopened =
             V2BodyStore::open(directory.path(), context.clone()).expect("reopen store");
         let pending_before = reopened.pending_revalidation.clone();
@@ -595,7 +562,6 @@ mod tests {
             &foreign_context,
             [(foreign_round, receipt.subject())],
         );
-
         assert!(matches!(
             reopened.retain_recovered_markers_for_authority(authority),
             Err(V2BodyStoreError::RecoveredValidationAuthorityContextMismatch)
@@ -603,7 +569,6 @@ mod tests {
         assert_eq!(reopened.pending_revalidation, pending_before);
         assert_eq!(reopened.validated, validated_before);
     }
-
     #[test]
     fn verified_decision_retires_losing_restart_marker_authority() {
         let directory = TempDir::new().expect("temporary directory");
@@ -629,7 +594,6 @@ mod tests {
         }
         assert_ne!(receipts[0].0.subject(), receipts[1].0.subject());
         drop(store);
-
         let mut reopened =
             V2BodyStore::open(directory.path(), context.clone()).expect("reopen store");
         reopened
@@ -650,7 +614,6 @@ mod tests {
         assert!(catalog.contains_key(&(receipts[0].0.round(), receipts[0].0.subject())));
         assert!(!catalog.contains_key(&(receipts[1].0.round(), receipts[1].0.subject())));
     }
-
     #[test]
     fn verified_decision_capability_cannot_cross_height_contexts() {
         let directory = TempDir::new().expect("temporary directory");
@@ -663,7 +626,6 @@ mod tests {
             .persist_validated_receipt(&receipt, commitment)
             .expect("persist candidate validation marker");
         drop(store);
-
         let mut reopened =
             V2BodyStore::open(directory.path(), context.clone()).expect("reopen store");
         let pending_before = reopened.pending_revalidation.clone();
@@ -671,7 +633,6 @@ mod tests {
         let mut foreign_context = context.clone();
         foreign_context.leader_seed[0] ^= 0x80;
         assert_ne!(foreign_context.id(), context.id());
-
         let error = reopened
             .retain_recovered_markers_for_subject(VerifiedRecoveredFinalitySubject::for_test(
                 &foreign_context,
@@ -685,7 +646,6 @@ mod tests {
         assert_eq!(reopened.pending_revalidation, pending_before);
         assert_eq!(reopened.validated, validated_before);
     }
-
     #[test]
     fn verified_decision_retires_already_promoted_losing_marker_authority() {
         let directory = TempDir::new().expect("temporary directory");
@@ -711,7 +671,6 @@ mod tests {
         }
         assert_ne!(receipts[0].0.subject(), receipts[1].0.subject());
         drop(store);
-
         let mut reopened =
             V2BodyStore::open(directory.path(), context.clone()).expect("reopen store");
         let _validated = reopened
@@ -724,7 +683,6 @@ mod tests {
                 .validated_recovery_catalog()
                 .contains_key(&(receipts[1].0.round(), receipts[1].0.subject()))
         );
-
         reopened
             .retain_recovered_markers_for_subject(VerifiedRecoveredFinalitySubject::for_test(
                 &context,
@@ -744,11 +702,9 @@ mod tests {
         assert!(catalog.contains_key(&(receipts[0].0.round(), receipts[0].0.subject())));
         assert!(!catalog.contains_key(&(receipts[1].0.round(), receipts[1].0.subject())));
     }
-
     #[test]
     fn non_v1_body_and_validation_frames_are_rejected() {
         const UNSUPPORTED_VERSION: u16 = 2;
-
         let body_directory = TempDir::new().expect("temporary body directory");
         let (body_context, body_keys) = context_and_keys();
         let (body, manifest) = body_and_manifest(&body_context, &body_keys, None);
@@ -773,7 +729,6 @@ mod tests {
             V2BodyStore::open(body_directory.path(), body_context),
             Err(V2BodyStoreError::UnsupportedVersion(UNSUPPORTED_VERSION))
         ));
-
         let marker_directory = TempDir::new().expect("temporary marker directory");
         let (marker_context, marker_keys) = context_and_keys();
         let (body, manifest) = body_and_manifest(&marker_context, &marker_keys, None);
@@ -807,7 +762,6 @@ mod tests {
             Err(V2BodyStoreError::UnsupportedVersion(UNSUPPORTED_VERSION))
         ));
     }
-
     #[test]
     fn rotating_leader_locked_body_reproposal_is_stored_and_revalidated_per_round() {
         let directory = TempDir::new().expect("temporary directory");
@@ -835,7 +789,6 @@ mod tests {
                 .map(ValidatedBodyReceipt::execution_commitment),
             Some(execution_commitment)
         );
-
         drop(store);
         let mut store = V2BodyStore::open(directory.path(), context.clone())
             .expect("recover the exact origin-view validation marker");
@@ -844,7 +797,6 @@ mod tests {
                 Ok::<wire::ExecutionCommitment, String>(execution_commitment)
             })
             .expect("semantically replay the recovered origin marker");
-
         let later_round = wire::ConsensusRound {
             context_id: context.id(),
             height: context.height,
@@ -887,7 +839,6 @@ mod tests {
             Some(&origin_receipt)
         );
     }
-
     #[test]
     fn locked_body_reproposal_cannot_change_rejection_into_success() {
         let directory = TempDir::new().expect("temporary directory");
@@ -908,7 +859,6 @@ mod tests {
                 },
             )
             .expect("persist origin rejection");
-
         let later_round = wire::ConsensusRound {
             context_id: context.id(),
             height: context.height,
@@ -937,7 +887,6 @@ mod tests {
                 .exists(),
             "a conflicting outcome must not become durable"
         );
-
         let later_rejection = store
             .execute_durable_validation(later_receipt, later_manifest_hash, |_| {
                 Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
@@ -950,7 +899,6 @@ mod tests {
             Some(&BodyValidationRejectionIdentity::Rejected)
         );
     }
-
     #[test]
     fn genesis_cross_view_validation_is_reexecuted_and_conflicts_fail_closed() {
         let directory = TempDir::new().expect("temporary directory");
@@ -973,7 +921,6 @@ mod tests {
         let _ = store
             .persist_validated_receipt(&origin_receipt, origin_commitment)
             .expect("persist the origin-view validation witness");
-
         let later_round = wire::ConsensusRound {
             context_id: context.id(),
             height: context.height,
@@ -989,7 +936,6 @@ mod tests {
         let conflicting_commitment =
             ValidatedBodyReceipt::for_test(later_receipt.clone()).execution_commitment();
         assert_ne!(origin_commitment, conflicting_commitment);
-
         let callback_ran = Cell::new(false);
         let later_task = BodyValidationTask::for_test(52, later_receipt.clone());
         let error = store
@@ -1008,7 +954,6 @@ mod tests {
         ));
         let marker_path = store.validated_path_for(later_round, origin_manifest.subject);
         assert!(!marker_path.exists());
-
         let conflicting_marker = ValidationOutcomeMarker {
             version: VALIDATION_OUTCOME_MARKER_VERSION,
             context_id: later_receipt.context_id,
@@ -1021,7 +966,6 @@ mod tests {
         write_validation_outcome_marker(&marker_path, &conflicting_marker)
             .expect("write a syntactically valid conflicting marker");
         drop(store);
-
         let error = match V2BodyStore::open_with_policy(
             directory.path(),
             context,
@@ -1035,7 +979,6 @@ mod tests {
             V2BodyStoreError::ConflictingValidationCommitment
         ));
     }
-
     #[test]
     fn result_bearing_proposal_is_rejected_before_durable_admission() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1065,7 +1008,6 @@ mod tests {
             Err(V2BodyStoreError::ResultBearingProposal)
         ));
     }
-
     #[test]
     fn typed_validation_deferral_and_durable_rejection_never_mint_success_receipts() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1077,7 +1019,6 @@ mod tests {
         let reference = missing_merge_reference(&receipt);
         let execution_commitment =
             ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
-
         let deferred = store
             .execute_validation_task(&task, |_| {
                 Err::<wire::ExecutionCommitment, _>(FixtureValidationError::MissingMergeSidecar(
@@ -1098,7 +1039,6 @@ mod tests {
                 .validated_path_for(receipt.round(), receipt.subject())
                 .exists()
         );
-
         let rejected = store
             .execute_validation_task(&task, |_| {
                 Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
@@ -1116,7 +1056,6 @@ mod tests {
         let marker_before_repeat =
             fs::read(store.validated_path_for(receipt.round(), receipt.subject()))
                 .expect("rejection marker is durable before returning the outcome");
-
         let callback_ran = Cell::new(false);
         let repeated = store
             .execute_validation_task(&task, |_| {
@@ -1137,7 +1076,6 @@ mod tests {
         ));
         assert!(store.validated_recovery_catalog().is_empty());
     }
-
     #[test]
     fn durable_validation_persists_success_and_repeats_idempotently() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1150,7 +1088,6 @@ mod tests {
         let expected_manifest_hash = receipt.manifest_hash();
         let execution_commitment =
             ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
-
         let validated = store
             .execute_durable_validation(receipt.clone(), expected_manifest_hash, |_| {
                 Ok::<_, FixtureValidationError>(execution_commitment)
@@ -1167,7 +1104,6 @@ mod tests {
         let marker_before_repeat = fs::read(&marker_path)
             .expect("success marker is durable before the outcome is returned");
         let files_before_repeat = durable_files_snapshot(directory.path());
-
         let validator_called = Cell::new(false);
         let repeated = store
             .execute_durable_validation(receipt.clone(), expected_manifest_hash, |_| {
@@ -1196,7 +1132,6 @@ mod tests {
             execution_commitment
         );
     }
-
     #[test]
     fn durable_validation_binds_rejection_and_typed_deferral_to_the_exact_body() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1209,7 +1144,6 @@ mod tests {
         let expected_manifest_hash = receipt.manifest_hash();
         let marker_path = store.validated_path_for(receipt.round(), receipt.subject());
         let files_before = durable_files_snapshot(directory.path());
-
         let reference = missing_merge_reference(&receipt);
         let deferred = store
             .execute_durable_validation(receipt.clone(), expected_manifest_hash, |_| {
@@ -1226,7 +1160,6 @@ mod tests {
         assert!(!marker_path.exists());
         assert!(store.validated_recovery_catalog().is_empty());
         assert_eq!(durable_files_snapshot(directory.path()), files_before);
-
         let rejected = store
             .execute_durable_validation(receipt.clone(), expected_manifest_hash, |_| {
                 Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
@@ -1264,7 +1197,6 @@ mod tests {
         );
         assert!(store.validated_recovery_catalog().is_empty());
     }
-
     #[test]
     fn durable_rejection_reopens_quarantined_and_promotes_only_after_exact_replay() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1295,7 +1227,6 @@ mod tests {
             "raw diagnostics must not enter durable authority"
         );
         drop(store);
-
         let mut reopened = V2BodyStore::open(directory.path(), context).expect("reopen store");
         assert_eq!(reopened.pending_revalidation.len(), 1);
         assert!(reopened.validated_recovery_catalog().is_empty());
@@ -1304,7 +1235,6 @@ mod tests {
             reopened.ensure_recovered_markers_revalidated(),
             Err(V2BodyStoreError::UnrevalidatedValidationMarkers)
         ));
-
         let callback_count = Cell::new(0_usize);
         reopened
             .revalidate_recovered_markers(|_| {
@@ -1320,7 +1250,6 @@ mod tests {
             .expect("rejection marker crossed semantic replay");
         assert!(reopened.validated_recovery_catalog().is_empty());
         assert_eq!(reopened.rejected.len(), 1);
-
         let repeat_callback_ran = Cell::new(false);
         let repeated = reopened
             .execute_durable_validation(
@@ -1342,7 +1271,6 @@ mod tests {
             marker_bytes
         );
     }
-
     #[test]
     fn recovered_rejection_rejects_outcome_change_and_retires_on_missing_sidecar() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1361,7 +1289,6 @@ mod tests {
             })
             .expect("persist rejection marker");
         drop(store);
-
         let mut reopened = V2BodyStore::open(directory.path(), context).expect("reopen store");
         let success = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
         assert!(matches!(
@@ -1371,7 +1298,6 @@ mod tests {
         assert_eq!(reopened.pending_revalidation.len(), 1);
         assert!(reopened.rejected.is_empty());
         assert!(reopened.validated_recovery_catalog().is_empty());
-
         let reference = missing_merge_reference(&receipt);
         reopened
             .revalidate_recovered_markers(|_| {
@@ -1402,7 +1328,6 @@ mod tests {
             Some((manifest, receipt))
         );
     }
-
     #[test]
     fn durable_validation_preflight_errors_preserve_store_state_byte_for_byte() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1413,7 +1338,6 @@ mod tests {
         let receipt = store
             .store(manifest, body)
             .expect("persist exact candidate body");
-
         let entries_before = store.entries.clone();
         let manifests_before = store.manifests.clone();
         let pending_before = store.pending_revalidation.clone();
@@ -1445,7 +1369,6 @@ mod tests {
         assert_eq!(store.validated, validated_before);
         assert_eq!(store.rejected, rejected_before);
         assert_eq!(durable_files_snapshot(directory.path()), files_before);
-
         let foreign_directory = TempDir::new().expect("foreign temporary directory");
         let mut foreign_context = context;
         foreign_context.network_id =
@@ -1477,7 +1400,6 @@ mod tests {
         assert_eq!(store.rejected, rejected_before);
         assert_eq!(durable_files_snapshot(directory.path()), files_before);
     }
-
     #[test]
     fn terminal_validate_outcome_catalog_drop_restores_both_maps_and_retired_seals() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1500,7 +1422,6 @@ mod tests {
             })
             .expect("promoted success exists");
         store.retired_revalidation.insert(retired_key, retired);
-
         let validated_before = store.validated.clone();
         let rejected_before = store.rejected.clone();
         let retired_before = store.retired_revalidation.clone();
@@ -1509,12 +1430,10 @@ mod tests {
                 .detach_terminal_validate_outcome_catalog()
                 .expect("detach aggregate terminal outcome catalog");
         }
-
         assert_eq!(store.validated, validated_before);
         assert_eq!(store.rejected, rejected_before);
         assert_eq!(store.retired_revalidation, retired_before);
     }
-
     #[test]
     fn terminal_validate_outcome_catalog_commit_restores_all_unselected_entries() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1522,16 +1441,13 @@ mod tests {
         let mut store = store_with_promoted_terminal_outcomes(directory.path(), &context, &keys);
         let validated_before = store.validated.clone();
         let rejected_before = store.rejected.clone();
-
         store
             .detach_terminal_validate_outcome_catalog()
             .expect("detach aggregate terminal outcome catalog")
             .commit_selected();
-
         assert_eq!(store.validated, validated_before);
         assert_eq!(store.rejected, rejected_before);
     }
-
     #[test]
     fn terminal_validate_outcome_catalog_rejects_pending_markers_without_mutation() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1557,7 +1473,6 @@ mod tests {
         let pending_before = store.pending_revalidation.clone();
         let validated_before = store.validated.clone();
         let rejected_before = store.rejected.clone();
-
         let error = match store.detach_terminal_validate_outcome_catalog() {
             Ok(cut) => {
                 drop(cut);
@@ -1573,7 +1488,6 @@ mod tests {
         assert_eq!(store.validated, validated_before);
         assert_eq!(store.rejected, rejected_before);
     }
-
     #[test]
     fn terminal_validate_outcome_catalog_rejects_ambiguous_key_without_mutation() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1597,7 +1511,6 @@ mod tests {
         store.rejected.insert(ambiguous_key, ambiguous_rejection);
         let validated_before = store.validated.clone();
         let rejected_before = store.rejected.clone();
-
         let error = match store.detach_terminal_validate_outcome_catalog() {
             Ok(cut) => {
                 drop(cut);
@@ -1612,7 +1525,6 @@ mod tests {
         assert_eq!(store.validated, validated_before);
         assert_eq!(store.rejected, rejected_before);
     }
-
     #[test]
     fn terminal_validate_outcome_catalog_cut_is_opaque_and_move_only() {
         let source = include_str!("v2_body_store.rs");
@@ -1623,7 +1535,6 @@ mod tests {
             .split_once("impl Drop for RecoveredTerminalValidateOutcomeCatalogCut<'_>")
             .expect("drop restoration follows the catalog implementation")
             .0;
-
         assert_eq!(implementation.matches("pub(super) fn ").count(), 2);
         assert!(implementation.contains("fn select_exact_terminal_validate("));
         assert!(implementation.contains("fn commit_selected(mut self)"));
@@ -1644,7 +1555,6 @@ mod tests {
             "#[derive(Clone)]\npub(super) struct RecoveredTerminalValidateOutcomeCatalogCut"
         ));
     }
-
     #[test]
     fn durable_validation_surface_has_no_scheduler_identity_or_ordinal() {
         let source = include_str!("v2_body_store.rs");
@@ -1672,7 +1582,6 @@ mod tests {
             .split("pub(crate) enum BlockSignaturePolicy")
             .next()
             .expect("signature policy follows validation error classification");
-
         for forbidden in [
             "EffectWorkId",
             "BodyValidationTask",
@@ -1703,7 +1612,6 @@ mod tests {
         assert!(error_classification.contains("fn rejection_identity(&self)"));
         assert!(error_classification.contains("BodyValidationRejectionIdentity::Rejected"));
     }
-
     #[test]
     fn rejection_marker_version_code_and_frame_binding_fail_closed() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1729,7 +1637,6 @@ mod tests {
             )
         );
         drop(store);
-
         let mut wrong_frame = canonical_marker.clone();
         wrong_frame.body_frame_hash = Hash::new(b"foreign durable body frame");
         write_validation_outcome_marker(&marker_path, &wrong_frame)
@@ -1738,7 +1645,6 @@ mod tests {
             V2BodyStore::open(directory.path(), context.clone()),
             Err(V2BodyStoreError::ValidationMarkerMismatch)
         ));
-
         let mut unknown_code = canonical_marker.clone();
         unknown_code.outcome = ValidationOutcomeMarkerKind::Rejected(u8::MAX);
         write_validation_outcome_marker(&marker_path, &unknown_code)
@@ -1749,7 +1655,6 @@ mod tests {
                 u8::MAX
             ))
         ));
-
         let mut unsupported_version = canonical_marker;
         unsupported_version.version = VALIDATION_OUTCOME_MARKER_VERSION.saturating_add(1);
         write_validation_outcome_marker(&marker_path, &unsupported_version)
@@ -1760,7 +1665,6 @@ mod tests {
                 if version == VALIDATION_OUTCOME_MARKER_VERSION.saturating_add(1)
         ));
     }
-
     #[test]
     fn corrupted_or_orphaned_validation_marker_fails_closed() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1782,7 +1686,6 @@ mod tests {
             V2BodyStore::open(directory.path(), context.clone()),
             Err(V2BodyStoreError::ChecksumMismatch)
         ));
-
         fs::remove_file(&marker_path).expect("remove corrupt marker");
         let reopened = V2BodyStore::open(directory.path(), context.clone()).expect("reopen body");
         let marker = ValidationOutcomeMarker {
@@ -1805,7 +1708,6 @@ mod tests {
             Err(V2BodyStoreError::OrphanedValidationMarker)
         ));
     }
-
     #[test]
     fn final_file_corruption_fails_closed_but_incomplete_temp_is_ignored() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1818,7 +1720,6 @@ mod tests {
             .expect("write incomplete temp file");
         V2BodyStore::open(directory.path(), context.clone())
             .expect("incomplete temp is unacknowledged");
-
         let final_path = fs::read_dir(&context_directory)
             .expect("list context directory")
             .map(|entry| entry.expect("directory entry").path())
@@ -1833,7 +1734,6 @@ mod tests {
             Err(V2BodyStoreError::ChecksumMismatch)
         ));
     }
-
     #[test]
     fn wrong_leader_signature_is_rejected_before_durability() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1847,7 +1747,6 @@ mod tests {
             Err(V2BodyStoreError::InvalidExpectedSignature)
         ));
     }
-
     #[test]
     fn height_one_can_require_the_distinct_genesis_authority() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1866,7 +1765,6 @@ mod tests {
         let _receipt = store
             .store(manifest, body)
             .expect("configured genesis signature is accepted");
-
         let other_directory = TempDir::new().expect("other temporary directory");
         let (body, manifest) = body_and_manifest_with_signature(&context, &impostor, 0);
         let mut store = V2BodyStore::open_with_policy(
@@ -1880,7 +1778,6 @@ mod tests {
             Err(V2BodyStoreError::InvalidExpectedSignature)
         ));
     }
-
     #[test]
     fn fixed_genesis_body_can_be_reproposed_after_a_certified_view_change() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1895,12 +1792,10 @@ mod tests {
             BlockSignaturePolicy::GenesisAuthority(genesis.public_key().clone()),
         )
         .expect("open genesis body store");
-
         let _receipt = store
             .store(manifest, body)
             .expect("fixed signed genesis body is valid in a later proposal view");
     }
-
     #[test]
     fn rotating_leader_reproposal_authenticates_the_immutable_header_leader() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1916,12 +1811,10 @@ mod tests {
             origin_view,
         );
         let mut store = V2BodyStore::open(directory.path(), context).expect("open body store");
-
         let _ = store
             .store(manifest, body)
             .expect("a later reproposal retains the original header leader signature");
     }
-
     #[test]
     fn body_from_a_future_view_is_rejected() {
         let directory = TempDir::new().expect("temporary directory");
@@ -1938,7 +1831,6 @@ mod tests {
             future_origin_view,
         );
         let mut store = V2BodyStore::open(directory.path(), context).expect("open body store");
-
         assert!(matches!(
             store.store(manifest, body),
             Err(V2BodyStoreError::BlockSubjectMismatch)

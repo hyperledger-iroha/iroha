@@ -9,7 +9,6 @@
 //! because it has already been performed on the host side,
 //! which is a trusted entity.
 //! This gives about 50% performance boost, see #4995.
-
 #![allow(unexpected_cfgs)]
 #![allow(semicolon_in_expressions_from_macros)]
 #![cfg_attr(
@@ -19,7 +18,6 @@
         reason = "test-only derive expansion materializes the complete data-model type registry as one local array; production code does not allocate it"
     )
 )]
-
 #[allow(unused_extern_crates)]
 extern crate bech32;
 #[allow(unused_extern_crates)]
@@ -27,7 +25,6 @@ extern crate self as iroha_data_model;
 // NOTE: Documentation coverage is enforced at the workspace level. If a
 // module lacks coverage, add targeted documentation at the module boundary
 // rather than silencing the lint at the crate root.
-
 pub use iroha_crypto::PublicKey;
 pub use iroha_data_model_derive::model;
 pub use norito::codec::{Decode, Encode};
@@ -38,9 +35,7 @@ pub use norito_derive::{
     FastJson as DeriveFastJson, FastJsonWrite as DeriveFastJsonWrite,
     JsonDeserialize as DeriveJsonDeserialize, JsonSerialize as DeriveJsonSerialize,
 };
-
 use crate::name::Name;
-
 /// Data model compatibility version for SDK and node handshakes.
 ///
 /// Version 2 makes the signature-bound fee payment intent mandatory and
@@ -51,10 +46,8 @@ use crate::name::Name;
 /// plus their retained registry entries, to bind the exact PLAIN electorate
 /// rules used by their ballot lifecycle.
 pub const DATA_MODEL_VERSION: u32 = 4;
-
 #[macro_use]
 mod id_macros;
-
 // NOTE: `iroha_ffi` is an optional dependency used only when the `ffi_export`
 // or `ffi_import` features are enabled. Many types in this crate previously
 // applied the `ffi_type` attribute unconditionally, which forced Cargo to build
@@ -62,7 +55,6 @@ mod id_macros;
 // required. To avoid long build times and hangs, all usages of `ffi_type` are
 // now wrapped in `cfg_attr` so that the attribute is only expanded when one of
 // the FFI features is explicitly activated.
-
 pub mod account;
 /// Account domain model types and queries.
 pub mod alias;
@@ -199,18 +191,14 @@ pub mod validator;
 pub mod verification;
 /// Visitor traits for traversing data-model structures.
 pub mod visit;
-
 /// SoraDNS attestation and directory data structures.
 pub mod soradns;
 /// Zero-knowledge proof payload types.
 pub mod zk;
-
 #[cfg(feature = "json")]
 mod json_key_codec;
-
 /// Bridge-related data types.
 pub mod bridge;
-
 /// Governance-related data types (feature-gated)
 #[cfg(feature = "governance")]
 pub mod governance;
@@ -221,42 +209,33 @@ pub mod testing;
 pub mod instruction_registry {
     pub use crate::isi::{InstructionRegistry, registry::default};
 }
-
 /// Build-time constants generated during the build process (e.g., keyword
 /// tables). Not part of the public API surface.
 mod build_consts {
     include!(concat!(env!("OUT_DIR"), "/build_consts.rs"));
 }
-
 pub use build_consts::PRECOMPUTED_KEYWORDS;
-
 // Include API version.
 #[cfg(feature = "transparent_api")]
 include!(concat!(env!("CARGO_MANIFEST_DIR"), "/transparent_api.rs"));
-
 #[cfg(not(feature = "transparent_api"))]
 include!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/non_transparent_api.rs"
 ));
-
 // Slice-based Norito decoders for model types used in packed sequences and
 // options. These forward to the archived Norito representation to avoid
 // duplicating decoding logic.
 mod norito_slice_decode;
-
 /// Private module defining sealing traits for `iroha_data_model`.
 mod seal {
     /// Seals the [`Instruction`](crate::isi::Instruction) trait.
     pub trait Instruction {}
-
     /// Seals the [`SingularQuery`](crate::query::SingularQuery) trait.
     pub trait SingularQuery {}
-
     /// Seals the [`crate::query::Query`](crate::query::Query) trait.
     pub trait Query {}
 }
-
 pub use error::{EnumTryAsError, ParseError};
 pub use errors::{
     AmxStage, CanonicalError, CanonicalErrorKind, CircuitBreakerKind, SettlementRouterOutage,
@@ -265,35 +244,28 @@ pub use executor::ValidationFail;
 pub use id::{ChainId, IdBox, NetworkId};
 pub use level::Level;
 pub use nexus::{DataSpaceId, LaneId};
-
 /// Uniquely identifiable entity ([`domain::Domain`], [`account::Account`], etc.).
 /// This trait should always be derived with `IdEqOrdHash`.
 pub trait Identifiable: Ord + Eq {
     /// Type of the entity identifier
     type Id: Into<IdBox> + Ord + Eq + core::hash::Hash;
-
     /// Get reference to the type identifier
     fn id(&self) -> &Self::Id;
 }
-
 /// Trait for proxy objects used for registration.
 pub trait Registrable {
     /// Constructed type
     type Target;
-
     /// Construct [`Self::Target`] with given authority
     fn build(self, authority: &crate::account::AccountId) -> Self::Target;
 }
-
 /// Trait that marks the entity as having metadata.
 pub trait HasMetadata {
     // type Metadata = metadata::Metadata;
     // Uncomment when stable.
-
     /// The metadata associated to this object.
     fn metadata(&self) -> &metadata::Metadata;
 }
-
 /// Trait for objects that are registered by proxy.
 pub trait Registered: Identifiable {
     /// The proxy type that is used to register this entity. Usually
@@ -302,7 +274,6 @@ pub trait Registered: Identifiable {
     /// set `With` to the builder's type.
     type With;
 }
-
 /// Auxiliary trait for objects which are stored in parts in `World`.
 /// E.g. `Account` is stored as `AccountId`+`AccountEntry` in `World::accounts`
 pub trait IntoKeyValue {
@@ -313,13 +284,10 @@ pub trait IntoKeyValue {
     /// Method to split object into parts
     fn into_key_value(self) -> (Self::Key, Self::Value);
 }
-
 mod ffi {
     //! Definitions and implementations of FFI related functionalities
-
     #[cfg(any(feature = "ffi_export", feature = "ffi_import"))]
     use super::*;
-
     #[cfg(any(feature = "ffi_export", feature = "ffi_import"))]
     iroha_ffi::handles! {
         account::Account,
@@ -329,7 +297,6 @@ mod ffi {
         permission::Permission,
         role::Role,
     }
-
     #[cfg(feature = "ffi_import")]
     iroha_ffi::decl_ffi_fns! { link_prefix="iroha_data_model" Drop, Clone, Eq, Ord }
     #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
@@ -339,14 +306,12 @@ mod ffi {
         Eq: { account::Account, asset::value::Asset, domain::Domain, metadata::Metadata, permission::Permission, role::Role },
         Ord: { account::Account, asset::value::Asset, domain::Domain, metadata::Metadata, permission::Permission, role::Role },
     }
-
     // NOTE: Makes sure that only one `dealloc` is exported per generated dynamic library
     #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
     mod dylib {
         iroha_ffi::def_ffi_fns! {dealloc}
     }
 }
-
 #[allow(ambiguous_glob_reexports)]
 pub mod prelude {
     //! Prelude: re-export of most commonly used traits, structs and macros in this crate.
@@ -366,7 +331,6 @@ pub mod prelude {
             QUANTITY_SCHEMA_HASH_V1, QUANTITY_SCHEMA_NAME_V1, QuantityValueV1,
         },
     };
-
     pub use super::{
         ChainId, Decode, Encode, HasMetadata, IdBox, Identifiable, Level, NetworkId, Registrable,
         ValidationFail,

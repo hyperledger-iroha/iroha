@@ -5,14 +5,12 @@
 //! runtime signer sees it, persists the exact verified signed transaction before
 //! submission, and retains bounded completed/dead-letter state for replay-safe
 //! reconciliation. It never owns private keys or an authoritative finance model.
-
 use std::{
     collections::BTreeSet,
     fmt,
     path::Path,
     sync::{Arc, Mutex},
 };
-
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_crypto::numeric::{Quantity, XorQuantity};
@@ -28,12 +26,10 @@ use iroha_data_model::{
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-
 use crate::durable_transaction_forwarder::{
     self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
     DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
 };
-
 /// Durable checkpoint schema version.
 pub const APPEAL_FINANCE_FORWARDER_CHECKPOINT_VERSION_V1: u8 = 1;
 /// Canonical checkpoint file name.
@@ -55,7 +51,6 @@ pub const APPEAL_FINANCE_RUNTIME_PROVIDER_QUALIFICATION_VERSION_V1: u8 = 1;
 pub const APPEAL_FINANCE_SEALED_CHECKPOINT_RECORD_VERSION_V1: u8 = 1;
 /// Maximum canonical wrapper overhead beyond the embedded checkpoint bytes.
 pub const APPEAL_FINANCE_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1: u64 = 4 * 1024;
-
 const CHECKPOINT_LOCK_FILE_NAME: &str = "appeal-finance-transaction-forwarder-state.lock";
 const IDENTITY_DOMAIN_V1: &[u8] = b"sorafs.appeal-finance.identity.v1\0";
 const OPERATION_ID_DOMAIN_V1: &[u8] = b"sorafs.appeal-finance.operation.v1\0";
@@ -75,7 +70,6 @@ const TRANSACTION_ELEMENT_AMPLIFICATION_LIMIT: usize = 8;
 const TRANSACTION_ALLOCATION_AMPLIFICATION_LIMIT: usize = 20;
 const TRANSACTION_ALLOCATION_FIXED_OVERHEAD_BYTES: usize = 512 * 1024;
 const TRANSACTION_MAX_NESTING_DEPTH: usize = 128;
-
 /// Bounded persistence and retry policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppealFinanceTransactionForwarderPolicyV1 {
@@ -92,7 +86,6 @@ pub struct AppealFinanceTransactionForwarderPolicyV1 {
     /// Maximum canonical checkpoint bytes.
     pub checkpoint_max_bytes: u64,
 }
-
 impl AppealFinanceTransactionForwarderPolicyV1 {
     /// Validate every first-release resource bound.
     pub fn validate(self) -> Result<(), AppealFinanceTransactionForwarderError> {
@@ -109,7 +102,6 @@ impl AppealFinanceTransactionForwarderPolicyV1 {
         Ok(())
     }
 }
-
 /// Configured public identity of the runtime checkpoint HSM/KMS provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppealFinanceCheckpointAuthenticationPolicyV1 {
@@ -124,7 +116,6 @@ pub struct AppealFinanceCheckpointAuthenticationPolicyV1 {
     /// Exact non-zero digest of the provider's public policy.
     pub policy_digest: [u8; 32],
 }
-
 impl AppealFinanceCheckpointAuthenticationPolicyV1 {
     /// Validate the bounded handle, strong Ed25519 key, and qualification.
     ///
@@ -150,7 +141,6 @@ impl AppealFinanceCheckpointAuthenticationPolicyV1 {
         Ok(())
     }
 }
-
 /// Public, non-secret qualification for an appeal-finance runtime provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppealFinanceRuntimeProviderQualificationV1 {
@@ -161,7 +151,6 @@ pub struct AppealFinanceRuntimeProviderQualificationV1 {
     /// Non-zero digest of the exact public provider policy.
     pub policy_digest: [u8; 32],
 }
-
 impl AppealFinanceRuntimeProviderQualificationV1 {
     /// Construct a first-release provider qualification.
     #[must_use]
@@ -172,7 +161,6 @@ impl AppealFinanceRuntimeProviderQualificationV1 {
             policy_digest,
         }
     }
-
     /// Validate the schema, revision, and public-policy digest.
     ///
     /// # Errors
@@ -190,7 +178,6 @@ impl AppealFinanceRuntimeProviderQualificationV1 {
         Ok(())
     }
 }
-
 /// Identity returned by the injected runtime checkpoint provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppealFinanceCheckpointRuntimeIdentityV1 {
@@ -201,7 +188,6 @@ pub struct AppealFinanceCheckpointRuntimeIdentityV1 {
     /// Active adapter and public-policy qualification.
     pub qualification: AppealFinanceRuntimeProviderQualificationV1,
 }
-
 /// Fixed external failure classes without provider diagnostics or credentials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppealFinanceCheckpointExternalError {
@@ -212,7 +198,6 @@ pub enum AppealFinanceCheckpointExternalError {
     /// A compare-and-swap may have committed and requires authoritative lookup.
     Ambiguous,
 }
-
 /// Exact sealed recovery record for one authenticated local checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct AppealFinanceSealedCheckpointRecordV1 {
@@ -227,7 +212,6 @@ pub struct AppealFinanceSealedCheckpointRecordV1 {
     /// Deterministic compare-and-swap revision.
     pub revision: [u8; 32],
 }
-
 impl AppealFinanceSealedCheckpointRecordV1 {
     fn new(
         checkpoint_sequence: u64,
@@ -244,7 +228,6 @@ impl AppealFinanceSealedCheckpointRecordV1 {
         record.revision = sealed_checkpoint_record_revision(&record);
         record
     }
-
     /// Validate schema, bounds, identity, and deterministic CAS revision.
     ///
     /// # Errors
@@ -266,7 +249,6 @@ impl AppealFinanceSealedCheckpointRecordV1 {
         }
         Ok(())
     }
-
     /// Encode the exact canonical Norito record for external sealed storage.
     ///
     /// # Errors
@@ -285,7 +267,6 @@ impl AppealFinanceSealedCheckpointRecordV1 {
         }
         Ok(bytes)
     }
-
     /// Decode one exact canonical Norito record from external sealed storage.
     ///
     /// # Errors
@@ -326,7 +307,6 @@ impl AppealFinanceSealedCheckpointRecordV1 {
         Ok(record)
     }
 }
-
 /// Runtime-only HSM/KMS signer plus monotonic sealed checkpoint head.
 ///
 /// Implementations must keep signing material and credentials out of process
@@ -345,7 +325,6 @@ pub trait AppealFinanceCheckpointRuntime: Send + Sync + fmt::Debug {
     fn identity(
         &self,
     ) -> Result<AppealFinanceCheckpointRuntimeIdentityV1, AppealFinanceCheckpointExternalError>;
-
     /// Sign one exact domain-separated checkpoint digest.
     ///
     /// # Errors
@@ -355,7 +334,6 @@ pub trait AppealFinanceCheckpointRuntime: Send + Sync + fmt::Debug {
         &self,
         digest: [u8; 32],
     ) -> Result<[u8; 64], AppealFinanceCheckpointExternalError>;
-
     /// Load the exact authenticated latest sealed record.
     ///
     /// # Errors
@@ -364,7 +342,6 @@ pub trait AppealFinanceCheckpointRuntime: Send + Sync + fmt::Debug {
     fn load_latest(
         &self,
     ) -> Result<Option<AppealFinanceSealedCheckpointRecordV1>, AppealFinanceCheckpointExternalError>;
-
     /// Atomically replace the sealed head if its exact revision is unchanged.
     ///
     /// Uncertain writes must return
@@ -379,7 +356,6 @@ pub trait AppealFinanceCheckpointRuntime: Send + Sync + fmt::Debug {
         next: &AppealFinanceSealedCheckpointRecordV1,
     ) -> Result<(), AppealFinanceCheckpointExternalError>;
 }
-
 /// Finalized ledger cursor bound to appeal-finance operations.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -390,7 +366,6 @@ pub struct AppealFinanceFinalizedCursorV1 {
     /// Finalized block hash.
     pub block_hash: [u8; 32],
 }
-
 /// Exact native instruction retained by the outbox.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum AppealFinanceOperationV1 {
@@ -401,7 +376,6 @@ pub enum AppealFinanceOperationV1 {
     /// Refund all authoritative remaining custody.
     Cancel(CancelAssetLock),
 }
-
 impl AppealFinanceOperationV1 {
     /// Return the operation kind.
     #[must_use]
@@ -412,7 +386,6 @@ impl AppealFinanceOperationV1 {
             Self::Cancel(_) => AppealFinanceTransactionKindV1::Cancel,
         }
     }
-
     /// Return the native escrow identity.
     #[must_use]
     pub fn escrow_id(&self) -> &EscrowId {
@@ -423,7 +396,6 @@ impl AppealFinanceOperationV1 {
         }
     }
 }
-
 impl From<AppealFinanceOperationV1> for InstructionBox {
     fn from(operation: AppealFinanceOperationV1) -> Self {
         match operation {
@@ -433,7 +405,6 @@ impl From<AppealFinanceOperationV1> for InstructionBox {
         }
     }
 }
-
 /// Native appeal-finance transaction kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppealFinanceTransactionKindV1 {
@@ -444,7 +415,6 @@ pub enum AppealFinanceTransactionKindV1 {
     /// Refund remaining custody.
     Cancel,
 }
-
 /// Finalized context required to admit one operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppealFinanceTransactionContextV1 {
@@ -459,7 +429,6 @@ pub struct AppealFinanceTransactionContextV1 {
     /// Bounded canonical context used to rebuild an idempotent receipt.
     pub reconciliation_context: Vec<u8>,
 }
-
 impl AppealFinanceTransactionContextV1 {
     fn validate(&self) -> Result<(), AppealFinanceTransactionForwarderError> {
         validate_finalized_cursor(self.finalized_cursor)?;
@@ -474,7 +443,6 @@ impl AppealFinanceTransactionContextV1 {
         Ok(())
     }
 }
-
 /// Exact signer/reconciler work item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppealFinanceTransactionSigningRequestV1 {
@@ -495,7 +463,6 @@ pub struct AppealFinanceTransactionSigningRequestV1 {
     /// Finalized cursor from the latest durable attempt.
     pub baseline_finalized_cursor: AppealFinanceFinalizedCursorV1,
 }
-
 /// Durable enqueue result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppealFinanceTransactionEnqueueResultV1 {
@@ -510,7 +477,6 @@ pub enum AppealFinanceTransactionEnqueueResultV1 {
         operation_id: [u8; 32],
     },
 }
-
 impl AppealFinanceTransactionEnqueueResultV1 {
     /// Return the stable semantic operation identity.
     #[must_use]
@@ -520,7 +486,6 @@ impl AppealFinanceTransactionEnqueueResultV1 {
         }
     }
 }
-
 /// Runtime-visible crash state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppealFinanceTransactionDeliveryStateV1 {
@@ -535,7 +500,6 @@ pub enum AppealFinanceTransactionDeliveryStateV1 {
     /// Submission is known pending/applied.
     Submitted,
 }
-
 impl From<StoredDeliveryStateV1> for AppealFinanceTransactionDeliveryStateV1 {
     fn from(value: StoredDeliveryStateV1) -> Self {
         match value {
@@ -547,7 +511,6 @@ impl From<StoredDeliveryStateV1> for AppealFinanceTransactionDeliveryStateV1 {
         }
     }
 }
-
 /// Pending operation snapshot.
 #[derive(Debug, Clone)]
 pub struct AppealFinanceTransactionPendingV1 {
@@ -570,7 +533,6 @@ pub struct AppealFinanceTransactionPendingV1 {
     /// Exact signed bytes, when available.
     pub signed_transaction_bytes: Option<Vec<u8>>,
 }
-
 /// Terminal reason retained without request payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppealFinanceTransactionDeadLetterReasonV1 {
@@ -589,7 +551,6 @@ pub enum AppealFinanceTransactionDeadLetterReasonV1 {
     /// The governed signer binding is no longer active for the operation authority.
     SignerBindingInactive,
 }
-
 /// Payload-free terminal delivery.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppealFinanceTransactionDeadLetterV1 {
@@ -604,7 +565,6 @@ pub struct AppealFinanceTransactionDeadLetterV1 {
     /// Finalized hash paired with the observed height.
     pub observed_finalized_block_hash: [u8; 32],
 }
-
 /// Pure authoritative reconciliation result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppealFinanceOperationReconciliationV1 {
@@ -615,7 +575,6 @@ pub enum AppealFinanceOperationReconciliationV1 {
     /// Finalized state consumed or contradicted the precondition.
     Conflict,
 }
-
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
 )]
@@ -624,7 +583,6 @@ enum StoredIdentityScopeV1 {
     Drawdown,
     Cancel,
 }
-
 impl StoredIdentityScopeV1 {
     const fn tag(self) -> u8 {
         match self {
@@ -634,7 +592,6 @@ impl StoredIdentityScopeV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredDeadLetterReasonV1 {
     FinalizedConflict,
@@ -645,7 +602,6 @@ enum StoredDeadLetterReasonV1 {
     InvalidContext,
     SignerBindingInactive,
 }
-
 impl From<StoredDeadLetterReasonV1> for AppealFinanceTransactionDeadLetterReasonV1 {
     fn from(value: StoredDeadLetterReasonV1) -> Self {
         match value {
@@ -659,7 +615,6 @@ impl From<StoredDeadLetterReasonV1> for AppealFinanceTransactionDeadLetterReason
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredPendingV1 {
     sequence: u64,
@@ -679,7 +634,6 @@ struct StoredPendingV1 {
     baseline_finalized_block_hash: [u8; 32],
     signed_transaction_bytes: Option<Vec<u8>>,
 }
-
 impl StoredPendingV1 {
     fn snapshot(&self) -> AppealFinanceTransactionPendingV1 {
         AppealFinanceTransactionPendingV1 {
@@ -694,7 +648,6 @@ impl StoredPendingV1 {
             signed_transaction_bytes: self.signed_transaction_bytes.clone(),
         }
     }
-
     fn request(&self) -> AppealFinanceTransactionSigningRequestV1 {
         AppealFinanceTransactionSigningRequestV1 {
             operation_id: self.operation_id,
@@ -711,51 +664,39 @@ impl StoredPendingV1 {
         }
     }
 }
-
 impl DeliveryRecord for StoredPendingV1 {
     type Transaction = Vec<u8>;
-
     fn delivery_state(&self) -> StoredDeliveryStateV1 {
         self.state
     }
-
     fn set_delivery_state(&mut self, state: StoredDeliveryStateV1) {
         self.state = state;
     }
-
     fn attempts(&self) -> u32 {
         self.attempts
     }
-
     fn set_attempts(&mut self, attempts: u32) {
         self.attempts = attempts;
     }
-
     fn baseline_finalized_height(&self) -> u64 {
         self.baseline_finalized_height
     }
-
     fn set_baseline_finalized_height(&mut self, height: u64) {
         self.baseline_finalized_height = height;
     }
-
     fn baseline_finalized_block_hash(&self) -> [u8; 32] {
         self.baseline_finalized_block_hash
     }
-
     fn set_baseline_finalized_block_hash(&mut self, block_hash: [u8; 32]) {
         self.baseline_finalized_block_hash = block_hash;
     }
-
     fn signed_transaction(&self) -> Option<&Self::Transaction> {
         self.signed_transaction_bytes.as_ref()
     }
-
     fn set_signed_transaction(&mut self, transaction: Option<Self::Transaction>) {
         self.signed_transaction_bytes = transaction;
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredCompletedV1 {
     operation_id: [u8; 32],
@@ -765,7 +706,6 @@ struct StoredCompletedV1 {
     finalized_height: u64,
     finalized_block_hash: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredDeadLetterV1 {
     operation_id: [u8; 32],
@@ -777,7 +717,6 @@ struct StoredDeadLetterV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct CheckpointBodyV1 {
     next_sequence: u64,
@@ -785,7 +724,6 @@ struct CheckpointBodyV1 {
     completed: Vec<StoredCompletedV1>,
     dead_letters: Vec<StoredDeadLetterV1>,
 }
-
 impl Default for CheckpointBodyV1 {
     fn default() -> Self {
         Self {
@@ -796,7 +734,6 @@ impl Default for CheckpointBodyV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct AuthenticatedCheckpointV1 {
     version: u8,
@@ -811,7 +748,6 @@ struct AuthenticatedCheckpointV1 {
     checkpoint_digest: [u8; 32],
     signature: [u8; 64],
 }
-
 #[derive(Debug)]
 struct DurableState {
     checkpoint: CheckpointBodyV1,
@@ -820,13 +756,11 @@ struct DurableState {
     fingerprint: Option<[u8; 32]>,
     durability_failure: bool,
 }
-
 #[derive(Clone)]
 struct CheckpointAuthenticationContext {
     policy: AppealFinanceCheckpointAuthenticationPolicyV1,
     runtime: Arc<dyn AppealFinanceCheckpointRuntime>,
 }
-
 impl fmt::Debug for CheckpointAuthenticationContext {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -836,7 +770,6 @@ impl fmt::Debug for CheckpointAuthenticationContext {
             .finish_non_exhaustive()
     }
 }
-
 /// Durable bounded appeal-finance transaction forwarder.
 #[derive(Debug, Clone)]
 pub struct AppealFinanceTransactionForwarder {
@@ -845,7 +778,6 @@ pub struct AppealFinanceTransactionForwarder {
     state: Arc<Mutex<DurableState>>,
     store: Option<Arc<AtomicCheckpointStore>>,
 }
-
 impl AppealFinanceTransactionForwarder {
     /// Construct a non-persistent forwarder for focused tests.
     #[cfg(test)]
@@ -866,7 +798,6 @@ impl AppealFinanceTransactionForwarder {
             store: None,
         })
     }
-
     /// Open or create a private, authenticated, single-writer durable checkpoint.
     ///
     /// The HSM/KMS-backed runtime signs every exact checkpoint and owns a
@@ -1007,7 +938,6 @@ impl AppealFinanceTransactionForwarder {
         }
         Ok(forwarder)
     }
-
     /// Validate and durably enqueue one authority-bound native operation.
     pub fn enqueue_unsigned_operation(
         &self,
@@ -1088,7 +1018,6 @@ impl AppealFinanceTransactionForwarder {
         self.commit_candidate(&mut state, candidate)?;
         Ok(AppealFinanceTransactionEnqueueResultV1::Inserted { operation_id })
     }
-
     /// Return a fair circular page after an immutable sequence cursor.
     pub fn pending_after(
         &self,
@@ -1114,7 +1043,6 @@ impl AppealFinanceTransactionForwarder {
             .map(StoredPendingV1::snapshot)
             .collect())
     }
-
     /// Read exact semantic material without claiming a signer attempt.
     pub fn operation_for_reconciliation(
         &self,
@@ -1130,7 +1058,6 @@ impl AppealFinanceTransactionForwarder {
             .map(StoredPendingV1::request)
             .ok_or(AppealFinanceTransactionForwarderError::UnknownOperation)
     }
-
     /// Return bounded payload-free dead letters.
     pub fn dead_letters(
         &self,
@@ -1159,7 +1086,6 @@ impl AppealFinanceTransactionForwarder {
             })
             .collect())
     }
-
     /// Durably claim one ready operation for an isolated signer.
     pub fn claim_for_signing(
         &self,
@@ -1191,7 +1117,6 @@ impl AppealFinanceTransactionForwarder {
         self.commit_candidate(&mut state, candidate)?;
         Ok(request)
     }
-
     /// Persist exact canonical signed bytes and verify all semantic material.
     pub fn store_signed_transaction(
         &self,
@@ -1225,7 +1150,6 @@ impl AppealFinanceTransactionForwarder {
         self.commit_candidate(&mut state, candidate)?;
         Ok(digest)
     }
-
     /// Release a signing claim known not to have submitted.
     pub fn release_signing_claim(
         &self,
@@ -1233,7 +1157,6 @@ impl AppealFinanceTransactionForwarder {
     ) -> Result<(), AppealFinanceTransactionForwarderError> {
         self.mutate_entry(operation_id, release_signing_claim_preserving_cursor)
     }
-
     /// Consume one failed signing attempt, dead-lettering at the configured bound.
     pub fn mark_signing_failed(
         &self,
@@ -1264,7 +1187,6 @@ impl AppealFinanceTransactionForwarder {
         }
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Mark exact signed bytes ambiguous before any submitter sees them.
     pub fn begin_submission(
         &self,
@@ -1276,7 +1198,6 @@ impl AppealFinanceTransactionForwarder {
         self.commit_candidate(&mut state, candidate)?;
         Ok(bytes)
     }
-
     /// Record a known pending/applied submission.
     pub fn mark_submitted(
         &self,
@@ -1286,7 +1207,6 @@ impl AppealFinanceTransactionForwarder {
             durable::mark_submitted(entry).map_err(Into::into)
         })
     }
-
     /// Return a known pre-queue failure to exact signed state.
     pub fn mark_not_submitted(
         &self,
@@ -1296,7 +1216,6 @@ impl AppealFinanceTransactionForwarder {
             durable::mark_not_submitted(entry).map_err(Into::into)
         })
     }
-
     /// Consume one definitely-not-submitted retry, preserving exact signed bytes.
     pub fn mark_retryable_submission_failed(
         &self,
@@ -1334,7 +1253,6 @@ impl AppealFinanceTransactionForwarder {
         }
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Retry exact signed bytes after authoritative finalized absence.
     pub fn mark_finalized_absent(
         &self,
@@ -1360,7 +1278,6 @@ impl AppealFinanceTransactionForwarder {
         }
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Reconcile semantic success committed through any peer.
     pub fn mark_semantic_finalized(
         &self,
@@ -1392,7 +1309,6 @@ impl AppealFinanceTransactionForwarder {
         candidate.completed.sort_by_key(|entry| entry.operation_id);
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Dead-letter a semantic conflict.
     pub fn mark_finalized_conflict(
         &self,
@@ -1411,7 +1327,6 @@ impl AppealFinanceTransactionForwarder {
         )?;
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Dead-letter an operation whose bound governed policy is no longer active.
     pub fn mark_policy_superseded(
         &self,
@@ -1430,7 +1345,6 @@ impl AppealFinanceTransactionForwarder {
         )?;
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Dead-letter a malformed or noncanonical durable reconciliation context.
     pub fn mark_invalid_context(
         &self,
@@ -1449,7 +1363,6 @@ impl AppealFinanceTransactionForwarder {
         )?;
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Dead-letter an operation whose governed signer binding is terminally inactive.
     pub fn mark_signer_binding_inactive(
         &self,
@@ -1468,7 +1381,6 @@ impl AppealFinanceTransactionForwarder {
         )?;
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Dead-letter a finalized cursor rollback or same-height fork.
     pub fn mark_stale_finalized_cursor(
         &self,
@@ -1490,7 +1402,6 @@ impl AppealFinanceTransactionForwarder {
         )?;
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Clear a terminally rejected envelope for bounded replacement signing.
     pub fn mark_transaction_rejected(
         &self,
@@ -1518,7 +1429,6 @@ impl AppealFinanceTransactionForwarder {
         }
         self.commit_candidate(&mut state, candidate)
     }
-
     fn move_to_dead_letter(
         &self,
         checkpoint: &mut CheckpointBodyV1,
@@ -1546,7 +1456,6 @@ impl AppealFinanceTransactionForwarder {
             .sort_by_key(|entry| entry.operation_id);
         Ok(())
     }
-
     fn mutate_entry(
         &self,
         operation_id: [u8; 32],
@@ -1557,7 +1466,6 @@ impl AppealFinanceTransactionForwarder {
         mutate(find_pending_mut(&mut candidate, operation_id)?)?;
         self.commit_candidate(&mut state, candidate)
     }
-
     fn lock_state(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, DurableState>, AppealFinanceTransactionForwarderError>
@@ -1571,7 +1479,6 @@ impl AppealFinanceTransactionForwarder {
         }
         Ok(state)
     }
-
     fn commit_candidate(
         &self,
         state: &mut DurableState,
@@ -1647,7 +1554,6 @@ impl AppealFinanceTransactionForwarder {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone)]
 struct PreparedOperation {
     identity_scope: StoredIdentityScopeV1,
@@ -1660,7 +1566,6 @@ struct PreparedOperation {
     expected_record: Option<AssetEscrowRecord>,
     reconciliation_context: Vec<u8>,
 }
-
 #[derive(Debug, Clone, NoritoSerialize)]
 struct PreparedOperationMaterialV1 {
     network_id: NetworkId,
@@ -1670,14 +1575,12 @@ struct PreparedOperationMaterialV1 {
     expected_record: Option<AssetEscrowRecord>,
     reconciliation_context: Vec<u8>,
 }
-
 #[derive(Debug, Clone, NoritoSerialize)]
 struct DrawdownIdentityMaterialV1 {
     escrow_id: EscrowId,
     amount: Quantity,
     expected_remaining_amount: Quantity,
 }
-
 impl PreparedOperation {
     fn new(
         network_id: NetworkId,
@@ -1716,7 +1619,6 @@ impl PreparedOperation {
             reconciliation_context,
         })
     }
-
     fn new_bounded(
         network_id: NetworkId,
         chain_id: ChainId,
@@ -1748,7 +1650,6 @@ impl PreparedOperation {
         }
         Ok(prepared)
     }
-
     fn decode_signed_transaction(
         bytes: &[u8],
         expected_network_id: &NetworkId,
@@ -1810,7 +1711,6 @@ impl PreparedOperation {
             max_transaction_bytes,
         )
     }
-
     fn operation_id(&self) -> [u8; 32] {
         operation_id_from_parts(
             self.identity_scope,
@@ -1819,13 +1719,11 @@ impl PreparedOperation {
         )
     }
 }
-
 fn validate_xor_quantity(amount: &Quantity) -> Result<(), AppealFinanceTransactionForwarderError> {
     XorQuantity::try_from_quantity(amount.clone())
         .map(|_| ())
         .map_err(|_| AppealFinanceTransactionForwarderError::InvalidOperation)
 }
-
 fn validate_operation(
     operation: &AppealFinanceOperationV1,
     authority: &AccountId,
@@ -1890,7 +1788,6 @@ fn validate_operation(
     }
     Ok(())
 }
-
 /// Reconcile exact semantics against one finalized authoritative escrow.
 pub fn reconcile_appeal_finance_operation_v1(
     request: &AppealFinanceTransactionSigningRequestV1,
@@ -1981,7 +1878,6 @@ pub fn reconcile_appeal_finance_operation_v1(
         }
     })
 }
-
 fn same_lock_identity(left: &AssetEscrowRecord, right: &AssetEscrowRecord) -> bool {
     left.id == right.id
         && left.seller == right.seller
@@ -1999,7 +1895,6 @@ fn same_lock_identity(left: &AssetEscrowRecord, right: &AssetEscrowRecord) -> bo
         && left.disputed_at_ms == right.disputed_at_ms
         && left.resolution == right.resolution
 }
-
 fn has_canonical_open_lock_lifecycle(record: &AssetEscrowRecord) -> bool {
     record.accepted_at_ms.is_none()
         && record.payment_sent_at_ms.is_none()
@@ -2007,7 +1902,6 @@ fn has_canonical_open_lock_lifecycle(record: &AssetEscrowRecord) -> bool {
         && record.closed_at_ms.is_none()
         && record.resolution.is_none()
 }
-
 fn operation_identity(
     operation: &AppealFinanceOperationV1,
 ) -> Result<(StoredIdentityScopeV1, [u8; 32]), AppealFinanceTransactionForwarderError> {
@@ -2041,7 +1935,6 @@ fn operation_identity(
     hasher.update(&bytes);
     Ok((scope, *hasher.finalize().as_bytes()))
 }
-
 fn semantic_digest(
     network_id: &NetworkId,
     chain_id: &ChainId,
@@ -2069,7 +1962,6 @@ fn semantic_digest(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn operation_id_from_parts(
     scope: StoredIdentityScopeV1,
     identity_digest: [u8; 32],
@@ -2082,11 +1974,9 @@ fn operation_id_from_parts(
     hasher.update(&semantic_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn transaction_digest(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()
 }
-
 fn find_pending_mut(
     checkpoint: &mut CheckpointBodyV1,
     operation_id: [u8; 32],
@@ -2097,7 +1987,6 @@ fn find_pending_mut(
         .find(|entry| entry.operation_id == operation_id)
         .ok_or(AppealFinanceTransactionForwarderError::UnknownOperation)
 }
-
 fn pending_position(
     checkpoint: &CheckpointBodyV1,
     operation_id: [u8; 32],
@@ -2108,13 +1997,11 @@ fn pending_position(
         .position(|entry| entry.operation_id == operation_id)
         .ok_or(AppealFinanceTransactionForwarderError::UnknownOperation)
 }
-
 fn validate_finalized_cursor(
     cursor: AppealFinanceFinalizedCursorV1,
 ) -> Result<(), AppealFinanceTransactionForwarderError> {
     durable::validate_finalized_cursor(cursor.into()).map_err(Into::into)
 }
-
 impl From<AppealFinanceFinalizedCursorV1> for FinalizedCursorV1 {
     fn from(value: AppealFinanceFinalizedCursorV1) -> Self {
         Self {
@@ -2123,7 +2010,6 @@ impl From<AppealFinanceFinalizedCursorV1> for FinalizedCursorV1 {
         }
     }
 }
-
 fn validate_request_cursor(
     request: &AppealFinanceTransactionSigningRequestV1,
     observed: AppealFinanceFinalizedCursorV1,
@@ -2136,14 +2022,12 @@ fn validate_request_cursor(
     }
     Ok(())
 }
-
 fn validate_observed_cursor(
     entry: &StoredPendingV1,
     observed: AppealFinanceFinalizedCursorV1,
 ) -> Result<(), AppealFinanceTransactionForwarderError> {
     validate_request_cursor(&entry.request(), observed)
 }
-
 fn validate_delivery(entry: &StoredPendingV1, max_attempts: u32) -> bool {
     let has_baseline =
         entry.baseline_finalized_height != 0 && entry.baseline_finalized_block_hash != [0; 32];
@@ -2157,7 +2041,6 @@ fn validate_delivery(entry: &StoredPendingV1, max_attempts: u32) -> bool {
     };
     has_baseline && valid_state && entry.attempts <= max_attempts
 }
-
 fn recover_interrupted_signing(entry: &mut StoredPendingV1) -> bool {
     if entry.state != StoredDeliveryStateV1::Signing {
         return false;
@@ -2165,7 +2048,6 @@ fn recover_interrupted_signing(entry: &mut StoredPendingV1) -> bool {
     entry.state = StoredDeliveryStateV1::Ready;
     true
 }
-
 fn claim_for_signing(
     entry: &mut StoredPendingV1,
     cursor: AppealFinanceFinalizedCursorV1,
@@ -2191,7 +2073,6 @@ fn claim_for_signing(
     entry.state = StoredDeliveryStateV1::Signing;
     Ok(())
 }
-
 fn store_signed_transaction(
     entry: &mut StoredPendingV1,
     bytes: Vec<u8>,
@@ -2206,7 +2087,6 @@ fn store_signed_transaction(
     entry.state = StoredDeliveryStateV1::Signed;
     Ok(())
 }
-
 fn release_signing_claim_preserving_cursor(
     entry: &mut StoredPendingV1,
 ) -> Result<(), AppealFinanceTransactionForwarderError> {
@@ -2216,7 +2096,6 @@ fn release_signing_claim_preserving_cursor(
     entry.state = StoredDeliveryStateV1::Ready;
     Ok(())
 }
-
 fn validate_checkpoint(
     checkpoint: &CheckpointBodyV1,
     policy: AppealFinanceTransactionForwarderPolicyV1,
@@ -2317,7 +2196,6 @@ fn validate_checkpoint(
     }
     Ok(())
 }
-
 fn validate_runtime_handle(value: &str) -> Result<(), AppealFinanceTransactionForwarderError> {
     validate_production_runtime_handle(value).map_err(|error| match error {
         ProductionRuntimeHandleError::InvalidSyntax | ProductionRuntimeHandleError::TestMarked => {
@@ -2325,7 +2203,6 @@ fn validate_runtime_handle(value: &str) -> Result<(), AppealFinanceTransactionFo
         }
     })
 }
-
 fn checked_checkpoint_verifying_key(bytes: [u8; 32]) -> Result<VerifyingKey, ()> {
     let key = VerifyingKey::from_bytes(&bytes).map_err(|_| ())?;
     if key.to_bytes() != bytes || key.is_weak() {
@@ -2333,7 +2210,6 @@ fn checked_checkpoint_verifying_key(bytes: [u8; 32]) -> Result<VerifyingKey, ()>
     }
     Ok(key)
 }
-
 fn checkpoint_canonical_digest<T: norito::NoritoSerialize>(
     domain: &[u8],
     value: &T,
@@ -2348,13 +2224,11 @@ fn checkpoint_canonical_digest<T: norito::NoritoSerialize>(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn checkpoint_body_digest(
     body: &CheckpointBodyV1,
 ) -> Result<[u8; 32], AppealFinanceTransactionForwarderError> {
     checkpoint_canonical_digest(CHECKPOINT_BODY_DIGEST_DOMAIN_V1, body)
 }
-
 fn authenticated_checkpoint_digest(
     checkpoint: &AuthenticatedCheckpointV1,
 ) -> Result<[u8; 32], AppealFinanceTransactionForwarderError> {
@@ -2363,14 +2237,12 @@ fn authenticated_checkpoint_digest(
     canonical.signature = [0; 64];
     checkpoint_canonical_digest(AUTHENTICATED_CHECKPOINT_DIGEST_DOMAIN_V1, &canonical)
 }
-
 fn checkpoint_signature_digest(checkpoint_digest: [u8; 32]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(AUTHENTICATED_CHECKPOINT_SIGNATURE_DOMAIN_V1);
     hasher.update(&checkpoint_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn validate_authenticated_checkpoint(
     checkpoint: &AuthenticatedCheckpointV1,
     policy: AppealFinanceTransactionForwarderPolicyV1,
@@ -2407,7 +2279,6 @@ fn validate_authenticated_checkpoint(
     )
     .map_err(|_| AppealFinanceTransactionForwarderError::InvalidAuthenticatedCheckpoint)
 }
-
 fn encode_authenticated_checkpoint(
     checkpoint: &AuthenticatedCheckpointV1,
     policy: AppealFinanceTransactionForwarderPolicyV1,
@@ -2423,7 +2294,6 @@ fn encode_authenticated_checkpoint(
     }
     Ok(bytes)
 }
-
 fn decode_authenticated_checkpoint(
     bytes: &[u8],
     policy: AppealFinanceTransactionForwarderPolicyV1,
@@ -2451,7 +2321,6 @@ fn decode_authenticated_checkpoint(
     validate_authenticated_checkpoint(&checkpoint, policy, authentication_policy)?;
     Ok(checkpoint)
 }
-
 fn sealed_checkpoint_record_revision(record: &AppealFinanceSealedCheckpointRecordV1) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(SEALED_CHECKPOINT_RECORD_REVISION_DOMAIN_V1);
@@ -2466,7 +2335,6 @@ fn sealed_checkpoint_record_revision(record: &AppealFinanceSealedCheckpointRecor
     hasher.update(&record.checkpoint_bytes);
     *hasher.finalize().as_bytes()
 }
-
 fn sealed_checkpoint_record_max_bytes(
     checkpoint_max_bytes: u64,
 ) -> Result<u64, AppealFinanceTransactionForwarderError> {
@@ -2477,7 +2345,6 @@ fn sealed_checkpoint_record_max_bytes(
         .checked_add(APPEAL_FINANCE_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1)
         .ok_or(AppealFinanceTransactionForwarderError::ResourceLimitExceeded)
 }
-
 fn decode_sealed_checkpoint(
     record: &AppealFinanceSealedCheckpointRecordV1,
     policy: AppealFinanceTransactionForwarderPolicyV1,
@@ -2493,7 +2360,6 @@ fn decode_sealed_checkpoint(
     }
     Ok(checkpoint)
 }
-
 fn verify_checkpoint_runtime_identity(
     policy: &AppealFinanceCheckpointAuthenticationPolicyV1,
     runtime: &dyn AppealFinanceCheckpointRuntime,
@@ -2515,7 +2381,6 @@ fn verify_checkpoint_runtime_identity(
     }
     Ok(())
 }
-
 fn sign_authenticated_checkpoint(
     body: CheckpointBodyV1,
     checkpoint_sequence: u64,
@@ -2562,7 +2427,6 @@ fn sign_authenticated_checkpoint(
     validate_authenticated_checkpoint(&checkpoint, policy, authentication_policy)?;
     Ok(checkpoint)
 }
-
 fn load_latest_qualified(
     authentication_policy: &AppealFinanceCheckpointAuthenticationPolicyV1,
     runtime: &dyn AppealFinanceCheckpointRuntime,
@@ -2572,7 +2436,6 @@ fn load_latest_qualified(
     verify_checkpoint_runtime_identity(authentication_policy, runtime)?;
     result.map_err(Into::into)
 }
-
 fn seal_checkpoint_record(
     runtime: &dyn AppealFinanceCheckpointRuntime,
     authentication_policy: &AppealFinanceCheckpointAuthenticationPolicyV1,
@@ -2626,7 +2489,6 @@ fn seal_checkpoint_record(
     verify_checkpoint_runtime_identity(authentication_policy, runtime)
         .map_err(|_| AppealFinanceTransactionForwarderError::CheckpointAuthenticationAmbiguous)
 }
-
 fn checkpoint_decode_limits(
     encoded_bytes: usize,
 ) -> Result<norito::DecodeLimits, AppealFinanceTransactionForwarderError> {
@@ -2639,7 +2501,6 @@ fn checkpoint_decode_limits(
         CHECKPOINT_MAX_NESTING_DEPTH,
     )
 }
-
 fn transaction_decode_limits(
     encoded_bytes: usize,
     max_transaction_bytes: usize,
@@ -2653,7 +2514,6 @@ fn transaction_decode_limits(
         TRANSACTION_MAX_NESTING_DEPTH,
     )
 }
-
 fn decode_limits(
     encoded_bytes: usize,
     max_bytes: usize,
@@ -2680,7 +2540,6 @@ fn decode_limits(
         max_depth,
     ))
 }
-
 /// Appeal-finance durable forwarding error.
 #[derive(Debug, Error)]
 pub enum AppealFinanceTransactionForwarderError {
@@ -2793,7 +2652,6 @@ pub enum AppealFinanceTransactionForwarderError {
     #[error("appeal-finance runtime lock is poisoned")]
     RuntimePoisoned,
 }
-
 impl From<DeliveryTransitionError> for AppealFinanceTransactionForwarderError {
     fn from(error: DeliveryTransitionError) -> Self {
         match error {
@@ -2803,7 +2661,6 @@ impl From<DeliveryTransitionError> for AppealFinanceTransactionForwarderError {
         }
     }
 }
-
 impl From<CheckpointStoreError> for AppealFinanceTransactionForwarderError {
     fn from(error: CheckpointStoreError) -> Self {
         match error {
@@ -2816,7 +2673,6 @@ impl From<CheckpointStoreError> for AppealFinanceTransactionForwarderError {
         }
     }
 }
-
 impl From<AppealFinanceCheckpointExternalError> for AppealFinanceTransactionForwarderError {
     fn from(error: AppealFinanceCheckpointExternalError) -> Self {
         match error {
@@ -2832,11 +2688,9 @@ impl From<AppealFinanceCheckpointExternalError> for AppealFinanceTransactionForw
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
-
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_crypto::numeric::Quantity;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -2848,9 +2702,7 @@ mod tests {
         transaction::{FeePaymentIntent, TransactionBuilder, signed::MultisigSignatures},
     };
     use tempfile::TempDir;
-
     use super::*;
-
     #[derive(Debug)]
     struct TestCheckpointRuntime {
         provider_handle: String,
@@ -2861,7 +2713,6 @@ mod tests {
             Mutex<Option<AppealFinanceRuntimeProviderQualificationV1>>,
         latest: Mutex<Option<AppealFinanceSealedCheckpointRecordV1>>,
     }
-
     impl TestCheckpointRuntime {
         fn new(seed: u8) -> Self {
             Self {
@@ -2875,7 +2726,6 @@ mod tests {
                 latest: Mutex::new(None),
             }
         }
-
         fn authentication_policy(&self) -> AppealFinanceCheckpointAuthenticationPolicyV1 {
             AppealFinanceCheckpointAuthenticationPolicyV1 {
                 version: APPEAL_FINANCE_CHECKPOINT_AUTHENTICATION_POLICY_VERSION_V1,
@@ -2885,14 +2735,12 @@ mod tests {
                 policy_digest: [self.key.to_bytes()[0]; 32],
             }
         }
-
         fn replace_qualification(
             &self,
             qualification: AppealFinanceRuntimeProviderQualificationV1,
         ) {
             *self.qualification.lock().expect("test qualification lock") = qualification;
         }
-
         fn replace_qualification_after_next_sign(
             &self,
             qualification: AppealFinanceRuntimeProviderQualificationV1,
@@ -2902,7 +2750,6 @@ mod tests {
                 .lock()
                 .expect("test post-sign qualification lock") = Some(qualification);
         }
-
         fn replace_qualification_after_next_compare_and_swap(
             &self,
             qualification: AppealFinanceRuntimeProviderQualificationV1,
@@ -2912,12 +2759,10 @@ mod tests {
                 .lock()
                 .expect("test post-CAS qualification lock") = Some(qualification);
         }
-
         fn replace_latest(&self, record: Option<AppealFinanceSealedCheckpointRecordV1>) {
             *self.latest.lock().expect("test sealed checkpoint lock") = record;
         }
     }
-
     impl AppealFinanceCheckpointRuntime for TestCheckpointRuntime {
         fn identity(
             &self,
@@ -2932,7 +2777,6 @@ mod tests {
                     .map_err(|_| AppealFinanceCheckpointExternalError::Unavailable)?,
             })
         }
-
         fn sign_digest(
             &self,
             digest: [u8; 32],
@@ -2952,7 +2796,6 @@ mod tests {
             }
             Ok(signature)
         }
-
         fn load_latest(
             &self,
         ) -> Result<
@@ -2964,7 +2807,6 @@ mod tests {
                 .map(|latest| latest.clone())
                 .map_err(|_| AppealFinanceCheckpointExternalError::Unavailable)
         }
-
         fn compare_and_swap_latest(
             &self,
             expected_revision: Option<[u8; 32]>,
@@ -2998,7 +2840,6 @@ mod tests {
             Ok(())
         }
     }
-
     fn open_durable(
         directory: &Path,
         runtime: Arc<TestCheckpointRuntime>,
@@ -3006,36 +2847,29 @@ mod tests {
         let authentication_policy = runtime.authentication_policy();
         AppealFinanceTransactionForwarder::open(directory, policy(), authentication_policy, runtime)
     }
-
     fn checkpoint_path(directory: &Path) -> std::path::PathBuf {
         directory.join(APPEAL_FINANCE_FORWARDER_CHECKPOINT_FILE_NAME_V1)
     }
-
     fn key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap()
     }
-
     fn account(seed: u8) -> AccountId {
         AccountId::new(key(seed).public_key().clone())
     }
-
     fn cursor(height: u64, hash: u8) -> AppealFinanceFinalizedCursorV1 {
         AppealFinanceFinalizedCursorV1 {
             height,
             block_hash: [hash; 32],
         }
     }
-
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; 32]),
         ))
     }
-
     fn test_network_id() -> NetworkId {
         network_id(0xA1)
     }
-
     fn policy() -> AppealFinanceTransactionForwarderPolicyV1 {
         AppealFinanceTransactionForwarderPolicyV1 {
             max_pending: 8,
@@ -3046,15 +2880,12 @@ mod tests {
             checkpoint_max_bytes: 8 * 1024 * 1024,
         }
     }
-
     fn escrow_id() -> EscrowId {
         EscrowId::new(Hash::new("appeal-finance-forwarder-test"))
     }
-
     fn asset_definition() -> AssetDefinitionId {
         "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().unwrap()
     }
-
     fn active_record() -> AssetEscrowRecord {
         AssetEscrowRecord {
             id: escrow_id(),
@@ -3078,7 +2909,6 @@ mod tests {
             resolution: None,
         }
     }
-
     fn drawdown_context() -> AppealFinanceTransactionContextV1 {
         AppealFinanceTransactionContextV1 {
             network_id: test_network_id(),
@@ -3088,7 +2918,6 @@ mod tests {
             reconciliation_context: vec![0xA1, 0x01],
         }
     }
-
     fn drawdown_operation() -> AppealFinanceOperationV1 {
         AppealFinanceOperationV1::Drawdown(DrawdownAssetLock::new(
             escrow_id(),
@@ -3096,7 +2925,6 @@ mod tests {
             Quantity::from(100_u32),
         ))
     }
-
     #[test]
     fn appeal_finance_operations_reject_non_xor_precision_before_queueing() {
         let forwarder = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
@@ -3120,7 +2948,6 @@ mod tests {
             forwarder.enqueue_unsigned_operation(account(1), open, &open_context),
             Err(AppealFinanceTransactionForwarderError::InvalidOperation)
         ));
-
         let invalid_drawdown = AppealFinanceOperationV1::Drawdown(DrawdownAssetLock::new(
             escrow_id(),
             invalid_xor.clone(),
@@ -3130,7 +2957,6 @@ mod tests {
             forwarder.enqueue_unsigned_operation(account(4), invalid_drawdown, &drawdown_context()),
             Err(AppealFinanceTransactionForwarderError::InvalidOperation)
         ));
-
         let invalid_precondition = AppealFinanceOperationV1::Drawdown(DrawdownAssetLock::new(
             escrow_id(),
             Quantity::from(60_u32),
@@ -3144,7 +2970,6 @@ mod tests {
             ),
             Err(AppealFinanceTransactionForwarderError::InvalidOperation)
         ));
-
         let mut poisoned_record = active_record();
         poisoned_record.amount = invalid_xor.clone();
         let poisoned_drawdown_context = AppealFinanceTransactionContextV1 {
@@ -3159,7 +2984,6 @@ mod tests {
             ),
             Err(AppealFinanceTransactionForwarderError::InvalidOperation)
         ));
-
         let mut poisoned_record = active_record();
         poisoned_record.remaining_amount = invalid_xor.clone();
         let poisoned_cancel_context = AppealFinanceTransactionContextV1 {
@@ -3172,10 +2996,8 @@ mod tests {
             forwarder.enqueue_unsigned_operation(account(1), cancel, &poisoned_cancel_context),
             Err(AppealFinanceTransactionForwarderError::InvalidOperation)
         ));
-
         assert!(forwarder.pending_after(None, 8).unwrap().is_empty());
     }
-
     #[test]
     fn cancel_operation_binds_the_observed_remaining_amount() {
         let forwarder = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
@@ -3183,14 +3005,12 @@ mod tests {
             escrow_id(),
             Quantity::from(99_u32),
         ));
-
         assert!(matches!(
             forwarder.enqueue_unsigned_operation(account(1), stale_cancel, &drawdown_context()),
             Err(AppealFinanceTransactionForwarderError::InvalidOperation)
         ));
         assert!(forwarder.pending_after(None, 8).unwrap().is_empty());
     }
-
     fn signed_bytes(
         signer: &KeyPair,
         authority: AccountId,
@@ -3198,7 +3018,6 @@ mod tests {
     ) -> Vec<u8> {
         signed_bytes_on_network(test_network_id(), signer, authority, operation)
     }
-
     fn signed_bytes_on_network(
         network_id: NetworkId,
         signer: &KeyPair,
@@ -3215,7 +3034,6 @@ mod tests {
         .unwrap();
         norito::to_bytes(&transaction).unwrap()
     }
-
     #[test]
     fn replay_is_idempotent_but_semantic_substitution_conflicts() {
         let forwarder = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
@@ -3242,7 +3060,6 @@ mod tests {
         ));
         assert_ne!(inserted.operation_id(), [0; 32]);
     }
-
     #[test]
     fn signed_envelope_rejects_wrong_authority_and_wrong_signature() {
         let forwarder = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
@@ -3256,7 +3073,6 @@ mod tests {
         forwarder
             .claim_for_signing(operation_id, cursor(7, 7))
             .unwrap();
-
         let wrong = key(5);
         let wrong_authority = AccountId::new(wrong.public_key().clone());
         let wrong_authority_bytes = signed_bytes(&wrong, wrong_authority, drawdown_operation());
@@ -3264,7 +3080,6 @@ mod tests {
             forwarder.store_signed_transaction(operation_id, &wrong_authority_bytes),
             Err(AppealFinanceTransactionForwarderError::InvalidSignedTransaction)
         ));
-
         let wrong_network_bytes = signed_bytes_on_network(
             network_id(0xF1),
             &signer,
@@ -3275,7 +3090,6 @@ mod tests {
             forwarder.store_signed_transaction(operation_id, &wrong_network_bytes),
             Err(AppealFinanceTransactionForwarderError::InvalidSignedTransaction)
         ));
-
         let mismatched_signature = {
             let transaction = TransactionBuilder::new(
                 test_network_id(),
@@ -3292,7 +3106,6 @@ mod tests {
             forwarder.store_signed_transaction(operation_id, &mismatched_signature),
             Err(AppealFinanceTransactionForwarderError::InvalidSignedTransaction)
         ));
-
         let valid = signed_bytes(&signer, account(4), drawdown_operation());
         assert_ne!(
             forwarder
@@ -3301,7 +3114,6 @@ mod tests {
             [0; 32]
         );
     }
-
     #[test]
     fn signed_envelope_rejects_proof_and_even_empty_multisig_sidecars() {
         let forwarder = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
@@ -3315,7 +3127,6 @@ mod tests {
         forwarder
             .claim_for_signing(operation_id, cursor(7, 7))
             .unwrap();
-
         let transaction_builder = || {
             TransactionBuilder::new(
                 test_network_id(),
@@ -3339,7 +3150,6 @@ mod tests {
             forwarder.store_signed_transaction(operation_id, &norito::to_bytes(&attached).unwrap()),
             Err(AppealFinanceTransactionForwarderError::InvalidSignedTransaction)
         ));
-
         let mut empty_multisig = transaction_builder()
             .try_sign(signer.private_key())
             .unwrap();
@@ -3352,7 +3162,6 @@ mod tests {
             ),
             Err(AppealFinanceTransactionForwarderError::InvalidSignedTransaction)
         ));
-
         let exact = transaction_builder()
             .try_sign(signer.private_key())
             .unwrap();
@@ -3365,7 +3174,6 @@ mod tests {
             [0; 32]
         );
     }
-
     #[test]
     fn crash_recovery_preserves_attempts_and_retry_exhaustion_dead_letters() {
         let dir = TempDir::new().unwrap();
@@ -3401,7 +3209,6 @@ mod tests {
             AppealFinanceTransactionDeadLetterReasonV1::RetryExhausted
         );
     }
-
     #[test]
     fn definitely_not_submitted_retries_are_bounded() {
         let forwarder = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
@@ -3425,14 +3232,12 @@ mod tests {
         forwarder
             .mark_retryable_submission_failed(operation_id, cursor(8, 8))
             .unwrap();
-
         assert!(forwarder.pending_after(None, 8).unwrap().is_empty());
         assert_eq!(
             forwarder.dead_letters(8).unwrap()[0].reason,
             AppealFinanceTransactionDeadLetterReasonV1::RetryExhausted
         );
     }
-
     #[test]
     fn completed_capacity_never_evicts_exactly_once_tombstones() {
         let mut bounded_policy = policy();
@@ -3446,7 +3251,6 @@ mod tests {
         forwarder
             .mark_semantic_finalized(first, cursor(8, 8))
             .unwrap();
-
         let cancel = AppealFinanceOperationV1::Cancel(CancelAssetLock::new(
             escrow_id(),
             Quantity::from(100_u32),
@@ -3474,7 +3278,6 @@ mod tests {
             "the original completion tombstone must remain replay-safe"
         );
     }
-
     #[test]
     fn reconciliation_proves_each_atomic_partition_and_rejects_stale_fork() {
         let record = active_record();
@@ -3510,7 +3313,6 @@ mod tests {
             .unwrap(),
             AppealFinanceOperationReconciliationV1::Conflict
         );
-
         let cancel = AppealFinanceTransactionSigningRequestV1 {
             operation_id: [2; 32],
             network_id: drawdown.network_id,
@@ -3537,7 +3339,6 @@ mod tests {
             reconcile_appeal_finance_operation_v1(&cancel, cursor(8, 9), Some(&after_cancel)),
             Err(AppealFinanceTransactionForwarderError::StaleFinalizedCursor)
         ));
-
         let mut forged_expected = record;
         forged_expected.closed_at_ms = Some(7);
         let forged = AppealFinanceTransactionSigningRequestV1 {
@@ -3555,7 +3356,6 @@ mod tests {
             Err(AppealFinanceTransactionForwarderError::InvalidOperation)
         ));
     }
-
     #[test]
     fn stale_same_height_fork_is_dead_lettered_without_signing() {
         let forwarder = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
@@ -3563,18 +3363,15 @@ mod tests {
             .enqueue_unsigned_operation(account(4), drawdown_operation(), &drawdown_context())
             .unwrap()
             .operation_id();
-
         forwarder
             .mark_stale_finalized_cursor(operation_id, cursor(7, 9))
             .unwrap();
-
         assert!(forwarder.pending_after(None, 8).unwrap().is_empty());
         assert_eq!(
             forwarder.dead_letters(8).unwrap()[0].reason,
             AppealFinanceTransactionDeadLetterReasonV1::StaleFinalizedCursor
         );
     }
-
     #[test]
     fn superseded_policy_and_invalid_context_are_distinct_terminal_reasons() {
         let superseded = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
@@ -3590,7 +3387,6 @@ mod tests {
             superseded.dead_letters(8).unwrap()[0].reason,
             AppealFinanceTransactionDeadLetterReasonV1::PolicySuperseded
         );
-
         let invalid = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
         let invalid_id = invalid
             .enqueue_unsigned_operation(account(4), drawdown_operation(), &drawdown_context())
@@ -3605,7 +3401,6 @@ mod tests {
             AppealFinanceTransactionDeadLetterReasonV1::InvalidContext
         );
     }
-
     #[test]
     fn inactive_signer_binding_is_a_payload_free_terminal_reason() {
         let forwarder = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
@@ -3614,11 +3409,9 @@ mod tests {
             .unwrap()
             .operation_id();
         let observed_cursor = cursor(8, 10);
-
         forwarder
             .mark_signer_binding_inactive(operation_id, observed_cursor)
             .unwrap();
-
         assert!(forwarder.pending_after(None, 8).unwrap().is_empty());
         let dead_letters = forwarder.dead_letters(8).unwrap();
         assert_eq!(dead_letters.len(), 1);
@@ -3640,7 +3433,6 @@ mod tests {
             observed_cursor.block_hash
         );
     }
-
     #[test]
     fn poisoned_checkpoint_fails_closed() {
         let dir = TempDir::new().unwrap();
@@ -3656,7 +3448,6 @@ mod tests {
             Err(AppealFinanceTransactionForwarderError::InvalidAuthenticatedCheckpoint)
         ));
     }
-
     #[test]
     fn sealed_checkpoint_record_has_one_bounded_canonical_persistence_format() {
         let dir = TempDir::new().unwrap();
@@ -3664,7 +3455,6 @@ mod tests {
         let forwarder = open_durable(dir.path(), runtime.clone()).unwrap();
         drop(forwarder);
         let record = runtime.load_latest().unwrap().unwrap();
-
         let bytes = record
             .to_canonical_bytes(policy().checkpoint_max_bytes)
             .unwrap();
@@ -3676,7 +3466,6 @@ mod tests {
             .unwrap(),
             record
         );
-
         let mut substituted = record;
         substituted.revision[0] ^= 0x80;
         let substituted_bytes = norito::to_bytes(&substituted).unwrap();
@@ -3688,7 +3477,6 @@ mod tests {
             Err(AppealFinanceTransactionForwarderError::InvalidSealedCheckpoint)
         ));
     }
-
     #[test]
     fn signed_checkpoint_tamper_fails_closed() {
         let dir = TempDir::new().unwrap();
@@ -3699,7 +3487,6 @@ mod tests {
             .enqueue_unsigned_operation(account(4), drawdown_operation(), &drawdown_context())
             .unwrap();
         drop(forwarder);
-
         let bytes = std::fs::read(checkpoint_path(dir.path())).unwrap();
         let mut checkpoint =
             decode_authenticated_checkpoint(&bytes, policy(), &authentication_policy).unwrap();
@@ -3709,13 +3496,11 @@ mod tests {
             norito::to_bytes(&checkpoint).unwrap(),
         )
         .unwrap();
-
         assert!(matches!(
             open_durable(dir.path(), runtime),
             Err(AppealFinanceTransactionForwarderError::InvalidAuthenticatedCheckpoint)
         ));
     }
-
     #[test]
     fn missing_or_rolled_back_sealed_head_fails_closed() {
         let dir = TempDir::new().unwrap();
@@ -3726,13 +3511,11 @@ mod tests {
             .unwrap();
         drop(forwarder);
         runtime.replace_latest(None);
-
         assert!(matches!(
             open_durable(dir.path(), runtime),
             Err(AppealFinanceTransactionForwarderError::CheckpointRollback)
         ));
     }
-
     #[test]
     fn validly_signed_same_sequence_substitution_is_a_fork() {
         let dir = TempDir::new().unwrap();
@@ -3743,7 +3526,6 @@ mod tests {
             .enqueue_unsigned_operation(account(4), drawdown_operation(), &drawdown_context())
             .unwrap();
         drop(forwarder);
-
         let bytes = std::fs::read(checkpoint_path(dir.path())).unwrap();
         let checkpoint =
             decode_authenticated_checkpoint(&bytes, policy(), &authentication_policy).unwrap();
@@ -3766,13 +3548,11 @@ mod tests {
             substituted.checkpoint_digest,
             substituted_bytes,
         )));
-
         assert!(matches!(
             open_durable(dir.path(), runtime),
             Err(AppealFinanceTransactionForwarderError::CheckpointFork)
         ));
     }
-
     #[test]
     fn crash_after_seal_before_local_rename_recovers_exact_head() {
         let dir = TempDir::new().unwrap();
@@ -3783,7 +3563,6 @@ mod tests {
             .enqueue_unsigned_operation(account(4), drawdown_operation(), &drawdown_context())
             .unwrap();
         drop(forwarder);
-
         let local_bytes = std::fs::read(checkpoint_path(dir.path())).unwrap();
         let local = decode_authenticated_checkpoint(&local_bytes, policy(), &authentication_policy)
             .unwrap();
@@ -3807,7 +3586,6 @@ mod tests {
         runtime
             .compare_and_swap_latest(Some(current.revision), &next_record)
             .unwrap();
-
         let restored = open_durable(dir.path(), runtime).unwrap();
         assert_eq!(
             std::fs::read(checkpoint_path(dir.path())).unwrap(),
@@ -3815,13 +3593,11 @@ mod tests {
         );
         assert_eq!(restored.pending_after(None, 8).unwrap().len(), 1);
     }
-
     #[test]
     fn substituted_runtime_identity_is_rejected_before_state_access() {
         let dir = TempDir::new().unwrap();
         let configured_runtime = Arc::new(TestCheckpointRuntime::new(47));
         let substituted_runtime = Arc::new(TestCheckpointRuntime::new(48));
-
         assert!(matches!(
             AppealFinanceTransactionForwarder::open(
                 dir.path(),
@@ -3833,14 +3609,12 @@ mod tests {
         ));
         assert!(!checkpoint_path(dir.path()).exists());
     }
-
     #[test]
     fn test_marked_checkpoint_provider_is_rejected_before_state_access() {
         let dir = TempDir::new().unwrap();
         let runtime = Arc::new(TestCheckpointRuntime::new(50));
         let mut authentication_policy = runtime.authentication_policy();
         authentication_policy.provider_handle = "hsm:dummy:appeal-finance".to_owned();
-
         assert!(matches!(
             AppealFinanceTransactionForwarder::open(
                 dir.path(),
@@ -3852,7 +3626,6 @@ mod tests {
         ));
         assert!(!checkpoint_path(dir.path()).exists());
     }
-
     #[test]
     fn checkpoint_provider_handles_use_central_production_grammar() {
         let runtime = TestCheckpointRuntime::new(49);
@@ -3862,7 +3635,6 @@ mod tests {
         authentication_policy
             .validate()
             .expect("canonical production provider handle");
-
         for handle in [
             "https://operator:secret@checkpoint",
             "https://checkpoint/path?credential=secret",
@@ -3877,7 +3649,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn qualification_drift_discards_candidate_before_durable_state_changes() {
         let dir = TempDir::new().unwrap();
@@ -3888,7 +3659,6 @@ mod tests {
         runtime.replace_qualification(AppealFinanceRuntimeProviderQualificationV1::new(
             2, [0xA5; 32],
         ));
-
         assert!(matches!(
             forwarder.enqueue_unsigned_operation(
                 account(4),
@@ -3904,7 +3674,6 @@ mod tests {
         );
         assert_eq!(runtime.load_latest().unwrap(), sealed_before);
     }
-
     #[test]
     fn post_sign_qualification_drift_discards_checkpoint_signature() {
         let dir = TempDir::new().unwrap();
@@ -3915,7 +3684,6 @@ mod tests {
         runtime.replace_qualification_after_next_sign(
             AppealFinanceRuntimeProviderQualificationV1::new(2, [0xA6; 32]),
         );
-
         assert!(matches!(
             forwarder.enqueue_unsigned_operation(
                 account(4),
@@ -3931,7 +3699,6 @@ mod tests {
         );
         assert_eq!(runtime.load_latest().unwrap(), sealed_before);
     }
-
     #[test]
     fn post_compare_and_swap_qualification_drift_is_ambiguous() {
         let dir = TempDir::new().unwrap();
@@ -3942,7 +3709,6 @@ mod tests {
         runtime.replace_qualification_after_next_compare_and_swap(
             AppealFinanceRuntimeProviderQualificationV1::new(2, [0xA7; 32]),
         );
-
         assert!(matches!(
             forwarder.enqueue_unsigned_operation(
                 account(4),

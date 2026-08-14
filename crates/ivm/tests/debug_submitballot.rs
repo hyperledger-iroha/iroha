@@ -1,5 +1,4 @@
 use iroha_data_model::isi as dm;
-
 #[test]
 fn decode_submit_ballot_roundtrip() {
     // Build a SubmitBallot, encode as InstructionBox, then decode and confirm type
@@ -17,7 +16,6 @@ fn decode_submit_ballot_roundtrip() {
     let bytes = norito::to_bytes(&ib).expect("encode InstructionBox");
     let decoded: dm::InstructionBox =
         norito::decode_from_bytes(&bytes).expect("decode InstructionBox");
-
     // Downcast to SubmitBallot via Instruction::as_any peeler
     let instr: &dyn dm::Instruction = &decoded;
     let recovered = instr

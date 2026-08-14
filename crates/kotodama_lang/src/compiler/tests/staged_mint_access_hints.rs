@@ -84,7 +84,6 @@ seiyaku StagedMintRequest {
   }
 }
 "#;
-
     let program = parse(src).expect("parse");
     let typed = analyze(&program).expect("analyze");
     let ir_prog = ir::lower_with_cap(&typed, usize::from(COLLECTION_ITERATION_CAP)).expect("lower");
@@ -95,14 +94,12 @@ seiyaku StagedMintRequest {
             crate::semantic::TypedItem::Function(func) => func,
         })
         .collect();
-
     let mut string_map: HashMap<(usize, ir::Temp), String> = HashMap::new();
     let mut string_literal_temps: HashSet<(usize, ir::Temp)> = HashSet::new();
     let mut dataref_kind_map: HashMap<(usize, ir::Temp), ir::DataRefKind> = HashMap::new();
     let mut int_const_map: HashMap<(usize, ir::Temp), i64> = HashMap::new();
     let mut param_temp_map: HashMap<(usize, usize), ir::Temp> = HashMap::new();
     let multiply_defined_dests = super::multiply_defined_temps(&ir_prog);
-
     use crate::ast::UnaryOp;
     use crate::ir::DataRefKind as DRK;
     for (func_idx, func) in ir_prog.functions.iter().enumerate() {
@@ -208,7 +205,6 @@ seiyaku StagedMintRequest {
             }
         }
     }
-
     let fn_index_by_name: HashMap<String, usize> = typed_functions
         .iter()
         .enumerate()
@@ -279,7 +275,6 @@ seiyaku StagedMintRequest {
             }
         }
     }
-
     let update_record_idx = ir_prog
         .functions
         .iter()
@@ -299,7 +294,6 @@ seiyaku StagedMintRequest {
             }
         }
     }
-
     assert_eq!(
         bases,
         vec![

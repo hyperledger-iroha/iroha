@@ -1,11 +1,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Pipeline transaction and block event surface coverage.
-
 use std::{
     io::{Read as _, Seek as _, SeekFrom},
     time::{Duration, Instant},
 };
-
 use eyre::{Result, WrapErr, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
@@ -23,11 +21,9 @@ use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
 };
-
 fn pipeline_event_timeout(network: &Network) -> Duration {
     network.sync_timeout().max(Duration::from_secs(60))
 }
-
 async fn test_with_instruction_and_status(
     context: &'static str,
     network: &Network,
@@ -35,10 +31,8 @@ async fn test_with_instruction_and_status(
     should_be: &TransactionStatus,
 ) -> Result<()> {
     let exec = exec.into();
-
     // Given
     let client = network.client();
-
     // When
     let transaction = client.build_transaction(
         exec,
@@ -54,7 +48,6 @@ async fn test_with_instruction_and_status(
     .await
     .wrap_err_with(|| format!("{context}: timed out opening pipeline event stream"))??;
     spawn_blocking(move || client.submit_transaction(&transaction)).await??;
-
     // Then
     timeout(event_timeout, async {
         let mut saw_queued = false;
@@ -84,15 +77,12 @@ async fn test_with_instruction_and_status(
     })
     .await
     .wrap_err_with(|| format!("{context}: timed out waiting for pipeline events"))??;
-
     events.close().await;
     Ok(())
 }
-
 #[allow(clippy::too_many_lines)]
 async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> Result<()> {
     let client = network.client();
-
     // When: submit a simple transaction to ensure a new non-genesis block is committed
     let kura_domain: DomainId = DomainId::try_new("kura-test", "universal")?;
     let register = domain_setup_instruction(&kura_domain, &client.account)?;
@@ -112,7 +102,6 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
         "applied_block_must_be_available_in_kura: timed out opening pipeline event stream",
     )??;
     spawn_blocking(move || client.submit_transaction(&tx)).await??;
-
     // Wait for the transaction pipeline to advance to Approved (committed)
     timeout(event_timeout, async {
         let mut saw_queued = false;
@@ -141,12 +130,10 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
     })
     .await?;
     events.close().await;
-
     // And wait until the peer reports at least 2 non-empty blocks (genesis + our tx)
     let peer = network.peer();
     peer.once_block_with(BlockHeight::predicate_non_empty(2))
         .await;
-
     // Then: the Kura storage on disk must contain at least two block entries
     let store_dir = peer.kura_store_dir();
     let lane_config = LaneConfig::default();
@@ -160,7 +147,6 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
     let hashes_path = blocks_dir.join("blocks.hashes");
     let index_path = blocks_dir.join("blocks.index");
     let data_path = blocks_dir.join("blocks.data");
-
     // Verify files exist
     assert!(
         hashes_path.exists(),
@@ -171,7 +157,6 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
         "blocks.index not found at {index_path:?}"
     );
     assert!(data_path.exists(), "blocks.data not found at {data_path:?}");
-
     // Wait for Kura writer to flush the new block to disk
     let expected_hash_bytes = 2 * 32;
     let expected_index_bytes = 2 * 16;
@@ -190,7 +175,6 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
         );
         sleep(Duration::from_millis(50)).await;
     }
-
     // Verify at least two hashes are present (32 bytes per hash)
     assert_eq!(
         hashes_len % 32,
@@ -201,7 +185,6 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
         hashes_len >= expected_hash_bytes,
         "expected at least two block hashes, got {hashes_len} bytes"
     );
-
     // Verify the index contains at least two entries (each entry is two u64 = 16 bytes)
     assert_eq!(
         index_len % 16,
@@ -213,7 +196,6 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
         "expected at least two block indices, got {index_len} bytes"
     );
     let index_count = index_len / 16;
-
     // Read the last block index and ensure the length is non-zero once Kura flushes.
     let deadline = Instant::now() + Duration::from_secs(15);
     let (start, length) = loop {
@@ -233,16 +215,13 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
         );
         sleep(Duration::from_millis(50)).await;
     };
-
     let mut data_file = std::fs::File::open(&data_path)?;
     data_file.seek(SeekFrom::Start(start))?;
     let mut block_buf = vec![0u8; usize::try_from(length).expect("block length fits in usize")];
     data_file.read_exact(&mut block_buf)?;
     assert!(!block_buf.is_empty(), "last block data must be non-empty");
-
     Ok(())
 }
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn pipeline_event_scenarios() -> Result<()> {
@@ -254,7 +233,6 @@ async fn pipeline_event_scenarios() -> Result<()> {
     else {
         return Ok(());
     };
-
     let domain = DomainId::try_new("looking-glass", "universal")?;
     let register = domain_setup_instruction(&domain, &network.client().account)?;
     test_with_instruction_and_status(
@@ -264,7 +242,6 @@ async fn pipeline_event_scenarios() -> Result<()> {
         &TransactionStatus::Approved,
     )
     .await?;
-
     let unknown_domain_id = DomainId::try_new("dummy", "universal")?;
     let fail_isi = Unregister::domain(unknown_domain_id.clone());
     test_with_instruction_and_status(
@@ -278,8 +255,6 @@ async fn pipeline_event_scenarios() -> Result<()> {
         ))),
     )
     .await?;
-
     applied_block_must_be_available_in_kura_scenario(&network).await?;
-
     Ok(())
 }

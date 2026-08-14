@@ -5,6 +5,30 @@ Last updated: 2026-08-14
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Workspace review closure
+
+- Freeze the shared worktree after the current optimization integration, then
+  complete the final governed-source/source-budget seal and authoritative full
+  formal proof-ledger checker before preparing a signed merge commit. Do not
+  treat validation from the earlier fifth integration merge as a receipt for
+  the current source tree.
+- After that freeze, use the official workflows to regenerate and check the
+  JavaScript current-Rust-contract fixture and generated-artifact registry.
+  Preserve the green SDK release guard after its end-to-end closure repin and
+  the completed environment-inventory and JavaScript receipt-header repairs.
+- For OpenAPI, first commit the final repaired inputs, regenerate the bundle
+  from that clean exact commit with truthful provenance, and commit the
+  generated outputs in a descendant. Refresh SF1 rows and projections only
+  with an authorized council re-sign over the current manifest digest.
+- Reconcile the merged Cargo manifests with the immutable lock policy before
+  authoritative workspace validation. Keep `Cargo.lock` unchanged unless a
+  reviewed lockfile update is supplied through the release process.
+- Finish borrowed, cache-/scratch-audited admission verification for default
+  w3f BLS, GOST, and SM2, and replace PQClean's heap-backed SHAKE workspace.
+  Extend the source-proven ordinary iterable adapter beyond `FindPeers` only
+  with producer-specific semantic parity and cold-Kura bounds. Then rerun the
+  focused Rust suites and strict all-target Clippy from the frozen candidate.
+
 ## Nexus topology model closure
 
 - Move physical validator/server membership, replication, privacy, DA, and
@@ -52,8 +76,8 @@ Completed history lives in [`status.md`](./status.md).
 
 Signed queries, ordinary transactions, peer authentication, core consensus
 preimages, NPoS and IVM VRF proofs, beacon helpers, SoraFS provider PoR VRF
-submissions, and their durable VRF snapshots now use the exact genesis-derived
-`NetworkId`. Signed
+submissions, SoraFS reputation-read authentication, and their durable VRF
+snapshots now use the exact genesis-derived `NetworkId`. Signed
 requests are fresh, fail closed on replay, and use one-shot owned transports;
 genesis transactions have a separate explicit domain and ordinary admission
 rejects it after initialization. Complete DAT-17 by replacing the remaining
@@ -1062,9 +1086,9 @@ The Rust-owned protocol-4 grouped fixture contains 55 negative controls and
 hashes to
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
 its grouped and diagnostics suite-source manifests hash to
-`92a87e705eccad8a63d32c1d4e0c8ce3c6167671905e4e7b76672cc60575606a`
+`2bc7845189fad1b66d33f3f2c87842a7c282e0b1d55344185d2d27f1c0d3c63f`
 and
-`c141cd7d6d379417af63b9712a2b9a5521327f5d88b33e6d55e71205655ee1e3`;
+`d865504a77bc35d48b4d52cb36deab51e55b02f250af36c37db06881769a91f5`;
 the synchronized 48-line wire TSV hashes to
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
@@ -1142,9 +1166,9 @@ The remaining work is evidence-driven and must stay in order:
   fixture SHA-256
   `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`,
   grouped/diagnostics suite-source manifest SHA-256 values
-  `92a87e705eccad8a63d32c1d4e0c8ce3c6167671905e4e7b76672cc60575606a`
+  `2bc7845189fad1b66d33f3f2c87842a7c282e0b1d55344185d2d27f1c0d3c63f`
   and
-  `c141cd7d6d379417af63b9712a2b9a5521327f5d88b33e6d55e71205655ee1e3`,
+  `d865504a77bc35d48b4d52cb36deab51e55b02f250af36c37db06881769a91f5`,
   and wire-TSV SHA-256
   `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
   The current harness inventories OpenAPI `7`, Python `62`, JavaScript `60`,

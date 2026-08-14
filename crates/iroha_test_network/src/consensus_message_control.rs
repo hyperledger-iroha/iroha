@@ -1,5 +1,4 @@
 //! Client side of the feature-isolated real-network consensus message controller.
-
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
@@ -11,7 +10,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
 use color_eyre::eyre::{Result, eyre};
 use iroha_crypto::{Hash as CryptoHash, HashOf};
 use iroha_data_model::{
@@ -25,7 +23,6 @@ use iroha_data_model::{
 };
 use norito::json::{Map, Value};
 use tokio::time::sleep;
-
 pub(crate) const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
 const CONTROL_FILE: &str = "command.norito.json";
 const ACK_FILE: &str = "ack.norito.json";
@@ -42,7 +39,6 @@ const MAX_RELEASES: usize = MAX_HOLDS;
 const DEFAULT_QUEUE_CAPACITY: usize = 512;
 const ACK_POLL: Duration = Duration::from_millis(10);
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
 /// Exact authoritative Sumeragi v2 payload kind matched by a receiver-local rule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ConsensusMessageControlKind {
@@ -74,7 +70,6 @@ pub enum ConsensusMessageControlKind {
     /// Commit-certificate response.
     CommitCertificateResponse,
 }
-
 impl ConsensusMessageControlKind {
     const fn as_str(self) -> &'static str {
         match self {
@@ -93,7 +88,6 @@ impl ConsensusMessageControlKind {
             Self::CommitCertificateResponse => "commit_certificate_response",
         }
     }
-
     fn parse(value: &str) -> Result<Self> {
         match value {
             "proposal" => Ok(Self::Proposal),
@@ -112,12 +106,10 @@ impl ConsensusMessageControlKind {
             _ => Err(eyre!("unknown consensus message-control kind `{value}`")),
         }
     }
-
     const fn has_exact_round(self) -> bool {
         !matches!(self, Self::PayloadChunk | Self::CommitCertificateRequest)
     }
 }
-
 /// Action taken when a rule matches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConsensusMessageControlAction {
@@ -126,7 +118,6 @@ pub enum ConsensusMessageControlAction {
     /// Retain the authenticated message in the receiver's bounded queue.
     Hold,
 }
-
 /// Exact feature-isolated Native AMX process-cut phase.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeAmxFaultPhase {
@@ -137,7 +128,6 @@ pub enum NativeAmxFaultPhase {
     /// Abort after constructing the exact State overlay and immediately before WSV publication.
     BeforeWorldCommit,
 }
-
 impl NativeAmxFaultPhase {
     const fn as_str(self) -> &'static str {
         match self {
@@ -146,7 +136,6 @@ impl NativeAmxFaultPhase {
             Self::BeforeWorldCommit => "before_world_commit",
         }
     }
-
     fn parse(value: &str) -> Result<Self> {
         match value {
             "after_prepare_qc" => Ok(Self::AfterPrepareQc),
@@ -156,7 +145,6 @@ impl NativeAmxFaultPhase {
         }
     }
 }
-
 /// Durable proof that the controlled daemon reached an exact Native AMX cut.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeAmxFaultAck {
@@ -167,7 +155,6 @@ pub struct NativeAmxFaultAck {
     /// Exact Native AMX source transaction identity.
     pub source_id: [u8; 32],
 }
-
 impl ConsensusMessageControlAction {
     const fn as_str(self) -> &'static str {
         match self {
@@ -175,7 +162,6 @@ impl ConsensusMessageControlAction {
             Self::Hold => "hold",
         }
     }
-
     fn parse(value: &str) -> Result<Self> {
         match value {
             "drop" => Ok(Self::Drop),
@@ -184,7 +170,6 @@ impl ConsensusMessageControlAction {
         }
     }
 }
-
 /// One exact receiver-local inbound rule.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsensusMessageControlRule {
@@ -203,7 +188,6 @@ pub struct ConsensusMessageControlRule {
     /// Drop or bounded hold action.
     pub action: ConsensusMessageControlAction,
 }
-
 impl ConsensusMessageControlRule {
     /// Construct a hash-agnostic direct rule, authenticating via `sender`.
     pub fn exact(
@@ -223,7 +207,6 @@ impl ConsensusMessageControlRule {
             action,
         }
     }
-
     /// Construct a hash-agnostic rule for traffic forwarded by an explicit relay.
     pub fn relayed(
         sender: PeerId,
@@ -243,7 +226,6 @@ impl ConsensusMessageControlRule {
             action,
         }
     }
-
     /// Further restrict this rule to one exact proposal block hash.
     #[must_use]
     pub fn with_block_hash(mut self, block_hash: HashOf<BlockHeader>) -> Self {
@@ -251,7 +233,6 @@ impl ConsensusMessageControlRule {
         self
     }
 }
-
 /// Descriptor for one message retained by a receiver.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsensusMessageControlHeld {
@@ -284,7 +265,6 @@ pub struct ConsensusMessageControlHeld {
     /// Original encoded P2P payload size.
     pub size_bytes: u64,
 }
-
 /// Canonical acknowledgement published by one controlled peer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsensusMessageControlAck {
@@ -325,7 +305,6 @@ pub struct ConsensusMessageControlAck {
     /// Revision that initiated the active or most recently completed drain.
     pub drain_fence: Option<u64>,
 }
-
 /// Per-peer handle for the feature-isolated controller.
 #[derive(Debug)]
 pub struct ConsensusMessageControl {
@@ -336,7 +315,6 @@ pub struct ConsensusMessageControl {
     next_native_amx_fault_revision: Mutex<u64>,
     operation: tokio::sync::Mutex<()>,
 }
-
 #[derive(Clone, Debug)]
 struct InitialCommand {
     command_digest: CryptoHash,
@@ -344,14 +322,12 @@ struct InitialCommand {
     queue_capacity: usize,
     staged: bool,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RootIdentity {
     device: u64,
     inode: u64,
     owner: u32,
 }
-
 struct ExpectedAck<'a> {
     revision: u64,
     command_digest: CryptoHash,
@@ -359,7 +335,6 @@ struct ExpectedAck<'a> {
     queue_capacity: usize,
     drain: bool,
 }
-
 impl ConsensusMessageControl {
     #[cfg(unix)]
     pub(crate) fn create(root: PathBuf) -> Result<Self> {
@@ -391,18 +366,15 @@ impl ConsensusMessageControl {
         control.initial_command.command_digest = command_digest;
         Ok(control)
     }
-
     #[cfg(not(unix))]
     pub(crate) fn create(_root: PathBuf) -> Result<Self> {
         Err(eyre!(
             "consensus message control requires Unix ownership/no-follow semantics"
         ))
     }
-
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }
-
     /// Replace the initial command before the daemon starts.
     ///
     /// The staged rules remain revision 1, so daemon initialization applies and
@@ -432,7 +404,6 @@ impl ConsensusMessageControl {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
-
         if self.initial_command.staged {
             return Err(eyre!(
                 "initial consensus message-control rules were already staged"
@@ -447,7 +418,6 @@ impl ConsensusMessageControl {
         };
         Ok(())
     }
-
     /// Wait until the daemon has pinned the directory and applied its initial command.
     pub async fn wait_until_ready(&self, timeout: Duration) -> Result<ConsensusMessageControlAck> {
         self.wait_for_revision(
@@ -463,7 +433,6 @@ impl ConsensusMessageControl {
         )
         .await
     }
-
     /// Atomically install rules and optionally release exact retained sequences.
     pub async fn apply(
         &self,
@@ -475,7 +444,6 @@ impl ConsensusMessageControl {
         self.apply_command(rules, release, queue_capacity, false, timeout)
             .await
     }
-
     async fn apply_command(
         &self,
         rules: &[ConsensusMessageControlRule],
@@ -513,7 +481,6 @@ impl ConsensusMessageControl {
         )
         .await
     }
-
     /// Clear all rules and release every retained message, including messages
     /// that raced with the first acknowledgement.
     pub async fn heal_and_release_all(
@@ -535,7 +502,6 @@ impl ConsensusMessageControl {
         }
         Ok(ack)
     }
-
     /// Read and validate the latest stable canonical acknowledgement.
     pub fn read_ack(&self) -> Result<ConsensusMessageControlAck> {
         validate_root_identity(&self.root, self.root_identity)?;
@@ -547,7 +513,6 @@ impl ConsensusMessageControl {
         validate_root_identity(&self.root, self.root_identity)?;
         parse_ack(&bytes)
     }
-
     /// Arm one exact, one-shot Native AMX process cut for this peer.
     ///
     /// `source_id` is the 32-byte digest of the exact signed source transaction,
@@ -582,7 +547,6 @@ impl ConsensusMessageControl {
         drop(next);
         Ok(revision)
     }
-
     /// Read and authenticate the latest durable Native AMX phase acknowledgement.
     pub fn read_native_amx_fault_ack(&self) -> Result<NativeAmxFaultAck> {
         validate_root_identity(&self.root, self.root_identity)?;
@@ -594,7 +558,6 @@ impl ConsensusMessageControl {
         validate_root_identity(&self.root, self.root_identity)?;
         parse_native_amx_fault(&bytes)
     }
-
     /// Wait until the daemon durably proves that it reached the armed phase.
     pub async fn wait_for_native_amx_fault(
         &self,
@@ -634,7 +597,6 @@ impl ConsensusMessageControl {
             sleep(ACK_POLL).await;
         }
     }
-
     async fn wait_for_revision(
         &self,
         expected: ExpectedAck<'_>,
@@ -718,7 +680,6 @@ impl ConsensusMessageControl {
             sleep(ACK_POLL).await;
         }
     }
-
     fn write_command(
         &self,
         revision: u64,
@@ -787,7 +748,6 @@ impl ConsensusMessageControl {
         Ok(CryptoHash::new(&bytes))
     }
 }
-
 fn ack_matches_expected(ack: &ConsensusMessageControlAck, expected: &ExpectedAck<'_>) -> bool {
     ack.revision == expected.revision
         && ack.command_digest == expected.command_digest
@@ -796,7 +756,6 @@ fn ack_matches_expected(ack: &ConsensusMessageControlAck, expected: &ExpectedAck
         && !ack.draining
         && (!expected.drain || ack.drain_fence == Some(expected.revision))
 }
-
 fn ack_matches_expected_release_in_progress(
     ack: &ConsensusMessageControlAck,
     expected: &ExpectedAck<'_>,
@@ -805,7 +764,6 @@ fn ack_matches_expected_release_in_progress(
         && ack_matches_expected(ack, expected)
         && (!ack.release_pending.is_empty() || ack.in_flight.is_some())
 }
-
 fn rule_value(rule: &ConsensusMessageControlRule) -> Value {
     object_value([
         ("action", Value::from(rule.action.as_str())),
@@ -825,7 +783,6 @@ fn rule_value(rule: &ConsensusMessageControlRule) -> Value {
         ("view", Value::from(rule.view)),
     ])
 }
-
 fn native_amx_fault_value(revision: u64, phase: NativeAmxFaultPhase, source_id: [u8; 32]) -> Value {
     object_value([
         ("phase", Value::from(phase.as_str())),
@@ -834,13 +791,11 @@ fn native_amx_fault_value(revision: u64, phase: NativeAmxFaultPhase, source_id: 
         ("version", Value::from(NATIVE_AMX_FAULT_FORMAT_VERSION)),
     ])
 }
-
 fn decode_lower_hex_32(value: &str) -> Option<[u8; 32]> {
     let bytes = value.as_bytes();
     if bytes.len() != 64 {
         return None;
     }
-
     let mut decoded = [0_u8; 32];
     for (output, pair) in decoded.iter_mut().zip(bytes.chunks_exact(2)) {
         let high = decode_lower_hex_nibble(pair[0])?;
@@ -849,7 +804,6 @@ fn decode_lower_hex_32(value: &str) -> Option<[u8; 32]> {
     }
     Some(decoded)
 }
-
 const fn decode_lower_hex_nibble(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
@@ -857,7 +811,6 @@ const fn decode_lower_hex_nibble(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
-
 fn parse_native_amx_fault(bytes: &[u8]) -> Result<NativeAmxFaultAck> {
     if bytes.is_empty() || bytes.len() > MAX_CONTROL_BYTES {
         return Err(eyre!("Native AMX fault acknowledgement has invalid size"));
@@ -899,7 +852,6 @@ fn parse_native_amx_fault(bytes: &[u8]) -> Result<NativeAmxFaultAck> {
         source_id,
     })
 }
-
 fn parse_ack(bytes: &[u8]) -> Result<ConsensusMessageControlAck> {
     if bytes.len() > MAX_ACK_BYTES {
         return Err(eyre!("message-control acknowledgement is too large"));
@@ -1108,7 +1060,6 @@ fn parse_ack(bytes: &[u8]) -> Result<ConsensusMessageControlAck> {
     }
     Ok(ack)
 }
-
 fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
     let object = exact_object(
         value,
@@ -1299,7 +1250,6 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
         size_bytes,
     })
 }
-
 fn parse_ack_rules(object: &Map) -> Result<Vec<ConsensusMessageControlRule>> {
     let values = object
         .get("rules")
@@ -1367,7 +1317,6 @@ fn parse_ack_rules(object: &Map) -> Result<Vec<ConsensusMessageControlRule>> {
     }
     Ok(rules)
 }
-
 fn parse_u64_array(object: &Map, field: &str, max: usize) -> Result<Vec<u64>> {
     let values = object
         .get(field)
@@ -1387,7 +1336,6 @@ fn parse_u64_array(object: &Map, field: &str, max: usize) -> Result<Vec<u64>> {
         })
         .collect()
 }
-
 fn require_strictly_increasing_positive(values: &[u64], field: &str) -> Result<()> {
     if values.first().is_some_and(|value| *value == 0)
         || values.windows(2).any(|pair| pair[0] >= pair[1])
@@ -1396,7 +1344,6 @@ fn require_strictly_increasing_positive(values: &[u64], field: &str) -> Result<(
     }
     Ok(())
 }
-
 fn exact_object<'a>(value: &'a Value, fields: &[&str], label: &str) -> Result<&'a Map> {
     let object = value
         .as_object()
@@ -1406,7 +1353,6 @@ fn exact_object<'a>(value: &'a Value, fields: &[&str], label: &str) -> Result<&'
     }
     Ok(object)
 }
-
 fn parse_canonical_peer(object: &Map, field: &str) -> Result<PeerId> {
     let literal = object
         .get(field)
@@ -1418,7 +1364,6 @@ fn parse_canonical_peer(object: &Map, field: &str) -> Result<PeerId> {
     }
     Ok(parsed)
 }
-
 fn parse_optional_canonical_hash(object: &Map, field: &str) -> Result<Option<HashOf<BlockHeader>>> {
     let Some(value) = object.get(field) else {
         return Err(eyre!("message-control record lacks hash `{field}`"));
@@ -1435,7 +1380,6 @@ fn parse_optional_canonical_hash(object: &Map, field: &str) -> Result<Option<Has
     }
     Ok(Some(parsed))
 }
-
 fn parse_canonical_crypto_hash(object: &Map, field: &str) -> Result<CryptoHash> {
     let literal = object
         .get(field)
@@ -1447,14 +1391,12 @@ fn parse_canonical_crypto_hash(object: &Map, field: &str) -> Result<CryptoHash> 
     }
     Ok(parsed)
 }
-
 fn required_u64(object: &Map, field: &str) -> Result<u64> {
     object
         .get(field)
         .and_then(Value::as_u64)
         .ok_or_else(|| eyre!("message-control acknowledgement lacks integer `{field}`"))
 }
-
 fn optional_u64(object: &Map, field: &str) -> Result<Option<u64>> {
     match object.get(field) {
         Some(Value::Null) => Ok(None),
@@ -1467,7 +1409,6 @@ fn optional_u64(object: &Map, field: &str) -> Result<Option<u64>> {
         )),
     }
 }
-
 fn optional_string(object: &Map, field: &str) -> Result<Option<String>> {
     match object.get(field) {
         Some(Value::Null) => Ok(None),
@@ -1478,11 +1419,9 @@ fn optional_string(object: &Map, field: &str) -> Result<Option<String>> {
         None => Err(eyre!("message-control acknowledgement lacks `{field}`")),
     }
 }
-
 fn canonical_json(value: &Value) -> Result<Vec<u8>> {
     Ok(norito::json::to_json(value)?.into_bytes())
 }
-
 fn object_value<const N: usize>(entries: [(&str, Value); N]) -> Value {
     let mut object = Map::new();
     for (key, value) in entries {
@@ -1490,11 +1429,9 @@ fn object_value<const N: usize>(entries: [(&str, Value); N]) -> Value {
     }
     Value::Object(object)
 }
-
 #[cfg(unix)]
 fn read_bounded_private_file(path: &Path, max_bytes: usize, owner: u32) -> Result<Vec<u8>> {
     use std::os::unix::fs::OpenOptionsExt;
-
     let named_before = fs::symlink_metadata(path)?;
     validate_private_file(&named_before, owner)?;
     if usize::try_from(named_before.len())
@@ -1555,14 +1492,12 @@ fn read_bounded_private_file(path: &Path, max_bytes: usize, owner: u32) -> Resul
     }
     Ok(bytes)
 }
-
 #[cfg(not(unix))]
 fn read_bounded_private_file(_path: &Path, _max_bytes: usize, _owner: u32) -> Result<Vec<u8>> {
     Err(eyre!(
         "consensus message control requires Unix ownership/no-follow semantics"
     ))
 }
-
 fn write_atomic_private_file(root: &Path, name: &str, bytes: &[u8], owner: u32) -> Result<()> {
     let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let temp = root.join(format!(".{name}.{}.{}.tmp", std::process::id(), sequence));
@@ -1604,7 +1539,6 @@ fn write_atomic_private_file(root: &Path, name: &str, bytes: &[u8], owner: u32) 
     }
     result
 }
-
 #[cfg(unix)]
 fn validate_private_root(metadata: &fs::Metadata) -> Result<RootIdentity> {
     use std::os::unix::fs::MetadataExt;
@@ -1620,14 +1554,12 @@ fn validate_private_root(metadata: &fs::Metadata) -> Result<RootIdentity> {
         owner: metadata.uid(),
     })
 }
-
 #[cfg(not(unix))]
 fn validate_private_root(_metadata: &fs::Metadata) -> Result<RootIdentity> {
     Err(eyre!(
         "consensus message control requires Unix ownership/no-follow semantics"
     ))
 }
-
 fn validate_root_identity(root: &Path, expected: RootIdentity) -> Result<()> {
     let metadata = fs::symlink_metadata(root)?;
     let actual = validate_private_root(&metadata)?;
@@ -1636,7 +1568,6 @@ fn validate_root_identity(root: &Path, expected: RootIdentity) -> Result<()> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn validate_private_file(metadata: &fs::Metadata, owner: u32) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
@@ -1650,31 +1581,26 @@ fn validate_private_file(metadata: &fs::Metadata, owner: u32) -> Result<()> {
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn validate_private_file(_metadata: &fs::Metadata, _owner: u32) -> Result<()> {
     Err(eyre!(
         "consensus message control requires Unix ownership/no-follow semantics"
     ))
 }
-
 #[cfg(unix)]
 fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(not(unix))]
 fn same_file(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use tempfile::tempdir;
-
     fn descriptor_peer() -> PeerId {
         PeerId::new(
             KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519)
@@ -1683,7 +1609,6 @@ mod tests {
                 .clone(),
         )
     }
-
     fn descriptor_subject() -> BlockSubject {
         BlockSubject {
             parent_block_hash: Some(HashOf::from_untyped_unchecked(CryptoHash::new(
@@ -1693,7 +1618,6 @@ mod tests {
             payload_hash: CryptoHash::new(b"descriptor-payload"),
         }
     }
-
     fn descriptor_execution_commitment() -> ExecutionCommitment {
         ExecutionCommitment::without_topups_or_merge_carrier(
             CryptoHash::new(b"descriptor-parent-state"),
@@ -1703,7 +1627,6 @@ mod tests {
             CryptoHash::new(b"descriptor-executed-wire"),
         )
     }
-
     fn held_descriptor(kind: ConsensusMessageControlKind) -> Value {
         let peer = descriptor_peer().to_string();
         let subject = descriptor_subject();
@@ -1819,7 +1742,6 @@ mod tests {
             ("view", view),
         ])
     }
-
     #[test]
     fn rule_constructors_bind_semantic_sender_and_authenticated_relay() {
         let sender = descriptor_peer();
@@ -1837,7 +1759,6 @@ mod tests {
             ConsensusMessageControlAction::Hold,
         );
         assert_eq!(direct.authenticated_via, sender);
-
         let relayed = ConsensusMessageControlRule::relayed(
             direct.sender.clone(),
             relay.clone(),
@@ -1854,7 +1775,6 @@ mod tests {
             encoded.get("authenticated_via").and_then(Value::as_str),
             Some(via_literal.as_str())
         );
-
         let second_relay = PeerId::new(
             KeyPair::try_from_seed(vec![0x45; 32], Algorithm::Ed25519)
                 .expect("second deterministic relay peer")
@@ -1885,7 +1805,6 @@ mod tests {
             "the same semantic and authenticated rule still overlaps"
         );
     }
-
     #[test]
     fn writer_rejects_duplicate_and_reordered_release_sequences() {
         let parent = tempdir().expect("temporary parent");
@@ -1894,7 +1813,6 @@ mod tests {
         assert!(control.write_command(2, &[], &[1, 1], 2, false).is_err());
         assert!(control.write_command(2, &[], &[2, 1], 2, false).is_err());
     }
-
     #[test]
     fn canonical_writer_has_explicit_version_and_bounds() {
         let parent = tempdir().expect("temporary parent");
@@ -1913,7 +1831,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn native_amx_fault_command_and_ack_bind_exact_phase_source_and_revision() {
         let parent = tempdir().expect("temporary parent");
@@ -1935,7 +1852,6 @@ mod tests {
                 source_id,
             }
         );
-
         write_atomic_private_file(
             &control.root,
             NATIVE_AMX_FAULT_ACK_FILE,
@@ -1949,7 +1865,6 @@ mod tests {
                 .expect("read exact acknowledgement"),
             parsed
         );
-
         let mut noncanonical: Value =
             norito::json::from_slice(&command).expect("parse command for mutation");
         noncanonical
@@ -1962,7 +1877,6 @@ mod tests {
         let uppercase = canonical_json(&noncanonical).expect("encode uppercase source");
         assert!(parse_native_amx_fault(&uppercase).is_err());
     }
-
     #[test]
     fn staged_initial_rules_replace_revision_one_before_startup() {
         let parent = tempdir().expect("temporary parent");
@@ -1977,11 +1891,9 @@ mod tests {
             0,
             ConsensusMessageControlAction::Drop,
         );
-
         control
             .stage_initial_rules(std::slice::from_ref(&rule), 17)
             .expect("stage initial rule");
-
         let bytes = fs::read(control.root.join(CONTROL_FILE)).expect("read staged command");
         let value: Value = norito::json::from_slice(&bytes).expect("parse staged command");
         assert_eq!(value.get("revision").and_then(Value::as_u64), Some(1));
@@ -2008,7 +1920,6 @@ mod tests {
         );
         assert!(control.stage_initial_rules(&[], 17).is_err());
     }
-
     fn empty_ack(digest: CryptoHash) -> ConsensusMessageControlAck {
         ConsensusMessageControlAck {
             revision: 2,
@@ -2031,7 +1942,6 @@ mod tests {
             drain_fence: None,
         }
     }
-
     #[test]
     fn exact_ack_binding_rejects_higher_revision_digest_rules_and_capacity_mismatch() {
         let digest = CryptoHash::new(b"expected");
@@ -2112,7 +2022,6 @@ mod tests {
             &expected
         ));
     }
-
     #[tokio::test]
     async fn controller_operations_are_serialized() {
         let parent = tempdir().expect("temporary parent");
@@ -2123,7 +2032,6 @@ mod tests {
         drop(first);
         assert!(control.operation.try_lock().is_ok());
     }
-
     #[test]
     fn ack_parser_rejects_unknown_schema_and_nonfatal_overflow() {
         let digest = CryptoHash::new(b"command");
@@ -2150,14 +2058,12 @@ mod tests {
         ]);
         let bytes = canonical_json(&base).expect("canonical ack");
         assert!(parse_ack(&bytes).is_ok());
-
         let mut unknown = base.clone();
         unknown
             .as_object_mut()
             .expect("object")
             .insert("unknown".to_owned(), Value::from(1_u64));
         assert!(parse_ack(&canonical_json(&unknown).expect("canonical unknown ack")).is_err());
-
         let mut overflow = base;
         overflow
             .as_object_mut()
@@ -2165,7 +2071,6 @@ mod tests {
             .insert("overflowed".to_owned(), Value::from(1_u64));
         assert!(parse_ack(&canonical_json(&overflow).expect("canonical overflow ack")).is_err());
     }
-
     #[test]
     fn ack_parser_enforces_terminal_disjointness_and_in_flight_capacity() {
         let digest = CryptoHash::new(b"terminal-command");
@@ -2193,7 +2098,6 @@ mod tests {
             ])
         };
         let parse = |value: &Value| parse_ack(&canonical_json(value).expect("canonical ack"));
-
         let mut retired = empty();
         retired.as_object_mut().expect("ack object").insert(
             "retired".to_owned(),
@@ -2202,7 +2106,6 @@ mod tests {
         let parsed = parse(&retired).expect("sorted positive retirement is valid");
         assert_eq!(parsed.retired, vec![1, 2]);
         assert!(parsed.delivered.is_empty());
-
         for invalid in [
             vec![Value::from(0_u64)],
             vec![Value::from(2_u64), Value::from(1_u64)],
@@ -2214,7 +2117,6 @@ mod tests {
                 .insert("retired".to_owned(), Value::Array(invalid));
             assert!(parse(&ack).is_err());
         }
-
         let mut terminal_overlap = empty();
         let object = terminal_overlap.as_object_mut().expect("ack object");
         object.insert(
@@ -2223,7 +2125,6 @@ mod tests {
         );
         object.insert("retired".to_owned(), Value::Array(vec![Value::from(1_u64)]));
         assert!(parse(&terminal_overlap).is_err());
-
         let mut valid_in_flight = empty();
         let object = valid_in_flight.as_object_mut().expect("ack object");
         object.insert("in_flight".to_owned(), Value::from(1_u64));
@@ -2231,12 +2132,10 @@ mod tests {
         let parsed = parse(&valid_in_flight).expect("in-flight bytes are explicitly retained");
         assert_eq!(parsed.in_flight, Some(1));
         assert_eq!(parsed.in_flight_bytes, 7);
-
         let mut in_flight_overlap = valid_in_flight;
         let object = in_flight_overlap.as_object_mut().expect("ack object");
         object.insert("retired".to_owned(), Value::Array(vec![Value::from(1_u64)]));
         assert!(parse(&in_flight_overlap).is_err());
-
         let held = held_descriptor(ConsensusMessageControlKind::PayloadChunk);
         let mut held_overlap = empty();
         let object = held_overlap.as_object_mut().expect("ack object");
@@ -2248,7 +2147,6 @@ mod tests {
         );
         object.insert("retired".to_owned(), Value::Array(vec![Value::from(1_u64)]));
         assert!(parse(&held_overlap).is_err());
-
         let mut over_count = empty();
         let object = over_count.as_object_mut().expect("ack object");
         object.insert("held".to_owned(), Value::Array(vec![held.clone()]));
@@ -2257,7 +2155,6 @@ mod tests {
         object.insert("in_flight_bytes".to_owned(), Value::from(1_u64));
         object.insert("queue_capacity".to_owned(), Value::from(1_u64));
         assert!(parse(&over_count).is_err());
-
         let mut over_bytes = empty();
         let object = over_bytes.as_object_mut().expect("ack object");
         object.insert("held".to_owned(), Value::Array(vec![held]));
@@ -2265,14 +2162,12 @@ mod tests {
         object.insert("in_flight".to_owned(), Value::from(2_u64));
         object.insert("in_flight_bytes".to_owned(), Value::from(MAX_HELD_BYTES));
         assert!(parse(&over_bytes).is_err());
-
         let mut missing_bytes = empty();
         missing_bytes
             .as_object_mut()
             .expect("ack object")
             .insert("in_flight".to_owned(), Value::from(1_u64));
         assert!(parse(&missing_bytes).is_err());
-
         let mut orphan_bytes = empty();
         orphan_bytes
             .as_object_mut()
@@ -2280,7 +2175,6 @@ mod tests {
             .insert("in_flight_bytes".to_owned(), Value::from(1_u64));
         assert!(parse(&orphan_bytes).is_err());
     }
-
     #[test]
     fn ack_parser_models_chunk_rounds_as_absent_and_rejects_fabrication() {
         let key = KeyPair::try_from_seed(vec![17_u8; 32], Algorithm::Ed25519)
@@ -2335,7 +2229,6 @@ mod tests {
         assert_eq!(parsed.held[0].signer, Some(0));
         assert!(parsed.held[0].subject.is_none());
         assert!(parsed.held[0].execution_commitment.is_none());
-
         let mut relayed = chunk.clone();
         relayed.as_object_mut().expect("chunk descriptor").insert(
             "authenticated_via".to_owned(),
@@ -2356,7 +2249,6 @@ mod tests {
             parsed_relayed.held[0].sender,
             parsed_relayed.held[0].authenticated_via
         );
-
         let mut missing_signer = chunk.clone();
         missing_signer
             .as_object_mut()
@@ -2366,7 +2258,6 @@ mod tests {
             parse_ack(&canonical_json(&ack(missing_signer)).expect("canonical missing-signer ack"))
                 .is_err()
         );
-
         let mut inconsistent_subject = chunk.clone();
         inconsistent_subject
             .as_object_mut()
@@ -2382,7 +2273,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut malformed_digest = chunk.clone();
         malformed_digest
             .as_object_mut()
@@ -2397,7 +2287,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut subjectless_vote = chunk.clone();
         {
             let subjectless_vote = subjectless_vote.as_object_mut().expect("chunk descriptor");
@@ -2411,7 +2300,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut timeout_certificate = chunk.clone();
         let timeout_certificate_object = timeout_certificate
             .as_object_mut()
@@ -2435,7 +2323,6 @@ mod tests {
             )
             .is_ok()
         );
-
         let mut signerless_certificate = timeout_certificate.clone();
         signerless_certificate
             .as_object_mut()
@@ -2448,7 +2335,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut duplicate_certificate_signer = timeout_certificate;
         duplicate_certificate_signer
             .as_object_mut()
@@ -2464,7 +2350,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut fabricated = chunk;
         fabricated
             .as_object_mut()
@@ -2474,7 +2359,6 @@ mod tests {
             parse_ack(&canonical_json(&ack(fabricated)).expect("canonical invalid ack")).is_err()
         );
     }
-
     #[test]
     fn held_descriptor_parser_accepts_every_daemon_payload_shape() {
         for kind in [
@@ -2505,7 +2389,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn held_descriptor_parser_rejects_invalid_execution_and_certificate_shapes() {
         let mut invalid_execution = held_descriptor(ConsensusMessageControlKind::PrepareVote);
@@ -2517,7 +2400,6 @@ mod tests {
             .expect("execution commitment")
             .insert("topup_anchor_count".to_owned(), Value::from(1_u64));
         assert!(parse_held(&invalid_execution).is_err());
-
         let mut reordered = held_descriptor(ConsensusMessageControlKind::PrepareCertificate);
         reordered
             .as_object_mut()
@@ -2527,7 +2409,6 @@ mod tests {
                 Value::Array(vec![Value::from(1_u64), Value::from(0_u64)]),
             );
         assert!(parse_held(&reordered).is_err());
-
         let mut missing_cited_responder =
             held_descriptor(ConsensusMessageControlKind::CertifiedBodyResponse);
         missing_cited_responder
@@ -2535,7 +2416,6 @@ mod tests {
             .expect("certified response descriptor")
             .insert("cited_responder".to_owned(), Value::Null);
         assert!(parse_held(&missing_cited_responder).is_err());
-
         let mut false_response_signer =
             held_descriptor(ConsensusMessageControlKind::CertifiedBodyResponse);
         false_response_signer
@@ -2543,7 +2423,6 @@ mod tests {
             .expect("certified response descriptor")
             .insert("signer".to_owned(), Value::from(0_u64));
         assert!(parse_held(&false_response_signer).is_err());
-
         let mut spurious_cited_responder =
             held_descriptor(ConsensusMessageControlKind::PrepareVote);
         spurious_cited_responder
@@ -2552,12 +2431,10 @@ mod tests {
             .insert("cited_responder".to_owned(), Value::from(0_u64));
         assert!(parse_held(&spurious_cited_responder).is_err());
     }
-
     #[cfg(unix)]
     #[test]
     fn acknowledgement_reader_rejects_symlink_and_hardlink_sources() {
         use std::os::unix::fs::{PermissionsExt, symlink};
-
         let parent = tempdir().expect("temporary parent");
         let control =
             ConsensusMessageControl::create(parent.path().join("control")).expect("create control");

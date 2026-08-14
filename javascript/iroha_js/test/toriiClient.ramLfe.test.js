@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import test from "node:test";
 
-import { AccountAddress, ToriiClient } from "../src/index.js";
+import { AccountAddress, LocalSigningContext, NetworkId, ToriiClient } from "../src/index.js";
 
 function ed25519PublicKeyBytes() {
   const { publicKey } = generateKeyPairSync("ed25519");
@@ -23,6 +23,8 @@ function jsonResponse(status, body) {
 }
 
 const ACCOUNT_ID = demoAccountId();
+const APPLICATION_SIGNING_CONTEXT = new LocalSigningContext(NetworkId.fromBytes(Buffer.alloc(32, 0xa5)));
+const APPLICATION_AUTH = Object.freeze({ accountId: ACCOUNT_ID, privateKey: Buffer.alloc(32, 0x5a) });
 const PROGRAM_ID = "identifier_lookup_retail";
 const OPAQUE_HASH = "11".repeat(32);
 const RECEIPT_HASH = "22".repeat(32);
@@ -225,6 +227,7 @@ test("listRamLfeProgramPolicies rejects non-exact proof-verifier metadata", asyn
 
 test("executeRamLfeProgram preserves the receipt and normalizes the output opening", async () => {
   const client = new ToriiClient("https://example.test", {
+    localSigningContext: APPLICATION_SIGNING_CONTEXT,
     fetchImpl: async (input, init) => {
       assert.equal(init.method, "POST");
       assert.equal(
@@ -241,6 +244,7 @@ test("executeRamLfeProgram preserves the receipt and normalizes the output openi
 
   const result = await client.executeRamLfeProgram(PROGRAM_ID, {
     encryptedInput: "ABCD",
+    canonicalAuth: APPLICATION_AUTH,
   });
   assert.equal(result.program_id, PROGRAM_ID);
   assert.equal(result.output_ciphertext, "C0FFEE");
@@ -298,10 +302,11 @@ test("executeRamLfeProgram rejects non-exact response fields", async () => {
 
   for (const [field, body, expectedPattern] of cases) {
     const client = new ToriiClient("https://example.test", {
+      localSigningContext: APPLICATION_SIGNING_CONTEXT,
       fetchImpl: async () => jsonResponse(200, body),
     });
     await assert.rejects(
-      () => client.executeRamLfeProgram(PROGRAM_ID, { encryptedInput: "ABCD" }),
+      () => client.executeRamLfeProgram(PROGRAM_ID, { encryptedInput: "ABCD", canonicalAuth: APPLICATION_AUTH }),
       expectedPattern ?? new RegExp(`ram-lfe execute response\\.${field}`),
       `RAM-LFE execute response ${field} exactness`,
     );
@@ -310,6 +315,7 @@ test("executeRamLfeProgram rejects non-exact response fields", async () => {
 
 test("executeRamLfeProgram returns null for missing programs", async () => {
   const client = new ToriiClient("https://example.test", {
+    localSigningContext: APPLICATION_SIGNING_CONTEXT,
     fetchImpl: async (_input, init) => {
       const payload = JSON.parse(init.body);
       assert.equal(payload.encrypted_input, "ABCD");
@@ -319,6 +325,7 @@ test("executeRamLfeProgram returns null for missing programs", async () => {
 
   const result = await client.executeRamLfeProgram(PROGRAM_ID, {
     encryptedInput: "ABCD",
+    canonicalAuth: APPLICATION_AUTH,
   });
   assert.equal(result, null);
 });
@@ -331,13 +338,14 @@ test("executeRamLfeProgram rejects unsupported inputHex option", async () => {
   });
 
   await assert.rejects(
-    () => client.executeRamLfeProgram(PROGRAM_ID, { inputHex: "ABCD" }),
+    () => client.executeRamLfeProgram(PROGRAM_ID, { inputHex: "ABCD", canonicalAuth: APPLICATION_AUTH }),
     (error) => error.name === "ValidationError",
   );
 });
 
 test("verifyRamLfeReceipt posts raw receipt payloads", async () => {
   const client = new ToriiClient("https://example.test", {
+    localSigningContext: APPLICATION_SIGNING_CONTEXT,
     fetchImpl: async (input, init) => {
       assert.equal(init.method, "POST");
       assert.equal(new URL(input).pathname, "/v1/ram-lfe/receipts/verify");
@@ -353,6 +361,7 @@ test("verifyRamLfeReceipt posts raw receipt payloads", async () => {
   const result = await client.verifyRamLfeReceipt({
     receipt: RECEIPT,
     outputHex: "C0FFEE",
+    canonicalAuth: APPLICATION_AUTH,
   });
   assert.equal(result.valid, true);
   assert.equal(result.program_id, PROGRAM_ID);
@@ -373,10 +382,11 @@ test("verifyRamLfeReceipt rejects non-exact response fields", async () => {
 
   for (const [field, body] of cases) {
     const client = new ToriiClient("https://example.test", {
+      localSigningContext: APPLICATION_SIGNING_CONTEXT,
       fetchImpl: async () => jsonResponse(200, body),
     });
     await assert.rejects(
-      () => client.verifyRamLfeReceipt({ receipt: RECEIPT, outputHex: "C0FFEE" }),
+      () => client.verifyRamLfeReceipt({ receipt: RECEIPT, outputHex: "C0FFEE", canonicalAuth: APPLICATION_AUTH }),
       new RegExp(`ram-lfe receipt verify response\\.${field}`),
       `RAM-LFE receipt verify response ${field} exactness`,
     );

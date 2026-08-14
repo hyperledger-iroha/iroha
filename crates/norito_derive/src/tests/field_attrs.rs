@@ -1,7 +1,5 @@
 //! Field-attribute parser and validation tests.
-
 use super::*;
-
 #[test]
 fn needs_size_attribute_is_parsed() {
     let field: syn::Field = syn::parse_quote! {
@@ -11,7 +9,73 @@ fn needs_size_attribute_is_parsed() {
     let attrs = FieldAttr::parse(&field.attrs).expect("valid field attribute");
     assert!(attrs.needs_size);
 }
-
+#[test]
+fn bounded_with_attribute_is_parsed_and_duplicate_is_rejected() {
+    let field: syn::Field = syn::parse_quote! {
+        #[norito(bounded_with = "checked::serialize")]
+        demo: u32
+    };
+    let attrs = FieldAttr::parse(&field.attrs).expect("valid bounded writer attribute");
+    assert_eq!(
+        attrs
+            .bounded_with
+            .expect("bounded writer path")
+            .to_token_stream()
+            .to_string(),
+        "checked :: serialize"
+    );
+    let duplicate: syn::Field = syn::parse_quote! {
+        #[norito(
+            bounded_with = "checked::serialize",
+            bounded_with = "checked::other"
+        )]
+        demo: u32
+    };
+    let error = FieldAttr::parse(&duplicate.attrs).expect_err("duplicate path must reject");
+    assert_eq!(error.to_string(), "duplicate `bounded_with` attribute");
+}
+#[test]
+fn json_attribute_expands_the_checked_module_writer() {
+    let field: syn::Field = syn::parse_quote! {
+        #[norito(json = "checked")]
+        demo: u32
+    };
+    let attrs = FieldAttr::parse(&field.attrs).expect("valid checked helper module attribute");
+    assert_eq!(
+        attrs
+            .with
+            .expect("ordinary helper module")
+            .to_token_stream()
+            .to_string(),
+        "checked"
+    );
+    assert_eq!(
+        attrs
+            .bounded_with
+            .expect("checked helper function")
+            .to_token_stream()
+            .to_string(),
+        "checked :: serialize_bounded"
+    );
+    let conflicting: syn::Field = syn::parse_quote! {
+        #[norito(with = "legacy", json = "checked")]
+        demo: u32
+    };
+    let error = FieldAttr::parse(&conflicting.attrs).expect_err("mixed helper modes must reject");
+    assert_eq!(
+        error.to_string(),
+        "`json` cannot be combined with `with` or `bounded_with`"
+    );
+    let reversed: syn::Field = syn::parse_quote! {
+        #[norito(json = "checked", bounded_with = "legacy::serialize")]
+        demo: u32
+    };
+    let error = FieldAttr::parse(&reversed.attrs).expect_err("reversed helper mix must reject");
+    assert_eq!(
+        error.to_string(),
+        "`json` cannot be combined with `with` or `bounded_with`"
+    );
+}
 #[test]
 fn required_attribute_is_parsed_and_duplicate_is_rejected() {
     let field: syn::Field = syn::parse_quote! {
@@ -20,7 +84,6 @@ fn required_attribute_is_parsed_and_duplicate_is_rejected() {
     };
     let attrs = FieldAttr::parse(&field.attrs).expect("valid required attribute");
     assert!(attrs.required);
-
     let duplicate: syn::Field = syn::parse_quote! {
         #[norito(required, required)]
         demo: Option<u32>
@@ -28,7 +91,6 @@ fn required_attribute_is_parsed_and_duplicate_is_rejected() {
     let error = FieldAttr::parse(&duplicate.attrs).expect_err("duplicate required must reject");
     assert_eq!(error.to_string(), "duplicate `required` attribute");
 }
-
 #[test]
 fn required_attribute_rejects_value_and_incompatible_uses() {
     let valued: syn::Field = syn::parse_quote! {
@@ -37,7 +99,6 @@ fn required_attribute_rejects_value_and_incompatible_uses() {
     };
     let error = FieldAttr::parse(&valued.attrs).expect_err("valued required must reject");
     assert_eq!(error.to_string(), "`required` does not take a value");
-
     let cases: Vec<(syn::Field, &str)> = vec![
         (
             syn::parse_quote!(#[norito(required)] demo: u32),
@@ -66,7 +127,6 @@ fn required_attribute_rejects_value_and_incompatible_uses() {
         assert_eq!(error.to_string(), expected);
     }
 }
-
 #[test]
 fn required_attribute_is_rejected_on_tuple_fields() {
     let field: syn::Field = syn::parse_quote!(#[norito(required)] Option<u32>);
@@ -77,7 +137,6 @@ fn required_attribute_is_rejected_on_tuple_fields() {
         "#[norito(required)] is only supported on named fields"
     );
 }
-
 #[test]
 fn malformed_and_unknown_field_attributes_are_rejected() {
     let malformed: syn::Field = syn::parse_quote! {
@@ -85,7 +144,6 @@ fn malformed_and_unknown_field_attributes_are_rejected() {
         malformed: u32
     };
     assert!(FieldAttr::parse(&malformed.attrs).is_err());
-
     let unknown: syn::Field = syn::parse_quote! {
         #[norito(transparant)]
         unknown: u32
@@ -93,7 +151,6 @@ fn malformed_and_unknown_field_attributes_are_rejected() {
     let error = FieldAttr::parse(&unknown.attrs).expect_err("unknown key must reject");
     assert_eq!(error.to_string(), "unknown `norito` field attribute");
 }
-
 #[test]
 fn malformed_enum_field_attribute_is_rejected_before_codegen() {
     let input: DeriveInput = syn::parse_quote! {
@@ -104,7 +161,6 @@ fn malformed_enum_field_attribute_is_rejected_before_codegen() {
             },
         }
     };
-
     validate_data_field_attrs(&input.data)
         .expect_err("enum fields must use the same validation as struct fields");
 }

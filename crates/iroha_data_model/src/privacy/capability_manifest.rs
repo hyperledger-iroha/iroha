@@ -1,10 +1,8 @@
 //! Canonical self-digesting Exact12 public capability manifest.
-
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
-
 use super::{
     PRIVACY_EXACT12_CAPABILITY_MANIFEST_DIGEST_DOMAIN_V1, PrivacyCapabilityRowV1,
     PrivacyCapabilityRowValidationErrorV1, PrivacyCapabilitySnapshotV1,
@@ -15,7 +13,6 @@ use super::{
 };
 /// Exact public Exact12 capability-manifest wire version.
 pub const PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1: u32 = 1;
-
 /// Canonical public operation schema selected by one retained protocol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -70,7 +67,6 @@ pub enum PrivacyOperationSchemaV1 {
     #[cfg_attr(feature = "json", norito(rename = "pq_masp_note_action_v1"))]
     PqMaspNoteActionV1,
 }
-
 impl PrivacyOperationSchemaV1 {
     /// Return the sole public string spelling of this operation schema.
     #[must_use]
@@ -93,7 +89,6 @@ impl PrivacyOperationSchemaV1 {
         }
     }
 }
-
 /// Closed execution classification for a retained public privacy operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -124,7 +119,6 @@ pub enum PrivacyExecutionModeV1 {
     #[cfg_attr(feature = "json", norito(rename = "note_action"))]
     NoteAction,
 }
-
 impl PrivacyExecutionModeV1 {
     /// Return the sole public string spelling of this execution mode.
     #[must_use]
@@ -139,7 +133,6 @@ impl PrivacyExecutionModeV1 {
         }
     }
 }
-
 /// Exact feature bitmap exposed by a retained public privacy operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[repr(transparent)]
@@ -152,7 +145,6 @@ pub struct PrivacyFeatureMaskV1(
     /// Exact first-release feature bits.
     pub u8,
 );
-
 impl PrivacyFeatureMaskV1 {
     /// Hidden-amount feature bit.
     pub const HIDE_AMOUNT: u8 = 1;
@@ -164,20 +156,17 @@ impl PrivacyFeatureMaskV1 {
     pub const HIDE_ASSET_TYPE: u8 = 1 << 3;
     /// Post-quantum-operation feature bit.
     pub const POST_QUANTUM: u8 = 1 << 4;
-
     /// Construct one exact feature bitmap.
     #[must_use]
     pub const fn new(bits: u8) -> Self {
         Self(bits)
     }
-
     /// Return the raw feature bits.
     #[must_use]
     pub const fn bits(self) -> u8 {
         self.0
     }
 }
-
 /// Evidence-derived local readiness carried by a committed capability row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -199,7 +188,6 @@ pub enum PrivacyCapabilityReadinessV1 {
     #[cfg_attr(feature = "json", norito(rename = "unavailable"))]
     Unavailable(PrivacyCompiledProfileUnavailableReasonV1),
 }
-
 /// Projection of committed governance lifecycle for one capability row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -227,7 +215,6 @@ pub enum PrivacyCapabilityActivationStateV1 {
     #[cfg_attr(feature = "json", norito(rename = "retired"))]
     Retired,
 }
-
 /// Explicit limitation retained by a public capability row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -246,7 +233,6 @@ pub enum PrivacyCapabilityLimitationV1 {
     )]
     MissingDistributionWideKnowledgeSoundnessEvidence,
 }
-
 impl PrivacyProtocolIdV1 {
     /// Canonical public operation schema for this retained protocol.
     #[must_use]
@@ -272,7 +258,6 @@ impl PrivacyProtocolIdV1 {
             Self::PqMaspStarkV0 => PrivacyOperationSchemaV1::PqMaspNoteActionV1,
         }
     }
-
     /// Canonical execution classification for this retained protocol.
     #[must_use]
     pub const fn expected_execution_mode(self) -> PrivacyExecutionModeV1 {
@@ -293,7 +278,6 @@ impl PrivacyProtocolIdV1 {
             | Self::PqMaspStarkV0 => PrivacyExecutionModeV1::NoteAction,
         }
     }
-
     /// Exact feature mask for this retained protocol.
     #[must_use]
     pub const fn expected_feature_mask(self) -> PrivacyFeatureMaskV1 {
@@ -323,7 +307,6 @@ impl PrivacyProtocolIdV1 {
         };
         PrivacyFeatureMaskV1::new(bits)
     }
-
     /// Explicit limitation required for this retained protocol, if any.
     #[must_use]
     pub const fn expected_capability_limitation(self) -> Option<PrivacyCapabilityLimitationV1> {
@@ -335,7 +318,6 @@ impl PrivacyProtocolIdV1 {
         }
     }
 }
-
 /// One row of the canonical public Exact12 capability manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -363,7 +345,6 @@ pub struct PrivacyExact12CapabilityRowV1 {
     /// Explicit retained limitation; revised Jindo always carries its missing evidence.
     pub limitation: Option<PrivacyCapabilityLimitationV1>,
 }
-
 impl PrivacyExact12CapabilityRowV1 {
     fn from_committed_snapshot_row(row: PrivacyCapabilityRowV1) -> Self {
         let readiness = match row.compiled_profile {
@@ -404,7 +385,6 @@ impl PrivacyExact12CapabilityRowV1 {
             limitation: row.protocol_id.expected_capability_limitation(),
         }
     }
-
     /// Return whether this committed row is executable and actively admitted.
     ///
     /// This value cannot be derived from a local compiled-profile catalog: it
@@ -423,7 +403,6 @@ impl PrivacyExact12CapabilityRowV1 {
             PrivacyCapabilityActivationStateV1::Active
         )
     }
-
     fn validate_at_committed_height(
         &self,
         committed_height: u64,
@@ -435,7 +414,6 @@ impl PrivacyExact12CapabilityRowV1 {
         }
         .validate_at_committed_height(committed_height)
         .map_err(PrivacyExact12CapabilityRowValidationErrorV1::CapabilityRow)?;
-
         let expected_operation_schema = self.protocol_id.expected_operation_schema();
         if self.operation_schema != expected_operation_schema {
             return Err(
@@ -495,7 +473,6 @@ impl PrivacyExact12CapabilityRowV1 {
         Ok(())
     }
 }
-
 /// Validation failure for one Exact12 capability-manifest row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyExact12CapabilityRowValidationErrorV1 {
@@ -551,7 +528,6 @@ pub enum PrivacyExact12CapabilityRowValidationErrorV1 {
         actual: Option<PrivacyCapabilityLimitationV1>,
     },
 }
-
 /// Canonical self-digesting v1 Exact12 public capability manifest.
 ///
 /// The manifest is projected only from one validated committed snapshot. Its
@@ -578,7 +554,6 @@ pub struct PrivacyExact12CapabilityManifestV1 {
     /// SHA-256 self-digest with this field normalized to zero.
     pub manifest_digest: PrivacyExact12CapabilityManifestDigestV1,
 }
-
 impl PrivacyCapabilitySnapshotV1 {
     /// Project this validated committed snapshot into the canonical Exact12 manifest.
     ///
@@ -613,7 +588,6 @@ impl PrivacyCapabilitySnapshotV1 {
         Ok(manifest)
     }
 }
-
 impl PrivacyExact12CapabilityManifestV1 {
     /// Compute the manifest digest with `manifest_digest` normalized to zero.
     ///
@@ -638,7 +612,6 @@ impl PrivacyExact12CapabilityManifestV1 {
             hasher.finalize().into(),
         ))
     }
-
     /// Return the one canonical validated manifest encoding.
     ///
     /// # Errors
@@ -650,7 +623,6 @@ impl PrivacyExact12CapabilityManifestV1 {
         norito::encode_canonical(self)
             .map_err(PrivacyExact12CapabilityManifestBuildErrorV1::CanonicalEncoding)
     }
-
     /// Validate the complete manifest, including its self-digest.
     ///
     /// # Errors
@@ -715,7 +687,6 @@ impl PrivacyExact12CapabilityManifestV1 {
         Ok(())
     }
 }
-
 /// Failure projecting a committed snapshot or encoding a validated manifest.
 #[derive(Debug, Error)]
 pub enum PrivacyExact12CapabilityManifestBuildErrorV1 {
@@ -729,7 +700,6 @@ pub enum PrivacyExact12CapabilityManifestBuildErrorV1 {
     #[error("privacy Exact12 capability manifest is invalid: {0}")]
     Manifest(PrivacyExact12CapabilityManifestValidationErrorV1),
 }
-
 /// Validation failure for a canonical Exact12 capability manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyExact12CapabilityManifestValidationErrorV1 {

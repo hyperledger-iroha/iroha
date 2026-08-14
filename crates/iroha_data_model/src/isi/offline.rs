@@ -4,7 +4,6 @@ use crate::offline::{
     KagemushaRecursiveSpendTopUpRequestV4, OfflineDeviceAttestationPolicy,
     OfflineDeviceAttestationRegistration,
 };
-
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[derive(getset::Getters)]
@@ -17,7 +16,6 @@ iroha_data_model_derive::model_single! {
         pub request: KagemushaRecursiveSpendTopUpRequestV4,
     }
 }
-
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[derive(getset::Getters)]
@@ -30,31 +28,26 @@ iroha_data_model_derive::model_single! {
         pub request: KagemushaRecursiveSpendRedeemRequestV4,
     }
 }
-
 impl PartialOrd for TopUpKagemushaRecursiveV4 {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for TopUpKagemushaRecursiveV4 {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.encode().cmp(&other.encode())
     }
 }
-
 impl PartialOrd for RedeemKagemushaRecursiveV4 {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for RedeemKagemushaRecursiveV4 {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.encode().cmp(&other.encode())
     }
 }
-
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[derive(getset::Getters)]
@@ -69,19 +62,16 @@ iroha_data_model_derive::model_single! {
         pub device_attestation_policy: OfflineDeviceAttestationPolicy,
     }
 }
-
 impl PartialOrd for ActivateKagemushaRecursiveReleaseV4 {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for ActivateKagemushaRecursiveReleaseV4 {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.encode().cmp(&other.encode())
     }
 }
-
 isi! {
     /// Register a platform-attested Kagemusha device authority.
     pub struct RegisterOfflineDeviceAttestation {
@@ -89,7 +79,6 @@ isi! {
         pub registration: OfflineDeviceAttestationRegistration,
     }
 }
-
 isi! {
     /// Replace the governed Kagemusha device-attestation verifier policy.
     pub struct SetOfflineDeviceAttestationPolicy {
@@ -97,13 +86,11 @@ isi! {
         pub policy: OfflineDeviceAttestationPolicy,
     }
 }
-
 impl crate::seal::Instruction for TopUpKagemushaRecursiveV4 {}
 impl crate::seal::Instruction for RedeemKagemushaRecursiveV4 {}
 impl crate::seal::Instruction for ActivateKagemushaRecursiveReleaseV4 {}
 impl crate::seal::Instruction for RegisterOfflineDeviceAttestation {}
 impl crate::seal::Instruction for SetOfflineDeviceAttestationPolicy {}
-
 impl TopUpKagemushaRecursiveV4 {
     /// Construct a scale-bound ABI-21 Kagemusha top-up instruction.
     #[must_use]
@@ -111,7 +98,6 @@ impl TopUpKagemushaRecursiveV4 {
         Self { request }
     }
 }
-
 impl RedeemKagemushaRecursiveV4 {
     /// Construct a branch-safe ABI-21 Kagemusha redemption instruction.
     #[must_use]
@@ -119,7 +105,6 @@ impl RedeemKagemushaRecursiveV4 {
         Self { request }
     }
 }
-
 impl ActivateKagemushaRecursiveReleaseV4 {
     /// Construct an atomic device-policy and ABI-21 release activation instruction.
     #[must_use]
@@ -133,18 +118,15 @@ impl ActivateKagemushaRecursiveReleaseV4 {
         }
     }
 }
-
 impl RegisterOfflineDeviceAttestation {
     /// Stable wire identifier used to frame device-attestation registrations.
     pub const WIRE_ID: &'static str = "iroha.offline.device_attestation.register";
-
     /// Construct a Kagemusha device-attestation registration instruction.
     #[must_use]
     pub fn new(registration: OfflineDeviceAttestationRegistration) -> Self {
         Self { registration }
     }
 }
-
 impl SetOfflineDeviceAttestationPolicy {
     /// Construct a Kagemusha device-attestation policy instruction.
     #[must_use]
@@ -152,11 +134,9 @@ impl SetOfflineDeviceAttestationPolicy {
         Self { policy }
     }
 }
-
 fn offline_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 macro_rules! impl_decode_one_canonical_offline_field {
     ($ty:ident { $field:ident: $field_ty:ty }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -165,7 +145,6 @@ macro_rules! impl_decode_one_canonical_offline_field {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 let $field = super::decode_aos_canonical_field::<$field_ty>(
                     super::read_aos_field(bytes, &mut offset, flags)?,
@@ -180,14 +159,12 @@ macro_rules! impl_decode_one_canonical_offline_field {
         }
     };
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ActivateKagemushaRecursiveReleaseV4 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = offline_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let activation = super::decode_aos_canonical_field::<
             KagemushaRecursiveSpendReleaseActivationV4,
@@ -210,7 +187,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivateKagemushaRecursiveRelease
         ))
     }
 }
-
 impl_decode_one_canonical_offline_field!(TopUpKagemushaRecursiveV4 {
     request: KagemushaRecursiveSpendTopUpRequestV4
 });
@@ -223,15 +199,12 @@ impl_decode_one_canonical_offline_field!(RegisterOfflineDeviceAttestation {
 impl_decode_one_canonical_offline_field!(SetOfflineDeviceAttestationPolicy {
     policy: OfflineDeviceAttestationPolicy
 });
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use norito::core::NoritoDeserialize as _;
-
     use super::*;
     use crate::offline::KagemushaDevicePublicKeyV2;
-
     fn registration_fixture() -> OfflineDeviceAttestationRegistration {
         let account_key = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519)
             .expect("derive checked offline attestation fixture keypair");
@@ -246,7 +219,6 @@ mod tests {
         let attestation_report = b"offline-attestation-roundtrip-report".to_vec();
         let attestation_report_hash = Hash::new(&attestation_report);
         let evidence = b"offline-attestation-roundtrip-evidence".to_vec();
-
         OfflineDeviceAttestationRegistration {
             version: 1,
             platform: "android-keymint".to_owned(),
@@ -275,17 +247,14 @@ mod tests {
             expires_at_ms: 2_000_000_000_000,
         }
     }
-
     #[test]
     fn device_attestation_instruction_uses_stable_wire_id_and_roundtrips() {
         let instruction = RegisterOfflineDeviceAttestation::new(registration_fixture());
         let boxed = InstructionBox::from(instruction.clone());
-
         assert_eq!(
             crate::isi::instruction_wire_id(&boxed),
             Some(RegisterOfflineDeviceAttestation::WIRE_ID)
         );
-
         let bytes = norito::core::to_bytes(&boxed).expect("serialize instruction box");
         let archived = norito::core::from_bytes::<InstructionBox>(&bytes)
             .expect("decode instruction box archive");

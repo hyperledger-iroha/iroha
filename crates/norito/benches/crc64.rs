@@ -1,6 +1,5 @@
 //! Benchmarks for CRC64 implementations (hardware, SIMD, and fallback).
 use criterion::{BatchSize, Criterion};
-
 fn random_bytes(n: usize) -> Vec<u8> {
     // Deterministic pseudo-random data for benchmarking
     let mut v = Vec::with_capacity(n);
@@ -12,7 +11,6 @@ fn random_bytes(n: usize) -> Vec<u8> {
     }
     v
 }
-
 fn bench_crc64(c: &mut Criterion) {
     let sizes = [1024usize, 16 * 1024, 256 * 1024, 1024 * 1024];
     for &n in &sizes {
@@ -26,7 +24,6 @@ fn bench_crc64(c: &mut Criterion) {
                 BatchSize::SmallInput,
             )
         });
-
         c.bench_function(&format!("crc64_fallback_{n}B"), |b| {
             b.iter_batched(
                 || random_bytes(n),
@@ -37,7 +34,6 @@ fn bench_crc64(c: &mut Criterion) {
                 BatchSize::SmallInput,
             )
         });
-
         #[cfg(all(
             feature = "simd-accel",
             target_arch = "x86_64",
@@ -53,7 +49,6 @@ fn bench_crc64(c: &mut Criterion) {
                 BatchSize::SmallInput,
             )
         });
-
         #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
         c.bench_function(&format!("crc64_pmull_{}B", n), |b| {
             b.iter_batched(
@@ -70,7 +65,6 @@ fn bench_crc64(c: &mut Criterion) {
         });
     }
 }
-
 /// Entry point for the benchmark binary.
 fn main() {
     let mut c = Criterion::default().configure_from_args();

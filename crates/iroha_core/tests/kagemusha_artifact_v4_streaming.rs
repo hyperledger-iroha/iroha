@@ -1,7 +1,5 @@
 //! Regression tests for bounded reader-based KRV4 artifact framing.
-
 use std::io::{self, Cursor};
-
 use iroha_core::zk::kagemusha_artifact_v4::{
     KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4,
     write_kagemusha_pasta_cycle_artifact_from_reader_v4, write_kagemusha_pasta_cycle_artifact_v4,
@@ -16,7 +14,6 @@ use iroha_data_model::offline::{
     KagemushaStepCircuitParamsV4,
 };
 use sha2::{Digest as _, Sha256};
-
 fn test_profile() -> KagemushaPastaCycleProofProfileV4 {
     let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
     let layout =
@@ -44,7 +41,6 @@ fn test_profile() -> KagemushaPastaCycleProofProfileV4 {
         artifacts: Vec::new(),
     }
 }
-
 #[test]
 fn reader_writer_matches_in_memory_frame_and_descriptor() {
     let profile = test_profile();
@@ -59,7 +55,6 @@ fn reader_writer_matches_in_memory_frame_and_descriptor() {
         payload,
     )
     .expect("write in-memory frame");
-
     let mut reader = Cursor::new(payload);
     let mut actual_frame = Vec::new();
     let actual_descriptor = write_kagemusha_pasta_cycle_artifact_from_reader_v4(
@@ -72,17 +67,14 @@ fn reader_writer_matches_in_memory_frame_and_descriptor() {
         Sha256::digest(payload).into(),
     )
     .expect("write reader frame");
-
     assert_eq!(actual_frame, expected_frame);
     assert_eq!(actual_descriptor, expected_descriptor);
 }
-
 #[test]
 fn reader_writer_rejects_early_eof_trailing_bytes_and_digest_mismatch() {
     let profile = test_profile();
     let payload = b"bounded reader fixture";
     let kind = KagemushaPastaCycleArtifactKindV4::ProvingKey;
-
     let mut early_reader = Cursor::new(payload);
     let early_error = write_kagemusha_pasta_cycle_artifact_from_reader_v4(
         &mut Vec::new(),
@@ -95,7 +87,6 @@ fn reader_writer_rejects_early_eof_trailing_bytes_and_digest_mismatch() {
     )
     .expect_err("short staged payload must fail closed");
     assert!(early_error.contains("ended before its declared length"));
-
     let declared = &payload[..payload.len() - 1];
     let mut trailing_reader = Cursor::new(payload);
     let trailing_error = write_kagemusha_pasta_cycle_artifact_from_reader_v4(
@@ -109,7 +100,6 @@ fn reader_writer_rejects_early_eof_trailing_bytes_and_digest_mismatch() {
     )
     .expect_err("trailing staged payload byte must fail closed");
     assert!(trailing_error.contains("exceeds its declared length"));
-
     let mut digest_reader = Cursor::new(payload);
     let digest_error = write_kagemusha_pasta_cycle_artifact_from_reader_v4(
         &mut Vec::new(),
@@ -123,12 +113,10 @@ fn reader_writer_rejects_early_eof_trailing_bytes_and_digest_mismatch() {
     .expect_err("changed staged payload digest must fail closed");
     assert!(digest_error.contains("digest changed while framing"));
 }
-
 struct PartialFailingSink {
     bytes: Vec<u8>,
     remaining: usize,
 }
-
 impl io::Write for PartialFailingSink {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if self.remaining == 0 {
@@ -142,18 +130,15 @@ impl io::Write for PartialFailingSink {
         self.remaining -= accepted;
         Ok(accepted)
     }
-
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
-
 #[test]
 fn reader_writer_enforces_cap_and_propagates_partial_sink_failure() {
     let profile = test_profile();
     let payload = b"sink failure fixture";
     let kind = KagemushaPastaCycleArtifactKindV4::ProvingKey;
-
     let mut oversized_reader = Cursor::new([]);
     let mut oversized_output = Vec::new();
     let oversized_error = write_kagemusha_pasta_cycle_artifact_from_reader_v4(
@@ -170,7 +155,6 @@ fn reader_writer_enforces_cap_and_propagates_partial_sink_failure() {
     .expect_err("declared payload above the hard cap must fail closed");
     assert!(oversized_error.contains("profile or payload is invalid"));
     assert!(oversized_output.is_empty());
-
     let mut sink = PartialFailingSink {
         bytes: Vec::new(),
         remaining: 10,

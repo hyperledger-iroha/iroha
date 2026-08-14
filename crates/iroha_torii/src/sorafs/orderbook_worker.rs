@@ -12,7 +12,6 @@
 //! semantic result. Settlement receipts have a globally unique receipt
 //! identity and retain their exact canonical payload on-chain; those may be
 //! reconciled idempotently across ingress peers.
-
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
     NetworkId,
@@ -34,7 +33,6 @@ use sorafs_node::orderbook_transaction_forwarder::{
     OrderbookTransactionSigningRequestV1, validate_orderbook_finalized_context_v1,
     validate_orderbook_pending_delivery_v1, validate_orderbook_reconciliation_material_v1,
 };
-
 /// Complete operation-scoped data read from one immutable finalized state.
 ///
 /// Query failures are represented outside this type: the caller must defer the
@@ -60,7 +58,6 @@ pub(crate) struct OrderbookFinalizedSnapshotV1 {
     /// Channel queried by the retained receipt's channel identity, when applicable.
     pub settlement_channel: Option<OrderbookSettlementChannelRecord>,
 }
-
 /// Result of comparing retained semantic material with finalized ledger state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OrderbookSemanticReconciliationV1 {
@@ -75,7 +72,6 @@ pub(crate) enum OrderbookSemanticReconciliationV1 {
     /// Finalized state contradicts or has consumed the retained precondition.
     Conflict(OrderbookFinalizedCursorV1),
 }
-
 /// Observation keyed by the exact retained signed-transaction digest.
 ///
 /// The digest is repeated in every signed outcome so a caller cannot
@@ -118,7 +114,6 @@ pub(crate) enum OrderbookEnvelopeReconciliationV1 {
     /// The exact transaction index or committed blocks were unavailable.
     Unavailable,
 }
-
 /// Payload-free reason why an entry is intentionally left unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OrderbookWorkerDeferReasonV1 {
@@ -133,7 +128,6 @@ pub(crate) enum OrderbookWorkerDeferReasonV1 {
     /// Durable delivery material is missing, inconsistent, or corrupted.
     InvalidDurableState,
 }
-
 /// One side effect requested from the supervised orderbook worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OrderbookWorkerActionV1 {
@@ -179,7 +173,6 @@ pub(crate) enum OrderbookWorkerActionV1 {
     /// Leave the durable entry untouched until a later bounded scan.
     Defer(OrderbookWorkerDeferReasonV1),
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FinalizedCursorRelationV1 {
     Same,
@@ -188,7 +181,6 @@ enum FinalizedCursorRelationV1 {
     ForkConflict,
     Invalid,
 }
-
 /// Compare one retained operation with an exact finalized projection.
 ///
 /// The snapshot must come from one immutable state view. In particular, the
@@ -226,7 +218,6 @@ pub(crate) fn reconcile_orderbook_semantics(
     if current_baseline_block_hash != delivery.baseline_finalized_block_hash {
         return OrderbookSemanticReconciliationV1::Conflict(cursor);
     }
-
     if let OrderbookOperationV1::SettlementReceipt(instruction) = &retained.operation {
         match exact_receipt_result(
             instruction.receipt_payload(),
@@ -248,7 +239,6 @@ pub(crate) fn reconcile_orderbook_semantics(
         // rather than acting on an accidental record.
         return OrderbookSemanticReconciliationV1::Deferred;
     }
-
     let Some(policy_record) = finalized.policy_record.as_ref() else {
         return OrderbookSemanticReconciliationV1::Deferred;
     };
@@ -303,7 +293,6 @@ pub(crate) fn reconcile_orderbook_semantics(
         }
     }
 }
-
 /// Select one safe durable transition for a pending delivery.
 ///
 /// Exact-envelope outcomes take precedence. If signed bytes exist, semantic
@@ -338,7 +327,6 @@ pub(crate) fn plan_orderbook_worker_action(
             OrderbookWorkerDeferReasonV1::FinalizedStateUnavailable,
         );
     }
-
     match envelope {
         OrderbookEnvelopeReconciliationV1::Applied {
             transaction_digest,
@@ -368,7 +356,6 @@ pub(crate) fn plan_orderbook_worker_action(
         | OrderbookEnvelopeReconciliationV1::Absent { .. }
         | OrderbookEnvelopeReconciliationV1::Unavailable => {}
     }
-
     if matches!(envelope, OrderbookEnvelopeReconciliationV1::Pending { .. }) {
         return match delivery.state {
             OrderbookTransactionDeliveryStateV1::Signed
@@ -396,7 +383,6 @@ pub(crate) fn plan_orderbook_worker_action(
             OrderbookWorkerDeferReasonV1::FinalizedStateUnavailable,
         );
     }
-
     if let OrderbookSemanticReconciliationV1::Finalized(finalized_cursor) = semantics {
         return OrderbookWorkerActionV1::FinalizeSemantic { finalized_cursor };
     }
@@ -417,7 +403,6 @@ pub(crate) fn plan_orderbook_worker_action(
             unreachable!("semantic finalization returns before state planning")
         }
     }
-
     match delivery.state {
         OrderbookTransactionDeliveryStateV1::Ready => {
             if configured_signer_authority != Some(&delivery.authority) {
@@ -468,14 +453,12 @@ pub(crate) fn plan_orderbook_worker_action(
         },
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExactReceiptResultV1 {
     Absent,
     Finalized,
     Conflict,
 }
-
 fn exact_receipt_result(
     canonical_receipt: &[u8],
     policy_digest: [u8; 32],
@@ -513,14 +496,12 @@ fn exact_receipt_result(
         ExactReceiptResultV1::Conflict
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReceiptAdmissionContextV1 {
     Ready,
     Unavailable,
     Conflict,
 }
-
 fn validate_receipt_admission_context(
     receipt: &sorafs_manifest::orderbook::SettlementReceiptV1,
     channel: &OrderbookSettlementChannelRecord,
@@ -572,7 +553,6 @@ fn validate_receipt_admission_context(
     }
     ReceiptAdmissionContextV1::Ready
 }
-
 fn signature_matches_account(account: &AccountId, signature: &OrderbookSignatureV1) -> bool {
     if signature.algorithm != sorafs_manifest::provider_advert::SignatureAlgorithm::Ed25519 {
         return false;
@@ -584,7 +564,6 @@ fn signature_matches_account(account: &AccountId, signature: &OrderbookSignature
             algorithm == Algorithm::Ed25519 && bytes == signature.public_key.as_slice()
         })
 }
-
 fn envelope_is_coherent(
     delivery: &OrderbookTransactionPendingV1,
     envelope: OrderbookEnvelopeReconciliationV1,
@@ -617,11 +596,9 @@ fn envelope_is_coherent(
         }
     }
 }
-
 fn valid_finalized_cursor(cursor: OrderbookFinalizedCursorV1) -> bool {
     cursor.height != 0 && cursor.block_hash != [0; 32]
 }
-
 fn finalized_cursor_relation(
     delivery: &OrderbookTransactionPendingV1,
     cursor: OrderbookFinalizedCursorV1,
@@ -643,7 +620,6 @@ fn finalized_cursor_relation(
         core::cmp::Ordering::Equal => FinalizedCursorRelationV1::ForkConflict,
     }
 }
-
 fn semantic_cursor(
     semantics: OrderbookSemanticReconciliationV1,
 ) -> Option<OrderbookFinalizedCursorV1> {
@@ -655,7 +631,6 @@ fn semantic_cursor(
         | OrderbookSemanticReconciliationV1::InvalidDurableState => None,
     }
 }
-
 /// Whether one exact finalized view proves native maintenance is due.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OrderbookMaintenanceDueV1 {
@@ -666,7 +641,6 @@ pub(crate) enum OrderbookMaintenanceDueV1 {
     /// The active projection exceeded its configured bound.
     Unknown,
 }
-
 /// Coherent finalized material used only to generate native worker operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OrderbookGenerationSnapshotV1 {
@@ -681,7 +655,6 @@ pub(crate) struct OrderbookGenerationSnapshotV1 {
     /// Bounded expiry conclusion from this same state view.
     pub maintenance_due: OrderbookMaintenanceDueV1,
 }
-
 /// Fixed generation validation failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OrderbookGenerationErrorV1 {
@@ -692,7 +665,6 @@ pub(crate) enum OrderbookGenerationErrorV1 {
     /// Maintenance state could not be covered by the configured projection.
     ProjectionUnavailable,
 }
-
 /// Select at most one native revision-scoped operation.
 ///
 /// Expiry maintenance has priority over matching so two worker replicas do not
@@ -758,7 +730,6 @@ pub(crate) fn plan_orderbook_generation(
         ),
     )))
 }
-
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::SigningKey;
@@ -783,31 +754,25 @@ mod tests {
         OrderbookTransactionForwarderPolicyV1,
     };
     use tempfile::TempDir;
-
     use super::*;
-
     fn foreign_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0xF1; 32]),
         ))
     }
-
     fn key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
             .expect("deterministic Ed25519 key")
     }
-
     fn account(key: &KeyPair) -> AccountId {
         AccountId::new(key.public_key().clone())
     }
-
     fn cursor(height: u64, hash_byte: u8) -> OrderbookFinalizedCursorV1 {
         OrderbookFinalizedCursorV1 {
             height,
             block_hash: [hash_byte; 32],
         }
     }
-
     fn context(
         matcher: &KeyPair,
         settlement: &KeyPair,
@@ -846,7 +811,6 @@ mod tests {
             finalized_cursor,
         }
     }
-
     fn forwarder() -> (OrderbookTransactionForwarder, TempDir) {
         let state_dir = tempfile::tempdir().expect("orderbook forwarder state directory");
         let forwarder = OrderbookTransactionForwarder::open(
@@ -863,7 +827,6 @@ mod tests {
         .expect("durable orderbook forwarder");
         (forwarder, state_dir)
     }
-
     fn match_operation(context: &OrderbookTransactionContextV1) -> OrderbookOperationV1 {
         OrderbookOperationV1::Match(MatchSorafsOrderbook::new(
             context.policy_record.policy_digest,
@@ -871,7 +834,6 @@ mod tests {
             8,
         ))
     }
-
     fn maintain_operation(context: &OrderbookTransactionContextV1) -> OrderbookOperationV1 {
         OrderbookOperationV1::Maintain(MaintainSorafsOrderbook::new(
             context.policy_record.policy_digest,
@@ -879,7 +841,6 @@ mod tests {
             16,
         ))
     }
-
     fn settlement_operation(
         context: &OrderbookTransactionContextV1,
         receipt_id: [u8; 32],
@@ -910,7 +871,6 @@ mod tests {
             context.policy_record.policy_digest,
         ))
     }
-
     fn channel_for_receipt(
         receipt: &SettlementReceiptV1,
         settlement_authority: AccountId,
@@ -941,7 +901,6 @@ mod tests {
             updated_at_unix: 1,
         }
     }
-
     fn retained_delivery(
         operation: OrderbookOperationV1,
         context: &OrderbookTransactionContextV1,
@@ -959,7 +918,6 @@ mod tests {
             .expect("retained operation");
         (delivery, retained)
     }
-
     fn enqueue_test_operation(
         forwarder: &OrderbookTransactionForwarder,
         operation: OrderbookOperationV1,
@@ -976,7 +934,6 @@ mod tests {
             forwarder.enqueue_unsigned_operation(operation, context)
         }
     }
-
     fn status(book_revision: u64) -> OrderbookLedgerStatusV1 {
         OrderbookLedgerStatusV1 {
             open_orders: 0,
@@ -996,7 +953,6 @@ mod tests {
             updated_at_unix: 1,
         }
     }
-
     fn snapshot(
         delivery: &OrderbookTransactionPendingV1,
         context: &OrderbookTransactionContextV1,
@@ -1012,7 +968,6 @@ mod tests {
             settlement_channel: None,
         }
     }
-
     fn mark_signed(
         delivery: &mut OrderbookTransactionPendingV1,
         state: OrderbookTransactionDeliveryStateV1,
@@ -1025,13 +980,11 @@ mod tests {
         delivery.transaction_digest = Some(digest);
         digest
     }
-
     #[test]
     fn match_and_maintenance_require_exact_policy_authority_revision_and_history() {
         let matcher = key(0x11);
         let settlement = key(0x12);
         let context = context(&matcher, &settlement, 7, cursor(10, 0x10));
-
         for operation in [match_operation(&context), maintain_operation(&context)] {
             let (delivery, retained) = retained_delivery(operation, &context);
             let exact = snapshot(&delivery, &context, context.finalized_cursor);
@@ -1044,7 +997,6 @@ mod tests {
                 ),
                 OrderbookSemanticReconciliationV1::Ready(context.finalized_cursor),
             );
-
             let mut stale = exact.clone();
             stale.finalized_cursor = cursor(9, 0x09);
             assert_eq!(
@@ -1056,7 +1008,6 @@ mod tests {
                 ),
                 OrderbookSemanticReconciliationV1::Deferred,
             );
-
             let mut fork = exact.clone();
             fork.finalized_cursor = cursor(10, 0xEE);
             assert_eq!(
@@ -1068,7 +1019,6 @@ mod tests {
                 ),
                 OrderbookSemanticReconciliationV1::Conflict(cursor(10, 0xEE)),
             );
-
             let advanced = cursor(11, 0x11);
             let mut changed_revision = exact.clone();
             changed_revision.finalized_cursor = advanced;
@@ -1082,7 +1032,6 @@ mod tests {
                 ),
                 OrderbookSemanticReconciliationV1::Conflict(advanced),
             );
-
             let mut abandoned_baseline = exact.clone();
             abandoned_baseline.finalized_cursor = advanced;
             abandoned_baseline.baseline_block_hash = Some([0xEF; 32]);
@@ -1095,7 +1044,6 @@ mod tests {
                 ),
                 OrderbookSemanticReconciliationV1::Conflict(advanced),
             );
-
             let rotated_matcher = key(0x13);
             let mut rotated = context.policy_record.policy.clone();
             rotated.revision = 2;
@@ -1121,7 +1069,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn exact_receipt_projection_converges_duplicates_across_peers() {
         let matcher = key(0x21);
@@ -1150,7 +1097,6 @@ mod tests {
             admitted_at_unix: 11,
             recorded_by: retained.authority.clone(),
         });
-
         // A current policy rotation cannot invalidate an already committed,
         // byte-identical receipt from the preceding authority.
         let rotated_settlement = key(0x23);
@@ -1176,7 +1122,6 @@ mod tests {
             ),
             OrderbookSemanticReconciliationV1::Conflict(advanced),
         );
-
         finalized.policy_record = Some(rotated_record);
         assert_eq!(
             reconcile_orderbook_semantics(
@@ -1199,14 +1144,12 @@ mod tests {
                 finalized_cursor: advanced,
             },
         );
-
         let (duplicate, _duplicate_state_dir) = forwarder();
         let first =
             enqueue_test_operation(&duplicate, operation.clone(), &context).expect("first enqueue");
         let replay =
             enqueue_test_operation(&duplicate, operation, &context).expect("idempotent replay");
         assert_eq!(first.operation_id(), replay.operation_id());
-
         let mut substituted = finalized;
         substituted
             .settlement_receipt
@@ -1224,7 +1167,6 @@ mod tests {
             OrderbookSemanticReconciliationV1::Conflict(advanced),
         );
     }
-
     #[test]
     fn exact_envelope_status_precedes_conflicts_and_absence_controls_retry() {
         let matcher = key(0x31);
@@ -1236,7 +1178,6 @@ mod tests {
             OrderbookTransactionDeliveryStateV1::Submitted,
         );
         let applied = cursor(31, 0x31);
-
         assert_eq!(
             plan_orderbook_worker_action(
                 &crate::signed_query_test_network_id(),
@@ -1282,7 +1223,6 @@ mod tests {
                 finalized_cursor: applied,
             },
         );
-
         delivery.state = OrderbookTransactionDeliveryStateV1::Ambiguous;
         assert_eq!(
             plan_orderbook_worker_action(
@@ -1322,7 +1262,6 @@ mod tests {
                 finalized_cursor: applied,
             },
         );
-
         // Absence at the retained baseline is not a retry authorization.
         let baseline = context.finalized_cursor;
         assert_eq!(
@@ -1339,7 +1278,6 @@ mod tests {
             OrderbookWorkerActionV1::Defer(OrderbookWorkerDeferReasonV1::AwaitingFinality),
         );
     }
-
     #[test]
     fn signed_delivery_submits_only_after_exact_absence_and_digest_match() {
         let matcher = key(0x41);
@@ -1347,7 +1285,6 @@ mod tests {
         let context = context(&matcher, &settlement, 5, cursor(40, 0x40));
         let (mut delivery, _) = retained_delivery(maintain_operation(&context), &context);
         let digest = mark_signed(&mut delivery, OrderbookTransactionDeliveryStateV1::Signed);
-
         assert_eq!(
             plan_orderbook_worker_action(
                 &crate::signed_query_test_network_id(),
@@ -1375,7 +1312,6 @@ mod tests {
             OrderbookWorkerActionV1::Defer(OrderbookWorkerDeferReasonV1::FinalizedStateUnavailable,),
         );
     }
-
     #[test]
     fn corrupted_durable_identity_and_signed_metadata_fail_closed() {
         let matcher = key(0x51);
@@ -1383,7 +1319,6 @@ mod tests {
         let context = context(&matcher, &settlement, 6, cursor(50, 0x50));
         let (delivery, retained) = retained_delivery(match_operation(&context), &context);
         let exact = snapshot(&delivery, &context, context.finalized_cursor);
-
         let mut corrupt_identity = delivery.clone();
         corrupt_identity.operation_id[0] ^= 1;
         assert_eq!(
@@ -1395,7 +1330,6 @@ mod tests {
             ),
             OrderbookSemanticReconciliationV1::InvalidDurableState,
         );
-
         let mut corrupt_semantic = delivery.clone();
         corrupt_semantic.semantic_digest[0] ^= 1;
         assert_eq!(
@@ -1407,7 +1341,6 @@ mod tests {
             ),
             OrderbookSemanticReconciliationV1::InvalidDurableState,
         );
-
         let mut corrupt_signed = delivery;
         let digest = mark_signed(
             &mut corrupt_signed,
@@ -1428,7 +1361,6 @@ mod tests {
             OrderbookWorkerActionV1::Defer(OrderbookWorkerDeferReasonV1::InvalidDurableState,),
         );
     }
-
     #[test]
     fn canonical_forwarder_validator_rejects_each_retained_field_substitution() {
         let matcher = key(0x58);
@@ -1436,7 +1368,6 @@ mod tests {
         let context = context(&matcher, &settlement, 6, cursor(55, 0x55));
         let (delivery, retained) = retained_delivery(match_operation(&context), &context);
         let exact = snapshot(&delivery, &context, context.finalized_cursor);
-
         let mut wrong_operation_id = retained.clone();
         wrong_operation_id.operation_id[0] ^= 1;
         let mut wrong_network = retained.clone();
@@ -1449,7 +1380,6 @@ mod tests {
             context.book_revision,
             7,
         ));
-
         for substituted in [
             wrong_operation_id,
             wrong_network,
@@ -1467,14 +1397,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn ready_delivery_requires_exact_governed_signer_and_network() {
         let matcher = key(0x61);
         let settlement = key(0x62);
         let context = context(&matcher, &settlement, 3, cursor(60, 0x60));
         let (delivery, _) = retained_delivery(match_operation(&context), &context);
-
         assert_eq!(
             plan_orderbook_worker_action(
                 &crate::signed_query_test_network_id(),
@@ -1509,7 +1437,6 @@ mod tests {
             },
         );
     }
-
     #[test]
     fn receipt_reconciliation_requires_fresh_provider_bound_signature() {
         let matcher = key(0x64);
@@ -1528,7 +1455,6 @@ mod tests {
             channel_for_receipt(&receipt, retained.authority.clone(), account(&matcher));
         channel.expires_at_unix = 10_000;
         finalized.settlement_channel = Some(channel.clone());
-
         assert_eq!(
             reconcile_orderbook_semantics(
                 &crate::signed_query_test_network_id(),
@@ -1538,7 +1464,6 @@ mod tests {
             ),
             OrderbookSemanticReconciliationV1::Ready(context.finalized_cursor),
         );
-
         let mut stale = finalized.clone();
         stale.finalized_at_unix =
             receipt.issued_at_unix + context.policy_record.policy.max_receipt_age_secs + 1;
@@ -1551,7 +1476,6 @@ mod tests {
             ),
             OrderbookSemanticReconciliationV1::Conflict(context.finalized_cursor),
         );
-
         let mut substituted_provider = finalized.clone();
         substituted_provider
             .settlement_channel
@@ -1567,7 +1491,6 @@ mod tests {
             ),
             OrderbookSemanticReconciliationV1::Conflict(context.finalized_cursor),
         );
-
         finalized.finalized_at_unix = 0;
         assert_eq!(
             reconcile_orderbook_semantics(
@@ -1579,7 +1502,6 @@ mod tests {
             OrderbookSemanticReconciliationV1::Deferred,
         );
     }
-
     #[test]
     fn generation_prioritizes_due_maintenance_and_never_guesses_unknown_projection() {
         let matcher = key(0x68);
@@ -1598,20 +1520,17 @@ mod tests {
             plan_orderbook_generation(&generation, 8, 16),
             Ok(Some(OrderbookOperationV1::Match(_)))
         ));
-
         generation.maintenance_due = OrderbookMaintenanceDueV1::Due;
         assert!(matches!(
             plan_orderbook_generation(&generation, 8, 16),
             Ok(Some(OrderbookOperationV1::Maintain(_)))
         ));
-
         generation.maintenance_due = OrderbookMaintenanceDueV1::Unknown;
         assert_eq!(
             plan_orderbook_generation(&generation, 8, 16),
             Err(OrderbookGenerationErrorV1::ProjectionUnavailable),
         );
     }
-
     #[test]
     fn sealed_no_fill_revision_conflicts_distinct_peer_envelopes_and_stays_sealed_after_restart() {
         let matcher = key(0x6A);
@@ -1632,7 +1551,6 @@ mod tests {
         // no-fill marker for this revision.
         let (first_delivery, first_retained) = retained_delivery(first_operation, &context);
         let (second_delivery, second_retained) = retained_delivery(second_operation, &context);
-
         for (delivery, retained) in [
             (&first_delivery, &first_retained),
             (&second_delivery, &second_retained),
@@ -1666,7 +1584,6 @@ mod tests {
                 },
             );
         }
-
         let mut restarted_status = status(context.book_revision);
         restarted_status.open_orders = 1;
         restarted_status.partially_filled_orders = 1;

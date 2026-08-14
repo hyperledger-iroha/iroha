@@ -5,17 +5,28 @@
 //!   `{ id, ok, error, content_type, size, created_ms, processed_ms, latency_ms }`.
 //!   Bounded query metadata is persisted independently under
 //!   `zk_prover/report_index/<id>.json`, so saving one report never rewrites
-//!   metadata for every other report.
+//!   metadata for every other report. Report maintenance streams those shards
+//!   one at a time; configured count and aggregate-byte retention limits evict
+//!   the oldest reports deterministically before a new report is committed.
+//!   Attachment discovery likewise retains only a scan-budget-derived window,
+//!   resumes its directory cursor across cycles, and canonically orders each
+//!   window instead of collecting and sorting the complete tenant population;
+//!   unscheduled locations remain in a retry queue with the same hard cap.
+//!   Registry-backed verifying-key files use the data model's 8 MiB V1 payload
+//!   ceiling and a stable direct-file read, so a corrupt key file cannot race
+//!   metadata admission and make the worker allocate an unbounded buffer;
+//!   inline registry keys are verified by reference instead of being cloned.
 //! - This module is strictly app-facing and non-forking. It must not affect consensus.
 //! - Enabled and paced via `iroha_config` (torii.zk_prover_enabled, torii.zk_prover_scan_period_secs).
 //!
 //! The worker verifies `ProofAttachment` payloads (single or list, Norito or JSON)
 //! using core backend verifiers and records per-proof metadata. It never mutates WSV.
-
+#[cfg(test)]
+use std::collections::BTreeMap;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BinaryHeap, HashSet},
     fs,
     io::Read as _,
     io::{Error as IoError, ErrorKind as IoErrorKind},
@@ -27,7 +38,6 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
 use iroha_core::{
@@ -41,7 +51,8 @@ use iroha_core::{
 #[cfg(test)]
 use iroha_crypto::Hash;
 use iroha_data_model::proof::{
-    ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId,
+    ProofAttachment, ProofAttachmentList, VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1, VerifyingKeyBox,
+    VerifyingKeyId,
 };
 use mv::storage::StorageReadOnly;
 use norito::json;
@@ -53,7 +64,6 @@ use tokio::{
     sync::Semaphore,
     task::{self, JoinSet},
 };
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 use crate::NoritoQuery;
 use crate::{
@@ -65,7 +75,6 @@ use crate::{
     },
     zk1::{MAX_TLV_COUNT as ZK1_MAX_TLV_COUNT, parse_tags as parse_zk1_tags},
 };
-
 #[derive(
     Debug,
     Clone,
@@ -98,7 +107,6 @@ pub struct ProofReportEntry {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub circuit_id: Option<String>,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -153,7 +161,6 @@ pub struct ProverReport {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub proofs: Vec<ProofReportEntry>,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -174,12 +181,13 @@ struct ProverReportSummary {
     #[norito(skip_serializing_if = "Option::is_none")]
     zk1_tags: Option<Vec<String>>,
 }
-
 #[derive(Clone)]
 struct ProverCfg {
     enabled: bool,
     scan_period_secs: u64,
     reports_ttl_secs: u64,
+    reports_max_count: u64,
+    reports_max_bytes: u64,
     max_inflight: usize,
     max_scan_bytes: u64,
     max_scan_millis: u64,
@@ -189,9 +197,7 @@ struct ProverCfg {
     state: Option<Arc<CoreState>>,
     telemetry: MaybeTelemetry,
 }
-
 static PROVER_CFG: OnceLock<RwLock<ProverCfg>> = OnceLock::new();
-
 #[cfg(test)]
 static TEST_PROCESSING_DELAY_MS: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
@@ -200,13 +206,14 @@ static TEST_SNAPSHOT_LOAD_DELAY_MS: AtomicU64 = AtomicU64::new(0);
 static TEST_MAX_SCAN_MILLIS_OVERRIDE: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 static MAX_INFLIGHT_OBSERVED: AtomicUsize = AtomicUsize::new(0);
-
-/// Configure prover enable, scan period (seconds), and reports TTL (seconds) from Torii config.
+/// Configure prover scheduling, bounded report retention, verifier scope, and telemetry.
 #[allow(clippy::too_many_arguments)]
 pub fn configure(
     enabled: bool,
     scan_period_secs: u64,
     reports_ttl_secs: u64,
+    reports_max_count: u64,
+    reports_max_bytes: u64,
     max_inflight: usize,
     max_scan_bytes: u64,
     max_scan_millis: u64,
@@ -216,10 +223,20 @@ pub fn configure(
     state: Option<Arc<CoreState>>,
     telemetry: MaybeTelemetry,
 ) {
+    assert!(
+        reports_max_count > 0,
+        "prover report retention count must be greater than zero"
+    );
+    assert!(
+        reports_max_bytes >= REPORT_FILE_MAX_BYTES.saturating_add(REPORT_SUMMARY_FILE_MAX_BYTES),
+        "prover report retention bytes must fit one maximum-size report and summary"
+    );
     let cfg = ProverCfg {
         enabled,
         scan_period_secs,
         reports_ttl_secs,
+        reports_max_count,
+        reports_max_bytes,
         max_inflight,
         max_scan_bytes,
         max_scan_millis,
@@ -241,37 +258,38 @@ pub fn configure(
         }
     }
 }
-
 fn with_cfg<R>(f: impl FnOnce(&ProverCfg) -> R) -> Option<R> {
     PROVER_CFG.get().map(|lock| {
         let guard = lock.read();
         f(&*guard)
     })
 }
-
 fn cfg_enabled() -> bool {
     with_cfg(|c| c.enabled).unwrap_or(false)
 }
-
 fn cfg_scan_period() -> Duration {
     Duration::from_secs(with_cfg(|c| c.scan_period_secs).unwrap_or(30))
 }
-
 fn cfg_reports_ttl_secs() -> u64 {
     with_cfg(|c| c.reports_ttl_secs).unwrap_or(7 * 24 * 60 * 60)
 }
-
+fn cfg_reports_max_count() -> u64 {
+    with_cfg(|c| c.reports_max_count)
+        .unwrap_or(iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT)
+}
+fn cfg_reports_max_bytes() -> u64 {
+    with_cfg(|c| c.reports_max_bytes)
+        .unwrap_or(iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_BYTES)
+}
 fn cfg_max_inflight() -> usize {
     with_cfg(|c| c.max_inflight)
         .unwrap_or(iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_INFLIGHT)
         .max(1)
 }
-
 fn cfg_max_scan_bytes() -> u64 {
     with_cfg(|c| c.max_scan_bytes)
         .unwrap_or(iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_SCAN_BYTES)
 }
-
 fn cfg_max_scan_millis() -> u64 {
     #[cfg(test)]
     {
@@ -283,38 +301,30 @@ fn cfg_max_scan_millis() -> u64 {
     with_cfg(|c| c.max_scan_millis)
         .unwrap_or(iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_SCAN_MILLIS)
 }
-
 fn cfg_keys_dir() -> PathBuf {
     with_cfg(|c| c.keys_dir.clone())
         .unwrap_or_else(iroha_config::parameters::defaults::torii::zk_prover_keys_dir)
 }
-
 fn cfg_allowed_backends() -> Vec<String> {
     with_cfg(|c| c.allowed_backends.clone())
         .unwrap_or_else(iroha_config::parameters::defaults::torii::zk_prover_allowed_backends)
 }
-
 fn cfg_allowed_circuits() -> Vec<String> {
     with_cfg(|c| c.allowed_circuits.clone())
         .unwrap_or_else(iroha_config::parameters::defaults::torii::zk_prover_allowed_circuits)
 }
-
 fn cfg_state() -> Option<Arc<CoreState>> {
     with_cfg(|c| c.state.clone()).flatten()
 }
-
 fn telemetry_handle() -> MaybeTelemetry {
     with_cfg(|c| c.telemetry.clone()).unwrap_or_else(MaybeTelemetry::disabled)
 }
-
 fn prover_dir() -> PathBuf {
     super::zk_attachments::base_dir().join("zk_prover")
 }
-
 fn reports_dir() -> PathBuf {
     prover_dir().join("reports")
 }
-
 fn ensure_dirs() {
     // `base_dir()` can be overridden in tests; keep directory creation keyed to the current path.
     static LAST_DIR: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
@@ -330,180 +340,59 @@ fn ensure_dirs() {
         *guard = Some(dir);
     }
 }
-
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
 }
-
 const ATTACHMENT_ID_HEX_LEN: usize = 64;
 const TENANT_KEY_HEX_LEN: usize = 64;
 const PROOF_ATTACHMENT_BODY_MAX_BYTES_V1: u64 =
     iroha_config::parameters::defaults::torii::ZK_PROVER_ATTACHMENT_BODY_MAX_BYTES_V1;
-const REPORT_FILE_MAX_BYTES: u64 = 8 * 1024 * 1024;
-const REPORT_SUMMARY_FILE_MAX_BYTES: u64 = 64 * 1024;
+const REPORT_FILE_MAX_BYTES: u64 =
+    iroha_config::parameters::defaults::torii::ZK_PROVER_REPORT_MAX_BYTES_V1;
+const REPORT_SUMMARY_FILE_MAX_BYTES: u64 =
+    iroha_config::parameters::defaults::torii::ZK_PROVER_REPORT_SUMMARY_MAX_BYTES_V1;
 const REPORT_SUMMARY_ERROR_MAX_BYTES: usize = 4 * 1024;
 const REPORT_SUMMARY_CONTENT_TYPE_MAX_BYTES: usize = 256;
 const REPORT_SUMMARY_TAG_MAX_BYTES: usize = 32;
+const REPORT_RETENTION_EVICTION_BATCH: usize = 128;
+// A discovery slot owns two fixed-length path components plus Vec/HashSet and
+// allocator overhead. Charging a conservative 512 bytes of the configured scan
+// byte geometry per slot keeps discovery memory proportional to the operator's
+// existing scan budget without changing the attachment-body byte accounting.
+const ATTACHMENT_DISCOVERY_BYTES_PER_LOCATION: u64 = 512;
+const ATTACHMENT_DISCOVERY_MAX_LOCATIONS: u64 = 4_096;
+// Directory entries include tenant directories, files, and end-of-directory
+// transitions. Eight work items per retained location permit ordinary
+// one-file tenant layouts to make progress while bounding hostile namespaces.
+const ATTACHMENT_DISCOVERY_WORK_PER_LOCATION: u64 = 8;
+const ATTACHMENT_DISCOVERY_MAX_WORK_ITEMS: u64 =
+    ATTACHMENT_DISCOVERY_MAX_LOCATIONS * ATTACHMENT_DISCOVERY_WORK_PER_LOCATION;
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
+const REPORT_QUERY_DEFAULT_LIMIT: usize = 100;
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
+const REPORT_QUERY_MAX_LIMIT: usize = 1_000;
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
+const REPORT_QUERY_MAX_OFFSET: usize = 10_000;
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
+const REPORT_QUERY_MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 static REPORT_SUMMARY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct AttachmentLocation {
-    tenant_key: String,
-    id: String,
-}
-
-fn sanitize_attachment_id(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.len() != ATTACHMENT_ID_HEX_LEN {
-        return None;
-    }
-    if trimmed.bytes().any(|b| !b.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some(trimmed.to_ascii_lowercase())
-}
-
-fn sanitize_report_id(raw: &str) -> Option<String> {
-    sanitize_attachment_id(raw)
-}
-
-fn sanitize_tenant_key(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.len() != TENANT_KEY_HEX_LEN {
-        return None;
-    }
-    if trimmed.bytes().any(|b| !b.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some(trimmed.to_ascii_lowercase())
-}
-
-fn attachments_root_dir() -> PathBuf {
-    super::zk_attachments::base_dir().join("zk_attachments")
-}
-
-fn attachment_meta_path(tenant_key: &str, id: &str) -> PathBuf {
-    attachments_root_dir()
-        .join(tenant_key)
-        .join(format!("{}.json", id))
-}
-
-fn attachment_bin_path(tenant_key: &str, id: &str) -> PathBuf {
-    attachments_root_dir()
-        .join(tenant_key)
-        .join(format!("{}.bin", id))
-}
-
-fn report_path_from_sanitized(id: &str) -> PathBuf {
-    reports_dir().join(format!("{}.json", id))
-}
-
-fn report_index_dir() -> PathBuf {
-    prover_dir().join("report_index")
-}
-
-fn report_summary_path_from_sanitized(id: &str) -> PathBuf {
-    report_index_dir().join(format!("{id}.json"))
-}
-
-fn report_summary_lock() -> &'static Mutex<()> {
-    REPORT_SUMMARY_LOCK.get_or_init(|| Mutex::new(()))
-}
-
-fn bounded_summary_text(value: &str, max_bytes: usize) -> String {
-    if value.len() <= max_bytes {
-        return value.to_owned();
-    }
-    let marker = "...";
-    let mut end = max_bytes.saturating_sub(marker.len());
-    while end > 0 && !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    let mut bounded = value[..end].to_owned();
-    bounded.push_str(marker);
-    bounded
-}
-
-fn report_summary_from_report(report: &ProverReport) -> ProverReportSummary {
-    let zk1_tags = report.zk1_tags.as_ref().and_then(|tags| {
-        let mut bounded = Vec::new();
-        for tag in tags.iter().take(ZK1_MAX_TLV_COUNT) {
-            let tag = bounded_summary_text(tag, REPORT_SUMMARY_TAG_MAX_BYTES);
-            if !bounded.contains(&tag) {
-                bounded.push(tag);
-            }
-        }
-        (!bounded.is_empty()).then_some(bounded)
-    });
-    ProverReportSummary {
-        id: report.id.clone(),
-        ok: report.ok,
-        error: report
-            .error
-            .as_deref()
-            .map(|error| bounded_summary_text(error, REPORT_SUMMARY_ERROR_MAX_BYTES)),
-        content_type: bounded_summary_text(
-            &report.content_type,
-            REPORT_SUMMARY_CONTENT_TYPE_MAX_BYTES,
-        ),
-        processed_ms: report.processed_ms,
-        zk1_tags,
-    }
-}
-
-fn normalize_report_summaries(raw: Vec<ProverReportSummary>) -> Vec<ProverReportSummary> {
-    let mut by_id: BTreeMap<String, ProverReportSummary> = BTreeMap::new();
-    for mut summary in raw {
-        let Some(clean) = sanitize_report_id(&summary.id) else {
-            continue;
-        };
-        summary.id = clean.clone();
-        by_id.insert(clean, summary);
-    }
-    by_id.into_values().collect()
-}
-
-fn persist_report_summary_locked(summary: &ProverReportSummary) -> std::io::Result<()> {
-    let Some(id) = sanitize_report_id(&summary.id) else {
-        return Err(IoError::new(
-            IoErrorKind::InvalidInput,
-            "invalid prover report summary id",
-        ));
-    };
-    ensure_dirs();
-    fs::create_dir_all(report_index_dir())?;
-    let path = report_summary_path_from_sanitized(&id);
-    let tmp_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut tmp = tempfile::NamedTempFile::new_in(tmp_dir)?;
-    let mut normalized = summary.clone();
-    normalized.id = id;
-    let body = norito::json::to_json(&normalized)
-        .map_err(|error| IoError::new(IoErrorKind::InvalidData, error.to_string()))?;
-    if body.len() as u64 > REPORT_SUMMARY_FILE_MAX_BYTES {
-        return Err(IoError::new(
-            IoErrorKind::InvalidData,
-            "prover report summary exceeds the hard size limit",
-        ));
-    }
-    use std::io::Write as _;
-    tmp.write_all(body.as_bytes())?;
-    tmp.flush()?;
-    tmp.persist(&path).map(|_| ()).map_err(|e| e.error)
-}
-
+static ATTACHMENT_DISCOVERY_STATE: OnceLock<Mutex<Option<AttachmentDiscoveryState>>> =
+    OnceLock::new();
+include!("zk_prover/attachment_discovery_and_report_storage.rs");
+#[cfg(test)]
 fn persist_report_summaries_locked(summaries: &[ProverReportSummary]) -> std::io::Result<()> {
     ensure_dirs();
     fs::create_dir_all(report_index_dir())?;
-    let normalized = normalize_report_summaries(summaries.to_vec());
-    let desired: HashSet<String> = normalized
-        .iter()
-        .map(|summary| summary.id.clone())
-        .collect();
-    for summary in &normalized {
-        persist_report_summary_locked(summary)?;
+    for summary in summaries {
+        let Some(id) = sanitize_report_id(&summary.id) else {
+            continue;
+        };
+        let mut normalized = summary.clone();
+        normalized.id = id;
+        persist_report_summary_locked(&normalized)?;
     }
     for entry in fs::read_dir(report_index_dir())? {
         let entry = entry?;
@@ -514,231 +403,341 @@ fn persist_report_summaries_locked(summaries: &[ProverReportSummary]) -> std::io
             .file_name()
             .to_str()
             .and_then(|name| name.strip_suffix(".json"))
-            .is_some_and(|id| desired.contains(id));
+            .is_some_and(|id| {
+                summaries
+                    .iter()
+                    .filter_map(|summary| sanitize_report_id(&summary.id))
+                    .any(|desired| desired == id)
+            });
         if !keep {
             let _ = fs::remove_file(entry.path());
         }
     }
     Ok(())
 }
-
-fn read_report_summaries_locked() -> Option<Vec<ProverReportSummary>> {
-    let entries = fs::read_dir(report_index_dir()).ok()?;
-    let mut summaries = Vec::new();
-    for entry in entries {
-        let entry = entry.ok()?;
-        if !entry.file_type().ok()?.is_file() {
-            continue;
-        }
-        let name = entry.file_name();
-        let name = name.to_str()?;
-        let Some(raw_id) = name.strip_suffix(".json") else {
+fn read_report_summary_locked(id: &str) -> Option<ProverReportSummary> {
+    let clean = sanitize_report_id(id)?;
+    let path = report_summary_path_from_sanitized(&clean);
+    let metadata = fs::symlink_metadata(&path).ok()?;
+    if !metadata.file_type().is_file() || metadata.len() > REPORT_SUMMARY_FILE_MAX_BYTES {
+        return None;
+    }
+    let mut reader = fs::File::open(path)
+        .ok()?
+        .take(REPORT_SUMMARY_FILE_MAX_BYTES.saturating_add(1));
+    let mut buf = Vec::new();
+    reader.read_to_end(&mut buf).ok()?;
+    if buf.len() as u64 > REPORT_SUMMARY_FILE_MAX_BYTES {
+        return None;
+    }
+    let s = std::str::from_utf8(&buf).ok()?;
+    let mut summary = norito::json::from_json::<ProverReportSummary>(s).ok()?;
+    summary.id = clean;
+    Some(bound_persisted_report_summary(summary))
+}
+fn report_id_from_entry(entry: &fs::DirEntry) -> Option<String> {
+    if !entry.file_type().ok()?.is_file() {
+        return None;
+    }
+    let name = entry.file_name();
+    let raw_id = name.to_str()?.strip_suffix(".json")?;
+    let clean = sanitize_report_id(raw_id)?;
+    (raw_id == clean).then_some(clean)
+}
+fn visit_report_ids(mut visitor: impl FnMut(String) -> bool) {
+    let Ok(entries) = fs::read_dir(reports_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Some(id) = report_id_from_entry(&entry) else {
             continue;
         };
-        let id = sanitize_report_id(raw_id)?;
-        if raw_id != id {
-            return None;
+        if !visitor(id) {
+            break;
         }
-        let file_len = entry.metadata().ok()?.len();
-        if file_len > REPORT_SUMMARY_FILE_MAX_BYTES {
-            return None;
-        }
-        let mut reader = fs::File::open(entry.path())
-            .ok()?
-            .take(REPORT_SUMMARY_FILE_MAX_BYTES.saturating_add(1));
-        let mut buf = Vec::new();
-        reader.read_to_end(&mut buf).ok()?;
-        if buf.len() as u64 > REPORT_SUMMARY_FILE_MAX_BYTES {
-            return None;
-        }
-        let s = std::str::from_utf8(&buf).ok()?;
-        let mut summary = norito::json::from_json::<ProverReportSummary>(s).ok()?;
-        summary.id = id;
-        summaries.push(summary);
     }
-    Some(normalize_report_summaries(summaries))
 }
-
-fn rebuild_report_summaries_locked() -> Vec<ProverReportSummary> {
-    let mut summaries = Vec::new();
-    for id in list_report_ids() {
-        if let Some(report) = load_report(&id) {
-            summaries.push(report_summary_from_report(&report));
+fn load_or_repair_report_summary_locked(id: &str) -> Option<ProverReportSummary> {
+    let clean = sanitize_report_id(id)?;
+    if !report_path_from_sanitized(&clean).is_file() {
+        let _ = fs::remove_file(report_summary_path_from_sanitized(&clean));
+        return None;
+    }
+    if let Some(summary) = read_report_summary_locked(&clean) {
+        return Some(summary);
+    }
+    let report = load_report(&clean)?;
+    let summary = report_summary_from_report(&report);
+    let _ = persist_report_summary_locked(&summary);
+    Some(summary)
+}
+fn visit_report_summaries_locked(mut visitor: impl FnMut(ProverReportSummary) -> bool) {
+    visit_report_ids(|id| {
+        if let Some(summary) = load_or_repair_report_summary_locked(&id) {
+            visitor(summary)
+        } else {
+            true
+        }
+    });
+}
+fn prune_stale_report_summaries_locked() {
+    let Ok(entries) = fs::read_dir(report_index_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Some(id) = report_id_from_entry(&entry) else {
+            continue;
+        };
+        if !report_path_from_sanitized(&id).is_file() {
+            let _ = fs::remove_file(entry.path());
         }
     }
-    let _ = persist_report_summaries_locked(&summaries);
+}
+#[cfg(test)]
+fn read_report_summaries_locked() -> Vec<ProverReportSummary> {
+    let mut summaries = Vec::new();
+    visit_report_summaries_locked(|summary| {
+        if summaries.len()
+            >= usize::try_from(
+                iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT,
+            )
+            .unwrap_or(usize::MAX)
+        {
+            return false;
+        }
+        summaries.push(summary);
+        true
+    });
+    summaries.sort_by(|left, right| left.id.cmp(&right.id));
     summaries
 }
-
+#[cfg(test)]
 fn load_report_summaries() -> Vec<ProverReportSummary> {
     let _guard = report_summary_lock().lock();
-    let mut summaries =
-        read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
-    let mut changed = false;
-    let before = summaries.len();
-    summaries.retain(|summary| report_path_from_sanitized(&summary.id).exists());
-    if summaries.len() != before {
-        changed = true;
-    }
-    let mut indexed: HashSet<String> = summaries.iter().map(|summary| summary.id.clone()).collect();
-    for id in list_report_ids() {
-        if indexed.insert(id.clone())
-            && let Some(report) = load_report(&id)
-        {
-            summaries.push(report_summary_from_report(&report));
-            changed = true;
-        }
-    }
-    if changed {
-        let _ = persist_report_summaries_locked(&summaries);
-    }
-    normalize_report_summaries(summaries)
+    prune_stale_report_summaries_locked();
+    read_report_summaries_locked()
 }
-
-fn upsert_report_summary(report: &ProverReport) -> std::io::Result<()> {
-    let _guard = report_summary_lock().lock();
-    let summary = report_summary_from_report(report);
-    persist_report_summary_locked(&summary)
-}
-
-fn remove_report_summary(id: &str) {
+#[cfg(test)]
+fn remove_report_summary_locked(id: &str) {
     let Some(clean) = sanitize_report_id(id) else {
         return;
     };
-    let _guard = report_summary_lock().lock();
     let _ = fs::remove_file(report_summary_path_from_sanitized(&clean));
 }
-
-#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
-fn filter_report_summary(
-    summary: &ProverReportSummary,
-    q: &ProverListQuery,
-    requested_id: Option<&str>,
-    ok_req: bool,
-    failed_req: bool,
-) -> bool {
-    if let Some(req_id) = requested_id {
-        if summary.id != req_id {
-            return false;
-        }
-    }
-    if let Some(ct) = q.content_type.as_deref() {
-        if !summary.content_type.contains(ct) {
-            return false;
-        }
-    }
-    if let Some(tag) = q.has_tag.as_deref() {
-        let has_tag = summary
-            .zk1_tags
-            .as_ref()
-            .map(|tags| tags.iter().any(|existing| existing == tag))
-            .unwrap_or(false);
-        if !has_tag {
-            return false;
-        }
-    }
-    if !q.since_ms.map_or(true, |th| summary.processed_ms >= th) {
-        return false;
-    }
-    if !q.before_ms.map_or(true, |th| summary.processed_ms <= th) {
-        return false;
-    }
-    match (ok_req, failed_req) {
-        (true, false) => summary.ok,
-        (false, true) => !summary.ok,
-        _ => true,
-    }
+#[cfg(test)]
+fn remove_report_summary(id: &str) {
+    let _guard = report_summary_lock().lock();
+    remove_report_summary_locked(id);
 }
-
-#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
-fn validate_zk1_tag_filter(q: &ProverListQuery) -> Result<(), &'static str> {
-    let Some(tag) = q.has_tag.as_deref() else {
-        return Ok(());
-    };
-    if tag.len() == 4 && tag.as_bytes().iter().all(u8::is_ascii_graphic) {
-        Ok(())
-    } else {
-        Err("invalid ZK1 tag filter (expected exactly four printable ASCII characters)")
-    }
+include!("zk_prover/report_query.rs");
+fn scan_deadline_reached(start: std::time::Instant, max_millis: u64) -> bool {
+    start.elapsed() >= Duration::from_millis(max_millis)
 }
-
-fn list_attachment_locations() -> Vec<AttachmentLocation> {
-    let mut locs = Vec::new();
-    if let Ok(rd) = fs::read_dir(attachments_root_dir()) {
-        for e in rd.flatten() {
-            let Ok(ft) = e.file_type() else { continue };
-            let file_name = e.file_name();
-            let Some(name) = file_name.to_str() else {
-                continue;
-            };
-            if !ft.is_dir() {
-                continue;
-            }
-            let Some(tenant_key) = sanitize_tenant_key(name) else {
-                continue;
-            };
-            if let Ok(trd) = fs::read_dir(attachments_root_dir().join(&tenant_key)) {
-                for te in trd.flatten() {
-                    if !te.file_type().is_ok_and(|file_type| file_type.is_file()) {
-                        continue;
-                    }
-                    let file_name = te.file_name();
-                    let Some(tname) = file_name.to_str() else {
-                        continue;
-                    };
-                    let Some(id) = tname.strip_suffix(".json") else {
-                        continue;
-                    };
-                    let Some(clean) = sanitize_attachment_id(id) else {
-                        continue;
-                    };
-                    locs.push(AttachmentLocation {
-                        tenant_key: tenant_key.clone(),
-                        id: clean,
-                    });
+fn canonicalize_attachment_locations(locations: &mut Vec<AttachmentLocation>) {
+    locations.sort_unstable();
+    let mut seen_ids = HashSet::with_capacity(locations.len());
+    locations.retain(|location| seen_ids.insert(location.id.clone()));
+}
+fn discover_attachment_window(
+    stream: &mut AttachmentDirectoryStream,
+    geometry: AttachmentDiscoveryGeometry,
+    start: std::time::Instant,
+    max_millis: u64,
+    mut include: impl FnMut(&AttachmentLocation) -> bool,
+) -> AttachmentDiscovery {
+    let mut discovery = AttachmentDiscovery::default();
+    loop {
+        if discovery.locations.len() >= geometry.max_locations {
+            discovery.work_exhausted = true;
+            break;
+        }
+        if discovery.work_items >= geometry.max_work_items {
+            discovery.work_exhausted = true;
+            break;
+        }
+        if scan_deadline_reached(start, max_millis) {
+            discovery.time_exhausted = true;
+            break;
+        }
+        let step = stream.step();
+        discovery.work_items = discovery.work_items.saturating_add(1);
+        match step {
+            AttachmentDirectoryStep::Advanced => {}
+            AttachmentDirectoryStep::Location(location) => {
+                if include(&location) {
+                    discovery.locations.push(location);
                 }
             }
+            AttachmentDirectoryStep::Complete => {
+                discovery.sweep_complete = true;
+                break;
+            }
+        }
+        if scan_deadline_reached(start, max_millis) {
+            discovery.time_exhausted = true;
+            break;
         }
     }
-    locs.sort();
-    locs
+    // Directory order is platform-local and non-consensus. Canonical ordering
+    // inside each bounded window keeps scheduling and tests reproducible without
+    // retaining the complete attachment population merely to sort it.
+    canonicalize_attachment_locations(&mut discovery.locations);
+    discovery
 }
-
+fn attachment_discovery_state() -> &'static Mutex<Option<AttachmentDiscoveryState>> {
+    ATTACHMENT_DISCOVERY_STATE.get_or_init(|| Mutex::new(None))
+}
+fn discover_pending_attachment_locations(
+    geometry: AttachmentDiscoveryGeometry,
+    start: std::time::Instant,
+    max_millis: u64,
+) -> AttachmentDiscovery {
+    let root = attachments_root_dir();
+    let mut state_guard = attachment_discovery_state().lock();
+    let root_changed = state_guard
+        .as_ref()
+        .is_some_and(|state| state.root.as_path() != root.as_path());
+    if root_changed || state_guard.is_none() {
+        *state_guard = Some(AttachmentDiscoveryState {
+            root: root.clone(),
+            stream: None,
+            retry_locations: Vec::new(),
+        });
+    }
+    let state = state_guard.as_mut().expect("initialized above");
+    let mut discovery = AttachmentDiscovery::default();
+    if !state.retry_locations.is_empty() {
+        let mut retry_locations = std::mem::take(&mut state.retry_locations)
+            .into_iter()
+            .peekable();
+        loop {
+            if retry_locations.peek().is_none() {
+                break;
+            }
+            if discovery.locations.len() >= geometry.max_locations
+                || discovery.work_items >= geometry.max_work_items
+            {
+                discovery.work_exhausted = true;
+                break;
+            }
+            if scan_deadline_reached(start, max_millis) {
+                discovery.time_exhausted = true;
+                break;
+            }
+            let location = retry_locations.next().expect("peeked above");
+            discovery.work_items = discovery.work_items.saturating_add(1);
+            if !report_path_from_sanitized(&location.id).exists() {
+                discovery.locations.push(location);
+            }
+            if scan_deadline_reached(start, max_millis) {
+                discovery.time_exhausted = true;
+                break;
+            }
+        }
+        state.retry_locations.extend(retry_locations);
+        if discovery.work_exhausted || discovery.time_exhausted {
+            canonicalize_attachment_locations(&mut discovery.locations);
+            return discovery;
+        }
+    }
+    if state.stream.is_none() {
+        let Ok(stream) = AttachmentDirectoryStream::open(root) else {
+            discovery.sweep_complete = true;
+            canonicalize_attachment_locations(&mut discovery.locations);
+            return discovery;
+        };
+        state.stream = Some(stream);
+    }
+    let remaining_geometry = AttachmentDiscoveryGeometry {
+        max_locations: geometry
+            .max_locations
+            .saturating_sub(discovery.locations.len()),
+        max_work_items: geometry.max_work_items.saturating_sub(discovery.work_items),
+    };
+    let streamed = discover_attachment_window(
+        state.stream.as_mut().expect("initialized above"),
+        remaining_geometry,
+        start,
+        max_millis,
+        |location| !report_path_from_sanitized(&location.id).exists(),
+    );
+    discovery.locations.extend(streamed.locations);
+    discovery.work_items = discovery.work_items.saturating_add(streamed.work_items);
+    discovery.sweep_complete = streamed.sweep_complete;
+    discovery.work_exhausted = streamed.work_exhausted;
+    discovery.time_exhausted = streamed.time_exhausted;
+    if discovery.sweep_complete {
+        state.stream = None;
+    }
+    canonicalize_attachment_locations(&mut discovery.locations);
+    discovery
+}
+fn retry_pending_attachment_locations(locations: Vec<AttachmentLocation>) {
+    if locations.is_empty() {
+        return;
+    }
+    let root = attachments_root_dir();
+    let mut state_guard = attachment_discovery_state().lock();
+    let root_changed = state_guard
+        .as_ref()
+        .is_some_and(|state| state.root.as_path() != root.as_path());
+    if root_changed || state_guard.is_none() {
+        *state_guard = Some(AttachmentDiscoveryState {
+            root,
+            stream: None,
+            retry_locations: Vec::new(),
+        });
+    }
+    let state = state_guard.as_mut().expect("initialized above");
+    let hard_cap = usize::try_from(ATTACHMENT_DISCOVERY_MAX_LOCATIONS)
+        .expect("the hard attachment discovery cap fits usize");
+    // Callers can return at most one bounded discovery window. Merge before
+    // truncation so concurrent scans retain the canonical lowest locations,
+    // independent of completion order.
+    state.retry_locations.extend(locations);
+    canonicalize_attachment_locations(&mut state.retry_locations);
+    state.retry_locations.truncate(hard_cap);
+}
 fn find_attachment_location(id: &str) -> Option<AttachmentLocation> {
     let clean = sanitize_attachment_id(id)?;
-    list_attachment_locations()
-        .into_iter()
-        .find(|location| location.id == clean)
+    let mut stream = AttachmentDirectoryStream::open(attachments_root_dir()).ok()?;
+    let mut found: Option<AttachmentLocation> = None;
+    loop {
+        match stream.step() {
+            AttachmentDirectoryStep::Advanced => {}
+            AttachmentDirectoryStep::Location(location) => {
+                if location.id == clean && found.as_ref().is_none_or(|current| &location < current)
+                {
+                    found = Some(location);
+                }
+            }
+            AttachmentDirectoryStep::Complete => return found,
+        }
+    }
 }
-
 fn load_attachment_meta(loc: &AttachmentLocation) -> Option<super::zk_attachments::AttachmentMeta> {
     let path = attachment_meta_path(&loc.tenant_key, &loc.id);
     let buf = read_bounded_attachment_regular_file(&path, ATTACHMENT_META_FILE_MAX_BYTES).ok()?;
     let s = std::str::from_utf8(&buf).ok()?;
     norito::json::from_json::<super::zk_attachments::AttachmentMeta>(s).ok()
 }
-
 struct AttachmentBodyLoad {
     observed_size: u64,
     bytes_read: u64,
     body: Result<Vec<u8>, String>,
 }
-
 enum AttachmentBodyLoadOutcome {
     Loaded(AttachmentBodyLoad),
     DeferredForByteBudget { required_bytes: u64 },
 }
-
 struct AttachmentSnapshot {
     meta: super::zk_attachments::AttachmentMeta,
     body_load: AttachmentBodyLoad,
 }
-
 enum AttachmentSnapshotLoad {
     Ready(AttachmentSnapshot),
     DeferredForByteBudget { required_bytes: u64 },
 }
-
 fn load_attachment_body_with_read_budget(
     loc: &AttachmentLocation,
     read_budget: u64,
@@ -771,7 +770,6 @@ fn load_attachment_body_with_read_budget(
             required_bytes: observed_size,
         });
     }
-
     // Read from this one opened file description and never reopen the path.
     // Limiting the read to the opened size makes aggregate accounting exact;
     // a concurrent grow/shrink is detected from descriptor metadata below.
@@ -813,7 +811,6 @@ fn load_attachment_body_with_read_budget(
         body: Ok(bytes),
     }))
 }
-
 #[cfg(test)]
 fn load_attachment_body(loc: &AttachmentLocation) -> Option<AttachmentBodyLoad> {
     match load_attachment_body_with_read_budget(loc, PROOF_ATTACHMENT_BODY_MAX_BYTES_V1)? {
@@ -823,7 +820,6 @@ fn load_attachment_body(loc: &AttachmentLocation) -> Option<AttachmentBodyLoad> 
         }
     }
 }
-
 fn load_attachment_snapshot(
     loc: &AttachmentLocation,
     read_budget: u64,
@@ -846,8 +842,135 @@ fn load_attachment_snapshot(
     }
     Some(snapshot_load)
 }
-
-fn save_report(rep: &ProverReport) -> std::io::Result<()> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReportRetentionCandidate {
+    processed_ms: u64,
+    id: String,
+    retained_bytes: u64,
+}
+impl Ord for ReportRetentionCandidate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.processed_ms, &self.id, self.retained_bytes).cmp(&(
+            other.processed_ms,
+            &other.id,
+            other.retained_bytes,
+        ))
+    }
+}
+impl PartialOrd for ReportRetentionCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+#[derive(Default)]
+struct ReportStoreScan {
+    count: u64,
+    retained_bytes: u64,
+    oldest: BinaryHeap<ReportRetentionCandidate>,
+}
+fn scan_report_store_locked(exclude_id: &str) -> ReportStoreScan {
+    let mut scan = ReportStoreScan::default();
+    visit_report_ids(|id| {
+        if id == exclude_id {
+            return true;
+        }
+        let report_path = report_path_from_sanitized(&id);
+        let Ok(report_metadata) = fs::symlink_metadata(&report_path) else {
+            return true;
+        };
+        if !report_metadata.file_type().is_file() {
+            return true;
+        }
+        let processed_ms =
+            load_or_repair_report_summary_locked(&id).map_or(0, |summary| summary.processed_ms);
+        let summary_bytes = fs::symlink_metadata(report_summary_path_from_sanitized(&id))
+            .ok()
+            .filter(|metadata| metadata.file_type().is_file())
+            .map_or(0, |metadata| metadata.len());
+        let retained_bytes = report_metadata.len().saturating_add(summary_bytes);
+        scan.count = scan.count.saturating_add(1);
+        scan.retained_bytes = scan.retained_bytes.saturating_add(retained_bytes);
+        let candidate = ReportRetentionCandidate {
+            processed_ms,
+            id,
+            retained_bytes,
+        };
+        if scan.oldest.len() < REPORT_RETENTION_EVICTION_BATCH {
+            scan.oldest.push(candidate);
+        } else if scan
+            .oldest
+            .peek()
+            .is_some_and(|newest_old| candidate < *newest_old)
+        {
+            let _ = scan.oldest.pop();
+            scan.oldest.push(candidate);
+        }
+        true
+    });
+    scan
+}
+fn report_store_fits(count: u64, retained_bytes: u64, max_count: u64, max_bytes: u64) -> bool {
+    count <= max_count && retained_bytes <= max_bytes
+}
+fn remove_file_if_present(path: &Path) -> std::io::Result<bool> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == IoErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+fn delete_report_files_locked(id: &str) -> std::io::Result<bool> {
+    let Some(clean) = sanitize_report_id(id) else {
+        return Ok(false);
+    };
+    let removed = remove_file_if_present(&report_path_from_sanitized(&clean))?;
+    let _ = remove_file_if_present(&report_summary_path_from_sanitized(&clean))?;
+    Ok(removed)
+}
+fn enforce_report_store_capacity_locked(
+    exclude_id: &str,
+    added_count: u64,
+    added_bytes: u64,
+    max_count: u64,
+    max_bytes: u64,
+) -> std::io::Result<usize> {
+    if added_count > max_count || added_bytes > max_bytes {
+        return Err(IoError::new(
+            IoErrorKind::InvalidInput,
+            "prover report retention geometry cannot admit the report",
+        ));
+    }
+    prune_stale_report_summaries_locked();
+    let mut evicted = 0usize;
+    loop {
+        let scan = scan_report_store_locked(exclude_id);
+        let mut projected_count = scan.count.saturating_add(added_count);
+        let mut projected_bytes = scan.retained_bytes.saturating_add(added_bytes);
+        if report_store_fits(projected_count, projected_bytes, max_count, max_bytes) {
+            return Ok(evicted);
+        }
+        let candidates = scan.oldest.into_sorted_vec();
+        if candidates.is_empty() {
+            return Err(IoError::other(
+                "prover report retention geometry cannot admit the report",
+            ));
+        }
+        for candidate in candidates {
+            delete_report_files_locked(&candidate.id)?;
+            evicted = evicted.saturating_add(1);
+            projected_count = projected_count.saturating_sub(1);
+            projected_bytes = projected_bytes.saturating_sub(candidate.retained_bytes);
+            if report_store_fits(projected_count, projected_bytes, max_count, max_bytes) {
+                return Ok(evicted);
+            }
+        }
+    }
+}
+fn save_report_with_limits(
+    rep: &ProverReport,
+    max_count: u64,
+    max_bytes: u64,
+) -> std::io::Result<()> {
     let Some(id) = sanitize_report_id(&rep.id) else {
         return Err(IoError::new(
             IoErrorKind::InvalidInput,
@@ -855,18 +978,39 @@ fn save_report(rep: &ProverReport) -> std::io::Result<()> {
         ));
     };
     ensure_dirs();
+    let body = norito::json::to_json_pretty(rep)
+        .map_err(|error| IoError::new(IoErrorKind::InvalidData, error.to_string()))?;
+    if body.len() as u64 > REPORT_FILE_MAX_BYTES {
+        return Err(IoError::new(
+            IoErrorKind::InvalidData,
+            "prover report exceeds the hard size limit",
+        ));
+    }
+    let summary = report_summary_from_report(rep);
+    let summary_body = norito::json::to_json(&summary)
+        .map_err(|error| IoError::new(IoErrorKind::InvalidData, error.to_string()))?;
+    if summary_body.len() as u64 > REPORT_SUMMARY_FILE_MAX_BYTES {
+        return Err(IoError::new(
+            IoErrorKind::InvalidData,
+            "prover report summary exceeds the hard size limit",
+        ));
+    }
+    let incoming_bytes = (body.len() as u64).saturating_add(summary_body.len() as u64);
+    let _guard = report_summary_lock().lock();
+    enforce_report_store_capacity_locked(&id, 1, incoming_bytes, max_count, max_bytes)?;
     let path = report_path_from_sanitized(&id);
     let tmp_dir = path.parent().unwrap_or_else(|| Path::new("."));
     let mut tmp = tempfile::NamedTempFile::new_in(tmp_dir)?;
-    let s = norito::json::to_json_pretty(rep).unwrap_or_else(|_| "{}".into());
     use std::io::Write as _;
-    tmp.write_all(s.as_bytes())?;
+    tmp.write_all(body.as_bytes())?;
     tmp.flush()?;
     tmp.persist(&path).map(|_| ()).map_err(|e| e.error)?;
-    upsert_report_summary(rep)?;
+    persist_report_summary_locked(&summary)?;
     Ok(())
 }
-
+fn save_report(rep: &ProverReport) -> std::io::Result<()> {
+    save_report_with_limits(rep, cfg_reports_max_count(), cfg_reports_max_bytes())
+}
 fn load_report(id: &str) -> Option<ProverReport> {
     let clean = sanitize_report_id(id)?;
     let path = report_path_from_sanitized(&clean);
@@ -899,30 +1043,10 @@ fn load_report(id: &str) -> Option<ProverReport> {
     report.id = clean;
     Some(report)
 }
-
-fn list_report_ids() -> Vec<String> {
-    let mut ids = Vec::new();
-    if let Ok(rd) = fs::read_dir(reports_dir()) {
-        for e in rd.flatten() {
-            if let Some(name) = e.file_name().to_str() {
-                if let Some(id) = name.strip_suffix(".json") {
-                    if let Some(clean) = sanitize_report_id(id) {
-                        ids.push(clean);
-                    }
-                }
-            }
-        }
-    }
-    ids
-}
-
 fn delete_report_files(id: &str) {
-    if let Some(clean) = sanitize_report_id(id) {
-        let _ = fs::remove_file(report_path_from_sanitized(&clean));
-        remove_report_summary(&clean);
-    }
+    let _guard = report_summary_lock().lock();
+    let _ = delete_report_files_locked(id);
 }
-
 fn record_prover_metrics(report: &ProverReport) {
     let telemetry = telemetry_handle();
     let status_label = if report.ok { "ok" } else { "error" };
@@ -935,7 +1059,6 @@ fn record_prover_metrics(report: &ProverReport) {
         );
     });
 }
-
 /// Garbage collect reports older than configured TTL. Returns number of deleted reports.
 pub fn gc_reports_once() -> usize {
     ensure_dirs();
@@ -944,13 +1067,26 @@ pub fn gc_reports_once() -> usize {
     let ttl_ms = ttl.as_millis() as u64;
     let mut deleted = 0usize;
     let _guard = report_summary_lock().lock();
-    let summaries = read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
-    for summary in summaries {
+    visit_report_summaries_locked(|summary| {
         let age_ms = now.saturating_sub(summary.processed_ms);
         if age_ms > ttl_ms {
-            let _ = fs::remove_file(report_path_from_sanitized(&summary.id));
-            let _ = fs::remove_file(report_summary_path_from_sanitized(&summary.id));
-            deleted += 1;
+            if delete_report_files_locked(&summary.id).unwrap_or(false) {
+                deleted = deleted.saturating_add(1);
+            }
+        }
+        true
+    });
+    prune_stale_report_summaries_locked();
+    match enforce_report_store_capacity_locked(
+        "",
+        0,
+        0,
+        cfg_reports_max_count(),
+        cfg_reports_max_bytes(),
+    ) {
+        Ok(evicted) => deleted = deleted.saturating_add(evicted),
+        Err(error) => {
+            iroha_logger::warn!(%error, "Failed to enforce prover report retention geometry");
         }
     }
     if deleted > 0 {
@@ -959,7 +1095,6 @@ pub fn gc_reports_once() -> usize {
     }
     deleted
 }
-
 #[derive(Clone)]
 struct ProverContext {
     keys_dir: PathBuf,
@@ -967,7 +1102,6 @@ struct ProverContext {
     allowed_circuits: Vec<String>,
     state: Option<Arc<CoreState>>,
 }
-
 fn backend_allowed(backend: &str, allowlist: &[String]) -> bool {
     !is_trusted_setup_backend_label(backend)
         && !is_developer_only_backend_label(backend)
@@ -976,19 +1110,16 @@ fn backend_allowed(backend: &str, allowlist: &[String]) -> bool {
         && is_verifier_backend_registry_label_v1(backend)
         && (allowlist.is_empty() || allowlist.iter().any(|allowed| backend.starts_with(allowed)))
 }
-
 fn is_unsupported_stark_fri_backend_label(backend: &str) -> bool {
     backend.starts_with(iroha_data_model::zk::ZK_BACKEND_STARK_FRI_V1)
         && !iroha_data_model::zk::is_stark_fri_v1_backend_label(backend)
 }
-
 fn circuit_allowed(circuit_id: &str, allowlist: &[String]) -> bool {
     allowlist.is_empty()
         || allowlist
             .iter()
             .any(|allowed| circuit_id.starts_with(allowed))
 }
-
 fn sanitize_vk_component(component: &str) -> String {
     let mut out = String::with_capacity(component.len());
     for ch in component.chars() {
@@ -1000,23 +1131,25 @@ fn sanitize_vk_component(component: &str) -> String {
     }
     if out.is_empty() { "_".to_string() } else { out }
 }
-
 fn vk_store_path(keys_dir: &Path, id: &VerifyingKeyId) -> PathBuf {
     let backend = sanitize_vk_component(id.backend.as_ref());
     let name = sanitize_vk_component(&id.name);
     keys_dir.join(format!("{backend}__{name}.vk"))
 }
-
 fn load_vk_bytes(keys_dir: &Path, id: &VerifyingKeyId) -> Result<Vec<u8>, String> {
     let path = vk_store_path(keys_dir, id);
-    fs::read(&path).map_err(|err| {
+    read_bounded_attachment_regular_file(
+        &path,
+        u64::try_from(VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1)
+            .expect("V1 verifying-key byte ceiling fits u64"),
+    )
+    .map_err(|err| {
         format!(
-            "failed to read verifying key bytes at {}: {err}",
+            "failed to read bounded verifying key bytes at {}: {err}",
             path.display()
         )
     })
 }
-
 fn decode_norito_attachments(body: &[u8]) -> Result<Vec<ProofAttachment>, String> {
     let list_err = match norito::decode_canonical::<ProofAttachmentList>(body) {
         Ok(list) => return Ok(list.into_vec()),
@@ -1030,7 +1163,6 @@ fn decode_norito_attachments(body: &[u8]) -> Result<Vec<ProofAttachment>, String
         "norito decode failed (list: {list_err}, single: {single_err})"
     ))
 }
-
 fn decode_json_attachments(body: &[u8]) -> Result<Vec<ProofAttachment>, String> {
     let list_err = match norito::json::from_slice::<ProofAttachmentList>(body) {
         Ok(list) => return Ok(list.into_vec()),
@@ -1044,7 +1176,6 @@ fn decode_json_attachments(body: &[u8]) -> Result<Vec<ProofAttachment>, String> 
         "json decode failed (canonical list: {list_err}, single: {single_err})"
     ))
 }
-
 fn decode_proof_attachments(
     content_type: &str,
     body: &[u8],
@@ -1054,7 +1185,6 @@ fn decode_proof_attachments(
             "proof attachment body exceeds the {PROOF_ATTACHMENT_BODY_MAX_BYTES_V1}-byte first-release limit"
         ));
     }
-
     match super::utils::strict_typed_content_format(content_type) {
         Some(super::utils::TypedRequestContentFormat::Norito) => {
             if body.len() >= 4 && &body[..4] == b"ZK1\0" {
@@ -1086,7 +1216,6 @@ fn decode_proof_attachments(
         )),
     }
 }
-
 fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -> ProofReportEntry {
     let backend = attachment.backend.clone();
     let backend_str = backend.as_str();
@@ -1094,7 +1223,6 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
     let mut errors = Vec::new();
     let resolved_vk_ref = attachment.vk_ref.clone();
     let mut circuit_id: Option<String> = None;
-
     if attachment.proof.backend.as_str() != backend_str {
         errors.push("proof backend does not match attachment backend".into());
     }
@@ -1119,7 +1247,6 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
             }
         }
     }
-
     let vk_id = &attachment.vk_ref;
     if vk_id.backend.as_str() != backend_str {
         errors.push(format!(
@@ -1137,8 +1264,6 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
             circuit_id,
         };
     }
-
-    let mut vk_box: Option<VerifyingKeyBox> = None;
     let state = match ctx.state.as_ref() {
         Some(state) => state,
         None => {
@@ -1155,7 +1280,7 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
     };
     let world = state.world_view();
     let record = match world.verifying_keys().get(vk_id) {
-        Some(record) => record.clone(),
+        Some(record) => record,
         None => {
             errors.push("verifying key not found in registry".into());
             return ProofReportEntry {
@@ -1184,14 +1309,13 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
         errors.push("vk_commitment does not match registry commitment".into());
     }
     circuit_id = Some(record.circuit_id.clone());
-    if let Some(key) = record.key.clone() {
-        if key.backend.as_str() != backend_str {
+    let vk_box = match record.key.as_ref() {
+        Some(key) if key.backend.as_str() != backend_str => {
             errors.push("verifying key backend does not match proof backend".into());
-        } else {
-            vk_box = Some(key);
+            None
         }
-    } else {
-        match load_vk_bytes(&ctx.keys_dir, vk_id) {
+        Some(key) => Some(std::borrow::Cow::Borrowed(key)),
+        None => match load_vk_bytes(&ctx.keys_dir, vk_id) {
             Ok(bytes) => {
                 if record.vk_len > 0 && bytes.len() != record.vk_len as usize {
                     errors.push(format!(
@@ -1200,12 +1324,18 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
                         record.vk_len
                     ));
                 }
-                vk_box = Some(VerifyingKeyBox::new(backend.clone(), bytes));
+                Some(std::borrow::Cow::Owned(VerifyingKeyBox::new(
+                    backend.clone(),
+                    bytes,
+                )))
             }
-            Err(err) => errors.push(err),
-        }
-    }
-    if let Some(vk_box) = vk_box.as_ref() {
+            Err(err) => {
+                errors.push(err);
+                None
+            }
+        },
+    };
+    if let Some(vk_box) = vk_box.as_deref() {
         if vk_box.bytes.is_empty() {
             errors.push("verifying key bytes are empty".into());
         } else {
@@ -1215,7 +1345,6 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
             }
         }
     }
-
     if !ctx.allowed_circuits.is_empty() {
         match circuit_id.as_deref() {
             Some(circuit) if circuit_allowed(circuit, &ctx.allowed_circuits) => {}
@@ -1223,9 +1352,8 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
             None => errors.push("circuit_id unavailable for allowlist".into()),
         }
     }
-
     if errors.is_empty() {
-        match vk_box.as_ref() {
+        match vk_box.as_deref() {
             Some(vk_box) => {
                 let verified = if let Some(state) = ctx.state.as_ref() {
                     let zk = state.zk_snapshot();
@@ -1246,7 +1374,6 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
             None => errors.push("verifying key bytes missing".into()),
         }
     }
-
     let ok = errors.is_empty();
     ProofReportEntry {
         backend,
@@ -1257,19 +1384,16 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
         circuit_id,
     }
 }
-
 /// Process a single attachment id, emitting a report if not present yet.
 pub fn process_attachment_once(id: &str) -> Option<ProverReport> {
     let clean = sanitize_attachment_id(id)?;
     let loc = find_attachment_location(&clean)?;
     process_attachment_once_at(&loc)
 }
-
 fn process_attachment_once_at(loc: &AttachmentLocation) -> Option<ProverReport> {
     if report_path_from_sanitized(&loc.id).exists() {
         return load_report(&loc.id);
     }
-
     match load_attachment_snapshot(loc, PROOF_ATTACHMENT_BODY_MAX_BYTES_V1)? {
         AttachmentSnapshotLoad::Ready(snapshot) => process_attachment_snapshot_at(loc, snapshot),
         AttachmentSnapshotLoad::DeferredForByteBudget { .. } => {
@@ -1277,7 +1401,6 @@ fn process_attachment_once_at(loc: &AttachmentLocation) -> Option<ProverReport> 
         }
     }
 }
-
 fn validate_attachment_snapshot<'a>(
     loc: &AttachmentLocation,
     meta: &super::zk_attachments::AttachmentMeta,
@@ -1297,7 +1420,6 @@ fn validate_attachment_snapshot<'a>(
     validate_attachment_body_contract(meta, body)?;
     Ok(body)
 }
-
 fn process_attachment_snapshot_at(
     loc: &AttachmentLocation,
     snapshot: AttachmentSnapshot,
@@ -1404,8 +1526,7 @@ fn process_attachment_snapshot_at(
     record_prover_metrics(&rep);
     Some(rep)
 }
-
-/// Scan all known attachments once, generating missing reports.
+/// Scan one bounded attachment-discovery window, generating missing reports.
 #[derive(Debug, Clone, Default)]
 struct ScanStats {
     processed_reports: usize,
@@ -1414,38 +1535,37 @@ struct ScanStats {
     remaining_pending: u64,
     budget_exhausted: Option<&'static str>,
 }
-
 async fn run_budgeted_scan() -> ScanStats {
     ensure_dirs();
     let telemetry = telemetry_handle();
-    let mut pending: Vec<AttachmentLocation> = Vec::new();
-    let mut seen_ids: HashSet<String> = HashSet::new();
-    for loc in list_attachment_locations() {
-        if report_path_from_sanitized(&loc.id).exists() {
-            continue;
-        }
-        if seen_ids.insert(loc.id.clone()) {
-            pending.push(loc);
-        }
-    }
-
-    let mut remaining = pending.len() as u64;
-    telemetry.with_metrics(|tel| tel.set_torii_zk_prover_pending(remaining));
-
     let max_bytes = cfg_max_scan_bytes();
     let max_millis = cfg_max_scan_millis();
     let max_inflight = cfg_max_inflight();
-
+    let start = std::time::Instant::now();
+    // Reserve half of the wall-clock budget for loading and scheduling the
+    // bounded window. Otherwise a large directory can consume the entire
+    // deadline repeatedly without allowing any discovered item to progress.
+    let discovery_max_millis = max_millis.div_ceil(2).max(1);
+    let discovery = discover_pending_attachment_locations(
+        AttachmentDiscoveryGeometry::from_scan_bytes(max_bytes),
+        start,
+        discovery_max_millis,
+    );
+    let mut remaining = discovery.pending_estimate();
+    let discovery_budget_reason = discovery.budget_reason();
+    let discovery_work_exhausted = discovery_budget_reason == Some("work");
+    let discovery_time_exhausted = discovery_budget_reason == Some("time");
+    let mut budget_reason = scan_deadline_reached(start, max_millis).then_some("time");
+    let mut pending = discovery.locations.into_iter();
+    telemetry.with_metrics(|tel| tel.set_torii_zk_prover_pending(remaining));
     let semaphore = Arc::new(Semaphore::new(max_inflight));
     let inflight = Arc::new(AtomicU64::new(0));
-    let start = std::time::Instant::now();
-    let mut budget_reason: Option<&'static str> = None;
     let mut byte_deferred = false;
     let mut bytes_processed = 0u64;
     let mut processed_reports = 0usize;
     let mut join_set = JoinSet::new();
-
-    for loc in pending {
+    let mut retry_locations = Vec::new();
+    while let Some(loc) = pending.next() {
         while join_set.len() >= max_inflight {
             let Some(res) = join_set.join_next().await else {
                 break;
@@ -1460,19 +1580,22 @@ async fn run_budgeted_scan() -> ScanStats {
                     iroha_logger::warn!(%err, "Background prover task join failed");
                 }
             }
-            if start.elapsed().as_millis() as u64 >= max_millis {
+            if scan_deadline_reached(start, max_millis) {
                 budget_reason = Some("time");
                 break;
             }
         }
         if budget_reason.is_some() {
+            retry_locations.push(loc);
+            retry_locations.extend(pending);
             break;
         }
-        if start.elapsed().as_millis() as u64 >= max_millis {
+        if scan_deadline_reached(start, max_millis) {
             budget_reason = Some("time");
+            retry_locations.push(loc);
+            retry_locations.extend(pending);
             break;
         }
-
         let remaining_read_budget = max_bytes.saturating_sub(bytes_processed);
         let snapshot_loc = loc.clone();
         let snapshot_load = match task::spawn_blocking(move || {
@@ -1483,15 +1606,17 @@ async fn run_budgeted_scan() -> ScanStats {
             Ok(snapshot_load) => snapshot_load,
             Err(error) => {
                 iroha_logger::warn!(%error, "Background prover snapshot load failed");
+                retry_locations.push(loc);
                 continue;
             }
         };
-        let crossed_time_budget = start.elapsed().as_millis() as u64 >= max_millis;
+        let crossed_time_budget = scan_deadline_reached(start, max_millis);
         let Some(snapshot_load) = snapshot_load else {
             remaining = remaining.saturating_sub(1);
             telemetry.with_metrics(|tel| tel.set_torii_zk_prover_pending(remaining));
             if crossed_time_budget {
                 budget_reason = Some("time");
+                retry_locations.extend(pending);
                 break;
             }
             continue;
@@ -1501,8 +1626,10 @@ async fn run_budgeted_scan() -> ScanStats {
             AttachmentSnapshotLoad::DeferredForByteBudget { required_bytes } => {
                 let _ = required_bytes;
                 byte_deferred = true;
+                retry_locations.push(loc);
                 if crossed_time_budget {
                     budget_reason = Some("time");
+                    retry_locations.extend(pending);
                     break;
                 }
                 // Do not let one large entry head-of-line block smaller later
@@ -1518,16 +1645,19 @@ async fn run_budgeted_scan() -> ScanStats {
                 "bounded attachment snapshot exceeded its assigned read budget"
             );
             byte_deferred = true;
+            retry_locations.push(loc);
             continue;
         }
-
         bytes_processed = bytes_processed.saturating_add(bytes_read);
         remaining = remaining.saturating_sub(1);
         telemetry.with_metrics(|tel| tel.set_torii_zk_prover_pending(remaining));
-
         let permit = match semaphore.clone().acquire_owned().await {
             Ok(permit) => permit,
-            Err(_) => break,
+            Err(_) => {
+                retry_locations.push(loc);
+                retry_locations.extend(pending);
+                break;
+            }
         };
         let inflight = inflight.clone();
         let telemetry_clone = telemetry.clone();
@@ -1552,10 +1682,11 @@ async fn run_budgeted_scan() -> ScanStats {
             // The body bytes have already been read and charged. Complete
             // this immutable snapshot once, then stop scheduling new work.
             budget_reason = Some("time");
+            retry_locations.extend(pending);
             break;
         }
     }
-
+    retry_pending_attachment_locations(retry_locations);
     while let Some(res) = join_set.join_next().await {
         match res {
             Ok(Ok(true)) => processed_reports += 1,
@@ -1568,11 +1699,15 @@ async fn run_budgeted_scan() -> ScanStats {
             }
         }
     }
-
-    if budget_reason.is_none() && byte_deferred {
-        budget_reason = Some("bytes");
+    if budget_reason.is_none() {
+        if byte_deferred {
+            budget_reason = Some("bytes");
+        } else if discovery_time_exhausted {
+            budget_reason = Some("time");
+        } else if discovery_work_exhausted {
+            budget_reason = Some("work");
+        }
     }
-
     telemetry.with_metrics(|tel| {
         tel.set_torii_zk_prover_inflight(0);
         tel.set_torii_zk_prover_pending(remaining);
@@ -1581,7 +1716,6 @@ async fn run_budgeted_scan() -> ScanStats {
     if let Some(reason) = budget_reason {
         telemetry.with_metrics(|tel| tel.inc_torii_zk_prover_budget_exhausted(reason));
     }
-
     ScanStats {
         processed_reports,
         bytes_processed,
@@ -1590,7 +1724,6 @@ async fn run_budgeted_scan() -> ScanStats {
         budget_exhausted: budget_reason,
     }
 }
-
 fn block_on_scan() -> ScanStats {
     Handle::try_current().map_or_else(
         |_| {
@@ -1625,12 +1758,10 @@ fn block_on_scan() -> ScanStats {
         },
     )
 }
-
 /// Run a single scan synchronously, returning the number of new reports created.
 pub fn scan_once() -> usize {
     block_on_scan().processed_reports
 }
-
 /// Start background scan worker when enabled. No-op if disabled.
 pub fn start_worker() {
     if !cfg_enabled() {
@@ -1649,7 +1780,6 @@ pub fn start_worker() {
         }
     });
 }
-
 // ---------------- Report-store test adapters ----------------
 //
 // These helpers used to compile as dormant public HTTP handlers even though
@@ -1657,8 +1787,8 @@ pub fn start_worker() {
 // tests without shipping an unauthenticated administrative surface. The
 // adapters compile only for unit tests or the explicit integration-test
 // feature. Any future report API must be declared in the route catalog with
-// `RequiredApiToken` before it is compiled for production.
-
+// one exact, replay-protected authentication policy before it is compiled for
+// production.
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 #[derive(
     Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
@@ -1675,7 +1805,7 @@ pub struct ProverListQuery {
     pub content_type: Option<String>,
     /// Require a ZK1 TLV tag to be present. Must be exactly four printable ASCII bytes (e.g., "PROF").
     pub has_tag: Option<String>,
-    /// Maximum number of results to return.
+    /// Maximum number of results to return (default 100, hard maximum 1000).
     pub limit: Option<u32>,
     /// Return only reports with processed_ms >= since_ms.
     pub since_ms: Option<u64>,
@@ -1685,7 +1815,7 @@ pub struct ProverListQuery {
     pub ids_only: Option<bool>,
     /// Result ordering: "asc" (default) or "desc" by processed_ms.
     pub order: Option<String>,
-    /// Offset to apply after ordering and filtering (server-side paging).
+    /// Offset to apply after ordering and filtering (hard maximum 10000).
     pub offset: Option<u32>,
     /// Convenience: alias for `failed_only=true` (errors are reports with ok=false).
     pub errors_only: Option<bool>,
@@ -1694,7 +1824,6 @@ pub struct ProverListQuery {
     /// Convenience: when true, return only the latest report (by processed_ms) after filters.
     pub latest: Option<bool>,
 }
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 /// GET /v1/zk/prover/reports — list prover reports with optional filters.
 pub async fn handle_list_reports(
@@ -1719,42 +1848,10 @@ pub async fn handle_list_reports(
     } else {
         None
     };
-
-    let mut filtered: Vec<ProverReportSummary> = load_report_summaries()
-        .into_iter()
-        .filter(|summary| {
-            filter_report_summary(summary, &q, requested_id.as_deref(), ok_req, failed_req)
-        })
-        .collect();
-    filtered.sort_by_key(|summary| summary.processed_ms);
-    // latest=true overrides order/offset/limit: pick the last (max processed_ms)
-    if q.latest.unwrap_or(false) {
-        if let Some(last) = filtered.pop() {
-            filtered = vec![last];
-        } else {
-            filtered.clear();
-        }
-    } else {
-        // Apply ordering
-        if matches!(q.order.as_deref(), Some("desc" | "DESC" | "Desc")) {
-            filtered.reverse();
-        }
-        // Apply offset then limit
-        if let Some(off) = q.offset {
-            let off = off as usize;
-            if off < filtered.len() {
-                filtered = filtered.split_off(off);
-            } else {
-                filtered.clear();
-            }
-        }
-        if let Some(lim) = q.limit {
-            let cap = lim.min(1000) as usize; // safety cap
-            if filtered.len() > cap {
-                filtered.truncate(cap);
-            }
-        }
-    }
+    let filtered = match select_report_summaries(&q, requested_id.as_deref(), ok_req, failed_req) {
+        Ok(filtered) => filtered,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
     // If ids_only requested, project to ids only
     let s = if q.ids_only.unwrap_or(false) {
         let ids: Vec<String> = filtered.iter().map(|summary| summary.id.clone()).collect();
@@ -1779,18 +1876,18 @@ pub async fn handle_list_reports(
             .collect();
         norito::json::to_json_pretty(&msgs).unwrap_or_else(|_| "[]".into())
     } else {
-        let reports: Vec<ProverReport> = filtered
-            .into_iter()
-            .filter_map(|summary| load_report(&summary.id))
-            .collect();
-        norito::json::to_json_pretty(&reports).unwrap_or_else(|_| "[]".into())
+        match encode_full_report_page(filtered) {
+            Ok(body) => body,
+            Err(message) => {
+                return (StatusCode::PAYLOAD_TOO_LARGE, message).into_response();
+            }
+        }
     };
     axum::response::Response::builder()
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(s))
         .unwrap()
 }
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 /// GET /v1/zk/prover/reports/count — return number of matching prover reports.
 pub async fn handle_count_reports(
@@ -1813,13 +1910,7 @@ pub async fn handle_count_reports(
     } else {
         None
     };
-
-    let count = load_report_summaries()
-        .into_iter()
-        .filter(|summary| {
-            filter_report_summary(summary, &q, requested_id.as_deref(), ok_req, failed_req)
-        })
-        .count() as u64;
+    let count = count_report_summaries(&q, requested_id.as_deref(), ok_req, failed_req);
     let body = norito::json::to_json_pretty(&crate::json_object(vec![("count", count)]))
         .unwrap_or_else(|_| "{}".into());
     axum::response::Response::builder()
@@ -1827,7 +1918,6 @@ pub async fn handle_count_reports(
         .body(axum::body::Body::from(body))
         .unwrap()
 }
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 /// DELETE /v1/zk/prover/reports — bulk delete reports matching filters.
 pub async fn handle_delete_reports(
@@ -1850,18 +1940,19 @@ pub async fn handle_delete_reports(
     } else {
         None
     };
-    let matches: Vec<String> = load_report_summaries()
-        .into_iter()
-        .filter(|summary| {
-            filter_report_summary(summary, &q, requested_id.as_deref(), ok_req, failed_req)
-        })
-        .map(|summary| summary.id)
-        .collect();
-
+    let mut delete_query = q.clone();
+    if delete_query.limit.is_none() {
+        delete_query.limit = Some(REPORT_QUERY_MAX_LIMIT as u32);
+    }
+    let matches =
+        match select_report_summaries(&delete_query, requested_id.as_deref(), ok_req, failed_req) {
+            Ok(matches) => matches,
+            Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        };
     let mut deleted_ids = Vec::new();
-    for id in matches {
-        delete_report_files(&id);
-        deleted_ids.push(id);
+    for summary in matches {
+        delete_report_files(&summary.id);
+        deleted_ids.push(summary.id);
     }
     let deleted_count = deleted_ids.len() as u64;
     let body = norito::json::to_json_pretty(&crate::json_object(vec![
@@ -1874,7 +1965,6 @@ pub async fn handle_delete_reports(
         .body(axum::body::Body::from(body))
         .unwrap()
 }
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 /// GET /v1/zk/prover/reports/{id} — get a single report by id.
 pub async fn handle_get_report(AxumPath(id): AxumPath<String>) -> impl IntoResponse {
@@ -1896,7 +1986,6 @@ pub async fn handle_get_report(AxumPath(id): AxumPath<String>) -> impl IntoRespo
         },
     )
 }
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 /// DELETE /v1/zk/prover/reports/{id} — delete a single report by id.
 pub async fn handle_delete_report(AxumPath(id): AxumPath<String>) -> impl IntoResponse {
@@ -1915,18 +2004,44 @@ pub async fn handle_delete_report(AxumPath(id): AxumPath<String>) -> impl IntoRe
         StatusCode::NOT_FOUND.into_response()
     }
 }
-
 #[cfg(test)]
 mod tests {
     use http_body_util::BodyExt as _;
     use iroha_core::zk::test_utils::{FixtureEnvelope, halo2_ivm_execution_envelope};
     use iroha_data_model::proof::{ProofAttachment, ProofBox};
-
     use super::*;
     use crate::test_utils::TestDataDirGuard;
-
     const TEST_SCAN_BUDGET_MARGIN_BYTES: u64 = 1024;
-
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn verifying_key_file_read_accepts_v1_limit_and_rejects_first_overflow_byte() {
+        let directory = tempfile::tempdir().expect("temporary verifying-key directory");
+        let id = VerifyingKeyId::new("halo2/ipa", "bounded-vk-read");
+        let path = vk_store_path(directory.path(), &id);
+        let limit = u64::try_from(VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1)
+            .expect("V1 verifying-key byte ceiling fits u64");
+        let file = fs::File::create(&path).expect("create exact-bound sparse verifying key");
+        file.set_len(limit)
+            .expect("size exact-bound sparse verifying key");
+        drop(file);
+        let exact = load_vk_bytes(directory.path(), &id)
+            .expect("an exact-bound direct verifying-key file is accepted");
+        assert_eq!(u64::try_from(exact.len()).expect("length fits u64"), limit);
+        drop(exact);
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("reopen verifying key for overflow fixture");
+        file.set_len(limit.saturating_add(1))
+            .expect("size overflowing sparse verifying key");
+        drop(file);
+        let error = load_vk_bytes(directory.path(), &id)
+            .expect_err("the first byte beyond the V1 ceiling must fail before allocation");
+        assert!(
+            error.contains("bounded verifying key bytes"),
+            "unexpected overflow rejection: {error}"
+        );
+    }
     #[test]
     fn report_summary_lock_remains_serialized_and_usable_after_writer_panic() {
         let panic = std::thread::spawn(|| {
@@ -1934,18 +2049,20 @@ mod tests {
             panic!("intentional report-summary writer panic");
         })
         .join();
-
         assert!(panic.is_err());
         let _guard = super::report_summary_lock().lock();
     }
-
     fn configure_test_cfg(allowed_circuits: Vec<String>) {
         let fixture_len = fixture_attachment_bytes().len() as u64;
-        let max_scan_bytes = fixture_len.saturating_add(TEST_SCAN_BUDGET_MARGIN_BYTES);
+        let max_scan_bytes = fixture_len
+            .saturating_add(TEST_SCAN_BUDGET_MARGIN_BYTES)
+            .max(ATTACHMENT_DISCOVERY_BYTES_PER_LOCATION.saturating_mul(8));
         let _ = super::configure(
             true,
             1,
             7 * 24 * 60 * 60,
+            iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT,
+            iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_BYTES,
             2,
             max_scan_bytes,
             5_000,
@@ -1959,24 +2076,19 @@ mod tests {
         super::TEST_SNAPSHOT_LOAD_DELAY_MS.store(0, AtomicOrdering::SeqCst);
         super::MAX_INFLIGHT_OBSERVED.store(0, AtomicOrdering::SeqCst);
     }
-
     fn init_test_cfg() {
         configure_test_cfg(iroha_config::parameters::defaults::torii::zk_prover_allowed_circuits());
     }
-
     struct SnapshotLoadDelayReset;
-
     impl Drop for SnapshotLoadDelayReset {
         fn drop(&mut self) {
             super::TEST_SNAPSHOT_LOAD_DELAY_MS.store(0, AtomicOrdering::SeqCst);
             super::TEST_MAX_SCAN_MILLIS_OVERRIDE.store(0, AtomicOrdering::SeqCst);
         }
     }
-
     fn attachment_body_id(body: &[u8]) -> String {
         hex::encode::<[u8; 32]>(Hash::new(body).into())
     }
-
     fn fixture_attachment_provenance(
         body: &[u8],
         content_type: &str,
@@ -1996,13 +2108,11 @@ mod tests {
             },
         }
     }
-
     fn corrupt_report_summary(id: &str) {
         fs::create_dir_all(report_index_dir()).expect("create report summary directory");
         fs::write(report_summary_path_from_sanitized(id), "{not json")
             .expect("write malformed report summary");
     }
-
     #[test]
     fn prover_backend_allowlist_rejects_trusted_setup_labels() {
         let broad_halo2 = ["halo2/".to_owned()];
@@ -2031,7 +2141,6 @@ mod tests {
         }
         assert!(backend_allowed("halo2/ipa", &broad_halo2));
     }
-
     #[test]
     fn prover_backend_allowlist_rejects_developer_only_labels() {
         for backend in [
@@ -2062,7 +2171,6 @@ mod tests {
         }
         assert!(backend_allowed("halo2/ipa", &[]));
     }
-
     #[test]
     fn prover_backend_allowlist_rejects_protocol_claimed_and_unregistered_stark_labels() {
         let broad_backends = [
@@ -2107,7 +2215,6 @@ mod tests {
                 "unsafe backend {backend} must not pass broad prover allowlists"
             );
         }
-
         for backend in [
             "halo2/ipa",
             "halo2/ipa:ivm-execution-v1",
@@ -2127,7 +2234,6 @@ mod tests {
             );
         }
     }
-
     fn fixture_envelope() -> FixtureEnvelope {
         static FIXTURE: OnceLock<FixtureEnvelope> = OnceLock::new();
         FIXTURE
@@ -2141,7 +2247,6 @@ mod tests {
             })
             .clone()
     }
-
     fn fixture_attachment() -> ProofAttachment {
         let fixture = fixture_envelope();
         let vk = fixture.vk_box("halo2/ipa").expect("fixture vk bytes");
@@ -2152,11 +2257,9 @@ mod tests {
         attachment.vk_commitment = Some(vk_commitment);
         attachment
     }
-
     fn fixture_attachment_bytes() -> Vec<u8> {
         norito::encode_canonical(&fixture_attachment()).expect("canonical proof attachment bytes")
     }
-
     #[test]
     fn json_attachment_ingress_rejects_legacy_array_surface() {
         let attachment = fixture_attachment();
@@ -2167,7 +2270,6 @@ mod tests {
                 .expect("single proof attachment object must remain accepted"),
             vec![attachment]
         );
-
         let array_json = format!("[{single_json}]");
         let error = decode_proof_attachments("application/json", array_json.as_bytes())
             .expect_err("legacy JSON proof-attachment arrays must be rejected");
@@ -2180,13 +2282,11 @@ mod tests {
             "legacy Vec decoder leaked into the accepted JSON surface: {error}"
         );
     }
-
     #[test]
     fn attachment_ingress_uses_exact_media_types_and_canonical_norito() {
         let attachment = fixture_attachment();
         let canonical =
             norito::encode_canonical(&attachment).expect("canonical proof attachment bytes");
-
         for content_type in ["application/x-norito", " Application/X-Norito\t"] {
             assert_eq!(
                 decode_proof_attachments(content_type, &canonical)
@@ -2195,7 +2295,6 @@ mod tests {
                 "content type {content_type}"
             );
         }
-
         for content_type in [
             "",
             "application/octet-stream",
@@ -2216,7 +2315,6 @@ mod tests {
                 "unexpected {content_type} rejection: {error}"
             );
         }
-
         let mut noncanonical = canonical.clone();
         let last = noncanonical
             .last_mut()
@@ -2228,7 +2326,6 @@ mod tests {
             error.contains("norito decode error"),
             "unexpected error: {error}"
         );
-
         let list = ProofAttachmentList::try_from(vec![attachment.clone(), attachment.clone()])
             .expect("two attachments are a valid bounded proof list");
         let list_frame =
@@ -2244,7 +2341,6 @@ mod tests {
                 .expect("canonical base64 JSON list must decode"),
             vec![attachment.clone(), attachment]
         );
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate_single = {
@@ -2261,7 +2357,6 @@ mod tests {
             error.contains("norito decode error"),
             "unexpected error: {error}"
         );
-
         let alternate_list = {
             let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             norito::core::to_bytes(&list).expect("valid alternate-layout attachment list")
@@ -2275,7 +2370,6 @@ mod tests {
             error.contains("norito decode error"),
             "unexpected error: {error}"
         );
-
         for (label, compressed) in [
             ("single", {
                 let mut bytes = Vec::new();
@@ -2301,7 +2395,6 @@ mod tests {
                 "unexpected compressed-{label} rejection: {error}"
             );
         }
-
         let oversized = vec![0_u8; PROOF_ATTACHMENT_BODY_MAX_BYTES_V1 as usize + 1];
         let error = decode_proof_attachments("application/x-norito", &oversized)
             .expect_err("oversized proof body must fail before decoding");
@@ -2310,7 +2403,6 @@ mod tests {
             "unexpected oversized-body rejection: {error}"
         );
     }
-
     fn fixture_state() -> Arc<CoreState> {
         let fixture = fixture_envelope();
         let vk = fixture.vk_box("halo2/ipa").expect("fixture vk bytes");
@@ -2330,7 +2422,6 @@ mod tests {
         record.max_proof_bytes = 1024 * 1024;
         record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
         record.key = Some(vk);
-
         let mut world = iroha_core::state::World::new();
         world
             .verifying_keys_mut_for_testing()
@@ -2351,7 +2442,6 @@ mod tests {
             .expect("empty SCCP outbox accepts prover test configuration");
         Arc::new(state)
     }
-
     #[test]
     fn prover_worker_does_not_classify_profileless_stark_prefix_as_stark() {
         let ctx = ProverContext {
@@ -2365,7 +2455,6 @@ mod tests {
             ProofBox::new("stark/fri/".to_owned(), vec![0x42]),
             VerifyingKeyId::new("stark/fri/", "profileless"),
         );
-
         let report = process_proof_attachment(&ctx, &attachment);
         let error = report
             .error
@@ -2381,7 +2470,6 @@ mod tests {
         );
         assert!(report.circuit_id.is_none());
     }
-
     #[test]
     fn prover_worker_rejects_trusted_setup_backend_before_registry_lookup() {
         let ctx = ProverContext {
@@ -2396,7 +2484,6 @@ mod tests {
                 ProofBox::new(backend.to_owned(), vec![0x42]),
                 VerifyingKeyId::new(backend, "trusted-setup"),
             );
-
             let report = process_proof_attachment(&ctx, &attachment);
             let error = report
                 .error
@@ -2409,7 +2496,6 @@ mod tests {
             assert!(report.circuit_id.is_none(), "case {backend}");
         }
     }
-
     #[test]
     fn prover_worker_rejects_developer_only_backend_before_registry_lookup() {
         let ctx = ProverContext {
@@ -2424,7 +2510,6 @@ mod tests {
                 ProofBox::new(backend.to_owned(), vec![0x42]),
                 VerifyingKeyId::new(backend, "developer-only"),
             );
-
             let report = process_proof_attachment(&ctx, &attachment);
             let error = report
                 .error
@@ -2437,7 +2522,6 @@ mod tests {
             assert!(report.circuit_id.is_none(), "case {backend}");
         }
     }
-
     #[test]
     fn prover_worker_rejects_attachment_backend_mismatch_before_registry_lookup() {
         let ctx = ProverContext {
@@ -2451,7 +2535,6 @@ mod tests {
             ProofBox::new("stark/fri".to_owned(), vec![0x42]),
             VerifyingKeyId::new("halo2/ipa", "tiny-add"),
         );
-
         let report = process_proof_attachment(&ctx, &attachment);
         let error = report
             .error
@@ -2463,7 +2546,6 @@ mod tests {
         );
         assert!(report.circuit_id.is_none());
     }
-
     #[test]
     fn prover_worker_still_reports_missing_registry_for_supported_backend() {
         let ctx = ProverContext {
@@ -2477,7 +2559,6 @@ mod tests {
             ProofBox::new("halo2/ipa".to_owned(), vec![0x42]),
             VerifyingKeyId::new("halo2/ipa", "missing-vk"),
         );
-
         let report = process_proof_attachment(&ctx, &attachment);
         let error = report
             .error
@@ -2485,18 +2566,15 @@ mod tests {
         assert!(error.contains("verifying key not found"));
         assert!(report.circuit_id.is_none());
     }
-
     fn anon_tenant_key() -> String {
         super::super::zk_attachments::AttachmentTenant::anonymous()
             .as_str()
             .to_string()
     }
-
     fn ensure_tenant_dir(tenant_key: &str) {
         fs::create_dir_all(attachments_root_dir().join(tenant_key))
             .expect("attachments tenant dir");
     }
-
     fn sample_report(
         id: String,
         ok: bool,
@@ -2521,7 +2599,6 @@ mod tests {
             proofs: Vec::new(),
         }
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn get_report_rejects_invalid_id() {
         let response = axum::response::IntoResponse::into_response(
@@ -2529,7 +2606,6 @@ mod tests {
         );
         assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_rejects_invalid_id() {
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
@@ -2540,7 +2616,6 @@ mod tests {
         .into_response();
         assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn count_reports_rejects_invalid_id() {
         let response = super::handle_count_reports(NoritoQuery(ProverListQuery {
@@ -2551,7 +2626,6 @@ mod tests {
         .into_response();
         assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn delete_reports_rejects_invalid_id() {
         let response = super::handle_delete_reports(NoritoQuery(ProverListQuery {
@@ -2562,23 +2636,19 @@ mod tests {
         .into_response();
         assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn get_report_returns_not_found_for_missing_report() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let response = axum::response::IntoResponse::into_response(
             super::handle_get_report(axum::extract::Path("fd".repeat(32))).await,
         );
         assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn get_report_returns_saved_report_payload() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let report = sample_report(
             "0f".repeat(32),
             false,
@@ -2587,7 +2657,6 @@ mod tests {
             now_ms(),
         );
         save_report(&report).expect("save report");
-
         let response = axum::response::IntoResponse::into_response(
             super::handle_get_report(axum::extract::Path(report.id.to_ascii_uppercase())).await,
         );
@@ -2605,7 +2674,6 @@ mod tests {
         assert_eq!(loaded.error.as_deref(), Some("verification failed"));
         assert_eq!(loaded.content_type, "application/x-zk1");
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn delete_report_rejects_invalid_id() {
         let response = axum::response::IntoResponse::into_response(
@@ -2613,26 +2681,21 @@ mod tests {
         );
         assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn delete_report_returns_not_found_for_missing_report() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let response = axum::response::IntoResponse::into_response(
             super::handle_delete_report(axum::extract::Path("fe".repeat(32))).await,
         );
         assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn delete_report_removes_existing_report_and_index() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let report = sample_report("1f".repeat(32), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
-
         let response = axum::response::IntoResponse::into_response(
             super::handle_delete_report(axum::extract::Path(report.id.to_ascii_uppercase())).await,
         );
@@ -2648,12 +2711,10 @@ mod tests {
             "deleted report should be removed from the index"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn delete_report_rebuilds_malformed_index_and_preserves_other_reports() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let first = sample_report("2f".repeat(32), true, None, "application/json", now_ms());
         let second = sample_report(
             "3f".repeat(32),
@@ -2665,7 +2726,6 @@ mod tests {
         save_report(&first).expect("save first report");
         save_report(&second).expect("save second report");
         corrupt_report_summary(&first.id);
-
         let response = axum::response::IntoResponse::into_response(
             super::handle_delete_report(axum::extract::Path(first.id.clone())).await,
         );
@@ -2678,12 +2738,10 @@ mod tests {
             load_report(&second.id).is_some(),
             "other report should remain"
         );
-
         let summaries = load_report_summaries();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, second.id);
     }
-
     #[test]
     fn report_index_tracks_save_and_delete() {
         init_test_cfg();
@@ -2711,7 +2769,6 @@ mod tests {
             summaries.iter().any(|summary| summary.id == id),
             "saved report should appear in index"
         );
-
         delete_report_files(&id);
         let summaries = load_report_summaries();
         assert!(
@@ -2719,12 +2776,10 @@ mod tests {
             "deleted report should be removed from index"
         );
     }
-
     #[test]
     fn report_summary_upserts_touch_only_the_matching_shard() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let first = sample_report("a1".repeat(32), true, None, "application/json", now_ms());
         let second = sample_report(
             "a2".repeat(32),
@@ -2736,9 +2791,7 @@ mod tests {
         save_report(&first).expect("save first report");
         let first_path = report_summary_path_from_sanitized(&first.id);
         let first_bytes = fs::read(&first_path).expect("read first summary shard");
-
         save_report(&second).expect("save second report");
-
         assert_eq!(
             fs::read(&first_path).expect("read unchanged first summary shard"),
             first_bytes,
@@ -2750,7 +2803,6 @@ mod tests {
             "the quadratic monolithic report index must not be recreated"
         );
     }
-
     #[test]
     fn report_summary_bounds_untrusted_variable_length_fields() {
         let mut report = sample_report("a3".repeat(32), false, None, "application/json", now_ms());
@@ -2761,7 +2813,6 @@ mod tests {
                 .map(|index| format!("{index:04}-{}", "x".repeat(REPORT_SUMMARY_TAG_MAX_BYTES)))
                 .collect(),
         );
-
         let summary = report_summary_from_report(&report);
         assert!(
             summary.error.as_deref().expect("bounded error").len()
@@ -2777,12 +2828,123 @@ mod tests {
         let encoded = norito::json::to_json(&summary).expect("encode bounded summary");
         assert!(encoded.len() as u64 <= REPORT_SUMMARY_FILE_MAX_BYTES);
     }
-
+    #[test]
+    fn persisted_report_summary_is_rebounded_after_decode() {
+        let summary = bound_persisted_report_summary(ProverReportSummary {
+            id: "aa".repeat(32),
+            ok: false,
+            error: Some("é".repeat(REPORT_SUMMARY_ERROR_MAX_BYTES)),
+            content_type: "x".repeat(REPORT_SUMMARY_CONTENT_TYPE_MAX_BYTES + 1),
+            processed_ms: 1,
+            zk1_tags: Some(
+                (0..=ZK1_MAX_TLV_COUNT)
+                    .map(|index| format!("{index:04}{}", "x".repeat(REPORT_SUMMARY_TAG_MAX_BYTES)))
+                    .collect(),
+            ),
+        });
+        assert!(
+            summary.error.as_deref().expect("bounded error").len()
+                <= REPORT_SUMMARY_ERROR_MAX_BYTES
+        );
+        assert!(summary.content_type.len() <= REPORT_SUMMARY_CONTENT_TYPE_MAX_BYTES);
+        assert_eq!(
+            summary.zk1_tags.as_ref().expect("bounded tags").len(),
+            ZK1_MAX_TLV_COUNT
+        );
+    }
+    fn encoded_report_store_bytes(report: &ProverReport) -> u64 {
+        let report_bytes = norito::json::to_json_pretty(report)
+            .expect("encode report")
+            .len() as u64;
+        let summary_bytes = norito::json::to_json(&report_summary_from_report(report))
+            .expect("encode summary")
+            .len() as u64;
+        report_bytes.saturating_add(summary_bytes)
+    }
+    #[test]
+    fn report_store_count_limit_evicts_the_oldest_report_on_append() {
+        let _env = TestDataDirGuard::new();
+        let first = sample_report("a4".repeat(32), true, None, "application/json", 1);
+        let second = sample_report("a5".repeat(32), true, None, "application/json", 2);
+        let third = sample_report("a6".repeat(32), true, None, "application/json", 3);
+        save_report_with_limits(&first, 2, u64::MAX).expect("save first report");
+        save_report_with_limits(&second, 2, u64::MAX).expect("save second report");
+        save_report_with_limits(&third, 2, u64::MAX).expect("save third report");
+        assert!(
+            load_report(&first.id).is_none(),
+            "oldest report must be evicted"
+        );
+        assert!(load_report(&second.id).is_some());
+        assert!(load_report(&third.id).is_some());
+    }
+    #[test]
+    fn report_store_byte_limit_evicts_before_persisting_the_new_report() {
+        let _env = TestDataDirGuard::new();
+        let first = sample_report("a7".repeat(32), true, None, "application/json", 1);
+        let mut second = sample_report("a8".repeat(32), false, None, "application/json", 2);
+        second.error = Some("bounded verifier failure".repeat(16));
+        let byte_limit = encoded_report_store_bytes(&first)
+            .saturating_add(encoded_report_store_bytes(&second))
+            .saturating_sub(1);
+        save_report_with_limits(&first, 10, byte_limit).expect("save first report");
+        save_report_with_limits(&second, 10, byte_limit).expect("save second report");
+        assert!(
+            load_report(&first.id).is_none(),
+            "old bytes must be reclaimed"
+        );
+        assert!(load_report(&second.id).is_some());
+    }
+    #[test]
+    fn report_store_rejects_an_item_larger_than_its_byte_geometry() {
+        let _env = TestDataDirGuard::new();
+        let report = sample_report("a9".repeat(32), true, None, "application/json", 1);
+        let required = encoded_report_store_bytes(&report);
+        let error = save_report_with_limits(&report, 1, required.saturating_sub(1))
+            .expect_err("an individually impossible report must be rejected");
+        assert_eq!(error.kind(), IoErrorKind::InvalidInput);
+        assert!(!report_path_from_sanitized(&report.id).exists());
+    }
+    #[test]
+    fn bounded_report_key_selection_never_retains_more_than_the_requested_window() {
+        let mut keys = BoundedReportKeys::new(false);
+        for processed_ms in (0..10_000_u64).rev() {
+            keys.consider(
+                ReportOrderKey {
+                    processed_ms,
+                    id: format!("{processed_ms:064x}"),
+                },
+                3,
+            );
+        }
+        let selected = keys.into_ordered();
+        assert_eq!(selected.len(), 3);
+        assert_eq!(selected[0].processed_ms, 0);
+        assert_eq!(selected[2].processed_ms, 2);
+    }
+    #[test]
+    fn report_query_window_caps_limit_and_rejects_offset_overflow() {
+        assert_eq!(
+            report_query_window(&ProverListQuery::default()).expect("default window"),
+            (0, REPORT_QUERY_DEFAULT_LIMIT)
+        );
+        let capped = report_query_window(&ProverListQuery {
+            limit: Some(u32::MAX),
+            offset: Some(REPORT_QUERY_MAX_OFFSET as u32),
+            ..Default::default()
+        })
+        .expect("maximum supported offset");
+        assert_eq!(capped, (REPORT_QUERY_MAX_OFFSET, REPORT_QUERY_MAX_LIMIT));
+        let error = report_query_window(&ProverListQuery {
+            offset: Some(REPORT_QUERY_MAX_OFFSET as u32 + 1),
+            ..Default::default()
+        })
+        .expect_err("offset beyond the bounded selection window must fail");
+        assert!(error.contains("pagination ceiling"));
+    }
     #[test]
     fn delete_report_files_prunes_stale_index_entry_when_file_is_missing() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let id = "f1".repeat(32);
         persist_report_summaries_locked(&[ProverReportSummary {
             id: id.clone(),
@@ -2793,23 +2955,17 @@ mod tests {
             zk1_tags: None,
         }])
         .expect("persist stale index");
-
         delete_report_files(&id);
-
-        let persisted = read_report_summaries_locked().expect("read report index");
+        let persisted = read_report_summaries_locked();
         assert!(persisted.is_empty(), "stale summary should be removed");
     }
-
     #[test]
     fn delete_report_files_ignores_invalid_id_and_preserves_existing_reports() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let report = sample_report("f2".repeat(32), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
-
         delete_report_files("../bad");
-
         assert!(
             load_report(&report.id).is_some(),
             "invalid delete should not remove valid reports"
@@ -2818,23 +2974,18 @@ mod tests {
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, report.id);
     }
-
     #[test]
     fn remove_report_summary_ignores_invalid_and_missing_ids() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let report = sample_report("f3".repeat(32), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
-
         remove_report_summary("../bad");
         remove_report_summary(&"f4".repeat(32));
-
         let summaries = load_report_summaries();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, report.id);
     }
-
     #[test]
     fn load_report_rejects_oversized_report_file() {
         init_test_cfg();
@@ -2849,13 +3000,11 @@ mod tests {
             "oversized report must be rejected"
         );
     }
-
     #[test]
     fn load_report_rejects_non_utf8_report_file() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
         ensure_dirs();
-
         let id = "ac".repeat(32);
         fs::write(report_path_from_sanitized(&id), [0xff, 0xfe, 0xfd]).expect("write report");
         assert!(
@@ -2863,13 +3012,11 @@ mod tests {
             "non-utf8 report payload must be rejected"
         );
     }
-
     #[test]
     fn load_report_rejects_malformed_report_json() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
         ensure_dirs();
-
         let id = "ad".repeat(32);
         fs::write(report_path_from_sanitized(&id), "{not json").expect("write report");
         assert!(
@@ -2877,12 +3024,10 @@ mod tests {
             "malformed report json must be rejected"
         );
     }
-
     #[test]
     fn load_report_returns_none_for_invalid_id() {
         assert!(load_report("../bad").is_none());
     }
-
     #[test]
     fn normalize_report_summaries_drops_invalid_ids_and_keeps_last_duplicate() {
         let dup_id = "cd".repeat(32);
@@ -2912,7 +3057,6 @@ mod tests {
                 zk1_tags: Some(vec!["PROF".to_string()]),
             },
         ]);
-
         assert_eq!(normalized.len(), 1);
         assert_eq!(normalized[0].id, dup_id);
         assert!(!normalized[0].ok);
@@ -2923,47 +3067,37 @@ mod tests {
             Some(&["PROF".to_string()][..])
         );
     }
-
     #[test]
     fn load_report_summaries_rebuilds_when_report_summary_is_malformed() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let report = sample_report("bb".repeat(32), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
         corrupt_report_summary(&report.id);
-
         let summaries = load_report_summaries();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, report.id);
-
-        let persisted = read_report_summaries_locked().expect("rebuilt index");
+        let persisted = read_report_summaries_locked();
         assert_eq!(persisted.len(), 1);
         assert_eq!(persisted[0].id, report.id);
     }
-
     #[test]
     fn load_report_summaries_rebuilds_empty_index_when_no_reports_exist() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let summaries = load_report_summaries();
         assert!(summaries.is_empty());
-
-        let persisted = read_report_summaries_locked().expect("persisted empty index");
+        let persisted = read_report_summaries_locked();
         assert!(persisted.is_empty());
     }
-
     #[test]
     fn load_report_summaries_prunes_missing_report_files_from_index() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let keep_id = "33".repeat(32);
         let missing_id = "44".repeat(32);
         let keep = sample_report(keep_id.clone(), true, None, "application/json", now_ms());
         save_report(&keep).expect("save kept report");
-
         persist_report_summaries_locked(&[
             report_summary_from_report(&keep),
             ProverReportSummary {
@@ -2976,25 +3110,20 @@ mod tests {
             },
         ])
         .expect("persist stale index");
-
         let summaries = load_report_summaries();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, keep_id);
-
-        let persisted = read_report_summaries_locked().expect("read cleaned index");
+        let persisted = read_report_summaries_locked();
         assert_eq!(persisted.len(), 1);
         assert_eq!(persisted[0].id, keep_id);
     }
-
     #[test]
     fn load_report_summaries_normalizes_valid_index_entries_and_deduplicates_ids() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let id = "45".repeat(32);
         let report = sample_report(id.clone(), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
-
         persist_report_summaries_locked(&[
             ProverReportSummary {
                 id: "bad".to_string(),
@@ -3022,7 +3151,6 @@ mod tests {
             },
         ])
         .expect("persist duplicated report index");
-
         let summaries = load_report_summaries();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, id);
@@ -3033,17 +3161,14 @@ mod tests {
             summaries[0].zk1_tags.as_deref(),
             Some(&["PROF".to_string()][..])
         );
-
-        let persisted = read_report_summaries_locked().expect("read normalized index");
+        let persisted = read_report_summaries_locked();
         assert_eq!(persisted.len(), 1);
         assert_eq!(persisted[0].id, id);
     }
-
     #[test]
     fn save_report_recovers_when_existing_summary_is_malformed() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let first = sample_report("d1".repeat(32), true, None, "application/json", now_ms());
         let second = sample_report(
             "d2".repeat(32),
@@ -3052,23 +3177,19 @@ mod tests {
             "application/x-zk1",
             first.processed_ms.saturating_add(1),
         );
-
         save_report(&first).expect("save first report");
         corrupt_report_summary(&first.id);
         save_report(&second).expect("save second report");
-
         let summaries = load_report_summaries();
         assert_eq!(summaries.len(), 2);
         assert!(summaries.iter().any(|summary| summary.id == first.id));
         assert!(summaries.iter().any(|summary| summary.id == second.id));
     }
-
     #[test]
     fn load_report_normalizes_persisted_uppercase_id() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
         ensure_dirs();
-
         let id = "ef".repeat(32);
         let persisted = sample_report(
             id.to_ascii_uppercase(),
@@ -3082,16 +3203,13 @@ mod tests {
             norito::json::to_json_pretty(&persisted).expect("report json"),
         )
         .expect("write report");
-
         let loaded = load_report(&id.to_ascii_uppercase()).expect("load report");
         assert_eq!(loaded.id, id);
     }
-
     #[test]
     fn save_report_rejects_invalid_id() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let err = save_report(&sample_report(
             "bad".to_string(),
             true,
@@ -3102,12 +3220,10 @@ mod tests {
         .expect_err("invalid report id should be rejected");
         assert_eq!(err.kind(), IoErrorKind::InvalidInput);
     }
-
     #[test]
     fn save_report_updates_existing_summary_without_duplicates() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let id = "ca".repeat(32);
         let first = sample_report(id.clone(), true, None, "application/json", now_ms());
         let mut updated = sample_report(
@@ -3118,10 +3234,8 @@ mod tests {
             first.processed_ms.saturating_add(10),
         );
         updated.zk1_tags = Some(vec!["PROF".to_string()]);
-
         save_report(&first).expect("save initial report");
         save_report(&updated).expect("save updated report");
-
         let summaries = load_report_summaries();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, id);
@@ -3133,30 +3247,29 @@ mod tests {
             summaries[0].zk1_tags.as_deref(),
             Some(&["PROF".to_string()][..])
         );
-
         let loaded = load_report(&id).expect("load updated report");
         assert!(!loaded.ok);
         assert_eq!(loaded.error.as_deref(), Some("verification failed"));
         assert_eq!(loaded.processed_ms, updated.processed_ms);
         assert_eq!(loaded.zk1_tags.as_deref(), Some(&["PROF".to_string()][..]));
     }
-
     #[test]
-    fn list_report_ids_ignores_invalid_entries_and_normalizes_case() {
+    fn report_id_visitor_ignores_invalid_entries() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
         ensure_dirs();
-
         let uppercase_id = "AB".repeat(32);
         let clean_id = uppercase_id.to_ascii_lowercase();
         fs::write(report_path_from_sanitized(&clean_id), b"{}").expect("write report file");
         fs::write(reports_dir().join("bad.json"), b"{}").expect("write invalid report id");
         fs::write(reports_dir().join("not-a-report.txt"), b"{}").expect("write non-report file");
-
-        let ids = list_report_ids();
+        let mut ids = Vec::new();
+        visit_report_ids(|id| {
+            ids.push(id);
+            true
+        });
         assert_eq!(ids, vec![clean_id]);
     }
-
     #[test]
     fn filter_report_summary_applies_requested_id_content_type_tag_and_time_bounds() {
         let id = "db".repeat(32);
@@ -3175,7 +3288,6 @@ mod tests {
             before_ms: Some(42),
             ..Default::default()
         };
-
         assert!(filter_report_summary(
             &summary,
             &query,
@@ -3231,7 +3343,6 @@ mod tests {
             false,
         ));
     }
-
     #[test]
     fn validate_zk1_tag_filter_rejects_malformed_tags() {
         assert!(
@@ -3250,7 +3361,6 @@ mod tests {
             assert!(err.contains("invalid ZK1 tag filter"));
         }
     }
-
     #[test]
     fn filter_report_summary_status_flags_follow_ok_failed_matrix() {
         let ok = ProverReportSummary {
@@ -3270,7 +3380,6 @@ mod tests {
             zk1_tags: Some(vec!["PROF".to_string()]),
         };
         let query = ProverListQuery::default();
-
         assert!(filter_report_summary(&ok, &query, None, false, false));
         assert!(filter_report_summary(&failed, &query, None, false, false));
         assert!(filter_report_summary(&ok, &query, None, true, false));
@@ -3280,12 +3389,10 @@ mod tests {
         assert!(filter_report_summary(&ok, &query, None, true, true));
         assert!(filter_report_summary(&failed, &query, None, true, true));
     }
-
     #[test]
     fn gc_reports_once_deletes_only_expired_reports_and_retains_fresh_index() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let ttl_ms = Duration::from_secs(cfg_reports_ttl_secs()).as_millis() as u64;
         let now = now_ms();
         let fresh_processed_ms = now.saturating_sub(ttl_ms.saturating_div(2));
@@ -3305,7 +3412,6 @@ mod tests {
         );
         save_report(&expired).expect("save expired report");
         save_report(&fresh).expect("save fresh report");
-
         let deleted = gc_reports_once();
         assert_eq!(deleted, 1);
         assert!(
@@ -3320,12 +3426,10 @@ mod tests {
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, fresh.id);
     }
-
     #[test]
     fn gc_reports_once_keeps_reports_when_none_are_expired() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let ttl_ms = Duration::from_secs(cfg_reports_ttl_secs()).as_millis() as u64;
         let fresh = sample_report(
             "21".repeat(32),
@@ -3335,7 +3439,6 @@ mod tests {
             now_ms().saturating_sub(ttl_ms.saturating_div(2)),
         );
         save_report(&fresh).expect("save fresh report");
-
         let deleted = gc_reports_once();
         assert_eq!(deleted, 0);
         assert!(
@@ -3346,16 +3449,13 @@ mod tests {
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, fresh.id);
     }
-
     #[test]
     fn gc_reports_once_rebuilds_when_report_summary_is_malformed() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let fresh = sample_report("31".repeat(32), true, None, "application/json", now_ms());
         save_report(&fresh).expect("save fresh report");
         corrupt_report_summary(&fresh.id);
-
         let deleted = gc_reports_once();
         assert_eq!(deleted, 0);
         assert!(
@@ -3366,12 +3466,10 @@ mod tests {
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, fresh.id);
     }
-
     #[test]
     fn gc_reports_once_deletes_expired_index_entries_even_when_report_file_is_missing() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let ttl_ms = Duration::from_secs(cfg_reports_ttl_secs()).as_millis() as u64;
         persist_report_summaries_locked(&[ProverReportSummary {
             id: "32".repeat(32),
@@ -3382,12 +3480,10 @@ mod tests {
             zk1_tags: Some(vec!["PROF".to_string()]),
         }])
         .expect("persist stale index");
-
         let deleted = gc_reports_once();
         assert_eq!(deleted, 1);
         assert!(load_report_summaries().is_empty());
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn count_reports_filters_using_report_summaries() {
         init_test_cfg();
@@ -3426,7 +3522,6 @@ mod tests {
         };
         save_report(&report_with_tag).expect("save tagged report");
         save_report(&report_without_tag).expect("save untagged report");
-
         let query = ProverListQuery {
             has_tag: Some("PROF".to_string()),
             ..Default::default()
@@ -3445,12 +3540,10 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert_eq!(parsed["count"].as_u64(), Some(1));
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn count_reports_failed_only_alias_counts_failed_reports() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let ok = sample_report("14".repeat(32), true, None, "application/json", now_ms());
         let failed = sample_report(
             "15".repeat(32),
@@ -3461,7 +3554,6 @@ mod tests {
         );
         save_report(&ok).expect("save ok report");
         save_report(&failed).expect("save failed report");
-
         let response = super::handle_count_reports(NoritoQuery(ProverListQuery {
             failed_only: Some(true),
             ..Default::default()
@@ -3479,12 +3571,10 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert_eq!(parsed["count"].as_u64(), Some(1));
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn count_reports_ok_and_errors_filters_together_count_all_reports() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let ok = sample_report("16".repeat(32), true, None, "application/json", now_ms());
         let failed = sample_report(
             "17".repeat(32),
@@ -3495,7 +3585,6 @@ mod tests {
         );
         save_report(&ok).expect("save ok report");
         save_report(&failed).expect("save failed report");
-
         let response = super::handle_count_reports(NoritoQuery(ProverListQuery {
             ok_only: Some(true),
             errors_only: Some(true),
@@ -3514,12 +3603,10 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert_eq!(parsed["count"].as_u64(), Some(2));
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn count_reports_errors_only_alias_counts_failed_reports() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let ok = sample_report("12".repeat(32), true, None, "application/json", now_ms());
         let failed = sample_report(
             "34".repeat(32),
@@ -3530,7 +3617,6 @@ mod tests {
         );
         save_report(&ok).expect("save ok report");
         save_report(&failed).expect("save failed report");
-
         let response = super::handle_count_reports(NoritoQuery(ProverListQuery {
             errors_only: Some(true),
             ..Default::default()
@@ -3548,15 +3634,12 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert_eq!(parsed["count"].as_u64(), Some(1));
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn count_reports_id_filter_accepts_uppercase_hex() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let report = sample_report("13".repeat(32), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
-
         let response = super::handle_count_reports(NoritoQuery(ProverListQuery {
             id: Some(report.id.to_ascii_uppercase()),
             ..Default::default()
@@ -3574,15 +3657,12 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert_eq!(parsed["count"].as_u64(), Some(1));
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn count_reports_returns_zero_when_no_reports_match() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let report = sample_report("18".repeat(32), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
-
         let response = super::handle_count_reports(NoritoQuery(ProverListQuery {
             content_type: Some("application/x-zk1".to_string()),
             ..Default::default()
@@ -3600,12 +3680,10 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert_eq!(parsed["count"].as_u64(), Some(0));
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn count_reports_filters_by_content_type_tag_and_time_bounds() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let mut target = sample_report(
             "19".repeat(32),
             false,
@@ -3633,7 +3711,6 @@ mod tests {
         save_report(&target).expect("save target report");
         save_report(&wrong_tag).expect("save wrong-tag report");
         save_report(&wrong_time).expect("save wrong-time report");
-
         let response = super::handle_count_reports(NoritoQuery(ProverListQuery {
             content_type: Some("x-zk1".to_string()),
             has_tag: Some("PROF".to_string()),
@@ -3654,12 +3731,10 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert_eq!(parsed["count"].as_u64(), Some(1));
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_ids_only_takes_precedence_over_messages_only() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let failed = sample_report(
             "55".repeat(32),
             false,
@@ -3676,7 +3751,6 @@ mod tests {
         );
         save_report(&failed).expect("save failed report");
         save_report(&ok).expect("save ok report");
-
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
             ids_only: Some(true),
             messages_only: Some(true),
@@ -3695,12 +3769,10 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert_eq!(ids, vec![failed.id]);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_failed_only_alias_returns_only_failed_ids() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let ok = sample_report("67".repeat(32), true, None, "application/json", now_ms());
         let failed = sample_report(
             "68".repeat(32),
@@ -3711,7 +3783,6 @@ mod tests {
         );
         save_report(&ok).expect("save ok report");
         save_report(&failed).expect("save failed report");
-
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
             ids_only: Some(true),
             failed_only: Some(true),
@@ -3730,15 +3801,12 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert_eq!(ids, vec![failed.id]);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_id_filter_accepts_uppercase_hex() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let report = sample_report("6c".repeat(32), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
-
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
             ids_only: Some(true),
             id: Some(report.id.to_ascii_uppercase()),
@@ -3757,12 +3825,10 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert_eq!(ids, vec![report.id]);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_filters_by_content_type_tag_and_time_bounds() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let mut target = sample_report(
             "69".repeat(32),
             false,
@@ -3787,11 +3853,9 @@ mod tests {
             target.processed_ms.saturating_add(10),
         );
         wrong_time.zk1_tags = Some(vec!["PROF".to_string()]);
-
         save_report(&target).expect("save target report");
         save_report(&wrong_tag).expect("save wrong-tag report");
         save_report(&wrong_time).expect("save wrong-time report");
-
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
             ids_only: Some(true),
             content_type: Some("x-zk1".to_string()),
@@ -3813,15 +3877,12 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert_eq!(ids, vec![target.id]);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_messages_only_preserves_null_error_field() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let report = sample_report("77".repeat(32), false, None, "application/x-zk1", now_ms());
         save_report(&report).expect("save report");
-
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
             messages_only: Some(true),
             ..Default::default()
@@ -3848,12 +3909,10 @@ mod tests {
             Some(norito::json::Value::Null)
         ));
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_messages_only_excludes_successful_reports() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let ok = sample_report("79".repeat(32), true, None, "application/json", now_ms());
         let failed = sample_report(
             "7a".repeat(32),
@@ -3864,7 +3923,6 @@ mod tests {
         );
         save_report(&ok).expect("save ok report");
         save_report(&failed).expect("save failed report");
-
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
             ok_only: Some(true),
             messages_only: Some(true),
@@ -3888,12 +3946,10 @@ mod tests {
             Some(failed.id.as_str())
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_latest_messages_only_returns_latest_failed_message() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let failed_old = sample_report(
             "7b".repeat(32),
             false,
@@ -3918,7 +3974,6 @@ mod tests {
         save_report(&failed_old).expect("save first failed report");
         save_report(&failed_new).expect("save second failed report");
         save_report(&ok_latest).expect("save latest ok report");
-
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
             messages_only: Some(true),
             latest: Some(true),
@@ -3946,12 +4001,10 @@ mod tests {
             Some("second failure")
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_desc_order_accepts_uppercase_desc() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let first = sample_report("56".repeat(32), true, None, "application/json", now_ms());
         let second = sample_report(
             "78".repeat(32),
@@ -3962,7 +4015,6 @@ mod tests {
         );
         save_report(&first).expect("save first report");
         save_report(&second).expect("save second report");
-
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
             ids_only: Some(true),
             order: Some("DESC".to_string()),
@@ -3981,12 +4033,10 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert_eq!(ids, vec![second.id, first.id]);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_desc_order_accepts_mixed_case_desc() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let first = sample_report("59".repeat(32), true, None, "application/json", now_ms());
         let second = sample_report(
             "5d".repeat(32),
@@ -3997,7 +4047,6 @@ mod tests {
         );
         save_report(&first).expect("save first report");
         save_report(&second).expect("save second report");
-
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
             ids_only: Some(true),
             order: Some("Desc".to_string()),
@@ -4016,12 +4065,10 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert_eq!(ids, vec![second.id, first.id]);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_latest_returns_latest_full_report() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let first = sample_report("57".repeat(32), true, None, "application/json", now_ms());
         let second = sample_report(
             "58".repeat(32),
@@ -4032,7 +4079,6 @@ mod tests {
         );
         save_report(&first).expect("save first report");
         save_report(&second).expect("save second report");
-
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
             latest: Some(true),
             ..Default::default()
@@ -4055,12 +4101,10 @@ mod tests {
         );
         assert_eq!(reports[0].get("ok").and_then(|v| v.as_bool()), Some(false));
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_latest_overrides_order_offset_and_limit() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let first = sample_report("5a".repeat(32), true, None, "application/json", now_ms());
         let second = sample_report(
             "5b".repeat(32),
@@ -4079,7 +4123,6 @@ mod tests {
         save_report(&first).expect("save first report");
         save_report(&second).expect("save second report");
         save_report(&third).expect("save third report");
-
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
             latest: Some(true),
             ids_only: Some(true),
@@ -4101,12 +4144,10 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert_eq!(ids, vec![third.id]);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn delete_reports_returns_deleted_ids_and_keeps_non_matching_reports() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let keep = sample_report("88".repeat(32), true, None, "application/json", now_ms());
         let delete = sample_report(
             "99".repeat(32),
@@ -4117,7 +4158,6 @@ mod tests {
         );
         save_report(&keep).expect("save kept report");
         save_report(&delete).expect("save deleted report");
-
         let response = super::handle_delete_reports(NoritoQuery(ProverListQuery {
             id: Some(delete.id.clone()),
             ..Default::default()
@@ -4147,12 +4187,10 @@ mod tests {
             "non-matching report should remain"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn delete_reports_id_filter_accepts_uppercase_hex() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let report = sample_report(
             "8a".repeat(32),
             false,
@@ -4161,7 +4199,6 @@ mod tests {
             now_ms(),
         );
         save_report(&report).expect("save report");
-
         let response = super::handle_delete_reports(NoritoQuery(ProverListQuery {
             id: Some(report.id.to_ascii_uppercase()),
             ..Default::default()
@@ -4187,12 +4224,10 @@ mod tests {
             "report should be deleted"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn delete_reports_errors_only_alias_deletes_only_failed_reports() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let ok = sample_report("9a".repeat(32), true, None, "application/json", now_ms());
         let failed = sample_report(
             "bc".repeat(32),
@@ -4203,7 +4238,6 @@ mod tests {
         );
         save_report(&ok).expect("save ok report");
         save_report(&failed).expect("save failed report");
-
         let response = super::handle_delete_reports(NoritoQuery(ProverListQuery {
             errors_only: Some(true),
             ..Default::default()
@@ -4230,12 +4264,10 @@ mod tests {
             "failed report should be deleted"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn delete_reports_failed_only_alias_deletes_only_failed_reports() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let ok = sample_report("bf".repeat(32), true, None, "application/json", now_ms());
         let failed = sample_report(
             "c0".repeat(32),
@@ -4246,7 +4278,6 @@ mod tests {
         );
         save_report(&ok).expect("save ok report");
         save_report(&failed).expect("save failed report");
-
         let response = super::handle_delete_reports(NoritoQuery(ProverListQuery {
             failed_only: Some(true),
             ..Default::default()
@@ -4273,12 +4304,10 @@ mod tests {
             "failed report should be deleted"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn delete_reports_filters_by_content_type_tag_and_time_bounds() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let mut target = sample_report(
             "c1".repeat(32),
             false,
@@ -4306,7 +4335,6 @@ mod tests {
         save_report(&target).expect("save target report");
         save_report(&wrong_tag).expect("save wrong-tag report");
         save_report(&wrong_time).expect("save wrong-time report");
-
         let response = super::handle_delete_reports(NoritoQuery(ProverListQuery {
             content_type: Some("x-zk1".to_string()),
             has_tag: Some("PROF".to_string()),
@@ -4343,12 +4371,10 @@ mod tests {
             "wrong-time report should remain"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn delete_reports_ok_and_errors_filters_together_delete_all_reports() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let ok = sample_report("bd".repeat(32), true, None, "application/json", now_ms());
         let failed = sample_report(
             "be".repeat(32),
@@ -4359,7 +4385,6 @@ mod tests {
         );
         save_report(&ok).expect("save ok report");
         save_report(&failed).expect("save failed report");
-
         let response = super::handle_delete_reports(NoritoQuery(ProverListQuery {
             ok_only: Some(true),
             errors_only: Some(true),
@@ -4387,15 +4412,12 @@ mod tests {
             "failed report should be deleted"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn delete_reports_with_no_matches_returns_zero_and_empty_ids() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let report = sample_report("ce".repeat(32), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
-
         let response = super::handle_delete_reports(NoritoQuery(ProverListQuery {
             id: Some("cf".repeat(32)),
             ..Default::default()
@@ -4418,15 +4440,12 @@ mod tests {
             "unmatched report should remain"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_offset_past_end_returns_empty_array() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let report = sample_report("aa".repeat(32), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
-
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
             offset: Some(5),
             ..Default::default()
@@ -4444,12 +4463,10 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert!(reports.is_empty());
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_offset_and_limit_select_expected_window() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let first = sample_report("ab".repeat(32), true, None, "application/json", now_ms());
         let second = sample_report(
             "ac".repeat(32),
@@ -4476,7 +4493,6 @@ mod tests {
         save_report(&second).expect("save second report");
         save_report(&third).expect("save third report");
         save_report(&fourth).expect("save fourth report");
-
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
             ids_only: Some(true),
             offset: Some(1),
@@ -4496,13 +4512,11 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert_eq!(ids, vec![second.id, third.id]);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_skips_unloadable_report_bodies_in_full_projection() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
         ensure_dirs();
-
         let id = "ae".repeat(32);
         fs::write(report_path_from_sanitized(&id), "{not json").expect("write report");
         persist_report_summaries_locked(&[ProverReportSummary {
@@ -4514,7 +4528,6 @@ mod tests {
             zk1_tags: None,
         }])
         .expect("persist report index");
-
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery::default()))
             .await
             .into_response();
@@ -4529,15 +4542,12 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert!(reports.is_empty(), "unloadable reports should be skipped");
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_latest_with_no_matches_returns_empty_ids_array() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-
         let report = sample_report("de".repeat(32), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
-
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
             latest: Some(true),
             ids_only: Some(true),
@@ -4557,13 +4567,11 @@ mod tests {
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert!(ids.is_empty());
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn list_reports_limit_is_capped_to_one_thousand() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
         ensure_dirs();
-
         let mut reports = Vec::with_capacity(1001);
         let base_ms = now_ms();
         for idx in 0..1001u64 {
@@ -4585,7 +4593,6 @@ mod tests {
         let summaries: Vec<ProverReportSummary> =
             reports.iter().map(report_summary_from_report).collect();
         persist_report_summaries_locked(&summaries).expect("persist report index");
-
         let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
             ids_only: Some(true),
             limit: Some(5_000),
@@ -4607,6 +4614,5 @@ mod tests {
         assert_eq!(ids.last(), Some(&reports[999].id));
         assert!(!ids.contains(&reports[1000].id));
     }
-
     include!("zk_prover/scanner_tests.rs");
 }

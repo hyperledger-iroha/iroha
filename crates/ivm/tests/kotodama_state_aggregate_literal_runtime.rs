@@ -1,9 +1,6 @@
 //! Runtime regressions for pointer-backed literals projected from aggregate values.
-
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
-
 mod common;
-
 fn run_program(source: &str) -> IVM {
     let code = KotodamaCompiler::new()
         .compile_source(source)
@@ -16,7 +13,6 @@ fn run_program(source: &str) -> IVM {
     vm.run().expect("run aggregate-state fixture");
     vm
 }
-
 #[test]
 fn mint_request_shape_roundtrips_all_eleven_fields() {
     let source = r#"
@@ -91,11 +87,9 @@ fn mint_request_shape_roundtrips_all_eleven_fields() {
             }
         }
     "#;
-
     let vm = run_program(source);
     assert_eq!(vm.register(10), 1);
 }
-
 #[test]
 fn mixed_pointer_and_scalar_literal_fields_keep_their_exact_types() {
     let source = r#"
@@ -142,7 +136,6 @@ fn mixed_pointer_and_scalar_literal_fields_keep_their_exact_types() {
             }
         }
     "#;
-
     let vm = run_program(source);
     assert_eq!(vm.register(10), 1);
 }

@@ -2,19 +2,15 @@
 //!
 //! For usage examples see [`iroha_version_derive::declare_versioned`].
 #![allow(unexpected_cfgs)]
-
 use core::ops::Range;
 use std::{format, string::String, vec::Vec};
-
 pub mod build_line;
 /// Re-export derive macros that assist with declaring versioned enums.
 #[cfg(feature = "derive")]
 pub use iroha_version_derive::*;
 /// Re-export Norito codec helpers required by consumers of versioned types.
 pub use norito::codec::{Decode, DecodeAll, Encode};
-
 pub use crate::build_line::BuildLine;
-
 /// JSON field name storing the version discriminator.
 pub const VERSION_FIELD_NAME: &str = "version";
 /// JSON field name storing the versioned payload.
@@ -30,18 +26,14 @@ pub mod json_helpers {
         to_value,
     };
 }
-
 /// Module which contains error and result for versioning
 /// Error types emitted while working with versioned containers.
 pub mod error {
     use std::{borrow::ToOwned, boxed::Box, fmt};
-
     use iroha_macro::FromVariant;
-
     use super::UnsupportedVersion;
     #[allow(unused_imports)] // False-positive
     use super::*;
-
     /// Versioning errors
     #[derive(Debug, FromVariant, thiserror::Error)]
     pub enum Error {
@@ -58,6 +50,8 @@ pub mod error {
         Json,
         /// Norito (de)serialization issue
         NoritoCodec(String),
+        /// Norito decoding exceeded a caller-provided resource ceiling.
+        NoritoResourceLimit,
         /// Problem with parsing integers
         ParseInt,
         /// Input version unsupported
@@ -65,7 +59,6 @@ pub mod error {
         /// Buffer is not empty after decoding. Returned by `decode_all_versioned()`
         ExtraBytesLeft(u64),
     }
-
     // Map Norito JSON errors into the crate's generic JSON error variant.
     // This allows `?` on `norito::json` helpers inside derive-generated code
     // to convert into `iroha_version::error::Error` seamlessly.
@@ -74,20 +67,20 @@ pub mod error {
             Self::Json
         }
     }
-
     impl From<norito::Error> for Error {
         fn from(x: norito::Error) -> Self {
             use std::string::ToString as _;
+            if x.is_decode_resource_limit() {
+                return Self::NoritoResourceLimit;
+            }
             Self::NoritoCodec(x.to_string())
         }
     }
-
     impl From<core::num::ParseIntError> for Error {
         fn from(_: core::num::ParseIntError) -> Self {
             Self::ParseInt
         }
     }
-
     impl fmt::Display for Error {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             let msg = match self {
@@ -102,35 +95,39 @@ pub mod error {
                 #[cfg(feature = "json")]
                 Self::Json => "JSON (de)serialization issue".to_owned(),
                 Self::NoritoCodec(x) => format!("Norito (de)serialization issue: {x}"),
+                Self::NoritoResourceLimit => {
+                    "Norito decoding exceeded its resource limit".to_owned()
+                }
                 Self::ParseInt => "Issue with parsing integers".to_owned(),
                 Self::UnsupportedVersion(v) => {
                     format!("Input version {} is unsupported", v.version)
                 }
                 Self::ExtraBytesLeft(n) => format!("Buffer contains {n} bytes after decoding"),
             };
-
             write!(f, "{msg}")
         }
     }
-
+    impl Error {
+        /// Return whether decoding stopped at a caller-provided resource ceiling.
+        #[must_use]
+        pub const fn is_decode_resource_limit(&self) -> bool {
+            matches!(self, Self::NoritoResourceLimit)
+        }
+    }
     /// Result type for versioning
     pub type Result<T, E = Error> = core::result::Result<T, E>;
 }
-
 /// General trait describing if this is a versioned container.
 pub trait Version {
     /// Version of the data contained inside.
     fn version(&self) -> u8;
-
     /// Supported versions.
     fn supported_versions() -> Range<u8>;
-
     /// If the contents' version is currently supported.
     fn is_supported(&self) -> bool {
         Self::supported_versions().contains(&self.version())
     }
 }
-
 /// Structure describing a container content which version is not supported.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, norito::Encode, norito::Decode)]
 #[allow(unexpected_cfgs)]
@@ -144,7 +141,6 @@ pub struct UnsupportedVersion {
     /// Raw content.
     pub raw: RawVersioned,
 }
-
 impl UnsupportedVersion {
     /// Constructs [`UnsupportedVersion`].
     #[must_use]
@@ -152,13 +148,11 @@ impl UnsupportedVersion {
     pub const fn new(version: u8, raw: RawVersioned) -> Self {
         Self { version, raw }
     }
-
     /// Expected version
     pub const fn expected_version() -> u8 {
         1
     }
 }
-
 /// Raw versioned content, serialized.
 #[derive(Debug, Clone, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode)]
 pub enum RawVersioned {
@@ -167,11 +161,9 @@ pub enum RawVersioned {
     /// In Norito format.
     NoritoBytes(Vec<u8>),
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RawVersioned {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         use norito::core::{DecodeFromSlice, Error};
-
         let tag = *bytes.first().ok_or(Error::LengthMismatch)?;
         let rest = &bytes[1..];
         match tag {
@@ -187,7 +179,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RawVersioned {
         }
     }
 }
-
 /// Norito related versioned (de)serialization traits.
 pub mod codec {
     use norito::{
@@ -195,9 +186,7 @@ pub mod codec {
         codec::{DecodeAll, Encode},
         core::DecodeFromSlice,
     };
-
     use super::{Version, error::Result};
-
     /// [`norito::codec::Decode`] versioned analog.
     pub trait DecodeVersioned: DecodeAll + Version {
         /// Use this function for versioned objects instead of `decode_all`.
@@ -208,13 +197,11 @@ pub mod codec {
         /// - Input has extra bytes
         fn decode_all_versioned(input: &[u8]) -> Result<Self>;
     }
-
     /// [`norito::codec::Encode`] versioned analog.
     pub trait EncodeVersioned: Encode + Version {
         /// Use this function for versioned objects instead of `encode`.
         fn encode_versioned(&self) -> Vec<u8>;
     }
-
     /// Decode a leading-version Norito payload using exact-slice semantics.
     ///
     /// The input must contain the version byte followed by the exact Norito
@@ -233,7 +220,6 @@ pub mod codec {
     {
         decode_exact_versioned_with_raw(input, input)
     }
-
     /// Decode a versioned Norito payload while preserving custom raw bytes for
     /// unsupported-version errors.
     ///
@@ -252,21 +238,17 @@ pub mod codec {
         T: Version + for<'de> NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
     {
         use crate::{RawVersioned, UnsupportedVersion, error::Error};
-
         let Some((&version, payload)) = bare_versioned.split_first() else {
             return Err(Error::NotVersioned);
         };
-
         if !T::supported_versions().contains(&version) {
             return Err(Error::UnsupportedVersion(Box::new(
                 UnsupportedVersion::new(version, RawVersioned::NoritoBytes(raw_for_error.to_vec())),
             )));
         }
-
         norito::codec::decode_exact_from_slice(payload).map_err(Error::from)
     }
 }
-
 /// JSON related versioned (de)serialization traits.
 #[cfg(feature = "json")]
 pub mod json {
@@ -274,14 +256,11 @@ pub mod json {
         borrow::ToOwned,
         string::{String, ToString},
     };
-
     use norito::json::Value;
-
     use super::{
         Version,
         error::{Error, Result},
     };
-
     /// JSON-focused versioned deserialize helper.
     pub trait DeserializeVersioned: Version {
         /// Use this function for versioned objects instead of [`norito::json::from_json`].
@@ -294,7 +273,6 @@ pub mod json {
         where
             Self: Sized;
     }
-
     /// JSON-focused versioned serialize helper.
     pub trait SerializeVersioned: Version {
         /// Use this function for versioned objects instead of [`norito::json::to_json`].
@@ -306,7 +284,6 @@ pub mod json {
         where
             Self: Sized;
     }
-
     /// Extract version and content from a versioned JSON object.
     ///
     /// # Errors
@@ -331,7 +308,6 @@ pub mod json {
             _ => Err(Error::ExpectedJson),
         }
     }
-
     /// Construct a `Value::Object` carrying the version metadata alongside the payload.
     pub fn build_versioned_object(version: &str, content: Value) -> Value {
         let mut map = norito::json::Map::new();
@@ -343,32 +319,26 @@ pub mod json {
         Value::Object(map)
     }
 }
-
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     #[cfg(feature = "json")]
     pub use super::json::*;
     pub use super::{codec::*, *};
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[derive(Debug, Clone, PartialEq, Eq, norito::Encode, norito::Decode)]
     #[norito(decode_from_slice)]
     struct ExactPayload(u32);
-
     impl Version for ExactPayload {
         fn version(&self) -> u8 {
             1
         }
-
         fn supported_versions() -> Range<u8> {
             1..2
         }
     }
-
     impl crate::codec::EncodeVersioned for ExactPayload {
         fn encode_versioned(&self) -> Vec<u8> {
             let mut bytes = Vec::with_capacity(1);
@@ -377,20 +347,16 @@ mod tests {
             bytes
         }
     }
-
     pub struct VersionedContainer(pub u8);
-
     impl Version for VersionedContainer {
         fn version(&self) -> u8 {
             let VersionedContainer(version) = self;
             *version
         }
-
         fn supported_versions() -> Range<u8> {
             1..10
         }
     }
-
     #[test]
     fn supported_version() {
         assert!(!VersionedContainer(0).is_supported());
@@ -399,7 +365,6 @@ mod tests {
         assert!(!VersionedContainer(10).is_supported());
         assert!(!VersionedContainer(11).is_supported());
     }
-
     #[test]
     fn raw_versioned_roundtrip() {
         let original = RawVersioned::Json("test".to_owned());
@@ -407,7 +372,6 @@ mod tests {
         let decoded = RawVersioned::decode_all(&mut &bytes[..]).expect("decode");
         assert_eq!(decoded, original);
     }
-
     #[test]
     fn unsupported_version_roundtrip() {
         let original = UnsupportedVersion::new(2, RawVersioned::Json("test".to_owned()));
@@ -416,7 +380,6 @@ mod tests {
         assert_eq!(decoded.version, original.version);
         assert_eq!(decoded.encode(), bytes);
     }
-
     #[test]
     fn decode_exact_versioned_roundtrip() {
         let encoded = crate::codec::EncodeVersioned::encode_versioned(&ExactPayload(42));
@@ -424,7 +387,6 @@ mod tests {
             crate::codec::decode_exact_versioned::<ExactPayload>(&encoded).expect("decode");
         assert_eq!(decoded, ExactPayload(42));
     }
-
     #[test]
     fn decode_exact_versioned_with_raw_preserves_custom_error_bytes() {
         let err = crate::codec::decode_exact_versioned_with_raw::<ExactPayload>(&[9, 0], b"raw")
@@ -434,5 +396,14 @@ mod tests {
         };
         assert_eq!(version.version, 9);
         assert_eq!(version.raw, RawVersioned::NoritoBytes(b"raw".to_vec()));
+    }
+    #[test]
+    fn norito_resource_limit_survives_version_error_conversion() {
+        let error = crate::error::Error::from(norito::Error::TotalAllocationExceeded {
+            attempted: 2,
+            limit: 1,
+        });
+        assert!(error.is_decode_resource_limit());
+        assert!(matches!(error, crate::error::Error::NoritoResourceLimit));
     }
 }

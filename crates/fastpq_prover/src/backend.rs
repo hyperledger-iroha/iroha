@@ -11,13 +11,11 @@ use std::{
     process::{Command, Stdio},
     sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, TryLockError},
 };
-
 use fastpq_isi::{StarkParameterSet, poseidon::PoseidonSponge};
 use iroha_crypto::Hash;
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 use metal::{Device, MTLDeviceLocation};
 use rayon::prelude::*;
-
 use crate::{
     Error, Result, TransitionBatch,
     fft::Planner,
@@ -29,7 +27,6 @@ use crate::{
         merkle_root_with_first_level,
     },
 };
-
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
 const FIELD_ONE: u64 = 1;
 const LDE_LEAF_DOMAIN: &[u8] = b"fastpq:v1:lde:leaf";
@@ -49,21 +46,16 @@ const MIN_POSEIDON_ROW_GPU_ROWS: usize = 32;
 const METAL_FRAMEWORK: &str = "/System/Library/Frameworks/Metal.framework/Metal";
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 static DEBUG_METAL_ENUM_ENV: OnceLock<bool> = OnceLock::new();
-
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 fn warm_up_core_graphics_display() {}
-
 static GPU_BACKEND: OnceLock<Option<GpuBackend>> = OnceLock::new();
 static GPU_OVERRIDE: OnceLock<GpuOverride> = OnceLock::new();
 static AUTO_RESOLVED_MODE: OnceLock<ExecutionMode> = OnceLock::new();
 static GPU_WORKLOAD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
 type ExecutionModeObserver =
     dyn Fn(ExecutionMode, ExecutionMode, Option<GpuBackend>) + Send + Sync + 'static;
-
 static EXECUTION_MODE_OBSERVER: OnceLock<RwLock<Option<Arc<ExecutionModeObserver>>>> =
     OnceLock::new();
-
 pub const TRANSCRIPT_TAG_INIT: &str = "fastpq:v1:init";
 pub const TRANSCRIPT_TAG_ROOTS: &str = "fastpq:v1:roots";
 pub const TRANSCRIPT_TAG_GAMMA: &str = "fastpq:v1:gamma";
@@ -74,7 +66,6 @@ pub const TRANSCRIPT_TAG_BETA_PREFIX: &str = "fastpq:v1:beta";
 pub const TRANSCRIPT_TAG_FRI_LAYER_PREFIX: &str = "fastpq:v1:fri_layer";
 /// Number of V1 AIR composition challenges derived from the transcript.
 pub const AIR_COMPOSITION_ALPHA_COUNT: usize = 2;
-
 /// Configuration for the FASTPQ backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionMode {
@@ -85,7 +76,6 @@ pub enum ExecutionMode {
     /// Detect hardware support at runtime and pick the best available mode.
     Auto,
 }
-
 /// Poseidon pipeline execution override.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PoseidonExecutionMode {
@@ -96,7 +86,6 @@ pub enum PoseidonExecutionMode {
     /// Attempt GPU hashing regardless of the primary execution mode.
     Gpu,
 }
-
 impl PoseidonExecutionMode {
     /// Return the poseidon override label.
     #[must_use]
@@ -108,7 +97,6 @@ impl PoseidonExecutionMode {
         }
     }
 }
-
 impl ExecutionMode {
     /// Return the execution mode as a lowercase label.
     #[must_use]
@@ -119,7 +107,6 @@ impl ExecutionMode {
             Self::Auto => "auto",
         }
     }
-
     /// Resolve the execution mode, performing runtime detection when required.
     #[must_use]
     pub fn resolve(self) -> Self {
@@ -137,11 +124,9 @@ impl ExecutionMode {
         resolved
     }
 }
-
 fn gpu_workload_mutex() -> &'static Mutex<()> {
     GPU_WORKLOAD_LOCK.get_or_init(|| Mutex::new(()))
 }
-
 pub fn try_acquire_gpu_lane() -> Option<MutexGuard<'static, ()>> {
     match gpu_workload_mutex().try_lock() {
         Ok(guard) => Some(guard),
@@ -149,18 +134,15 @@ pub fn try_acquire_gpu_lane() -> Option<MutexGuard<'static, ()>> {
         Err(TryLockError::WouldBlock) => None,
     }
 }
-
 pub fn acquire_gpu_lane() -> MutexGuard<'static, ()> {
     match gpu_workload_mutex().lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
 }
-
 fn execution_mode_observer_slot() -> &'static RwLock<Option<Arc<ExecutionModeObserver>>> {
     EXECUTION_MODE_OBSERVER.get_or_init(|| RwLock::new(None))
 }
-
 fn notify_execution_mode_observer(
     requested: ExecutionMode,
     resolved: ExecutionMode,
@@ -184,7 +166,6 @@ fn notify_execution_mode_observer(
         }
     }
 }
-
 /// Install a hook invoked whenever [`ExecutionMode::Auto`] resolves to a concrete mode.
 pub fn set_execution_mode_observer<F>(observer: F)
 where
@@ -195,14 +176,12 @@ where
         .expect("execution mode observer lock poisoned");
     *guard = Some(Arc::new(observer));
 }
-
 /// Remove the previously installed execution mode observer, if any.
 pub fn clear_execution_mode_observer() {
     if let Ok(mut guard) = execution_mode_observer_slot().write() {
         guard.take();
     }
 }
-
 fn gpu_available() -> bool {
     match gpu_override() {
         GpuOverride::ForceCpu => false,
@@ -230,14 +209,12 @@ fn gpu_available() -> bool {
             .is_some(),
     }
 }
-
 pub fn current_gpu_backend() -> Option<GpuBackend> {
     if GPU_BACKEND.get().is_none() {
         let _ = gpu_available();
     }
     GPU_BACKEND.get().and_then(|backend| *backend)
 }
-
 fn default_batch_execution_mode() -> ExecutionMode {
     if current_gpu_backend().is_some() {
         ExecutionMode::Gpu
@@ -245,7 +222,6 @@ fn default_batch_execution_mode() -> ExecutionMode {
         ExecutionMode::Cpu
     }
 }
-
 fn log_execution_resolution(requested: ExecutionMode, resolved: ExecutionMode) {
     let backend = current_gpu_backend();
     let backend_label = backend.map_or("none", GpuBackend::as_str);
@@ -288,7 +264,6 @@ fn log_execution_resolution(requested: ExecutionMode, resolved: ExecutionMode) {
         resolved
     });
 }
-
 fn gpu_override() -> GpuOverride {
     *GPU_OVERRIDE.get_or_init(|| {
         let value = overrides::guard_env_override(|| overrides::debug_env_string("FASTPQ_GPU"));
@@ -302,14 +277,12 @@ fn gpu_override() -> GpuOverride {
         parsed
     })
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GpuOverride {
     Auto,
     ForceCpu,
     ForceGpu,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GpuBackend {
     /// CUDA runtime is available.
@@ -321,7 +294,6 @@ pub enum GpuBackend {
     /// Reused GPU detection from Norito compression backend.
     Norito,
 }
-
 impl GpuBackend {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -333,33 +305,27 @@ impl GpuBackend {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, Default)]
 struct BackendAvailability {
     bits: u8,
 }
-
 impl BackendAvailability {
     const CUDA_BIT: u8 = 1 << 0;
     const OPENCL_BIT: u8 = 1 << 1;
     const METAL_BIT: u8 = 1 << 2;
     const NORITO_BIT: u8 = 1 << 3;
-
     const fn empty() -> Self {
         Self { bits: 0 }
     }
-
     fn with(mut self, backend: GpuBackend, available: bool) -> Self {
         if available {
             self.bits |= Self::mask(backend);
         }
         self
     }
-
     fn has(self, backend: GpuBackend) -> bool {
         self.bits & Self::mask(backend) != 0
     }
-
     const fn mask(backend: GpuBackend) -> u8 {
         match backend {
             GpuBackend::Cuda => Self::CUDA_BIT,
@@ -369,7 +335,6 @@ impl BackendAvailability {
         }
     }
 }
-
 fn log_detected_backend(backend: Option<GpuBackend>) {
     if let Some(kind) = backend {
         tracing::info!(
@@ -384,7 +349,6 @@ fn log_detected_backend(backend: Option<GpuBackend>) {
         );
     }
 }
-
 fn log_gpu_override(raw: &str, parsed: GpuOverride) {
     match parsed {
         GpuOverride::ForceCpu => tracing::info!(
@@ -404,7 +368,6 @@ fn log_gpu_override(raw: &str, parsed: GpuOverride) {
         ),
     }
 }
-
 fn warn_unknown_override(raw: &str) {
     tracing::warn!(
         target: "fastpq::planner",
@@ -412,7 +375,6 @@ fn warn_unknown_override(raw: &str) {
         "Unknown FASTPQ_GPU override; falling back to auto detection"
     );
 }
-
 fn detect_gpu_backend() -> Option<GpuBackend> {
     let cuda = cuda_available();
     let metal = metal_available();
@@ -437,7 +399,6 @@ fn detect_gpu_backend() -> Option<GpuBackend> {
         );
     resolve_backend(availability)
 }
-
 fn gpu_backend_supported_in_build(backend: GpuBackend) -> bool {
     match backend {
         GpuBackend::Cuda => cfg!(all(feature = "fastpq-gpu", not(fastpq_cuda_unavailable))),
@@ -447,7 +408,6 @@ fn gpu_backend_supported_in_build(backend: GpuBackend) -> bool {
         GpuBackend::OpenCl | GpuBackend::Norito => false,
     }
 }
-
 fn parse_gpu_override(raw: &str) -> Option<GpuOverride> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -463,7 +423,6 @@ fn parse_gpu_override(raw: &str) -> Option<GpuOverride> {
         }
     }
 }
-
 fn resolve_backend(availability: BackendAvailability) -> Option<GpuBackend> {
     [
         GpuBackend::Cuda,
@@ -474,11 +433,9 @@ fn resolve_backend(availability: BackendAvailability) -> Option<GpuBackend> {
     .into_iter()
     .find(|&backend| availability.has(backend))
 }
-
 fn norito_gpu_available() -> bool {
     norito::core::hw::has_gpu_compression()
 }
-
 fn cuda_available() -> bool {
     #[cfg(unix)]
     {
@@ -507,7 +464,6 @@ fn cuda_available() -> bool {
     }
     false
 }
-
 fn opencl_available() -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -535,7 +491,6 @@ fn opencl_available() -> bool {
     }
     command_success("clinfo", &["--list"])
 }
-
 #[cfg(unix)]
 fn has_icd_entries(dir: &str) -> bool {
     fs::read_dir(dir)
@@ -551,7 +506,6 @@ fn has_icd_entries(dir: &str) -> bool {
         })
         .unwrap_or(false)
 }
-
 fn command_success(program: &str, args: &[&str]) -> bool {
     Command::new(program)
         .args(args)
@@ -561,7 +515,6 @@ fn command_success(program: &str, args: &[&str]) -> bool {
         .map(|status| status.success())
         .unwrap_or(false)
 }
-
 #[cfg(target_os = "macos")]
 fn run_command_capture(program: &str, args: &[&str]) -> Option<String> {
     let output = Command::new(program)
@@ -575,18 +528,14 @@ fn run_command_capture(program: &str, args: &[&str]) -> Option<String> {
     }
     String::from_utf8(output.stdout).ok()
 }
-
 #[cfg(windows)]
 fn system_root() -> Option<PathBuf> {
     env::var_os("SystemRoot").map(PathBuf::from)
 }
-
 #[cfg(test)]
 mod detection_tests {
     use fastpq_isi::CANONICAL_PARAMETER_SETS;
-
     use super::*;
-
     fn availability(enabled: &[GpuBackend]) -> BackendAvailability {
         enabled
             .iter()
@@ -594,7 +543,6 @@ mod detection_tests {
                 state.with(*backend, true)
             })
     }
-
     #[test]
     fn resolve_backend_prefers_cuda() {
         assert_eq!(
@@ -607,7 +555,6 @@ mod detection_tests {
             Some(GpuBackend::Cuda)
         );
     }
-
     #[test]
     fn resolve_backend_prefers_metal_before_opencl() {
         assert_eq!(
@@ -619,7 +566,6 @@ mod detection_tests {
             Some(GpuBackend::Metal)
         );
     }
-
     #[test]
     fn resolve_backend_prefers_opencl_when_metal_missing() {
         assert_eq!(
@@ -627,7 +573,6 @@ mod detection_tests {
             Some(GpuBackend::OpenCl)
         );
     }
-
     #[test]
     fn resolve_backend_falls_back_to_metal() {
         assert_eq!(
@@ -635,7 +580,6 @@ mod detection_tests {
             Some(GpuBackend::Metal)
         );
     }
-
     #[test]
     fn resolve_backend_uses_norito_last() {
         assert_eq!(
@@ -643,24 +587,20 @@ mod detection_tests {
             Some(GpuBackend::Norito)
         );
     }
-
     #[test]
     fn resolve_backend_returns_none_when_unavailable() {
         assert_eq!(resolve_backend(availability(&[])), None);
     }
-
     #[test]
     fn backend_support_map_excludes_unimplemented_backends() {
         assert!(!gpu_backend_supported_in_build(GpuBackend::OpenCl));
         assert!(!gpu_backend_supported_in_build(GpuBackend::Norito));
     }
-
     #[cfg(any(not(feature = "fastpq-gpu"), fastpq_cuda_unavailable))]
     #[test]
     fn cuda_backend_support_is_disabled_without_compiled_runtime() {
         assert!(!gpu_backend_supported_in_build(GpuBackend::Cuda));
     }
-
     #[test]
     fn parse_override_accepts_cpu_gpu_auto() {
         assert_eq!(parse_gpu_override("cpu"), Some(GpuOverride::ForceCpu));
@@ -668,13 +608,11 @@ mod detection_tests {
         assert_eq!(parse_gpu_override("auto"), Some(GpuOverride::Auto));
         assert_eq!(parse_gpu_override("  detect  "), Some(GpuOverride::Auto));
     }
-
     #[test]
     fn parse_override_rejects_unknown_values() {
         assert_eq!(parse_gpu_override("unknown-mode"), None);
         assert_eq!(parse_gpu_override(""), Some(GpuOverride::Auto));
     }
-
     #[test]
     fn backend_config_defaults_to_cpu_execution_mode() {
         let params = CANONICAL_PARAMETER_SETS[0];
@@ -683,22 +621,17 @@ mod detection_tests {
         assert_eq!(config.poseidon_mode(), PoseidonExecutionMode::Cpu);
     }
 }
-
 #[cfg(test)]
 mod observer_tests {
     use std::sync::mpsc;
     use std::time::Duration;
-
     use super::*;
-
     struct ExecutionModeObserverGuard;
-
     impl Drop for ExecutionModeObserverGuard {
         fn drop(&mut self) {
             clear_execution_mode_observer();
         }
     }
-
     #[test]
     fn execution_mode_observer_receives_resolution() {
         clear_execution_mode_observer();
@@ -707,9 +640,7 @@ mod observer_tests {
         set_execution_mode_observer(move |requested, resolved, backend| {
             let _ = tx.send((requested, resolved, backend));
         });
-
         let resolved = ExecutionMode::Auto.resolve();
-
         let (requested, resolved_event, backend) = rx
             .recv_timeout(Duration::from_secs(2))
             .expect("observer payload");
@@ -726,11 +657,9 @@ mod observer_tests {
             ),
             ExecutionMode::Auto => unreachable!("resolution never returns Auto"),
         }
-
         clear_execution_mode_observer();
     }
 }
-
 #[cfg(target_os = "macos")]
 fn metal_available() -> bool {
     if metal_library_path().is_none() {
@@ -768,7 +697,6 @@ fn metal_available() -> bool {
         || lowered.contains("metal gpu family")
         || lowered.contains("metal: up to date")
 }
-
 #[cfg(target_os = "macos")]
 fn macos_opencl_devices_present() -> bool {
     if let Some(result) = macos_system_profiler_opencl_devices() {
@@ -779,7 +707,6 @@ fn macos_opencl_devices_present() -> bool {
     }
     macos_ioreg_reports_accelerator()
 }
-
 #[cfg(target_os = "macos")]
 fn macos_system_profiler_opencl_devices() -> Option<bool> {
     let output = run_command_capture(
@@ -795,7 +722,6 @@ fn macos_system_profiler_opencl_devices() -> Option<bool> {
     }
     None
 }
-
 #[cfg(target_os = "macos")]
 fn macos_ioreg_reports_accelerator() -> bool {
     if let Some(output) = run_command_capture("ioreg", &["-l", "-w0", "-c", "IOAccelerator"]) {
@@ -806,12 +732,10 @@ fn macos_ioreg_reports_accelerator() -> bool {
     }
     false
 }
-
 #[cfg(not(target_os = "macos"))]
 fn metal_available() -> bool {
     metal_library_path().is_some()
 }
-
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 fn metal_device_visible_via_api() -> bool {
     warm_up_core_graphics_display();
@@ -845,12 +769,10 @@ fn metal_device_visible_via_api() -> bool {
     }
     !devices.is_empty()
 }
-
 #[cfg(all(target_os = "macos", not(feature = "fastpq-gpu")))]
 fn metal_device_visible_via_api() -> bool {
     false
 }
-
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 fn fastpq_debug_metal_enum() -> bool {
     if let Some(enabled) = overrides::metal_debug_enum_override() {
@@ -861,12 +783,10 @@ fn fastpq_debug_metal_enum() -> bool {
             .unwrap_or(false)
     })
 }
-
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 fn bool_flag(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
 }
-
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 fn device_location_label(location: MTLDeviceLocation) -> &'static str {
     match location {
@@ -876,7 +796,6 @@ fn device_location_label(location: MTLDeviceLocation) -> &'static str {
         _ => "unknown",
     }
 }
-
 fn metal_library_path() -> Option<String> {
     overrides::guard_env_override(|| {
         overrides::debug_env_string("FASTPQ_METAL_LIB").and_then(|path| {
@@ -893,7 +812,6 @@ fn metal_library_path() -> Option<String> {
             .map(str::to_owned)
     })
 }
-
 /// Preview backend configuration used by the FASTPQ prover.
 #[derive(Debug, Clone, Copy)]
 pub struct BackendConfig {
@@ -904,7 +822,6 @@ pub struct BackendConfig {
     /// Poseidon pipeline override (defaults to [`ExecutionMode::Auto`]).
     pub poseidon_mode: PoseidonExecutionMode,
 }
-
 impl BackendConfig {
     /// Construct a configuration from a canonical parameter set.
     pub fn new(params: StarkParameterSet) -> Self {
@@ -914,34 +831,29 @@ impl BackendConfig {
             poseidon_mode: PoseidonExecutionMode::Cpu,
         }
     }
-
     /// Override the execution mode used by the backend.
     #[must_use]
     pub fn with_execution_mode(mut self, mode: ExecutionMode) -> Self {
         self.execution_mode = mode;
         self
     }
-
     /// Override the Poseidon pipeline execution mode used by the backend.
     #[must_use]
     pub fn with_poseidon_mode(mut self, mode: PoseidonExecutionMode) -> Self {
         self.poseidon_mode = mode;
         self
     }
-
     /// Return the requested execution mode.
     #[must_use]
     pub fn execution_mode(&self) -> ExecutionMode {
         self.execution_mode
     }
-
     /// Return the configured Poseidon pipeline mode.
     #[must_use]
     pub fn poseidon_mode(&self) -> PoseidonExecutionMode {
         self.poseidon_mode
     }
 }
-
 /// Trait describing the behaviour of a FASTPQ prover backend.
 pub trait Backend {
     /// Attempt to generate a proof artifact for the supplied batch.
@@ -955,7 +867,6 @@ pub trait Backend {
         params_version: u16,
     ) -> Result<BackendArtifact>;
 }
-
 /// Deterministic artifact emitted by the backend after running the placeholder
 /// FASTPQ pipeline.  This mirrors the minimal data the verifier needs to
 /// reconstruct the Fiat–Shamir transcript and query openings.
@@ -1000,19 +911,16 @@ pub struct BackendArtifact {
     /// Per-round FRI openings for sampled query indices.
     pub fri_query_openings: Vec<FriQueryOpening>,
 }
-
 /// Concrete backend implementing the deterministic FASTPQ STARK pipeline.
 #[derive(Debug, Clone)]
 pub struct StarkBackend {
     config: BackendConfig,
 }
-
 impl StarkBackend {
     /// Create a backend from a canonical configuration.
     pub fn new(config: BackendConfig) -> Self {
         Self { config }
     }
-
     /// Expose the configured execution mode, primarily for tests.
     #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
@@ -1020,7 +928,6 @@ impl StarkBackend {
         self.config.execution_mode()
     }
 }
-
 /// Hash the low-degree extension evaluations into Merkle leaves grouped by the
 /// canonical chunk size derived from the FRI arity.
 ///
@@ -1029,7 +936,6 @@ impl StarkBackend {
 pub fn hash_lde_leaves(evaluations: &[u64], arity: u32) -> Result<Vec<u64>> {
     hash_lde_leaves_with_mode(evaluations, arity, default_batch_execution_mode())
 }
-
 fn hash_lde_leaves_with_mode(
     evaluations: &[u64],
     arity: u32,
@@ -1048,7 +954,6 @@ fn hash_lde_leaves_with_mode(
     }
     hash_with_domain_limb_batches(LDE_LEAF_DOMAIN, &messages, mode)
 }
-
 /// Hash one LDE leaf chunk using the same domain as [`hash_lde_leaves`].
 ///
 /// # Errors
@@ -1061,7 +966,6 @@ pub fn hash_lde_chunk(leaf_index: usize, values: &[u64]) -> Result<u64> {
     limbs.extend(values.iter().copied());
     hash_with_domain(LDE_LEAF_DOMAIN, &limbs)
 }
-
 /// Hash one row-major AIR trace opening.
 ///
 /// # Errors
@@ -1079,7 +983,6 @@ pub fn hash_air_trace_row(row_index: usize, values: &[u64]) -> Result<u64> {
     limbs.extend(values.iter().copied());
     hash_with_domain(AIR_TRACE_LEAF_DOMAIN, &limbs)
 }
-
 /// Hash one AIR composition leaf.
 ///
 /// # Errors
@@ -1088,7 +991,6 @@ pub fn hash_air_composition_leaf(index: usize, value: u64) -> Result<u64> {
     let index = u64::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?;
     hash_with_domain(AIR_COMPOSITION_LEAF_DOMAIN, &[index, value])
 }
-
 /// Hash all row-major AIR trace leaves.
 ///
 /// # Errors
@@ -1117,7 +1019,6 @@ fn hash_air_trace_rows_with_mode(columns: &[Vec<u64>], mode: ExecutionMode) -> R
     }
     hash_with_domain_limb_batches(AIR_TRACE_LEAF_DOMAIN, &messages, mode)
 }
-
 /// Hash all AIR composition leaves.
 ///
 /// # Errors
@@ -1130,7 +1031,6 @@ fn hash_air_composition_leaves_with_mode(values: &[u64], mode: ExecutionMode) ->
     }
     hash_with_domain_limb_batches(AIR_COMPOSITION_LEAF_DOMAIN, &messages, mode)
 }
-
 /// Evaluate the sampled FASTPQ AIR composition value for two adjacent rows.
 ///
 /// # Errors
@@ -1171,14 +1071,12 @@ pub fn air_composition_value_for_rows(
     let metadata_hash = get("metadata_hash")?;
     let dsid = get("dsid")?;
     let slot = get("slot")?;
-
     let value_old_0 = column_names
         .iter()
         .position(|column| column == "value_old_limb_0");
     let value_new_0 = column_names
         .iter()
         .position(|column| column == "value_new_limb_0");
-
     let mut acc = 0u64;
     let mut idx = 0usize;
     let absorb = |acc: &mut u64, idx: &mut usize, residue: u64| {
@@ -1186,7 +1084,6 @@ pub fn air_composition_value_for_rows(
         *acc = add_mod(*acc, mul_mod(coeff, residue));
         *idx = idx.saturating_add(1);
     };
-
     for selector in [
         s_active,
         s_transfer,
@@ -1203,7 +1100,6 @@ pub fn air_composition_value_for_rows(
             mul_mod(current[selector], sub_mod(current[selector], FIELD_ONE)),
         );
     }
-
     let operation_sum = [
         s_transfer,
         s_mint,
@@ -1219,7 +1115,6 @@ pub fn air_composition_value_for_rows(
         &mut idx,
         sub_mod(current[s_active], operation_sum),
     );
-
     let permission_sum = add_mod(current[s_role_grant], current[s_role_revoke]);
     absorb(&mut acc, &mut idx, sub_mod(current[s_perm], permission_sum));
     absorb(
@@ -1227,7 +1122,6 @@ pub fn air_composition_value_for_rows(
         &mut idx,
         mul_mod(next[s_active], sub_mod(FIELD_ONE, current[s_active])),
     );
-
     if let (Some(old), Some(new)) = (value_old_0, value_new_0) {
         let numeric_selector = [s_transfer, s_mint, s_burn]
             .into_iter()
@@ -1239,14 +1133,11 @@ pub fn air_composition_value_for_rows(
             mul_mod(numeric_selector, sub_mod(expected_delta, current[delta])),
         );
     }
-
     for stable in [metadata_hash, dsid, slot] {
         absorb(&mut acc, &mut idx, sub_mod(current[stable], next[stable]));
     }
-
     Ok(acc)
 }
-
 /// Evaluate FASTPQ AIR composition values over all row openings.
 ///
 /// # Errors
@@ -1278,7 +1169,6 @@ pub fn air_composition_values(
         })
         .collect()
 }
-
 fn air_row_at(columns: &[Vec<u64>], row_index: usize) -> Result<Vec<u64>> {
     columns
         .iter()
@@ -1293,7 +1183,6 @@ fn air_row_at(columns: &[Vec<u64>], row_index: usize) -> Result<Vec<u64>> {
         })
         .collect()
 }
-
 /// Open sampled AIR rows and composition values.
 ///
 /// # Errors
@@ -1324,7 +1213,6 @@ fn open_air_constraint_openings_with_mode(
         .collect();
     let next_paths = merkle_paths_for_leaf_indices(air_trace_leaves, &next_indices, mode)?;
     let composition_paths = merkle_paths_for_leaf_indices(composition_leaves, query_indices, mode)?;
-
     query_indices
         .iter()
         .copied()
@@ -1353,7 +1241,6 @@ fn open_air_constraint_openings_with_mode(
         )
         .collect()
 }
-
 /// Hash one FRI round leaf with domain separation from LDE openings.
 ///
 /// # Errors
@@ -1368,16 +1255,13 @@ pub fn hash_fri_chunk(round: usize, leaf_index: usize, values: &[u64]) -> Result
     limbs.extend(values.iter().copied());
     hash_with_domain(FRI_LEAF_DOMAIN, &limbs)
 }
-
 /// Return the chunk size (number of evaluations per leaf hash) for the given FRI arity.
 pub fn lde_chunk_size(arity: u32) -> usize {
     usize::try_from(arity.saturating_mul(8).max(1)).expect("FRI chunk size fits usize")
 }
-
 fn fri_chunk_size(arity: u32) -> usize {
     usize::try_from(arity.max(1)).expect("FRI arity fits usize")
 }
-
 /// Open the full LDE leaf chunks that contain the supplied query indices.
 ///
 /// # Errors
@@ -1402,7 +1286,6 @@ pub fn open_query_chunks(
     }
     Ok(chunks)
 }
-
 /// Compute Merkle authentication paths for the supplied query indices over the provided leaf set.
 ///
 /// The query indices are expressed in terms of evaluation positions; internally they are grouped
@@ -1424,7 +1307,6 @@ pub fn merkle_paths_for_queries(
         default_batch_execution_mode(),
     )
 }
-
 fn merkle_paths_for_queries_with_mode(
     leaves: &[u64],
     query_indices: &[usize],
@@ -1480,7 +1362,6 @@ fn merkle_paths_for_queries_with_mode(
     }
     Ok(paths)
 }
-
 fn merkle_paths_for_leaf_indices(
     leaves: &[u64],
     leaf_indices: &[usize],
@@ -1527,7 +1408,6 @@ fn merkle_paths_for_leaf_indices(
     }
     Ok(paths)
 }
-
 /// Verify a Merkle authentication path over FASTPQ Poseidon field leaves.
 ///
 /// # Errors
@@ -1546,7 +1426,6 @@ pub fn verify_merkle_path(root: u64, leaf: u64, leaf_index: usize, path: &[u64])
     }
     Ok(current == root)
 }
-
 #[allow(clippy::unnecessary_wraps)]
 fn build_merkle_levels_with_mode(leaves: &[u64], mode: ExecutionMode) -> Result<Vec<Vec<u64>>> {
     if leaves.is_empty() {
@@ -1570,7 +1449,6 @@ fn build_merkle_levels_with_mode(leaves: &[u64], mode: ExecutionMode) -> Result<
     }
     Ok(levels)
 }
-
 fn merkle_root_with_mode(leaves: &[u64], mode: ExecutionMode) -> u64 {
     let levels = build_merkle_levels_with_mode(leaves, mode).expect("Merkle levels are infallible");
     levels
@@ -1579,11 +1457,9 @@ fn merkle_root_with_mode(leaves: &[u64], mode: ExecutionMode) -> u64 {
         .copied()
         .unwrap_or(0)
 }
-
 fn merkle_node_hash(left: u64, right: u64) -> u64 {
     hash_field_with_domain_cpu(TRACE_NODE_DOMAIN, &[left, right])
 }
-
 fn domain_seed(domain: &[u8]) -> u64 {
     let digest = Hash::new(domain);
     let bytes = digest.as_ref();
@@ -1593,14 +1469,12 @@ fn domain_seed(domain: &[u8]) -> u64 {
     let reduced = u128::from(raw) % u128::from(GOLDILOCKS_MODULUS);
     u64::try_from(reduced).expect("modulus reduction fits u64")
 }
-
 fn hash_field_with_domain_cpu(domain: &[u8], values: &[u64]) -> u64 {
     let mut sponge = PoseidonSponge::new();
     sponge.absorb(domain_seed(domain));
     sponge.absorb_slice(values);
     sponge.squeeze()
 }
-
 /// Compute the Fiat–Shamir lookup grand product accumulator over the supplied
 /// selector and witness evaluations using the canonical Goldilocks field
 /// arithmetic.
@@ -1624,23 +1498,19 @@ pub fn compute_lookup_grand_product(
     }
     poseidon::hash_field_elements_cpu(&running)
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn hash_trace_rows(columns: &[Vec<u64>]) -> Vec<u64> {
     hash_trace_rows_with_mode(columns, default_batch_execution_mode())
 }
-
 fn hash_trace_rows_with_mode(columns: &[Vec<u64>], mode: ExecutionMode) -> Vec<u64> {
     if columns.is_empty() {
         return Vec::new();
     }
-
     let row_count = columns[0].len();
     assert!(
         columns.iter().all(|column| column.len() == row_count),
         "LDE columns must have a consistent length"
     );
-
     if mode == ExecutionMode::Gpu {
         #[cfg(feature = "fastpq-gpu")]
         if row_count < MIN_POSEIDON_ROW_GPU_ROWS {
@@ -1669,10 +1539,8 @@ fn hash_trace_rows_with_mode(columns: &[Vec<u64>], mode: ExecutionMode) -> Vec<u
             }
         }
     }
-
     hash_trace_rows_cpu(columns)
 }
-
 fn hash_trace_rows_cpu(columns: &[Vec<u64>]) -> Vec<u64> {
     if columns.is_empty() {
         return Vec::new();
@@ -1693,7 +1561,6 @@ fn hash_trace_rows_cpu(columns: &[Vec<u64>]) -> Vec<u64> {
         })
         .collect()
 }
-
 pub fn extend_row_hashes(
     planner: &Planner,
     mode: ExecutionMode,
@@ -1703,7 +1570,6 @@ pub fn extend_row_hashes(
     if rows.is_empty() || trace_len == 0 {
         return rows;
     }
-
     let blowup = 1usize << planner.blowup_log();
     let expected_eval_len = trace_len
         .checked_mul(blowup)
@@ -1717,7 +1583,6 @@ pub fn extend_row_hashes(
         "row hash length ({}) must match trace domain ({trace_len}) or the evaluation domain ({expected_eval_len})",
         rows.len()
     );
-
     let mut coeffs = vec![rows];
     match mode {
         ExecutionMode::Gpu => {
@@ -1725,23 +1590,18 @@ pub fn extend_row_hashes(
             let mut cpu_coeffs = coeffs.clone();
             #[cfg(test)]
             planner.ifft_columns(&mut cpu_coeffs);
-
             planner.ifft_gpu(&mut coeffs);
-
             #[cfg(test)]
             assert_eq!(
                 cpu_coeffs, coeffs,
                 "ifft gpu output diverged from cpu reference"
             );
-
             let lde = planner.lde_gpu(&coeffs);
-
             #[cfg(test)]
             {
                 let cpu_lde = planner.lde_columns(&coeffs);
                 assert_eq!(cpu_lde, lde, "lde gpu output diverged from cpu reference");
             }
-
             lde.into_iter().next().unwrap_or_default()
         }
         ExecutionMode::Cpu | ExecutionMode::Auto => {
@@ -1754,7 +1614,6 @@ pub fn extend_row_hashes(
         }
     }
 }
-
 #[cfg(test)]
 pub fn fold_with_fri(
     evaluations: &[u64],
@@ -1769,26 +1628,20 @@ pub fn fold_with_fri(
         transcript.append_fri_final(0);
         return Ok((vec![0], Vec::new()));
     }
-
     let arity = usize::try_from(arity).expect("FRI arity fits usize");
     let max_rounds = usize::try_from(max_reductions).expect("FRI reduction bound fits usize");
-
     let mut current = evaluations.to_vec();
     let mut layers = Vec::new();
     let mut betas = Vec::new();
     let mut round = 0usize;
-
     while current.len() > 1 && round < max_rounds {
         let span = tracing::info_span!("fastpq_fri_round", round, layer_len = current.len(), arity);
         let _enter = span.enter();
-
         let root = fri_layer_commitment(round, &current);
         transcript.append_fri_layer(round, root);
         layers.push(root);
-
         let beta = transcript.challenge_beta(round);
         betas.push(beta);
-
         let mut padded = current;
         pad_to_arity(&mut padded, arity);
         tracing::debug!(
@@ -1809,15 +1662,12 @@ pub fn fold_with_fri(
         current = next;
         round += 1;
     }
-
     let final_root = fri_layer_commitment(round, &current);
     transcript.append_fri_final(final_root);
     tracing::info!(round, final_root, "final FRI layer commitment");
     layers.push(final_root);
-
     Ok((layers, betas))
 }
-
 #[allow(clippy::type_complexity)]
 fn fold_with_fri_opening_layers(
     evaluations: &[u64],
@@ -1833,7 +1683,6 @@ fn fold_with_fri_opening_layers(
         transcript.append_fri_final(0);
         return Ok((vec![Vec::new()], vec![0], Vec::new()));
     }
-
     let arity_usize = usize::try_from(arity).expect("FRI arity fits usize");
     let max_rounds = usize::try_from(max_reductions).expect("FRI reduction bound fits usize");
     let mut current = evaluations.to_vec();
@@ -1841,7 +1690,6 @@ fn fold_with_fri_opening_layers(
     let mut roots = Vec::new();
     let mut betas = Vec::new();
     let mut round = 0usize;
-
     while current.len() > 1 && round < max_rounds {
         pad_to_arity(&mut current, arity_usize);
         let leaves = hash_fri_leaves_with_mode(round, &current, arity, mode)?;
@@ -1849,22 +1697,18 @@ fn fold_with_fri_opening_layers(
         transcript.append_fri_layer(round, root);
         roots.push(root);
         layer_values.push(current.clone());
-
         let beta = transcript.challenge_beta(round);
         betas.push(beta);
         current = fold_round(&current, arity_usize, beta);
         round += 1;
     }
-
     let leaves = hash_fri_leaves_with_mode(round, &current, arity, mode)?;
     let final_root = merkle_root_with_mode(&leaves, mode);
     transcript.append_fri_final(final_root);
     roots.push(final_root);
     layer_values.push(current);
-
     Ok((layer_values, roots, betas))
 }
-
 fn hash_fri_leaves_with_mode(
     round: usize,
     values: &[u64],
@@ -1888,7 +1732,6 @@ fn hash_fri_leaves_with_mode(
     }
     hash_with_domain_limb_batches(FRI_LEAF_DOMAIN, &messages, mode)
 }
-
 fn open_fri_query_chains(
     layer_values: &[Vec<u64>],
     query_indices: &[usize],
@@ -1903,7 +1746,6 @@ fn open_fri_query_chains(
     for (round, values) in layer_values.iter().enumerate() {
         round_leaves.push(hash_fri_leaves_with_mode(round, values, arity, mode)?);
     }
-
     let mut openings = Vec::with_capacity(query_indices.len());
     for &initial_index in query_indices {
         let initial_index_u32 =
@@ -1946,7 +1788,6 @@ fn open_fri_query_chains(
             });
             index = folded_index;
         }
-
         let final_values = layer_values
             .last()
             .expect("non-empty layer values")
@@ -1977,10 +1818,8 @@ fn open_fri_query_chains(
             final_merkle_path: final_paths.into_iter().next().unwrap_or_default(),
         });
     }
-
     Ok(openings)
 }
-
 fn pad_to_arity(values: &mut Vec<u64>, arity: usize) {
     if values.is_empty() || arity == 0 {
         return;
@@ -1993,7 +1832,6 @@ fn pad_to_arity(values: &mut Vec<u64>, arity: usize) {
     let padding = arity - remainder;
     values.extend(std::iter::repeat_n(pad_value, padding));
 }
-
 fn fold_round(values: &[u64], arity: usize, challenge: u64) -> Vec<u64> {
     if values.is_empty() || arity == 0 {
         return Vec::new();
@@ -2011,7 +1849,6 @@ fn fold_round(values: &[u64], arity: usize, challenge: u64) -> Vec<u64> {
     }
     next
 }
-
 #[cfg(test)]
 fn fri_layer_commitment(round: usize, values: &[u64]) -> u64 {
     let modulus = u128::from(GOLDILOCKS_MODULUS);
@@ -2030,7 +1867,6 @@ fn fri_layer_commitment(round: usize, values: &[u64]) -> u64 {
     }
     poseidon::hash_field_elements_cpu(&limbs)
 }
-
 pub fn sample_queries(
     domain_size: usize,
     target: usize,
@@ -2043,7 +1879,6 @@ pub fn sample_queries(
     let desired = target.min(domain_size);
     let mut indices = BTreeSet::new();
     let mut counter: u32 = 0;
-
     while indices.len() < desired {
         let tag = format!("{TRANSCRIPT_TAG_QUERY_INDEX}:{counter}");
         counter = counter
@@ -2062,10 +1897,8 @@ pub fn sample_queries(
             indices.insert(index);
         }
     }
-
     indices.into_iter().collect()
 }
-
 pub fn open_queries(evaluations: &[u64], indices: &[usize]) -> Result<Vec<(u32, u64)>> {
     let mut openings = Vec::with_capacity(indices.len());
     for &index in indices {
@@ -2082,7 +1915,6 @@ pub fn open_queries(evaluations: &[u64], indices: &[usize]) -> Result<Vec<(u32, 
     }
     Ok(openings)
 }
-
 impl Backend for StarkBackend {
     #[allow(clippy::too_many_lines)]
     fn prove(
@@ -2098,7 +1930,6 @@ impl Backend for StarkBackend {
                 actual: batch.parameter.clone(),
             });
         }
-
         let trace = build_trace(batch)?;
         let column_names: Vec<String> = trace
             .columns
@@ -2119,7 +1950,6 @@ impl Backend for StarkBackend {
                 "transfer gadget witnesses planned"
             );
         }
-
         let column_digests = hash_columns_from_coefficients(
             &trace,
             &polynomial_data.coefficients,
@@ -2129,7 +1959,6 @@ impl Backend for StarkBackend {
         );
         let trace_root =
             merkle_root_with_first_level(column_digests.leaves(), column_digests.fused_parents());
-
         let lde_columns = polynomial_data.lde_columns();
         let lde_rows = hash_trace_rows_with_mode(lde_columns, canonical_mode);
         let lde_values = extend_row_hashes(&planner, canonical_mode, lde_rows, trace.padded_len);
@@ -2142,7 +1971,6 @@ impl Backend for StarkBackend {
         let lde_root = merkle_root_with_mode(&lde_hashes, canonical_mode);
         let air_trace_leaves = hash_air_trace_rows_with_mode(lde_columns, canonical_mode)?;
         let air_trace_root = merkle_root_with_mode(&air_trace_leaves, canonical_mode);
-
         let mut transcript = Transcript::initialise(
             public_io,
             self.config.params.name,
@@ -2185,7 +2013,6 @@ impl Backend for StarkBackend {
             .concat(),
         );
         transcript.append_message(LOOKUP_PRODUCT_DOMAIN, &lookup_grand_product.to_le_bytes());
-
         let (fri_layer_values, fri_layers, fri_betas) = fold_with_fri_opening_layers(
             &air_composition_values,
             self.config.params.fri.arity,
@@ -2223,10 +2050,8 @@ impl Backend for StarkBackend {
             self.config.params.fri.arity,
             canonical_mode,
         )?;
-
         let trace_rows = u32::try_from(trace.rows)
             .map_err(|_| Error::TraceLengthOverflow { rows: trace.rows })?;
-
         Ok(BackendArtifact {
             parameter: self.config.params.name.to_string(),
             trace_rows,
@@ -2250,12 +2075,10 @@ impl Backend for StarkBackend {
         })
     }
 }
-
 #[derive(Debug, Clone)]
 pub struct Transcript {
     state: Vec<u8>,
 }
-
 impl Transcript {
     pub fn initialise(
         public_io: &PublicIO,
@@ -2274,7 +2097,6 @@ impl Transcript {
         transcript.append_message(tag, &payload);
         Ok(transcript)
     }
-
     pub fn append_message(&mut self, tag: &str, message: &[u8]) {
         let tag_len = u32::try_from(tag.len()).expect("transcript tag length fits u32");
         self.state.extend_from_slice(&tag_len.to_le_bytes());
@@ -2283,21 +2105,17 @@ impl Transcript {
         self.state.extend_from_slice(&message_len.to_le_bytes());
         self.state.extend_from_slice(message);
     }
-
     pub fn append_fri_layer(&mut self, round: usize, root: u64) {
         let tag = format!("{TRANSCRIPT_TAG_FRI_LAYER_PREFIX}:{round}");
         self.append_message(&tag, &root.to_le_bytes());
     }
-
     pub fn append_fri_final(&mut self, root: u64) {
         self.append_message(FRI_FINAL_DOMAIN, &root.to_le_bytes());
     }
-
     pub fn challenge_beta(&mut self, round: usize) -> u64 {
         let tag = format!("{TRANSCRIPT_TAG_BETA_PREFIX}:{round}");
         self.challenge_field(&tag)
     }
-
     pub fn challenge_bytes(&mut self, tag: &str) -> [u8; Hash::LENGTH] {
         let mut payload = self.state.clone();
         let tag_len = u32::try_from(tag.len()).expect("transcript challenge tag fits u32");
@@ -2307,7 +2125,6 @@ impl Transcript {
         self.state.extend_from_slice(digest.as_ref());
         digest.into()
     }
-
     pub fn challenge_field(&mut self, tag: &str) -> u64 {
         let bytes = self.challenge_bytes(tag);
         let mut chunk = [0u8; 8];
@@ -2316,12 +2133,10 @@ impl Transcript {
         u64::try_from(value).expect("modulus reduction stays within u64")
     }
 }
-
 fn hash_with_domain(domain: &[u8], values: &[u64]) -> Result<u64> {
     let limbs = hash_with_domain_limbs(domain, values)?;
     Ok(poseidon::hash_field_elements_cpu(&limbs))
 }
-
 fn hash_with_domain_limb_batches(
     domain: &[u8],
     messages: &[Vec<u64>],
@@ -2336,7 +2151,6 @@ fn hash_with_domain_limb_batches(
         .collect::<Result<Vec<_>>>()?;
     Ok(hash_poseidon_limb_batches(&limbs, mode))
 }
-
 fn hash_with_domain_limbs(domain: &[u8], values: &[u64]) -> Result<Vec<u64>> {
     let mut payload = Vec::with_capacity(values.len() * 8);
     for value in values {
@@ -2357,7 +2171,6 @@ fn hash_with_domain_limbs(domain: &[u8], values: &[u64]) -> Result<Vec<u64>> {
     limbs.extend(payload_packed.limbs);
     Ok(limbs)
 }
-
 fn hash_poseidon_limb_batches(messages: &[Vec<u64>], mode: ExecutionMode) -> Vec<u64> {
     if messages.is_empty() {
         return Vec::new();
@@ -2375,7 +2188,6 @@ fn hash_poseidon_limb_batches(messages: &[Vec<u64>], mode: ExecutionMode) -> Vec
         .map(|limbs| poseidon::hash_field_elements_cpu(limbs))
         .collect()
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn hash_poseidon_limb_batches_gpu(messages: &[Vec<u64>]) -> Option<Vec<u64>> {
     let mut groups = std::collections::BTreeMap::<usize, Vec<usize>>::new();
@@ -2385,7 +2197,6 @@ fn hash_poseidon_limb_batches_gpu(messages: &[Vec<u64>]) -> Option<Vec<u64>> {
             .or_default()
             .push(index);
     }
-
     let mut result = vec![0u64; messages.len()];
     for indices in groups.values() {
         let group_messages = indices
@@ -2454,7 +2265,6 @@ fn hash_poseidon_limb_batches_gpu(messages: &[Vec<u64>]) -> Option<Vec<u64>> {
     }
     Some(result)
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn hash_poseidon_limb_batch_cpu(messages: &[Vec<u64>]) -> Vec<u64> {
     messages
@@ -2462,7 +2272,6 @@ fn hash_poseidon_limb_batch_cpu(messages: &[Vec<u64>]) -> Vec<u64> {
         .map(|limbs| poseidon::hash_field_elements_cpu(limbs))
         .collect()
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn poseidon_limb_batch_matches_cpu_sample(
     messages: &[Vec<u64>],
@@ -2475,12 +2284,10 @@ fn poseidon_limb_batch_matches_cpu_sample(
     if messages.is_empty() {
         return true;
     }
-
     #[cfg(any(test, debug_assertions))]
     let sample_indices = 0..messages.len();
     #[cfg(not(any(test, debug_assertions)))]
     let sample_indices = poseidon_limb_batch_sample_indices(messages.len());
-
     for index in sample_indices {
         let expected = poseidon::hash_field_elements_cpu(&messages[index]);
         let actual = hashes[index];
@@ -2502,14 +2309,12 @@ fn poseidon_limb_batch_matches_cpu_sample(
     }
     true
 }
-
 #[cfg(all(feature = "fastpq-gpu", not(any(test, debug_assertions))))]
 fn poseidon_limb_batch_sample_indices(len: usize) -> Vec<usize> {
     const SAMPLE_COUNT: usize = 16;
     if len <= SAMPLE_COUNT {
         return (0..len).collect();
     }
-
     let last = len - 1;
     let mut indices = Vec::with_capacity(SAMPLE_COUNT);
     for sample in 0..SAMPLE_COUNT {
@@ -2520,31 +2325,25 @@ fn poseidon_limb_batch_sample_indices(len: usize) -> Vec<usize> {
     }
     indices
 }
-
 fn add_mod(a: u64, b: u64) -> u64 {
     let sum = u128::from(a) + u128::from(b);
     u64::try_from(sum % u128::from(GOLDILOCKS_MODULUS)).expect("modulus reduction fits in u64")
 }
-
 fn sub_mod(a: u64, b: u64) -> u64 {
     let reduced = (u128::from(a) + u128::from(GOLDILOCKS_MODULUS) - u128::from(b))
         % u128::from(GOLDILOCKS_MODULUS);
     u64::try_from(reduced).expect("modulus reduction fits in u64")
 }
-
 fn mul_mod(a: u64, b: u64) -> u64 {
     let product = u128::from(a) * u128::from(b);
     let reduced = product % u128::from(GOLDILOCKS_MODULUS);
     u64::try_from(reduced).expect("modulus reduction fits in u64")
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-
     use super::*;
     use crate::{OperationKind, PublicInputs, StateTransition, trace::merkle_root};
-
     fn sample_batch(rows: usize) -> TransitionBatch {
         let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         for idx in 0..rows {
@@ -2562,7 +2361,6 @@ mod tests {
         batch.sort();
         batch
     }
-
     #[test]
     fn transcript_challenges_are_deterministic() {
         let mut transcript = Transcript::initialise(
@@ -2580,7 +2378,6 @@ mod tests {
         assert_ne!(b, 0);
         assert_ne!(a, b);
     }
-
     #[test]
     fn open_queries_rejects_out_of_range() {
         let err = open_queries(&[10u64, 11u64], &[2]).expect_err("out-of-range query");
@@ -2589,7 +2386,6 @@ mod tests {
             Error::QueryIndexOutOfRange { index: 2, len: 2 }
         ));
     }
-
     #[test]
     fn merkle_paths_rejects_out_of_range_indices() {
         let evaluations = vec![1u64, 2, 3, 4];
@@ -2601,7 +2397,6 @@ mod tests {
             Error::QueryIndexOutOfRange { index: 4, len: 4 }
         ));
     }
-
     #[test]
     fn merkle_paths_verify_against_lookup_root_for_single_leaf() {
         let evaluations = vec![42u64];
@@ -2611,10 +2406,8 @@ mod tests {
             merkle_paths_for_queries(&leaves, &[0], 8, evaluations.len()).expect("query path");
         let chunks = open_query_chunks(&evaluations, &[0], 8).expect("query chunk");
         let leaf = hash_lde_chunk(0, &chunks[0]).expect("leaf hash");
-
         assert!(verify_merkle_path(root, leaf, 0, &paths[0]).expect("path verifies"));
     }
-
     #[test]
     fn merkle_paths_verify_against_lookup_root_for_odd_leaf_count() {
         let chunk_size = lde_chunk_size(8);
@@ -2629,10 +2422,8 @@ mod tests {
             merkle_paths_for_queries(&leaves, &[query_index], 8, evaluations.len()).expect("path");
         let chunks = open_query_chunks(&evaluations, &[query_index], 8).expect("chunk");
         let leaf = hash_lde_chunk(leaf_index, &chunks[0]).expect("leaf hash");
-
         assert!(verify_merkle_path(root, leaf, leaf_index, &paths[0]).expect("path verifies"));
     }
-
     #[test]
     fn trace_row_hashes_match_cpu_reference_for_edge_shapes() {
         let cases = [
@@ -2653,7 +2444,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn lde_row_hashes_match_cpu_reference_for_trace_shape() {
         let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
@@ -2666,7 +2456,6 @@ mod tests {
             hash_trace_rows_cpu(lde_columns)
         );
     }
-
     #[test]
     fn domain_hash_batches_match_scalar_reference() {
         let messages = [
@@ -2687,7 +2476,6 @@ mod tests {
         assert_eq!(cpu_batched, expected);
         assert_eq!(batched, expected);
     }
-
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn domain_hash_gpu_batches_group_mixed_limb_lengths() {
@@ -2709,7 +2497,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(hashes, expected);
     }
-
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn domain_hash_gpu_batches_match_scalar_for_pair_of_len17_limb_messages() {
@@ -2722,7 +2509,6 @@ mod tests {
             .map(|message| hash_with_domain_limbs(FRI_LEAF_DOMAIN, message).expect("limbs"))
             .collect::<Vec<_>>();
         assert_eq!(limbs.iter().map(Vec::len).collect::<Vec<_>>(), vec![17, 17]);
-
         let hashes =
             hash_poseidon_limb_batches_gpu(&limbs).expect("same-length limb group should hash");
         let expected = limbs
@@ -2731,7 +2517,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(hashes, expected);
     }
-
     #[test]
     fn fold_with_fri_emits_layers_and_betas() {
         let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
@@ -2759,7 +2544,6 @@ mod tests {
         );
         assert!(layers.iter().all(|&layer| layer != 0));
     }
-
     #[test]
     fn fold_with_fri_rejects_invalid_arity() {
         let mut transcript = Transcript::initialise(
@@ -2774,7 +2558,6 @@ mod tests {
             super::fold_with_fri(&[1, 2, 3], 4, 1, &mut transcript).expect_err("invalid arity");
         assert!(matches!(err, super::Error::FriArity(4)));
     }
-
     #[test]
     fn sampled_queries_are_sorted_and_unique() {
         let mut transcript = Transcript::initialise(
@@ -2789,7 +2572,6 @@ mod tests {
         assert_eq!(indices.len(), 16);
         assert!(indices.windows(2).all(|window| window[0] < window[1]));
     }
-
     #[test]
     fn sampled_queries_cap_at_domain_size() {
         let mut transcript = Transcript::initialise(
@@ -2807,7 +2589,6 @@ mod tests {
         assert!(indices.iter().all(|&idx| idx < 5));
         assert!(indices.windows(2).all(|window| window[0] < window[1]));
     }
-
     #[test]
     fn lde_row_hashes_match_expected_length() {
         let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
@@ -2819,7 +2600,6 @@ mod tests {
             * usize::try_from(params.fri.blowup_factor).expect("blowup fits usize");
         assert_eq!(hashes.len(), expected);
     }
-
     #[test]
     fn lookup_grand_product_consumes_lde_witness() {
         let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
@@ -2839,7 +2619,6 @@ mod tests {
         );
         assert_ne!(product, 0);
     }
-
     #[test]
     fn pad_to_arity_extends_with_last_value() {
         let mut values = vec![1u64, 2, 3];
@@ -2849,7 +2628,6 @@ mod tests {
         super::pad_to_arity(&mut values, 4);
         assert_eq!(values.len(), 4);
     }
-
     #[test]
     fn fold_round_weights_by_challenge_powers() {
         let values = vec![1u64, 2, 3, 4];
@@ -2864,7 +2642,6 @@ mod tests {
         }
         assert_eq!(folded[0], expected);
     }
-
     #[test]
     fn fri_layer_commitment_changes_when_values_change() {
         let original = super::fri_layer_commitment(0, &[1, 2, 3, 4]);
@@ -2873,7 +2650,6 @@ mod tests {
         let repeated = super::fri_layer_commitment(0, &[1, 2, 3, 4]);
         assert_eq!(original, repeated);
     }
-
     #[test]
     fn fri_folding_reduces_layer_length() {
         let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
@@ -2909,7 +2685,6 @@ mod tests {
         assert_eq!(layers, repeat_layers);
         assert_eq!(betas, repeat_betas);
     }
-
     fn reference_pad_to_arity(values: &mut Vec<u64>, arity: usize) {
         if values.is_empty() || arity == 0 {
             return;
@@ -2922,7 +2697,6 @@ mod tests {
         let padding = arity - remainder;
         values.extend(std::iter::repeat_n(pad_value, padding));
     }
-
     fn reference_fold_round(values: &[u64], arity: usize, beta: u64) -> Vec<u64> {
         if values.is_empty() || arity == 0 {
             return Vec::new();
@@ -2939,7 +2713,6 @@ mod tests {
         }
         next
     }
-
     fn reference_fri_layer_commitment(round: usize, values: &[u64]) -> u64 {
         let modulus = u128::from(super::GOLDILOCKS_MODULUS);
         let round_field = u64::try_from(u128::try_from(round).unwrap_or(0) % modulus)
@@ -2957,7 +2730,6 @@ mod tests {
         }
         poseidon::hash_field_elements_cpu(&limbs)
     }
-
     #[test]
     fn fri_layers_match_reference_harness() {
         let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
@@ -2976,7 +2748,6 @@ mod tests {
         let (layers, betas) =
             super::fold_with_fri(&evaluations, params.fri.arity, 3, &mut transcript)
                 .expect("fold with fri");
-
         let mut reference_transcript = Transcript::initialise(
             &crate::proof::PublicIO::default(),
             params.name,
@@ -3003,11 +2774,9 @@ mod tests {
         let final_root = reference_fri_layer_commitment(round, &current);
         reference_transcript.append_fri_final(final_root);
         reference_layers.push(final_root);
-
         assert_eq!(layers, reference_layers);
         assert_eq!(betas[..reference_betas.len()], reference_betas[..]);
     }
-
     #[test]
     fn fri_reference_detects_mutation() {
         let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
@@ -3026,7 +2795,6 @@ mod tests {
         let (baseline_layers, _) =
             super::fold_with_fri(&evaluations, params.fri.arity, 3, &mut transcript)
                 .expect("baseline fold");
-
         let mut mutated = evaluations.clone();
         mutated[0] = mutated[0].wrapping_add(1);
         let mut reference_transcript = Transcript::initialise(
@@ -3053,18 +2821,13 @@ mod tests {
         let final_root = reference_fri_layer_commitment(round, &current);
         reference_transcript.append_fri_final(final_root);
         mutated_layers.push(final_root);
-
         assert_ne!(baseline_layers, mutated_layers);
     }
-
     mod fri_properties {
         use fastpq_isi::CANONICAL_PARAMETER_SETS;
-
         use super::*;
         use crate::Planner;
-
         const MAX_TRACE_LOG: u32 = 4;
-
         fn fri_input_cases() -> Vec<(u32, Vec<u64>)> {
             let mut cases = Vec::new();
             for trace_log in 0..=MAX_TRACE_LOG {
@@ -3082,7 +2845,6 @@ mod tests {
             }
             cases
         }
-
         #[test]
         fn fri_layers_and_betas_are_deterministic() {
             for (trace_log, coeffs) in fri_input_cases() {
@@ -3090,10 +2852,8 @@ mod tests {
                 let planner = Planner::new(&params);
                 let trace_len = 1usize << trace_log;
                 assert_eq!(coeffs.len(), trace_len);
-
                 let evaluations = planner.lde_columns(std::slice::from_ref(&coeffs));
                 let evaluation = evaluations.into_iter().next().expect("evaluation column");
-
                 let mut transcript_a = Transcript::initialise(
                     &crate::proof::PublicIO::default(),
                     params.name,
@@ -3110,7 +2870,6 @@ mod tests {
                     TRANSCRIPT_TAG_INIT,
                 )
                 .expect("transcript");
-
                 let (layers_a, betas_a) = fold_with_fri(
                     &evaluation,
                     params.fri.arity,
@@ -3125,10 +2884,8 @@ mod tests {
                     &mut transcript_b,
                 )
                 .expect("fri folding");
-
                 assert_eq!(layers_a, layers_b);
                 assert_eq!(betas_a, betas_b);
-
                 let expected_len = trace_len << planner.blowup_log();
                 assert_eq!(evaluation.len(), expected_len);
             }

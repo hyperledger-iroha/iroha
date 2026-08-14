@@ -1,6 +1,5 @@
 //! Example: compute a single SHA-256 block using an IVM custom op.
 use ivm::IVM;
-
 fn main() {
     let mut vm = IVM::new(u64::MAX);
     // Prepare a single-block message "abc" with SHA-256 padding

@@ -1,6 +1,5 @@
 //! Contains message structures for p2p communication during consensus.
 use std::{collections::BTreeMap, sync::Arc};
-
 use iroha_crypto::{Hash, HashOf, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
@@ -21,9 +20,7 @@ use norito::{
     codec::{Decode, Encode},
     core as ncore,
 };
-
 use crate::block::NewBlock;
-
 #[allow(clippy::enum_variant_names, clippy::large_enum_variant)]
 /// Messages used by peers to communicate during the consensus process.
 #[derive(Debug, Clone, Decode, Encode, FromVariant)]
@@ -93,7 +90,6 @@ pub enum BlockMessage {
     /// Explicitly versioned global Sumeragi v2 message.
     V2(#[skip_try_from] ConsensusMessageV2),
 }
-
 impl BlockMessage {
     /// Local no-op sentinel used only when an infallible legacy decode path must return a valid
     /// message after a wire-codec failure.
@@ -105,7 +101,6 @@ impl BlockMessage {
             bls_sig: Vec::new(),
         })
     }
-
     /// Whether this belongs to the independent lane-local consensus protocol.
     pub(crate) const fn is_lane_local(&self) -> bool {
         matches!(
@@ -121,13 +116,11 @@ impl BlockMessage {
                 | Self::LaneHistoricalRecoveryResponse(_)
         )
     }
-
     /// Whether this is bounded live consensus traffic which does not enter
     /// either the global reducer or an autonomous lane reducer.
     pub(crate) const fn is_live_auxiliary(&self) -> bool {
         matches!(self, Self::KuraReplicaAdvert(_))
     }
-
     /// Reject retired global Sumeragi v1 messages at the live wire boundary.
     ///
     /// The variants remain part of the enum so historical frames can be
@@ -151,7 +144,6 @@ impl BlockMessage {
             )),
         }
     }
-
     /// Normalize compact message variants into their full forms.
     pub fn normalize(self) -> Self {
         match self {
@@ -159,7 +151,6 @@ impl BlockMessage {
             other => other,
         }
     }
-
     /// Return whether this message belongs to an admitted live protocol.
     ///
     /// Global v1 variants remain decodable for archives but cannot claim live
@@ -172,13 +163,11 @@ impl BlockMessage {
             message => message.is_lane_local() || message.is_live_auxiliary(),
         }
     }
-
     /// Return whether asynchronous ingress must preserve this live message.
     #[must_use]
     pub fn requires_blocking_ingress(&self) -> bool {
         self.is_authoritative_v2_ingress()
     }
-
     /// Build an RBC chunk message, using the compact variant when fields fit.
     pub fn from_rbc_chunk(chunk: super::consensus::RbcChunk) -> Self {
         let super::consensus::RbcChunk {
@@ -228,7 +217,6 @@ impl BlockMessage {
             bytes,
         })
     }
-
     /// Network priority for this consensus message.
     ///
     /// RBC chunks are required for deliver quorum; deprioritising them stalls consensus.
@@ -236,7 +224,6 @@ impl BlockMessage {
         iroha_p2p::Priority::High
     }
 }
-
 impl<'a> ncore::DecodeFromSlice<'a> for BlockMessage {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         let mut cursor = bytes;
@@ -245,7 +232,6 @@ impl<'a> ncore::DecodeFromSlice<'a> for BlockMessage {
         Ok((value, consumed))
     }
 }
-
 /// Wire wrapper for consensus payloads.
 ///
 /// Cached bytes always store a full Norito-framed [`BlockMessage`] so the payload remains
@@ -255,7 +241,6 @@ pub struct BlockMessageWire {
     message: Arc<BlockMessage>,
     encoded: Option<Arc<Vec<u8>>>,
 }
-
 impl BlockMessageWire {
     /// Wrap a consensus message without cached bytes.
     pub fn new(message: BlockMessage) -> Self {
@@ -264,7 +249,6 @@ impl BlockMessageWire {
             encoded: None,
         }
     }
-
     /// Wrap an `Arc`-backed live message and cache its canonical full-frame bytes.
     ///
     /// # Errors
@@ -278,18 +262,15 @@ impl BlockMessageWire {
             encoded: Some(encoded),
         })
     }
-
     /// Borrow the underlying consensus message.
     pub fn as_message(&self) -> &BlockMessage {
         self.message.as_ref()
     }
-
     /// Acquire a mutable reference, clearing cached encoded bytes.
     pub fn make_mut(&mut self) -> &mut BlockMessage {
         self.encoded = None;
         Arc::make_mut(&mut self.message)
     }
-
     /// Consume the wrapper and return the consensus message.
     pub fn into_message(self) -> BlockMessage {
         let message = self.message;
@@ -301,15 +282,12 @@ impl BlockMessageWire {
         }
         (*message).clone()
     }
-
     /// Cached encoded length if available.
     pub fn encoded_len(&self) -> Option<usize> {
         self.encoded.as_ref().map(|bytes| bytes.len())
     }
-
     fn framed_prefix_len(bytes: &[u8]) -> Result<usize, ncore::Error> {
         const LEN_OFF: usize = 4 + 1 + 1 + 16 + 1;
-
         if bytes.len() < ncore::Header::SIZE {
             return Err(ncore::Error::LengthMismatch);
         }
@@ -359,38 +337,31 @@ impl BlockMessageWire {
             .filter(|size| *size <= bytes.len())
             .ok_or(ncore::Error::LengthMismatch)
     }
-
     pub(crate) fn try_encode_live_message(message: &BlockMessage) -> Result<Vec<u8>, ncore::Error> {
         message.ensure_live_outbound()?;
         ncore::to_bytes(message)
     }
-
     #[cfg(test)]
     fn encode_archival_message(message: &BlockMessage) -> Vec<u8> {
         ncore::to_bytes(message).expect("encode archival Sumeragi block message fixture")
     }
 }
-
 impl AsRef<BlockMessage> for BlockMessageWire {
     fn as_ref(&self) -> &BlockMessage {
         self.message.as_ref()
     }
 }
-
 impl std::ops::Deref for BlockMessageWire {
     type Target = BlockMessage;
-
     fn deref(&self) -> &Self::Target {
         self.message.as_ref()
     }
 }
-
 impl From<BlockMessage> for BlockMessageWire {
     fn from(message: BlockMessage) -> Self {
         Self::new(message)
     }
 }
-
 impl NoritoSerialize for BlockMessageWire {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.message.ensure_live_outbound()?;
@@ -403,7 +374,6 @@ impl NoritoSerialize for BlockMessageWire {
         Ok(())
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for BlockMessageWire {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         match Self::try_deserialize(archived) {
@@ -417,7 +387,6 @@ impl<'a> NoritoDeserialize<'a> for BlockMessageWire {
             }
         }
     }
-
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
@@ -430,7 +399,6 @@ impl<'a> NoritoDeserialize<'a> for BlockMessageWire {
         })
     }
 }
-
 impl<'a> ncore::DecodeFromSlice<'a> for BlockMessageWire {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         let consumed = Self::framed_prefix_len(bytes)?;
@@ -446,7 +414,6 @@ impl<'a> ncore::DecodeFromSlice<'a> for BlockMessageWire {
         ))
     }
 }
-
 /// Compact RBC payload chunk header (u32 height/view/epoch).
 #[derive(Debug, Clone, Decode, Encode)]
 pub struct RbcChunkCompact {
@@ -463,7 +430,6 @@ pub struct RbcChunkCompact {
     /// Chunk bytes.
     pub bytes: Vec<u8>,
 }
-
 impl RbcChunkCompact {
     /// Build a compact chunk when headers fit into u32.
     pub fn try_from_chunk(chunk: &super::consensus::RbcChunk) -> Option<Self> {
@@ -479,7 +445,6 @@ impl RbcChunkCompact {
             bytes: chunk.bytes.clone(),
         })
     }
-
     /// Convert into the full `RbcChunk` form.
     pub fn into_chunk(self) -> super::consensus::RbcChunk {
         super::consensus::RbcChunk {
@@ -492,14 +457,12 @@ impl RbcChunkCompact {
         }
     }
 }
-
 /// Control-flow signals exchanged between peers (pacemaker frames).
 #[derive(Debug, Clone, Decode, FromVariant)]
 pub enum ControlFlow {
     /// Evidence propagation for slashing/governance actions.
     Evidence(super::consensus::Evidence),
 }
-
 impl NoritoSerialize for ControlFlow {
     fn serialize(&self, _writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         Err(ncore::Error::Message(
@@ -507,7 +470,6 @@ impl NoritoSerialize for ControlFlow {
         ))
     }
 }
-
 /// Minimal proposal header hint broadcast alongside `BlockCreated` by the leader.
 /// Carries a `HighestQC` header reference for pacemaker consumers.
 #[derive(Debug, Clone, Copy, Decode, Encode)]
@@ -521,7 +483,6 @@ pub struct ProposalHint {
     /// Highest certificate reference known to the proposer.
     pub highest_qc: super::consensus::QcRef,
 }
-
 // Bridge Norito codec (Encode/Decode) to core slice-based decoding for strict-safe paths.
 impl<'a> norito::core::DecodeFromSlice<'a> for ControlFlow {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
@@ -532,10 +493,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ControlFlow {
         Ok((value, used))
     }
 }
-
 // NOTE: slice-based decode for ControlFlow is validated indirectly via
 // other consensus tests; no dedicated unit test here to avoid duplication.
-
 /// `BlockCreated` message structure.
 #[derive(Debug, Clone, Decode, Encode)]
 pub struct BlockCreated {
@@ -547,7 +506,6 @@ pub struct BlockCreated {
     #[norito(default)]
     pub frontier: Option<BlockCreatedFrontierInfo>,
 }
-
 /// Consensus metadata bundled into `BlockCreated` for frontier progression.
 #[derive(Debug, Clone, Decode, Encode)]
 pub struct BlockCreatedFrontierInfo {
@@ -570,7 +528,6 @@ pub struct BlockCreatedFrontierInfo {
     /// Leader signature over the block header.
     pub leader_signature: BlockSignature,
 }
-
 impl From<&NewBlock> for BlockCreated {
     fn from(block: &NewBlock) -> Self {
         let mut signed = SignedBlock::presigned_with_da(
@@ -592,7 +549,6 @@ impl From<&NewBlock> for BlockCreated {
         }
     }
 }
-
 impl From<NewBlock> for BlockCreated {
     fn from(block: NewBlock) -> Self {
         Self {
@@ -601,7 +557,6 @@ impl From<NewBlock> for BlockCreated {
         }
     }
 }
-
 impl From<&SignedBlock> for BlockCreated {
     fn from(block: &SignedBlock) -> Self {
         Self {
@@ -611,7 +566,6 @@ impl From<&SignedBlock> for BlockCreated {
         }
     }
 }
-
 impl BlockCreated {
     /// Build a frontier-complete `BlockCreated`.
     pub fn with_frontier(block: SignedBlock, frontier: BlockCreatedFrontierInfo) -> Self {
@@ -621,7 +575,6 @@ impl BlockCreated {
         }
     }
 }
-
 impl BlockCreatedFrontierInfo {
     /// Build inline frontier metadata from the proposal/RBC-init information for the slot.
     pub fn from_proposal_and_rbc_init(
@@ -641,7 +594,6 @@ impl BlockCreatedFrontierInfo {
         }
     }
 }
-
 /// `BlockSyncUpdate` message structure.
 #[derive(Debug, Clone, Decode, Encode)]
 pub struct BlockSyncUpdate {
@@ -658,7 +610,6 @@ pub struct BlockSyncUpdate {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub stake_snapshot: Option<super::stake_snapshot::CommitStakeSnapshot>,
 }
-
 /// Current clean-break layout for lane, Native, and canonical executed-block
 /// historical recovery transport.
 ///
@@ -668,7 +619,6 @@ pub struct BlockSyncUpdate {
 /// coordinated clean break which carries protocol-v4 finality artifacts;
 /// older layouts are not accepted.
 pub const LANE_HISTORICAL_RECOVERY_VERSION_V4: u16 = 4;
-
 /// Exact canonical executed body needed by a durable-evidence repair owner.
 ///
 /// Every field is copied from one locally verified durable finality artifact.
@@ -690,7 +640,6 @@ pub struct CanonicalExecutedBlockNeedV1 {
     /// Exact canonical result-bearing `SignedBlockWire` hash.
     pub executed_block_wire_hash: Hash,
 }
-
 /// Exact durable dependency named by a historical lane recovery request.
 ///
 /// Lane-owned variants bind the immutable lane certificate carried by
@@ -729,7 +678,6 @@ pub enum LaneHistoricalRecoveryKindV1 {
         chunk_index: u32,
     },
 }
-
 /// Versioned request for one exact historical lane recovery dependency.
 ///
 /// The outer P2P envelope authenticates `requester`; ingress rejects any
@@ -754,7 +702,6 @@ pub struct LaneHistoricalRecoveryRequestV1 {
     /// Exact missing durable dependency.
     pub kind: LaneHistoricalRecoveryKindV1,
 }
-
 impl LaneHistoricalRecoveryRequestV1 {
     /// Immutable lane proposal which owns this request.
     #[must_use]
@@ -764,7 +711,6 @@ impl LaneHistoricalRecoveryRequestV1 {
             None => None,
         }
     }
-
     /// Exact global height whose durable dependency is requested.
     #[must_use]
     pub const fn source_height(&self) -> u64 {
@@ -777,7 +723,6 @@ impl LaneHistoricalRecoveryRequestV1 {
         }
     }
 }
-
 /// Proof-carrying payload returned for one outstanding historical request.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub enum LaneHistoricalRecoveryPayloadV1 {
@@ -818,7 +763,6 @@ pub enum LaneHistoricalRecoveryPayloadV1 {
         bytes: Vec<u8>,
     },
 }
-
 /// Versioned response to one exact outstanding historical recovery request.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub struct LaneHistoricalRecoveryResponseV1 {
@@ -829,7 +773,6 @@ pub struct LaneHistoricalRecoveryResponseV1 {
     /// Bounded independently verifiable recovery evidence.
     pub payload: LaneHistoricalRecoveryPayloadV1,
 }
-
 /// Direct certified block fetch message family.
 #[derive(Debug, Clone, Decode, Encode, FromVariant)]
 pub enum CertifiedBlockFetch {
@@ -842,7 +785,6 @@ pub enum CertifiedBlockFetch {
     /// Block body companion used when the full certified response exceeds the frame cap.
     Body(#[skip_try_from] CertifiedBlockFetchBody),
 }
-
 /// Request the exact certified block for a known commit QC subject.
 #[derive(Debug, Clone, Decode, Encode)]
 pub struct CertifiedBlockFetchRequest {
@@ -855,7 +797,6 @@ pub struct CertifiedBlockFetchRequest {
     /// Hash of the certified block.
     pub block_hash: HashOf<BlockHeader>,
 }
-
 /// Response carrying a block and the commit QC certifying it.
 #[derive(Debug, Clone, Decode, Encode)]
 pub struct CertifiedBlockFetchResponse {
@@ -874,7 +815,6 @@ pub struct CertifiedBlockFetchResponse {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub stake_snapshot: Option<super::stake_snapshot::CommitStakeSnapshot>,
 }
-
 /// Proof companion for an exact certified block fetch response.
 #[derive(Debug, Clone, Decode, Encode)]
 pub struct CertifiedBlockFetchProof {
@@ -893,7 +833,6 @@ pub struct CertifiedBlockFetchProof {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub stake_snapshot: Option<super::stake_snapshot::CommitStakeSnapshot>,
 }
-
 /// Body companion for an exact certified block fetch response.
 #[derive(Debug, Clone, Decode, Encode)]
 pub struct CertifiedBlockFetchBody {
@@ -904,7 +843,6 @@ pub struct CertifiedBlockFetchBody {
     /// Full block body for the certified subject.
     pub block: SignedBlock,
 }
-
 /// Validation error for a malformed certified block response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CertifiedBlockFetchValidationError {
@@ -923,7 +861,6 @@ pub enum CertifiedBlockFetchValidationError {
     /// Validator checkpoint metadata does not match the commit QC.
     CheckpointMismatch,
 }
-
 impl CertifiedBlockFetchResponse {
     /// Validate that the response self-certifies the returned block.
     pub fn validate_subject(&self) -> Result<(), CertifiedBlockFetchValidationError> {
@@ -943,7 +880,6 @@ impl CertifiedBlockFetchResponse {
         )
     }
 }
-
 impl CertifiedBlockFetchProof {
     /// Validate that the proof self-certifies the carried block hash.
     pub fn validate_subject(&self) -> Result<(), CertifiedBlockFetchValidationError> {
@@ -956,7 +892,6 @@ impl CertifiedBlockFetchProof {
         )
     }
 }
-
 impl CertifiedBlockFetchBody {
     /// Validate that the body matches the carried height/view.
     pub fn validate_subject(&self) -> Result<(), CertifiedBlockFetchValidationError> {
@@ -970,7 +905,6 @@ impl CertifiedBlockFetchBody {
         Ok(())
     }
 }
-
 fn validate_certified_fetch_proof_parts(
     height: u64,
     view: u64,
@@ -1011,7 +945,6 @@ fn validate_certified_fetch_proof_parts(
     }
     Ok(())
 }
-
 impl From<&SignedBlock> for BlockSyncUpdate {
     fn from(block: &SignedBlock) -> Self {
         Self {
@@ -1023,7 +956,6 @@ impl From<&SignedBlock> for BlockSyncUpdate {
         }
     }
 }
-
 /// Request an exact frontier block body for a known `(height, view, block_hash)` slot.
 #[derive(Debug, Clone, Decode, Encode)]
 pub struct FetchBlockBody {
@@ -1036,7 +968,6 @@ pub struct FetchBlockBody {
     /// View hint for the requested body.
     pub view: u64,
 }
-
 /// Exact block-body payload carried in a `BlockBodyResponse`.
 #[derive(Debug, Clone, Decode, Encode, FromVariant)]
 pub enum BlockBodyData {
@@ -1046,7 +977,6 @@ pub enum BlockBodyData {
     /// sidecars so lagging peers can recover committed frontier blocks without reproposing them.
     BlockSyncUpdate(#[skip_try_from] BlockSyncUpdate),
 }
-
 /// Exact frontier block-body response keyed by `(height, view, block_hash)`.
 #[derive(Debug, Clone, Decode, Encode)]
 pub struct BlockBodyResponse {
@@ -1059,9 +989,7 @@ pub struct BlockBodyResponse {
     /// The returned authoritative body payload.
     pub body: BlockBodyData,
 }
-
 // NOTE: Previously manual decoding validated signature uniqueness; Decode is now derived for simplicity.
-
 /// Request a peer to resend a pending block payload.
 #[derive(Debug, Clone, Copy, Decode, Encode, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FetchPendingBlockPriority {
@@ -1070,7 +998,6 @@ pub enum FetchPendingBlockPriority {
     /// Consensus-critical fetch (highest QC).
     Consensus,
 }
-
 /// Request a peer to resend a pending block payload.
 #[derive(Debug, Clone, Decode, Encode)]
 pub struct FetchPendingBlock {
@@ -1098,14 +1025,12 @@ pub struct FetchPendingBlock {
     #[norito(default)]
     pub commit_qc_only: Option<bool>,
 }
-
 /// Current clean-break layout version for authenticated Kura replica adverts.
 pub const KURA_REPLICA_ADVERT_VERSION_V1: u16 = 1;
 /// Hard admission bound for one encoded Kura replica advert.
 pub const MAX_KURA_REPLICA_ADVERT_WIRE_BYTES: usize = 16 * 1024;
 const KURA_REPLICA_ADVERT_SIGNATURE_BYTES: usize = 96;
 const KURA_REPLICA_ADVERT_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha:kura-replica-advert:v1";
-
 #[derive(Encode)]
 struct KuraReplicaAdvertSignaturePreimageV1 {
     domain: Vec<u8>,
@@ -1119,7 +1044,6 @@ struct KuraReplicaAdvertSignaturePreimageV1 {
     keeper_index: u32,
     keeper: PeerId,
 }
-
 /// Authenticated durable-replica claim for one exact canonical Kura body.
 ///
 /// Every identity needed for safe eviction is signed.  The advert is useful
@@ -1149,7 +1073,6 @@ pub struct KuraReplicaAdvertV1 {
     /// Keeper signature over [`Self::signature_preimage`].
     pub signature: Vec<u8>,
 }
-
 impl KuraReplicaAdvertV1 {
     /// Return the domain-separated canonical signing bytes.
     #[must_use]
@@ -1168,7 +1091,6 @@ impl KuraReplicaAdvertV1 {
         }
         .encode()
     }
-
     /// Verify fixed bounds, the clean-break version, and the keeper signature.
     ///
     /// Kura must additionally authenticate the canonical block, finality,
@@ -1202,11 +1124,9 @@ impl KuraReplicaAdvertV1 {
             .map_err(|error| format!("invalid Kura replica advert keeper signature: {error}"))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{borrow::Cow, sync::Arc, time::Duration};
-
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
         AccountId, Level,
@@ -1223,24 +1143,19 @@ mod tests {
         transaction::TransactionBuilder,
     };
     use norito::{core as norito_core, decode_from_bytes};
-
     use super::*;
     use crate::{block::BlockBuilder, sumeragi::consensus, tx::AcceptedTransaction};
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("Sumeragi message fixture key generation should succeed")
     }
-
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
             panic!("{algorithm:?} Sumeragi message fixture key generation should succeed: {err}")
         })
     }
-
     fn checked_random_peer_id() -> PeerId {
         PeerId::from(checked_random_keypair().public_key().clone())
     }
-
     fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
         let network_id = crate::sumeragi::synthetic_network_id("sumeragi-message-test");
         let keypair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
@@ -1256,7 +1171,6 @@ mod tests {
             .sign(keypair.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
-
     fn sample_qc_vote(seed: u8) -> consensus::QcVote {
         consensus::QcVote {
             phase: consensus::Phase::Commit,
@@ -1275,7 +1189,6 @@ mod tests {
             bls_sig: vec![seed, seed.wrapping_add(1)],
         }
     }
-
     fn sample_qc(seed: u8) -> consensus::Qc {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive sample QC validator key");
@@ -1304,7 +1217,6 @@ mod tests {
             },
         }
     }
-
     fn sample_certified_block_fetch_response(seed: u8) -> CertifiedBlockFetchResponse {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive sample certified block key");
@@ -1342,7 +1254,6 @@ mod tests {
             stake_snapshot: None,
         }
     }
-
     fn sample_certified_block_fetch_proof(seed: u8) -> CertifiedBlockFetchProof {
         let response = sample_certified_block_fetch_response(seed);
         CertifiedBlockFetchProof {
@@ -1354,7 +1265,6 @@ mod tests {
             stake_snapshot: response.stake_snapshot,
         }
     }
-
     fn sample_certified_block_fetch_body(seed: u8) -> CertifiedBlockFetchBody {
         let response = sample_certified_block_fetch_response(seed);
         CertifiedBlockFetchBody {
@@ -1363,7 +1273,6 @@ mod tests {
             block: response.block,
         }
     }
-
     fn sample_exec_witness_msg(seed: u8) -> consensus::ExecWitnessMsg {
         consensus::ExecWitnessMsg {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
@@ -1375,7 +1284,6 @@ mod tests {
             witness: consensus::ExecWitness::default(),
         }
     }
-
     fn sample_rbc_init_request(seed: u8) -> consensus::RbcInitRequest {
         consensus::RbcInitRequest {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
@@ -1385,7 +1293,6 @@ mod tests {
             view: u64::from(seed % 5),
         }
     }
-
     fn sample_rbc_chunk_request(seed: u8) -> consensus::RbcChunkRequest {
         consensus::RbcChunkRequest {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
@@ -1396,7 +1303,6 @@ mod tests {
             missing_indices: vec![1, 4, 9],
         }
     }
-
     fn sample_rbc_chunk(
         seed: u8,
         height: u64,
@@ -1416,7 +1322,6 @@ mod tests {
             bytes,
         }
     }
-
     fn sample_lane_block_messages(
         seed: u8,
     ) -> (
@@ -1459,7 +1364,6 @@ mod tests {
             payload_block_hint: None,
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
-
         let body = proposal.vote_body(consensus::Phase::Prepare);
         let signature = Signature::try_new(keypair.private_key(), &body.signature_preimage())
             .expect("sign lane-block fixture vote");
@@ -1480,7 +1384,6 @@ mod tests {
         };
         (proposal, vote, qc)
     }
-
     fn assert_compact_matches_chunk(compact: &RbcChunkCompact, chunk: &consensus::RbcChunk) {
         assert_eq!(compact.block_hash, chunk.block_hash);
         assert_eq!(u64::from(compact.height), chunk.height);
@@ -1489,7 +1392,6 @@ mod tests {
         assert_eq!(compact.idx, chunk.idx);
         assert_eq!(compact.bytes, chunk.bytes);
     }
-
     fn assert_invalid_wire_sentinel(message: &BlockMessage) {
         match message {
             BlockMessage::VrfCommit(commit) => {
@@ -1501,7 +1403,6 @@ mod tests {
             other => panic!("expected invalid-wire sentinel, got {other:?}"),
         }
     }
-
     fn decode_archival_block_message_into_network_envelope(
         message: BlockMessage,
     ) -> crate::NetworkMessage {
@@ -1518,7 +1419,6 @@ mod tests {
         );
         network
     }
-
     fn roundtrip_live_block_message_over_network_message(
         message: BlockMessage,
     ) -> crate::NetworkMessage {
@@ -1528,7 +1428,6 @@ mod tests {
         let bytes = norito_core::to_bytes(&network).expect("encode live network message");
         decode_from_bytes(&bytes).expect("decode live network message")
     }
-
     #[test]
     fn block_created_from_newblock_ref_and_move_equivalent() {
         // Build a minimal NewBlock and sign it.
@@ -1553,16 +1452,13 @@ mod tests {
             .with_da_commitments(Some(da_bundle.clone()))
             .sign(kp.private_key())
             .unpack(|_| {});
-
         let msg_from_ref = BlockCreated::from(&new_block);
         let msg_from_move = BlockCreated::from(new_block.clone());
-
         assert_eq!(msg_from_ref.block.header(), msg_from_move.block.header());
         assert_eq!(msg_from_ref.block.hash(), msg_from_move.block.hash());
         assert_eq!(msg_from_ref.block.da_commitments(), Some(&da_bundle));
         assert_eq!(msg_from_move.block.da_commitments(), Some(&da_bundle));
     }
-
     #[test]
     fn block_created_from_newblock_ref_preserves_previous_roster_evidence() {
         let kp = KeyPair::try_from_seed(b"seed-seed".to_vec(), Algorithm::Ed25519)
@@ -1589,13 +1485,11 @@ mod tests {
             validator_checkpoint: checkpoint,
             stake_snapshot: None,
         };
-
         let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_previous_roster_evidence(Some(evidence.clone()))
             .sign(kp.private_key())
             .unpack(|_| {});
-
         let msg = BlockCreated::from(&new_block);
         assert_eq!(
             msg.block.previous_roster_evidence(),
@@ -1608,7 +1502,6 @@ mod tests {
             "payload and header evidence hash must stay aligned",
         );
     }
-
     #[test]
     fn block_created_frontier_wire_constructors_match_formal_gate() {
         let kp = KeyPair::try_from_seed(b"frontier-wire".to_vec(), Algorithm::Ed25519)
@@ -1617,10 +1510,8 @@ mod tests {
             .chain(0, None)
             .sign(kp.private_key())
             .unpack(|_| {});
-
         let from_borrowed_new_block = BlockCreated::from(&new_block);
         let from_owned_new_block = BlockCreated::from(new_block.clone());
-
         assert!(
             from_borrowed_new_block.frontier.is_none(),
             "plain borrowed NewBlock constructors must not fabricate frontier metadata",
@@ -1634,7 +1525,6 @@ mod tests {
             from_owned_new_block.block.hash(),
             "borrowed and owned NewBlock constructors must preserve the same block",
         );
-
         let signed_block = from_borrowed_new_block.block.clone();
         let from_signed_block = BlockCreated::from(&signed_block);
         assert!(
@@ -1646,7 +1536,6 @@ mod tests {
             signed_block.hash(),
             "SignedBlock constructor must preserve the block payload",
         );
-
         let block_hash = signed_block.hash();
         let parent_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x21; Hash::LENGTH]));
@@ -1694,7 +1583,6 @@ mod tests {
             block_header: signed_block.header(),
             leader_signature: leader_signature.clone(),
         };
-
         let frontier = BlockCreatedFrontierInfo::from_proposal_and_rbc_init(&proposal, &rbc_init);
         assert_eq!(frontier.highest_qc, proposal.header.highest_qc);
         assert_eq!(frontier.payload_hash, proposal.payload_hash);
@@ -1705,7 +1593,6 @@ mod tests {
         assert_eq!(frontier.chunk_digests, rbc_init.chunk_digests);
         assert_eq!(frontier.chunk_root, rbc_init.chunk_root);
         assert_eq!(frontier.leader_signature, leader_signature);
-
         let with_frontier = BlockCreated::with_frontier(signed_block.clone(), frontier.clone());
         let preserved_frontier = with_frontier
             .frontier
@@ -1729,15 +1616,12 @@ mod tests {
             frontier.leader_signature,
         );
     }
-
     #[test]
     fn rbc_repair_requests_decode_but_do_not_reemit() {
         let init_request = BlockMessage::RbcInitRequest(sample_rbc_init_request(7));
         let chunk_request = BlockMessage::RbcChunkRequest(sample_rbc_chunk_request(11));
-
         let init_roundtrip = decode_archival_block_message_into_network_envelope(init_request);
         let chunk_roundtrip = decode_archival_block_message_into_network_envelope(chunk_request);
-
         assert!(matches!(
             init_roundtrip,
             crate::NetworkMessage::SumeragiBlock(wire)
@@ -1749,17 +1633,14 @@ mod tests {
                 if matches!(wire.as_message(), BlockMessage::RbcChunkRequest(_))
         ));
     }
-
     #[test]
     fn control_flow_evidence_is_archival_decode_only() {
         use super::super::consensus;
         use iroha_p2p::ClassifyTopic;
-
         #[derive(Encode)]
         enum ArchivedControlFlow {
             Evidence(consensus::Evidence),
         }
-
         // Construct minimal double-vote evidence
         let dummy_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([1u8; 32]));
         let v1 = consensus::Vote {
@@ -1798,7 +1679,6 @@ mod tests {
         let decoded = ControlFlow::decode(&mut bytes.as_slice())
             .expect("historical control-flow fixture must remain decodable");
         assert!(matches!(decoded, ControlFlow::Evidence(_)));
-
         let network = crate::NetworkMessage::SumeragiControlFlow(Box::new(decoded));
         assert!(!network.is_outbound_allowed());
         assert!(
@@ -1806,20 +1686,17 @@ mod tests {
             "decoded v1 control flow must not be serializable for live networking"
         );
     }
-
     #[test]
     fn block_message_priority_marks_rbc_chunk_high() {
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([2u8; 32]));
         let chunk = sample_rbc_chunk(2, 1, 0, 0, 0, vec![0u8; 1]);
         let msg = BlockMessage::RbcChunk(chunk.clone());
         assert_eq!(msg.priority(), iroha_p2p::Priority::High);
-
         let compact = RbcChunkCompact::try_from_chunk(&chunk).expect("chunk headers fit in u32");
         assert_eq!(
             BlockMessage::RbcChunkCompact(compact).priority(),
             iroha_p2p::Priority::High
         );
-
         let requester = checked_random_peer_id();
         let fetch_body = BlockMessage::FetchBlockBody(FetchBlockBody {
             requester: requester.clone(),
@@ -1828,7 +1705,6 @@ mod tests {
             view: 0,
         });
         assert_eq!(fetch_body.priority(), iroha_p2p::Priority::High);
-
         let fetch = BlockMessage::FetchPendingBlock(FetchPendingBlock {
             requester,
             block_hash,
@@ -1840,7 +1716,6 @@ mod tests {
         });
         assert_eq!(fetch.priority(), iroha_p2p::Priority::High);
     }
-
     #[test]
     fn block_message_priority_marks_all_variants_high_match_formal_gate() {
         let response = sample_certified_block_fetch_response(0x90);
@@ -1934,7 +1809,6 @@ mod tests {
         let fetch_proof = sample_certified_block_fetch_proof(0x9A);
         let fetch_body = sample_certified_block_fetch_body(0x9B);
         let (lane_proposal, lane_vote, lane_qc) = sample_lane_block_messages(0xA7);
-
         let messages = vec![
             (
                 "BlockCreated",
@@ -2054,7 +1928,6 @@ mod tests {
             ("LaneBlockVote", BlockMessage::LaneBlockVote(lane_vote)),
             ("LaneBlockQc", BlockMessage::LaneBlockQc(lane_qc)),
         ];
-
         for (variant, message) in messages {
             assert_eq!(
                 message.priority(),
@@ -2063,40 +1936,31 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn certified_block_fetch_response_accepts_matching_block_qc_and_checkpoint() {
         let response = sample_certified_block_fetch_response(21);
-
         assert_eq!(response.validate_subject(), Ok(()));
     }
-
     #[test]
     fn certified_block_fetch_proof_accepts_matching_block_qc_and_checkpoint() {
         let proof = sample_certified_block_fetch_proof(28);
-
         assert_eq!(proof.validate_subject(), Ok(()));
     }
-
     #[test]
     fn certified_block_fetch_body_accepts_matching_height_and_view() {
         let body = sample_certified_block_fetch_body(29);
-
         assert_eq!(body.validate_subject(), Ok(()));
     }
-
     #[test]
     fn certified_block_fetch_response_rejects_mismatched_hash() {
         let mut response = sample_certified_block_fetch_response(22);
         response.commit_qc.subject_block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH]));
-
         assert_eq!(
             response.validate_subject(),
             Err(CertifiedBlockFetchValidationError::BlockHashMismatch)
         );
     }
-
     #[test]
     fn certified_block_fetch_response_rejects_mismatched_height_and_view() {
         let mut height_mismatch = sample_certified_block_fetch_response(23);
@@ -2105,21 +1969,18 @@ mod tests {
             height_mismatch.validate_subject(),
             Err(CertifiedBlockFetchValidationError::HeightMismatch)
         );
-
         let mut view_mismatch = sample_certified_block_fetch_response(24);
         view_mismatch.view = view_mismatch.view.saturating_add(1);
         assert_eq!(
             view_mismatch.validate_subject(),
             Err(CertifiedBlockFetchValidationError::ViewMismatch)
         );
-
         let mut qc_view_mismatch = sample_certified_block_fetch_response(25);
         qc_view_mismatch.commit_qc.view = qc_view_mismatch.commit_qc.view.saturating_add(1);
         assert_eq!(
             qc_view_mismatch.validate_subject(),
             Err(CertifiedBlockFetchValidationError::QcViewMismatch)
         );
-
         let mut qc_height_mismatch = sample_certified_block_fetch_response(38);
         qc_height_mismatch.commit_qc.height = qc_height_mismatch.commit_qc.height.saturating_add(1);
         assert_eq!(
@@ -2127,18 +1988,15 @@ mod tests {
             Err(CertifiedBlockFetchValidationError::QcHeightMismatch)
         );
     }
-
     #[test]
     fn certified_block_fetch_response_rejects_uncertified_response() {
         let mut response = sample_certified_block_fetch_response(26);
         response.commit_qc.phase = consensus::Phase::Prepare;
-
         assert_eq!(
             response.validate_subject(),
             Err(CertifiedBlockFetchValidationError::Uncertified)
         );
     }
-
     #[test]
     fn certified_block_fetch_response_rejects_empty_certificate_parts() {
         let mut empty_bitmap = sample_certified_block_fetch_response(32);
@@ -2147,7 +2005,6 @@ mod tests {
             empty_bitmap.validate_subject(),
             Err(CertifiedBlockFetchValidationError::Uncertified)
         );
-
         let mut empty_signature = sample_certified_block_fetch_response(33);
         empty_signature
             .commit_qc
@@ -2159,18 +2016,15 @@ mod tests {
             Err(CertifiedBlockFetchValidationError::Uncertified)
         );
     }
-
     #[test]
     fn certified_block_fetch_proof_rejects_checkpoint_mismatch() {
         let mut proof = sample_certified_block_fetch_proof(34);
         proof.validator_checkpoint.signers_bitmap.push(0xff);
-
         assert_eq!(
             proof.validate_subject(),
             Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
         );
     }
-
     #[test]
     fn certified_block_fetch_proof_rejects_mismatched_or_uncertified_qc() {
         let mut block_hash_mismatch = sample_certified_block_fetch_proof(39);
@@ -2180,21 +2034,18 @@ mod tests {
             block_hash_mismatch.validate_subject(),
             Err(CertifiedBlockFetchValidationError::BlockHashMismatch)
         );
-
         let mut height_mismatch = sample_certified_block_fetch_proof(40);
         height_mismatch.commit_qc.height = height_mismatch.commit_qc.height.saturating_add(1);
         assert_eq!(
             height_mismatch.validate_subject(),
             Err(CertifiedBlockFetchValidationError::QcHeightMismatch)
         );
-
         let mut view_mismatch = sample_certified_block_fetch_proof(41);
         view_mismatch.commit_qc.view = view_mismatch.commit_qc.view.saturating_add(1);
         assert_eq!(
             view_mismatch.validate_subject(),
             Err(CertifiedBlockFetchValidationError::QcViewMismatch)
         );
-
         let mut uncertified = sample_certified_block_fetch_proof(42);
         uncertified.commit_qc.phase = consensus::Phase::Prepare;
         assert_eq!(
@@ -2202,7 +2053,6 @@ mod tests {
             Err(CertifiedBlockFetchValidationError::Uncertified)
         );
     }
-
     #[test]
     fn certified_block_fetch_response_rejects_checkpoint_mismatch() {
         let mut response = sample_certified_block_fetch_response(37);
@@ -2210,13 +2060,11 @@ mod tests {
             .validator_checkpoint
             .validator_set_hash_version
             .saturating_add(1);
-
         assert_eq!(
             response.validate_subject(),
             Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
         );
     }
-
     #[test]
     fn certified_block_fetch_rejects_checkpoint_root_and_roster_mutations() {
         let mut chain_order = sample_certified_block_fetch_response(43);
@@ -2225,14 +2073,12 @@ mod tests {
             chain_order.validate_subject(),
             Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
         );
-
         let mut state_root = sample_certified_block_fetch_proof(44);
         state_root.validator_checkpoint.post_state_root = Hash::prehashed([0x44; Hash::LENGTH]);
         assert_eq!(
             state_root.validate_subject(),
             Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
         );
-
         let mut roster = sample_certified_block_fetch_response(45);
         let extra = KeyPair::try_from_seed(vec![45; 32], Algorithm::Ed25519)
             .expect("derive mutated roster fixture key");
@@ -2245,7 +2091,6 @@ mod tests {
             Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
         );
     }
-
     #[test]
     fn certified_block_fetch_rejects_checkpoint_signature_and_hash_mutations() {
         let mut parent_root = sample_certified_block_fetch_response(46);
@@ -2254,7 +2099,6 @@ mod tests {
             parent_root.validate_subject(),
             Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
         );
-
         let mut rechain_seq = sample_certified_block_fetch_proof(47);
         rechain_seq.validator_checkpoint.rechain_seq = rechain_seq
             .validator_checkpoint
@@ -2264,7 +2108,6 @@ mod tests {
             rechain_seq.validate_subject(),
             Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
         );
-
         let mut aggregate_signature = sample_certified_block_fetch_response(48);
         aggregate_signature
             .validator_checkpoint
@@ -2274,7 +2117,6 @@ mod tests {
             aggregate_signature.validate_subject(),
             Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
         );
-
         let mut validator_set_hash = sample_certified_block_fetch_proof(49);
         validator_set_hash.validator_checkpoint.validator_set_hash =
             HashOf::from_untyped_unchecked(Hash::prehashed([0x49; Hash::LENGTH]));
@@ -2283,7 +2125,6 @@ mod tests {
             Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
         );
     }
-
     #[test]
     fn certified_block_fetch_body_rejects_mismatched_height_and_view() {
         let mut height_mismatch = sample_certified_block_fetch_body(35);
@@ -2292,7 +2133,6 @@ mod tests {
             height_mismatch.validate_subject(),
             Err(CertifiedBlockFetchValidationError::HeightMismatch)
         );
-
         let mut view_mismatch = sample_certified_block_fetch_body(36);
         view_mismatch.view = view_mismatch.view.saturating_add(1);
         assert_eq!(
@@ -2300,7 +2140,6 @@ mod tests {
             Err(CertifiedBlockFetchValidationError::ViewMismatch)
         );
     }
-
     #[test]
     fn certified_block_fetch_decodes_but_does_not_reemit() {
         let requester = checked_random_peer_id();
@@ -2320,12 +2159,10 @@ mod tests {
         let body = BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Body(
             sample_certified_block_fetch_body(31),
         ));
-
         let request_roundtrip = decode_archival_block_message_into_network_envelope(request);
         let response_roundtrip = decode_archival_block_message_into_network_envelope(response);
         let proof_roundtrip = decode_archival_block_message_into_network_envelope(proof);
         let body_roundtrip = decode_archival_block_message_into_network_envelope(body);
-
         assert!(matches!(
             request_roundtrip,
             crate::NetworkMessage::SumeragiBlock(wire)
@@ -2359,7 +2196,6 @@ mod tests {
                 )
         ));
     }
-
     #[test]
     fn block_message_wire_decodes_cached_archival_payload_without_reemitting_it() {
         let msg = BlockMessage::VrfCommit(consensus::VrfCommit {
@@ -2372,19 +2208,16 @@ mod tests {
         let wire = <BlockMessageWire as norito_core::DecodeFromSlice>::decode_from_slice(&encoded)
             .expect("decode archival block message fixture")
             .0;
-
         assert!(encoded.starts_with(&norito_core::MAGIC));
         assert_eq!(wire.encoded_len(), Some(encoded.len()));
         assert!(matches!(wire.as_ref(), BlockMessage::VrfCommit(_)));
         assert!(norito_core::to_bytes(&wire).is_err());
     }
-
     #[test]
     fn noncanonical_v2_protocol_version_is_not_live_encodable() {
         use iroha_data_model::block::consensus_v2::{
             ConsensusMessageV2Payload, PayloadChunk, PayloadManifest,
         };
-
         let mut message =
             ConsensusMessageV2::new(ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
                 manifest_hash: HashOf::<PayloadManifest>::from_untyped_unchecked(Hash::new(
@@ -2397,51 +2230,40 @@ mod tests {
             }));
         message.protocol_version = message.protocol_version.saturating_sub(1);
         let message = Arc::new(BlockMessage::V2(message));
-
         assert!(BlockMessageWire::try_preencoded(Arc::clone(&message)).is_err());
         assert!(norito_core::to_bytes(&BlockMessageWire::new((*message).clone())).is_err());
     }
-
     #[test]
     fn archival_block_message_payload_is_self_describing() {
         let vote = sample_qc_vote(0x41);
         let msg = BlockMessage::QcVote(vote.clone());
         let encoded = BlockMessageWire::encode_archival_message(&msg);
-
         assert!(encoded.starts_with(&norito_core::MAGIC));
-
         let decoded = decode_from_bytes::<BlockMessage>(&encoded).expect("decode inner message");
         match decoded {
             BlockMessage::QcVote(decoded_vote) => assert_eq!(decoded_vote, vote),
             other => panic!("expected qc vote, got {other:?}"),
         }
     }
-
     #[test]
     fn invalid_wire_sentinel_is_identified_and_self_describing() {
         let msg = BlockMessage::invalid_wire_sentinel();
         assert_invalid_wire_sentinel(&msg);
         assert!(BlockMessageWire::try_encode_live_message(&msg).is_err());
-
         let encoded = BlockMessageWire::encode_archival_message(&msg);
-
         let decoded = decode_from_bytes::<BlockMessage>(&encoded).expect("decode sentinel frame");
         assert_invalid_wire_sentinel(&decoded);
     }
-
     #[test]
     fn block_message_wire_into_message_clones_shared_arc() {
         let (proposal, _, _) = sample_lane_block_messages(0x43);
         let msg = Arc::new(BlockMessage::LaneBlockProposal(proposal));
         let wire = BlockMessageWire::try_preencoded(Arc::clone(&msg))
             .expect("lane-local fixture is live traffic");
-
         let message = wire.into_message();
-
         assert!(matches!(message, BlockMessage::LaneBlockProposal(_)));
         assert_eq!(Arc::strong_count(&msg), 1);
     }
-
     #[test]
     fn block_message_wire_archival_decode_gate_is_strict_and_one_way() {
         fn archival_marker() -> BlockMessage {
@@ -2452,7 +2274,6 @@ mod tests {
                 bls_sig: vec![0xB7],
             })
         }
-
         fn assert_archival_marker(label: &str, message: &BlockMessage) {
             match message {
                 BlockMessage::VrfCommit(commit) => {
@@ -2464,7 +2285,6 @@ mod tests {
                 other => panic!("{label}: expected archival marker, got {other:?}"),
             }
         }
-
         fn assert_rejects_frame(label: &str, bytes: Vec<u8>) {
             assert!(
                 <BlockMessageWire as norito_core::DecodeFromSlice>::decode_from_slice(&bytes)
@@ -2472,12 +2292,9 @@ mod tests {
                 "{label} frame should be rejected"
             );
         }
-
         const LEN_OFF: usize = 4 + 1 + 1 + 16 + 1;
-
         let wrapped = archival_marker();
         let wrapped_encoded = BlockMessageWire::encode_archival_message(&wrapped);
-
         assert!(wrapped_encoded.starts_with(&norito_core::MAGIC));
         assert_eq!(wrapped_encoded[4], norito_core::VERSION_MAJOR);
         assert_eq!(wrapped_encoded[5], norito_core::VERSION_MINOR);
@@ -2487,7 +2304,6 @@ mod tests {
         );
         assert_eq!(wrapped_encoded[22], norito_core::Compression::None as u8);
         assert!(LEN_OFF + 8 <= norito_core::Header::SIZE);
-
         let mut framed_with_trailing = wrapped_encoded.clone();
         framed_with_trailing.extend_from_slice(&[0xAA; 7]);
         let (decoded, consumed) =
@@ -2510,7 +2326,6 @@ mod tests {
             norito_core::to_bytes(&decoded).is_err(),
             "a decoded archival frame must remain decode-only"
         );
-
         let decoded_via_decode: BlockMessageWire =
             Decode::decode(&mut wrapped_encoded.as_slice()).expect("decode block message wire");
         assert_archival_marker("Decode::decode message", decoded_via_decode.as_message());
@@ -2519,45 +2334,35 @@ mod tests {
             Some(wrapped_encoded.len())
         );
         assert!(norito_core::to_bytes(&decoded_via_decode).is_err());
-
         let decoded_payload =
             decode_from_bytes::<BlockMessage>(&wrapped_encoded).expect("decode cached payload");
         assert_archival_marker("cached payload", &decoded_payload);
-
         let mut bad_magic = wrapped_encoded.clone();
         bad_magic[0] ^= 0xFF;
         assert_rejects_frame("bad magic", bad_magic);
-
         let mut bad_major = wrapped_encoded.clone();
         bad_major[4] = bad_major[4].wrapping_add(1);
         assert_rejects_frame("bad major version", bad_major);
-
         let mut bad_minor = wrapped_encoded.clone();
         bad_minor[5] = bad_minor[5].wrapping_add(1);
         assert_rejects_frame("bad minor version", bad_minor);
-
         let mut bad_schema = wrapped_encoded.clone();
         bad_schema[6] ^= 0x01;
         assert_rejects_frame("bad schema hash", bad_schema);
-
         let mut compressed = wrapped_encoded.clone();
         compressed[22] = norito_core::Compression::Zstd as u8;
         assert_rejects_frame("compressed frame", compressed);
-
         let mut missing_len = wrapped_encoded.clone();
         missing_len.truncate(norito_core::Header::SIZE - 1);
         assert_rejects_frame("missing length", missing_len);
-
         let mut length_overflow = wrapped_encoded.clone();
         length_overflow[LEN_OFF..LEN_OFF + 8].copy_from_slice(&u64::MAX.to_le_bytes());
         assert_rejects_frame("length overflow", length_overflow);
-
         let mut payload_unavailable = wrapped_encoded.clone();
         let too_large_payload = u64::try_from(wrapped_encoded.len()).expect("test frame length");
         payload_unavailable[LEN_OFF..LEN_OFF + 8].copy_from_slice(&too_large_payload.to_le_bytes());
         assert_rejects_frame("payload unavailable", payload_unavailable);
     }
-
     #[test]
     fn live_block_message_cache_is_canonical_and_mutation_clears_it() {
         let (proposal, _, _) = sample_lane_block_messages(0x44);
@@ -2567,7 +2372,6 @@ mod tests {
         let wire = BlockMessageWire::try_preencoded(Arc::new(message))
             .expect("live preencoder must bind canonical bytes to the message");
         assert_eq!(wire.encode(), canonical);
-
         let (alternate, _, _) = sample_lane_block_messages(0x45);
         let alternate = BlockMessage::LaneBlockProposal(alternate);
         let mut mutated = wire;
@@ -2575,7 +2379,6 @@ mod tests {
         assert_eq!(mutated.encoded_len(), None);
         assert!(mutated.encode().starts_with(&norito_core::MAGIC));
     }
-
     #[test]
     fn block_message_wire_decodes_but_does_not_reemit_archived_qc_vote() {
         let decoded = decode_archival_block_message_into_network_envelope(BlockMessage::QcVote(
@@ -2596,7 +2399,6 @@ mod tests {
             other => panic!("expected cached sumeragi block message, got {other:?}"),
         }
     }
-
     #[test]
     fn block_message_wire_decodes_but_does_not_reemit_archived_qc() {
         let decoded =
@@ -2613,7 +2415,6 @@ mod tests {
             other => panic!("expected cached sumeragi block message, got {other:?}"),
         }
     }
-
     #[test]
     fn block_message_wire_network_roundtrip_cached_lane_block_messages() {
         let (proposal, vote, qc) = sample_lane_block_messages(0x71);
@@ -2652,7 +2453,6 @@ mod tests {
                 BlockMessage::LaneHistoricalRecoveryRequest(Box::new(historical_request)),
             ),
         ];
-
         for (label, message) in cases {
             let framed = norito_core::to_bytes(&message).expect("encode raw lane-topic fixture");
             assert_eq!(
@@ -2686,7 +2486,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn block_message_wire_decodes_but_does_not_reemit_archived_exec_witness() {
         let decoded = decode_archival_block_message_into_network_envelope(
@@ -2707,7 +2506,6 @@ mod tests {
             other => panic!("expected cached sumeragi block message, got {other:?}"),
         }
     }
-
     #[test]
     fn rbc_chunk_compact_roundtrip_normalizes() {
         let chunk = sample_rbc_chunk(4, 10, 2, 3, 1, vec![0xAB; 8]);
@@ -2722,7 +2520,6 @@ mod tests {
             other => panic!("expected normalized RBC chunk, got {other:?}"),
         }
     }
-
     #[test]
     fn rbc_chunk_compact_falls_back_on_large_headers() {
         let large_height = u64::from(u32::MAX) + 1;
@@ -2730,7 +2527,6 @@ mod tests {
         let msg = BlockMessage::from_rbc_chunk(chunk.clone());
         assert!(matches!(msg, BlockMessage::RbcChunk(inner) if inner == chunk));
     }
-
     #[test]
     fn rbc_chunk_compact_boundary_and_field_preservation_match_formal_gate() {
         let max_fit = u64::from(u32::MAX);
@@ -2742,21 +2538,18 @@ mod tests {
             u32::MAX,
             vec![0x00, 0x11, 0xFE, 0xFF],
         );
-
         let compact = RbcChunkCompact::try_from_chunk(&chunk).expect("u32 boundary values fit");
         assert_compact_matches_chunk(&compact, &chunk);
         assert_eq!(compact.height, u32::MAX);
         assert_eq!(compact.view, u32::MAX - 1);
         assert_eq!(compact.epoch, u32::MAX - 2);
         assert_eq!(compact.idx, u32::MAX);
-
         match BlockMessage::from_rbc_chunk(chunk.clone()) {
             BlockMessage::RbcChunkCompact(compact) => {
                 assert_compact_matches_chunk(&compact, &chunk)
             }
             other => panic!("expected compact RBC chunk, got {other:?}"),
         }
-
         for overflow in [
             sample_rbc_chunk(0xB2, max_fit + 1, 1, 1, 7, vec![0xA0]),
             sample_rbc_chunk(0xB3, 1, max_fit + 1, 1, 8, vec![0xA1]),
@@ -2768,24 +2561,20 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn rbc_chunk_compact_normalization_matches_formal_gate() {
         let chunk = sample_rbc_chunk(0xC1, 33, 44, 55, 66, vec![1, 3, 5, 8, 13]);
         let compact = RbcChunkCompact::try_from_chunk(&chunk).expect("chunk headers fit in u32");
-
         assert_eq!(compact.clone().into_chunk(), chunk);
         match BlockMessage::RbcChunkCompact(compact).normalize() {
             BlockMessage::RbcChunk(full) => assert_eq!(full, chunk),
             other => panic!("expected compact normalization to yield full chunk, got {other:?}"),
         }
-
         let full_chunk = sample_rbc_chunk(0xC2, u64::from(u32::MAX) + 5, 77, 88, 99, vec![0xEE]);
         match BlockMessage::RbcChunk(full_chunk.clone()).normalize() {
             BlockMessage::RbcChunk(normalized) => assert_eq!(normalized, full_chunk),
             other => panic!("expected full RBC chunk to remain unchanged, got {other:?}"),
         }
-
         let requester = PeerId::from(
             KeyPair::try_from_seed(vec![0xC3; 32], Algorithm::Ed25519)
                 .expect("derive compact fetch requester key")
@@ -2817,7 +2606,6 @@ mod tests {
             other => panic!("expected fetch message to remain unchanged, got {other:?}"),
         }
     }
-
     fn signed_kura_replica_advert_fixture() -> KuraReplicaAdvertV1 {
         let key = KeyPair::try_from_seed(vec![0xD7; 32], Algorithm::BlsNormal)
             .expect("derive Kura replica advert signer");
@@ -2838,14 +2626,12 @@ mod tests {
             .to_vec();
         advert
     }
-
     #[test]
     fn kura_replica_advert_signature_binds_every_eviction_identity() {
         let advert = signed_kura_replica_advert_fixture();
         advert
             .verify_keeper_signature()
             .expect("exact signed advert is valid");
-
         let mut mutations = Vec::new();
         let mut wrong_network = advert.clone();
         wrong_network.network_id = crate::sumeragi::synthetic_network_id("other-network");
@@ -2872,7 +2658,6 @@ mod tests {
         let mut wrong_keeper = advert.clone();
         wrong_keeper.keeper = checked_random_peer_id();
         mutations.push(wrong_keeper);
-
         for mutation in mutations {
             assert!(
                 mutation.verify_keeper_signature().is_err(),
@@ -2880,7 +2665,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn kura_replica_advert_is_live_auxiliary_not_lane_or_global_v1() {
         let advert = signed_kura_replica_advert_fixture();
@@ -2892,7 +2676,6 @@ mod tests {
         message
             .ensure_live_outbound()
             .expect("authenticated replica advert is an admitted live auxiliary type");
-
         let mut invalid = advert;
         invalid.executed_block_wire_len += 1;
         assert!(
@@ -2902,7 +2685,6 @@ mod tests {
             "live outbound admission must reject a forged replica advert"
         );
     }
-
     #[cfg(feature = "bls")]
     #[test]
     fn bls_aggregate_disabled_with_mixed_backends() {}

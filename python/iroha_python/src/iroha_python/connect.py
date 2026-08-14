@@ -63,6 +63,23 @@ __all__ = [
 _SID_LENGTH = 32
 _NONCE_LENGTH = 16
 _CONNECT_URI_VERSION = "1"
+_CONNECT_SESSION_RESPONSE_FIELDS = frozenset(
+    {
+        "sid",
+        "network_id",
+        "app_pk",
+        "nonce",
+        "wallet_uri",
+        "app_uri",
+        "token_app",
+        "token_wallet",
+        "token_management",
+        "token_relay",
+    }
+)
+_CONNECT_SESSION_URI_FIELDS = frozenset(
+    {"sid", "network_id", "app_pk", "nonce", "node", "v", "role", "token", "relay"}
+)
 
 
 def _normalize_connect_wallet_signature_algorithm(algorithm: str) -> str:
@@ -327,6 +344,7 @@ class ConnectSessionInfo:
     network_id: NetworkId
     app_public_key: bytes
     nonce: bytes
+    wallet_uri: str
     app_uri: str
     app_token: str
     wallet_token: str
@@ -346,35 +364,42 @@ class ConnectSessionInfo:
             app_public_key=app_public_key,
             nonce=nonce,
         )
+        wallet_uri = _require_exact_non_empty_string(self.wallet_uri, "wallet_uri")
         app_uri = _require_exact_non_empty_string(self.app_uri, "app_uri")
-        app_token = _require_exact_non_empty_string(self.app_token, "app_token")
-        wallet_token = _require_exact_non_empty_string(self.wallet_token, "wallet_token")
-        management_token = _require_exact_non_empty_string(
+        app_token = _canonical_connect_token(self.app_token, "app_token")
+        wallet_token = _canonical_connect_token(self.wallet_token, "wallet_token")
+        management_token = _canonical_connect_token(
             self.management_token, "management_token"
         )
-        relay_token = _require_exact_non_empty_string(self.relay_token, "relay_token")
-        parsed_uri = parse_connect_uri(app_uri)
-        if (
-            parsed_uri.sid != self.sid
-            or parsed_uri.network_id != network_id
-            or parsed_uri.app_public_key != app_public_key
-            or parsed_uri.nonce != nonce
-        ):
-            raise ValueError("app_uri substituted canonical Connect session identity")
-        uri_params = parse_qs(
-            urlparse(app_uri).query,
-            keep_blank_values=True,
-            strict_parsing=True,
+        relay_token = _canonical_connect_token(self.relay_token, "relay_token")
+        wallet_node = _validate_connect_session_role_uri(
+            wallet_uri,
+            context="wallet_uri",
+            sid=self.sid,
+            network_id=network_id,
+            app_public_key=app_public_key,
+            nonce=nonce,
+            role="wallet",
+            token=wallet_token,
+            relay_token=relay_token,
         )
-        if _get_single(uri_params, "role") != "app":
-            raise ValueError("app_uri role must be exactly 'app'")
-        if _get_single(uri_params, "token") != app_token:
-            raise ValueError("app_uri token does not match token_app")
-        if _get_single(uri_params, "relay") != relay_token:
-            raise ValueError("app_uri relay token does not match token_relay")
+        app_node = _validate_connect_session_role_uri(
+            app_uri,
+            context="app_uri",
+            sid=self.sid,
+            network_id=network_id,
+            app_public_key=app_public_key,
+            nonce=nonce,
+            role="app",
+            token=app_token,
+            relay_token=relay_token,
+        )
+        if wallet_node != app_node:
+            raise ValueError("Connect session response URIs disagree on node")
         object.__setattr__(self, "network_id", network_id)
         object.__setattr__(self, "app_public_key", app_public_key)
         object.__setattr__(self, "nonce", nonce)
+        object.__setattr__(self, "wallet_uri", wallet_uri)
         object.__setattr__(self, "app_uri", app_uri)
         object.__setattr__(self, "app_token", app_token)
         object.__setattr__(self, "wallet_token", wallet_token)
@@ -389,6 +414,14 @@ class ConnectSessionInfo:
         session_ttl_ms: Optional[int] = None,
     ) -> "ConnectSessionInfo":
         try:
+            if set(payload) != _CONNECT_SESSION_RESPONSE_FIELDS:
+                missing = sorted(_CONNECT_SESSION_RESPONSE_FIELDS.difference(payload))
+                unsupported = sorted(set(payload).difference(_CONNECT_SESSION_RESPONSE_FIELDS))
+                raise ValueError(
+                    "connect session response has an inexact field set; "
+                    f"missing={missing}, unsupported={unsupported}"
+                )
+
             def required_string(key: str) -> str:
                 return _require_exact_non_empty_string(payload[key], key)
 
@@ -402,6 +435,7 @@ class ConnectSessionInfo:
                     required_string("app_pk"), 32, "app_pk"
                 ),
                 nonce=_decode_canonical_base64url(required_string("nonce"), 16, "nonce"),
+                wallet_uri=required_string("wallet_uri"),
                 app_uri=required_string("app_uri"),
                 app_token=required_string("token_app"),
                 wallet_token=required_string("token_wallet"),
@@ -412,20 +446,20 @@ class ConnectSessionInfo:
         except KeyError as exc:  # pragma: no cover - defensive
             raise ValueError("connect session response is missing required fields") from exc
 
-    def as_dict(self) -> Dict[str, Optional[str]]:
-        """Return the raw response as a JSON-friendly dict."""
+    def as_dict(self) -> Dict[str, str]:
+        """Return the exact Torii response fields as a JSON-friendly dict."""
 
         return {
             "sid": self.sid,
             "network_id": self.network_id.literal,
             "app_pk": _to_base64url(self.app_public_key),
             "nonce": _to_base64url(self.nonce),
+            "wallet_uri": self.wallet_uri,
             "app_uri": self.app_uri,
             "token_app": self.app_token,
             "token_wallet": self.wallet_token,
             "token_management": self.management_token,
             "token_relay": self.relay_token,
-            "expires_at": self.expires_at.isoformat(timespec="seconds") if self.expires_at else None,
         }
 
 
@@ -487,6 +521,68 @@ def _ensure_connect_session_matches_request(
         or _to_base64url(session.nonce) != body["nonce"]
     ):
         raise ValueError("Torii Connect session response substituted request identity")
+    expected_node = body.get("node", "")
+    if _connect_session_uri_node(session.wallet_uri) != expected_node:
+        raise ValueError("Torii Connect session response substituted request node")
+
+
+def _canonical_connect_token(value: Any, field: str) -> str:
+    token = _require_exact_non_empty_string(value, field)
+    _decode_canonical_base64url(token, 32, field)
+    return token
+
+
+def _connect_session_uri_node(uri: str) -> str:
+    params = parse_qs(urlparse(uri).query, keep_blank_values=True, strict_parsing=True)
+    values = params.get("node")
+    if values is None or len(values) != 1:
+        raise ValueError("Connect session URI node must appear exactly once")
+    return values[0]
+
+
+def _validate_connect_session_role_uri(
+    uri: str,
+    *,
+    context: str,
+    sid: str,
+    network_id: NetworkId,
+    app_public_key: bytes,
+    nonce: bytes,
+    role: str,
+    token: str,
+    relay_token: str,
+) -> str:
+    parsed = urlparse(uri)
+    if (
+        parsed.scheme != "iroha"
+        or parsed.netloc != "connect"
+        or parsed.path not in {"", "/"}
+        or parsed.params
+        or parsed.fragment
+    ):
+        raise ValueError(f"{context} must be an iroha://connect URI")
+    params = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+    if set(params) != _CONNECT_SESSION_URI_FIELDS:
+        missing = sorted(_CONNECT_SESSION_URI_FIELDS.difference(params))
+        unsupported = sorted(set(params).difference(_CONNECT_SESSION_URI_FIELDS))
+        raise ValueError(
+            f"{context} has an inexact parameter set; "
+            f"missing={missing}, unsupported={unsupported}"
+        )
+    expected = {
+        "sid": sid,
+        "network_id": network_id.literal,
+        "app_pk": _to_base64url(app_public_key),
+        "nonce": _to_base64url(nonce),
+        "v": _CONNECT_URI_VERSION,
+        "role": role,
+        "token": token,
+        "relay": relay_token,
+    }
+    for field, expected_value in expected.items():
+        if _get_single(params, field) != expected_value:
+            raise ValueError(f"{context} substituted Connect session identity or authorization")
+    return _connect_session_uri_node(uri)
 
 
 def _connect_session_info_from_response(
@@ -1613,13 +1709,7 @@ def bootstrap_connect_preview_session(
         session = ConnectSessionInfo.from_mapping(response)
     else:
         raise ValueError("Torii Connect session response is missing or malformed")
-    if (
-        session.sid != preview.sid_base64url
-        or session.network_id != preview.network_id
-        or session.app_public_key != preview.app_key_pair.public_key
-        or session.nonce != preview.nonce
-    ):
-        raise ValueError("Torii Connect session response substituted canonical session identity")
+    _ensure_connect_session_matches_request(session, payload)
     wallet_token = _read_session_token(session, "wallet_token")
     app_token = _read_session_token(session, "app_token")
     management_token = _read_session_token(session, "management_token")

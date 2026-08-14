@@ -7,7 +7,6 @@
 //! Enabled feed transports attest a stable V1 handle, revision, and canonical
 //! hostname/SPKI policy digest before checkpoint state is opened and again
 //! before and after every feed operation.
-
 use std::{
     cmp::Ordering,
     collections::BTreeSet,
@@ -23,7 +22,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
 use blake3::Hasher;
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
 use flate2::read::GzDecoder;
@@ -31,9 +29,7 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thiserror::Error;
 use url::{Host, Url};
-
 use super::provider::{GatewayProviderBindingErrorV1, GatewayProviderBindingV1};
-
 /// V1 schema version for compliance catalog payloads.
 pub const GATEWAY_COMPLIANCE_CATALOG_VERSION_V1: u8 = 1;
 /// V1 schema version for catalog signatures.
@@ -60,7 +56,6 @@ pub const MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1: usize = 64 * 1024 * 1024;
 pub const MAX_GATEWAY_COMPLIANCE_HISTORY_V1: usize = 4_096;
 /// Maximum durable mutation-idempotency records.
 pub const MAX_GATEWAY_COMPLIANCE_IDEMPOTENCY_RECORDS_V1: usize = 4_096;
-
 const CATALOG_SIGNING_DOMAIN_V1: &[u8] = b"sorafs-gateway-compliance-catalog-v1";
 const ACK_SIGNING_DOMAIN_V1: &[u8] = b"sorafs-gateway-compliance-ack-v1";
 const ROLLBACK_SIGNING_DOMAIN_V1: &[u8] = b"sorafs-gateway-compliance-rollback-v1";
@@ -71,13 +66,11 @@ const FEED_TRANSPORT_POLICY_DOMAIN_V1: &[u8] =
     b"sorafs-gateway-compliance-feed-transport-policy-v1";
 const CHECKPOINT_STORE_GENERATION_DOMAIN_V1: &[u8] =
     b"sorafs-gateway-compliance-checkpoint-store-generation-v1";
-
 /// Stable runtime handle required from the V1 authenticated feed transport.
 pub const GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1: &str =
     "sorafs.gateway.compliance.feed-https.v1";
 /// Exact V1 runtime adapter revision.
 pub const GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1: u64 = 1;
-
 /// One strong Ed25519 identity authorized by policy.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -88,7 +81,6 @@ pub struct GatewayComplianceTrustedSignerV1 {
     /// Canonical Ed25519 public key.
     pub public_key: [u8; 32],
 }
-
 /// Config-derived threshold trust policy.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -111,7 +103,6 @@ pub struct GatewayComplianceTrustPolicyV1 {
     /// Revoked gateway signer identifiers in strictly increasing order.
     pub revoked_gateway_signer_ids: Vec<String>,
 }
-
 impl GatewayComplianceTrustPolicyV1 {
     /// Validate the complete threshold and revocation policy.
     pub fn validate(&self) -> Result<(), GatewayComplianceError> {
@@ -134,7 +125,6 @@ impl GatewayComplianceTrustPolicyV1 {
         )?;
         validate_disjoint_signer_roles(&self.catalog_signers, &self.gateway_signers)
     }
-
     /// Return the domain-separated canonical policy digest.
     pub fn canonical_digest(&self) -> Result<[u8; 32], GatewayComplianceError> {
         self.validate()?;
@@ -144,16 +134,13 @@ impl GatewayComplianceTrustPolicyV1 {
             MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
         )
     }
-
     fn catalog_signer(&self, signer_id: &str) -> Option<&GatewayComplianceTrustedSignerV1> {
         find_signer(&self.catalog_signers, signer_id)
     }
-
     fn gateway_signer(&self, signer_id: &str) -> Option<&GatewayComplianceTrustedSignerV1> {
         find_signer(&self.gateway_signers, signer_id)
     }
 }
-
 /// Canonical compliance subject family.
 #[derive(
     Debug,
@@ -179,7 +166,6 @@ pub enum GatewayComplianceSubjectKindV1 {
     /// Canonical URL.
     Url,
 }
-
 /// Baseline deny rule from an admitted feed.
 #[derive(
     Debug,
@@ -213,7 +199,6 @@ pub struct GatewayComplianceBaselineRuleV1 {
     /// Exclusive expiry Unix second, when present.
     pub expires_at_unix: Option<u64>,
 }
-
 /// Accepted appeal that allows one otherwise denied subject.
 #[derive(
     Debug,
@@ -243,7 +228,6 @@ pub struct GatewayComplianceAppealOverrideV1 {
     /// Exclusive expiry Unix second.
     pub expires_at_unix: u64,
 }
-
 /// Legal or safety hold that cannot be bypassed by an appeal or toggle.
 #[derive(
     Debug,
@@ -273,7 +257,6 @@ pub struct GatewayComplianceLegalSafetyHoldV1 {
     /// Exclusive expiry Unix second, when present.
     pub expires_at_unix: Option<u64>,
 }
-
 /// Threshold-approved scoped policy toggle.
 #[derive(
     Debug,
@@ -301,7 +284,6 @@ pub struct GatewayComplianceToggleV1 {
     /// Exclusive expiry Unix second.
     pub expires_at_unix: u64,
 }
-
 /// Digest anchor for one normalized source feed.
 #[derive(
     Debug,
@@ -323,7 +305,6 @@ pub struct GatewayComplianceSourceAnchorV1 {
     /// Source feed generation Unix second.
     pub generated_at_unix: u64,
 }
-
 /// Unsigned, deterministic catalog payload.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -352,7 +333,6 @@ pub struct GatewayComplianceCatalogPayloadV1 {
     /// Scoped toggles in canonical order.
     pub toggles: Vec<GatewayComplianceToggleV1>,
 }
-
 impl GatewayComplianceCatalogPayloadV1 {
     /// Normalize all bounded fields and deterministically sort each inventory.
     pub fn normalize(mut self) -> Result<Self, GatewayComplianceError> {
@@ -404,7 +384,6 @@ impl GatewayComplianceCatalogPayloadV1 {
         reject_duplicate_toggle_scope(&self.toggles)?;
         Ok(self)
     }
-
     /// Validate strict canonical shape and resource bounds.
     pub fn validate(&self) -> Result<(), GatewayComplianceError> {
         if self.version != GATEWAY_COMPLIANCE_CATALOG_VERSION_V1 {
@@ -450,7 +429,6 @@ impl GatewayComplianceCatalogPayloadV1 {
         encode_bounded(self, MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1)?;
         Ok(())
     }
-
     /// Return the exact domain-separated catalog identifier.
     pub fn catalog_digest(&self) -> Result<[u8; 32], GatewayComplianceError> {
         self.validate()?;
@@ -460,7 +438,6 @@ impl GatewayComplianceCatalogPayloadV1 {
             MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
         )
     }
-
     /// Return the digest governance signers approve.
     pub fn signing_digest(&self) -> Result<[u8; 32], GatewayComplianceError> {
         self.validate()?;
@@ -471,7 +448,6 @@ impl GatewayComplianceCatalogPayloadV1 {
         )
     }
 }
-
 /// One governance approval on a catalog.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -484,7 +460,6 @@ pub struct GatewayComplianceCatalogApprovalV1 {
     /// Strong Ed25519 signature of the catalog signing digest.
     pub signature: [u8; 64],
 }
-
 /// Threshold-signed predecessor-bound catalog.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -495,7 +470,6 @@ pub struct GatewayComplianceCatalogV1 {
     /// Distinct governance approvals in strict signer-id order.
     pub approvals: Vec<GatewayComplianceCatalogApprovalV1>,
 }
-
 impl GatewayComplianceCatalogV1 {
     /// Verify canonical shape, trust-policy binding, freshness, and quorum.
     pub fn verify(
@@ -571,7 +545,6 @@ impl GatewayComplianceCatalogV1 {
         self.payload.catalog_digest()
     }
 }
-
 /// Payload signed by one regional gateway after staging a catalog.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -590,7 +563,6 @@ pub struct GatewayComplianceAcknowledgementPayloadV1 {
     /// Payload-free rejection code when `accepted` is false.
     pub rejection_code: Option<String>,
 }
-
 /// Signed regional gateway acknowledgement.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -601,7 +573,6 @@ pub struct GatewayComplianceAcknowledgementV1 {
     /// Gateway Ed25519 signature.
     pub signature: [u8; 64],
 }
-
 impl GatewayComplianceAcknowledgementV1 {
     fn verify(
         &self,
@@ -671,7 +642,6 @@ impl GatewayComplianceAcknowledgementV1 {
         )
     }
 }
-
 /// Unsigned rollback command.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -690,7 +660,6 @@ pub struct GatewayComplianceRollbackPayloadV1 {
     /// Governance authorization Unix second.
     pub authorized_at_unix: u64,
 }
-
 /// Threshold-approved rollback authorization.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -701,7 +670,6 @@ pub struct GatewayComplianceRollbackV1 {
     /// Governance approvals in strict signer-id order.
     pub approvals: Vec<GatewayComplianceCatalogApprovalV1>,
 }
-
 /// Canonical normalized external feed document.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -722,7 +690,6 @@ pub struct GatewayComplianceFeedDocumentV1 {
     /// Scoped toggles.
     pub toggles: Vec<GatewayComplianceToggleV1>,
 }
-
 impl GatewayComplianceFeedDocumentV1 {
     /// Normalize and validate one external feed.
     pub fn normalize(mut self) -> Result<Self, GatewayComplianceError> {
@@ -771,7 +738,6 @@ impl GatewayComplianceFeedDocumentV1 {
         encode_bounded(&self, MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1)?;
         Ok(self)
     }
-
     /// Return a digest of the canonical normalized feed.
     pub fn canonical_digest(&self) -> Result<[u8; 32], GatewayComplianceError> {
         let normalized = self.clone().normalize()?;
@@ -787,7 +753,6 @@ impl GatewayComplianceFeedDocumentV1 {
         )
     }
 }
-
 /// One allowlisted HTTPS host and pinned TLS identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GatewayComplianceFeedHostPolicy {
@@ -796,7 +761,6 @@ pub struct GatewayComplianceFeedHostPolicy {
     /// Non-empty set of accepted SHA-256 SPKI digests.
     pub accepted_spki_sha256: BTreeSet<[u8; 32]>,
 }
-
 /// Config-derived feed endpoint policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GatewayComplianceFeedPolicy {
@@ -809,7 +773,6 @@ pub struct GatewayComplianceFeedPolicy {
     /// Exact redirect host allowlist, including the initial host.
     pub hosts: Vec<GatewayComplianceFeedHostPolicy>,
 }
-
 /// Bounded feed-fetch policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GatewayComplianceFetchLimits {
@@ -826,7 +789,6 @@ pub struct GatewayComplianceFetchLimits {
     /// Total operation deadline given to the injected transport.
     pub total_timeout: Duration,
 }
-
 impl Default for GatewayComplianceFetchLimits {
     fn default() -> Self {
         Self {
@@ -839,7 +801,6 @@ impl Default for GatewayComplianceFetchLimits {
         }
     }
 }
-
 /// Content encodings admitted from compliance feeds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GatewayComplianceContentEncoding {
@@ -850,7 +811,6 @@ pub enum GatewayComplianceContentEncoding {
     /// Zstandard-compressed bytes.
     Zstd,
 }
-
 /// Address-pinned request handed to a runtime transport.
 #[derive(Debug, Clone)]
 pub struct GatewayComplianceFetchRequest {
@@ -865,7 +825,6 @@ pub struct GatewayComplianceFetchRequest {
     /// Maximum response bytes the transport may buffer.
     pub max_encoded_bytes: usize,
 }
-
 /// Address- and trust-bound response returned by a runtime transport.
 #[derive(Clone)]
 pub struct GatewayComplianceFetchResponse {
@@ -884,7 +843,6 @@ pub struct GatewayComplianceFetchResponse {
     /// Transport-observed elapsed time.
     pub elapsed: Duration,
 }
-
 impl Debug for GatewayComplianceFetchResponse {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -902,7 +860,6 @@ impl Debug for GatewayComplianceFetchResponse {
             .finish()
     }
 }
-
 /// Runtime-owned authenticated DNS and HTTPS transport.
 pub trait GatewayComplianceFeedTransport: Send + Sync {
     /// Return the provider identity currently serving this runtime boundary.
@@ -914,14 +871,12 @@ pub trait GatewayComplianceFeedTransport: Send + Sync {
     fn qualification(
         &self,
     ) -> Result<GatewayComplianceFeedTransportIdentityV1, GatewayComplianceFeedTransportProbeError>;
-
     /// Resolve a DNS hostname using the runtime's pinned resolver.
     fn resolve(
         &self,
         hostname: &str,
         timeout: Duration,
     ) -> Result<Vec<IpAddr>, GatewayComplianceError>;
-
     /// Fetch through only the supplied pinned addresses, without automatic
     /// redirects or transparent decompression.
     fn fetch(
@@ -929,7 +884,6 @@ pub trait GatewayComplianceFeedTransport: Send + Sync {
         request: &GatewayComplianceFetchRequest,
     ) -> Result<GatewayComplianceFetchResponse, GatewayComplianceError>;
 }
-
 /// Payload-free identity reported by one authenticated feed transport.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GatewayComplianceFeedTransportIdentityV1 {
@@ -942,24 +896,20 @@ pub struct GatewayComplianceFeedTransportIdentityV1 {
     /// Explicit marker set by test, mock, development, or placeholder adapters.
     pub test_marked: bool,
 }
-
 /// Redacted failure returned when a runtime provider cannot attest its identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("gateway compliance feed transport qualification failed")]
 pub struct GatewayComplianceFeedTransportProbeError;
-
 #[derive(Debug, NoritoSerialize)]
 struct GatewayComplianceFeedTransportPolicyDigestV1 {
     version: u8,
     hosts: Vec<GatewayComplianceFeedTransportHostDigestV1>,
 }
-
 #[derive(Debug, NoritoSerialize)]
 struct GatewayComplianceFeedTransportHostDigestV1 {
     hostname: String,
     accepted_spki_sha256: Vec<[u8; 32]>,
 }
-
 /// Controller configuration assembled exclusively from resolved `iroha_config`.
 #[derive(Debug, Clone)]
 pub struct GatewayComplianceControllerConfig {
@@ -987,7 +937,6 @@ pub struct GatewayComplianceControllerConfig {
     /// Maximum durable history length.
     pub max_history_entries: usize,
 }
-
 impl GatewayComplianceControllerConfig {
     /// Validate bounds, ordering, HTTPS allowlists, and pins.
     pub fn validate(&self) -> Result<(), GatewayComplianceError> {
@@ -1109,14 +1058,12 @@ impl GatewayComplianceControllerConfig {
         }
         Ok(())
     }
-
     fn feed(&self, feed_id: &str) -> Option<&GatewayComplianceFeedPolicy> {
         self.feeds
             .binary_search_by(|feed| feed.feed_id.as_str().cmp(feed_id))
             .ok()
             .map(|index| &self.feeds[index])
     }
-
     fn expected_feed_transport_identity(
         &self,
     ) -> Result<GatewayComplianceFeedTransportIdentityV1, GatewayComplianceError> {
@@ -1138,7 +1085,6 @@ impl GatewayComplianceControllerConfig {
             test_marked: false,
         })
     }
-
     fn feed_transport_policy_digest(&self) -> Result<[u8; 32], GatewayComplianceError> {
         let mut pins_by_hostname = std::collections::BTreeMap::new();
         for feed in &self.feeds {
@@ -1156,7 +1102,6 @@ impl GatewayComplianceControllerConfig {
         gateway_compliance_feed_transport_policy_digest(&pins_by_hostname)
     }
 }
-
 /// Compute the V1 domain-separated digest of a canonical hostname/SPKI policy.
 ///
 /// Runtime adapter implementations use this helper to attest the exact
@@ -1195,7 +1140,6 @@ pub fn gateway_compliance_feed_transport_policy_digest(
         MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
     )
 }
-
 /// Effective request disposition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GatewayComplianceDisposition {
@@ -1204,7 +1148,6 @@ pub enum GatewayComplianceDisposition {
     /// Reject under the selected compliance rule.
     Deny,
 }
-
 /// Policy tier that produced an effective decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GatewayComplianceDecisionSource {
@@ -1217,7 +1160,6 @@ pub enum GatewayComplianceDecisionSource {
     /// Legal or safety hold took absolute precedence.
     LegalSafetyHold,
 }
-
 /// Payload-free deterministic evaluation output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GatewayComplianceDecision {
@@ -1234,7 +1176,6 @@ pub struct GatewayComplianceDecision {
     /// Exclusive serving-catalog expiry as a Unix second.
     pub catalog_valid_until_unix: u64,
 }
-
 /// Durable promotion or rollback record.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -1253,7 +1194,6 @@ pub struct GatewayComplianceHistoryRecordV1 {
     /// Payload-free reason code.
     pub reason_code: String,
 }
-
 /// Exact durable gateway-compliance mutation kind.
 #[derive(
     Debug,
@@ -1279,7 +1219,6 @@ pub enum GatewayComplianceMutationKindV1 {
     /// Roll back to the last-known-good catalog.
     Rollback,
 }
-
 impl GatewayComplianceMutationKindV1 {
     fn history_action(self) -> Option<&'static str> {
         match self {
@@ -1289,7 +1228,6 @@ impl GatewayComplianceMutationKindV1 {
         }
     }
 }
-
 /// Cryptographic idempotency binding supplied by the authenticated API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GatewayComplianceMutationBindingV1 {
@@ -1298,7 +1236,6 @@ pub struct GatewayComplianceMutationBindingV1 {
     /// Digest of the exact canonical method, target, and request bytes.
     pub request_digest: [u8; 32],
 }
-
 /// Stable response returned for an initial mutation and every exact replay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GatewayComplianceMutationResultV1 {
@@ -1307,7 +1244,6 @@ pub struct GatewayComplianceMutationResultV1 {
     /// Unix second at which the initial mutation committed.
     pub recorded_at_unix: u64,
 }
-
 /// Durable replay binding for one successful mutation.
 #[derive(
     Debug,
@@ -1332,7 +1268,6 @@ pub struct GatewayComplianceIdempotencyRecordV1 {
     /// Unix second at which the initial mutation committed.
     pub recorded_at_unix: u64,
 }
-
 /// Durable controller state.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -1359,7 +1294,6 @@ pub struct GatewayComplianceCheckpointV1 {
     /// Bounded immutable exact-request replay registry.
     pub idempotency_records: Vec<GatewayComplianceIdempotencyRecordV1>,
 }
-
 impl GatewayComplianceCheckpointV1 {
     fn empty(policy_digest: [u8; 32]) -> Self {
         Self {
@@ -1376,7 +1310,6 @@ impl GatewayComplianceCheckpointV1 {
         }
     }
 }
-
 /// Opaque generation of the exact durable checkpoint bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GatewayComplianceStoreGeneration {
@@ -1385,7 +1318,6 @@ pub enum GatewayComplianceStoreGeneration {
     /// Domain-separated digest of the exact checkpoint bytes.
     Present([u8; 32]),
 }
-
 /// One exact snapshot loaded under an active checkpoint-store lease.
 #[derive(Debug)]
 pub struct GatewayComplianceStoreSnapshot {
@@ -1394,12 +1326,10 @@ pub struct GatewayComplianceStoreSnapshot {
     /// Exact checkpoint bytes, or `None` when the checkpoint is absent.
     pub bytes: Option<Vec<u8>>,
 }
-
 /// Process-lifetime exclusive lease over one durable checkpoint backend.
 pub trait GatewayComplianceStoreLease: Debug + Send + Sync {
     /// Load the exact current checkpoint snapshot.
     fn load(&self) -> Result<GatewayComplianceStoreSnapshot, GatewayComplianceError>;
-
     /// Atomically replace the checkpoint only when its exact generation matches.
     fn compare_and_store(
         &self,
@@ -1407,33 +1337,28 @@ pub trait GatewayComplianceStoreLease: Debug + Send + Sync {
         bytes: &[u8],
     ) -> Result<GatewayComplianceStoreGeneration, GatewayComplianceError>;
 }
-
 /// Durable checkpoint backend. A controller must hold its exclusive lease for
 /// its complete lifetime.
 pub trait GatewayComplianceStore: Debug + Send + Sync {
     /// Acquire the one active process-lifetime lease.
     fn try_acquire(&self) -> Result<Box<dyn GatewayComplianceStoreLease>, GatewayComplianceError>;
 }
-
 #[cfg(test)]
 #[derive(Debug, Default)]
 struct TestGatewayComplianceStore {
     state: Arc<std::sync::Mutex<TestGatewayComplianceStoreState>>,
 }
-
 #[cfg(test)]
 #[derive(Debug, Default)]
 struct TestGatewayComplianceStoreState {
     bytes: Option<Vec<u8>>,
     leased: bool,
 }
-
 #[cfg(test)]
 #[derive(Debug)]
 struct TestGatewayComplianceStoreLease {
     state: Arc<std::sync::Mutex<TestGatewayComplianceStoreState>>,
 }
-
 #[cfg(test)]
 impl Drop for TestGatewayComplianceStoreLease {
     fn drop(&mut self) {
@@ -1442,7 +1367,6 @@ impl Drop for TestGatewayComplianceStoreLease {
         }
     }
 }
-
 #[cfg(test)]
 impl GatewayComplianceStore for TestGatewayComplianceStore {
     fn try_acquire(&self) -> Result<Box<dyn GatewayComplianceStoreLease>, GatewayComplianceError> {
@@ -1460,7 +1384,6 @@ impl GatewayComplianceStore for TestGatewayComplianceStore {
         }))
     }
 }
-
 #[cfg(test)]
 impl GatewayComplianceStoreLease for TestGatewayComplianceStoreLease {
     fn load(&self) -> Result<GatewayComplianceStoreSnapshot, GatewayComplianceError> {
@@ -1470,7 +1393,6 @@ impl GatewayComplianceStoreLease for TestGatewayComplianceStoreLease {
             .map_err(|_| GatewayComplianceError::StatePoisoned)?;
         Ok(checkpoint_store_snapshot(state.bytes.clone()))
     }
-
     fn compare_and_store(
         &self,
         expected: GatewayComplianceStoreGeneration,
@@ -1494,7 +1416,6 @@ impl GatewayComplianceStoreLease for TestGatewayComplianceStoreLease {
         Ok(checkpoint_store_generation(Some(bytes)))
     }
 }
-
 /// Filesystem store with an exclusive stable-file lease, exact-byte CAS,
 /// no-follow temp creation, fsync, and atomic replacement.
 #[derive(Debug, Clone)]
@@ -1504,13 +1425,11 @@ pub struct FileGatewayComplianceStore {
     #[cfg(test)]
     test_hook: Arc<FileGatewayComplianceStoreTestHook>,
 }
-
 #[cfg(test)]
 #[derive(Debug, Default)]
 struct FileGatewayComplianceStoreTestHook {
     before_persist_replacement: std::sync::Mutex<Option<Vec<u8>>>,
 }
-
 impl FileGatewayComplianceStore {
     /// Construct an absolute-path store. The parent directory must be
     /// provisioned ahead of startup, must not traverse symlinks, and must not
@@ -1532,7 +1451,6 @@ impl FileGatewayComplianceStore {
             test_hook: Arc::new(FileGatewayComplianceStoreTestHook::default()),
         })
     }
-
     #[cfg(test)]
     fn replace_before_next_persist(&self, bytes: Vec<u8>) {
         *self
@@ -1542,7 +1460,6 @@ impl FileGatewayComplianceStore {
             .expect("file checkpoint test hook lock") = Some(bytes);
     }
 }
-
 #[derive(Debug)]
 struct FileGatewayComplianceStoreLease {
     path: PathBuf,
@@ -1551,7 +1468,6 @@ struct FileGatewayComplianceStoreLease {
     #[cfg(test)]
     test_hook: Arc<FileGatewayComplianceStoreTestHook>,
 }
-
 impl GatewayComplianceStore for FileGatewayComplianceStore {
     fn try_acquire(&self) -> Result<Box<dyn GatewayComplianceStoreLease>, GatewayComplianceError> {
         let parent = self.path.parent().ok_or_else(|| {
@@ -1560,7 +1476,6 @@ impl GatewayComplianceStore for FileGatewayComplianceStore {
         validate_checkpoint_parent(parent)?;
         let lock_path = checkpoint_lock_path(&self.path)?;
         validate_output_file(&lock_path)?;
-
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true);
         set_no_follow(&mut options);
@@ -1591,7 +1506,6 @@ impl GatewayComplianceStore for FileGatewayComplianceStore {
             &lock_file,
             "checkpoint lease file changed after locking",
         )?;
-
         Ok(Box::new(FileGatewayComplianceStoreLease {
             path: self.path.clone(),
             max_bytes: self.max_bytes,
@@ -1601,12 +1515,10 @@ impl GatewayComplianceStore for FileGatewayComplianceStore {
         }))
     }
 }
-
 impl GatewayComplianceStoreLease for FileGatewayComplianceStoreLease {
     fn load(&self) -> Result<GatewayComplianceStoreSnapshot, GatewayComplianceError> {
         read_checkpoint_snapshot(&self.path, self.max_bytes)
     }
-
     fn compare_and_store(
         &self,
         expected: GatewayComplianceStoreGeneration,
@@ -1685,7 +1597,6 @@ impl GatewayComplianceStoreLease for FileGatewayComplianceStoreLease {
         // and be overwritten. Post-replacement exact-byte verification catches
         // interference that changes the final durable result, but cannot
         // observe an intervening value overwritten by the rename.
-
         let persisted = temporary
             .persist(&self.path)
             .map_err(|error| persistence_io("replace checkpoint", error.error))?;
@@ -1707,7 +1618,6 @@ impl GatewayComplianceStoreLease for FileGatewayComplianceStoreLease {
         File::open(parent)
             .and_then(|directory| directory.sync_all())
             .map_err(|_| GatewayComplianceError::CheckpointConflict)?;
-
         let generation = checkpoint_store_generation(Some(bytes));
         let durable = read_checkpoint_snapshot(&self.path, self.max_bytes)
             .map_err(|_| GatewayComplianceError::CheckpointConflict)?;
@@ -1717,27 +1627,22 @@ impl GatewayComplianceStoreLease for FileGatewayComplianceStoreLease {
         Ok(generation)
     }
 }
-
 #[derive(Debug, Clone)]
 struct GatewayComplianceControllerState {
     checkpoint: GatewayComplianceCheckpointV1,
     generation: GatewayComplianceStoreGeneration,
 }
-
 impl std::ops::Deref for GatewayComplianceControllerState {
     type Target = GatewayComplianceCheckpointV1;
-
     fn deref(&self) -> &Self::Target {
         &self.checkpoint
     }
 }
-
 impl std::ops::DerefMut for GatewayComplianceControllerState {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.checkpoint
     }
 }
-
 /// Thread-safe governed compliance controller.
 #[derive(Debug)]
 pub struct GatewayComplianceController {
@@ -1747,7 +1652,6 @@ pub struct GatewayComplianceController {
     state: RwLock<GatewayComplianceControllerState>,
     fenced: AtomicBool,
 }
-
 impl GatewayComplianceController {
     /// Load or initialize a controller without enabling external feed access.
     ///
@@ -1762,7 +1666,6 @@ impl GatewayComplianceController {
     ) -> Result<Self, GatewayComplianceError> {
         Self::new_inner(config, store, None)
     }
-
     /// Qualify an authenticated feed transport before opening durable state,
     /// then load or initialize the controller.
     ///
@@ -1781,7 +1684,6 @@ impl GatewayComplianceController {
         qualify_feed_transport(&expected_feed_transport_identity, transport)?;
         Self::new_inner(config, store, Some(expected_feed_transport_identity))
     }
-
     fn new_inner(
         config: GatewayComplianceControllerConfig,
         store: Arc<dyn GatewayComplianceStore>,
@@ -1807,7 +1709,6 @@ impl GatewayComplianceController {
             fenced: AtomicBool::new(false),
         })
     }
-
     /// Fetch, pin, decompress, decode, and normalize one configured feed.
     pub fn fetch_feed(
         &self,
@@ -1838,7 +1739,6 @@ impl GatewayComplianceController {
         }
         document.normalize()
     }
-
     /// Deterministically merge normalized feeds into an unsigned catalog.
     pub fn build_catalog_payload(
         &self,
@@ -1905,7 +1805,6 @@ impl GatewayComplianceController {
         validate_catalog_against_config(&payload, &self.config)?;
         Ok(payload)
     }
-
     /// Durably stage a threshold-signed candidate under an exact request
     /// binding. Exact replays return the original durable result even after a
     /// later promotion; same-key substitution and same-sequence equivocation
@@ -1960,7 +1859,6 @@ impl GatewayComplianceController {
             recorded_at_unix: observed_at_unix,
         })
     }
-
     /// Durably record one signed gateway acknowledgement under an exact
     /// request binding.
     pub fn acknowledge(
@@ -2030,7 +1928,6 @@ impl GatewayComplianceController {
             recorded_at_unix: observed_at_unix,
         })
     }
-
     /// Promote the exact expected staged catalog after the configured
     /// regional-gateway quorum.
     pub fn promote(
@@ -2118,7 +2015,6 @@ impl GatewayComplianceController {
             recorded_at_unix: observed_at_unix,
         })
     }
-
     /// Roll the serving pointer back to the last-known-good catalog while
     /// preserving the promoted predecessor-chain head.
     pub fn rollback(
@@ -2199,7 +2095,6 @@ impl GatewayComplianceController {
             recorded_at_unix: observed_at_unix,
         })
     }
-
     /// Evaluate the active catalog with mandatory precedence:
     /// legal/safety hold, accepted appeal, then baseline policy.
     pub fn evaluate(
@@ -2212,7 +2107,6 @@ impl GatewayComplianceController {
         let scope = normalize_scope(scope)?;
         self.evaluate_scopes(&[scope.as_str()], subject_kind, subject, observed_at_unix)
     }
-
     /// Evaluate the complete serving scope for this gateway while preserving
     /// precedence across global, regional, and gateway-specific records.
     pub fn evaluate_serving(
@@ -2231,7 +2125,6 @@ impl GatewayComplianceController {
             observed_at_unix,
         )
     }
-
     fn evaluate_scopes(
         &self,
         scopes: &[&str],
@@ -2325,12 +2218,10 @@ impl GatewayComplianceController {
             catalog_valid_until_unix: catalog.payload.valid_until_unix,
         })
     }
-
     /// Return a payload-safe state snapshot for authenticated control/read APIs.
     pub fn checkpoint(&self) -> Result<GatewayComplianceCheckpointV1, GatewayComplianceError> {
         Ok(self.read_state()?.checkpoint.clone())
     }
-
     fn read_state(
         &self,
     ) -> Result<RwLockReadGuard<'_, GatewayComplianceControllerState>, GatewayComplianceError> {
@@ -2343,7 +2234,6 @@ impl GatewayComplianceController {
         }
         Ok(guard)
     }
-
     fn write_state(
         &self,
     ) -> Result<RwLockWriteGuard<'_, GatewayComplianceControllerState>, GatewayComplianceError>
@@ -2357,7 +2247,6 @@ impl GatewayComplianceController {
         }
         Ok(guard)
     }
-
     fn commit(
         &self,
         guard: &mut RwLockWriteGuard<'_, GatewayComplianceControllerState>,
@@ -2380,7 +2269,6 @@ impl GatewayComplianceController {
         Ok(())
     }
 }
-
 fn validate_mutation_binding(
     binding: GatewayComplianceMutationBindingV1,
 ) -> Result<(), GatewayComplianceError> {
@@ -2391,7 +2279,6 @@ fn validate_mutation_binding(
     }
     Ok(())
 }
-
 fn replay_mutation(
     checkpoint: &GatewayComplianceCheckpointV1,
     operation: GatewayComplianceMutationKindV1,
@@ -2413,7 +2300,6 @@ fn replay_mutation(
         recorded_at_unix: record.recorded_at_unix,
     }))
 }
-
 fn validate_new_mutation(
     checkpoint: &GatewayComplianceCheckpointV1,
     binding: GatewayComplianceMutationBindingV1,
@@ -2433,7 +2319,6 @@ fn validate_new_mutation(
     }
     Ok(())
 }
-
 fn append_mutation_record(
     checkpoint: &mut GatewayComplianceCheckpointV1,
     operation: GatewayComplianceMutationKindV1,
@@ -2451,13 +2336,11 @@ fn append_mutation_record(
             recorded_at_unix,
         });
 }
-
 /// Build a fresh governed empty catalog for Torii request tests.
 #[cfg(test)]
 pub(crate) fn allow_all_gateway_compliance_controller_for_tests() -> Arc<GatewayComplianceController>
 {
     use ed25519_dalek::{Signer as _, SigningKey};
-
     let catalog_key = SigningKey::from_bytes(&[0xC1; 32]);
     let gateway_key = SigningKey::from_bytes(&[0xD2; 32]);
     let trust_policy = GatewayComplianceTrustPolicyV1 {
@@ -2573,7 +2456,6 @@ pub(crate) fn allow_all_gateway_compliance_controller_for_tests() -> Arc<Gateway
         .expect("test catalog must promote");
     controller
 }
-
 fn validate_signer_inventory(
     signers: &[GatewayComplianceTrustedSignerV1],
     revoked: &[String],
@@ -2643,7 +2525,6 @@ fn validate_signer_inventory(
     }
     Ok(())
 }
-
 fn validate_disjoint_signer_roles(
     catalog_signers: &[GatewayComplianceTrustedSignerV1],
     gateway_signers: &[GatewayComplianceTrustedSignerV1],
@@ -2666,7 +2547,6 @@ fn validate_disjoint_signer_roles(
     }
     Ok(())
 }
-
 fn find_signer<'a>(
     signers: &'a [GatewayComplianceTrustedSignerV1],
     signer_id: &str,
@@ -2676,13 +2556,11 @@ fn find_signer<'a>(
         .ok()
         .map(|index| &signers[index])
 }
-
 fn contains_sorted(values: &[String], needle: &str) -> bool {
     values
         .binary_search_by(|value| value.as_str().cmp(needle))
         .is_ok()
 }
-
 fn normalize_baseline_rule(
     rule: &mut GatewayComplianceBaselineRuleV1,
 ) -> Result<(), GatewayComplianceError> {
@@ -2698,7 +2576,6 @@ fn normalize_baseline_rule(
         .transpose()?;
     validate_interval(rule.effective_from_unix, rule.expires_at_unix)
 }
-
 fn normalize_appeal(
     appeal: &mut GatewayComplianceAppealOverrideV1,
 ) -> Result<(), GatewayComplianceError> {
@@ -2712,7 +2589,6 @@ fn normalize_appeal(
     }
     validate_interval(appeal.effective_from_unix, Some(appeal.expires_at_unix))
 }
-
 fn normalize_hold(
     hold: &mut GatewayComplianceLegalSafetyHoldV1,
 ) -> Result<(), GatewayComplianceError> {
@@ -2722,14 +2598,12 @@ fn normalize_hold(
     hold.authority_reference = normalize_token(&hold.authority_reference, "authority_reference")?;
     validate_interval(hold.effective_from_unix, hold.expires_at_unix)
 }
-
 fn normalize_toggle(toggle: &mut GatewayComplianceToggleV1) -> Result<(), GatewayComplianceError> {
     toggle.toggle_id = normalize_token(&toggle.toggle_id, "toggle_id")?;
     toggle.scope = normalize_scope(&toggle.scope)?;
     toggle.approval_reference = normalize_token(&toggle.approval_reference, "approval_reference")?;
     validate_interval(toggle.effective_from_unix, Some(toggle.expires_at_unix))
 }
-
 fn validate_interval(
     effective_from_unix: u64,
     expires_at_unix: Option<u64>,
@@ -2743,7 +2617,6 @@ fn validate_interval(
     }
     Ok(())
 }
-
 fn normalize_token(value: &str, field: &'static str) -> Result<String, GatewayComplianceError> {
     let normalized = value.trim().to_ascii_lowercase();
     if normalized.is_empty()
@@ -2760,14 +2633,12 @@ fn normalize_token(value: &str, field: &'static str) -> Result<String, GatewayCo
     }
     Ok(normalized)
 }
-
 fn validate_token(value: &str, field: &'static str) -> Result<(), GatewayComplianceError> {
     if normalize_token(value, field)? != value {
         return Err(GatewayComplianceError::NonCanonical(field.into()));
     }
     Ok(())
 }
-
 fn normalize_scope(value: &str) -> Result<String, GatewayComplianceError> {
     let normalized = normalize_token(value, "scope")?;
     if normalized == "global"
@@ -2785,7 +2656,6 @@ fn normalize_scope(value: &str) -> Result<String, GatewayComplianceError> {
         ))
     }
 }
-
 fn normalize_subject(
     kind: GatewayComplianceSubjectKindV1,
     value: &str,
@@ -2807,7 +2677,6 @@ fn normalize_subject(
         GatewayComplianceSubjectKindV1::Url => normalize_subject_url(trimmed),
     }
 }
-
 fn normalize_cid(value: &str) -> Result<String, GatewayComplianceError> {
     let encoded = value.strip_prefix('b').ok_or_else(|| {
         GatewayComplianceError::InvalidCatalog(
@@ -2831,7 +2700,6 @@ fn normalize_cid(value: &str) -> Result<String, GatewayComplianceError> {
     }
     Ok(value.to_owned())
 }
-
 fn decode_base32_lower(value: &str) -> Result<Vec<u8>, GatewayComplianceError> {
     let mut output = Vec::with_capacity(value.len().saturating_mul(5) / 8);
     let mut accumulator = 0_u16;
@@ -2861,7 +2729,6 @@ fn decode_base32_lower(value: &str) -> Result<Vec<u8>, GatewayComplianceError> {
     }
     Ok(output)
 }
-
 fn encode_base32_lower(value: &[u8]) -> String {
     const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
     let mut output = String::with_capacity(value.len().saturating_mul(8).div_ceil(5));
@@ -2884,7 +2751,6 @@ fn encode_base32_lower(value: &[u8]) -> String {
     }
     output
 }
-
 fn normalize_hex(value: &str, expected_length: usize) -> Result<String, GatewayComplianceError> {
     let normalized = value.to_ascii_lowercase();
     if normalized.len() != expected_length
@@ -2896,7 +2762,6 @@ fn normalize_hex(value: &str, expected_length: usize) -> Result<String, GatewayC
     }
     Ok(normalized)
 }
-
 fn normalize_subject_url(value: &str) -> Result<String, GatewayComplianceError> {
     let parsed = Url::parse(value).map_err(|error| {
         GatewayComplianceError::InvalidCatalog(format!("invalid URL subject: {error}"))
@@ -2913,7 +2778,6 @@ fn normalize_subject_url(value: &str) -> Result<String, GatewayComplianceError> 
     }
     Ok(parsed.to_string())
 }
-
 fn reject_duplicate_keys<T, F>(
     values: &[T],
     key: F,
@@ -2932,7 +2796,6 @@ where
     }
     Ok(())
 }
-
 fn reject_duplicate_toggle_scope(
     toggles: &[GatewayComplianceToggleV1],
 ) -> Result<(), GatewayComplianceError> {
@@ -2945,7 +2808,6 @@ fn reject_duplicate_toggle_scope(
     }
     Ok(())
 }
-
 fn verify_ed25519(
     public_key: &[u8; 32],
     signature: &[u8; 64],
@@ -2966,7 +2828,6 @@ fn verify_ed25519(
         }
     })
 }
-
 fn validate_catalog_transition(
     previous: Option<&GatewayComplianceCatalogV1>,
     next: &GatewayComplianceCatalogV1,
@@ -2992,7 +2853,6 @@ fn validate_catalog_transition(
     }
     Ok(())
 }
-
 fn validate_catalog_freshness(
     payload: &GatewayComplianceCatalogPayloadV1,
     observed_at_unix: u64,
@@ -3006,7 +2866,6 @@ fn validate_catalog_freshness(
     }
     Ok(())
 }
-
 fn validate_catalog_against_config(
     payload: &GatewayComplianceCatalogPayloadV1,
     config: &GatewayComplianceControllerConfig,
@@ -3055,7 +2914,6 @@ fn validate_catalog_against_config(
     }
     Ok(())
 }
-
 fn verify_rollback(
     authorization: &GatewayComplianceRollbackV1,
     policy: &GatewayComplianceTrustPolicyV1,
@@ -3131,7 +2989,6 @@ fn verify_rollback(
     }
     Ok(())
 }
-
 fn validate_checkpoint(
     checkpoint: &GatewayComplianceCheckpointV1,
     config: &GatewayComplianceControllerConfig,
@@ -3351,7 +3208,6 @@ fn validate_checkpoint(
             known_catalog_digests.insert(digest);
         }
     }
-
     let mut idempotency_keys = BTreeSet::new();
     let mut previous_idempotency_timestamp = 0;
     for record in &checkpoint.idempotency_records {
@@ -3423,7 +3279,6 @@ fn validate_checkpoint(
     encode_bounded(checkpoint, MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1)?;
     Ok(())
 }
-
 fn decode_checkpoint(
     bytes: &[u8],
 ) -> Result<GatewayComplianceCheckpointV1, GatewayComplianceError> {
@@ -3453,7 +3308,6 @@ fn decode_checkpoint(
     }
     Ok(checkpoint)
 }
-
 fn fetch_feed_bytes(
     feed: &GatewayComplianceFeedPolicy,
     limits: GatewayComplianceFetchLimits,
@@ -3549,7 +3403,6 @@ fn fetch_feed_bytes(
     }
     Err(GatewayComplianceError::TooManyRedirects)
 }
-
 fn qualified_feed_transport_resolve(
     expected: &GatewayComplianceFeedTransportIdentityV1,
     transport: &dyn GatewayComplianceFeedTransport,
@@ -3561,7 +3414,6 @@ fn qualified_feed_transport_resolve(
     qualify_feed_transport(expected, transport)?;
     result.map_err(redact_feed_transport_operation_error)
 }
-
 fn qualified_feed_transport_fetch(
     expected: &GatewayComplianceFeedTransportIdentityV1,
     transport: &dyn GatewayComplianceFeedTransport,
@@ -3572,7 +3424,6 @@ fn qualified_feed_transport_fetch(
     qualify_feed_transport(expected, transport)?;
     result.map_err(redact_feed_transport_operation_error)
 }
-
 fn redact_feed_transport_operation_error(error: GatewayComplianceError) -> GatewayComplianceError {
     match error {
         GatewayComplianceError::FetchTimeout => GatewayComplianceError::FetchTimeout,
@@ -3594,7 +3445,6 @@ fn redact_feed_transport_operation_error(error: GatewayComplianceError) -> Gatew
         _ => GatewayComplianceError::FeedTransportOperationFailed,
     }
 }
-
 fn remaining_fetch_time(
     started: Instant,
     total_timeout: Duration,
@@ -3604,7 +3454,6 @@ fn remaining_fetch_time(
         .filter(|remaining| !remaining.is_zero())
         .ok_or(GatewayComplianceError::FetchTimeout)
 }
-
 fn qualify_feed_transport(
     expected: &GatewayComplianceFeedTransportIdentityV1,
     transport: &dyn GatewayComplianceFeedTransport,
@@ -3641,7 +3490,6 @@ fn qualify_feed_transport(
     }
     Ok(())
 }
-
 fn validate_feed_url(
     feed: &GatewayComplianceFeedPolicy,
     raw: &str,
@@ -3693,7 +3541,6 @@ fn validate_feed_url(
     }
     Ok(parsed)
 }
-
 fn host_policy<'a>(
     feed: &'a GatewayComplianceFeedPolicy,
     host: &str,
@@ -3704,7 +3551,6 @@ fn host_policy<'a>(
         .map(|index| &feed.hosts[index])
         .ok_or_else(|| GatewayComplianceError::UnsafeUrl("host is not allowlisted".into()))
 }
-
 fn validate_dns_hostname(host: &str) -> Result<(), GatewayComplianceError> {
     if host.is_empty()
         || host.len() > 253
@@ -3733,7 +3579,6 @@ fn validate_dns_hostname(host: &str) -> Result<(), GatewayComplianceError> {
     }
     Ok(())
 }
-
 fn normalize_resolved_addresses(
     addresses: &mut Vec<IpAddr>,
     maximum: usize,
@@ -3751,14 +3596,12 @@ fn normalize_resolved_addresses(
     }
     Ok(())
 }
-
 fn is_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => is_public_ipv4(ip),
         IpAddr::V6(ip) => is_public_ipv6(ip),
     }
 }
-
 fn is_public_ipv4(ip: Ipv4Addr) -> bool {
     let [a, b, c, _] = ip.octets();
     !(ip.is_private()
@@ -3775,7 +3618,6 @@ fn is_public_ipv4(ip: Ipv4Addr) -> bool {
         || (a == 192 && b == 88 && c == 99)
         || (a == 198 && (18..=19).contains(&b)))
 }
-
 fn is_public_ipv6(ip: Ipv6Addr) -> bool {
     let segments = ip.segments();
     let documentation = segments[0] == 0x2001 && segments[1] == 0x0db8;
@@ -3795,7 +3637,6 @@ fn is_public_ipv6(ip: Ipv6Addr) -> bool {
         || orchid
         || transition)
 }
-
 fn decompress_bounded(
     bytes: &[u8],
     encoding: GatewayComplianceContentEncoding,
@@ -3824,7 +3665,6 @@ fn decompress_bounded(
         }
     }
 }
-
 fn read_bounded<R: Read>(
     reader: R,
     maximum: usize,
@@ -3845,15 +3685,12 @@ fn read_bounded<R: Read>(
     }
     Ok(output)
 }
-
 fn active_interval(start: u64, end: Option<u64>, observed: u64) -> bool {
     start <= observed && end.is_none_or(|end| observed < end)
 }
-
 fn scopes_match(rule_scope: &str, request_scopes: &[&str]) -> bool {
     rule_scope == "global" || request_scopes.contains(&rule_scope)
 }
-
 fn toggle_enabled(
     toggles: &[GatewayComplianceToggleV1],
     toggle_id: &str,
@@ -3884,7 +3721,6 @@ fn toggle_enabled(
         })
         .is_none_or(|toggle| toggle.enabled)
 }
-
 fn hash_canonical<T: norito::NoritoSerialize>(
     domain: &[u8],
     value: &T,
@@ -3899,7 +3735,6 @@ fn hash_canonical<T: norito::NoritoSerialize>(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn checkpoint_store_generation(bytes: Option<&[u8]>) -> GatewayComplianceStoreGeneration {
     let Some(bytes) = bytes else {
         return GatewayComplianceStoreGeneration::Absent;
@@ -3914,39 +3749,28 @@ fn checkpoint_store_generation(bytes: Option<&[u8]>) -> GatewayComplianceStoreGe
     hasher.update(bytes);
     GatewayComplianceStoreGeneration::Present(*hasher.finalize().as_bytes())
 }
-
 fn checkpoint_store_snapshot(bytes: Option<Vec<u8>>) -> GatewayComplianceStoreSnapshot {
     GatewayComplianceStoreSnapshot {
         generation: checkpoint_store_generation(bytes.as_deref()),
         bytes,
     }
 }
-
 fn encode_bounded<T: norito::NoritoSerialize>(
     value: &T,
     maximum: usize,
 ) -> Result<Vec<u8>, GatewayComplianceError> {
-    let exact = norito::core::encoded_frame_len(value)
-        .map_err(|error| GatewayComplianceError::Encoding(error.to_string()))?;
-    if exact > maximum {
-        return Err(GatewayComplianceError::ResourceLimit {
-            resource: "canonical encoded bytes",
-            found: exact,
-            maximum,
-        });
+    match norito::core::to_bytes_bounded(value, maximum) {
+        Ok(bytes) => Ok(bytes),
+        Err(norito::core::BoundedEncodeError::FrameTooLarge { encoded_bytes, .. }) => {
+            Err(GatewayComplianceError::ResourceLimit {
+                resource: "canonical encoded bytes",
+                found: encoded_bytes,
+                maximum,
+            })
+        }
+        Err(error) => Err(GatewayComplianceError::Encoding(error.to_string())),
     }
-    let bytes = norito::to_bytes(value)
-        .map_err(|error| GatewayComplianceError::Encoding(error.to_string()))?;
-    if bytes.len() > maximum {
-        return Err(GatewayComplianceError::ResourceLimit {
-            resource: "canonical encoded bytes",
-            found: bytes.len(),
-            maximum,
-        });
-    }
-    Ok(bytes)
 }
-
 fn checkpoint_lock_path(path: &Path) -> Result<PathBuf, GatewayComplianceError> {
     let parent = path.parent().ok_or_else(|| {
         GatewayComplianceError::Persistence("compliance checkpoint path has no parent".into())
@@ -3959,7 +3783,6 @@ fn checkpoint_lock_path(path: &Path) -> Result<PathBuf, GatewayComplianceError> 
     lock_name.push(".lock");
     Ok(parent.join(lock_name))
 }
-
 fn read_checkpoint_snapshot(
     path: &Path,
     max_bytes: usize,
@@ -4008,13 +3831,11 @@ fn read_checkpoint_snapshot(
     }
     Ok(checkpoint_store_snapshot(Some(bytes)))
 }
-
 fn validate_checkpoint_parent(path: &Path) -> Result<(), GatewayComplianceError> {
     validate_existing_directory_chain(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         let metadata = fs::symlink_metadata(path)
             .map_err(|error| persistence_io("inspect checkpoint parent", error))?;
         if metadata.permissions().mode() & 0o022 != 0 {
@@ -4025,7 +3846,6 @@ fn validate_checkpoint_parent(path: &Path) -> Result<(), GatewayComplianceError>
     }
     Ok(())
 }
-
 fn validate_existing_directory_chain(path: &Path) -> Result<(), GatewayComplianceError> {
     let mut current = PathBuf::new();
     for component in path.components() {
@@ -4050,7 +3870,6 @@ fn validate_existing_directory_chain(path: &Path) -> Result<(), GatewayComplianc
     }
     Ok(())
 }
-
 fn validate_checkpoint_file_metadata(
     metadata: &fs::Metadata,
 ) -> Result<(), GatewayComplianceError> {
@@ -4061,7 +3880,6 @@ fn validate_checkpoint_file_metadata(
     }
     validate_file_permissions(metadata, "compliance checkpoint")
 }
-
 fn validate_output_file(path: &Path) -> Result<(), GatewayComplianceError> {
     match fs::symlink_metadata(path) {
         Ok(metadata)
@@ -4078,7 +3896,6 @@ fn validate_output_file(path: &Path) -> Result<(), GatewayComplianceError> {
         Err(error) => Err(persistence_io("inspect checkpoint output", error)),
     }
 }
-
 fn validate_opened_file(
     path: &Path,
     file: &File,
@@ -4101,14 +3918,12 @@ fn validate_opened_file(
     validate_file_permissions(&path_metadata, "opened checkpoint file")?;
     validate_file_permissions(&opened_metadata, "opened checkpoint file")
 }
-
 #[cfg(unix)]
 fn validate_file_permissions(
     metadata: &fs::Metadata,
     label: &'static str,
 ) -> Result<(), GatewayComplianceError> {
     use std::os::unix::fs::PermissionsExt as _;
-
     if metadata.permissions().mode() & 0o022 != 0 {
         return Err(GatewayComplianceError::Persistence(format!(
             "{label} must not be group- or world-writable"
@@ -4116,7 +3931,6 @@ fn validate_file_permissions(
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn validate_file_permissions(
     _metadata: &fs::Metadata,
@@ -4124,44 +3938,36 @@ fn validate_file_permissions(
 ) -> Result<(), GatewayComplianceError> {
     Ok(())
 }
-
 #[cfg(unix)]
 fn set_no_follow(options: &mut OpenOptions) {
     use std::os::unix::fs::OpenOptionsExt as _;
     options.custom_flags(libc::O_NOFOLLOW);
 }
-
 #[cfg(not(unix))]
 fn set_no_follow(_options: &mut OpenOptions) {}
-
 #[cfg(unix)]
 fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(not(unix))]
 fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len()
         && left.modified().ok() == right.modified().ok()
         && left.is_file() == right.is_file()
 }
-
 #[cfg(unix)]
 fn hard_link_count(metadata: &fs::Metadata) -> u64 {
     use std::os::unix::fs::MetadataExt as _;
     metadata.nlink()
 }
-
 #[cfg(not(unix))]
 fn hard_link_count(_metadata: &fs::Metadata) -> u64 {
     1
 }
-
 fn persistence_io(action: &'static str, error: io::Error) -> GatewayComplianceError {
     GatewayComplianceError::Persistence(format!("{action}: {error}"))
 }
-
 /// Fail-closed compliance controller errors.
 #[derive(Debug, Error)]
 pub enum GatewayComplianceError {
@@ -4352,7 +4158,6 @@ pub enum GatewayComplianceError {
     #[error("gateway compliance state lock poisoned")]
     StatePoisoned,
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -4363,34 +4168,27 @@ mod tests {
             atomic::{AtomicBool, AtomicUsize, Ordering as TestAtomicOrdering},
         },
     };
-
     use ed25519_dalek::{Signer as _, SigningKey};
     use flate2::{Compression, write::GzEncoder};
-
     use super::*;
-
     const NOW: u64 = 1_800_000_000;
-
     #[derive(Debug, Default)]
     struct MemoryStore {
         state: Arc<Mutex<MemoryStoreState>>,
         fail_next_store: Arc<AtomicBool>,
         fail_after_store: Arc<AtomicBool>,
     }
-
     #[derive(Debug, Default)]
     struct MemoryStoreState {
         bytes: Option<Vec<u8>>,
         leased: bool,
     }
-
     #[derive(Debug)]
     struct MemoryStoreLease {
         state: Arc<Mutex<MemoryStoreState>>,
         fail_next_store: Arc<AtomicBool>,
         fail_after_store: Arc<AtomicBool>,
     }
-
     impl Drop for MemoryStoreLease {
         fn drop(&mut self) {
             if let Ok(mut state) = self.state.lock() {
@@ -4398,26 +4196,21 @@ mod tests {
             }
         }
     }
-
     impl MemoryStore {
         fn fail_next_store(&self) {
             self.fail_next_store.store(true, TestAtomicOrdering::SeqCst);
         }
-
         fn fail_after_store(&self) {
             self.fail_after_store
                 .store(true, TestAtomicOrdering::SeqCst);
         }
-
         fn durable_bytes(&self) -> Option<Vec<u8>> {
             self.state.lock().expect("memory store lock").bytes.clone()
         }
-
         fn force_store(&self, bytes: Vec<u8>) {
             self.state.lock().expect("memory store lock").bytes = Some(bytes);
         }
     }
-
     impl GatewayComplianceStore for MemoryStore {
         fn try_acquire(
             &self,
@@ -4438,7 +4231,6 @@ mod tests {
             }))
         }
     }
-
     impl GatewayComplianceStoreLease for MemoryStoreLease {
         fn load(&self) -> Result<GatewayComplianceStoreSnapshot, GatewayComplianceError> {
             let state = self
@@ -4447,7 +4239,6 @@ mod tests {
                 .map_err(|_| GatewayComplianceError::StatePoisoned)?;
             Ok(checkpoint_store_snapshot(state.bytes.clone()))
         }
-
         fn compare_and_store(
             &self,
             expected: GatewayComplianceStoreGeneration,
@@ -4482,21 +4273,18 @@ mod tests {
             Ok(checkpoint_store_generation(Some(bytes)))
         }
     }
-
     fn catalog_keys() -> [SigningKey; 2] {
         [
             SigningKey::from_bytes(&[0x11; 32]),
             SigningKey::from_bytes(&[0x22; 32]),
         ]
     }
-
     fn gateway_keys() -> [SigningKey; 2] {
         [
             SigningKey::from_bytes(&[0x33; 32]),
             SigningKey::from_bytes(&[0x44; 32]),
         ]
     }
-
     fn trust_policy() -> GatewayComplianceTrustPolicyV1 {
         let catalog = catalog_keys();
         let gateways = gateway_keys();
@@ -4528,7 +4316,6 @@ mod tests {
             revoked_gateway_signer_ids: Vec::new(),
         }
     }
-
     fn config() -> GatewayComplianceControllerConfig {
         let feed = feed_policy();
         let policy_digest = gateway_compliance_feed_transport_policy_digest(&BTreeMap::from([(
@@ -4556,7 +4343,6 @@ mod tests {
             max_history_entries: 16,
         }
     }
-
     #[derive(Debug)]
     struct QualifiableTransport {
         identity: Mutex<GatewayComplianceFeedTransportIdentityV1>,
@@ -4567,7 +4353,6 @@ mod tests {
         qualification_calls: AtomicUsize,
         resolve_calls: AtomicUsize,
     }
-
     impl QualifiableTransport {
         fn new(identity: GatewayComplianceFeedTransportIdentityV1) -> Self {
             Self {
@@ -4580,7 +4365,6 @@ mod tests {
                 resolve_calls: AtomicUsize::new(0),
             }
         }
-
         fn expected() -> Self {
             Self::new(
                 config()
@@ -4589,7 +4373,6 @@ mod tests {
             )
         }
     }
-
     impl GatewayComplianceFeedTransport for QualifiableTransport {
         fn qualification(
             &self,
@@ -4608,7 +4391,6 @@ mod tests {
                 .expect("transport identity lock")
                 .clone())
         }
-
         fn resolve(
             &self,
             _hostname: &str,
@@ -4626,7 +4408,6 @@ mod tests {
             }
             Ok(vec!["93.184.216.34".parse().expect("public IP")])
         }
-
         fn fetch(
             &self,
             _request: &GatewayComplianceFetchRequest,
@@ -4652,12 +4433,10 @@ mod tests {
             Ok(fetch_response(Vec::new()))
         }
     }
-
     #[derive(Debug, Default)]
     struct UnexpectedStore {
         acquire_calls: AtomicUsize,
     }
-
     impl GatewayComplianceStore for UnexpectedStore {
         fn try_acquire(
             &self,
@@ -4668,7 +4447,6 @@ mod tests {
             ))
         }
     }
-
     #[test]
     fn cross_role_signer_reuse_fails_before_provider_or_store_access() {
         let mut reused_id = config();
@@ -4677,7 +4455,6 @@ mod tests {
         let mut reused_key = config();
         reused_key.trust_policy.gateway_signers[0].public_key =
             reused_key.trust_policy.catalog_signers[0].public_key;
-
         for (label, config) in [
             ("signer identifier", reused_id),
             ("Ed25519 public key", reused_key),
@@ -4709,7 +4486,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn feed_transport_qualification_rejects_bad_providers_before_store_access() {
         let cases = [
@@ -4794,7 +4570,6 @@ mod tests {
                 GatewayComplianceError::FeedTransportUnqualified,
             ),
         ];
-
         for (identity, expected_error) in cases {
             let transport = QualifiableTransport::new(identity);
             let store = Arc::new(UnexpectedStore::default());
@@ -4820,7 +4595,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn feed_transport_probe_failure_is_redacted_before_store_access() {
         let transport = QualifiableTransport::expected();
@@ -4844,7 +4618,6 @@ mod tests {
         );
         assert_eq!(store.acquire_calls.load(TestAtomicOrdering::SeqCst), 0);
     }
-
     #[test]
     fn feed_transport_operation_diagnostics_are_redacted() {
         let error = redact_feed_transport_operation_error(GatewayComplianceError::InvalidFeed(
@@ -4864,14 +4637,12 @@ mod tests {
             GatewayComplianceError::FetchTimeout
         ));
     }
-
     #[test]
     fn external_feed_startup_rejects_missing_config_binding_before_store_access() {
         let transport = QualifiableTransport::expected();
         let store = Arc::new(UnexpectedStore::default());
         let mut unbound = config();
         unbound.feed_transport_provider = None;
-
         let error = GatewayComplianceController::new_with_feed_transport(
             unbound,
             store.clone(),
@@ -4889,7 +4660,6 @@ mod tests {
         );
         assert_eq!(transport.resolve_calls.load(TestAtomicOrdering::SeqCst), 0);
     }
-
     #[test]
     fn feed_transport_identity_is_revalidated_before_each_network_use() {
         let transport = QualifiableTransport::expected();
@@ -4910,7 +4680,6 @@ mod tests {
             .lock()
             .expect("transport identity lock")
             .revision += 1;
-
         assert!(matches!(
             controller.fetch_feed("baseline", &transport),
             Err(GatewayComplianceError::FeedTransportStale)
@@ -4927,7 +4696,6 @@ mod tests {
             "stale providers must be rejected before DNS or HTTP"
         );
     }
-
     #[test]
     fn feed_transport_drift_during_network_io_discards_response_bytes() {
         for (drift_policy, expected_error) in [
@@ -4950,7 +4718,6 @@ mod tests {
                     .drift_revision_on_fetch
                     .store(true, TestAtomicOrdering::SeqCst);
             }
-
             let error = controller
                 .fetch_feed("baseline", &transport)
                 .expect_err("provider drift must discard fetched bytes");
@@ -4972,7 +4739,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn feed_transport_drift_during_dns_discards_addresses_before_http() {
         let transport = QualifiableTransport::expected();
@@ -4985,7 +4751,6 @@ mod tests {
         transport
             .drift_revision_on_resolve
             .store(true, TestAtomicOrdering::SeqCst);
-
         assert!(matches!(
             controller.fetch_feed("baseline", &transport),
             Err(GatewayComplianceError::FeedTransportStale)
@@ -4999,7 +4764,6 @@ mod tests {
         );
         assert_eq!(transport.resolve_calls.load(TestAtomicOrdering::SeqCst), 1);
     }
-
     #[test]
     fn unbound_controller_cannot_reach_a_feed_transport() {
         let transport = QualifiableTransport::expected();
@@ -5018,7 +4782,6 @@ mod tests {
         );
         assert_eq!(transport.resolve_calls.load(TestAtomicOrdering::SeqCst), 0);
     }
-
     fn mutation_binding(nonce: u8) -> GatewayComplianceMutationBindingV1 {
         assert_ne!(nonce, 0, "test idempotency key must be non-zero");
         GatewayComplianceMutationBindingV1 {
@@ -5026,7 +4789,6 @@ mod tests {
             request_digest: [nonce.wrapping_add(1); 32],
         }
     }
-
     fn indexed_mutation_binding(index: u64) -> GatewayComplianceMutationBindingV1 {
         let mut key_digest = [0xA1; 32];
         key_digest[..8].copy_from_slice(&index.to_be_bytes());
@@ -5037,11 +4799,9 @@ mod tests {
             request_digest,
         }
     }
-
     fn subject(byte: u8) -> String {
         hex::encode([byte; 32])
     }
-
     fn payload(
         sequence: u64,
         predecessor_digest: Option<[u8; 32]>,
@@ -5064,7 +4824,6 @@ mod tests {
             toggles: Vec::new(),
         }
     }
-
     fn sign_catalog(payload: GatewayComplianceCatalogPayloadV1) -> GatewayComplianceCatalogV1 {
         let payload = payload.normalize().expect("normalize catalog");
         let digest = payload.signing_digest().expect("catalog signing digest");
@@ -5085,7 +4844,6 @@ mod tests {
             ],
         }
     }
-
     fn acknowledgement(
         gateway_index: usize,
         catalog_digest: [u8; 32],
@@ -5093,7 +4851,6 @@ mod tests {
     ) -> GatewayComplianceAcknowledgementV1 {
         acknowledgement_at(gateway_index, catalog_digest, accepted, NOW + 10)
     }
-
     fn acknowledgement_at(
         gateway_index: usize,
         catalog_digest: [u8; 32],
@@ -5124,7 +4881,6 @@ mod tests {
             signature: gateway_keys()[gateway_index].sign(&digest).to_bytes(),
         }
     }
-
     fn rollback_authorization(
         operation_id: [u8; 32],
         from_catalog_digest: [u8; 32],
@@ -5162,7 +4918,6 @@ mod tests {
             ],
         }
     }
-
     fn promote(
         controller: &GatewayComplianceController,
         catalog: GatewayComplianceCatalogV1,
@@ -5202,7 +4957,6 @@ mod tests {
             .expect("promote catalog")
             .catalog_digest
     }
-
     #[test]
     fn threshold_promotion_is_durable_and_predecessor_bound() {
         let store = Arc::new(MemoryStore::default());
@@ -5238,7 +4992,6 @@ mod tests {
                 .catalog_digest,
             first_digest
         );
-
         assert_eq!(controller.checkpoint().expect("checkpoint").revision, 4);
         drop(controller);
         let recovered =
@@ -5254,14 +5007,12 @@ mod tests {
                 .expect("digest"),
             first_digest
         );
-
         let wrong_successor = sign_catalog(payload(2, Some([0xFF; 32])));
         assert!(matches!(
             recovered.stage_catalog(wrong_successor, NOW + 30, mutation_binding(6)),
             Err(GatewayComplianceError::InvalidPredecessor)
         ));
     }
-
     #[test]
     fn exact_mutation_replays_survive_promotion_expiry_and_restart() {
         let store = Arc::new(MemoryStore::default());
@@ -5272,7 +5023,6 @@ mod tests {
         let first_ack_binding = indexed_mutation_binding(2);
         let second_ack_binding = indexed_mutation_binding(3);
         let promote_binding = indexed_mutation_binding(4);
-
         let staged = controller
             .stage_catalog(catalog.clone(), NOW + 5, stage_binding)
             .expect("stage");
@@ -5288,7 +5038,6 @@ mod tests {
             .promote(staged.catalog_digest, 1, NOW + 20, promote_binding)
             .expect("promote");
         assert_eq!(controller.checkpoint().expect("checkpoint").revision, 4);
-
         drop(controller);
         let recovered =
             GatewayComplianceController::new(config(), store).expect("recover checkpoint");
@@ -5319,7 +5068,6 @@ mod tests {
             "exact replays must not advance the durable revision"
         );
     }
-
     #[test]
     fn new_keys_for_identical_stage_and_acknowledgement_commit_distinct_replay_records() {
         let store = Arc::new(MemoryStore::default());
@@ -5333,7 +5081,6 @@ mod tests {
             .stage_catalog(catalog, NOW + 6, indexed_mutation_binding(2))
             .expect("idempotent stage under a new key");
         assert_eq!(first.catalog_digest, second.catalog_digest);
-
         let acknowledgement = acknowledgement(0, first.catalog_digest, true);
         controller
             .acknowledge(
@@ -5345,7 +5092,6 @@ mod tests {
         controller
             .acknowledge(acknowledgement, NOW + 11, indexed_mutation_binding(4))
             .expect("idempotent acknowledgement under a new key");
-
         let checkpoint = controller.checkpoint().expect("checkpoint");
         assert_eq!(checkpoint.acknowledgements.len(), 1);
         assert_eq!(checkpoint.idempotency_records.len(), 4);
@@ -5362,7 +5108,6 @@ mod tests {
             4
         );
     }
-
     #[test]
     fn idempotency_key_substitution_and_cross_action_reuse_fail_closed() {
         let controller =
@@ -5398,7 +5143,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn promotion_expectation_failure_does_not_consume_the_operation_key() {
         let controller =
@@ -5431,7 +5175,6 @@ mod tests {
             digest
         );
     }
-
     #[test]
     fn crash_before_durable_replace_commits_neither_state_nor_replay_binding() {
         let store = Arc::new(MemoryStore::default());
@@ -5449,7 +5192,6 @@ mod tests {
         assert!(checkpoint.idempotency_records.is_empty());
         assert_eq!(checkpoint.revision, 0);
         assert!(store.durable_bytes().is_none());
-
         assert_eq!(
             controller
                 .stage_catalog(catalog, NOW + 5, binding)
@@ -5459,7 +5201,6 @@ mod tests {
         );
         assert_eq!(controller.checkpoint().expect("checkpoint").revision, 1);
     }
-
     #[test]
     fn memory_store_allows_one_controller_lease_until_drop() {
         let store = Arc::new(MemoryStore::default());
@@ -5469,13 +5210,11 @@ mod tests {
             GatewayComplianceController::new(config(), store.clone()),
             Err(GatewayComplianceError::LeaseHeld)
         ));
-
         drop(controller);
         let recovered =
             GatewayComplianceController::new(config(), store).expect("lease after controller drop");
         assert_eq!(recovered.checkpoint().expect("checkpoint").revision, 0);
     }
-
     #[test]
     fn stale_generation_fences_controller_without_overwriting_durable_bytes() {
         let store = Arc::new(MemoryStore::default());
@@ -5485,7 +5224,6 @@ mod tests {
         controller
             .stage_catalog(catalog.clone(), NOW + 5, indexed_mutation_binding(1))
             .expect("first durable stage");
-
         let poisoned = b"out-of-band-checkpoint-replacement".to_vec();
         store.force_store(poisoned.clone());
         assert!(matches!(
@@ -5498,7 +5236,6 @@ mod tests {
         ));
         assert_eq!(store.durable_bytes(), Some(poisoned));
     }
-
     #[test]
     fn crash_after_durable_replace_recovers_exactly_once_and_fences_old_controller() {
         let store = Arc::new(MemoryStore::default());
@@ -5507,7 +5244,6 @@ mod tests {
         let catalog = sign_catalog(payload(1, None));
         let binding = indexed_mutation_binding(1);
         let catalog_digest = catalog.payload.catalog_digest().expect("catalog digest");
-
         store.fail_after_store();
         assert!(matches!(
             controller.stage_catalog(catalog.clone(), NOW + 5, binding),
@@ -5525,7 +5261,6 @@ mod tests {
         .expect("durable checkpoint");
         assert_eq!(durable.revision, 1);
         assert_eq!(durable.idempotency_records.len(), 1);
-
         drop(controller);
         let recovered =
             GatewayComplianceController::new(config(), store).expect("recover durable replacement");
@@ -5540,7 +5275,6 @@ mod tests {
         );
         assert_eq!(recovered.checkpoint().expect("checkpoint").revision, 1);
     }
-
     #[test]
     fn full_idempotency_registry_replays_known_keys_and_rejects_new_keys() {
         let store = Arc::new(MemoryStore::default());
@@ -5572,7 +5306,6 @@ mod tests {
             .expect("encode full registry");
         drop(controller);
         store.force_store(bytes);
-
         let recovered =
             GatewayComplianceController::new(config(), store).expect("recover full registry");
         assert_eq!(
@@ -5605,7 +5338,6 @@ mod tests {
             MAX_GATEWAY_COMPLIANCE_IDEMPOTENCY_RECORDS_V1
         );
     }
-
     #[test]
     fn checkpoint_rejects_duplicate_idempotency_keys() {
         let store = Arc::new(MemoryStore::default());
@@ -5635,7 +5367,6 @@ mod tests {
             Err(GatewayComplianceError::InvalidCheckpoint(_))
         ));
     }
-
     #[test]
     fn checkpoint_rejects_revision_rollback_and_truncated_bytes_on_restart() {
         let store = Arc::new(MemoryStore::default());
@@ -5660,14 +5391,12 @@ mod tests {
             GatewayComplianceController::new(config(), store.clone()),
             Err(GatewayComplianceError::InvalidCheckpoint(_))
         ));
-
         store.force_store(vec![0x4E, 0x52, 0x54]);
         assert!(matches!(
             GatewayComplianceController::new(config(), store),
             Err(GatewayComplianceError::InvalidCheckpoint(_))
         ));
     }
-
     #[test]
     fn signature_substitution_and_duplicate_quorum_fail_closed() {
         let policy = trust_policy();
@@ -5677,7 +5406,6 @@ mod tests {
             catalog.verify(&policy, NOW + 1, 300),
             Err(GatewayComplianceError::InvalidSignature { .. })
         ));
-
         let mut duplicate = sign_catalog(payload(1, None));
         duplicate.approvals[1] = duplicate.approvals[0].clone();
         assert!(matches!(
@@ -5685,27 +5413,23 @@ mod tests {
             Err(GatewayComplianceError::DuplicateSigner(_))
         ));
     }
-
     #[test]
     fn catalog_rejects_stale_and_future_source_anchors() {
         let controller =
             GatewayComplianceController::new(config(), Arc::new(MemoryStore::default()))
                 .expect("controller");
-
         let mut stale = payload(1, None);
         stale.source_anchors[0].generated_at_unix = NOW - 3_601;
         assert!(matches!(
             controller.stage_catalog(sign_catalog(stale), NOW + 5, mutation_binding(1)),
             Err(GatewayComplianceError::InvalidCatalog(_))
         ));
-
         let mut future = payload(1, None);
         future.source_anchors[0].generated_at_unix = NOW + 301;
         assert!(matches!(
             controller.stage_catalog(sign_catalog(future), NOW + 5, mutation_binding(2)),
             Err(GatewayComplianceError::InvalidCatalog(_))
         ));
-
         let mut excessive_validity = payload(1, None);
         excessive_validity.valid_until_unix = NOW + 7_201;
         assert!(matches!(
@@ -5717,7 +5441,6 @@ mod tests {
             Err(GatewayComplianceError::InvalidCatalog(_))
         ));
     }
-
     #[test]
     fn serving_rejects_zero_rolled_back_and_expired_clocks() {
         let controller =
@@ -5735,7 +5458,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn promotion_revalidates_acknowledgement_freshness() {
         let controller =
@@ -5766,7 +5488,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn every_mutation_rejects_clock_rollback_before_state_change() {
         let controller =
@@ -5788,7 +5509,6 @@ mod tests {
         controller
             .promote(first_digest, 1, NOW + 100, mutation_binding(4))
             .expect("promote first");
-
         let mut second = payload(2, Some(first_digest));
         second.generated_at_unix = NOW + 40;
         second.valid_until_unix = NOW + 1_000;
@@ -5808,7 +5528,6 @@ mod tests {
             first_digest
         );
     }
-
     #[test]
     fn cid_subjects_require_canonical_lowercase_base32_round_trip() {
         let canonical = "bafyr6iffuws2ljnfuws2ljnfuws2ljnfuws2ljnfuws2ljnfuws2ljnfuu";
@@ -5834,7 +5553,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn controller_config_rejects_unbounded_fetch_and_freshness_windows() {
         let mut redirects = config();
@@ -5843,28 +5561,24 @@ mod tests {
             redirects.validate(),
             Err(GatewayComplianceError::InvalidPolicy(_))
         ));
-
         let mut timeout = config();
         timeout.fetch_limits.total_timeout = Duration::from_secs(121);
         assert!(matches!(
             timeout.validate(),
             Err(GatewayComplianceError::InvalidPolicy(_))
         ));
-
         let mut freshness = config();
         freshness.max_feed_age_secs = 0;
         assert!(matches!(
             freshness.validate(),
             Err(GatewayComplianceError::InvalidPolicy(_))
         ));
-
         let mut unknown_gateway = config();
         unknown_gateway.gateway_scope = "gateway:gateway-unknown".into();
         assert!(matches!(
             unknown_gateway.validate(),
             Err(GatewayComplianceError::InvalidPolicy(_))
         ));
-
         let mut malformed_region = config();
         malformed_region.region_scope = "gateway:gateway-eu".into();
         assert!(matches!(
@@ -5872,7 +5586,6 @@ mod tests {
             Err(GatewayComplianceError::InvalidPolicy(_))
         ));
     }
-
     #[test]
     fn serving_evaluation_fails_closed_without_a_promoted_catalog() {
         let controller =
@@ -5887,7 +5600,6 @@ mod tests {
             Err(GatewayComplianceError::NoServingCatalog)
         ));
     }
-
     #[test]
     fn allow_all_test_controller_serves_from_a_governed_catalog() {
         let controller = allow_all_gateway_compliance_controller_for_tests();
@@ -5913,7 +5625,6 @@ mod tests {
             serving.payload.valid_until_unix
         );
     }
-
     #[test]
     fn serving_precedence_spans_global_region_and_gateway_scopes() {
         let controller =
@@ -6003,7 +5714,6 @@ mod tests {
             GatewayComplianceDecisionSource::LegalSafetyHold
         );
     }
-
     #[test]
     fn hold_then_appeal_then_baseline_precedence_is_deterministic() {
         let store = Arc::new(MemoryStore::default());
@@ -6072,7 +5782,6 @@ mod tests {
             expires_at_unix: NOW + 1_000,
         });
         promote(&controller, sign_catalog(candidate));
-
         let evaluate = |byte| {
             controller
                 .evaluate(
@@ -6097,7 +5806,6 @@ mod tests {
         );
         assert_eq!(evaluate(4).source, GatewayComplianceDecisionSource::NoMatch);
     }
-
     #[test]
     fn threshold_rollback_changes_serving_pointer_but_preserves_chain_head() {
         let store = Arc::new(MemoryStore::default());
@@ -6107,7 +5815,6 @@ mod tests {
         let first_digest = promote(&controller, first);
         let second = sign_catalog(payload(2, Some(first_digest)));
         let second_digest = promote(&controller, second);
-
         let rollback_payload = GatewayComplianceRollbackPayloadV1 {
             version: GATEWAY_COMPLIANCE_ROLLBACK_VERSION_V1,
             operation_id: [0xC1; 32],
@@ -6197,7 +5904,6 @@ mod tests {
             revision
         );
     }
-
     #[test]
     fn rollback_rejects_an_expired_last_known_good_catalog() {
         let controller =
@@ -6206,7 +5912,6 @@ mod tests {
         let mut first = payload(1, None);
         first.valid_until_unix = NOW + 100;
         let first_digest = promote(&controller, sign_catalog(first));
-
         let mut second = payload(2, Some(first_digest));
         second.generated_at_unix = NOW + 30;
         second.valid_until_unix = NOW + 1_000;
@@ -6226,21 +5931,18 @@ mod tests {
         controller
             .promote(second_digest, 2, NOW + 50, mutation_binding(15))
             .expect("promote second");
-
         let rollback = rollback_authorization([0xD1; 32], second_digest, first_digest, NOW + 120);
         assert!(matches!(
             controller.rollback(&rollback, NOW + 120, mutation_binding(0xD1)),
             Err(GatewayComplianceError::CatalogNotFresh)
         ));
     }
-
     #[test]
     fn checkpoint_rejects_pointer_and_history_lineage_substitution() {
         let store = Arc::new(MemoryStore::default());
         let controller =
             GatewayComplianceController::new(config(), store.clone()).expect("controller");
         promote(&controller, sign_catalog(payload(1, None)));
-
         let mut checkpoint = controller.checkpoint().expect("checkpoint");
         checkpoint.history[0].serving_digest = [0xBA; 32];
         let encoded = encode_bounded(&checkpoint, MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1)
@@ -6252,14 +5954,12 @@ mod tests {
             Err(GatewayComplianceError::InvalidCheckpoint(_))
         ));
     }
-
     #[test]
     fn checkpoint_rejects_terminal_history_without_exact_replay_record() {
         let store = Arc::new(MemoryStore::default());
         let controller =
             GatewayComplianceController::new(config(), store.clone()).expect("controller");
         promote(&controller, sign_catalog(payload(1, None)));
-
         let mut checkpoint = controller.checkpoint().expect("checkpoint");
         checkpoint
             .idempotency_records
@@ -6275,13 +5975,11 @@ mod tests {
             Err(GatewayComplianceError::InvalidCheckpoint(_))
         ));
     }
-
     #[derive(Debug)]
     struct ScriptedTransport {
         resolutions: Mutex<VecDeque<Vec<IpAddr>>>,
         response: GatewayComplianceFetchResponse,
     }
-
     impl GatewayComplianceFeedTransport for ScriptedTransport {
         fn qualification(
             &self,
@@ -6291,7 +5989,6 @@ mod tests {
         > {
             Ok(test_feed_transport_identity())
         }
-
         fn resolve(
             &self,
             _hostname: &str,
@@ -6303,7 +6000,6 @@ mod tests {
                 .pop_front()
                 .ok_or_else(|| GatewayComplianceError::InvalidFeed("missing DNS script".into()))
         }
-
         fn fetch(
             &self,
             _request: &GatewayComplianceFetchRequest,
@@ -6311,7 +6007,6 @@ mod tests {
             Ok(self.response.clone())
         }
     }
-
     fn test_feed_transport_identity() -> GatewayComplianceFeedTransportIdentityV1 {
         let policy = feed_policy();
         let pins_by_hostname = policy
@@ -6327,7 +6022,6 @@ mod tests {
             test_marked: false,
         }
     }
-
     fn feed_policy() -> GatewayComplianceFeedPolicy {
         GatewayComplianceFeedPolicy {
             feed_id: "baseline".into(),
@@ -6339,7 +6033,6 @@ mod tests {
             }],
         }
     }
-
     fn fetch_response(body: Vec<u8>) -> GatewayComplianceFetchResponse {
         GatewayComplianceFetchResponse {
             status: 200,
@@ -6351,14 +6044,11 @@ mod tests {
             elapsed: Duration::from_millis(20),
         }
     }
-
     include!("compliance_feed_transport_tests.rs");
-
     #[derive(Debug)]
     struct DeadlineTransport {
         response: GatewayComplianceFetchResponse,
     }
-
     impl GatewayComplianceFeedTransport for DeadlineTransport {
         fn qualification(
             &self,
@@ -6368,7 +6058,6 @@ mod tests {
         > {
             Ok(test_feed_transport_identity())
         }
-
         fn resolve(
             &self,
             _hostname: &str,
@@ -6377,7 +6066,6 @@ mod tests {
             std::thread::sleep(Duration::from_millis(8));
             Ok(vec!["93.184.216.34".parse().expect("public IP")])
         }
-
         fn fetch(
             &self,
             _request: &GatewayComplianceFetchRequest,
@@ -6385,7 +6073,6 @@ mod tests {
             Ok(self.response.clone())
         }
     }
-
     #[test]
     fn feed_fetch_enforces_one_cumulative_deadline() {
         let mut limits = GatewayComplianceFetchLimits::default();
@@ -6404,7 +6091,6 @@ mod tests {
             Err(GatewayComplianceError::FetchTimeout)
         ));
     }
-
     #[test]
     fn file_store_lease_restart_and_exact_replay_are_durable() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -6418,7 +6104,6 @@ mod tests {
             GatewayComplianceController::new(config(), store.clone()),
             Err(GatewayComplianceError::LeaseHeld)
         ));
-
         let catalog = sign_catalog(payload(1, None));
         let binding = indexed_mutation_binding(1);
         let staged = controller
@@ -6438,7 +6123,6 @@ mod tests {
                     .contains(".tmp-")),
             "same-directory temporary files must not survive a successful replacement"
         );
-
         drop(controller);
         let recovered =
             GatewayComplianceController::new(config(), store).expect("restart controller");
@@ -6450,7 +6134,6 @@ mod tests {
         );
         assert_eq!(recovered.checkpoint().expect("checkpoint").revision, 1);
     }
-
     #[test]
     fn file_store_exact_byte_cas_fences_stale_controller() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -6463,7 +6146,6 @@ mod tests {
         controller
             .stage_catalog(catalog.clone(), NOW + 5, indexed_mutation_binding(1))
             .expect("first stage");
-
         let replacement = b"external-exact-byte-replacement";
         fs::write(&path, replacement).expect("replace checkpoint outside controller");
         assert!(matches!(
@@ -6476,7 +6158,6 @@ mod tests {
         ));
         assert_eq!(fs::read(path).expect("durable replacement"), replacement);
     }
-
     #[test]
     fn file_store_rechecks_generation_immediately_before_persist() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -6490,7 +6171,6 @@ mod tests {
         controller
             .stage_catalog(catalog.clone(), NOW + 5, indexed_mutation_binding(1))
             .expect("first stage");
-
         let replacement = b"replacement-during-write-preparation".to_vec();
         store.replace_before_next_persist(replacement.clone());
         assert!(matches!(
@@ -6516,7 +6196,6 @@ mod tests {
             "prepared temporary file must be removed after a generation conflict"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn file_store_rejects_hardlinked_checkpoint() {
@@ -6535,12 +6214,10 @@ mod tests {
         assert_eq!(fs::read(path).expect("checkpoint"), b"seed");
         assert_eq!(fs::read(alias).expect("checkpoint alias"), b"seed");
     }
-
     #[cfg(unix)]
     #[test]
     fn file_store_rejects_group_or_world_writable_parent() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let temp = tempfile::tempdir().expect("tempdir");
         let root = fs::canonicalize(temp.path()).expect("canonical tempdir");
         let unsafe_parent = root.join("unsafe");
@@ -6552,12 +6229,10 @@ mod tests {
             Err(GatewayComplianceError::Persistence(_))
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn file_store_rejects_symlink_lease_file() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("tempdir");
         let root = fs::canonicalize(temp.path()).expect("canonical tempdir");
         let path = root.join("checkpoint.to");
@@ -6572,12 +6247,10 @@ mod tests {
         ));
         assert_eq!(fs::read(target).expect("lease target"), b"do-not-lock");
     }
-
     #[cfg(unix)]
     #[test]
     fn file_store_rejects_symlink_checkpoint() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("tempdir");
         let root = fs::canonicalize(temp.path()).expect("canonical tempdir");
         let target = root.join("real.to");

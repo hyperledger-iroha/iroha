@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 
 @dataclass(frozen=True)
@@ -85,7 +85,6 @@ class ConnectSessionInfo:
     token_wallet: str
     token_management: str
     token_relay: str
-    extra: Dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -456,6 +455,377 @@ def parse_sumeragi_json_object(payload: bytes, label: str) -> Dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{label} must be a JSON object")
     return value
+
+@dataclass(frozen=True)
+class PeerInfo:
+    """Online peer descriptor returned by ``GET /v1/peers``."""
+
+    address: str
+    public_key_hex: str
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "PeerInfo":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("peer payload must be an object")
+        address = payload.get("address")
+        if not isinstance(address, str) or not address:
+            raise RuntimeError("peer payload missing `address`")
+        identity = payload.get("id")
+        if not isinstance(identity, Mapping):
+            raise RuntimeError("peer payload missing `id` object")
+        public_key = identity.get("public_key")
+        if not isinstance(public_key, str) or not public_key:
+            raise RuntimeError("peer payload missing `id.public_key`")
+        return cls(address=address, public_key_hex=public_key)
+
+
+@dataclass(frozen=True)
+class PeerTelemetryConfig:
+    """Configuration snapshot attached to a telemetry peer entry."""
+
+    public_key_hex: str
+    queue_capacity: Optional[int]
+    network_block_gossip_size: Optional[int]
+    network_block_gossip_period_ms: Optional[int]
+    network_tx_gossip_size: Optional[int]
+    network_tx_gossip_period_ms: Optional[int]
+
+
+@dataclass(frozen=True)
+class PeerTelemetryLocation:
+    """Geolocation metadata for a telemetry peer."""
+
+    lat: float
+    lon: float
+    country: str
+    city: str
+
+
+@dataclass(frozen=True)
+class PeerTelemetryInfo:
+    """Entry returned by ``GET /v1/telemetry/peers-info``."""
+
+    url: str
+    connected: bool
+    telemetry_unsupported: bool
+    config: Optional[PeerTelemetryConfig]
+    location: Optional[PeerTelemetryLocation]
+    connected_peers: Optional[List[str]]
+
+
+@dataclass(frozen=True)
+class LoggerConfig:
+    """Logger configuration fragment exposed via ``/v1/configuration``."""
+
+    level: str
+    filter: Optional[str]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "LoggerConfig":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("logger section must be an object")
+        level = payload.get("level")
+        if not isinstance(level, str) or not level:
+            raise RuntimeError("logger section missing `level`")
+        filter_value = payload.get("filter")
+        if filter_value is None:
+            filter_str = None
+        elif isinstance(filter_value, str):
+            filter_str = filter_value
+        else:
+            raise RuntimeError("logger section `filter` must be a string when present")
+        return cls(level=level, filter=filter_str)
+
+    def to_payload(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"level": self.level}
+        payload["filter"] = self.filter
+        return payload
+
+
+@dataclass(frozen=True)
+class NetworkConfig:
+    """Network gossip configuration exposed via ``/v1/configuration``."""
+
+    block_gossip_size: int
+    block_gossip_period_ms: int
+    transaction_gossip_size: int
+    transaction_gossip_period_ms: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "NetworkConfig":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("network section must be an object")
+        try:
+            block_gossip_size = int(payload["block_gossip_size"])
+            block_gossip_period_ms = int(payload["block_gossip_period_ms"])
+            transaction_gossip_size = int(payload["transaction_gossip_size"])
+            transaction_gossip_period_ms = int(payload["transaction_gossip_period_ms"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("network section is missing numeric gossip fields") from exc
+        return cls(
+            block_gossip_size=block_gossip_size,
+            block_gossip_period_ms=block_gossip_period_ms,
+            transaction_gossip_size=transaction_gossip_size,
+            transaction_gossip_period_ms=transaction_gossip_period_ms,
+        )
+
+
+@dataclass(frozen=True)
+class QueueConfig:
+    """Transaction queue configuration exposed via ``/v1/configuration``."""
+
+    capacity: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "QueueConfig":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("queue section must be an object")
+        try:
+            capacity = int(payload["capacity"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("queue section missing numeric `capacity`") from exc
+        return cls(capacity=capacity)
+
+
+@dataclass(frozen=True)
+class ConfidentialGasSchedule:
+    """Confidential verification gas schedule."""
+
+    proof_base: int
+    per_public_input: int
+    per_proof_byte: int
+    per_nullifier: int
+    per_commitment: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ConfidentialGasSchedule":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("confidential gas section must be an object")
+        try:
+            proof_base = int(payload["proof_base"])
+            per_public_input = int(payload["per_public_input"])
+            per_proof_byte = int(payload["per_proof_byte"])
+            per_nullifier = int(payload["per_nullifier"])
+            per_commitment = int(payload["per_commitment"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("confidential gas section missing numeric fields") from exc
+        return cls(
+            proof_base=proof_base,
+            per_public_input=per_public_input,
+            per_proof_byte=per_proof_byte,
+            per_nullifier=per_nullifier,
+            per_commitment=per_commitment,
+        )
+
+    def to_payload(self) -> Dict[str, Any]:
+        return {
+            "proof_base": self.proof_base,
+            "per_public_input": self.per_public_input,
+            "per_proof_byte": self.per_proof_byte,
+            "per_nullifier": self.per_nullifier,
+            "per_commitment": self.per_commitment,
+        }
+
+
+@dataclass(frozen=True)
+class TransportNoritoRpcConfig:
+    """Norito-RPC transport summary exposed via ``/v1/configuration``."""
+
+    enabled: bool
+    stage: str
+    require_mtls: bool
+    canary_allowlist_size: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "TransportNoritoRpcConfig":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("transport.norito_rpc section must be an object")
+        enabled = payload.get("enabled")
+        if not isinstance(enabled, bool):
+            raise RuntimeError("transport.norito_rpc section missing `enabled`")
+        stage = payload.get("stage")
+        if not isinstance(stage, str) or not stage:
+            raise RuntimeError("transport.norito_rpc section missing `stage`")
+        require_mtls = payload.get("require_mtls")
+        if not isinstance(require_mtls, bool):
+            raise RuntimeError("transport.norito_rpc section missing `require_mtls`")
+        try:
+            canary_allowlist_size = int(payload["canary_allowlist_size"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "transport.norito_rpc section missing numeric `canary_allowlist_size`"
+            ) from exc
+        return cls(
+            enabled=enabled,
+            stage=stage,
+            require_mtls=require_mtls,
+            canary_allowlist_size=canary_allowlist_size,
+        )
+
+
+@dataclass(frozen=True)
+class StreamingSoranetConfig:
+    """SoraNet streaming defaults exposed via ``/v1/configuration``."""
+
+    enabled: bool
+    stream_tag: str
+    exit_multiaddr: str
+    padding_budget_ms: Optional[int]
+    access_kind: str
+    gar_category: str
+    channel_salt: str
+    provision_spool_dir: str
+    provision_window_segments: int
+    provision_queue_capacity: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "StreamingSoranetConfig":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("transport.streaming.soranet section must be an object")
+        enabled = payload.get("enabled")
+        if not isinstance(enabled, bool):
+            raise RuntimeError("transport.streaming.soranet section missing `enabled`")
+        stream_tag = payload.get("stream_tag")
+        if not isinstance(stream_tag, str) or not stream_tag:
+            raise RuntimeError("transport.streaming.soranet section missing `stream_tag`")
+        exit_multiaddr = payload.get("exit_multiaddr")
+        if not isinstance(exit_multiaddr, str) or not exit_multiaddr:
+            raise RuntimeError("transport.streaming.soranet section missing `exit_multiaddr`")
+        padding_value = payload.get("padding_budget_ms")
+        if padding_value is None:
+            padding_budget_ms = None
+        else:
+            try:
+                padding_budget_ms = int(padding_value)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "transport.streaming.soranet section `padding_budget_ms` must be numeric"
+                ) from exc
+        access_kind = payload.get("access_kind")
+        if not isinstance(access_kind, str) or not access_kind:
+            raise RuntimeError("transport.streaming.soranet section missing `access_kind`")
+        gar_category = payload.get("gar_category")
+        if not isinstance(gar_category, str) or not gar_category:
+            raise RuntimeError("transport.streaming.soranet section missing `gar_category`")
+        channel_salt = payload.get("channel_salt")
+        if not isinstance(channel_salt, str):
+            raise RuntimeError("transport.streaming.soranet section missing `channel_salt`")
+        provision_spool_dir = payload.get("provision_spool_dir")
+        if not isinstance(provision_spool_dir, str) or not provision_spool_dir:
+            raise RuntimeError("transport.streaming.soranet section missing `provision_spool_dir`")
+        try:
+            provision_window_segments = int(payload["provision_window_segments"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "transport.streaming.soranet section missing numeric `provision_window_segments`"
+            ) from exc
+        try:
+            provision_queue_capacity = int(payload["provision_queue_capacity"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "transport.streaming.soranet section missing numeric `provision_queue_capacity`"
+            ) from exc
+        return cls(
+            enabled=enabled,
+            stream_tag=stream_tag,
+            exit_multiaddr=exit_multiaddr,
+            padding_budget_ms=padding_budget_ms,
+            access_kind=access_kind,
+            gar_category=gar_category,
+            channel_salt=channel_salt,
+            provision_spool_dir=provision_spool_dir,
+            provision_window_segments=provision_window_segments,
+            provision_queue_capacity=provision_queue_capacity,
+        )
+
+
+@dataclass(frozen=True)
+class StreamingTransportConfig:
+    """Streaming transport configuration exposed via ``/v1/configuration``."""
+
+    soranet: Optional[StreamingSoranetConfig]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "StreamingTransportConfig":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("transport.streaming section must be an object")
+        soranet_section = payload.get("soranet")
+        soranet = (
+            StreamingSoranetConfig.from_payload(soranet_section)
+            if isinstance(soranet_section, Mapping)
+            else None
+        )
+        return cls(soranet=soranet)
+
+
+@dataclass(frozen=True)
+class TransportConfig:
+    """Transport configuration exposed via ``/v1/configuration``."""
+
+    norito_rpc: Optional[TransportNoritoRpcConfig]
+    streaming: Optional[StreamingTransportConfig]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "TransportConfig":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("transport section must be an object")
+        norito_section = payload.get("norito_rpc")
+        norito_rpc = (
+            TransportNoritoRpcConfig.from_payload(norito_section)
+            if isinstance(norito_section, Mapping)
+            else None
+        )
+        streaming_section = payload.get("streaming")
+        streaming = (
+            StreamingTransportConfig.from_payload(streaming_section)
+            if isinstance(streaming_section, Mapping)
+            else None
+        )
+        return cls(norito_rpc=norito_rpc, streaming=streaming)
+
+
+@dataclass(frozen=True)
+class ConfigurationSnapshot:
+    """Typed configuration payload returned by ``GET /v1/configuration``."""
+
+    public_key_hex: str
+    logger: LoggerConfig
+    network: NetworkConfig
+    queue: Optional[QueueConfig]
+    confidential_gas: Optional[ConfidentialGasSchedule]
+    transport: Optional[TransportConfig]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ConfigurationSnapshot":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("configuration response must be an object")
+        public_key = payload.get("public_key")
+        if not isinstance(public_key, str) or not public_key:
+            raise RuntimeError("configuration response missing `public_key`")
+        logger = LoggerConfig.from_payload(payload.get("logger", {}))
+        network = NetworkConfig.from_payload(payload.get("network", {}))
+        queue_section = payload.get("queue")
+        queue = QueueConfig.from_payload(queue_section) if isinstance(queue_section, Mapping) else None
+        gas_section = payload.get("confidential_gas")
+        confidential_gas = (
+            ConfidentialGasSchedule.from_payload(gas_section)
+            if isinstance(gas_section, Mapping)
+            else None
+        )
+        transport_section = payload.get("transport")
+        transport = (
+            TransportConfig.from_payload(transport_section)
+            if isinstance(transport_section, Mapping)
+            else None
+        )
+        return cls(
+            public_key_hex=public_key,
+            logger=logger,
+            network=network,
+            queue=queue,
+            confidential_gas=confidential_gas,
+            transport=transport,
+        )
 
 # Keep the public model identity stable even though definitions live in this
 # private support module.

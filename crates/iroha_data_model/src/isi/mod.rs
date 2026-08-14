@@ -14,9 +14,7 @@
 //!   enums that "box together" a family of related generic instructions into a
 //!   closed, visitable set. Despite the name, they are not heap boxes; they are
 //!   plain tagged unions that implement [`crate::isi::Instruction`].
-
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
-
 #[cfg(test)]
 use std::cell::RefCell;
 use std::{
@@ -28,13 +26,11 @@ use std::{
     sync::{Arc, OnceLock, RwLock},
     vec::Vec,
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use derive_more::{Constructor, Display};
 use iroha_schema::{IntoSchema, Metadata as SchemaMetadata, UnnamedFieldsMeta};
 use norito::codec::{Decode, Encode};
 use rustc_hash::FxHashMap as HashMap;
-
 use super::prelude::*;
 use crate::{Level, Registered, seal};
 /// Consensus key lifecycle instructions.
@@ -46,7 +42,6 @@ pub mod endorsement;
 pub mod governance;
 /// Ministry agenda intake instructions.
 pub mod ministry;
-
 /// Owned trait-object wrapper for any [`crate::isi::Instruction`].
 ///
 /// This newtype wraps `Box<dyn Instruction>` to allow implementing blanket traits
@@ -62,21 +57,17 @@ pub mod ministry;
 /// ```
 #[repr(transparent)]
 pub struct InstructionBox(Box<dyn Instruction>);
-
 impl core::ops::Deref for InstructionBox {
     type Target = dyn Instruction;
-
     fn deref(&self) -> &Self::Target {
         &*self.0
     }
 }
-
 impl core::fmt::Display for InstructionBox {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("InstructionBox")
     }
 }
-
 impl core::fmt::Debug for InstructionBox {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("InstructionBox")
@@ -84,23 +75,19 @@ impl core::fmt::Debug for InstructionBox {
             .finish()
     }
 }
-
 impl Clone for InstructionBox {
     fn clone(&self) -> Self {
         // Use the object-safe clone-on-trait mechanism.
         self.0.dyn_box_clone()
     }
 }
-
 impl PartialEq for InstructionBox {
     fn eq(&self, other: &Self) -> bool {
         Instruction::id(&**self) == Instruction::id(&**other)
             && self.dyn_encode() == other.dyn_encode()
     }
 }
-
 impl Eq for InstructionBox {}
-
 /// Client-side wrapper preserving an instruction wire-id plus already encoded
 /// payload bytes.
 ///
@@ -113,7 +100,6 @@ pub struct OpaqueInstruction {
     bare_payload: Vec<u8>,
     framed_payload: Vec<u8>,
 }
-
 impl OpaqueInstruction {
     /// Build an opaque instruction from a framed wire payload returned by Torii.
     ///
@@ -130,60 +116,55 @@ impl OpaqueInstruction {
             framed_payload: framed_payload.to_vec(),
         })
     }
-
     /// Return the stable wire identifier carried by this opaque instruction.
     #[must_use]
     pub const fn wire_id(&self) -> &'static str {
         self.wire_id
     }
-
     /// Return the exact framed payload carried by this opaque instruction.
     #[must_use]
     pub fn framed_payload(&self) -> &[u8] {
         &self.framed_payload
     }
 }
-
 impl crate::seal::Instruction for OpaqueInstruction {}
-
 impl Instruction for OpaqueInstruction {
     fn dyn_encode(&self) -> Vec<u8> {
         self.bare_payload.clone()
     }
-
     fn dyn_encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.bare_payload);
     }
-
     fn dyn_encode_capacity_hint(&self) -> Option<usize> {
         Some(self.bare_payload.len())
     }
-
     fn dyn_encoded_len(&self) -> Option<usize> {
         Some(self.bare_payload.len())
     }
-
+    fn dyn_write_frame(&self, writer: &mut dyn std::io::Write) -> Result<(), norito::core::Error> {
+        std::io::Write::write_all(writer, &self.framed_payload)?;
+        Ok(())
+    }
+    fn dyn_frame_len(&self) -> Result<usize, norito::core::Error> {
+        Ok(self.framed_payload.len())
+    }
     fn as_any(&self) -> &dyn Any {
         self
     }
-
     fn id(&self) -> &'static str {
         self.wire_id
     }
 }
-
 impl From<OpaqueInstruction> for InstructionBox {
     fn from(i: OpaqueInstruction) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl PartialOrd for InstructionBox {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for InstructionBox {
     fn cmp(&self, other: &Self) -> Ordering {
         let id_cmp = Instruction::id(&**self).cmp(Instruction::id(&**other));
@@ -193,12 +174,10 @@ impl Ord for InstructionBox {
         self.dyn_encode().cmp(&other.dyn_encode())
     }
 }
-
 // Implement the sealing marker for the wrapper so it participates in generic APIs
 // (e.g., `Executable: From<Vec<InstructionBox>>`). Special handling in the
 // blanket `Instruction` impl ensures `as_any` exposes the inner type.
 impl crate::seal::Instruction for InstructionBox {}
-
 // Allow direct boxing of standalone instructions that are not part of a grouped enum.
 impl From<crate::isi::zk::VerifyProof> for InstructionBox {
     fn from(i: crate::isi::zk::VerifyProof) -> Self {
@@ -405,7 +384,6 @@ impl From<crate::isi::asset_transfer_control::SetAssetHoldingLimit> for Instruct
         InstructionBox(Box::new(i))
     }
 }
-
 // Allow direct boxing of ZK asset and voting instructions
 impl From<crate::isi::zk::RegisterZkAsset> for InstructionBox {
     fn from(i: crate::isi::zk::RegisterZkAsset) -> Self {
@@ -437,91 +415,76 @@ impl From<crate::isi::zk::FinalizeElection> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::staking::ActivatePublicLaneValidator> for InstructionBox {
     fn from(i: crate::isi::staking::ActivatePublicLaneValidator) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::staking::ExitPublicLaneValidator> for InstructionBox {
     fn from(i: crate::isi::staking::ExitPublicLaneValidator) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::staking::RebindPublicLaneValidatorPeer> for InstructionBox {
     fn from(i: crate::isi::staking::RebindPublicLaneValidatorPeer) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::kaigi::CreateKaigi> for InstructionBox {
     fn from(i: crate::isi::kaigi::CreateKaigi) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::kaigi::JoinKaigi> for InstructionBox {
     fn from(i: crate::isi::kaigi::JoinKaigi) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::kaigi::LeaveKaigi> for InstructionBox {
     fn from(i: crate::isi::kaigi::LeaveKaigi) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::kaigi::EndKaigi> for InstructionBox {
     fn from(i: crate::isi::kaigi::EndKaigi) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::kaigi::RecordKaigiUsage> for InstructionBox {
     fn from(i: crate::isi::kaigi::RecordKaigiUsage) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::kaigi::SetKaigiRelayManifest> for InstructionBox {
     fn from(i: crate::isi::kaigi::SetKaigiRelayManifest) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::kaigi::RegisterKaigiRelay> for InstructionBox {
     fn from(i: crate::isi::kaigi::RegisterKaigiRelay) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::kaigi::ReportKaigiRelayHealth> for InstructionBox {
     fn from(i: crate::isi::kaigi::ReportKaigiRelayHealth) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::nexus::SetLaneRelayEmergencyValidators> for InstructionBox {
     fn from(i: crate::isi::nexus::SetLaneRelayEmergencyValidators) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::nexus::RegisterVerifiedLaneRelay> for InstructionBox {
     fn from(i: crate::isi::nexus::RegisterVerifiedLaneRelay) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation> for InstructionBox {
     fn from(i: crate::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 macro_rules! impl_nexus_program_instruction_box {
     ($($ty:ident),+ $(,)?) => {
         $(
@@ -533,7 +496,6 @@ macro_rules! impl_nexus_program_instruction_box {
         )+
     };
 }
-
 impl_nexus_program_instruction_box!(
     CreateFeeSponsorProgram,
     StageFeeSponsorProgramRevision,
@@ -546,349 +508,291 @@ impl_nexus_program_instruction_box!(
     FundFeeSponsorProgram,
     WithdrawFeeSponsorProgram,
 );
-
 impl From<crate::isi::identifier::RegisterIdentifierPolicy> for InstructionBox {
     fn from(i: crate::isi::identifier::RegisterIdentifierPolicy) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::identifier::ActivateIdentifierPolicy> for InstructionBox {
     fn from(i: crate::isi::identifier::ActivateIdentifierPolicy) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::identifier::ClaimIdentifier> for InstructionBox {
     fn from(i: crate::isi::identifier::ClaimIdentifier) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::identifier::RevokeIdentifier> for InstructionBox {
     fn from(i: crate::isi::identifier::RevokeIdentifier) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::DeploySoracloudService> for InstructionBox {
     fn from(i: crate::isi::soracloud::DeploySoracloudService) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::UpgradeSoracloudService> for InstructionBox {
     fn from(i: crate::isi::soracloud::UpgradeSoracloudService) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::DeploySoracloudAppInfra> for InstructionBox {
     fn from(i: crate::isi::soracloud::DeploySoracloudAppInfra) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::UpgradeSoracloudAppInfra> for InstructionBox {
     fn from(i: crate::isi::soracloud::UpgradeSoracloudAppInfra) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RollbackSoracloudService> for InstructionBox {
     fn from(i: crate::isi::soracloud::RollbackSoracloudService) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::SetSoracloudServiceConfig> for InstructionBox {
     fn from(i: crate::isi::soracloud::SetSoracloudServiceConfig) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::DeleteSoracloudServiceConfig> for InstructionBox {
     fn from(i: crate::isi::soracloud::DeleteSoracloudServiceConfig) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::SetSoracloudServiceSecret> for InstructionBox {
     fn from(i: crate::isi::soracloud::SetSoracloudServiceSecret) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::DeleteSoracloudServiceSecret> for InstructionBox {
     fn from(i: crate::isi::soracloud::DeleteSoracloudServiceSecret) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::MutateSoracloudState> for InstructionBox {
     fn from(i: crate::isi::soracloud::MutateSoracloudState) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RegisterSoracloudFhePolicy> for InstructionBox {
     fn from(i: crate::isi::soracloud::RegisterSoracloudFhePolicy) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RotateSoracloudFhePolicy> for InstructionBox {
     fn from(i: crate::isi::soracloud::RotateSoracloudFhePolicy) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RevokeSoracloudFhePolicy> for InstructionBox {
     fn from(i: crate::isi::soracloud::RevokeSoracloudFhePolicy) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RunSoracloudFheJob> for InstructionBox {
     fn from(i: crate::isi::soracloud::RunSoracloudFheJob) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RecordSoracloudDecryptionRequest> for InstructionBox {
     fn from(i: crate::isi::soracloud::RecordSoracloudDecryptionRequest) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::JoinSoracloudHfSharedLease> for InstructionBox {
     fn from(i: crate::isi::soracloud::JoinSoracloudHfSharedLease) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::LeaveSoracloudHfSharedLease> for InstructionBox {
     fn from(i: crate::isi::soracloud::LeaveSoracloudHfSharedLease) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RenewSoracloudHfSharedLease> for InstructionBox {
     fn from(i: crate::isi::soracloud::RenewSoracloudHfSharedLease) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::AdvertiseSoracloudModelHost> for InstructionBox {
     fn from(i: crate::isi::soracloud::AdvertiseSoracloudModelHost) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::HeartbeatSoracloudModelHost> for InstructionBox {
     fn from(i: crate::isi::soracloud::HeartbeatSoracloudModelHost) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::WithdrawSoracloudModelHost> for InstructionBox {
     fn from(i: crate::isi::soracloud::WithdrawSoracloudModelHost) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::ReconcileSoracloudModelHosts> for InstructionBox {
     fn from(i: crate::isi::soracloud::ReconcileSoracloudModelHosts) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::AdvertiseSoracloudInrouHost> for InstructionBox {
     fn from(i: crate::isi::soracloud::AdvertiseSoracloudInrouHost) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::WithdrawSoracloudInrouHost> for InstructionBox {
     fn from(i: crate::isi::soracloud::WithdrawSoracloudInrouHost) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::ReconcileSoracloudInrouPlacements> for InstructionBox {
     fn from(i: crate::isi::soracloud::ReconcileSoracloudInrouPlacements) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::ReportSoracloudModelHostViolation> for InstructionBox {
     fn from(i: crate::isi::soracloud::ReportSoracloudModelHostViolation) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::DeploySoracloudAgentApartment> for InstructionBox {
     fn from(i: crate::isi::soracloud::DeploySoracloudAgentApartment) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RenewSoracloudAgentLease> for InstructionBox {
     fn from(i: crate::isi::soracloud::RenewSoracloudAgentLease) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RestartSoracloudAgentApartment> for InstructionBox {
     fn from(i: crate::isi::soracloud::RestartSoracloudAgentApartment) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RevokeSoracloudAgentPolicy> for InstructionBox {
     fn from(i: crate::isi::soracloud::RevokeSoracloudAgentPolicy) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RequestSoracloudAgentWalletSpend> for InstructionBox {
     fn from(i: crate::isi::soracloud::RequestSoracloudAgentWalletSpend) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::ApproveSoracloudAgentWalletSpend> for InstructionBox {
     fn from(i: crate::isi::soracloud::ApproveSoracloudAgentWalletSpend) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::EnqueueSoracloudAgentMessage> for InstructionBox {
     fn from(i: crate::isi::soracloud::EnqueueSoracloudAgentMessage) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::AcknowledgeSoracloudAgentMessage> for InstructionBox {
     fn from(i: crate::isi::soracloud::AcknowledgeSoracloudAgentMessage) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::AllowSoracloudAgentAutonomyArtifact> for InstructionBox {
     fn from(i: crate::isi::soracloud::AllowSoracloudAgentAutonomyArtifact) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RunSoracloudAgentAutonomy> for InstructionBox {
     fn from(i: crate::isi::soracloud::RunSoracloudAgentAutonomy) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RecordSoracloudAgentAutonomyExecution> for InstructionBox {
     fn from(i: crate::isi::soracloud::RecordSoracloudAgentAutonomyExecution) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::StartSoracloudTrainingJob> for InstructionBox {
     fn from(i: crate::isi::soracloud::StartSoracloudTrainingJob) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::CheckpointSoracloudTrainingJob> for InstructionBox {
     fn from(i: crate::isi::soracloud::CheckpointSoracloudTrainingJob) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RetrySoracloudTrainingJob> for InstructionBox {
     fn from(i: crate::isi::soracloud::RetrySoracloudTrainingJob) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RegisterSoracloudModelArtifact> for InstructionBox {
     fn from(i: crate::isi::soracloud::RegisterSoracloudModelArtifact) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RegisterSoracloudModelWeight> for InstructionBox {
     fn from(i: crate::isi::soracloud::RegisterSoracloudModelWeight) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::PromoteSoracloudModelWeight> for InstructionBox {
     fn from(i: crate::isi::soracloud::PromoteSoracloudModelWeight) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RollbackSoracloudModelWeight> for InstructionBox {
     fn from(i: crate::isi::soracloud::RollbackSoracloudModelWeight) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RegisterSoracloudUploadedModelBundle> for InstructionBox {
     fn from(i: crate::isi::soracloud::RegisterSoracloudUploadedModelBundle) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::FinalizeSoracloudUploadedModelBundle> for InstructionBox {
     fn from(i: crate::isi::soracloud::FinalizeSoracloudUploadedModelBundle) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::AdvanceSoracloudRollout> for InstructionBox {
     fn from(i: crate::isi::soracloud::AdvanceSoracloudRollout) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::SetSoracloudRuntimeState> for InstructionBox {
     fn from(i: crate::isi::soracloud::SetSoracloudRuntimeState) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::SetSoracloudInrouReplicaRuntimeState> for InstructionBox {
     fn from(i: crate::isi::soracloud::SetSoracloudInrouReplicaRuntimeState) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState> for InstructionBox {
     fn from(i: crate::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::ReportSoracloudServiceLeaseUsage> for InstructionBox {
     fn from(i: crate::isi::soracloud::ReportSoracloudServiceLeaseUsage) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RecordSoracloudMailboxMessage> for InstructionBox {
     fn from(i: crate::isi::soracloud::RecordSoracloudMailboxMessage) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RecordSoracloudRuntimeReceipt> for InstructionBox {
     fn from(i: crate::isi::soracloud::RecordSoracloudRuntimeReceipt) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt>
     for InstructionBox
 {
@@ -896,7 +800,6 @@ impl From<crate::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionRec
         InstructionBox(Box::new(i))
     }
 }
-
 // Allow direct boxing of runtime upgrade instructions
 impl From<crate::isi::runtime_upgrade::ProposeRuntimeUpgrade> for InstructionBox {
     fn from(i: crate::isi::runtime_upgrade::ProposeRuntimeUpgrade) -> Self {
@@ -913,7 +816,6 @@ impl From<crate::isi::runtime_upgrade::CancelRuntimeUpgrade> for InstructionBox 
         InstructionBox(Box::new(i))
     }
 }
-
 // Allow direct boxing of verifying-keys registry instructions
 impl From<crate::isi::verifying_keys::RegisterVerifyingKey> for InstructionBox {
     fn from(i: crate::isi::verifying_keys::RegisterVerifyingKey) -> Self {
@@ -973,7 +875,6 @@ impl From<crate::isi::social::CancelTwitterEscrow> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-
 // Allow direct boxing of native asset escrow instructions.
 impl From<crate::isi::escrow::OpenAssetEscrow> for InstructionBox {
     fn from(i: crate::isi::escrow::OpenAssetEscrow) -> Self {
@@ -1061,7 +962,6 @@ impl From<crate::isi::vpn::RefundExpiredVpnLease> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-
 // Allow direct boxing of SoraFS capacity marketplace instructions.
 impl From<crate::isi::sorafs::RegisterCapacityDeclaration> for InstructionBox {
     fn from(i: crate::isi::sorafs::RegisterCapacityDeclaration) -> Self {
@@ -1083,7 +983,6 @@ impl From<crate::isi::sorafs::ResolveSorafsCapacityDispute> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-
 // Allow direct boxing of SoraFS pin registry instructions
 impl From<crate::isi::sorafs::RegisterPinManifest> for InstructionBox {
     fn from(i: crate::isi::sorafs::RegisterPinManifest) -> Self {
@@ -1100,7 +999,6 @@ impl From<crate::isi::sorafs::RetirePinManifest> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-
 // Allow direct boxing of content lane instructions.
 impl From<crate::isi::content::PublishContentBundle> for InstructionBox {
     fn from(i: crate::isi::content::PublishContentBundle) -> Self {
@@ -1325,13 +1223,11 @@ impl From<crate::isi::space_directory::PublishSpaceDirectoryManifest> for Instru
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::space_directory::RevokeSpaceDirectoryManifest> for InstructionBox {
     fn from(i: crate::isi::space_directory::RevokeSpaceDirectoryManifest) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::space_directory::ExpireSpaceDirectoryManifest> for InstructionBox {
     fn from(i: crate::isi::space_directory::ExpireSpaceDirectoryManifest) -> Self {
         InstructionBox(Box::new(i))
@@ -1424,7 +1320,6 @@ macro_rules! impl_musubi_instruction_box {
         )+
     };
 }
-
 impl_musubi_instruction_box!(
     RegisterMusubiNamespaceBindingV1,
     RegisterMusubiArchiveV1,
@@ -1451,98 +1346,82 @@ impl From<crate::isi::offline::TopUpKagemushaRecursiveV4> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::offline::RedeemKagemushaRecursiveV4> for InstructionBox {
     fn from(i: crate::isi::offline::RedeemKagemushaRecursiveV4) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::offline::ActivateKagemushaRecursiveReleaseV4> for InstructionBox {
     fn from(i: crate::isi::offline::ActivateKagemushaRecursiveReleaseV4) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::offline::RegisterOfflineDeviceAttestation> for InstructionBox {
     fn from(i: crate::isi::offline::RegisterOfflineDeviceAttestation) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::offline::SetOfflineDeviceAttestationPolicy> for InstructionBox {
     fn from(i: crate::isi::offline::SetOfflineDeviceAttestationPolicy) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 // Allow direct boxing of oracle feed instructions.
 impl From<crate::isi::oracle::RegisterOracleFeed> for InstructionBox {
     fn from(i: crate::isi::oracle::RegisterOracleFeed) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::oracle::SubmitOracleObservation> for InstructionBox {
     fn from(i: crate::isi::oracle::SubmitOracleObservation) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::oracle::AggregateOracleFeed> for InstructionBox {
     fn from(i: crate::isi::oracle::AggregateOracleFeed) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::oracle::OpenOracleDispute> for InstructionBox {
     fn from(i: crate::isi::oracle::OpenOracleDispute) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::oracle::ResolveOracleDispute> for InstructionBox {
     fn from(i: crate::isi::oracle::ResolveOracleDispute) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::oracle::ProposeOracleChange> for InstructionBox {
     fn from(i: crate::isi::oracle::ProposeOracleChange) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::oracle::VoteOracleChangeStage> for InstructionBox {
     fn from(i: crate::isi::oracle::VoteOracleChangeStage) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::oracle::RollbackOracleChange> for InstructionBox {
     fn from(i: crate::isi::oracle::RollbackOracleChange) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::oracle::SubmitDefiOracleAttestation> for InstructionBox {
     fn from(i: crate::isi::oracle::SubmitDefiOracleAttestation) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::oracle::RecordTwitterBinding> for InstructionBox {
     fn from(i: crate::isi::oracle::RecordTwitterBinding) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::oracle::RevokeTwitterBinding> for InstructionBox {
     fn from(i: crate::isi::oracle::RevokeTwitterBinding) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 // Allow direct boxing of SoraDNS resolver-directory instructions.
 impl From<crate::isi::soradns::SubmitDirectoryDraft> for InstructionBox {
     fn from(i: crate::isi::soradns::SubmitDirectoryDraft) -> Self {
@@ -1579,50 +1458,42 @@ impl From<crate::isi::soradns::SetDirectoryRotationPolicy> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-
 // Allow direct boxing of public lane staking instructions.
 impl From<crate::isi::staking::RegisterPublicLaneValidator> for InstructionBox {
     fn from(i: crate::isi::staking::RegisterPublicLaneValidator) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::staking::BondPublicLaneStake> for InstructionBox {
     fn from(i: crate::isi::staking::BondPublicLaneStake) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::staking::SchedulePublicLaneUnbond> for InstructionBox {
     fn from(i: crate::isi::staking::SchedulePublicLaneUnbond) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::staking::FinalizePublicLaneUnbond> for InstructionBox {
     fn from(i: crate::isi::staking::FinalizePublicLaneUnbond) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::staking::SlashPublicLaneValidator> for InstructionBox {
     fn from(i: crate::isi::staking::SlashPublicLaneValidator) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::staking::CancelConsensusEvidencePenalty> for InstructionBox {
     fn from(i: crate::isi::staking::CancelConsensusEvidencePenalty) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::staking::RecordPublicLaneRewards> for InstructionBox {
     fn from(i: crate::isi::staking::RecordPublicLaneRewards) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::staking::ClaimPublicLaneRewards> for InstructionBox {
     fn from(i: crate::isi::staking::ClaimPublicLaneRewards) -> Self {
         InstructionBox(Box::new(i))
@@ -1649,7 +1520,6 @@ impl From<crate::isi::confidential::SetPoseidonParamsLifecycle> for InstructionB
         InstructionBox(Box::new(i))
     }
 }
-
 // Allow direct boxing of governance instructions
 #[cfg(feature = "governance")]
 impl From<crate::isi::governance::ProposeDeployContract> for InstructionBox {
@@ -1711,32 +1581,27 @@ impl From<crate::isi::governance::RestituteGovernanceLock> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-
 // Allow direct boxing of asset metadata helpers
 impl From<crate::isi::transparent::SetAssetKeyValue> for InstructionBox {
     fn from(i: crate::isi::transparent::SetAssetKeyValue) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::transparent::RemoveAssetKeyValue> for InstructionBox {
     fn from(i: crate::isi::transparent::RemoveAssetKeyValue) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::transparent::AddSignatory> for InstructionBox {
     fn from(i: crate::isi::transparent::AddSignatory) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::transparent::RemoveSignatory> for InstructionBox {
     fn from(i: crate::isi::transparent::RemoveSignatory) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-
 impl From<crate::isi::transparent::SetAccountQuorum> for InstructionBox {
     fn from(i: crate::isi::transparent::SetAccountQuorum) -> Self {
         InstructionBox(Box::new(i))
@@ -1777,13 +1642,11 @@ impl From<crate::isi::ministry::SubmitAgendaProposal> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-
 /// Object-safe cloning support for [`Instruction`] trait objects.
 pub trait InstructionDynClone {
     /// Clone the underlying instruction into a boxed trait object.
     fn dyn_box_clone(&self) -> InstructionBox;
 }
-
 /// Marker trait designating instruction.
 ///
 /// Instructions allow to change the state of `Iroha`.
@@ -1793,28 +1656,26 @@ pub trait InstructionDynClone {
 pub trait Instruction: InstructionDynClone + seal::Instruction + Send + Sync + 'static {
     /// Execute instruction
     fn dyn_execute(&self) {}
-
     /// Encode instruction into bytes
     fn dyn_encode(&self) -> Vec<u8>;
-
     /// Append encoded instruction bytes to `out`.
     fn dyn_encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.dyn_encode());
     }
-
     /// Return a best-effort capacity hint for [`Self::dyn_encode_into`].
     fn dyn_encode_capacity_hint(&self) -> Option<usize> {
         self.dyn_encoded_len()
     }
-
     /// Return the encoded instruction payload length without allocating when available.
     fn dyn_encoded_len(&self) -> Option<usize> {
         None
     }
-
+    /// Write the exact canonical Norito frame without materializing an intermediate payload.
+    fn dyn_write_frame(&self, writer: &mut dyn std::io::Write) -> Result<(), norito::core::Error>;
+    /// Return the exact canonical Norito frame length without allocating.
+    fn dyn_frame_len(&self) -> Result<usize, norito::core::Error>;
     /// Downcast to concrete type
     fn as_any(&self) -> &dyn Any;
-
     /// Identifier of this instruction type.
     ///
     /// By default, it resolves to the name of the concrete type at
@@ -1823,7 +1684,6 @@ pub trait Instruction: InstructionDynClone + seal::Instruction + Send + Sync + '
     fn id(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
-
     /// Convert into [`crate::isi::InstructionBox`]
     fn into_instruction_box(self: Box<Self>) -> InstructionBox
     where
@@ -1833,7 +1693,6 @@ pub trait Instruction: InstructionDynClone + seal::Instruction + Send + Sync + '
         InstructionBox(self)
     }
 }
-
 /// Marker trait for built-in instructions.
 pub trait BuiltInInstruction: Instruction {
     /// [`Encode`] [`Self`] as [`crate::isi::InstructionBox`].
@@ -1849,7 +1708,6 @@ where
         self.encode()
     }
 }
-
 impl<T> Instruction for T
 where
     T: Clone + Debug + PartialEq + PartialOrd + Encode + seal::Instruction + Send + Sync + 'static,
@@ -1857,20 +1715,23 @@ where
     fn dyn_encode(&self) -> Vec<u8> {
         self.encode()
     }
-
     fn dyn_encode_into(&self, out: &mut Vec<u8>) {
         Encode::encode_to(self, out);
     }
-
     fn dyn_encode_capacity_hint(&self) -> Option<usize> {
         norito::NoritoSerialize::encoded_len_exact(self)
             .or_else(|| norito::NoritoSerialize::encoded_len_hint(self))
     }
-
     fn dyn_encoded_len(&self) -> Option<usize> {
         norito::NoritoSerialize::encoded_len_exact(self)
     }
-
+    fn dyn_write_frame(&self, writer: &mut dyn std::io::Write) -> Result<(), norito::core::Error> {
+        let mut writer = writer;
+        norito::core::write_frame_to_writer(self, &mut writer)
+    }
+    fn dyn_frame_len(&self) -> Result<usize, norito::core::Error> {
+        norito::core::encoded_frame_len(self)
+    }
     fn as_any(&self) -> &dyn Any {
         // Special-case: if `self` is `InstructionBox`, expose its inner instruction
         // to preserve downcasting behavior used by the visitor helpers.
@@ -1881,7 +1742,6 @@ where
         })
     }
 }
-
 // Provide an object-safe cloning path for any `T` that implements `Instruction` + `Clone`.
 impl<T> InstructionDynClone for T
 where
@@ -1891,7 +1751,6 @@ where
         InstructionBox(Box::new(self.clone()))
     }
 }
-
 fn peel_instruction_box(mut instr: &dyn Instruction) -> &dyn Instruction {
     loop {
         if let Some(nested) = instr.as_any().downcast_ref::<InstructionBox>() {
@@ -1901,7 +1760,6 @@ fn peel_instruction_box(mut instr: &dyn Instruction) -> &dyn Instruction {
         }
     }
 }
-
 fn instruction_tuple_flags() -> u8 {
     let defaults = norito::core::default_encode_flags();
     let dynamic_mask = norito::core::header_flags::PACKED_SEQ;
@@ -1921,37 +1779,12 @@ fn instruction_tuple_flags() -> u8 {
         }
     }
 }
-
-type InstructionPayloadFrameWriter =
-    fn(&mut dyn std::io::Write, &[u8], u8) -> Result<(), norito::core::Error>;
-
-struct EncodedInstructionPayload {
-    name: &'static str,
-    bare_payload: Vec<u8>,
-    framed_payload_len: usize,
-    payload_header_flags: u8,
-    write_framed_payload: InstructionPayloadFrameWriter,
-}
-
-fn write_raw_instruction_payload(
-    writer: &mut dyn std::io::Write,
-    payload: &[u8],
-    _payload_header_flags: u8,
-) -> Result<(), norito::core::Error> {
-    std::io::Write::write_all(writer, payload)?;
-    Ok(())
-}
-
-fn write_instruction_pair_fields<W: std::io::Write>(
+fn write_instruction_pair_prefix<W: std::io::Write>(
     mut writer: W,
     name: &str,
     framed_payload_len: usize,
-    bare_payload: &[u8],
-    payload_header_flags: u8,
-    write_framed_payload: InstructionPayloadFrameWriter,
 ) -> Result<(), norito::core::Error> {
     let flags = instruction_tuple_flags();
-
     let name_len = norito::core::len_prefix_len_with_flags(name.len(), flags)
         .checked_add(name.len())
         .ok_or(norito::core::Error::LengthMismatch)?;
@@ -1966,7 +1799,6 @@ fn write_instruction_pair_fields<W: std::io::Write>(
         flags,
     )?;
     std::io::Write::write_all(&mut writer, name.as_bytes())?;
-
     let payload_len = core::mem::size_of::<u64>()
         .checked_add(framed_payload_len)
         .ok_or(norito::core::Error::LengthMismatch)?;
@@ -1979,53 +1811,80 @@ fn write_instruction_pair_fields<W: std::io::Write>(
         &mut writer,
         u64::try_from(framed_payload_len).map_err(|_| norito::core::Error::LengthMismatch)?,
     )?;
-    write_framed_payload(&mut writer, bare_payload, payload_header_flags)?;
     Ok(())
 }
-
-fn encoded_instruction_payload(instr: &InstructionBox) -> Option<EncodedInstructionPayload> {
-    let inner = peel_instruction_box(&**instr);
-    if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
-        return Some(EncodedInstructionPayload {
-            name: opaque.wire_id,
-            bare_payload: opaque.framed_payload.clone(),
-            framed_payload_len: opaque.framed_payload.len(),
-            payload_header_flags: 0,
-            write_framed_payload: write_raw_instruction_payload,
-        });
-    }
-    let type_name = Instruction::id(inner);
-    let entry = {
-        let registry = instruction_registry();
-        registry.entry_for_type_name(type_name)?
-    };
-    let mut bare_payload = Vec::new();
-    if let Some(hint) = {
-        let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-        Instruction::dyn_encode_capacity_hint(inner)
-    } {
-        bare_payload.reserve_exact(hint);
-    }
-    let _ = norito::codec::take_last_encode_flags();
-    Instruction::dyn_encode_into(inner, &mut bare_payload);
-    let payload_header_flags =
-        norito::codec::take_last_encode_flags().unwrap_or_else(norito::core::default_encode_flags);
-    let framed_payload_len = (entry.frame_len)(bare_payload.len())?;
-    Some(EncodedInstructionPayload {
-        name: entry.wire_id,
-        bare_payload,
-        framed_payload_len,
-        payload_header_flags,
-        write_framed_payload: entry.frame_write,
-    })
+struct ExactInstructionFrameWriter<'a, W: std::io::Write + ?Sized> {
+    inner: &'a mut W,
+    expected: usize,
+    written: usize,
+    rejected_write: bool,
 }
-
+impl<'a, W: std::io::Write + ?Sized> ExactInstructionFrameWriter<'a, W> {
+    fn new(inner: &'a mut W, expected: usize) -> Self {
+        Self {
+            inner,
+            expected,
+            written: 0,
+            rejected_write: false,
+        }
+    }
+    fn is_complete(&self) -> bool {
+        !self.rejected_write && self.written == self.expected
+    }
+    fn rejected_write(&self) -> bool {
+        self.rejected_write
+    }
+    fn written(&self) -> usize {
+        self.written
+    }
+    fn admit(&mut self, additional: usize) -> std::io::Result<()> {
+        let Some(end) = self.written.checked_add(additional) else {
+            self.rejected_write = true;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                "instruction frame length overflow",
+            ));
+        };
+        if end > self.expected {
+            self.rejected_write = true;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                "instruction frame exceeded its counted length",
+            ));
+        }
+        Ok(())
+    }
+}
+impl<W: std::io::Write + ?Sized> std::io::Write for ExactInstructionFrameWriter<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.admit(bytes.len())?;
+        let written = self.inner.write(bytes)?;
+        self.written += written;
+        Ok(written)
+    }
+    fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.admit(bytes.len())?;
+        self.inner.write_all(bytes)?;
+        self.written += bytes.len();
+        Ok(())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
 /// Return the stable registry wire identifier used to frame an instruction.
 #[must_use]
 pub fn instruction_wire_id(instr: &InstructionBox) -> Option<&'static str> {
-    encoded_instruction_payload(instr).map(|payload| payload.name)
+    let inner = peel_instruction_box(&**instr);
+    if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
+        return Some(opaque.wire_id);
+    }
+    let type_name = Instruction::id(inner);
+    let registry = instruction_registry();
+    registry
+        .entry_for_type_name(type_name)
+        .map(|entry| entry.wire_id)
 }
-
 /// Encode one registered instruction into its stable wire id and exact Norito frame.
 ///
 /// The returned payload is the same framed byte sequence embedded in an
@@ -2034,22 +1893,34 @@ pub fn instruction_wire_id(instr: &InstructionBox) -> Option<&'static str> {
 /// clients must verify and submit without altering instruction bytes.
 #[must_use]
 pub fn framed_instruction_payload(instr: &InstructionBox) -> Option<(&'static str, Vec<u8>)> {
-    let encoded = encoded_instruction_payload(instr)?;
-    let mut payload = Vec::with_capacity(encoded.framed_payload_len);
-    (encoded.write_framed_payload)(
-        &mut payload,
-        &encoded.bare_payload,
-        encoded.payload_header_flags,
-    )
-    .ok()?;
-    Some((encoded.name, payload))
+    let inner = peel_instruction_box(&**instr);
+    if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
+        let mut payload = Vec::new();
+        payload
+            .try_reserve_exact(opaque.framed_payload.len())
+            .ok()?;
+        payload.extend_from_slice(&opaque.framed_payload);
+        return Some((opaque.wire_id, payload));
+    }
+    let type_name = Instruction::id(inner);
+    let entry = {
+        let registry = instruction_registry();
+        registry.entry_for_type_name(type_name)
+    }?;
+    let framed_payload_len = inner.dyn_frame_len().ok()?;
+    let mut payload = Vec::new();
+    payload.try_reserve_exact(framed_payload_len).ok()?;
+    let mut exact = ExactInstructionFrameWriter::new(&mut payload, framed_payload_len);
+    let write_result = inner.dyn_write_frame(&mut exact);
+    let complete = exact.is_complete();
+    drop(exact);
+    write_result.ok()?;
+    complete.then_some((entry.wire_id, payload))
 }
-
 #[cfg(test)]
 fn encoded_instruction_pair_payload(instr: &InstructionBox) -> Option<(&'static str, Vec<u8>)> {
     framed_instruction_payload(instr)
 }
-
 fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
     let inner = peel_instruction_box(&**instr);
     if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
@@ -2060,14 +1931,9 @@ fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
         let registry = instruction_registry();
         registry.entry_for_type_name(type_name)?
     };
-    let payload_len = {
-        let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-        Instruction::dyn_encoded_len(inner)?
-    };
-    let framed_payload_len = (entry.frame_len)(payload_len)?;
+    let framed_payload_len = inner.dyn_frame_len().ok()?;
     encoded_instruction_tuple_len(entry.wire_id, framed_payload_len)
 }
-
 fn encoded_instruction_pair_hint(instr: &InstructionBox) -> Option<usize> {
     let inner = peel_instruction_box(&**instr);
     if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
@@ -2085,7 +1951,6 @@ fn encoded_instruction_pair_hint(instr: &InstructionBox) -> Option<usize> {
     let framed_payload_len = (entry.frame_len)(payload_len)?;
     encoded_instruction_tuple_len(entry.wire_id, framed_payload_len)
 }
-
 fn encoded_instruction_tuple_len(name: &str, framed_payload_len: usize) -> Option<usize> {
     let flags = instruction_tuple_flags();
     let name_len =
@@ -2094,12 +1959,10 @@ fn encoded_instruction_tuple_len(name: &str, framed_payload_len: usize) -> Optio
     tuple_field_len_with_flags(name_len, flags)?
         .checked_add(tuple_field_len_with_flags(payload_vec_len, flags)?)
 }
-
 fn tuple_field_len_with_flags(elem_len: usize, flags: u8) -> Option<usize> {
     let prefix_len = norito::core::len_prefix_len_with_flags(elem_len, flags);
     prefix_len.checked_add(elem_len)
 }
-
 fn framed_instruction_payload_len_for<T>(payload_len: usize) -> Option<usize> {
     let align = norito::core::archived_payload_align::<T>();
     let padding = if align <= 1 {
@@ -2112,7 +1975,6 @@ fn framed_instruction_payload_len_for<T>(payload_len: usize) -> Option<usize> {
         .checked_add(padding)?
         .checked_add(payload_len)
 }
-
 impl norito::core::NoritoSerialize for InstructionBox {
     fn schema_hash() -> [u8; 16]
     where
@@ -2121,40 +1983,55 @@ impl norito::core::NoritoSerialize for InstructionBox {
         // Match the archived layout used in `serialize`: `(type_name, payload_with_header)`.
         norito::core::type_name_schema_hash::<(String, Vec<u8>)>()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let payload = encoded_instruction_payload(self).ok_or_else(|| {
+        let inner = peel_instruction_box(&**self);
+        if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
+            write_instruction_pair_prefix(
+                &mut *writer,
+                opaque.wire_id,
+                opaque.framed_payload.len(),
+            )?;
+            std::io::Write::write_all(writer, &opaque.framed_payload)?;
+            return Ok(());
+        }
+        let type_name = Instruction::id(inner);
+        let entry = {
+            let registry = instruction_registry();
+            registry.entry_for_type_name(type_name)
+        }
+        .ok_or_else(|| {
             norito::core::Error::Message("failed to encode instruction payload".to_owned())
         })?;
-        write_instruction_pair_fields(
-            writer,
-            payload.name,
-            payload.framed_payload_len,
-            &payload.bare_payload,
-            payload.payload_header_flags,
-            payload.write_framed_payload,
-        )
+        let framed_payload_len = inner.dyn_frame_len()?;
+        write_instruction_pair_prefix(&mut *writer, entry.wire_id, framed_payload_len)?;
+        let mut exact = ExactInstructionFrameWriter::new(writer, framed_payload_len);
+        let write_result = inner.dyn_write_frame(&mut exact);
+        let rejected_write = exact.rejected_write();
+        let written = exact.written();
+        drop(exact);
+        if rejected_write {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        write_result?;
+        (written == framed_payload_len)
+            .then_some(())
+            .ok_or(norito::core::Error::LengthMismatch)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         encoded_instruction_pair_len(self).or_else(|| encoded_instruction_pair_hint(self))
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         encoded_instruction_pair_len(self)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
     fn schema_hash() -> [u8; 16] {
         // Must match the schema used by `NoritoSerialize` for `InstructionBox`
         // which serializes as a `(String, Vec<u8>)` pair.
         norito::core::type_name_schema_hash::<(String, Vec<u8>)>()
     }
-
     fn deserialize(archived: &'a norito::core::Archived<InstructionBox>) -> Self {
         const MAX_MESSAGE_LEN: usize = 256;
-
         let truncate_message = |mut message: String| {
             // Keep the placeholder bounded; it may end up in logs/errors.
             if message.len() > MAX_MESSAGE_LEN {
@@ -2162,7 +2039,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
             }
             message
         };
-
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         if let Ok(bytes) = norito::core::payload_slice_from_ptr(ptr) {
             match decode_instruction_pair_fields_from_slice(bytes) {
@@ -2193,7 +2069,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
                 Err(_) => {}
             }
         }
-
         let pair: Result<(String, Vec<u8>), norito::core::Error> =
             norito::core::NoritoDeserialize::try_deserialize(archived.cast());
         match pair {
@@ -2217,7 +2092,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
             }
         }
     }
-
     fn try_deserialize(
         archived: &'a norito::core::Archived<InstructionBox>,
     ) -> Result<Self, norito::core::Error> {
@@ -2229,13 +2103,11 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
                 Err(_) => {}
             }
         }
-
         let (name, bytes): (String, Vec<u8>) =
             norito::core::NoritoDeserialize::try_deserialize(archived.cast())?;
         decode_instruction_from_pair(&name, &bytes)
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for InstructionBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (inst, used) =
@@ -2250,18 +2122,19 @@ impl<'a> norito::core::DecodeFromSlice<'a> for InstructionBox {
         Ok((inst, used))
     }
 }
-
 impl norito::json::FastJsonWrite for InstructionBox {
     fn write_json(&self, out: &mut String) {
         // JSON uses base64 of the canonical Norito-framed payload so clients can
         // round-trip without guessing decode flags.
-        let bytes =
-            norito::encode_canonical(self).expect("InstructionBox should canonically Norito-frame");
-        let encoded = STANDARD.encode(bytes);
-        norito::json::JsonSerialize::json_serialize(&encoded, out);
+        norito::json::write_canonical_base64_json(self, out);
+    }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_canonical_base64_json_to(self, out)
     }
 }
-
 #[cfg(feature = "json")]
 fn instruction_box_from_base64_literal(
     encoded: &str,
@@ -2272,7 +2145,6 @@ fn instruction_box_from_base64_literal(
     norito::decode_canonical::<InstructionBox>(&bytes)
         .map_err(|err| norito::json::Error::Message(err.to_string()))
 }
-
 #[cfg(feature = "json")]
 fn json_required_string(map: &norito::json::Map, key: &str) -> Result<String, norito::json::Error> {
     map.get(key)
@@ -2280,14 +2152,12 @@ fn json_required_string(map: &norito::json::Map, key: &str) -> Result<String, no
         .map(str::to_owned)
         .ok_or_else(|| norito::json::Error::Message(format!("instruction `{key}` is required")))
 }
-
 #[cfg(feature = "json")]
 fn json_required_bool(map: &norito::json::Map, key: &str) -> Result<bool, norito::json::Error> {
     map.get(key)
         .and_then(norito::json::Value::as_bool)
         .ok_or_else(|| norito::json::Error::Message(format!("instruction `{key}` must be a bool")))
 }
-
 #[cfg(feature = "json")]
 fn json_required_u64(map: &norito::json::Map, key: &str) -> Result<u64, norito::json::Error> {
     map.get(key)
@@ -2296,7 +2166,6 @@ fn json_required_u64(map: &norito::json::Map, key: &str) -> Result<u64, norito::
             norito::json::Error::Message(format!("instruction `{key}` must be an unsigned integer"))
         })
 }
-
 #[cfg(feature = "json")]
 fn json_required_asset_transfer_availability(
     map: &norito::json::Map,
@@ -2310,7 +2179,6 @@ fn json_required_asset_transfer_availability(
         ))),
     }
 }
-
 #[cfg(feature = "json")]
 fn json_optional_exact_nonblank_string(
     map: &norito::json::Map,
@@ -2328,14 +2196,12 @@ fn json_optional_exact_nonblank_string(
         ))),
     }
 }
-
 #[cfg(feature = "json")]
 fn json_quantity_opt(
     value: Option<&norito::json::Value>,
     field: &str,
 ) -> Result<Option<iroha_primitives::numeric::Quantity>, norito::json::Error> {
     use std::str::FromStr as _;
-
     let Some(value) = value else {
         return Ok(None);
     };
@@ -2364,13 +2230,11 @@ fn json_quantity_opt(
         "asset transfer {field} must be a string, number, or null"
     )))
 }
-
 #[cfg(feature = "json")]
 fn json_asset_transfer_target(
     params: &norito::json::Map,
 ) -> Result<(crate::account::AccountId, crate::asset::AssetDefinitionId), norito::json::Error> {
     use std::str::FromStr as _;
-
     let account_id = crate::account::AccountId::parse_encoded(
         json_required_string(params, "account_id")?.as_str(),
     )
@@ -2382,13 +2246,11 @@ fn json_asset_transfer_target(
     .map_err(|err| norito::json::Error::Message(err.to_string()))?;
     Ok((account_id, asset_definition_id))
 }
-
 #[cfg(feature = "json")]
 fn instruction_box_from_object(
     map: &norito::json::Map,
 ) -> Result<InstructionBox, norito::json::Error> {
     use std::str::FromStr as _;
-
     let name = json_required_string(map, "name")?;
     let params = map
         .get("params")
@@ -2487,7 +2349,6 @@ fn instruction_box_from_object(
         ))),
     }
 }
-
 impl norito::json::JsonDeserialize for InstructionBox {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -2501,13 +2362,11 @@ impl norito::json::JsonDeserialize for InstructionBox {
         }
     }
 }
-
 impl iroha_schema::TypeId for InstructionBox {
     fn id() -> iroha_schema::Ident {
         std::any::type_name::<Self>().to_owned()
     }
 }
-
 /// Decode a wire-framed ISI payload into a typed [`InstructionBox`].
 ///
 /// The `name` must be either the canonical Rust `type_name` or a wire-id
@@ -2533,7 +2392,6 @@ pub fn decode_instruction_from_pair(
         "unknown instruction `{name}` (not registered)"
     )))
 }
-
 fn framed_instruction_payload_header_flags(payload: &[u8]) -> Result<u8, norito::Error> {
     let flags = *payload
         .get(norito::core::Header::SIZE - 1)
@@ -2541,11 +2399,9 @@ fn framed_instruction_payload_header_flags(payload: &[u8]) -> Result<u8, norito:
     norito::core::validate_header_flags(flags)?;
     Ok(flags)
 }
-
 fn instruction_canonical_framing_error() -> norito::Error {
     norito::Error::Message("instruction payload must use canonical Norito framing".to_owned())
 }
-
 fn decode_instruction_pair_fields_from_slice(
     bytes: &[u8],
 ) -> Result<(&str, &[u8], usize), norito::Error> {
@@ -2559,7 +2415,6 @@ fn decode_instruction_pair_fields_from_slice(
     let name_field = bytes
         .get(name_field_start..name_field_end)
         .ok_or(norito::Error::LengthMismatch)?;
-
     let (name_len, inner_name_hdr) =
         norito::core::read_len_from_slice_with_flags(name_field, flags)?;
     let name_start = inner_name_hdr;
@@ -2575,7 +2430,6 @@ fn decode_instruction_pair_fields_from_slice(
             .ok_or(norito::Error::LengthMismatch)?,
     )
     .map_err(|_| norito::Error::InvalidUtf8)?;
-
     let payload_field_prefix = bytes
         .get(name_field_end..)
         .ok_or(norito::Error::LengthMismatch)?;
@@ -2590,7 +2444,6 @@ fn decode_instruction_pair_fields_from_slice(
     let payload_field = bytes
         .get(payload_field_start..payload_field_end)
         .ok_or(norito::Error::LengthMismatch)?;
-
     let (payload_len, payload_inner_hdr) = norito::core::read_seq_len_slice(payload_field)?;
     let payload_start = payload_inner_hdr;
     let payload_end = payload_start
@@ -2604,7 +2457,6 @@ fn decode_instruction_pair_fields_from_slice(
         .ok_or(norito::Error::LengthMismatch)?;
     Ok((name, payload, payload_field_end))
 }
-
 fn decode_instruction_from_borrowed_pair(
     bytes: &[u8],
 ) -> Result<(InstructionBox, usize), norito::Error> {
@@ -2612,7 +2464,6 @@ fn decode_instruction_from_borrowed_pair(
     let instruction = decode_instruction_from_pair(name, payload)?;
     Ok((instruction, used))
 }
-
 /// Frame a bare instruction payload with its Norito header using the registry metadata.
 ///
 /// # Errors
@@ -2634,12 +2485,10 @@ pub fn frame_instruction_payload(
         "unknown instruction `{type_name}` (not registered)"
     )))
 }
-
 impl IntoSchema for InstructionBox {
     fn type_name() -> iroha_schema::Ident {
         "InstructionBox".to_owned()
     }
-
     fn update_schema_map(map: &mut iroha_schema::MetaMap) {
         if map.contains_key::<Self>() {
             return;
@@ -2647,7 +2496,6 @@ impl IntoSchema for InstructionBox {
         map.insert::<Self>(SchemaMetadata::Tuple(UnnamedFieldsMeta { types: vec![] }));
     }
 }
-
 /// Function signature used to construct an [`crate::isi::Instruction`] from header-framed bytes.
 ///
 /// The `header_flags` argument propagates Norito metadata alongside the encoded
@@ -2655,7 +2503,6 @@ impl IntoSchema for InstructionBox {
 /// signature allows future instructions to react to packed-layout flags without
 /// widening the registry interface again.
 pub type InstructionConstructor = fn(u8, &[u8]) -> Result<InstructionBox, norito::Error>;
-
 /// Registry storing constructors for [`crate::isi::Instruction`] types keyed by their type names.
 #[derive(Default, Clone)]
 pub struct InstructionRegistry {
@@ -2664,23 +2511,19 @@ pub struct InstructionRegistry {
     /// Lookup table mapping either `type_name` or wire-id -> registry entry.
     lookup: HashMap<&'static str, RegistryEntry>,
 }
-
 #[derive(Clone, Copy)]
 struct RegistryEntry {
     type_name: &'static str,
     ctor: InstructionConstructor,
     wire_id: &'static str,
     frame: fn(&[u8], u8) -> Result<Vec<u8>, norito::core::Error>,
-    frame_write: InstructionPayloadFrameWriter,
     frame_len: fn(usize) -> Option<usize>,
 }
-
 impl InstructionRegistry {
     /// Create an empty registry.
     pub fn new() -> Self {
         Self::default()
     }
-
     /// Register a new [`crate::isi::Instruction`] type.
     #[must_use]
     pub fn register<T>(mut self) -> Self
@@ -2705,20 +2548,6 @@ impl InstructionRegistry {
         {
             norito::core::frame_bare_with_header_flags::<T>(payload, header_flags)
         }
-        fn frame_write<T>(
-            writer: &mut dyn std::io::Write,
-            payload: &[u8],
-            header_flags: u8,
-        ) -> Result<(), norito::core::Error>
-        where
-            T: Instruction
-                + Decode
-                + 'static
-                + norito::NoritoSerialize
-                + for<'a> norito::NoritoDeserialize<'a>,
-        {
-            norito::core::write_bare_frame_with_header_flags::<T, _>(writer, payload, header_flags)
-        }
         fn frame_len<T>(payload_len: usize) -> Option<usize>
         where
             T: Instruction
@@ -2735,13 +2564,11 @@ impl InstructionRegistry {
             ctor: ctor::<T>,
             wire_id: name,
             frame: frame::<T>,
-            frame_write: frame_write::<T>,
             frame_len: frame_len::<T>,
         };
         self.insert_entry(entry);
         self
     }
-
     /// Register a new [`crate::isi::Instruction`] type using a stable wire identifier.
     #[must_use]
     pub fn register_with_id<T>(mut self, wire_id: &'static str) -> Self
@@ -2766,20 +2593,6 @@ impl InstructionRegistry {
         {
             norito::core::frame_bare_with_header_flags::<T>(payload, header_flags)
         }
-        fn frame_write<T>(
-            writer: &mut dyn std::io::Write,
-            payload: &[u8],
-            header_flags: u8,
-        ) -> Result<(), norito::core::Error>
-        where
-            T: Instruction
-                + Decode
-                + 'static
-                + norito::NoritoSerialize
-                + for<'a> norito::NoritoDeserialize<'a>,
-        {
-            norito::core::write_bare_frame_with_header_flags::<T, _>(writer, payload, header_flags)
-        }
         fn frame_len<T>(payload_len: usize) -> Option<usize>
         where
             T: Instruction
@@ -2796,13 +2609,11 @@ impl InstructionRegistry {
             ctor: ctor::<T>,
             wire_id,
             frame: frame::<T>,
-            frame_write: frame_write::<T>,
             frame_len: frame_len::<T>,
         };
         self.insert_entry(entry);
         self
     }
-
     /// Register a new [`crate::isi::Instruction`] type using the direct slice decoder.
     ///
     /// This is intentionally opt-in because not every built-in instruction has a
@@ -2830,20 +2641,6 @@ impl InstructionRegistry {
         {
             norito::core::frame_bare_with_header_flags::<T>(payload, header_flags)
         }
-        fn frame_write<T>(
-            writer: &mut dyn std::io::Write,
-            payload: &[u8],
-            header_flags: u8,
-        ) -> Result<(), norito::core::Error>
-        where
-            T: Instruction
-                + Decode
-                + 'static
-                + norito::NoritoSerialize
-                + for<'a> norito::NoritoDeserialize<'a>,
-        {
-            norito::core::write_bare_frame_with_header_flags::<T, _>(writer, payload, header_flags)
-        }
         fn frame_len<T>(payload_len: usize) -> Option<usize>
         where
             T: Instruction
@@ -2860,13 +2657,11 @@ impl InstructionRegistry {
             ctor: ctor::<T>,
             wire_id: name,
             frame: frame::<T>,
-            frame_write: frame_write::<T>,
             frame_len: frame_len::<T>,
         };
         self.insert_entry(entry);
         self
     }
-
     /// Register a new [`crate::isi::Instruction`] type using a stable wire identifier
     /// and the direct slice decoder.
     ///
@@ -2895,20 +2690,6 @@ impl InstructionRegistry {
         {
             norito::core::frame_bare_with_header_flags::<T>(payload, header_flags)
         }
-        fn frame_write<T>(
-            writer: &mut dyn std::io::Write,
-            payload: &[u8],
-            header_flags: u8,
-        ) -> Result<(), norito::core::Error>
-        where
-            T: Instruction
-                + Decode
-                + 'static
-                + norito::NoritoSerialize
-                + for<'a> norito::NoritoDeserialize<'a>,
-        {
-            norito::core::write_bare_frame_with_header_flags::<T, _>(writer, payload, header_flags)
-        }
         fn frame_len<T>(payload_len: usize) -> Option<usize>
         where
             T: Instruction
@@ -2925,13 +2706,11 @@ impl InstructionRegistry {
             ctor: ctor::<T>,
             wire_id,
             frame: frame::<T>,
-            frame_write: frame_write::<T>,
             frame_len: frame_len::<T>,
         };
         self.insert_entry(entry);
         self
     }
-
     /// Decode an [`crate::isi::Instruction`] using the registered constructor for the given type name.
     pub fn decode(
         &self,
@@ -2943,7 +2722,6 @@ impl InstructionRegistry {
             Self::decode_entry(entry, header_flags, bytes)
         })
     }
-
     /// Decode an [`crate::isi::Instruction`] providing explicit Norito layout flags.
     ///
     /// The `header_flags` argument mirrors the values produced by
@@ -2959,7 +2737,6 @@ impl InstructionRegistry {
         self.entry_for_key(name)
             .map(|entry| Self::decode_entry(entry, header_flags, bytes))
     }
-
     /// Number of registered instruction types.
     pub fn len(&self) -> usize {
         self.entries.len()
@@ -2980,7 +2757,6 @@ impl InstructionRegistry {
     pub fn wire_id(&self, type_name: &'static str) -> Option<&'static str> {
         self.entries.get(type_name).map(|entry| entry.wire_id)
     }
-
     fn insert_entry(&mut self, entry: RegistryEntry) {
         for key in [entry.type_name, entry.wire_id] {
             if let Some(previous) = self.lookup.get(key)
@@ -2992,7 +2768,6 @@ impl InstructionRegistry {
                 );
             }
         }
-
         if let Some(previous) = self.entries.insert(entry.type_name, entry)
             && previous.wire_id != entry.wire_id
         {
@@ -3001,7 +2776,6 @@ impl InstructionRegistry {
         self.lookup.insert(entry.type_name, entry);
         self.lookup.insert(entry.wire_id, entry);
     }
-
     fn remap_wire_id<T>(mut self, wire_id: &'static str) -> Self
     where
         T: 'static,
@@ -3014,19 +2788,15 @@ impl InstructionRegistry {
             wire_id,
             ..previous
         };
-
         self.insert_entry(entry);
         self
     }
-
     fn entry_for_type_name(&self, type_name: &'static str) -> Option<RegistryEntry> {
         self.entries.get(type_name).copied()
     }
-
     fn entry_for_key(&self, key: &str) -> Option<&RegistryEntry> {
         self.lookup.get(key)
     }
-
     fn decode_entry(
         entry: &RegistryEntry,
         header_flags: u8,
@@ -3035,7 +2805,6 @@ impl InstructionRegistry {
         (entry.ctor)(header_flags, bytes)
     }
 }
-
 fn decode_instruction_payload<T>(
     input: &[u8],
     header_flags: u8,
@@ -3048,7 +2817,6 @@ where
     let instruction = norito::decode_from_bytes::<T>(input)?;
     Ok(InstructionBox(Box::new(instruction)))
 }
-
 fn decode_instruction_payload_from_slice<T>(
     input: &[u8],
     header_flags: u8,
@@ -3061,7 +2829,6 @@ where
     let instruction = norito::core::from_bytes_view(input)?.decode::<T>()?;
     Ok(InstructionBox(Box::new(instruction)))
 }
-
 pub(crate) fn read_aos_field<'a>(
     bytes: &'a [u8],
     offset: &mut usize,
@@ -3083,7 +2850,6 @@ pub(crate) fn read_aos_field<'a>(
     *offset = field_end;
     Ok(field)
 }
-
 pub(crate) fn decode_aos_canonical_field<T>(
     field: &[u8],
     flags: u8,
@@ -3098,7 +2864,6 @@ where
     }
     Ok(value)
 }
-
 pub(crate) fn decode_aos_slice_field<T>(field: &[u8], flags: u8) -> Result<T, norito::core::Error>
 where
     T: for<'de> norito::core::NoritoDeserialize<'de> + for<'de> norito::core::DecodeFromSlice<'de>,
@@ -3110,7 +2875,6 @@ where
     }
     Ok(value)
 }
-
 pub(crate) fn decode_packed_instruction_payload<T>(
     bytes: &[u8],
 ) -> Result<(T, usize), norito::core::Error>
@@ -3128,7 +2892,6 @@ where
     norito::core::note_payload_access(bytes, used);
     Ok((decoded, used))
 }
-
 /// Build an [`InstructionRegistry`] populated with the provided instruction types.
 #[macro_export]
 macro_rules! instruction_registry {
@@ -3145,7 +2908,6 @@ macro_rules! instruction_registry {
         registry
     }};
 }
-
 /// Build an [`InstructionRegistry`] registering each type with its annotated stable
 /// wire identifier by reading its `WIRE_ID` associated constant.
 #[macro_export]
@@ -3158,15 +2920,12 @@ macro_rules! instruction_registry_with_ids {
         registry
     }};
 }
-
 static INSTRUCTION_REGISTRY: OnceLock<RwLock<Arc<InstructionRegistry>>> = OnceLock::new();
-
 #[cfg(test)]
 thread_local! {
     static INSTRUCTION_REGISTRY_OVERRIDE: RefCell<Option<Arc<InstructionRegistry>>> =
         const { RefCell::new(None) };
 }
-
 /// Set global [`InstructionRegistry`] used for deserializing [`crate::isi::InstructionBox`].
 pub fn set_instruction_registry(registry: InstructionRegistry) {
     let registry = Arc::new(registry);
@@ -3186,16 +2945,13 @@ pub fn set_instruction_registry(registry: InstructionRegistry) {
         let _ = INSTRUCTION_REGISTRY.set(RwLock::new(registry));
     }
 }
-
 enum InstructionRegistryReadGuard {
     Global(std::sync::RwLockReadGuard<'static, Arc<InstructionRegistry>>),
     #[cfg(test)]
     Local(Arc<InstructionRegistry>),
 }
-
 impl std::ops::Deref for InstructionRegistryReadGuard {
     type Target = InstructionRegistry;
-
     fn deref(&self) -> &InstructionRegistry {
         match self {
             Self::Global(registry) => {
@@ -3207,7 +2963,6 @@ impl std::ops::Deref for InstructionRegistryReadGuard {
         }
     }
 }
-
 fn instruction_registry() -> InstructionRegistryReadGuard {
     #[cfg(test)]
     if let Some(local) = INSTRUCTION_REGISTRY_OVERRIDE.with(|cell| cell.borrow().clone()) {
@@ -3222,7 +2977,6 @@ fn instruction_registry() -> InstructionRegistryReadGuard {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     InstructionRegistryReadGuard::Global(registry)
 }
-
 macro_rules! isi {
     ($(#[$meta:meta])* pub struct $name:ident $($rest:tt)*) => {
         iroha_data_model_derive::model_single! {
@@ -3236,7 +2990,6 @@ macro_rules! isi {
         }
     };
 }
-
 macro_rules! impl_display {
     (
         $ty:ident $(< $($generic:tt),+ >)?
@@ -3253,7 +3006,6 @@ macro_rules! impl_display {
         }
     }
 }
-
 macro_rules! impl_into_box {
     ( $($isi:ty)|* => $middle:ty ) => {
         impl From<$middle> for InstructionBox {
@@ -3261,7 +3013,6 @@ macro_rules! impl_into_box {
                 InstructionBox(Box::new(instruction))
             }
         }
-
         $(impl From<$isi> for InstructionBox {
             fn from(instruction: $isi) -> Self {
                 InstructionBox::from(<$middle>::from(instruction))
@@ -3269,7 +3020,6 @@ macro_rules! impl_into_box {
         })*
     };
 }
-
 macro_rules! isi_box {
     ($($meta:meta)* $item:item) => {
         #[derive(
@@ -3289,7 +3039,6 @@ macro_rules! isi_box {
         $item
     };
 }
-
 macro_rules! enum_type {
     ($(#[$meta:meta])* $vis:vis enum $name:ident { $( $(#[$variant_meta:meta])* $variant:ident ),+ $(,)? }) => {
         #[derive(
@@ -3314,7 +3063,6 @@ macro_rules! enum_type {
                 $variant
             ),+
         }
-
         impl ::core::fmt::Display for $name {
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 f.write_str(match self {
@@ -3322,10 +3070,8 @@ macro_rules! enum_type {
                 })
             }
         }
-
         impl ::core::convert::TryFrom<u8> for $name {
             type Error = ();
-
             fn try_from(value: u8) -> Result<Self, Self::Error> {
                 match value {
                     $( x if x == Self::$variant as u8 => Ok(Self::$variant), )+
@@ -3333,7 +3079,6 @@ macro_rules! enum_type {
                 }
             }
         }
-
         #[cfg(feature = "json")]
         impl norito::json::FastJsonWrite for $name {
             fn write_json(&self, out: &mut String) {
@@ -3343,8 +3088,15 @@ macro_rules! enum_type {
                 });
                 out.push('"');
             }
+            fn write_json_to(
+                &self,
+                out: &mut dyn norito::json::JsonWriteSink,
+            ) -> Result<(), norito::json::BoundedJsonError> {
+                norito::json::write_json_string_to(match self {
+                    $( Self::$variant => stringify!($variant), )+
+                }, out)
+            }
         }
-
         #[cfg(feature = "json")]
         impl norito::json::JsonDeserialize for $name {
             fn json_deserialize(
@@ -3361,7 +3113,6 @@ macro_rules! enum_type {
         }
     };
 }
-
 /// Legacy paid account-alias acquisition compatibility.
 pub mod account_alias_lease;
 /// Native account controller replacement and social recovery instructions.
@@ -3440,7 +3191,6 @@ pub mod verifying_keys;
 pub mod vpn;
 /// Zero-knowledge instruction wrappers.
 pub mod zk;
-
 pub use account_recovery::*;
 pub use asset_alias::*;
 pub use asset_transfer_control::*;
@@ -3467,7 +3217,6 @@ pub use transfer::*;
 pub use transparent::*;
 pub use vpn::*;
 pub use zk::*;
-
 isi_box! {
     /// Enum with all supported [`SetKeyValue`] instructions.
     ///
@@ -3487,12 +3236,10 @@ isi_box! {
         Trigger(SetKeyValue<Trigger>),
     }
 }
-
 impl SetKeyValueBox {
     /// Norito wire identifier for `SetKeyValueBox` payload framing.
     pub const WIRE_ID: &'static str = "iroha.set_key_value";
 }
-
 enum_type! {
     /// Type discriminator for [`SetKeyValueBox`] variants.
     pub(crate) enum SetKeyValueType {
@@ -3503,7 +3250,6 @@ enum_type! {
         Trigger,
     }
 }
-
 isi_box! {
     /// Enum with all supported [`RemoveKeyValue`] instructions.
     ///
@@ -3522,12 +3268,10 @@ isi_box! {
         Trigger(RemoveKeyValue<Trigger>),
     }
 }
-
 impl RemoveKeyValueBox {
     /// Norito wire identifier for `RemoveKeyValueBox` payload framing.
     pub const WIRE_ID: &'static str = "iroha.remove_key_value";
 }
-
 enum_type! {
     /// Type discriminator for [`RemoveKeyValueBox`] variants.
     pub(crate) enum RemoveKeyValueType {
@@ -3538,7 +3282,6 @@ enum_type! {
         Trigger,
     }
 }
-
 isi_box! {
     /// Enum with all supported [`Grant`] instructions.
     ///
@@ -3553,12 +3296,10 @@ isi_box! {
         RolePermission(Grant<Permission, Role>),
     }
 }
-
 impl GrantBox {
     /// Norito wire identifier for `GrantBox` payload framing.
     pub const WIRE_ID: &'static str = "iroha.grant";
 }
-
 enum_type! {
     /// Type discriminator for [`GrantBox`] variants.
     pub(crate) enum GrantType {
@@ -3567,7 +3308,6 @@ enum_type! {
         RolePermission,
     }
 }
-
 isi_box! {
     /// Enum with all supported [`Revoke`] instructions.
     ///
@@ -3582,12 +3322,10 @@ isi_box! {
         RolePermission(Revoke<Permission, Role>),
     }
 }
-
 impl RevokeBox {
     /// Norito wire identifier for `RevokeBox` payload framing.
     pub const WIRE_ID: &'static str = "iroha.revoke";
 }
-
 enum_type! {
     /// Type discriminator for [`RevokeBox`] variants.
     pub(crate) enum RevokeType {
@@ -3599,7 +3337,6 @@ enum_type! {
         RolePermission,
     }
 }
-
 enum_type! {
     /// All built-in instruction kinds supported by the data model.
     pub enum InstructionType {
@@ -3633,17 +3370,13 @@ enum_type! {
         Custom,
     }
 }
-
 pub mod error {
     //! Module containing errors that can occur during instruction evaluation
-
     use std::{boxed::Box, fmt::Debug, format, string::String, vec::Vec};
-
     use derive_more::Display;
     use iroha_data_model_derive::model;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-
     pub use self::model::*;
     use crate::{
         IdBox,
@@ -3651,13 +3384,10 @@ pub mod error {
         prelude::NumericSpec,
         query::error::{FindError, QueryExecutionFail},
     };
-
     #[model]
     mod model {
         use getset::Getters;
-
         use super::*;
-
         /// Instruction execution error type
         #[derive(
             Debug,
@@ -3706,7 +3436,6 @@ pub mod error {
             /// i.e. you can't burn last key
             InvariantViolation(Box<str>),
         }
-
         /// Typed asset-transfer policy failure.
         ///
         /// The variant is the stable machine classification. Human-readable
@@ -3745,7 +3474,6 @@ pub mod error {
             /// Transfer policy rejected the operation: {0}
             PolicyRejected(Box<str>),
         }
-
         /// Quota scope used by [`AccountAdmissionError::QuotaExceeded`].
         #[derive(
             Debug,
@@ -3773,7 +3501,6 @@ pub mod error {
             /// Block-scoped quota.
             Block,
         }
-
         /// Errors raised while admitting implicit accounts under domain/chain policies.
         #[derive(
             Debug,
@@ -3813,7 +3540,6 @@ pub mod error {
             /// Receipt amount is below the minimum required to create an account implicitly.
             MinInitialAmountUnsatisfied(AccountAdmissionMinInitialAmountUnsatisfied),
         }
-
         /// Account admission policy payload is invalid: {reason}.
         #[derive(
             Debug,
@@ -3838,7 +3564,6 @@ pub mod error {
             /// Human-readable reason describing the invalid payload.
             pub reason: String,
         }
-
         /// Default role assignment failed for `{role}`: {reason}.
         #[derive(
             Debug,
@@ -3865,7 +3590,6 @@ pub mod error {
             /// Reason for the failure.
             pub reason: String,
         }
-
         /// Implicit account creation quota exceeded for {scope} (created {created}, cap {cap}).
         #[derive(
             Debug,
@@ -3894,7 +3618,6 @@ pub mod error {
             /// Allowed cap for implicit accounts within the scope.
             pub cap: u32,
         }
-
         /// Implicit account creation fee could not be paid for `{asset_definition}` (required `{required}`, available `{available}`).
         #[derive(
             Debug,
@@ -3923,7 +3646,6 @@ pub mod error {
             /// Amount available in the payer account.
             pub available: iroha_primitives::numeric::Quantity,
         }
-
         /// Minimum initial amount requirement is not satisfied for `{asset_definition}` (required {required}, provided {provided}).
         #[derive(
             Debug,
@@ -3952,7 +3674,6 @@ pub mod error {
             /// Amount supplied by the receipt operation.
             pub provided: iroha_primitives::numeric::Quantity,
         }
-
         /// Evaluation error. This error indicates instruction is not a valid Iroha DSL
         #[derive(
             Debug,
@@ -3982,7 +3703,6 @@ pub mod error {
             /// Incorrect value type
             Type(#[source] TypeError),
         }
-
         /// Generic structure used to represent a mismatch
         #[derive(
             Debug,
@@ -4008,7 +3728,6 @@ pub mod error {
             /// The value that caused the error
             pub actual: T,
         }
-
         #[cfg(feature = "json")]
         impl<T> norito::json::JsonSerialize for Mismatch<T>
         where
@@ -4025,8 +3744,20 @@ pub mod error {
                 self.actual.json_serialize(out);
                 out.push('}');
             }
+            fn json_serialize_to(
+                &self,
+                out: &mut dyn norito::json::JsonWriteSink,
+            ) -> Result<(), norito::json::BoundedJsonError> {
+                out.begin_container()?;
+                out.push_str("{\"expected\":")?;
+                self.expected.json_serialize_to(out)?;
+                out.push_str(",\"actual\":")?;
+                self.actual.json_serialize_to(out)?;
+                out.push('}')?;
+                out.end_container();
+                Ok(())
+            }
         }
-
         #[cfg(feature = "json")]
         impl<T> norito::json::JsonDeserialize for Mismatch<T>
         where
@@ -4036,11 +3767,9 @@ pub mod error {
                 parser: &mut norito::json::Parser<'_>,
             ) -> Result<Self, norito::json::Error> {
                 use norito::json::MapVisitor;
-
                 let mut visitor = MapVisitor::new(parser)?;
                 let mut expected: Option<T> = None;
                 let mut actual: Option<T> = None;
-
                 while let Some(key) = visitor.next_key()? {
                     match key.as_str() {
                         "expected" => {
@@ -4062,15 +3791,12 @@ pub mod error {
                     }
                 }
                 visitor.finish()?;
-
                 let expected =
                     expected.ok_or_else(|| norito::json::Error::missing_field("expected"))?;
                 let actual = actual.ok_or_else(|| norito::json::Error::missing_field("actual"))?;
-
                 Ok(Self { expected, actual })
             }
         }
-
         /// Type error
         #[derive(
             Debug,
@@ -4096,7 +3822,6 @@ pub mod error {
             /// Asset definition numeric spec mismatch (asset can't hold provided numeric value)
             AssetNumericSpec(#[source] Mismatch<NumericSpec>),
         }
-
         /// Math error, which occurs during instruction execution
         #[derive(
             Debug,
@@ -4137,7 +3862,6 @@ pub mod error {
             /// Conversion failed: {0}
             FixedPointConversion(String),
         }
-
         /// Mintability logic error
         #[derive(
             Debug,
@@ -4168,7 +3892,6 @@ pub mod error {
             /// Limited mintability token count `{0}` is invalid
             InvalidMintabilityTokens(u32),
         }
-
         /// Invalid instruction parameter error
         #[derive(
             Debug,
@@ -4197,7 +3920,6 @@ pub mod error {
             /// Attempt to register a time-trigger with `start` point in the past
             TimeTriggerInThePast,
         }
-
         /// Repetition of `{instruction}` for id `{id}`
         #[derive(
             Debug,
@@ -4226,34 +3948,29 @@ pub mod error {
             pub id: IdBox,
         }
     }
-
     impl<T: Debug> Mismatch<T> {
         /// The value that is needed for normal execution
         pub fn expected(&self) -> &T {
             &self.expected
         }
     }
-
     impl<T: Debug> Mismatch<T> {
         /// The value that caused the error
         pub fn actual(&self) -> &T {
             &self.actual
         }
     }
-
     impl From<&str> for InstructionExecutionError {
         fn from(error: &str) -> Self {
             Self::Conversion(error.to_owned())
         }
     }
-
     impl From<TypeError> for InstructionExecutionError {
         fn from(err: TypeError) -> Self {
             Self::Evaluate(InstructionEvaluationError::Type(err))
         }
     }
 }
-
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     pub use super::{
@@ -4380,1096 +4097,6 @@ pub mod prelude {
         vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
     };
 }
-
 #[cfg(test)]
-mod tests {
-    #![allow(clippy::too_many_lines)]
-
-    use iroha_primitives::const_vec::ConstVec;
-
-    use super::*;
-    use crate::prelude::*;
-    macro_rules! check_enum {
-        ($name:ident { $($variant:ident),+ $(,)? }) => {
-            $(assert_eq!($name::try_from($name::$variant as u8).unwrap(), $name::$variant);)+
-            assert!($name::try_from(u8::MAX).is_err());
-            $(assert_eq!(format!("{}", $name::$variant), stringify!($variant));)+
-        };
-    }
-
-    struct RegistryGuard;
-
-    impl RegistryGuard {
-        fn set(registry: InstructionRegistry) -> Self {
-            set_instruction_registry(registry);
-            Self
-        }
-    }
-
-    impl Drop for RegistryGuard {
-        fn drop(&mut self) {
-            set_instruction_registry(crate::instruction_registry::default());
-        }
-    }
-
-    fn outbound_sccp_context() -> crate::bridge::SccpOutboundMessageContextV1 {
-        crate::bridge::SccpOutboundMessageContextV1::new(
-            crate::bridge::SccpLaneIdV1 {
-                source: crate::bridge::SccpNetworkV1::SoraTaira,
-                target: crate::bridge::SccpNetworkV1::BscTestnet,
-            },
-            [0x44; 32],
-            [0x45; 32],
-        )
-        .expect("valid outbound SCCP context")
-    }
-
-    fn test_domain_id() -> DomainId {
-        DomainId::try_new("wonderland", "universal").expect("domain id")
-    }
-
-    fn framed_instruction_payload<T>(value: &T) -> Vec<u8>
-    where
-        T: Instruction + norito::codec::Encode + 'static + norito::core::NoritoSerialize,
-    {
-        let (payload, flags) = norito::codec::encode_with_header_flags(value);
-        norito::core::frame_bare_with_header_flags::<T>(&payload, flags)
-            .expect("frame instruction payload")
-    }
-
-    fn bare_instruction_pair(name: &str, framed_payload: Vec<u8>) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        norito::core::serialize_to_buffer(&(name.to_owned(), framed_payload), &mut bytes)
-            .expect("serialize instruction pair");
-        bytes
-    }
-
-    fn framed_instruction_pair(name: &str, framed_payload: Vec<u8>) -> Vec<u8> {
-        norito::core::to_bytes(&(name.to_owned(), framed_payload))
-            .expect("serialize framed instruction pair")
-    }
-
-    #[test]
-    fn aa_setup_instruction_registry() {
-        let _guard = RegistryGuard::set(instruction_registry![Log]);
-    }
-
-    #[test]
-    fn register_and_decode_instruction() {
-        let registry = InstructionRegistry::new().register_slice::<Log>();
-        // Sanity: decode map contains type name and entries are populated
-        assert!(
-            !registry.is_empty(),
-            "registry should contain at least one entry"
-        );
-        assert!(registry.contains(std::any::type_name::<Log>()));
-        let name = std::any::type_name::<Log>();
-        let instruction = Log {
-            level: Level::INFO,
-            msg: "test".into(),
-        };
-        let (payload, flags) = norito::codec::encode_with_header_flags(&instruction);
-        let bytes = norito::core::frame_bare_with_header_flags::<Log>(&payload, flags)
-            .expect("frame instruction payload");
-        // Use the decode API directly to ensure local registry wiring works
-        let decoded = InstructionRegistry::decode(&registry, name, &bytes)
-            .expect("constructor not found in decode map")
-            .expect("failed to decode");
-        // Verify type id and payload equivalence without relying on downcast
-        assert_eq!(Instruction::id(&*decoded), name);
-        assert_eq!(Instruction::dyn_encode(&*decoded), payload);
-    }
-
-    #[cfg(feature = "json")]
-    #[test]
-    fn instruction_box_json_is_canonical_and_ambient_independent() {
-        let registry = InstructionRegistry::new().register_slice::<Log>();
-        let _registry = RegistryGuard::set(registry);
-        let instruction = InstructionBox::from(Log::new(
-            Level::INFO,
-            "canonical JSON instruction".to_owned(),
-        ));
-        let canonical_json =
-            norito::json::to_json(&instruction).expect("encode canonical InstructionBox JSON");
-        let alternate_flags =
-            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
-        {
-            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-            assert_eq!(
-                norito::json::to_json(&instruction)
-                    .expect("encode InstructionBox JSON under alternate ambient layout"),
-                canonical_json
-            );
-        }
-
-        let alternate_frame = {
-            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-            norito::to_bytes(&instruction).expect("encode alternate-layout InstructionBox")
-        };
-        let alternate_json = norito::json::to_json(&STANDARD.encode(alternate_frame))
-            .expect("encode alternate frame as JSON string");
-        norito::json::from_json::<InstructionBox>(&alternate_json)
-            .expect_err("alternate-layout InstructionBox JSON must be rejected");
-    }
-
-    #[test]
-    fn decode_unregistered_instruction() {
-        let registry = InstructionRegistry::new();
-        assert!(registry.decode("missing", &[]).is_none());
-    }
-
-    #[test]
-    fn record_sccp_message_registry_roundtrip_preserves_payload_bytes() {
-        let registry = InstructionRegistry::new().register_slice::<RecordSccpMessage>();
-        let _guard = RegistryGuard::set(registry);
-        let instruction = RecordSccpMessage::new(outbound_sccp_context(), vec![0xAA, 0xBB, 0xCC]);
-        let (bytes, expected_flags) = norito::codec::encode_with_header_flags(&instruction);
-        let framed = frame_instruction_payload(std::any::type_name::<RecordSccpMessage>(), &bytes)
-            .expect("record sccp message must frame");
-        let view = norito::core::from_bytes_view(&framed).expect("framed instruction payload");
-        assert_eq!(view.flags(), expected_flags);
-        let decoded =
-            decode_instruction_from_pair(std::any::type_name::<RecordSccpMessage>(), &framed)
-                .expect("record sccp message must decode");
-        let decoded = decoded
-            .as_any()
-            .downcast_ref::<RecordSccpMessage>()
-            .expect("decoded instruction type");
-        assert_eq!(decoded.context, outbound_sccp_context());
-        assert_eq!(decoded.payload_bytes, vec![0xAA, 0xBB, 0xCC]);
-    }
-
-    #[test]
-    fn registry_decode_accepts_misaligned_framed_payload() {
-        let registry = InstructionRegistry::new().register_slice::<Log>();
-        let name = std::any::type_name::<Log>();
-        let instruction = Log::new(Level::INFO, "misaligned framed payload".to_owned());
-        let payload = instruction.encode();
-        let framed = frame_instruction_payload(name, &payload).expect("frame instruction payload");
-        let mut misaligned = Vec::with_capacity(framed.len() + 1);
-        misaligned.push(0xAA);
-        misaligned.extend_from_slice(&framed);
-
-        let decoded = InstructionRegistry::decode(&registry, name, &misaligned[1..])
-            .expect("constructor not found in decode map")
-            .expect("decode misaligned framed payload");
-
-        assert_eq!(Instruction::id(&*decoded), name);
-        assert_eq!(Instruction::dyn_encode(&*decoded), payload);
-    }
-
-    #[test]
-    fn record_sccp_registry_decode_accepts_misaligned_framed_payload() {
-        let registry = InstructionRegistry::new().register_slice::<RecordSccpMessage>();
-        let name = std::any::type_name::<RecordSccpMessage>();
-        let instruction =
-            RecordSccpMessage::new(outbound_sccp_context(), vec![0xAA, 0xBB, 0xCC, 0xDD]);
-        let payload = instruction.encode();
-        let framed = frame_instruction_payload(name, &payload).expect("frame instruction payload");
-        let mut misaligned = Vec::with_capacity(framed.len() + 1);
-        misaligned.push(0xAA);
-        misaligned.extend_from_slice(&framed);
-
-        let decoded = InstructionRegistry::decode(&registry, name, &misaligned[1..])
-            .expect("constructor not found in decode map")
-            .expect("decode misaligned framed payload");
-
-        assert_eq!(Instruction::id(&*decoded), name);
-        assert_eq!(Instruction::dyn_encode(&*decoded), payload);
-    }
-
-    #[test]
-    fn instruction_box_embeds_instruction_payload_with_recorded_flags() {
-        let registry = InstructionRegistry::new().register_slice::<RecordSccpMessage>();
-        let _guard = RegistryGuard::set(registry);
-        let instruction = RecordSccpMessage::new(outbound_sccp_context(), vec![0xAA, 0xBB, 0xCC]);
-        let (_, expected_flags) = norito::codec::encode_with_header_flags(&instruction);
-        let boxed = InstructionBox::from(instruction);
-
-        let (_, framed_payload) =
-            super::encoded_instruction_pair_payload(&boxed).expect("instruction pair payload");
-
-        let view =
-            norito::core::from_bytes_view(&framed_payload).expect("framed instruction payload");
-        assert_eq!(view.flags(), expected_flags);
-    }
-
-    #[test]
-    fn frame_payload_accepts_non_static_type_name() {
-        let log = Log::new(Level::INFO, "framed".to_string());
-        let payload = log.encode();
-        let type_name = std::any::type_name::<Log>().to_string();
-        let framed =
-            frame_instruction_payload(&type_name, &payload).expect("frame instruction payload");
-        let decoded: Log = norito::decode_from_bytes(&framed).expect("decode framed payload");
-        assert_eq!(decoded, log);
-    }
-
-    #[test]
-    fn dyn_encode_matches_instruction_box() {
-        let log = Log {
-            level: Level::INFO,
-            msg: "test".to_string(),
-        };
-        let boxed = InstructionBox::from(log.clone());
-        let expected = Instruction::dyn_encode(&*boxed);
-        let actual = Instruction::dyn_encode(&log);
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn dyn_encode_into_matches_dyn_encode() {
-        let log = Log {
-            level: Level::INFO,
-            msg: "stream encode".to_string(),
-        };
-        let expected = Instruction::dyn_encode(&log);
-        let mut actual = Vec::with_capacity(
-            Instruction::dyn_encode_capacity_hint(&log).expect("encode capacity hint"),
-        );
-
-        Instruction::dyn_encode_into(&log, &mut actual);
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn opaque_instruction_dyn_encode_into_appends_bare_payload() {
-        let opaque = OpaqueInstruction {
-            wire_id: "opaque/test",
-            bare_payload: vec![0xAA, 0xBB, 0xCC],
-            framed_payload: vec![0xF0, 0xF1, 0xF2],
-        };
-        let mut actual = vec![0x11];
-
-        Instruction::dyn_encode_into(&opaque, &mut actual);
-
-        assert_eq!(actual, vec![0x11, 0xAA, 0xBB, 0xCC]);
-        assert_eq!(
-            Instruction::dyn_encode_capacity_hint(&opaque),
-            Some(opaque.bare_payload.len())
-        );
-    }
-
-    #[test]
-    fn opaque_instruction_serializes_preserved_framed_payload() {
-        let log = Log::new(Level::INFO, "opaque preserve".to_owned());
-        let wire_id = "opaque/test";
-        let bare_payload = Instruction::dyn_encode(&log);
-        let framed_payload = norito::core::frame_bare_with_header_flags::<Log>(
-            &bare_payload,
-            norito::core::default_encode_flags(),
-        )
-        .expect("frame payload");
-        let opaque = InstructionBox::from(
-            OpaqueInstruction::from_framed(wire_id, &framed_payload).expect("opaque payload"),
-        );
-
-        assert_eq!(Instruction::dyn_encode(&*opaque), bare_payload);
-        assert_eq!(
-            opaque
-                .as_any()
-                .downcast_ref::<OpaqueInstruction>()
-                .expect("opaque")
-                .framed_payload(),
-            framed_payload.as_slice()
-        );
-        assert_eq!(
-            norito::to_bytes(&opaque).expect("encode opaque"),
-            norito::to_bytes(&(wire_id.to_owned(), framed_payload)).expect("encode pair"),
-        );
-    }
-
-    #[test]
-    fn opaque_instruction_rejects_unframed_or_malformed_payloads() {
-        let log = Log::new(Level::INFO, "opaque reject raw".to_owned());
-        let raw_payload = Instruction::dyn_encode(&log);
-
-        assert!(
-            OpaqueInstruction::from_framed("opaque/raw", &raw_payload).is_err(),
-            "opaque instructions must carry a Norito-framed payload"
-        );
-        assert!(
-            OpaqueInstruction::from_framed("opaque/short", &[0x01, 0x02]).is_err(),
-            "short garbage must not be accepted as a framed opaque payload"
-        );
-    }
-
-    #[test]
-    fn as_any_downcasts() {
-        let log = Log {
-            level: Level::INFO,
-            msg: "downcast".to_string(),
-        };
-        let instr: &dyn Instruction = &log;
-        assert!(instr.as_any().downcast_ref::<Log>().is_some());
-    }
-
-    #[test]
-    fn into_instruction_box_produces_equivalent() {
-        let log = Log {
-            level: Level::INFO,
-            msg: "into".to_string(),
-        };
-        let boxed = Instruction::into_instruction_box(Box::new(log.clone()));
-        let expected = Instruction::dyn_encode(&*InstructionBox::from(log));
-        assert_eq!(Instruction::dyn_encode(&*boxed), expected);
-    }
-
-    #[test]
-    fn dyn_execute_does_not_panic() {
-        let log = InstructionBox::from(Log {
-            level: Level::INFO,
-            msg: "exec".to_string(),
-        });
-        Instruction::dyn_execute(&*log);
-    }
-
-    #[test]
-    fn instruction_box_display() {
-        let log = InstructionBox::from(Log {
-            level: Level::INFO,
-            msg: "display".to_string(),
-        });
-        assert_eq!(log.to_string(), "InstructionBox");
-    }
-
-    #[test]
-    fn norito_serialize_trait_object() {
-        let log = Log {
-            level: Level::INFO,
-            msg: "serialize".to_string(),
-        };
-        let boxed = InstructionBox::from(log.clone());
-        let bytes = norito::core::to_bytes(&boxed).expect("serialize");
-        let archived = norito::core::from_bytes::<(String, Vec<u8>)>(&bytes).expect("from_bytes");
-        let (name, payload) =
-            norito::core::NoritoDeserialize::try_deserialize(archived).expect("deserialize");
-        assert_eq!(name, Log::WIRE_ID);
-        let bare = Instruction::dyn_encode(&log);
-        let payload_slice = payload.as_slice();
-        assert!(
-            payload_slice.starts_with(&norito::core::MAGIC),
-            "Instruction payload must include Norito header",
-        );
-        assert!(
-            payload.len() >= norito::core::Header::SIZE,
-            "Instruction payload shorter than Norito header",
-        );
-        assert_eq!(
-            &payload_slice[norito::core::Header::SIZE..],
-            bare.as_slice()
-        );
-    }
-
-    #[test]
-    fn instruction_box_direct_serialize_matches_tuple_wire_layout() {
-        let _guard = RegistryGuard::set(instruction_registry![Log]);
-        let boxed = InstructionBox::from(Log {
-            level: Level::INFO,
-            msg: "tuple layout".to_string(),
-        });
-
-        for flags in [0, norito::core::default_encode_flags()] {
-            let _flags = norito::core::DecodeFlagsGuard::enter(flags);
-            let (name, payload) =
-                super::encoded_instruction_pair_payload(&boxed).expect("instruction pair payload");
-            let expected_pair = (name.to_owned(), payload);
-
-            let mut expected = Vec::new();
-            norito::core::serialize_to_buffer(&expected_pair, &mut expected)
-                .expect("serialize expected tuple");
-
-            let mut actual = Vec::new();
-            norito::core::serialize_to_buffer(&boxed, &mut actual)
-                .expect("serialize instruction box");
-
-            assert_eq!(actual, expected, "flags=0x{flags:02x}");
-        }
-    }
-
-    #[test]
-    fn instruction_box_encoded_len_exact_matches_norito() {
-        let boxed = InstructionBox::from(Log {
-            level: Level::INFO,
-            msg: "exact length".to_string(),
-        });
-        let expected = norito::core::to_bytes(&boxed)
-            .expect("serialize instruction box")
-            .len()
-            - norito::core::Header::SIZE;
-
-        assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_exact(&boxed)
-                .expect("instruction box exact len"),
-            expected
-        );
-    }
-
-    #[test]
-    fn instruction_box_len_hint_does_not_force_exact_inner_len() {
-        let boxed = InstructionBox::from(CustomInstruction::new("custom length hint"));
-        let exact = norito::core::NoritoSerialize::encoded_len_exact(&boxed);
-        let hint = norito::core::NoritoSerialize::encoded_len_hint(&boxed)
-            .expect("instruction box length hint");
-        let actual = norito::core::to_bytes(&boxed)
-            .expect("serialize instruction box")
-            .len()
-            - norito::core::Header::SIZE;
-
-        assert!(
-            exact.is_none() || exact == Some(actual),
-            "exact length must be absent or byte-accurate"
-        );
-        assert!(hint >= actual, "length hint must not under-reserve");
-    }
-
-    #[test]
-    fn norito_roundtrip_trait_object_deserialize() {
-        let log = Log {
-            level: Level::INFO,
-            msg: "deserialize".to_string(),
-        };
-        let _guard = RegistryGuard::set(instruction_registry![Log]);
-        let boxed = InstructionBox::from(log.clone());
-        let bytes = norito::core::to_bytes(&boxed).expect("serialize");
-        let archived = norito::core::from_bytes::<InstructionBox>(&bytes).expect("from_bytes");
-        let decoded =
-            norito::core::NoritoDeserialize::try_deserialize(archived).expect("deserialize");
-        // Validate via type id and payload equality rather than downcast
-        assert_eq!(Instruction::id(&*decoded), Instruction::id(&log));
-        assert_eq!(
-            Instruction::dyn_encode(&*decoded),
-            Instruction::dyn_encode(&log)
-        );
-    }
-
-    #[test]
-    fn instruction_pair_canonical_decode_covers_payload_body() {
-        let expected = ("force-decode".to_owned(), vec![1_u8, 2, 3, 4]);
-        let framed =
-            norito::core::to_bytes(&expected).expect("serialize instruction tuple with Norito");
-        let archived =
-            norito::core::from_bytes::<(String, Vec<u8>)>(&framed).expect("decode framed tuple");
-        let decoded = norito::core::NoritoDeserialize::try_deserialize(archived).expect("decode");
-        assert_eq!(decoded, expected);
-    }
-
-    #[test]
-    fn borrowed_instruction_pair_decodes_without_owned_payload() {
-        let _guard = RegistryGuard::set(instruction_registry![Log]);
-        let expected = InstructionBox::from(Log::new(Level::INFO, "borrowed pair".to_owned()));
-        let mut bytes = Vec::new();
-        norito::core::serialize_to_buffer(&expected, &mut bytes)
-            .expect("serialize instruction box tuple");
-
-        let (decoded, used) =
-            super::decode_instruction_from_borrowed_pair(&bytes).expect("borrowed pair decode");
-
-        assert_eq!(used, bytes.len());
-        assert_eq!(Instruction::id(&*decoded), Instruction::id(&*expected));
-        assert_eq!(
-            Instruction::dyn_encode(&*decoded),
-            Instruction::dyn_encode(&*expected)
-        );
-    }
-
-    #[test]
-    fn borrowed_instruction_pair_honors_inner_frame_flags_under_outer_canonical_layout() {
-        let _guard = RegistryGuard::set(crate::instruction_registry::default());
-        let log = Log::new(Level::INFO, "inner compact frame".to_owned());
-        let expected = InstructionBox::from(log.clone());
-        let framed_payload = framed_instruction_payload(&log);
-        assert_eq!(
-            framed_payload[norito::core::Header::SIZE - 1]
-                & norito::core::header_flags::COMPACT_LEN,
-            norito::core::header_flags::COMPACT_LEN
-        );
-
-        let _layout = norito::core::DecodeFlagsGuard::enter(0);
-        let bytes = bare_instruction_pair(Log::WIRE_ID, framed_payload);
-        let (decoded, used) =
-            super::decode_instruction_from_borrowed_pair(&bytes).expect("borrowed pair decode");
-
-        assert_eq!(used, bytes.len());
-        assert_eq!(Instruction::id(&*decoded), Instruction::id(&*expected));
-        assert_eq!(
-            Instruction::dyn_encode(&*decoded),
-            Instruction::dyn_encode(&*expected)
-        );
-    }
-
-    #[test]
-    fn instruction_box_decode_from_slice_accepts_misaligned_borrowed_pair() {
-        use norito::core::DecodeFromSlice;
-
-        let _guard = RegistryGuard::set(instruction_registry![Log]);
-        let expected = InstructionBox::from(Log::new(Level::INFO, "misaligned pair".to_owned()));
-        let mut bytes = vec![0xAA];
-        norito::core::serialize_to_buffer(&expected, &mut bytes)
-            .expect("serialize instruction box tuple");
-
-        let (decoded, used) =
-            InstructionBox::decode_from_slice(&bytes[1..]).expect("decode misaligned pair");
-
-        assert_eq!(used, bytes.len() - 1);
-        assert_eq!(Instruction::id(&*decoded), Instruction::id(&*expected));
-        assert_eq!(
-            Instruction::dyn_encode(&*decoded),
-            Instruction::dyn_encode(&*expected)
-        );
-    }
-
-    #[test]
-    fn instruction_box_rejects_non_norito_payload() {
-        use norito::core::DecodeFromSlice;
-
-        let err = InstructionBox::decode_from_slice(&[0x01, 0x02])
-            .expect_err("non-canonical payload must be rejected");
-        match err {
-            norito::core::Error::Message(msg) => assert!(
-                msg.contains("canonical Norito framing"),
-                "error should steer callers to the canonical encoding: {msg}"
-            ),
-            other => panic!("unexpected error variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn instruction_box_lossy_deserialize_maps_malformed_pair_payload_to_invalid_instruction() {
-        let malformed_pair_payload = vec![0xFF; 32];
-        let framed = norito::core::frame_bare_with_header_flags::<InstructionBox>(
-            &malformed_pair_payload,
-            norito::core::default_encode_flags(),
-        )
-        .expect("frame malformed instruction-box payload");
-        let archived =
-            norito::core::from_bytes::<InstructionBox>(&framed).expect("instruction-box frame");
-
-        assert!(
-            norito::core::NoritoDeserialize::try_deserialize(archived).is_err(),
-            "strict decode must reject malformed pair payloads"
-        );
-
-        let decoded: InstructionBox = norito::core::NoritoDeserialize::deserialize(archived);
-        let invalid = decoded
-            .as_any()
-            .downcast_ref::<transparent::InvalidInstruction>()
-            .expect("malformed pair becomes invalid placeholder");
-
-        assert_eq!(invalid.wire_id, "<norito>");
-        assert_eq!(invalid.payload_hash, [0; 32]);
-        assert!(
-            invalid.message.len() <= 256,
-            "Norito tuple decode error should be bounded, got {} bytes",
-            invalid.message.len()
-        );
-    }
-
-    #[test]
-    fn instruction_box_decoders_reject_registered_wire_id_with_unframed_payload() {
-        use norito::core::DecodeFromSlice;
-
-        let _guard = RegistryGuard::set(crate::instruction_registry::default());
-        let malformed_payload = vec![0x01, 0x02, 0x03];
-        let framed_pair = framed_instruction_pair(Log::WIRE_ID, malformed_payload.clone());
-        let archived =
-            norito::core::from_bytes::<InstructionBox>(&framed_pair).expect("instruction pair");
-
-        assert!(
-            norito::core::NoritoDeserialize::try_deserialize(archived).is_err(),
-            "strict decode must reject unframed payload bytes for registered wire ids"
-        );
-
-        let bare_pair = bare_instruction_pair(Log::WIRE_ID, malformed_payload.clone());
-        assert!(
-            InstructionBox::decode_from_slice(&bare_pair).is_err(),
-            "borrowed-pair decode must reject unframed payload bytes for registered wire ids"
-        );
-
-        let decoded: InstructionBox = norito::core::NoritoDeserialize::deserialize(archived);
-        let invalid = decoded
-            .as_any()
-            .downcast_ref::<transparent::InvalidInstruction>()
-            .expect("malformed registered payload becomes invalid placeholder");
-        let expected_hash: [u8; 32] = iroha_crypto::Hash::new(&malformed_payload).into();
-
-        assert_eq!(invalid.wire_id, Log::WIRE_ID);
-        assert_eq!(invalid.payload_hash, expected_hash);
-    }
-
-    #[test]
-    fn instruction_box_strict_decoders_reject_removed_direct_instruction_pairs() {
-        use norito::core::DecodeFromSlice;
-
-        let _guard = RegistryGuard::set(crate::instruction_registry::default());
-        let direct_register = Register::domain(Domain::new(test_domain_id()));
-        let direct_repo = repo::RepoMarginCallIsi::new(
-            "instruction_box_removed_direct"
-                .parse()
-                .expect("repo agreement id"),
-        );
-
-        for (removed_name, framed_payload) in [
-            (
-                std::any::type_name::<Register<Domain>>(),
-                framed_instruction_payload(&direct_register),
-            ),
-            (
-                repo::RepoMarginCallIsi::WIRE_ID,
-                framed_instruction_payload(&direct_repo),
-            ),
-        ] {
-            let framed_pair = framed_instruction_pair(removed_name, framed_payload.clone());
-            let archived = norito::core::from_bytes::<InstructionBox>(&framed_pair)
-                .expect("instruction pair bytes");
-            assert!(
-                norito::core::NoritoDeserialize::try_deserialize(archived).is_err(),
-                "{removed_name} must be rejected by strict InstructionBox deserialization"
-            );
-
-            let bare_pair = bare_instruction_pair(removed_name, framed_payload);
-            assert!(
-                InstructionBox::decode_from_slice(&bare_pair).is_err(),
-                "{removed_name} must be rejected by canonical borrowed-pair decoding"
-            );
-        }
-    }
-
-    #[test]
-    fn instruction_box_lossy_deserialize_maps_removed_direct_pair_to_invalid_instruction() {
-        let _guard = RegistryGuard::set(crate::instruction_registry::default());
-        let direct_register = Register::domain(Domain::new(test_domain_id()));
-        let removed_name = std::any::type_name::<Register<Domain>>();
-        let framed_payload = framed_instruction_payload(&direct_register);
-        let framed_pair = framed_instruction_pair(removed_name, framed_payload.clone());
-        let archived =
-            norito::core::from_bytes::<InstructionBox>(&framed_pair).expect("instruction pair");
-
-        let decoded: InstructionBox = norito::core::NoritoDeserialize::deserialize(archived);
-        let invalid = decoded
-            .as_any()
-            .downcast_ref::<transparent::InvalidInstruction>()
-            .expect("removed direct instruction becomes invalid placeholder");
-        let expected_hash: [u8; 32] = iroha_crypto::Hash::new(&framed_payload).into();
-
-        assert_eq!(invalid.wire_id, removed_name);
-        assert_eq!(invalid.payload_hash, expected_hash);
-        assert!(
-            invalid.message.contains("not registered")
-                || invalid.message.contains("unknown instruction"),
-            "invalid placeholder should preserve the decode failure: {}",
-            invalid.message
-        );
-    }
-
-    #[test]
-    fn instruction_box_strict_decoders_reject_cross_family_instruction_pairs() {
-        use norito::core::DecodeFromSlice;
-
-        let _guard = RegistryGuard::set(crate::instruction_registry::default());
-        let register_payload = framed_instruction_payload(&RegisterBox::Domain(Register::domain(
-            Domain::new(test_domain_id()),
-        )));
-        let repo_payload = framed_instruction_payload(&repo::RepoInstructionBox::MarginCall(
-            repo::RepoMarginCallIsi::new("instruction_box_cross_family".parse().expect("repo id")),
-        ));
-
-        for (spoofed_name, mismatched_payload) in [
-            (MintBox::WIRE_ID, register_payload),
-            (settlement::SettlementInstructionBox::WIRE_ID, repo_payload),
-        ] {
-            let framed_pair = framed_instruction_pair(spoofed_name, mismatched_payload.clone());
-            let archived = norito::core::from_bytes::<InstructionBox>(&framed_pair)
-                .expect("instruction pair bytes");
-            assert!(
-                norito::core::NoritoDeserialize::try_deserialize(archived).is_err(),
-                "{spoofed_name} must reject a payload from another boxed family"
-            );
-
-            let bare_pair = bare_instruction_pair(spoofed_name, mismatched_payload);
-            assert!(
-                InstructionBox::decode_from_slice(&bare_pair).is_err(),
-                "{spoofed_name} must reject mismatched borrowed-pair payloads"
-            );
-        }
-    }
-
-    #[test]
-    fn instruction_box_lossy_deserialize_maps_cross_family_pair_to_invalid_instruction() {
-        let _guard = RegistryGuard::set(crate::instruction_registry::default());
-        let framed_payload = framed_instruction_payload(&RegisterBox::Domain(Register::domain(
-            Domain::new(test_domain_id()),
-        )));
-        let framed_pair = framed_instruction_pair(MintBox::WIRE_ID, framed_payload.clone());
-        let archived =
-            norito::core::from_bytes::<InstructionBox>(&framed_pair).expect("instruction pair");
-
-        let decoded: InstructionBox = norito::core::NoritoDeserialize::deserialize(archived);
-        let invalid = decoded
-            .as_any()
-            .downcast_ref::<transparent::InvalidInstruction>()
-            .expect("cross-family instruction becomes invalid placeholder");
-        let expected_hash: [u8; 32] = iroha_crypto::Hash::new(&framed_payload).into();
-
-        assert_eq!(invalid.wire_id, MintBox::WIRE_ID);
-        assert_eq!(invalid.payload_hash, expected_hash);
-    }
-
-    #[test]
-    fn instruction_box_lossy_deserialize_bounds_unknown_wire_error_message() {
-        let _guard = RegistryGuard::set(crate::instruction_registry::default());
-        let hostile_name = format!("iroha.{}", "x".repeat(2048));
-        let framed_pair = framed_instruction_pair(&hostile_name, Vec::new());
-        let archived =
-            norito::core::from_bytes::<InstructionBox>(&framed_pair).expect("instruction pair");
-
-        let decoded: InstructionBox = norito::core::NoritoDeserialize::deserialize(archived);
-        let invalid = decoded
-            .as_any()
-            .downcast_ref::<transparent::InvalidInstruction>()
-            .expect("unknown instruction becomes invalid placeholder");
-        let expected_hash: [u8; 32] = iroha_crypto::Hash::new([]).into();
-
-        assert_eq!(invalid.wire_id, hostile_name);
-        assert_eq!(invalid.payload_hash, expected_hash);
-        assert!(
-            invalid.message.len() <= 256,
-            "decode error should be bounded, got {} bytes",
-            invalid.message.len()
-        );
-        assert!(
-            invalid.message.contains("unknown instruction"),
-            "invalid placeholder should explain the rejected wire id"
-        );
-    }
-
-    #[test]
-    fn instruction_box_decode_from_slice_rejects_trailing_bytes_after_valid_pair() {
-        use norito::core::DecodeFromSlice;
-
-        let _guard = RegistryGuard::set(instruction_registry![Log]);
-        let boxed = InstructionBox::from(Log::new(Level::INFO, "pair tail".to_owned()));
-        let mut bare_pair = Vec::new();
-        norito::core::serialize_to_buffer(&boxed, &mut bare_pair)
-            .expect("serialize instruction box pair");
-        bare_pair.extend_from_slice(&[0xAA, 0x55]);
-
-        let err = InstructionBox::decode_from_slice(&bare_pair)
-            .expect_err("trailing bytes after a valid pair must be rejected");
-        match err {
-            norito::core::Error::Message(msg) => assert!(
-                msg.contains("canonical Norito framing"),
-                "error should reject non-canonical trailing bytes: {msg}"
-            ),
-            other => panic!("unexpected error variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn instruction_box_try_deserialize_rejects_trailing_bytes_inside_framed_pair() {
-        let _guard = RegistryGuard::set(instruction_registry![Log]);
-        let boxed = InstructionBox::from(Log::new(Level::INFO, "framed pair tail".to_owned()));
-        let mut bare_pair = Vec::new();
-        norito::core::serialize_to_buffer(&boxed, &mut bare_pair)
-            .expect("serialize instruction box pair");
-        bare_pair.extend_from_slice(&[0xAA, 0x55]);
-        let framed = norito::core::frame_bare_with_header_flags::<InstructionBox>(
-            &bare_pair,
-            norito::core::default_encode_flags(),
-        )
-        .expect("frame tailed instruction pair");
-        let archived =
-            norito::core::from_bytes::<InstructionBox>(&framed).expect("instruction box frame");
-
-        let err = norito::core::NoritoDeserialize::try_deserialize(archived)
-            .expect_err("framed instruction pairs with trailing bytes must be rejected");
-        match err {
-            norito::core::Error::Message(msg) => assert!(
-                msg.contains("canonical Norito framing"),
-                "error should reject non-canonical trailing bytes: {msg}"
-            ),
-            other => panic!("unexpected error variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn instruction_box_lossy_deserialize_maps_trailing_pair_bytes_to_invalid_instruction() {
-        let _guard = RegistryGuard::set(instruction_registry_with_ids![Log]);
-        let boxed = InstructionBox::from(Log::new(Level::INFO, "lossy pair tail".to_owned()));
-        let (wire_id, framed_payload) =
-            encoded_instruction_pair_payload(&boxed).expect("encoded instruction payload");
-        assert_eq!(wire_id, Log::WIRE_ID);
-        let mut bare_pair = Vec::new();
-        norito::core::serialize_to_buffer(&boxed, &mut bare_pair)
-            .expect("serialize instruction box pair");
-        bare_pair.extend_from_slice(&[0xAA, 0x55]);
-        let framed = norito::core::frame_bare_with_header_flags::<InstructionBox>(
-            &bare_pair,
-            norito::core::default_encode_flags(),
-        )
-        .expect("frame tailed instruction pair");
-        let archived =
-            norito::core::from_bytes::<InstructionBox>(&framed).expect("instruction box frame");
-
-        let decoded: InstructionBox = norito::core::NoritoDeserialize::deserialize(archived);
-        let invalid = decoded
-            .as_any()
-            .downcast_ref::<transparent::InvalidInstruction>()
-            .expect("tailed instruction pair becomes invalid placeholder");
-        let expected_hash: [u8; 32] = iroha_crypto::Hash::new(&framed_payload).into();
-
-        assert_eq!(invalid.wire_id, Log::WIRE_ID);
-        assert_eq!(invalid.payload_hash, expected_hash);
-        assert!(
-            invalid.message.contains("canonical Norito framing"),
-            "invalid placeholder should explain non-canonical trailing bytes: {}",
-            invalid.message
-        );
-    }
-
-    #[test]
-    fn const_vec_instruction_box_decodes_with_varint_tail() {
-        let _guard = RegistryGuard::set(instruction_registry![Log]);
-
-        let instruction = InstructionBox::from(Log {
-            level: Level::INFO,
-            msg: "varint tail regression".to_owned(),
-        });
-        let expected = vec![instruction.clone()];
-        let original = ConstVec::from(expected.clone());
-
-        let framed = norito::core::to_bytes(&original).expect("serialize ConstVec<InstructionBox>");
-        let flags = framed[norito::core::Header::SIZE - 1];
-        let payload = &framed[norito::core::Header::SIZE..];
-        let mut mutated = payload.to_vec();
-
-        let (len, used_hdr) = {
-            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
-            norito::core::read_seq_len_slice(&mutated).expect("sequence header")
-        };
-        eprintln!("const_vec len={len} used_hdr={used_hdr}");
-        assert_eq!(len, expected.len());
-
-        {
-            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
-            let mut cursor = used_hdr;
-            for _ in 0..len {
-                let (_, hdr) =
-                    norito::core::read_len_dyn_slice(&mutated[cursor..]).expect("element header");
-                eprintln!("const_vec element hdr={hdr}");
-                for byte in &mut mutated[cursor..cursor + hdr] {
-                    *byte = 0;
-                }
-                cursor += hdr;
-            }
-        }
-
-        let decoded = {
-            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
-            let (value, used) =
-                norito::core::decode_field_canonical::<ConstVec<InstructionBox>>(&mutated)
-                    .expect("decode const vec from tail offsets");
-            assert!(used > 0);
-            value
-        };
-        norito::core::reset_decode_state();
-        assert_eq!(decoded.into_vec(), expected);
-    }
-
-    #[test]
-    fn encode_as_instruction_box_uses_encode() {
-        let log = Log {
-            level: Level::INFO,
-            msg: "encode".to_string(),
-        };
-        let expected = log.encode();
-        let actual = BuiltInInstruction::encode_as_instruction_box(&log);
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn default_registry_roundtrip_selected_instructions() {
-        // Install default registry covering built-ins and keep a local handle
-        let _guard = RegistryGuard::set(crate::instruction_registry::default());
-        let local_registry = crate::instruction_registry::default();
-
-        // Build a small suite of representative instructions
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let account_id = AccountId::new(
-            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
-                .parse()
-                .unwrap(),
-        );
-        let asset_def_id: AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-        let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
-        let nft_id: NftId = "n0$wonderland".parse().unwrap();
-        let role_id: RoleId = "auditor".parse().unwrap();
-        let key: Name = "k".parse().unwrap();
-
-        let cases: Vec<InstructionBox> = vec![
-            // Register/Unregister
-            Register::domain(Domain::new(domain_id.clone())).into(),
-            Unregister::domain(domain_id.clone()).into(),
-            // Set/Remove metadata
-            SetKeyValue::domain(domain_id.clone(), key.clone(), Json::new(1u32)).into(),
-            RemoveKeyValue::domain(domain_id.clone(), key.clone()).into(),
-            // Mint/Burn asset
-            Mint::asset_quantity(10_u32, asset_id.clone()).into(),
-            Burn::asset_quantity(5_u32, asset_id.clone()).into(),
-            // Transfer asset
-            Transfer::asset_quantity(asset_id.clone(), 1_u32, account_id.clone()).into(),
-            // NFT register + transfer
-            Register::nft(Nft::new(nft_id.clone(), Metadata::default())).into(),
-            Transfer::nft(account_id.clone(), nft_id.clone(), account_id.clone()).into(),
-            // Grant/Revoke role
-            Grant::account_role(role_id.clone(), account_id.clone()).into(),
-            Revoke::account_role(role_id.clone(), account_id.clone()).into(),
-            // SetParameter
-            SetParameter::new(Parameter::Transaction(
-                crate::parameter::TransactionParameter::MaxInstructions(nonzero_ext::nonzero!(
-                    10_u64
-                )),
-            ))
-            .into(),
-            // Log
-            Log::new(Level::INFO, "hello".into()).into(),
-        ];
-
-        for instr in cases {
-            let bytes = norito::to_bytes(&instr).expect("serialize");
-            // Decode without relying on the global registry during this window
-            let (name, payload) = norito::decode_from_bytes::<(String, Vec<u8>)>(&bytes)
-                .expect("extract tag + payload");
-            let decoded = local_registry
-                .decode(&name, &payload)
-                .unwrap_or_else(|| panic!("instruction `{name}` is not registered"))
-                .expect("decode via default registry");
-            assert_eq!(instr, decoded);
-        }
-    }
-
-    #[test]
-    fn revoke_encode_as_instruction_box_uses_encode() {
-        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let signatory = "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
-            .parse()
-            .unwrap();
-        let account_id = AccountId::new(signatory);
-        let permission = Permission::new("dummy".parse().unwrap(), Json::new(()));
-        let revoke = Revoke::account_permission(permission, account_id);
-        let expected = revoke.encode();
-        let actual = BuiltInInstruction::encode_as_instruction_box(&revoke);
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn discriminant_roundtrip() {
-        check_enum!(SetKeyValueType {
-            Domain,
-            Account,
-            AssetDefinition,
-            Nft,
-            Trigger
-        });
-        check_enum!(RemoveKeyValueType {
-            Domain,
-            Account,
-            AssetDefinition,
-            Nft,
-            Trigger
-        });
-        check_enum!(RegisterType {
-            Peer,
-            Domain,
-            Account,
-            AssetDefinition,
-            Nft,
-            Role,
-            Trigger
-        });
-        check_enum!(UnregisterType {
-            Peer,
-            Domain,
-            Account,
-            AssetDefinition,
-            Nft,
-            Role,
-            Trigger
-        });
-        check_enum!(MintType {
-            Asset,
-            TriggerRepetitions
-        });
-        check_enum!(BurnType {
-            Asset,
-            TriggerRepetitions
-        });
-        check_enum!(TransferType {
-            Domain,
-            AssetDefinition,
-            Asset,
-            Nft
-        });
-        check_enum!(GrantType {
-            Permission,
-            Role,
-            RolePermission
-        });
-        check_enum!(RevokeType {
-            Permission,
-            Role,
-            RolePermission
-        });
-    }
-
-    #[test]
-    fn ordering_is_preserved_across_roundtrip() {
-        // Ensure the total ordering of InstructionBox is stable after Norito roundtrip.
-        let _guard = RegistryGuard::set(crate::instruction_registry::default());
-
-        let domain_id: DomainId = DomainId::try_new("alice", "universal").unwrap();
-        let account_id = AccountId::new(
-            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
-                .parse()
-                .expect("public key"),
-        );
-        let asset_def_id: AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("alice", "universal").unwrap(),
-                "coin".parse().unwrap(),
-            );
-        let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
-        let role_id: RoleId = "auditor".parse().unwrap();
-
-        let mut instrs = vec![
-            Register::domain(Domain::new(domain_id.clone())).into(),
-            Grant::account_role(role_id.clone(), account_id.clone()).into(),
-            Mint::asset_quantity(5_u32, asset_id.clone()).into(),
-            Transfer::asset_quantity(asset_id.clone(), 1_u32, account_id.clone()).into(),
-            Burn::asset_quantity(1_u32, asset_id.clone()).into(),
-            Unregister::domain(domain_id.clone()).into(),
-            Log::new(Level::INFO, "x".into()).into(),
-        ];
-        // Sort by Ord
-        instrs.sort();
-        // Roundtrip each via Norito bytes
-        let rt: Vec<InstructionBox> = instrs
-            .iter()
-            // Explicitly specify the generic type so the compiler knows which
-            // `NoritoSerialize` implementation to use for the `InstructionBox`
-            // trait object reference.
-            .map(|i| norito::to_bytes::<InstructionBox>(i).expect("encode"))
-            .map(|b| norito::decode_from_bytes::<InstructionBox>(&b).expect("decode"))
-            .collect();
-        let mut rt_sorted = rt.clone();
-        rt_sorted.sort();
-        assert_eq!(instrs, rt_sorted);
-    }
-
-    include!("default_registry_tail_test.rs");
-}
+#[path = "instruction_enum_tests.rs"]
+mod tests;

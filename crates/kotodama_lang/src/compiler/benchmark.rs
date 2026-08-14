@@ -4,7 +4,6 @@
 //! constructors. A caller can only advance source accepted by the production
 //! [`CompilerSession`](crate::session::CompilerSession), so benchmarking an
 //! individual phase cannot become a back door for forged typed programs.
-
 use super::{Compiler, CompilerOptions, native_diagnostic_bundle};
 use crate::{
     diagnostic::{DiagnosticBundle, DiagnosticPhase},
@@ -13,7 +12,6 @@ use crate::{
         ResolvedCompilationUnit,
     },
 };
-
 /// Owned source input for the canonical compiler pipeline.
 #[derive(Clone)]
 pub struct SourcePhase {
@@ -22,7 +20,6 @@ pub struct SourcePhase {
     source: String,
     source_name: Option<String>,
 }
-
 impl SourcePhase {
     /// Create a benchmark input governed by the same options as an ordinary build.
     #[must_use]
@@ -38,7 +35,6 @@ impl SourcePhase {
             source_name,
         }
     }
-
     /// Run source budgets, lossless lexing/CST construction, and spanned AST parsing.
     pub fn parse(self) -> Result<ParsedHirPhase, DiagnosticBundle> {
         let program = self.session.parse_compilation_unit(CompileRequest {
@@ -53,7 +49,6 @@ impl SourcePhase {
         })
     }
 }
-
 /// Opaque spanned AST produced by the canonical lossless parser.
 #[derive(Clone)]
 pub struct ParsedHirPhase {
@@ -62,7 +57,6 @@ pub struct ParsedHirPhase {
     program: ParsedCompilationUnit,
     source_name: Option<String>,
 }
-
 impl ParsedHirPhase {
     /// Resolve declarations, types, values, and calls into fail-closed resolved HIR.
     pub fn resolve(self) -> Result<ResolvedHirPhase, DiagnosticBundle> {
@@ -75,7 +69,6 @@ impl ParsedHirPhase {
         })
     }
 }
-
 /// Opaque resolved HIR with stable symbol and source identities.
 #[derive(Clone)]
 pub struct ResolvedHirPhase {
@@ -84,7 +77,6 @@ pub struct ResolvedHirPhase {
     program: ResolvedCompilationUnit,
     source_name: Option<String>,
 }
-
 impl ResolvedHirPhase {
     /// Type-check the resolved program and derive its complete effect HIR.
     pub fn type_effect(self) -> Result<TypedEffectHirPhase, DiagnosticBundle> {
@@ -96,7 +88,6 @@ impl ResolvedHirPhase {
         })
     }
 }
-
 /// Opaque typed/effect HIR accepted by the canonical compiler session.
 #[derive(Clone)]
 pub struct TypedEffectHirPhase {
@@ -104,7 +95,6 @@ pub struct TypedEffectHirPhase {
     program: crate::semantic::TypedProgram,
     source_name: Option<String>,
 }
-
 impl TypedEffectHirPhase {
     /// Validate deployability and lower typed/effect HIR into the mutable transport IR.
     pub fn lower_ir(self) -> Result<LoweredIrPhase, DiagnosticBundle> {
@@ -117,13 +107,11 @@ impl TypedEffectHirPhase {
         })
     }
 }
-
 /// Opaque lowering IR ready for strict SSA construction.
 pub struct LoweredIrPhase {
     compiler: Compiler,
     program: super::LoweredCompilation,
 }
-
 impl LoweredIrPhase {
     /// Construct and verify strict SSA MIR without running optimization.
     pub fn construct_ssa(self) -> Result<SsaMirPhase, DiagnosticBundle> {
@@ -134,13 +122,11 @@ impl LoweredIrPhase {
         })
     }
 }
-
 /// Opaque, verified strict SSA MIR before optimization.
 pub struct SsaMirPhase {
     compiler: Compiler,
     program: super::SsaCompilation,
 }
-
 impl SsaMirPhase {
     /// Run the canonical SSA optimizer and whole-program reachability pass.
     pub fn optimize(self) -> Result<OptimizedSsaMirPhase, DiagnosticBundle> {
@@ -151,13 +137,11 @@ impl SsaMirPhase {
         })
     }
 }
-
 /// Opaque optimized SSA MIR ready for deterministic Phi destruction.
 pub struct OptimizedSsaMirPhase {
     compiler: Compiler,
     program: super::PreparedCompilation,
 }
-
 impl OptimizedSsaMirPhase {
     /// Destroy SSA, split critical edges, and materialize deterministic Phi copies.
     pub fn destroy_ssa(self) -> Result<CodegenPhase, DiagnosticBundle> {
@@ -168,13 +152,11 @@ impl OptimizedSsaMirPhase {
         })
     }
 }
-
 /// Opaque de-SSA program ready for final register allocation and artifact emission.
 pub struct CodegenPhase {
     compiler: Compiler,
     program: super::CodegenCompilation,
 }
-
 impl CodegenPhase {
     /// Emit the canonical deployable artifact, manifest, and hash-bound sidecars.
     pub fn emit(self) -> Result<CompileOutput, DiagnosticBundle> {
@@ -204,11 +186,9 @@ impl CodegenPhase {
             })
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn build_through_phases(
         source: &str,
         source_name: &str,
@@ -227,7 +207,6 @@ mod tests {
         .destroy_ssa()?
         .emit()
     }
-
     #[test]
     fn phase_sequence_matches_ordinary_compilation() {
         let source = "seiyaku Bench { view fn add(int a, int b) -> int { return a + b; } }";
@@ -240,12 +219,10 @@ mod tests {
             .expect("ordinary compilation succeeds");
         let phased = build_through_phases(source, source_name)
             .expect("phase-separated compilation succeeds");
-
         assert_eq!(phased.artifact, ordinary.artifact);
         assert_eq!(phased.manifest, ordinary.manifest);
         assert_eq!(phased.report, ordinary.report);
     }
-
     #[test]
     fn resolution_failure_matches_ordinary_structured_diagnostics() {
         let source = "seiyaku Broken { view fn inspect() -> int { return missing; } }";
@@ -267,11 +244,9 @@ mod tests {
             Ok(_) => panic!("unknown value must fail resolved-HIR construction"),
             Err(diagnostics) => diagnostics,
         };
-
         assert_eq!(phased, ordinary);
         assert_eq!(phased.diagnostics[0].phase, DiagnosticPhase::Resolve);
     }
-
     #[test]
     fn semantic_failure_matches_ordinary_structured_diagnostics() {
         let source = "seiyaku Broken { view fn inspect() -> int { return true + 1; } }";
@@ -295,7 +270,6 @@ mod tests {
             Ok(_) => panic!("invalid addition must fail typed/effect HIR construction"),
             Err(diagnostics) => diagnostics,
         };
-
         assert_eq!(phased, ordinary);
         assert_eq!(phased.diagnostics[0].phase, DiagnosticPhase::Semantic);
     }

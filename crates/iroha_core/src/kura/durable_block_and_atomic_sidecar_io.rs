@@ -1,5 +1,4 @@
 // Durable block publication and atomic sidecar persistence primitives.
-
 impl Kura {
     fn blocks_root_debug_file_bytes(root: &Path) -> Result<u64> {
         let path = root.join("blocks.jsonl");
@@ -22,7 +21,6 @@ impl Kura {
         }
         Ok(metadata.len())
     }
-
     fn read_durable_hash_at_height(
         block_store: &mut BlockStore,
         height: u64,
@@ -36,7 +34,6 @@ impl Kura {
             .first()
             .copied())
     }
-
     fn ensure_durable_block_at_height(&self, height: u64, hash: HashOf<BlockHeader>) -> Result<()> {
         let mut block_store = self.block_store.lock();
         match Self::read_durable_hash_at_height(&mut block_store, height)? {
@@ -56,7 +53,6 @@ impl Kura {
             }
         }
     }
-
     /// Append a debug dump while the caller holds prune and canonical-chain
     /// locks. Pending canonical bytes are captured before the lower-order
     /// geometry/sidecar capacity locks.
@@ -113,7 +109,6 @@ impl Kura {
             ),
         }
     }
-
     fn append_bound_debug_block_dump(&self, path: &Path, bytes: &[u8]) -> Result<(u64, u64)> {
         let parent = path.parent().ok_or_else(|| {
             Error::IO(
@@ -196,13 +191,11 @@ impl Kura {
         }
         Ok((before, after.len()))
     }
-
     #[cfg(test)]
     fn persist_block_at_height(&self, block: &Arc<SignedBlock>, height: u64) -> Result<()> {
         let write_guard = self.lock_block_store_for_write();
         self.persist_block_at_height_while_locked(block, height, &write_guard)
     }
-
     fn persist_block_at_height_while_locked(
         &self,
         block: &Arc<SignedBlock>,
@@ -217,7 +210,6 @@ impl Kura {
                 PathBuf::from("block_store_test_fail"),
             ));
         }
-
         let start_height = height.saturating_sub(1);
         self.ensure_no_pending_rollback()?;
         let mut block_store = self.block_store.lock();
@@ -284,7 +276,6 @@ impl Kura {
             );
             self.record_writer_fault("stale DA-sidecar cleanup", &error);
         }
-
         if let Some(block_store_before) = block_store_before {
             match Self::block_store_tracked_bytes(&mut block_store) {
                 Ok(after_bytes) => self.update_disk_usage_delta(block_store_before, after_bytes),
@@ -315,7 +306,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn store_block_durable(
         &self,
         block: &Arc<SignedBlock>,
@@ -352,7 +342,6 @@ impl Kura {
         if let Some(entry) = merge_entry {
             Self::validate_merge_transaction_uniqueness(block, entry)?;
         }
-
         {
             let block_data = self.block_data.lock();
             self.ensure_prune_recovery_not_required()?;
@@ -409,7 +398,6 @@ impl Kura {
                 return Ok(());
             }
         }
-
         if let Some(entry) = merge_entry {
             self.preflight_committed_merge_entry_for_block(block, entry)?;
         }
@@ -426,7 +414,6 @@ impl Kura {
             block,
             LaneBlockArtifactConflictPolicy::PreserveCanonical,
         )?;
-
         // Lane-artifact staging, when present, already owns `sidecar_lock`. Canonical mutation
         // therefore follows one global order: sidecar -> block-store write -> block_data.
         let write_guard = self.lock_block_store_for_write();
@@ -482,14 +469,12 @@ impl Kura {
             );
             return Ok(());
         }
-
         if let Some(entry) = merge_entry {
             // Recheck after all fallible staging and while the canonical height
             // is still exclusively reserved. Deterministic binding conflicts
             // must fail before the block becomes irrevocable.
             self.preflight_committed_merge_entry_for_block(block, entry)?;
         }
-
         self.write_canonical_association_stage(block, merge_entry)?;
         if let Err(err) =
             self.persist_block_at_height_while_locked(block, actual_height, &write_guard)
@@ -516,7 +501,6 @@ impl Kura {
             self.remove_canonical_association_stage()?;
             return Err(err);
         }
-
         if let Some(batch) = lane_artifacts.take() {
             batch.commit();
         }
@@ -551,7 +535,6 @@ impl Kura {
             })?;
         }
         self.append_debug_block_dump(block);
-
         if let Some(entry) = merge_entry {
             // The block fsync above is the Kura commit point. From here on all
             // repair is monotonic: never truncate the block, lane artifacts, or
@@ -573,17 +556,14 @@ impl Kura {
             // that best-effort removal failed; an idempotent store retry uses
             // the existing-block branch above to remove it.
         }
-
         debug!(
             height = actual_height,
             new_len,
             ?block_hash,
             "stored block durably in Kura"
         );
-
         Ok(())
     }
-
     fn validate_next_or_existing_block(
         block_data: &[(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)],
         actual_height: u64,
@@ -591,7 +571,6 @@ impl Kura {
         block_hash: HashOf<BlockHeader>,
     ) -> Result<()> {
         let expected_next_height = u64::try_from(block_data.len())?.saturating_add(1);
-
         if actual_height < expected_next_height {
             let index = actual_height_usize.saturating_sub(1);
             if let Some((expected, _)) = block_data.get(index) {
@@ -605,17 +584,14 @@ impl Kura {
                 });
             }
         }
-
         if actual_height > expected_next_height {
             return Err(Error::BlockHeightGap {
                 expected_next_height,
                 actual_height,
             });
         }
-
         Ok(())
     }
-
     fn file_len_or_zero(path: &Path) -> Result<u64> {
         if path.as_os_str().is_empty() {
             return Ok(0);
@@ -626,7 +602,6 @@ impl Kura {
             Err(err) => Err(Error::IO(err, path.to_path_buf())),
         }
     }
-
     fn read_block_data_from_file(
         file: &mut FileWrap,
         start_location_in_data_file: u64,
@@ -637,15 +612,12 @@ impl Kura {
             file.read_exact(dest_buffer)
         })
     }
-
     fn write_atomic_synced_replace(&self, path: &Path, bytes: &[u8]) -> Result<()> {
         self.write_atomic_synced_impl(path, bytes, true).map(|_| ())
     }
-
     fn write_atomic_synced_noclobber(&self, path: &Path, bytes: &[u8]) -> Result<bool> {
         self.write_atomic_synced_impl(path, bytes, false)
     }
-
     fn write_atomic_synced_impl(
         &self,
         path: &Path,
@@ -654,7 +626,6 @@ impl Kura {
     ) -> Result<bool> {
         self.write_atomic_synced_impl_with_prefix(path, bytes, allow_replace, ".kura-sidecar-")
     }
-
     fn write_atomic_synced_impl_with_prefix(
         &self,
         path: &Path,
@@ -809,7 +780,6 @@ impl Kura {
         sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
         Ok(true)
     }
-
     #[cfg(test)]
     fn fail_next_atomic_write_after_temporary_sync_for_test(&self) {
         self.fail_next_atomic_write_after_temporary_sync

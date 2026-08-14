@@ -1,5 +1,4 @@
 //! Settlement logic for repo and reverse-repo instructions.
-
 use iroha_data_model::{
     asset::AssetId,
     events::data::prelude::{
@@ -14,7 +13,6 @@ use iroha_data_model::{
     repo::{RepoAgreement, RepoGovernance},
 };
 use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity, RoundingMode};
-
 use super::prelude::*;
 use crate::{
     smartcontracts::isi::{
@@ -22,18 +20,15 @@ use crate::{
     },
     state::{StateTransaction, WorldReadOnly},
 };
-
 const MAX_HAIRCUT_BPS: u16 = 10_000;
 const MS_PER_DAY: u64 = 86_400_000;
 const ACT_360_YEAR_MS: u64 = MS_PER_DAY * 360;
-
 /// Non-reusable proof that repo consent and retained-agreement checks selected two exact legs.
 pub(in crate::smartcontracts::isi) struct VerifiedRepoNumericPair {
     authority: AccountId,
     binding: Vec<u8>,
     legs: [(AssetId, AssetId, Quantity); 2],
 }
-
 impl VerifiedRepoNumericPair {
     fn new<T: norito::codec::Encode>(
         authority: AccountId,
@@ -51,14 +46,12 @@ impl VerifiedRepoNumericPair {
             legs,
         })
     }
-
     pub(in crate::smartcontracts::isi) fn into_parts(
         self,
     ) -> (AccountId, Vec<u8>, [(AssetId, AssetId, Quantity); 2]) {
         (self.authority, self.binding, self.legs)
     }
 }
-
 fn ensure_positive_quantity(quantity: &Quantity, label: &str) -> Result<(), Error> {
     if quantity.is_zero() {
         return Err(InstructionExecutionError::InvariantViolation(
@@ -67,7 +60,6 @@ fn ensure_positive_quantity(quantity: &Quantity, label: &str) -> Result<(), Erro
     }
     Ok(())
 }
-
 fn ensure_agreement_quantities(agreement: &RepoAgreement) -> Result<(), Error> {
     ensure_positive_quantity(agreement.cash_leg().quantity(), "stored repo cash quantity")?;
     ensure_positive_quantity(
@@ -95,7 +87,6 @@ fn ensure_agreement_quantities(agreement: &RepoAgreement) -> Result<(), Error> {
     }
     Ok(())
 }
-
 fn ensure_accounts(
     stx: &StateTransaction<'_, '_>,
     initiator: &AccountId,
@@ -109,7 +100,6 @@ fn ensure_accounts(
     }
     Ok(())
 }
-
 fn ensure_explicit_governance(governance: RepoGovernance) -> Result<(), Error> {
     if governance.haircut_bps() > MAX_HAIRCUT_BPS {
         return Err(InstructionExecutionError::InvariantViolation(
@@ -122,11 +112,9 @@ fn ensure_explicit_governance(governance: RepoGovernance) -> Result<(), Error> {
     }
     Ok(())
 }
-
 fn asset_in_account_with_same_scope(source: &AssetId, account: AccountId) -> AssetId {
     AssetId::with_scope(source.definition().clone(), account, source.scope().clone())
 }
-
 fn compute_accrued_interest(
     principal: &Quantity,
     rate_bps: u16,
@@ -136,7 +124,6 @@ fn compute_accrued_interest(
     if rate_bps == 0 || elapsed_ms == 0 || principal.is_zero() {
         return Ok(Quantity::zero());
     }
-
     let rate_fraction = Numeric::try_new(u128::from(rate_bps), 4).map_err(|err| {
         InstructionExecutionError::InvariantViolation(
             format!("failed to normalise repo rate: {err}").into(),
@@ -185,7 +172,6 @@ fn compute_accrued_interest(
         .into()
     })
 }
-
 fn expected_cash_settlement(
     principal: &Quantity,
     rate_bps: u16,
@@ -198,7 +184,6 @@ fn expected_cash_settlement(
             "reverse repo settlement predates agreement initiation".into(),
         ));
     }
-
     let elapsed_ms = settlement_timestamp_ms - initiated_timestamp_ms;
     let interest = compute_accrued_interest(principal, rate_bps, elapsed_ms, cash_spec)?;
     principal.checked_add(&interest).map_err(|_| {
@@ -208,7 +193,6 @@ fn expected_cash_settlement(
         .into()
     })
 }
-
 #[allow(clippy::too_many_lines)]
 impl Execute for RepoIsi {
     fn execute(
@@ -230,7 +214,6 @@ impl Execute for RepoIsi {
             maturity_timestamp_ms,
             governance,
         } = self;
-
         if &initiator != authority {
             return Err(InstructionExecutionError::InvariantViolation(
                 "repo initiator must match the transaction authority".into(),
@@ -257,14 +240,12 @@ impl Execute for RepoIsi {
         ensure_positive_quantity(cash_leg.quantity(), "repo cash quantity")?;
         ensure_positive_quantity(collateral_leg.quantity(), "repo collateral quantity")?;
         ensure_explicit_governance(governance)?;
-
         ensure_accounts(
             state_transaction,
             &initiator,
             &counterparty,
             custodian.as_ref(),
         )?;
-
         if state_transaction
             .world
             .repo_agreements
@@ -275,7 +256,6 @@ impl Execute for RepoIsi {
                 format!("repo agreement {agreement_id} already exists").into(),
             ));
         }
-
         let initiated_timestamp_ms = u64::try_from(
             state_transaction._curr_block.creation_time().as_millis(),
         )
@@ -289,19 +269,16 @@ impl Execute for RepoIsi {
                 "repo maturity must be later than its on-ledger initiation".into(),
             ));
         }
-
         let cash_def_id = cash_leg.asset_definition_id().clone();
         let collateral_def_id = collateral_leg.asset_definition_id().clone();
         let cash_spec = state_transaction
             .numeric_spec_for(&cash_def_id)
             .map_err(Error::from)?;
         assert_numeric_spec_with(cash_leg.quantity().as_numeric(), cash_spec)?;
-
         let collateral_spec = state_transaction
             .numeric_spec_for(&collateral_def_id)
             .map_err(Error::from)?;
         assert_numeric_spec_with(collateral_leg.quantity().as_numeric(), collateral_spec)?;
-
         let collateral_holder_account = custodian.clone().unwrap_or_else(|| counterparty.clone());
         let cash_source = ensure_bilateral_counterparty_consent(
             state_transaction,
@@ -322,7 +299,6 @@ impl Execute for RepoIsi {
         let cash_destination = asset_in_account_with_same_scope(&cash_source, initiator.clone());
         let collateral_source =
             asset_in_account_with_same_scope(&collateral_custody_asset, initiator.clone());
-
         let movement = VerifiedRepoNumericPair::new(
             authority.clone(),
             &(
@@ -347,7 +323,6 @@ impl Execute for RepoIsi {
             state_transaction,
             movement,
         )?;
-
         let agreement = RepoAgreement::new(
             agreement_id.clone(),
             initiator.clone(),
@@ -365,7 +340,6 @@ impl Execute for RepoIsi {
         state_transaction
             .world
             .insert_repo_agreement_entry(agreement.clone());
-
         iroha_logger::info!(
             %agreement_id,
             initiator=%initiator,
@@ -373,7 +347,6 @@ impl Execute for RepoIsi {
             custodian=?custodian,
             "repo agreement initiated"
         );
-
         let mut repo_events =
             Vec::with_capacity(2_usize.saturating_add(usize::from(custodian.is_some())));
         repo_events.push(AccountEvent::Repo(RepoAccountEvent::Initiated(
@@ -403,11 +376,9 @@ impl Execute for RepoIsi {
             )));
         }
         state_transaction.world.emit_events(repo_events);
-
         Ok(())
     }
 }
-
 impl Execute for RepoInstructionBox {
     fn execute(
         self,
@@ -421,7 +392,6 @@ impl Execute for RepoInstructionBox {
         }
     }
 }
-
 #[allow(clippy::too_many_lines)]
 impl Execute for ReverseRepoIsi {
     fn execute(
@@ -430,7 +400,6 @@ impl Execute for ReverseRepoIsi {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let ReverseRepoIsi { agreement_id } = self;
-
         let mut stored_agreement = state_transaction
             .world
             .repo_agreements
@@ -447,7 +416,6 @@ impl Execute for ReverseRepoIsi {
             ));
         }
         ensure_agreement_quantities(&stored_agreement)?;
-
         let initiator = stored_agreement.initiator().clone();
         let counterparty = stored_agreement.counterparty().clone();
         let is_participant = authority == &initiator
@@ -461,14 +429,12 @@ impl Execute for ReverseRepoIsi {
                 "repo maturity settlement must be submitted by a recorded participant".into(),
             ));
         }
-
         ensure_accounts(
             state_transaction,
             &initiator,
             &counterparty,
             stored_agreement.custodian().as_ref(),
         )?;
-
         let block_timestamp_ms = u64::try_from(
             state_transaction._curr_block.creation_time().as_millis(),
         )
@@ -483,7 +449,6 @@ impl Execute for ReverseRepoIsi {
                 "repo agreement cannot settle before its recorded maturity".into(),
             ));
         }
-
         let cash_def_id = stored_agreement.cash_leg().asset_definition_id().clone();
         let cash_spec = state_transaction
             .numeric_spec_for(&cash_def_id)
@@ -496,7 +461,6 @@ impl Execute for ReverseRepoIsi {
             cash_spec,
         )?;
         assert_numeric_spec_with(expected_cash_quantity.as_numeric(), cash_spec)?;
-
         let cash_destination = stored_agreement.cash_source().clone();
         let cash_source = asset_in_account_with_same_scope(&cash_destination, initiator.clone());
         let collateral_source = stored_agreement.collateral_custody_asset().clone();
@@ -505,7 +469,6 @@ impl Execute for ReverseRepoIsi {
         let collateral_leg = stored_agreement.collateral_leg().clone();
         let cash_leg =
             iroha_data_model::repo::RepoCashLeg::new(cash_def_id, expected_cash_quantity.clone());
-
         let movement = VerifiedRepoNumericPair::new(
             authority.clone(),
             &(agreement_id.clone(), settlement_timestamp_ms),
@@ -522,7 +485,6 @@ impl Execute for ReverseRepoIsi {
             state_transaction,
             movement,
         )?;
-
         if !stored_agreement.settle() {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("repo agreement {agreement_id} has already settled").into(),
@@ -531,7 +493,6 @@ impl Execute for ReverseRepoIsi {
         state_transaction
             .world
             .insert_repo_agreement_entry(stored_agreement.clone());
-
         iroha_logger::info!(
             %agreement_id,
             initiator=%initiator,
@@ -539,7 +500,6 @@ impl Execute for ReverseRepoIsi {
             custodian=?stored_agreement.custodian(),
             "repo agreement settled at fixed maturity"
         );
-
         let mut repo_events = Vec::with_capacity(
             2_usize.saturating_add(usize::from(stored_agreement.custodian().is_some())),
         );
@@ -579,11 +539,9 @@ impl Execute for ReverseRepoIsi {
             )));
         }
         state_transaction.world.emit_events(repo_events);
-
         Ok(())
     }
 }
-
 impl Execute for RepoMarginCallIsi {
     fn execute(
         self,
@@ -591,7 +549,6 @@ impl Execute for RepoMarginCallIsi {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let RepoMarginCallIsi { agreement_id } = self;
-
         let mut agreement = state_transaction
             .world
             .repo_agreements
@@ -608,7 +565,6 @@ impl Execute for RepoMarginCallIsi {
                 format!("repo agreement {agreement_id} has already settled").into(),
             ));
         }
-
         let is_authorised = authority == agreement.initiator()
             || authority == agreement.counterparty()
             || agreement
@@ -620,13 +576,11 @@ impl Execute for RepoMarginCallIsi {
                 "margin call must be initiated by a repo participant".into(),
             ));
         }
-
         if agreement.governance().margin_frequency_secs() == 0 {
             return Err(InstructionExecutionError::InvariantViolation(
                 "margin checks are disabled for this agreement".into(),
             ));
         }
-
         let current_timestamp_ms = u64::try_from(
             state_transaction._curr_block.creation_time().as_millis(),
         )
@@ -640,18 +594,15 @@ impl Execute for RepoMarginCallIsi {
                 "margin checks cannot be recorded at or after repo maturity".into(),
             ));
         }
-
         if !agreement.is_margin_check_due(current_timestamp_ms) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "margin check is not yet due for this agreement".into(),
             ));
         }
-
         agreement.record_margin_check(current_timestamp_ms);
         state_transaction
             .world
             .insert_repo_agreement_entry(agreement.clone());
-
         iroha_logger::info!(
             %agreement_id,
             initiator=%agreement.initiator(),
@@ -660,7 +611,6 @@ impl Execute for RepoMarginCallIsi {
             margin_timestamp=current_timestamp_ms,
             "repo margin call recorded"
         );
-
         let mut repo_events = Vec::with_capacity(
             2_usize.saturating_add(usize::from(agreement.custodian().is_some())),
         );
@@ -694,15 +644,12 @@ impl Execute for RepoMarginCallIsi {
             )));
         }
         state_transaction.world.emit_events(repo_events);
-
         Ok(())
     }
 }
-
 /// Repo-related query implementations.
 pub mod query {
     use std::collections::BTreeSet;
-
     use eyre::Result;
     use iroha_data_model::{
         account::{AccountId, ParsedAccountId},
@@ -716,24 +663,20 @@ pub mod query {
     };
     use iroha_telemetry::metrics;
     use norito::json::Value;
-
     use super::*;
     use crate::{
         smartcontracts::ValidQuery,
         state::{StateReadOnly, WorldReadOnly},
     };
-
     #[derive(Clone, Copy)]
     enum RepoAgreementAccountIndex {
         Initiator,
         Counterparty,
         Custodian,
     }
-
     fn repo_agreement_id_field(field: &str) -> bool {
         field == "id"
     }
-
     fn repo_agreement_account_index(field: &str) -> Option<RepoAgreementAccountIndex> {
         match field {
             "initiator" => Some(RepoAgreementAccountIndex::Initiator),
@@ -742,13 +685,11 @@ pub mod query {
             _ => None,
         }
     }
-
     fn repo_agreement_id_from_value(value: &Value) -> Option<RepoAgreementId> {
         value
             .as_str()
             .and_then(|raw| raw.parse::<RepoAgreementId>().ok())
     }
-
     fn account_id_from_value(value: &Value) -> Option<AccountId> {
         value.as_str().and_then(|raw| {
             AccountId::parse_encoded(raw)
@@ -756,7 +697,6 @@ pub mod query {
                 .ok()
         })
     }
-
     fn intersect_candidate_ids(
         best: &mut Option<BTreeSet<RepoAgreementId>>,
         candidates: BTreeSet<RepoAgreementId>,
@@ -767,7 +707,6 @@ pub mod query {
         };
         *best = Some(current.intersection(&candidates).cloned().collect());
     }
-
     fn ids_for_accounts(
         world: &impl WorldReadOnly,
         index: RepoAgreementAccountIndex,
@@ -792,13 +731,11 @@ pub mod query {
         }
         ids
     }
-
     pub(super) fn repo_agreement_candidate_ids(
         predicate: &PredicateJson,
         world: &impl WorldReadOnly,
     ) -> Option<BTreeSet<RepoAgreementId>> {
         let mut best = None;
-
         for cond in &predicate.equals {
             if repo_agreement_id_field(&cond.field) {
                 intersect_candidate_ids(
@@ -809,7 +746,6 @@ pub mod query {
                 );
                 continue;
             }
-
             if let Some(index) = repo_agreement_account_index(&cond.field) {
                 intersect_candidate_ids(
                     &mut best,
@@ -817,7 +753,6 @@ pub mod query {
                 );
             }
         }
-
         for cond in &predicate.r#in {
             if repo_agreement_id_field(&cond.field) {
                 intersect_candidate_ids(
@@ -829,7 +764,6 @@ pub mod query {
                 );
                 continue;
             }
-
             if let Some(index) = repo_agreement_account_index(&cond.field) {
                 intersect_candidate_ids(
                     &mut best,
@@ -841,10 +775,8 @@ pub mod query {
                 );
             }
         }
-
         best
     }
-
     impl ValidQuery for FindRepoAgreements {
         #[metrics(+"find_repo_agreements")]
         fn execute(
@@ -853,9 +785,9 @@ pub mod query {
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = RepoAgreement>, Error> {
             let world = state_ro.world();
-            let predicate_json = filter
-                .json_payload()
-                .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+            let predicate_json = filter.json_payload().and_then(
+                iroha_data_model::query::json::predicate_json_candidate_plan_for_execution,
+            );
             if let Some(candidate_ids) = predicate_json
                 .as_ref()
                 .and_then(|predicate| repo_agreement_candidate_ids(predicate, world))
@@ -870,7 +802,6 @@ pub mod query {
                     }));
                 return Ok(iter);
             }
-
             let iter: Box<dyn Iterator<Item = RepoAgreement> + '_> = Box::new(
                 world
                     .repo_agreements()
@@ -883,7 +814,6 @@ pub mod query {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use hex::encode_upper;
@@ -909,18 +839,15 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
     use norito::json::{Map, Number, Value};
-
     use super::*;
     use crate::{
         kura::Kura, prelude::World, query::store::LiveQueryStore, smartcontracts::ValidQuery,
         state::State,
     };
-
     fn checked_account_id() -> AccountId {
         let key_pair = KeyPair::try_random().expect("repo fixture key generation should succeed");
         AccountId::new(key_pair.public_key().clone())
     }
-
     #[test]
     fn checked_account_id_preserves_default_algorithm() {
         let account_id = checked_account_id();
@@ -929,11 +856,9 @@ mod tests {
             Algorithm::default()
         );
     }
-
     #[test]
     fn repo_quantity_boundaries_reject_negative_and_zero_values() {
         assert!(Quantity::try_from_numeric(Numeric::new(-1_i32, 0)).is_err());
-
         let error = ensure_positive_quantity(&Quantity::zero(), "repo cash quantity")
             .expect_err("zero repo quantity must be rejected");
         assert!(matches!(
@@ -941,14 +866,11 @@ mod tests {
             InstructionExecutionError::InvariantViolation(_)
         ));
     }
-
     fn setup_state() -> (State, RepoAgreementId, AssetDefinitionId, AssetDefinitionId) {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob_account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
-
         let cash_def_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
@@ -959,7 +881,6 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             );
-
         let cash_def = {
             let __asset_definition_id = cash_def_id.clone();
             AssetDefinition::numeric(
@@ -980,7 +901,6 @@ mod tests {
             )
         }
         .build(&ALICE_ID);
-
         let bob_cash = Asset::new(
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
             Quantity::from(2_000u32),
@@ -989,7 +909,6 @@ mod tests {
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
             Quantity::from(1_500u32),
         );
-
         let world = World::with_assets(
             [domain],
             [alice_account, bob_account],
@@ -997,15 +916,12 @@ mod tests {
             [bob_cash, alice_collateral],
             [],
         );
-
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
         let agreement_id: RepoAgreementId = "daily_repo".parse().unwrap();
-
         (state, agreement_id, cash_def_id, collateral_def_id)
     }
-
     fn setup_state_with_custodian() -> (
         State,
         RepoAgreementId,
@@ -1016,12 +932,10 @@ mod tests {
         crate::test_alias::ensure();
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob_account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
         let custodian_id = checked_account_id();
         let custodian_account = Account::new(custodian_id.clone()).build(&ALICE_ID);
-
         let cash_def_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
@@ -1032,7 +946,6 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             );
-
         let cash_def = {
             let __asset_definition_id = cash_def_id.clone();
             AssetDefinition::numeric(
@@ -1053,7 +966,6 @@ mod tests {
             )
         }
         .build(&ALICE_ID);
-
         let bob_cash = Asset::new(
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
             Quantity::from(2_000u32),
@@ -1062,7 +974,6 @@ mod tests {
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
             Quantity::from(1_500u32),
         );
-
         let world = World::with_assets(
             [domain],
             [alice_account, bob_account, custodian_account],
@@ -1070,12 +981,10 @@ mod tests {
             [bob_cash, alice_collateral],
             [],
         );
-
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
         let agreement_id: RepoAgreementId = "daily_repo".parse().unwrap();
-
         (
             state,
             agreement_id,
@@ -1084,7 +993,6 @@ mod tests {
             custodian_id,
         )
     }
-
     fn repo_setup_instruction(
         agreement_id: &RepoAgreementId,
         cash_def_id: &AssetDefinitionId,
@@ -1097,7 +1005,6 @@ mod tests {
             1_704_000_000_000 + MS_PER_DAY,
         )
     }
-
     fn repo_setup_instruction_with_maturity(
         agreement_id: &RepoAgreementId,
         cash_def_id: &AssetDefinitionId,
@@ -1119,7 +1026,6 @@ mod tests {
             RepoGovernance::with_defaults(1_500, 86_400),
         )
     }
-
     fn seed_repo_consents(stx: &mut StateTransaction<'_, '_>, instruction: &RepoIsi) {
         let holder = instruction
             .custodian()
@@ -1138,7 +1044,6 @@ mod tests {
             ),
         );
     }
-
     fn seed_repo_consents_for_assets(
         stx: &mut StateTransaction<'_, '_>,
         instruction: &RepoIsi,
@@ -1169,7 +1074,6 @@ mod tests {
             .account_permissions
             .insert(instruction.initiator().clone(), permissions);
     }
-
     fn execute_repo_with_consents(
         stx: &mut StateTransaction<'_, '_>,
         instruction: RepoIsi,
@@ -1177,14 +1081,12 @@ mod tests {
         seed_repo_consents(stx, &instruction);
         instruction.execute(&ALICE_ID, stx)
     }
-
     fn repo_asset_balance(stx: &StateTransaction<'_, '_>, asset_id: &AssetId) -> Quantity {
         stx.world
             .assets
             .get(asset_id)
             .map_or_else(Quantity::zero, |asset| (**asset).clone())
     }
-
     #[test]
     fn repo_open_requires_exact_consents_for_unchanged_terms() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
@@ -1194,7 +1096,6 @@ mod tests {
         let instruction = repo_setup_instruction(&agreement_id, &cash_def_id, &collateral_def_id);
         let bob_cash = AssetId::new(cash_def_id.clone(), BOB_ID.clone());
         let alice_collateral = AssetId::new(collateral_def_id, ALICE_ID.clone());
-
         let error = instruction
             .clone()
             .execute(&ALICE_ID, &mut stx)
@@ -1209,7 +1110,6 @@ mod tests {
             Quantity::from(1_500_u32)
         );
         assert!(stx.world.repo_agreements.get(&agreement_id).is_none());
-
         seed_repo_consents(&mut stx, &instruction);
         let mut changed_terms = instruction.clone();
         changed_terms.cash_leg.quantity = Quantity::from(1_001_u32);
@@ -1226,12 +1126,10 @@ mod tests {
             Quantity::from(1_500_u32)
         );
         assert!(stx.world.repo_agreements.get(&agreement_id).is_none());
-
         instruction
             .execute(&ALICE_ID, &mut stx)
             .expect("the byte-identical consented proposal must open");
     }
-
     #[test]
     fn repo_open_is_atomic_when_second_leg_cannot_settle() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
@@ -1242,7 +1140,6 @@ mod tests {
             repo_setup_instruction(&agreement_id, &cash_def_id, &collateral_def_id);
         instruction.collateral_leg.quantity = Quantity::from(1_501_u32);
         seed_repo_consents(&mut stx, &instruction);
-
         let bob_cash = AssetId::new(cash_def_id, BOB_ID.clone());
         let alice_collateral = AssetId::new(collateral_def_id, ALICE_ID.clone());
         instruction
@@ -1265,7 +1162,6 @@ mod tests {
             "a rejected pair must not emit repo lifecycle events"
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn repo_uses_only_the_exact_consent_selected_dataspace_balances() {
@@ -1326,7 +1222,6 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let wrong_id: RepoAgreementId = "wrong_scope_repo".parse().expect("agreement id");
         let wrong_instruction = repo_setup_instruction(&wrong_id, &cash_def_id, &collateral_def_id);
         let wrong_cash = AssetId::with_scope(
@@ -1358,7 +1253,6 @@ mod tests {
         );
         assert_eq!(repo_asset_balance(&stx, &wrong_cash), Quantity::zero());
         assert!(stx.world.repo_agreements.get(&wrong_id).is_none());
-
         let agreement_id: RepoAgreementId = "exact_scope_repo".parse().expect("agreement id");
         let instruction = repo_setup_instruction(&agreement_id, &cash_def_id, &collateral_def_id);
         seed_repo_consents_for_assets(
@@ -1370,7 +1264,6 @@ mod tests {
         instruction
             .execute(&ALICE_ID, &mut stx)
             .expect("the two exact consent-selected scopes must settle");
-
         let agreement = stx
             .world
             .repo_agreements
@@ -1395,18 +1288,15 @@ mod tests {
         );
         assert_eq!(repo_asset_balance(&stx, &wrong_cash), Quantity::zero());
     }
-
     #[test]
     fn repo_initiation_transfers_assets_and_records_agreement() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let repo_instruction =
             repo_setup_instruction(&agreement_id, &cash_def_id, &collateral_def_id);
         execute_repo_with_consents(&mut stx, repo_instruction).expect("repo execution");
-
         let mut initiator_event = None;
         let mut counterparty_event = None;
         let mut custodian_event = None;
@@ -1437,7 +1327,6 @@ mod tests {
             custodian_event.is_none(),
             "custodian should be absent in two-party repo"
         );
-
         assert!(stx.world.repo_agreements.get(&agreement_id).is_some());
         let recorded = stx
             .world
@@ -1445,7 +1334,6 @@ mod tests {
             .get(&agreement_id)
             .expect("agreement");
         assert_eq!(recorded.initiated_timestamp_ms, 0);
-
         let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
         let bob_cash_id = AssetId::new(cash_def_id.clone(), BOB_ID.clone());
         assert_eq!(
@@ -1456,7 +1344,6 @@ mod tests {
             **stx.world.assets.get(&bob_cash_id).expect("bob cash"),
             Quantity::from(1_000u32)
         );
-
         let alice_collateral_id = AssetId::new(collateral_def_id.clone(), ALICE_ID.clone());
         let bob_collateral_id = AssetId::new(collateral_def_id.clone(), BOB_ID.clone());
         assert_eq!(
@@ -1475,21 +1362,17 @@ mod tests {
                 .expect("bob collateral"),
             Quantity::from(1_100u32)
         );
-
         stx.apply();
         block.commit().expect("commit succeeds");
-
         let view = state.view();
         assert!(view.world.repo_agreements().get(&agreement_id).is_some());
     }
-
     #[test]
     fn find_repo_agreements_uses_id_predicate_lookup() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         execute_repo_with_consents(
             &mut stx,
             repo_setup_instruction(&agreement_id, &cash_def_id, &collateral_def_id),
@@ -1497,7 +1380,6 @@ mod tests {
         .expect("repo execution");
         stx.apply();
         block.commit().expect("commit succeeds");
-
         let view = state.view();
         let predicate = CompoundPredicate::<RepoAgreement>::build(|predicate| {
             predicate.equals("id", agreement_id.to_string())
@@ -1508,7 +1390,6 @@ mod tests {
             .map(|agreement| agreement.id)
             .collect::<Vec<_>>();
         assert_eq!(found, vec![agreement_id.clone()]);
-
         let missing: RepoAgreementId = "missing_repo".parse().unwrap();
         let predicate = CompoundPredicate::<RepoAgreement>::build(|predicate| {
             predicate.in_values("id", [agreement_id.to_string(), missing.to_string()])
@@ -1520,7 +1401,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(found, vec![agreement_id]);
     }
-
     #[test]
     fn find_repo_agreements_uses_participant_indexes() {
         let (state, agreement_id, cash_def_id, collateral_def_id, custodian_id) =
@@ -1528,7 +1408,6 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let instruction = RepoIsi::new(
             agreement_id.clone(),
             ALICE_ID.clone(),
@@ -1544,10 +1423,8 @@ mod tests {
             RepoGovernance::with_defaults(1_500, 86_400),
         );
         execute_repo_with_consents(&mut stx, instruction).expect("repo execution");
-
         stx.apply();
         block.commit().expect("commit succeeds");
-
         let view = state.view();
         assert!(
             view.world
@@ -1567,7 +1444,6 @@ mod tests {
                 .get(&custodian_id)
                 .is_some_and(|agreements| agreements.contains(&agreement_id))
         );
-
         for (field, account_id) in [
             ("initiator", ALICE_ID.clone()),
             ("counterparty", BOB_ID.clone()),
@@ -1583,7 +1459,6 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(found, vec![agreement_id.clone()]);
         }
-
         let missing_predicate = CompoundPredicate::<RepoAgreement>::build(|predicate| {
             predicate.equals("initiator", custodian_id.to_string())
         });
@@ -1594,16 +1469,13 @@ mod tests {
                 .count(),
             0
         );
-
         drop(view);
-
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         stx.world.remove_repo_agreement_entry(&agreement_id);
         stx.apply();
         block.commit().expect("commit succeeds");
-
         let view = state.view();
         assert!(
             view.world
@@ -1622,7 +1494,6 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn repo_agreement_candidates_intersect_participant_indexes() {
         let (state, target_id, cash_def_id, collateral_def_id, custodian_id) =
@@ -1630,7 +1501,6 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let make_agreement =
             |id: RepoAgreementId, initiator: AccountId, counterparty: AccountId| {
                 RepoAgreement::new(
@@ -1651,7 +1521,6 @@ mod tests {
                     None,
                 )
             };
-
         let same_initiator_id: RepoAgreementId = "same_initiator".parse().unwrap();
         let same_counterparty_id: RepoAgreementId = "same_counterparty".parse().unwrap();
         for agreement in [
@@ -1661,7 +1530,6 @@ mod tests {
         ] {
             stx.world.insert_repo_agreement_entry(agreement);
         }
-
         let predicate = CompoundPredicate::<RepoAgreement>::build(|predicate| {
             predicate
                 .equals("initiator", ALICE_ID.to_string())
@@ -1675,17 +1543,14 @@ mod tests {
             .expect("predicate JSON");
         let candidate_ids = query::repo_agreement_candidate_ids(&predicate_json, &stx.world)
             .expect("indexed candidates");
-
         assert_eq!(candidate_ids, std::collections::BTreeSet::from([target_id]));
     }
-
     #[test]
     fn repo_instruction_box_executes_via_instruction_dispatch() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let repo_instruction =
             repo_setup_instruction(&agreement_id, &cash_def_id, &collateral_def_id);
         seed_repo_consents(&mut stx, &repo_instruction);
@@ -1693,13 +1558,11 @@ mod tests {
         boxed
             .execute(&ALICE_ID, &mut stx)
             .expect("repo instruction box execution");
-
         assert!(
             stx.world.repo_agreements.get(&agreement_id).is_some(),
             "repo instruction box should record the agreement"
         );
     }
-
     #[test]
     fn repo_initiation_with_custodian_routes_collateral() {
         let (state, agreement_id, cash_def_id, collateral_def_id, custodian_id) =
@@ -1707,7 +1570,6 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let repo_instruction = RepoIsi::new(
             agreement_id.clone(),
             ALICE_ID.clone(),
@@ -1723,7 +1585,6 @@ mod tests {
             RepoGovernance::with_defaults(1_500, 86_400),
         );
         execute_repo_with_consents(&mut stx, repo_instruction).expect("repo execution");
-
         let mut roles = Vec::new();
         for event in &stx.world.internal_event_buf {
             if let DataEvent::Account(AccountEvent::Repo(RepoAccountEvent::Initiated(payload))) =
@@ -1739,7 +1600,6 @@ mod tests {
         assert!(roles.contains(&(ALICE_ID.clone(), RepoAccountRole::Initiator)));
         assert!(roles.contains(&(BOB_ID.clone(), RepoAccountRole::Counterparty)));
         assert!(roles.contains(&(custodian_id.clone(), RepoAccountRole::Custodian)));
-
         let custodian_collateral_id = AssetId::new(collateral_def_id.clone(), custodian_id.clone());
         assert_eq!(
             **stx
@@ -1749,10 +1609,8 @@ mod tests {
                 .expect("custodian collateral"),
             Quantity::from(1_100u32)
         );
-
         stx.apply();
         block.commit().expect("commit succeeds");
-
         let view = state.view();
         let stored = view
             .world
@@ -1761,7 +1619,6 @@ mod tests {
             .expect("agreement stored");
         assert_eq!(stored.custodian(), &Some(custodian_id));
     }
-
     #[test]
     fn reverse_repo_rejects_pre_maturity_without_mutating_state() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
@@ -1784,7 +1641,6 @@ mod tests {
             stx.apply();
             block.commit().expect("commit");
         }
-
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, maturity_ms - 1, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -1792,7 +1648,6 @@ mod tests {
         let bob_collateral = AssetId::new(collateral_def_id, BOB_ID.clone());
         let cash_before = repo_asset_balance(&stx, &alice_cash);
         let collateral_before = repo_asset_balance(&stx, &bob_collateral);
-
         let error = ReverseRepoIsi::new(agreement_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect_err("fixed-maturity settlement must reject an early unwind");
@@ -1806,7 +1661,6 @@ mod tests {
                 .is_some_and(RepoAgreement::is_active)
         );
     }
-
     #[test]
     fn repo_open_respects_counterparty_cash_freeze() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
@@ -1815,13 +1669,11 @@ mod tests {
         let mut stx = block.transaction();
         let instruction = repo_setup_instruction(&agreement_id, &cash_def_id, &collateral_def_id);
         seed_repo_consents(&mut stx, &instruction);
-
         let mut control = AssetTransferControlRecord::new(cash_def_id.clone());
         control.availability_revision = 1;
         control.outgoing_availability = AssetTransferAvailability::Disabled;
         crate::smartcontracts::isi::asset::isi::update_control_record(&mut stx, &BOB_ID, control)
             .expect("install counterparty cash freeze");
-
         let bob_cash = AssetId::new(cash_def_id, BOB_ID.clone());
         let alice_collateral = AssetId::new(collateral_def_id, ALICE_ID.clone());
         let error = instruction
@@ -1843,7 +1695,6 @@ mod tests {
         );
         assert!(stx.world.repo_agreements.get(&agreement_id).is_none());
     }
-
     #[test]
     fn repo_maturity_settlement_respects_collateral_holder_freeze_atomically() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
@@ -1864,7 +1715,6 @@ mod tests {
             stx.apply();
             block.commit().expect("commit");
         }
-
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, maturity_ms, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -1873,7 +1723,6 @@ mod tests {
         control.outgoing_availability = AssetTransferAvailability::Disabled;
         crate::smartcontracts::isi::asset::isi::update_control_record(&mut stx, &BOB_ID, control)
             .expect("install collateral-holder freeze");
-
         let alice_cash = AssetId::new(cash_def_id, ALICE_ID.clone());
         let bob_collateral = AssetId::new(collateral_def_id, BOB_ID.clone());
         let cash_before = repo_asset_balance(&stx, &alice_cash);
@@ -1896,12 +1745,10 @@ mod tests {
                 .is_some_and(RepoAgreement::is_active)
         );
     }
-
     #[allow(clippy::too_many_lines)]
     #[test]
     fn reverse_repo_restores_assets_and_seals_agreement() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
-
         {
             let initiation_ms: u64 = 1_704_000_000_000;
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, initiation_ms, 0);
@@ -1913,7 +1760,6 @@ mod tests {
             stx.apply();
             block.commit().expect("commit");
         }
-
         let settlement_ms: u64 = 1_704_000_000_000 + super::MS_PER_DAY;
         let stored_agreement = {
             let view = state.view();
@@ -1940,7 +1786,6 @@ mod tests {
         let interest_due = expected_cash
             .checked_sub(stored_agreement.cash_leg().quantity())
             .expect("interest non-negative");
-
         let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
         if !interest_due.is_zero() {
             crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
@@ -1950,13 +1795,10 @@ mod tests {
             )
             .expect("seed interest funds");
         }
-
         let reverse_instruction = ReverseRepoIsi::new(agreement_id.clone());
-
         reverse_instruction
             .execute(&ALICE_ID, &mut stx)
             .expect("reverse repo execute");
-
         let mut initiator_event = None;
         let mut counterparty_event = None;
         let mut custodian_event = None;
@@ -1999,7 +1841,6 @@ mod tests {
             custodian_event.is_none(),
             "custodian event unexpected for repo without custodian"
         );
-
         assert!(
             stx.world
                 .repo_agreements
@@ -2007,7 +1848,6 @@ mod tests {
                 .is_some_and(|agreement| !agreement.is_active()),
             "settlement must retain a one-shot agreement tombstone"
         );
-
         let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
         let bob_cash_id = AssetId::new(cash_def_id.clone(), BOB_ID.clone());
         assert!(
@@ -2020,7 +1860,6 @@ mod tests {
                 .checked_add(&interest_due)
                 .expect("principal + interest")
         );
-
         let alice_collateral_id = AssetId::new(collateral_def_id.clone(), ALICE_ID.clone());
         let bob_collateral_id = AssetId::new(collateral_def_id.clone(), BOB_ID.clone());
         assert_eq!(
@@ -2035,15 +1874,12 @@ mod tests {
             stx.world.assets.get(&bob_collateral_id).is_none(),
             "counterparty collateral should be fully returned"
         );
-
         let replay_error = ReverseRepoIsi::new(agreement_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect_err("a settled repo identifier must be one-shot");
         assert!(replay_error.to_string().contains("already settled"));
-
         stx.apply();
         block.commit().expect("commit");
-
         let view = state.view();
         assert!(
             view.world
@@ -2054,13 +1890,11 @@ mod tests {
                 })
         );
     }
-
     #[test]
     fn maturity_settlement_does_not_require_stale_consent_permissions() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
         let initiation_ms: u64 = 1_704_000_000_000;
         let maturity_ms = initiation_ms + MS_PER_DAY;
-
         {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, initiation_ms, 0);
             let mut block = state.block(header);
@@ -2073,7 +1907,6 @@ mod tests {
             );
             instruction.rate_bps = 0;
             execute_repo_with_consents(&mut stx, instruction).expect("repo opens");
-
             assert!(
                 stx.world
                     .account_permissions
@@ -2084,7 +1917,6 @@ mod tests {
             stx.apply();
             block.commit().expect("commit open agreement");
         }
-
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, maturity_ms, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -2103,11 +1935,9 @@ mod tests {
                 .is_some_and(RepoAgreement::is_active),
             "rejected outsider submission must not settle the agreement"
         );
-
         ReverseRepoIsi::new(agreement_id.clone())
             .execute(&BOB_ID, &mut stx)
             .expect("counterparty can trigger the recorded maturity after permission revocation");
-
         assert!(
             stx.world
                 .repo_agreements
@@ -2124,12 +1954,10 @@ mod tests {
             Quantity::from(1_500_u32)
         );
     }
-
     #[allow(clippy::too_many_lines)]
     #[test]
     fn reverse_repo_ignores_unrelated_collateral_and_uses_stored_terms() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
-
         let initiation_ms: u64 = 1_704_500_000_000;
         {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, initiation_ms, 0);
@@ -2148,7 +1976,6 @@ mod tests {
             stx.apply();
             block.commit().expect("commit");
         }
-
         let settlement_ms = initiation_ms + super::MS_PER_DAY;
         let stored_agreement = {
             let view = state.view();
@@ -2175,7 +2002,6 @@ mod tests {
         let interest_due = expected_cash
             .checked_sub(stored_agreement.cash_leg().quantity())
             .expect("interest non-negative");
-
         let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
         if !interest_due.is_zero() {
             crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
@@ -2185,7 +2011,6 @@ mod tests {
             )
             .expect("seed interest funds");
         }
-
         // An unrelated balance cannot be selected by the ID-only settlement instruction.
         let extra_collateral = Quantity::from(50u32);
         let bob_collateral_id = AssetId::new(collateral_def_id.clone(), BOB_ID.clone());
@@ -2195,13 +2020,10 @@ mod tests {
             &extra_collateral,
         )
         .expect("seed substitution collateral");
-
         let reverse_instruction = ReverseRepoIsi::new(agreement_id.clone());
-
         reverse_instruction
             .execute(&ALICE_ID, &mut stx)
             .expect("reverse repo execute");
-
         let mut initiator_event = None;
         let mut counterparty_event = None;
         let mut custodian_event = None;
@@ -2244,7 +2066,6 @@ mod tests {
             custodian_event.is_none(),
             "custodian event unexpected for repo without custodian"
         );
-
         assert!(
             stx.world
                 .repo_agreements
@@ -2252,7 +2073,6 @@ mod tests {
                 .is_some_and(|agreement| !agreement.is_active()),
             "settlement must retain its one-shot tombstone"
         );
-
         let bob_cash_id = AssetId::new(cash_def_id.clone(), BOB_ID.clone());
         assert_eq!(
             **stx.world.assets.get(&bob_cash_id).expect("bob cash"),
@@ -2260,7 +2080,6 @@ mod tests {
                 .checked_add(&interest_due)
                 .expect("principal + interest")
         );
-
         let alice_collateral_id = AssetId::new(collateral_def_id.clone(), ALICE_ID.clone());
         assert_eq!(
             **stx
@@ -2278,10 +2097,8 @@ mod tests {
                 .expect("unrelated collateral remains"),
             extra_collateral,
         );
-
         stx.apply();
         block.commit().expect("commit");
-
         let view = state.view();
         assert!(
             view.world
@@ -2290,13 +2107,11 @@ mod tests {
                 .is_some_and(|agreement| !agreement.is_active())
         );
     }
-
     #[allow(clippy::too_many_lines)]
     #[test]
     fn reverse_repo_with_custodian_emits_events_for_all_parties() {
         let (state, agreement_id, cash_def_id, collateral_def_id, custodian_id) =
             setup_state_with_custodian();
-
         let initiation_ms: u64 = 1_705_000_000_000;
         {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, initiation_ms, 0);
@@ -2320,7 +2135,6 @@ mod tests {
             stx.apply();
             block.commit().expect("commit");
         }
-
         let settlement_ms = initiation_ms + super::MS_PER_DAY;
         let stored_agreement = {
             let view = state.view();
@@ -2333,7 +2147,6 @@ mod tests {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, settlement_ms, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let cash_spec = stx
             .numeric_spec_for(&cash_def_id)
             .expect("cash spec for settlement");
@@ -2348,7 +2161,6 @@ mod tests {
         let interest_due = expected_cash
             .checked_sub(stored_agreement.cash_leg().quantity())
             .expect("interest non-negative");
-
         let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
         if !interest_due.is_zero() {
             crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
@@ -2358,11 +2170,9 @@ mod tests {
             )
             .expect("seed interest funds");
         }
-
         ReverseRepoIsi::new(agreement_id.clone())
             .execute(&custodian_id, &mut stx)
             .expect("recorded custodian can trigger maturity settlement");
-
         let mut initiator_event = None;
         let mut counterparty_event = None;
         let mut custodian_event = None;
@@ -2377,14 +2187,12 @@ mod tests {
                 }
             }
         }
-
         let initiator_event =
             initiator_event.expect("initiator should receive a repo settlement event");
         let counterparty_event =
             counterparty_event.expect("counterparty should receive a repo settlement event");
         let custodian_event =
             custodian_event.expect("custodian should receive a repo settlement event");
-
         assert_eq!(initiator_event.account().clone(), ALICE_ID.clone());
         assert_eq!(initiator_event.role(), &RepoAccountRole::Initiator);
         assert_eq!(initiator_event.cash_leg().quantity(), &expected_cash);
@@ -2393,7 +2201,6 @@ mod tests {
             stored_agreement.collateral_leg().quantity()
         );
         assert_eq!(initiator_event.settled_timestamp_ms(), &settlement_ms);
-
         assert_eq!(counterparty_event.account().clone(), BOB_ID.clone());
         assert_eq!(counterparty_event.role(), &RepoAccountRole::Counterparty);
         assert_eq!(counterparty_event.cash_leg().quantity(), &expected_cash);
@@ -2402,7 +2209,6 @@ mod tests {
             stored_agreement.collateral_leg().quantity()
         );
         assert_eq!(counterparty_event.settled_timestamp_ms(), &settlement_ms);
-
         assert_eq!(custodian_event.account().clone(), custodian_id.clone());
         assert_eq!(custodian_event.role(), &RepoAccountRole::Custodian);
         assert_eq!(custodian_event.counterparty().clone(), ALICE_ID.clone());
@@ -2412,7 +2218,6 @@ mod tests {
             stored_agreement.collateral_leg().quantity()
         );
         assert_eq!(custodian_event.settled_timestamp_ms(), &settlement_ms);
-
         assert!(
             stx.world
                 .repo_agreements
@@ -2420,16 +2225,13 @@ mod tests {
                 .is_some_and(|agreement| !agreement.is_active()),
             "agreement tombstone should survive settlement"
         );
-
         let custodian_collateral_id = AssetId::new(collateral_def_id.clone(), custodian_id.clone());
         assert!(
             stx.world.assets.get(&custodian_collateral_id).is_none(),
             "custodian collateral should return to the initiator"
         );
-
         stx.apply();
         block.commit().expect("commit");
-
         let view = state.view();
         assert!(
             view.world
@@ -2438,11 +2240,9 @@ mod tests {
                 .is_some_and(|agreement| !agreement.is_active())
         );
     }
-
     #[test]
     fn repo_margin_call_updates_schedule_and_emits_events() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
-
         {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
@@ -2460,16 +2260,13 @@ mod tests {
             stx.apply();
             block.commit().expect("commit");
         }
-
         let margin_timestamp_ms = super::MS_PER_DAY;
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, margin_timestamp_ms, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         RepoMarginCallIsi::new(agreement_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("margin call execute");
-
         let mut roles = Vec::new();
         for event in &stx.world.internal_event_buf {
             if let DataEvent::Account(AccountEvent::Repo(RepoAccountEvent::MarginCalled(payload))) =
@@ -2482,10 +2279,8 @@ mod tests {
         }
         assert!(roles.contains(&(ALICE_ID.clone(), RepoAccountRole::Initiator)));
         assert!(roles.contains(&(BOB_ID.clone(), RepoAccountRole::Counterparty)));
-
         stx.apply();
         block.commit().expect("commit");
-
         let view = state.view();
         let recorded = view
             .world
@@ -2497,11 +2292,9 @@ mod tests {
             &margin_timestamp_ms
         );
     }
-
     #[test]
     fn repo_margin_call_rejected_when_not_due() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
-
         {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
@@ -2514,17 +2307,14 @@ mod tests {
             stx.apply();
             block.commit().expect("commit");
         }
-
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, super::MS_PER_DAY / 2, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let err = RepoMarginCallIsi::new(agreement_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect_err("margin call should be rejected when not due");
         assert!(err.to_string().contains("margin check is not yet due"));
     }
-
     #[allow(clippy::too_many_lines)]
     fn capture_proof_stage(
         state: &State,
@@ -2539,7 +2329,6 @@ mod tests {
         fn number_value(value: u64) -> Value {
             Value::Number(Number::from(value))
         }
-
         let view = state.view();
         let agreement_snapshot = view.world.repo_agreements().get(agreement_id).cloned();
         let agreement_value = agreement_snapshot.map_or_else(
@@ -2619,7 +2408,6 @@ mod tests {
                             number_value(timestamp.saturating_sub(base_timestamp_ms))
                         }),
                 );
-
                 let mut cash = Map::new();
                 cash.insert(
                     "asset".into(),
@@ -2631,7 +2419,6 @@ mod tests {
                 );
                 cash.insert("source".into(), string_value(agreement.cash_source()));
                 obj.insert("cash".into(), Value::Object(cash));
-
                 let mut collateral = Map::new();
                 collateral.insert(
                     "asset".into(),
@@ -2646,11 +2433,9 @@ mod tests {
                     string_value(agreement.collateral_custody_asset()),
                 );
                 obj.insert("collateral".into(), Value::Object(collateral));
-
                 Value::Object(obj)
             },
         );
-
         let mut sorted_assets = tracked_assets.to_vec();
         sorted_assets.sort();
         let assets = sorted_assets
@@ -2666,14 +2451,12 @@ mod tests {
                 Value::Object(entry)
             })
             .collect::<Vec<_>>();
-
         let mut frame = Map::new();
         frame.insert("stage".into(), Value::String(stage_label.to_string()));
         frame.insert("agreement".into(), agreement_value);
         frame.insert("assets".into(), Value::Array(assets));
         Value::Object(frame)
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn repo_deterministic_lifecycle_proof_matches_fixture() {
@@ -2689,7 +2472,6 @@ mod tests {
         // Refresh the fixtures with `scripts/regen_repo_proof_fixture.sh` under
         // the pinned toolchain whenever repo semantics change so governance
         // evidence stays reproducible.
-
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
         let tracked_assets = vec![
             AssetId::new(cash_def_id.clone(), ALICE_ID.clone()),
@@ -2698,7 +2480,6 @@ mod tests {
             AssetId::new(collateral_def_id.clone(), BOB_ID.clone()),
         ];
         let mut frames = Vec::new();
-
         {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, BASE_TIMESTAMP_MS, 0);
             let mut block = state.block(header);
@@ -2723,7 +2504,6 @@ mod tests {
             &agreement_id,
             BASE_TIMESTAMP_MS,
         ));
-
         {
             let margin_timestamp = BASE_TIMESTAMP_MS + super::MS_PER_DAY;
             let header = BlockHeader::new(nonzero!(2_u64), None, None, None, margin_timestamp, 0);
@@ -2742,7 +2522,6 @@ mod tests {
             &agreement_id,
             BASE_TIMESTAMP_MS,
         ));
-
         {
             let unwind_timestamp = BASE_TIMESTAMP_MS + (2 * super::MS_PER_DAY);
             let stored_agreement = state
@@ -2778,11 +2557,9 @@ mod tests {
                 )
                 .expect("seed interest funds");
             }
-
             ReverseRepoIsi::new(agreement_id.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("reverse repo execute");
-
             stx.apply();
             block.commit().expect("commit");
         }
@@ -2793,12 +2570,10 @@ mod tests {
             &agreement_id,
             BASE_TIMESTAMP_MS,
         ));
-
         let proof = norito::json!({
             "scenario": "repo_lifecycle_deterministic",
             "frames": frames,
         });
-
         let proof_bytes = norito::json::to_vec_pretty(&proof).expect("serialize proof");
         if let Ok(path) = std::env::var("REPO_PROOF_SNAPSHOT_OUT") {
             let snapshot_path = std::path::PathBuf::from(&path);

@@ -1,5 +1,4 @@
 #![allow(clippy::print_stdout)]
-
 use std::{
     collections::HashMap,
     env, fs,
@@ -7,18 +6,15 @@ use std::{
     process::Command,
     time::Instant,
 };
-
 use eyre::{Context, Result, bail, eyre};
 use hex::encode as hex_encode;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-
 const DEFAULT_SCENARIO: &str = "submit";
 const DEFAULT_TEST: &str = "org.hyperledger.iroha.android.client.HttpClientTransportHarnessTests";
 const DEFAULT_CONFIG_RELATIVE: &str = "tools/torii_mock_harness/config/default.toml";
 const DEFAULT_FIXTURE_RELATIVE: &str = "fixtures/norito_rpc/transaction_payloads.json";
 const DEFAULT_RUNNER_RELATIVE: &str = "java/iroha_android/run_tests.sh";
-
 fn main() -> Result<()> {
     let opts = CliOptions::parse()?;
     let repo_root = locate_repo_root(opts.repo_root.as_deref())?;
@@ -28,27 +24,22 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| repo_root.join(DEFAULT_CONFIG_RELATIVE));
     let scenarios = ScenarioSet::load(&config_path)?;
     let scenario = scenarios.resolve(&opts.scenario)?;
-
     let tests = opts.tests.clone().unwrap_or_else(|| scenario.tests.clone());
     if tests.is_empty() {
         bail!("scenario '{}' does not specify any tests", scenario.name);
     }
-
     let harness_runner = resolve_repo_path(&repo_root, &opts.runner, &scenario.runner);
     if !harness_runner.is_file() {
         bail!("expected harness runner at {}", harness_runner.display());
     }
-
     let fixture_path = resolve_repo_path(&repo_root, &opts.fixture_path, &scenario.fixture);
     if !fixture_path.is_file() {
         bail!("fixture payloads not found at {}", fixture_path.display());
     }
-
     let metrics_path = opts
         .metrics_path
         .clone()
         .unwrap_or_else(|| default_metrics_path(&repo_root, &opts.sdk));
-
     let joined_tests = tests.join(",");
     let start = Instant::now();
     run_harness(
@@ -61,7 +52,6 @@ fn main() -> Result<()> {
         &scenario.env,
     )?;
     let duration_ms = start.elapsed().as_millis() as u64;
-
     let fixture_hash = compute_sha256_hex(&fixture_path)?;
     let retry_total = read_retry_total();
     write_metrics_file(
@@ -72,7 +62,6 @@ fn main() -> Result<()> {
         retry_total,
         &fixture_hash,
     )?;
-
     println!(
         "[torii-mock-harness] Scenario '{}' for SDK '{}' completed in {}ms",
         scenario.name, opts.sdk, duration_ms
@@ -83,7 +72,6 @@ fn main() -> Result<()> {
     );
     Ok(())
 }
-
 #[derive(Debug, Default, Clone)]
 struct CliOptions {
     sdk: String,
@@ -95,7 +83,6 @@ struct CliOptions {
     runner: Option<PathBuf>,
     fixture_path: Option<PathBuf>,
 }
-
 impl CliOptions {
     fn parse() -> Result<Self> {
         let mut args = env::args().skip(1);
@@ -113,7 +100,6 @@ impl CliOptions {
                 .map(PathBuf::from),
             ..CliOptions::default()
         };
-
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--sdk" => {
@@ -169,11 +155,9 @@ impl CliOptions {
                 }
             }
         }
-
         Ok(opts)
     }
 }
-
 fn print_usage() {
     println!(
         "\
@@ -195,7 +179,6 @@ Environment:
 "
     );
 }
-
 fn parse_tests(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(|entry| entry.trim())
@@ -203,7 +186,6 @@ fn parse_tests(raw: &str) -> Vec<String> {
         .map(|entry| entry.to_string())
         .collect()
 }
-
 fn locate_repo_root(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(root) = explicit {
         return fs::canonicalize(root)
@@ -217,7 +199,6 @@ fn locate_repo_root(explicit: Option<&Path>) -> Result<PathBuf> {
         "failed to locate repository root; pass --repo-root to override"
     ))
 }
-
 fn walk_up_to_repo(start: &Path) -> Option<PathBuf> {
     let mut current = Some(start);
     while let Some(dir) = current {
@@ -230,7 +211,6 @@ fn walk_up_to_repo(start: &Path) -> Option<PathBuf> {
     }
     None
 }
-
 fn resolve_repo_path(
     repo_root: &Path,
     override_path: &Option<PathBuf>,
@@ -241,7 +221,6 @@ fn resolve_repo_path(
     }
     join_repo(repo_root, default_path)
 }
-
 fn join_repo(repo_root: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -249,11 +228,9 @@ fn join_repo(repo_root: &Path, path: &Path) -> PathBuf {
         repo_root.join(path)
     }
 }
-
 fn default_metrics_path(repo_root: &Path, sdk: &str) -> PathBuf {
     repo_root.join(format!("mock-harness-metrics-{sdk}.prom"))
 }
-
 fn run_harness(
     script: &Path,
     repo_root: &Path,
@@ -283,7 +260,6 @@ fn run_harness(
     }
     Ok(())
 }
-
 fn compute_sha256_hex(path: &Path) -> Result<String> {
     let data = fs::read(path)
         .with_context(|| format!("failed to read fixture payload {}", path.display()))?;
@@ -291,14 +267,12 @@ fn compute_sha256_hex(path: &Path) -> Result<String> {
     hasher.update(&data);
     Ok(hex_encode(hasher.finalize()))
 }
-
 fn read_retry_total() -> u64 {
     env::var("TORII_MOCK_HARNESS_RETRY_TOTAL")
         .ok()
         .and_then(|raw| raw.parse::<u64>().ok())
         .unwrap_or(0)
 }
-
 fn write_metrics_file(
     path: &Path,
     sdk: &str,
@@ -326,12 +300,10 @@ torii_mock_harness_fixture_version{{sdk=\"{sdk}\",scenario=\"{scenario}\",fixtur
         .with_context(|| format!("failed to write metrics file {}", path.display()))?;
     Ok(())
 }
-
 #[derive(Debug, Clone)]
 struct ScenarioSet {
     entries: HashMap<String, ScenarioEntry>,
 }
-
 impl ScenarioSet {
     fn load(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path)
@@ -351,20 +323,17 @@ impl ScenarioSet {
         }
         Ok(Self { entries })
     }
-
     fn resolve(&self, name: &str) -> Result<&ScenarioEntry> {
         self.entries
             .get(name)
             .ok_or_else(|| eyre!("scenario '{}' not found in config", name))
     }
 }
-
 #[derive(Debug, Deserialize)]
 struct ScenarioFile {
     #[serde(default)]
     scenario: Vec<ScenarioRecord>,
 }
-
 #[derive(Debug, Deserialize)]
 struct ScenarioRecord {
     name: String,
@@ -379,7 +348,6 @@ struct ScenarioRecord {
     #[serde(default)]
     env: HashMap<String, String>,
 }
-
 impl ScenarioRecord {
     fn into_entry(self) -> ScenarioEntry {
         let tests = sanitize_tests(self.tests);
@@ -401,14 +369,12 @@ impl ScenarioRecord {
         }
     }
 }
-
 fn sanitize_tests(raw: Vec<String>) -> Vec<String> {
     raw.into_iter()
         .map(|entry| entry.trim().to_string())
         .filter(|entry| !entry.is_empty())
         .collect()
 }
-
 fn sanitize_path(raw: Option<String>) -> Option<PathBuf> {
     raw.and_then(|entry| {
         let trimmed = entry.trim();
@@ -419,7 +385,6 @@ fn sanitize_path(raw: Option<String>) -> Option<PathBuf> {
         }
     })
 }
-
 #[derive(Debug, Clone)]
 struct ScenarioEntry {
     name: String,
@@ -430,11 +395,9 @@ struct ScenarioEntry {
     fixture: PathBuf,
     env: HashMap<String, String>,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn scenario_config_parses() {
         let toml = r#"
@@ -460,7 +423,6 @@ name = "fallback"
             PathBuf::from("fixtures/norito_rpc/transaction_payloads.json")
         );
     }
-
     #[test]
     fn scenario_config_resolves_runner_and_fixture() {
         let toml = r#"
@@ -478,14 +440,12 @@ fixture = "/tmp/fixture.json"
         assert_eq!(entries[0].runner, PathBuf::from("bin/run.sh"));
         assert_eq!(entries[0].fixture, PathBuf::from("/tmp/fixture.json"));
     }
-
     #[test]
     fn parse_tests_splits_and_trims() {
         let tests = parse_tests("Foo, Bar ,Baz");
         assert_eq!(tests, vec!["Foo", "Bar", "Baz"]);
         assert!(parse_tests(" , ").is_empty());
     }
-
     #[test]
     fn retry_total_parsing_handles_invalid() {
         unsafe {

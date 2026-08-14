@@ -92,8 +92,12 @@ so reviewers can reproduce them verbatim.
 
 1. **Regenerate fixtures**
    ```bash
+   sf1_stage="$(mktemp -d "${TMPDIR:-/tmp}/iroha-sf1.XXXXXX")"
+   sf1_stage="$(cd -- "$sf1_stage" && pwd -P)"
+   chmod 700 "$sf1_stage"
    cargo run --locked -p sorafs_chunker --features dev-tools --bin export_vectors \
-     --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
+     -- --write --staging-root "$sf1_stage" \
+     --signing-key-file /absolute/private/council-signing-key.hex
    ```
 2. **Run the parity suite** – `cargo test -p sorafs_chunker` and the
    cross-language diff harness (`crates/sorafs_chunker/tests/vectors.rs`) must be

@@ -3,7 +3,6 @@ fn assert_passive_committed_lane_status_reads(
     proposal: &LaneBlockProposalV1,
 ) {
     use super::super::status::CommittedLaneBlockExecutionStatus as ExecutionStatus;
-
     let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(
         &iroha_data_model::nexus::LaneCatalog::default(),
     );

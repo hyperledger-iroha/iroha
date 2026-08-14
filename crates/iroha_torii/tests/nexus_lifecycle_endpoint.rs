@@ -1,9 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level regressions for the read-only Nexus lifecycle status surface.
 #![cfg(feature = "app_api")]
-
 use std::sync::Arc;
-
 use axum::{
     Router,
     body::Body,
@@ -21,20 +19,16 @@ use iroha_core::{
 };
 use iroha_data_model::nexus::{LaneId, LaneLifecycleStatusV1};
 use iroha_torii_shared::uri::NEXUS_LANE_LIFECYCLE;
-
 #[path = "fixtures.rs"]
 mod fixtures;
-
 struct NexusHarness {
     app: Router,
     queue: Arc<Queue>,
     state: Arc<State>,
 }
-
 fn build_app() -> NexusHarness {
     build_app_with_api_token(None)
 }
-
 fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.nexus.enabled = true;
@@ -53,7 +47,6 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
         .set_nexus(cfg.nexus.clone())
         .expect("apply initial Nexus config");
     let state = Arc::new(state);
-
     let events_sender: EventsSender = tokio::sync::broadcast::channel(64).0;
     let router = Arc::new(ConfigLaneRouter::new(
         cfg.nexus.routing_policy.clone(),
@@ -73,7 +66,6 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
         let view = state.view();
         queue.reconfigure_nexus(&state.nexus_snapshot(), &view, None);
     }
-
     let torii = fixtures::ToriiHarness::new_without_telemetry(
         &cfg,
         iroha_data_model::ChainId::from("test-chain"),
@@ -83,14 +75,12 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
         &queue,
         events_sender,
     );
-
     NexusHarness {
         app: torii.router(),
         queue,
         state,
     }
 }
-
 async fn response_bytes(response: Response) -> Vec<u8> {
     response
         .into_body()
@@ -100,7 +90,6 @@ async fn response_bytes(response: Response) -> Vec<u8> {
         .to_bytes()
         .to_vec()
 }
-
 #[tokio::test]
 async fn lifecycle_get_returns_valid_exact_json_status() {
     let harness = build_app();
@@ -130,7 +119,6 @@ async fn lifecycle_get_returns_valid_exact_json_status() {
         harness.state.nexus_snapshot().lane_catalog
     );
 }
-
 #[tokio::test]
 async fn lifecycle_get_returns_valid_exact_norito_status() {
     let harness = build_app();
@@ -153,7 +141,6 @@ async fn lifecycle_get_returns_valid_exact_norito_status() {
         harness.state.nexus_snapshot().lane_catalog
     );
 }
-
 #[tokio::test]
 async fn lifecycle_get_honors_api_token_access_policy() {
     let harness = build_app_with_api_token(Some("lifecycle-status-token"));
@@ -170,7 +157,6 @@ async fn lifecycle_get_honors_api_token_access_policy() {
                 .expect("response");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
-
     let response = fixtures::request(
         &harness.app,
         Request::builder()
@@ -184,7 +170,6 @@ async fn lifecycle_get_honors_api_token_access_policy() {
     .expect("response");
     assert_eq!(response.status(), StatusCode::OK);
 }
-
 #[tokio::test]
 async fn lifecycle_post_and_normalization_variants_are_unregistered_without_mutation() {
     let harness = build_app();

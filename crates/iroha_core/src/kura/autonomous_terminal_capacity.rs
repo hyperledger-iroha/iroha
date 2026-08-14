@@ -10,7 +10,6 @@ impl Kura {
             None,
         )
     }
-
     /// Inventory one active autonomous namespace while allowing the exact
     /// authenticated view-state named temporary currently being recovered.
     /// Every other recovery artifact remains fail-closed.
@@ -234,7 +233,6 @@ impl Kura {
             conceptual_bytes,
         })
     }
-
     /// Return `(missing_terminal_count, incomplete_lifecycle_count)` across
     /// every active route while geometry and sidecar locks are held.
     ///
@@ -244,7 +242,6 @@ impl Kura {
     fn autonomous_global_terminal_reservation_counts_locked(&self) -> Result<(usize, usize)> {
         self.autonomous_global_terminal_reservation_counts_with_allowed_view_temp_locked(None)
     }
-
     fn autonomous_global_terminal_reservation_counts_with_allowed_view_temp_locked(
         &self,
         allowed_view_temp: Option<&Path>,
@@ -301,7 +298,6 @@ impl Kura {
         }
         Ok((missing, incomplete))
     }
-
     fn autonomous_global_terminal_outcome_reserved_bytes_locked(&self) -> Result<u64> {
         let (missing, incomplete) = self.autonomous_global_terminal_reservation_counts_locked()?;
         let terminal_max = u64::try_from(AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES)?;
@@ -316,13 +312,11 @@ impl Kura {
                 )
             })
     }
-
     fn autonomous_global_terminal_outcome_reserved_bytes(&self) -> Result<u64> {
         let _geometry_guard = self.lane_geometry_lock.lock();
         let _sidecar_guard = self.sidecar_lock.lock();
         self.autonomous_global_terminal_outcome_reserved_bytes_locked()
     }
-
     /// Preflight one autonomous atomic write against physical bytes, every
     /// admitted missing-terminal slot, the one serialized terminal-CAS
     /// transient, all pending canonical blocks, and all outstanding carrier
@@ -346,7 +340,6 @@ impl Kura {
             None,
         )
     }
-
     fn validate_configured_autonomous_mutation_disk_peak_with_allowed_view_temp_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -448,7 +441,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Snapshot canonical blocks that are still represented only in memory.
     ///
     /// Callers hold `prune_lock` and `canonical_chain_lock`. This helper must
@@ -461,7 +453,6 @@ impl Kura {
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
         self.pending_block_bytes(persisted_count, unindexed_bytes)
     }
-
     fn validate_configured_kura_capacity_after_startup_recovery(&self) -> Result<()> {
         if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() {
             return Ok(());
@@ -501,7 +492,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn validate_autonomous_lifecycle_cursor_cas_budget(
         related_files: usize,
         related_bytes: u64,
@@ -529,7 +519,6 @@ impl Kura {
                 "autonomous lifecycle cursor CAS would exceed the shared sidecar aggregate byte budget",
             );
         }
-
         // Atomic synced replacement materializes one `.kura-sidecar-*` temp.
         // Bound that transient exposure separately from the resulting stable
         // namespace so replacing a cursor is not miscounted as a second stable
@@ -550,7 +539,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn validate_autonomous_identity_artifact_cas_budget(
         inventory: &AutonomousLaneAttemptInventoryBudget,
         identity: (u64, u64),
@@ -589,7 +577,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn validate_autonomous_namespace_artifact_cas_budget(
         inventory: &AutonomousLaneAttemptInventoryBudget,
         previous_len: u64,

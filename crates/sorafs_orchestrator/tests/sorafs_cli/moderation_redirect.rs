@@ -6,7 +6,6 @@ fn moderation_redirect_manifest_fixture()
         ModerationReproBodyV1, ModerationReproManifestV1, ModerationReproSignatureV1,
         ModerationSeedMaterialV1, ModerationThresholdsV1, moderation_model_required_operations_v1,
     };
-
     let max_input_bytes = 1;
     let calibration_knot_count = 2;
     let mut body = ModerationReproBodyV1 {
@@ -62,13 +61,11 @@ fn moderation_redirect_manifest_fixture()
     manifest.validate().expect("fixture manifest validates");
     manifest
 }
-
 struct ModerationRedirectFixture {
     manifest_path: PathBuf,
     payload_path: PathBuf,
     result_path: PathBuf,
 }
-
 fn prepare_moderation_redirect_fixture(root: &Path) -> ModerationRedirectFixture {
     let manifest = moderation_redirect_manifest_fixture();
     let manifest_path = root.join("moderation-redirect-manifest.to");
@@ -108,7 +105,6 @@ fn prepare_moderation_redirect_fixture(root: &Path) -> ModerationRedirectFixture
         result_path,
     }
 }
-
 fn assert_moderation_redirect_left_no_evidence(output: &std::process::Output, path: &Path) {
     assert!(!output.status.success());
     assert!(
@@ -120,12 +116,10 @@ fn assert_moderation_redirect_left_no_evidence(output: &std::process::Output, pa
         "a redirected moderation canary must publish no evidence file"
     );
 }
-
 #[test]
 fn moderation_runner_canary_rejects_status_and_screen_redirects_before_evidence() {
     let tempdir = tempdir().expect("tempdir");
     let fixture = prepare_moderation_redirect_fixture(tempdir.path());
-
     for endpoint in ["status", "screen"] {
         let origin = MockServer::start();
         let substituted_origin = MockServer::start();
@@ -180,7 +174,6 @@ fn moderation_runner_canary_rejects_status_and_screen_redirects_before_evidence(
             .arg(format!("--json-out={}", evidence_path.display()))
             .output()
             .expect("command executes");
-
         assert_moderation_redirect_left_no_evidence(&output, &evidence_path);
         redirect.assert_calls(1);
         if let Some(status_response) = status_response {
@@ -189,12 +182,10 @@ fn moderation_runner_canary_rejects_status_and_screen_redirects_before_evidence(
         substituted_response.assert_calls(0);
     }
 }
-
 #[test]
 fn moderation_committee_canary_rejects_status_and_aggregate_redirects_before_evidence() {
     let tempdir = tempdir().expect("tempdir");
     let fixture = prepare_moderation_redirect_fixture(tempdir.path());
-
     for endpoint in ["status", "aggregate"] {
         let origin = MockServer::start();
         let substituted_origin = MockServer::start();
@@ -250,7 +241,6 @@ fn moderation_committee_canary_rejects_status_and_aggregate_redirects_before_evi
             .arg(format!("--json-out={}", evidence_path.display()))
             .output()
             .expect("command executes");
-
         assert_moderation_redirect_left_no_evidence(&output, &evidence_path);
         redirect.assert_calls(1);
         if let Some(status_response) = status_response {

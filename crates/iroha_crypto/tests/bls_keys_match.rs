@@ -1,8 +1,6 @@
 //! Validate that stored BLS keypair fixtures line up with the expected public keys.
 #![cfg(all(feature = "bls", not(feature = "ffi_import")))]
-
 use iroha_crypto::{KeyPair, PrivateKey, PublicKey};
-
 #[test]
 fn bls_keys_match_localnet_soranexus() {
     // Sanity-check the localnet BLS keypairs used by the Sora Nexus configs.
@@ -24,7 +22,6 @@ fn bls_keys_match_localnet_soranexus() {
             "89262081623DF6E560E259917D2AE1740FE840190AABBAC16083672E82FD99E184455D",
         ),
     ];
-
     for (public_hex, private_hex) in keypairs {
         let private = private_hex
             .parse::<PrivateKey>()

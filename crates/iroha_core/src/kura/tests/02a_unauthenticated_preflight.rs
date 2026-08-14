@@ -23,7 +23,6 @@ fn copy_regular_test_tree(source: &Path, destination: &Path) {
         }
     }
 }
-
 #[cfg(unix)]
 fn snapshot_regular_test_tree(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
     fn visit(root: &Path, current: &Path, snapshot: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) {
@@ -49,12 +48,10 @@ fn snapshot_regular_test_tree(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>>
             );
         }
     }
-
     let mut snapshot = BTreeMap::new();
     visit(root, root, &mut snapshot);
     snapshot
 }
-
 fn configured_primary_catalog(alias: &str) -> LaneCatalog {
     LaneCatalog::new(
         nonzero!(1_u32),
@@ -65,7 +62,6 @@ fn configured_primary_catalog(alias: &str) -> LaneCatalog {
     )
     .expect("configured primary-lane catalog")
 }
-
 #[test]
 fn unauthenticated_new_preflight_rejects_custom_single_lane_without_mutation() {
     let temp = TempDir::new().expect("temporary parent directory");
@@ -73,7 +69,6 @@ fn unauthenticated_new_preflight_rejects_custom_single_lane_without_mutation() {
     let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
     let custom_catalog = configured_primary_catalog("custom-primary-path");
     let custom_config = RuntimeLaneConfig::from_catalog(&custom_catalog);
-
     let error = Kura::validate_unauthenticated_fresh_store_inputs(&config, &custom_config)
         .expect_err("custom single-lane geometry requires catalog authentication");
     assert!(matches!(
@@ -88,7 +83,6 @@ fn unauthenticated_new_preflight_rejects_custom_single_lane_without_mutation() {
         "rejected custom geometry must not create its store root"
     );
 }
-
 #[test]
 fn unauthenticated_new_preflight_rejects_multilane_without_mutation() {
     let temp = TempDir::new().expect("temporary parent directory");
@@ -103,7 +97,6 @@ fn unauthenticated_new_preflight_rejects_multilane_without_mutation() {
     let catalog =
         LaneCatalog::new(nonzero!(2_u32), vec![lane_zero, lane_one]).expect("two-lane catalog");
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-
     let error = Kura::validate_unauthenticated_fresh_store_inputs(&config, &lane_config)
         .expect_err("multilane geometry requires catalog authentication");
     assert!(matches!(
@@ -118,19 +111,16 @@ fn unauthenticated_new_preflight_rejects_multilane_without_mutation() {
         "rejected multilane geometry must not create its store root"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn unauthenticated_new_preflight_rejects_symlink_root_without_mutation() {
     use std::os::unix::fs::symlink;
-
     let temp = TempDir::new().expect("temporary parent directory");
     let target = temp.path().join("target");
     fs::create_dir(&target).expect("create symlink target");
     let store_root = temp.path().join("kura-link");
     symlink(&target, &store_root).expect("create Kura root symlink");
     let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
-
     let error =
         Kura::validate_unauthenticated_fresh_store_inputs(&config, &RuntimeLaneConfig::default())
             .expect_err("a symlink store root must fail closed");

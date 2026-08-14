@@ -1,8 +1,6 @@
 #![cfg(feature = "json")]
 //! Deterministic tests for `Parser::parse_string`.
-
 use norito::json::{Parser, write_json_string};
-
 #[test]
 fn parser_parse_string_matches_quoted_input() {
     let cases = [
@@ -15,7 +13,6 @@ fn parser_parse_string_matches_quoted_input() {
         "emoji 😀",
         "cuneiform 𒀭",
     ];
-
     for value in cases {
         let mut quoted = String::new();
         write_json_string(value, &mut quoted);

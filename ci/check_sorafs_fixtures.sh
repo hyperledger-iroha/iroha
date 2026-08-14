@@ -417,11 +417,14 @@ create_fixture_worktree() {
 
 run_fixed_path_fixture_generators() {
   local worktree="$1"
+  local sf1_stage="${fixture_snapshot_root}/sf1-stage-${worktree##*/}"
+  mkdir -m 0700 -- "${sf1_stage}"
   (
     cd "${worktree}"
     echo "[sorafs-fixtures] regenerating chunker fixtures + signatures in ${worktree##*/}"
     CARGO_TARGET_DIR="${fixture_cargo_target_dir}" \
-      cargo run --locked -p sorafs_chunker --features dev-tools --bin export_vectors
+      cargo run --locked -p sorafs_chunker --features dev-tools --bin export_vectors -- \
+        --write --staging-root "${sf1_stage}"
     echo "[sorafs-fixtures] regenerating provider admission fixtures in ${worktree##*/}"
     CARGO_TARGET_DIR="${fixture_cargo_target_dir}" \
       NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked \
@@ -634,6 +637,8 @@ expect_aliases(backpressure)
 PY
 
 require_fixture_tool node "SF1 vector parity"
+echo "[sorafs-fixtures] running SF1 vector checker regressions (Node)"
+node --test scripts/tests/check_sf1_vectors.test.mjs
 echo "[sorafs-fixtures] running SF1 vector parity (Node)"
 node scripts/check_sf1_vectors.mjs
 

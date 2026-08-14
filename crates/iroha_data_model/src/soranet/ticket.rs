@@ -5,16 +5,13 @@
 //! lean so Halo2 commitments can be layered on top without frequent changes.
 //! The cryptographic proof plumbing (commitments, nullifier checks, Halo2
 //! verification) lives in the host runtime and the `iroha_zkp_halo2` crate.
-
 use iroha_crypto::{PrivateKey, PublicKey, Signature, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 use super::Digest32;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{account::AccountId, metadata::Metadata};
-
 const LEAF_TAG_BLINDED_CID: &[u8] = b"soranet.ticket.body.blinded_cid.v1";
 const LEAF_TAG_SCOPE: &[u8] = b"soranet.ticket.body.scope.v1";
 const LEAF_TAG_MAX_USES: &[u8] = b"soranet.ticket.body.max_uses.v1";
@@ -25,7 +22,6 @@ const LEAF_TAG_SALT_EPOCH: &[u8] = b"soranet.ticket.body.salt_epoch.v1";
 const LEAF_TAG_POLICY_FLAGS: &[u8] = b"soranet.ticket.body.policy_flags.v1";
 const LEAF_TAG_METADATA: &[u8] = b"soranet.ticket.body.metadata.v1";
 const NODE_DOMAIN: &[u8] = b"soranet.ticket.body.node.v1";
-
 /// Errors raised during ticket commitment verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum TicketCommitmentError {
@@ -38,7 +34,6 @@ pub enum TicketCommitmentError {
         actual: Digest32,
     },
 }
-
 /// Errors raised during ticket signature verification.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TicketSignatureError {
@@ -52,7 +47,6 @@ pub enum TicketSignatureError {
     #[error("ticket signature verification failed: {0}")]
     Signature(#[from] iroha_crypto::Error),
 }
-
 /// Ticket capability scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -74,7 +68,6 @@ pub enum TicketScopeV1 {
     /// Ticket grants administrative operations (e.g., revoke, delegate).
     Admin,
 }
-
 /// Canonical ticket payload describing the blinded CID and policy window.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -88,7 +81,7 @@ pub enum TicketScopeV1 {
 )]
 pub struct TicketBodyV1 {
     /// Blinded content identifier protected by the `SoraNet` salt schedule.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub blinded_cid: Digest32,
     /// Capability scope granted to the holder.
     pub scope: TicketScopeV1,
@@ -108,7 +101,6 @@ pub struct TicketBodyV1 {
     #[norito(default)]
     pub metadata: Metadata,
 }
-
 impl TicketBodyV1 {
     /// Compute the canonical BLAKE3 Merkle commitment for this ticket body.
     #[must_use]
@@ -116,7 +108,6 @@ impl TicketBodyV1 {
         compute_ticket_commitment(self)
     }
 }
-
 /// Ticket envelope bundling the body, cryptographic commitment, proof, and signature.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -132,24 +123,22 @@ pub struct TicketEnvelopeV1 {
     /// Canonical ticket body.
     pub body: TicketBodyV1,
     /// Commitment over ticket fields (exact hash computed in host runtime).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub commitment: Digest32,
     /// Halo2 proof bytes verifying the commitment/nullifier constraints.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub zk_proof: Vec<u8>,
     /// Issuer signature sealing the ticket body + commitment.
     pub signature: Signature,
     /// Nullifier used to detect replay; actual validation occurs host-side.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub nullifier: Digest32,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 struct TicketSignaturePayloadV1 {
     body: TicketBodyV1,
     commitment: Digest32,
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for TicketBodyV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = bytes;
@@ -159,7 +148,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TicketBodyV1 {
         Ok((value, consumed))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for TicketEnvelopeV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = bytes;
@@ -169,7 +157,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TicketEnvelopeV1 {
         Ok((value, consumed))
     }
 }
-
 impl TicketEnvelopeV1 {
     /// Build and sign a ticket envelope with a commitment derived from `body`.
     ///
@@ -203,19 +190,16 @@ impl TicketEnvelopeV1 {
             nullifier,
         })
     }
-
     /// Returns `true` if the ticket has expired relative to `timestamp`.
     #[must_use]
     pub fn is_expired(&self, timestamp: u64) -> bool {
         timestamp >= self.body.valid_until
     }
-
     /// Returns `true` if the ticket is not yet active at `timestamp`.
     #[must_use]
     pub fn is_not_yet_active(&self, timestamp: u64) -> bool {
         timestamp < self.body.valid_after
     }
-
     /// Returns a display hint describing the ticket scope.
     #[must_use]
     pub fn scope_label(&self) -> &'static str {
@@ -225,7 +209,6 @@ impl TicketEnvelopeV1 {
             TicketScopeV1::Admin => "admin",
         }
     }
-
     /// Verifies that the embedded commitment matches the canonical Merkle commitment over the body.
     ///
     /// This helper provides a lightweight host-side check that ensures the Halo2 proof payload can
@@ -247,14 +230,12 @@ impl TicketEnvelopeV1 {
             })
         }
     }
-
     /// Returns `true` when the commitment embedded in the envelope is missing or does not match the
     /// canonical commitment derived from the body.
     #[must_use]
     pub fn commitment_is_placeholder(&self) -> bool {
         self.verify_commitment().is_err()
     }
-
     /// Verifies the issuer signature over the canonical body plus commitment payload.
     ///
     /// # Errors
@@ -274,7 +255,6 @@ impl TicketEnvelopeV1 {
             .verify(issuer_public_key, &self.signature_payload())
             .map_err(TicketSignatureError::Signature)
     }
-
     fn signature_payload(&self) -> TicketSignaturePayloadV1 {
         TicketSignaturePayloadV1 {
             body: self.body.clone(),
@@ -282,39 +262,27 @@ impl TicketEnvelopeV1 {
         }
     }
 }
-
 fn compute_ticket_commitment(body: &TicketBodyV1) -> Digest32 {
     let mut leaves = Vec::with_capacity(9);
-
     leaves.push(hash_leaf(LEAF_TAG_BLINDED_CID, body.blinded_cid.as_slice()));
-
     let scope_bytes = body.scope.encode();
     leaves.push(hash_leaf(LEAF_TAG_SCOPE, scope_bytes.as_slice()));
-
     let max_uses_bytes = body.max_uses.to_le_bytes();
     leaves.push(hash_leaf(LEAF_TAG_MAX_USES, &max_uses_bytes));
-
     let valid_after_bytes = body.valid_after.to_le_bytes();
     leaves.push(hash_leaf(LEAF_TAG_VALID_AFTER, &valid_after_bytes));
-
     let valid_until_bytes = body.valid_until.to_le_bytes();
     leaves.push(hash_leaf(LEAF_TAG_VALID_UNTIL, &valid_until_bytes));
-
     let issuer_bytes = body.issuer_id.encode();
     leaves.push(hash_leaf(LEAF_TAG_ISSUER_ID, issuer_bytes.as_slice()));
-
     let salt_epoch_bytes = body.salt_epoch.to_le_bytes();
     leaves.push(hash_leaf(LEAF_TAG_SALT_EPOCH, &salt_epoch_bytes));
-
     let policy_flags_bytes = body.policy_flags.to_le_bytes();
     leaves.push(hash_leaf(LEAF_TAG_POLICY_FLAGS, &policy_flags_bytes));
-
     let metadata_bytes = body.metadata.encode();
     leaves.push(hash_leaf(LEAF_TAG_METADATA, metadata_bytes.as_slice()));
-
     merkle_root(leaves)
 }
-
 fn hash_leaf(domain: &[u8], value: &[u8]) -> Digest32 {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
@@ -323,7 +291,6 @@ fn hash_leaf(domain: &[u8], value: &[u8]) -> Digest32 {
     hasher.update(value);
     finalize_hash(&hasher)
 }
-
 fn hash_node(left: &Digest32, right: &Digest32) -> Digest32 {
     let mut hasher = blake3::Hasher::new();
     hasher.update(NODE_DOMAIN);
@@ -331,10 +298,8 @@ fn hash_node(left: &Digest32, right: &Digest32) -> Digest32 {
     hasher.update(right);
     finalize_hash(&hasher)
 }
-
 fn merkle_root(mut leaves: Vec<Digest32>) -> Digest32 {
     debug_assert!(!leaves.is_empty());
-
     while leaves.len() > 1 {
         let mut next = Vec::with_capacity(leaves.len().div_ceil(2));
         for chunk in leaves.chunks(2) {
@@ -347,25 +312,20 @@ fn merkle_root(mut leaves: Vec<Digest32>) -> Digest32 {
         }
         leaves = next;
     }
-
     leaves[0]
 }
-
 fn finalize_hash(hasher: &blake3::Hasher) -> Digest32 {
     let mut out = [0_u8; 32];
     let clone = hasher.clone();
     out.copy_from_slice(clone.finalize().as_bytes());
     out
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::codec::{Decode, Encode};
-
     use super::*;
     use crate::{account::AccountId, domain::DomainId};
-
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -375,12 +335,10 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn sample_issuer_keypair() -> KeyPair {
         KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
             .expect("derive checked Soranet ticket fixture issuer keypair")
     }
-
     fn sample_body() -> TicketBodyV1 {
         let _domain = DomainId::try_new("wonderland", "universal").expect("static domain is valid");
         let issuer_key = sample_issuer_keypair();
@@ -397,7 +355,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     #[test]
     fn ticket_envelope_roundtrip() {
         let envelope = sample_envelope();
@@ -406,7 +363,6 @@ mod tests {
             TicketEnvelopeV1::decode(&mut bytes.as_slice()).expect("decode ticket envelope");
         assert_eq!(envelope, decoded);
     }
-
     fn sample_envelope() -> TicketEnvelopeV1 {
         let body = sample_body();
         let commitment = body.compute_commitment();
@@ -419,7 +375,6 @@ mod tests {
             nullifier: [0u8; 32],
         }
     }
-
     fn signed_sample_envelope() -> TicketEnvelopeV1 {
         let issuer_key = sample_issuer_keypair();
         TicketEnvelopeV1::try_sign(
@@ -430,7 +385,6 @@ mod tests {
         )
         .expect("sign checked SoraNet ticket envelope")
     }
-
     fn signature_with_malformed_ed25519_r(
         signature: &Signature,
         replacement_r: &[u8; 32],
@@ -439,7 +393,6 @@ mod tests {
         payload[..replacement_r.len()].copy_from_slice(replacement_r);
         Signature::from_bytes(&payload)
     }
-
     #[test]
     fn detects_expiration_boundaries() {
         let ticket = sample_envelope();
@@ -447,7 +400,6 @@ mod tests {
         assert!(ticket.is_expired(20));
         assert!(ticket.is_expired(25));
     }
-
     #[test]
     fn detects_activation_window() {
         let ticket = sample_envelope();
@@ -455,7 +407,6 @@ mod tests {
         assert!(!ticket.is_not_yet_active(10));
         assert!(!ticket.is_not_yet_active(15));
     }
-
     #[test]
     fn scope_labels_match_variants() {
         let mut ticket = sample_envelope();
@@ -465,41 +416,34 @@ mod tests {
         ticket.body.scope = TicketScopeV1::Admin;
         assert_eq!(ticket.scope_label(), "admin");
     }
-
     #[test]
     fn commitment_verification_succeeds_for_matching_body() {
         let mut ticket = sample_envelope();
         assert_eq!(ticket.verify_commitment(), Ok(()));
         assert!(!ticket.commitment_is_placeholder());
-
         ticket.commitment[0] ^= 0xFF;
         assert!(ticket.verify_commitment().is_err());
         assert!(ticket.commitment_is_placeholder());
     }
-
     #[test]
     fn commitment_changes_with_body_mutation() {
         let body = sample_body();
         let commitment = body.compute_commitment();
         assert_ne!(commitment, [0u8; 32]);
-
         let mut tweaked = body.clone();
         tweaked.max_uses += 1;
         assert_ne!(tweaked.compute_commitment(), commitment);
     }
-
     #[test]
     fn ticket_signature_verifies_body_and_commitment() {
         signed_sample_envelope()
             .verify_signature()
             .expect("checked ticket signature verifies");
     }
-
     #[test]
     fn ticket_signature_rejects_stale_commitment() {
         let mut ticket = signed_sample_envelope();
         ticket.body.max_uses += 1;
-
         assert!(matches!(
             ticket.verify_signature(),
             Err(TicketSignatureError::Commitment(
@@ -507,7 +451,6 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn ticket_try_sign_rejects_issuer_private_key_mismatch() {
         let wrong_key = KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::Ed25519)
@@ -519,32 +462,26 @@ mod tests {
             wrong_key.private_key(),
         )
         .expect_err("issuer mismatch must reject before signing");
-
         assert!(matches!(err, iroha_crypto::Error::Other(_)));
     }
-
     #[test]
     fn ticket_signature_rejects_all_zero_signature_material() {
         let mut ticket = signed_sample_envelope();
         ticket.signature = Signature::from_bytes(&[0u8; 64]);
-
         assert!(matches!(
             ticket.verify_signature(),
             Err(TicketSignatureError::Signature(_))
         ));
     }
-
     #[test]
     fn ticket_signature_rejects_malformed_ed25519_signature_r() {
         let valid_signature = signed_sample_envelope().signature;
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_R),
             ("noncanonical", NONCANONICAL_ED25519_R),
         ] {
             let mut ticket = signed_sample_envelope();
             ticket.signature = signature_with_malformed_ed25519_r(&valid_signature, &replacement_r);
-
             assert!(
                 matches!(
                     ticket.verify_signature(),

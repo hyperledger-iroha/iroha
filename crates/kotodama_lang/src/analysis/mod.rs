@@ -5,20 +5,16 @@
 //! the parsed AST and typed program, whereas bytecode checks inspect compiled
 //! `.to` artifacts. Fuzz harnesses execute simplified interpreters or VM runs
 //! to exercise contracts and surface potential runtime failures.
-
 use std::fmt;
-
 pub mod bytecode;
 pub mod fuzz;
 pub mod source;
-
 /// Severity level associated with an [`AnalysisFinding`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnalysisSeverity {
     Warning,
     Info,
 }
-
 impl fmt::Display for AnalysisSeverity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -27,7 +23,6 @@ impl fmt::Display for AnalysisSeverity {
         }
     }
 }
-
 /// Category of analysis that produced a [`AnalysisFinding`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnalysisCategory {
@@ -36,7 +31,6 @@ pub enum AnalysisCategory {
     Fuzz,
     BytecodeFuzz,
 }
-
 impl fmt::Display for AnalysisCategory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let label = match self {
@@ -48,7 +42,6 @@ impl fmt::Display for AnalysisCategory {
         write!(f, "{label}")
     }
 }
-
 /// Single finding produced by one of the analysis passes.
 #[derive(Debug, Clone)]
 pub struct AnalysisFinding {
@@ -57,7 +50,6 @@ pub struct AnalysisFinding {
     pub category: AnalysisCategory,
     pub message: String,
 }
-
 impl AnalysisFinding {
     pub fn warning(
         category: AnalysisCategory,
@@ -71,7 +63,6 @@ impl AnalysisFinding {
             message: message.into(),
         }
     }
-
     pub fn info(
         category: AnalysisCategory,
         code: &'static str,
@@ -85,14 +76,12 @@ impl AnalysisFinding {
         }
     }
 }
-
 /// Deterministic pseudo-random number generator used by fuzz harnesses to avoid
 /// introducing external dependencies.
 #[derive(Clone)]
 pub struct SimpleRng {
     state: u64,
 }
-
 impl SimpleRng {
     /// Create a new RNG seeded with `seed`. Zero seeds are allowed but will be
     /// tweaked to avoid the all-zero state.
@@ -104,7 +93,6 @@ impl SimpleRng {
         };
         Self { state }
     }
-
     /// Next 64-bit word using xorshift64*.
     pub fn next_u64(&mut self) -> u64 {
         let mut x = self.state;
@@ -114,12 +102,10 @@ impl SimpleRng {
         self.state = x;
         x.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
-
     /// Next 32-bit word.
     pub fn next_u32(&mut self) -> u32 {
         (self.next_u64() & 0xFFFF_FFFF) as u32
     }
-
     /// Next boolean.
     pub fn next_bool(&mut self) -> bool {
         (self.next_u64() & 1) == 1

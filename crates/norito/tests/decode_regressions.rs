@@ -1,7 +1,5 @@
 //! Regression tests covering truncated and tampered Norito decode inputs.
-
 use norito::core::{self, Error};
-
 #[test]
 fn aos_bytes_decode_truncation() {
     let rows = vec![(42u64, b"abc".as_slice(), true)];
@@ -11,13 +9,11 @@ fn aos_bytes_decode_truncation() {
     let err = norito::aos::decode_rows_u64_bytes_bool(&truncated).expect_err("should fail");
     assert!(matches!(err, Error::LengthMismatch | Error::Message(_)));
 }
-
 #[cfg(feature = "columnar")]
 #[test]
 fn ncb_str_view_truncation_and_offset_tamper() {
     let rows = vec![(1u64, "alice", true), (2u64, "bob", false)];
     let payload = norito::columnar::encode_ncb_u64_str_bool(&rows);
-
     // Truncate the final byte and ensure the view rejects it.
     let mut truncated = payload.clone();
     truncated.pop();
@@ -25,7 +21,6 @@ fn ncb_str_view_truncation_and_offset_tamper() {
         .err()
         .expect("truncation");
     assert!(matches!(err, Error::LengthMismatch));
-
     // Tamper with the string offsets to point past the end of the blob.
     let mut tampered = payload.clone();
     let n = rows.len();
@@ -76,7 +71,6 @@ fn ncb_str_view_truncation_and_offset_tamper() {
         .expect("tamper");
     assert!(matches!(err, Error::LengthMismatch));
 }
-
 #[test]
 fn header_decode_rejects_misaligned_payload() {
     let value = vec![1_u64, 2, 3, 5, 8];

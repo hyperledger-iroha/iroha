@@ -4,14 +4,12 @@
 //! package library also owns canonical Norito RPC fixture generation and
 //! verification so SDK pipelines and repository automation share one
 //! implementation.
-
 use std::{
     any::TypeId,
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
 };
-
 use anyhow::{Context, Result};
 use clap::Parser;
 use iroha_data_model::{instruction_registry, isi::InstructionRegistry, prelude as dm};
@@ -25,7 +23,6 @@ use norito::{
 };
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
 macro_rules! for_each_instruction_type {
     ($macro:ident) => {
         $macro!(iroha_data_model::isi::RegisterPeerWithPop);
@@ -140,7 +137,6 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::runtime_upgrade::CancelRuntimeUpgrade);
     };
 }
-
 /// Command line arguments accepted by the exporter.
 #[derive(Parser, Debug)]
 #[command(
@@ -167,16 +163,13 @@ struct Args {
     #[arg(long)]
     pretty: bool,
 }
-
 fn main() -> Result<()> {
     let args = Args::parse();
     run(args)
 }
-
 fn run(args: Args) -> Result<()> {
     fs::create_dir_all(&args.out)
         .with_context(|| format!("create output directory {}", args.out.display()))?;
-
     let registry = instruction_registry::default();
     let doc_index = if let Some(doc_path) = &args.doc_json {
         Some(
@@ -190,11 +183,9 @@ fn run(args: Args) -> Result<()> {
     let timestamp = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .context("format timestamp")?;
-
     let manifest = build_manifest(&specs, &timestamp);
     let manifest_path = args.out.join("instruction_manifest.json");
     write_json_with_digest(&manifest_path, &manifest, args.pretty)?;
-
     let builder_index = build_builder_index(
         &specs,
         &timestamp,
@@ -204,16 +195,12 @@ fn run(args: Args) -> Result<()> {
     );
     let builder_index_path = args.out.join("builder_index.json");
     write_json_with_digest(&builder_index_path, &builder_index, args.pretty)?;
-
     let examples_dir = args.out.join("instruction_examples");
     write_examples(&examples_dir, &specs, &timestamp, args.pretty)?;
-
     Ok(())
 }
-
 type TypeIndex = HashMap<TypeId, MetaMapEntry>;
 type DocIndex = HashMap<String, String>;
-
 #[derive(JsonDeserialize)]
 struct RustdocCrate {
     #[norito(default)]
@@ -221,7 +208,6 @@ struct RustdocCrate {
     #[norito(default)]
     index: HashMap<String, RustdocItem>,
 }
-
 #[derive(JsonDeserialize)]
 struct RustdocPath {
     #[allow(dead_code)]
@@ -232,13 +218,11 @@ struct RustdocPath {
     #[norito(default)]
     kind: String,
 }
-
 #[derive(JsonDeserialize)]
 struct RustdocItem {
     #[norito(default)]
     docs: Option<String>,
 }
-
 #[derive(Debug, Clone)]
 struct InstructionSpec {
     discriminant: String,
@@ -247,7 +231,6 @@ struct InstructionSpec {
     layout: Value,
     documentation: String,
 }
-
 impl InstructionSpec {
     fn new<T>(registry: &InstructionRegistry, docs: Option<&DocIndex>) -> Self
     where
@@ -274,7 +257,6 @@ impl InstructionSpec {
             documentation,
         }
     }
-
     fn manifest_value(&self) -> Value {
         object([
             (
@@ -293,7 +275,6 @@ impl InstructionSpec {
             ),
         ])
     }
-
     fn builder_value(&self, package: &str, stability: &str, features: &[String]) -> Value {
         let builder_name = self.builder_name();
         object([
@@ -315,7 +296,6 @@ impl InstructionSpec {
             ),
         ])
     }
-
     fn example_value(&self, timestamp: &str) -> Value {
         object([
             (
@@ -327,12 +307,10 @@ impl InstructionSpec {
             ("layout".into(), self.layout.clone()),
         ])
     }
-
     fn builder_name(&self) -> String {
         format!("{}Builder", sanitize_identifier(self.type_name))
     }
 }
-
 fn build_manifest(specs: &[InstructionSpec], timestamp: &str) -> Value {
     object([
         ("version".into(), Value::Number(Number::U64(1))),
@@ -343,7 +321,6 @@ fn build_manifest(specs: &[InstructionSpec], timestamp: &str) -> Value {
         ),
     ])
 }
-
 fn build_builder_index(
     specs: &[InstructionSpec],
     timestamp: &str,
@@ -366,7 +343,6 @@ fn build_builder_index(
         ),
     ])
 }
-
 fn builder_notes(package: &str, builder_name: &str, layout: &Value) -> String {
     let fqcn = if package.is_empty() {
         builder_name.to_owned()
@@ -378,11 +354,9 @@ fn builder_notes(package: &str, builder_name: &str, layout: &Value) -> String {
         None => format!("Builder `{fqcn}`"),
     }
 }
-
 fn layout_documentation(layout: &Value) -> Option<String> {
     describe_layout(layout).map(|summary| format!("Schema summary: {summary}."))
 }
-
 fn describe_layout(layout: &Value) -> Option<String> {
     let kind = layout.get("kind")?.as_str()?;
     match kind {
@@ -430,7 +404,6 @@ fn describe_layout(layout: &Value) -> Option<String> {
         other => Some(format!("layout kind `{other}`")),
     }
 }
-
 fn summarize_fields(layout: &Value, label: &str) -> Option<String> {
     let fields = layout.get("fields")?.as_array()?;
     if fields.is_empty() {
@@ -455,7 +428,6 @@ fn summarize_fields(layout: &Value, label: &str) -> Option<String> {
         Some(format!("{label} fields: {}", parts.join(", ")))
     }
 }
-
 fn summarize_enum(layout: &Value) -> Option<String> {
     let variants = layout.get("variants")?.as_array()?;
     if variants.is_empty() {
@@ -481,7 +453,6 @@ fn summarize_enum(layout: &Value) -> Option<String> {
         Some(format!("enum variants: {}", parts.join(", ")))
     }
 }
-
 fn summarize_bitmap(layout: &Value) -> Option<String> {
     let repr = layout.get("repr").and_then(Value::as_str)?;
     let masks = layout.get("masks")?.as_array()?;
@@ -501,7 +472,6 @@ fn summarize_bitmap(layout: &Value) -> Option<String> {
         format!("bitmap<{repr}> masks: {}", mask_labels.join(", "))
     })
 }
-
 fn load_doc_index(path: &Path) -> Result<DocIndex> {
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let parsed: RustdocCrate =
@@ -528,7 +498,6 @@ fn load_doc_index(path: &Path) -> Result<DocIndex> {
     }
     Ok(docs)
 }
-
 fn gather_instruction_specs(
     registry: &InstructionRegistry,
     docs: Option<&DocIndex>,
@@ -543,7 +512,6 @@ fn gather_instruction_specs(
     specs.sort_by(|a, b| a.discriminant.cmp(&b.discriminant));
     specs
 }
-
 fn layout_for<T: IntoSchema + 'static>() -> Value {
     let schema = T::schema();
     let type_index: TypeIndex = schema.into_iter().collect();
@@ -559,11 +527,9 @@ fn layout_for<T: IntoSchema + 'static>() -> Value {
         });
     metadata_to_value(&metadata, &type_index)
 }
-
 fn base_type_name(full: &str) -> &str {
     full.split_once('<').map(|(head, _)| head).unwrap_or(full)
 }
-
 fn metadata_to_value(meta: &Metadata, index: &TypeIndex) -> Value {
     match meta {
         Metadata::Struct(named) => struct_metadata(named, index),
@@ -610,7 +576,6 @@ fn metadata_to_value(meta: &Metadata, index: &TypeIndex) -> Value {
         Metadata::Bitmap(meta) => bitmap_metadata(meta, index),
     }
 }
-
 fn struct_metadata(named: &NamedFieldsMeta, index: &TypeIndex) -> Value {
     object([
         ("kind".into(), Value::String("struct".to_owned())),
@@ -626,7 +591,6 @@ fn struct_metadata(named: &NamedFieldsMeta, index: &TypeIndex) -> Value {
         ),
     ])
 }
-
 fn tuple_metadata(tuple: &UnnamedFieldsMeta, index: &TypeIndex) -> Value {
     object([
         ("kind".into(), Value::String("tuple".to_owned())),
@@ -643,7 +607,6 @@ fn tuple_metadata(tuple: &UnnamedFieldsMeta, index: &TypeIndex) -> Value {
         ),
     ])
 }
-
 fn enum_metadata(enum_meta: &EnumMeta, index: &TypeIndex) -> Value {
     object([
         ("kind".into(), Value::String("enum".to_owned())),
@@ -672,7 +635,6 @@ fn enum_metadata(enum_meta: &EnumMeta, index: &TypeIndex) -> Value {
         ),
     ])
 }
-
 fn array_metadata(meta: &ArrayMeta, index: &TypeIndex) -> Value {
     object([
         ("kind".into(), Value::String("array".to_owned())),
@@ -683,7 +645,6 @@ fn array_metadata(meta: &ArrayMeta, index: &TypeIndex) -> Value {
         ("len".into(), Value::Number(Number::U64(meta.len as u64))),
     ])
 }
-
 fn map_metadata(meta: &MapMeta, index: &TypeIndex) -> Value {
     object([
         ("kind".into(), Value::String("map".to_owned())),
@@ -697,7 +658,6 @@ fn map_metadata(meta: &MapMeta, index: &TypeIndex) -> Value {
         ),
     ])
 }
-
 fn result_metadata(meta: &ResultMeta, index: &TypeIndex) -> Value {
     object([
         ("kind".into(), Value::String("result".to_owned())),
@@ -708,7 +668,6 @@ fn result_metadata(meta: &ResultMeta, index: &TypeIndex) -> Value {
         ),
     ])
 }
-
 fn bitmap_metadata(meta: &BitmapMeta, index: &TypeIndex) -> Value {
     object([
         ("kind".into(), Value::String("bitmap".to_owned())),
@@ -732,7 +691,6 @@ fn bitmap_metadata(meta: &BitmapMeta, index: &TypeIndex) -> Value {
         ),
     ])
 }
-
 fn field_value(name: Option<String>, ty: TypeId, index: &TypeIndex) -> Value {
     object([
         (
@@ -742,14 +700,12 @@ fn field_value(name: Option<String>, ty: TypeId, index: &TypeIndex) -> Value {
         ("type".into(), Value::String(lookup_type_name(index, ty))),
     ])
 }
-
 fn lookup_type_name(index: &TypeIndex, ty: TypeId) -> String {
     index
         .get(&ty)
         .map(|entry| entry.type_name.clone())
         .unwrap_or_else(|| format!("{ty:?}"))
 }
-
 fn object(pairs: impl IntoIterator<Item = (String, Value)>) -> Value {
     let mut map = Map::new();
     for (key, value) in pairs {
@@ -757,7 +713,6 @@ fn object(pairs: impl IntoIterator<Item = (String, Value)>) -> Value {
     }
     Value::Object(map)
 }
-
 fn sanitize_identifier(input: &str) -> String {
     let mut out = String::new();
     for c in input.chars() {
@@ -789,7 +744,6 @@ fn sanitize_identifier(input: &str) -> String {
     }
     out
 }
-
 fn write_json_with_digest(path: &Path, value: &Value, pretty: bool) -> Result<()> {
     let json = if pretty {
         json::to_json_pretty(value)?
@@ -799,7 +753,6 @@ fn write_json_with_digest(path: &Path, value: &Value, pretty: bool) -> Result<()
     fs::write(path, json.as_bytes()).with_context(|| format!("write {}", path.display()))?;
     write_digest_file(path, json.as_bytes())
 }
-
 fn write_digest_file(path: &Path, data: &[u8]) -> Result<()> {
     let mut hasher = Sha256::new();
     hasher.update(data);
@@ -814,7 +767,6 @@ fn write_digest_file(path: &Path, data: &[u8]) -> Result<()> {
     fs::write(&digest_path, digest_entry)
         .with_context(|| format!("write {}", digest_path.display()))
 }
-
 fn write_examples(
     dir: &Path,
     specs: &[InstructionSpec],
@@ -834,7 +786,6 @@ fn write_examples(
     }
     Ok(())
 }
-
 fn hex_lower(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -843,35 +794,28 @@ fn hex_lower(bytes: &[u8]) -> String {
     }
     out
 }
-
 #[cfg(test)]
 mod tests {
     use std::fs;
-
     use iroha_schema::IntoSchema;
     use tempfile::NamedTempFile;
-
     use super::*;
-
     #[derive(IntoSchema)]
     struct Sample {
         value: u32,
     }
-
     #[allow(dead_code)]
     #[derive(IntoSchema)]
     struct LayoutStruct {
         foo: u32,
         bar: String,
     }
-
     #[allow(dead_code)]
     #[derive(IntoSchema)]
     enum LayoutEnum {
         Unit,
         Payload(u32),
     }
-
     #[test]
     fn sanitize_identifier_collapses_noise() {
         assert_eq!(
@@ -881,7 +825,6 @@ mod tests {
         assert_eq!(sanitize_identifier("123start"), "_123start");
         assert_eq!(sanitize_identifier(""), "Instruction");
     }
-
     #[test]
     fn layout_exposes_struct_fields() {
         let sample = Sample { value: 42 };
@@ -904,7 +847,6 @@ mod tests {
             "expected `value: u32` field in layout"
         );
     }
-
     #[test]
     fn asset_quantity_instructions_use_the_live_nominal_type() {
         let specs = gather_instruction_specs(&instruction_registry::default(), None);
@@ -936,7 +878,6 @@ mod tests {
             "retired Numeric asset instruction leaked into the exported manifest"
         );
     }
-
     #[test]
     fn generic_privacy_types_are_absent_but_specialized_flows_remain_registered() {
         let registry = instruction_registry::default();
@@ -946,7 +887,6 @@ mod tests {
             110,
             "first-release generated instruction count"
         );
-
         let retired = [
             ("zk", ["Sh", "ield"].concat()),
             ("zk", ["Zk", "Transfer"].concat()),
@@ -972,7 +912,6 @@ mod tests {
                 "retired generic privacy type must not remain in exporter inventory: {type_name}"
             );
         }
-
         for specialized_type in [
             std::any::type_name::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>(),
             std::any::type_name::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>(),
@@ -983,7 +922,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn provider_ingest_completion_export_is_the_six_field_hard_cut() {
         let specs = gather_instruction_specs(&instruction_registry::default(), None);
@@ -1019,7 +957,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn metadata_to_value_renders_float_mode() {
         let index = TypeIndex::new();
@@ -1027,11 +964,9 @@ mod tests {
         let Value::Object(map) = layout else {
             panic!("expected float metadata object");
         };
-
         assert_eq!(map.get("kind").and_then(Value::as_str), Some("float"));
         assert_eq!(map.get("mode").and_then(Value::as_str), Some("Binary64"));
     }
-
     #[test]
     fn describe_layout_produces_struct_summary() {
         let layout = layout_for::<LayoutStruct>();
@@ -1041,7 +976,6 @@ mod tests {
             "summary should list struct fields: {summary}"
         );
     }
-
     #[test]
     fn describe_layout_produces_enum_summary() {
         let layout = layout_for::<LayoutEnum>();
@@ -1051,7 +985,6 @@ mod tests {
             "summary should list enum variants: {summary}"
         );
     }
-
     #[test]
     fn builder_notes_include_fqcn() {
         let layout = layout_for::<LayoutStruct>();
@@ -1065,7 +998,6 @@ mod tests {
             "expected struct fields reference in notes: {notes}"
         );
     }
-
     #[test]
     fn layout_documentation_falls_back_to_summary() {
         let layout = layout_for::<LayoutStruct>();
@@ -1075,7 +1007,6 @@ mod tests {
             "fallback doc should reference struct fields: {doc}"
         );
     }
-
     #[test]
     fn load_doc_index_prefers_data_model_entries() {
         let tmp = NamedTempFile::new().expect("temp file");
@@ -1091,7 +1022,6 @@ mod tests {
             }
         }"#;
         fs::write(tmp.path(), rustdoc).expect("write rustdoc json");
-
         let index = load_doc_index(tmp.path()).expect("load docs");
         assert_eq!(
             index.get("iroha_data_model::example::Thing"),

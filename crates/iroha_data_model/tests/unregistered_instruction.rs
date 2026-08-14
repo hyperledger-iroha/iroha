@@ -1,10 +1,8 @@
 //! Tests unregistered instruction deserialization.
-
 use iroha_data_model::{
     isi::{InstructionBox, set_instruction_registry},
     prelude::Log,
 };
-
 #[test]
 fn unregistered_instruction_returns_error_with_name() {
     set_instruction_registry(iroha_data_model::instruction_registry![Log]);

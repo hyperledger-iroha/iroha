@@ -1,18 +1,13 @@
 #![allow(unexpected_cfgs)]
-
 //! Deterministic SoraFS provider reputation schemas, scoring, and proofs.
-
 use std::cmp::Ordering;
-
 use blake3::{Hash, Hasher};
 use norito::{
     core::Error as NoritoError,
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
 };
 use thiserror::Error;
-
 pub mod signed;
-
 /// Schema version for [`ReputationWeightsV1`].
 pub const REPUTATION_WEIGHTS_VERSION_V1: u8 = 1;
 /// Schema version for [`ReputationProviderMetricsV1`].
@@ -55,7 +50,6 @@ pub const MAX_REPUTATION_TRUST_EDGES: usize = 1_048_576;
 pub const REPUTATION_EIGENTRUST_MAX_ITERATIONS: usize = 100;
 /// Convergence threshold for the L1 score delta, in basis points.
 pub const REPUTATION_EIGENTRUST_CONVERGENCE_L1_BPS: u64 = 1;
-
 /// Governance-controlled reputation weights expressed in basis points.
 #[derive(
     Debug,
@@ -86,7 +80,6 @@ pub struct ReputationWeightsV1 {
     /// Penalty weight for unresolved repair breaches.
     pub repair_breach_bps: u16,
 }
-
 impl Default for ReputationWeightsV1 {
     fn default() -> Self {
         Self {
@@ -101,7 +94,6 @@ impl Default for ReputationWeightsV1 {
         }
     }
 }
-
 impl ReputationWeightsV1 {
     /// Validate that the version and aggregate weight budget are canonical.
     pub fn validate(&self) -> Result<(), ReputationValidationError> {
@@ -124,7 +116,6 @@ impl ReputationWeightsV1 {
         Ok(())
     }
 }
-
 /// Reserve+Rent lifecycle stage used as a reputation multiplier input.
 #[derive(
     Debug,
@@ -150,7 +141,6 @@ pub enum ReputationReserveStageV1 {
     /// Provider is in default.
     Default,
 }
-
 impl ReputationReserveStageV1 {
     const fn multiplier_bps(self) -> u16 {
         match self {
@@ -162,7 +152,6 @@ impl ReputationReserveStageV1 {
         }
     }
 }
-
 /// Degradation flags attached to a provider reputation entry.
 #[derive(
     Debug,
@@ -198,7 +187,6 @@ pub enum ReputationDegradationFlagV1 {
     /// Score is below the low-score threshold.
     LowScore,
 }
-
 /// Canonical provider metrics consumed by the reputation scorer.
 #[derive(
     Debug,
@@ -229,7 +217,6 @@ pub struct ReputationProviderMetricsV1 {
     /// Unresolved repair breaches per reputation period, normalised to basis points.
     pub repair_breach_rate_bps: u16,
 }
-
 impl ReputationProviderMetricsV1 {
     /// Validate all metric fields.
     pub fn validate(&self) -> Result<(), ReputationValidationError> {
@@ -248,7 +235,6 @@ impl ReputationProviderMetricsV1 {
         Ok(())
     }
 }
-
 /// Per-provider reputation input used for deterministic score generation.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -270,7 +256,6 @@ pub struct ReputationProviderInputV1 {
     /// Whether a slashing event applies during the window.
     pub slashing_event: bool,
 }
-
 impl ReputationProviderInputV1 {
     /// Validate the provider input before scoring.
     pub fn validate(&self) -> Result<(), ReputationValidationError> {
@@ -287,7 +272,6 @@ impl ReputationProviderInputV1 {
         Ok(())
     }
 }
-
 /// Pairwise settlement-satisfaction trust edge used by the EigenTrust step.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -302,7 +286,6 @@ pub struct ReputationTrustEdgeV1 {
     /// Trust score for this edge, in basis points.
     pub trust_bps: u16,
 }
-
 impl ReputationTrustEdgeV1 {
     /// Validate the trust edge before it enters the EigenTrust iteration.
     pub fn validate(&self) -> Result<(), ReputationValidationError> {
@@ -325,7 +308,6 @@ impl ReputationTrustEdgeV1 {
         Ok(())
     }
 }
-
 /// Published provider reputation record.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -344,7 +326,6 @@ pub struct ProviderReputationV1 {
     /// Hash of the raw metrics payload.
     pub raw_metrics_hash: [u8; 32],
 }
-
 impl ProviderReputationV1 {
     /// Validate the provider reputation record.
     pub fn validate(&self) -> Result<(), ReputationValidationError> {
@@ -378,7 +359,6 @@ impl ProviderReputationV1 {
         Ok(())
     }
 }
-
 /// Merkle proof for one provider reputation record.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -393,7 +373,6 @@ pub struct ReputationMerkleProofV1 {
     /// Sibling hashes from leaf to root.
     pub siblings: Vec<[u8; 32]>,
 }
-
 impl ReputationMerkleProofV1 {
     /// Verify this proof for a provider record and expected root.
     pub fn verify(
@@ -441,7 +420,6 @@ impl ReputationMerkleProofV1 {
         Ok(())
     }
 }
-
 /// Published reputation snapshot.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -467,7 +445,6 @@ pub struct ReputationSnapshotV1 {
     #[norito(default)]
     pub previous_snapshot_id: Option<[u8; 16]>,
 }
-
 impl ReputationSnapshotV1 {
     /// Build and validate a snapshot from scored provider records.
     pub fn from_providers(
@@ -493,7 +470,6 @@ impl ReputationSnapshotV1 {
         snapshot.validate()?;
         Ok(snapshot)
     }
-
     /// Validate the snapshot and all provider records.
     pub fn validate(&self) -> Result<(), ReputationValidationError> {
         if self.version != REPUTATION_SNAPSHOT_VERSION_V1 {
@@ -540,7 +516,6 @@ impl ReputationSnapshotV1 {
         }
         Ok(())
     }
-
     /// Construct a Merkle proof for a provider in this snapshot.
     pub fn merkle_proof(
         &self,
@@ -572,7 +547,6 @@ impl ReputationSnapshotV1 {
         })
     }
 }
-
 /// Event emitted when a reputation snapshot is accepted for publication.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -594,7 +568,6 @@ pub struct ReputationSnapshotEventV1 {
     #[norito(default)]
     pub previous_snapshot_id: Option<[u8; 16]>,
 }
-
 impl ReputationSnapshotEventV1 {
     /// Build an event from a validated snapshot and assigned sequence.
     pub fn from_snapshot(
@@ -619,7 +592,6 @@ impl ReputationSnapshotEventV1 {
         event.validate()?;
         Ok(event)
     }
-
     /// Validate the snapshot event envelope.
     pub fn validate(&self) -> Result<(), ReputationValidationError> {
         if self.version != REPUTATION_SNAPSHOT_EVENT_VERSION_V1 {
@@ -660,7 +632,6 @@ impl ReputationSnapshotEventV1 {
         Ok(())
     }
 }
-
 /// Score provider inputs and return a validated reputation snapshot.
 pub fn build_reputation_snapshot(
     snapshot_id: [u8; 16],
@@ -678,7 +649,6 @@ pub fn build_reputation_snapshot(
         previous_snapshot_id,
     )
 }
-
 /// Score provider inputs, apply pairwise trust edges, and return a validated snapshot.
 pub fn build_reputation_snapshot_with_trust_edges(
     snapshot_id: [u8; 16],
@@ -711,7 +681,6 @@ pub fn build_reputation_snapshot_with_trust_edges(
         previous_snapshot_id,
     )
 }
-
 /// Score one provider using deterministic fixed-point arithmetic.
 pub fn score_provider_reputation(
     input: &ReputationProviderInputV1,
@@ -719,7 +688,6 @@ pub fn score_provider_reputation(
 ) -> Result<ProviderReputationV1, ReputationValidationError> {
     input.validate()?;
     weights.validate()?;
-
     let metrics = input.metrics;
     let positive = weighted_component(metrics.por_success_bps, weights.por_success_bps)
         + weighted_component(metrics.pdp_success_bps, weights.pdp_success_bps)
@@ -732,11 +700,9 @@ pub fn score_provider_reputation(
         )
         + weighted_component(metrics.repair_breach_rate_bps, weights.repair_breach_bps);
     let mut score = positive.saturating_sub(negative);
-
     let mut flags = Vec::new();
     apply_reserve_stage(input.reserve_stage, &mut score, &mut flags);
     apply_proof_success_penalty(metrics, &mut score, &mut flags);
-
     if input.active_dispute {
         flags.push(ReputationDegradationFlagV1::ActiveDispute);
         score = score.min(2_000);
@@ -745,14 +711,12 @@ pub fn score_provider_reputation(
         flags.push(ReputationDegradationFlagV1::SlashingEvent);
         score = score.min(2_000);
     }
-
     if let Some(previous) = input.previous_score_bps {
         let current_weight = u32::from(DEFAULT_CURRENT_SCORE_WEIGHT_BPS);
         let previous_weight = u32::from(REPUTATION_BASIS_POINTS) - current_weight;
         score = ((score * current_weight) + (u32::from(previous) * previous_weight))
             / u32::from(REPUTATION_BASIS_POINTS);
     }
-
     let bounded = u16::try_from(score.clamp(
         u32::from(MIN_REPUTATION_SCORE_BPS),
         u32::from(MAX_REPUTATION_SCORE_BPS),
@@ -765,7 +729,6 @@ pub fn score_provider_reputation(
     }
     flags.sort();
     flags.dedup();
-
     let raw_metrics_hash = hash_norito(&metrics)?;
     let record = ProviderReputationV1 {
         version: PROVIDER_REPUTATION_VERSION_V1,
@@ -778,7 +741,6 @@ pub fn score_provider_reputation(
     record.validate()?;
     Ok(record)
 }
-
 /// Compute the Merkle root for sorted provider records.
 pub fn compute_reputation_merkle_root(
     providers: &[ProviderReputationV1],
@@ -805,7 +767,6 @@ pub fn compute_reputation_merkle_root(
     }
     merkle_root_commitment(leaves[0], providers.len())
 }
-
 fn reputation_leaf_hashes(
     providers: &[ProviderReputationV1],
 ) -> Result<Vec<[u8; 32]>, ReputationValidationError> {
@@ -821,7 +782,6 @@ fn reputation_leaf_hashes(
     }
     Ok(leaves)
 }
-
 fn reputation_leaf_hash(
     provider: &ProviderReputationV1,
 ) -> Result<[u8; 32], ReputationValidationError> {
@@ -836,7 +796,6 @@ fn reputation_leaf_hash(
     }
     Ok(hash_to_array(hasher.finalize()))
 }
-
 fn merkle_parent(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
     let mut hasher = Hasher::new();
     hasher.update(b"sorafs-reputation-node-v1");
@@ -844,7 +803,6 @@ fn merkle_parent(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
     hasher.update(&right);
     hash_to_array(hasher.finalize())
 }
-
 fn merkle_root_commitment(
     raw_root: [u8; 32],
     leaf_count: usize,
@@ -857,7 +815,6 @@ fn merkle_root_commitment(
     hasher.update(&raw_root);
     Ok(hash_to_array(hasher.finalize()))
 }
-
 fn merkle_siblings(
     leaves: &[[u8; 32]],
     leaf_index: usize,
@@ -902,7 +859,6 @@ fn merkle_siblings(
     }
     Ok(siblings)
 }
-
 fn verify_merkle_path(
     leaf: [u8; 32],
     leaf_index: usize,
@@ -942,7 +898,6 @@ fn verify_merkle_path(
     }
     Ok(node)
 }
-
 fn merkle_depth(mut leaf_count: usize) -> usize {
     let mut depth = 0;
     while leaf_count > 1 {
@@ -951,7 +906,6 @@ fn merkle_depth(mut leaf_count: usize) -> usize {
     }
     depth
 }
-
 fn apply_eigentrust_edges(
     providers: &mut [ProviderReputationV1],
     trust_edges: &[ReputationTrustEdgeV1],
@@ -964,7 +918,6 @@ fn apply_eigentrust_edges(
     validate_provider_count(providers.len())?;
     validate_trust_edges(trust_edges)?;
     validate_sorted_providers(providers)?;
-
     let len = providers.len();
     let mut row_counts = try_zeroed_vec::<usize>(len, "reputation trust row counts")?;
     for edge in trust_edges {
@@ -985,7 +938,6 @@ fn apply_eigentrust_edges(
             },
         )?;
     }
-
     let mut rows = Vec::new();
     rows.try_reserve_exact(len)
         .map_err(|_| ReputationValidationError::AllocationFailed {
@@ -1012,7 +964,6 @@ fn apply_eigentrust_edges(
         })?;
         rows[from].push((to, edge.trust_bps));
     }
-
     for row in &mut rows {
         if row.is_empty() {
             continue;
@@ -1065,7 +1016,6 @@ fn apply_eigentrust_edges(
                 context: "normalized reputation trust edge remainder",
             })?;
     }
-
     let baseline = try_collect_scores(providers)?;
     let mut rank = try_clone_u64(&baseline, "reputation rank vector")?;
     let mut propagated = try_zeroed_vec::<u64>(len, "reputation propagated rank vector")?;
@@ -1141,7 +1091,6 @@ fn apply_eigentrust_edges(
             break;
         }
     }
-
     for (provider, eigentrust_score) in providers.iter_mut().zip(rank) {
         let bounded_eigentrust = u16::try_from(eigentrust_score.clamp(
             u64::from(MIN_REPUTATION_SCORE_BPS),
@@ -1155,7 +1104,6 @@ fn apply_eigentrust_edges(
     }
     Ok(())
 }
-
 fn try_collect_scores(
     providers: &[ProviderReputationV1],
 ) -> Result<Vec<u64>, ReputationValidationError> {
@@ -1172,7 +1120,6 @@ fn try_collect_scores(
     );
     Ok(scores)
 }
-
 fn try_clone_u64(
     source: &[u64],
     context: &'static str,
@@ -1184,7 +1131,6 @@ fn try_clone_u64(
     output.extend_from_slice(source);
     Ok(output)
 }
-
 fn try_zeroed_vec<T: Default + Clone>(
     len: usize,
     context: &'static str,
@@ -1196,13 +1142,11 @@ fn try_zeroed_vec<T: Default + Clone>(
     output.resize(len, T::default());
     Ok(output)
 }
-
 fn provider_index(providers: &[ProviderReputationV1], provider_id: &str) -> Option<usize> {
     providers
         .binary_search_by(|entry| entry.provider_id.as_str().cmp(provider_id))
         .ok()
 }
-
 fn refresh_low_score_flag(
     provider: &mut ProviderReputationV1,
 ) -> Result<(), ReputationValidationError> {
@@ -1218,11 +1162,9 @@ fn refresh_low_score_flag(
     provider.degradation_flags.dedup();
     provider.validate()
 }
-
 fn weighted_component(metric_bps: u16, weight_bps: u16) -> u32 {
     (u32::from(metric_bps) * u32::from(weight_bps)) / u32::from(REPUTATION_BASIS_POINTS)
 }
-
 fn apply_reserve_stage(
     stage: ReputationReserveStageV1,
     score: &mut u32,
@@ -1243,7 +1185,6 @@ fn apply_reserve_stage(
     }
     *score = (*score * u32::from(stage.multiplier_bps())) / u32::from(REPUTATION_BASIS_POINTS);
 }
-
 fn apply_proof_success_penalty(
     metrics: ReputationProviderMetricsV1,
     score: &mut u32,
@@ -1258,18 +1199,15 @@ fn apply_proof_success_penalty(
         *score = (*score * 8_000) / u32::from(REPUTATION_BASIS_POINTS);
     }
 }
-
 fn hash_norito<T: norito::NoritoSerialize>(value: &T) -> Result<[u8; 32], NoritoError> {
     let bytes = norito::to_bytes(value)?;
     Ok(hash_to_array(blake3::hash(&bytes)))
 }
-
 fn hash_to_array(hash: Hash) -> [u8; 32] {
     let mut out = [0_u8; 32];
     out.copy_from_slice(hash.as_bytes());
     out
 }
-
 fn sort_provider_records(providers: &mut [ProviderReputationV1]) {
     providers.sort_by(
         |left, right| match left.provider_id.cmp(&right.provider_id) {
@@ -1278,7 +1216,6 @@ fn sort_provider_records(providers: &mut [ProviderReputationV1]) {
         },
     );
 }
-
 fn validate_sorted_providers(
     providers: &[ProviderReputationV1],
 ) -> Result<(), ReputationValidationError> {
@@ -1299,7 +1236,6 @@ fn validate_sorted_providers(
     }
     Ok(())
 }
-
 fn ensure_sorted_unique_flags(
     flags: &[ReputationDegradationFlagV1],
     provider_id: &str,
@@ -1321,7 +1257,6 @@ fn ensure_sorted_unique_flags(
     }
     Ok(())
 }
-
 fn validate_provider_id(provider_id: &str) -> Result<(), ReputationValidationError> {
     if provider_id.trim().is_empty() || matches!(provider_id, "." | "..") {
         return Err(ReputationValidationError::InvalidProviderId);
@@ -1339,7 +1274,6 @@ fn validate_provider_id(provider_id: &str) -> Result<(), ReputationValidationErr
     }
     Ok(())
 }
-
 fn validate_provider_count(count: usize) -> Result<(), ReputationValidationError> {
     if count > MAX_REPUTATION_PROVIDERS {
         return Err(ReputationValidationError::TooManyProviders {
@@ -1349,7 +1283,6 @@ fn validate_provider_count(count: usize) -> Result<(), ReputationValidationError
     }
     Ok(())
 }
-
 fn validate_trust_edge_count(count: usize) -> Result<(), ReputationValidationError> {
     if count > MAX_REPUTATION_TRUST_EDGES {
         return Err(ReputationValidationError::TooManyTrustEdges {
@@ -1359,7 +1292,6 @@ fn validate_trust_edge_count(count: usize) -> Result<(), ReputationValidationErr
     }
     Ok(())
 }
-
 fn validate_trust_edges(
     trust_edges: &[ReputationTrustEdgeV1],
 ) -> Result<(), ReputationValidationError> {
@@ -1386,14 +1318,12 @@ fn validate_trust_edges(
     }
     Ok(())
 }
-
 fn validate_bps(field: &'static str, value: u16) -> Result<(), ReputationValidationError> {
     if value > REPUTATION_BASIS_POINTS {
         return Err(ReputationValidationError::BasisPointsOutOfRange { field, value });
     }
     Ok(())
 }
-
 /// Reputation validation and proof errors.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ReputationValidationError {
@@ -1669,17 +1599,14 @@ pub enum ReputationValidationError {
     #[error("reputation Norito serialization failed: {0}")]
     Serialization(String),
 }
-
 impl From<NoritoError> for ReputationValidationError {
     fn from(error: NoritoError) -> Self {
         Self::Serialization(error.to_string())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn metrics() -> ReputationProviderMetricsV1 {
         ReputationProviderMetricsV1 {
             version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
@@ -1692,7 +1619,6 @@ mod tests {
             repair_breach_rate_bps: 0,
         }
     }
-
     fn input(provider_id: &str) -> ReputationProviderInputV1 {
         ReputationProviderInputV1 {
             version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
@@ -1704,14 +1630,12 @@ mod tests {
             slashing_event: false,
         }
     }
-
     #[test]
     fn default_weights_match_spec_budget() {
         ReputationWeightsV1::default()
             .validate()
             .expect("valid weights");
     }
-
     #[test]
     fn scoring_applies_proof_reserve_and_dispute_penalties() {
         let mut input = input("provider-a");
@@ -1720,7 +1644,6 @@ mod tests {
         input.active_dispute = true;
         let scored = score_provider_reputation(&input, &ReputationWeightsV1::default())
             .expect("scored reputation");
-
         assert!(scored.score_bps <= 2_000);
         assert!(
             scored
@@ -1738,7 +1661,6 @@ mod tests {
                 .contains(&ReputationDegradationFlagV1::ActiveDispute)
         );
     }
-
     #[test]
     fn provider_validation_rejects_too_many_flags_before_hash_and_order_checks() {
         let mut provider =
@@ -1753,7 +1675,6 @@ mod tests {
             ReputationDegradationFlagV1::ReserveDefault,
             ReputationDegradationFlagV1::ReserveWarning,
         ];
-
         assert_eq!(
             provider.validate(),
             Err(ReputationValidationError::TooManyDegradationFlags {
@@ -1763,7 +1684,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn provider_identifiers_reject_whole_url_dot_segments() {
         for provider_id in ["", ".", "..", " provider-a", "provider/a", "provider-a "] {
@@ -1773,7 +1693,6 @@ mod tests {
                 "{provider_id:?} must not be a canonical provider identifier"
             );
         }
-
         validate_provider_id("provider..a").expect("embedded dots remain canonical");
         validate_provider_id(&"p".repeat(256)).expect("maximum-length provider id");
         assert_eq!(
@@ -1781,7 +1700,6 @@ mod tests {
             Err(ReputationValidationError::ProviderIdTooLong { len: 257 })
         );
     }
-
     #[test]
     fn scoring_smooths_against_previous_score_and_bounds_result() {
         let mut input = input("provider-a");
@@ -1791,7 +1709,6 @@ mod tests {
         input.previous_score_bps = Some(9_900);
         let scored = score_provider_reputation(&input, &ReputationWeightsV1::default())
             .expect("scored reputation");
-
         assert!(scored.score_bps >= MIN_REPUTATION_SCORE_BPS);
         assert!(scored.score_bps <= MAX_REPUTATION_SCORE_BPS);
         assert!(
@@ -1799,7 +1716,6 @@ mod tests {
             "previous score should smooth the current low score"
         );
     }
-
     #[test]
     fn snapshot_sorts_providers_and_verifies_merkle_proof() {
         let snapshot = build_reputation_snapshot(
@@ -1814,11 +1730,9 @@ mod tests {
             None,
         )
         .expect("snapshot");
-
         assert_eq!(snapshot.providers[0].provider_id, "provider-a");
         assert_eq!(snapshot.providers[1].provider_id, "provider-b");
         assert_eq!(snapshot.providers[2].provider_id, "provider-c");
-
         let proof = snapshot.merkle_proof("provider-b").expect("proof");
         let provider = snapshot
             .providers
@@ -1829,7 +1743,6 @@ mod tests {
             .verify(provider, snapshot.merkle_root)
             .expect("valid proof");
     }
-
     #[test]
     fn snapshot_event_derives_from_valid_snapshot() {
         let snapshot = build_reputation_snapshot(
@@ -1840,9 +1753,7 @@ mod tests {
             Some([0xAB; 16]),
         )
         .expect("snapshot");
-
         let event = ReputationSnapshotEventV1::from_snapshot(7, &snapshot).expect("snapshot event");
-
         assert_eq!(event.version, REPUTATION_SNAPSHOT_EVENT_VERSION_V1);
         assert_eq!(event.sequence, 7);
         assert_eq!(event.snapshot_id, snapshot.snapshot_id);
@@ -1852,7 +1763,6 @@ mod tests {
         assert_eq!(event.previous_snapshot_id, snapshot.previous_snapshot_id);
         event.validate().expect("valid event");
     }
-
     #[test]
     fn snapshot_previous_id_is_absent_for_genesis_and_nonzero_for_successors() {
         let genesis = build_reputation_snapshot(
@@ -1865,7 +1775,6 @@ mod tests {
         .expect("genesis snapshot");
         assert_eq!(genesis.previous_snapshot_id, None);
         genesis.validate().expect("valid genesis snapshot");
-
         let predecessor_id = genesis.snapshot_id;
         let successor = build_reputation_snapshot(
             [0xAE; 16],
@@ -1878,7 +1787,6 @@ mod tests {
         assert_eq!(successor.previous_snapshot_id, Some(predecessor_id));
         successor.validate().expect("valid successor snapshot");
     }
-
     #[test]
     fn snapshot_and_event_reject_zero_previous_id() {
         assert_eq!(
@@ -1891,7 +1799,6 @@ mod tests {
             ),
             Err(ReputationValidationError::InvalidPreviousSnapshotId)
         );
-
         let snapshot = build_reputation_snapshot(
             [0xB0; 16],
             1_800_000_000,
@@ -1908,7 +1815,6 @@ mod tests {
             Err(ReputationValidationError::InvalidPreviousSnapshotId)
         );
     }
-
     #[test]
     fn trust_edges_apply_eigentrust_penalty_without_lifting_baseline() {
         let baseline = build_reputation_snapshot(
@@ -1933,7 +1839,6 @@ mod tests {
             None,
         )
         .expect("trust-edge snapshot");
-
         let baseline_a = baseline
             .providers
             .iter()
@@ -1954,7 +1859,6 @@ mod tests {
             .iter()
             .find(|provider| provider.provider_id == "provider-b")
             .expect("trust-edge provider-b");
-
         assert!(
             edged_a.score_bps < baseline_a.score_bps,
             "provider without inbound trust should lose score"
@@ -1965,7 +1869,6 @@ mod tests {
         );
         with_edges.validate().expect("valid trust-edge snapshot");
     }
-
     #[test]
     fn eigentrust_does_not_reinject_the_published_minimum_during_iteration() {
         let weights = ReputationWeightsV1::default();
@@ -1979,7 +1882,6 @@ mod tests {
             provider.score_bps = MAX_REPUTATION_SCORE_BPS;
             provider.degradation_flags.clear();
         }
-
         apply_eigentrust_edges(
             &mut providers,
             &[
@@ -1999,12 +1901,10 @@ mod tests {
             DEFAULT_EIGENTRUST_ALPHA_BPS,
         )
         .expect("apply sparse EigenTrust graph");
-
         assert_eq!(providers[0].score_bps, MIN_REPUTATION_SCORE_BPS);
         assert_eq!(providers[1].score_bps, 1_548);
         assert_eq!(providers[2].score_bps, MAX_REPUTATION_SCORE_BPS);
     }
-
     #[test]
     fn trust_edges_reject_unknown_providers() {
         let err = build_reputation_snapshot_with_trust_edges(
@@ -2021,7 +1921,6 @@ mod tests {
             None,
         )
         .expect_err("unknown trust-edge provider should fail");
-
         assert_eq!(
             err,
             ReputationValidationError::TrustEdgeUnknownProvider {
@@ -2029,7 +1928,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn trust_edges_reject_zero_self_duplicate_and_noncanonical_order() {
         let self_edge = ReputationTrustEdgeV1 {
@@ -2044,7 +1942,6 @@ mod tests {
                 provider_id: "provider-a".to_string()
             })
         );
-
         let zero_edge = ReputationTrustEdgeV1 {
             version: REPUTATION_TRUST_EDGE_VERSION_V1,
             from_provider_id: "provider-a".to_string(),
@@ -2055,7 +1952,6 @@ mod tests {
             zero_edge.validate(),
             Err(ReputationValidationError::ZeroTrustEdge)
         );
-
         let edge = ReputationTrustEdgeV1 {
             version: REPUTATION_TRUST_EDGE_VERSION_V1,
             from_provider_id: "provider-a".to_string(),
@@ -2069,7 +1965,6 @@ mod tests {
                 to_provider_id: "provider-b".to_string(),
             })
         );
-
         assert_eq!(
             validate_trust_edges(&[
                 ReputationTrustEdgeV1 {
@@ -2088,7 +1983,6 @@ mod tests {
             Err(ReputationValidationError::TrustEdgesNotSorted)
         );
     }
-
     #[test]
     fn sparse_trust_graph_handles_thousands_of_providers_without_dense_matrix() {
         const PROVIDER_COUNT: usize = 2_048;
@@ -2109,7 +2003,6 @@ mod tests {
                 trust_bps: REPUTATION_BASIS_POINTS,
             })
             .collect::<Vec<_>>();
-
         let snapshot = build_reputation_snapshot_with_trust_edges(
             [0xD1; 16],
             1_800_000_000,
@@ -2119,7 +2012,6 @@ mod tests {
             None,
         )
         .expect("bounded sparse graph must score");
-
         assert_eq!(snapshot.providers.len(), PROVIDER_COUNT);
         assert!(
             snapshot
@@ -2134,7 +2026,6 @@ mod tests {
                 .all(|pair| pair[0].score_bps == pair[1].score_bps)
         );
     }
-
     #[test]
     fn reputation_input_cardinality_limits_fail_before_scoring_allocations() {
         assert_eq!(
@@ -2152,7 +2043,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn merkle_proof_rejects_tampered_provider_record() {
         let snapshot = build_reputation_snapshot(
@@ -2166,13 +2056,11 @@ mod tests {
         let proof = snapshot.merkle_proof("provider-a").expect("proof");
         let mut provider = snapshot.providers[0].clone();
         provider.score_bps = provider.score_bps.saturating_sub(1);
-
         assert_eq!(
             proof.verify(&provider, snapshot.merkle_root),
             Err(ReputationValidationError::MerkleRootMismatch)
         );
     }
-
     #[test]
     fn merkle_proof_binds_leaf_count_and_exact_depth() {
         let snapshot = build_reputation_snapshot(
@@ -2190,14 +2078,12 @@ mod tests {
         let provider = &snapshot.providers[1];
         let proof = snapshot.merkle_proof(&provider.provider_id).expect("proof");
         assert_eq!(proof.leaf_count, 3);
-
         let mut wrong_count = proof.clone();
         wrong_count.leaf_count = 4;
         assert_eq!(
             wrong_count.verify(provider, snapshot.merkle_root),
             Err(ReputationValidationError::MerkleRootMismatch)
         );
-
         let mut too_deep = proof.clone();
         too_deep.siblings.push([0xAA; 32]);
         assert_eq!(
@@ -2207,7 +2093,6 @@ mod tests {
                 found: 3,
             })
         );
-
         let mut too_shallow = proof;
         too_shallow.siblings.pop();
         assert_eq!(
@@ -2218,7 +2103,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn merkle_proof_rejects_bad_index_and_noncanonical_odd_duplication() {
         let snapshot = build_reputation_snapshot(
@@ -2235,7 +2119,6 @@ mod tests {
         .expect("snapshot");
         let provider = &snapshot.providers[2];
         let proof = snapshot.merkle_proof(&provider.provider_id).expect("proof");
-
         let mut bad_index = proof.clone();
         bad_index.leaf_index = bad_index.leaf_count;
         assert_eq!(
@@ -2245,7 +2128,6 @@ mod tests {
                 leaf_count: 3,
             })
         );
-
         let mut bad_duplication = proof;
         bad_duplication.siblings[0][0] ^= 1;
         assert_eq!(
@@ -2253,7 +2135,6 @@ mod tests {
             Err(ReputationValidationError::NonCanonicalOddLeafSibling)
         );
     }
-
     #[test]
     fn one_leaf_merkle_proof_has_zero_depth_and_rejects_extra_sibling() {
         let snapshot = build_reputation_snapshot(
@@ -2270,7 +2151,6 @@ mod tests {
         proof
             .verify(provider, snapshot.merkle_root)
             .expect("zero-depth proof");
-
         proof.siblings.push([0x11; 32]);
         assert_eq!(
             proof.verify(provider, snapshot.merkle_root),
@@ -2280,7 +2160,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn snapshot_rejects_zero_time_self_link_and_parameter_drift() {
         assert_eq!(
@@ -2293,7 +2172,6 @@ mod tests {
             ),
             Err(ReputationValidationError::InvalidGeneratedAt)
         );
-
         let mut snapshot = build_reputation_snapshot(
             [0xD3; 16],
             1_800_000_000,
@@ -2307,7 +2185,6 @@ mod tests {
             snapshot.validate(),
             Err(ReputationValidationError::SelfReferentialSnapshot)
         );
-
         snapshot.previous_snapshot_id = None;
         snapshot.alpha_bps -= 1;
         assert_eq!(
@@ -2316,7 +2193,6 @@ mod tests {
                 found: DEFAULT_EIGENTRUST_ALPHA_BPS - 1,
             })
         );
-
         snapshot.alpha_bps = DEFAULT_EIGENTRUST_ALPHA_BPS;
         snapshot.current_score_weight_bps -= 1;
         assert_eq!(
@@ -2326,7 +2202,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn snapshot_validation_rejects_duplicate_provider_ids() {
         let first =
@@ -2335,7 +2210,6 @@ mod tests {
         let second =
             score_provider_reputation(&input("provider-a"), &ReputationWeightsV1::default())
                 .expect("second");
-
         assert!(matches!(
             ReputationSnapshotV1 {
                 version: REPUTATION_SNAPSHOT_VERSION_V1,
@@ -2352,7 +2226,6 @@ mod tests {
             Err(ReputationValidationError::DuplicateProviderId { .. })
         ));
     }
-
     #[test]
     fn snapshot_validation_rejects_empty_provider_set() {
         assert_eq!(

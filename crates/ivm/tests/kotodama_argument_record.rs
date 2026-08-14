@@ -1,10 +1,8 @@
 //! End-to-end coverage for one-shot public entrypoint argument decoding.
-
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
 };
-
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::Name;
 use iroha_primitives::json::Json;
@@ -14,7 +12,6 @@ use ivm::{
     pointer_abi::PointerType,
 };
 mod common;
-
 fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -28,7 +25,6 @@ fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(Hash::new(payload).as_ref());
     out
 }
-
 fn argument_record_tlv(entrypoint: &ivm::EmbeddedEntrypointDescriptor, payload: &Json) -> Vec<u8> {
     let schema = entrypoint
         .argument_schema
@@ -38,7 +34,6 @@ fn argument_record_tlv(entrypoint: &ivm::EmbeddedEntrypointDescriptor, payload: 
         ivm::encode_argument_record_from_json(schema, payload).expect("encode argument record");
     tlv(PointerType::NoritoBytes, &record)
 }
-
 fn host_with_arguments(inputs: BTreeMap<Name, Vec<u8>>) -> WsvHost {
     let caller = AccountId::new(
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
@@ -48,7 +43,6 @@ fn host_with_arguments(inputs: BTreeMap<Name, Vec<u8>>) -> WsvHost {
     WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new())
         .with_public_inputs(inputs)
 }
-
 #[test]
 fn shared_sdk_fixture_is_generated_and_validated_by_rust() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -65,7 +59,6 @@ fn shared_sdk_fixture_is_generated_and_validated_by_rust() {
         root.get("generator").and_then(norito::json::Value::as_str),
         Some("ivm::encode_argument_record_from_json")
     );
-
     let contract = root
         .get("contract")
         .and_then(norito::json::Value::as_object)
@@ -94,7 +87,6 @@ fn shared_sdk_fixture_is_generated_and_validated_by_rust() {
         .argument_schema
         .as_ref()
         .expect("fixture entrypoint schema");
-
     let boundary = root
         .get("torii_boundary")
         .and_then(norito::json::Value::as_object)
@@ -107,7 +99,6 @@ fn shared_sdk_fixture_is_generated_and_validated_by_rust() {
     );
     let generated =
         ivm::encode_argument_record_from_json(schema, &payload).expect("generate fixture record");
-
     let expected_schema = root
         .get("entrypoint_argument_schema_v1")
         .and_then(norito::json::Value::as_object)
@@ -123,7 +114,6 @@ fn shared_sdk_fixture_is_generated_and_validated_by_rust() {
         norito::to_bytes(schema).expect("encode fixture schema"),
         expected_schema_bytes
     );
-
     let expected_record = root
         .get("entrypoint_argument_record_v1")
         .and_then(norito::json::Value::as_object)
@@ -136,7 +126,6 @@ fn shared_sdk_fixture_is_generated_and_validated_by_rust() {
     )
     .expect("decode fixture record bytes");
     assert_eq!(generated, expected_record_bytes);
-
     let validated = ivm::validate_argument_record(schema, &generated)
         .expect("validate Rust-generated fixture record");
     assert_eq!(
@@ -147,7 +136,6 @@ fn shared_sdk_fixture_is_generated_and_validated_by_rust() {
             .expect("fixture schema hash")
     );
 }
-
 #[test]
 fn compiled_wrapper_decodes_record_and_loads_aligned_words() {
     let source = r#"
@@ -172,22 +160,18 @@ seiyaku ArgumentRecordRuntime {
         .find(|entrypoint| entrypoint.name == "run")
         .expect("run entrypoint descriptor");
     let entry_pc = u64::try_from(parsed.prefix_len()).expect("prefix fits u64") + run.entry_pc;
-
     let payload =
         Json::from_str_norito(r#"{"count":"41","label":"ready"}"#).expect("valid boundary JSON");
     let key: Name = "trigger_event_json".parse().expect("public input key");
     let host = host_with_arguments(BTreeMap::from([(key, argument_record_tlv(run, &payload))]));
-
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&code).expect("load compiled program");
     vm.set_program_counter(entry_pc)
         .expect("select run wrapper");
     vm.set_host(host);
     vm.run().expect("execute parameterized wrapper");
-
     assert_eq!(common::decode_i64_register(&vm, 10), 41);
 }
-
 #[test]
 fn single_json_parameter_is_a_named_record_field_not_the_transport_object() {
     let source = r#"
@@ -210,12 +194,10 @@ seiyaku JsonArgumentRecordRuntime {
         .find(|entrypoint| entrypoint.name == "run")
         .expect("run entrypoint descriptor");
     let entry_pc = u64::try_from(parsed.prefix_len()).expect("prefix fits u64") + run.entry_pc;
-
     let payload = Json::from_str_norito(r#"{"event":{"value":29}}"#)
         .expect("valid named Json boundary field");
     let key: Name = "trigger_event_json".parse().expect("public input key");
     let host = host_with_arguments(BTreeMap::from([(key, argument_record_tlv(run, &payload))]));
-
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&code).expect("load compiled program");
     vm.set_program_counter(entry_pc)
@@ -229,7 +211,6 @@ seiyaku JsonArgumentRecordRuntime {
     assert_eq!(payload.len(), 1);
     assert_eq!(common::decode_i64_word(&vm, payload[0]), 29);
 }
-
 #[test]
 fn compiled_wrapper_rebuilds_recursive_public_types_from_one_record() {
     let source = r#"
@@ -262,7 +243,6 @@ seiyaku RecursiveArgumentRecordRuntime {
         .find(|entrypoint| entrypoint.name == "run")
         .expect("run entrypoint descriptor");
     let entry_pc = u64::try_from(parsed.prefix_len()).expect("prefix fits u64") + run.entry_pc;
-
     let payload = Json::from_str_norito(
         r#"{
             "request":{"count":"7","ready":true},
@@ -274,7 +254,6 @@ seiyaku RecursiveArgumentRecordRuntime {
     .expect("valid recursive boundary JSON");
     let key: Name = "trigger_event_json".parse().expect("public input key");
     let host = host_with_arguments(BTreeMap::from([(key, argument_record_tlv(run, &payload))]));
-
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&code).expect("load compiled program");
     vm.set_program_counter(entry_pc)

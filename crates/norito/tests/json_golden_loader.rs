@@ -4,21 +4,17 @@
 //! asserts that the native writer canonicalizes the input into
 //! the expected output. Also verifies that parsing the output round-trips to an
 //! equivalent `Value`.
-
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-
 use norito::json;
-
 fn golden_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("data")
         .join("json_golden")
 }
-
 #[test]
 fn json_writer_corpus_goldens() {
     let dir = golden_dir();

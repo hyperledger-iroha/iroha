@@ -30,6 +30,7 @@ TEST_PATH_HINTS = {
     "iroha_test_network",
     "iroha_test_samples",
 }
+TEST_FILE_STEMS = frozenset({"test", "tests"})
 
 # Top-level search roots (falls back to the repo root if none exist).
 SEARCH_ROOTS = (
@@ -92,10 +93,17 @@ def iter_rust_files(root: Path) -> Iterable[Path]:
 
 
 def classify_scope(path: Path) -> str:
+    """Classify a Rust source by its build role and test-shard convention."""
+
     parts = set(path.parts)
     if path.name == "build.rs":
         return "build"
-    if TEST_PATH_HINTS.intersection(parts):
+    stem = path.stem
+    if (
+        TEST_PATH_HINTS.intersection(parts)
+        or stem in TEST_FILE_STEMS
+        or stem.endswith(("_test", "_tests"))
+    ):
         return "test"
     if "benches" in parts:
         return "bench"

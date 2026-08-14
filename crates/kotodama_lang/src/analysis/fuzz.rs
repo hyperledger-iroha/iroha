@@ -1,7 +1,5 @@
 use std::collections::HashMap;
-
 use iroha_primitives::{bigint::BigInt, numeric_abi::IntValueV1};
-
 use super::{AnalysisCategory, AnalysisFinding};
 use crate::{
     analysis::SimpleRng,
@@ -10,7 +8,6 @@ use crate::{
         self, ExprKind, Type, TypedBlock, TypedExpr, TypedFunction, TypedProgram, TypedStatement,
     },
 };
-
 /// Outcome of the Kotodama source fuzz pass.
 #[derive(Debug, Default)]
 pub struct FuzzReport {
@@ -18,12 +15,10 @@ pub struct FuzzReport {
     pub cases_executed: usize,
     pub functions_covered: usize,
 }
-
 const MAX_PARAMS: usize = 3;
 const DEFAULT_MAX_CASES: usize = 64;
 const DEFAULT_LOOP_LIMIT: usize = 128;
 const DEFAULT_RECURSION_LIMIT: usize = 16;
-
 /// Execute a lightweight interpreter-based fuzzing harness against the typed
 /// program. Only integer and boolean parameters are supported currently. Other
 /// functions are reported as skipped.
@@ -41,7 +36,6 @@ pub fn run_fuzz(
             _ => None,
         })
         .collect();
-
     let typed_functions: HashMap<&str, &TypedFunction> = typed
         .items
         .iter()
@@ -49,17 +43,14 @@ pub fn run_fuzz(
             semantic::TypedItem::Function(func) => (func.name.as_str(), func),
         })
         .collect();
-
     if typed_functions.is_empty() {
         return report;
     }
-
     let mut evaluator = Evaluator::new(
         &typed_functions,
         DEFAULT_RECURSION_LIMIT,
         DEFAULT_LOOP_LIMIT,
     );
-
     for name in typed_functions.keys() {
         let Some(ast_fn) = ast_functions.get(name) else {
             continue;
@@ -103,7 +94,6 @@ pub fn run_fuzz(
         if cases.is_empty() {
             continue;
         }
-
         report.functions_covered += 1;
         let mut rng = SimpleRng::new(hash_name(name));
         let mut executed = 0usize;
@@ -180,17 +170,14 @@ pub fn run_fuzz(
         }
         report.cases_executed += executed;
     }
-
     report
 }
-
 fn hash_name(name: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     name.hash(&mut hasher);
     hasher.finish()
 }
-
 fn param_specs(func: &AstFunction) -> Result<Vec<ParamSpec>, String> {
     let mut out = Vec::new();
     for param in &func.params {
@@ -199,7 +186,6 @@ fn param_specs(func: &AstFunction) -> Result<Vec<ParamSpec>, String> {
     }
     Ok(out)
 }
-
 fn param_type_from_expr(expr: &Option<TypeExpr>) -> Result<Type, String> {
     if let Some(t) = expr {
         convert_type_expr(t)
@@ -207,7 +193,6 @@ fn param_type_from_expr(expr: &Option<TypeExpr>) -> Result<Type, String> {
         Ok(Type::Int)
     }
 }
-
 fn convert_type_expr(expr: &TypeExpr) -> Result<Type, String> {
     Ok(match expr {
         TypeExpr::Source { ty, .. } | TypeExpr::Resolved { ty, .. } => {
@@ -253,7 +238,6 @@ fn convert_type_expr(expr: &TypeExpr) -> Result<Type, String> {
         }
     })
 }
-
 fn build_samples(param_specs: &[ParamSpec]) -> Option<Vec<Vec<Value>>> {
     let mut samples = Vec::new();
     for spec in param_specs {
@@ -262,7 +246,6 @@ fn build_samples(param_specs: &[ParamSpec]) -> Option<Vec<Vec<Value>>> {
     }
     Some(samples)
 }
-
 fn supported_type_samples(ty: &Type) -> Option<Vec<Value>> {
     match ty {
         Type::Int => Some(vec![
@@ -287,14 +270,12 @@ fn supported_type_samples(ty: &Type) -> Option<Vec<Value>> {
         _ => None,
     }
 }
-
 fn enumerate_cases(samples: &[Vec<Value>], limit: usize) -> Vec<Vec<Value>> {
     let mut out = Vec::new();
     let mut current = Vec::with_capacity(samples.len());
     enumerate_cases_rec(samples, limit, 0, &mut current, &mut out);
     out
 }
-
 fn enumerate_cases_rec(
     samples: &[Vec<Value>],
     limit: usize,
@@ -318,11 +299,9 @@ fn enumerate_cases_rec(
         current.pop();
     }
 }
-
 struct ParamSpec {
     ty: Type,
 }
-
 #[derive(Debug, Clone)]
 enum Value {
     Int(BigInt),
@@ -330,7 +309,6 @@ enum Value {
     Unit,
     Tuple(Vec<Value>),
 }
-
 impl Value {
     fn as_int(&self) -> Option<&BigInt> {
         match self {
@@ -338,7 +316,6 @@ impl Value {
             _ => None,
         }
     }
-
     fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Bool(v) => Some(*v),
@@ -346,18 +323,15 @@ impl Value {
         }
     }
 }
-
 fn bounded_int(value: BigInt, operation: &'static str) -> Result<Value, EvalError> {
     IntValueV1::try_new(value.clone()).map_err(|_| EvalError::ArithmeticOverflow(operation))?;
     Ok(Value::Int(value))
 }
-
 struct Evaluator<'a> {
     functions: HashMap<&'a str, &'a TypedFunction>,
     recursion_limit: usize,
     loop_limit: usize,
 }
-
 impl<'a> Evaluator<'a> {
     fn new(
         functions: &HashMap<&'a str, &'a TypedFunction>,
@@ -370,15 +344,12 @@ impl<'a> Evaluator<'a> {
             loop_limit,
         }
     }
-
     fn set_loop_limit(&mut self, limit: usize) {
         self.loop_limit = limit.max(1);
     }
-
     fn run_function(&mut self, name: &str, args: &[Value]) -> Result<Value, EvalError> {
         self.execute_function(name, args, 0)
     }
-
     fn execute_function(
         &mut self,
         name: &str,
@@ -420,7 +391,6 @@ impl<'a> Evaluator<'a> {
             )),
         }
     }
-
     fn exec_block(
         &mut self,
         block: &TypedBlock,
@@ -435,7 +405,6 @@ impl<'a> Evaluator<'a> {
         }
         Ok(FlowControl::Next)
     }
-
     fn exec_statement(
         &mut self,
         stmt: &TypedStatement,
@@ -549,7 +518,6 @@ impl<'a> Evaluator<'a> {
             }
         }
     }
-
     fn eval_expr(
         &mut self,
         expr: &TypedExpr,
@@ -681,7 +649,6 @@ impl<'a> Evaluator<'a> {
             }
         }
     }
-
     fn eval_binary(
         &self,
         op: crate::ast::BinaryOp,
@@ -793,7 +760,6 @@ impl<'a> Evaluator<'a> {
             }
         }
     }
-
     fn eval_call(&mut self, name: &str, args: &[Value], depth: usize) -> Result<Value, EvalError> {
         if self.functions.contains_key(name) {
             self.execute_function(name, args, depth + 1)
@@ -802,7 +768,6 @@ impl<'a> Evaluator<'a> {
         }
     }
 }
-
 #[derive(Debug)]
 enum EvalError {
     UnsupportedFeature(&'static str),
@@ -812,7 +777,6 @@ enum EvalError {
     ArithmeticOverflow(&'static str),
     Runtime(String),
 }
-
 #[derive(Debug)]
 enum FlowControl {
     Next,
@@ -820,18 +784,15 @@ enum FlowControl {
     Break,
     ContinueLoop,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::parser::parse_test_fragment as parse;
-
     fn fuzz(source: &str) -> FuzzReport {
         let program = parse(source).expect("parse");
         let typed = semantic::analyze(&program).expect("typed");
         run_fuzz(&program, &typed, 16)
     }
-
     #[test]
     fn fuzz_simple_add() {
         let report = fuzz(
@@ -844,7 +805,6 @@ mod tests {
         assert_eq!(report.findings.len(), 0);
         assert!(report.cases_executed > 0);
     }
-
     #[test]
     fn fuzz_interpreter_executes_ints_wider_than_i64() {
         let report = fuzz(
@@ -860,7 +820,6 @@ mod tests {
         );
         assert!(report.cases_executed > 0);
     }
-
     #[test]
     fn fuzz_executes_the_largest_v1_bounded_range() {
         let report = fuzz(
@@ -876,7 +835,6 @@ mod tests {
         );
         assert!(report.cases_executed > 0);
     }
-
     #[test]
     fn fuzz_skips_unsupported_call() {
         let report = fuzz(

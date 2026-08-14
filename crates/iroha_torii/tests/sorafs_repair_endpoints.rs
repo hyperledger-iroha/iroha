@@ -1,12 +1,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "app_api")]
-
 //! Public-contract tests for the chain-authoritative SoraFS repair API.
-
 use iroha_torii::openapi::generate_spec;
 use iroha_torii_shared::route_catalog::contracts_and_verification_keys as routes;
 use norito::json::Value;
-
 #[test]
 fn repair_route_catalog_exposes_only_the_v1_native_ledger_surface() {
     let expected = [
@@ -58,7 +55,6 @@ fn repair_route_catalog_exposes_only_the_v1_native_ledger_surface() {
     for (route, path) in expected {
         assert_eq!(route.path(), path);
     }
-
     let paths = routes::ROUTES
         .iter()
         .map(|route| route.path())
@@ -74,7 +70,6 @@ fn repair_route_catalog_exposes_only_the_v1_native_ledger_surface() {
         );
     }
 }
-
 #[test]
 fn repair_openapi_requires_signed_transactions_and_finalized_cursors() {
     let spec = generate_spec();
@@ -82,7 +77,6 @@ fn repair_openapi_requires_signed_transactions_and_finalized_cursors() {
         .get("paths")
         .and_then(Value::as_object)
         .expect("OpenAPI paths");
-
     let command_requirements = [
         ("/v1/sorafs/audit/repair/report", "SubmitSorafsRepairTask"),
         (
@@ -140,7 +134,6 @@ fn repair_openapi_requires_signed_transactions_and_finalized_cursors() {
             Some("#/components/schemas/VersionedSignedTransactionJson")
         );
     }
-
     let task_parameters = operation_parameter_names(paths, "/v1/sorafs/audit/repair/tasks", "get");
     for required in [
         "limit",
@@ -150,7 +143,6 @@ fn repair_openapi_requires_signed_transactions_and_finalized_cursors() {
     ] {
         assert!(task_parameters.contains(&required));
     }
-
     let event_parameters =
         operation_parameter_names(paths, "/v1/sorafs/audit/repair/events", "get");
     for required in [
@@ -168,7 +160,6 @@ fn repair_openapi_requires_signed_transactions_and_finalized_cursors() {
     assert!(!paths.contains_key("/v1/sorafs/audit/repair/events/stream"));
     assert!(!paths.contains_key("/v1/sorafs/audit/repair/events/ws"));
 }
-
 fn operation_parameter_names<'a>(
     paths: &'a norito::json::Map,
     path: &str,

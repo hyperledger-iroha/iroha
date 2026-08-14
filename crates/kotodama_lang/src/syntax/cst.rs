@@ -1,9 +1,6 @@
 //! Immutable lossless concrete syntax tree nodes.
-
 use crate::source::{SourceFile, SourceId, TextRange};
-
 use super::kind::SyntaxKind;
-
 /// One lossless token in a concrete syntax tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GreenToken {
@@ -14,7 +11,6 @@ pub struct GreenToken {
     /// Expected token kind for a zero-width recovery token.
     pub expected: Option<SyntaxKind>,
 }
-
 impl GreenToken {
     /// Construct a source-backed token.
     #[must_use]
@@ -25,7 +21,6 @@ impl GreenToken {
             expected: None,
         }
     }
-
     /// Construct a zero-width missing token.
     #[must_use]
     pub const fn missing(offset: u32, expected: SyntaxKind) -> Self {
@@ -35,14 +30,12 @@ impl GreenToken {
             expected: Some(expected),
         }
     }
-
     /// Return whether this is a parser-inserted missing token.
     #[must_use]
     pub const fn is_missing(&self) -> bool {
         matches!(self.kind, SyntaxKind::Missing)
     }
 }
-
 /// A child of a concrete syntax node.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GreenElement {
@@ -51,7 +44,6 @@ pub enum GreenElement {
     /// Leaf token.
     Token(GreenToken),
 }
-
 impl GreenElement {
     fn range(&self) -> TextRange {
         match self {
@@ -60,7 +52,6 @@ impl GreenElement {
         }
     }
 }
-
 /// Immutable concrete syntax node.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GreenNode {
@@ -71,7 +62,6 @@ pub struct GreenNode {
     /// Lossless children in source order.
     pub children: Vec<GreenElement>,
 }
-
 impl GreenNode {
     pub(crate) fn new(kind: SyntaxKind, fallback: u32, children: Vec<GreenElement>) -> Self {
         let first = children
@@ -94,31 +84,26 @@ impl GreenNode {
         }
     }
 }
-
 /// Complete lossless concrete syntax tree for one source file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SyntaxTree {
     source: SourceId,
     root: GreenNode,
 }
-
 impl SyntaxTree {
     pub(crate) fn new(source: SourceId, root: GreenNode) -> Self {
         Self { source, root }
     }
-
     /// Return the source identifier.
     #[must_use]
     pub const fn source(&self) -> SourceId {
         self.source
     }
-
     /// Return the root node.
     #[must_use]
     pub const fn root(&self) -> &GreenNode {
         &self.root
     }
-
     /// Reconstruct the exact source text represented by the tree.
     #[must_use]
     pub fn text(&self, source: &SourceFile) -> String {
@@ -142,20 +127,17 @@ impl SyntaxTree {
         }
         output
     }
-
     /// Return every leaf token in source order, including trivia, missing
     /// tokens, and end-of-file.
     #[must_use]
     pub fn tokens(&self) -> Vec<&GreenToken> {
         self.token_iter().collect()
     }
-
     pub(crate) fn token_iter(&self) -> GreenTokenIter<'_> {
         GreenTokenIter {
             pending: self.root.children.iter().rev().collect(),
         }
     }
-
     /// Consume the tree and return its tokens without recursively dropping
     /// nested green nodes.
     pub(crate) fn into_tokens(self) -> Vec<GreenToken> {
@@ -174,14 +156,11 @@ impl SyntaxTree {
         tokens
     }
 }
-
 pub(crate) struct GreenTokenIter<'tree> {
     pending: Vec<&'tree GreenElement>,
 }
-
 impl<'tree> Iterator for GreenTokenIter<'tree> {
     type Item = &'tree GreenToken;
-
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(element) = self.pending.pop() {
             match element {
@@ -192,7 +171,6 @@ impl<'tree> Iterator for GreenTokenIter<'tree> {
         None
     }
 }
-
 #[derive(Clone, Debug)]
 pub(crate) struct SyntaxOutlineNode {
     pub(crate) kind: SyntaxKind,
@@ -200,12 +178,10 @@ pub(crate) struct SyntaxOutlineNode {
     parent: Option<usize>,
     children: Vec<usize>,
 }
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SyntaxOutline {
     nodes: Vec<SyntaxOutlineNode>,
 }
-
 /// One parser-inserted token with the syntax node that owned the failed
 /// expectation. Retaining the owner avoids guessing at equal child/parent
 /// recovery boundaries after the outline has been completed.
@@ -215,20 +191,17 @@ pub(crate) struct MissingSyntax {
     pub(crate) expected: SyntaxKind,
     pub(crate) owner: Option<usize>,
 }
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SyntaxOutlineBuilder {
     outline: SyntaxOutline,
     stack: Vec<usize>,
 }
-
 #[derive(Clone, Debug)]
 pub(crate) struct SyntaxOutlineCheckpoint {
     node_len: usize,
     stack: Vec<usize>,
     child_lengths: Vec<(usize, usize)>,
 }
-
 impl SyntaxOutlineBuilder {
     pub(crate) fn start(&mut self, kind: SyntaxKind, start: u32) -> usize {
         let parent = self.stack.last().copied();
@@ -245,7 +218,6 @@ impl SyntaxOutlineBuilder {
         self.stack.push(id);
         id
     }
-
     /// Complete `id` and any still-open descendants at the same recovery
     /// boundary. Successful parses finish in strict stack order; unwinding
     /// descendants here keeps malformed input structurally balanced.
@@ -259,17 +231,14 @@ impl SyntaxOutlineBuilder {
             }
         }
     }
-
     pub(crate) fn set_kind(&mut self, id: usize, kind: SyntaxKind) {
         if let Some(node) = self.outline.nodes.get_mut(id) {
             node.kind = kind;
         }
     }
-
     pub(crate) fn current(&self) -> Option<usize> {
         self.stack.last().copied()
     }
-
     pub(crate) fn checkpoint(&self) -> SyntaxOutlineCheckpoint {
         SyntaxOutlineCheckpoint {
             node_len: self.outline.nodes.len(),
@@ -281,7 +250,6 @@ impl SyntaxOutlineBuilder {
                 .collect(),
         }
     }
-
     pub(crate) fn rollback(&mut self, checkpoint: SyntaxOutlineCheckpoint) {
         self.outline.nodes.truncate(checkpoint.node_len);
         for (id, child_len) in checkpoint.child_lengths {
@@ -291,7 +259,6 @@ impl SyntaxOutlineBuilder {
         }
         self.stack = checkpoint.stack;
     }
-
     pub(crate) fn finish_open_nodes(&mut self, end: u32) {
         while let Some(id) = self.stack.pop() {
             if let Some(node) = self.outline.nodes.get_mut(id) {
@@ -299,12 +266,10 @@ impl SyntaxOutlineBuilder {
             }
         }
     }
-
     pub(crate) fn into_outline(self) -> SyntaxOutline {
         self.outline
     }
 }
-
 /// Build one lossless tree from the structural decisions recorded by the
 /// canonical AST parser and the original trivia-bearing lexer tape.
 pub(crate) fn build_tree_from_outline(
@@ -323,7 +288,6 @@ pub(crate) fn build_tree_from_outline(
             ),
         );
     };
-
     let mut depths = vec![0_usize; outline.nodes.len()];
     for (id, node) in outline.nodes.iter().enumerate() {
         depths[id] = node
@@ -360,19 +324,16 @@ pub(crate) fn build_tree_from_outline(
     for insertions in &mut direct_missing {
         insertions.sort_unstable_by_key(|(offset, _)| *offset);
     }
-
     struct Frame {
         node: usize,
         child: usize,
         missing: usize,
     }
-
     struct DirectEmissionBoundary {
         offset: u32,
         include_missing: bool,
         include_eof: bool,
     }
-
     fn emit_direct(
         events: &mut Vec<Event>,
         tokens: &[GreenToken],
@@ -415,7 +376,6 @@ pub(crate) fn build_tree_from_outline(
             }
         }
     }
-
     let mut events = Vec::with_capacity(tokens.len().saturating_add(outline.nodes.len() * 2));
     events.push(Event::Start {
         kind: root.kind,
@@ -479,7 +439,6 @@ pub(crate) fn build_tree_from_outline(
     }
     build_tree(source, tokens, events)
 }
-
 #[derive(Debug)]
 pub(crate) enum Event {
     Start { kind: SyntaxKind, offset: u32 },
@@ -487,13 +446,11 @@ pub(crate) enum Event {
     Missing { expected: SyntaxKind, offset: u32 },
     Finish { offset: u32 },
 }
-
 struct NodeBuilder {
     kind: SyntaxKind,
     offset: u32,
     children: Vec<GreenElement>,
 }
-
 pub(crate) fn build_tree(
     source: SourceId,
     tokens: &[GreenToken],

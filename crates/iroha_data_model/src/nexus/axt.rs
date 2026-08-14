@@ -2,22 +2,18 @@
 //!
 //! These structures mirror the IVM syscall surface while providing Norito-compatible
 //! schemas for WSV/block persistence and gossip replication.
-
-use std::collections::{BTreeMap, BTreeSet};
-
-use iroha_crypto::{Hash, HashOf, PrivateKey, PublicKey, Signature};
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use iroha_zkp_halo2::poseidon::hash_bytes as poseidon_hash_bytes;
-use norito::codec::{Decode, Encode, encode_adaptive};
-use thiserror::Error;
-
 use crate::{
     NetworkId,
     block::BlockHeader,
     nexus::{DataSpaceId, LaneId, UniversalAccountId},
 };
-
+use iroha_crypto::{Hash, HashOf, PrivateKey, PublicKey, Signature};
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use iroha_zkp_halo2::poseidon::hash_bytes as poseidon_hash_bytes;
+use norito::codec::{Decode, Encode, encode_adaptive};
+use std::collections::{BTreeMap, BTreeSet};
+use thiserror::Error;
 /// Canonical 32-byte binding derived from an AXT descriptor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -26,27 +22,23 @@ use crate::{
 )]
 #[repr(transparent)]
 pub struct AxtBinding([u8; 32]);
-
 impl AxtBinding {
     /// Construct a binding from raw bytes.
     #[must_use]
     pub const fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
-
     /// Borrow the binding bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
-
     /// Consume the binding and return the inner array.
     #[must_use]
     pub const fn into_array(self) -> [u8; 32] {
         self.0
     }
 }
-
 /// Canonical descriptor for an AXT envelope.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -60,7 +52,6 @@ pub struct AxtDescriptor {
     #[norito(default)]
     pub touches: Vec<AxtTouchSpec>,
 }
-
 /// Declared access set for a dataspace touched by an AXT envelope.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -77,7 +68,6 @@ pub struct AxtTouchSpec {
     #[norito(default)]
     pub write: Vec<String>,
 }
-
 /// Runtime manifest supplied via `AXT_TOUCH`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -92,7 +82,6 @@ pub struct TouchManifest {
     #[norito(default)]
     pub write: Vec<String>,
 }
-
 impl TouchManifest {
     /// Construct a canonical touch manifest from read/write key prefixes.
     ///
@@ -121,14 +110,12 @@ impl TouchManifest {
             values.dedup();
             values
         }
-
         Self {
             read: collect_sorted(read),
             write: collect_sorted(write),
         }
     }
 }
-
 /// Compute the canonical descriptor binding used by asset handles and manifests.
 ///
 /// The descriptor's bare Norito payload is prefixed with a domain separator and
@@ -144,7 +131,6 @@ pub fn compute_descriptor_binding(descriptor: &AxtDescriptor) -> Result<[u8; 32]
     buf.extend_from_slice(&encoded);
     Ok(poseidon_hash_bytes(&buf))
 }
-
 impl AxtDescriptor {
     /// Deterministically compute the binding hash for this descriptor.
     ///
@@ -153,35 +139,30 @@ impl AxtDescriptor {
     pub fn binding(&self) -> Result<AxtBinding, norito::Error> {
         compute_descriptor_binding(self).map(AxtBinding::new)
     }
-
     /// Build a descriptor with sorted dataspace/touch entries.
     #[must_use]
     pub fn builder() -> AxtDescriptorBuilder {
         AxtDescriptorBuilder::default()
     }
 }
-
 /// Deterministic builder for [`AxtDescriptor`].
 #[derive(Debug, Default, Clone)]
 pub struct AxtDescriptorBuilder {
     dsids: BTreeSet<DataSpaceId>,
     touches: BTreeMap<DataSpaceId, AxtTouchSpec>,
 }
-
 impl AxtDescriptorBuilder {
     /// Start an empty builder.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
-
     /// Add a dataspace to the descriptor.
     #[must_use]
     pub fn dataspace(mut self, dsid: DataSpaceId) -> Self {
         self.dsids.insert(dsid);
         self
     }
-
     /// Add or replace a touch declaration for a dataspace.
     #[must_use]
     pub fn touch<R, W>(mut self, dsid: DataSpaceId, read: R, write: W) -> Self
@@ -201,7 +182,6 @@ impl AxtDescriptorBuilder {
         self.touches.insert(dsid, touch);
         self
     }
-
     /// Build the descriptor, rejecting undeclared/duplicate dataspace or touch entries.
     ///
     /// # Errors
@@ -214,7 +194,6 @@ impl AxtDescriptorBuilder {
         Ok(descriptor)
     }
 }
-
 /// Touch fragment emitted for a particular dataspace.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -227,7 +206,6 @@ pub struct AxtTouchFragment {
     /// Manifest captured during execution.
     pub manifest: TouchManifest,
 }
-
 /// Wrapper around proof artifacts provided by dataspace verifiers.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -241,7 +219,6 @@ pub struct ProofBlob {
     #[norito(default)]
     pub expiry_slot: Option<u64>,
 }
-
 /// Check whether the proof envelope binds to the expected dataspace, manifest root,
 /// and V1 `FastPQ` verifier binding.
 #[must_use]
@@ -268,7 +245,6 @@ pub fn proof_matches_manifest(
         && binding.verifier_version == "v1"
         && fastpq_binding_shape_is_concrete(binding)
 }
-
 fn fastpq_binding_shape_is_concrete(binding: &AxtFastpqBinding) -> bool {
     binding_string_is_present(&binding.parameter)
         && binding_string_is_present(&binding.source_dataspace)
@@ -285,16 +261,13 @@ fn fastpq_binding_shape_is_concrete(binding: &AxtFastpqBinding) -> bool {
             .windows(2)
             .all(|pair| pair[0] < pair[1])
 }
-
 fn binding_string_is_present(value: &str) -> bool {
     !value.trim().is_empty()
 }
-
 fn binding_hex_digest_is_present(value: &str) -> bool {
     let value = value.trim();
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
-
 fn fastpq_claim_type_is_supported(value: &str) -> bool {
     let value = value.trim();
     value.eq_ignore_ascii_case("authorization")
@@ -302,7 +275,6 @@ fn fastpq_claim_type_is_supported(value: &str) -> bool {
         || value.eq_ignore_ascii_case("tx_predicate")
         || value.eq_ignore_ascii_case("value_conservation")
 }
-
 /// Norito envelope used to bind dataspace proofs to manifest roots and DA state.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(decode_from_slice)]
@@ -335,7 +307,6 @@ pub struct AxtProofEnvelope {
     #[norito(default)]
     pub amount_commitment: Option<[u8; 32]>,
 }
-
 /// Structured FASTPQ receipt/effect binding embedded in AXT proof envelopes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -379,7 +350,6 @@ pub struct AxtFastpqBinding {
     #[norito(default)]
     pub effect_binding: Option<AxtEffectBinding>,
 }
-
 /// Business-effect bindings committed by a FASTPQ proof envelope.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -418,7 +388,6 @@ pub struct AxtEffectBinding {
     #[norito(default)]
     pub destination_amount_i64: Option<i64>,
 }
-
 /// Proof fragment associated with a dataspace.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -431,7 +400,6 @@ pub struct AxtProofFragment {
     /// Proof payload provided by the dataspace.
     pub proof: ProofBlob,
 }
-
 /// Dataspace composability group binding advertised by the capability.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -444,7 +412,6 @@ pub struct GroupBinding {
     /// Epoch identifier linked to the handle.
     pub epoch_id: u64,
 }
-
 /// Handle budget parameters.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -458,7 +425,6 @@ pub struct HandleBudget {
     #[norito(default)]
     pub per_use: Option<Quantity>,
 }
-
 /// Capability subject metadata.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -472,10 +438,8 @@ pub struct HandleSubject {
     #[norito(default)]
     pub origin_dsid: Option<DataSpaceId>,
 }
-
 /// Domain separator for V1 issuer signatures over asset handles.
 pub const AXT_HANDLE_ISSUER_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha:axt:asset-handle-issuer:v1\0";
-
 /// Immutable admission context for one V1 AXT issuer signature.
 ///
 /// None of these values is selected by the submitted handle. Validators
@@ -502,7 +466,6 @@ pub struct AxtHandleIssuerContextV1 {
     /// Canonical hash of the authorized ABI surface.
     pub abi_hash: [u8; 32],
 }
-
 impl Default for AxtHandleIssuerContextV1 {
     /// Return a syntactic fixture context that cannot match committed policy.
     ///
@@ -523,7 +486,6 @@ impl Default for AxtHandleIssuerContextV1 {
         }
     }
 }
-
 /// Canonical V1 statement authenticated by an AXT capability issuer.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -556,7 +518,6 @@ pub struct AssetHandleIssuerPayloadV1 {
     /// Requested clock-skew allowance, if any.
     pub max_clock_skew_ms: Option<u32>,
 }
-
 /// Unsigned AXT capability claims prepared by an issuer.
 ///
 /// This type cannot enter an AXT envelope. Signing consumes it and returns the
@@ -591,7 +552,6 @@ pub struct AssetHandleDraft {
     #[norito(default)]
     pub max_clock_skew_ms: Option<u32>,
 }
-
 impl AssetHandleDraft {
     /// Build the exact statement authenticated by the dataspace issuer.
     #[must_use]
@@ -614,7 +574,6 @@ impl AssetHandleDraft {
             max_clock_skew_ms: self.max_clock_skew_ms,
         }
     }
-
     /// Encode the domain-separated canonical V1 issuer-signature preimage.
     #[must_use]
     pub fn issuer_signature_preimage_v1(&self, context: AxtHandleIssuerContextV1) -> Vec<u8> {
@@ -629,7 +588,6 @@ impl AssetHandleDraft {
         preimage.extend_from_slice(&encoded);
         preimage
     }
-
     /// Authenticate this handle with the committed dataspace issuer's key.
     ///
     /// # Errors
@@ -649,7 +607,6 @@ impl AssetHandleDraft {
         ))
     }
 }
-
 /// Admission-ready AXT capability with a mandatory issuer signature.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -685,7 +642,6 @@ pub struct AssetHandle {
     /// Issuer signature over the canonical V1 handle statement.
     pub issuer_signature: Signature,
 }
-
 impl AssetHandle {
     fn from_signed_draft(
         draft: AssetHandleDraft,
@@ -708,7 +664,6 @@ impl AssetHandle {
             issuer_signature,
         }
     }
-
     /// Recover the unsigned claims for canonical signature verification.
     #[must_use]
     pub fn draft(&self) -> AssetHandleDraft {
@@ -726,7 +681,6 @@ impl AssetHandle {
             max_clock_skew_ms: self.max_clock_skew_ms,
         }
     }
-
     /// Verify this handle against the issuer key resolved from committed policy.
     ///
     /// # Errors
@@ -749,7 +703,6 @@ impl AssetHandle {
         )
     }
 }
-
 /// Error returned when a handle does not represent the one allowed ratchet step.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum AxtHandleSequenceError {
@@ -773,7 +726,6 @@ pub enum AxtHandleSequenceError {
     #[error("handle sub-nonce counter is exhausted")]
     CounterExhausted,
 }
-
 /// Validate one exact era/counter transition and return the next counter.
 ///
 /// This deliberately rejects both stale values and caller-selected future
@@ -800,7 +752,6 @@ pub fn next_axt_handle_sub_nonce(
         .checked_add(1)
         .ok_or(AxtHandleSequenceError::CounterExhausted)
 }
-
 /// Simplified representation of spend operations.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -818,7 +769,6 @@ pub struct SpendOp {
     #[norito(default)]
     pub amount: Option<Quantity>,
 }
-
 /// Intent forwarded to a dataspace via `USE_ASSET_HANDLE`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -831,7 +781,6 @@ pub struct RemoteSpendIntent {
     /// Operation payload.
     pub op: SpendOp,
 }
-
 /// Recorded handle usage for commit validation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -853,7 +802,6 @@ pub struct AxtHandleFragment {
     #[norito(default)]
     pub amount_commitment: Option<[u8; 32]>,
 }
-
 /// Canonical fingerprint for a handle usage recorded in the replay ledger.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -870,7 +818,6 @@ pub struct AxtHandleReplayKey {
     /// Target lane for the handle.
     pub target_lane: LaneId,
 }
-
 impl AxtHandleReplayKey {
     /// Create a replay key from explicit parts.
     #[must_use]
@@ -887,7 +834,6 @@ impl AxtHandleReplayKey {
             target_lane,
         }
     }
-
     /// Create a replay key from an [`AssetHandle`].
     #[must_use]
     pub fn from_handle(handle: &AssetHandle) -> Self {
@@ -899,7 +845,6 @@ impl AxtHandleReplayKey {
         )
     }
 }
-
 /// Ledger entry capturing when a handle was consumed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -914,7 +859,6 @@ pub struct AxtReplayRecord {
     /// Slot after which the replay guard can be evicted.
     pub retain_until_slot: u64,
 }
-
 impl AxtReplayRecord {
     /// Determine whether the replay guard has expired for a given slot and retention window.
     ///
@@ -929,7 +873,6 @@ impl AxtReplayRecord {
         current_slot >= effective_until
     }
 }
-
 /// Aggregate record used to persist and replicate AXT envelopes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -955,7 +898,6 @@ pub struct AxtEnvelopeRecord {
     /// Exact height of the block that persists this envelope.
     pub commit_height: u64,
 }
-
 /// Per-dataspace policy snapshot sourced from the Space Directory/WSV.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -974,7 +916,6 @@ pub struct AxtPolicyEntry {
     /// Current slot used for expiry checks.
     pub current_slot: u64,
 }
-
 /// Binding between a dataspace id and its AXT policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -987,7 +928,6 @@ pub struct AxtPolicyBinding {
     /// Policy entry.
     pub policy: AxtPolicyEntry,
 }
-
 /// Collection of AXT policy bindings for deterministic replication.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -1000,7 +940,6 @@ pub struct AxtPolicySnapshot {
     /// Ordered bindings for each dataspace.
     pub entries: Vec<AxtPolicyBinding>,
 }
-
 /// Errors returned when validating an AXT policy snapshot.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum AxtPolicySnapshotValidationError {
@@ -1026,7 +965,6 @@ pub enum AxtPolicySnapshotValidationError {
         actual: u64,
     },
 }
-
 impl AxtPolicySnapshot {
     /// Compute a stable, truncated hash version for a policy snapshot.
     #[must_use]
@@ -1041,7 +979,6 @@ impl AxtPolicySnapshot {
         truncated.copy_from_slice(&hash.as_ref()[..8]);
         u64::from_le_bytes(truncated)
     }
-
     /// Populate the version field and reject non-canonical snapshot entries.
     ///
     /// # Errors
@@ -1053,7 +990,6 @@ impl AxtPolicySnapshot {
         self.validate()?;
         Ok(self)
     }
-
     /// Validate canonical binding order and the exact derived snapshot version.
     ///
     /// # Errors
@@ -1078,7 +1014,6 @@ impl AxtPolicySnapshot {
                 );
             }
         }
-
         let expected = Self::compute_version(&self.entries);
         if self.version != expected {
             return Err(AxtPolicySnapshotValidationError::VersionMismatch {
@@ -1089,7 +1024,6 @@ impl AxtPolicySnapshot {
         Ok(())
     }
 }
-
 /// Context captured when an AXT envelope fails policy checks.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1118,7 +1052,6 @@ pub struct AxtRejectContext {
     #[norito(default)]
     pub next_handle_counter: Option<u64>,
 }
-
 impl core::fmt::Display for AxtRejectContext {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
@@ -1138,7 +1071,6 @@ impl core::fmt::Display for AxtRejectContext {
         write!(f, ")")
     }
 }
-
 /// Canonical reason codes for AXT policy rejections.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1173,7 +1105,6 @@ pub enum AxtRejectReason {
     /// Duplicate fragment encountered.
     Duplicate,
 }
-
 impl AxtRejectReason {
     /// Stable label used for telemetry and debug outputs.
     #[must_use]
@@ -1193,7 +1124,6 @@ impl AxtRejectReason {
             Self::Duplicate => "duplicate",
         }
     }
-
     /// Stable machine-readable code suitable for APIs and telemetry.
     #[must_use]
     pub const fn code(self) -> &'static str {
@@ -1212,13 +1142,11 @@ impl AxtRejectReason {
             Self::Duplicate => "AXT_DUPLICATE",
         }
     }
-
     /// Alias for telemetry call sites.
     #[must_use]
     pub const fn as_label(self) -> &'static str {
         self.label()
     }
-
     /// Resolve a reason label (e.g., from telemetry) back into a structured enum.
     #[must_use]
     pub fn from_label(label: &str) -> Option<Self> {
@@ -1239,7 +1167,6 @@ impl AxtRejectReason {
         }
     }
 }
-
 /// Errors returned when validating an AXT descriptor.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum AxtValidationError {
@@ -1350,7 +1277,6 @@ pub enum AxtValidationError {
         current_index: usize,
     },
 }
-
 /// Validate the canonical invariants of an AXT descriptor.
 ///
 /// # Errors
@@ -1362,7 +1288,6 @@ pub fn validate_descriptor(descriptor: &AxtDescriptor) -> Result<(), AxtValidati
     if descriptor.dsids.is_empty() {
         return Err(AxtValidationError::EmptyDataspaceList);
     }
-
     let mut seen_dsids = BTreeSet::new();
     for dsid in &descriptor.dsids {
         if !seen_dsids.insert(*dsid) {
@@ -1377,7 +1302,6 @@ pub fn validate_descriptor(descriptor: &AxtDescriptor) -> Result<(), AxtValidati
             });
         }
     }
-
     let mut seen_touches = BTreeSet::new();
     for touch in &descriptor.touches {
         if !seen_dsids.contains(&touch.dsid) {
@@ -1399,10 +1323,8 @@ pub fn validate_descriptor(descriptor: &AxtDescriptor) -> Result<(), AxtValidati
         validate_read_paths(touch.dsid, &touch.read)?;
         validate_write_paths(touch.dsid, &touch.write)?;
     }
-
     Ok(())
 }
-
 fn validate_read_paths(dsid: DataSpaceId, paths: &[String]) -> Result<(), AxtValidationError> {
     let mut first_indices = BTreeMap::new();
     for (index, path) in paths.iter().enumerate() {
@@ -1431,7 +1353,6 @@ fn validate_read_paths(dsid: DataSpaceId, paths: &[String]) -> Result<(), AxtVal
     }
     Ok(())
 }
-
 fn validate_write_paths(dsid: DataSpaceId, paths: &[String]) -> Result<(), AxtValidationError> {
     let mut first_indices = BTreeMap::new();
     for (index, path) in paths.iter().enumerate() {
@@ -1460,14 +1381,11 @@ fn validate_write_paths(dsid: DataSpaceId, paths: &[String]) -> Result<(), AxtVa
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::{decode_from_bytes, to_bytes};
-
-    use super::*;
-
     fn sample_descriptor(dsid: DataSpaceId) -> AxtDescriptor {
         AxtDescriptor {
             dsids: vec![dsid],
@@ -1478,13 +1396,11 @@ mod tests {
             }],
         }
     }
-
     fn test_network_id(seed: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             seed,
         )))
     }
-
     fn issuer_context(network_id: NetworkId, asset_dsid: DataSpaceId) -> AxtHandleIssuerContextV1 {
         AxtHandleIssuerContextV1 {
             network_id,
@@ -1496,7 +1412,6 @@ mod tests {
             abi_hash: [0xAB; 32],
         }
     }
-
     fn sample_asset_handle_draft() -> AssetHandleDraft {
         AssetHandleDraft {
             scope: vec!["transfer".into()],
@@ -1521,7 +1436,6 @@ mod tests {
             max_clock_skew_ms: Some(25),
         }
     }
-
     fn sample_asset_handle() -> AssetHandle {
         let issuer = KeyPair::from_seed(vec![0x33; 32], Algorithm::Ed25519);
         sample_asset_handle_draft()
@@ -1531,7 +1445,6 @@ mod tests {
             )
             .expect("sign sample handle")
     }
-
     #[test]
     fn unsigned_draft_cannot_decode_as_admission_handle() {
         let encoded = to_bytes(&sample_asset_handle_draft()).expect("encode unsigned draft");
@@ -1540,7 +1453,6 @@ mod tests {
             "the admission wire type must require its issuer context and signature"
         );
     }
-
     #[test]
     fn asset_handle_issuer_signature_binds_every_policy_field_and_network() {
         let issuer = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
@@ -1550,7 +1462,6 @@ mod tests {
         let signed = sample_asset_handle_draft()
             .sign_by_issuer_v1(context, issuer.private_key())
             .expect("sign fixture handle");
-
         assert!(
             signed
                 .verify_issuer_signature_v1(context, issuer.public_key())
@@ -1562,7 +1473,6 @@ mod tests {
                 .is_err(),
             "a forged issuer must not authenticate"
         );
-
         let mut wrong_contexts = Vec::new();
         let mut wrong = context;
         wrong.network_id = test_network_id(b"other-network");
@@ -1593,7 +1503,6 @@ mod tests {
                 "issuer signatures must bind the exact external admission context"
             );
         }
-
         let mut altered = Vec::new();
         let mut handle = signed.clone();
         handle.scope.push("mint".into());
@@ -1628,7 +1537,6 @@ mod tests {
         let mut handle = signed.clone();
         handle.max_clock_skew_ms = Some(26);
         altered.push(handle);
-
         for altered in altered {
             assert!(
                 altered
@@ -1638,7 +1546,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn handle_sequence_accepts_only_exact_checked_progression() {
         let mut policy = AxtPolicyEntry {
@@ -1649,12 +1556,10 @@ mod tests {
             current_slot: 1,
         };
         let mut handle = sample_asset_handle();
-
         assert_eq!(next_axt_handle_sub_nonce(&policy, &handle), Ok(4));
         policy.next_handle_counter = 4;
         handle.sub_nonce = 4;
         assert_eq!(next_axt_handle_sub_nonce(&policy, &handle), Ok(5));
-
         handle.sub_nonce = 3;
         assert!(matches!(
             next_axt_handle_sub_nonce(&policy, &handle),
@@ -1677,7 +1582,6 @@ mod tests {
                 actual: u64::MAX
             })
         ));
-
         policy.active_handle_era = u64::MAX;
         policy.next_handle_counter = u64::MAX;
         handle.handle_era = u64::MAX;
@@ -1687,7 +1591,6 @@ mod tests {
             Err(AxtHandleSequenceError::CounterExhausted)
         );
     }
-
     fn sample_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
         AxtFastpqBinding {
             parameter: "fastpq-lane-balanced".to_string(),
@@ -1707,7 +1610,6 @@ mod tests {
             effect_binding: None,
         }
     }
-
     fn descriptor_with_paths(read: &[&str], write: &[&str]) -> AxtDescriptor {
         let dsid = DataSpaceId::new(1);
         AxtDescriptor {
@@ -1719,21 +1621,18 @@ mod tests {
             }],
         }
     }
-
     #[test]
     fn touch_manifest_constructor_canonicalizes_paths() {
         let manifest = TouchManifest::from_read_write(
             [" zebra ", "", "alpha", "alpha", " \t "],
             [" zeta", "\n", "beta ", "beta", "alpha"],
         );
-
         assert_eq!(manifest.read, vec!["alpha".to_owned(), "zebra".to_owned()]);
         assert_eq!(
             manifest.write,
             vec!["alpha".to_owned(), "beta".to_owned(), "zeta".to_owned()]
         );
     }
-
     #[test]
     fn descriptor_validation_rejects_duplicates_and_missing() {
         let empty = AxtDescriptor {
@@ -1744,7 +1643,6 @@ mod tests {
             validate_descriptor(&empty),
             Err(AxtValidationError::EmptyDataspaceList)
         ));
-
         let dup_ds = AxtDescriptor {
             dsids: vec![DataSpaceId::new(1), DataSpaceId::new(1)],
             touches: Vec::new(),
@@ -1753,7 +1651,6 @@ mod tests {
             validate_descriptor(&dup_ds),
             Err(AxtValidationError::DuplicateDataspaceId(_))
         ));
-
         let undeclared_touch = AxtDescriptor {
             dsids: vec![DataSpaceId::new(2)],
             touches: vec![AxtTouchSpec {
@@ -1766,7 +1663,6 @@ mod tests {
             validate_descriptor(&undeclared_touch),
             Err(AxtValidationError::TouchUndeclaredDataspace(_))
         ));
-
         let dup_touch = AxtDescriptor {
             dsids: vec![DataSpaceId::new(3)],
             touches: vec![
@@ -1787,7 +1683,6 @@ mod tests {
             Err(AxtValidationError::DuplicateTouch(_))
         ));
     }
-
     #[test]
     fn descriptor_validation_rejects_noncanonical_entry_order() {
         let first = DataSpaceId::new(2);
@@ -1803,7 +1698,6 @@ mod tests {
                 current: second,
             })
         );
-
         let unsorted_touches = AxtDescriptor {
             dsids: vec![second, first],
             touches: vec![
@@ -1827,7 +1721,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn descriptor_validation_rejects_noncanonical_read_paths() {
         assert_eq!(
@@ -1861,7 +1754,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn descriptor_validation_rejects_noncanonical_write_paths() {
         assert_eq!(
@@ -1895,7 +1787,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn replay_record_zeroed_slots_are_expired() {
         let record = AxtReplayRecord {
@@ -1906,23 +1797,19 @@ mod tests {
         assert!(record.is_expired(0, 1));
         assert!(record.is_expired(5, 10));
     }
-
     #[test]
     fn descriptor_validation_accepts_valid_descriptor() {
         let descriptor = sample_descriptor(DataSpaceId::new(7));
         assert_eq!(validate_descriptor(&descriptor), Ok(()));
     }
-
     #[test]
     fn descriptor_binding_hashes_bare_norito_payload() {
         let descriptor = sample_descriptor(DataSpaceId::new(9));
         let mut expected_preimage = b"iroha:axt:desc:v1\0".to_vec();
         expected_preimage.extend_from_slice(&encode_adaptive(&descriptor));
-
         let binding = compute_descriptor_binding(&descriptor).expect("binding");
         assert_eq!(binding, poseidon_hash_bytes(&expected_preimage));
     }
-
     #[test]
     fn axt_reject_reason_roundtrips_label() {
         assert_eq!(
@@ -1931,7 +1818,6 @@ mod tests {
         );
         assert_eq!(AxtRejectReason::from_label("unknown"), None);
     }
-
     #[test]
     fn envelope_roundtrips_through_norito() {
         #[derive(Encode)]
@@ -1943,7 +1829,6 @@ mod tests {
             proofs: Vec<AxtProofFragment>,
             handles: Vec<AxtHandleFragment>,
         }
-
         let dsid = DataSpaceId::new(11);
         let descriptor = sample_descriptor(dsid);
         let binding = AxtBinding::new([0xAB; 32]);
@@ -2030,13 +1915,11 @@ mod tests {
             }],
             commit_height: 5,
         };
-
         let bytes = to_bytes(&envelope).expect("encode envelope");
         let decoded: AxtEnvelopeRecord = decode_from_bytes(&bytes).expect("decode envelope");
         assert_eq!(decoded, envelope);
         assert_eq!(decoded.binding.as_bytes(), &binding.into_array());
         assert_eq!(decoded.descriptor, descriptor);
-
         let missing_commit_height = EnvelopeWithoutCommitHeight {
             binding: envelope.binding,
             lane: envelope.lane,
@@ -2052,19 +1935,16 @@ mod tests {
             "commit_height is a required V1 wire field"
         );
     }
-
     #[test]
     fn policy_snapshot_validation_rejects_order_duplicates_and_stale_versions() {
         #[derive(Encode)]
         struct SnapshotWithoutVersion {
             entries: Vec<AxtPolicyBinding>,
         }
-
         #[derive(Encode)]
         struct SnapshotWithoutEntries {
             version: u64,
         }
-
         let policy = AxtPolicyEntry {
             manifest_root: [0x42; 32],
             target_lane: LaneId::new(1),
@@ -2080,7 +1960,6 @@ mod tests {
             dsid: DataSpaceId::new(2),
             policy,
         };
-
         let entries = vec![first, second];
         let canonical = AxtPolicySnapshot {
             version: AxtPolicySnapshot::compute_version(&entries),
@@ -2108,7 +1987,6 @@ mod tests {
             .is_err(),
             "snapshot entries are a required V1 wire field"
         );
-
         let duplicate_entries = vec![first, first];
         let duplicate = AxtPolicySnapshot {
             version: AxtPolicySnapshot::compute_version(&duplicate_entries),
@@ -2120,7 +1998,6 @@ mod tests {
                 first.dsid
             ))
         );
-
         let reversed_entries = vec![second, first];
         let reversed = AxtPolicySnapshot {
             version: AxtPolicySnapshot::compute_version(&reversed_entries),
@@ -2143,7 +2020,6 @@ mod tests {
             reversed.clone().with_computed_version(),
             Err(AxtPolicySnapshotValidationError::EntriesNotStrictlyOrdered { .. })
         ));
-
         let zero_version = AxtPolicySnapshot {
             version: 0,
             entries: canonical.entries.clone(),
@@ -2155,7 +2031,6 @@ mod tests {
                 actual: 0,
             })
         );
-
         let stale = AxtPolicySnapshot {
             version: canonical.version.wrapping_add(1),
             entries: canonical.entries.clone(),
@@ -2168,7 +2043,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn proof_matches_manifest_accepts_envelope_and_rejects_raw_root() {
         let dsid = DataSpaceId::new(17);
@@ -2188,7 +2062,6 @@ mod tests {
             expiry_slot: None,
         };
         assert!(proof_matches_manifest(&proof, dsid, manifest_root));
-
         let missing_binding = AxtProofEnvelope {
             dsid,
             manifest_root,
@@ -2207,30 +2080,25 @@ mod tests {
             dsid,
             manifest_root
         ));
-
         let raw_proof = ProofBlob {
             payload: manifest_root.to_vec(),
             expiry_slot: Some(5),
         };
         assert!(!proof_matches_manifest(&raw_proof, dsid, manifest_root));
     }
-
     #[test]
     fn fastpq_binding_shape_requires_strictly_increasing_target_dsids() {
         let mut binding = sample_fastpq_binding(DataSpaceId::new(17));
         binding.target_dsids = vec![1, 2, 3];
         assert!(fastpq_binding_shape_is_concrete(&binding));
-
         binding.target_dsids = vec![1, 1, 2];
         assert!(!fastpq_binding_shape_is_concrete(&binding));
-
         binding.target_dsids = vec![3, 1, 2];
         assert!(
             !fastpq_binding_shape_is_concrete(&binding),
             "unique but non-canonical target order must fail closed"
         );
     }
-
     #[test]
     fn proof_matches_manifest_rejects_alternate_layout_and_restores_flags() {
         let dsid = DataSpaceId::new(21);
@@ -2248,7 +2116,6 @@ mod tests {
         let alternate_flags = default_flags & !norito::core::header_flags::COMPACT_LEN;
         assert_ne!(alternate_flags, default_flags);
         let prior_flags = norito::core::effective_decode_flags();
-
         let canonical_payload = {
             let _guard = norito::core::DecodeFlagsGuard::enter(default_flags);
             norito::to_bytes(&envelope).expect("encode canonical envelope")
@@ -2258,7 +2125,6 @@ mod tests {
             norito::to_bytes(&envelope).expect("encode alternate-layout envelope")
         };
         assert_ne!(alternate_payload, canonical_payload);
-
         let canonical_proof = ProofBlob {
             payload: canonical_payload,
             expiry_slot: None,
@@ -2294,7 +2160,6 @@ mod tests {
         }
         assert_eq!(norito::core::effective_decode_flags(), prior_flags);
     }
-
     #[test]
     fn proof_matches_manifest_rejects_synthetic_binding_shape() {
         let dsid = DataSpaceId::new(20);
@@ -2315,7 +2180,6 @@ mod tests {
             expiry_slot: None,
         };
         assert!(!proof_matches_manifest(&proof, dsid, manifest_root));
-
         let mut binding = sample_fastpq_binding(dsid);
         binding.claim_type = "synthetic".to_string();
         let envelope = AxtProofEnvelope {
@@ -2332,7 +2196,6 @@ mod tests {
             expiry_slot: None,
         };
         assert!(!proof_matches_manifest(&proof, dsid, manifest_root));
-
         let mut binding = sample_fastpq_binding(dsid);
         binding.target_dsids.clear();
         let envelope = AxtProofEnvelope {
@@ -2350,7 +2213,6 @@ mod tests {
         };
         assert!(!proof_matches_manifest(&proof, dsid, manifest_root));
     }
-
     #[test]
     fn proof_matches_manifest_rejects_mismatch() {
         let dsid = DataSpaceId::new(18);
@@ -2372,13 +2234,11 @@ mod tests {
             expiry_slot: None,
         };
         assert!(!proof_matches_manifest(&proof, dsid, manifest_root));
-
         let raw_proof = ProofBlob {
             payload: bad_root.to_vec(),
             expiry_slot: Some(7),
         };
         assert!(!proof_matches_manifest(&raw_proof, dsid, manifest_root));
-
         let zero_root = [0u8; 32];
         let zero_proof = ProofBlob {
             payload: zero_root.to_vec(),

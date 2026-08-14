@@ -1618,7 +1618,13 @@ def _verify_persisted_record_source(
         raise ReceiptError(f"{label}.status_history does not end at current updated_at_ms")
 
 
-def _require_https(url: str, *, allow_insecure_http: bool, label: str) -> None:
+def _require_https(
+    url: str,
+    *,
+    allow_insecure_http: bool,
+    label: str,
+    rail_profile: str | None = None,
+) -> None:
     url_label = f"{label} URL"
     if len(url) > MAX_HTTP_URL_CHARS:
         raise ReceiptError(f"{url_label} must be no longer than {MAX_HTTP_URL_CHARS} characters")
@@ -1665,8 +1671,19 @@ def _require_https(url: str, *, allow_insecure_http: bool, label: str) -> None:
         url_label,
         allow_insecure_http=allow_insecure_http,
     )
-    if parsed.params or parsed.query or parsed.fragment:
-        raise ReceiptError(f"{url_label} must not contain params, query, or fragment")
+    if parsed.params or parsed.fragment:
+        raise ReceiptError(f"{url_label} must not contain params or fragment")
+    expected_query = (
+        urllib.parse.urlencode({"profile": rail_profile})
+        if rail_profile is not None
+        else ""
+    )
+    if parsed.query != expected_query or (rail_profile is None and "?" in url):
+        if rail_profile is None:
+            raise ReceiptError(f"{url_label} must not contain a query")
+        raise ReceiptError(
+            f"{url_label} query must exactly match the recorded rail profile"
+        )
     _validate_url_path(parsed, url_label)
     _reject_reserved_placeholder_url_host(parsed, url_label)
     _reject_template_canary_url_host(parsed, url_label)
@@ -2407,11 +2424,19 @@ def verify_receipt_file(
         receipt["_verified_index_path"] = verified_index_path
     elif kind == "iso-rail-gateway":
         _check_timestamp(receipt, "submitted_at", label)
+        if "profile" not in receipt:
+            raise ReceiptError(f"{label} profile must be recorded")
+        profile = _normalize_profile(receipt.get("profile"), f"{label} profile")
         endpoint_url = _require_clean_string(
             receipt.get("endpoint_url"),
             f"{label} endpoint_url",
         )
-        _require_https(endpoint_url, allow_insecure_http=allow_insecure_http, label=label)
+        _require_https(
+            endpoint_url,
+            allow_insecure_http=allow_insecure_http,
+            label=label,
+            rail_profile=profile,
+        )
         _check_endpoint_digest(receipt, label, endpoint_url)
         _verify_rail_source(
             receipt,

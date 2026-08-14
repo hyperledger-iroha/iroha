@@ -6,9 +6,7 @@
 //! Pass `--check` to verify a destination against the current canonical Rust
 //! encodings and JSON models, and use `--out-dir <path>` to target a cache
 //! staging directory.
-
 mod native_amx_grouped;
-
 use std::{
     collections::BTreeSet,
     env,
@@ -16,7 +14,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     NetworkId,
@@ -41,7 +38,6 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use norito::codec::{DecodeAll, Encode};
-
 const FIXTURE_DIRECTORY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/sumeragi_v2");
 const WIRE_FIXTURE_BASENAME: &str = "wire_v2.tsv";
 const CANONICAL_BODY: &[u8] = b"body";
@@ -49,13 +45,11 @@ const HEADER: &str = "# Accept rows were generated from iroha_data_model::block:
 # Reject rows are Rust-encoded invalid values or deliberate corruptions of those payloads.\n\
 # Bare Norito v1 layout with COMPACT_LEN; do not regenerate from an SDK codec.\n\
 # kind\tname\thex\texpectation\n";
-
 #[derive(Clone, Copy)]
 enum Expectation {
     Accept,
     Reject,
 }
-
 impl Expectation {
     const fn as_str(self) -> &'static str {
         match self {
@@ -64,14 +58,12 @@ impl Expectation {
         }
     }
 }
-
 struct FixtureRow {
     kind: &'static str,
     name: &'static str,
     bytes: Vec<u8>,
     expectation: Expectation,
 }
-
 impl FixtureRow {
     fn accepted(kind: &'static str, name: &'static str, bytes: Vec<u8>) -> Self {
         Self {
@@ -81,7 +73,6 @@ impl FixtureRow {
             expectation: Expectation::Accept,
         }
     }
-
     fn rejected(kind: &'static str, name: &'static str, bytes: Vec<u8>) -> Self {
         Self {
             kind,
@@ -91,12 +82,10 @@ impl FixtureRow {
         }
     }
 }
-
 struct NamedMessage {
     name: &'static str,
     message: ConsensusMessageV2,
 }
-
 #[derive(Encode)]
 struct PreV4ExecutionCommitment {
     parent_state_root: Hash,
@@ -110,7 +99,6 @@ struct PreV4ExecutionCommitment {
     executed_block_wire_len: u64,
     executed_block_wire_hash: Hash,
 }
-
 struct FixtureValues {
     context: HeightContext,
     prepare: QuorumCertificate,
@@ -119,7 +107,6 @@ struct FixtureValues {
     commit_response: CommitCertificateResponse,
     messages: Vec<NamedMessage>,
 }
-
 impl FixtureValues {
     fn message(&self, name: &str) -> Result<&ConsensusMessageV2, Box<dyn Error>> {
         self.messages
@@ -129,13 +116,11 @@ impl FixtureValues {
             .ok_or_else(|| format!("missing canonical message `{name}`").into())
     }
 }
-
 fn peer(seed: u8) -> PeerId {
     let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("deterministic Ed25519 fixture seed is valid");
     PeerId::new(key_pair.public_key().clone())
 }
-
 fn network_id(seed: u8) -> NetworkId {
     NetworkId::from_genesis_hash(
         HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
@@ -143,7 +128,6 @@ fn network_id(seed: u8) -> NetworkId {
         )),
     )
 }
-
 fn context() -> HeightContext {
     let mut peers = (1..=4).map(peer).collect::<Vec<_>>();
     peers.sort();
@@ -179,12 +163,10 @@ fn context() -> HeightContext {
         leader_seed: [0xa5; 32],
     }
 }
-
 fn canonical_body_chunks(context: &HeightContext) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     encode_payload_chunks(context.da_layout, CANONICAL_BODY)
         .map_err(|error| format!("failed to encode canonical fixture body: {error}").into())
 }
-
 fn round(context: &HeightContext, view: u64) -> ConsensusRound {
     ConsensusRound {
         context_id: context.id(),
@@ -192,7 +174,6 @@ fn round(context: &HeightContext, view: u64) -> ConsensusRound {
         view,
     }
 }
-
 fn subject(seed: u8) -> BlockSubject {
     BlockSubject {
         parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new([seed, 0]))),
@@ -200,7 +181,6 @@ fn subject(seed: u8) -> BlockSubject {
         payload_hash: Hash::new([seed, 2]),
     }
 }
-
 fn execution_commitment(seed: u8) -> ExecutionCommitment {
     ExecutionCommitment::without_topups_or_merge_carrier(
         Hash::new([seed, 3]),
@@ -210,7 +190,6 @@ fn execution_commitment(seed: u8) -> ExecutionCommitment {
         Hash::new([seed, 6]),
     )
 }
-
 fn qc(context: &HeightContext, view: u64, phase: GlobalPhase) -> QuorumCertificate {
     let seed = u8::try_from(view + 1).expect("fixture views fit in u8");
     QuorumCertificate {
@@ -223,11 +202,9 @@ fn qc(context: &HeightContext, view: u64, phase: GlobalPhase) -> QuorumCertifica
         aggregate_signature: vec![0x5a; 48],
     }
 }
-
 fn merge_carrier_entry_hash() -> HashOf<MergeLedgerEntry> {
     HashOf::from_untyped_unchecked(Hash::new(b"sumeragi-v2-v4-merge-carrier-fixture"))
 }
-
 fn merge_carrier_execution_commitment(seed: u8) -> ExecutionCommitment {
     ExecutionCommitment::new_with_native_amx_application_manifest_and_merge_carrier(
         Hash::new([seed, 3]),
@@ -244,13 +221,11 @@ fn merge_carrier_execution_commitment(seed: u8) -> ExecutionCommitment {
     )
     .expect("canonical merge-carrier fixture execution commitment")
 }
-
 fn merge_carrier_qc(context: &HeightContext) -> QuorumCertificate {
     let mut certificate = qc(context, 4, GlobalPhase::Prepare);
     certificate.execution_commitment = merge_carrier_execution_commitment(5);
     certificate
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "the canonical fixture values are easier to audit when assembled in one deterministic sequence"
@@ -327,7 +302,6 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
     commit_response
         .validate_against(&context, &commit_request)
         .map_err(|error| format!("fixture commit response is invalid: {error}"))?;
-
     let messages = vec![
         NamedMessage {
             name: "proposal",
@@ -542,7 +516,6 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
     status
         .validate()
         .map_err(|error| format!("fixture status is invalid: {error}"))?;
-
     Ok(FixtureValues {
         context,
         prepare,
@@ -552,7 +525,6 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
         messages,
     })
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "accepted and rejected wire fixtures intentionally share one ordered construction sequence"
@@ -576,7 +548,6 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
             values.commit_response.signature_preimage(),
         ),
     ]);
-
     let canonical_manifest = values.message("payload_manifest")?;
     let canonical_vote = values.message("vote")?;
     let canonical_reproposal_vote = values.message("commit_vote_reproposal")?;
@@ -584,20 +555,16 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
     let canonical_merge_carrier_qc = values.message("quorum_certificate_merge_carrier")?;
     let canonical_request = values.message("commit_certificate_request")?;
     let canonical_response = values.message("commit_certificate_response")?;
-
     let mut wrong_protocol_version = canonical_manifest.clone();
     wrong_protocol_version.protocol_version = PROTOCOL_VERSION - 1;
-
     let mut truncated = canonical_manifest.encode();
     truncated
         .pop()
         .ok_or("canonical payload-manifest message was unexpectedly empty")?;
     let mut trailing_byte = canonical_manifest.encode();
     trailing_byte.push(0);
-
     let mut noncanonical_qc = values.prepare.clone();
     noncanonical_qc.signers = vec![1, 0, 2];
-
     let mut native_manifest_wrong_version = values.prepare.clone();
     native_manifest_wrong_version
         .execution_commitment
@@ -620,7 +587,6 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         .execution_commitment
         .native_amx_application_manifest_count =
         iroha_data_model::block::consensus_v2::MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES + 1;
-
     let mut merge_carrier_wrong_version = canonical_merge_carrier_qc.clone();
     let ConsensusMessageV2Payload::QuorumCertificate(certificate) =
         &mut merge_carrier_wrong_version.payload
@@ -633,7 +599,6 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         .as_mut()
         .ok_or("canonical merge-carrier fixture is missing its carrier")?
         .version = MERGE_CARRIER_COMMITMENT_VERSION_V1.saturating_add(1);
-
     let ConsensusMessageV2Payload::QuorumCertificate(certificate) =
         &canonical_merge_carrier_qc.payload
     else {
@@ -658,7 +623,6 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         &pre_v4_commitment.encode(),
         "merge-carrier execution commitment",
     )?;
-
     let mut commit_vote = canonical_vote.clone();
     let ConsensusMessageV2Payload::Vote(vote) = &mut commit_vote.payload else {
         return Err("canonical vote fixture contains the wrong payload".into());
@@ -670,7 +634,6 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         0,
         "global phase discriminant",
     )?;
-
     let overlapping_timeout_groups = TimeoutCertificate {
         round: round(&values.context, 2),
         groups: vec![
@@ -686,7 +649,6 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
             },
         ],
     };
-
     let mut unknown_payload_tag = canonical_manifest.encode();
     replace_first_guarded(
         &mut unknown_payload_tag,
@@ -694,7 +656,6 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         &[11, 0, 0, 0],
         "payload-manifest discriminant",
     )?;
-
     let mut wrong_nested_request = values.commit_request.clone();
     wrong_nested_request.protocol_version = PROTOCOL_VERSION - 1;
     let mut empty_request_signature = values.commit_request.clone();
@@ -703,7 +664,6 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
     truncated_request_signature
         .pop()
         .ok_or("canonical commit request message was unexpectedly empty")?;
-
     let mut empty_response_signature = values.commit_response.clone();
     empty_response_signature.signature.clear();
     let mut truncated_response_signature = canonical_response.encode();
@@ -712,7 +672,6 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         .ok_or("canonical commit response message was unexpectedly empty")?;
     let mut prepare_response = values.commit_response.clone();
     prepare_response.certificate.phase = GlobalPhase::Prepare;
-
     let mut split_round_vote = canonical_reproposal_vote.clone();
     let ConsensusMessageV2Payload::Vote(vote) = &mut split_round_vote.payload else {
         return Err("canonical reproposal vote fixture contains the wrong payload".into());
@@ -724,7 +683,6 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         return Err("canonical reproposal QC fixture contains the wrong payload".into());
     };
     certificate.proposal_round = round(&values.context, 1);
-
     let mut invalid_network_id = *values.context.network_id.as_bytes();
     invalid_network_id[Hash::LENGTH - 1] &= !1;
     let mut invalid_network_id_message = canonical_request.encode();
@@ -734,7 +692,6 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         &invalid_network_id,
         "commit-request network id",
     )?;
-
     rows.extend([
         FixtureRow::rejected(
             "negative_message",
@@ -869,7 +826,6 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
             invalid_network_id_message,
         ),
     ]);
-
     let mut wrong_request_hash = values.commit_response.clone();
     wrong_request_hash.request_hash =
         HashOf::from_untyped_unchecked(Hash::new(b"wrong commit request"));
@@ -908,7 +864,6 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
             .encode(),
         ),
     ]);
-
     let mut wrong_status_version = values.status.clone();
     wrong_status_version.protocol_version = PROTOCOL_VERSION - 1;
     let mut truncated_status = values.status.encode();
@@ -923,10 +878,8 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         ),
         FixtureRow::rejected("negative_status", "truncated", truncated_status),
     ]);
-
     Ok(rows)
 }
-
 fn replace_single_difference(
     canonical: &[u8],
     comparison: &[u8],
@@ -953,7 +906,6 @@ fn replace_single_difference(
     corrupted[*index] = replacement;
     Ok(corrupted)
 }
-
 fn replace_unique_subsequence(
     bytes: &[u8],
     needle: &[u8],
@@ -981,7 +933,6 @@ fn replace_unique_subsequence(
     corrupted.extend_from_slice(&bytes[*index + needle.len()..]);
     Ok(corrupted)
 }
-
 fn replace_first_guarded(
     bytes: &mut [u8],
     needle: &[u8],
@@ -1009,19 +960,16 @@ fn replace_first_guarded(
     bytes[index..index + needle.len()].copy_from_slice(replacement);
     Ok(())
 }
-
 fn decode_message(bytes: &[u8]) -> Result<ConsensusMessageV2, String> {
     let mut cursor = bytes;
     ConsensusMessageV2::decode_all(&mut cursor)
         .map_err(|error| format!("failed to decode message: {error:?}"))
 }
-
 fn decode_status(bytes: &[u8]) -> Result<SumeragiV2Status, String> {
     let mut cursor = bytes;
     SumeragiV2Status::decode_all(&mut cursor)
         .map_err(|error| format!("failed to decode status: {error:?}"))
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "the fixture validator audits the complete canonical row set as one invariant"
@@ -1036,7 +984,6 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
             return Err(format!("duplicate fixture row {}/{}", row.kind, row.name).into());
         }
     }
-
     for row in rows.iter().filter(|row| row.kind == "message") {
         let decoded = decode_message(&row.bytes)?;
         decoded
@@ -1050,7 +997,6 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
     if decode_status(&status.bytes)?.encode() != status.bytes {
         return Err("canonical compact status did not round-trip".into());
     }
-
     for name in [
         "truncated",
         "trailing_byte",
@@ -1065,13 +1011,11 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
             return Err(format!("negative message {name} unexpectedly decoded").into());
         }
     }
-
     let wrong_version =
         decode_message(&row(rows, "negative_message", "wrong_protocol_version")?.bytes)?;
     if wrong_version.validate_version().is_ok() {
         return Err("wrong_protocol_version unexpectedly passed validation".into());
     }
-
     let noncanonical =
         decode_message(&row(rows, "negative_message", "noncanonical_signers")?.bytes)?;
     let ConsensusMessageV2Payload::QuorumCertificate(certificate) = noncanonical.payload else {
@@ -1080,7 +1024,6 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
     if certificate.validate(&values.context).is_ok() {
         return Err("noncanonical_signers unexpectedly passed validation".into());
     }
-
     for name in [
         "execution_commitment_native_manifest_wrong_version",
         "execution_commitment_native_manifest_zero_count_nonempty_root",
@@ -1096,7 +1039,6 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
             return Err(format!("{name} unexpectedly passed validation").into());
         }
     }
-
     let overlapping =
         decode_message(&row(rows, "negative_message", "overlapping_timeout_groups")?.bytes)?;
     let ConsensusMessageV2Payload::TimeoutCertificate(certificate) = overlapping.payload else {
@@ -1105,7 +1047,6 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
     if certificate.validate(&values.context).is_ok() {
         return Err("overlapping_timeout_groups unexpectedly passed validation".into());
     }
-
     for name in [
         "commit_request_wrong_nested_protocol",
         "commit_request_empty_signature",
@@ -1130,7 +1071,6 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
             return Err(format!("{name} unexpectedly passed validation").into());
         }
     }
-
     for name in [
         "commit_response_wrong_request_hash",
         "commit_response_wrong_context",
@@ -1147,7 +1087,6 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
             return Err(format!("{name} unexpectedly passed binding validation").into());
         }
     }
-
     let wrong_status =
         decode_status(&row(rows, "negative_status", "wrong_protocol_version")?.bytes)?;
     if wrong_status.protocol_version == PROTOCOL_VERSION {
@@ -1158,7 +1097,6 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
     }
     Ok(())
 }
-
 fn row<'a>(
     rows: &'a [FixtureRow],
     kind: &str,
@@ -1168,7 +1106,6 @@ fn row<'a>(
         .find(|row| row.kind == kind && row.name == name)
         .ok_or_else(|| format!("missing generated fixture {kind}/{name}").into())
 }
-
 fn render(rows: &[FixtureRow]) -> String {
     let mut rendered = String::from(HEADER);
     for row in rows {
@@ -1183,7 +1120,6 @@ fn render(rows: &[FixtureRow]) -> String {
     }
     rendered
 }
-
 fn write_fixture(path: &Path, rendered: &str, check_only: bool) -> Result<(), Box<dyn Error>> {
     if check_only {
         let existing = fs::read_to_string(path)?;
@@ -1202,13 +1138,11 @@ fn write_fixture(path: &Path, rendered: &str, check_only: bool) -> Result<(), Bo
     fs::write(path, rendered)?;
     Ok(())
 }
-
 #[derive(Debug, PartialEq, Eq)]
 struct Options {
     check_only: bool,
     output_dir: PathBuf,
 }
-
 fn parse_options_from(
     arguments: impl IntoIterator<Item = String>,
 ) -> Result<Options, Box<dyn Error>> {
@@ -1242,11 +1176,9 @@ fn parse_options_from(
         output_dir: output_dir.unwrap_or_else(|| PathBuf::from(FIXTURE_DIRECTORY)),
     })
 }
-
 fn parse_options() -> Result<Options, Box<dyn Error>> {
     parse_options_from(env::args().skip(1))
 }
-
 fn main() -> Result<(), Box<dyn Error>> {
     let options = parse_options()?;
     let values = build_values()?;
@@ -1264,17 +1196,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         options.check_only,
     )
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn canonical_body_chunks_cover_the_complete_rs16_stripe() {
         let context = context();
         let chunks = canonical_body_chunks(&context).expect("canonical encoded body chunks");
         assert_eq!(chunks, vec![CANONICAL_BODY.to_vec(); 2]);
-
         let manifest = PayloadManifest::derive(
             &context,
             round(&context, 1),
@@ -1286,7 +1215,6 @@ mod tests {
         assert_eq!(manifest.chunk_hashes.len(), 2);
         assert_eq!(manifest.validate(&context), Ok(()));
     }
-
     #[test]
     fn staged_output_directory_is_explicit() {
         let options = parse_options_from([
@@ -1298,7 +1226,6 @@ mod tests {
         assert!(options.check_only);
         assert_eq!(options.output_dir, Path::new("/tmp/sumeragi-fixtures"));
     }
-
     #[test]
     fn duplicate_and_incomplete_options_are_rejected() {
         for arguments in [

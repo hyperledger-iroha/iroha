@@ -1,14 +1,10 @@
 //! Proof verification events (ZK) for the data event stream.
-
 use iroha_data_model_derive::model;
-
 pub use self::model::*;
 use super::*;
-
 #[model]
 mod model {
     use super::*;
-
     /// Proof verification outcome events.
     #[derive(
         Debug,
@@ -31,7 +27,6 @@ mod model {
         /// Proof records were pruned due to retention policy.
         Pruned(ProofPruned),
     }
-
     /// A proof verification success event payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -49,7 +44,6 @@ mod model {
         /// Bound to the transaction `call_hash` via audit fields and used for operator correlation.
         pub envelope_hash: Option<[u8; 32]>,
     }
-
     /// A proof verification failure event payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -66,7 +60,6 @@ mod model {
         /// Hash of the verification envelope payload (e.g., Norito TLV body) when available.
         pub envelope_hash: Option<[u8; 32]>,
     }
-
     /// A proof retention event payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -91,7 +84,6 @@ mod model {
         /// Origin of the pruning run.
         pub origin: ProofPruneOrigin,
     }
-
     /// Source of a proof pruning pass.
     #[derive(
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -104,7 +96,6 @@ mod model {
         Manual,
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(
     ProofEvent,
@@ -113,12 +104,10 @@ impl_json_via_norito_bytes!(
     ProofPruned,
     ProofPruneOrigin
 );
-
 /// Prelude exports for proof events
 pub mod prelude {
     pub use super::{ProofEvent, ProofPruneOrigin, ProofPruned, ProofRejected, ProofVerified};
 }
-
 // Convenience constructors for common event-set presets
 impl ProofEventSet {
     /// A set that matches only `Verified` events.

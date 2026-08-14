@@ -59,7 +59,6 @@ fn merge_carrier_budget_reserves_receipt_frontier_without_double_counting_termin
         expected_peak,
         "carrier admission reserves receipt/frontier work while the global lifecycle slot owns terminal bytes"
     );
-
     let block_required = kura
         .block_required_bytes_for_budget(carrier.as_ref(), Some(&entry), u64::MAX)
         .expect("account complete merge carrier");
@@ -104,7 +103,6 @@ fn merge_carrier_budget_reserves_receipt_frontier_without_double_counting_termin
         .max_disk_usage_bytes = exact_limit;
     kura.check_storage_budget(carrier.as_ref(), Some(&entry))
         .expect("exact post-WSV evidence reservation must admit the carrier");
-
     Arc::get_mut(&mut kura)
         .expect("exclusive merge Kura before negative budget check")
         .max_disk_usage_bytes = exact_limit - 1;
@@ -120,7 +118,6 @@ fn merge_carrier_budget_reserves_receipt_frontier_without_double_counting_termin
         } if limit == exact_limit - 1 && required == exact_limit
     ));
 }
-
 #[test]
 fn committed_merge_carrier_reconstructs_only_outstanding_post_wsv_components() {
     let temp_dir = TempDir::new().expect("create merge reservation temp dir");
@@ -135,7 +132,6 @@ fn committed_merge_carrier_reconstructs_only_outstanding_post_wsv_components() {
     let expected = kura
         .merge_lane_application_artifact_required_bytes_for_block(carrier.as_ref(), Some(&entry))
         .expect("account committed carrier envelope");
-
     kura.store_block(parent).expect("store reservation parent");
     kura.store_block_with_merge_entry(Arc::clone(&carrier), &entry)
         .expect("store reservation carrier");
@@ -152,7 +148,6 @@ fn committed_merge_carrier_reconstructs_only_outstanding_post_wsv_components() {
         expected,
         "exact retry must not multiply the carrier envelope"
     );
-
     let wrong_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong reservation carrier"));
     kura.release_post_wsv_lane_artifact_budget_reservation(
         &entry,
@@ -178,7 +173,6 @@ fn committed_merge_carrier_reconstructs_only_outstanding_post_wsv_components() {
             .expect("read unreleased reservation total"),
         expected
     );
-
     kura.persist_merge_lane_block_application_receipts_from_committed_log(&entry)
         .expect_err("receipt publication must wait for exact carrier finality");
     let _ = persist_v2_finality_chain_through(
@@ -199,7 +193,6 @@ fn committed_merge_carrier_reconstructs_only_outstanding_post_wsv_components() {
         shared_transient,
         "durability-attested receipt/frontier bytes must leave only the shared transient while terminal completion is pending"
     );
-
     kura.post_wsv_lane_artifact_budget_reservations
         .lock()
         .clear();
@@ -217,7 +210,6 @@ fn committed_merge_carrier_reconstructs_only_outstanding_post_wsv_components() {
         carrier.hash(),
     )
     .expect_err("incomplete terminal evidence must remain fail-closed after reconstruction");
-
     kura.post_wsv_lane_artifact_budget_reservations
         .lock()
         .clear();
@@ -234,7 +226,6 @@ fn committed_merge_carrier_reconstructs_only_outstanding_post_wsv_components() {
         0,
         "a stale lazy carrier must not strand a reservation",
     );
-
     let used = kura
         .kura_disk_usage_bytes()
         .expect("measure physical bytes before lazy reconstruction");
@@ -277,7 +268,6 @@ fn committed_merge_carrier_reconstructs_only_outstanding_post_wsv_components() {
         "capacity rejection must be atomic and leave no reservation",
     );
 }
-
 #[test]
 fn direct_lane_receipt_preflights_its_exact_unreserved_append_peak() {
     let temp_dir = TempDir::new().expect("create direct receipt budget temp dir");
@@ -366,14 +356,12 @@ fn direct_lane_receipt_preflights_its_exact_unreserved_append_peak() {
     let (data_path, index_path) =
         Kura::lane_block_application_receipt_paths_for_entry(lane_entry, temp_dir.path());
     assert!(!data_path.exists() && !index_path.exists());
-
     Arc::get_mut(&mut kura)
         .expect("exclusive Kura before exact direct receipt capacity check")
         .max_disk_usage_bytes = exact_limit;
     kura.persist_lane_block_application_receipt(&proposal)
         .expect("the exact unreserved direct receipt peak must admit");
 }
-
 #[test]
 fn latest_execution_index_rejects_equal_height_forks_on_append_and_rebuild() {
     let first = merge_entry_with_indexed_entrypoint(offline_top_up_entrypoint_for_index(
@@ -408,7 +396,6 @@ fn latest_execution_index_rejects_equal_height_forks_on_append_and_rebuild() {
         ),
     );
     assert_ne!(first.canonical_hash(), fork.canonical_hash());
-
     let mut memory_log = MergeLedgerLog::in_memory(MERGE_LEDGER_CACHE_CAPACITY);
     assert!(memory_log.append(&first).expect("append first execution"));
     let error = memory_log
@@ -427,7 +414,6 @@ fn latest_execution_index_rejects_equal_height_forks_on_append_and_rebuild() {
             first.canonical_hash(),
         )),
     );
-
     let temp_dir = TempDir::new().expect("equal-height merge-log temp dir");
     let path = temp_dir.path().join("merge.log");
     let mut file = fs::File::create(&path).expect("create raw forked merge log");
@@ -446,7 +432,6 @@ fn latest_execution_index_rejects_equal_height_forks_on_append_and_rebuild() {
         .expect_err("startup reconstruction must reject an equal-height execution fork");
     assert!(matches!(error, Error::MergeCarrierConflict(_)));
 }
-
 #[test]
 fn bounded_forward_execution_reconstruction_keeps_an_incomplete_nonlatest_carrier() {
     let first = merge_entry_with_indexed_entrypoint(offline_top_up_entrypoint_for_index(
@@ -507,7 +492,6 @@ fn bounded_forward_execution_reconstruction_keeps_an_incomplete_nonlatest_carrie
         second_descriptor.proposal_height,
     );
     let identities = BTreeSet::from([first_identity, second_identity]);
-
     let temp_dir = TempDir::new().expect("forward execution reconstruction temp dir");
     let path = temp_dir.path().join("merge.log");
     {

@@ -1,9 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smoke tests for Torii RWA endpoints.
 #![cfg(feature = "app_api")]
-
 use std::{net::SocketAddr, sync::Arc};
-
 use axum::{body::Body, http::Request};
 use http::StatusCode;
 use iroha_core::{
@@ -14,7 +12,6 @@ use iroha_core::{
 };
 use iroha_torii::Torii;
 use tower::ServiceExt as _;
-
 async fn call_app(app: &axum::Router, request: Request<Body>) -> axum::response::Response {
     let service = app
         .clone()
@@ -24,7 +21,6 @@ async fn call_app(app: &axum::Router, request: Request<Body>) -> axum::response:
         .expect("rwa make service");
     service.oneshot(request).await.expect("rwa response")
 }
-
 #[tokio::test]
 async fn rwas_endpoints_exist() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -60,7 +56,6 @@ async fn rwas_endpoints_exist() {
         iroha_torii::MaybeTelemetry::disabled(),
     );
     let app = torii.api_router_for_tests();
-
     let resp = call_app(
         &app,
         Request::builder()
@@ -73,7 +68,6 @@ async fn rwas_endpoints_exist() {
         resp.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
-
     let resp = call_app(
         &app,
         Request::builder()

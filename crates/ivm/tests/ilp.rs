@@ -1,14 +1,11 @@
 use ivm::IVM;
-
 fn encode_add(rd: u16, rs: u16, rt: u16) -> [u8; 2] {
     let word = ((0x1u16) << 12) | ((rd & 0xf) << 8) | ((rs & 0xf) << 4) | (rt & 0xf);
     word.to_le_bytes()
 }
-
 fn encode_halt() -> [u8; 2] {
     0u16.to_le_bytes()
 }
-
 #[test]
 fn parallel_independent_adds() {
     let mut vm = IVM::new(u64::MAX);
@@ -25,7 +22,6 @@ fn parallel_independent_adds() {
     assert_eq!(vm.register(10), 3);
     assert_eq!(vm.register(11), 7);
 }
-
 #[test]
 fn dependency_serialization() {
     let mut vm = IVM::new(u64::MAX);
@@ -39,12 +35,10 @@ fn dependency_serialization() {
     vm.run_simple().unwrap();
     assert_eq!(vm.register(3), 7);
 }
-
 fn encode_load(rd: u16, base: u16) -> [u8; 2] {
     let word = ((0x3u16) << 12) | ((rd & 0xf) << 8) | ((base & 0xf) << 4);
     word.to_le_bytes()
 }
-
 #[test]
 fn error_stops_batch() {
     let mut vm = IVM::new(u64::MAX);

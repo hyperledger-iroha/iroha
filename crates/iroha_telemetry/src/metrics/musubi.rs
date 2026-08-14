@@ -4,12 +4,10 @@
 //! namespaces, accounts, aliases, archive IDs, provider IDs, transaction
 //! hashes, operation IDs, URLs, and raw error strings therefore cannot enter
 //! the Prometheus cardinality surface through this API.
-
 use prometheus::{
     IntCounterVec, Opts, Registry,
     core::{AtomicU64, Collector, GenericGauge, GenericGaugeVec},
 };
-
 /// One of the seven resumable Musubi publication phases.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MusubiPublicationPhaseMetricV1 {
@@ -28,7 +26,6 @@ pub enum MusubiPublicationPhaseMetricV1 {
     /// Exact finalized home and universal-index verification.
     FinalVerification,
 }
-
 impl MusubiPublicationPhaseMetricV1 {
     const ALL: [Self; 7] = [
         Self::Validation,
@@ -39,7 +36,6 @@ impl MusubiPublicationPhaseMetricV1 {
         Self::ReleaseSubmission,
         Self::FinalVerification,
     ];
-
     const fn label(self) -> &'static str {
         match self {
             Self::Validation => "validation",
@@ -52,7 +48,6 @@ impl MusubiPublicationPhaseMetricV1 {
         }
     }
 }
-
 /// Bounded terminal class for authenticated seed-ingress deadletters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MusubiIngestDeadletterReasonV1 {
@@ -69,7 +64,6 @@ pub enum MusubiIngestDeadletterReasonV1 {
     /// A bounded fallback class for a new, not-yet-separated failure.
     Other,
 }
-
 impl MusubiIngestDeadletterReasonV1 {
     const fn label(self) -> &'static str {
         match self {
@@ -82,7 +76,6 @@ impl MusubiIngestDeadletterReasonV1 {
         }
     }
 }
-
 /// Bounded surface at which a Musubi integrity check failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MusubiIntegritySurfaceV1 {
@@ -105,7 +98,6 @@ pub enum MusubiIntegritySurfaceV1 {
     /// A bounded fallback class for a new, not-yet-separated surface.
     Other,
 }
-
 impl MusubiIntegritySurfaceV1 {
     const fn label(self) -> &'static str {
         match self {
@@ -121,7 +113,6 @@ impl MusubiIntegritySurfaceV1 {
         }
     }
 }
-
 /// Bounded cache operation that detected corruption.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MusubiCacheOperationV1 {
@@ -134,7 +125,6 @@ pub enum MusubiCacheOperationV1 {
     /// Trusted retained-set pruning.
     Prune,
 }
-
 impl MusubiCacheOperationV1 {
     const fn label(self) -> &'static str {
         match self {
@@ -145,7 +135,6 @@ impl MusubiCacheOperationV1 {
         }
     }
 }
-
 /// Bounded finalized-query cursor failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MusubiCursorFailureReasonV1 {
@@ -164,7 +153,6 @@ pub enum MusubiCursorFailureReasonV1 {
     /// A bounded fallback class for a new, not-yet-separated reason.
     Other,
 }
-
 impl MusubiCursorFailureReasonV1 {
     const fn label(self) -> &'static str {
         match self {
@@ -178,7 +166,6 @@ impl MusubiCursorFailureReasonV1 {
         }
     }
 }
-
 /// Bounded package, alias, or registry governance action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MusubiGovernanceActionV1 {
@@ -211,7 +198,6 @@ pub enum MusubiGovernanceActionV1 {
     /// Parliament registry admission or pricing policy change.
     Policy,
 }
-
 impl MusubiGovernanceActionV1 {
     const fn label(self) -> &'static str {
         match self {
@@ -232,7 +218,6 @@ impl MusubiGovernanceActionV1 {
         }
     }
 }
-
 /// Bounded reason for rejecting a governance mutation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MusubiGovernanceRejectionReasonV1 {
@@ -253,7 +238,6 @@ pub enum MusubiGovernanceRejectionReasonV1 {
     /// A bounded fallback class for a new, not-yet-separated reason.
     Other,
 }
-
 impl MusubiGovernanceRejectionReasonV1 {
     const fn label(self) -> &'static str {
         match self {
@@ -268,7 +252,6 @@ impl MusubiGovernanceRejectionReasonV1 {
         }
     }
 }
-
 /// Registered Musubi V1 metrics with a closed label surface.
 #[derive(Clone)]
 pub struct MusubiMetrics {
@@ -282,7 +265,6 @@ pub struct MusubiMetrics {
     storage_bytes_used: GenericGauge<AtomicU64>,
     storage_bytes_capacity: GenericGauge<AtomicU64>,
 }
-
 impl MusubiMetrics {
     pub(super) fn new(registry: &Registry) -> Self {
         let publication_phase_age_seconds = GenericGaugeVec::new(
@@ -348,7 +330,6 @@ impl MusubiMetrics {
             "Configured byte capacity of the measured Musubi archive or immutable-cache root",
         )
         .expect("Musubi metric definition is valid");
-
         register(registry, &publication_phase_age_seconds);
         register(registry, &replication_shortfall_releases);
         register(registry, &ingest_deadletters_total);
@@ -358,7 +339,6 @@ impl MusubiMetrics {
         register(registry, &governance_rejections_total);
         register(registry, &storage_bytes_used);
         register(registry, &storage_bytes_capacity);
-
         Self {
             publication_phase_age_seconds,
             replication_shortfall_releases,
@@ -371,7 +351,6 @@ impl MusubiMetrics {
             storage_bytes_capacity,
         }
     }
-
     /// Reset every publication phase gauge before projecting a fresh journal snapshot.
     pub fn reset_publication_phase_ages(&self) {
         for phase in MusubiPublicationPhaseMetricV1::ALL {
@@ -380,7 +359,6 @@ impl MusubiMetrics {
                 .set(0);
         }
     }
-
     /// Set the age of the oldest active publication in one bounded phase.
     pub fn set_publication_phase_age(
         &self,
@@ -391,40 +369,34 @@ impl MusubiMetrics {
             .with_label_values(&[phase.label()])
             .set(age_seconds);
     }
-
     /// Set the number of releases currently excluded for replica shortfall.
     pub fn set_replication_shortfall_releases(&self, releases: u64) {
         self.replication_shortfall_releases.set(releases);
     }
-
     /// Record one terminal authenticated seed-ingress failure.
     pub fn inc_ingest_deadletter(&self, reason: MusubiIngestDeadletterReasonV1) {
         self.ingest_deadletters_total
             .with_label_values(&[reason.label()])
             .inc();
     }
-
     /// Record one commitment verification failure.
     pub fn inc_integrity_failure(&self, surface: MusubiIntegritySurfaceV1) {
         self.integrity_failures_total
             .with_label_values(&[surface.label()])
             .inc();
     }
-
     /// Record one immutable-cache corruption detection.
     pub fn inc_cache_corruption(&self, operation: MusubiCacheOperationV1) {
         self.cache_corruption_total
             .with_label_values(&[operation.label()])
             .inc();
     }
-
     /// Record one finalized-query cursor failure.
     pub fn inc_cursor_failure(&self, reason: MusubiCursorFailureReasonV1) {
         self.cursor_failures_total
             .with_label_values(&[reason.label()])
             .inc();
     }
-
     /// Record one rejected package, alias, or Parliament mutation.
     pub fn inc_governance_rejection(
         &self,
@@ -435,38 +407,31 @@ impl MusubiMetrics {
             .with_label_values(&[action.label(), reason.label()])
             .inc();
     }
-
     /// Project one measurement pair used to calculate storage pressure.
     pub fn set_storage_usage(&self, used_bytes: u64, capacity_bytes: u64) {
         self.storage_bytes_capacity.set(capacity_bytes);
         self.storage_bytes_used.set(used_bytes);
     }
 }
-
 fn register<C: Collector + Clone + 'static>(registry: &Registry, metric: &C) {
     registry
         .register(Box::new(metric.clone()))
         .expect("Musubi metric names are unique and valid");
 }
-
 #[cfg(test)]
 mod tests {
     use prometheus::{Encoder as _, TextEncoder};
-
     use super::*;
-
     #[test]
     fn phase_age_series_remain_absent_until_a_successful_projection() {
         let registry = Registry::new();
         let metrics = MusubiMetrics::new(&registry);
-
         let mut encoded = Vec::new();
         TextEncoder::new()
             .encode(&registry.gather(), &mut encoded)
             .expect("encode empty Musubi metrics");
         let encoded = String::from_utf8(encoded).expect("Prometheus output is UTF-8");
         assert!(!encoded.contains("musubi_publication_phase_age_seconds"));
-
         metrics.reset_publication_phase_ages();
         let mut projected = Vec::new();
         TextEncoder::new()
@@ -481,7 +446,6 @@ mod tests {
             MusubiPublicationPhaseMetricV1::ALL.len()
         );
     }
-
     #[test]
     fn exports_only_bounded_musubi_labels() {
         let registry = Registry::new();
@@ -506,13 +470,11 @@ mod tests {
             MusubiGovernanceRejectionReasonV1::StaleRevision,
         );
         metrics.set_storage_usage(90, 100);
-
         let mut encoded = Vec::new();
         TextEncoder::new()
             .encode(&registry.gather(), &mut encoded)
             .expect("encode Musubi metrics");
         let encoded = String::from_utf8(encoded).expect("Prometheus output is UTF-8");
-
         for expected in [
             "musubi_publication_phase_age_seconds{phase=\"readback\"} 31",
             "musubi_replication_shortfall_releases 4",

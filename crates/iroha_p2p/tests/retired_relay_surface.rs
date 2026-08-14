@@ -1,5 +1,4 @@
 //! Guards the first-release P2P surface against reintroducing a non-functional relay feature.
-
 #[test]
 fn retired_relay_stub_surface_is_absent() {
     let manifest = include_str!("../Cargo.toml");
@@ -7,7 +6,6 @@ fn retired_relay_stub_surface_is_absent() {
     let retired_feature = ["p2p", "turn"].join("_");
     let retired_environment_variable = ["P2P_", "TU", "RN"].concat();
     let retired_module = ["pub mod ", "tu", "rn"].concat();
-
     assert!(
         !manifest.contains(&retired_feature),
         "the retired relay-stub Cargo feature must not be reintroduced"
@@ -21,7 +19,6 @@ fn retired_relay_stub_surface_is_absent() {
         "the retired relay-stub transport module must not be reintroduced"
     );
 }
-
 #[test]
 fn retired_classical_noise_surface_is_unreachable() {
     let manifest = include_str!("../Cargo.toml");
@@ -30,7 +27,6 @@ fn retired_classical_noise_surface_is_unreachable() {
     let (_, feature_and_dev_sections) = manifest
         .split_once("[features]")
         .expect("P2P manifest must declare its feature inventory");
-
     assert!(
         !manifest.contains("noise_handshake"),
         "the classical Noise handshake feature must stay retired"

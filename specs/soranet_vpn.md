@@ -21,7 +21,17 @@ the same deterministic framing.
   deterministically by priority and canonical multiaddr, and derives the TLS
   server name, leaf SPKI SHA-256, descriptor commitment, relay-certificate
   digest, and snapshot digest solely from that signed directory entry. There is
-  no independent raw TLS-pin override. Profile fields are empty and
+  no independent raw TLS-pin override. The first-release directory contract
+  limits the encoded snapshot to 5 MiB, 16 issuers, 64 relays, 1,952 issuer
+  ML-DSA-65 public-key bytes, and 64 KiB per embedded SRC bundle. Every local
+  node, relay, and CLI consumer opens only a direct regular snapshot file
+  without following its final path component, pins its identity through the
+  read, reads at most the limit plus one byte, and decodes under an explicit
+  Norito allocation budget. CLI HTTP fetches preflight `Content-Length` when
+  present and stream at most the same limit plus one byte when the response is
+  chunked or has no declared length. Complete-directory validation retains only
+  the configured relay bundle, so certificates are not decoded into a second
+  aggregate vector. Profile fields are empty and
   `available=false` when this trust cannot cover a complete configured lease;
   quote admission, the durable on-chain quote policy, relay helper-ticket
   admission, and restart reconstruction all reject trust that expires before

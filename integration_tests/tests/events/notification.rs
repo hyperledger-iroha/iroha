@@ -1,8 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for notifications emitted after trigger execution.
-
 use std::time::Duration;
-
 use eyre::Result;
 use futures_util::StreamExt;
 use integration_tests::sandbox;
@@ -16,7 +14,6 @@ use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
 };
-
 async fn trigger_completion_success_should_produce_event_scenario(network: &Network) -> Result<()> {
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
@@ -25,7 +22,6 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
     let account_id = ALICE_ID.clone();
     let asset_id = AssetId::new(asset_definition_id, account_id);
     let trigger_id = "mint_rose_event".parse::<TriggerId>()?;
-
     let instruction = Mint::asset_quantity(1u32, asset_id.clone());
     let register_trigger = Register::trigger(Trigger::new(
         trigger_id.clone(),
@@ -47,7 +43,6 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
     );
     spawn_blocking(move || client.submit_transaction_blocking(&register_tx)).await??;
     network.ensure_blocks(2).await?;
-
     let event_timeout = network.sync_timeout();
     let ready_tx = network.client().build_transaction(
         [Log::new(
@@ -75,7 +70,6 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
             "trigger_completion_success_should_produce_event: timed out opening trigger event stream"
         )
     })??;
-
     let ready_client = network.client();
     spawn_blocking(move || ready_client.submit_transaction(&ready_tx)).await??;
     timeout(event_timeout, async {
@@ -104,7 +98,6 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
     .map_err(|_| {
         eyre::eyre!("trigger_completion_success_should_produce_event: timed out waiting for event stream handshake")
     })??;
-
     let call_trigger = ExecuteTrigger::new(trigger_id.clone());
     let client = network.client();
     let trigger_tx = client.build_transaction(
@@ -147,15 +140,12 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
     let event_result = tokio::try_join!(submit_trigger, wait_event);
     events.close().await;
     event_result?;
-
     Ok(())
 }
-
 #[allow(clippy::too_many_lines)]
 async fn trigger_completion_failure_reports_error_scenario(network: &Network) -> Result<()> {
     let account_id = ALICE_ID.clone();
     let trigger_id = "fail_box_event".parse::<TriggerId>()?;
-
     let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
     let register_trigger = Register::trigger(Trigger::new(
         trigger_id.clone(),
@@ -178,7 +168,6 @@ async fn trigger_completion_failure_reports_error_scenario(network: &Network) ->
     })
     .await??;
     network.ensure_blocks(2).await?;
-
     let retry_delay = Duration::from_secs(2);
     let mut attempts = 0;
     let err = loop {
@@ -213,7 +202,6 @@ async fn trigger_completion_failure_reports_error_scenario(network: &Network) ->
         if is_expected {
             break err;
         }
-
         let err_msg = err.to_string();
         let is_transient = err
             .chain()
@@ -225,13 +213,11 @@ async fn trigger_completion_failure_reports_error_scenario(network: &Network) ->
             || err_msg.contains("connection refused")
             || err_msg.contains("timed out")
             || err_msg.contains("timeout");
-
         if attempts < 2 && is_transient {
             attempts += 1;
             sleep(retry_delay).await;
             continue;
         }
-
         return Err(err);
     };
     if let Some(FindError::Domain(_)) = err
@@ -276,10 +262,8 @@ async fn trigger_completion_failure_reports_error_scenario(network: &Network) ->
     } else {
         return Err(err);
     }
-
     Ok(())
 }
-
 #[tokio::test]
 async fn trigger_completion_event_scenarios() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -290,9 +274,7 @@ async fn trigger_completion_event_scenarios() -> Result<()> {
     else {
         return Ok(());
     };
-
     trigger_completion_success_should_produce_event_scenario(&network).await?;
     trigger_completion_failure_reports_error_scenario(&network).await?;
-
     Ok(())
 }

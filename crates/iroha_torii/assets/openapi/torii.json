@@ -40668,7 +40668,7 @@
     },
     "/v1/explorer/asset-definitions/{definition_id}/econometrics": {
       "get": {
-        "description": "Fetch econometrics aggregates (velocity/issuance windows) for an asset definition.",
+        "description": "Fetch econometrics aggregates (velocity/issuance windows) for an asset definition. The fixed 30-day scan retains at most 65,536 distinct transfer-participant identities across all windows; larger histories fail closed with `explorer_econometrics_participant_limit_exceeded`.",
         "parameters": [
           {
             "description": "Asset definition identifier.",
@@ -40701,7 +40701,7 @@
     },
     "/v1/explorer/asset-definitions/{definition_id}/snapshot": {
       "get": {
-        "description": "Fetch econometrics snapshot (holders + distribution metrics) for an asset definition.",
+        "description": "Fetch an exact econometrics snapshot (holders + distribution metrics) for an asset definition when no more than the first-release ceiling of 65,536 holders is examined; larger definitions fail closed with `explorer_snapshot_holder_limit_exceeded`.",
         "parameters": [
           {
             "description": "Asset definition identifier.",

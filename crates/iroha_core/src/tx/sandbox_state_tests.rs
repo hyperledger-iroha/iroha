@@ -7,7 +7,6 @@ fn sandbox_accounts_are_deterministic() {
         );
     }
 }
-
 /// Account credentials used by the sandbox (ID and signing key).
 #[derive(Debug, Clone)]
 pub struct Credential {
@@ -16,7 +15,6 @@ pub struct Credential {
     /// Private key used to sign transactions for the account.
     pub key: iroha_crypto::PrivateKey,
 }
-
 /// Credentials of the special genesis account used to bootstrap state.
 pub static GENESIS_ACCOUNT: LazyLock<Credential> = LazyLock::new(|| {
     let (id, key_pair) = gen_account_in(GENESIS_DOMAIN_ID.clone());
@@ -28,12 +26,10 @@ pub static GENESIS_ACCOUNT: LazyLock<Credential> = LazyLock::new(|| {
 /// Chain identifier used by sandbox state metadata.
 pub static CHAIN_ID: LazyLock<ChainId> =
     LazyLock::new(|| ChainId::from("00000000-0000-0000-0000-000000000000"));
-
 /// Build the [`AssetId`] for the sandbox test asset owned by a named account.
 pub fn asset(account_name: &str) -> AssetId {
     AssetId::new(ASSET.clone(), ACCOUNT[account_name].id.clone())
 }
-
 /// Convenience builder that yields a single transfer instruction iterator.
 ///
 /// Transfers `quantity` units of the sandbox asset from `src` to `dest`.
@@ -44,7 +40,6 @@ pub fn transfer<'a>(
 ) -> impl IntoIterator<Item = InstructionBox> + 'a {
     transfers_batched::<1>(src, quantity, dest)
 }
-
 /// Produce an iterator over `N_INSTRUCTIONS` transfer instructions.
 ///
 /// Each instruction transfers `quantity_per_instruction` units of the sandbox
@@ -63,7 +58,6 @@ pub fn transfers_batched<'a, const N_INSTRUCTIONS: usize>(
         .into()
     })
 }
-
 /// Assert that the emitted events match a stored JSON snapshot.
 pub fn assert_events(actual: &[EventBox], snapshot_path: impl AsRef<std::path::Path>) {
     let snapshot_path_buf = {
@@ -100,13 +94,11 @@ pub fn assert_events(actual: &[EventBox], snapshot_path: impl AsRef<std::path::P
     let normalised = normalise_line_endings(&rendered, line_endings);
     expected.assert_eq(normalised.as_ref());
 }
-
 enum EventSnapshot<'a> {
     Asset(AssetEventSnapshot<'a>),
     TriggerCompleted(TriggerCompletedSnapshot<'a>),
     Raw(String),
 }
-
 impl<'a> EventSnapshot<'a> {
     fn from_event(event: &'a EventBox) -> Self {
         match event {
@@ -119,7 +111,6 @@ impl<'a> EventSnapshot<'a> {
         }
     }
 }
-
 impl norito::json::JsonSerialize for EventSnapshot<'_> {
     fn json_serialize(&self, out: &mut String) {
         match self {
@@ -129,12 +120,10 @@ impl norito::json::JsonSerialize for EventSnapshot<'_> {
         }
     }
 }
-
 enum AssetEventSnapshot<'a> {
     Added(&'a AssetChanged),
     Removed(&'a AssetChanged),
 }
-
 impl<'a> AssetEventSnapshot<'a> {
     fn from_data_event(event: &'a data::DataEvent) -> Option<Self> {
         match event {
@@ -143,14 +132,12 @@ impl<'a> AssetEventSnapshot<'a> {
             _ => None,
         }
     }
-
     fn from_domain_event(event: &'a DomainEvent) -> Option<Self> {
         match event {
             DomainEvent::Asset(event) => Self::from_asset_event(&event.event),
             _ => None,
         }
     }
-
     fn from_asset_event(event: &'a AssetEvent) -> Option<Self> {
         match event {
             AssetEvent::Added(change) => Some(Self::Added(change)),
@@ -158,21 +145,18 @@ impl<'a> AssetEventSnapshot<'a> {
             _ => None,
         }
     }
-
     fn variant_label(&self) -> &'static str {
         match self {
             Self::Added(_) => "Added",
             Self::Removed(_) => "Removed",
         }
     }
-
     fn change(&self) -> &'a AssetChanged {
         match self {
             Self::Added(change) | Self::Removed(change) => change,
         }
     }
 }
-
 fn format_asset_id_for_snapshot(asset_id: &AssetId) -> String {
     let account = asset_id.account();
     let account_str = ACCOUNT_ALIAS_BY_ID.get(account).map_or_else(
@@ -185,20 +169,17 @@ fn format_asset_id_for_snapshot(asset_id: &AssetId) -> String {
         format!("{}#{}", asset_id.definition(), account_str)
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SnapshotLineEndings {
     Lf,
     Crlf,
 }
-
 fn load_snapshot(path: &std::path::Path) -> (Option<String>, SnapshotLineEndings) {
     std::fs::read_to_string(path).map_or((None, SnapshotLineEndings::Lf), |text| {
         let endings = detect_line_endings_from_text(&text);
         (Some(text), endings)
     })
 }
-
 fn normalise_line_endings(input: &str, endings: SnapshotLineEndings) -> std::borrow::Cow<'_, str> {
     match endings {
         SnapshotLineEndings::Lf => std::borrow::Cow::Borrowed(input),
@@ -211,7 +192,6 @@ fn normalise_line_endings(input: &str, endings: SnapshotLineEndings) -> std::bor
         }
     }
 }
-
 fn detect_line_endings_from_text(text: &str) -> SnapshotLineEndings {
     if text.contains('\r') {
         SnapshotLineEndings::Crlf
@@ -219,7 +199,6 @@ fn detect_line_endings_from_text(text: &str) -> SnapshotLineEndings {
         SnapshotLineEndings::Lf
     }
 }
-
 fn collapse_to_unix_line_endings(text: &str) -> std::borrow::Cow<'_, str> {
     if text.contains('\r') {
         let collapsed = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -228,7 +207,6 @@ fn collapse_to_unix_line_endings(text: &str) -> std::borrow::Cow<'_, str> {
         std::borrow::Cow::Borrowed(text)
     }
 }
-
 impl norito::json::JsonSerialize for AssetEventSnapshot<'_> {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -264,9 +242,7 @@ impl norito::json::JsonSerialize for AssetEventSnapshot<'_> {
         out.push('}');
     }
 }
-
 struct TriggerCompletedSnapshot<'a>(&'a TriggerCompletedEvent);
-
 impl norito::json::JsonSerialize for TriggerCompletedSnapshot<'_> {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -296,7 +272,6 @@ impl norito::json::JsonSerialize for TriggerCompletedSnapshot<'_> {
         out.push('}');
     }
 }
-
 impl Default for Sandbox {
     fn default() -> Self {
         let world = {
@@ -320,7 +295,6 @@ impl Default for Sandbox {
             let assets = INIT_BALANCE
                 .iter()
                 .map(|(name, num)| Asset::new(asset(name), *num));
-
             World::with_assets([domain], accounts, [asset_def], assets, [])
         };
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -336,11 +310,9 @@ impl Default for Sandbox {
         sandbox.state.pipeline.parallel_overlay = false;
         sandbox.state.pipeline.parallel_apply = false;
         sandbox.state.pipeline.workers = 1;
-
         sandbox.with_max_execution_depth(INIT_EXECUTION_DEPTH)
     }
 }
-
 impl Sandbox {
     fn trigger_registration_metadata(&self) -> Metadata {
         let height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
@@ -362,7 +334,6 @@ impl Sandbox {
         metadata.insert(key_time, Json::new(registered_ms));
         metadata
     }
-
     /// Add a time trigger that transfers the test asset after a timer fires.
     ///
     /// Enqueues a time-based trigger which moves `quantity` units from `src`
@@ -372,7 +343,6 @@ impl Sandbox {
     pub fn with_time_trigger_transfer(self, src: &str, quantity: u32, dest: &str) -> Self {
         self.with_time_trigger_transfer_internal(src, quantity, dest, Repeats::Indefinitely, 0)
     }
-
     /// Add a labeled time trigger variant for test disambiguation.
     #[must_use]
     pub fn with_time_trigger_transfer_labeled(
@@ -384,7 +354,6 @@ impl Sandbox {
     ) -> Self {
         self.with_time_trigger_transfer_internal(src, quantity, dest, Repeats::Indefinitely, label)
     }
-
     fn with_time_trigger_transfer_internal(
         self,
         src: &str,
@@ -408,13 +377,11 @@ impl Sandbox {
         )
         .try_into()
         .unwrap();
-
         transaction.add_time_trigger(trigger).unwrap();
         transaction.apply();
         block.commit();
         self
     }
-
     /// Add a data trigger that reacts to asset-added events and forwards funds.
     #[must_use]
     pub fn with_data_trigger_transfer(self, src: &str, quantity: u32, dest: &str) -> Self {
@@ -426,7 +393,6 @@ impl Sandbox {
             0,
         )
     }
-
     /// Add a single-use data trigger that fires at most once.
     #[must_use]
     pub fn with_data_trigger_transfer_once(self, src: &str, quantity: u32, dest: &str) -> Self {
@@ -438,7 +404,6 @@ impl Sandbox {
             0,
         )
     }
-
     /// Add a labeled data trigger for disambiguation between similar triggers in tests.
     #[must_use]
     pub fn with_data_trigger_transfer_labeled(
@@ -456,7 +421,6 @@ impl Sandbox {
             label,
         )
     }
-
     /// Add a data trigger with an explicit [`Quantity`] amount.
     #[must_use]
     pub fn with_data_trigger_transfer_quantity(
@@ -473,7 +437,6 @@ impl Sandbox {
             0,
         )
     }
-
     fn with_data_trigger_transfer_quantity_internal(
         self,
         src: &str,
@@ -503,13 +466,11 @@ impl Sandbox {
         )
         .try_into()
         .unwrap();
-
         transaction.add_data_trigger(trigger).unwrap();
         transaction.apply();
         block.commit();
         self
     }
-
     /// Limit the maximum smart contract execution depth in the sandbox state.
     #[must_use]
     pub fn with_max_execution_depth(self, depth: u8) -> Self {
@@ -520,7 +481,6 @@ impl Sandbox {
         world.commit();
         self
     }
-
     /// Queue a single transfer transaction from `src` to `dest`.
     ///
     /// This is a convenience wrapper over [`Self::request_transfers_batched`] with
@@ -528,7 +488,6 @@ impl Sandbox {
     pub fn request_transfer(&mut self, src: &str, quantity: u32, dest: &str) {
         self.request_transfers_batched::<1>(src, quantity, dest);
     }
-
     /// Queue a transaction consisting of repeated Transfer instructions.
     ///
     /// Builds and buffers a signed transaction that contains `N_INSTRUCTIONS`
@@ -559,7 +518,6 @@ impl Sandbox {
         };
         self.transactions.push(transaction);
     }
-
     /// Build a signed block from all queued transactions and open it for assertions.
     ///
     /// Consumes the currently queued transactions, packs them into a signed
@@ -581,14 +539,12 @@ impl Sandbox {
                 .unpack(|_| {})
                 .into()
         };
-
         SandboxBlock {
             state: self.state.block(block.header()),
             block: Some(block),
         }
     }
 }
-
 impl SandboxBlock<'_> {
     /// Validate and commit the prepared block to the sandbox state.
     ///
@@ -616,10 +572,8 @@ impl SandboxBlock<'_> {
             // topology in state is only used by sumeragi
             vec![],
         );
-
         (events, committed)
     }
-
     /// Assert that selected accounts have the expected balances.
     ///
     /// The `expected` map specifies accounts (by short name like "alice")
@@ -641,7 +595,6 @@ impl SandboxBlock<'_> {
                 (*name, balance)
             })
             .collect();
-
         assert_eq!(actual, expected);
     }
 }

@@ -1,21 +1,15 @@
 #![allow(unexpected_cfgs)]
-
 //! Retention precedence helpers for SoraFS manifests.
-
 use core::fmt;
-
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-
 use crate::{ManifestV1, MetadataEntry};
-
 /// Schema version for [`RetentionSourceV1`].
 pub const RETENTION_SOURCE_VERSION_V1: u8 = 1;
 /// Manifest metadata key for a deal-driven retention cap.
 pub const RETENTION_DEAL_END_EPOCH_KEY: &str = "sorafs.retention.deal_end_epoch";
 /// Manifest metadata key for a governance-imposed retention cap.
 pub const RETENTION_GOVERNANCE_CAP_EPOCH_KEY: &str = "sorafs.retention.governance_cap_epoch";
-
 /// Errors raised while parsing retention metadata.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum RetentionMetadataError {
@@ -35,7 +29,6 @@ pub enum RetentionMetadataError {
     #[error("retention source derived fields do not match their epoch inputs")]
     DerivedFieldsMismatch,
 }
-
 /// Retention sources applied to compute the effective expiry epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(tag = "source", rename_all = "snake_case")]
@@ -49,7 +42,6 @@ pub enum RetentionSourceKindV1 {
     /// Governance retention cap constraint.
     GovernanceCap,
 }
-
 impl RetentionSourceKindV1 {
     /// Canonical string label for the source.
     #[must_use]
@@ -62,13 +54,11 @@ impl RetentionSourceKindV1 {
         }
     }
 }
-
 impl fmt::Display for RetentionSourceKindV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
-
 /// Retention-source record persisted alongside manifest metadata.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct RetentionSourceV1 {
@@ -87,7 +77,6 @@ pub struct RetentionSourceV1 {
     /// Sources that matched the effective minimum epoch.
     pub sources: Vec<RetentionSourceKindV1>,
 }
-
 impl RetentionSourceV1 {
     /// Compute retention precedence from explicit inputs.
     pub fn compute(
@@ -103,7 +92,6 @@ impl RetentionSourceV1 {
             governance_cap_epoch,
         ))
     }
-
     fn compute_canonical(
         pin_policy_epoch: u64,
         deal_end_epoch: Option<u64>,
@@ -119,7 +107,6 @@ impl RetentionSourceV1 {
         if let Some(epoch) = governance_cap_epoch {
             candidates.push((RetentionSourceKindV1::GovernanceCap, epoch));
         }
-
         if candidates.is_empty() {
             return Self {
                 version: RETENTION_SOURCE_VERSION_V1,
@@ -130,7 +117,6 @@ impl RetentionSourceV1 {
                 sources: vec![RetentionSourceKindV1::Unbounded],
             };
         }
-
         let min_epoch = candidates
             .iter()
             .map(|(_, epoch)| *epoch)
@@ -146,7 +132,6 @@ impl RetentionSourceV1 {
         if pin_policy_epoch == min_epoch {
             sources.push(RetentionSourceKindV1::PinPolicy);
         }
-
         Self {
             version: RETENTION_SOURCE_VERSION_V1,
             pin_policy_epoch,
@@ -156,7 +141,6 @@ impl RetentionSourceV1 {
             sources,
         }
     }
-
     /// Validate a decoded retention source, including all derived fields.
     pub fn validate(&self) -> Result<(), RetentionMetadataError> {
         if self.version != RETENTION_SOURCE_VERSION_V1 {
@@ -176,7 +160,6 @@ impl RetentionSourceV1 {
         }
         Ok(())
     }
-
     /// Compute retention precedence directly from a manifest's metadata.
     pub fn from_manifest(manifest: &ManifestV1) -> Result<Self, RetentionMetadataError> {
         let (deal_end_epoch, governance_cap_epoch) = parse_retention_metadata(&manifest.metadata)?;
@@ -188,20 +171,17 @@ impl RetentionSourceV1 {
         source.validate()?;
         Ok(source)
     }
-
     /// Effective retention epoch after applying precedence rules.
     #[must_use]
     pub const fn effective_epoch(&self) -> u64 {
         self.effective_epoch
     }
 }
-
 fn parse_retention_metadata(
     entries: &[MetadataEntry],
 ) -> Result<(Option<u64>, Option<u64>), RetentionMetadataError> {
     let mut deal_end_epoch = None;
     let mut governance_cap_epoch = None;
-
     for entry in entries {
         if entry.key == RETENTION_DEAL_END_EPOCH_KEY {
             if deal_end_epoch.is_some() {
@@ -219,10 +199,8 @@ fn parse_retention_metadata(
             governance_cap_epoch = parse_epoch_value(&entry.key, &entry.value)?;
         }
     }
-
     Ok((deal_end_epoch, governance_cap_epoch))
 }
-
 fn parse_epoch_value(key: &str, value: &str) -> Result<Option<u64>, RetentionMetadataError> {
     if value.is_empty()
         || !value.bytes().all(|byte| byte.is_ascii_digit())
@@ -245,7 +223,6 @@ fn parse_epoch_value(key: &str, value: &str) -> Result<Option<u64>, RetentionMet
         Ok(Some(parsed))
     }
 }
-
 fn validate_optional_epoch(
     field: &'static str,
     epoch: Option<u64>,
@@ -255,13 +232,11 @@ fn validate_optional_epoch(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{DagCodecId, ManifestBuilder, PinPolicy, StorageClass};
     use sorafs_chunker::ChunkProfile;
-
     fn manifest_with_metadata(entries: Vec<MetadataEntry>, retention_epoch: u64) -> ManifestV1 {
         ManifestBuilder::new()
             .root_cid(crate::canonical_manifest_root_cid([0xAA; 32]))
@@ -281,7 +256,6 @@ mod tests {
             .build()
             .expect("build manifest")
     }
-
     #[test]
     fn retention_precedence_prefers_minimum_epoch() {
         let manifest = manifest_with_metadata(
@@ -301,7 +275,6 @@ mod tests {
         assert_eq!(source.effective_epoch, 50);
         assert_eq!(source.sources, vec![RetentionSourceKindV1::DealEnd]);
     }
-
     #[test]
     fn retention_precedence_handles_unbounded() {
         let manifest = manifest_with_metadata(Vec::new(), 0);
@@ -309,7 +282,6 @@ mod tests {
         assert_eq!(source.effective_epoch, 0);
         assert_eq!(source.sources, vec![RetentionSourceKindV1::Unbounded]);
     }
-
     #[test]
     fn retention_precedence_records_matching_sources() {
         let manifest = manifest_with_metadata(
@@ -329,7 +301,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn retention_precedence_rejects_duplicate_keys() {
         let manifest = manifest_with_metadata(
@@ -348,7 +319,6 @@ mod tests {
         let err = RetentionSourceV1::from_manifest(&manifest).expect_err("duplicate key");
         assert!(matches!(err, RetentionMetadataError::DuplicateKey { .. }));
     }
-
     #[test]
     fn retention_precedence_rejects_invalid_values() {
         let manifest = manifest_with_metadata(
@@ -361,7 +331,6 @@ mod tests {
         let err = RetentionSourceV1::from_manifest(&manifest).expect_err("invalid value");
         assert!(matches!(err, RetentionMetadataError::InvalidValue { .. }));
     }
-
     #[test]
     fn retention_precedence_rejects_noncanonical_integer_spellings() {
         for value in [" 10", "10 ", "+10", "010", "1_0", "\u{ff11}0", ""] {
@@ -378,7 +347,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn retention_precedence_canonical_zero_means_no_optional_cap() {
         let manifest = manifest_with_metadata(
@@ -393,7 +361,6 @@ mod tests {
         assert_eq!(source.effective_epoch, 30);
         assert_eq!(source.sources, vec![RetentionSourceKindV1::PinPolicy]);
     }
-
     #[test]
     fn retention_source_rejects_noncanonical_optional_zero() {
         let err = RetentionSourceV1::compute(30, Some(0), None).expect_err("optional zero");
@@ -404,27 +371,23 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn retention_source_validation_recomputes_derived_fields() {
         let canonical =
             RetentionSourceV1::compute(30, Some(10), Some(20)).expect("canonical retention source");
         canonical.validate().expect("valid source");
-
         let mut wrong_epoch = canonical.clone();
         wrong_epoch.effective_epoch = 20;
         assert_eq!(
             wrong_epoch.validate(),
             Err(RetentionMetadataError::DerivedFieldsMismatch)
         );
-
         let mut wrong_sources = canonical.clone();
         wrong_sources.sources = vec![RetentionSourceKindV1::PinPolicy];
         assert_eq!(
             wrong_sources.validate(),
             Err(RetentionMetadataError::DerivedFieldsMismatch)
         );
-
         let mut unsupported = canonical;
         unsupported.version = RETENTION_SOURCE_VERSION_V1 + 1;
         assert!(matches!(

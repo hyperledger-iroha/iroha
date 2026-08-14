@@ -1,8 +1,6 @@
 //! Zero-knowledge envelope types (Norito TLV payloads).
-
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 use crate::{
     AssetDefinitionId, NetworkId,
     account::AccountId,
@@ -10,16 +8,12 @@ use crate::{
         PrivacyNullifierV1, ZkAcePqAuthorizationStatementV1, privacy_protocol_label_is_reserved_v1,
     },
 };
-
 /// Canonical ZK-ACE circuit identifier for post-quantum authorization v0.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID: &str = "zk_ace_pq_authorization_v0";
-
 /// Canonical verifier-registry label used by ZK-ACE authorization v0.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND: &str = "stark/fri/sha256-goldilocks";
-
 /// Canonical backend family identifier for native STARK/FRI verification.
 pub const ZK_BACKEND_STARK_FRI_V1: &str = "stark/fri";
-
 /// Canonical empty root of the first-release depth-16 Pasta Poseidon
 /// confidential commitment tree.
 ///
@@ -31,7 +25,6 @@ pub const CONFIDENTIAL_TREE_POSEIDON_PASTA_V1_EMPTY_ROOT: [u8; 32] = [
     0xea, 0x06, 0x0f, 0x4e, 0x4b, 0xe3, 0x78, 0x13, 0x28, 0x09, 0x2c, 0x94, 0xbc, 0xa4, 0x26, 0x8e,
     0x6e, 0x9b, 0x24, 0x6b, 0x0e, 0xc6, 0xea, 0x33, 0x9a, 0xdc, 0x76, 0x6a, 0x2b, 0x9b, 0x92, 0x01,
 ];
-
 /// Exact verifier-registry labels admitted by native Rust dispatch.
 ///
 /// This closed set is intentionally separate from [`BackendTag`]. A registry
@@ -53,13 +46,11 @@ pub const ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1: &[&str] = &[
     "stark/fri/poseidon2-goldilocks",
     "stark/fri/sha256_goldilocks.v1",
 ];
-
 const STARK_FRI_V1_REGISTRY_PROFILES: &[&str] = &[
     "sha256-goldilocks",
     "poseidon2-goldilocks",
     "sha256_goldilocks.v1",
 ];
-
 /// Return true when a backend label names an admitted STARK/FRI v1 verifier profile.
 #[inline]
 #[must_use]
@@ -69,37 +60,27 @@ pub fn is_stark_fri_v1_backend_label(backend: &str) -> bool {
             .strip_prefix("stark/fri/")
             .is_some_and(|profile| STARK_FRI_V1_REGISTRY_PROFILES.contains(&profile))
 }
-
 /// Domain tag used when deriving ZK-ACE identity commitments and replay nullifiers.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG: &str = "iroha:zk-ace:pq-authorization:v0";
-
 /// First executable ZK-ACE action class.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER: &str = "transparent_asset_transfer";
-
 /// Permanent Norito schema identity for the typed ZK-ACE public-input wrapper.
 pub const ZK_ACE_PRIVACY_PUBLIC_INPUTS_SCHEMA_NAME_V1: &str =
     "iroha.privacy.zk-ace.public-inputs.v1";
 /// Exact type-name-independent transfer-digest preimage schema.
 pub const ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1: &[u8] = b"framing=poseidon2-domain-words:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=source:account-canonical-hex-v1-utf8|part2=destination:account-canonical-hex-v1-utf8|part3=asset-definition-id:uuid-bytes16|part4=amount:u128be|part5=network-id:bytes32|part6=action-class:utf8|part7=policy-digest:bytes32";
-
 /// Maximum source accounts that one ZK-ACE identity commitment may authorize.
 pub const ZK_ACE_MAX_ALLOWED_ACCOUNTS: usize = 16;
-
 /// Number of bytes packed into each Goldilocks field limb for ZK-ACE hashes.
 pub const ZK_ACE_PACKED_LIMB_BYTES: usize = 7;
-
 /// Default maximum proof payload size accepted by generic `OpenVerify` admission.
 pub const OPEN_VERIFY_DEFAULT_MAX_PROOF_BYTES: usize = 64 * 1024 * 1024;
-
 /// Default maximum circuit identifier size accepted by generic `OpenVerify` admission.
 pub const OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES: usize = 256;
-
 /// Default maximum public-input metadata size accepted by generic `OpenVerify` admission.
 pub const OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES: usize = 1024 * 1024;
-
 /// Default maximum auxiliary metadata size for non-admission `OpenVerify` callers.
 pub const OPEN_VERIFY_DEFAULT_MAX_AUX_BYTES: usize = 64 * 1024;
-
 /// Low-level proof engine supported by generic [`OpenVerifyEnvelope`] verification.
 ///
 /// Privacy protocols and verifier profiles are deliberately not represented by
@@ -112,11 +93,9 @@ pub enum BackendTag {
     /// Native transparent STARK/FRI.
     Stark,
 }
-
 impl BackendTag {
     /// All generic `OpenVerify` engines, in canonical Norito order.
     pub const ALL: [Self; 2] = [Self::Halo2IpaPasta, Self::Stark];
-
     /// Return the canonical JSON label for this engine.
     #[must_use]
     pub const fn canonical_label(self) -> &'static str {
@@ -125,7 +104,6 @@ impl BackendTag {
             BackendTag::Stark => "stark",
         }
     }
-
     /// Parse an exact canonical JSON label.
     ///
     /// This parser intentionally performs no trimming, case folding, family
@@ -139,7 +117,6 @@ impl BackendTag {
         }
     }
 }
-
 /// Return the low-level engine for one exact verifier-registry label.
 ///
 /// This function deliberately has no fallback family matching. Adding a new
@@ -166,21 +143,24 @@ pub fn verifier_backend_registry_tag_v1(label: &str) -> Option<BackendTag> {
         _ => None,
     }
 }
-
 /// Return whether `label` is one exact native verifier-registry label.
 #[inline]
 #[must_use]
 pub fn is_verifier_backend_registry_label_v1(label: &str) -> bool {
     verifier_backend_registry_tag_v1(label).is_some()
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for BackendTag {
     fn json_serialize(&self, out: &mut String) {
         norito::json::write_json_string(self.canonical_label(), out);
     }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.canonical_label(), out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for BackendTag {
     fn json_deserialize(
@@ -193,7 +173,6 @@ impl norito::json::JsonDeserialize for BackendTag {
         })
     }
 }
-
 /// Size and policy bounds for validating an [`OpenVerifyEnvelope`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpenVerifyEnvelopeBounds {
@@ -210,7 +189,6 @@ pub struct OpenVerifyEnvelopeBounds {
     /// Whether the verifier-key hash must be non-zero.
     pub require_nonzero_vk_hash: bool,
 }
-
 impl Default for OpenVerifyEnvelopeBounds {
     fn default() -> Self {
         Self {
@@ -223,7 +201,6 @@ impl Default for OpenVerifyEnvelopeBounds {
         }
     }
 }
-
 /// Validation failure for a generic [`OpenVerifyEnvelope`] admission check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenVerifyEnvelopeValidationError {
@@ -274,7 +251,6 @@ pub enum OpenVerifyEnvelopeValidationError {
         max: usize,
     },
 }
-
 impl core::fmt::Display for OpenVerifyEnvelopeValidationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -322,9 +298,7 @@ impl core::fmt::Display for OpenVerifyEnvelopeValidationError {
         }
     }
 }
-
 impl std::error::Error for OpenVerifyEnvelopeValidationError {}
-
 /// Envelope for open-verify operations (canonical `SignedQuery` layout).
 ///
 /// This structure is serialized with Norito and used as the TLV payload for
@@ -345,7 +319,7 @@ pub struct OpenVerifyEnvelope {
     /// Generic codecs may still represent an unavailable key binding as all
     /// zeros, but chain admission for registered proof attachments requires an
     /// exact match with the active verifier-key commitment.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub vk_hash: [u8; 32],
     /// Public-input metadata bytes (opaque; backend-specific canonical encoding).
     ///
@@ -361,7 +335,6 @@ pub struct OpenVerifyEnvelope {
     /// future instruction explicitly defines and validates auxiliary semantics.
     pub aux: Vec<u8>,
 }
-
 impl OpenVerifyEnvelope {
     /// Create a new envelope with required fields; `aux` defaults to empty.
     pub fn new(
@@ -380,7 +353,6 @@ impl OpenVerifyEnvelope {
             aux: Vec::new(),
         }
     }
-
     /// Validate the generic shape required before registered proof admission.
     ///
     /// Backend-specific verifiers must still validate circuit semantics,
@@ -395,7 +367,6 @@ impl OpenVerifyEnvelope {
     pub fn validate_for_admission(&self) -> Result<(), OpenVerifyEnvelopeValidationError> {
         self.validate_with_bounds(OpenVerifyEnvelopeBounds::default())
     }
-
     /// Validate generic shape and size invariants with caller-provided bounds.
     ///
     /// # Errors
@@ -460,7 +431,6 @@ impl OpenVerifyEnvelope {
         Ok(())
     }
 }
-
 /// Returns `true` when a circuit identifier uses the portable `OpenVerify` grammar.
 #[must_use]
 pub fn open_verify_circuit_id_is_portable(circuit_id: &str) -> bool {
@@ -488,7 +458,6 @@ pub fn open_verify_circuit_id_is_portable(circuit_id: &str) -> bool {
             || matches!(*byte, b'-' | b'_' | b'/' | b':' | b'.')
     })
 }
-
 /// Return whether an `OpenVerify` circuit identifier reuses a privacy label.
 ///
 /// Privacy labels are reserved as complete `:`- or `/`-delimited circuit
@@ -500,9 +469,7 @@ pub fn open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(circuit_id
         .split([':', '/'])
         .any(privacy_protocol_label_is_reserved_v1)
 }
-
 // Note: Norito serialization is derived via `Encode`/`Decode` (packed structs compatible)
-
 /// STARK/FRI proof payload embedded inside [`OpenVerifyEnvelope::proof_bytes`] when
 /// [`OpenVerifyEnvelope::backend`] is [`BackendTag::Stark`].
 ///
@@ -527,7 +494,6 @@ pub struct StarkFriOpenProofV1 {
     /// Backend-native proof envelope bytes.
     pub envelope_bytes: Vec<u8>,
 }
-
 /// Exact public inputs accepted by the native privacy ZK-ACE engine.
 ///
 /// The consensus statement is carried without a second, partially overlapping
@@ -546,10 +512,9 @@ pub struct ZkAcePrivacyPublicInputsV1 {
     /// Exact typed consensus statement being authorized.
     pub statement: ZkAcePqAuthorizationStatementV1,
     /// Trusted genesis-block digest.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub genesis_hash: [u8; 32],
 }
-
 /// Canonical byte packing used by ZK-ACE Poseidon2-domain hashing.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -562,7 +527,6 @@ pub struct ZkAcePackedBytesV1 {
     /// Little-endian 7-byte Goldilocks limbs.
     pub limbs: Vec<u64>,
 }
-
 impl ZkAcePrivacyPublicInputsV1 {
     /// Construct the only admitted first-release public-input schema.
     #[must_use]
@@ -574,7 +538,6 @@ impl ZkAcePrivacyPublicInputsV1 {
         }
     }
 }
-
 /// Derive the exact action projection used by the native privacy ZK-ACE AIR.
 ///
 /// The replay nullifier is derived from this digest and is therefore zeroed to
@@ -602,7 +565,6 @@ pub fn derive_zk_ace_privacy_authorization_digest(
         ],
     ))
 }
-
 /// Pack arbitrary bytes into canonical 7-byte Goldilocks limbs.
 #[must_use]
 pub fn zk_ace_pack_bytes_to_field_limbs(bytes: &[u8]) -> ZkAcePackedBytesV1 {
@@ -620,21 +582,18 @@ pub fn zk_ace_pack_bytes_to_field_limbs(bytes: &[u8]) -> ZkAcePackedBytesV1 {
         limbs,
     }
 }
-
 /// Domain-separated Poseidon2 hash over already canonical byte parts.
 #[must_use]
 pub fn zk_ace_poseidon2_domain_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let words = zk_ace_poseidon2_domain_words(domain, parts);
     let mut sponge = fastpq_isi::poseidon::PoseidonSponge::new();
     sponge.absorb_slice(&words);
-
     let mut out = [0u8; 32];
     for chunk in out.chunks_exact_mut(core::mem::size_of::<u64>()) {
         chunk.copy_from_slice(&sponge.squeeze_element().to_le_bytes());
     }
     out
 }
-
 /// Canonical Goldilocks field preimage used by ZK-ACE Poseidon2-domain hashing.
 #[must_use]
 pub fn zk_ace_poseidon2_domain_words(domain: &[u8], parts: &[&[u8]]) -> Vec<u64> {
@@ -650,11 +609,9 @@ pub fn zk_ace_poseidon2_domain_words(domain: &[u8], parts: &[&[u8]]) -> Vec<u64>
     }
     words
 }
-
 fn zk_ace_poseidon_bytes(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     zk_ace_poseidon2_domain_hash(domain, parts)
 }
-
 /// Derive the ZK-ACE identity commitment from its private witness components.
 pub fn derive_zk_ace_identity_commitment(
     identity_root: &[u8; 32],
@@ -666,7 +623,6 @@ pub fn derive_zk_ace_identity_commitment(
         &[identity_root, identity_blinding, domain_tag.as_bytes()],
     )
 }
-
 /// Derive the ZK-ACE replay nullifier for a specific action.
 pub fn derive_zk_ace_replay_nullifier(
     replay_secret: &[u8; 32],
@@ -686,7 +642,6 @@ pub fn derive_zk_ace_replay_nullifier(
         ],
     )
 }
-
 /// Derive the action digest for a ZK-ACE-authorized transparent asset transfer.
 ///
 /// Account identities use their domainless canonical hex payload and the asset
@@ -714,7 +669,6 @@ pub fn derive_zk_ace_transfer_digest(
         .map_err(|_| ZkAceTransferDigestErrorV1::DestinationAccountEncoding)?;
     let asset_bytes = asset.aid_bytes();
     let amount_bytes = amount.to_be_bytes();
-
     Ok(zk_ace_poseidon_bytes(
         b"zk-ace.transparent-transfer.v1",
         &[
@@ -729,7 +683,6 @@ pub fn derive_zk_ace_transfer_digest(
         ],
     ))
 }
-
 /// Canonical account encoding failure while deriving a ZK-ACE transfer digest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ZkAceTransferDigestErrorV1 {
@@ -740,44 +693,36 @@ pub enum ZkAceTransferDigestErrorV1 {
     #[error("ZK-ACE destination account cannot be encoded canonically")]
     DestinationAccountEncoding,
 }
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::type_complexity)]
-
     use std::{
         collections::BTreeSet,
         str::FromStr as _,
         sync::{Arc, Barrier},
         thread,
     };
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-
     use super::*;
     use crate::{
         account::address::ChainDiscriminantGuard, block::BlockHeader, domain::DomainId, name::Name,
     };
-
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),
         ))
     }
-
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn asset_definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             Name::from_str("xor").expect("asset name"),
         )
     }
-
     #[test]
     fn zk_ace_transfer_digest_is_domainless_and_discriminant_independent() {
         let from = account(0x42);
@@ -787,7 +732,6 @@ mod tests {
         let policy_hash = [0x44; 32];
         let amount = 123u128;
         let action_class = ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER;
-
         let digest = derive_zk_ace_transfer_digest(
             &from,
             &to,
@@ -817,7 +761,6 @@ mod tests {
                 &policy_hash,
             ],
         );
-
         assert_eq!(digest, expected);
         let barrier = Arc::new(Barrier::new(8));
         let results = thread::scope(|scope| {
@@ -866,7 +809,6 @@ mod tests {
             "ambient display state must not enter the consensus digest"
         );
     }
-
     fn valid_open_verify_admission_envelope() -> OpenVerifyEnvelope {
         OpenVerifyEnvelope::new(
             BackendTag::Stark,
@@ -876,7 +818,6 @@ mod tests {
             vec![0x03, 0x04, 0x05],
         )
     }
-
     #[test]
     fn stark_fri_v1_backend_label_accepts_only_admitted_profiles() {
         for backend in [
@@ -890,7 +831,6 @@ mod tests {
                 "{backend} must be accepted",
             );
         }
-
         for backend in [
             "stark/fri/debug-proof",
             "stark/fri/mock",
@@ -908,7 +848,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(feature = "json")]
     fn assert_json_roundtrip<T>(value: &T)
     where
@@ -921,7 +860,6 @@ mod tests {
         let decoded: T = norito::json::from_json(&json).expect("deserialize from json");
         assert_eq!(&decoded, value);
     }
-
     #[test]
     fn backend_tag_norito_discriminants_are_exhaustive_and_canonical() {
         for (backend, expected_tag) in [(BackendTag::Halo2IpaPasta, 0u32), (BackendTag::Stark, 1)] {
@@ -934,14 +872,12 @@ mod tests {
             );
             let decoded = BackendTag::decode(&mut encoded.as_slice()).expect("decode backend tag");
             assert_eq!(decoded, backend);
-
             let framed = norito::to_bytes(&backend).expect("encode framed backend tag");
             let decoded: BackendTag =
                 norito::decode_from_bytes(&framed).expect("decode framed backend tag");
             assert_eq!(decoded, backend);
         }
     }
-
     #[test]
     fn backend_tag_norito_rejects_unknown_discriminants() {
         for tag in [2_u32, 3, u32::MAX] {
@@ -952,7 +888,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn backend_tag_parser_accepts_only_canonical_engine_labels() {
         for (label, expected) in [
@@ -966,7 +901,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn verifier_backend_registry_is_closed_exact_and_engine_typed() {
         assert_eq!(ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(), 12);
@@ -983,7 +917,6 @@ mod tests {
                 assert_eq!(tag, BackendTag::Stark, "{label}");
             }
         }
-
         for rejected in [
             "",
             " halo2/ipa",
@@ -1030,7 +963,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn backend_tag_parser_rejects_aliases_retired_families_and_adversarial_labels() {
         for label in [
@@ -1108,7 +1040,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn open_verify_envelope_admission_validation_accepts_canonical_shape() {
         for backend in BackendTag::ALL {
@@ -1119,7 +1050,6 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{}: {error}", backend.canonical_label()));
         }
     }
-
     #[test]
     fn open_verify_envelope_admission_validation_accepts_portable_circuit_ids() {
         for circuit_id in [
@@ -1130,17 +1060,14 @@ mod tests {
         ] {
             let mut envelope = valid_open_verify_admission_envelope();
             envelope.circuit_id = circuit_id.to_owned();
-
             envelope
                 .validate_for_admission()
                 .unwrap_or_else(|err| panic!("{circuit_id} should be accepted: {err}"));
         }
     }
-
     #[test]
     fn open_verify_admission_reserves_every_active_and_retired_privacy_label() {
         use crate::privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1};
-
         fn assert_reserved(label: &str) {
             for circuit_id in [
                 label.to_owned(),
@@ -1158,7 +1085,6 @@ mod tests {
                     open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(&circuit_id),
                     "privacy namespace component must be detected in {circuit_id:?}"
                 );
-
                 let mut envelope = valid_open_verify_admission_envelope();
                 envelope.circuit_id = circuit_id.clone();
                 assert_eq!(
@@ -1167,7 +1093,6 @@ mod tests {
                     "reserved generic circuit id {circuit_id:?}"
                 );
             }
-
             for near_miss in [
                 format!("generic-{label}"),
                 format!("{label}-generic"),
@@ -1186,7 +1111,6 @@ mod tests {
                     .unwrap_or_else(|error| panic!("near miss {near_miss:?}: {error}"));
             }
         }
-
         for protocol in PrivacyProtocolIdV1::ALL {
             assert_reserved(protocol.canonical_label());
         }
@@ -1194,11 +1118,9 @@ mod tests {
             assert_reserved(label);
         }
     }
-
     #[test]
     fn open_verify_envelope_admission_validation_rejects_malformed_circuit_ids() {
         use OpenVerifyEnvelopeValidationError::{CircuitIdTooLarge, InvalidCircuitId};
-
         for (name, circuit_id) in [
             ("uppercase", "Stark/fri/sha256-goldilocks"),
             ("control", "stark/fri/sha256-goldilocks\nforged"),
@@ -1225,14 +1147,12 @@ mod tests {
         ] {
             let mut envelope = valid_open_verify_admission_envelope();
             envelope.circuit_id = circuit_id.to_owned();
-
             assert_eq!(
                 envelope.validate_for_admission().unwrap_err(),
                 InvalidCircuitId,
                 "{name}",
             );
         }
-
         let mut oversized = valid_open_verify_admission_envelope();
         oversized.circuit_id = "stark".to_owned();
         assert_eq!(
@@ -1246,7 +1166,6 @@ mod tests {
             "oversized circuit id",
         );
     }
-
     #[test]
     fn open_verify_envelope_admission_validation_rejects_adversarial_shapes() {
         use OpenVerifyEnvelopeValidationError::{
@@ -1254,7 +1173,6 @@ mod tests {
             EmptyPublicInputs, NonEmptyAux, ProofBytesTooLarge, PublicInputsTooLarge,
             ZeroVerifierKeyHash,
         };
-
         let cases: [(
             &str,
             fn(&mut OpenVerifyEnvelope),
@@ -1311,7 +1229,6 @@ mod tests {
                 NonEmptyAux,
             ),
         ];
-
         for (name, mutate, expected) in cases {
             let mut envelope = valid_open_verify_admission_envelope();
             mutate(&mut envelope);
@@ -1325,7 +1242,6 @@ mod tests {
             assert_eq!(err, expected, "{name}");
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn backend_tag_json_accepts_only_exact_canonical_labels() {
@@ -1336,7 +1252,6 @@ mod tests {
             assert_eq!(decoded, backend);
             assert_json_roundtrip(&backend);
         }
-
         for alias in [
             "",
             "halo2/ipa",
@@ -1376,19 +1291,16 @@ mod tests {
             norito::json::from_str::<BackendTag>(&json)
                 .expect_err("backend aliases and unknown labels must be rejected by JSON");
         }
-
         for invalid_json in ["null", "true", "0", "{}", "[]"] {
             norito::json::from_str::<BackendTag>(invalid_json)
                 .expect_err("non-string backend labels must be rejected");
         }
     }
-
     #[test]
     fn open_verify_envelope_validation_allows_explicit_aux_and_zero_key_only_when_configured() {
         let mut envelope = valid_open_verify_admission_envelope();
         envelope.vk_hash = [0; 32];
         envelope.aux = b"bounded-aux".to_vec();
-
         envelope
             .validate_with_bounds(OpenVerifyEnvelopeBounds {
                 allow_aux: true,
@@ -1397,7 +1309,6 @@ mod tests {
                 ..OpenVerifyEnvelopeBounds::default()
             })
             .expect("custom non-admission bounds can allow zero key and aux");
-
         let err = envelope
             .validate_with_bounds(OpenVerifyEnvelopeBounds {
                 allow_aux: true,
@@ -1414,13 +1325,11 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn zk_ace_packing_and_hash_vectors_are_stable() {
         let packed = zk_ace_pack_bytes_to_field_limbs(b"ABCDEFGH");
         assert_eq!(packed.length, 8);
         assert_eq!(packed.limbs, vec![0x0047_4645_4443_4241, 0x48]);
-
         let identity_root = [0x11; 32];
         let identity_blinding = [0x22; 32];
         let replay_secret = [0x33; 32];
@@ -1451,7 +1360,6 @@ mod tests {
             ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
             ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
         );
-
         assert_eq!(
             hex::encode(identity_commitment),
             "9cb1c494eaf171b6ce218d3c7c6de88cdc8228f9b4eda310a325b4b2c1cbd68f"
@@ -1465,7 +1373,6 @@ mod tests {
             "4cab0d306af008a3069e2c3656c1b17f29c4da7b931c46b032f442ccfbb635e3"
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn zk_ace_json_roundtrips_generic_stark_wrapper_and_packing() {
@@ -1475,7 +1382,6 @@ mod tests {
             public_inputs: vec![vec![[0xAA; 32], [0xBB; 32]], vec![[0xCC; 32]]],
             envelope_bytes: vec![0x01, 0x02, 0x03, 0x04],
         };
-
         assert_json_roundtrip(&packed);
         assert_json_roundtrip(&open_proof);
     }

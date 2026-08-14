@@ -1,5 +1,4 @@
 use std::sync::Arc;
-
 use iroha_data_model::soranet::vpn::{
     VPN_CELL_LEN, VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1,
     VpnFlowLabelV1,
@@ -15,7 +14,6 @@ use tokio::{
     io::{AsyncWriteExt, duplex},
     runtime::Runtime,
 };
-
 fn overlay() -> VpnOverlay {
     let cfg = VpnConfig {
         enabled: true,
@@ -23,7 +21,6 @@ fn overlay() -> VpnOverlay {
     };
     VpnOverlay::from_config(cfg)
 }
-
 #[test]
 fn overlay_parses_valid_frame() {
     let overlay = overlay();
@@ -43,14 +40,12 @@ fn overlay_parses_valid_frame() {
     let padded = VpnCellV1 { header, payload }
         .into_padded_frame()
         .expect("padded");
-
     let parsed = overlay.parse_frame(&padded.bytes).expect("parsed");
     assert_eq!(VpnCellClassV1::Data, parsed.header.class);
     assert_eq!(0x10203, parsed.header.flow_label.to_u32());
     assert_eq!(4u16, parsed.header.payload_len);
     assert_eq!(vec![0xAB; 4], parsed.payload);
 }
-
 #[test]
 fn overlay_rejects_short_frame() {
     let overlay = overlay();
@@ -62,7 +57,6 @@ fn overlay_rejects_short_frame() {
         if expected == VPN_CELL_LEN && actual == VPN_CELL_LEN - 1
     ));
 }
-
 #[test]
 fn overlay_rejects_flow_label_overflow_for_configured_width() {
     let mut cfg = VpnConfig {
@@ -72,7 +66,6 @@ fn overlay_rejects_flow_label_overflow_for_configured_width() {
     };
     cfg.flow_label_bits = 8;
     let overlay = VpnOverlay::from_config(cfg);
-
     let header = VpnCellHeaderV1 {
         version: 1,
         class: VpnCellClassV1::Data,
@@ -90,14 +83,12 @@ fn overlay_rejects_flow_label_overflow_for_configured_width() {
     }
     .into_padded_frame()
     .expect("frame");
-
     let err = overlay.parse_frame(&frame.bytes).expect_err("overflow");
     assert!(matches!(
         err,
         VpnCellError::FlowLabelOverflow { max_bits: 8, .. }
     ));
 }
-
 #[test]
 fn session_records_frame_ingress_and_egress() {
     let metrics = Arc::new(Metrics::new());
@@ -123,17 +114,14 @@ fn session_records_frame_ingress_and_egress() {
     let frame = VpnCellV1 { header, payload }
         .into_padded_frame()
         .expect("frame");
-
     let parsed_in = session
         .record_frame_ingress(&overlay, &frame.bytes)
         .expect("ingress parsed");
     assert_eq!(6, parsed_in.payload.len());
-
     let parsed_out = session
         .record_frame_egress(&overlay, &frame.bytes)
         .expect("egress parsed");
     assert_eq!(6, parsed_out.payload.len());
-
     let snapshot = metrics.snapshot();
     assert_eq!(1, snapshot.vpn_sessions);
     assert_eq!(6, snapshot.vpn_ingress_bytes);
@@ -143,7 +131,6 @@ fn session_records_frame_ingress_and_egress() {
     assert_eq!(1, snapshot.vpn_ingress_frames);
     assert_eq!(1, snapshot.vpn_egress_frames);
 }
-
 #[test]
 fn session_rejects_replayed_ingress_sequence() {
     let metrics = Arc::new(Metrics::new());
@@ -171,7 +158,6 @@ fn session_rejects_replayed_ingress_sequence() {
     }
     .into_padded_frame()
     .expect("frame");
-
     session
         .record_frame_ingress(&overlay, &frame.bytes)
         .expect("first frame is accepted");
@@ -186,7 +172,6 @@ fn session_rejects_replayed_ingress_sequence() {
         }
     ));
 }
-
 #[test]
 fn overlay_rejects_padding_budget_mismatch() {
     let overlay = overlay();
@@ -207,13 +192,11 @@ fn overlay_rejects_padding_budget_mismatch() {
     .into_padded_frame()
     .expect("frame");
     frame.bytes[frame.bytes.len() - 1] = 0;
-
     let err = overlay
         .parse_frame(&frame.bytes)
         .expect_err("padding budget should be validated");
     assert!(matches!(err, VpnCellError::PaddingBudgetMismatch { .. }));
 }
-
 #[test]
 fn overlay_rejects_cover_flag_mismatch() {
     let overlay = overlay();
@@ -244,7 +227,6 @@ fn overlay_rejects_cover_flag_mismatch() {
         }
     ));
 }
-
 #[test]
 fn overlay_rejects_cover_cell_without_cover_flag() {
     let overlay = overlay();
@@ -262,7 +244,6 @@ fn overlay_rejects_cover_cell_without_cover_flag() {
         },
         payload: vec![0xAB; 4],
     };
-
     let err = overlay
         .pad_cell(cell)
         .expect_err("cover flag should be required");
@@ -274,7 +255,6 @@ fn overlay_rejects_cover_cell_without_cover_flag() {
         })
     ));
 }
-
 #[test]
 fn overlay_rejects_cover_frame_with_unknown_flags() {
     let overlay = overlay();
@@ -285,7 +265,6 @@ fn overlay_rejects_cover_frame_with_unknown_flags() {
         flags: VpnCellFlagsV1::from_bits(0x80),
         start_sequence: 0,
     };
-
     let err = overlay
         .cover_frame(&meta, 1)
         .expect_err("invalid flags should be rejected");
@@ -294,7 +273,6 @@ fn overlay_rejects_cover_frame_with_unknown_flags() {
         VpnFrameBuildError::Cell(VpnCellError::InvalidFlags { bits, .. }) if bits & 0x80 != 0
     ));
 }
-
 #[test]
 fn overlay_read_write_round_trip() {
     let overlay = overlay();
@@ -322,7 +300,6 @@ fn overlay_read_write_round_trip() {
         assert_eq!(padding_budget_ms, parsed.header.padding_budget_ms);
     });
 }
-
 #[test]
 fn overlay_rejects_truncated_stream_frames() {
     let overlay = overlay();

@@ -5,6 +5,9 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.security.KeyPairGenerator
+import java.security.Signature
+import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -15,6 +18,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.assertFailsWith
+import org.hyperledger.iroha.sdk.client.CanonicalRequestSigner
+import org.hyperledger.iroha.sdk.client.LocalSigningContext
+import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
+import org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy
 import org.hyperledger.iroha.sdk.norito.CRC64
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
@@ -1634,6 +1641,21 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun toriiLifecycleRoutesAndHeadersAreExact() {
+        val networkId = org.hyperledger.iroha.sdk.core.model.NetworkId.parse(
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+        )
+        val otherNetworkId = org.hyperledger.iroha.sdk.core.model.NetworkId.parse(
+            "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val timestampMs = 1_700_000_000_500L
+        val nonce = "offline-lineage-1"
+        val canonicalAuth = ToriiCanonicalRequestAuth(
+            "alice",
+            keyPair.private,
+            timestampMs,
+            nonce,
+        )
         val captured = AtomicReference<TransportRequest>()
         val client = KagemushaRecursiveSpendProver.newToriiClient(
             URI.create("https://torii.example/api/"),
@@ -1672,6 +1694,7 @@ class KagemushaRecursiveSpendProverTest {
                     )
                 }
             },
+            LocalSigningContext(networkId),
         )
 
         val status = client.getOfflineCapability().join()
@@ -1694,13 +1717,48 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertEquals(listOf("application/json"), captured.get().headers["Accept"])
 
-        client.getRecipientRegistrationLineage(
-            KagemushaRecursiveSpendProver.RecipientLineageQueryV2(
-                archive("iroha_torii_shared::offline_api::OfflineRecipientLineageRequest"),
-            ),
-        ).join()
-        assertEquals("/api/v1/offline/receiver-lineage", captured.get().uri.path)
-        assertEquals(listOf("application/x-norito"), captured.get().headers["Content-Type"])
+        val lineageQuery = KagemushaRecursiveSpendProver.RecipientLineageQueryV2(
+            archive("iroha_torii_shared::offline_api::OfflineRecipientLineageRequest"),
+        )
+        client.getRecipientRegistrationLineage(lineageQuery, canonicalAuth).join()
+        val lineageRequest = captured.get()
+        assertEquals("/api/v1/offline/receiver-lineage", lineageRequest.uri.path)
+        assertEquals(listOf("application/x-norito"), lineageRequest.headers["Content-Type"])
+        assertEquals(listOf("alice"), lineageRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT])
+        assertEquals(
+            listOf(timestampMs.toString()),
+            lineageRequest.headers[CanonicalRequestSigner.HEADER_TIMESTAMP_MS],
+        )
+        assertEquals(listOf(nonce), lineageRequest.headers[CanonicalRequestSigner.HEADER_NONCE])
+        assertEquals(RequestReplayPolicy.ONE_SHOT, lineageRequest.replayPolicy)
+        val signature = Base64.getDecoder().decode(
+            lineageRequest.headers.getValue(CanonicalRequestSigner.HEADER_SIGNATURE).single(),
+        )
+        fun verifiesOn(
+            candidate: org.hyperledger.iroha.sdk.core.model.NetworkId = networkId,
+            method: String = lineageRequest.method,
+            uri: URI = lineageRequest.uri,
+            body: ByteArray = lineageRequest.body,
+        ): Boolean {
+            val verifier = Signature.getInstance("Ed25519")
+            verifier.initVerify(keyPair.public)
+            verifier.update(
+                CanonicalRequestSigner.canonicalRequestSignatureMessage(
+                    candidate,
+                    method,
+                    uri,
+                    body,
+                    timestampMs,
+                    nonce,
+                ),
+            )
+            return verifier.verify(signature)
+        }
+        assertTrue(verifiesOn())
+        assertFalse(verifiesOn(candidate = otherNetworkId))
+        assertFalse(verifiesOn(method = "GET"))
+        assertFalse(verifiesOn(uri = URI.create("https://torii.example/api/v1/offline/readiness")))
+        assertFalse(verifiesOn(body = lineageRequest.body + byteArrayOf(0)))
 
         val operationId = "11".repeat(32)
         client.submitTopUp(

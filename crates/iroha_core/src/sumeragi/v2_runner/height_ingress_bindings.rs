@@ -6,7 +6,6 @@ struct HeightIngressBindings {
     certified_serve: CertifiedServeIngressBinding,
     leader_wire: LeaderWireIngressBinding,
 }
-
 impl HeightIngressBindings {
     fn new(
         certified_serve: CertifiedServeIngressBinding,
@@ -17,7 +16,6 @@ impl HeightIngressBindings {
             leader_wire,
         }
     }
-
     fn retire(&mut self) -> Result<(), V2RunnerError> {
         match (
             self.certified_serve.gate.as_ref(),
@@ -42,7 +40,6 @@ impl HeightIngressBindings {
                 "per-height ingress gates changed their shared queue".to_owned(),
             ));
         }
-
         close_ingress_for_rollover(
             &self.certified_serve.ingress_ready,
             &self.certified_serve.block_ingress,
@@ -65,7 +62,6 @@ impl HeightIngressBindings {
         Ok(())
     }
 }
-
 impl Drop for HeightIngressBindings {
     fn drop(&mut self) {
         if let Err(error) = self.retire() {
@@ -86,11 +82,9 @@ impl Drop for HeightIngressBindings {
         }
     }
 }
-
 struct V2StatusClearGuard {
     clear_on_drop: bool,
 }
-
 impl V2StatusClearGuard {
     fn new() -> Self {
         super::status::clear_v2_status();
@@ -98,12 +92,10 @@ impl V2StatusClearGuard {
             clear_on_drop: false,
         }
     }
-
     fn clear_on_drop(&mut self) {
         self.clear_on_drop = true;
     }
 }
-
 impl Drop for V2StatusClearGuard {
     fn drop(&mut self) {
         if self.clear_on_drop {
@@ -111,12 +103,10 @@ impl Drop for V2StatusClearGuard {
         }
     }
 }
-
 fn close_ingress_for_rollover(ingress_ready: &AtomicBool, block_ingress: &FairV2Ingress) {
     ingress_ready.store(false, Ordering::Release);
     block_ingress.close();
 }
-
 fn open_ingress_for_active_height(
     output_guard: &ConsensusOutputGuard,
     ingress_ready: &AtomicBool,
@@ -144,7 +134,6 @@ fn open_ingress_for_active_height(
     ingress_activation.complete();
     Ok(())
 }
-
 fn ingress_capacity_error(error: FairV2IngressCapacityError) -> V2RunnerError {
     if error.is_bytes() {
         V2RunnerError::IngressByteCapacity {
@@ -158,19 +147,16 @@ fn ingress_capacity_error(error: FairV2IngressCapacityError) -> V2RunnerError {
         }
     }
 }
-
 fn validate_deadline_duration(duration: Duration) -> Result<(), V2RunnerError> {
     Instant::now()
         .checked_add(duration)
         .ok_or(V2RunnerError::InvalidLimits)?;
     Ok(())
 }
-
 fn deadline_after(now: Instant, duration: Duration) -> Instant {
     now.checked_add(duration)
         .expect("consensus deadline duration was prevalidated before height startup")
 }
-
 fn initial_block_sync_deadline(
     height_started_at: Instant,
     round_timeout: Duration,
@@ -182,14 +168,12 @@ fn initial_block_sync_deadline(
         deadline_after(height_started_at, round_timeout)
     }
 }
-
 const fn retain_eager_block_sync(
     recovering_interrupted_tip: bool,
     admitted_discovered_commit_qc: bool,
 ) -> bool {
     recovering_interrupted_tip || admitted_discovered_commit_qc
 }
-
 fn snapshot_successor_logical_time(
     anchor: &wire::SnapshotBootstrapAnchor,
     block_cadence: Duration,
@@ -205,7 +189,6 @@ fn snapshot_successor_logical_time(
         .ok_or(V2RunnerError::V2BlockTimeOverflow)?;
     Ok(Duration::from_millis(successor_ms))
 }
-
 fn canonical_executed_block_recovery_batches(
     needs: &[CanonicalExecutedBlockNeedV1],
     capacity: usize,

@@ -1,15 +1,11 @@
 //! CLI helper for generating the canonical `SoraFS` gateway fixture bundle.
-
 use std::{env, path::PathBuf};
-
 use eyre::WrapErr;
 use integration_tests::sorafs_gateway_conformance::{default_fixture_dir, write_fixture_bundle};
-
 fn main() -> eyre::Result<()> {
     let output_dir = parse_output_dir()?;
     let metadata =
         write_fixture_bundle(&output_dir).wrap_err("failed to generate SoraFS gateway fixtures")?;
-
     println!(
         "wrote SoraFS gateway fixtures {} to {}",
         metadata.version,
@@ -23,14 +19,11 @@ fn main() -> eyre::Result<()> {
         metadata.car_blake3_hex
     );
     println!("  released_at_unix={}", metadata.released_at_unix);
-
     Ok(())
 }
-
 fn parse_output_dir() -> eyre::Result<PathBuf> {
     let mut args = env::args().skip(1);
     let mut output: Option<PathBuf> = None;
-
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--out" => {
@@ -54,6 +47,5 @@ fn parse_output_dir() -> eyre::Result<PathBuf> {
             }
         }
     }
-
     Ok(output.unwrap_or_else(default_fixture_dir))
 }

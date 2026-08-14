@@ -3,16 +3,13 @@
 //! Builds a transaction with many `SetKeyValue` instructions and sets
 #![allow(clippy::cast_possible_truncation)]
 //! `overlay_chunk_instructions` to a tiny value to force many chunks.
-
 use std::{borrow::Cow, sync::Arc};
-
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
-
 #[test]
 fn overlay_apply_respects_chunking_and_preserves_effects() {
     // Build world with one domain/account
@@ -39,13 +36,11 @@ fn overlay_apply_respects_chunking_and_preserves_effects() {
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
-
     // Configure tiny chunk size (e.g., 2 instructions per chunk)
     let mut cfg = state.view().pipeline().clone();
     cfg.overlay_chunk_instructions = 2;
     state.set_pipeline(cfg);
     eprintln!("configured pipeline chunk=2");
-
     // Build one transaction with many SetKeyValue instructions on the same account
     let n_instr = 50usize;
     let mut instrs: Vec<InstructionBox> = Vec::with_capacity(n_instr);
@@ -67,7 +62,6 @@ fn overlay_apply_respects_chunking_and_preserves_effects() {
     )
     .with_executable(Executable::from_iter(instrs))
     .sign(kp.private_key());
-
     // Build and apply a block with this transaction
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let new_block = BlockBuilder::new(vec![accepted])
@@ -79,7 +73,6 @@ fn overlay_apply_respects_chunking_and_preserves_effects() {
     let cb = vb.commit_unchecked().unpack(|_| {});
     let _events = sb.apply_without_execution(&cb, Vec::new());
     let _ = sb.commit();
-
     // Verify all metadata keys were set on the account
     let view = state.view();
     let acc = view

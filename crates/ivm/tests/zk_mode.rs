@@ -1,7 +1,6 @@
 use ivm::{IVM, VMError, encoding, zk::MAX_CYCLES};
 mod common;
 use common::{assemble, assemble_zk};
-
 #[test]
 fn test_zk_mode_padding_and_assert() {
     // Program that triggers an assertion failure via the ZK ASSERT instruction.
@@ -10,7 +9,6 @@ fn test_zk_mode_padding_and_assert() {
     let mut assert_prog = Vec::with_capacity(8);
     assert_prog.extend_from_slice(&assert_instr.to_le_bytes());
     assert_prog.extend_from_slice(&halt);
-
     // Case 1: Normal mode (zk_mode = false) -> ZK op is rejected immediately.
     let mut vm = IVM::new(u64::MAX);
     vm.set_register(1, 1);
@@ -23,7 +21,6 @@ fn test_zk_mode_padding_and_assert() {
     );
     // Execution is rejected before the instruction is applied.
     assert_eq!(vm.get_cycle_count(), 0);
-
     // Case 2: ZK mode (zk_mode = true) -> should pad to MAX_CYCLES and then error
     let mut vm2 = IVM::new(u64::MAX);
     vm2.set_register(1, 1);
@@ -36,7 +33,6 @@ fn test_zk_mode_padding_and_assert() {
     );
     // Execution should be padded to MAX_CYCLES cycles
     assert_eq!(vm2.get_cycle_count(), MAX_CYCLES);
-
     // Case 3: ZK mode with no assertion (normal halt) -> should still pad cycles and return Ok
     let mut vm3 = IVM::new(u64::MAX);
     let halt_prog: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
@@ -50,7 +46,6 @@ fn test_zk_mode_padding_and_assert() {
         "Cycles should be padded to MAX_CYCLES on normal halt in ZK mode"
     );
 }
-
 #[test]
 fn test_exceed_max_cycles_error() {
     // Infinite loop using JMP with zero offset
@@ -66,7 +61,6 @@ fn test_exceed_max_cycles_error() {
     assert!(matches!(res, Err(VMError::ExceededMaxCycles)));
     assert_eq!(vm.get_cycle_count(), 10);
 }
-
 #[test]
 fn test_assert_continues_execution_in_zk_mode() {
     // Program: ASSERT r1; ADDI r2,r2,1; HALT
@@ -77,7 +71,6 @@ fn test_assert_continues_execution_in_zk_mode() {
     bytes.extend_from_slice(&assert_inst.to_le_bytes());
     bytes.extend_from_slice(&addi_inst.to_le_bytes());
     bytes.extend_from_slice(&halt_inst.to_le_bytes());
-
     // Normal mode: ZK ASSERT is rejected, so ADDI does not execute.
     let mut vm = IVM::new(u64::MAX);
     vm.set_register(1, 1);
@@ -91,7 +84,6 @@ fn test_assert_continues_execution_in_zk_mode() {
         0,
         "addi executed unexpectedly when ZK mode bit is unset"
     );
-
     // ZK mode: execution continues so ADDI runs
     let mut vm2 = IVM::new(u64::MAX);
     vm2.set_register(1, 1);
@@ -103,7 +95,6 @@ fn test_assert_continues_execution_in_zk_mode() {
     assert_eq!(vm2.register(2), 1, "addi should execute in zk mode");
     assert_eq!(vm2.get_cycle_count(), 10);
 }
-
 #[test]
 fn test_zero_max_cycles_means_no_padding() {
     // Program header sets max_cycles=0 which disables ZK padding.
@@ -116,7 +107,6 @@ fn test_zero_max_cycles_means_no_padding() {
     // Without a cycle limit there should be no padding.
     assert_eq!(vm.get_cycle_count(), 1);
 }
-
 #[test]
 fn test_program_exceeding_old_cycle_limit() {
     // Loop for >65k cycles but <MAX_CYCLES to confirm higher limit works.

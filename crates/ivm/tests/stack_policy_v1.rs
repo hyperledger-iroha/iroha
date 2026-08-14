@@ -1,12 +1,8 @@
 //! Regression coverage for the immutable IVM ABI V1 guest-stack policy.
-
 use ivm::{IVM, IvmStackPolicy, Memory, VMError, encoding, instruction, runtime::IvmConfig};
-
 mod common;
 use common::assemble;
-
 const GAS_LIMIT: u64 = 100_000;
-
 fn assemble_words(words: &[u32]) -> Vec<u8> {
     let mut code = Vec::with_capacity(words.len() * 4);
     for word in words {
@@ -14,13 +10,11 @@ fn assemble_words(words: &[u32]) -> Vec<u8> {
     }
     assemble(&code)
 }
-
 fn observe_stack_top(mut vm: IVM, program: &[u8]) -> u64 {
     vm.load_program(program).expect("stack probe must load");
     vm.run().expect("stack probe must run");
     vm.register(1)
 }
-
 #[test]
 fn policy_vectors_enforce_v1_floor_alignment_and_ceiling() {
     let policy = IvmStackPolicy::V1;
@@ -28,7 +22,6 @@ fn policy_vectors_enforce_v1_floor_alignment_and_ceiling() {
     assert_eq!(policy.maximum_stack_bytes(), 4 * 1024 * 1024);
     assert_eq!(policy.bytes_per_gas(), 4);
     assert_eq!(policy.stack_alignment_bytes(), 16);
-
     assert_eq!(policy.stack_limit_for_gas(0), policy.minimum_stack_bytes());
     assert_eq!(policy.stack_limit_for_gas(GAS_LIMIT), 400_000);
     assert_eq!(policy.stack_limit_for_gas(GAS_LIMIT + 1), 400_000);
@@ -37,7 +30,6 @@ fn policy_vectors_enforce_v1_floor_alignment_and_ceiling() {
         policy.maximum_stack_bytes()
     );
 }
-
 #[test]
 fn every_public_vm_constructor_exposes_the_same_v1_stack_top() {
     let program = assemble_words(&[
@@ -45,7 +37,6 @@ fn every_public_vm_constructor_exposes_the_same_v1_stack_top() {
         encoding::wide::encode_halt(),
     ]);
     let expected = Memory::STACK_START + IvmStackPolicy::V1.stack_limit_for_gas(GAS_LIMIT);
-
     let observed = [
         observe_stack_top(IVM::new(GAS_LIMIT), &program),
         observe_stack_top(
@@ -61,10 +52,8 @@ fn every_public_vm_constructor_exposes_the_same_v1_stack_top() {
             &program,
         ),
     ];
-
     assert_eq!(observed, [expected; 4]);
 }
-
 #[test]
 fn guest_stack_top_is_an_exclusive_memory_boundary() {
     let inside = assemble_words(&[
@@ -77,7 +66,6 @@ fn guest_stack_top_is_an_exclusive_memory_boundary() {
     inside_vm
         .run()
         .expect("the final aligned word below r31 must be writable");
-
     let outside = assemble_words(&[
         encoding::wide::encode_store(instruction::wide::memory::STORE64, 31, 1, 0),
         encoding::wide::encode_halt(),
@@ -92,7 +80,6 @@ fn guest_stack_top_is_an_exclusive_memory_boundary() {
         Err(VMError::MemoryAccessViolation { .. })
     ));
 }
-
 #[test]
 fn production_ivm_sources_have_no_mutable_guest_stack_policy() {
     const IVM_SOURCE: &str = include_str!("../src/ivm.rs");
@@ -114,19 +101,16 @@ fn production_ivm_sources_have_no_mutable_guest_stack_policy() {
         "with_stack_budget_bytes",
         "with_stack_limit_bytes",
     ];
-
     for needle in forbidden {
         assert!(
             sources.iter().all(|source| !source.contains(needle)),
             "production IVM source contains retired guest-stack control `{needle}`"
         );
     }
-
     assert!(
         IVM_SOURCE.contains("Memory::new_with_stack_limit(0, config.stack_limit_for_gas())"),
         "the production VM constructor must derive memory geometry from IvmConfig"
     );
-
     let node_configuration_sources = [
         include_str!("../../iroha_config/src/parameters/actual.rs"),
         include_str!("../../iroha_config/src/parameters/defaults.rs"),

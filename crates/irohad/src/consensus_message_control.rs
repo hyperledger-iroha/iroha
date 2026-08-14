@@ -4,12 +4,10 @@
 //! It never changes transport authentication or wire encryption: rules are
 //! evaluated after the P2P layer has authenticated the remote peer and before
 //! the message enters ordinary relay accounting.
-
 #[cfg(not(unix))]
 compile_error!(
     "the test-network message controller requires Unix openat/no-follow and ownership semantics"
 );
-
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     env,
@@ -21,7 +19,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-
 use iroha_core::NetworkMessage;
 use iroha_crypto::Hash;
 use iroha_crypto::HashOf;
@@ -40,10 +37,8 @@ use norito::{
     codec::Encode,
     json::{Map, Value},
 };
-
 /// Environment variable consumed only by the feature-isolated test daemon.
 pub(crate) const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
-
 const CONTROL_FILE: &str = "command.norito.json";
 const ACK_FILE: &str = "ack.norito.json";
 const FORMAT_VERSION: u64 = 4;
@@ -57,13 +52,11 @@ const MAX_SENDER_BYTES: usize = 256;
 const MAX_KIND_BYTES: usize = 64;
 const MAX_HASH_BYTES: usize = 128;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
     Drop,
     Hold,
 }
-
 impl Action {
     fn parse(value: &Value) -> Result<Self, ControlError> {
         match value.as_str() {
@@ -72,7 +65,6 @@ impl Action {
             _ => Err(ControlError::InvalidField("action")),
         }
     }
-
     const fn as_str(self) -> &'static str {
         match self {
             Self::Drop => "drop",
@@ -80,7 +72,6 @@ impl Action {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MessageKind {
     Proposal,
@@ -99,7 +90,6 @@ enum MessageKind {
     VrfCommit,
     VrfReveal,
 }
-
 impl MessageKind {
     fn parse(value: &Value) -> Result<Self, ControlError> {
         let Some(value) = value.as_str() else {
@@ -127,7 +117,6 @@ impl MessageKind {
             _ => Err(ControlError::InvalidField("kind")),
         }
     }
-
     const fn as_str(self) -> &'static str {
         match self {
             Self::Proposal => "proposal",
@@ -148,7 +137,6 @@ impl MessageKind {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MessageMeta {
     sender: PeerId,
@@ -164,7 +152,6 @@ struct MessageMeta {
     certificate_signers: Vec<ValidatorIndex>,
     envelope_digest: Hash,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Rule {
     sender: PeerId,
@@ -175,7 +162,6 @@ struct Rule {
     block_hash: Option<HashOf<BlockHeader>>,
     action: Action,
 }
-
 impl Rule {
     fn matches(&self, meta: &MessageMeta) -> bool {
         self.sender == meta.sender
@@ -189,7 +175,6 @@ impl Rule {
                 .is_none_or(|expected| meta.block_hash.as_ref() == Some(expected))
     }
 }
-
 #[derive(Debug)]
 struct Command {
     revision: u64,
@@ -198,14 +183,12 @@ struct Command {
     release: Vec<u64>,
     drain: bool,
 }
-
 #[derive(Clone, Debug)]
 struct HeldDescriptor {
     sequence: u64,
     meta: MessageMeta,
     size_bytes: usize,
 }
-
 pub(crate) struct HeldMessage<R = NetworkReplyRoute, O = ()> {
     pub(crate) sequence: u64,
     pub(crate) peer: Peer,
@@ -216,7 +199,6 @@ pub(crate) struct HeldMessage<R = NetworkReplyRoute, O = ()> {
     /// Exact local-only ownership retained with the controlled occurrence.
     pub(crate) ownership: Option<O>,
 }
-
 struct HeldEntry<R, O> {
     descriptor: HeldDescriptor,
     peer: Peer,
@@ -225,7 +207,6 @@ struct HeldEntry<R, O> {
     reply_route: Option<R>,
     ownership: Option<O>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Admission {
     Pass,
@@ -233,7 +214,6 @@ pub(crate) enum Admission {
     Held,
     Consumed,
 }
-
 /// Terminal disposition of one exact controlled release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReleaseOutcome {
@@ -244,7 +224,6 @@ pub(crate) enum ReleaseOutcome {
     /// The release could not reach a successful terminal state.
     Failed,
 }
-
 struct State<R = NetworkReplyRoute, O = ()> {
     revision: u64,
     command_digest: Option<Hash>,
@@ -267,7 +246,6 @@ struct State<R = NetworkReplyRoute, O = ()> {
     drain_next_rules: Option<Vec<Rule>>,
     drain_fence: Option<u64>,
 }
-
 impl<R, O> Default for State<R, O> {
     fn default() -> Self {
         Self {
@@ -294,7 +272,6 @@ impl<R, O> Default for State<R, O> {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RootIdentity {
     #[cfg(unix)]
@@ -302,7 +279,6 @@ struct RootIdentity {
     #[cfg(unix)]
     inode: u64,
 }
-
 /// Feature-only controller shared by relay workers and its file watcher.
 pub(crate) struct Controller<R = NetworkReplyRoute, O = ()> {
     root: PathBuf,
@@ -310,7 +286,6 @@ pub(crate) struct Controller<R = NetworkReplyRoute, O = ()> {
     state: Mutex<State<R, O>>,
     ack_publish: Mutex<()>,
 }
-
 impl<O> Controller<NetworkReplyRoute, O> {
     /// Open and pin the explicitly configured private control directory.
     pub(crate) fn from_env() -> Result<Option<Self>, ControlError> {
@@ -349,13 +324,11 @@ impl<O> Controller<NetworkReplyRoute, O> {
         Ok(Some(controller))
     }
 }
-
 impl<R, O> Controller<R, O> {
     /// Construct an isolated controller for daemon boundary tests.
     #[cfg(test)]
     pub(crate) fn for_tests() -> (tempfile::TempDir, Self) {
         use std::os::unix::fs::PermissionsExt;
-
         let parent = tempfile::tempdir().expect("temporary parent");
         let root = parent.path().join("control");
         fs::create_dir(&root).expect("create control root");
@@ -369,14 +342,12 @@ impl<R, O> Controller<R, O> {
         };
         (parent, controller)
     }
-
     /// Hold and FIFO-release every subsequently admitted message in tests.
     #[cfg(test)]
     pub(crate) fn drain_subsequent_messages_for_tests(&self) {
         let mut state = self.state.lock().expect("message control state poisoned");
         state.drain_next_rules = Some(Vec::new());
     }
-
     fn validate_root(&self) -> Result<(), ControlError> {
         let metadata = fs::symlink_metadata(&self.root).map_err(ControlError::Io)?;
         validate_private_root(&metadata)?;
@@ -385,7 +356,6 @@ impl<R, O> Controller<R, O> {
         }
         Ok(())
     }
-
     /// Read and atomically apply one newer canonical command, if present.
     pub(crate) fn poll_command(&self) -> Result<(), ControlError> {
         self.validate_root()?;
@@ -408,7 +378,6 @@ impl<R, O> Controller<R, O> {
                 return Ok(());
             }
         }
-
         let parsed = parse_command(&bytes);
         let mut state = self.state.lock().expect("message control state poisoned");
         state.last_seen_digest = Some(digest);
@@ -422,7 +391,6 @@ impl<R, O> Controller<R, O> {
         drop(state);
         self.publish_ack()
     }
-
     /// Apply the current receiver-local rule to an authenticated inbound message.
     pub(crate) fn admit(
         &self,
@@ -442,7 +410,6 @@ impl<R, O> Controller<R, O> {
                 )
             })
     }
-
     /// Apply one rule while retaining an exact local-only reply authority.
     pub(crate) fn admit_with_reply_route(
         &self,
@@ -470,7 +437,6 @@ impl<R, O> Controller<R, O> {
             )
         })
     }
-
     /// Apply one rule while atomically retaining reply authority and ownership.
     ///
     /// `ownership` is an opaque process-local token. A held occurrence stores it
@@ -585,7 +551,6 @@ impl<R, O> Controller<R, O> {
         self.publish_ack()?;
         Ok((Admission::Held, None))
     }
-
     /// Take the next prevalidated release entry in exact ingress order.
     pub(crate) fn next_release(&self) -> Result<Option<HeldMessage<R, O>>, ControlError> {
         let mut state = self.state.lock().expect("message control state poisoned");
@@ -617,7 +582,6 @@ impl<R, O> Controller<R, O> {
             ownership: entry.ownership,
         }))
     }
-
     /// Record exact completion of one release. Failure permanently closes the controller.
     pub(crate) fn complete_release(
         &self,
@@ -656,7 +620,6 @@ impl<R, O> Controller<R, O> {
             Err(ControlError::DownstreamDeliveryFailed)
         }
     }
-
     fn publish_ack(&self) -> Result<(), ControlError> {
         let _publish = self
             .ack_publish
@@ -674,7 +637,6 @@ impl<R, O> Controller<R, O> {
         self.validate_root()
     }
 }
-
 fn hold_capacity_available<R, O>(state: &State<R, O>, incoming_bytes: usize) -> bool {
     state
         .held
@@ -687,13 +649,11 @@ fn hold_capacity_available<R, O>(state: &State<R, O>, incoming_bytes: usize) -> 
             .and_then(|bytes| bytes.checked_add(incoming_bytes))
             .is_some_and(|bytes| bytes <= MAX_HELD_BYTES)
 }
-
 fn fail_hold_overflow<R, O>(state: &mut State<R, O>) {
     state.overflowed = state.overflowed.saturating_add(1);
     state.fatal = true;
     state.last_error = Some("hold_queue_overflow".to_owned());
 }
-
 fn apply_command<R, O>(
     state: &mut State<R, O>,
     command: Command,
@@ -720,7 +680,6 @@ fn apply_command<R, O>(
         return Err(ControlError::DrainWithExplicitRelease);
     }
     validate_release_sequences(&command.release, state.held.keys().copied())?;
-
     state.revision = command.revision;
     state.command_digest = Some(digest);
     state.queue_capacity = command.queue_capacity;
@@ -738,7 +697,6 @@ fn apply_command<R, O>(
     }
     Ok(())
 }
-
 /// Activate post-drain rules at the same linearization point that observes all
 /// retained and in-flight messages successfully delivered or retired.
 fn finish_drain_if_empty<R, O>(state: &mut State<R, O>) {
@@ -750,7 +708,6 @@ fn finish_drain_if_empty<R, O>(state: &mut State<R, O>) {
         state.rules = next_rules;
     }
 }
-
 fn validate_release_sequences(
     release: &[u64],
     held: impl IntoIterator<Item = u64>,
@@ -768,7 +725,6 @@ fn validate_release_sequences(
     }
     Ok(())
 }
-
 fn parse_command(bytes: &[u8]) -> Result<Command, ControlError> {
     if bytes.len() > MAX_COMMAND_BYTES {
         return Err(ControlError::CommandTooLarge);
@@ -852,7 +808,6 @@ fn parse_command(bytes: &[u8]) -> Result<Command, ControlError> {
         drain,
     })
 }
-
 fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
     let object = exact_object(
         value,
@@ -945,7 +900,6 @@ fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
         )?,
     })
 }
-
 fn exact_object<'a>(value: &'a Value, fields: &[&str]) -> Result<&'a Map, ControlError> {
     let object = value.as_object().ok_or(ControlError::ExpectedObject)?;
     if object.len() != fields.len() || fields.iter().any(|field| !object.contains_key(*field)) {
@@ -953,20 +907,17 @@ fn exact_object<'a>(value: &'a Value, fields: &[&str]) -> Result<&'a Map, Contro
     }
     Ok(object)
 }
-
 fn required_u64(object: &Map, field: &'static str) -> Result<u64, ControlError> {
     object
         .get(field)
         .and_then(Value::as_u64)
         .ok_or(ControlError::InvalidField(field))
 }
-
 fn canonical_json(value: &Value) -> Result<Vec<u8>, ControlError> {
     norito::json::to_json(value)
         .map(String::into_bytes)
         .map_err(|_| ControlError::JsonEncode)
 }
-
 fn ack_value<R, O>(state: &State<R, O>) -> Result<Value, ControlError> {
     let held = state
         .held
@@ -1042,7 +993,6 @@ fn ack_value<R, O>(state: &State<R, O>) -> Result<Value, ControlError> {
         ("version", Value::from(FORMAT_VERSION)),
     ]))
 }
-
 fn descriptor_value(descriptor: &HeldDescriptor) -> Result<Value, ControlError> {
     let subject = descriptor
         .meta
@@ -1118,7 +1068,6 @@ fn descriptor_value(descriptor: &HeldDescriptor) -> Result<Value, ControlError> 
         ),
     ]))
 }
-
 fn rule_value(rule: &Rule) -> Value {
     object_value([
         ("action", Value::from(rule.action.as_str())),
@@ -1138,7 +1087,6 @@ fn rule_value(rule: &Rule) -> Value {
         ("view", Value::from(rule.view)),
     ])
 }
-
 fn object_value<const N: usize>(entries: [(&str, Value); N]) -> Value {
     let mut object = Map::new();
     for (key, value) in entries {
@@ -1146,7 +1094,6 @@ fn object_value<const N: usize>(entries: [(&str, Value); N]) -> Value {
     }
     Value::Object(object)
 }
-
 fn message_meta(
     peer: &Peer,
     authenticated_via: &PeerId,
@@ -1316,7 +1263,6 @@ fn message_meta(
     validate_message_meta(&meta)?;
     Ok(Some(meta))
 }
-
 /// Validate the exact JSON descriptor contract before a controlled message can
 /// enter the hold queue.
 ///
@@ -1341,7 +1287,6 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
     {
         return Err(ControlError::InvalidMessageDescriptor);
     }
-
     let has_subject_and_execution = meta.subject.is_some() && meta.execution_commitment.is_some();
     let has_no_subject_or_execution = meta.subject.is_none() && meta.execution_commitment.is_none();
     let has_single_signer = meta.signer.is_some();
@@ -1415,11 +1360,9 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
         Err(ControlError::InvalidMessageDescriptor)
     }
 }
-
 fn read_stable_private_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, ControlError> {
     read_stable_private_file_after_open(path, max_bytes, || {})
 }
-
 fn read_stable_private_file_after_open(
     path: &Path,
     max_bytes: usize,
@@ -1488,7 +1431,6 @@ fn read_stable_private_file_after_open(
     validate_private_file(&opened_after)?;
     Ok(bytes)
 }
-
 fn write_atomic_private_file(root: &Path, name: &str, bytes: &[u8]) -> Result<(), ControlError> {
     let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let temp_name = format!(".{name}.{}.{}.tmp", std::process::id(), sequence);
@@ -1530,7 +1472,6 @@ fn write_atomic_private_file(root: &Path, name: &str, bytes: &[u8]) -> Result<()
     }
     result
 }
-
 fn validate_private_root(metadata: &fs::Metadata) -> Result<(), ControlError> {
     if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
         return Err(ControlError::UnsafeRoot);
@@ -1545,7 +1486,6 @@ fn validate_private_root(metadata: &fs::Metadata) -> Result<(), ControlError> {
     }
     Ok(())
 }
-
 fn validate_private_file(metadata: &fs::Metadata) -> Result<(), ControlError> {
     if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
         return Err(ControlError::UnsafeFile);
@@ -1562,7 +1502,6 @@ fn validate_private_file(metadata: &fs::Metadata) -> Result<(), ControlError> {
     }
     Ok(())
 }
-
 fn root_identity(metadata: &fs::Metadata) -> RootIdentity {
     #[cfg(unix)]
     {
@@ -1578,7 +1517,6 @@ fn root_identity(metadata: &fs::Metadata) -> RootIdentity {
         RootIdentity {}
     }
 }
-
 fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -1592,7 +1530,6 @@ fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
             && left.created().ok() == right.created().ok()
     }
 }
-
 #[derive(Debug)]
 pub(crate) enum ControlError {
     Io(std::io::Error),
@@ -1634,7 +1571,6 @@ pub(crate) enum ControlError {
     HoldQueueOverflow,
     InvalidMessageDescriptor,
 }
-
 impl ControlError {
     pub(crate) const fn code(&self) -> &'static str {
         match self {
@@ -1679,7 +1615,6 @@ impl ControlError {
         }
     }
 }
-
 impl std::fmt::Display for ControlError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1693,31 +1628,23 @@ impl std::fmt::Display for ControlError {
         }
     }
 }
-
 impl std::error::Error for ControlError {}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-
     use super::*;
     use iroha_core::sumeragi::message::{BlockMessage, BlockMessageWire};
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::block::consensus_v2::{
-        ConsensusMessageV2, PayloadChunk, PayloadManifest,
-    };
+    use iroha_data_model::block::consensus_v2::{ConsensusMessageV2, PayloadChunk, PayloadManifest};
     use tempfile::tempdir;
-
     fn peer(marker: u8) -> PeerId {
         let key = KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
             .expect("deterministic peer key");
         PeerId::new(key.public_key().clone())
     }
-
     fn hash(marker: u8) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::prehashed([marker; Hash::LENGTH]))
     }
-
     fn subject(marker: u8) -> BlockSubject {
         BlockSubject {
             parent_block_hash: Some(hash(marker.wrapping_add(1))),
@@ -1725,7 +1652,6 @@ mod tests {
             payload_hash: Hash::new([marker, 0xA5]),
         }
     }
-
     fn execution_commitment(marker: u8) -> ExecutionCommitment {
         ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new([marker, 1]),
@@ -1735,7 +1661,6 @@ mod tests {
             Hash::new([marker, 4]),
         )
     }
-
     fn valid_meta(kind: MessageKind) -> MessageMeta {
         let sender = peer(42);
         let subject = subject(7);
@@ -1822,7 +1747,6 @@ mod tests {
             envelope_digest: Hash::new([kind as u8, 0x5A]),
         }
     }
-
     fn transport_peer(marker: u8) -> Peer {
         let key = KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
             .expect("deterministic transport key");
@@ -1831,7 +1755,6 @@ mod tests {
             key.public_key().clone(),
         )
     }
-
     fn chunk_message(marker: u8) -> NetworkMessage {
         NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(BlockMessage::V2(
             ConsensusMessageV2::new(ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
@@ -1845,11 +1768,9 @@ mod tests {
             })),
         ))))
     }
-
     fn test_controller() -> (tempfile::TempDir, Controller) {
         Controller::for_tests()
     }
-
     fn rule(sender: PeerId, kind: MessageKind, height: u64, view: u64) -> Rule {
         Rule {
             authenticated_via: sender.clone(),
@@ -1861,7 +1782,6 @@ mod tests {
             action: Action::Hold,
         }
     }
-
     #[test]
     fn matcher_is_exact_across_every_rule_dimension() {
         let peer_a = peer(1);
@@ -1910,7 +1830,6 @@ mod tests {
             assert!(!rule.matches(&changed));
         }
     }
-
     #[test]
     fn descriptor_contract_accepts_every_v2_payload_shape() {
         for kind in [
@@ -1946,15 +1865,12 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn descriptor_contract_rejects_unparseable_adversarial_shapes() {
         let mut cases = Vec::new();
-
         let mut zero_height = valid_meta(MessageKind::PrepareVote);
         zero_height.height = Some(0);
         cases.push(zero_height);
-
         let mut invalid_commitment = valid_meta(MessageKind::PrepareVote);
         invalid_commitment
             .execution_commitment
@@ -1962,40 +1878,31 @@ mod tests {
             .expect("vote commitment")
             .topup_anchor_count = 1;
         cases.push(invalid_commitment);
-
         let mut mismatched_hash = valid_meta(MessageKind::PrepareVote);
         mismatched_hash.block_hash = Some(hash(99));
         cases.push(mismatched_hash);
-
         let mut duplicate_signers = valid_meta(MessageKind::PrepareCertificate);
         duplicate_signers.certificate_signers = vec![0, 1, 1];
         cases.push(duplicate_signers);
-
         let mut empty_certificate = valid_meta(MessageKind::PrepareCertificate);
         empty_certificate.certificate_signers.clear();
         cases.push(empty_certificate);
-
         let mut invented_chunk_round = valid_meta(MessageKind::PayloadChunk);
         invented_chunk_round.height = Some(9);
         invented_chunk_round.view = Some(2);
         cases.push(invented_chunk_round);
-
         let mut missing_vote_signer = valid_meta(MessageKind::PrepareVote);
         missing_vote_signer.signer = None;
         cases.push(missing_vote_signer);
-
         let mut missing_cited_responder = valid_meta(MessageKind::CertifiedBodyResponse);
         missing_cited_responder.cited_responder = None;
         cases.push(missing_cited_responder);
-
         let mut false_response_signer = valid_meta(MessageKind::CertifiedBodyResponse);
         false_response_signer.signer = Some(0);
         cases.push(false_response_signer);
-
         let mut spurious_cited_responder = valid_meta(MessageKind::PrepareVote);
         spurious_cited_responder.cited_responder = Some(0);
         cases.push(spurious_cited_responder);
-
         for meta in cases {
             assert!(matches!(
                 validate_message_meta(&meta),
@@ -2003,7 +1910,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn parser_rejects_malformed_oversized_and_noncanonical_commands() {
         assert!(matches!(
@@ -2030,7 +1936,6 @@ mod tests {
             Err(ControlError::NonCanonicalJson)
         ));
     }
-
     #[test]
     fn parser_rejects_zero_height_and_order_dependent_rule_overlap() {
         let mut wildcard = rule(peer(3), MessageKind::PrepareVote, 9, 1);
@@ -2091,7 +1996,6 @@ mod tests {
             Err(ControlError::NonCanonicalField("block_hash"))
         ));
     }
-
     #[test]
     fn stale_duplicate_reordered_and_unknown_releases_are_atomic() {
         let mut state = State::<NetworkReplyRoute>::default();
@@ -2118,7 +2022,6 @@ mod tests {
         assert_eq!(state.rules, original_rules);
         assert!(state.release_pending.is_empty());
     }
-
     #[test]
     fn hold_capacity_is_bounded_by_count_bytes_and_checked_arithmetic() {
         let mut state = State::<NetworkReplyRoute>::default();
@@ -2131,7 +2034,6 @@ mod tests {
         state.queue_capacity = 0;
         state.held_bytes = 0;
         assert!(!hold_capacity_available(&state, 0));
-
         state.queue_capacity = 1;
         state.in_flight = Some(1);
         state.in_flight_bytes = 4;
@@ -2152,7 +2054,6 @@ mod tests {
         assert_eq!(state.overflowed, 1);
         assert_eq!(state.last_error.as_deref(), Some("hold_queue_overflow"));
     }
-
     #[test]
     fn retired_release_finishes_drain_without_claiming_delivery() {
         let (_parent, controller) = test_controller();
@@ -2162,7 +2063,6 @@ mod tests {
         controller
             .admit(sender, &authenticated_via, chunk_message(1), 101)
             .expect("hold one drain occurrence");
-
         let released = controller
             .next_release()
             .expect("take release")
@@ -2184,7 +2084,6 @@ mod tests {
         assert_eq!(state.in_flight_bytes, 0);
         assert!(state.drain_next_rules.is_none());
     }
-
     #[test]
     fn failed_release_clears_in_flight_ownership_and_latches_fatal() {
         let (_parent, controller) = test_controller();
@@ -2198,7 +2097,6 @@ mod tests {
             .next_release()
             .expect("take release")
             .expect("held occurrence is releasable");
-
         assert!(matches!(
             controller.complete_release(released.sequence, ReleaseOutcome::Failed),
             Err(ControlError::DownstreamDeliveryFailed)
@@ -2211,7 +2109,6 @@ mod tests {
         assert_eq!(state.in_flight_bytes, 0);
         assert!(state.drain_next_rules.is_some());
     }
-
     #[test]
     fn fatal_controller_rejects_an_unchanged_command_poll() {
         let (_control_dir, controller) = test_controller();
@@ -2227,7 +2124,6 @@ mod tests {
         write_atomic_private_file(&controller.root, CONTROL_FILE, &bytes)
             .expect("install private command");
         controller.poll_command().expect("initial command poll");
-
         {
             let mut state = controller
                 .state
@@ -2236,19 +2132,16 @@ mod tests {
             state.fatal = true;
             state.last_error = Some("test_fatal".to_owned());
         }
-
         assert!(matches!(
             controller.poll_command(),
             Err(ControlError::ControllerFatal)
         ));
     }
-
     #[test]
     fn drain_fence_holds_racing_chunks_fifo_until_atomic_cutover() {
         let (_parent, controller) = test_controller();
         let sender = transport_peer(11);
         let authenticated_via = sender.id().clone();
-
         // Seed one retained pre-fence chunk. Compact chunks deliberately have
         // no fabricated height/view metadata.
         {
@@ -2274,7 +2167,6 @@ mod tests {
             state.drain_next_rules = None;
             state.release_pending.clear();
         }
-
         let next_rules = vec![Rule {
             sender: sender.id().clone(),
             authenticated_via: sender.id().clone(),
@@ -2302,7 +2194,6 @@ mod tests {
             assert!(state.drain_next_rules.is_some());
             assert!(state.rules.is_empty());
         }
-
         let first = controller
             .next_release()
             .expect("take first release")
@@ -2332,7 +2223,6 @@ mod tests {
         controller
             .complete_release(first.sequence, ReleaseOutcome::Delivered)
             .expect("complete first release");
-
         let mut released = vec![first.sequence];
         while let Some(message) = controller.next_release().expect("take drain release") {
             released.push(message.sequence);
@@ -2358,7 +2248,6 @@ mod tests {
             Admission::Pass
         );
     }
-
     #[test]
     fn controlled_v2_admission_preserves_distinct_relay_identity() {
         let (_parent, controller) = test_controller();
@@ -2384,7 +2273,6 @@ mod tests {
         assert_eq!(held.descriptor.meta.authenticated_via, authenticated_via);
         assert_eq!(held.authenticated_via, authenticated_via);
         drop(state);
-
         let released = controller
             .next_release()
             .expect("take relayed message release")
@@ -2396,11 +2284,9 @@ mod tests {
             .complete_release(released.sequence, ReleaseOutcome::Delivered)
             .expect("complete relayed message release");
     }
-
     #[test]
     fn direct_private_reader_rejects_symlink_and_hardlink_commands() {
         use std::os::unix::fs::{PermissionsExt, symlink};
-
         let directory = tempdir().expect("temporary directory");
         let source = directory.path().join("source");
         fs::write(&source, b"{}").expect("write source");
@@ -2418,11 +2304,9 @@ mod tests {
             Err(ControlError::UnsafeFile)
         ));
     }
-
     #[test]
     fn private_reader_treats_safe_atomic_replacement_as_retryable_identity_churn() {
         use std::os::unix::fs::PermissionsExt;
-
         let directory = tempdir().expect("temporary directory");
         let command = directory.path().join("command.json");
         let replacement = directory.path().join("replacement.json");
@@ -2432,7 +2316,6 @@ mod tests {
             .expect("chmod original command");
         fs::set_permissions(&replacement, fs::Permissions::from_mode(0o600))
             .expect("chmod replacement command");
-
         let error = read_stable_private_file_after_open(&command, MAX_COMMAND_BYTES, || {
             fs::rename(&replacement, &command).expect("atomically replace command");
         })

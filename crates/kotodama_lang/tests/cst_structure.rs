@@ -1,12 +1,9 @@
 //! Structural CST coverage for declarations, statements, and hostile recovery.
-
 use std::collections::HashMap;
-
 use kotodama_lang::{
     source::{FrontendBudget, SourceFile, SourceId},
     syntax::{GreenElement, GreenNode, SyntaxKind, lex, parse},
 };
-
 fn collect_kinds(node: &GreenNode, counts: &mut HashMap<SyntaxKind, usize>) {
     *counts.entry(node.kind).or_default() += 1;
     for child in &node.children {
@@ -15,7 +12,6 @@ fn collect_kinds(node: &GreenNode, counts: &mut HashMap<SyntaxKind, usize>) {
         }
     }
 }
-
 fn collect_nodes<'tree>(node: &'tree GreenNode, nodes: &mut Vec<&'tree GreenNode>) {
     nodes.push(node);
     for child in &node.children {
@@ -24,7 +20,6 @@ fn collect_nodes<'tree>(node: &'tree GreenNode, nodes: &mut Vec<&'tree GreenNode
         }
     }
 }
-
 #[test]
 fn valid_contract_has_declaration_and_statement_structure() {
     let text = r#"seiyaku Shape {
@@ -53,7 +48,6 @@ fn valid_contract_has_declaration_and_statement_structure() {
     let output = parse(&source, FrontendBudget::v1());
     assert!(output.is_ok(), "{:?}", output.diagnostics.diagnostics);
     assert_eq!(output.tree.text(&source), text);
-
     let mut counts = HashMap::new();
     collect_kinds(output.tree.root(), &mut counts);
     for required in [
@@ -86,7 +80,6 @@ fn valid_contract_has_declaration_and_statement_structure() {
     assert_eq!(counts.get(&SyntaxKind::FunctionItem), Some(&3));
     assert_eq!(counts.get(&SyntaxKind::ParamList), Some(&3));
 }
-
 #[test]
 fn local_test_declarations_and_attributes_are_structural_nodes() {
     let text = r#"module Tests {
@@ -98,7 +91,6 @@ fn local_test_declarations_and_attributes_are_structural_nodes() {
     let source = SourceFile::new(SourceId(12), "contract.test.ko", text);
     let output = parse(&source, FrontendBudget::v1());
     assert!(output.is_ok(), "{:?}", output.diagnostics.diagnostics);
-
     let mut counts = HashMap::new();
     collect_kinds(output.tree.root(), &mut counts);
     assert_eq!(counts.get(&SyntaxKind::TestTargetItem), Some(&1));
@@ -106,7 +98,6 @@ fn local_test_declarations_and_attributes_are_structural_nodes() {
     assert_eq!(counts.get(&SyntaxKind::Attribute), Some(&1));
     assert_eq!(counts.get(&SyntaxKind::FunctionItem), Some(&1));
 }
-
 #[test]
 fn hostile_recovery_is_lossless_and_inserts_specific_missing_tokens() {
     let text = r#"seiyaku Broken {
@@ -121,7 +112,6 @@ fn hostile_recovery_is_lossless_and_inserts_specific_missing_tokens() {
     let output = parse(&source, FrontendBudget::v1());
     assert_eq!(output.tree.text(&source), text);
     assert!(!output.is_ok());
-
     let mut counts = HashMap::new();
     collect_kinds(output.tree.root(), &mut counts);
     assert!(
@@ -133,7 +123,6 @@ fn hostile_recovery_is_lossless_and_inserts_specific_missing_tokens() {
     );
     assert_eq!(counts.get(&SyntaxKind::FunctionItem), Some(&1));
     assert_eq!(counts.get(&SyntaxKind::Attribute), Some(&1));
-
     let expected = output
         .tree
         .tokens()
@@ -145,7 +134,6 @@ fn hostile_recovery_is_lossless_and_inserts_specific_missing_tokens() {
     assert!(expected.contains(&SyntaxKind::RParen), "{expected:?}");
     assert!(expected.contains(&SyntaxKind::Semicolon), "{expected:?}");
 }
-
 #[test]
 fn tree_uses_the_one_lossless_token_stream_exactly_once() {
     let text = "/* 前 */\n誓約 Demo { // 言葉\n 始まり() { let string s = \"雪\"; }\n}\n";
@@ -153,7 +141,6 @@ fn tree_uses_the_one_lossless_token_stream_exactly_once() {
     let lexed = lex(&source, FrontendBudget::v1());
     let output = parse(&source, FrontendBudget::v1());
     assert_eq!(output.tree.text(&source), text);
-
     let tree_tokens = output
         .tree
         .tokens()
@@ -162,7 +149,6 @@ fn tree_uses_the_one_lossless_token_stream_exactly_once() {
         .copied()
         .collect::<Vec<_>>();
     assert_eq!(tree_tokens, lexed.tokens);
-
     let mut nodes = Vec::new();
     collect_nodes(output.tree.root(), &mut nodes);
     for node in nodes {
@@ -189,7 +175,6 @@ fn tree_uses_the_one_lossless_token_stream_exactly_once() {
         }
     }
 }
-
 #[test]
 fn excessive_nested_recovery_remains_bounded_and_lossless() {
     let mut text = String::from("seiyaku Deep { fn run() {");
@@ -201,7 +186,6 @@ fn excessive_nested_recovery_remains_bounded_and_lossless() {
         text.push('}');
     }
     text.push_str("} }");
-
     let source = SourceFile::new(SourceId(15), "deep.ko", &text);
     let output = parse(&source, FrontendBudget::v1());
     assert_eq!(output.tree.text(&source), text);

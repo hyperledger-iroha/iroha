@@ -1,15 +1,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Focused wrong-dataspace Torii ingress regression for transaction and query routing.
-
 use super::localnet_npos::npos_override_transactions;
-
 use std::{
     collections::BTreeSet,
     num::NonZeroU32,
     thread,
     time::{Duration, Instant},
 };
-
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -53,7 +50,6 @@ use norito::{decode_from_bytes, json::Value as JsonValue};
 use reqwest::StatusCode as HttpStatusCode;
 use tokio::time::sleep;
 use toml::{Table, Value as TomlValue};
-
 const NEXUS_ALIAS: &str = "universal";
 const DS1_ALIAS: &str = "ds1";
 const DS2_ALIAS: &str = "ds2";
@@ -76,35 +72,29 @@ const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ALICE_WRONG_INGRESS_INDEX: usize = VALIDATORS_PER_LANE * 2;
 const BOB_WRONG_INGRESS_INDEX: usize = VALIDATORS_PER_LANE;
-
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
-
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
 }
-
 fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("universal", "universal").expect("fee asset domain"),
         "xor".parse().expect("fee asset name"),
     )
 }
-
 fn routing_probe_gas_account_id() -> AccountId {
     ALICE_ID.clone()
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct ExpectedLaneValidatorBinding {
     validator: String,
     peer_id: String,
 }
-
 #[derive(Debug)]
 struct RoutedJsonResponse {
     status: HttpStatusCode,
@@ -114,7 +104,6 @@ struct RoutedJsonResponse {
     route_lane_id: Option<String>,
     route_dataspace_id: Option<String>,
 }
-
 #[derive(Debug)]
 struct RoutedTransactionSubmitResponse {
     status: HttpStatusCode,
@@ -124,27 +113,23 @@ struct RoutedTransactionSubmitResponse {
     route_lane_id: Option<String>,
     route_dataspace_id: Option<String>,
 }
-
 fn validator_authority_account_for_peer(index: usize) -> AccountId {
     let keypair = KeyPair::try_from_seed(validator_authority_seed(index), Algorithm::Ed25519)
         .expect("fixture tx/query routing validator authority key");
     AccountId::new(keypair.public_key().clone())
 }
-
 fn validator_authority_seed(index: usize) -> Vec<u8> {
     let mut seed = vec![0_u8; 32];
     seed[0] = 0xC1;
     seed[1..9].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
     seed
 }
-
 fn expected_lane_binding_for_peer(index: usize, peer_id: &PeerId) -> ExpectedLaneValidatorBinding {
     ExpectedLaneValidatorBinding {
         validator: validator_authority_account_for_peer(index).to_string(),
         peer_id: peer_id.to_string(),
     }
 }
-
 fn localnet_builder() -> NetworkBuilder {
     let gas_account_str = routing_probe_gas_account_id()
         .canonical_i105()
@@ -176,7 +161,6 @@ fn localnet_builder() -> NetworkBuilder {
             );
             lane_nexus.insert("visibility".into(), TomlValue::String("public".to_owned()));
             lane_nexus.insert("metadata".into(), TomlValue::Table(Table::new()));
-
             let mut lane_ds1 = Table::new();
             lane_ds1.insert("index".into(), TomlValue::Integer(1));
             lane_ds1.insert("alias".into(), TomlValue::String("lane-ds1".to_owned()));
@@ -186,7 +170,6 @@ fn localnet_builder() -> NetworkBuilder {
                 TomlValue::String("restricted".to_owned()),
             );
             lane_ds1.insert("metadata".into(), TomlValue::Table(Table::new()));
-
             let mut lane_ds2 = Table::new();
             lane_ds2.insert("index".into(), TomlValue::Integer(2));
             lane_ds2.insert("alias".into(), TomlValue::String("lane-ds2".to_owned()));
@@ -196,7 +179,6 @@ fn localnet_builder() -> NetworkBuilder {
                 TomlValue::String("restricted".to_owned()),
             );
             lane_ds2.insert("metadata".into(), TomlValue::Table(Table::new()));
-
             let mut ds_nexus = Table::new();
             ds_nexus.insert("alias".into(), TomlValue::String(NEXUS_ALIAS.to_owned()));
             ds_nexus.insert("id".into(), TomlValue::Integer(NEXUS_ID_U64 as i64));
@@ -205,7 +187,6 @@ fn localnet_builder() -> NetworkBuilder {
                 TomlValue::String("main nexus dataspace".to_owned()),
             );
             ds_nexus.insert("fault_tolerance".into(), TomlValue::Integer(1));
-
             let mut ds1 = Table::new();
             ds1.insert("alias".into(), TomlValue::String(DS1_ALIAS.to_owned()));
             ds1.insert("id".into(), TomlValue::Integer(DS1_ID_U64 as i64));
@@ -218,7 +199,6 @@ fn localnet_builder() -> NetworkBuilder {
                 TomlValue::String("private dataspace one".to_owned()),
             );
             ds1.insert("fault_tolerance".into(), TomlValue::Integer(1));
-
             let mut ds2 = Table::new();
             ds2.insert("alias".into(), TomlValue::String(DS2_ALIAS.to_owned()));
             ds2.insert("id".into(), TomlValue::Integer(DS2_ID_U64 as i64));
@@ -231,21 +211,18 @@ fn localnet_builder() -> NetworkBuilder {
                 TomlValue::String("private dataspace two".to_owned()),
             );
             ds2.insert("fault_tolerance".into(), TomlValue::Integer(1));
-
             let mut matcher_alice = Table::new();
             matcher_alice.insert("account".into(), TomlValue::String(ALICE_ID.to_string()));
             let mut rule_alice = Table::new();
             rule_alice.insert("lane".into(), TomlValue::Integer(1));
             rule_alice.insert("dataspace".into(), TomlValue::String(DS1_ALIAS.to_owned()));
             rule_alice.insert("matcher".into(), TomlValue::Table(matcher_alice));
-
             let mut matcher_bob = Table::new();
             matcher_bob.insert("account".into(), TomlValue::String(BOB_ID.to_string()));
             let mut rule_bob = Table::new();
             rule_bob.insert("lane".into(), TomlValue::Integer(2));
             rule_bob.insert("dataspace".into(), TomlValue::String(DS2_ALIAS.to_owned()));
             rule_bob.insert("matcher".into(), TomlValue::Table(matcher_bob));
-
             let mut policy = Table::new();
             policy.insert("default_lane".into(), TomlValue::Integer(0));
             policy.insert(
@@ -259,7 +236,6 @@ fn localnet_builder() -> NetworkBuilder {
                     TomlValue::Table(rule_bob),
                 ]),
             );
-
             layer
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 3_i64)
@@ -307,7 +283,6 @@ fn localnet_builder() -> NetworkBuilder {
                 );
         })
 }
-
 fn multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
     let lane_count = NonZeroU32::new(3).expect("lane count");
     let lanes = vec![
@@ -337,7 +312,6 @@ fn multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
     let lane_config = ActualLaneConfig::from_catalog(&catalog);
     proof_policy_bundle(&lane_config)
 }
-
 fn npos_multilane_genesis_post_topology_transactions(
     topology: &[PeerId],
 ) -> Vec<Vec<InstructionBox>> {
@@ -347,7 +321,6 @@ fn npos_multilane_genesis_post_topology_transactions(
         "expected {TOTAL_PEERS} peers in genesis topology, got {}",
         topology.len()
     );
-
     let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
     let universal_domain: DomainId =
         DomainId::try_new("universal", "universal").expect("universal domain");
@@ -363,7 +336,6 @@ fn npos_multilane_genesis_post_topology_transactions(
         DomainId::try_new("nexus", "universal").expect("asset definition domain"),
         "ds2coin".parse().expect("asset definition name"),
     );
-
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),
         Register::domain(Domain::new(universal_domain)).into(),
@@ -426,7 +398,6 @@ fn npos_multilane_genesis_post_topology_transactions(
         .into(),
         Mint::asset_quantity(200_u32, AssetId::new(ds2_asset_def.clone(), BOB_ID.clone())).into(),
     ];
-
     for (index, peer) in topology.iter().take(LANE_VALIDATOR_COUNT).enumerate() {
         let lane_index = if index < VALIDATORS_PER_LANE {
             NEXUS_LANE_INDEX
@@ -465,10 +436,8 @@ fn npos_multilane_genesis_post_topology_transactions(
         );
         bootstrap_tx.push(ActivatePublicLaneValidator::new(lane_id, validator_id).into());
     }
-
     vec![bootstrap_tx]
 }
-
 fn lane_validator_snapshot(
     snapshot: &JsonValue,
     context: &str,
@@ -484,7 +453,6 @@ fn lane_validator_snapshot(
         .get("items")
         .and_then(JsonValue::as_array)
         .ok_or_else(|| eyre!("{context}: lane validator response is missing items"))?;
-
     let mut active = BTreeSet::new();
     for item in items {
         let entry = item
@@ -511,10 +479,8 @@ fn lane_validator_snapshot(
             });
         }
     }
-
     Ok((usize::try_from(total).unwrap_or(usize::MAX), active))
 }
-
 fn wait_for_active_lane_validators(
     client: &Client,
     lane_id: LaneId,
@@ -536,7 +502,6 @@ fn wait_for_active_lane_validators(
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
-
     Err(eyre!(
         "{context}: timed out waiting for active validators on lane {lane_id}; expected total {} active {:?}, observed total {} active {:?}",
         expected_active.len(),
@@ -545,7 +510,6 @@ fn wait_for_active_lane_validators(
         last_active
     ))
 }
-
 fn wait_for_height(client: &Client, target_height: u64, context: &str) -> Result<SumeragiV2Status> {
     let started = Instant::now();
     let mut last_height = 0;
@@ -564,7 +528,6 @@ fn wait_for_height(client: &Client, target_height: u64, context: &str) -> Result
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
-
     let suffix = last_error
         .map(|err| format!("; last status query error: {err}"))
         .unwrap_or_default();
@@ -572,7 +535,6 @@ fn wait_for_height(client: &Client, target_height: u64, context: &str) -> Result
         "{context}: timed out waiting for block height >= {target_height}; last observed {last_height}{suffix}"
     ))
 }
-
 fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
     match client.query_single(FindAssetById::new(asset_id.clone())) {
         Ok(asset) => Ok(asset.value().clone()),
@@ -582,14 +544,12 @@ fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
         Err(err) => Err(eyre!(err)),
     }
 }
-
 fn routed_header_string(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
         .and_then(|value| value.to_str().ok())
         .map(ToOwned::to_owned)
 }
-
 fn routed_response_context(
     status: HttpStatusCode,
     headers: &reqwest::header::HeaderMap,
@@ -618,7 +578,6 @@ fn routed_response_context(
         routed_header_string(headers, "x-iroha-route-dataspace-id"),
     )
 }
-
 fn routed_json_empty_body_is_transient(status: HttpStatusCode, body: &[u8]) -> bool {
     body.is_empty()
         && matches!(
@@ -629,12 +588,10 @@ fn routed_json_empty_body_is_transient(status: HttpStatusCode, body: &[u8]) -> b
                 | HttpStatusCode::GATEWAY_TIMEOUT
         )
 }
-
 fn routed_json_response_is_transient(response: &RoutedJsonResponse) -> bool {
     response.body.is_null()
         && routed_json_empty_body_is_transient(response.status, response.body_text.as_bytes())
 }
-
 fn routed_submit_response_is_transient(response: &RoutedTransactionSubmitResponse) -> bool {
     if routed_json_empty_body_is_transient(response.status, response.body_text.as_bytes()) {
         return true;
@@ -647,7 +604,6 @@ fn routed_submit_response_is_transient(response: &RoutedTransactionSubmitRespons
         HttpStatusCode::NOT_FOUND | HttpStatusCode::SERVICE_UNAVAILABLE
     ) && response.body_text.contains("route_unavailable")
 }
-
 fn add_client_headers(
     client: &Client,
     mut request: reqwest::RequestBuilder,
@@ -665,18 +621,15 @@ fn add_client_headers(
     }
     request
 }
-
 fn encode_versioned_signed_transaction(transaction: &SignedTransaction) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(1);
     bytes.push(1);
     bytes.extend(norito::codec::encode_adaptive(transaction));
     bytes
 }
-
 fn routed_http_client() -> reqwest::Client {
     integration_tests::http::client_with_timeout(iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT)
 }
-
 async fn torii_json_get(
     client: &Client,
     path_segments: &[String],
@@ -699,7 +652,6 @@ async fn torii_json_get(
             query.append_pair(key, value);
         }
     }
-
     let request = routed_http_client()
         .get(url)
         .header(reqwest::header::ACCEPT, "application/json");
@@ -717,7 +669,6 @@ async fn torii_json_get(
         norito::json::from_slice(&body)
             .wrap_err_with(|| format!("decode JSON body ({response_context}): {body_text}"))?
     };
-
     Ok(RoutedJsonResponse {
         status,
         body: json_body,
@@ -727,7 +678,6 @@ async fn torii_json_get(
         route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
     })
 }
-
 async fn torii_json_get_as_account(
     client: &Client,
     account: &AccountId,
@@ -751,7 +701,6 @@ async fn torii_json_get_as_account(
             query.append_pair(key, value);
         }
     }
-
     let uri: Uri = url
         .as_str()
         .parse()
@@ -770,14 +719,15 @@ async fn torii_json_get_as_account(
         &[],
         timestamp_ms,
         &nonce,
-    );
+    )
+    .wrap_err("construct canonical app-api request")?;
     let signature = Signature::try_new(client.key_pair.private_key(), &message)
         .wrap_err("sign canonical app-api request")?;
     let response = routed_http_client()
         .get(url)
         .header(reqwest::header::ACCEPT, "application/json")
-        .header(HEADER_ACCOUNT, account.to_string())
-        .header(HEADER_SIGNATURE, signature_header_value(&signature))
+        .header(HEADER_ACCOUNT, account.to_canonical_hex()?)
+        .header(HEADER_SIGNATURE, signature_header_value(&signature)?)
         .header(HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
         .header(HEADER_NONCE, nonce)
         .send()
@@ -793,7 +743,6 @@ async fn torii_json_get_as_account(
         norito::json::from_slice(&body)
             .wrap_err_with(|| format!("decode JSON body ({response_context}): {body_text}"))?
     };
-
     Ok(RoutedJsonResponse {
         status,
         body: json_body,
@@ -803,7 +752,6 @@ async fn torii_json_get_as_account(
         route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
     })
 }
-
 async fn wait_for_torii_json_get(
     client: &Client,
     path_segments: &[String],
@@ -834,7 +782,6 @@ async fn wait_for_torii_json_get(
         "{context}: timed out waiting for routed JSON response{suffix}"
     ))
 }
-
 async fn wait_for_torii_json_get_as_account(
     client: &Client,
     account: &AccountId,
@@ -866,7 +813,6 @@ async fn wait_for_torii_json_get_as_account(
         "{context}: timed out waiting for routed JSON response{suffix}"
     ))
 }
-
 async fn submit_transaction_raw(
     client: &Client,
     transaction: &SignedTransaction,
@@ -892,7 +838,6 @@ async fn submit_transaction_raw(
     } else {
         None
     };
-
     Ok(RoutedTransactionSubmitResponse {
         status,
         receipt,
@@ -902,7 +847,6 @@ async fn submit_transaction_raw(
         route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
     })
 }
-
 async fn submit_transaction_and_expect_route(
     submitter: &Client,
     _confirmation_client: &Client,
@@ -946,13 +890,11 @@ async fn submit_transaction_and_expect_route(
         expected_dataspace_id.as_u64(),
         response.route_dataspace_id
     );
-
     let receipt = response
         .receipt
         .ok_or_else(|| eyre!("{context}: missing transaction submission receipt"))?;
     Ok(receipt)
 }
-
 fn expect_proxy_route_headers(
     response: &RoutedJsonResponse,
     expected_lane_id: LaneId,
@@ -979,7 +921,6 @@ fn expect_proxy_route_headers(
     );
     Ok(())
 }
-
 fn expect_proxy_fanout_headers(response: &RoutedJsonResponse, context: &str) -> Result<()> {
     ensure!(
         response.routed_by.as_deref() == Some("proxy"),
@@ -998,7 +939,6 @@ fn expect_proxy_fanout_headers(response: &RoutedJsonResponse, context: &str) -> 
     );
     Ok(())
 }
-
 fn permission_response_contains(
     body: &JsonValue,
     permission_name: &str,
@@ -1014,7 +954,6 @@ fn permission_response_contains(
             && item.get("payload").is_some_and(&payload_matches)
     }))
 }
-
 fn manifest_response_contains_status(
     body: &JsonValue,
     dataspace_id: DataSpaceId,
@@ -1030,7 +969,6 @@ fn manifest_response_contains_status(
             && record.get("status").and_then(JsonValue::as_str) == Some(expected_status)
     }))
 }
-
 fn manifest_response_contains_dataspace(
     body: &JsonValue,
     dataspace_id: DataSpaceId,
@@ -1044,7 +982,6 @@ fn manifest_response_contains_dataspace(
         record.get("dataspace_id").and_then(JsonValue::as_u64) == Some(dataspace_id.as_u64())
     }))
 }
-
 async fn wait_for_manifest_api_absence(
     client: &Client,
     uaid_literal: &str,
@@ -1055,7 +992,6 @@ async fn wait_for_manifest_api_absence(
     let started = Instant::now();
     let mut last_body = String::new();
     let mut last_error: Option<String> = None;
-
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
         match torii_json_get(
             client,
@@ -1117,10 +1053,8 @@ async fn wait_for_manifest_api_absence(
                 last_error = Some(err.to_string());
             }
         }
-
         tokio::time::sleep(STATUS_POLL_INTERVAL).await;
     }
-
     let suffix = last_error
         .map(|err| format!("; last manifests API error: {err}"))
         .unwrap_or_default();
@@ -1128,7 +1062,6 @@ async fn wait_for_manifest_api_absence(
         "{context}: timed out waiting for manifest absence on UAID {uaid_literal}; last body `{last_body}`{suffix}"
     ))
 }
-
 fn account_assets_response_contains(
     body: &JsonValue,
     asset_definition_id: &AssetDefinitionId,
@@ -1143,13 +1076,11 @@ fn account_assets_response_contains(
         .iter()
         .any(|item| item.get("asset").and_then(JsonValue::as_str) == Some(expected.as_str())))
 }
-
 #[test]
 fn tx_query_cross_dataspace_routing_genesis_preexecution_smoke() {
     let _guard = sandbox::serial_guard();
     let _network = localnet_builder().build();
 }
-
 #[test]
 fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models() -> Result<()>
 {
@@ -1160,19 +1091,16 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
     else {
         return Ok(());
     };
-
     let alice = network.client();
     let bob = network
         .peer()
         .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
-
     let peers = network.peers();
     ensure!(
         peers.len() == TOTAL_PEERS,
         "expected {TOTAL_PEERS} peers for cross-dataspace topology, got {}",
         peers.len()
     );
-
     let expected_nexus_validators: BTreeSet<_> = peers
         .iter()
         .enumerate()
@@ -1193,7 +1121,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         .take(VALIDATORS_PER_LANE)
         .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
         .collect();
-
     wait_for_active_lane_validators(
         &alice,
         LaneId::new(NEXUS_LANE_INDEX),
@@ -1212,7 +1139,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         &expected_ds2_validators,
         "ds2 lane validator activation",
     )?;
-
     let lane_sync_height = alice
         .get_sumeragi_status()
         .map_err(|err| eyre!(err))?
@@ -1222,7 +1148,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         lane_sync_height,
         "lane validator activation propagation on bob",
     )?;
-
     ensure!(
         (VALIDATORS_PER_LANE * 2..LANE_VALIDATOR_COUNT).contains(&ALICE_WRONG_INGRESS_INDEX),
         "alice wrong-dataspace ingress index must point into the ds2 lane"
@@ -1231,7 +1156,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         (VALIDATORS_PER_LANE..VALIDATORS_PER_LANE * 2).contains(&BOB_WRONG_INGRESS_INDEX),
         "bob wrong-dataspace ingress index must point into the ds1 lane"
     );
-
     let alice_via_ds2 =
         peers[ALICE_WRONG_INGRESS_INDEX].client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
     let alice_on_ds1 =
@@ -1267,12 +1191,10 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         lane_sync_height,
         "lane validator activation propagation on bob ds2 authoritative client",
     )?;
-
     let ds1_lane_id = LaneId::new(DS1_LANE_INDEX);
     let ds2_lane_id = LaneId::new(DS2_LANE_INDEX);
     let ds1_dataspace_id = DataSpaceId::new(DS1_ID_U64);
     let ds2_dataspace_id = DataSpaceId::new(DS2_ID_U64);
-
     let ds1_asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("asset definition domain"),
         "ds1coin".parse().expect("asset definition name"),
@@ -1283,7 +1205,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
     );
     let alice_ds1_asset = AssetId::new(ds1_asset_definition_id.clone(), ALICE_ID.clone());
     let bob_ds2_asset = AssetId::new(ds2_asset_definition_id.clone(), BOB_ID.clone());
-
     rt.block_on(async {
         let alice_probe = alice_via_ds2.build_transaction(
             [InstructionBox::from(Log::new(
@@ -1302,7 +1223,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             "alice tx via ds2 should route to ds1",
         )
         .await?;
-
         let bob_probe = bob_via_ds1.build_transaction(
             [InstructionBox::from(Log::new(
                 Level::INFO,
@@ -1320,10 +1240,8 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             "bob tx via ds1 should route to ds2",
         )
         .await?;
-
         Ok::<(), eyre::Report>(())
     })?;
-
     ensure!(
         asset_balance(&alice_via_ds2, &alice_ds1_asset)? == Quantity::from(100_u32),
         "alice signed query through ds2 ingress did not route to ds1"
@@ -1332,7 +1250,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         asset_balance(&bob_via_ds1, &bob_ds2_asset)? == Quantity::from(200_u32),
         "bob signed query through ds1 ingress did not route to ds2"
     );
-
     let alice_account = rt.block_on(wait_for_torii_json_get(
         &alice_via_ds2,
         &["v1".to_owned(), "accounts".to_owned(), ALICE_ID.to_string()],
@@ -1357,7 +1274,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             == Some(ALICE_ID.to_string().as_str()),
         "alice account GET through ds2 ingress did not return alice's canonical account id"
     );
-
     let alice_assets = rt.block_on(wait_for_torii_json_get_as_account(
         &alice_via_ds2,
         &ALICE_ID,
@@ -1385,7 +1301,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         )?,
         "alice assets query through ds2 ingress did not include ds1 asset definition"
     );
-
     let bob_assets = rt.block_on(wait_for_torii_json_get_as_account(
         &bob_via_ds1,
         &BOB_ID,
@@ -1413,7 +1328,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         )?,
         "bob assets query through ds1 ingress did not include ds2 asset definition"
     );
-
     let alice_assets_hidden_from_bob = rt.block_on(wait_for_torii_json_get_as_account(
         &bob_via_ds1,
         &BOB_ID,
@@ -1436,7 +1350,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         &alice_assets_hidden_from_bob,
         "alice assets query as bob through ds1 ingress",
     )?;
-
     let manifest_uaid =
         UniversalAccountId::from_hash(Hash::new(b"wrong-ingress-ds2-manifest-routing"));
     let manifest_uaid_literal = manifest_uaid.to_string();
@@ -1462,7 +1375,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             notes: Some("wrong ingress manifest routing regression".to_owned()),
         }],
     };
-
     let manifests_before = rt.block_on(wait_for_torii_json_get(
         &bob_via_ds1,
         &[
@@ -1499,7 +1411,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         )?,
         "manifest should not exist before publish"
     );
-
     let bob_manifest_permissions_api_before = rt.block_on(wait_for_torii_json_get_as_account(
         &bob_via_ds1,
         &BOB_ID,
@@ -1534,7 +1445,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         )?,
         "bob should not expose ds2 manifest publish permission before grant"
     );
-
     let unauthorized_publish_tx = bob_via_ds1.build_transaction(
         [InstructionBox::from(PublishSpaceDirectoryManifest {
             manifest: ds2_manifest.clone(),
@@ -1557,10 +1467,8 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         ds2_lane_id,
         "manifest must remain absent after unauthorized publish through wrong ingress",
     ))?;
-
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1590,7 +1498,6 @@ mod tests {
         header::{HeaderMap, HeaderValue},
     };
     use std::panic;
-
     fn routed_json_response(
         status: HttpStatusCode,
         body: JsonValue,
@@ -1605,7 +1512,6 @@ mod tests {
             route_dataspace_id: None,
         }
     }
-
     fn routed_json_response_with_route(
         routed_by: Option<&str>,
         route_lane_id: Option<&str>,
@@ -1620,14 +1526,12 @@ mod tests {
             route_dataspace_id: route_dataspace_id.map(ToOwned::to_owned),
         }
     }
-
     fn ds2_asset_definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("nexus", "universal").expect("asset domain"),
             "ds2coin".parse().expect("asset name"),
         )
     }
-
     fn deterministic_topology(peer_count: usize) -> Vec<PeerId> {
         (0..peer_count)
             .map(|index| {
@@ -1640,7 +1544,6 @@ mod tests {
             })
             .collect()
     }
-
     fn decode_manifest_hash_fixture(raw: &str) -> [u8; 32] {
         assert_eq!(raw.len(), 64);
         let mut hash = [0_u8; 32];
@@ -1650,12 +1553,10 @@ mod tests {
         }
         hash
     }
-
     #[test]
     fn dataspace_fixture_manifest_hashes_derive_config_ids() {
         let ds1_hash = decode_manifest_hash_fixture(DS1_MANIFEST_HASH);
         let ds2_hash = decode_manifest_hash_fixture(DS2_MANIFEST_HASH);
-
         assert_eq!(NEXUS_ALIAS, "universal");
         assert_eq!(NEXUS_ID_U64, DataSpaceId::UNIVERSAL.as_u64());
         assert_eq!(DataSpaceId::from_hash(&ds1_hash).as_u64(), DS1_ID_U64);
@@ -1663,12 +1564,10 @@ mod tests {
         assert_ne!(DataSpaceId::from_hash(&ds1_hash), DataSpaceId::UNIVERSAL);
         assert_ne!(DataSpaceId::from_hash(&ds2_hash), DataSpaceId::UNIVERSAL);
     }
-
     #[test]
     fn fixture_asset_helpers_keep_stake_and_fee_ids_distinct() {
         let stake_definition_id = stake_asset_definition_id();
         let fee_definition_id = nexus_fee_asset_definition_id();
-
         assert_eq!(stake_asset_id_literal(), stake_definition_id.to_string());
         assert_ne!(
             stake_definition_id.to_string(),
@@ -1676,12 +1575,10 @@ mod tests {
             "stake and fee helpers should preserve their separate asset-definition domains"
         );
     }
-
     #[test]
     fn multilane_da_policy_bundle_matches_wrong_ingress_topology() {
         let bundle = multilane_da_proof_policy_bundle();
         let expected_hash = DaProofPolicyBundle::new(bundle.policies.clone()).policy_hash;
-
         assert_eq!(bundle.version, DaProofPolicyBundle::VERSION_V1);
         assert_eq!(bundle.policy_hash, expected_hash);
         assert_eq!(bundle.policies.len(), 3);
@@ -1696,23 +1593,19 @@ mod tests {
         assert_eq!(bundle.policies[2].dataspace_id.as_u64(), DS2_ID_U64);
         assert_eq!(bundle.policies[2].alias, "lane-ds2");
     }
-
     #[test]
     fn multilane_da_policy_bundle_hash_changes_when_policy_order_changes() {
         let bundle = multilane_da_proof_policy_bundle();
         let mut reversed_policies = bundle.policies.clone();
         reversed_policies.reverse();
         let reversed_hash = DaProofPolicyBundle::new(reversed_policies).policy_hash;
-
         assert_eq!(bundle, multilane_da_proof_policy_bundle());
         assert_ne!(bundle.policy_hash, reversed_hash);
     }
-
     #[test]
     fn genesis_post_topology_builder_requires_full_wrong_ingress_roster() {
         let topology = deterministic_topology(TOTAL_PEERS);
         let transactions = npos_multilane_genesis_post_topology_transactions(&topology);
-
         assert_eq!(transactions.len(), 1);
         assert_eq!(transactions[0].len(), 12 + LANE_VALIDATOR_COUNT * 5);
         let lane_registrations = transactions[0]
@@ -1734,34 +1627,28 @@ mod tests {
             expected_lane_binding_for_peer(0, &topology[0]).peer_id,
             topology[0].to_string()
         );
-
         let short_topology = deterministic_topology(TOTAL_PEERS - 1);
         let result = panic::catch_unwind(|| {
             npos_multilane_genesis_post_topology_transactions(&short_topology)
         });
         assert!(result.is_err());
     }
-
     #[test]
     fn genesis_post_topology_builder_is_stable_for_same_wrong_ingress_roster() {
         let topology = deterministic_topology(TOTAL_PEERS);
         let first = npos_multilane_genesis_post_topology_transactions(&topology);
         let second = npos_multilane_genesis_post_topology_transactions(&topology);
-
         assert_eq!(format!("{first:?}"), format!("{second:?}"));
     }
-
     #[test]
     fn routing_probe_gas_account_uses_alice_subject() {
         let gas_account = routing_probe_gas_account_id();
-
         assert_eq!(gas_account, ALICE_ID.clone());
         assert_eq!(
             gas_account.canonical_i105().expect("gas account i105"),
             ALICE_ID.canonical_i105().expect("alice i105")
         );
     }
-
     #[test]
     fn versioned_signed_transaction_encoder_prefixes_v1_and_roundtrips_payload() {
         let network_id = NetworkId::from_genesis_hash(
@@ -1780,18 +1667,15 @@ mod tests {
         )])
         .sign(ALICE_KEYPAIR.private_key());
         let adaptive_payload = norito::codec::encode_adaptive(&transaction);
-
         let encoded = encode_versioned_signed_transaction(&transaction);
         let (decoded, decoded_len) = SignedTransaction::decode_from_slice(&encoded[1..])
             .expect("adaptive signed transaction should decode from raw slice");
-
         assert_eq!(encoded.first(), Some(&1));
         assert_eq!(encoded.len(), adaptive_payload.len() + 1);
         assert_eq!(&encoded[1..], adaptive_payload.as_slice());
         assert_eq!(decoded_len, adaptive_payload.len());
         assert_eq!(decoded, transaction);
     }
-
     #[test]
     fn expected_lane_binding_for_peer_is_deterministic() {
         let mut seed = vec![0_u8; 32];
@@ -1802,9 +1686,7 @@ mod tests {
         let expected_validator_key =
             KeyPair::try_from_seed(validator_authority_seed(5), Algorithm::Ed25519)
                 .expect("fixture tx/query routing validator authority key");
-
         let binding = expected_lane_binding_for_peer(5, &peer_id);
-
         assert_eq!(binding.peer_id, peer_id.to_string());
         assert_eq!(
             binding.validator,
@@ -1823,7 +1705,6 @@ mod tests {
             validator_authority_account_for_peer(6)
         );
     }
-
     #[test]
     fn lane_validator_snapshot_filters_active_bindings_and_preserves_total() {
         let body = norito::json!({
@@ -1841,10 +1722,8 @@ mod tests {
                 },
             ],
         });
-
         let (total, active) =
             lane_validator_snapshot(&body, "lane validators").expect("lane snapshot should parse");
-
         assert_eq!(total, 2);
         assert_eq!(active.len(), 1);
         assert!(active.contains(&ExpectedLaneValidatorBinding {
@@ -1852,7 +1731,6 @@ mod tests {
             peer_id: "peer-a".to_owned(),
         }));
     }
-
     #[test]
     fn lane_validator_snapshot_rejects_malformed_payloads() {
         for (body, expected) in [
@@ -1889,14 +1767,12 @@ mod tests {
         ] {
             let err = lane_validator_snapshot(&body, "lane validators")
                 .expect_err("malformed lane snapshot should fail");
-
             assert!(
                 err.to_string().contains(expected),
                 "expected `{expected}` in `{err}`"
             );
         }
     }
-
     #[test]
     fn routed_response_context_includes_path_query_and_route_headers() {
         let mut headers = HeaderMap::new();
@@ -1908,14 +1784,12 @@ mod tests {
             ("account".to_owned(), "alice".to_owned()),
             ("dataspace".to_owned(), "2".to_owned()),
         ];
-
         let context = routed_response_context(
             HttpStatusCode::ACCEPTED,
             &headers,
             &path_segments,
             &query_pairs,
         );
-
         assert_eq!(
             routed_header_string(&headers, "x-iroha-routed-by"),
             Some("proxy".to_owned())
@@ -1926,18 +1800,15 @@ mod tests {
         assert!(context.contains(r#"route_lane_id=Some("2")"#));
         assert!(context.contains(r#"route_dataspace_id=Some("7")"#));
     }
-
     #[test]
     fn routed_response_context_formats_root_path_without_query_or_headers() {
         let context = routed_response_context(HttpStatusCode::OK, &HeaderMap::new(), &[], &[]);
-
         assert!(context.contains("status=200 OK"));
         assert!(context.contains("path=/"));
         assert!(context.contains("routed_by=None"));
         assert!(context.contains("route_lane_id=None"));
         assert!(context.contains("route_dataspace_id=None"));
     }
-
     #[test]
     fn routed_response_context_formats_root_path_with_query() {
         let context = routed_response_context(
@@ -1946,11 +1817,9 @@ mod tests {
             &[],
             &[("dataspace".to_owned(), DS2_ID_U64.to_string())],
         );
-
         assert!(context.contains("status=502 Bad Gateway"));
         assert!(context.contains("path=/?dataspace=2"));
     }
-
     #[test]
     fn routed_header_string_ignores_non_utf8_header_values() {
         let mut headers = HeaderMap::new();
@@ -1958,13 +1827,11 @@ mod tests {
             "x-iroha-route-lane-id",
             HeaderValue::from_bytes(&[0xFF]).expect("binary header value"),
         );
-
         assert_eq!(
             routed_header_string(&headers, "x-iroha-route-lane-id"),
             None
         );
     }
-
     #[test]
     fn expect_proxy_route_headers_accepts_exact_lane_dataspace() {
         let response = routed_json_response_with_route(
@@ -1972,7 +1839,6 @@ mod tests {
             Some(&DS1_LANE_INDEX.to_string()),
             Some(&DS1_ID_U64.to_string()),
         );
-
         expect_proxy_route_headers(
             &response,
             LaneId::new(DS1_LANE_INDEX),
@@ -1980,7 +1846,6 @@ mod tests {
             "ds1 routed response",
         )
         .expect("matching route headers should pass");
-
         let wrong_dataspace = routed_json_response_with_route(
             Some("proxy"),
             Some(&DS1_LANE_INDEX.to_string()),
@@ -1993,10 +1858,8 @@ mod tests {
             "ds1 routed response",
         )
         .expect_err("wrong dataspace header should fail");
-
         assert!(err.to_string().contains("expected routed dataspace 1"));
     }
-
     #[test]
     fn expect_proxy_route_headers_rejects_missing_proxy_and_wrong_lane() {
         let local_response = routed_json_response_with_route(
@@ -2012,7 +1875,6 @@ mod tests {
         )
         .expect_err("local response should not satisfy proxy route headers");
         assert!(err.to_string().contains("expected proxied read"));
-
         let wrong_lane = routed_json_response_with_route(
             Some("proxy"),
             Some(&(DS1_LANE_INDEX + 1).to_string()),
@@ -2027,7 +1889,6 @@ mod tests {
         .expect_err("wrong lane header should fail");
         assert!(err.to_string().contains("expected routed lane 1"));
     }
-
     #[test]
     fn expect_proxy_route_headers_rejects_missing_lane_or_dataspace() {
         let missing_lane =
@@ -2040,7 +1901,6 @@ mod tests {
         )
         .expect_err("missing lane header should fail");
         assert!(err.to_string().contains("expected routed lane 1"));
-
         let missing_dataspace =
             routed_json_response_with_route(Some("proxy"), Some(&DS1_LANE_INDEX.to_string()), None);
         let err = expect_proxy_route_headers(
@@ -2052,45 +1912,36 @@ mod tests {
         .expect_err("missing dataspace header should fail");
         assert!(err.to_string().contains("expected routed dataspace 1"));
     }
-
     #[test]
     fn expect_proxy_fanout_headers_requires_proxy_without_singular_route() {
         let response = routed_json_response_with_route(Some("proxy"), None, None);
-
         expect_proxy_fanout_headers(&response, "fanout permissions")
             .expect("fanout response without singular route should pass");
-
         let local_response = routed_json_response_with_route(Some("local"), None, None);
         let err = expect_proxy_fanout_headers(&local_response, "fanout permissions")
             .expect_err("local fanout response should fail for proxy-only helper");
         assert!(err.to_string().contains("expected proxied fanout read"));
-
         let missing_route_source = routed_json_response_with_route(None, None, None);
         let err = expect_proxy_fanout_headers(&missing_route_source, "fanout permissions")
             .expect_err("missing fanout route source should fail");
         assert!(err.to_string().contains("expected proxied fanout read"));
-
         let singular_route =
             routed_json_response_with_route(Some("proxy"), Some(&DS1_LANE_INDEX.to_string()), None);
         let err = expect_proxy_fanout_headers(&singular_route, "fanout permissions")
             .expect_err("fanout response with singular route should fail");
-
         assert!(
             err.to_string()
                 .contains("fanout response should not expose singular route lane")
         );
-
         let singular_dataspace =
             routed_json_response_with_route(Some("proxy"), None, Some(&DS2_ID_U64.to_string()));
         let err = expect_proxy_fanout_headers(&singular_dataspace, "fanout permissions")
             .expect_err("fanout response with singular dataspace should fail");
-
         assert!(
             err.to_string()
                 .contains("fanout response should not expose singular route dataspace")
         );
     }
-
     #[test]
     fn permission_response_contains_matches_name_and_dataspace_payload() {
         let body = norito::json!({
@@ -2105,7 +1956,6 @@ mod tests {
                 },
             ],
         });
-
         assert!(
             permission_response_contains(
                 &body,
@@ -2124,7 +1974,6 @@ mod tests {
             )
             .expect("permission response should decode")
         );
-
         let err = permission_response_contains(
             &norito::json!({}),
             "CanPublishSpaceDirectoryManifest",
@@ -2137,7 +1986,6 @@ mod tests {
                 .contains("permission response missing items array")
         );
     }
-
     #[test]
     fn permission_response_contains_ignores_wrong_names_and_missing_payloads() {
         let body = norito::json!({
@@ -2147,7 +1995,6 @@ mod tests {
                 { "name": DS2_ID_U64, "payload": { "dataspace": DS2_ID_U64 } },
             ],
         });
-
         assert!(
             !permission_response_contains(
                 &body,
@@ -2158,11 +2005,9 @@ mod tests {
             .expect("permission response should decode")
         );
     }
-
     #[test]
     fn response_helpers_reject_non_array_collections() {
         let asset_definition_id = ds2_asset_definition_id();
-
         let permission_err = permission_response_contains(
             &norito::json!({ "items": {} }),
             "CanPublishSpaceDirectoryManifest",
@@ -2175,7 +2020,6 @@ mod tests {
                 .to_string()
                 .contains("permission response missing items array")
         );
-
         let manifest_err = manifest_response_contains_status(
             &norito::json!({ "manifests": {} }),
             DataSpaceId::new(DS2_ID_U64),
@@ -2188,7 +2032,6 @@ mod tests {
                 .to_string()
                 .contains("manifest response missing manifests array")
         );
-
         let assets_err = account_assets_response_contains(
             &norito::json!({ "items": {} }),
             &asset_definition_id,
@@ -2201,7 +2044,6 @@ mod tests {
                 .contains("account assets response missing items array")
         );
     }
-
     #[test]
     fn manifest_response_helpers_match_dataspace_and_status() {
         let body = norito::json!({
@@ -2210,7 +2052,6 @@ mod tests {
                 { "dataspace_id": DS2_ID_U64, "status": "Active" },
             ],
         });
-
         assert!(
             manifest_response_contains_status(
                 &body,
@@ -2237,7 +2078,6 @@ mod tests {
             )
             .expect("manifest response should decode")
         );
-
         let err = manifest_response_contains_dataspace(
             &norito::json!({}),
             DataSpaceId::new(DS1_ID_U64),
@@ -2249,7 +2089,6 @@ mod tests {
                 .contains("manifest response missing manifests array")
         );
     }
-
     #[test]
     fn manifest_response_contains_status_requires_manifest_array() {
         let err = manifest_response_contains_status(
@@ -2259,13 +2098,11 @@ mod tests {
             "manifest response",
         )
         .expect_err("missing manifest array should fail");
-
         assert!(
             err.to_string()
                 .contains("manifest response missing manifests array")
         );
     }
-
     #[test]
     fn manifest_response_contains_dataspace_ignores_missing_or_non_numeric_ids() {
         let body = norito::json!({
@@ -2274,7 +2111,6 @@ mod tests {
                 { "status": "Active" },
             ],
         });
-
         assert!(
             !manifest_response_contains_dataspace(
                 &body,
@@ -2284,7 +2120,6 @@ mod tests {
             .expect("manifest response should decode")
         );
     }
-
     #[test]
     fn manifest_response_contains_status_ignores_missing_or_non_string_statuses() {
         let body = norito::json!({
@@ -2294,7 +2129,6 @@ mod tests {
                 { "dataspace_id": DS1_ID_U64, "status": "Active" },
             ],
         });
-
         assert!(
             !manifest_response_contains_status(
                 &body,
@@ -2305,7 +2139,6 @@ mod tests {
             .expect("manifest response should decode")
         );
     }
-
     #[test]
     fn account_assets_response_contains_matches_asset_definition_literal() {
         let asset_definition_id = ds2_asset_definition_id();
@@ -2325,7 +2158,6 @@ mod tests {
                 { "asset": other_asset_literal },
             ],
         });
-
         assert!(
             account_assets_response_contains(&body, &asset_definition_id, "account assets")
                 .expect("account assets response should decode")
@@ -2334,7 +2166,6 @@ mod tests {
             !account_assets_response_contains(&other_body, &asset_definition_id, "account assets")
                 .expect("account assets response should decode")
         );
-
         let err =
             account_assets_response_contains(&norito::json!({}), &asset_definition_id, "assets")
                 .expect_err("missing account assets items should fail");
@@ -2343,7 +2174,6 @@ mod tests {
                 .contains("account assets response missing items array")
         );
     }
-
     #[test]
     fn account_assets_response_contains_ignores_non_string_assets() {
         let asset_definition_id = ds2_asset_definition_id();
@@ -2354,13 +2184,11 @@ mod tests {
                 { "not_asset": asset_literal },
             ],
         });
-
         assert!(
             !account_assets_response_contains(&body, &asset_definition_id, "account assets")
                 .expect("account assets response should decode")
         );
     }
-
     #[test]
     fn account_assets_response_contains_requires_exact_asset_literal() {
         let asset_definition_id = ds2_asset_definition_id();
@@ -2370,13 +2198,11 @@ mod tests {
                 { "asset": asset_literal },
             ],
         });
-
         assert!(
             !account_assets_response_contains(&body, &asset_definition_id, "account assets")
                 .expect("account assets response should decode")
         );
     }
-
     #[test]
     fn routed_json_empty_body_is_transient_for_empty_timeout_statuses() {
         assert!(routed_json_empty_body_is_transient(
@@ -2396,7 +2222,6 @@ mod tests {
             b""
         ));
     }
-
     #[test]
     fn routed_json_empty_body_is_not_transient_for_non_empty_or_success_statuses() {
         assert!(!routed_json_empty_body_is_transient(
@@ -2408,14 +2233,11 @@ mod tests {
             b""
         ));
     }
-
     #[test]
     fn routed_json_response_is_transient_only_for_empty_retryable_routed_failures() {
         let response = routed_json_response(HttpStatusCode::BAD_GATEWAY, JsonValue::Null, "");
-
         assert!(routed_json_response_is_transient(&response));
     }
-
     #[test]
     fn routed_json_response_is_not_transient_after_json_body_decodes() {
         let body_text = r#"{"error":"route_unavailable"}"#;
@@ -2424,25 +2246,19 @@ mod tests {
             norito::json::from_str(body_text).expect("decode test JSON"),
             body_text,
         );
-
         assert!(!routed_json_response_is_transient(&response));
     }
-
     #[test]
     fn routed_json_response_is_not_transient_for_non_retryable_empty_statuses() {
         let response = routed_json_response(HttpStatusCode::NOT_FOUND, JsonValue::Null, "");
-
         assert!(!routed_json_response_is_transient(&response));
     }
-
     #[test]
     fn routed_json_response_is_not_transient_when_null_body_text_is_non_empty() {
         let response =
             routed_json_response(HttpStatusCode::GATEWAY_TIMEOUT, JsonValue::Null, "timeout");
-
         assert!(!routed_json_response_is_transient(&response));
     }
-
     #[test]
     fn routed_submit_response_is_transient_for_route_unavailable() {
         let response = RoutedTransactionSubmitResponse {
@@ -2453,10 +2269,8 @@ mod tests {
             route_lane_id: None,
             route_dataspace_id: None,
         };
-
         assert!(super::routed_submit_response_is_transient(&response));
     }
-
     #[test]
     fn routed_submit_response_is_not_transient_for_other_not_found() {
         let response = RoutedTransactionSubmitResponse {
@@ -2467,10 +2281,8 @@ mod tests {
             route_lane_id: None,
             route_dataspace_id: None,
         };
-
         assert!(!super::routed_submit_response_is_transient(&response));
     }
-
     #[test]
     fn routed_submit_response_is_transient_for_empty_proxy_not_found() {
         let response = RoutedTransactionSubmitResponse {
@@ -2481,10 +2293,8 @@ mod tests {
             route_lane_id: Some(DS2_LANE_INDEX.to_string()),
             route_dataspace_id: Some(DS2_ID_U64.to_string()),
         };
-
         assert!(super::routed_submit_response_is_transient(&response));
     }
-
     #[test]
     fn routed_submit_response_is_transient_for_unmarked_empty_not_found() {
         let response = RoutedTransactionSubmitResponse {
@@ -2495,7 +2305,6 @@ mod tests {
             route_lane_id: None,
             route_dataspace_id: None,
         };
-
         assert!(super::routed_submit_response_is_transient(&response));
     }
 }

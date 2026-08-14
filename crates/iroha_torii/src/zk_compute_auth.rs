@@ -1,5 +1,4 @@
 // Exact-network account authentication shared by expensive ZK tooling routes.
-
 #[cfg(feature = "app_api")]
 fn require_zk_ivm_derive_authority(
     request_authority: &iroha_data_model::account::AccountId,
@@ -14,7 +13,6 @@ fn require_zk_ivm_derive_authority(
         ),
     ))
 }
-
 macro_rules! mount_authenticated_zk_compute_routes {
     ($builder:ident, $app_state:ident, $proof_body_limit:ident) => {
         #[cfg(feature = "zk-verify-batch")]

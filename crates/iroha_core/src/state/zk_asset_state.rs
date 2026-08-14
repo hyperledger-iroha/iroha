@@ -10,7 +10,6 @@ pub struct FrontierCheckpoint {
     /// Merkle root associated with the checkpoint.
     pub root: [u8; 32],
 }
-
 /// Summary of how a frontier checkpoint update changed the rolling history.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct FrontierCheckpointUpdate {
@@ -19,7 +18,6 @@ pub struct FrontierCheckpointUpdate {
     /// How many checkpoints were evicted to satisfy depth/interval constraints.
     pub evicted: u64,
 }
-
 mod zk_asset_tree_frontier_json {
     pub(super) fn serialize(
         frontier: &crate::zk::confidential_v2::ConfidentialTreeFrontierV2,
@@ -35,7 +33,6 @@ mod zk_asset_tree_frontier_json {
         out.push(']');
     }
 }
-
 /// Canonical shielded asset ledger snapshot persisted within the world state.
 #[derive(Clone, Debug, JsonSerialize, NoritoSerialize, NoritoDeserialize)]
 pub struct ZkAssetState {
@@ -59,7 +56,6 @@ pub struct ZkAssetState {
     /// Rolling set of frontier checkpoints (height, commitment count, root).
     pub frontier_checkpoints: Vec<FrontierCheckpoint>,
 }
-
 impl Default for ZkAssetState {
     fn default() -> Self {
         let tree_profile = ConfidentialTreeProfile::default();
@@ -76,14 +72,12 @@ impl Default for ZkAssetState {
         }
     }
 }
-
 impl ZkAssetState {
     /// Read the persisted current root after checking constant-size tree metadata.
     pub fn current_root(&self) -> Result<[u8; 32], String> {
         self.validate_tree_metadata()?;
         Ok(self.persisted_root)
     }
-
     /// Validate the constant-size metadata needed by hot mutation and root reads.
     ///
     /// Complete retained-history and checkpoint validation belongs to
@@ -124,7 +118,6 @@ impl ZkAssetState {
                     .to_owned(),
             );
         }
-
         if let Some(checkpoint) = self.frontier_checkpoints.last() {
             let commitment_count = usize::try_from(checkpoint.commitment_count).map_err(|_| {
                 "frontier checkpoint commitment count does not fit usize".to_owned()
@@ -151,7 +144,6 @@ impl ZkAssetState {
         }
         Ok(())
     }
-
     /// Fully rebuild and validate persisted roots, frontier, and checkpoints.
     ///
     /// This linear audit is intentionally reserved for decode, recovery, and
@@ -173,7 +165,6 @@ impl ZkAssetState {
                     .to_owned(),
             );
         }
-
         let prefix_roots = self.tree_profile.compute_prefix_roots(&self.commitments)?;
         if !self.commitments.is_empty() {
             let retained_start = self.commitments.len() - self.root_history.len();
@@ -187,7 +178,6 @@ impl ZkAssetState {
                 );
             }
         }
-
         let mut previous_height = None;
         let mut previous_commitment_count = None;
         for checkpoint in &self.frontier_checkpoints {
@@ -222,7 +212,6 @@ impl ZkAssetState {
         }
         Ok(())
     }
-
     /// Append a 32-byte note commitment to the shielded ledger and update the root.
     /// Enforces a cap on the number of recent roots kept (`cap`, minimum 1).
     /// Returns the new Merkle root.
@@ -232,7 +221,6 @@ impl ZkAssetState {
             .next()
             .ok_or_else(|| "single commitment append produced no root".to_owned())
     }
-
     /// Atomically append an ordered commitment batch and return each resulting root.
     ///
     /// The complete batch is validated before either commitments or retained roots
@@ -257,7 +245,6 @@ impl ZkAssetState {
         if commitments.is_empty() {
             return Ok(Vec::new());
         }
-
         let append = crate::zk::confidential_v2::append_confidential_tree_frontier_v2(
             previous_len,
             self.tree_frontier,
@@ -272,7 +259,6 @@ impl ZkAssetState {
         self.root_history
             .try_reserve(append.appended_roots.len())
             .map_err(|error| format!("failed to reserve confidential root history: {error}"))?;
-
         self.commitments.extend_from_slice(commitments);
         self.root_history.extend_from_slice(&append.appended_roots);
         // Bound retained roots by the sole confidential tree-history policy.
@@ -286,7 +272,6 @@ impl ZkAssetState {
         self.persisted_root = append.current_root;
         Ok(append.appended_roots)
     }
-
     /// Record a frontier checkpoint for reorg recovery, enforcing interval and depth bounds.
     pub fn record_frontier_checkpoint(
         &mut self,
@@ -299,7 +284,6 @@ impl ZkAssetState {
         if interval == 0 {
             return Ok(update);
         }
-
         let should_record = self
             .frontier_checkpoints
             .last()
@@ -312,7 +296,6 @@ impl ZkAssetState {
             });
             update.recorded = true;
         }
-
         if depth_bound == 0 {
             if self.frontier_checkpoints.len() > 1 {
                 let evicted = (self.frontier_checkpoints.len() - 1) as u64;
@@ -325,7 +308,6 @@ impl ZkAssetState {
             }
             return Ok(update);
         }
-
         let evict = self
             .frontier_checkpoints
             .iter()
@@ -351,7 +333,6 @@ impl ZkAssetState {
         Ok(update)
     }
 }
-
 #[cfg(feature = "telemetry")]
 impl ZkAssetState {
     /// Build [`ConfidentialTreeStats`] for the current tree snapshot.
@@ -378,7 +359,6 @@ impl ZkAssetState {
         }
     }
 }
-
 #[cfg(feature = "telemetry")]
 fn saturating_len_to_u64(len: usize) -> u64 {
     u64::try_from(len).unwrap_or(u64::MAX)

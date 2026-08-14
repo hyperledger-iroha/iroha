@@ -1,18 +1,14 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
-
 //! # SHAKE Implementation
 //!
 //! This module retains only the scalar SHAKE256 permutation and buffered
 //! single-stream PRNG needed by bounded key generation and ffSampling.
-
 use super::PRNG;
 use zeroize::Zeroize;
-
 // Keccak state (25*8 = 200 bytes).
 struct KeccakState([u64; 25]);
-
 impl KeccakState {
     const RC: [u64; 24] = [
         0x0000000000000001,
@@ -40,15 +36,12 @@ impl KeccakState {
         0x0000000080000001,
         0x8000000080008008,
     ];
-
     // Create a new KeccakState initialized at zero.
     fn new() -> Self {
         Self([0u64; 25])
     }
-
     fn process(&mut self) {
         let mut A: [u64; 25] = self.0;
-
         // Invert some words (alternate internal representation, which
         // saves some operations).
         A[1] = !A[1];
@@ -57,7 +50,6 @@ impl KeccakState {
         A[12] = !A[12];
         A[17] = !A[17];
         A[20] = !A[20];
-
         // Compute 24 rounds. The loop is partially unrolled (two rounds
         // per iteration).
         for i in 0..12 {
@@ -65,7 +57,6 @@ impl KeccakState {
             let (mut tt0, mut tt1, mut tt2, mut tt3);
             let (mut t, mut kt);
             let (mut c0, mut c1, mut c2, mut c3, mut c4, mut bnn);
-
             tt0 = A[1] ^ A[6];
             tt1 = A[11] ^ A[16];
             tt0 ^= A[21] ^ tt1;
@@ -75,7 +66,6 @@ impl KeccakState {
             tt0 ^= A[24];
             tt2 ^= tt3;
             t0 = tt0 ^ tt2;
-
             tt0 = A[2] ^ A[7];
             tt1 = A[12] ^ A[17];
             tt0 ^= A[22] ^ tt1;
@@ -85,7 +75,6 @@ impl KeccakState {
             tt0 ^= A[20];
             tt2 ^= tt3;
             t1 = tt0 ^ tt2;
-
             tt0 = A[3] ^ A[8];
             tt1 = A[13] ^ A[18];
             tt0 ^= A[23] ^ tt1;
@@ -95,7 +84,6 @@ impl KeccakState {
             tt0 ^= A[21];
             tt2 ^= tt3;
             t2 = tt0 ^ tt2;
-
             tt0 = A[4] ^ A[9];
             tt1 = A[14] ^ A[19];
             tt0 ^= A[24] ^ tt1;
@@ -105,7 +93,6 @@ impl KeccakState {
             tt0 ^= A[22];
             tt2 ^= tt3;
             t3 = tt0 ^ tt2;
-
             tt0 = A[0] ^ A[5];
             tt1 = A[10] ^ A[15];
             tt0 ^= A[20] ^ tt1;
@@ -115,7 +102,6 @@ impl KeccakState {
             tt0 ^= A[23];
             tt2 ^= tt3;
             t4 = tt0 ^ tt2;
-
             A[0] = A[0] ^ t0;
             A[5] = A[5] ^ t0;
             A[10] = A[10] ^ t0;
@@ -165,7 +151,6 @@ impl KeccakState {
             A[14] = (A[14] << 39) | (A[14] >> (64 - 39));
             A[19] = (A[19] << 8) | (A[19] >> (64 - 8));
             A[24] = (A[24] << 14) | (A[24] >> (64 - 14));
-
             bnn = !A[12];
             kt = A[6] | A[12];
             c0 = A[0] ^ kt;
@@ -247,7 +232,6 @@ impl KeccakState {
             A[15] = c3;
             A[21] = c4;
             A[0] = A[0] ^ Self::RC[2 * i + 0];
-
             tt0 = A[6] ^ A[9];
             tt1 = A[7] ^ A[5];
             tt0 ^= A[8] ^ tt1;
@@ -257,7 +241,6 @@ impl KeccakState {
             tt0 ^= A[21];
             tt2 ^= tt3;
             t0 = tt0 ^ tt2;
-
             tt0 = A[12] ^ A[10];
             tt1 = A[13] ^ A[11];
             tt0 ^= A[14] ^ tt1;
@@ -267,7 +250,6 @@ impl KeccakState {
             tt0 ^= A[2];
             tt2 ^= tt3;
             t1 = tt0 ^ tt2;
-
             tt0 = A[18] ^ A[16];
             tt1 = A[19] ^ A[17];
             tt0 ^= A[15] ^ tt1;
@@ -277,7 +259,6 @@ impl KeccakState {
             tt0 ^= A[8];
             tt2 ^= tt3;
             t2 = tt0 ^ tt2;
-
             tt0 = A[24] ^ A[22];
             tt1 = A[20] ^ A[23];
             tt0 ^= A[21] ^ tt1;
@@ -287,7 +268,6 @@ impl KeccakState {
             tt0 ^= A[14];
             tt2 ^= tt3;
             t3 = tt0 ^ tt2;
-
             tt0 = A[0] ^ A[3];
             tt1 = A[1] ^ A[4];
             tt0 ^= A[2] ^ tt1;
@@ -297,7 +277,6 @@ impl KeccakState {
             tt0 ^= A[15];
             tt2 ^= tt3;
             t4 = tt0 ^ tt2;
-
             A[0] = A[0] ^ t0;
             A[3] = A[3] ^ t0;
             A[1] = A[1] ^ t0;
@@ -347,7 +326,6 @@ impl KeccakState {
             A[20] = (A[20] << 39) | (A[20] >> (64 - 39));
             A[23] = (A[23] << 8) | (A[23] >> (64 - 8));
             A[21] = (A[21] << 14) | (A[21] >> (64 - 14));
-
             bnn = !A[13];
             kt = A[9] | A[13];
             c0 = A[0] ^ kt;
@@ -429,7 +407,6 @@ impl KeccakState {
             A[4] = c3;
             A[8] = c4;
             A[0] = A[0] ^ Self::RC[2 * i + 1];
-
             t = A[5];
             A[5] = A[18];
             A[18] = A[11];
@@ -457,7 +434,6 @@ impl KeccakState {
             A[17] = A[7];
             A[7] = t;
         }
-
         // Invert some words back to normal representation.
         A[1] = !A[1];
         A[2] = !A[2];
@@ -465,7 +441,6 @@ impl KeccakState {
         A[12] = !A[12];
         A[17] = !A[17];
         A[20] = !A[20];
-
         self.0 = A;
     }
 }
@@ -474,13 +449,10 @@ pub struct SHAKE<const SZ: usize> {
     ptr: usize,
     flipped: bool,
 }
-
 /// Type specialization for SHAKE128.
 pub type SHAKE128 = SHAKE<128>;
-
 /// Type specialization for SHAKE256.
 pub type SHAKE256 = SHAKE<256>;
-
 impl<const SZ: usize> SHAKE<SZ> {
     // A custom compile-time check; it should prevent compilation from
     // succeeded if SZ is not 128 or 256.
@@ -490,7 +462,6 @@ impl<const SZ: usize> SHAKE<SZ> {
         let _ = &[()][1 - ((SZ == 128 || SZ == 256) as usize)];
     }
     const RATE: usize = 200 - (SZ >> 2);
-
     /// Create a new instance.
     pub fn new() -> Self {
         Self {
@@ -499,7 +470,6 @@ impl<const SZ: usize> SHAKE<SZ> {
             flipped: false,
         }
     }
-
     /// Inject some bytes into the engine.
     ///
     /// This function can be called repeatedly. If the engine is in output
@@ -522,7 +492,6 @@ impl<const SZ: usize> SHAKE<SZ> {
         }
         self.ptr = ptr;
     }
-
     /// Flip the engine from input to output mode.
     ///
     /// If the engine is already in output mode, then a panic is triggered.
@@ -535,7 +504,6 @@ impl<const SZ: usize> SHAKE<SZ> {
         self.ptr = Self::RATE;
         self.flipped = true;
     }
-
     /// Extract some bytes from the engine.
     ///
     /// This function can be called repeatedly. If the engine is in input
@@ -558,13 +526,11 @@ impl<const SZ: usize> SHAKE<SZ> {
         }
         self.ptr = ptr;
     }
-
     /// Reset this engine to the initial state (empty, input mode).
     pub fn reset(&mut self) {
         *self = Self::new();
     }
 }
-
 /// PRNG based on SHAKE256.
 ///
 /// This is just a wrapper SHAKE256 itself, with an extra buffer to speed
@@ -575,14 +541,12 @@ pub struct SHAKE256_PRNG {
     buf: [u8; 136],
     ptr: usize,
 }
-
 impl SHAKE256_PRNG {
     fn refill(&mut self) {
         self.sh.extract(&mut self.buf);
         self.ptr = 0;
     }
 }
-
 impl PRNG for SHAKE256_PRNG {
     fn new(seed: &[u8]) -> Self {
         let mut sh = SHAKE256::new();
@@ -594,7 +558,6 @@ impl PRNG for SHAKE256_PRNG {
             ptr: 136,
         }
     }
-
     fn next_u8(&mut self) -> u8 {
         if self.ptr == self.buf.len() {
             self.refill();
@@ -603,7 +566,6 @@ impl PRNG for SHAKE256_PRNG {
         self.ptr += 1;
         x
     }
-
     fn next_u16(&mut self) -> u16 {
         if self.ptr >= (self.buf.len() - 1) {
             let x = self.next_u8() as u16;
@@ -614,7 +576,6 @@ impl PRNG for SHAKE256_PRNG {
         self.ptr += 2;
         x
     }
-
     fn next_u64(&mut self) -> u64 {
         if self.ptr >= (self.buf.len() - 7) {
             let mut x = 0;
@@ -628,7 +589,6 @@ impl PRNG for SHAKE256_PRNG {
         self.ptr += 8;
         x
     }
-
     fn zeroize(&mut self) {
         self.sh.state.0.zeroize();
         self.sh.ptr = 0;
@@ -637,7 +597,6 @@ impl PRNG for SHAKE256_PRNG {
         self.ptr = 0;
     }
 }
-
 impl Drop for SHAKE256_PRNG {
     fn drop(&mut self) {
         <Self as PRNG>::zeroize(self);

@@ -1,7 +1,5 @@
 //! `from_bytes` rejects payloads with non-None compression via UnsupportedCompression.
-
 use byteorder::{ByteOrder, LittleEndian};
-
 #[test]
 fn from_bytes_rejects_non_none_compression() {
     // Build a minimal header with Compression::Zstd (1) and zero-length payload
@@ -21,7 +19,6 @@ fn from_bytes_rejects_non_none_compression() {
     LittleEndian::write_u64(&mut bytes[31..39], 0);
     // Flags = 0
     bytes[39] = 0;
-
     let res = norito::core::from_bytes::<u8>(&bytes);
     assert!(matches!(
         res,

@@ -1,7 +1,6 @@
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use norito::columnar;
 use rand::{Rng, SeedableRng, rngs::StdRng};
-
 fn gen_rows(n: usize) -> Vec<(u64, String, bool)> {
     let mut rng = StdRng::seed_from_u64(42);
     let mut rows = Vec::with_capacity(n);
@@ -15,7 +14,6 @@ fn gen_rows(n: usize) -> Vec<(u64, String, bool)> {
     }
     rows
 }
-
 // Simplified previous Vec-based encoder for (u64, &str, bool)
 fn encode_vec(rows: &[(u64, &str, bool)]) -> Vec<u8> {
     let n = rows.len() as u32;
@@ -61,19 +59,16 @@ fn encode_vec(rows: &[(u64, &str, bool)]) -> Vec<u8> {
     }
     buf
 }
-
 // Current ByteSink-based encoder (same as library implementation)
 fn encode_sink(rows: &[(u64, &str, bool)]) -> Vec<u8> {
     columnar::encode_ncb_u64_str_bool(rows)
 }
-
 fn bench_ncb_sink_vs_vec(c: &mut Criterion) {
     let rows_owned = gen_rows(10_000);
     let rows_borrowed: Vec<(u64, &str, bool)> = rows_owned
         .iter()
         .map(|(id, s, b)| (*id, s.as_str(), *b))
         .collect();
-
     c.bench_function("ncb_vec_encode_10k", |b| {
         b.iter_batched(
             || rows_borrowed.clone(),
@@ -83,7 +78,6 @@ fn bench_ncb_sink_vs_vec(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("ncb_sink_encode_10k", |b| {
         b.iter_batched(
             || rows_borrowed.clone(),
@@ -94,6 +88,5 @@ fn bench_ncb_sink_vs_vec(c: &mut Criterion) {
         )
     });
 }
-
 criterion_group!(benches, bench_ncb_sink_vs_vec);
 criterion_main!(benches);

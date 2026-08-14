@@ -1,12 +1,10 @@
 #![allow(unexpected_cfgs)]
-
 //! Norito-encoded manifest model for SoraFS artifacts.
 //!
 //! The structure tracks the metadata described in the SoraFS Architecture
 //! RFC (SF-1): chunking profile, CAR commitments, pin policies, and governance
 //! attestations. Encoding uses Norito so manifests can be validated by Torii,
 //! gateways, and storage nodes without bespoke parsers.
-
 use blake3::Hash;
 use ed25519_dalek::Signature as DalekSig;
 use norito::{
@@ -16,7 +14,6 @@ use norito::{
 };
 use sorafs_chunker::ChunkProfile;
 use thiserror::Error;
-
 pub mod alias_cache;
 pub mod capacity;
 pub mod chunker_registry;
@@ -49,7 +46,6 @@ pub mod retention;
 pub mod token;
 pub mod transparency;
 pub mod validation;
-
 /// Decode a fixed-width Ed25519 signature after rejecting inert or malformed `R` payloads.
 pub(crate) fn checked_ed25519_signature_from_bytes(
     signature: &[u8; ed25519_dalek::SIGNATURE_LENGTH],
@@ -68,7 +64,6 @@ pub(crate) fn checked_ed25519_signature_from_bytes(
         .map_err(|err| format!("signature R is small-order (weak); rejected: {err}"))?;
     Ok(DalekSig::from_bytes(signature))
 }
-
 /// Decode a fixed-width Ed25519 verifying key after rejecting inert or weak keys.
 pub(crate) fn checked_ed25519_verifying_key_from_bytes(
     public_key: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
@@ -86,18 +81,15 @@ pub(crate) fn checked_ed25519_verifying_key_from_bytes(
     }
     Ok(verifying_key)
 }
-
 pub(crate) fn inert_bytes(bytes: &[u8]) -> bool {
     !bytes.is_empty() && bytes.iter().all(|byte| *byte == 0)
 }
-
 fn ed25519_compressed_y_is_canonical(bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH]) -> bool {
     const ED25519_FIELD_MODULUS_LE: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
         0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     let mut y = *bytes;
     y[ed25519_dalek::PUBLIC_KEY_LENGTH - 1] &= 0x7f;
     for idx in (0..ed25519_dalek::PUBLIC_KEY_LENGTH).rev() {
@@ -109,79 +101,64 @@ fn ed25519_compressed_y_is_canonical(bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENG
     }
     false
 }
-
 #[cfg(test)]
 mod checked_ed25519_signature_tests {
     use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, SigningKey};
-
     const ED25519_SMALL_ORDER_POINT: [u8; PUBLIC_KEY_LENGTH] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     const ED25519_NON_CANONICAL_IDENTITY: [u8; PUBLIC_KEY_LENGTH] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     const ED25519_NON_CANONICAL_NON_SMALL_ORDER_POINT: [u8; PUBLIC_KEY_LENGTH] = [
         0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     #[test]
     fn checked_ed25519_signature_rejects_all_zero_signature_material() {
         let err = super::checked_ed25519_signature_from_bytes(&[0; SIGNATURE_LENGTH])
             .expect_err("all-zero signature material must fail");
         assert!(err.contains("all zero"), "unexpected error: {err}");
     }
-
     #[test]
     fn checked_ed25519_signature_rejects_noncanonical_or_small_order_r() {
         use ed25519_dalek::Signer as _;
-
         let signing_key = SigningKey::from_bytes(&[0x42; 32]);
         let mut signature = signing_key.sign(b"sorafs-manifest-invalid-r").to_bytes();
-
         signature[..PUBLIC_KEY_LENGTH].copy_from_slice(&ED25519_SMALL_ORDER_POINT);
         let err = super::checked_ed25519_signature_from_bytes(&signature)
             .expect_err("small-order signature R must fail");
         assert!(err.contains("small-order"), "unexpected error: {err}");
-
         signature[..PUBLIC_KEY_LENGTH].copy_from_slice(&ED25519_NON_CANONICAL_IDENTITY);
         let err = super::checked_ed25519_signature_from_bytes(&signature)
             .expect_err("noncanonical signature R must fail");
         assert!(err.contains("not a canonical"), "unexpected error: {err}");
     }
-
     #[test]
     fn checked_ed25519_verifying_key_rejects_all_zero_public_key_material() {
         let err = super::checked_ed25519_verifying_key_from_bytes(&[0; PUBLIC_KEY_LENGTH])
             .expect_err("all-zero public key material must fail");
         assert!(err.contains("all zero"));
-
         let err = super::checked_ed25519_verifying_key_from_bytes(&ED25519_SMALL_ORDER_POINT)
             .expect_err("small-order public key material must fail");
         assert!(err.contains("small-order"), "unexpected error: {err}");
-
         let err = super::checked_ed25519_verifying_key_from_bytes(&ED25519_NON_CANONICAL_IDENTITY)
             .expect_err("noncanonical public key material must fail");
         assert!(err.contains("not a canonical"), "unexpected error: {err}");
-
         let err = super::checked_ed25519_verifying_key_from_bytes(
             &ED25519_NON_CANONICAL_NON_SMALL_ORDER_POINT,
         )
         .expect_err("noncanonical non-small-order public key material must fail");
         assert!(err.contains("not a canonical"), "unexpected error: {err}");
-
         let signing_key = SigningKey::from_bytes(&[0x41; 32]);
         let public_key = signing_key.verifying_key().to_bytes();
         super::checked_ed25519_verifying_key_from_bytes(&public_key)
             .expect("valid Ed25519 public key must pass");
     }
-
     #[test]
     fn inert_bytes_requires_non_empty_all_zero_material() {
         assert!(!super::inert_bytes(&[]));
@@ -189,7 +166,6 @@ mod checked_ed25519_signature_tests {
         assert!(!super::inert_bytes(&[0, 1, 0]));
     }
 }
-
 pub use capacity::{
     AssignmentError, CAPACITY_DECLARATION_VERSION_V1, CAPACITY_DISPUTE_VERSION_V1,
     CAPACITY_TELEMETRY_VERSION_V1, CapacityDeclarationV1, CapacityDeclarationValidationError,
@@ -299,14 +275,17 @@ pub use manifest_capabilities::{
 pub use orderbook::{
     BYTES_PER_GIB, ByteRangeV1, ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_ID_DOMAIN_V1,
     ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
-    ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1, ORDERBOOK_SETTLEMENT_CHANNEL_ID_DOMAIN_V1,
-    ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1, OrderBookMatchOutcomeV1,
-    OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1, OrderRequestV1, OrderSideV1,
-    OrderTierV1, OrderbookPayloadDecodeError, OrderbookSignatureV1, OrderbookValidationError,
-    SETTLEMENT_CHANNEL_VERSION_V1, SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelStatusV1,
-    SettlementChannelV1, SettlementReceiptV1, TradeEventV1, apply_settlement_receipt_v1,
-    decode_order_cancel_v1, decode_order_request_v1, decode_settlement_channel_v1,
-    decode_settlement_receipt_v1, decode_trade_event_v1, derive_orderbook_order_id_v1,
+    ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1,
+    ORDERBOOK_SETTLEMENT_CHANNEL_ID_DOMAIN_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1,
+    OrderBookMatchOutcomeV1, OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1,
+    OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookPayloadDecodeError, OrderbookSignatureV1,
+    OrderbookValidationError, SETTLEMENT_CHANNEL_VERSION_V1, SETTLEMENT_RECEIPT_VERSION_V1,
+    SettlementChannelStatusV1, SettlementChannelV1, SettlementReceiptV1, TradeEventV1,
+    apply_settlement_receipt_v1, decode_order_cancel_v1, decode_order_cancel_v1_with_limits,
+    decode_order_request_v1, decode_order_request_v1_with_limits, decode_settlement_channel_v1,
+    decode_settlement_channel_v1_with_limits, decode_settlement_receipt_v1,
+    decode_settlement_receipt_v1_with_limits, decode_trade_event_v1,
+    decode_trade_event_v1_with_limits, derive_orderbook_order_id_v1,
     derive_orderbook_settlement_channel_id_v1, derive_orderbook_trade_id_v1, match_order_book_v1,
     match_orders_v1, open_settlement_channel_for_trade_v1, order_cancel_signature_digest_v1,
     order_request_signature_digest_v1, settlement_receipt_signature_digest_v1,
@@ -509,7 +488,6 @@ pub use validation::{
     encode_manifest_v1_base64_canonical, validate_chunker_handle, validate_manifest,
     validate_manifest_root_cid, validate_pin_policy, validate_registered_chunker_profile,
 };
-
 pub use self::gateway_fixture::{
     GatewayFixtureMetadata, SORAFS_GATEWAY_CAR_DIGEST_HEX,
     SORAFS_GATEWAY_CHUNK_DIGEST_SHA3_256_HEX, SORAFS_GATEWAY_COUNCIL_ENVELOPE_DIGEST_HEX,
@@ -518,16 +496,12 @@ pub use self::gateway_fixture::{
     SORAFS_GATEWAY_PAYLOAD_DIGEST_HEX, SORAFS_GATEWAY_PROFILE_VERSION, gateway_fixture_digest_hex,
     gateway_fixture_metadata,
 };
-
 /// Manifest version identifier.
 pub const MANIFEST_VERSION_V1: u8 = 1;
-
 /// Canonical Proof-of-Retrievability root for an empty V1 payload.
 pub const EMPTY_POR_ROOT_V1: [u8; 32] = [0; 32];
-
 /// Multihash code for BLAKE3-256.
 pub const BLAKE3_256_MULTIHASH_CODE: u64 = 0x1f;
-
 /// Builds the canonical binary CIDv1 used for first-release manifest roots.
 ///
 /// The returned bytes encode CID version 1, the dag-cbor multicodec, the
@@ -542,7 +516,6 @@ pub fn canonical_manifest_root_cid(digest: [u8; 32]) -> Vec<u8> {
     cid.extend_from_slice(&digest);
     cid
 }
-
 /// Norito-encoded manifest (version 1).
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -570,27 +543,23 @@ pub struct ManifestV1 {
     pub alias_claims: Vec<AliasClaim>,
     pub metadata: Vec<MetadataEntry>,
 }
-
 impl ManifestV1 {
     /// Serializes the manifest using canonical Norito encoding.
     pub fn encode(&self) -> Result<Vec<u8>, NoritoError> {
         norito::to_bytes(self)
     }
-
     /// Computes the canonical manifest digest used by the Pin Registry.
     pub fn digest(&self) -> Result<Hash, NoritoError> {
         let bytes = self.encode()?;
         Ok(blake3::hash(&bytes))
     }
 }
-
 /// Errors raised while building a manifest.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum ManifestBuildError {
     #[error("missing required field: {0}")]
     MissingField(&'static str),
 }
-
 /// Builder for [`ManifestV1`].
 #[derive(Debug, Default)]
 pub struct ManifestBuilder {
@@ -607,31 +576,26 @@ pub struct ManifestBuilder {
     alias_claims: Vec<AliasClaim>,
     metadata: Vec<MetadataEntry>,
 }
-
 impl ManifestBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
-
     #[must_use]
     pub fn root_cid(mut self, cid: impl Into<Vec<u8>>) -> Self {
         self.root_cid = Some(cid.into());
         self
     }
-
     #[must_use]
     pub fn dag_codec(mut self, codec: DagCodecId) -> Self {
         self.dag_codec = Some(codec);
         self
     }
-
     #[must_use]
     pub fn chunking_profile(mut self, profile: ChunkingProfileV1) -> Self {
         self.chunking = Some(profile);
         self
     }
-
     #[must_use]
     pub fn chunking_from_registry(mut self, profile_id: ProfileId) -> Self {
         if let Some(descriptor) = crate::chunker_registry::lookup(profile_id) {
@@ -639,34 +603,29 @@ impl ManifestBuilder {
         }
         self
     }
-
     #[must_use]
     pub fn chunking_from_profile(mut self, profile: ChunkProfile, multihash_code: u64) -> Self {
         self.chunking = Some(ChunkingProfileV1::from_profile(profile, multihash_code));
         self
     }
-
     /// Set the SHA3-256 commitment to the ordered chunk metadata plan.
     #[must_use]
     pub fn chunk_digest_sha3_256(mut self, digest: [u8; 32]) -> Self {
         self.chunk_digest_sha3_256 = Some(digest);
         self
     }
-
     /// Set the Merkle root of the Proof-of-Retrievability tree.
     #[must_use]
     pub fn por_root(mut self, root: [u8; 32]) -> Self {
         self.por_root = Some(root);
         self
     }
-
     /// Set the exact unchunked payload length represented by the DAG.
     #[must_use]
     pub fn content_length(mut self, len: u64) -> Self {
         self.content_length = Some(len);
         self
     }
-
     /// Set the BLAKE3-256 digest of the entire canonical CARv2 archive.
     ///
     /// This commits the pragma, CARv2 header, embedded CARv1 payload, and
@@ -676,32 +635,27 @@ impl ManifestBuilder {
         self.car_digest = Some(digest);
         self
     }
-
     /// Set the complete canonical CARv2 archive length in bytes.
     #[must_use]
     pub fn car_size(mut self, size: u64) -> Self {
         self.car_size = Some(size);
         self
     }
-
     #[must_use]
     pub fn pin_policy(mut self, policy: PinPolicy) -> Self {
         self.pin_policy = Some(policy);
         self
     }
-
     #[must_use]
     pub fn governance(mut self, proofs: GovernanceProofs) -> Self {
         self.governance = proofs;
         self
     }
-
     #[must_use]
     pub fn push_alias(mut self, claim: AliasClaim) -> Self {
         self.alias_claims.push(claim);
         self
     }
-
     #[must_use]
     pub fn extend_aliases<I>(mut self, claims: I) -> Self
     where
@@ -710,7 +664,6 @@ impl ManifestBuilder {
         self.alias_claims.extend(claims);
         self
     }
-
     #[must_use]
     pub fn add_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.metadata.push(MetadataEntry {
@@ -719,7 +672,6 @@ impl ManifestBuilder {
         });
         self
     }
-
     #[must_use]
     pub fn extend_metadata<I>(mut self, entries: I) -> Self
     where
@@ -732,7 +684,6 @@ impl ManifestBuilder {
         );
         self
     }
-
     pub fn build(self) -> Result<ManifestV1, ManifestBuildError> {
         let root_cid = self
             .root_cid
@@ -761,7 +712,6 @@ impl ManifestBuilder {
         let pin_policy = self
             .pin_policy
             .ok_or(ManifestBuildError::MissingField("pin_policy"))?;
-
         Ok(ManifestV1 {
             version: MANIFEST_VERSION_V1,
             root_cid,
@@ -779,7 +729,6 @@ impl ManifestBuilder {
         })
     }
 }
-
 /// Simple newtype for Dag codec identifiers (CID multicodec).
 #[derive(
     Debug,
@@ -793,7 +742,6 @@ impl ManifestBuilder {
     Eq,
 )]
 pub struct DagCodecId(pub u64);
-
 /// Snapshot of the chunking profile baked into the manifest.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -810,7 +758,6 @@ pub struct ChunkingProfileV1 {
     pub multihash_code: u64,
     pub aliases: Vec<String>,
 }
-
 impl ChunkingProfileV1 {
     pub fn from_profile(profile: ChunkProfile, multihash_code: u64) -> Self {
         if let Some(descriptor) =
@@ -832,7 +779,6 @@ impl ChunkingProfileV1 {
             }
         }
     }
-
     pub fn from_descriptor(descriptor: &crate::chunker_registry::ChunkerProfileDescriptor) -> Self {
         Self {
             profile_id: descriptor.id,
@@ -852,7 +798,6 @@ impl ChunkingProfileV1 {
         }
     }
 }
-
 /// Profile identifier used for chunking negotiation.
 #[derive(
     Debug,
@@ -868,7 +813,6 @@ impl ChunkingProfileV1 {
     Ord,
 )]
 pub struct ProfileId(pub u32);
-
 /// Storage replication policy encoded in the manifest.
 #[derive(
     Debug,
@@ -886,7 +830,6 @@ pub struct PinPolicy {
     pub storage_class: StorageClass,
     pub retention_epoch: u64,
 }
-
 impl Default for PinPolicy {
     fn default() -> Self {
         Self {
@@ -896,7 +839,6 @@ impl Default for PinPolicy {
         }
     }
 }
-
 /// Storage tier expressed in the manifest.
 #[derive(
     Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, PartialOrd, Ord, Default,
@@ -907,7 +849,6 @@ pub enum StorageClass {
     Warm,
     Cold,
 }
-
 impl FastJsonWrite for StorageClass {
     fn write_json(&self, out: &mut String) {
         let label = match self {
@@ -918,7 +859,6 @@ impl FastJsonWrite for StorageClass {
         NoritoJsonSerialize::json_serialize(&label, out);
     }
 }
-
 impl json::JsonDeserialize for StorageClass {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = parser.parse_string()?;
@@ -932,7 +872,6 @@ impl json::JsonDeserialize for StorageClass {
         }
     }
 }
-
 /// Governance proof bundle.
 ///
 /// Future policy proofs (e.g., admission allowlists, replication attestations)
@@ -951,7 +890,6 @@ impl json::JsonDeserialize for StorageClass {
 pub struct GovernanceProofs {
     pub council_signatures: Vec<CouncilSignature>,
 }
-
 /// Council signature proof binding the manifest digest.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -960,7 +898,6 @@ pub struct CouncilSignature {
     pub signer: [u8; 32],
     pub signature: Vec<u8>,
 }
-
 /// Alias binding bundled with the manifest.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -970,7 +907,6 @@ pub struct AliasClaim {
     pub namespace: String,
     pub proof: Vec<u8>,
 }
-
 /// Metadata key/value pair recorded in the manifest.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -979,11 +915,9 @@ pub struct MetadataEntry {
     pub key: String,
     pub value: String,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn canonical_manifest_root_cid_has_exact_first_release_layout() {
         let digest = [0xA5; 32];
@@ -1000,7 +934,6 @@ mod tests {
         );
         assert_eq!(&cid[4..], digest);
     }
-
     fn sample_manifest() -> ManifestV1 {
         ManifestBuilder::new()
             .root_cid(canonical_manifest_root_cid([0xAA; 32]))
@@ -1032,7 +965,6 @@ mod tests {
             .build()
             .expect("build manifest")
     }
-
     #[test]
     fn encode_roundtrip() {
         let manifest = sample_manifest();
@@ -1040,7 +972,6 @@ mod tests {
         let decoded: ManifestV1 = norito::decode_from_bytes(&bytes).expect("decode manifest");
         assert_eq!(manifest, decoded);
     }
-
     #[test]
     fn digest_is_deterministic() {
         let manifest = sample_manifest();
@@ -1051,7 +982,6 @@ mod tests {
         assert_eq!(manifest.chunking.name, "sf1");
         assert_eq!(manifest.chunking.semver, "1.0.0");
     }
-
     #[test]
     fn digest_binds_the_embedded_chunk_plan_commitment() {
         let manifest = sample_manifest();
@@ -1062,7 +992,6 @@ mod tests {
             substituted.digest().expect("substituted digest")
         );
     }
-
     #[test]
     fn digest_binds_the_por_root() {
         let manifest = sample_manifest();
@@ -1073,7 +1002,6 @@ mod tests {
             substituted.digest().expect("substituted digest")
         );
     }
-
     #[test]
     fn digest_binds_the_complete_car_archive_commitments() {
         let manifest = sample_manifest();
@@ -1085,7 +1013,6 @@ mod tests {
                 .digest()
                 .expect("substituted CAR archive digest")
         );
-
         let mut substituted_size = manifest.clone();
         substituted_size.car_size = substituted_size.car_size.saturating_add(1);
         assert_ne!(
@@ -1095,12 +1022,10 @@ mod tests {
                 .expect("substituted CAR archive size")
         );
     }
-
     #[test]
     fn builder_rejects_missing_fields() {
         let err = ManifestBuilder::new().build().unwrap_err();
         assert!(matches!(err, ManifestBuildError::MissingField("root_cid")));
-
         let err = ManifestBuilder::new()
             .root_cid(canonical_manifest_root_cid([0xAA; 32]))
             .dag_codec(DagCodecId(0x71))
@@ -1117,7 +1042,6 @@ mod tests {
             .build()
             .expect_err("PoR root is mandatory");
         assert_eq!(err, ManifestBuildError::MissingField("por_root"));
-
         let err = ManifestBuilder::new()
             .root_cid(canonical_manifest_root_cid([0xAA; 32]))
             .dag_codec(DagCodecId(0x71))
@@ -1138,7 +1062,6 @@ mod tests {
             ManifestBuildError::MissingField("chunk_digest_sha3_256")
         );
     }
-
     #[test]
     fn chunking_profile_includes_registry_aliases() {
         let manifest = sample_manifest();
@@ -1151,7 +1074,6 @@ mod tests {
             .collect();
         assert_eq!(manifest.chunking.aliases, expected);
     }
-
     #[test]
     fn chunking_profile_fallback_has_inline_alias() {
         let custom_profile = ChunkProfile {

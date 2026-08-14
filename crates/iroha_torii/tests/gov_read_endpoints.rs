@@ -1,9 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii handler tests for governance read endpoints: proposal/referendum/locks/tally.
 #![allow(unexpected_cfgs, clippy::similar_names, clippy::too_many_lines)]
-
 use std::sync::Arc;
-
 use axum::{extract::Path as AxPath, response::IntoResponse};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -16,12 +14,10 @@ use iroha_data_model::governance::types::{
     AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
 };
 use mv::storage::StorageReadOnly;
-
 fn checked_governance_read_ed25519_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked governance read endpoint Ed25519 fixture keypair")
 }
-
 #[test]
 fn governance_read_fixture_uses_checked_ed25519_key_generation() {
     let key_pair = checked_governance_read_ed25519_key_fixture();
@@ -29,10 +25,8 @@ fn governance_read_fixture_uses_checked_ed25519_key_generation() {
         .public_key()
         .try_algorithm()
         .expect("fixture governance read public key has a valid algorithm");
-
     assert_eq!(algorithm, Algorithm::Ed25519);
 }
-
 #[tokio::test]
 async fn gov_proposal_get_returns_record() {
     let mut st_raw = State::new_for_testing(
@@ -40,7 +34,6 @@ async fn gov_proposal_get_returns_record() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-
     // Insert a proposal record under a known id
     let id_bytes = [0xAAu8; 32];
     let id_hex = hex::encode(id_bytes);
@@ -74,7 +67,6 @@ async fn gov_proposal_get_returns_record() {
             "proposal record should be present in state"
         );
     }
-
     let state = Arc::new(st_raw);
     let resp = iroha_torii::handle_gov_get_proposal(state.clone(), AxPath(id_hex))
         .await
@@ -110,7 +102,6 @@ async fn gov_proposal_get_returns_record() {
         Some("irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw")
     );
 }
-
 #[tokio::test]
 async fn gov_proposal_get_invalid_id_and_missing_entry() {
     let state = Arc::new(State::new_for_testing(
@@ -118,7 +109,6 @@ async fn gov_proposal_get_invalid_id_and_missing_entry() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     ));
-
     // Case 1: invalid hex (odd length)
     let err = iroha_torii::handle_gov_get_proposal(state.clone(), AxPath("abc".to_string()))
         .await
@@ -135,7 +125,6 @@ async fn gov_proposal_get_invalid_id_and_missing_entry() {
         },
         other => panic!("unexpected error type: {other:?}"),
     }
-
     // Case 2: valid hex but wrong length (31 bytes)
     let bad_len = "aa".repeat(31);
     let err = iroha_torii::handle_gov_get_proposal(state.clone(), AxPath(bad_len))
@@ -153,7 +142,6 @@ async fn gov_proposal_get_invalid_id_and_missing_entry() {
         },
         other => panic!("unexpected error type: {other:?}"),
     }
-
     // Case 3: well-formed (32-byte) id that does not exist → found=false
     let missing = "bb".repeat(32);
     let resp = iroha_torii::handle_gov_get_proposal(state, AxPath(missing))
@@ -168,7 +156,6 @@ async fn gov_proposal_get_invalid_id_and_missing_entry() {
         Some(false)
     );
 }
-
 #[tokio::test]
 async fn gov_council_current_does_not_synthesize_an_unpersisted_roster() {
     let kura = Kura::blank_kura_for_testing();
@@ -178,7 +165,6 @@ async fn gov_council_current_does_not_synthesize_an_unpersisted_roster() {
         .await
         .expect("handler ok")
         .0;
-
     assert!(resp.members.is_empty());
     assert!(resp.alternates.is_empty());
     assert_eq!(resp.candidate_count, 0);
@@ -187,7 +173,6 @@ async fn gov_council_current_does_not_synthesize_an_unpersisted_roster() {
         iroha_data_model::isi::governance::CouncilDerivationKind::Manual
     );
 }
-
 #[tokio::test]
 async fn gov_referendum_and_locks_and_tally_endpoints() {
     let mut raw_state = State::new_for_testing(
@@ -195,7 +180,6 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-
     // Prepare a referendum record and a locks record under rid = "r1"
     let rid = "r1".to_string();
     // Referendum record
@@ -227,9 +211,7 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
     assert_eq!(prev_height, 0, "fresh test state should start at height 0");
     iroha_core::query::insert_gov_referendum_for_test(&mut raw_state, rid.clone(), rr);
     iroha_core::query::insert_gov_locks_for_test(&mut raw_state, rid.clone(), locks);
-
     let state = Arc::new(raw_state);
-
     // GET referendum
     let resp_r = iroha_torii::handle_gov_get_referendum(state.clone(), AxPath(rid.clone()))
         .await
@@ -248,7 +230,6 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
             .and_then(norito::json::Value::as_str),
         Some("Plain")
     );
-
     // GET locks
     let resp_l = iroha_torii::handle_gov_get_locks(state.clone(), AxPath(rid.clone()))
         .await
@@ -266,7 +247,6 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
             .and_then(norito::json::Value::as_str),
         Some(&rid[..])
     );
-
     // GET tally: sqrt(10000) = 100, conviction factor = 1 + duration/step.
     let resp_t = iroha_torii::handle_gov_get_tally(state.clone(), AxPath(rid))
         .await
@@ -284,7 +264,6 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
         vt.get("approve").and_then(norito::json::Value::as_u64),
         Some(expected_approve as u64)
     );
-
     // Missing ids: referendum/locks not present → found=false; tally zeros
     let missing_id = "missing-rid".to_string();
     let resp_rm = iroha_torii::handle_gov_get_referendum(state.clone(), AxPath(missing_id.clone()))
@@ -297,7 +276,6 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
         vrm.get("found").and_then(norito::json::Value::as_bool),
         Some(false)
     );
-
     let resp_lm = iroha_torii::handle_gov_get_locks(state.clone(), AxPath(missing_id.clone()))
         .await
         .expect("handler ok")
@@ -308,7 +286,6 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
         vlm.get("found").and_then(norito::json::Value::as_bool),
         Some(false)
     );
-
     let resp_tm = iroha_torii::handle_gov_get_tally(state, AxPath(missing_id))
         .await
         .expect("handler ok")

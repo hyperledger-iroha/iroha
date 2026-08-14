@@ -3,9 +3,7 @@
 //! Integers use canonical JSON number tokens across the complete `i64`/`u64`
 //! domain. Exact decimals and quantities use canonical strings so they never
 //! pass through floating-point conversion.
-
 use core::{fmt::Write as _, str::FromStr};
-
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::{AccountId, ParsedAccountId},
@@ -31,20 +29,13 @@ use ivm_abi::{
 #[cfg(test)]
 use norito::{decode_from_bytes, to_bytes};
 use norito::{json as njson, json::native::Number as JsonNumber};
-
-use crate::{
-    IVM, PointerType, VMError, host::preflight_reserved_syscall_gas, pointer_abi, syscalls,
-};
-
+use crate::{IVM, PointerType, VMError, host::preflight_reserved_syscall_gas, pointer_abi, syscalls};
 /// Base gas for a schema-bound native JSON construction.
 pub const JSON_BUILD_GAS_BASE: u64 = 32;
-
 /// Base gas for one typed JSON getter.
 pub const JSON_TYPED_GETTER_GAS_BASE: u64 = 16;
-
 /// Address translation used for compiler literal TLVs.
 pub type AddressResolver = fn(&IVM, u64) -> u64;
-
 /// Result metadata for one typed getter execution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JsonGetterCost {
@@ -53,13 +44,11 @@ pub struct JsonGetterCost {
     /// Typed payload and Option allocation bytes materialized.
     pub output_bytes: usize,
 }
-
 #[derive(Default)]
 struct BuildStats {
     source_bytes: usize,
     collection_elements: usize,
 }
-
 fn drain_json_values_stack_safe(values: &mut Vec<njson::Value>) {
     let mut pending = core::mem::take(values);
     while let Some(value) = pending.pop() {
@@ -73,26 +62,21 @@ fn drain_json_values_stack_safe(values: &mut Vec<njson::Value>) {
         }
     }
 }
-
 // `norito::json::Value` has no custom destructor, so an owned deeply nested
 // array/object must be dismantled iteratively on every early-return path.
 #[derive(Debug)]
 struct StackSafeJsonValue(Option<njson::Value>);
-
 impl StackSafeJsonValue {
     fn new(value: njson::Value) -> Self {
         Self(Some(value))
     }
-
     fn value(&self) -> &njson::Value {
         self.0.as_ref().expect("stack-safe JSON value is present")
     }
-
     fn into_inner(mut self) -> njson::Value {
         self.0.take().expect("stack-safe JSON value is present")
     }
 }
-
 impl Drop for StackSafeJsonValue {
     fn drop(&mut self) {
         if let Some(value) = self.0.take() {
@@ -101,27 +85,21 @@ impl Drop for StackSafeJsonValue {
         }
     }
 }
-
 #[derive(Default)]
 struct StackSafeJsonValues(Vec<njson::Value>);
-
 impl StackSafeJsonValues {
     fn len(&self) -> usize {
         self.0.len()
     }
-
     fn push(&mut self, value: njson::Value) {
         self.0.push(value);
     }
-
     fn push_guarded(&mut self, value: StackSafeJsonValue) {
         self.push(value.into_inner());
     }
-
     fn split_off(&mut self, at: usize) -> Vec<njson::Value> {
         self.0.split_off(at)
     }
-
     fn into_only(mut self) -> Result<StackSafeJsonValue, VMError> {
         if self.0.len() != 1 {
             return Err(VMError::DecodeError);
@@ -131,16 +109,13 @@ impl StackSafeJsonValues {
         ))
     }
 }
-
 impl Drop for StackSafeJsonValues {
     fn drop(&mut self) {
         drain_json_values_stack_safe(&mut self.0);
     }
 }
-
 fn escape_json_string(value: &str, output: &mut String) {
     const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
-
     output.push('"');
     for character in value.chars() {
         match character {
@@ -159,7 +134,6 @@ fn escape_json_string(value: &str, output: &mut String) {
     }
     output.push('"');
 }
-
 fn json_from_value_ref(value: &njson::Value) -> Result<Json, VMError> {
     enum Task<'a> {
         Value {
@@ -169,7 +143,6 @@ fn json_from_value_ref(value: &njson::Value) -> Result<Json, VMError> {
         Escaped(&'a str),
         Byte(char),
     }
-
     let mut output = String::new();
     let mut pending = vec![Task::Value { value, depth: 1 }];
     while let Some(task) = pending.pop() {
@@ -241,7 +214,6 @@ fn json_from_value_ref(value: &njson::Value) -> Result<Json, VMError> {
     // deeply nested owned `Value` merely to validate and recursively drop it.
     Json::from_raw_json(output).map_err(|_| VMError::DecodeError)
 }
-
 fn load_tlv<'a>(
     vm: &'a IVM,
     address: u64,
@@ -263,14 +235,12 @@ fn load_tlv<'a>(
     }
     Ok(tlv)
 }
-
 fn decode_canonical<T>(payload: &[u8]) -> Result<T, VMError>
 where
     T: norito::codec::Decode + norito::codec::Encode,
 {
     ivm_abi::codec::decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
 }
-
 fn allocate_tlv(vm: &mut IVM, pointer_type: PointerType, payload: &[u8]) -> Result<u64, VMError> {
     let payload_len = u32::try_from(payload.len()).map_err(|_| VMError::NoritoInvalid)?;
     let mut envelope = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
@@ -281,7 +251,6 @@ fn allocate_tlv(vm: &mut IVM, pointer_type: PointerType, payload: &[u8]) -> Resu
     envelope.extend_from_slice(Hash::new(payload).as_ref());
     vm.alloc_host_tlv(&envelope)
 }
-
 fn decode_construction_schema(
     vm: &IVM,
     address: u64,
@@ -297,7 +266,6 @@ fn decode_construction_schema(
     }
     Ok((schema, tlv.payload.len()))
 }
-
 fn read_word_table(vm: &IVM, address: u64, count: usize) -> Result<Vec<u64>, VMError> {
     if count > MAX_STATE_VALUE_WORDS || !address.is_multiple_of(8) {
         return Err(VMError::DecodeError);
@@ -319,7 +287,6 @@ fn read_word_table(vm: &IVM, address: u64, count: usize) -> Result<Vec<u64>, VME
         .map(|chunk| u64::from_le_bytes(chunk.try_into().expect("eight-byte word")))
         .collect())
 }
-
 fn state_node_word_count(
     nodes: &[StateValueNodeV1],
     node_index: &mut usize,
@@ -341,7 +308,6 @@ fn state_node_word_count(
         }
     }
 }
-
 fn pointer_leaf<'a>(
     vm: &'a IVM,
     word: u64,
@@ -353,7 +319,6 @@ fn pointer_leaf<'a>(
     stats.source_bytes = stats.source_bytes.saturating_add(tlv.payload.len());
     Ok(tlv.payload)
 }
-
 fn convert_leaf(
     vm: &IVM,
     kind: StateValueKindV1,
@@ -451,7 +416,6 @@ fn convert_leaf(
         | StateValueKindV1::SoracloudResponse => return Err(VMError::DecodeError),
     })
 }
-
 fn convert_state_schema(
     vm: &IVM,
     schema: &StateValueSchemaV1,
@@ -472,7 +436,6 @@ fn convert_state_schema(
             item_count: usize,
         },
     }
-
     let mut root_end = 0usize;
     state_node_word_count(&schema.nodes, &mut root_end)?;
     if root_end != schema.nodes.len() {
@@ -592,7 +555,6 @@ fn convert_state_schema(
     }
     completed.into_only()
 }
-
 fn convert_construction_schema(
     vm: &IVM,
     nodes: &[JsonConstructionNodeV1],
@@ -615,7 +577,6 @@ fn convert_construction_schema(
             item_count: usize,
         },
     }
-
     if nodes.is_empty() || nodes.len() > MAX_JSON_CONSTRUCTION_NODES_V1 {
         return Err(VMError::DecodeError);
     }
@@ -731,7 +692,6 @@ fn convert_construction_schema(
     *word_index = next_word;
     Ok(value)
 }
-
 /// Deterministic gas charged by [`build_json`].
 #[must_use]
 pub fn build_json_gas(
@@ -753,7 +713,6 @@ pub fn build_json_gas(
         gas.saturating_add(u64::try_from(value).unwrap_or(u64::MAX))
     })
 }
-
 /// Deterministic gas for one typed JSON getter.
 #[must_use]
 pub fn typed_getter_gas(input_bytes: usize, output_bytes: usize) -> u64 {
@@ -761,7 +720,6 @@ pub fn typed_getter_gas(input_bytes: usize, output_bytes: usize) -> u64 {
         .saturating_add(u64::try_from(input_bytes).unwrap_or(u64::MAX))
         .saturating_add(u64::try_from(output_bytes).unwrap_or(u64::MAX))
 }
-
 /// Execute `JSON_BUILD` using `r10=schema`, `r11=word table`, `r12=word count`.
 ///
 /// # Errors
@@ -831,19 +789,16 @@ pub fn build_json(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMErro
     vm.set_register(10, pointer);
     Ok(gas)
 }
-
 fn canonical_account(raw: &str) -> Option<AccountId> {
     let value = AccountId::parse_encoded(raw)
         .ok()
         .map(ParsedAccountId::into_account_id)?;
     (value.to_string() == raw).then_some(value)
 }
-
 fn canonical_asset_definition(raw: &str) -> Option<AssetDefinitionId> {
     let value = AssetDefinitionId::parse_address_literal(raw).ok()?;
     (value.to_string() == raw).then_some(value)
 }
-
 fn canonical_from_str<T>(raw: &str) -> Option<T>
 where
     T: FromStr + ToString,
@@ -851,7 +806,6 @@ where
     let value = raw.parse::<T>().ok()?;
     (value.to_string() == raw).then_some(value)
 }
-
 fn canonical_hex_bytes(raw: &str) -> Option<Vec<u8>> {
     let hex = raw.strip_prefix("0x")?;
     if hex.len() % 2 != 0
@@ -864,7 +818,6 @@ fn canonical_hex_bytes(raw: &str) -> Option<Vec<u8>> {
     }
     hex::decode(hex).ok()
 }
-
 fn canonical_numeric_string<T>(field: &njson::Value) -> Option<T>
 where
     T: FromStr + ToString,
@@ -873,7 +826,6 @@ where
     let value = spelling.parse::<T>().ok()?;
     (value.to_string() == spelling).then_some(value)
 }
-
 fn canonical_json_integer(field: &njson::Value) -> Option<BigInt> {
     match field {
         njson::Value::Number(JsonNumber::I64(value)) => Some(BigInt::from(*value)),
@@ -886,7 +838,6 @@ fn canonical_json_integer(field: &njson::Value) -> Option<BigInt> {
         | njson::Value::Object(_) => None,
     }
 }
-
 fn getter_value(number: u32, field: &njson::Value) -> Option<(PointerType, Vec<u8>)> {
     Some(match number {
         syscalls::SYSCALL_JSON_GET_JSON => {
@@ -940,7 +891,6 @@ fn getter_value(number: u32, field: &njson::Value) -> Option<(PointerType, Vec<u
         _ => return None,
     })
 }
-
 /// Execute one typed JSON getter and materialize `Option<T>` as an active-only
 /// compiler-owned sum handle in `r10`.
 ///
@@ -987,7 +937,6 @@ pub fn typed_getter(
         output_bytes: payload_bytes.saturating_add(16),
     })
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
@@ -995,10 +944,8 @@ mod tests {
         json::{JsonConstructionNodeV1, JsonConstructionSchemaV1},
         state_value::{StateValueKindV1, StateValueNodeV1, StateValueSchemaV1},
     };
-
     use super::*;
     use crate::{core_host::CoreHost, memory::Memory};
-
     fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
         bytes.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -1012,19 +959,16 @@ mod tests {
         bytes.extend_from_slice(Hash::new(payload).as_ref());
         bytes
     }
-
     fn leaf(kind: StateValueKindV1) -> StateValueSchemaV1 {
         StateValueSchemaV1 {
             nodes: vec![StateValueNodeV1::Leaf(kind)],
         }
     }
-
     fn quantity_frame(value: Quantity) -> Vec<u8> {
         QuantityValueV1::new(value)
             .encode_frame()
             .expect("quantity frame")
     }
-
     fn nested_list_fixture(
         vm: &mut IVM,
         wrappers: usize,
@@ -1045,13 +989,11 @@ mod tests {
         }
         (schema, word)
     }
-
     fn nested_option_schema(wrappers: usize, kind: StateValueKindV1) -> StateValueSchemaV1 {
         let mut nodes = vec![StateValueNodeV1::Option; wrappers];
         nodes.push(StateValueNodeV1::Leaf(kind));
         StateValueSchemaV1 { nodes }
     }
-
     fn nested_some_options(vm: &mut IVM, wrappers: usize, mut word: u64) -> u64 {
         let layout = crate::sum::SumLayoutV1::option(1).expect("unary Option layout");
         for _ in 0..wrappers {
@@ -1059,7 +1001,6 @@ mod tests {
         }
         word
     }
-
     fn install_build_inputs(vm: &mut IVM, schema: &JsonConstructionSchemaV1, words: &[u64]) {
         assert!(schema.validate(), "test construction schema must be valid");
         let schema_payload =
@@ -1087,7 +1028,6 @@ mod tests {
             u64::try_from(words.len()).expect("test construction word count"),
         );
     }
-
     fn getter_payload(
         vm: &mut IVM,
         json_pointer: u64,
@@ -1113,7 +1053,6 @@ mod tests {
         let output = vm.validate_tlv(words[0]).expect("typed getter output TLV");
         (output.type_id, output.payload.to_vec())
     }
-
     #[test]
     fn construction_schema_decode_rejects_alternate_layouts_independently_of_ambient_flags() {
         let schema = JsonConstructionSchemaV1 {
@@ -1132,7 +1071,6 @@ mod tests {
             decode_canonical::<JsonConstructionSchemaV1>(&canonical),
             Ok(schema.clone())
         );
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate = {
@@ -1144,7 +1082,6 @@ mod tests {
             decode_canonical::<JsonConstructionSchemaV1>(&alternate),
             Err(VMError::DecodeError)
         );
-
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         let ambient_before = to_bytes(&schema).expect("ambient JSON schema");
         assert_eq!(
@@ -1156,7 +1093,6 @@ mod tests {
             ambient_before
         );
     }
-
     #[test]
     fn native_json_state_conversion_is_bounded_and_stack_safe_at_256_schema_nodes() {
         std::thread::Builder::new()
@@ -1190,7 +1126,6 @@ mod tests {
                 assert_eq!(current, &njson::Value::Bool(true));
                 assert_eq!(stats.collection_elements, MAX_STATE_VALUE_NODES - 1);
                 drop(value);
-
                 let option_schema =
                     nested_option_schema(MAX_STATE_VALUE_NODES - 1, StateValueKindV1::Bool);
                 let option_handle = nested_some_options(&mut vm, MAX_STATE_VALUE_NODES - 1, 1);
@@ -1205,7 +1140,6 @@ mod tests {
                 .expect("convert 255 nested Options");
                 assert_eq!(option_value.value(), &njson::Value::Bool(true));
                 drop(option_value);
-
                 let (too_deep, too_deep_handle) =
                     nested_list_fixture(&mut vm, MAX_STATE_VALUE_NODES, StateValueKindV1::Bool, 1);
                 assert!(matches!(
@@ -1218,7 +1152,6 @@ mod tests {
                     ),
                     Err(VMError::DecodeError)
                 ));
-
                 let malformed_schema =
                     nested_option_schema(MAX_STATE_VALUE_NODES - 1, StateValueKindV1::Bool);
                 let option_layout =
@@ -1239,7 +1172,6 @@ mod tests {
                     ),
                     Err(VMError::DecodeError)
                 ));
-
                 let mut node_index = 0usize;
                 assert_eq!(
                     state_node_word_count(&option_schema.nodes, &mut node_index),
@@ -1258,7 +1190,6 @@ mod tests {
             .join()
             .expect("small-stack JSON state test");
     }
-
     #[test]
     fn build_json_deep_success_and_later_invalid_sibling_cleanup_are_stack_safe() {
         std::thread::Builder::new()
@@ -1348,7 +1279,6 @@ mod tests {
             .join()
             .expect("small-stack JSON build test");
     }
-
     #[test]
     fn build_json_emits_canonical_payload_accepted_by_getter_under_alternate_flags() {
         let schema = JsonConstructionSchemaV1 {
@@ -1376,13 +1306,11 @@ mod tests {
         vm.set_register(10, schema_pointer);
         vm.set_register(11, table);
         vm.set_register(12, 1);
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let ambient_probe = vec!["preserve".to_owned(), "ambient".to_owned()];
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         let ambient_before = to_bytes(&ambient_probe).expect("ambient probe");
-
         build_json(&mut vm, CoreHost::resolve_code_tlv_addr)
             .expect("build JSON under alternate ambient flags");
         let json_pointer = vm.register(10);
@@ -1402,7 +1330,6 @@ mod tests {
             json_payload,
             encode_canonical_norito(&decoded_json).expect("re-encode canonical JSON")
         );
-
         let (pointer_type, getter_payload) = getter_payload(
             &mut vm,
             json_pointer,
@@ -1425,7 +1352,6 @@ mod tests {
             "canonical output encoding must restore the caller's ambient layout"
         );
     }
-
     #[test]
     fn typed_getters_emit_all_norito_outputs_canonically_under_alternate_flags() {
         let name: Name = "wonderland".parse().expect("canonical name");
@@ -1458,13 +1384,11 @@ mod tests {
         let root_pointer = vm
             .alloc_input_tlv(&tlv(PointerType::Json, &root_payload))
             .expect("root JSON TLV");
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let ambient_probe = vec!["preserve".to_owned(), "ambient".to_owned()];
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         let ambient_before = to_bytes(&ambient_probe).expect("ambient probe");
-
         let (pointer_type, payload) = getter_payload(
             &mut vm,
             root_pointer,
@@ -1477,7 +1401,6 @@ mod tests {
             payload,
             encode_canonical_norito(&nested_json).expect("canonical nested JSON")
         );
-
         let (pointer_type, payload) = getter_payload(
             &mut vm,
             root_pointer,
@@ -1490,7 +1413,6 @@ mod tests {
             payload,
             encode_canonical_norito(&name).expect("canonical name")
         );
-
         let (pointer_type, payload) = getter_payload(
             &mut vm,
             root_pointer,
@@ -1503,7 +1425,6 @@ mod tests {
             payload,
             encode_canonical_norito(&account).expect("canonical account")
         );
-
         let (pointer_type, payload) = getter_payload(
             &mut vm,
             root_pointer,
@@ -1516,7 +1437,6 @@ mod tests {
             payload,
             encode_canonical_norito(&nft).expect("canonical NFT")
         );
-
         let (pointer_type, payload) = getter_payload(
             &mut vm,
             root_pointer,
@@ -1538,7 +1458,6 @@ mod tests {
             "canonical getter encoding must restore the caller's ambient layout"
         );
     }
-
     #[test]
     fn build_json_uses_canonical_number_tokens_across_the_json_integer_domain() {
         let values = [BigInt::from(-7_i64), BigInt::from(u64::MAX)];
@@ -1575,7 +1494,6 @@ mod tests {
         vm.set_register(10, schema_ptr);
         vm.set_register(11, table);
         vm.set_register(12, 2);
-
         build_json(&mut vm, CoreHost::resolve_code_tlv_addr).expect("build exact JSON");
         let output = vm.validate_tlv(vm.register(10)).expect("JSON output");
         let json: Json = decode_from_bytes(output.payload).expect("decode JSON");
@@ -1588,7 +1506,6 @@ mod tests {
             ])
         );
     }
-
     #[test]
     fn build_json_rejects_int_outside_the_native_json_integer_domain() {
         let value = "1606938044258990275541962092341162602522202993782792835301376"
@@ -1618,13 +1535,11 @@ mod tests {
         vm.set_register(10, schema_ptr);
         vm.set_register(11, table);
         vm.set_register(12, 1);
-
         assert_eq!(
             build_json(&mut vm, CoreHost::resolve_code_tlv_addr),
             Err(VMError::DecodeError)
         );
     }
-
     #[test]
     fn build_json_orders_keys_and_converts_amount_and_bytes() {
         let account = AccountId::new(
@@ -1692,7 +1607,6 @@ mod tests {
         assert!(text.contains(r#""bytes":"0xab01""#));
         assert!(text.contains(&account.to_string()));
     }
-
     #[test]
     fn build_json_recurses_through_list_and_active_only_option() {
         let amount = "1.25".parse::<Quantity>().expect("canonical quantity");
@@ -1745,7 +1659,6 @@ mod tests {
             njson::Value::Array(vec![njson::Value::from("1.25"), njson::Value::Null])
         );
     }
-
     #[test]
     fn build_json_preserves_full_u64_and_scale_28_quantity_without_floats() {
         let maximum = Numeric::new(u64::MAX, 0);
@@ -1800,7 +1713,6 @@ mod tests {
             ])
         );
     }
-
     #[test]
     fn int_getter_accepts_only_actual_json_integer_tokens() {
         assert_eq!(
@@ -1829,7 +1741,6 @@ mod tests {
             "get_int must reject a numeric token outside its u64 domain"
         );
     }
-
     #[test]
     fn typed_getter_returns_active_only_some_and_none_handles() {
         let json = Json::from_str_norito(
@@ -1868,7 +1779,6 @@ mod tests {
                 .into_int(),
             BigInt::from_i128(7)
         );
-
         let maximum: Name = "maximum".parse().expect("maximum key");
         let maximum_ptr = vm
             .alloc_input_tlv(&tlv(
@@ -1899,7 +1809,6 @@ mod tests {
                 .into_int(),
             BigInt::from(u64::MAX)
         );
-
         let missing: Name = "missing".parse().expect("missing key");
         let missing_ptr = vm
             .alloc_input_tlv(&tlv(PointerType::Name, &to_bytes(&missing).unwrap()))
@@ -1920,7 +1829,6 @@ mod tests {
             ),
             Ok((false, vec![]))
         );
-
         let string: Name = "string".parse().expect("string key");
         let string_ptr = vm
             .alloc_input_tlv(&tlv(PointerType::Name, &to_bytes(&string).unwrap()))
@@ -1941,7 +1849,6 @@ mod tests {
             ),
             Ok((false, vec![]))
         );
-
         let wrong: Name = "wrong".parse().expect("wrong-type key");
         let wrong_ptr = vm
             .alloc_input_tlv(&tlv(PointerType::Name, &to_bytes(&wrong).unwrap()))
@@ -1962,7 +1869,6 @@ mod tests {
             ),
             Ok((false, vec![]))
         );
-
         let array = Json::from(norito::json!([7]));
         let array_ptr = vm
             .alloc_input_tlv(&tlv(
@@ -1987,7 +1893,6 @@ mod tests {
             Ok((false, vec![]))
         );
     }
-
     #[test]
     fn typed_quantity_getter_accepts_only_canonical_string_values() {
         let oversized = "9".repeat(200);
@@ -2005,7 +1910,6 @@ mod tests {
             .alloc_input_tlv(&tlv(PointerType::Json, &json_payload))
             .expect("JSON TLV");
         let option_layout = crate::sum::SumLayoutV1::option(1).expect("Option<quantity> layout");
-
         for (key, expected) in [
             (
                 "decimal",
@@ -2052,7 +1956,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn build_json_rejects_duplicate_key_schema_before_reading_values() {
         let duplicate = JsonConstructionSchemaV1 {
@@ -2078,13 +1981,11 @@ mod tests {
         vm.set_register(10, schema_ptr);
         vm.set_register(11, 0);
         vm.set_register(12, 2);
-
         assert_eq!(
             build_json(&mut vm, CoreHost::resolve_code_tlv_addr),
             Err(VMError::DecodeError)
         );
     }
-
     #[test]
     fn build_json_rejects_noncanonical_quantities_and_hidden_option_payloads() {
         let quantity_schema = JsonConstructionSchemaV1 {
@@ -2116,7 +2017,6 @@ mod tests {
             Err(VMError::DecodeError),
             "quantity inputs must already use their unique canonical frame",
         );
-
         let option_schema = JsonConstructionSchemaV1 {
             nodes: vec![JsonConstructionNodeV1::Value {
                 schema: StateValueSchemaV1 {
@@ -2150,7 +2050,6 @@ mod tests {
             "Option::none cannot smuggle an inactive placeholder into JSON",
         );
     }
-
     #[test]
     fn build_json_rejects_a_word_count_that_disagrees_with_the_schema() {
         let schema = JsonConstructionSchemaV1 {
@@ -2168,13 +2067,11 @@ mod tests {
         vm.set_register(10, schema_ptr);
         vm.set_register(11, 0);
         vm.set_register(12, 0);
-
         assert_eq!(
             build_json(&mut vm, CoreHost::resolve_code_tlv_addr),
             Err(VMError::DecodeError)
         );
     }
-
     #[test]
     fn build_json_spills_large_canonical_output_to_owned_heap() {
         let schema = JsonConstructionSchemaV1 {
@@ -2201,7 +2098,6 @@ mod tests {
         vm.set_register(10, schema_ptr);
         vm.set_register(11, table);
         vm.set_register(12, 1);
-
         build_json(&mut vm, CoreHost::resolve_code_tlv_addr).expect("build large JSON");
         let output_ptr = vm.register(10);
         assert!(output_ptr >= Memory::HEAP_START);
@@ -2214,7 +2110,6 @@ mod tests {
             Some(source.as_str())
         );
     }
-
     #[test]
     fn typed_getter_rejects_malformed_json_and_key_payloads() {
         let mut vm = IVM::new(u64::MAX);
@@ -2235,7 +2130,6 @@ mod tests {
             ),
             Err(VMError::DecodeError)
         );
-
         let json = Json::from(norito::json!({"count": 7}));
         let json_ptr = vm
             .alloc_input_tlv(&tlv(

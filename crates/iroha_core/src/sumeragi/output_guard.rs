@@ -7,7 +7,6 @@
 //! publishes the final `RESTART_REQUIRED` state. Panic and incomplete-operation
 //! drops close admission before releasing their read permits without blocking
 //! on a writer.
-
 #[cfg(not(test))]
 use std::sync::OnceLock;
 use std::sync::{
@@ -15,11 +14,9 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU8, Ordering},
 };
 use std::thread;
-
 const OPEN: u8 = 0;
 const ACTIVATING: u8 = 1;
 const RESTART_REQUIRED: u8 = 2;
-
 /// Shared admission/effect barrier for one consensus process.
 #[derive(Debug)]
 pub(crate) struct ConsensusOutputGuard {
@@ -27,7 +24,6 @@ pub(crate) struct ConsensusOutputGuard {
     authoritative_worker_launch_claimed: AtomicBool,
     output: RwLock<()>,
 }
-
 impl Default for ConsensusOutputGuard {
     fn default() -> Self {
         Self {
@@ -37,14 +33,12 @@ impl Default for ConsensusOutputGuard {
         }
     }
 }
-
 /// Proof that one consensus admission or effect crossed the open guard.
 pub(crate) struct ConsensusOutputPermit<'a> {
     output_guard: &'a ConsensusOutputGuard,
     read_guard: Option<RwLockReadGuard<'a, ()>>,
     armed: bool,
 }
-
 /// One fail-stop consensus operation admitted while output remains open.
 ///
 /// The operation owns its output permit until [`Self::complete`] is called.
@@ -55,13 +49,11 @@ pub(crate) struct ConsensusFailStopOperation<'a> {
     output_guard: &'a ConsensusOutputGuard,
     permit: Option<ConsensusOutputPermit<'a>>,
 }
-
 impl ConsensusOutputGuard {
     /// Construct an isolated open guard for tests or an explicitly scoped runner.
     pub(crate) fn isolated() -> Arc<Self> {
         Arc::new(Self::default())
     }
-
     /// Admit one output only while no restart-required transition has begun.
     pub(crate) fn acquire(&self) -> Option<ConsensusOutputPermit<'_>> {
         if self.state.load(Ordering::Acquire) != OPEN {
@@ -95,7 +87,6 @@ impl ConsensusOutputGuard {
             armed: true,
         })
     }
-
     /// Begin an operation whose abnormal exit permanently requires restart.
     pub(crate) fn begin_fail_stop_operation(&self) -> Option<ConsensusFailStopOperation<'_>> {
         let permit = self.acquire()?;
@@ -104,7 +95,6 @@ impl ConsensusOutputGuard {
             permit: Some(permit),
         })
     }
-
     /// Permanently claim the one authoritative worker launch allowed in this process.
     ///
     /// The claim is intentionally never released, including after orderly worker exit.
@@ -115,7 +105,6 @@ impl ConsensusOutputGuard {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
     }
-
     /// Permanently stop new output and, outside panic unwinding, drain admitted output.
     ///
     /// During unwinding this only closes admission; taking a writer there
@@ -134,7 +123,6 @@ impl ConsensusOutputGuard {
             Err(_) => unreachable!("consensus output guard has a valid state"),
         }
     }
-
     /// Permanently close admission without blocking for an in-flight drain.
     ///
     /// Panic guards use this before their stack can release nested permits.
@@ -142,7 +130,6 @@ impl ConsensusOutputGuard {
     pub(crate) fn close_admission_for_restart(&self) {
         self.begin_activation();
     }
-
     /// Activate restart recovery from an already-admitted fatal effect.
     ///
     /// The state changes to `ACTIVATING` before the fatal effect releases its read permit. This
@@ -160,7 +147,6 @@ impl ConsensusOutputGuard {
         drop(read_guard);
         self.try_finalize_activation();
     }
-
     fn begin_activation(&self) {
         match self
             .state
@@ -170,7 +156,6 @@ impl ConsensusOutputGuard {
             Err(_) => unreachable!("consensus output guard has a valid state"),
         }
     }
-
     fn try_finalize_activation(&self) {
         if thread::panicking() || self.state.load(Ordering::Acquire) != ACTIVATING {
             return;
@@ -185,7 +170,6 @@ impl ConsensusOutputGuard {
         }
         drop(guard);
     }
-
     fn drain_and_publish_restart_required(&self) {
         let guard = match self.output.write() {
             Ok(guard) => guard,
@@ -194,13 +178,11 @@ impl ConsensusOutputGuard {
         self.state.store(RESTART_REQUIRED, Ordering::Release);
         drop(guard);
     }
-
     /// Return whether activation has begun or completed.
     pub(crate) fn restart_required(&self) -> bool {
         self.state.load(Ordering::Acquire) != OPEN
     }
 }
-
 impl<'a> ConsensusOutputPermit<'a> {
     /// Return whether this live permit belongs to the exact guard.
     ///
@@ -212,7 +194,6 @@ impl<'a> ConsensusOutputPermit<'a> {
     pub(crate) fn authorizes(&self, output_guard: &ConsensusOutputGuard) -> bool {
         std::ptr::eq(self.output_guard, output_guard) && self.armed && self.read_guard.is_some()
     }
-
     fn take_for_explicit_activation(&mut self) -> RwLockReadGuard<'a, ()> {
         self.armed = false;
         self.read_guard
@@ -220,7 +201,6 @@ impl<'a> ConsensusOutputPermit<'a> {
             .expect("an admitted output permit owns its read guard")
     }
 }
-
 impl Drop for ConsensusOutputPermit<'_> {
     fn drop(&mut self) {
         if !self.armed {
@@ -238,7 +218,6 @@ impl Drop for ConsensusOutputPermit<'_> {
         }
     }
 }
-
 impl ConsensusFailStopOperation<'_> {
     /// Borrow the held output permit for a guarded downstream effect.
     pub(crate) fn permit(&self) -> &ConsensusOutputPermit<'_> {
@@ -246,13 +225,11 @@ impl ConsensusFailStopOperation<'_> {
             .as_ref()
             .expect("incomplete fail-stop operation owns its output permit")
     }
-
     /// Mark the operation successful and release its output permit normally.
     pub(crate) fn complete(mut self) {
         drop(self.permit.take());
     }
 }
-
 impl Drop for ConsensusFailStopOperation<'_> {
     fn drop(&mut self) {
         if let Some(permit) = self.permit.take() {
@@ -261,14 +238,12 @@ impl Drop for ConsensusFailStopOperation<'_> {
         }
     }
 }
-
 /// Return the sole guard used by production consensus in this process.
 #[cfg(not(test))]
 pub(crate) fn process_consensus_output_guard() -> Arc<ConsensusOutputGuard> {
     static PROCESS_GUARD: OnceLock<Arc<ConsensusOutputGuard>> = OnceLock::new();
     Arc::clone(PROCESS_GUARD.get_or_init(ConsensusOutputGuard::isolated))
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -280,9 +255,7 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
-
     use super::ConsensusOutputGuard;
-
     #[test]
     fn activation_drains_existing_output_and_rejects_every_later_output() {
         let guard = ConsensusOutputGuard::isolated();
@@ -300,7 +273,6 @@ mod tests {
             activated_worker.store(true, Ordering::Release);
             done_tx.send(()).expect("publish completed activation");
         });
-
         assert!(
             done_rx.recv_timeout(Duration::from_millis(25)).is_err(),
             "activation must wait for already-admitted output"
@@ -316,12 +288,10 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("activation completes after output drains");
         worker.join().expect("join activation worker");
-
         assert!(activated.load(Ordering::Acquire));
         assert!(guard.restart_required());
         assert!(guard.acquire().is_none());
     }
-
     #[test]
     fn fatal_permit_closes_gate_without_waiting_for_earlier_output() {
         let guard = ConsensusOutputGuard::isolated();
@@ -337,7 +307,6 @@ mod tests {
             worker_guard.activate_restart_required_from_permit(fatal_permit);
             done_tx.send(()).expect("publish completed activation");
         });
-
         ready_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("fatal output must be admitted before activation");
@@ -362,7 +331,6 @@ mod tests {
             super::ACTIVATING,
             "an earlier output must keep nonblocking activation pending"
         );
-
         drop(earlier_permit);
         assert_eq!(
             guard.state.load(Ordering::Acquire),
@@ -371,7 +339,6 @@ mod tests {
         );
         assert!(guard.acquire().is_none());
     }
-
     #[test]
     fn nested_ordinary_permit_panic_closes_without_deadlock_and_finalizes_later() {
         let guard = ConsensusOutputGuard::isolated();
@@ -384,7 +351,6 @@ mod tests {
                 panic!("model ingress panic with nested ordinary permits");
             }
         });
-
         assert!(unwind.is_err(), "nested panic must unwind without deadlock");
         assert_eq!(
             guard.state.load(Ordering::Acquire),
@@ -400,7 +366,6 @@ mod tests {
             super::ACTIVATING,
             "rejected admission cannot finalize while an earlier output remains"
         );
-
         drop(surviving_permit);
         assert_eq!(
             guard.state.load(Ordering::Acquire),
@@ -409,7 +374,6 @@ mod tests {
         );
         assert!(guard.acquire().is_none());
     }
-
     #[test]
     fn nested_fail_stop_operation_panic_closes_without_blocking_outer_permit() {
         let guard = ConsensusOutputGuard::isolated();
@@ -424,7 +388,6 @@ mod tests {
                 panic!("model nested fail-stop panic");
             }
         });
-
         assert!(
             unwind.is_err(),
             "fail-stop panic must not deadlock on its outer ordinary permit"
@@ -435,7 +398,6 @@ mod tests {
         drop(surviving_permit);
         assert_eq!(guard.state.load(Ordering::Acquire), super::RESTART_REQUIRED);
     }
-
     #[test]
     fn nested_fail_stop_error_closes_without_blocking_outer_operation() {
         let guard = ConsensusOutputGuard::isolated();
@@ -445,16 +407,13 @@ mod tests {
         let inner = guard
             .begin_fail_stop_operation()
             .expect("admit inner fail-stop operation");
-
         drop(inner);
-
         assert_eq!(guard.state.load(Ordering::Acquire), super::ACTIVATING);
         assert!(guard.acquire().is_none());
         outer.complete();
         assert_eq!(guard.state.load(Ordering::Acquire), super::RESTART_REQUIRED);
         assert!(guard.acquire().is_none());
     }
-
     #[test]
     fn completed_fail_stop_operation_leaves_guard_open() {
         let guard = ConsensusOutputGuard::isolated();
@@ -462,17 +421,14 @@ mod tests {
             .begin_fail_stop_operation()
             .expect("admit fail-stop operation")
             .complete();
-
         assert!(!guard.restart_required());
         assert!(guard.acquire().is_some());
     }
-
     #[test]
     fn permit_authorizes_only_its_exact_guard_for_its_full_lifetime() {
         let guard = ConsensusOutputGuard::isolated();
         let foreign = ConsensusOutputGuard::isolated();
         let permit = guard.acquire().expect("admit exact output permit");
-
         assert!(permit.authorizes(&guard));
         assert!(!permit.authorizes(&foreign));
         guard.close_admission_for_restart();
@@ -484,7 +440,6 @@ mod tests {
         drop(permit);
         assert!(guard.restart_required());
     }
-
     #[test]
     fn fail_stop_operation_latches_restart_required_during_unwind() {
         let guard = ConsensusOutputGuard::isolated();
@@ -497,7 +452,6 @@ mod tests {
                 panic!("model an abnormal consensus operation");
             }
         });
-
         assert!(unwind.is_err());
         assert!(guard.restart_required());
         assert!(guard.acquire().is_none());

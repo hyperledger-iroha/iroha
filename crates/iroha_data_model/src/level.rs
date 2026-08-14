@@ -4,13 +4,10 @@ use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
 use thiserror::Error;
-
 pub use self::model::*;
-
 #[model]
 mod model {
     use super::*;
-
     /// Log level for reading from environment and (de)serializing
     #[derive(
         Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
@@ -31,7 +28,6 @@ mod model {
         ERROR,
     }
 }
-
 impl ::core::fmt::Display for Level {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.write_str(match self {
@@ -43,15 +39,12 @@ impl ::core::fmt::Display for Level {
         })
     }
 }
-
 #[derive(Debug, Error, Clone, Copy)]
 #[error("invalid log level")]
 /// Error returned when parsing a log level from text fails.
 pub struct ParseLevelError;
-
 impl ::core::str::FromStr for Level {
     type Err = ParseLevelError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Accept case-insensitive inputs for ergonomics (e.g., LOG_LEVEL=info)
         match s.to_ascii_uppercase().as_str() {
@@ -64,10 +57,8 @@ impl ::core::str::FromStr for Level {
         }
     }
 }
-
 impl ::core::convert::TryFrom<u8> for Level {
     type Error = ();
-
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::TRACE),
@@ -79,14 +70,18 @@ impl ::core::convert::TryFrom<u8> for Level {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl FastJsonWrite for Level {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(&self.to_string(), out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for Level {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -99,42 +94,34 @@ impl JsonDeserialize for Level {
             })
     }
 }
-
 #[cfg(all(test, feature = "json"))]
 mod tests {
     use norito::json::{self, FastJsonWrite};
-
     use super::*;
-
     #[test]
     fn parse_level_from_str() {
         assert_eq!("INFO".parse::<Level>().unwrap(), Level::INFO);
     }
-
     #[test]
     fn parse_level_from_str_case_insensitive() {
         assert_eq!("info".parse::<Level>().unwrap(), Level::INFO);
         assert_eq!("Warn".parse::<Level>().unwrap(), Level::WARN);
         assert_eq!("DeBuG".parse::<Level>().unwrap(), Level::DEBUG);
     }
-
     #[test]
     fn parse_invalid_level_from_str() {
         assert!("invalid".parse::<Level>().is_err());
     }
-
     #[test]
     fn level_try_from_u8() {
         assert_eq!(Level::try_from(2).unwrap(), Level::INFO);
         assert!(Level::try_from(5).is_err());
     }
-
     #[test]
     fn level_json_roundtrip() {
         let mut json_repr = String::new();
         Level::WARN.write_json(&mut json_repr);
         assert_eq!(json_repr, "\"WARN\"");
-
         let decoded: Level = json::from_json(&json_repr).expect("deserialize");
         assert_eq!(decoded, Level::WARN);
     }

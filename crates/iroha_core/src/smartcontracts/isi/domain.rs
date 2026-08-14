@@ -1,11 +1,8 @@
 //! This module contains [`Domain`] structure and related implementations and trait implementations.
-
 use eyre::Result;
 use iroha_data_model::{account::rekey::AccountRekeyRecord, prelude::*, query::error::FindError};
 use iroha_telemetry::metrics;
-
 use super::super::isi::prelude::*;
-
 /// ISI module contains all instructions related to domains:
 /// - creating/changing assets
 /// - registering/unregistering accounts
@@ -16,7 +13,6 @@ pub mod isi {
         collections::{BTreeSet, btree_map::Entry},
         str::FromStr,
     };
-
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::{
         IntoKeyValue, NetworkId,
@@ -38,7 +34,6 @@ pub mod isi {
     };
     use iroha_logger::prelude::*;
     use norito::codec::Decode as _;
-
     use super::*;
     use crate::{
         alias::{
@@ -50,10 +45,8 @@ pub mod isi {
             public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
         },
     };
-
     /// Alias grace window after lease expiry (369 hours).
     const ASSET_ALIAS_GRACE_MS: u64 = 369u64 * 60 * 60 * 1_000;
-
     fn retained_validation_fee_plain_electorate_rules(
         proposal: &crate::state::GovernanceProposalRecord,
     ) -> Option<&ValidationFeePlainElectorateRulesV1> {
@@ -76,9 +69,7 @@ pub mod isi {
             | ProposalKind::MusubiRegistryGovernance(_) => None,
         }
     }
-
     include!("domain/asset_alias_scope.rs");
-
     fn ensure_global_asset_definition_registered_on_authoritative_route(
         state_transaction: &StateTransaction<'_, '_>,
         definition: &AssetDefinition,
@@ -87,7 +78,6 @@ pub mod isi {
             return Ok(());
         }
         ensure_global_asset_definition_home_is_public_or_universal(state_transaction, definition)?;
-
         let home_dataspace = asset_definition_home_dataspace(state_transaction, definition)
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
@@ -101,7 +91,6 @@ pub mod isi {
         let route_dataspace = state_transaction
             .current_dataspace_id
             .or(state_transaction.world.current_dataspace_id);
-
         if let Some(route_dataspace) = route_dataspace
             && route_dataspace != home_dataspace
         {
@@ -115,10 +104,8 @@ pub mod isi {
                 .into(),
             ));
         }
-
         Ok(())
     }
-
     /// Restore or retarget the continuity record for an already validated alias binding.
     ///
     /// # Errors
@@ -159,7 +146,6 @@ pub mod isi {
             .insert(label.clone(), record);
         Ok(())
     }
-
     /// Restore only the missing binding/index state of an exact account-alias setup intent.
     ///
     /// The declarative classifier must run immediately before this helper. The
@@ -217,7 +203,6 @@ pub mod isi {
                     .into(),
             ));
         }
-
         ensure_single_sbp_retail_fi_home(state_transaction, &intent.target_account, &alias)?;
         ensure_contract_alias_namespace_available(state_transaction, &alias)?;
         state_transaction
@@ -232,7 +217,6 @@ pub mod isi {
         }
         Ok(())
     }
-
     fn purge_stale_account_label_state(
         state_transaction: &mut StateTransaction<'_, '_>,
         label: &AccountAlias,
@@ -246,7 +230,6 @@ pub mod isi {
             );
             state_transaction.world.remove_account_alias_binding(label);
         }
-
         if let Some(record) = state_transaction
             .world
             .account_rekey_records
@@ -267,7 +250,6 @@ pub mod isi {
                 .remove(label.clone());
         }
     }
-
     /// Reject a primary-alias change while recovery state still depends on the alias.
     ///
     /// # Errors
@@ -305,7 +287,6 @@ pub mod isi {
         }
         Ok(())
     }
-
     fn ensure_account_alias_lease(
         state_transaction: &mut StateTransaction<'_, '_>,
         owner: &AccountId,
@@ -314,7 +295,6 @@ pub mod isi {
         crate::sns::ensure_account_alias_lease(state_transaction, owner, label)
             .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))
     }
-
     fn sbp_retail_fi_home_domain(
         alias: &AccountAlias,
         catalog: &DataSpaceCatalog,
@@ -326,7 +306,6 @@ pub mod isi {
             None
         }
     }
-
     fn ensure_single_sbp_retail_fi_home(
         state_transaction: &StateTransaction<'_, '_>,
         account: &AccountId,
@@ -337,7 +316,6 @@ pub mod isi {
         else {
             return Ok(());
         };
-
         for existing_alias in state_transaction.world.bound_account_aliases(account) {
             if existing_alias == *requested_alias
                 || crate::sns::resolve_active_account_alias(
@@ -366,10 +344,8 @@ pub mod isi {
                 ));
             }
         }
-
         Ok(())
     }
-
     fn contract_alias_matches_account_label(
         alias: &ContractAlias,
         label: &AccountAlias,
@@ -385,7 +361,6 @@ pub mod isi {
             && alias.domain_segment() == label.domain.as_ref().map(|domain| domain.name().as_ref())
             && alias.dataspace_segment() == dataspace_alias
     }
-
     fn ensure_contract_alias_namespace_available(
         state_transaction: &StateTransaction<'_, '_>,
         label: &AccountAlias,
@@ -410,7 +385,6 @@ pub mod isi {
             Ok(())
         }
     }
-
     pub(crate) fn resolve_contract_alias_components(
         state_transaction: &StateTransaction<'_, '_>,
         alias: &ContractAlias,
@@ -448,7 +422,6 @@ pub mod isi {
                 })?;
         Ok((label_name, domain, dataspace))
     }
-
     pub(crate) fn ensure_authority_can_manage_contract_alias(
         state_transaction: &StateTransaction<'_, '_>,
         authority: &AccountId,
@@ -467,7 +440,6 @@ pub mod isi {
             format!("authority is not permitted to manage contract alias `{alias}`").into(),
         ))
     }
-
     fn ensure_authority_can_manage_stale_contract_alias(
         state_transaction: &StateTransaction<'_, '_>,
         authority: &AccountId,
@@ -503,7 +475,6 @@ pub mod isi {
             format!("authority is not permitted to manage contract alias `{alias}`").into(),
         ))
     }
-
     fn account_alias_selector_for_contract_alias(
         alias: &ContractAlias,
     ) -> Result<iroha_data_model::sns::NameSelectorV1, InstructionExecutionError> {
@@ -524,7 +495,6 @@ pub mod isi {
             label: account_alias_literal,
         })
     }
-
     pub(crate) fn ensure_account_alias_namespace_available_for_contract_alias(
         state_transaction: &StateTransaction<'_, '_>,
         alias: &ContractAlias,
@@ -561,7 +531,6 @@ pub mod isi {
             Ok(())
         }
     }
-
     fn ensure_asset_definition_human_fields(
         asset_definition: &AssetDefinition,
     ) -> Result<(), InstructionExecutionError> {
@@ -578,7 +547,6 @@ pub mod isi {
         validate_alias_for_asset_definition(asset_definition.alias().as_ref(), asset_definition)?;
         Ok(())
     }
-
     fn validate_asset_definition_alias_route(
         state_transaction: &StateTransaction<'_, '_>,
         alias: Option<&AssetDefinitionAlias>,
@@ -611,7 +579,6 @@ pub mod isi {
         }
         Ok(())
     }
-
     fn ensure_authority_can_manage_asset_definition_alias(
         state_transaction: &StateTransaction<'_, '_>,
         authority: &AccountId,
@@ -661,7 +628,6 @@ pub mod isi {
             .into(),
         ))
     }
-
     fn ensure_asset_definition_domain_context(
         state_transaction: &StateTransaction<'_, '_>,
         authority: &AccountId,
@@ -699,7 +665,6 @@ pub mod isi {
         }
         Ok(())
     }
-
     /// Derive the deterministic offline escrow account for an asset definition.
     pub(crate) fn offline_escrow_account_id(
         network_id: &NetworkId,
@@ -707,7 +672,6 @@ pub mod isi {
     ) -> AccountId {
         iroha_data_model::offline::offline_escrow_account_id(network_id, definition_id)
     }
-
     pub(crate) fn ensure_offline_escrow_account(
         asset_definition: &AssetDefinition,
         _authority: &AccountId,
@@ -735,17 +699,14 @@ pub mod isi {
                 entry.get().clone()
             }
         };
-
         ensure_controller_capabilities(
             escrow_account.controller(),
             &state_transaction.crypto.allowed_signing,
             &state_transaction.crypto.allowed_curve_ids,
         )?;
-
         if state_transaction.world.account(&escrow_account).is_ok() {
             return Ok(());
         }
-
         let account = Account {
             id: escrow_account.clone(),
             metadata: Metadata::default(),
@@ -758,14 +719,11 @@ pub mod isi {
             .world
             .accounts
             .insert(account_id.clone(), account_value);
-
         Ok(())
     }
-
     fn account_subject_matches(left: &AccountId, right: &AccountId) -> bool {
         left.subject_id() == right.subject_id()
     }
-
     fn is_permission_account_associated(permission: &Permission, account_id: &AccountId) -> bool {
         if let Ok(permission) =
             iroha_executor_data_model::permission::nexus::CanManageFeeSponsorProgram::try_from(
@@ -836,10 +794,8 @@ pub mod isi {
         {
             return account_subject_matches(&permission.owner, account_id);
         }
-
         false
     }
-
     fn remove_account_associated_permissions(
         state_transaction: &mut StateTransaction<'_, '_>,
         account_id: &AccountId,
@@ -850,7 +806,6 @@ pub mod isi {
             .iter()
             .map(|(holder, _)| holder.clone())
             .collect();
-
         for holder in account_ids {
             let should_remove = state_transaction
                 .world
@@ -864,7 +819,6 @@ pub mod isi {
             if !should_remove {
                 continue;
             }
-
             let remove_entry = if let Some(permissions) =
                 state_transaction.world.account_permissions.get_mut(&holder)
             {
@@ -874,24 +828,20 @@ pub mod isi {
             } else {
                 false
             };
-
             if remove_entry {
                 state_transaction
                     .world
                     .account_permissions
                     .remove(holder.clone());
             }
-
             state_transaction.invalidate_permission_cache_for_account(&holder);
         }
-
         let role_ids: Vec<RoleId> = state_transaction
             .world
             .roles
             .iter()
             .map(|(role_id, _)| role_id.clone())
             .collect();
-
         for role_id in role_ids {
             let should_remove = state_transaction
                 .world
@@ -904,22 +854,18 @@ pub mod isi {
             if !should_remove {
                 continue;
             }
-
             let impacted_accounts = state_transaction.accounts_with_role(&role_id);
-
             if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
                 role.permissions
                     .retain(|permission| !is_permission_account_associated(permission, account_id));
                 role.permission_epochs
                     .retain(|permission, _| role.permissions.contains(permission));
             }
-
             if !impacted_accounts.is_empty() {
                 state_transaction.invalidate_permission_cache_for(impacted_accounts.iter());
             }
         }
     }
-
     fn is_permission_asset_definition_associated(
         permission: &Permission,
         asset_definition_id: &AssetDefinitionId,
@@ -986,10 +932,8 @@ pub mod isi {
         {
             return permission.asset.definition() == asset_definition_id;
         }
-
         false
     }
-
     fn remove_asset_definition_associated_permissions(
         state_transaction: &mut StateTransaction<'_, '_>,
         asset_definition_id: &AssetDefinitionId,
@@ -1000,7 +944,6 @@ pub mod isi {
             .iter()
             .map(|(holder, _)| holder.clone())
             .collect();
-
         for holder in account_ids {
             let should_remove = state_transaction
                 .world
@@ -1014,7 +957,6 @@ pub mod isi {
             if !should_remove {
                 continue;
             }
-
             let remove_entry = if let Some(permissions) =
                 state_transaction.world.account_permissions.get_mut(&holder)
             {
@@ -1025,24 +967,20 @@ pub mod isi {
             } else {
                 false
             };
-
             if remove_entry {
                 state_transaction
                     .world
                     .account_permissions
                     .remove(holder.clone());
             }
-
             state_transaction.invalidate_permission_cache_for_account(&holder);
         }
-
         let role_ids: Vec<RoleId> = state_transaction
             .world
             .roles
             .iter()
             .map(|(role_id, _)| role_id.clone())
             .collect();
-
         for role_id in role_ids {
             let should_remove = state_transaction
                 .world
@@ -1056,9 +994,7 @@ pub mod isi {
             if !should_remove {
                 continue;
             }
-
             let impacted_accounts = state_transaction.accounts_with_role(&role_id);
-
             if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
                 role.permissions.retain(|permission| {
                     !is_permission_asset_definition_associated(permission, asset_definition_id)
@@ -1066,13 +1002,11 @@ pub mod isi {
                 role.permission_epochs
                     .retain(|permission, _| role.permissions.contains(permission));
             }
-
             if !impacted_accounts.is_empty() {
                 state_transaction.invalidate_permission_cache_for(impacted_accounts.iter());
             }
         }
     }
-
     fn resolve_config_account_literal(
         world: &impl crate::state::WorldReadOnly,
         dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
@@ -1091,7 +1025,6 @@ pub mod isi {
                 .into()
             })
     }
-
     fn config_account_matches(
         world: &impl crate::state::WorldReadOnly,
         dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
@@ -1104,7 +1037,6 @@ pub mod isi {
             resolve_config_account_literal(world, dataspace_catalog, raw, field_path, now_ms)?;
         Ok(configured == *account_id)
     }
-
     fn parse_config_asset_definition_id(
         world: &impl crate::state::WorldReadOnly,
         raw: &str,
@@ -1112,7 +1044,6 @@ pub mod isi {
     ) -> Option<AssetDefinitionId> {
         crate::block::parse_asset_definition_literal_with_world(world, raw, now_ms)
     }
-
     impl Execute for Register<Account> {
         #[metrics(+"register_account")]
         fn execute(
@@ -1169,7 +1100,6 @@ pub mod isi {
                     "Opaque identifiers require a UAID".to_owned().into(),
                 ));
             }
-
             if let Some(label) = account.label() {
                 if account_label_is_pii(label) {
                     return Err(InstructionExecutionError::InvariantViolation(
@@ -1199,7 +1129,6 @@ pub mod isi {
                     ));
                 }
             }
-
             if account.uaid().is_some() {
                 let mut seen = BTreeSet::new();
                 for opaque in account.opaque_ids() {
@@ -1223,7 +1152,6 @@ pub mod isi {
                 .world
                 .accounts
                 .insert(account_id.clone(), account_value);
-
             if let Some(uaid) = account.uaid() {
                 state_transaction
                     .world
@@ -1231,7 +1159,6 @@ pub mod isi {
                     .insert(*uaid, account_id.clone());
                 state_transaction.rebuild_space_directory_bindings(*uaid);
             }
-
             if let Some(label) = account.label() {
                 if state_transaction
                     .world
@@ -1248,7 +1175,6 @@ pub mod isi {
                     ));
                 }
             }
-
             if let Some(uaid) = account.uaid() {
                 for opaque in account.opaque_ids() {
                     if state_transaction
@@ -1272,7 +1198,6 @@ pub mod isi {
                     }
                 }
             }
-
             if let Some(record) = AccountRekeyRecord::from_account(&account)
                 && state_transaction
                     .world
@@ -1295,14 +1220,11 @@ pub mod isi {
                     "Account label already registered".to_owned().into(),
                 ));
             }
-
             let created = AccountEvent::Created(AccountCreated::new(account));
             state_transaction.world.emit_events(Some(created));
-
             Ok(())
         }
     }
-
     impl Execute for Unregister<Account> {
         #[metrics(+"unregister_account")]
         fn execute(
@@ -1311,7 +1233,6 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
-
             if let Some((program_id, _)) =
                 state_transaction
                     .world
@@ -1331,7 +1252,6 @@ pub mod isi {
                 )
                 .into());
             }
-
             if crate::smartcontracts::isi::asset::isi::is_sccp_custody_account(
                 state_transaction,
                 &account_id,
@@ -1359,7 +1279,6 @@ pub mod isi {
                 )
                 .into());
             }
-
             if crate::smartcontracts::isi::sorafs_reserve::is_reserve_custody_account(
                 state_transaction.world(),
                 &account_id,
@@ -1372,7 +1291,6 @@ pub mod isi {
                 )
                     .into());
             }
-
             if crate::smartcontracts::isi::escrow::is_protocol_escrow_custody_account(
                 state_transaction,
                 &account_id,
@@ -1397,7 +1315,6 @@ pub mod isi {
                 )
                 .into());
             }
-
             let contract_deploy_nonce_key = Name::from_str(
                 iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
             )
@@ -1416,7 +1333,6 @@ pub mod isi {
                 )
                 .into());
             }
-
             let orchard_pool_references =
                 crate::privacy_state::load_privacy_orchard_pool_references_v1(
                     &state_transaction.world.privacy_commitments,
@@ -1442,11 +1358,9 @@ pub mod isi {
                 )
                 .into());
             }
-
             if let Some(primary_label) = state_transaction.world.account(&account_id)?.label() {
                 ensure_alias_can_change_recovery_binding(state_transaction, primary_label)?;
             }
-
             if let Some(owned_domain_id) = state_transaction
                 .world
                 .domains_by_owner
@@ -1608,7 +1522,6 @@ pub mod isi {
                 "nexus.staking.slash_sink_account_id",
                 state_transaction.block_unix_timestamp_ms(),
             )?;
-
             if nexus_fee_sink_matches {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -2241,9 +2154,7 @@ pub mod isi {
                 )
                 .into());
             }
-
             remove_account_associated_permissions(state_transaction, &account_id);
-
             state_transaction
                 .world()
                 .triggers()
@@ -2261,14 +2172,11 @@ pub mod isi {
                         &trigger_id,
                     );
                 });
-
             state_transaction
                 .world
                 .account_permissions
                 .remove(account_id.clone());
-
             state_transaction.world.remove_account_roles(&account_id);
-
             let remove_assets: Vec<AssetId> = state_transaction
                 .world
                 .assets_in_account_iter(&account_id)
@@ -2279,7 +2187,6 @@ pub mod isi {
                     .world
                     .remove_asset_and_metadata_with_total(&asset_id)?;
             }
-
             let mut remove_nfts: BTreeSet<NftId> = state_transaction
                 .world
                 .nfts_in_account_iter(&account_id)
@@ -2304,17 +2211,14 @@ pub mod isi {
                     .world
                     .emit_events(Some(DomainEvent::Nft(NftEvent::Deleted(nft_id))));
             }
-
             let removed = state_transaction.world.accounts.remove(account_id.clone());
             let Some(account_value) = removed else {
                 return Err(FindError::Account(account_id).into());
             };
-
             state_transaction
                 .world
                 .tx_sequences
                 .remove(account_id.clone());
-
             for label in state_transaction
                 .world
                 .remove_account_alias_bindings_for_account(&account_id)
@@ -2324,7 +2228,6 @@ pub mod isi {
                     .account_rekey_records
                     .remove(label.clone());
             }
-
             if let Some(uaid) = account_value.uaid().copied() {
                 state_transaction.world.uaid_accounts.remove(uaid);
                 for opaque in account_value.opaque_ids() {
@@ -2338,15 +2241,12 @@ pub mod isi {
                     state_transaction.world.identifier_claims.remove(*opaque);
                 }
             }
-
             state_transaction
                 .world
                 .emit_events(Some(AccountEvent::Deleted(account_id)));
-
             Ok(())
         }
     }
-
     impl Execute for Register<AssetDefinition> {
         #[metrics(+"register_asset_definition")]
         fn execute(
@@ -2377,7 +2277,6 @@ pub mod isi {
                 state_transaction,
                 &asset_definition,
             )?;
-
             let asset_definition_id = asset_definition.id().clone();
             if state_transaction
                 .world
@@ -2418,15 +2317,12 @@ pub mod isi {
                     bound_at_ms,
                 )?;
             }
-
             state_transaction
                 .world
                 .emit_asset_definition_event(AssetDefinitionEvent::Created(asset_definition));
-
             Ok(())
         }
     }
-
     impl Execute for Unregister<AssetDefinition> {
         #[metrics(+"unregister_asset_definition")]
         fn execute(
@@ -2435,7 +2331,6 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_definition_id = self.object().clone();
-
             if crate::smartcontracts::isi::asset::isi::is_sccp_settlement_asset_definition(
                 state_transaction,
                 &asset_definition_id,
@@ -2460,7 +2355,6 @@ pub mod isi {
                 )
                 .into());
             }
-
             if crate::smartcontracts::isi::sorafs_reserve::is_reserve_asset_definition(
                 state_transaction.world(),
                 &asset_definition_id,
@@ -2473,7 +2367,6 @@ pub mod isi {
                 )
                     .into());
             }
-
             let orchard_pool_references =
                 crate::privacy_state::load_privacy_orchard_pool_references_v1(
                     &state_transaction.world.privacy_commitments,
@@ -2499,7 +2392,6 @@ pub mod isi {
                 )
                 .into());
             }
-
             if asset_definition_id == state_transaction.gov.voting_asset_id {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -2706,7 +2598,6 @@ pub mod isi {
                 .into());
             }
             remove_asset_definition_associated_permissions(state_transaction, &asset_definition_id);
-
             let mut assets_to_remove = Vec::new();
             assets_to_remove.extend(
                 state_transaction
@@ -2717,7 +2608,6 @@ pub mod isi {
                     .map(|(asset_id, _)| asset_id)
                     .cloned(),
             );
-
             let domain = state_transaction
                 .world
                 .asset_definition_domains
@@ -2732,13 +2622,11 @@ pub mod isi {
                 {
                     error!(%asset_id, "asset not found. This is a bug");
                 }
-
                 events.push(DataEvent::asset(
                     AssetEvent::Deleted(asset_id),
                     domain.clone(),
                 ));
             }
-
             if state_transaction
                 .world
                 .remove_asset_definition_entry(&asset_definition_id)
@@ -2758,18 +2646,14 @@ pub mod isi {
                 .offline
                 .escrow_accounts
                 .remove(&asset_definition_id);
-
             events.push(DataEvent::asset_definition(
                 AssetDefinitionEvent::Deleted(asset_definition_id),
                 domain,
             ));
-
             state_transaction.world.emit_events(events);
-
             Ok(())
         }
     }
-
     impl Execute for SetAssetDefinitionAlias {
         fn execute(
             self,
@@ -2781,7 +2665,6 @@ pub mod isi {
                 alias,
                 lease_expiry_ms,
             } = self;
-
             if alias.is_none() && lease_expiry_ms.is_some() {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
@@ -2790,7 +2673,6 @@ pub mod isi {
                 )
                 .into());
             }
-
             // Ensure definition exists and validate the alias against the display label and any
             // explicit human-readable name carried by the stored definition.
             let definition = state_transaction
@@ -2856,11 +2738,9 @@ pub mod isi {
                     .world
                     .clear_asset_definition_alias(&asset_definition_id);
             }
-
             Ok(())
         }
     }
-
     impl Execute for SetContractAlias {
         fn execute(
             self,
@@ -2872,7 +2752,6 @@ pub mod isi {
                 alias,
                 lease_expiry_ms,
             } = self;
-
             if alias.is_none() && lease_expiry_ms.is_some() {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
@@ -2881,7 +2760,6 @@ pub mod isi {
                 )
                 .into());
             }
-
             if let Some(alias) = alias {
                 let contract_dataspace_id = contract_address.dataspace_id().map_err(|err| {
                     InstructionExecutionError::InvalidParameter(
@@ -2911,7 +2789,6 @@ pub mod isi {
                     )
                     .into());
                 }
-
                 let (_, _, alias_dataspace_id) =
                     resolve_contract_alias_components(state_transaction, &alias)?;
                 if alias_dataspace_id != contract_dataspace_id {
@@ -2922,14 +2799,11 @@ pub mod isi {
                     )
                     .into());
                 }
-
                 ensure_authority_can_manage_contract_alias(state_transaction, authority, &alias)?;
-
                 ensure_account_alias_namespace_available_for_contract_alias(
                     state_transaction,
                     &alias,
                 )?;
-
                 let bound_at_ms = state_transaction.block_unix_timestamp_ms();
                 if lease_expiry_ms.is_some_and(|lease_expiry_ms| lease_expiry_ms <= bound_at_ms) {
                     return Err(InstructionExecutionError::InvalidParameter(
@@ -2973,11 +2847,9 @@ pub mod isi {
                     .world
                     .clear_contract_alias(&contract_address);
             }
-
             Ok(())
         }
     }
-
     impl Execute for SetKeyValue<AssetDefinition> {
         #[metrics(+"set_key_value_asset_definition")]
         fn execute(
@@ -2996,7 +2868,6 @@ pub mod isi {
                 "max_metadata_value_bytes",
                 crate::smartcontracts::limits::DEFAULT_JSON_LIMIT,
             )?;
-
             state_transaction
                 .world
                 .asset_definition_mut(&asset_definition_id)
@@ -3006,7 +2877,6 @@ pub mod isi {
                         .metadata_mut()
                         .insert(key.clone(), value.clone())
                 })?;
-
             state_transaction.world.emit_asset_definition_event(
                 AssetDefinitionEvent::MetadataInserted(MetadataChanged {
                     target: asset_definition_id,
@@ -3014,11 +2884,9 @@ pub mod isi {
                     value,
                 }),
             );
-
             Ok(())
         }
     }
-
     impl Execute for RemoveKeyValue<AssetDefinition> {
         #[metrics(+"remove_key_value_asset_definition")]
         fn execute(
@@ -3036,7 +2904,6 @@ pub mod isi {
                         .remove(self.key().as_ref())
                         .ok_or_else(|| FindError::MetadataKey(self.key().clone()))
                 })?;
-
             state_transaction.world.emit_asset_definition_event(
                 AssetDefinitionEvent::MetadataRemoved(MetadataChanged {
                     target: asset_definition_id,
@@ -3044,11 +2911,9 @@ pub mod isi {
                     value,
                 }),
             );
-
             Ok(())
         }
     }
-
     impl Execute for SetKeyValue<Domain> {
         #[metrics(+"set_domain_key_value")]
         fn execute(
@@ -3067,10 +2932,8 @@ pub mod isi {
                 "max_metadata_value_bytes",
                 crate::smartcontracts::limits::DEFAULT_JSON_LIMIT,
             )?;
-
             let domain = state_transaction.world.domain_mut(&domain_id)?;
             domain.metadata_mut().insert(key.clone(), value.clone());
-
             state_transaction
                 .world
                 .emit_events(Some(DomainEvent::MetadataInserted(MetadataChanged {
@@ -3078,13 +2941,10 @@ pub mod isi {
                     key,
                     value,
                 })));
-
             Ok(())
         }
     }
-
     // centralized in smartcontracts::limits
-
     impl Execute for RemoveKeyValue<Domain> {
         #[metrics(+"remove_domain_key_value")]
         fn execute(
@@ -3093,13 +2953,11 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let domain_id = self.object().clone();
-
             let domain = state_transaction.world.domain_mut(&domain_id)?;
             let value = domain
                 .metadata_mut()
                 .remove(self.key().as_ref())
                 .ok_or_else(|| FindError::MetadataKey(self.key().clone()))?;
-
             state_transaction
                 .world
                 .emit_events(Some(DomainEvent::MetadataRemoved(MetadataChanged {
@@ -3107,11 +2965,9 @@ pub mod isi {
                     key: self.key().clone(),
                     value,
                 })));
-
             Ok(())
         }
     }
-
     impl Execute for Transfer<Account, DomainId, Account> {
         fn execute(
             self,
@@ -3123,10 +2979,8 @@ pub mod isi {
                 object,
                 destination,
             } = self;
-
             let _ = state_transaction.world.account(&source)?;
             let _ = state_transaction.world.account(&destination)?;
-
             let authority_is_source_owner = authority == &source;
             let authority_is_transferred_domain_owner =
                 state_transaction.world.domain(&object)?.owned_by() == authority;
@@ -3135,7 +2989,6 @@ pub mod isi {
                     "Can't transfer domain of another account".to_owned().into(),
                 ));
             }
-
             let next_musubi_owner_generation = (source != destination)
                 .then(|| {
                     let current_generation = match state_transaction
@@ -3159,17 +3012,14 @@ pub mod isi {
                     })
                 })
                 .transpose()?;
-
             {
                 let domain = state_transaction.world.domain_mut(&object)?;
-
                 if domain.owned_by() != &source {
                     return Err(Error::InvariantViolation(
                         format!("Can't transfer domain {domain} since {source} doesn't own it",)
                             .into(),
                     ));
                 }
-
                 domain.set_owned_by(destination.clone());
             }
             if let Some(next_generation) = next_musubi_owner_generation {
@@ -3187,11 +3037,9 @@ pub mod isi {
                     domain: object,
                     new_owner: destination,
                 })));
-
             Ok(())
         }
     }
-
     pub(crate) fn ensure_controller_capabilities(
         controller: &AccountController,
         allowed_algorithms: &[Algorithm],
@@ -3216,7 +3064,6 @@ pub mod isi {
                 .into(),
             ));
         }
-
         match first_disallowed_curve(controller, allowed_curve_ids)? {
             Some(curve) => {
                 let algo = curve.algorithm();
@@ -3232,10 +3079,8 @@ pub mod isi {
             }
             None => {}
         }
-
         Ok(())
     }
-
     fn first_disallowed_algorithm(
         controller: &AccountController,
         allowed: &[Algorithm],
@@ -3257,7 +3102,6 @@ pub mod isi {
             }
         }
     }
-
     fn controller_algorithm(
         public_key: &PublicKey,
     ) -> Result<Algorithm, InstructionExecutionError> {
@@ -3267,7 +3111,6 @@ pub mod isi {
             )
         })
     }
-
     fn algorithm_if_disallowed(algo: Algorithm, allowed: &[Algorithm]) -> Option<Algorithm> {
         if allowed.contains(&algo) || is_bls_algorithm(algo) {
             None
@@ -3275,7 +3118,6 @@ pub mod isi {
             Some(algo)
         }
     }
-
     fn first_disallowed_curve(
         controller: &AccountController,
         allowed_curve_ids: &[u8],
@@ -3316,7 +3158,6 @@ pub mod isi {
             }
         }
     }
-
     fn curve_if_disallowed(
         algo: Algorithm,
         allowed_curve_ids: &[u8],
@@ -3332,7 +3173,6 @@ pub mod isi {
             Ok(Some(curve))
         }
     }
-
     fn is_bls_algorithm(algo: Algorithm) -> bool {
         #[cfg(feature = "bls")]
         {
@@ -3345,43 +3185,37 @@ pub mod isi {
         }
     }
 }
-
 /// Implementations for domain queries.
 pub mod query {
     use std::collections::BTreeSet;
-
     use iroha_data_model::{
         domain::Domain,
         query::{
             dsl::{CompoundPredicate, EvaluatePredicate},
             error::QueryExecutionFail,
-            json::PredicateJson,
+            json::{PredicateJson, predicate_json_candidate_plan_for_execution},
         },
     };
     use norito::json::Value;
-
     use super::*;
     use crate::{
         smartcontracts::{ValidQuery, ValidSingularQuery},
         state::{StateReadOnly, WorldReadOnly},
     };
-
     #[derive(Debug, Default)]
     struct DomainPredicateView {
         ids: BTreeSet<DomainId>,
         owners: BTreeSet<AccountId>,
     }
-
     impl DomainPredicateView {
         fn from_predicate(predicate: &CompoundPredicate<Domain>) -> Self {
             let mut view = Self::default();
             let Some(raw) = predicate.json_payload() else {
                 return view;
             };
-            let Ok(predicate) = norito::json::from_str::<PredicateJson>(raw) else {
+            let Some(predicate) = predicate_json_candidate_plan_for_execution(raw) else {
                 return view;
             };
-
             for condition in predicate.equals {
                 view.push_field_value(&condition.field, &condition.value);
             }
@@ -3390,15 +3224,12 @@ pub mod query {
                     view.push_field_value(&membership.field, &value);
                 }
             }
-
             view
         }
-
         fn push_field_value(&mut self, field: &str, value: &Value) {
             let Value::String(raw) = value else {
                 return;
             };
-
             match field {
                 "id" | "domain" | "domain_id" => {
                     if let Some(domain_id) = parse_domain_predicate_value(raw) {
@@ -3415,13 +3246,11 @@ pub mod query {
                 _ => {}
             }
         }
-
         fn plan(&self) -> DomainQueryPlan {
             let mut ids = self.ids.iter().cloned().collect::<Vec<_>>();
             ids.sort();
             let mut owners = self.owners.iter().cloned().collect::<Vec<_>>();
             owners.sort();
-
             if !ids.is_empty() {
                 return DomainQueryPlan::Ids(ids);
             }
@@ -3431,20 +3260,17 @@ pub mod query {
             DomainQueryPlan::Full
         }
     }
-
     #[derive(Debug)]
     enum DomainQueryPlan {
         Ids(Vec<DomainId>),
         Owners(Vec<AccountId>),
         Full,
     }
-
     fn parse_domain_predicate_value(raw: &str) -> Option<DomainId> {
         DomainId::parse_fully_qualified(raw)
             .ok()
             .or_else(|| DomainId::try_new(raw, "universal").ok())
     }
-
     fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
         if path.is_empty() {
             return None;
@@ -3461,17 +3287,14 @@ pub mod query {
         }
         Some(current)
     }
-
     fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
         matches!(value, Value::String(raw) if raw == expected)
     }
-
     fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
         values
             .iter()
             .any(|value| matches!(value, Value::String(raw) if raw == expected))
     }
-
     fn domain_alias_values(domain: &Domain, field: &str) -> Vec<String> {
         match field {
             "id" | "domain" | "domain_id" => {
@@ -3489,17 +3312,14 @@ pub mod query {
             _ => Vec::new(),
         }
     }
-
     fn domain_json_value<'a>(cache: &'a mut Option<Value>, domain: &Domain) -> Option<&'a Value> {
         if cache.is_none() {
-            *cache = norito::json::to_value(domain).ok();
+            *cache = crate::smartcontracts::isi::query::ordinary_predicate_json_value(domain);
         }
         cache.as_ref()
     }
-
     fn predicate_matches_domain(predicate: &PredicateJson, domain: &Domain) -> bool {
         let mut domain_json = None;
-
         for cond in &predicate.equals {
             let aliases = domain_alias_values(domain, &cond.field);
             if !aliases.is_empty() {
@@ -3521,7 +3341,6 @@ pub mod query {
                 return false;
             }
         }
-
         for cond in &predicate.r#in {
             let aliases = domain_alias_values(domain, &cond.field);
             if !aliases.is_empty() {
@@ -3543,7 +3362,6 @@ pub mod query {
                 return false;
             }
         }
-
         for field in &predicate.exists {
             if !domain_alias_values(domain, field).is_empty() {
                 continue;
@@ -3558,24 +3376,21 @@ pub mod query {
                 return false;
             }
         }
-
         true
     }
-
     impl ValidSingularQuery for FindDomainById {
         #[metrics(+"find_domain_by_id")]
         fn execute(
             &self,
             state_ro: &impl StateReadOnly,
         ) -> std::result::Result<Domain, QueryExecutionFail> {
-            state_ro
+            let domain = state_ro
                 .world()
                 .domain(self.domain_id())
-                .cloned()
-                .map_err(QueryExecutionFail::from)
+                .map_err(QueryExecutionFail::from)?;
+            crate::smartcontracts::isi::query::own_singular_query_value(domain)
         }
     }
-
     impl ValidQuery for FindDomains {
         #[metrics(+"find_domains")]
         fn execute(
@@ -3587,8 +3402,7 @@ pub mod query {
             let predicate_view = DomainPredicateView::from_predicate(&filter);
             let predicate_json = filter
                 .json_payload()
-                .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
-
+                .and_then(predicate_json_candidate_plan_for_execution);
             let iter: Box<dyn Iterator<Item = Domain> + '_> = match predicate_view.plan() {
                 DomainQueryPlan::Ids(ids) => Box::new(
                     ids.into_iter()
@@ -3607,7 +3421,6 @@ pub mod query {
                 }
                 DomainQueryPlan::Full => Box::new(world.domains_iter().cloned()),
             };
-
             Ok(iter.filter(move |domain| {
                 if let Some(predicate) = predicate_json.as_ref() {
                     predicate_matches_domain(predicate, domain)
@@ -3617,7 +3430,6 @@ pub mod query {
             }))
         }
     }
-
     impl ValidQuery for FindDomainsByAccountId {
         #[metrics(+"find_domains_by_account_id")]
         fn execute(
@@ -3627,7 +3439,6 @@ pub mod query {
         ) -> std::result::Result<impl Iterator<Item = Domain>, QueryExecutionFail> {
             let account_id = self.account_id().clone();
             state_ro.world().account(&account_id)?;
-
             let domains = state_ro
                 .world()
                 .domains_owned_by_iter(&account_id)
@@ -3639,13 +3450,10 @@ pub mod query {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     include!("domain_restricted_asset_definition_tests.rs");
-
     use std::sync::Arc;
-
     use iroha_crypto::{
         Algorithm, Hash, KeyPair,
         blake2::{Blake2b512, digest::Digest as _},
@@ -3715,7 +3523,6 @@ mod tests {
     };
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
-
     use super::isi::upsert_account_rekey_record;
     use super::*;
     use crate::{
@@ -3731,27 +3538,22 @@ mod tests {
             GovernanceReferendumStatus, GovernanceStageApprovals, State, WorldReadOnly,
         },
     };
-
     fn test_state() -> State {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         State::new_for_testing(World::default(), kura, query)
     }
-
     fn fixture_keypair(seed: u8, algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], algorithm)
             .expect("fixture seed must derive a valid keypair")
     }
-
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("domain ISI fixture key generation should succeed")
     }
-
     fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("domain ISI fixture key generation for requested algorithm should succeed")
     }
-
     fn install_orchard_pool_dependency_guard(
         state_transaction: &mut crate::state::StateTransaction<'_, '_>,
         asset_definition_id: AssetDefinitionId,
@@ -3785,13 +3587,11 @@ mod tests {
         );
         key
     }
-
     #[derive(Clone, Copy, Debug)]
     enum ValidationFeeProposalFixtureKind {
         Policy,
         PayoutLifecycle,
     }
-
     #[derive(Clone, Debug)]
     struct ValidationFeeUnregisterTargets {
         domain_id: DomainId,
@@ -3799,7 +3599,6 @@ mod tests {
         bond_escrow_account: AccountId,
         slash_receiver_account: AccountId,
     }
-
     fn fixture_account(seed: u8) -> AccountId {
         AccountId::new(
             fixture_keypair(seed, Algorithm::Ed25519)
@@ -3807,7 +3606,6 @@ mod tests {
                 .clone(),
         )
     }
-
     fn register_validation_fee_unregister_targets(
         authority: &AccountId,
         state_transaction: &mut crate::state::StateTransaction<'_, '_>,
@@ -3872,7 +3670,6 @@ mod tests {
             slash_receiver_account,
         }
     }
-
     fn validation_fee_unregister_rules(
         targets: &ValidationFeeUnregisterTargets,
     ) -> ValidationFeePlainElectorateRulesV1 {
@@ -3899,20 +3696,17 @@ mod tests {
         );
         rules
     }
-
     fn validation_fee_guard_sbd_asset_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("sbd", "guard").expect("SBD guard domain"),
             "sbd".parse().expect("SBD asset name"),
         )
     }
-
     fn validation_fee_guard_network_id() -> iroha_data_model::NetworkId {
         "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
             .parse()
             .expect("canonical validation-fee guard network id")
     }
-
     fn validation_fee_guard_payout_binding(
         rules: &ValidationFeePlainElectorateRulesV1,
     ) -> ValidationFeeTreasuryPayoutBindingV1 {
@@ -3952,7 +3746,6 @@ mod tests {
         );
         binding
     }
-
     fn validation_fee_unregister_proposal_kind(
         fixture_kind: ValidationFeeProposalFixtureKind,
         rules: &ValidationFeePlainElectorateRulesV1,
@@ -3993,7 +3786,6 @@ mod tests {
             }
         }
     }
-
     const VALIDATION_FEE_PARLIAMENT_BODIES: [ParliamentBody; 7] = [
         ParliamentBody::RulesCommittee,
         ParliamentBody::AgendaCouncil,
@@ -4003,7 +3795,6 @@ mod tests {
         ParliamentBody::OversightCommittee,
         ParliamentBody::FmaCommittee,
     ];
-
     fn validation_fee_unregister_parliament_snapshot() -> GovernanceParliamentSnapshot {
         let rosters = VALIDATION_FEE_PARLIAMENT_BODIES
             .into_iter()
@@ -4036,7 +3827,6 @@ mod tests {
             bodies,
         }
     }
-
     fn insert_validation_fee_unregister_proposal(
         state_transaction: &mut crate::state::StateTransaction<'_, '_>,
         fixture_kind: ValidationFeeProposalFixtureKind,
@@ -4125,7 +3915,6 @@ mod tests {
         }
         proposal_id
     }
-
     fn drift_validation_fee_governance_config(
         state_transaction: &mut crate::state::StateTransaction<'_, '_>,
     ) {
@@ -4136,7 +3925,6 @@ mod tests {
         state_transaction.gov.bond_escrow_account = fixture_account(0xB1);
         state_transaction.gov.slash_receiver_account = fixture_account(0xB2);
     }
-
     fn assert_validation_fee_governance_config_drift(
         state_transaction: &crate::state::StateTransaction<'_, '_>,
         rules: &ValidationFeePlainElectorateRulesV1,
@@ -4151,7 +3939,6 @@ mod tests {
             rules.slash_receiver_account
         );
     }
-
     fn instruction_error_contains(error: &InstructionExecutionError, expected: &str) -> bool {
         match error {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
@@ -4161,7 +3948,6 @@ mod tests {
             _ => false,
         }
     }
-
     #[test]
     fn checked_keypair_helpers_preserve_requested_algorithms() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
@@ -4172,7 +3958,6 @@ mod tests {
             );
         }
     }
-
     fn seed_domain(state: &mut State, domain_id: &DomainId, owner: &AccountId) {
         let domain = Domain {
             id: domain_id.clone(),
@@ -4191,7 +3976,6 @@ mod tests {
         domains.insert(domain_id.clone());
         state.world.domains_by_owner.insert(owner.clone(), domains);
     }
-
     fn seed_account(state: &mut State, account_id: &AccountId, domain_id: &DomainId) {
         let account = Account {
             id: account_id.clone(),
@@ -4204,7 +3988,6 @@ mod tests {
         let (account_id, account_value) = account.into_key_value();
         state.world.accounts.insert(account_id, account_value);
     }
-
     fn test_state_with_authority(authority: &AccountId) -> State {
         let mut state = test_state();
         let domain_id = DomainId::try_new("authority", "universal").expect("domain id");
@@ -4212,7 +3995,6 @@ mod tests {
         seed_account(&mut state, authority, &domain_id);
         state
     }
-
     #[test]
     fn unregister_account_rejects_governed_orchard_reserve_dependency_atomically() {
         let authority = (*ALICE_ID).clone();
@@ -4244,7 +4026,6 @@ mod tests {
             asset_definition_id,
             reserve_account.clone(),
         );
-
         let error = Unregister::account(reserve_account.clone())
             .execute(&authority, &mut transaction)
             .expect_err("governed Orchard reserve account must remain registered");
@@ -4263,7 +4044,6 @@ mod tests {
                 .is_some()
         );
     }
-
     #[test]
     fn unregister_asset_definition_rejects_governed_orchard_dependency_atomically() {
         let authority = (*ALICE_ID).clone();
@@ -4294,7 +4074,6 @@ mod tests {
             asset_definition_id.clone(),
             reserve_account,
         );
-
         let error = Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut transaction)
             .expect_err("governed Orchard backing definition must remain registered");
@@ -4317,7 +4096,6 @@ mod tests {
                 .is_some()
         );
     }
-
     #[test]
     fn unregister_domain_rejects_governed_orchard_asset_cascade_before_mutation() {
         let authority = (*ALICE_ID).clone();
@@ -4348,7 +4126,6 @@ mod tests {
             asset_definition_id.clone(),
             reserve_account.clone(),
         );
-
         let error = Unregister::domain(domain_id.clone())
             .execute(&authority, &mut transaction)
             .expect_err("domain cascade must retain governed Orchard backing definition");
@@ -4373,7 +4150,6 @@ mod tests {
                 .is_some()
         );
     }
-
     #[test]
     fn domain_controller_capabilities_check_multisig_members_with_checked_algorithm_access() {
         let allowed = [Algorithm::Ed25519];
@@ -4381,7 +4157,6 @@ mod tests {
             iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(&allowed);
         let ed25519 = fixture_keypair(0x51, Algorithm::Ed25519);
         let secp256k1 = fixture_keypair(0x52, Algorithm::Secp256k1);
-
         let allowed_policy = MultisigPolicy::new(
             1,
             vec![MultisigMember::new(ed25519.public_key().clone(), 1).expect("member")],
@@ -4393,7 +4168,6 @@ mod tests {
             &allowed_curve_ids,
         )
         .expect("Ed25519 multisig member should be accepted");
-
         let disallowed_policy = MultisigPolicy::new(
             1,
             vec![MultisigMember::new(secp256k1.public_key().clone(), 1).expect("member")],
@@ -4405,13 +4179,11 @@ mod tests {
             &allowed_curve_ids,
         )
         .expect_err("Secp256k1 multisig member should be rejected");
-
         assert!(matches!(
             err,
             InstructionExecutionError::InvariantViolation(_)
         ));
     }
-
     #[test]
     fn fixture_keypair_uses_checked_seed_derivation() {
         assert_eq!(
@@ -4423,13 +4195,11 @@ mod tests {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     #[test]
     fn find_domain_by_id_returns_registered_domain() {
         let mut state = test_state();
         let domain_id = DomainId::try_new("banka", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &ALICE_ID);
-
         let view = state.view();
         let domain = FindDomainById::new(domain_id.clone())
             .execute(&view)
@@ -4437,50 +4207,41 @@ mod tests {
         assert_eq!(domain.id(), &domain_id);
         assert_eq!(domain.owned_by(), &*ALICE_ID);
     }
-
     #[test]
     fn find_domains_by_account_id_returns_owned_domains_only() {
         use std::collections::BTreeSet;
-
         let mut state = test_state();
         let owner_domain = DomainId::try_new("owner", "universal").expect("domain id");
         let alice_owned = DomainId::try_new("banka", "universal").expect("domain id");
         let bob_owned = DomainId::try_new("bankb", "universal").expect("domain id");
         let bob_id = AccountId::new(checked_keypair().public_key().clone());
-
         seed_domain(&mut state, &owner_domain, &ALICE_ID);
         seed_account(&mut state, &ALICE_ID, &owner_domain);
         seed_account(&mut state, &bob_id, &owner_domain);
         seed_domain(&mut state, &alice_owned, &ALICE_ID);
         seed_domain(&mut state, &bob_owned, &bob_id);
-
         let view = state.view();
         let domains: Vec<_> = FindDomainsByAccountId::new(ALICE_ID.clone())
             .execute(CompoundPredicate::PASS, &view)
             .unwrap()
             .map(|domain| domain.id().clone())
             .collect();
-
         assert_eq!(
             domains.into_iter().collect::<BTreeSet<_>>(),
             BTreeSet::from([owner_domain, alice_owned])
         );
     }
-
     #[test]
     fn find_domains_filters_owner_with_owner_index() {
         use std::collections::BTreeSet;
-
         let mut state = test_state();
         let alice_owned = DomainId::try_new("banka", "universal").expect("domain id");
         let alice_owned_two = DomainId::try_new("cards", "universal").expect("domain id");
         let bob_owned = DomainId::try_new("bankb", "universal").expect("domain id");
         let bob_id = AccountId::new(checked_keypair().public_key().clone());
-
         seed_domain(&mut state, &alice_owned, &ALICE_ID);
         seed_domain(&mut state, &alice_owned_two, &ALICE_ID);
         seed_domain(&mut state, &bob_owned, &bob_id);
-
         let view = state.view();
         assert_eq!(
             view.world()
@@ -4490,7 +4251,6 @@ mod tests {
             BTreeSet::from([alice_owned.clone(), alice_owned_two.clone()]),
             "fixture should populate the owner index used by the query planner",
         );
-
         let predicate =
             CompoundPredicate::<Domain>::build(|p| p.equals("owned_by", ALICE_ID.to_string()));
         let domains: Vec<_> = FindDomains
@@ -4498,13 +4258,11 @@ mod tests {
             .unwrap()
             .map(|domain| domain.id().clone())
             .collect();
-
         assert_eq!(
             domains.into_iter().collect::<BTreeSet<_>>(),
             BTreeSet::from([alice_owned, alice_owned_two])
         );
     }
-
     #[test]
     fn domain_owner_index_tracks_insert_transfer_and_remove() {
         let state = test_state();
@@ -4517,11 +4275,9 @@ mod tests {
             metadata: Metadata::default(),
             owned_by: owner.clone(),
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         tx.world.insert_domain_entry(domain_id.clone(), domain);
         let owned = tx
             .world
@@ -4529,7 +4285,6 @@ mod tests {
             .map(|domain| domain.id().clone())
             .collect::<Vec<_>>();
         assert_eq!(owned, vec![domain_id.clone()]);
-
         {
             let domain = tx.world.domain_mut(&domain_id).expect("domain exists");
             domain.set_owned_by(new_owner.clone());
@@ -4546,22 +4301,18 @@ mod tests {
             .map(|domain| domain.id().clone())
             .collect::<Vec<_>>();
         assert_eq!(owned_by_new_owner, vec![domain_id.clone()]);
-
         tx.world.remove_domain_entry(&domain_id);
         assert!(
             tx.world.domains_owned_by_iter(&new_owner).next().is_none(),
             "owner index should remove unregistered domain",
         );
     }
-
     fn alias_domain(domain: &DomainId) -> AccountAliasDomain {
         AccountAliasDomain::new(domain.name().clone())
     }
-
     fn alias_in_domain(domain: &DomainId, label: Name) -> AccountAlias {
         AccountAlias::new(label, Some(alias_domain(domain)), DataSpaceId::UNIVERSAL)
     }
-
     fn alias_in_dataspace_domain(
         domain: &DomainId,
         dataspace: DataSpaceId,
@@ -4569,7 +4320,6 @@ mod tests {
     ) -> AccountAlias {
         AccountAlias::new_in_dataspace(label, Some(alias_domain(domain)), dataspace)
     }
-
     fn resolved_account_alias(
         tx: &StateTransaction<'_, '_>,
         alias: &AccountAlias,
@@ -4584,7 +4334,6 @@ mod tests {
             alias.dataspace,
         )
     }
-
     fn repair_only_quote_guard() -> AliasQuoteGuardV1 {
         AliasQuoteGuardV1 {
             expected_policy_version: 0,
@@ -4596,14 +4345,12 @@ mod tests {
             valid_until_ms: 0,
         }
     }
-
     /// Test adapter for exercising declarative setup repair against pre-seeded leases.
     struct EnsureTestAccountAliasBinding {
         account: AccountId,
         alias: Option<AccountAlias>,
         lease_expiry_ms: Option<u64>,
     }
-
     impl EnsureTestAccountAliasBinding {
         fn bind(account: AccountId, alias: AccountAlias, lease_expiry_ms: Option<u64>) -> Self {
             Self {
@@ -4612,7 +4359,6 @@ mod tests {
                 lease_expiry_ms,
             }
         }
-
         fn clear(account: AccountId) -> Self {
             Self {
                 account,
@@ -4621,7 +4367,6 @@ mod tests {
             }
         }
     }
-
     impl Execute for EnsureTestAccountAliasBinding {
         fn execute(
             self,
@@ -4656,14 +4401,12 @@ mod tests {
             .execute(authority, tx)
         }
     }
-
     /// Test adapter for exercising explicit primary-alias compare-and-set semantics.
     struct CasTestPrimaryAccountAlias {
         account: AccountId,
         alias: Option<AccountAlias>,
         lease_expiry_ms: Option<u64>,
     }
-
     impl CasTestPrimaryAccountAlias {
         fn bind(account: AccountId, alias: AccountAlias, lease_expiry_ms: Option<u64>) -> Self {
             Self {
@@ -4672,7 +4415,6 @@ mod tests {
                 lease_expiry_ms,
             }
         }
-
         fn clear(account: AccountId) -> Self {
             Self {
                 account,
@@ -4681,7 +4423,6 @@ mod tests {
             }
         }
     }
-
     impl Execute for CasTestPrimaryAccountAlias {
         fn execute(
             self,
@@ -4707,19 +4448,16 @@ mod tests {
                 .alias
                 .as_ref()
                 .map(|alias| resolved_account_alias(tx, alias));
-
             if let Some(alias) = self.alias
                 && current.as_ref() != Some(&alias)
             {
                 EnsureTestAccountAliasBinding::bind(self.account.clone(), alias, None)
                     .execute(authority, tx)?;
             }
-
             CompareAndSetPrimaryAccountAlias::new(self.account, expected, new_alias)
                 .execute(authority, tx)
         }
     }
-
     fn install_retail_dataspace_catalog(
         tx: &mut StateTransaction<'_, '_>,
     ) -> (DataSpaceId, DataSpaceId) {
@@ -4745,7 +4483,6 @@ mod tests {
         tx.world.dataspace_catalog = catalog;
         (paynet, cbuae)
     }
-
     fn install_dataspace_catalog_with_lane(
         tx: &mut StateTransaction<'_, '_>,
         dataspace: DataSpaceId,
@@ -4779,7 +4516,6 @@ mod tests {
         )
         .expect("lane catalog");
     }
-
     fn seed_account_alias_manage_permissions(
         tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
@@ -4814,7 +4550,6 @@ mod tests {
             );
         }
     }
-
     fn seed_contract_alias_manage_permissions(
         tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
@@ -4826,7 +4561,6 @@ mod tests {
             tx, authority, label, domain, dataspace,
         );
     }
-
     fn seed_contract_alias_manage_permissions_in_dataspace(
         tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
@@ -4840,7 +4574,6 @@ mod tests {
             &AccountAlias::new_in_dataspace(label, domain, dataspace),
         );
     }
-
     fn retail_account_aliases(paynet: DataSpaceId, cbuae: DataSpaceId) -> Vec<AccountAlias> {
         let hbl = DomainId::try_new("hbl", "paynet").expect("hbl domain");
         let ubl = DomainId::try_new("ubl", "paynet").expect("ubl domain");
@@ -4851,7 +4584,6 @@ mod tests {
             AccountAlias::domainless("retailcbuae".parse::<Name>().expect("label"), cbuae),
         ]
     }
-
     fn seed_account_alias_lease(
         tx: &mut StateTransaction<'_, '_>,
         owner: &AccountId,
@@ -4887,7 +4619,6 @@ mod tests {
             );
         }
     }
-
     fn seed_account_alias_lease_record(
         tx: &mut StateTransaction<'_, '_>,
         owner: &AccountId,
@@ -4927,7 +4658,6 @@ mod tests {
                 .smart_contract_state
                 .insert(dataspace_key, norito::codec::Encode::encode(&record));
         }
-
         if let Some(domain_id) = alias
             .domain_id(&tx.nexus.dataspace_catalog)
             .expect("fixture alias domain")
@@ -4965,7 +4695,6 @@ mod tests {
                     .insert(storage_key, norito::codec::Encode::encode(&record));
             }
         }
-
         let selector = crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
             .expect("selector");
         let address = AccountAddress::from_account_id(owner).expect("account address");
@@ -4985,7 +4714,6 @@ mod tests {
             norito::codec::Encode::encode(&record),
         );
     }
-
     fn seed_expired_account_alias_lease_record(
         tx: &mut StateTransaction<'_, '_>,
         owner: &AccountId,
@@ -5013,7 +4741,6 @@ mod tests {
             norito::codec::Encode::encode(&record),
         );
     }
-
     fn seed_dataspace_alias_lease(
         tx: &mut StateTransaction<'_, '_>,
         owner: &AccountId,
@@ -5037,7 +4764,6 @@ mod tests {
             norito::codec::Encode::encode(&record),
         );
     }
-
     fn seed_domainful_alias_manage_permissions(
         tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
@@ -5056,7 +4782,6 @@ mod tests {
             }),
         );
     }
-
     fn seed_manifest_record<F>(
         world: &mut World,
         uaid: UniversalAccountId,
@@ -5083,7 +4808,6 @@ mod tests {
         world.space_directory_manifests.insert(uaid, set);
         manifest_hash
     }
-
     #[test]
     fn account_label_registration_and_cleanup() {
         let mut state = test_state();
@@ -5091,12 +4815,10 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
-
         let account_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = Account::new(account_id.clone()).with_label(Some(account_label.clone()));
-
         // Execute register with label.
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -5115,14 +4837,12 @@ mod tests {
             Some(&account_id),
             "alias index should be inserted"
         );
-
         // Duplicate label should be rejected.
         let second_keypair = checked_keypair();
         let second_id = AccountId::new(second_keypair.public_key().clone());
         let dup_account = Account::new(second_id.clone()).with_label(Some(account_label.clone()));
         let err = Register::account(dup_account).execute(&authority, &mut tx);
         assert!(err.is_err(), "duplicate label must raise error");
-
         // Unregister removes label mapping.
         Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
@@ -5140,7 +4860,6 @@ mod tests {
             "alias index must be removed on unregister"
         );
     }
-
     #[test]
     fn register_domainless_account_indexes_alias() {
         let state = test_state();
@@ -5150,7 +4869,6 @@ mod tests {
             "primary".parse::<Name>().expect("label"),
             DataSpaceId::UNIVERSAL,
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -5159,7 +4877,6 @@ mod tests {
         Register::account(Account::new(account_id.clone()).with_label(Some(account_label.clone())))
             .execute(&authority, &mut tx)
             .expect("register domainless account");
-
         let account = tx.world.account(&account_id).expect("account should exist");
         assert_eq!(account.label(), Some(&account_label));
         assert_eq!(
@@ -5167,20 +4884,17 @@ mod tests {
             Some(&account_id)
         );
     }
-
     #[test]
     fn register_domainless_account_emits_direct_created_event() {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register domainless account");
-
         let created = tx
             .world
             .internal_event_buf
@@ -5194,30 +4908,25 @@ mod tests {
                 _ => None,
             })
             .expect("account created event");
-
         assert_eq!(created.account.id(), &account_id);
         assert!(tx.world.internal_event_buf.iter().all(|event| {
             !matches!(event.as_ref(), DataEvent::Domain(DomainEvent::Account(_)))
         }));
     }
-
     #[test]
     fn register_existing_plain_account_returns_repetition_error() {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let error = Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect_err("explicit duplicate registration must fail");
-
         assert_eq!(
             error,
             InstructionExecutionError::Repetition(RepetitionError {
@@ -5226,7 +4935,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn register_account_with_label_still_emits_direct_created_event() {
         let mut state = test_state();
@@ -5234,10 +4942,8 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
-
         let account_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -5246,7 +4952,6 @@ mod tests {
         Register::account(Account::new(account_id.clone()).with_label(Some(account_label)))
             .execute(&authority, &mut tx)
             .expect("register account with label");
-
         let created = tx
             .world
             .internal_event_buf
@@ -5260,13 +4965,11 @@ mod tests {
                 _ => None,
             })
             .expect("account created event");
-
         assert_eq!(created.account.id(), &account_id);
         assert!(tx.world.internal_event_buf.iter().all(|event| {
             !matches!(event.as_ref(), DataEvent::Domain(DomainEvent::Account(_)))
         }));
     }
-
     #[test]
     fn register_account_with_label_requires_active_sns_lease() {
         let mut state = test_state();
@@ -5274,10 +4977,8 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
-
         let label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -5285,13 +4986,11 @@ mod tests {
         let err = Register::account(Account::new(account_id.clone()).with_label(Some(label)))
             .execute(&authority, &mut tx)
             .expect_err("alias lease should be required");
-
         assert!(
             instruction_error_contains(&err, "active SNS lease"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn register_account_with_label_rejects_lease_owned_by_another_account() {
         let mut state = test_state();
@@ -5300,7 +4999,6 @@ mod tests {
         let lease_owner = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
-
         let label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let account_id = AccountId::new(checked_keypair().public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -5308,12 +5006,10 @@ mod tests {
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
         seed_account_alias_lease(&mut tx, &lease_owner, &label);
-
         let err =
             Register::account(Account::new(account_id.clone()).with_label(Some(label.clone())))
                 .execute(&authority, &mut tx)
                 .expect_err("another account's lease must not authorize registration");
-
         assert!(
             instruction_error_contains(&err, "owned by another account"),
             "unexpected error: {err}"
@@ -5321,7 +5017,6 @@ mod tests {
         assert!(tx.world.account(&account_id).is_err());
         assert!(tx.world.account_aliases.get(&label).is_none());
     }
-
     #[test]
     fn register_account_with_retail_aliases_requires_active_sns_lease() {
         let authority = (*ALICE_ID).clone();
@@ -5330,11 +5025,9 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let (paynet, cbuae) = install_retail_dataspace_catalog(&mut tx);
-
         for alias in retail_account_aliases(paynet, cbuae) {
             let account_id = AccountId::new(checked_keypair().public_key().clone());
             seed_account_alias_manage_permissions(&mut tx, &authority, &alias);
-
             let err =
                 Register::account(Account::new(account_id.clone()).with_label(Some(alias.clone())))
                     .execute(&authority, &mut tx)
@@ -5346,20 +5039,17 @@ mod tests {
             assert!(tx.world.account_aliases.get(&alias).is_none());
         }
     }
-
     #[test]
     fn set_account_label_relabels_existing_single_key_account() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let old_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let new_label = alias_in_domain(&domain_id, "treasury".parse::<Name>().unwrap());
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = Account::new(account_id.clone()).with_label(Some(old_label.clone()));
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -5369,7 +5059,6 @@ mod tests {
         Register::account(new_account)
             .execute(&authority, &mut tx)
             .expect("register account with initial label");
-
         CasTestPrimaryAccountAlias {
             account: account_id.clone(),
             alias: Some(new_label.clone()),
@@ -5377,7 +5066,6 @@ mod tests {
         }
         .execute(&authority, &mut tx)
         .expect("relabel existing account");
-
         assert_eq!(
             tx.world.account_aliases.get(&old_label),
             Some(&account_id),
@@ -5405,7 +5093,6 @@ mod tests {
             "account should expose the updated label"
         );
     }
-
     #[test]
     fn primary_alias_cas_allows_domainful_alias_without_domain_link() {
         let mut state = test_state();
@@ -5413,10 +5100,8 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
-
         let account_id = AccountId::new(checked_keypair().public_key().clone());
         let label = alias_in_domain(&domain_id, "treasury".parse::<Name>().unwrap());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -5425,7 +5110,6 @@ mod tests {
             .expect("register domainless account");
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
         seed_account_alias_lease_record(&mut tx, &account_id, &label);
-
         CasTestPrimaryAccountAlias {
             account: account_id.clone(),
             alias: Some(label.clone()),
@@ -5442,19 +5126,16 @@ mod tests {
             Some(&label)
         );
     }
-
     #[test]
     fn primary_alias_setup_rejects_stale_non_empty_binding() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let stale_owner = AccountId::new(checked_keypair().public_key().clone());
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -5470,7 +5151,6 @@ mod tests {
             .expect("register account");
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
         seed_account_alias_lease_record(&mut tx, &account_id, &label);
-
         let error = CasTestPrimaryAccountAlias {
             account: account_id.clone(),
             alias: Some(label.clone()),
@@ -5479,7 +5159,6 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect_err("declarative setup must not reclaim a non-empty binding");
         assert!(instruction_error_contains(&error, "alias.binding.conflict"));
-
         assert_eq!(
             tx.world.account_aliases.get(&label),
             Some(&stale_owner),
@@ -5495,7 +5174,6 @@ mod tests {
             "conflicting setup must preserve continuity state"
         );
     }
-
     #[test]
     fn bind_account_alias_requires_active_sns_lease() {
         let mut state = test_state();
@@ -5503,10 +5181,8 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
-
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -5514,7 +5190,6 @@ mod tests {
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let err = RebindAccountAlias::new(
             resolved_account_alias(&tx, &alias),
             account_id.clone(),
@@ -5522,13 +5197,11 @@ mod tests {
         )
         .execute(&authority, &mut tx)
         .expect_err("alias lease should be required");
-
         assert!(
             instruction_error_contains(&err, "not found"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn alias_binding_and_primary_alias_reject_lease_owned_by_another_account() {
         let mut state = test_state();
@@ -5537,7 +5210,6 @@ mod tests {
         let lease_owner = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
-
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let account_id = AccountId::new(checked_keypair().public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -5548,7 +5220,6 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register account");
         seed_account_alias_lease(&mut tx, &lease_owner, &alias);
-
         for err in [
             EnsureTestAccountAliasBinding {
                 account: account_id.clone(),
@@ -5579,7 +5250,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn account_alias_mutations_reject_expired_leases_even_during_replay() {
         let mut state = test_state();
@@ -5587,14 +5257,12 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
-
         let existing_id = AccountId::new(checked_keypair().public_key().clone());
         let registration_id = AccountId::new(checked_keypair().public_key().clone());
         let registration_alias =
             alias_in_domain(&domain_id, "register_expired".parse::<Name>().unwrap());
         let binding_alias = alias_in_domain(&domain_id, "binding_expired".parse::<Name>().unwrap());
         let primary_alias = alias_in_domain(&domain_id, "primary_expired".parse::<Name>().unwrap());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -5606,7 +5274,6 @@ mod tests {
         seed_expired_account_alias_lease_record(&mut tx, &registration_id, &registration_alias);
         seed_expired_account_alias_lease_record(&mut tx, &existing_id, &binding_alias);
         seed_expired_account_alias_lease_record(&mut tx, &existing_id, &primary_alias);
-
         let registration_err = Register::account(
             Account::new(registration_id.clone()).with_label(Some(registration_alias.clone())),
         )
@@ -5616,7 +5283,6 @@ mod tests {
             instruction_error_contains(&registration_err, "active SNS lease"),
             "unexpected registration error: {registration_err}"
         );
-
         let binding_err =
             EnsureTestAccountAliasBinding::bind(existing_id.clone(), binding_alias.clone(), None)
                 .execute(&authority, &mut tx)
@@ -5631,7 +5297,6 @@ mod tests {
             binding_message.contains("alias.lifecycle.conflict"),
             "unexpected expired-binding payload: {binding_message}"
         );
-
         let primary_err =
             CasTestPrimaryAccountAlias::bind(existing_id.clone(), primary_alias.clone(), None)
                 .execute(&authority, &mut tx)
@@ -5658,7 +5323,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn account_alias_binding_instructions_cannot_bypass_paid_sns_renewal() {
         let mut state = test_state();
@@ -5668,7 +5332,6 @@ mod tests {
         seed_account(&mut state, &authority, &domain_id);
         let account_id = AccountId::new(checked_keypair().public_key().clone());
         let alias = alias_in_domain(&domain_id, "renewal".parse::<Name>().unwrap());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -5677,7 +5340,6 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register account");
         seed_account_alias_lease_record(&mut tx, &account_id, &alias);
-
         for err in [
             EnsureTestAccountAliasBinding::bind(account_id.clone(), alias.clone(), Some(20))
                 .execute(&authority, &mut tx)
@@ -5730,7 +5392,6 @@ mod tests {
         let record = NameRecordV1::decode(&mut slice).expect("decode lease record");
         assert_eq!(record.expires_at_ms, u64::MAX);
     }
-
     #[test]
     fn bind_account_alias_in_retail_namespace_requires_active_sns_lease() {
         let authority = (*ALICE_ID).clone();
@@ -5739,14 +5400,12 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let (paynet, _) = install_retail_dataspace_catalog(&mut tx);
-
         let account_id = AccountId::new(checked_keypair().public_key().clone());
         let alias = AccountAlias::domainless("bindretail".parse::<Name>().expect("label"), paynet);
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
         seed_account_alias_manage_permissions(&mut tx, &authority, &alias);
-
         let err = RebindAccountAlias::new(
             resolved_account_alias(&tx, &alias),
             account_id.clone(),
@@ -5760,7 +5419,6 @@ mod tests {
         );
         assert!(tx.world.account_aliases.get(&alias).is_none());
     }
-
     #[test]
     fn retail_account_alias_rejects_asset_alias_permission() {
         let state = test_state();
@@ -5772,7 +5430,6 @@ mod tests {
         let alias = alias_in_dataspace_domain(&hbl, paynet, "cbdc".parse::<Name>().expect("label"));
         let current_account_id = AccountId::new(checked_keypair().public_key().clone());
         let replacement_account_id = AccountId::new(checked_keypair().public_key().clone());
-
         for account_id in [&current_account_id, &replacement_account_id] {
             let account = Account {
                 id: account_id.clone(),
@@ -5797,7 +5454,6 @@ mod tests {
                 scope: AssetDefinitionAliasPermissionScope::Domain(hbl.clone()),
             }),
         );
-
         let err = RebindAccountAlias::new(
             resolved_account_alias(&tx, &alias),
             current_account_id.clone(),
@@ -5814,7 +5470,6 @@ mod tests {
             Some(&current_account_id),
             "rejected mutation must preserve the original alias binding"
         );
-
         tx.world.add_account_permission(
             &current_account_id,
             Permission::from(CanManageAccountAlias {
@@ -5828,7 +5483,6 @@ mod tests {
         )
         .execute(&current_account_id, &mut tx)
         .expect("exact domain permission should authorize the alias mutation");
-
         assert_eq!(
             tx.world.account_aliases.get(&alias),
             Some(&replacement_account_id)
@@ -5842,7 +5496,6 @@ mod tests {
             replacement_account_id
         );
     }
-
     #[test]
     fn cbdc_fi_account_alias_management_isolated_by_exact_domain() {
         let authority = (*ALICE_ID).clone();
@@ -5850,7 +5503,6 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let retail = DataSpaceId::new(10);
         install_dataspace_catalog_with_lane(&mut tx, retail, "sbp", LaneVisibility::Public);
         let hbl = DomainId::try_new("hbl", "sbp").expect("HBL alias domain");
@@ -5889,14 +5541,12 @@ mod tests {
         ] {
             seed_account_alias_lease_record(&mut tx, &target, alias);
         }
-
         let hbl_permission: Permission = CanManageAccountAlias {
             scope: AccountAliasPermissionScope::Domain(hbl.clone()),
         }
         .into();
         tx.world
             .add_account_permission(&authority, hbl_permission.clone());
-
         EnsureTestAccountAliasBinding {
             account: target.clone(),
             alias: Some(hbl_alias.clone()),
@@ -5904,7 +5554,6 @@ mod tests {
         }
         .execute(&authority, &mut tx)
         .expect("exact HBL domain permission must authorize an HBL alias");
-
         for forbidden_alias in [&ubl_alias, &domainless_alias] {
             let err = EnsureTestAccountAliasBinding {
                 account: target.clone(),
@@ -5922,7 +5571,6 @@ mod tests {
                 "rejected cross-scope alias must remain unbound"
             );
         }
-
         tx.world
             .insert_account_alias_binding(ubl_alias.clone(), target.clone());
         tx.world.account_rekey_records.insert(
@@ -5948,7 +5596,6 @@ mod tests {
         assert_eq!(tx.world.account_aliases.get(&ubl_alias), Some(&target));
         tx.world.remove_account_alias_binding(&ubl_alias);
         tx.world.account_rekey_records.remove(ubl_alias.clone());
-
         assert!(
             tx.world
                 .remove_account_permission(&authority, &hbl_permission),
@@ -5960,7 +5607,6 @@ mod tests {
                 scope: AccountAliasPermissionScope::Dataspace(retail),
             }),
         );
-
         for forbidden_alias in [&hbl_secondary_alias, &ubl_alias] {
             let err = EnsureTestAccountAliasBinding {
                 account: target.clone(),
@@ -5974,7 +5620,6 @@ mod tests {
                 "unexpected domainful-alias error: {err}"
             );
         }
-
         EnsureTestAccountAliasBinding {
             account: target.clone(),
             alias: Some(domainless_alias.clone()),
@@ -5990,7 +5635,6 @@ mod tests {
         assert!(tx.world.account_aliases.get(&hbl_secondary_alias).is_none());
         assert!(tx.world.account_aliases.get(&ubl_alias).is_none());
     }
-
     #[test]
     fn cbdc_retail_account_rejects_cross_fi_secondary_alias_and_repoint() {
         let authority = (*ALICE_ID).clone();
@@ -5998,7 +5642,6 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let retail = DataSpaceId::new(10);
         install_dataspace_catalog_with_lane(&mut tx, retail, "sbp", LaneVisibility::Public);
         let hbl = DomainId::try_new("hbl", "sbp").expect("HBL alias domain");
@@ -6045,7 +5688,6 @@ mod tests {
                 scope: AccountAliasPermissionScope::Domain(hbl),
             }),
         );
-
         EnsureTestAccountAliasBinding {
             account: hbl_account.clone(),
             alias: Some(hbl_home_alias.clone()),
@@ -6060,7 +5702,6 @@ mod tests {
         }
         .execute(&authority, &mut tx)
         .expect("same-FI secondary aliases remain supported");
-
         tx.world
             .insert_account_alias_binding(ubl_home_alias.clone(), ubl_account.clone());
         tx.world.account_rekey_records.insert(
@@ -6068,7 +5709,6 @@ mod tests {
             AccountRekeyRecord::new(ubl_home_alias.clone(), ubl_account.clone()),
         );
         seed_account_alias_lease_record(&mut tx, &ubl_account, &ubl_home_alias);
-
         let err = EnsureTestAccountAliasBinding {
             account: ubl_account.clone(),
             alias: Some(hbl_foreign_target_alias.clone()),
@@ -6087,7 +5727,6 @@ mod tests {
                 .is_none(),
             "rejected foreign-home secondary alias must remain unbound"
         );
-
         let err = EnsureTestAccountAliasBinding {
             account: ubl_account.clone(),
             alias: Some(hbl_home_alias.clone()),
@@ -6109,7 +5748,6 @@ mod tests {
             Some(&ubl_account),
             "rejected cross-FI repoint must preserve the UBL home"
         );
-
         tx.world.remove_account_alias_binding(&hbl_secondary_alias);
         tx.world
             .account_rekey_records
@@ -6131,14 +5769,12 @@ mod tests {
             "rejected last-home repoint must preserve its source binding"
         );
     }
-
     #[test]
     fn clearing_primary_status_keeps_retail_home_binding_and_blocks_cross_fi_setup() {
         let state = test_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let retail = DataSpaceId::new(10);
         install_dataspace_catalog_with_lane(&mut tx, retail, "sbp", LaneVisibility::Public);
         let hbl = DomainId::try_new("hbl", "sbp").expect("HBL alias domain");
@@ -6184,13 +5820,11 @@ mod tests {
             }),
         );
         seed_account_alias_lease_record(&mut tx, &customer, &hbl_alias);
-
         CasTestPrimaryAccountAlias::clear(customer.clone())
             .execute(&ubl_manager, &mut tx)
             .expect("explicit primary CAS may clear status without unbinding the FI home");
         assert_eq!(tx.world.account(&customer).expect("customer").label(), None);
         assert_eq!(tx.world.account_aliases.get(&ubl_alias), Some(&customer));
-
         let bind_err = EnsureTestAccountAliasBinding {
             account: customer.clone(),
             alias: Some(hbl_alias.clone()),
@@ -6207,7 +5841,6 @@ mod tests {
         assert!(tx.world.account_aliases.get(&hbl_alias).is_none());
         assert_eq!(tx.world.account_aliases.get(&ubl_alias), Some(&customer));
     }
-
     #[test]
     fn cbdc_retail_same_fi_primary_rotation_remains_supported() {
         let authority = (*ALICE_ID).clone();
@@ -6215,7 +5848,6 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let retail = DataSpaceId::new(10);
         install_dataspace_catalog_with_lane(&mut tx, retail, "sbp", LaneVisibility::Public);
         let ubl = DomainId::try_new("ubl", "sbp").expect("UBL alias domain");
@@ -6250,7 +5882,6 @@ mod tests {
                 scope: AccountAliasPermissionScope::Domain(ubl),
             }),
         );
-
         EnsureTestAccountAliasBinding {
             account: customer.clone(),
             alias: Some(new_alias.clone()),
@@ -6265,7 +5896,6 @@ mod tests {
         }
         .execute(&authority, &mut tx)
         .expect("atomically rotate the primary alias within UBL");
-
         assert_eq!(
             tx.world.account(&customer).expect("customer").label(),
             Some(&new_alias)
@@ -6273,7 +5903,6 @@ mod tests {
         assert_eq!(tx.world.account_aliases.get(&old_alias), Some(&customer));
         assert_eq!(tx.world.account_aliases.get(&new_alias), Some(&customer));
     }
-
     #[test]
     fn cleared_primary_status_does_not_enable_cross_fi_replacement() {
         let authority = (*ALICE_ID).clone();
@@ -6281,7 +5910,6 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let retail = DataSpaceId::new(10);
         install_dataspace_catalog_with_lane(&mut tx, retail, "sbp", LaneVisibility::Public);
         let hbl = DomainId::try_new("hbl", "sbp").expect("HBL alias domain");
@@ -6317,7 +5945,6 @@ mod tests {
                 scope: AccountAliasPermissionScope::Domain(hbl),
             }),
         );
-
         let err = CasTestPrimaryAccountAlias {
             account: target.clone(),
             alias: Some(hbl_alias.clone()),
@@ -6335,7 +5962,6 @@ mod tests {
         );
         assert_eq!(tx.world.account_aliases.get(&ubl_alias), Some(&target));
         assert!(tx.world.account_aliases.get(&hbl_alias).is_none());
-
         let err = CasTestPrimaryAccountAlias {
             account: target.clone(),
             alias: None,
@@ -6348,7 +5974,6 @@ mod tests {
             "unexpected primary-clear error: {err}"
         );
         assert_eq!(tx.world.account_aliases.get(&ubl_alias), Some(&target));
-
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
@@ -6376,7 +6001,6 @@ mod tests {
         assert!(tx.world.account_aliases.get(&hbl_alias).is_none());
         assert_eq!(tx.world.account_aliases.get(&ubl_alias), Some(&target));
     }
-
     #[test]
     fn primary_alias_cas_in_retail_namespace_requires_active_sns_lease() {
         let authority = (*ALICE_ID).clone();
@@ -6385,7 +6009,6 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let (_, cbuae) = install_retail_dataspace_catalog(&mut tx);
-
         let account_id = AccountId::new(checked_keypair().public_key().clone());
         let alias =
             AccountAlias::domainless("primaryretail".parse::<Name>().expect("label"), cbuae);
@@ -6393,7 +6016,6 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register account");
         seed_account_alias_manage_permissions(&mut tx, &authority, &alias);
-
         let err = CompareAndSetPrimaryAccountAlias::new(
             account_id.clone(),
             None,
@@ -6407,7 +6029,6 @@ mod tests {
         );
         assert!(tx.world.account_aliases.get(&alias).is_none());
     }
-
     #[test]
     fn set_account_label_binds_existing_multisig_account_with_rekey_record() {
         let mut state = test_state();
@@ -6415,7 +6036,6 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
-
         let member_a = MultisigMember::new(checked_keypair().public_key().clone(), 1)
             .expect("multisig member");
         let member_b = MultisigMember::new(checked_keypair().public_key().clone(), 1)
@@ -6423,7 +6043,6 @@ mod tests {
         let policy = MultisigPolicy::new(2, vec![member_a, member_b]).expect("multisig policy");
         let account_id = AccountId::new_multisig(policy);
         let account_label = alias_in_domain(&domain_id, "cbdc".parse::<Name>().unwrap());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -6432,7 +6051,6 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register unlabeled multisig account");
         seed_account_alias_lease(&mut tx, &account_id, &account_label);
-
         CasTestPrimaryAccountAlias {
             account: account_id.clone(),
             alias: Some(account_label.clone()),
@@ -6440,7 +6058,6 @@ mod tests {
         }
         .execute(&authority, &mut tx)
         .expect("bind label to existing multisig account");
-
         assert_eq!(
             tx.world.account_aliases.get(&account_label),
             Some(&account_id),
@@ -6468,7 +6085,6 @@ mod tests {
             "multisig account should expose the bound label"
         );
     }
-
     #[test]
     fn account_rekey_upsert_records_alias_reassignment_provenance() {
         let state = test_state();
@@ -6481,7 +6097,6 @@ mod tests {
         );
         let first = AccountId::new(checked_keypair().public_key().clone());
         let second = AccountId::new(checked_keypair().public_key().clone());
-
         upsert_account_rekey_record(&mut tx, &alias, &first).expect("initial continuity record");
         upsert_account_rekey_record(&mut tx, &alias, &second).expect("alias reassignment");
         let record = tx
@@ -6496,7 +6111,6 @@ mod tests {
             vec![AccountRekeyTransitionProvenance::AliasReassignment]
         );
         let active_account_id = record.active_account_id.clone();
-
         let mismatched_alias = AccountAlias::domainless(
             "mismatched".parse().expect("alias label"),
             DataSpaceId::UNIVERSAL,
@@ -6510,7 +6124,6 @@ mod tests {
             .expect_err("mismatched embedded alias must fail closed");
         assert!(error.to_string().contains("mismatched continuity record"));
     }
-
     #[test]
     fn set_account_label_rejects_account_registrar_repointing_existing_alias() {
         let mut state = test_state();
@@ -6519,7 +6132,6 @@ mod tests {
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
         seed_account(&mut state, &registrar, &domain_id);
-
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let first_keypair = checked_keypair();
         let first_id = AccountId::new(first_keypair.public_key().clone());
@@ -6529,7 +6141,6 @@ mod tests {
             domain: domain_id.clone(),
         }
         .into();
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -6545,7 +6156,6 @@ mod tests {
             .execute(&domain_owner, &mut tx)
             .expect("register second account");
         seed_account_alias_lease(&mut tx, &first_id, &alias);
-
         CasTestPrimaryAccountAlias {
             account: first_id.clone(),
             alias: Some(alias.clone()),
@@ -6553,7 +6163,6 @@ mod tests {
         }
         .execute(&domain_owner, &mut tx)
         .expect("seed alias on first account");
-
         seed_account_alias_lease(&mut tx, &second_id, &alias);
         let error = CasTestPrimaryAccountAlias {
             account: second_id.clone(),
@@ -6566,7 +6175,6 @@ mod tests {
             instruction_error_contains(&error, "alias.binding.conflict"),
             "unexpected error: {error}"
         );
-
         assert_eq!(
             tx.world.account_aliases.get(&alias),
             Some(&first_id),
@@ -6605,7 +6213,6 @@ mod tests {
             "rekey record must retain the existing controller"
         );
     }
-
     #[test]
     fn set_account_label_rejects_global_registrar_repointing_existing_alias() {
         let mut state = test_state();
@@ -6614,7 +6221,6 @@ mod tests {
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
         seed_account(&mut state, &registrar, &domain_id);
-
         let alias = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
         let first_keypair = checked_keypair();
         let first_id = AccountId::new(first_keypair.public_key().clone());
@@ -6624,7 +6230,6 @@ mod tests {
             "CanRegisterAccount".parse().expect("permission name"),
             iroha_primitives::json::Json::new(()),
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -6640,7 +6245,6 @@ mod tests {
             .execute(&domain_owner, &mut tx)
             .expect("register second account");
         seed_account_alias_lease(&mut tx, &first_id, &alias);
-
         CasTestPrimaryAccountAlias {
             account: first_id.clone(),
             alias: Some(alias.clone()),
@@ -6648,7 +6252,6 @@ mod tests {
         }
         .execute(&domain_owner, &mut tx)
         .expect("seed alias on first account");
-
         seed_account_alias_lease(&mut tx, &second_id, &alias);
         let error = CasTestPrimaryAccountAlias {
             account: second_id.clone(),
@@ -6658,7 +6261,6 @@ mod tests {
         .execute(&registrar, &mut tx)
         .expect_err("global registrar must use an explicit CAS rebind operation");
         assert!(instruction_error_contains(&error, "alias.binding.conflict"));
-
         assert_eq!(
             tx.world.account_aliases.get(&alias),
             Some(&first_id),
@@ -6681,7 +6283,6 @@ mod tests {
             "conflicting setup must not modify the requested target"
         );
     }
-
     #[test]
     fn bind_account_alias_adds_multiple_aliases_to_existing_multisig_account() {
         let mut state = test_state();
@@ -6689,7 +6290,6 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
-
         let member_a = MultisigMember::new(checked_keypair().public_key().clone(), 1)
             .expect("multisig member");
         let member_b = MultisigMember::new(checked_keypair().public_key().clone(), 1)
@@ -6698,7 +6298,6 @@ mod tests {
         let account_id = AccountId::new_multisig(policy);
         let banking_label = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let issuance_label = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -6708,7 +6307,6 @@ mod tests {
             .expect("register unlabeled multisig account");
         seed_account_alias_lease(&mut tx, &account_id, &banking_label);
         seed_account_alias_lease(&mut tx, &account_id, &issuance_label);
-
         EnsureTestAccountAliasBinding {
             account: account_id.clone(),
             alias: Some(banking_label.clone()),
@@ -6723,7 +6321,6 @@ mod tests {
         }
         .execute(&authority, &mut tx)
         .expect("bind issuance alias");
-
         assert_eq!(
             tx.world.account_aliases.get(&banking_label),
             Some(&account_id),
@@ -6769,7 +6366,6 @@ mod tests {
             "binding extra aliases should not overwrite the account's canonical label"
         );
     }
-
     #[test]
     fn unregister_account_removes_all_bound_aliases() {
         let mut state = test_state();
@@ -6777,13 +6373,11 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
-
         let primary_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let bound_label =
             AccountAlias::domainless("public".parse::<Name>().unwrap(), DataSpaceId::UNIVERSAL);
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -6800,11 +6394,9 @@ mod tests {
         }
         .execute(&authority, &mut tx)
         .expect("bind additional alias");
-
         Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect("unregister account");
-
         assert!(tx.world.account_aliases.get(&primary_label).is_none());
         assert!(tx.world.account_aliases.get(&bound_label).is_none());
         assert!(tx.world.account_rekey_records.get(&primary_label).is_none());
@@ -6817,7 +6409,6 @@ mod tests {
             "reverse alias index must be cleared on unregister"
         );
     }
-
     #[test]
     fn broad_account_alias_binding_clear_is_rejected_without_mutation() {
         let mut state = test_state();
@@ -6825,14 +6416,12 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
-
         let primary_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let root_alias =
             AccountAlias::domainless("public".parse::<Name>().unwrap(), DataSpaceId::UNIVERSAL);
         let domain_alias = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -6857,7 +6446,6 @@ mod tests {
         }
         .execute(&authority, &mut tx)
         .expect("bind domain alias");
-
         let error = EnsureTestAccountAliasBinding::clear(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("broad secondary-alias clearing is not a lifecycle CAS operation");
@@ -6865,7 +6453,6 @@ mod tests {
             &error,
             "broad alias clearing was removed"
         ));
-
         assert_eq!(
             tx.world.account_aliases.get(&primary_label),
             Some(&account_id),
@@ -6896,19 +6483,16 @@ mod tests {
         assert!(remaining_aliases.contains(&root_alias));
         assert!(remaining_aliases.contains(&domain_alias));
     }
-
     #[test]
     fn alias_setup_rejects_stale_non_empty_binding() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let stale_owner = AccountId::new(checked_keypair().public_key().clone());
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -6924,7 +6508,6 @@ mod tests {
             .expect("register account");
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
         seed_account_alias_lease_record(&mut tx, &account_id, &alias);
-
         let error = EnsureTestAccountAliasBinding {
             account: account_id.clone(),
             alias: Some(alias.clone()),
@@ -6933,7 +6516,6 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect_err("declarative setup must reject stale non-empty binding drift");
         assert!(instruction_error_contains(&error, "alias.binding.conflict"));
-
         assert_eq!(
             tx.world.account_aliases.get(&alias),
             Some(&stale_owner),
@@ -6949,7 +6531,6 @@ mod tests {
             "conflicting setup must preserve continuity state"
         );
     }
-
     #[test]
     fn bind_account_alias_allows_account_registrar_for_domain() {
         let mut state = test_state();
@@ -6958,7 +6539,6 @@ mod tests {
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
         seed_account(&mut state, &registrar, &domain_id);
-
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
@@ -6966,7 +6546,6 @@ mod tests {
             domain: domain_id.clone(),
         }
         .into();
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -6978,7 +6557,6 @@ mod tests {
             .execute(&domain_owner, &mut tx)
             .expect("register account");
         seed_account_alias_lease(&mut tx, &account_id, &alias);
-
         EnsureTestAccountAliasBinding {
             account: account_id.clone(),
             alias: Some(alias.clone()),
@@ -6986,14 +6564,12 @@ mod tests {
         }
         .execute(&registrar, &mut tx)
         .expect("registrar should bind alias");
-
         assert_eq!(
             tx.world.account_aliases.get(&alias),
             Some(&account_id),
             "registrar-bound alias should resolve to the target account"
         );
     }
-
     #[test]
     fn bind_account_alias_allows_global_account_registrar() {
         let mut state = test_state();
@@ -7002,7 +6578,6 @@ mod tests {
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
         seed_account(&mut state, &registrar, &domain_id);
-
         let alias = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
@@ -7010,7 +6585,6 @@ mod tests {
             "CanRegisterAccount".parse().expect("permission name"),
             iroha_primitives::json::Json::new(()),
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -7022,7 +6596,6 @@ mod tests {
             .execute(&domain_owner, &mut tx)
             .expect("register account");
         seed_account_alias_lease(&mut tx, &account_id, &alias);
-
         EnsureTestAccountAliasBinding {
             account: account_id.clone(),
             alias: Some(alias.clone()),
@@ -7030,14 +6603,12 @@ mod tests {
         }
         .execute(&registrar, &mut tx)
         .expect("global registrar should bind alias");
-
         assert_eq!(
             tx.world.account_aliases.get(&alias),
             Some(&account_id),
             "global-registrar-bound alias should resolve to the target account"
         );
     }
-
     #[test]
     fn bind_account_alias_rejects_alias_owned_by_different_account_without_registrar_rights() {
         let mut state = test_state();
@@ -7046,13 +6617,11 @@ mod tests {
         let unauthorized = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
         seed_account(&mut state, &unauthorized, &domain_id);
-
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let first_keypair = checked_keypair();
         let first_id = AccountId::new(first_keypair.public_key().clone());
         let second_keypair = checked_keypair();
         let second_id = AccountId::new(second_keypair.public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -7064,7 +6633,6 @@ mod tests {
             .execute(&domain_owner, &mut tx)
             .expect("register second account");
         seed_account_alias_lease(&mut tx, &first_id, &alias);
-
         EnsureTestAccountAliasBinding {
             account: first_id.clone(),
             alias: Some(alias.clone()),
@@ -7072,7 +6640,6 @@ mod tests {
         }
         .execute(&domain_owner, &mut tx)
         .expect("bind alias to first account");
-
         let err = EnsureTestAccountAliasBinding {
             account: second_id.clone(),
             alias: Some(alias.clone()),
@@ -7080,7 +6647,6 @@ mod tests {
         }
         .execute(&unauthorized, &mut tx)
         .expect_err("alias collision should be rejected");
-
         assert!(
             instruction_error_contains(&err, "alias.owner.conflict"),
             "error should preserve the existing lease-owner conflict: {err}"
@@ -7091,7 +6657,6 @@ mod tests {
             "existing alias binding must remain unchanged"
         );
     }
-
     #[test]
     fn bind_account_alias_rejects_account_registrar_repointing_existing_alias() {
         let mut state = test_state();
@@ -7100,7 +6665,6 @@ mod tests {
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
         seed_account(&mut state, &registrar, &domain_id);
-
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let first_keypair = checked_keypair();
         let first_id = AccountId::new(first_keypair.public_key().clone());
@@ -7110,7 +6674,6 @@ mod tests {
             domain: domain_id.clone(),
         }
         .into();
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -7126,7 +6689,6 @@ mod tests {
             .execute(&domain_owner, &mut tx)
             .expect("register second account");
         seed_account_alias_lease(&mut tx, &first_id, &alias);
-
         EnsureTestAccountAliasBinding {
             account: first_id.clone(),
             alias: Some(alias.clone()),
@@ -7134,7 +6696,6 @@ mod tests {
         }
         .execute(&domain_owner, &mut tx)
         .expect("seed alias on first account");
-
         seed_account_alias_lease(&mut tx, &second_id, &alias);
         let error = EnsureTestAccountAliasBinding {
             account: second_id.clone(),
@@ -7144,7 +6705,6 @@ mod tests {
         .execute(&registrar, &mut tx)
         .expect_err("registrar must use an explicit CAS rebind operation");
         assert!(instruction_error_contains(&error, "alias.binding.conflict"));
-
         assert_eq!(
             tx.world.account_aliases.get(&alias),
             Some(&first_id),
@@ -7159,7 +6719,6 @@ mod tests {
             "an additional alias conflict must not alter primary state"
         );
     }
-
     #[test]
     fn bind_account_alias_rejects_global_registrar_repointing_existing_alias() {
         let mut state = test_state();
@@ -7168,7 +6727,6 @@ mod tests {
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
         seed_account(&mut state, &registrar, &domain_id);
-
         let alias = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
         let first_keypair = checked_keypair();
         let first_id = AccountId::new(first_keypair.public_key().clone());
@@ -7178,7 +6736,6 @@ mod tests {
             "CanRegisterAccount".parse().expect("permission name"),
             iroha_primitives::json::Json::new(()),
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -7194,7 +6751,6 @@ mod tests {
             .execute(&domain_owner, &mut tx)
             .expect("register second account");
         seed_account_alias_lease(&mut tx, &first_id, &alias);
-
         EnsureTestAccountAliasBinding {
             account: first_id.clone(),
             alias: Some(alias.clone()),
@@ -7202,7 +6758,6 @@ mod tests {
         }
         .execute(&domain_owner, &mut tx)
         .expect("seed alias on first account");
-
         seed_account_alias_lease(&mut tx, &second_id, &alias);
         let error = EnsureTestAccountAliasBinding {
             account: second_id.clone(),
@@ -7212,7 +6767,6 @@ mod tests {
         .execute(&registrar, &mut tx)
         .expect_err("global registrar must use an explicit CAS rebind operation");
         assert!(instruction_error_contains(&error, "alias.binding.conflict"));
-
         assert_eq!(
             tx.world.account_aliases.get(&alias),
             Some(&first_id),
@@ -7227,19 +6781,16 @@ mod tests {
             "an additional alias conflict must not alter primary state"
         );
     }
-
     #[test]
     fn register_account_rejects_phone_like_label() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let account_label = alias_in_domain(&domain_id, "+819398553445".parse::<Name>().unwrap());
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = Account::new(account_id.clone()).with_label(Some(account_label));
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -7251,7 +6802,6 @@ mod tests {
             "error should mention raw PII: {err}"
         );
     }
-
     #[test]
     fn transfer_domain_rejects_authority_without_ownership() {
         let mut state = test_state();
@@ -7262,7 +6812,6 @@ mod tests {
             DomainId::try_new("foo", "universal").expect("foo domain id");
         let user1 = AccountId::new(checked_keypair().public_key().clone());
         let user2 = AccountId::new(checked_keypair().public_key().clone());
-
         let authority_domain: DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
         seed_domain(&mut state, &authority_domain, &authority);
@@ -7271,11 +6820,9 @@ mod tests {
         seed_domain(&mut state, &transferred_domain_id, &user1);
         seed_account(&mut state, &user1, &users_domain_id);
         seed_account(&mut state, &user2, &users_domain_id);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let err = Transfer::domain(user1.clone(), transferred_domain_id.clone(), user2)
             .execute(&authority, &mut tx)
             .expect_err("transfer must fail for authority that does not own source or domain");
@@ -7292,7 +6839,6 @@ mod tests {
             &user1
         );
     }
-
     #[test]
     fn transfer_domain_rejects_noncanonical_musubi_generation_before_owner_mutation() {
         for generation in [0, 1] {
@@ -7303,7 +6849,6 @@ mod tests {
             seed_domain(&mut state, &domain_id, &source);
             seed_account(&mut state, &source, &domain_id);
             seed_account(&mut state, &destination, &domain_id);
-
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut transaction = block.transaction();
@@ -7311,7 +6856,6 @@ mod tests {
                 .world
                 .musubi_domain_ownership_generations_mut()
                 .insert(domain_id.clone(), generation);
-
             let error = Transfer::domain(source.clone(), domain_id.clone(), destination.clone())
                 .execute(&source, &mut transaction)
                 .expect_err("a noncanonical stored generation must fail before transfer");
@@ -7338,14 +6882,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn register_account_rejects_opaque_ids_without_uaid() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("opaque", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let account_id = AccountId::new(checked_keypair().public_key().clone());
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::missing-uaid"));
         let new_account = NewAccount {
@@ -7355,7 +6897,6 @@ mod tests {
             uaid: None,
             opaque_ids: vec![opaque],
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -7368,14 +6909,12 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn register_account_rejects_duplicate_opaque_ids() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("opaque", "dupes").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let account_id = AccountId::new(checked_keypair().public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new("uaid::opaque-dupes"));
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::dupe"));
@@ -7386,7 +6925,6 @@ mod tests {
             uaid: Some(uaid),
             opaque_ids: vec![opaque, opaque],
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -7398,20 +6936,17 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn register_account_rejects_opaque_id_collisions() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("opaque", "collide").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::collide"));
         let first_id = AccountId::new(checked_keypair().public_key().clone());
         let second_id = AccountId::new(checked_keypair().public_key().clone());
         let first_uaid = UniversalAccountId::from_hash(Hash::new("uaid::opaque-collide-1"));
         let second_uaid = UniversalAccountId::from_hash(Hash::new("uaid::opaque-collide-2"));
-
         let first_account = NewAccount {
             id: first_id.clone(),
             metadata: Metadata::default(),
@@ -7426,14 +6961,12 @@ mod tests {
             uaid: Some(second_uaid),
             opaque_ids: vec![opaque],
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(first_account)
             .execute(&authority, &mut tx)
             .expect("register first account");
-
         let err = Register::account(second_account)
             .execute(&authority, &mut tx)
             .expect_err("opaque id collisions should be rejected");
@@ -7451,7 +6984,6 @@ mod tests {
             "colliding account must not be inserted"
         );
     }
-
     #[test]
     fn register_account_rejects_disallowed_algorithms() {
         let mut state = test_state();
@@ -7468,11 +7000,9 @@ mod tests {
                 );
             *guard = Arc::new(cfg);
         }
-
         let secp_pair = checked_keypair_with_algorithm(Algorithm::Secp256k1);
         let account_id = AccountId::new(secp_pair.public_key().clone());
         let new_account = Account::new(account_id.clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -7485,7 +7015,6 @@ mod tests {
             "error should reference allowed_signing gating: {err_string}"
         );
     }
-
     #[cfg(feature = "bls")]
     #[test]
     fn register_account_allows_bls_even_when_not_in_allowed_signing() {
@@ -7493,7 +7022,6 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("bls", "allowed").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         {
             let mut guard = state.crypto.write();
             let mut cfg = (**guard).clone();
@@ -7504,11 +7032,9 @@ mod tests {
                 );
             *guard = Arc::new(cfg);
         }
-
         let bls_pair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let account_id = AccountId::new(bls_pair.public_key().clone());
         let new_account = Account::new(account_id.clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -7516,25 +7042,21 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("BLS controllers should be allowed for consensus accounts");
     }
-
     #[test]
     fn register_account_rejects_disallowed_curve_ids() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("restricted", "curves").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         {
             let mut guard = state.crypto.write();
             let mut cfg = (**guard).clone();
             cfg.allowed_curve_ids.clear();
             *guard = Arc::new(cfg);
         }
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = Account::new(account_id.clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -7547,24 +7069,20 @@ mod tests {
             "error should reference curve gating: {err_string}"
         );
     }
-
     #[test]
     fn register_account_updates_space_directory_bindings() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("spaces", "bindings").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::register_bindings"));
         let dataspace = DataSpaceId::new(17);
         seed_manifest_record(&mut state.world, uaid, dataspace, |record| {
             record.lifecycle.mark_activated(5);
         });
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -7573,7 +7091,6 @@ mod tests {
             .expect("register account with UAID");
         tx.apply();
         block.commit().unwrap();
-
         let view = state.view();
         let bindings = view
             .world()
@@ -7589,30 +7106,25 @@ mod tests {
             "account must be bound to dataspace"
         );
     }
-
     #[test]
     fn register_account_rejects_duplicate_uaid() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("uaid", "duplicates").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::duplicate"));
         let first_keypair = checked_keypair();
         let first_id = AccountId::new(first_keypair.public_key().clone());
         let first_account = NewAccount::new(first_id.clone()).with_uaid(Some(uaid));
-
         let second_keypair = checked_keypair();
         let second_id = AccountId::new(second_keypair.public_key().clone());
         let second_account = NewAccount::new(second_id.clone()).with_uaid(Some(uaid));
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(first_account)
             .execute(&authority, &mut tx)
             .expect("register first account");
-
         let err = Register::account(second_account)
             .execute(&authority, &mut tx)
             .expect_err("duplicate UAID must be rejected");
@@ -7630,31 +7142,25 @@ mod tests {
             tx.world.accounts.get(&second_id).is_none(),
             "duplicate account should not be inserted"
         );
-
         tx.apply();
         block.commit().expect("commit block");
-
         let view = state.view();
         assert_eq!(view.world().uaid_accounts().get(&uaid), Some(&first_id));
     }
-
     #[test]
     fn unregister_account_removes_space_directory_bindings() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("spaces", "cleanup").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::unregister_bindings"));
         let dataspace = DataSpaceId::new(21);
         seed_manifest_record(&mut state.world, uaid, dataspace, |record| {
             record.lifecycle.mark_activated(3);
         });
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -7666,7 +7172,6 @@ mod tests {
             .expect("unregister account");
         tx.apply();
         block.commit().unwrap();
-
         let view = state.view();
         assert!(
             view.world().uaid_dataspaces().get(&uaid).is_none(),
@@ -7677,17 +7182,14 @@ mod tests {
             "UAID index should be cleared after account deletion"
         );
     }
-
     #[test]
     fn unregister_account_removes_owned_nfts_and_asset_metadata() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let other_domain_id: DomainId = DomainId::try_new("other", "world").expect("domain id");
         seed_domain(&mut state, &other_domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -7696,7 +7198,6 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let asset_def_id: AssetDefinitionId =
             AssetDefinitionId::derive_from_components(domain_id.clone(), "rose".parse().unwrap());
         Register::asset_definition({
@@ -7719,13 +7220,11 @@ mod tests {
         tx.world
             .increase_asset_total_amount(&asset_def_id, &quantity)
             .expect("fixture asset total must match the inserted balance");
-
         let key: Name = "tag".parse().unwrap();
         let value = Json::from(norito::json!("owned"));
         let mut metadata = Metadata::default();
         metadata.insert(key, value);
         tx.world.asset_metadata.insert(asset_id.clone(), metadata);
-
         let nft_id = NftId::new(other_domain_id.clone(), "dragon".parse().unwrap());
         let nft = Nft {
             id: nft_id.clone(),
@@ -7734,15 +7233,12 @@ mod tests {
         };
         let (nft_id, nft_value) = nft.into_key_value();
         tx.world.insert_nft_entry(nft_id.clone(), nft_value);
-
         tx.nexus.fees.fee_sink_account_id = authority.to_string();
         tx.nexus.staking.stake_escrow_account_id = authority.to_string();
         tx.nexus.staking.slash_sink_account_id = authority.to_string();
-
         Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect("unregister account");
-
         assert!(
             tx.world.assets.get(&asset_id).is_none(),
             "asset should be removed"
@@ -7756,24 +7252,19 @@ mod tests {
             "owned NFT should be removed"
         );
     }
-
     #[test]
     fn unregister_account_removes_foreign_nft_permissions_from_accounts_and_roles() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let foreign_domain_id: DomainId = DomainId::try_new("foreign", "world").expect("domain id");
         seed_domain(&mut state, &foreign_domain_id, &authority);
-
         let holder_domain: DomainId = DomainId::try_new("holders", "world").expect("domain id");
         seed_domain(&mut state, &holder_domain, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let holder_id = AccountId::new(checked_keypair().public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -7783,7 +7274,6 @@ mod tests {
         Register::account(NewAccount::new(holder_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register holder account");
-
         let nft_id = NftId::new(foreign_domain_id, "dragon".parse().unwrap());
         let nft = Nft {
             id: nft_id.clone(),
@@ -7792,7 +7282,6 @@ mod tests {
         };
         let (nft_id, nft_value) = nft.into_key_value();
         tx.world.insert_nft_entry(nft_id.clone(), nft_value);
-
         let permission: Permission = iroha_executor_data_model::permission::nft::CanTransferNft {
             nft: nft_id.clone(),
         }
@@ -7800,7 +7289,6 @@ mod tests {
         Grant::account_permission(permission.clone(), holder_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant permission to holder");
-
         let role_id: RoleId = "NFT_CLEANUP".parse().expect("role id");
         Register::role(Role::new(role_id.clone(), holder_id.clone()))
             .execute(&authority, &mut tx)
@@ -7808,7 +7296,6 @@ mod tests {
         Grant::role_permission(permission.clone(), role_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant permission to role");
-
         assert!(
             tx.world
                 .account_permissions
@@ -7821,11 +7308,9 @@ mod tests {
             role.permissions().any(|perm| perm == &permission),
             "role should include permission before unregister"
         );
-
         Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect("unregister account");
-
         assert!(
             tx.world.nfts.get(&nft_id).is_none(),
             "foreign-domain NFT owned by removed account should be removed"
@@ -7847,7 +7332,6 @@ mod tests {
             "permission epochs should be pruned"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_owns_domain() {
         let mut state = test_state();
@@ -7855,7 +7339,6 @@ mod tests {
         let external_domain: DomainId = DomainId::try_new("external", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         seed_domain(&mut state, &external_domain, &account_id);
@@ -7865,7 +7348,6 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account owning a domain must not be unregistered");
@@ -7879,21 +7361,18 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_immutable_governance_lock_custody_after_config_change() {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let custody_account = AccountId::new(checked_keypair().public_key().clone());
         let owner = (*BOB_ID).clone();
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(NewAccount::new(custody_account.clone()))
             .execute(&authority, &mut tx)
             .expect("register retained custody account");
-
         let mut locks = GovernanceLocksForReferendum::default();
         locks.locks.insert(
             owner.clone(),
@@ -7916,7 +7395,6 @@ mod tests {
             .put_governance_locks("retained-account-custody".to_owned(), locks);
         tx.gov.bond_escrow_account = authority.clone();
         tx.gov.slash_receiver_account = authority.clone();
-
         let err = Unregister::account(custody_account.clone())
             .execute(&authority, &mut tx)
             .expect_err("immutable lock custody account must remain registered");
@@ -7930,7 +7408,6 @@ mod tests {
             "custody account must remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_zero_lock_validation_fee_proposal_custody_after_config_change() {
         for fixture_kind in [
@@ -7960,7 +7437,6 @@ mod tests {
                 );
                 drift_validation_fee_governance_config(&mut tx);
                 assert_validation_fee_governance_config_drift(&tx, &rules);
-
                 for (reference, account_id) in [
                     ("bond escrow", &targets.bond_escrow_account),
                     ("slash receiver", &targets.slash_receiver_account),
@@ -7984,7 +7460,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn unregister_asset_definition_rejects_zero_lock_validation_fee_proposal_rules_after_config_change()
      {
@@ -8015,7 +7490,6 @@ mod tests {
                 );
                 drift_validation_fee_governance_config(&mut tx);
                 assert_validation_fee_governance_config_drift(&tx, &rules);
-
                 let err = Unregister::asset_definition(targets.voting_asset_id.clone())
                     .execute(&authority, &mut tx)
                     .expect_err(
@@ -8037,7 +7511,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn unregister_domain_rejects_zero_lock_validation_fee_proposal_rules_after_config_change() {
         for fixture_kind in [
@@ -8067,7 +7540,6 @@ mod tests {
                 );
                 drift_validation_fee_governance_config(&mut tx);
                 assert_validation_fee_governance_config_drift(&tx, &rules);
-
                 let err = Unregister::domain(targets.domain_id.clone())
                     .execute(&authority, &mut tx)
                     .expect_err(
@@ -8093,21 +7565,17 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn unregister_account_removes_account_read_permissions_from_accounts_and_roles() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let holder_domain: DomainId = DomainId::try_new("holders", "world").expect("domain id");
         seed_domain(&mut state, &holder_domain, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let holder_id = AccountId::new(checked_keypair().public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -8117,7 +7585,6 @@ mod tests {
         Register::account(NewAccount::new(holder_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register holder account");
-
         let permission: Permission =
             iroha_executor_data_model::permission::query::CanReadAccountData {
                 account: account_id.clone(),
@@ -8131,7 +7598,6 @@ mod tests {
         Grant::account_permission(permission.clone(), holder_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant permission to holder");
-
         let role_id: RoleId = "ACCOUNT_CLEANUP".parse().expect("role id");
         Register::role(Role::new(role_id.clone(), holder_id.clone()))
             .execute(&authority, &mut tx)
@@ -8139,7 +7605,6 @@ mod tests {
         Grant::role_permission(permission.clone(), role_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant permission to role");
-
         assert!(
             tx.world
                 .account_permissions
@@ -8152,11 +7617,9 @@ mod tests {
             role.permissions().any(|perm| perm == &permission),
             "role should include permission before unregister"
         );
-
         Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect("unregister account");
-
         assert!(
             !tx.world
                 .account_permissions
@@ -8174,21 +7637,17 @@ mod tests {
             "permission epochs should be pruned"
         );
     }
-
     #[test]
     fn unregister_account_removes_citizen_service_permissions_from_accounts_and_roles() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let holder_domain: DomainId = DomainId::try_new("holders", "world").expect("domain id");
         seed_domain(&mut state, &holder_domain, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let holder_id = AccountId::new(checked_keypair().public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -8198,7 +7657,6 @@ mod tests {
         Register::account(NewAccount::new(holder_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register holder account");
-
         let permission: Permission =
             iroha_executor_data_model::permission::governance::CanRecordCitizenService {
                 owner: account_id.clone(),
@@ -8207,7 +7665,6 @@ mod tests {
         Grant::account_permission(permission.clone(), holder_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant permission to holder");
-
         let role_id: RoleId = "CITIZEN_SERVICE_CLEANUP".parse().expect("role id");
         Register::role(Role::new(role_id.clone(), holder_id.clone()))
             .execute(&authority, &mut tx)
@@ -8215,7 +7672,6 @@ mod tests {
         Grant::role_permission(permission.clone(), role_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant permission to role");
-
         assert!(
             tx.world
                 .account_permissions
@@ -8228,11 +7684,9 @@ mod tests {
             role.permissions().any(|perm| perm == &permission),
             "role should include permission before unregister"
         );
-
         Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect("unregister account");
-
         assert!(
             !tx.world
                 .account_permissions
@@ -8250,24 +7704,19 @@ mod tests {
             "permission epochs should be pruned"
         );
     }
-
     #[test]
     fn unregister_account_removes_permissions_for_deleted_account() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let retained_domain: DomainId = DomainId::try_new("retained", "world").expect("domain id");
         seed_domain(&mut state, &retained_domain, &authority);
-
         let holder_domain: DomainId = DomainId::try_new("holders", "world").expect("domain id");
         seed_domain(&mut state, &holder_domain, &authority);
-
         let keypair = checked_keypair();
         let target_id = AccountId::new(keypair.public_key().clone());
         let holder_id = AccountId::new(checked_keypair().public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -8277,7 +7726,6 @@ mod tests {
         Register::account(NewAccount::new(holder_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register holder account");
-
         let permission: Permission =
             iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
                 account: target_id.clone(),
@@ -8286,7 +7734,6 @@ mod tests {
         Grant::account_permission(permission.clone(), holder_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant permission to holder");
-
         let role_id: RoleId = "CROSS_DOMAIN_PRESERVE".parse().expect("role id");
         Register::role(Role::new(role_id.clone(), holder_id.clone()))
             .execute(&authority, &mut tx)
@@ -8294,11 +7741,9 @@ mod tests {
         Grant::role_permission(permission.clone(), role_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant permission to role");
-
         Unregister::account(target_id.clone())
             .execute(&authority, &mut tx)
             .expect("unregister target account");
-
         assert!(
             !tx.world
                 .account_permissions
@@ -8316,14 +7761,12 @@ mod tests {
             "permission epoch should be pruned for removed subject"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_owns_asset_definition() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let asset_def_id: AssetDefinitionId =
@@ -8351,7 +7794,6 @@ mod tests {
             .set_owned_by(account_id.clone());
         tx.world
             .replace_asset_definition_owner_index(&asset_def_id, &authority, &account_id);
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account owning an asset definition must not be unregistered");
@@ -8365,7 +7807,6 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_has_contract_deployment_nonce_state() {
         let mut state = test_state();
@@ -8373,7 +7814,6 @@ mod tests {
             DomainId::try_new("contract_deployer", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let account_id = AccountId::new(checked_keypair().public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -8381,7 +7821,6 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let nonce_key: Name = iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY
             .parse()
             .expect("contract deployment nonce key");
@@ -8389,7 +7828,6 @@ mod tests {
             .account_mut(&account_id)
             .expect("registered account")
             .insert(nonce_key.clone(), Json::new(1_u64));
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("contract deployer identity must retain its monotonic nonce state");
@@ -8413,14 +7851,12 @@ mod tests {
             "deployment nonce must remain unchanged"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_is_governance_bond_escrow_account() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -8430,7 +7866,6 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register account");
         tx.gov.bond_escrow_account = account_id.clone();
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("governance bond escrow account must not be unregistered");
@@ -8444,14 +7879,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_is_governance_viral_incentive_pool_account() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -8461,7 +7894,6 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register account");
         tx.gov.viral_incentives.incentive_pool_account = account_id.clone();
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("governance viral incentive pool account must not be unregistered");
@@ -8475,14 +7907,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_is_oracle_reward_pool() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -8492,7 +7922,6 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register account");
         tx.oracle.economics.reward_pool = account_id.clone();
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("oracle reward pool account must not be unregistered");
@@ -8506,14 +7935,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_is_nexus_fee_sink_account() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -8529,7 +7956,6 @@ mod tests {
         tx.nexus.fees.fee_sink_account_id = account_id.to_string();
         tx.nexus.staking.stake_escrow_account_id = helper_account_id.to_string();
         tx.nexus.staking.slash_sink_account_id = helper_account_id.to_string();
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("nexus fee sink account must not be unregistered");
@@ -8543,7 +7969,6 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_nexus_fee_sink_account_is_configured() {
         let mut state = test_state();
@@ -8552,9 +7977,7 @@ mod tests {
         let remove_domain: DomainId = DomainId::try_new("remove", "world").expect("domain id");
         seed_domain(&mut state, &sink_domain, &authority);
         seed_domain(&mut state, &remove_domain, &authority);
-
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -8564,7 +7987,6 @@ mod tests {
         tx.nexus.fees.fee_sink_account_id = account_id.to_string();
         tx.nexus.staking.stake_escrow_account_id = account_id.to_string();
         tx.nexus.staking.slash_sink_account_id = account_id.to_string();
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("configured account must remain protected");
@@ -8578,14 +8000,12 @@ mod tests {
             "configured sink account should remain"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_nexus_fee_sink_literal_is_invalid() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -8595,7 +8015,6 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register account");
         tx.nexus.fees.fee_sink_account_id = "not-an-account-literal".to_owned();
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("invalid nexus fee sink literal must fail closed");
@@ -8609,7 +8028,6 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_allows_unrelated_account_when_fee_sink_is_different_account() {
         let mut state = test_state();
@@ -8618,10 +8036,8 @@ mod tests {
         let sink_domain: DomainId = DomainId::try_new("sink", "world").expect("domain id");
         seed_domain(&mut state, &remove_domain, &authority);
         seed_domain(&mut state, &sink_domain, &authority);
-
         let remove_account_id = AccountId::new(checked_keypair().public_key().clone());
         let sink_account_id = AccountId::new(checked_keypair().public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -8632,7 +8048,6 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register removal candidate account");
         tx.nexus.fees.fee_sink_account_id = sink_account_id.to_string();
-
         Unregister::account(remove_account_id.clone())
             .execute(&authority, &mut tx)
             .expect("unrelated account should not be blocked by the configured sink account");
@@ -8645,14 +8060,12 @@ mod tests {
             "configured sink account should remain"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_is_nexus_staking_escrow_account() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -8668,7 +8081,6 @@ mod tests {
         tx.nexus.fees.fee_sink_account_id = helper_account_id.to_string();
         tx.nexus.staking.stake_escrow_account_id = account_id.to_string();
         tx.nexus.staking.slash_sink_account_id = helper_account_id.to_string();
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("nexus staking escrow account must not be unregistered");
@@ -8682,14 +8094,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_is_nexus_staking_slash_sink_account() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -8705,7 +8115,6 @@ mod tests {
         tx.nexus.fees.fee_sink_account_id = helper_account_id.to_string();
         tx.nexus.staking.stake_escrow_account_id = helper_account_id.to_string();
         tx.nexus.staking.slash_sink_account_id = account_id.to_string();
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("nexus staking slash sink account must not be unregistered");
@@ -8719,14 +8128,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_is_offline_escrow_account() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let asset_definition_id =
@@ -8752,7 +8159,6 @@ mod tests {
             .offline
             .escrow_accounts
             .insert(asset_definition_id, account_id.clone());
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("offline escrow account must not be unregistered");
@@ -8766,14 +8172,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_live_offline_escrow_after_transaction_boundary() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let asset_definition_id = AssetDefinitionId::derive_from_components(
             domain_id,
             "usd".parse().expect("asset definition name"),
@@ -8809,7 +8213,6 @@ mod tests {
                 .expect("mint live offline escrow backing");
             first_tx.apply();
         }
-
         let mut second_tx = block.transaction();
         assert!(
             second_tx.settlement.offline.escrow_accounts.is_empty(),
@@ -8838,7 +8241,6 @@ mod tests {
             Quantity::from(5_u32),
         );
     }
-
     #[test]
     fn ordinary_metadata_does_not_reserve_an_offline_escrow_account() {
         let chain_id = ChainId::from("offline-escrow-testnet");
@@ -8887,7 +8289,6 @@ mod tests {
             tx.settlement.offline.escrow_accounts.is_empty(),
             "ordinary asset metadata must not create an escrow binding"
         );
-
         Unregister::account(escrow_account_id.clone())
             .execute(&authority, &mut tx)
             .expect("legacy-looking metadata must have no offline semantics");
@@ -8896,14 +8297,12 @@ mod tests {
             "ordinary unbound account should be removable"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_is_content_publish_allow_account() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -8913,7 +8312,6 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register account");
         tx.content.publish_allow_accounts = vec![account_id.clone()];
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("content publish allow-list account must not be unregistered");
@@ -8927,14 +8325,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_is_sorafs_telemetry_submitter() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -8944,7 +8340,6 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register account");
         tx.gov.sorafs_telemetry.submitters = vec![account_id.clone()];
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("SoraFS telemetry submitter account must not be unregistered");
@@ -8958,14 +8353,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_is_configured_sorafs_provider_owner() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -8974,12 +8367,10 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let provider_id = iroha_data_model::sorafs::capacity::ProviderId::new([0xD4; 32]);
         tx.gov
             .sorafs_provider_owners
             .insert(provider_id, account_id.clone());
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("configured SoraFS provider-owner account must not be unregistered");
@@ -8993,14 +8384,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_owns_sorafs_provider() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let provider_id = iroha_data_model::sorafs::capacity::ProviderId::new([0xB1; 32]);
@@ -9013,7 +8402,6 @@ mod tests {
         tx.world
             .provider_owners
             .insert(provider_id, account_id.clone());
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account owning a provider must not be unregistered");
@@ -9027,14 +8415,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_has_citizenship_record() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9047,7 +8433,6 @@ mod tests {
             account_id.clone(),
             crate::state::CitizenshipRecord::new(account_id.clone(), 100_u64.into(), 1),
         );
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account with citizenship record must not be unregistered");
@@ -9061,14 +8446,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_has_public_lane_validator_state() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9093,7 +8476,6 @@ mod tests {
                 last_reward_epoch: None,
             },
         );
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account with validator stake state must not be unregistered");
@@ -9107,14 +8489,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_ignores_mismatched_public_lane_validator_row() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9139,11 +8519,9 @@ mod tests {
                 last_reward_epoch: None,
             },
         );
-
         Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect("mismatched validator row must not block account unregister");
-
         assert!(
             tx.world.accounts.get(&account_id).is_none(),
             "account should be unregistered when only malformed validator state references it"
@@ -9159,14 +8537,12 @@ mod tests {
             iroha_data_model::nexus::PublicLaneValidatorStatus::Active
         ));
     }
-
     #[test]
     fn unregister_account_rejects_when_account_has_public_lane_reward_record_state() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9196,7 +8572,6 @@ mod tests {
                 metadata: Metadata::default(),
             },
         );
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account with public-lane reward state must not be unregistered");
@@ -9210,14 +8585,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_is_reward_claim_asset_owner() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9240,7 +8613,6 @@ mod tests {
             ),
             1,
         );
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account referenced by reward-claim asset owner must not be unregistered");
@@ -9254,14 +8626,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_ignores_mismatched_public_lane_economic_rows() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9302,11 +8672,9 @@ mod tests {
                 metadata: Metadata::default(),
             },
         );
-
         Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect("mismatched public-lane economic rows must not block account unregister");
-
         assert!(
             tx.world.accounts.get(&account_id).is_none(),
             "account should be unregistered when only malformed economic rows reference it"
@@ -9326,14 +8694,12 @@ mod tests {
             "malformed reward row remains as stored"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_has_repo_agreement_state() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9342,7 +8708,6 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let repo_id: iroha_data_model::repo::RepoAgreementId =
             "repoguard".parse().expect("repo agreement id");
         let agreement = iroha_data_model::repo::RepoAgreement::new(
@@ -9384,7 +8749,6 @@ mod tests {
             None,
         );
         tx.world.insert_repo_agreement_entry(agreement);
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account with repo agreement state must not be unregistered");
@@ -9398,14 +8762,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_has_committed_settlement_receipt() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9414,7 +8776,6 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let settlement_id: iroha_data_model::isi::SettlementId =
             "settleguard".parse().expect("settlement id");
         let receipt = iroha_data_model::isi::SettlementReceipt {
@@ -9457,7 +8818,6 @@ mod tests {
             fx_corridor: None,
         };
         tx.world.settlement_receipts.insert(settlement_id, receipt);
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account with a committed settlement receipt must not be unregistered");
@@ -9471,14 +8831,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_has_oracle_feed_provider_state() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9487,11 +8845,9 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let mut feed = iroha_data_model::oracle::kits::price_xor_usd().feed_config;
         feed.providers = vec![account_id.clone()];
         tx.world.oracle_feeds.insert(feed.feed_id.clone(), feed);
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account with oracle provider state must not be unregistered");
@@ -9505,14 +8861,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_has_oracle_feed_history_state() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9521,7 +8875,6 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let kit = iroha_data_model::oracle::kits::price_xor_usd();
         let feed = kit.feed_config;
         let feed_id = feed.feed_id.clone();
@@ -9552,7 +8905,6 @@ mod tests {
                 evidence_hashes: Vec::new(),
             }],
         );
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account with oracle history state must not be unregistered");
@@ -9566,14 +8918,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_has_governance_proposal_state() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9582,7 +8932,6 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let proposal_id = [0xA5; 32];
         let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
             iroha_data_model::governance::types::DeployContractProposal {
@@ -9610,7 +8959,6 @@ mod tests {
                 enacted_at_height: None,
             },
         );
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account with governance proposal state must not be unregistered");
@@ -9624,14 +8972,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_has_content_bundle_state() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9640,7 +8986,6 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let bundle_id = Hash::new(b"content-bundle-account-guard");
         let stripe_layout = iroha_data_model::da::prelude::DaStripeLayout::default();
         let manifest = iroha_data_model::content::ContentBundleManifest {
@@ -9675,7 +9020,6 @@ mod tests {
                 expires_at_height: None,
             },
         );
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account with content bundle state must not be unregistered");
@@ -9689,14 +9033,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_has_runtime_upgrade_state() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9705,7 +9047,6 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
             name: "runtime-guard".to_string(),
             description: "guard".to_string(),
@@ -9729,7 +9070,6 @@ mod tests {
                 created_height: 1,
             },
         );
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account with runtime upgrade state must not be unregistered");
@@ -9743,14 +9083,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_has_viral_escrow_state() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9759,7 +9097,6 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let binding_digest = Hash::new(b"viral-escrow-account-guard");
         tx.world.viral_escrows.insert(
             binding_digest,
@@ -9773,7 +9110,6 @@ mod tests {
                 created_at_ms: 1,
             },
         );
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account with viral escrow state must not be unregistered");
@@ -9787,14 +9123,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_has_sorafs_pin_manifest_state() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9803,7 +9137,6 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let digest = iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xAB; 32]);
         tx.world.pin_manifests.insert(
             digest,
@@ -9831,7 +9164,6 @@ mod tests {
                 Metadata::default(),
             ),
         );
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account with SoraFS pin manifest state must not be unregistered");
@@ -9845,14 +9177,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_has_da_pin_intent_owner_state() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let network_id = *state.network_id_ref();
@@ -9862,7 +9192,6 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let ticket_id = iroha_data_model::da::types::StorageTicketId::new([0xD1; 32]);
         tx.world.da_pin_intents_by_ticket.insert(
             ticket_id,
@@ -9891,7 +9220,6 @@ mod tests {
                 },
             },
         );
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account with DA pin intent owner state must not be unregistered");
@@ -9905,14 +9233,12 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_account_allows_peer_based_lane_relay_emergency_state() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9921,7 +9247,6 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let peer = PeerId::new(
             checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
                 .public_key()
@@ -9935,7 +9260,6 @@ mod tests {
                 metadata: Metadata::default(),
             },
         );
-
         assert!(
             Unregister::account(account_id.clone())
                 .execute(&authority, &mut tx)
@@ -9947,14 +9271,12 @@ mod tests {
             "account should be removed when lane-relay override stores peers instead"
         );
     }
-
     #[test]
     fn unregister_account_rejects_when_account_in_governance_parliament_snapshot_state() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9963,7 +9285,6 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-
         let proposal_id = [0xC5; 32];
         let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
             iroha_data_model::governance::types::DeployContractProposal {
@@ -10010,7 +9331,6 @@ mod tests {
                 enacted_at_height: None,
             },
         );
-
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("account in governance parliament snapshot must not be unregistered");
@@ -10024,34 +9344,28 @@ mod tests {
             "account should remain after rejected unregister"
         );
     }
-
     #[test]
     fn space_directory_events_drive_bindings() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("spaces", "events").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::events"));
         let dataspace = DataSpaceId::new(33);
         let manifest_hash = seed_manifest_record(&mut state.world, uaid, dataspace, |_| {});
-
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(new_account)
             .execute(&authority, &mut tx)
             .expect("register account");
-
         assert!(
             tx.world.uaid_dataspaces.get(&uaid).is_none(),
             "inactive manifest should not bind accounts"
         );
-
         tx.world
             .emit_events(Some(SpaceDirectoryEvent::ManifestActivated(
                 SpaceDirectoryManifestActivated {
@@ -10062,7 +9376,6 @@ mod tests {
                     expiry_epoch: None,
                 },
             )));
-
         let bindings = tx
             .world
             .uaid_dataspaces
@@ -10084,7 +9397,6 @@ mod tests {
             Some(10),
             "activation epoch recorded"
         );
-
         tx.world
             .emit_events(Some(SpaceDirectoryEvent::ManifestRevoked(
                 SpaceDirectoryManifestRevoked {
@@ -10095,7 +9407,6 @@ mod tests {
                     reason: Some("operator request".to_string()),
                 },
             )));
-
         assert!(
             tx.world.uaid_dataspaces.get(&uaid).is_none(),
             "bindings cleared after revocation"
@@ -10114,18 +9425,15 @@ mod tests {
             manifest_record.lifecycle.revocation.as_ref().unwrap().epoch,
             25
         );
-
         tx.apply();
         block.commit().unwrap();
     }
-
     #[test]
     fn asset_registration_is_independent_of_legacy_offline_metadata() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId = DomainId::try_new("offline", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-
         let asset_name: Name = "usd".parse().expect("asset name");
         let definition_id =
             AssetDefinitionId::derive_from_components(domain_id.clone(), asset_name);
@@ -10134,7 +9442,6 @@ mod tests {
             "offline.enabled".parse().expect("legacy metadata key"),
             Json::new(true),
         );
-
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
             name: "USD".to_owned(),
@@ -10147,14 +9454,12 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(new_definition)
             .execute(&authority, &mut tx)
             .expect("register asset definition");
-
         assert!(
             tx.settlement
                 .offline
@@ -10164,14 +9469,12 @@ mod tests {
             "ordinary registration must not materialize offline state"
         );
     }
-
     #[test]
     fn register_asset_definition_defers_offline_state_until_offline_use() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId = DomainId::try_new("offline2", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-
         let asset_name: Name = "eur".parse().expect("asset name");
         let definition_id =
             AssetDefinitionId::derive_from_components(domain_id.clone(), asset_name);
@@ -10187,14 +9490,12 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(new_definition)
             .execute(&authority, &mut tx)
             .expect("register asset definition");
-
         assert!(
             tx.settlement
                 .offline
@@ -10204,7 +9505,6 @@ mod tests {
             "escrow mapping should not be created"
         );
     }
-
     #[test]
     fn register_global_asset_definition_rejects_restricted_dataspace_home() {
         let mut state = test_state();
@@ -10212,7 +9512,6 @@ mod tests {
         let paynet = DataSpaceId::new(7);
         let domain_id: DomainId = DomainId::try_new("private-unit", "paynet").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id,
             "unit".parse().expect("asset definition name"),
@@ -10229,7 +9528,6 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -10261,11 +9559,9 @@ mod tests {
         .expect("lane catalog");
         tx.current_dataspace_id = Some(paynet);
         tx.world.current_dataspace_id = Some(paynet);
-
         let err = Register::asset_definition(new_definition)
             .execute(&authority, &mut tx)
             .expect_err("restricted dataspaces must not register global asset definitions");
-
         match err {
             InstructionExecutionError::InvariantViolation(message) => {
                 assert!(
@@ -10276,7 +9572,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn replay_allows_legacy_global_asset_definition_in_restricted_dataspace() {
         let mut state = test_state();
@@ -10284,7 +9579,6 @@ mod tests {
         let paynet = DataSpaceId::new(7);
         let domain_id: DomainId = DomainId::try_new("private-unit", "paynet").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id,
             "unit".parse().expect("asset definition name"),
@@ -10301,7 +9595,6 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -10309,12 +9602,10 @@ mod tests {
         tx.current_dataspace_id = Some(paynet);
         tx.world.current_dataspace_id = Some(paynet);
         tx.replay_compatibility = true;
-
         Register::asset_definition(new_definition)
             .execute(&authority, &mut tx)
             .expect("replay must preserve legacy committed registration");
     }
-
     #[test]
     fn register_global_asset_definition_allows_public_alias_home_on_authoritative_route() {
         let mut state = test_state();
@@ -10322,7 +9613,6 @@ mod tests {
         let paynet = DataSpaceId::new(7);
         let domain_id: DomainId = DomainId::try_new("private-unit", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "unit".parse().expect("name"),
@@ -10340,24 +9630,20 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Public);
         tx.current_dataspace_id = Some(paynet);
         tx.world.current_dataspace_id = Some(paynet);
-
         Register::asset_definition(new_definition)
             .execute(&authority, &mut tx)
             .expect("public dataspace may home a global asset");
-
         assert_eq!(
             tx.world.asset_definition_aliases.get(&alias),
             Some(&definition_id)
         );
     }
-
     #[test]
     fn register_global_asset_definition_rejects_public_alias_home_on_wrong_route() {
         let mut state = test_state();
@@ -10365,7 +9651,6 @@ mod tests {
         let paynet = DataSpaceId::new(7);
         let domain_id: DomainId = DomainId::try_new("private-unit", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "unit".parse().expect("name"),
@@ -10383,24 +9668,20 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Public);
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-
         let err = Register::asset_definition(new_definition)
             .execute(&authority, &mut tx)
             .expect_err("global definition must be registered on its alias home route");
-
         assert!(
             err.to_string().contains("authoritative dataspace"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn asset_home_extra_coverage_register_global_allows_universal_alias_home() {
         let mut state = test_state();
@@ -10408,7 +9689,6 @@ mod tests {
         let paynet = DataSpaceId::new(7);
         let domain_id: DomainId = DomainId::try_new("private-unit", "paynet").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "unit".parse().expect("name"),
@@ -10426,24 +9706,20 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: Some(domain_id),
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-
         Register::asset_definition(new_definition)
             .execute(&authority, &mut tx)
             .expect("universal alias may home a global asset");
-
         assert_eq!(
             tx.world.asset_definition_aliases.get(&alias),
             Some(&definition_id)
         );
     }
-
     #[test]
     fn asset_home_more_coverage_register_restricted_policy_allows_restricted_alias_home() {
         let mut state = test_state();
@@ -10451,7 +9727,6 @@ mod tests {
         let paynet = DataSpaceId::new(7);
         let domain_id: DomainId = DomainId::try_new("restricted-unit", "paynet").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "unit".parse().expect("name"),
@@ -10469,18 +9744,15 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
             owning_domain: Some(domain_id),
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
         tx.current_dataspace_id = Some(paynet);
         tx.world.current_dataspace_id = Some(paynet);
-
         Register::asset_definition(new_definition)
             .execute(&authority, &mut tx)
             .expect("restricted-policy definition may use a restricted alias home");
-
         assert_eq!(
             tx.world.asset_definition_aliases.get(&alias),
             Some(&definition_id)
@@ -10493,7 +9765,6 @@ mod tests {
             iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted
         );
     }
-
     #[test]
     fn register_asset_definition_rejects_missing_explicit_name() {
         let mut state = test_state();
@@ -10501,7 +9772,6 @@ mod tests {
         let domain_id: DomainId =
             DomainId::try_new("missing-name", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id,
             "usd".parse().expect("asset definition name"),
@@ -10509,7 +9779,6 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let err = Register::asset_definition(AssetDefinition::numeric(
             definition_id,
             "   ".to_owned(),
@@ -10523,14 +9792,12 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn register_asset_definition_rejects_duplicate_alias() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId = DomainId::try_new("alias-test", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-
         let id1 = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "usd1".parse().expect("asset name"),
@@ -10540,7 +9807,6 @@ mod tests {
             "usd2".parse().expect("asset name"),
         );
         let alias: AssetDefinitionAlias = "USD#issuer.main".parse().expect("alias");
-
         let first = NewAssetDefinition {
             id: id1,
             name: "USD".to_owned(),
@@ -10565,15 +9831,12 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         Register::asset_definition(first)
             .execute(&authority, &mut tx)
             .expect("first registration should succeed");
-
         let err = Register::asset_definition(second)
             .execute(&authority, &mut tx)
             .expect_err("duplicate alias must fail");
@@ -10582,7 +9845,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn asset_alias_requires_asset_owner_and_independent_domain_namespace_scope() {
         let attacker = (*ALICE_ID).clone();
@@ -10595,7 +9857,6 @@ mod tests {
         seed_domain(&mut state, &issuer_domain, &attacker);
         seed_domain(&mut state, &victim_domain, &namespace_owner);
         seed_account(&mut state, &namespace_owner, &victim_domain);
-
         let definition_id = AssetDefinitionId::derive_from_components(
             issuer_domain.clone(),
             "usd".parse().expect("asset name"),
@@ -10608,14 +9869,12 @@ mod tests {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         tx.world.add_account_permission(
             &attacker,
             Permission::from(CanManageAccountAlias {
                 scope: AccountAliasPermissionScope::Domain(victim_domain.clone()),
             }),
         );
-
         let error = Register::asset_definition(
             AssetDefinition::numeric(
                 definition_id.clone(),
@@ -10630,7 +9889,6 @@ mod tests {
         assert!(error.to_string().contains("CanManageAssetDefinitionAlias"));
         assert!(tx.world.asset_definitions.get(&definition_id).is_none());
         assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
-
         Register::asset_definition(AssetDefinition::numeric(
             definition_id.clone(),
             "usd".to_owned(),
@@ -10647,7 +9905,6 @@ mod tests {
         ))
         .execute(&attacker, &mut tx)
         .expect("register second unaliased attacker-owned definition");
-
         let error = SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&attacker, &mut tx)
             .expect_err("asset owner still needs exact victim-domain namespace scope");
@@ -10658,7 +9915,6 @@ mod tests {
                 .get(&definition_id)
                 .is_none()
         );
-
         tx.world.add_account_permission(
             &namespace_owner,
             Permission::from(CanManageAssetDefinitionAlias {
@@ -10675,7 +9931,6 @@ mod tests {
                 .get(&definition_id)
                 .is_none()
         );
-
         let domain_asset_alias_permission = Permission::from(CanManageAssetDefinitionAlias {
             scope: AssetDefinitionAliasPermissionScope::Domain(victim_domain),
         });
@@ -10688,7 +9943,6 @@ mod tests {
             tx.world.asset_definition_aliases.get(&alias),
             Some(&definition_id)
         );
-
         assert!(
             tx.world
                 .remove_account_permission(&attacker, &domain_asset_alias_permission),
@@ -10720,7 +9974,6 @@ mod tests {
             Some(&definition_id)
         );
     }
-
     #[test]
     fn domainless_asset_alias_requires_exact_dataspace_namespace_scope() {
         let authority = (*ALICE_ID).clone();
@@ -10733,7 +9986,6 @@ mod tests {
             "cash".parse().expect("asset name"),
         );
         let alias: AssetDefinitionAlias = "cash#paynet".parse().expect("dataspace-root alias");
-
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -10747,7 +9999,6 @@ mod tests {
         ))
         .execute(&authority, &mut tx)
         .expect("register unaliased definition");
-
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAssetDefinitionAlias {
@@ -10766,7 +10017,6 @@ mod tests {
                 .get(&definition_id)
                 .is_none()
         );
-
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
@@ -10777,7 +10027,6 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect_err("account-alias dataspace permission must not authorize asset aliases");
         assert!(error.to_string().contains("CanManageAssetDefinitionAlias"));
-
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAssetDefinitionAlias {
@@ -10792,7 +10041,6 @@ mod tests {
             Some(&definition_id)
         );
     }
-
     #[test]
     fn set_asset_definition_alias_updates_world_indexes() {
         let mut state = test_state();
@@ -10800,7 +10048,6 @@ mod tests {
         let domain_id: DomainId =
             DomainId::try_new("alias-update", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id =
             AssetDefinitionId::derive_from_components(domain_id, "usd".parse().expect("name"));
         let definition = NewAssetDefinition {
@@ -10815,19 +10062,16 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register asset definition");
-
         let alias: AssetDefinitionAlias = "USD#issuer.main".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), Some(11_000))
             .execute(&authority, &mut tx)
             .expect("bind alias");
-
         assert_eq!(
             tx.world.asset_definition_aliases.get(&alias),
             Some(&definition_id),
@@ -10850,14 +10094,12 @@ mod tests {
             .expect("definition should exist");
         assert_eq!(updated.alias().as_ref(), Some(&binding.alias));
     }
-
     #[test]
     fn set_asset_definition_alias_clear_removes_indexes() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId = DomainId::try_new("alias-clear", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id =
             AssetDefinitionId::derive_from_components(domain_id, "usd".parse().expect("name"));
         let definition = NewAssetDefinition {
@@ -10872,14 +10114,12 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register asset definition");
-
         let alias: AssetDefinitionAlias = "USD#issuer.main".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
@@ -10887,7 +10127,6 @@ mod tests {
         SetAssetDefinitionAlias::clear(definition_id.clone())
             .execute(&authority, &mut tx)
             .expect("clear alias");
-
         assert!(
             tx.world.asset_definition_aliases.get(&alias).is_none(),
             "alias index should be removed"
@@ -10908,14 +10147,12 @@ mod tests {
             "definition alias should be cleared"
         );
     }
-
     #[test]
     fn set_asset_definition_alias_rejects_global_move_to_restricted_dataspace() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId = DomainId::try_new("alias-global", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "unit".parse().expect("name"),
@@ -10932,7 +10169,6 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -10941,25 +10177,21 @@ mod tests {
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register global definition");
-
         let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         let err = SetAssetDefinitionAlias::bind(definition_id, alias, None)
             .execute(&authority, &mut tx)
             .expect_err("global alias must not move home to restricted dataspace");
-
         assert!(
             err.to_string().contains("restricted dataspace"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn set_asset_definition_alias_allows_global_move_to_public_dataspace() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId = DomainId::try_new("alias-public", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id =
             AssetDefinitionId::derive_from_components(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
@@ -10974,7 +10206,6 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -10983,25 +10214,21 @@ mod tests {
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register global definition");
-
         let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect("public dataspace may home a global asset alias");
-
         assert_eq!(
             tx.world.asset_definition_aliases.get(&alias),
             Some(&definition_id)
         );
     }
-
     #[test]
     fn asset_home_extra_coverage_set_alias_allows_global_move_to_universal() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId = DomainId::try_new("alias-universal", "paynet").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "unit".parse().expect("name"),
@@ -11021,18 +10248,15 @@ mod tests {
             )
             .build(&authority),
         );
-
         let alias: AssetDefinitionAlias = "unit#universal".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect("universal dataspace may home a global asset alias");
-
         assert_eq!(
             tx.world.asset_definition_aliases.get(&alias),
             Some(&definition_id)
         );
     }
-
     #[test]
     fn asset_home_extra_coverage_clear_alias_keeps_global_home_universal() {
         let mut state = test_state();
@@ -11040,7 +10264,6 @@ mod tests {
         let domain_id: DomainId =
             DomainId::try_new("alias-clear-universal", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id =
             AssetDefinitionId::derive_from_components(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
@@ -11055,14 +10278,12 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register global definition");
-
         let alias: AssetDefinitionAlias = "unit#universal".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
@@ -11070,7 +10291,6 @@ mod tests {
         SetAssetDefinitionAlias::clear(definition_id.clone())
             .execute(&authority, &mut tx)
             .expect("clearing alias should leave universal domain fallback");
-
         assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
         assert!(
             tx.world
@@ -11079,7 +10299,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn set_asset_definition_alias_clear_rejects_restricted_domain_fallback_for_global_asset() {
         let state = test_state();
@@ -11095,7 +10314,6 @@ mod tests {
             None,
         )
         .build(&authority);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -11112,17 +10330,14 @@ mod tests {
                 10_000,
             )
             .expect("seed public alias");
-
         let err = SetAssetDefinitionAlias::clear(definition_id)
             .execute(&authority, &mut tx)
             .expect_err("clearing alias would expose restricted domain fallback");
-
         assert!(
             err.to_string().contains("restricted dataspace"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn set_asset_definition_alias_allows_restricted_policy_in_restricted_dataspace() {
         let mut state = test_state();
@@ -11130,7 +10345,6 @@ mod tests {
         let domain_id: DomainId =
             DomainId::try_new("alias-restricted", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id =
             AssetDefinitionId::derive_from_components(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
@@ -11145,7 +10359,6 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -11154,18 +10367,15 @@ mod tests {
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register restricted definition");
-
         let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect("restricted asset alias may use restricted dataspace");
-
         assert_eq!(
             tx.world.asset_definition_aliases.get(&alias),
             Some(&definition_id)
         );
     }
-
     #[test]
     fn set_contract_alias_updates_world_indexes() {
         let state = test_state();
@@ -11179,20 +10389,17 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("address");
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.world
             .contract_instances
             .insert(contract_address.clone(), Hash::new("contract-alias"));
-
         let alias: ContractAlias = "router::universal".parse().expect("alias");
         seed_contract_alias_manage_permissions(&mut tx, &authority, &alias);
         SetContractAlias::bind(contract_address.clone(), alias.clone(), Some(11_000))
             .execute(&authority, &mut tx)
             .expect("bind contract alias");
-
         assert_eq!(
             tx.world.contract_aliases.get(&alias),
             Some(&contract_address),
@@ -11210,7 +10417,6 @@ mod tests {
             Some(11_000 + 369u64 * 60 * 60 * 1_000)
         );
     }
-
     #[test]
     fn unprivileged_authority_cannot_bind_privileged_benefit_alias() {
         let state = test_state();
@@ -11226,7 +10432,6 @@ mod tests {
         )
         .expect("address");
         let alias: ContractAlias = "benefit::benefit".parse().expect("benefit alias");
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -11240,7 +10445,6 @@ mod tests {
             contract_address.clone(),
             Hash::new("malicious-benefit-lookalike"),
         );
-
         let error = SetContractAlias::bind(contract_address, alias, None)
             .execute(&authority, &mut tx)
             .expect_err("unprivileged alias binding must fail closed");
@@ -11251,7 +10455,6 @@ mod tests {
             "unexpected alias authorization error: {error}"
         );
     }
-
     #[test]
     fn set_contract_alias_allows_active_dynamic_sns_dataspace() {
         let state = test_state();
@@ -11267,7 +10470,6 @@ mod tests {
             dynamic_dataspace,
         )
         .expect("address");
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -11276,13 +10478,11 @@ mod tests {
             contract_address.clone(),
             Hash::new("dynamic-contract-alias"),
         );
-
         let alias: ContractAlias = "router::is".parse().expect("alias");
         seed_contract_alias_manage_permissions(&mut tx, &authority, &alias);
         SetContractAlias::bind(contract_address.clone(), alias.clone(), Some(11_000))
             .execute(&authority, &mut tx)
             .expect("bind dynamic dataspace contract alias");
-
         assert_eq!(
             tx.world.contract_aliases.get(&alias),
             Some(&contract_address)
@@ -11295,7 +10495,6 @@ mod tests {
             Some(alias)
         );
     }
-
     #[test]
     fn set_contract_alias_rejects_unknown_dynamic_dataspace_alias() {
         let state = test_state();
@@ -11310,7 +10509,6 @@ mod tests {
             dynamic_dataspace,
         )
         .expect("address");
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -11318,7 +10516,6 @@ mod tests {
             contract_address.clone(),
             Hash::new("dynamic-contract-alias"),
         );
-
         let err = SetContractAlias::bind(
             contract_address,
             "router::missing".parse().expect("alias"),
@@ -11326,14 +10523,12 @@ mod tests {
         )
         .execute(&authority, &mut tx)
         .expect_err("unknown dynamic dataspace must fail closed");
-
         let err_debug = format!("{err:?}");
         assert!(
             err_debug.contains("unknown or inactive dataspace alias `missing`"),
             "unexpected error: {err_debug}"
         );
     }
-
     #[test]
     fn set_contract_alias_clear_allows_stale_undeployed_binding() {
         let state = test_state();
@@ -11347,11 +10542,9 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("address");
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         tx.world
             .bind_contract_alias(
                 &contract_address,
@@ -11366,11 +10559,9 @@ mod tests {
             &authority,
             &"router::universal".parse().expect("alias"),
         );
-
         SetContractAlias::clear(contract_address.clone())
             .execute(&authority, &mut tx)
             .expect("clear should tolerate undeployed stale alias");
-
         assert!(
             tx.world
                 .contract_alias_bindings
@@ -11386,7 +10577,6 @@ mod tests {
             "alias index should be removed"
         );
     }
-
     #[test]
     fn set_contract_alias_clear_allows_stale_dynamic_dataspace_binding() {
         let state = test_state();
@@ -11403,7 +10593,6 @@ mod tests {
         )
         .expect("address");
         let alias: ContractAlias = "router::is".parse().expect("alias");
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -11419,11 +10608,9 @@ mod tests {
                 .map(|name| AccountAliasDomain::new(name.parse().expect("alias domain"))),
             dynamic_dataspace,
         );
-
         SetContractAlias::clear(contract_address.clone())
             .execute(&authority, &mut tx)
             .expect("clear should tolerate undeployed dynamic alias");
-
         assert!(
             tx.world
                 .contract_alias_bindings
@@ -11436,7 +10623,6 @@ mod tests {
             "alias index should be removed"
         );
     }
-
     #[test]
     fn set_contract_alias_clear_allows_unknown_dynamic_dataspace_without_binding() {
         let state = test_state();
@@ -11450,15 +10636,12 @@ mod tests {
             DataSpaceId::new(4_242),
         )
         .expect("address");
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         SetContractAlias::clear(contract_address.clone())
             .execute(&authority, &mut tx)
             .expect("clear should be a no-op for unknown undeployed dynamic address");
-
         assert!(
             tx.world
                 .contract_alias_bindings
@@ -11467,7 +10650,6 @@ mod tests {
             "clear should not create a binding"
         );
     }
-
     #[test]
     fn set_contract_alias_clear_rejects_lease_without_alias() {
         let state = test_state();
@@ -11481,11 +10663,9 @@ mod tests {
             DataSpaceId::new(4_242),
         )
         .expect("address");
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let err = SetContractAlias {
             contract_address,
             alias: None,
@@ -11493,14 +10673,12 @@ mod tests {
         }
         .execute(&authority, &mut tx)
         .expect_err("lease metadata without alias must fail");
-
         let err_debug = format!("{err:?}");
         assert!(
             err_debug.contains("lease_expiry_ms requires alias binding"),
             "unexpected error: {err_debug}"
         );
     }
-
     #[test]
     fn set_contract_alias_rejects_account_alias_collision() {
         let state = test_state();
@@ -11516,7 +10694,6 @@ mod tests {
         .expect("address");
         let label =
             AccountAlias::domainless("router".parse().expect("label"), DataSpaceId::UNIVERSAL);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -11529,7 +10706,6 @@ mod tests {
             &authority,
             &"router::universal".parse().expect("alias"),
         );
-
         let err = SetContractAlias::bind(
             contract_address,
             "router::universal".parse().expect("alias"),
@@ -11543,7 +10719,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn bind_account_alias_rejects_contract_alias_collision() {
         let mut state = test_state();
@@ -11568,7 +10743,6 @@ mod tests {
         };
         let (account_id, account_value) = account.into_key_value();
         state.world.accounts.insert(account_id, account_value);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -11591,7 +10765,6 @@ mod tests {
                 10_000,
             )
             .expect("seed contract alias");
-
         let err = EnsureTestAccountAliasBinding {
             account: authority.clone(),
             alias: Some(label),
@@ -11605,14 +10778,12 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn set_asset_definition_alias_grace_window_sweeps_after_expiry() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId = DomainId::try_new("alias-grace", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id =
             AssetDefinitionId::derive_from_components(domain_id, "usd".parse().expect("name"));
         let definition = NewAssetDefinition {
@@ -11627,21 +10798,18 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register asset definition");
-
         let alias: AssetDefinitionAlias = "USD#issuer.main".parse().expect("alias");
         let lease_expiry = 11_000_u64;
         let grace_until = lease_expiry + 369u64 * 60 * 60 * 1_000;
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), Some(lease_expiry))
             .execute(&authority, &mut tx)
             .expect("bind alias");
-
         let swept_at_grace = tx.world.sweep_expired_asset_definition_aliases(grace_until);
         assert!(
             swept_at_grace.is_empty(),
@@ -11652,7 +10820,6 @@ mod tests {
             Some(&definition_id),
             "alias should still resolve during grace window"
         );
-
         let swept_after_grace = tx
             .world
             .sweep_expired_asset_definition_aliases(grace_until + 1);
@@ -11673,7 +10840,6 @@ mod tests {
             "binding record should be removed after grace expiry"
         );
     }
-
     #[test]
     fn set_asset_definition_alias_rejects_expired_lease_at_bind_time() {
         let mut state = test_state();
@@ -11681,7 +10847,6 @@ mod tests {
         let domain_id: DomainId =
             DomainId::try_new("alias-past-expiry", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id =
             AssetDefinitionId::derive_from_components(domain_id, "usd".parse().expect("name"));
         let definition = NewAssetDefinition {
@@ -11696,33 +10861,28 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register asset definition");
-
         let alias: AssetDefinitionAlias = "USD#issuer.main".parse().expect("alias");
         let err = SetAssetDefinitionAlias::bind(definition_id, alias, Some(10_000))
             .execute(&authority, &mut tx)
             .expect_err("expired lease should be rejected");
         let debug = format!("{err:?}");
-
         assert!(
             debug.contains("lease_expiry_ms must be greater than the current block timestamp"),
             "unexpected error: {debug}"
         );
     }
-
     #[test]
     fn legacy_offline_metadata_is_ordinary_metadata() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId = DomainId::try_new("offline3", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-
         let asset_name: Name = "gbp".parse().expect("asset name");
         let definition_id =
             AssetDefinitionId::derive_from_components(domain_id.clone(), asset_name);
@@ -11738,14 +10898,12 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(new_definition)
             .execute(&authority, &mut tx)
             .expect("register asset definition");
-
         assert!(
             tx.settlement
                 .offline
@@ -11754,7 +10912,6 @@ mod tests {
                 .is_none(),
             "escrow mapping should not be created before metadata update"
         );
-
         SetKeyValue::asset_definition(
             definition_id.clone(),
             "offline.enabled".parse().expect("legacy metadata key"),
@@ -11762,7 +10919,6 @@ mod tests {
         )
         .execute(&authority, &mut tx)
         .expect("set ordinary metadata");
-
         assert!(
             tx.settlement
                 .offline
@@ -11772,14 +10928,12 @@ mod tests {
             "metadata must not create offline runtime state"
         );
     }
-
     #[test]
     fn legacy_offline_false_metadata_does_not_change_runtime_state() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id = DomainId::try_new("offline-disable", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id,
             "cash".parse().expect("asset name"),
@@ -11796,14 +10950,12 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register asset definition");
-
         let metadata_key: Name = "offline.enabled".parse().expect("legacy metadata key");
         SetKeyValue::asset_definition(
             definition_id.clone(),
@@ -11812,7 +10964,6 @@ mod tests {
         )
         .execute(&authority, &mut tx)
         .expect("store ordinary metadata");
-
         assert_eq!(
             tx.world
                 .asset_definition(&definition_id)
@@ -11826,14 +10977,12 @@ mod tests {
             "legacy-looking metadata must not materialize offline state"
         );
     }
-
     #[test]
     fn removing_legacy_offline_metadata_does_not_change_runtime_state() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id = DomainId::try_new("offline-remove", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id,
             "cash".parse().expect("asset name"),
@@ -11850,23 +10999,19 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register asset definition");
-
         let metadata_key: Name = "offline.enabled".parse().expect("legacy metadata key");
         SetKeyValue::asset_definition(definition_id.clone(), metadata_key.clone(), Json::new(true))
             .execute(&authority, &mut tx)
             .expect("store ordinary metadata");
-
         RemoveKeyValue::asset_definition(definition_id.clone(), metadata_key.clone())
             .execute(&authority, &mut tx)
             .expect("remove offline opt-in metadata");
-
         assert!(
             tx.world
                 .asset_definition(&definition_id)
@@ -11881,7 +11026,6 @@ mod tests {
             "metadata removal must not materialize offline state"
         );
     }
-
     #[test]
     fn legacy_offline_true_metadata_does_not_change_runtime_state() {
         let mut state = test_state();
@@ -11889,7 +11033,6 @@ mod tests {
         let domain_id: DomainId =
             DomainId::try_new("offline-metadata-disabled", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id,
             "gbp".parse().expect("asset name"),
@@ -11906,7 +11049,6 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -11931,7 +11073,6 @@ mod tests {
             "legacy-looking metadata must not materialize offline state"
         );
     }
-
     #[test]
     fn unregister_asset_definition_rejects_when_definition_has_repo_agreement_state() {
         let mut state = test_state();
@@ -11941,16 +11082,13 @@ mod tests {
             DomainId::try_new("counter", "guard").expect("counterparty domain");
         seed_domain(&mut state, &asset_domain, &authority);
         seed_domain(&mut state, &counterparty_domain, &authority);
-
         let initiator = AccountId::new(checked_keypair().public_key().clone());
         let counterparty = AccountId::new(checked_keypair().public_key().clone());
         let asset_definition_id =
             AssetDefinitionId::derive_from_components(asset_domain.clone(), "usd".parse().unwrap());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
             AssetDefinition::numeric(
@@ -11962,7 +11100,6 @@ mod tests {
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");
-
         let repo_id: iroha_data_model::repo::RepoAgreementId =
             "repo_asset_guard".parse().expect("repo agreement id");
         tx.world
@@ -11995,7 +11132,6 @@ mod tests {
                 iroha_data_model::repo::RepoGovernance::with_defaults(1_000, 60),
                 None,
             ));
-
         let err = Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("asset definition with repo agreement reference must not be unregistered");
@@ -12012,21 +11148,17 @@ mod tests {
             "asset definition should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_asset_definition_rejects_when_definition_is_governance_voting_asset() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
-
         let asset_definition_id =
             AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
             AssetDefinition::numeric(
@@ -12039,7 +11171,6 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect("register asset definition");
         tx.gov.voting_asset_id = asset_definition_id.clone();
-
         let err = Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("governance voting asset definition must not be unregistered");
@@ -12056,7 +11187,6 @@ mod tests {
             "asset definition should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_asset_definition_rejects_immutable_governance_lock_custody_after_config_change() {
         let mut state = test_state();
@@ -12067,7 +11197,6 @@ mod tests {
             asset_domain.clone(),
             "locked".parse().unwrap(),
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -12082,7 +11211,6 @@ mod tests {
         })
         .execute(&authority, &mut tx)
         .expect("register retained custody asset definition");
-
         let owner = (*BOB_ID).clone();
         let mut locks = GovernanceLocksForReferendum::default();
         locks.locks.insert(
@@ -12106,7 +11234,6 @@ mod tests {
             .put_governance_locks("retained-asset-custody".to_owned(), locks);
         tx.gov.voting_asset_id =
             AssetDefinitionId::derive_from_components(asset_domain, "replacement".parse().unwrap());
-
         let err = Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("immutable lock custody asset definition must remain registered");
@@ -12123,21 +11250,17 @@ mod tests {
             "custody asset definition must remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_asset_definition_rejects_when_definition_is_governance_viral_reward_asset() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
-
         let asset_definition_id =
             AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
             AssetDefinition::numeric(
@@ -12150,7 +11273,6 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect("register asset definition");
         tx.gov.viral_incentives.reward_asset_definition_id = asset_definition_id.clone();
-
         let err = Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("governance viral reward asset definition must not be unregistered");
@@ -12167,21 +11289,17 @@ mod tests {
             "asset definition should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_asset_definition_rejects_when_definition_is_oracle_reward_asset() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
-
         let asset_definition_id =
             AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
             AssetDefinition::numeric(
@@ -12194,7 +11312,6 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect("register asset definition");
         tx.oracle.economics.reward_asset = asset_definition_id.clone();
-
         let err = Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("oracle reward asset definition must not be unregistered");
@@ -12211,21 +11328,17 @@ mod tests {
             "asset definition should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_asset_definition_rejects_when_definition_is_nexus_fee_asset() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
-
         let asset_definition_id =
             AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
             AssetDefinition::numeric(
@@ -12238,7 +11351,6 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect("register asset definition");
         tx.nexus.fees.fee_asset_id = asset_definition_id.to_string();
-
         let err = Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("nexus fee asset definition must not be unregistered");
@@ -12255,21 +11367,17 @@ mod tests {
             "asset definition should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_asset_definition_rejects_when_definition_is_nexus_staking_asset() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
-
         let asset_definition_id =
             AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
             AssetDefinition::numeric(
@@ -12282,7 +11390,6 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect("register asset definition");
         tx.nexus.staking.stake_asset_id = asset_definition_id.to_string();
-
         let err = Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("nexus staking asset definition must not be unregistered");
@@ -12299,7 +11406,6 @@ mod tests {
             "asset definition should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_asset_definition_removes_associated_permissions_from_accounts_and_roles() {
         let mut state = test_state();
@@ -12309,17 +11415,14 @@ mod tests {
             DomainId::try_new("holder", "guard").expect("holder domain id");
         seed_domain(&mut state, &asset_domain, &authority);
         seed_domain(&mut state, &holder_domain, &authority);
-
         let asset_definition_id =
             AssetDefinitionId::derive_from_components(asset_domain.clone(), "usd".parse().unwrap());
         let asset_account = AccountId::new(checked_keypair().public_key().clone());
         let holder_id = AccountId::new(checked_keypair().public_key().clone());
         let asset_id = AssetId::new(asset_definition_id.clone(), asset_account.clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         Register::account(NewAccount::new(asset_account.clone()))
             .execute(&authority, &mut tx)
             .expect("register asset account");
@@ -12337,7 +11440,6 @@ mod tests {
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");
-
         let alias: AssetDefinitionAlias = "usd#universal".parse().expect("asset alias");
         let bound_at_ms = tx.block_unix_timestamp_ms();
         tx.world
@@ -12349,7 +11451,6 @@ mod tests {
                 bound_at_ms,
             )
             .expect("bind exact-permission fixture alias");
-
         let permission_with_definition: Permission = iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata {
             asset_definition: asset_definition_id.clone(),
         }
@@ -12386,7 +11487,6 @@ mod tests {
         Grant::account_permission(permission_with_exact_alias.clone(), holder_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant exact alias permission to holder");
-
         let role_id: RoleId = "ASSET_CLEANUP".parse().expect("role id");
         Register::role(Role::new(role_id.clone(), holder_id.clone()))
             .execute(&authority, &mut tx)
@@ -12403,7 +11503,6 @@ mod tests {
         Grant::role_permission(permission_with_exact_alias.clone(), role_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant exact alias permission to role");
-
         assert!(
             tx.world
                 .account_permissions
@@ -12437,11 +11536,9 @@ mod tests {
                 .any(|perm| perm == &permission_with_exact_alias),
             "role should include exact alias permission before unregister"
         );
-
         Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect("unregister asset definition");
-
         assert!(
             !tx.world
                 .account_permissions
@@ -12504,21 +11601,17 @@ mod tests {
             "exact alias permission epoch should be pruned"
         );
     }
-
     #[test]
     fn unregister_asset_definition_removes_offline_escrow_mapping() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
-
         let asset_definition_id =
             AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
             AssetDefinition::numeric(
@@ -12542,11 +11635,9 @@ mod tests {
                 .is_some(),
             "escrow mapping should exist before unregister"
         );
-
         Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect("unregister asset definition");
-
         assert!(
             tx.settlement
                 .offline
@@ -12556,7 +11647,6 @@ mod tests {
             "escrow mapping should be removed with asset definition"
         );
     }
-
     #[test]
     fn unregister_asset_definition_rejects_when_definition_has_committed_settlement_receipt() {
         let mut state = test_state();
@@ -12566,16 +11656,13 @@ mod tests {
             DomainId::try_new("counter", "guard").expect("counterparty domain");
         seed_domain(&mut state, &asset_domain, &authority);
         seed_domain(&mut state, &counterparty_domain, &authority);
-
         let from = AccountId::new(checked_keypair().public_key().clone());
         let to = AccountId::new(checked_keypair().public_key().clone());
         let asset_definition_id =
             AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
             AssetDefinition::numeric(
@@ -12587,7 +11674,6 @@ mod tests {
         })
         .execute(&authority, &mut tx)
         .expect("register asset definition");
-
         let settlement_id: iroha_data_model::isi::SettlementId =
             "settle_asset_guard".parse().expect("settlement id");
         let receipt = iroha_data_model::isi::SettlementReceipt {
@@ -12627,7 +11713,6 @@ mod tests {
             fx_corridor: None,
         };
         tx.world.settlement_receipts.insert(settlement_id, receipt);
-
         let err = Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect_err(
@@ -12646,21 +11731,18 @@ mod tests {
             "asset definition should remain after rejected unregister"
         );
     }
-
     #[test]
     fn unregister_asset_definition_ignores_mismatched_public_lane_reward_record() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &domain_id, &authority);
-
         let account_id = AccountId::new(checked_keypair().public_key().clone());
         let asset_definition_id =
             AssetDefinitionId::derive_from_components(domain_id, "fee".parse().unwrap());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
             AssetDefinition::numeric(
@@ -12687,11 +11769,9 @@ mod tests {
                 metadata: Metadata::default(),
             },
         );
-
         Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect("mismatched public-lane reward row must not block asset definition unregister");
-
         assert!(
             tx.world
                 .asset_definitions
@@ -12707,21 +11787,17 @@ mod tests {
             "malformed reward row remains as stored"
         );
     }
-
     #[test]
     fn unregister_asset_definition_removes_confidential_state() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId = DomainId::try_new("zk", "guard").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-
         let asset_definition_id =
             AssetDefinitionId::derive_from_components(domain_id, "shield".parse().unwrap());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
             AssetDefinition::numeric(
@@ -12737,11 +11813,9 @@ mod tests {
             asset_definition_id.clone(),
             crate::state::ZkAssetState::default(),
         );
-
         Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect("unregister asset definition");
-
         assert!(
             tx.world
                 .asset_definitions

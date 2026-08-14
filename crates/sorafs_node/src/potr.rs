@@ -7,7 +7,6 @@
 //! exactly-once source identity and must return the canonical proof-outcome
 //! operation or repair-task identity. A substituted acknowledgement is never
 //! checkpointed, so a crash or rejected acknowledgement remains safe to replay.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
@@ -18,14 +17,12 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
 #[cfg(windows)]
 use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
-
 use iroha_data_model::sorafs::moderation_ledger::sorafs_repair_task_id_v1;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::{
@@ -38,9 +35,7 @@ use sorafs_manifest::{
     },
 };
 use thiserror::Error;
-
 use crate::proof_outcome_forwarder::{ProofOutcomeOutboxError, potr_proof_outcome_operation_id_v1};
-
 /// Durable PoTR checkpoint schema version.
 pub const POTR_TRACKER_CHECKPOINT_VERSION_V1: u8 = 1;
 /// File containing the canonical PoTR tracker checkpoint.
@@ -53,11 +48,9 @@ pub const POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1: u64 = 64 * 1024 * 1024;
 pub const POTR_RECEIPT_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024;
 /// Maximum number of receipts returned by one export operation.
 pub const POTR_EXPORT_MAX_RECORDS_V1: usize = 1_000;
-
 const CHECKPOINT_LOCK_FILE_NAME: &str = "potr-receipts-state.lock";
 static CHECKPOINT_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static CHECKPOINT_PROCESS_LOCK: Mutex<()> = Mutex::new(());
-
 /// Exact finalized provider-admission policy accepted for one PoTR receipt.
 ///
 /// The binding is persisted with the final signed receipt before any ledger or
@@ -82,7 +75,6 @@ pub struct PotrAdmissionPolicyBindingV1 {
     /// Digest of the exact council-verified provider admission envelope.
     pub admission_envelope_digest: [u8; 32],
 }
-
 impl PotrAdmissionPolicyBindingV1 {
     /// Validate non-zero identity and finalized-anchor invariants.
     pub fn validate(self) -> Result<(), PotrAdmissionPolicyBindingError> {
@@ -109,7 +101,6 @@ impl PotrAdmissionPolicyBindingV1 {
         }
         Ok(())
     }
-
     /// Validate this binding against the exact council-verified admission.
     pub fn validate_for(
         self,
@@ -124,7 +115,6 @@ impl PotrAdmissionPolicyBindingV1 {
         }
         Ok(())
     }
-
     /// Require this binding to be the same revision as, or a finalized
     /// successor of, `floor`.
     pub fn ensure_at_or_after(self, floor: Self) -> Result<(), PotrAdmissionPolicyProgressError> {
@@ -157,7 +147,6 @@ impl PotrAdmissionPolicyBindingV1 {
         Ok(())
     }
 }
-
 /// Invalid shape or admission association for a PoTR policy binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PotrAdmissionPolicyBindingError {
@@ -189,7 +178,6 @@ pub enum PotrAdmissionPolicyBindingError {
     #[error("PoTR admission binding envelope does not match the admission")]
     AdmissionEnvelopeMismatch,
 }
-
 /// Invalid transition from a retained PoTR admission-policy floor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PotrAdmissionPolicyProgressError {
@@ -215,7 +203,6 @@ pub enum PotrAdmissionPolicyProgressError {
     #[error("PoTR admission policy finalized block conflicts with retained state")]
     FinalizedBlockConflict,
 }
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0x0002_0000 | 0x0008_0000;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -226,12 +213,10 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 #[cfg(windows)]
 const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-
 /// Error returned by the authoritative latency-repair scheduler.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("{0}")]
 pub struct PotrRepairHandoffError(pub String);
-
 /// Exactly-once repair effect required for a missed-deadline PoTR receipt.
 pub trait PotrLatencyRepairHandoff: Send + Sync + std::fmt::Debug {
     /// Enqueue the exact governed receipt for authoritative ledger submission.
@@ -245,7 +230,6 @@ pub trait PotrLatencyRepairHandoff: Send + Sync + std::fmt::Debug {
         receipt: &PotrReceiptV1,
         admission_envelope_digest: [u8; 32],
     ) -> Result<[u8; 32], PotrRepairHandoffError>;
-
     /// Enqueue a latency repair using the final signed receipt digest as identity.
     ///
     /// Success must return
@@ -256,7 +240,6 @@ pub trait PotrLatencyRepairHandoff: Send + Sync + std::fmt::Debug {
         report: &RepairReportV1,
     ) -> Result<[u8; 32], PotrRepairHandoffError>;
 }
-
 /// Result of recording a final signed receipt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PotrRecordOutcome {
@@ -265,7 +248,6 @@ pub enum PotrRecordOutcome {
     /// The exact final signed receipt was already retained.
     Existing(PotrReceiptStatusV1),
 }
-
 impl PotrRecordOutcome {
     /// Return the durable receipt status.
     #[must_use]
@@ -275,7 +257,6 @@ impl PotrRecordOutcome {
         }
     }
 }
-
 /// Compact bounded status for a retained final signed receipt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PotrReceiptStatusV1 {
@@ -296,7 +277,6 @@ pub struct PotrReceiptStatusV1 {
     #[norito(default)]
     pub proof_outcome_receipt_digest: Option<[u8; 32]>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredPotrReceiptV1 {
     sequence: u64,
@@ -313,7 +293,6 @@ struct StoredPotrReceiptV1 {
     #[norito(default)]
     repair_receipt_digest: Option<[u8; 32]>,
 }
-
 impl StoredPotrReceiptV1 {
     fn status(&self) -> PotrReceiptStatusV1 {
         PotrReceiptStatusV1 {
@@ -327,21 +306,18 @@ impl StoredPotrReceiptV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PotrTrackerCheckpointV1 {
     version: u8,
     next_sequence: u64,
     records: Vec<StoredPotrReceiptV1>,
 }
-
 #[derive(Debug, Clone)]
 struct RuntimeState {
     next_sequence: u64,
     records: BTreeMap<[u8; 32], StoredPotrReceiptV1>,
     digest_index: BTreeMap<[u8; 32], [u8; 32]>,
 }
-
 impl Default for RuntimeState {
     fn default() -> Self {
         Self {
@@ -351,7 +327,6 @@ impl Default for RuntimeState {
         }
     }
 }
-
 impl RuntimeState {
     fn checkpoint(&self) -> PotrTrackerCheckpointV1 {
         let mut records = self.records.values().cloned().collect::<Vec<_>>();
@@ -362,7 +337,6 @@ impl RuntimeState {
             records,
         }
     }
-
     fn from_checkpoint(
         checkpoint: PotrTrackerCheckpointV1,
         max_records: usize,
@@ -388,14 +362,12 @@ impl RuntimeState {
         })
     }
 }
-
 #[derive(Debug)]
 struct DurableState {
     runtime: RuntimeState,
     fingerprint: Option<[u8; 32]>,
     durability_failure: Option<String>,
 }
-
 /// Durable, bounded tracker for final signed PoTR receipts.
 #[derive(Debug, Clone)]
 pub struct PotrTracker {
@@ -403,7 +375,6 @@ pub struct PotrTracker {
     state: Arc<Mutex<DurableState>>,
     checkpoint_store: Option<Arc<PotrCheckpointStore>>,
 }
-
 impl PotrTracker {
     /// Construct a bounded non-persistent tracker for unit tests.
     #[cfg(test)]
@@ -419,7 +390,6 @@ impl PotrTracker {
             checkpoint_store: None,
         })
     }
-
     /// Open or create a durable PoTR tracker below `state_dir`.
     pub fn open(
         state_dir: &Path,
@@ -443,7 +413,6 @@ impl PotrTracker {
             checkpoint_store: Some(store),
         })
     }
-
     /// Validate, atomically persist, and complete any authoritative latency repair.
     pub fn record_receipt(
         &self,
@@ -469,7 +438,6 @@ impl PotrTracker {
             .ok_or(PotrReceiptValidationError::ProviderKeyUnavailable)?
             .to_vec();
         let repair_report = build_latency_repair_report(&receipt, receipt_digest)?;
-
         let mut durable = self.lock_state()?;
         let existed = if let Some(existing) = durable.runtime.records.get(&request_scope_digest) {
             if existing.receipt_digest != receipt_digest || existing.receipt != receipt {
@@ -521,7 +489,6 @@ impl PotrTracker {
             self.commit_candidate(&mut durable, candidate)?;
             false
         };
-
         self.complete_terminal_handoffs_locked(&mut durable, request_scope_digest, repair)?;
         let status = durable
             .runtime
@@ -539,7 +506,6 @@ impl PotrTracker {
             PotrRecordOutcome::Inserted(status)
         })
     }
-
     /// Retry every persisted ledger or missed-deadline repair handoff.
     ///
     /// This is intended for startup recovery after the repair manager is ready.
@@ -563,7 +529,6 @@ impl PotrTracker {
         }
         Ok(pending.len())
     }
-
     /// Return the status for one exact final signed receipt digest.
     pub fn status(
         &self,
@@ -577,7 +542,6 @@ impl PotrTracker {
             .and_then(|scope| durable.runtime.records.get(scope))
             .map(StoredPotrReceiptV1::status))
     }
-
     /// Return the latest exact admission-policy binding retained for a provider.
     pub fn admission_policy_floor(
         &self,
@@ -586,7 +550,6 @@ impl PotrTracker {
         let durable = self.lock_state()?;
         Ok(latest_admission_policy(&durable.runtime, provider_id))
     }
-
     /// Return a bounded sequence-ordered status export.
     pub fn export_statuses(
         &self,
@@ -611,7 +574,6 @@ impl PotrTracker {
         statuses.truncate(limit);
         Ok(statuses)
     }
-
     /// Return a bounded sequence-ordered export of exact signed receipts.
     pub fn export_receipts(
         &self,
@@ -638,7 +600,6 @@ impl PotrTracker {
             .map(|record| record.receipt.clone())
             .collect())
     }
-
     /// Return receipts matching manifest, provider, and optional storage tier.
     pub fn receipts_for(
         &self,
@@ -663,7 +624,6 @@ impl PotrTracker {
             .map(|record| record.receipt.clone())
             .collect())
     }
-
     fn complete_terminal_handoffs_locked(
         &self,
         durable: &mut DurableState,
@@ -745,7 +705,6 @@ impl PotrTracker {
         candidate_record.repair_receipt_digest = Some(repair_receipt);
         self.commit_candidate(durable, candidate)
     }
-
     fn lock_state(&self) -> Result<std::sync::MutexGuard<'_, DurableState>, PotrTrackerError> {
         let guard = self
             .state
@@ -756,7 +715,6 @@ impl PotrTracker {
         }
         Ok(guard)
     }
-
     fn commit_candidate(
         &self,
         durable: &mut DurableState,
@@ -778,7 +736,6 @@ impl PotrTracker {
         Ok(())
     }
 }
-
 fn latest_admission_policy(
     runtime: &RuntimeState,
     provider_id: &[u8; 32],
@@ -790,7 +747,6 @@ fn latest_admission_policy(
         .max_by_key(|record| record.sequence)
         .map(|record| record.admission_policy)
 }
-
 fn build_latency_repair_report(
     receipt: &PotrReceiptV1,
     receipt_digest: [u8; 32],
@@ -823,7 +779,6 @@ fn build_latency_repair_report(
         .map_err(|error| PotrTrackerError::RepairReport(error.to_string()))?;
     Ok(Some(report))
 }
-
 fn validate_policy(max_records: usize, checkpoint_max_bytes: u64) -> Result<(), PotrTrackerError> {
     if max_records == 0 {
         return Err(PotrTrackerError::InvalidPolicy(
@@ -837,7 +792,6 @@ fn validate_policy(max_records: usize, checkpoint_max_bytes: u64) -> Result<(), 
     }
     Ok(())
 }
-
 fn validate_checkpoint(
     checkpoint: &PotrTrackerCheckpointV1,
     max_records: usize,
@@ -886,7 +840,6 @@ fn validate_checkpoint(
     }
     Ok(())
 }
-
 fn validate_record(record: &StoredPotrReceiptV1) -> Result<(), PotrTrackerError> {
     record.receipt.validate()?;
     record.admission_policy.validate().map_err(|error| {
@@ -945,7 +898,6 @@ fn validate_record(record: &StoredPotrReceiptV1) -> Result<(), PotrTrackerError>
     }
     Ok(())
 }
-
 #[derive(Debug)]
 struct PotrCheckpointStore {
     root: PathBuf,
@@ -954,7 +906,6 @@ struct PotrCheckpointStore {
     lock_path: PathBuf,
     checkpoint_max_bytes: u64,
 }
-
 impl PotrCheckpointStore {
     fn new(root: &Path, checkpoint_max_bytes: u64) -> Result<Self, PotrTrackerError> {
         ensure_private_state_directory(root)?;
@@ -972,7 +923,6 @@ impl PotrCheckpointStore {
             checkpoint_max_bytes,
         })
     }
-
     fn verify_root_identity(&self) -> Result<(), PotrTrackerError> {
         if state_directory_identity(&self.root)? != self.root_identity {
             return Err(PotrTrackerError::CheckpointIo(
@@ -981,7 +931,6 @@ impl PotrCheckpointStore {
         }
         Ok(())
     }
-
     fn load(
         &self,
         max_records: usize,
@@ -1017,7 +966,6 @@ impl PotrCheckpointStore {
         self.verify_root_identity()?;
         Ok((Some(checkpoint), Some(fingerprint)))
     }
-
     fn commit(
         &self,
         checkpoint: &PotrTrackerCheckpointV1,
@@ -1101,7 +1049,6 @@ impl PotrCheckpointStore {
         Ok(*blake3::hash(&bytes).as_bytes())
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct StateDirectoryIdentity {
     #[cfg(unix)]
@@ -1115,12 +1062,10 @@ struct StateDirectoryIdentity {
     #[cfg(all(not(unix), not(windows)))]
     _unsupported: (),
 }
-
 fn state_directory_identity(path: &Path) -> Result<StateDirectoryIdentity, PotrTrackerError> {
     let (_directory, metadata) = open_stable_state_directory(path)?;
     state_directory_identity_from_metadata(&metadata)
 }
-
 #[cfg(unix)]
 fn state_directory_identity_from_metadata(
     metadata: &fs::Metadata,
@@ -1130,7 +1075,6 @@ fn state_directory_identity_from_metadata(
         inode: metadata.ino(),
     })
 }
-
 #[cfg(windows)]
 fn state_directory_identity_from_metadata(
     metadata: &fs::Metadata,
@@ -1146,7 +1090,6 @@ fn state_directory_identity_from_metadata(
         })?,
     })
 }
-
 #[cfg(all(not(unix), not(windows)))]
 fn state_directory_identity_from_metadata(
     _metadata: &fs::Metadata,
@@ -1155,12 +1098,10 @@ fn state_directory_identity_from_metadata(
         "PoTR durable state is unsupported on this platform".to_owned(),
     ))
 }
-
 struct CheckpointWriterGuard {
     _process_guard: std::sync::MutexGuard<'static, ()>,
     _file: File,
 }
-
 impl CheckpointWriterGuard {
     fn acquire(path: &Path) -> Result<Self, PotrTrackerError> {
         let process_guard = CHECKPOINT_PROCESS_LOCK
@@ -1247,7 +1188,6 @@ impl CheckpointWriterGuard {
         })
     }
 }
-
 fn ensure_private_state_directory(path: &Path) -> Result<(), PotrTrackerError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -1287,7 +1227,6 @@ fn ensure_private_state_directory(path: &Path) -> Result<(), PotrTrackerError> {
     state_directory_identity(path).map(drop)?;
     Ok(())
 }
-
 fn read_checkpoint_bytes(path: &Path, max_bytes: u64) -> Result<Option<Vec<u8>>, PotrTrackerError> {
     let path_metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -1365,7 +1304,6 @@ fn read_checkpoint_bytes(path: &Path, max_bytes: u64) -> Result<Option<Vec<u8>>,
     }
     Ok(Some(bytes))
 }
-
 fn validate_regular_file_metadata(
     path: &Path,
     metadata: &fs::Metadata,
@@ -1409,7 +1347,6 @@ fn validate_regular_file_metadata(
     }
     Ok(())
 }
-
 fn write_checkpoint_temp(path: &Path, bytes: &[u8]) -> Result<File, PotrTrackerError> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -1468,7 +1405,6 @@ fn write_checkpoint_temp(path: &Path, bytes: &[u8]) -> Result<File, PotrTrackerE
     }
     Ok(file)
 }
-
 fn validate_checkpoint_temp(
     path: &Path,
     file: &File,
@@ -1497,7 +1433,6 @@ fn validate_checkpoint_temp(
     }
     Ok(())
 }
-
 fn validate_persisted_checkpoint(
     path: &Path,
     file: &File,
@@ -1522,7 +1457,6 @@ fn validate_persisted_checkpoint(
     }
     Ok(())
 }
-
 fn persist_atomic_replacement(temporary: &Path, destination: &Path) -> std::io::Result<()> {
     // `std::fs::rename` does not replace an existing Windows destination. `TempPath::persist`
     // selects native replacement semantics on all release targets. Cleanup remains disabled so a
@@ -1531,7 +1465,6 @@ fn persist_atomic_replacement(temporary: &Path, destination: &Path) -> std::io::
     temporary.disable_cleanup(true);
     temporary.persist(destination).map_err(|error| error.error)
 }
-
 fn sync_directory(path: &Path) -> Result<(), PotrTrackerError> {
     let (directory, opened) = open_stable_state_directory(path)?;
     directory.sync_all().map_err(|error| {
@@ -1558,7 +1491,6 @@ fn sync_directory(path: &Path) -> Result<(), PotrTrackerError> {
     }
     Ok(())
 }
-
 fn open_stable_state_directory(path: &Path) -> Result<(File, fs::Metadata), PotrTrackerError> {
     let before = fs::symlink_metadata(path).map_err(|error| {
         PotrTrackerError::CheckpointIo(format!("inspect PoTR state root {path:?}: {error}"))
@@ -1587,7 +1519,6 @@ fn open_stable_state_directory(path: &Path) -> Result<(File, fs::Metadata), Potr
     }
     Ok((directory, opened))
 }
-
 fn validate_state_directory_metadata(
     path: &Path,
     metadata: &fs::Metadata,
@@ -1625,7 +1556,6 @@ fn validate_state_directory_metadata(
     }
     Ok(())
 }
-
 #[cfg(any(
     target_os = "linux",
     target_os = "android",
@@ -1636,13 +1566,11 @@ fn configure_direct_file_open(options: &mut OpenOptions) -> Result<(), PotrTrack
     options.custom_flags(SAFE_OPEN_FLAGS);
     Ok(())
 }
-
 #[cfg(windows)]
 fn configure_direct_file_open(options: &mut OpenOptions) -> Result<(), PotrTrackerError> {
     options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     Ok(())
 }
-
 #[cfg(not(any(
     target_os = "linux",
     target_os = "android",
@@ -1655,7 +1583,6 @@ fn configure_direct_file_open(_options: &mut OpenOptions) -> Result<(), PotrTrac
         "PoTR durable state is unsupported on this platform".to_owned(),
     ))
 }
-
 #[cfg(any(
     target_os = "linux",
     target_os = "android",
@@ -1666,7 +1593,6 @@ fn configure_direct_directory_open(options: &mut OpenOptions) -> Result<(), Potr
     options.custom_flags(SAFE_OPEN_FLAGS);
     Ok(())
 }
-
 #[cfg(windows)]
 fn configure_direct_directory_open(options: &mut OpenOptions) -> Result<(), PotrTrackerError> {
     // `File::sync_all` maps to `FlushFileBuffers`, which requires a write-capable handle.
@@ -1674,7 +1600,6 @@ fn configure_direct_directory_open(options: &mut OpenOptions) -> Result<(), Potr
     options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
     Ok(())
 }
-
 #[cfg(not(any(
     target_os = "linux",
     target_os = "android",
@@ -1687,12 +1612,10 @@ fn configure_direct_directory_open(_options: &mut OpenOptions) -> Result<(), Pot
         "PoTR durable state is unsupported on this platform".to_owned(),
     ))
 }
-
 #[cfg(unix)]
 fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(windows)]
 fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.volume_serial_number().is_some()
@@ -1700,12 +1623,10 @@ fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.volume_serial_number() == right.volume_serial_number()
         && left.file_index() == right.file_index()
 }
-
 #[cfg(all(not(unix), not(windows)))]
 fn same_file_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     same_file_identity(left, right)
@@ -1717,7 +1638,6 @@ fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(windows)]
 fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     same_file_identity(left, right)
@@ -1727,12 +1647,10 @@ fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
 }
-
 #[cfg(all(not(unix), not(windows)))]
 fn file_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn directory_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     same_file_identity(left, right)
@@ -1741,7 +1659,6 @@ fn directory_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bo
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(windows)]
 fn directory_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     same_file_identity(left, right)
@@ -1749,12 +1666,10 @@ fn directory_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bo
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
 }
-
 #[cfg(all(not(unix), not(windows)))]
 fn directory_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 fn checkpoint_decode_limits(max_bytes: u64) -> norito::DecodeLimits {
     let max_bytes = usize::try_from(max_bytes).unwrap_or(usize::MAX);
     norito::DecodeLimits::new(
@@ -1765,7 +1680,6 @@ fn checkpoint_decode_limits(max_bytes: u64) -> norito::DecodeLimits {
         64,
     )
 }
-
 /// Errors returned by the durable PoTR receipt protocol.
 #[derive(Debug, Error)]
 pub enum PotrTrackerError {
@@ -1881,7 +1795,6 @@ pub enum PotrTrackerError {
     #[error("PoTR tracker runtime lock is poisoned")]
     RuntimePoisoned,
 }
-
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
@@ -1895,7 +1808,6 @@ mod tests {
         },
         thread,
     };
-
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair};
     use sorafs_manifest::{
@@ -1908,17 +1820,12 @@ mod tests {
         potr::{POTR_RECEIPT_VERSION_V1, PotrStatus, sign_potr_receipt_v1},
     };
     use tempfile::TempDir;
-
     use crate::{NodeHandle, config::StorageConfig};
-
     use super::*;
-
     const PROVIDER_ID: [u8; 32] = [0x22; 32];
     const MANIFEST_DIGEST: [u8; 32] = [0x11; 32];
-
     type ProofOutcome = (PotrReceiptV1, [u8; 32], [u8; 32]);
     type RepairReport = (RepairReportV1, [u8; 32]);
-
     #[derive(Debug, Default)]
     struct RecordingRepair {
         proof_failures_remaining: AtomicU64,
@@ -1926,7 +1833,6 @@ mod tests {
         proof_outcomes: Mutex<BTreeMap<[u8; 32], ProofOutcome>>,
         reports: Mutex<BTreeMap<[u8; 32], RepairReport>>,
     }
-
     impl RecordingRepair {
         fn failing(count: u64) -> Self {
             Self {
@@ -1936,18 +1842,15 @@ mod tests {
                 reports: Mutex::new(BTreeMap::new()),
             }
         }
-
         fn proof_failing(count: u64) -> Self {
             Self {
                 proof_failures_remaining: AtomicU64::new(count),
                 ..Self::default()
             }
         }
-
         fn count(&self) -> usize {
             self.reports.lock().expect("repair lock").len()
         }
-
         fn contains(&self, identity: &[u8; 32]) -> bool {
             self.reports
                 .lock()
@@ -1955,7 +1858,6 @@ mod tests {
                 .contains_key(identity)
         }
     }
-
     impl PotrLatencyRepairHandoff for RecordingRepair {
         fn enqueue_proof_outcome(
             &self,
@@ -2005,7 +1907,6 @@ mod tests {
                 }
             }
         }
-
         fn enqueue_latency_repair(
             &self,
             source_identity: [u8; 32],
@@ -2037,13 +1938,11 @@ mod tests {
             }
         }
     }
-
     #[derive(Debug, Clone, Copy)]
     struct SubstitutingAcknowledgementHandoff {
         substitute_proof_outcome: bool,
         substitute_repair: bool,
     }
-
     impl SubstitutingAcknowledgementHandoff {
         fn substitute(mut exact: [u8; 32]) -> [u8; 32] {
             exact[0] ^= 1;
@@ -2053,7 +1952,6 @@ mod tests {
             exact
         }
     }
-
     impl PotrLatencyRepairHandoff for SubstitutingAcknowledgementHandoff {
         fn enqueue_proof_outcome(
             &self,
@@ -2078,7 +1976,6 @@ mod tests {
                 exact
             })
         }
-
         fn enqueue_latency_repair(
             &self,
             source_identity: [u8; 32],
@@ -2095,7 +1992,6 @@ mod tests {
             })
         }
     }
-
     fn governed_fixture() -> (AdmissionRecord, KeyPair, KeyPair) {
         let gateway_key =
             KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519).expect("gateway key");
@@ -2226,7 +2122,6 @@ mod tests {
             provider_key,
         )
     }
-
     fn gateway_public_key(key: &KeyPair) -> [u8; 32] {
         key.public_key()
             .to_bytes()
@@ -2234,7 +2129,6 @@ mod tests {
             .try_into()
             .expect("Ed25519 gateway key")
     }
-
     fn admission_policy_binding(
         admission: &AdmissionRecord,
         policy_sequence: u64,
@@ -2255,7 +2149,6 @@ mod tests {
             admission_envelope_digest: *admission.envelope_digest(),
         }
     }
-
     fn signed_receipt(
         gateway_key: &KeyPair,
         provider_key: &KeyPair,
@@ -2288,7 +2181,6 @@ mod tests {
         };
         sign_potr_receipt_v1(receipt, gateway_key, provider_key).expect("sign receipt")
     }
-
     #[test]
     fn final_signed_receipt_is_atomic_restart_safe_and_idempotent() {
         let (admission, gateway_key, provider_key) = governed_fixture();
@@ -2332,7 +2224,6 @@ mod tests {
             PotrRecordOutcome::Existing(_)
         ));
         drop(tracker);
-
         let restored =
             PotrTracker::open(dir.path(), 8, POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1)
                 .expect("restore tracker");
@@ -2349,7 +2240,6 @@ mod tests {
         );
         assert_eq!(repair.count(), 0);
     }
-
     #[test]
     fn wrong_signer_and_overlapping_request_scope_fail_closed() {
         let (admission, gateway_key, provider_key) = governed_fixture();
@@ -2406,7 +2296,6 @@ mod tests {
             Err(PotrTrackerError::RequestScopeConflict { .. })
         ));
     }
-
     #[test]
     fn proof_outcome_outage_persists_receipt_and_restart_replays_before_repair() {
         let (admission, gateway_key, provider_key) = governed_fixture();
@@ -2442,7 +2331,6 @@ mod tests {
         assert_eq!(persisted.proof_outcome_receipt_digest, None);
         assert_eq!(persisted.repair_receipt_digest, None);
         drop(tracker);
-
         let restored =
             PotrTracker::open(dir.path(), 8, POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1)
                 .expect("restore");
@@ -2475,14 +2363,12 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn substituted_terminal_acknowledgements_are_not_checkpointed() {
         let (admission, gateway_key, provider_key) = governed_fixture();
         let policy_binding = admission_policy_binding(&admission, 1);
         let gateway_public = gateway_public_key(&gateway_key);
         let tracker = PotrTracker::in_memory(8).expect("tracker");
-
         let success = signed_receipt(
             &gateway_key,
             &provider_key,
@@ -2511,7 +2397,6 @@ mod tests {
             .expect("receipt remains durable");
         assert_eq!(pending_success.proof_outcome_receipt_digest, None);
         assert_eq!(pending_success.repair_receipt_digest, None);
-
         let exact_handoff = RecordingRepair::default();
         assert_eq!(
             tracker
@@ -2533,7 +2418,6 @@ mod tests {
                 .expect("canonical proof-outcome operation id")
             )
         );
-
         let missed = signed_receipt(
             &gateway_key,
             &provider_key,
@@ -2562,7 +2446,6 @@ mod tests {
             .expect("receipt remains durable");
         assert!(pending_missed.proof_outcome_receipt_digest.is_some());
         assert_eq!(pending_missed.repair_receipt_digest, None);
-
         assert_eq!(
             tracker
                 .resume_terminal_handoffs(&exact_handoff)
@@ -2578,7 +2461,6 @@ mod tests {
             Some(sorafs_repair_task_id_v1(missed_digest))
         );
     }
-
     #[test]
     fn repair_outage_persists_pending_identity_and_restart_replays_exactly_once() {
         let (admission, gateway_key, provider_key) = governed_fixture();
@@ -2616,7 +2498,6 @@ mod tests {
             None
         );
         drop(tracker);
-
         let restored =
             PotrTracker::open(dir.path(), 8, POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1)
                 .expect("restore");
@@ -2636,7 +2517,6 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn node_startup_defers_repair_required_potr_handoff() {
         let (admission, gateway_key, provider_key) = governed_fixture();
@@ -2674,7 +2554,6 @@ mod tests {
             Err(PotrTrackerError::RepairHandoff(_))
         ));
         drop(tracker);
-
         let first_restart = NodeHandle::try_new(config.clone())
             .expect("repair-required PoTR handoff must not brick node startup");
         assert_eq!(
@@ -2700,7 +2579,6 @@ mod tests {
             "a failing explicit repair adapter must not fabricate a receipt"
         );
         drop(first_restart);
-
         let second_restart = NodeHandle::try_new(config)
             .expect("pending repair-required PoTR handoff must remain restart-safe");
         assert_eq!(
@@ -2712,7 +2590,6 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn admission_rotation_floor_survives_restart_and_rejects_rollback_and_replay_substitution() {
         let (admission, gateway_key, provider_key) = governed_fixture();
@@ -2764,7 +2641,6 @@ mod tests {
             )
             .expect("rotated policy receipt");
         drop(tracker);
-
         let restored =
             PotrTracker::open(dir.path(), 8, POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1)
                 .expect("restore");
@@ -2786,7 +2662,6 @@ mod tests {
                 PotrAdmissionPolicyProgressError::SequenceRollback
             ))
         ));
-
         let mut substituted = policy_v2;
         substituted.policy_digest[0] ^= 0x80;
         assert!(matches!(
@@ -2794,7 +2669,6 @@ mod tests {
             Err(PotrTrackerError::AdmissionPolicyReplayConflict)
         ));
     }
-
     #[test]
     fn racing_conflicting_receipts_have_one_durable_winner() {
         let (admission, gateway_key, provider_key) = governed_fixture();
@@ -2853,7 +2727,6 @@ mod tests {
         );
         assert_eq!(tracker.export_receipts(0, 8).unwrap().len(), 1);
     }
-
     fn empty_checkpoint(next_sequence: u64) -> PotrTrackerCheckpointV1 {
         PotrTrackerCheckpointV1 {
             version: POTR_TRACKER_CHECKPOINT_VERSION_V1,
@@ -2861,11 +2734,9 @@ mod tests {
             records: Vec::new(),
         }
     }
-
     fn private_potr_directory(path: &Path) {
         ensure_private_state_directory(path).expect("create private PoTR state directory");
     }
-
     fn assert_distinct_potr_directory_identities() {
         let outer = TempDir::new().expect("temporary directory");
         let first = outer.path().join("first");
@@ -2877,7 +2748,6 @@ mod tests {
             state_directory_identity(&second).expect("second identity")
         );
     }
-
     fn assert_hardlinked_potr_checkpoint_is_rejected() {
         let directory = TempDir::new().expect("temporary directory");
         let store = PotrCheckpointStore::new(
@@ -2896,7 +2766,6 @@ mod tests {
             Err(PotrTrackerError::CheckpointIo(_))
         ));
     }
-
     fn assert_hardlinked_potr_lock_is_rejected() {
         let directory = TempDir::new().expect("temporary directory");
         private_potr_directory(directory.path());
@@ -2909,7 +2778,6 @@ mod tests {
             Err(PotrTrackerError::CheckpointIo(_))
         ));
     }
-
     fn assert_potr_root_path_substitution_is_rejected() {
         let outer = TempDir::new().expect("temporary directory");
         let state = outer.path().join("state");
@@ -2927,7 +2795,6 @@ mod tests {
             "replacement root must not receive PoTR checkpoint bytes"
         );
     }
-
     fn assert_potr_os_lock_contention_is_busy() {
         let directory = TempDir::new().expect("temporary directory");
         private_potr_directory(directory.path());
@@ -2946,7 +2813,6 @@ mod tests {
         drop(lock_file);
         drop(CheckpointWriterGuard::acquire(&lock_path).expect("lock becomes available"));
     }
-
     #[cfg(any(unix, windows))]
     #[test]
     fn potr_checkpoint_store_replaces_existing_destination() {
@@ -2968,12 +2834,10 @@ mod tests {
             Some(second_checkpoint)
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn unix_potr_checkpoint_open_rejects_symlink_and_hardlink_targets() {
         use std::os::unix::fs::symlink;
-
         let symlink_directory = TempDir::new().expect("temporary directory");
         let store = PotrCheckpointStore::new(
             symlink_directory.path(),
@@ -2987,7 +2851,6 @@ mod tests {
             store.load(8),
             Err(PotrTrackerError::CheckpointIo(_))
         ));
-
         let lock_directory = TempDir::new().expect("temporary directory");
         private_potr_directory(lock_directory.path());
         let outside_lock = lock_directory.path().join("outside.lock");
@@ -3000,11 +2863,9 @@ mod tests {
             CheckpointWriterGuard::acquire(&lock_path),
             Err(PotrTrackerError::CheckpointIo(_))
         ));
-
         assert_hardlinked_potr_checkpoint_is_rejected();
         assert_hardlinked_potr_lock_is_rejected();
     }
-
     #[cfg(unix)]
     #[test]
     fn unix_potr_identity_path_substitution_and_lock_contention_are_fenced() {
@@ -3012,14 +2873,12 @@ mod tests {
         assert_potr_root_path_substitution_is_rejected();
         assert_potr_os_lock_contention_is_busy();
     }
-
     #[cfg(windows)]
     #[test]
     fn windows_potr_direct_open_uses_reparse_safe_flags() {
         assert_ne!(FILE_FLAG_OPEN_REPARSE_POINT, 0);
         assert_ne!(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, 0);
     }
-
     #[cfg(windows)]
     #[test]
     fn windows_potr_checkpoint_identity_and_hardlinks_are_fenced() {
@@ -3027,7 +2886,6 @@ mod tests {
         assert_hardlinked_potr_checkpoint_is_rejected();
         assert_hardlinked_potr_lock_is_rejected();
     }
-
     #[cfg(windows)]
     #[test]
     fn windows_potr_path_substitution_and_lock_contention_are_fenced() {

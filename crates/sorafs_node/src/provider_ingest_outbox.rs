@@ -4,7 +4,6 @@
 //! URLs, credentials, and signer material. It retains the immutable ledger
 //! binding, source-delivery crash state, and the exact signed completion
 //! transaction required for reconciliation.
-
 use std::{
     collections::BTreeSet,
     fmt,
@@ -18,12 +17,10 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
-
 use iroha_config::parameters::{
     defaults::sorafs::storage::provider_ingest_runtime::outbox as provider_ingest_outbox_defaults,
     is_production_runtime_handle,
@@ -41,7 +38,6 @@ use iroha_data_model::{
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-
 use crate::provider_ingest_runtime::{
     ProviderIngestVerifiedMusubiBundleReceiptV1, StoredProviderIngestVerifiedMusubiBundleReceiptV1,
 };
@@ -52,7 +48,6 @@ use crate::{
     },
     read_local_checkpoint_bounded, write_local_checkpoint_atomic_bounded,
 };
-
 // Internal persisted-layout revision. The product/wire contract remains V1,
 // while pre-release checkpoint layouts are intentionally rejected and reseeded.
 const PROVIDER_INGEST_OUTBOX_LAYOUT_VERSION_V5: u8 = 5;
@@ -79,14 +74,11 @@ const PROVIDER_INGEST_CHECKPOINT_OPERATION_TIMEOUT_MAX_MS_V1: u64 = 24 * 60 * 60
 const MAX_MANIFEST_CID_BYTES_V1: usize = 256;
 const MAX_CHUNKER_HANDLE_BYTES_V1: usize = 128;
 const MAX_MANIFEST_ID_BYTES_V1: usize = 128;
-
 static PROVIDER_INGEST_PROCESS_LOCKS: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
-
 /// File name used for the provider-ingest outbox checkpoint.
 pub const PROVIDER_INGEST_OUTBOX_FILE_V1: &str = "provider_ingest_outbox_v1.to";
 /// Protocol ceiling for one payload-free status page.
 pub const PROVIDER_INGEST_STATUS_PAGE_MAX_V1: usize = 1_000;
-
 /// Non-secret configured identity of the production sealed checkpoint store.
 ///
 /// Credentials, authentication tokens, private keys, and vendor diagnostics
@@ -100,14 +92,12 @@ pub struct ProviderIngestCheckpointProviderBindingV1 {
     /// Exact non-zero digest of the provider's public policy.
     pub policy_digest: [u8; 32],
 }
-
 impl ProviderIngestCheckpointProviderBindingV1 {
     /// Return the exact qualification required from the injected provider.
     #[must_use]
     pub const fn qualification(&self) -> ProviderIngestCheckpointProviderQualificationV1 {
         ProviderIngestCheckpointProviderQualificationV1::new(self.revision, self.policy_digest)
     }
-
     /// Validate the complete canonical finalized authorization binding.
     ///
     /// This is exposed for authenticated runtime boundaries that decode the
@@ -118,7 +108,6 @@ impl ProviderIngestCheckpointProviderBindingV1 {
         self.qualification().validate()
     }
 }
-
 /// Payload-free public qualification returned by the sealed checkpoint store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderIngestCheckpointProviderQualificationV1 {
@@ -129,7 +118,6 @@ pub struct ProviderIngestCheckpointProviderQualificationV1 {
     /// Non-zero digest of the exact public provider policy.
     pub policy_digest: [u8; 32],
 }
-
 impl ProviderIngestCheckpointProviderQualificationV1 {
     /// Construct a first-release provider qualification.
     #[must_use]
@@ -140,7 +128,6 @@ impl ProviderIngestCheckpointProviderQualificationV1 {
             policy_digest,
         }
     }
-
     /// Validate the qualification schema and non-zero binding.
     ///
     /// # Errors
@@ -156,7 +143,6 @@ impl ProviderIngestCheckpointProviderQualificationV1 {
         Ok(())
     }
 }
-
 /// Fixed payload-free failure classes returned by an external sealed store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderIngestCheckpointExternalErrorV1 {
@@ -167,7 +153,6 @@ pub enum ProviderIngestCheckpointExternalErrorV1 {
     /// A compare-and-swap may have committed and requires authoritative readback.
     Ambiguous,
 }
-
 /// Canonical external authority record for one provider-ingest checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestSealedCheckpointRecordV1 {
@@ -188,7 +173,6 @@ pub struct ProviderIngestSealedCheckpointRecordV1 {
     /// Deterministic content-addressed compare-and-swap revision.
     pub revision: [u8; 32],
 }
-
 impl ProviderIngestSealedCheckpointRecordV1 {
     fn new(
         checkpoint_sequence: u64,
@@ -210,7 +194,6 @@ impl ProviderIngestSealedCheckpointRecordV1 {
         record.revision = provider_ingest_sealed_checkpoint_revision(&record);
         record
     }
-
     /// Validate namespace, schema, lineage, bounds, bytes, and deterministic revision.
     ///
     /// # Errors
@@ -241,7 +224,6 @@ impl ProviderIngestSealedCheckpointRecordV1 {
         }
         Ok(())
     }
-
     /// Encode the exact bounded canonical Norito record used by the provider and cache.
     ///
     /// # Errors
@@ -261,7 +243,6 @@ impl ProviderIngestSealedCheckpointRecordV1 {
         }
         Ok(bytes)
     }
-
     /// Decode one exact bounded canonical record from sealed storage or local cache.
     ///
     /// # Errors
@@ -289,7 +270,6 @@ impl ProviderIngestSealedCheckpointRecordV1 {
         Ok(record)
     }
 }
-
 /// Runtime-only sealed, monotonic provider-ingest checkpoint authority.
 ///
 /// Implementations must preserve exact canonical records across restarts and
@@ -298,7 +278,6 @@ impl ProviderIngestSealedCheckpointRecordV1 {
 pub trait ProviderIngestCheckpointRuntimeV1: Send + Sync + fmt::Debug {
     /// Return the stable opaque production handle.
     fn handle(&self) -> &str;
-
     /// Return the current payload-free provider qualification.
     ///
     /// # Errors
@@ -310,7 +289,6 @@ pub trait ProviderIngestCheckpointRuntimeV1: Send + Sync + fmt::Debug {
         ProviderIngestCheckpointProviderQualificationV1,
         ProviderIngestCheckpointExternalErrorV1,
     >;
-
     /// Load the exact latest authoritative record.
     ///
     /// # Errors
@@ -322,7 +300,6 @@ pub trait ProviderIngestCheckpointRuntimeV1: Send + Sync + fmt::Debug {
         Option<ProviderIngestSealedCheckpointRecordV1>,
         ProviderIngestCheckpointExternalErrorV1,
     >;
-
     /// Replace the exact latest record if its deterministic revision is unchanged.
     ///
     /// A write whose commit outcome is unknown must return
@@ -337,7 +314,6 @@ pub trait ProviderIngestCheckpointRuntimeV1: Send + Sync + fmt::Debug {
         next: &ProviderIngestSealedCheckpointRecordV1,
     ) -> Result<(), ProviderIngestCheckpointExternalErrorV1>;
 }
-
 /// Finalized block identity used by provider-ingest reconciliation.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -348,7 +324,6 @@ pub struct ProviderIngestFinalizedCursorV1 {
     /// Finalized block hash at `height`.
     pub block_hash: [u8; 32],
 }
-
 impl ProviderIngestFinalizedCursorV1 {
     fn validate(self) -> Result<(), ProviderIngestOutboxError> {
         if self.height == 0 || self.block_hash == [0; 32] {
@@ -357,7 +332,6 @@ impl ProviderIngestFinalizedCursorV1 {
         Ok(())
     }
 }
-
 /// Dedicated bounded policy for the provider-ingest outbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderIngestOutboxPolicyV1 {
@@ -384,7 +358,6 @@ pub struct ProviderIngestOutboxPolicyV1 {
     /// Maximum rows returned by one status page.
     pub max_status_page_size: usize,
 }
-
 impl Default for ProviderIngestOutboxPolicyV1 {
     fn default() -> Self {
         Self {
@@ -404,7 +377,6 @@ impl Default for ProviderIngestOutboxPolicyV1 {
         }
     }
 }
-
 impl ProviderIngestOutboxPolicyV1 {
     /// Validate all first-release resource and timing bounds.
     pub fn validate(self) -> Result<(), ProviderIngestOutboxError> {
@@ -450,7 +422,6 @@ impl ProviderIngestOutboxPolicyV1 {
         Ok(())
     }
 }
-
 /// Payload-free retry classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ProviderIngestFailureClassV1 {
@@ -479,7 +450,6 @@ pub enum ProviderIngestFailureClassV1 {
     /// Governed completion-signer policy changed or was revoked.
     SignerPolicyChanged,
 }
-
 impl ProviderIngestFailureClassV1 {
     const fn is_source_retryable(self) -> bool {
         matches!(
@@ -490,12 +460,10 @@ impl ProviderIngestFailureClassV1 {
                 | Self::StorageRejected
         )
     }
-
     const fn is_retry_exhaustible(self) -> bool {
         !matches!(self, Self::BindingMismatch)
     }
 }
-
 /// Payload-free terminal dead-letter reason.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ProviderIngestDeadLetterReasonV1 {
@@ -506,7 +474,6 @@ pub enum ProviderIngestDeadLetterReasonV1 {
     /// The governed retry bound was consumed.
     RetryExhausted,
 }
-
 /// Finalized-chain reason for cancelling active work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ProviderIngestCancellationReasonV1 {
@@ -517,13 +484,11 @@ pub enum ProviderIngestCancellationReasonV1 {
     /// The manifest was retired.
     ManifestRetired,
 }
-
 /// Opaque runtime identity owning one source lease.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
 )]
 pub struct ProviderIngestClaimOwnerV1([u8; 32]);
-
 impl ProviderIngestClaimOwnerV1 {
     /// Construct a runtime owner from non-zero runtime entropy.
     pub fn new(bytes: [u8; 32]) -> Result<Self, ProviderIngestOutboxError> {
@@ -533,14 +498,12 @@ impl ProviderIngestClaimOwnerV1 {
         Ok(Self(bytes))
     }
 }
-
 /// Exact finalized network and archive identity retained for one Musubi ingest job.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct FinalizedProviderIngestMusubiContextV1 {
     network_id: NetworkId,
     archive_id: ArchiveId,
 }
-
 impl FinalizedProviderIngestMusubiContextV1 {
     /// Construct and validate an exact finalized Musubi context.
     ///
@@ -558,19 +521,16 @@ impl FinalizedProviderIngestMusubiContextV1 {
         context.validate()?;
         Ok(context)
     }
-
     /// Exact configured deployment identity.
     #[must_use]
     pub const fn network_id(&self) -> &NetworkId {
         &self.network_id
     }
-
     /// Exact finalized Musubi archive identity.
     #[must_use]
     pub const fn archive_id(&self) -> ArchiveId {
         self.archive_id
     }
-
     /// Validate the bounded canonical context.
     ///
     /// # Errors
@@ -583,7 +543,6 @@ impl FinalizedProviderIngestMusubiContextV1 {
         Ok(())
     }
 }
-
 /// Immutable authorization derived from exact finalized ledger state.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct FinalizedProviderIngestAuthorizationV1 {
@@ -599,7 +558,6 @@ pub struct FinalizedProviderIngestAuthorizationV1 {
     content_length: u64,
     musubi_context: Option<FinalizedProviderIngestMusubiContextV1>,
 }
-
 impl FinalizedProviderIngestAuthorizationV1 {
     #[allow(clippy::too_many_arguments)]
     /// Construct and validate the immutable authorization captured from one
@@ -645,7 +603,6 @@ impl FinalizedProviderIngestAuthorizationV1 {
         authorization.validate()?;
         Ok(authorization)
     }
-
     #[allow(clippy::too_many_arguments)]
     /// Construct and validate an immutable Musubi authorization captured from
     /// one exact finalized ledger view.
@@ -689,7 +646,6 @@ impl FinalizedProviderIngestAuthorizationV1 {
         authorization.validate()?;
         Ok(authorization)
     }
-
     /// Stable job identity derived from provider, order, and manifest binding.
     ///
     /// The admission cursor is intentionally excluded so an unchanged pending
@@ -698,79 +654,66 @@ impl FinalizedProviderIngestAuthorizationV1 {
     pub const fn job_id(&self) -> [u8; 32] {
         self.job_id
     }
-
     /// Original finalized cursor that admitted this job.
     #[must_use]
     pub const fn admission_finalized_cursor(&self) -> ProviderIngestFinalizedCursorV1 {
         self.admission_finalized_cursor
     }
-
     /// Original finalized admission height.
     #[must_use]
     pub const fn finalized_height(&self) -> u64 {
         self.admission_finalized_cursor.height
     }
-
     /// Original finalized admission block hash.
     #[must_use]
     pub const fn finalized_block_hash(&self) -> [u8; 32] {
         self.admission_finalized_cursor.block_hash
     }
-
     /// Configured provider identity.
     #[must_use]
     pub const fn provider_id(&self) -> [u8; 32] {
         self.provider_id
     }
-
     /// Replication order identity.
     #[must_use]
     pub const fn order_id(&self) -> [u8; 32] {
         self.order_id
     }
-
     /// Canonical manifest digest.
     #[must_use]
     pub const fn manifest_digest(&self) -> [u8; 32] {
         self.manifest_digest
     }
-
     /// Canonical manifest CID.
     #[must_use]
     pub fn manifest_cid(&self) -> &[u8] {
         &self.manifest_cid
     }
-
     /// Canonical chunker profile handle.
     #[must_use]
     pub fn chunker_handle(&self) -> &str {
         &self.chunker_handle
     }
-
     /// Finalized chunk-plan commitment.
     #[must_use]
     pub const fn chunk_digest_sha3_256(&self) -> [u8; 32] {
         self.chunk_digest_sha3_256
     }
-
     /// Finalized PoR root.
     #[must_use]
     pub const fn por_root(&self) -> [u8; 32] {
         self.por_root
     }
-
     /// Finalized payload length.
     #[must_use]
     pub const fn content_length(&self) -> u64 {
         self.content_length
     }
-
     /// Exact finalized Musubi context, absent for a generic replication job.
     #[must_use]
     pub const fn musubi_context(&self) -> Option<&FinalizedProviderIngestMusubiContextV1> {
         self.musubi_context.as_ref()
     }
-
     fn derived_job_id(&self) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
         hasher.update(PROVIDER_INGEST_JOB_ID_DOMAIN_V1);
@@ -794,7 +737,6 @@ impl FinalizedProviderIngestAuthorizationV1 {
         }
         *hasher.finalize().as_bytes()
     }
-
     fn same_binding(&self, other: &Self) -> bool {
         self.provider_id == other.provider_id
             && self.order_id == other.order_id
@@ -806,7 +748,6 @@ impl FinalizedProviderIngestAuthorizationV1 {
             && self.content_length == other.content_length
             && self.musubi_context == other.musubi_context
     }
-
     /// Validate the complete canonical finalized authorization binding.
     ///
     /// This is exposed for authenticated runtime boundaries that decode the
@@ -841,12 +782,10 @@ impl FinalizedProviderIngestAuthorizationV1 {
         Ok(())
     }
 }
-
 fn hash_length_prefixed(hasher: &mut blake3::Hasher, bytes: &[u8]) {
     hasher.update(&u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
     hasher.update(bytes);
 }
-
 /// Opaque, leased source claim returned to one worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestSourceClaimV1 {
@@ -857,27 +796,23 @@ pub struct ProviderIngestSourceClaimV1 {
     lease_expires_at_ms: u64,
     authorization: FinalizedProviderIngestAuthorizationV1,
 }
-
 impl ProviderIngestSourceClaimV1 {
     /// Stable job identity.
     #[must_use]
     pub const fn job_id(&self) -> [u8; 32] {
         self.job_id
     }
-
     /// Lease expiry in runtime milliseconds.
     #[must_use]
     pub const fn lease_expires_at_ms(&self) -> u64 {
         self.lease_expires_at_ms
     }
-
     /// Immutable payload-free ledger authorization.
     #[must_use]
     pub fn authorization(&self) -> &FinalizedProviderIngestAuthorizationV1 {
         &self.authorization
     }
 }
-
 /// Public completion-delivery state without retained transaction bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderIngestCompletionStateV1 {
@@ -938,7 +873,6 @@ pub enum ProviderIngestCompletionStateV1 {
         transaction_hash: [u8; 32],
     },
 }
-
 /// Payload-free runtime status for one provider-ingest job.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderIngestDeliveryStateV1 {
@@ -1008,7 +942,6 @@ pub enum ProviderIngestDeliveryStateV1 {
         observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
     },
 }
-
 /// Payload-free status row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestStatusV1 {
@@ -1025,7 +958,6 @@ pub struct ProviderIngestStatusV1 {
     /// Current durable state without payload or signed transaction bytes.
     pub state: ProviderIngestDeliveryStateV1,
 }
-
 /// Bounded deterministic status page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestStatusPageV1 {
@@ -1034,7 +966,6 @@ pub struct ProviderIngestStatusPageV1 {
     /// Pass this value as `after_job_id` to read the next page.
     pub next_after_job_id: Option<[u8; 32]>,
 }
-
 /// Constant-time payload-free aggregate counts for daemon readiness.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ProviderIngestOutboxCountsV1 {
@@ -1045,7 +976,6 @@ pub struct ProviderIngestOutboxCountsV1 {
     /// Retained terminal dead letters.
     pub dead_letters: usize,
 }
-
 /// Result of idempotently admitting one finalized provider-ingest job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderIngestEnqueueResultV1 {
@@ -1065,7 +995,6 @@ pub enum ProviderIngestEnqueueResultV1 {
         job_id: [u8; 32],
     },
 }
-
 impl ProviderIngestEnqueueResultV1 {
     /// Return the stable job identity.
     #[must_use]
@@ -1077,7 +1006,6 @@ impl ProviderIngestEnqueueResultV1 {
         }
     }
 }
-
 /// Outcome of a bounded retry transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderIngestRetryOutcomeV1 {
@@ -1091,7 +1019,6 @@ pub enum ProviderIngestRetryOutcomeV1 {
     /// The job moved to terminal retry exhaustion.
     DeadLettered,
 }
-
 fn validate_completion_signer_policy(
     policy: ProviderIngestCompletionSignerPolicyV1,
 ) -> Result<(), ProviderIngestOutboxError> {
@@ -1100,7 +1027,6 @@ fn validate_completion_signer_policy(
     }
     Ok(())
 }
-
 /// Current finalized observation used to reconcile a prepared signer policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) enum ProviderIngestSignerPolicyObservationV1 {
@@ -1111,7 +1037,6 @@ pub(crate) enum ProviderIngestSignerPolicyObservationV1 {
     /// Exact active finalized signer policy.
     Active(ProviderIngestCompletionSignerPolicyV1),
 }
-
 /// Exact evidence and timing inputs required to expire one exposed completion.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ProviderIngestExposedCompletionExpiryV1<'a> {
@@ -1130,14 +1055,12 @@ pub(crate) struct ProviderIngestExposedCompletionExpiryV1<'a> {
     /// Finalized cursor at which absence and authority were observed.
     pub(crate) observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredFinalizedCompletionAuthorityObservationV1 {
     cursor: ProviderIngestFinalizedCursorV1,
     provider_owner: Option<AccountId>,
     signer_policy: ProviderIngestSignerPolicyObservationV1,
 }
-
 /// Exact finalized and fee-quoted payload handed to an isolated signer.
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestCompletionSigningContextV1 {
@@ -1156,7 +1079,6 @@ pub struct ProviderIngestCompletionSigningContextV1 {
     /// Exact fee-quoted payload that the isolated signer must sign.
     pub expected_payload: TransactionPayload,
 }
-
 impl fmt::Debug for ProviderIngestCompletionSigningContextV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1171,7 +1093,6 @@ impl fmt::Debug for ProviderIngestCompletionSigningContextV1 {
             .finish()
     }
 }
-
 /// Opaque claim handed to the isolated completion signer.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ProviderIngestCompletionSigningClaimV1 {
@@ -1180,7 +1101,6 @@ pub struct ProviderIngestCompletionSigningClaimV1 {
     signing_token: [u8; 32],
     context: ProviderIngestCompletionSigningContextV1,
 }
-
 impl fmt::Debug for ProviderIngestCompletionSigningClaimV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1192,27 +1112,23 @@ impl fmt::Debug for ProviderIngestCompletionSigningClaimV1 {
             .finish()
     }
 }
-
 impl ProviderIngestCompletionSigningClaimV1 {
     /// Stable job identity.
     #[must_use]
     pub const fn job_id(&self) -> [u8; 32] {
         self.job_id
     }
-
     /// Monotonic signer-claim generation.
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
     }
-
     /// Exact prepared context that the isolated signer must sign.
     #[must_use]
     pub const fn context(&self) -> &ProviderIngestCompletionSigningContextV1 {
         &self.context
     }
 }
-
 /// Exact transaction returned only after the ambiguous state is durable.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ProviderIngestCompletionSubmissionV1 {
@@ -1223,7 +1139,6 @@ pub struct ProviderIngestCompletionSubmissionV1 {
     /// Exact signed provider-specific completion transaction.
     pub signed_transaction: SignedTransaction,
 }
-
 impl fmt::Debug for ProviderIngestCompletionSubmissionV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1234,7 +1149,6 @@ impl fmt::Debug for ProviderIngestCompletionSubmissionV1 {
             .finish()
     }
 }
-
 /// Typed committed-state evidence for this provider's completion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestFinalizedCompletionV1 {
@@ -1253,7 +1167,6 @@ pub struct ProviderIngestFinalizedCompletionV1 {
     /// Committed transaction hash, when exposed by the finalized reader.
     pub committed_transaction_hash: Option<[u8; 32]>,
 }
-
 /// Typed finalized-state evidence proving that active work is inapplicable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderIngestFinalizedCancellationV1 {
@@ -1268,7 +1181,6 @@ pub struct ProviderIngestFinalizedCancellationV1 {
     /// Authoritative cancellation class.
     pub reason: ProviderIngestCancellationReasonV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredCompletionDeliveryV1 {
     state: StoredDeliveryStateV1,
@@ -1289,7 +1201,6 @@ struct StoredCompletionDeliveryV1 {
     next_attempt_at_ms: u64,
     last_failure_class: Option<ProviderIngestFailureClassV1>,
 }
-
 impl Default for StoredCompletionDeliveryV1 {
     fn default() -> Self {
         Self {
@@ -1313,51 +1224,39 @@ impl Default for StoredCompletionDeliveryV1 {
         }
     }
 }
-
 impl DeliveryRecord for StoredCompletionDeliveryV1 {
     type Transaction = SignedTransaction;
-
     fn delivery_state(&self) -> StoredDeliveryStateV1 {
         self.state
     }
-
     fn set_delivery_state(&mut self, state: StoredDeliveryStateV1) {
         self.state = state;
     }
-
     fn attempts(&self) -> u32 {
         self.attempts
     }
-
     fn set_attempts(&mut self, attempts: u32) {
         self.attempts = attempts;
     }
-
     fn baseline_finalized_height(&self) -> u64 {
         self.baseline_finalized_height
     }
-
     fn set_baseline_finalized_height(&mut self, height: u64) {
         self.baseline_finalized_height = height;
     }
-
     fn baseline_finalized_block_hash(&self) -> [u8; 32] {
         self.baseline_finalized_block_hash
     }
-
     fn set_baseline_finalized_block_hash(&mut self, block_hash: [u8; 32]) {
         self.baseline_finalized_block_hash = block_hash;
     }
-
     fn signed_transaction(&self) -> Option<&Self::Transaction> {
         self.signed_transaction.as_ref()
     }
-
     fn set_signed_transaction(&mut self, transaction: Option<Self::Transaction>) {
         self.signed_transaction = transaction;
     }
 }
-
 /// Pointer-sized completion storage that preserves the prior canonical codec.
 ///
 /// Norito's generic `Box<T>` codec adds owned-value framing, so forwarding the
@@ -1365,60 +1264,48 @@ impl DeliveryRecord for StoredCompletionDeliveryV1 {
 #[repr(transparent)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BoxedStoredCompletionDeliveryV1(Box<StoredCompletionDeliveryV1>);
-
 impl BoxedStoredCompletionDeliveryV1 {
     fn new(completion: StoredCompletionDeliveryV1) -> Self {
         Self(Box::new(completion))
     }
 }
-
 impl AsRef<StoredCompletionDeliveryV1> for BoxedStoredCompletionDeliveryV1 {
     fn as_ref(&self) -> &StoredCompletionDeliveryV1 {
         self.0.as_ref()
     }
 }
-
 impl std::ops::Deref for BoxedStoredCompletionDeliveryV1 {
     type Target = StoredCompletionDeliveryV1;
-
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
     }
 }
-
 impl std::ops::DerefMut for BoxedStoredCompletionDeliveryV1 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.0.as_mut()
     }
 }
-
 impl norito::core::NoritoSerialize for BoxedStoredCompletionDeliveryV1 {
     fn schema_hash() -> [u8; 16] {
         <StoredCompletionDeliveryV1 as norito::core::NoritoSerialize>::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(self.0.as_ref(), writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         norito::core::NoritoSerialize::encoded_len_hint(self.0.as_ref())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         norito::core::NoritoSerialize::encoded_len_exact(self.0.as_ref())
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for BoxedStoredCompletionDeliveryV1 {
     fn schema_hash() -> [u8; 16] {
         <StoredCompletionDeliveryV1 as norito::core::NoritoDeserialize<'a>>::schema_hash()
     }
-
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("boxed provider-ingest completion decode")
     }
-
     fn try_deserialize(
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -1429,7 +1316,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for BoxedStoredCompletionDeliveryV1
         Ok(Self::new(completion))
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredProviderIngestStateV1 {
     PendingSource,
@@ -1449,7 +1335,6 @@ enum StoredProviderIngestStateV1 {
         completion: BoxedStoredCompletionDeliveryV1,
     },
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredActiveProviderIngestV1 {
     sequence: u64,
@@ -1458,7 +1343,6 @@ struct StoredActiveProviderIngestV1 {
     claim_generation: u64,
     state: StoredProviderIngestStateV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredProviderIngestTerminalOutcomeV1 {
     FinalizedCompleted {
@@ -1480,14 +1364,12 @@ enum StoredProviderIngestTerminalOutcomeV1 {
         observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
     },
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredTerminalProviderIngestV1 {
     sequence: u64,
     authorization: FinalizedProviderIngestAuthorizationV1,
     outcome: StoredProviderIngestTerminalOutcomeV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderIngestOutboxCheckpointV1 {
     magic: [u8; 16],
@@ -1498,7 +1380,6 @@ struct ProviderIngestOutboxCheckpointV1 {
     active: Vec<StoredActiveProviderIngestV1>,
     terminal: Vec<StoredTerminalProviderIngestV1>,
 }
-
 impl Default for ProviderIngestOutboxCheckpointV1 {
     fn default() -> Self {
         Self {
@@ -1512,7 +1393,6 @@ impl Default for ProviderIngestOutboxCheckpointV1 {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 struct ProviderIngestOutboxState {
     checkpoint: ProviderIngestOutboxCheckpointV1,
@@ -1520,7 +1400,6 @@ struct ProviderIngestOutboxState {
     aggregate_counts: ProviderIngestOutboxCountsV1,
     durability_failure: Option<String>,
 }
-
 enum ProviderIngestCheckpointWorkerOperation {
     Qualification,
     LoadLatest,
@@ -1529,13 +1408,11 @@ enum ProviderIngestCheckpointWorkerOperation {
         next: Box<ProviderIngestSealedCheckpointRecordV1>,
     },
 }
-
 struct ProviderIngestCheckpointIdentityResponse {
     handle_before: String,
     qualification: ProviderIngestCheckpointProviderQualificationV1,
     handle_after: String,
 }
-
 enum ProviderIngestCheckpointWorkerResponse {
     Qualification(
         Result<ProviderIngestCheckpointIdentityResponse, ProviderIngestCheckpointExternalErrorV1>,
@@ -1552,19 +1429,16 @@ enum ProviderIngestCheckpointWorkerResponse {
     Panicked,
     TimedOut,
 }
-
 struct ProviderIngestCheckpointWorkerCall {
     operation: ProviderIngestCheckpointWorkerOperation,
     deadline: Instant,
     cancelled: Arc<AtomicBool>,
     response: SyncSender<ProviderIngestCheckpointWorkerResponse>,
 }
-
 enum ProviderIngestCheckpointWorkerRequest {
     Call(ProviderIngestCheckpointWorkerCall),
     Shutdown(SyncSender<()>),
 }
-
 struct ProviderIngestCheckpointWorker {
     requests: SyncSender<ProviderIngestCheckpointWorkerRequest>,
     operation_timeout: Duration,
@@ -1572,11 +1446,9 @@ struct ProviderIngestCheckpointWorker {
     call_active: Mutex<bool>,
     call_available: Condvar,
 }
-
 struct ProviderIngestCheckpointCallAdmission<'worker> {
     worker: &'worker ProviderIngestCheckpointWorker,
 }
-
 impl ProviderIngestCheckpointWorker {
     fn try_new(
         runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
@@ -1611,7 +1483,6 @@ impl ProviderIngestCheckpointWorker {
             call_available: Condvar::new(),
         })
     }
-
     fn acquire_call(
         &self,
         deadline: Instant,
@@ -1642,7 +1513,6 @@ impl ProviderIngestCheckpointWorker {
             }
         }
     }
-
     fn call(
         &self,
         operation: ProviderIngestCheckpointWorkerOperation,
@@ -1716,7 +1586,6 @@ impl ProviderIngestCheckpointWorker {
         }
     }
 }
-
 impl Drop for ProviderIngestCheckpointCallAdmission<'_> {
     fn drop(&mut self) {
         if let Ok(mut call_active) = self.worker.call_active.lock() {
@@ -1725,7 +1594,6 @@ impl Drop for ProviderIngestCheckpointCallAdmission<'_> {
         self.worker.call_available.notify_one();
     }
 }
-
 impl Drop for ProviderIngestCheckpointWorker {
     fn drop(&mut self) {
         let timed_out = self.timed_out.swap(true, Ordering::AcqRel);
@@ -1740,7 +1608,6 @@ impl Drop for ProviderIngestCheckpointWorker {
         }
     }
 }
-
 fn provider_ingest_checkpoint_worker(
     runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
     receiver: mpsc::Receiver<ProviderIngestCheckpointWorkerRequest>,
@@ -1804,13 +1671,11 @@ fn provider_ingest_checkpoint_worker(
         }
     }
 }
-
 #[derive(Clone)]
 struct ProviderIngestCheckpointAuthority {
     binding: ProviderIngestCheckpointProviderBindingV1,
     worker: Arc<ProviderIngestCheckpointWorker>,
 }
-
 impl fmt::Debug for ProviderIngestCheckpointAuthority {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1819,7 +1684,6 @@ impl fmt::Debug for ProviderIngestCheckpointAuthority {
             .finish_non_exhaustive()
     }
 }
-
 /// Durable payload-free outbox for provider-internal finalized-ledger ingest.
 #[derive(Clone)]
 pub struct ProviderIngestOutbox {
@@ -1829,7 +1693,6 @@ pub struct ProviderIngestOutbox {
     policy: ProviderIngestOutboxPolicyV1,
     state: Arc<Mutex<ProviderIngestOutboxState>>,
 }
-
 impl fmt::Debug for ProviderIngestOutbox {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1841,7 +1704,6 @@ impl fmt::Debug for ProviderIngestOutbox {
             .finish()
     }
 }
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct ProviderIngestDirectoryIdentity {
     #[cfg(unix)]
@@ -1849,7 +1711,6 @@ struct ProviderIngestDirectoryIdentity {
     #[cfg(unix)]
     inode: u64,
 }
-
 struct ProviderIngestWriterLock {
     _process_guard: ProviderIngestProcessLock,
     _file: File,
@@ -1857,7 +1718,6 @@ struct ProviderIngestWriterLock {
     parent_path: PathBuf,
     parent_identity: ProviderIngestDirectoryIdentity,
 }
-
 impl ProviderIngestWriterLock {
     fn acquire(checkpoint_path: &Path) -> Result<Self, ProviderIngestOutboxError> {
         let parent = checkpoint_path.parent().ok_or_else(|| {
@@ -1941,7 +1801,6 @@ impl ProviderIngestWriterLock {
         writer_lock.validate_live(checkpoint_path)?;
         Ok(writer_lock)
     }
-
     fn validate_live(&self, checkpoint_path: &Path) -> Result<(), ProviderIngestOutboxError> {
         crate::reject_unsafe_checkpoint_ancestors(checkpoint_path)
             .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
@@ -1980,11 +1839,9 @@ impl ProviderIngestWriterLock {
         Ok(())
     }
 }
-
 struct ProviderIngestProcessLock {
     path: PathBuf,
 }
-
 impl ProviderIngestProcessLock {
     fn acquire(path: &Path) -> Result<Self, ProviderIngestOutboxError> {
         let parent = path.parent().ok_or_else(|| {
@@ -2010,7 +1867,6 @@ impl ProviderIngestProcessLock {
         Ok(Self { path })
     }
 }
-
 impl Drop for ProviderIngestProcessLock {
     fn drop(&mut self) {
         if let Ok(mut held) = PROVIDER_INGEST_PROCESS_LOCKS.lock() {
@@ -2018,7 +1874,6 @@ impl Drop for ProviderIngestProcessLock {
         }
     }
 }
-
 fn prepare_provider_ingest_checkpoint_path(
     path: PathBuf,
 ) -> Result<PathBuf, ProviderIngestOutboxError> {
@@ -2055,7 +1910,6 @@ fn prepare_provider_ingest_checkpoint_path(
         .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
     Ok(path)
 }
-
 fn provider_ingest_lock_path(checkpoint_path: &Path) -> Result<PathBuf, ProviderIngestOutboxError> {
     let mut file_name = checkpoint_path
         .file_name()
@@ -2068,7 +1922,6 @@ fn provider_ingest_lock_path(checkpoint_path: &Path) -> Result<PathBuf, Provider
     file_name.push(PROVIDER_INGEST_OUTBOX_LOCK_SUFFIX_V1);
     Ok(checkpoint_path.with_file_name(file_name))
 }
-
 fn provider_ingest_directory_identity(
     path: &Path,
 ) -> Result<ProviderIngestDirectoryIdentity, ProviderIngestOutboxError> {
@@ -2087,7 +1940,6 @@ fn provider_ingest_directory_identity(
         inode: metadata.ino(),
     })
 }
-
 fn validate_provider_ingest_lock_metadata(
     path: &Path,
     metadata: &fs::Metadata,
@@ -2115,14 +1967,12 @@ fn validate_provider_ingest_lock_metadata(
     }
     Ok(())
 }
-
 fn validate_provider_ingest_runtime_handle(value: &str) -> Result<(), ProviderIngestOutboxError> {
     if !is_production_runtime_handle(value) {
         return Err(ProviderIngestOutboxError::InvalidCheckpointProviderBinding);
     }
     Ok(())
 }
-
 fn provider_ingest_sealed_checkpoint_revision(
     record: &ProviderIngestSealedCheckpointRecordV1,
 ) -> [u8; 32] {
@@ -2158,7 +2008,6 @@ fn provider_ingest_sealed_checkpoint_revision(
     hasher.update(&record.checkpoint_bytes);
     *hasher.finalize().as_bytes()
 }
-
 fn provider_ingest_sealed_checkpoint_record_max_bytes(
     checkpoint_max_bytes: u64,
 ) -> Result<u64, ProviderIngestOutboxError> {
@@ -2169,7 +2018,6 @@ fn provider_ingest_sealed_checkpoint_record_max_bytes(
         .checked_add(PROVIDER_INGEST_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1)
         .ok_or(ProviderIngestOutboxError::CheckpointTooLarge)
 }
-
 fn encode_provider_ingest_checkpoint(
     checkpoint: &ProviderIngestOutboxCheckpointV1,
     policy: ProviderIngestOutboxPolicyV1,
@@ -2184,7 +2032,6 @@ fn encode_provider_ingest_checkpoint(
     }
     Ok(bytes)
 }
-
 fn decode_provider_ingest_checkpoint(
     bytes: &[u8],
     policy: ProviderIngestOutboxPolicyV1,
@@ -2205,7 +2052,6 @@ fn decode_provider_ingest_checkpoint(
     validate_checkpoint(&checkpoint, policy)?;
     Ok(checkpoint)
 }
-
 impl ProviderIngestCheckpointAuthority {
     fn try_new(
         binding: ProviderIngestCheckpointProviderBindingV1,
@@ -2224,7 +2070,6 @@ impl ProviderIngestCheckpointAuthority {
         authority.assert_identity()?;
         Ok(authority)
     }
-
     fn assert_identity(&self) -> Result<(), ProviderIngestOutboxError> {
         self.binding.validate()?;
         let response = self
@@ -2251,7 +2096,6 @@ impl ProviderIngestCheckpointAuthority {
         }
         Ok(())
     }
-
     fn load_latest(
         &self,
         checkpoint_max_bytes: u64,
@@ -2277,7 +2121,6 @@ impl ProviderIngestCheckpointAuthority {
         }
         Ok(record)
     }
-
     fn compare_and_swap(
         &self,
         checkpoint_max_bytes: u64,
@@ -2345,7 +2188,6 @@ impl ProviderIngestCheckpointAuthority {
         Err(ProviderIngestOutboxError::CheckpointAuthorityAmbiguous)
     }
 }
-
 impl ProviderIngestOutbox {
     /// Construct a non-persistent outbox for crate-internal composition tests.
     #[cfg(test)]
@@ -2366,7 +2208,6 @@ impl ProviderIngestOutbox {
             })),
         })
     }
-
     /// Open a local-only bounded checkpoint for crate-internal composition tests.
     ///
     /// The standard daemon never selects this constructor. Production provider
@@ -2399,7 +2240,6 @@ impl ProviderIngestOutbox {
             })),
         })
     }
-
     /// Open a production outbox whose external sealed head is authoritative.
     ///
     /// The local file is only a revalidated cache. It may be absent or exactly
@@ -2510,13 +2350,11 @@ impl ProviderIngestOutbox {
             })),
         })
     }
-
     /// Return the validated policy.
     #[must_use]
     pub const fn policy(&self) -> ProviderIngestOutboxPolicyV1 {
         self.policy
     }
-
     /// Return the greatest finalized cursor durably observed by this outbox.
     pub fn finalized_cursor_high_water(
         &self,
@@ -2527,7 +2365,6 @@ impl ProviderIngestOutbox {
                 .map(|(cursor, _)| cursor),
         )
     }
-
     /// Return the finalized cursor and block time durably bound as one snapshot.
     pub fn finalized_snapshot_high_water(
         &self,
@@ -2535,7 +2372,6 @@ impl ProviderIngestOutbox {
         let state = self.lock_state()?;
         validate_retained_finalized_snapshot(&state.checkpoint, None)
     }
-
     /// Durably advance one finalized cursor/time snapshot, rejecting regression,
     /// block substitution, or time equivocation for the same finalized block.
     pub fn observe_finalized_snapshot(
@@ -2568,7 +2404,6 @@ impl ProviderIngestOutbox {
         candidate.finalized_block_time_ms_high_water = Some(finalized_block_time_ms);
         self.persist_candidate(&mut state, candidate)
     }
-
     /// Durably admit one immutable provider/order/manifest binding.
     pub fn enqueue(
         &self,
@@ -2615,7 +2450,6 @@ impl ProviderIngestOutbox {
         {
             return Err(ProviderIngestOutboxError::OrderBindingConflict);
         }
-
         let mut candidate = state.checkpoint.clone();
         prune_terminal_entries(
             &mut candidate,
@@ -2640,7 +2474,6 @@ impl ProviderIngestOutbox {
         self.persist_candidate(&mut state, candidate)?;
         Ok(ProviderIngestEnqueueResultV1::Inserted { job_id })
     }
-
     /// Atomically claim the next eligible source job in admission sequence.
     pub fn claim_next_source(
         &self,
@@ -2710,7 +2543,6 @@ impl ProviderIngestOutbox {
         }
         Ok(None)
     }
-
     /// Claim one exact source job, reclaiming an expired lease when bounded.
     pub fn claim_source(
         &self,
@@ -2780,7 +2612,6 @@ impl ProviderIngestOutbox {
         self.persist_candidate(&mut state, candidate)?;
         Ok(claim)
     }
-
     /// Renew one exact live source claim without changing its owner or generation.
     ///
     /// The returned claim replaces the caller's previous claim. Any transition
@@ -2832,7 +2663,6 @@ impl ProviderIngestOutbox {
         self.persist_candidate(&mut state, candidate)?;
         Ok(renewed)
     }
-
     /// Persist a retryable source/storage failure under the exact live lease.
     pub fn schedule_source_retry(
         &self,
@@ -2879,7 +2709,6 @@ impl ProviderIngestOutbox {
             next_attempt_at_ms,
         })
     }
-
     /// Move a source claim to a permanent payload-free dead letter.
     pub fn dead_letter_source(
         &self,
@@ -2913,7 +2742,6 @@ impl ProviderIngestOutbox {
         )?;
         self.persist_candidate(&mut state, candidate)
     }
-
     /// Record that exact verified bytes are present in local storage.
     pub fn mark_local_stored(
         &self,
@@ -2923,7 +2751,6 @@ impl ProviderIngestOutbox {
     ) -> Result<(), ProviderIngestOutboxError> {
         self.mark_local_stored_verified(claim, now_ms, manifest_id, None)
     }
-
     /// Record exact locally stored bytes together with any mandatory Musubi verifier receipt.
     pub fn mark_local_stored_verified(
         &self,
@@ -2961,7 +2788,6 @@ impl ProviderIngestOutbox {
         };
         self.persist_candidate(&mut state, candidate)
     }
-
     /// Durably back off a failed fee quote or completion-payload construction.
     pub fn record_completion_preparation_failure(
         &self,
@@ -2977,7 +2803,6 @@ impl ProviderIngestOutbox {
             None,
         )
     }
-
     /// Durably back off unavailable or rejected governed signer resolution.
     pub fn record_completion_signer_resolution_failure(
         &self,
@@ -2993,7 +2818,6 @@ impl ProviderIngestOutbox {
             None,
         )
     }
-
     /// Durably record a proved missing or revoked signer policy.
     ///
     /// When the same finalized owner previously used a governed policy, the
@@ -3014,7 +2838,6 @@ impl ProviderIngestOutbox {
             Some(current_provider_owner),
         )
     }
-
     fn record_completion_ready_failure(
         &self,
         job_id: [u8; 32],
@@ -3102,7 +2925,6 @@ impl ProviderIngestOutbox {
             next_attempt_at_ms,
         })
     }
-
     /// Reconcile the finalized owner before resolving or constructing a new
     /// Ready-state completion.
     ///
@@ -3153,7 +2975,6 @@ impl ProviderIngestOutbox {
         }
         Ok(owner_changed)
     }
-
     /// Validate the exact active signer policy for a Ready entry before fee
     /// quoting or payload construction performs any work.
     pub(crate) fn validate_ready_completion_signer_policy(
@@ -3207,7 +3028,6 @@ impl ProviderIngestOutbox {
         }
         Ok(())
     }
-
     /// Durably claim a local-stored job for isolated completion signing.
     pub(crate) fn claim_completion_signing(
         &self,
@@ -3281,7 +3101,6 @@ impl ProviderIngestOutbox {
         self.persist_candidate(&mut state, candidate)?;
         Ok(claim)
     }
-
     /// Release a signer-only claim and durably apply bounded backoff.
     pub(crate) fn release_completion_signing(
         &self,
@@ -3332,7 +3151,6 @@ impl ProviderIngestOutbox {
             next_attempt_at_ms,
         })
     }
-
     /// Invalidate completion material prepared by a superseded provider owner
     /// or governed signer policy.
     ///
@@ -3531,7 +3349,6 @@ impl ProviderIngestOutbox {
         } else {
             (None, false)
         };
-
         let attempts = match completion.state {
             StoredDeliveryStateV1::Signing => {
                 durable::release_signing_claim(completion)?;
@@ -3558,7 +3375,6 @@ impl ProviderIngestOutbox {
         };
         completion.signer_policy_floor = next_signer_policy_floor;
         completion.signer_policy_successor_required = signer_policy_successor_required;
-
         if attempts >= self.policy.max_attempts {
             move_active_to_dead_letter(
                 &mut candidate,
@@ -3582,7 +3398,6 @@ impl ProviderIngestOutbox {
             next_attempt_at_ms,
         }))
     }
-
     /// Recover signer-only claims whose bounded in-process lease elapsed.
     ///
     /// This is safe after a worker task is aborted because signer-only claims
@@ -3663,7 +3478,6 @@ impl ProviderIngestOutbox {
         }
         Ok(recovered)
     }
-
     /// Persist the exact provider-specific signed completion transaction.
     pub fn store_completion_transaction(
         &self,
@@ -3690,7 +3504,6 @@ impl ProviderIngestOutbox {
         self.persist_candidate(&mut state, candidate)?;
         Ok(transaction_hash)
     }
-
     /// Read exact bytes for preflight only when their retained signing context
     /// still matches the current finalized owner and governed signer policy.
     ///
@@ -3745,7 +3558,6 @@ impl ProviderIngestOutbox {
             signed_transaction,
         })
     }
-
     /// Durably back off an ingress preflight that failed before exposure.
     pub(crate) fn mark_completion_preflight_unavailable(
         &self,
@@ -3801,7 +3613,6 @@ impl ProviderIngestOutbox {
             next_attempt_at_ms,
         })
     }
-
     /// Handle terminal rejection in queue preflight.
     ///
     /// Never-exposed bytes may be discarded and re-signed. Bytes exposed by an
@@ -3875,7 +3686,6 @@ impl ProviderIngestOutbox {
             next_attempt_at_ms,
         })
     }
-
     /// Atomically authorize current finalized signing authority and enter the
     /// ambiguous crash state before exposing exact bytes to a queue.
     pub(crate) fn authorize_and_begin_completion_submission(
@@ -3921,7 +3731,6 @@ impl ProviderIngestOutbox {
             signed_transaction,
         })
     }
-
     /// Record that the exact transaction is known pending or applied.
     pub(crate) fn mark_completion_submitted(
         &self,
@@ -3938,7 +3747,6 @@ impl ProviderIngestOutbox {
         durable::mark_submitted(completion)?;
         self.persist_candidate(&mut state, candidate)
     }
-
     /// Retain an already-exposed exact transaction after observation proves it
     /// pending or committed at the transaction layer.
     pub(crate) fn mark_exposed_completion_observed(
@@ -3971,7 +3779,6 @@ impl ProviderIngestOutbox {
         }
         self.persist_candidate(&mut state, candidate)
     }
-
     /// Discard a previously exposed signed transaction only after its signed
     /// TTL elapsed and a strictly newer finalized cursor still proves it
     /// absent. This is the safe rotation escape hatch for quarantined bytes.
@@ -4116,7 +3923,6 @@ impl ProviderIngestOutbox {
             next_attempt_at_ms,
         }))
     }
-
     /// Record a failure proven to have occurred before queue admission.
     pub(crate) fn mark_completion_not_submitted(
         &self,
@@ -4173,7 +3979,6 @@ impl ProviderIngestOutbox {
             next_attempt_at_ms,
         })
     }
-
     /// Retry the same exact transaction only after finalized absence is proven.
     pub(crate) fn mark_completion_finalized_absent(
         &self,
@@ -4227,7 +4032,6 @@ impl ProviderIngestOutbox {
             next_attempt_at_ms,
         })
     }
-
     /// Re-sign after a terminal pipeline rejection, or dead-letter at the bound.
     ///
     /// The rejection cursor must exactly match a prior durable
@@ -4293,7 +4097,6 @@ impl ProviderIngestOutbox {
             next_attempt_at_ms,
         })
     }
-
     /// Mark this provider complete only after exact committed-state confirmation.
     ///
     /// The evidence cursor must exactly match a prior durable
@@ -4425,7 +4228,6 @@ impl ProviderIngestOutbox {
             .sort_by_key(|entry| entry.authorization.job_id);
         self.persist_candidate(&mut state, candidate)
     }
-
     /// Reconcile finalized completion, including an absent local job.
     ///
     /// An absent completion is written directly as a terminal tombstone. It
@@ -4512,7 +4314,6 @@ impl ProviderIngestOutbox {
             .sort_by_key(|entry| entry.authorization.job_id);
         self.persist_candidate(&mut state, candidate)
     }
-
     /// Reconcile finalized cancellation, including an absent local job.
     ///
     /// An absent job is written directly as a terminal tombstone so a crash
@@ -4594,7 +4395,6 @@ impl ProviderIngestOutbox {
             .sort_by_key(|entry| entry.authorization.job_id);
         self.persist_candidate(&mut state, candidate)
     }
-
     /// Cancel active work after finalized chain state proves it inapplicable.
     ///
     /// The evidence cursor must exactly match a prior durable
@@ -4677,7 +4477,6 @@ impl ProviderIngestOutbox {
             .sort_by_key(|entry| entry.authorization.job_id);
         self.persist_candidate(&mut state, candidate)
     }
-
     /// Deterministically prune only governed terminal tombstones.
     pub fn prune_terminal(
         &self,
@@ -4696,7 +4495,6 @@ impl ProviderIngestOutbox {
         }
         Ok(removed)
     }
-
     /// Return constant-time payload-free aggregate counts under one state lock.
     ///
     /// Checkpoints are exhaustively validated before installation. This
@@ -4710,7 +4508,6 @@ impl ProviderIngestOutbox {
         validate_checkpoint_count_snapshot(&state.checkpoint, state.aggregate_counts, self.policy)?;
         Ok(state.aggregate_counts)
     }
-
     /// Return the exact cloned finalized authorization retained for one job.
     ///
     /// This accessor exposes no lease or signer material and returns the same
@@ -4736,7 +4533,6 @@ impl ProviderIngestOutbox {
             .cloned()
             .ok_or(ProviderIngestOutboxError::UnknownJob)
     }
-
     /// Return one payload-free status by stable job identity.
     pub fn status(
         &self,
@@ -4759,7 +4555,6 @@ impl ProviderIngestOutbox {
             .map(terminal_status)
             .ok_or(ProviderIngestOutboxError::UnknownJob)
     }
-
     /// Return a bounded payload-free page in stable job-id order.
     pub fn statuses_page(
         &self,
@@ -4791,14 +4586,12 @@ impl ProviderIngestOutbox {
             next_after_job_id,
         })
     }
-
     fn lock_state(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, ProviderIngestOutboxState>, ProviderIngestOutboxError>
     {
         self.lock_state_after_authoritative_load(|| {})
     }
-
     fn lock_state_after_authoritative_load(
         &self,
         authoritative_loaded: impl FnOnce(),
@@ -4843,7 +4636,6 @@ impl ProviderIngestOutbox {
         }
         Ok(state)
     }
-
     fn persist_candidate(
         &self,
         live: &mut ProviderIngestOutboxState,
@@ -4948,14 +4740,12 @@ impl ProviderIngestOutbox {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SourceEligibility {
     Eligible,
     ExpiredLease,
     Skip,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExactSourceEligibility {
     Eligible,
@@ -4964,7 +4754,6 @@ enum ExactSourceEligibility {
     LeaseHeld,
     LocalStored,
 }
-
 fn install_source_claim(
     entry: &mut StoredActiveProviderIngestV1,
     owner: ProviderIngestClaimOwnerV1,
@@ -5000,7 +4789,6 @@ fn install_source_claim(
         authorization: entry.authorization.clone(),
     })
 }
-
 fn derive_lease_token(
     job_id: [u8; 32],
     owner: ProviderIngestClaimOwnerV1,
@@ -5015,7 +4803,6 @@ fn derive_lease_token(
     hasher.update(&lease_expires_at_ms.to_le_bytes());
     *hasher.finalize().as_bytes()
 }
-
 fn validate_live_claim(
     entry: &StoredActiveProviderIngestV1,
     claim: &ProviderIngestSourceClaimV1,
@@ -5044,7 +4831,6 @@ fn validate_live_claim(
     }
     Ok(())
 }
-
 fn validate_replayed_authorization(
     retained: &FinalizedProviderIngestAuthorizationV1,
     replayed: &FinalizedProviderIngestAuthorizationV1,
@@ -5060,7 +4846,6 @@ fn validate_replayed_authorization(
     }
     Ok(())
 }
-
 fn active_position(
     checkpoint: &ProviderIngestOutboxCheckpointV1,
     job_id: [u8; 32],
@@ -5071,7 +4856,6 @@ fn active_position(
         .position(|entry| entry.authorization.job_id == job_id)
         .ok_or(ProviderIngestOutboxError::UnknownJob)
 }
-
 fn find_active_mut(
     checkpoint: &mut ProviderIngestOutboxCheckpointV1,
     job_id: [u8; 32],
@@ -5082,7 +4866,6 @@ fn find_active_mut(
         .find(|entry| entry.authorization.job_id == job_id)
         .ok_or(ProviderIngestOutboxError::UnknownJob)
 }
-
 fn local_completion_mut(
     entry: &mut StoredActiveProviderIngestV1,
 ) -> Result<&mut StoredCompletionDeliveryV1, ProviderIngestOutboxError> {
@@ -5091,7 +4874,6 @@ fn local_completion_mut(
     };
     Ok(completion)
 }
-
 fn clear_completion_signing_material(completion: &mut StoredCompletionDeliveryV1) {
     completion.state = StoredDeliveryStateV1::Ready;
     completion.signing_claimed_at_ms = 0;
@@ -5105,14 +4887,12 @@ fn clear_completion_signing_material(completion: &mut StoredCompletionDeliveryV1
     completion.next_attempt_at_ms = 0;
     completion.last_failure_class = None;
 }
-
 fn normalize_signer_policy_lineage(completion: &mut StoredCompletionDeliveryV1) {
     if completion.signer_policy_floor.is_none() {
         completion.signer_policy_owner = None;
         completion.signer_policy_successor_required = false;
     }
 }
-
 fn validate_manifest_id(
     authorization: &FinalizedProviderIngestAuthorizationV1,
     manifest_id: &str,
@@ -5127,7 +4907,6 @@ fn validate_manifest_id(
     }
     Ok(())
 }
-
 fn provided_musubi_receipt_shape_is_valid(
     authorization: &FinalizedProviderIngestAuthorizationV1,
     musubi_bundle: Option<&ProviderIngestVerifiedMusubiBundleReceiptV1>,
@@ -5138,7 +4917,6 @@ fn provided_musubi_receipt_shape_is_valid(
         (None, Some(_)) | (Some(_), None) => false,
     }
 }
-
 fn stored_musubi_receipt_shape_is_valid(
     authorization: &FinalizedProviderIngestAuthorizationV1,
     musubi_bundle: Option<&StoredProviderIngestVerifiedMusubiBundleReceiptV1>,
@@ -5149,13 +4927,11 @@ fn stored_musubi_receipt_shape_is_valid(
         (None, Some(_)) | (Some(_), None) => false,
     }
 }
-
 fn increment_attempt(attempts: u32) -> Result<u32, ProviderIngestOutboxError> {
     attempts
         .checked_add(1)
         .ok_or(ProviderIngestOutboxError::AttemptOverflow)
 }
-
 fn consume_bounded_attempt(
     attempts: u32,
     max_attempts: u32,
@@ -5166,7 +4942,6 @@ fn consume_bounded_attempt(
         increment_attempt(attempts)
     }
 }
-
 const fn valid_permanent_failure_pair(
     reason: ProviderIngestDeadLetterReasonV1,
     failure_class: ProviderIngestFailureClassV1,
@@ -5182,7 +4957,6 @@ const fn valid_permanent_failure_pair(
         )
     )
 }
-
 fn retry_at(
     now_ms: u64,
     attempts: u32,
@@ -5198,7 +4972,6 @@ fn retry_at(
         .checked_add(delay)
         .ok_or(ProviderIngestOutboxError::TimestampOverflow)
 }
-
 fn completion_signing_recover_at_ms(
     claimed_at_ms: u64,
     policy: ProviderIngestOutboxPolicyV1,
@@ -5214,7 +4987,6 @@ fn completion_signing_recover_at_ms(
         .checked_add(recovery_delay)
         .ok_or(ProviderIngestOutboxError::TimestampOverflow)
 }
-
 fn validate_cursor_after_admission(
     authorization: &FinalizedProviderIngestAuthorizationV1,
     observed: ProviderIngestFinalizedCursorV1,
@@ -5228,7 +5000,6 @@ fn validate_cursor_after_admission(
     }
     Ok(())
 }
-
 fn validate_cursor_after_baseline(
     completion: &StoredCompletionDeliveryV1,
     observed: ProviderIngestFinalizedCursorV1,
@@ -5238,14 +5009,12 @@ fn validate_cursor_after_baseline(
     }
     Ok(())
 }
-
 const fn finalized_cursor(cursor: ProviderIngestFinalizedCursorV1) -> FinalizedCursorV1 {
     FinalizedCursorV1 {
         height: cursor.height,
         block_hash: cursor.block_hash,
     }
 }
-
 fn move_active_to_dead_letter(
     checkpoint: &mut ProviderIngestOutboxCheckpointV1,
     position: usize,
@@ -5273,7 +5042,6 @@ fn move_active_to_dead_letter(
         .sort_by_key(|entry| entry.authorization.job_id);
     Ok(())
 }
-
 fn terminal_observed_height(entry: &StoredTerminalProviderIngestV1) -> u64 {
     match &entry.outcome {
         StoredProviderIngestTerminalOutcomeV1::FinalizedCompleted {
@@ -5289,7 +5057,6 @@ fn terminal_observed_height(entry: &StoredTerminalProviderIngestV1) -> u64 {
         } => observed_finalized_cursor.height,
     }
 }
-
 fn prune_terminal_entries(
     checkpoint: &mut ProviderIngestOutboxCheckpointV1,
     observed_finalized_height: u64,
@@ -5305,7 +5072,6 @@ fn prune_terminal_entries(
         .sort_by_key(|entry| entry.authorization.job_id);
     before - checkpoint.terminal.len()
 }
-
 fn ensure_terminal_slot(
     checkpoint: &ProviderIngestOutboxCheckpointV1,
     policy: ProviderIngestOutboxPolicyV1,
@@ -5315,7 +5081,6 @@ fn ensure_terminal_slot(
     }
     Ok(())
 }
-
 fn require_transaction_hash(
     completion: &StoredCompletionDeliveryV1,
     expected: [u8; 32],
@@ -5325,7 +5090,6 @@ fn require_transaction_hash(
     }
     Ok(())
 }
-
 fn validate_completion_submission_authority(
     completion: &StoredCompletionDeliveryV1,
     current_provider_owner: &AccountId,
@@ -5368,7 +5132,6 @@ fn validate_completion_submission_authority(
     }
     Ok(())
 }
-
 fn derive_signing_token(
     job_id: [u8; 32],
     generation: u64,
@@ -5383,7 +5146,6 @@ fn derive_signing_token(
     hash_length_prefixed(&mut hasher, &encoded);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn validate_signing_claim(
     completion: &StoredCompletionDeliveryV1,
     claim: &ProviderIngestCompletionSigningClaimV1,
@@ -5403,7 +5165,6 @@ fn validate_signing_claim(
     }
     Ok(())
 }
-
 fn validate_completion_signing_context(
     authorization: &FinalizedProviderIngestAuthorizationV1,
     context: &ProviderIngestCompletionSigningContextV1,
@@ -5435,7 +5196,6 @@ fn validate_completion_signing_context(
     )
     .map_err(|_| ProviderIngestOutboxError::InvalidSigningContext)
 }
-
 fn completion_account_id_fits_canonical_bound(account_id: &AccountId) -> bool {
     norito::to_bytes(account_id).is_ok_and(|encoded| {
         !encoded.is_empty()
@@ -5445,7 +5205,6 @@ fn completion_account_id_fits_canonical_bound(account_id: &AccountId) -> bool {
             })
     })
 }
-
 fn validate_signer_policy_progress(
     retained: Option<ProviderIngestCompletionSignerPolicyV1>,
     successor_required: bool,
@@ -5483,7 +5242,6 @@ fn validate_signer_policy_progress(
     }
     Ok(())
 }
-
 fn observe_finalized_completion_authority(
     completion: &mut StoredCompletionDeliveryV1,
     provider_owner: Option<&AccountId>,
@@ -5559,7 +5317,6 @@ fn observe_finalized_completion_authority(
         ) => Err(ProviderIngestOutboxError::FinalizedAuthorityConflict),
     }
 }
-
 fn validate_finalized_completion_authority_observation(
     observation: &StoredFinalizedCompletionAuthorityObservationV1,
 ) -> Result<(), ProviderIngestOutboxError> {
@@ -5582,7 +5339,6 @@ fn validate_finalized_completion_authority_observation(
     }
     Ok(())
 }
-
 fn validate_finalized_completion_authority_matches(
     completion: &StoredCompletionDeliveryV1,
     provider_owner: Option<&AccountId>,
@@ -5601,7 +5357,6 @@ fn validate_finalized_completion_authority_matches(
     }
     Ok(())
 }
-
 fn validate_completion_instruction(
     authorization: &FinalizedProviderIngestAuthorizationV1,
     context: &ProviderIngestCompletionSigningContextV1,
@@ -5636,7 +5391,6 @@ fn validate_completion_instruction(
     }
     Ok(())
 }
-
 fn validate_completion_transaction(
     authorization: &FinalizedProviderIngestAuthorizationV1,
     context: &ProviderIngestCompletionSigningContextV1,
@@ -5668,7 +5422,6 @@ fn validate_completion_transaction(
     }
     Ok(transaction_hash)
 }
-
 fn validate_finalized_completion_evidence(
     evidence: &ProviderIngestFinalizedCompletionV1,
 ) -> Result<(), ProviderIngestOutboxError> {
@@ -5685,7 +5438,6 @@ fn validate_finalized_completion_evidence(
     }
     Ok(())
 }
-
 fn validate_completion_binding(
     authorization: &FinalizedProviderIngestAuthorizationV1,
     evidence: &ProviderIngestFinalizedCompletionV1,
@@ -5698,7 +5450,6 @@ fn validate_completion_binding(
     }
     Ok(())
 }
-
 fn validate_finalized_cancellation_evidence(
     evidence: &ProviderIngestFinalizedCancellationV1,
 ) -> Result<(), ProviderIngestOutboxError> {
@@ -5711,7 +5462,6 @@ fn validate_finalized_cancellation_evidence(
     }
     Ok(())
 }
-
 fn validate_retained_finalized_snapshot(
     checkpoint: &ProviderIngestOutboxCheckpointV1,
     required_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
@@ -5741,7 +5491,6 @@ fn validate_retained_finalized_snapshot(
     }
     Ok(retained_snapshot)
 }
-
 fn validate_cancellation_binding(
     authorization: &FinalizedProviderIngestAuthorizationV1,
     evidence: &ProviderIngestFinalizedCancellationV1,
@@ -5754,7 +5503,6 @@ fn validate_cancellation_binding(
     }
     Ok(())
 }
-
 fn validate_cursor_not_before(
     retained: ProviderIngestFinalizedCursorV1,
     observed: ProviderIngestFinalizedCursorV1,
@@ -5766,11 +5514,9 @@ fn validate_cursor_not_before(
     }
     Ok(())
 }
-
 fn committed_hashes_conflict(retained: Option<[u8; 32]>, observed: Option<[u8; 32]>) -> bool {
     matches!((retained, observed), (Some(left), Some(right)) if left != right)
 }
-
 fn completion_status(completion: &StoredCompletionDeliveryV1) -> ProviderIngestCompletionStateV1 {
     let baseline = ProviderIngestFinalizedCursorV1 {
         height: completion.baseline_finalized_height,
@@ -5823,7 +5569,6 @@ fn completion_status(completion: &StoredCompletionDeliveryV1) -> ProviderIngestC
         },
     }
 }
-
 fn active_status(entry: &StoredActiveProviderIngestV1) -> ProviderIngestStatusV1 {
     let state = match &entry.state {
         StoredProviderIngestStateV1::PendingSource => {
@@ -5862,7 +5607,6 @@ fn active_status(entry: &StoredActiveProviderIngestV1) -> ProviderIngestStatusV1
     };
     status_row(&entry.authorization, state)
 }
-
 fn terminal_status(entry: &StoredTerminalProviderIngestV1) -> ProviderIngestStatusV1 {
     let state = match &entry.outcome {
         StoredProviderIngestTerminalOutcomeV1::FinalizedCompleted {
@@ -5903,7 +5647,6 @@ fn terminal_status(entry: &StoredTerminalProviderIngestV1) -> ProviderIngestStat
     };
     status_row(&entry.authorization, state)
 }
-
 fn status_row(
     authorization: &FinalizedProviderIngestAuthorizationV1,
     state: ProviderIngestDeliveryStateV1,
@@ -5917,7 +5660,6 @@ fn status_row(
         state,
     }
 }
-
 fn checkpoint_counts(
     checkpoint: &ProviderIngestOutboxCheckpointV1,
 ) -> ProviderIngestOutboxCountsV1 {
@@ -5936,7 +5678,6 @@ fn checkpoint_counts(
             .count(),
     }
 }
-
 fn validate_checkpoint_count_snapshot(
     checkpoint: &ProviderIngestOutboxCheckpointV1,
     counts: ProviderIngestOutboxCountsV1,
@@ -5962,7 +5703,6 @@ fn validate_checkpoint_count_snapshot(
     validate_retained_finalized_snapshot(checkpoint, None)?;
     Ok(())
 }
-
 fn validate_checkpoint(
     checkpoint: &ProviderIngestOutboxCheckpointV1,
     policy: ProviderIngestOutboxPolicyV1,
@@ -6011,7 +5751,6 @@ fn validate_checkpoint(
     validate_checkpoint_finalized_high_water(checkpoint)?;
     Ok(())
 }
-
 fn validate_checkpoint_finalized_high_water(
     checkpoint: &ProviderIngestOutboxCheckpointV1,
 ) -> Result<(), ProviderIngestOutboxError> {
@@ -6102,7 +5841,6 @@ fn validate_checkpoint_finalized_high_water(
     }
     Ok(())
 }
-
 fn validate_active_state(
     entry: &StoredActiveProviderIngestV1,
     policy: ProviderIngestOutboxPolicyV1,
@@ -6155,7 +5893,6 @@ fn validate_active_state(
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_lines)]
 fn validate_completion_delivery(
     authorization: &FinalizedProviderIngestAuthorizationV1,
@@ -6294,7 +6031,6 @@ fn validate_completion_delivery(
     }
     Ok(())
 }
-
 fn validate_unexposed_completion_authority_observation(
     completion: &StoredCompletionDeliveryV1,
     context: &ProviderIngestCompletionSigningContextV1,
@@ -6317,7 +6053,6 @@ fn validate_unexposed_completion_authority_observation(
     }
     Ok(())
 }
-
 fn validate_terminal(
     entry: &StoredTerminalProviderIngestV1,
     policy: ProviderIngestOutboxPolicyV1,
@@ -6383,7 +6118,6 @@ fn validate_terminal(
     }
     Ok(())
 }
-
 /// Durable provider-ingest state-machine errors.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ProviderIngestOutboxError {
@@ -6562,7 +6296,6 @@ pub enum ProviderIngestOutboxError {
     #[error("provider-ingest outbox durability is poisoned")]
     DurabilityPoisoned,
 }
-
 impl From<DeliveryTransitionError> for ProviderIngestOutboxError {
     fn from(error: DeliveryTransitionError) -> Self {
         match error {
@@ -6572,7 +6305,6 @@ impl From<DeliveryTransitionError> for ProviderIngestOutboxError {
         }
     }
 }
-
 impl From<ProviderIngestCheckpointExternalErrorV1> for ProviderIngestOutboxError {
     fn from(error: ProviderIngestCheckpointExternalErrorV1) -> Self {
         match error {
@@ -6586,7 +6318,6 @@ impl From<ProviderIngestCheckpointExternalErrorV1> for ProviderIngestOutboxError
         }
     }
 }
-
 #[cfg(test)]
 #[allow(clippy::too_many_lines)]
 mod tests {
@@ -6598,7 +6329,6 @@ mod tests {
         },
         time::{Duration, Instant},
     };
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::AccountId,
@@ -6618,9 +6348,7 @@ mod tests {
         transaction::{FeePaymentIntent, TransactionBuilder, signed::MultisigSignatures},
     };
     use tempfile::{TempDir, tempdir};
-
     use super::*;
-
     fn test_network_id() -> iroha_data_model::NetworkId {
         iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,
@@ -6628,13 +6356,11 @@ mod tests {
             iroha_crypto::Hash::new(b"provider-ingest-outbox-test"),
         ))
     }
-
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             [seed; 32],
         )))
     }
-
     fn policy() -> ProviderIngestOutboxPolicyV1 {
         ProviderIngestOutboxPolicyV1 {
             max_active_entries: 16,
@@ -6650,46 +6376,39 @@ mod tests {
             max_status_page_size: 4,
         }
     }
-
     #[test]
     fn boxed_completion_codec_preserves_prior_bytes() {
         let completion = StoredCompletionDeliveryV1::default();
         let boxed = BoxedStoredCompletionDeliveryV1::new(completion.clone());
         let expected = norito::to_bytes(&completion).expect("encode prior completion layout");
         let actual = norito::to_bytes(&boxed).expect("encode boxed completion layout");
-
         assert_eq!(actual, expected);
         let decoded: BoxedStoredCompletionDeliveryV1 =
             norito::decode_from_bytes(&actual).expect("decode boxed completion layout");
         assert_eq!(decoded.as_ref(), &completion);
     }
-
     fn checkpoint_path(directory: &TempDir) -> PathBuf {
         fs::canonicalize(directory.path())
             .expect("canonical tempdir")
             .join(PROVIDER_INGEST_OUTBOX_FILE_V1)
     }
-
     fn cursor(height: u64) -> ProviderIngestFinalizedCursorV1 {
         ProviderIngestFinalizedCursorV1 {
             height,
             block_hash: [u8::try_from(height).unwrap_or(0xFE); 32],
         }
     }
-
     fn finalized_block_time_ms(cursor: ProviderIngestFinalizedCursorV1) -> u64 {
         cursor
             .height
             .checked_mul(1_000)
             .expect("fixture block time")
     }
-
     fn observe_finalized(outbox: &ProviderIngestOutbox, cursor: ProviderIngestFinalizedCursorV1) {
         outbox
             .observe_finalized_snapshot(cursor, finalized_block_time_ms(cursor))
             .expect("observe finalized fixture snapshot");
     }
-
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum TestCheckpointCasBehavior {
         Normal,
@@ -6698,19 +6417,16 @@ mod tests {
         UnchangedOk,
         UnchangedAmbiguous,
     }
-
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum TestCheckpointOperation {
         Qualification,
         LoadLatest,
         CompareAndSwap,
     }
-
     #[derive(Debug, Default)]
     struct TestCheckpointBlockState {
         operation: Option<TestCheckpointOperation>,
     }
-
     #[derive(Debug)]
     struct TestCheckpointRuntime {
         handle: String,
@@ -6726,7 +6442,6 @@ mod tests {
         load_latest_calls: AtomicUsize,
         compare_and_swap_calls: AtomicUsize,
     }
-
     impl TestCheckpointRuntime {
         fn new(seed: u8) -> Self {
             Self {
@@ -6745,7 +6460,6 @@ mod tests {
                 compare_and_swap_calls: AtomicUsize::new(0),
             }
         }
-
         fn binding(&self) -> ProviderIngestCheckpointProviderBindingV1 {
             ProviderIngestCheckpointProviderBindingV1 {
                 handle: self.handle.clone(),
@@ -6757,22 +6471,18 @@ mod tests {
                     .policy_digest,
             }
         }
-
         fn latest(&self) -> Option<ProviderIngestSealedCheckpointRecordV1> {
             self.latest.lock().expect("test checkpoint latest").clone()
         }
-
         fn replace_latest(&self, record: Option<ProviderIngestSealedCheckpointRecordV1>) {
             *self.latest.lock().expect("test checkpoint latest") = record;
         }
-
         fn set_next_cas_behavior(&self, behavior: TestCheckpointCasBehavior) {
             *self
                 .next_cas_behavior
                 .lock()
                 .expect("test checkpoint CAS behavior") = behavior;
         }
-
         fn set_qualification(
             &self,
             qualification: ProviderIngestCheckpointProviderQualificationV1,
@@ -6782,7 +6492,6 @@ mod tests {
                 .lock()
                 .expect("test checkpoint qualification") = qualification;
         }
-
         fn set_qualification_after_next_cas(
             &self,
             qualification: ProviderIngestCheckpointProviderQualificationV1,
@@ -6792,19 +6501,16 @@ mod tests {
                 .lock()
                 .expect("test post-CAS checkpoint qualification") = Some(qualification);
         }
-
         fn block_operation(&self, operation: TestCheckpointOperation) {
             self.blocked
                 .lock()
                 .expect("test checkpoint block state")
                 .operation = Some(operation);
         }
-
         fn block_load_after_next_cas(&self) {
             self.block_load_after_next_cas
                 .store(true, Ordering::Release);
         }
-
         fn release_blocked_operation(&self) {
             self.blocked
                 .lock()
@@ -6812,7 +6518,6 @@ mod tests {
                 .operation = None;
             self.blocked_changed.notify_all();
         }
-
         fn wait_if_blocked(&self, operation: TestCheckpointOperation) {
             let mut blocked = self.blocked.lock().expect("test checkpoint block state");
             while blocked.operation == Some(operation) {
@@ -6822,7 +6527,6 @@ mod tests {
                     .expect("test checkpoint block state");
             }
         }
-
         fn operation_calls(&self, operation: TestCheckpointOperation) -> usize {
             match operation {
                 TestCheckpointOperation::Qualification => {
@@ -6837,12 +6541,10 @@ mod tests {
             }
         }
     }
-
     impl ProviderIngestCheckpointRuntimeV1 for TestCheckpointRuntime {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -6856,7 +6558,6 @@ mod tests {
                 .map(|qualification| *qualification)
                 .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Unavailable)
         }
-
         fn load_latest(
             &self,
         ) -> Result<
@@ -6870,7 +6571,6 @@ mod tests {
                 .map(|latest| latest.clone())
                 .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Unavailable)
         }
-
         fn compare_and_swap_latest(
             &self,
             expected_revision: Option<[u8; 32]>,
@@ -6935,7 +6635,6 @@ mod tests {
             outcome
         }
     }
-
     fn open_sealed(
         directory: &TempDir,
         runtime: Arc<TestCheckpointRuntime>,
@@ -6947,14 +6646,12 @@ mod tests {
             runtime,
         )
     }
-
     fn deadline_policy() -> ProviderIngestOutboxPolicyV1 {
         ProviderIngestOutboxPolicyV1 {
             checkpoint_operation_timeout_ms: 750,
             ..policy()
         }
     }
-
     fn open_sealed_with_deadline(
         directory: &TempDir,
         runtime: Arc<TestCheckpointRuntime>,
@@ -6966,7 +6663,6 @@ mod tests {
             runtime,
         )
     }
-
     fn reopen_sealed_after_worker_release(
         directory: &TempDir,
         runtime: Arc<TestCheckpointRuntime>,
@@ -6981,7 +6677,6 @@ mod tests {
             }
         }
     }
-
     fn wait_for_checkpoint_sequence(runtime: &TestCheckpointRuntime, expected_sequence: u64) {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
@@ -6998,7 +6693,6 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
     }
-
     fn wait_for_operation_calls(
         runtime: &TestCheckpointRuntime,
         operation: TestCheckpointOperation,
@@ -7013,9 +6707,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
     }
-
     include!("provider_ingest_outbox/tests/sealed_checkpoint_lifecycle.rs");
-
     #[test]
     fn sealed_record_rejects_byte_digest_revision_and_lineage_tamper() {
         let checkpoint_bytes = encode_provider_ingest_checkpoint(
@@ -7049,7 +6741,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidSealedCheckpoint)
         );
     }
-
     #[test]
     fn provider_drift_substitution_and_test_markers_fail_closed() {
         let directory = tempdir().expect("checkpoint directory");
@@ -7063,7 +6754,6 @@ mod tests {
             Err(ProviderIngestOutboxError::CheckpointProviderIdentityMismatch)
         );
         drop(outbox);
-
         let substituted = Arc::new(TestCheckpointRuntime::new(0x77));
         let configured = ProviderIngestCheckpointProviderBindingV1 {
             handle: "sealed.sorafs.provider-ingest.configured".to_owned(),
@@ -7079,7 +6769,6 @@ mod tests {
             ),
             Err(ProviderIngestOutboxError::CheckpointProviderIdentityMismatch)
         ));
-
         let stale = Arc::new(TestCheckpointRuntime::new(0x7B));
         let stale_binding = ProviderIngestCheckpointProviderBindingV1 {
             handle: stale.handle.clone(),
@@ -7095,7 +6784,6 @@ mod tests {
             ),
             Err(ProviderIngestOutboxError::CheckpointProviderIdentityMismatch)
         ));
-
         let test_marked = Arc::new(TestCheckpointRuntime::new(0x78));
         let invalid_binding = ProviderIngestCheckpointProviderBindingV1 {
             handle: "sealed.sorafs.provider-ingest.test".to_owned(),
@@ -7112,7 +6800,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidCheckpointProviderBinding)
         ));
     }
-
     #[test]
     fn post_cas_provider_drift_is_ambiguous_and_poisoned() {
         let directory = tempdir().expect("checkpoint directory");
@@ -7121,7 +6808,6 @@ mod tests {
         runtime.set_qualification_after_next_cas(
             ProviderIngestCheckpointProviderQualificationV1::new(2, [0x7A; 32]),
         );
-
         assert_eq!(
             outbox.observe_finalized_snapshot(cursor(10), finalized_block_time_ms(cursor(10))),
             Err(ProviderIngestOutboxError::CheckpointAuthorityAmbiguous)
@@ -7134,7 +6820,6 @@ mod tests {
             2
         );
     }
-
     fn signer_policy(revision: u64) -> ProviderIngestCompletionSignerPolicyV1 {
         let digest_byte = u8::try_from(revision).unwrap_or(0xFE);
         ProviderIngestCompletionSignerPolicyV1 {
@@ -7144,7 +6829,6 @@ mod tests {
             policy_digest: [digest_byte; 32],
         }
     }
-
     fn authorization(order: u8, height: u64) -> FinalizedProviderIngestAuthorizationV1 {
         FinalizedProviderIngestAuthorizationV1::from_finalized_state(
             height,
@@ -7160,7 +6844,6 @@ mod tests {
         )
         .expect("authorization")
     }
-
     fn authorization_with_musubi_context(
         generic: &FinalizedProviderIngestAuthorizationV1,
         context: FinalizedProviderIngestMusubiContextV1,
@@ -7180,7 +6863,6 @@ mod tests {
         )
         .expect("Musubi authorization")
     }
-
     fn musubi_commitment(
         authorization: &FinalizedProviderIngestAuthorizationV1,
         seed: u8,
@@ -7209,7 +6891,6 @@ mod tests {
         commitment.validate().expect("valid Musubi commitment");
         commitment
     }
-
     fn verified_musubi_receipt(
         authorization: &FinalizedProviderIngestAuthorizationV1,
         commitment: MusubiArchiveCommitmentV1,
@@ -7221,7 +6902,6 @@ mod tests {
             MusubiVerificationLockDigestV1::new([0xC2; 32]),
         )
     }
-
     fn musubi_authorization_and_receipt(
         order: u8,
         height: u64,
@@ -7241,15 +6921,12 @@ mod tests {
         let receipt = verified_musubi_receipt(&authorization, commitment);
         (authorization, receipt)
     }
-
     fn owner(seed: u8) -> ProviderIngestClaimOwnerV1 {
         ProviderIngestClaimOwnerV1::new([seed; 32]).expect("owner")
     }
-
     fn manifest_id(authorization: &FinalizedProviderIngestAuthorizationV1) -> String {
         hex::encode(authorization.manifest_digest())
     }
-
     fn signed_completion_for(
         provider_id: [u8; 32],
         order_id: [u8; 32],
@@ -7264,7 +6941,6 @@ mod tests {
             seed,
         )
     }
-
     fn signed_completion_for_at(
         provider_id: [u8; 32],
         order_id: [u8; 32],
@@ -7281,7 +6957,6 @@ mod tests {
             signer_policy(1),
         )
     }
-
     fn signed_completion_for_at_with_policy(
         provider_id: [u8; 32],
         order_id: [u8; 32],
@@ -7315,7 +6990,6 @@ mod tests {
         builder.set_ttl(Duration::from_secs(30));
         builder.try_sign(key.private_key()).expect("sign")
     }
-
     fn signed_completion(
         authorization: &FinalizedProviderIngestAuthorizationV1,
         completion_epoch: u64,
@@ -7328,7 +7002,6 @@ mod tests {
             seed,
         )
     }
-
     fn signed_completion_at(
         authorization: &FinalizedProviderIngestAuthorizationV1,
         completion_epoch: u64,
@@ -7343,7 +7016,6 @@ mod tests {
             seed,
         )
     }
-
     fn signed_completion_with_policy_at(
         authorization: &FinalizedProviderIngestAuthorizationV1,
         completion_epoch: u64,
@@ -7360,7 +7032,6 @@ mod tests {
             completion_signer_policy,
         )
     }
-
     fn enqueue_and_store_local(
         outbox: &ProviderIngestOutbox,
         authorization: &FinalizedProviderIngestAuthorizationV1,
@@ -7381,7 +7052,6 @@ mod tests {
             .mark_local_stored(&claim, now_ms + 1, manifest_id(authorization))
             .expect("mark local");
     }
-
     fn completion_context(
         transaction: &SignedTransaction,
         completion_epoch: u64,
@@ -7399,7 +7069,6 @@ mod tests {
             expected_payload: transaction.payload().clone(),
         }
     }
-
     fn claim_for_transaction(
         outbox: &ProviderIngestOutbox,
         job_id: [u8; 32],
@@ -7417,7 +7086,6 @@ mod tests {
             )
             .expect("claim completion signing")
     }
-
     fn stored_completion(
         outbox: &ProviderIngestOutbox,
         job_id: [u8; 32],
@@ -7434,7 +7102,6 @@ mod tests {
         };
         completion.as_ref().clone()
     }
-
     fn begin_submission(
         outbox: &ProviderIngestOutbox,
         job_id: [u8; 32],
@@ -7458,12 +7125,10 @@ mod tests {
             now_ms,
         )
     }
-
     fn completed_by(seed: u8) -> AccountId {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key");
         AccountId::new(key.public_key().clone())
     }
-
     fn finalized_evidence(
         authorization: &FinalizedProviderIngestAuthorizationV1,
         completion_epoch: u64,
@@ -7480,7 +7145,6 @@ mod tests {
             committed_transaction_hash,
         }
     }
-
     fn cancellation_evidence(
         authorization: &FinalizedProviderIngestAuthorizationV1,
         reason: ProviderIngestCancellationReasonV1,
@@ -7494,7 +7158,6 @@ mod tests {
             reason,
         }
     }
-
     #[test]
     fn completion_signer_policy_validity_is_const_and_requires_nonzero_components() {
         const VALID: bool = ProviderIngestCompletionSignerPolicyV1 {
@@ -7546,7 +7209,6 @@ mod tests {
             policy_digest: [2; 32],
         }
         .is_valid();
-
         const _: [(); 7] = [(); VALID as usize
             + (!ZERO_POLICY_ID) as usize
             + (!ZERO_REVISION) as usize
@@ -7554,7 +7216,6 @@ mod tests {
             + (!REVISION_ONE_WITH_PREDECESSOR) as usize
             + (!SUCCESSOR_WITHOUT_PREDECESSOR) as usize
             + (!SUCCESSOR_WITH_ZERO_PREDECESSOR) as usize];
-
         let mut sparse_policy = ProviderIngestCompletionSignerPolicyV1 {
             policy_id: [0; 32],
             revision: 1,
@@ -7565,7 +7226,6 @@ mod tests {
         sparse_policy.policy_digest[0] = 1;
         assert!(sparse_policy.is_valid());
     }
-
     #[test]
     fn repeated_unchecked_authority_observation_is_idempotent() {
         let owner = completed_by(0xA0);
@@ -7579,7 +7239,6 @@ mod tests {
             ),
             Ok(true)
         );
-
         let retained = completion.clone();
         assert_eq!(
             observe_finalized_completion_authority(
@@ -7592,7 +7251,6 @@ mod tests {
         );
         assert_eq!(completion, retained);
     }
-
     #[test]
     fn checkpoint_finalized_high_water_requires_a_complete_nonzero_time_pair() {
         let mut checkpoint = ProviderIngestOutboxCheckpointV1::default();
@@ -7600,25 +7258,21 @@ mod tests {
             validate_checkpoint_finalized_high_water(&checkpoint),
             Ok(())
         );
-
         checkpoint.finalized_cursor_high_water = Some(cursor(8));
         assert_eq!(
             validate_checkpoint_finalized_high_water(&checkpoint),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         );
-
         checkpoint.finalized_block_time_ms_high_water = Some(8_000);
         assert_eq!(
             validate_checkpoint_finalized_high_water(&checkpoint),
             Ok(())
         );
-
         checkpoint.finalized_block_time_ms_high_water = Some(0);
         assert_eq!(
             validate_checkpoint_finalized_high_water(&checkpoint),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         );
-
         checkpoint.finalized_cursor_high_water = None;
         checkpoint.finalized_block_time_ms_high_water = Some(8_000);
         assert_eq!(
@@ -7626,7 +7280,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         );
     }
-
     #[test]
     fn policy_bounds_worst_case_checkpoint_capacity() {
         let defaults = ProviderIngestOutboxPolicyV1::default();
@@ -7634,7 +7287,6 @@ mod tests {
         assert_eq!(defaults.checkpoint_max_bytes, 160 * 1024 * 1024);
         assert_eq!(defaults.checkpoint_operation_timeout_ms, 30_000);
         defaults.validate().expect("default capacity fits");
-
         let mut invalid_checkpoint_deadline = policy();
         invalid_checkpoint_deadline.checkpoint_operation_timeout_ms = 0;
         assert_eq!(
@@ -7647,7 +7299,6 @@ mod tests {
             invalid_checkpoint_deadline.validate(),
             Err(ProviderIngestOutboxError::InvalidPolicy)
         );
-
         let mut exact = policy();
         exact.max_active_entries = 1;
         exact.max_terminal_entries = 1;
@@ -7668,13 +7319,11 @@ mod tests {
                 + provider_ingest_outbox_defaults::TERMINAL_ENTRY_CANONICAL_OVERHEAD_BYTES_V1
         );
         exact.validate().expect("exact capacity boundary fits");
-
         exact.checkpoint_max_bytes -= 1;
         assert_eq!(
             exact.validate(),
             Err(ProviderIngestOutboxError::InvalidPolicy)
         );
-
         let mut overflow = policy();
         overflow.max_active_entries = usize::MAX;
         overflow.checkpoint_max_bytes = u64::MAX;
@@ -7683,7 +7332,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidPolicy)
         );
     }
-
     #[test]
     fn canonical_active_fixture_fits_payload_and_structural_capacity_budgets() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
@@ -7699,7 +7347,6 @@ mod tests {
         outbox
             .store_completion_transaction(&signing_claim, transaction)
             .expect("store signed completion fixture");
-
         let checkpoint = outbox.state.lock().unwrap().checkpoint.clone();
         let active_bytes =
             norito::to_bytes(&checkpoint.active[0]).expect("encode canonical active entry");
@@ -7718,7 +7365,6 @@ mod tests {
         encode_provider_ingest_checkpoint(&checkpoint, policy())
             .expect("canonical active fixture fits configured checkpoint");
     }
-
     #[test]
     fn canonical_terminal_fixture_fits_derived_structural_charge_and_capacity_boundary() {
         assert!(
@@ -7758,7 +7404,6 @@ mod tests {
             authorization: authorization.clone(),
             outcome: outcome.clone(),
         };
-
         let authorization_bytes =
             norito::to_bytes(&authorization).expect("encode maximum-field authorization");
         let completed_by_bytes =
@@ -7802,7 +7447,6 @@ mod tests {
             terminal_len
                 <= provider_ingest_outbox_defaults::TERMINAL_ENTRY_CANONICAL_OVERHEAD_BYTES_V1
         );
-
         let checkpoint = ProviderIngestOutboxCheckpointV1 {
             next_sequence: 2,
             finalized_cursor_high_water: Some(cursor(8)),
@@ -7817,7 +7461,6 @@ mod tests {
                 <= provider_ingest_outbox_defaults::CHECKPOINT_CANONICAL_OVERHEAD_BYTES_V1
                     + provider_ingest_outbox_defaults::TERMINAL_ENTRY_CANONICAL_OVERHEAD_BYTES_V1
         );
-
         let mut boundary = policy();
         boundary.max_active_entries = 1;
         boundary.max_terminal_entries = 1;
@@ -7842,7 +7485,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidPolicy)
         );
     }
-
     #[test]
     fn stable_job_identity_excludes_advancing_admission_cursor() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
@@ -7868,7 +7510,6 @@ mod tests {
                 .admission_finalized_cursor,
             cursor(7)
         );
-
         let mut same_height_fork = first.clone();
         same_height_fork.admission_finalized_cursor.block_hash = [0xEE; 32];
         assert_eq!(
@@ -7876,7 +7517,6 @@ mod tests {
             Err(ProviderIngestOutboxError::AdmissionEvidenceConflict)
         );
     }
-
     #[test]
     fn duplicate_source_claim_is_rejected_and_expired_lease_is_reclaimed() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
@@ -7890,7 +7530,6 @@ mod tests {
             outbox.claim_source(authorization.job_id(), owner(2), 109, cursor(7)),
             Err(ProviderIngestOutboxError::LeaseAlreadyHeld)
         );
-
         let second = outbox
             .claim_source(authorization.job_id(), owner(2), 110, cursor(7))
             .expect("expired lease is reclaimable");
@@ -7911,7 +7550,6 @@ mod tests {
             .mark_local_stored(&second, 111, manifest_id(&authorization))
             .unwrap();
     }
-
     #[test]
     fn claim_next_source_is_sequence_ordered_and_single_flight() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
@@ -7919,7 +7557,6 @@ mod tests {
         let second = authorization(0x61, 7);
         outbox.enqueue(first.clone()).unwrap();
         outbox.enqueue(second.clone()).unwrap();
-
         let first_claim = outbox
             .claim_next_source(owner(1), 100, cursor(7))
             .unwrap()
@@ -7937,7 +7574,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn retry_backoff_is_capped_and_retry_exhausted_is_reachable() {
         let mut bounded = policy();
@@ -7945,7 +7581,6 @@ mod tests {
         let outbox = ProviderIngestOutbox::in_memory(bounded).expect("outbox");
         let authorization = authorization(0x53, 7);
         outbox.enqueue(authorization.clone()).unwrap();
-
         let mut claim = outbox
             .claim_source(authorization.job_id(), owner(1), 100, cursor(7))
             .unwrap();
@@ -8000,14 +7635,12 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn every_crash_state_survives_or_recovers_safely() {
         let directory = tempdir().expect("tempdir");
         let path = checkpoint_path(&directory);
         let initial_authorization = authorization(0x54, 7);
         let job_id = initial_authorization.job_id();
-
         let mut outbox = ProviderIngestOutbox::open(&path, policy()).expect("open");
         outbox.enqueue(initial_authorization.clone()).unwrap();
         drop(outbox);
@@ -8016,7 +7649,6 @@ mod tests {
             outbox.status(job_id).unwrap().state,
             ProviderIngestDeliveryStateV1::PendingSource { attempts: 0 }
         ));
-
         let first_claim = outbox
             .claim_source(job_id, owner(1), 100, cursor(7))
             .unwrap();
@@ -8026,7 +7658,6 @@ mod tests {
             outbox.status(job_id).unwrap().state,
             ProviderIngestDeliveryStateV1::SourceClaimed { generation: 1, .. }
         ));
-
         let retry = outbox
             .schedule_source_retry(
                 &first_claim,
@@ -8052,7 +7683,6 @@ mod tests {
                 ..
             }
         ));
-
         let second_claim = outbox
             .claim_source(job_id, owner(2), 111, cursor(8))
             .unwrap();
@@ -8068,7 +7698,6 @@ mod tests {
                 ..
             }
         ));
-
         let interrupted_transaction = signed_completion(&initial_authorization, 8, 8);
         let interrupted_claim =
             claim_for_transaction(&outbox, job_id, &interrupted_transaction, 8, 113, cursor(8));
@@ -8097,7 +7726,6 @@ mod tests {
             outbox.store_completion_transaction(&interrupted_claim, interrupted_transaction),
             Err(ProviderIngestOutboxError::InvalidSigningClaim)
         );
-
         let transaction = signed_completion(&initial_authorization, 9, 8);
         let signing_claim = claim_for_transaction(&outbox, job_id, &transaction, 9, 143, cursor(9));
         let transaction_hash = outbox
@@ -8115,7 +7743,6 @@ mod tests {
                 ..
             } if hash == transaction_hash
         ));
-
         begin_submission(&outbox, job_id, transaction_hash, 144).unwrap();
         drop(outbox);
         outbox = ProviderIngestOutbox::open(&path, policy()).expect("ambiguous restart");
@@ -8126,7 +7753,6 @@ mod tests {
                 ..
             }
         ));
-
         outbox
             .mark_completion_submitted(job_id, transaction_hash)
             .unwrap();
@@ -8139,7 +7765,6 @@ mod tests {
                 ..
             }
         ));
-
         observe_finalized(&outbox, cursor(10));
         let evidence = finalized_evidence(&initial_authorization, 9, Some(transaction_hash), 10);
         outbox.mark_finalized_complete(job_id, evidence).unwrap();
@@ -8153,7 +7778,6 @@ mod tests {
                 ..
             } if hash == transaction_hash
         ));
-
         let cancelled = authorization(0x5D, 7);
         outbox.enqueue(cancelled.clone()).unwrap();
         outbox
@@ -8197,7 +7821,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn finalized_cursor_high_water_survives_restart_and_rejects_substitution() {
         let directory = tempdir().expect("tempdir");
@@ -8226,7 +7849,6 @@ mod tests {
             Err(ProviderIngestOutboxError::StaleFinalizedCursor)
         );
         drop(outbox);
-
         let reopened = ProviderIngestOutbox::open(&path, policy()).expect("restart");
         assert_eq!(
             reopened.finalized_cursor_high_water().unwrap(),
@@ -8260,7 +7882,6 @@ mod tests {
             Some(cursor(9))
         );
     }
-
     #[test]
     fn retained_finalized_snapshot_validation_fails_closed() {
         let mut checkpoint = ProviderIngestOutboxCheckpointV1::default();
@@ -8272,34 +7893,29 @@ mod tests {
             validate_retained_finalized_snapshot(&checkpoint, None),
             Ok(None)
         );
-
         checkpoint.finalized_cursor_high_water = Some(cursor(8));
         assert_eq!(
             validate_retained_finalized_snapshot(&checkpoint, Some(cursor(8))),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         );
-
         checkpoint.finalized_cursor_high_water = None;
         checkpoint.finalized_block_time_ms_high_water = Some(8_000);
         assert_eq!(
             validate_retained_finalized_snapshot(&checkpoint, Some(cursor(8))),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         );
-
         checkpoint.finalized_cursor_high_water = Some(cursor(8));
         checkpoint.finalized_block_time_ms_high_water = Some(0);
         assert_eq!(
             validate_retained_finalized_snapshot(&checkpoint, Some(cursor(8))),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         );
-
         checkpoint.finalized_cursor_high_water = Some(cursor(0));
         checkpoint.finalized_block_time_ms_high_water = Some(8_000);
         assert_eq!(
             validate_retained_finalized_snapshot(&checkpoint, Some(cursor(8))),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         );
-
         checkpoint.finalized_cursor_high_water = Some(cursor(8));
         assert_eq!(
             validate_retained_finalized_snapshot(&checkpoint, Some(cursor(9))),
@@ -8310,7 +7926,6 @@ mod tests {
             Ok(Some((cursor(8), 8_000)))
         );
     }
-
     #[test]
     fn finalized_transition_rejects_malformed_snapshot_before_absent_job_lookup() {
         let authorization = authorization(0x7A, 7);
@@ -8342,7 +7957,6 @@ mod tests {
             assert_eq!(outbox.state.lock().unwrap().checkpoint, malformed);
         }
     }
-
     #[test]
     fn finalized_transitions_require_snapshot_before_absent_job_lookup() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
@@ -8354,7 +7968,6 @@ mod tests {
             8,
         );
         let empty = outbox.state.lock().unwrap().checkpoint.clone();
-
         assert_eq!(
             outbox.mark_completion_transaction_rejected(
                 authorization.job_id(),
@@ -8374,7 +7987,6 @@ mod tests {
         );
         assert_eq!(outbox.state.lock().unwrap().checkpoint, empty);
     }
-
     #[test]
     fn persistent_outbox_holds_one_hardened_writer_lock_for_its_lifetime() {
         let directory = tempdir().expect("tempdir");
@@ -8387,11 +7999,9 @@ mod tests {
         drop(first);
         let reopened = ProviderIngestOutbox::open(&path, policy()).expect("lock released");
         drop(reopened);
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::{PermissionsExt as _, symlink};
-
             let lock_path = provider_ingest_lock_path(&path).expect("lock path");
             fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o644))
                 .expect("weaken lock permissions");
@@ -8401,7 +8011,6 @@ mod tests {
             ));
             fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))
                 .expect("restore lock permissions");
-
             let alias = directory.path().join("provider-ingest-lock-alias");
             fs::hard_link(&lock_path, &alias).expect("hard-link lock");
             assert!(matches!(
@@ -8409,7 +8018,6 @@ mod tests {
                 Err(ProviderIngestOutboxError::Checkpoint(_))
             ));
             fs::remove_file(&alias).expect("remove hard-link alias");
-
             fs::remove_file(&lock_path).expect("remove regular lock");
             let target = directory.path().join("provider-ingest-lock-target");
             fs::write(&target, b"").expect("write lock target");
@@ -8422,7 +8030,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn completion_ambiguity_absence_rejection_and_duplicates_are_safe() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
@@ -8449,7 +8056,6 @@ mod tests {
         outbox
             .mark_completion_submitted(job_id, first_hash)
             .expect("duplicate submitted acknowledgement is idempotent");
-
         observe_finalized(&outbox, cursor(9));
         assert_eq!(
             outbox
@@ -8508,7 +8114,6 @@ mod tests {
             outbox.claim_completion_signing(job_id, second_context.clone(), 240),
             Err(ProviderIngestOutboxError::RetryNotDue)
         );
-
         let second_claim = outbox
             .claim_completion_signing(job_id, second_context, 241)
             .unwrap();
@@ -8536,7 +8141,6 @@ mod tests {
         );
         assert_eq!(outbox.state.lock().unwrap().checkpoint, finalized);
     }
-
     #[test]
     fn completion_transaction_is_bound_to_provider_order_and_epoch() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
@@ -8545,7 +8149,6 @@ mod tests {
         enqueue_and_store_local(&outbox, &authorization, 100);
         let expected = signed_completion(&authorization, 8, 8);
         let signing_claim = claim_for_transaction(&outbox, job_id, &expected, 8, 102, cursor(8));
-
         let wrong_provider = signed_completion_for([0x99; 32], authorization.order_id(), 8, 8);
         assert_eq!(
             outbox.store_completion_transaction(&signing_claim, wrong_provider),
@@ -8563,7 +8166,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidSignedTransaction)
         );
     }
-
     #[test]
     fn completion_transaction_rejects_envelope_sidecars() {
         let authorization = authorization(0x57, 7);
@@ -8572,7 +8174,6 @@ mod tests {
         assert!(
             validate_completion_transaction(&authorization, &context, &expected, policy()).is_ok()
         );
-
         let key = KeyPair::try_from_seed(vec![8; 32], Algorithm::Ed25519).expect("key");
         let attachments = ProofAttachmentList::try_from(vec![ProofAttachment::new_ref(
             "halo2/ipa".into(),
@@ -8589,7 +8190,6 @@ mod tests {
             validate_completion_transaction(&authorization, &context, &attached, policy()),
             Err(ProviderIngestOutboxError::InvalidSignedTransaction)
         );
-
         let mut multisig = expected.clone();
         multisig.set_multisig_signatures(MultisigSignatures::new(Vec::new()));
         assert_eq!(
@@ -8597,7 +8197,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidSignedTransaction)
         );
     }
-
     #[test]
     fn rejected_completion_reaches_retry_exhausted_terminal_state() {
         let mut one_attempt = policy();
@@ -8636,7 +8235,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn retry_exhaustion_rejects_non_retryable_failure_class() {
         let configured_policy = policy();
@@ -8655,7 +8253,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         );
     }
-
     #[test]
     fn protected_terminal_capacity_fails_closed_until_retention_expires() {
         let mut bounded = policy();
@@ -8699,7 +8296,6 @@ mod tests {
             outbox.status(protected.job_id()).unwrap().state,
             ProviderIngestDeliveryStateV1::PendingSource { .. }
         ));
-
         let completed = authorization(5, 7);
         assert_eq!(
             outbox.reconcile_finalized_completion(
@@ -8713,7 +8309,6 @@ mod tests {
             Err(ProviderIngestOutboxError::UnknownJob)
         );
         assert_eq!(outbox.state.lock().unwrap().checkpoint.terminal.len(), 2);
-
         let active = authorization(4, 7);
         outbox.enqueue(active.clone()).unwrap();
         observe_finalized(&outbox, cursor(20));
@@ -8734,7 +8329,6 @@ mod tests {
         ));
         assert_eq!(outbox.state.lock().unwrap().checkpoint.active.len(), 1);
     }
-
     #[test]
     fn status_inventory_is_bounded_and_paginated() {
         let mut bounded = policy();
@@ -8754,7 +8348,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidPageLimit)
         );
     }
-
     #[test]
     fn aggregate_counts_are_exact_durable_and_fail_closed_on_an_invalid_seal() {
         let directory = tempdir().expect("tempdir");
@@ -8764,7 +8357,6 @@ mod tests {
             outbox.aggregate_counts().unwrap(),
             ProviderIngestOutboxCountsV1::default()
         );
-
         let active = authorization(0x31, 7);
         let cancelled = authorization(0x32, 7);
         let dead_letter = authorization(0x33, 7);
@@ -8800,18 +8392,15 @@ mod tests {
             dead_letters: 1,
         };
         assert_eq!(outbox.aggregate_counts().unwrap(), expected);
-
         drop(outbox);
         outbox = ProviderIngestOutbox::open(&path, policy()).expect("restart");
         assert_eq!(outbox.aggregate_counts().unwrap(), expected);
-
         outbox.state.lock().unwrap().aggregate_counts.active = 2;
         assert_eq!(
             outbox.aggregate_counts(),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         );
     }
-
     #[test]
     fn malformed_corrupt_noncanonical_and_retired_checkpoints_fail_closed() {
         #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
@@ -8819,20 +8408,17 @@ mod tests {
             version: u8,
             entries: Vec<u8>,
         }
-
         let directory = tempdir().expect("tempdir");
         let path = checkpoint_path(&directory);
         let outbox = ProviderIngestOutbox::open(&path, policy()).unwrap();
         outbox.enqueue(authorization(0x57, 7)).unwrap();
         drop(outbox);
         let valid = fs::read(&path).unwrap();
-
         fs::write(&path, &valid[..valid.len() / 2]).unwrap();
         assert!(matches!(
             ProviderIngestOutbox::open(&path, policy()),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         ));
-
         let mut corrupt = valid.clone();
         corrupt[0] ^= 0xFF;
         fs::write(&path, corrupt).unwrap();
@@ -8840,7 +8426,6 @@ mod tests {
             ProviderIngestOutbox::open(&path, policy()),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         ));
-
         let mut noncanonical = valid.clone();
         noncanonical.push(0);
         fs::write(&path, noncanonical).unwrap();
@@ -8848,7 +8433,6 @@ mod tests {
             ProviderIngestOutbox::open(&path, policy()),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         ));
-
         let retired = norito::to_bytes(&RetiredPreReleaseCheckpointV1 {
             version: 1,
             entries: Vec::new(),
@@ -8859,7 +8443,6 @@ mod tests {
             ProviderIngestOutbox::open(&path, policy()),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         ));
-
         fs::write(&path, &valid).unwrap();
         let restored = ProviderIngestOutbox::open(&path, policy()).unwrap();
         let mut retired_layout = restored.state.lock().unwrap().checkpoint.clone();
@@ -8871,7 +8454,6 @@ mod tests {
             ProviderIngestOutbox::open(&path, policy()),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         ));
-
         fs::write(&path, &valid).unwrap();
         let restored = ProviderIngestOutbox::open(&path, policy()).unwrap();
         let mut malformed = restored.state.lock().unwrap().checkpoint.clone();
@@ -8882,7 +8464,6 @@ mod tests {
             ProviderIngestOutbox::open(&path, policy()),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         ));
-
         let mut tiny = policy();
         tiny.max_active_entries = 1;
         tiny.max_terminal_entries = 1;
@@ -8909,7 +8490,6 @@ mod tests {
             Err(ProviderIngestOutboxError::Checkpoint(_))
         ));
     }
-
     #[test]
     fn retired_v2_checkpoint_magic_and_layout_are_rejected() {
         let directory = tempdir().expect("tempdir");
@@ -8920,7 +8500,6 @@ mod tests {
         retired_v2.magic = *b"SORAFSINGESTV2\0\0";
         retired_v2.version = 2;
         drop(outbox);
-
         fs::write(
             &path,
             norito::to_bytes(&retired_v2).expect("encode retired V2 layout"),
@@ -8931,7 +8510,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         ));
     }
-
     #[test]
     fn retired_v3_checkpoint_magic_and_layout_are_rejected() {
         let directory = tempdir().expect("tempdir");
@@ -8942,7 +8520,6 @@ mod tests {
         retired_v3.magic = *b"SORAFSINGESTV3\0\0";
         retired_v3.version = 3;
         drop(outbox);
-
         fs::write(
             &path,
             norito::to_bytes(&retired_v3).expect("encode retired V3 layout"),
@@ -8953,7 +8530,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         ));
     }
-
     #[test]
     fn retired_v4_checkpoint_magic_and_layout_are_rejected() {
         let directory = tempdir().expect("tempdir");
@@ -8964,7 +8540,6 @@ mod tests {
         retired_v4.magic = *b"SORAFSINGESTV4\0\0";
         retired_v4.version = 4;
         drop(outbox);
-
         fs::write(
             &path,
             norito::to_bytes(&retired_v4).expect("encode retired V4 layout"),
@@ -8975,7 +8550,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         ));
     }
-
     #[test]
     fn musubi_context_is_bounded_and_separates_job_identity() {
         let generic = authorization(0x5A, 7);
@@ -8986,12 +8560,10 @@ mod tests {
         assert_eq!(first_context.network_id(), &network_id(0x41));
         assert_eq!(first_context.archive_id(), commitment.archive_id());
         first_context.validate().expect("valid bounded context");
-
         let encoded = norito::to_bytes(&first_context).expect("encode context");
         let decoded: FinalizedProviderIngestMusubiContextV1 =
             norito::decode_from_bytes(&encoded).expect("decode context");
         assert_eq!(decoded, first_context);
-
         let first = authorization_with_musubi_context(&generic, first_context.clone());
         let second_context =
             FinalizedProviderIngestMusubiContextV1::new(network_id(0x42), commitment.archive_id())
@@ -9001,7 +8573,6 @@ mod tests {
         assert_ne!(first.job_id(), second.job_id());
         assert!(!generic.same_binding(&first));
         assert!(!first.same_binding(&second));
-
         let mut unmarked_network = first_context.clone();
         unmarked_network.network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; 32])),
@@ -9017,12 +8588,10 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidAuthorization)
         );
     }
-
     #[test]
     fn generic_and_musubi_local_receipt_pairing_is_exact() {
         let (musubi, receipt) = musubi_authorization_and_receipt(0x5B, 7, 0x32);
         let generic = authorization(0x5B, 7);
-
         let generic_outbox = ProviderIngestOutbox::in_memory(policy()).expect("generic outbox");
         generic_outbox
             .enqueue(generic.clone())
@@ -9042,7 +8611,6 @@ mod tests {
         generic_outbox
             .mark_local_stored(&generic_claim, 101, manifest_id(&generic))
             .expect("store generic without receipt");
-
         let musubi_outbox = ProviderIngestOutbox::in_memory(policy()).expect("Musubi outbox");
         observe_finalized(&musubi_outbox, cursor(7));
         musubi_outbox
@@ -9074,7 +8642,6 @@ mod tests {
                 ..
             }
         ));
-
         observe_finalized(&musubi_outbox, cursor(8));
         musubi_outbox
             .mark_finalized_complete(musubi.job_id(), finalized_evidence(&musubi, 8, None, 8))
@@ -9097,14 +8664,12 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn private_musubi_receipt_checkpoint_roundtrip_preserves_public_projection() {
         let directory = tempdir().expect("tempdir");
         let path = checkpoint_path(&directory);
         let (authorization, receipt) = musubi_authorization_and_receipt(0x60, 7, 0x36);
         let job_id = authorization.job_id();
-
         let outbox = ProviderIngestOutbox::open(&path, policy()).expect("outbox");
         observe_finalized(&outbox, cursor(7));
         outbox
@@ -9122,7 +8687,6 @@ mod tests {
             )
             .expect("persist private receipt DTO");
         drop(outbox);
-
         let restored = ProviderIngestOutbox::open(&path, policy()).expect("restore local state");
         let ProviderIngestDeliveryStateV1::LocalStored {
             musubi_bundle: Some(local_receipt),
@@ -9132,13 +8696,11 @@ mod tests {
             panic!("restored Musubi state must project its opaque receipt");
         };
         assert_eq!(*local_receipt, receipt);
-
         observe_finalized(&restored, cursor(8));
         restored
             .mark_finalized_complete(job_id, finalized_evidence(&authorization, 8, None, 8))
             .expect("finalize restored Musubi state");
         drop(restored);
-
         let restored = ProviderIngestOutbox::open(&path, policy()).expect("restore terminal state");
         let ProviderIngestDeliveryStateV1::FinalizedCompleted {
             musubi_bundle: Some(terminal_receipt),
@@ -9149,7 +8711,6 @@ mod tests {
         };
         assert_eq!(*terminal_receipt, receipt);
     }
-
     #[test]
     fn checkpoint_rejects_future_or_postcompletion_receipt_cursor() {
         let (authorization, receipt) = musubi_authorization_and_receipt(0x61, 7, 0x37);
@@ -9165,7 +8726,6 @@ mod tests {
         outbox
             .mark_local_stored_verified(&claim, 101, manifest_id(&authorization), Some(receipt))
             .expect("store exact Musubi receipt");
-
         let mut future = outbox.state.lock().unwrap().checkpoint.clone();
         let StoredProviderIngestStateV1::LocalStored {
             musubi_bundle: Some(receipt),
@@ -9179,7 +8739,6 @@ mod tests {
             validate_checkpoint(&future, policy()),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         );
-
         outbox
             .mark_finalized_complete(job_id, finalized_evidence(&authorization, 8, None, 8))
             .expect("finalize Musubi receipt at height eight");
@@ -9198,7 +8757,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         );
     }
-
     #[test]
     fn musubi_receipt_context_substitution_is_rejected() {
         let (original, receipt) = musubi_authorization_and_receipt(0x5C, 7, 0x33);
@@ -9211,7 +8769,6 @@ mod tests {
         let substituted =
             authorization_with_musubi_context(&authorization(0x5C, 7), substituted_context);
         assert_ne!(original.job_id(), substituted.job_id());
-
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
         outbox
             .enqueue(substituted.clone())
@@ -9229,12 +8786,10 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidAuthorization)
         );
     }
-
     #[test]
     fn checkpoint_validation_rejects_musubi_receipt_shape_substitution() {
         let (musubi, receipt) = musubi_authorization_and_receipt(0x5D, 7, 0x34);
         let generic = authorization(0x5D, 7);
-
         let generic_outbox = ProviderIngestOutbox::in_memory(policy()).expect("generic outbox");
         generic_outbox
             .enqueue(generic.clone())
@@ -9256,7 +8811,6 @@ mod tests {
             validate_checkpoint(&generic_checkpoint, policy()),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         );
-
         let musubi_outbox = ProviderIngestOutbox::in_memory(policy()).expect("Musubi outbox");
         observe_finalized(&musubi_outbox, cursor(7));
         musubi_outbox
@@ -9280,7 +8834,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         );
     }
-
     #[test]
     fn terminal_without_local_manifest_permits_no_receipt_only() {
         let (musubi, receipt) = musubi_authorization_and_receipt(0x5E, 7, 0x35);
@@ -9301,7 +8854,6 @@ mod tests {
                 ..
             }
         ));
-
         let mut substituted = outbox.state.lock().unwrap().checkpoint.clone();
         let StoredProviderIngestTerminalOutcomeV1::FinalizedCompleted { musubi_bundle, .. } =
             &mut substituted.terminal[0].outcome
@@ -9314,7 +8866,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         );
     }
-
     #[test]
     fn generic_local_and_terminal_rows_remain_receipt_free() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
@@ -9334,7 +8885,6 @@ mod tests {
                 ..
             }
         ));
-
         observe_finalized(&outbox, cursor(8));
         outbox
             .mark_finalized_complete(job_id, finalized_evidence(&authorization, 8, None, 8))
@@ -9347,7 +8897,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn illegal_transitions_and_stale_material_are_rejected() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
@@ -9360,7 +8909,6 @@ mod tests {
             outbox.claim_completion_signing(job_id, context, 100),
             Err(ProviderIngestOutboxError::InvalidTransition)
         );
-
         let claim = outbox
             .claim_source(job_id, owner(1), 100, cursor(7))
             .unwrap();
@@ -9383,7 +8931,6 @@ mod tests {
         outbox
             .mark_local_stored(&claim, 101, manifest_id(&authorization))
             .unwrap();
-
         let signing_claim = claim_for_transaction(&outbox, job_id, &transaction, 8, 102, cursor(8));
         let transaction_hash = outbox
             .store_completion_transaction(&signing_claim, transaction)
@@ -9409,7 +8956,6 @@ mod tests {
             Err(ProviderIngestOutboxError::UnknownJob)
         );
     }
-
     #[test]
     fn uncertain_durability_poison_is_fail_closed() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
@@ -9423,7 +8969,6 @@ mod tests {
             Err(ProviderIngestOutboxError::DurabilityPoisoned)
         );
     }
-
     #[test]
     fn checkpoint_validation_rejects_signed_transaction_substitution() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
@@ -9436,7 +8981,6 @@ mod tests {
         outbox
             .store_completion_transaction(&signing_claim, transaction)
             .unwrap();
-
         let mut checkpoint = outbox.state.lock().unwrap().checkpoint.clone();
         let completion = local_completion_mut(&mut checkpoint.active[0]).unwrap();
         let substituted = signed_completion_for([0x99; 32], authorization.order_id(), 8, 9);
@@ -9446,7 +8990,6 @@ mod tests {
             validate_checkpoint(&checkpoint, policy()),
             Err(ProviderIngestOutboxError::InvalidSignedTransaction)
         );
-
         let mut substituted_context = outbox.state.lock().unwrap().checkpoint.clone();
         let completion = local_completion_mut(&mut substituted_context.active[0]).unwrap();
         completion
@@ -9459,7 +9002,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidSignedTransaction)
         );
     }
-
     #[test]
     fn terminal_finalization_requires_this_provider_not_only_order_completion() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
@@ -9475,7 +9017,6 @@ mod tests {
         outbox
             .mark_completion_submitted(job_id, transaction_hash)
             .unwrap();
-
         observe_finalized(&outbox, cursor(9));
         let mut other_provider = finalized_evidence(&authorization, 8, Some(transaction_hash), 9);
         other_provider.provider_id = [0x99; 32];
@@ -9491,7 +9032,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn source_lease_renewal_is_durable_and_invalidates_the_previous_token() {
         let directory = tempdir().expect("tempdir");
@@ -9512,12 +9052,10 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidSourceClaim)
         );
         drop(outbox);
-
         let reopened = ProviderIngestOutbox::open(&path, policy()).expect("reopen");
         reopened
             .mark_local_stored(&renewed, 106, manifest_id(&initial_authorization))
             .expect("renewed token survives restart");
-
         let expired = authorization(0x65, 7);
         reopened.enqueue(expired.clone()).unwrap();
         let expired_claim = reopened
@@ -9528,7 +9066,6 @@ mod tests {
             Err(ProviderIngestOutboxError::SourceClaimExpired)
         );
     }
-
     #[test]
     fn prepared_signing_context_binds_network_owner_payload_and_claim_generation() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
@@ -9538,7 +9075,6 @@ mod tests {
         observe_finalized(&outbox, cursor(8));
         let transaction = signed_completion(&authorization, 8, 8);
         let valid = completion_context(&transaction, 8, cursor(8));
-
         let mut wrong_network = valid.clone();
         wrong_network.network_id = network_id(0xF3);
         assert_eq!(
@@ -9578,7 +9114,6 @@ mod tests {
                 Err(ProviderIngestOutboxError::InvalidSignerPolicy)
             );
         }
-
         let first_claim = outbox
             .claim_completion_signing(job_id, valid.clone(), 102)
             .unwrap();
@@ -9609,7 +9144,6 @@ mod tests {
             .store_completion_transaction(&second_claim, transaction)
             .expect("exact signature");
     }
-
     #[test]
     fn signer_policy_floor_rejects_rollback_equivocation_and_identity_substitution() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
@@ -9635,7 +9169,6 @@ mod tests {
         digest_equivocation_policy.policy_digest = [0xEE; 32];
         let mut unchanged_digest_policy = signer_policy(3);
         unchanged_digest_policy.policy_digest = signer_policy(2).policy_digest;
-
         for invalid_policy in [
             identity_substitution_policy,
             revision_rollback_policy,
@@ -9660,7 +9193,6 @@ mod tests {
             .claim_completion_signing(job_id, canonical_successor, 113)
             .expect("claim canonical strict policy successor");
     }
-
     #[test]
     fn signer_policy_floor_accepts_canonical_replacement_identity() {
         let replacement = ProviderIngestCompletionSignerPolicyV1 {
@@ -9674,7 +9206,6 @@ mod tests {
         validate_signer_policy_progress(Some(signer_policy(2)), true, replacement)
             .expect("canonical replacement satisfies a required post-revocation successor");
     }
-
     #[test]
     fn finalized_owner_rotation_invalidates_only_unexposed_prepared_state() {
         let prepared_states = [
@@ -9689,7 +9220,6 @@ mod tests {
             let authorization = authorization(order, 7);
             let job_id = authorization.job_id();
             enqueue_and_store_local(&outbox, &authorization, 100);
-
             let old_transaction = signed_completion(&authorization, 8, 8);
             let old_owner = old_transaction.authority().clone();
             let old_claim =
@@ -9716,7 +9246,6 @@ mod tests {
             }
             let prepared = stored_completion(&outbox, job_id);
             assert_eq!(prepared.state, prepared_state);
-
             observe_finalized(&outbox, cursor(9));
             assert_eq!(
                 outbox
@@ -9739,7 +9268,6 @@ mod tests {
                 before_rotation.signed_transaction,
                 prepared.signed_transaction
             );
-
             let replacement_seed = 0x40_u8.saturating_add(u8::try_from(index).unwrap());
             let replacement_owner = completed_by(replacement_seed);
             assert_eq!(
@@ -9766,7 +9294,6 @@ mod tests {
                 "one finalized cursor cannot equivocate about provider ownership"
             );
             assert_eq!(stored_completion(&outbox, job_id), before_rotation);
-
             observe_finalized(&outbox, cursor(10));
             let invalidation = outbox
                 .invalidate_stale_completion_authority(
@@ -9852,7 +9379,6 @@ mod tests {
                 outbox.store_completion_transaction(&old_claim, old_transaction),
                 Err(ProviderIngestOutboxError::InvalidSigningClaim)
             );
-
             let replacement_transaction = signed_completion(&authorization, 10, replacement_seed);
             assert_eq!(replacement_transaction.authority(), &replacement_owner);
             outbox
@@ -9864,7 +9390,6 @@ mod tests {
                 .expect("replacement owner may sign after bounded backoff");
         }
     }
-
     #[test]
     fn newer_matching_authority_observation_is_restart_safe_for_unexposed_state() {
         for prepared_state in [
@@ -9892,7 +9417,6 @@ mod tests {
                     .store_completion_transaction(&claim, transaction)
                     .expect("store exact signed completion");
             }
-
             observe_finalized(&outbox, cursor(9));
             outbox
                 .invalidate_stale_completion_authority(
@@ -9904,7 +9428,6 @@ mod tests {
                 )
                 .expect("record owner-only observation");
             drop(outbox);
-
             outbox = ProviderIngestOutbox::open(&path, policy())
                 .expect("restart after owner-only observation");
             let owner_checked = stored_completion(&outbox, job_id);
@@ -9927,7 +9450,6 @@ mod tests {
                 )
                 .expect("refine exact active policy");
             drop(outbox);
-
             outbox = ProviderIngestOutbox::open(&path, policy())
                 .expect("restart after exact active policy");
             let fully_checked = stored_completion(&outbox, job_id);
@@ -9944,7 +9466,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn finalized_signer_policy_change_invalidates_only_unexposed_bytes_after_restart() {
         let prepared_states = [
@@ -9979,7 +9500,6 @@ mod tests {
             }
             assert_eq!(stored_completion(&outbox, job_id).state, prepared_state);
             drop(outbox);
-
             outbox = ProviderIngestOutbox::open(&path, policy()).expect("restart");
             let restored = stored_completion(&outbox, job_id);
             assert_eq!(restored.state, prepared_state);
@@ -10140,7 +9660,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn missing_finalized_owner_retains_exposed_states_across_restart() {
         let prepared_states = [
@@ -10193,7 +9712,6 @@ mod tests {
                 "one finalized cursor cannot remove the retained owner for {prepared_state:?}"
             );
             assert_eq!(stored_completion(&outbox, job_id), prepared);
-
             observe_finalized(&outbox, cursor(9));
             let invalidation = outbox
                 .invalidate_stale_completion_authority(
@@ -10250,7 +9768,6 @@ mod tests {
                 })
             );
             drop(outbox);
-
             outbox = ProviderIngestOutbox::open(&path, policy()).expect("restart");
             assert_eq!(
                 stored_completion(&outbox, job_id),
@@ -10259,7 +9776,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn exposed_expiry_uses_finalized_chain_time_and_preserves_revocation_lineage() {
         let directory = tempdir().expect("tempdir");
@@ -10278,7 +9794,6 @@ mod tests {
         outbox
             .mark_completion_submitted(job_id, transaction_hash)
             .expect("mark submitted");
-
         observe_finalized(&outbox, cursor(9));
         outbox
             .mark_completion_finalized_absent(job_id, transaction_hash, 200, cursor(9))
@@ -10300,7 +9815,6 @@ mod tests {
         assert!(quarantined.ever_exposed);
         assert!(quarantined.signer_policy_successor_required);
         drop(outbox);
-
         outbox = ProviderIngestOutbox::open(&path, policy()).expect("restart");
         assert_eq!(stored_completion(&outbox, job_id), quarantined);
         assert_eq!(
@@ -10331,7 +9845,6 @@ mod tests {
             None
         );
         assert_eq!(stored_completion(&outbox, job_id), quarantined);
-
         outbox
             .observe_finalized_snapshot(cursor(11), 39_000)
             .expect("advance to exact transaction expiry");
@@ -10368,7 +9881,6 @@ mod tests {
                 .expect("exact expiry remains live"),
             None
         );
-
         outbox
             .observe_finalized_snapshot(cursor(12), 39_001)
             .expect("advance beyond transaction expiry");
@@ -10404,7 +9916,6 @@ mod tests {
         assert_eq!(expired.signer_policy_floor, Some(signer_policy(1)));
         assert!(expired.signer_policy_successor_required);
         drop(outbox);
-
         outbox = ProviderIngestOutbox::open(&path, policy()).expect("restart after expiry");
         assert_eq!(stored_completion(&outbox, job_id), expired);
         outbox
@@ -10425,7 +9936,6 @@ mod tests {
             .claim_completion_signing(job_id, successor, 1_000_001)
             .expect("strict successor resumes after chain-proven expiry");
     }
-
     #[test]
     fn missing_finalized_owner_dead_letter_is_durable_and_payload_free() {
         let directory = tempdir().expect("tempdir");
@@ -10441,7 +9951,6 @@ mod tests {
         let _transaction_hash = outbox
             .store_completion_transaction(&claim, transaction)
             .unwrap();
-
         observe_finalized(&outbox, cursor(9));
         assert_eq!(
             outbox
@@ -10464,7 +9973,6 @@ mod tests {
             }
         );
         drop(outbox);
-
         outbox = ProviderIngestOutbox::open(&path, one_attempt).expect("restart");
         assert!(matches!(
             outbox.status(job_id).unwrap().state,
@@ -10484,11 +9992,9 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn completion_preparation_preflight_and_signing_recovery_are_bounded() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
-
         let preparation = authorization(0x70, 7);
         enqueue_and_store_local(&outbox, &preparation, 100);
         observe_finalized(&outbox, cursor(8));
@@ -10514,7 +10020,6 @@ mod tests {
                 ..
             }
         ));
-
         let preflight = authorization(0x71, 7);
         enqueue_and_store_local(&outbox, &preflight, 100);
         let transaction = signed_completion(&preflight, 8, 8);
@@ -10569,7 +10074,6 @@ mod tests {
                 123,
             )
             .expect("preflight becomes available exactly when due");
-
         let interrupted = authorization(0x72, 7);
         enqueue_and_store_local(&outbox, &interrupted, 100);
         let transaction = signed_completion(&interrupted, 8, 8);
@@ -10609,7 +10113,6 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidSigningClaim)
         );
     }
-
     #[test]
     fn finalized_completion_inserts_an_absent_terminal_without_active_capacity() {
         let mut bounded = policy();
@@ -10617,7 +10120,6 @@ mod tests {
         let outbox = ProviderIngestOutbox::in_memory(bounded).expect("outbox");
         let active = authorization(0x73, 7);
         outbox.enqueue(active).expect("fill active capacity");
-
         let completed = authorization(0x74, 7);
         let before_reconciliation = outbox.state.lock().unwrap().checkpoint.clone();
         assert_eq!(
@@ -10651,7 +10153,6 @@ mod tests {
             }
         ));
         assert_eq!(outbox.state.lock().unwrap().checkpoint.active.len(), 1);
-
         observe_finalized(&outbox, cursor(9));
         let finalized = outbox.state.lock().unwrap().checkpoint.clone();
         assert_eq!(
@@ -10663,7 +10164,6 @@ mod tests {
         );
         assert_eq!(outbox.state.lock().unwrap().checkpoint, finalized);
     }
-
     #[test]
     fn finalized_cancellation_inserts_absent_and_supersedes_dead_letter() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
@@ -10702,7 +10202,6 @@ mod tests {
                 ..
             }
         ));
-
         let dead = authorization(0x76, 7);
         outbox.enqueue(dead.clone()).unwrap();
         let claim = outbox
@@ -10736,13 +10235,11 @@ mod tests {
             } if observed_finalized_cursor == cursor(9)
         ));
     }
-
     #[test]
     fn semantic_finalization_accepts_other_replica_and_overrides_terminal_tombstones() {
         let mut roomy = policy();
         roomy.max_terminal_entries = 16;
         let outbox = ProviderIngestOutbox::in_memory(roomy).expect("outbox");
-
         let pending = authorization(0x67, 7);
         outbox.enqueue(pending.clone()).unwrap();
         observe_finalized(&outbox, cursor(8));
@@ -10757,7 +10254,6 @@ mod tests {
                 ..
             }
         ));
-
         let signed = authorization(0x68, 7);
         enqueue_and_store_local(&outbox, &signed, 100);
         let transaction = signed_completion(&signed, 8, 8);
@@ -10784,7 +10280,6 @@ mod tests {
                 ..
             } if hash == other_hash
         ));
-
         let signing = authorization(0x6C, 7);
         enqueue_and_store_local(&outbox, &signing, 120);
         let transaction = signed_completion_at(&signing, 8, cursor(9), 8);
@@ -10798,7 +10293,6 @@ mod tests {
             outbox.store_completion_transaction(&signing_claim, transaction),
             Err(ProviderIngestOutboxError::UnknownJob)
         );
-
         let cancelled = authorization(0x69, 7);
         outbox.enqueue(cancelled.clone()).unwrap();
         outbox
@@ -10818,7 +10312,6 @@ mod tests {
                 finalized_evidence(&cancelled, 9, None, 11),
             )
             .expect("later semantic success supersedes cancellation");
-
         let dead = authorization(0x6A, 7);
         outbox.enqueue(dead.clone()).unwrap();
         let claim = outbox
@@ -10842,7 +10335,6 @@ mod tests {
             .mark_finalized_complete(dead.job_id(), evidence)
             .expect("semantic replay is idempotent");
     }
-
     #[test]
     fn typed_cancellation_rejects_substituted_binding_and_stale_cursor() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
@@ -10900,7 +10392,6 @@ mod tests {
         );
         assert_eq!(outbox.state.lock().unwrap().checkpoint, cancelled);
     }
-
     #[test]
     fn canonical_manifest_digest_type_matches_status_binding() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");

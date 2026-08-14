@@ -1,5 +1,4 @@
 use ivm::{IVM, ProgramMetadata, encoding};
-
 fn simple_prog(nops: usize) -> Vec<u8> {
     let mut bytes = ProgramMetadata::default().encode();
     for _ in 0..nops {
@@ -9,7 +8,6 @@ fn simple_prog(nops: usize) -> Vec<u8> {
     bytes.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     bytes
 }
-
 #[test]
 fn predecode_counters_increase_via_vm_run() {
     let prog = simple_prog(32);

@@ -4,18 +4,14 @@
 //! smart-contract ISI definitions and the runtime registry that
 //! tracks provider capacity declarations, telemetry snapshots, and
 //! fee accrual ledgers.
-
 use core::fmt;
 use std::cmp::Ordering;
-
 use hex;
 use iroha_primitives::numeric::{NumericOperationError, Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use crate::metadata::Metadata;
-
 /// Provider identifier (BLAKE3-256 digest allocated by governance).
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
@@ -26,27 +22,23 @@ use crate::metadata::Metadata;
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct ProviderId(pub [u8; 32]);
-
 impl ProviderId {
     /// Construct a new provider identifier.
     #[must_use]
     pub const fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
-
     /// Access the raw digest bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
-
 impl fmt::Display for ProviderId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "0x{}", hex::encode(self.0))
     }
 }
-
 /// Stored capacity declaration along with metadata required for registry queries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -57,7 +49,7 @@ pub struct CapacityDeclarationRecord {
     /// Provider that authored the capacity declaration.
     pub provider_id: ProviderId,
     /// Canonical Norito encoding of `CapacityDeclarationV1`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub declaration: Vec<u8>,
     /// Total committed GiB advertised by the provider.
     pub committed_capacity_gib: u64,
@@ -70,7 +62,6 @@ pub struct CapacityDeclarationRecord {
     /// Optional metadata annotations persisted alongside the declaration.
     pub metadata: Metadata,
 }
-
 impl CapacityDeclarationRecord {
     /// Construct a new record from raw components.
     #[allow(clippy::too_many_arguments)]
@@ -95,13 +86,11 @@ impl CapacityDeclarationRecord {
         }
     }
 }
-
 impl PartialOrd for CapacityDeclarationRecord {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for CapacityDeclarationRecord {
     fn cmp(&self, other: &Self) -> Ordering {
         (
@@ -118,7 +107,6 @@ impl Ord for CapacityDeclarationRecord {
             ))
     }
 }
-
 /// Telemetry snapshot reported by a provider for a given epoch window.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -165,7 +153,6 @@ pub struct CapacityTelemetryRecord {
     #[norito(default)]
     pub nonce: u64,
 }
-
 impl CapacityTelemetryRecord {
     /// Construct a telemetry record.
     #[allow(clippy::too_many_arguments)]
@@ -206,7 +193,6 @@ impl CapacityTelemetryRecord {
             nonce: 0,
         }
     }
-
     /// Return a copy of this record tagged with a nonce.
     #[must_use]
     pub fn with_nonce(mut self, nonce: u64) -> Self {
@@ -214,13 +200,11 @@ impl CapacityTelemetryRecord {
         self
     }
 }
-
 impl PartialOrd for CapacityTelemetryRecord {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for CapacityTelemetryRecord {
     fn cmp(&self, other: &Self) -> Ordering {
         (
@@ -235,7 +219,6 @@ impl Ord for CapacityTelemetryRecord {
             ))
     }
 }
-
 /// Aggregated fee ledger entry for a provider.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -275,7 +258,6 @@ pub struct CapacityFeeLedgerEntry {
     #[norito(default)]
     pub last_nonce: u64,
 }
-
 /// Batch of accrual deltas used to update a [`CapacityFeeLedgerEntry`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CapacityAccrual {
@@ -296,7 +278,6 @@ pub struct CapacityAccrual {
     /// Last accepted telemetry nonce (0 when unused).
     pub nonce: u64,
 }
-
 impl CapacityFeeLedgerEntry {
     /// Incrementally update utilisation and fee counters.
     ///
@@ -328,7 +309,6 @@ impl CapacityFeeLedgerEntry {
                 });
             }
         }
-
         let current_fee_total = self
             .storage_fee
             .checked_add(&self.egress_fee)
@@ -340,7 +320,6 @@ impl CapacityFeeLedgerEntry {
                 accrued: self.accrued_fee.clone(),
             });
         }
-
         let total_declared_gib = self
             .total_declared_gib
             .checked_add(accrual.declared_delta_gib)
@@ -373,7 +352,6 @@ impl CapacityFeeLedgerEntry {
                 accrued: accrued_fee,
             });
         }
-
         self.total_declared_gib = total_declared_gib;
         self.total_utilised_gib = total_utilised_gib;
         self.storage_fee = storage_fee;
@@ -386,7 +364,6 @@ impl CapacityFeeLedgerEntry {
         self.last_updated_epoch = accrual.window_end_epoch;
         Ok(())
     }
-
     /// Accumulate a penalty amount.
     ///
     /// # Errors
@@ -416,7 +393,6 @@ impl CapacityFeeLedgerEntry {
         Ok(())
     }
 }
-
 /// Errors raised while mutating a provider capacity-fee ledger.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum CapacityLedgerMutationError {
@@ -482,7 +458,6 @@ pub enum CapacityLedgerMutationError {
     #[error("capacity accounting quantity error: {0}")]
     Quantity(#[from] NumericOperationError),
 }
-
 /// Unique identifier for a capacity dispute (BLAKE3-256 digest of the payload).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[repr(transparent)]
@@ -491,21 +466,18 @@ pub enum CapacityLedgerMutationError {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct CapacityDisputeId(pub [u8; 32]);
-
 impl CapacityDisputeId {
     /// Construct a dispute identifier from raw bytes.
     #[must_use]
     pub const fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
-
     /// Access the underlying byte array.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
-
 /// Evidence metadata recorded alongside a dispute.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -522,7 +494,6 @@ pub struct CapacityDisputeEvidence {
     /// Optional size of the evidence bundle in bytes.
     pub size_bytes: Option<u64>,
 }
-
 /// Dispute outcome recorded once governance issues a ruling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -538,7 +509,6 @@ pub enum CapacityDisputeOutcome {
     /// Dispute was withdrawn before a ruling was issued.
     Withdrawn,
 }
-
 /// Resolution metadata captured when a dispute leaves the pending queue.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -553,7 +523,6 @@ pub struct CapacityDisputeResolution {
     /// Optional human-readable notes describing the resolution.
     pub notes: Option<String>,
 }
-
 /// Lifecycle state of a capacity dispute.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -567,7 +536,6 @@ pub enum CapacityDisputeStatus {
     /// Dispute has been resolved according to the recorded outcome.
     Resolved(CapacityDisputeResolution),
 }
-
 impl CapacityDisputeStatus {
     /// Returns `true` when the dispute is still awaiting a decision.
     #[must_use]
@@ -575,7 +543,6 @@ impl CapacityDisputeStatus {
         matches!(self, Self::Pending)
     }
 }
-
 /// Registry record for disputes raised against a capacity provider.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -606,7 +573,6 @@ pub struct CapacityDisputeRecord {
     /// Current lifecycle status recorded by governance.
     pub status: CapacityDisputeStatus,
 }
-
 impl CapacityDisputeRecord {
     /// Construct a pending dispute record from raw components.
     #[allow(clippy::too_many_arguments)]
@@ -638,13 +604,11 @@ impl CapacityDisputeRecord {
         }
     }
 }
-
 impl PartialOrd for CapacityDisputeRecord {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for CapacityDisputeRecord {
     fn cmp(&self, other: &Self) -> Ordering {
         (
@@ -661,24 +625,19 @@ impl Ord for CapacityDisputeRecord {
             ))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_primitives::numeric::Numeric;
-
     use super::*;
-
     fn quantity_nanos(value: u128) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(value, 9))
             .expect("u128 nano-XOR fixture fits Quantity")
     }
-
     fn maximum_quantity() -> Quantity {
         "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
             .parse()
             .expect("signed 512-bit maximum quantity")
     }
-
     #[derive(Encode)]
     struct ForgedCapacityFeeLedgerEntry {
         provider_id: ProviderId,
@@ -695,7 +654,6 @@ mod tests {
         last_window_end_epoch: u64,
         last_nonce: u64,
     }
-
     fn sample_accrual() -> CapacityAccrual {
         CapacityAccrual {
             declared_delta_gib: 10,
@@ -708,14 +666,11 @@ mod tests {
             nonce: 2,
         }
     }
-
     #[test]
     fn accrual_updates_fee_ledger_entry() {
         let mut entry = CapacityFeeLedgerEntry::default();
         let accrual = sample_accrual();
-
         entry.accrue(&accrual).expect("valid ledger accrual");
-
         assert_eq!(entry.total_declared_gib, 10);
         assert_eq!(entry.total_utilised_gib, 7);
         assert_eq!(entry.storage_fee, quantity_nanos(100));
@@ -727,7 +682,6 @@ mod tests {
         assert_eq!(entry.last_nonce, 2);
         assert_eq!(entry.last_updated_epoch, 6);
     }
-
     #[test]
     fn accrual_counter_overflow_is_atomic() {
         let mut entry = CapacityFeeLedgerEntry {
@@ -753,7 +707,6 @@ mod tests {
         );
         assert_eq!(entry, before);
     }
-
     #[test]
     fn capacity_fee_ledger_rejects_forged_negative_fee() {
         let forged = ForgedCapacityFeeLedgerEntry {
@@ -778,11 +731,9 @@ mod tests {
             "capacity ledger must reject a forged negative fee"
         );
     }
-
     #[test]
     fn accrual_rejects_window_and_replay_attacks_atomically() {
         let mut entry = CapacityFeeLedgerEntry::default();
-
         let mut invalid = sample_accrual();
         invalid.window_end_epoch = invalid.window_start_epoch;
         assert!(matches!(
@@ -790,7 +741,6 @@ mod tests {
             Err(CapacityLedgerMutationError::InvalidWindow { .. })
         ));
         assert_eq!(entry, CapacityFeeLedgerEntry::default());
-
         entry
             .accrue(&sample_accrual())
             .expect("commit initial accrual");
@@ -800,7 +750,6 @@ mod tests {
             Err(CapacityLedgerMutationError::ReplayedNonce(2))
         ));
         assert_eq!(entry, committed);
-
         let mut stale = sample_accrual();
         stale.nonce = 3;
         stale.window_start_epoch = 4;
@@ -810,7 +759,6 @@ mod tests {
             Err(CapacityLedgerMutationError::StaleWindow { .. })
         ));
         assert_eq!(entry, committed);
-
         let mut overlap = sample_accrual();
         overlap.nonce = 3;
         overlap.window_start_epoch = 5;
@@ -821,7 +769,6 @@ mod tests {
         ));
         assert_eq!(entry, committed);
     }
-
     #[test]
     fn accrual_rejects_overflow_and_conservation_attacks_atomically() {
         let mut overflow = CapacityFeeLedgerEntry {
@@ -836,7 +783,6 @@ mod tests {
             ))
         ));
         assert_eq!(overflow, before);
-
         let mut overutilised = CapacityFeeLedgerEntry::default();
         let mut overutilisation = sample_accrual();
         overutilisation.declared_delta_gib = 1;
@@ -846,7 +792,6 @@ mod tests {
             Err(CapacityLedgerMutationError::UtilisationExceedsDeclaration { .. })
         ));
         assert_eq!(overutilised, CapacityFeeLedgerEntry::default());
-
         let mut corrupt = CapacityFeeLedgerEntry {
             storage_fee: quantity_nanos(1),
             accrued_fee: Quantity::zero(),
@@ -858,7 +803,6 @@ mod tests {
             Err(CapacityLedgerMutationError::FeeConservationViolation { .. })
         ));
         assert_eq!(corrupt, corrupt_before);
-
         let mut fee_delta_overflow = sample_accrual();
         fee_delta_overflow.storage_fee_delta = maximum_quantity();
         fee_delta_overflow.egress_fee_delta = quantity_nanos(1);
@@ -869,7 +813,6 @@ mod tests {
         ));
         assert_eq!(clean, CapacityFeeLedgerEntry::default());
     }
-
     #[test]
     fn penalty_updates_are_checked_and_atomic() {
         let mut entry = CapacityFeeLedgerEntry::default();
@@ -881,14 +824,12 @@ mod tests {
             .expect("same-epoch penalty");
         assert_eq!(entry.penalty_slashed, quantity_nanos(25));
         assert_eq!(entry.penalty_events, 1);
-
         let committed = entry.clone();
         assert!(matches!(
             entry.apply_penalty(&quantity_nanos(1), 5),
             Err(CapacityLedgerMutationError::BackdatedPenalty { .. })
         ));
         assert_eq!(entry, committed);
-
         entry.penalty_slashed = maximum_quantity();
         let overflow = entry.clone();
         assert!(matches!(
@@ -896,7 +837,6 @@ mod tests {
             Err(CapacityLedgerMutationError::Quantity(_))
         ));
         assert_eq!(entry, overflow);
-
         entry.penalty_slashed = Quantity::zero();
         entry.penalty_events = u32::MAX;
         let event_overflow = entry.clone();

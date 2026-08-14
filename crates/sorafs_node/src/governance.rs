@@ -12,12 +12,10 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
-
 use axum::http::{Request, Version, header, request::Parts};
 use ed25519_dalek::VerifyingKey as DalekVerifyingKey;
 use hex::ToHex;
@@ -54,7 +52,6 @@ use sorafs_manifest::{
     validate_governance_dag_head_against_rotatable_chain_v1,
 };
 use url::Url;
-
 use crate::{
     FencedPrivacyPublicationDispositionV1, FencedPrivacyPublicationReceiptV1,
     FencedPrivacyPublicationRequestV1, FencedTransparencyHeadAncestryProofV1,
@@ -64,23 +61,18 @@ use crate::{
     PdpRejectionReasonV1, PdpTerminalDecisionV1, PrivacyPublicationAuthorizationV1,
     governance_rooted_fs,
 };
-
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
 struct GovernanceCarBuffer {
     bytes: Vec<u8>,
 }
-
 impl GovernanceCarBuffer {
     fn new() -> Self {
         Self { bytes: Vec::new() }
     }
-
     fn into_bytes(self) -> Vec<u8> {
         self.bytes
     }
 }
-
 impl Write for GovernanceCarBuffer {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         let next_len = self
@@ -99,12 +91,10 @@ impl Write for GovernanceCarBuffer {
         self.bytes.extend_from_slice(buffer);
         Ok(buffer.len())
     }
-
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
-
 #[cfg(unix)]
 unsafe extern "C" {
     fn geteuid() -> std::os::raw::c_uint;
@@ -263,7 +253,6 @@ const GOVERNANCE_DAG_SEALED_STATE_MAX_BYTES_V1: usize = 192 * 1024 * 1024;
 const GOVERNANCE_RUNTIME_DAG_PRODUCER_CHECKPOINT_SEALED_MAX_BYTES_V1: usize = 64 * 1024;
 const GOVERNANCE_RUNTIME_DAG_PRODUCER_INTENT_SEALED_MAX_BYTES_V1: usize = 64 * 1024;
 const GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_SEALED_MAX_BYTES_V1: usize = 256 * 1024;
-
 #[derive(Debug, Clone, Copy)]
 struct GovernanceTwoSlotStoreSpecV1 {
     directory_name: &'static str,
@@ -271,7 +260,6 @@ struct GovernanceTwoSlotStoreSpecV1 {
     stable_nonce: &'static [u8],
     max_payload_bytes: usize,
 }
-
 const GOVERNANCE_PUBLICATION_STORE_SPEC_V1: GovernanceTwoSlotStoreSpecV1 =
     GovernanceTwoSlotStoreSpecV1 {
         directory_name: GOVERNANCE_PUBLICATION_STORE_DIR_V1,
@@ -307,7 +295,6 @@ const GOVERNANCE_FENCED_PRIVACY_STORE_SPEC_V1: GovernanceTwoSlotStoreSpecV1 =
         stable_nonce: b"sorafs.governance.fenced-privacy.local-store.v1",
         max_payload_bytes: 16 * 1024,
     };
-
 /// Public, non-secret qualification returned by a Governance DAG runtime provider.
 ///
 /// `revision` identifies the deployment-owned adapter/policy revision and
@@ -321,7 +308,6 @@ pub struct GovernanceDagRuntimeProviderQualificationV1 {
     /// Non-zero digest of the public provider policy.
     pub policy_digest: [u8; 32],
 }
-
 impl GovernanceDagRuntimeProviderQualificationV1 {
     /// Construct one public provider qualification.
     #[must_use]
@@ -331,15 +317,12 @@ impl GovernanceDagRuntimeProviderQualificationV1 {
             policy_digest,
         }
     }
-
     /// Whether both first-release qualification fields are non-zero.
     pub(crate) fn is_valid(self) -> bool {
         self.revision != 0 && self.policy_digest.iter().any(|byte| *byte != 0)
     }
 }
-
 include!("governance/signing_purpose.rs");
-
 /// Authenticated Governance DAG endpoint class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum GovernanceDagAuthenticationScope {
@@ -348,7 +331,6 @@ pub enum GovernanceDagAuthenticationScope {
     /// Signed-head compare-and-swap request.
     SignedHead,
 }
-
 impl GovernanceDagAuthenticationScope {
     /// Canonical lowercase wire label for the endpoint class.
     #[must_use]
@@ -358,7 +340,6 @@ impl GovernanceDagAuthenticationScope {
             Self::SignedHead => "signed-head",
         }
     }
-
     const fn signing_tag(self) -> u8 {
         match self {
             Self::Ipfs => 1,
@@ -366,12 +347,10 @@ impl GovernanceDagAuthenticationScope {
         }
     }
 }
-
 const GOVERNANCE_DAG_REQUEST_INGRESS_ENDPOINT_DOMAIN_V1: &[u8] =
     b"sorafs.governance-dag.request-ingress-endpoint.v1\0";
 const GOVERNANCE_DAG_REQUEST_INGRESS_BINDING_DOMAIN_V1: &[u8] =
     b"sorafs.governance-dag.request-ingress-binding.v1\0";
-
 /// Receiver posture required from every first-release Governance DAG endpoint.
 ///
 /// There is deliberately no permissive or signer-only variant. A provider can
@@ -383,7 +362,6 @@ pub enum GovernanceDagRequestIngressEnforcementV1 {
     /// The authenticated receiver is the backend's exclusive ingress.
     ExclusiveAuthenticatedReceiver = 1,
 }
-
 impl GovernanceDagRequestIngressEnforcementV1 {
     /// Stable first-release wire identifier.
     #[must_use]
@@ -391,7 +369,6 @@ impl GovernanceDagRequestIngressEnforcementV1 {
         self as u8
     }
 }
-
 /// Replay posture required from every first-release Governance DAG receiver.
 ///
 /// The store must implement one atomic nonce consume shared by every ingress
@@ -403,7 +380,6 @@ pub enum GovernanceDagRequestReplayPostureV1 {
     /// Shared, sealed, atomic nonce consumption retained through expiry.
     SharedSealedAtomicConsumeUntilExpiry = 1,
 }
-
 impl GovernanceDagRequestReplayPostureV1 {
     /// Stable first-release wire identifier.
     #[must_use]
@@ -411,7 +387,6 @@ impl GovernanceDagRequestReplayPostureV1 {
         self as u8
     }
 }
-
 /// Stable validation failure for a live Governance DAG ingress qualification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GovernanceDagRequestIngressQualificationErrorV1 {
@@ -430,7 +405,6 @@ pub enum GovernanceDagRequestIngressQualificationErrorV1 {
     /// The complete ingress replica-set identity is zero.
     InvalidReplicaSet,
 }
-
 impl fmt::Display for GovernanceDagRequestIngressQualificationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -454,9 +428,7 @@ impl fmt::Display for GovernanceDagRequestIngressQualificationErrorV1 {
         })
     }
 }
-
 impl std::error::Error for GovernanceDagRequestIngressQualificationErrorV1 {}
-
 /// Compute the exact public binding for one configured request-ingress endpoint.
 ///
 /// IPFS endpoints bind their normalized base URL with exactly one trailing
@@ -485,7 +457,6 @@ pub fn governance_dag_request_ingress_endpoint_binding_v1(
     hasher.update(canonical);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn canonical_governance_dag_request_ingress_endpoint_url_v1(
     scope: GovernanceDagAuthenticationScope,
     endpoint: &str,
@@ -521,7 +492,6 @@ fn canonical_governance_dag_request_ingress_endpoint_url_v1(
     }
     Ok(url)
 }
-
 /// Exact public request policy expected from one qualified ingress provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GovernanceDagRequestIngressBindingV1 {
@@ -532,7 +502,6 @@ pub struct GovernanceDagRequestIngressBindingV1 {
     max_envelope_lifetime_secs: u64,
     max_future_skew_secs: u64,
 }
-
 impl GovernanceDagRequestIngressBindingV1 {
     /// Validate and construct one exact ingress binding.
     ///
@@ -571,43 +540,36 @@ impl GovernanceDagRequestIngressBindingV1 {
             max_future_skew_secs,
         })
     }
-
     /// Endpoint class bound by this policy.
     #[must_use]
     pub const fn scope(self) -> GovernanceDagAuthenticationScope {
         self.scope
     }
-
     /// Domain-separated digest of the exact normalized endpoint.
     #[must_use]
     pub const fn endpoint_binding(self) -> [u8; 32] {
         self.endpoint_binding
     }
-
     /// Raw canonical Ed25519 request-auth key.
     #[must_use]
     pub const fn public_key(self) -> [u8; 32] {
         self.public_key
     }
-
     /// Maximum complete request body admitted by the receiver.
     #[must_use]
     pub const fn max_body_bytes(self) -> u64 {
         self.max_body_bytes
     }
-
     /// Maximum signed-envelope lifetime in seconds.
     #[must_use]
     pub const fn max_envelope_lifetime_secs(self) -> u64 {
         self.max_envelope_lifetime_secs
     }
-
     /// Maximum accepted future issuance skew in seconds.
     #[must_use]
     pub const fn max_future_skew_secs(self) -> u64 {
         self.max_future_skew_secs
     }
-
     /// Domain-separated digest of the complete endpoint, key, body, and timing policy.
     ///
     /// Rollout evidence uses this identity to bind deployment approval to the
@@ -627,7 +589,6 @@ impl GovernanceDagRequestIngressBindingV1 {
         *hasher.finalize().as_bytes()
     }
 }
-
 /// Live provider proof that an exact endpoint enforces receiver authentication
 /// and shared sealed replay consumption.
 ///
@@ -645,7 +606,6 @@ pub struct GovernanceDagRequestIngressQualificationV1 {
     enforcement: GovernanceDagRequestIngressEnforcementV1,
     replay_posture: GovernanceDagRequestReplayPostureV1,
 }
-
 impl GovernanceDagRequestIngressQualificationV1 {
     /// Validate and construct one live first-release ingress qualification.
     ///
@@ -686,50 +646,42 @@ impl GovernanceDagRequestIngressQualificationV1 {
                 GovernanceDagRequestReplayPostureV1::SharedSealedAtomicConsumeUntilExpiry,
         })
     }
-
     /// Runtime adapter revision and public-policy identity.
     #[must_use]
     pub const fn provider(self) -> GovernanceDagRuntimeProviderQualificationV1 {
         self.provider
     }
-
     /// Exact endpoint, key, body, and timing binding.
     #[must_use]
     pub const fn binding(self) -> GovernanceDagRequestIngressBindingV1 {
         self.binding
     }
-
     /// Public identity of the installed receiver policy.
     #[must_use]
     pub const fn receiver_policy_digest(self) -> [u8; 32] {
         self.receiver_policy_digest
     }
-
     /// Stable identity of the shared sealed replay namespace.
     #[must_use]
     pub const fn replay_namespace_digest(self) -> [u8; 32] {
         self.replay_namespace_digest
     }
-
     /// Public digest of the complete ingress replica set sharing that namespace.
     #[must_use]
     pub const fn replica_set_digest(self) -> [u8; 32] {
         self.replica_set_digest
     }
-
     /// Required exclusive receiver posture.
     #[must_use]
     pub const fn enforcement(self) -> GovernanceDagRequestIngressEnforcementV1 {
         self.enforcement
     }
-
     /// Required shared sealed replay posture.
     #[must_use]
     pub const fn replay_posture(self) -> GovernanceDagRequestReplayPostureV1 {
         self.replay_posture
     }
 }
-
 /// Version of the public Governance DAG request-authentication envelope.
 pub const GOVERNANCE_DAG_REQUEST_AUTH_VERSION_V1: u8 = 1;
 /// Maximum canonical absolute URL bytes authenticated by the V1 envelope.
@@ -762,7 +714,6 @@ pub const GOVERNANCE_DAG_REQUEST_AUTH_SELECTED_HEADER_NAMES_V1: [&str; 6] = [
     "if-none-match",
     "user-agent",
 ];
-
 const GOVERNANCE_DAG_REQUEST_AUTH_DOMAIN_V1: &[u8] =
     b"sorafs.governance-dag.http-request-auth.v1\0";
 const GOVERNANCE_DAG_REQUEST_DIGEST_DOMAIN_V1: &[u8] =
@@ -772,7 +723,6 @@ const GOVERNANCE_DAG_REQUEST_AUTH_HEADER_PREFIX_V1: &str = "x-sorafs-governance-
 pub(crate) const GOVERNANCE_DAG_REQUEST_AUTH_MAX_ENVELOPE_LIFETIME_SECS_V1: u64 = 300;
 /// Hard V1 ceiling for future issuance skew in request authentication.
 pub(crate) const GOVERNANCE_DAG_REQUEST_AUTH_MAX_FUTURE_SKEW_SECS_V1: u64 = 60;
-
 /// One canonical, explicitly public HTTP header selected for authentication.
 ///
 /// The V1 allow-list intentionally excludes authorization, cookies, proxy
@@ -783,7 +733,6 @@ pub struct GovernanceDagCanonicalRequestHeaderV1 {
     name: String,
     value: String,
 }
-
 impl GovernanceDagCanonicalRequestHeaderV1 {
     /// Construct one V1 selected public header.
     ///
@@ -817,20 +766,17 @@ impl GovernanceDagCanonicalRequestHeaderV1 {
             value: value.to_owned(),
         })
     }
-
     /// Canonical lowercase header name.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
-
     /// Exact visible-ASCII header value.
     #[must_use]
     pub fn value(&self) -> &str {
         &self.value
     }
 }
-
 /// Bounded canonical descriptor of one complete Governance DAG HTTP request.
 ///
 /// The descriptor contains public routing metadata and a body commitment only.
@@ -846,7 +792,6 @@ pub struct GovernanceDagCanonicalRequestV1 {
     body_blake3: [u8; 32],
     request_digest: [u8; 32],
 }
-
 impl GovernanceDagCanonicalRequestV1 {
     /// Construct a descriptor from exact bounded HTTP request parts.
     ///
@@ -893,7 +838,6 @@ impl GovernanceDagCanonicalRequestV1 {
             max_body_bytes,
         )
     }
-
     /// Construct a fully validated V1 descriptor and its request digest.
     ///
     /// `max_body_bytes` is the already validated deployment request bound.
@@ -962,49 +906,41 @@ impl GovernanceDagCanonicalRequestV1 {
         descriptor.request_digest = descriptor.compute_request_digest();
         Ok(descriptor)
     }
-
     /// Authenticated endpoint class.
     #[must_use]
     pub const fn scope(&self) -> GovernanceDagAuthenticationScope {
         self.scope
     }
-
     /// Exact canonical HTTP method.
     #[must_use]
     pub fn method(&self) -> &str {
         &self.method
     }
-
     /// Exact canonical absolute URL, including its canonical query.
     #[must_use]
     pub fn canonical_url(&self) -> &str {
         &self.canonical_url
     }
-
     /// Ordered selected public headers.
     #[must_use]
     pub fn selected_headers(&self) -> &[GovernanceDagCanonicalRequestHeaderV1] {
         &self.selected_headers
     }
-
     /// Exact request-body length in bytes.
     #[must_use]
     pub const fn body_length(&self) -> u64 {
         self.body_length
     }
-
     /// BLAKE3 commitment to the exact request-body bytes, including empty bodies.
     #[must_use]
     pub const fn body_blake3(&self) -> [u8; 32] {
         self.body_blake3
     }
-
     /// Domain-separated digest of every canonical descriptor field.
     #[must_use]
     pub const fn request_digest(&self) -> [u8; 32] {
         self.request_digest
     }
-
     fn append_canonical_bytes(&self, bytes: &mut Vec<u8>) {
         bytes.push(GOVERNANCE_DAG_REQUEST_AUTH_VERSION_V1);
         bytes.push(self.scope.signing_tag());
@@ -1018,7 +954,6 @@ impl GovernanceDagCanonicalRequestV1 {
         bytes.extend_from_slice(&self.body_length.to_be_bytes());
         bytes.extend_from_slice(&self.body_blake3);
     }
-
     fn compute_request_digest(&self) -> [u8; 32] {
         let mut canonical = Vec::with_capacity(
             GOVERNANCE_DAG_REQUEST_DIGEST_DOMAIN_V1.len()
@@ -1032,13 +967,11 @@ impl GovernanceDagCanonicalRequestV1 {
         *blake3::hash(&canonical).as_bytes()
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GovernanceDagAuthenticationHeaderDispositionV1 {
     Reject,
     Retain,
 }
-
 /// Build one canonical outbound descriptor from a complete HTTP request.
 ///
 /// Only the fixed V1 selected-public-header set is committed. Ordinary public
@@ -1076,7 +1009,6 @@ pub fn canonicalize_governance_dag_outbound_http_request_v1<'a>(
     )
     .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest)
 }
-
 /// A complete HTTP request authorized for Governance DAG backend dispatch.
 ///
 /// Construction is restricted to [`GovernanceDagHttpRequestReceiverV1`]. The
@@ -1090,27 +1022,23 @@ pub struct GovernanceDagVerifiedHttpRequestV1<B> {
     request: Request<B>,
     descriptor: GovernanceDagCanonicalRequestV1,
 }
-
 impl<B> GovernanceDagVerifiedHttpRequestV1<B> {
     /// Exact canonical descriptor authenticated for this request.
     #[must_use]
     pub const fn descriptor(&self) -> &GovernanceDagCanonicalRequestV1 {
         &self.descriptor
     }
-
     /// Borrow the sanitized request that may be dispatched to the backend.
     #[must_use]
     pub const fn request(&self) -> &Request<B> {
         &self.request
     }
-
     /// Consume the authorization capability and recover the sanitized request.
     #[must_use]
     pub fn into_request(self) -> Request<B> {
         self.request
     }
 }
-
 /// Reusable receiver boundary for authenticated Governance DAG HTTP requests.
 ///
 /// The receiver consumes one actual [`Request`] so the method, URI, headers,
@@ -1132,7 +1060,6 @@ pub struct GovernanceDagHttpRequestReceiverV1<'a> {
     policy: GovernanceDagRequestAuthenticationPolicyV1,
     replay_store: &'a mut dyn GovernanceDagRequestAuthenticationReplayStoreV1,
 }
-
 impl<'a> GovernanceDagHttpRequestReceiverV1<'a> {
     /// Bind one exact endpoint policy and replay store.
     ///
@@ -1166,7 +1093,6 @@ impl<'a> GovernanceDagHttpRequestReceiverV1<'a> {
             replay_store,
         })
     }
-
     /// Authenticate one complete HTTP request before backend dispatch.
     ///
     /// # Errors
@@ -1233,7 +1159,6 @@ impl<'a> GovernanceDagHttpRequestReceiverV1<'a> {
         })
     }
 }
-
 fn canonical_governance_dag_request_url_from_parts_v1(
     endpoint: &Url,
     scope: GovernanceDagAuthenticationScope,
@@ -1250,7 +1175,6 @@ fn canonical_governance_dag_request_url_from_parts_v1(
     if matches!(parts.version, Version::HTTP_10 | Version::HTTP_11) && host.is_none() {
         return Err(GovernanceDagRequestAuthenticationErrorV1::InvalidAuthority);
     }
-
     let host_origin = host
         .map(|value| {
             value
@@ -1284,7 +1208,6 @@ fn canonical_governance_dag_request_url_from_parts_v1(
     {
         return Err(GovernanceDagRequestAuthenticationErrorV1::AuthorityMismatch);
     }
-
     let path_and_query = parts
         .uri
         .path_and_query()
@@ -1314,7 +1237,6 @@ fn canonical_governance_dag_request_url_from_parts_v1(
     }
     Ok(canonical_url)
 }
-
 fn governance_dag_request_authority_origin_v1(
     endpoint: &Url,
     authority: &str,
@@ -1340,13 +1262,11 @@ fn governance_dag_request_authority_origin_v1(
     }
     Ok(url.origin())
 }
-
 type GovernanceDagHttpHeaderRefV1<'a> = (&'a str, &'a [u8]);
 type GovernanceDagPartitionedHttpHeadersV1<'a> = (
     Vec<GovernanceDagHttpHeaderRefV1<'a>>,
     Vec<GovernanceDagHttpHeaderRefV1<'a>>,
 );
-
 fn partition_governance_dag_http_headers_v1<'a>(
     headers: impl IntoIterator<Item = GovernanceDagHttpHeaderRefV1<'a>>,
     body: &[u8],
@@ -1426,7 +1346,6 @@ fn partition_governance_dag_http_headers_v1<'a>(
     }
     Ok((selected, authentication))
 }
-
 fn parse_governance_request_content_length_v1(
     value: &[u8],
 ) -> Result<u64, GovernanceDagRequestAuthenticationErrorV1> {
@@ -1441,7 +1360,6 @@ fn parse_governance_request_content_length_v1(
         .and_then(|value| value.parse::<u64>().ok())
         .ok_or(GovernanceDagRequestAuthenticationErrorV1::InvalidFraming)
 }
-
 fn governance_request_auth_is_forbidden_credential_header_v1(name: &str) -> bool {
     [
         "authorization",
@@ -1455,14 +1373,12 @@ fn governance_request_auth_is_forbidden_credential_header_v1(name: &str) -> bool
     .iter()
     .any(|forbidden| forbidden.eq_ignore_ascii_case(name))
 }
-
 fn governance_request_auth_header_has_prefix_v1(name: &str) -> bool {
     name.get(..GOVERNANCE_DAG_REQUEST_AUTH_HEADER_PREFIX_V1.len())
         .is_some_and(|prefix| {
             prefix.eq_ignore_ascii_case(GOVERNANCE_DAG_REQUEST_AUTH_HEADER_PREFIX_V1)
         })
 }
-
 fn governance_request_auth_url_is_canonical(value: &str) -> bool {
     let Ok(url) = Url::parse(value) else {
         return false;
@@ -1493,7 +1409,6 @@ fn governance_request_auth_url_is_canonical(value: &str) -> bool {
     }
     reconstructed.as_str() == value
 }
-
 fn governance_request_auth_url_has_noncanonical_percent_escape(value: &str) -> bool {
     let bytes = value.as_bytes();
     let mut index = 0;
@@ -1521,7 +1436,6 @@ fn governance_request_auth_url_has_noncanonical_percent_escape(value: &str) -> b
     }
     false
 }
-
 fn governance_request_auth_hex_nibble(byte: u8) -> u8 {
     match byte {
         b'0'..=b'9' => byte - b'0',
@@ -1530,7 +1444,6 @@ fn governance_request_auth_hex_nibble(byte: u8) -> u8 {
         _ => unreachable!("caller validates hexadecimal request-auth escapes"),
     }
 }
-
 /// Stable, payload-free rejection from the V1 request-authentication contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GovernanceDagRequestAuthenticationErrorV1 {
@@ -1579,7 +1492,6 @@ pub enum GovernanceDagRequestAuthenticationErrorV1 {
     /// The deployment-owned shared sealed replay store is unavailable.
     ReplayStoreUnavailable,
 }
-
 impl fmt::Display for GovernanceDagRequestAuthenticationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -1652,9 +1564,7 @@ impl fmt::Display for GovernanceDagRequestAuthenticationErrorV1 {
         })
     }
 }
-
 impl std::error::Error for GovernanceDagRequestAuthenticationErrorV1 {}
-
 /// Pinned receiver policy for V1 Governance DAG request authentication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GovernanceDagRequestAuthenticationPolicyV1 {
@@ -1662,7 +1572,6 @@ pub struct GovernanceDagRequestAuthenticationPolicyV1 {
     max_envelope_lifetime_secs: u64,
     max_future_skew_secs: u64,
 }
-
 impl GovernanceDagRequestAuthenticationPolicyV1 {
     /// Construct and validate one receiver policy.
     ///
@@ -1699,26 +1608,22 @@ impl GovernanceDagRequestAuthenticationPolicyV1 {
             max_future_skew_secs,
         })
     }
-
     /// Raw canonical Ed25519 public key pinned by the receiver.
     #[must_use]
     pub const fn public_key(self) -> [u8; 32] {
         self.public_key
     }
-
     /// Maximum accepted envelope lifetime in seconds.
     #[must_use]
     pub const fn max_envelope_lifetime_secs(self) -> u64 {
         self.max_envelope_lifetime_secs
     }
-
     /// Maximum accepted issuance skew into the future in seconds.
     #[must_use]
     pub const fn max_future_skew_secs(self) -> u64 {
         self.max_future_skew_secs
     }
 }
-
 /// Replay-consumption boundary used by the V1 authenticated receiver.
 ///
 /// Production implementations must atomically consume one nonce in a shared,
@@ -1740,7 +1645,6 @@ pub trait GovernanceDagRequestAuthenticationReplayStoreV1: fmt::Debug {
         now_unix_secs: u64,
     ) -> Result<(), GovernanceDagRequestAuthenticationErrorV1>;
 }
-
 /// Caller-owned process-local bounded live-nonce cache for V1 validation.
 ///
 /// This cache never evicts a live nonce to admit another request; capacity
@@ -1752,7 +1656,6 @@ pub struct GovernanceDagRequestAuthenticationReplayCacheV1 {
     entries: BTreeMap<[u8; 32], u64>,
     capacity: usize,
 }
-
 impl GovernanceDagRequestAuthenticationReplayCacheV1 {
     /// Construct an empty cache with the governed V1 capacity.
     #[must_use]
@@ -1762,7 +1665,6 @@ impl GovernanceDagRequestAuthenticationReplayCacheV1 {
             capacity: GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1,
         }
     }
-
     /// Construct an empty cache with a smaller deterministic capacity.
     ///
     /// # Errors
@@ -1780,7 +1682,6 @@ impl GovernanceDagRequestAuthenticationReplayCacheV1 {
             capacity,
         })
     }
-
     fn consume(
         &mut self,
         nonce: [u8; 32],
@@ -1799,7 +1700,6 @@ impl GovernanceDagRequestAuthenticationReplayCacheV1 {
         Ok(())
     }
 }
-
 impl GovernanceDagRequestAuthenticationReplayStoreV1
     for GovernanceDagRequestAuthenticationReplayCacheV1
 {
@@ -1812,13 +1712,11 @@ impl GovernanceDagRequestAuthenticationReplayStoreV1
         self.consume(nonce, expires_at_unix_secs, now_unix_secs)
     }
 }
-
 impl Default for GovernanceDagRequestAuthenticationReplayCacheV1 {
     fn default() -> Self {
         Self::new()
     }
 }
-
 /// Public HSM-signed authentication envelope for one canonical request.
 ///
 /// The envelope deliberately exposes only fixed public authentication fields.
@@ -1835,7 +1733,6 @@ pub struct GovernanceDagRequestAuthenticationEnvelopeV1 {
     public_key: [u8; 32],
     signature: [u8; 64],
 }
-
 impl GovernanceDagRequestAuthenticationEnvelopeV1 {
     /// Construct one structurally canonical signed envelope.
     ///
@@ -1874,7 +1771,6 @@ impl GovernanceDagRequestAuthenticationEnvelopeV1 {
             signature,
         })
     }
-
     /// Build the exact domain-separated bytes an HSM must sign.
     #[must_use]
     pub fn signing_payload(
@@ -1900,50 +1796,42 @@ impl GovernanceDagRequestAuthenticationEnvelopeV1 {
         payload.extend_from_slice(&public_key);
         payload
     }
-
     /// Authenticated endpoint class.
     #[must_use]
     pub const fn scope(&self) -> GovernanceDagAuthenticationScope {
         self.scope
     }
-
     /// Inclusive issuance time as Unix seconds.
     #[must_use]
     pub const fn issued_at_unix_secs(&self) -> u64 {
         self.issued_at_unix_secs
     }
-
     /// Exclusive expiry time as Unix seconds.
     #[must_use]
     pub const fn expires_at_unix_secs(&self) -> u64 {
         self.expires_at_unix_secs
     }
-
     /// Public 256-bit one-use nonce.
     #[must_use]
     pub const fn nonce(&self) -> [u8; 32] {
         self.nonce
     }
-
     /// Signed canonical request digest.
     #[must_use]
     pub const fn request_digest(&self) -> [u8; 32] {
         self.request_digest
     }
-
     /// Raw Ed25519 public key used by the runtime HSM.
     #[must_use]
     pub const fn public_key(&self) -> [u8; 32] {
         self.public_key
     }
-
     /// Raw canonical Ed25519 signature.
     #[must_use]
     pub const fn signature(&self) -> [u8; 64] {
         self.signature
     }
 }
-
 /// Render the exact eight canonical public HTTP authentication headers.
 #[must_use]
 pub fn governance_dag_request_authentication_headers_v1(
@@ -1984,7 +1872,6 @@ pub fn governance_dag_request_authentication_headers_v1(
         ),
     ]
 }
-
 /// Parse exactly one V1 public authentication-envelope header set.
 ///
 /// Ordinary HTTP headers are ignored. Every name using the Governance DAG
@@ -2055,7 +1942,6 @@ pub fn parse_governance_dag_request_authentication_headers_v1<'a>(
         signature: parse_governance_request_auth_hex_header_v1(signature)?,
     })
 }
-
 /// Verify one parsed envelope before forwarding the request to its backend.
 ///
 /// `now_unix_secs` is supplied by the receiver so tests and deployment time
@@ -2087,7 +1973,6 @@ pub fn verify_governance_dag_request_authentication_v1(
         now_unix_secs,
     )
 }
-
 /// Verify every request-auth property except receiver-side nonce consumption.
 ///
 /// This exists only for the outbound service's non-authoritative signer sanity
@@ -2143,7 +2028,6 @@ pub(crate) fn verify_governance_dag_request_authentication_without_replay_v1(
         .verify(&public_key, &signing_payload)
         .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::SignatureVerification)
 }
-
 fn parse_governance_request_auth_decimal_header_v1(
     value: &[u8],
 ) -> Result<u64, GovernanceDagRequestAuthenticationErrorV1> {
@@ -2159,7 +2043,6 @@ fn parse_governance_request_auth_decimal_header_v1(
         .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader)?;
     Ok(value)
 }
-
 fn parse_governance_request_auth_hex_header_v1<const N: usize>(
     value: &[u8],
 ) -> Result<[u8; N], GovernanceDagRequestAuthenticationErrorV1> {
@@ -2175,13 +2058,11 @@ fn parse_governance_request_auth_hex_header_v1<const N: usize>(
         .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader)?;
     Ok(decoded)
 }
-
 fn append_governance_request_auth_field(bytes: &mut Vec<u8>, field: &[u8]) {
     let length = u32::try_from(field.len()).expect("bounded request-auth fields fit u32");
     bytes.extend_from_slice(&length.to_be_bytes());
     bytes.extend_from_slice(field);
 }
-
 /// Rotation-aware, receiver-qualified runtime authenticator for Governance DAG publication.
 ///
 /// Implementations own an Ed25519 HSM signing boundary and return only the
@@ -2195,7 +2076,6 @@ fn append_governance_request_auth_field(bytes: &mut Vec<u8>, field: &[u8]) {
 pub trait GovernanceDagRequestAuthenticator: Send + Sync + fmt::Debug {
     /// Opaque, non-secret deployment handle for this authenticator.
     fn handle(&self) -> &str;
-
     /// Actively qualify the adapter, receiver, endpoint, and replay store.
     ///
     /// Implementations must probe the exact receiver and shared sealed replay
@@ -2205,7 +2085,6 @@ pub trait GovernanceDagRequestAuthenticator: Send + Sync + fmt::Debug {
     /// production-ready. Returning configuration text without a live probe
     /// violates this trust-boundary contract.
     fn ingress_qualification(&self) -> Result<GovernanceDagRequestIngressQualificationV1, String>;
-
     /// Sign one exact bounded canonical outbound request descriptor.
     ///
     /// The returned envelope must use a fresh non-zero nonce and a short
@@ -2216,7 +2095,6 @@ pub trait GovernanceDagRequestAuthenticator: Send + Sync + fmt::Debug {
         request: &GovernanceDagCanonicalRequestV1,
     ) -> Result<GovernanceDagRequestAuthenticationEnvelopeV1, String>;
 }
-
 /// Durable object class owned by the sealed Governance DAG checkpoint store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GovernanceDagSealedStateSlot {
@@ -2233,7 +2111,6 @@ pub enum GovernanceDagSealedStateSlot {
     /// Live request-authentication nonces for signed-head operations.
     SignedHeadRequestReplay,
 }
-
 impl GovernanceDagSealedStateSlot {
     fn domain(self) -> &'static [u8] {
         match self {
@@ -2250,7 +2127,6 @@ impl GovernanceDagSealedStateSlot {
         }
     }
 }
-
 /// Return the canonical V1 payload ceiling for one sealed-state slot.
 ///
 /// Producer filesystem intents contain only checkpoint metadata and digests
@@ -2277,7 +2153,6 @@ pub const fn governance_dag_sealed_state_payload_max_bytes_v1(
         }
     }
 }
-
 /// Unsealed canonical record returned by the runtime checkpoint provider.
 ///
 /// The provider must keep this payload authenticated and confidential at rest.
@@ -2291,7 +2166,6 @@ pub struct GovernanceDagSealedStateRecord {
     /// Canonical Norito payload recovered by the provider.
     pub payload: Vec<u8>,
 }
-
 impl GovernanceDagSealedStateRecord {
     /// Construct a record and bind its public CAS revision.
     #[must_use]
@@ -2303,14 +2177,12 @@ impl GovernanceDagSealedStateRecord {
             payload,
         }
     }
-
     /// Verify the record's deterministic public CAS revision.
     #[must_use]
     pub fn has_valid_revision(&self, slot: GovernanceDagSealedStateSlot) -> bool {
         self.revision == governance_dag_sealed_state_revision(slot, self.generation, &self.payload)
     }
 }
-
 /// Derive the deterministic public CAS token for sealed Governance DAG state.
 #[must_use]
 pub fn governance_dag_sealed_state_revision(
@@ -2329,7 +2201,6 @@ pub fn governance_dag_sealed_state_revision(
     hasher.update(payload);
     *hasher.finalize().as_bytes()
 }
-
 /// Runtime-only sealed, monotonic Governance DAG checkpoint storage.
 ///
 /// Implementations must seal payloads at rest and enforce linearizable
@@ -2340,20 +2211,17 @@ pub fn governance_dag_sealed_state_revision(
 pub trait GovernanceDagSealedCheckpointStore: Send + Sync + fmt::Debug {
     /// Opaque, non-secret deployment handle for this store.
     fn handle(&self) -> &str;
-
     /// Qualify the active adapter and its public policy revision.
     ///
     /// Implementations must fail when the sealed monotonic store is
     /// unavailable, revoked, stale, test-marked, or otherwise not
     /// production-ready.
     fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String>;
-
     /// Load and unseal the latest record for `slot`.
     fn load(
         &self,
         slot: GovernanceDagSealedStateSlot,
     ) -> Result<Option<GovernanceDagSealedStateRecord>, String>;
-
     /// Atomically store `next` if `expected_revision` is still current.
     fn compare_and_swap(
         &self,
@@ -2361,7 +2229,6 @@ pub trait GovernanceDagSealedCheckpointStore: Send + Sync + fmt::Debug {
         expected_revision: Option<[u8; 32]>,
         next: GovernanceDagSealedStateRecord,
     ) -> Result<(), String>;
-
     /// Atomically remove a transient record if its exact revision is current.
     fn delete(
         &self,
@@ -2369,7 +2236,6 @@ pub trait GovernanceDagSealedCheckpointStore: Send + Sync + fmt::Debug {
         expected_revision: [u8; 32],
     ) -> Result<(), String>;
 }
-
 /// Deployment-owned authenticated reader for the authoritative privacy target head.
 ///
 /// Implementations authenticate every target read using runtime-only credentials
@@ -2378,7 +2244,6 @@ pub trait GovernanceDagSealedCheckpointStore: Send + Sync + fmt::Debug {
 pub trait FencedTransparencyAuthoritativeHeadReaderV1: Send + Sync + fmt::Debug {
     /// Stable, credential-free deployment identity for this reader.
     fn handle(&self) -> &str;
-
     /// Qualify the active adapter and its public policy revision.
     ///
     /// Implementations must fail when the authenticated transport or readback
@@ -2390,7 +2255,6 @@ pub trait FencedTransparencyAuthoritativeHeadReaderV1: Send + Sync + fmt::Debug 
     /// Returns a redacted diagnostic when the configured provider cannot prove
     /// its current public identity and policy qualification.
     fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String>;
-
     /// Authenticate the current head and verify every exact requested ancestor
     /// and publication inclusion.
     ///
@@ -2413,7 +2277,6 @@ pub trait FencedTransparencyAuthoritativeHeadReaderV1: Send + Sync + fmt::Debug 
         required_publications: &[FencedTransparencyPublicationInclusionV1],
     ) -> Result<FencedTransparencyHeadAncestryProofV1, String>;
 }
-
 #[derive(Debug, Clone)]
 struct PublishIndexEntryForCar {
     position: usize,
@@ -2426,7 +2289,6 @@ struct PublishIndexEntryForCar {
     json_blake3: String,
     json_len: usize,
 }
-
 struct PreparedGovernanceCarSegment {
     segment: JsonMap,
     car_path: PathBuf,
@@ -2436,7 +2298,6 @@ struct PreparedGovernanceCarSegment {
     plan_body: String,
     manifest_body: String,
 }
-
 /// One weekly rollup recovered from the fully authenticated runtime DAG.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AuthoritativeAppealFinanceWeeklyRollup {
@@ -2445,7 +2306,6 @@ pub(crate) struct AuthoritativeAppealFinanceWeeklyRollup {
     /// Typed payload authenticated by the signed runtime DAG.
     pub(crate) rollup: SoraFsAppealFinanceWeeklyRollupV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct CachedPrivacyPublicationAuthorizationV1 {
     lease_id: [u8; 32],
@@ -2470,7 +2330,6 @@ struct CachedPrivacyPublicationAuthorizationV1 {
     release_record_digest: [u8; 32],
     payload_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct FencedPrivacyPendingRequestV1 {
     version: u8,
@@ -2486,7 +2345,6 @@ struct FencedPrivacyPendingRequestV1 {
     fencing_token: u64,
     fencing_floor: u64,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct FencedPrivacyPublicationCacheV1 {
     version: u8,
@@ -2505,7 +2363,6 @@ struct FencedPrivacyPublicationCacheV1 {
     last_disposition: FencedPrivacyPublicationDispositionV1,
     last_included_head: FencedTransparencyTargetHeadV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct FencedPrivacyAuthoritativeHeadSyncV1 {
     version: u8,
@@ -2515,7 +2372,6 @@ struct FencedPrivacyAuthoritativeHeadSyncV1 {
     authoritative_head: Option<FencedTransparencyTargetHeadV1>,
     ancestry_proof_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct FencedPrivacyStateV1 {
     version: u8,
@@ -2523,7 +2379,6 @@ struct FencedPrivacyStateV1 {
     publication_cache: Option<FencedPrivacyPublicationCacheV1>,
     authoritative_head_sync: Option<FencedPrivacyAuthoritativeHeadSyncV1>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagProviderBindingV1 {
     signer_handle: String,
@@ -2535,7 +2390,6 @@ struct RuntimeDagProviderBindingV1 {
     publisher_peer_id: Vec<u8>,
     publisher_public_key: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagQualificationTransitionBodyV1 {
     version: u8,
@@ -2553,7 +2407,6 @@ struct RuntimeDagQualificationTransitionBodyV1 {
     archive_generation: u64,
     archive_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagKeyTransitionSigningPayloadV1 {
     version: u8,
@@ -2561,7 +2414,6 @@ struct RuntimeDagKeyTransitionSigningPayloadV1 {
     incoming_segment_revision: u64,
     transition_body_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagKeyTransitionEnvelopeV1 {
     version: u8,
@@ -2571,13 +2423,11 @@ struct RuntimeDagKeyTransitionEnvelopeV1 {
     outgoing_signature: [u8; 64],
     incoming_signature: [u8; 64],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagQualificationTransitionV1 {
     body: RuntimeDagQualificationTransitionBodyV1,
     key_transition: RuntimeDagKeyTransitionEnvelopeV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagQualificationHistoryV1 {
     version: u8,
@@ -2588,13 +2438,11 @@ struct RuntimeDagQualificationHistoryV1 {
     archive_tail_transition_digest: [u8; 32],
     transitions: Vec<RuntimeDagQualificationTransitionV1>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagQualificationStateV1 {
     version: u8,
     history: Option<RuntimeDagQualificationHistoryV1>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagQualificationArchiveBodyV1 {
     version: u8,
@@ -2608,13 +2456,11 @@ struct RuntimeDagQualificationArchiveBodyV1 {
     signer: RuntimeDagProviderBindingV1,
     transitions: Vec<RuntimeDagQualificationTransitionV1>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagQualificationArchiveV1 {
     body: RuntimeDagQualificationArchiveBodyV1,
     signature: [u8; 64],
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RuntimeDagQualificationSummary {
     transition_generation: u64,
@@ -2622,7 +2468,6 @@ struct RuntimeDagQualificationSummary {
     archive_generation: u64,
     archive_digest: [u8; 32],
 }
-
 impl RuntimeDagQualificationSummary {
     const EMPTY: Self = Self {
         transition_generation: 0,
@@ -2631,7 +2476,6 @@ impl RuntimeDagQualificationSummary {
         archive_digest: [0; 32],
     };
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct RuntimeDagProducerCheckpointV1 {
     pub(crate) version: u8,
@@ -2653,13 +2497,11 @@ pub(crate) struct RuntimeDagProducerCheckpointV1 {
     pub(crate) qualification_archive_generation: u64,
     pub(crate) qualification_archive_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagProducerStagedArtifactV1 {
     byte_len: u64,
     blake3: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagProducerPublishIntentV1 {
     version: u8,
@@ -2670,33 +2512,28 @@ struct RuntimeDagProducerPublishIntentV1 {
     head: RuntimeDagProducerStagedArtifactV1,
     index: RuntimeDagProducerStagedArtifactV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagProducerStagedTransactionV1 {
     block_bytes: Vec<u8>,
     head_bytes: Vec<u8>,
     index_bytes: Vec<u8>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagProducerStagedEnvelopeV1 {
     intent: RuntimeDagProducerPublishIntentV1,
     transaction: RuntimeDagProducerStagedTransactionV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagProducerStagingStateV1 {
     version: u8,
     staged: Option<RuntimeDagProducerStagedEnvelopeV1>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagCommittedStateV1 {
     version: u8,
     head_bytes: Option<Vec<u8>>,
     index_bytes: Option<Vec<u8>>,
 }
-
 /// One exact authenticated publication-authority generation for local readers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GovernancePublicationSnapshotV1 {
@@ -2704,20 +2541,17 @@ pub(crate) struct GovernancePublicationSnapshotV1 {
     store_record_digest: [u8; 32],
     canonical_bytes: Vec<u8>,
 }
-
 impl GovernancePublicationSnapshotV1 {
     /// Return the fixed-store generation and complete record digest.
     #[cfg(test)]
     pub(crate) fn store_identity(&self) -> (u64, [u8; 32]) {
         (self.store_generation, self.store_record_digest)
     }
-
     /// Borrow the canonical authoritative publication JSON bytes.
     #[cfg(test)]
     pub(crate) fn canonical_bytes(&self) -> &[u8] {
         &self.canonical_bytes
     }
-
     /// Consume the snapshot without cloning its potentially large canonical
     /// publication body.
     pub(crate) fn into_parts(self) -> (Vec<u8>, u64, [u8; 32]) {
@@ -2728,7 +2562,6 @@ impl GovernancePublicationSnapshotV1 {
         )
     }
 }
-
 /// One exact authenticated runtime-DAG head/index generation for local readers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeDagCommittedSnapshotV1 {
@@ -2737,24 +2570,20 @@ pub(crate) struct RuntimeDagCommittedSnapshotV1 {
     head_bytes: Vec<u8>,
     index_bytes: Vec<u8>,
 }
-
 impl RuntimeDagCommittedSnapshotV1 {
     /// Return the fixed-store generation and complete record digest.
     pub(crate) fn store_identity(&self) -> (u64, [u8; 32]) {
         (self.store_generation, self.store_record_digest)
     }
-
     /// Borrow the canonical signed-head bytes committed with the index.
     pub(crate) fn head_bytes(&self) -> &[u8] {
         &self.head_bytes
     }
-
     /// Borrow the canonical runtime-index bytes committed with the head.
     pub(crate) fn index_bytes(&self) -> &[u8] {
         &self.index_bytes
     }
 }
-
 /// One read-only runtime-DAG generation authenticated by an exact sealed
 /// producer checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2763,32 +2592,27 @@ pub(crate) struct AuthenticatedRuntimeDagSnapshotV1 {
     checkpoint_generation: u64,
     checkpoint_revision: [u8; 32],
 }
-
 impl AuthenticatedRuntimeDagSnapshotV1 {
     /// Return the fixed-store generation and complete record digest.
     #[cfg(test)]
     pub(crate) fn store_identity(&self) -> (u64, [u8; 32]) {
         self.committed.store_identity()
     }
-
     /// Borrow the canonical signed-head bytes.
     #[cfg(test)]
     pub(crate) fn head_bytes(&self) -> &[u8] {
         self.committed.head_bytes()
     }
-
     /// Borrow the canonical runtime-index bytes.
     #[cfg(test)]
     pub(crate) fn index_bytes(&self) -> &[u8] {
         self.committed.index_bytes()
     }
-
     /// Return the sealed producer-checkpoint generation and revision digest.
     #[cfg(test)]
     pub(crate) fn checkpoint_identity(&self) -> (u64, [u8; 32]) {
         (self.checkpoint_generation, self.checkpoint_revision)
     }
-
     /// Consume the authenticated snapshot without cloning its signed head or
     /// potentially large runtime index.
     pub(crate) fn into_parts(self) -> (Vec<u8>, Vec<u8>, u64, [u8; 32], u64, [u8; 32]) {
@@ -2802,7 +2626,6 @@ impl AuthenticatedRuntimeDagSnapshotV1 {
         )
     }
 }
-
 /// Persists governance artefacts on the filesystem for downstream ingestion.
 #[derive(Debug)]
 pub(crate) struct FilesystemGovernancePublisher {
@@ -2818,7 +2641,6 @@ pub(crate) struct FilesystemGovernancePublisher {
     runtime_dag_test_observed_timestamp: AtomicU64,
     _root_lock: File,
 }
-
 #[derive(Debug, Clone)]
 /// Retained canonical root and platform-stable directory identities for fencing.
 pub(crate) struct GovernanceFilesystemRootGuard {
@@ -2833,7 +2655,6 @@ pub(crate) struct GovernanceFilesystemRootGuard {
     #[cfg(unix)]
     writer_root: bool,
 }
-
 #[cfg(unix)]
 #[derive(Debug, Clone)]
 struct GovernanceFilesystemDirectoryIdentity {
@@ -2845,7 +2666,6 @@ struct GovernanceFilesystemDirectoryIdentity {
     permissions: u32,
     is_root: bool,
 }
-
 #[derive(Clone)]
 /// Startup-qualified signer pinned to one exact public provider policy.
 pub(crate) struct GovernanceRuntimeDagSigner {
@@ -2856,7 +2676,6 @@ pub(crate) struct GovernanceRuntimeDagSigner {
     verification_key: PublicKey,
     provider: Arc<dyn GovernanceDagRuntimeSigner>,
 }
-
 #[derive(Clone)]
 /// Startup-qualified sealed store pinned to one exact public provider policy.
 pub(crate) struct GovernanceRuntimeDagCheckpointStore {
@@ -2864,7 +2683,6 @@ pub(crate) struct GovernanceRuntimeDagCheckpointStore {
     qualification: GovernanceDagRuntimeProviderQualificationV1,
     provider: Arc<dyn GovernanceDagSealedCheckpointStore>,
 }
-
 /// Startup-qualified, identity-pinned fused privacy Governance publisher.
 #[derive(Clone)]
 pub struct QualifiedFencedTransparencyPublisherV1 {
@@ -2872,7 +2690,6 @@ pub struct QualifiedFencedTransparencyPublisherV1 {
     qualification: GovernanceDagRuntimeProviderQualificationV1,
     provider: Arc<dyn FencedTransparencyPublisherV1>,
 }
-
 #[derive(Clone)]
 /// Startup-qualified, identity-pinned authoritative privacy-head reader.
 pub struct QualifiedFencedTransparencyHeadReaderV1 {
@@ -2880,13 +2697,11 @@ pub struct QualifiedFencedTransparencyHeadReaderV1 {
     qualification: GovernanceDagRuntimeProviderQualificationV1,
     provider: Arc<dyn FencedTransparencyAuthoritativeHeadReaderV1>,
 }
-
 #[derive(Debug)]
 struct FencedPrivacyBoundaryFailure {
     error: GovernancePublishError,
     may_have_appended: bool,
 }
-
 impl fmt::Debug for QualifiedFencedTransparencyPublisherV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2897,7 +2712,6 @@ impl fmt::Debug for QualifiedFencedTransparencyPublisherV1 {
             .finish()
     }
 }
-
 impl fmt::Debug for QualifiedFencedTransparencyHeadReaderV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2908,7 +2722,6 @@ impl fmt::Debug for QualifiedFencedTransparencyHeadReaderV1 {
             .finish()
     }
 }
-
 impl fmt::Debug for GovernanceRuntimeDagSigner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GovernanceRuntimeDagSigner")
@@ -2918,7 +2731,6 @@ impl fmt::Debug for GovernanceRuntimeDagSigner {
             .finish_non_exhaustive()
     }
 }
-
 impl fmt::Debug for GovernanceRuntimeDagCheckpointStore {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2929,14 +2741,12 @@ impl fmt::Debug for GovernanceRuntimeDagCheckpointStore {
             .finish()
     }
 }
-
 impl FilesystemGovernancePublisher {
     /// Construct an unsigned base publisher for isolated tests.
     #[cfg(test)]
     pub(crate) fn try_new(root: PathBuf) -> io::Result<Self> {
         Self::try_new_with_publication_lock(root, Arc::new(Mutex::new(())))
     }
-
     /// Construct a publisher sharing its transaction fence with its owning node.
     pub(crate) fn try_new_with_publication_lock(
         root: PathBuf,
@@ -3005,17 +2815,14 @@ impl FilesystemGovernancePublisher {
             _root_lock: root_lock,
         })
     }
-
     /// Return the canonical filesystem root pinned by this publisher.
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }
-
     /// Return the retained physical root/ancestor identity fence.
     pub(crate) fn root_guard(&self) -> &GovernanceFilesystemRootGuard {
         &self.root_guard
     }
-
     /// Atomically attach and reconcile the signed-producer runtime providers.
     ///
     /// Neither provider is installed until both qualifications and the sealed
@@ -3047,7 +2854,6 @@ impl FilesystemGovernancePublisher {
         self.runtime_dag_checkpoint_store = Some(checkpoint_store);
         Ok(self)
     }
-
     /// Authenticate and install one explicit signer/store qualification rotation.
     ///
     /// Every change advances one canonical authority segment. Both outgoing and
@@ -3122,7 +2928,6 @@ impl FilesystemGovernancePublisher {
                 ));
             }
         }
-
         reconcile_runtime_dag_producer_state(
             &self.root,
             &self.root_guard,
@@ -3266,7 +3071,6 @@ impl FilesystemGovernancePublisher {
         }
         Ok(())
     }
-
     /// Archive an authenticated prefix and retain at most `retain_latest`
     /// live provider transitions.
     ///
@@ -3390,7 +3194,6 @@ impl FilesystemGovernancePublisher {
                 "governance runtime DAG qualification archive durable readback diverged",
             ));
         }
-
         let mut next = previous;
         next.qualification_archive_generation = archive_generation;
         next.qualification_archive_digest = archive_digest;
@@ -3409,7 +3212,6 @@ impl FilesystemGovernancePublisher {
                 "governance runtime DAG qualification archive checkpoint readback diverged",
             ));
         }
-
         let predecessor_history = history.clone();
         history.transitions.drain(..prune_count);
         history.archive_generation = archive_generation;
@@ -3426,7 +3228,6 @@ impl FilesystemGovernancePublisher {
         reconcile_runtime_dag_producer_state(&self.root, &self.root_guard, signer, store)?;
         Ok(prune_count)
     }
-
     /// Attach an already-qualified fused privacy publication provider.
     pub(crate) fn with_qualified_fenced_privacy_publisher(
         mut self,
@@ -3439,7 +3240,6 @@ impl FilesystemGovernancePublisher {
         self.fenced_privacy_publisher = Some(publisher);
         Ok(self)
     }
-
     /// Attach an already-qualified reader and bootstrap the local head cache.
     ///
     /// Standard node, Torii, and daemon launchers resolve this reader alongside
@@ -3460,7 +3260,6 @@ impl FilesystemGovernancePublisher {
         self.fenced_privacy_head_reader = Some(reader);
         Ok(self)
     }
-
     fn record_publish_index(
         &self,
         payload_kind: &str,
@@ -3565,7 +3364,6 @@ impl FilesystemGovernancePublisher {
         publication_state.insert("publish_index".into(), JsonValue::Object(publish_index));
         publication_state.insert("car_queue".into(), JsonValue::Object(car_queue));
         let prepared_state = prepare_governance_publication_state(publication_state)?;
-
         let persistence = (|| -> Result<(), GovernancePublishError> {
             let persisted = persist_governance_source_pair(
                 &self.root,
@@ -3600,7 +3398,6 @@ impl FilesystemGovernancePublisher {
         }
         Ok((encoded_path, json_path))
     }
-
     fn record_runtime_signed_payload(
         &self,
         payload_kind: &str,
@@ -3620,7 +3417,6 @@ impl FilesystemGovernancePublisher {
             None,
         )
     }
-
     #[allow(clippy::too_many_arguments)]
     fn record_runtime_signed_payload_with_provenance(
         &self,
@@ -3668,7 +3464,6 @@ impl FilesystemGovernancePublisher {
             provenance,
         )
     }
-
     fn preflight_runtime_signed_payload(
         &self,
         payload: &GovernanceLogPayloadV1,
@@ -3686,7 +3481,6 @@ impl FilesystemGovernancePublisher {
         checkpoint_store.assert_qualification()?;
         preflight_runtime_signed_dag_payload(payload, source_payload_len)
     }
-
     fn preflight_runtime_signed_payload_with_provenance(
         &self,
         payload: &GovernanceLogPayloadV1,
@@ -3713,13 +3507,11 @@ impl FilesystemGovernancePublisher {
         checkpoint_store.assert_qualification()?;
         preflight_runtime_signed_dag_payload(payload, source_payload_len)
     }
-
     #[cfg(test)]
     fn set_runtime_dag_observed_timestamp_for_test(&self, timestamp: u64) {
         self.runtime_dag_test_observed_timestamp
             .store(timestamp, Ordering::SeqCst);
     }
-
     fn lock_publication(&self) -> Result<MutexGuard<'_, ()>, GovernancePublishError> {
         self.root_guard.revalidate()?;
         let guard = self.publication_lock.lock().map_err(|_| {
@@ -3731,7 +3523,6 @@ impl FilesystemGovernancePublisher {
         Ok(guard)
     }
 }
-
 fn acquire_governance_publisher_lock(root: &Path) -> io::Result<File> {
     let lock_path = root.join(GOVERNANCE_PUBLISHER_LOCK_FILE);
     validate_atomic_output_path(&lock_path)?;
@@ -3796,7 +3587,6 @@ fn acquire_governance_publisher_lock(root: &Path) -> io::Result<File> {
         )),
     }
 }
-
 fn validate_governance_lock_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(io::Error::other(format!(
@@ -3813,18 +3603,15 @@ fn validate_governance_lock_metadata(path: &Path, metadata: &fs::Metadata) -> io
     }
     Ok(())
 }
-
 impl GovernanceFilesystemRootGuard {
     /// Capture a root which this process is authorized to mutate.
     pub(crate) fn capture_writer(root: &Path) -> io::Result<Self> {
         Self::capture_with_role(root, true)
     }
-
     /// Capture a read-only producer root and pin its distinct owner identity.
     pub(crate) fn capture_source(root: &Path) -> io::Result<Self> {
         Self::capture_with_role(root, false)
     }
-
     fn capture_with_role(root: &Path, writer_root: bool) -> io::Result<Self> {
         #[cfg(unix)]
         let lexical_root = governance_absolute_lexical_root(root)?;
@@ -3947,16 +3734,13 @@ impl GovernanceFilesystemRootGuard {
         guard.revalidate()?;
         Ok(guard)
     }
-
     /// Return the exact canonical root bound by this guard.
     pub(crate) fn root(&self) -> &Path {
         &self.canonical_root
     }
-
     pub(crate) fn rooted_directory(&self) -> &governance_rooted_fs::RootedDirectory {
         &self.rooted_directory
     }
-
     /// Return a path-free digest of the retained physical root identity.
     pub(crate) fn identity_digest(&self) -> io::Result<[u8; 32]> {
         self.revalidate()?;
@@ -3964,7 +3748,6 @@ impl GovernanceFilesystemRootGuard {
         self.revalidate()?;
         Ok(digest)
     }
-
     /// Revalidate every retained ancestor and root identity.
     pub(crate) fn revalidate(&self) -> io::Result<()> {
         #[cfg(unix)]
@@ -4021,7 +3804,6 @@ impl GovernanceFilesystemRootGuard {
         Ok(())
     }
 }
-
 #[cfg(unix)]
 fn revalidate_governance_directory_identity(
     identity: &GovernanceFilesystemDirectoryIdentity,
@@ -4070,7 +3852,6 @@ fn revalidate_governance_directory_identity(
     governance_rooted_fs::validate_retained_directory_acl(&identity.handle, &identity.path)?;
     Ok(())
 }
-
 #[cfg(unix)]
 fn validate_governance_directory_policy(
     path: &Path,
@@ -4115,7 +3896,6 @@ fn validate_governance_directory_policy(
         path.display()
     )))
 }
-
 #[cfg(unix)]
 fn governance_directory_policy_accepts(
     owner: u32,
@@ -4137,7 +3917,6 @@ fn governance_directory_policy_accepts(
     let writable = permissions & 0o022 != 0;
     trusted_owner && (!writable || permissions & 0o1000 != 0)
 }
-
 #[cfg(any(unix, windows))]
 fn governance_absolute_lexical_root(root: &Path) -> io::Result<PathBuf> {
     let absolute = if root.is_absolute() {
@@ -4158,12 +3937,10 @@ fn governance_absolute_lexical_root(root: &Path) -> io::Result<PathBuf> {
     }
     Ok(absolute)
 }
-
 #[cfg(unix)]
 fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(windows)]
 fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.volume_serial_number().is_some()
@@ -4171,12 +3948,10 @@ fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> b
         && left.volume_serial_number() == right.volume_serial_number()
         && left.file_index() == right.file_index()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn metadata_identifies_same_file(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 fn status_label(status: DealSettlementStatusV1) -> &'static str {
     match status {
         DealSettlementStatusV1::WindowSettled => "window_settled",
@@ -4185,7 +3960,6 @@ fn status_label(status: DealSettlementStatusV1) -> &'static str {
         DealSettlementStatusV1::Defaulted => "defaulted",
     }
 }
-
 fn pdp_decision_label(decision: PdpTerminalDecisionV1) -> &'static str {
     match decision {
         PdpTerminalDecisionV1::Accepted => "accepted",
@@ -4212,7 +3986,6 @@ fn pdp_decision_label(decision: PdpTerminalDecisionV1) -> &'static str {
         }
     }
 }
-
 fn governance_two_slot_label_digest_v1(kind: &[u8], value: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"sorafs.governance.local-two-slot.binding-label.v1\0");
@@ -4230,7 +4003,6 @@ fn governance_two_slot_label_digest_v1(kind: &[u8], value: &[u8]) -> [u8; 32] {
     hasher.update(value);
     *hasher.finalize().as_bytes()
 }
-
 fn governance_two_slot_config_v1(
     spec: GovernanceTwoSlotStoreSpecV1,
 ) -> Result<governance_rooted_fs::TwoSlotStoreConfigV1, GovernancePublishError> {
@@ -4242,7 +4014,6 @@ fn governance_two_slot_config_v1(
     )
     .map_err(Into::into)
 }
-
 fn open_governance_two_slot_store_v1(
     root_guard: &GovernanceFilesystemRootGuard,
     spec: GovernanceTwoSlotStoreSpecV1,
@@ -4255,7 +4026,6 @@ fn open_governance_two_slot_store_v1(
     root_guard.revalidate()?;
     Ok(store)
 }
-
 fn load_governance_two_slot_store_v1(
     store: &governance_rooted_fs::TwoSlotStoreV1,
     label: &str,
@@ -4264,7 +4034,6 @@ fn load_governance_two_slot_store_v1(
         GovernancePublishError::other(format!("failed to load {label} two-slot state: {error}"))
     })
 }
-
 fn compare_and_swap_governance_two_slot_store_v1(
     store: &governance_rooted_fs::TwoSlotStoreV1,
     expected: &governance_rooted_fs::TwoSlotSnapshotV1,
@@ -4275,7 +4044,6 @@ fn compare_and_swap_governance_two_slot_store_v1(
         GovernancePublishError::other(format!("failed to commit {label} two-slot state: {error}"))
     })
 }
-
 fn encode_governance_two_slot_value_v1<T: norito::NoritoSerialize>(
     value: &T,
     label: &str,
@@ -4284,7 +4052,6 @@ fn encode_governance_two_slot_value_v1<T: norito::NoritoSerialize>(
         GovernancePublishError::other(format!("failed to encode {label}: {error}"))
     })
 }
-
 fn decode_governance_two_slot_value_v1<T>(
     snapshot: &governance_rooted_fs::TwoSlotSnapshotV1,
     label: &str,
@@ -4295,7 +4062,6 @@ where
 {
     decode_canonical_runtime_dag(snapshot.payload(), label)
 }
-
 #[cfg(test)]
 fn write_atomic(
     root_guard: &GovernanceFilesystemRootGuard,
@@ -4304,7 +4070,6 @@ fn write_atomic(
 ) -> io::Result<()> {
     write_rooted_atomic(root_guard, path, data)
 }
-
 fn write_immutable_governance_file(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
@@ -4365,7 +4130,6 @@ fn write_immutable_governance_file(
     readback.binding().verify()?;
     Ok(())
 }
-
 fn write_immutable_governance_artifact(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
@@ -4392,7 +4156,6 @@ fn write_immutable_governance_artifact(
     readback.binding().verify()?;
     Ok(())
 }
-
 fn governance_source_pair_id(
     payload_kind: &str,
     encoded_len: u64,
@@ -4416,7 +4179,6 @@ fn governance_source_pair_id(
         json_blake3,
     )))
 }
-
 pub(crate) fn governance_source_pair_relative_paths(
     payload_kind: &str,
     encoded_len: u64,
@@ -4435,7 +4197,6 @@ pub(crate) fn governance_source_pair_relative_paths(
     let root = format!("{GOVERNANCE_PUBLICATION_SOURCES_DIR}/{payload_kind}/{pair_id}");
     Ok((format!("{root}/payload.to"), format!("{root}/payload.json")))
 }
-
 fn validate_governance_publication_payload_kind(
     payload_kind: &str,
 ) -> Result<(), GovernancePublishError> {
@@ -4452,7 +4213,6 @@ fn validate_governance_publication_payload_kind(
     }
     Ok(())
 }
-
 fn persist_governance_source_pair(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -4492,7 +4252,6 @@ fn persist_governance_source_pair(
     )?;
     Ok((encoded_path, json_path))
 }
-
 fn rooted_target(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
@@ -4515,7 +4274,6 @@ fn rooted_target(
     root_guard.revalidate()?;
     Ok(target)
 }
-
 fn rooted_atomic_temp_name(target: &OsStr) -> io::Result<OsString> {
     let target = target.to_str().ok_or_else(|| {
         io::Error::new(
@@ -4529,7 +4287,6 @@ fn rooted_atomic_temp_name(target: &OsStr) -> io::Result<OsString> {
         std::process::id()
     )))
 }
-
 fn write_rooted_atomic(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
@@ -4562,7 +4319,6 @@ fn write_rooted_atomic(
     directory.atomic_replace_current(&name, &temporary_name, data)?;
     root_guard.revalidate()
 }
-
 fn write_rooted_atomic_expected(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
@@ -4594,7 +4350,6 @@ fn write_rooted_atomic_expected(
     directory.atomic_write(&name, &temporary_name, data, expected)?;
     root_guard.revalidate()
 }
-
 pub(super) fn read_rooted_governance_state_file(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
@@ -4605,7 +4360,6 @@ pub(super) fn read_rooted_governance_state_file(
     root_guard.revalidate()?;
     Ok(snapshot)
 }
-
 fn write_rooted_digest_sidecar(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
@@ -4615,7 +4369,6 @@ fn write_rooted_digest_sidecar(
     body.push('\n');
     write_rooted_atomic(root_guard, &digest_sidecar_path_for(path), body.as_bytes())
 }
-
 fn ensure_rooted_digest_sidecar_immutable(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
@@ -4642,7 +4395,6 @@ fn ensure_rooted_digest_sidecar_immutable(
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
-
     write_rooted_atomic_expected(
         root_guard,
         &sidecar_path,
@@ -4663,7 +4415,6 @@ fn ensure_rooted_digest_sidecar_immutable(
     readback.binding().verify()?;
     Ok(())
 }
-
 fn verify_rooted_digest_sidecar(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
@@ -4685,7 +4436,6 @@ fn verify_rooted_digest_sidecar(
     actual.binding().verify()?;
     Ok(())
 }
-
 #[cfg(test)]
 fn write_atomic_with_directory_sync<F>(path: &Path, data: &[u8], sync_parent: F) -> io::Result<()>
 where
@@ -4707,7 +4457,6 @@ where
     validate_atomic_output_path(path)?;
     let counter = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp_path = temp_path_for_atomic(path, std::process::id(), counter);
-
     let write_result = (|| -> io::Result<()> {
         let mut file = open_atomic_temp_file(&tmp_path)?;
         file.write_all(data)?;
@@ -4718,13 +4467,11 @@ where
         sync_parent(parent)?;
         Ok(())
     })();
-
     if write_result.is_err() {
         let _ = fs::remove_file(&tmp_path);
     }
     write_result
 }
-
 fn write_digest_sidecar(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
@@ -4732,7 +4479,6 @@ fn write_digest_sidecar(
 ) -> io::Result<()> {
     write_rooted_digest_sidecar(root_guard, path, data)
 }
-
 fn digest_sidecar_path_for(path: &Path) -> PathBuf {
     let suffix = match path.extension().and_then(|ext| ext.to_str()) {
         Some(ext) if !ext.is_empty() => format!("{ext}.blake3"),
@@ -4740,7 +4486,6 @@ fn digest_sidecar_path_for(path: &Path) -> PathBuf {
     };
     path.with_extension(suffix)
 }
-
 fn verify_digest_sidecar(path: &Path, data: &[u8]) -> Result<(), GovernancePublishError> {
     let digest_path = digest_sidecar_path_for(path);
     let actual = read_bounded_governance_state_file(&digest_path, GOVERNANCE_DIGEST_SIDECAR_BYTES)?;
@@ -4754,7 +4499,6 @@ fn verify_digest_sidecar(path: &Path, data: &[u8]) -> Result<(), GovernancePubli
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn temp_path_for_atomic(path: &Path, pid: u32, counter: u64) -> PathBuf {
     let suffix = format!("tmp-{pid}-{counter}");
@@ -4764,7 +4508,6 @@ fn temp_path_for_atomic(path: &Path, pid: u32, counter: u64) -> PathBuf {
         None => candidate,
     }
 }
-
 #[cfg(test)]
 fn open_atomic_temp_file(path: &Path) -> io::Result<File> {
     let mut options = fs::OpenOptions::new();
@@ -4793,7 +4536,6 @@ fn open_atomic_temp_file(path: &Path) -> io::Result<File> {
     }
     Ok(file)
 }
-
 fn validate_atomic_output_path(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -4818,7 +4560,6 @@ fn validate_atomic_output_path(path: &Path) -> io::Result<()> {
             ));
         }
     }
-
     if let Some(parent) = path.parent() {
         for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
             if ancestor.as_os_str().is_empty() {
@@ -4854,20 +4595,16 @@ fn validate_atomic_output_path(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut fs::OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(unix)]
 fn set_directory_no_follow_flags(options: &mut fs::OpenOptions) {
     options.custom_flags(platform_no_follow_flag() | platform_directory_only_flag());
 }
-
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-
 #[cfg(all(
     target_os = "android",
     not(any(
@@ -4879,7 +4616,6 @@ fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
     ))
 ))]
 compile_error!("Governance DAG filesystem flags are not qualified for this Android architecture");
-
 #[cfg(all(
     unix,
     not(any(
@@ -4894,12 +4630,10 @@ compile_error!("Governance DAG filesystem flags are not qualified for this Andro
     ))
 ))]
 compile_error!("Governance DAG filesystem flags are not qualified for this Unix target");
-
 #[cfg(all(target_os = "android", target_arch = "riscv64"))]
 fn platform_no_follow_flag() -> i32 {
     0x400000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "aarch64", target_arch = "arm")
@@ -4907,7 +4641,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x8000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "x86", target_arch = "x86_64")
@@ -4915,7 +4648,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x20000
 }
-
 #[cfg(all(
     target_os = "linux",
     any(
@@ -4929,7 +4661,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x8000
 }
-
 #[cfg(all(
     target_os = "linux",
     not(any(
@@ -4943,7 +4674,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x20000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -4959,12 +4689,10 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(target_os = "android", target_arch = "riscv64"))]
 fn platform_directory_only_flag() -> i32 {
     0x200000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "aarch64", target_arch = "arm")
@@ -4972,7 +4700,6 @@ fn platform_directory_only_flag() -> i32 {
 fn platform_directory_only_flag() -> i32 {
     0x4000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "x86", target_arch = "x86_64")
@@ -4980,7 +4707,6 @@ fn platform_directory_only_flag() -> i32 {
 fn platform_directory_only_flag() -> i32 {
     0x10000
 }
-
 #[cfg(all(
     target_os = "linux",
     any(
@@ -4994,7 +4720,6 @@ fn platform_directory_only_flag() -> i32 {
 fn platform_directory_only_flag() -> i32 {
     0x4000
 }
-
 #[cfg(all(
     target_os = "linux",
     not(any(
@@ -5008,39 +4733,32 @@ fn platform_directory_only_flag() -> i32 {
 fn platform_directory_only_flag() -> i32 {
     0x10000
 }
-
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 fn platform_directory_only_flag() -> i32 {
     0x0010_0000
 }
-
 #[cfg(target_os = "freebsd")]
 fn platform_directory_only_flag() -> i32 {
     0x0002_0000
 }
-
 #[cfg(target_os = "dragonfly")]
 fn platform_directory_only_flag() -> i32 {
     0x0800_0000
 }
-
 #[cfg(target_os = "openbsd")]
 fn platform_directory_only_flag() -> i32 {
     0x0002_0000
 }
-
 #[cfg(target_os = "netbsd")]
 fn platform_directory_only_flag() -> i32 {
     0x0020_0000
 }
-
 fn current_unix_timestamp_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default()
 }
-
 impl QualifiedFencedTransparencyPublisherV1 {
     /// Qualify and pin one deployment-owned fused privacy publisher.
     ///
@@ -5078,19 +4796,16 @@ impl QualifiedFencedTransparencyPublisherV1 {
         publisher.assert_qualification()?;
         Ok(publisher)
     }
-
     /// Return the pinned opaque deployment handle.
     #[must_use]
     pub fn handle(&self) -> &str {
         &self.handle
     }
-
     /// Return the pinned public adapter qualification.
     #[must_use]
     pub const fn qualification(&self) -> GovernanceDagRuntimeProviderQualificationV1 {
         self.qualification
     }
-
     pub(crate) fn assert_qualification(&self) -> Result<(), GovernancePublishError> {
         let qualification = self.provider.qualification().map_err(|_| {
             GovernancePublishError::other(
@@ -5104,7 +4819,6 @@ impl QualifiedFencedTransparencyPublisherV1 {
         }
         Ok(())
     }
-
     fn compare_and_append_privacy_classified(
         &self,
         request: &FencedPrivacyPublicationRequestV1,
@@ -5148,7 +4862,6 @@ impl QualifiedFencedTransparencyPublisherV1 {
         Ok(receipt)
     }
 }
-
 impl QualifiedFencedTransparencyHeadReaderV1 {
     /// Qualify and pin one deployment-owned authenticated head reader.
     ///
@@ -5186,19 +4899,16 @@ impl QualifiedFencedTransparencyHeadReaderV1 {
         reader.assert_qualification()?;
         Ok(reader)
     }
-
     /// Return the pinned opaque deployment handle.
     #[must_use]
     pub fn handle(&self) -> &str {
         &self.handle
     }
-
     /// Return the pinned public adapter qualification.
     #[must_use]
     pub const fn qualification(&self) -> GovernanceDagRuntimeProviderQualificationV1 {
         self.qualification
     }
-
     pub(crate) fn assert_qualification(&self) -> Result<(), GovernancePublishError> {
         let qualification = self.provider.qualification().map_err(|_| {
             GovernancePublishError::other(
@@ -5212,7 +4922,6 @@ impl QualifiedFencedTransparencyHeadReaderV1 {
         }
         Ok(())
     }
-
     fn read_authoritative_head_with_ancestry(
         &self,
         required_ancestors: &[FencedTransparencyTargetHeadV1],
@@ -5242,7 +4951,6 @@ impl QualifiedFencedTransparencyHeadReaderV1 {
         Ok(proof)
     }
 }
-
 pub(crate) fn ensure_fenced_privacy_runtime_bindings_match(
     publisher: &QualifiedFencedTransparencyPublisherV1,
     reader: &QualifiedFencedTransparencyHeadReaderV1,
@@ -5255,7 +4963,6 @@ pub(crate) fn ensure_fenced_privacy_runtime_bindings_match(
     }
     Ok(())
 }
-
 impl GovernanceRuntimeDagSigner {
     fn try_new(
         expected_handle: String,
@@ -5355,7 +5062,6 @@ impl GovernanceRuntimeDagSigner {
             provider,
         })
     }
-
     fn sign(
         &self,
         purpose: GovernanceDagSigningPurposeV1,
@@ -5387,7 +5093,6 @@ impl GovernanceRuntimeDagSigner {
             signature: signature_bytes.to_vec(),
         })
     }
-
     /// Revalidate the pinned signer identity and public provider policy.
     pub(crate) fn assert_qualification(&self) -> Result<(), GovernancePublishError> {
         let qualification = self.provider.qualification().map_err(|_| {
@@ -5406,7 +5111,6 @@ impl GovernanceRuntimeDagSigner {
         }
         Ok(())
     }
-
     /// Return the exact retained, non-secret signer binding without exposing
     /// filesystem paths or the signer provider itself.
     #[must_use]
@@ -5425,16 +5129,13 @@ impl GovernanceRuntimeDagSigner {
             self.public_key,
         )
     }
-
     fn publisher_peer_id_hex(&self) -> String {
         hex::encode(&self.publisher_peer_id)
     }
-
     fn publisher_public_key_hex(&self) -> String {
         hex::encode(self.public_key)
     }
 }
-
 impl GovernanceRuntimeDagCheckpointStore {
     fn try_new(
         expected_handle: String,
@@ -5470,15 +5171,12 @@ impl GovernanceRuntimeDagCheckpointStore {
         store.assert_qualification()?;
         Ok(store)
     }
-
     pub(crate) fn handle(&self) -> &str {
         &self.handle
     }
-
     pub(crate) const fn qualification(&self) -> GovernanceDagRuntimeProviderQualificationV1 {
         self.qualification
     }
-
     pub(crate) fn assert_qualification(&self) -> Result<(), GovernancePublishError> {
         let qualification = self.provider.qualification().map_err(|_| {
             GovernancePublishError::other(
@@ -5492,7 +5190,6 @@ impl GovernanceRuntimeDagCheckpointStore {
         }
         Ok(())
     }
-
     fn load(
         &self,
         slot: GovernanceDagSealedStateSlot,
@@ -5515,7 +5212,6 @@ impl GovernanceRuntimeDagCheckpointStore {
         }
         Ok(record)
     }
-
     fn compare_and_swap(
         &self,
         slot: GovernanceDagSealedStateSlot,
@@ -5548,7 +5244,6 @@ impl GovernanceRuntimeDagCheckpointStore {
         }
         Ok(())
     }
-
     fn delete(
         &self,
         slot: GovernanceDagSealedStateSlot,
@@ -5570,7 +5265,6 @@ impl GovernanceRuntimeDagCheckpointStore {
         Ok(())
     }
 }
-
 /// Qualify one exact runtime signer without opening the publisher filesystem.
 pub(crate) fn qualify_governance_dag_runtime_signer_provider(
     expected_handle: String,
@@ -5587,7 +5281,6 @@ pub(crate) fn qualify_governance_dag_runtime_signer_provider(
         provider,
     )
 }
-
 /// Qualify one exact sealed local-producer store before opening state.
 pub(crate) fn qualify_governance_dag_runtime_checkpoint_store(
     expected_handle: String,
@@ -5596,7 +5289,6 @@ pub(crate) fn qualify_governance_dag_runtime_checkpoint_store(
 ) -> Result<GovernanceRuntimeDagCheckpointStore, GovernancePublishError> {
     GovernanceRuntimeDagCheckpointStore::try_new(expected_handle, expected_qualification, provider)
 }
-
 fn validate_runtime_handle(
     handle: &str,
     label: &'static str,
@@ -5611,7 +5303,6 @@ fn validate_runtime_handle(
         )),
     }
 }
-
 #[cfg(unix)]
 fn metadata_stable_during_read(before: &fs::Metadata, after: &fs::Metadata) -> bool {
     metadata_identifies_same_file(before, after)
@@ -5621,14 +5312,12 @@ fn metadata_stable_during_read(before: &fs::Metadata, after: &fs::Metadata) -> b
         && before.ctime() == after.ctime()
         && before.ctime_nsec() == after.ctime_nsec()
 }
-
 #[cfg(not(unix))]
 fn metadata_stable_during_read(before: &fs::Metadata, after: &fs::Metadata) -> bool {
     metadata_identifies_same_file(before, after)
         && before.len() == after.len()
         && before.modified().ok() == after.modified().ok()
 }
-
 fn read_bounded_governance_state_file(path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
     let max_bytes_u64 = u64::try_from(max_bytes)
         .map_err(|_| io::Error::other("governance state byte limit exceeds u64"))?;
@@ -5687,7 +5376,6 @@ fn read_bounded_governance_state_file(path: &Path, max_bytes: usize) -> io::Resu
     validate_atomic_output_path(path)?;
     Ok(bytes)
 }
-
 fn validate_governance_state_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(io::Error::other(format!(
@@ -5704,7 +5392,6 @@ fn validate_governance_state_metadata(path: &Path, metadata: &fs::Metadata) -> i
     }
     Ok(())
 }
-
 fn empty_governance_publish_index() -> JsonMap {
     let mut index = JsonMap::new();
     index.insert(
@@ -5730,7 +5417,6 @@ fn empty_governance_publish_index() -> JsonMap {
     index.insert("entries".into(), JsonValue::Array(Vec::new()));
     index
 }
-
 fn empty_governance_car_queue() -> JsonMap {
     let mut queue = JsonMap::new();
     queue.insert(
@@ -5758,7 +5444,6 @@ fn empty_governance_car_queue() -> JsonMap {
     queue.insert("segments".into(), JsonValue::Array(Vec::new()));
     queue
 }
-
 fn empty_governance_publication_state() -> JsonMap {
     let mut state = JsonMap::new();
     state.insert(
@@ -5782,7 +5467,6 @@ fn empty_governance_publication_state() -> JsonMap {
     );
     state
 }
-
 fn read_governance_publication_initialization_marker(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -5805,7 +5489,6 @@ fn read_governance_publication_initialization_marker(
     snapshot.binding().verify()?;
     Ok(true)
 }
-
 fn governance_publication_artifact_roots_present(
     root_guard: &GovernanceFilesystemRootGuard,
 ) -> Result<bool, GovernancePublishError> {
@@ -5826,7 +5509,6 @@ fn governance_publication_artifact_roots_present(
     root_guard.revalidate()?;
     Ok(false)
 }
-
 fn initialize_governance_publication_authority_if_pristine(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -5851,7 +5533,6 @@ fn initialize_governance_publication_authority_if_pristine(
             "authoritative governance publication state is missing from an initialized root",
         ));
     }
-
     let state = empty_governance_publication_state();
     validate_governance_publication_state(&state)?;
     let body = json::to_json_pretty(&JsonValue::Object(state)).map_err(|error| {
@@ -5867,7 +5548,6 @@ fn initialize_governance_publication_authority_if_pristine(
     let _ = read_governance_publication_state(&store)?;
     Ok((store, marker_present))
 }
-
 fn write_governance_publication_initialization_marker(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -5886,7 +5566,6 @@ fn write_governance_publication_initialization_marker(
     }
     Ok(())
 }
-
 fn reject_legacy_atomic_state_names(
     directory: &governance_rooted_fs::RootedDirectory,
     targets: &[&str],
@@ -5908,7 +5587,6 @@ fn reject_legacy_atomic_state_names(
     }
     Ok(())
 }
-
 fn reject_legacy_governance_publication_authorities(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -5951,7 +5629,6 @@ fn reject_legacy_governance_publication_authorities(
     }
     Ok(())
 }
-
 fn read_governance_publication_state(
     store: &governance_rooted_fs::TwoSlotStoreV1,
 ) -> Result<(JsonMap, governance_rooted_fs::TwoSlotSnapshotV1), GovernancePublishError> {
@@ -5959,7 +5636,6 @@ fn read_governance_publication_state(
     let state = decode_governance_publication_state_snapshot(&snapshot)?;
     Ok((state, snapshot))
 }
-
 fn decode_governance_publication_state_snapshot(
     snapshot: &governance_rooted_fs::TwoSlotSnapshotV1,
 ) -> Result<JsonMap, GovernancePublishError> {
@@ -5993,7 +5669,6 @@ fn decode_governance_publication_state_snapshot(
     }
     Ok(state)
 }
-
 /// Load one exact publication-authority generation through a retained root.
 ///
 /// An entirely pristine root is reported as `None`; once initialization state
@@ -6039,7 +5714,6 @@ pub(crate) fn load_governance_publication_snapshot_v1(
         canonical_bytes: snapshot.payload().to_vec(),
     }))
 }
-
 #[cfg(test)]
 fn commit_governance_publication_state(
     root: &Path,
@@ -6056,7 +5730,6 @@ fn commit_governance_publication_state(
     let body = prepare_governance_publication_state(state)?;
     write_prepared_governance_publication_state(&store, &snapshot, &body).map(drop)
 }
-
 #[cfg(test)]
 fn commit_governance_publication_state_with<F>(
     root: &Path,
@@ -6082,7 +5755,6 @@ where
     )?;
     write_prepared_governance_publication_state(&store, &snapshot, &body).map(drop)
 }
-
 fn prepare_governance_publication_state(
     mut state: JsonMap,
 ) -> Result<Vec<u8>, GovernancePublishError> {
@@ -6116,7 +5788,6 @@ fn prepare_governance_publication_state(
     }
     Ok(body.into_bytes())
 }
-
 fn write_prepared_governance_publication_state(
     store: &governance_rooted_fs::TwoSlotStoreV1,
     expected: &governance_rooted_fs::TwoSlotSnapshotV1,
@@ -6140,7 +5811,6 @@ fn write_prepared_governance_publication_state(
     }
     Ok(committed)
 }
-
 fn require_exact_governance_fields(
     map: &JsonMap,
     expected: &[&str],
@@ -6153,7 +5823,6 @@ fn require_exact_governance_fields(
     }
     Ok(())
 }
-
 fn required_governance_string<'a>(
     map: &'a JsonMap,
     field: &str,
@@ -6163,7 +5832,6 @@ fn required_governance_string<'a>(
         .and_then(JsonValue::as_str)
         .ok_or_else(|| GovernancePublishError::other(format!("{context} is missing `{field}`")))
 }
-
 fn required_governance_u64(
     map: &JsonMap,
     field: &str,
@@ -6173,7 +5841,6 @@ fn required_governance_u64(
         .and_then(JsonValue::as_u64)
         .ok_or_else(|| GovernancePublishError::other(format!("{context} is missing `{field}`")))
 }
-
 fn validate_governance_lower_hex(
     value: &str,
     bytes: usize,
@@ -6190,7 +5857,6 @@ fn validate_governance_lower_hex(
     }
     Ok(())
 }
-
 fn validate_governance_publication_labels(
     labels: &JsonMap,
     context: &str,
@@ -6244,7 +5910,6 @@ fn validate_governance_publication_labels(
     }
     Ok(())
 }
-
 #[derive(Debug)]
 struct GovernancePublishIdentity {
     payload_kind: String,
@@ -6255,7 +5920,6 @@ struct GovernancePublishIdentity {
     json_blake3: String,
     json_len: u64,
 }
-
 fn validate_governance_publish_index_state(
     index: &JsonMap,
 ) -> Result<Vec<GovernancePublishIdentity>, GovernancePublishError> {
@@ -6410,7 +6074,6 @@ fn validate_governance_publish_index_state(
                 )));
             }
         }
-
         let count = payload_kind_counts
             .get(payload_kind)
             .and_then(JsonValue::as_u64)
@@ -6442,7 +6105,6 @@ fn validate_governance_publish_index_state(
     }
     Ok(identities)
 }
-
 fn validate_governance_car_segment_source_files(
     segment: &JsonMap,
     identity: &GovernancePublishIdentity,
@@ -6529,7 +6191,6 @@ fn validate_governance_car_segment_source_files(
     }
     Ok(())
 }
-
 fn register_governance_artifact_owner(
     owners: &mut BTreeMap<String, String>,
     path: &str,
@@ -6547,7 +6208,6 @@ fn register_governance_artifact_owner(
     }
     Ok(())
 }
-
 fn validate_governance_car_queue_state(
     queue: &JsonMap,
     identities: &[GovernancePublishIdentity],
@@ -6792,7 +6452,6 @@ fn validate_governance_car_queue_state(
     }
     Ok(())
 }
-
 fn validate_governance_publication_state(state: &JsonMap) -> Result<(), GovernancePublishError> {
     const STATE_FIELDS: [&str; 7] = [
         "schema",
@@ -6834,7 +6493,6 @@ fn validate_governance_publication_state(state: &JsonMap) -> Result<(), Governan
     let identities = validate_governance_publish_index_state(index)?;
     validate_governance_car_queue_state(queue, &identities)
 }
-
 #[derive(Debug, Default)]
 struct GovernancePublicationArtifactInventory {
     source_kind_dirs: BTreeSet<String>,
@@ -6843,7 +6501,6 @@ struct GovernancePublicationArtifactInventory {
     car_files: BTreeSet<String>,
     next_position: usize,
 }
-
 fn governance_publication_artifact_inventory(
     state: &JsonMap,
 ) -> Result<GovernancePublicationArtifactInventory, GovernancePublishError> {
@@ -6905,7 +6562,6 @@ fn governance_publication_artifact_inventory(
             }
         }
     }
-
     let segments = state
         .get("car_queue")
         .and_then(|queue| queue.get("segments"))
@@ -6934,21 +6590,18 @@ fn governance_publication_artifact_inventory(
     }
     Ok(inventory)
 }
-
 fn is_canonical_governance_source_pair_directory(name: &str) -> bool {
     name.len() == 64
         && name
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
-
 fn is_canonical_governance_source_artifact_name(name: &str) -> bool {
     matches!(
         name,
         "payload.to" | "payload.to.blake3" | "payload.json" | "payload.json.blake3"
     )
 }
-
 fn reject_governance_publication_recovery_quarantine(
     root_guard: &GovernanceFilesystemRootGuard,
 ) -> Result<(), GovernancePublishError> {
@@ -6973,7 +6626,6 @@ fn reject_governance_publication_recovery_quarantine(
         "governance publication recovery quarantine contains {entry_count} preserved entries; stop the publisher, inspect them, and clear `{GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR}` offline before restart"
     )))
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn prepare_governance_publication_recovery_quarantine(
     root_guard: &GovernanceFilesystemRootGuard,
@@ -6993,7 +6645,6 @@ fn prepare_governance_publication_recovery_quarantine(
     root_guard.revalidate()?;
     Ok(quarantine)
 }
-
 fn governance_publication_atomic_temp_target_name(name: &str) -> Option<&str> {
     let name = name.strip_prefix('.')?;
     let (target_name, suffix) = name.rsplit_once(".tmp-")?;
@@ -7010,7 +6661,6 @@ fn governance_publication_atomic_temp_target_name(name: &str) -> Option<&str> {
     }
     Some(target_name)
 }
-
 fn governance_artifact_roles_form_write_prefix<const N: usize>(
     present: &BTreeSet<String>,
     write_order: &[&str; N],
@@ -7021,7 +6671,6 @@ fn governance_artifact_roles_form_write_prefix<const N: usize>(
             .take(present.len())
             .all(|role| present.contains(*role))
 }
-
 fn canonical_governance_car_artifact_base(name: &str) -> Option<&str> {
     const SUFFIXES: [&str; 6] = [
         ".plan.json.blake3",
@@ -7040,12 +6689,10 @@ fn canonical_governance_car_artifact_base(name: &str) -> Option<&str> {
         && is_canonical_governance_source_pair_directory(pair_id))
     .then_some(base)
 }
-
 #[cfg(test)]
 fn is_canonical_governance_car_artifact_name(name: &str) -> bool {
     canonical_governance_car_artifact_base(name).is_some()
 }
-
 #[derive(Debug)]
 struct GovernancePublicationPlannedFileRemoval {
     directory: governance_rooted_fs::RootedDirectory,
@@ -7054,14 +6701,12 @@ struct GovernancePublicationPlannedFileRemoval {
     expected_bytes: Vec<u8>,
     quarantine_slot: OsString,
 }
-
 #[derive(Debug)]
 struct GovernancePublicationPlannedDirectoryRemoval {
     parent: governance_rooted_fs::RootedDirectory,
     retained: governance_rooted_fs::RootedDirectory,
     quarantine_slot: OsString,
 }
-
 #[derive(Debug, Default)]
 struct GovernancePublicationArtifactCleanupPlan {
     authority_files: Vec<GovernancePublicationPlannedFileRemoval>,
@@ -7072,7 +6717,6 @@ struct GovernancePublicationArtifactCleanupPlan {
     car_files: Vec<GovernancePublicationPlannedFileRemoval>,
     car_root: Option<GovernancePublicationPlannedDirectoryRemoval>,
 }
-
 #[derive(Debug)]
 struct GovernanceInterruptedPublicationIdentity {
     payload_kind: String,
@@ -7080,7 +6724,6 @@ struct GovernanceInterruptedPublicationIdentity {
     source_roles_complete: bool,
     verified_source: Option<PublishIndexEntryForCar>,
 }
-
 impl GovernanceInterruptedPublicationIdentity {
     fn verified_source(&self) -> Result<&PublishIndexEntryForCar, GovernancePublishError> {
         self.verified_source.as_ref().ok_or_else(|| {
@@ -7090,7 +6733,6 @@ impl GovernanceInterruptedPublicationIdentity {
         })
     }
 }
-
 fn plan_governance_publication_file_removal(
     directory: &governance_rooted_fs::RootedDirectory,
     name: &OsStr,
@@ -7129,7 +6771,6 @@ fn plan_governance_publication_file_removal(
         quarantine_slot,
     })
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn plan_private_governance_file_removal(
     directory: &governance_rooted_fs::RootedDirectory,
@@ -7161,7 +6802,6 @@ fn plan_private_governance_file_removal(
         quarantine_slot,
     })
 }
-
 fn governance_source_artifact_max_bytes(target: &str) -> Option<usize> {
     match target {
         "payload.to" => Some(GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES),
@@ -7170,7 +6810,6 @@ fn governance_source_artifact_max_bytes(target: &str) -> Option<usize> {
         _ => None,
     }
 }
-
 fn governance_car_artifact_max_bytes(role: &str) -> Option<usize> {
     match role {
         ".car" => Some(GOVERNANCE_CAR_ARCHIVE_MAX_BYTES),
@@ -7182,13 +6821,11 @@ fn governance_car_artifact_max_bytes(role: &str) -> Option<usize> {
         _ => None,
     }
 }
-
 fn governance_digest_sidecar_body(data: &[u8]) -> Vec<u8> {
     let mut body = blake3::hash(data).to_hex().to_string();
     body.push('\n');
     body.into_bytes()
 }
-
 fn expected_interrupted_governance_car_role<'a>(
     prepared: &'a PreparedGovernanceCarSegment,
     role: &str,
@@ -7209,7 +6846,6 @@ fn expected_interrupted_governance_car_role<'a>(
         _ => None,
     }
 }
-
 fn governance_artifact_rollback_rank<const N: usize>(
     role: &str,
     is_temporary: bool,
@@ -7225,7 +6861,6 @@ fn governance_artifact_rollback_rank<const N: usize>(
         })?;
     Ok(if is_temporary { N + position } else { position })
 }
-
 fn verify_complete_interrupted_source_pair(
     root_guard: &GovernanceFilesystemRootGuard,
     identity: &mut GovernanceInterruptedPublicationIdentity,
@@ -7294,7 +6929,6 @@ fn verify_complete_interrupted_source_pair(
     });
     Ok(())
 }
-
 fn plan_governance_publication_source_artifacts(
     root_guard: &GovernanceFilesystemRootGuard,
     inventory: &GovernancePublicationArtifactInventory,
@@ -7534,7 +7168,6 @@ fn plan_governance_publication_source_artifacts(
     }
     Ok((plan, interrupted_identity))
 }
-
 fn plan_governance_publication_car_artifacts(
     root_guard: &GovernanceFilesystemRootGuard,
     inventory: &GovernancePublicationArtifactInventory,
@@ -7737,14 +7370,12 @@ fn plan_governance_publication_car_artifacts(
     }
     Ok(())
 }
-
 fn apply_governance_publication_cleanup_plan(
     root_guard: &GovernanceFilesystemRootGuard,
     plan: GovernancePublicationArtifactCleanupPlan,
 ) -> Result<(), GovernancePublishError> {
     apply_governance_publication_cleanup_plan_with(root_guard, plan, |_| Ok(()))
 }
-
 #[cfg(windows)]
 fn apply_governance_publication_cleanup_plan_with<AfterStep>(
     root_guard: &GovernanceFilesystemRootGuard,
@@ -7771,7 +7402,6 @@ where
         })?;
         after_step(completed_steps)
     };
-
     for removal in authority_files {
         let GovernancePublicationPlannedFileRemoval {
             directory,
@@ -7783,7 +7413,6 @@ where
         directory.remove_file_binding(binding)?;
         record_step()?;
     }
-
     // Persistence writes source roles before CAR roles. Rollback is the exact
     // inverse: discard the next CAR temporary, remove durable CAR roles in
     // reverse order, and only then unwind the source prefix.
@@ -7807,7 +7436,6 @@ where
         parent.remove_empty_directory_binding(retained)?;
         record_step()?;
     }
-
     for removal in source_files {
         let GovernancePublicationPlannedFileRemoval {
             directory,
@@ -7835,7 +7463,6 @@ where
     root_guard.revalidate()?;
     Ok(())
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn apply_governance_publication_cleanup_plan_with<AfterStep>(
     root_guard: &GovernanceFilesystemRootGuard,
@@ -7892,7 +7519,6 @@ where
         root_guard.revalidate()?;
         return Ok(());
     }
-
     let quarantine = prepare_governance_publication_recovery_quarantine(root_guard)?;
     let GovernancePublicationArtifactCleanupPlan {
         authority_files,
@@ -7911,7 +7537,6 @@ where
         })?;
         after_step(completed_steps)
     };
-
     for removal in authority_files {
         let GovernancePublicationPlannedFileRemoval {
             directory,
@@ -7930,7 +7555,6 @@ where
         isolated.binding().verify()?;
         record_step()?;
     }
-
     // Persistence writes source roles before CAR roles. Rollback isolates the
     // exact inverse prefix into a durable, bounded quarantine. POSIX has no
     // conditional unlink-by-descriptor, so no quarantined pathname is ever
@@ -7961,7 +7585,6 @@ where
         )?;
         record_step()?;
     }
-
     for removal in source_files {
         let GovernancePublicationPlannedFileRemoval {
             directory,
@@ -8007,7 +7630,6 @@ where
         "isolated {isolated_count} interrupted governance publication entries into `{GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR}`; stop the publisher, inspect them, and clear the quarantine offline before restart"
     )))
 }
-
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn apply_governance_publication_cleanup_plan_with<AfterStep>(
     _root_guard: &GovernanceFilesystemRootGuard,
@@ -8021,7 +7643,6 @@ where
         "governance publication recovery is unsupported on this platform",
     ))
 }
-
 fn governance_publish_entry_for_integrity(
     entry: &JsonMap,
     position: usize,
@@ -8048,7 +7669,6 @@ fn governance_publish_entry_for_integrity(
         json_len,
     })
 }
-
 fn verify_exact_governance_publication_artifact(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
@@ -8073,7 +7693,6 @@ fn verify_exact_governance_publication_artifact(
     snapshot.binding().verify()?;
     Ok(())
 }
-
 fn verify_governance_publication_artifact_integrity(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -8094,7 +7713,6 @@ fn verify_governance_publication_artifact_integrity(
             "publication entry and CAR segment integrity inventories diverge",
         ));
     }
-
     for (position, (entry, segment)) in entries.iter().zip(segments).enumerate() {
         let entry = entry.as_object().ok_or_else(|| {
             GovernancePublishError::other(format!(
@@ -8146,7 +7764,6 @@ fn verify_governance_publication_artifact_integrity(
     root_guard.revalidate()?;
     Ok(())
 }
-
 fn reconcile_governance_publication_artifacts(
     root_guard: &GovernanceFilesystemRootGuard,
     state: &JsonMap,
@@ -8168,7 +7785,6 @@ fn reconcile_governance_publication_artifacts(
     apply_governance_publication_cleanup_plan(root_guard, cleanup_plan)?;
     Ok(())
 }
-
 fn reconcile_current_governance_publication_artifacts(
     root_guard: &GovernanceFilesystemRootGuard,
     store: &governance_rooted_fs::TwoSlotStoreV1,
@@ -8176,7 +7792,6 @@ fn reconcile_current_governance_publication_artifacts(
     let (state, _) = read_governance_publication_state(store)?;
     reconcile_governance_publication_artifacts(root_guard, &state)
 }
-
 pub(crate) fn validate_governance_car_source_lengths(
     encoded_len: usize,
     json_len: usize,
@@ -8204,7 +7819,6 @@ pub(crate) fn validate_governance_car_source_lengths(
     }
     Ok(total)
 }
-
 #[expect(
     clippy::too_many_arguments,
     reason = "the publish index binds both exact source-file identities alongside their logical publication metadata"
@@ -8314,7 +7928,6 @@ fn update_publish_index(
         },
     ))
 }
-
 fn rebuild_publish_index(
     mut index: JsonMap,
     mut entries: Vec<JsonValue>,
@@ -8322,7 +7935,6 @@ fn rebuild_publish_index(
     let mut payload_kind_counts = JsonMap::new();
     let mut by_encoded_blake3 = JsonMap::new();
     let mut by_payload_kind = JsonMap::new();
-
     for (position, entry) in entries.iter_mut().enumerate() {
         let Some(entry_map) = entry.as_object_mut() else {
             return Err(GovernancePublishError::other(
@@ -8346,7 +7958,6 @@ fn rebuild_publish_index(
             .saturating_add(1);
         payload_kind_counts.insert(payload_kind.clone(), JsonValue::from(count));
         append_index_position(&mut by_payload_kind, &payload_kind, position);
-
         let Some(digest_hex) = entry_map
             .get("encoded_blake3")
             .and_then(JsonValue::as_str)
@@ -8358,7 +7969,6 @@ fn rebuild_publish_index(
         };
         append_index_position(&mut by_encoded_blake3, &digest_hex, position);
     }
-
     index.insert(
         "schema".into(),
         JsonValue::from(GOVERNANCE_PUBLISH_INDEX_SCHEMA),
@@ -8383,10 +7993,8 @@ fn rebuild_publish_index(
     );
     index.insert("by_payload_kind".into(), JsonValue::Object(by_payload_kind));
     index.insert("entries".into(), JsonValue::Array(entries));
-
     Ok(index)
 }
-
 fn append_index_position(index: &mut JsonMap, key: &str, position: usize) {
     let position = JsonValue::from(position as u64);
     match index.get_mut(key).and_then(JsonValue::as_array_mut) {
@@ -8396,7 +8004,6 @@ fn append_index_position(index: &mut JsonMap, key: &str, position: usize) {
         }
     }
 }
-
 fn index_path_string(root: &Path, path: &Path) -> String {
     let path = path.strip_prefix(root).unwrap_or(path);
     let parts = path
@@ -8409,7 +8016,6 @@ fn index_path_string(root: &Path, path: &Path) -> String {
         parts.join("/")
     }
 }
-
 #[cfg(test)]
 fn assemble_governance_car_queue(
     root: &Path,
@@ -8420,7 +8026,6 @@ fn assemble_governance_car_queue(
     let segment = assemble_governance_car_segment(root, root_guard, entry)?;
     install_governance_car_segment(queue, entry, segment)
 }
-
 fn install_governance_car_segment(
     mut queue: JsonMap,
     entry: &PublishIndexEntryForCar,
@@ -8449,7 +8054,6 @@ fn install_governance_car_segment(
     }
     rebuild_car_queue(queue, segments)
 }
-
 fn rebuild_car_queue(
     _previous_queue: JsonMap,
     mut segments: Vec<JsonValue>,
@@ -8459,7 +8063,6 @@ fn rebuild_car_queue(
     let mut by_payload_kind = JsonMap::new();
     let mut by_car_archive_blake3 = JsonMap::new();
     let mut assembled_count = 0u64;
-
     for (position, segment) in segments.iter_mut().enumerate() {
         let Some(segment_map) = segment.as_object_mut() else {
             return Err(GovernancePublishError::other(
@@ -8513,7 +8116,6 @@ fn rebuild_car_queue(
             GovernancePublishError::other("governance CAR queue assembled count overflowed")
         })?;
     }
-
     queue.insert(
         "schema".into(),
         JsonValue::from(GOVERNANCE_CAR_QUEUE_SCHEMA),
@@ -8544,11 +8146,9 @@ fn rebuild_car_queue(
         JsonValue::Object(by_car_archive_blake3),
     );
     queue.insert("segments".into(), JsonValue::Array(segments));
-
     record_governance_dag_backlog(pending_count);
     Ok(queue)
 }
-
 fn assemble_governance_car_segment(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -8559,7 +8159,6 @@ fn assemble_governance_car_segment(
     persist_prepared_governance_car_segment(root_guard, &prepared)?;
     Ok(prepared.segment)
 }
-
 fn prepare_governance_car_segment(
     root: &Path,
     entry: &PublishIndexEntryForCar,
@@ -8587,12 +8186,10 @@ fn prepare_governance_car_segment(
             "governance CAR writer returned inconsistent bounded archive statistics",
         ));
     }
-
     let base_path = governance_car_segment_base_path(root, entry)?;
     let car_path = base_path.with_extension("car");
     let plan_path = base_path.with_extension("plan.json");
     let manifest_path = base_path.with_extension("json");
-
     let plan_json = governance_car_plan_json(entry, &plan, &stats, &file_records);
     let plan_body = json::to_json_pretty(&JsonValue::Object(plan_json)).map_err(|err| {
         GovernancePublishError::other(format!("serialize governance CAR plan: {err}"))
@@ -8602,7 +8199,6 @@ fn prepare_governance_car_segment(
             "governance CAR plan exceeds its fixed serialized bound",
         ));
     }
-
     let segment_json = governance_car_segment_json(
         root,
         entry,
@@ -8632,7 +8228,6 @@ fn prepare_governance_car_segment(
         manifest_body: segment_body,
     })
 }
-
 fn persist_prepared_governance_car_segment(
     root_guard: &GovernanceFilesystemRootGuard,
     prepared: &PreparedGovernanceCarSegment,
@@ -8657,14 +8252,12 @@ fn persist_prepared_governance_car_segment(
     )?;
     Ok(())
 }
-
 fn governance_car_segment_base_path(
     root: &Path,
     entry: &PublishIndexEntryForCar,
 ) -> Result<PathBuf, GovernancePublishError> {
     Ok(root.join(governance_car_segment_relative_base(entry)?))
 }
-
 fn governance_car_segment_relative_base(
     entry: &PublishIndexEntryForCar,
 ) -> Result<String, GovernancePublishError> {
@@ -8682,7 +8275,6 @@ fn governance_car_segment_relative_base(
         entry.position
     ))
 }
-
 fn governance_car_segment_files(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -8732,7 +8324,6 @@ fn governance_car_segment_files(
             })?;
         snapshots.push(snapshot);
     }
-
     let encoded_bytes = snapshots[0].bytes();
     let encoded_digest = blake3::hash(encoded_bytes).to_hex().to_string();
     if encoded_bytes.len() != entry.encoded_len || encoded_digest != entry.encoded_blake3 {
@@ -8779,7 +8370,6 @@ fn governance_car_segment_files(
             "governance CAR source aggregate does not match its bounded publish-index identity",
         ));
     }
-
     let mut files = Vec::with_capacity(specs.len());
     let mut records = Vec::with_capacity(specs.len());
     for ((role, relative_path, _, _), snapshot) in specs.into_iter().zip(snapshots) {
@@ -8801,7 +8391,6 @@ fn governance_car_segment_files(
     }
     Ok((files, records))
 }
-
 fn governance_car_segment_files_from_source_bytes(
     entry: &PublishIndexEntryForCar,
     encoded: &[u8],
@@ -8843,7 +8432,6 @@ fn governance_car_segment_files_from_source_bytes(
             "in-memory governance CAR source aggregate is inconsistent",
         ));
     }
-
     let mut files = Vec::with_capacity(specs.len());
     let mut records = Vec::with_capacity(specs.len());
     for (role, relative_path, bytes) in specs {
@@ -8864,7 +8452,6 @@ fn governance_car_segment_files_from_source_bytes(
     }
     Ok((files, records))
 }
-
 fn governance_car_plan_json(
     entry: &PublishIndexEntryForCar,
     plan: &CarBuildPlan,
@@ -8907,7 +8494,6 @@ fn governance_car_plan_json(
     root.insert("chunks".into(), governance_car_chunks_json(plan));
     root
 }
-
 fn governance_car_segment_json(
     root: &Path,
     entry: &PublishIndexEntryForCar,
@@ -8993,7 +8579,6 @@ fn governance_car_segment_json(
     segment.insert("chunk_profile".into(), chunk_profile_json_from_stats(stats));
     segment
 }
-
 fn chunk_profile_json(plan: &CarBuildPlan) -> JsonValue {
     let profile = plan.chunk_profile;
     let mut value = JsonMap::new();
@@ -9006,7 +8591,6 @@ fn chunk_profile_json(plan: &CarBuildPlan) -> JsonValue {
     value.insert("break_mask".into(), JsonValue::from(profile.break_mask));
     JsonValue::Object(value)
 }
-
 fn chunk_profile_json_from_stats(stats: &sorafs_car::CarWriteStats) -> JsonValue {
     let profile = stats.chunk_profile;
     let mut value = JsonMap::new();
@@ -9019,7 +8603,6 @@ fn chunk_profile_json_from_stats(stats: &sorafs_car::CarWriteStats) -> JsonValue
     value.insert("break_mask".into(), JsonValue::from(profile.break_mask));
     JsonValue::Object(value)
 }
-
 fn governance_car_chunks_json(plan: &CarBuildPlan) -> JsonValue {
     JsonValue::Array(
         plan.chunks
@@ -9036,7 +8619,6 @@ fn governance_car_chunks_json(plan: &CarBuildPlan) -> JsonValue {
             .collect(),
     )
 }
-
 fn resolve_index_path(root: &Path, relative_path: &str) -> Result<PathBuf, GovernancePublishError> {
     let components = index_path_components(relative_path)?;
     let mut path = root.to_path_buf();
@@ -9045,7 +8627,6 @@ fn resolve_index_path(root: &Path, relative_path: &str) -> Result<PathBuf, Gover
     }
     Ok(path)
 }
-
 fn index_path_components(relative_path: &str) -> Result<Vec<String>, GovernancePublishError> {
     if relative_path.is_empty()
         || relative_path == "."
@@ -9073,7 +8654,6 @@ fn index_path_components(relative_path: &str) -> Result<Vec<String>, GovernanceP
     }
     Ok(components)
 }
-
 #[derive(Debug, Clone)]
 struct RuntimeDagTip {
     sequence: u64,
@@ -9081,21 +8661,18 @@ struct RuntimeDagTip {
     node_cid: Vec<u8>,
     timestamp: u64,
 }
-
 #[derive(Debug, Clone)]
 struct RuntimeDagAuthoritySegmentV1 {
     activation_block_count: u64,
     revision: u64,
     binding: RuntimeDagProviderBindingV1,
 }
-
 #[derive(Debug, Clone)]
 struct RuntimeDagAuthorityLineageV1 {
     segments: Vec<RuntimeDagAuthoritySegmentV1>,
     transitions: Vec<RuntimeDagQualificationTransitionV1>,
     qualification: RuntimeDagQualificationSummary,
 }
-
 // The runtime DAG append helper keeps the filesystem, signer, payload, and
 // derived artifact metadata together so every publish path indexes identical
 // evidence fields.
@@ -9129,7 +8706,6 @@ fn append_runtime_signed_dag_payload(
         }
         None => Vec::new(),
     };
-
     let expected_submission_account_digest = submission_provenance
         .as_ref()
         .map(|provenance| hex::encode(provenance.publisher_account_digest));
@@ -9160,7 +8736,6 @@ fn append_runtime_signed_dag_payload(
             "governance runtime DAG index references a missing block file",
         ));
     }
-
     let tip = runtime_dag_tip_from_entries(&blocks)?;
     let sequence = match tip.as_ref() {
         Some(tip) => tip.sequence.checked_add(1).ok_or_else(|| {
@@ -9199,7 +8774,6 @@ fn append_runtime_signed_dag_payload(
             "verify governance runtime DAG node signature: {err}"
         ))
     })?;
-
     let prev_block_cid = tip.as_ref().map(|tip| tip.block_cid.clone());
     let block_cid = governance_dag_block_cid_v1(
         prev_block_cid.as_deref(),
@@ -9230,7 +8804,6 @@ fn append_runtime_signed_dag_payload(
     block.validate().map_err(|err| {
         GovernancePublishError::other(format!("validate governance runtime DAG block: {err}"))
     })?;
-
     let block_count = sequence.checked_add(1).ok_or_else(|| {
         GovernancePublishError::other("governance runtime DAG block count exhausted")
     })?;
@@ -9253,7 +8826,6 @@ fn append_runtime_signed_dag_payload(
     head.validate().map_err(|err| {
         GovernancePublishError::other(format!("validate governance runtime DAG head: {err}"))
     })?;
-
     let block_bytes = block.canonical_bytes().map_err(|err| {
         GovernancePublishError::other(format!("encode governance runtime DAG block: {err}"))
     })?;
@@ -9269,7 +8841,6 @@ fn append_runtime_signed_dag_payload(
     let block_digest_hex = blake3::hash(&block_bytes).to_hex().to_string();
     let block_cid_hex = hex::encode(&block.block_cid);
     let block_path = runtime_dag_block_path(root, sequence, &block_cid_hex);
-
     let head_bytes = norito::to_bytes(&head).map_err(|err| {
         GovernancePublishError::other(format!("encode governance runtime DAG head: {err}"))
     })?;
@@ -9339,7 +8910,6 @@ fn append_runtime_signed_dag_payload(
     );
     entry.insert("published_at_unix".into(), JsonValue::from(timestamp));
     blocks.push(JsonValue::Object(entry));
-
     let index_bytes =
         build_runtime_dag_index_bytes(signer, checkpoint_store, index, blocks, &head)?;
     root_guard.revalidate()?;
@@ -9357,7 +8927,6 @@ fn append_runtime_signed_dag_payload(
     record_governance_dag_head_age(head.generated_at);
     Ok(())
 }
-
 fn read_runtime_dag_index(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -9430,7 +8999,6 @@ fn read_runtime_dag_index(
         }
     }
 }
-
 fn validate_runtime_dag_signer_fields(
     index: &JsonMap,
     signer: &GovernanceRuntimeDagSigner,
@@ -9510,7 +9078,6 @@ fn validate_runtime_dag_signer_fields(
     }
     Ok(())
 }
-
 fn validate_runtime_dag_checkpoint_store_fields(
     index: &JsonMap,
     store: &GovernanceRuntimeDagCheckpointStore,
@@ -9549,7 +9116,6 @@ fn validate_runtime_dag_checkpoint_store_fields(
     }
     Ok(())
 }
-
 fn insert_runtime_dag_signer_fields(index: &mut JsonMap, signer: &GovernanceRuntimeDagSigner) {
     index.insert(
         "signer_handle".into(),
@@ -9576,7 +9142,6 @@ fn insert_runtime_dag_signer_fields(index: &mut JsonMap, signer: &GovernanceRunt
         JsonValue::from(hex::encode(signer.qualification.policy_digest)),
     );
 }
-
 fn insert_runtime_dag_checkpoint_store_fields(
     index: &mut JsonMap,
     store: &GovernanceRuntimeDagCheckpointStore,
@@ -9594,7 +9159,6 @@ fn insert_runtime_dag_checkpoint_store_fields(
         JsonValue::from(hex::encode(store.qualification.policy_digest)),
     );
 }
-
 fn runtime_dag_index_provider_binding(
     index: &JsonMap,
 ) -> Result<RuntimeDagProviderBindingV1, GovernancePublishError> {
@@ -9629,7 +9193,6 @@ fn runtime_dag_index_provider_binding(
     validate_runtime_dag_provider_binding(&binding)?;
     Ok(binding)
 }
-
 fn insert_runtime_dag_provider_binding_fields(
     index: &mut JsonMap,
     binding: &RuntimeDagProviderBindingV1,
@@ -9671,7 +9234,6 @@ fn insert_runtime_dag_provider_binding_fields(
         JsonValue::from(hex::encode(binding.publisher_public_key)),
     );
 }
-
 pub(crate) fn runtime_dag_payload_kind(payload: &GovernanceLogPayloadV1) -> &str {
     match payload {
         GovernanceLogPayloadV1::ProviderAdvert(_) => "provider_advert",
@@ -9693,7 +9255,6 @@ pub(crate) fn runtime_dag_payload_kind(payload: &GovernanceLogPayloadV1) -> &str
         GovernanceLogPayloadV1::PorWeeklyReport(_) => "por_weekly_report",
     }
 }
-
 pub(crate) fn runtime_dag_payload_kind_is_supported(kind: &str) -> bool {
     const SUPPORTED: &[&str] = &[
         "appeal_finance_report",
@@ -9719,7 +9280,6 @@ pub(crate) fn runtime_dag_payload_kind_is_supported(kind: &str) -> bool {
     ];
     SUPPORTED.contains(&kind)
 }
-
 fn canonical_runtime_source_payload_len(
     payload: &GovernanceLogPayloadV1,
 ) -> Result<usize, GovernancePublishError> {
@@ -9738,13 +9298,11 @@ fn canonical_runtime_source_payload_len(
         }
         Ok(exact)
     }
-
     macro_rules! encoded_len {
         ($value:expr) => {
             encoded_bounded_len($value)
         };
     }
-
     match payload {
         GovernanceLogPayloadV1::ProviderAdvert(value) => encoded_len!(value),
         GovernanceLogPayloadV1::ReplicationOrder(value) => encoded_len!(value),
@@ -9772,7 +9330,6 @@ fn canonical_runtime_source_payload_len(
         GovernanceLogPayloadV1::PorWeeklyReport(value) => encoded_len!(value),
     }
 }
-
 fn canonical_runtime_source_payload_bytes(
     payload: &GovernanceLogPayloadV1,
 ) -> Result<Vec<u8>, GovernancePublishError> {
@@ -9792,14 +9349,12 @@ fn canonical_runtime_source_payload_bytes(
         }
         Ok(bytes)
     }
-
     let expected_len = canonical_runtime_source_payload_len(payload)?;
     macro_rules! encode {
         ($value:expr) => {
             encode_exact($value, expected_len)
         };
     }
-
     match payload {
         GovernanceLogPayloadV1::ProviderAdvert(value) => encode!(value),
         GovernanceLogPayloadV1::ReplicationOrder(value) => encode!(value),
@@ -9818,7 +9373,6 @@ fn canonical_runtime_source_payload_bytes(
         GovernanceLogPayloadV1::PorWeeklyReport(value) => encode!(value),
     }
 }
-
 fn preflight_runtime_signed_dag_payload(
     payload: &GovernanceLogPayloadV1,
     source_payload_len: usize,
@@ -9832,7 +9386,6 @@ fn preflight_runtime_signed_dag_payload(
             "canonical governance source payload is outside the V1 producer byte limit of {GOVERNANCE_RUNTIME_DAG_SOURCE_PAYLOAD_MAX_BYTES}"
         )));
     }
-
     // Every variable-size source variant is semantically bounded before this
     // point, and `encoded_frame_len` above performs a real serialization into
     // a counting sink. The remaining node/block fields are fixed-width except
@@ -9864,7 +9417,6 @@ fn preflight_runtime_signed_dag_payload(
     }
     Ok(())
 }
-
 fn decode_canonical_runtime_dag<T>(bytes: &[u8], label: &str) -> Result<T, GovernancePublishError>
 where
     for<'de> T: norito::NoritoDeserialize<'de>,
@@ -9894,14 +9446,12 @@ where
     }
     Ok(value)
 }
-
 fn runtime_dag_decode_allocation_limit(input_bytes: usize) -> usize {
     input_bytes
         .saturating_mul(GOVERNANCE_RUNTIME_DAG_DECODE_ALLOCATION_MULTIPLIER_V1)
         .max(GOVERNANCE_RUNTIME_DAG_DECODE_MIN_ALLOCATED_BYTES_V1)
         .min(GOVERNANCE_RUNTIME_DAG_DECODE_MAX_ALLOCATED_BYTES_V1)
 }
-
 fn add_runtime_dag_audit_bytes(total: &mut u64, len: usize) -> Result<(), GovernancePublishError> {
     let len = u64::try_from(len).map_err(|_| {
         GovernancePublishError::other("governance runtime DAG artifact length exceeds u64")
@@ -9916,7 +9466,6 @@ fn add_runtime_dag_audit_bytes(total: &mut u64, len: usize) -> Result<(), Govern
     }
     Ok(())
 }
-
 fn validate_runtime_dag_immutable_file_inventory(
     root: &Path,
 ) -> Result<(), GovernancePublishError> {
@@ -9935,7 +9484,6 @@ fn validate_runtime_dag_immutable_file_inventory(
     root_guard.revalidate()?;
     Ok(())
 }
-
 fn validate_existing_runtime_dag_root(
     root: &Path,
     signer: &GovernanceRuntimeDagSigner,
@@ -9944,7 +9492,6 @@ fn validate_existing_runtime_dag_root(
     authoritative_appeal_finance_weekly_rollups(root, signer, store)?;
     Ok(())
 }
-
 /// Authenticate the complete runtime DAG and return its signed weekly rollups.
 pub(crate) fn authoritative_appeal_finance_weekly_rollups(
     root: &Path,
@@ -9966,7 +9513,6 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
         }
         return Ok(Vec::new());
     };
-
     let index = read_runtime_dag_index(root, &root_guard, signer, store)?;
     let current_binding = runtime_dag_provider_binding(signer, store);
     let indexed_blocks = index
@@ -9983,7 +9529,6 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
             "persisted governance runtime DAG index block count is outside the hard limit",
         ));
     }
-
     let block_count = u64::try_from(indexed_blocks.len()).map_err(|_| {
         GovernancePublishError::other("governance runtime DAG block count exceeds u64")
     })?;
@@ -10014,7 +9559,6 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
                 "governance runtime DAG index position or sequence is noncanonical",
             ));
         }
-
         let block_path_string = required_runtime_string(entry, "block_path")?;
         let block_path = resolve_index_path(root, &block_path_string)?;
         let block_bytes = read_bounded_governance_state_file(
@@ -10093,7 +9637,6 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
                 "governance runtime DAG index submission provenance does not match the signed node",
             ));
         }
-
         let source_path_string = required_runtime_string(entry, "encoded_path")?;
         let source_path = resolve_index_path(root, &source_path_string)?;
         let source_bytes = read_bounded_governance_state_file(
@@ -10139,14 +9682,12 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
                 rollup: rollup.clone(),
             });
         }
-
         let json_path_string = required_runtime_string(entry, "json_path")?;
         let json_path = resolve_index_path(root, &json_path_string)?;
         let json_bytes =
             read_bounded_governance_state_file(&json_path, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES)?;
         verify_digest_sidecar(&json_path, &json_bytes)?;
         add_runtime_dag_audit_bytes(&mut total_bytes, json_bytes.len())?;
-
         append_runtime_index_position(&mut expected_by_payload_kind, payload_kind, position_u64);
         append_runtime_index_position(
             &mut expected_by_encoded_blake3,
@@ -10161,7 +9702,6 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
         indexed_block_paths.push(block_path);
         blocks.push(block);
     }
-
     for (field, expected) in [
         ("by_encoded_blake3", expected_by_encoded_blake3),
         (
@@ -10176,7 +9716,6 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
             )));
         }
     }
-
     add_runtime_dag_audit_bytes(&mut total_bytes, head_bytes.len())?;
     let head: GovernanceDagHeadV1 =
         decode_canonical_runtime_dag(head_bytes, "governance runtime DAG head")?;
@@ -10208,7 +9747,6 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
             "governance runtime DAG index and signed head are inconsistent",
         ));
     }
-
     let blocks_dir = root
         .join(GOVERNANCE_RUNTIME_DAG_DIR)
         .join(GOVERNANCE_RUNTIME_DAG_BLOCKS_DIR);
@@ -10232,7 +9770,6 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
     validate_runtime_dag_immutable_file_inventory(root)?;
     Ok(authoritative_weekly_rollups)
 }
-
 pub(crate) fn runtime_dag_producer_root_digest(
     root: &Path,
 ) -> Result<[u8; 32], GovernancePublishError> {
@@ -10254,7 +9791,6 @@ pub(crate) fn runtime_dag_producer_root_digest(
     hasher.update(canonical.as_bytes());
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn runtime_dag_provider_binding(
     signer: &GovernanceRuntimeDagSigner,
     store: &GovernanceRuntimeDagCheckpointStore,
@@ -10270,7 +9806,6 @@ fn runtime_dag_provider_binding(
         publisher_public_key: signer.public_key,
     }
 }
-
 fn validate_runtime_dag_provider_binding(
     binding: &RuntimeDagProviderBindingV1,
 ) -> Result<(), GovernancePublishError> {
@@ -10306,7 +9841,6 @@ fn validate_runtime_dag_provider_binding(
     }
     Ok(())
 }
-
 fn runtime_dag_transition_body_digest(
     body: &RuntimeDagQualificationTransitionBodyV1,
 ) -> Result<[u8; 32], GovernancePublishError> {
@@ -10320,7 +9854,6 @@ fn runtime_dag_transition_body_digest(
     hasher.update(&canonical);
     Ok(*hasher.finalize().as_bytes())
 }
-
 /// Build the exact predecessor-bound Governance DAG key-transition payload.
 pub fn governance_dag_key_transition_signing_payload_v1(
     outgoing_segment_revision: u64,
@@ -10344,7 +9877,6 @@ pub fn governance_dag_key_transition_signing_payload_v1(
     payload.extend_from_slice(&canonical);
     Ok(payload)
 }
-
 fn runtime_dag_archive_signing_bytes(
     body: &RuntimeDagQualificationArchiveBodyV1,
 ) -> Result<Vec<u8>, GovernancePublishError> {
@@ -10360,7 +9892,6 @@ fn runtime_dag_archive_signing_bytes(
     payload.extend_from_slice(&canonical);
     Ok(payload)
 }
-
 fn runtime_dag_raw_signature(
     signer: &GovernanceRuntimeDagSigner,
     purpose: GovernanceDagSigningPurposeV1,
@@ -10377,7 +9908,6 @@ fn runtime_dag_raw_signature(
             )
         })
 }
-
 fn verify_runtime_dag_binding_signature(
     binding: &RuntimeDagProviderBindingV1,
     payload: &[u8],
@@ -10400,7 +9930,6 @@ fn verify_runtime_dag_binding_signature(
         ))
     })
 }
-
 fn runtime_dag_transition_digest(
     transition: &RuntimeDagQualificationTransitionV1,
 ) -> Result<[u8; 32], GovernancePublishError> {
@@ -10414,7 +9943,6 @@ fn runtime_dag_transition_digest(
     hasher.update(&canonical);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn runtime_dag_archive_digest(
     archive: &RuntimeDagQualificationArchiveV1,
 ) -> Result<[u8; 32], GovernancePublishError> {
@@ -10428,7 +9956,6 @@ fn runtime_dag_archive_digest(
     hasher.update(&canonical);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn validate_runtime_dag_qualification_transition(
     transition: &RuntimeDagQualificationTransitionV1,
     root_digest: [u8; 32],
@@ -10489,7 +10016,6 @@ fn validate_runtime_dag_qualification_transition(
     )?;
     runtime_dag_transition_digest(transition)
 }
-
 fn validate_runtime_dag_qualification_archive(
     archive: &RuntimeDagQualificationArchiveV1,
     root_digest: [u8; 32],
@@ -10559,11 +10085,9 @@ fn validate_runtime_dag_qualification_archive(
     }
     runtime_dag_archive_digest(archive)
 }
-
 fn runtime_dag_qualification_history_path(root: &Path) -> PathBuf {
     root.join(GOVERNANCE_RUNTIME_DAG_QUALIFICATION_HISTORY_FILE)
 }
-
 fn runtime_dag_qualification_archive_path(
     root: &Path,
     generation: u64,
@@ -10572,7 +10096,6 @@ fn runtime_dag_qualification_archive_path(
     root.join(GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVES_DIR)
         .join(format!("{generation:020}_{}.to", hex::encode(digest)))
 }
-
 fn parse_runtime_dag_qualification_archive_name(name: &str) -> Option<(u64, [u8; 32])> {
     let stem = name.strip_suffix(".to")?;
     let (generation, digest) = stem.split_once('_')?;
@@ -10583,7 +10106,6 @@ fn parse_runtime_dag_qualification_archive_name(name: &str) -> Option<(u64, [u8;
     let digest = hex::decode(digest).ok()?;
     Some((generation, digest.as_slice().try_into().ok()?))
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn runtime_dag_qualification_archive_temp_inventory(
     directory: &governance_rooted_fs::RootedDirectory,
@@ -10649,7 +10171,6 @@ fn runtime_dag_qualification_archive_temp_inventory(
     }
     Ok((temporaries, directory_was_empty))
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn isolate_runtime_dag_qualification_archive_temps(
     root_guard: &GovernanceFilesystemRootGuard,
@@ -10699,7 +10220,6 @@ fn isolate_runtime_dag_qualification_archive_temps(
     root_guard.revalidate()?;
     apply_governance_publication_cleanup_plan(root_guard, plan)
 }
-
 #[cfg(windows)]
 fn isolate_runtime_dag_qualification_archive_temps(
     root_guard: &GovernanceFilesystemRootGuard,
@@ -10736,7 +10256,6 @@ fn isolate_runtime_dag_qualification_archive_temps(
     root_guard.revalidate()?;
     Ok(())
 }
-
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn isolate_runtime_dag_qualification_archive_temps(
     _root_guard: &GovernanceFilesystemRootGuard,
@@ -10746,7 +10265,6 @@ fn isolate_runtime_dag_qualification_archive_temps(
         "governance runtime DAG qualification archive recovery is unsupported on this platform",
     ))
 }
-
 fn staged_runtime_dag_qualification_archive(
     root: &Path,
     checkpoint: &RuntimeDagProducerCheckpointV1,
@@ -10787,7 +10305,6 @@ fn staged_runtime_dag_qualification_archive(
     }
     Ok(candidate)
 }
-
 fn write_runtime_dag_qualification_state<T: norito::NoritoSerialize>(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
@@ -10856,7 +10373,6 @@ fn write_runtime_dag_qualification_state<T: norito::NoritoSerialize>(
     readback.binding().verify()?;
     Ok(bytes)
 }
-
 fn read_runtime_dag_qualification_archive(
     root: &Path,
     generation: u64,
@@ -10894,7 +10410,6 @@ fn read_runtime_dag_qualification_archive(
     }
     Ok(archive)
 }
-
 fn read_runtime_dag_qualification_archive_read_only(
     root_guard: &GovernanceFilesystemRootGuard,
     generation: u64,
@@ -10924,7 +10439,6 @@ fn read_runtime_dag_qualification_archive_read_only(
     root_guard.revalidate()?;
     Ok(archive)
 }
-
 fn validate_runtime_dag_qualification_history(
     root: &Path,
     history: &RuntimeDagQualificationHistoryV1,
@@ -10939,7 +10453,6 @@ fn validate_runtime_dag_qualification_history(
         None,
     )
 }
-
 fn validate_runtime_dag_qualification_history_with_guard(
     root: &Path,
     history: &RuntimeDagQualificationHistoryV1,
@@ -10967,7 +10480,6 @@ fn validate_runtime_dag_qualification_history_with_guard(
             "governance runtime DAG qualification history is malformed or outside its V1 bounds",
         ));
     }
-
     let mut archives = Vec::new();
     let mut archive_generation = history.archive_generation;
     let mut archive_digest = history.archive_digest;
@@ -11000,7 +10512,6 @@ fn validate_runtime_dag_qualification_history_with_guard(
         ));
     }
     archives.reverse();
-
     let mut expected_archive_generation = 1_u64;
     let mut expected_archive_digest = [0; 32];
     let mut archive_digests = Vec::with_capacity(archives.len());
@@ -11066,7 +10577,6 @@ fn validate_runtime_dag_qualification_history_with_guard(
             })?;
         expected_archive_digest = digest;
     }
-
     if history.archive_generation != 0
         && (!runtime_dag_generation_immediately_precedes(
             history.archived_through_generation,
@@ -11078,7 +10588,6 @@ fn validate_runtime_dag_qualification_history_with_guard(
             "governance runtime DAG qualification history archive head is substituted",
         ));
     }
-
     for transition in &history.transitions {
         let digest = validate_runtime_dag_qualification_transition(transition, root_digest)?;
         if transition.body.generation != expected_generation
@@ -11118,7 +10627,6 @@ fn validate_runtime_dag_qualification_history_with_guard(
             "governance runtime DAG qualification history is outside its total bound or ends at a substituted provider",
         ));
     }
-
     let archives_dir = root.join(GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVES_DIR);
     let allowed_unindexed_archive = allowed_unindexed_archive.map(|(generation, digest)| {
         runtime_dag_qualification_archive_path(root, generation, digest)
@@ -11186,7 +10694,6 @@ fn validate_runtime_dag_qualification_history_with_guard(
             Err(error) => return Err(error.into()),
         }
     }
-
     if let Some(root_guard) = read_only_root_guard {
         root_guard.revalidate()?;
     }
@@ -11197,11 +10704,9 @@ fn validate_runtime_dag_qualification_history_with_guard(
         archive_digest: history.archive_digest,
     })
 }
-
 fn runtime_dag_generation_immediately_precedes(previous: u64, next: u64) -> bool {
     previous.checked_add(1) == Some(next)
 }
-
 fn reject_legacy_runtime_dag_qualification_state(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -11231,7 +10736,6 @@ fn reject_legacy_runtime_dag_qualification_state(
     root_guard.revalidate()?;
     Ok(())
 }
-
 fn open_runtime_dag_qualification_store_v1(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -11280,7 +10784,6 @@ fn open_runtime_dag_qualification_store_v1(
         &initial,
     )
 }
-
 fn load_runtime_dag_qualification_state_v1(
     store: &governance_rooted_fs::TwoSlotStoreV1,
 ) -> Result<
@@ -11303,7 +10806,6 @@ fn load_runtime_dag_qualification_state_v1(
     }
     Ok((state, snapshot))
 }
-
 fn read_runtime_dag_qualification_history(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -11322,7 +10824,6 @@ fn read_runtime_dag_qualification_history(
         None,
     )
 }
-
 fn read_runtime_dag_qualification_history_allowing_archive(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -11360,7 +10861,6 @@ fn read_runtime_dag_qualification_history_allowing_archive(
     )?;
     Ok(Some((history, summary)))
 }
-
 fn read_existing_runtime_dag_qualification_history_v1(
     root_guard: &GovernanceFilesystemRootGuard,
     expected_binding: &RuntimeDagProviderBindingV1,
@@ -11439,7 +10939,6 @@ fn read_existing_runtime_dag_qualification_history_v1(
     root_guard.revalidate()?;
     Ok(Some((history, summary)))
 }
-
 fn runtime_dag_qualification_summary(
     root: &Path,
     signer: &GovernanceRuntimeDagSigner,
@@ -11453,7 +10952,6 @@ fn runtime_dag_qualification_summary(
         })
     })
 }
-
 fn runtime_dag_history_tail_transition(
     root: &Path,
     history: &RuntimeDagQualificationHistoryV1,
@@ -11472,7 +10970,6 @@ fn runtime_dag_history_tail_transition(
     )?;
     Ok(archive.body.transitions.last().cloned())
 }
-
 fn runtime_dag_full_transition_lineage(
     root_guard: &GovernanceFilesystemRootGuard,
     history: &RuntimeDagQualificationHistoryV1,
@@ -11527,7 +11024,6 @@ fn runtime_dag_full_transition_lineage(
     root_guard.revalidate()?;
     Ok(transitions)
 }
-
 fn runtime_dag_authority_lineage(
     root: &Path,
     current_binding: &RuntimeDagProviderBindingV1,
@@ -11535,7 +11031,6 @@ fn runtime_dag_authority_lineage(
     let root_guard = GovernanceFilesystemRootGuard::capture_source(root)?;
     runtime_dag_authority_lineage_read_only(&root_guard, current_binding)
 }
-
 fn runtime_dag_authority_lineage_read_only(
     root_guard: &GovernanceFilesystemRootGuard,
     current_binding: &RuntimeDagProviderBindingV1,
@@ -11602,7 +11097,6 @@ fn runtime_dag_authority_lineage_read_only(
         qualification,
     })
 }
-
 fn validate_runtime_dag_authority_lineage_for_chain(
     authority_lineage: &RuntimeDagAuthorityLineageV1,
     blocks: &[&GovernanceDagBlockV1],
@@ -11648,7 +11142,6 @@ fn validate_runtime_dag_authority_lineage_for_chain(
         }
         tip_authority_segment_index = authority_segment_index;
     }
-
     while authority_segment_index + 1 < authority_lineage.segments.len()
         && authority_lineage.segments[authority_segment_index + 1].activation_block_count
             <= block_count
@@ -11683,7 +11176,6 @@ fn validate_runtime_dag_authority_lineage_for_chain(
             ));
         }
     }
-
     let tip_authority = authority_lineage
         .segments
         .get(tip_authority_segment_index)
@@ -11701,7 +11193,6 @@ fn validate_runtime_dag_authority_lineage_for_chain(
     }
     Ok(())
 }
-
 /// Validate one committed producer snapshot against its bounded, dual-signed
 /// authority-segment lineage.
 pub(crate) fn validate_runtime_dag_snapshot_authority_lineage<'a>(
@@ -11713,7 +11204,6 @@ pub(crate) fn validate_runtime_dag_snapshot_authority_lineage<'a>(
     let root_guard = GovernanceFilesystemRootGuard::capture_source(root)?;
     validate_runtime_dag_snapshot_authority_lineage_read_only(&root_guard, checkpoint, blocks, head)
 }
-
 fn validate_runtime_dag_snapshot_authority_lineage_read_only<'a>(
     root_guard: &GovernanceFilesystemRootGuard,
     checkpoint: &RuntimeDagProducerCheckpointV1,
@@ -11739,7 +11229,6 @@ fn validate_runtime_dag_snapshot_authority_lineage_read_only<'a>(
     root_guard.revalidate()?;
     Ok(())
 }
-
 fn authenticated_runtime_dag_authority_lineage_read_only(
     root_guard: &GovernanceFilesystemRootGuard,
     checkpoint: &RuntimeDagProducerCheckpointV1,
@@ -11763,9 +11252,7 @@ fn authenticated_runtime_dag_authority_lineage_read_only(
     root_guard.revalidate()?;
     Ok(authority_lineage)
 }
-
 type RuntimeDagIndexTransitionV1 = ([u8; 32], [u8; 32], Option<Vec<u8>>);
-
 fn canonical_runtime_dag_index_for_transition(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -11842,7 +11329,6 @@ fn canonical_runtime_dag_index_for_transition(
         Some(successor.into_bytes()),
     ))
 }
-
 fn canonical_runtime_dag_successor_index_from_transition(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -11919,7 +11405,6 @@ fn canonical_runtime_dag_successor_index_from_transition(
     }
     Ok(Some(successor.into_bytes()))
 }
-
 fn runtime_dag_checkpoint_from_transition(
     transition: &RuntimeDagQualificationTransitionV1,
     transition_digest: [u8; 32],
@@ -11946,7 +11431,6 @@ fn runtime_dag_checkpoint_from_transition(
         qualification_archive_digest: body.archive_digest,
     }
 }
-
 fn validate_runtime_dag_transition_predecessor(
     transition: &RuntimeDagQualificationTransitionV1,
     transition_digest: [u8; 32],
@@ -11977,7 +11461,6 @@ fn validate_runtime_dag_transition_predecessor(
     }
     Ok(())
 }
-
 fn install_runtime_dag_provider_transition(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -12093,7 +11576,6 @@ fn install_runtime_dag_provider_transition(
     signer.assert_qualification()?;
     store.assert_qualification()
 }
-
 fn recover_runtime_dag_provider_transition(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -12134,7 +11616,6 @@ fn recover_runtime_dag_provider_transition(
     }
     install_runtime_dag_provider_transition(root, root_guard, signer, store, &transition)
 }
-
 fn write_runtime_dag_qualification_history(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -12179,7 +11660,6 @@ fn write_runtime_dag_qualification_history(
     }
     Ok(summary)
 }
-
 fn runtime_dag_history_after_archive(
     history: &RuntimeDagQualificationHistoryV1,
     archive: &RuntimeDagQualificationArchiveV1,
@@ -12207,7 +11687,6 @@ fn runtime_dag_history_after_archive(
     next.archive_tail_transition_digest = body.tail_transition_digest;
     Ok(next)
 }
-
 fn recover_runtime_dag_qualification_compaction(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -12355,7 +11834,6 @@ fn recover_runtime_dag_qualification_compaction(
     }
     Ok(())
 }
-
 fn empty_runtime_dag_producer_checkpoint(
     root: &Path,
     signer: &GovernanceRuntimeDagSigner,
@@ -12383,7 +11861,6 @@ fn empty_runtime_dag_producer_checkpoint(
         qualification_archive_digest: qualification.archive_digest,
     })
 }
-
 fn runtime_dag_producer_checkpoint(
     root: &Path,
     signer: &GovernanceRuntimeDagSigner,
@@ -12451,7 +11928,6 @@ fn runtime_dag_producer_checkpoint(
         qualification_archive_digest: qualification.archive_digest,
     })
 }
-
 fn validate_runtime_dag_producer_checkpoint_shape(
     checkpoint: &RuntimeDagProducerCheckpointV1,
     root: &Path,
@@ -12497,7 +11973,6 @@ fn validate_runtime_dag_producer_checkpoint_shape(
     })?;
     Ok(())
 }
-
 fn runtime_dag_checkpoint_binding(
     checkpoint: &RuntimeDagProducerCheckpointV1,
 ) -> RuntimeDagProviderBindingV1 {
@@ -12512,7 +11987,6 @@ fn runtime_dag_checkpoint_binding(
         publisher_public_key: checkpoint.publisher_public_key,
     }
 }
-
 fn decode_runtime_dag_unqualified_checkpoint_record(
     record: &GovernanceDagSealedStateRecord,
     root: &Path,
@@ -12534,7 +12008,6 @@ fn decode_runtime_dag_unqualified_checkpoint_record(
     }
     Ok(checkpoint)
 }
-
 fn validate_runtime_dag_producer_checkpoint(
     checkpoint: &RuntimeDagProducerCheckpointV1,
     root: &Path,
@@ -12563,7 +12036,6 @@ fn validate_runtime_dag_producer_checkpoint(
     }
     Ok(())
 }
-
 fn runtime_dag_producer_checkpoint_generation(
     checkpoint: &RuntimeDagProducerCheckpointV1,
 ) -> Result<u64, GovernancePublishError> {
@@ -12578,7 +12050,6 @@ fn runtime_dag_producer_checkpoint_generation(
             )
         })
 }
-
 fn runtime_dag_producer_checkpoint_record(
     checkpoint: &RuntimeDagProducerCheckpointV1,
 ) -> Result<GovernanceDagSealedStateRecord, GovernancePublishError> {
@@ -12594,7 +12065,6 @@ fn runtime_dag_producer_checkpoint_record(
         payload,
     ))
 }
-
 fn decode_runtime_dag_producer_checkpoint_record(
     record: &GovernanceDagSealedStateRecord,
     root: &Path,
@@ -12610,7 +12080,6 @@ fn decode_runtime_dag_producer_checkpoint_record(
     validate_runtime_dag_producer_checkpoint(&checkpoint, root, signer, store)?;
     Ok(checkpoint)
 }
-
 fn local_runtime_dag_producer_checkpoint(
     root: &Path,
     signer: &GovernanceRuntimeDagSigner,
@@ -12631,7 +12100,6 @@ fn local_runtime_dag_producer_checkpoint(
         )),
     }
 }
-
 fn validate_runtime_dag_producer_intent_bounds(
     root: &Path,
     intent: &RuntimeDagProducerPublishIntentV1,
@@ -12725,7 +12193,6 @@ fn validate_runtime_dag_producer_intent_bounds(
     }
     Ok(())
 }
-
 fn validate_runtime_dag_producer_intent_metadata(
     intent: &RuntimeDagProducerPublishIntentV1,
 ) -> Result<(), GovernancePublishError> {
@@ -12768,7 +12235,6 @@ fn validate_runtime_dag_producer_intent_metadata(
     }
     Ok(())
 }
-
 fn runtime_dag_producer_staged_artifact(
     bytes: &[u8],
 ) -> Result<RuntimeDagProducerStagedArtifactV1, GovernancePublishError> {
@@ -12786,7 +12252,6 @@ fn runtime_dag_producer_staged_artifact(
         blake3: *blake3::hash(bytes).as_bytes(),
     })
 }
-
 fn runtime_dag_producer_staging_revision(
     checkpoint: &RuntimeDagProducerCheckpointV1,
     previous_checkpoint_revision: Option<[u8; 32]>,
@@ -12826,7 +12291,6 @@ fn runtime_dag_producer_staging_revision(
     }
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn reject_legacy_runtime_dag_mutable_state(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -12883,7 +12347,6 @@ fn reject_legacy_runtime_dag_mutable_state(
     root_guard.revalidate()?;
     Ok(())
 }
-
 fn open_runtime_dag_staging_store_v1(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -12907,7 +12370,6 @@ fn open_runtime_dag_staging_store_v1(
         &initial,
     )
 }
-
 fn load_runtime_dag_staging_state_v1(
     store: &governance_rooted_fs::TwoSlotStoreV1,
 ) -> Result<
@@ -12928,7 +12390,6 @@ fn load_runtime_dag_staging_state_v1(
     }
     Ok((state, snapshot))
 }
-
 fn open_runtime_dag_committed_store_v1(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -12953,7 +12414,6 @@ fn open_runtime_dag_committed_store_v1(
         &initial,
     )
 }
-
 fn load_runtime_dag_committed_state_v1(
     store: &governance_rooted_fs::TwoSlotStoreV1,
 ) -> Result<
@@ -12970,7 +12430,6 @@ fn load_runtime_dag_committed_state_v1(
     validate_runtime_dag_committed_state_v1(&state)?;
     Ok((state, snapshot))
 }
-
 fn validate_runtime_dag_committed_state_v1(
     state: &RuntimeDagCommittedStateV1,
 ) -> Result<(), GovernancePublishError> {
@@ -12989,7 +12448,6 @@ fn validate_runtime_dag_committed_state_v1(
     }
     Ok(())
 }
-
 /// Load one exact committed runtime-DAG generation through a retained root.
 ///
 /// This is the sole read boundary for consumers of mutable head/index state.
@@ -13040,7 +12498,6 @@ pub(crate) fn load_runtime_dag_committed_snapshot_v1(
         )),
     }
 }
-
 fn validate_authenticated_runtime_dag_semantics_v1(
     root_guard: &GovernanceFilesystemRootGuard,
     authority_lineage: &RuntimeDagAuthorityLineageV1,
@@ -13068,7 +12525,6 @@ fn validate_authenticated_runtime_dag_semantics_v1(
     let mut expected_block_names = BTreeSet::new();
     let mut previous_block_cid: Option<Vec<u8>> = None;
     let mut previous_node_cid: Option<Vec<u8>> = None;
-
     for (position, entry) in indexed_blocks.iter().enumerate() {
         let entry = entry.as_object().ok_or_else(|| {
             GovernancePublishError::other(
@@ -13087,7 +12543,6 @@ fn validate_authenticated_runtime_dag_semantics_v1(
                 "authenticated governance runtime DAG index position or sequence is noncanonical",
             ));
         }
-
         let indexed_block_cid = required_runtime_string(entry, "block_cid_hex")?;
         let indexed_node_cid = required_runtime_string(entry, "node_cid_hex")?;
         let indexed_block_cid_bytes = required_runtime_hex(entry, "block_cid_hex")?;
@@ -13155,7 +12610,6 @@ fn validate_authenticated_runtime_dag_semantics_v1(
         }
         previous_block_cid = Some(block.block_cid.clone());
         previous_node_cid = Some(block.node.node_cid.clone());
-
         let payload_kind = runtime_dag_payload_kind(&block.node.payload);
         if !runtime_dag_payload_kind_is_supported(payload_kind)
             || required_runtime_string(entry, "payload_kind")? != payload_kind
@@ -13182,7 +12636,6 @@ fn validate_authenticated_runtime_dag_semantics_v1(
                 "authenticated governance runtime DAG submission provenance is substituted",
             ));
         }
-
         let source_path_string = required_runtime_string(entry, "encoded_path")?;
         let source_path = resolve_index_path(root, &source_path_string)?;
         let source_snapshot = read_rooted_governance_state_file(
@@ -13207,7 +12660,6 @@ fn validate_authenticated_runtime_dag_semantics_v1(
                 "authenticated governance runtime DAG source payload is substituted",
             ));
         }
-
         let json_path_string = required_runtime_string(entry, "json_path")?;
         let json_path = resolve_index_path(root, &json_path_string)?;
         let json_snapshot = read_rooted_governance_state_file(
@@ -13241,7 +12693,6 @@ fn validate_authenticated_runtime_dag_semantics_v1(
                 "authenticated governance runtime DAG source paths do not bind their immutable bytes",
             ));
         }
-
         append_runtime_index_position(
             &mut expected_by_encoded_blake3,
             &block_digest_hex,
@@ -13274,7 +12725,6 @@ fn validate_authenticated_runtime_dag_semantics_v1(
         json_snapshot.binding().verify()?;
         decoded_blocks.push(block);
     }
-
     for (field, expected) in [
         ("by_encoded_blake3", expected_by_encoded_blake3),
         (
@@ -13289,7 +12739,6 @@ fn validate_authenticated_runtime_dag_semantics_v1(
             )));
         }
     }
-
     let runtime_root = root_guard
         .rooted_directory()
         .open_directory(OsStr::new(GOVERNANCE_RUNTIME_DAG_DIR))?;
@@ -13319,7 +12768,6 @@ fn validate_authenticated_runtime_dag_semantics_v1(
             "authenticated governance runtime DAG block inventory contains an unindexed or missing artifact",
         ));
     }
-
     if head.generated_at > latest_allowed {
         return Err(GovernancePublishError::other(
             "authenticated governance runtime DAG head is future-dated",
@@ -13337,7 +12785,6 @@ fn validate_authenticated_runtime_dag_semantics_v1(
     root_guard.revalidate()?;
     Ok(())
 }
-
 /// Load a runtime-DAG generation bracketed by one exact sealed producer
 /// checkpoint without initializing or reconciling any local state.
 ///
@@ -13365,7 +12812,6 @@ pub(crate) fn load_authenticated_runtime_dag_snapshot_v1(
         }
         Err(error) => return Err(error.into()),
     }
-
     let checkpoint_record_a = store
         .load(GovernanceDagSealedStateSlot::ProducerCheckpoint)?
         .ok_or_else(|| {
@@ -13390,7 +12836,6 @@ pub(crate) fn load_authenticated_runtime_dag_snapshot_v1(
     }
     let authority_lineage =
         authenticated_runtime_dag_authority_lineage_read_only(root_guard, &checkpoint)?;
-
     // The fixed-store generation is intentionally not derived from the block
     // count. A qualified provider transition rewrites the authenticated index
     // binding without appending a block and therefore advances this store
@@ -13521,7 +12966,6 @@ pub(crate) fn load_authenticated_runtime_dag_snapshot_v1(
             &head,
         )?;
     }
-
     let checkpoint_record_b = store
         .load(GovernanceDagSealedStateSlot::ProducerCheckpoint)?
         .ok_or_else(|| {
@@ -13545,7 +12989,6 @@ pub(crate) fn load_authenticated_runtime_dag_snapshot_v1(
     root_guard.revalidate()?;
     signer.assert_qualification()?;
     store.assert_qualification()?;
-
     Ok(
         committed.map(|committed| AuthenticatedRuntimeDagSnapshotV1 {
             committed,
@@ -13554,7 +12997,6 @@ pub(crate) fn load_authenticated_runtime_dag_snapshot_v1(
         }),
     )
 }
-
 #[cfg(test)]
 pub(crate) fn write_runtime_dag_committed_snapshot_fixture_v1(
     root: &Path,
@@ -13582,7 +13024,6 @@ pub(crate) fn write_runtime_dag_committed_snapshot_fixture_v1(
     )?;
     Ok(())
 }
-
 fn stage_runtime_dag_producer_transaction(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -13621,7 +13062,6 @@ fn stage_runtime_dag_producer_transaction(
     }
     Ok(())
 }
-
 fn load_runtime_dag_producer_staged_transaction(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -13643,7 +13083,6 @@ fn load_runtime_dag_producer_staged_transaction(
     validate_runtime_dag_producer_intent_bounds(root, intent, &staged)?;
     Ok(staged)
 }
-
 fn clear_runtime_dag_producer_staged_transaction(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -13684,7 +13123,6 @@ fn clear_runtime_dag_producer_staged_transaction(
     }
     Ok(())
 }
-
 fn runtime_dag_producer_block_path_from_intent(
     root: &Path,
     intent: &RuntimeDagProducerPublishIntentV1,
@@ -13704,7 +13142,6 @@ fn runtime_dag_producer_block_path_from_intent(
         &hex::encode(intent.checkpoint.head_block_cid),
     ))
 }
-
 fn validate_runtime_dag_producer_file_lengths(
     block_len: usize,
     head_len: usize,
@@ -13723,7 +13160,6 @@ fn validate_runtime_dag_producer_file_lengths(
     }
     Ok(())
 }
-
 fn validate_runtime_dag_producer_entry_count(
     entries: usize,
     checkpoint_count: u64,
@@ -13738,7 +13174,6 @@ fn validate_runtime_dag_producer_entry_count(
     }
     Ok(())
 }
-
 fn decode_runtime_dag_producer_intent_metadata_record(
     record: &GovernanceDagSealedStateRecord,
     root: &Path,
@@ -13766,7 +13201,6 @@ fn decode_runtime_dag_producer_intent_metadata_record(
     validate_runtime_dag_producer_intent_metadata(&intent)?;
     Ok(intent)
 }
-
 fn load_and_validate_runtime_dag_producer_staged_transaction(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -13795,7 +13229,6 @@ fn load_and_validate_runtime_dag_producer_staged_transaction(
     }
     Ok(staged)
 }
-
 #[cfg(windows)]
 fn isolate_recoverable_atomic_state_for_target(
     root_guard: &GovernanceFilesystemRootGuard,
@@ -13821,7 +13254,6 @@ fn isolate_recoverable_atomic_state_for_target(
     root_guard.revalidate()?;
     Ok(())
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn plan_recoverable_atomic_temps_for_target(
     parent: &governance_rooted_fs::RootedDirectory,
@@ -13860,7 +13292,6 @@ fn plan_recoverable_atomic_temps_for_target(
     }
     Ok(())
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn isolate_recoverable_atomic_state_for_target(
     root_guard: &GovernanceFilesystemRootGuard,
@@ -13893,7 +13324,6 @@ fn isolate_recoverable_atomic_state_for_target(
     root_guard.revalidate()?;
     apply_governance_publication_cleanup_plan(root_guard, plan)
 }
-
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn isolate_recoverable_atomic_state_for_target(
     _root_guard: &GovernanceFilesystemRootGuard,
@@ -13905,7 +13335,6 @@ fn isolate_recoverable_atomic_state_for_target(
         "governance atomic recovery is unsupported on this platform",
     ))
 }
-
 fn validate_runtime_dag_producer_intent_successor(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -13925,7 +13354,6 @@ fn validate_runtime_dag_producer_intent_successor(
             "sealed governance runtime DAG producer intent is not the direct checkpoint successor",
         ));
     }
-
     let block: GovernanceDagBlockV1 = decode_canonical_runtime_dag(
         &staged.block_bytes,
         "sealed governance runtime DAG successor block",
@@ -13964,7 +13392,6 @@ fn validate_runtime_dag_producer_intent_successor(
             "sealed governance runtime DAG successor block, head, or signer binding is substituted",
         ));
     }
-
     let new_value: JsonValue = json::from_slice(&staged.index_bytes).map_err(|error| {
         GovernancePublishError::other(format!(
             "sealed governance runtime DAG successor index is invalid: {error}"
@@ -14013,7 +13440,6 @@ fn validate_runtime_dag_producer_intent_successor(
             "sealed governance runtime DAG successor block does not match its final index entry",
         ));
     }
-
     let prior_tip = if previous_count == 0 {
         None
     } else {
@@ -14038,7 +13464,6 @@ fn validate_runtime_dag_producer_intent_successor(
             "sealed governance runtime DAG successor does not extend the exact prior tip",
         ));
     }
-
     let committed_store = open_runtime_dag_committed_store_v1(root, root_guard)?;
     let (committed, _) = load_runtime_dag_committed_state_v1(&committed_store)?;
     match committed.index_bytes.as_deref() {
@@ -14081,7 +13506,6 @@ fn validate_runtime_dag_producer_intent_successor(
             ));
         }
     }
-
     match committed.head_bytes.as_deref() {
         Some(current) if current == staged.head_bytes => {}
         Some(current)
@@ -14097,7 +13521,6 @@ fn validate_runtime_dag_producer_intent_successor(
     }
     Ok(())
 }
-
 fn apply_runtime_dag_producer_intent(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -14177,7 +13600,6 @@ fn apply_runtime_dag_producer_intent(
     root_guard.revalidate()?;
     Ok(())
 }
-
 fn finish_runtime_dag_producer_intent(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -14267,7 +13689,6 @@ fn finish_runtime_dag_producer_intent(
     signer.assert_qualification()?;
     store.assert_qualification()
 }
-
 fn reconcile_runtime_dag_producer_state(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -14342,7 +13763,6 @@ fn reconcile_runtime_dag_producer_state(
     root_guard.revalidate()?;
     Ok(())
 }
-
 /// Requalify both signed-producer providers and authenticate the complete local root.
 pub(crate) fn revalidate_runtime_dag_producer_state(
     root: &Path,
@@ -14356,7 +13776,6 @@ pub(crate) fn revalidate_runtime_dag_producer_state(
     signer.assert_qualification()?;
     store.assert_qualification()
 }
-
 #[allow(clippy::too_many_arguments)]
 fn commit_runtime_dag_producer_transaction(
     root: &Path,
@@ -14478,7 +13897,6 @@ fn commit_runtime_dag_producer_transaction(
     signer.assert_qualification()?;
     store.assert_qualification()
 }
-
 fn runtime_dag_tip_from_entries(
     blocks: &[JsonValue],
 ) -> Result<Option<RuntimeDagTip>, GovernancePublishError> {
@@ -14497,7 +13915,6 @@ fn runtime_dag_tip_from_entries(
         timestamp: required_runtime_u64(map, "published_at_unix")?,
     }))
 }
-
 fn runtime_dag_checkpoint_cid(
     blocks: &[JsonValue],
     block_count: u64,
@@ -14534,7 +13951,6 @@ fn runtime_dag_checkpoint_cid(
     }
     required_runtime_hex(checkpoint_map, "block_cid_hex").map(Some)
 }
-
 fn build_runtime_dag_index_bytes(
     signer: &GovernanceRuntimeDagSigner,
     store: &GovernanceRuntimeDagCheckpointStore,
@@ -14547,7 +13963,6 @@ fn build_runtime_dag_index_bytes(
     let mut by_payload_kind = JsonMap::new();
     let mut previous_block_cid_hex: Option<String> = None;
     let mut previous_node_cid_hex: Option<String> = None;
-
     for (position, block) in blocks.iter_mut().enumerate() {
         let position_u64 = u64::try_from(position).map_err(|_| {
             GovernancePublishError::other("governance runtime DAG index position exceeds u64")
@@ -14588,7 +14003,6 @@ fn build_runtime_dag_index_bytes(
         previous_block_cid_hex = Some(block_cid_hex);
         previous_node_cid_hex = Some(node_cid_hex);
     }
-
     index.insert(
         "schema".into(),
         JsonValue::from(GOVERNANCE_RUNTIME_DAG_INDEX_SCHEMA),
@@ -14620,13 +14034,11 @@ fn build_runtime_dag_index_bytes(
     );
     index.insert("by_payload_kind".into(), JsonValue::Object(by_payload_kind));
     index.insert("blocks".into(), JsonValue::Array(blocks));
-
     let body = json::to_json_pretty(&JsonValue::Object(index)).map_err(|err| {
         GovernancePublishError::other(format!("serialize governance runtime DAG index: {err}"))
     })?;
     Ok(body.into_bytes())
 }
-
 fn append_runtime_index_position(index: &mut JsonMap, key: &str, position: u64) {
     let position = JsonValue::from(position);
     match index.get_mut(key).and_then(JsonValue::as_array_mut) {
@@ -14636,7 +14048,6 @@ fn append_runtime_index_position(index: &mut JsonMap, key: &str, position: u64) 
         }
     }
 }
-
 fn runtime_dag_index_entry_files_exist(root: &Path, entry: &JsonValue) -> bool {
     entry
         .get("block_path")
@@ -14644,30 +14055,24 @@ fn runtime_dag_index_entry_files_exist(root: &Path, entry: &JsonValue) -> bool {
         .and_then(|path| resolve_index_path(root, path).ok())
         .is_some_and(|path| path.is_file())
 }
-
 fn runtime_dag_block_path(root: &Path, sequence: u64, block_cid_hex: &str) -> PathBuf {
     root.join(GOVERNANCE_RUNTIME_DAG_DIR)
         .join(GOVERNANCE_RUNTIME_DAG_BLOCKS_DIR)
         .join(format!("{sequence:020}_{block_cid_hex}.to"))
 }
-
 fn runtime_dag_head_path(root: &Path) -> PathBuf {
     root.join(GOVERNANCE_RUNTIME_DAG_DIR)
         .join(GOVERNANCE_RUNTIME_DAG_HEAD_FILE)
 }
-
 fn fenced_privacy_head_cache_path(root: &Path) -> PathBuf {
     root.join(GOVERNANCE_FENCED_PRIVACY_HEAD_CACHE_FILE)
 }
-
 fn fenced_privacy_head_sync_path(root: &Path) -> PathBuf {
     root.join(GOVERNANCE_FENCED_PRIVACY_HEAD_SYNC_FILE)
 }
-
 fn fenced_privacy_pending_path(root: &Path) -> PathBuf {
     root.join(GOVERNANCE_FENCED_PRIVACY_PENDING_FILE)
 }
-
 impl CachedPrivacyPublicationAuthorizationV1 {
     fn from_authorization(authorization: &PrivacyPublicationAuthorizationV1) -> Self {
         let lease = authorization.leader_lease();
@@ -14700,7 +14105,6 @@ impl CachedPrivacyPublicationAuthorizationV1 {
             payload_digest: authorization.payload_digest(),
         }
     }
-
     fn reconstruct(&self) -> Result<PrivacyPublicationAuthorizationV1, GovernancePublishError> {
         let malformed = || {
             GovernancePublishError::other(
@@ -14753,7 +14157,6 @@ impl CachedPrivacyPublicationAuthorizationV1 {
         .map_err(|_| malformed())
     }
 }
-
 impl FencedPrivacyPendingRequestV1 {
     fn from_request(
         request: &FencedPrivacyPublicationRequestV1,
@@ -14785,7 +14188,6 @@ impl FencedPrivacyPendingRequestV1 {
         }
         Ok(pending)
     }
-
     fn has_valid_shape(&self) -> bool {
         let predecessor_is_valid = match self.expected_authoritative_head {
             Some(head) => head.is_valid(),
@@ -14813,7 +14215,6 @@ impl FencedPrivacyPendingRequestV1 {
             && self.fencing_floor == expected_floor
             && self.fencing_token != 0
     }
-
     fn reconstruct_request(
         &self,
         incoming_authorization: &PrivacyPublicationAuthorizationV1,
@@ -14867,7 +14268,6 @@ impl FencedPrivacyPendingRequestV1 {
         Ok(request)
     }
 }
-
 impl FencedPrivacyPublicationCacheV1 {
     fn from_verified_receipt(
         request: &FencedPrivacyPublicationRequestV1,
@@ -14932,7 +14332,6 @@ impl FencedPrivacyPublicationCacheV1 {
         }
         Ok(cache)
     }
-
     fn has_valid_shape(&self) -> bool {
         let expected_floor = self
             .last_expected_authoritative_head
@@ -14979,7 +14378,6 @@ impl FencedPrivacyPublicationCacheV1 {
             }
             && self.last_fencing_floor == expected_floor
     }
-
     fn exact_retry_request(
         &self,
         incoming_authorization: &PrivacyPublicationAuthorizationV1,
@@ -15027,7 +14425,6 @@ impl FencedPrivacyPublicationCacheV1 {
         Ok(Some(request))
     }
 }
-
 impl FencedPrivacyAuthoritativeHeadSyncV1 {
     fn from_authenticated_read(
         reader: &QualifiedFencedTransparencyHeadReaderV1,
@@ -15048,7 +14445,6 @@ impl FencedPrivacyAuthoritativeHeadSyncV1 {
         }
         Ok(sync)
     }
-
     fn has_valid_shape(&self) -> bool {
         self.version == GOVERNANCE_FENCED_PRIVACY_HEAD_SYNC_VERSION_V1
             && validate_production_runtime_handle(&self.reader_handle).is_ok()
@@ -15060,7 +14456,6 @@ impl FencedPrivacyAuthoritativeHeadSyncV1 {
                 .is_none_or(FencedTransparencyTargetHeadV1::is_valid)
     }
 }
-
 fn reject_legacy_fenced_privacy_state(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
@@ -15092,7 +14487,6 @@ fn reject_legacy_fenced_privacy_state(
     root_guard.revalidate()?;
     Ok(())
 }
-
 fn validate_fenced_privacy_state_v1(
     state: &FencedPrivacyStateV1,
 ) -> Result<(), GovernancePublishError> {
@@ -15137,7 +14531,6 @@ fn validate_fenced_privacy_state_v1(
     }
     Ok(())
 }
-
 fn open_fenced_privacy_store_v1(
     root: &Path,
 ) -> Result<governance_rooted_fs::TwoSlotStoreV1, GovernancePublishError> {
@@ -15158,7 +14551,6 @@ fn open_fenced_privacy_store_v1(
         &initial,
     )
 }
-
 fn load_fenced_privacy_state_v1(
     store: &governance_rooted_fs::TwoSlotStoreV1,
 ) -> Result<
@@ -15174,7 +14566,6 @@ fn load_fenced_privacy_state_v1(
     validate_fenced_privacy_state_v1(&state)?;
     Ok((state, snapshot))
 }
-
 fn update_fenced_privacy_state_v1(
     root: &Path,
     label: &str,
@@ -15205,14 +14596,12 @@ fn update_fenced_privacy_state_v1(
     }
     Ok(())
 }
-
 fn read_fenced_privacy_pending_request(
     root: &Path,
 ) -> Result<Option<FencedPrivacyPendingRequestV1>, GovernancePublishError> {
     let store = open_fenced_privacy_store_v1(root)?;
     Ok(load_fenced_privacy_state_v1(&store)?.0.pending)
 }
-
 fn write_fenced_privacy_pending_request(
     root: &Path,
     pending: &FencedPrivacyPendingRequestV1,
@@ -15226,20 +14615,17 @@ fn write_fenced_privacy_pending_request(
         state.pending = Some(pending.clone());
     })
 }
-
 fn remove_fenced_privacy_pending_request(root: &Path) -> Result<(), GovernancePublishError> {
     update_fenced_privacy_state_v1(root, "cleared fenced privacy pending request", |state| {
         state.pending = None;
     })
 }
-
 fn read_fenced_privacy_head_cache(
     root: &Path,
 ) -> Result<Option<FencedPrivacyPublicationCacheV1>, GovernancePublishError> {
     let store = open_fenced_privacy_store_v1(root)?;
     Ok(load_fenced_privacy_state_v1(&store)?.0.publication_cache)
 }
-
 fn write_fenced_privacy_head_cache(
     root: &Path,
     cache: &FencedPrivacyPublicationCacheV1,
@@ -15253,7 +14639,6 @@ fn write_fenced_privacy_head_cache(
         state.publication_cache = Some(cache.clone());
     })
 }
-
 fn read_fenced_privacy_head_sync(
     root: &Path,
 ) -> Result<Option<FencedPrivacyAuthoritativeHeadSyncV1>, GovernancePublishError> {
@@ -15262,7 +14647,6 @@ fn read_fenced_privacy_head_sync(
         .0
         .authoritative_head_sync)
 }
-
 fn write_fenced_privacy_head_sync(
     root: &Path,
     sync: &FencedPrivacyAuthoritativeHeadSyncV1,
@@ -15276,7 +14660,6 @@ fn write_fenced_privacy_head_sync(
         state.authoritative_head_sync = Some(sync.clone());
     })
 }
-
 fn retain_fenced_privacy_required_ancestor(
     required: &mut Vec<FencedTransparencyTargetHeadV1>,
     ancestor: Option<FencedTransparencyTargetHeadV1>,
@@ -15285,7 +14668,6 @@ fn retain_fenced_privacy_required_ancestor(
         required.push(ancestor);
     }
 }
-
 fn retain_fenced_privacy_required_publication(
     required: &mut Vec<FencedTransparencyPublicationInclusionV1>,
     publication: FencedTransparencyPublicationInclusionV1,
@@ -15294,7 +14676,6 @@ fn retain_fenced_privacy_required_publication(
         required.push(publication);
     }
 }
-
 /// Reauthenticate the persisted privacy head/cache against the exact target.
 ///
 /// The caller must hold the shared filesystem-publisher transaction fence so
@@ -15380,7 +14761,6 @@ pub(crate) fn synchronize_fenced_privacy_authoritative_head(
     }
     Ok(authoritative_head)
 }
-
 fn empty_governance_ed25519_signature() -> GovernanceLogSignatureV1 {
     GovernanceLogSignatureV1 {
         algorithm: GovernanceSignatureAlgorithm::Ed25519,
@@ -15388,7 +14768,6 @@ fn empty_governance_ed25519_signature() -> GovernanceLogSignatureV1 {
         signature: Vec::new(),
     }
 }
-
 fn required_runtime_string(map: &JsonMap, field: &str) -> Result<String, GovernancePublishError> {
     map.get(field)
         .and_then(JsonValue::as_str)
@@ -15399,7 +14778,6 @@ fn required_runtime_string(map: &JsonMap, field: &str) -> Result<String, Governa
             ))
         })
 }
-
 fn optional_runtime_string(
     map: &JsonMap,
     field: &str,
@@ -15416,7 +14794,6 @@ fn optional_runtime_string(
             }),
     }
 }
-
 fn required_optional_runtime_string(
     map: &JsonMap,
     field: &str,
@@ -15438,7 +14815,6 @@ fn required_optional_runtime_string(
             }),
     }
 }
-
 fn json_optional_string_matches(value: Option<&JsonValue>, expected: Option<&str>) -> bool {
     match (value, expected) {
         (Some(JsonValue::Null), None) => true,
@@ -15446,7 +14822,6 @@ fn json_optional_string_matches(value: Option<&JsonValue>, expected: Option<&str
         _ => false,
     }
 }
-
 fn required_runtime_u64(map: &JsonMap, field: &str) -> Result<u64, GovernancePublishError> {
     map.get(field).and_then(JsonValue::as_u64).ok_or_else(|| {
         GovernancePublishError::other(format!(
@@ -15454,7 +14829,6 @@ fn required_runtime_u64(map: &JsonMap, field: &str) -> Result<u64, GovernancePub
         ))
     })
 }
-
 fn required_runtime_hex(map: &JsonMap, field: &str) -> Result<Vec<u8>, GovernancePublishError> {
     let value = required_runtime_string(map, field)?;
     if value.is_empty() {
@@ -15468,7 +14842,6 @@ fn required_runtime_hex(map: &JsonMap, field: &str) -> Result<Vec<u8>, Governanc
         ))
     })
 }
-
 fn record_governance_dag_publish_result(
     payload_kind: &str,
     result: &Result<(), GovernancePublishError>,
@@ -15487,27 +14860,23 @@ fn record_governance_dag_publish_result(
         current_unix_timestamp_seconds(),
     );
 }
-
 fn record_governance_dag_backlog(pending_count: u64) {
     let Some(metrics) = iroha_telemetry::metrics::global() else {
         return;
     };
     metrics.set_sorafs_governance_dag_backlog(GOVERNANCE_DAG_SINK_FILESYSTEM, pending_count);
 }
-
 fn record_governance_dag_head_age_from_index(index: &JsonMap) {
     if let Some(generated_at) = governance_dag_head_generated_at_from_index(index) {
         record_governance_dag_head_age(generated_at);
     }
 }
-
 fn governance_dag_head_generated_at_from_index(index: &JsonMap) -> Option<u64> {
     index
         .get("head_generated_at")
         .and_then(JsonValue::as_u64)
         .or_else(|| index.get("generated_at").and_then(JsonValue::as_u64))
 }
-
 fn record_governance_dag_head_age(generated_at: u64) {
     let Some(metrics) = iroha_telemetry::metrics::global() else {
         return;
@@ -15517,11 +14886,9 @@ fn record_governance_dag_head_age(generated_at: u64) {
         governance_dag_head_age_seconds(generated_at, current_unix_timestamp_seconds()),
     );
 }
-
 fn governance_dag_head_age_seconds(generated_at: u64, now: u64) -> u64 {
     now.saturating_sub(generated_at)
 }
-
 fn ensure_canonical_governance_encoding<T: norito::NoritoSerialize>(
     value: &T,
     encoded: &[u8],
@@ -15539,7 +14906,6 @@ fn ensure_canonical_governance_encoding<T: norito::NoritoSerialize>(
     }
     Ok(())
 }
-
 fn bind_authenticated_submission_labels(
     labels: &mut JsonMap,
     provenance: Option<&GovernanceSubmissionProvenanceV1>,
@@ -15557,7 +14923,6 @@ fn bind_authenticated_submission_labels(
         JsonValue::from(provenance.origin().label()),
     );
 }
-
 fn bind_authenticated_submission_json(
     json_body: String,
     provenance: Option<&GovernanceSubmissionProvenanceV1>,
@@ -15594,7 +14959,6 @@ fn bind_authenticated_submission_json(
         ))
     })
 }
-
 #[cfg(test)]
 impl FilesystemGovernancePublisher {
     fn publish_transparency_ledger_publication(
@@ -15614,7 +14978,6 @@ impl FilesystemGovernancePublisher {
             Some(&provenance),
         )
     }
-
     fn publish_proof_token_issuance(
         &self,
         issuance: &ProofTokenIssuanceV1,
@@ -15630,7 +14993,6 @@ impl FilesystemGovernancePublisher {
             Some(&provenance),
         )
     }
-
     fn publish_appeal_finance_report(
         &self,
         report: &SoraFsAppealFinanceReportV1,
@@ -15645,7 +15007,6 @@ impl FilesystemGovernancePublisher {
             &provenance,
         )
     }
-
     fn publish_appeal_finance_weekly_rollup(
         &self,
         rollup: &SoraFsAppealFinanceWeeklyRollupV1,
@@ -15662,7 +15023,6 @@ impl FilesystemGovernancePublisher {
         )
     }
 }
-
 #[cfg(test)]
 fn test_submission_provenance(
     origin: crate::GovernanceSubmissionOriginV1,
@@ -15671,7 +15031,6 @@ fn test_submission_provenance(
         .expect("fixed test publisher key must be valid");
     GovernanceSubmissionProvenanceV1::new(AccountId::new(public_key), origin)
 }
-
 impl GovernancePublisher for FilesystemGovernancePublisher {
     fn publish_deal_settlement(
         &self,
@@ -15767,10 +15126,8 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             if let Some(notes) = &settlement.audit_notes {
                 settlement_obj.insert("audit_notes".into(), JsonValue::from(notes.clone()));
             }
-
             let mut payload = JsonMap::new();
             payload.insert("settlement".into(), JsonValue::Object(settlement_obj));
-
             let mut metadata = JsonMap::new();
             metadata.insert(
                 "status".into(),
@@ -15779,11 +15136,9 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
             metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
             payload.insert("metadata".into(), JsonValue::Object(metadata));
-
             let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
                 GovernancePublishError::other(format!("serialize settlement json: {err}"))
             })?;
-
             let mut labels = JsonMap::new();
             labels.insert(
                 "deal_id".into(),
@@ -15816,13 +15171,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 &digest_hex,
                 encoded.len(),
             )?;
-
             Ok(())
         })();
         record_governance_dag_publish_result("deal_settlement", &result, encoded.len());
         result
     }
-
     fn publish_pdp_archive(
         &self,
         archive: &PdpGovernanceArchiveV1,
@@ -15898,7 +15251,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|error| {
                 GovernancePublishError::other(format!("serialize PDP archive json: {error}"))
             })?;
-
             let mut labels = JsonMap::new();
             labels.insert(
                 "challenge_id_hex".into(),
@@ -15930,7 +15282,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         record_governance_dag_publish_result("pdp_archive", &result, encoded.len());
         result
     }
-
     fn publish_por_challenge_publication(
         &self,
         publication: &PorChallengePublicationV1,
@@ -15967,7 +15318,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                     "serialize PoR challenge publication json: {error}"
                 ))
             })?;
-
             let mut labels = JsonMap::new();
             labels.insert(
                 "challenge_id_hex".into(),
@@ -16006,7 +15356,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         record_governance_dag_publish_result("por_challenge_publication", &result, encoded.len());
         result
     }
-
     fn publish_por_weekly_report(
         &self,
         report: &PorWeeklyReportV1,
@@ -16035,7 +15384,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|error| {
                 GovernancePublishError::other(format!("serialize PoR weekly report json: {error}"))
             })?;
-
             let mut labels = JsonMap::new();
             labels.insert("cycle".into(), JsonValue::from(report.cycle.to_string()));
             labels.insert("generated_at".into(), JsonValue::from(report.generated_at));
@@ -16070,7 +15418,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         record_governance_dag_publish_result("por_weekly_report", &result, encoded.len());
         result
     }
-
     fn publish_gc_audit_event(
         &self,
         event: &GcAuditEventV1,
@@ -16095,7 +15442,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                     GovernancePublishError::other(format!("serialize gc event: {err}"))
                 })?,
             );
-
             let mut metadata = JsonMap::new();
             metadata.insert(
                 "reason".into(),
@@ -16107,11 +15453,9 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
             metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
             payload.insert("metadata".into(), JsonValue::Object(metadata));
-
             let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
                 GovernancePublishError::other(format!("serialize gc audit json: {err}"))
             })?;
-
             let mut labels = JsonMap::new();
             labels.insert(
                 "manifest".into(),
@@ -16140,13 +15484,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 &digest_hex,
                 encoded.len(),
             )?;
-
             Ok(())
         })();
         record_governance_dag_publish_result("gc_audit", &result, encoded.len());
         result
     }
-
     fn publish_reconciliation_report(
         &self,
         report: &SorafsReconciliationReportV1,
@@ -16171,7 +15513,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                     GovernancePublishError::other(format!("serialize reconciliation report: {err}"))
                 })?,
             );
-
             let mut metadata = JsonMap::new();
             metadata.insert(
                 "provider".into(),
@@ -16230,13 +15571,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
             metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
             payload.insert("metadata".into(), JsonValue::Object(metadata));
-
             let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
                 GovernancePublishError::other(format!(
                     "serialize reconciliation report json: {err}"
                 ))
             })?;
-
             let mut labels = JsonMap::new();
             labels.insert(
                 "provider".into(),
@@ -16274,13 +15613,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 &digest_hex,
                 encoded.len(),
             )?;
-
             Ok(())
         })();
         record_governance_dag_publish_result("reconciliation", &result, encoded.len());
         result
     }
-
     fn publish_reputation_snapshot(
         &self,
         envelope: &SignedReputationSnapshotV1,
@@ -16303,7 +15640,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let json_body = reputation_snapshot_json(envelope, encoded.len(), &digest_hex)?;
-
             let mut labels = JsonMap::new();
             labels.insert(
                 "snapshot_id_hex".into(),
@@ -16347,13 +15683,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 &digest_hex,
                 encoded.len(),
             )?;
-
             Ok(())
         })();
         record_governance_dag_publish_result("reputation_snapshot", &result, encoded.len());
         result
     }
-
     fn publish_moderation_ballot_event(
         &self,
         event: &SoraFsModerationBallotGovernanceEventV1,
@@ -16370,7 +15704,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let json_body = moderation_ballot_event_json(event, encoded, &digest_hex)?;
-
             let mut labels = JsonMap::new();
             labels.insert("case_id".into(), JsonValue::from(event.case_id.clone()));
             labels.insert("round_id".into(), JsonValue::from(event.round_id.clone()));
@@ -16416,13 +15749,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 &digest_hex,
                 encoded.len(),
             )?;
-
             Ok(())
         })();
         record_governance_dag_publish_result("moderation_ballot_event", &result, encoded.len());
         result
     }
-
     fn publish_transparency_ledger_publication(
         &self,
         publication: &ModerationLedgerCyclePublicationV1,
@@ -16551,7 +15882,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 transparency_ledger_publication_json(publication, encoded, &digest_hex)?,
                 provenance,
             )?;
-
             let block_hash = publication.block.block_hash().map_err(|err| {
                 GovernancePublishError::other(format!("hash transparency ledger block: {err}"))
             })?;
@@ -16696,7 +16026,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             } else {
                 remove_fenced_privacy_pending_request(&self.root)?;
             }
-
             Ok(())
         })();
         record_governance_dag_publish_result(
@@ -16706,7 +16035,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         );
         result
     }
-
     fn publish_proof_token_issuance(
         &self,
         issuance: &ProofTokenIssuanceV1,
@@ -16734,7 +16062,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 proof_token_issuance_json(issuance, encoded, &digest_hex)?,
                 provenance,
             )?;
-
             let mut labels = JsonMap::new();
             labels.insert(
                 "token_id_hex".into(),
@@ -16801,13 +16128,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 encoded.len(),
                 provenance,
             )?;
-
             Ok(())
         })();
         record_governance_dag_publish_result("proof_token_issuance", &result, encoded.len());
         result
     }
-
     fn publish_appeal_finance_report(
         &self,
         report: &SoraFsAppealFinanceReportV1,
@@ -16832,7 +16157,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 appeal_finance_report_json(report, encoded, &digest_hex)?,
                 Some(provenance),
             )?;
-
             let mut labels = JsonMap::new();
             labels.insert("case_id".into(), JsonValue::from(report.case_id.clone()));
             if let Some(round_id) = &report.round_id {
@@ -16907,13 +16231,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 encoded.len(),
                 Some(provenance),
             )?;
-
             Ok(())
         })();
         record_governance_dag_publish_result("appeal_finance_report", &result, encoded.len());
         result
     }
-
     fn publish_appeal_finance_weekly_rollup(
         &self,
         rollup: &SoraFsAppealFinanceWeeklyRollupV1,
@@ -16940,7 +16262,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 appeal_finance_weekly_rollup_json(rollup, encoded, &digest_hex)?,
                 Some(provenance),
             )?;
-
             let mut labels = JsonMap::new();
             labels.insert("cycle".into(), JsonValue::from(rollup.cycle.to_string()));
             labels.insert(
@@ -16989,7 +16310,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 encoded.len(),
                 Some(provenance),
             )?;
-
             Ok(())
         })();
         record_governance_dag_publish_result(
@@ -16999,7 +16319,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         );
         result
     }
-
     fn publish_appeal_finance_settlement_receipt(
         &self,
         receipt: &SoraFsAppealFinanceSettlementReceiptV1,
@@ -17023,7 +16342,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let json_body = appeal_finance_settlement_receipt_json(receipt, encoded, &digest_hex)?;
-
             let mut labels = JsonMap::new();
             labels.insert("case_id".into(), JsonValue::from(receipt.case_id.clone()));
             if let Some(round_id) = &receipt.round_id {
@@ -17124,7 +16442,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 &digest_hex,
                 encoded.len(),
             )?;
-
             Ok(())
         })();
         record_governance_dag_publish_result(
@@ -17135,7 +16452,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         result
     }
 }
-
 fn reputation_snapshot_json(
     envelope: &SignedReputationSnapshotV1,
     encoded_len: usize,
@@ -17151,7 +16467,6 @@ fn reputation_snapshot_json(
         "schema".into(),
         JsonValue::from("sorafs.reputation_snapshot.metadata.v1"),
     );
-
     let snapshot = &envelope.snapshot;
     let mut metadata = JsonMap::new();
     metadata.insert(
@@ -17191,12 +16506,10 @@ fn reputation_snapshot_json(
         JsonValue::from(u64::try_from(encoded_len).unwrap_or(u64::MAX)),
     );
     payload.insert("metadata".into(), JsonValue::Object(metadata));
-
     json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
         GovernancePublishError::other(format!("serialize signed reputation snapshot json: {err}"))
     })
 }
-
 fn moderation_ballot_event_json(
     event: &SoraFsModerationBallotGovernanceEventV1,
     encoded: &[u8],
@@ -17209,7 +16522,6 @@ fn moderation_ballot_event_json(
             GovernancePublishError::other(format!("serialize moderation ballot event: {err}"))
         })?,
     );
-
     let mut metadata = JsonMap::new();
     metadata.insert("case_id".into(), JsonValue::from(event.case_id.clone()));
     metadata.insert("round_id".into(), JsonValue::from(event.round_id.clone()));
@@ -17267,12 +16579,10 @@ fn moderation_ballot_event_json(
     );
     metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
     payload.insert("metadata".into(), JsonValue::Object(metadata));
-
     json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
         GovernancePublishError::other(format!("serialize moderation ballot event json: {err}"))
     })
 }
-
 fn transparency_ledger_publication_json(
     publication: &ModerationLedgerCyclePublicationV1,
     encoded: &[u8],
@@ -17284,7 +16594,6 @@ fn transparency_ledger_publication_json(
     let publication_hash = publication.publication_hash().map_err(|err| {
         GovernancePublishError::other(format!("hash transparency ledger publication: {err}"))
     })?;
-
     let mut payload = JsonMap::new();
     payload.insert(
         "publication".into(),
@@ -17294,7 +16603,6 @@ fn transparency_ledger_publication_json(
             ))
         })?,
     );
-
     let mut metadata = JsonMap::new();
     metadata.insert(
         "cycle_id_hex".into(),
@@ -17338,14 +16646,12 @@ fn transparency_ledger_publication_json(
     );
     metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
     payload.insert("metadata".into(), JsonValue::Object(metadata));
-
     json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
         GovernancePublishError::other(format!(
             "serialize transparency ledger publication json: {err}"
         ))
     })
 }
-
 fn proof_token_issuance_json(
     issuance: &ProofTokenIssuanceV1,
     encoded: &[u8],
@@ -17358,7 +16664,6 @@ fn proof_token_issuance_json(
             GovernancePublishError::other(format!("serialize proof-token issuance: {err}"))
         })?,
     );
-
     let mut metadata = JsonMap::new();
     metadata.insert(
         "payload_version".into(),
@@ -17424,12 +16729,10 @@ fn proof_token_issuance_json(
     );
     metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
     payload.insert("metadata".into(), JsonValue::Object(metadata));
-
     json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
         GovernancePublishError::other(format!("serialize proof-token issuance json: {err}"))
     })
 }
-
 fn appeal_finance_report_json(
     report: &SoraFsAppealFinanceReportV1,
     encoded: &[u8],
@@ -17442,7 +16745,6 @@ fn appeal_finance_report_json(
             GovernancePublishError::other(format!("serialize appeal finance report: {err}"))
         })?,
     );
-
     let mut metadata = JsonMap::new();
     metadata.insert(
         "report_id_hex".into(),
@@ -17495,12 +16797,10 @@ fn appeal_finance_report_json(
     );
     metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
     payload.insert("metadata".into(), JsonValue::Object(metadata));
-
     json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
         GovernancePublishError::other(format!("serialize appeal finance report json: {err}"))
     })
 }
-
 fn appeal_finance_weekly_rollup_json(
     rollup: &SoraFsAppealFinanceWeeklyRollupV1,
     encoded: &[u8],
@@ -17513,7 +16813,6 @@ fn appeal_finance_weekly_rollup_json(
             GovernancePublishError::other(format!("serialize appeal finance weekly rollup: {err}"))
         })?,
     );
-
     let mut metadata = JsonMap::new();
     metadata.insert("cycle".into(), JsonValue::from(rollup.cycle.to_string()));
     metadata.insert(
@@ -17567,14 +16866,12 @@ fn appeal_finance_weekly_rollup_json(
     );
     metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
     payload.insert("metadata".into(), JsonValue::Object(metadata));
-
     json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
         GovernancePublishError::other(format!(
             "serialize appeal finance weekly rollup json: {err}"
         ))
     })
 }
-
 fn appeal_finance_settlement_receipt_json(
     receipt: &SoraFsAppealFinanceSettlementReceiptV1,
     encoded: &[u8],
@@ -17589,7 +16886,6 @@ fn appeal_finance_settlement_receipt_json(
             ))
         })?,
     );
-
     let mut metadata = JsonMap::new();
     metadata.insert(
         "receipt_id_hex".into(),
@@ -17654,14 +16950,12 @@ fn appeal_finance_settlement_receipt_json(
     );
     metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
     payload.insert("metadata".into(), JsonValue::Object(metadata));
-
     json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
         GovernancePublishError::other(format!(
             "serialize appeal finance settlement receipt json: {err}"
         ))
     })
 }
-
 #[cfg(test)]
 mod tests {
     include!("governance/tests/support.rs");

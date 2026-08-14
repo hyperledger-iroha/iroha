@@ -1,8 +1,6 @@
 //! NCB enum large dataset fixture and view checks.
 #![cfg(feature = "json")]
-
 use norito::columnar as ncb;
-
 #[test]
 fn ncb_enum_offsets_id_code_delta_large_fixture() {
     use ncb::EnumBorrow;
@@ -27,7 +25,6 @@ fn ncb_enum_offsets_id_code_delta_large_fixture() {
         }
         id = id.wrapping_add((i % 9 + 1) as u64);
     }
-
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, false, true);
     // Path checked/created inside ensure_hex_fixture
     // Generate-or-verify fixture behavior
@@ -79,7 +76,6 @@ fn ncb_enum_offsets_id_code_delta_large_fixture() {
         }
     }
     ensure_hex_fixture("tests/data/enum_offsets_id_code_delta_large.hex", &bytes);
-
     // View-level checks across chunk boundary (256) and ends
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     assert_eq!(view.len(), n);
@@ -109,7 +105,6 @@ fn ncb_enum_offsets_id_code_delta_large_fixture() {
         ncb::ColEnumRef::Code(v) => assert!(v > 0),
         _ => panic!("expected Code at 256"),
     }
-
     // Iterator parity: fast vs indexed and vs naive scanning counts
     let mut naive_true = 0usize;
     let mut naive_names_true = 0usize;

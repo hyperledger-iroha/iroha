@@ -5,18 +5,15 @@ async fn push_records_teu_using_router_assignment() {
         lane: LaneId,
         dataspace: DataSpaceId,
     }
-
     impl LaneRouter for StaticRouter {
         fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
             RoutingDecision::new(self.lane, self.dataspace)
         }
     }
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new(world_with_test_domains(), kura, query_handle);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
     let test_lane = LaneId::new(7);
     let test_dataspace = DataSpaceId::new(42);
     install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
@@ -36,7 +33,6 @@ async fn push_records_teu_using_router_assignment() {
         router,
         &[(test_lane, test_dataspace)],
     ));
-
     let (account_id, key_pair) = gen_account_in("wonderland");
     let domain_name = unique_test_domain_name("tagged");
     let unregister =
@@ -71,7 +67,6 @@ async fn push_records_teu_using_router_assignment() {
     queue
         .push(tx, state.view())
         .expect("Failed to push tx into queue");
-
     let teu_info = queue
         .tx_teu
         .get(&hash)
@@ -79,7 +74,6 @@ async fn push_records_teu_using_router_assignment() {
     assert_eq!(teu_info.lane_id, test_lane);
     assert_eq!(teu_info.dataspace_id, test_dataspace);
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn push_records_teu_from_ivm_metadata() {
@@ -87,38 +81,31 @@ async fn push_records_teu_from_ivm_metadata() {
     let query_handle = LiveQueryStore::start_test();
     let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
-
     let (account_id, key_pair) = gen_account_in("wonderland");
     let max_cycles = 42_000_u64;
     let tx = accepted_ivm_tx_by(account_id, &key_pair, &time_source, max_cycles);
     let hash = tx.as_ref().hash();
-
     queue
         .push(tx, state.view())
         .expect("Failed to enqueue IVM transaction");
-
     let info = queue
         .tx_teu
         .get(&hash)
         .expect("TEU info missing for IVM transaction");
     assert_eq!(info.teu, max_cycles);
 }
-
 #[tokio::test]
 async fn block_events_carry_lane_metadata_from_queue() {
     struct TaggedRouter {
         lane: LaneId,
         dataspace: DataSpaceId,
     }
-
     impl LaneRouter for TaggedRouter {
         fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
             RoutingDecision::new(self.lane, self.dataspace)
         }
     }
-
     let expected_lane = LaneId::new(5);
     let expected_dataspace = DataSpaceId::new(13);
     let kura = Kura::blank_kura_for_testing();
@@ -127,7 +114,6 @@ async fn block_events_carry_lane_metadata_from_queue() {
     install_test_nexus_routes(&mut state, &[(expected_lane, expected_dataspace)]);
     let state = Arc::new(state);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
     let queue = Arc::new(Queue::test_with_router_for_routes(
         config_factory(),
         &time_source,
@@ -137,7 +123,6 @@ async fn block_events_carry_lane_metadata_from_queue() {
         }),
         &[(expected_lane, expected_dataspace)],
     ));
-
     let tx = accepted_tx_by_someone(&time_source);
     let hash = tx.as_ref().hash();
     let routing = queue
@@ -149,12 +134,10 @@ async fn block_events_carry_lane_metadata_from_queue() {
         queue.routing_decisions.contains_key(&hash),
         "routing decision missing from queue cache"
     );
-
     let state_view = state.view();
     let mut guards = Vec::new();
     queue.get_transactions_for_block(&state_view, nonzero!(1_usize), &mut guards);
     drop(state_view);
-
     assert_eq!(guards.len(), 1);
     let cached = queue
         .routing_decisions
@@ -172,7 +155,6 @@ async fn block_events_carry_lane_metadata_from_queue() {
     assert_eq!(ledger_entry.lane_id, expected_lane);
     assert_eq!(ledger_entry.dataspace_id, expected_dataspace);
     crate::queue::routing_ledger::record(hash, ledger_entry);
-
     let new_block = BlockBuilder::new(transactions)
         .chain(0, None)
         .sign(ALICE_KEYPAIR.private_key())
@@ -181,15 +163,12 @@ async fn block_events_carry_lane_metadata_from_queue() {
     let signed_block: SignedBlock = new_block.into();
     let mut state_block = state.block(header);
     let valid_block = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
-
     drop(guards);
-
     let ledger_before_event = crate::queue::routing_ledger::take(&hash)
         .expect("routing entry removed before event emission");
     assert_eq!(ledger_before_event.lane_id, expected_lane);
     assert_eq!(ledger_before_event.dataspace_id, expected_dataspace);
     crate::queue::routing_ledger::record(hash, ledger_before_event);
-
     let tx_event = valid_block
         .produce_events()
         .find_map(|event| match event {
@@ -197,11 +176,9 @@ async fn block_events_carry_lane_metadata_from_queue() {
             _ => None,
         })
         .expect("missing transaction event for routed transaction");
-
     assert_eq!(tx_event.lane_id(), expected_lane);
     assert_eq!(tx_event.dataspace_id(), expected_dataspace);
 }
-
 #[test]
 fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
     let refreshed = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(10));
@@ -227,7 +204,6 @@ fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
             (refreshed.lane_id, refreshed.dataspace_id),
         ],
     ));
-
     let tx = accepted_tx_by_someone(&time_source);
     let hash = tx.as_ref().hash();
     queue.push(tx, state.view()).expect("push tx");
@@ -238,7 +214,6 @@ fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
             .map(|entry| *entry.value()),
         Some(RoutingDecision::default())
     );
-
     router.set(refreshed);
     let state_view = state.view();
     let mut expired = Vec::new();
@@ -246,7 +221,6 @@ fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
         .pop_from_queue(&state_view, &mut expired)
         .expect("proposal pop should return admitted tx");
     drop(state_view);
-
     assert!(expired.is_empty());
     assert_eq!(guard.routing(), RoutingDecision::default());
     assert_eq!(
@@ -260,7 +234,6 @@ fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
         crate::queue::routing_ledger::get(&hash),
         Some(RoutingDecision::default())
     );
-
     let transactions = vec![guard.clone_accepted()];
     let new_block = BlockBuilder::new(transactions)
         .chain(0, None)
@@ -270,13 +243,11 @@ fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
     let signed_block: SignedBlock = new_block.into();
     let mut state_block = state.block(header);
     let valid_block = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
-
     drop(guard);
     assert_eq!(
         crate::queue::routing_ledger::get(&hash),
         Some(RoutingDecision::default())
     );
-
     let tx_event = valid_block
         .produce_events()
         .find_map(|event| match event {
@@ -284,12 +255,10 @@ fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
             _ => None,
         })
         .expect("missing transaction event for admitted routed transaction");
-
     assert_eq!(tx_event.lane_id(), LaneId::SINGLE);
     assert_eq!(tx_event.dataspace_id(), DataSpaceId::UNIVERSAL);
     let _ = crate::queue::routing_ledger::take(&hash);
 }
-
 #[test]
 fn proposal_pop_ignores_replacement_router_failure_for_admitted_work() {
     let kura = Kura::blank_kura_for_testing();
@@ -307,17 +276,14 @@ fn proposal_pop_ignores_replacement_router_failure_for_admitted_work() {
     let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
     queue.events_sender = event_sender;
     let queue = Arc::new(queue);
-
     let tx = accepted_tx_by_someone(&time_source);
     let hash = tx.as_ref().hash();
     queue.push(tx, state.view()).expect("push tx");
     router.set_error(RoutingResolveError::UnknownLane {
         lane_id: LaneId::new(99),
     });
-
     let mut guards = Vec::new();
     queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
-
     assert_eq!(guards.len(), 1);
     assert_eq!(queue.queued_len(), 0);
     assert_eq!(queue.active_len(), 1);
@@ -334,7 +300,6 @@ fn proposal_pop_ignores_replacement_router_failure_for_admitted_work() {
         Some(RoutingDecision::default())
     );
     assert!(!queue.accepted_work_validation_faulted());
-
     let mut saw_rejected = false;
     while let Ok(event) = event_receiver.try_recv() {
         let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event else {
@@ -354,7 +319,6 @@ fn proposal_pop_ignores_replacement_router_failure_for_admitted_work() {
         "replacement-router failure must not reject already accepted work"
     );
 }
-
 #[test]
 fn proposal_fee_drift_restores_fifo_and_retains_accepted_work() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -392,7 +356,6 @@ fn proposal_fee_drift_restores_fifo_and_retains_accepted_work() {
         nexus.fees.per_instruction_fee = Quantity::zero();
         nexus.fees.per_gas_unit_fee = Quantity::zero();
     }
-
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -435,7 +398,6 @@ fn proposal_fee_drift_restores_fifo_and_retains_accepted_work() {
     queue
         .push(tx, state.view())
         .expect("initial funded fee admission should succeed");
-
     let mut assets = state.world.assets.block();
     assets
         .remove(payer_asset_id)
@@ -443,7 +405,6 @@ fn proposal_fee_drift_restores_fifo_and_retains_accepted_work() {
     assets.commit();
     let mut guards = Vec::new();
     queue.get_transactions_for_block_with_state(&state, nonzero!(1_usize), &mut guards);
-
     assert!(guards.is_empty());
     assert_eq!(queue.active_len(), 1);
     assert_eq!(queue.queued_len(), 1);
@@ -452,7 +413,6 @@ fn proposal_fee_drift_restores_fifo_and_retains_accepted_work() {
     assert!(queue.routing_plans.contains_key(&hash));
     assert!(queue.accepted_work_validation_faulted());
 }
-
 #[test]
 fn expired_event_prefers_full_plan_over_divergent_legacy_route() {
     let expected = RoutingDecision::new(LaneId::new(5), DataSpaceId::new(13));
@@ -475,12 +435,10 @@ fn expired_event_prefers_full_plan_over_divergent_legacy_route() {
     let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
     queue.events_sender = event_sender;
     let queue = Arc::new(queue);
-
     let tx = accepted_tx_by_someone(&time_source);
     let hash = tx.as_ref().hash();
     queue.push(tx, state.view()).expect("push tx");
     while event_receiver.try_recv().is_ok() {}
-
     queue.routing_decisions.insert(hash, stale);
     crate::queue::routing_ledger::record(hash, stale);
     queue
@@ -492,16 +450,13 @@ fn expired_event_prefers_full_plan_over_divergent_legacy_route() {
         queue.capacity.get(),
     );
     crate::queue::routing_ledger::record(hash, stale);
-
     time_handle.advance(Duration::from_millis(11));
     let mut guards = Vec::new();
     queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
-
     assert!(guards.is_empty());
     assert_eq!(queue.active_len(), 0);
     assert_eq!(crate::queue::routing_ledger::get_plan(&hash), None);
     assert_eq!(crate::queue::routing_ledger::get(&hash), None);
-
     let mut saw_expired = false;
     while let Ok(event) = event_receiver.try_recv() {
         let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event else {
@@ -523,7 +478,6 @@ fn expired_event_prefers_full_plan_over_divergent_legacy_route() {
         "expected expired event to carry full-plan route"
     );
 }
-
 #[test]
 fn corrupt_route_indexes_retain_accepted_work_without_rejection() {
     let expected = RoutingDecision::new(LaneId::new(5), DataSpaceId::new(13));
@@ -544,12 +498,10 @@ fn corrupt_route_indexes_retain_accepted_work_without_rejection() {
     let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
     queue.events_sender = event_sender;
     let queue = Arc::new(queue);
-
     let tx = accepted_tx_by_someone(&time_source);
     let hash = tx.as_ref().hash();
     queue.push(tx, state.view()).expect("push tx");
     while event_receiver.try_recv().is_ok() {}
-
     queue.routing_decisions.insert(hash, stale);
     crate::queue::routing_ledger::record(hash, stale);
     queue
@@ -564,10 +516,8 @@ fn corrupt_route_indexes_retain_accepted_work_without_rejection() {
     router.set_error(RoutingResolveError::UnknownLane {
         lane_id: LaneId::new(99),
     });
-
     let mut guards = Vec::new();
     queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
-
     assert!(guards.is_empty());
     assert_eq!(queue.active_len(), 1);
     assert_eq!(queue.queued_len(), 1);
@@ -577,7 +527,6 @@ fn corrupt_route_indexes_retain_accepted_work_without_rejection() {
     );
     assert_eq!(crate::queue::routing_ledger::get(&hash), Some(stale));
     assert!(queue.accepted_work_validation_faulted());
-
     let mut saw_rejected = false;
     while let Ok(event) = event_receiver.try_recv() {
         let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event else {
@@ -597,29 +546,22 @@ fn corrupt_route_indexes_retain_accepted_work_without_rejection() {
         "accepted work with corrupt routing indexes must not be rejected or tombstoned"
     );
 }
-
 #[tokio::test]
 async fn dropping_transaction_guard_clears_removed_hashes() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
-
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
-
     queue
         .push(accepted_tx_by_someone(&time_source), state.view())
         .expect("Failed to push tx into queue");
-
     let mut expired_transactions = Vec::new();
     let state_view = state.view();
     let guard = queue
         .pop_from_queue(&state_view, &mut expired_transactions)
         .expect("Expected a transaction guard");
     assert!(expired_transactions.is_empty());
-
     drop(guard);
-
     assert!(queue.removed_hashes.is_empty());
 }

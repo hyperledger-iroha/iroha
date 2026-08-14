@@ -6,13 +6,10 @@
 //! unbounded retry with a public ceiling.  AES is CPU-only safe Rust with a
 //! fixed-control-flow algebraic S-box; neither secret-indexed tables nor
 //! accelerator/device dispatch are used.
-
 use rand_core_06::{CryptoRng, RngCore};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
-
 use super::{holder_aes256::ConstantTimeAes256KeyV1, ring::ApplicationPolynomialV1};
-
 pub(crate) const CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1: usize = 16;
 pub(crate) const CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1: u64 =
     super::params::RANDOMNESS_NORM_SQUARED_BOUND_V1;
@@ -43,12 +40,10 @@ const CDF_155_V1: [(u64, u64); 21] = [
     (0, 0x0000_0000_0000_0062),
     (0, 0),
 ];
-
 pub(crate) struct CredentialRandomnessV1 {
     polynomials: [ApplicationPolynomialV1; CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1],
     norm_squared: u64,
 }
-
 impl CredentialRandomnessV1 {
     #[cfg(test)]
     pub(crate) const fn polynomials(
@@ -56,12 +51,10 @@ impl CredentialRandomnessV1 {
     ) -> &[ApplicationPolynomialV1; CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1] {
         &self.polynomials
     }
-
     #[cfg(test)]
     pub(crate) const fn norm_squared(&self) -> u64 {
         self.norm_squared
     }
-
     pub(crate) fn into_polynomials(
         mut self,
     ) -> [ApplicationPolynomialV1; CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1] {
@@ -71,26 +64,22 @@ impl CredentialRandomnessV1 {
         )
     }
 }
-
 impl core::fmt::Debug for CredentialRandomnessV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("CredentialRandomnessV1(<redacted>)")
     }
 }
-
 impl Zeroize for CredentialRandomnessV1 {
     fn zeroize(&mut self) {
         self.polynomials.zeroize();
         self.norm_squared.zeroize();
     }
 }
-
 impl Drop for CredentialRandomnessV1 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 pub(crate) fn sample_credential_randomness_v1<R: CryptoRng + RngCore>(
     rng: &mut R,
 ) -> Result<CredentialRandomnessV1, CredentialRandomnessErrorV1> {
@@ -99,7 +88,6 @@ pub(crate) fn sample_credential_randomness_v1<R: CryptoRng + RngCore>(
         .map_err(|_| CredentialRandomnessErrorV1::RandomnessUnavailable)?;
     sample_credential_randomness_from_seed_v1(&*seed).map(|(sample, _)| sample)
 }
-
 pub(crate) fn sample_credential_randomness_from_seed_v1(
     seed: &[u8; 32],
 ) -> Result<
@@ -115,7 +103,6 @@ pub(crate) fn sample_credential_randomness_from_seed_v1(
         MAX_CREDENTIAL_RANDOMNESS_COEFFICIENT_PROPOSALS_V1,
     )
 }
-
 fn sample_credential_randomness_from_seed_with_limits_v1(
     seed: &[u8; 32],
     vector_attempts: u32,
@@ -135,7 +122,6 @@ fn sample_credential_randomness_from_seed_with_limits_v1(
     )
     .map(|(sample, proposals, _, _)| (sample, proposals))
 }
-
 fn sample_credential_randomness_from_seed_bounded_v1(
     seed: &[u8; 32],
     vector_attempts: u32,
@@ -217,12 +203,10 @@ fn sample_credential_randomness_from_seed_bounded_v1(
     }
     Err(CredentialRandomnessErrorV1::SamplingExhausted)
 }
-
 struct GaussianSignCacheV1 {
     bits: u64,
     position: u8,
 }
-
 impl GaussianSignCacheV1 {
     const fn new() -> Self {
         Self {
@@ -230,7 +214,6 @@ impl GaussianSignCacheV1 {
             position: 64,
         }
     }
-
     fn next(&mut self, stream: &mut Aes256CtrV1<'_>) -> u32 {
         if self.position >= 64 {
             let mut bytes = Zeroizing::new([0_u8; 8]);
@@ -244,14 +227,12 @@ impl GaussianSignCacheV1 {
         bit
     }
 }
-
 impl Drop for GaussianSignCacheV1 {
     fn drop(&mut self) {
         self.bits.zeroize();
         self.position.zeroize();
     }
 }
-
 fn gaussian_155_v1(
     stream: &mut Aes256CtrV1<'_>,
     signs: &mut GaussianSignCacheV1,
@@ -274,7 +255,6 @@ fn gaussian_155_v1(
     }
     Err(CredentialRandomnessErrorV1::CoefficientSamplingExhausted)
 }
-
 fn cdf_155_sample_v1(stream: &mut Aes256CtrV1<'_>) -> usize {
     let mut bytes = Zeroizing::new([0_u8; 16]);
     stream.fill(bytes.as_mut());
@@ -286,7 +266,6 @@ fn cdf_155_sample_v1(stream: &mut Aes256CtrV1<'_>) -> usize {
     }
     index
 }
-
 fn ber_exp_v1(stream: &mut Aes256CtrV1<'_>, mut exponent: f64) -> bool {
     const LN_2: f64 = f64::from_bits(0x3fe6_2e42_fefa_39ef);
     let mut bytes = Zeroizing::new([0_u8; 16]);
@@ -297,13 +276,11 @@ fn ber_exp_v1(stream: &mut Aes256CtrV1<'_>, mut exponent: f64) -> bool {
     power = power.min(63);
     let low_bits = first ^ ((first >> power) << power);
     let first_accepts = low_bits == 0;
-
     let second =
         u64::from_le_bytes(bytes[8..].try_into().expect("fixed slice")) & ((1_u64 << 53) - 1);
     let threshold = (exp_small_v1(-exponent) * (1_u64 << 53) as f64) as u64;
     first_accepts && second < threshold
 }
-
 fn exp_small_v1(value: f64) -> f64 {
     const C1: f64 = 1.666_666_666_666_660_2e-1;
     const C2: f64 = -2.777_777_777_701_559_3e-3;
@@ -315,14 +292,12 @@ fn exp_small_v1(value: f64) -> f64 {
         value - square * (C1 + square * (C2 + square * (C3 + square * (C4 + square * C5))));
     1.0 - ((value * reduced) / (reduced - 2.0) - value)
 }
-
 struct Aes256CtrV1<'a> {
     encryption_key: &'a ConstantTimeAes256KeyV1,
     counter: [u8; 16],
     cache: [u8; 16],
     cursor: usize,
 }
-
 impl<'a> Aes256CtrV1<'a> {
     fn new(encryption_key: &'a ConstantTimeAes256KeyV1, domain: u64) -> Self {
         let mut counter = [0_u8; 16];
@@ -334,7 +309,6 @@ impl<'a> Aes256CtrV1<'a> {
             cursor: 16,
         }
     }
-
     fn fill(&mut self, output: &mut [u8]) {
         for byte in output {
             if self.cursor == self.cache.len() {
@@ -347,7 +321,6 @@ impl<'a> Aes256CtrV1<'a> {
         }
     }
 }
-
 impl Drop for Aes256CtrV1<'_> {
     fn drop(&mut self) {
         self.counter.zeroize();
@@ -355,7 +328,6 @@ impl Drop for Aes256CtrV1<'_> {
         self.cursor.zeroize();
     }
 }
-
 fn increment_be(counter: &mut [u8; 16]) {
     let mut carry = 1_u8;
     for byte in counter.iter_mut().rev() {
@@ -364,7 +336,6 @@ fn increment_be(counter: &mut [u8; 16]) {
         carry = u8::from(overflow);
     }
 }
-
 /// Bounded failure from the exact credential-randomness sampler.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum CredentialRandomnessErrorV1 {
@@ -377,36 +348,27 @@ pub(crate) enum CredentialRandomnessErrorV1 {
     #[error("credential-randomness internal invariant failed")]
     InternalInvariant,
 }
-
 #[cfg(test)]
 mod tests {
     use rand_core_06::Error as RngError;
     use sha2::{Digest as _, Sha256};
-
     use super::*;
-
     struct FailingRng;
-
     impl RngCore for FailingRng {
         fn next_u32(&mut self) -> u32 {
             panic!("credential sampling must use the fallible RNG interface")
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("credential sampling must use the fallible RNG interface")
         }
-
         fn fill_bytes(&mut self, _destination: &mut [u8]) {
             panic!("credential sampling must use the fallible RNG interface")
         }
-
         fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
             Err(RngError::new("injected credential-sampling RNG failure"))
         }
     }
-
     impl CryptoRng for FailingRng {}
-
     #[test]
     fn pinned_lazer_seed_matches_first_polynomial_and_full_vector_digest() {
         let seed = core::array::from_fn(|index| u8::try_from(index).expect("index fits u8"));
@@ -449,7 +411,6 @@ mod tests {
                 .expect("hex")
         );
     }
-
     #[test]
     fn cdf_threshold_pairs_are_pinned() {
         let mut bytes = Vec::with_capacity(CDF_155_V1.len() * 16);
@@ -463,7 +424,6 @@ mod tests {
                 .expect("hex")
         );
     }
-
     #[test]
     fn public_caps_fail_closed_and_accepted_norm_is_bounded() {
         let seed = core::array::from_fn(|index| u8::try_from(index).expect("index fits u8"));
@@ -486,7 +446,6 @@ mod tests {
         let (sample, _) = sample_credential_randomness_from_seed_v1(&seed).expect("sample");
         assert!(sample.norm_squared() <= CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1);
     }
-
     #[test]
     fn failing_rng_is_reported_without_using_infallible_methods() {
         assert!(matches!(
@@ -494,14 +453,12 @@ mod tests {
             Err(CredentialRandomnessErrorV1::RandomnessUnavailable)
         ));
     }
-
     #[test]
     fn forced_norm_retry_advances_domain_and_preserves_sign_cache() {
         let seed = core::array::from_fn(|index| u8::try_from(index).expect("index fits u8"));
         let (sample, _, accepted_outer_domain, second_attempt_sign_position) =
             sample_credential_randomness_from_seed_bounded_v1(&seed, 64, 256, 10_600)
                 .expect("a later bounded vector meets the forced lower norm");
-
         assert!(accepted_outer_domain > 0);
         assert_eq!(second_attempt_sign_position, 4);
         assert!(sample.norm_squared() <= 10_600);

@@ -1,5 +1,4 @@
 //! Sora Name Service data structures for registrar APIs.
-
 use blake3::Hasher;
 use derive_more::Display;
 use iroha_crypto::PublicKey;
@@ -7,27 +6,22 @@ use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use crate::{
     account::{AccountAddress, AccountId},
     metadata::Metadata,
     name,
 };
-
 /// Unique identifier assigned to a top-level suffix (e.g., `.sora`).
 pub type SuffixId = u16;
-
 /// Fixed suffix id for full account-alias lease records.
 pub const ACCOUNT_ALIAS_SUFFIX_ID: SuffixId = 0x1001;
 /// Fixed suffix id for domain-name lease records.
 pub const DOMAIN_NAME_SUFFIX_ID: SuffixId = 0x1002;
 /// Fixed suffix id for dataspace-alias lease records.
 pub const DATASPACE_ALIAS_SUFFIX_ID: SuffixId = 0x1003;
-
 const fn default_ownership_generation_v1() -> u64 {
     1
 }
-
 /// Canonical selector payload for SNS names.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -42,11 +36,9 @@ pub struct NameSelectorV1 {
     /// Lowercase, NFC-normalised label.
     pub label: String,
 }
-
 impl NameSelectorV1 {
     /// Current selector version.
     pub const VERSION: u8 = 1;
-
     /// Construct a selector by canonicalising the provided label.
     ///
     /// # Errors
@@ -72,7 +64,6 @@ impl NameSelectorV1 {
             label: canonical,
         })
     }
-
     /// Compute the deterministic name hash used as the registry key.
     #[must_use]
     pub fn name_hash(&self) -> [u8; 32] {
@@ -82,14 +73,12 @@ impl NameSelectorV1 {
         hasher.update(self.label.as_bytes());
         *hasher.finalize().as_bytes()
     }
-
     /// Borrow the normalised label.
     #[must_use]
     pub fn normalized_label(&self) -> &str {
         &self.label
     }
 }
-
 /// Errors raised while constructing [`NameSelectorV1`].
 #[derive(Debug, Display, Error)]
 pub enum NameSelectorError {
@@ -97,7 +86,6 @@ pub enum NameSelectorError {
     #[display("{_0}")]
     InvalidLabel(String),
 }
-
 /// Record describing the canonical ownership state of a SNS name.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -133,7 +121,6 @@ pub struct NameRecordV1 {
     /// Optional auction state for premium or Dutch reopen flows.
     pub auction: Option<NameAuctionStateV1>,
 }
-
 impl NameRecordV1 {
     /// Construct a new record with the supplied parameters.
     #[allow(clippy::too_many_arguments)]
@@ -165,7 +152,6 @@ impl NameRecordV1 {
             auction: None,
         }
     }
-
     /// Replace the owner and advance the authoritative ownership generation.
     pub fn transfer_owner(&mut self, owner: AccountId) {
         if self.owner != owner {
@@ -174,7 +160,6 @@ impl NameRecordV1 {
         self.owner = owner;
     }
 }
-
 /// Lifecycle state of a SNS registration.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -197,7 +182,6 @@ pub enum NameStatus {
     /// Registration has been permanently retired.
     Tombstoned(NameTombstoneStateV1),
 }
-
 /// Details captured when a registration is frozen.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -210,7 +194,6 @@ pub struct NameFrozenStateV1 {
     /// Timestamp (ms) when the freeze lifts automatically.
     pub until_ms: u64,
 }
-
 /// Details captured when a registration is tombstoned.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -221,7 +204,6 @@ pub struct NameTombstoneStateV1 {
     /// Reason recorded by governance/guardian.
     pub reason: String,
 }
-
 /// Canonical representation of token amounts used by SNS pricing.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -234,7 +216,6 @@ pub struct TokenValue {
     /// Exact non-negative amount expressed in the asset's native precision.
     pub amount: Quantity,
 }
-
 impl TokenValue {
     /// Construct a new token amount.
     #[must_use]
@@ -245,7 +226,6 @@ impl TokenValue {
         }
     }
 }
-
 /// Auction metadata recorded for pending or running auctions.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -266,7 +246,6 @@ pub struct NameAuctionStateV1 {
     /// Settlement transaction hash once the auction closes.
     pub settlement_tx: Option<Json>,
 }
-
 /// Supported auction kinds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -283,7 +262,6 @@ pub enum AuctionKind {
     /// Dutch reopen (descending price) for expired names.
     DutchReopen,
 }
-
 /// Controller descriptor referencing account addresses or resolver templates.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -300,7 +278,6 @@ pub struct NameControllerV1 {
     /// Free-form metadata payload describing UX hints.
     pub payload: Metadata,
 }
-
 impl NameControllerV1 {
     /// Convenience helper for single-account controllers.
     pub fn account(address: &AccountAddress) -> Self {
@@ -312,7 +289,6 @@ impl NameControllerV1 {
         }
     }
 }
-
 /// Supported controller categories.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -333,7 +309,6 @@ pub enum ControllerType {
     /// External link / application-defined payload.
     ExternalLink,
 }
-
 /// Steward-advertised pricing tier definition.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -356,7 +331,6 @@ pub struct PriceTierV1 {
     /// Maximum purchase duration allowed by this tier.
     pub max_duration_years: u8,
 }
-
 /// Reserved label assignment controlled by governance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -373,7 +347,6 @@ pub struct ReservedNameV1 {
     /// Notes captured with the reservation.
     pub note: String,
 }
-
 /// Basis-point split describing how funds are routed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -390,7 +363,6 @@ pub struct SuffixFeeSplitV1 {
     /// Escrow allocation (basis points).
     pub escrow_bps: u16,
 }
-
 /// Policy lifecycle state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -409,7 +381,6 @@ pub enum SuffixStatus {
     /// Permanently revoked.
     Revoked,
 }
-
 /// Minimal suffix policy definition consumed by the registrar.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -450,7 +421,6 @@ pub struct SuffixPolicyV1 {
     /// Free-form metadata (KPI covenants, annex references).
     pub metadata: Metadata,
 }
-
 impl SuffixPolicyV1 {
     /// Returns the canonical lowercase suffix string.
     #[must_use]
@@ -458,11 +428,9 @@ impl SuffixPolicyV1 {
         self.suffix.to_lowercase()
     }
 }
-
 /// Convenience helpers for building example payloads inside docs/tests.
 pub mod fixtures {
     use super::*;
-
     /// Deterministic steward account used in fixtures/tests.
     pub fn steward_account() -> AccountId {
         // Use a known-valid ed25519 point so parsing is stable in tests.
@@ -472,7 +440,6 @@ pub mod fixtures {
                 .expect("valid steward key literal");
         AccountId::new(key)
     }
-
     /// Deterministic default policy fixture used in docs/tests.
     pub fn default_policy() -> SuffixPolicyV1 {
         let steward = steward_account();
@@ -518,7 +485,6 @@ pub mod fixtures {
         }
     }
 }
-
 /// Re-export commonly used SNS types.
 pub mod prelude {
     pub use super::{
@@ -527,27 +493,22 @@ pub mod prelude {
         SuffixFeeSplitV1, SuffixId, SuffixPolicyV1, SuffixStatus, TokenValue, fixtures,
     };
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};
-
     use super::{TokenValue, fixtures};
-
     #[derive(Encode)]
     struct ForgedTokenValue {
         asset_id: String,
         amount: Numeric,
     }
-
     #[test]
     fn token_value_new_assigns_fields() {
         let value = TokenValue::new("61CtjvNd9T3THAR65GsMVHr82Bjc", 120_u64.into());
         assert_eq!(value.asset_id, "61CtjvNd9T3THAR65GsMVHr82Bjc");
         assert_eq!(value.amount, 120_u64.into());
     }
-
     #[test]
     fn sns_token_values_reject_negative_numeric_payloads() {
         let encoded = ForgedTokenValue {
@@ -557,7 +518,6 @@ mod tests {
         .encode();
         assert!(TokenValue::decode(&mut encoded.as_slice()).is_err());
     }
-
     #[test]
     fn default_policy_exposes_pricing_and_reserved_names() {
         let policy = fixtures::default_policy();
@@ -568,7 +528,6 @@ mod tests {
         );
         assert_eq!(policy.status, super::SuffixStatus::Active);
     }
-
     #[test]
     fn default_policy_uses_settlement_holding_for_pricing() {
         let policy = fixtures::default_policy();

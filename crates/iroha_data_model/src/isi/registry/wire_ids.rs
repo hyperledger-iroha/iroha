@@ -1,10 +1,7 @@
 //! Explicit wire identifiers for the built-in instruction registry.
-
 use super::*;
-
 #[cfg(test)]
 type TypeName = fn() -> &'static str;
-
 /// One built-in instruction's Rust type and path-independent wire identity.
 #[derive(Clone, Copy)]
 pub(super) struct BuiltInWireId {
@@ -18,7 +15,6 @@ pub(super) struct BuiltInWireId {
     pub(super) governance_only: bool,
     apply: Registrar,
 }
-
 macro_rules! built_in_wire_id_with_scope {
     ($ty:ty => $wire_id:literal, governance_only = $governance_only:literal) => {
         BuiltInWireId {
@@ -34,20 +30,17 @@ macro_rules! built_in_wire_id_with_scope {
         }
     };
 }
-
 macro_rules! built_in_wire_id {
     ($ty:ty => $wire_id:literal) => {
         built_in_wire_id_with_scope!($ty => $wire_id, governance_only = false)
     };
 }
-
 #[cfg(feature = "governance")]
 macro_rules! governance_wire_id {
     ($ty:ty => $wire_id:literal) => {
         built_in_wire_id_with_scope!($ty => $wire_id, governance_only = true)
     };
 }
-
 /// Complete canonical wire-ID inventory for built-in instructions.
 pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(RegisterBox => "iroha.register"),
@@ -417,7 +410,6 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(runtime_upgrade::ActivateRuntimeUpgrade => "iroha.runtime_upgrade.activate"),
     built_in_wire_id!(runtime_upgrade::CancelRuntimeUpgrade => "iroha.runtime_upgrade.cancel"),
 ];
-
 /// Apply every canonical built-in wire identifier to an already populated registry.
 pub(super) fn apply(registry: InstructionRegistry) -> InstructionRegistry {
     ALL.iter()

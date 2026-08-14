@@ -1,10 +1,8 @@
 // Provider-ingest runtime binding and capacity regressions.
-
 #[test]
 fn provider_ingest_catalog_projects_independent_source_and_resolver_qualifications() {
     let mut config = default_runtime_config();
     configure_provider_ingest_runtime(&mut config);
-
     let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
         .expect("project provider-ingest provider bindings");
     let source = bindings
@@ -29,7 +27,6 @@ fn provider_ingest_catalog_projects_independent_source_and_resolver_qualificatio
                 .expect("configured parallel-fetch bound fits u32"),
         })
     );
-
     let resolver = bindings
         .iter()
         .find(|binding| {
@@ -44,7 +41,6 @@ fn provider_ingest_catalog_projects_independent_source_and_resolver_qualificatio
     assert_eq!(resolver.policy_digest(), Some([0xB2; 32]));
     assert_ne!(source.revision(), resolver.revision());
     assert_ne!(source.policy_digest(), resolver.policy_digest());
-
     let signer = bindings
         .iter()
         .find(|binding| {
@@ -84,7 +80,6 @@ fn provider_ingest_catalog_projects_independent_source_and_resolver_qualificatio
         checkpoint.provider_ingest_checkpoint_max_bytes(),
         Some(160 * 1024 * 1024)
     );
-
     let mut excessive_streams = config;
     excessive_streams.torii.sorafs_storage.max_parallel_fetches =
         usize::try_from(MAX_PROVIDER_INGEST_SOURCE_STREAMS_V1).expect("stream ceiling fits usize")
@@ -96,7 +91,6 @@ fn provider_ingest_catalog_projects_independent_source_and_resolver_qualificatio
         ))
     ));
 }
-
 #[test]
 fn provider_ingest_catalog_accepts_enabled_default_outbox_capacity() {
     let mut config = default_runtime_config();
@@ -121,7 +115,6 @@ fn provider_ingest_catalog_accepts_enabled_default_outbox_capacity() {
         max_signed_transaction_bytes: provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES,
         max_status_page_size: provider_ingest_outbox_defaults::MAX_STATUS_PAGE_SIZE,
     };
-
     let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
         .expect("enabled default provider-ingest outbox must project");
     assert_eq!(
@@ -143,7 +136,6 @@ fn provider_ingest_catalog_accepts_enabled_default_outbox_capacity() {
         Some(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES.0)
     );
 }
-
 #[test]
 fn provider_ingest_catalog_rejects_broker_incompatible_outbox_limits() {
     let mut exact = default_runtime_config();
@@ -182,7 +174,6 @@ fn provider_ingest_catalog_rejects_broker_incompatible_outbox_limits() {
             .and_then(IrohaRuntimeProviderBindingV1::provider_ingest_max_signed_transaction_bytes),
         Some(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_LIMIT)
     );
-
     let mut oversized_checkpoint = default_runtime_config();
     configure_provider_ingest_runtime(&mut oversized_checkpoint);
     oversized_checkpoint
@@ -200,7 +191,6 @@ fn provider_ingest_catalog_rejects_broker_incompatible_outbox_limits() {
             IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore,
         ))
     );
-
     let mut oversized_transaction = default_runtime_config();
     configure_provider_ingest_runtime(&mut oversized_transaction);
     oversized_transaction
@@ -218,7 +208,6 @@ fn provider_ingest_catalog_rejects_broker_incompatible_outbox_limits() {
             IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver,
         ))
     );
-
     let mut legacy_128_mib_transaction = default_runtime_config();
     configure_provider_ingest_runtime(&mut legacy_128_mib_transaction);
     let legacy_ingest = legacy_128_mib_transaction
@@ -240,7 +229,6 @@ fn provider_ingest_catalog_rejects_broker_incompatible_outbox_limits() {
         )),
         "the former 128 MiB transaction limit must not project under a 192 MiB checkpoint"
     );
-
     let mut below_envelope_reserve = default_runtime_config();
     configure_provider_ingest_runtime(&mut below_envelope_reserve);
     below_envelope_reserve
@@ -258,7 +246,6 @@ fn provider_ingest_catalog_rejects_broker_incompatible_outbox_limits() {
             IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver,
         ))
     );
-
     let mut exact_minimum = default_runtime_config();
     configure_provider_ingest_runtime(&mut exact_minimum);
     exact_minimum
@@ -272,7 +259,6 @@ fn provider_ingest_catalog_rejects_broker_incompatible_outbox_limits() {
         Bytes(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN);
     IrohaRuntimeProviderBindingsV1::try_from_config(&exact_minimum)
         .expect("exact signed-transaction minimum must project");
-
     let mut impossible_aggregate = default_runtime_config();
     configure_provider_ingest_runtime(&mut impossible_aggregate);
     impossible_aggregate

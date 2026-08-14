@@ -4,9 +4,7 @@
 //! and emits deterministic reward instructions destined for the XOR treasury. The scoring model
 //! operates on per-mille ratios so results remain deterministic across hardware while allowing
 //! fine-grained weighting of availability, bandwidth, and compliance signals.
-
 use std::{collections::BTreeMap, str::FromStr};
-
 #[cfg(test)]
 use iroha_data_model::isi::transfer::TransferBox;
 use iroha_data_model::{
@@ -27,7 +25,6 @@ use iroha_primitives::{
     numeric::{Numeric, Quantity, RoundingMode},
 };
 use thiserror::Error;
-
 /// Weight distribution (basis points) applied to each reward component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RewardWeights {
@@ -38,10 +35,8 @@ pub struct RewardWeights {
     /// Weight applied to the compliance multiplier.
     pub compliance_bps: u16,
 }
-
 impl RewardWeights {
     const MAX_TOTAL: u16 = 10_000;
-
     /// Returns the total configured weight (basis points).
     #[must_use]
     pub const fn total(self) -> u16 {
@@ -49,7 +44,6 @@ impl RewardWeights {
             .saturating_add(self.bandwidth_bps)
             .saturating_add(self.compliance_bps)
     }
-
     /// Validate the weight distribution.
     ///
     /// # Errors
@@ -64,7 +58,6 @@ impl RewardWeights {
         Ok(())
     }
 }
-
 /// Normalised reward components expressed in per-mille (0‒1000).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RewardComponents {
@@ -75,7 +68,6 @@ pub struct RewardComponents {
     /// Compliance multiplier (0‒1000).
     pub compliance_per_mille: u16,
 }
-
 impl RewardComponents {
     /// All-zero components helper.
     #[must_use]
@@ -87,7 +79,6 @@ impl RewardComponents {
         }
     }
 }
-
 /// Reason a relay was deemed ineligible for payout in the current epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RewardSkipReason {
@@ -100,7 +91,6 @@ pub enum RewardSkipReason {
     /// Score reduced to zero by the weighting function (insufficient performance).
     ZeroScore,
 }
-
 /// Outcome of reward evaluation for a relay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RewardDecision {
@@ -125,7 +115,6 @@ pub enum RewardDecision {
         components: RewardComponents,
     },
 }
-
 /// Immutable configuration backing the reward calculator.
 #[derive(Debug, Clone)]
 pub struct RewardConfig {
@@ -142,7 +131,6 @@ pub struct RewardConfig {
     /// Bonus applied when the relay advertises exit capability (per-mille).
     pub exit_bonus_per_mille: u16,
 }
-
 /// Errors surfaced by the reward calculator.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum RelayIncentiveError {
@@ -168,18 +156,15 @@ pub enum RelayIncentiveError {
     #[error("numeric scale unsupported while computing payout")]
     NumericScale,
 }
-
 /// Deterministic `SoraNet` relay reward calculator.
 #[derive(Debug, Clone)]
 pub struct RelayRewardCalculator {
     config: RewardConfig,
     total_weight: u16,
 }
-
 impl RelayRewardCalculator {
     const SCORE_SCALE_PER_MILLE: u32 = 3;
     const PAYOUT_SCALE: u32 = 9;
-
     /// Create a new calculator using the supplied configuration.
     ///
     /// # Errors
@@ -203,13 +188,11 @@ impl RelayRewardCalculator {
             config,
         })
     }
-
     /// Returns a reference to the calculator configuration.
     #[must_use]
     pub fn config(&self) -> &RewardConfig {
         &self.config
     }
-
     /// Evaluate the relay metrics and derive a payout decision.
     ///
     /// # Errors
@@ -231,7 +214,6 @@ impl RelayRewardCalculator {
         let components = self.compute_components(metrics);
         let base_score = self.apply_weights(components);
         let mut score = self.apply_exit_bonus(base_score, bond.exit_capable);
-
         let make_instruction = |payout_amount: Quantity, reward_score: u16, metadata: Metadata| {
             RelayRewardInstructionV1 {
                 relay_id,
@@ -244,7 +226,6 @@ impl RelayRewardCalculator {
                 metadata,
             }
         };
-
         let make_skip = |reason: RewardSkipReason, current_score: u16| {
             let mut metadata = build_metadata(
                 components,
@@ -266,24 +247,19 @@ impl RelayRewardCalculator {
                 components,
             })
         };
-
         if bond.bond_asset_id != self.config.policy.bond_asset_id {
             return make_skip(RewardSkipReason::BondAssetMismatch, score);
         }
-
         if !bond.meets_exit_minimum(&self.config.policy) {
             return make_skip(RewardSkipReason::InsufficientBond, score);
         }
-
         if matches!(metrics.compliance, RelayComplianceStatusV1::Suspended) {
             score = 0;
             return make_skip(RewardSkipReason::ComplianceSuspended, score);
         }
-
         if score == 0 {
             return make_skip(RewardSkipReason::ZeroScore, score);
         }
-
         let payout = self.compute_payout(score)?;
         let metadata = build_metadata(
             components,
@@ -294,16 +270,13 @@ impl RelayRewardCalculator {
             issued_at_unix,
             extra_metadata,
         );
-
         let instruction = make_instruction(payout, score, metadata);
-
         Ok(RewardDecision::Rewarded {
             instruction,
             score_per_mille: score,
             components,
         })
     }
-
     fn compute_components(&self, metrics: &RelayEpochMetricsV1) -> RewardComponents {
         let availability = metrics.uptime_ratio_per_mille();
         let bandwidth = {
@@ -323,7 +296,6 @@ impl RelayRewardCalculator {
             compliance_per_mille: compliance,
         }
     }
-
     fn apply_weights(&self, components: RewardComponents) -> u16 {
         let total_weight = u32::from(self.total_weight);
         let availability = u32::from(components.availability_per_mille)
@@ -341,7 +313,6 @@ impl RelayRewardCalculator {
             (weighted / total_weight).min(1_000) as u16
         }
     }
-
     fn apply_exit_bonus(&self, score: u16, exit_capable: bool) -> u16 {
         if exit_capable && self.config.exit_bonus_per_mille > 0 {
             score
@@ -351,7 +322,6 @@ impl RelayRewardCalculator {
             score
         }
     }
-
     fn compute_payout(&self, score: u16) -> Result<Quantity, RelayIncentiveError> {
         let score_numeric = Numeric::try_new(u128::from(score), Self::SCORE_SCALE_PER_MILLE)
             .map_err(|_| RelayIncentiveError::NumericScale)?;
@@ -366,26 +336,22 @@ impl RelayRewardCalculator {
             .map_err(|_| RelayIncentiveError::NumericOverflow)
     }
 }
-
 /// Helper that converts reward instructions into ledger-ready transfers.
 #[derive(Debug, Clone)]
 pub struct RelayPayoutLedger {
     treasury_account: AccountId,
 }
-
 impl RelayPayoutLedger {
     /// Create a payout ledger that debits the specified treasury account.
     #[must_use]
     pub fn new(treasury_account: AccountId) -> Self {
         Self { treasury_account }
     }
-
     /// Access the treasury account identifier.
     #[must_use]
     pub fn treasury_account(&self) -> &AccountId {
         &self.treasury_account
     }
-
     /// Convert the reward instruction into a transfer instruction, skipping zero-amount payouts.
     #[must_use]
     pub fn to_transfer(&self, instruction: &RelayRewardInstructionV1) -> Option<InstructionBox> {
@@ -394,7 +360,6 @@ impl RelayPayoutLedger {
         }
         Some(instruction.to_transfer_instruction(&self.treasury_account))
     }
-
     /// Create a dispute record linked to the original payout instruction.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
@@ -417,7 +382,6 @@ impl RelayPayoutLedger {
         )
     }
 }
-
 /// Aggregates relay earnings to feed operator dashboards and telemetry.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RelayEarningsEntry {
@@ -426,7 +390,6 @@ pub struct RelayEarningsEntry {
     /// Total XOR amount paid to the relay.
     pub payout_amount: Quantity,
 }
-
 /// Failure while aggregating relay payout telemetry.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum RelayEarningsError {
@@ -437,13 +400,11 @@ pub enum RelayEarningsError {
     #[error("relay payout amount overflow")]
     PayoutAmountOverflow,
 }
-
 /// Accumulates payout entries keyed by relay identifier.
 #[derive(Debug, Default)]
 pub struct RelayEarningsAccumulator {
     entries: BTreeMap<RelayId, RelayEarningsEntry>,
 }
-
 impl RelayEarningsAccumulator {
     /// Record a non-zero payout for aggregation.
     pub fn record(
@@ -466,14 +427,12 @@ impl RelayEarningsAccumulator {
         entry.payout_amount = payout_amount;
         Ok(())
     }
-
     /// Retrieve the aggregated earnings map.
     #[must_use]
     pub fn entries(&self) -> &BTreeMap<RelayId, RelayEarningsEntry> {
         &self.entries
     }
 }
-
 fn build_metadata(
     components: RewardComponents,
     base_score: u16,
@@ -484,7 +443,6 @@ fn build_metadata(
     extra_metadata: Option<&Metadata>,
 ) -> Metadata {
     let mut metadata = Metadata::default();
-
     metadata_insert(
         &mut metadata,
         "availability_per_mille",
@@ -521,22 +479,18 @@ fn build_metadata(
         Json::new(exit_capable && final_score > base_score),
     );
     metadata_insert(&mut metadata, "issued_at_unix", Json::new(issued_at_unix));
-
     if let Some(extra) = extra_metadata {
         for (key, value) in extra.iter() {
             let _ = metadata.insert(key.clone(), value.clone());
         }
     }
-
     metadata
 }
-
 fn metadata_insert(metadata: &mut Metadata, key: &str, value: impl Into<Json>) {
     if let Ok(name) = Name::from_str(key) {
         metadata.insert(name, value);
     }
 }
-
 fn skip_reason_label(reason: RewardSkipReason) -> &'static str {
     match reason {
         RewardSkipReason::InsufficientBond => "insufficient_bond",
@@ -545,7 +499,6 @@ fn skip_reason_label(reason: RewardSkipReason) -> &'static str {
         RewardSkipReason::ZeroScore => "zero_score",
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
@@ -559,18 +512,14 @@ mod tests {
         },
     };
     use iroha_primitives::BigInt;
-
     use super::*;
-
     fn quantity(value: u64) -> Quantity {
         Quantity::from(value)
     }
-
     fn scaled_quantity(mantissa: u128, scale: u32) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(mantissa, scale))
             .expect("non-negative test quantity")
     }
-
     fn default_policy() -> RelayBondPolicyV1 {
         RelayBondPolicyV1 {
             minimum_exit_bond: quantity(1_000),
@@ -583,7 +532,6 @@ mod tests {
             activation_grace_epochs: 0,
         }
     }
-
     fn bond(exit_capable: bool, amount: u64) -> RelayBondLedgerEntryV1 {
         RelayBondLedgerEntryV1 {
             relay_id: [0_u8; 32],
@@ -596,7 +544,6 @@ mod tests {
             exit_capable,
         }
     }
-
     fn metrics(
         compliance: RelayComplianceStatusV1,
         uptime: u64,
@@ -616,17 +563,14 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     fn sample_account(domain: &str) -> AccountId {
         let key_pair = KeyPair::try_from_seed(domain.as_bytes().to_vec(), Algorithm::Ed25519)
             .expect("derive deterministic sample account key");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn budget_id() -> [u8; 32] {
         [0xB7; 32]
     }
-
     fn config() -> RewardConfig {
         RewardConfig {
             policy: default_policy(),
@@ -641,7 +585,6 @@ mod tests {
             exit_bonus_per_mille: 100,
         }
     }
-
     #[test]
     fn rewarded_when_metrics_full_and_bond_sufficient() {
         let calc = RelayRewardCalculator::new(config()).expect("config valid");
@@ -673,7 +616,6 @@ mod tests {
         let key = Name::from_str("score_per_mille").expect("name");
         assert_eq!(instruction.metadata.get(&key), Some(&Json::new(1_000_u64)));
     }
-
     #[test]
     fn skip_when_bond_insufficient() {
         let calc = RelayRewardCalculator::new(config()).expect("config valid");
@@ -688,7 +630,6 @@ mod tests {
         };
         assert_eq!(reason, RewardSkipReason::InsufficientBond);
     }
-
     #[test]
     fn skip_when_compliance_suspended() {
         let calc = RelayRewardCalculator::new(config()).expect("config valid");
@@ -709,7 +650,6 @@ mod tests {
         assert_eq!(reason, RewardSkipReason::ComplianceSuspended);
         assert_eq!(score_per_mille, 0);
     }
-
     #[test]
     fn skip_when_asset_mismatch() {
         let mut cfg = config();
@@ -729,7 +669,6 @@ mod tests {
         };
         assert_eq!(reason, RewardSkipReason::BondAssetMismatch);
     }
-
     #[test]
     fn warning_penalty_reduces_score() {
         let calc = RelayRewardCalculator::new(config()).expect("config valid");
@@ -753,7 +692,6 @@ mod tests {
         );
         assert_eq!(instruction.reward_score, 980);
     }
-
     #[test]
     fn zero_weights_rejected() {
         let mut cfg = config();
@@ -765,7 +703,6 @@ mod tests {
         let err = RelayRewardCalculator::new(cfg).expect_err("should fail");
         matches!(err, RelayIncentiveError::InvalidWeights { .. });
     }
-
     #[test]
     fn zero_bandwidth_target_rejected() {
         let mut cfg = config();
@@ -773,7 +710,6 @@ mod tests {
         let err = RelayRewardCalculator::new(cfg).expect_err("should fail");
         assert_eq!(err, RelayIncentiveError::ZeroBandwidthTarget);
     }
-
     #[test]
     fn sub_nano_base_payout_is_rejected() {
         let mut cfg = config();
@@ -784,20 +720,17 @@ mod tests {
             RelayIncentiveError::InvalidBasePayoutScale { scale: 10 }
         );
     }
-
     #[test]
     fn payout_rounds_toward_zero_at_nano_xor_boundary() {
         let mut cfg = config();
         cfg.epoch_base_payout = scaled_quantity(1, 9);
         let calculator = RelayRewardCalculator::new(cfg).expect("nano-XOR payout config");
-
         assert_eq!(
             calculator.compute_payout(500).expect("rounded payout"),
             Quantity::zero(),
             "half a nano-XOR must be rounded explicitly toward zero"
         );
     }
-
     #[test]
     fn payout_rounding_bounds_only_the_final_nano_xor_result() {
         let mut bytes = [0xff_u8; 64];
@@ -807,7 +740,6 @@ mod tests {
         cfg.epoch_base_payout = Quantity::from_canonical_numeric(Numeric::new(maximum.clone(), 9))
             .expect("maximum nano-XOR mantissa is a quantity");
         let calculator = RelayRewardCalculator::new(cfg).expect("boundary payout config");
-
         let payout = calculator
             .compute_payout(500)
             .expect("wide half-product rounds before the final bound");
@@ -819,7 +751,6 @@ mod tests {
             .expect("rounded half fits");
         assert_eq!(payout, expected);
     }
-
     #[test]
     fn payout_ledger_handles_transfers_and_disputes() {
         let treasury = sample_account("treasury");
@@ -847,7 +778,6 @@ mod tests {
         };
         assert_eq!(asset_transfer.source.account(), &treasury);
         assert_eq!(asset_transfer.destination, instruction.beneficiary);
-
         let dispute = ledger.open_dispute(
             instruction.clone(),
             scaled_quantity(12_500, 3),
@@ -858,7 +788,6 @@ mod tests {
         assert_eq!(dispute.status, RelayRewardDisputeStatusV1::Pending);
         assert_eq!(dispute.original_instruction, instruction);
     }
-
     #[test]
     fn earnings_accumulator_sums_payouts() {
         let mut accumulator = RelayEarningsAccumulator::default();
@@ -884,7 +813,6 @@ mod tests {
         accumulator
             .record(&second)
             .expect("second payout aggregates");
-
         let entry = accumulator
             .entries()
             .get(&base_instruction.relay_id)
@@ -892,7 +820,6 @@ mod tests {
         assert_eq!(entry.payout_count, 2);
         assert_eq!(entry.payout_amount, Quantity::from(200_u64));
     }
-
     #[test]
     fn earnings_accumulator_counter_overflow_is_atomic() {
         let relay_id = [0xCC; 32];
@@ -918,7 +845,6 @@ mod tests {
             budget_approval_id: Some(budget_id()),
             metadata: Metadata::default(),
         };
-
         assert_eq!(
             accumulator.record(&instruction),
             Err(RelayEarningsError::PayoutCountOverflow)

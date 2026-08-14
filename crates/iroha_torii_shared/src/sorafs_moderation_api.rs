@@ -9,9 +9,7 @@
 //! The DTO validators enforce the transport representation and size bounds.
 //! The apply handler must additionally decode the embedded core resolution
 //! with bounded Norito limits and require a byte-identical canonical re-encode.
-
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-
 /// Stable schema label returned by the dead-letter prepare route.
 pub const SORAFS_MODERATION_DEAD_LETTER_PREPARE_RESPONSE_SCHEMA_V1: &str =
     "sorafs.moderation.dead_letter_resolution.prepare.v1";
@@ -22,7 +20,6 @@ pub const SORAFS_MODERATION_DEAD_LETTER_APPLY_RESPONSE_SCHEMA_V1: &str =
     "sorafs.moderation.dead_letter_resolution.apply.v1";
 /// Stable success status returned by the dead-letter apply route.
 pub const SORAFS_MODERATION_DEAD_LETTER_APPLY_STATUS_V1: &str = "applied";
-
 /// Maximum canonical bytes in one prepared dead-letter resolution frame.
 pub const SORAFS_MODERATION_DEAD_LETTER_RESOLUTION_MAX_CANONICAL_BYTES_V1: usize = 4 * 1024;
 /// Maximum padded-standard-base64 bytes representing one resolution frame.
@@ -34,7 +31,6 @@ pub const SORAFS_MODERATION_DEAD_LETTER_PREPARE_REQUEST_MAX_BYTES_V1: usize = 10
 pub const SORAFS_MODERATION_DEAD_LETTER_APPLY_REQUEST_MAX_BYTES_V1: usize = 8 * 1024;
 /// Maximum JSON bytes accepted from either successful dead-letter route response.
 pub const SORAFS_MODERATION_DEAD_LETTER_JSON_RESPONSE_MAX_BYTES_V1: usize = 8 * 1024;
-
 /// Closed dead-letter source selected for resolution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoDeserialize, NoritoSerialize)]
 #[norito(schema_name = "iroha.torii.v1.sorafs.moderation.dead_letter.kind")]
@@ -46,7 +42,6 @@ pub enum SorafsModerationDeadLetterKindV1 {
     /// A panel notification exhausted durable delivery attempts.
     PanelNotification,
 }
-
 impl norito::json::JsonSerialize for SorafsModerationDeadLetterKindV1 {
     fn json_serialize(&self, out: &mut String) {
         let value = match self {
@@ -57,7 +52,6 @@ impl norito::json::JsonSerialize for SorafsModerationDeadLetterKindV1 {
         norito::json::write_json_string(value, out);
     }
 }
-
 impl norito::json::JsonDeserialize for SorafsModerationDeadLetterKindV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -73,7 +67,6 @@ impl norito::json::JsonDeserialize for SorafsModerationDeadLetterKindV1 {
         }
     }
 }
-
 /// Closed disposition applied to one unresolved dead letter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoDeserialize, NoritoSerialize)]
 #[norito(schema_name = "iroha.torii.v1.sorafs.moderation.dead_letter.action")]
@@ -83,7 +76,6 @@ pub enum SorafsModerationDeadLetterResolutionActionV1 {
     /// Seal the incident without scheduling another delivery attempt.
     Acknowledge,
 }
-
 impl norito::json::JsonSerialize for SorafsModerationDeadLetterResolutionActionV1 {
     fn json_serialize(&self, out: &mut String) {
         let value = match self {
@@ -93,7 +85,6 @@ impl norito::json::JsonSerialize for SorafsModerationDeadLetterResolutionActionV
         norito::json::write_json_string(value, out);
     }
 }
-
 impl norito::json::JsonDeserialize for SorafsModerationDeadLetterResolutionActionV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -108,7 +99,6 @@ impl norito::json::JsonDeserialize for SorafsModerationDeadLetterResolutionActio
         }
     }
 }
-
 /// Strict request for a checkpoint-bound dead-letter resolution statement.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -127,7 +117,6 @@ pub struct SorafsModerationDeadLetterPrepareRequestV1 {
     /// Explicit authorization time in Unix milliseconds.
     pub authorized_at_unix_ms: u64,
 }
-
 impl SorafsModerationDeadLetterPrepareRequestV1 {
     /// Validate the canonical lexical and non-zero request bounds.
     ///
@@ -143,7 +132,6 @@ impl SorafsModerationDeadLetterPrepareRequestV1 {
         Ok(())
     }
 }
-
 /// Prepared statement that must be signed by the configured external attestor.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -162,7 +150,6 @@ pub struct SorafsModerationDeadLetterPrepareResponseV1 {
     /// Exact 32-byte signing message as lowercase hexadecimal.
     pub signing_message_hex: String,
 }
-
 impl SorafsModerationDeadLetterPrepareResponseV1 {
     /// Validate the complete successful prepare response contract.
     ///
@@ -185,7 +172,6 @@ impl SorafsModerationDeadLetterPrepareResponseV1 {
         validate_lower_hex("signing_message_hex", &self.signing_message_hex, 32, false)
     }
 }
-
 /// Strict request applying one externally signed dead-letter resolution.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -200,7 +186,6 @@ pub struct SorafsModerationDeadLetterApplyRequestV1 {
     /// Detached 64-byte Ed25519 signature as lowercase hexadecimal.
     pub signature_hex: String,
 }
-
 impl SorafsModerationDeadLetterApplyRequestV1 {
     /// Validate the canonical frame and detached-signature representations.
     ///
@@ -214,7 +199,6 @@ impl SorafsModerationDeadLetterApplyRequestV1 {
         validate_lower_hex("signature_hex", &self.signature_hex, 64, true)
     }
 }
-
 /// Successful result of atomically applying a signed dead-letter resolution.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -235,7 +219,6 @@ pub struct SorafsModerationDeadLetterApplyResponseV1 {
     /// Applied dead-letter disposition.
     pub action: SorafsModerationDeadLetterResolutionActionV1,
 }
-
 impl SorafsModerationDeadLetterApplyResponseV1 {
     /// Validate the complete successful apply response contract.
     ///
@@ -257,7 +240,6 @@ impl SorafsModerationDeadLetterApplyResponseV1 {
         validate_lower_hex("identity_hex", &self.identity_hex, 32, true)
     }
 }
-
 fn validate_exact(field: &str, actual: &str, expected: &str) -> Result<(), String> {
     if actual == expected {
         Ok(())
@@ -265,7 +247,6 @@ fn validate_exact(field: &str, actual: &str, expected: &str) -> Result<(), Strin
         Err(format!("{field} must equal {expected:?}"))
     }
 }
-
 fn validate_lower_hex(
     field: &str,
     value: &str,
@@ -288,7 +269,6 @@ fn validate_lower_hex(
     }
     Ok(())
 }
-
 fn validate_resolution_base64(value: &str) -> Result<(), String> {
     if value.len() > SORAFS_MODERATION_DEAD_LETTER_RESOLUTION_MAX_BASE64_BYTES_V1 {
         return Err(format!(
@@ -307,13 +287,11 @@ fn validate_resolution_base64(value: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn canonical_standard_base64_decoded_len(value: &str) -> Option<usize> {
     let bytes = value.as_bytes();
     if bytes.is_empty() || !bytes.len().is_multiple_of(4) {
         return None;
     }
-
     let padding = if bytes.ends_with(b"==") {
         2
     } else {
@@ -329,7 +307,6 @@ fn canonical_standard_base64_decoded_len(value: &str) -> Option<usize> {
     {
         return None;
     }
-
     match padding {
         0 if symbol_count.is_multiple_of(4) => {}
         1 if symbol_count % 4 == 3
@@ -338,14 +315,12 @@ fn canonical_standard_base64_decoded_len(value: &str) -> Option<usize> {
             && base64_symbol_value(bytes[symbol_count - 1])?.trailing_zeros() >= 4 => {}
         _ => return None,
     }
-
     bytes
         .len()
         .checked_div(4)?
         .checked_mul(3)?
         .checked_sub(padding)
 }
-
 const fn base64_symbol_value(byte: u8) -> Option<u8> {
     match byte {
         b'A'..=b'Z' => Some(byte - b'A'),
@@ -356,11 +331,9 @@ const fn base64_symbol_value(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn prepare_request() -> SorafsModerationDeadLetterPrepareRequestV1 {
         SorafsModerationDeadLetterPrepareRequestV1 {
             identity_hex: "11".repeat(32),
@@ -369,7 +342,6 @@ mod tests {
             authorized_at_unix_ms: 1_725_000_000_123,
         }
     }
-
     fn prepare_response() -> SorafsModerationDeadLetterPrepareResponseV1 {
         SorafsModerationDeadLetterPrepareResponseV1 {
             schema: SORAFS_MODERATION_DEAD_LETTER_PREPARE_RESPONSE_SCHEMA_V1.to_owned(),
@@ -378,14 +350,12 @@ mod tests {
             signing_message_hex: "22".repeat(32),
         }
     }
-
     fn apply_request() -> SorafsModerationDeadLetterApplyRequestV1 {
         SorafsModerationDeadLetterApplyRequestV1 {
             resolution_norito_b64: "AQIDBA==".to_owned(),
             signature_hex: "33".repeat(64),
         }
     }
-
     fn apply_response() -> SorafsModerationDeadLetterApplyResponseV1 {
         SorafsModerationDeadLetterApplyResponseV1 {
             schema: SORAFS_MODERATION_DEAD_LETTER_APPLY_RESPONSE_SCHEMA_V1.to_owned(),
@@ -395,7 +365,6 @@ mod tests {
             action: SorafsModerationDeadLetterResolutionActionV1::Acknowledge,
         }
     }
-
     #[test]
     fn json_contract_is_exact() {
         {
@@ -476,7 +445,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn closed_string_enums_reject_aliases() {
         for invalid in [
@@ -497,7 +465,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn every_dto_rejects_unknown_json_fields() {
         let identity = "11".repeat(32);
@@ -528,7 +495,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn canonical_validation_rejects_aliases_and_out_of_bounds_values() {
         assert_eq!(
@@ -541,7 +507,6 @@ mod tests {
             .expect("valid prepare response");
         apply_request().validate().expect("valid apply request");
         apply_response().validate().expect("valid apply response");
-
         for identity in ["00".repeat(32), "AA".repeat(32), "11".repeat(31)] {
             let mut request = prepare_request();
             request.identity_hex = identity;
@@ -550,7 +515,6 @@ mod tests {
         let mut request = prepare_request();
         request.authorized_at_unix_ms = 0;
         assert!(request.validate().is_err());
-
         for resolution in [
             String::new(),
             "AQIDBA".to_owned(),
@@ -567,7 +531,6 @@ mod tests {
             request.signature_hex = signature;
             assert!(request.validate().is_err());
         }
-
         let mut response = prepare_response();
         response.status = "queued".to_owned();
         assert!(response.validate().is_err());
@@ -575,7 +538,6 @@ mod tests {
         response.schema = "sorafs.moderation.dead_letter_resolution.v0".to_owned();
         assert!(response.validate().is_err());
     }
-
     #[test]
     fn every_dto_has_a_deterministic_norito_roundtrip() {
         {

@@ -1,12 +1,9 @@
 //! Roundtrip coverage for packed-sequence layouts.
-
 use std::collections::BTreeMap;
-
 use norito::{
     codec::encode_with_header_flags,
     core::{DecodeFlagsGuard, decode_from_bytes, frame_bare_with_header_flags, header_flags},
 };
-
 #[test]
 fn packed_seq_vec_roundtrip() {
     let value = vec![1u32, 2, 3, 4];
@@ -18,7 +15,6 @@ fn packed_seq_vec_roundtrip() {
     let decoded: Vec<u32> = decode_from_bytes(&bytes).expect("decode packed-seq vec");
     assert_eq!(decoded, value);
 }
-
 #[test]
 fn packed_seq_empty_vec_roundtrip_fixed_offsets() {
     let value: Vec<u32> = Vec::new();
@@ -30,7 +26,6 @@ fn packed_seq_empty_vec_roundtrip_fixed_offsets() {
     let decoded: Vec<u32> = decode_from_bytes(&bytes).expect("decode packed-seq empty vec");
     assert_eq!(decoded, value);
 }
-
 #[test]
 fn packed_seq_btreemap_roundtrip_fixed_offsets() {
     let mut map = BTreeMap::new();

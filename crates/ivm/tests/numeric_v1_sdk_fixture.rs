@@ -1,16 +1,13 @@
 //! Cross-SDK golden verification for Kotodama V1 numeric frames and envelopes.
-
 #[allow(dead_code)]
 #[path = "../examples/numeric_v1_fixture.rs"]
 mod fixture_generator;
-
 use iroha_primitives::{
     bigint::BigInt,
     numeric::{Numeric, NumericError},
     numeric_abi::{DecimalValueV1, IntValueV1, NumericAbiError, QuantityValueV1},
 };
 use ivm::{VMError, numeric::PointerAbiFaultV1, numeric_tlv};
-
 #[test]
 fn checked_in_fixture_is_generated_by_the_current_rust_wire_implementation() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -18,14 +15,12 @@ fn checked_in_fixture_is_generated_by_the_current_rust_wire_implementation() {
     let actual = std::fs::read_to_string(&path).expect("read shared numeric fixture");
     assert_eq!(actual, fixture_generator::render_fixture());
 }
-
 #[test]
 fn every_valid_and_adversarial_vector_has_the_pinned_rust_outcome() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/numeric_v1_golden.json");
     let text = std::fs::read_to_string(path).expect("read shared numeric fixture");
     let document = norito::json::parse_value(&text).expect("parse shared numeric fixture");
-
     for vector in document
         .get("text")
         .and_then(norito::json::Value::as_array)
@@ -50,7 +45,6 @@ fn every_valid_and_adversarial_vector_has_the_pinned_rust_outcome() {
             string(vector, "id")
         );
     }
-
     for vector in document
         .get("valid")
         .and_then(norito::json::Value::as_array)
@@ -118,7 +112,6 @@ fn every_valid_and_adversarial_vector_has_the_pinned_rust_outcome() {
         };
         assert_eq!(decoded, canonical, "{}", string(vector, "id"));
     }
-
     for vector in document
         .get("invalid")
         .and_then(norito::json::Value::as_array)
@@ -153,7 +146,6 @@ fn every_valid_and_adversarial_vector_has_the_pinned_rust_outcome() {
             string(vector, "id")
         );
     }
-
     for vector in document
         .get("invalid_text")
         .and_then(norito::json::Value::as_array)
@@ -182,7 +174,6 @@ fn every_valid_and_adversarial_vector_has_the_pinned_rust_outcome() {
         );
     }
 }
-
 fn canonical_integer_syntax(source: &str) -> bool {
     let magnitude = source.strip_prefix('-').unwrap_or(source);
     !magnitude.is_empty()
@@ -190,7 +181,6 @@ fn canonical_integer_syntax(source: &str) -> bool {
         && (magnitude == "0" || !magnitude.starts_with('0'))
         && source != "-0"
 }
-
 fn canonical_scaled_syntax(source: &str) -> bool {
     let unsigned = source.strip_prefix('-').unwrap_or(source);
     let mut parts = unsigned.split('.');
@@ -208,7 +198,6 @@ fn canonical_scaled_syntax(source: &str) -> bool {
     }
     source != "-0" && source != "-0.0"
 }
-
 fn numeric_text_error_category(
     kind: &str,
     input: &norito::json::Value,
@@ -247,14 +236,12 @@ fn numeric_text_error_category(
         other => panic!("unknown invalid-text kind {other}"),
     }
 }
-
 fn string<'a>(value: &'a norito::json::Value, key: &str) -> &'a str {
     value
         .get(key)
         .and_then(norito::json::Value::as_str)
         .unwrap_or_else(|| panic!("fixture field {key} must be a string"))
 }
-
 fn frame_error_category(error: NumericAbiError) -> &'static str {
     match error {
         NumericAbiError::FrameTooShort => "frame_too_short",
@@ -272,7 +259,6 @@ fn frame_error_category(error: NumericAbiError) -> &'static str {
         other => panic!("unpinned numeric frame error: {other:?}"),
     }
 }
-
 fn envelope_error_category(error: VMError) -> &'static str {
     match error {
         VMError::PointerAbiFault(PointerAbiFaultV1::PayloadHashMismatch) => "payload_hash_mismatch",
@@ -287,11 +273,9 @@ fn envelope_error_category(error: VMError) -> &'static str {
         other => panic!("unpinned numeric envelope error: {other:?}"),
     }
 }
-
 trait Pipe: Sized {
     fn pipe<T>(self, function: impl FnOnce(Self) -> T) -> T {
         function(self)
     }
 }
-
 impl<T> Pipe for T {}

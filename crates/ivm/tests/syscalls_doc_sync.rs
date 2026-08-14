@@ -1,6 +1,5 @@
 //! Ensure `docs/syscalls.md` generated section exactly matches the runtime’s
 //! enriched table (Number/Name/Args/Return/Gas). This fails on any drift.
-
 #[test]
 fn generated_syscalls_section_is_up_to_date() {
     const BEGIN: &str = "<!-- BEGIN GENERATED SYSCALLS -->";

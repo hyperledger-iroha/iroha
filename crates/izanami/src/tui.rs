@@ -12,11 +12,8 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
-
 use crate::config::{ChaosConfig, IzanamiArgs, MIN_PIPELINE_TIME, WorkloadProfile};
-
 const HELP_TEXT: &str = "↑/↓ or Tab/Shift+Tab move  •  Enter edit/run  •  Esc/q exit";
-
 pub fn launch(args: IzanamiArgs) -> Result<Option<(ChaosConfig, IzanamiArgs)>> {
     let mut stdout = std::io::stdout();
     enable_raw_mode()?;
@@ -28,14 +25,12 @@ pub fn launch(args: IzanamiArgs) -> Result<Option<(ChaosConfig, IzanamiArgs)>> {
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
-
     let final_args = app.args.clone();
     match outcome? {
         Outcome::Run(config) => Ok(Some((config, final_args))),
         Outcome::Exit => Ok(None),
     }
 }
-
 fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
@@ -56,7 +51,6 @@ where
         }
     }
 }
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Field {
     AllowNet,
@@ -86,7 +80,6 @@ enum Field {
     Run,
     Quit,
 }
-
 impl Field {
     fn label(self) -> &'static str {
         match self {
@@ -118,7 +111,6 @@ impl Field {
             Field::Quit => "Quit",
         }
     }
-
     fn all() -> &'static [Field] {
         const FIELDS: &[Field] = &[
             Field::AllowNet,
@@ -150,29 +142,24 @@ impl Field {
         ];
         FIELDS
     }
-
     fn editable(self) -> bool {
         !matches!(self, Field::Run | Field::Quit)
     }
 }
-
 struct InputState {
     field: Field,
     buffer: String,
 }
-
 struct Message {
     text: String,
     is_error: bool,
 }
-
 struct App {
     args: IzanamiArgs,
     list_state: ListState,
     input: Option<InputState>,
     message: Option<Message>,
 }
-
 fn parse_bool_input(buffer: &str, label: &str) -> Result<bool, String> {
     let normalized = buffer.trim().to_ascii_lowercase();
     match normalized.as_str() {
@@ -181,7 +168,6 @@ fn parse_bool_input(buffer: &str, label: &str) -> Result<bool, String> {
         other => Err(format!("{label} must be true/false (received `{other}`)")),
     }
 }
-
 impl App {
     fn new(mut args: IzanamiArgs) -> Self {
         // ensure seed default display is empty rather than zero
@@ -197,7 +183,6 @@ impl App {
             message: None,
         }
     }
-
     fn draw(&mut self, f: &mut Frame<'_>) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -208,7 +193,6 @@ impl App {
                 Constraint::Length(3),
             ])
             .split(f.area());
-
         let title = Paragraph::new("Izanami Chaosnet Configuration")
             .style(
                 Style::default()
@@ -217,7 +201,6 @@ impl App {
             )
             .alignment(ratatui::layout::Alignment::Center);
         f.render_widget(title, chunks[0]);
-
         let items: Vec<ListItem> = Field::all()
             .iter()
             .map(|field| {
@@ -231,7 +214,6 @@ impl App {
                 ListItem::new(line)
             })
             .collect();
-
         let list = List::new(items)
             .block(Block::default().borders(Borders::ALL).title("Fields"))
             .highlight_style(
@@ -241,7 +223,6 @@ impl App {
             )
             .highlight_symbol("→ ");
         f.render_stateful_widget(list, chunks[1], &mut self.list_state);
-
         let info = self.message.as_ref().map_or_else(
             || Paragraph::new(HELP_TEXT.to_string()).style(Style::default().fg(Color::DarkGray)),
             |msg| {
@@ -253,7 +234,6 @@ impl App {
             },
         );
         f.render_widget(info, chunks[2]);
-
         let editing = self.input.as_ref().map_or_else(
             || {
                 Paragraph::new("Press Enter on a field to edit.")
@@ -270,7 +250,6 @@ impl App {
         );
         f.render_widget(editing, chunks[3]);
     }
-
     #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
     fn handle_key(&mut self, key: KeyEvent) -> Result<Option<Outcome>> {
         if let Some(mut input) = self.input.take() {
@@ -372,7 +351,6 @@ impl App {
             }
             return Ok(None);
         }
-
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => return Ok(Some(Outcome::Exit)),
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
@@ -401,10 +379,8 @@ impl App {
             }
             _ => {}
         }
-
         Ok(None)
     }
-
     fn start_edit(&mut self, field: Field) {
         if let Some(value) = self.string_for(field) {
             self.input = Some(InputState {
@@ -414,7 +390,6 @@ impl App {
             self.clear_message();
         }
     }
-
     fn apply_input(&mut self, field: Field, buffer: &str) -> Result<(), String> {
         match field {
             Field::Peers => {
@@ -608,7 +583,6 @@ impl App {
         }
         Ok(())
     }
-
     fn try_run_selected(&mut self) -> Option<Outcome> {
         match ChaosConfig::try_from(self.args.clone()) {
             Ok(config) => {
@@ -627,14 +601,12 @@ impl App {
             }
         }
     }
-
     fn selected_field(&self) -> Option<Field> {
         self.list_state
             .selected()
             .and_then(|idx| Field::all().get(idx))
             .copied()
     }
-
     fn move_selection(&mut self, forward: bool) -> Field {
         if forward {
             self.next_field()
@@ -642,7 +614,6 @@ impl App {
             self.prev_field()
         }
     }
-
     fn next_field(&mut self) -> Field {
         let len = Field::all().len();
         let current = self.list_state.selected().unwrap_or(0);
@@ -650,7 +621,6 @@ impl App {
         self.list_state.select(Some(next));
         self.selected_field().unwrap()
     }
-
     fn prev_field(&mut self) -> Field {
         let len = Field::all().len();
         let current = self.list_state.selected().unwrap_or(0);
@@ -658,7 +628,6 @@ impl App {
         self.list_state.select(Some(prev));
         self.selected_field().unwrap()
     }
-
     fn value_for(&self, field: Field) -> String {
         match field {
             Field::AllowNet => {
@@ -715,7 +684,6 @@ impl App {
             Field::Quit => "(exit)".into(),
         }
     }
-
     fn string_for(&self, field: Field) -> Option<String> {
         Some(match field {
             Field::Peers => self.args.peers.to_string(),
@@ -760,21 +728,17 @@ impl App {
             Field::Run | Field::Quit => return None,
         })
     }
-
     fn clear_message(&mut self) {
         self.message = None;
     }
 }
-
 enum Outcome {
     Run(ChaosConfig),
     Exit,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn apply_input_rejects_non_finite_tps() {
         let args = IzanamiArgs::defaults();
@@ -787,7 +751,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn apply_input_rejects_pipeline_time_under_minimum() {
         let args = IzanamiArgs::defaults();
@@ -800,7 +763,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn apply_input_accepts_contract_deploy_toggle() {
         let args = IzanamiArgs::defaults();

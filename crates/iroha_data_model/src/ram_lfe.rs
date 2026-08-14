@@ -1,16 +1,12 @@
 //! Generic hidden-program RAM-LFE policy and receipt types.
-
 use std::{fmt, str::FromStr, string::String, vec::Vec};
-
 use iroha_crypto::{
     Algorithm, Hash, PolicyCommitment, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
     SignatureOf,
 };
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 use crate::{account::AccountId, name::Name, proof::ProofBox};
-
 pub(crate) fn signature_for_public_key_algorithm(
     public_key: &PublicKey,
     signature: &Signature,
@@ -28,7 +24,6 @@ pub(crate) fn signature_for_public_key_algorithm(
     };
     Ok(signature)
 }
-
 /// Error returned while parsing [`RamLfeProgramId`] literals.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum RamLfeProgramIdParseError {
@@ -36,7 +31,6 @@ pub enum RamLfeProgramIdParseError {
     #[error("{0}")]
     InvalidName(String),
 }
-
 /// Stable on-chain identifier for a hidden RAM-LFE program policy.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -47,7 +41,6 @@ pub struct RamLfeProgramId {
     /// Canonical program name.
     pub name: Name,
 }
-
 impl RamLfeProgramId {
     /// Construct a new program identifier.
     #[must_use]
@@ -55,23 +48,19 @@ impl RamLfeProgramId {
         Self { name }
     }
 }
-
 impl fmt::Display for RamLfeProgramId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.name.fmt(f)
     }
 }
-
 impl FromStr for RamLfeProgramId {
     type Err = RamLfeProgramIdParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Name::from_str(s.trim())
             .map(Self::new)
             .map_err(|err| RamLfeProgramIdParseError::InvalidName(err.to_string()))
     }
 }
-
 /// Public metadata for a globally registered hidden RAM-LFE program.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -100,7 +89,6 @@ pub struct RamLfeProgramPolicy {
     #[norito(default)]
     pub note: Option<String>,
 }
-
 impl RamLfeProgramPolicy {
     /// Construct a new inactive RAM-LFE program policy.
     #[must_use]
@@ -124,14 +112,12 @@ impl RamLfeProgramPolicy {
             note: None,
         }
     }
-
     /// Override the output-opening verifier key.
     #[must_use]
     pub fn with_output_opening_public_key(mut self, public_key: PublicKey) -> Self {
         self.output_opening_public_key = public_key;
         self
     }
-
     /// Attach an optional operator note.
     #[must_use]
     pub fn with_note(mut self, note: impl Into<String>) -> Self {
@@ -139,7 +125,6 @@ impl RamLfeProgramPolicy {
         self
     }
 }
-
 /// Canonical stateless RAM-LFE execution receipt payload.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -174,7 +159,6 @@ pub struct RamLfeExecutionReceiptPayload {
     #[norito(default)]
     pub expires_at_ms: Option<u64>,
 }
-
 impl RamLfeExecutionReceiptPayload {
     /// Encode the canonical signed/proved payload bytes.
     ///
@@ -183,7 +167,6 @@ impl RamLfeExecutionReceiptPayload {
     pub fn to_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
         norito::encode_canonical(self)
     }
-
     /// Hash the canonical payload bytes for proof-binding circuits.
     ///
     /// # Errors
@@ -192,7 +175,6 @@ impl RamLfeExecutionReceiptPayload {
         self.to_bytes().map(Hash::new)
     }
 }
-
 /// Canonical payload signed by an external RAM-LFE output-opening authority.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -219,7 +201,6 @@ pub struct RamLfeOutputOpeningPayload {
     #[norito(default)]
     pub expires_at_ms: Option<u64>,
 }
-
 /// Externally attested opening of a RAM-LFE encrypted output.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -232,7 +213,6 @@ pub struct RamLfeOutputOpening {
     /// Signature over the canonical opening payload bytes.
     pub signature: Signature,
 }
-
 impl RamLfeOutputOpening {
     /// Verify the opening authority signature.
     ///
@@ -244,7 +224,6 @@ impl RamLfeOutputOpening {
             .verify(public_key, &self.payload)
     }
 }
-
 /// Explicit attestation attached to a RAM-LFE receipt payload.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -258,7 +237,6 @@ pub enum RamLfeReceiptAttestation {
     /// Proof payload over the canonical payload bytes.
     Proof(ProofBox),
 }
-
 impl RamLfeReceiptAttestation {
     /// Return the signature when this attestation is signed.
     #[must_use]
@@ -268,7 +246,6 @@ impl RamLfeReceiptAttestation {
             Self::Proof(_) => None,
         }
     }
-
     /// Return the proof when this attestation is proof based.
     #[must_use]
     pub const fn proof(&self) -> Option<&ProofBox> {
@@ -278,7 +255,6 @@ impl RamLfeReceiptAttestation {
         }
     }
 }
-
 /// Self-contained generic RAM-LFE execution receipt.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -291,7 +267,6 @@ pub struct RamLfeExecutionReceipt {
     /// Explicit receipt attestation.
     pub attestation: RamLfeReceiptAttestation,
 }
-
 impl RamLfeExecutionReceipt {
     /// Encode the canonical attested payload bytes.
     ///
@@ -300,7 +275,6 @@ impl RamLfeExecutionReceipt {
     pub fn payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
         self.payload.to_bytes()
     }
-
     /// Verify the signature over the payload.
     ///
     /// # Errors
@@ -315,7 +289,6 @@ impl RamLfeExecutionReceipt {
             .verify(public_key, &self.payload)
     }
 }
-
 /// Prelude exports for RAM-LFE program-policy consumers.
 pub mod prelude {
     pub use super::{
@@ -324,13 +297,10 @@ pub mod prelude {
         RamLfeProgramPolicy, RamLfeReceiptAttestation,
     };
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair, RamLfeBackend, RamLfeVerificationMode};
-
     use super::*;
-
     const NONCANONICAL_ED25519_R: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -340,28 +310,23 @@ mod tests {
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked RAM-LFE fixture keypair")
     }
-
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
             panic!("{algorithm:?} RAM-LFE fixture key generation should succeed: {err}")
         })
     }
-
     fn checked_ed25519_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked RAM-LFE Ed25519 fixture keypair")
     }
-
     fn with_malformed_ed25519_r(signature: &Signature, replacement_r: &[u8; 32]) -> Signature {
         let mut bytes = signature.payload().to_vec();
         bytes[..replacement_r.len()].copy_from_slice(replacement_r);
         Signature::from_bytes(&bytes)
     }
-
     fn receipt_payload() -> RamLfeExecutionReceiptPayload {
         RamLfeExecutionReceiptPayload {
             program_id: "email_retail".parse().expect("valid program id"),
@@ -378,7 +343,6 @@ mod tests {
             expires_at_ms: Some(1_777_777_877_000),
         }
     }
-
     fn signed_receipt(
         signer: &KeyPair,
         payload: RamLfeExecutionReceiptPayload,
@@ -393,7 +357,6 @@ mod tests {
             payload,
         }
     }
-
     fn opening_payload() -> RamLfeOutputOpeningPayload {
         RamLfeOutputOpeningPayload {
             program_id: "email_retail".parse().expect("valid program id"),
@@ -406,7 +369,6 @@ mod tests {
             expires_at_ms: Some(1_777_777_877_000),
         }
     }
-
     fn signed_opening(
         signer: &KeyPair,
         payload: RamLfeOutputOpeningPayload,
@@ -421,17 +383,14 @@ mod tests {
             payload,
         }
     }
-
     #[test]
     fn signed_receipt_verifies_only_signed_attestation() {
         let signer = checked_random_keypair();
         let receipt = signed_receipt(&signer, receipt_payload());
-
         receipt
             .verify_signature(signer.public_key())
             .expect("signed attestation should verify");
     }
-
     #[test]
     fn receipt_payload_identity_ignores_ambient_norito_layout() {
         let payload = receipt_payload();
@@ -462,18 +421,15 @@ mod tests {
             canonical_hash
         );
     }
-
     #[test]
     fn signed_receipt_rejects_wrong_key_and_proof_attestation() {
         let signer = checked_random_keypair();
         let wrong_signer = checked_random_keypair();
         let payload = receipt_payload();
         let receipt = signed_receipt(&signer, payload.clone());
-
         receipt
             .verify_signature(wrong_signer.public_key())
             .expect_err("receipt signatures must reject unrelated verifier keys");
-
         let proof_receipt = RamLfeExecutionReceipt {
             payload,
             attestation: RamLfeReceiptAttestation::Proof(crate::proof::ProofBox::new(
@@ -485,13 +441,11 @@ mod tests {
             .verify_signature(signer.public_key())
             .expect_err("signature verification must reject proof attestations");
     }
-
     #[test]
     fn signed_receipt_rejects_all_zero_signature_material() {
         let signer = checked_random_keypair();
         let mut receipt = signed_receipt(&signer, receipt_payload());
         receipt.attestation = RamLfeReceiptAttestation::Signed(Signature::from_bytes(&[0u8; 64]));
-
         assert_eq!(
             receipt
                 .verify_signature(signer.public_key())
@@ -499,13 +453,11 @@ mod tests {
             iroha_crypto::Error::BadSignature
         );
     }
-
     #[test]
     fn signed_receipt_rejects_short_signature_material() {
         let signer = checked_ed25519_keypair(0x33);
         let mut receipt = signed_receipt(&signer, receipt_payload());
         receipt.attestation = RamLfeReceiptAttestation::Signed(Signature::from_bytes(&[0x44; 63]));
-
         assert_eq!(
             receipt
                 .verify_signature(signer.public_key())
@@ -513,7 +465,6 @@ mod tests {
             iroha_crypto::Error::BadSignature
         );
     }
-
     #[test]
     fn signed_receipt_rejects_malformed_ed25519_signature_r() {
         let signer = checked_ed25519_keypair(0x31);
@@ -530,7 +481,6 @@ mod tests {
                 signature,
                 &replacement_r,
             ));
-
             assert_eq!(
                 receipt.verify_signature(signer.public_key()).unwrap_err(),
                 iroha_crypto::Error::BadSignature,
@@ -538,7 +488,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn signed_receipt_rejects_malformed_mldsa_signature_lengths() {
         let signer = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
@@ -552,7 +501,6 @@ mod tests {
             .expect("signed fixture carries a signature")
             .payload()
             .to_vec();
-
         for (label, replacement_signature) in [
             (
                 "short",
@@ -567,7 +515,6 @@ mod tests {
             let mut invalid_receipt = receipt.clone();
             invalid_receipt.attestation =
                 RamLfeReceiptAttestation::Signed(Signature::from_bytes(&replacement_signature));
-
             assert_eq!(
                 invalid_receipt
                     .verify_signature(signer.public_key())
@@ -577,18 +524,15 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn signed_receipt_rejects_tampered_ciphertext_binding() {
         let signer = checked_random_keypair();
         let mut receipt = signed_receipt(&signer, receipt_payload());
         receipt.payload.output_ciphertext_hash = Hash::new(b"tampered-output-ciphertext");
-
         receipt
             .verify_signature(signer.public_key())
             .expect_err("mutating ciphertext-bound receipt fields must invalidate signature");
     }
-
     #[test]
     fn signed_receipt_rejects_mutation_of_security_bindings() {
         macro_rules! assert_rejected {
@@ -604,7 +548,6 @@ mod tests {
                 );
             }};
         }
-
         assert_rejected!("program_id", |payload| {
             payload.program_id = "email_other".parse().expect("valid program id");
         });
@@ -642,29 +585,24 @@ mod tests {
             payload.expires_at_ms = None;
         });
     }
-
     #[test]
     fn output_opening_rejects_wrong_key_and_tampered_payload() {
         let signer = checked_random_keypair();
         let wrong_signer = checked_random_keypair();
         let mut opening = signed_opening(&signer, opening_payload());
-
         opening
             .verify_signature(wrong_signer.public_key())
             .expect_err("output openings must reject unrelated verifier keys");
-
         opening.payload.opened_output_hash = Hash::new(b"tampered-opened-output");
         opening
             .verify_signature(signer.public_key())
             .expect_err("mutating opened output binding must invalidate opening signature");
     }
-
     #[test]
     fn output_opening_rejects_all_zero_signature_material() {
         let signer = checked_random_keypair();
         let mut opening = signed_opening(&signer, opening_payload());
         opening.signature = Signature::from_bytes(&[0u8; 64]);
-
         assert_eq!(
             opening
                 .verify_signature(signer.public_key())
@@ -672,13 +610,11 @@ mod tests {
             iroha_crypto::Error::BadSignature
         );
     }
-
     #[test]
     fn output_opening_rejects_short_signature_material() {
         let signer = checked_ed25519_keypair(0x34);
         let mut opening = signed_opening(&signer, opening_payload());
         opening.signature = Signature::from_bytes(&[0x55; 63]);
-
         assert_eq!(
             opening
                 .verify_signature(signer.public_key())
@@ -686,7 +622,6 @@ mod tests {
             iroha_crypto::Error::BadSignature
         );
     }
-
     #[test]
     fn output_opening_rejects_malformed_ed25519_signature_r() {
         let signer = checked_ed25519_keypair(0x32);
@@ -696,7 +631,6 @@ mod tests {
         ] {
             let mut opening = signed_opening(&signer, opening_payload());
             opening.signature = with_malformed_ed25519_r(&opening.signature, &replacement_r);
-
             assert_eq!(
                 opening.verify_signature(signer.public_key()).unwrap_err(),
                 iroha_crypto::Error::BadSignature,
@@ -704,7 +638,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn output_opening_rejects_malformed_mldsa_signature_lengths() {
         let signer = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
@@ -713,7 +646,6 @@ mod tests {
             .verify_signature(signer.public_key())
             .expect("valid ML-DSA RAM-LFE opening signature verifies");
         let valid_signature = opening.signature.payload().to_vec();
-
         for (label, replacement_signature) in [
             (
                 "short",
@@ -727,7 +659,6 @@ mod tests {
         ] {
             let mut invalid_opening = opening.clone();
             invalid_opening.signature = Signature::from_bytes(&replacement_signature);
-
             assert_eq!(
                 invalid_opening
                     .verify_signature(signer.public_key())
@@ -737,7 +668,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn output_opening_rejects_mutation_of_security_bindings() {
         macro_rules! assert_rejected {
@@ -753,7 +683,6 @@ mod tests {
                 );
             }};
         }
-
         assert_rejected!("program_id", |payload| {
             payload.program_id = "email_other".parse().expect("valid program id");
         });

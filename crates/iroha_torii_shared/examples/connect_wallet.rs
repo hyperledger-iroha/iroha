@@ -10,7 +10,6 @@
 //! Supply the signing seed at runtime through
 //! `IROHA_CONNECT_ACCOUNT_SEED_HEX=<32-byte-ed25519-seed>`; never persist it in
 //! source, shell history, or a checked-in configuration file.
-
 #[cfg(feature = "connect")]
 use anyhow::Context;
 #[cfg(feature = "connect")]
@@ -35,11 +34,9 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 #[cfg(feature = "connect")]
 use tokio_tungstenite::tungstenite::{Bytes, Message};
-
 #[cfg(feature = "connect")]
 type WalletWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-
 #[cfg(feature = "connect")]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -65,7 +62,6 @@ async fn main() -> anyhow::Result<()> {
     if let Some(other) = args.next() {
         anyhow::bail!("unexpected trailing argument `{other}`");
     }
-
     let sid = decode_canonical_base64url::<32>(&sid_b64, "sid")?;
     let app_pk_bytes = decode_canonical_base64url::<32>(&app_pk_b64, "app_pk")?;
     let nonce = decode_canonical_base64url::<16>(&nonce_b64, "nonce")?;
@@ -83,7 +79,6 @@ async fn main() -> anyhow::Result<()> {
     }
     let account_key_pair = KeyPair::try_from_seed(account_seed, Algorithm::Ed25519)?;
     let account_id = AccountId::new(account_key_pair.public_key().clone()).to_string();
-
     // Connect WS as wallet
     let ws_url = format!(
         "{}/v1/connect/ws?sid={}&role=wallet",
@@ -96,7 +91,6 @@ async fn main() -> anyhow::Result<()> {
         .insert(AUTHORIZATION, format!("Bearer {token}").parse()?);
     let (mut ws, _resp) = tokio_tungstenite::connect_async(request).await?;
     eprintln!("wallet: connected WS");
-
     let open_message = ws.next().await.context("Open frame")??;
     let Message::Binary(open_bytes) = open_message else {
         anyhow::bail!("expected binary Open frame");
@@ -118,7 +112,6 @@ async fn main() -> anyhow::Result<()> {
     if app_pk != app_pk_bytes || constraints.network_id != network_id {
         anyhow::bail!("Open does not match the canonical invite identity");
     }
-
     let x = X25519Sha256::new();
     let (wallet_pk, wallet_sk) = x.try_keypair(KeyGenOption::Random)?;
     let wallet_pk_bytes: [u8; 32] = *wallet_pk.as_bytes();
@@ -150,10 +143,8 @@ async fn main() -> anyhow::Result<()> {
     };
     ws.send(Message::Binary(Bytes::from(approval.encode())))
         .await?;
-
     let (k_app, k_wallet) = sdk::x25519_derive_keys(&wallet_sk.to_bytes(), &app_pk_bytes, &sid)
         .expect("x25519 derive keys");
-
     // Read one frame (expect SignRequestTx/Raw)
     let msg = ws.next().await.context("ws recv")??;
     let Message::Binary(bin) = msg else {
@@ -171,7 +162,6 @@ async fn main() -> anyhow::Result<()> {
         _ => anyhow::bail!("expected ciphertext"),
     };
     log_wallet_payload(&env);
-
     send_wallet_action(
         &mut ws,
         &k_wallet,
@@ -183,7 +173,6 @@ async fn main() -> anyhow::Result<()> {
     .await?;
     Ok(())
 }
-
 #[cfg(feature = "connect")]
 fn decode_canonical_base64url<const N: usize>(value: &str, field: &str) -> anyhow::Result<[u8; N]> {
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -196,7 +185,6 @@ fn decode_canonical_base64url<const N: usize>(value: &str, field: &str) -> anyho
         .try_into()
         .map_err(|_| anyhow::anyhow!("{field} must decode to exactly {N} bytes"))
 }
-
 #[cfg(feature = "connect")]
 fn required_arg(
     args: &mut impl Iterator<Item = String>,
@@ -211,13 +199,11 @@ fn required_arg(
     args.next()
         .ok_or_else(|| anyhow::anyhow!("{expected_flag} requires a value"))
 }
-
 // Fallback stub when `tokio-tungstenite` `connect` feature is not enabled.
 #[cfg(not(feature = "connect"))]
 fn main() {
     eprintln!("connect_wallet example requires `tokio-tungstenite` with `connect` feature");
 }
-
 #[cfg(feature = "connect")]
 fn log_wallet_payload(env: &proto::EnvelopeV1) {
     match &env.payload {
@@ -262,7 +248,6 @@ fn log_wallet_payload(env: &proto::EnvelopeV1) {
         }
     }
 }
-
 #[cfg(feature = "connect")]
 async fn send_wallet_action(
     ws: &mut WalletWebSocket,
@@ -290,7 +275,6 @@ async fn send_wallet_action(
             ws.send(Message::Binary(Bytes::from(frame.encode())))
                 .await?;
             eprintln!("wallet: sent SignResultOk");
-
             let close = sdk::encrypt_close_current(
                 k_wallet,
                 sid,

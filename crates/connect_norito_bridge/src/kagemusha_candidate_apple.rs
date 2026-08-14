@@ -4,7 +4,6 @@
 //! boundaries used by the Android lab.  The checkpoint contains public proof
 //! results only; note openings remain in the owner-private staged scenario and
 //! are decoded again after the XCTest process restart.
-
 use std::{
     collections::BTreeMap,
     ffi::OsStr,
@@ -15,11 +14,9 @@ use std::{
     ptr, slice,
     time::Instant,
 };
-
 use libc::{c_int, c_uchar, c_ulong};
 use norito::json::{Map as JsonMap, Value as JsonValue};
 use sha2::{Digest as _, Sha256};
-
 use super::{
     BridgeError, BridgeResult, KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
     KagemushaNoteOpeningV2, KagemushaOutputMembershipPathsV4,
@@ -39,13 +36,11 @@ use super::{
     require_kagemusha_candidate_evidence_lab_installed_v4,
     validate_kagemusha_recursive_spend_branch_against_installed_v4, write_kagemusha_archive_bridge,
 };
-
 use super::kagemusha_candidate_scenario::{
     bytes as scenario_bytes, digest32 as scenario_digest32, load_scenario, positive_decimal,
     read_private_regular, scenario_inventory_sha256,
     validate_kagemusha_candidate_scenario_directory_v1,
 };
-
 const APPLE_CHECKPOINT_SCHEMA: &str = "iroha.kagemusha.ios_candidate_lab.checkpoint.v1";
 const APPLE_TRANSCRIPT_SCHEMA: &str = "iroha.kagemusha.ios_device_lab.native_transcript.v1";
 const APPLE_CHECKPOINT_VERSION: u16 = 1;
@@ -56,7 +51,6 @@ const TAIRA_I105_CHAIN_DISCRIMINANT: u16 = 369;
 const ARTIFACT_STREAM_BYTES: usize = 1024 * 1024;
 const APPLE_RESOURCE_CEILING_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 const EXPECTED_DUPLICATE_REJECTION_CODE: c_int = -311;
-
 #[derive(Clone, Debug, norito::Encode, norito::Decode)]
 struct AppleCandidateCheckpointV1 {
     schema: String,
@@ -86,21 +80,17 @@ struct AppleCandidateCheckpointV1 {
     split_hop_01_result: Vec<u8>,
     split_hop_02_result: Vec<u8>,
 }
-
 fn fail<T>() -> BridgeResult<T> {
     Err(BridgeError::KagemushaProve)
 }
-
 fn checked_duration_ns(started: Instant) -> BridgeResult<u64> {
     u64::try_from(started.elapsed().as_nanos()).map_err(|_| BridgeError::KagemushaProve)
 }
-
 fn timed<T>(work: impl FnOnce() -> BridgeResult<T>) -> BridgeResult<(T, u64)> {
     let started = Instant::now();
     let value = work()?;
     Ok((value, checked_duration_ns(started)?))
 }
-
 fn peak_rss_bytes() -> BridgeResult<u64> {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
     if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
@@ -117,7 +107,6 @@ fn peak_rss_bytes() -> BridgeResult<u64> {
         raw.checked_mul(1024).ok_or(BridgeError::KagemushaProve)
     }
 }
-
 unsafe fn bounded_path(ptr_: *const c_uchar, len: c_ulong) -> BridgeResult<PathBuf> {
     let len = usize::try_from(len).map_err(|_| BridgeError::KagemushaProve)?;
     if ptr_.is_null() || len == 0 || len > MAX_PATH_BYTES {
@@ -134,7 +123,6 @@ unsafe fn bounded_path(ptr_: *const c_uchar, len: c_ulong) -> BridgeResult<PathB
     }
     Ok(path)
 }
-
 unsafe fn nonce32(ptr_: *const c_uchar, len: c_ulong) -> BridgeResult<[u8; 32]> {
     if ptr_.is_null() || len != 32 {
         return fail();
@@ -147,7 +135,6 @@ unsafe fn nonce32(ptr_: *const c_uchar, len: c_ulong) -> BridgeResult<[u8; 32]> 
     }
     Ok(nonce)
 }
-
 fn decode<T>(payload: &[u8]) -> BridgeResult<T>
 where
     T: norito::NoritoSerialize,
@@ -155,11 +142,9 @@ where
 {
     decode_canonical_kagemusha_archive(payload)
 }
-
 fn encode<T: norito::NoritoSerialize>(value: &T) -> BridgeResult<Vec<u8>> {
     norito::to_bytes(value).map_err(|_| BridgeError::KagemushaProve)
 }
-
 fn take_ffi_archive<T>(code: c_int, ptr_: *mut c_uchar, len: c_ulong) -> BridgeResult<T>
 where
     T: norito::NoritoSerialize,
@@ -176,7 +161,6 @@ where
     connect_norito_free(ptr_);
     decode(&archive)
 }
-
 fn call_init(
     local: &KagemushaRecursiveSpendInitLocalRequestV4,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendInitResultV4> {
@@ -193,7 +177,6 @@ fn call_init(
     };
     take_ffi_archive(code, output, output_len)
 }
-
 fn call_append(
     local: &KagemushaRecursiveSpendAppendLocalRequestV4,
     recipient: &iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
@@ -216,7 +199,6 @@ fn call_append(
     };
     take_ffi_archive(code, output, output_len)
 }
-
 fn call_verify(
     local: &KagemushaRecursiveSpendVerifyLocalRequestV4,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV4> {
@@ -233,7 +215,6 @@ fn call_verify(
     };
     take_ffi_archive(code, output, output_len)
 }
-
 fn call_redeem(
     local: &KagemushaRecursiveSpendRedeemLocalRequestV4,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV4> {
@@ -250,7 +231,6 @@ fn call_redeem(
     };
     take_ffi_archive(code, output, output_len)
 }
-
 fn file_identity(metadata: &std::fs::Metadata) -> (u64, u64, u32, u64, u64, i64, i64) {
     (
         metadata.dev(),
@@ -262,7 +242,6 @@ fn file_identity(metadata: &std::fs::Metadata) -> (u64, u64, u32, u64, u64, i64,
         metadata.mtime_nsec(),
     )
 }
-
 fn open_exact_artifact(path: &Path, expected_size: u64) -> BridgeResult<File> {
     let before = std::fs::symlink_metadata(path).map_err(|_| BridgeError::KagemushaProve)?;
     if !before.file_type().is_file()
@@ -287,13 +266,11 @@ fn open_exact_artifact(path: &Path, expected_size: u64) -> BridgeResult<File> {
     }
     Ok(file)
 }
-
 fn cancel_candidate_handles(handles: &[u64]) {
     for handle in handles {
         let _ = connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_cancel_v4(*handle);
     }
 }
-
 fn install_candidate_from_directory(
     candidate_path: &Path,
     artifact_root: &Path,
@@ -423,7 +400,6 @@ fn install_candidate_from_directory(
     result?;
     checked_duration_ns(started)
 }
-
 fn candidate_context(
     candidate_path: &Path,
     roster_path: &Path,
@@ -470,7 +446,6 @@ fn candidate_context(
     let accepted = encode(&installed.accepted_identity)?;
     Ok((candidate, files, inventory, accepted))
 }
-
 fn append_local(
     bundle: iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
     provenance: iroha_data_model::offline::KagemushaRecursiveSpendTopUpProvenanceV4,
@@ -505,7 +480,6 @@ fn append_local(
         output_membership,
     }
 }
-
 fn proof_phase(
     candidate_path: &Path,
     roster_path: &Path,
@@ -548,7 +522,6 @@ fn proof_phase(
     let (init, init_duration_ns) = timed(|| call_init(&init_local))?;
     init.validate_for_request(&init_local.request)
         .map_err(|_| BridgeError::KagemushaProve)?;
-
     let transfer_commitment = scenario_digest32(&files, "transfer-verifier-commitment-v2.bin")
         .map_err(|_| BridgeError::KagemushaProve)?;
     let request_one: iroha_data_model::offline::KagemushaRecipientPaymentRequestV2 = decode(
@@ -610,7 +583,6 @@ fn proof_phase(
     {
         return fail();
     }
-
     let request_two: iroha_data_model::offline::KagemushaRecipientPaymentRequestV2 = decode(
         scenario_bytes(&files, "append-hop-02-recipient-request-v2.norito")
             .map_err(|_| BridgeError::KagemushaProve)?,
@@ -726,13 +698,11 @@ fn proof_phase(
     }
     Ok(archive)
 }
-
 struct Branch<'a> {
     bundle: &'a iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
     provenance: &'a iroha_data_model::offline::KagemushaRecursiveSpendTopUpProvenanceV4,
     witness: &'a iroha_data_model::offline::KagemushaNoteMembershipWitnessV2,
 }
-
 fn verify_request(
     branch: &Branch<'_>,
     request: iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
@@ -752,7 +722,6 @@ fn verify_request(
         },
     }
 }
-
 fn redeem_request(
     branch: &Branch<'_>,
     opening: KagemushaNoteOpeningV2,
@@ -780,7 +749,6 @@ fn redeem_request(
         change_output_membership: None,
     }
 }
-
 fn archive_pair(first: &[u8], second: &[u8]) -> BridgeResult<Vec<u8>> {
     let first_len = u64::try_from(first.len()).map_err(|_| BridgeError::KagemushaProve)?;
     let second_len = u64::try_from(second.len()).map_err(|_| BridgeError::KagemushaProve)?;
@@ -795,22 +763,18 @@ fn archive_pair(first: &[u8], second: &[u8]) -> BridgeResult<Vec<u8>> {
     output.extend_from_slice(second);
     Ok(output)
 }
-
 fn json_string(map: JsonMap) -> BridgeResult<Vec<u8>> {
     let mut output =
         norito::json::to_vec(&JsonValue::Object(map)).map_err(|_| BridgeError::KagemushaProve)?;
     output.push(b'\n');
     Ok(output)
 }
-
 fn insert_digest(map: &mut JsonMap, key: &str, digest: [u8; 32]) {
     map.insert(key.to_owned(), JsonValue::from(hex::encode(digest)));
 }
-
 fn insert_u64(map: &mut JsonMap, key: &str, value: u64) {
     map.insert(key.to_owned(), JsonValue::from(value));
 }
-
 fn causal_event(
     sequence: u64,
     phase: &str,
@@ -860,7 +824,6 @@ fn causal_event(
     );
     JsonValue::Object(event)
 }
-
 fn restart_phase(
     candidate_path: &Path,
     roster_path: &Path,
@@ -1037,7 +1000,6 @@ fn restart_phase(
         )
         .map(|_| ())
     })?;
-
     let request_one: iroha_data_model::offline::KagemushaRecipientPaymentRequestV2 = decode(
         scenario_bytes(&files, "append-hop-01-recipient-request-v2.norito")
             .map_err(|_| BridgeError::KagemushaProve)?,
@@ -1081,7 +1043,6 @@ fn restart_phase(
     {
         return fail();
     }
-
     let mut duplicate = KagemushaRecursiveSpendAppendLocalRequestV4 {
         version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
         previous_inputs: vec![
@@ -1156,7 +1117,6 @@ fn restart_phase(
     {
         return fail();
     }
-
     let recipient_text = scenario_bytes(&files, "redeem-recipient-account-id.txt")
         .map_err(|_| BridgeError::KagemushaProve)?
         .strip_suffix(b"\n")
@@ -1231,7 +1191,6 @@ fn restart_phase(
     if redeemed_atomic_units != init.bundle.statement.current_note.amount.atomic_units {
         return fail();
     }
-
     let restart_peak_rss_bytes = peak_rss_bytes()?;
     if restart_peak_rss_bytes == 0 || restart_peak_rss_bytes > APPLE_RESOURCE_CEILING_BYTES {
         return fail();
@@ -1263,7 +1222,6 @@ fn restart_phase(
             return fail();
         }
     }
-
     let initial_atomic_units = init.bundle.statement.current_note.amount.atomic_units;
     let first_recipient_atomic_units = recipient_one
         .bundle
@@ -1291,7 +1249,6 @@ fn restart_phase(
     {
         return fail();
     }
-
     let candidate_record_bytes = read_private_regular(candidate_path, MAX_CANDIDATE_BYTES)
         .map_err(|_| BridgeError::KagemushaProve)?;
     let append_hop_01_request_pair = archive_pair(
@@ -1313,7 +1270,6 @@ fn restart_phase(
     let recipient_two_bundle_archive = encode(recipient_two.bundle)?;
     let final_change_bundle_archive = encode(final_change.bundle)?;
     let duplicate_code_bytes = duplicate_code.to_le_bytes();
-
     let causal_events = vec![
         causal_event(
             1,
@@ -1571,7 +1527,6 @@ fn restart_phase(
     if causal_events.len() != 28 {
         return fail();
     }
-
     let artifact_inventory = accepted
         .artifacts
         .iter()
@@ -1589,7 +1544,6 @@ fn restart_phase(
             JsonValue::Object(entry)
         })
         .collect::<Vec<_>>();
-
     let mut transcript = BTreeMap::new();
     transcript.insert(
         "schema".to_owned(),
@@ -1809,7 +1763,6 @@ fn restart_phase(
     transcript.insert("causal_events".to_owned(), JsonValue::Array(causal_events));
     json_string(transcript)
 }
-
 /// Physical-iOS implementation behind the feature- and target-guarded C ABI.
 pub(crate) unsafe fn proof_phase_bridge_v1(
     candidate_path_ptr: *const c_uchar,
@@ -1840,7 +1793,6 @@ pub(crate) unsafe fn proof_phase_bridge_v1(
     })();
     result.map_or_else(|error| error.code(), |()| 0)
 }
-
 /// Physical-iOS restart implementation behind the guarded C ABI.
 pub(crate) unsafe fn restart_phase_bridge_v1(
     candidate_path_ptr: *const c_uchar,

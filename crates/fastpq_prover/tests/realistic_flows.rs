@@ -1,5 +1,4 @@
 //! FASTPQ proof smoke tests covering realistic governance and remittance scenarios.
-
 use fastpq_prover::{
     OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch,
     gadgets::transfer::attach_transfer_smt_witnesses, verify,
@@ -13,7 +12,6 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use norito::to_bytes;
-
 fn annotate_inputs(batch: &mut TransitionBatch, slot: u64) {
     batch.public_inputs.dsid = [0x3D; 16];
     batch.public_inputs.slot = slot;
@@ -22,11 +20,9 @@ fn annotate_inputs(batch: &mut TransitionBatch, slot: u64) {
     batch.public_inputs.perm_root = [0x33; 32];
     batch.public_inputs.tx_set_hash = [0x44; 32];
 }
-
 fn encode_u64(value: u64) -> Vec<u8> {
     value.to_le_bytes().to_vec()
 }
-
 fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
     let seed: [u8; Hash::LENGTH] = Hash::new(format!("{label}@{domain}")).into();
     let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::default())
@@ -34,11 +30,9 @@ fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
     let _ = domain;
     AccountId::new(keypair.public_key().clone())
 }
-
 fn governance_batch() -> TransitionBatch {
     let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
     annotate_inputs(&mut batch, 7);
-
     batch.push(StateTransition::new(
         b"role/council@governance/permission/vote.sora".to_vec(),
         encode_u64(0),
@@ -49,18 +43,15 @@ fn governance_batch() -> TransitionBatch {
             epoch: 42,
         },
     ));
-
     batch.push(StateTransition::new(
         b"account/governance.ballot@governance/metadata/ballot_2025_02".to_vec(),
         vec![],
         vec![1],
         OperationKind::MetaSet,
     ));
-
     batch.sort();
     batch
 }
-
 fn remittance_batch() -> TransitionBatch {
     const REMIT_AMOUNT: u64 = 75_000;
     const ALICE_START: u64 = 500_000;
@@ -74,7 +65,6 @@ fn remittance_batch() -> TransitionBatch {
     );
     let from_account = deterministic_account("alice", &domain);
     let to_account = deterministic_account("bob", &domain);
-
     batch.push(StateTransition::new(
         format!("asset/{asset_definition}/{from_account}").into_bytes(),
         encode_u64(ALICE_START),
@@ -87,7 +77,6 @@ fn remittance_batch() -> TransitionBatch {
         encode_u64(BOB_START + REMIT_AMOUNT),
         OperationKind::Transfer,
     ));
-
     let mut transcripts = vec![remittance_transcript(
         &asset_definition,
         &from_account,
@@ -104,11 +93,9 @@ fn remittance_batch() -> TransitionBatch {
         TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
         to_bytes(&transcripts).expect("encode transcripts"),
     );
-
     batch.sort();
     batch
 }
-
 fn combined_batch() -> TransitionBatch {
     let mut governance = governance_batch();
     let mut remit = remittance_batch();
@@ -119,29 +106,24 @@ fn combined_batch() -> TransitionBatch {
     governance.sort();
     governance
 }
-
 fn prove_and_verify(mut batch: TransitionBatch) {
     batch.sort();
     let prover = Prover::canonical("fastpq-lane-balanced").expect("canonical prover");
     let proof = prover.prove(&batch).expect("FASTPQ proof");
     verify(&batch, &proof).expect("FASTPQ verification");
 }
-
 #[test]
 fn governance_flow_proof_verifies() {
     prove_and_verify(governance_batch());
 }
-
 #[test]
 fn remittance_flow_proof_verifies() {
     prove_and_verify(remittance_batch());
 }
-
 #[test]
 fn governance_and_remittance_combined_proof_verifies() {
     prove_and_verify(combined_batch());
 }
-
 fn remittance_transcript(
     asset_definition: &AssetDefinitionId,
     from_account: &AccountId,

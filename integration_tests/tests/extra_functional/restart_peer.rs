@@ -7,7 +7,6 @@ use std::{
     path::Path,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::crypto::{Hash, Signature};
@@ -62,7 +61,6 @@ use tokio::{
     time::{sleep, timeout},
 };
 use toml::Table;
-
 const PRIVATE_MODEL_SERVICE_NAME: &str = "portal";
 const PRIVATE_MODEL_SERVICE_VERSION: &str = "1.0.0";
 const PRIVATE_MODEL_ID: &str = "vision_model";
@@ -71,7 +69,6 @@ const PRIVATE_MODEL_WEIGHT_VERSION: &str = "v1";
 const PRIVATE_MODEL_ARTIFACT_ID: &str = "vision_model_artifact";
 const PRIVATE_MODEL_DATASET_REF: &str = "sorafs://private-upload-fixture";
 const PRIVATE_MODEL_POLICY_ID: &str = "policy-private-release";
-
 #[derive(Clone, Debug, iroha::data_model::JsonSerialize)]
 struct PrivateUploadedModelQuantizedCpuModelDtoForTest {
     input_len: u64,
@@ -82,7 +79,6 @@ struct PrivateUploadedModelQuantizedCpuModelDtoForTest {
     output_min: i32,
     output_max: i32,
 }
-
 #[derive(Clone, Debug, iroha::data_model::JsonSerialize)]
 struct PrivateUploadedModelExecuteRequestForTest {
     service_name: String,
@@ -98,14 +94,12 @@ struct PrivateUploadedModelExecuteRequestForTest {
     output_artifact: SoraPrivateModelArtifactRefV1,
     emitted_sequence: u64,
 }
-
 fn with_soracloud_private_runtime_bootstrap(mut builder: NetworkBuilder) -> NetworkBuilder {
     for instruction in sorafs_pin_fee_bootstrap_instructions() {
         builder = builder.with_genesis_instruction(instruction);
     }
     builder
 }
-
 fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
     let fee_asset_id: AssetDefinitionId =
         iroha_config::parameters::defaults::governance::sorafs_pin_fee::asset_id()
@@ -120,14 +114,12 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
         None,
     );
     let seed_amount = Quantity::from(10_000_000_000_000_u128);
-
     vec![
         Register::account(Account::new(treasury)).into(),
         Register::asset_definition(fee_definition).into(),
         Mint::asset_quantity(seed_amount, AssetId::new(fee_asset_id, ALICE_ID.clone())).into(),
     ]
 }
-
 fn register_private_model_pin(
     content_length: u64,
     chunk_seed: u8,
@@ -154,7 +146,6 @@ fn register_private_model_pin(
     let instruction = RegisterPinManifest::new(manifest.encode()?, None, None);
     Ok((digest, instruction))
 }
-
 fn soracloud_private_model_service_bundle() -> SoraDeploymentBundleV1 {
     let mut container = SoraContainerManifestV1 {
         schema_version: SORA_CONTAINER_MANIFEST_VERSION_V1,
@@ -194,7 +185,6 @@ fn soracloud_private_model_service_bundle() -> SoraDeploymentBundleV1 {
     };
     let container_manifest_hash = Hash::new(iroha::data_model::Encode::encode(&container));
     container.capabilities.allow_model_inference = true;
-
     SoraDeploymentBundleV1 {
         schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
         container,
@@ -253,7 +243,6 @@ fn soracloud_private_model_service_bundle() -> SoraDeploymentBundleV1 {
         },
     }
 }
-
 fn soracloud_service_bundle_provenance(
     bundle: &SoraDeploymentBundleV1,
 ) -> Result<ManifestProvenance> {
@@ -267,7 +256,6 @@ fn soracloud_service_bundle_provenance(
         signature: Signature::try_new(ALICE_KEYPAIR.private_key(), &payload)?,
     })
 }
-
 fn private_uploaded_model_bundle(model_digest: ManifestDigest) -> SoraUploadedModelBundleV1 {
     SoraUploadedModelBundleV1 {
         schema_version: SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
@@ -313,7 +301,6 @@ fn private_uploaded_model_bundle(model_digest: ManifestDigest) -> SoraUploadedMo
         decryption_policy_ref: PRIVATE_MODEL_POLICY_ID.to_owned(),
     }
 }
-
 fn uploaded_model_bundle_provenance(
     bundle: &SoraUploadedModelBundleV1,
 ) -> Result<ManifestProvenance> {
@@ -323,7 +310,6 @@ fn uploaded_model_bundle_provenance(
         signature: Signature::try_new(ALICE_KEYPAIR.private_key(), &payload)?,
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 fn uploaded_model_finalize_provenance(
     service_name: &iroha::data_model::name::Name,
@@ -356,7 +342,6 @@ fn uploaded_model_finalize_provenance(
         signature: Signature::try_new(ALICE_KEYPAIR.private_key(), &payload)?,
     })
 }
-
 fn private_model_artifact_ref(
     role: &str,
     manifest_digest: ManifestDigest,
@@ -371,7 +356,6 @@ fn private_model_artifact_ref(
         artifact_role: role.to_owned(),
     }
 }
-
 fn private_uploaded_model_execute_request(
     bundle: &SoraUploadedModelBundleV1,
     input_artifact: SoraPrivateModelArtifactRefV1,
@@ -400,7 +384,6 @@ fn private_uploaded_model_execute_request(
         emitted_sequence: 17,
     }
 }
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn restarted_peer_should_restore_its_state() -> Result<()> {
@@ -409,7 +392,6 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
         "xor".parse()?,
     );
     let quantity = Quantity::from(200_u32);
-
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
             .with_peers(4)
@@ -425,7 +407,6 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
         return Ok(());
     };
     let peers = network.peers();
-
     // create state on the first peer
     let peer_a = &peers[0];
     let peer_b = &peers[1];
@@ -475,7 +456,6 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     {
         return Ok(());
     }
-
     // Ensure the mint made it into the chain before shutting down peers.
     let mint_deadline = Instant::now() + network.sync_timeout();
     let minted = loop {
@@ -489,7 +469,6 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
             stringify!(restarted_peer_should_restore_its_state),
         )?;
         let Some(assets) = assets else { return Ok(()) };
-
         if assets.iter().any(|asset| {
             *asset.id().account() == ALICE_ID.clone()
                 && *asset.id().definition() == asset_definition_id
@@ -497,14 +476,12 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
         }) {
             break true;
         }
-
         if Instant::now() >= mint_deadline {
             break false;
         }
         sleep(Duration::from_millis(200)).await;
     };
     assert!(minted, "minted asset not observed before restart");
-
     // Ensure a post-mint snapshot persists before shutdown so restart can rebuild from disk.
     let snapshot_dir = peer_b.kura_store_dir().join("snapshot");
     let snapshot_deadline = Instant::now() + network.sync_timeout();
@@ -538,10 +515,8 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     if !snapshot_ready {
         return Err(eyre!("snapshot not created before shutdown"));
     }
-
     // shutdown all
     network.shutdown().await;
-
     // restart another one, **without a genesis** even
     let config: Vec<_> = network.config_layers().collect();
     assert_ne!(peer_a, peer_b);
@@ -551,7 +526,6 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
         Ok::<(), eyre::Report>(())
     })
     .await;
-
     match start_result {
         Ok(Ok(())) => {}
         Ok(Err(err)) => {
@@ -572,7 +546,6 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
             return Err(err);
         }
     }
-
     // ensure it has the state
     let client = peer_b.client();
     let deadline = Instant::now() + network.sync_timeout();
@@ -604,10 +577,8 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
         return Err(eyre!("restarted peer did not restore asset before timeout"));
     };
     assert_eq!(quantity, restored_value);
-
     Ok(())
 }
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -> Result<()> {
@@ -632,7 +603,6 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     else {
         return Ok(());
     };
-
     let domain_id = DomainId::try_new("paynet", "universal")?;
     let asset_definition_id =
         AssetDefinitionId::derive_from_components(domain_id.clone(), "routecoin".parse()?);
@@ -644,7 +614,6 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     );
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let quantity = Quantity::from(321_u32);
-
     let client = network.client();
     let setup_domain = domain_setup_instruction(&domain_id, &client.account)?;
     let setup_alias = account_alias_setup_instruction(
@@ -684,11 +653,9 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     if sandbox::handle_result(submit_res, test_name)?.is_none() {
         return Ok(());
     }
-
     if sandbox::handle_result(network.ensure_blocks(2).await, test_name)?.is_none() {
         return Ok(());
     }
-
     let expected_digest = wait_for_route_sensitive_state_digest(
         client.clone(),
         account_id.clone(),
@@ -700,13 +667,10 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
         network.sync_timeout(),
     )
     .await?;
-
     network.shutdown().await;
-
     for peer in network.peers() {
         remove_optional_recovery_sidecars(&peer.kura_store_dir())?;
     }
-
     let config_layers: Vec<_> = network.config_layers().collect();
     for peer in network.peers() {
         timeout(network.peer_startup_timeout(), async {
@@ -717,7 +681,6 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
         .await
         .map_err(eyre::Report::new)??;
     }
-
     for peer in network.peers() {
         let digest = wait_for_route_sensitive_state_digest(
             peer.client(),
@@ -737,10 +700,8 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
             peer.id()
         );
     }
-
     Ok(())
 }
-
 async fn wait_for_route_sensitive_state_digest(
     client: Client,
     account_id: AccountId,
@@ -775,7 +736,6 @@ async fn wait_for_route_sensitive_state_digest(
     }
     Err(last_error)
 }
-
 async fn route_sensitive_state_digest(
     client: Client,
     account_id: AccountId,
@@ -800,11 +760,9 @@ async fn route_sensitive_state_digest(
                 quantity
             ));
         }
-
         let mut aliases =
             client.query_single(FindAliasesByAccountId::new(account_id.clone(), None, None))?;
         aliases.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
-
         let mut surface = Vec::new();
         surface.push(format!("account={}", account.id()));
         surface.push(format!("alias_account={}", alias_account.id()));
@@ -820,7 +778,6 @@ async fn route_sensitive_state_digest(
     .await
     .map_err(eyre::Report::from)?
 }
-
 fn remove_optional_recovery_sidecars(root: &Path) -> Result<()> {
     const SIDE_CAR_DIRS: [&str; 3] = ["snapshot", "wsv_checkpoints", "commit_manifests"];
     if !root.exists() {
@@ -844,7 +801,6 @@ fn remove_optional_recovery_sidecars(root: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 #[test]
 fn remove_optional_recovery_sidecars_preserves_non_sidecar_payloads() -> Result<()> {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
@@ -860,9 +816,7 @@ fn remove_optional_recovery_sidecars_preserves_non_sidecar_payloads() -> Result<
         std::fs::write(root.join("snapshot/stale"), b"optional")?;
         std::fs::write(root.join("wsv_checkpoints/stale"), b"optional")?;
         std::fs::write(root.join("nested/commit_manifests/stale"), b"optional")?;
-
         remove_optional_recovery_sidecars(&root)?;
-
         assert!(root.join("blocks/1/block.wire").exists());
         assert!(root.join("nested/retained/block.wire").exists());
         assert!(!root.join("snapshot").exists());
@@ -873,7 +827,6 @@ fn remove_optional_recovery_sidecars_preserves_non_sidecar_payloads() -> Result<
     let _ = std::fs::remove_dir_all(&root);
     result
 }
-
 #[test]
 fn remove_optional_recovery_sidecars_preserves_similarly_named_payload_dirs() -> Result<()> {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
@@ -887,9 +840,7 @@ fn remove_optional_recovery_sidecars_preserves_similarly_named_payload_dirs() ->
         std::fs::write(root.join("wsv_checkpoints.tmp/block.wire"), b"payload")?;
         std::fs::write(root.join("commit_manifests_old/block.wire"), b"payload")?;
         std::fs::write(root.join("nested/snapshot/stale"), b"optional")?;
-
         remove_optional_recovery_sidecars(&root)?;
-
         assert!(root.join("snapshot_backup/block.wire").exists());
         assert!(root.join("wsv_checkpoints.tmp/block.wire").exists());
         assert!(root.join("commit_manifests_old/block.wire").exists());
@@ -899,21 +850,18 @@ fn remove_optional_recovery_sidecars_preserves_similarly_named_payload_dirs() ->
     let _ = std::fs::remove_dir_all(&root);
     result
 }
-
 #[test]
 fn remove_optional_recovery_sidecars_ignores_missing_root() -> Result<()> {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     let root = std::env::temp_dir().join(format!("iroha_sidecar_prune_missing_{nanos}"));
     remove_optional_recovery_sidecars(&root)
 }
-
 fn signing_uri(url: &reqwest::Url) -> Result<Uri> {
     match url.query() {
         Some(query) => Ok(format!("{}?{query}", url.path()).parse()?),
         None => Ok(url.path().parse()?),
     }
 }
-
 #[test]
 fn signing_uri_binds_path_and_query_but_not_origin_or_fragment() -> Result<()> {
     let url = reqwest::Url::parse(
@@ -928,7 +876,6 @@ fn signing_uri_binds_path_and_query_but_not_origin_or_fragment() -> Result<()> {
     assert!(!uri.to_string().contains("ignored"));
     Ok(())
 }
-
 #[test]
 fn signing_uri_keeps_percent_encoded_path_and_query_boundaries() -> Result<()> {
     let url = reqwest::Url::parse(
@@ -941,7 +888,6 @@ fn signing_uri_keeps_percent_encoded_path_and_query_boundaries() -> Result<()> {
     );
     Ok(())
 }
-
 fn add_canonical_app_headers(
     request: reqwest::RequestBuilder,
     client: &Client,
@@ -966,15 +912,14 @@ fn add_canonical_app_headers(
         body,
         timestamp_ms,
         &nonce,
-    );
+    )?;
     let signature = Signature::try_new(client.key_pair.private_key(), &message)?;
     Ok(request
-        .header(HEADER_ACCOUNT, client.account.to_string())
-        .header(HEADER_SIGNATURE, signature_header_value(&signature))
+        .header(HEADER_ACCOUNT, client.account.to_canonical_hex()?)
+        .header(HEADER_SIGNATURE, signature_header_value(&signature)?)
         .header(HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
         .header(HEADER_NONCE, nonce))
 }
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -> Result<()> {
@@ -987,7 +932,6 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     else {
         return Ok(());
     };
-
     let (model_digest, model_pin) = register_private_model_pin(4_352, 0xC1)?;
     let (input_digest, input_pin) = register_private_model_pin(64, 0xC2)?;
     let (output_digest, output_pin) = register_private_model_pin(96, 0xC3)?;
@@ -1001,7 +945,6 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     let training_config_hash = Hash::new(b"private-training-config");
     let reproducibility_hash = Hash::new(b"private-reproducibility");
     let provenance_attestation_hash = Hash::new(b"private-provenance-attestation");
-
     let setup_instructions = vec![
         model_pin.into(),
         input_pin.into(),
@@ -1028,11 +971,9 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     if sandbox::handle_result(setup_res, test_name)?.is_none() {
         return Ok(());
     }
-
     if sandbox::handle_result(network.ensure_blocks(2).await, test_name)?.is_none() {
         return Ok(());
     }
-
     let upload_instructions = vec![
         RegisterSoracloudUploadedModelBundle {
             bundle: uploaded_bundle.clone(),
@@ -1081,11 +1022,9 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     if sandbox::handle_result(upload_res, test_name)?.is_none() {
         return Ok(());
     }
-
     if sandbox::handle_result(network.ensure_blocks(3).await, test_name)?.is_none() {
         return Ok(());
     }
-
     let execute_request = private_uploaded_model_execute_request(
         &uploaded_bundle,
         input_artifact.clone(),
@@ -1104,7 +1043,6 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     );
     assert_eq!(receipt.input_artifact, input_artifact);
     assert_eq!(receipt.output_artifact, output_artifact);
-
     let receipt_instruction = RecordSoracloudPrivateUploadedModelExecutionReceipt {
         receipt: receipt.clone(),
     };
@@ -1122,11 +1060,9 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     if sandbox::handle_result(receipt_res, test_name)?.is_none() {
         return Ok(());
     }
-
     if sandbox::handle_result(network.ensure_blocks(4).await, test_name)?.is_none() {
         return Ok(());
     }
-
     let committed = wait_for_private_uploaded_model_receipt(
         network.client(),
         receipt.clone(),
@@ -1134,13 +1070,10 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     )
     .await?;
     assert_eq!(committed, receipt);
-
     network.shutdown().await;
-
     for peer in network.peers() {
         remove_optional_recovery_sidecars(&peer.kura_store_dir())?;
     }
-
     let config_layers: Vec<_> = network.config_layers().collect();
     for peer in network.peers() {
         timeout(network.peer_startup_timeout(), async {
@@ -1151,7 +1084,6 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
         .await
         .map_err(eyre::Report::new)??;
     }
-
     for peer in network.peers() {
         let restored = wait_for_private_uploaded_model_receipt(
             peer.client(),
@@ -1166,10 +1098,8 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
             peer.id()
         );
     }
-
     Ok(())
 }
-
 async fn post_private_uploaded_model_execute(
     client: &Client,
     request: &PrivateUploadedModelExecuteRequestForTest,
@@ -1228,7 +1158,6 @@ async fn post_private_uploaded_model_execute(
         .ok_or_else(|| eyre!("private execute response omitted receipt"))?;
     Ok(json::from_value(receipt_value.clone())?)
 }
-
 async fn wait_for_private_uploaded_model_receipt(
     client: Client,
     expected: SoraPrivateUploadedModelExecutionReceiptV1,
@@ -1248,7 +1177,6 @@ async fn wait_for_private_uploaded_model_receipt(
     }
     Err(last_error)
 }
-
 async fn fetch_private_uploaded_model_receipt(
     client: &Client,
     expected: &SoraPrivateUploadedModelExecutionReceiptV1,
@@ -1324,7 +1252,6 @@ async fn fetch_private_uploaded_model_receipt(
     }
     Ok(receipt)
 }
-
 #[tokio::test]
 async fn restarted_peer_with_mismatched_genesis_pubkey_is_rejected() -> Result<()> {
     let test_name = stringify!(restarted_peer_with_mismatched_genesis_pubkey_is_rejected);
@@ -1335,18 +1262,14 @@ async fn restarted_peer_with_mismatched_genesis_pubkey_is_rejected() -> Result<(
         return Ok(());
     };
     let peer = &network.peers()[0];
-
     if sandbox::handle_result(network.ensure_blocks(1).await, test_name)?.is_none() {
         return Ok(());
     }
-
     let config_layers: Vec<_> = network.config_layers().collect();
     let wrong_genesis_pubkey = KeyPair::random().public_key().to_string();
     let override_layer = Table::new().write(["genesis", "public_key"], wrong_genesis_pubkey);
     let genesis = network.genesis();
-
     network.shutdown().await;
-
     let start_result = timeout(network.peer_startup_timeout(), async {
         peer.start_checked(
             config_layers
@@ -1358,7 +1281,6 @@ async fn restarted_peer_with_mismatched_genesis_pubkey_is_rejected() -> Result<(
         .await
     })
     .await;
-
     let rejection = match start_result {
         Ok(Ok(())) => {
             network.shutdown().await;
@@ -1388,7 +1310,6 @@ async fn restarted_peer_with_mismatched_genesis_pubkey_is_rejected() -> Result<(
         format!("{rejection:?}").contains("does not match configured genesis.public_key"),
         "restart failed for an unexpected reason: {rejection:?}"
     );
-
     network.shutdown().await;
     Ok(())
 }

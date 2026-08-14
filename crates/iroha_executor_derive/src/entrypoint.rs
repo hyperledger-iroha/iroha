@@ -1,22 +1,18 @@
 //! Module [`executor_entrypoint`](crate::executor_entrypoint) macro implementation
-
 use manyhow::{Emitter, emit};
 use proc_macro2::TokenStream;
 use quote::quote;
-
 mod export {
     pub const EXECUTOR_EXECUTE_TRANSACTION: &str = "_iroha_executor_execute_transaction";
     pub const EXECUTOR_EXECUTE_INSTRUCTION: &str = "_iroha_executor_execute_instruction";
     pub const EXECUTOR_VALIDATE_QUERY: &str = "_iroha_executor_validate_query";
     pub const EXECUTOR_MIGRATE_CONTEXT: &str = "_iroha_executor_migrate";
 }
-
 mod import {
     pub const DECODE_EXECUTE_TRANSACTION_CONTEXT: &str = "__decode_execute_transaction_context";
     pub const DECODE_EXECUTE_INSTRUCTION_CONTEXT: &str = "__decode_execute_instruction_context";
     pub const DECODE_VALIDATE_QUERY_CONTEXT: &str = "__decode_validate_query_context";
 }
-
 /// [`executor_entrypoint`](crate::executor_entrypoint()) macro implementation
 #[allow(clippy::needless_pass_by_value)]
 pub fn impl_validate_entrypoint(emitter: &mut Emitter, item: syn::ItemFn) -> TokenStream {
@@ -45,7 +41,6 @@ pub fn impl_validate_entrypoint(emitter: &mut Emitter, item: syn::ItemFn) -> Tok
             }
         };
     }
-
     match_entrypoints! {
         validate: {
             execute_transaction => EXECUTOR_EXECUTE_TRANSACTION(DECODE_EXECUTE_TRANSACTION_CONTEXT),
@@ -54,7 +49,6 @@ pub fn impl_validate_entrypoint(emitter: &mut Emitter, item: syn::ItemFn) -> Tok
         }
     }
 }
-
 fn impl_validate_entrypoint_priv(
     fn_item: syn::ItemFn,
     user_entrypoint_name: &'static str,
@@ -68,20 +62,16 @@ fn impl_validate_entrypoint_priv(
         block,
     } = fn_item;
     let fn_name = &sig.ident;
-
     assert!(
         matches!(sig.output, syn::ReturnType::Type(_, _)),
         "Executor `{user_entrypoint_name}` entrypoint must have `Result` return type"
     );
-
     let generated_entrypoint_ident: syn::Ident = syn::parse_str(generated_entrypoint_name)
         .expect("Provided entrypoint name to generate is not a valid Ident, this is a bug");
-
     let decode_validation_context_fn_ident: syn::Ident =
         syn::parse_str(decode_validation_context_fn_name).expect(
             "Provided function name to query validating object is not a valid Ident, this is a bug",
         );
-
     quote! {
         /// Executor entrypoint
         ///
@@ -93,17 +83,13 @@ fn impl_validate_entrypoint_priv(
         #[doc(hidden)]
         unsafe extern "C" fn #generated_entrypoint_ident(context: *const u8) -> *const u8 {
             let host = ::iroha_executor::Iroha;
-
             let context = ::iroha_executor::utils::#decode_validation_context_fn_ident(context);
             let verdict = #fn_name(context.target, host, context.context);
-
             let bytes_box = ::core::mem::ManuallyDrop::new(
                 ::iroha_executor::utils::encode_with_length_prefix(&verdict)
             );
-
             bytes_box.as_ptr()
         }
-
         // NOTE: Host objects are always passed by value to the IVM
         #[allow(clippy::needless_pass_by_value)]
         #(#attrs)*
@@ -112,7 +98,6 @@ fn impl_validate_entrypoint_priv(
         #block
     }
 }
-
 pub fn impl_migrate_entrypoint(fn_item: syn::ItemFn) -> TokenStream {
     let syn::ItemFn {
         attrs,
@@ -121,15 +106,12 @@ pub fn impl_migrate_entrypoint(fn_item: syn::ItemFn) -> TokenStream {
         block,
     } = fn_item;
     let fn_name = &sig.ident;
-
     let migrate_fn_name = syn::Ident::new(
         export::EXECUTOR_MIGRATE_CONTEXT,
         proc_macro2::Span::call_site(),
     );
-
     quote! {
         iroha_executor::utils::register_getrandom_err_callback!();
-
         /// Executor `migrate` entrypoint
         ///
         /// # Memory safety
@@ -142,7 +124,6 @@ pub fn impl_migrate_entrypoint(fn_item: syn::ItemFn) -> TokenStream {
             let context = ::iroha_executor::utils::__decode_migrate_context(context);
             #fn_name(host, context);
         }
-
         // NOTE: False positive
         #[allow(clippy::unnecessary_wraps)]
         #(#attrs)*

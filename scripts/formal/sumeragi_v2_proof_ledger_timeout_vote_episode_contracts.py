@@ -21,25 +21,12 @@ def _timeout_vote_episode_source_fidelity_errors(
     }
     sources: dict[str, str] = {}
     for role, path in paths.items():
-        if role == "ingress" and path.is_file() and not path.is_symlink():
-            _reviewed_path, sources[role] = _read_reviewed_rust_source(
-                repo_root,
-                path.relative_to(repo_root).as_posix(),
-                errors,
-                "timeout-vote episode ingress source",
-            )
-            continue
-        if not path.is_file() or path.is_symlink():
-            errors.append(
-                f"{path}: timeout-vote episode {role} source must be a regular file"
-            )
-            sources[role] = ""
-            continue
-        try:
-            sources[role] = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as error:
-            errors.append(f"{path}: cannot read timeout-vote episode source: {error}")
-            sources[role] = ""
+        _loaded_path, sources[role] = _read_reviewed_rust_source(
+            repo_root,
+            path.relative_to(repo_root).as_posix(),
+            errors,
+            f"timeout-vote episode {role} source",
+        )
     if errors:
         return errors
 
@@ -125,6 +112,13 @@ def _timeout_vote_episode_source_fidelity_errors(
         "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
         (),
         "direct authenticated validator TimeoutVote owner classifier",
+    )
+    queue_gate = bind_item(
+        "ingress::fair_v2_ingress_queue_gate_verdict",
+        "ingress",
+        "fair_v2_ingress_queue_gate_verdict",
+        (),
+        "queue-local fair-ingress barrier verdict",
     )
     for name, description in (
         (
@@ -258,6 +252,7 @@ def _timeout_vote_episode_source_fidelity_errors(
 
     expected_item_keys = {
         "ingress::fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+        "ingress::fair_v2_ingress_queue_gate_verdict",
         "ingress::try_recv_if_checked",
         "ingress::try_recv_if_checked_retiring_obsolete",
         "ingress::try_recv_if_checked_retiring_obsolete_with_barrier_bypass",
@@ -296,6 +291,19 @@ pub(crate) enum FairV2IngressBarrierBypass {
 }
 """,
         "fair-ingress barrier bypass must remain a closed internal two-variant policy",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        ingress_path,
+        sources["ingress"],
+        """
+enum FairV2IngressQueueGateVerdict {
+    Blocked,
+    Strict,
+    Dependency,
+}
+""",
+        "queue-local ingress verdict must remain a closed three-variant policy",
         errors,
     )
     _require_rust_token_sequence(
@@ -385,19 +393,39 @@ fair_v2_ingress_is_timeout_vote(&entry.inbound)
         ingress_path,
         queue_gate,
         """
-let timeout_vote_episode_dependency = barrier_bypass
-    == FairV2IngressBarrierBypass::TimeoutVoteEpisode
-    && fair_v2_ingress_is_direct_validator_timeout_vote_owner(source, entry)
-    && (leader_wire_barrier.is_some_and(|owner| {
-        owner.token.identity.phase == FairV2IngressLeaderWirePhase::CertifiedResponse
-    }) || (leader_wire_barrier.is_none()
-        && (selected_serve_barrier.is_some() || certified_body_request_cutoff.is_some())));
+let timeout_vote_episode_dependency =
+    barrier_bypass
+        == FairV2IngressBarrierBypass::TimeoutVoteEpisode
+        && fair_v2_ingress_is_direct_validator_timeout_vote_owner(source, entry)
+        && (leader_wire_barrier.is_some_and(|owner| {
+            owner.token.identity.phase
+                == FairV2IngressLeaderWirePhase::CertifiedResponse
+        }) || (leader_wire_barrier.is_none()
+            && (selected_serve_barrier.is_some()
+                || certified_body_request_cutoff.is_some())));
 let dependency_bypass = !ingress_barrier_allows
     && (serve_fence_escape_dependency
         || timeout_vote_episode_dependency
         || (leader_wire_control_barrier
 """,
         "TimeoutVote bypass must be mode-scoped, direct-source checked, limited to a CertifiedResponse leader owner or Serve barrier, and subordinate to a blocked ordinary barrier",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        selector,
+        """
+let verdict = fair_v2_ingress_queue_gate_verdict(
+    source,
+    lane,
+    index,
+    &serve_projection,
+    &leader_wire_projection,
+    barrier_bypass,
+);
+(verdict != FairV2IngressQueueGateVerdict::Blocked).then(|| {
+""",
+        "classified selector must delegate every candidate to the sealed queue-local verdict",
         errors,
     )
     _require_rust_token_sequence(
@@ -1580,6 +1608,7 @@ assert_eq!(
     expected_operator_modules = {
         "SumeragiV2AsyncNetwork.tla",
         "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+        "SumeragiV2AsyncRecoveryVoteEpochBoundaryContinuationProofs.tla",
     }
     observed_operator_modules = set(_TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256)
     if observed_operator_modules != expected_operator_modules:
@@ -1591,6 +1620,7 @@ assert_eq!(
     expected_theorem_modules = {
         "SumeragiV2AsyncNetwork.tla",
         "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+        "SumeragiV2AsyncRecoveryVoteEpochBoundaryContinuationProofs.tla",
         "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
     }
     observed_theorem_modules = set(_TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256)
@@ -1767,6 +1797,13 @@ assert_eq!(
     boundary_seals = _TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256.get(
         boundary_filename, {}
     )
+    boundary_continuation_filename = (
+        "SumeragiV2AsyncRecoveryVoteEpochBoundaryContinuationProofs.tla"
+    )
+    boundary_continuation_path = formal_dir / boundary_continuation_filename
+    boundary_continuation_seals = _TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256.get(
+        boundary_continuation_filename, {}
+    )
     expected_boundary_symbols = {
         "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue",
         "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue",
@@ -1776,6 +1813,8 @@ assert_eq!(
         "AsyncTimeoutRecoveryEpisodeFromParametersHasMutationFrameShape",
         "AsyncTimeoutRecoveryEpisodeSetHasMutationFrameShape",
         "AsyncTimeoutRecoveryClearedFrozenPredecessorPreservesCurrentBoundary",
+    }
+    expected_boundary_continuation_symbols = {
         "AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary",
         "AsyncTimeoutRecoveryRetainedEpisodesHaveCurrentBoundary",
         "AsyncTimeoutRecoveryNewEpisodeDecomposition",
@@ -1798,6 +1837,19 @@ assert_eq!(
             f"missing={sorted(expected_boundary_symbols - observed_boundary_symbols)}, "
             f"extra={sorted(observed_boundary_symbols - expected_boundary_symbols)}"
         )
+    observed_boundary_continuation_symbols = set(boundary_continuation_seals)
+    if (
+        observed_boundary_continuation_symbols
+        != expected_boundary_continuation_symbols
+    ):
+        errors.append(
+            "timeout-recovery current-boundary continuation theorem "
+            "source-seal inventory must be exact; "
+            "missing="
+            f"{sorted(expected_boundary_continuation_symbols - observed_boundary_continuation_symbols)}, "
+            "extra="
+            f"{sorted(observed_boundary_continuation_symbols - expected_boundary_continuation_symbols)}"
+        )
     boundary_source: str | None = None
     if not boundary_path.is_file() or boundary_path.is_symlink():
         errors.append(
@@ -1812,8 +1864,28 @@ assert_eq!(
                 f"{boundary_path}: cannot read timeout-recovery "
                 f"current-boundary proofs: {error}"
             )
+    boundary_continuation_source: str | None = None
+    if (
+        not boundary_continuation_path.is_file()
+        or boundary_continuation_path.is_symlink()
+    ):
+        errors.append(
+            f"{boundary_continuation_path}: timeout-recovery current-boundary "
+            "continuation proofs must be a regular formal source"
+        )
+    else:
+        try:
+            boundary_continuation_source = boundary_continuation_path.read_text(
+                encoding="utf-8"
+            )
+        except (OSError, UnicodeDecodeError) as error:
+            errors.append(
+                f"{boundary_continuation_path}: cannot read timeout-recovery "
+                f"current-boundary continuation proofs: {error}"
+            )
     boundary_operator_bodies: dict[str, tuple[str, int]] = {}
     boundary_theorem_bodies: dict[str, tuple[str, int]] = {}
+    boundary_theorem_paths: dict[str, Path] = {}
     if boundary_source is not None:
         boundary_operator_seals = _TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256.get(
             boundary_filename, {}
@@ -1823,8 +1895,6 @@ assert_eq!(
             "AsyncTimeoutRecoveryBoundaryFrameShape",
             "AsyncTimeoutRecoveryMutationFrameShape",
             "AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor",
-            "AsyncTimeoutRecoveryNewBaseEpisodeIn",
-            "AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn",
         }
         observed_boundary_operator_symbols = set(boundary_operator_seals)
         if observed_boundary_operator_symbols != expected_boundary_operator_symbols:
@@ -1880,6 +1950,84 @@ assert_eq!(
                     f"theorem {symbol} must match reviewed digest "
                     f"{expected_sha256}; found {observed_sha256}"
                 )
+            boundary_theorem_paths[symbol] = boundary_path
+    if boundary_continuation_source is not None:
+        boundary_continuation_operator_seals = (
+            _TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256.get(
+                boundary_continuation_filename, {}
+            )
+        )
+        expected_boundary_continuation_operator_symbols = {
+            "AsyncTimeoutRecoveryNewBaseEpisodeIn",
+            "AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn",
+        }
+        observed_boundary_continuation_operator_symbols = set(
+            boundary_continuation_operator_seals
+        )
+        if (
+            observed_boundary_continuation_operator_symbols
+            != expected_boundary_continuation_operator_symbols
+        ):
+            errors.append(
+                "timeout-recovery boundary continuation operator source-seal "
+                "inventory must be exact; "
+                "missing="
+                f"{sorted(expected_boundary_continuation_operator_symbols - observed_boundary_continuation_operator_symbols)}, "
+                "extra="
+                f"{sorted(observed_boundary_continuation_operator_symbols - expected_boundary_continuation_operator_symbols)}"
+            )
+        for symbol, expected_sha256 in (
+            boundary_continuation_operator_seals.items()
+        ):
+            extracted = _top_level_operator_body(
+                boundary_continuation_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{boundary_continuation_path}: missing source-sealed "
+                    f"timeout-recovery boundary continuation operator {symbol}"
+                )
+                continue
+            boundary_operator_bodies[symbol] = extracted
+            body, line = extracted
+            observed_sha256 = hashlib.sha256(
+                " ".join(body.split()).encode("utf-8")
+            ).hexdigest()
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{boundary_continuation_path}:{line}: timeout-recovery "
+                    f"boundary continuation operator {symbol} must match "
+                    f"reviewed digest {expected_sha256}; found {observed_sha256}"
+                )
+        for symbol, expected_sha256 in boundary_continuation_seals.items():
+            extracted = _top_level_theorem_body(
+                boundary_continuation_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{boundary_continuation_path}: missing source-sealed "
+                    f"timeout-recovery current-boundary continuation theorem {symbol}"
+                )
+                continue
+            boundary_theorem_bodies[symbol] = extracted
+            boundary_theorem_paths[symbol] = boundary_continuation_path
+            body, line = extracted
+            observed_sha256 = hashlib.sha256(
+                " ".join(body.split()).encode("utf-8")
+            ).hexdigest()
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{boundary_continuation_path}:{line}: timeout-recovery "
+                    f"current-boundary continuation theorem {symbol} must match "
+                    f"reviewed digest {expected_sha256}; found {observed_sha256}"
+                )
+
+    def boundary_theorem_path(symbol: str) -> Path:
+        return boundary_theorem_paths.get(symbol, boundary_path)
 
     reviewed_timeout_transition_operator_sha256 = {
         "SumeragiV2AsyncNetwork.tla": {
@@ -1921,6 +2069,8 @@ assert_eq!(
             "AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor": (
                 "5bb5d4962bbc9db7fcbe00c53e70d5532ed39550ee5da04acdac6048dc0fc5c3"
             ),
+        },
+        boundary_continuation_filename: {
             "AsyncTimeoutRecoveryNewBaseEpisodeIn": (
                 "aebba5c89eb28cc959098eef0a148c0a3defe3818d71f7aacc07ab8f2fd73136"
             ),
@@ -1932,6 +2082,10 @@ assert_eq!(
     reviewed_operator_sources = {
         "SumeragiV2AsyncNetwork.tla": (formal_path, formal_bodies),
         boundary_filename: (boundary_path, boundary_operator_bodies),
+        boundary_continuation_filename: (
+            boundary_continuation_path,
+            boundary_operator_bodies,
+        ),
     }
     for filename, reviewed in reviewed_timeout_transition_operator_sha256.items():
         source_path, bodies = reviewed_operator_sources[filename]
@@ -1963,7 +2117,7 @@ assert_eq!(
         expected_normalized = " ".join(expected.split())
         if observed != expected_normalized:
             errors.append(
-                f"{boundary_path}:{line}: {symbol} must remain the exact "
+                f"{boundary_theorem_path(symbol)}:{line}: {symbol} must remain the exact "
                 "theorem-level ASSUME/PROVE current-boundary sequent with "
                 "arbitrary state records and the reviewed validator bound; "
                 f"expected {expected_normalized!r}; found {observed!r}"
@@ -2062,7 +2216,7 @@ PROVE /\ AsyncTimeoutRecoveryMutationFrameShape(
         expected_normalized = " ".join(expected.split())
         if observed != expected_normalized:
             errors.append(
-                f"{boundary_path}:{line}: {symbol} must remain the exact "
+                f"{boundary_theorem_path(symbol)}:{line}: {symbol} must remain the exact "
                 "reviewed timeout-recovery boundary theorem statement; "
                 f"expected {expected_normalized!r}; found {observed!r}"
             )
@@ -2304,7 +2458,7 @@ PROVE AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'
                 )
         if missing:
             errors.append(
-                f"{boundary_path}:{line}: timeout-recovery boundary theorem "
+                f"{boundary_theorem_path(symbol)}:{line}: timeout-recovery boundary theorem "
                 f"{symbol} must retain the exact reviewed proof dependencies; "
                 f"missing={missing!r}"
             )

@@ -84,8 +84,10 @@ scripts/soranet_guard_capacity_report.py \
 ```
 
 The report prints the observed counters and suggests whether to increase
-`max_circuits_per_client` (to reduce capacity rejections) or lower the cooldown
-(to reduce throttling) based on the ratios it observes. The quota-specific
+`max_circuits_per_client` (within the configured `max_active_circuits` global
+corridor) or lower the cooldown based on the ratios it observes. Global circuit
+capacity failures remain fail-closed rather than allocating another remote
+tracker or circuit-registry entry. The quota-specific
 metrics expose how many throttles were caused by per-remote and per-descriptor
 limits, while the `soranet_abuse_*` gauges surface the number of active
 cooldowns in effect. Combine these with the compliance spool, where each

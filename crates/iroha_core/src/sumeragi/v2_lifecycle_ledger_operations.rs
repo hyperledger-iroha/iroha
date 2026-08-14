@@ -5,7 +5,6 @@ impl LifecycleLedgerV1 {
         preimage.extend_from_slice(&self.encode());
         LifecycleDigest::new(*Hash::new(preimage).as_ref())
     }
-
     pub(super) fn from_coordinator(
         coordinator: &LifecycleCoordinator,
     ) -> Result<Self, LifecycleLedgerError> {
@@ -48,7 +47,6 @@ impl LifecycleLedgerV1 {
             coordinator.producer_debts.clone(),
         )
     }
-
     pub(super) fn recovery_snapshot(
         &self,
         mut physical_slot_universes: BTreeMap<u128, BTreeSet<PhysicalSlotId>>,
@@ -122,7 +120,6 @@ impl LifecycleLedgerV1 {
             producer_debts,
         ))
     }
-
     /// Construct and validate a canonical durable ledger.
     pub(super) fn new(
         context: LifecycleContext,
@@ -146,7 +143,6 @@ impl LifecycleLedgerV1 {
         ledger.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
         Ok(ledger)
     }
-
     /// Construct the empty ledger for a validated height context.
     pub(super) fn empty(context: LifecycleContext) -> Self {
         Self {
@@ -158,22 +154,18 @@ impl LifecycleLedgerV1 {
             producer_debts: Vec::new(),
         }
     }
-
     /// Return the typed persisted context.
     pub(super) const fn context(&self) -> LifecycleContext {
         LifecycleContext::new(LifecycleDigest::new(self.context), self.height)
     }
-
     /// Return the durable ordinal high-water mark.
     pub(super) const fn high_water(&self) -> u128 {
         self.high_water
     }
-
     /// Borrow the canonical ordinal-ordered records.
     pub(super) fn records(&self) -> &[LifecycleLedgerRecordV1] {
         &self.records
     }
-
     /// Classify every exact committed Broadcast-plus-next-Sign pair in this frame.
     ///
     /// Classification is purely durable and does not decode any runtime WAL or
@@ -209,7 +201,6 @@ impl LifecycleLedgerV1 {
             })
             .collect())
     }
-
     fn project_recovered_lifecycle_signed_broadcast_and_sign_at(
         &self,
         broadcast_ordinal: u128,
@@ -222,7 +213,6 @@ impl LifecycleLedgerV1 {
             &index,
         )
     }
-
     #[allow(clippy::too_many_lines)]
     fn project_validated_recovered_lifecycle_signed_broadcast_and_sign_at(
         &self,
@@ -241,7 +231,6 @@ impl LifecycleLedgerV1 {
             .binary_search_by_key(&next_sign_ordinal, LifecycleLedgerRecordV1::ordinal)
             .ok()
             .and_then(|index| self.records.get(index))?;
-
         let parent = self
             .records
             .get(index.unique_parent_index(broadcast_ordinal)?)?;
@@ -258,7 +247,6 @@ impl LifecycleLedgerV1 {
         let parent_owner = parent.owner();
         let next_sign_owner = next_sign.owner();
         let parent_ordinal = parent.ordinal();
-
         if observed_broadcast_ordinal != broadcast_ordinal
             || parent.ordinal() >= broadcast_ordinal
             || parent.terminal()? != Some(TerminalOutcome::Advanced)
@@ -317,7 +305,6 @@ impl LifecycleLedgerV1 {
         {
             return None;
         }
-
         let parent_record_count = index.owner_record_count(parent_owner);
         let parent_classification = match (
             parent_key.phase(),
@@ -395,7 +382,6 @@ impl LifecycleLedgerV1 {
             }
             _ => return None,
         };
-
         Some(RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1 {
             ledger_frame_identity,
             parent: parent_classification,
@@ -404,7 +390,6 @@ impl LifecycleLedgerV1 {
             next_sign_ordinal,
         })
     }
-
     /// Stage the exact all-row tombstone successor for finalized-height retirement.
     ///
     /// Existing terminal rows remain byte-for-byte unchanged. Every live
@@ -424,7 +409,6 @@ impl LifecycleLedgerV1 {
                 "finalized-height Serve retirement belongs to another ledger frame".to_owned(),
             ));
         }
-
         let mut consumed_producers = BTreeSet::new();
         let mut retired_records = Vec::with_capacity(self.records.len());
         for record in &self.records {
@@ -442,7 +426,6 @@ impl LifecycleLedgerV1 {
                         .to_owned(),
                 )
             })?;
-
             if work_class == LifecycleWorkClass::CertifiedServe {
                 let producer_ordinal = record.ordinal().checked_add(1).ok_or_else(|| {
                     LifecycleLedgerError::InvalidLedger(
@@ -468,7 +451,6 @@ impl LifecycleLedgerV1 {
                             .to_owned(),
                     ));
                 }
-
                 match (
                     terminal,
                     producer.terminal().expect("producer terminal decoded"),
@@ -536,7 +518,6 @@ impl LifecycleLedgerV1 {
                 }
                 continue;
             }
-
             if work_class == LifecycleWorkClass::ProducerTurn {
                 return Err(LifecycleLedgerError::InvalidLedger(
                     "finalized-height ProducerTurn was not consumed by its exact Serve owner"
@@ -549,11 +530,9 @@ impl LifecycleLedgerV1 {
                 Self::cancelled_record(record)?
             });
         }
-
         if !consumed_producers.is_empty() || !serve_reconciliation.is_drained() {
             return Err(LifecycleLedgerError::InvalidLedger(
-                "finalized-height Serve retirement census was not consumed exactly once"
-                    .to_owned(),
+                "finalized-height Serve retirement census was not consumed exactly once".to_owned(),
             ));
         }
         let retired = Self::new(
@@ -580,7 +559,6 @@ impl LifecycleLedgerV1 {
             retired,
         })
     }
-
     fn cancelled_record(
         record: &LifecycleLedgerRecordV1,
     ) -> Result<LifecycleLedgerRecordV1, LifecycleLedgerError> {
@@ -596,7 +574,6 @@ impl LifecycleLedgerV1 {
             record.replay_authority.clone(),
         )
     }
-
     fn terminalized_record(
         record: &LifecycleLedgerRecordV1,
         outcome: TerminalOutcome,
@@ -636,7 +613,6 @@ impl LifecycleLedgerV1 {
             DurableContinuation::None,
         )
     }
-
     /// Authenticate every live BodyFrame-backed Fetch against this exact frame.
     ///
     /// Unlike the consuming storage-cut constructor, this internal phase keeps
@@ -655,7 +631,6 @@ impl LifecycleLedgerV1 {
             .into_startup(self)
             .ok_or(DurableCertifiedFetchRecoveryError::InvalidStorageCut)
     }
-
     fn authenticate_durable_certified_fetch_census(
         &self,
         verified: &VerifiedHeightContext,
@@ -702,7 +677,6 @@ impl LifecycleLedgerV1 {
         .ok_or(DurableCertifiedFetchRecoveryError::AmbiguousCensus)?;
         Ok(census)
     }
-
     /// Consume this exact opened ledger and body store into one Ready-Fetch cut.
     ///
     /// Authentication censes every live BodyFrame-backed Fetch row before
@@ -746,7 +720,6 @@ impl LifecycleLedgerV1 {
             .then_some(cut)
             .ok_or(DurableCertifiedFetchRecoveryError::InvalidStorageCut)
     }
-
     #[cfg(test)]
     /// Substitute one structurally valid but foreign replay origin generation.
     pub(super) fn with_foreign_replay_authority_for_test(&self, ordinal: u128) -> Option<Self> {
@@ -761,12 +734,10 @@ impl LifecycleLedgerV1 {
         changed.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT).ok()?;
         Some(changed)
     }
-
     /// Borrow the canonical Serve-to-producer debts.
     pub(super) fn producer_debts(&self) -> &[LifecycleProducerDebtV1] {
         &self.producer_debts
     }
-
     /// Authenticate the unique live or already-repaired Validate parent of one WAL vote.
     ///
     /// This read-only projection binds the complete WAL identity to the exact
@@ -779,7 +750,6 @@ impl LifecycleLedgerV1 {
     ) -> Option<AuthenticatedRecoveredWalValidateLedgerParent> {
         self.authenticate_recovered_wal_validate_parent_shape(recovered, false)
     }
-
     /// Authenticate the Validate parent of an already-fsynced Sign-to-Broadcast edge.
     ///
     /// This is deliberately distinct from the live/repaired-Sign stutter above:
@@ -792,7 +762,6 @@ impl LifecycleLedgerV1 {
     ) -> Option<AuthenticatedRecoveredWalValidateLedgerParent> {
         self.authenticate_recovered_wal_validate_parent_shape(recovered, true)
     }
-
     fn authenticate_recovered_wal_validate_parent_shape(
         &self,
         recovered: &RecoveredWalVoteSign,
@@ -962,7 +931,6 @@ impl LifecycleLedgerV1 {
             vote: vote.clone(),
         })
     }
-
     /// Stage exactly one standalone Proposal/Timeout control Sign row.
     ///
     /// An exact existing row stutters without rewriting it. Absence appends
@@ -992,7 +960,6 @@ impl LifecycleLedgerV1 {
             }
             return Ok((self.clone(), record.ordinal(), false));
         }
-
         let ordinal = self.high_water.checked_add(1).ok_or_else(|| {
             LifecycleLedgerError::InvalidLedger(
                 "recovered control Sign ordinal exhausted".to_owned(),
@@ -1009,7 +976,6 @@ impl LifecycleLedgerV1 {
         }
         Ok((staged, ordinal, true))
     }
-
     /// Authenticate the exact crash cut after a recovered control Sign fsynced
     /// its sole live Broadcast child.
     ///
@@ -1103,7 +1069,6 @@ impl LifecycleLedgerV1 {
         }
         Ok((broadcast, parent.ordinal(), child_ordinal))
     }
-
     /// Authenticate one exact Proposal-Sign/Broadcast/next-Vote crash cut.
     ///
     /// The frame classifier first binds the transaction-local adjacent child
@@ -1125,7 +1090,6 @@ impl LifecycleLedgerV1 {
                 "recovered control Broadcast-and-Sign changed its verified context".to_owned(),
             ));
         }
-
         let mut matching = self
             .recovered_lifecycle_signed_broadcast_and_sign_pairs()?
             .into_iter()
@@ -1148,7 +1112,6 @@ impl LifecycleLedgerV1 {
                 "recovered control Broadcast-and-Sign matched multiple durable pairs".to_owned(),
             ));
         }
-
         let record_at = |ordinal| {
             self.records
                 .binary_search_by_key(&ordinal, |record| record.ordinal())
@@ -1181,7 +1144,6 @@ impl LifecycleLedgerV1 {
         }
         Ok(pair)
     }
-
     pub(super) fn recovered_phase_signed_broadcast_ordinals(
         &self,
         repair: &AuthenticatedWalVoteLifecycleRepair,
@@ -1248,7 +1210,6 @@ impl LifecycleLedgerV1 {
                 == 3)
             .then_some((parent.ordinal(), sign_ordinal, broadcast_ordinal))
     }
-
     /// Authenticate an already-fsynced recovered Validate→Sign→Broadcast chain
     /// before consuming the repair into its exact frame receipt.
     pub(super) fn authenticate_recovered_phase_signed_broadcast_repair(
@@ -1312,7 +1273,6 @@ impl LifecycleLedgerV1 {
         }
         Ok((broadcast, parent_ordinal, sign_ordinal, broadcast_ordinal))
     }
-
     /// Authenticate an already-fsynced recovered Validate→Sign→Broadcast chain.
     pub(super) fn authenticate_recovered_phase_signed_broadcast(
         &self,
@@ -1336,7 +1296,6 @@ impl LifecycleLedgerV1 {
         }
         Ok((broadcast, parent_ordinal, sign_ordinal, broadcast_ordinal))
     }
-
     /// Authenticate one exact Validate/Prepare-Sign/Broadcast plus Commit-Sign cut.
     ///
     /// The durable phase repair independently authenticates the historical
@@ -1407,7 +1366,6 @@ impl LifecycleLedgerV1 {
         }
         Ok(pair)
     }
-
     /// Stage exactly one standalone recovered Decision Fetch row.
     ///
     /// An exact existing row is a read-only stutter. Absence appends only the
@@ -1436,7 +1394,6 @@ impl LifecycleLedgerV1 {
             }
             return Ok((self.clone(), record.ordinal(), false));
         }
-
         let ordinal = self.high_water.checked_add(1).ok_or_else(|| {
             LifecycleLedgerError::InvalidLedger(
                 "recovered Decision Fetch ordinal exhausted".to_owned(),
@@ -1453,7 +1410,6 @@ impl LifecycleLedgerV1 {
         }
         Ok((staged, ordinal, true))
     }
-
     /// Authenticate the crash cut after a recovered Fetch advanced to one live Store.
     ///
     /// The WAL parent remains payload-free. The sole same-owner child must be
@@ -1532,7 +1488,6 @@ impl LifecycleLedgerV1 {
         }
         Ok((fetch.ordinal(), store_ordinal))
     }
-
     /// Stage or exactly coalesce the first-release recovered Decision body chain.
     ///
     /// The payload-free Decision Fetch must already be durable. A live exact
@@ -1549,7 +1504,6 @@ impl LifecycleLedgerV1 {
         self.reject_terminal_recovered_decision_apply(projection)?;
         self.stage_recovered_decision_apply_projection(projection)
     }
-
     fn stage_recovered_decision_apply_projection(
         &self,
         projection: &impl RecoveredDecisionApplyStageProjectionV1,
@@ -1578,7 +1532,6 @@ impl LifecycleLedgerV1 {
             .iter()
             .filter(|record| record.owner() == owner)
             .collect::<Vec<_>>();
-
         if projection.exactly_matches_live_fetch(fetch) {
             if owner_records.len() != 1 || fetch.ordinal() != owner.first_admission_ordinal() {
                 return Err(LifecycleLedgerError::InvalidLedger(
@@ -1626,7 +1579,6 @@ impl LifecycleLedgerV1 {
             staged.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
             return Ok((staged, apply_ordinal, true));
         }
-
         let Some((DurableContinuationEdge::FetchToStore, store_ordinal)) = fetch
             .continuation()
             .and_then(DurableContinuation::successor_parts)
@@ -1652,7 +1604,6 @@ impl LifecycleLedgerV1 {
                     .to_owned(),
             ));
         }
-
         if lineage.exactly_matches_live_store_record(owner, store) {
             if owner_records.len() != 2 {
                 return Err(LifecycleLedgerError::InvalidLedger(
@@ -1690,7 +1641,6 @@ impl LifecycleLedgerV1 {
             staged.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
             return Ok((staged, apply_ordinal, true));
         }
-
         let Some((DurableContinuationEdge::StoreToValidate, validate_ordinal)) = store
             .continuation()
             .and_then(DurableContinuation::successor_parts)
@@ -1728,7 +1678,6 @@ impl LifecycleLedgerV1 {
         }
         Ok((self.clone(), apply_ordinal, false))
     }
-
     /// Authenticate an already terminal recovered Decision body chain.
     ///
     /// This oracle never feeds storage-only recovery: a terminal Apply must
@@ -1741,7 +1690,6 @@ impl LifecycleLedgerV1 {
     ) -> Result<u128, LifecycleLedgerError> {
         self.authenticate_terminal_recovered_decision_apply_projection(projection)
     }
-
     fn reject_terminal_recovered_decision_apply(
         &self,
         projection: &crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1,
@@ -1757,7 +1705,6 @@ impl LifecycleLedgerV1 {
         }
         Ok(())
     }
-
     #[cfg(test)]
     fn reject_terminal_recovered_decision_apply_projection(
         &self,
@@ -1774,7 +1721,6 @@ impl LifecycleLedgerV1 {
         }
         Ok(())
     }
-
     fn authenticate_terminal_recovered_decision_apply_projection(
         &self,
         projection: &impl TerminalRecoveredDecisionApplyProjectionV1,
@@ -1857,7 +1803,6 @@ impl LifecycleLedgerV1 {
         }
         Ok(apply_ordinal)
     }
-
     /// Join one terminal recovered-Decision Apply row to the complete
     /// Kura-authenticated CompleteTip evidence retained for successor startup.
     ///
@@ -2004,7 +1949,6 @@ impl LifecycleLedgerV1 {
         }
         Ok(apply_ordinal)
     }
-
     /// Consume the exact opened predecessor store, frame, and CompleteTip proof
     /// into one non-decomposable authentication cut.
     ///
@@ -2040,7 +1984,6 @@ impl LifecycleLedgerV1 {
         }
         Ok(cut)
     }
-
     /// Purely stage one adapter-authenticated WAL-ahead Validate-to-Sign repair.
     ///
     /// The only mutable shape is an exact live Validate parent with no child.
@@ -2081,7 +2024,6 @@ impl LifecycleLedgerV1 {
                 "recovered WAL vote changed its durable Validate parent".to_owned(),
             ));
         }
-
         let existing_child = self
             .records
             .iter()
@@ -2096,7 +2038,6 @@ impl LifecycleLedgerV1 {
                 "recovered WAL parent terminal cannot be decoded".to_owned(),
             )
         })?;
-
         if let Some((edge, child_ordinal)) = continuation.successor_parts() {
             let child = existing_child.ok_or_else(|| {
                 LifecycleLedgerError::InvalidLedger(
@@ -2117,7 +2058,6 @@ impl LifecycleLedgerV1 {
             }
             return Ok((self.clone(), child_ordinal, false));
         }
-
         if terminal.is_some()
             || continuation != DurableContinuation::None
             || existing_child.is_some()
@@ -2151,7 +2091,6 @@ impl LifecycleLedgerV1 {
         staged.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
         Ok((staged, child_ordinal, true))
     }
-
     fn validate(&self, max_records: usize) -> Result<(), LifecycleLedgerError> {
         if self.format_version != LEDGER_VERSION || self.records.len() > max_records {
             return Err(LifecycleLedgerError::InvalidLedger(
@@ -2321,7 +2260,6 @@ impl LifecycleLedgerV1 {
         }
         self.validate_debts()
     }
-
     fn validate_debts(&self) -> Result<(), LifecycleLedgerError> {
         let mut serves = BTreeSet::new();
         let mut producers = BTreeSet::new();

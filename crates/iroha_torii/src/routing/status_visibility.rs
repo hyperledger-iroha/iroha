@@ -1,5 +1,4 @@
 //! Status-path visibility helpers for telemetry routes.
-
 pub(super) fn is_nexus_status_segment(tail: &str) -> bool {
     let mut segments = tail.split('/').filter(|segment| !segment.is_empty());
     matches!(

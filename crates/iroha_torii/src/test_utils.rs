@@ -2,7 +2,6 @@
 //!
 //! These helpers are intended for crate integration tests to avoid duplicating
 //! queue-drain and state-apply boilerplate when exercising app API endpoints.
-
 use std::{
     borrow::Cow,
     collections::BTreeMap,
@@ -12,7 +11,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-
 use iroha_config::parameters::{defaults, defaults::zk::fastpq};
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
@@ -46,14 +44,12 @@ use iroha_data_model::{
     smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAddress},
     sorafs::pricing::PricingScheduleRecord,
 };
-
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias},
     governance::CanEnactGovernance,
     smart_contract::{CanInvokeContractEntrypoint, CanRegisterSmartContractCode},
 };
 use nonzero_ext::nonzero;
-
 /// Exact genesis-lineage identity used by [`mk_minimal_root_cfg`].
 #[must_use]
 pub fn signed_query_network_id() -> NetworkId {
@@ -61,12 +57,10 @@ pub fn signed_query_network_id() -> NetworkId {
         b"Torii test genesis trust anchor",
     )))
 }
-
 fn checked_random_keypair(context: &str) -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random()
         .unwrap_or_else(|err| panic!("{context}: checked random key generation failed: {err}"))
 }
-
 fn checked_random_keypair_with_algorithm(
     algorithm: Algorithm,
     context: &str,
@@ -75,7 +69,6 @@ fn checked_random_keypair_with_algorithm(
         panic!("{context}: checked random {algorithm:?} key generation failed: {err}")
     })
 }
-
 /// Parameters for invoking a contract within Torii integration tests.
 pub struct ContractCallOptions<'a> {
     /// Explicit entry point function to call on the contract.
@@ -85,7 +78,6 @@ pub struct ContractCallOptions<'a> {
     /// Upper bound on gas consumption for the call.
     pub gas_limit: u64,
 }
-
 /// Parameters for invoking a read-only contract view within Torii integration tests.
 pub struct ContractViewOptions<'a> {
     /// Explicit entry point function to execute.
@@ -95,7 +87,6 @@ pub struct ContractViewOptions<'a> {
     /// Upper bound on gas consumption for the local view execution.
     pub gas_limit: u64,
 }
-
 /// Drain queued transactions and apply a single block at the given height.
 ///
 /// Returns the number of applied transactions. Panics if any transaction fails
@@ -112,7 +103,6 @@ pub fn apply_queued_in_one_block(
     if guards.is_empty() {
         return 0;
     }
-
     let accepted: Vec<_> = guards
         .iter()
         .map(|guard| {
@@ -124,7 +114,6 @@ pub fn apply_queued_in_one_block(
         })
         .collect();
     let applied = accepted.len();
-
     // Synthetic Torii states do not all install the production lane-manifest snapshot. Preserve
     // every explicit test registry, including registries that intentionally omit lane zero, but
     // bind the live Nexus catalog when the registry is entirely empty so execution-context
@@ -135,7 +124,6 @@ pub fn apply_queued_in_one_block(
             Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance));
         state.install_lane_manifests(&manifests);
     }
-
     // Supplying a non-empty context bypasses Core's automatic single-height lane ownership
     // fixture, which is unsuitable for this helper's multi-block synthetic chains. Preserve the
     // queue order so every context remains aligned with the corresponding block entrypoint.
@@ -147,7 +135,6 @@ pub fn apply_queued_in_one_block(
             })
             .collect(),
     );
-
     let latest_block = state.view().latest_block();
     let leader = checked_random_keypair_with_algorithm(
         iroha_crypto::Algorithm::BlsNormal,
@@ -158,20 +145,17 @@ pub fn apply_queued_in_one_block(
         .with_execution_context(Some(execution_context))
         .sign(leader.private_key())
         .unpack(|_| {});
-
     debug_assert_eq!(
         new_block.header().height().get(),
         expected_height,
         "Unexpected block height when applying queued transactions",
     );
-
     let mut state_block = state.block(new_block.header());
     // Ensure stateless validation uses the expected chain id for these tests.
     state_block.chain_id = chain_id.clone();
     let valid_block = new_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-
     let committed_block = valid_block.commit_unchecked().unpack(|_| {});
     let block_ref = committed_block.as_ref();
     for (idx, tx) in block_ref.external_transactions().enumerate() {
@@ -183,10 +167,8 @@ pub fn apply_queued_in_one_block(
         }
     }
     finalize_committed_block(state, state_block, committed_block);
-
     applied
 }
-
 fn execution_context_for_routing_plan(
     entrypoint_hash: iroha_crypto::HashOf<iroha_data_model::transaction::TransactionEntrypoint>,
     routing: RoutingDecision,
@@ -204,7 +186,6 @@ fn execution_context_for_routing_plan(
             ExternalExecutionRouteLeg::new(leg.route.lane_id, leg.route.dataspace_id, role)
         })
         .collect();
-
     ExternalExecutionContext::with_routing_plan(
         entrypoint_hash,
         routing.lane_id,
@@ -213,7 +194,6 @@ fn execution_context_for_routing_plan(
         legs,
     )
 }
-
 /// Repeatedly drain and apply queued transactions, incrementing block height
 /// starting at `start_height`, until the queue is empty. Returns total applied.
 pub fn drain_queue_and_apply_all(
@@ -234,7 +214,6 @@ pub fn drain_queue_and_apply_all(
     }
     total
 }
-
 /// Apply the bookkeeping for a fully committed block: update transaction heights,
 /// advance block hashes, and persist the block into Kura.
 pub fn finalize_committed_block(
@@ -251,7 +230,6 @@ pub fn finalize_committed_block(
     let _ = state_block.apply_without_execution(&committed_block, Vec::new());
     state_block.commit().unwrap();
 }
-
 /// Build a minimal self-describing contract artifact containing a single HALT.
 pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
@@ -292,7 +270,6 @@ pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     out
 }
-
 /// Compute the hex-encoded contract code hash for a `.to` program.
 ///
 /// This matches Torii's domain-separated full-artifact deployment hashing.
@@ -301,7 +278,6 @@ pub fn contract_code_hash_hex(code_bytes: &[u8]) -> String {
     let h = ivm::contract_code_hash(&code_bytes);
     hex::encode(<[u8; 32]>::from(h))
 }
-
 /// Guard that overrides Torii's data directory with a temporary path for test isolation
 /// and clears it on drop. The underlying directory is removed when the guard is dropped.
 #[must_use]
@@ -310,7 +286,6 @@ pub struct TestDataDirGuard {
     canonical_path: PathBuf,
     override_guard: crate::data_dir::OverrideGuard,
 }
-
 impl TestDataDirGuard {
     /// Create a new temporary data directory and activate the override.
     pub fn new() -> Self {
@@ -326,19 +301,16 @@ impl TestDataDirGuard {
             override_guard,
         }
     }
-
     /// Access the filesystem path backing this guard.
     pub fn path(&self) -> &Path {
         &self.canonical_path
     }
 }
-
 impl Default for TestDataDirGuard {
     fn default() -> Self {
         Self::new()
     }
 }
-
 /// Small container for random authority credentials used in tests.
 pub struct AuthorityCreds {
     /// Generated account id for the authority
@@ -346,7 +318,6 @@ pub struct AuthorityCreds {
     /// Private key corresponding to the generated account id
     pub private_key: ExposedPrivateKey,
 }
-
 /// Generate a random authority with matching private key (domain `wonderland`).
 pub fn random_authority() -> AuthorityCreds {
     let kp = checked_random_keypair("random authority fixture");
@@ -357,7 +328,6 @@ pub fn random_authority() -> AuthorityCreds {
         private_key,
     }
 }
-
 /// Build a minimal world that contains the given authority account in `wonderland`.
 pub fn world_with_authority(authority: &AccountId) -> iroha_core::state::World {
     let domain_id: iroha_data_model::domain::DomainId =
@@ -366,7 +336,6 @@ pub fn world_with_authority(authority: &AccountId) -> iroha_core::state::World {
     let account = Account::new(authority.clone()).build(authority);
     iroha_core::state::World::with([domain], [account], [])
 }
-
 /// Grant the permissions needed for contract deploy/activate flows in integration tests.
 pub fn grant_contract_operator_permissions(state: &Arc<State>, authority: &AccountId) {
     let height_u64 = u64::try_from(state.view().height())
@@ -382,17 +351,14 @@ pub fn grant_contract_operator_permissions(state: &Arc<State>, authority: &Accou
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let register_permission: permission::Permission = CanRegisterSmartContractCode.into();
     Grant::account_permission(register_permission, authority.clone())
         .execute(authority, &mut stx)
         .expect("grant CanRegisterSmartContractCode");
-
     let enact_permission: permission::Permission = CanEnactGovernance.into();
     Grant::account_permission(enact_permission, authority.clone())
         .execute(authority, &mut stx)
         .expect("grant CanEnactGovernance");
-
     let alias_permission: permission::Permission = CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
     }
@@ -400,13 +366,11 @@ pub fn grant_contract_operator_permissions(state: &Arc<State>, authority: &Accou
     Grant::account_permission(alias_permission, authority.clone())
         .execute(authority, &mut stx)
         .expect("grant universal-dataspace contract alias management");
-
     stx.apply();
     block
         .commit()
         .expect("commit contract operator permissions");
 }
-
 /// Build and enqueue a locally signed atomic contract deployment transaction.
 ///
 /// This deliberately exercises the native deployment instructions instead of
@@ -429,7 +393,6 @@ pub fn enqueue_locally_signed_contract_deployment(
         std::iter::empty(),
     )
 }
-
 /// Build and enqueue a local deployment with exact permissions for its
 /// non-signable contract-subject account.
 pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
@@ -463,7 +426,6 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
         .manifest
         .try_signed(&key_pair)
         .expect("sign contract manifest locally");
-
     let nonce_key = Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY)
         .expect("contract deployment nonce metadata key");
     let state_view = state.view();
@@ -482,7 +444,6 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
         .unwrap_or(0);
     let network_id = *state_view.network_id();
     drop(state_view);
-
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
         &format!("fixture{deploy_nonce}"),
         None,
@@ -497,7 +458,6 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
         .expect("contract upload chunk count fits u32");
     assert_ne!(chunk_count, 0, "contract artifact must not be empty");
     let subject_permissions = subject_permissions.into_iter().collect::<Vec<_>>();
-
     let mut instructions = Vec::with_capacity(
         usize::try_from(chunk_count).expect("chunk count fits usize")
             + 5
@@ -546,7 +506,6 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
             authority.clone(),
         )));
     }
-
     let transaction = TransactionBuilder::new(
         network_id,
         authority.clone(),
@@ -560,14 +519,12 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
             state.view(),
         )
         .expect("enqueue locally signed contract deployment");
-
     (
         contract_address,
         hex::encode(verified.code_hash.as_ref()),
         hex::encode(verified.abi_hash.as_ref()),
     )
 }
-
 /// Build JSON string for contract call request body.
 pub fn contract_call_request_json(
     account: &AccountId,
@@ -594,7 +551,6 @@ pub fn contract_call_request_json(
     let value = crate::json_object(entries);
     norito::json::to_json(&value).expect("serialize contract call request")
 }
-
 /// Build JSON string for contract view request body.
 pub fn contract_view_request_json(
     account: &AccountId,
@@ -613,7 +569,6 @@ pub fn contract_view_request_json(
     let value = crate::json_object(entries);
     norito::json::to_json(&value).expect("serialize contract view request")
 }
-
 /// Build a minimal actual configuration root suitable for constructing Kiso and Torii in tests.
 ///
 /// The configuration mirrors the helpers used across integration tests and sets required
@@ -632,7 +587,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     use iroha_data_model::peer::Peer;
     use iroha_logger::Level;
     use iroha_primitives::addr::socket_addr;
-
     A::Root {
         common: A::Common {
             chain: ChainId::from("test-chain"),
@@ -821,6 +775,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             query_burst_per_authority: None,
             query_max_inflight: defaults::torii::QUERY_MAX_INFLIGHT,
             query_heavy_max_inflight: defaults::torii::QUERY_HEAVY_MAX_INFLIGHT,
+            query_fanout_max_retained_bytes:
+                defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES,
             query_queue_timeout: Duration::from_millis(defaults::torii::QUERY_QUEUE_TIMEOUT_MS),
             tx_rate_per_authority_per_sec: None,
             tx_burst_per_authority: None,
@@ -929,6 +885,9 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 )
                 .expect("request signature replay cache must be non-zero"),
             },
+            app_api_routed_read_body_read_timeout: Duration::from_millis(
+                defaults::torii::APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS,
+            ),
             attachments_ttl_secs: 7 * 24 * 60 * 60,
             attachments_max_bytes: 4 * 1024 * 1024,
             attachments_per_tenant_max_count: defaults::torii::ATTACHMENTS_PER_TENANT_MAX_COUNT,
@@ -963,6 +922,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             zk_prover_enabled: false,
             zk_prover_scan_period_secs: 30,
             zk_prover_reports_ttl_secs: 7 * 24 * 60 * 60,
+            zk_prover_reports_max_count:
+                iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT,
+            zk_prover_reports_max_bytes:
+                iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_BYTES,
             zk_prover_max_inflight: defaults::torii::ZK_PROVER_MAX_INFLIGHT,
             zk_prover_max_scan_bytes: defaults::torii::ZK_PROVER_MAX_SCAN_BYTES,
             zk_prover_max_scan_millis: defaults::torii::ZK_PROVER_MAX_SCAN_MILLIS,
@@ -1519,11 +1482,9 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         },
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{borrow::Cow, sync::Arc};
-
     use super::checked_random_keypair;
     use iroha_core::{
         kura::Kura,
@@ -1541,19 +1502,16 @@ mod tests {
         nexus::{DataSpaceId, LaneId},
         transaction::{TransactionBuilder, TransactionEntrypoint},
     };
-
     use super::{
         apply_queued_in_one_block, contract_code_hash_hex, execution_context_for_routing_plan,
         minimal_ivm_program,
     };
-
     #[test]
     fn contract_code_hash_hex_matches_domain_separated_full_artifact_hash() {
         let code = minimal_ivm_program(1);
         let expected = hex::encode(<[u8; 32]>::from(ivm::contract_code_hash(&code)));
         assert_eq!(contract_code_hash_hex(&code), expected);
     }
-
     #[test]
     fn shared_random_fixture_helpers_emit_default_keys() {
         let creds = super::random_authority();
@@ -1561,7 +1519,6 @@ mod tests {
             creds.account.expect_single_signatory().algorithm(),
             iroha_crypto::Algorithm::default()
         );
-
         let cfg = super::mk_minimal_root_cfg();
         assert_eq!(
             cfg.common.key_pair.algorithm(),
@@ -1572,7 +1529,6 @@ mod tests {
             iroha_crypto::Algorithm::default()
         );
     }
-
     #[test]
     fn fixture_execution_context_preserves_full_routing_plan() {
         let coordinator = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(20));
@@ -1584,9 +1540,7 @@ mod tests {
         let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
             b"torii fixture routed transaction",
         ));
-
         let context = execution_context_for_routing_plan(entrypoint_hash, coordinator, &plan);
-
         assert_eq!(context.entrypoint_hash, entrypoint_hash);
         assert_eq!(context.lane_id, coordinator.lane_id);
         assert_eq!(context.dataspace_id, coordinator.dataspace_id);
@@ -1606,7 +1560,6 @@ mod tests {
             participant.dataspace_id
         );
     }
-
     #[test]
     fn apply_queued_in_one_block_overrides_chain_id() {
         let keypair = checked_random_keypair("queued transaction signer fixture");
@@ -1622,15 +1575,12 @@ mod tests {
             chain_id.clone(),
         ));
         let network_id = *state.network_id_ref();
-
         assert_eq!(&state.chain_id, &chain_id);
-
         let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
         let queue = Arc::new(Queue::from_config(
             iroha_config::parameters::actual::Queue::default(),
             events,
         ));
-
         let tx = TransactionBuilder::new(
             network_id,
             authority.clone(),
@@ -1644,7 +1594,6 @@ mod tests {
         let first_tx_hash = tx.hash();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         queue.push(accepted, state.view()).expect("queue push");
-
         let applied = apply_queued_in_one_block(&state, &queue, &chain_id, 1);
         assert_eq!(applied, 1);
         let view = state.view();
@@ -1667,7 +1616,6 @@ mod tests {
                 .collect()
         );
         drop(view);
-
         let second_tx = TransactionBuilder::new(
             network_id,
             authority,

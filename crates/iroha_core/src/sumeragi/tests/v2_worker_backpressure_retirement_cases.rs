@@ -17,7 +17,6 @@ fn closed_flush_racing_final_receiver_retirement_is_nonfatal() {
             .expect("one retirement-race reply fanout"),
         )
         .expect("retain the retirement-race reply");
-
     let mut control = None;
     pending
         .drive_with_budget_ack(usize::MAX, |post, _ticket, attempted, _timeout_attempt| {
@@ -35,7 +34,6 @@ fn closed_flush_racing_final_receiver_retirement_is_nonfatal() {
     pending
         .poll_reply_flushes()
         .expect("final receiver retirement after Closed must not fail stop output");
-
     let target = &pending.fanouts[0].targets[0];
     assert_eq!(target.message_index, 0);
     assert!(target.current.is_none());

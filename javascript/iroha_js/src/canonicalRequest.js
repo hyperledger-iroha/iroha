@@ -16,6 +16,17 @@ const CANONICAL_REQUEST_NETWORK_DOMAIN = Buffer.from(
   "utf8",
 );
 
+/** Maximum decoded non-empty form pairs in a canonical V1 request. */
+export const CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1 = 64;
+/** Maximum UTF-8 bytes in the raw canonical V1 query. */
+export const CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1 = 64 * 1024;
+/** Maximum UTF-8 bytes in the canonical V1 HTTP method token. */
+export const CANONICAL_REQUEST_MAX_METHOD_BYTES_V1 = 32;
+/** Maximum UTF-8 bytes in the percent-encoded canonical V1 path. */
+export const CANONICAL_REQUEST_MAX_PATH_BYTES_V1 = 64 * 1024;
+/** Maximum UTF-8 bytes in a canonical V1 account identity or alias. */
+export const CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1 = 36 * 1024;
+
 function compareUtf8(left, right) {
   if (left === right) {
     return 0;
@@ -39,6 +50,16 @@ function requireExactNonBlankString(value, field, context) {
   if (value.trim() !== value) {
     throw new Error(`${field} must not contain surrounding whitespace for ${context}`);
   }
+  if (
+    field === "nonce" &&
+    (Buffer.byteLength(value, "utf8") > 256 ||
+      !Array.from(value).every((character) => {
+        const code = character.codePointAt(0);
+        return code >= 0x21 && code <= 0x7e;
+      }))
+  ) {
+    throw new Error(`nonce must contain 1...256 non-whitespace ASCII bytes for ${context}`);
+  }
   return value;
 }
 
@@ -49,6 +70,11 @@ export function requireCanonicalAuthAccount(value, context) {
   if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
     throw new TypeError(
       `${context} must be an exact canonical I105 account or ASCII account alias`,
+    );
+  }
+  if (Buffer.byteLength(value, "utf8") > CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1) {
+    throw new TypeError(
+      `${context} exceeds ${CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1} UTF-8 bytes`,
     );
   }
   if (CANONICAL_AUTH_ACCOUNT_ALIAS_PATTERN.test(value)) {
@@ -68,9 +94,10 @@ export function requireCanonicalAuthAccount(value, context) {
 }
 
 function canonicalAuthAccountHeaderValue(accountId) {
-  // Fetch headers accept ByteString values. Use Latin-1 code units as the
-  // carrier so the emitted header bytes are the account literal's exact UTF-8.
-  return Buffer.from(accountId, "utf8").toString("latin1");
+  if (CANONICAL_AUTH_ACCOUNT_ALIAS_PATTERN.test(accountId)) {
+    return accountId;
+  }
+  return AccountAddress.parseEncoded(accountId).address.canonicalHex();
 }
 
 /**
@@ -82,8 +109,20 @@ export function canonicalQueryString(raw) {
   if (raw === undefined || raw === null) {
     return "";
   }
-  const params = raw instanceof URLSearchParams ? raw : new URLSearchParams(String(raw));
+  const rawText = raw instanceof URLSearchParams ? raw.toString() : String(raw);
+  const rawBytes = Buffer.byteLength(rawText, "utf8");
+  if (rawBytes > CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1) {
+    throw new RangeError(
+      `canonical request query exceeds ${CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1} raw UTF-8 bytes`,
+    );
+  }
+  const params = new URLSearchParams(rawText);
   const pairs = Array.from(params.entries()).map(([k, v]) => [k, v]);
+  if (pairs.length > CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1) {
+    throw new RangeError(
+      `canonical request query exceeds ${CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1} pairs`,
+    );
+  }
   pairs.sort((a, b) => {
     const keyOrder = compareUtf8(a[0], b[0]);
     if (keyOrder !== 0) {
@@ -104,11 +143,23 @@ export function canonicalQueryString(raw) {
  * @returns {Buffer}
  */
 export function canonicalRequestMessage({ method, path, query, body }) {
-  const upperMethod = String(method ?? "").toUpperCase();
+  const methodText = String(method ?? "");
+  const pathText = String(path);
+  if (Buffer.byteLength(methodText, "utf8") > CANONICAL_REQUEST_MAX_METHOD_BYTES_V1) {
+    throw new RangeError(
+      `canonical request method exceeds ${CANONICAL_REQUEST_MAX_METHOD_BYTES_V1} UTF-8 bytes`,
+    );
+  }
+  if (Buffer.byteLength(pathText, "utf8") > CANONICAL_REQUEST_MAX_PATH_BYTES_V1) {
+    throw new RangeError(
+      `canonical request path exceeds ${CANONICAL_REQUEST_MAX_PATH_BYTES_V1} UTF-8 bytes`,
+    );
+  }
+  const upperMethod = methodText.toUpperCase();
   const canonicalQuery = canonicalQueryString(query);
   const bodyBuffer = body === undefined ? Buffer.alloc(0) : Buffer.from(body);
   const bodyHash = createHash("sha256").update(bodyBuffer).digest("hex");
-  const rendered = `${upperMethod}\n${path}\n${canonicalQuery}\n${bodyHash}`;
+  const rendered = `${upperMethod}\n${pathText}\n${canonicalQuery}\n${bodyHash}`;
   return Buffer.from(rendered, "utf8");
 }
 
@@ -127,6 +178,9 @@ export function canonicalRequestSignatureMessage({
   timestampMs,
   nonce,
 }) {
+  if (!Number.isSafeInteger(timestampMs) || timestampMs < 0) {
+    throw new RangeError("timestampMs must be a non-negative safe integer");
+  }
   const checkedNonce = requireExactNonBlankString(
     nonce,
     "nonce",
@@ -144,8 +198,9 @@ export function canonicalRequestSignatureMessage({
 
 /**
  * Build canonical signing headers for app-facing Torii endpoints.
- * `accountId` is the exact canonical I105 account or active canonical ASCII
- * account alias carried by `X-Iroha-Account`.
+ * `accountId` is an exact canonical I105 account or active canonical ASCII
+ * alias. I105 is rendered as lowercase canonical hex in `X-Iroha-Account`;
+ * ASCII aliases are carried unchanged.
  * @param {{accountId: string, networkId: import("./networkId.js").NetworkId, method: string, path: string, query?: string | URLSearchParams, body?: Buffer | ArrayBuffer | ArrayBufferView | string, privateKey: Buffer | ArrayBuffer | ArrayBufferView, timestampMs?: number, nonce?: string}} params
  * @returns {{ "X-Iroha-Account": string, "X-Iroha-Signature": string, "X-Iroha-Timestamp-Ms": string, "X-Iroha-Nonce": string }}
  */
@@ -167,17 +222,13 @@ export function buildCanonicalRequestHeaders({
   if (!privateKey) {
     throw new Error("privateKey is required for canonical headers");
   }
-  if (!Number.isFinite(timestampMs)) {
-    throw new Error("timestampMs must be a finite number");
-  }
   const checkedNonce = requireExactNonBlankString(nonce, "nonce", "canonical headers");
-  const normalizedTimestampMs = Math.trunc(timestampMs);
   const signatureInput = {
     method,
     path,
     query,
     body,
-    timestampMs: normalizedTimestampMs,
+    timestampMs,
     nonce: checkedNonce,
   };
   const message = canonicalRequestSignatureMessage({ networkId, ...signatureInput });
@@ -185,7 +236,7 @@ export function buildCanonicalRequestHeaders({
   return {
     "X-Iroha-Account": canonicalAuthAccountHeaderValue(checkedAccount),
     "X-Iroha-Signature": Buffer.from(signature).toString("base64"),
-    "X-Iroha-Timestamp-Ms": String(normalizedTimestampMs),
+    "X-Iroha-Timestamp-Ms": String(timestampMs),
     "X-Iroha-Nonce": checkedNonce,
   };
 }
@@ -311,9 +362,6 @@ export async function buildCanonicalJsonRequest({
   if (!path) {
     throw new Error("path is required for canonical JSON requests");
   }
-  if (!Number.isFinite(timestampMs)) {
-    throw new Error("timestampMs must be a finite number");
-  }
   const checkedNonce = requireExactNonBlankString(
     nonce,
     "nonce",
@@ -323,7 +371,6 @@ export async function buildCanonicalJsonRequest({
     throw new Error("privateKey or sign is required for canonical JSON requests");
   }
   const methodUpper = String(method).toUpperCase();
-  const normalizedTimestampMs = Math.trunc(timestampMs);
   const canonicalTarget = canonicalTargetFromPath({ path, query, baseUrl });
   const bodyJson = body === undefined ? "" : JSON.stringify(body);
   const message = canonicalRequestSignatureMessage({
@@ -332,7 +379,7 @@ export async function buildCanonicalJsonRequest({
     path: canonicalTarget.path,
     query: canonicalTarget.query,
     body: bodyJson,
-    timestampMs: normalizedTimestampMs,
+    timestampMs,
     nonce: checkedNonce,
   });
   const signatureBase64 = privateKey
@@ -346,7 +393,7 @@ export async function buildCanonicalJsonRequest({
           path: canonicalTarget.path,
           query: canonicalTarget.query,
           body: bodyJson,
-          timestampMs: normalizedTimestampMs,
+          timestampMs,
           nonce: checkedNonce,
         }),
       );
@@ -357,7 +404,7 @@ export async function buildCanonicalJsonRequest({
       ...normalizeHeadersInit(headers),
       "X-Iroha-Account": canonicalAuthAccountHeaderValue(checkedAccount),
       "X-Iroha-Signature": signatureBase64,
-      "X-Iroha-Timestamp-Ms": String(normalizedTimestampMs),
+      "X-Iroha-Timestamp-Ms": String(timestampMs),
       "X-Iroha-Nonce": checkedNonce,
     },
     body: bodyJson,

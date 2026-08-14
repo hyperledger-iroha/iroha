@@ -1,11 +1,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! End-to-end regressions for the authoritative Sumeragi v2 production runner.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::{Duration, Instant},
 };
-
 use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::future::try_join_all;
 use integration_tests::sandbox;
@@ -44,7 +42,6 @@ use iroha_test_network::{
 };
 use norito::json::Value;
 use tokio::{task, time::sleep};
-
 const VALIDATOR_COUNT: usize = 4;
 const LOCKED_REPROPOSAL_HEIGHT: u64 = 2;
 const LOCKED_REPROPOSAL_FIRST_VIEW: u64 = 0;
@@ -71,7 +68,6 @@ const SIGNED_OBSERVER_COUNT: usize = 5;
 const OBSERVER_SLOW_READ_CHUNK_BYTES: usize = 1_024;
 const OBSERVER_SLOW_READ_DELAY: Duration = Duration::from_millis(2);
 const OBSERVER_PRESSURE_PAYLOAD_BYTES: usize = 512 * 1024;
-
 #[derive(Clone, Debug)]
 struct V2StatusSnapshot {
     peer: String,
@@ -95,24 +91,20 @@ struct V2StatusSnapshot {
     prepare_quorums: Vec<SumeragiV2VoteQuorumStatus>,
     liveness: SumeragiV2LivenessStatus,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PrepareQcSnapshot {
     reference: QuorumCertificateRef,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct LockedReproposalPrepareQcSplit<'a> {
     locked: &'a QuorumCertificateRef,
     reproposed: &'a QuorumCertificateRef,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct DistinctPrepareQcSplit<'a> {
     first: &'a QuorumCertificateRef,
     second: &'a QuorumCertificateRef,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct HeldVoteSelection {
     subject: Option<BlockSubject>,
@@ -122,7 +114,6 @@ struct HeldVoteSelection {
     envelope_digests: Vec<Hash>,
     sequences: Vec<u64>,
 }
-
 fn strict_dual_quorum(
     signer_count: u32,
     min_signers: u32,
@@ -136,7 +127,6 @@ fn strict_dual_quorum(
         && signed_power <= total_power
         && u128::from(signed_power) * 3 > u128::from(total_power) * 2
 }
-
 fn is_minimal_exact_prepare_quorum(
     quorum: &SumeragiV2VoteQuorumStatus,
     height_context: &SumeragiV2HeightContextStatus,
@@ -156,7 +146,6 @@ fn is_minimal_exact_prepare_quorum(
             quorum.total_power,
         )
 }
-
 fn validate_minimal_exact_prepare_quorum(
     snapshot: &V2StatusSnapshot,
     expected: &QuorumCertificateRef,
@@ -185,7 +174,6 @@ fn validate_minimal_exact_prepare_quorum(
     );
     Ok(())
 }
-
 fn validate_commit_qc_dual_quorum(
     snapshot: &V2StatusSnapshot,
     minimum_committed_height: u64,
@@ -239,7 +227,6 @@ fn validate_commit_qc_dual_quorum(
     }
     Ok(())
 }
-
 fn locked_commit_has_exact_progress_witness(
     liveness: &SumeragiV2LivenessStatus,
     locked: &QuorumCertificateRef,
@@ -291,10 +278,8 @@ fn locked_commit_has_exact_progress_witness(
                 && certificate.certificate.subject == locked.subject
                 && certificate.certificate.execution_commitment == locked.execution_commitment
         });
-
     exact_pool || exact_outbound || exact_timeout || exact_decision
 }
-
 fn validate_locked_commit_progress_witness(
     snapshot: &V2StatusSnapshot,
     locked: &QuorumCertificateRef,
@@ -339,7 +324,6 @@ fn validate_locked_commit_progress_witness(
     }
     Ok(())
 }
-
 fn validate_applied_successor_witness(
     snapshot: &V2StatusSnapshot,
     minimum_committed_height: u64,
@@ -359,7 +343,6 @@ fn validate_applied_successor_witness(
     );
     Ok(())
 }
-
 fn classify_locked_reproposal_prepare_qc_split<'a>(
     qcs: &[&'a PrepareQcSnapshot],
     height: u64,
@@ -369,7 +352,6 @@ fn classify_locked_reproposal_prepare_qc_split<'a>(
     if qcs.len() != VALIDATOR_COUNT {
         return None;
     }
-
     // Receiver-local rules admit the second-view Prepare traffic to the first
     // two peers and retain it at the final two peers. Preserve that exact
     // partition shape instead of accepting an arbitrary count-only split.
@@ -384,7 +366,6 @@ fn classify_locked_reproposal_prepare_qc_split<'a>(
     {
         return None;
     }
-
     let reproposed_reference = &reproposed[0].reference;
     let locked_reference = &locked[0].reference;
     if reproposed
@@ -398,13 +379,11 @@ fn classify_locked_reproposal_prepare_qc_split<'a>(
     {
         return None;
     }
-
     Some(LockedReproposalPrepareQcSplit {
         locked: locked_reference,
         reproposed: reproposed_reference,
     })
 }
-
 fn classify_distinct_prepare_qc_split<'a>(
     qcs: &[&'a PrepareQcSnapshot],
     first_group: [usize; 2],
@@ -446,7 +425,6 @@ fn classify_distinct_prepare_qc_split<'a>(
         second: &qcs[second_group[0]].reference,
     })
 }
-
 fn held_no_high_timeout_vote_selection(
     ack: &ConsensusMessageControlAck,
     height: u64,
@@ -493,7 +471,6 @@ fn held_no_high_timeout_vote_selection(
     }
     None
 }
-
 fn held_prepare_vote_subject(
     ack: &ConsensusMessageControlAck,
     height: u64,
@@ -575,7 +552,6 @@ fn held_prepare_vote_subject(
             })
         })
 }
-
 fn held_prepare_certificate_sequences(
     ack: &ConsensusMessageControlAck,
     height: u64,
@@ -620,7 +596,6 @@ fn held_prepare_certificate_sequences(
         }
     })
 }
-
 fn held_timeout_certificate_sequences(
     ack: &ConsensusMessageControlAck,
     height: u64,
@@ -666,7 +641,6 @@ fn held_timeout_certificate_sequences(
         }
     })
 }
-
 fn held_quorum_evidence_sequences(
     ack: &ConsensusMessageControlAck,
     height: u64,
@@ -696,7 +670,6 @@ fn held_quorum_evidence_sequences(
     if !has_certificate && vote_senders.len() < LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES {
         return None;
     }
-
     let mut sequences = matching
         .into_iter()
         .map(|message| message.sequence)
@@ -704,7 +677,6 @@ fn held_quorum_evidence_sequences(
     sequences.sort_unstable();
     (!sequences.is_empty()).then_some(sequences)
 }
-
 fn locked_reproposal_receiver_rules(
     receiver_index: usize,
     peer_ids: &[PeerId],
@@ -769,7 +741,6 @@ fn locked_reproposal_receiver_rules(
     }
     rules
 }
-
 fn observer_pressure_view_change_rules(
     receiver_index: usize,
     peer_ids: &[PeerId],
@@ -796,7 +767,6 @@ fn observer_pressure_view_change_rules(
         })
         .collect()
 }
-
 fn distinct_prepare_qc_receiver_rules(
     receiver_index: usize,
     peer_ids: &[PeerId],
@@ -842,7 +812,6 @@ fn distinct_prepare_qc_receiver_rules(
     }
     rules
 }
-
 #[cfg(test)]
 mod prepare_qc_split_tests {
     use super::*;
@@ -857,19 +826,15 @@ mod prepare_qc_split_tests {
         },
     };
     use iroha_test_network::ConsensusMessageControlHeld;
-
     const HEIGHT: u64 = 3;
     const FIRST_VIEW: u64 = 0;
     const SECOND_VIEW: u64 = 1;
-
     fn hash(seed: u8) -> Hash {
         Hash::new([seed])
     }
-
     fn hash_of<T>(seed: u8) -> HashOf<T> {
         HashOf::from_untyped_unchecked(hash(seed))
     }
-
     fn snapshot(view: u64, subject_seed: u8, execution_seed: u8) -> PrepareQcSnapshot {
         PrepareQcSnapshot {
             reference: QuorumCertificateRef {
@@ -899,12 +864,10 @@ mod prepare_qc_split_tests {
             },
         }
     }
-
     fn classify(snapshots: &[PrepareQcSnapshot]) -> Option<LockedReproposalPrepareQcSplit<'_>> {
         let qcs = snapshots.iter().collect::<Vec<_>>();
         classify_locked_reproposal_prepare_qc_split(&qcs, HEIGHT, FIRST_VIEW, SECOND_VIEW)
     }
-
     fn height_context_status() -> SumeragiV2HeightContextStatus {
         SumeragiV2HeightContextStatus {
             epoch: 0,
@@ -918,7 +881,6 @@ mod prepare_qc_split_tests {
             },
         }
     }
-
     fn quorum(reference: QuorumCertificateRef) -> SumeragiV2VoteQuorumStatus {
         SumeragiV2VoteQuorumStatus {
             round: reference.round,
@@ -931,7 +893,6 @@ mod prepare_qc_split_tests {
             total_power: 4,
         }
     }
-
     fn peer_ids() -> Vec<PeerId> {
         (0..VALIDATOR_COUNT)
             .map(|index| {
@@ -944,7 +905,6 @@ mod prepare_qc_split_tests {
             })
             .collect()
     }
-
     fn ack(held: Vec<ConsensusMessageControlHeld>) -> ConsensusMessageControlAck {
         ConsensusMessageControlAck {
             revision: 1,
@@ -967,7 +927,6 @@ mod prepare_qc_split_tests {
             drain_fence: None,
         }
     }
-
     fn held_prepare_vote(
         sequence: u64,
         sender: PeerId,
@@ -991,7 +950,6 @@ mod prepare_qc_split_tests {
             size_bytes: 64,
         }
     }
-
     fn held_timeout_vote(
         sequence: u64,
         sender: PeerId,
@@ -1014,7 +972,6 @@ mod prepare_qc_split_tests {
             size_bytes: 64,
         }
     }
-
     fn held_prepare_certificate(
         sequence: u64,
         sender: PeerId,
@@ -1038,7 +995,6 @@ mod prepare_qc_split_tests {
             size_bytes: 96,
         }
     }
-
     fn held_timeout_certificate(
         sequence: u64,
         sender: PeerId,
@@ -1062,7 +1018,6 @@ mod prepare_qc_split_tests {
             size_bytes: 96,
         }
     }
-
     #[test]
     fn classifies_prepare_qc_partitions_and_held_evidence() {
         let reproposed = snapshot(SECOND_VIEW, 0x40, 0x50);
@@ -1073,13 +1028,11 @@ mod prepare_qc_split_tests {
             locked.clone(),
             locked.clone(),
         ];
-
         let split = classify(&snapshots).expect("valid locked-body split");
         assert_eq!(*split.locked, locked.reference);
         assert_eq!(*split.reproposed, reproposed.reference);
         assert_ne!(split.locked, split.reproposed);
         assert_eq!(split.locked.subject, split.reproposed.subject);
-
         let first = snapshot(FIRST_VIEW, 0x40, 0x50);
         let second = snapshot(SECOND_VIEW, 0x41, 0x51);
         let snapshots = [first.clone(), first.clone(), second.clone(), second.clone()];
@@ -1125,7 +1078,6 @@ mod prepare_qc_split_tests {
             )
             .is_none()
         );
-
         let peer_ids = peer_ids();
         let first_vote = snapshot(FIRST_VIEW, 0x70, 0x72).reference;
         let second_vote = snapshot(FIRST_VIEW, 0x71, 0x73).reference;
@@ -1170,7 +1122,6 @@ mod prepare_qc_split_tests {
             )
             .is_none()
         );
-
         let mut duplicate_digest = held_prepare_vote(12, peer_ids[1].clone(), 1, first_vote);
         duplicate_digest.envelope_digest = hash(11);
         assert!(
@@ -1188,7 +1139,6 @@ mod prepare_qc_split_tests {
             .is_none(),
             "a forged duplicate envelope digest cannot count as two signed votes"
         );
-
         let timeout_ack = ack(vec![
             held_timeout_vote(5, peer_ids[0].clone(), 0),
             held_timeout_vote(6, peer_ids[1].clone(), 1),
@@ -1208,7 +1158,6 @@ mod prepare_qc_split_tests {
         .expect("two exact no-high timeout votes");
         assert_eq!(timeout.signers, BTreeSet::from([0, 1]));
         assert_eq!(timeout.sequences, vec![5, 6]);
-
         let certificate_signers = vec![0, 1, 2];
         let certificate_digest = hash(0xA0);
         let mut first_certificate = held_prepare_certificate(
@@ -1272,7 +1221,6 @@ mod prepare_qc_split_tests {
             .is_none(),
             "different certificate digests cannot be combined into one source set"
         );
-
         let timeout_certificate_digest = hash(0xA1);
         let mut first_timeout_certificate =
             held_timeout_certificate(8, peer_ids[0].clone(), None, certificate_signers.clone());
@@ -1367,7 +1315,6 @@ mod prepare_qc_split_tests {
             ),
             Some(vec![9]),
         );
-
         let mut relayed = held_timeout_vote(10, peer_ids[0].clone(), 0);
         relayed.authenticated_via = peer_ids[2].clone();
         assert!(
@@ -1381,7 +1328,6 @@ mod prepare_qc_split_tests {
             .is_none()
         );
     }
-
     #[test]
     fn exact_prepare_qc_requires_both_count_and_power_quorum() {
         assert!(strict_dual_quorum(3, 3, 3, 4));
@@ -1396,12 +1342,10 @@ mod prepare_qc_split_tests {
         assert!(!strict_dual_quorum(3, 3, 2, 2));
         assert!(!strict_dual_quorum(3, 3, 5, 4));
         assert!(!strict_dual_quorum(3, 3, 0, 0));
-
         let expected = snapshot(FIRST_VIEW, 0x40, 0x50).reference;
         let context = height_context_status();
         let valid = quorum(expected);
         assert!(is_minimal_exact_prepare_quorum(&valid, &context, &expected));
-
         let mut count_short = valid;
         count_short.signer_count = 2;
         assert!(!is_minimal_exact_prepare_quorum(
@@ -1409,7 +1353,6 @@ mod prepare_qc_split_tests {
             &context,
             &expected
         ));
-
         let mut power_short = valid;
         power_short.signed_power = 2;
         assert!(!is_minimal_exact_prepare_quorum(
@@ -1417,7 +1360,6 @@ mod prepare_qc_split_tests {
             &context,
             &expected
         ));
-
         let mut over_delivered = valid;
         over_delivered.signer_count = 4;
         over_delivered.signed_power = 4;
@@ -1426,7 +1368,6 @@ mod prepare_qc_split_tests {
             &context,
             &expected
         ));
-
         let mut wrong_subject = valid;
         wrong_subject.subject = snapshot(FIRST_VIEW, 0x41, 0x50).reference.subject;
         assert!(!is_minimal_exact_prepare_quorum(
@@ -1434,7 +1375,6 @@ mod prepare_qc_split_tests {
             &context,
             &expected
         ));
-
         let mut wrong_total = valid;
         wrong_total.total_power = 3;
         assert!(!is_minimal_exact_prepare_quorum(
@@ -1443,7 +1383,6 @@ mod prepare_qc_split_tests {
             &expected
         ));
     }
-
     #[test]
     fn locked_commit_progress_witness_rejects_inexact_or_empty_ownership() {
         let locked = snapshot(FIRST_VIEW, 0x40, 0x50).reference;
@@ -1456,7 +1395,6 @@ mod prepare_qc_split_tests {
             HEIGHT - 1,
             None,
         ));
-
         let outbound = |kind, reference: QuorumCertificateRef| SumeragiV2OutboundIntentStatus {
             kind,
             round: reference.round,
@@ -1477,7 +1415,6 @@ mod prepare_qc_split_tests {
             HEIGHT - 1,
             None,
         ));
-
         let mut wrong_round = empty.clone();
         wrong_round.outbound_intents.push(outbound(
             SumeragiV2OutboundIntentKind::CommitVote,
@@ -1491,7 +1428,6 @@ mod prepare_qc_split_tests {
             HEIGHT - 1,
             None,
         ));
-
         let mut wrong_origin = outbound(SumeragiV2OutboundIntentKind::CommitVote, locked);
         wrong_origin.proposal_round = Some(snapshot(SECOND_VIEW, 0x40, 0x50).reference.round);
         let mut wrong_origin_status = empty.clone();
@@ -1504,7 +1440,6 @@ mod prepare_qc_split_tests {
             HEIGHT - 1,
             None,
         ));
-
         let mut wrong_subject = empty.clone();
         wrong_subject.outbound_intents.push(outbound(
             SumeragiV2OutboundIntentKind::CommitVote,
@@ -1518,7 +1453,6 @@ mod prepare_qc_split_tests {
             HEIGHT - 1,
             None,
         ));
-
         let mut empty_pool = empty.clone();
         let mut no_signers = quorum(locked);
         no_signers.signer_count = 0;
@@ -1533,11 +1467,9 @@ mod prepare_qc_split_tests {
             None,
         ));
     }
-
     #[test]
     fn locked_commit_progress_witness_accepts_each_exact_owner() {
         let locked = snapshot(FIRST_VIEW, 0x40, 0x50).reference;
-
         let mut outbound = SumeragiV2LivenessStatus::default();
         outbound
             .outbound_intents
@@ -1557,7 +1489,6 @@ mod prepare_qc_split_tests {
             HEIGHT - 1,
             None,
         ));
-
         let mut pooled = SumeragiV2LivenessStatus::default();
         let mut one_vote = quorum(locked);
         one_vote.signer_count = 1;
@@ -1571,7 +1502,6 @@ mod prepare_qc_split_tests {
             HEIGHT - 1,
             None,
         ));
-
         let mut later_finality = outbound.clone();
         later_finality.outbound_intents[0].round.view = SECOND_VIEW;
         assert!(locked_commit_has_exact_progress_witness(
@@ -1582,7 +1512,6 @@ mod prepare_qc_split_tests {
             HEIGHT - 1,
             None,
         ));
-
         let exact_timeout = SumeragiV2OutboundIntentStatus {
             kind: SumeragiV2OutboundIntentKind::TimeoutVote,
             round: ConsensusRound {
@@ -1625,7 +1554,6 @@ mod prepare_qc_split_tests {
             HEIGHT - 1,
             None,
         ));
-
         let decision = SumeragiV2CommitQcStatus {
             certificate: QuorumCertificateRef {
                 phase: GlobalPhase::Commit,
@@ -1654,12 +1582,10 @@ mod prepare_qc_split_tests {
             Some(&decision),
         ));
     }
-
     #[test]
     fn rejects_malformed_locked_body_reference_splits() {
         let reproposed = snapshot(SECOND_VIEW, 0x40, 0x50);
         let locked = snapshot(FIRST_VIEW, 0x40, 0x50);
-
         let three_by_one = [
             reproposed.clone(),
             reproposed.clone(),
@@ -1667,7 +1593,6 @@ mod prepare_qc_split_tests {
             locked.clone(),
         ];
         assert!(classify(&three_by_one).is_none());
-
         let reversed_groups = [
             locked.clone(),
             locked.clone(),
@@ -1675,7 +1600,6 @@ mod prepare_qc_split_tests {
             reproposed.clone(),
         ];
         assert!(classify(&reversed_groups).is_none());
-
         let within_group_disagreement = [
             reproposed.clone(),
             snapshot(SECOND_VIEW, 0x40, 0x51),
@@ -1683,7 +1607,6 @@ mod prepare_qc_split_tests {
             locked.clone(),
         ];
         assert!(classify(&within_group_disagreement).is_none());
-
         let identical_cross_group_references = [
             reproposed.clone(),
             reproposed.clone(),
@@ -1691,7 +1614,6 @@ mod prepare_qc_split_tests {
             reproposed.clone(),
         ];
         assert!(classify(&identical_cross_group_references).is_none());
-
         let different_subjects = [
             snapshot(SECOND_VIEW, 0x41, 0x50),
             snapshot(SECOND_VIEW, 0x41, 0x50),
@@ -1699,7 +1621,6 @@ mod prepare_qc_split_tests {
             locked.clone(),
         ];
         assert!(classify(&different_subjects).is_none());
-
         let different_execution_commitments = [
             snapshot(SECOND_VIEW, 0x40, 0x52),
             snapshot(SECOND_VIEW, 0x40, 0x52),
@@ -1708,7 +1629,6 @@ mod prepare_qc_split_tests {
         ];
         assert!(classify(&different_execution_commitments).is_none());
     }
-
     #[test]
     fn initial_receiver_rules_encode_the_ordered_partition() {
         let peer_ids = peer_ids();
@@ -1784,7 +1704,6 @@ mod prepare_qc_split_tests {
             }));
         }
     }
-
     #[test]
     fn observer_pressure_rules_drop_only_remote_view_zero_commit_evidence() {
         let peer_ids = peer_ids();
@@ -1805,9 +1724,7 @@ mod prepare_qc_split_tests {
             }));
         }
     }
-
     include!("sumeragi_v2_runner/restart_timing_test.rs");
-
     #[test]
     fn distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one() {
         let cadence_ms = u64::try_from(DISTINCT_PREPARE_QC_BLOCK_CADENCE.as_millis())
@@ -1816,7 +1733,6 @@ mod prepare_qc_split_tests {
             iroha_config::parameters::actual::sumeragi_v2_timing_ms(cadence_ms)
                 .expect("scenario cadence derives valid v2 timing");
         let base_round_timeout = Duration::from_millis(base_round_timeout_ms);
-
         assert_eq!(base_round_timeout, Duration::from_secs(80));
         assert!(
             DISTINCT_PREPARE_QC_VIEW_ZERO_TIMEOUT
@@ -1829,7 +1745,6 @@ mod prepare_qc_split_tests {
         );
     }
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn authoritative_v2_genesis_commits_on_every_validator() -> Result<()> {
     init_instruction_registry();
@@ -1846,7 +1761,6 @@ async fn authoritative_v2_genesis_commits_on_every_validator() -> Result<()> {
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
     };
-
     let result = async {
         ensure!(
             network.peers().len() == VALIDATOR_COUNT
@@ -1881,7 +1795,6 @@ async fn authoritative_v2_genesis_commits_on_every_validator() -> Result<()> {
     network.shutdown_and_release().await;
     result
 }
-
 /// Four validators must retain the exact voting roster while five signed
 /// observers recover through authenticated body sync after receiver-local
 /// control forces a view change under bounded, byte-transparent slow-reader
@@ -1890,7 +1803,6 @@ async fn authoritative_v2_genesis_commits_on_every_validator() -> Result<()> {
 #[ignore = "runs nine real peers with transparent slow-reader relays"]
 async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Result<()> {
     init_instruction_registry();
-
     let builder = NetworkBuilder::new()
         .with_peers(VALIDATOR_COUNT)
         .with_auto_populated_trusted_peers()
@@ -1909,13 +1821,11 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
         )
         .with_sync_timeout(Duration::from_secs(240))
         .with_peer_startup_timeout(Duration::from_secs(180));
-
     let context = stringify!(signed_observer_slow_reader_pressure_recovers_exact_successor);
     let network = sandbox::start_network_async_or_skip(builder, context).await?;
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
     };
-
     let result = async {
         let validators = network.validators().to_vec();
         let observers = network.observers().to_vec();
@@ -1926,7 +1836,6 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
                 && all_participants.len() == VALIDATOR_COUNT + SIGNED_OBSERVER_COUNT,
             "observer pressure scenario requires exactly four validators and five observers"
         );
-
         let validator_ids = validators
             .iter()
             .map(NetworkPeer::id)
@@ -1954,7 +1863,6 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
                 && topology_ids.is_disjoint(&observer_ids),
             "signed observers entered the validator topology: validators={validator_ids:?}, observers={observer_ids:?}, topology={topology_ids:?}"
         );
-
         try_join_all(validators.iter().zip(&expected_rules).map(|(peer, expected)| async move {
             let ack = peer
                 .consensus_message_control()
@@ -1976,7 +1884,6 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
             Ok::<(), eyre::Report>(())
         }))
         .await?;
-
         let initial = wait_for_v2_status_condition(
             &validators,
             "one common open observer-pressure height-two view-zero round",
@@ -2006,7 +1913,6 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
             network.set_observer_slow_reader_relays_paused(true),
             "observer slow-reader relays were unavailable at the exact open-round boundary"
         );
-
         let recovered_account = fixture_account(0xD5)?;
         assert_accounts_absent(&all_participants, &[recovered_account.clone()]).await?;
         let relay_stats_before = observers
@@ -2055,7 +1961,6 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
             ACCOUNT_VISIBILITY_TIMEOUT,
         )
         .await?;
-
         let committed_views =
             try_join_all(validators.iter().map(|peer| {
                 committed_view_at_height(peer, LOCKED_REPROPOSAL_HEIGHT)
@@ -2086,7 +1991,6 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
             dropped.iter().all(|count| *count > 0),
             "a validator changed view without proving its exact receiver-local drop rule fired: {dropped:?}"
         );
-
         let recovered = wait_for_common_awaiting_v2_round(
             &validators,
             LOCKED_REPROPOSAL_HEIGHT,
@@ -2097,7 +2001,6 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
         for snapshot in &recovered {
             validate_applied_successor_witness(snapshot, LOCKED_REPROPOSAL_HEIGHT)?;
         }
-
         let proof = fetch_bridge_finality_proof(&validators[0], LOCKED_REPROPOSAL_HEIGHT).await?;
         verify_bridge_finality_proof(&proof, &network.client().network_id)
             .wrap_err("recovered block finality proof failed cryptographic validation")?;
@@ -2159,7 +2062,6 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
             artifact.commit_qc.signers,
             artifact.height_context.quorum,
         );
-
         let observer_snapshots = wait_for_v2_status_condition(
             &observers,
             "observer convergence on the applied successor",
@@ -2214,17 +2116,14 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
         Ok(())
     }
     .await;
-
     network.shutdown_and_release().await;
     result
 }
-
 /// A four-voter v2 network must finalize across one validator outage, recover
 /// the restarted validator, and keep finalizing with the full roster restored.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
     init_instruction_registry();
-
     let builder = NetworkBuilder::new()
         .with_peers(VALIDATOR_COUNT)
         .with_auto_populated_trusted_peers()
@@ -2235,7 +2134,6 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
     };
-
     let result = async {
         ensure!(
             network.peers().len() == VALIDATOR_COUNT,
@@ -2254,7 +2152,6 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             network.peers().iter().all(NetworkPeer::is_running),
             "all four voting validators must be running after fresh genesis"
         );
-
         let all_peers = network.peers().to_vec();
         let initial_statuses =
             wait_for_normal_statuses(&all_peers, 1, STATUS_TIMEOUT).await?;
@@ -2271,7 +2168,6 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             wait_for_common_awaiting_v2_round(&all_peers, initial_committed_floor, STATUS_TIMEOUT)
                 .await?;
         validate_v2_status_set(&initial_v2, VALIDATOR_COUNT)?;
-
         let before_restart_account = fixture_account(0xA1)?;
         let during_outage_account = fixture_account(0xA2)?;
         let after_restart_account = fixture_account(0xA3)?;
@@ -2284,7 +2180,6 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             ],
         )
         .await?;
-
         let first_target_non_empty = initial_statuses
             .iter()
             .map(|status| status.blocks_non_empty)
@@ -2302,7 +2197,6 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             ACCOUNT_VISIBILITY_TIMEOUT,
         )
         .await?;
-
         let pre_restart_statuses = wait_for_normal_statuses(
             &all_peers,
             initial_committed_floor.saturating_add(1),
@@ -2325,7 +2219,6 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
         for snapshot in &pre_restart_v2 {
             validate_applied_successor_witness(snapshot, pre_restart_floor)?;
         }
-
         let config_layers = network
             .config_layers()
             .collect::<Vec<_>>();
@@ -2333,7 +2226,6 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
         let restart_peer = network.peers()[restart_index].clone();
         let restart_node_fingerprint = pre_restart_v2[restart_index].node_fingerprint.clone();
         restart_peer.shutdown().await;
-
         let remaining_peers = network
             .peers()
             .iter()
@@ -2345,7 +2237,6 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             "exactly three voting validators must remain after one-peer shutdown, got {}",
             remaining_peers.len()
         );
-
         let outage_baseline = normal_statuses(&remaining_peers).await?;
         let outage_target_non_empty = outage_baseline
             .iter()
@@ -2364,7 +2255,6 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             ACCOUNT_VISIBILITY_TIMEOUT,
         )
         .await?;
-
         let outage_statuses = wait_for_normal_statuses(
             &remaining_peers,
             pre_restart_floor.saturating_add(1),
@@ -2390,7 +2280,6 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
         for snapshot in &outage_v2 {
             validate_applied_successor_witness(snapshot, outage_floor)?;
         }
-
         restart_peer
             .start_checked(config_layers.iter().cloned(), None)
             .await
@@ -2408,7 +2297,6 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             ACCOUNT_VISIBILITY_TIMEOUT,
         )
         .await?;
-
         let recovered_statuses =
             wait_for_normal_statuses(&all_peers, outage_floor, STATUS_TIMEOUT).await?;
         let recovered_floor = recovered_statuses
@@ -2426,7 +2314,6 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             recovered_v2[restart_index].node_fingerprint == restart_node_fingerprint,
             "a restarted validator must retain its v2 node identity"
         );
-
         let post_restart_target_non_empty = recovered_statuses
             .iter()
             .map(|status| status.blocks_non_empty)
@@ -2448,7 +2335,6 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             ACCOUNT_VISIBILITY_TIMEOUT,
         )
         .await?;
-
         let final_statuses = wait_for_normal_statuses(
             &all_peers,
             recovered_floor.saturating_add(1),
@@ -2487,21 +2373,17 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
                 after.peer
             );
         }
-
         Ok(())
     }
     .await;
-
     network.shutdown_and_release().await;
     result
 }
-
 /// The production NPoS runner must replace an unavailable view leader through
 /// a persisted timeout certificate and finalize within the Taira rollout bound.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()> {
     init_instruction_registry();
-
     // Taira's one-second cadence is signed into genesis. The v2 round timeout
     // is derived from that immutable cadence by the protocol.
     let builder = NetworkBuilder::new()
@@ -2515,7 +2397,6 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
     };
-
     let result = async {
         ensure!(
             network.peers().len() == VALIDATOR_COUNT
@@ -2526,7 +2407,6 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
             network.peers().iter().all(NetworkPeer::is_running),
             "all Taira validators must be running after fresh NPoS genesis"
         );
-
         let all_peers = network.peers().to_vec();
         let seed_account = fixture_account(0xB0)?;
         let outage_account = fixture_account(0xB1)?;
@@ -2535,7 +2415,6 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
             &[seed_account.clone(), outage_account.clone()],
         )
         .await?;
-
         // Commit a seed transaction so the next height has just opened. The
         // view-zero leader then has the full one-second cadence remaining,
         // which makes the leader outage deterministic rather than a race with
@@ -2552,7 +2431,6 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
             .ensure_blocks_with(|height| height.non_empty >= seed_target_non_empty)
             .await
             .wrap_err("Taira NPoS seed transaction did not finalize")?;
-
         let seeded = normal_statuses(&all_peers).await?;
         let seeded_floor = seeded
             .iter()
@@ -2574,7 +2452,6 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
         let config_layers = network
             .config_layers()
             .collect::<Vec<_>>();
-
         leader_peer.shutdown().await;
         ensure!(
             !leader_peer.is_running(),
@@ -2589,7 +2466,6 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
             remaining_peers.len() == VALIDATOR_COUNT - 1,
             "exactly three NPoS voters must remain after the leader outage"
         );
-
         let outage_baseline = normal_statuses(&remaining_peers).await?;
         let outage_target_non_empty = outage_baseline
             .iter()
@@ -2598,7 +2474,6 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
             .unwrap_or_default()
             .saturating_add(1);
         submit_account(remaining_peers[0].client(), outage_account.clone()).await?;
-
         let recovery_started = Instant::now();
         tokio::time::timeout(
             TAIRA_RECOVERY_BOUND,
@@ -2616,14 +2491,12 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
             "Taira recovery exceeded {:?}: elapsed={recovery_elapsed:?}",
             TAIRA_RECOVERY_BOUND
         );
-
         wait_for_accounts_visible(
             &remaining_peers,
             &[seed_account.clone(), outage_account.clone()],
             ACCOUNT_VISIBILITY_TIMEOUT,
         )
         .await?;
-
         let mut committed_views = Vec::with_capacity(remaining_peers.len());
         for peer in &remaining_peers {
             committed_views.push(committed_view_at_height(peer, target_height).await?);
@@ -2642,7 +2515,6 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
             committed_views.windows(2).all(|views| views[0] == views[1]),
             "validators disagreed on the committed block view at height {target_height}: {committed_views:?}"
         );
-
         leader_peer
             .start_checked(config_layers.iter().cloned(), None)
             .await
@@ -2659,7 +2531,6 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
             ACCOUNT_VISIBILITY_TIMEOUT,
         )
         .await?;
-
         let recovered =
             wait_for_common_awaiting_v2_round(&all_peers, target_height, STATUS_TIMEOUT).await?;
         validate_v2_status_set(&recovered, VALIDATOR_COUNT)?;
@@ -2670,15 +2541,12 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
             recovered[leader_peer_index].node_fingerprint == leader_node_fingerprint,
             "the restarted Taira leader changed its v2 node fingerprint"
         );
-
         Ok(())
     }
     .await;
-
     network.shutdown_and_release().await;
     result
 }
-
 /// Revision-1 receiver partitions staged before Sumeragi starts must retain a
 /// 2+2 split of honest, round-distinct PrepareQC references for the same locked
 /// subject without deciding, then converge on that exact body after ordered
@@ -2690,7 +2558,6 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
 async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quorum_release()
 -> Result<()> {
     init_instruction_registry();
-
     const CONTROL_TIMEOUT: Duration = Duration::from_secs(20);
     let builder = NetworkBuilder::new()
         .with_peers(VALIDATOR_COUNT)
@@ -2709,7 +2576,6 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
     };
-
     let result = async {
         let peers = network.peers().to_vec();
         ensure!(
@@ -2748,7 +2614,6 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
             Ok::<(), eyre::Report>(())
         }))
         .await?;
-
         let target_height = LOCKED_REPROPOSAL_HEIGHT;
         let first_view = LOCKED_REPROPOSAL_FIRST_VIEW;
         let second_view = LOCKED_REPROPOSAL_SECOND_VIEW;
@@ -2770,11 +2635,9 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
                 ))
                 .collect::<Vec<_>>()
         );
-
         let account = fixture_account(0xC1)?;
         assert_accounts_absent(&peers, &[account.clone()]).await?;
         enqueue_account(peers[0].client(), account.clone()).await?;
-
         let partitioned = wait_for_locked_reproposal_prepare_qc_split(
             &peers,
             target_height,
@@ -2860,7 +2723,6 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
             );
             validate_locked_commit_progress_witness(snapshot, &expected_reference)?;
         }
-
         let prepare_releases = wait_for_held_quorum_evidence(
             &peers[2..],
             target_height,
@@ -2909,7 +2771,6 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
                 }),
         )
         .await?;
-
         let aligned = wait_for_exact_prepare_qc_reference(
             &peers,
             &reproposed_reference,
@@ -2929,7 +2790,6 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
         for snapshot in &aligned {
             validate_locked_commit_progress_witness(snapshot, &reproposed_reference)?;
         }
-
         let commit_releases = wait_for_held_quorum_evidence(
             &peers,
             target_height,
@@ -2978,7 +2838,6 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
                 }),
         )
         .await?;
-
         network
             .ensure_blocks_with(|height| height.total >= target_height)
             .await
@@ -3036,7 +2895,6 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
                 peer.mnemonic()
             );
         }
-
         let healed = try_join_all(peers.iter().map(|peer| async move {
             peer.consensus_message_control()
                 .expect("controlled peer")
@@ -3062,7 +2920,6 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
                 peer.mnemonic()
             );
         }
-
         wait_for_accounts_visible(&peers, &[account], ACCOUNT_VISIBILITY_TIMEOUT).await?;
         let final_statuses =
             wait_for_common_awaiting_v2_round(&peers, target_height, STATUS_TIMEOUT)
@@ -3075,11 +2932,9 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
         Ok(())
     }
     .await;
-
     network.shutdown_and_release().await;
     result
 }
-
 /// A staged four-validator schedule must construct two honest PrepareQCs for
 /// different subjects without forging traffic or letting the lower QC reach
 /// the next leader, then converge on the higher-view certified subject after
@@ -3101,7 +2956,6 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release() -> Result<()> {
     init_instruction_registry();
-
     const CONTROL_TIMEOUT: Duration = Duration::from_secs(20);
     let builder = NetworkBuilder::new()
         .with_peers(VALIDATOR_COUNT)
@@ -3122,7 +2976,6 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
     };
-
     let result = async {
         let peers = network.peers().to_vec();
         ensure!(
@@ -3157,7 +3010,6 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             Ok::<(), eyre::Report>(())
         }))
         .await?;
-
         let height = LOCKED_REPROPOSAL_HEIGHT;
         let first_view = LOCKED_REPROPOSAL_FIRST_VIEW;
         let second_view = LOCKED_REPROPOSAL_SECOND_VIEW;
@@ -3186,7 +3038,6 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
         );
         validate_open_round(&initial, height, first_view)?;
         let view_zero_release_started = Instant::now();
-
         let first_leader_validator = initial[0].leader;
         ensure!(
             first_leader_validator < VALIDATOR_COUNT as u64,
@@ -3218,12 +3069,10 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             .expect("three unlocked validators include an old-QC observer");
         let first_group = [first_lock_index, first_qc_observer];
         let second_group = [second_leader_index, second_qc_partner];
-
         let first_account = fixture_account(0xC2)?;
         let second_account = fixture_account(0xC3)?;
         assert_accounts_absent(&peers, &[first_account.clone(), second_account.clone()]).await?;
         enqueue_account(peers[first_lock_index].client(), first_account.clone()).await?;
-
         let first_vote_senders = peer_ids
             .iter()
             .enumerate()
@@ -3302,7 +3151,6 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                 || status_round_is_open(&immediately_after_a, height, first_view),
             "view-zero timeout raced the exact A release fence before the controlled receiver could install its QC: {immediately_after_a:?}"
         );
-
         let first_locked = wait_for_v2_status_condition(
             &peers,
             "one isolated durable view-zero PrepareQC lock",
@@ -3379,12 +3227,10 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             &first_locked[first_lock_index],
             SumeragiV2IgnoreReason::UnsafeProposal,
         );
-
         // Queue work directly at the next leader only after subject A is
         // frozen. Its no-high-QC timeout justification must therefore produce
         // a genuinely new proposal subject rather than reload A's bytes.
         enqueue_account(peers[second_leader_index].client(), second_account.clone()).await?;
-
         let unlocked_senders = unlocked
             .iter()
             .map(|index| {
@@ -3459,7 +3305,6 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                 }),
         )
         .await?;
-
         let view_one = wait_for_v2_status_condition(
             &peers,
             "all validators in frozen view one with the next leader selected",
@@ -3500,7 +3345,6 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                 );
             }
         }
-
         let unlocked_timeout_senders = unlocked
             .iter()
             .map(|index| peer_ids[*index].clone())
@@ -3527,7 +3371,6 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             },
         )
         .await?;
-
         let mut locked_timeout_signers = timeout_releases[first_lock_index].signers.clone();
         locked_timeout_signers.insert(
             *validator_by_peer
@@ -3558,7 +3401,6 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             },
         )
         .await?;
-
         let second_leader_prepare = wait_for_control_selection(
             &peers[second_leader_index],
             "two unlocked view-one Prepare votes for a subject distinct from the old lock",
@@ -3654,7 +3496,6 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             },
         ))
         .await?;
-
         let second_certified = wait_for_v2_status_condition(
             &peers,
             "two exact view-one PrepareQC references for subject B",
@@ -3734,7 +3575,6 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             "the A-locked validator did not explicitly reject B under the safe-value rule: before={unsafe_proposal_before}, after={:?}",
             second_certified[first_lock_index],
         );
-
         let second_certificate_senders = second_group
             .iter()
             .map(|index| peer_ids[*index].clone())
@@ -3761,7 +3601,6 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             },
         )
         .await?;
-
         release_exact_control_sequences(
             &peers[first_qc_observer],
             &expected_rules[first_qc_observer],
@@ -3770,7 +3609,6 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             CONTROL_TIMEOUT,
         )
         .await?;
-
         let divergent = wait_for_distinct_prepare_qc_split(
             &peers,
             first_group,
@@ -3828,7 +3666,6 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                 &second_reference,
             )?;
         }
-
         let controller_baselines = peers
             .iter()
             .map(|peer| {
@@ -3838,7 +3675,6 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                     .wrap_err_with(|| format!("read pre-heal ACK from {}", peer.mnemonic()))
             })
             .collect::<Result<Vec<_>>>()?;
-
         let healed = try_join_all(peers.iter().map(|peer| async move {
             peer.consensus_message_control()
                 .expect("controlled peer")
@@ -3863,7 +3699,6 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                 peer.mnemonic(),
             );
         }
-
         network
             .ensure_blocks_with(|block_height| block_height.total >= height)
             .await
@@ -3940,11 +3775,9 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
         Ok(())
     }
     .await;
-
     network.shutdown_and_release().await;
     result
 }
-
 async fn submit_account(client: Client, account_id: AccountId) -> Result<()> {
     task::spawn_blocking(move || {
         client.submit_blocking(
@@ -3956,7 +3789,6 @@ async fn submit_account(client: Client, account_id: AccountId) -> Result<()> {
     .wrap_err("account-registration task panicked")??;
     Ok(())
 }
-
 async fn submit_pressure_account(
     client: Client,
     account_id: AccountId,
@@ -3976,7 +3808,6 @@ async fn submit_pressure_account(
     .wrap_err("observer-pressure transaction task panicked")??;
     Ok(())
 }
-
 async fn enqueue_account(client: Client, account_id: AccountId) -> Result<()> {
     task::spawn_blocking(move || {
         client.submit(
@@ -3988,13 +3819,11 @@ async fn enqueue_account(client: Client, account_id: AccountId) -> Result<()> {
     .wrap_err("account-registration enqueue task panicked")??;
     Ok(())
 }
-
 fn fixture_account(seed_marker: u8) -> Result<AccountId> {
     let key_pair = KeyPair::try_from_seed(vec![seed_marker; 32], Algorithm::Ed25519)
         .wrap_err("derive deterministic v2-runner test account")?;
     Ok(AccountId::new(key_pair.public_key().clone()))
 }
-
 async fn normal_statuses(peers: &[NetworkPeer]) -> Result<Vec<iroha::client::Status>> {
     let mut statuses = Vec::with_capacity(peers.len());
     for peer in peers {
@@ -4006,7 +3835,6 @@ async fn normal_statuses(peers: &[NetworkPeer]) -> Result<Vec<iroha::client::Sta
     }
     Ok(statuses)
 }
-
 async fn wait_for_validator_commit_before_observer_catchup(
     validators: &[NetworkPeer],
     observers: &[NetworkPeer],
@@ -4060,7 +3888,6 @@ async fn wait_for_validator_commit_before_observer_catchup(
         sleep(FAST_STATUS_POLL_INTERVAL).await;
     }
 }
-
 async fn wait_for_normal_statuses(
     peers: &[NetworkPeer],
     min_blocks: u64,
@@ -4092,7 +3919,6 @@ async fn wait_for_normal_statuses(
         sleep(FAST_STATUS_POLL_INTERVAL).await;
     }
 }
-
 async fn wait_for_common_awaiting_v2_round(
     peers: &[NetworkPeer],
     min_committed_height: u64,
@@ -4153,7 +3979,6 @@ async fn wait_for_common_awaiting_v2_round(
         sleep(FAST_STATUS_POLL_INTERVAL).await;
     }
 }
-
 async fn wait_for_exact_applied_successor(
     peers: &[NetworkPeer],
     committed_height: u64,
@@ -4177,7 +4002,6 @@ async fn wait_for_exact_applied_successor(
     )
     .await
 }
-
 fn status_is_awaiting_proposal(phase: &Value) -> bool {
     phase
         .as_str()
@@ -4192,7 +4016,6 @@ fn status_is_awaiting_proposal(phase: &Value) -> bool {
                 || tag.eq_ignore_ascii_case("awaiting_proposal")
         })
 }
-
 fn status_round_is_open(snapshot: &V2StatusSnapshot, height: u64, view: u64) -> bool {
     snapshot.height == height
         && snapshot.view == view
@@ -4211,7 +4034,6 @@ fn status_round_is_open(snapshot: &V2StatusSnapshot, height: u64, view: u64) -> 
                 && (quorum.signer_count > 0 || quorum.certificate_formed)
         })
 }
-
 fn validate_open_round(snapshots: &[V2StatusSnapshot], height: u64, view: u64) -> Result<()> {
     ensure!(
         snapshots
@@ -4249,7 +4071,6 @@ fn validate_open_round(snapshots: &[V2StatusSnapshot], height: u64, view: u64) -
     );
     Ok(())
 }
-
 fn ignore_count(snapshot: &V2StatusSnapshot, reason: SumeragiV2IgnoreReason) -> u64 {
     snapshot
         .liveness
@@ -4258,7 +4079,6 @@ fn ignore_count(snapshot: &V2StatusSnapshot, reason: SumeragiV2IgnoreReason) -> 
         .find(|entry| entry.reason == reason)
         .map_or(0, |entry| entry.count)
 }
-
 fn peer_index_for_validator(peers: &[NetworkPeer], validator: u64) -> Result<usize> {
     let mut roster = peers
         .iter()
@@ -4277,7 +4097,6 @@ fn peer_index_for_validator(peers: &[NetworkPeer], validator: u64) -> Result<usi
             )
         })
 }
-
 fn validator_indices_by_peer(peers: &[NetworkPeer]) -> Result<BTreeMap<PeerId, ValidatorIndex>> {
     let mut roster = peers.iter().map(NetworkPeer::id).collect::<Vec<_>>();
     roster.sort();
@@ -4293,19 +4112,16 @@ fn validator_indices_by_peer(peers: &[NetworkPeer]) -> Result<BTreeMap<PeerId, V
         })
         .collect()
 }
-
 async fn committed_view_at_height(peer: &NetworkPeer, height: u64) -> Result<u64> {
     committed_block_metadata_at_height(peer, height)
         .await
         .map(|(view, _)| view)
 }
-
 async fn committed_hash_at_height(peer: &NetworkPeer, height: u64) -> Result<String> {
     committed_block_metadata_at_height(peer, height)
         .await
         .map(|(_, hash)| hash)
 }
-
 async fn committed_block_metadata_at_height(
     peer: &NetworkPeer,
     height: u64,
@@ -4326,7 +4142,6 @@ async fn committed_block_metadata_at_height(
     .await
     .wrap_err_with(|| format!("block-metadata query panicked for {}", peer.mnemonic()))?
 }
-
 async fn wait_for_committed_block_metadata(
     peers: &[NetworkPeer],
     height: u64,
@@ -4358,7 +4173,6 @@ async fn wait_for_committed_block_metadata(
         sleep(FAST_STATUS_POLL_INTERVAL).await;
     }
 }
-
 async fn assert_account_registration_in_exact_block(
     peers: &[NetworkPeer],
     height: u64,
@@ -4403,7 +4217,6 @@ async fn assert_account_registration_in_exact_block(
     .await?;
     Ok(())
 }
-
 async fn fetch_bridge_finality_proof(
     peer: &NetworkPeer,
     height: u64,
@@ -4445,7 +4258,6 @@ async fn fetch_bridge_finality_proof(
         )
     })
 }
-
 fn validate_exact_finality_proof(
     peer: &NetworkPeer,
     proof: &BridgeFinalityProof,
@@ -4505,7 +4317,6 @@ fn validate_exact_finality_proof(
     );
     Ok(())
 }
-
 fn validate_exact_prepare_signers_against_frozen_context(
     snapshot: &V2StatusSnapshot,
     expected: &QuorumCertificateRef,
@@ -4570,7 +4381,6 @@ fn validate_exact_prepare_signers_against_frozen_context(
     );
     Ok(())
 }
-
 async fn wait_for_control_selection<T>(
     peer: &NetworkPeer,
     description: &str,
@@ -4629,7 +4439,6 @@ async fn wait_for_control_selection<T>(
         sleep(FAST_STATUS_POLL_INTERVAL).await;
     }
 }
-
 async fn release_exact_control_sequences(
     peer: &NetworkPeer,
     rules: &[ConsensusMessageControlRule],
@@ -4656,7 +4465,6 @@ async fn release_exact_control_sequences(
     );
     Ok(ack)
 }
-
 async fn wait_for_v2_status_condition(
     peers: &[NetworkPeer],
     description: &str,
@@ -4717,7 +4525,6 @@ async fn wait_for_v2_status_condition(
         sleep(FAST_STATUS_POLL_INTERVAL).await;
     }
 }
-
 async fn wait_for_distinct_prepare_qc_split(
     peers: &[NetworkPeer],
     first_group: [usize; 2],
@@ -4771,7 +4578,6 @@ async fn wait_for_distinct_prepare_qc_split(
     )
     .await
 }
-
 async fn wait_for_locked_reproposal_prepare_qc_split(
     peers: &[NetworkPeer],
     height: u64,
@@ -4851,7 +4657,6 @@ async fn wait_for_locked_reproposal_prepare_qc_split(
         sleep(FAST_STATUS_POLL_INTERVAL).await;
     }
 }
-
 async fn wait_for_exact_prepare_qc_reference(
     peers: &[NetworkPeer],
     expected: &QuorumCertificateRef,
@@ -4908,7 +4713,6 @@ async fn wait_for_exact_prepare_qc_reference(
         sleep(FAST_STATUS_POLL_INTERVAL).await;
     }
 }
-
 async fn wait_for_held_quorum_evidence(
     peers: &[NetworkPeer],
     height: u64,
@@ -4989,7 +4793,6 @@ async fn wait_for_held_quorum_evidence(
         sleep(FAST_STATUS_POLL_INTERVAL).await;
     }
 }
-
 async fn assert_accounts_absent(peers: &[NetworkPeer], accounts: &[AccountId]) -> Result<()> {
     for peer in peers {
         let client = peer.client();
@@ -5008,7 +4811,6 @@ async fn assert_accounts_absent(peers: &[NetworkPeer], accounts: &[AccountId]) -
     }
     Ok(())
 }
-
 async fn wait_for_accounts_visible(
     peers: &[NetworkPeer],
     accounts: &[AccountId],
@@ -5048,7 +4850,6 @@ async fn wait_for_accounts_visible(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 async fn wait_for_v2_statuses(
     peers: &[NetworkPeer],
     min_committed_height: u64,
@@ -5084,7 +4885,6 @@ async fn wait_for_v2_statuses(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 async fn fetch_v2_status(peer: &NetworkPeer) -> Result<V2StatusSnapshot> {
     let client = peer.client();
     let peer_name = peer.mnemonic().to_owned();
@@ -5094,11 +4894,9 @@ async fn fetch_v2_status(peer: &NetworkPeer) -> Result<V2StatusSnapshot> {
         .wrap_err_with(|| format!("fetch authoritative v2 status from {peer_name}"))?;
     parse_v2_status(peer_name, &value)
 }
-
 async fn fetch_v2_status_set(peers: &[NetworkPeer]) -> Result<Vec<V2StatusSnapshot>> {
     try_join_all(peers.iter().map(fetch_v2_status)).await
 }
-
 fn parse_v2_status(peer: String, value: &Value) -> Result<V2StatusSnapshot> {
     let typed = norito::json::from_value::<SumeragiV2Status>(value.clone())
         .wrap_err_with(|| format!("v2 status for {peer} is not the canonical typed payload"))?;
@@ -5145,7 +4943,6 @@ fn parse_v2_status(peer: String, value: &Value) -> Result<V2StatusSnapshot> {
         .map(norito::json::from_value::<SumeragiV2CommitQcStatus>)
         .transpose()
         .wrap_err_with(|| format!("v2 status for {peer} has a malformed durable CommitQC"))?;
-
     Ok(V2StatusSnapshot {
         peer: peer.clone(),
         protocol_version: required_u64("protocol_version")?,
@@ -5169,7 +4966,6 @@ fn parse_v2_status(peer: String, value: &Value) -> Result<V2StatusSnapshot> {
         liveness,
     })
 }
-
 fn optional_prepare_qc(
     object: &norito::json::Map,
     peer: &str,
@@ -5186,9 +4982,7 @@ fn optional_prepare_qc(
     );
     Ok(Some(PrepareQcSnapshot { reference: typed }))
 }
-
 include!("sumeragi_v2_runner/status_validation_helpers.rs");
-
 fn validate_v2_status_set(
     snapshots: &[V2StatusSnapshot],
     frozen_validator_count: usize,
@@ -5256,7 +5050,6 @@ fn validate_v2_status_set(
             snapshot.peer
         );
     }
-
     for (index, left) in snapshots.iter().enumerate() {
         for right in &snapshots[index + 1..] {
             ensure!(

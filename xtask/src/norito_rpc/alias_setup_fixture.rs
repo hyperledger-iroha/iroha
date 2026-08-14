@@ -1,5 +1,4 @@
 //! Typed, deterministic owner for the shared V1 alias-setup fixture.
-
 use eyre::{Result, WrapErr as _, bail, eyre};
 use iroha::client::{
     ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1, AccountOnboardingPlanBodyV1,
@@ -41,11 +40,9 @@ use norito::{
     json,
 };
 use norito_codegen_exporter::AliasSetupFixtureBytes;
-
 const PLAN_NETWORK_ID_V1: &str =
     "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
 const FIXTURE_PAYMENT_ASSET: &str = "4rPeAP6jAjiLVZThZYwwPRBuQagt";
-
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct AliasSetupFixtureV1 {
@@ -59,7 +56,6 @@ struct AliasSetupFixtureV1 {
     instruction_frame_vectors: Vec<InstructionFrameVectorV1>,
     report_json_vector: AliasSetupReportV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct AccountAliasCaseV1 {
@@ -69,7 +65,6 @@ struct AccountAliasCaseV1 {
     domain: Option<String>,
     dataspace: String,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct ResolvedNameVectorsV1 {
@@ -77,14 +72,12 @@ struct ResolvedNameVectorsV1 {
     domain: ResolvedDomainV1,
     account_alias: ResolvedAccountAliasV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct AliasPermissionScopeVectorV1 {
     scope: String,
     value: ResolvedAccountAliasV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct AccountOnboardingReceiptVectorV1 {
@@ -96,7 +89,6 @@ struct AccountOnboardingReceiptVectorV1 {
     signature_hex: String,
     receipt_json: AccountOnboardingPlanReceiptV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct PlanHashVectorV1 {
@@ -105,7 +97,6 @@ struct PlanHashVectorV1 {
     canonical_body_norito_hex: String,
     canonical_plan_hash_hex: String,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct InstructionFrameVectorV1 {
@@ -113,7 +104,6 @@ struct InstructionFrameVectorV1 {
     wire_id: String,
     framed_payload_hex: String,
 }
-
 pub(super) fn render() -> Result<AliasSetupFixtureBytes> {
     let fixture = build_fixture()?;
     validate_fixture(&fixture)?;
@@ -127,7 +117,6 @@ pub(super) fn render() -> Result<AliasSetupFixtureBytes> {
     }
     AliasSetupFixtureBytes::try_new(rendered.into_bytes())
 }
-
 fn build_fixture() -> Result<AliasSetupFixtureV1> {
     let dataspace_id = DataSpaceId::new(7);
     let resolved_alias = resolved_alias()?;
@@ -149,7 +138,6 @@ fn build_fixture() -> Result<AliasSetupFixtureV1> {
     let acquisition = AliasLeaseAcquisitionV1::new(1, None);
     let ensure = EnsureAlias::new(intent.clone(), acquisition, quote_guard.clone());
     let (ensure_vector, ensure_frame) = instruction_frame("ensure_account_alias", ensure.into())?;
-
     let target = iroha_data_model::alias_setup::AliasTargetV1::AccountAlias(resolved_alias.clone());
     let renewal = RenewAliasLease::new(target.clone(), 1_000, 2_000, quote_guard.clone());
     let (renewal_vector, renewal_frame) =
@@ -180,7 +168,6 @@ fn build_fixture() -> Result<AliasSetupFixtureV1> {
         CompareAndSetPrimaryAccountAlias::new(first.clone(), None, Some(resolved_alias.clone()))
             .into(),
     )?;
-
     let network_id = PLAN_NETWORK_ID_V1
         .parse::<NetworkId>()
         .wrap_err("parse canonical alias-plan NetworkId")?;
@@ -244,7 +231,6 @@ fn build_fixture() -> Result<AliasSetupFixtureV1> {
             blockers: Vec::new(),
             valid_until_ms: 50_000,
         });
-
     Ok(AliasSetupFixtureV1 {
         schema_version: 1,
         account_alias_cases: vec![
@@ -293,31 +279,26 @@ fn build_fixture() -> Result<AliasSetupFixtureV1> {
         ),
     })
 }
-
 fn account(seed: u8) -> Result<AccountId> {
     let key_pair = KeyPair::try_from_seed([seed; 32].to_vec(), Algorithm::Ed25519)
         .wrap_err_with(|| format!("derive alias fixture account for seed {seed:#04x}"))?;
     Ok(AccountId::new(key_pair.public_key().clone()))
 }
-
 fn amount(value: u32) -> Result<Quantity> {
     Quantity::from_canonical_numeric(Numeric::new(value, 0))
         .map_err(|error| eyre!("invalid alias fixture quantity {value}: {error}"))
 }
-
 fn payment_asset() -> Result<AssetDefinitionId> {
     FIXTURE_PAYMENT_ASSET
         .parse()
         .map_err(|error| eyre!("invalid alias fixture payment asset: {error}"))
 }
-
 fn resolved_alias() -> Result<ResolvedAccountAliasV1> {
     Ok(ResolvedAccountAliasV1::new(
         "merchant@banka.paynet".parse::<AccountAliasName>()?,
         DataSpaceId::new(7),
     ))
 }
-
 fn alias_case(input: &str) -> Result<AccountAliasCaseV1> {
     let parsed = input.parse::<AccountAliasName>()?;
     Ok(AccountAliasCaseV1 {
@@ -328,7 +309,6 @@ fn alias_case(input: &str) -> Result<AccountAliasCaseV1> {
         dataspace: parsed.dataspace.to_string(),
     })
 }
-
 fn instruction_frame(
     name: &str,
     instruction: InstructionBox,
@@ -347,7 +327,6 @@ fn instruction_frame(
         },
     ))
 }
-
 fn onboarding_receipt_vector() -> Result<AccountOnboardingReceiptVectorV1> {
     let receipt = account_onboarding_test_fixture::receipt_v1()?;
     let canonical_body = receipt.body.encode();
@@ -362,7 +341,6 @@ fn onboarding_receipt_vector() -> Result<AccountOnboardingReceiptVectorV1> {
         receipt_json: receipt,
     })
 }
-
 fn setup_plan_vector(plan: AliasTransactionPlanV1) -> Result<PlanHashVectorV1> {
     if !plan.verify_hash() {
         bail!("deterministic alias setup plan hash is invalid");
@@ -375,7 +353,6 @@ fn setup_plan_vector(plan: AliasTransactionPlanV1) -> Result<PlanHashVectorV1> {
         canonical_plan_hash_hex: hex::encode(plan.plan_hash.as_ref()),
     })
 }
-
 fn lifecycle_plan_vector(plan: AliasLifecycleTransactionPlanV1) -> Result<PlanHashVectorV1> {
     if !plan.verify_hash() {
         bail!("deterministic alias lifecycle plan hash is invalid");
@@ -388,7 +365,6 @@ fn lifecycle_plan_vector(plan: AliasLifecycleTransactionPlanV1) -> Result<PlanHa
         canonical_plan_hash_hex: hex::encode(plan.plan_hash.as_ref()),
     })
 }
-
 fn validate_fixture(fixture: &AliasSetupFixtureV1) -> Result<()> {
     if fixture.schema_version != 1 {
         bail!("alias-setup fixture schema_version must be exactly 1");
@@ -430,7 +406,6 @@ fn validate_fixture(fixture: &AliasSetupFixtureV1) -> Result<()> {
     {
         bail!("alias-setup onboarding hash, authority, or signature summary is inconsistent");
     }
-
     let expected_plan_domains = [
         (
             "setup_account_alias_create",
@@ -482,7 +457,6 @@ fn validate_fixture(fixture: &AliasSetupFixtureV1) -> Result<()> {
             bail!("alias plan hash vector {name} has trailing Norito bytes");
         }
     }
-
     let expected_frames = [
         ("ensure_account_alias", EnsureAlias::WIRE_ID),
         ("renew_account_alias", RenewAliasLease::WIRE_ID),
@@ -526,7 +500,6 @@ fn validate_fixture(fixture: &AliasSetupFixtureV1) -> Result<()> {
     }
     Ok(())
 }
-
 fn decode_lower_hex(value: &str, label: &str) -> Result<Vec<u8>> {
     let decoded = hex::decode(value).wrap_err_with(|| format!("decode {label} hex"))?;
     if hex::encode(&decoded) != value {
@@ -534,13 +507,10 @@ fn decode_lower_hex(value: &str, label: &str) -> Result<Vec<u8>> {
     }
     Ok(decoded)
 }
-
 #[cfg(test)]
 mod tests {
     use norito::json::{self, Value};
-
     use super::*;
-
     #[test]
     fn owner_is_deterministic_and_uses_the_real_receipt_type() {
         assert_eq!(account_onboarding_test_fixture::NETWORK_HASH_SEED_V1, 0xA1);
@@ -571,7 +541,6 @@ mod tests {
                 .verify()
         );
     }
-
     #[test]
     fn onboarding_json_rejects_genesis_and_retired_identity_aliases() {
         let fixture = build_fixture().expect("typed alias fixture");
@@ -586,7 +555,6 @@ mod tests {
             .and_then(Value::as_object)
             .expect("typed onboarding receipt body");
         assert!(canonical_body.contains_key("network_id"));
-
         for retired in [
             "chain",
             "chainId",
@@ -601,21 +569,18 @@ mod tests {
             body.insert(retired.to_owned(), Value::String("same-label".to_owned()));
             json::from_value::<AliasSetupFixtureV1>(alias_only)
                 .expect_err("retired alias must not replace network_id");
-
             let mut dual = canonical.clone();
             onboarding_body_mut(&mut dual)
                 .insert(retired.to_owned(), Value::String("same-label".to_owned()));
             json::from_value::<AliasSetupFixtureV1>(dual)
                 .expect_err("retired alias must remain unknown beside network_id");
         }
-
         let mut genesis = canonical;
         onboarding_body_mut(&mut genesis)
             .insert("network_id".to_owned(), Value::String("genesis".to_owned()));
         json::from_value::<AliasSetupFixtureV1>(genesis)
             .expect_err("genesis shorthand must not decode as a NetworkId");
     }
-
     fn onboarding_body_mut(value: &mut Value) -> &mut json::Map {
         value
             .as_object_mut()

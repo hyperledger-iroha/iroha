@@ -11,13 +11,11 @@ pub(crate) struct AutonomousLaneMergeBundleV1 {
     /// Immutable origin proposal with prepare/commit QCs and signer PoPs.
     pub(crate) certified: CertifiedLaneBlockArtifact,
 }
-
 impl AutonomousLaneMergeBundleV1 {
     /// Exact coordinated first-release layout accepted by Kura and merge transport.
     pub(crate) const VERSION: u8 = 1;
     /// Stable persistence label for the independently durable canonical bundle pair.
     pub(crate) const FORMAT_LABEL: &'static str = "lane.autonomous_merge_bundle.v1";
-
     /// Canonical framed bytes used by authenticated bundle transport and merge logs.
     pub(crate) fn encode_framed(&self) -> Result<Vec<u8>> {
         let bytes = norito::encode_canonical(self)?;
@@ -28,7 +26,6 @@ impl AutonomousLaneMergeBundleV1 {
         }
         Ok(bytes)
     }
-
     /// Domain-separated digest committed by canonical merge batches.
     pub(crate) fn bundle_hash(&self) -> Result<Hash> {
         let bytes = self.encode_framed()?;
@@ -37,13 +34,11 @@ impl AutonomousLaneMergeBundleV1 {
             &bytes,
         ]))
     }
-
     /// Exact producer-authenticated executable payload.
     pub(crate) const fn executable_payload(&self) -> &LaneExecutablePayloadV1 {
         &self.autonomous.executable_payload
     }
 }
-
 /// Exact durable autonomous source admitted to canonical merge construction.
 ///
 /// Construction requires both the independently durable canonical bundle
@@ -62,7 +57,6 @@ pub(crate) struct DurableAutonomousLaneMergeSource {
     /// Exact independently durable execution input used for deterministic replay.
     pub(crate) input: LaneBlockExecutionInputArtifact,
 }
-
 /// Move-only authority to sign one autonomous lane READY vote.
 ///
 /// Kura is the only module that can construct this value. Construction follows
@@ -80,7 +74,6 @@ pub(crate) struct LaneReadyAuthorization {
     signer: PeerId,
     height_context_id: HeightContextId,
 }
-
 /// Move-only authority for the first durable autonomous execution-input write.
 ///
 /// The authority is minted from the exact repair-disabled executable payload
@@ -92,12 +85,10 @@ struct AutonomousLaneExecutionInputPersistenceAuthorization {
     projection: ProductionInFlightFirstReleaseTransitionProjection,
     input: LaneBlockExecutionInputArtifact,
 }
-
 impl AutonomousLaneExecutionInputPersistenceAuthorization {
     fn matches_input(&self, input: &LaneBlockExecutionInputArtifact) -> bool {
         self.input == *input
     }
-
     fn consume_for_persistence(
         self,
         input: &LaneBlockExecutionInputArtifact,
@@ -105,7 +96,6 @@ impl AutonomousLaneExecutionInputPersistenceAuthorization {
         self.matches_input(input).then_some(self.projection)
     }
 }
-
 /// Move-only authority for the exact autonomous READY-QC Kura write.
 ///
 /// Construction validates the certificate against the immutable executable
@@ -123,7 +113,6 @@ struct AutonomousLaneReadyQcPersistenceAuthorization {
     reservation_group: LaneQueueReservationGroupBindingV1,
     certificate: DurableLanePayloadAvailabilityCertificateV1,
 }
-
 impl AutonomousLaneReadyQcPersistenceAuthorization {
     fn consume_for_persistence(
         self,
@@ -145,7 +134,6 @@ impl AutonomousLaneReadyQcPersistenceAuthorization {
         Some(self.projection)
     }
 }
-
 /// Move-only authority for the first durable autonomous lane-Commit write.
 ///
 /// Kura mints this value only from the exact repair-disabled merge source that
@@ -158,12 +146,10 @@ struct AutonomousLaneCommitPersistenceAuthorization {
     projection: ProductionInFlightFirstReleaseTransitionProjection,
     certified: CertifiedLaneBlockArtifact,
 }
-
 impl AutonomousLaneCommitPersistenceAuthorization {
     fn matches_artifact(&self, artifact: &CertifiedLaneBlockArtifact) -> bool {
         self.certified == *artifact
     }
-
     fn consume_for_persistence(
         self,
         artifact: &CertifiedLaneBlockArtifact,
@@ -171,7 +157,6 @@ impl AutonomousLaneCommitPersistenceAuthorization {
         self.matches_artifact(artifact).then_some(self.projection)
     }
 }
-
 /// Move-only authority for the first durable autonomous slot-retirement write.
 ///
 /// The authority binds the exact authenticated payload, ordered reservation
@@ -187,7 +172,6 @@ struct AutonomousLaneSlotRetirementPersistenceAuthorization {
     retirement: AutonomousLaneSlotRetirementV1,
     view_state_path: PathBuf,
 }
-
 impl AutonomousLaneSlotRetirementPersistenceAuthorization {
     fn consume_for_persistence(
         self,
@@ -209,7 +193,6 @@ impl AutonomousLaneSlotRetirementPersistenceAuthorization {
         Some(self.projection)
     }
 }
-
 /// Exact durable Queue release phase observed by startup reconciliation.
 ///
 /// This is deliberately process-local rather than a persistence layout. Queue
@@ -225,7 +208,6 @@ pub(crate) enum AutonomousLaneRetirementQueueSnapshotPhaseV1 {
     /// completion forgetting remain pending after restart.
     Completed,
 }
-
 /// Immutable payload/committee identity paired with a signed lifecycle cursor.
 ///
 /// The anchor is non-authorizing data extracted from Kura's exact durable
@@ -243,7 +225,6 @@ pub(crate) struct AutonomousLaneRetirementSnapshotAttemptAnchorV1 {
     producer_index: u16,
     local_actor_index: u16,
 }
-
 impl AutonomousLaneRetirementSnapshotAttemptAnchorV1 {
     /// Construct exact immutable anchor facts for Queue adversarial tests.
     ///
@@ -278,19 +259,16 @@ impl AutonomousLaneRetirementSnapshotAttemptAnchorV1 {
             local_actor_index,
         })
     }
-
     /// Hash of the immutable origin proposal authenticated by the payload.
     #[must_use]
     pub(crate) const fn origin_proposal_hash(&self) -> Hash {
         self.origin_proposal_hash
     }
-
     /// Hash of the exact producer-authenticated executable payload.
     #[must_use]
     pub(crate) const fn executable_payload_hash(&self) -> Hash {
         self.executable_payload_hash
     }
-
     /// Versioned ordered validator-set identity and bounded member count.
     #[must_use]
     pub(crate) const fn validator_set_identity(&self) -> (u16, HashOf<Vec<PeerId>>, u8) {
@@ -300,13 +278,11 @@ impl AutonomousLaneRetirementSnapshotAttemptAnchorV1 {
             self.validator_count,
         )
     }
-
     /// Producer and local Kura release actor indices in the ordered validator set.
     #[must_use]
     pub(crate) const fn actor_indices(&self) -> (u16, u16) {
         (self.producer_index, self.local_actor_index)
     }
-
     /// One-hot producer and local Kura release actors used by the formal state.
     #[must_use]
     pub(crate) fn actor_projections(&self) -> (u128, u128) {
@@ -316,7 +292,6 @@ impl AutonomousLaneRetirementSnapshotAttemptAnchorV1 {
         )
     }
 }
-
 /// Opaque, move-only Kura proof for one release-barrier Queue snapshot group.
 ///
 /// Only Kura's bounded, repair-disabled authenticated read can construct this
@@ -333,7 +308,6 @@ pub(crate) struct AutonomousLaneRetirementSnapshotEvidenceV1 {
     attempt_anchor: AutonomousLaneRetirementSnapshotAttemptAnchorV1,
     recovered_state: ProductionInFlightFirstReleaseStateProjection,
 }
-
 impl AutonomousLaneRetirementSnapshotEvidenceV1 {
     /// Construct exact opaque evidence parts for Queue adversarial tests.
     ///
@@ -356,38 +330,32 @@ impl AutonomousLaneRetirementSnapshotEvidenceV1 {
             recovered_state,
         }
     }
-
     /// Durable Queue release phase against which this Kura proof was minted.
     #[must_use]
     pub(crate) const fn phase(&self) -> AutonomousLaneRetirementQueueSnapshotPhaseV1 {
         self.phase
     }
-
     /// Complete FIFO-ordered reservation-group binding authenticated by Kura.
     #[must_use]
     pub(crate) const fn reservation_group(&self) -> LaneQueueReservationGroupBindingV1 {
         self.reservation_group
     }
-
     /// Digest of the exact durable slot retirement.
     #[must_use]
     pub(crate) const fn retirement_hash(&self) -> Hash {
         self.retirement_hash
     }
-
     /// Payload and committee facts which must match the signed lifecycle cursor.
     #[must_use]
     pub(crate) const fn attempt_anchor(&self) -> AutonomousLaneRetirementSnapshotAttemptAnchorV1 {
         self.attempt_anchor
     }
-
     /// Complete current formal state selected from Queue phase and Kura claims.
     #[must_use]
     pub(crate) const fn recovered_state(&self) -> ProductionInFlightFirstReleaseStateProjection {
         self.recovered_state
     }
 }
-
 /// Move-only authority for one exact ordered claim-prefix replacement.
 ///
 /// Claim recovery validates the whole on-disk group before constructing these
@@ -399,7 +367,6 @@ struct AutonomousLaneEntrypointClaimTransitionAuthorization {
     path: PathBuf,
     replacement: AutonomousLaneEntrypointClaimV3,
 }
-
 /// Move-only authority for Queue's exact ordered `PrepareRelease` append.
 ///
 /// Kura constructs this value only after revalidating the durable retirement
@@ -414,7 +381,6 @@ pub(crate) struct AutonomousLaneQueueReleasePreparationAuthorization {
     barrier: LaneQueueReservationReleaseBarrierV3,
     claims_fully_released: bool,
 }
-
 impl AutonomousLaneQueueReleasePreparationAuthorization {
     /// Consume this proof for the exact Queue barrier it authorizes.
     pub(crate) fn consume_for_queue(
@@ -424,7 +390,6 @@ impl AutonomousLaneQueueReleasePreparationAuthorization {
         (self.barrier == *barrier).then_some((self.projection, self.claims_fully_released))
     }
 }
-
 /// Move-only authority for Queue's remaining release-side mutations.
 ///
 /// Kura mints this value only after every exact claim is durably `Released` or
@@ -438,7 +403,6 @@ pub(crate) struct AutonomousLaneQueueReleaseFinalizationAuthorization {
     restore_projection: ProductionInFlightFirstReleaseTransitionProjection,
     forget_projection: ProductionInFlightFirstReleaseTransitionProjection,
 }
-
 impl AutonomousLaneQueueReleaseFinalizationAuthorization {
     /// Consume this proof for the exact Queue barrier it authorizes.
     pub(crate) fn consume_for_queue(
@@ -452,14 +416,12 @@ impl AutonomousLaneQueueReleaseFinalizationAuthorization {
         ])
     }
 }
-
 /// Queue evidence accepted at Kura's `ReleasePending -> Released` boundary.
 enum AutonomousLaneQueueReleaseBarrierGate {
     Authorized(DurableLaneQueueReleaseBarrierAuthorization),
     #[cfg(test)]
     DirectTest,
 }
-
 impl AutonomousLaneQueueReleaseBarrierGate {
     fn consume_for_claim_transition(
         self,
@@ -474,7 +436,6 @@ impl AutonomousLaneQueueReleaseBarrierGate {
         }
     }
 }
-
 impl AutonomousLaneEntrypointClaimTransitionAuthorization {
     fn consume_for_persistence(
         self,
@@ -484,7 +445,6 @@ impl AutonomousLaneEntrypointClaimTransitionAuthorization {
         (self.path.as_path() == path && self.replacement == *replacement).then_some(self.projection)
     }
 }
-
 /// Exact concrete facts used to project Kura's autonomous release protocol.
 #[derive(Clone, Copy)]
 struct AutonomousLaneReleaseProjectionContext {
@@ -500,7 +460,6 @@ struct AutonomousLaneReleaseProjectionContext {
     reservation_group: LaneQueueReservationGroupBindingV1,
     retirement_hash: Hash,
 }
-
 impl AutonomousLaneReleaseProjectionContext {
     fn from_payload(
         kura: &Kura,
@@ -513,7 +472,6 @@ impl AutonomousLaneReleaseProjectionContext {
         if !retirement.matches_payload(payload) {
             return Err("autonomous release retirement differs from its payload".to_owned());
         }
-
         let descriptor = &payload.origin_proposal.descriptor;
         let validator_count = u8::try_from(descriptor.validator_set.len())
             .map_err(|_| "autonomous release committee exceeds the refinement width".to_owned())?;
@@ -542,7 +500,6 @@ impl AutonomousLaneReleaseProjectionContext {
             .ok_or_else(|| {
                 "autonomous release producer index exceeds the refinement width".to_owned()
             })?;
-
         // The local committee member is the physical writer when available.
         // A non-committee recovery node projects the producer-authenticated
         // durable payload as the logical custody witness, matching the other
@@ -603,7 +560,6 @@ impl AutonomousLaneReleaseProjectionContext {
             retirement_hash,
         })
     }
-
     fn retirement_snapshot_evidence(
         self,
         payload: &LaneExecutablePayloadV1,
@@ -663,7 +619,6 @@ impl AutonomousLaneReleaseProjectionContext {
             recovered_state,
         })
     }
-
     fn state(
         self,
         binding_a: CanonicalIdentityProjection,
@@ -681,7 +636,6 @@ impl AutonomousLaneReleaseProjectionContext {
             false,
         )
     }
-
     fn state_with_fifo(
         self,
         binding_a: CanonicalIdentityProjection,
@@ -739,7 +693,6 @@ impl AutonomousLaneReleaseProjectionContext {
             },
         }
     }
-
     fn retirement_authorization(
         self,
         payload: &LaneExecutablePayloadV1,
@@ -784,7 +737,6 @@ impl AutonomousLaneReleaseProjectionContext {
             view_state_path: view_state_path.to_path_buf(),
         })
     }
-
     fn claim_transition_authorization(
         self,
         path: &Path,
@@ -874,7 +826,6 @@ impl AutonomousLaneReleaseProjectionContext {
             replacement: replacement.clone(),
         })
     }
-
     fn queue_preparation_authorization(
         self,
         retirement: &AutonomousLaneSlotRetirementV1,
@@ -934,7 +885,6 @@ impl AutonomousLaneReleaseProjectionContext {
             claims_fully_released,
         })
     }
-
     fn queue_finalization_authorization(
         self,
         retirement: &AutonomousLaneSlotRetirementV1,
@@ -953,7 +903,6 @@ impl AutonomousLaneReleaseProjectionContext {
                 "autonomous Queue release barrier differs from its Kura retirement".to_owned(),
             );
         }
-
         let binding_a =
             canonical_lane_queue_reservation_group_identity_projection(self.reservation_group);
         let selected_count = self.reservation_group.reservation_count;
@@ -1029,7 +978,6 @@ impl AutonomousLaneReleaseProjectionContext {
         })
     }
 }
-
 impl LaneReadyAuthorization {
     /// Return whether this one-shot authority names the exact READY signing
     /// request and still has a structurally complete durable-input binding.
@@ -1060,7 +1008,6 @@ impl LaneReadyAuthorization {
             && group.reservation_count
                 == u64::try_from(descriptor.accepted_transaction_hashes.len()).unwrap_or(u64::MAX)
     }
-
     /// Consume this exact durable-input authority at the READY signature
     /// boundary after rechecking the complete first-release projection.
     pub(crate) fn consume_signing_request(
@@ -1167,7 +1114,6 @@ impl LaneReadyAuthorization {
             .is_some_and(|checked| checked.into_projection() == projection)
     }
 }
-
 impl Kura {
     /// Mint the exact one-shot `PersistKuraRetirement` authority consumed by
     /// the first durable autonomous view-state tombstone write.
@@ -1180,7 +1126,6 @@ impl Kura {
         AutonomousLaneReleaseProjectionContext::from_payload(self, payload, retirement)?
             .retirement_authorization(payload, retirement, view_state_path)
     }
-
     /// Mint the one-shot `PersistExecutionInput` authority for an exact
     /// autonomous payload/input pair.
     fn authorize_autonomous_execution_input_persistence(
@@ -1209,7 +1154,6 @@ impl Kura {
         if expected != *input {
             return Err("autonomous execution input differs from its canonical payload".to_owned());
         }
-
         let descriptor = &payload.origin_proposal.descriptor;
         let validator_count = u8::try_from(descriptor.validator_set.len()).map_err(|_| {
             "autonomous execution-input committee exceeds the refinement width".to_owned()
@@ -1329,7 +1273,6 @@ impl Kura {
             input: input.clone(),
         })
     }
-
     /// Validate one exact autonomous READY certificate and mint the move-only
     /// composed-transition authority consumed by its Kura persistence sink.
     fn authorize_lane_payload_availability_certificate_persistence(
@@ -1345,7 +1288,6 @@ impl Kura {
             expected_epoch,
         )
         .map_err(|error| error.to_string())?;
-
         let descriptor = &payload.origin_proposal.descriptor;
         let validator_count = u8::try_from(descriptor.validator_set.len())
             .map_err(|_| "autonomous READY committee exceeds the refinement width".to_owned())?;
@@ -1479,7 +1421,6 @@ impl Kura {
             certificate: certificate.clone(),
         })
     }
-
     /// Mint the exact one-shot `LaneCommit` authority for a certified
     /// autonomous source immediately before its first durable certificate
     /// publication.
@@ -1529,7 +1470,6 @@ impl Kura {
                 "autonomous lane-Commit input differs from its executable payload".to_owned(),
             );
         }
-
         let descriptor = &artifact.proposal.descriptor;
         let validator_count = u8::try_from(descriptor.validator_set.len()).map_err(|_| {
             "autonomous lane-Commit committee exceeds the refinement width".to_owned()
@@ -1674,7 +1614,6 @@ impl Kura {
             certified: artifact.clone(),
         })
     }
-
     fn autonomous_lane_merge_bundle_paths_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -1701,7 +1640,6 @@ impl Kura {
             .map_err(|_| "invalid prepare lane block QC")?;
         crate::lane_consensus::validate_lane_block_qc(&artifact.commit_qc)
             .map_err(|_| "invalid commit lane block QC")?;
-
         let descriptor = &artifact.proposal.descriptor;
         let prepare_body = artifact.proposal.vote_body(CertPhase::Prepare);
         let commit_body = artifact.proposal.vote_body(CertPhase::Commit);
@@ -1741,7 +1679,6 @@ impl Kura {
         .map_err(|_| "invalid commit lane block QC aggregate")?;
         Ok(())
     }
-
     fn validate_autonomous_lane_block_artifact(
         artifact: &AutonomousLaneBlockArtifact,
         expected_network_id: iroha_data_model::NetworkId,
@@ -1778,7 +1715,6 @@ impl Kura {
             )
             .map_err(|_| "invalid autonomous lane payload availability certificate")?;
         }
-
         let mut current = artifact.executable_payload.origin_proposal.clone();
         if let Some(checkpoint) = &artifact.view_checkpoint {
             crate::lane_consensus::validate_lane_block_view_checkpoint(
@@ -1809,7 +1745,6 @@ impl Kura {
         }
         Ok(current)
     }
-
     /// Validate a complete autonomous merge source without consulting mutable
     /// committee state or local sidecars.
     pub(crate) fn validate_autonomous_lane_merge_bundle(
@@ -1853,7 +1788,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Decode exact canonical framed bundle bytes and verify all embedded proofs.
     pub(crate) fn decode_autonomous_lane_merge_bundle(
         bytes: &[u8],
@@ -1875,18 +1809,15 @@ impl Kura {
         Self::validate_autonomous_lane_merge_bundle(&bundle, expected_network_id, expected_epoch)?;
         Ok(bundle)
     }
-
     fn autonomous_lane_merge_bundle_pair_entry_limit(&self) -> usize {
         self.roster_sidecar_retention
             .get()
             .saturating_add(usize::try_from(MAX_INDEXED_SIDECAR_GAP_ENTRIES).unwrap_or(usize::MAX))
             .min(MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES)
     }
-
     fn autonomous_lane_merge_bundle_pair_byte_limit(&self) -> usize {
         self.pending_control_sidecar_limits.aggregate_bytes
     }
-
     /// Validate the whole bundle pair before any exact-slot admission.
     ///
     /// The configured retention window plus the existing bounded sparse-gap
@@ -1926,7 +1857,6 @@ impl Kura {
         {
             return Err("autonomous merge bundle data exceeds its aggregate byte budget");
         }
-
         bound
             .index
             .seek(SeekFrom::Start(layout.entries_offset))
@@ -1977,7 +1907,6 @@ impl Kura {
         }
         Ok((layout, heights))
     }
-
     /// Read one exact bundle slot from an already bound progress pair.
     ///
     /// Empty sparse-index entries are absence. Every non-empty entry must be
@@ -2043,7 +1972,6 @@ impl Kura {
         }
         Ok(Some((bundle, bytes)))
     }
-
     #[allow(clippy::too_many_lines)]
     fn durable_autonomous_lane_merge_source_under_prune_guard(
         &self,
@@ -2065,7 +1993,6 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return Err("Kura prune recovery blocks autonomous merge-source admission");
         }
-
         let autonomous_record = self
             .read_autonomous_lane_block_record_locked(
                 &entry,
@@ -2093,7 +2020,6 @@ impl Kura {
             return Err("autonomous lane view state has unresolved recovery state");
         }
         let autonomous = autonomous_record.artifact;
-
         let certified = if let Some(certified) = certified_override {
             self.require_active_lane_artifact(&entry, &certified.proposal.descriptor)
                 .map_err(|_| "autonomous merge certificate targets stale lane geometry")?;
@@ -2159,7 +2085,6 @@ impl Kura {
             )
             .map_err(|_| "latest certified frontier changed during bundle admission")?;
         }
-
         let (input_data_path, input_index_path) =
             Self::lane_block_execution_input_paths_for_entry(&entry, &self.store_root);
         let input_namespace = self
@@ -2201,7 +2126,6 @@ impl Kura {
             .map_err(|_| "durable autonomous execution input is invalid")?;
         self.require_active_lane_artifact(&entry, &input.proposal.descriptor)
             .map_err(|_| "autonomous execution input targets stale lane geometry")?;
-
         let bundle = AutonomousLaneMergeBundleV1 {
             version: AutonomousLaneMergeBundleV1::VERSION,
             autonomous,
@@ -2267,7 +2191,6 @@ impl Kura {
         let bundle_hash = bundle
             .bundle_hash()
             .map_err(|_| "autonomous merge bundle cannot be canonically hashed")?;
-
         // Extract one lossless first-release trace from the exact durable
         // bundle before it becomes merge eligible. The bitmap projection uses
         // the certificate's canonical committee order; no proposer-local or
@@ -2390,7 +2313,6 @@ impl Kura {
             decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
             release: ProductionInFlightFirstReleaseReleaseProjection::default(),
         };
-
         // The source reader observes an already-durable input. PersistExecutionInput
         // is therefore an idempotent named step for one authenticated READY/Commit
         // witness, while the following two steps extract the durable QC and lane
@@ -2412,7 +2334,6 @@ impl Kura {
         if checked_input.into_projection() != input_projection {
             return Err("checked durable execution-input projection changed before admission");
         }
-
         let mut ready_qc_after = input_after;
         ready_qc_after.carrier.ready_qc_durable = true;
         ready_qc_after.history.ever_ready_qc_durable = true;
@@ -2429,7 +2350,6 @@ impl Kura {
         if checked_ready_qc.into_projection() != ready_qc_projection {
             return Err("checked durable READY-QC projection changed before admission");
         }
-
         let mut lane_commit_after = ready_qc_after;
         lane_commit_after.decision.lane_commit_scope = binding_a;
         lane_commit_after.decision.lane_commit_owner = lane_commit_actor;
@@ -2453,7 +2373,6 @@ impl Kura {
             input,
         })
     }
-
     /// Revalidate the exact independently durable source admitted to merge.
     ///
     /// This read never repairs an execution-input or certified data/index
@@ -2476,7 +2395,6 @@ impl Kura {
             true,
         )
     }
-
     /// Publish one exact canonical autonomous bundle through an independent
     /// strict data/index/directory durability barrier.
     ///
@@ -2505,7 +2423,6 @@ impl Kura {
                 "autonomous merge source bytes or hash differ from its canonical bundle",
             ));
         }
-
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(descriptor.lane_id)?;
         self.require_active_lane_artifact(&entry, descriptor)?;
@@ -2571,7 +2488,6 @@ impl Kura {
             return Ok(());
         }
         drop(existing_pair);
-
         let projected_entry_count = match existing_layout {
             None | Some(SidecarIndexLayout { entry_count: 0, .. }) => 1_u64,
             Some(layout) if descriptor.lane_block_height < layout.base_height => layout
@@ -2620,7 +2536,6 @@ impl Kura {
                 "autonomous merge bundle data would exceed its aggregate byte budget",
             ));
         }
-
         #[cfg(test)]
         if FAIL_NEXT_AUTONOMOUS_MERGE_BUNDLE_PERSISTENCE.with(|flag| flag.replace(false)) {
             return Err(Self::invalid_lane_artifact_error(
@@ -2628,7 +2543,6 @@ impl Kura {
                 "injected autonomous merge bundle publication failure",
             ));
         }
-
         let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path, None)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         #[cfg(test)]
@@ -2709,7 +2623,6 @@ impl Kura {
                 .cloned()
                 .collect::<Vec<_>>()
         };
-
         for entry in entries {
             let (certified, persisted_bundles) = {
                 let _geometry_guard = self.lane_geometry_lock.lock();
@@ -2722,7 +2635,6 @@ impl Kura {
                 }
                 let _sidecar_guard = self.sidecar_lock.lock();
                 self.ensure_prune_recovery_not_required()?;
-
                 let frontier =
                     self.read_latest_certified_lane_block_frontier_locked(&active_entry, true)?;
                 if let Some(frontier) = frontier.as_ref() {
@@ -2736,7 +2648,6 @@ impl Kura {
                         &frontier.snapshot,
                     )?;
                 }
-
                 let (certified_data_path, certified_index_path) =
                     Self::certified_lane_block_paths_for_entry(&active_entry, &self.store_root);
                 if !self.recover_bound_progress_sidecar_artifacts(
@@ -2804,7 +2715,6 @@ impl Kura {
                         "certified lane block history exists without its mandatory durable frontier",
                     ));
                 }
-
                 let (bundle_data_path, bundle_index_path) =
                     Self::autonomous_lane_merge_bundle_paths_for_entry(
                         &active_entry,
@@ -2884,7 +2794,6 @@ impl Kura {
                 };
                 (certified, bundles)
             };
-
             for lane_block_height in persisted_bundles.keys() {
                 let Some(artifact) = certified.get(lane_block_height) else {
                     return Err(Self::invalid_lane_artifact_error(
@@ -2899,7 +2808,6 @@ impl Kura {
                     ));
                 }
             }
-
             for (lane_block_height, artifact) in certified {
                 let Some(availability) = artifact.prepare_qc.payload_availability_qc.as_ref()
                 else {
@@ -3057,7 +2965,6 @@ impl Kura {
         if !availability_body.qc_mode_tag.ends_with(&context_suffix) {
             return Err("READY height-context session differs from the proposal");
         }
-
         let durable = self
             .read_lane_block_execution_input_with_repair_policy(
                 descriptor.lane_id,
@@ -3110,7 +3017,6 @@ impl Kura {
             LANE_READY_EXECUTION_INPUT_AUTHORIZATION_DOMAIN_V1,
             durable_bytes.as_slice(),
         ]);
-
         // Project the exact committee positions named by the authenticated
         // payload and signing request. The checked token is consumed only
         // after the repair-disabled durable input and full reservation group

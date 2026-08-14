@@ -11,7 +11,6 @@ mod transaction_admission_domain_source_tests {
             .unwrap_or_else(|| panic!("missing signature terminator for `{name}`"));
         &signature[..=end]
     }
-
     #[test]
     fn ordinary_transaction_admission_has_no_chain_id_parameter_axis() {
         let source = include_str!("../routing.rs");
@@ -45,7 +44,6 @@ mod transaction_admission_domain_source_tests {
             "handle_post_v1_subscription_plan",
             "handle_post_v1_subscription_usage",
         ];
-
         for name in network_scoped_functions {
             let signature = function_signature(source, name);
             assert!(

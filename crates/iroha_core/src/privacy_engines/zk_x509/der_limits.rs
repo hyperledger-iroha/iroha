@@ -3,7 +3,6 @@
 //! These limits define fixed admission and numeric-verifier topology and
 //! therefore remain present in every node build. The native reference parser
 //! and witness construction that consume them are release-evidence tooling.
-
 /// Maximum bytes in one certificate or CRL DER document.
 pub(crate) const ZK_X509_DER_MAX_DOCUMENT_BYTES_V1: usize = 16 * 1024;
 /// Maximum content bytes in one DER value.

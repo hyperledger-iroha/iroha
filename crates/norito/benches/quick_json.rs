@@ -1,9 +1,7 @@
 //! Quick JSON benches exercising Norito's typed JSON pipelines.
 #![cfg(feature = "json")]
-
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use norito::json::FastJsonWrite;
-
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
@@ -11,7 +9,6 @@ struct Inner {
     a: u64,
     name: String,
 }
-
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
@@ -21,7 +18,6 @@ struct Outer {
     flag: bool,
     inner: Vec<Inner>,
 }
-
 fn make_outer(n_inner: usize, payload: &str) -> Outer {
     let mut inners = Vec::with_capacity(n_inner);
     for i in 0..n_inner {
@@ -37,16 +33,13 @@ fn make_outer(n_inner: usize, payload: &str) -> Outer {
         inner: inners,
     }
 }
-
 fn bench_quick(c: &mut Criterion) {
     let mut g = c.benchmark_group("quick_typed_encode_decode");
     g.sample_size(20);
-
     for &n in &[8usize, 32] {
         let v = make_outer(n, "payload");
         let s_generic = norito::json::to_json(&v).unwrap();
         let s_fast = norito::json::to_json_fast(&v).unwrap();
-
         g.bench_function(BenchmarkId::new("encode_generic", n), |b| {
             b.iter_batched(
                 || v.clone(),
@@ -80,7 +73,6 @@ fn bench_quick(c: &mut Criterion) {
         });
     }
     g.finish();
-
     // small-object break-even
     let mut small = c.benchmark_group("quick_small_break_even");
     small.sample_size(20);
@@ -103,6 +95,5 @@ fn bench_quick(c: &mut Criterion) {
     }
     small.finish();
 }
-
 criterion_group!(benches, bench_quick);
 criterion_main!(benches);

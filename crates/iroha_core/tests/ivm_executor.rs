@@ -1,7 +1,6 @@
 //! Unit tests for executing single instructions via the IVM executor.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use std::sync::Arc;
-
 use iroha_core::{
     executor::Executor,
     kura::Kura,
@@ -11,11 +10,9 @@ use iroha_core::{
 use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
-
 #[test]
 fn ivm_instruction_executes() {
     let executor = Executor::default();
-
     let world = World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
@@ -23,7 +20,6 @@ fn ivm_instruction_executes() {
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
-
     let domain_id: DomainId = DomainId::try_new("test", "universal").expect("domain id");
     let instruction: InstructionBox = Register::domain(Domain::new(domain_id.clone())).into();
     executor
@@ -31,11 +27,9 @@ fn ivm_instruction_executes() {
         .expect("execution");
     assert!(state_tx.world.domain(&domain_id).is_ok());
 }
-
 #[test]
 fn ivm_instruction_reports_error() {
     let executor = Executor::default();
-
     let world = World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
@@ -43,7 +37,6 @@ fn ivm_instruction_reports_error() {
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
-
     let domain_id: DomainId = DomainId::try_new("fail", "universal").expect("domain id");
     let instruction: InstructionBox = Register::domain(Domain::new(domain_id.clone())).into();
     executor
@@ -52,11 +45,9 @@ fn ivm_instruction_reports_error() {
     let result = executor.execute_instruction(&mut state_tx, &ALICE_ID.clone(), instruction);
     assert!(result.is_err());
 }
-
 #[test]
 fn register_genesis_domain_rejected() {
     let executor = Executor::default();
-
     let world = World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
@@ -64,14 +55,12 @@ fn register_genesis_domain_rejected() {
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
-
     let domain_id = (*iroha_genesis::GENESIS_DOMAIN_ID).clone();
     let instruction: InstructionBox = Register::domain(Domain::new(domain_id.clone())).into();
     let result = executor.execute_instruction(&mut state_tx, &ALICE_ID.clone(), instruction);
     let err = result.expect_err("genesis domain must be rejected");
     assert!(format!("{err:?}").contains("genesis domain"));
 }
-
 fn new_state(
     world: World,
     kura: Arc<Kura>,

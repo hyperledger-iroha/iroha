@@ -8,7 +8,6 @@
 //! health checks, and receipt helpers consumed by `iroha_core`'s
 //! `SettlementEngine`; treasury automation and AMM/RFQ execution hook into
 //! these deterministic primitives.
-
 #![deny(
     missing_docs,
     clippy::all,
@@ -27,14 +26,12 @@
     clippy::missing_errors_doc,
     clippy::missing_panics_doc
 )]
-
 use norito::{
     Archived, Error, NoritoDeserialize, NoritoSerialize,
     core::DecodeFromSlice,
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize, Parser},
 };
 use time::{Duration, OffsetDateTime};
-
 pub mod config;
 pub mod haircut;
 pub mod policy;
@@ -42,7 +39,6 @@ pub mod price;
 pub mod receipt;
 pub mod swapline;
 pub mod volatility;
-
 pub use DurationSeconds as TwapWindowSeconds;
 pub use config::{EpsilonBps, SettlementConfig};
 pub use haircut::{HaircutTier, LiquidityProfile};
@@ -55,11 +51,9 @@ pub use price::{ShadowPrice, ShadowPriceCalculator, ShadowPriceError};
 pub use receipt::{SettlementReceipt, SettlementReceiptError};
 pub use swapline::{CollateralKind, SwapLineConfig, SwapLineError, SwapLineExposure, SwapLineId};
 pub use volatility::VolatilityBucket;
-
 /// UTC timestamp rounded to milliseconds since Unix epoch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TimestampMs(OffsetDateTime);
-
 impl TimestampMs {
     /// Construct from milliseconds since Unix epoch.
     pub fn from_unix_millis(ms: u64) -> Result<Self, String> {
@@ -68,7 +62,6 @@ impl TimestampMs {
             .map(Self)
             .map_err(|err| format!("timestamp out of range: {err}"))
     }
-
     /// Extract milliseconds since Unix epoch.
     #[must_use]
     pub fn as_unix_millis(self) -> u64 {
@@ -76,32 +69,27 @@ impl TimestampMs {
         let clamped = nanos.clamp(0, i128::from(u64::MAX) * 1_000_000);
         u64::try_from(clamped / 1_000_000).expect("timestamp clamped to u64 milliseconds range")
     }
-
     /// Access the underlying timestamp.
     #[must_use]
     pub const fn as_offset_datetime(self) -> OffsetDateTime {
         self.0
     }
 }
-
 impl From<OffsetDateTime> for TimestampMs {
     fn from(value: OffsetDateTime) -> Self {
         Self(value)
     }
 }
-
 impl From<TimestampMs> for OffsetDateTime {
     fn from(value: TimestampMs) -> Self {
         value.0
     }
 }
-
 impl NoritoSerialize for TimestampMs {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         self.as_unix_millis().serialize(writer)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for TimestampMs {
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
         let ptr = std::ptr::from_ref(archived).cast::<u8>();
@@ -121,12 +109,10 @@ impl<'a> NoritoDeserialize<'a> for TimestampMs {
         Self::from_unix_millis(millis)
             .map_err(|err| Error::Message(format!("invalid timestamp: {err}")))
     }
-
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("timestamp should deserialize")
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for TimestampMs {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (millis, used) = <u64 as DecodeFromSlice>::decode_from_slice(bytes)?;
@@ -135,62 +121,52 @@ impl<'a> DecodeFromSlice<'a> for TimestampMs {
         Ok((timestamp, used))
     }
 }
-
 impl FastJsonWrite for TimestampMs {
     fn write_json(&self, out: &mut String) {
         self.as_unix_millis().json_serialize(out);
     }
 }
-
 impl JsonDeserialize for TimestampMs {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
         let millis = u64::json_deserialize(parser)?;
         Self::from_unix_millis(millis).map_err(json::Error::Message)
     }
 }
-
 /// Duration stored as whole seconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DurationSeconds(Duration);
-
 impl DurationSeconds {
     /// Construct from a `time::Duration`.
     #[must_use]
     pub const fn new(duration: Duration) -> Self {
         Self(duration)
     }
-
     /// Access the underlying duration.
     #[must_use]
     pub const fn as_duration(self) -> Duration {
         self.0
     }
-
     /// Whole seconds represented by this duration.
     #[must_use]
     pub const fn whole_seconds(self) -> i64 {
         self.0.whole_seconds()
     }
 }
-
 impl From<Duration> for DurationSeconds {
     fn from(value: Duration) -> Self {
         Self(value)
     }
 }
-
 impl From<DurationSeconds> for Duration {
     fn from(value: DurationSeconds) -> Self {
         value.0
     }
 }
-
 impl NoritoSerialize for DurationSeconds {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         self.0.whole_seconds().serialize(writer)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for DurationSeconds {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         let seconds_arch: &Archived<i64> = archived.cast();
@@ -198,33 +174,27 @@ impl<'a> NoritoDeserialize<'a> for DurationSeconds {
         Self(Duration::seconds(seconds))
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for DurationSeconds {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (seconds, used) = <i64 as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok((Self(Duration::seconds(seconds)), used))
     }
 }
-
 impl FastJsonWrite for DurationSeconds {
     fn write_json(&self, out: &mut String) {
         self.0.whole_seconds().json_serialize(out);
     }
 }
-
 impl JsonDeserialize for DurationSeconds {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
         let seconds = i64::json_deserialize(parser)?;
         Ok(Self(Duration::seconds(seconds)))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use norito::decode_from_bytes;
-
     use super::{TimestampMs, XorQuantity};
-
     #[test]
     fn xor_quantity_norito_roundtrip() {
         let amount: XorQuantity = "1234.56".parse().expect("canonical XOR quantity");
@@ -232,7 +202,6 @@ mod tests {
         let decoded: XorQuantity = decode_from_bytes(&bytes).expect("decode");
         assert_eq!(decoded, amount);
     }
-
     #[test]
     fn timestamp_ms_norito_roundtrip() {
         let timestamp = TimestampMs::from_unix_millis(1_700_000_000_000).expect("timestamp");

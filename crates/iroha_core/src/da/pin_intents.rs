@@ -3,12 +3,10 @@
 //! Torii writes `da-pin-intent-*.norito` artefacts alongside DA commitments.
 //! These helpers load and sort pin intents deterministically so they can be
 //! threaded into WSV/registry wiring without relying on filesystem ordering.
-
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
-
 use iroha_data_model::{
     da::{
         pin_intent::{DaPinIntent, DaPinIntentBundle},
@@ -18,9 +16,7 @@ use iroha_data_model::{
 };
 use norito::{decode_from_bytes, to_bytes};
 use thiserror::Error;
-
 use crate::da::ReplayFingerprint;
-
 /// Errors encountered while loading DA pin intents from disk.
 #[derive(Debug, Error)]
 pub enum DaPinIntentSpoolError {
@@ -107,7 +103,6 @@ pub enum DaPinIntentSpoolError {
         observed: ReplayFingerprint,
     },
 }
-
 /// Load all DA pin intents from the spool directory.
 ///
 /// Files are filtered by filename (`da-pin-intent-*.norito`), checked against
@@ -129,7 +124,6 @@ pub fn load_pin_intents(
     let Some(dir_entries) = open_pin_intent_spool_dir(spool_dir)? else {
         return Ok(None);
     };
-
     let mut paths = Vec::new();
     for entry in dir_entries {
         let entry = entry.map_err(|source| DaPinIntentSpoolError::ReadEntry {
@@ -143,7 +137,6 @@ pub fn load_pin_intents(
         paths.push(path);
     }
     paths.sort();
-
     for path in paths {
         let bytes = read_regular_pin_intent_file(&path)?;
         let (filename_key, intent) = decode_pin_intent(&bytes, &path)?;
@@ -164,11 +157,9 @@ pub fn load_pin_intents(
         duplicate_bodies.push((intent.clone(), filename_key.fingerprint));
         intents.push(intent);
     }
-
     if intents.is_empty() {
         return Ok(None);
     }
-
     // Deterministic ordering: by lane, epoch, sequence, then storage ticket bytes.
     intents.sort_by(|a, b| {
         (
@@ -184,10 +175,8 @@ pub fn load_pin_intents(
                 b.storage_ticket.as_ref(),
             ))
     });
-
     Ok(Some(intents))
 }
-
 fn open_pin_intent_spool_dir(
     spool_dir: &Path,
 ) -> Result<Option<std::fs::ReadDir>, DaPinIntentSpoolError> {
@@ -217,7 +206,6 @@ fn open_pin_intent_spool_dir(
             source,
         })
 }
-
 fn read_regular_pin_intent_file(path: &Path) -> Result<Vec<u8>, DaPinIntentSpoolError> {
     let metadata =
         std::fs::symlink_metadata(path).map_err(|source| DaPinIntentSpoolError::ReadFile {
@@ -240,7 +228,6 @@ fn read_regular_pin_intent_file(path: &Path) -> Result<Vec<u8>, DaPinIntentSpool
     revalidate_regular_pin_intent_file(path, &metadata, bytes.len())?;
     Ok(bytes)
 }
-
 fn revalidate_regular_pin_intent_file(
     path: &Path,
     metadata: &std::fs::Metadata,
@@ -273,7 +260,6 @@ fn revalidate_regular_pin_intent_file(
     }
     Ok(())
 }
-
 fn is_da_pin_file(path: &Path) -> Result<bool, DaPinIntentSpoolError> {
     let Some(name) = path.file_name() else {
         return Ok(false);
@@ -286,20 +272,16 @@ fn is_da_pin_file(path: &Path) -> Result<bool, DaPinIntentSpoolError> {
     }
     Ok(false)
 }
-
 #[cfg(unix)]
 fn non_utf8_artifact_name_matches(name: &std::ffi::OsStr, prefix: &[u8], suffix: &[u8]) -> bool {
     use std::os::unix::ffi::OsStrExt;
-
     let bytes = name.as_bytes();
     bytes.starts_with(prefix) && bytes.ends_with(suffix)
 }
-
 #[cfg(not(unix))]
 fn non_utf8_artifact_name_matches(_name: &std::ffi::OsStr, _prefix: &[u8], _suffix: &[u8]) -> bool {
     false
 }
-
 #[derive(Clone, Copy)]
 struct PinIntentFileKey {
     lane_id: LaneId,
@@ -308,7 +290,6 @@ struct PinIntentFileKey {
     storage_ticket: StorageTicketId,
     fingerprint: ReplayFingerprint,
 }
-
 fn parse_pin_intent_file_key(path: &Path) -> Result<PinIntentFileKey, DaPinIntentSpoolError> {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return Err(malformed_filename(path));
@@ -319,7 +300,6 @@ fn parse_pin_intent_file_key(path: &Path) -> Result<PinIntentFileKey, DaPinInten
     else {
         return Err(malformed_filename(path));
     };
-
     let mut fields = rest.split('-');
     let Some(lane_hex) = fields.next() else {
         return Err(malformed_filename(path));
@@ -339,13 +319,11 @@ fn parse_pin_intent_file_key(path: &Path) -> Result<PinIntentFileKey, DaPinInten
     if fields.next().is_some() {
         return Err(malformed_filename(path));
     }
-
     let lane_id = parse_fixed_hex_u32(lane_hex, 8, path).map(LaneId::new)?;
     let epoch = parse_fixed_hex_u64(epoch_hex, 16, path)?;
     let sequence = parse_fixed_hex_u64(sequence_hex, 16, path)?;
     let storage_ticket = StorageTicketId::new(parse_fixed_hex_32(ticket_hex, path)?);
     let fingerprint = ReplayFingerprint::from(parse_fixed_hex_32(fingerprint_hex, path)?);
-
     Ok(PinIntentFileKey {
         lane_id,
         epoch,
@@ -354,7 +332,6 @@ fn parse_pin_intent_file_key(path: &Path) -> Result<PinIntentFileKey, DaPinInten
         fingerprint,
     })
 }
-
 fn parse_fixed_hex_u32(
     value: &str,
     width: usize,
@@ -365,7 +342,6 @@ fn parse_fixed_hex_u32(
     }
     u32::from_str_radix(value, 16).map_err(|_| malformed_filename(path))
 }
-
 fn parse_fixed_hex_u64(
     value: &str,
     width: usize,
@@ -376,7 +352,6 @@ fn parse_fixed_hex_u64(
     }
     u64::from_str_radix(value, 16).map_err(|_| malformed_filename(path))
 }
-
 fn parse_fixed_hex_32(value: &str, path: &Path) -> Result<[u8; 32], DaPinIntentSpoolError> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(malformed_filename(path));
@@ -385,13 +360,11 @@ fn parse_fixed_hex_32(value: &str, path: &Path) -> Result<[u8; 32], DaPinIntentS
     hex::decode_to_slice(value, &mut bytes).map_err(|_| malformed_filename(path))?;
     Ok(bytes)
 }
-
 fn malformed_filename(path: &Path) -> DaPinIntentSpoolError {
     DaPinIntentSpoolError::MalformedFilename {
         path: path.to_path_buf(),
     }
 }
-
 fn decode_pin_intent(
     data: &[u8],
     path: &Path,
@@ -419,10 +392,8 @@ fn decode_pin_intent(
             intent_ticket: intent.storage_ticket,
         });
     }
-
     Ok((filename_key, intent))
 }
-
 /// Drop duplicate/invalid pin intents deterministically and surface the reasons.
 /// When duplicate keys appear, keep the latest intent in sort order.
 #[must_use]
@@ -433,7 +404,6 @@ pub fn canonicalize_bundle(
     let version = bundle.version;
     let mut intents = bundle.intents;
     sort_pin_intents(&mut intents);
-
     let mut by_key = BTreeMap::<PinIntentKey, (DaPinIntent, usize)>::new();
     for (idx, intent) in intents.into_iter().enumerate() {
         if is_zero_manifest(&intent.manifest_hash) {
@@ -444,7 +414,6 @@ pub fn canonicalize_bundle(
             });
             continue;
         }
-
         let key = PinIntentKey::from(&intent);
         match by_key.entry(key) {
             std::collections::btree_map::Entry::Vacant(entry) => {
@@ -470,7 +439,6 @@ pub fn canonicalize_bundle(
             }
         }
     }
-
     let mut alias_winners = BTreeMap::<String, (usize, PinIntentKey)>::new();
     for (key, (intent, idx)) in &by_key {
         if let Some(alias) = &intent.alias {
@@ -501,7 +469,6 @@ pub fn canonicalize_bundle(
             }
         }
     }
-
     let intents: Vec<_> = by_key
         .into_iter()
         .filter(|(key, (intent, _))| {
@@ -513,13 +480,10 @@ pub fn canonicalize_bundle(
         })
         .map(|(_, (intent, _))| intent)
         .collect();
-
     let mut canonical = DaPinIntentBundle::new(intents);
     canonical.version = version;
-
     (canonical, drops)
 }
-
 /// Reasons why a DA pin intent was dropped while canonicalizing a bundle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PinIntentDropReason {
@@ -555,14 +519,12 @@ pub enum PinIntentDropReason {
         kept_ticket: StorageTicketId,
     },
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct PinIntentKey {
     lane: u32,
     epoch: u64,
     sequence: u64,
 }
-
 impl From<&DaPinIntent> for PinIntentKey {
     fn from(intent: &DaPinIntent) -> Self {
         Self {
@@ -572,7 +534,6 @@ impl From<&DaPinIntent> for PinIntentKey {
         }
     }
 }
-
 fn sort_pin_intents(intents: &mut [DaPinIntent]) {
     intents.sort_by_cached_key(|intent| {
         (
@@ -587,15 +548,12 @@ fn sort_pin_intents(intents: &mut [DaPinIntent]) {
         )
     });
 }
-
 fn is_zero_manifest(digest: &iroha_data_model::sorafs::pin_registry::ManifestDigest) -> bool {
     digest.as_bytes().iter().all(|byte| *byte == 0)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{convert::TryFrom, path::PathBuf};
-
     use iroha_data_model::{
         da::{
             pin_intent::{DaPinIntent, DaPinIntentBundle},
@@ -605,9 +563,7 @@ mod tests {
         sorafs::pin_registry::ManifestDigest,
     };
     use tempfile::tempdir;
-
     use super::*;
-
     fn sample_intent(lane: u32, seq: u64) -> DaPinIntent {
         let lane_byte = u8::try_from(lane).expect("lane id fits in byte for test intent");
         let seq_byte = u8::try_from(seq).expect("sequence fits in byte for test intent");
@@ -636,7 +592,6 @@ mod tests {
             ),
         }
     }
-
     fn pin_intent_file_name(intent: &DaPinIntent, fingerprint: [u8; 32]) -> String {
         format!(
             "da-pin-intent-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}.norito",
@@ -647,54 +602,43 @@ mod tests {
             fingerprint = hex::encode(fingerprint)
         )
     }
-
     #[test]
     fn returns_none_for_missing_dir() {
         let missing = PathBuf::from("this-path-should-not-exist-da-pin-spool");
         assert!(load_pin_intents(&missing).unwrap().is_none());
     }
-
     #[test]
     fn loads_and_sorts_pin_intents() {
         let dir = tempdir().expect("tempdir");
         let intent_a = sample_intent(2, 5);
         let intent_b = sample_intent(1, 1);
-
         let bytes_a = to_bytes(&intent_a).expect("encode intent a");
         let bytes_b = to_bytes(&intent_b).expect("encode intent b");
-
         let file_a = dir.path().join(pin_intent_file_name(&intent_a, [0xaa; 32]));
         let file_b = dir.path().join(pin_intent_file_name(&intent_b, [0xbb; 32]));
-
         std::fs::write(file_a, bytes_a).expect("write a");
         std::fs::write(file_b, bytes_b).expect("write b");
-
         let intents = load_pin_intents(dir.path())
             .expect("load intents")
             .expect("intents present");
-
         assert_eq!(intents.len(), 2);
         // Sorted by lane then sequence, so intent_b should come first.
         assert_eq!(intents[0].lane_id, LaneId::new(1));
         assert_eq!(intents[0].sequence, 1);
     }
-
     #[test]
     fn load_pin_intents_rejects_corrupt_entries() {
         let dir = tempdir().expect("tempdir");
         let intent = sample_intent(1, 1);
         let bytes = to_bytes(&intent).expect("encode intent");
-
         let valid_path = dir.path().join(pin_intent_file_name(&intent, [0xcc; 32]));
         let mut corrupt_key = sample_intent(1, 2);
         corrupt_key.storage_ticket = intent.storage_ticket;
         let corrupt_path = dir
             .path()
             .join(pin_intent_file_name(&corrupt_key, [0xdd; 32]));
-
         std::fs::write(valid_path, bytes).expect("write valid");
         std::fs::write(corrupt_path, b"corrupt").expect("write corrupt");
-
         assert!(
             matches!(
                 load_pin_intents(dir.path()),
@@ -703,14 +647,12 @@ mod tests {
             "corrupt pin-intent artifacts must reject the whole spool load"
         );
     }
-
     #[test]
     fn load_pin_intents_rejects_pin_intent_shaped_directory() {
         let dir = tempdir().expect("tempdir");
         let intent = sample_intent(1, 1);
         let path = dir.path().join(pin_intent_file_name(&intent, [0x7b; 32]));
         std::fs::create_dir(&path).expect("create pin-intent-shaped directory");
-
         assert!(
             matches!(
                 load_pin_intents(dir.path()),
@@ -719,12 +661,10 @@ mod tests {
             "pin-intent-shaped non-files must reject the whole spool load"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn load_pin_intents_rejects_pin_intent_shaped_symlink() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("tempdir");
         let intent = sample_intent(1, 1);
         let target = dir.path().join("pin-intent-target.bin");
@@ -732,7 +672,6 @@ mod tests {
             .expect("write target intent");
         let path = dir.path().join(pin_intent_file_name(&intent, [0x7b; 32]));
         symlink(&target, &path).expect("create pin-intent-shaped symlink");
-
         assert!(
             matches!(
                 load_pin_intents(dir.path()),
@@ -741,20 +680,16 @@ mod tests {
             "pin-intent-shaped symlinks must reject the whole spool load"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn load_pin_intents_rejects_spool_dir_symlink() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("tempdir");
         let target = dir.path().join("pin-intent-spool-target");
         std::fs::create_dir(&target).expect("create target directory");
         let spool = dir.path().join("pin-intent-spool-link");
         symlink(&target, &spool).expect("create pin-intent spool symlink");
-
         let err = load_pin_intents(&spool).expect_err("symlinked pin-intent spool must reject");
-
         match err {
             DaPinIntentSpoolError::ReadDir {
                 path: observed,
@@ -781,7 +716,6 @@ mod tests {
             "spool symlink target should not be removed"
         );
     }
-
     #[test]
     fn pin_intent_read_revalidation_rejects_length_change() {
         let dir = tempdir().expect("tempdir");
@@ -790,10 +724,8 @@ mod tests {
         std::fs::write(&path, b"old").expect("write initial pin intent");
         let metadata = std::fs::symlink_metadata(&path).expect("inspect initial pin intent");
         std::fs::write(&path, b"new-longer").expect("replace pin intent bytes");
-
         let err = revalidate_regular_pin_intent_file(&path, &metadata, 3)
             .expect_err("post-read length changes must reject DA pin-intent artifacts");
-
         match err {
             DaPinIntentSpoolError::ReadFile {
                 path: observed,
@@ -809,39 +741,32 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn pin_intent_file_matcher_rejects_non_utf8_pin_intent_shaped_filename() {
         use std::{ffi::OsString, os::unix::ffi::OsStringExt};
-
         let path = PathBuf::from(OsString::from_vec(b"da-pin-intent-\xFF.norito".to_vec()));
-
         let err = is_da_pin_file(&path).expect_err("non-UTF8 shaped artifact rejects");
         match err {
             DaPinIntentSpoolError::MalformedFilename { path: seen } => assert_eq!(seen, path),
             _ => panic!("expected malformed filename for non-UTF8 DA artifact, got {err:?}"),
         }
     }
-
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn load_pin_intents_rejects_non_utf8_pin_intent_shaped_filename() {
         use std::{ffi::OsString, os::unix::ffi::OsStringExt};
-
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join(PathBuf::from(OsString::from_vec(
             b"da-pin-intent-\xFF.norito".to_vec(),
         )));
         std::fs::write(&path, b"ignored").expect("write invalid utf8 filename");
-
         let err = load_pin_intents(dir.path()).expect_err("non-UTF8 DA artifact rejects");
         match err {
             DaPinIntentSpoolError::MalformedFilename { path: seen } => assert_eq!(seen, path),
             _ => panic!("expected malformed filename for non-UTF8 DA artifact, got {err:?}"),
         }
     }
-
     #[test]
     fn load_pin_intents_rejects_malformed_filenames() {
         let dir = tempdir().expect("tempdir");
@@ -850,9 +775,7 @@ mod tests {
         let malformed_path = dir
             .path()
             .join("da-pin-intent-00000001-0000000000000001-0000000000000001.norito");
-
         std::fs::write(malformed_path, bytes).expect("write malformed filename intent");
-
         assert!(
             matches!(
                 load_pin_intents(dir.path()),
@@ -861,7 +784,6 @@ mod tests {
             "malformed pin-intent filenames must reject the whole spool load"
         );
     }
-
     #[test]
     fn load_pin_intents_rejects_filename_tuple_mismatches() {
         let dir = tempdir().expect("tempdir");
@@ -870,9 +792,7 @@ mod tests {
         let mut file_key = intent.clone();
         file_key.sequence = 2;
         let mismatch_path = dir.path().join(pin_intent_file_name(&file_key, [0x99; 32]));
-
         std::fs::write(mismatch_path, bytes).expect("write mismatch intent");
-
         assert!(
             matches!(
                 load_pin_intents(dir.path()),
@@ -881,7 +801,6 @@ mod tests {
             "pin-intent filename/body tuple mismatches must reject the whole spool load"
         );
     }
-
     #[test]
     fn load_pin_intents_rejects_filename_ticket_mismatches() {
         let dir = tempdir().expect("tempdir");
@@ -890,9 +809,7 @@ mod tests {
         let mut file_key = intent.clone();
         file_key.storage_ticket = StorageTicketId::new([0x99; 32]);
         let mismatch_path = dir.path().join(pin_intent_file_name(&file_key, [0x88; 32]));
-
         std::fs::write(mismatch_path, bytes).expect("write ticket mismatch intent");
-
         assert!(
             matches!(
                 load_pin_intents(dir.path()),
@@ -901,18 +818,15 @@ mod tests {
             "pin-intent filename/body ticket mismatches must reject the whole spool load"
         );
     }
-
     #[test]
     fn load_pin_intents_rejects_same_intent_under_different_fingerprint() {
         let dir = tempdir().expect("tempdir");
         let intent = sample_intent(1, 1);
         let bytes = to_bytes(&intent).expect("encode intent");
-
         for fingerprint in [[0x55; 32], [0x54; 32]] {
             let path = dir.path().join(pin_intent_file_name(&intent, fingerprint));
             std::fs::write(path, &bytes).expect("write duplicate-fingerprint intent");
         }
-
         let err = load_pin_intents(dir.path())
             .expect_err("same pin-intent body under different fingerprints must reject");
         match err {
@@ -932,15 +846,12 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn canonicalize_drops_zero_manifest() {
         let mut zero = sample_intent(1, 1);
         zero.manifest_hash = ManifestDigest::new([0; 32]);
         let bundle = DaPinIntentBundle::new(vec![zero.clone(), sample_intent(2, 2)]);
-
         let (canonical, drops) = canonicalize_bundle(bundle);
-
         assert_eq!(canonical.intents.len(), 1);
         assert!(drops.contains(&PinIntentDropReason::ZeroManifest {
             lane: zero.lane_id.as_u32(),
@@ -948,7 +859,6 @@ mod tests {
             sequence: zero.sequence,
         }));
     }
-
     #[test]
     fn canonicalize_prefers_latest_alias() {
         let mut first = sample_intent(1, 1);
@@ -957,9 +867,7 @@ mod tests {
         second.alias = Some("dup-alias".to_string());
         second.manifest_hash = ManifestDigest::new([0x22; 32]);
         let bundle = DaPinIntentBundle::new(vec![first.clone(), second.clone()]);
-
         let (canonical, drops) = canonicalize_bundle(bundle);
-
         assert_eq!(canonical.intents.len(), 1);
         assert_eq!(canonical.intents[0].storage_ticket, second.storage_ticket);
         assert!(drops.iter().any(|drop| matches!(
@@ -973,7 +881,6 @@ mod tests {
                 && *kept_ticket == second.storage_ticket
         )));
     }
-
     #[test]
     fn canonicalize_replaces_duplicate_key_with_latest_manifest() {
         let mut first = sample_intent(3, 4);
@@ -981,9 +888,7 @@ mod tests {
         let mut second = first.clone();
         second.manifest_hash = ManifestDigest::new([0x22; 32]);
         let bundle = DaPinIntentBundle::new(vec![first.clone(), second.clone()]);
-
         let (canonical, drops) = canonicalize_bundle(bundle);
-
         assert_eq!(canonical.intents.len(), 1);
         assert_eq!(canonical.intents[0].manifest_hash, second.manifest_hash);
         assert!(drops.iter().any(|drop| matches!(
@@ -1001,7 +906,6 @@ mod tests {
                 && *replaced_manifest == first.manifest_hash
         )));
     }
-
     #[test]
     fn canonicalize_replaces_duplicate_sequence_with_new_ticket() {
         let mut first = sample_intent(5, 6);
@@ -1010,10 +914,8 @@ mod tests {
         let mut second = first.clone();
         second.storage_ticket = StorageTicketId::new([0x22; 32]);
         second.manifest_hash = ManifestDigest::new([0x33; 32]);
-
         let bundle = DaPinIntentBundle::new(vec![first.clone(), second.clone()]);
         let (canonical, drops) = canonicalize_bundle(bundle);
-
         assert_eq!(canonical.intents.len(), 1);
         assert_eq!(canonical.intents[0].storage_ticket, second.storage_ticket);
         assert_eq!(canonical.intents[0].manifest_hash, second.manifest_hash);

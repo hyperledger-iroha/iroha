@@ -34,9 +34,7 @@
     clippy::unnecessary_lazy_evaluations,
     clippy::useless_conversion
 )]
-
 //! Metal GPU bindings for FASTPQ.
-
 #[cfg(test)]
 use std::sync::Once;
 use std::{
@@ -57,7 +55,6 @@ use std::{
     time::{Duration, Instant},
     vec::Vec,
 };
-
 use block::ConcreteBlock;
 use fastpq_isi::poseidon::STATE_WIDTH;
 use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
@@ -69,7 +66,6 @@ use metal::{
 use norito::json::{self, Value};
 use smallvec::SmallVec;
 use tracing::{debug, warn};
-
 use crate::{
     backend::GpuBackend,
     bn254_poseidon::Bn254PoseidonBatchSlice,
@@ -84,9 +80,7 @@ use crate::{
     poseidon_manifest::poseidon_manifest,
     trace::{PoseidonColumnBatch, PoseidonColumnSlice},
 };
-
 type MetalResult<T> = Result<T, GpuError>;
-
 const POSEIDON_PERMUTE_KERNEL: &str = "poseidon_permute";
 const POSEIDON_HASH_KERNEL: &str = "poseidon_hash_columns";
 const POSEIDON_HASH_ROWS_KERNEL: &str = "poseidon_hash_rows";
@@ -134,15 +128,12 @@ const METAL_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 // Permit acquisition is host-side backpressure, so it must not fail before a
 // submitted command is considered hung.
 const METAL_COMMAND_PERMIT_TIMEOUT: Duration = METAL_COMMAND_TIMEOUT;
-
 fn debug_env_var(name: &str) -> Option<String> {
     overrides::guard_env_override(|| overrides::debug_env_string(name))
 }
-
 fn debug_env_bool(name: &str) -> Option<bool> {
     overrides::guard_env_override(|| overrides::debug_env_bool(name))
 }
-
 // BN254 Metal pipelines are bundled to keep the host in sync with the metallib.
 // Transcript hashing uses a narrow context so it does not have to compile the
 // full prover pipeline set before validating word-batch acceleration.
@@ -174,7 +165,6 @@ static LAST_LDE_TILE_LIMIT: AtomicU32 = AtomicU32::new(0);
 static MAX_IN_FLIGHT_ENV_OVERRIDE: OnceLock<Option<usize>> = OnceLock::new();
 static THREADGROUP_ENV_OVERRIDE: OnceLock<Option<u64>> = OnceLock::new();
 static DISPATCH_TRACE_ENV: OnceLock<bool> = OnceLock::new();
-
 /// Return `GpuError::Unsupported` when Metal is unavailable; otherwise load
 /// the BN254 Poseidon word-batch pipeline used by FASTPQ transcript hashing.
 pub(crate) fn bn254_status() -> MetalResult<()> {
@@ -185,7 +175,6 @@ pub(crate) fn bn254_status() -> MetalResult<()> {
     let _ = &ctx.bn254_poseidon_hash;
     Ok(())
 }
-
 /// Pending BN254 Metal FFT dispatch.
 ///
 /// WP2-C will replace this with a real kernel-backed guard when the Metal
@@ -193,18 +182,15 @@ pub(crate) fn bn254_status() -> MetalResult<()> {
 pub(crate) struct PendingBn254Fft<'a> {
     pending: Option<PendingColumns<'a>>,
 }
-
 impl<'a> PendingBn254Fft<'a> {
     fn empty() -> Self {
         Self { pending: None }
     }
-
     fn new(pending: PendingColumns<'a>) -> Self {
         Self {
             pending: Some(pending),
         }
     }
-
     /// Wait for the dispatch to complete.
     pub fn wait(mut self) -> MetalResult<()> {
         if let Some(pending) = self.pending.take() {
@@ -213,14 +199,12 @@ impl<'a> PendingBn254Fft<'a> {
         Ok(())
     }
 }
-
 pub fn bn254_fft_columns(columns: &mut [Vec<u64>], log_size: u32) -> MetalResult<()> {
     if columns.is_empty() {
         return Ok(());
     }
     bn254_fft_columns_async(columns, log_size)?.wait()
 }
-
 /// Enqueue a BN254 FFT on the Metal backend.
 pub(crate) fn bn254_fft_columns_async<'a>(
     columns: &'a mut [Vec<u64>],
@@ -232,25 +216,21 @@ pub(crate) fn bn254_fft_columns_async<'a>(
     let pending = dispatch_bn254_fft_columns(columns, log_size)?;
     Ok(PendingBn254Fft::new(pending))
 }
-
 /// Pending BN254 Metal LDE dispatch.
 ///
 /// Replaced by real pipeline once BN254 kernels ship.
 pub(crate) struct PendingBn254Lde {
     pending: Option<PendingLde>,
 }
-
 impl PendingBn254Lde {
     fn empty() -> Self {
         Self { pending: None }
     }
-
     fn new(pending: PendingLde) -> Self {
         Self {
             pending: Some(pending),
         }
     }
-
     /// Wait for the dispatch to complete and collect the evaluated columns.
     pub fn wait(mut self) -> MetalResult<Option<Vec<Vec<u64>>>> {
         if let Some(pending) = self.pending.take() {
@@ -260,7 +240,6 @@ impl PendingBn254Lde {
         }
     }
 }
-
 pub fn bn254_lde_columns(
     coeffs: &[Vec<u64>],
     trace_log: u32,
@@ -272,13 +251,11 @@ pub fn bn254_lde_columns(
     }
     bn254_lde_columns_async(coeffs, trace_log, blowup_log, coset)?.wait()
 }
-
 fn bn254_smoke_test() -> MetalResult<()> {
     // Minimal FFT check to prove BN254 kernels are reachable.
     const FFT_LOG: u32 = 3;
     let mut fft_columns = sample_bn254_columns(FFT_LOG, 1);
     bn254_fft_columns(&mut fft_columns, FFT_LOG)?;
-
     // LDE smoke test with a small trace and coset to validate staging/layout.
     const TRACE_LOG: u32 = 2;
     const BLOWUP_LOG: u32 = 1;
@@ -298,7 +275,6 @@ fn bn254_smoke_test() -> MetalResult<()> {
     }
     Ok(())
 }
-
 /// Enqueue a BN254 LDE on the Metal backend.
 pub(crate) fn bn254_lde_columns_async(
     coeffs: &[Vec<u64>],
@@ -312,7 +288,6 @@ pub(crate) fn bn254_lde_columns_async(
     let pending = dispatch_bn254_lde_columns(coeffs, trace_log, blowup_log, coset)?;
     Ok(PendingBn254Lde::new(pending))
 }
-
 fn dispatch_bn254_fft_columns<'a>(
     columns: &'a mut [Vec<u64>],
     log_size: u32,
@@ -407,7 +382,6 @@ fn dispatch_bn254_fft_columns<'a>(
         pending_batches,
     ))
 }
-
 fn dispatch_bn254_lde_columns(
     coeffs: &[Vec<u64>],
     trace_log: u32,
@@ -541,13 +515,11 @@ fn dispatch_bn254_lde_columns(
         host_stats,
     ))
 }
-
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 fn ensure_multi_queue_env() {
     static INIT: Once = Once::new();
     INIT.call_once(|| set_queue_policy_override_for_tests(2, 1));
 }
-
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 fn unwrap_or_skip<T>(result: MetalResult<T>, context: &str) -> Option<T> {
     match result {
@@ -559,11 +531,9 @@ fn unwrap_or_skip<T>(result: MetalResult<T>, context: &str) -> Option<T> {
         Err(err) => panic!("Metal {context} failed: {err}"),
     }
 }
-
 #[cfg(test)]
 mod bn254_parity {
     use super::{ensure_multi_queue_env, unwrap_or_skip, *};
-
     fn sample_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>> {
         let len = 1usize << log_size;
         let mut columns = Vec::with_capacity(column_count);
@@ -577,14 +547,12 @@ mod bn254_parity {
         }
         columns
     }
-
     fn canonical_to_scalars(column: &[u64]) -> Vec<Bn254Scalar> {
         column
             .chunks_exact(BN254_LIMBS)
             .map(|chunk| bn254_limbs_slice_to_scalar(chunk).expect("valid scalar"))
             .collect()
     }
-
     fn scalars_to_canonical(columns: &[Vec<Bn254Scalar>]) -> Vec<Vec<u64>> {
         columns
             .iter()
@@ -597,7 +565,6 @@ mod bn254_parity {
             })
             .collect()
     }
-
     fn cpu_fft(columns: &mut [Vec<Bn254Scalar>], log_size: u32, twiddles: &[Bn254Scalar]) {
         let n = 1usize << log_size;
         for column in columns {
@@ -618,7 +585,6 @@ mod bn254_parity {
             }
         }
     }
-
     fn cpu_lde(
         coeffs: &[Vec<Bn254Scalar>],
         trace_log: u32,
@@ -645,7 +611,6 @@ mod bn254_parity {
         }
         outputs
     }
-
     #[test]
     fn fft_matches_cpu_reference() {
         ensure_multi_queue_env();
@@ -670,7 +635,6 @@ mod bn254_parity {
         }
         assert_eq!(gpu_columns, cpu_expected);
     }
-
     #[test]
     fn lde_matches_cpu_reference() {
         ensure_multi_queue_env();
@@ -697,11 +661,9 @@ mod bn254_parity {
         assert_eq!(gpu_eval, cpu_expected);
     }
 }
-
 static TEST_QUEUE_FANOUT_OVERRIDE: OnceLock<usize> = OnceLock::new();
 #[cfg(test)]
 static TEST_QUEUE_THRESHOLD_OVERRIDE: OnceLock<u32> = OnceLock::new();
-
 #[cfg(test)]
 fn set_queue_policy_override_for_tests(fanout: usize, threshold: u32) {
     let _ = TEST_QUEUE_FANOUT_OVERRIDE.set(fanout);
@@ -711,7 +673,6 @@ struct PipelineLimits {
     exec_width: u32,
     max_threads: u32,
 }
-
 struct DispatchTicket {
     command: CommandBuffer,
     trace_label: Option<String>,
@@ -720,14 +681,12 @@ struct DispatchTicket {
     permit: CommandPermit,
     adaptive_sample: Option<AdaptiveSample>,
 }
-
 impl DispatchTicket {
     fn with_adaptive_sample(mut self, sample: AdaptiveSample) -> Self {
         self.adaptive_sample = Some(sample);
         self
     }
 }
-
 /// Host-side metrics captured while preparing GPU LDE buffers.
 #[derive(Clone, Debug, Default)]
 pub struct LdeHostStats {
@@ -738,7 +697,6 @@ pub struct LdeHostStats {
     /// Queue-depth delta observed while zero-fill was running.
     pub queue_delta: Option<QueueDepthStats>,
 }
-
 /// Enable or disable capture of [`LdeHostStats`] for subsequent `lde_columns` calls.
 pub fn enable_lde_host_stats(enabled: bool) {
     LDE_STATS_ENABLED.store(enabled, Ordering::Release);
@@ -750,7 +708,6 @@ pub fn enable_lde_host_stats(enabled: bool) {
         }
     }
 }
-
 /// Returns the most recent [`LdeHostStats`] sample recorded by `lde_columns`, clearing it.
 pub fn take_lde_host_stats() -> Option<LdeHostStats> {
     if !LDE_STATS_ENABLED.load(Ordering::Acquire) {
@@ -761,7 +718,6 @@ pub fn take_lde_host_stats() -> Option<LdeHostStats> {
         .and_then(|store| store.lock().ok())
         .and_then(|mut guard| guard.take())
 }
-
 /// Cache hit/miss totals for stage twiddle buffers.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TwiddleCacheStats {
@@ -774,7 +730,6 @@ pub struct TwiddleCacheStats {
     /// Milliseconds spent uploading twiddles after caching (actual work).
     pub after_ms: f64,
 }
-
 /// Enable or disable capture of [`TwiddleCacheStats`] for subsequent twiddle lookups.
 pub fn enable_twiddle_cache_stats(enabled: bool) {
     TWIDDLE_STATS_ENABLED.store(enabled, Ordering::Relaxed);
@@ -786,7 +741,6 @@ pub fn enable_twiddle_cache_stats(enabled: bool) {
         }
     }
 }
-
 /// Returns the accumulated [`TwiddleCacheStats`], clearing the snapshot.
 pub fn take_twiddle_cache_stats() -> Option<TwiddleCacheStats> {
     if !TWIDDLE_STATS_ENABLED.load(Ordering::Relaxed) {
@@ -799,7 +753,6 @@ pub fn take_twiddle_cache_stats() -> Option<TwiddleCacheStats> {
         stats
     })
 }
-
 fn record_twiddle_cache_sample(duration_ms: f64, hit: bool) {
     if !TWIDDLE_STATS_ENABLED.load(Ordering::Relaxed) {
         return;
@@ -815,7 +768,6 @@ fn record_twiddle_cache_sample(duration_ms: f64, hit: bool) {
         }
     }
 }
-
 /// Enable or disable queue depth instrumentation for subsequent Metal dispatches.
 pub fn enable_queue_depth_stats(enabled: bool) {
     QUEUE_STATS_ENABLED.store(enabled, Ordering::Release);
@@ -828,7 +780,6 @@ pub fn enable_queue_depth_stats(enabled: bool) {
         reset_column_staging_stats();
     }
 }
-
 /// Returns the most recent queue depth snapshot recorded since statistics were enabled.
 pub fn take_queue_depth_stats() -> Option<QueueDepthStats> {
     if !QUEUE_STATS_ENABLED.load(Ordering::Acquire) {
@@ -841,7 +792,6 @@ pub fn take_queue_depth_stats() -> Option<QueueDepthStats> {
     guard.reset();
     Some(snapshot)
 }
-
 /// Returns the accumulated column staging telemetry, clearing the current snapshot.
 pub fn take_column_staging_stats() -> Option<ColumnStagingStats> {
     if !COLUMN_STAGING_STATS_ENABLED.load(Ordering::Acquire) {
@@ -850,7 +800,6 @@ pub fn take_column_staging_stats() -> Option<ColumnStagingStats> {
     let store = COLUMN_STAGING_STATS.get_or_init(|| Mutex::new(ColumnStagingStats::default()));
     store.lock().ok().map(|mut guard| mem::take(&mut *guard))
 }
-
 /// Returns a snapshot of the adaptive scheduling heuristics, if initialised.
 pub fn adaptive_schedule_snapshot() -> Option<AdaptiveScheduleSnapshot> {
     let scheduler = ADAPTIVE_SCHEDULER.get();
@@ -900,7 +849,6 @@ pub fn adaptive_schedule_snapshot() -> Option<AdaptiveScheduleSnapshot> {
         lde_tile_stage_limit: (lde_tile > 0).then_some(lde_tile),
     })
 }
-
 /// Returns a snapshot of the current queue depth metrics without resetting the counters.
 pub fn snapshot_queue_depth_stats() -> Option<QueueDepthStats> {
     if !QUEUE_STATS_ENABLED.load(Ordering::Acquire) {
@@ -911,14 +859,12 @@ pub fn snapshot_queue_depth_stats() -> Option<QueueDepthStats> {
     guard.advance(Instant::now());
     Some(guard.snapshot(command_semaphore().limit()))
 }
-
 fn reset_column_staging_stats() {
     let store = COLUMN_STAGING_STATS.get_or_init(|| Mutex::new(ColumnStagingStats::default()));
     if let Ok(mut guard) = store.lock() {
         *guard = ColumnStagingStats::default();
     }
 }
-
 fn record_staging_flatten(phase: ColumnStagingPhase, duration: Duration) {
     if !COLUMN_STAGING_STATS_ENABLED.load(Ordering::Acquire) {
         return;
@@ -929,7 +875,6 @@ fn record_staging_flatten(phase: ColumnStagingPhase, duration: Duration) {
         guard.record_flatten_sample(phase, delta);
     }
 }
-
 fn record_staging_wait(phase: ColumnStagingPhase, duration: Duration) {
     if !COLUMN_STAGING_STATS_ENABLED.load(Ordering::Acquire) {
         return;
@@ -940,7 +885,6 @@ fn record_staging_wait(phase: ColumnStagingPhase, duration: Duration) {
         guard.record_wait_sample(phase, delta);
     }
 }
-
 /// Enable or disable capture of per-dispatch Metal kernel statistics.
 pub fn enable_kernel_stats(enabled: bool) {
     KERNEL_STATS_ENABLED.store(enabled, Ordering::Relaxed);
@@ -949,7 +893,6 @@ pub fn enable_kernel_stats(enabled: bool) {
         guard.clear();
     }
 }
-
 /// Returns the collected Metal kernel statistics, clearing the current snapshot.
 pub fn take_kernel_stats() -> Option<Vec<KernelStatsSample>> {
     if !KERNEL_STATS_ENABLED.load(Ordering::Relaxed) {
@@ -958,7 +901,6 @@ pub fn take_kernel_stats() -> Option<Vec<KernelStatsSample>> {
     let store = KERNEL_STATS.get_or_init(|| Mutex::new(Vec::new()));
     store.lock().ok().map(|mut guard| guard.drain(..).collect())
 }
-
 /// Enable or disable capture of post-tiling dispatch samples.
 pub fn enable_post_tile_stats(enabled: bool) {
     POST_TILE_STATS_ENABLED.store(enabled, Ordering::Relaxed);
@@ -967,7 +909,6 @@ pub fn enable_post_tile_stats(enabled: bool) {
         guard.clear();
     }
 }
-
 /// Returns the recorded post-tiling dispatch samples, clearing the snapshot.
 pub fn take_post_tile_stats() -> Option<Vec<PostTileSample>> {
     if !POST_TILE_STATS_ENABLED.load(Ordering::Relaxed) {
@@ -976,7 +917,6 @@ pub fn take_post_tile_stats() -> Option<Vec<PostTileSample>> {
     let store = POST_TILE_STATS.get_or_init(|| Mutex::new(Vec::new()));
     store.lock().ok().map(|mut guard| guard.drain(..).collect())
 }
-
 fn record_post_tile_sample(kind: KernelKind, log_len: u32, stage_start: u32, columns: u32) {
     if !POST_TILE_STATS_ENABLED.load(Ordering::Relaxed) {
         return;
@@ -991,7 +931,6 @@ fn record_post_tile_sample(kind: KernelKind, log_len: u32, stage_start: u32, col
         });
     }
 }
-
 /// Aggregated queue depth metrics captured while GPU dispatches were in flight.
 #[derive(Clone, Debug, Default)]
 pub struct QueueDepthStats {
@@ -1010,7 +949,6 @@ pub struct QueueDepthStats {
     /// Per-queue occupancy metrics, indexed by queue slot.
     pub queues: Vec<QueueLaneStats>,
 }
-
 /// Per-queue occupancy data captured alongside [`QueueDepthStats`].
 #[derive(Clone, Copy, Debug, Default)]
 pub struct QueueLaneStats {
@@ -1025,7 +963,6 @@ pub struct QueueLaneStats {
     /// Milliseconds spent with two or more command buffers in flight on this queue.
     pub overlap_ms: f64,
 }
-
 /// Staging buckets emitted by [`ColumnStagingStats`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColumnStagingPhase {
@@ -1036,7 +973,6 @@ pub enum ColumnStagingPhase {
     /// Poseidon staging activity (permute/hash).
     Poseidon,
 }
-
 /// Host-side staging telemetry recorded while batches are prepared.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ColumnStagingPhaseStats {
@@ -1047,18 +983,15 @@ pub struct ColumnStagingPhaseStats {
     /// Milliseconds spent waiting for GPU completions before a staging buffer could be reused.
     pub wait_ms: f64,
 }
-
 impl ColumnStagingPhaseStats {
     fn record_flatten(&mut self, duration_ms: f64) {
         self.batches = self.batches.saturating_add(1);
         self.flatten_ms += duration_ms;
     }
-
     fn record_wait(&mut self, duration_ms: f64) {
         self.wait_ms += duration_ms;
     }
 }
-
 /// Per-batch sample describing how long the host spent waiting vs flattening.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ColumnStagingSample {
@@ -1069,7 +1002,6 @@ pub struct ColumnStagingSample {
     /// Milliseconds spent waiting for the GPU before staging could continue.
     pub wait_ms: f64,
 }
-
 impl ColumnStagingSample {
     /// Ratio of time spent waiting relative to the total host staging time for this batch.
     pub fn wait_ratio(&self) -> f64 {
@@ -1081,7 +1013,6 @@ impl ColumnStagingSample {
         }
     }
 }
-
 /// Host-side staging telemetry recorded while FFT/LDE/Poseidon batches are prepared.
 #[derive(Clone, Debug, Default)]
 pub struct ColumnStagingStats {
@@ -1094,43 +1025,35 @@ pub struct ColumnStagingStats {
     poseidon_samples: Vec<ColumnStagingSample>,
     pending_wait: ColumnStagingPending,
 }
-
 impl ColumnStagingStats {
     /// Aggregate telemetry across all phases.
     pub fn total(&self) -> ColumnStagingPhaseStats {
         self.total
     }
-
     /// FFT/IFFT telemetry.
     pub fn fft(&self) -> ColumnStagingPhaseStats {
         self.fft
     }
-
     /// LDE telemetry.
     pub fn lde(&self) -> ColumnStagingPhaseStats {
         self.lde
     }
-
     /// Poseidon telemetry.
     pub fn poseidon(&self) -> ColumnStagingPhaseStats {
         self.poseidon
     }
-
     /// Returns the recorded FFT batch samples.
     pub fn fft_samples(&self) -> &[ColumnStagingSample] {
         &self.fft_samples
     }
-
     /// Returns the recorded LDE batch samples.
     pub fn lde_samples(&self) -> &[ColumnStagingSample] {
         &self.lde_samples
     }
-
     /// Returns the recorded Poseidon batch samples.
     pub fn poseidon_samples(&self) -> &[ColumnStagingSample] {
         &self.poseidon_samples
     }
-
     fn phase_mut(&mut self, phase: ColumnStagingPhase) -> &mut ColumnStagingPhaseStats {
         match phase {
             ColumnStagingPhase::Fft => &mut self.fft,
@@ -1138,7 +1061,6 @@ impl ColumnStagingStats {
             ColumnStagingPhase::Poseidon => &mut self.poseidon,
         }
     }
-
     fn samples_mut(&mut self, phase: ColumnStagingPhase) -> &mut Vec<ColumnStagingSample> {
         match phase {
             ColumnStagingPhase::Fft => &mut self.fft_samples,
@@ -1146,7 +1068,6 @@ impl ColumnStagingStats {
             ColumnStagingPhase::Poseidon => &mut self.poseidon_samples,
         }
     }
-
     fn record_flatten_sample(&mut self, phase: ColumnStagingPhase, flatten_ms: f64) {
         self.total.record_flatten(flatten_ms);
         let wait_ms = self.pending_wait.take(phase);
@@ -1159,21 +1080,18 @@ impl ColumnStagingStats {
             wait_ms,
         });
     }
-
     fn record_wait_sample(&mut self, phase: ColumnStagingPhase, wait_ms: f64) {
         self.total.record_wait(wait_ms);
         self.phase_mut(phase).record_wait(wait_ms);
         self.pending_wait.add(phase, wait_ms);
     }
 }
-
 #[derive(Clone, Debug, Default)]
 struct ColumnStagingPending {
     fft: f64,
     lde: f64,
     poseidon: f64,
 }
-
 impl ColumnStagingPending {
     fn phase_mut(&mut self, phase: ColumnStagingPhase) -> &mut f64 {
         match phase {
@@ -1182,11 +1100,9 @@ impl ColumnStagingPending {
             ColumnStagingPhase::Poseidon => &mut self.poseidon,
         }
     }
-
     fn add(&mut self, phase: ColumnStagingPhase, wait_ms: f64) {
         *self.phase_mut(phase) += wait_ms;
     }
-
     fn take(&mut self, phase: ColumnStagingPhase) -> f64 {
         let slot = self.phase_mut(phase);
         let captured = *slot;
@@ -1194,7 +1110,6 @@ impl ColumnStagingPending {
         captured
     }
 }
-
 /// Snapshot describing the command semaphore heuristics.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CommandLimitSnapshot {
@@ -1213,7 +1128,6 @@ pub struct CommandLimitSnapshot {
     /// User-provided override applied via `FASTPQ_METAL_MAX_IN_FLIGHT`, if any.
     pub override_limit: Option<u32>,
 }
-
 /// Origin of the automatically derived command buffer limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandLimitSource {
@@ -1224,13 +1138,11 @@ pub enum CommandLimitSource {
     /// Fallback constant used when no system telemetry was available.
     Fallback,
 }
-
 impl Default for CommandLimitSource {
     fn default() -> Self {
         Self::Fallback
     }
 }
-
 impl CommandLimitSource {
     /// Returns a stable string identifier for serialization.
     pub fn as_str(&self) -> &'static str {
@@ -1241,7 +1153,6 @@ impl CommandLimitSource {
         }
     }
 }
-
 /// Snapshot describing the resolved FFT/LDE batch heuristics.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BatchHeuristicSnapshot {
@@ -1260,7 +1171,6 @@ pub struct BatchHeuristicSnapshot {
     /// Indicates whether a fixed override disabled the adaptive scheduler.
     pub override_active: bool,
 }
-
 /// Combined snapshot of the adaptive scheduling heuristics.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AdaptiveScheduleSnapshot {
@@ -1277,14 +1187,12 @@ pub struct AdaptiveScheduleSnapshot {
     /// LDE tile depth chosen for the current run.
     pub lde_tile_stage_limit: Option<u32>,
 }
-
 #[derive(Clone, Copy)]
 enum AdaptiveStateId {
     Fft,
     Lde,
     Poseidon,
 }
-
 impl AdaptiveStateId {
     fn state(self) -> &'static AdaptiveBatchState {
         let scheduler = adaptive_scheduler();
@@ -1295,13 +1203,11 @@ impl AdaptiveStateId {
         }
     }
 }
-
 struct BatchSelection {
     columns: u32,
     max_columns: u32,
     adaptive_state: Option<AdaptiveStateId>,
 }
-
 impl BatchSelection {
     fn fixed(columns: u32) -> Self {
         Self {
@@ -1310,7 +1216,6 @@ impl BatchSelection {
             adaptive_state: None,
         }
     }
-
     fn adaptive(columns: u32, max_columns: u32, state: AdaptiveStateId) -> Self {
         Self {
             columns,
@@ -1318,11 +1223,9 @@ impl BatchSelection {
             adaptive_state: Some(state),
         }
     }
-
     fn columns(&self) -> u32 {
         self.columns.max(1)
     }
-
     fn sample_for(&self, actual_columns: u32) -> Option<AdaptiveSample> {
         if self.adaptive_state.is_none() || actual_columns != self.columns {
             return None;
@@ -1334,14 +1237,12 @@ impl BatchSelection {
         })
     }
 }
-
 #[derive(Clone, Copy)]
 struct AdaptiveSample {
     state: AdaptiveStateId,
     columns: u32,
     max_columns: u32,
 }
-
 impl AdaptiveSample {
     fn record(&self, duration: Duration) {
         let duration_ms = elapsed_ms(duration);
@@ -1350,13 +1251,11 @@ impl AdaptiveSample {
             .record_sample(self.columns, self.max_columns, duration_ms);
     }
 }
-
 struct AdaptiveScheduler {
     fft: AdaptiveBatchState,
     lde: AdaptiveBatchState,
     poseidon: AdaptiveBatchState,
 }
-
 impl AdaptiveScheduler {
     fn new() -> Self {
         Self {
@@ -1365,22 +1264,18 @@ impl AdaptiveScheduler {
             poseidon: AdaptiveBatchState::new(MIN_POSEIDON_STATES_PER_BATCH, ADAPTIVE_TARGET_MS),
         }
     }
-
     fn select_fft(&self, recommended: u32, max_columns: u32) -> BatchSelection {
         self.fft
             .select(recommended, max_columns, AdaptiveStateId::Fft)
     }
-
     fn select_lde(&self, recommended: u32, max_columns: u32) -> BatchSelection {
         self.lde
             .select(recommended, max_columns, AdaptiveStateId::Lde)
     }
-
     fn select_poseidon(&self, recommended: u32, max_states: u32) -> BatchSelection {
         self.poseidon
             .select(recommended, max_states, AdaptiveStateId::Poseidon)
     }
-
     fn snapshot(
         &self,
     ) -> (
@@ -1396,17 +1291,14 @@ impl AdaptiveScheduler {
         (fft, lde, poseidon)
     }
 }
-
 fn adaptive_scheduler() -> &'static AdaptiveScheduler {
     ADAPTIVE_SCHEDULER.get_or_init(AdaptiveScheduler::new)
 }
-
 struct AdaptiveBatchState {
     target_ms: f64,
     min_columns: u32,
     data: Mutex<AdaptiveBatchData>,
 }
-
 impl AdaptiveBatchState {
     fn new(min_columns: u32, target_ms: f64) -> Self {
         Self {
@@ -1415,7 +1307,6 @@ impl AdaptiveBatchState {
             data: Mutex::new(AdaptiveBatchData::default()),
         }
     }
-
     fn select(&self, recommended: u32, max_columns: u32, kind: AdaptiveStateId) -> BatchSelection {
         let max_columns = max_columns.max(self.min_columns);
         let mut data = self.data.lock().expect("adaptive scheduler poisoned");
@@ -1431,7 +1322,6 @@ impl AdaptiveBatchState {
         drop(data);
         BatchSelection::adaptive(resolved, max_columns, kind)
     }
-
     fn record_sample(&self, columns: u32, max_columns: u32, duration_ms: f64) {
         let mut data = self.data.lock().expect("adaptive scheduler poisoned");
         data.last_duration_ms = Some(duration_ms);
@@ -1450,7 +1340,6 @@ impl AdaptiveBatchState {
         }
         data.current_columns = next;
     }
-
     fn snapshot(&self, override_value: Option<u32>) -> Option<BatchHeuristicSnapshot> {
         if let Some(value) = override_value {
             return Some(BatchHeuristicSnapshot {
@@ -1481,7 +1370,6 @@ impl AdaptiveBatchState {
         })
     }
 }
-
 #[derive(Clone, Copy, Debug, Default)]
 struct AdaptiveBatchData {
     current_columns: u32,
@@ -1490,7 +1378,6 @@ struct AdaptiveBatchData {
     last_duration_ms: Option<f64>,
     samples: u32,
 }
-
 impl QueueDepthStats {
     /// Returns the delta between two queue depth snapshots, saturating at zero.
     pub fn delta_since(&self, previous: &QueueDepthStats) -> QueueDepthStats {
@@ -1515,7 +1402,6 @@ impl QueueDepthStats {
             queues,
         }
     }
-
     /// Accumulates another queue depth delta into this snapshot.
     pub fn accumulate_delta(&mut self, delta: &QueueDepthStats) {
         self.limit = delta.limit;
@@ -1536,7 +1422,6 @@ impl QueueDepthStats {
         }
     }
 }
-
 impl QueueLaneStats {
     fn delta_since(&self, previous: Option<&QueueLaneStats>) -> QueueLaneStats {
         if let Some(prev) = previous {
@@ -1551,7 +1436,6 @@ impl QueueLaneStats {
             self.clone()
         }
     }
-
     fn accumulate_delta(&mut self, delta: &QueueLaneStats) {
         self.dispatch_count = self.dispatch_count.saturating_add(delta.dispatch_count);
         self.max_in_flight = self.max_in_flight.max(delta.max_in_flight);
@@ -1559,12 +1443,10 @@ impl QueueLaneStats {
         self.overlap_ms += delta.overlap_ms;
     }
 }
-
 fn saturating_sub_ms(current: f64, previous: f64) -> f64 {
     let delta = current - previous;
     if delta <= 0.0 { 0.0 } else { delta }
 }
-
 /// Kernel categories profiled by the Metal backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum KernelKind {
@@ -1577,7 +1459,6 @@ pub enum KernelKind {
     /// Poseidon permutation batches.
     Poseidon,
 }
-
 impl KernelKind {
     /// Returns a stable string identifier for this kernel category.
     pub fn as_str(&self) -> &'static str {
@@ -1589,7 +1470,6 @@ impl KernelKind {
         }
     }
 }
-
 /// Sample describing a post-tiling dispatch.
 #[derive(Clone, Copy, Debug)]
 pub struct PostTileSample {
@@ -1602,7 +1482,6 @@ pub struct PostTileSample {
     /// Number of columns processed in the batch.
     pub columns: u32,
 }
-
 /// Descriptor capturing the characteristics of an exported Metal kernel.
 #[derive(Clone, Copy, Debug)]
 pub struct MetalKernelDescriptor {
@@ -1617,7 +1496,6 @@ pub struct MetalKernelDescriptor {
     /// Free-form description covering coset handling, inputs, and determinism notes.
     pub notes: &'static str,
 }
-
 const METAL_KERNEL_DESCRIPTORS: &[MetalKernelDescriptor] = &[
     MetalKernelDescriptor {
         entry_point: "fastpq_fft_columns",
@@ -1702,12 +1580,10 @@ const METAL_KERNEL_DESCRIPTORS: &[MetalKernelDescriptor] = &[
                 BN254 field bytes.",
     },
 ];
-
 /// Returns metadata describing every exported Metal kernel.
 pub fn metal_kernel_descriptors() -> &'static [MetalKernelDescriptor] {
     METAL_KERNEL_DESCRIPTORS
 }
-
 /// Snapshot of a single Metal kernel dispatch.
 #[derive(Clone, Copy, Debug)]
 pub struct KernelStatsSample {
@@ -1732,7 +1608,6 @@ pub struct KernelStatsSample {
     /// Kernel duration in milliseconds.
     pub duration_ms: f64,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct KernelProfileParams {
     kind: KernelKind,
@@ -1740,7 +1615,6 @@ struct KernelProfileParams {
     elements: u64,
     columns: u32,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct KernelDispatchContext {
     profile: KernelProfileParams,
@@ -1750,7 +1624,6 @@ struct KernelDispatchContext {
     execution_width: u32,
     max_threads_per_group: u32,
 }
-
 impl KernelDispatchContext {
     fn from_pipeline(
         profile: KernelProfileParams,
@@ -1770,7 +1643,6 @@ impl KernelDispatchContext {
             max_threads_per_group: max_threads.try_into().unwrap_or(u32::MAX),
         }
     }
-
     fn sample(&self, duration: Duration) -> KernelStatsSample {
         KernelStatsSample {
             kind: self.profile.kind,
@@ -1786,7 +1658,6 @@ impl KernelDispatchContext {
         }
     }
 }
-
 fn record_kernel_stats(context: &KernelDispatchContext, duration: Duration) {
     if !KERNEL_STATS_ENABLED.load(Ordering::Relaxed) {
         return;
@@ -1796,14 +1667,12 @@ fn record_kernel_stats(context: &KernelDispatchContext, duration: Duration) {
         guard.push(context.sample(duration));
     }
 }
-
 struct ColumnBatchTicket {
     range: Range<usize>,
     buffer: PooledBuffer,
     metal_buffer: Buffer,
     tickets: SmallVec<[DispatchTicket; 2]>,
 }
-
 impl ColumnBatchTicket {
     fn wait(self, columns: &mut [Vec<u64>], extent: usize, record_wait: bool) -> MetalResult<()> {
         let ColumnBatchTicket {
@@ -1821,14 +1690,12 @@ impl ColumnBatchTicket {
         Ok(())
     }
 }
-
 struct PoseidonBatchTicket {
     range: Range<usize>,
     buffer: PooledBuffer,
     metal_buffer: Buffer,
     ticket: DispatchTicket,
 }
-
 impl PoseidonBatchTicket {
     fn wait(self, states: &mut [u64], record_wait: bool) -> MetalResult<()> {
         let PoseidonBatchTicket {
@@ -1846,7 +1713,6 @@ impl PoseidonBatchTicket {
         Ok(())
     }
 }
-
 struct PoseidonHashTicket {
     column_offset: usize,
     payload: PooledBuffer,
@@ -1857,7 +1723,6 @@ struct PoseidonHashTicket {
     state_buffer: Buffer,
     ticket: DispatchTicket,
 }
-
 impl PoseidonHashTicket {
     fn wait(self, result: &mut [u64], record_wait: bool) -> MetalResult<()> {
         let PoseidonHashTicket {
@@ -1881,7 +1746,6 @@ impl PoseidonHashTicket {
         Ok(())
     }
 }
-
 /// Pending Metal column kernel dispatch.
 ///
 /// The guard keeps the shared buffers and command tickets alive until
@@ -1894,7 +1758,6 @@ pub(crate) struct PendingColumns<'a> {
     _twiddle_buffer: Buffer,
     completed: bool,
 }
-
 impl<'a> PendingColumns<'a> {
     fn new(
         columns: &'a mut [Vec<u64>],
@@ -1910,14 +1773,12 @@ impl<'a> PendingColumns<'a> {
             completed: false,
         }
     }
-
     /// Wait for the GPU kernel to finish and restore the column slices.
     pub(crate) fn wait(mut self) -> MetalResult<()> {
         self.finish()?;
         self.completed = true;
         Ok(())
     }
-
     fn finish(&mut self) -> MetalResult<()> {
         if self.completed {
             return Ok(());
@@ -1930,7 +1791,6 @@ impl<'a> PendingColumns<'a> {
         Ok(())
     }
 }
-
 impl Drop for PendingColumns<'_> {
     fn drop(&mut self) {
         if self.completed || self.pending_batches.is_empty() {
@@ -1945,7 +1805,6 @@ impl Drop for PendingColumns<'_> {
         }
     }
 }
-
 /// Pending Metal LDE kernel dispatch.
 pub(crate) struct PendingLde {
     column_count: usize,
@@ -1960,7 +1819,6 @@ pub(crate) struct PendingLde {
     host_stats: Option<LdeHostStats>,
     completed: bool,
 }
-
 impl PendingLde {
     fn new(
         column_count: usize,
@@ -1988,14 +1846,12 @@ impl PendingLde {
             completed: false,
         }
     }
-
     /// Wait for the Metal LDE to finish and collect the evaluated columns.
     pub(crate) fn wait(mut self) -> MetalResult<Option<Vec<Vec<u64>>>> {
         let result = self.finish()?;
         self.completed = true;
         Ok(result)
     }
-
     fn finish(&mut self) -> MetalResult<Option<Vec<Vec<u64>>>> {
         if self.completed {
             return Ok(None);
@@ -2014,7 +1870,6 @@ impl PendingLde {
         Ok(Some(result))
     }
 }
-
 impl Drop for PendingLde {
     fn drop(&mut self) {
         if self.completed || self.tickets.is_empty() {
@@ -2029,7 +1884,6 @@ impl Drop for PendingLde {
         }
     }
 }
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct FftArgs {
@@ -2042,7 +1896,6 @@ struct FftArgs {
     column_offset: u32,
     _padding: u32,
 }
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct LdeArgs {
@@ -2056,7 +1909,6 @@ struct LdeArgs {
     local_stage_limit: u32,
     coset: u64,
 }
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct PostTileArgs {
@@ -2069,7 +1921,6 @@ struct PostTileArgs {
     threadgroup_lanes: u32,
     coset: u64,
 }
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct PoseidonArgs {
@@ -2078,7 +1929,6 @@ struct PoseidonArgs {
     block_count: u32,
     _reserved: u32,
 }
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
@@ -2089,7 +1939,6 @@ struct PoseidonFusedArgs {
     leaf_offset: u32,
     parent_offset: u32,
 }
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct PoseidonRowArgs {
@@ -2099,7 +1948,6 @@ struct PoseidonRowArgs {
     batch_count: u32,
     states_per_lane: u32,
 }
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct Bn254PoseidonArgs {
@@ -2108,14 +1956,12 @@ struct Bn254PoseidonArgs {
     round_count: u32,
     _reserved: u32,
 }
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct Bn254PoseidonMetalSlice {
     offset: u32,
     len: u32,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct PoseidonRowDispatchEvidence {
     batch_count: u32,
@@ -2129,7 +1975,6 @@ struct PoseidonRowDispatchEvidence {
     queue_index: usize,
     byte_estimate: u64,
 }
-
 impl PoseidonRowDispatchEvidence {
     fn contextualize_error(self, error: GpuError) -> GpuError {
         warn!(
@@ -2170,7 +2015,6 @@ impl PoseidonRowDispatchEvidence {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug)]
 struct Bn254PoseidonDispatchEvidence {
     batch_count: u32,
@@ -2182,7 +2026,6 @@ struct Bn254PoseidonDispatchEvidence {
     queue_index: usize,
     byte_estimate: u64,
 }
-
 impl Bn254PoseidonDispatchEvidence {
     fn contextualize_error(self, error: GpuError) -> GpuError {
         match error {
@@ -2206,13 +2049,11 @@ impl Bn254PoseidonDispatchEvidence {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug)]
 struct QueuePolicy {
     fanout: usize,
     column_threshold: u32,
 }
-
 impl QueuePolicy {
     fn new(fanout: usize, column_threshold: u32) -> Self {
         let validated_fanout = fanout.clamp(1, MAX_QUEUE_FANOUT);
@@ -2222,19 +2063,15 @@ impl QueuePolicy {
             column_threshold: threshold,
         }
     }
-
     fn fanout(&self) -> usize {
         self.fanout
     }
-
     fn column_threshold(&self) -> u32 {
         self.column_threshold
     }
-
     fn should_fan_out(&self, total_columns: u32) -> bool {
         self.fanout > 1 && total_columns >= self.column_threshold
     }
-
     fn select_index(&self, total_columns: u32, batch_index: usize) -> usize {
         if !self.should_fan_out(total_columns) {
             return 0;
@@ -2242,7 +2079,6 @@ impl QueuePolicy {
         batch_index % self.fanout
     }
 }
-
 fn queue_total_columns_hint(column_count: u32, inverse: bool, policy: &QueuePolicy) -> u32 {
     if inverse && policy.should_fan_out(column_count) && column_count <= policy.column_threshold() {
         policy.column_threshold().saturating_sub(1)
@@ -2250,12 +2086,10 @@ fn queue_total_columns_hint(column_count: u32, inverse: bool, policy: &QueuePoli
         column_count
     }
 }
-
 struct QueuePool {
     queues: Vec<CommandQueue>,
     policy: QueuePolicy,
 }
-
 impl QueuePool {
     fn new(device: &Device, policy: QueuePolicy) -> Self {
         let mut queues = Vec::with_capacity(policy.fanout());
@@ -2264,45 +2098,37 @@ impl QueuePool {
         }
         Self { queues, policy }
     }
-
     fn select(&self, total_columns: u32, batch_index: usize) -> (&CommandQueue, usize) {
         let index = self.policy.select_index(total_columns, batch_index);
         (&self.queues[index], index)
     }
-
     #[allow(dead_code)]
     fn primary(&self) -> (&CommandQueue, usize) {
         (&self.queues[0], 0)
     }
-
     fn policy(&self) -> &QueuePolicy {
         &self.policy
     }
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 struct TwiddleCacheKey {
     log_len: u32,
     root: u64,
     inverse: bool,
 }
-
 struct TwiddleCacheEntry {
     buffer: Buffer,
     build_cost_ms: f64,
 }
-
 struct TwiddleCache {
     buffers: HashMap<TwiddleCacheKey, TwiddleCacheEntry>,
 }
-
 impl TwiddleCache {
     fn new() -> Self {
         Self {
             buffers: HashMap::new(),
         }
     }
-
     fn resolve(&mut self, device: &Device, log_len: u32, root: u64, inverse: bool) -> Buffer {
         let key = TwiddleCacheKey {
             log_len,
@@ -2332,7 +2158,6 @@ impl TwiddleCache {
         buffer
     }
 }
-
 struct MetalPipelines {
     device: Device,
     queues: QueuePool,
@@ -2352,27 +2177,23 @@ struct MetalPipelines {
     bn254_fft_twiddles: Mutex<HashMap<u32, Buffer>>,
     bn254_lde_twiddles: Mutex<HashMap<(u32, u32), Buffer>>,
 }
-
 struct Bn254PoseidonMetalPipelines {
     device: Device,
     queues: QueuePool,
     bn254_poseidon_hash: ComputePipelineState,
 }
-
 fn metal_context() -> MetalResult<&'static MetalPipelines> {
     match METAL_CONTEXT.get_or_init(build_metal_context) {
         Ok(context) => Ok(context),
         Err(err) => Err(err.clone()),
     }
 }
-
 fn bn254_poseidon_context() -> MetalResult<&'static Bn254PoseidonMetalPipelines> {
     match BN254_POSEIDON_CONTEXT.get_or_init(build_bn254_poseidon_context) {
         Ok(context) => Ok(context),
         Err(err) => Err(err.clone()),
     }
 }
-
 impl MetalPipelines {
     fn stage_twiddle_buffer(&self, log_len: u32, root: u64, inverse: bool) -> Buffer {
         let mut cache = self
@@ -2381,7 +2202,6 @@ impl MetalPipelines {
             .expect("Metal twiddle cache poisoned");
         cache.resolve(&self.device, log_len, root, inverse)
     }
-
     fn bn254_fft_twiddle_buffer(&self, log_size: u32) -> MetalResult<Buffer> {
         let mut cache = self
             .bn254_fft_twiddles
@@ -2394,7 +2214,6 @@ impl MetalPipelines {
         cache.insert(log_size, buffer.clone());
         Ok(buffer)
     }
-
     fn bn254_lde_twiddle_buffer(&self, trace_log: u32, blowup_log: u32) -> MetalResult<Buffer> {
         let key = (trace_log, blowup_log);
         let mut cache = self
@@ -2414,7 +2233,6 @@ impl MetalPipelines {
         Ok(buffer)
     }
 }
-
 fn pipeline_limits(pipeline: &ComputePipelineState) -> PipelineLimits {
     let exec_width = u32::try_from(pipeline.thread_execution_width()).unwrap_or(u32::MAX);
     let max_threads =
@@ -2424,7 +2242,6 @@ fn pipeline_limits(pipeline: &ComputePipelineState) -> PipelineLimits {
         max_threads: max_threads.max(1),
     }
 }
-
 /// Upload a flattened BN254 twiddle buffer (Montgomery limbs) for Metal FFT/LDE kernels.
 ///
 /// Layout: stage-major, contiguous per stage with `(n/2)` twiddles, indexed as
@@ -2444,7 +2261,6 @@ pub(crate) fn upload_bn254_twiddles(device: &Device, twiddles: &[u64]) -> MetalR
     );
     Ok(buffer)
 }
-
 /// Flatten an array of BN254 twiddles (each four limbs) into a `[u64]` buffer.
 pub(crate) fn flatten_bn254_twiddles(twiddles: &[[u64; 4]]) -> Vec<u64> {
     let mut flat = Vec::with_capacity(twiddles.len() * 4);
@@ -2453,7 +2269,6 @@ pub(crate) fn flatten_bn254_twiddles(twiddles: &[[u64; 4]]) -> Vec<u64> {
     }
     flat
 }
-
 /// Convenience: derive stage-major BN254 twiddles on CPU then upload to Metal.
 pub(crate) fn stage_bn254_twiddles(device: &Device, log_size: u32) -> MetalResult<Buffer> {
     let twiddles = bn254_stage_twiddles_limbs(log_size)?;
@@ -2461,7 +2276,6 @@ pub(crate) fn stage_bn254_twiddles(device: &Device, log_size: u32) -> MetalResul
     let flat = flatten_bn254_twiddles(&twiddles);
     upload_bn254_twiddles(device, &flat)
 }
-
 /// Validate BN254 twiddle layout against the expected stage-major shape.
 ///
 /// For `log_size`, the twiddle count must equal `log_size * (n/2)` where `n = 1 << log_size`.
@@ -2483,7 +2297,6 @@ pub(crate) fn validate_bn254_twiddles_shape(
     }
     Ok(())
 }
-
 /// Expected twiddle count for BN254 FFT (radix-2) given `log_size`.
 pub(crate) fn bn254_fft_twiddle_len(log_size: u32) -> MetalResult<usize> {
     if log_size == 0 {
@@ -2492,7 +2305,6 @@ pub(crate) fn bn254_fft_twiddle_len(log_size: u32) -> MetalResult<usize> {
     let n = 1usize << log_size;
     Ok((log_size as usize) * (n / 2))
 }
-
 /// Expected twiddle count for BN254 LDE (radix-2) given trace/eval logs.
 pub(crate) fn bn254_lde_twiddle_len(trace_log: u32, blowup_log: u32) -> MetalResult<usize> {
     if trace_log == 0 {
@@ -2506,7 +2318,6 @@ pub(crate) fn bn254_lde_twiddle_len(trace_log: u32, blowup_log: u32) -> MetalRes
     let eval_len = 1usize << eval_log;
     Ok((eval_log as usize) * (eval_len / 2))
 }
-
 /// Upload a BN254 coset element (4 Montgomery limbs) for LDE kernels.
 pub(crate) fn upload_bn254_coset(device: &Device, coset: &[u64]) -> MetalResult<Buffer> {
     if coset.len() != 4 {
@@ -2522,7 +2333,6 @@ pub(crate) fn upload_bn254_coset(device: &Device, coset: &[u64]) -> MetalResult<
     );
     Ok(buffer)
 }
-
 fn load_pipeline(
     device: &Device,
     library: &Library,
@@ -2541,7 +2351,6 @@ fn load_pipeline(
             message: format!("failed to create pipeline for {name}: {err}"),
         })
 }
-
 fn register_metal_device_hints(device: &Device) {
     let location = device.location();
     let is_discrete = !device.is_low_power()
@@ -2565,11 +2374,9 @@ fn register_metal_device_hints(device: &Device) {
         working_set,
     ));
 }
-
 fn load_metal_library(device: &Device) -> MetalResult<Library> {
     let library_path =
         resolve_metal_library_path().ok_or_else(|| GpuError::Unsupported(GpuBackend::Metal))?;
-
     device
         .new_library_with_file(&library_path)
         .map_err(|err| GpuError::Execution {
@@ -2577,7 +2384,6 @@ fn load_metal_library(device: &Device) -> MetalResult<Library> {
             message: format!("failed to load Metal library: {err}"),
         })
 }
-
 fn build_bn254_poseidon_context() -> MetalResult<Bn254PoseidonMetalPipelines> {
     let Some(device) = Device::system_default() else {
         return Err(GpuError::Unsupported(GpuBackend::Metal));
@@ -2593,21 +2399,18 @@ fn build_bn254_poseidon_context() -> MetalResult<Bn254PoseidonMetalPipelines> {
         manifest_sha = manifest_sha,
         "loaded BN254 Poseidon word-batch Metal pipeline"
     );
-
     Ok(Bn254PoseidonMetalPipelines {
         device,
         queues,
         bn254_poseidon_hash,
     })
 }
-
 fn build_metal_context() -> MetalResult<MetalPipelines> {
     let Some(device) = Device::system_default() else {
         return Err(GpuError::Unsupported(GpuBackend::Metal));
     };
     register_metal_device_hints(&device);
     let library = load_metal_library(&device)?;
-
     let poseidon_permute = load_pipeline(&device, &library, POSEIDON_PERMUTE_KERNEL)?;
     let poseidon_hash = load_pipeline(&device, &library, POSEIDON_HASH_KERNEL)?;
     let poseidon_hash_rows = load_pipeline(&device, &library, POSEIDON_HASH_ROWS_KERNEL)?;
@@ -2629,7 +2432,6 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
         manifest_sha = manifest_sha,
         "loaded Poseidon manifest for GPU parity checks"
     );
-
     // Pre-stage minimal BN254 twiddle buffers from the CPU domain builder to ensure
     // the GPU layout stays aligned with host fixtures before runtime dispatches.
     let mut bn254_fft_twiddles = HashMap::new();
@@ -2646,7 +2448,6 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
         ))?;
     let lde_buffer = stage_bn254_twiddles(&device, lde_eval_log)?;
     bn254_lde_twiddles.insert(lde_min, lde_buffer);
-
     Ok(MetalPipelines {
         device,
         queues,
@@ -2666,7 +2467,6 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
         bn254_lde_twiddles: Mutex::new(bn254_lde_twiddles),
     })
 }
-
 fn resolve_metal_library_path() -> Option<String> {
     debug_env_var("FASTPQ_METAL_LIB")
         .and_then(|path| {
@@ -2682,7 +2482,6 @@ fn resolve_metal_library_path() -> Option<String> {
                 .map(str::to_owned)
         })
 }
-
 fn resolve_queue_policy(device: &Device) -> QueuePolicy {
     let fanout_override = queue_fanout_override();
     let fanout = fanout_override.unwrap_or_else(|| default_queue_fanout(device));
@@ -2705,7 +2504,6 @@ fn resolve_queue_policy(device: &Device) -> QueuePolicy {
     );
     policy
 }
-
 fn default_queue_fanout(device: &Device) -> usize {
     if is_discrete_gpu(device) {
         DISCRETE_QUEUE_FANOUT
@@ -2713,7 +2511,6 @@ fn default_queue_fanout(device: &Device) -> usize {
         MIN_QUEUE_FANOUT
     }
 }
-
 fn is_discrete_gpu(device: &Device) -> bool {
     !device.is_low_power()
         || device.is_headless()
@@ -2722,7 +2519,6 @@ fn is_discrete_gpu(device: &Device) -> bool {
             MTLDeviceLocation::Slot | MTLDeviceLocation::External
         )
 }
-
 fn queue_fanout_override() -> Option<usize> {
     if let Some(value) = RUNTIME_QUEUE_FANOUT_OVERRIDE.get().copied() {
         return Some(value);
@@ -2751,7 +2547,6 @@ fn queue_fanout_override() -> Option<usize> {
         }
     })
 }
-
 fn parse_queue_fanout_override(raw: &str) -> Result<usize, &'static str> {
     let value: usize = raw.parse().map_err(|_| "not an integer")?;
     if value == 0 {
@@ -2759,7 +2554,6 @@ fn parse_queue_fanout_override(raw: &str) -> Result<usize, &'static str> {
     }
     Ok(value)
 }
-
 fn queue_threshold_override() -> Option<u32> {
     if let Some(value) = RUNTIME_QUEUE_THRESHOLD_OVERRIDE.get().copied() {
         return Some(value);
@@ -2791,7 +2585,6 @@ fn queue_threshold_override() -> Option<u32> {
         }
     })
 }
-
 fn parse_queue_threshold_override(raw: &str) -> Result<u32, &'static str> {
     let value: u32 = raw.parse().map_err(|_| "not an integer")?;
     if value == 0 {
@@ -2799,7 +2592,6 @@ fn parse_queue_threshold_override(raw: &str) -> Result<u32, &'static str> {
     }
     Ok(value)
 }
-
 /// Apply runtime overrides for the Metal queue fan-out and column threshold heuristics.
 ///
 /// When a value is provided, it must respect the same constraints enforced by the
@@ -2831,7 +2623,6 @@ pub fn set_metal_queue_policy(
     }
     Ok(())
 }
-
 fn default_queue_column_threshold(fanout: usize) -> u32 {
     if fanout <= 1 {
         return u32::MAX;
@@ -2839,16 +2630,13 @@ fn default_queue_column_threshold(fanout: usize) -> u32 {
     let scaled = (fanout as u32).saturating_mul(8);
     DEFAULT_QUEUE_COLUMN_THRESHOLD.max(scaled)
 }
-
 #[allow(dead_code)] // Metal FFT entry point is unused when CUDA-only builds run tests
 pub fn fft_columns(columns: &mut [Vec<u64>], log_size: u32, root: u64) -> MetalResult<()> {
     if columns.is_empty() {
         return Ok(());
     }
-
     fft_columns_async(columns, log_size, root)?.wait()
 }
-
 /// Dispatches an FFT over the provided columns and returns a pending handle.
 pub(crate) fn fft_columns_async<'a>(
     columns: &'a mut [Vec<u64>],
@@ -2857,7 +2645,6 @@ pub(crate) fn fft_columns_async<'a>(
 ) -> MetalResult<PendingColumns<'a>> {
     dispatch_fft_columns(columns, log_size, root, false)
 }
-
 fn dispatch_fft_columns<'a>(
     columns: &'a mut [Vec<u64>],
     log_size: u32,
@@ -2868,17 +2655,14 @@ fn dispatch_fft_columns<'a>(
     if columns.iter().any(|column| column.len() != extent) {
         return Err(GpuError::InvalidInput("columns must share length"));
     }
-
     let column_len = u64::try_from(extent)
         .map_err(|_| GpuError::InvalidInput("column length exceeds u64::MAX"))?;
     let column_count = u32::try_from(columns.len())
         .map_err(|_| GpuError::InvalidInput("column count exceeds u32::MAX"))?;
-
     let context = metal_context()?;
     let limits = pipeline_limits(&context.fft);
     let tuning = metal_config::fft_tuning(log_size, limits.exec_width, limits.max_threads);
     let twiddle_buffer = context.stage_twiddle_buffer(log_size, root, inverse);
-
     let base_args = FftArgs {
         column_len,
         log_len: log_size,
@@ -2889,7 +2673,6 @@ fn dispatch_fft_columns<'a>(
         column_offset: 0,
         _padding: 0,
     };
-
     let post_stage_start = post_tile_stage_start(log_size, tuning.tile_stage_limit);
     let fft_selection = select_fft_batch(tuning.threadgroup_lanes);
     let batch_size = fft_selection.columns();
@@ -2899,7 +2682,6 @@ fn dispatch_fft_columns<'a>(
     slots.resize_with(pipe_depth, || None);
     let queue_total_columns =
         queue_total_columns_hint(column_count, inverse, context.queues.policy());
-
     for (batch_index, (offset, batch_columns)) in batches.into_iter().enumerate() {
         let slot_index = batch_index % pipe_depth;
         if let Some(batch) = slots[slot_index].take() {
@@ -2978,9 +2760,7 @@ fn dispatch_fft_columns<'a>(
             tickets,
         });
     }
-
     let pending_batches: Vec<ColumnBatchTicket> = slots.into_iter().flatten().collect();
-
     Ok(PendingColumns::new(
         columns,
         extent,
@@ -2988,7 +2768,6 @@ fn dispatch_fft_columns<'a>(
         pending_batches,
     ))
 }
-
 fn fft_dispatch_geometry(column_count: u32, threadgroup_lanes: u32) -> (MTLSize, MTLSize, u64) {
     let lanes = u64::from(threadgroup_lanes.max(1));
     let groups = MTLSize::new(u64::from(column_count), 1, 1);
@@ -2996,7 +2775,6 @@ fn fft_dispatch_geometry(column_count: u32, threadgroup_lanes: u32) -> (MTLSize,
     let logical = lanes * u64::from(column_count);
     (groups, threads, logical)
 }
-
 fn poseidon_dispatch_geometry(
     state_count: u32,
     tuning: metal_config::PoseidonTuning,
@@ -3025,7 +2803,6 @@ fn poseidon_dispatch_geometry(
         states_per_lane,
     )
 }
-
 fn bn254_poseidon_dispatch_geometry(
     batch_count: u32,
     tuning: metal_config::PoseidonTuning,
@@ -3050,7 +2827,6 @@ fn bn254_poseidon_dispatch_geometry(
         states_per_lane,
     )
 }
-
 fn poseidon_recommended_states_per_batch(
     state_count: u32,
     tuning: metal_config::PoseidonTuning,
@@ -3065,7 +2841,6 @@ fn poseidon_recommended_states_per_batch(
     let target = base.saturating_mul(multiplier).max(base);
     state_count.min(target)
 }
-
 fn select_poseidon_batch(state_count: u32, tuning: metal_config::PoseidonTuning) -> BatchSelection {
     debug_assert!(
         state_count > 0,
@@ -3075,7 +2850,6 @@ fn select_poseidon_batch(state_count: u32, tuning: metal_config::PoseidonTuning)
     adaptive_scheduler()
         .select_poseidon(recommended, state_count.max(MIN_POSEIDON_STATES_PER_BATCH))
 }
-
 fn poseidon_element_range(offset: u32, count: u32) -> MetalResult<Range<usize>> {
     let start_state = usize::try_from(offset)
         .map_err(|_| GpuError::InvalidInput("poseidon offset exceeds usize"))?;
@@ -3093,7 +2867,6 @@ fn poseidon_element_range(offset: u32, count: u32) -> MetalResult<Range<usize>> 
         ))?;
     Ok(start..start + len)
 }
-
 fn poseidon_payload_range(offset: u32, count: u32, padded_len: usize) -> MetalResult<Range<usize>> {
     let start_state = usize::try_from(offset)
         .map_err(|_| GpuError::InvalidInput("poseidon payload offset exceeds usize"))?;
@@ -3111,14 +2884,12 @@ fn poseidon_payload_range(offset: u32, count: u32, padded_len: usize) -> MetalRe
         ))?;
     Ok(start..start + len)
 }
-
 #[derive(Clone, Debug)]
 struct ColumnBatchIter {
     total: u32,
     batch_size: u32,
     offset: u32,
 }
-
 impl ColumnBatchIter {
     fn new(total: u32, batch_size: u32) -> Self {
         Self {
@@ -3127,11 +2898,9 @@ impl ColumnBatchIter {
             offset: 0,
         }
     }
-
     fn remaining(&self) -> u32 {
         self.total.saturating_sub(self.offset)
     }
-
     fn remaining_batches(&self) -> usize {
         let remaining = self.remaining();
         if remaining == 0 {
@@ -3142,10 +2911,8 @@ impl ColumnBatchIter {
         usize::try_from(batches).unwrap_or(usize::MAX)
     }
 }
-
 impl Iterator for ColumnBatchIter {
     type Item = (u32, u32);
-
     fn next(&mut self) -> Option<Self::Item> {
         if self.offset >= self.total {
             return None;
@@ -3156,25 +2923,20 @@ impl Iterator for ColumnBatchIter {
         self.offset = self.offset.saturating_add(chunk);
         Some((start, chunk))
     }
-
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = self.remaining_batches();
         (remaining, Some(remaining))
     }
 }
-
 impl ExactSizeIterator for ColumnBatchIter {
     fn len(&self) -> usize {
         self.remaining_batches()
     }
 }
-
 impl FusedIterator for ColumnBatchIter {}
-
 fn column_batch_ranges(total: u32, batch_size: u32) -> ColumnBatchIter {
     ColumnBatchIter::new(total, batch_size)
 }
-
 fn lde_tile_stage_limit(eval_log: u32) -> u32 {
     if eval_log == 0 {
         return 0;
@@ -3191,7 +2953,6 @@ fn lde_tile_stage_limit(eval_log: u32) -> u32 {
     LAST_LDE_TILE_LIMIT.store(clamped, Ordering::Release);
     clamped
 }
-
 fn lde_tile_stage_override() -> Option<u32> {
     *LDE_TILE_OVERRIDE.get_or_init(|| {
         debug_env_var(LDE_TILE_STAGE_ENV).and_then(|raw| match parse_lde_tile_stage_override(raw.trim()) {
@@ -3216,7 +2977,6 @@ fn lde_tile_stage_override() -> Option<u32> {
         })
     })
 }
-
 fn parse_lde_tile_stage_override(raw: &str) -> Result<u32, &'static str> {
     let value: u32 = raw.parse().map_err(|_| "not an integer")?;
     if !(metal_config::LDE_TILE_STAGE_LIMIT_MIN..=metal_config::LDE_TILE_STAGE_LIMIT_MAX)
@@ -3226,12 +2986,10 @@ fn parse_lde_tile_stage_override(raw: &str) -> Result<u32, &'static str> {
     }
     Ok(value)
 }
-
 fn post_tile_stage_start(total_log: u32, local_stage_limit: u32) -> Option<u32> {
     let stage_start = total_log.min(local_stage_limit);
     (stage_start < total_log).then_some(stage_start)
 }
-
 fn submit_post_tile_dispatch(
     context: &MetalPipelines,
     queue: &CommandQueue,
@@ -3265,16 +3023,13 @@ fn submit_post_tile_dispatch(
     record_post_tile_sample(profile.kind, args.log_len, args.stage_start, batch_columns);
     Ok(ticket)
 }
-
 #[allow(dead_code)] // Metal IFFT entry point is unused in non-macOS test environments
 pub fn ifft_columns(columns: &mut [Vec<u64>], log_size: u32, root: u64) -> MetalResult<()> {
     if columns.is_empty() {
         return Ok(());
     }
-
     ifft_columns_async(columns, log_size, root)?.wait()
 }
-
 /// Dispatches an inverse FFT and returns a pending handle for the caller to await.
 pub(crate) fn ifft_columns_async<'a>(
     columns: &'a mut [Vec<u64>],
@@ -3283,7 +3038,6 @@ pub(crate) fn ifft_columns_async<'a>(
 ) -> MetalResult<PendingColumns<'a>> {
     dispatch_fft_columns(columns, log_size, root, true)
 }
-
 /// Returns the resolved FFT tuning (threadgroup lanes/tile stages) for the current Metal device.
 pub fn fft_tuning_snapshot(log_size: u32) -> MetalResult<metal_config::FftTuning> {
     let context = metal_context()?;
@@ -3294,7 +3048,6 @@ pub fn fft_tuning_snapshot(log_size: u32) -> MetalResult<metal_config::FftTuning
         limits.max_threads,
     ))
 }
-
 /// Returns the resolved Poseidon tuning (threadgroup lanes/states per lane) for the current device.
 pub fn poseidon_tuning_snapshot() -> MetalResult<metal_config::PoseidonTuning> {
     let context = metal_context()?;
@@ -3304,7 +3057,6 @@ pub fn poseidon_tuning_snapshot() -> MetalResult<metal_config::PoseidonTuning> {
         limits.max_threads,
     ))
 }
-
 #[allow(dead_code)] // Metal LDE entry point is unused when Metal is not available
 pub fn lde_columns(
     coeffs: &[Vec<u64>],
@@ -3316,10 +3068,8 @@ pub fn lde_columns(
     if coeffs.is_empty() {
         return Ok(Some(Vec::new()));
     }
-
     lde_columns_async(coeffs, trace_log, blowup_log, lde_root, coset)?.wait()
 }
-
 /// Dispatches an LDE kernel and returns a pending handle so callers can wait later.
 pub(crate) fn lde_columns_async(
     coeffs: &[Vec<u64>],
@@ -3334,21 +3084,18 @@ pub(crate) fn lde_columns_async(
             "coefficient columns must share length",
         ));
     }
-
     let eval_log = trace_log
         .checked_add(blowup_log)
         .ok_or(GpuError::InvalidInput(
             "lde log size exceeds 32-bit representation",
         ))?;
     let eval_len = 1usize << eval_log;
-
     let trace_len_u64 = u64::try_from(trace_len)
         .map_err(|_| GpuError::InvalidInput("trace length exceeds u64::MAX"))?;
     let eval_len_u64 = u64::try_from(eval_len)
         .map_err(|_| GpuError::InvalidInput("lde length exceeds u64::MAX"))?;
     let column_count = u32::try_from(coeffs.len())
         .map_err(|_| GpuError::InvalidInput("column count exceeds u32::MAX"))?;
-
     let mut coeff_buffer = flatten_with_stats(coeffs, ColumnStagingPhase::Lde);
     // Pre-zero the evaluation buffer so the Metal kernel can assume padded slots are zeroed.
     let stats_enabled = LDE_STATS_ENABLED.load(Ordering::Acquire);
@@ -3371,7 +3118,6 @@ pub(crate) fn lde_columns_async(
     let stage_twiddle_buffer = context.stage_twiddle_buffer(eval_log, lde_root, false);
     let limits = pipeline_limits(&context.lde);
     let tuning = metal_config::fft_tuning(eval_log, limits.exec_width, limits.max_threads);
-
     let local_stage_limit = lde_tile_stage_limit(eval_log);
     let base_args = LdeArgs {
         trace_len: trace_len_u64,
@@ -3384,7 +3130,6 @@ pub(crate) fn lde_columns_async(
         local_stage_limit,
         coset,
     };
-
     let mut tickets = Vec::new();
     let post_stage_start = post_tile_stage_start(eval_log, local_stage_limit);
     let lde_selection = select_lde_batch(eval_log, tuning.threadgroup_lanes);
@@ -3462,7 +3207,6 @@ pub(crate) fn lde_columns_async(
         host_stats,
     ))
 }
-
 pub fn poseidon_permute(states: &mut [u64]) -> MetalResult<()> {
     if states.is_empty() {
         return Ok(());
@@ -3472,7 +3216,6 @@ pub fn poseidon_permute(states: &mut [u64]) -> MetalResult<()> {
             "poseidon states must be a multiple of STATE_WIDTH",
         ));
     }
-
     let context = metal_context()?;
     let state_count = u32::try_from(states.len() / STATE_WIDTH)
         .map_err(|_| GpuError::InvalidInput("poseidon batch exceeds u32::MAX states"))?;
@@ -3487,7 +3230,6 @@ pub fn poseidon_permute(states: &mut [u64]) -> MetalResult<()> {
     let batches = column_batch_ranges(state_count, batch_states);
     let pipe_depth = POSEIDON_DISPATCH_PIPE_DEPTH;
     let mut slots: Vec<Option<PoseidonBatchTicket>> = (0..pipe_depth).map(|_| None).collect();
-
     for (batch_index, (offset, count)) in batches.into_iter().enumerate() {
         let slot_index = batch_index % pipe_depth;
         if let Some(ticket) = slots[slot_index].take() {
@@ -3541,13 +3283,11 @@ pub fn poseidon_permute(states: &mut [u64]) -> MetalResult<()> {
             ticket,
         });
     }
-
     for ticket in slots.into_iter().flatten() {
         ticket.wait(states, false)?;
     }
     Ok(())
 }
-
 pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64>> {
     if batch.is_empty() {
         return Ok(Vec::new());
@@ -3579,7 +3319,6 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
     let payloads = batch.payloads();
     let pipe_depth = POSEIDON_DISPATCH_PIPE_DEPTH;
     let mut slots: Vec<Option<PoseidonHashTicket>> = (0..pipe_depth).map(|_| None).collect();
-
     for (batch_index, (offset, count)) in batches.into_iter().enumerate() {
         let slot_index = batch_index % pipe_depth;
         if let Some(ticket) = slots[slot_index].take() {
@@ -3651,14 +3390,11 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
             ticket,
         });
     }
-
     for ticket in slots.into_iter().flatten() {
         ticket.wait(&mut result, false)?;
     }
-
     Ok(result)
 }
-
 pub fn poseidon_hash_rows(columns: &[Vec<u64>]) -> MetalResult<Vec<u64>> {
     if columns.is_empty() {
         return Ok(Vec::new());
@@ -3676,7 +3412,6 @@ pub fn poseidon_hash_rows(columns: &[Vec<u64>]) -> MetalResult<Vec<u64>> {
         .map_err(|_| GpuError::InvalidInput("poseidon row count exceeds u32::MAX"))?;
     let column_count = u32::try_from(columns.len())
         .map_err(|_| GpuError::InvalidInput("poseidon row column count exceeds u32::MAX"))?;
-
     let context = metal_context()?;
     let mut column_chunk = flatten_with_stats(columns, ColumnStagingPhase::Poseidon);
     let column_buffer = shared_buffer(&context.device, column_chunk.as_mut_slice());
@@ -3694,7 +3429,6 @@ pub fn poseidon_hash_rows(columns: &[Vec<u64>]) -> MetalResult<Vec<u64>> {
     let total_batches =
         u32::try_from(column_batch_ranges(row_count, batch_size).len()).unwrap_or(u32::MAX);
     let mut tickets = Vec::new();
-
     for (batch_index, (offset, count)) in column_batch_ranges(row_count, batch_size)
         .into_iter()
         .enumerate()
@@ -3753,14 +3487,11 @@ pub fn poseidon_hash_rows(columns: &[Vec<u64>]) -> MetalResult<Vec<u64>> {
         }
         tickets.push((ticket, evidence));
     }
-
     for (ticket, evidence) in tickets {
         wait_for_ticket(ticket).map_err(|error| evidence.contextualize_error(error))?;
     }
-
     Ok(result.as_slice().to_vec())
 }
-
 pub fn bn254_poseidon_hash_words(
     words: &[u64],
     slices: &[Bn254PoseidonBatchSlice],
@@ -3770,7 +3501,6 @@ pub fn bn254_poseidon_hash_words(
     }
     bn254_poseidon_hash_words_async(words, slices)?.wait()
 }
-
 /// Pending BN254 Poseidon word-batch dispatch.
 ///
 /// The guard owns the staged Metal buffers until [`wait`](Self::wait), allowing
@@ -3790,7 +3520,6 @@ pub(crate) struct PendingBn254PoseidonWords {
     evidence: Bn254PoseidonDispatchEvidence,
     completed: bool,
 }
-
 impl PendingBn254PoseidonWords {
     /// Wait for the dispatch and collect canonical BN254 digest bytes.
     pub(crate) fn wait(mut self) -> MetalResult<Vec<[u8; 32]>> {
@@ -3802,7 +3531,6 @@ impl PendingBn254PoseidonWords {
             .map(bn254_limbs_to_bytes)
             .collect())
     }
-
     fn finish(&mut self) -> MetalResult<()> {
         if self.completed {
             return Ok(());
@@ -3831,7 +3559,6 @@ impl PendingBn254PoseidonWords {
         result
     }
 }
-
 impl Drop for PendingBn254PoseidonWords {
     fn drop(&mut self) {
         if self.completed || self.ticket.is_none() {
@@ -3846,7 +3573,6 @@ impl Drop for PendingBn254PoseidonWords {
         }
     }
 }
-
 pub(crate) fn bn254_poseidon_hash_words_async(
     words: &[u64],
     slices: &[Bn254PoseidonBatchSlice],
@@ -3856,7 +3582,6 @@ pub(crate) fn bn254_poseidon_hash_words_async(
             "BN254 Poseidon async dispatch requires at least one input",
         ));
     }
-
     let context = bn254_poseidon_context()?;
     let batch_count = u32::try_from(slices.len())
         .map_err(|_| GpuError::InvalidInput("BN254 Poseidon batch exceeds u32::MAX inputs"))?;
@@ -3882,7 +3607,6 @@ pub(crate) fn bn254_poseidon_hash_words_async(
             })?,
         });
     }
-
     let params = bn254_poseidon_width3_params();
     let staged_words = if words.is_empty() { &[0u64][..] } else { words };
     let mut word_chunk = PooledBuffer::from_slice(staged_words);
@@ -3901,7 +3625,6 @@ pub(crate) fn bn254_poseidon_hash_words_async(
         ))?;
     let mut output = PooledBuffer::zeroed(output_len);
     let output_buffer = shared_buffer(&context.device, output.as_mut_slice());
-
     let limits = pipeline_limits(&context.bn254_poseidon_hash);
     let tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
     let (threadgroups, threadgroup, logical_threads, states_per_lane) =
@@ -3968,7 +3691,6 @@ pub(crate) fn bn254_poseidon_hash_words_async(
         completed: false,
     })
 }
-
 /// Dispatch the low-level leaf-plus-parent kernel used by backend parity tests.
 ///
 /// Production trace commitments use `trace::hash_columns_gpu_fused`, which
@@ -4046,7 +3768,6 @@ pub fn poseidon_hash_columns_fused(batch: &PoseidonColumnBatch) -> MetalResult<V
         },
     )?;
     wait_for_ticket(ticket)?;
-
     let parent_limits = pipeline_limits(&context.poseidon_trace_parents);
     let (parent_threadgroups, parent_threadgroup, parent_logical_threads, parent_states_per_lane) =
         poseidon_dispatch_geometry(parent_count, tuning, &parent_limits);
@@ -4090,7 +3811,6 @@ pub fn poseidon_hash_columns_fused(batch: &PoseidonColumnBatch) -> MetalResult<V
     wait_for_ticket(parent_ticket)?;
     Ok(hash_chunk.as_slice().to_vec())
 }
-
 fn shared_buffer<T>(device: &Device, data: &mut [T]) -> Buffer {
     let byte_len = u64::try_from(mem::size_of_val(data))
         .expect("Metal shared buffer length must fit into u64");
@@ -4106,7 +3826,6 @@ fn shared_buffer<T>(device: &Device, data: &mut [T]) -> Buffer {
     });
     buffer
 }
-
 fn submit_compute<F>(
     queue: &CommandQueue,
     queue_index: usize,
@@ -4130,7 +3849,6 @@ where
         configure,
     )
 }
-
 fn submit_compute_with_geometry<F>(
     queue: &CommandQueue,
     queue_index: usize,
@@ -4153,19 +3871,16 @@ where
             (groups, group, logical_threads)
         }
     };
-
     let kernel_context = profile.map(|params| {
         let groups = threadgroups.width.max(1);
         let width = threadgroup.width.max(1);
         KernelDispatchContext::from_pipeline(params, logical_threads, groups, width, pipeline)
     });
-
     let command_buffer = queue.new_command_buffer();
     let owned_buffer = command_buffer.to_owned();
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(pipeline);
     configure(encoder);
-
     let trace_enabled = dispatch_trace_enabled();
     let tracing_start = if trace_enabled {
         trace_dispatch_start(pipeline, logical_threads, &threadgroups, &threadgroup);
@@ -4181,7 +3896,6 @@ where
     };
     encoder.dispatch_thread_groups(threadgroups, threadgroup);
     encoder.end_encoding();
-
     let completion = permit.completion();
     let completion_handler = ConcreteBlock::new(move |_| {
         completion.complete();
@@ -4204,7 +3918,6 @@ where
         adaptive_sample: None,
     })
 }
-
 fn dispatch_sizes(pipeline: &ComputePipelineState, threads: u64) -> (MTLSize, MTLSize) {
     let execution_width = pipeline.thread_execution_width().max(1);
     let max_threads = pipeline.max_total_threads_per_threadgroup().max(1);
@@ -4216,7 +3929,6 @@ fn dispatch_sizes(pipeline: &ComputePipelineState, threads: u64) -> (MTLSize, MT
     let groups = threads.div_ceil(threadgroup.width.max(1)).max(1);
     (MTLSize::new(groups, 1, 1), threadgroup)
 }
-
 fn bn254_threadgroup_geometry(
     pipeline: &ComputePipelineState,
     elements: u64,
@@ -4233,27 +3945,23 @@ fn bn254_threadgroup_geometry(
     let threadgroup = MTLSize::new(width, 1, 1);
     (MTLSize::new(1, 1, 1), threadgroup)
 }
-
 fn fft_bytes_per_batch(column_len: u64, columns: u32) -> u64 {
     let element_bytes = u64::try_from(mem::size_of::<u64>()).unwrap_or(u64::MAX);
     let io_bytes = element_bytes.saturating_mul(2);
     let per_column = u128::from(column_len).saturating_mul(u128::from(io_bytes));
     clamp_u128_to_u64(per_column.saturating_mul(u128::from(columns)))
 }
-
 fn lde_bytes_per_batch(trace_len: u64, eval_len: u64, columns: u32) -> u64 {
     let element_bytes = u64::try_from(mem::size_of::<u64>()).unwrap_or(u64::MAX);
     let per_column = u128::from(trace_len + eval_len).saturating_mul(u128::from(element_bytes));
     clamp_u128_to_u64(per_column.saturating_mul(u128::from(columns)))
 }
-
 fn poseidon_bytes_per_batch(states: u32) -> u64 {
     let width = u64::try_from(STATE_WIDTH).unwrap_or(u64::MAX);
     let element_bytes = u64::try_from(mem::size_of::<u64>()).unwrap_or(u64::MAX);
     let per_state = u128::from(width).saturating_mul(u128::from(element_bytes));
     clamp_u128_to_u64(per_state.saturating_mul(u128::from(states)))
 }
-
 fn poseidon_hash_bytes_per_batch(states: u32, padded_len: u32) -> u64 {
     let element_bytes = u64::try_from(mem::size_of::<u64>()).unwrap_or(u64::MAX);
     let payload = u128::from(padded_len).saturating_mul(u128::from(element_bytes));
@@ -4266,7 +3974,6 @@ fn poseidon_hash_bytes_per_batch(states: u32, padded_len: u32) -> u64 {
         .saturating_add(descriptor_total);
     clamp_u128_to_u64(per_column.saturating_mul(u128::from(states)))
 }
-
 fn poseidon_row_hash_bytes_per_batch(rows: u32, columns: u32) -> u64 {
     let element_bytes = u64::try_from(mem::size_of::<u64>()).unwrap_or(u64::MAX);
     let input = u128::from(rows)
@@ -4275,7 +3982,6 @@ fn poseidon_row_hash_bytes_per_batch(rows: u32, columns: u32) -> u64 {
     let output = u128::from(rows).saturating_mul(u128::from(element_bytes));
     clamp_u128_to_u64(input.saturating_add(output))
 }
-
 fn bn254_poseidon_hash_bytes(
     word_count: usize,
     slice_count: usize,
@@ -4308,7 +4014,6 @@ fn bn254_poseidon_hash_bytes(
             .saturating_add(constants),
     )
 }
-
 fn clamp_u128_to_u64(value: u128) -> u64 {
     if value > u128::from(u64::MAX) {
         u64::MAX
@@ -4316,7 +4021,6 @@ fn clamp_u128_to_u64(value: u128) -> u64 {
         value as u64
     }
 }
-
 fn wait_for_ticket(mut ticket: DispatchTicket) -> MetalResult<()> {
     let trace_label = ticket.trace_label.clone();
     let timing_start = ticket.timing_start;
@@ -4375,7 +4079,6 @@ fn wait_for_ticket(mut ticket: DispatchTicket) -> MetalResult<()> {
         })
     }
 }
-
 fn wait_for_tickets<T>(tickets: T) -> MetalResult<()>
 where
     T: IntoIterator<Item = DispatchTicket>,
@@ -4385,7 +4088,6 @@ where
     }
     Ok(())
 }
-
 fn record_lde_stats(stats: LdeHostStats) {
     if !LDE_STATS_ENABLED.load(Ordering::Acquire) {
         return;
@@ -4395,33 +4097,27 @@ fn record_lde_stats(stats: LdeHostStats) {
         *guard = Some(stats);
     }
 }
-
 fn elapsed_ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000.0
 }
-
 fn flatten(columns: &[Vec<u64>]) -> PooledBuffer {
     PooledBuffer::from_columns(columns)
 }
-
 fn flatten_with_stats(columns: &[Vec<u64>], phase: ColumnStagingPhase) -> PooledBuffer {
     let start = Instant::now();
     let buffer = PooledBuffer::from_columns(columns);
     record_staging_flatten(phase, start.elapsed());
     buffer
 }
-
 fn clone_slice_with_stats(elements: &[u64], phase: ColumnStagingPhase) -> PooledBuffer {
     let start = Instant::now();
     let buffer = PooledBuffer::from_slice(elements);
     record_staging_flatten(phase, start.elapsed());
     buffer
 }
-
 fn buffer_pool() -> &'static Mutex<BufferPool> {
     BUFFER_POOL.get_or_init(|| Mutex::new(BufferPool::default()))
 }
-
 fn select_fft_batch(threadgroup_lanes: u32) -> BatchSelection {
     if let Some(columns) = fft_batch_override() {
         return BatchSelection::fixed(columns);
@@ -4429,14 +4125,12 @@ fn select_fft_batch(threadgroup_lanes: u32) -> BatchSelection {
     let recommended = default_fft_columns_per_batch(threadgroup_lanes);
     adaptive_scheduler().select_fft(recommended, MAX_FFT_COLUMNS_PER_BATCH)
 }
-
 fn default_fft_columns_per_batch(threadgroup_lanes: u32) -> u32 {
     let lanes = threadgroup_lanes.max(1);
     let target_threads = FFT_COLUMNS_TARGET_THREADS.max(lanes);
     let columns = target_threads / lanes;
     columns.clamp(MIN_FFT_COLUMNS_PER_BATCH, MAX_FFT_COLUMNS_PER_BATCH)
 }
-
 fn fft_batch_override() -> Option<u32> {
     *FFT_BATCH_OVERRIDE.get_or_init(|| {
         debug_env_var(FFT_COLUMNS_ENV).and_then(|raw| match parse_fft_batch_override(raw.trim()) {
@@ -4461,7 +4155,6 @@ fn fft_batch_override() -> Option<u32> {
         })
     })
 }
-
 fn parse_fft_batch_override(raw: &str) -> Result<u32, &'static str> {
     let value: u32 = raw.parse().map_err(|_| "not an integer")?;
     if !(MIN_FFT_COLUMNS_PER_BATCH..=MAX_FFT_COLUMNS_PER_BATCH).contains(&value) {
@@ -4469,7 +4162,6 @@ fn parse_fft_batch_override(raw: &str) -> Result<u32, &'static str> {
     }
     Ok(value)
 }
-
 fn select_lde_batch(eval_log: u32, threadgroup_lanes: u32) -> BatchSelection {
     if let Some(columns) = lde_batch_override() {
         return BatchSelection::fixed(columns);
@@ -4478,7 +4170,6 @@ fn select_lde_batch(eval_log: u32, threadgroup_lanes: u32) -> BatchSelection {
     let domain_cap = lde_domain_cap(eval_log).max(MIN_LDE_COLUMNS_PER_BATCH);
     adaptive_scheduler().select_lde(recommended, domain_cap)
 }
-
 fn default_lde_columns_per_batch(eval_log: u32, threadgroup_lanes: u32) -> u32 {
     let domain_cap = lde_domain_cap(eval_log);
     let lanes = threadgroup_lanes.max(1);
@@ -4489,7 +4180,6 @@ fn default_lde_columns_per_batch(eval_log: u32, threadgroup_lanes: u32) -> u32 {
     columns = columns.clamp(MIN_LDE_COLUMNS_PER_BATCH, MAX_LDE_COLUMNS_PER_BATCH);
     columns.min(domain_cap).max(MIN_LDE_COLUMNS_PER_BATCH)
 }
-
 fn lde_domain_cap(eval_log: u32) -> u32 {
     match eval_log {
         n if n >= 22 => 1,
@@ -4498,7 +4188,6 @@ fn lde_domain_cap(eval_log: u32) -> u32 {
         _ => 64,
     }
 }
-
 fn lde_batch_override() -> Option<u32> {
     *LDE_BATCH_OVERRIDE.get_or_init(|| {
         debug_env_var(LDE_COLUMNS_ENV).and_then(|raw| match parse_lde_batch_override(raw.trim()) {
@@ -4523,7 +4212,6 @@ fn lde_batch_override() -> Option<u32> {
         })
     })
 }
-
 fn parse_lde_batch_override(raw: &str) -> Result<u32, &'static str> {
     let value: u32 = raw.parse().map_err(|_| "not an integer")?;
     if !(MIN_LDE_COLUMNS_PER_BATCH..=MAX_LDE_COLUMNS_PER_BATCH).contains(&value) {
@@ -4531,7 +4219,6 @@ fn parse_lde_batch_override(raw: &str) -> Result<u32, &'static str> {
     }
     Ok(value)
 }
-
 fn acquire_buffer(min_capacity: usize) -> Vec<u64> {
     if min_capacity == 0 {
         return Vec::new();
@@ -4541,12 +4228,10 @@ fn acquire_buffer(min_capacity: usize) -> Vec<u64> {
         .expect("buffer pool poisoned")
         .take(min_capacity)
 }
-
 #[derive(Default)]
 struct BufferPool {
     spare: Vec<Vec<u64>>,
 }
-
 impl BufferPool {
     fn take(&mut self, min_capacity: usize) -> Vec<u64> {
         let mut candidate = None;
@@ -4563,7 +4248,6 @@ impl BufferPool {
             None => Vec::with_capacity(min_capacity),
         }
     }
-
     fn recycle(&mut self, mut buffer: Vec<u64>) {
         if buffer.capacity() == 0 {
             return;
@@ -4575,17 +4259,14 @@ impl BufferPool {
             self.spare.truncate(MAX_BUFFER_POOL_BUFFERS);
         }
     }
-
     #[cfg(test)]
     fn len_for_tests(&self) -> usize {
         self.spare.len()
     }
 }
-
 struct PooledBuffer {
     data: Vec<u64>,
 }
-
 impl PooledBuffer {
     fn from_columns(columns: &[Vec<u64>]) -> Self {
         let len = columns.first().map_or(0, Vec::len);
@@ -4597,29 +4278,24 @@ impl PooledBuffer {
         }
         Self { data }
     }
-
     fn from_slice(elements: &[u64]) -> Self {
         let mut data = acquire_buffer(elements.len());
         data.clear();
         data.extend_from_slice(elements);
         Self { data }
     }
-
     fn zeroed(len: usize) -> Self {
         let mut data = acquire_buffer(len);
         data.resize(len, 0);
         Self { data }
     }
-
     fn as_slice(&self) -> &[u64] {
         &self.data
     }
-
     fn as_mut_slice(&mut self) -> &mut [u64] {
         self.data.as_mut_slice()
     }
 }
-
 impl Drop for PooledBuffer {
     fn drop(&mut self) {
         if self.data.capacity() == 0 {
@@ -4633,7 +4309,6 @@ impl Drop for PooledBuffer {
             .recycle(buffer);
     }
 }
-
 struct CommandSemaphoreState {
     limit: usize,
     queue_floor: usize,
@@ -4643,14 +4318,12 @@ struct CommandSemaphoreState {
     gpu_cores: Option<usize>,
     cpu_parallelism: Option<usize>,
 }
-
 struct CommandLimitComputation {
     limit: usize,
     source: CommandLimitSource,
     gpu_cores: Option<usize>,
     cpu_parallelism: Option<usize>,
 }
-
 fn command_semaphore() -> &'static CommandSemaphore {
     COMMAND_SEMAPHORE.get_or_init(|| {
         let queue_floor = resolved_queue_floor();
@@ -4682,7 +4355,6 @@ fn command_semaphore() -> &'static CommandSemaphore {
         CommandSemaphore::new(limit.max(1))
     })
 }
-
 fn command_limit_snapshot() -> Option<CommandLimitSnapshot> {
     COMMAND_SEMAPHORE_STATE
         .get()
@@ -4696,7 +4368,6 @@ fn command_limit_snapshot() -> Option<CommandLimitSnapshot> {
             override_limit: state.override_limit.and_then(|v| v.try_into().ok()),
         })
 }
-
 fn max_in_flight_override() -> Option<usize> {
     if let Some(value) = overrides::metal_max_in_flight_override() {
         return Some(value);
@@ -4731,7 +4402,6 @@ fn max_in_flight_override() -> Option<usize> {
         })
     })
 }
-
 fn auto_in_flight_limit(queue_floor: usize) -> CommandLimitComputation {
     if let Some(cores) = gpu_core_count() {
         let limit = limit_from_gpu_cores(cores).max(queue_floor);
@@ -4772,17 +4442,14 @@ fn auto_in_flight_limit(queue_floor: usize) -> CommandLimitComputation {
         cpu_parallelism,
     }
 }
-
 fn limit_from_gpu_cores(cores: usize) -> usize {
     let safe = cores.max(1);
     let half = (safe + 1) / 2;
     half.clamp(2, 16)
 }
-
 fn gpu_core_count() -> Option<usize> {
     *GPU_CORE_COUNT.get_or_init(detect_gpu_core_count)
 }
-
 fn detect_gpu_core_count() -> Option<usize> {
     let output = Command::new("system_profiler")
         .arg("SPDisplaysDataType")
@@ -4814,7 +4481,6 @@ fn detect_gpu_core_count() -> Option<usize> {
     );
     Some(cores)
 }
-
 fn parse_gpu_core_count(payload: &str) -> Option<usize> {
     let value: Value = json::from_str(payload).ok()?;
     let entries = value.get("SPDisplaysDataType").and_then(Value::as_array)?;
@@ -4829,7 +4495,6 @@ fn parse_gpu_core_count(payload: &str) -> Option<usize> {
     }
     None
 }
-
 fn value_to_usize(value: &Value) -> Option<usize> {
     match value {
         Value::Number(num) => num.as_u64().and_then(|n| n.try_into().ok()),
@@ -4837,19 +4502,16 @@ fn value_to_usize(value: &Value) -> Option<usize> {
         _ => None,
     }
 }
-
 fn default_in_flight_limit_for_parallelism(cpus: usize) -> usize {
     let safe_cpus = cpus.max(1);
     let half = (safe_cpus + 1) / 2;
     half.clamp(2, 16)
 }
-
 struct CommandSemaphore {
     limit: usize,
     state: Mutex<usize>,
     condvar: Condvar,
 }
-
 impl CommandSemaphore {
     fn new(limit: usize) -> Self {
         Self {
@@ -4858,7 +4520,6 @@ impl CommandSemaphore {
             condvar: Condvar::new(),
         }
     }
-
     fn acquire_timeout(&self, timeout: Duration) -> bool {
         let started = Instant::now();
         let mut guard = self.state.lock().expect("command semaphore poisoned");
@@ -4879,7 +4540,6 @@ impl CommandSemaphore {
         *guard += 1;
         true
     }
-
     fn release(&self) {
         let mut guard = self.state.lock().expect("command semaphore poisoned");
         if *guard == 0 {
@@ -4888,33 +4548,27 @@ impl CommandSemaphore {
         *guard -= 1;
         self.condvar.notify_one();
     }
-
     fn limit(&self) -> usize {
         self.limit
     }
-
     #[cfg(test)]
     fn in_flight_for_tests(&self) -> usize {
         *self.state.lock().expect("command semaphore poisoned")
     }
 }
-
 fn resolved_queue_floor() -> usize {
     let fanout = context_queue_fanout().unwrap_or(1);
     fanout.saturating_mul(2).max(2)
 }
-
 fn context_queue_fanout() -> Option<usize> {
     METAL_CONTEXT
         .get()
         .and_then(|result| result.as_ref().ok())
         .map(|context| context.queues.policy().fanout())
 }
-
 struct CommandPermit {
     completion: Arc<CommandPermitCompletion>,
 }
-
 impl CommandPermit {
     fn try_new(queue_index: usize) -> MetalResult<Self> {
         let semaphore = command_semaphore();
@@ -4936,33 +4590,27 @@ impl CommandPermit {
             completion: Arc::new(CommandPermitCompletion::new(semaphore, queue_index)),
         })
     }
-
     fn completion(&self) -> Arc<CommandPermitCompletion> {
         Arc::clone(&self.completion)
     }
-
     fn mark_launched(&mut self) {
         self.completion.mark_launched();
     }
-
     fn complete(&mut self) {
         self.completion.complete();
     }
 }
-
 impl Drop for CommandPermit {
     fn drop(&mut self) {
         self.complete();
     }
 }
-
 struct CommandPermitCompletion {
     semaphore: &'static CommandSemaphore,
     queue_index: usize,
     launched: AtomicBool,
     released: AtomicBool,
 }
-
 impl CommandPermitCompletion {
     fn new(semaphore: &'static CommandSemaphore, queue_index: usize) -> Self {
         Self {
@@ -4972,7 +4620,6 @@ impl CommandPermitCompletion {
             released: AtomicBool::new(false),
         }
     }
-
     fn mark_launched(&self) {
         if self
             .launched
@@ -4982,7 +4629,6 @@ impl CommandPermitCompletion {
             record_queue_launch(self.queue_index);
         }
     }
-
     fn complete(&self) {
         if self.launched.swap(false, Ordering::AcqRel) {
             record_queue_completion(self.queue_index);
@@ -4992,7 +4638,6 @@ impl CommandPermitCompletion {
         }
     }
 }
-
 #[derive(Default)]
 struct QueueStatsState {
     in_flight: u32,
@@ -5004,7 +4649,6 @@ struct QueueStatsState {
     window: Duration,
     lanes: Vec<QueueLaneState>,
 }
-
 #[derive(Clone, Default)]
 struct QueueLaneState {
     in_flight: u32,
@@ -5013,7 +4657,6 @@ struct QueueLaneState {
     busy: Duration,
     overlap: Duration,
 }
-
 impl QueueStatsState {
     fn reset(&mut self) {
         self.in_flight = 0;
@@ -5031,7 +4674,6 @@ impl QueueStatsState {
             lane.overlap = Duration::default();
         }
     }
-
     fn advance(&mut self, now: Instant) {
         if let Some(previous) = self.last_event {
             let delta = now.saturating_duration_since(previous);
@@ -5053,7 +4695,6 @@ impl QueueStatsState {
         }
         self.last_event = Some(now);
     }
-
     fn record_launch(&mut self, queue_index: usize, now: Instant) {
         self.advance(now);
         self.in_flight = self.in_flight.saturating_add(1);
@@ -5068,7 +4709,6 @@ impl QueueStatsState {
             lane.max_in_flight = lane.in_flight;
         }
     }
-
     fn record_completion(&mut self, queue_index: usize, now: Instant) {
         self.advance(now);
         if self.in_flight > 0 {
@@ -5079,7 +4719,6 @@ impl QueueStatsState {
             lane.in_flight -= 1;
         }
     }
-
     fn snapshot(&self, limit: usize) -> QueueDepthStats {
         let queues = self
             .lanes
@@ -5103,7 +4742,6 @@ impl QueueStatsState {
             queues,
         }
     }
-
     fn lane_mut(&mut self, index: usize) -> &mut QueueLaneState {
         if index >= self.lanes.len() {
             self.lanes.resize_with(index + 1, QueueLaneState::default);
@@ -5111,7 +4749,6 @@ impl QueueStatsState {
         &mut self.lanes[index]
     }
 }
-
 fn record_queue_launch(queue_index: usize) {
     if !QUEUE_STATS_ENABLED.load(Ordering::Acquire) {
         return;
@@ -5121,7 +4758,6 @@ fn record_queue_launch(queue_index: usize) {
         guard.record_launch(queue_index, Instant::now());
     }
 }
-
 fn record_queue_completion(queue_index: usize) {
     if !QUEUE_STATS_ENABLED.load(Ordering::Acquire) {
         return;
@@ -5131,7 +4767,6 @@ fn record_queue_completion(queue_index: usize) {
         guard.record_completion(queue_index, Instant::now());
     }
 }
-
 fn threadgroup_override() -> Option<u64> {
     if let Some(value) = overrides::metal_threadgroup_override() {
         return Some(value);
@@ -5166,7 +4801,6 @@ fn threadgroup_override() -> Option<u64> {
         })
     })
 }
-
 fn dispatch_trace_enabled() -> bool {
     if let Some(enabled) = overrides::metal_dispatch_trace_override() {
         return enabled;
@@ -5185,7 +4819,6 @@ fn dispatch_trace_enabled() -> bool {
             .unwrap_or(false)
     })
 }
-
 fn trace_dispatch_start(
     pipeline: &ComputePipelineState,
     threads: u64,
@@ -5208,7 +4841,6 @@ fn trace_dispatch_start(
         "dispatching Metal kernel"
     );
 }
-
 fn trace_dispatch_end_label(label: Option<String>, duration: Duration, success: bool) {
     if !dispatch_trace_enabled() {
         return;
@@ -5221,24 +4853,20 @@ fn trace_dispatch_end_label(label: Option<String>, duration: Duration, success: 
         "Metal kernel completed"
     );
 }
-
 fn restore_range(columns: &mut [Vec<u64>], range: Range<usize>, buffer: &[u64], extent: usize) {
     if range.is_empty() {
         return;
     }
     restore(&mut columns[range], buffer, extent);
 }
-
 fn restore(columns: &mut [Vec<u64>], buffer: &[u64], extent: usize) {
     for (column, chunk) in columns.iter_mut().zip(buffer.chunks_exact(extent)) {
         column.copy_from_slice(chunk);
     }
 }
-
 fn bn254_two_adicity() -> u32 {
     Bn254Fr::S
 }
-
 fn bn254_validate_log(log_size: u32) -> MetalResult<()> {
     if log_size == 0 {
         return Err(GpuError::InvalidInput(
@@ -5252,7 +4880,6 @@ fn bn254_validate_log(log_size: u32) -> MetalResult<()> {
     }
     Ok(())
 }
-
 fn bn254_scalar_to_canonical_limbs(value: &Bn254Scalar) -> [u64; BN254_LIMBS] {
     let bytes = value.to_bytes();
     let mut limbs = [0u64; BN254_LIMBS];
@@ -5263,7 +4890,6 @@ fn bn254_scalar_to_canonical_limbs(value: &Bn254Scalar) -> [u64; BN254_LIMBS] {
     }
     limbs
 }
-
 fn bn254_scalar_from_canonical_limbs(limbs: &[u64; BN254_LIMBS]) -> MetalResult<Bn254Scalar> {
     let mut bytes = [0u8; 32];
     for (index, limb) in limbs.iter().enumerate() {
@@ -5273,14 +4899,12 @@ fn bn254_scalar_from_canonical_limbs(limbs: &[u64; BN254_LIMBS]) -> MetalResult<
         GpuError::InvalidInput("BN254 canonical limbs decode produced invalid field element")
     })
 }
-
 fn bn254_limbs_slice_to_scalar(slice: &[u64]) -> MetalResult<Bn254Scalar> {
     let limbs: [u64; BN254_LIMBS] = slice
         .try_into()
         .expect("slice length should equal BN254 limb count");
     bn254_scalar_from_canonical_limbs(&limbs)
 }
-
 fn bn254_stage_twiddles_scalars(log_size: u32) -> MetalResult<Vec<Bn254Scalar>> {
     bn254_validate_log(log_size)?;
     let n = 1usize << log_size;
@@ -5313,7 +4937,6 @@ fn bn254_stage_twiddles_scalars(log_size: u32) -> MetalResult<Vec<Bn254Scalar>> 
     }
     Ok(twiddles)
 }
-
 fn bn254_stage_twiddles_limbs(log_size: u32) -> MetalResult<Vec<[u64; BN254_LIMBS]>> {
     let scalars = bn254_stage_twiddles_scalars(log_size)?;
     let twiddles: Vec<[u64; BN254_LIMBS]> = scalars
@@ -5323,7 +4946,6 @@ fn bn254_stage_twiddles_limbs(log_size: u32) -> MetalResult<Vec<[u64; BN254_LIMB
     validate_bn254_twiddles_shape(log_size, &twiddles)?;
     Ok(twiddles)
 }
-
 fn sample_bn254_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>> {
     let len = 1usize << log_size;
     let mut columns = Vec::with_capacity(column_count);
@@ -5337,11 +4959,9 @@ fn sample_bn254_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>> {
     }
     columns
 }
-
 fn sample_bn254_coset() -> [u64; BN254_LIMBS] {
     bn254_scalar_to_canonical_limbs(&Bn254Scalar::from(5u64))
 }
-
 fn bn254_column_extent(columns: &[Vec<u64>]) -> MetalResult<usize> {
     if columns.is_empty() {
         return Ok(0);
@@ -5359,13 +4979,11 @@ fn bn254_column_extent(columns: &[Vec<u64>]) -> MetalResult<usize> {
     }
     Ok(limb_len / BN254_LIMBS)
 }
-
 fn goldilocks_mul(a: u64, b: u64) -> u64 {
     let product = u128::from(a) * u128::from(b);
     let reduced = product % u128::from(FIELD_MODULUS);
     u64::try_from(reduced).expect("Goldilocks reduction fits in u64")
 }
-
 fn goldilocks_pow(mut base: u64, mut exponent: u64) -> u64 {
     let mut result = 1u64;
     while exponent != 0 {
@@ -5377,22 +4995,18 @@ fn goldilocks_pow(mut base: u64, mut exponent: u64) -> u64 {
     }
     result
 }
-
 fn goldilocks_inv(value: u64) -> u64 {
     goldilocks_pow(value, FIELD_MODULUS - 2)
 }
-
 fn compute_stage_twiddles(log_len: u32, root: u64, inverse: bool) -> Vec<u64> {
     if log_len == 0 {
         return Vec::new();
     }
-
     let len = 1u64 << log_len;
     let mut omega = root;
     if inverse {
         omega = goldilocks_inv(omega);
     }
-
     let mut twiddles = Vec::with_capacity(log_len as usize);
     for stage in 0..log_len {
         let size = 1u64 << (stage + 1);
@@ -5401,7 +5015,6 @@ fn compute_stage_twiddles(log_len: u32, root: u64, inverse: bool) -> Vec<u64> {
     }
     twiddles
 }
-
 #[cfg(test)]
 mod helper_tests {
     use super::{
@@ -5411,14 +5024,12 @@ mod helper_tests {
         queue_total_columns_hint, select_poseidon_batch,
     };
     use crate::metal_config::{self, DeviceHints};
-
     #[test]
     fn post_tile_stage_start_only_dispatches_when_needed() {
         assert_eq!(post_tile_stage_start(10, 4), Some(4));
         assert_eq!(post_tile_stage_start(8, 16), None);
         assert_eq!(post_tile_stage_start(0, 4), None);
     }
-
     #[test]
     fn lde_tile_stage_limit_scales_with_log_size() {
         let _hint_guard = metal_config::device_hints_test_guard();
@@ -5426,7 +5037,6 @@ mod helper_tests {
         assert_eq!(lde_tile_stage_limit(18), 12);
         assert_eq!(lde_tile_stage_limit(64), 8);
     }
-
     #[test]
     fn lde_tile_stage_limit_respects_device_hints() {
         let _hint_guard = metal_config::device_hints_test_guard();
@@ -5438,49 +5048,41 @@ mod helper_tests {
         )));
         assert_eq!(lde_tile_stage_limit(18), 14);
     }
-
     #[test]
     fn queue_policy_round_robins_above_threshold() {
         let policy = QueuePolicy::new(3, 8);
         let below = policy.select_index(4, 5);
         assert_eq!(below, 0, "fan-out should not engage below threshold");
-
         let indices: Vec<_> = (0..6).map(|idx| policy.select_index(16, idx)).collect();
         assert_eq!(indices, vec![0, 1, 2, 0, 1, 2]);
     }
-
     #[test]
     fn queue_policy_clamps_requested_values() {
         let policy = QueuePolicy::new(0, 0);
         assert_eq!(policy.fanout(), 1);
         assert_eq!(policy.column_threshold(), 1);
-
         let capped = QueuePolicy::new(MAX_QUEUE_FANOUT + 10, 4);
         assert_eq!(capped.fanout(), MAX_QUEUE_FANOUT);
         assert_eq!(capped.column_threshold(), 4);
     }
-
     #[test]
     fn queue_fanout_override_validation() {
         assert_eq!(parse_queue_fanout_override("2").unwrap(), 2);
         assert!(parse_queue_fanout_override("0").is_err());
         assert!(parse_queue_fanout_override("abc").is_err());
     }
-
     #[test]
     fn queue_threshold_override_validation() {
         assert_eq!(parse_queue_threshold_override("12").unwrap(), 12);
         assert!(parse_queue_threshold_override("0").is_err());
         assert!(parse_queue_threshold_override("abc").is_err());
     }
-
     #[test]
     fn default_queue_threshold_scales_with_fanout() {
         assert_eq!(default_queue_column_threshold(1), u32::MAX);
         assert_eq!(default_queue_column_threshold(2), 16);
         assert_eq!(default_queue_column_threshold(3), 24);
     }
-
     #[test]
     fn inverse_fft_hint_disables_threshold_fanout() {
         let policy = QueuePolicy::new(2, 16);
@@ -5489,7 +5091,6 @@ mod helper_tests {
         assert_eq!(queue_total_columns_hint(32, true, &policy), 32);
         assert_eq!(queue_total_columns_hint(16, false, &policy), 16);
     }
-
     #[test]
     fn poseidon_recommended_batch_respects_caps() {
         let tuning = metal_config::PoseidonTuning {
@@ -5510,7 +5111,6 @@ mod helper_tests {
         assert!(recommended >= base);
         assert!(recommended <= max_expected);
     }
-
     #[test]
     fn poseidon_batch_selection_respects_remaining_states() {
         let tuning = metal_config::PoseidonTuning {
@@ -5523,7 +5123,6 @@ mod helper_tests {
         let sample = selection.sample_for(total_states);
         assert!(sample.is_some(), "adaptive sample expected");
     }
-
     #[test]
     fn poseidon_element_range_scales_with_state_width() {
         let range = poseidon_element_range(2, 3).expect("range");
@@ -5531,13 +5130,10 @@ mod helper_tests {
         assert_eq!(range.end, 5 * STATE_WIDTH);
     }
 }
-
 #[cfg(test)]
 mod bn254_helper_tests {
     use metal::Device;
-
     use super::*;
-
     #[test]
     fn upload_bn254_twiddles_rejects_non_limb_multiple() {
         if Device::system_default().is_none() {
@@ -5547,14 +5143,12 @@ mod bn254_helper_tests {
         let err = upload_bn254_twiddles(&device, &[1u64, 2, 3]).expect_err("expected invalid");
         assert!(matches!(err, GpuError::InvalidInput(_)));
     }
-
     #[test]
     fn flatten_bn254_twiddles_concatenates_limbs() {
         let inputs = [[1u64, 2, 3, 4], [5, 6, 7, 8]];
         let flat = super::flatten_bn254_twiddles(&inputs);
         assert_eq!(flat, vec![1, 2, 3, 4, 5, 6, 7, 8]);
     }
-
     #[test]
     fn upload_bn254_coset_requires_four_limbs() {
         if Device::system_default().is_none() {
@@ -5564,26 +5158,21 @@ mod bn254_helper_tests {
         let err = upload_bn254_coset(&device, &[1u64, 2, 3]).expect_err("expected invalid");
         assert!(matches!(err, GpuError::InvalidInput(_)));
     }
-
     #[test]
     fn validate_bn254_twiddles_shape_checks_length() {
         let ok = super::validate_bn254_twiddles_shape(2, &[[0u64; 4]; 4]).is_ok();
         assert!(ok, "expected shape to be valid");
-
         let err = super::validate_bn254_twiddles_shape(2, &[[0u64; 4]; 3])
             .expect_err("expected shape error");
         assert!(matches!(err, GpuError::InvalidInput(_)));
     }
-
     #[test]
     fn bn254_twiddle_len_helpers_match_shape() {
         assert_eq!(super::bn254_fft_twiddle_len(2).unwrap(), 4);
         assert!(super::bn254_fft_twiddle_len(0).is_err());
-
         assert_eq!(super::bn254_lde_twiddle_len(2, 1).unwrap(), 12);
         assert!(super::bn254_lde_twiddle_len(0, 1).is_err());
     }
-
     #[test]
     fn stage_bn254_twiddles_rejects_zero_log() {
         if Device::system_default().is_none() {
@@ -5593,7 +5182,6 @@ mod bn254_helper_tests {
         let err = super::stage_bn254_twiddles(&device, 0).expect_err("expected log_size rejection");
         assert!(matches!(err, GpuError::InvalidInput(_)));
     }
-
     #[test]
     fn stage_bn254_twiddles_matches_expected_size() {
         if Device::system_default().is_none() {
@@ -5606,7 +5194,6 @@ mod bn254_helper_tests {
         let expected_bytes = expected_twiddles * BN254_LIMBS * std::mem::size_of::<u64>();
         assert_eq!(buffer.length() as usize, expected_bytes);
     }
-
     #[test]
     fn bn254_status_runs_smoke_checks() {
         if Device::system_default().is_none() {
@@ -5620,19 +5207,14 @@ mod bn254_helper_tests {
         }
     }
 }
-
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 mod tests {
     use std::{thread, time::Duration};
-
     use fastpq_isi::{CANONICAL_PARAMETER_SETS, poseidon as cpu_poseidon};
     use iroha_crypto::Hash;
-
     use super::{ensure_multi_queue_env, unwrap_or_skip, *};
     use crate::fft::Planner;
-
     const TRACE_NODE_DOMAIN_FOR_TESTS: &[u8] = b"fastpq:v1:trace:node";
-
     fn sample_fft_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>> {
         let len = 1usize << log_size;
         (0..column_count)
@@ -5647,7 +5229,6 @@ mod tests {
             })
             .collect()
     }
-
     fn test_domain_seed(domain: &[u8]) -> u64 {
         let digest = Hash::new(domain);
         let bytes = digest.as_ref();
@@ -5656,14 +5237,12 @@ mod tests {
         u64::try_from(u128::from(u64::from_le_bytes(chunk)) % u128::from(FIELD_MODULUS))
             .expect("Goldilocks reduction fits u64")
     }
-
     fn hash_with_domain_for_tests(domain: &[u8], values: &[u64]) -> u64 {
         let mut sponge = cpu_poseidon::PoseidonSponge::new();
         sponge.absorb(test_domain_seed(domain));
         sponge.absorb_slice(values);
         sponge.squeeze()
     }
-
     #[test]
     fn fft_dispatch_geometry_scales_with_columns() {
         let lanes = 32;
@@ -5672,7 +5251,6 @@ mod tests {
         assert_eq!(threads.width, u64::from(lanes));
         assert_eq!(logical, u64::from(lanes * 4));
     }
-
     #[test]
     fn fft_and_ifft_match_cpu_reference() {
         ensure_multi_queue_env();
@@ -5680,12 +5258,10 @@ mod tests {
         let params = CANONICAL_PARAMETER_SETS[0];
         let planner = Planner::new(&params);
         let scenarios = [(3, 2), (10, 2), (14, 1)];
-
         for (log_size, column_count) in scenarios {
             let mut cpu_columns = sample_fft_columns(log_size, column_count);
             let mut metal_columns = cpu_columns.clone();
             let root = planner.trace_domain(log_size).generator;
-
             planner.fft_columns(&mut cpu_columns);
             if unwrap_or_skip(
                 super::fft_columns(&mut metal_columns, log_size, root),
@@ -5696,7 +5272,6 @@ mod tests {
                 return;
             }
             assert_eq!(cpu_columns, metal_columns);
-
             planner.ifft_columns(&mut cpu_columns);
             if unwrap_or_skip(
                 super::ifft_columns(&mut metal_columns, log_size, root),
@@ -5709,7 +5284,6 @@ mod tests {
             assert_eq!(cpu_columns, metal_columns);
         }
     }
-
     #[test]
     fn lde_matches_cpu_reference() {
         ensure_multi_queue_env();
@@ -5718,7 +5292,6 @@ mod tests {
         let planner = Planner::new(&params);
         let trace_log = 3;
         let trace_len = 1usize << trace_log;
-
         let coeffs = vec![
             (0..trace_len)
                 .map(|idx| {
@@ -5750,7 +5323,6 @@ mod tests {
         let gpu_eval = gpu_eval.expect("Metal backend declined workload");
         assert_eq!(cpu_eval, gpu_eval);
     }
-
     #[test]
     fn poseidon_matches_cpu_permutation() {
         ensure_multi_queue_env();
@@ -5762,20 +5334,17 @@ mod tests {
             cpu_states.push(idx * 5 + 1);
         }
         let mut metal_states = cpu_states.clone();
-
         for chunk in cpu_states.chunks_exact_mut(cpu_poseidon::STATE_WIDTH) {
             let mut state = [0u64; cpu_poseidon::STATE_WIDTH];
             state.copy_from_slice(chunk);
             cpu_poseidon::permute_state(&mut state);
             chunk.copy_from_slice(&state);
         }
-
         if unwrap_or_skip(super::poseidon_permute(&mut metal_states), "poseidon").is_none() {
             return;
         }
         assert_eq!(cpu_states, metal_states);
     }
-
     #[test]
     fn poseidon_hash_rows_matches_cpu_reference() {
         ensure_multi_queue_env();
@@ -5808,7 +5377,6 @@ mod tests {
         };
         assert_eq!(actual, expected);
     }
-
     #[test]
     fn poseidon_hash_columns_batches_multi_block_columns() {
         ensure_multi_queue_env();
@@ -5835,7 +5403,6 @@ mod tests {
         );
         let expected =
             crate::trace::hash_columns_cpu_batch_inputs(&domains, &columns).expect("cpu reference");
-
         super::adaptive_scheduler()
             .poseidon
             .record_sample(4, domains.len() as u32, 0.0);
@@ -5849,7 +5416,6 @@ mod tests {
         };
         let stats = super::take_kernel_stats().expect("kernel stats enabled");
         super::enable_kernel_stats(false);
-
         assert_eq!(actual, expected);
         assert!(
             stats
@@ -5858,7 +5424,6 @@ mod tests {
             "expected a vectorized Poseidon dispatch, got {stats:?}"
         );
     }
-
     #[test]
     fn poseidon_hash_columns_batches_merkle_pairs() {
         ensure_multi_queue_env();
@@ -5880,7 +5445,6 @@ mod tests {
             .iter()
             .map(|pair| hash_with_domain_for_tests(TRACE_NODE_DOMAIN_FOR_TESTS, pair))
             .collect::<Vec<_>>();
-
         super::adaptive_scheduler()
             .poseidon
             .record_sample(8, pairs.len() as u32, 0.0);
@@ -5894,7 +5458,6 @@ mod tests {
         };
         let stats = super::take_kernel_stats().expect("kernel stats enabled");
         super::enable_kernel_stats(false);
-
         assert_eq!(actual, expected);
         assert!(
             stats
@@ -5903,7 +5466,6 @@ mod tests {
             "expected Merkle pair hashing to use a vectorized dispatch, got {stats:?}"
         );
     }
-
     #[test]
     fn poseidon_dispatch_geometry_meets_minimum_threads() {
         let limits = super::PipelineLimits {
@@ -5921,7 +5483,6 @@ mod tests {
         assert_eq!(group.width, 32);
         assert!(groups.width >= 1);
     }
-
     #[test]
     fn bn254_poseidon_dispatch_geometry_uses_actual_work() {
         let limits = super::PipelineLimits {
@@ -5942,14 +5503,12 @@ mod tests {
         assert_eq!(states_per_lane, 4);
         assert_eq!(group.width, 16);
         assert_eq!(groups.width, 1);
-
         let (groups, group, logical_threads, states_per_lane) =
             super::bn254_poseidon_dispatch_geometry(513, tuning, &limits);
         assert_eq!(logical_threads, 129);
         assert_eq!(states_per_lane, 4);
         assert_eq!(group.width, 32);
         assert_eq!(groups.width, 5);
-
         let wide_tuning = super::metal_config::PoseidonTuning {
             threadgroup_lanes: 256,
             states_per_lane: 2,
@@ -5965,22 +5524,18 @@ mod tests {
         assert_eq!(group.width, super::BN254_POSEIDON_THREADGROUP_CAPACITY);
         assert_eq!(groups.width, 2);
     }
-
     #[test]
     fn column_batch_iterator_chunks_columns() {
         let batches: Vec<_> = super::column_batch_ranges(10, 4).collect();
         assert_eq!(batches, vec![(0, 4), (4, 4), (8, 2)]);
     }
-
     #[test]
     fn column_batch_iterator_handles_zero_total_and_batch_size() {
         let empty: Vec<_> = super::column_batch_ranges(0, 8).collect();
         assert!(empty.is_empty());
-
         let singletons: Vec<_> = super::column_batch_ranges(3, 0).collect();
         assert_eq!(singletons, vec![(0, 1), (1, 1), (2, 1)]);
     }
-
     #[test]
     fn column_batch_iterator_reports_exact_len() {
         let mut iter = super::column_batch_ranges(9, 4);
@@ -5989,7 +5544,6 @@ mod tests {
         assert_eq!(iter.len(), 2);
         let _: Vec<_> = iter.collect();
     }
-
     #[test]
     fn stage_twiddles_match_reference_values() {
         let expected = vec![
@@ -6002,7 +5556,6 @@ mod tests {
         let root = super::goldilocks_pow(super::GOLDILOCKS_GENERATOR, (FIELD_MODULUS - 1) >> 5);
         let twiddles = super::compute_stage_twiddles(5, root, false);
         assert_eq!(twiddles, expected);
-
         let inverse_twiddles = super::compute_stage_twiddles(5, root, true);
         for (forward, inverse) in expected.iter().zip(inverse_twiddles.iter()) {
             assert_eq!(*inverse, super::goldilocks_inv(*forward));
@@ -6012,23 +5565,19 @@ mod tests {
     fn buffer_pool_recycles_vectors() {
         let mut pool = BufferPool::default();
         assert_eq!(pool.len_for_tests(), 0);
-
         let buffer = pool.take(16);
         assert!(buffer.capacity() >= 16);
         pool.recycle(buffer);
         assert_eq!(pool.len_for_tests(), 1);
-
         let buffer = pool.take(8);
         assert!(buffer.capacity() >= 8);
         assert_eq!(pool.len_for_tests(), 0);
     }
-
     #[test]
     fn pooled_buffer_zeroed_is_preinitialized() {
         let buffer = PooledBuffer::zeroed(4);
         assert_eq!(buffer.as_slice(), &[0, 0, 0, 0]);
     }
-
     #[test]
     fn queue_stats_capture_overlap() {
         super::enable_queue_depth_stats(true);
@@ -6046,33 +5595,28 @@ mod tests {
         assert!(stats.max_in_flight >= 1);
         assert!(stats.overlap_ms > 0.0);
     }
-
     #[test]
     fn command_completion_releases_permit_and_queue_stats_once() {
         super::enable_queue_depth_stats(true);
         let semaphore = Box::leak(Box::new(super::CommandSemaphore::new(1)));
         assert!(semaphore.acquire_timeout(Duration::from_millis(1)));
         assert_eq!(semaphore.in_flight_for_tests(), 1);
-
         let completion = super::CommandPermitCompletion::new(semaphore, 0);
         completion.mark_launched();
         completion.mark_launched();
         completion.complete();
         completion.complete();
-
         assert_eq!(semaphore.in_flight_for_tests(), 0);
         let stats = super::take_queue_depth_stats().expect("stats captured");
         super::enable_queue_depth_stats(false);
         assert_eq!(stats.dispatch_count, 1);
         assert_eq!(stats.queues[0].dispatch_count, 1);
     }
-
     #[test]
     fn poseidon_dispatch_staging_uses_deeper_completion_backed_pipe() {
         assert!(super::POSEIDON_DISPATCH_PIPE_DEPTH > 1);
         assert!(super::POSEIDON_DISPATCH_PIPE_DEPTH <= super::DEFAULT_MAX_COMMAND_BUFFERS);
     }
-
     #[test]
     fn column_staging_stats_capture_events() {
         super::enable_queue_depth_stats(true);
@@ -6107,7 +5651,6 @@ mod tests {
         assert_eq!(poseidon_samples[0].wait_ms, 0.0);
         assert!(stats.lde_samples().is_empty());
     }
-
     #[test]
     fn queue_depth_delta_handles_accumulation() {
         let before = QueueDepthStats {
@@ -6169,7 +5712,6 @@ mod tests {
         assert_eq!(delta.queues[0].dispatch_count, 2);
         assert!((delta.queues[0].busy_ms - 0.75).abs() < f64::EPSILON);
         assert!((delta.queues[1].overlap_ms - 0.25).abs() < f64::EPSILON);
-
         let mut total = QueueDepthStats::default();
         total.accumulate_delta(&delta);
         assert_eq!(total.dispatch_count, 3);
@@ -6179,7 +5721,6 @@ mod tests {
         assert!((total.window_ms - 1.0).abs() < f64::EPSILON);
         assert_eq!(total.queues.len(), 2);
         assert_eq!(total.queues[0].max_in_flight, 2);
-
         let next = QueueDepthStats {
             limit: 4,
             dispatch_count: 1,
@@ -6205,7 +5746,6 @@ mod tests {
         assert_eq!(total.queues[0].dispatch_count, 3);
         assert_eq!(total.queues[1].dispatch_count, 2);
     }
-
     #[test]
     fn lde_batch_size_scales_with_domain() {
         assert_eq!(default_lde_columns_per_batch(10, 32), 64);
@@ -6218,7 +5758,6 @@ mod tests {
             MIN_LDE_COLUMNS_PER_BATCH
         );
     }
-
     #[test]
     fn lde_batch_size_scales_with_lane_width() {
         assert_eq!(default_lde_columns_per_batch(10, 32), 64);
@@ -6229,7 +5768,6 @@ mod tests {
             DEFAULT_LDE_COLUMNS_PER_BATCH
         );
     }
-
     #[test]
     fn fft_batch_size_scales_with_lane_width() {
         assert_eq!(default_fft_columns_per_batch(32), MAX_FFT_COLUMNS_PER_BATCH);
@@ -6237,7 +5775,6 @@ mod tests {
         assert_eq!(default_fft_columns_per_batch(128), 32);
         assert_eq!(default_fft_columns_per_batch(256), 16);
     }
-
     #[test]
     fn fft_batch_override_validation() {
         assert_eq!(parse_fft_batch_override("2").unwrap(), 2);
@@ -6245,7 +5782,6 @@ mod tests {
         assert!(parse_fft_batch_override("65").is_err());
         assert!(parse_fft_batch_override("abc").is_err());
     }
-
     #[test]
     fn lde_batch_override_validation() {
         assert_eq!(parse_lde_batch_override("4").unwrap(), 4);
@@ -6253,7 +5789,6 @@ mod tests {
         assert!(parse_lde_batch_override("65").is_err());
         assert!(parse_lde_batch_override("abc").is_err());
     }
-
     #[test]
     fn default_in_flight_limit_scales_with_parallelism() {
         assert_eq!(default_in_flight_limit_for_parallelism(1), 2);
@@ -6264,7 +5799,6 @@ mod tests {
         assert_eq!(default_in_flight_limit_for_parallelism(12), 6);
         assert_eq!(default_in_flight_limit_for_parallelism(32), 16);
     }
-
     #[test]
     fn adaptive_batch_doubles_until_target() {
         let state = AdaptiveBatchState::new(1, 2.0);
@@ -6274,7 +5808,6 @@ mod tests {
         let next = state.select(2, 16, AdaptiveStateId::Fft);
         assert_eq!(next.columns(), 4);
     }
-
     #[test]
     fn adaptive_batch_backs_off_after_slow_sample() {
         let state = AdaptiveBatchState::new(1, 2.0);
@@ -6287,7 +5820,6 @@ mod tests {
         let backoff = state.select(2, 32, AdaptiveStateId::Fft);
         assert_eq!(backoff.columns(), 2);
     }
-
     #[test]
     fn adaptive_batch_backoff_respects_minimum_floor() {
         let state = AdaptiveBatchState::new(3, 2.0);
@@ -6297,7 +5829,6 @@ mod tests {
         let next = state.select(4, 64, AdaptiveStateId::Fft);
         assert_eq!(next.columns(), 3);
     }
-
     #[test]
     fn parse_gpu_core_count_reads_fields() {
         let payload = r#"{"SPDisplaysDataType":[{"sppci_cores":10}]}"#;
@@ -6305,7 +5836,6 @@ mod tests {
         let payload = r#"{"SPDisplaysDataType":[{"spdisplays_cores":"8"}]}"#;
         assert_eq!(super::parse_gpu_core_count(payload), Some(8));
     }
-
     #[test]
     fn kernel_descriptors_cover_entry_points() {
         let descriptors = super::metal_kernel_descriptors();

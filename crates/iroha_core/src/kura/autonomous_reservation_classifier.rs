@@ -13,7 +13,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             && key.reservation_owner_hash == identity.reservation_owner_hash
             && key.proposal_identity_hash == identity.proposal_identity_hash
     }
-
     fn validate_autonomous_reservation_reconciliation_group(
         group: &LaneQueueReservationReconciliationGroupV1,
     ) -> std::result::Result<(), AutonomousLaneReservationEvidenceError> {
@@ -41,7 +40,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         }
         Ok(())
     }
-
     fn charge_autonomous_reservation_attempt_read(
         inventory: &AutonomousReservationLaneInventory,
         lane_block_height: u64,
@@ -66,7 +64,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         }
         Ok(())
     }
-
     fn charge_autonomous_reservation_attempt_payload_read(
         inventory: &AutonomousReservationLaneInventory,
         lane_block_height: u64,
@@ -85,7 +82,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         }
         Ok(())
     }
-
     #[allow(clippy::too_many_arguments)]
     fn load_autonomous_reservation_attempt_locked(
         &self,
@@ -148,7 +144,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         );
         Ok(())
     }
-
     #[allow(clippy::too_many_arguments)]
     fn load_autonomous_reservation_attempt_self_context_locked(
         &self,
@@ -230,7 +225,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         );
         Ok(())
     }
-
     fn read_autonomous_reservation_claim_locked(
         &self,
         path: &Path,
@@ -263,7 +257,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
         Ok(Some(claim))
     }
-
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn preflight_autonomous_reservation_claims_locked(
         &self,
@@ -328,7 +321,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             }) {
                 return Err(conflict(&temp_path));
             }
-
             let Some(_retirement) = retirement else {
                 if existing.as_ref().is_some_and(|claim| claim != &expected_active)
                     || existing.is_none() && staged.is_none()
@@ -357,7 +349,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                 }
                 continue;
             }
-
             // Historical retirement replay never mutates claims. Its exact
             // owner must already be Released, or the hash-addressed claim must
             // be authenticatedly superseded by a later attempt. Any temp is
@@ -406,7 +397,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         }
         Ok(())
     }
-
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn read_requested_certified_lane_blocks_strict_locked(
         &self,
@@ -538,7 +528,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             )
             .into());
         }
-
         let mut requested = BTreeMap::new();
         for (height, (offset, len)) in requested_ranges {
             *decoded_bytes = decoded_bytes
@@ -591,7 +580,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         }
         Ok(requested)
     }
-
     fn autonomous_reservation_certified_lane_snapshot_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -707,7 +695,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             frontier,
         })
     }
-
     fn autonomous_reservation_certification_for_payload(
         snapshot: &AutonomousReservationCertifiedLaneSnapshot,
         payload: &LaneExecutablePayloadV1,
@@ -758,7 +745,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             AutonomousLaneReservationCertificationV1::Exact,
         ))
     }
-
     /// Classify a complete immutable Queue reconciliation snapshot under one
     /// Kura evidence window.
     ///
@@ -819,7 +805,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         if groups.is_empty() {
             return Ok(Vec::new());
         }
-
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
@@ -853,7 +838,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         if self.prune_recovery_is_required() {
             return Err(Error::PruneRecoveryRequired.into());
         }
-
         let mut scanned_entries = 0_usize;
         let mut decoded_bytes = 0_u64;
         let mut inventories = BTreeMap::<LaneId, AutonomousReservationLaneInventory>::new();
@@ -976,7 +960,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             }
             inventories.insert(*lane_id, inventory);
         }
-
         let mut certified_snapshots = BTreeMap::new();
         for (lane_id, requested_heights) in &requested_certified_heights {
             let entry = entries
@@ -994,7 +977,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             )?;
             certified_snapshots.insert(*lane_id, snapshot);
         }
-
         for (coordinate, expected_epoch) in &coordinate_epochs {
             let (lane_id, lane_block_height, proposal_height) = *coordinate;
             let entry = entries
@@ -1020,7 +1002,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                 )?;
             }
         }
-
         let mut classifications = Vec::with_capacity(groups.len());
         let mut claim_probes = 0_usize;
         let mut preflighted_claim_attempts = BTreeSet::new();
@@ -1121,7 +1102,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                     &mut decoded_bytes,
                 )?;
             }
-
             if attempt.retirement.is_none() {
                 let other_coordinates = inventory
                     .attempts
@@ -1194,7 +1174,6 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         }
         Ok(classifications)
     }
-
     #[cfg(test)]
     fn classify_autonomous_lane_reservation_group(
         &self,

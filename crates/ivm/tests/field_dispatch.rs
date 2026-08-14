@@ -13,7 +13,6 @@ use ivm::{
     },
     simd_choice,
 };
-
 #[test]
 fn test_scalar_add_sub_mul() {
     let _guard = ivm::field_dispatch::field_impl_test_lock();
@@ -27,7 +26,6 @@ fn test_scalar_add_sub_mul() {
     let mul = backend.mul(a, b);
     assert_eq!(mul.to_fr(), Fr::from(35u64));
 }
-
 #[test]
 fn test_field_impl_cached() {
     let _guard = ivm::field_dispatch::field_impl_test_lock();
@@ -36,7 +34,6 @@ fn test_field_impl_cached() {
     let p2 = field_impl();
     assert_eq!(p1.type_id(), p2.type_id(), "backend should be cached");
 }
-
 #[test]
 fn test_field_impl_ops() {
     let _guard = ivm::field_dispatch::field_impl_test_lock();
@@ -47,7 +44,6 @@ fn test_field_impl_ops() {
     let res = backend.mul(a, b);
     assert_eq!(res.to_fr(), Fr::from(12u64));
 }
-
 #[test]
 fn test_runtime_detection_matches_choice() {
     let _guard = ivm::field_dispatch::field_impl_test_lock();
@@ -66,7 +62,6 @@ fn test_runtime_detection_matches_choice() {
     };
     assert_eq!(backend.type_id(), expected.type_id());
 }
-
 #[test]
 fn test_forced_scalar_backend() {
     let _guard = ivm::field_dispatch::field_impl_test_lock();

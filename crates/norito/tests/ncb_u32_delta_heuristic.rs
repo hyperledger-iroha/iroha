@@ -1,7 +1,5 @@
 //! Tests for enabling/disabling u32 delta heuristics in NCB encoders.
-
 use norito::columnar as ncb;
-
 #[test]
 fn enum_adaptive_enables_code_delta_when_beneficial() {
     use ncb::EnumBorrow;

@@ -1,7 +1,5 @@
 //! Host execution for bilateral settlements and owner-funded native FX corridors.
-
 use std::collections::BTreeSet;
-
 #[cfg(any(feature = "telemetry", test))]
 use iroha_data_model::isi::error::{AssetTransferAdmissionError, InstructionEvaluationError};
 use iroha_data_model::{
@@ -26,7 +24,6 @@ use iroha_primitives::{
     json::Json,
     numeric::{Numeric, NumericSpec, Quantity},
 };
-
 use super::*;
 use crate::smartcontracts::isi::asset::isi::{
     assert_numeric_spec_with, execute_native_fx_numeric_asset_pair,
@@ -36,20 +33,17 @@ use crate::smartcontracts::isi::asset::isi::{
 use crate::smartcontracts::isi::error::MathError;
 #[cfg(feature = "telemetry")]
 use crate::sumeragi::status::SettlementOutcomeKind;
-
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
 pub(crate) const SETTLEMENT_KIND_DVP: &str = "dvp";
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
 pub(crate) const SETTLEMENT_KIND_PVP: &str = "pvp";
 pub(crate) const CAN_SET_FX_CORRIDOR_POLICY: &str = "CanSetFxCorridorPolicy";
-
 /// Non-reusable proof that bilateral consent selected two exact settlement legs.
 pub(in crate::smartcontracts::isi) struct VerifiedSettlementNumericPair {
     authority: AccountId,
     binding: Vec<u8>,
     legs: [(AssetId, AssetId, Quantity); 2],
 }
-
 impl VerifiedSettlementNumericPair {
     fn new<T: norito::codec::Encode>(
         authority: AccountId,
@@ -67,14 +61,12 @@ impl VerifiedSettlementNumericPair {
             legs,
         })
     }
-
     pub(in crate::smartcontracts::isi) fn into_parts(
         self,
     ) -> (AccountId, Vec<u8>, [(AssetId, AssetId, Quantity); 2]) {
         (self.authority, self.binding, self.legs)
     }
 }
-
 impl Execute for SettlementInstructionBox {
     fn execute(
         self,
@@ -91,7 +83,6 @@ impl Execute for SettlementInstructionBox {
         }
     }
 }
-
 #[cfg(any(feature = "telemetry", test))]
 fn settlement_failure_reason(err: &Error) -> &'static str {
     match err {
@@ -118,7 +109,6 @@ fn settlement_failure_reason(err: &Error) -> &'static str {
         _ => "other",
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn record_settlement_receipt(
     stx: &mut StateTransaction<'_, '_>,
@@ -144,7 +134,6 @@ fn record_settlement_receipt(
             .min(u128::from(u64::MAX)),
     )
     .unwrap_or(u64::MAX);
-
     let receipt = SettlementReceipt {
         kind,
         authority: authority.clone(),
@@ -156,13 +145,11 @@ fn record_settlement_receipt(
         legs,
         fx_corridor,
     };
-
     stx.world
         .settlement_receipts
         .insert(settlement_id.clone(), receipt);
     Ok(())
 }
-
 fn dvp_leg_snapshots(
     delivery_leg: &SettlementLeg,
     payment_leg: &SettlementLeg,
@@ -178,7 +165,6 @@ fn dvp_leg_snapshots(
         },
     ]
 }
-
 fn pvp_leg_snapshots(
     primary_leg: &SettlementLeg,
     counter_leg: &SettlementLeg,
@@ -194,7 +180,6 @@ fn pvp_leg_snapshots(
         },
     ]
 }
-
 fn fx_corridor_leg_snapshots(
     source_leg: &SettlementLeg,
     destination_leg: &SettlementLeg,
@@ -210,7 +195,6 @@ fn fx_corridor_leg_snapshots(
         },
     ]
 }
-
 fn has_exact_permission(
     stx: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -224,7 +208,6 @@ fn has_exact_permission(
     {
         return true;
     }
-
     stx.world
         .account_roles
         .iter()
@@ -237,12 +220,10 @@ fn has_exact_permission(
         })
         .any(|role| role.permissions().any(|permission| permission == required))
 }
-
 fn can_manage_fx_corridors(stx: &StateTransaction<'_, '_>, authority: &AccountId) -> bool {
     let manager: Permission = CanManageFxCorridors.into();
     has_exact_permission(stx, authority, &manager)
 }
-
 fn can_set_fx_corridor_policy(
     stx: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -254,13 +235,11 @@ fn can_set_fx_corridor_policy(
     .into();
     can_manage_fx_corridors(stx, authority) || has_exact_permission(stx, authority, &exact)
 }
-
 fn invalid_fx_parameter(message: impl Into<String>) -> Error {
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
         message.into(),
     ))
 }
-
 fn fx_policy_registry(stx: &StateTransaction<'_, '_>) -> Result<FxCorridorPolicyRegistry, Error> {
     let parameters = stx.world.parameters.get();
     let Some(custom) = parameters
@@ -273,7 +252,6 @@ fn fx_policy_registry(stx: &StateTransaction<'_, '_>) -> Result<FxCorridorPolicy
         .map_err(|err| invalid_fx_parameter(format!("invalid FX corridor policy registry: {err}")))?
         .ok_or_else(|| invalid_fx_parameter("FX corridor policy registry id mismatch"))
 }
-
 pub(in crate::smartcontracts::isi) fn fx_policy(
     stx: &StateTransaction<'_, '_>,
     policy_id: &Name,
@@ -283,7 +261,6 @@ pub(in crate::smartcontracts::isi) fn fx_policy(
         .cloned()
         .ok_or_else(|| invalid_fx_parameter(format!("FX corridor policy `{policy_id}` not found")))
 }
-
 fn validate_fx_policy_entities(
     stx: &StateTransaction<'_, '_>,
     policy: &FxCorridorPolicy,
@@ -291,7 +268,6 @@ fn validate_fx_policy_entities(
     if let Some(message) = policy.invariant_error() {
         return Err(invalid_fx_parameter(message));
     }
-
     ensure_account_exists(stx, &policy.owner)?;
     let feed = stx
         .world
@@ -308,7 +284,6 @@ fn validate_fx_policy_entities(
             "FX corridor oracle feed key does not match its canonical feed identity",
         ));
     }
-
     stx.nexus
         .dataspace_catalog
         .by_id(policy.source_dataspace)
@@ -338,7 +313,6 @@ fn validate_fx_policy_entities(
             destination_dataspace.alias
         )));
     }
-
     for asset_definition_id in [
         &policy.source_asset_definition_id,
         &policy.destination_asset_definition_id,
@@ -350,21 +324,17 @@ fn validate_fx_policy_entities(
             )));
         }
     }
-
     Ok(())
 }
-
 fn ensure_account_exists(stx: &StateTransaction<'_, '_>, account: &AccountId) -> Result<(), Error> {
     stx.world.account(account).map_err(Error::from)?;
     Ok(())
 }
-
 fn ensure_leg_accounts(stx: &StateTransaction<'_, '_>, leg: &SettlementLeg) -> Result<(), Error> {
     ensure_account_exists(stx, leg.from())?;
     ensure_account_exists(stx, leg.to())?;
     Ok(())
 }
-
 fn resolve_settlement_leg_source_asset_id(
     stx: &StateTransaction<'_, '_>,
     leg: &SettlementLeg,
@@ -374,7 +344,6 @@ fn resolve_settlement_leg_source_asset_id(
         leg.from().clone(),
     ))
 }
-
 fn resolve_settlement_leg_asset_ids(
     stx: &StateTransaction<'_, '_>,
     leg: &SettlementLeg,
@@ -387,7 +356,6 @@ fn resolve_settlement_leg_asset_ids(
     );
     Ok((withdraw, deposit))
 }
-
 fn resolve_authorized_settlement_leg_asset_ids(
     stx: &StateTransaction<'_, '_>,
     leg: &SettlementLeg,
@@ -431,7 +399,6 @@ fn resolve_authorized_settlement_leg_asset_ids(
     );
     Ok((withdraw, deposit))
 }
-
 fn ensure_leg_quantity(leg: &SettlementLeg) -> Result<(), Error> {
     if leg.quantity().is_zero() {
         return Err(InstructionExecutionError::InvariantViolation(
@@ -440,7 +407,6 @@ fn ensure_leg_quantity(leg: &SettlementLeg) -> Result<(), Error> {
     }
     Ok(())
 }
-
 fn scoped_fx_leg_asset_ids(leg: &SettlementLeg, dataspace: DataSpaceId) -> (AssetId, AssetId) {
     let scope = AssetBalanceScope::Dataspace(dataspace);
     (
@@ -452,7 +418,6 @@ fn scoped_fx_leg_asset_ids(leg: &SettlementLeg, dataspace: DataSpaceId) -> (Asse
         AssetId::with_scope(leg.asset_definition_id().clone(), leg.to().clone(), scope),
     )
 }
-
 fn exact_fx_destination_amount(
     source_amount: &Quantity,
     destination_spec: NumericSpec,
@@ -481,7 +446,6 @@ fn exact_fx_destination_amount(
     }
     Ok(destination_amount)
 }
-
 fn fx_corridor_escrow_account(
     stx: &StateTransaction<'_, '_>,
     policy: &FxCorridorPolicy,
@@ -492,7 +456,6 @@ fn fx_corridor_escrow_account(
         &policy.destination_asset_definition_id,
     )
 }
-
 fn persist_fx_policy_registry(
     stx: &mut StateTransaction<'_, '_>,
     registry: FxCorridorPolicyRegistry,
@@ -510,7 +473,6 @@ fn persist_fx_policy_registry(
             new_value: Parameter::Custom(next),
         })));
 }
-
 fn validate_fx_oracle_evidence(
     stx: &StateTransaction<'_, '_>,
     policy: &FxCorridorPolicy,
@@ -567,7 +529,6 @@ fn validate_fx_oracle_evidence(
     }
     Ok((success.value, record.recorded_at_ms))
 }
-
 fn next_fx_corridor_usage(
     registry: &FxCorridorPolicyRegistry,
     policy: &FxCorridorPolicy,
@@ -617,7 +578,6 @@ fn next_fx_corridor_usage(
     }
     Ok(usage)
 }
-
 fn ensure_bilateral_settlement_id_unused(
     stx: &StateTransaction<'_, '_>,
     settlement_id: &SettlementId,
@@ -629,7 +589,6 @@ fn ensure_bilateral_settlement_id_unused(
     }
     Ok(())
 }
-
 fn ensure_bilateral_settlement_shape(
     first_leg: &SettlementLeg,
     second_leg: &SettlementLeg,
@@ -652,7 +611,6 @@ fn ensure_bilateral_settlement_shape(
     }
     Ok(())
 }
-
 /// Resolve one exact balance authorized by an owner-issued bilateral consent.
 ///
 /// Grant/revoke validation permits only `debited_asset.account()` to issue the
@@ -709,7 +667,6 @@ pub(super) fn ensure_bilateral_counterparty_consent(
     }
     Ok(source)
 }
-
 fn validate_dvp_preconditions(
     authority: &AccountId,
     stx: &mut StateTransaction<'_, '_>,
@@ -739,7 +696,6 @@ fn validate_dvp_preconditions(
         settlement_id,
         intent_hash,
     )?;
-
     ensure_leg_quantity(delivery_leg)?;
     ensure_leg_quantity(payment_leg)?;
     ensure_leg_accounts(stx, delivery_leg)?;
@@ -757,10 +713,8 @@ fn validate_dvp_preconditions(
         payment_assets.1.clone(),
         payment_leg.quantity().clone(),
     )?;
-
     Ok((delivery_assets, payment_assets))
 }
-
 fn validate_pvp_preconditions(
     authority: &AccountId,
     stx: &mut StateTransaction<'_, '_>,
@@ -790,7 +744,6 @@ fn validate_pvp_preconditions(
         settlement_id,
         intent_hash,
     )?;
-
     ensure_leg_quantity(primary_leg)?;
     ensure_leg_quantity(counter_leg)?;
     ensure_leg_accounts(stx, primary_leg)?;
@@ -808,10 +761,8 @@ fn validate_pvp_preconditions(
         counter_assets.1.clone(),
         counter_leg.quantity().clone(),
     )?;
-
     Ok((primary_assets, counter_assets))
 }
-
 struct ValidatedFxSettlement {
     policy: FxCorridorPolicy,
     source_leg: SettlementLeg,
@@ -820,7 +771,6 @@ struct ValidatedFxSettlement {
     oracle_recorded_at_ms: u64,
     next_usage: FxCorridorUsage,
 }
-
 fn validate_fx_settlement_preconditions(
     authority: &AccountId,
     stx: &mut StateTransaction<'_, '_>,
@@ -840,7 +790,6 @@ fn validate_fx_settlement_preconditions(
             .into(),
         ));
     }
-
     let policy = fx_policy(stx, &instruction.policy_id)?;
     validate_fx_policy_entities(stx, &policy)?;
     if !policy.enabled {
@@ -916,7 +865,6 @@ fn validate_fx_settlement_preconditions(
             "FX corridor source quantity must be positive",
         ));
     }
-
     let source_spec = stx
         .numeric_spec_for(&policy.source_asset_definition_id)
         .map_err(Error::from)?;
@@ -941,7 +889,6 @@ fn validate_fx_settlement_preconditions(
         &instruction.source_amount,
         &destination_amount,
     )?;
-
     let source_leg = SettlementLeg::new(
         policy.source_asset_definition_id.clone(),
         instruction.source_amount.clone(),
@@ -969,7 +916,6 @@ fn validate_fx_settlement_preconditions(
         destination_leg.quantity().clone(),
         &policy,
     )?;
-
     Ok(ValidatedFxSettlement {
         policy,
         source_leg,
@@ -979,7 +925,6 @@ fn validate_fx_settlement_preconditions(
         next_usage,
     })
 }
-
 impl Execute for SetFxCorridorPolicy {
     fn execute(
         self,
@@ -996,7 +941,6 @@ impl Execute for SetFxCorridorPolicy {
             ));
         }
         validate_fx_policy_entities(stx, &self.policy)?;
-
         let mut registry = fx_policy_registry(stx)?;
         let expected_revision = match registry.get(&self.policy.policy_id) {
             Some(previous) => {
@@ -1032,7 +976,6 @@ impl Execute for SetFxCorridorPolicy {
         Ok(())
     }
 }
-
 fn validate_fx_escrow_instruction(
     authority: &AccountId,
     stx: &mut StateTransaction<'_, '_>,
@@ -1072,7 +1015,6 @@ fn validate_fx_escrow_instruction(
     assert_numeric_spec_with(amount.as_numeric(), spec)?;
     Ok(policy)
 }
-
 impl Execute for FundFxCorridorEscrow {
     fn execute(
         self,
@@ -1107,7 +1049,6 @@ impl Execute for FundFxCorridorEscrow {
         )
     }
 }
-
 impl Execute for RefundFxCorridorEscrow {
     fn execute(
         self,
@@ -1131,7 +1072,6 @@ impl Execute for RefundFxCorridorEscrow {
         )
     }
 }
-
 pub(crate) fn admission_validate_fx_corridor(
     authority: &AccountId,
     stx: &mut StateTransaction<'_, '_>,
@@ -1140,7 +1080,6 @@ pub(crate) fn admission_validate_fx_corridor(
     let _ = validate_fx_settlement_preconditions(authority, stx, instruction)?;
     Ok(())
 }
-
 impl Execute for SettleFxCorridor {
     fn execute(
         self,
@@ -1156,7 +1095,6 @@ impl Execute for SettleFxCorridor {
             oracle_recorded_at_ms,
             next_usage,
         } = validated;
-
         let (source_id, source_destination_id) =
             scoped_fx_leg_asset_ids(&source_leg, policy.source_dataspace);
         let (destination_source_id, destination_id) =
@@ -1226,7 +1164,6 @@ impl Execute for SettleFxCorridor {
             legs,
             Some(fx_corridor),
         )?;
-
         iroha_logger::info!(
             settlement_id = %self.settlement_id,
             policy_id = %policy.policy_id,
@@ -1240,7 +1177,6 @@ impl Execute for SettleFxCorridor {
         Ok(())
     }
 }
-
 pub(crate) fn admission_validate_dvp(
     authority: &AccountId,
     stx: &mut StateTransaction<'_, '_>,
@@ -1257,7 +1193,6 @@ pub(crate) fn admission_validate_dvp(
     )?;
     Ok(())
 }
-
 pub(crate) fn admission_validate_pvp(
     authority: &AccountId,
     stx: &mut StateTransaction<'_, '_>,
@@ -1274,7 +1209,6 @@ pub(crate) fn admission_validate_pvp(
     )?;
     Ok(())
 }
-
 #[allow(clippy::too_many_lines)]
 impl Execute for DvpIsi {
     fn execute(
@@ -1290,7 +1224,6 @@ impl Execute for DvpIsi {
             plan,
             metadata,
         } = self;
-
         let (delivery_assets, payment_assets) = match validate_dvp_preconditions(
             authority,
             stx,
@@ -1319,7 +1252,6 @@ impl Execute for DvpIsi {
                 return Err(err);
             }
         };
-
         let first = match plan.order() {
             SettlementExecutionOrder::DeliveryThenPayment => (
                 delivery_assets.0.clone(),
@@ -1344,7 +1276,6 @@ impl Execute for DvpIsi {
                 delivery_leg.quantity().clone(),
             ),
         };
-
         let movement = VerifiedSettlementNumericPair::new(
             authority.clone(),
             &(settlement_id.clone(), intent_hash, plan),
@@ -1365,7 +1296,6 @@ impl Execute for DvpIsi {
                     legs,
                     None,
                 )?;
-
                 #[cfg(feature = "telemetry")]
                 {
                     stx.telemetry.record_dvp_finality(
@@ -1378,7 +1308,6 @@ impl Execute for DvpIsi {
                     );
                     stx.telemetry.note_settlement_success(SETTLEMENT_KIND_DVP);
                 }
-
                 iroha_logger::info!(
                     %settlement_id,
                     delivery_from=%delivery_leg.from(),
@@ -1386,7 +1315,6 @@ impl Execute for DvpIsi {
                     payment_asset=%payment_leg.asset_definition_id(),
                     "DvP settlement executed"
                 );
-
                 Ok(())
             }
             Err(err) => {
@@ -1409,7 +1337,6 @@ impl Execute for DvpIsi {
         }
     }
 }
-
 #[allow(clippy::too_many_lines)]
 impl Execute for PvpIsi {
     fn execute(
@@ -1425,7 +1352,6 @@ impl Execute for PvpIsi {
             plan,
             metadata,
         } = self;
-
         let (primary_assets, counter_assets) = match validate_pvp_preconditions(
             authority,
             stx,
@@ -1455,7 +1381,6 @@ impl Execute for PvpIsi {
                 return Err(err);
             }
         };
-
         let first = match plan.order() {
             SettlementExecutionOrder::DeliveryThenPayment => (
                 primary_assets.0.clone(),
@@ -1480,7 +1405,6 @@ impl Execute for PvpIsi {
                 primary_leg.quantity().clone(),
             ),
         };
-
         let movement = VerifiedSettlementNumericPair::new(
             authority.clone(),
             &(settlement_id.clone(), intent_hash, plan),
@@ -1501,7 +1425,6 @@ impl Execute for PvpIsi {
                     legs,
                     None,
                 )?;
-
                 #[cfg(feature = "telemetry")]
                 {
                     stx.telemetry.record_pvp_finality(
@@ -1515,7 +1438,6 @@ impl Execute for PvpIsi {
                     );
                     stx.telemetry.note_settlement_success(SETTLEMENT_KIND_PVP);
                 }
-
                 iroha_logger::info!(
                     %settlement_id,
                     primary_from=%primary_leg.from(),
@@ -1523,7 +1445,6 @@ impl Execute for PvpIsi {
                     counter_asset=%counter_leg.asset_definition_id(),
                     "PvP settlement executed"
                 );
-
                 Ok(())
             }
             Err(err) => {
@@ -1547,11 +1468,9 @@ impl Execute for PvpIsi {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-
     use iroha_data_model::{
         account::{
             Account, AccountAddress, NewAccount,
@@ -1576,16 +1495,13 @@ mod tests {
     use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
     use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID, SAMPLE_GENESIS_ACCOUNT_ID};
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{kura::Kura, prelude::World, query::store::LiveQueryStore, state::State};
-
     fn quantity(value: &str) -> Quantity {
         value
             .parse::<Quantity>()
             .expect("settlement fixture quantity must be canonical and non-negative")
     }
-
     fn grant_exact_settlement_consent(
         stx: &mut StateTransaction<'_, '_>,
         initiator: &AccountId,
@@ -1610,7 +1526,6 @@ mod tests {
             .account_permissions
             .insert(initiator.clone(), permissions);
     }
-
     fn grant_dvp_consent(
         stx: &mut StateTransaction<'_, '_>,
         initiator: &AccountId,
@@ -1638,7 +1553,6 @@ mod tests {
             instruction.intent_hash(),
         );
     }
-
     fn grant_pvp_consent(
         stx: &mut StateTransaction<'_, '_>,
         initiator: &AccountId,
@@ -1666,7 +1580,6 @@ mod tests {
             instruction.intent_hash(),
         );
     }
-
     fn assert_smart_contract_parameter_contains(error: InstructionExecutionError, expected: &str) {
         let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
@@ -1679,7 +1592,6 @@ mod tests {
             "expected `{message}` to contain `{expected}`"
         );
     }
-
     #[test]
     fn bilateral_settlement_rejects_partial_commit_plans() {
         let first = SettlementLeg::new(
@@ -1716,11 +1628,9 @@ mod tests {
             );
         }
     }
-
     fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
         settlement_state_with_balances(Quantity::from(10u32), Quantity::from(1_000u32))
     }
-
     fn set_test_holding_limit(
         stx: &mut StateTransaction<'_, '_>,
         account_id: &AccountId,
@@ -1731,14 +1641,12 @@ mod tests {
             .execute(&ALICE_ID, stx)
             .expect("asset owner should set the test holding limit");
     }
-
     fn asset_balance_or_zero(stx: &StateTransaction<'_, '_>, id: &AssetId) -> Quantity {
         stx.world
             .assets
             .get(id)
             .map_or_else(Quantity::zero, |value| value.as_ref().clone())
     }
-
     fn assert_holding_limit_error(error: &InstructionExecutionError) {
         assert!(
             matches!(
@@ -1750,7 +1658,6 @@ mod tests {
             "expected typed holding-limit error, got {error:?}"
         );
     }
-
     fn fx_corridor_state(
         source_balance: u32,
         destination_balance: u32,
@@ -1769,7 +1676,6 @@ mod tests {
         let source_dataspace = DataSpaceId::new(10);
         let destination_dataspace = DataSpaceId::new(12);
         let policy_id: Name = "aed_to_pkr".parse().expect("policy id");
-
         let mut world = World::with_assets(
             [Domain::new(domain_id.clone()).build(&ALICE_ID)],
             [
@@ -1918,7 +1824,6 @@ mod tests {
         );
         (state, policy)
     }
-
     fn fx_catalog(policy: &FxCorridorPolicy) -> DataSpaceCatalog {
         DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
@@ -1937,11 +1842,9 @@ mod tests {
         ])
         .expect("FX dataspace catalog")
     }
-
     fn configure_fx_catalog(stx: &mut StateTransaction<'_, '_>, policy: &FxCorridorPolicy) {
         stx.nexus.dataspace_catalog = fx_catalog(policy);
     }
-
     fn insert_active_fx_alias(
         stx: &mut StateTransaction<'_, '_>,
         alias: AccountAlias,
@@ -1971,7 +1874,6 @@ mod tests {
         );
         stx.world.insert_account_alias_binding(alias, account_id);
     }
-
     fn fx_settlement(policy: &FxCorridorPolicy, id: &str, source_amount: u32) -> SettleFxCorridor {
         let event = FeedEvent {
             feed_id: policy.oracle_feed_id.clone(),
@@ -2001,7 +1903,6 @@ mod tests {
             },
         }
     }
-
     fn fund_fx_corridor(
         stx: &mut StateTransaction<'_, '_>,
         policy: &FxCorridorPolicy,
@@ -2016,7 +1917,6 @@ mod tests {
         .execute(&policy.owner, stx)
         .expect("FX corridor owner funding succeeds");
     }
-
     #[test]
     fn fx_corridor_settles_exact_rate_atomically_and_rejects_replay() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
@@ -2038,7 +1938,6 @@ mod tests {
             .clone()
             .execute(&ALICE_ID, &mut stx)
             .expect("FX settlement succeeds");
-
         let balance = |id: AssetId| {
             stx.world
                 .assets
@@ -2093,13 +1992,11 @@ mod tests {
         assert_eq!(details.source_amount, Quantity::from(10_u32));
         assert_eq!(details.destination_amount, Quantity::from(760_u32));
         assert_eq!(details.recipient, BOB_ID.clone());
-
         let replay = instruction
             .execute(&ALICE_ID, &mut stx)
             .expect_err("settlement id replay must fail");
         assert!(replay.to_string().contains("already been committed"));
     }
-
     #[test]
     fn fx_corridor_debits_only_the_signing_source_account() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
@@ -2116,13 +2013,11 @@ mod tests {
         stx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
             [0xF2; iroha_crypto::Hash::LENGTH],
         ));
-
         let instruction = fx_settlement(&policy, "fx_authority_source", 2);
         instruction
             .clone()
             .execute(&BOB_ID, &mut stx)
             .expect("the signed source account may spend only its own balance");
-
         let source_balance = |account: &AccountId| {
             stx.world
                 .assets
@@ -2150,7 +2045,6 @@ mod tests {
             BOB_ID.clone(),
         );
     }
-
     #[test]
     fn fx_corridor_recipient_alias_domain_is_required_and_unambiguous() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
@@ -2164,7 +2058,6 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .expect("policy registration succeeds");
         fund_fx_corridor(&mut stx, &policy, 1_000);
-
         stx.world.remove_account_alias_bindings_for_account(&BOB_ID);
         assert_smart_contract_parameter_contains(
             fx_settlement(&policy, "fx_missing_recipient_domain", 1)
@@ -2172,7 +2065,6 @@ mod tests {
                 .expect_err("recipient without an allowed alias must fail"),
             "no alias in an allowed destination domain",
         );
-
         for (label, domain) in [("hbl_recipient", "hbl"), ("ubl_recipient", "ubl")] {
             insert_active_fx_alias(
                 &mut stx,
@@ -2193,7 +2085,6 @@ mod tests {
             "alias domain is ambiguous",
         );
     }
-
     #[test]
     fn fx_corridor_rejects_recipient_bound_only_to_non_allowed_destination_domain() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
@@ -2207,7 +2098,6 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .expect("policy registration succeeds");
         fund_fx_corridor(&mut stx, &policy, 1_000);
-
         stx.world.remove_account_alias_bindings_for_account(&BOB_ID);
         insert_active_fx_alias(
             &mut stx,
@@ -2220,7 +2110,6 @@ mod tests {
             ),
             BOB_ID.clone(),
         );
-
         assert_smart_contract_parameter_contains(
             fx_settlement(&policy, "fx_non_allowed_recipient_domain", 1)
                 .execute(&ALICE_ID, &mut stx)
@@ -2228,7 +2117,6 @@ mod tests {
             "no alias in an allowed destination domain",
         );
     }
-
     #[test]
     fn fx_corridor_rejects_policy_and_signed_intent_mismatches() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
@@ -2242,7 +2130,6 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .expect("policy registration succeeds");
         fund_fx_corridor(&mut stx, &policy, 1_000);
-
         let mut wrong_revision = fx_settlement(&policy, "fx_wrong_revision", 1);
         wrong_revision.expected_policy_revision = 2;
         assert_smart_contract_parameter_contains(
@@ -2251,7 +2138,6 @@ mod tests {
                 .expect_err("revision mismatch must fail"),
             "revision mismatch",
         );
-
         let mut wrong_asset = fx_settlement(&policy, "fx_wrong_asset", 1);
         wrong_asset.source_asset_definition_id = policy.destination_asset_definition_id.clone();
         assert_smart_contract_parameter_contains(
@@ -2260,7 +2146,6 @@ mod tests {
                 .expect_err("asset mismatch must fail"),
             "do not match",
         );
-
         let mut reserve_recipient = fx_settlement(&policy, "fx_reserve_recipient", 1);
         reserve_recipient.recipient = super::fx_corridor_escrow_account(&stx, &policy);
         assert_smart_contract_parameter_contains(
@@ -2269,7 +2154,6 @@ mod tests {
                 .expect_err("reserve recipient must fail"),
             "recipient",
         );
-
         let delegated_funding = FundFxCorridorEscrow {
             policy_id: policy.policy_id.clone(),
             expected_policy_revision: policy.revision,
@@ -2283,7 +2167,6 @@ mod tests {
                 .to_string()
                 .contains("exact FX corridor owner")
         );
-
         let mut wrong_oracle = fx_settlement(&policy, "fx_wrong_oracle", 1);
         wrong_oracle.oracle_evidence.event_hash = iroha_crypto::HashOf::new(&FeedEvent {
             feed_id: policy.oracle_feed_id.clone(),
@@ -2298,7 +2181,6 @@ mod tests {
                 .expect_err("wrong exact oracle event must fail"),
             "latest retained event",
         );
-
         let mut revision_two = policy.clone();
         revision_two.revision = 3;
         assert_smart_contract_parameter_contains(
@@ -2309,7 +2191,6 @@ mod tests {
             .expect_err("policy revision must be monotonic"),
             "must be 2",
         );
-
         let mut redirected_owner = policy.clone();
         redirected_owner.revision = 2;
         redirected_owner.owner = ALICE_ID.clone();
@@ -2321,7 +2202,6 @@ mod tests {
             .expect_err("a policy revision cannot redirect corridor custody ownership"),
             "immutable",
         );
-
         let mut disabled = policy.clone();
         disabled.revision = 2;
         disabled.enabled = false;
@@ -2355,7 +2235,6 @@ mod tests {
             .execute(&disabled.owner, &mut stx)
             .expect("the exact owner may refund its disabled corridor reserve");
     }
-
     #[test]
     fn fx_corridor_protocol_escrow_rejects_generic_manager_drain_and_supply_changes() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
@@ -2380,7 +2259,6 @@ mod tests {
         stx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
             [0xF3; iroha_crypto::Hash::LENGTH],
         ));
-
         let escrow_asset = AssetId::with_scope(
             policy.destination_asset_definition_id.clone(),
             escrow_account.clone(),
@@ -2401,7 +2279,6 @@ mod tests {
         stx.world
             .account_permissions
             .insert(ALICE_ID.clone(), manager_permissions);
-
         for error in [
             Transfer::asset_quantity(escrow_asset.clone(), 1_u32, ALICE_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
@@ -2434,7 +2311,6 @@ mod tests {
             Quantity::from(1_000_u32),
         );
     }
-
     #[test]
     fn fx_corridor_requires_fresh_oracle_evidence_and_enforces_exposure_velocity() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
@@ -2454,7 +2330,6 @@ mod tests {
                 .expect_err("oracle evidence older than the governed maximum must fail"),
             "stale",
         );
-
         let (state, mut policy) = fx_corridor_state(10, 1_000, 76, true);
         policy.max_source_amount_per_settlement = Quantity::one();
         policy.max_settlements_per_window = 1;
@@ -2474,7 +2349,6 @@ mod tests {
                 .expect_err("per-settlement source exposure must be enforced"),
             "per-settlement exposure",
         );
-
         stx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
             [0xF4; iroha_crypto::Hash::LENGTH],
         ));
@@ -2488,7 +2362,6 @@ mod tests {
             "velocity limit",
         );
     }
-
     #[test]
     fn fx_corridor_policy_static_invariants_fail_closed() {
         let (_, policy) = fx_corridor_state(1, 76, 76, true);
@@ -2508,14 +2381,12 @@ mod tests {
         let mut zero_oracle_age = policy;
         zero_oracle_age.max_oracle_age_ms = 0;
         cases.push(zero_oracle_age);
-
         assert!(
             cases
                 .iter()
                 .all(|candidate| candidate.invariant_error().is_some())
         );
     }
-
     #[test]
     fn fx_corridor_preflight_preserves_source_on_non_exact_or_unfunded_payout() {
         let (state, policy) = fx_corridor_state(10, 1, 76, true);
@@ -2537,7 +2408,6 @@ mod tests {
                 .expect_err("signed output mismatch must fail"),
             "signed expected destination amount",
         );
-
         let source_id = AssetId::with_scope(
             policy.source_asset_definition_id.clone(),
             ALICE_ID.clone(),
@@ -2547,7 +2417,6 @@ mod tests {
             **stx.world.assets.get(&source_id).expect("source unchanged"),
             Quantity::from(10_u32)
         );
-
         let mut policy_two = policy.clone();
         policy_two.revision = 2;
         SetFxCorridorPolicy {
@@ -2567,7 +2436,6 @@ mod tests {
             Quantity::from(10_u32)
         );
     }
-
     #[test]
     fn fx_corridor_rejects_wrong_dataspace_and_frozen_reserve_without_partial_effects() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
@@ -2622,7 +2490,6 @@ mod tests {
             .clone()
             .execute(&ALICE_ID, &mut stx)
             .expect_err("ordinary transfer controls must gate the native payout leg");
-
         let source_id = AssetId::with_scope(
             policy.source_asset_definition_id.clone(),
             ALICE_ID.clone(),
@@ -2659,17 +2526,14 @@ mod tests {
             "a preflight rejection must not record a committed settlement receipt",
         );
     }
-
     fn settlement_state_with_balances(
         delivery_balance: Quantity,
         payment_balance: Quantity,
     ) -> (State, AssetDefinitionId, AssetDefinitionId) {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
-
         let delivery_asset_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
@@ -2680,7 +2544,6 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             );
-
         let delivery_def = AssetDefinition::numeric(
             delivery_asset_id.clone(),
             "bond".to_owned(),
@@ -2695,7 +2558,6 @@ mod tests {
             None,
         )
         .build(&ALICE_ID);
-
         let alice_delivery = Asset::new(
             AssetId::new(delivery_asset_id.clone(), ALICE_ID.clone()),
             delivery_balance,
@@ -2704,7 +2566,6 @@ mod tests {
             AssetId::new(payment_asset_id.clone(), BOB_ID.clone()),
             payment_balance,
         );
-
         let world = World::with_assets(
             [domain],
             [alice, bob],
@@ -2712,23 +2573,18 @@ mod tests {
             [alice_delivery, bob_payment],
             [],
         );
-
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
-
         (state, delivery_asset_id, payment_asset_id)
     }
-
     fn settlement_state_with_payment_spec(
         payment_spec: NumericSpec,
     ) -> (State, AssetDefinitionId, AssetDefinitionId) {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
-
         let delivery_asset_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
@@ -2739,7 +2595,6 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             );
-
         let delivery_def = AssetDefinition::new(
             delivery_asset_id.clone(),
             "bond".to_owned(),
@@ -2756,7 +2611,6 @@ mod tests {
             None,
         )
         .build(&ALICE_ID);
-
         let alice_delivery = Asset::new(
             AssetId::new(delivery_asset_id.clone(), ALICE_ID.clone()),
             Quantity::from(5_u32),
@@ -2765,7 +2619,6 @@ mod tests {
             AssetId::new(payment_asset_id.clone(), BOB_ID.clone()),
             Quantity::from(2_u32),
         );
-
         let world = World::with_assets(
             [domain],
             [alice, bob],
@@ -2773,14 +2626,11 @@ mod tests {
             [alice_delivery, bob_payment],
             [],
         );
-
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
-
         (state, delivery_asset_id, payment_asset_id)
     }
-
     #[test]
     fn dvp_rejects_unilateral_counterparty_debit() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
@@ -2803,7 +2653,6 @@ mod tests {
             ),
             SettlementPlan::default(),
         );
-
         let error = instruction
             .execute(&ALICE_ID, &mut stx)
             .expect_err("initiator must not debit an unconsenting counterparty");
@@ -2820,7 +2669,6 @@ mod tests {
             Quantity::from(1_000_u32)
         );
     }
-
     #[test]
     fn pvp_rejects_unilateral_counterparty_debit() {
         let (state, primary_def_id, counter_def_id) = settlement_state();
@@ -2843,7 +2691,6 @@ mod tests {
             ),
             SettlementPlan::default(),
         );
-
         let error = instruction
             .execute(&ALICE_ID, &mut stx)
             .expect_err("initiator must not debit an unconsenting FX counterparty");
@@ -2860,14 +2707,12 @@ mod tests {
             Quantity::from(1_000_u32)
         );
     }
-
     #[test]
     fn failed_bilateral_attempts_do_not_grow_consensus_state_or_pin_entities() {
         let (state, _delivery_def_id, payment_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let victim_account = CARPENTER_ID.clone();
         Register::account(NewAccount::new(victim_account.clone()))
             .execute(&ALICE_ID, &mut stx)
@@ -2884,7 +2729,6 @@ mod tests {
         ))
         .execute(&ALICE_ID, &mut stx)
         .expect("register otherwise-unreferenced victim asset definition");
-
         let settlement_id: SettlementId = "failed_pin_attempt".parse().expect("settlement id");
         let instruction = DvpIsi::new(
             settlement_id.clone(),
@@ -2905,7 +2749,6 @@ mod tests {
         let receipts_before = stx.world.settlement_receipts.len();
         let events_before = stx.world.internal_event_buf.len();
         let transcripts_before = stx.pending_transfer_transcript_count_for_testing();
-
         for _ in 0..16 {
             let error = instruction
                 .clone()
@@ -2913,7 +2756,6 @@ mod tests {
                 .expect_err("unconsented victim debit must fail");
             assert!(error.to_string().contains("exact consent"));
         }
-
         assert_eq!(
             stx.world.settlement_receipts.len(),
             receipts_before,
@@ -2930,7 +2772,6 @@ mod tests {
             transcripts_before,
             "failed attempts must not stage transfer transcripts"
         );
-
         Unregister::asset_definition(victim_definition.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("failed settlement references must not pin an asset definition");
@@ -2945,7 +2786,6 @@ mod tests {
         );
         assert!(stx.world.accounts.get(&victim_account).is_none());
     }
-
     #[test]
     fn dvp_consent_is_bound_to_exact_terms_and_settlement_id_is_one_shot() {
         let (state, delivery_def_id, payment_def_id) =
@@ -2971,7 +2811,6 @@ mod tests {
         );
         grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
         let settlement_id = instruction.settlement_id().clone();
-
         let mut changed_terms = instruction.clone();
         changed_terms.payment_leg.quantity = Quantity::from(501_u32);
         let error = changed_terms
@@ -2982,7 +2821,6 @@ mod tests {
             stx.world.settlement_receipts.get(&settlement_id).is_none(),
             "a rejected substitution must not consume or persist the settlement id"
         );
-
         instruction
             .clone()
             .execute(&ALICE_ID, &mut stx)
@@ -3015,7 +2853,6 @@ mod tests {
             "replay must not stage another transfer transcript"
         );
     }
-
     #[test]
     fn dvp_respects_counterparty_outgoing_freeze() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
@@ -3044,7 +2881,6 @@ mod tests {
         control.outgoing_availability = AssetTransferAvailability::Disabled;
         crate::smartcontracts::isi::asset::isi::update_control_record(&mut stx, &BOB_ID, control)
             .expect("install outgoing freeze");
-
         let error = instruction
             .execute(&ALICE_ID, &mut stx)
             .expect_err("settlement must honor the counterparty freeze");
@@ -3063,16 +2899,13 @@ mod tests {
             Quantity::from(1_000_u32)
         );
     }
-
     #[test]
     fn dvp_moves_assets_after_exact_counterparty_consent() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let settlement_id: SettlementId = "dvp_trade".parse().unwrap();
-
         let delivery_leg = SettlementLeg::new(
             delivery_def_id.clone(),
             Quantity::from(10_u32),
@@ -3085,12 +2918,10 @@ mod tests {
             BOB_ID.clone(),
             ALICE_ID.clone(),
         );
-
         let plan = SettlementPlan::new(
             SettlementExecutionOrder::PaymentThenDelivery,
             SettlementAtomicity::AllOrNothing,
         );
-
         let instruction = DvpIsi {
             settlement_id: settlement_id.clone(),
             delivery_leg,
@@ -3129,7 +2960,6 @@ mod tests {
             transcripts_before + 1,
             "both bilateral deltas must share one atomic FastPQ transcript"
         );
-
         let alice_bond = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
         let bob_bond = AssetId::new(delivery_def_id.clone(), BOB_ID.clone());
         assert!(
@@ -3140,7 +2970,6 @@ mod tests {
             **stx.world.assets.get(&bob_bond).expect("buyer bond balance"),
             Quantity::from(10_u32)
         );
-
         let alice_cash = AssetId::new(payment_def_id.clone(), ALICE_ID.clone());
         let bob_cash = AssetId::new(payment_def_id.clone(), BOB_ID.clone());
         assert_eq!(
@@ -3155,7 +2984,6 @@ mod tests {
             stx.world.assets.get(&bob_cash).is_none(),
             "payment asset should be debited from the payer"
         );
-
         let receipt = stx
             .world
             .settlement_receipts
@@ -3173,7 +3001,6 @@ mod tests {
             vec![SettlementLegRole::Delivery, SettlementLegRole::Payment]
         );
     }
-
     #[test]
     fn dvp_persists_balances_after_commit_in_dataspace_context() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
@@ -3183,7 +3010,6 @@ mod tests {
         let dataspace = DataSpaceId::new(7);
         stx.current_dataspace_id = Some(dataspace);
         stx.world.current_dataspace_id = Some(dataspace);
-
         let instruction = DvpIsi {
             settlement_id: "dvp_persisted".parse().unwrap(),
             delivery_leg: SettlementLeg::new(
@@ -3208,18 +3034,14 @@ mod tests {
         instruction
             .execute(&ALICE_ID, &mut stx)
             .expect("DvP execution succeeds");
-
         stx.apply();
         state_block.commit().expect("commit state block");
-
         let view = state.view();
         let world = view.world();
-
         let alice_bond = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
         let bob_bond = AssetId::new(delivery_def_id.clone(), BOB_ID.clone());
         let alice_cash = AssetId::new(payment_def_id.clone(), ALICE_ID.clone());
         let bob_cash = AssetId::new(payment_def_id.clone(), BOB_ID.clone());
-
         assert!(
             world.asset(&alice_bond).is_err(),
             "seller delivery balance should stay debited after commit"
@@ -3247,7 +3069,6 @@ mod tests {
             "payer cash balance should stay debited after commit"
         );
     }
-
     #[test]
     fn dvp_persists_partial_debits_after_commit() {
         let (state, delivery_def_id, payment_def_id) =
@@ -3257,7 +3078,6 @@ mod tests {
         let mut stx = state_block.transaction();
         stx.current_dataspace_id = Some(DataSpaceId::new(7));
         stx.world.current_dataspace_id = Some(DataSpaceId::new(7));
-
         let instruction = DvpIsi {
             settlement_id: "dvp_partial_commit".parse().unwrap(),
             delivery_leg: SettlementLeg::new(
@@ -3282,18 +3102,14 @@ mod tests {
         instruction
             .execute(&ALICE_ID, &mut stx)
             .expect("DvP execution succeeds");
-
         stx.apply();
         state_block.commit().expect("commit state block");
-
         let view = state.view();
         let world = view.world();
-
         let alice_bond = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
         let bob_bond = AssetId::new(delivery_def_id.clone(), BOB_ID.clone());
         let alice_cash = AssetId::new(payment_def_id.clone(), ALICE_ID.clone());
         let bob_cash = AssetId::new(payment_def_id.clone(), BOB_ID.clone());
-
         assert_eq!(
             world
                 .asset(&alice_bond)
@@ -3331,7 +3147,6 @@ mod tests {
             Quantity::from(155_u32),
         );
     }
-
     #[test]
     fn dvp_uses_the_exact_counterparty_authorized_dataspace_balance() {
         let ds1 = DataSpaceId::new(7);
@@ -3340,7 +3155,6 @@ mod tests {
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
-
         let delivery_def_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "bond".parse().expect("delivery asset name"),
@@ -3349,7 +3163,6 @@ mod tests {
             domain_id.clone(),
             "usd".parse().expect("payment asset name"),
         );
-
         let delivery_def = {
             let __asset_definition_id = delivery_def_id.clone();
             AssetDefinition::numeric(
@@ -3370,7 +3183,6 @@ mod tests {
             )
         }
         .build(&ALICE_ID);
-
         let alice_delivery = Asset::new(
             AssetId::with_scope(
                 delivery_def_id.clone(),
@@ -3387,7 +3199,6 @@ mod tests {
             ),
             Quantity::from(1_000_u32),
         );
-
         let world = World::with_assets(
             [domain],
             [alice, bob],
@@ -3398,13 +3209,11 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         stx.current_dataspace_id = Some(ds1);
         stx.world.current_dataspace_id = Some(ds1);
-
         let instruction = DvpIsi {
             settlement_id: "dvp_cross_scope".parse().unwrap(),
             delivery_leg: SettlementLeg::new(
@@ -3464,12 +3273,10 @@ mod tests {
             ),
             Quantity::from(1_000_u32),
         );
-
         grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
         instruction
             .execute(&ALICE_ID, &mut stx)
             .expect("explicit consent may authorize the exact counterparty dataspace balance");
-
         let alice_delivery_ds1 = AssetId::with_scope(
             delivery_def_id.clone(),
             ALICE_ID.clone(),
@@ -3490,7 +3297,6 @@ mod tests {
             BOB_ID.clone(),
             iroha_data_model::asset::AssetBalanceScope::Dataspace(ds2),
         );
-
         assert_eq!(
             stx.world
                 .asset(&alice_delivery_ds1)
@@ -3528,7 +3334,6 @@ mod tests {
             Quantity::zero(),
         );
     }
-
     #[test]
     fn dvp_commit_first_is_rejected_without_moving_assets() {
         let (state, delivery_def_id, payment_def_id) =
@@ -3536,9 +3341,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let settlement_id: SettlementId = "dvp_commit_first".parse().unwrap();
-
         let instruction = DvpIsi {
             settlement_id: settlement_id.clone(),
             delivery_leg: SettlementLeg::new(
@@ -3560,7 +3363,6 @@ mod tests {
             metadata: Metadata::default(),
         };
         grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
-
         let err = instruction
             .execute(&ALICE_ID, &mut stx)
             .expect_err("partial-commit DvP must be rejected");
@@ -3568,7 +3370,6 @@ mod tests {
             err.to_string().contains("AllOrNothing"),
             "unexpected error: {err:?}"
         );
-
         let alice_delivery = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
         let bob_delivery = AssetId::new(delivery_def_id.clone(), BOB_ID.clone());
         assert_eq!(
@@ -3581,7 +3382,6 @@ mod tests {
             "seller balance must remain unchanged"
         );
         assert!(stx.world.assets.get(&bob_delivery).is_none());
-
         let bob_cash = AssetId::new(payment_def_id.clone(), BOB_ID.clone());
         let alice_cash = AssetId::new(payment_def_id.clone(), ALICE_ID.clone());
         assert_eq!(
@@ -3591,7 +3391,6 @@ mod tests {
         );
         assert!(stx.world.assets.get(&alice_cash).is_none());
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn dvp_commit_second_is_rejected_without_moving_assets() {
@@ -3600,11 +3399,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let alice_delivery = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
         let bob_delivery = AssetId::new(delivery_def_id.clone(), BOB_ID.clone());
         let bob_cash = AssetId::new(payment_def_id.clone(), BOB_ID.clone());
-
         let initial_alice_delivery = stx
             .world
             .assets
@@ -3625,9 +3422,7 @@ mod tests {
             .cloned()
             .map(Owned::into_inner)
             .expect("payer cash balance");
-
         let settlement_id: SettlementId = "dvp_commit_second".parse().unwrap();
-
         let instruction = DvpIsi {
             settlement_id: settlement_id.clone(),
             delivery_leg: SettlementLeg::new(
@@ -3649,7 +3444,6 @@ mod tests {
             metadata: Metadata::default(),
         };
         grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
-
         let err = instruction
             .execute(&ALICE_ID, &mut stx)
             .expect_err("partial-commit DvP must be rejected");
@@ -3657,7 +3451,6 @@ mod tests {
             err.to_string().contains("AllOrNothing"),
             "unexpected error: {err:?}"
         );
-
         let alice_after = stx
             .world
             .assets
@@ -3677,7 +3470,6 @@ mod tests {
             .cloned()
             .map(Owned::into_inner)
             .expect("payer cash balance");
-
         assert_eq!(
             alice_after, initial_alice_delivery,
             "delivery leg should be rolled back for commit-second"
@@ -3690,13 +3482,11 @@ mod tests {
             bob_cash_after, initial_bob_cash,
             "payer cash balance should be unaffected"
         );
-
         assert!(
             stx.world.settlement_receipts.get(&settlement_id).is_none(),
             "a rejected DvP must not create consensus receipt state"
         );
     }
-
     #[test]
     fn dvp_holding_limit_rejects_first_leg_without_mutation() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
@@ -3704,7 +3494,6 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
         set_test_holding_limit(&mut stx, &BOB_ID, &delivery_def_id, Quantity::zero());
-
         let alice_delivery = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
         let bob_delivery = AssetId::new(delivery_def_id.clone(), BOB_ID.clone());
         let bob_payment = AssetId::new(payment_def_id.clone(), BOB_ID.clone());
@@ -3712,7 +3501,6 @@ mod tests {
         let external_events_before = stx.world.external_event_buf.len();
         let internal_events_before = stx.world.internal_event_buf.len();
         let settlement_id: SettlementId = "dvp_holding_first".parse().unwrap();
-
         let instruction = DvpIsi {
             settlement_id: settlement_id.clone(),
             delivery_leg: SettlementLeg::new(
@@ -3738,7 +3526,6 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect_err("first destination holding limit must reject DvP");
         assert_holding_limit_error(&error);
-
         assert_eq!(
             asset_balance_or_zero(&stx, &alice_delivery),
             Quantity::from(10_u32)
@@ -3754,13 +3541,11 @@ mod tests {
         );
         assert_eq!(stx.world.external_event_buf.len(), external_events_before);
         assert_eq!(stx.world.internal_event_buf.len(), internal_events_before);
-
         assert!(
             stx.world.settlement_receipts.get(&settlement_id).is_none(),
             "a rejected DvP must not create consensus receipt state"
         );
     }
-
     #[test]
     fn dvp_holding_limit_rolls_back_first_leg_for_atomic_plans() {
         for atomicity in [SettlementAtomicity::AllOrNothing] {
@@ -3770,7 +3555,6 @@ mod tests {
             let mut stx = block.transaction();
             set_test_holding_limit(&mut stx, &ALICE_ID, &delivery_def_id, Quantity::zero());
             set_test_holding_limit(&mut stx, &ALICE_ID, &payment_def_id, Quantity::zero());
-
             let alice_delivery = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
             let bob_delivery = AssetId::new(delivery_def_id.clone(), BOB_ID.clone());
             let bob_payment = AssetId::new(payment_def_id.clone(), BOB_ID.clone());
@@ -3786,7 +3570,6 @@ mod tests {
             let external_events_before = stx.world.external_event_buf.len();
             let internal_events_before = stx.world.internal_event_buf.len();
             let settlement_id: SettlementId = "dvp_holding_second".parse().unwrap();
-
             let instruction = DvpIsi {
                 settlement_id: settlement_id.clone(),
                 delivery_leg: SettlementLeg::new(
@@ -3809,7 +3592,6 @@ mod tests {
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("second destination holding limit must reject DvP");
             assert_holding_limit_error(&error);
-
             assert_eq!(
                 asset_balance_or_zero(&stx, &alice_delivery),
                 Quantity::from(10_u32),
@@ -3838,21 +3620,18 @@ mod tests {
                     .is_some_and(|assets| !assets.contains(&bob_delivery)),
                 "rollback must remove the created destination from holder indexes"
             );
-
             assert!(
                 stx.world.settlement_receipts.get(&settlement_id).is_none(),
                 "a rejected DvP must not create consensus receipt state"
             );
         }
     }
-
     #[test]
     fn dvp_failure_preserves_balances() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let alice_bond_id = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
         let bob_cash_id = AssetId::new(payment_def_id.clone(), BOB_ID.clone());
         let initial_alice_bond = stx
@@ -3869,9 +3648,7 @@ mod tests {
             .cloned()
             .map(Owned::into_inner)
             .expect("bob payment balance");
-
         let settlement_id: SettlementId = "dvp_fail".parse().unwrap();
-
         let instruction = DvpIsi {
             settlement_id: settlement_id.clone(),
             delivery_leg: SettlementLeg::new(
@@ -3890,7 +3667,6 @@ mod tests {
             metadata: Metadata::default(),
         };
         grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
-
         let err = instruction
             .execute(&ALICE_ID, &mut stx)
             .expect_err("insufficient payment leg must fail");
@@ -3902,7 +3678,6 @@ mod tests {
             ),
             "unexpected error: {err:?}"
         );
-
         let alice_after = stx
             .world
             .assets
@@ -3915,7 +3690,6 @@ mod tests {
             .get(&bob_cash_id)
             .cloned()
             .map_or_else(Quantity::zero, Owned::into_inner);
-
         assert_eq!(
             alice_after, initial_alice_bond,
             "seller bond balance changed"
@@ -3924,22 +3698,18 @@ mod tests {
             bob_cash_after, initial_bob_cash,
             "payer cash balance changed"
         );
-
         assert!(
             stx.world.settlement_receipts.get(&settlement_id).is_none(),
             "an insufficient-funds DvP must not create consensus receipt state"
         );
     }
-
     #[test]
     fn pvp_swaps_currencies_after_exact_counterparty_consent() {
         let (state, primary_def_id, counter_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let settlement_id: SettlementId = "pvp_fx".parse().unwrap();
-
         let primary_leg = SettlementLeg::new(
             primary_def_id.clone(),
             Quantity::from(10_u32),
@@ -3952,7 +3722,6 @@ mod tests {
             BOB_ID.clone(),
             ALICE_ID.clone(),
         );
-
         let instruction = PvpIsi {
             settlement_id: settlement_id.clone(),
             primary_leg,
@@ -3965,7 +3734,6 @@ mod tests {
             .clone()
             .execute(&ALICE_ID, &mut stx)
             .expect("PvP execution succeeds");
-
         let alice_primary = AssetId::new(primary_def_id.clone(), ALICE_ID.clone());
         let bob_primary = AssetId::new(primary_def_id.clone(), BOB_ID.clone());
         assert!(
@@ -3980,7 +3748,6 @@ mod tests {
                 .expect("counterparty primary balance"),
             Quantity::from(10_u32)
         );
-
         let alice_counter = AssetId::new(counter_def_id.clone(), ALICE_ID.clone());
         let bob_counter = AssetId::new(counter_def_id.clone(), BOB_ID.clone());
         assert_eq!(
@@ -3991,7 +3758,6 @@ mod tests {
                 .expect("initiator counter balance"),
             Quantity::from(100_u32)
         );
-
         let receipt = stx
             .world
             .settlement_receipts
@@ -4025,14 +3791,12 @@ mod tests {
             "PvP replay must not replace or append to the committed receipt"
         );
     }
-
     #[test]
     fn pvp_failure_preserves_balances() {
         let (state, primary_def_id, counter_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let alice_primary_id = AssetId::new(primary_def_id.clone(), ALICE_ID.clone());
         let bob_counter_id = AssetId::new(counter_def_id.clone(), BOB_ID.clone());
         let alice_primary_before = stx
@@ -4049,9 +3813,7 @@ mod tests {
             .cloned()
             .map(Owned::into_inner)
             .expect("counterparty counter balance");
-
         let settlement_id: SettlementId = "pvp_fail".parse().unwrap();
-
         let instruction = PvpIsi {
             settlement_id: settlement_id.clone(),
             primary_leg: SettlementLeg::new(
@@ -4070,7 +3832,6 @@ mod tests {
             metadata: Metadata::default(),
         };
         grant_pvp_consent(&mut stx, &ALICE_ID, &instruction);
-
         let err = instruction
             .execute(&ALICE_ID, &mut stx)
             .expect_err("insufficient counter leg must fail");
@@ -4082,7 +3843,6 @@ mod tests {
             ),
             "unexpected error: {err:?}"
         );
-
         let alice_primary_after = stx
             .world
             .assets
@@ -4095,16 +3855,13 @@ mod tests {
             .get(&bob_counter_id)
             .cloned()
             .map_or_else(Quantity::zero, Owned::into_inner);
-
         assert_eq!(alice_primary_after, alice_primary_before);
         assert_eq!(bob_counter_after, bob_counter_before);
-
         assert!(
             stx.world.settlement_receipts.get(&settlement_id).is_none(),
             "an insufficient-funds PvP must not create consensus receipt state"
         );
     }
-
     #[test]
     fn pvp_holding_limit_rejects_first_leg_without_mutation() {
         let (state, primary_def_id, counter_def_id) = settlement_state();
@@ -4112,13 +3869,11 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
         set_test_holding_limit(&mut stx, &BOB_ID, &primary_def_id, Quantity::zero());
-
         let alice_primary = AssetId::new(primary_def_id.clone(), ALICE_ID.clone());
         let bob_primary = AssetId::new(primary_def_id.clone(), BOB_ID.clone());
         let bob_counter = AssetId::new(counter_def_id.clone(), BOB_ID.clone());
         let alice_counter = AssetId::new(counter_def_id.clone(), ALICE_ID.clone());
         let settlement_id: SettlementId = "pvp_holding_first".parse().unwrap();
-
         let instruction = PvpIsi {
             settlement_id: settlement_id.clone(),
             primary_leg: SettlementLeg::new(
@@ -4141,7 +3896,6 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect_err("first destination holding limit must reject PvP");
         assert_holding_limit_error(&error);
-
         assert_eq!(
             asset_balance_or_zero(&stx, &alice_primary),
             Quantity::from(10_u32)
@@ -4160,7 +3914,6 @@ mod tests {
             "a rejected PvP must not create consensus receipt state"
         );
     }
-
     #[test]
     fn pvp_commit_first_is_rejected_without_moving_assets() {
         let (state, primary_def_id, counter_def_id) = settlement_state();
@@ -4168,13 +3921,11 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
         set_test_holding_limit(&mut stx, &ALICE_ID, &counter_def_id, Quantity::zero());
-
         let alice_primary = AssetId::new(primary_def_id.clone(), ALICE_ID.clone());
         let bob_primary = AssetId::new(primary_def_id.clone(), BOB_ID.clone());
         let bob_counter = AssetId::new(counter_def_id.clone(), BOB_ID.clone());
         let alice_counter = AssetId::new(counter_def_id.clone(), ALICE_ID.clone());
         let settlement_id: SettlementId = "pvp_holding_commit_first".parse().unwrap();
-
         let instruction = PvpIsi {
             settlement_id: settlement_id.clone(),
             primary_leg: SettlementLeg::new(
@@ -4203,7 +3954,6 @@ mod tests {
             error.to_string().contains("AllOrNothing"),
             "unexpected error: {error}"
         );
-
         assert_eq!(
             asset_balance_or_zero(&stx, &alice_primary),
             Quantity::from(10_u32)
@@ -4217,20 +3967,17 @@ mod tests {
             asset_balance_or_zero(&stx, &alice_counter),
             Quantity::zero()
         );
-
         assert!(
             stx.world.settlement_receipts.get(&settlement_id).is_none(),
             "a rejected PvP must not create consensus receipt state"
         );
     }
-
     #[test]
     fn admission_validate_dvp_rejects_insufficient_funds() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let instruction = DvpIsi {
             settlement_id: "dvp_insufficient".parse().unwrap(),
             delivery_leg: SettlementLeg::new(
@@ -4249,7 +3996,6 @@ mod tests {
             metadata: Metadata::default(),
         };
         grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
-
         let err = super::admission_validate_dvp(&ALICE_ID, &mut stx, &instruction)
             .expect_err("admission guard should reject insufficient payment leg");
         assert!(
@@ -4261,14 +4007,12 @@ mod tests {
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn admission_validate_dvp_allows_funded_trade() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let instruction = DvpIsi {
             settlement_id: "dvp_ok".parse().unwrap(),
             delivery_leg: SettlementLeg::new(
@@ -4287,18 +4031,15 @@ mod tests {
             metadata: Metadata::default(),
         };
         grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
-
         super::admission_validate_dvp(&ALICE_ID, &mut stx, &instruction)
             .expect("admission guard should allow funded trades");
     }
-
     #[test]
     fn admission_validate_pvp_rejects_insufficient_funds() {
         let (state, primary_def_id, counter_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let instruction = PvpIsi {
             settlement_id: "pvp_insufficient".parse().unwrap(),
             primary_leg: SettlementLeg::new(
@@ -4317,7 +4058,6 @@ mod tests {
             metadata: Metadata::default(),
         };
         grant_pvp_consent(&mut stx, &ALICE_ID, &instruction);
-
         let err = super::admission_validate_pvp(&ALICE_ID, &mut stx, &instruction)
             .expect_err("admission guard should reject insufficient counter leg");
         assert!(
@@ -4329,14 +4069,12 @@ mod tests {
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn admission_validate_pvp_allows_funded_fx() {
         let (state, primary_def_id, counter_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let instruction = PvpIsi {
             settlement_id: "pvp_ok".parse().unwrap(),
             primary_leg: SettlementLeg::new(
@@ -4355,15 +4093,12 @@ mod tests {
             metadata: Metadata::default(),
         };
         grant_pvp_consent(&mut stx, &ALICE_ID, &instruction);
-
         super::admission_validate_pvp(&ALICE_ID, &mut stx, &instruction)
             .expect("admission guard should allow funded FX settlements");
     }
-
     #[test]
     fn settlement_failure_reason_classifies_errors() {
         use iroha_data_model::{isi::error::MathError, query::error::FindError};
-
         let insufficient = InstructionExecutionError::InvariantViolation(
             "settlement leg requires 10 but only 5 is available".into(),
         );
@@ -4371,12 +4106,10 @@ mod tests {
             super::settlement_failure_reason(&insufficient),
             "insufficient_funds"
         );
-
         let zero_qty = InstructionExecutionError::InvariantViolation(
             "settlement legs must specify non-zero quantities".into(),
         );
         assert_eq!(super::settlement_failure_reason(&zero_qty), "zero_quantity");
-
         let mismatch = InstructionExecutionError::InvariantViolation(
             "DvP counterparties must be reciprocal across delivery and payment legs".into(),
         );
@@ -4384,7 +4117,6 @@ mod tests {
             super::settlement_failure_reason(&mismatch),
             "counterparty_mismatch"
         );
-
         let unsupported = InstructionExecutionError::InvariantViolation(
             "settlement atomicity policy `CommitFirstLeg` is not supported yet".into(),
         );
@@ -4399,17 +4131,14 @@ mod tests {
             super::settlement_failure_reason(&partial_bilateral),
             "unsupported_policy"
         );
-
         let find_missing = InstructionExecutionError::Find(FindError::Account(ALICE_ID.clone()));
         assert_eq!(
             super::settlement_failure_reason(&find_missing),
             "missing_entity"
         );
-
         let math = InstructionExecutionError::Math(MathError::Overflow);
         assert_eq!(super::settlement_failure_reason(&math), "math_error");
     }
-
     #[test]
     fn settlement_leg_quantity_boundaries_reject_negative_and_zero_values() {
         let definition_id = AssetDefinitionId::derive_from_components(
@@ -4417,14 +4146,12 @@ mod tests {
             "usd".parse().expect("asset name"),
         );
         assert!(Quantity::try_from_numeric(Numeric::new(-1, 0)).is_err());
-
         let leg = SettlementLeg::new(
             definition_id,
             Quantity::zero(),
             ALICE_ID.clone(),
             BOB_ID.clone(),
         );
-
         assert!(matches!(
             super::ensure_leg_quantity(&leg),
             Err(InstructionExecutionError::InvariantViolation(_))

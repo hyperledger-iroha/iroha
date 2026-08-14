@@ -2,7 +2,6 @@ use ivm::{
     SimdChoice, clear_forced_simd, clear_thread_forced_simd, forced_simd_test_lock,
     set_thread_forced_simd, simd_backend, simd_choice, vector_supported,
 };
-
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn test_vector_detection_x86() {
@@ -16,7 +15,6 @@ fn test_vector_detection_x86() {
     let expected = has_avx512_path || has_avx2 || has_sse2;
     assert_eq!(vector_supported(), expected);
 }
-
 #[cfg(target_arch = "aarch64")]
 #[test]
 fn test_vector_detection_aarch64() {
@@ -26,7 +24,6 @@ fn test_vector_detection_aarch64() {
     let expected = std::arch::is_aarch64_feature_detected!("neon");
     assert_eq!(vector_supported(), expected);
 }
-
 #[test]
 fn test_backend_matches_support() {
     let _simd_guard = forced_simd_test_lock();
@@ -36,7 +33,6 @@ fn test_backend_matches_support() {
     let backend = simd_backend();
     assert_eq!(supported, backend != "scalar");
 }
-
 #[test]
 fn test_simd_choice_consistency() {
     let _simd_guard = forced_simd_test_lock();
@@ -64,7 +60,6 @@ fn test_simd_choice_consistency() {
     let expected = SimdChoice::Scalar;
     assert_eq!(choice, expected);
 }
-
 #[test]
 fn test_force_simd_override_scalar() {
     let _simd_guard = forced_simd_test_lock();
@@ -72,7 +67,6 @@ fn test_force_simd_override_scalar() {
     assert_eq!(simd_choice(), SimdChoice::Scalar);
     set_thread_forced_simd(prev);
 }
-
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn test_force_simd_override_avx2() {
@@ -86,7 +80,6 @@ fn test_force_simd_override_avx2() {
     assert_eq!(simd_choice(), expected);
     set_thread_forced_simd(prev);
 }
-
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn test_force_simd_override_avx512() {
@@ -101,7 +94,6 @@ fn test_force_simd_override_avx512() {
     assert_eq!(simd_choice(), expected);
     set_thread_forced_simd(prev);
 }
-
 #[cfg(target_arch = "aarch64")]
 #[test]
 fn test_force_simd_override_neon() {
@@ -115,7 +107,6 @@ fn test_force_simd_override_neon() {
     assert_eq!(simd_choice(), expected);
     set_thread_forced_simd(prev);
 }
-
 #[test]
 fn test_clear_forced_simd_restore_detection() {
     let _simd_guard = forced_simd_test_lock();

@@ -1,5 +1,4 @@
 // Reservation-journal codec, bound, crash, and replay regression tests.
-
 #[test]
 fn frame_decoder_rejects_an_advertised_alternate_layout() {
     let frame = LaneQueueReservationJournalFrameV6::PutBatch(vec![record(18, 3)]);
@@ -16,7 +15,6 @@ fn frame_decoder_rejects_an_advertised_alternate_layout() {
             .expect("ordinary Norito accepts the advertised alternate layout"),
         frame
     );
-
     let limits =
         LaneQueueReservationJournalLimits::new(u64::MAX, u64::from(u32::MAX), u64::MAX, usize::MAX);
     let error = decode_frame(&alternate, limits)
@@ -27,7 +25,6 @@ fn frame_decoder_rejects_an_advertised_alternate_layout() {
         "lane reservation journal payload is not canonically encoded"
     );
 }
-
 #[test]
 fn configured_frame_limit_rejects_valid_oversized_payload_before_replay() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -60,7 +57,6 @@ fn configured_frame_limit_rejects_valid_oversized_payload_before_replay() {
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn configured_file_limit_rejects_oversized_startup_journal_before_scan() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -87,7 +83,6 @@ fn configured_file_limit_rejects_oversized_startup_journal_before_scan() {
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn replay_rejects_more_distinct_owners_than_configured_queue_capacity() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -124,7 +119,6 @@ fn replay_rejects_more_distinct_owners_than_configured_queue_capacity() {
         "a later release must not excuse an over-limit replay prefix: {error}"
     );
 }
-
 #[test]
 fn invalid_runtime_limits_fail_before_creating_a_journal() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -153,7 +147,6 @@ fn invalid_runtime_limits_fail_before_creating_a_journal() {
         );
     }
 }
-
 #[test]
 fn every_execution_group_rejects_4097_members_before_mutating_replay_state() {
     let oversized = (0..=MAX_MERGE_EXECUTION_ENTRYPOINTS)
@@ -165,7 +158,6 @@ fn every_execution_group_rejects_4097_members_before_mutating_replay_state() {
     let mut oversized_completion_barrier =
         release_completion(core::slice::from_ref(&oversized[0]), 3);
     oversized_completion_barrier.barrier = oversized_barrier.clone();
-
     for (label, frame) in [
         (
             "put",
@@ -242,7 +234,6 @@ fn every_execution_group_rejects_4097_members_before_mutating_replay_state() {
         assert!(completed_releases.is_empty());
     }
 }
-
 #[test]
 fn every_snapshot_top_level_vector_obeys_configured_owner_capacity() {
     let first = indexed_record(0);
@@ -304,7 +295,6 @@ fn every_snapshot_top_level_vector_obeys_configured_owner_capacity() {
         );
     }
 }
-
 #[test]
 fn runtime_owner_limit_rejects_before_write_and_remains_reopenable() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -319,7 +309,6 @@ fn runtime_owner_limit_rejects_before_write_and_remains_reopenable() {
         .put_batch(vec![first.clone()])
         .expect("first owner fits configured capacity");
     let durable_len = fs::metadata(&path).expect("journal metadata").len();
-
     let error = journal
         .put_batch(vec![second])
         .expect_err("second distinct owner must fail before append");
@@ -331,12 +320,10 @@ fn runtime_owner_limit_rejects_before_write_and_remains_reopenable() {
         "owner admission rejection must not extend the durable file"
     );
     drop(journal);
-
     let (_journal, replay, _seal) = LaneQueueReservationJournal::open_with_limits(&path, limits)
         .expect("the admitted prefix must remain restartable");
     assert_eq!(replay.records(), &[first]);
 }
-
 #[test]
 fn stale_forget_release_does_not_undercount_completed_ownership() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -360,7 +347,6 @@ fn stale_forget_release_does_not_undercount_completed_ownership() {
         .forget_release(stale)
         .expect("stale full barrier identity is a durable no-op");
     let durable_len = fs::metadata(&path).expect("journal metadata").len();
-
     let error = journal
         .put_batch(vec![second])
         .expect_err("completed ownership must still consume the configured slot");
@@ -371,12 +357,10 @@ fn stale_forget_release_does_not_undercount_completed_ownership() {
         "an under-capacity rejection must precede durable append"
     );
     drop(journal);
-
     let (_journal, replay, _seal) = LaneQueueReservationJournal::open_with_limits(&path, limits)
         .expect("the exact completed owner remains replayable");
     assert_eq!(replay.completed_releases(), &[completion]);
 }
-
 #[test]
 fn replay_rejects_same_length_valid_content_mutation_on_retained_append_handle() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -401,7 +385,6 @@ fn replay_rejects_same_length_valid_content_mutation_on_retained_append_handle()
         "fixture journals must have the same exact length"
     );
     fs::write(&path, &original).expect("write original journal");
-
     let len = u64::try_from(original.len()).expect("fixture length fits u64");
     let limits = LaneQueueReservationJournalLimits::new(len, u64::from(u32::MAX), len, 8);
     let mut file = open_regular_append(&path).expect("open retained append handle");
@@ -429,7 +412,6 @@ fn replay_rejects_same_length_valid_content_mutation_on_retained_append_handle()
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn ownership_limit_is_checked_before_applying_the_exceeding_prefix() {
     let first = indexed_record(0);
@@ -455,12 +437,10 @@ fn ownership_limit_is_checked_before_applying_the_exceeding_prefix() {
     assert!(release_barriers.is_empty());
     assert!(completed_releases.is_empty());
 }
-
 #[test]
 fn ownership_union_counts_tombstones_and_completed_releases_exactly_once() {
     let first = indexed_record(0);
     let second = indexed_record(1);
-
     let mut live = vec![first.clone()];
     let mut committed = Vec::new();
     let mut plan_tombstoned = Vec::new();
@@ -483,7 +463,6 @@ fn ownership_union_counts_tombstones_and_completed_releases_exactly_once() {
     );
     assert_eq!(live, vec![first.clone()]);
     assert!(committed.is_empty());
-
     let prepared_for_first = release_barrier(core::slice::from_ref(&first), 4);
     apply_frame_with_ownership_limit(
         &mut live,
@@ -497,7 +476,6 @@ fn ownership_union_counts_tombstones_and_completed_releases_exactly_once() {
     .expect("a prepared view of the same live owner must not be double-counted");
     assert_eq!(live, vec![first.clone()]);
     assert_eq!(prepared, vec![prepared_for_first]);
-
     let sentinel = indexed_record(2);
     let mut current_live = vec![sentinel.clone()];
     let second_completion = release_completion(core::slice::from_ref(&second), 5);
@@ -524,7 +502,6 @@ fn ownership_union_counts_tombstones_and_completed_releases_exactly_once() {
         "an over-limit snapshot union must be rejected before replacing current replay state"
     );
 }
-
 #[test]
 fn deterministic_file_budget_exhaustion_does_not_poison_or_extend_journal() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -544,7 +521,6 @@ fn deterministic_file_budget_exhaustion_does_not_poison_or_extend_journal() {
     let (mut journal, replay, _seal) = LaneQueueReservationJournal::open_with_limits(&path, limits)
         .expect("create exactly bootstrap-sized journal");
     assert!(replay.records().is_empty());
-
     for _ in 0..2 {
         let error = journal
             .put_batch(vec![record(1, 1)])
@@ -564,7 +540,6 @@ fn deterministic_file_budget_exhaustion_does_not_poison_or_extend_journal() {
         );
     }
 }
-
 #[test]
 fn decoder_allocation_ceiling_tracks_configured_frame_budget() {
     let configured = 128_u64 * 1024 * 1024;
@@ -587,7 +562,6 @@ fn decoder_allocation_ceiling_tracks_configured_frame_budget() {
         "near-limit hostile frames must not receive the full calibrated multiplier"
     );
 }
-
 fn apply_unprotected_frame(
     records: &mut Vec<LaneQueueReservationRecordV5>,
     committed: &mut Vec<LaneQueueReservationKeyV2>,
@@ -602,7 +576,6 @@ fn apply_unprotected_frame(
         frame,
     )
 }
-
 #[test]
 fn crash_at_every_operation_frame_write_boundary_is_prefix_atomic() {
     let first = record(1, 1);
@@ -654,7 +627,6 @@ fn crash_at_every_operation_frame_write_boundary_is_prefix_atomic() {
             LaneQueueReservationJournalFrameV6::ForgetRelease(barrier),
         ),
     ];
-
     for (label, operation) in cases {
         let operation_frame = encode_frame(&operation).expect("encode operation frame");
         for written in 0..operation_frame.len() {
@@ -671,7 +643,6 @@ fn crash_at_every_operation_frame_write_boundary_is_prefix_atomic() {
             file.write_all(&operation_frame[..written])
                 .expect("write partial operation frame");
             drop(file);
-
             let (_journal, replay) = LaneQueueReservationJournal::open(&path, u64::MAX)
                 .expect("repair truncated boundary");
             assert_eq!(
@@ -685,7 +656,6 @@ fn crash_at_every_operation_frame_write_boundary_is_prefix_atomic() {
         }
     }
 }
-
 #[test]
 fn corrupt_complete_suffix_fails_closed_without_truncation() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -710,7 +680,6 @@ fn corrupt_complete_suffix_fails_closed_without_truncation() {
     file.write_all(&corrupt).expect("write corrupt second");
     file.write_all(&third_frame).expect("write trailing third");
     drop(file);
-
     let corrupt_len = path.metadata().expect("metadata").len();
     assert!(
         LaneQueueReservationJournal::open(&path, u64::MAX).is_err(),
@@ -722,7 +691,6 @@ fn corrupt_complete_suffix_fails_closed_without_truncation() {
         "fail-closed recovery must retain corrupt evidence for operator repair"
     );
 }
-
 #[test]
 fn legacy_and_unknown_frame_magic_are_rejected_without_rewrite() {
     for (label, magic) in [
@@ -737,7 +705,6 @@ fn legacy_and_unknown_frame_magic_are_rejected_without_rewrite() {
         let mut bytes = magic.to_vec();
         bytes.extend_from_slice(&0_u32.to_le_bytes());
         fs::write(&path, &bytes).expect("write legacy or unknown header");
-
         assert!(
             LaneQueueReservationJournal::open(&path, u64::MAX).is_err(),
             "{label} journal magic must fail closed"
@@ -749,7 +716,6 @@ fn legacy_and_unknown_frame_magic_are_rejected_without_rewrite() {
         );
     }
 }
-
 #[test]
 fn complete_v5_envelope_is_hard_rejected_without_decode_or_rewrite() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -760,7 +726,6 @@ fn complete_v5_envelope_is_hard_rejected_without_decode_or_rewrite() {
     let version_end = version_start + 2;
     bytes[version_start..version_end].copy_from_slice(&5_u16.to_le_bytes());
     fs::write(&path, &bytes).expect("write complete retired V5 envelope");
-
     let error = LaneQueueReservationJournal::open(&path, u64::MAX)
         .err()
         .expect("V5 envelope must fail before payload decoding");
@@ -777,7 +742,6 @@ fn complete_v5_envelope_is_hard_rejected_without_decode_or_rewrite() {
         "V5 evidence must never be migrated, truncated, or rewritten"
     );
 }
-
 #[test]
 fn complete_v3_frames_are_rejected_without_repair_or_rewrite() {
     let mut legacy_record = record(1, 1);
@@ -791,13 +755,11 @@ fn complete_v3_frames_are_rejected_without_repair_or_rewrite() {
             legacy_record.key,
         )),
     ];
-
     for (index, bytes) in frames.into_iter().enumerate() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join(format!("v3-frame-{index}.norito"));
         fs::write(&path, &bytes).expect("write complete V3 frame fixture");
         let original_len = path.metadata().expect("V3 metadata").len();
-
         let error = LaneQueueReservationJournal::open(&path, u64::MAX)
             .err()
             .expect("a complete V3 frame must fail closed");
@@ -818,14 +780,12 @@ fn complete_v3_frames_are_rejected_without_repair_or_rewrite() {
         );
     }
 }
-
 #[test]
 fn complete_v4_bootstrap_is_rejected_without_repair_or_rewrite() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("v4-bootstrap.norito");
     let bytes = encode_v4_bootstrap_fixture();
     fs::write(&path, &bytes).expect("write complete V4 bootstrap fixture");
-
     let error = LaneQueueReservationJournal::open(&path, u64::MAX)
         .err()
         .expect("a complete V4 bootstrap must fail closed");
@@ -840,7 +800,6 @@ fn complete_v4_bootstrap_is_rejected_without_repair_or_rewrite() {
         "complete V4 evidence must not be rewritten as V6"
     );
 }
-
 #[test]
 fn v6_envelope_rejects_unsupported_record_versions_without_rewrite() {
     for unsupported_version in [3, 4, 6] {
@@ -858,7 +817,6 @@ fn v6_envelope_rejects_unsupported_record_versions_without_rewrite() {
         let mut journal_bytes = encode_frame(&bootstrap_frame()).expect("encode V6 bootstrap");
         journal_bytes.extend_from_slice(&bytes);
         fs::write(&path, &journal_bytes).expect("write version-mismatched frame");
-
         let error = LaneQueueReservationJournal::open(&path, u64::MAX)
             .err()
             .expect("unsupported record inside a V6 envelope must fail closed");
@@ -870,7 +828,6 @@ fn v6_envelope_rejects_unsupported_record_versions_without_rewrite() {
         );
     }
 }
-
 #[test]
 fn v6_envelope_rejects_mismatched_reservation_identity_without_rewrite() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -885,7 +842,6 @@ fn v6_envelope_rejects_mismatched_reservation_identity_without_rewrite() {
     let mut journal_bytes = encode_frame(&bootstrap_frame()).expect("encode V6 bootstrap");
     journal_bytes.extend_from_slice(&frame);
     fs::write(&path, &journal_bytes).expect("write mismatched reservation identity");
-
     let error = LaneQueueReservationJournal::open(&path, u64::MAX)
         .err()
         .expect("mismatched reservation identity must fail closed");
@@ -902,7 +858,6 @@ fn v6_envelope_rejects_mismatched_reservation_identity_without_rewrite() {
         "mismatched reservation evidence must not be rewritten",
     );
 }
-
 #[test]
 fn v6_release_batch_replay_is_atomic_idempotent_and_exact() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -911,7 +866,6 @@ fn v6_release_batch_replay_is_atomic_idempotent_and_exact() {
     let second = record(2, 1);
     let third = record(3, 1);
     let released = vec![first.key, third.key];
-
     {
         let (mut journal, replay) =
             LaneQueueReservationJournal::open(&path, u64::MAX).expect("create V6 journal");
@@ -923,7 +877,6 @@ fn v6_release_batch_replay_is_atomic_idempotent_and_exact() {
             .release_batch(released.clone())
             .expect("atomically release two exact reservations");
     }
-
     let (mut journal, replay) =
         LaneQueueReservationJournal::open(&path, u64::MAX).expect("replay V6 release batch");
     assert_eq!(
@@ -931,7 +884,6 @@ fn v6_release_batch_replay_is_atomic_idempotent_and_exact() {
         core::slice::from_ref(&second),
         "one V6 ReleaseBatch frame must remove every exact member"
     );
-
     let mut replacement = first;
     replacement.key.routing_plan_digest = Hash::new(b"replacement-plan");
     replacement.key.proposal_identity_hash = Hash::new(b"replacement-proposal");
@@ -945,7 +897,6 @@ fn v6_release_batch_replay_is_atomic_idempotent_and_exact() {
         .release_batch(released)
         .expect("repeat stale exact release batch idempotently");
     drop(journal);
-
     let (_journal, replay) =
         LaneQueueReservationJournal::open(&path, u64::MAX).expect("replay exact V6 history");
     assert_eq!(
@@ -957,7 +908,6 @@ fn v6_release_batch_replay_is_atomic_idempotent_and_exact() {
     assert!(replay.release_barriers().is_empty());
     assert!(replay.completed_releases().is_empty());
 }
-
 #[test]
 fn duplicate_exact_replay_is_idempotent_but_conflicting_owner_is_rejected() {
     let exact = record(1, 1);
@@ -970,7 +920,6 @@ fn duplicate_exact_replay_is_idempotent_but_conflicting_owner_is_rejected() {
     )
     .expect("duplicate exact record");
     assert_eq!(records, vec![exact.clone()]);
-
     let mut conflicting = exact;
     conflicting.key.reservation_owner_hash = Hash::new(b"conflicting-owner");
     assert!(
@@ -981,7 +930,6 @@ fn duplicate_exact_replay_is_idempotent_but_conflicting_owner_is_rejected() {
         )
         .is_err()
     );
-
     let mut conflicting_plan = records[0].clone();
     conflicting_plan.key.routing_plan_digest = Hash::new(b"conflicting-plan");
     assert!(
@@ -992,7 +940,6 @@ fn duplicate_exact_replay_is_idempotent_but_conflicting_owner_is_rejected() {
         )
         .is_err()
     );
-
     let mut conflicting_fifo_order = record(3, 1);
     conflicting_fifo_order.fifo_order = records[0].fifo_order;
     assert!(
@@ -1004,7 +951,6 @@ fn duplicate_exact_replay_is_idempotent_but_conflicting_owner_is_rejected() {
         .is_err(),
         "one durable FIFO ordinal cannot identify two transaction hashes"
     );
-
     let mut participant = record(2, 1);
     participant.key.coordinator_leg.role = RouteLegRole::Participant;
     assert!(
@@ -1017,17 +963,14 @@ fn duplicate_exact_replay_is_idempotent_but_conflicting_owner_is_rejected() {
         "participant legs must never become full-transaction reservations"
     );
 }
-
 #[test]
 fn reservation_record_rejects_mismatched_primary_hashes_atomically() {
     let existing = record(1, 1);
     let mut records = vec![existing.clone()];
     let mut committed = vec![existing.key];
-
     let mut mismatched = record(2, 1);
     mismatched.key.signed_transaction_hash =
         typed_hash::<SignedTransaction>(b"mismatched-signed-transaction");
-
     let records_before = records.clone();
     let committed_before = committed.clone();
     let error = apply_unprotected_frame(
@@ -1046,7 +989,6 @@ fn reservation_record_rejects_mismatched_primary_hashes_atomically() {
         "failed validation must not mutate commit barriers",
     );
 }
-
 #[test]
 fn ordered_release_survives_every_restart_phase_and_exact_retries() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1054,7 +996,6 @@ fn ordered_release_survives_every_restart_phase_and_exact_retries() {
     let records = vec![record(1, 1), record(2, 1)];
     let barrier = release_barrier(&records, 1);
     let completion = release_completion(&records, 1);
-
     {
         let (mut journal, replay) =
             LaneQueueReservationJournal::open(&path, u64::MAX).expect("create journal");
@@ -1074,7 +1015,6 @@ fn ordered_release_survives_every_restart_phase_and_exact_retries() {
     assert_eq!(replay.records(), records.as_slice());
     assert_eq!(replay.release_barriers(), &[barrier.clone()]);
     assert!(replay.completed_releases().is_empty());
-
     journal
         .complete_release(completion.clone())
         .expect("complete ordered release");
@@ -1085,13 +1025,11 @@ fn ordered_release_survives_every_restart_phase_and_exact_retries() {
         .prepare_release(barrier.clone())
         .expect("retry prepare after completion");
     drop(journal);
-
     let (mut journal, replay) =
         LaneQueueReservationJournal::open(&path, u64::MAX).expect("replay completed release");
     assert!(replay.records().is_empty());
     assert!(replay.release_barriers().is_empty());
     assert_eq!(replay.completed_releases(), &[completion]);
-
     journal
         .forget_release(barrier.clone())
         .expect("forget exact completion");
@@ -1099,7 +1037,6 @@ fn ordered_release_survives_every_restart_phase_and_exact_retries() {
         .forget_release(barrier)
         .expect("repeat exact forget");
     drop(journal);
-
     let (_journal, replay) =
         LaneQueueReservationJournal::open(&path, u64::MAX).expect("replay forgotten release");
     assert!(replay.records().is_empty());

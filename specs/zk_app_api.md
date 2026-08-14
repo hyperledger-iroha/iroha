@@ -331,7 +331,7 @@ Configuration must be set via `iroha_config` files. Environment variable overrid
 
 The body-admission count and read deadline are shared with the proof-bearing SCCP bridge submission routes. SCCP retains its stricter endpoint-specific byte ceilings; the shared gate prevents slow or concurrent uploads from reserving heavy verification capacity before their bounded bodies are complete.
 
-When the worker exhausts the byte or time budget, it stops scheduling new attachments, increments `torii_zk_prover_budget_exhausted_total{reason="bytes|time"}`, and leaves the remainder queued for the next scan. Live gauges expose the current workload via `torii_zk_prover_inflight` (attachments in progress), `torii_zk_prover_pending` (attachments yet to be scheduled), and the most recent cycle statistics: `torii_zk_prover_last_scan_bytes` and `torii_zk_prover_last_scan_ms`.
+When the worker exhausts the byte, time, or bounded directory-work budget, it stops scheduling new attachments, increments `torii_zk_prover_budget_exhausted_total{reason="bytes|time|work"}`, and leaves the remainder queued for the next scan. Discovery retains only a scan-budget-derived window, resumes its directory cursor across cycles, canonically orders that window instead of collecting the complete multi-tenant attachment population, and reserves the latter half of the scan deadline for scheduled work. Live gauges expose the current workload via `torii_zk_prover_inflight` (attachments in progress), `torii_zk_prover_pending` (discovered pending entries plus one sentinel while the sweep is incomplete), and the most recent cycle statistics: `torii_zk_prover_last_scan_bytes` and `torii_zk_prover_last_scan_ms`.
 
 ### Operations & Dashboards
 

@@ -1,8 +1,6 @@
 //! Logic related to opaque pointer handles and functions that are common to multiple handle types
-
 /// Type of the handle id
 pub type Id = u8;
-
 /// Implement [`crate::Handle`] for given types with the given initial handle id. Ids are
 /// assigned incrementally to every type in the macro invocation. Check the following example:
 ///
@@ -37,12 +35,10 @@ macro_rules! handles {
         unsafe impl $crate::Handle for $ty {
             const ID: $crate::handle::Id = $id;
         }
-
         $crate::handles! {$id + 1, $( $other ),*}
     };
     ( $id:expr, $(,)? ) => {};
 }
-
 /// Generate FFI equivalent implementation of the requested trait method (e.g. Clone, Eq, Ord).
 ///
 /// One `[prefix]__<fn_name>` is generated per invocation of this macro. User should ensure that
@@ -102,7 +98,6 @@ macro_rules! def_ffi_fns {
                         return Err($crate::FfiReturn::UnknownHandle);
                     },
                 }
-
                 Ok(())
             })
         }
@@ -124,7 +119,6 @@ macro_rules! def_ffi_fns {
                 match $crate::FfiConvert::try_from_ffi(handle_id, &mut ())? {
                     $( <$other as $crate::Handle>::ID => {
                         let default_value = Default::default();
-
                         let out_ptr = out_ptr.cast::<<$other as $crate::FfiType>::ReprC>();
                         <$other as $crate::FfiOutPtrWrite>::write_out(default_value, out_ptr);
                     } )+
@@ -133,7 +127,6 @@ macro_rules! def_ffi_fns {
                         return Err($crate::FfiReturn::UnknownHandle);
                     },
                 }
-
                 Ok(())
             })
         }
@@ -159,13 +152,10 @@ macro_rules! def_ffi_fns {
                             left_handle_ptr as <&$other as $crate::FfiType>::ReprC,
                             right_handle_ptr as <&$other as $crate::FfiType>::ReprC
                         );
-
                         let mut lhandle_store = Default::default();
                         let mut rhandle_store = Default::default();
-
                         let lhandle: &$other = $crate::FfiConvert::try_from_ffi(lhandle_ptr, &mut lhandle_store)?;
                         let rhandle: &$other = $crate::FfiConvert::try_from_ffi(rhandle_ptr, &mut rhandle_store)?;
-
                         <bool as $crate::FfiOutPtrWrite>::write_out(lhandle == rhandle, out_ptr);
                     } )+
                     unknown_id => {
@@ -173,7 +163,6 @@ macro_rules! def_ffi_fns {
                         return Err($crate::FfiReturn::UnknownHandle);
                     },
                 }
-
                 Ok(())
             })
         }
@@ -199,13 +188,10 @@ macro_rules! def_ffi_fns {
                             left_handle_ptr as <&$other as $crate::FfiType>::ReprC,
                             right_handle_ptr as <&$other as $crate::FfiType>::ReprC
                         );
-
                         let mut lhandle_store = Default::default();
                         let mut rhandle_store = Default::default();
-
                         let lhandle: &$other = $crate::FfiConvert::try_from_ffi(lhandle_ptr, &mut lhandle_store)?;
                         let rhandle: &$other = $crate::FfiConvert::try_from_ffi(rhandle_ptr, &mut rhandle_store)?;
-
                         <core::cmp::Ordering as $crate::FfiOutPtrWrite>::write_out(lhandle.cmp(rhandle), out_ptr);
                     } )+
                     unknown_id => {
@@ -213,7 +199,6 @@ macro_rules! def_ffi_fns {
                         return Err($crate::FfiReturn::UnknownHandle);
                     },
                 }
-
                 Ok(())
             })
         }
@@ -241,7 +226,6 @@ macro_rules! def_ffi_fns {
                         return Err($crate::FfiReturn::UnknownHandle);
                     },
                 }
-
                 Ok(())
             })
         }
@@ -257,17 +241,14 @@ macro_rules! def_ffi_fns {
             if ptr.is_null() {
                 return $crate::FfiReturn::ArgIsNull;
             }
-
             if let Ok(layout) = core::alloc::Layout::from_size_align(size, align) {
                 std::alloc::dealloc(ptr, layout);
                 return $crate::FfiReturn::Ok;
             }
-
             $crate::FfiReturn::TrapRepresentation
         }
     };
 }
-
 /// Generate the declaration of FFI functions for the requested trait method (e.g. Clone, Eq, Ord)
 #[macro_export]
 macro_rules! decl_ffi_fns {

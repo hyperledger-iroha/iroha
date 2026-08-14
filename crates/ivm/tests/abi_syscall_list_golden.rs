@@ -1,10 +1,8 @@
 //! Golden test for the ABI syscall list ordering and contents.
 //! The canonical list below is owned by `gen_syscalls_doc`.
-
 #[test]
 fn abi_syscall_list_matches_golden() {
     use ivm::syscalls as S;
-
     // Keep the ordering sorted by canonical syscall number.
     // BEGIN GENERATED ABI V1 SYSCALL LIST
     let golden: &[u32] = &[
@@ -232,7 +230,6 @@ fn abi_syscall_list_matches_golden() {
         S::SYSCALL_ACCOUNT_RECOVERY_FINALIZE,
     ];
     // END GENERATED ABI V1 SYSCALL LIST
-
     let actual = ivm::syscalls::abi_syscall_list();
     assert_strictly_increasing(actual);
     assert_eq!(
@@ -249,7 +246,6 @@ fn abi_syscall_list_matches_golden() {
     // Sanity: the function is also referenced via constants to ensure names are in scope
     assert!(golden.contains(&S::SYSCALL_EXIT));
 }
-
 fn assert_strictly_increasing(values: &[u32]) {
     for window in values.windows(2) {
         if let [prev, next] = window {

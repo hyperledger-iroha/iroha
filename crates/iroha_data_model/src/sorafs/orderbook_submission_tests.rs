@@ -2,16 +2,13 @@ use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey};
 use norito::core::{DecodeFlagsGuard, header_flags};
 #[rustfmt::skip]
 use sorafs_manifest::{OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1, OrderbookSettlementReceiptFieldsV1, XorQuantity, build_signed_orderbook_order_cancel_bytes_ed25519_v1, build_signed_orderbook_order_request_bytes_ed25519_v1, build_signed_orderbook_settlement_receipt_bytes_ed25519_v1, decode_order_request_v1};
-
 use super::*;
 #[rustfmt::skip]
 use crate::{account::{AccountAddress, AccountId, address::ChainDiscriminantGuard}, block::BlockHeader, isi::InstructionBox, transaction::{FeePaymentIntent, IvmBytecode, TransactionBuilder, TransactionSubmissionReceiptPayload}};
-
 type Error = SorafsOrderbookSubmissionValidationError;
 type Route = SorafsOrderbookSubmissionRouteV1;
 const NETWORK_SEED: u8 = 0x71;
 const DISCRIMINANT: u16 = 369;
-
 #[rustfmt::skip]
 fn keypair(seed: u8) -> KeyPair { KeyPair::from_private_key(PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32]).unwrap()).unwrap() }
 #[rustfmt::skip]
@@ -20,7 +17,6 @@ fn network(seed: u8) -> NetworkId { NetworkId::from_genesis_hash(HashOf::<BlockH
 fn amount(micro: u128) -> XorQuantity { XorQuantity::try_from_micro(micro).unwrap() }
 #[rustfmt::skip]
 fn owner(seed: u8) -> Vec<u8> { AccountAddress::from_account_id(&AccountId::new(keypair(seed).public_key().clone())).unwrap().to_i105_for_discriminant(DISCRIMINANT).unwrap().into_bytes() }
-
 #[rustfmt::skip]
 fn order_instruction(owner_account: Vec<u8>, seed: u8) -> InstructionBox {
     SubmitSorafsOrderbookOrder::new(build_signed_orderbook_order_request_bytes_ed25519_v1(OrderbookOrderRequestFieldsV1 {
@@ -29,7 +25,6 @@ fn order_instruction(owner_account: Vec<u8>, seed: u8) -> InstructionBox {
         maker_fee_bps: 1, taker_fee_bps: 2,
     }, &[seed; 32]).unwrap(), [0xA5; 32]).into()
 }
-
 #[rustfmt::skip]
 fn instruction(route: Route, seed: u8) -> InstructionBox {
     match route {
@@ -44,7 +39,6 @@ fn instruction(route: Route, seed: u8) -> InstructionBox {
         }, &[seed; 32]).unwrap(), [0xA5; 32]).into(),
     }
 }
-
 #[rustfmt::skip]
 fn signed(instructions: Vec<InstructionBox>, seed: u8) -> SignedTransaction {
     let keys = keypair(seed);
@@ -59,7 +53,6 @@ fn ivm(size: usize, seed: u8) -> SignedTransaction {
 }
 #[rustfmt::skip]
 fn inspect(transaction: &SignedTransaction, route: Route) -> Result<ValidatedSorafsOrderbookSubmissionV1, Error> { inspect_sorafs_orderbook_submission_for_discriminant_v1(&transaction.encode_wire_v1().unwrap(), route, &network(NETWORK_SEED), DISCRIMINANT) }
-
 macro_rules! reject {
     ($transaction:expr, $route:expr, $error:expr) => {
         assert_eq!(inspect(&$transaction, $route), Err($error))
@@ -78,7 +71,6 @@ macro_rules! reject_wire {
         )
     };
 }
-
 #[test]
 #[allow(deprecated)]
 #[rustfmt::skip]
@@ -91,7 +83,6 @@ fn all_routes_validate_and_derive_equal_authoritative_identities() {
         assert_eq!(validated.identity.tx_hash, validated.identity.signed_transaction_hash);
     }
 }
-
 #[test]
 #[rustfmt::skip]
 fn transaction_wire_network_route_signature_and_shape_fail_closed() {
@@ -108,7 +99,6 @@ fn transaction_wire_network_route_signature_and_shape_fail_closed() {
     reject!(signed(vec![item.clone(), item], 0x24), Route::SubmitOrder, Error::NonSingletonInstruction);
     reject!(ivm(1, 0x24), Route::SubmitOrder, Error::NonInstructionExecutable);
 }
-
 #[test]
 #[rustfmt::skip]
 fn embedded_signature_owner_and_discriminant_fail_closed() {
@@ -132,7 +122,6 @@ fn embedded_signature_owner_and_discriminant_fail_closed() {
     let alternate = signed(vec![order_instruction(alternate, seed)], seed);
     assert_eq!(inspect_sorafs_orderbook_submission_for_discriminant_v1(&alternate.encode_wire_v1().unwrap(), Route::SubmitOrder, &network(NETWORK_SEED), DISCRIMINANT), Err(Error::InvalidEmbeddedPayload));
 }
-
 #[test]
 #[rustfmt::skip]
 fn alternate_layout_and_framed_overhead_are_rejected() {
@@ -151,7 +140,6 @@ fn alternate_layout_and_framed_overhead_are_rejected() {
     assert!(norito::to_bytes(&near_cap).unwrap().len() > ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1);
     reject!(near_cap, Route::SubmitOrder, Error::TransactionTooLarge);
 }
-
 #[rustfmt::skip]
 fn receipt_fixture() -> (SorafsOrderbookSubmissionIdentityV1, KeyPair, TransactionSubmissionReceipt) {
     let identity = inspect(&transaction(Route::SubmitOrder, 0x27), Route::SubmitOrder).unwrap().identity; let signer = keypair(0x61);
@@ -170,7 +158,6 @@ macro_rules! reject_receipt {
         )
     };
 }
-
 #[test]
 #[rustfmt::skip]
 fn receipt_is_exact_signed_pinned_bounded_and_binds_every_identity() {

@@ -1,14 +1,10 @@
 //! Sanity tests for documentation fixtures.
-
 use std::convert::TryFrom;
-
 use norito::json::{self, Value};
-
 fn parse_hex_u64(s: &str) -> u64 {
     let s = s.trim_start_matches("0x");
     u64::from_str_radix(s, 16).expect("hex u64")
 }
-
 fn parse_hex_words(s: &str) -> Vec<u8> {
     let s = s.trim_start_matches("0x");
     assert!(s.len().is_multiple_of(2), "even-length hex");
@@ -17,9 +13,7 @@ fn parse_hex_words(s: &str) -> Vec<u8> {
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex byte"))
         .collect()
 }
-
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
-
 fn add_mod(a: u64, b: u64) -> u64 {
     let sum = a.wrapping_add(b);
     if sum >= GOLDILOCKS_MODULUS {
@@ -28,18 +22,15 @@ fn add_mod(a: u64, b: u64) -> u64 {
         sum
     }
 }
-
 fn mul_mod(a: u64, b: u64) -> u64 {
     let product = u128::from(a) * u128::from(b);
     let reduced = product % u128::from(GOLDILOCKS_MODULUS);
     u64::try_from(reduced).expect("product fits field element")
 }
-
 #[test]
 fn lookup_grand_product_fixture_matches() {
     let contents = include_str!("fixtures/lookup_grand_product.json");
     let root: Value = json::from_str(contents).expect("parse lookup JSON");
-
     let gamma = parse_hex_u64(
         root.get("gamma")
             .and_then(Value::as_str)
@@ -71,7 +62,6 @@ fn lookup_grand_product_fixture_matches() {
     );
     assert_eq!(z, table_product, "grand product matches table");
 }
-
 #[test]
 fn smt_update_fixture_has_consistent_shape() {
     let contents = include_str!("fixtures/smt_update.json");

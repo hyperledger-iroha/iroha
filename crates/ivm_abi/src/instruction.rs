@@ -4,7 +4,6 @@
 //! opcode families (arithmetic, memory, control-flow, crypto and zero-knowledge
 //! helpers) and provide convenience extractors for working with raw instruction
 //! words. ISO20022 opcode values remain reserved for future releases.
-
 /// Helpers for the canonical wide encoding (8-bit opcode + three 8-bit operands).
 pub mod wide {
     /// Arithmetic and logic operations (register-register).
@@ -24,7 +23,6 @@ pub mod wide {
         pub const NEG: u8 = 0x0D;
         pub const SEQ: u8 = 0x0E;
         pub const SNE: u8 = 0x0F;
-
         pub const MUL: u8 = 0x10;
         pub const MULH: u8 = 0x11;
         pub const MULHU: u8 = 0x12;
@@ -33,7 +31,6 @@ pub mod wide {
         pub const DIVU: u8 = 0x15;
         pub const REM: u8 = 0x16;
         pub const REMU: u8 = 0x17;
-
         pub const ROTL: u8 = 0x18;
         pub const ROTR: u8 = 0x19;
         pub const POPCNT: u8 = 0x1A;
@@ -46,7 +43,6 @@ pub mod wide {
         pub const DIV_CEIL: u8 = 0x28;
         pub const GCD: u8 = 0x29;
         pub const MEAN: u8 = 0x2A;
-
         pub const ADDI: u8 = 0x20;
         pub const ANDI: u8 = 0x21;
         pub const ORI: u8 = 0x22;
@@ -55,7 +51,6 @@ pub mod wide {
         pub const ROTL_IMM: u8 = 0x25;
         pub const ROTR_IMM: u8 = 0x26;
     }
-
     /// Memory access.
     pub mod memory {
         pub const LOAD64: u8 = 0x30;
@@ -67,7 +62,6 @@ pub mod wide {
         /// Load a validated signed 64-bit scalar by its `u16` literal-table index.
         pub const LDI64: u8 = 0x35;
     }
-
     /// Control flow.
     pub mod control {
         pub const BEQ: u8 = 0x40;
@@ -85,14 +79,12 @@ pub mod wide {
         /// Jump by a signed 24-bit word offset and write the link to register 1.
         pub const JALS: u8 = 0x4B;
     }
-
     /// System / syscall.
     pub mod system {
         pub const SCALL: u8 = 0x60;
         pub const GETGAS: u8 = 0x61;
         pub const SYSTEM: u8 = 0x62;
     }
-
     /// Vector and crypto helpers.
     pub mod crypto {
         pub const VADD32: u8 = 0x70;
@@ -104,7 +96,6 @@ pub mod wide {
         pub const SETVL: u8 = 0x76;
         pub const PARBEGIN: u8 = 0x77;
         pub const PAREND: u8 = 0x78;
-
         pub const SHA256BLOCK: u8 = 0x80;
         pub const SHA3BLOCK: u8 = 0x81;
         /// Hash two scalar registers: `rd = poseidon2(rs1, rs2)`.
@@ -130,7 +121,6 @@ pub mod wide {
         pub const DILITHIUMVERIFY: u8 = 0x8D;
         pub const PAIRING: u8 = 0x8E;
     }
-
     /// Reserved ISO20022 helpers (not enabled in ABI v1).
     pub mod iso20022 {
         pub const MSG_CREATE: u8 = 0x90;
@@ -150,7 +140,6 @@ pub mod wide {
         pub const DECODE_STR: u8 = 0x9E;
         pub const VALIDATE_FORMAT: u8 = 0x9F;
     }
-
     /// Zero-knowledge helpers.
     pub mod zk {
         pub const ASSERT: u8 = 0xA0;
@@ -161,49 +150,40 @@ pub mod wide {
         pub const FINV: u8 = 0xA5;
         pub const ASSERT_RANGE: u8 = 0xA6;
     }
-
     #[inline]
     pub fn opcode(word: u32) -> u8 {
         (word >> 24) as u8
     }
-
     #[inline]
     pub fn rd(word: u32) -> usize {
         ((word >> 16) & 0xFF) as usize
     }
-
     #[inline]
     pub fn rs1(word: u32) -> usize {
         ((word >> 8) & 0xFF) as usize
     }
-
     #[inline]
     pub fn rs2(word: u32) -> usize {
         (word & 0xFF) as usize
     }
-
     #[inline]
     pub fn imm8(word: u32) -> i8 {
         word as u8 as i8
     }
-
     #[inline]
     pub fn imm16(word: u32) -> i16 {
         (word & 0xFFFF) as u16 as i16
     }
-
     /// Return the unsigned literal-table index carried in the low 16 bits.
     #[inline]
     pub fn literal_index(word: u32) -> usize {
         (word & 0xFFFF) as u16 as usize
     }
-
     /// Return the signed 24-bit word offset carried by `JMP`/`JALS`.
     #[inline]
     pub fn imm24(word: u32) -> i32 {
         ((word << 8) as i32) >> 8
     }
-
     /// Returns true when `op` is one of the defined wide opcode values.
     pub fn is_valid_opcode(op: u8) -> bool {
         matches!(

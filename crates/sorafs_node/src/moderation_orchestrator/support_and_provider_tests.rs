@@ -8,7 +8,6 @@ use std::{
     },
     thread,
 };
-
 use ed25519_dalek::{Signer as _, SigningKey};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
@@ -34,9 +33,7 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use tempfile::TempDir;
-
 use super::*;
-
 const TEST_ENVELOPE_CREATION_UNIX_MS: u64 = 1_700_000_000_000;
 const TRANSACTION_SIGNER_HANDLE: &str = "moderation-hsm-primary";
 const STRICT_INGRESS_HANDLE: &str = "moderation-ingress-primary";
@@ -62,7 +59,6 @@ const PANEL_NOTIFICATION_ARCHIVE_ROTATED_QUALIFICATION: ModerationRuntimeProvide
     ModerationRuntimeProviderQualificationV1::new(2, [0xB5; 32]);
 const CHECKPOINT_STORE_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
     ModerationRuntimeProviderQualificationV1::new(7, [0xA7; 32]);
-
 fn test_network_id() -> iroha_data_model::NetworkId {
     iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
         iroha_data_model::block::BlockHeader,
@@ -70,7 +66,6 @@ fn test_network_id() -> iroha_data_model::NetworkId {
         iroha_crypto::Hash::prehashed([0xA5; iroha_crypto::Hash::LENGTH]),
     ))
 }
-
 #[derive(Debug)]
 struct MockRuntimeProvider {
     handle: String,
@@ -78,7 +73,6 @@ struct MockRuntimeProvider {
         Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>,
     >,
 }
-
 impl MockRuntimeProvider {
     fn new(
         handle: impl Into<String>,
@@ -89,14 +83,12 @@ impl MockRuntimeProvider {
             qualification: Mutex::new(Ok(qualification)),
         }
     }
-
     fn set_qualification(&self, qualification: ModerationRuntimeProviderQualificationV1) {
         *self
             .qualification
             .lock()
             .expect("provider qualification lock") = Ok(qualification);
     }
-
     fn set_readiness(&self, readiness: ModerationRuntimeProviderReadinessErrorV1) {
         *self
             .qualification
@@ -104,12 +96,10 @@ impl MockRuntimeProvider {
             .expect("provider qualification lock") = Err(readiness);
     }
 }
-
 impl ModerationRuntimeProviderV1 for MockRuntimeProvider {
     fn handle(&self) -> &str {
         &self.handle
     }
-
     fn qualification(
         &self,
     ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
@@ -120,13 +110,11 @@ impl ModerationRuntimeProviderV1 for MockRuntimeProvider {
             .expect("provider qualification lock")
     }
 }
-
 #[derive(Debug)]
 struct MockSnapshotReader {
     snapshot: Mutex<ModerationFinalizedLedgerSnapshotV1>,
     checkpoint_store: Arc<MockCheckpointStore>,
 }
-
 impl MockSnapshotReader {
     fn new(snapshot: ModerationFinalizedLedgerSnapshotV1) -> Self {
         Self {
@@ -134,12 +122,10 @@ impl MockSnapshotReader {
             checkpoint_store: Arc::new(MockCheckpointStore::default()),
         }
     }
-
     fn replace(&self, snapshot: ModerationFinalizedLedgerSnapshotV1) {
         *self.snapshot.lock().expect("snapshot lock") = snapshot;
     }
 }
-
 impl ModerationFinalizedSnapshotReaderV1 for MockSnapshotReader {
     fn read_finalized_snapshot(
         &self,
@@ -149,7 +135,6 @@ impl ModerationFinalizedSnapshotReaderV1 for MockSnapshotReader {
         Ok(self.snapshot.lock().expect("snapshot lock").clone())
     }
 }
-
 #[derive(Debug)]
 struct MockSubmitterState {
     calls: usize,
@@ -162,14 +147,12 @@ struct MockSubmitterState {
     failure: Option<ModerationSubmissionFailureV1>,
     ambiguous_is_applied: bool,
 }
-
 #[derive(Debug)]
 struct MockSubmitter {
     state: Mutex<MockSubmitterState>,
     transaction_signer_provider: MockRuntimeProvider,
     strict_ingress_provider: MockRuntimeProvider,
 }
-
 impl MockSubmitter {
     fn new(fallback: ModerationSubmissionLookupV1) -> Self {
         Self {
@@ -194,7 +177,6 @@ impl MockSubmitter {
             ),
         }
     }
-
     fn ambiguous_applied(fallback: ModerationSubmissionLookupV1) -> Self {
         Self {
             state: Mutex::new(MockSubmitterState {
@@ -218,27 +200,21 @@ impl MockSubmitter {
             ),
         }
     }
-
     fn calls(&self) -> usize {
         self.state.lock().expect("submitter lock").calls
     }
-
     fn actions(&self) -> Vec<ModerationNativeActionV1> {
         self.state.lock().expect("submitter lock").actions.clone()
     }
-
     fn sign_calls(&self) -> usize {
         self.state.lock().expect("submitter lock").sign_calls
     }
-
     fn set_failure(&self, failure: Option<ModerationSubmissionFailureV1>) {
         self.state.lock().expect("submitter lock").failure = failure;
     }
-
     fn set_sign_failure(&self, failure: Option<ModerationSubmissionFailureV1>) {
         self.state.lock().expect("submitter lock").sign_failure = failure;
     }
-
     fn set_lookup(
         &self,
         operation_id: [u8; 32],
@@ -252,20 +228,16 @@ impl MockSubmitter {
             .insert((operation_id, transaction_id), lookup);
     }
 }
-
 impl ModerationTransactionSubmitterV1 for MockSubmitter {
     fn transaction_signer_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
         &self.transaction_signer_provider
     }
-
     fn strict_ingress_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
         &self.strict_ingress_provider
     }
-
     fn network_id(&self) -> iroha_data_model::NetworkId {
         test_network_id()
     }
-
     fn sign(
         &self,
         request: &ModerationTransactionRequestV1,
@@ -302,7 +274,6 @@ impl ModerationTransactionSubmitterV1 for MockSubmitter {
         state.signed.insert(signed_key, signed.clone());
         Ok(signed)
     }
-
     fn submit_signed(
         &self,
         request: &ModerationTransactionRequestV1,
@@ -361,7 +332,6 @@ impl ModerationTransactionSubmitterV1 for MockSubmitter {
             observed_finalized_height: request.baseline_finalized_height,
         })
     }
-
     fn lookup(
         &self,
         operation_id: [u8; 32],
@@ -378,7 +348,6 @@ impl ModerationTransactionSubmitterV1 for MockSubmitter {
             .unwrap_or(state.fallback)
     }
 }
-
 #[derive(Debug)]
 struct MockHandoffSink {
     provider: MockRuntimeProvider,
@@ -386,7 +355,6 @@ struct MockHandoffSink {
     published_archive_heads: Mutex<BTreeMap<[u8; 32], ModerationPanelNotificationArchiveHeadV1>>,
     calls: AtomicUsize,
 }
-
 impl Default for MockHandoffSink {
     fn default() -> Self {
         Self {
@@ -400,16 +368,13 @@ impl Default for MockHandoffSink {
         }
     }
 }
-
 impl MockHandoffSink {
     fn delivered(&self) -> Vec<[u8; 32]> {
         self.delivered.lock().expect("handoff sink lock").clone()
     }
-
     fn calls(&self) -> usize {
         self.calls.load(AtomicOrdering::Relaxed)
     }
-
     fn published_archive_head_count(&self) -> usize {
         self.published_archive_heads
             .lock()
@@ -417,12 +382,10 @@ impl MockHandoffSink {
             .len()
     }
 }
-
 impl ModerationRuntimeProviderV1 for MockHandoffSink {
     fn handle(&self) -> &str {
         self.provider.handle()
     }
-
     fn qualification(
         &self,
     ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
@@ -430,7 +393,6 @@ impl ModerationRuntimeProviderV1 for MockHandoffSink {
         self.provider.qualification()
     }
 }
-
 impl ModerationTerminalHandoffSinkV1 for MockHandoffSink {
     fn deliver(
         &self,
@@ -443,7 +405,6 @@ impl ModerationTerminalHandoffSinkV1 for MockHandoffSink {
         }
         Ok(())
     }
-
     fn publish_panel_notification_archive_head(
         &self,
         head: &ModerationPanelNotificationArchiveHeadV1,
@@ -470,7 +431,6 @@ impl ModerationTerminalHandoffSinkV1 for MockHandoffSink {
         published.insert(head.operation_id, head.clone());
         Ok(())
     }
-
     fn read_panel_notification_archive_head(
         &self,
     ) -> Result<Option<ModerationPanelNotificationArchiveHeadV1>, ModerationHandoffFailureV1> {
@@ -483,18 +443,15 @@ impl ModerationTerminalHandoffSinkV1 for MockHandoffSink {
             .cloned())
     }
 }
-
 #[derive(Debug, Default)]
 struct ReentrantLockProbe {
     orchestrator: Mutex<Option<Weak<ModerationOrchestratorV1>>>,
     checks: AtomicUsize,
 }
-
 impl ReentrantLockProbe {
     fn attach(&self, orchestrator: &Arc<ModerationOrchestratorV1>) {
         *self.orchestrator.lock().expect("probe lock") = Some(Arc::downgrade(orchestrator));
     }
-
     fn check(&self) {
         let orchestrator = self
             .orchestrator
@@ -512,18 +469,15 @@ impl ReentrantLockProbe {
         let _ = orchestrator.snapshot();
         self.checks.fetch_add(1, AtomicOrdering::Relaxed);
     }
-
     fn checks(&self) -> usize {
         self.checks.load(AtomicOrdering::Relaxed)
     }
 }
-
 #[derive(Debug)]
 struct ProbedSnapshotReader {
     inner: Arc<MockSnapshotReader>,
     probe: Arc<ReentrantLockProbe>,
 }
-
 impl ModerationFinalizedSnapshotReaderV1 for ProbedSnapshotReader {
     fn read_finalized_snapshot(
         &self,
@@ -534,26 +488,21 @@ impl ModerationFinalizedSnapshotReaderV1 for ProbedSnapshotReader {
         self.inner.read_finalized_snapshot(max_cases, max_events)
     }
 }
-
 #[derive(Debug)]
 struct ProbedSubmitter {
     inner: Arc<MockSubmitter>,
     probe: Arc<ReentrantLockProbe>,
 }
-
 impl ModerationTransactionSubmitterV1 for ProbedSubmitter {
     fn transaction_signer_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
         self.inner.transaction_signer_provider()
     }
-
     fn strict_ingress_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
         self.inner.strict_ingress_provider()
     }
-
     fn network_id(&self) -> iroha_data_model::NetworkId {
         self.inner.network_id()
     }
-
     fn sign(
         &self,
         request: &ModerationTransactionRequestV1,
@@ -561,7 +510,6 @@ impl ModerationTransactionSubmitterV1 for ProbedSubmitter {
         self.probe.check();
         self.inner.sign(request)
     }
-
     fn submit_signed(
         &self,
         request: &ModerationTransactionRequestV1,
@@ -570,7 +518,6 @@ impl ModerationTransactionSubmitterV1 for ProbedSubmitter {
         self.probe.check();
         self.inner.submit_signed(request, signed)
     }
-
     fn lookup(
         &self,
         operation_id: [u8; 32],
@@ -580,18 +527,15 @@ impl ModerationTransactionSubmitterV1 for ProbedSubmitter {
         self.inner.lookup(operation_id, transaction_id)
     }
 }
-
 #[derive(Debug)]
 struct ProbedHandoffSink {
     inner: Arc<MockHandoffSink>,
     probe: Arc<ReentrantLockProbe>,
 }
-
 impl ModerationRuntimeProviderV1 for ProbedHandoffSink {
     fn handle(&self) -> &str {
         self.inner.handle()
     }
-
     fn qualification(
         &self,
     ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
@@ -599,7 +543,6 @@ impl ModerationRuntimeProviderV1 for ProbedHandoffSink {
         self.inner.qualification()
     }
 }
-
 impl ModerationTerminalHandoffSinkV1 for ProbedHandoffSink {
     fn deliver(
         &self,
@@ -608,7 +551,6 @@ impl ModerationTerminalHandoffSinkV1 for ProbedHandoffSink {
         self.probe.check();
         self.inner.deliver(handoff)
     }
-
     fn publish_panel_notification_archive_head(
         &self,
         head: &ModerationPanelNotificationArchiveHeadV1,
@@ -616,7 +558,6 @@ impl ModerationTerminalHandoffSinkV1 for ProbedHandoffSink {
         self.probe.check();
         self.inner.publish_panel_notification_archive_head(head)
     }
-
     fn read_panel_notification_archive_head(
         &self,
     ) -> Result<Option<ModerationPanelNotificationArchiveHeadV1>, ModerationHandoffFailureV1> {
@@ -624,7 +565,6 @@ impl ModerationTerminalHandoffSinkV1 for ProbedHandoffSink {
         self.inner.read_panel_notification_archive_head()
     }
 }
-
 #[derive(Debug)]
 struct BlockingSignSubmitter {
     inner: Arc<MockSubmitter>,
@@ -632,7 +572,6 @@ struct BlockingSignSubmitter {
     released: Mutex<bool>,
     release: Condvar,
 }
-
 impl BlockingSignSubmitter {
     fn new(inner: Arc<MockSubmitter>, entered: mpsc::Sender<()>) -> Self {
         Self {
@@ -642,26 +581,21 @@ impl BlockingSignSubmitter {
             release: Condvar::new(),
         }
     }
-
     fn release(&self) {
         *self.released.lock().expect("release lock") = true;
         self.release.notify_all();
     }
 }
-
 impl ModerationTransactionSubmitterV1 for BlockingSignSubmitter {
     fn transaction_signer_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
         self.inner.transaction_signer_provider()
     }
-
     fn strict_ingress_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
         self.inner.strict_ingress_provider()
     }
-
     fn network_id(&self) -> iroha_data_model::NetworkId {
         self.inner.network_id()
     }
-
     fn sign(
         &self,
         request: &ModerationTransactionRequestV1,
@@ -678,7 +612,6 @@ impl ModerationTransactionSubmitterV1 for BlockingSignSubmitter {
         }
         self.inner.sign(request)
     }
-
     fn submit_signed(
         &self,
         request: &ModerationTransactionRequestV1,
@@ -686,7 +619,6 @@ impl ModerationTransactionSubmitterV1 for BlockingSignSubmitter {
     ) -> Result<ModerationTransactionReceiptV1, ModerationSubmissionFailureV1> {
         self.inner.submit_signed(request, signed)
     }
-
     fn lookup(
         &self,
         operation_id: [u8; 32],
@@ -695,7 +627,6 @@ impl ModerationTransactionSubmitterV1 for BlockingSignSubmitter {
         self.inner.lookup(operation_id, transaction_id)
     }
 }
-
 #[derive(Debug)]
 struct DriftingSubmitter {
     inner: Arc<MockSubmitter>,
@@ -703,20 +634,16 @@ struct DriftingSubmitter {
     ingress_after_submit: Option<ModerationRuntimeProviderQualificationV1>,
     ingress_after_lookup: Option<ModerationRuntimeProviderQualificationV1>,
 }
-
 impl ModerationTransactionSubmitterV1 for DriftingSubmitter {
     fn transaction_signer_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
         self.inner.transaction_signer_provider()
     }
-
     fn strict_ingress_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
         self.inner.strict_ingress_provider()
     }
-
     fn network_id(&self) -> iroha_data_model::NetworkId {
         self.inner.network_id()
     }
-
     fn sign(
         &self,
         request: &ModerationTransactionRequestV1,
@@ -729,7 +656,6 @@ impl ModerationTransactionSubmitterV1 for DriftingSubmitter {
         }
         result
     }
-
     fn submit_signed(
         &self,
         request: &ModerationTransactionRequestV1,
@@ -743,7 +669,6 @@ impl ModerationTransactionSubmitterV1 for DriftingSubmitter {
         }
         result
     }
-
     fn lookup(
         &self,
         operation_id: [u8; 32],
@@ -758,18 +683,15 @@ impl ModerationTransactionSubmitterV1 for DriftingSubmitter {
         result
     }
 }
-
 #[derive(Debug)]
 struct DriftingHandoffSink {
     inner: Arc<MockHandoffSink>,
     qualification_after_delivery: ModerationRuntimeProviderQualificationV1,
 }
-
 impl ModerationRuntimeProviderV1 for DriftingHandoffSink {
     fn handle(&self) -> &str {
         self.inner.handle()
     }
-
     fn qualification(
         &self,
     ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
@@ -777,7 +699,6 @@ impl ModerationRuntimeProviderV1 for DriftingHandoffSink {
         self.inner.qualification()
     }
 }
-
 impl ModerationTerminalHandoffSinkV1 for DriftingHandoffSink {
     fn deliver(
         &self,
@@ -789,7 +710,6 @@ impl ModerationTerminalHandoffSinkV1 for DriftingHandoffSink {
             .set_qualification(self.qualification_after_delivery);
         result
     }
-
     fn publish_panel_notification_archive_head(
         &self,
         head: &ModerationPanelNotificationArchiveHeadV1,
@@ -800,21 +720,18 @@ impl ModerationTerminalHandoffSinkV1 for DriftingHandoffSink {
             .set_qualification(self.qualification_after_delivery);
         result
     }
-
     fn read_panel_notification_archive_head(
         &self,
     ) -> Result<Option<ModerationPanelNotificationArchiveHeadV1>, ModerationHandoffFailureV1> {
         self.inner.read_panel_notification_archive_head()
     }
 }
-
 #[derive(Debug)]
 struct MockPanelNotificationSink {
     provider: MockRuntimeProvider,
     calls: Mutex<usize>,
     receipts: Mutex<BTreeMap<[u8; 32], ModerationPanelNotificationDeliveryReceiptV1>>,
 }
-
 impl Default for MockPanelNotificationSink {
     fn default() -> Self {
         Self {
@@ -827,7 +744,6 @@ impl Default for MockPanelNotificationSink {
         }
     }
 }
-
 impl MockPanelNotificationSink {
     fn deliver(
         &self,
@@ -848,21 +764,17 @@ impl MockPanelNotificationSink {
                 delivered_at_unix_ms,
             })
     }
-
     fn calls(&self) -> usize {
         *self.calls.lock().expect("panel sink calls lock")
     }
-
     fn unique_deliveries(&self) -> usize {
         self.receipts.lock().expect("panel sink receipt lock").len()
     }
 }
-
 impl ModerationRuntimeProviderV1 for MockPanelNotificationSink {
     fn handle(&self) -> &str {
         self.provider.handle()
     }
-
     fn qualification(
         &self,
     ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
@@ -870,7 +782,6 @@ impl ModerationRuntimeProviderV1 for MockPanelNotificationSink {
         self.provider.qualification()
     }
 }
-
 impl ModerationPanelNotificationSinkV1 for MockPanelNotificationSink {
     fn deliver(
         &self,
@@ -887,10 +798,8 @@ impl ModerationPanelNotificationSinkV1 for MockPanelNotificationSink {
         ))
     }
 }
-
 type MockPanelNotificationArchiveArtifacts =
     BTreeMap<[u8; 32], ([u8; 32], ModerationPanelNotificationArchiveReadbackV1)>;
-
 struct MockPanelNotificationArchive {
     provider: MockRuntimeProvider,
     archive_id: [u8; 32],
@@ -901,7 +810,6 @@ struct MockPanelNotificationArchive {
     next_install_behavior: AtomicUsize,
     next_read_behavior: AtomicUsize,
 }
-
 impl fmt::Debug for MockPanelNotificationArchive {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -912,13 +820,11 @@ impl fmt::Debug for MockPanelNotificationArchive {
             .finish_non_exhaustive()
     }
 }
-
 impl Default for MockPanelNotificationArchive {
     fn default() -> Self {
         Self::with_handle(PANEL_NOTIFICATION_ARCHIVE_HANDLE)
     }
 }
-
 impl MockPanelNotificationArchive {
     fn with_handle(handle: impl Into<String>) -> Self {
         Self {
@@ -934,7 +840,6 @@ impl MockPanelNotificationArchive {
             next_read_behavior: AtomicUsize::new(0),
         }
     }
-
     fn public_key(&self) -> [u8; 32] {
         self.signing_key
             .lock()
@@ -942,39 +847,32 @@ impl MockPanelNotificationArchive {
             .verifying_key()
             .to_bytes()
     }
-
     fn rotate_signing_key(&self, signing_seed: [u8; 32]) {
         *self
             .signing_key
             .lock()
             .expect("notification archive signing key") = SigningKey::from_bytes(&signing_seed);
     }
-
     fn fail_next_install(&self, behavior: usize) {
         self.next_install_behavior
             .store(behavior, AtomicOrdering::SeqCst);
     }
-
     fn fail_next_read(&self, behavior: usize) {
         self.next_read_behavior
             .store(behavior, AtomicOrdering::SeqCst);
     }
-
     fn install_calls(&self) -> usize {
         self.install_calls.load(AtomicOrdering::SeqCst)
     }
-
     fn read_calls(&self) -> usize {
         self.read_calls.load(AtomicOrdering::SeqCst)
     }
-
     fn artifact_count(&self) -> usize {
         self.artifacts
             .lock()
             .expect("notification archive artifacts")
             .len()
     }
-
     fn artifact(&self, operation_id: [u8; 32]) -> Vec<u8> {
         self.artifacts
             .lock()
@@ -985,7 +883,6 @@ impl MockPanelNotificationArchive {
             .canonical_artifact
             .clone()
     }
-
     fn replace_artifact(&self, operation_id: [u8; 32], bytes: Vec<u8>) {
         self.artifacts
             .lock()
@@ -996,12 +893,10 @@ impl MockPanelNotificationArchive {
             .canonical_artifact = bytes;
     }
 }
-
 impl ModerationRuntimeProviderV1 for MockPanelNotificationArchive {
     fn handle(&self) -> &str {
         self.provider.handle()
     }
-
     fn qualification(
         &self,
     ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
@@ -1009,16 +904,13 @@ impl ModerationRuntimeProviderV1 for MockPanelNotificationArchive {
         self.provider.qualification()
     }
 }
-
 impl ModerationPanelNotificationArchiveV1 for MockPanelNotificationArchive {
     fn archive_id(&self) -> [u8; 32] {
         self.archive_id
     }
-
     fn signing_public_key(&self) -> [u8; 32] {
         self.public_key()
     }
-
     fn install(
         &self,
         operation_id: [u8; 32],
@@ -1068,7 +960,6 @@ impl ModerationPanelNotificationArchiveV1 for MockPanelNotificationArchive {
             result
         }
     }
-
     fn read(
         &self,
         operation_id: [u8; 32],
@@ -1105,18 +996,15 @@ impl ModerationPanelNotificationArchiveV1 for MockPanelNotificationArchive {
         Ok(readback)
     }
 }
-
 #[derive(Debug)]
 struct ProbedPanelNotificationArchive {
     inner: Arc<MockPanelNotificationArchive>,
     probe: Arc<ReentrantLockProbe>,
 }
-
 impl ModerationRuntimeProviderV1 for ProbedPanelNotificationArchive {
     fn handle(&self) -> &str {
         self.inner.handle()
     }
-
     fn qualification(
         &self,
     ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
@@ -1125,18 +1013,15 @@ impl ModerationRuntimeProviderV1 for ProbedPanelNotificationArchive {
         self.inner.qualification()
     }
 }
-
 impl ModerationPanelNotificationArchiveV1 for ProbedPanelNotificationArchive {
     fn archive_id(&self) -> [u8; 32] {
         self.probe.check();
         self.inner.archive_id()
     }
-
     fn signing_public_key(&self) -> [u8; 32] {
         self.probe.check();
         self.inner.signing_public_key()
     }
-
     fn install(
         &self,
         operation_id: [u8; 32],
@@ -1147,7 +1032,6 @@ impl ModerationPanelNotificationArchiveV1 for ProbedPanelNotificationArchive {
         self.inner
             .install(operation_id, receipt_message, canonical_artifact)
     }
-
     fn read(
         &self,
         operation_id: [u8; 32],
@@ -1159,13 +1043,11 @@ impl ModerationPanelNotificationArchiveV1 for ProbedPanelNotificationArchive {
         self.inner.read(operation_id)
     }
 }
-
 fn account(seed: u8) -> AccountId {
     let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
         .expect("deterministic account");
     AccountId::new(keypair.public_key().clone())
 }
-
 fn key_for_authority(authority: &AccountId) -> KeyPair {
     (1_u8..=u8::MAX)
         .map(|seed| {
@@ -1175,7 +1057,6 @@ fn key_for_authority(authority: &AccountId) -> KeyPair {
         .find(|key| key.public_key() == authority.expect_single_signatory())
         .expect("test authority must use the deterministic account fixture")
 }
-
 fn policy(revision: u64) -> ModerationLedgerPolicyV1 {
     ModerationLedgerPolicyV1 {
         version: MODERATION_LEDGER_POLICY_VERSION_V1,
@@ -1191,11 +1072,9 @@ fn policy(revision: u64) -> ModerationLedgerPolicyV1 {
         unrevealed_commit_penalty_points: 20,
     }
 }
-
 fn policy_action(policy: ModerationLedgerPolicyV1) -> ModerationNativeActionV1 {
     ModerationNativeActionV1::SetPolicy(SetSorafsModerationPolicy::new(policy))
 }
-
 fn empty_snapshot(height: u64, block_hash: [u8; 32]) -> ModerationFinalizedLedgerSnapshotV1 {
     ModerationFinalizedLedgerSnapshotV1 {
         version: MODERATION_FINALIZED_SNAPSHOT_VERSION_V1,
@@ -1209,7 +1088,6 @@ fn empty_snapshot(height: u64, block_hash: [u8; 32]) -> ModerationFinalizedLedge
         events: Vec::new(),
     }
 }
-
 fn empty_snapshot_at(
     height: u64,
     block_hash: [u8; 32],
@@ -1219,7 +1097,6 @@ fn empty_snapshot_at(
     snapshot.finalized_at_unix_ms = finalized_at_unix_ms;
     snapshot
 }
-
 fn snapshot_with_policy(
     height: u64,
     block_hash: [u8; 32],
@@ -1259,7 +1136,6 @@ fn snapshot_with_policy(
         }],
     }
 }
-
 fn awaiting_acceptance_snapshot(
     height: u64,
     block_hash: [u8; 32],
@@ -1398,7 +1274,6 @@ fn awaiting_acceptance_snapshot(
         sortition_digest,
     )
 }
-
 fn activated_case_snapshot(
     height: u64,
     block_hash: [u8; 32],
@@ -1413,7 +1288,6 @@ fn activated_case_snapshot(
     appeal.status = ModerationAppealStatusV1::BallotOpen;
     appeal.accepted_jurors = accepted_jurors;
     appeal.activated_at_unix_ms = Some(31);
-
     let intake = &appeal.intake;
     let jurors = selection.jurors;
     let case = ModerationCaseRecordV1 {
@@ -1480,7 +1354,6 @@ fn activated_case_snapshot(
     }];
     snapshot
 }
-
 fn finalized_case_snapshot(
     mut snapshot: ModerationFinalizedLedgerSnapshotV1,
     height: u64,
@@ -1488,7 +1361,6 @@ fn finalized_case_snapshot(
     governance: AccountId,
 ) -> ModerationFinalizedLedgerSnapshotV1 {
     const FINALIZED_AT_UNIX_MS: u64 = 61;
-
     snapshot.finalized_height = height;
     snapshot.finalized_block_hash = block_hash;
     snapshot.finalized_at_unix_ms = FINALIZED_AT_UNIX_MS;
@@ -1558,7 +1430,6 @@ fn finalized_case_snapshot(
     }];
     snapshot
 }
-
 fn config(temp: &TempDir, name: &str) -> ModerationOrchestratorConfigV1 {
     let canonical_temp = temp.path().canonicalize().expect("canonical tempdir");
     ModerationOrchestratorConfigV1 {
@@ -1606,7 +1477,6 @@ fn config(temp: &TempDir, name: &str) -> ModerationOrchestratorConfigV1 {
         panel_notification_archive_new_key_possession_signature: None,
     }
 }
-
 fn provider_test_request() -> ModerationTransactionRequestV1 {
     ModerationTransactionRequestV1::new(
         test_network_id(),
@@ -1619,7 +1489,6 @@ fn provider_test_request() -> ModerationTransactionRequestV1 {
     )
     .expect("canonical provider test request")
 }
-
 #[test]
 fn runtime_provider_handles_use_canonical_production_grammar() {
     for handle in [
@@ -1656,7 +1525,6 @@ fn runtime_provider_handles_use_canonical_production_grammar() {
         Err(ModerationRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle)
     );
 }
-
 #[test]
 fn external_providers_are_qualified_before_checkpoint_access() {
     let temp = TempDir::new().expect("tempdir");
@@ -1671,17 +1539,14 @@ fn external_providers_are_qualified_before_checkpoint_access() {
     submitter
         .transaction_signer_provider
         .set_readiness(ModerationRuntimeProviderReadinessErrorV1::Rejected);
-
     let error = ModerationOrchestratorV1::open(config.clone(), deps(reader, submitter))
         .expect_err("unqualified signer must fail before checkpoint access");
-
     assert!(matches!(
         error,
         ModerationOrchestratorError::InvalidConfiguration(message)
             if message.contains("runtime provider binding")
     ));
     assert!(!missing_parent.exists());
-
     config.transaction_signer_handle = "moderation-hsm-secondary".to_owned();
     let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
     let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
@@ -1691,7 +1556,6 @@ fn external_providers_are_qualified_before_checkpoint_access() {
             if message.contains("runtime provider binding")
     ));
     assert!(!missing_parent.exists());
-
     config.transaction_signer_handle = TRANSACTION_SIGNER_HANDLE.to_owned();
     for settlement in [true, false] {
         let mut boundary_config = config.clone();
@@ -1714,7 +1578,6 @@ fn external_providers_are_qualified_before_checkpoint_access() {
         ));
         assert!(!missing_parent.exists());
     }
-
     config.panel_notification_handle = "moderation-notification-secondary".to_owned();
     let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
     let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
@@ -1725,7 +1588,6 @@ fn external_providers_are_qualified_before_checkpoint_access() {
     ));
     assert!(!missing_parent.exists());
 }
-
 #[test]
 fn snapshot_bounds_cannot_exceed_native_query_ceilings() {
     let temp = TempDir::new().expect("tempdir");
@@ -1754,7 +1616,6 @@ fn snapshot_bounds_cannot_exceed_native_query_ceilings() {
         assert!(!checkpoint_parent.exists());
     }
 }
-
 #[test]
 fn signer_policy_drift_discards_the_returned_envelope() {
     let temp = TempDir::new().expect("tempdir");
@@ -1768,14 +1629,12 @@ fn signer_policy_drift_discards_the_returned_envelope() {
     });
     let qualified = QualifiedModerationTransactionSubmitterV1::try_new(&config, submitter)
         .expect("initially qualified submitter");
-
     assert_eq!(
         qualified.sign(&provider_test_request()),
         Err(ModerationSubmissionFailureV1::RuntimeUnavailable)
     );
     assert_eq!(inner.sign_calls(), 1);
 }
-
 #[test]
 fn ingress_policy_drift_after_admission_is_ambiguous() {
     let temp = TempDir::new().expect("tempdir");
@@ -1791,14 +1650,12 @@ fn ingress_policy_drift_after_admission_is_ambiguous() {
         .expect("initially qualified submitter");
     let request = provider_test_request();
     let signed = qualified.sign(&request).expect("qualified signer result");
-
     assert_eq!(
         qualified.submit_signed(&request, &signed),
         Err(ModerationSubmissionFailureV1::Ambiguous)
     );
     assert_eq!(inner.calls(), 1);
 }
-
 #[test]
 fn ingress_policy_drift_discards_a_positive_lookup() {
     let temp = TempDir::new().expect("tempdir");
@@ -1817,13 +1674,11 @@ fn ingress_policy_drift_discards_a_positive_lookup() {
     qualified
         .submit_signed(&request, &signed)
         .expect("qualified admission");
-
     assert_eq!(
         qualified.lookup(request.operation_id, Some(signed.transaction_id)),
         ModerationSubmissionLookupV1::Unknown
     );
 }
-
 #[test]
 fn canonical_committed_event_sequence_must_be_contiguous() {
     let temp = TempDir::new().expect("tempdir");
@@ -1850,7 +1705,6 @@ fn canonical_committed_event_sequence_must_be_contiguous() {
         ),
     });
     validate_finalized_snapshot(&snapshot, &config).expect("single retained event suffix");
-
     let mut skipped_block_index = snapshot.clone();
     skipped_block_index.events.push(ModerationFinalizedEventV1 {
         sequence: 8,
@@ -1870,7 +1724,6 @@ fn canonical_committed_event_sequence_must_be_contiguous() {
         Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(message))
             if message.contains("block index")
     ));
-
     snapshot.events.push(ModerationFinalizedEventV1 {
         sequence: 9,
         block_height: 4,
@@ -1890,7 +1743,6 @@ fn canonical_committed_event_sequence_must_be_contiguous() {
             if message.contains("sequence")
     ));
 }
-
 fn deps(
     reader: Arc<MockSnapshotReader>,
     submitter: Arc<MockSubmitter>,
@@ -1905,7 +1757,6 @@ fn deps(
         panel_notification_archive: Arc::new(MockPanelNotificationArchive::default()),
     }
 }
-
 fn seed_ready_operation_without_delivery(
     orchestrator: &ModerationOrchestratorV1,
     authority: AccountId,
@@ -1950,7 +1801,6 @@ fn seed_ready_operation_without_delivery(
         .expect("persist ready operation");
     operation_id
 }
-
 fn execute_one_prepared_sign(orchestrator: &ModerationOrchestratorV1, operation_id: [u8; 32]) {
     let prepared = {
         let mut state = orchestrator.state.lock().expect("orchestrator state");
@@ -1968,7 +1818,6 @@ fn execute_one_prepared_sign(orchestrator: &ModerationOrchestratorV1, operation_
         .execute_external_work(prepared)
         .expect("execute signer work");
 }
-
 fn prepare_one_submit(
     orchestrator: &ModerationOrchestratorV1,
     operation_id: [u8; 32],
@@ -1987,7 +1836,6 @@ fn prepare_one_submit(
     ));
     prepared
 }
-
 fn retained_envelope(
     orchestrator: &ModerationOrchestratorV1,
 ) -> (
@@ -2016,7 +1864,6 @@ fn retained_envelope(
         entry.state,
     )
 }
-
 fn sign_dead_letter_resolution(resolution: &ModerationDeadLetterResolutionV1) -> [u8; 64] {
     SigningKey::from_bytes(&CHECKPOINT_STORE_ATTESTATION_SIGNING_SEED)
         .sign(
@@ -2026,7 +1873,6 @@ fn sign_dead_letter_resolution(resolution: &ModerationDeadLetterResolutionV1) ->
         )
         .to_bytes()
 }
-
 fn assert_finalized_authority_rejection_has_no_native_mutation(
     snapshot: ModerationFinalizedLedgerSnapshotV1,
     authenticated: AccountId,
@@ -2045,7 +1891,6 @@ fn assert_finalized_authority_rejection_has_no_native_mutation(
     )
     .expect("orchestrator");
     let action_label = action.label();
-
     let error = orchestrator
         .submit(authenticated.clone(), action, [0xE1; 32])
         .expect_err("non-ledger authority must fail closed");

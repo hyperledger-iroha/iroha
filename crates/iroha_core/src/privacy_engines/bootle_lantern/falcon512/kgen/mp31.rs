@@ -1,12 +1,9 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
-
 use super::super::table_assets::{read_u16_le, read_u32_le};
-
 // ========================================================================
 // Low-level computations modulo a small prime.
 // ========================================================================
-
 // All mp_*() functions deal with integers modulo a prime p, such that
 // 1.34*2^30 < p < 2^31.
 //
@@ -43,27 +40,23 @@ use super::super::table_assets::{read_u16_le, read_u32_le};
 // x with R2 = 2^64 mod p. In the other direction, if x is the Montgomery
 // reprensentation of y, then the unsigned representation of y can be
 // obtained by computing the Montgomery multiplication of y with 1.
-
 // Return 0xFFFFFFFF if the top bit of x is 1, 0x00000000 otherwise.
 #[inline(always)]
 pub(crate) const fn tbmask(x: u32) -> u32 {
     ((x as i32) >> 31) as u32
 }
-
 // Given v in the [-(p-1), +(p-1)] range (signed), return x = v mod p.
 #[inline(always)]
 pub(crate) fn mp_set(v: i32, p: u32) -> u32 {
     let w = v as u32;
     w.wrapping_add(p & tbmask(w))
 }
-
 // Given v in the [0, 2*p-1] range (unsigned), return x = v mod p.
 #[inline(always)]
 pub(crate) fn mp_set_u(v: u32, p: u32) -> u32 {
     let w = v.wrapping_sub(p);
     w.wrapping_add(p & tbmask(w))
 }
-
 // Given x (integer modulo p), return its signed normalized value
 // (in [-p/2, +p/2]).
 #[inline(always)]
@@ -71,7 +64,6 @@ pub(crate) fn mp_norm(x: u32, p: u32) -> i32 {
     let c = tbmask(x.wrapping_sub((p + 1) >> 1));
     x.wrapping_sub(p & !c) as i32
 }
-
 // Compute R = 2^32 mod p.
 #[inline(always)]
 pub(crate) fn mp_R(p: u32) -> u32 {
@@ -81,7 +73,6 @@ pub(crate) fn mp_R(p: u32) -> u32 {
     // We compute and return R = 2^32 - 2*p
     p.wrapping_neg() << 1
 }
-
 // Compute hR = 2^31 mod p.
 #[inline(always)]
 pub(crate) fn mp_hR(p: u32) -> u32 {
@@ -91,7 +82,6 @@ pub(crate) fn mp_hR(p: u32) -> u32 {
     // We compute and return hR = 2^31 - p
     0x80000000 - p
 }
-
 // Compute a + b mod p.
 // This function is compatible with Montgomery representation: if a and b
 // are the Montgomery representations of x and y, respectively, then this
@@ -101,7 +91,6 @@ pub(crate) fn mp_add(a: u32, b: u32, p: u32) -> u32 {
     let d = a.wrapping_add(b).wrapping_sub(p);
     d.wrapping_add(p & tbmask(d))
 }
-
 // Compute a - b mod p.
 // This function is compatible with Montgomery representation: if a and b
 // are the Montgomery representations of x and y, respectively, then this
@@ -111,7 +100,6 @@ pub(crate) fn mp_sub(a: u32, b: u32, p: u32) -> u32 {
     let d = a.wrapping_sub(b);
     d.wrapping_add(p & tbmask(d))
 }
-
 // Compute a / 2 mod p.
 // This function is compatible with Montgomery representation: if a is the
 // Montgomery representation of x, then this returns the Montgomery
@@ -120,7 +108,6 @@ pub(crate) fn mp_sub(a: u32, b: u32, p: u32) -> u32 {
 pub(crate) fn mp_half(a: u32, p: u32) -> u32 {
     a.wrapping_add(p & (a & 1).wrapping_neg()) >> 1
 }
-
 // Compute a*b/2^32 mod p; parameter p0i is equal to -1/p mod 2^32.
 // This is the "Montgomery multiplication".
 #[inline(always)]
@@ -130,7 +117,6 @@ pub(crate) fn mp_mmul(a: u32, b: u32, p: u32, p0i: u32) -> u32 {
     let d = (((z + (w as u64) * (p as u64)) >> 32) as u32).wrapping_sub(p);
     d.wrapping_add(p & tbmask(d))
 }
-
 // Compute 2^(31*e) mod p.
 // Exponent e is considered non-secret.
 #[inline(always)]
@@ -150,7 +136,6 @@ pub(crate) fn mp_Rx31(e: u32, p: u32, p0i: u32, R2: u32) -> u32 {
         x = mp_mmul(x, x, p, p0i);
     }
 }
-
 // Compute x/y mod p. If y is not invertible modulo p, then 0 is returned
 // (regardless of the value of x).
 #[allow(dead_code)]
@@ -216,11 +201,9 @@ pub(crate) fn mp_div(x: u32, y: u32, p: u32) -> u32 {
     // this point.
     v & tbmask(b.wrapping_sub(2))
 }
-
 // ========================================================================
 // Pre-computed moduli and NTT.
 // ========================================================================
-
 // Each modulus is p < 2^31 such that p = 1 mod 2048. The moduli are in
 // decreasing order.
 //
@@ -247,14 +230,11 @@ pub(crate) struct SmallPrime {
     pub(crate) ig: u32,  // 1/g mod p (Mont.)
     pub(crate) s: u32,   // inverse mod p of the product of previous primes (Mont.)
 }
-
 // The first prime in PRIMES[] has a dedicated name because it is
 // used directly in some functions.
 pub(crate) const P0: SmallPrime = PRIMES[0];
-
 // REV10[] contains the precomputed "bit-reversal" function over 10 bits.
 const MP31_TABLE_BYTES: &[u8; 9_440] = include_bytes!("../assets/kgen_mp31_tables_le_v1.bin");
-
 const fn decode_rev10(bytes: &[u8; 9_440]) -> [u16; 1024] {
     let mut table = [0_u16; 1024];
     let mut index = 0;
@@ -264,7 +244,6 @@ const fn decode_rev10(bytes: &[u8; 9_440]) -> [u16; 1024] {
     }
     table
 }
-
 const fn decode_primes(bytes: &[u8; 9_440]) -> [SmallPrime; 308] {
     let mut table = [SmallPrime {
         p: 0,
@@ -289,7 +268,5 @@ const fn decode_primes(bytes: &[u8; 9_440]) -> [SmallPrime; 308] {
     }
     table
 }
-
 pub(crate) const REV10: [u16; 1024] = decode_rev10(MP31_TABLE_BYTES);
-
 pub(crate) const PRIMES: [SmallPrime; 308] = decode_primes(MP31_TABLE_BYTES);

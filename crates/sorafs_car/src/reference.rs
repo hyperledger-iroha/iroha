@@ -4,21 +4,17 @@
 //! this crate owns CAR parsing and trustless replay. Keeping the adapter here
 //! avoids a dependency cycle and lets operators receive the same outcome shape
 //! as the rest of the SF-11 reference validators.
-
 use sorafs_manifest::{
     ManifestV1, decode_manifest_v1_canonical,
     reference::{ValidationContextFieldV1, ValidationInputV1, ValidationOutcomeV1},
     validation::{ManifestValidationError, PinPolicyConstraints, validate_manifest},
 };
-
 use crate::{TrustlessVerificationError, TrustlessVerificationOutcome, TrustlessVerifierConfig};
-
 const CATEGORY_INTERNAL: &str = "internal";
 const CATEGORY_NORITO: &str = "norito";
 const CATEGORY_POLICY: &str = "policy";
 const CATEGORY_VALIDATION: &str = "validation";
 const TELEMETRY_MANIFEST_CAR: &str = "sorafs.reference.manifest_car";
-
 /// Validates a Norito-encoded manifest and a full CAR stream as one replay unit.
 #[must_use]
 pub fn validate_manifest_car_replay_bytes(
@@ -32,7 +28,6 @@ pub fn validate_manifest_car_replay_bytes(
     let manifest_label = manifest_label.into();
     let car_label = car_label.into();
     let inputs = replay_inputs(&manifest_label, &car_label);
-
     let manifest = match decode_manifest_v1_canonical(manifest_bytes) {
         Ok(manifest) => manifest,
         Err(error) => {
@@ -48,7 +43,6 @@ pub fn validate_manifest_car_replay_bytes(
             );
         }
     };
-
     validate_manifest_car_replay(
         &manifest,
         car_bytes,
@@ -58,7 +52,6 @@ pub fn validate_manifest_car_replay_bytes(
         generated_at,
     )
 }
-
 /// Validates an already-decoded manifest and a full CAR stream as one replay unit.
 #[must_use]
 pub fn validate_manifest_car_replay(
@@ -73,7 +66,6 @@ pub fn validate_manifest_car_replay(
     let car_label = car_label.into();
     let inputs = replay_inputs(&manifest_label, &car_label);
     let mut context = manifest_context(manifest, config);
-
     if let Err(error) = validate_manifest(manifest, &PinPolicyConstraints::default()) {
         let (code, category) = manifest_validation_code_category(&error);
         context.push(ValidationContextFieldV1::new(
@@ -91,7 +83,6 @@ pub fn validate_manifest_car_replay(
             generated_at,
         );
     }
-
     let verifier = crate::TrustlessVerifier::new(config.clone());
     match verifier.verify_full(manifest, car_bytes) {
         Ok(outcome) => {
@@ -108,14 +99,12 @@ pub fn validate_manifest_car_replay(
         Err(error) => trustless_replay_error(error, context, inputs, generated_at),
     }
 }
-
 fn replay_inputs(manifest_label: &str, car_label: &str) -> Vec<ValidationInputV1> {
     vec![
         ValidationInputV1::new("manifest", manifest_label.to_owned()),
         ValidationInputV1::new("car", car_label.to_owned()),
     ]
 }
-
 fn manifest_context(
     manifest: &ManifestV1,
     config: &TrustlessVerifierConfig,
@@ -155,17 +144,14 @@ fn manifest_context(
         ),
         ValidationContextFieldV1::new("trustless_config_version", config.version.to_string()),
     ];
-
     if let Ok(digest) = manifest.digest() {
         context.push(ValidationContextFieldV1::new(
             "manifest_digest_blake3_hex",
             hex::encode(digest.as_bytes()),
         ));
     }
-
     context
 }
-
 fn outcome_context(outcome: &TrustlessVerificationOutcome) -> Vec<ValidationContextFieldV1> {
     vec![
         ValidationContextFieldV1::new(
@@ -191,7 +177,6 @@ fn outcome_context(outcome: &TrustlessVerificationOutcome) -> Vec<ValidationCont
         ValidationContextFieldV1::new("car_size", outcome.report.stats.car_size.to_string()),
     ]
 }
-
 fn manifest_validation_code_category(
     error: &ManifestValidationError,
 ) -> (&'static str, &'static str) {
@@ -244,7 +229,6 @@ fn manifest_validation_code_category(
         | ManifestValidationError::ManifestTooLarge { .. } => ("SFS-VAL-002", CATEGORY_VALIDATION),
     }
 }
-
 fn trustless_replay_error(
     error: TrustlessVerificationError,
     mut context: Vec<ValidationContextFieldV1>,
@@ -255,7 +239,6 @@ fn trustless_replay_error(
         "replay_error",
         error.to_string(),
     ));
-
     let (code, category, action) = match &error {
         TrustlessVerificationError::Car(_) => (
             "SFS-CAR-001",
@@ -284,7 +267,6 @@ fn trustless_replay_error(
             "Resolve an approved finalized native pin record matching the verified manifest/CAR replay metadata.",
         ),
     };
-
     ValidationOutcomeV1::error(
         code,
         category,
@@ -296,28 +278,22 @@ fn trustless_replay_error(
         generated_at,
     )
 }
-
 fn telemetry_tags(code: &str) -> Vec<String> {
     vec![
         TELEMETRY_MANIFEST_CAR.to_owned(),
         format!("sorafs.reference.code.{code}"),
     ]
 }
-
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};
-
     use norito::decode_from_bytes;
-
     use super::*;
-
     fn workspace_path(relative: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../")
             .join(relative)
     }
-
     fn gateway_inputs() -> (Vec<u8>, Vec<u8>, TrustlessVerifierConfig) {
         let manifest_bytes = fs::read(workspace_path(
             "fixtures/sorafs_gateway/1.0.0/manifest_v1.to",
@@ -331,7 +307,6 @@ mod tests {
         .expect("gateway config");
         (manifest_bytes, car_bytes, config)
     }
-
     fn context_value<'a>(outcome: &'a ValidationOutcomeV1, key: &str) -> Option<&'a str> {
         outcome
             .context
@@ -339,7 +314,6 @@ mod tests {
             .find(|field| field.key == key)
             .map(|field| field.value.as_str())
     }
-
     #[test]
     fn manifest_car_replay_accepts_gateway_fixture() {
         let (manifest_bytes, car_bytes, config) = gateway_inputs();
@@ -351,7 +325,6 @@ mod tests {
             &config,
             123,
         );
-
         assert!(outcome.is_ok(), "{outcome:?}");
         assert_eq!(outcome.code, "SFS-OK-000");
         assert_eq!(outcome.generated_at, 123);
@@ -364,14 +337,12 @@ mod tests {
             Some("ce50a9aadf84e57559208d39201621262fd1b1887ae490ca54470e2a00153f27")
         );
     }
-
     #[test]
     fn manifest_car_replay_rejects_manifest_car_digest_mismatch() {
         let (manifest_bytes, car_bytes, config) = gateway_inputs();
         let mut manifest: ManifestV1 = decode_from_bytes(&manifest_bytes).expect("manifest");
         manifest.car_digest[0] ^= 0xFF;
         let tampered_manifest = norito::to_bytes(&manifest).expect("tampered manifest bytes");
-
         let outcome = validate_manifest_car_replay_bytes(
             &tampered_manifest,
             &car_bytes,
@@ -380,7 +351,6 @@ mod tests {
             &config,
             123,
         );
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-CAR-001");
         assert_eq!(outcome.category, "validation");
@@ -390,7 +360,6 @@ mod tests {
                 .contains("manifest car digest mismatch")
         );
     }
-
     #[test]
     fn manifest_car_replay_rejects_malformed_manifest_norito() {
         let (_, car_bytes, config) = gateway_inputs();
@@ -402,17 +371,14 @@ mod tests {
             &config,
             123,
         );
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, "norito");
     }
-
     #[test]
     fn manifest_car_replay_rejects_trailing_manifest_bytes() {
         let (mut manifest_bytes, car_bytes, config) = gateway_inputs();
         manifest_bytes.extend_from_slice(&[0x00, 0xA5]);
-
         let outcome = validate_manifest_car_replay_bytes(
             &manifest_bytes,
             &car_bytes,
@@ -421,17 +387,14 @@ mod tests {
             &config,
             123,
         );
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, "norito");
     }
-
     #[test]
     fn manifest_car_replay_rejects_oversized_manifest_before_decode() {
         let (_, car_bytes, config) = gateway_inputs();
         let oversized = vec![0_u8; sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 1];
-
         let outcome = validate_manifest_car_replay_bytes(
             &oversized,
             &car_bytes,
@@ -440,20 +403,17 @@ mod tests {
             &config,
             123,
         );
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, "norito");
         assert!(outcome.message.contains("maximum"));
     }
-
     #[test]
     fn manifest_car_replay_maps_manifest_policy_failure() {
         let (manifest_bytes, car_bytes, config) = gateway_inputs();
         let mut manifest: ManifestV1 = decode_from_bytes(&manifest_bytes).expect("manifest");
         manifest.version = manifest.version.saturating_add(1);
         let invalid_manifest = norito::to_bytes(&manifest).expect("invalid manifest bytes");
-
         let outcome = validate_manifest_car_replay_bytes(
             &invalid_manifest,
             &car_bytes,
@@ -462,12 +422,10 @@ mod tests {
             &config,
             123,
         );
-
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-VAL-002");
         assert_eq!(outcome.category, "validation");
     }
-
     #[test]
     fn inert_chunk_digest_maps_to_manifest_validation_failure() {
         assert_eq!(

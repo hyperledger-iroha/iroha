@@ -6,13 +6,10 @@
 //! owner and namespace authority; after clear, only the native namespace root can revoke. The
 //! leaf token pins its definition so it cannot migrate across a label rebind. Bootstrap-root
 //! permissions remain genesis-only, and ownership of an adjacent field grants no authority.
-
 use std::{borrow::ToOwned as _, collections::BTreeSet, vec::Vec};
-
 use iroha_executor_data_model::permission::{
     Permission, asset_definition::CanManageAssetDefinitionAlias,
 };
-
 use crate::{
     Execute,
     prelude::Context,
@@ -21,21 +18,17 @@ use crate::{
         prelude::*,
     },
 };
-
 #[cfg(test)]
 pub(crate) mod test_override {
     use std::cell::RefCell;
-
     thread_local! {
         static PERMISSIONS: RefCell<Vec<crate::data_model::permission::Permission>> = const {
             RefCell::new(Vec::new())
         };
     }
-
     pub fn permissions() -> Vec<crate::data_model::permission::Permission> {
         PERMISSIONS.with(|permissions| permissions.borrow().clone())
     }
-
     pub fn replace_permissions(
         permissions: Vec<crate::data_model::permission::Permission>,
     ) -> Vec<crate::data_model::permission::Permission> {
@@ -45,7 +38,6 @@ pub(crate) mod test_override {
         })
     }
 }
-
 /// Declare permission types of current module. Use it with a full path to the permission.
 /// Used to iterate over tokens to validate `Grant` and `Revoke` instructions.
 ///
@@ -81,10 +73,8 @@ macro_rules! declare_permissions {
         pub(crate) enum AnyPermission { $(
             $token_ty($($token_path::)+$token_ty), )*
         }
-
         impl TryFrom<&PermissionObject> for AnyPermission {
             type Error = iroha_executor_data_model::TryFromDataModelObjectError;
-
             fn try_from(permission: &PermissionObject) -> Result<Self, Self::Error> {
                 match permission.name().as_ref() { $(
                     stringify!($token_ty) => {
@@ -95,7 +85,6 @@ macro_rules! declare_permissions {
                 }
             }
         }
-
         impl From<AnyPermission> for PermissionObject {
             fn from(permission: AnyPermission) -> Self {
                 match permission { $(
@@ -103,7 +92,6 @@ macro_rules! declare_permissions {
                 }
             }
         }
-
         impl ValidateGrantRevoke for AnyPermission {
             fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
                 self.validate_payload()?;
@@ -114,7 +102,6 @@ macro_rules! declare_permissions {
                     AnyPermission::$token_ty(permission) => permission.validate_grant(authority, context, host), )*
                 }
             }
-
             fn validate_revoke(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
                 self.validate_payload()?;
                 if self.is_holder_delegable() && self.is_owned_by(authority, host) {
@@ -125,7 +112,6 @@ macro_rules! declare_permissions {
                 }
             }
         }
-
         impl AnyPermission {
             fn is_owned_by(&self, authority: &AccountId, host: &Iroha) -> bool {
                 match self { $(
@@ -133,7 +119,6 @@ macro_rules! declare_permissions {
                 }
             }
         }
-
         macro_rules! map_default_permissions {
             ($callback:ident) => { $(
                 $callback!($($token_path::)+$token_ty); )+
@@ -143,15 +128,12 @@ macro_rules! declare_permissions {
         pub(crate) use map_default_permissions;
     };
 }
-
 declare_permissions! {
     iroha_executor_data_model::permission::peer::{CanManagePeers},
     iroha_executor_data_model::permission::peer::{CanManageLaneRelayEmergency},
-
     iroha_executor_data_model::permission::domain::{CanRegisterDomain},
     iroha_executor_data_model::permission::domain::{CanUnregisterDomain},
     iroha_executor_data_model::permission::domain::{CanModifyDomainMetadata},
-
     iroha_executor_data_model::permission::account::{CanRegisterAccount},
     iroha_executor_data_model::permission::account::{CanUnregisterAccount},
     iroha_executor_data_model::permission::account::{CanModifyAccountMetadata},
@@ -159,16 +141,13 @@ declare_permissions! {
     iroha_executor_data_model::permission::account::{CanManageAccountAlias},
     iroha_executor_data_model::permission::account::{CanDelegateAccountAliasResolution},
     iroha_executor_data_model::permission::account::{CanResolveAccountAlias},
-
     iroha_executor_data_model::permission::query::{CanReadRestrictedDataspace},
     iroha_executor_data_model::permission::query::{CanReadAllLedgerData},
     iroha_executor_data_model::permission::query::{CanReadAccountData},
-
     iroha_executor_data_model::permission::asset_definition::{CanUnregisterAssetDefinition},
     iroha_executor_data_model::permission::asset_definition::{CanModifyAssetDefinitionMetadata},
     iroha_executor_data_model::permission::asset_definition::{CanManageAssetDefinitionConfidentialPolicy},
     iroha_executor_data_model::permission::asset_definition::{CanManageAssetDefinitionAlias},
-
     iroha_executor_data_model::permission::asset::{CanMintAssetWithDefinition},
     iroha_executor_data_model::permission::asset::{CanBurnAssetWithDefinition},
     iroha_executor_data_model::permission::asset::{CanTransferAssetWithDefinition},
@@ -180,12 +159,10 @@ declare_permissions! {
     iroha_executor_data_model::permission::asset::{CanSetAssetTransferAvailability},
     iroha_executor_data_model::permission::asset::{CanSetAssetTransferDailyLimit},
     iroha_executor_data_model::permission::asset::{CanSetAssetHoldingLimit},
-
     iroha_executor_data_model::permission::nft::{CanRegisterNft},
     iroha_executor_data_model::permission::nft::{CanUnregisterNft},
     iroha_executor_data_model::permission::nft::{CanTransferNft},
     iroha_executor_data_model::permission::nft::{CanModifyNftMetadata},
-
     iroha_executor_data_model::permission::parameter::{CanSetParameters},
     iroha_executor_data_model::permission::sccp::{CanManageSccpGovernance},
     iroha_executor_data_model::permission::sccp::{CanProposeSccpRouteGovernance},
@@ -193,15 +170,12 @@ declare_permissions! {
     iroha_executor_data_model::permission::offline::{CanActivateKagemushaRecursiveReleaseV4},
     iroha_executor_data_model::permission::offline::{CanManageOfflineDeviceAttestationPolicy},
     iroha_executor_data_model::permission::role::{CanManageRoles},
-
     iroha_executor_data_model::permission::trigger::{CanRegisterTrigger},
     iroha_executor_data_model::permission::trigger::{CanUnregisterTrigger},
     iroha_executor_data_model::permission::trigger::{CanModifyTrigger},
     iroha_executor_data_model::permission::trigger::{CanExecuteTrigger},
     iroha_executor_data_model::permission::trigger::{CanModifyTriggerMetadata},
-
     iroha_executor_data_model::permission::executor::{CanUpgradeExecutor},
-
     iroha_executor_data_model::permission::smart_contract::{CanRegisterSmartContractCode},
     iroha_executor_data_model::permission::smart_contract::{CanInvokeContractEntrypoint},
     iroha_executor_data_model::permission::settlement::{CanExecuteSettlement},
@@ -236,7 +210,6 @@ declare_permissions! {
     iroha_executor_data_model::permission::nexus::{CanManageFeeSponsorProgram},
     iroha_executor_data_model::permission::nexus::{CanEnrollFeeSponsorProgram},
 }
-
 impl AnyPermission {
     /// Return whether this permission is immutable after genesis.
     ///
@@ -259,7 +232,6 @@ impl AnyPermission {
                 | Self::CanManageFxCorridors(_)
         )
     }
-
     /// Exact account-read holders may use their grant but cannot propagate it: only the
     /// account named by the token controls its lifecycle. Exact asset-definition-alias holders
     /// likewise cannot bypass the asset-owner plus namespace-authority grant rule. Genesis-only
@@ -275,7 +247,6 @@ impl AnyPermission {
                     })
             )
     }
-
     fn validate_payload(&self) -> Result {
         match self {
             Self::CanInvokeContractEntrypoint(permission) => {
@@ -285,19 +256,15 @@ impl AnyPermission {
         }
     }
 }
-
 mod query {
     use iroha_executor_data_model::permission::query::{
         CanReadAllLedgerData, CanReadRestrictedDataspace,
     };
-
     use super::*;
-
     impl ValidateGrantRevoke for CanReadRestrictedDataspace {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -307,12 +274,10 @@ mod query {
             OnlyGenesis::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanReadAllLedgerData {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -323,7 +288,6 @@ mod query {
         }
     }
 }
-
 /// Trait that enables using permissions on the blockchain
 pub trait ExecutorPermission: Permission + PartialEq {
     /// Check if the account owns this permission
@@ -338,18 +302,15 @@ pub trait ExecutorPermission: Permission + PartialEq {
                 return has_permission_in_account(&override_permissions, self);
             }
         }
-
         let account_permissions: Vec<_> = host
             .query(FindPermissionsByAccountId::new(authority.clone()))
             .execute()
             .expect("INTERNAL BUG: `FindPermissionsByAccountId` must never fail")
             .map(|res| res.dbg_expect("Failed to get permission from cursor"))
             .collect();
-
         if has_permission_in_account(&account_permissions, self) {
             return true;
         }
-
         // collect all roles assigned to the authority
         let role_ids: Vec<RoleId> = host
             .query(FindRolesByAccountId::new(authority.clone()))
@@ -357,29 +318,22 @@ pub trait ExecutorPermission: Permission + PartialEq {
             .expect("INTERNAL BUG: `FindRolesByAccountId` must never fail")
             .map(|role_id| role_id.dbg_expect("Failed to get role from cursor"))
             .collect();
-
         // check if any of the roles have the permission we need
         if role_ids.is_empty() {
             return false;
         }
-
         let role_permissions: Vec<_> = roles_permissions(host).collect();
-
         permission_owned_in_sources(&account_permissions, &role_permissions, &role_ids, self)
     }
 }
-
 impl<T: Permission + PartialEq> ExecutorPermission for T {}
-
 /// Trait that should be implemented for all permission tokens.
 /// Provides a function to check validity of [`Grant`] and [`Revoke`]
 /// instructions containing implementing permission.
 pub(super) trait ValidateGrantRevoke {
     fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result;
-
     fn validate_revoke(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result;
 }
-
 /// Predicate-like trait used for pass conditions to identify if [`Grant`] or [`Revoke`] should be allowed.
 pub(crate) trait PassCondition {
     /// Validate whether the condition permits the grant or revoke operation.
@@ -389,7 +343,6 @@ pub(crate) trait PassCondition {
     /// or if validation fails due to host lookups.
     fn validate(&self, authority: &AccountId, host: &Iroha, context: &Context) -> Result;
 }
-
 fn ensure_permission_owned<T>(
     permission: &T,
     authority: &AccountId,
@@ -408,7 +361,6 @@ where
         )))
     }
 }
-
 macro_rules! impl_owned_permission {
     ($($ty:ty),+ $(,)?) => {$(
         impl ValidateGrantRevoke for $ty {
@@ -420,7 +372,6 @@ macro_rules! impl_owned_permission {
             ) -> Result {
                 super::ensure_permission_owned(self, authority, host, stringify!($ty))
             }
-
             fn validate_revoke(
                 &self,
                 authority: &AccountId,
@@ -432,12 +383,9 @@ macro_rules! impl_owned_permission {
         }
     )+};
 }
-
 mod executor {
     use iroha_executor_data_model::permission::executor::CanUpgradeExecutor;
-
     use super::*;
-
     impl ValidateGrantRevoke for CanUpgradeExecutor {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
@@ -452,14 +400,11 @@ mod executor {
         }
     }
 }
-
 mod smart_contract {
     use iroha_executor_data_model::permission::smart_contract::{
         CanInvokeContractEntrypoint, CanRegisterSmartContractCode,
     };
-
     use super::*;
-
     impl ValidateGrantRevoke for CanRegisterSmartContractCode {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
@@ -473,7 +418,6 @@ mod smart_contract {
             OnlyGenesis::from(self).validate(authority, host, context)
         }
     }
-
     pub(super) fn validate_contract_entrypoint_payload(
         permission: &CanInvokeContractEntrypoint,
     ) -> Result {
@@ -485,7 +429,6 @@ mod smart_contract {
         }
         Ok(())
     }
-
     fn validate_contract_entrypoint_delegation(
         permission: &CanInvokeContractEntrypoint,
         authority: &AccountId,
@@ -498,18 +441,15 @@ mod smart_contract {
         {
             return Ok(());
         }
-
         Err(ValidationFail::NotPermitted(
             "only genesis, an exact holder, or a smart-contract registrar may delegate an exact contract entrypoint permission"
                 .to_owned(),
         ))
     }
-
     impl ValidateGrantRevoke for CanInvokeContractEntrypoint {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             validate_contract_entrypoint_delegation(self, authority, context, host)
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -520,19 +460,15 @@ mod smart_contract {
         }
     }
 }
-
 mod settlement {
     use iroha_executor_data_model::permission::settlement::{
         CanExecuteSettlement, CanManageFxCorridors, CanSetFxCorridorPolicy,
     };
-
     use super::*;
-
     impl ValidateGrantRevoke for CanManageFxCorridors {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -542,7 +478,6 @@ mod settlement {
             OnlyGenesis::from(self).validate(authority, host, context)
         }
     }
-
     fn validate_bilateral_settlement_consent(
         permission: &CanExecuteSettlement,
         authority: &AccountId,
@@ -551,13 +486,11 @@ mod settlement {
         if context.curr_block.is_genesis() || permission.debited_asset.account() == authority {
             return Ok(());
         }
-
         Err(ValidationFail::NotPermitted(
             "only the debited account may delegate or revoke exact bilateral settlement consent"
                 .to_owned(),
         ))
     }
-
     impl ValidateGrantRevoke for CanExecuteSettlement {
         fn validate_grant(
             &self,
@@ -567,7 +500,6 @@ mod settlement {
         ) -> Result {
             validate_bilateral_settlement_consent(self, authority, context)
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -577,7 +509,6 @@ mod settlement {
             validate_bilateral_settlement_consent(self, authority, context)
         }
     }
-
     fn validate_corridor_delegation(
         authority: &AccountId,
         context: &Context,
@@ -586,12 +517,10 @@ mod settlement {
         if context.curr_block.is_genesis() || CanManageFxCorridors.is_owned_by(authority, host) {
             return Ok(());
         }
-
         Err(ValidationFail::NotPermitted(
             "only genesis or an FX corridor manager may delegate corridor permissions".to_owned(),
         ))
     }
-
     macro_rules! impl_corridor_permission {
         ($ty:ty) => {
             impl ValidateGrantRevoke for $ty {
@@ -603,7 +532,6 @@ mod settlement {
                 ) -> Result {
                     validate_corridor_delegation(authority, context, host)
                 }
-
                 fn validate_revoke(
                     &self,
                     authority: &AccountId,
@@ -615,18 +543,14 @@ mod settlement {
             }
         };
     }
-
     impl_corridor_permission!(CanSetFxCorridorPolicy);
 }
-
 mod nexus {
     use iroha_executor_data_model::permission::nexus::{
         CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
         CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
     };
-
     use super::*;
-
     fn ensure_publish_manifest_grant_authority(
         permission: CanPublishSpaceDirectoryManifest,
         authority: &AccountId,
@@ -645,7 +569,6 @@ mod nexus {
                 ));
             }
         }
-
         if permission.is_owned_by(authority, host) {
             Ok(())
         } else {
@@ -655,16 +578,13 @@ mod nexus {
             ))
         }
     }
-
     impl ValidateGrantRevoke for CanPublishSpaceDirectoryManifest {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             if context.curr_block.is_genesis() {
                 return Ok(());
             }
-
             ensure_publish_manifest_grant_authority(*self, authority, host)
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -674,11 +594,9 @@ mod nexus {
             if context.curr_block.is_genesis() {
                 return Ok(());
             }
-
             ensure_publish_manifest_grant_authority(*self, authority, host)
         }
     }
-
     fn ensure_uaid_manifest_grant_authority(
         permission: CanPublishSpaceDirectoryManifestForUaid,
         authority: &AccountId,
@@ -692,22 +610,18 @@ mod nexus {
         {
             return Ok(());
         }
-
         Err(ValidationFail::NotPermitted(
             "Current authority must hold either the exact UAID-scoped permission or the dataspace-wide CanPublishSpaceDirectoryManifest permission to grant or revoke it"
                 .to_owned(),
         ))
     }
-
     impl ValidateGrantRevoke for CanPublishSpaceDirectoryManifestForUaid {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             if context.curr_block.is_genesis() {
                 return Ok(());
             }
-
             ensure_uaid_manifest_grant_authority(*self, authority, host)
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -717,11 +631,9 @@ mod nexus {
             if context.curr_block.is_genesis() {
                 return Ok(());
             }
-
             ensure_uaid_manifest_grant_authority(*self, authority, host)
         }
     }
-
     fn ensure_account_domain_manifest_grant_authority(
         permission: &CanPublishSpaceDirectoryManifestForAccountDomain,
         authority: &AccountId,
@@ -747,7 +659,6 @@ mod nexus {
                 ));
             }
         }
-
         if permission.is_owned_by(authority, host)
             || (CanPublishSpaceDirectoryManifest {
                 dataspace: permission.dataspace,
@@ -756,22 +667,18 @@ mod nexus {
         {
             return Ok(());
         }
-
         Err(ValidationFail::NotPermitted(
             "Only an existing exact holder or a dataspace-wide manifest authority may grant or revoke this permission"
                 .to_owned(),
         ))
     }
-
     impl ValidateGrantRevoke for CanPublishSpaceDirectoryManifestForAccountDomain {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             if context.curr_block.is_genesis() {
                 return Ok(());
             }
-
             ensure_account_domain_manifest_grant_authority(self, authority, host)
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -781,11 +688,9 @@ mod nexus {
             if context.curr_block.is_genesis() {
                 return Ok(());
             }
-
             ensure_account_domain_manifest_grant_authority(self, authority, host)
         }
     }
-
     fn ensure_sponsor_program_delegation_authority(
         sponsor: &AccountId,
         authority: &AccountId,
@@ -799,12 +704,10 @@ mod nexus {
         {
             return Ok(());
         }
-
         Err(ValidationFail::NotPermitted(
             "only the sponsor or its fee-program manager may delegate this permission".to_owned(),
         ))
     }
-
     impl ValidateGrantRevoke for CanManageFeeSponsorProgram {
         fn validate_grant(
             &self,
@@ -819,7 +722,6 @@ mod nexus {
                 "only the sponsor account may delegate fee-program management".to_owned(),
             ))
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -838,7 +740,6 @@ mod nexus {
             }
         }
     }
-
     macro_rules! impl_program_scoped_delegation {
         ($permission:ty) => {
             impl ValidateGrantRevoke for $permission {
@@ -857,7 +758,6 @@ mod nexus {
                         host,
                     )
                 }
-
                 fn validate_revoke(
                     &self,
                     authority: &AccountId,
@@ -876,10 +776,8 @@ mod nexus {
             }
         };
     }
-
     impl_program_scoped_delegation!(CanEnrollFeeSponsorProgram);
 }
-
 mod sorafs {
     use iroha_executor_data_model::permission::sorafs::{
         CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanDeclareSorafsCapacity,
@@ -888,9 +786,7 @@ mod sorafs {
         CanSetSorafsPricing, CanSetSorafsReservePolicy, CanSubmitSorafsTelemetry,
         CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
-
     use super::*;
-
     impl_owned_permission!(
         CanBindSorafsAlias,
         CanDeclareSorafsCapacity,
@@ -908,16 +804,12 @@ mod sorafs {
         CanUnregisterSorafsProviderOwner,
     );
 }
-
 mod soranet {
     use iroha_executor_data_model::permission::soranet::{
         CanIngestSoranetPrivacy, CanIssueSoranetVpnQuote, CanManageSoranetVpnQuoteIssuers,
     };
-
     use super::*;
-
     impl_owned_permission!(CanManageSoranetVpnQuoteIssuers, CanIngestSoranetPrivacy);
-
     fn validate_quote_issuer_delegation(
         authority: &AccountId,
         context: &Context,
@@ -933,12 +825,10 @@ mod soranet {
                 .to_owned(),
         ))
     }
-
     impl ValidateGrantRevoke for CanIssueSoranetVpnQuote {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             validate_quote_issuer_delegation(authority, context, host)
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -949,15 +839,12 @@ mod soranet {
         }
     }
 }
-
 mod oracle {
     use iroha_executor_data_model::permission::oracle::{
         CanManageTwitterBindings, CanProposeOracleChange, CanRegisterOracleFeed,
         CanResolveOracleDispute, CanRollbackOracleChange, CanVoteOracleChangeStage,
     };
-
     use super::*;
-
     impl_owned_permission!(
         CanRegisterOracleFeed,
         CanProposeOracleChange,
@@ -967,14 +854,9 @@ mod oracle {
         CanManageTwitterBindings,
     );
 }
-
 mod peer {
-    use iroha_executor_data_model::permission::peer::{
-        CanManageLaneRelayEmergency, CanManagePeers,
-    };
-
+    use iroha_executor_data_model::permission::peer::{CanManageLaneRelayEmergency, CanManagePeers};
     use super::*;
-
     impl ValidateGrantRevoke for CanManagePeers {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
@@ -988,7 +870,6 @@ mod peer {
             OnlyGenesis::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanManageLaneRelayEmergency {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
@@ -1003,12 +884,9 @@ mod peer {
         }
     }
 }
-
 mod role {
     use iroha_executor_data_model::permission::role::CanManageRoles;
-
     use super::*;
-
     impl ValidateGrantRevoke for CanManageRoles {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
@@ -1023,13 +901,10 @@ mod role {
         }
     }
 }
-
 mod parameter {
     //! Module with pass conditions for parameter related tokens
     use iroha_executor_data_model::permission::parameter::CanSetParameters;
-
     use super::*;
-
     impl ValidateGrantRevoke for CanSetParameters {
         fn validate_grant(
             &self,
@@ -1040,13 +915,11 @@ mod parameter {
             if CanSetParameters.is_owned_by(authority, host) {
                 return Ok(());
             }
-
             Err(ValidationFail::NotPermitted(
                 "Current authority doesn't have the permission to set parameters, therefore it can't grant it to another account"
                     .to_owned()
             ))
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -1056,7 +929,6 @@ mod parameter {
             if CanSetParameters.is_owned_by(authority, host) {
                 return Ok(());
             }
-
             Err(ValidationFail::NotPermitted(
                 "Current authority doesn't have the permission to set parameters, therefore it can't revoke it from another account"
                     .to_owned()
@@ -1064,15 +936,12 @@ mod parameter {
         }
     }
 }
-
 mod sccp {
     //! Pass conditions for governed SCCP state management.
     use iroha_executor_data_model::permission::sccp::{
         CanManageSccpGovernance, CanProposeSccpRouteGovernance,
     };
-
     use super::*;
-
     impl ValidateGrantRevoke for CanManageSccpGovernance {
         fn validate_grant(
             &self,
@@ -1082,7 +951,6 @@ mod sccp {
         ) -> Result {
             ensure_permission_owned(self, authority, host, "CanManageSccpGovernance")
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -1092,7 +960,6 @@ mod sccp {
             ensure_permission_owned(self, authority, host, "CanManageSccpGovernance")
         }
     }
-
     impl ValidateGrantRevoke for CanProposeSccpRouteGovernance {
         fn validate_grant(
             &self,
@@ -1107,7 +974,6 @@ mod sccp {
                 "Only SCCP governance managers may grant CanProposeSccpRouteGovernance".to_owned(),
             ))
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -1123,16 +989,13 @@ mod sccp {
         }
     }
 }
-
 mod offline {
     //! Pass conditions for governed offline-settlement releases.
     use iroha_executor_data_model::permission::offline::{
         CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
         CanManageOfflineEscrow,
     };
-
     use super::*;
-
     macro_rules! impl_genesis_only_offline_permission {
         ($($permission:ty),+ $(,)?) => {
             $(
@@ -1145,7 +1008,6 @@ mod offline {
                     ) -> Result {
                         OnlyGenesis::from(self).validate(authority, host, context)
                     }
-
                     fn validate_revoke(
                         &self,
                         authority: &AccountId,
@@ -1158,26 +1020,21 @@ mod offline {
             )+
         }
     }
-
     impl_genesis_only_offline_permission!(
         CanManageOfflineEscrow,
         CanActivateKagemushaRecursiveReleaseV4,
         CanManageOfflineDeviceAttestationPolicy,
     );
 }
-
 pub mod asset {
     //! Module with pass conditions for asset related tokens
-
     use iroha_executor_data_model::permission::asset::{
         CanBurnAsset, CanBurnAssetWithDefinition, CanMintAssetToAccount,
         CanMintAssetWithDefinition, CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition,
         CanSetAssetHoldingLimit, CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit,
         CanTransferAsset, CanTransferAssetWithDefinition,
     };
-
     use super::*;
-
     /// Check if `authority` is the owner of asset.
     ///
     /// `authority` is owner of asset if:
@@ -1187,26 +1044,22 @@ pub mod asset {
     pub fn is_asset_owner(asset_id: &AssetId, authority: &AccountId, host: &Iroha) -> bool {
         crate::permission::account::is_account_owner(asset_id.account(), authority, host)
     }
-
     /// Pass condition that checks if `authority` is the owner of asset.
     #[derive(Debug, Clone)]
     pub struct Owner<'asset> {
         /// Asset id to check against
         pub asset: &'asset AssetId,
     }
-
     impl PassCondition for Owner<'_> {
         fn validate(&self, authority: &AccountId, host: &Iroha, _context: &Context) -> Result {
             if is_asset_owner(self.asset, authority, host) {
                 return Ok(());
             }
-
             Err(ValidationFail::NotPermitted(
                 "Can't access asset owned by another account".to_owned(),
             ))
         }
     }
-
     impl ValidateGrantRevoke for CanMintAssetWithDefinition {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             super::asset_definition::Owner::from(self).validate(authority, host, context)
@@ -1220,7 +1073,6 @@ pub mod asset {
             super::asset_definition::Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanBurnAssetWithDefinition {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             super::asset_definition::Owner::from(self).validate(authority, host, context)
@@ -1234,7 +1086,6 @@ pub mod asset {
             super::asset_definition::Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanTransferAssetWithDefinition {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             super::asset_definition::Owner::from(self).validate(authority, host, context)
@@ -1248,7 +1099,6 @@ pub mod asset {
             super::asset_definition::Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanModifyAssetMetadataWithDefinition {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             super::asset_definition::Owner::from(self).validate(authority, host, context)
@@ -1262,7 +1112,6 @@ pub mod asset {
             super::asset_definition::Owner::from(self).validate(authority, host, context)
         }
     }
-
     macro_rules! impl_asset_definition_control_permission {
         ($ty:ty) => {
             impl ValidateGrantRevoke for $ty {
@@ -1274,7 +1123,6 @@ pub mod asset {
                 ) -> Result {
                     super::asset_definition::Owner::from(self).validate(authority, host, context)
                 }
-
                 fn validate_revoke(
                     &self,
                     authority: &AccountId,
@@ -1286,11 +1134,9 @@ pub mod asset {
             }
         };
     }
-
     impl_asset_definition_control_permission!(CanSetAssetTransferAvailability);
     impl_asset_definition_control_permission!(CanSetAssetTransferDailyLimit);
     impl_asset_definition_control_permission!(CanSetAssetHoldingLimit);
-
     impl ValidateGrantRevoke for CanMintAssetToAccount {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             super::asset_definition::Owner {
@@ -1310,7 +1156,6 @@ pub mod asset {
             .validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanBurnAsset {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             validate_asset_or_definition_owner(&self.asset, authority, context, host)
@@ -1324,7 +1169,6 @@ pub mod asset {
             validate_asset_or_definition_owner(&self.asset, authority, context, host)
         }
     }
-
     impl ValidateGrantRevoke for CanTransferAsset {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             Owner::from(self).validate(authority, host, context)
@@ -1338,7 +1182,6 @@ pub mod asset {
             Owner::from(self).validate(authority, host, context)
         }
     }
-
     macro_rules! impl_froms {
         ($($name:ty),+ $(,)?) => {$(
             impl<'t> From<&'t $name> for Owner<'t> {
@@ -1348,9 +1191,7 @@ pub mod asset {
             })+
         };
     }
-
     impl_froms!(CanBurnAsset, CanTransferAsset, CanModifyAssetMetadata);
-
     impl ValidateGrantRevoke for CanModifyAssetMetadata {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             validate_asset_or_definition_owner(&self.asset, authority, context, host)
@@ -1364,7 +1205,6 @@ pub mod asset {
             validate_asset_or_definition_owner(&self.asset, authority, context, host)
         }
     }
-
     fn validate_asset_or_definition_owner(
         asset: &AssetId,
         authority: &AccountId,
@@ -1380,22 +1220,18 @@ pub mod asset {
         .validate(authority, host, context)
     }
 }
-
 pub mod asset_definition {
     //! Module with pass conditions for asset definition related tokens
-
     use iroha_executor_data_model::permission::asset_definition::{
         AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
         CanManageAssetDefinitionConfidentialPolicy, CanModifyAssetDefinitionMetadata,
         CanUnregisterAssetDefinition,
     };
-
     use super::*;
     use crate::smart_contract::{
         Iroha,
         data_model::{isi::error::InstructionExecutionError, query::error::FindError},
     };
-
     /// Check if `authority` is the owner of asset definition
     ///
     /// `authority` is owner of asset definition if:
@@ -1424,7 +1260,6 @@ pub mod asset_definition {
         })?;
         Ok(asset_definition.owned_by() == authority)
     }
-
     fn validate_asset_definition_alias_namespace_scope_owner(
         scope: &AssetDefinitionAliasPermissionScope,
         authority: &AccountId,
@@ -1443,7 +1278,6 @@ pub mod asset_definition {
             )),
         }
     }
-
     pub(super) fn asset_definition_alias_namespace_scope(
         alias: &ResolvedAssetDefinitionAliasV1,
     ) -> Result<AssetDefinitionAliasPermissionScope> {
@@ -1457,7 +1291,6 @@ pub mod asset_definition {
             ))),
         }
     }
-
     fn validate_asset_definition_alias_namespace_authority(
         alias: &ResolvedAssetDefinitionAliasV1,
         authority: &AccountId,
@@ -1473,7 +1306,6 @@ pub mod asset_definition {
         }
         validate_asset_definition_alias_namespace_scope_owner(&scope, authority, context, host)
     }
-
     fn validate_active_asset_definition_alias_owner(
         alias: &ResolvedAssetDefinitionAliasV1,
         authority: &AccountId,
@@ -1498,26 +1330,22 @@ pub mod asset_definition {
             "Asset-definition alias `{alias}` is not actively bound"
         )))
     }
-
     /// Pass condition that checks if `authority` is the owner of asset definition.
     #[derive(Debug, Clone)]
     pub struct Owner<'asset_definition> {
         /// Asset definition id to check against
         pub asset_definition: &'asset_definition AssetDefinitionId,
     }
-
     impl PassCondition for Owner<'_> {
         fn validate(&self, authority: &AccountId, host: &Iroha, _context: &Context) -> Result {
             if is_asset_definition_owner(self.asset_definition, authority, host)? {
                 return Ok(());
             }
-
             Err(ValidationFail::NotPermitted(
                 "Can't access asset definition owned by another account".to_owned(),
             ))
         }
     }
-
     impl ValidateGrantRevoke for CanUnregisterAssetDefinition {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             Owner::from(self).validate(authority, host, context)
@@ -1531,7 +1359,6 @@ pub mod asset_definition {
             Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanModifyAssetDefinitionMetadata {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             Owner::from(self).validate(authority, host, context)
@@ -1545,7 +1372,6 @@ pub mod asset_definition {
             Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanManageAssetDefinitionConfidentialPolicy {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             Owner::from(self).validate(authority, host, context)
@@ -1559,7 +1385,6 @@ pub mod asset_definition {
             Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanManageAssetDefinitionAlias {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             match &self.scope {
@@ -1574,7 +1399,6 @@ pub mod asset_definition {
                 ),
             }
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -1594,7 +1418,6 @@ pub mod asset_definition {
             }
         }
     }
-
     macro_rules! impl_froms {
         ($($name:ty),+ $(,)?) => {$(
             impl<'t> From<&'t $name> for Owner<'t> {
@@ -1604,7 +1427,6 @@ pub mod asset_definition {
             })+
         };
     }
-
     impl_froms!(
         CanUnregisterAssetDefinition,
         CanModifyAssetDefinitionMetadata,
@@ -1618,7 +1440,6 @@ pub mod asset_definition {
         iroha_executor_data_model::permission::asset::CanSetAssetHoldingLimit,
     );
 }
-
 /// Module with pass conditions for NFT related tokens
 ///
 /// - Owner of `nft.domain` can unregister, modify and transfer NFT
@@ -1631,13 +1452,11 @@ pub mod nft {
     use iroha_executor_data_model::permission::nft::{
         CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft,
     };
-
     use super::*;
     use crate::smart_contract::{
         Iroha,
         data_model::{isi::error::InstructionExecutionError, query::error::FindError},
     };
-
     /// Check if `authority` is *week* owner of NFT.
     ///
     /// `authority` is *week* owner of NFT if:
@@ -1670,7 +1489,6 @@ pub mod nft {
             is_nft_full_owner(nft_id, authority, host)
         }
     }
-
     /// Check if `authority` is *full* owner of NFT.
     ///
     /// `authority` is *full* owner of NFT if:
@@ -1683,45 +1501,38 @@ pub mod nft {
     pub fn is_nft_full_owner(nft_id: &NftId, authority: &AccountId, host: &Iroha) -> Result<bool> {
         domain::is_domain_owner(nft_id.domain(), authority, host)
     }
-
     /// Pass condition that checks if `authority` is the *weak* owner of NFT.
     #[derive(Debug, Clone)]
     pub struct WeakOwner<'nft> {
         /// NFT id to check against
         pub nft: &'nft NftId,
     }
-
     impl PassCondition for WeakOwner<'_> {
         fn validate(&self, authority: &AccountId, host: &Iroha, _context: &Context) -> Result {
             if is_nft_weak_owner(self.nft, authority, host)? {
                 return Ok(());
             }
-
             Err(ValidationFail::NotPermitted(
                 "Can't access NFT owned by another account".to_owned(),
             ))
         }
     }
-
     /// Pass condition that checks if `authority` is the *full* owner of NFT.
     #[derive(Debug, Clone)]
     pub struct FullOwner<'nft> {
         /// NFT id to check against
         pub nft: &'nft NftId,
     }
-
     impl PassCondition for FullOwner<'_> {
         fn validate(&self, authority: &AccountId, host: &Iroha, _context: &Context) -> Result {
             if is_nft_full_owner(self.nft, authority, host)? {
                 return Ok(());
             }
-
             Err(ValidationFail::NotPermitted(
                 "Can't access NFT from domain owned by another account".to_owned(),
             ))
         }
     }
-
     impl ValidateGrantRevoke for CanRegisterNft {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             super::domain::Owner::from(self).validate(authority, host, context)
@@ -1735,7 +1546,6 @@ pub mod nft {
             super::domain::Owner::from(self).validate(authority, host, context)
         }
     }
-
     macro_rules! impl_froms_and_validate_grant_revoke {
         ($owner:ident : $($name:ty),+ $(,)?) => {$(
             impl<'t> From<&'t $name> for $owner<'t> {
@@ -1743,7 +1553,6 @@ pub mod nft {
                     Self { nft: &value.nft }
                 }
             }
-
             impl ValidateGrantRevoke for $name {
                 fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
                     $owner::from(self).validate(authority, host, context)
@@ -1759,37 +1568,30 @@ pub mod nft {
             }
         )+};
     }
-
     impl_froms_and_validate_grant_revoke!(WeakOwner: CanTransferNft);
     impl_froms_and_validate_grant_revoke!(FullOwner: CanUnregisterNft, CanModifyNftMetadata);
 }
-
 pub mod account {
     //! Module with pass conditions for asset related tokens
-
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanManageAccountAlias,
         CanModifyAccountMetadata, CanRegisterAccount, CanReplaceAccountController,
         CanResolveAccountAlias, CanUnregisterAccount,
     };
     use iroha_executor_data_model::permission::query::CanReadAccountData;
-
     use super::*;
-
     /// Check if `authority` is the owner of account.
     ///
     /// `authority` owns the account if it matches the account subject exactly.
     pub fn is_account_owner(account_id: &AccountId, authority: &AccountId, _host: &Iroha) -> bool {
         account_id == authority
     }
-
     /// Pass condition that checks if `authority` is the owner of account.
     #[derive(Debug, Clone)]
     pub struct Owner<'asset> {
         /// Account id to check against
         pub account: &'asset AccountId,
     }
-
     pub(super) fn validate_dataspace_alias_owner(
         dataspace: crate::smart_contract::data_model::nexus::DataSpaceId,
         authority: &AccountId,
@@ -1812,7 +1614,6 @@ pub mod account {
             )))
         }
     }
-
     fn validate_account_alias_domain_owner(
         domain: &crate::smart_contract::data_model::domain::DomainId,
         authority: &AccountId,
@@ -1821,7 +1622,6 @@ pub mod account {
     ) -> Result {
         super::domain::Owner { domain }.validate(authority, host, context)
     }
-
     fn validate_account_alias_scope_owner(
         scope: &AccountAliasPermissionScope,
         authority: &AccountId,
@@ -1857,7 +1657,6 @@ pub mod account {
             }
         }
     }
-
     fn can_delegate_account_alias_resolve(
         authority: &AccountId,
         scope: &AccountAliasPermissionScope,
@@ -1872,19 +1671,16 @@ pub mod account {
         account_permissions_allow_delegation
             || validate_account_alias_scope_owner(scope, authority, context, host).is_ok()
     }
-
     impl PassCondition for Owner<'_> {
         fn validate(&self, authority: &AccountId, host: &Iroha, _context: &Context) -> Result {
             if is_account_owner(self.account, authority, host) {
                 return Ok(());
             }
-
             Err(ValidationFail::NotPermitted(
                 "Can't access another account".to_owned(),
             ))
         }
     }
-
     impl ValidateGrantRevoke for CanRegisterAccount {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             super::domain::Owner::from(self).validate(authority, host, context)
@@ -1898,7 +1694,6 @@ pub mod account {
             super::domain::Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanUnregisterAccount {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             Owner::from(self).validate(authority, host, context)
@@ -1912,7 +1707,6 @@ pub mod account {
             Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanModifyAccountMetadata {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             Owner::from(self).validate(authority, host, context)
@@ -1926,7 +1720,6 @@ pub mod account {
             Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanReplaceAccountController {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             Owner::from(self).validate(authority, host, context)
@@ -1940,12 +1733,10 @@ pub mod account {
             Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanReadAccountData {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             Owner::from(self).validate(authority, host, context)
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -1955,19 +1746,16 @@ pub mod account {
             Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanResolveAccountAlias {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             if can_delegate_account_alias_resolve(authority, &self.scope, context, host) {
                 return Ok(());
             }
-
             Err(ValidationFail::NotPermitted(
                 "Can't grant or revoke account-alias resolution outside an owned or exactly delegated scope"
                     .to_owned(),
             ))
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -1977,12 +1765,10 @@ pub mod account {
             self.validate_grant(authority, context, host)
         }
     }
-
     impl ValidateGrantRevoke for CanDelegateAccountAliasResolution {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             validate_account_alias_scope_owner(&self.scope, authority, context, host)
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -1992,12 +1778,10 @@ pub mod account {
             validate_account_alias_scope_owner(&self.scope, authority, context, host)
         }
     }
-
     impl ValidateGrantRevoke for CanManageAccountAlias {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             validate_account_alias_scope_owner(&self.scope, authority, context, host)
         }
-
         fn validate_revoke(
             &self,
             authority: &AccountId,
@@ -2007,7 +1791,6 @@ pub mod account {
             self.validate_grant(authority, context, host)
         }
     }
-
     macro_rules! impl_froms {
         ($($name:ty),+ $(,)?) => {$(
             impl<'t> From<&'t $name> for Owner<'t> {
@@ -2017,7 +1800,6 @@ pub mod account {
             })+
         };
     }
-
     impl_froms!(
         CanUnregisterAccount,
         CanModifyAccountMetadata,
@@ -2025,20 +1807,17 @@ pub mod account {
         CanReadAccountData,
     );
 }
-
 pub mod trigger {
     //! Module with pass conditions for trigger related tokens
     use iroha_executor_data_model::permission::trigger::{
         CanExecuteTrigger, CanModifyTrigger, CanModifyTriggerMetadata, CanRegisterTrigger,
         CanUnregisterTrigger,
     };
-
     use super::*;
     use crate::data_model::{
         isi::error::InstructionExecutionError,
         query::{error::FindError, trigger::FindTriggers},
     };
-
     /// Check if `authority` is the owner of trigger.
     ///
     /// `authority` owns the trigger if it matches the trigger authority exactly.
@@ -2051,7 +1830,6 @@ pub mod trigger {
         host: &Iroha,
     ) -> Result<bool> {
         let trigger = find_trigger(trigger_id, host)?;
-
         Ok(trigger.action().authority() == authority)
     }
     /// Returns the trigger.
@@ -2073,26 +1851,22 @@ pub mod trigger {
             })
         }
     }
-
     /// Pass condition that checks if `authority` is the owner of trigger.
     #[derive(Debug, Clone)]
     pub struct Owner<'trigger> {
         /// Trigger id to check against
         pub trigger: &'trigger TriggerId,
     }
-
     impl PassCondition for Owner<'_> {
         fn validate(&self, authority: &AccountId, host: &Iroha, _context: &Context) -> Result {
             if is_trigger_owner(self.trigger, authority, host)? {
                 return Ok(());
             }
-
             Err(ValidationFail::NotPermitted(
                 "Can't give permission to access trigger owned by another account".to_owned(),
             ))
         }
     }
-
     impl ValidateGrantRevoke for CanRegisterTrigger {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             super::account::Owner::from(self).validate(authority, host, context)
@@ -2106,7 +1880,6 @@ pub mod trigger {
             super::account::Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanExecuteTrigger {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             Owner::from(self).validate(authority, host, context)
@@ -2120,7 +1893,6 @@ pub mod trigger {
             Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanUnregisterTrigger {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             Owner::from(self).validate(authority, host, context)
@@ -2134,7 +1906,6 @@ pub mod trigger {
             Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanModifyTrigger {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             Owner::from(self).validate(authority, host, context)
@@ -2148,7 +1919,6 @@ pub mod trigger {
             Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanModifyTriggerMetadata {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             Owner::from(self).validate(authority, host, context)
@@ -2162,7 +1932,6 @@ pub mod trigger {
             Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl<'t> From<&'t CanRegisterTrigger> for super::account::Owner<'t> {
         fn from(value: &'t CanRegisterTrigger) -> Self {
             Self {
@@ -2170,7 +1939,6 @@ pub mod trigger {
             }
         }
     }
-
     macro_rules! impl_froms {
         ($($name:ty),+ $(,)?) => {$(
             impl<'t> From<&'t $name> for Owner<'t> {
@@ -2180,7 +1948,6 @@ pub mod trigger {
             })+
         };
     }
-
     impl_froms!(
         CanUnregisterTrigger,
         CanModifyTrigger,
@@ -2188,7 +1955,6 @@ pub mod trigger {
         CanModifyTriggerMetadata,
     );
 }
-
 pub mod domain {
     //! Module with pass conditions for domain related tokens
     use iroha_executor_data_model::permission::{
@@ -2198,9 +1964,7 @@ pub mod domain {
     use iroha_smart_contract::data_model::{
         isi::error::InstructionExecutionError, query::error::FindError,
     };
-
     use super::*;
-
     /// Check if `authority` is owner of domain
     ///
     /// # Errors
@@ -2227,26 +1991,22 @@ pub mod domain {
             })
         }
     }
-
     /// Pass condition that checks if `authority` is the owner of domain.
     #[derive(Debug, Clone)]
     pub struct Owner<'domain> {
         /// Domain id to check against
         pub domain: &'domain DomainId,
     }
-
     impl PassCondition for Owner<'_> {
         fn validate(&self, authority: &AccountId, host: &Iroha, _context: &Context) -> Result {
             if is_domain_owner(self.domain, authority, host)? {
                 return Ok(());
             }
-
             Err(ValidationFail::NotPermitted(
                 "Can't access domain owned by another account".to_owned(),
             ))
         }
     }
-
     impl ValidateGrantRevoke for CanRegisterDomain {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
@@ -2273,7 +2033,6 @@ pub mod domain {
             Owner::from(self).validate(authority, host, context)
         }
     }
-
     impl ValidateGrantRevoke for CanModifyDomainMetadata {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             Owner::from(self).validate(authority, host, context)
@@ -2287,7 +2046,6 @@ pub mod domain {
             Owner::from(self).validate(authority, host, context)
         }
     }
-
     macro_rules! impl_froms {
         ($($name:ty),+ $(,)?) => {$(
             impl<'t> From<&'t $name> for Owner<'t> {
@@ -2297,7 +2055,6 @@ pub mod domain {
             })+
         };
     }
-
     impl_froms!(
         CanUnregisterDomain,
         CanModifyDomainMetadata,
@@ -2305,13 +2062,11 @@ pub mod domain {
         CanRegisterNft,
     );
 }
-
 /// Pass condition that allows operation only in genesis.
 ///
 /// In other words it always operation only if block height is 0.
 #[derive(Debug, Default, Copy, Clone)]
 pub(crate) struct OnlyGenesis;
-
 impl PassCondition for OnlyGenesis {
     fn validate(&self, _authority: &AccountId, _host: &Iroha, context: &Context) -> Result {
         if context.curr_block.is_genesis() {
@@ -2323,13 +2078,11 @@ impl PassCondition for OnlyGenesis {
         }
     }
 }
-
 impl<T: Permission> From<&T> for OnlyGenesis {
     fn from(_: &T) -> Self {
         Self
     }
 }
-
 /// Iterator over all accounts and theirs permission tokens
 pub(crate) fn accounts_permissions(
     host: &Iroha,
@@ -2346,7 +2099,6 @@ pub(crate) fn accounts_permissions(
                 .map(move |permission| (account.id().clone(), permission))
         })
 }
-
 /// Iterator over all roles and theirs permission tokens
 pub(crate) fn roles_permissions(host: &Iroha) -> impl Iterator<Item = (RoleId, PermissionObject)> {
     host.query(FindRoles)
@@ -2361,7 +2113,6 @@ pub(crate) fn roles_permissions(host: &Iroha) -> impl Iterator<Item = (RoleId, P
                 .map(move |permission| (role.id().clone(), permission))
         })
 }
-
 fn has_permission_in_roles<P>(
     roles: impl IntoIterator<Item = (RoleId, PermissionObject)>,
     role_ids: &[RoleId],
@@ -2374,16 +2125,13 @@ where
     if role_ids.is_empty() {
         return false;
     }
-
     let role_filter: BTreeSet<_> = role_ids.iter().cloned().collect();
-
     roles
         .into_iter()
         .filter(|(role_id, _)| role_filter.contains(role_id))
         .filter_map(|(_, permission)| P::try_from(&permission).ok())
         .any(|permission| *target == permission)
 }
-
 fn has_permission_in_account<P>(permissions: &[PermissionObject], target: &P) -> bool
 where
     P: Permission + PartialEq,
@@ -2394,7 +2142,6 @@ where
         .filter_map(|permission| P::try_from(permission).ok())
         .any(|permission| *target == permission)
 }
-
 pub(crate) fn permission_owned_in_sources<P>(
     account_permissions: &[PermissionObject],
     roles: &[(RoleId, PermissionObject)],
@@ -2408,7 +2155,6 @@ where
     has_permission_in_account(account_permissions, target)
         || has_permission_in_roles(roles.iter().cloned(), role_ids, target)
 }
-
 /// Revoked all permissions satisfied given [condition].
 ///
 /// Note: you must manually call `deny!` if this function returns error.
@@ -2419,26 +2165,20 @@ pub(crate) fn revoke_permissions<V: Execute + ?Sized>(
     for (owner_id, permission) in accounts_permissions(executor.host()) {
         if condition(&permission) {
             let isi = RevokeBox::from(Revoke::account_permission(permission, owner_id.clone()));
-
             executor.host().submit(&isi)?;
         }
     }
-
     for (role_id, permission) in roles_permissions(executor.host()) {
         if condition(&permission) {
             let isi = RevokeBox::from(Revoke::role_permission(permission, role_id.clone()));
-
             executor.host().submit(&isi)?;
         }
     }
-
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use std::{num::NonZeroU64, vec::Vec};
-
     use iroha_crypto::{Hash, PublicKey};
     use iroha_executor_data_model::permission::offline::{
         CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
@@ -2465,7 +2205,6 @@ mod tests {
         smart_contract::CanInvokeContractEntrypoint,
         soranet::{CanIssueSoranetVpnQuote, CanManageSoranetVpnQuoteIssuers},
     };
-
     use super::{
         AnyPermission, OnlyGenesis, PassCondition, ValidateGrantRevoke, has_permission_in_roles,
         permission_owned_in_sources,
@@ -2488,7 +2227,6 @@ mod tests {
             },
         },
     };
-
     fn make_context(authority: &AccountId, height: u64) -> Context {
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("height must be non-zero"),
@@ -2503,7 +2241,6 @@ mod tests {
             curr_block: header,
         }
     }
-
     fn make_account_id() -> AccountId {
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -2511,7 +2248,6 @@ mod tests {
                 .unwrap();
         AccountId::new(public_key)
     }
-
     fn make_other_account_id() -> AccountId {
         let public_key: PublicKey =
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
@@ -2519,7 +2255,6 @@ mod tests {
                 .unwrap();
         AccountId::new(public_key)
     }
-
     fn make_third_account_id() -> AccountId {
         let public_key: PublicKey =
             "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016"
@@ -2527,7 +2262,6 @@ mod tests {
                 .unwrap();
         AccountId::new(public_key)
     }
-
     fn make_fee_sponsor_program_id(sponsor: AccountId, name: &str) -> FeeSponsorProgramId {
         FeeSponsorProgramId::new(
             sponsor,
@@ -2535,48 +2269,37 @@ mod tests {
                 .expect("fee sponsor program name must be valid"),
         )
     }
-
     #[test]
     fn has_permission_in_roles_filters_by_role_ids() {
         let role_id: RoleId = "role1".parse().unwrap();
         let other_role_id: RoleId = "role2".parse().unwrap();
-
         let permission = PermissionObject::from(CanManagePeers);
-
         let roles = vec![
             (role_id.clone(), permission.clone()),
             (other_role_id, PermissionObject::from(CanManagePeers)),
         ];
-
         let role_ids = vec![role_id];
-
         assert!(has_permission_in_roles(roles, &role_ids, &CanManagePeers));
     }
-
     #[test]
     fn has_permission_in_roles_returns_false_when_role_ids_empty() {
         let role_id: RoleId = "role1".parse().unwrap();
         let roles = vec![(role_id, PermissionObject::from(CanManagePeers))];
         let role_ids: Vec<RoleId> = Vec::new();
-
         assert!(!has_permission_in_roles(roles, &role_ids, &CanManagePeers));
     }
-
     #[test]
     fn has_permission_in_roles_deduplicates_role_ids() {
         let role_id: RoleId = "role1".parse().unwrap();
         let roles = vec![(role_id.clone(), PermissionObject::from(CanManagePeers))];
         let role_ids = vec![role_id.clone(), role_id];
-
         assert!(has_permission_in_roles(roles, &role_ids, &CanManagePeers));
     }
-
     #[test]
     fn permission_owned_returns_true_for_direct_permission() {
         let account_permissions = vec![PermissionObject::from(CanManagePeers)];
         let role_permissions: Vec<(RoleId, PermissionObject)> = Vec::new();
         let role_ids: Vec<RoleId> = Vec::new();
-
         assert!(permission_owned_in_sources(
             &account_permissions,
             &role_permissions,
@@ -2584,14 +2307,12 @@ mod tests {
             &CanManagePeers,
         ));
     }
-
     #[test]
     fn permission_owned_returns_true_via_roles() {
         let role_id: RoleId = "validators".parse().unwrap();
         let account_permissions = Vec::new();
         let role_permissions = vec![(role_id.clone(), PermissionObject::from(CanManagePeers))];
         let role_ids = vec![role_id];
-
         assert!(permission_owned_in_sources(
             &account_permissions,
             &role_permissions,
@@ -2599,13 +2320,11 @@ mod tests {
             &CanManagePeers,
         ));
     }
-
     #[test]
     fn permission_owned_returns_false_when_missing() {
         let account_permissions = vec![PermissionObject::from(CanManagePeers)];
         let role_permissions: Vec<(RoleId, PermissionObject)> = Vec::new();
         let role_ids: Vec<RoleId> = Vec::new();
-
         assert!(!permission_owned_in_sources(
             &account_permissions,
             &role_permissions,
@@ -2613,7 +2332,6 @@ mod tests {
             &CanRegisterDomain,
         ));
     }
-
     #[test]
     fn permission_owned_matches_opaque_asset_definition_permission() {
         let asset_definition = AssetDefinitionId::from_uuid_bytes([
@@ -2627,7 +2345,6 @@ mod tests {
         let account_permissions = vec![PermissionObject::from(token.clone())];
         let role_permissions: Vec<(RoleId, PermissionObject)> = Vec::new();
         let role_ids: Vec<RoleId> = Vec::new();
-
         assert!(permission_owned_in_sources(
             &account_permissions,
             &role_permissions,
@@ -2635,7 +2352,6 @@ mod tests {
             &token,
         ));
     }
-
     #[test]
     fn confidential_policy_permission_holder_can_delegate_only_the_exact_asset_definition() {
         let authority = make_account_id();
@@ -2660,11 +2376,9 @@ mod tests {
         let sibling_dispatched = AnyPermission::try_from(&PermissionObject::from(sibling))
             .expect("sibling confidential-policy permission must be typed");
         let previous = test_override::replace_permissions(vec![held]);
-
         let exact_grant = exact_dispatched.validate_grant(&authority, &context, &Iroha);
         let exact_revoke = exact_dispatched.validate_revoke(&authority, &context, &Iroha);
         let sibling_grant = sibling_dispatched.validate_grant(&authority, &context, &Iroha);
-
         test_override::replace_permissions(previous);
         assert!(exact_grant.is_ok());
         assert!(exact_revoke.is_ok());
@@ -2673,26 +2387,21 @@ mod tests {
             Err(ValidationFail::NotPermitted(_))
         ));
     }
-
     #[test]
     fn only_genesis_allows_first_block() {
         let authority = make_account_id();
         let context = make_context(&authority, 1);
-
         assert!(OnlyGenesis.validate(&authority, &Iroha, &context).is_ok());
     }
-
     #[test]
     fn only_genesis_rejects_other_blocks() {
         let authority = make_account_id();
         let context = make_context(&authority, 2);
-
         let err = OnlyGenesis
             .validate(&authority, &Iroha, &context)
             .expect_err("expected rejection");
         assert!(matches!(err, ValidationFail::NotPermitted(_)));
     }
-
     #[test]
     fn bilateral_settlement_consent_is_controlled_by_debited_account() {
         let debited_account = make_account_id();
@@ -2710,7 +2419,6 @@ mod tests {
         };
         let debited_context = make_context(&debited_account, 2);
         let other_context = make_context(&other, 2);
-
         permission
             .validate_grant(&debited_account, &debited_context, &Iroha)
             .expect("debited account may grant exact consent");
@@ -2724,27 +2432,23 @@ mod tests {
             ValidationFail::NotPermitted(_)
         ));
     }
-
     #[test]
     fn vpn_quote_issuer_leaf_requires_manager_delegation() {
         let authority = make_account_id();
         let context = make_context(&authority, 2);
         let leaf = AnyPermission::CanIssueSoranetVpnQuote(CanIssueSoranetVpnQuote);
-
         let previous = test_override::replace_permissions(Vec::new());
         assert!(matches!(
             leaf.validate_grant(&authority, &context, &Iroha)
                 .expect_err("an unrelated account must not appoint a VPN quote issuer"),
             ValidationFail::NotPermitted(_)
         ));
-
         test_override::replace_permissions(vec![CanIssueSoranetVpnQuote.into()]);
         assert!(matches!(
             leaf.validate_grant(&authority, &context, &Iroha)
                 .expect_err("an issuer leaf must not propagate itself"),
             ValidationFail::NotPermitted(_)
         ));
-
         test_override::replace_permissions(vec![CanManageSoranetVpnQuoteIssuers.into()]);
         leaf.validate_grant(&authority, &context, &Iroha)
             .expect("the issuer manager may grant the leaf");
@@ -2752,7 +2456,6 @@ mod tests {
             .expect("the issuer manager may revoke the leaf");
         test_override::replace_permissions(previous);
     }
-
     #[test]
     fn governed_offline_permissions_are_immutable_after_genesis() {
         let banking_authority = make_account_id();
@@ -2790,7 +2493,6 @@ mod tests {
                 ),
             ),
         ];
-
         for (name, grant, revoke) in results {
             for result in [grant, revoke] {
                 let error = result.expect_err(
@@ -2806,12 +2508,10 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn governed_offline_permissions_can_only_be_seeded_in_genesis() {
         let genesis_authority = make_account_id();
         let context = make_context(&genesis_authority, 1);
-
         let results = [
             (
                 "CanManageOfflineEscrow",
@@ -2850,7 +2550,6 @@ mod tests {
             assert!(revoke.is_ok(), "genesis must revoke {name}: {revoke:?}");
         }
     }
-
     #[test]
     fn fee_sponsor_program_manager_is_typed_and_only_the_sponsor_may_delegate_it() {
         let sponsor = make_account_id();
@@ -2860,7 +2559,6 @@ mod tests {
             sponsor: sponsor.clone(),
         };
         let raw: PermissionObject = permission.clone().into();
-
         assert!(matches!(
             AnyPermission::try_from(&raw),
             Ok(AnyPermission::CanManageFeeSponsorProgram(parsed)) if parsed == permission
@@ -2884,7 +2582,6 @@ mod tests {
             Err(ValidationFail::NotPermitted(_))
         ));
     }
-
     #[test]
     fn alias_resolution_delegate_can_propagate_only_the_exact_scope() {
         let authority = make_account_id();
@@ -2902,13 +2599,11 @@ mod tests {
         let held_dispatched =
             AnyPermission::try_from(&held_object).expect("delegation token must be typed");
         let previous = test_override::replace_permissions(vec![held_object]);
-
         let exact_grant = exact.validate_grant(&authority, &context, &Iroha);
         let exact_revoke = exact.validate_revoke(&authority, &context, &Iroha);
         let cross_scope_grant = other.validate_grant(&authority, &context, &Iroha);
         let recursive_grant = held_dispatched.validate_grant(&authority, &context, &Iroha);
         let recursive_revoke = held_dispatched.validate_revoke(&authority, &context, &Iroha);
-
         test_override::replace_permissions(previous);
         assert!(exact_grant.is_ok());
         assert!(exact_revoke.is_ok());
@@ -2919,7 +2614,6 @@ mod tests {
         assert!(recursive_grant.is_ok());
         assert!(recursive_revoke.is_ok());
     }
-
     #[test]
     fn exact_asset_alias_holder_cannot_revoke_after_binding_clear_without_namespace_root() {
         let holder = make_account_id();
@@ -2938,14 +2632,12 @@ mod tests {
         let exact_raw = PermissionObject::from(exact.clone());
         let dispatched =
             AnyPermission::try_from(&exact_raw).expect("exact alias permission must be typed");
-
         // The binding is intentionally absent. Exact possession must not bypass the native
         // namespace-root lookup; the definition pin prevents rebinding escalation, while the
         // namespace root remains the lifecycle authority after clear.
         let previous = test_override::replace_permissions(vec![exact_raw]);
         let holder_revoke = dispatched.validate_revoke(&holder, &context, &Iroha);
         test_override::replace_permissions(previous);
-
         assert!(holder_revoke.is_err());
         assert!(matches!(
             super::asset_definition::asset_definition_alias_namespace_scope(match &exact.scope {
@@ -2956,7 +2648,6 @@ mod tests {
                 if domain == DomainId::try_new("banka", "paynet").expect("alias domain")
         ));
     }
-
     #[test]
     fn exact_holder_dispatch_covers_each_corrected_delegation_family() {
         let authority = make_account_id();
@@ -3002,16 +2693,13 @@ mod tests {
                 program_id: make_fee_sponsor_program_id(authority.clone(), "retail"),
             }),
         ];
-
         for raw in permissions {
             let name = raw.name().to_owned();
             let dispatched =
                 AnyPermission::try_from(&raw).expect("corrected permission must be typed");
             let previous = test_override::replace_permissions(vec![raw]);
-
             let grant = dispatched.validate_grant(&authority, &context, &Iroha);
             let revoke = dispatched.validate_revoke(&authority, &context, &Iroha);
-
             test_override::replace_permissions(previous);
             assert!(
                 grant.is_ok(),
@@ -3023,7 +2711,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn exact_contract_holder_cannot_propagate_noncanonical_selector() {
         let authority = make_account_id();
@@ -3043,16 +2730,13 @@ mod tests {
         let dispatched =
             AnyPermission::try_from(&raw).expect("contract permission must be structurally typed");
         let previous = test_override::replace_permissions(vec![raw]);
-
         let grant = dispatched.validate_grant(&authority, &context, &Iroha);
         let revoke = dispatched.validate_revoke(&authority, &context, &Iroha);
-
         test_override::replace_permissions(previous);
         for result in [grant, revoke] {
             assert!(matches!(result, Err(ValidationFail::NotPermitted(_))));
         }
     }
-
     #[test]
     fn restricted_dataspace_reader_cannot_grant_or_revoke_after_genesis() {
         let authority = make_account_id();
@@ -3064,14 +2748,12 @@ mod tests {
         let role_dispatched =
             AnyPermission::try_from(&permission).expect("restricted-read permission must be typed");
         let previous = test_override::replace_permissions(vec![permission]);
-
         let denied = [
             exact.validate_grant(&authority, &post_genesis, &Iroha),
             exact.validate_revoke(&authority, &post_genesis, &Iroha),
             role_dispatched.validate_grant(&authority, &post_genesis, &Iroha),
             role_dispatched.validate_revoke(&authority, &post_genesis, &Iroha),
         ];
-
         test_override::replace_permissions(previous);
         for result in denied {
             let error = result
@@ -3084,12 +2766,10 @@ mod tests {
                 "unexpected restricted-read mutation rejection: {error}",
             );
         }
-
         let genesis = make_context(&authority, 1);
         assert!(exact.validate_grant(&authority, &genesis, &Iroha).is_ok());
         assert!(exact.validate_revoke(&authority, &genesis, &Iroha).is_ok());
     }
-
     #[test]
     fn global_ledger_reader_cannot_grant_or_revoke_after_genesis() {
         let authority = make_account_id();
@@ -3099,12 +2779,10 @@ mod tests {
         let dispatched =
             AnyPermission::try_from(&permission).expect("global-read permission must be typed");
         let previous = test_override::replace_permissions(vec![permission]);
-
         let denied = [
             dispatched.validate_grant(&authority, &post_genesis, &Iroha),
             dispatched.validate_revoke(&authority, &post_genesis, &Iroha),
         ];
-
         test_override::replace_permissions(previous);
         for result in denied {
             let error = result.expect_err(
@@ -3112,12 +2790,10 @@ mod tests {
             );
             assert!(matches!(error, ValidationFail::NotPermitted(_)));
         }
-
         let genesis = make_context(&authority, 1);
         assert!(exact.validate_grant(&authority, &genesis, &Iroha).is_ok());
         assert!(exact.validate_revoke(&authority, &genesis, &Iroha).is_ok());
     }
-
     #[test]
     fn account_subject_exclusively_controls_account_read_grants() {
         let account = make_account_id();
@@ -3129,7 +2805,6 @@ mod tests {
         let permission = PermissionObject::from(exact.clone());
         let dispatched =
             AnyPermission::try_from(&permission).expect("account-read permission must be typed");
-
         assert!(
             dispatched
                 .validate_grant(&account, &context, &Iroha)
@@ -3142,7 +2817,6 @@ mod tests {
                 .is_ok(),
             "the account subject must control revocation"
         );
-
         let previous = test_override::replace_permissions(vec![permission]);
         let reader_context = make_context(&reader, 2);
         let denied = [
@@ -3157,7 +2831,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn alias_resolution_domain_delegate_cannot_widen_or_cross_scope_kind() {
         let authority = make_account_id();
@@ -3183,11 +2856,9 @@ mod tests {
             scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::new(10)),
         };
         let previous = test_override::replace_permissions(vec![PermissionObject::from(held)]);
-
         let exact_grant = exact.validate_grant(&authority, &context, &Iroha);
         let sibling_grant = sibling.validate_grant(&authority, &context, &Iroha);
         let dataspace_grant = dataspace.validate_grant(&authority, &context, &Iroha);
-
         test_override::replace_permissions(previous);
         assert!(exact_grant.is_ok());
         assert!(matches!(
@@ -3199,7 +2870,6 @@ mod tests {
             Err(ValidationFail::NotPermitted(_))
         ));
     }
-
     #[test]
     fn can_publish_space_directory_manifest_grant_allows_existing_holder_after_genesis() {
         let authority = make_account_id();
@@ -3208,13 +2878,10 @@ mod tests {
             dataspace: DataSpaceId::new(10),
         };
         let previous = test_override::replace_permissions(vec![PermissionObject::from(token)]);
-
         let result = token.validate_grant(&authority, &context, &Iroha);
-
         test_override::replace_permissions(previous);
         assert!(result.is_ok());
     }
-
     #[test]
     fn can_publish_space_directory_manifest_grant_rejects_unscoped_null_payload_after_genesis() {
         let authority = make_account_id();
@@ -3228,13 +2895,10 @@ mod tests {
                 .expect("permission ident"),
             Json::from_raw_json("null".to_owned()).expect("valid JSON fixture"),
         )]);
-
         let result = token.validate_grant(&authority, &context, &Iroha);
-
         test_override::replace_permissions(previous);
         assert!(matches!(result, Err(ValidationFail::NotPermitted(_))));
     }
-
     #[test]
     fn can_publish_space_directory_manifest_grant_rejects_missing_holder_after_genesis() {
         let authority = make_account_id();
@@ -3244,15 +2908,12 @@ mod tests {
         };
         let previous =
             test_override::replace_permissions(vec![PermissionObject::from(CanManagePeers)]);
-
         let err = token
             .validate_grant(&authority, &context, &Iroha)
             .expect_err("expected rejection");
-
         test_override::replace_permissions(previous);
         assert!(matches!(err, ValidationFail::NotPermitted(_)));
     }
-
     #[test]
     fn dataspace_manifest_holder_can_delegate_one_exact_uaid_after_genesis() {
         let authority = make_account_id();
@@ -3265,13 +2926,10 @@ mod tests {
         let previous = test_override::replace_permissions(vec![PermissionObject::from(
             CanPublishSpaceDirectoryManifest { dataspace },
         )]);
-
         let result = scoped.validate_grant(&authority, &context, &Iroha);
-
         test_override::replace_permissions(previous);
         assert!(result.is_ok());
     }
-
     #[test]
     fn uaid_manifest_holder_cannot_delegate_a_different_uaid_after_genesis() {
         let authority = make_account_id();
@@ -3286,13 +2944,10 @@ mod tests {
             uaid: UniversalAccountId::from_hash(Hash::new(b"uaid::ubl-customer")),
         };
         let previous = test_override::replace_permissions(vec![PermissionObject::from(held)]);
-
         let result = requested.validate_grant(&authority, &context, &Iroha);
-
         test_override::replace_permissions(previous);
         assert!(matches!(result, Err(ValidationFail::NotPermitted(_))));
     }
-
     #[test]
     fn account_domain_manifest_delegation_is_exact_across_hbl_and_ubl() {
         let authority = make_account_id();
@@ -3308,10 +2963,8 @@ mod tests {
         };
         let previous =
             test_override::replace_permissions(vec![PermissionObject::from(hbl.clone())]);
-
         let own_result = hbl.validate_grant(&authority, &context, &Iroha);
         let cross_fi_result = ubl.validate_grant(&authority, &context, &Iroha);
-
         test_override::replace_permissions(previous);
         assert!(own_result.is_ok());
         assert!(matches!(
@@ -3319,7 +2972,6 @@ mod tests {
             Err(ValidationFail::NotPermitted(_))
         ));
     }
-
     #[test]
     fn dataspace_manifest_holder_can_delegate_account_domain_scope() {
         let authority = make_account_id();
@@ -3332,13 +2984,10 @@ mod tests {
         let previous = test_override::replace_permissions(vec![PermissionObject::from(
             CanPublishSpaceDirectoryManifest { dataspace },
         )]);
-
         let result = hbl.validate_grant(&authority, &context, &Iroha);
-
         test_override::replace_permissions(previous);
         assert!(result.is_ok());
     }
-
     #[test]
     fn fee_program_manager_can_delegate_exact_enrollment_scope() {
         let sponsor = make_account_id();
@@ -3351,17 +3000,14 @@ mod tests {
         let previous = test_override::replace_permissions(vec![PermissionObject::from(
             CanManageFeeSponsorProgram { sponsor },
         )]);
-
         for result in [
             enrollment.validate_grant(&manager, &context, &Iroha),
             enrollment.validate_revoke(&manager, &context, &Iroha),
         ] {
             assert!(result.is_ok(), "program manager must delegate exact scopes");
         }
-
         test_override::replace_permissions(previous);
     }
-
     #[test]
     fn fee_program_delegation_is_exact_to_the_program_sponsor() {
         let first_sponsor = make_account_id();
@@ -3379,16 +3025,13 @@ mod tests {
                 sponsor: first_sponsor,
             },
         )]);
-
         assert!(first.validate_grant(&manager, &context, &Iroha).is_ok());
         assert!(matches!(
             second.validate_grant(&manager, &context, &Iroha),
             Err(ValidationFail::NotPermitted(_))
         ));
-
         test_override::replace_permissions(previous);
     }
-
     #[test]
     fn exact_fee_program_enrollment_holder_can_propagate_exact_token() {
         let sponsor = make_account_id();
@@ -3401,7 +3044,6 @@ mod tests {
         let dispatched =
             AnyPermission::try_from(&raw).expect("fee-program enrollment token must be typed");
         let previous = test_override::replace_permissions(vec![raw]);
-
         assert!(
             dispatched
                 .validate_grant(&registrar, &context, &Iroha)
@@ -3412,10 +3054,8 @@ mod tests {
                 .validate_revoke(&registrar, &context, &Iroha)
                 .is_ok()
         );
-
         test_override::replace_permissions(previous);
     }
-
     #[test]
     fn genesis_can_seed_fee_program_permissions() {
         let sponsor = make_account_id();
@@ -3426,7 +3066,6 @@ mod tests {
             AnyPermission::CanManageFeeSponsorProgram(CanManageFeeSponsorProgram { sponsor }),
             AnyPermission::CanEnrollFeeSponsorProgram(CanEnrollFeeSponsorProgram { program_id }),
         ];
-
         for permission in permissions {
             assert!(
                 permission
@@ -3440,16 +3079,13 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn account_domain_manifest_permission_json_uses_dot_fqn() {
         let token = CanPublishSpaceDirectoryManifestForAccountDomain {
             dataspace: DataSpaceId::new(10),
             domain: DomainId::try_new("hbl", "sbp").expect("HBL domain"),
         };
-
         let payload = norito::json::to_json(&token).expect("serialize publisher permission");
-
         assert_eq!(payload, r#"{"dataspace":10,"domain":"hbl.sbp"}"#);
         assert_eq!(
             norito::json::from_str::<CanPublishSpaceDirectoryManifestForAccountDomain>(&payload)
@@ -3457,16 +3093,13 @@ mod tests {
             token,
         );
     }
-
     #[test]
     fn sponsor_program_permissions_json_use_exact_program_id() {
         let sponsor = make_account_id();
         let token = CanEnrollFeeSponsorProgram {
             program_id: make_fee_sponsor_program_id(sponsor, "retail"),
         };
-
         let payload = norito::json::to_json(&token).expect("serialize enrollment permission");
-
         assert_eq!(
             payload,
             format!(r#"{{"program_id":"{}"}}"#, token.program_id),

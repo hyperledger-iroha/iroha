@@ -1,8 +1,6 @@
 //! Print operator JSON fields for TAIRA confidential v2 verifying-key updates.
-
 use base64::Engine as _;
 use iroha_core::zk::confidential_v2;
-
 fn print_record(kind: &str, version: u32) -> Result<(), String> {
     let (name, mut record) = match kind {
         "transfer" => (
@@ -61,7 +59,6 @@ fn print_record(kind: &str, version: u32) -> Result<(), String> {
     );
     Ok(())
 }
-
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let result = match args.as_slice() {

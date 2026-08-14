@@ -15,9 +15,7 @@
 //! privacy_exact12_activation_network::canonical_exact12_governance_survives_four_peer_activation_replay_and_restart \
 //! -- --exact --nocapture --test-threads=1
 //! ```
-
 use std::time::Duration;
-
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::client::Client;
@@ -50,7 +48,6 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use tokio::time::{Instant, sleep, timeout};
-
 const TEST_NAME: &str =
     "canonical_exact12_governance_survives_four_peer_activation_replay_and_restart";
 const REQUIRED_DAEMON_FEATURE: &str = "zk-stark";
@@ -61,13 +58,11 @@ const ACTIVATION_ADVANCE_TIMEOUT: Duration = Duration::from_secs(300);
 const TEST_BLOCK_CADENCE: Duration = Duration::from_millis(100);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ZK_AMS_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkAmsV1;
-
 #[derive(Clone, Copy)]
 struct ExpectedProtocolState {
     compiled: CompiledPrivacyProfileV1,
     activation: Option<PrivacyProtocolActivationRecordV1>,
 }
-
 fn require_test_network_feature(feature: &str) -> Result<()> {
     let enabled = std::env::var("TEST_NETWORK_IROHAD_FEATURES")
         .ok()
@@ -83,25 +78,21 @@ fn require_test_network_feature(feature: &str) -> Result<()> {
     );
     Ok(())
 }
-
 fn bounded_client(mut client: Client) -> Client {
     client.transaction_status_timeout = SUBMISSION_TIMEOUT;
     client.torii_request_timeout = Duration::from_secs(20);
     client.transaction_ttl = Some(Duration::from_secs(3_600));
     client
 }
-
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
 }
-
 fn error_chain_contains(error: &eyre::Report, needle: &str) -> bool {
     let needle = needle.to_ascii_lowercase();
     error
         .chain()
         .any(|cause| cause.to_string().to_ascii_lowercase().contains(&needle))
 }
-
 fn is_exact_replay_error(error: &eyre::Report) -> bool {
     [
         "prtry:already_committed",
@@ -114,7 +105,6 @@ fn is_exact_replay_error(error: &eyre::Report) -> bool {
     .iter()
     .any(|needle| error_chain_contains(error, needle))
 }
-
 fn compiled_exact12() -> Result<Vec<CompiledPrivacyProfileV1>> {
     ensure!(
         PrivacyProtocolIdV1::COUNT == 12,
@@ -149,7 +139,6 @@ fn compiled_exact12() -> Result<Vec<CompiledPrivacyProfileV1>> {
     }
     Ok(profiles)
 }
-
 fn expected_states(
     profiles: &[CompiledPrivacyProfileV1],
     activations: impl IntoIterator<Item = Option<PrivacyProtocolActivationRecordV1>>,
@@ -171,7 +160,6 @@ fn expected_states(
         })
         .collect())
 }
-
 fn assert_exact12_snapshot(
     snapshot: &PrivacyExact12CapabilityManifestV1,
     minimum_height: u64,
@@ -222,7 +210,6 @@ fn assert_exact12_snapshot(
     }
     Ok(())
 }
-
 async fn wait_for_identical_exact12_snapshots(
     clients: &[Client],
     minimum_height: u64,
@@ -286,7 +273,6 @@ async fn wait_for_identical_exact12_snapshots(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 fn next_incoming_height(client: &Client) -> Result<u64> {
     client
         .get_privacy_capabilities()
@@ -295,7 +281,6 @@ fn next_incoming_height(client: &Client) -> Result<u64> {
         .checked_add(1)
         .ok_or_else(|| eyre!("incoming privacy-governance height overflowed"))
 }
-
 fn proposed_activation(
     compiled: CompiledPrivacyProfileV1,
     proposed_at_height: u64,
@@ -308,14 +293,12 @@ fn proposed_activation(
         },
     ))
 }
-
 fn instruction_transaction(
     client: &Client,
     instruction: impl Into<InstructionBox>,
 ) -> SignedTransaction {
     client.build_transaction([instruction.into()], no_fee(), Metadata::default())
 }
-
 async fn submit_signed_transaction(
     client: &Client,
     transaction: &SignedTransaction,
@@ -332,7 +315,6 @@ async fn submit_signed_transaction(
     .map_err(|error| eyre!("{context}: submission task failed: {error}"))?
     .wrap_err_with(|| context.to_owned())
 }
-
 async fn submit_instruction(
     client: &Client,
     instruction: impl Into<InstructionBox>,
@@ -341,7 +323,6 @@ async fn submit_instruction(
     let transaction = instruction_transaction(client, instruction);
     submit_signed_transaction(client, &transaction, context).await
 }
-
 async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<()> {
     let start = client
         .get_privacy_capabilities()
@@ -378,7 +359,6 @@ async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<
     );
     Ok(())
 }
-
 fn exact_applied_transaction_visible(
     client: &Client,
     transaction: &SignedTransaction,
@@ -405,7 +385,6 @@ fn exact_applied_transaction_visible(
     );
     Ok(true)
 }
-
 async fn wait_for_transaction_on_peers(
     clients: &[Client],
     transaction: &SignedTransaction,
@@ -439,7 +418,6 @@ async fn wait_for_transaction_on_peers(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 fn assert_zk_ams_unavailable(
     snapshot: &PrivacyExact12CapabilityManifestV1,
     minimum_height: u64,
@@ -473,7 +451,6 @@ fn assert_zk_ams_unavailable(
     );
     Ok(())
 }
-
 async fn wait_for_identical_zk_ams_unavailable(
     clients: &[Client],
     minimum_height: u64,
@@ -520,7 +497,6 @@ async fn wait_for_identical_zk_ams_unavailable(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Result<()> {
     require_test_network_feature(REQUIRED_DAEMON_FEATURE)?;
@@ -541,7 +517,6 @@ async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Re
     );
     let candidate = zk_ams_release_candidate_profile_material_v1()
         .wrap_err("derive deterministic but non-activatable ZK-AMS candidate profile")?;
-
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -554,7 +529,6 @@ async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Re
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
     };
-
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
@@ -576,7 +550,6 @@ async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Re
             "ZK-AMS must begin unavailable and unregistered",
         )
         .await?;
-
         let grant = instruction_transaction(
             &client,
             Grant::account_permission(
@@ -591,7 +564,6 @@ async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Re
             "ZK-AMS governance grant convergence",
         )
         .await?;
-
         let proposal_height = next_incoming_height(&client)?;
         let activation_height = proposal_height
             .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
@@ -616,7 +588,6 @@ async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Re
                 && error_chain_contains(&activation_error, "not governance-available"),
             "ZK-AMS candidate activation rejected for wrong reason: {activation_error:?}"
         );
-
         let bundle = privacy_exact12_fixture_bundle_v1()
             .wrap_err("construct canonical Exact12 fixture bundle")?;
         let fixture_row = bundle
@@ -640,7 +611,6 @@ async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Re
                 && error_chain_contains(&action_error, "is not registered"),
             "ZK-AMS production action rejected for wrong reason: {action_error:?}"
         );
-
         let pre_restart_height = client
             .get_privacy_capabilities()
             .wrap_err("query ZK-AMS state before restart")?
@@ -651,7 +621,6 @@ async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Re
             "ZK-AMS activation and action rejections must preserve closed state",
         )
         .await?;
-
         let restart_index = all_clients.len() - 1;
         let restart_peer = network.peers()[restart_index].clone();
         let config_layers = network.config_layers().collect::<Vec<_>>();
@@ -693,7 +662,6 @@ async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Re
             "ZK-AMS closed status must survive validator restart",
         )
         .await?;
-
         let restarted_client = bounded_client(restart_peer.client());
         let replay_error = submit_signed_transaction(
             &restarted_client,
@@ -713,11 +681,9 @@ async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Re
         Ok(())
     }
     .await;
-
     network.shutdown().await;
     result
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_restart()
 -> Result<()> {
@@ -735,7 +701,6 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
     let Some(network) = sandbox::start_network_async_or_skip(builder, TEST_NAME).await? else {
         return Ok(());
     };
-
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
@@ -760,7 +725,6 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
         )
         .await?;
         let immutable_consensus_policy = initial_snapshots[0].consensus_policy;
-
         let unauthorized_height = next_incoming_height(&client)?;
         let unauthorized_activation_height = unauthorized_height
             .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
@@ -792,14 +756,12 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             "unauthorized registration rejection must not register any exact-12 activation",
         )
         .await?;
-
         submit_instruction(
             &client,
             Grant::account_permission(Permission::from(CanEnactGovernance), client.account.clone()),
             "grant CanEnactGovernance for exact-12 activation",
         )
         .await?;
-
         let early_height = next_incoming_height(&client)?;
         let insufficient_activation_delay =
             PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1
@@ -834,7 +796,6 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             "one-block-early rejection must not register any exact-12 activation",
         )
         .await?;
-
         let tampered_height = next_incoming_height(&client)?;
         let tampered_activation_height = tampered_height
             .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
@@ -869,7 +830,6 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             "rejected profile substitution must not register any activation",
         )
         .await?;
-
         let first_registration_height = next_incoming_height(&client)?;
         let final_registration_height = first_registration_height
             .checked_add(
@@ -940,7 +900,6 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
                     .is_some_and(|record| !record.lifecycle.is_active()))),
             "a pre-activation proposal submission was incorrectly exposed as Active"
         );
-
         let last_pre_activation_height = activation_height
             .checked_sub(1)
             .ok_or_else(|| eyre!("shared exact-12 activation height has no predecessor"))?;
@@ -971,7 +930,6 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
                     .is_some_and(|record| !record.lifecycle.is_active()))),
             "an exact-12 lifecycle became Active before its governed height"
         );
-
         let restart_index = all_clients.len() - 1;
         let restart_peer = network.peers()[restart_index].clone();
         let config_layers = network.config_layers().collect::<Vec<_>>();
@@ -1012,7 +970,6 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
              quorum probe"
         );
         let healthy_clients = all_clients[..restart_index].to_vec();
-
         submit_instruction(
             &client,
             Log::new(
@@ -1064,7 +1021,6 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             "exact-12 registration or activation mutated the privacy consensus policy"
         );
         let immutable_active_rows = active_snapshots[0].protocols.clone();
-
         let first_proposal_transaction = first_proposal_transaction
             .as_ref()
             .ok_or_else(|| eyre!("first exact-12 proposal transaction was not retained"))?;
@@ -1120,7 +1076,6 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
                 .all(|snapshot| snapshot.consensus_policy == immutable_consensus_policy),
             "fresh duplicate registration mutated the privacy consensus policy"
         );
-
         let height_before_replay = client
             .get_privacy_capabilities()
             .wrap_err("query exact-12 height before proposal replay")?
@@ -1144,7 +1099,6 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
                 == height_before_replay,
             "exact activation proposal replay unexpectedly committed another block"
         );
-
         let expected_catch_up_height = height_before_replay
             .checked_add(1)
             .ok_or_else(|| eyre!("exact-12 catch-up height overflowed"))?;
@@ -1178,7 +1132,6 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             "healthy-validator exact-12 catch-up sentinel finality",
         )
         .await?;
-
         timeout(
             RESTART_TIMEOUT,
             restart_peer.start_checked(config_layers.iter(), None),
@@ -1216,7 +1169,6 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
         Ok(())
     }
     .await;
-
     network.shutdown().await;
     result
 }

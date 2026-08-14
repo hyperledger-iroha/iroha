@@ -1,8 +1,6 @@
 //! Verify dynamic durable lowering for `StateMap<int, int>`.
-
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 mod common;
-
 #[test]
 fn dynamic_map_set_uses_durable_state() {
     let src = r#"
@@ -23,7 +21,6 @@ fn dynamic_map_set_uses_durable_state() {
     vm.load_program(&code).expect("load");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run");
-
     // Inspect the host-owned state directly. A second CNTR-less helper image
     // must not inherit the loaded contract's state schema.
     let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(2))

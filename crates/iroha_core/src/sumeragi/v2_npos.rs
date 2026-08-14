@@ -4,9 +4,7 @@
 //! world state directly: the only persistence path is a
 //! [`VrfEpochRecord`] carried by a finalized block's
 //! [`NposConsensusEffects`](iroha_data_model::consensus::NposConsensusEffects).
-
 use std::collections::{BTreeMap, BTreeSet};
-
 use iroha_crypto::{Hash, KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     block::consensus_v2 as wire,
@@ -20,14 +18,11 @@ use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 use zeroize::Zeroizing;
-
 use super::consensus::{NPOS_TAG, v2_vrf_commit_preimage, v2_vrf_reveal_preimage};
 use crate::state::{State, WorldReadOnly};
 use wire::{VrfCommit, VrfReveal};
-
 /// Domain separator for deterministic NPoS VRF input derivation.
 const VRF_INPUT_DOMAIN: &[u8] = b"iroha:npos:vrf:input:v1";
-
 fn derive_vrf_material_from_key(
     network_id: &iroha_data_model::NetworkId,
     private_key: &PrivateKey,
@@ -52,7 +47,6 @@ fn derive_vrf_material_from_key(
     let commitment: [u8; 32] = Hash::new(reveal).into();
     Ok((reveal, commitment, proof.encode()))
 }
-
 fn vrf_input(
     network_id: &iroha_data_model::NetworkId,
     epoch: u64,
@@ -67,7 +61,6 @@ fn vrf_input(
     message.extend_from_slice(&u64::from(signer).to_be_bytes());
     message
 }
-
 /// Result of admitting one authenticated VRF observation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum V2VrfIngressOutcome {
@@ -80,7 +73,6 @@ pub(crate) enum V2VrfIngressOutcome {
     /// The message failed a frozen-context, cryptographic, or window check.
     Rejected(V2VrfRejection),
 }
-
 /// Stable reason for rejecting an inbound VRF message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum V2VrfRejection {
@@ -111,7 +103,6 @@ pub(crate) enum V2VrfRejection {
     /// The explicit per-height observation bound was exhausted.
     Capacity,
 }
-
 /// Fatal construction or local-emission failure.
 #[derive(Debug, Error)]
 pub(crate) enum V2NposError {
@@ -157,7 +148,6 @@ pub(crate) enum V2NposError {
     #[error("fresh local NPoS VRF message failed authenticated ingress: {0:?}")]
     LocalAdmission(V2VrfIngressOutcome),
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct EpochSchedule {
     length: u64,
@@ -165,7 +155,6 @@ struct EpochSchedule {
     reveal_end: u64,
     position: u64,
 }
-
 #[derive(Clone, Copy)]
 struct VrfRecordValidationContext<'a> {
     network_id: &'a iroha_data_model::NetworkId,
@@ -175,7 +164,6 @@ struct VrfRecordValidationContext<'a> {
     leader_seed: [u8; 32],
     roster: &'a [wire::ValidatorPower],
 }
-
 impl<'a> From<&'a wire::HeightContext> for VrfRecordValidationContext<'a> {
     fn from(context: &'a wire::HeightContext) -> Self {
         Self {
@@ -188,14 +176,12 @@ impl<'a> From<&'a wire::HeightContext> for VrfRecordValidationContext<'a> {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NposEpochParams {
     pub(crate) epoch_length_blocks: u64,
     pub(crate) commit_deadline_offset: u64,
     pub(crate) reveal_deadline_offset: u64,
 }
-
 pub(crate) fn committed_epoch_params(
     world: &impl WorldReadOnly,
 ) -> Result<NposEpochParams, V2NposError> {
@@ -222,7 +208,6 @@ pub(crate) fn committed_epoch_params(
         reveal_deadline_offset,
     })
 }
-
 #[derive(Debug)]
 struct ActiveVrfLifecycle {
     context: wire::HeightContext,
@@ -239,13 +224,11 @@ struct ActiveVrfLifecycle {
     outbound: Vec<wire::ConsensusMessageV2>,
     retransmit: Option<wire::ConsensusMessageV2>,
 }
-
 /// Per-height NPoS VRF state owned exclusively by the serialized v2 runner.
 #[derive(Debug, Default)]
 pub(crate) struct V2NposVrfLifecycle {
     active: Option<ActiveVrfLifecycle>,
 }
-
 impl V2NposVrfLifecycle {
     /// Restore the active epoch from finalized WSV and stage deterministic
     /// local emission for the current frozen window.
@@ -306,7 +289,6 @@ impl V2NposVrfLifecycle {
             context.roster.len(),
         )
     }
-
     fn from_parts(
         context: wire::HeightContext,
         schedule: EpochSchedule,
@@ -369,7 +351,6 @@ impl V2NposVrfLifecycle {
             active: Some(active),
         })
     }
-
     /// Authenticate and retain an inbound commitment without mutating WSV.
     pub(crate) fn accept_commit(
         &mut self,
@@ -381,7 +362,6 @@ impl V2NposVrfLifecycle {
             |active| active.accept_commit(commit, sender),
         )
     }
-
     /// Authenticate and retain an inbound reveal without mutating WSV.
     pub(crate) fn accept_reveal(
         &mut self,
@@ -393,7 +373,6 @@ impl V2NposVrfLifecycle {
             |active| active.accept_reveal(reveal, sender),
         )
     }
-
     /// Drain locally generated messages for one bounded broadcast to the
     /// frozen voter set.
     pub(crate) fn take_outbound(&mut self) -> Vec<wire::ConsensusMessageV2> {
@@ -401,7 +380,6 @@ impl V2NposVrfLifecycle {
             .as_mut()
             .map_or_else(Vec::new, |active| std::mem::take(&mut active.outbound))
     }
-
     /// Clone the single locally authenticated message for bounded periodic
     /// retransmission while this height remains active.
     pub(crate) fn retransmission(&self) -> Vec<wire::ConsensusMessageV2> {
@@ -411,7 +389,6 @@ impl V2NposVrfLifecycle {
             .into_iter()
             .collect()
     }
-
     /// Return the current proposal record when it extends finalized WSV.
     pub(crate) fn pending_records(&self) -> Vec<VrfEpochRecord> {
         self.active
@@ -421,7 +398,6 @@ impl V2NposVrfLifecycle {
             .collect()
     }
 }
-
 /// Validate every VRF observation carried by an authoritative v2 candidate.
 ///
 /// This is intentionally called both during Prepare validation and immediately
@@ -444,7 +420,6 @@ pub(crate) fn validate_candidate_records(
             ))
         };
     }
-
     if records.len() > 1 {
         return Err(V2NposError::InvalidRecord(
             "candidate carries more than one active-epoch record",
@@ -500,7 +475,6 @@ pub(crate) fn validate_candidate_records(
     validate_extension_at_candidate_height(context, schedule, existing.as_ref(), record)?;
     Ok(())
 }
-
 /// Validate a finalized epoch record against the exact NPoS height context
 /// certified for its boundary block.
 ///
@@ -538,7 +512,6 @@ pub(crate) fn validate_finalized_epoch_record(
         true,
     )
 }
-
 /// Authenticate the exact pre-boundary record and derive the immediate
 /// successor epoch seed from its canonically ordered, in-window reveals.
 ///
@@ -575,7 +548,6 @@ pub(crate) fn authenticated_successor_seed(
     validate_authenticated_record(context, schedule, record, roster_len, false)?;
     Ok(super::next_epoch_seed_from_record(record))
 }
-
 impl EpochSchedule {
     fn for_context(
         context: VrfRecordValidationContext<'_>,
@@ -605,7 +577,6 @@ impl EpochSchedule {
         })
     }
 }
-
 impl ActiveVrfLifecycle {
     fn accept_commit(&mut self, commit: VrfCommit, sender: Option<&PeerId>) -> V2VrfIngressOutcome {
         let signer = match self.authenticate_commit(&commit, sender) {
@@ -634,7 +605,6 @@ impl ActiveVrfLifecycle {
         }
         self.retain_commit(signer, commit)
     }
-
     fn accept_reveal(&mut self, reveal: VrfReveal, sender: Option<&PeerId>) -> V2VrfIngressOutcome {
         let signer = match self.authenticate_reveal(&reveal, sender) {
             Ok(signer) => signer,
@@ -686,7 +656,6 @@ impl ActiveVrfLifecycle {
                 V2VrfIngressOutcome::Rejected(V2VrfRejection::ConflictingReveal)
             };
         }
-
         if self.schedule.position <= self.schedule.reveal_end {
             let participant = self
                 .participants
@@ -725,7 +694,6 @@ impl ActiveVrfLifecycle {
             V2VrfIngressOutcome::AcceptedLate
         }
     }
-
     fn retain_commit(&mut self, signer: u32, commit: VrfCommit) -> V2VrfIngressOutcome {
         let participant = self
             .participants
@@ -750,7 +718,6 @@ impl ActiveVrfLifecycle {
         self.updated_at_height = self.updated_at_height.max(self.context.height);
         V2VrfIngressOutcome::Accepted
     }
-
     fn authenticate_commit(
         &self,
         commit: &VrfCommit,
@@ -773,7 +740,6 @@ impl ActiveVrfLifecycle {
             .map_err(|_| V2VrfRejection::InvalidSignature)?;
         Ok(commit.signer)
     }
-
     fn authenticate_reveal(
         &self,
         reveal: &VrfReveal,
@@ -798,7 +764,6 @@ impl ActiveVrfLifecycle {
             .map_err(|_| V2VrfRejection::InvalidSignature)?;
         Ok(reveal.signer)
     }
-
     fn bound_sender(
         &self,
         signer: u32,
@@ -817,7 +782,6 @@ impl ActiveVrfLifecycle {
         }
         Ok(peer)
     }
-
     fn stage_local_message(
         &mut self,
         local_validator: Option<wire::ValidatorIndex>,
@@ -844,7 +808,6 @@ impl ActiveVrfLifecycle {
             local_validator,
         )
         .map_err(|error| V2NposError::LocalMaterial(error.to_string()))?;
-
         let existing = self.participants.get(&local_validator);
         if existing
             .and_then(|participant| participant.commitment)
@@ -852,7 +815,6 @@ impl ActiveVrfLifecycle {
         {
             return Err(V2NposError::LocalCommitmentMismatch);
         }
-
         if self.schedule.position <= self.schedule.commit_end {
             if existing
                 .and_then(|participant| participant.commitment)
@@ -883,7 +845,6 @@ impl ActiveVrfLifecycle {
             }
             return Ok(());
         }
-
         if self.schedule.position <= self.schedule.reveal_end
             && existing
                 .and_then(|participant| participant.commitment)
@@ -919,7 +880,6 @@ impl ActiveVrfLifecycle {
         }
         Ok(())
     }
-
     fn record(&self) -> VrfEpochRecord {
         let finalized = self.context.height == self.context.epoch_end_height;
         let late_signers = self.late_reveals.keys().copied().collect::<BTreeSet<_>>();
@@ -969,16 +929,13 @@ impl ActiveVrfLifecycle {
             validator_election: self.validator_election.clone(),
         }
     }
-
     fn pending_record(&self) -> Option<VrfEpochRecord> {
         let record = self.record();
         (self.committed_record.as_ref() != Some(&record)).then_some(record)
     }
 }
-
 const MAX_VRF_SIGNATURE_BYTES: usize = 512;
 const MAX_VRF_PROOF_BYTES: usize = 128;
-
 fn verify_vrf_reveal_for_chain(
     network_id: &iroha_data_model::NetworkId,
     peer: &PeerId,
@@ -1009,11 +966,9 @@ fn verify_vrf_reveal_for_chain(
     )
     .is_some_and(|output| output.0 == reveal.reveal)
 }
-
 fn verify_vrf_reveal(context: &wire::HeightContext, peer: &PeerId, reveal: &VrfReveal) -> bool {
     verify_vrf_reveal_for_chain(&context.network_id, peer, reveal)
 }
-
 fn validate_extension_at_candidate_height(
     context: &wire::HeightContext,
     schedule: EpochSchedule,
@@ -1045,7 +1000,6 @@ fn validate_extension_at_candidate_height(
             .map(|reveal| (reveal.signer, reveal))
             .collect::<BTreeMap<_, _>>()
     });
-
     for participant in &proposed.participants {
         let old = existing_participants.get(&participant.signer).copied();
         if old.and_then(|record| record.commitment).is_none() {
@@ -1080,7 +1034,6 @@ fn validate_extension_at_candidate_height(
             }
         }
     }
-
     for late in &proposed.late_reveals {
         if existing_late.contains_key(&late.signer) {
             continue;
@@ -1103,7 +1056,6 @@ fn validate_extension_at_candidate_height(
     }
     Ok(())
 }
-
 fn old_commitment_without_reveal(
     participants: &BTreeMap<u32, &VrfParticipantRecord>,
     signer: u32,
@@ -1114,7 +1066,6 @@ fn old_commitment_without_reveal(
             .filter(|_| participant.reveal.is_none())
     })
 }
-
 #[allow(clippy::too_many_lines)]
 fn validate_authenticated_record(
     context: VrfRecordValidationContext<'_>,
@@ -1165,7 +1116,6 @@ fn validate_authenticated_record(
             "penalty height is present without the applied marker",
         ));
     }
-
     let mut participant_signers = BTreeSet::new();
     let mut latest_observation_height = 0_u64;
     for participant in &record.participants {
@@ -1196,7 +1146,6 @@ fn validate_authenticated_record(
             ));
         }
         verify_commit_proof(context, commit_proof)?;
-
         let last_observed = if let Some(reveal) = participant.reveal {
             let actual: [u8; 32] = Hash::new(reveal).into();
             if actual != commitment {
@@ -1249,7 +1198,6 @@ fn validate_authenticated_record(
             "participants are not in canonical signer order",
         ));
     }
-
     let participants = record
         .participants
         .iter()
@@ -1300,13 +1248,11 @@ fn validate_authenticated_record(
             "late reveals are not in canonical signer order",
         ));
     }
-
     if !boundary && record.updated_at_height != latest_observation_height {
         return Err(V2NposError::InvalidRecord(
             "record update height is not derived from admitted proof observations",
         ));
     }
-
     if boundary {
         let expected_non_reveal = record
             .participants
@@ -1333,7 +1279,6 @@ fn validate_authenticated_record(
     }
     Ok(())
 }
-
 fn window_position(
     context: VrfRecordValidationContext<'_>,
     schedule: EpochSchedule,
@@ -1348,7 +1293,6 @@ fn window_position(
         .checked_add(1)
         .filter(|position| *position <= schedule.length)
 }
-
 fn verify_commit_proof(
     context: VrfRecordValidationContext<'_>,
     proof: &VrfCommitProof,
@@ -1381,7 +1325,6 @@ fn verify_commit_proof(
         )
         .map_err(|_| V2NposError::InvalidRecord("commit signature verification failed"))
 }
-
 fn verify_reveal_proof(
     context: VrfRecordValidationContext<'_>,
     proof: &VrfRevealProof,
@@ -1421,7 +1364,6 @@ fn verify_reveal_proof(
     }
     Ok(())
 }
-
 fn validate_persisted_record(
     context: VrfRecordValidationContext<'_>,
     schedule: EpochSchedule,
@@ -1445,7 +1387,6 @@ fn validate_persisted_record(
     validate_authenticated_record(context, schedule, record, roster_len, false)
         .map_err(|_| V2NposError::PersistedRecordConflict)
 }
-
 fn record_extends(base: &VrfEpochRecord, candidate: &VrfEpochRecord) -> bool {
     if base.epoch != candidate.epoch
         || base.seed != candidate.seed
@@ -1504,7 +1445,6 @@ fn record_extends(base: &VrfEpochRecord, candidate: &VrfEpochRecord) -> bool {
             .iter()
             .all(|signer| candidate.no_participation.contains(signer))
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
@@ -1513,10 +1453,8 @@ mod tests {
         consensus::{NposConsensusEffects, VrfEpochRecord},
         parameter::system::SumeragiNposParameters,
     };
-
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
-
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(
             iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
@@ -1524,7 +1462,6 @@ mod tests {
             ),
         )
     }
-
     fn keys() -> Vec<KeyPair> {
         let mut keys = (1_u8..=4)
             .map(|seed| {
@@ -1535,7 +1472,6 @@ mod tests {
         keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
         keys
     }
-
     fn context(height: u64, keys: &[KeyPair]) -> wire::HeightContext {
         let roster = keys
             .iter()
@@ -1569,7 +1505,6 @@ mod tests {
             leader_seed: [0x44; 32],
         }
     }
-
     fn unreachable_parent_qc(parent_height: u64) -> wire::QuorumCertificate {
         // Unit construction below does not call HeightContext::validate; only
         // the fields consumed by the lifecycle are relevant after height one.
@@ -1607,7 +1542,6 @@ mod tests {
             aggregate_signature: vec![1],
         }
     }
-
     fn schedule(position: u64) -> EpochSchedule {
         EpochSchedule {
             length: 10,
@@ -1616,7 +1550,6 @@ mod tests {
             position,
         }
     }
-
     fn epoch_params() -> NposEpochParams {
         NposEpochParams {
             epoch_length_blocks: 10,
@@ -1624,7 +1557,6 @@ mod tests {
             reveal_deadline_offset: 6,
         }
     }
-
     fn state_with_record(record: Option<VrfEpochRecord>) -> State {
         let world = World::new();
         {
@@ -1649,7 +1581,6 @@ mod tests {
             ChainId::from("v2-npos-vrf-test"),
         )
     }
-
     fn effects(record: VrfEpochRecord) -> NposConsensusEffects {
         NposConsensusEffects {
             vrf_epoch_seals: vec![record],
@@ -1657,7 +1588,6 @@ mod tests {
             penalty_actions: Vec::new(),
         }
     }
-
     fn lifecycle_at(
         height: u64,
         position: u64,
@@ -1675,7 +1605,6 @@ mod tests {
         )
         .expect("lifecycle")
     }
-
     fn sign_commit(
         key: &KeyPair,
         context: &wire::HeightContext,
@@ -1690,7 +1619,6 @@ mod tests {
         .to_vec();
         commit
     }
-
     fn material(
         key: &KeyPair,
         context: &wire::HeightContext,
@@ -1704,7 +1632,6 @@ mod tests {
         )
         .expect("derive fixture VRF material")
     }
-
     fn sign_reveal(
         key: &KeyPair,
         context: &wire::HeightContext,
@@ -1729,7 +1656,6 @@ mod tests {
         .to_vec();
         reveal
     }
-
     #[test]
     fn fresh_npos_genesis_opens_without_precommit_parameters_or_vrf_activity() {
         let keys = keys();
@@ -1740,7 +1666,6 @@ mod tests {
             LiveQueryStore::start_test(),
             ChainId::from("v2-npos-vrf-test"),
         );
-
         let mut lifecycle = V2NposVrfLifecycle::open(&context, &state, Some(0), &keys[0])
             .expect("fixed signed genesis needs no committed pre-block schedule");
         assert!(lifecycle.active.is_none());
@@ -1748,7 +1673,6 @@ mod tests {
         assert!(lifecycle.take_outbound().is_empty());
         assert!(lifecycle.retransmission().is_empty());
     }
-
     #[test]
     fn authoritative_schedule_requires_committed_parameters() {
         let keys = keys();
@@ -1764,7 +1688,6 @@ mod tests {
             V2NposVrfLifecycle::open(&context, &missing, None, &keys[0]),
             Err(V2NposError::MissingCommittedParameters)
         ));
-
         let state = state_with_record(None);
         let lifecycle =
             V2NposVrfLifecycle::open(&context, &state, None, &keys[0]).expect("committed schedule");
@@ -1773,7 +1696,6 @@ mod tests {
             Some(schedule(2))
         );
     }
-
     #[test]
     fn authoritative_schedule_rejects_invalid_committed_windows() {
         let keys = keys();
@@ -1793,7 +1715,6 @@ mod tests {
             );
             world.commit();
         }
-
         assert!(matches!(
             V2NposVrfLifecycle::open(&context, &state, None, &keys[0]),
             Err(V2NposError::MissingCommittedParameters)
@@ -1803,7 +1724,6 @@ mod tests {
             Err(V2NposError::MissingCommittedParameters)
         ));
     }
-
     #[test]
     fn authenticated_pre_boundary_reveals_drive_only_the_immediate_successor_seed() {
         let keys = keys();
@@ -1834,7 +1754,6 @@ mod tests {
             .pending_records()
             .pop()
             .expect("two authenticated commitments");
-
         let reveal_context = context(4, &keys);
         let authenticated_reveal = |signer: u32| {
             let (reveal, _, vrf_proof) = material(
@@ -1854,7 +1773,6 @@ mod tests {
                 },
             )
         };
-
         let mut one_reveal = lifecycle_at(4, 4, Some(committed.clone()), None, &keys);
         assert_eq!(
             one_reveal.accept_reveal(
@@ -1867,7 +1785,6 @@ mod tests {
             .pending_records()
             .pop()
             .expect("one authenticated reveal");
-
         let mut two_reveals = lifecycle_at(4, 4, Some(committed.clone()), None, &keys);
         for signer in 0..2_u32 {
             let signer_index = usize::try_from(signer).expect("small signer");
@@ -1883,7 +1800,6 @@ mod tests {
             .pending_records()
             .pop()
             .expect("two authenticated reveals");
-
         let seed_with_one = authenticated_successor_seed(
             &reveal_context.network_id,
             reveal_context.epoch,
@@ -1905,7 +1821,6 @@ mod tests {
         )
         .expect("two-reveal successor seed");
         assert_ne!(seed_with_one, seed_with_two);
-
         let mut mismatched_params = epoch_params();
         mismatched_params.reveal_deadline_offset -= 1;
         assert!(
@@ -1921,7 +1836,6 @@ mod tests {
             .is_err(),
             "the record schedule must match the independently committed epoch parameters"
         );
-
         let mut reordered = two_reveals.clone();
         reordered.participants.reverse();
         assert!(
@@ -1936,7 +1850,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut forged = two_reveals;
         forged.participants[0]
             .reveal
@@ -1954,7 +1867,6 @@ mod tests {
             )
             .is_err()
         );
-
         let late_context = context(7, &keys);
         let mut late = lifecycle_at(7, 7, Some(committed.clone()), None, &keys);
         assert_eq!(
@@ -1993,18 +1905,15 @@ mod tests {
             "late reveals never affect entropy"
         );
     }
-
     #[test]
     fn first_mutable_genesis_epoch_candidate_must_commit_the_schedule_snapshot() {
         let keys = keys();
         let context = context(2, &keys);
         let state = state_with_record(None);
-
         assert!(matches!(
             validate_candidate_records(&context, &state, None),
             Err(V2NposError::MissingEpochStartRecord)
         ));
-
         let lifecycle = V2NposVrfLifecycle::open(&context, &state, Some(0), &keys[0])
             .expect("open first mutable genesis-epoch height");
         let record = lifecycle
@@ -2014,7 +1923,6 @@ mod tests {
         validate_candidate_records(&context, &state, Some(&effects(record)))
             .expect("epoch-start record freezes the committed schedule");
     }
-
     #[test]
     fn mid_epoch_parameter_update_reuses_epoch_start_schedule() {
         let keys = keys();
@@ -2028,7 +1936,6 @@ mod tests {
             .expect("mandatory epoch-start record");
         validate_candidate_records(&first_context, &state, Some(&effects(first_record.clone())))
             .expect("valid epoch-start record");
-
         // Model one finalized block that both persists the mandatory snapshot
         // and changes the on-chain schedule. The update is valid for a future
         // epoch but is deliberately incompatible with the active context's end
@@ -2048,7 +1955,6 @@ mod tests {
             );
             world.commit();
         }
-
         let second_context = context(3, &keys);
         let reopened = V2NposVrfLifecycle::open(&second_context, &state, None, &keys[0])
             .expect("active genesis epoch must reopen from its height-two snapshot");
@@ -2064,7 +1970,6 @@ mod tests {
         validate_candidate_records(&second_context, &state, None)
             .expect("unchanged active-epoch record remains valid after parameter update");
     }
-
     #[test]
     fn wrong_sender_key_index_epoch_window_and_signature_are_rejected() {
         let keys = keys();
@@ -2104,7 +2009,6 @@ mod tests {
             lifecycle.accept_commit(wrong_index, Some(&context.roster[0].validator)),
             V2VrfIngressOutcome::Rejected(V2VrfRejection::SignerOutOfRange)
         );
-
         let mut reveal_window = lifecycle_at(4, 4, None, None, &keys);
         assert_eq!(
             reveal_window.accept_commit(valid, Some(&context.roster[0].validator)),
@@ -2137,7 +2041,6 @@ mod tests {
             V2VrfIngressOutcome::Rejected(V2VrfRejection::MalformedSignature)
         );
     }
-
     #[test]
     fn reveal_requires_matching_commitment_and_conflicts_are_deduplicated() {
         let keys = keys();
@@ -2177,7 +2080,6 @@ mod tests {
             commit_lifecycle.accept_commit(conflict, Some(&commit_context.roster[0].validator)),
             V2VrfIngressOutcome::Rejected(V2VrfRejection::ConflictingCommitment)
         );
-
         let committed = commit_lifecycle
             .pending_records()
             .pop()
@@ -2252,7 +2154,6 @@ mod tests {
             V2VrfIngressOutcome::Duplicate
         );
     }
-
     #[test]
     fn capacity_restart_and_boundary_seal_are_bounded_and_deterministic() {
         let keys = keys();
@@ -2268,7 +2169,6 @@ mod tests {
         let first_outbound = first.take_outbound();
         let first_retransmission = first.retransmission();
         let first_record = first.pending_records().pop().expect("pending local commit");
-
         let mut restarted = V2NposVrfLifecycle::from_parts(
             context(2, &keys),
             schedule(2),
@@ -2300,7 +2200,6 @@ mod tests {
                     && first.bls_sig == repeated.bls_sig
         ));
         assert_eq!(restarted.take_outbound().len(), 1);
-
         let ctx = context(2, &keys);
         let second = sign_commit(
             &keys[1],
@@ -2316,7 +2215,6 @@ mod tests {
             first.accept_commit(second, Some(&ctx.roster[1].validator)),
             V2VrfIngressOutcome::Rejected(V2VrfRejection::Capacity)
         );
-
         let boundary = lifecycle_at(10, 10, Some(first_record), None, &keys);
         let seal = boundary.pending_records().pop().expect("boundary seal");
         assert!(seal.finalized);
@@ -2324,7 +2222,6 @@ mod tests {
         assert_eq!(seal.committed_no_reveal, vec![0]);
         assert_eq!(seal.no_participation, vec![1, 2, 3]);
     }
-
     #[test]
     fn finalized_epoch_record_requires_exact_boundary_context_and_offender_partition() {
         let keys = keys();
@@ -2337,17 +2234,14 @@ mod tests {
             .pending_records()
             .pop()
             .expect("finalized boundary seal");
-
         validate_finalized_epoch_record(&boundary_context, &seal)
             .expect("exact boundary context authenticates the final record");
-
         let mut forged_partition = seal.clone();
         forged_partition.committed_no_reveal.clear();
         assert!(
             validate_finalized_epoch_record(&boundary_context, &forged_partition).is_err(),
             "a finality context must not authorize a rewritten non-reveal partition"
         );
-
         let mut non_boundary = boundary_context;
         non_boundary.height = 9;
         assert!(
@@ -2355,7 +2249,6 @@ mod tests {
             "only the certified epoch-boundary context can authorize penalties"
         );
     }
-
     #[test]
     fn committed_local_commit_recovers_and_emits_reveal_after_restart() {
         let keys = keys();
@@ -2378,7 +2271,6 @@ mod tests {
             .expect("reveal record");
         assert!(record.participants[0].reveal.is_some());
     }
-
     #[test]
     fn authenticated_late_reveal_relaxes_boundary_penalty_without_changing_entropy_reveal() {
         let keys = keys();
@@ -2403,7 +2295,6 @@ mod tests {
             .pending_records()
             .pop()
             .expect("commit record");
-
         let late_context = context(8, &keys);
         let mut late_height = lifecycle_at(8, 8, Some(committed.clone()), None, &keys);
         let late = sign_reveal(
@@ -2439,12 +2330,10 @@ mod tests {
             .is_err(),
             "a candidate must not backdate a same-block commitment and late reveal"
         );
-
         let boundary = lifecycle_at(10, 10, Some(late_record), None, &keys);
         let seal = boundary.pending_records().pop().expect("boundary seal");
         assert!(!seal.committed_no_reveal.contains(&0));
         assert!(!seal.no_participation.contains(&0));
-
         let boundary_context = context(10, &keys);
         let boundary_reveal = sign_reveal(
             &keys[0],
@@ -2465,7 +2354,6 @@ mod tests {
             "the boundary seal must be derived only from committed pre-state"
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn candidate_record_verifies_exact_commit_proof_and_rejects_fabrication() {
@@ -2499,7 +2387,6 @@ mod tests {
             Some(&effects(record.clone())),
         )
         .expect("authentic first commit is valid");
-
         let extension_context = context(3, &keys);
         let mut extension_lifecycle = lifecycle_at(3, 3, Some(record.clone()), None, &keys);
         let extension = sign_commit(
@@ -2527,7 +2414,6 @@ mod tests {
             Some(&effects(extension_record)),
         )
         .expect("non-boundary record remains a valid monotonic extension");
-
         let mut forged = record.clone();
         forged.participants[0]
             .commit_proof
@@ -2542,7 +2428,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut backdated = record.clone();
         backdated.participants[0]
             .commit_proof
@@ -2558,7 +2443,6 @@ mod tests {
             ),
             Err(V2NposError::InvalidRecord(_))
         ));
-
         let mut wrong_signer = record.clone();
         wrong_signer.participants[0].signer = 1;
         wrong_signer.participants[0]
@@ -2574,7 +2458,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut replay_context = commit_context.clone();
         replay_context.network_id = test_network_id(0x52);
         assert!(
@@ -2585,7 +2468,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut duplicate = record.clone();
         duplicate
             .participants
@@ -2598,7 +2480,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut wrong_schedule = record.clone();
         wrong_schedule.epoch_length = 9;
         assert!(
@@ -2609,7 +2490,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut rewritten = record.clone();
         rewritten.updated_at_height = 3;
         rewritten.participants[0]
@@ -2627,7 +2507,6 @@ mod tests {
             .is_err(),
             "unsigned observation height is immutable once committed"
         );
-
         let mut forged_metadata = lifecycle.pending_records().pop().expect("commit record");
         forged_metadata.penalties_applied = true;
         forged_metadata.penalties_applied_at_height = Some(2);
@@ -2640,7 +2519,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn reveal_extension_requires_committed_commit_and_current_height_admission() {
         let keys = keys();
@@ -2665,7 +2543,6 @@ mod tests {
             .pending_records()
             .pop()
             .expect("commit record");
-
         let reveal_context = context(5, &keys);
         let mut reveal_lifecycle = lifecycle_at(5, 5, Some(committed.clone()), None, &keys);
         let signed_reveal = sign_reveal(
@@ -2704,7 +2581,6 @@ mod tests {
             Some(&effects(revealed.clone())),
         )
         .expect("current-height reveal extends committed commitment");
-
         let mut backdated = revealed.clone();
         backdated.participants[0]
             .reveal_proof
@@ -2720,7 +2596,6 @@ mod tests {
             )
             .is_err()
         );
-
         assert!(
             validate_candidate_records(
                 &reveal_context,
@@ -2729,7 +2604,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut mismatched = revealed;
         mismatched.participants[0].reveal = Some([0xA5; 32]);
         assert!(
@@ -2741,7 +2615,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn boundary_requires_one_exact_authenticated_seal() {
         let keys = keys();
@@ -2789,7 +2662,6 @@ mod tests {
             Some(&effects(seal.clone())),
         )
         .expect("exact boundary seal");
-
         assert!(matches!(
             validate_candidate_records(
                 &boundary_context,
@@ -2798,7 +2670,6 @@ mod tests {
             ),
             Err(V2NposError::MissingBoundarySeal)
         ));
-
         let duplicate = NposConsensusEffects {
             vrf_epoch_seals: vec![seal.clone(), seal.clone()],
             v2_evidence_admissions: Vec::new(),
@@ -2812,7 +2683,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut unfinalized = seal.clone();
         unfinalized.finalized = false;
         assert!(
@@ -2823,7 +2693,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut wrong_boundary = seal.clone();
         wrong_boundary.updated_at_height = 9;
         assert!(
@@ -2834,7 +2703,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut forged_offenders = seal;
         forged_offenders.no_participation.clear();
         assert!(

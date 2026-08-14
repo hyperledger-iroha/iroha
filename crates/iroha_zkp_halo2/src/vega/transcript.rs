@@ -1,17 +1,13 @@
 //! Closed-domain Keccak Fiat--Shamir transcript for canonical Vega proofs.
-
-use thiserror::Error;
-
 use super::{
     VegaCurveError, VegaT256ScalarV1,
     commitment::{Commitment, CommitmentError},
     sponge::keccak256,
 };
-
+use thiserror::Error;
 const PERSONA_TAG: &[u8] = b"NoTR";
 const DOM_SEP_TAG: &[u8] = b"NoDS";
 const MAX_PENDING_BYTES: usize = 16 * 1024 * 1024;
-
 /// Failure while operating the bounded canonical Vega transcript.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum VegaTranscriptError {
@@ -28,13 +24,11 @@ pub enum VegaTranscriptError {
     #[error("Vega commitment has no canonical transcript representation")]
     CommitmentEncoding,
 }
-
 impl From<CommitmentError> for VegaTranscriptError {
     fn from(_: CommitmentError) -> Self {
         Self::CommitmentEncoding
     }
 }
-
 /// Exact Keccak-256 Fiat--Shamir transcript used by the pinned Vega engine.
 ///
 /// Production construction fixes the upstream `neutronnova_prove` domain.
@@ -47,14 +41,12 @@ pub struct VegaTranscriptV1 {
     state: [u8; 64],
     pending: Vec<u8>,
 }
-
 impl VegaTranscriptV1 {
     /// Start the canonical multi-circuit NeutronNova Vega transcript.
     #[must_use]
     pub fn new_neutron_nova() -> Self {
         Self::new_raw(b"neutronnova_prove")
     }
-
     pub(super) fn absorb_scalar(
         &mut self,
         label: &'static [u8],
@@ -62,7 +54,6 @@ impl VegaTranscriptV1 {
     ) -> Result<(), VegaTranscriptError> {
         self.absorb_raw(label, &scalar.to_be_bytes())
     }
-
     pub(super) fn absorb_scalars(
         &mut self,
         label: &'static [u8],
@@ -79,7 +70,6 @@ impl VegaTranscriptV1 {
         }
         Ok(())
     }
-
     pub(super) fn absorb_commitment(
         &mut self,
         label: &'static [u8],
@@ -87,7 +77,6 @@ impl VegaTranscriptV1 {
     ) -> Result<(), VegaTranscriptError> {
         self.absorb_raw(label, &commitment.transcript_bytes()?)
     }
-
     pub(super) fn absorb_r1cs_instance(
         &mut self,
         label: &'static [u8],
@@ -106,7 +95,6 @@ impl VegaTranscriptV1 {
         }
         self.absorb_raw(label, &representation)
     }
-
     pub(super) fn absorb_relaxed_r1cs_instance(
         &mut self,
         label: &'static [u8],
@@ -129,7 +117,6 @@ impl VegaTranscriptV1 {
         }
         self.absorb_raw(label, &representation)
     }
-
     pub(super) fn absorb_univariate(
         &mut self,
         label: &'static [u8],
@@ -148,7 +135,6 @@ impl VegaTranscriptV1 {
         }
         Ok(())
     }
-
     pub(super) fn domain_separator(
         &mut self,
         domain: &'static [u8],
@@ -158,7 +144,6 @@ impl VegaTranscriptV1 {
         self.pending.extend_from_slice(domain);
         Ok(())
     }
-
     pub(super) fn absorb_raw(
         &mut self,
         label: &'static [u8],
@@ -169,7 +154,6 @@ impl VegaTranscriptV1 {
         self.pending.extend_from_slice(representation);
         Ok(())
     }
-
     pub(super) fn squeeze(
         &mut self,
         label: &'static [u8],
@@ -192,7 +176,6 @@ impl VegaTranscriptV1 {
         self.pending.clear();
         Ok(VegaT256ScalarV1::from_uniform_le_bytes(output))
     }
-
     fn new_raw(label: &'static [u8]) -> Self {
         let mut input = Vec::with_capacity(PERSONA_TAG.len() + label.len());
         input.extend_from_slice(PERSONA_TAG);
@@ -203,7 +186,6 @@ impl VegaTranscriptV1 {
             pending: Vec::new(),
         }
     }
-
     fn reserve_absorb(
         &mut self,
         label_len: usize,
@@ -224,7 +206,6 @@ impl VegaTranscriptV1 {
         Ok(())
     }
 }
-
 fn updated_state(input: &[u8]) -> [u8; 64] {
     let mut low = Vec::with_capacity(input.len() + 1);
     low.extend_from_slice(input);
@@ -236,16 +217,13 @@ fn updated_state(input: &[u8]) -> [u8; 64] {
     output[32..].copy_from_slice(&keccak256(&high));
     output
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vega::VegaT256PointV1;
-
     fn scalar_hex(scalar: VegaT256ScalarV1) -> String {
         hex::encode(scalar.to_le_bytes())
     }
-
     #[test]
     fn transcript_matches_independent_pinned_reference_vector() {
         let mut transcript = VegaTranscriptV1::new_raw(b"refimpl_vector");
@@ -253,7 +231,6 @@ mod tests {
             .absorb_scalar(b"s1", VegaT256ScalarV1::from_u64(2))
             .expect("bounded");
         let c1 = transcript.squeeze(b"c1").expect("round available");
-
         transcript
             .absorb_raw(
                 b"g",
@@ -270,12 +247,10 @@ mod tests {
             )
             .expect("bounded");
         let c2 = transcript.squeeze(b"c2").expect("round available");
-
         transcript.absorb_scalar(b"c", c1).expect("bounded");
         transcript.absorb_scalar(b"c", c2).expect("bounded");
         let c3 = transcript.squeeze(b"c3").expect("round available");
         let c4 = transcript.squeeze(b"c4").expect("round available");
-
         assert_eq!(
             scalar_hex(c1),
             "64c77efc9d66c2754055360c0346286f1cf76c0b5f5cdbc879fe7f31ea1f944b"
@@ -293,7 +268,6 @@ mod tests {
             "983abdecf960c20256bfad6062326f42fae747ef12f227c7c9b1a1517ded2374"
         );
     }
-
     #[test]
     fn domain_and_schedule_changes_cannot_replay_challenges() {
         let mut production = VegaTranscriptV1::new_neutron_nova();
@@ -301,7 +275,6 @@ mod tests {
             .absorb_scalar(b"c", VegaT256ScalarV1::from_u64(9))
             .expect("bounded");
         let production_challenge = production.squeeze(b"r").expect("round available");
-
         let mut other_domain = VegaTranscriptV1::new_raw(b"neutronnova_verify");
         other_domain
             .absorb_scalar(b"c", VegaT256ScalarV1::from_u64(9))
@@ -310,7 +283,6 @@ mod tests {
             production_challenge,
             other_domain.squeeze(b"r").expect("round available")
         );
-
         let mut other_label = VegaTranscriptV1::new_neutron_nova();
         other_label
             .absorb_scalar(b"d", VegaT256ScalarV1::from_u64(9))
@@ -320,7 +292,6 @@ mod tests {
             other_label.squeeze(b"r").expect("round available")
         );
     }
-
     #[test]
     fn oversize_and_round_overflow_are_rejected() {
         let mut transcript = VegaTranscriptV1::new_neutron_nova();
@@ -334,7 +305,6 @@ mod tests {
             Err(VegaTranscriptError::RoundCounterExhausted)
         );
     }
-
     #[test]
     fn scalar_and_commitment_representations_are_fixed_width_and_unambiguous() {
         let scalar = VegaT256ScalarV1::from_u64(1);
@@ -343,7 +313,6 @@ mod tests {
         let mut typed = VegaTranscriptV1::new_raw(b"typed");
         typed.absorb_scalar(b"s", scalar).expect("bounded");
         typed.absorb_commitment(b"p", &commitment).expect("bounded");
-
         let mut explicit = VegaTranscriptV1::new_raw(b"typed");
         explicit
             .absorb_raw(b"s", &scalar.to_be_bytes())

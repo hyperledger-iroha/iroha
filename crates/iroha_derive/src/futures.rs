@@ -1,11 +1,9 @@
 #![allow(unused)]
-
 use iroha_derive_primitives::Emitter;
 use manyhow::emit;
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Generics, ItemFn, ReturnType, Signature};
-
 fn impl_telemetry_future(
     emitter: &mut Emitter,
     ItemFn {
@@ -27,7 +25,6 @@ fn impl_telemetry_future(
         output,
         ..
     } = sig;
-
     if asyncness.is_none() {
         emit!(
             emitter,
@@ -35,12 +32,10 @@ fn impl_telemetry_future(
             "Only async functions can be instrumented for `telemetry_future`",
         );
     }
-
     let output = match &output {
         ReturnType::Type(_, tp) => quote! { #tp },
         ReturnType::Default => quote! { () },
     };
-
     quote! {
         #(#attrs)*
         #vis async fn #ident < #params > ( #inputs ) -> #output
@@ -51,15 +46,12 @@ fn impl_telemetry_future(
         }
     }
 }
-
 /// Attribute macro implementation that wraps an async block with telemetry.
 pub fn telemetry_future_impl(args: &TokenStream, input: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
-
     if !args.is_empty() {
         emit!(emitter, args, "Unexpected arguments");
     }
-
     let Some(input) = emitter.handle(syn::parse2(input)) else {
         return emitter.finish_token_stream();
     };
@@ -68,6 +60,5 @@ pub fn telemetry_future_impl(args: &TokenStream, input: TokenStream) -> TokenStr
     } else {
         quote! { #input }
     };
-
     emitter.finish_token_stream_with(result)
 }

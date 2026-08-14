@@ -3,9 +3,7 @@
 //! Aggregate state is stored under one durable key.  The compiler emits a
 //! preorder schema, while the host converts the VM's flattened word table into
 //! a canonical Norito record bound to that schema.
-
 use std::io::{self, Write};
-
 use iroha_crypto::Hash;
 #[cfg(test)]
 use norito::core::serialize_to_buffer;
@@ -16,9 +14,7 @@ use norito::{
         serialize_to_writer,
     },
 };
-
 use crate::pointer_abi::PointerType;
-
 /// Domain separator for hashes binding stored records to exact state schemas.
 pub const STATE_VALUE_SCHEMA_HASH_DOMAIN_V1: &[u8] = b"KOTODAMA_STATE_VALUE_SCHEMA_V1\0";
 /// Nominal Norito schema name for compiler-emitted durable-value schemas.
@@ -45,7 +41,6 @@ pub const STATE_VALUE_RECORD_ATOM_TAG_BYTES_V1: u8 = 1;
 pub const STATE_VALUE_RECORD_POINTER_LENGTH_BYTES_V1: u8 = 4;
 /// Width of every list item count in the flat V1 record payload.
 pub const STATE_VALUE_RECORD_LIST_ITEM_COUNT_BYTES_V1: u8 = 1;
-
 /// Hash an exact encoded V1 schema with its dedicated domain separator.
 #[must_use]
 pub fn state_value_schema_hash_v1(schema_payload: &[u8]) -> [u8; 32] {
@@ -55,7 +50,6 @@ pub fn state_value_schema_hash_v1(schema_payload: &[u8]) -> [u8; 32] {
     material.extend_from_slice(schema_payload);
     Hash::new(&material).into()
 }
-
 /// Maximum schema nodes accepted by the V1 aggregate-state codec.
 pub const MAX_STATE_VALUE_NODES: usize = 256;
 /// Maximum flattened VM words accepted by the V1 aggregate-state codec.
@@ -72,7 +66,6 @@ pub const MAX_STATE_VALUE_LIST_CAPACITY_V1: u8 = 64;
 pub const DECODED_STATE_VALUE_TABLE_OFFSET: i16 = 8;
 /// Width of one decoded state-value word.
 pub const DECODED_STATE_VALUE_WORD_BYTES: i16 = 8;
-
 fn state_value_complete_frame_len<T>(payload_len: usize) -> Result<usize, NoritoError> {
     let alignment = norito::core::archived_payload_align::<T>();
     let remainder = norito::core::Header::SIZE % alignment;
@@ -87,14 +80,12 @@ fn state_value_complete_frame_len<T>(payload_len: usize) -> Result<usize, Norito
         .and_then(|framing| framing.checked_add(payload_len))
         .ok_or(NoritoError::LengthMismatch)
 }
-
 fn state_value_payload_limit<T>(max_frame_len: usize) -> Result<usize, NoritoError> {
     let empty_frame_len = state_value_complete_frame_len::<T>(0)?;
     max_frame_len
         .checked_sub(empty_frame_len)
         .ok_or(NoritoError::LengthMismatch)
 }
-
 fn ensure_state_value_frame_limit<T>(
     payload_len: usize,
     max_frame_len: usize,
@@ -107,13 +98,11 @@ fn ensure_state_value_frame_limit<T>(
     }
     Ok(())
 }
-
 struct BoundedStateValuePayload {
     bytes: Vec<u8>,
     limit: usize,
     value_name: &'static str,
 }
-
 impl BoundedStateValuePayload {
     fn new<T>(max_frame_len: usize, value_name: &'static str) -> Result<Self, NoritoError> {
         Ok(Self {
@@ -122,7 +111,6 @@ impl BoundedStateValuePayload {
             value_name,
         })
     }
-
     fn ensure_additional(&self, additional: usize) -> Result<(), NoritoError> {
         let next_len = self
             .bytes
@@ -137,12 +125,10 @@ impl BoundedStateValuePayload {
         }
         Ok(())
     }
-
     fn into_inner(self) -> Vec<u8> {
         self.bytes
     }
 }
-
 impl Write for BoundedStateValuePayload {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let next_len =
@@ -166,12 +152,10 @@ impl Write for BoundedStateValuePayload {
         self.bytes.extend_from_slice(bytes);
         Ok(bytes.len())
     }
-
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
-
 fn decode_state_value_payload_wrapper<'a, T>(
     bytes: &'a [u8],
     max_frame_len: usize,
@@ -188,7 +172,6 @@ fn decode_state_value_payload_wrapper<'a, T>(
     norito::core::note_payload_access(bytes, used);
     Ok((payload, used))
 }
-
 /// Canonical representation of one scalar leaf in a durable aggregate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StateValueKindV1 {
@@ -250,7 +233,6 @@ pub enum StateValueKindV1 {
     #[codec(index = 18)]
     SoracloudResponse,
 }
-
 impl StateValueKindV1 {
     /// Return the stable Norito enum discriminant used by ABI V1.
     #[must_use]
@@ -277,7 +259,6 @@ impl StateValueKindV1 {
             Self::SoracloudResponse => 18,
         }
     }
-
     const fn from_wire_tag(tag: u8) -> Option<Self> {
         Some(match tag {
             0 => Self::Int,
@@ -302,7 +283,6 @@ impl StateValueKindV1 {
             _ => return None,
         })
     }
-
     /// Return the canonical persisted pointer-ABI type for this leaf, or `None`
     /// for inline booleans.
     ///
@@ -332,20 +312,17 @@ impl StateValueKindV1 {
             Self::SoracloudResponse => PointerType::SoracloudResponse,
         })
     }
-
     /// Return whether the value occupies a pointer word rather than an inline scalar.
     #[must_use]
     pub const fn is_pointer(self) -> bool {
         self.pointer_type().is_some()
     }
-
     /// Return whether this leaf is a non-copyable resource handle.
     #[must_use]
     pub const fn is_resource_handle(self) -> bool {
         matches!(self, Self::AssetHandle)
     }
 }
-
 /// One preorder node in a compiler-emitted durable-value schema.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StateValueNodeV1 {
@@ -381,7 +358,6 @@ pub enum StateValueNodeV1 {
     #[codec(index = 5)]
     Leaf(StateValueKindV1),
 }
-
 impl StateValueNodeV1 {
     /// Stable Norito discriminant for [`Self::Struct`].
     pub const STRUCT_TAG: u32 = 0;
@@ -395,7 +371,6 @@ impl StateValueNodeV1 {
     pub const LIST_TAG: u32 = 4;
     /// Stable Norito discriminant for [`Self::Leaf`].
     pub const LEAF_TAG: u32 = 5;
-
     /// Return this node's stable Norito enum discriminant.
     #[must_use]
     pub const fn tag(&self) -> u32 {
@@ -409,7 +384,6 @@ impl StateValueNodeV1 {
         }
     }
 }
-
 /// Compiler-owned schema for one aggregate durable-state type.
 ///
 /// Wire traversal and owned-value cleanup are iterative. The standalone
@@ -421,7 +395,6 @@ pub struct StateValueSchemaV1 {
     /// Preorder aggregate layout.
     pub nodes: Vec<StateValueNodeV1>,
 }
-
 impl Drop for StateValueSchemaV1 {
     fn drop(&mut self) {
         let mut pending = Vec::<Box<StateValueSchemaV1>>::new();
@@ -439,23 +412,19 @@ impl Drop for StateValueSchemaV1 {
         }
     }
 }
-
 fn state_value_schema_codec_error(message: impl Into<String>) -> NoritoError {
     NoritoError::Message(message.into())
 }
-
 fn encode_state_value_schema_payload(schema: &StateValueSchemaV1) -> Result<Vec<u8>, NoritoError> {
     struct Cursor<'a> {
         nodes: &'a [StateValueNodeV1],
         index: usize,
     }
-
     enum Pending<'a> {
         Start(&'a [StateValueNodeV1]),
         Visit(usize),
         Finish(usize),
     }
-
     fn insert_cursor<'a>(
         cursors: &mut Vec<Option<Cursor<'a>>>,
         free_cursors: &mut Vec<usize>,
@@ -470,7 +439,6 @@ fn encode_state_value_schema_payload(schema: &StateValueSchemaV1) -> Result<Vec<
             index
         }
     }
-
     let _canonical_flags =
         norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let analysis = schema
@@ -484,7 +452,6 @@ fn encode_state_value_schema_payload(schema: &StateValueSchemaV1) -> Result<Vec<
     )?;
     payload.write_all(&STATE_VALUE_SCHEMA_PAYLOAD_MAGIC_V1)?;
     serialize_to_writer(&node_count, &mut payload)?;
-
     let mut cursors = Vec::<Option<Cursor<'_>>>::new();
     let mut free_cursors = Vec::new();
     let mut pending = vec![Pending::Start(&schema.nodes)];
@@ -602,7 +569,6 @@ fn encode_state_value_schema_payload(schema: &StateValueSchemaV1) -> Result<Vec<
     )?;
     Ok(payload)
 }
-
 fn decode_state_value_schema_field<'a, T>(
     encoded: &'a [u8],
     offset: &mut usize,
@@ -617,7 +583,6 @@ where
         .ok_or(NoritoError::LengthMismatch)?;
     Ok(value)
 }
-
 fn decode_state_value_schema_string(
     encoded: &[u8],
     offset: &mut usize,
@@ -643,7 +608,6 @@ fn decode_state_value_schema_string(
         .ok_or(NoritoError::LengthMismatch)?;
     Ok(value)
 }
-
 fn decode_state_value_schema_strings(
     encoded: &[u8],
     offset: &mut usize,
@@ -690,7 +654,6 @@ fn decode_state_value_schema_strings(
         .ok_or(NoritoError::LengthMismatch)?;
     Ok(fields)
 }
-
 fn decode_state_value_schema_payload(encoded: &[u8]) -> Result<StateValueSchemaV1, NoritoError> {
     enum Constructor {
         Struct { name: String, fields: Vec<String> },
@@ -699,7 +662,6 @@ fn decode_state_value_schema_payload(encoded: &[u8]) -> Result<StateValueSchemaV
         Result,
         List { capacity: u8 },
     }
-
     impl Constructor {
         fn child_count(&self) -> usize {
             match self {
@@ -710,12 +672,10 @@ fn decode_state_value_schema_payload(encoded: &[u8]) -> Result<StateValueSchemaV
             }
         }
     }
-
     enum Pending {
         DecodeNode { depth: usize },
         Finish(Constructor),
     }
-
     let _canonical_flags =
         norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     ensure_state_value_frame_limit::<StateValueSchemaV1>(
@@ -738,7 +698,6 @@ fn decode_state_value_schema_payload(encoded: &[u8]) -> Result<StateValueSchemaV
             "StateValueSchemaV1 node count must be in 1..={MAX_STATE_VALUE_NODES}"
         )));
     }
-
     let mut pending = vec![Pending::DecodeNode { depth: 1 }];
     let mut completed = Vec::<StateValueSchemaV1>::new();
     let mut decoded_nodes = 0usize;
@@ -882,26 +841,21 @@ fn decode_state_value_schema_payload(encoded: &[u8]) -> Result<StateValueSchemaV
     }
     Ok(schema)
 }
-
 impl NoritoSerialize for StateValueSchemaV1 {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name(STATE_VALUE_SCHEMA_NAME_V1)
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         encode_state_value_schema_payload(self)?.serialize(writer)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for StateValueSchemaV1 {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name(STATE_VALUE_SCHEMA_NAME_V1)
     }
-
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("StateValueSchemaV1 decode")
     }
-
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
         let bytes =
             norito::core::payload_slice_from_ptr(std::ptr::from_ref(archived).cast::<u8>())?;
@@ -913,7 +867,6 @@ impl<'a> NoritoDeserialize<'a> for StateValueSchemaV1 {
         decode_state_value_schema_payload(encoded)
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for StateValueSchemaV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), NoritoError> {
         let (encoded, used) = decode_state_value_payload_wrapper::<Self>(
@@ -924,7 +877,6 @@ impl<'a> DecodeFromSlice<'a> for StateValueSchemaV1 {
         Ok((decode_state_value_schema_payload(encoded)?, used))
     }
 }
-
 /// Reconstruct the exact V1 runtime schema for one non-map CNTR durable-state
 /// type, including the selected value type of a `StateMap`.
 ///
@@ -938,7 +890,6 @@ pub fn state_value_schema_for_embedded_type_v1(
 ) -> Option<StateValueSchemaV1> {
     use crate::metadata::EmbeddedStateType as Embedded;
     use StateValueKindV1 as Kind;
-
     enum Pending<'a> {
         Visit {
             ty: &'a Embedded,
@@ -951,7 +902,6 @@ pub fn state_value_schema_for_embedded_type_v1(
             capacity: u8,
         },
     }
-
     let mut node_streams = vec![Vec::new()];
     let mut remaining_nodes = MAX_STATE_VALUE_NODES;
     let mut pending = vec![Pending::Visit {
@@ -1060,12 +1010,10 @@ pub fn state_value_schema_for_embedded_type_v1(
             }
         }
     }
-
     let nodes = node_streams.into_iter().next()?;
     let schema = StateValueSchemaV1 { nodes };
     schema.validate().then_some(schema)
 }
-
 /// Reconstruct a CNTR durable-value schema only when every runtime schema
 /// bound, including canonical encoded size, is satisfied.
 #[must_use]
@@ -1076,7 +1024,6 @@ pub fn admissible_state_value_schema_for_embedded_type_v1(
     let encoded = crate::codec::encode_canonical_norito(&schema).ok()?;
     (encoded.len() <= MAX_STATE_VALUE_SCHEMA_BYTES).then_some(schema)
 }
-
 impl StateValueSchemaV1 {
     fn analyze(&self) -> Option<StateValueAnalysisV1> {
         #[derive(Clone, Copy)]
@@ -1084,7 +1031,6 @@ impl StateValueSchemaV1 {
             analysis: StateValueAnalysisV1,
             next_index: usize,
         }
-
         enum Pending<'a> {
             Enter {
                 nodes: &'a [StateValueNodeV1],
@@ -1121,7 +1067,6 @@ impl StateValueSchemaV1 {
                 element_len: usize,
             },
         }
-
         let mut pending = vec![Pending::Enter {
             nodes: &self.nodes,
             index: 0,
@@ -1355,7 +1300,6 @@ impl StateValueSchemaV1 {
                 }
             }
         }
-
         if completed.len() != 1 {
             return None;
         }
@@ -1367,13 +1311,11 @@ impl StateValueSchemaV1 {
             && result.analysis.depth <= MAX_STATE_VALUE_NODES)
             .then_some(result.analysis)
     }
-
     /// Validate tree shape, active-width bounds, and recursive list constraints.
     #[must_use]
     pub fn validate(&self) -> bool {
         self.analyze().is_some()
     }
-
     /// Return the fixed VM words needed by a value of this type.
     ///
     /// Every `Option`, `Result`, and `List` consumes one compiler-owned handle.
@@ -1381,7 +1323,6 @@ impl StateValueSchemaV1 {
     pub fn word_count(&self) -> Option<usize> {
         self.analyze().map(|analysis| analysis.max_words)
     }
-
     /// Return the flattened VM word kinds in deterministic preorder.
     pub fn word_kinds(&self) -> Option<Vec<StateValueWordKindV1>> {
         if !self.validate() {
@@ -1391,7 +1332,6 @@ impl StateValueSchemaV1 {
         let words = max_state_value_word_kinds(&self.nodes, &mut node_index)?;
         (node_index == self.nodes.len()).then_some(words)
     }
-
     /// Validate an active-only atom stream against this exact schema.
     #[must_use]
     pub fn validate_atoms(&self, atoms: &[StateValueAtomV1]) -> bool {
@@ -1400,7 +1340,6 @@ impl StateValueSchemaV1 {
         }
         walk_state_value_atoms(&self.nodes, atoms, false).is_some()
     }
-
     /// Return actual flattened VM word roles selected by this value.
     pub fn word_kinds_for_atoms(
         &self,
@@ -1416,7 +1355,6 @@ impl StateValueSchemaV1 {
         Some(kinds)
     }
 }
-
 #[derive(Clone, Copy)]
 struct StateValueAnalysisV1 {
     node_count: usize,
@@ -1424,7 +1362,6 @@ struct StateValueAnalysisV1 {
     depth: usize,
     contains_resource_handle: bool,
 }
-
 fn skip_state_value_node(nodes: &[StateValueNodeV1], node_index: &mut usize) -> bool {
     let mut remaining = 1usize;
     while remaining != 0 {
@@ -1450,7 +1387,6 @@ fn skip_state_value_node(nodes: &[StateValueNodeV1], node_index: &mut usize) -> 
     }
     true
 }
-
 fn max_state_value_word_kinds(
     nodes: &[StateValueNodeV1],
     node_index: &mut usize,
@@ -1494,7 +1430,6 @@ fn max_state_value_word_kinds(
     }
     Some(words)
 }
-
 fn walk_state_value_atoms<'a>(
     nodes: &'a [StateValueNodeV1],
     atoms: &'a [StateValueAtomV1],
@@ -1506,7 +1441,6 @@ fn walk_state_value_atoms<'a>(
         node_index: usize,
         atom_index: usize,
     }
-
     enum Pending<'a> {
         Visit {
             cursor: usize,
@@ -1524,7 +1458,6 @@ fn walk_state_value_atoms<'a>(
             cursor: usize,
         },
     }
-
     fn insert_cursor<'a>(
         cursors: &mut Vec<Option<Cursor<'a>>>,
         free_cursors: &mut Vec<usize>,
@@ -1539,7 +1472,6 @@ fn walk_state_value_atoms<'a>(
             index
         }
     }
-
     let mut cursors = vec![Some(Cursor {
         nodes,
         atoms,
@@ -1701,7 +1633,6 @@ fn walk_state_value_atoms<'a>(
     }
     Some(kinds)
 }
-
 /// Flattened word role derived from a validated schema.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StateValueWordKindV1 {
@@ -1712,7 +1643,6 @@ pub enum StateValueWordKindV1 {
     /// Scalar or pointer leaf.
     Leaf(StateValueKindV1),
 }
-
 /// Canonical stored representation of one flattened aggregate word.
 ///
 /// Record wire traversal and owner cleanup are iterative. The standalone
@@ -1734,7 +1664,6 @@ pub enum StateValueAtomV1 {
     #[codec(index = 3)]
     List(Vec<Vec<StateValueAtomV1>>),
 }
-
 impl StateValueAtomV1 {
     /// Stable Norito discriminant for [`Self::Tag`].
     pub const TAG_TAG: u32 = 0;
@@ -1744,7 +1673,6 @@ impl StateValueAtomV1 {
     pub const POINTER_TAG: u32 = 2;
     /// Stable Norito discriminant for [`Self::List`].
     pub const LIST_TAG: u32 = 3;
-
     /// Return this atom's stable Norito enum discriminant.
     #[must_use]
     pub const fn tag(&self) -> u32 {
@@ -1756,7 +1684,6 @@ impl StateValueAtomV1 {
         }
     }
 }
-
 fn drop_state_value_atom_streams_iteratively(mut pending: Vec<Vec<StateValueAtomV1>>) {
     while let Some(mut atoms) = pending.pop() {
         for atom in atoms.drain(..) {
@@ -1766,11 +1693,9 @@ fn drop_state_value_atom_streams_iteratively(mut pending: Vec<Vec<StateValueAtom
         }
     }
 }
-
 fn state_value_record_codec_error(message: impl Into<String>) -> NoritoError {
     NoritoError::Message(message.into())
 }
-
 fn extend_state_value_record_payload(
     payload: &mut BoundedStateValuePayload,
     bytes: &[u8],
@@ -1778,7 +1703,6 @@ fn extend_state_value_record_payload(
     payload.write_all(bytes)?;
     Ok(())
 }
-
 fn encode_state_value_record_payload(record: &StateValueRecordV1) -> Result<Vec<u8>, NoritoError> {
     enum Pending<'a> {
         Stream {
@@ -1790,7 +1714,6 @@ fn encode_state_value_record_payload(record: &StateValueRecordV1) -> Result<Vec<
             depth: usize,
         },
     }
-
     let mut payload = BoundedStateValuePayload::new::<StateValueRecordV1>(
         MAX_STATE_VALUE_RECORD_BYTES,
         "StateValueRecordV1",
@@ -1871,7 +1794,6 @@ fn encode_state_value_record_payload(record: &StateValueRecordV1) -> Result<Vec<
     )?;
     Ok(payload)
 }
-
 fn take_state_value_record_bytes<'a>(
     encoded: &'a [u8],
     offset: &mut usize,
@@ -1884,14 +1806,12 @@ fn take_state_value_record_bytes<'a>(
     *offset = end;
     Ok(bytes)
 }
-
 fn decode_state_value_record_u8(encoded: &[u8], offset: &mut usize) -> Result<u8, NoritoError> {
     take_state_value_record_bytes(encoded, offset, 1)?
         .first()
         .copied()
         .ok_or(NoritoError::LengthMismatch)
 }
-
 fn decode_state_value_record_u16(encoded: &[u8], offset: &mut usize) -> Result<u16, NoritoError> {
     Ok(u16::from_le_bytes(
         take_state_value_record_bytes(encoded, offset, 2)?
@@ -1899,7 +1819,6 @@ fn decode_state_value_record_u16(encoded: &[u8], offset: &mut usize) -> Result<u
             .map_err(|_| NoritoError::LengthMismatch)?,
     ))
 }
-
 fn decode_state_value_record_u32(encoded: &[u8], offset: &mut usize) -> Result<u32, NoritoError> {
     Ok(u32::from_le_bytes(
         take_state_value_record_bytes(encoded, offset, 4)?
@@ -1907,7 +1826,6 @@ fn decode_state_value_record_u32(encoded: &[u8], offset: &mut usize) -> Result<u
             .map_err(|_| NoritoError::LengthMismatch)?,
     ))
 }
-
 fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV1, NoritoError> {
     enum BuilderFrame {
         Stream {
@@ -1921,9 +1839,7 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
             child_depth: usize,
         },
     }
-
     struct BuilderFrames(Vec<BuilderFrame>);
-
     impl BuilderFrames {
         fn ensure_slots(&self, additional: usize) -> Result<(), NoritoError> {
             let required = self
@@ -1936,13 +1852,11 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
             }
             Ok(())
         }
-
         fn push(&mut self, frame: BuilderFrame) {
             debug_assert!(self.0.len() < self.0.capacity());
             self.0.push(frame);
         }
     }
-
     impl Drop for BuilderFrames {
         fn drop(&mut self) {
             let mut current = None;
@@ -1997,7 +1911,6 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
             }
         }
     }
-
     fn charge_allocation(
         allocated: &mut usize,
         limit: usize,
@@ -2015,7 +1928,6 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
         *allocated = next;
         Ok(())
     }
-
     fn try_vec_with_capacity<T>(
         capacity: usize,
         allocated: &mut usize,
@@ -2045,7 +1957,6 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
         }
         Ok(values)
     }
-
     fn decode_stream_frame(
         encoded: &[u8],
         offset: &mut usize,
@@ -2067,7 +1978,6 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
             depth,
         })
     }
-
     fn append_atom(frames: &mut BuilderFrames, atom: StateValueAtomV1) {
         let Some(BuilderFrame::Stream {
             remaining_atoms,
@@ -2082,7 +1992,6 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
         *remaining_atoms -= 1;
         atoms.push(atom);
     }
-
     fn append_completed_list(frames: &mut BuilderFrames, items: Vec<Vec<StateValueAtomV1>>) {
         let Some(BuilderFrame::Stream { atoms, .. }) = frames.0.last_mut() else {
             unreachable!("completed record list must append to its parent stream");
@@ -2090,7 +1999,6 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
         debug_assert!(atoms.len() < atoms.capacity());
         atoms.push(StateValueAtomV1::List(items));
     }
-
     ensure_state_value_frame_limit::<StateValueRecordV1>(
         encoded.len(),
         MAX_STATE_VALUE_RECORD_BYTES,
@@ -2111,7 +2019,6 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
     let schema_hash: [u8; 32] = take_state_value_record_bytes(encoded, &mut offset, 32)?
         .try_into()
         .map_err(|_| NoritoError::LengthMismatch)?;
-
     const RECORD_PREFIX_BYTES: usize = STATE_VALUE_RECORD_PAYLOAD_MAGIC_V1.len()
         + 32
         + STATE_VALUE_RECORD_STREAM_COUNT_BYTES_V1 as usize;
@@ -2136,7 +2043,6 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
     let root = decode_stream_frame(encoded, &mut offset, 0, &mut allocated, allocation_limit)?;
     frames.ensure_slots(1)?;
     frames.push(root);
-
     loop {
         let stream_complete = matches!(
             frames.0.last(),
@@ -2158,7 +2064,6 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
                 };
                 return Ok(StateValueRecordV1 { schema_hash, atoms });
             }
-
             let parent_accepts_stream = matches!(
                 frames.0.get(frames.0.len() - 2),
                 Some(BuilderFrame::List {
@@ -2202,7 +2107,6 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
                 frames.push(child);
                 continue;
             }
-
             let completed = frames.0.pop().ok_or(NoritoError::LengthMismatch)?;
             let BuilderFrame::List { items, .. } = completed else {
                 unreachable!("completed record list must be a list frame");
@@ -2210,7 +2114,6 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
             append_completed_list(&mut frames, items);
             continue;
         }
-
         let depth = match frames.0.last() {
             Some(BuilderFrame::Stream { depth, .. }) => *depth,
             _ => {
@@ -2271,7 +2174,6 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
                     append_atom(&mut frames, StateValueAtomV1::List(Vec::new()));
                     continue;
                 }
-
                 frames.ensure_slots(2)?;
                 let items = try_vec_with_capacity::<Vec<StateValueAtomV1>>(
                     item_count,
@@ -2308,7 +2210,6 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
         }
     }
 }
-
 /// Canonical Norito value stored under one aggregate durable-state key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateValueRecordV1 {
@@ -2317,32 +2218,26 @@ pub struct StateValueRecordV1 {
     /// Active-only atoms in schema preorder; sum tags select exactly one payload.
     pub atoms: Vec<StateValueAtomV1>,
 }
-
 impl Drop for StateValueRecordV1 {
     fn drop(&mut self) {
         drop_state_value_atom_streams_iteratively(vec![std::mem::take(&mut self.atoms)]);
     }
 }
-
 impl NoritoSerialize for StateValueRecordV1 {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name(STATE_VALUE_RECORD_NAME_V1)
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         encode_state_value_record_payload(self)?.serialize(writer)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for StateValueRecordV1 {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name(STATE_VALUE_RECORD_NAME_V1)
     }
-
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("StateValueRecordV1 decode")
     }
-
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
         let bytes =
             norito::core::payload_slice_from_ptr(std::ptr::from_ref(archived).cast::<u8>())?;
@@ -2354,7 +2249,6 @@ impl<'a> NoritoDeserialize<'a> for StateValueRecordV1 {
         decode_state_value_record_payload(encoded)
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for StateValueRecordV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), NoritoError> {
         let (encoded, used) = decode_state_value_payload_wrapper::<Self>(
@@ -2365,7 +2259,6 @@ impl<'a> DecodeFromSlice<'a> for StateValueRecordV1 {
         Ok((decode_state_value_record_payload(encoded)?, used))
     }
 }
-
 /// Decode one exact canonical V1 durable-state record without re-encoding it.
 ///
 /// The outer Norito frame must use the canonical uncompressed layout, exact
@@ -2399,11 +2292,9 @@ pub fn decode_canonical_state_value_record_v1(
         view.decode_exact::<StateValueRecordV1>()
     })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn assert_norito_discriminant<T: norito::codec::Encode>(value: &T, expected: u32) {
         let encoded = norito::codec::Encode::encode(value);
         assert!(encoded.len() >= 4, "enum encoding must contain a u32 tag");
@@ -2412,7 +2303,6 @@ mod tests {
             expected
         );
     }
-
     fn nested_list_schema(wrappers: usize) -> StateValueSchemaV1 {
         (0..wrappers).fold(
             StateValueSchemaV1 {
@@ -2426,17 +2316,14 @@ mod tests {
             },
         )
     }
-
     fn drop_schema_iteratively(schema: StateValueSchemaV1) {
         drop(schema);
     }
-
     fn nested_list_atoms(wrappers: usize) -> Vec<StateValueAtomV1> {
         (0..wrappers).fold(vec![StateValueAtomV1::Bool(true)], |item, _| {
             vec![StateValueAtomV1::List(vec![item])]
         })
     }
-
     fn drop_atoms_iteratively(atoms: Vec<StateValueAtomV1>) {
         let mut pending = vec![atoms];
         while let Some(mut atoms) = pending.pop() {
@@ -2447,13 +2334,11 @@ mod tests {
             }
         }
     }
-
     fn nested_option_schema(wrappers: usize) -> StateValueSchemaV1 {
         let mut nodes = vec![StateValueNodeV1::Option; wrappers];
         nodes.push(StateValueNodeV1::Leaf(StateValueKindV1::Bool));
         StateValueSchemaV1 { nodes }
     }
-
     fn schema_with_name_len(name_len: usize) -> StateValueSchemaV1 {
         StateValueSchemaV1 {
             nodes: vec![
@@ -2465,7 +2350,6 @@ mod tests {
             ],
         }
     }
-
     fn encode_schema_payload_without_limit(name_len: usize) -> Vec<u8> {
         let _canonical_flags =
             norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
@@ -2482,7 +2366,6 @@ mod tests {
             .expect("serialize leaf kind");
         payload
     }
-
     fn schema_name_len_at_payload_limit() -> usize {
         let payload_limit =
             state_value_payload_limit::<StateValueSchemaV1>(MAX_STATE_VALUE_SCHEMA_BYTES)
@@ -2507,7 +2390,6 @@ mod tests {
         );
         name_len
     }
-
     fn encode_record_payload_without_limit(pointer_len: usize) -> Vec<u8> {
         let mut payload = Vec::new();
         payload.extend_from_slice(&STATE_VALUE_RECORD_PAYLOAD_MAGIC_V1);
@@ -2522,7 +2404,6 @@ mod tests {
         payload.resize(payload.len() + pointer_len, 0xa5);
         payload
     }
-
     fn wide_struct_schema(field_count: usize) -> StateValueSchemaV1 {
         let mut nodes = vec![StateValueNodeV1::Struct {
             name: "Wide".into(),
@@ -2533,7 +2414,6 @@ mod tests {
         nodes.extend((0..field_count).map(|_| StateValueNodeV1::Leaf(StateValueKindV1::Bool)));
         StateValueSchemaV1 { nodes }
     }
-
     #[test]
     fn durable_state_enum_tags_match_the_pinned_wire_discriminants() {
         let kinds = [
@@ -2583,7 +2463,6 @@ mod tests {
             assert_eq!(kind.pointer_type(), pointer_type);
             assert_norito_discriminant(&kind, kind.tag());
         }
-
         let int_schema = StateValueSchemaV1 {
             nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],
         };
@@ -2605,7 +2484,6 @@ mod tests {
             assert_eq!(node.tag(), u32::try_from(expected).expect("node tag"));
             assert_norito_discriminant(&node, node.tag());
         }
-
         let atoms = [
             StateValueAtomV1::Tag(false),
             StateValueAtomV1::Bool(false),
@@ -2617,7 +2495,6 @@ mod tests {
             assert_norito_discriminant(&atom, atom.tag());
         }
     }
-
     #[test]
     fn schema_and_record_roundtrip_deterministically() {
         assert_eq!(
@@ -2647,7 +2524,6 @@ mod tests {
             norito::decode_from_bytes::<StateValueSchemaV1>(&first).expect("decode schema"),
             schema
         );
-
         let record = StateValueRecordV1 {
             schema_hash: [7; 32],
             atoms: vec![
@@ -2669,7 +2545,6 @@ mod tests {
             *Hash::new(&first).as_ref()
         );
     }
-
     #[test]
     fn exact_record_decoder_rejects_alternate_layouts_and_logical_tails() {
         let record = StateValueRecordV1 {
@@ -2696,14 +2571,12 @@ mod tests {
             assert_eq!(norito::core::get_decode_flags(), ambient_flags);
             assert_eq!(norito::core::payload_ctx(), payload_context_before);
         }
-
         let mut padded = canonical.clone();
         padded.insert(norito::core::Header::SIZE, 0);
         assert!(matches!(
             decode_canonical_state_value_record_v1(&padded),
             Err(NoritoError::LengthMismatch)
         ));
-
         let mut corrupt = canonical.clone();
         *corrupt.last_mut().expect("canonical frame has payload") ^= 0x80;
         {
@@ -2719,14 +2592,12 @@ mod tests {
             assert_eq!(norito::core::get_decode_flags(), ambient_flags);
             assert_eq!(norito::core::payload_ctx(), payload_context_before);
         }
-
         let mut wrong_schema = canonical.clone();
         wrong_schema[6] ^= 0x80;
         assert!(matches!(
             decode_canonical_state_value_record_v1(&wrong_schema),
             Err(NoritoError::SchemaMismatch)
         ));
-
         let compressible_record = StateValueRecordV1 {
             schema_hash: [0x5a; 32],
             atoms: vec![StateValueAtomV1::Pointer(vec![0; 4 * 1024])],
@@ -2740,7 +2611,6 @@ mod tests {
             decode_canonical_state_value_record_v1(&compressed),
             Err(NoritoError::NonCanonicalEncoding)
         ));
-
         let alternate_flags =
             STATE_VALUE_RECORD_FRAME_FLAGS_V1 | norito::core::header_flags::COMPACT_LEN;
         let alternate_payload = {
@@ -2760,7 +2630,6 @@ mod tests {
             decode_canonical_state_value_record_v1(&alternate),
             Err(NoritoError::NonCanonicalEncoding)
         ));
-
         let payload =
             encode_state_value_record_payload(&record).expect("encode canonical KRV1 payload");
         let mut wrapped = Vec::new();
@@ -2780,7 +2649,6 @@ mod tests {
             Err(NoritoError::LengthMismatch)
         ));
     }
-
     #[test]
     fn malformed_schema_shape_is_rejected() {
         assert!(
@@ -2799,7 +2667,6 @@ mod tests {
             .validate()
         );
     }
-
     #[test]
     fn sum_records_carry_only_the_active_payload() {
         let option = StateValueSchemaV1 {
@@ -2823,7 +2690,6 @@ mod tests {
             StateValueAtomV1::Tag(false),
             StateValueAtomV1::Pointer(vec![1]),
         ]));
-
         let result = StateValueSchemaV1 {
             nodes: vec![
                 StateValueNodeV1::Result,
@@ -2844,7 +2710,6 @@ mod tests {
             StateValueAtomV1::Pointer(vec![1]),
         ]));
     }
-
     #[test]
     fn nested_quantity_lists_roundtrip_and_reject_invalid_shapes() {
         let quantity = StateValueSchemaV1 {
@@ -2868,7 +2733,6 @@ mod tests {
             vec![vec![StateValueAtomV1::Pointer(vec![1])]],
         )]])];
         assert!(nested.validate_atoms(&atoms));
-
         let record = StateValueRecordV1 {
             schema_hash: [9; 32],
             atoms,
@@ -2879,7 +2743,6 @@ mod tests {
                 .expect("decode nested list record"),
             record
         );
-
         let overflow = vec![StateValueAtomV1::List(vec![
             vec![StateValueAtomV1::List(Vec::new())],
             vec![StateValueAtomV1::List(Vec::new())],
@@ -2887,7 +2750,6 @@ mod tests {
             vec![StateValueAtomV1::List(Vec::new())],
         ])];
         assert!(!nested.validate_atoms(&overflow));
-
         for capacity in [0, 65] {
             let invalid = StateValueSchemaV1 {
                 nodes: vec![StateValueNodeV1::List {
@@ -2900,7 +2762,6 @@ mod tests {
             assert!(!invalid.validate());
         }
     }
-
     #[test]
     fn lists_reject_resource_handles_recursively() {
         let resource = StateValueSchemaV1 {
@@ -2921,7 +2782,6 @@ mod tests {
         };
         assert!(!list.validate());
     }
-
     #[test]
     fn recursive_list_schema_boundary_is_stack_safe() {
         let worker = std::thread::Builder::new()
@@ -2953,7 +2813,6 @@ mod tests {
         drop_schema_iteratively(accepted);
         drop_schema_iteratively(rejected);
     }
-
     #[test]
     fn recursive_list_schema_boundary_roundtrips_canonically_on_a_small_stack() {
         let worker = std::thread::Builder::new()
@@ -2979,7 +2838,6 @@ mod tests {
             .expect("boundary schema must roundtrip canonically");
         assert!(decoded_valid);
         assert_eq!(encoded, reencoded);
-
         let rejected = nested_list_schema(MAX_STATE_VALUE_NODES);
         assert!(
             norito::encode_canonical(&rejected).is_err(),
@@ -2987,7 +2845,6 @@ mod tests {
         );
         drop_schema_iteratively(rejected);
     }
-
     #[test]
     fn schema_byte_limit_covers_the_complete_canonical_frame() {
         let payload_limit =
@@ -3008,7 +2865,6 @@ mod tests {
         let decoded = norito::decode_canonical::<StateValueSchemaV1>(&frame)
             .expect("decode boundary schema frame");
         assert_eq!(decoded, schema);
-
         let oversized_name_len = boundary_name_len + 1;
         let oversized = schema_with_name_len(oversized_name_len);
         assert!(encode_state_value_schema_payload(&oversized).is_err());
@@ -3031,7 +2887,6 @@ mod tests {
         assert_eq!(oversized_frame.len(), MAX_STATE_VALUE_SCHEMA_BYTES + 1);
         assert!(norito::decode_from_bytes::<StateValueSchemaV1>(&oversized_frame).is_err());
     }
-
     #[test]
     fn flat_schema_payload_rejects_noncanonical_boundaries() {
         let schema = StateValueSchemaV1 {
@@ -3060,31 +2915,25 @@ mod tests {
             encode_state_value_schema_payload(&decoded).expect("re-encode flat schema payload"),
             encoded
         );
-
         let mut malformed = encoded.clone();
         malformed[0] ^= 0xff;
         assert!(decode_state_value_schema_payload(&malformed).is_err());
-
         let mut malformed = encoded.clone();
         malformed[STATE_VALUE_SCHEMA_PAYLOAD_MAGIC_V1.len()] = 0;
         malformed[STATE_VALUE_SCHEMA_PAYLOAD_MAGIC_V1.len() + 1] = 0;
         assert!(decode_state_value_schema_payload(&malformed).is_err());
-
         let mut malformed = encoded.clone();
         malformed[STATE_VALUE_SCHEMA_PAYLOAD_MAGIC_V1.len() + 2] = u8::MAX;
         assert!(decode_state_value_schema_payload(&malformed).is_err());
-
         let mut malformed = encoded.clone();
         malformed.push(0);
         assert!(decode_state_value_schema_payload(&malformed).is_err());
-
         for end in 0..encoded.len() {
             assert!(
                 decode_state_value_schema_payload(&encoded[..end]).is_err(),
                 "truncation at byte {end} must reject"
             );
         }
-
         let mut forged_fields = Vec::new();
         forged_fields.extend_from_slice(&STATE_VALUE_SCHEMA_PAYLOAD_MAGIC_V1);
         forged_fields.extend_from_slice(&1_u16.to_le_bytes());
@@ -3097,7 +2946,6 @@ mod tests {
             "a forged field count must reject before Vec<String> preallocation"
         );
     }
-
     #[test]
     fn flat_schema_payload_pins_asymmetric_result_and_list_layouts() {
         let result = StateValueSchemaV1 {
@@ -3122,7 +2970,6 @@ mod tests {
             ]
             .concat(),
         );
-
         let list = StateValueSchemaV1 {
             nodes: vec![StateValueNodeV1::List {
                 element: Box::new(StateValueSchemaV1 {
@@ -3146,7 +2993,6 @@ mod tests {
             .concat(),
         );
     }
-
     #[test]
     fn record_byte_limit_covers_the_complete_canonical_frame() {
         let payload_limit =
@@ -3173,7 +3019,6 @@ mod tests {
         let decoded = norito::decode_canonical::<StateValueRecordV1>(&frame)
             .expect("decode boundary record frame");
         assert_eq!(decoded, record);
-
         let oversized_pointer_len = pointer_len + 1;
         let oversized = StateValueRecordV1 {
             schema_hash: [0x5a; 32],
@@ -3199,7 +3044,6 @@ mod tests {
         assert_eq!(oversized_frame.len(), MAX_STATE_VALUE_RECORD_BYTES + 1);
         assert!(norito::decode_from_bytes::<StateValueRecordV1>(&oversized_frame).is_err());
     }
-
     #[test]
     fn flat_record_payload_has_one_exact_all_variants_golden() {
         let record = StateValueRecordV1 {
@@ -3248,7 +3092,6 @@ mod tests {
             encoded
         );
     }
-
     #[test]
     fn flat_record_decoder_precharges_all_owned_allocations() {
         let record = StateValueRecordV1 {
@@ -3271,7 +3114,6 @@ mod tests {
             }),
             Err(NoritoError::TotalAllocationExceeded { .. })
         ));
-
         let sufficient_allocation = encoded
             .len()
             .checked_mul(64)
@@ -3292,7 +3134,6 @@ mod tests {
             record
         );
     }
-
     #[test]
     fn flat_record_payload_rejects_every_noncanonical_boundary() {
         let record = StateValueRecordV1 {
@@ -3311,55 +3152,43 @@ mod tests {
             ],
         };
         let encoded = encode_state_value_record_payload(&record).expect("encode KRV1");
-
         for end in 0..encoded.len() {
             assert!(
                 decode_state_value_record_payload(&encoded[..end]).is_err(),
                 "KRV1 truncation at byte {end} must reject"
             );
         }
-
         let mut malformed = encoded.clone();
         malformed[0] ^= 0xff;
         assert!(decode_state_value_record_payload(&malformed).is_err());
-
         let mut malformed = encoded.clone();
         malformed[36..38].copy_from_slice(&0_u16.to_le_bytes());
         assert!(decode_state_value_record_payload(&malformed).is_err());
-
         let mut malformed = encoded.clone();
         malformed[36..38].copy_from_slice(&257_u16.to_le_bytes());
         assert!(decode_state_value_record_payload(&malformed).is_err());
-
         let mut malformed = encoded.clone();
         malformed[38] = u8::MAX;
         assert!(decode_state_value_record_payload(&malformed).is_err());
-
         let mut malformed = encoded.clone();
         malformed[39] = 2;
         assert!(decode_state_value_record_payload(&malformed).is_err());
-
         let mut malformed = encoded.clone();
         malformed[41] = 2;
         assert!(decode_state_value_record_payload(&malformed).is_err());
-
         let mut malformed = encoded.clone();
         malformed[43..47].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(decode_state_value_record_payload(&malformed).is_err());
-
         let mut malformed = encoded.clone();
         malformed[50] = MAX_STATE_VALUE_LIST_CAPACITY_V1 + 1;
         assert!(decode_state_value_record_payload(&malformed).is_err());
-
         let mut malformed = encoded.clone();
         malformed[51..53].copy_from_slice(&0_u16.to_le_bytes());
         assert!(decode_state_value_record_payload(&malformed).is_err());
-
         let mut malformed = encoded.clone();
         malformed.push(0);
         assert!(decode_state_value_record_payload(&malformed).is_err());
     }
-
     #[test]
     fn flat_record_encoder_rejects_invalid_counts() {
         let empty = StateValueRecordV1 {
@@ -3367,7 +3196,6 @@ mod tests {
             atoms: Vec::new(),
         };
         assert!(encode_state_value_record_payload(&empty).is_err());
-
         let wide = StateValueRecordV1 {
             schema_hash: [0; 32],
             atoms: (0..=MAX_STATE_VALUE_WORDS)
@@ -3375,7 +3203,6 @@ mod tests {
                 .collect(),
         };
         assert!(encode_state_value_record_payload(&wide).is_err());
-
         let list = StateValueRecordV1 {
             schema_hash: [0; 32],
             atoms: vec![StateValueAtomV1::List(
@@ -3386,7 +3213,6 @@ mod tests {
         };
         assert!(encode_state_value_record_payload(&list).is_err());
     }
-
     #[test]
     fn recursive_list_record_boundary_is_canonical_and_stack_safe() {
         let worker = std::thread::Builder::new()
@@ -3406,7 +3232,6 @@ mod tests {
                 if encoded != reencoded {
                     return Err("canonical KRV1 re-encode changed bytes".to_owned());
                 }
-
                 let mut trailing = encode_state_value_record_payload(&record)
                     .map_err(|error| error.to_string())?;
                 trailing.push(0);
@@ -3415,7 +3240,6 @@ mod tests {
                 }
                 drop(decoded);
                 drop(record);
-
                 let rejected = StateValueRecordV1 {
                     schema_hash: [0x5a; 32],
                     atoms: nested_list_atoms(MAX_STATE_VALUE_NODES),
@@ -3424,7 +3248,6 @@ mod tests {
                     return Err("256 nested KRV1 Lists were accepted".to_owned());
                 }
                 drop(rejected);
-
                 let empty_chain = StateValueRecordV1 {
                     schema_hash: [0x5a; 32],
                     atoms: (1..MAX_STATE_VALUE_NODES)
@@ -3446,7 +3269,6 @@ mod tests {
             .expect("small-stack record wire test")
             .expect("record boundary must be stack safe");
     }
-
     #[test]
     fn boundary_walkers_are_stack_safe_for_flat_sums_and_recursive_lists() {
         let worker = std::thread::Builder::new()
@@ -3465,7 +3287,6 @@ mod tests {
                     options.validate_atoms(&active_option_atoms),
                     options.validate_atoms(&inactive_option_atoms),
                 );
-
                 let lists = nested_list_schema(MAX_STATE_VALUE_NODES - 1);
                 let list_atoms = nested_list_atoms(MAX_STATE_VALUE_NODES - 1);
                 let list_results = (
@@ -3507,7 +3328,6 @@ mod tests {
         drop_schema_iteratively(lists);
         drop_atoms_iteratively(list_atoms);
     }
-
     #[test]
     fn recursive_list_elements_share_the_exact_node_budget() {
         let accepted = StateValueSchemaV1 {
@@ -3521,7 +3341,6 @@ mod tests {
             "List + struct + 254 leaves is exactly 256 nodes"
         );
         assert_eq!(accepted.word_count(), Some(1));
-
         let rejected = StateValueSchemaV1 {
             nodes: vec![StateValueNodeV1::List {
                 element: Box::new(wide_struct_schema(MAX_STATE_VALUE_NODES - 1)),
@@ -3533,7 +3352,6 @@ mod tests {
             "List + struct + 255 leaves is 257 nodes"
         );
     }
-
     #[test]
     fn malformed_recursive_list_element_schemas_reject() {
         let invalid_elements = [
@@ -3560,7 +3378,6 @@ mod tests {
             };
             assert!(!schema.validate());
         }
-
         for capacity in [
             MIN_STATE_VALUE_LIST_CAPACITY_V1 - 1,
             MAX_STATE_VALUE_LIST_CAPACITY_V1 + 1,
@@ -3576,7 +3393,6 @@ mod tests {
             assert!(!schema.validate());
         }
     }
-
     #[test]
     fn mixed_schema_preserves_preorder_and_active_only_words() {
         let schema = StateValueSchemaV1 {
@@ -3617,7 +3433,6 @@ mod tests {
         assert!(schema.validate());
         assert_eq!(schema.word_count(), Some(expected_words.len()));
         assert_eq!(schema.word_kinds(), Some(expected_words.clone()));
-
         let atoms = vec![
             StateValueAtomV1::Bool(true),
             StateValueAtomV1::Tag(true),

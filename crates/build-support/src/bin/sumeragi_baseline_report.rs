@@ -4,7 +4,6 @@
 //! (either passed as the first CLI argument or via `SUMERAGI_BASELINE_ARTIFACT_DIR`),
 //! groups runs per scenario, and renders a Markdown report containing aggregated
 //! throughput and latency measurements alongside per-run details.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::{self, Write as _},
@@ -12,11 +11,8 @@ use std::{
     path::{Path, PathBuf},
     process::ExitCode,
 };
-
 use norito::json::{self, Map, Value, native::Number};
-
 type Result<T> = std::result::Result<T, ReportError>;
-
 fn main() -> ExitCode {
     match emit_report(io::stdout().lock()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -26,7 +22,6 @@ fn main() -> ExitCode {
         }
     }
 }
-
 fn emit_report(mut writer: impl Write) -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if matches!(args.first().map(String::as_str), Some("--help" | "-h")) {
@@ -35,7 +30,6 @@ fn emit_report(mut writer: impl Write) -> Result<()> {
     }
     run_with_args(&mut writer, &args)
 }
-
 fn run_with_args(writer: &mut impl Write, args: &[String]) -> Result<()> {
     let root = match args {
         [] => {
@@ -54,12 +48,10 @@ fn run_with_args(writer: &mut impl Write, args: &[String]) -> Result<()> {
             ));
         }
     };
-
     let report = generate_report(&root)?;
     writer.write_all(report.as_bytes())?;
     Ok(())
 }
-
 fn generate_report(root: &Path) -> Result<String> {
     if !root.exists() {
         return Err(ReportError::Input(format!(
@@ -73,7 +65,6 @@ fn generate_report(root: &Path) -> Result<String> {
             root.display()
         )));
     }
-
     let mut summary_paths = Vec::new();
     for entry in root.read_dir()? {
         let entry = entry?;
@@ -88,17 +79,14 @@ fn generate_report(root: &Path) -> Result<String> {
             }
         }
     }
-
     summary_paths.sort();
     if summary_paths.is_empty() {
         return Err(ReportError::EmptyDataset(root.to_path_buf()));
     }
-
     let mut samples = Vec::with_capacity(summary_paths.len());
     for path in summary_paths {
         samples.push(ScenarioSample::from_path(path)?);
     }
-
     let mut grouped: BTreeMap<String, Vec<ScenarioSample>> = BTreeMap::new();
     for sample in samples {
         grouped
@@ -106,7 +94,6 @@ fn generate_report(root: &Path) -> Result<String> {
             .or_default()
             .push(sample);
     }
-
     let mut output = String::new();
     writeln!(output, "# Sumeragi NPoS Baseline Report")?;
     writeln!(
@@ -115,14 +102,12 @@ fn generate_report(root: &Path) -> Result<String> {
         grouped.values().map(Vec::len).sum::<usize>(),
         root.display()
     )?;
-
     writeln!(output, "\n## Summary\n")?;
     writeln!(
         output,
         "| Scenario | Runs | Peers | Block cadence (ms) | Blocks sampled (median) | Throughput (median blk/s) | Commit EMA (median ms) | Observed block (median ms) |"
     )?;
     writeln!(output, "| --- | --- | --- | --- | --- | --- | --- | --- |")?;
-
     for (scenario, runs) in &grouped {
         let summary = ScenarioSummary::from_runs(scenario, runs)?;
         writeln!(
@@ -137,15 +122,12 @@ fn generate_report(root: &Path) -> Result<String> {
             observed_block_median = summary.observed_block_time.median,
         )?;
     }
-
     for (scenario, runs) in grouped {
         let summary = ScenarioSummary::from_runs(&scenario, &runs)?;
         summary.render_detail(&mut output, &runs)?;
     }
-
     Ok(output)
 }
-
 #[derive(Debug, Clone)]
 struct PhaseStats {
     _samples: u64,
@@ -154,7 +136,6 @@ struct PhaseStats {
     _mean: f64,
     median: f64,
 }
-
 impl PhaseStats {
     fn from_object(map: &Map, path: &Path) -> Result<Self> {
         Ok(Self {
@@ -166,7 +147,6 @@ impl PhaseStats {
         })
     }
 }
-
 #[derive(Debug, Clone)]
 struct ScenarioSample {
     scenario: String,
@@ -186,7 +166,6 @@ struct ScenarioSample {
     view_change_installs: Option<PhaseStats>,
     status_view_changes: Option<f64>,
 }
-
 impl ScenarioSample {
     fn from_path(path: PathBuf) -> Result<Self> {
         let contents = std::fs::read_to_string(&path)?;
@@ -194,14 +173,12 @@ impl ScenarioSample {
             path: path.clone(),
             message: err.to_string(),
         })?;
-
         let root = value.as_object().ok_or_else(|| ReportError::InvalidType {
             path: path.clone(),
             field: "<root>".into(),
             expected: "object",
             actual: value_type(&value),
         })?;
-
         let scenario = require_string(root, "scenario", &path)?;
         let network = require_object(root, "network", &path)?;
         let peers = require_u64(network, "peers", &path)?;
@@ -211,7 +188,6 @@ impl ScenarioSample {
         let elapsed_ms = require_f64(timing, "elapsed_ms", &path)?;
         let throughput_blocks_per_sec = require_f64(timing, "throughput_blocks_per_sec", &path)?;
         let observed_block_time_ms = require_f64(timing, "observed_block_time_ms", &path)?;
-
         let phase_root = require_object(root, "phase_latency_ema_ms", &path)?;
         let mut phase_stats = BTreeMap::new();
         for (phase, value) in phase_root {
@@ -223,7 +199,6 @@ impl ScenarioSample {
             })?;
             phase_stats.insert(phase.clone(), PhaseStats::from_object(obj, &path)?);
         }
-
         let queue_root = root
             .get("queue")
             .and_then(Value::as_object)
@@ -235,7 +210,6 @@ impl ScenarioSample {
                 queue_stats.insert(key.clone(), PhaseStats::from_object(obj, &path)?);
             }
         }
-
         let view_root = root
             .get("view_changes")
             .and_then(Value::as_object)
@@ -251,13 +225,10 @@ impl ScenarioSample {
             .and_then(Value::as_object)
             .and_then(|obj| obj.get("value"))
             .and_then(Value::as_f64);
-
         let telemetry_samples = require_u64(root, "telemetry_samples", &path)?;
-
         let final_height = require_object(root, "final_height", &path)?;
         let final_height_total = require_u64(final_height, "total", &path)?;
         let final_height_non_empty = require_u64(final_height, "non_empty", &path)?;
-
         let environment = root
             .get("environment")
             .and_then(Value::as_object)
@@ -273,7 +244,6 @@ impl ScenarioSample {
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
-
         Ok(Self {
             scenario,
             source: path,
@@ -294,7 +264,6 @@ impl ScenarioSample {
         })
     }
 }
-
 #[derive(Debug, Clone)]
 struct StatsSummary {
     min: f64,
@@ -302,7 +271,6 @@ struct StatsSummary {
     _mean: f64,
     median: f64,
 }
-
 impl StatsSummary {
     fn from_values(values: &[f64], label: &str) -> Result<Self> {
         if values.is_empty() {
@@ -330,7 +298,6 @@ impl StatsSummary {
         })
     }
 }
-
 struct ScenarioSummary {
     runs: usize,
     peers: u64,
@@ -341,7 +308,6 @@ struct ScenarioSummary {
     commit_max: f64,
     observed_block_time: StatsSummary,
 }
-
 impl ScenarioSummary {
     fn from_runs(scenario: &str, runs: &[ScenarioSample]) -> Result<Self> {
         if runs.is_empty() {
@@ -351,13 +317,11 @@ impl ScenarioSummary {
         }
         let mut peers_set = BTreeSet::new();
         let mut block_cadence_values = Vec::new();
-
         let mut blocks_sampled_vals = Vec::new();
         let mut throughput_vals = Vec::new();
         let mut commit_median_vals = Vec::new();
         let mut commit_max_vals = Vec::new();
         let mut observed_block_vals = Vec::new();
-
         for run in runs {
             peers_set.insert(run.peers);
             if block_cadence_values
@@ -366,11 +330,9 @@ impl ScenarioSummary {
             {
                 block_cadence_values.push(run.block_cadence_ms);
             }
-
             blocks_sampled_vals.push(u64_to_f64(run.blocks_sampled, "blocks_sampled")?);
             throughput_vals.push(run.throughput_blocks_per_sec);
             observed_block_vals.push(run.observed_block_time_ms);
-
             let commit_stats = run.phase_stats.get("commit").ok_or_else(|| {
                 ReportError::Aggregate(format!(
                     "scenario `{scenario}` run `{}` missing commit stats",
@@ -380,7 +342,6 @@ impl ScenarioSummary {
             commit_median_vals.push(commit_stats.median);
             commit_max_vals.push(commit_stats.max);
         }
-
         if peers_set.len() != 1 {
             return Err(ReportError::Inconsistent {
                 scenario: scenario.into(),
@@ -393,7 +354,6 @@ impl ScenarioSummary {
                 detail: format!("inconsistent block_cadence_ms values: {block_cadence_values:?}"),
             });
         }
-
         Ok(Self {
             runs: runs.len(),
             peers: *peers_set.iter().next().unwrap(),
@@ -408,7 +368,6 @@ impl ScenarioSummary {
             )?,
         })
     }
-
     fn render_detail(&self, writer: &mut impl fmt::Write, runs: &[ScenarioSample]) -> Result<()> {
         let Some(first_run) = runs.first() else {
             return Err(ReportError::Aggregate(
@@ -422,7 +381,6 @@ impl ScenarioSummary {
         Self::render_view_change_section(writer, first_run)?;
         Ok(())
     }
-
     fn render_overview_section(
         &self,
         writer: &mut impl fmt::Write,
@@ -449,7 +407,6 @@ impl ScenarioSummary {
         )?;
         Ok(())
     }
-
     fn render_runs_table(writer: &mut impl fmt::Write, runs: &[ScenarioSample]) -> Result<()> {
         writeln!(
             writer,
@@ -459,7 +416,6 @@ impl ScenarioSummary {
             writer,
             "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
         )?;
-
         for (idx, run) in runs.iter().enumerate() {
             let commit_stats = run.phase_stats.get("commit").ok_or_else(|| {
                 ReportError::Aggregate(format!("missing commit stats for {}", run.source.display()))
@@ -490,7 +446,6 @@ impl ScenarioSummary {
         }
         Ok(())
     }
-
     fn render_environment_section(
         writer: &mut impl fmt::Write,
         first_run: &ScenarioSample,
@@ -527,7 +482,6 @@ impl ScenarioSummary {
         }
         Ok(())
     }
-
     fn render_queue_metrics(
         writer: &mut impl fmt::Write,
         first_run: &ScenarioSample,
@@ -545,7 +499,6 @@ impl ScenarioSummary {
         }
         Ok(())
     }
-
     fn render_view_change_section(
         writer: &mut impl fmt::Write,
         first_run: &ScenarioSample,
@@ -560,7 +513,6 @@ impl ScenarioSummary {
         Ok(())
     }
 }
-
 #[derive(Debug)]
 enum ReportError {
     Io(std::io::Error),
@@ -587,7 +539,6 @@ enum ReportError {
     Aggregate(String),
     Input(String),
 }
-
 impl std::fmt::Display for ReportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -624,26 +575,21 @@ impl std::fmt::Display for ReportError {
         }
     }
 }
-
 impl std::error::Error for ReportError {}
-
 impl From<std::io::Error> for ReportError {
     fn from(err: std::io::Error) -> Self {
         Self::Io(err)
     }
 }
-
 impl From<std::fmt::Error> for ReportError {
     fn from(err: std::fmt::Error) -> Self {
         Self::Fmt(err)
     }
 }
-
 const USAGE: &str = "Usage: sumeragi_baseline_report [ARTIFACT_DIR]\n\n\
 Generate a Markdown report from Sumeragi NPoS baseline summaries.\n\
 Pass the directory containing *.summary.json artifacts as the first argument,\n\
 or set SUMERAGI_BASELINE_ARTIFACT_DIR. Use --help to display this message.\n";
-
 fn require_object<'a>(map: &'a Map, key: &str, path: &Path) -> Result<&'a Map> {
     map.get(key).map_or_else(
         || {
@@ -663,7 +609,6 @@ fn require_object<'a>(map: &'a Map, key: &str, path: &Path) -> Result<&'a Map> {
         },
     )
 }
-
 fn require_u64(map: &Map, key: &str, path: &Path) -> Result<u64> {
     map.get(key).map_or_else(
         || {
@@ -682,7 +627,6 @@ fn require_u64(map: &Map, key: &str, path: &Path) -> Result<u64> {
         },
     )
 }
-
 fn require_f64(map: &Map, key: &str, path: &Path) -> Result<f64> {
     map.get(key).map_or_else(
         || {
@@ -701,7 +645,6 @@ fn require_f64(map: &Map, key: &str, path: &Path) -> Result<f64> {
         },
     )
 }
-
 fn require_string(map: &Map, key: &str, path: &Path) -> Result<String> {
     map.get(key).map_or_else(
         || {
@@ -721,7 +664,6 @@ fn require_string(map: &Map, key: &str, path: &Path) -> Result<String> {
         },
     )
 }
-
 fn value_type(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
@@ -732,12 +674,10 @@ fn value_type(value: &Value) -> &'static str {
         Value::Object(_) => "object",
     }
 }
-
 fn approx_equal(lhs: f64, rhs: f64) -> bool {
     const TOLERANCE: f64 = 1.0e-9;
     (lhs - rhs).abs() <= TOLERANCE
 }
-
 fn number_to_string(number: &Number) -> String {
     match number {
         Number::I64(value) => value.to_string(),
@@ -756,7 +696,6 @@ fn number_to_string(number: &Number) -> String {
         }
     }
 }
-
 fn u64_to_f64(value: u64, label: &str) -> Result<f64> {
     const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_992; // 2^53
     if value > MAX_SAFE_INTEGER {

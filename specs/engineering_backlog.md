@@ -8221,9 +8221,12 @@ redistributable schemas, and official trust/revocation bundles.
   coverage for successful export plus disabled-bridge rejection.
 - Completed 2026-06-04: added config-backed durable ISO store retention and
   compaction. Operators can set `store_retention_secs` or `store_max_records`;
-  zero defaults retain all records. Compaction is independent from dedupe TTL,
-  removes expired or oldest overflow records from memory and disk, clears replay
-  indexes, and regenerates the audit manifest from survivors.
+  count retention now defaults to 256 and fails closed above the first-release
+  hard maximum of 1024. Reload uses stable bounded reads and deterministic
+  streaming newest-record retention before populating replay indexes.
+  Compaction is independent from dedupe TTL, removes expired or oldest overflow
+  records from memory and disk, clears replay indexes, and regenerates the audit
+  manifest from survivors without a full-store prune snapshot.
 - Completed 2026-06-04: added the config-backed ISO external audit export spool.
   Operators can set `audit_export_dir`; each audit-index regeneration mirrors
   `messages.index.json` into that external directory and writes digest-addressed

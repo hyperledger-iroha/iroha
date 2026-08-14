@@ -1,8 +1,6 @@
 //! Ensure scheduler ready-queue heap vs per-wave sort produce identical outcomes.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use std::{borrow::Cow, sync::Arc};
-
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -10,9 +8,7 @@ use iroha_core::{
 };
 use iroha_data_model::prelude::*;
 use mv::storage::StorageReadOnly;
-
 mod snapshots;
-
 fn test_network_id(label: &[u8]) -> NetworkId {
     NetworkId::from_genesis_hash(
         iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
@@ -20,7 +16,6 @@ fn test_network_id(label: &[u8]) -> NetworkId {
         ),
     )
 }
-
 fn run_with_ready_heap(
     ready_heap: bool,
     network_id: &NetworkId,
@@ -63,12 +58,10 @@ fn run_with_ready_heap(
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
-
     // Configure scheduler knob
     let mut cfg = state.view().pipeline().clone();
     cfg.ready_queue_heap = ready_heap;
     state.set_pipeline(cfg);
-
     // Build and execute block
     let block: SignedBlock = {
         let accepted: Vec<_> = txs
@@ -90,7 +83,6 @@ fn run_with_ready_heap(
     };
     (json, state)
 }
-
 #[test]
 fn scheduler_ready_queue_heap_vs_wave_sort_parity() {
     let network_id = test_network_id(b"scheduler-ready-queue-heap-parity");
@@ -103,7 +95,6 @@ fn scheduler_ready_queue_heap_vs_wave_sort_parity() {
         );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let b_coin = AssetId::of(rose.clone(), bob_id.clone());
-
     // Build a set of independent txs so scheduler ordering/tie-breakers apply
     let txs = vec![
         TransactionBuilder::new(
@@ -143,11 +134,9 @@ fn scheduler_ready_queue_heap_vs_wave_sort_parity() {
         )])
         .sign(alice_keypair.private_key()),
     ];
-
     let (json_heap, state_heap) =
         run_with_ready_heap(true, &network_id, txs.clone(), &alice_id, &bob_id);
     let (json_wave, state_wave) = run_with_ready_heap(false, &network_id, txs, &alice_id, &bob_id);
-
     assert_eq!(json_heap, json_wave, "event sequences must match");
     let bal = |state: &iroha_core::state::State, id: &AssetId| {
         state

@@ -1,7 +1,5 @@
 //! AXT host flow coverage for DefaultHost and WsvHost.
-
 use std::{collections::HashMap, sync::Arc};
-
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     nexus::{
@@ -19,14 +17,11 @@ use ivm::{
     mock_wsv::{AccountId, DataspaceAxtPolicy, MockWorldStateView, WsvHost},
     syscalls,
 };
-
 const AXT_VERIFY_EMPTY_GAS: u64 = 64;
 const AXT_GAS_BASE: u64 = 16;
-
 fn axt_gas(payload_len: usize) -> u64 {
     AXT_GAS_BASE.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
 }
-
 fn use_handle_gas(
     handle: &AssetHandle,
     intent: &RemoteSpendIntent,
@@ -43,7 +38,6 @@ fn use_handle_gas(
             .saturating_add(proof_len),
     )
 }
-
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
     tlv.extend_from_slice(&(pty as u16).to_be_bytes());
@@ -54,24 +48,20 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     tlv.extend_from_slice(&h);
     tlv
 }
-
 fn store_tlv(vm: &mut IVM, ty: PointerType, value: &[u8]) -> u64 {
     let tlv = make_tlv(ty, value);
     vm.alloc_input_tlv(&tlv).expect("alloc input")
 }
-
 fn canonical_norito_bytes<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
     let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     norito::to_bytes(value).expect("encode canonical Norito fixture")
 }
-
 fn alternate_norito_bytes<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
     let alternate_flags =
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
     let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
     norito::to_bytes(value).expect("encode alternate-layout Norito fixture")
 }
-
 fn sample_wsv_caller() -> AccountId {
     AccountId::new(
         KeyPair::try_random()
@@ -80,7 +70,6 @@ fn sample_wsv_caller() -> AccountId {
             .clone(),
     )
 }
-
 #[test]
 fn sample_wsv_caller_uses_checked_ed25519_key_generation() {
     let caller = sample_wsv_caller();
@@ -88,10 +77,8 @@ fn sample_wsv_caller_uses_checked_ed25519_key_generation() {
         .expect_single_signatory()
         .try_algorithm()
         .expect("fixture caller public key has a valid algorithm");
-
     assert_eq!(algorithm, Algorithm::Ed25519);
 }
-
 fn begin_with_touch<T: IVMHost>(
     vm: &mut IVM,
     host: &mut T,
@@ -105,7 +92,6 @@ fn begin_with_touch<T: IVMHost>(
         host.syscall(syscalls::SYSCALL_AXT_BEGIN, vm),
         Ok(axt_gas(desc_bytes.len()))
     );
-
     let dsid = descriptor
         .dsids
         .first()
@@ -123,7 +109,6 @@ fn begin_with_touch<T: IVMHost>(
     );
     (dsid, ds_ptr)
 }
-
 fn build_handle(
     dsid: DataSpaceId,
     binding: [u8; 32],
@@ -157,7 +142,6 @@ fn build_handle(
         issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     }
 }
-
 fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
     let mut payload = Vec::new();
     payload.extend_from_slice(domain);
@@ -166,7 +150,6 @@ fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
     }
     iroha_crypto::Hash::new(payload)
 }
-
 fn proof_blob_for(
     dsid: DataSpaceId,
     manifest_root: [u8; 32],
@@ -208,7 +191,6 @@ fn proof_blob_for(
         expiry_slot,
     }
 }
-
 fn use_handle<T: IVMHost>(
     vm: &mut IVM,
     host: &mut T,
@@ -241,7 +223,6 @@ fn use_handle<T: IVMHost>(
     }
     host.syscall(syscalls::SYSCALL_USE_ASSET_HANDLE, vm)
 }
-
 fn use_handle_payloads<T: IVMHost>(
     vm: &mut IVM,
     host: &mut T,
@@ -250,7 +231,6 @@ fn use_handle_payloads<T: IVMHost>(
 ) -> Result<u64, VMError> {
     use_handle_payloads_with_proof(vm, host, handle_payload, intent_payload, None)
 }
-
 fn use_handle_payloads_with_proof<T: IVMHost>(
     vm: &mut IVM,
     host: &mut T,
@@ -270,7 +250,6 @@ fn use_handle_payloads_with_proof<T: IVMHost>(
     }
     host.syscall(syscalls::SYSCALL_USE_ASSET_HANDLE, vm)
 }
-
 fn adversarial_wsv_host(dsid: DataSpaceId, manifest_root: [u8; 32]) -> WsvHost {
     let mut wsv = MockWorldStateView::new();
     wsv.set_axt_policy(
@@ -286,7 +265,6 @@ fn adversarial_wsv_host(dsid: DataSpaceId, manifest_root: [u8; 32]) -> WsvHost {
     WsvHost::new_with_subject(wsv, sample_wsv_caller(), HashMap::new())
         .with_axt_policy(Arc::new(axt::AllowAllAxtPolicy))
 }
-
 fn adversarial_descriptor(dsid: DataSpaceId) -> axt::AxtDescriptor {
     axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -297,14 +275,12 @@ fn adversarial_descriptor(dsid: DataSpaceId) -> axt::AxtDescriptor {
         }],
     }
 }
-
 fn adversarial_manifest() -> TouchManifest {
     TouchManifest {
         read: vec!["orders/item".into()],
         write: vec!["ledger/item".into()],
     }
 }
-
 fn assert_alternate_layouts_rejected_without_state_mutation<T: IVMHost>(
     mut host: T,
     dsid: DataSpaceId,
@@ -313,7 +289,6 @@ fn assert_alternate_layouts_rejected_without_state_mutation<T: IVMHost>(
     let mut vm = IVM::new(1_000_000);
     let descriptor = adversarial_descriptor(dsid);
     let manifest = adversarial_manifest();
-
     let descriptor_bytes = canonical_norito_bytes(&descriptor);
     let alternate_descriptor = alternate_norito_bytes(&descriptor);
     assert_ne!(alternate_descriptor, descriptor_bytes);
@@ -328,7 +303,6 @@ fn assert_alternate_layouts_rejected_without_state_mutation<T: IVMHost>(
         host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Err(VMError::NoritoInvalid)
     );
-
     let dsid_bytes = canonical_norito_bytes(&dsid);
     let dsid_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &dsid_bytes);
     let manifest_bytes = canonical_norito_bytes(&manifest);
@@ -340,14 +314,12 @@ fn assert_alternate_layouts_rejected_without_state_mutation<T: IVMHost>(
         Err(VMError::PermissionDenied),
         "a rejected begin must not install partial AXT state"
     );
-
     let descriptor_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &descriptor_bytes);
     vm.set_register(10, descriptor_ptr);
     assert_eq!(
         host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Ok(axt_gas(descriptor_bytes.len()))
     );
-
     let alternate_dsid = alternate_norito_bytes(&dsid);
     assert_ne!(alternate_dsid, dsid_bytes);
     assert_eq!(
@@ -362,7 +334,6 @@ fn assert_alternate_layouts_rejected_without_state_mutation<T: IVMHost>(
         host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
         Err(VMError::NoritoInvalid)
     );
-
     let alternate_manifest = alternate_norito_bytes(&manifest);
     assert_ne!(alternate_manifest, manifest_bytes);
     assert_eq!(
@@ -377,7 +348,6 @@ fn assert_alternate_layouts_rejected_without_state_mutation<T: IVMHost>(
         host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
         Err(VMError::NoritoInvalid)
     );
-
     vm.set_register(10, dsid_ptr);
     vm.set_register(11, manifest_ptr);
     assert_eq!(
@@ -387,7 +357,6 @@ fn assert_alternate_layouts_rejected_without_state_mutation<T: IVMHost>(
         )),
         "alternate-layout touch failures must not record the dataspace"
     );
-
     let proof = proof_blob_for(dsid, manifest_root, b"alternate-layout", Some(50));
     let proof_bytes = canonical_norito_bytes(&proof);
     let alternate_proof = alternate_norito_bytes(&proof);
@@ -404,7 +373,6 @@ fn assert_alternate_layouts_rejected_without_state_mutation<T: IVMHost>(
         host.syscall(syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
         Err(VMError::NoritoInvalid)
     );
-
     let envelope = norito::decode_from_bytes::<axt::AxtProofEnvelope>(&proof.payload)
         .expect("decode canonical proof envelope");
     let alternate_envelope = alternate_norito_bytes(&envelope);
@@ -430,7 +398,6 @@ fn assert_alternate_layouts_rejected_without_state_mutation<T: IVMHost>(
         host.syscall(syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
         Err(VMError::NoritoInvalid)
     );
-
     let binding = axt::compute_binding(&descriptor).expect("compute descriptor binding");
     let account = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     let mut handle = build_handle(dsid, binding, &["transfer"], account, 1, Some(1));
@@ -495,7 +462,6 @@ fn assert_alternate_layouts_rejected_without_state_mutation<T: IVMHost>(
         "rejected proof/handle layouts must not cache a proof or consume the handle nonce"
     );
 }
-
 fn assert_noncanonical_touch_keys_rejected_without_state_mutation<T: IVMHost>(
     mut host: T,
     dsid: DataSpaceId,
@@ -514,7 +480,6 @@ fn assert_noncanonical_touch_keys_rejected_without_state_mutation<T: IVMHost>(
             vec!["orders/z".to_owned(), "orders/a".to_owned()],
         ),
     ];
-
     for (label, paths) in &invalid_paths {
         let mut invalid = descriptor.clone();
         invalid.touches[0].read.clone_from(paths);
@@ -527,7 +492,6 @@ fn assert_noncanonical_touch_keys_rejected_without_state_mutation<T: IVMHost>(
             "{label} descriptor touch keys must be rejected"
         );
     }
-
     let dsid_bytes = canonical_norito_bytes(&dsid);
     let dsid_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &dsid_bytes);
     let valid_manifest = adversarial_manifest();
@@ -540,7 +504,6 @@ fn assert_noncanonical_touch_keys_rejected_without_state_mutation<T: IVMHost>(
         Err(VMError::PermissionDenied),
         "rejected descriptors must not install partial AXT state"
     );
-
     let descriptor_bytes = canonical_norito_bytes(&descriptor);
     let descriptor_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &descriptor_bytes);
     vm.set_register(10, descriptor_ptr);
@@ -548,7 +511,6 @@ fn assert_noncanonical_touch_keys_rejected_without_state_mutation<T: IVMHost>(
         host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Ok(axt_gas(descriptor_bytes.len()))
     );
-
     for (label, paths) in invalid_paths {
         let invalid = TouchManifest {
             read: paths,
@@ -564,7 +526,6 @@ fn assert_noncanonical_touch_keys_rejected_without_state_mutation<T: IVMHost>(
             "{label} runtime touch keys must be rejected"
         );
     }
-
     vm.set_register(10, dsid_ptr);
     vm.set_register(11, valid_manifest_ptr);
     assert_eq!(
@@ -575,7 +536,6 @@ fn assert_noncanonical_touch_keys_rejected_without_state_mutation<T: IVMHost>(
         "rejected manifests must not record a partial touch"
     );
 }
-
 fn assert_invalid_handle_values_rejected_without_state_mutation<T: IVMHost>(
     mut host: T,
     dsid: DataSpaceId,
@@ -585,7 +545,6 @@ fn assert_invalid_handle_values_rejected_without_state_mutation<T: IVMHost>(
     let descriptor = adversarial_descriptor(dsid);
     let manifest = adversarial_manifest();
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("compute descriptor binding");
     let account = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     let mut handle = build_handle(dsid, binding, &["transfer"], account, 1, Some(1));
@@ -600,7 +559,6 @@ fn assert_invalid_handle_values_rejected_without_state_mutation<T: IVMHost>(
             amount: Some(Quantity::from(1_u64)),
         },
     };
-
     let mut invalid_handles = Vec::new();
     let mut invalid = handle.clone();
     invalid.scope = vec![" transfer".into()];
@@ -617,7 +575,6 @@ fn assert_invalid_handle_values_rejected_without_state_mutation<T: IVMHost>(
     let mut invalid = handle.clone();
     invalid.budget.per_use = Some(Quantity::zero());
     invalid_handles.push(("zero per-use budget", invalid, VMError::PermissionDenied));
-
     let intent_bytes = canonical_norito_bytes(&intent);
     for (label, invalid, expected) in invalid_handles {
         assert_eq!(
@@ -631,7 +588,6 @@ fn assert_invalid_handle_values_rejected_without_state_mutation<T: IVMHost>(
             "{label} must be rejected"
         );
     }
-
     let mut invalid_intents = Vec::new();
     let mut invalid = intent.clone();
     invalid.op.kind.clear();
@@ -645,7 +601,6 @@ fn assert_invalid_handle_values_rejected_without_state_mutation<T: IVMHost>(
     let mut invalid = intent.clone();
     invalid.op.amount = Some(Quantity::zero());
     invalid_intents.push(("zero amount", invalid, VMError::PermissionDenied));
-
     let handle_bytes = canonical_norito_bytes(&handle);
     for (label, invalid, expected) in invalid_intents {
         assert_eq!(
@@ -659,14 +614,12 @@ fn assert_invalid_handle_values_rejected_without_state_mutation<T: IVMHost>(
             "{label} must be rejected"
         );
     }
-
     assert_eq!(
         use_handle(&mut vm, &mut host, &handle, &intent, None),
         Ok(use_handle_gas(&handle, &intent, None)),
         "rejected values must not consume the handle nonce or budget"
     );
 }
-
 #[test]
 fn axt_hosts_reject_alternate_norito_layouts_without_mutating_in_flight_state() {
     let manifest_root = [0x41; 32];
@@ -676,7 +629,6 @@ fn axt_hosts_reject_alternate_norito_layouts_without_mutating_in_flight_state() 
         default_dsid,
         manifest_root,
     );
-
     let wsv_dsid = DataSpaceId::new(502);
     assert_alternate_layouts_rejected_without_state_mutation(
         adversarial_wsv_host(wsv_dsid, manifest_root),
@@ -684,7 +636,6 @@ fn axt_hosts_reject_alternate_norito_layouts_without_mutating_in_flight_state() 
         manifest_root,
     );
 }
-
 #[test]
 fn axt_hosts_reject_noncanonical_touch_keys_without_recording_touches() {
     let default_dsid = DataSpaceId::new(503);
@@ -692,14 +643,12 @@ fn axt_hosts_reject_noncanonical_touch_keys_without_recording_touches() {
         DefaultHost::new(),
         default_dsid,
     );
-
     let wsv_dsid = DataSpaceId::new(504);
     assert_noncanonical_touch_keys_rejected_without_state_mutation(
         adversarial_wsv_host(wsv_dsid, [0x42; 32]),
         wsv_dsid,
     );
 }
-
 #[test]
 fn axt_hosts_reject_invalid_handle_and_intent_values_without_recording_usage() {
     let manifest_root = [0x43; 32];
@@ -709,7 +658,6 @@ fn axt_hosts_reject_invalid_handle_and_intent_values_without_recording_usage() {
         default_dsid,
         manifest_root,
     );
-
     let wsv_dsid = DataSpaceId::new(506);
     assert_invalid_handle_values_rejected_without_state_mutation(
         adversarial_wsv_host(wsv_dsid, manifest_root),
@@ -717,12 +665,10 @@ fn axt_hosts_reject_invalid_handle_and_intent_values_without_recording_usage() {
         manifest_root,
     );
 }
-
 #[test]
 fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
-
     let dsid = DataSpaceId::new(42);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -739,7 +685,6 @@ fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
         host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Ok(axt_gas(desc_bytes.len()))
     );
-
     let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
     let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
     let manifest = TouchManifest {
@@ -754,7 +699,6 @@ fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
         host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
         Ok(axt_gas(ds_bytes.len().saturating_add(manifest_bytes.len())))
     );
-
     let binding = axt::compute_binding(&descriptor).expect("compute binding");
     let handle = AssetHandle {
         scope: vec!["transfer".into()],
@@ -782,7 +726,6 @@ fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
     };
     let handle_bytes = norito::to_bytes(&handle).expect("encode handle");
     let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &handle_bytes);
-
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -794,11 +737,9 @@ fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
     };
     let intent_bytes = norito::to_bytes(&intent).expect("encode intent");
     let intent_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &intent_bytes);
-
     let handle_proof = proof_blob_for(dsid, [1; 32], b"default-happy", None);
     let proof_bytes = norito::to_bytes(&handle_proof).expect("encode proof");
     let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &proof_bytes);
-
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, proof_ptr);
@@ -806,7 +747,6 @@ fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
         host.syscall(syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
         Err(VMError::PermissionDenied)
     ));
-
     // Standalone DefaultHost can preflight the envelope, but cannot verify it.
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
@@ -814,18 +754,15 @@ fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
         host.syscall(syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
         Err(VMError::PermissionDenied)
     ));
-
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn default_host_rejects_raw_axt_proof_bytes() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
-
     let dsid = DataSpaceId::new(43);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -849,7 +786,6 @@ fn default_host_rejects_raw_axt_proof_bytes() {
         PointerType::ProofBlob,
         &norito::to_bytes(&raw_proof).expect("encode raw proof"),
     );
-
     vm.set_register(10, ds_ptr);
     vm.set_register(11, raw_proof_ptr);
     assert!(matches!(
@@ -857,12 +793,10 @@ fn default_host_rejects_raw_axt_proof_bytes() {
         Err(VMError::NoritoInvalid)
     ));
 }
-
 #[test]
 fn default_host_rejects_late_proof_manifest_root_mismatch_at_commit() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
-
     let dsid = DataSpaceId::new(44);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -877,7 +811,6 @@ fn default_host_rejects_late_proof_manifest_root_mismatch_at_commit() {
         write: vec!["ledger/late".into()],
     };
     let (_dsid, ds_ptr) = begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = build_handle(
         dsid,
@@ -900,7 +833,6 @@ fn default_host_rejects_late_proof_manifest_root_mismatch_at_commit() {
         use_handle(&mut vm, &mut host, &handle, &intent, None),
         Ok(use_handle_gas(&handle, &intent, None))
     );
-
     let mismatched_proof = proof_blob_for(dsid, [0x44; 32], b"default-late-mismatch", None);
     let proof_ptr = store_tlv(
         &mut vm,
@@ -918,7 +850,6 @@ fn default_host_rejects_late_proof_manifest_root_mismatch_at_commit() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn asset_handle_roundtrip_preserves_origin_dsid() {
     let dsid = DataSpaceId::new(7);
@@ -939,14 +870,11 @@ fn asset_handle_roundtrip_preserves_origin_dsid() {
         10,
         Some(10),
     );
-
     let bytes = norito::to_bytes(&handle).expect("encode handle");
     let decoded: AssetHandle =
         norito::decode_from_bytes(&bytes).expect("decode handle bytes should succeed");
-
     assert_eq!(decoded.subject.origin_dsid, Some(dsid));
 }
-
 #[test]
 fn handle_subject_roundtrip() {
     let dsid = DataSpaceId::new(11);
@@ -954,14 +882,11 @@ fn handle_subject_roundtrip() {
         account: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_string(),
         origin_dsid: Some(dsid),
     };
-
     let bytes = norito::to_bytes(&subject).expect("encode subject");
     let decoded: HandleSubject =
         norito::decode_from_bytes(&bytes).expect("decode subject bytes should succeed");
-
     assert_eq!(decoded.origin_dsid, Some(dsid));
 }
-
 #[test]
 fn dataspace_id_roundtrip() {
     let dsid = DataSpaceId::new(13);
@@ -970,12 +895,10 @@ fn dataspace_id_roundtrip() {
         norito::decode_from_bytes(&bytes).expect("decode dsid should succeed");
     assert_eq!(decoded, dsid);
 }
-
 #[test]
 fn default_host_rejects_binding_mismatch() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
-
     let dsid = DataSpaceId::new(7);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1001,7 +924,6 @@ fn default_host_rejects_binding_mismatch() {
     );
     handle.axt_binding = vec![9; 32];
     handle.axt_binding[0] ^= 0xFF;
-
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -1014,12 +936,10 @@ fn default_host_rejects_binding_mismatch() {
     let result = use_handle(&mut vm, &mut host, &handle, &intent, None);
     assert!(matches!(result, Err(VMError::PermissionDenied)));
 }
-
 #[test]
 fn default_host_allows_multiple_handle_usages_within_budget() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
-
     let dsid = DataSpaceId::new(11);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1044,7 +964,6 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
         Some(200),
     );
     let proof = proof_blob_for(dsid, [1; 32], b"default-multiple-uses", None);
-
     let first_intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -1058,7 +977,6 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
         use_handle(&mut vm, &mut host, &handle, &first_intent, None),
         Ok(use_handle_gas(&handle, &first_intent, None))
     );
-
     let second_intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -1073,7 +991,6 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
         use_handle(&mut vm, &mut host, &handle, &second_intent, None),
         Ok(use_handle_gas(&handle, &second_intent, None))
     );
-
     let proof_ptr = store_tlv(
         &mut vm,
         PointerType::ProofBlob,
@@ -1085,18 +1002,15 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
         host.syscall(syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
         Err(VMError::PermissionDenied)
     ));
-
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn default_host_rejects_handle_scope_mismatch() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
-
     let dsid = DataSpaceId::new(12);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1111,7 +1025,6 @@ fn default_host_rejects_handle_scope_mismatch() {
         write: vec!["ledger/999".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = build_handle(
         dsid,
@@ -1137,12 +1050,10 @@ fn default_host_rejects_handle_scope_mismatch() {
         "unexpected result {result:?}"
     );
 }
-
 #[test]
 fn default_host_rejects_handle_subject_mismatch() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
-
     let dsid = DataSpaceId::new(13);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1157,7 +1068,6 @@ fn default_host_rejects_handle_subject_mismatch() {
         write: vec!["ledger/42".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = build_handle(
         dsid,
@@ -1183,12 +1093,10 @@ fn default_host_rejects_handle_subject_mismatch() {
         "unexpected result {result:?}"
     );
 }
-
 #[test]
 fn default_host_rejects_commit_without_required_proof() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
-
     let dsid = DataSpaceId::new(14);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1203,7 +1111,6 @@ fn default_host_rejects_commit_without_required_proof() {
         write: vec!["ledger/abc".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = build_handle(
         dsid,
@@ -1231,12 +1138,10 @@ fn default_host_rejects_commit_without_required_proof() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn handle_proof_fails_closed_without_verifier() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
-
     let dsid = DataSpaceId::new(21);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1251,7 +1156,6 @@ fn handle_proof_fails_closed_without_verifier() {
         write: vec!["ledger/h1".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = build_handle(
         dsid,
@@ -1275,18 +1179,15 @@ fn handle_proof_fails_closed_without_verifier() {
         use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
     ));
-
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn default_host_rejects_handle_with_invalid_manifest_root() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
-
     let dsid = DataSpaceId::new(22);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1301,7 +1202,6 @@ fn default_host_rejects_handle_with_invalid_manifest_root() {
         write: vec!["ledger/bad".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let mut handle = build_handle(
         dsid,
@@ -1328,12 +1228,10 @@ fn default_host_rejects_handle_with_invalid_manifest_root() {
         "unexpected result {result:?}"
     );
 }
-
 #[test]
 fn default_host_rejects_handle_with_empty_scope() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
-
     let dsid = DataSpaceId::new(23);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1348,7 +1246,6 @@ fn default_host_rejects_handle_with_empty_scope() {
         write: vec!["ledger/scope".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let mut handle = build_handle(
         dsid,
@@ -1375,12 +1272,10 @@ fn default_host_rejects_handle_with_empty_scope() {
         "unexpected result {result:?}"
     );
 }
-
 #[test]
 fn default_host_rejects_handle_with_zero_era_or_nonce_or_expiry() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
-
     let dsid = DataSpaceId::new(24);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1395,7 +1290,6 @@ fn default_host_rejects_handle_with_zero_era_or_nonce_or_expiry() {
         write: vec!["ledger/era".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let base = build_handle(
         dsid,
@@ -1415,21 +1309,18 @@ fn default_host_rejects_handle_with_zero_era_or_nonce_or_expiry() {
             amount: Some(Quantity::from(1_u64)),
         },
     };
-
     let mut zero_era = base.clone();
     zero_era.handle_era = 0;
     assert!(matches!(
         use_handle(&mut vm, &mut host, &zero_era, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
     ));
-
     let mut zero_nonce = base.clone();
     zero_nonce.sub_nonce = 0;
     assert!(matches!(
         use_handle(&mut vm, &mut host, &zero_nonce, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
     ));
-
     let mut zero_expiry = base.clone();
     zero_expiry.expiry_slot = 0;
     assert!(matches!(
@@ -1437,12 +1328,10 @@ fn default_host_rejects_handle_with_zero_era_or_nonce_or_expiry() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn default_host_rejects_handle_with_zero_budget_or_empty_group() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
-
     let dsid = DataSpaceId::new(25);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1457,7 +1346,6 @@ fn default_host_rejects_handle_with_zero_budget_or_empty_group() {
         write: vec!["ledger/budget".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let mut base = build_handle(
         dsid,
@@ -1477,13 +1365,11 @@ fn default_host_rejects_handle_with_zero_budget_or_empty_group() {
             amount: Some(Quantity::from(1_u64)),
         },
     };
-
     base.budget.remaining = Quantity::from(0_u64);
     assert!(matches!(
         use_handle(&mut vm, &mut host, &base, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
     ));
-
     let mut empty_group = build_handle(
         dsid,
         binding,
@@ -1498,12 +1384,10 @@ fn default_host_rejects_handle_with_zero_budget_or_empty_group() {
         Err(VMError::NoritoInvalid)
     ));
 }
-
 #[test]
 fn commit_requires_proof_for_every_dataspace() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
-
     let ds_a = DataSpaceId::new(30);
     let ds_b = DataSpaceId::new(31);
     let descriptor = axt::AxtDescriptor {
@@ -1529,7 +1413,6 @@ fn commit_requires_proof_for_every_dataspace() {
         read: vec!["orders/b/1".into()],
         write: vec!["ledger/b/1".into()],
     };
-
     let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
     let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
@@ -1537,7 +1420,6 @@ fn commit_requires_proof_for_every_dataspace() {
         host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Ok(axt_gas(desc_bytes.len()))
     );
-
     // Touch ds_a
     let ds_a_bytes = norito::to_bytes(&ds_a).expect("encode ds");
     let ds_a_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_a_bytes);
@@ -1551,7 +1433,6 @@ fn commit_requires_proof_for_every_dataspace() {
             ds_a_bytes.len().saturating_add(manifest_a_bytes.len())
         ))
     );
-
     // Touch ds_b
     let ds_b_bytes = norito::to_bytes(&ds_b).expect("encode ds");
     let ds_b_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_b_bytes);
@@ -1565,7 +1446,6 @@ fn commit_requires_proof_for_every_dataspace() {
             ds_b_bytes.len().saturating_add(manifest_b_bytes.len())
         ))
     );
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle_a = build_handle(
         ds_a,
@@ -1611,12 +1491,10 @@ fn commit_requires_proof_for_every_dataspace() {
         use_handle(&mut vm, &mut host, &handle_b, &intent_b, None),
         Ok(use_handle_gas(&handle_b, &intent_b, None))
     );
-
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
         Err(VMError::PermissionDenied)
     ));
-
     // Now show failure if a dataspace proof is absent
     let mut vm_fail = IVM::new(1_000_000);
     let mut host_fail = DefaultHost::new();
@@ -1646,7 +1524,6 @@ fn commit_requires_proof_for_every_dataspace() {
             ds_b_bytes.len().saturating_add(manifest_b_bytes.len())
         ))
     );
-
     assert_eq!(
         use_handle(&mut vm_fail, &mut host_fail, &handle_a, &intent_a, None),
         Ok(use_handle_gas(&handle_a, &intent_a, None))
@@ -1656,12 +1533,10 @@ fn commit_requires_proof_for_every_dataspace() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn axt_begin_rejects_invalid_descriptor() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
-
     // Duplicate dsids should be rejected
     let dup_descriptor = axt::AxtDescriptor {
         dsids: vec![DataSpaceId::new(1), DataSpaceId::new(1)],
@@ -1677,7 +1552,6 @@ fn axt_begin_rejects_invalid_descriptor() {
         host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Err(VMError::PermissionDenied)
     ));
-
     // Touch for unknown dsid should be rejected
     let bad_touch_descriptor = axt::AxtDescriptor {
         dsids: vec![DataSpaceId::new(2)],
@@ -1697,7 +1571,6 @@ fn axt_begin_rejects_invalid_descriptor() {
         host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Err(VMError::PermissionDenied)
     ));
-
     // Duplicate touch for same dsid should be rejected
     let dup_touch_descriptor = axt::AxtDescriptor {
         dsids: vec![DataSpaceId::new(3)],
@@ -1725,11 +1598,9 @@ fn axt_begin_rejects_invalid_descriptor() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 struct DenyTouchPolicy {
     denied: DataSpaceId,
 }
-
 impl axt::AxtPolicy for DenyTouchPolicy {
     fn allow_touch(
         &self,
@@ -1742,14 +1613,11 @@ impl axt::AxtPolicy for DenyTouchPolicy {
             Ok(())
         }
     }
-
     fn allow_handle(&self, _usage: &axt::HandleUsage) -> Result<(), VMError> {
         Ok(())
     }
 }
-
 struct DenyHandlePolicy;
-
 impl axt::AxtPolicy for DenyHandlePolicy {
     fn allow_touch(
         &self,
@@ -1758,12 +1626,10 @@ impl axt::AxtPolicy for DenyHandlePolicy {
     ) -> Result<(), VMError> {
         Ok(())
     }
-
     fn allow_handle(&self, _usage: &axt::HandleUsage) -> Result<(), VMError> {
         Err(VMError::PermissionDenied)
     }
 }
-
 #[test]
 fn axt_policy_rejects_touch() {
     let mut vm = IVM::new(1_000_000);
@@ -1771,7 +1637,6 @@ fn axt_policy_rejects_touch() {
         denied: DataSpaceId::new(77),
     });
     let mut host = DefaultHost::new().with_axt_policy(policy);
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![DataSpaceId::new(77)],
         touches: vec![axt::AxtTouchSpec {
@@ -1787,7 +1652,6 @@ fn axt_policy_rejects_touch() {
         host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Ok(axt_gas(desc_bytes.len()))
     );
-
     let ds_ptr = store_tlv(
         &mut vm,
         PointerType::DataSpaceId,
@@ -1800,7 +1664,6 @@ fn axt_policy_rejects_touch() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn wsv_host_policy_checks_root_and_expiry() {
     let mut vm = IVM::new(1_000_000);
@@ -1811,7 +1674,6 @@ fn wsv_host_policy_checks_root_and_expiry() {
         WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
             .with_axt_manifest_root(dsid, manifest_root);
     host.set_current_time_ms(50);
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -1825,7 +1687,6 @@ fn wsv_host_policy_checks_root_and_expiry() {
         write: vec!["ledger/policy".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let mut expired_handle = build_handle(
         dsid,
@@ -1850,7 +1711,6 @@ fn wsv_host_policy_checks_root_and_expiry() {
         use_handle(&mut vm, &mut host, &expired_handle, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
     ));
-
     let mut bad_root = build_handle(
         dsid,
         binding,
@@ -1865,7 +1725,6 @@ fn wsv_host_policy_checks_root_and_expiry() {
         use_handle(&mut vm, &mut host, &bad_root, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
     ));
-
     let mut ok_handle = build_handle(
         dsid,
         binding,
@@ -1881,7 +1740,6 @@ fn wsv_host_policy_checks_root_and_expiry() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn wsv_host_preflights_slot_length_and_skew_then_fails_closed() {
     let mut vm = IVM::new(1_000_000);
@@ -1903,7 +1761,6 @@ fn wsv_host_preflights_slot_length_and_skew_then_fails_closed() {
         },
     );
     let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -1917,7 +1774,6 @@ fn wsv_host_preflights_slot_length_and_skew_then_fails_closed() {
         write: vec!["ledger/slot".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let mut handle = build_handle(
         dsid,
@@ -1945,7 +1801,6 @@ fn wsv_host_preflights_slot_length_and_skew_then_fails_closed() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn wsv_host_rejects_handle_skew_above_config() {
     let mut vm = IVM::new(1_000_000);
@@ -1967,7 +1822,6 @@ fn wsv_host_rejects_handle_skew_above_config() {
         },
     );
     let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -1981,7 +1835,6 @@ fn wsv_host_rejects_handle_skew_above_config() {
         write: vec!["ledger/skew".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let mut handle = build_handle(
         dsid,
@@ -2009,7 +1862,6 @@ fn wsv_host_rejects_handle_skew_above_config() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn wsv_host_rejects_preflighted_proof_without_verifier() {
     let mut vm = IVM::new(1_000_000);
@@ -2031,7 +1883,6 @@ fn wsv_host_rejects_preflighted_proof_without_verifier() {
         },
     );
     let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -2045,14 +1896,12 @@ fn wsv_host_rejects_preflighted_proof_without_verifier() {
         write: vec!["ledger/skew".into()],
     };
     let (_dsid, ds_ptr) = begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     vm.set_register(10, ds_ptr);
     vm.set_register(11, 0);
     assert_eq!(
         host.syscall(syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
         Ok(AXT_VERIFY_EMPTY_GAS)
     );
-
     let proof = proof_blob_for(dsid, manifest_root, b"proof-within-skew", Some(1));
     let proof_ptr = store_tlv(
         &mut vm,
@@ -2066,7 +1915,6 @@ fn wsv_host_rejects_preflighted_proof_without_verifier() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn wsv_host_rejects_inline_proof_expired_with_skew() {
     let mut vm = IVM::new(1_000_000);
@@ -2088,7 +1936,6 @@ fn wsv_host_rejects_inline_proof_expired_with_skew() {
         },
     );
     let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -2102,7 +1949,6 @@ fn wsv_host_rejects_inline_proof_expired_with_skew() {
         write: vec!["ledger/inline".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let mut handle = build_handle(
         dsid,
@@ -2129,7 +1975,6 @@ fn wsv_host_rejects_inline_proof_expired_with_skew() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn wsv_host_rejects_zero_manifest_root_and_handle_root() {
     let mut vm = IVM::new(1_000_000);
@@ -2139,7 +1984,6 @@ fn wsv_host_rejects_zero_manifest_root_and_handle_root() {
         WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
             .with_axt_manifest_root(dsid, [0; 32]);
     host.set_current_time_ms(10);
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -2153,7 +1997,6 @@ fn wsv_host_rejects_zero_manifest_root_and_handle_root() {
         write: vec!["ledger/zero".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let mut zero_root_handle =
         build_handle(dsid, binding, &["transfer"], &caller.to_string(), 10, None);
@@ -2177,7 +2020,6 @@ fn wsv_host_rejects_zero_manifest_root_and_handle_root() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn wsv_host_rejects_missing_policy_binding() {
     let mut vm = IVM::new(1_000_000);
@@ -2186,7 +2028,6 @@ fn wsv_host_rejects_missing_policy_binding() {
     let mut host =
         WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
     host.set_current_time_ms(5);
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -2200,7 +2041,6 @@ fn wsv_host_rejects_missing_policy_binding() {
         write: vec!["ledger/missing".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let mut handle = build_handle(dsid, binding, &["transfer"], &caller.to_string(), 10, None);
     handle.manifest_view_root = vec![5; 32];
@@ -2223,7 +2063,6 @@ fn wsv_host_rejects_missing_policy_binding() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn wsv_host_policy_checks_target_lane() {
     let mut vm = IVM::new(1_000_000);
@@ -2234,7 +2073,6 @@ fn wsv_host_policy_checks_target_lane() {
         WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
             .with_axt_target_lane(dsid, 7);
     host.set_axt_manifest_root(dsid, manifest_root);
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -2248,7 +2086,6 @@ fn wsv_host_policy_checks_target_lane() {
         write: vec!["ledger/lane".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let mut wrong_lane = build_handle(
         dsid,
@@ -2273,7 +2110,6 @@ fn wsv_host_policy_checks_target_lane() {
         use_handle(&mut vm, &mut host, &wrong_lane, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
     ));
-
     let mut ok_lane = build_handle(
         dsid,
         binding,
@@ -2288,7 +2124,6 @@ fn wsv_host_policy_checks_target_lane() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn wsv_host_applies_policy_snapshot_lane_and_root() {
     let mut vm = IVM::new(1_000_000);
@@ -2313,7 +2148,6 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
         WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
             .with_axt_policy_snapshot(policy_snapshot)
             .expect("canonical policy snapshot");
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -2327,7 +2161,6 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
         write: vec!["ledger/snap".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
@@ -2339,7 +2172,6 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
         },
     };
     let proof = proof_blob_for(dsid, manifest_root, b"lane-policy-snapshot", None);
-
     let mut wrong_lane = build_handle(dsid, binding, &["transfer"], &caller.to_string(), 10, None);
     wrong_lane.target_lane = LaneId::new(1);
     wrong_lane.manifest_view_root = manifest_root.to_vec();
@@ -2347,7 +2179,6 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
         use_handle(&mut vm, &mut host, &wrong_lane, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
     ));
-
     let mut ok_lane = build_handle(dsid, binding, &["transfer"], &caller.to_string(), 10, None);
     ok_lane.target_lane = LaneId::new(4);
     ok_lane.manifest_view_root = manifest_root.to_vec();
@@ -2356,7 +2187,6 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn wsv_host_rejects_noncanonical_policy_snapshot_without_panicking() {
     let dsid = DataSpaceId::new(130);
@@ -2374,7 +2204,6 @@ fn wsv_host_rejects_noncanonical_policy_snapshot_without_panicking() {
         version: 1,
         entries,
     };
-
     assert!(
         WsvHost::new_with_subject(
             MockWorldStateView::new(),
@@ -2385,7 +2214,6 @@ fn wsv_host_rejects_noncanonical_policy_snapshot_without_panicking() {
         .is_err()
     );
 }
-
 #[test]
 fn wsv_host_respects_explicit_policy_slot_over_time() {
     let mut vm = IVM::new(1_000_000);
@@ -2405,7 +2233,6 @@ fn wsv_host_respects_explicit_policy_slot_over_time() {
         },
     );
     let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -2419,7 +2246,6 @@ fn wsv_host_respects_explicit_policy_slot_over_time() {
         write: vec!["ledger/slot".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let mut handle = build_handle(
         dsid,
@@ -2446,7 +2272,6 @@ fn wsv_host_respects_explicit_policy_slot_over_time() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn wsv_host_policy_checks_min_era_and_nonce() {
     let mut vm = IVM::new(1_000_000);
@@ -2457,7 +2282,6 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
         WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
             .with_axt_active_handle_era(dsid, 3)
             .with_axt_next_handle_counter(dsid, 5);
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -2472,7 +2296,6 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
     host.set_axt_manifest_root(dsid, manifest_root);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
@@ -2484,7 +2307,6 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
         },
     };
     let proof = proof_blob_for(dsid, manifest_root, b"era-nonce-policy", None);
-
     let mut low_era = build_handle(
         dsid,
         binding,
@@ -2498,7 +2320,6 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
         use_handle(&mut vm, &mut host, &low_era, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
     ));
-
     let mut low_nonce = build_handle(
         dsid,
         binding,
@@ -2512,7 +2333,6 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
         use_handle(&mut vm, &mut host, &low_nonce, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
     ));
-
     let mut ok = build_handle(
         dsid,
         binding,
@@ -2528,12 +2348,10 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn axt_policy_rejects_handle_usage() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new().with_axt_policy(Arc::new(DenyHandlePolicy));
-
     let dsid = DataSpaceId::new(88);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -2548,7 +2366,6 @@ fn axt_policy_rejects_handle_usage() {
         write: vec!["ledger/policy".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = build_handle(
         dsid,
@@ -2570,14 +2387,12 @@ fn axt_policy_rejects_handle_usage() {
     let result = use_handle(&mut vm, &mut host, &handle, &intent, None);
     assert!(matches!(result, Err(VMError::PermissionDenied)));
 }
-
 #[test]
 fn wsv_host_rejects_invalid_descriptor() {
     let mut vm = IVM::new(1_000_000);
     let caller = sample_wsv_caller();
     let mut host =
         WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
-
     let descriptor = axt::AxtDescriptor {
         dsids: Vec::new(),
         touches: Vec::new(),
@@ -2593,7 +2408,6 @@ fn wsv_host_rejects_invalid_descriptor() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn wsv_host_applies_axt_policy() {
     let mut vm = IVM::new(1_000_000);
@@ -2603,7 +2417,6 @@ fn wsv_host_applies_axt_policy() {
     let mut host =
         WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
             .with_axt_policy(policy);
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -2619,7 +2432,6 @@ fn wsv_host_applies_axt_policy() {
         host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Ok(axt_gas(desc_bytes.len()))
     );
-
     let ds_ptr = store_tlv(
         &mut vm,
         PointerType::DataSpaceId,

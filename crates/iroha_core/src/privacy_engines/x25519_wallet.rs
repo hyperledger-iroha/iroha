@@ -5,18 +5,14 @@
 //! this module first requires the encoded Montgomery `u` coordinate to be
 //! strictly smaller than `2^255 - 19`, then rejects the complete low-order set
 //! through the mandatory all-zero shared-secret check.
-
 use core::borrow::Borrow;
-
 use curve25519_dalek::{constants::X25519_BASEPOINT, montgomery::MontgomeryPoint};
 use thiserror::Error;
 use zeroize::Zeroizing;
-
 const FIELD_MODULUS_LITTLE_ENDIAN: [u8; 32] = [
     0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
 ];
-
 /// Strict key-agreement failure shared by private wallet codecs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum X25519WalletErrorV1 {
@@ -33,7 +29,6 @@ pub(crate) enum X25519WalletErrorV1 {
     #[error("X25519 key agreement produced an all-zero shared secret")]
     ZeroSharedSecret,
 }
-
 fn is_canonical_field_encoding(bytes: [u8; 32]) -> bool {
     // Strict little-endian comparison against p. Equality is non-canonical.
     for index in (0..32).rev() {
@@ -46,7 +41,6 @@ fn is_canonical_field_encoding(bytes: [u8; 32]) -> bool {
     }
     false
 }
-
 /// Validate the sole canonical X25519 public-key representation.
 pub(crate) fn validate_x25519_public_key_v1(
     public_key: [u8; 32],
@@ -54,7 +48,6 @@ pub(crate) fn validate_x25519_public_key_v1(
     if !is_canonical_field_encoding(public_key) {
         return Err(X25519WalletErrorV1::NonCanonicalPublicKey);
     }
-
     // A fixed non-zero clamped probe rejects the entire low-order set. This is
     // safe only after the strict encoding check above; otherwise RFC 7748
     // masking could admit byte aliases for the same low-order point.
@@ -66,7 +59,6 @@ pub(crate) fn validate_x25519_public_key_v1(
     }
     Ok(())
 }
-
 /// Derive and validate an X25519 public key from a non-zero wallet secret.
 pub(crate) fn x25519_public_key_v1(
     secret_key: impl Borrow<[u8; 32]>,
@@ -80,7 +72,6 @@ pub(crate) fn x25519_public_key_v1(
     validate_x25519_public_key_v1(public_key)?;
     Ok(public_key)
 }
-
 /// Perform strict X25519 key agreement and retain the secret in zeroizing
 /// storage.
 pub(crate) fn x25519_shared_secret_v1(
@@ -103,16 +94,13 @@ pub(crate) fn x25519_shared_secret_v1(
     }
     Ok(shared)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn strict_public_key_validation_rejects_aliases_and_low_order_points() {
         let public = x25519_public_key_v1([0x42; 32]).expect("canonical public key");
         validate_x25519_public_key_v1(public).expect("generated key is valid");
-
         assert_eq!(
             validate_x25519_public_key_v1(FIELD_MODULUS_LITTLE_ENDIAN),
             Err(X25519WalletErrorV1::NonCanonicalPublicKey)
@@ -144,7 +132,6 @@ mod tests {
             Err(X25519WalletErrorV1::ZeroSecret)
         );
     }
-
     #[test]
     fn strict_key_agreement_is_symmetric() {
         let alice_secret = [0x11; 32];
@@ -155,7 +142,6 @@ mod tests {
         let bob_shared = x25519_shared_secret_v1(&bob_secret, alice_public).unwrap();
         assert_eq!(*alice_shared, *bob_shared);
     }
-
     #[test]
     fn rfc_7748_key_agreement_vector_is_exact() {
         let alice_secret: [u8; 32] =
@@ -183,7 +169,6 @@ mod tests {
                 .unwrap()
                 .try_into()
                 .unwrap();
-
         assert_eq!(x25519_public_key_v1(&alice_secret).unwrap(), alice_public);
         assert_eq!(x25519_public_key_v1(&bob_secret).unwrap(), bob_public);
         assert_eq!(

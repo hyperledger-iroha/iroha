@@ -826,13 +826,13 @@ fn production_lifecycle_factory_replays_markers_on_consensus_stack() {
             .store(manifest.clone(), canonical_wire.clone())
             .expect("persist production marker-replay body");
         if persist_matching_outcome {
-            body_store
+            let _ = body_store
                 .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
                     Ok::<_, String>(semantic_commitment)
                 })
                 .expect("persist matching semantic marker");
         } else {
-            body_store
+            let _ = body_store
                 .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
                     Err::<wire::ExecutionCommitment, _>(
                         "deliberately mismatched recovered rejection".to_owned(),
@@ -1188,9 +1188,10 @@ fn production_lifecycle_factory_replays_markers_on_consensus_stack() {
                 LifecycleRunnerRankTarget::Runtime
             );
 
-            let ordinary_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
-            ));
+            let ordinary_message =
+                crate::sumeragi::message::BlockMessage::V2(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
+                ));
             assert!(matches!(
                 leader_wire_ingress.try_push(crate::sumeragi::InboundBlockMessage::new(
                     ordinary_message,
@@ -1213,7 +1214,7 @@ fn production_lifecycle_factory_replays_markers_on_consensus_stack() {
             );
             assert!(matches!(
                 leader_wire_ingress.try_push(crate::sumeragi::InboundBlockMessage::new(
-                    BlockMessage::V2(invalid_response_message),
+                    crate::sumeragi::message::BlockMessage::V2(invalid_response_message),
                     Some(local_peer.clone()),
                 )),
                 Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)

@@ -2,14 +2,10 @@
 //!
 //! These helpers avoid external time dependencies and operate purely on
 //! integer arithmetic over Unix milliseconds.
-
 use std::cmp;
-
 use thiserror::Error;
-
 /// Milliseconds in a UTC day.
 pub const MS_PER_DAY: u64 = 86_400_000;
-
 /// Billing period selection for month-based schedules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BillingPeriod {
@@ -18,7 +14,6 @@ pub enum BillingPeriod {
     /// Bill for the upcoming period.
     Next,
 }
-
 /// A concrete billing period in UTC milliseconds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MonthlyPeriod {
@@ -27,7 +22,6 @@ pub struct MonthlyPeriod {
     /// Period end (exclusive) in Unix milliseconds.
     pub end_ms: u64,
 }
-
 /// Errors returned by calendar helpers.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum CalendarError {
@@ -47,7 +41,6 @@ pub enum CalendarError {
     #[error("calendar conversion overflow")]
     Overflow,
 }
-
 /// Compute the monthly anchor at or before `ts_ms`.
 ///
 /// The anchor uses the given `anchor_day` (clamped to the last day of the
@@ -72,7 +65,6 @@ pub fn monthly_anchor_at_or_before(
         Ok(anchor)
     }
 }
-
 /// Compute the monthly anchor strictly after `ts_ms`.
 ///
 /// If `ts_ms` is before the anchor for its month, that anchor is returned.
@@ -96,7 +88,6 @@ pub fn monthly_anchor_after(
         anchor_for_month(next_year, next_month, anchor_day, anchor_time_ms)
     }
 }
-
 /// Compute the billing period for a charge at `charge_at_ms`.
 ///
 /// The period boundaries are derived from the monthly anchors defined by
@@ -132,7 +123,6 @@ pub fn monthly_billing_period(
         }
     }
 }
-
 fn validate_anchor(anchor_day: u8, anchor_time_ms: u32) -> Result<(), CalendarError> {
     if !(1..=31).contains(&anchor_day) {
         return Err(CalendarError::InvalidAnchorDay);
@@ -142,13 +132,11 @@ fn validate_anchor(anchor_day: u8, anchor_time_ms: u32) -> Result<(), CalendarEr
     }
     Ok(())
 }
-
 fn year_month_from_unix_ms(ts_ms: u64) -> Result<(i32, u8), CalendarError> {
     let days = i64::try_from(ts_ms / MS_PER_DAY).map_err(|_| CalendarError::Overflow)?;
     let (year, month, _day) = civil_from_days(days)?;
     Ok((year, month))
 }
-
 fn anchor_for_month(
     year: i32,
     month: u8,
@@ -164,7 +152,6 @@ fn anchor_for_month(
     }
     u64::try_from(ms).map_err(|_| CalendarError::Overflow)
 }
-
 fn prev_month(year: i32, month: u8) -> Result<(i32, u8), CalendarError> {
     if !(1..=12).contains(&month) {
         return Err(CalendarError::InvalidMonth);
@@ -176,7 +163,6 @@ fn prev_month(year: i32, month: u8) -> Result<(i32, u8), CalendarError> {
         Ok((year, month - 1))
     }
 }
-
 fn next_month(year: i32, month: u8) -> Result<(i32, u8), CalendarError> {
     if !(1..=12).contains(&month) {
         return Err(CalendarError::InvalidMonth);
@@ -188,7 +174,6 @@ fn next_month(year: i32, month: u8) -> Result<(i32, u8), CalendarError> {
         Ok((year, month + 1))
     }
 }
-
 fn days_in_month(year: i32, month: u8) -> Result<u8, CalendarError> {
     if !(1..=12).contains(&month) {
         return Err(CalendarError::InvalidMonth);
@@ -208,11 +193,9 @@ fn days_in_month(year: i32, month: u8) -> Result<u8, CalendarError> {
     };
     Ok(dim)
 }
-
 fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0) && ((year % 100 != 0) || (year % 400 == 0))
 }
-
 // Convert days since Unix epoch (1970-01-01) to Y-M-D.
 fn civil_from_days(days: i64) -> Result<(i32, u8, u8), CalendarError> {
     // Algorithm adapted from Howard Hinnant's date algorithms.
@@ -231,7 +214,6 @@ fn civil_from_days(days: i64) -> Result<(i32, u8, u8), CalendarError> {
     let day = u8::try_from(d).map_err(|_| CalendarError::Overflow)?;
     Ok((year, month, day))
 }
-
 // Convert Y-M-D to days since Unix epoch (1970-01-01).
 fn days_from_civil(year: i32, month: u8, day: u8) -> Result<i64, CalendarError> {
     let dim = days_in_month(year, month)?;
@@ -247,11 +229,9 @@ fn days_from_civil(year: i32, month: u8, day: u8) -> Result<i64, CalendarError> 
     let days = era * 146_097 + doe - 719_468;
     Ok(days)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn unix_ms(year: i32, month: u8, day: u8, hour: u8, minute: u8, second: u8, ms: u16) -> u64 {
         let days = days_from_civil(year, month, day).expect("valid date");
         let day_ms = u64::try_from(days).expect("positive days") * MS_PER_DAY;
@@ -261,14 +241,12 @@ mod tests {
             + u64::from(second) * 1_000
             + u64::from(ms)
     }
-
     #[test]
     fn anchor_at_or_before_returns_current_anchor() {
         let ts = unix_ms(2024, 3, 15, 12, 0, 0, 0);
         let anchor = monthly_anchor_at_or_before(ts, 1, 0).expect("anchor");
         assert_eq!(anchor, unix_ms(2024, 3, 1, 0, 0, 0, 0));
     }
-
     #[test]
     fn anchor_at_or_before_steps_back_when_before_anchor() {
         let anchor = unix_ms(2024, 3, 1, 0, 0, 0, 0);
@@ -276,21 +254,18 @@ mod tests {
         let anchor = monthly_anchor_at_or_before(ts, 1, 0).expect("anchor");
         assert_eq!(anchor, unix_ms(2024, 2, 1, 0, 0, 0, 0));
     }
-
     #[test]
     fn anchor_after_returns_next_on_anchor() {
         let ts = unix_ms(2024, 3, 1, 0, 0, 0, 0);
         let anchor = monthly_anchor_after(ts, 1, 0).expect("anchor");
         assert_eq!(anchor, unix_ms(2024, 4, 1, 0, 0, 0, 0));
     }
-
     #[test]
     fn anchor_after_returns_current_when_before_anchor() {
         let ts = unix_ms(2024, 3, 10, 0, 0, 0, 0);
         let anchor = monthly_anchor_after(ts, 20, 0).expect("anchor");
         assert_eq!(anchor, unix_ms(2024, 3, 20, 0, 0, 0, 0));
     }
-
     #[test]
     fn monthly_period_previous_uses_last_anchor() {
         let charge_at = unix_ms(2024, 4, 1, 0, 0, 0, 0);
@@ -299,7 +274,6 @@ mod tests {
         assert_eq!(period.start_ms, unix_ms(2024, 3, 1, 0, 0, 0, 0));
         assert_eq!(period.end_ms, unix_ms(2024, 4, 1, 0, 0, 0, 0));
     }
-
     #[test]
     fn monthly_period_next_uses_next_anchor() {
         let charge_at = unix_ms(2024, 4, 1, 0, 0, 0, 0);
@@ -307,28 +281,22 @@ mod tests {
         assert_eq!(period.start_ms, unix_ms(2024, 4, 1, 0, 0, 0, 0));
         assert_eq!(period.end_ms, unix_ms(2024, 5, 1, 0, 0, 0, 0));
     }
-
     #[test]
     fn anchor_day_clamps_to_last_day_of_month() {
         let ts = unix_ms(2024, 2, 29, 12, 0, 0, 0);
         let anchor = monthly_anchor_at_or_before(ts, 31, 0).expect("anchor");
         assert_eq!(anchor, unix_ms(2024, 2, 29, 0, 0, 0, 0));
     }
-
     #[test]
     fn end_of_day_anchor_time_is_valid_and_exact() {
         let ts = unix_ms(2024, 5, 10, 23, 59, 59, 998);
         let anchor_time = u32::try_from(MS_PER_DAY - 1).expect("day ms fits u32");
-
         let anchor = monthly_anchor_after(ts, 10, anchor_time).expect("anchor");
-
         assert_eq!(anchor, unix_ms(2024, 5, 10, 23, 59, 59, 999));
     }
-
     #[test]
     fn invalid_anchor_day_is_rejected_for_public_helpers() {
         let ts = unix_ms(2024, 1, 15, 0, 0, 0, 0);
-
         assert_eq!(
             monthly_anchor_at_or_before(ts, 0, 0),
             Err(CalendarError::InvalidAnchorDay)
@@ -342,7 +310,6 @@ mod tests {
             Err(CalendarError::InvalidAnchorDay)
         );
     }
-
     #[test]
     fn invalid_anchor_time_is_rejected() {
         let ts = unix_ms(2024, 1, 1, 0, 0, 0, 0);
@@ -350,15 +317,12 @@ mod tests {
         let err = monthly_anchor_at_or_before(ts, 1, invalid);
         assert_eq!(err, Err(CalendarError::InvalidAnchorTime));
     }
-
     #[test]
     fn previous_period_at_unix_epoch_reports_overflow() {
         let err = monthly_billing_period(0, 1, 0, BillingPeriod::Previous)
             .expect_err("previous period before unix epoch should overflow");
-
         assert_eq!(err, CalendarError::Overflow);
     }
-
     #[test]
     fn month_helpers_cross_year_and_reject_invalid_months() {
         assert_eq!(prev_month(2024, 1), Ok((2023, 12)));
@@ -368,7 +332,6 @@ mod tests {
         assert_eq!(prev_month(2024, 0), Err(CalendarError::InvalidMonth));
         assert_eq!(next_month(2024, 13), Err(CalendarError::InvalidMonth));
     }
-
     #[test]
     fn days_in_month_applies_leap_century_rules() {
         assert_eq!(days_in_month(2024, 2), Ok(29));
@@ -378,7 +341,6 @@ mod tests {
         assert_eq!(days_in_month(2023, 12), Ok(31));
         assert_eq!(days_in_month(2023, 0), Err(CalendarError::InvalidMonth));
     }
-
     #[test]
     fn civil_date_conversion_roundtrips_known_dates() {
         for (year, month, day) in [
@@ -392,7 +354,6 @@ mod tests {
             assert_eq!(civil_from_days(days), Ok((year, month, day)));
         }
     }
-
     #[test]
     fn days_from_civil_rejects_invalid_month_and_day() {
         assert_eq!(

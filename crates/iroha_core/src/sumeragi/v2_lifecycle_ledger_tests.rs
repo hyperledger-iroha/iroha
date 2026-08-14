@@ -2,7 +2,6 @@
 /// Ledger-local behavior and source-surface regressions.
 pub(crate) mod tests {
     use super::*;
-
     #[test]
     fn production_owner_parent_surface_is_declaration_only() {
         let source = include_str!("v2_lifecycle_coordinator.rs");
@@ -28,13 +27,11 @@ pub(crate) mod tests {
             assert!(declaration.contains(retained), "owner dropped {retained}");
         }
     }
-
     #[cfg(feature = "bls")]
     /// BLS-backed storage-recovery and CompleteTip retirement regressions.
     pub(crate) mod durable_ready_fetch_recovery {
         include!("v2_lifecycle_ledger_tests_durable_recovery_01.rs");
         include!("v2_lifecycle_ledger_tests_durable_recovery_02.rs");
     }
-
     include!("v2_lifecycle_ledger_tests_frame_and_store.rs");
 }

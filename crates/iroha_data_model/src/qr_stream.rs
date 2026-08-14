@@ -4,15 +4,12 @@
 //! optional XOR parity frames, and wraps each chunk in a CRC32-protected frame.
 //! The format matches the existing Swift/Android/JS SDK implementations to
 //! ensure cross-platform parity for the first release.
-
 use std::time::{Duration, Instant};
-
 use blake2::{
     Blake2bVar,
     digest::{Update, VariableOutput},
 };
 use thiserror::Error;
-
 /// Magic bytes that start every QR stream frame (`IQ`).
 pub const QR_STREAM_MAGIC: [u8; 2] = [0x49, 0x51];
 /// Binary encoding flag for payloads.
@@ -29,7 +26,6 @@ pub const QR_STREAM_MAX_PAYLOAD_BYTES: u32 = 2 * 1024 * 1024;
 pub const QR_STREAM_MAX_FRAMES: u16 = 8192;
 /// Default timeout for assembling frames (milliseconds).
 pub const QR_STREAM_DEFAULT_TIMEOUT_MS: u64 = 120_000;
-
 /// QR stream frame kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QrStreamFrameKind {
@@ -40,7 +36,6 @@ pub enum QrStreamFrameKind {
     /// Parity frame carrying XOR parity for a chunk group.
     Parity = 2,
 }
-
 impl QrStreamFrameKind {
     fn from_u8(value: u8) -> Result<Self, QrStreamError> {
         match value {
@@ -51,7 +46,6 @@ impl QrStreamFrameKind {
         }
     }
 }
-
 /// Payload kind tags embedded in the envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
@@ -65,7 +59,6 @@ pub enum QrPayloadKind {
     /// Kagemusha receiver acknowledgement.
     KagemushaAcknowledgement = 3,
 }
-
 impl QrPayloadKind {
     fn from_u16(value: u16) -> Self {
         match value {
@@ -76,7 +69,6 @@ impl QrPayloadKind {
         }
     }
 }
-
 /// Encoder options controlling chunking and parity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QrStreamOptions {
@@ -91,7 +83,6 @@ pub struct QrStreamOptions {
     /// Encoding marker (binary by default).
     pub encoding: u8,
 }
-
 impl Default for QrStreamOptions {
     fn default() -> Self {
         Self {
@@ -103,7 +94,6 @@ impl Default for QrStreamOptions {
         }
     }
 }
-
 /// Limits applied by the frame assembler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QrStreamAssemblerLimits {
@@ -116,7 +106,6 @@ pub struct QrStreamAssemblerLimits {
     /// Timeout window for assembly since first frame.
     pub timeout: Duration,
 }
-
 impl Default for QrStreamAssemblerLimits {
     fn default() -> Self {
         Self {
@@ -127,7 +116,6 @@ impl Default for QrStreamAssemblerLimits {
         }
     }
 }
-
 /// Errors raised while encoding or decoding QR stream frames.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum QrStreamError {
@@ -153,7 +141,6 @@ pub enum QrStreamError {
     #[error("qr stream assembly timed out")]
     TimedOut,
 }
-
 /// Envelope describing the payload layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QrStreamEnvelope {
@@ -176,7 +163,6 @@ pub struct QrStreamEnvelope {
     /// BLAKE2b-256 hash of the payload bytes.
     pub payload_hash: [u8; 32],
 }
-
 impl QrStreamEnvelope {
     /// Construct a new envelope and validate the payload hash length.
     #[allow(clippy::too_many_arguments)]
@@ -203,7 +189,6 @@ impl QrStreamEnvelope {
             payload_hash,
         }
     }
-
     /// Derive the stream id from the payload hash.
     #[must_use]
     pub fn stream_id(&self) -> [u8; 16] {
@@ -211,13 +196,11 @@ impl QrStreamEnvelope {
         out.copy_from_slice(&self.payload_hash[..16]);
         out
     }
-
     /// Interpret the payload kind tag as a typed enum.
     #[must_use]
     pub fn payload_kind_tag(&self) -> QrPayloadKind {
         QrPayloadKind::from_u16(self.payload_kind)
     }
-
     /// Encode the envelope into canonical bytes.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
@@ -233,7 +216,6 @@ impl QrStreamEnvelope {
         out.extend_from_slice(&self.payload_hash);
         out
     }
-
     /// Decode envelope bytes.
     ///
     /// # Errors
@@ -279,7 +261,6 @@ impl QrStreamEnvelope {
         })
     }
 }
-
 /// A single QR stream frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QrStreamFrame {
@@ -294,7 +275,6 @@ pub struct QrStreamFrame {
     /// Frame payload bytes.
     pub payload: Vec<u8>,
 }
-
 impl QrStreamFrame {
     /// Encode a frame to bytes with CRC32.
     #[must_use]
@@ -313,7 +293,6 @@ impl QrStreamFrame {
         out.extend_from_slice(&crc.to_le_bytes());
         out
     }
-
     /// Decode a frame from bytes.
     ///
     /// # Errors
@@ -353,11 +332,9 @@ impl QrStreamFrame {
         })
     }
 }
-
 /// Encoder for QR stream frames.
 #[derive(Debug, Clone, Copy)]
 pub struct QrStreamEncoder;
-
 impl QrStreamEncoder {
     /// Encode a payload into a list of frames.
     ///
@@ -447,7 +424,6 @@ impl QrStreamEncoder {
         }
         Ok((envelope, frames))
     }
-
     /// Encode frames directly to bytes.
     ///
     /// # Errors
@@ -463,7 +439,6 @@ impl QrStreamEncoder {
         ))
     }
 }
-
 /// Decoder / assembler for QR stream frames.
 pub struct QrStreamAssembler {
     envelope: Option<QrStreamEnvelope>,
@@ -474,7 +449,6 @@ pub struct QrStreamAssembler {
     limits: QrStreamAssemblerLimits,
     started_at: Option<Instant>,
 }
-
 impl QrStreamAssembler {
     /// Create a new assembler with explicit limits.
     pub fn new(limits: QrStreamAssemblerLimits) -> Self {
@@ -488,7 +462,6 @@ impl QrStreamAssembler {
             started_at: None,
         }
     }
-
     /// Ingest raw frame bytes.
     ///
     /// # Errors
@@ -497,7 +470,6 @@ impl QrStreamAssembler {
         let frame = QrStreamFrame::decode(bytes)?;
         self.ingest_frame(frame)
     }
-
     /// Ingest a decoded frame.
     ///
     /// # Errors
@@ -559,7 +531,6 @@ impl QrStreamAssembler {
         }
         Ok(self.progress())
     }
-
     fn progress(&self) -> QrStreamDecodeResult {
         QrStreamDecodeResult {
             payload: None,
@@ -568,11 +539,9 @@ impl QrStreamAssembler {
             recovered_chunks: self.recovered.iter().filter(|v| **v).count(),
         }
     }
-
     fn received_chunks(&self) -> usize {
         self.data_chunks.iter().filter(|c| c.is_some()).count()
     }
-
     fn track_timeout(&mut self) -> Result<(), QrStreamError> {
         let now = Instant::now();
         match self.started_at {
@@ -587,7 +556,6 @@ impl QrStreamAssembler {
         }
         Ok(())
     }
-
     fn validate_limits(&self, envelope: &QrStreamEnvelope) -> Result<(), QrStreamError> {
         if envelope.payload_length > self.limits.max_payload_bytes {
             return Err(QrStreamError::LimitExceeded("payload_length"));
@@ -604,21 +572,18 @@ impl QrStreamAssembler {
         }
         Ok(())
     }
-
     fn store_data(&mut self, frame: &QrStreamFrame) {
         let index = frame.index as usize;
         if index < self.data_chunks.len() && self.data_chunks[index].is_none() {
             self.data_chunks[index] = Some(frame.payload.clone());
         }
     }
-
     fn store_parity(&mut self, frame: &QrStreamFrame) {
         let index = frame.index as usize;
         if index < self.parity_chunks.len() && self.parity_chunks[index].is_none() {
             self.parity_chunks[index] = Some(frame.payload.clone());
         }
     }
-
     fn recover_missing(&mut self, envelope: &QrStreamEnvelope) {
         let group_size = envelope.parity_group as usize;
         if group_size == 0 {
@@ -665,7 +630,6 @@ impl QrStreamAssembler {
             }
         }
     }
-
     fn finalize_if_complete(&self) -> Result<Option<Vec<u8>>, QrStreamError> {
         let envelope = match &self.envelope {
             Some(env) => env,
@@ -699,13 +663,11 @@ impl QrStreamAssembler {
         Ok(Some(payload))
     }
 }
-
 impl Default for QrStreamAssembler {
     fn default() -> Self {
         Self::new(QrStreamAssemblerLimits::default())
     }
 }
-
 /// Result produced by the QR stream assembler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QrStreamDecodeResult {
@@ -718,14 +680,12 @@ pub struct QrStreamDecodeResult {
     /// Number of chunks reconstructed via parity.
     pub recovered_chunks: usize,
 }
-
 impl QrStreamDecodeResult {
     /// Whether the payload has been fully reconstructed.
     #[must_use]
     pub fn is_complete(&self) -> bool {
         self.payload.is_some()
     }
-
     /// Progress ratio based on received data chunks.
     #[must_use]
     pub fn progress(&self) -> f64 {
@@ -738,7 +698,6 @@ impl QrStreamDecodeResult {
         }
     }
 }
-
 fn expected_chunk_length(
     payload_len: usize,
     chunk_size: usize,
@@ -754,7 +713,6 @@ fn expected_chunk_length(
     let tail = payload_len.saturating_sub(chunk_size.saturating_mul(total.saturating_sub(1)));
     tail.min(chunk_size)
 }
-
 fn xor_parity(
     payload: &[u8],
     chunk_size: usize,
@@ -778,7 +736,6 @@ fn xor_parity(
     }
     parity
 }
-
 fn blake2b256(payload: &[u8]) -> [u8; 32] {
     let mut hasher = Blake2bVar::new(32).expect("blake2b var init");
     hasher.update(payload);
@@ -788,7 +745,6 @@ fn blake2b256(payload: &[u8]) -> [u8; 32] {
         .expect("blake2b finalize");
     out
 }
-
 fn crc32(bytes: &[u8]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;
     for &byte in bytes {
@@ -804,14 +760,12 @@ fn crc32(bytes: &[u8]) -> u32 {
     }
     crc ^ 0xFFFF_FFFF
 }
-
 fn read_u16_le(bytes: &[u8], offset: usize) -> Result<u16, QrStreamError> {
     if offset + 2 > bytes.len() {
         return Err(QrStreamError::InvalidLength("u16"));
     }
     Ok(u16::from_le_bytes([bytes[offset], bytes[offset + 1]]))
 }
-
 fn read_u32_le(bytes: &[u8], offset: usize) -> Result<u32, QrStreamError> {
     if offset + 4 > bytes.len() {
         return Err(QrStreamError::InvalidLength("u32"));
@@ -823,20 +777,17 @@ fn read_u32_le(bytes: &[u8], offset: usize) -> Result<u32, QrStreamError> {
         bytes[offset + 3],
     ]))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use norito::json::{self, Value};
     use std::fs;
     use std::path::PathBuf;
-
     #[derive(Debug)]
     struct FixtureFrame {
         kind: QrStreamFrameKind,
         bytes: Vec<u8>,
     }
-
     #[derive(Debug)]
     struct QrStreamFixture {
         payload: Vec<u8>,
@@ -844,7 +795,6 @@ mod tests {
         envelope: Vec<u8>,
         frames: Vec<FixtureFrame>,
     }
-
     fn load_fixture(name: &str) -> QrStreamFixture {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.push("../../fixtures/qr_stream");
@@ -917,7 +867,6 @@ mod tests {
             frames,
         }
     }
-
     #[test]
     fn qr_stream_roundtrip_fixture() {
         let fixture = load_fixture("qr_stream_basic.json");
@@ -927,7 +876,6 @@ mod tests {
         let encoded: Vec<Vec<u8>> = frames.iter().map(super::QrStreamFrame::encode).collect();
         let fixture_bytes: Vec<Vec<u8>> = fixture.frames.iter().map(|f| f.bytes.clone()).collect();
         assert_eq!(encoded, fixture_bytes);
-
         let mut assembler = QrStreamAssembler::default();
         let mut result = None;
         for bytes in fixture_bytes {
@@ -938,7 +886,6 @@ mod tests {
         }
         assert_eq!(result, Some(fixture.payload));
     }
-
     #[test]
     fn qr_stream_parity_recovers_missing_frame() {
         let fixture = load_fixture("qr_stream_parity.json");
@@ -957,12 +904,10 @@ mod tests {
         }
         assert_eq!(result, Some(fixture.payload));
     }
-
     #[test]
     fn qr_payload_kind_unknown_maps_to_unspecified() {
         assert_eq!(QrPayloadKind::from_u16(999), QrPayloadKind::Unspecified);
     }
-
     #[test]
     fn qr_stream_limits_reject_large_payload() {
         let payload = vec![0u8; (QR_STREAM_MAX_PAYLOAD_BYTES as usize) + 1];
@@ -982,7 +927,6 @@ mod tests {
             QrStreamError::LimitExceeded("payload_length")
         );
     }
-
     #[test]
     fn qr_stream_accepts_out_of_order_and_duplicates() {
         let fixture = load_fixture("qr_stream_basic.json");

@@ -16,7 +16,7 @@ private final class MusubiV1RejectRedirectDelegate: NSObject, URLSessionTaskDele
     }
 }
 
-/// Signer-free read-only client for the twelve typed Musubi first-release queries.
+/// Exact-network authenticated client for the twelve typed Musubi first-release queries.
 public final class MusubiToriiClientV1: @unchecked Sendable {
     public static let exactPackagePath = "/v1/musubi/queries/exact-package"
     public static let exactReleasePath = "/v1/musubi/queries/exact-release"
@@ -40,34 +40,44 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
 
     public let baseURL: URL
     public let defaultHeaders: [String: String]
+    public let localSigningContext: ToriiLocalSigningContext
     private let session: URLSession
 
     public init(
         baseURL: URL,
+        localSigningContext: ToriiLocalSigningContext,
         session: URLSession = .shared,
         defaultHeaders: [String: String] = [:]
     ) {
         self.baseURL = baseURL.hasDirectoryPath ? baseURL : baseURL.appendingPathComponent("")
+        self.localSigningContext = localSigningContext
         self.session = session
         self.defaultHeaders = defaultHeaders
     }
 
     /// Fetches one exact structural package record.
     public func findExactPackage(
-        _ request: MusubiExactPackageQueryV1
+        _ request: MusubiExactPackageQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> MusubiPackageRecordV1 {
-        let record: MusubiPackageRecordV1 = try await post(Self.exactPackagePath, request: request)
+        let record: MusubiPackageRecordV1 = try await post(
+            Self.exactPackagePath,
+            request: request,
+            canonicalAuth: canonicalAuth
+        )
         try record.requireMatches(request)
         return record
     }
 
     /// Fetches paired home and universal projections for one exact release at finality.
     public func findExactRelease(
-        _ request: MusubiExactReleaseQueryV1
+        _ request: MusubiExactReleaseQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> MusubiExactReleaseSnapshotV1 {
         let snapshot: MusubiExactReleaseSnapshotV1 = try await post(
             Self.exactReleasePath,
-            request: request
+            request: request,
+            canonicalAuth: canonicalAuth
         )
         try snapshot.requireMatches(request)
         return snapshot
@@ -75,11 +85,13 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
 
     /// Fetches one immutable provider proof by its archive/order/provider identity.
     public func findProviderBundleAttestation(
-        _ request: MusubiProviderBundleAttestationKeyV1
+        _ request: MusubiProviderBundleAttestationKeyV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> MusubiProviderBundleAttestationRecordV1 {
         let record: MusubiProviderBundleAttestationRecordV1 = try await post(
             Self.providerBundleAttestationPath,
-            request: request
+            request: request,
+            canonicalAuth: canonicalAuth
         )
         try record.requireMatches(request)
         return record
@@ -87,11 +99,13 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
 
     /// Reads the finalized universal sparse resolver index.
     public func findResolverIndex(
-        _ request: MusubiResolverIndexQueryV1
+        _ request: MusubiResolverIndexQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> MusubiResolverIndexPageV1 {
         let page: MusubiResolverIndexPageV1 = try await post(
             Self.resolverIndexPath,
-            request: request
+            request: request,
+            canonicalAuth: canonicalAuth
         )
         try page.requireMatches(request)
         return page
@@ -99,11 +113,13 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
 
     /// Lists exact structured versions for a package.
     public func findVersions(
-        _ request: MusubiPackagePageQueryV1
+        _ request: MusubiPackagePageQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> MusubiPageV1<MusubiVersionV1> {
         let page: MusubiPageV1<MusubiVersionV1> = try await post(
             Self.versionsPath,
-            request: request
+            request: request,
+            canonicalAuth: canonicalAuth
         )
         try page.requireMatches(request)
         return page
@@ -111,11 +127,13 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
 
     /// Lists accepted owners/maintainers and pending invitations for a package.
     public func findMaintainers(
-        _ request: MusubiPackagePageQueryV1
+        _ request: MusubiPackagePageQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> MusubiPageV1<MusubiMaintainerDirectoryEntryV1> {
         let page: MusubiPageV1<MusubiMaintainerDirectoryEntryV1> = try await post(
             Self.maintainersPath,
-            request: request
+            request: request,
+            canonicalAuth: canonicalAuth
         )
         try page.requireMatches(request)
         return page
@@ -123,11 +141,13 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
 
     /// Lists renewable SoraFS locations for an archive.
     public func findArchiveLocations(
-        _ request: MusubiArchiveLocationQueryV1
+        _ request: MusubiArchiveLocationQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> MusubiArchiveLocationPageV1 {
         let page: MusubiArchiveLocationPageV1 = try await post(
             Self.archiveLocationsPath,
-            request: request
+            request: request,
+            canonicalAuth: canonicalAuth
         )
         try page.requireMatches(request)
         return page
@@ -135,30 +155,41 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
 
     /// Classifies a bounded exact archive batch for fail-closed cache retention.
     public func findArchiveRetention(
-        _ request: MusubiArchiveRetentionQueryV1
+        _ request: MusubiArchiveRetentionQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> MusubiArchiveRetentionPageV1 {
         let page: MusubiArchiveRetentionPageV1 = try await post(
             Self.archiveRetentionPath,
-            request: request
+            request: request,
+            canonicalAuth: canonicalAuth
         )
         try page.requireMatches(request)
         return page
     }
 
     /// Resolves one paid permanent global alias.
-    public func findAlias(_ request: MusubiAliasQueryV1) async throws -> MusubiAliasRecordV1 {
-        let record: MusubiAliasRecordV1 = try await post(Self.aliasPath, request: request)
+    public func findAlias(
+        _ request: MusubiAliasQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> MusubiAliasRecordV1 {
+        let record: MusubiAliasRecordV1 = try await post(
+            Self.aliasPath,
+            request: request,
+            canonicalAuth: canonicalAuth
+        )
         try record.requireMatches(request)
         return record
     }
 
     /// Lists immutable history for one permanent global alias.
     public func findAliasHistory(
-        _ request: MusubiAliasQueryV1
+        _ request: MusubiAliasQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> MusubiPageV1<MusubiAliasHistoryEntryV1> {
         let page: MusubiPageV1<MusubiAliasHistoryEntryV1> = try await post(
             Self.aliasHistoryPath,
-            request: request
+            request: request,
+            canonicalAuth: canonicalAuth
         )
         try page.requireMatches(request)
         return page
@@ -166,26 +197,36 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
 
     /// Scans the deterministic public package directory by byte prefix.
     public func findOrderedPrefix(
-        _ request: MusubiOrderedPrefixQueryV1
+        _ request: MusubiOrderedPrefixQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> MusubiOrderedPrefixPageV1 {
         let page: MusubiOrderedPrefixPageV1 = try await post(
             Self.orderedPrefixPath,
-            request: request
+            request: request,
+            canonicalAuth: canonicalAuth
         )
         try page.requireMatches(request)
         return page
     }
 
     /// Searches the rebuildable finalized-event package metadata projection.
-    public func search(_ request: MusubiSearchQueryV1) async throws -> MusubiSearchPageV1 {
-        let page: MusubiSearchPageV1 = try await post(Self.searchPath, request: request)
+    public func search(
+        _ request: MusubiSearchQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> MusubiSearchPageV1 {
+        let page: MusubiSearchPageV1 = try await post(
+            Self.searchPath,
+            request: request,
+            canonicalAuth: canonicalAuth
+        )
         try page.requireMatches(request)
         return page
     }
 
     private func post<Request: Encodable, Response: Decodable>(
         _ path: String,
-        request payload: Request
+        request payload: Request,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> Response {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -205,12 +246,51 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
         guard let target = URL(string: String(path.dropFirst()), relativeTo: baseURL)?.absoluteURL else {
             throw ToriiClientError.invalidURL(path)
         }
-        var request = URLRequest(url: target)
+        var request = URLRequest(url: target, cachePolicy: .reloadIgnoringLocalCacheData)
         request.httpMethod = "POST"
         request.httpBody = body
+        let reserved = Set(
+            [
+                ToriiCanonicalRequest.headerAccount,
+                ToriiCanonicalRequest.headerSignature,
+                ToriiCanonicalRequest.headerTimestampMs,
+                ToriiCanonicalRequest.headerNonce,
+                "X-Iroha-Witness",
+            ].map { $0.lowercased() })
+        guard defaultHeaders.keys.allSatisfy({ !reserved.contains($0.lowercased()) }) else {
+            throw ToriiClientError.invalidPayload(
+                "Canonical request headers must be supplied only through canonicalAuth."
+            )
+        }
+        guard (canonicalAuth.timestampMs == nil) == (canonicalAuth.nonce == nil) else {
+            throw ToriiClientError.invalidPayload(
+                "timestampMs and nonce must be provided together."
+            )
+        }
         for (name, value) in defaultHeaders { request.setValue(value, forHTTPHeaderField: name) }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        let timestampMs =
+            canonicalAuth.timestampMs
+            ?? UInt64(Date().timeIntervalSince1970 * 1_000)
+        let nonce =
+            canonicalAuth.nonce
+            ?? UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let authHeaders = try ToriiCanonicalRequest.buildHeaders(
+            method: "POST",
+            url: target,
+            body: body,
+            accountId: canonicalAuth.accountId,
+            privateKey: canonicalAuth.privateKey,
+            networkId: localSigningContext.networkId,
+            timestampMs: timestampMs,
+            nonce: nonce
+        )
+        for (name, value) in authHeaders {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
 
         if let violation = IrohaTransportSecurity.httpViolation(
             context: "MusubiToriiClientV1",

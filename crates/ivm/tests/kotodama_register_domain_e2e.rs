@@ -1,20 +1,16 @@
 //! End-to-end canonical domain registration from a Kotodama contract.
-
 use std::collections::HashMap;
-
 use iroha_crypto::PublicKey;
 use ivm::{
     IVM, KotodamaCompiler,
     mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
 };
 mod common;
-
 fn account(domain: &str, public_key: &str) -> AccountId {
     let _domain = iroha_data_model::DomainId::try_new(domain, "universal").unwrap();
     let public_key: PublicKey = public_key.parse().unwrap();
     AccountId::new(public_key)
 }
-
 #[test]
 fn kotodama_register_domain_e2e() {
     // Compile a tiny Kotodama program that registers a domain via typed constructor.
@@ -27,7 +23,6 @@ fn kotodama_register_domain_e2e() {
     "#;
     let compiler = KotodamaCompiler::new();
     let program = compiler.compile_source(src).expect("compile kotodama");
-
     // Set up a mock WSV with an authority having RegisterDomain permission.
     let alice = account(
         "domain",
@@ -36,11 +31,9 @@ fn kotodama_register_domain_e2e() {
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
-
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     // Load and run
     vm.load_program(&program).expect("load program");
     common::select_kotodama_entrypoint(&mut vm, &program, "main");

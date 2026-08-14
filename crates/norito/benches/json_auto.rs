@@ -1,8 +1,6 @@
 //! Compare decode speeds for from_json, from_json_fast, and from_json_auto.
 #![cfg(feature = "json")]
-
 use criterion::{Criterion, criterion_group, criterion_main};
-
 #[derive(Debug, PartialEq, norito::derive::FastJson, norito::derive::FastJsonWrite)]
 struct Inner {
     value: f64,
@@ -10,14 +8,12 @@ struct Inner {
     tags: Vec<String>,
     opt: Option<String>,
 }
-
 #[derive(Debug, PartialEq, norito::derive::FastJson, norito::derive::FastJsonWrite)]
 struct Outer {
     id: u64,
     inner: Inner,
     items: Vec<Inner>,
 }
-
 impl norito::json::JsonDeserialize for Inner {
     fn json_deserialize(p: &mut norito::json::Parser<'_>) -> Result<Self, norito::json::Error> {
         p.skip_ws();
@@ -56,7 +52,6 @@ impl norito::json::JsonDeserialize for Inner {
         })
     }
 }
-
 impl norito::json::JsonDeserialize for Outer {
     fn json_deserialize(p: &mut norito::json::Parser<'_>) -> Result<Self, norito::json::Error> {
         p.skip_ws();
@@ -85,7 +80,6 @@ impl norito::json::JsonDeserialize for Outer {
         })
     }
 }
-
 fn sample_large_json() -> String {
     let mut items = String::from("[");
     for i in 0..128 {
@@ -108,11 +102,9 @@ fn sample_large_json() -> String {
         "{{\"id\":777,\"inner\":{{\"value\":-1.25e2,\"flags\":[false,true,false],\"tags\":[\"p\",\"q\"],\"opt\":\"z\"}},\"items\":{items}}}"
     )
 }
-
 fn bench_json_auto(c: &mut Criterion) {
     let small = r#"{"id":1,"inner":{"value":3.14,"flags":[true,false],"tags":["a"],"opt":null},"items":[{"value":1.0,"flags":[true],"tags":["x"],"opt":"y"}]}"#;
     let large = sample_large_json();
-
     c.bench_function("decode_small_from_json", |b| {
         b.iter(|| {
             let v: Outer = norito::json::from_json(std::hint::black_box(small)).unwrap();
@@ -131,7 +123,6 @@ fn bench_json_auto(c: &mut Criterion) {
             std::hint::black_box(v)
         })
     });
-
     c.bench_function("decode_large_from_json", |b| {
         b.iter(|| {
             let v: Outer = norito::json::from_json(std::hint::black_box(&large)).unwrap();
@@ -151,6 +142,5 @@ fn bench_json_auto(c: &mut Criterion) {
         })
     });
 }
-
 criterion_group!(benches, bench_json_auto);
 criterion_main!(benches);

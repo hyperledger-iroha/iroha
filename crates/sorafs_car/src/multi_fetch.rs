@@ -6,7 +6,6 @@
 //! transport-agnostic: callers provide an async fetcher that knows how to talk
 //! to their networking stack or storage adapters, while the scheduler handles
 //! determinism, retry policy, and basic fairness.
-
 use std::{
     collections::VecDeque,
     fmt,
@@ -14,35 +13,28 @@ use std::{
     sync::Arc,
     time::Instant,
 };
-
 use futures::{Future, FutureExt, StreamExt, stream::FuturesUnordered};
-
 use crate::{CarBuildPlan, CarPlanError, ChunkFetchSpec};
-
 /// Identifier used to reference providers that can serve SoraFS chunks.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProviderId(String);
-
 impl ProviderId {
     /// Creates a new provider identifier.
     #[must_use]
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
-
     /// Returns the identifier as a string slice.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
-
 impl fmt::Display for ProviderId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
-
 /// Static configuration for a provider participating in multi-source fetch.
 #[derive(Debug, Clone)]
 pub struct FetchProvider {
@@ -51,7 +43,6 @@ pub struct FetchProvider {
     weight: NonZeroU32,
     metadata: Option<ProviderMetadata>,
 }
-
 impl FetchProvider {
     /// Creates a provider with the supplied identifier and default limits.
     ///
@@ -66,53 +57,45 @@ impl FetchProvider {
             metadata: None,
         }
     }
-
     /// Updates the maximum number of concurrent chunk requests permitted.
     #[must_use]
     pub fn with_max_concurrent_chunks(mut self, value: NonZeroUsize) -> Self {
         self.max_concurrent_chunks = value;
         self
     }
-
     /// Updates the provider weight used by the round-robin scheduler.
     #[must_use]
     pub fn with_weight(mut self, weight: NonZeroU32) -> Self {
         self.weight = weight;
         self
     }
-
     /// Attaches provider metadata (e.g., capabilities, stakes) if available.
     #[must_use]
     pub fn with_metadata(mut self, metadata: ProviderMetadata) -> Self {
         self.metadata = Some(metadata);
         self
     }
-
     /// Returns the provider identifier.
     #[must_use]
     pub fn id(&self) -> &ProviderId {
         &self.id
     }
-
     /// Returns the maximum number of in-flight chunk requests permitted.
     #[must_use]
     pub fn max_concurrent_chunks(&self) -> usize {
         self.max_concurrent_chunks.get()
     }
-
     /// Returns the provider scheduling weight.
     #[must_use]
     pub fn weight(&self) -> NonZeroU32 {
         self.weight
     }
-
     /// Returns optional metadata describing this provider.
     #[must_use]
     pub fn metadata(&self) -> Option<&ProviderMetadata> {
         self.metadata.as_ref()
     }
 }
-
 /// Supplemental metadata sourced from provider advertisements.
 #[derive(Debug, Clone)]
 pub struct ProviderMetadata {
@@ -135,7 +118,6 @@ pub struct ProviderMetadata {
     /// Optional admin endpoint exposing privacy telemetry.
     pub privacy_events_url: Option<String>,
 }
-
 impl ProviderMetadata {
     #[must_use]
     pub fn new() -> Self {
@@ -160,13 +142,11 @@ impl ProviderMetadata {
         }
     }
 }
-
 impl Default for ProviderMetadata {
     fn default() -> Self {
         Self::new()
     }
 }
-
 /// Range-capability metadata decoded from provider adverts.
 #[derive(Debug, Clone)]
 pub struct RangeCapability {
@@ -176,7 +156,6 @@ pub struct RangeCapability {
     pub requires_alignment: bool,
     pub supports_merkle_proof: bool,
 }
-
 /// Stream budget advertised by providers.
 #[derive(Debug, Clone)]
 pub struct StreamBudget {
@@ -184,7 +163,6 @@ pub struct StreamBudget {
     pub max_bytes_per_sec: u64,
     pub burst_bytes: Option<u64>,
 }
-
 /// Transport hint advertised by providers for ranged fetch.
 #[derive(Debug, Clone)]
 pub struct TransportHint {
@@ -192,7 +170,6 @@ pub struct TransportHint {
     pub protocol_id: u8,
     pub priority: u8,
 }
-
 /// Normalised transport protocols understood by the fetcher.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportProtocolKind {
@@ -207,7 +184,6 @@ pub enum TransportProtocolKind {
     /// Transport protocol is unknown to the orchestrator.
     Unknown,
 }
-
 impl TransportProtocolKind {
     #[allow(clippy::match_same_arms)]
     fn from_hint(hint: &TransportHint) -> Self {
@@ -218,7 +194,6 @@ impl TransportProtocolKind {
             255 => return Self::VendorReserved,
             _ => {}
         }
-
         let label = hint.protocol.trim().to_ascii_lowercase();
         match label.as_str() {
             "torii" | "torii_http_range" | "torii-http-range" | "toriihttp" | "torii-range" => {
@@ -232,7 +207,6 @@ impl TransportProtocolKind {
         }
     }
 }
-
 impl TransportHint {
     /// Returns the normalised transport protocol advertised by this hint.
     #[must_use]
@@ -240,7 +214,6 @@ impl TransportHint {
         TransportProtocolKind::from_hint(self)
     }
 }
-
 /// Reasons a provider cannot serve a specific chunk request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CapabilityMismatch {
@@ -275,7 +248,6 @@ pub enum CapabilityMismatch {
         burst_limit: u64,
     },
 }
-
 impl fmt::Display for CapabilityMismatch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -314,7 +286,6 @@ impl fmt::Display for CapabilityMismatch {
         }
     }
 }
-
 /// Fetch-time configuration knobs for the orchestrator.
 #[derive(Clone)]
 pub struct FetchOptions {
@@ -332,7 +303,6 @@ pub struct FetchOptions {
     /// Optional scoring policy used to influence provider priority.
     pub score_policy: Option<Arc<dyn ScorePolicy>>,
 }
-
 impl Default for FetchOptions {
     fn default() -> Self {
         Self {
@@ -345,7 +315,6 @@ impl Default for FetchOptions {
         }
     }
 }
-
 impl fmt::Debug for FetchOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FetchOptions")
@@ -364,7 +333,6 @@ impl fmt::Debug for FetchOptions {
             .finish()
     }
 }
-
 /// Request metadata passed to the caller-supplied fetcher.
 #[derive(Debug, Clone)]
 pub struct FetchRequest {
@@ -375,14 +343,12 @@ pub struct FetchRequest {
     /// 1-based attempt counter for the chunk.
     pub attempt: usize,
 }
-
 /// Successful chunk response returned by the fetcher.
 #[derive(Debug, Clone)]
 pub struct ChunkResponse {
     /// Raw chunk bytes as returned by the provider.
     pub bytes: Vec<u8>,
 }
-
 impl ChunkResponse {
     /// Creates a new response wrapper.
     #[must_use]
@@ -390,7 +356,6 @@ impl ChunkResponse {
         Self { bytes }
     }
 }
-
 /// Verification failures encountered while validating chunk contents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChunkVerificationError {
@@ -402,7 +367,6 @@ pub enum ChunkVerificationError {
         actual: [u8; 32],
     },
 }
-
 /// Categorises a failed chunk attempt.
 #[derive(Debug, Clone)]
 pub enum AttemptFailure {
@@ -414,7 +378,6 @@ pub enum AttemptFailure {
     /// Provider returned data that failed deterministic verification.
     InvalidChunk(ChunkVerificationError),
 }
-
 /// Evidence emitted when a gateway blocks a request for policy reasons.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyBlockEvidence {
@@ -427,7 +390,6 @@ pub struct PolicyBlockEvidence {
     /// Lowercase hexadecimal digest of the active governed catalog.
     pub catalog_digest_hex: String,
 }
-
 /// Detailed information about the most recent attempt for a chunk.
 #[derive(Debug, Clone)]
 pub struct AttemptError {
@@ -436,7 +398,6 @@ pub struct AttemptError {
     /// Failure mode for the attempt.
     pub failure: AttemptFailure,
 }
-
 /// Receipt describing how a chunk was ultimately retrieved.
 #[derive(Debug, Clone)]
 pub struct ChunkReceipt {
@@ -451,7 +412,6 @@ pub struct ChunkReceipt {
     /// Size of the chunk payload in bytes.
     pub bytes: u32,
 }
-
 /// Aggregate report for a provider after a fetch session.
 #[derive(Debug, Clone)]
 pub struct ProviderReport {
@@ -464,7 +424,6 @@ pub struct ProviderReport {
     /// Whether the provider was disabled due to consecutive failures.
     pub disabled: bool,
 }
-
 /// Final outcome returned by the orchestrator.
 #[derive(Debug, Clone)]
 pub struct FetchOutcome {
@@ -475,7 +434,6 @@ pub struct FetchOutcome {
     /// Per-provider statistics from the session.
     pub provider_reports: Vec<ProviderReport>,
 }
-
 impl FetchOutcome {
     /// Concatenates chunks in plan order, returning the assembled payload.
     #[must_use]
@@ -488,7 +446,6 @@ impl FetchOutcome {
         out
     }
 }
-
 /// Chunk payload delivered to observers when streaming is enabled.
 pub struct ChunkDelivery<'a> {
     /// Index of the chunk within the plan (0-based).
@@ -504,13 +461,11 @@ pub struct ChunkDelivery<'a> {
     /// Verified chunk bytes.
     pub bytes: &'a [u8],
 }
-
 /// Errors emitted by chunk observers.
 #[derive(Debug, Clone)]
 pub struct ObserverError {
     message: String,
 }
-
 impl ObserverError {
     /// Creates a new observer error with the provided message.
     #[must_use]
@@ -520,33 +475,27 @@ impl ObserverError {
         }
     }
 }
-
 impl fmt::Display for ObserverError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
     }
 }
-
 impl std::error::Error for ObserverError {}
-
 impl From<&str> for ObserverError {
     fn from(message: &str) -> Self {
         Self::new(message)
     }
 }
-
 impl From<String> for ObserverError {
     fn from(message: String) -> Self {
         Self::new(message)
     }
 }
-
 /// Observer invoked when chunks become available in plan order.
 pub trait ChunkObserver: Send {
     /// Called once per chunk after verification succeeds.
     fn on_chunk(&mut self, delivery: ChunkDelivery<'_>) -> Result<(), ObserverError>;
 }
-
 impl<F> ChunkObserver for F
 where
     F: for<'a> FnMut(ChunkDelivery<'a>) -> Result<(), ObserverError> + Send,
@@ -555,7 +504,6 @@ where
         self(delivery)
     }
 }
-
 fn effective_capacity(provider: &FetchProvider) -> usize {
     let configured = provider.max_concurrent_chunks();
     let mut capacity = configured;
@@ -567,7 +515,6 @@ fn effective_capacity(provider: &FetchProvider) -> usize {
     }
     capacity.max(1)
 }
-
 pub(crate) fn provider_can_serve_chunk(
     provider: &FetchProvider,
     spec: &ChunkFetchSpec,
@@ -575,19 +522,16 @@ pub(crate) fn provider_can_serve_chunk(
     let Some(metadata) = provider.metadata() else {
         return Ok(());
     };
-
     let range = metadata
         .range_capability
         .as_ref()
         .ok_or(CapabilityMismatch::MissingRangeCapability)?;
-
     if spec.length > range.max_chunk_span {
         return Err(CapabilityMismatch::ChunkTooLarge {
             chunk_length: spec.length,
             max_span: range.max_chunk_span,
         });
     }
-
     if range.requires_alignment {
         let alignment = u64::from(range.min_granularity.max(1));
         if !spec.offset.is_multiple_of(alignment) {
@@ -603,7 +547,6 @@ pub(crate) fn provider_can_serve_chunk(
             });
         }
     }
-
     if let Some(budget) = &metadata.stream_budget {
         let burst_limit = budget
             .burst_bytes
@@ -616,10 +559,8 @@ pub(crate) fn provider_can_serve_chunk(
             });
         }
     }
-
     Ok(())
 }
-
 /// Errors returned by the multi-source fetch orchestrator.
 #[derive(Debug)]
 pub enum MultiSourceError {
@@ -655,7 +596,6 @@ pub enum MultiSourceError {
     /// Internal invariant violation (should not occur; indicates a logic bug).
     InternalInvariant(String),
 }
-
 impl fmt::Display for MultiSourceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -701,16 +641,12 @@ impl fmt::Display for MultiSourceError {
         }
     }
 }
-
 impl std::error::Error for MultiSourceError {}
-
 struct ChunkAttempt {
     spec: ChunkFetchSpec,
     attempts: usize,
 }
-
 type BoxedObserver = Box<dyn ChunkObserver + 'static>;
-
 pub async fn fetch_plan_parallel<F, Fut, E>(
     plan: &CarBuildPlan,
     providers: impl IntoIterator<Item = FetchProvider>,
@@ -724,7 +660,6 @@ where
 {
     fetch_plan_parallel_internal(plan, providers, fetcher, options, None).await
 }
-
 pub async fn fetch_plan_parallel_with_observer<F, Fut, E, O>(
     plan: &CarBuildPlan,
     providers: impl IntoIterator<Item = FetchProvider>,
@@ -740,7 +675,6 @@ where
 {
     fetch_plan_parallel_internal(plan, providers, fetcher, options, Some(Box::new(observer))).await
 }
-
 #[derive(Clone)]
 struct ProviderState {
     config: Arc<FetchProvider>,
@@ -753,7 +687,6 @@ struct ProviderState {
     successes: usize,
     disabled: bool,
 }
-
 impl std::fmt::Debug for ProviderState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProviderState")
@@ -769,7 +702,6 @@ impl std::fmt::Debug for ProviderState {
             .finish()
     }
 }
-
 impl ProviderState {
     fn new(config: FetchProvider) -> Self {
         let capacity = effective_capacity(&config);
@@ -794,20 +726,16 @@ impl ProviderState {
             disabled: false,
         }
     }
-
     fn capacity(&self) -> usize {
         self.capacity
     }
-
     fn is_available(&self) -> bool {
         !self.disabled && self.inflight < self.capacity()
     }
-
     fn record_success(&mut self) {
         self.successes += 1;
         self.consecutive_failures = 0;
     }
-
     fn record_failure(&mut self, threshold: usize) {
         self.failures += 1;
         self.consecutive_failures += 1;
@@ -815,7 +743,6 @@ impl ProviderState {
             self.disabled = true;
         }
     }
-
     fn into_report(self) -> ProviderReport {
         ProviderReport {
             provider: self.config,
@@ -824,7 +751,6 @@ impl ProviderState {
             disabled: self.disabled,
         }
     }
-
     fn runtime_stats(&self) -> ProviderStats {
         ProviderStats {
             inflight: self.inflight,
@@ -836,7 +762,6 @@ impl ProviderState {
         }
     }
 }
-
 struct JobOutcome<E> {
     provider_idx: usize,
     provider: Arc<FetchProvider>,
@@ -845,17 +770,14 @@ struct JobOutcome<E> {
     result: Result<ChunkResponse, E>,
     latency: std::time::Duration,
 }
-
 enum ProviderSelectionOutcome {
     Selected(usize),
     Unavailable,
     Ineligible(Vec<(usize, CapabilityMismatch)>),
 }
-
 fn has_active_providers(states: &[ProviderState]) -> bool {
     states.iter().any(|state| !state.disabled)
 }
-
 /// Snapshot of provider runtime statistics available to score policies.
 #[derive(Debug, Clone)]
 pub struct ProviderStats {
@@ -866,21 +788,18 @@ pub struct ProviderStats {
     pub consecutive_failures: usize,
     pub disabled: bool,
 }
-
 /// Context supplied to custom score policies.
 pub struct ProviderScoreContext<'a> {
     pub provider: &'a FetchProvider,
     pub stats: &'a ProviderStats,
     pub spec: &'a ChunkFetchSpec,
 }
-
 /// Decision returned by a score policy.
 #[derive(Debug, Clone, Copy)]
 pub struct ProviderScoreDecision {
     pub priority_delta: i64,
     pub allow: bool,
 }
-
 impl ProviderScoreDecision {
     #[must_use]
     pub fn allow() -> Self {
@@ -890,18 +809,15 @@ impl ProviderScoreDecision {
         }
     }
 }
-
 impl Default for ProviderScoreDecision {
     fn default() -> Self {
         Self::allow()
     }
 }
-
 /// Trait implemented by custom provider scoring policies.
 pub trait ScorePolicy: Send + Sync {
     fn score(&self, ctx: ProviderScoreContext<'_>) -> ProviderScoreDecision;
 }
-
 fn select_weighted_provider(
     states: &[ProviderState],
     credits: &mut [i64],
@@ -912,11 +828,9 @@ fn select_weighted_provider(
     if states.is_empty() || states.len() != credits.len() {
         return ProviderSelectionOutcome::Unavailable;
     }
-
     let serviceable_exists = states
         .iter()
         .any(|state| !state.disabled && provider_can_serve_chunk(&state.config, spec).is_ok());
-
     let mut choice: Option<usize> = None;
     let mut max_credit = i64::MIN;
     for (idx, state) in states.iter().enumerate() {
@@ -953,12 +867,10 @@ fn select_weighted_provider(
             choice = Some(idx);
         }
     }
-
     if let Some(idx) = choice {
         credits[idx] -= total_weight;
         return ProviderSelectionOutcome::Selected(idx);
     }
-
     if !serviceable_exists {
         let mut reasons = Vec::new();
         for (idx, state) in states.iter().enumerate() {
@@ -973,10 +885,8 @@ fn select_weighted_provider(
             return ProviderSelectionOutcome::Ineligible(reasons);
         }
     }
-
     ProviderSelectionOutcome::Unavailable
 }
-
 fn verify_chunk(
     spec: &ChunkFetchSpec,
     response: &ChunkResponse,
@@ -988,7 +898,6 @@ fn verify_chunk(
             actual: response.bytes.len(),
         });
     }
-
     if options.verify_digests {
         let digest = blake3::hash(&response.bytes);
         if digest.as_bytes() != &spec.digest {
@@ -998,10 +907,8 @@ fn verify_chunk(
             });
         }
     }
-
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 fn handle_attempt_failure(
     provider_states: &mut [ProviderState],
@@ -1019,9 +926,7 @@ fn handle_attempt_failure(
         let state = &mut provider_states[provider_idx];
         state.record_failure(failure_threshold);
     }
-
     chunk_last_error[spec.chunk_index] = Some(attempt_error.clone());
-
     if let Some(limit) = retry_limit
         && attempt >= limit
     {
@@ -1031,7 +936,6 @@ fn handle_attempt_failure(
             last_error: Box::new(attempt_error),
         });
     }
-
     if !has_active_providers(provider_states) {
         return Err(MultiSourceError::NoHealthyProviders {
             chunk_index: spec.chunk_index,
@@ -1039,7 +943,6 @@ fn handle_attempt_failure(
             last_error: Some(Box::new(attempt_error)),
         });
     }
-
     let retry = ChunkAttempt {
         spec,
         attempts: attempt,
@@ -1051,12 +954,10 @@ fn handle_attempt_failure(
     }
     Ok(())
 }
-
 struct DeliveryError {
     chunk_index: usize,
     error: ObserverError,
 }
-
 fn deliver_ready_chunks(
     observer: &mut dyn ChunkObserver,
     specs: &[ChunkFetchSpec],
@@ -1091,7 +992,6 @@ fn deliver_ready_chunks(
     }
     Ok(())
 }
-
 /// Fetches chunks described by `plan` using the supplied providers and fetcher.
 ///
 /// The orchestrator schedules chunk requests across providers using a weighted
@@ -1115,12 +1015,10 @@ where
     if provider_states.is_empty() {
         return Err(MultiSourceError::NoProviders);
     }
-
     let total_capacity: usize = provider_states.iter().map(ProviderState::capacity).sum();
     if total_capacity == 0 {
         return Err(MultiSourceError::NoProviders);
     }
-
     let mut global_limit = options.global_parallel_limit.unwrap_or(total_capacity);
     if global_limit == 0 {
         global_limit = total_capacity;
@@ -1129,12 +1027,10 @@ where
         global_limit = 1;
     }
     global_limit = global_limit.min(total_capacity).max(1);
-
     let chunk_specs = plan
         .try_chunk_fetch_specs()
         .map_err(MultiSourceError::InvalidPlan)?;
     let total_chunks = chunk_specs.len();
-
     let mut pending: VecDeque<ChunkAttempt> = chunk_specs
         .iter()
         .cloned()
@@ -1150,12 +1046,10 @@ where
                 .collect(),
         });
     }
-
     let mut chunk_results: Vec<Option<Vec<u8>>> = vec![None; total_chunks];
     let mut chunk_receipts: Vec<Option<ChunkReceipt>> = vec![None; total_chunks];
     let mut chunk_last_error: Vec<Option<AttemptError>> = vec![None; total_chunks];
     let mut next_delivery = 0usize;
-
     let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
     let fetcher = Arc::new(fetcher);
     let total_weight: i64 = provider_states
@@ -1168,7 +1062,6 @@ where
     let mut pending_front: Option<ChunkAttempt> = None;
     let retry_limit = options.per_chunk_retry_limit;
     let failure_threshold = options.provider_failure_threshold;
-
     while completed < total_chunks {
         while in_flight.len() < global_limit {
             let next_task = if let Some(task) = pending_front.take() {
@@ -1179,7 +1072,6 @@ where
             let Some(task) = next_task else {
                 break;
             };
-
             let selection = select_weighted_provider(
                 &provider_states,
                 &mut provider_credits,
@@ -1208,7 +1100,6 @@ where
                     });
                 }
             };
-
             let spec = task.spec.clone();
             let attempt_number = task.attempts + 1;
             provider_states[provider_idx].inflight += 1;
@@ -1217,10 +1108,8 @@ where
                     .bytes_inflight
                     .saturating_add(u64::from(spec.length));
             }
-
             let provider = provider_states[provider_idx].config.clone();
             let fetcher = Arc::clone(&fetcher);
-
             let future = async move {
                 let request = FetchRequest {
                     provider: Arc::clone(&provider),
@@ -1239,14 +1128,11 @@ where
                     latency,
                 }
             };
-
             in_flight.push(future.boxed());
         }
-
         if completed >= total_chunks {
             break;
         }
-
         if in_flight.is_empty() {
             let stalled = pending_front.take().or_else(|| pending.pop_front());
             if let Some(task) = stalled {
@@ -1267,16 +1153,13 @@ where
                 break;
             }
         }
-
         let Some(outcome) = in_flight.next().await else {
             continue;
         };
-
         let provider_idx = outcome.provider_idx;
         let chunk_index = outcome.spec.chunk_index;
         let attempt = outcome.attempt;
         let provider_id = outcome.provider.id().clone();
-
         {
             let state = &mut provider_states[provider_idx];
             if state.inflight == 0 {
@@ -1291,7 +1174,6 @@ where
                     .saturating_sub(u64::from(outcome.spec.length));
             }
         }
-
         match outcome.result {
             Ok(response) => match verify_chunk(&outcome.spec, &response, &options) {
                 Ok(()) => {
@@ -1373,13 +1255,11 @@ where
             }
         }
     }
-
     if completed != total_chunks {
         return Err(MultiSourceError::InternalInvariant(format!(
             "fetch completed {completed} of {total_chunks} chunks"
         )));
     }
-
     let chunks: Vec<Vec<u8>> = chunk_results
         .into_iter()
         .enumerate()
@@ -1391,7 +1271,6 @@ where
             })
         })
         .collect::<Result<_, _>>()?;
-
     let receipts: Vec<ChunkReceipt> = chunk_receipts
         .into_iter()
         .enumerate()
@@ -1403,19 +1282,16 @@ where
             })
         })
         .collect::<Result<_, _>>()?;
-
     let provider_reports = provider_states
         .into_iter()
         .map(ProviderState::into_report)
         .collect();
-
     Ok(FetchOutcome {
         chunks,
         chunk_receipts: receipts,
         provider_reports,
     })
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1426,15 +1302,11 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
         },
     };
-
     use futures::{executor::block_on, future::poll_fn};
     use sorafs_chunker::ChunkProfile;
-
     use super::*;
-
     #[derive(Debug, Clone)]
     struct TestError(&'static str);
-
     #[test]
     fn transport_hint_protocol_kind_prefers_identifier() {
         let hint = TransportHint {
@@ -1444,7 +1316,6 @@ mod tests {
         };
         assert_eq!(hint.protocol_kind(), TransportProtocolKind::SoraNetRelay);
     }
-
     #[test]
     fn transport_hint_protocol_kind_matches_label_variants() {
         let quic_hint = TransportHint {
@@ -1453,7 +1324,6 @@ mod tests {
             priority: 0,
         };
         assert_eq!(quic_hint.protocol_kind(), TransportProtocolKind::QuicStream);
-
         let torii_hint = TransportHint {
             protocol: "torii_http_range".to_owned(),
             protocol_id: 0,
@@ -1463,7 +1333,6 @@ mod tests {
             torii_hint.protocol_kind(),
             TransportProtocolKind::ToriiHttpRange
         );
-
         let vendor_hint = TransportHint {
             protocol: "vendor_reserved".to_owned(),
             protocol_id: 0,
@@ -1473,7 +1342,6 @@ mod tests {
             vendor_hint.protocol_kind(),
             TransportProtocolKind::VendorReserved
         );
-
         let unknown_hint = TransportHint {
             protocol: "custom".to_owned(),
             protocol_id: 42,
@@ -1481,19 +1349,15 @@ mod tests {
         };
         assert_eq!(unknown_hint.protocol_kind(), TransportProtocolKind::Unknown);
     }
-
     impl fmt::Display for TestError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str(self.0)
         }
     }
-
     impl Error for TestError {}
-
     fn plan_for_payload(payload: &[u8]) -> CarBuildPlan {
         CarBuildPlan::single_file(payload).expect("plan")
     }
-
     fn record_max(counter: &AtomicUsize, value: usize) {
         let mut current = counter.load(Ordering::SeqCst);
         while value > current {
@@ -1503,7 +1367,6 @@ mod tests {
             }
         }
     }
-
     async fn cooperative_yield() {
         let mut yielded = false;
         poll_fn(|cx| {
@@ -1517,7 +1380,6 @@ mod tests {
         })
         .await;
     }
-
     #[test]
     fn provider_capacity_respects_stream_budget() {
         let mut metadata = ProviderMetadata::new();
@@ -1532,7 +1394,6 @@ mod tests {
         let state = ProviderState::new(provider);
         assert_eq!(state.capacity(), 1);
     }
-
     #[test]
     fn orchestrator_errors_when_all_providers_incompatible() {
         let payload: Vec<u8> = (0..=255u8).cycle().take(8 * 1024).collect();
@@ -1562,14 +1423,12 @@ mod tests {
                 Ok::<ChunkResponse, TestError>(ChunkResponse::new(bytes))
             }
         };
-
         let result = block_on(fetch_plan_parallel(
             &plan,
             providers,
             fetcher,
             FetchOptions::default(),
         ));
-
         match result {
             Err(MultiSourceError::NoCompatibleProviders {
                 chunk_index,
@@ -1590,7 +1449,6 @@ mod tests {
             other => panic!("expected NoCompatibleProviders error, received {other:?}"),
         }
     }
-
     #[test]
     fn orchestrator_prefers_compatible_provider_when_mixed() {
         let payload: Vec<u8> = (0..=255u8).cycle().take(32 * 1024).collect();
@@ -1601,7 +1459,6 @@ mod tests {
             .map(|chunk| chunk.length)
             .expect("plan has chunks");
         assert!(chunk_len > 1, "chunk length must exceed one byte");
-
         let mut limited_metadata = ProviderMetadata::new();
         limited_metadata.range_capability = Some(RangeCapability {
             max_chunk_span: chunk_len - 1,
@@ -1611,7 +1468,6 @@ mod tests {
             supports_merkle_proof: false,
         });
         let limited = FetchProvider::new("limited").with_metadata(limited_metadata);
-
         let mut full_metadata = ProviderMetadata::new();
         full_metadata.range_capability = Some(RangeCapability {
             max_chunk_span: chunk_len * 2,
@@ -1621,7 +1477,6 @@ mod tests {
             supports_merkle_proof: false,
         });
         let compatible = FetchProvider::new("compatible").with_metadata(full_metadata);
-
         let providers = vec![limited, compatible];
         let shared_payload = Arc::new(payload.clone());
         let fetcher = move |req: FetchRequest| {
@@ -1633,7 +1488,6 @@ mod tests {
                 Ok::<ChunkResponse, TestError>(ChunkResponse::new(bytes))
             }
         };
-
         let outcome = block_on(fetch_plan_parallel(
             &plan,
             providers,
@@ -1641,7 +1495,6 @@ mod tests {
             FetchOptions::default(),
         ))
         .expect("fetch succeeds with compatible provider");
-
         let limited_report = outcome
             .provider_reports
             .iter()
@@ -1650,7 +1503,6 @@ mod tests {
         assert_eq!(limited_report.successes, 0);
         assert_eq!(limited_report.failures, 0);
         assert!(!limited_report.disabled);
-
         let compatible_report = outcome
             .provider_reports
             .iter()
@@ -1659,12 +1511,10 @@ mod tests {
         assert_eq!(compatible_report.successes, plan.chunks.len());
         assert!(!compatible_report.disabled);
     }
-
     #[test]
     fn orchestrator_errors_when_provider_missing_range_capability() {
         let payload: Vec<u8> = (0..=255u8).cycle().take(8 * 1024).collect();
         let plan = plan_for_payload(&payload);
-
         let mut metadata = ProviderMetadata::new();
         metadata.stream_budget = Some(StreamBudget {
             max_in_flight: 1,
@@ -1672,7 +1522,6 @@ mod tests {
             burst_bytes: Some(1_000_000),
         });
         let providers = vec![FetchProvider::new("fallback").with_metadata(metadata)];
-
         let shared_payload = Arc::new(payload.clone());
         let fetcher = move |req: FetchRequest| {
             let payload = Arc::clone(&shared_payload);
@@ -1683,7 +1532,6 @@ mod tests {
                 Ok::<ChunkResponse, TestError>(ChunkResponse::new(bytes))
             }
         };
-
         match block_on(fetch_plan_parallel(
             &plan,
             providers,
@@ -1703,7 +1551,6 @@ mod tests {
             other => panic!("expected NoCompatibleProviders error, received {other:?}"),
         }
     }
-
     #[test]
     fn orchestrator_falls_back_when_stream_budget_rejects_primary() {
         let payload: Vec<u8> = (0..=255u8).cycle().take(32 * 1024).collect();
@@ -1713,7 +1560,6 @@ mod tests {
             .first()
             .map(|chunk| chunk.length)
             .expect("plan has chunks");
-
         let mut limited_metadata = ProviderMetadata::new();
         limited_metadata.range_capability = Some(RangeCapability {
             max_chunk_span: chunk_len,
@@ -1727,7 +1573,6 @@ mod tests {
             max_bytes_per_sec: u64::from(chunk_len - 1),
             burst_bytes: Some(u64::from(chunk_len - 1)),
         });
-
         let mut healthy_metadata = ProviderMetadata::new();
         healthy_metadata.range_capability = Some(RangeCapability {
             max_chunk_span: chunk_len * 2,
@@ -1741,14 +1586,12 @@ mod tests {
             max_bytes_per_sec: u64::from(chunk_len) * 8,
             burst_bytes: None,
         });
-
         let providers = vec![
             FetchProvider::new("limited").with_metadata(limited_metadata),
             FetchProvider::new("healthy")
                 .with_max_concurrent_chunks(NonZeroUsize::new(2).unwrap())
                 .with_metadata(healthy_metadata),
         ];
-
         let shared_payload = Arc::new(payload.clone());
         let fetcher = move |req: FetchRequest| {
             let payload = Arc::clone(&shared_payload);
@@ -1759,7 +1602,6 @@ mod tests {
                 Ok::<ChunkResponse, TestError>(ChunkResponse::new(bytes))
             }
         };
-
         let outcome = block_on(fetch_plan_parallel(
             &plan,
             providers,
@@ -1767,7 +1609,6 @@ mod tests {
             FetchOptions::default(),
         ))
         .expect("fetch succeeds");
-
         let limited_report = outcome
             .provider_reports
             .iter()
@@ -1778,18 +1619,15 @@ mod tests {
             .iter()
             .find(|report| report.provider.id().as_str() == "healthy")
             .expect("healthy provider present");
-
         assert_eq!(limited_report.successes, 0);
         assert_eq!(limited_report.failures, 0);
         assert!(!limited_report.disabled);
         assert_eq!(healthy_report.successes, plan.chunks.len());
         assert_eq!(healthy_report.failures, 0);
-
         for receipt in outcome.chunk_receipts {
             assert_eq!(receipt.provider.as_str(), "healthy");
         }
     }
-
     #[test]
     fn orchestrator_reports_length_alignment_mismatch() {
         let payload: Vec<u8> = (0u8..12u8).collect();
@@ -1804,7 +1642,6 @@ mod tests {
             "chunk length {chunk_len} too small to trigger alignment mismatch"
         );
         let required_alignment = chunk_len.saturating_sub(1).max(2);
-
         let mut metadata = ProviderMetadata::new();
         metadata.range_capability = Some(RangeCapability {
             max_chunk_span: chunk_len,
@@ -1813,7 +1650,6 @@ mod tests {
             requires_alignment: true,
             supports_merkle_proof: false,
         });
-
         let providers = vec![FetchProvider::new("aligned").with_metadata(metadata)];
         let shared_payload = Arc::new(payload.clone());
         let fetcher = move |req: FetchRequest| {
@@ -1824,14 +1660,12 @@ mod tests {
                 Ok::<ChunkResponse, TestError>(ChunkResponse::new(payload[start..end].to_vec()))
             }
         };
-
         let result = block_on(fetch_plan_parallel(
             &plan,
             providers,
             fetcher,
             FetchOptions::default(),
         ));
-
         match result {
             Err(MultiSourceError::NoCompatibleProviders {
                 chunk_index,
@@ -1855,7 +1689,6 @@ mod tests {
             other => panic!("expected NoCompatibleProviders error, received {other:?}"),
         }
     }
-
     #[test]
     fn provider_reports_offset_alignment_mismatch() {
         let chunk_offset = 6u64;
@@ -1867,7 +1700,6 @@ mod tests {
             digest: [0xAA; 32],
             taikai_segment_hint: None,
         };
-
         let mut metadata = ProviderMetadata::new();
         metadata.range_capability = Some(RangeCapability {
             max_chunk_span: chunk_length,
@@ -1876,7 +1708,6 @@ mod tests {
             requires_alignment: true,
             supports_merkle_proof: false,
         });
-
         let provider = FetchProvider::new("offset").with_metadata(metadata);
         match provider_can_serve_chunk(&provider, &spec) {
             Err(CapabilityMismatch::OffsetMisaligned {
@@ -1889,7 +1720,6 @@ mod tests {
             other => panic!("expected offset-alignment mismatch, received {other:?}"),
         }
     }
-
     #[test]
     fn stream_budget_max_in_flight_limits_parallelism() {
         let payload: Vec<u8> = (0..0x100000u32).map(|value| (value % 251) as u8).collect();
@@ -1904,7 +1734,6 @@ mod tests {
             .map(|chunk| chunk.length)
             .max()
             .expect("at least one chunk present");
-
         let mut metadata = ProviderMetadata::new();
         metadata.range_capability = Some(RangeCapability {
             max_chunk_span: max_chunk_len,
@@ -1918,7 +1747,6 @@ mod tests {
             max_bytes_per_sec: 512 * 1024,
             burst_bytes: Some(512 * 1024),
         });
-
         let provider = FetchProvider::new("throttled")
             .with_max_concurrent_chunks(NonZeroUsize::new(4).unwrap())
             .with_metadata(metadata);
@@ -1948,7 +1776,6 @@ mod tests {
                 Ok::<ChunkResponse, TestError>(ChunkResponse::new(bytes))
             }
         };
-
         let outcome = block_on(fetch_plan_parallel(
             &plan,
             vec![provider],
@@ -1956,14 +1783,12 @@ mod tests {
             FetchOptions::default(),
         ))
         .expect("fetch succeeds");
-
         assert_eq!(outcome.chunks.len(), plan.chunks.len());
         assert!(
             peak.load(Ordering::SeqCst) <= 1,
             "observed more than one in-flight chunk"
         );
     }
-
     #[test]
     fn weighted_scheduler_respects_provider_weights() {
         let chunk_count = 8;
@@ -1972,7 +1797,6 @@ mod tests {
         for idx in 0..chunk_count * chunk_len {
             payload.push((idx % 251) as u8);
         }
-
         let profile = ChunkProfile {
             min_size: chunk_len,
             target_size: chunk_len,
@@ -1982,7 +1806,6 @@ mod tests {
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, profile).expect("weighted plan");
         assert_eq!(plan.chunks.len(), chunk_count);
-
         let providers = vec![
             FetchProvider::new("heavy")
                 .with_max_concurrent_chunks(NonZeroUsize::new(2).unwrap())
@@ -1991,7 +1814,6 @@ mod tests {
                 .with_max_concurrent_chunks(NonZeroUsize::new(2).unwrap())
                 .with_weight(NonZeroU32::new(1).unwrap()),
         ];
-
         let shared_payload = Arc::new(payload.clone());
         let outcome = block_on(fetch_plan_parallel(
             &plan,
@@ -2007,7 +1829,6 @@ mod tests {
             FetchOptions::default(),
         ))
         .expect("fetch succeeds");
-
         let heavy = outcome
             .provider_reports
             .iter()
@@ -2018,7 +1839,6 @@ mod tests {
             .iter()
             .find(|report| report.provider.id().as_str() == "light")
             .expect("light provider present");
-
         assert_eq!(heavy.successes + light.successes, chunk_count);
         assert!(
             heavy.successes >= light.successes,
@@ -2029,7 +1849,6 @@ mod tests {
         assert!(heavy.successes >= 4, "heavy successes {}", heavy.successes);
         assert!(light.successes >= 1, "light successes {}", light.successes);
     }
-
     #[test]
     fn multi_provider_fetch_succeeds() {
         let payload: Vec<u8> = (0..=255u8).cycle().take(32 * 1024).collect();
@@ -2048,7 +1867,6 @@ mod tests {
                 Ok::<ChunkResponse, TestError>(ChunkResponse::new(bytes))
             }
         };
-
         let outcome = block_on(fetch_plan_parallel(
             &plan,
             providers,
@@ -2056,14 +1874,12 @@ mod tests {
             FetchOptions::default(),
         ))
         .expect("fetch succeeds");
-
         assert_eq!(outcome.chunks.len(), plan.chunks.len());
         let mut assembled = Vec::new();
         for chunk in &outcome.chunks {
             assembled.extend_from_slice(chunk);
         }
         assert_eq!(assembled, payload);
-
         let total_successes: usize = outcome
             .provider_reports
             .iter()
@@ -2072,9 +1888,7 @@ mod tests {
         assert_eq!(total_successes, plan.chunks.len());
         assert_eq!(outcome.chunk_receipts.len(), plan.chunks.len());
     }
-
     struct DenyAlphaPolicy;
-
     impl ScorePolicy for DenyAlphaPolicy {
         fn score(&self, ctx: ProviderScoreContext<'_>) -> ProviderScoreDecision {
             if ctx.provider.id().as_str() == "alpha" {
@@ -2087,7 +1901,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn score_policy_can_filter_providers() {
         let payload: Vec<u8> = (0..=255u8).cycle().take(16 * 1024).collect();
@@ -2102,22 +1915,18 @@ mod tests {
                 Ok::<ChunkResponse, TestError>(ChunkResponse::new(payload[start..end].to_vec()))
             }
         };
-
         let options = FetchOptions {
             score_policy: Some(Arc::new(DenyAlphaPolicy)),
             ..FetchOptions::default()
         };
-
         let outcome = block_on(fetch_plan_parallel(&plan, providers, fetcher, options))
             .expect("fetch succeeds with filtered providers");
-
         let beta_report = outcome
             .provider_reports
             .iter()
             .find(|report| report.provider.id().as_str() == "beta")
             .expect("beta provider present");
         assert_eq!(beta_report.successes, plan.chunks.len());
-
         let alpha_report = outcome
             .provider_reports
             .iter()
@@ -2127,7 +1936,6 @@ mod tests {
         assert_eq!(alpha_report.failures, 0);
         assert!(!alpha_report.disabled, "policy should skip before failure");
     }
-
     #[test]
     fn orchestrator_failover_to_backup_provider() {
         let payload: Vec<u8> = (0..=255u8).cycle().take(16 * 1024).collect();
@@ -2150,7 +1958,6 @@ mod tests {
                 }
             }
         };
-
         let outcome = block_on(fetch_plan_parallel(
             &plan,
             providers,
@@ -2158,14 +1965,12 @@ mod tests {
             FetchOptions::default(),
         ))
         .expect("backup provider should complete fetch");
-
         let backup_report = outcome
             .provider_reports
             .iter()
             .find(|report| report.provider.id().as_str() == "backup")
             .expect("backup present");
         assert_eq!(backup_report.successes, plan.chunks.len());
-
         let primary_report = outcome
             .provider_reports
             .iter()
@@ -2173,7 +1978,6 @@ mod tests {
             .expect("primary present");
         assert!(primary_report.failures > 0);
     }
-
     #[test]
     fn digest_mismatch_triggers_error_after_retries() {
         let payload: Vec<u8> = (0..=255u8).cycle().take(8 * 1024).collect();
@@ -2195,16 +1999,13 @@ mod tests {
                 Ok::<ChunkResponse, TestError>(ChunkResponse::new(bytes))
             }
         };
-
         let options = FetchOptions {
             per_chunk_retry_limit: Some(2),
             provider_failure_threshold: 0,
             ..FetchOptions::default()
         };
-
         let result =
             block_on(fetch_plan_parallel(&plan, providers, fetcher, options)).expect_err("fails");
-
         match result {
             MultiSourceError::ExhaustedRetries { last_error, .. } => match last_error.failure {
                 AttemptFailure::InvalidChunk(ChunkVerificationError::DigestMismatch { .. }) => {}
@@ -2213,16 +2014,13 @@ mod tests {
             other => panic!("unexpected error variant: {other:?}"),
         }
     }
-
     #[test]
     fn streaming_observer_receives_chunks_in_order() {
         let payload = vec![0x5a; 8192];
         let plan = plan_for_payload(&payload);
-
         let shared_payload = Arc::new(payload.clone());
         let deliveries = Arc::new(Mutex::new(Vec::new()));
         let deliveries_for_observer = Arc::clone(&deliveries);
-
         let outcome = block_on(fetch_plan_parallel_with_observer(
             &plan,
             vec![FetchProvider::new("alpha")],
@@ -2249,19 +2047,16 @@ mod tests {
             },
         ))
         .expect("fetch succeeds");
-
         let expected: Vec<usize> = (0..outcome.chunks.len()).collect();
         let observed = deliveries.lock().expect("lock deliveries").clone();
         assert_eq!(observed, expected);
     }
-
     #[test]
     fn streaming_observer_failure_propagates() {
         let payload = vec![0x1f; 2 * 256 * 1024];
         let plan = plan_for_payload(&payload);
         assert!(plan.chunks.len() > 1, "expected multiple chunks");
         let shared_payload = Arc::new(payload.clone());
-
         let error = block_on(fetch_plan_parallel_with_observer(
             &plan,
             vec![FetchProvider::new("alpha")],
@@ -2287,7 +2082,6 @@ mod tests {
             },
         ))
         .expect_err("observer error should propagate");
-
         match error {
             MultiSourceError::ObserverFailed {
                 chunk_index,

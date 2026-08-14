@@ -1,5 +1,4 @@
 //! Ensure every syscall in the ABI list has a symbolic name mapping.
-
 #[test]
 fn every_abi_syscall_has_a_name() {
     let list = ivm::syscalls::abi_syscall_list();

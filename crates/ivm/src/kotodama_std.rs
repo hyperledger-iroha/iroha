@@ -6,7 +6,6 @@
 //! intrinsics (for example, ballot verification and the vendor bridge wrappers)
 //! that lower to SCALLs with Norito TLVs. These helpers
 //! remain useful for tests and for building TLVs from host code.
-
 use crate::{
     IVM, Memory, PointerType,
     host::IVMHost,
@@ -14,7 +13,6 @@ use crate::{
     schema_registry::{DefaultRegistry, SchemaRegistry},
     syscalls,
 };
-
 /// Build a TLV with type `NoritoBytes` for the given payload and place it in
 /// the VM INPUT region. Returns the pointer to the TLV.
 pub fn input_tlv_norito_bytes(vm: &mut IVM, payload: &[u8]) -> u64 {
@@ -27,7 +25,6 @@ pub fn input_tlv_norito_bytes(vm: &mut IVM, payload: &[u8]) -> u64 {
     tlv.extend_from_slice(&h);
     vm.alloc_input_tlv(&tlv).expect("alloc input tlv")
 }
-
 /// Write a TLV into INPUT starting at offset 0 and return its fixed pointer.
 /// This variant is useful when programs expect the TLV at `Memory::INPUT_START`.
 pub fn preload_input_tlv(vm: &mut IVM, payload: &[u8]) -> u64 {
@@ -41,18 +38,15 @@ pub fn preload_input_tlv(vm: &mut IVM, payload: &[u8]) -> u64 {
     vm.memory.preload_input(0, &tlv).expect("preload input tlv");
     Memory::INPUT_START
 }
-
 /// Emit a single SCALL instruction into the given code buffer.
 pub fn emit_scall(code: &mut Vec<u8>, number: u32) {
     let word = crate::encoding::wide::encode_sys(wide::system::SCALL, (number & 0xFF) as u8);
     code.extend_from_slice(&word.to_le_bytes());
 }
-
 /// Emit a HALT instruction into the given code buffer.
 pub fn emit_halt(code: &mut Vec<u8>) {
     code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
 }
-
 /// Convenience wrapper: perform a ZK verify syscall by building a NoritoBytes TLV
 /// from `env_bytes`, placing it into INPUT, and invoking the host syscall.
 /// Returns the value of `r10` after the syscall (1 = success, 0 = failure).
@@ -68,7 +62,6 @@ pub fn zk_verify_with_env(
         .expect("syscall ok");
     vm.register(10)
 }
-
 /// Vendor bridge: enqueue a built-in instruction by passing a Norito-encoded
 /// `InstructionBox` in a `NoritoBytes` TLV via INPUT and invoking the vendor
 /// syscall. Returns the host gas cost (0 for `DefaultHost`; CoreHost returns
@@ -85,7 +78,6 @@ pub fn vendor_execute_instruction_bytes(
         .expect("syscall ok");
     gas_before.saturating_sub(vm.remaining_gas())
 }
-
 /// Vendor bridge helper for queries. Accepts Norito-encoded `QueryRequest`
 /// bytes and performs `SMARTCONTRACT_EXECUTE_QUERY`.
 pub fn vendor_execute_query_bytes(host: &mut dyn IVMHost, vm: &mut IVM, query_bytes: &[u8]) -> u64 {
@@ -96,7 +88,6 @@ pub fn vendor_execute_query_bytes(host: &mut dyn IVMHost, vm: &mut IVM, query_by
         .expect("syscall ok");
     gas_before.saturating_sub(vm.remaining_gas())
 }
-
 /// ZK batch verify helper: serialize a slice of `OpenVerifyEnvelope` and invoke
 /// the `ZK_VERIFY_BATCH` syscall. Returns `(status, out_ptr)` where `status`
 /// is the value left in `r11` and `out_ptr` is the pointer returned in `r10`
@@ -120,21 +111,17 @@ pub fn zk_verify_batch_envs(
         .expect("syscall ok");
     (vm.register(11), vm.register(10))
 }
-
 /// Helper: encode an Order JSON payload into Norito bytes using the default registry.
 pub fn encode_order_json(json: &[u8]) -> Option<Vec<u8>> {
     DefaultRegistry::new().encode_json("Order", json)
 }
-
 /// Helper: decode Norito bytes (Order) into minified JSON using the default registry.
 pub fn decode_order_to_json(bytes: &[u8]) -> Option<Vec<u8>> {
     DefaultRegistry::new().decode_to_json("Order", bytes)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn order_helpers_roundtrip() {
         let j = br#"{"qty":10, "side":"buy"}"#;
@@ -143,7 +130,6 @@ mod tests {
         let s = std::str::from_utf8(&dec).unwrap();
         assert!(s.contains("qty") && s.contains("side"));
     }
-
     #[test]
     fn order_decoder_rejects_another_registered_schema() {
         let bytes = DefaultRegistry::new()

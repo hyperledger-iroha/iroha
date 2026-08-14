@@ -30,17 +30,14 @@ fn sample_appeal_finance_settlement_receipt() -> SoraFsAppealFinanceSettlementRe
         configured_signer_count: 1,
     }
 }
-
 #[test]
 fn governance_payload_accepts_appeal_finance_settlement_receipt() {
     let receipt = sample_appeal_finance_settlement_receipt();
     let payload = GovernanceLogPayloadV1::AppealFinanceSettlementReceipt(receipt);
-
     payload
         .validate(1_800_000_032)
         .expect("settlement receipt payload validates");
 }
-
 #[test]
 fn appeal_finance_settlement_receipt_accepts_canonical_bounds_and_applied_states() {
     let mut bounded = sample_appeal_finance_settlement_receipt();
@@ -57,7 +54,6 @@ fn appeal_finance_settlement_receipt_accepts_canonical_bounds_and_applied_states
         "a".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_CONFIG_VERSION_MAX_BYTES_V1 - 3)
     );
     bounded.validate().expect("maximum canonical bounds");
-
     for (step, reconciliation, lifecycle) in [
         ("drawdown_non_refund", "awaiting_refund_cancel", "locked"),
         ("drawdown_non_refund", "settled", "drawn_down"),
@@ -72,7 +68,6 @@ fn appeal_finance_settlement_receipt_accepts_canonical_bounds_and_applied_states
             .unwrap_or_else(|error| panic!("{step}/{reconciliation}/{lifecycle}: {error}"));
     }
 }
-
 #[test]
 fn appeal_finance_settlement_receipt_rejects_noncanonical_visible_identifiers() {
     fn assert_invalid_label(
@@ -90,7 +85,6 @@ fn appeal_finance_settlement_receipt_rejects_noncanonical_visible_identifiers() 
             )
         );
     }
-
     let mut receipt = sample_appeal_finance_settlement_receipt();
     receipt.case_id = "case 42".to_string();
     assert_invalid_label(
@@ -98,7 +92,6 @@ fn appeal_finance_settlement_receipt_rejects_noncanonical_visible_identifiers() 
         "case_id",
         APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1,
     );
-
     let mut receipt = sample_appeal_finance_settlement_receipt();
     receipt.round_id = Some("round-é".to_string());
     assert_invalid_label(
@@ -106,7 +99,6 @@ fn appeal_finance_settlement_receipt_rejects_noncanonical_visible_identifiers() 
         "round_id",
         APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1,
     );
-
     let mut receipt = sample_appeal_finance_settlement_receipt();
     receipt.payer_account = "payer#account".to_string();
     assert_invalid_label(
@@ -114,7 +106,6 @@ fn appeal_finance_settlement_receipt_rejects_noncanonical_visible_identifiers() 
         "payer_account",
         APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1,
     );
-
     let mut receipt = sample_appeal_finance_settlement_receipt();
     receipt.destination_account =
         "d".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1 + 1);
@@ -123,7 +114,6 @@ fn appeal_finance_settlement_receipt_rejects_noncanonical_visible_identifiers() 
         "destination_account",
         APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1,
     );
-
     let mut receipt = sample_appeal_finance_settlement_receipt();
     receipt.release_authority_account = Some("release\nauthority".to_string());
     assert_invalid_label(
@@ -131,7 +121,6 @@ fn appeal_finance_settlement_receipt_rejects_noncanonical_visible_identifiers() 
         "release_authority_account",
         APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1,
     );
-
     let mut receipt = sample_appeal_finance_settlement_receipt();
     receipt.required_authority = " authority".to_string();
     assert_invalid_label(
@@ -140,7 +129,6 @@ fn appeal_finance_settlement_receipt_rejects_noncanonical_visible_identifiers() 
         APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1,
     );
 }
-
 #[test]
 fn appeal_finance_settlement_receipt_requires_canonical_config_version() {
     for version in [
@@ -155,7 +143,6 @@ fn appeal_finance_settlement_receipt_requires_canonical_config_version() {
             .validate()
             .unwrap_or_else(|error| panic!("{version}: {error}"));
     }
-
     for version in [
         "baseline-v0",
         "baseline-v01",
@@ -177,7 +164,6 @@ fn appeal_finance_settlement_receipt_requires_canonical_config_version() {
             "{version}"
         );
     }
-
     let mut oversized = sample_appeal_finance_settlement_receipt();
     oversized.appeal_finance_config_version = format!(
         "{}-v1",
@@ -192,7 +178,6 @@ fn appeal_finance_settlement_receipt_requires_canonical_config_version() {
         )
     );
 }
-
 #[test]
 fn appeal_finance_settlement_receipt_rejects_unfinalized_or_unknown_states() {
     let mut receipt = sample_appeal_finance_settlement_receipt();
@@ -201,7 +186,6 @@ fn appeal_finance_settlement_receipt_rejects_unfinalized_or_unknown_states() {
         receipt.validate(),
         Err(SoraFsAppealFinanceSettlementReceiptValidationError::UnsupportedSubmittedStep)
     );
-
     for status in ["pending_forwarder_submission", "mismatch", "unknown"] {
         let mut receipt = sample_appeal_finance_settlement_receipt();
         receipt.reconciliation_status = status.to_string();
@@ -213,7 +197,6 @@ fn appeal_finance_settlement_receipt_rejects_unfinalized_or_unknown_states() {
                 "{status}"
             );
     }
-
     for status in ["funded", "expired", "unknown"] {
         let mut receipt = sample_appeal_finance_settlement_receipt();
         receipt.observed_lifecycle_status = status.to_string();
@@ -223,7 +206,6 @@ fn appeal_finance_settlement_receipt_rejects_unfinalized_or_unknown_states() {
             "{status}"
         );
     }
-
     for (step, reconciliation, lifecycle) in [
         ("drawdown_non_refund", "settled", "locked"),
         (
@@ -245,7 +227,6 @@ fn appeal_finance_settlement_receipt_rejects_unfinalized_or_unknown_states() {
         );
     }
 }
-
 #[test]
 fn appeal_finance_settlement_receipt_rejects_zero_timestamp_and_panel() {
     let mut receipt = sample_appeal_finance_settlement_receipt();
@@ -254,7 +235,6 @@ fn appeal_finance_settlement_receipt_rejects_zero_timestamp_and_panel() {
         receipt.validate(),
         Err(SoraFsAppealFinanceSettlementReceiptValidationError::MissingGeneratedAt)
     );
-
     let mut receipt = sample_appeal_finance_settlement_receipt();
     receipt.panel_size = 0;
     assert_eq!(
@@ -262,7 +242,6 @@ fn appeal_finance_settlement_receipt_rejects_zero_timestamp_and_panel() {
         Err(SoraFsAppealFinanceSettlementReceiptValidationError::InvalidPanelSize)
     );
 }
-
 #[test]
 fn appeal_finance_settlement_receipt_requires_finalized_block_cursor() {
     let mut receipt = sample_appeal_finance_settlement_receipt();
@@ -271,7 +250,6 @@ fn appeal_finance_settlement_receipt_requires_finalized_block_cursor() {
         receipt.validate(),
         Err(SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinalizedBlockHeight)
     );
-
     let mut receipt = sample_appeal_finance_settlement_receipt();
     receipt.finalized_block_hash = [0; 32];
     assert_eq!(
@@ -279,20 +257,17 @@ fn appeal_finance_settlement_receipt_requires_finalized_block_cursor() {
         Err(SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinalizedBlockHash)
     );
 }
-
 #[test]
 fn appeal_finance_settlement_receipt_canonical_digest_binds_finalized_cursor() {
     let receipt = sample_appeal_finance_settlement_receipt();
     let encoded = norito::to_bytes(&receipt).expect("encode receipt");
     let digest = blake3::hash(&encoded);
-
     let mut changed_height = receipt.clone();
     changed_height.finalized_block_height += 1;
     let changed_height_encoded =
         norito::to_bytes(&changed_height).expect("encode changed-height receipt");
     assert_ne!(changed_height_encoded, encoded);
     assert_ne!(blake3::hash(&changed_height_encoded), digest);
-
     let mut changed_hash = receipt;
     changed_hash.finalized_block_hash[0] ^= 0x01;
     let changed_hash_encoded =
@@ -300,7 +275,6 @@ fn appeal_finance_settlement_receipt_canonical_digest_binds_finalized_cursor() {
     assert_ne!(changed_hash_encoded, encoded);
     assert_ne!(blake3::hash(&changed_hash_encoded), digest);
 }
-
 fn sample_orderbook_settlement_receipt() -> SettlementReceiptV1 {
     SettlementReceiptV1 {
         version: crate::SETTLEMENT_RECEIPT_VERSION_V1,
@@ -327,22 +301,18 @@ fn sample_orderbook_settlement_receipt() -> SettlementReceiptV1 {
         },
     }
 }
-
 #[test]
 fn governance_payload_accepts_orderbook_settlement_receipt() {
     let receipt = sample_orderbook_settlement_receipt();
     let payload = GovernanceLogPayloadV1::OrderbookSettlementReceipt(receipt);
-
     payload
         .validate(1_800_000_033)
         .expect("orderbook settlement receipt payload validates");
 }
-
 #[test]
 fn appeal_finance_settlement_receipt_rejects_invalid_reconciliation_digest() {
     let mut receipt = sample_appeal_finance_settlement_receipt();
     receipt.reconciliation_digest_hex = "AA".repeat(32);
-
     let err = receipt
         .validate()
         .expect_err("uppercase digest rejected as non-canonical");
@@ -354,7 +324,6 @@ fn appeal_finance_settlement_receipt_rejects_invalid_reconciliation_digest() {
         }
     );
 }
-
 #[test]
 fn appeal_finance_settlement_receipt_requires_exact_lowercase_hex_fields() {
     fn assert_invalid_hex(receipt: SoraFsAppealFinanceSettlementReceiptV1, field: &'static str) {
@@ -368,25 +337,20 @@ fn appeal_finance_settlement_receipt_requires_exact_lowercase_hex_fields() {
             )
         );
     }
-
     let mut receipt = sample_appeal_finance_settlement_receipt();
     receipt.escrow_id_hex = "AA".repeat(32);
     assert_invalid_hex(receipt, "escrow_id_hex");
-
     let mut receipt = sample_appeal_finance_settlement_receipt();
     receipt.tx_hash_hex = "2".repeat(63);
     assert_invalid_hex(receipt, "tx_hash_hex");
-
     let mut receipt = sample_appeal_finance_settlement_receipt();
     receipt.reconciliation_digest_hex = format!("{}g", "3".repeat(63));
     assert_invalid_hex(receipt, "reconciliation_digest_hex");
 }
-
 #[test]
 fn appeal_finance_settlement_receipt_rejects_zero_policy_digest() {
     let mut receipt = sample_appeal_finance_settlement_receipt();
     receipt.appeal_finance_policy_digest = [0; 32];
-
     let err = receipt
         .validate()
         .expect_err("zero governed policy digest rejected");

@@ -1,14 +1,10 @@
 //! Schema metadata test for tuple structs and unnamed field handling.
-
 mod common;
-
 use common::{assert_schema, entry};
 use iroha_schema::prelude::*;
 use norito::{Decode, Encode};
-
 #[derive(IntoSchema, Encode, Decode)]
 struct Command(String, Vec<String>, #[codec(skip)] bool);
-
 #[test]
 fn unnamed() {
     assert_schema::<Command>(

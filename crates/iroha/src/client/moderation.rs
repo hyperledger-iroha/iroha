@@ -1,5 +1,5 @@
 //! Route-to-instruction validation for native `SoraFS` moderation submissions.
-
+use super::SorafsModerationCommandRoute;
 use eyre::{Result, eyre};
 use iroha_data_model::{
     isi::sorafs::{
@@ -11,9 +11,6 @@ use iroha_data_model::{
     },
     transaction::{Executable, SignedTransaction},
 };
-
-use super::SorafsModerationCommandRoute;
-
 impl SorafsModerationCommandRoute {
     pub(super) const fn expected_instruction_label(self) -> &'static str {
         match self {
@@ -30,14 +27,12 @@ impl SorafsModerationCommandRoute {
         }
     }
 }
-
 fn route_mismatch(route: SorafsModerationCommandRoute) -> eyre::Report {
     eyre!(
         "SoraFS moderation route requires exactly one `{}` native instruction",
         route.expected_instruction_label()
     )
 }
-
 /// Reject a transaction unless it contains the one native instruction selected by `route`.
 pub(super) fn validate_transaction_route(
     route: SorafsModerationCommandRoute,
@@ -67,11 +62,13 @@ pub(super) fn validate_transaction_route(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-
+    use super::*;
+    use crate::client::{
+        SORAFS_MODERATION_TRANSACTION_TTL,
+        evidence_http_tests::{base_url, client_with_base_url},
+    };
     use iroha_data_model::{
         Level,
         isi::{InstructionBox, Log, sorafs::SubmitSorafsModerationCommit},
@@ -80,13 +77,7 @@ mod tests {
             Executable, FeePaymentIntent, IvmBytecode, SignedTransaction, TransactionBuilder,
         },
     };
-
-    use super::*;
-    use crate::client::{
-        SORAFS_MODERATION_TRANSACTION_TTL,
-        evidence_http_tests::{base_url, client_with_base_url},
-    };
-
+    use std::num::NonZeroU64;
     fn sign_executable(client: &super::super::Client, executable: Executable) -> SignedTransaction {
         let gas_limit = executable
             .requires_transaction_gas_limit()
@@ -103,7 +94,6 @@ mod tests {
             .try_sign_transaction(builder)
             .expect("sign moderation route validation fixture")
     }
-
     fn assert_rejected_before_http(
         client: &super::super::Client,
         route: SorafsModerationCommandRoute,
@@ -117,7 +107,6 @@ mod tests {
             || client.post_sorafs_moderation_transaction(route, transaction),
         );
     }
-
     #[test]
     fn moderation_route_validation_accepts_exact_instruction_and_rejects_mismatch_before_http() {
         let client = client_with_base_url(base_url());
@@ -132,7 +121,6 @@ mod tests {
             &transaction,
         );
     }
-
     #[test]
     fn moderation_route_validation_rejects_non_native_and_non_singleton_before_http() {
         let client = client_with_base_url(base_url());
@@ -147,7 +135,6 @@ mod tests {
             SorafsModerationCommandRoute::SubmitCommit,
             &wrong_instruction,
         );
-
         let commit: InstructionBox = SubmitSorafsModerationCommit::new(vec![0xA5]).into();
         let multiple = sign_executable(
             &client,
@@ -158,7 +145,6 @@ mod tests {
             SorafsModerationCommandRoute::SubmitCommit,
             &multiple,
         );
-
         let ivm = sign_executable(
             &client,
             Executable::Ivm(IvmBytecode::from_compiled(vec![0x00])),

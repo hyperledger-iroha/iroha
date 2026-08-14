@@ -6,16 +6,13 @@
 //! Notes:
 //! - Use the `SignedBlock` v1 Norito serialization for any `call_selector(inner)` and certificate hashing contexts.
 //! - Fixed-point thresholds are represented as integers; Q-format mapping is specified in docs.
-
 use std::{collections::BTreeMap, fmt, str::FromStr, string::String, vec::Vec};
-
 use iroha_crypto::{PublicKey, SignatureOf};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
-
 use crate::{
     account::AccountId,
     asset::AssetId,
@@ -31,10 +28,8 @@ use crate::{
         ValidationFeeTreasuryPayoutBindingV1,
     },
 };
-
 #[cfg(test)]
 use crate::isi::bridge::SccpRouteGovernanceActionV1;
-
 /// Errors emitted when parsing hex-encoded hashes used by governance payloads.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HashParseError {
@@ -51,7 +46,6 @@ pub enum HashParseError {
         message: String,
     },
 }
-
 impl fmt::Display for HashParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -62,18 +56,14 @@ impl fmt::Display for HashParseError {
         }
     }
 }
-
 impl std::error::Error for HashParseError {}
-
 const HASH_WIRE_VERSION_V1: u16 = 1;
-
 #[derive(Clone, Copy, Debug, Encode, Decode)]
 struct HashWire32 {
     version: u16,
     declared_len: u16,
     bytes: [u8; 32],
 }
-
 impl HashWire32 {
     const fn new(bytes: [u8; 32]) -> Self {
         Self {
@@ -82,7 +72,6 @@ impl HashWire32 {
             bytes,
         }
     }
-
     fn try_into_bytes(self) -> Result<[u8; 32], norito::core::Error> {
         if self.version != HASH_WIRE_VERSION_V1 {
             return Err(norito::core::Error::LengthMismatch);
@@ -93,7 +82,6 @@ impl HashWire32 {
         Ok(self.bytes)
     }
 }
-
 fn decode_hex_array<const N: usize>(input: &str) -> Result<[u8; N], HashParseError> {
     let bytes = hex::decode(input).map_err(|err| HashParseError::InvalidHex {
         message: format!("{err}"),
@@ -108,7 +96,6 @@ fn decode_hex_array<const N: usize>(input: &str) -> Result<[u8; N], HashParseErr
     array.copy_from_slice(&bytes);
     Ok(array)
 }
-
 fn parse_hash_payload<const N: usize>(payload: &[u8]) -> Result<[u8; N], norito::core::Error> {
     if payload.len() == N {
         let mut array = [0u8; N];
@@ -130,23 +117,19 @@ fn parse_hash_payload<const N: usize>(payload: &[u8]) -> Result<[u8; N], norito:
     }
     Err(norito::core::Error::LengthMismatch)
 }
-
 macro_rules! define_hash32_newtype {
     ($name:ident, $doc:literal) => {
         #[doc = $doc]
         #[repr(transparent)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, IntoSchema)]
         pub struct $name([u8; 32]);
-
         impl $name {
             /// Number of bytes in the encoded hash.
             pub const LENGTH: usize = 32;
-
             /// Construct the hash wrapper from raw bytes.
             pub const fn new(bytes: [u8; 32]) -> Self {
                 Self(bytes)
             }
-
             /// Attempt to parse the hash from a lowercase hexadecimal string.
             ///
             /// # Errors
@@ -154,47 +137,39 @@ macro_rules! define_hash32_newtype {
             pub fn from_hex_str(input: &str) -> Result<Self, HashParseError> {
                 decode_hex_array::<32>(input).map(Self)
             }
-
             /// Borrow the raw hash bytes.
             pub const fn as_bytes(&self) -> &[u8; 32] {
                 &self.0
             }
-
             /// Consume the wrapper and return the raw bytes.
             pub const fn into_bytes(self) -> [u8; 32] {
                 self.0
             }
-
             /// Render the hash as a lowercase hexadecimal string.
             pub fn to_hex(&self) -> String {
                 hex::encode(self.0)
             }
         }
-
         impl From<[u8; 32]> for $name {
             fn from(bytes: [u8; 32]) -> Self {
                 Self::new(bytes)
             }
         }
-
         impl From<$name> for [u8; 32] {
             fn from(hash: $name) -> Self {
                 hash.into_bytes()
             }
         }
-
         impl AsRef<[u8; 32]> for $name {
             fn as_ref(&self) -> &[u8; 32] {
                 self.as_bytes()
             }
         }
-
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.write_str(&self.to_hex())
             }
         }
-
         impl norito::core::NoritoSerialize for $name {
             fn serialize(
                 &self,
@@ -203,23 +178,19 @@ macro_rules! define_hash32_newtype {
                 let wire = HashWire32::new(self.0);
                 <HashWire32 as norito::core::NoritoSerialize>::serialize(&wire, writer)
             }
-
             fn encoded_len_hint(&self) -> Option<usize> {
                 let wire = HashWire32::new(self.0);
                 <HashWire32 as norito::core::NoritoSerialize>::encoded_len_hint(&wire)
             }
-
             fn encoded_len_exact(&self) -> Option<usize> {
                 let wire = HashWire32::new(self.0);
                 <HashWire32 as norito::core::NoritoSerialize>::encoded_len_exact(&wire)
             }
         }
-
         impl<'de> norito::core::NoritoDeserialize<'de> for $name {
             fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
                 Self::try_deserialize(archived).expect("fixed-length hash decode should succeed")
             }
-
             fn try_deserialize(
                 archived: &'de norito::core::Archived<Self>,
             ) -> Result<Self, norito::core::Error> {
@@ -271,7 +242,6 @@ macro_rules! define_hash32_newtype {
                 }
             }
         }
-
         impl<'a> norito::core::DecodeFromSlice<'a> for $name {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
                 if let Ok((wire, used)) = norito::core::decode_field_canonical::<HashWire32>(bytes)
@@ -308,14 +278,18 @@ macro_rules! define_hash32_newtype {
                 }
             }
         }
-
         #[cfg(feature = "json")]
         impl JsonSerialize for $name {
             fn json_serialize(&self, out: &mut String) {
                 json::write_json_string(&self.to_hex(), out);
             }
+            fn json_serialize_to(
+                &self,
+                out: &mut dyn json::JsonWriteSink,
+            ) -> Result<(), json::BoundedJsonError> {
+                json::write_json_string_to(&self.to_hex(), out)
+            }
         }
-
         #[cfg(feature = "json")]
         impl JsonDeserialize for $name {
             fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
@@ -323,81 +297,73 @@ macro_rules! define_hash32_newtype {
                 Self::from_hex_str(&buf).map_err(|err| json::Error::Message(format!("{err}")))
             }
         }
-
         impl FromStr for $name {
             type Err = HashParseError;
-
             fn from_str(s: &str) -> Result<Self, Self::Err> {
                 Self::from_hex_str(s)
             }
         }
     };
 }
-
 define_hash32_newtype!(
     ContractCodeHash,
     "Blake2b-32 hash identifying a contract bytecode artifact."
 );
-
 define_hash32_newtype!(
     ContractAbiHash,
     "Blake2b-32 hash describing the ABI surface of a contract."
 );
-
 /// ABI version targeted by the contract manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct AbiVersion(u16);
-
 impl AbiVersion {
     /// Create a new ABI version wrapper.
     pub const fn new(version: u16) -> Self {
         Self(version)
     }
-
     /// Borrow the underlying numeric version.
     pub const fn get(self) -> u16 {
         self.0
     }
 }
-
 impl Default for AbiVersion {
     fn default() -> Self {
         Self::new(1)
     }
 }
-
 impl From<u16> for AbiVersion {
     fn from(value: u16) -> Self {
         Self::new(value)
     }
 }
-
 impl From<AbiVersion> for u16 {
     fn from(version: AbiVersion) -> Self {
         version.get()
     }
 }
-
 impl fmt::Display for AbiVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.0, f)
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for AbiVersion {
     fn json_serialize(&self, out: &mut String) {
         json::JsonSerialize::json_serialize(&self.0, out);
     }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.json_serialize_to(out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for AbiVersion {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
         u16::json_deserialize(parser).map(Self::from)
     }
 }
-
 /// Governance proposal kinds supported today.
 #[expect(
     clippy::large_enum_variant,
@@ -432,7 +398,6 @@ pub enum ProposalKind {
     #[codec(index = 6)]
     SorafsProviderGovernance(SorafsProviderGovernanceProposal),
 }
-
 /// Proposal payload for deploying an IVM contract via governance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -452,7 +417,6 @@ pub struct DeployContractProposal {
     #[norito(default)]
     pub manifest_provenance: Option<ManifestProvenance>,
 }
-
 /// Proposal payload for scheduling a runtime upgrade through governance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -463,7 +427,6 @@ pub struct RuntimeUpgradeProposal {
     /// Canonical runtime-upgrade manifest payload.
     pub manifest: RuntimeUpgradeManifest,
 }
-
 /// Proposal payload for applying one closed SCCP registry action.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -474,7 +437,6 @@ pub struct SccpRouteGovernanceProposal {
     /// Complete network- and action-bound SCCP referendum preimage.
     pub anchor: Box<crate::isi::bridge::SccpRouteGovernanceAnchorV1>,
 }
-
 /// Proposal payload for one closed `SoraFS` provider-owner transition.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -485,7 +447,6 @@ pub struct SorafsProviderGovernanceProposal {
     /// Exact compare-and-set provider-owner action to execute on enactment.
     pub action: Box<SorafsProviderGovernanceActionV1>,
 }
-
 /// Proposal payload for one governed validation-fee policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -500,7 +461,6 @@ pub struct ValidationFeePolicyProposal {
     /// Exact PLAIN electorate rules committed at proposal creation.
     pub plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 }
-
 /// Proposal payload authorizing one exact validation-fee payout lifecycle.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -517,7 +477,6 @@ pub struct ValidationFeePayoutLifecycleProposal {
     /// Exact PLAIN electorate rules committed at proposal creation.
     pub plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 }
-
 /// Inclusive execution window for enactment certificates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -526,13 +485,12 @@ pub struct ValidationFeePayoutLifecycleProposal {
 )]
 pub struct AtWindow {
     /// First block in the enactment window (inclusive).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub lower: u64,
     /// Last block in the enactment window (inclusive).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub upper: u64,
 }
-
 /// Consensus-retained evidence for one finalized governance referendum.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -545,32 +503,31 @@ pub struct GovernanceFinalizationEvidence {
     /// Referendum identifier, equal to the proposal identifier for native governance.
     pub referendum_id: [u8; 32],
     /// Block height at which the referendum result was finalized.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub finalized_at_height: u64,
     /// Voting mode whose tally was finalized.
     pub mode: VotingMode,
     /// Final approve weight.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u128_string"))]
     pub approve: u128,
     /// Final reject weight.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u128_string"))]
     pub reject: u128,
     /// Final abstain weight.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u128_string"))]
     pub abstain: u128,
     /// Minimum turnout applied to this result.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u128_string"))]
     pub min_turnout: u128,
     /// Approval-threshold numerator applied to this result.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub approval_threshold_numerator: u64,
     /// Approval-threshold denominator applied to this result.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub approval_threshold_denominator: u64,
     /// Final deterministic decision.
     pub approved: bool,
 }
-
 /// Governance parameters (subset) — see gov.md for full spec.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct GovernanceParameters {
@@ -597,24 +554,20 @@ pub struct GovernanceParameters {
     /// Additional deposit required per block of desired enactment window.
     pub deposit_per_block: Quantity,
 }
-
 /// Content-addressable proposal identifier (32-byte hash).
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, IntoSchema)]
 pub struct ProposalId(pub [u8; 32]);
-
 impl norito::core::NoritoSerialize for ProposalId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let wire = HashWire32::new(self.0);
         <HashWire32 as norito::core::NoritoSerialize>::serialize(&wire, writer)
     }
 }
-
 impl<'de> norito::core::NoritoDeserialize<'de> for ProposalId {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("ProposalId must decode from fixed-length payload")
     }
-
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -647,14 +600,18 @@ impl<'de> norito::core::NoritoDeserialize<'de> for ProposalId {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for ProposalId {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(&hex::encode(self.0), out);
     }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(&hex::encode(self.0), out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for ProposalId {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
@@ -664,7 +621,6 @@ impl JsonDeserialize for ProposalId {
             .map_err(|err| json::Error::Message(format!("{err}")))
     }
 }
-
 /// Minimal referendum status enumeration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub enum ReferendumStatus {
@@ -683,7 +639,6 @@ pub enum ReferendumStatus {
     /// Referendum expired without reaching a conclusion.
     Expired,
 }
-
 /// Referendum shell (subset of fields).
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct Referendum {
@@ -704,7 +659,6 @@ pub struct Referendum {
     /// Optional enactment window associated with approval.
     pub schedule: Option<AtWindow>,
 }
-
 /// Voter choice variants.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub enum VoteChoice {
@@ -715,7 +669,6 @@ pub enum VoteChoice {
     /// Neither support nor oppose (Abstain).
     Abstain,
 }
-
 /// Vote shell (conviction index is abstract for now).
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct Vote {
@@ -728,10 +681,8 @@ pub struct Vote {
     /// Ballot choice (Aye, Nay, or Abstain).
     pub choice: VoteChoice,
 }
-
 /// Simple threshold scheme with per-signer signatures.
 pub const ENACTMENT_SIGNATURE_SCHEME_SIMPLE_THRESHOLD: u16 = 1;
-
 /// Supported signature schemes for enactment certificates.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
@@ -741,7 +692,6 @@ pub enum EnactmentSignatureScheme {
     #[default]
     SimpleThreshold,
 }
-
 impl EnactmentSignatureScheme {
     /// Numeric scheme identifier for on-wire payloads.
     #[must_use]
@@ -750,7 +700,6 @@ impl EnactmentSignatureScheme {
             Self::SimpleThreshold => ENACTMENT_SIGNATURE_SCHEME_SIMPLE_THRESHOLD,
         }
     }
-
     /// Canonical string representation.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -759,28 +708,22 @@ impl EnactmentSignatureScheme {
         }
     }
 }
-
 impl fmt::Display for EnactmentSignatureScheme {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
-
 /// Error returned when parsing an enactment signature scheme.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnactmentSignatureSchemeParseError(pub String);
-
 impl fmt::Display for EnactmentSignatureSchemeParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "invalid enactment signature scheme `{}`", self.0)
     }
 }
-
 impl std::error::Error for EnactmentSignatureSchemeParseError {}
-
 impl FromStr for EnactmentSignatureScheme {
     type Err = EnactmentSignatureSchemeParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "simple_threshold" | "simple-threshold" | "simple" => Ok(Self::SimpleThreshold),
@@ -788,14 +731,12 @@ impl FromStr for EnactmentSignatureScheme {
         }
     }
 }
-
 /// Error returned when converting an unknown scheme id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EnactmentSignatureSchemeIdError {
     /// Unsupported scheme identifier.
     pub scheme_id: u16,
 }
-
 impl fmt::Display for EnactmentSignatureSchemeIdError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -805,12 +746,9 @@ impl fmt::Display for EnactmentSignatureSchemeIdError {
         )
     }
 }
-
 impl std::error::Error for EnactmentSignatureSchemeIdError {}
-
 impl TryFrom<u16> for EnactmentSignatureScheme {
     type Error = EnactmentSignatureSchemeIdError;
-
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
             ENACTMENT_SIGNATURE_SCHEME_SIMPLE_THRESHOLD => Ok(Self::SimpleThreshold),
@@ -818,14 +756,18 @@ impl TryFrom<u16> for EnactmentSignatureScheme {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for EnactmentSignatureScheme {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(self.as_str(), out);
     }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(self.as_str(), out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for EnactmentSignatureScheme {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
@@ -833,7 +775,6 @@ impl JsonDeserialize for EnactmentSignatureScheme {
         Self::from_str(&value).map_err(|_| json::Error::unknown_field(value))
     }
 }
-
 /// Governance enactment certificate payload (signed via [`EnactmentSignatureScheme`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -845,7 +786,6 @@ pub struct GovernanceEnactment {
     /// Inclusive window in which enactment is valid.
     pub at_window: AtWindow,
 }
-
 /// Signature over a governance enactment payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -857,7 +797,6 @@ pub struct GovernanceEnactmentSignature {
     /// Signature of the enactment payload.
     pub signature: SignatureOf<GovernanceEnactment>,
 }
-
 /// Signature bundle for governance enactment certificates.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -867,7 +806,6 @@ pub struct GovernanceEnactmentSignatureSet {
     /// Collected signatures ordered deterministically by signer account id.
     pub signatures: Vec<GovernanceEnactmentSignature>,
 }
-
 /// Signed governance enactment certificate.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -877,7 +815,6 @@ pub struct GovernanceEnactmentCertificate {
     /// Signature bundle proving authorization.
     pub signatures: GovernanceEnactmentSignatureSet,
 }
-
 /// Parliament governance body identifiers.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
@@ -899,7 +836,6 @@ pub enum ParliamentBody {
     /// MPC/FMA board — final multi-party check for enactment readiness.
     FmaCommittee,
 }
-
 #[cfg(feature = "json")]
 impl json::JsonSerialize for ParliamentBody {
     fn json_serialize(&self, out: &mut String) {
@@ -914,8 +850,22 @@ impl json::JsonSerialize for ParliamentBody {
         };
         json::write_json_string(label, out);
     }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        let label = match self {
+            ParliamentBody::RulesCommittee => "rules-committee",
+            ParliamentBody::AgendaCouncil => "agenda-council",
+            ParliamentBody::InterestPanel => "interest-panel",
+            ParliamentBody::ReviewPanel => "review-panel",
+            ParliamentBody::PolicyJury => "policy-jury",
+            ParliamentBody::OversightCommittee => "oversight-committee",
+            ParliamentBody::FmaCommittee => "fma-committee",
+        };
+        json::write_json_string_to(label, out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl json::JsonDeserialize for ParliamentBody {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
@@ -934,7 +884,6 @@ impl json::JsonDeserialize for ParliamentBody {
         }
     }
 }
-
 /// Parliament roster for a single body.
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -955,7 +904,6 @@ pub struct ParliamentRoster {
     #[norito(default)]
     pub derived_by: CouncilDerivationKind,
 }
-
 /// Parliament configuration and rosters for all bodies selected in an epoch.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -966,7 +914,6 @@ pub struct ParliamentBodies {
     #[norito(default)]
     pub rosters: BTreeMap<ParliamentBody, ParliamentRoster>,
 }
-
 /// Parliament enactment certificate payload (signed via [`EnactmentSignatureScheme`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -976,7 +923,6 @@ pub struct ParliamentEnactment {
     /// Inclusive window in which enactment is valid.
     pub at_window: AtWindow,
 }
-
 /// Signature over a parliament enactment payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -988,7 +934,6 @@ pub struct ParliamentEnactmentSignature {
     /// Signature of the enactment payload.
     pub signature: SignatureOf<ParliamentEnactment>,
 }
-
 /// Signature bundle for parliament enactment certificates.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -998,7 +943,6 @@ pub struct ParliamentEnactmentSignatureSet {
     /// Collected signatures ordered deterministically by signer account id.
     pub signatures: Vec<ParliamentEnactmentSignature>,
 }
-
 /// Signed parliament enactment certificate.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -1008,7 +952,6 @@ pub struct ParliamentEnactmentCertificate {
     /// Signature bundle proving authorization.
     pub signatures: ParliamentEnactmentSignatureSet,
 }
-
 impl ProposalKind {
     /// Compute the deterministic, proposal-kind-separated fingerprint (`Blake2b-32`).
     #[must_use]
@@ -1031,7 +974,6 @@ impl ProposalKind {
         crate::governance_fingerprint::fingerprint(domain, self)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::KeyPair;
@@ -1040,18 +982,14 @@ mod tests {
         digest::{Update, VariableOutput},
     };
     use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::{AccountId, DomainId};
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked governance fixture keypair")
     }
-
     fn checked_account_id() -> AccountId {
         AccountId::new(checked_random_keypair().public_key().clone())
     }
-
     #[test]
     fn contract_hash_roundtrips_hex() {
         let raw = [0xAAu8; 32];
@@ -1060,7 +998,6 @@ mod tests {
         let parsed = ContractCodeHash::from_hex_str(&encoded).expect("parse hex");
         assert_eq!(parsed, hash);
     }
-
     #[test]
     fn hash_parse_rejects_wrong_length() {
         let err =
@@ -1073,14 +1010,12 @@ mod tests {
             _ => panic!("unexpected error variant"),
         }
     }
-
     #[test]
     fn contract_hash_from_hex_roundtrip() {
         let raw = "aa".repeat(ContractCodeHash::LENGTH);
         let parsed = ContractCodeHash::from_hex_str(&raw).expect("parse contract hash");
         assert_eq!(parsed.to_hex(), raw);
     }
-
     #[test]
     fn hash_decode_rejects_non_canonical_vec_layout() {
         let mut non_canonical = Vec::new();
@@ -1089,13 +1024,11 @@ mod tests {
             non_canonical.extend_from_slice(&idx.to_le_bytes());
         }
         non_canonical.extend_from_slice(&[0x11u8; 32]);
-
         let mut encoded = Vec::new();
         norito::core::serialize_to_buffer(&non_canonical, &mut encoded).expect("encode vec");
         let result = <ContractCodeHash as DecodeFromSlice>::decode_from_slice(&encoded);
         assert!(result.is_err());
     }
-
     #[test]
     fn hash_decode_rejects_versioned_payload_with_trailing_bytes() {
         let mut payload = Vec::with_capacity(4 + ContractCodeHash::LENGTH + 1);
@@ -1107,18 +1040,15 @@ mod tests {
         );
         payload.extend_from_slice(&[0x11; ContractCodeHash::LENGTH]);
         payload.push(0xFF);
-
         assert!(matches!(
             parse_hash_payload::<{ ContractCodeHash::LENGTH }>(&payload),
             Err(norito::core::Error::LengthMismatch)
         ));
     }
-
     #[test]
     fn parliament_body_default_is_agenda() {
         assert_eq!(ParliamentBody::default(), ParliamentBody::AgendaCouncil);
     }
-
     #[test]
     fn governance_types_encode() {
         let code_hash = ContractCodeHash::from_hex_str(&"aa".repeat(32)).expect("code hash");
@@ -1132,7 +1062,6 @@ mod tests {
             abi_version: AbiVersion::new(1),
             manifest_provenance: None,
         };
-
         let payload = ProposalKind::DeployContract(proposal.clone());
         let framed = norito::to_bytes(&payload).expect("encode proposal kind");
         let decoded =
@@ -1163,7 +1092,6 @@ mod tests {
             }
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proposal_kind_json_rejects_unknown_fields_through_musubi_action() {
@@ -1181,7 +1109,6 @@ mod tests {
                 .expect("canonical governance proposal JSON decodes"),
             proposal
         );
-
         for (prefix, depth) in [
             ("{", "the proposal envelope"),
             ("\"payload\":{", "the Musubi action envelope"),
@@ -1199,7 +1126,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn runtime_upgrade_proposal_roundtrip() {
         let manifest = RuntimeUpgradeManifest {
@@ -1242,7 +1168,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn sccp_route_governance_proposal_is_boxed_out_of_proposal_kind() {
         assert_eq!(
@@ -1255,7 +1180,6 @@ mod tests {
             "ProposalKind must not carry a complete SCCP route action inline"
         );
     }
-
     #[test]
     fn proposal_fingerprint_matches_manual_derivation() {
         let proposal = DeployContractProposal {
@@ -1268,9 +1192,7 @@ mod tests {
             manifest_provenance: None,
         };
         let kind = ProposalKind::DeployContract(proposal);
-
         let fp = kind.fingerprint();
-
         let manual_bytes = Encode::encode(&kind);
         let domain = crate::governance_fingerprint::DEPLOY_CONTRACT_V1;
         let domain_len = u64::try_from(domain.len())
@@ -1284,12 +1206,9 @@ mod tests {
         hasher
             .finalize_variable(&mut manual_arr)
             .expect("finalize Blake2bVar");
-
         assert_eq!(fp, manual_arr);
-
         assert_ne!(fp, [0; 32]);
     }
-
     #[test]
     fn vote_choice_roundtrip() {
         let vote = Vote {
@@ -1302,12 +1221,10 @@ mod tests {
             conviction: 3,
             choice: VoteChoice::Aye,
         };
-
         let framed = norito::to_bytes(&vote).expect("encode vote");
         let decoded = norito::decode_from_bytes::<Vote>(&framed).expect("decode vote");
         assert_eq!(decoded.choice, VoteChoice::Aye);
     }
-
     #[test]
     #[cfg(feature = "json")]
     fn proposal_id_json_roundtrip() {
@@ -1316,15 +1233,12 @@ mod tests {
         let decoded: ProposalId = norito::json::from_json(&json).expect("deserialize proposal id");
         assert_eq!(decoded, id);
     }
-
     #[test]
     fn parliament_bodies_roundtrip() {
         use std::collections::BTreeMap;
-
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let members = vec![checked_account_id(), checked_account_id()];
         let alternates = vec![checked_account_id()];
-
         let roster = ParliamentRoster {
             body: ParliamentBody::RulesCommittee,
             epoch: 3,
@@ -1335,12 +1249,10 @@ mod tests {
         };
         let mut rosters = BTreeMap::new();
         rosters.insert(ParliamentBody::RulesCommittee, roster.clone());
-
         let bodies = ParliamentBodies {
             selection_epoch: 3,
             rosters,
         };
-
         let framed = norito::to_bytes(&bodies).expect("encode bodies");
         let decoded =
             norito::decode_from_bytes::<ParliamentBodies>(&framed).expect("decode bodies");
@@ -1352,7 +1264,6 @@ mod tests {
         assert_eq!(back.members, roster.members);
         assert_eq!(back.derived_by, roster.derived_by);
     }
-
     #[test]
     fn enactment_signature_scheme_ids_and_labels() {
         assert_eq!(
@@ -1369,13 +1280,11 @@ mod tests {
             EnactmentSignatureScheme::SimpleThreshold
         );
     }
-
     #[test]
     fn enactment_signature_scheme_parsing_rejects_unknown() {
         let err = "unknown".parse::<EnactmentSignatureScheme>().unwrap_err();
         assert_eq!(err.0, "unknown");
     }
-
     #[test]
     fn governance_enactment_certificate_roundtrip() {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -1405,13 +1314,11 @@ mod tests {
                 }],
             },
         };
-
         let encoded = norito::to_bytes(&cert).expect("encode enactment certificate");
         let decoded = norito::decode_from_bytes::<GovernanceEnactmentCertificate>(&encoded)
             .expect("decode enactment certificate");
         assert_eq!(decoded, cert);
     }
-
     #[test]
     fn parliament_enactment_certificate_roundtrip() {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -1440,7 +1347,6 @@ mod tests {
                 }],
             },
         };
-
         let encoded = norito::to_bytes(&cert).expect("encode parliament certificate");
         let decoded = norito::decode_from_bytes::<ParliamentEnactmentCertificate>(&encoded)
             .expect("decode parliament certificate");

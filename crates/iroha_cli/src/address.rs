@@ -1,5 +1,4 @@
 //! Account address tooling (canonical I105 and public-key input/output).
-
 use super::*;
 use clap::ValueEnum;
 use iroha::account_address::{
@@ -9,15 +8,20 @@ use iroha::data_model::account::AccountId;
 use iroha_crypto::PublicKey;
 use norito::json::{self, JsonSerialize};
 use std::{
-    fs::{self, File},
-    io::{self, BufWriter, Read, Write},
+    fs::File,
+    io::{self, BufWriter, Write},
     path::{Path, PathBuf},
 };
-
 /// Minamoto I105 prefix used by tests (runtime commands require an explicit context).
 #[cfg(test)]
 const DEFAULT_I105_PREFIX: u16 = 753;
-
+// A canonical V1 controller payload is at most 1,024 bytes. Four KiB leaves
+// ample room for I105/base-105 or public-key text, while the aggregate and
+// row ceilings keep audit/normalization reports from retaining an arbitrary
+// pipe or file before address validation begins.
+const ADDRESS_INPUT_MAX_LINE_BYTES_V1: usize = 4 * 1024;
+const ADDRESS_INPUT_MAX_ENTRIES_V1: usize = 16_384;
+const ADDRESS_INPUT_MAX_BYTES_V1: usize = 16 * 1024 * 1024;
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Convert account addresses between supported textual encodings.
@@ -27,7 +31,6 @@ pub enum Command {
     /// Rewrite newline-separated addresses into canonical encodings.
     Normalize(Normalize),
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -37,7 +40,6 @@ impl Run for Command {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct Convert {
     /// Address literal to parse (canonical I105 or public key).
@@ -56,7 +58,6 @@ pub struct Convert {
     #[arg(long = "format", value_enum, default_value_t = OutputFormat::I105)]
     format: OutputFormat,
 }
-
 impl Convert {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let network_context = resolve_address_network_context(
@@ -67,21 +68,17 @@ impl Convert {
         let expect_prefix = resolve_address_expect_prefix(&network_context, self.expect_prefix)?;
         let input = parse_address_input(self.input.as_str(), Some(expect_prefix))
             .wrap_err("failed to parse address literal")?;
-
         if self.format == OutputFormat::Json {
             let summary = AddressSummary::build(&input, network_context.chain_discriminant)
                 .wrap_err("failed to build address summary")?;
             return context.print_data(&summary);
         }
-
         let output =
             encode_address_literal(&input, network_context.chain_discriminant, self.format)
                 .wrap_err("failed to encode address output")?;
-
         context.println_data(output)
     }
 }
-
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
 #[value(rename_all = "kebab_case")]
 enum OutputFormat {
@@ -89,7 +86,6 @@ enum OutputFormat {
     CanonicalHex,
     Json,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct Audit {
     /// Path to a file containing newline-separated addresses (defaults to STDIN).
@@ -111,7 +107,6 @@ pub struct Audit {
     #[arg(long = "format", value_enum, default_value_t = AuditOutputFormat::Json)]
     format: AuditOutputFormat,
 }
-
 impl Audit {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let inputs =
@@ -125,7 +120,6 @@ impl Audit {
             Some(context.config().account_chain_discriminant),
         )?;
         let expect_prefix = resolve_address_expect_prefix(&network_context, self.expect_prefix)?;
-
         let mut stats = AddressAuditStats::default();
         let mut entries = Vec::with_capacity(inputs.len());
         for (index, raw) in inputs.into_iter().enumerate() {
@@ -165,7 +159,6 @@ impl Audit {
             AuditOutputFormat::Json => context.print_data(&report)?,
             AuditOutputFormat::Csv => Self::print_csv(&report, context)?,
         }
-
         if report.stats.errors > 0 && !self.allow_errors {
             eyre::bail!(
                 "address audit encountered {} parse error(s); rerun with --allow-errors to suppress the failure",
@@ -174,7 +167,6 @@ impl Audit {
         }
         Ok(())
     }
-
     fn print_csv<C: RunContext>(report: &AddressAuditReport, context: &mut C) -> Result<()> {
         const HEADER: &str =
             "input,status,format,domain_kind,i105,canonical_hex,error_code,error_message";
@@ -202,14 +194,12 @@ impl Audit {
         Ok(())
     }
 }
-
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
 #[value(rename_all = "kebab_case")]
 enum AuditOutputFormat {
     Json,
     Csv,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct Normalize {
     /// Path to a file containing newline-separated addresses (defaults to STDIN).
@@ -234,7 +224,6 @@ pub struct Normalize {
     #[arg(long = "allow-errors")]
     allow_errors: bool,
 }
-
 impl Normalize {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let inputs =
@@ -242,7 +231,6 @@ impl Normalize {
         if inputs.is_empty() {
             eyre::bail!("no addresses provided");
         }
-
         let network_context = resolve_address_network_context(
             self.profile.as_deref(),
             self.network_prefix,
@@ -258,7 +246,6 @@ impl Normalize {
         if outputs.is_empty() {
             return Ok(());
         }
-
         if let Some(path) = self.output.as_ref() {
             if path == Path::new("-") {
                 for line in outputs {
@@ -272,10 +259,8 @@ impl Normalize {
                 context.println_data(line)?;
             }
         }
-
         Ok(())
     }
-
     fn process_entries(
         &self,
         inputs: &[String],
@@ -301,7 +286,6 @@ impl Normalize {
         }
         Ok(outputs)
     }
-
     fn render_output(&self, parsed: &ParsedAddressInput, network_prefix: u16) -> Result<String> {
         if self.format == OutputFormat::Json {
             let summary = AddressSummary::build(parsed, network_prefix)
@@ -315,12 +299,10 @@ impl Normalize {
             .map_err(|err| eyre::eyre!(err.to_string()))
     }
 }
-
 #[derive(Debug)]
 struct AddressNetworkContext {
     chain_discriminant: u16,
 }
-
 fn resolve_address_network_context(
     profile: Option<&str>,
     network_prefix: Option<u16>,
@@ -369,14 +351,12 @@ fn resolve_address_network_context(
         ),
     }
 }
-
 fn resolve_address_expect_prefix(
     context: &AddressNetworkContext,
     expect_prefix: Option<u16>,
 ) -> Result<u16> {
     Ok(expect_prefix.unwrap_or(context.chain_discriminant))
 }
-
 #[derive(JsonSerialize)]
 struct AddressSummary {
     detected_format: DetectedFormat,
@@ -384,7 +364,6 @@ struct AddressSummary {
     canonical_hex: String,
     i105: I105Encoding,
 }
-
 impl AddressSummary {
     fn build(
         parsed: &ParsedAddressInput,
@@ -404,13 +383,11 @@ impl AddressSummary {
         })
     }
 }
-
 #[derive(Clone, Copy, Debug, JsonSerialize)]
 struct DetectedFormat {
     kind: &'static str,
     network_prefix: Option<u16>,
 }
-
 impl DetectedFormat {
     const fn i105() -> Self {
         Self {
@@ -418,7 +395,6 @@ impl DetectedFormat {
             network_prefix: None,
         }
     }
-
     const fn public_key() -> Self {
         Self {
             kind: "public_key",
@@ -426,18 +402,15 @@ impl DetectedFormat {
         }
     }
 }
-
 #[derive(JsonSerialize)]
 struct I105Encoding {
     value: String,
     network_prefix: u16,
 }
-
 #[derive(JsonSerialize)]
 struct DomainSummary {
     kind: &'static str,
 }
-
 impl DomainSummary {
     const fn from_kind(kind: AddressDomainKind) -> Self {
         Self {
@@ -445,7 +418,6 @@ impl DomainSummary {
         }
     }
 }
-
 fn normalize_skipped_address_message(index: usize, err: &eyre::Report, i18n: &Localizer) -> String {
     let index_text = index.to_string();
     let error_text = err.to_string();
@@ -457,13 +429,11 @@ fn normalize_skipped_address_message(index: usize, err: &eyre::Report, i18n: &Lo
         ],
     )
 }
-
 #[derive(Debug)]
 struct ParsedAddressInput {
     parsed: ParsedAccountAddress,
     detected_format: DetectedFormat,
 }
-
 fn parse_address_input(
     input: &str,
     expect_prefix: Option<u16>,
@@ -505,13 +475,11 @@ fn parse_address_input(
         detected_format: DetectedFormat::i105(),
     })
 }
-
 #[derive(JsonSerialize)]
 struct AddressAuditReport {
     entries: Vec<AddressAuditEntry>,
     stats: AddressAuditStats,
 }
-
 #[derive(JsonSerialize)]
 struct AddressAuditEntry {
     input: String,
@@ -519,62 +487,108 @@ struct AddressAuditEntry {
     summary: Option<AddressSummary>,
     error: Option<AddressAuditError>,
 }
-
 #[derive(JsonSerialize)]
 struct AddressAuditError {
     code: &'static str,
     message: String,
 }
-
 #[derive(Default, JsonSerialize)]
 struct AddressAuditStats {
     total: usize,
     parsed: usize,
     errors: usize,
 }
-
 impl AddressAuditStats {
     fn record_summary(&mut self, _summary: &AddressSummary) {
         self.parsed += 1;
     }
-
     fn record_error(&mut self) {
         self.errors += 1;
     }
-
     fn finalize(&mut self, total_entries: usize) {
         self.total = total_entries;
     }
 }
-
 fn read_address_inputs(source: Option<&PathBuf>) -> Result<Vec<String>> {
-    let mut buffer = String::new();
-    match source {
-        Some(path) if path == Path::new("-") => {
-            io::stdin()
-                .read_to_string(&mut buffer)
-                .wrap_err("failed to read addresses from stdin")?;
-        }
+    let bytes = match source {
+        Some(path) if path == Path::new("-") => read_cli_input_bounded(
+            &mut io::stdin().lock(),
+            ADDRESS_INPUT_MAX_BYTES_V1,
+            "address input",
+        )
+        .wrap_err("failed to read addresses from stdin")?,
         Some(path) => {
-            buffer = fs::read_to_string(path)
-                .wrap_err_with(|| format!("failed to read addresses from {}", path.display()))?;
+            let mut file = File::open(path)
+                .wrap_err_with(|| format!("failed to open addresses from {}", path.display()))?;
+            let metadata = file
+                .metadata()
+                .wrap_err_with(|| format!("failed to inspect address input {}", path.display()))?;
+            if !metadata.is_file() {
+                eyre::bail!("address input must be a regular file: {}", path.display());
+            }
+            if metadata.len() > ADDRESS_INPUT_MAX_BYTES_V1 as u64 {
+                eyre::bail!(
+                    "address input {} exceeds the first-release limit of {} bytes",
+                    path.display(),
+                    ADDRESS_INPUT_MAX_BYTES_V1
+                );
+            }
+            let bytes =
+                read_cli_input_bounded(&mut file, ADDRESS_INPUT_MAX_BYTES_V1, "address input")
+                    .wrap_err_with(|| {
+                        format!("failed to read addresses from {}", path.display())
+                    })?;
+            let after = file.metadata().wrap_err_with(|| {
+                format!("failed to reinspect address input {}", path.display())
+            })?;
+            if after.len() != metadata.len() || after.len() != bytes.len() as u64 {
+                eyre::bail!("address input changed while reading: {}", path.display());
+            }
+            bytes
         }
-        None => {
-            io::stdin()
-                .read_to_string(&mut buffer)
-                .wrap_err("failed to read addresses from stdin")?;
+        None => read_cli_input_bounded(
+            &mut io::stdin().lock(),
+            ADDRESS_INPUT_MAX_BYTES_V1,
+            "address input",
+        )
+        .wrap_err("failed to read addresses from stdin")?,
+    };
+    parse_address_input_lines(bytes, "address input")
+}
+fn parse_address_input_lines(bytes: Vec<u8>, label: &str) -> Result<Vec<String>> {
+    let buffer = String::from_utf8(bytes)
+        .map_err(|error| eyre::eyre!("{label} is not valid UTF-8: {error}"))?;
+    let mut entries = Vec::new();
+    entries
+        .try_reserve_exact(ADDRESS_INPUT_MAX_ENTRIES_V1.min(buffer.lines().count()))
+        .map_err(|error| eyre::eyre!("failed to reserve address entry storage: {error}"))?;
+    for (line_index, line) in buffer.lines().enumerate() {
+        if line.len() > ADDRESS_INPUT_MAX_LINE_BYTES_V1 {
+            eyre::bail!(
+                "{label} line {} exceeds the first-release limit of {} bytes",
+                line_index + 1,
+                ADDRESS_INPUT_MAX_LINE_BYTES_V1
+            );
         }
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if entries.len() == ADDRESS_INPUT_MAX_ENTRIES_V1 {
+            eyre::bail!(
+                "{label} exceeds the first-release limit of {} address entries",
+                ADDRESS_INPUT_MAX_ENTRIES_V1
+            );
+        }
+        let mut owned = String::new();
+        owned
+            .try_reserve_exact(trimmed.len())
+            .map_err(|error| eyre::eyre!("failed to reserve address line storage: {error}"))?;
+        owned.push_str(trimmed);
+        entries.push(owned);
     }
-
-    let entries = buffer
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(str::to_owned)
-        .collect();
     Ok(entries)
 }
-
 fn encode_address_literal(
     parsed: &ParsedAddressInput,
     network_prefix: u16,
@@ -589,7 +603,6 @@ fn encode_address_literal(
         OutputFormat::Json => unreachable!("JSON encoding handled separately"),
     }
 }
-
 fn write_lines_to_file(path: &Path, lines: &[String]) -> Result<()> {
     let file =
         File::create(path).wrap_err_with(|| format!("failed to create {}", path.display()))?;
@@ -609,7 +622,6 @@ fn write_lines_to_file(path: &Path, lines: &[String]) -> Result<()> {
         .wrap_err("failed to terminate newline")?;
     writer.flush().wrap_err("failed to flush writer")
 }
-
 fn csv_escape(value: &str) -> String {
     if value.is_empty() {
         return String::new();
@@ -631,7 +643,6 @@ fn csv_escape(value: &str) -> String {
     escaped.push('"');
     escaped
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,22 +650,18 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
     use iroha_data_model::{account::AccountId, domain::DomainId};
     use iroha_i18n::{Bundle, Language, Localizer};
-
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")
     }
-
     fn account_id_for_domain(label: &str, seed: u8) -> AccountId {
         let _ = DomainId::try_new(label, "universal").expect("domain label canonicalises");
         let key_pair = fixture_key_pair(seed);
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn test_i18n() -> Localizer {
         Localizer::new(Bundle::Cli, Language::English)
     }
-
     #[test]
     fn address_summary_reports_default_domain_kind() {
         let account = account_id_for_domain("treasury", 1);
@@ -669,7 +676,6 @@ mod tests {
         let summary = AddressSummary::build(&parsed, DEFAULT_I105_PREFIX).expect("summary");
         assert_eq!(summary.domain.kind, "default");
     }
-
     #[test]
     fn fixture_key_pair_uses_checked_seed_derivation() {
         assert_eq!(fixture_key_pair(0x11).algorithm(), Algorithm::Ed25519);
@@ -678,7 +684,6 @@ mod tests {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     #[test]
     fn address_summary_suppresses_warning_for_default_domain() {
         let account = account_id_for_domain(DEFAULT_DOMAIN_NAME, 2);
@@ -693,7 +698,6 @@ mod tests {
         let summary = AddressSummary::build(&parsed, DEFAULT_I105_PREFIX).expect("summary");
         assert_eq!(summary.domain.kind, "default");
     }
-
     #[test]
     fn normalize_serialises_json_summary() {
         let account = account_id_for_domain("treasury", 5);
@@ -701,7 +705,6 @@ mod tests {
             .expect("address encoding")
             .to_i105_for_discriminant(DEFAULT_I105_PREFIX)
             .expect("i105");
-
         let cmd = Normalize {
             input: None,
             output: None,
@@ -711,7 +714,6 @@ mod tests {
             format: OutputFormat::Json,
             allow_errors: false,
         };
-
         let i18n = test_i18n();
         let outputs = cmd
             .process_entries(&[literal], &i18n, DEFAULT_I105_PREFIX, DEFAULT_I105_PREFIX)
@@ -722,7 +724,6 @@ mod tests {
             "json summary should include canonical_hex field"
         );
     }
-
     #[test]
     fn normalize_warning_messages_include_context() {
         let i18n = test_i18n();
@@ -734,26 +735,21 @@ mod tests {
             "unexpected message: {message}"
         );
     }
-
     #[test]
     fn address_network_context_requires_profile_or_prefix() {
         let err = resolve_address_network_context(None, None, None)
             .expect_err("missing network context should fail");
-
         assert!(
             err.to_string()
                 .contains("provide --profile or --network-prefix")
         );
     }
-
     #[test]
     fn address_network_context_uses_config_default_prefix() {
         let context = resolve_address_network_context(None, None, Some(DEFAULT_I105_PREFIX))
             .expect("default prefix should resolve");
-
         assert_eq!(context.chain_discriminant, DEFAULT_I105_PREFIX);
     }
-
     #[test]
     fn address_network_context_resolves_profile_and_rejects_mismatch() {
         let context =
@@ -762,7 +758,6 @@ mod tests {
             context.chain_discriminant,
             iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT
         );
-
         let err = resolve_address_network_context(Some("taira"), Some(DEFAULT_I105_PREFIX), None)
             .expect_err("profile mismatch should fail");
         assert!(
@@ -770,7 +765,6 @@ mod tests {
                 .contains("profile `taira` expected chain_discriminant=369")
         );
     }
-
     #[test]
     fn explicit_expect_prefix_allows_reencoding_between_networks() {
         let account = account_id_for_domain("treasury", 7);
@@ -784,18 +778,15 @@ mod tests {
             .expect("output prefix resolves");
         let expect_prefix =
             resolve_address_expect_prefix(&context, Some(input_prefix)).expect("expect prefix");
-
         let parsed = parse_address_input(&input, Some(expect_prefix)).expect("input parses");
         let rendered = encode_address_literal(&parsed, output_prefix, OutputFormat::I105)
             .expect("output i105");
-
         assert_ne!(rendered, input);
         assert!(
             AccountAddress::parse_encoded(&rendered, Some(output_prefix)).is_ok(),
             "rendered address should parse under output prefix"
         );
     }
-
     #[test]
     fn parse_address_input_rejects_canonical_hex() {
         let account = account_id_for_domain("treasury", 8);
@@ -810,15 +801,12 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn parse_address_input_accepts_public_key_and_marks_detected_format() {
         let key_pair = fixture_key_pair(9);
         let public_key = key_pair.public_key().to_string();
-
         let parsed =
             parse_address_input(&public_key, Some(DEFAULT_I105_PREFIX)).expect("public key parses");
-
         assert_eq!(parsed.detected_format.kind, "public_key");
         let expected = AccountAddress::from_account_id(&AccountId::new(
             public_key
@@ -828,17 +816,14 @@ mod tests {
         .expect("address encoding");
         assert_eq!(parsed.parsed.address, expected);
     }
-
     #[test]
     fn convert_public_key_input_emits_canonical_i105() {
         let key_pair = fixture_key_pair(10);
         let public_key = key_pair.public_key().to_string();
         let parsed =
             parse_address_input(&public_key, Some(DEFAULT_I105_PREFIX)).expect("public key parses");
-
         let rendered = encode_address_literal(&parsed, DEFAULT_I105_PREFIX, OutputFormat::I105)
             .expect("i105 render");
-
         assert_eq!(
             rendered,
             AccountId::new(
@@ -849,5 +834,40 @@ mod tests {
             .canonical_i105()
             .expect("canonical I105"),
         );
+    }
+    #[test]
+    fn address_input_line_and_entry_bounds_are_exact() {
+        let exact_line = "a".repeat(ADDRESS_INPUT_MAX_LINE_BYTES_V1);
+        assert_eq!(
+            parse_address_input_lines(exact_line.clone().into_bytes(), "fixture")
+                .expect("exact line bound is admitted"),
+            vec![exact_line]
+        );
+        let over_line = "a".repeat(ADDRESS_INPUT_MAX_LINE_BYTES_V1 + 1);
+        let error = parse_address_input_lines(over_line.into_bytes(), "fixture")
+            .expect_err("first over-limit line must fail");
+        assert!(error.to_string().contains("line 1"));
+        let exact_entries = "a\n".repeat(ADDRESS_INPUT_MAX_ENTRIES_V1);
+        assert_eq!(
+            parse_address_input_lines(exact_entries.into_bytes(), "fixture")
+                .expect("exact entry bound is admitted")
+                .len(),
+            ADDRESS_INPUT_MAX_ENTRIES_V1
+        );
+        let over_entries = "a\n".repeat(ADDRESS_INPUT_MAX_ENTRIES_V1 + 1);
+        let error = parse_address_input_lines(over_entries.into_bytes(), "fixture")
+            .expect_err("first over-limit entry must fail");
+        assert!(error.to_string().contains("address entries"));
+    }
+    #[test]
+    fn address_file_size_is_rejected_before_reading() {
+        let directory = tempfile::tempdir().expect("create address input directory");
+        let path = directory.path().join("addresses.txt");
+        let file = File::create(&path).expect("create sparse address input");
+        file.set_len((ADDRESS_INPUT_MAX_BYTES_V1 + 1) as u64)
+            .expect("extend sparse address input");
+        let error = read_address_inputs(Some(&path))
+            .expect_err("oversized address file must fail before allocation");
+        assert!(error.to_string().contains("first-release limit"));
     }
 }

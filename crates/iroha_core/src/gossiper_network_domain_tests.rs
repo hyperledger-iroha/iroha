@@ -1,5 +1,4 @@
 // Exact-network regressions for transaction-gossip target selection.
-
 #[test]
 fn initial_target_seed_is_stable_and_exact_network_specific() {
     let network_id = test_network_id();
@@ -10,7 +9,6 @@ fn initial_target_seed_is_stable_and_exact_network_specific() {
     let self_peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
     let other_peer: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
     let max_peer: PeerId = (*CARPENTER_KEYPAIR).public_key().clone().into();
-
     let seed = TransactionGossiper::initial_target_seed(
         &network_id,
         &self_peer,

@@ -1,12 +1,8 @@
 #![allow(clippy::redundant_pub_crate, clippy::needless_pass_by_value)]
-
 use eyre::Result;
 use norito::json::Value;
-
 use crate::{CliOutputFormat, RunContext};
-
 use super::commands::{EvidenceCountArgs, EvidenceKindArg, EvidenceListArgs};
-
 pub(crate) fn list<C: RunContext>(context: &mut C, args: EvidenceListArgs) -> Result<()> {
     let client = context.client_from_config();
     let kind = args.kind.map(EvidenceKindArg::as_str);
@@ -32,7 +28,6 @@ pub(crate) fn list<C: RunContext>(context: &mut C, args: EvidenceListArgs) -> Re
     }
     Ok(())
 }
-
 pub(crate) fn count<C: RunContext>(context: &mut C, _args: EvidenceCountArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_evidence_count_json()?;
@@ -47,13 +42,11 @@ pub(crate) fn count<C: RunContext>(context: &mut C, _args: EvidenceCountArgs) ->
     }
     Ok(())
 }
-
 fn format_evidence_summary(idx: usize, item: &Value) -> String {
     let mut parts = Vec::new();
     let ordinal = idx + 1;
     let kind = item.get("kind").and_then(Value::as_str).unwrap_or("-");
     parts.push(format!("{ordinal}: kind={kind}"));
-
     for key in [
         "class",
         "phase",
@@ -92,7 +85,6 @@ fn format_evidence_summary(idx: usize, item: &Value) -> String {
     }
     parts.join(" ")
 }
-
 fn value_to_string(value: &Value) -> Option<String> {
     value
         .as_str()
@@ -101,11 +93,9 @@ fn value_to_string(value: &Value) -> Option<String> {
         .or_else(|| value.as_i64().map(|n| n.to_string()))
         .or_else(|| value.as_bool().map(|b| b.to_string()))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn format_evidence_summary_includes_core_fields() {
         let mut map = norito::json::Map::new();
@@ -131,7 +121,6 @@ mod tests {
         assert!(summary.contains("recorded_ms=1234"));
         assert!(summary.contains("reason=shape mismatch"));
     }
-
     #[test]
     fn format_evidence_summary_uses_index_offset() {
         let mut map = norito::json::Map::new();

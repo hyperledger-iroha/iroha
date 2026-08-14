@@ -10,13 +10,11 @@ fn height_context_requires_bounded_three_f_plus_one_geometry() {
     ));
     assert!(try_context_with_powers(VotingMode::Permissioned, &[1; 31]).is_ok());
 }
-
 #[test]
 fn set_a_validator_fetches_the_initial_proposal_body() {
     let context = context();
     let subject = Subject::repeat(0x65);
     let mut reducer = Reducer::new(context.clone(), Some(id(1)), Generation::new(60)).unwrap();
-
     let received = reducer
         .step(Event::ProposalReceived {
             tag: reducer.current_tag(),
@@ -28,7 +26,6 @@ fn set_a_validator_fetches_the_initial_proposal_body() {
             ),
         })
         .expect("Set A accepts the current leader proposal");
-
     assert!(matches!(
         received.effects(),
         [Effect::FetchBody {
@@ -38,13 +35,11 @@ fn set_a_validator_fetches_the_initial_proposal_body() {
         }] if *fetched == subject
     ));
 }
-
 #[test]
 fn observer_does_not_fetch_an_uncertified_initial_proposal() {
     let context = context();
     let subject = Subject::repeat(0x63);
     let mut reducer = Reducer::new(context.clone(), None, Generation::new(64)).unwrap();
-
     let received = reducer
         .step(Event::ProposalReceived {
             tag: reducer.current_tag(),
@@ -56,16 +51,13 @@ fn observer_does_not_fetch_an_uncertified_initial_proposal() {
             ),
         })
         .expect("observer retains authenticated proposal control");
-
     assert!(received.effects().is_empty());
 }
-
 #[test]
 fn set_b_validator_defers_the_body_until_same_view_fallback() {
     let context = context();
     let subject = Subject::repeat(0x66);
     let mut reducer = Reducer::new(context.clone(), Some(id(4)), Generation::new(61)).unwrap();
-
     let received = reducer
         .step(Event::ProposalReceived {
             tag: reducer.current_tag(),
@@ -84,7 +76,6 @@ fn set_b_validator_defers_the_body_until_same_view_fallback() {
             .prepare_intent(Round::new(context.height(), 0))
             .is_none()
     );
-
     let fallback = reducer
         .step(Event::RetransmitElapsed {
             tag: reducer.current_tag(),
@@ -99,20 +90,17 @@ fn set_b_validator_defers_the_body_until_same_view_fallback() {
         }] if *fetched == subject
     ));
 }
-
 #[test]
 fn retransmit_before_a_proposal_does_not_prearm_set_b_fallback() {
     let context = context();
     let subject = Subject::repeat(0x62);
     let mut reducer = Reducer::new(context.clone(), Some(id(4)), Generation::new(65)).unwrap();
-
     let early_tick = reducer
         .step(Event::RetransmitElapsed {
             tag: reducer.current_tag(),
         })
         .expect("an idle retransmission tick is harmless");
     assert!(early_tick.effects().is_empty());
-
     let received = reducer
         .step(Event::ProposalReceived {
             tag: reducer.current_tag(),
@@ -128,7 +116,6 @@ fn retransmit_before_a_proposal_does_not_prearm_set_b_fallback() {
         received.effects().is_empty(),
         "fallback starts only on a proposal-scoped retransmission boundary"
     );
-
     let proposal_tick = reducer
         .step(Event::RetransmitElapsed {
             tag: reducer.current_tag(),
@@ -143,7 +130,6 @@ fn retransmit_before_a_proposal_does_not_prearm_set_b_fallback() {
         }] if *fetched == subject
     ));
 }
-
 #[test]
 fn set_b_validator_cannot_vote_before_same_view_fallback() {
     let context = context();
@@ -184,10 +170,8 @@ fn set_b_validator_cannot_vote_before_same_view_fallback() {
             valid: true,
         })
         .expect("validating an early Set B body remains non-voting");
-
     assert!(validated.effects().is_empty());
     assert!(reducer.durable_state().prepare_intent(round).is_none());
-
     let fallback = reducer
         .step(Event::RetransmitElapsed {
             tag: reducer.current_tag(),
@@ -200,7 +184,6 @@ fn set_b_validator_cannot_vote_before_same_view_fallback() {
                 if vote.round() == round && vote.subject() == subject)
     )));
 }
-
 #[test]
 fn certified_view_change_resets_set_b_fallback() {
     let roster = (1_u8..=7)
@@ -255,7 +238,6 @@ fn certified_view_change_resets_set_b_fallback() {
         })
         .expect("view-zero fallback activates");
     assert!(matches!(fallback.effects(), [Effect::FetchBody { .. }]));
-
     let timeout = tc_without_high(&context, 0, &[1, 2, 3, 4, 5]);
     let install = only_persist(
         reducer
@@ -267,7 +249,6 @@ fn certified_view_change_resets_set_b_fallback() {
     );
     acknowledge(&mut reducer, &install);
     assert_eq!(reducer.current_tag().view(), 1);
-
     let next_subject = Subject::repeat(0x6f);
     let next = reducer
         .step(Event::ProposalReceived {
@@ -285,7 +266,6 @@ fn certified_view_change_resets_set_b_fallback() {
         "a certified view transition must reset same-view fallback"
     );
 }
-
 #[test]
 fn same_view_timeout_upgrade_resets_set_b_fallback() {
     let roster = (1_u8..=7)
@@ -339,7 +319,6 @@ fn same_view_timeout_upgrade_resets_set_b_fallback() {
     );
     acknowledge(&mut reducer, &first_install);
     assert_eq!(reducer.current_tag().view(), 1);
-
     let first_subject = Subject::repeat(0x77);
     let first_proposal = reducer
         .step(Event::ProposalReceived {
@@ -367,7 +346,6 @@ fn same_view_timeout_upgrade_resets_set_b_fallback() {
             ..
         } if *round == Round::new(context.height(), 1) && *subject == first_subject
     )));
-
     let replacement_subject = Subject::repeat(0x78);
     let higher_prepare = qc(
         &context,
@@ -393,7 +371,6 @@ fn same_view_timeout_upgrade_resets_set_b_fallback() {
         before_upgrade.generation(),
         "the upgraded certificate starts a replacement proposal generation"
     );
-
     let replacement = reducer
         .step(Event::ProposalReceived {
             tag: reducer.current_tag(),
@@ -409,7 +386,6 @@ fn same_view_timeout_upgrade_resets_set_b_fallback() {
         replacement.effects().is_empty(),
         "a same-view timeout upgrade must reset fallback for the replacement proposal"
     );
-
     let replacement_fallback = reducer
         .step(Event::RetransmitElapsed {
             tag: reducer.current_tag(),
@@ -426,7 +402,6 @@ fn same_view_timeout_upgrade_resets_set_b_fallback() {
             && *subject == replacement_subject
     )));
 }
-
 #[test]
 fn retransmit_rebinds_durable_locked_validation_after_view_change() {
     let context = context();
@@ -448,7 +423,6 @@ fn retransmit_rebinds_durable_locked_validation_after_view_change() {
     ];
     let mut recovered =
         Reducer::recover(context.clone(), Some(id(4)), Generation::new(25), entries).unwrap();
-
     let resumed = resume_after_replay(&mut recovered);
     assert!(matches!(
         resumed.effects(),
@@ -458,7 +432,6 @@ fn retransmit_rebinds_durable_locked_validation_after_view_change() {
         }] if *vote == commit_vote
     ));
     complete_signature(&mut recovered, 0x7c);
-
     let available = recovered
         .step(Event::BodyAvailable {
             tag: recovered.current_tag(),
@@ -479,7 +452,6 @@ fn retransmit_rebinds_durable_locked_validation_after_view_change() {
         recovered.body_state(prepare.round(), subject),
         BodyState::Durable
     );
-
     let old_tag = recovered.current_tag();
     let timeout = tc_with_high(&context, 0, prepare.clone(), &[1, 2, 3]);
     let install = only_persist(
@@ -520,7 +492,6 @@ fn retransmit_rebinds_durable_locked_validation_after_view_change() {
         effect,
         Effect::Broadcast(ConsensusMessageV2::Vote(vote)) if vote.vote() == commit_vote
     )));
-
     let rebound_available = recovered
         .step(Event::BodyAvailable {
             tag: current_tag,
@@ -560,7 +531,6 @@ fn retransmit_rebinds_durable_locked_validation_after_view_change() {
         recovered.body_state(prepare.round(), subject),
         BodyState::Durable
     );
-
     let retransmitted = recovered
         .step(Event::RetransmitElapsed { tag: current_tag })
         .expect("retransmission rebinds durable locked validation to the current view");
@@ -582,7 +552,6 @@ fn retransmit_rebinds_durable_locked_validation_after_view_change() {
             && *round == prepare.round()
             && *validated_subject == subject
     )));
-
     recovered
         .step(Event::ValidationCompleted {
             tag: current_tag,

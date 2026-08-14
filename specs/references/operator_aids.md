@@ -2,6 +2,12 @@
 
 This page lists non-consensus, operator-facing endpoints that help with visibility and troubleshooting. Responses are JSON unless noted.
 
+All finite Sumeragi reads below require a fresh exact-`NetworkId` operator
+request signature. The CLI examples therefore name an explicit runtime-only
+operator key file; API tokens, account keys, redirects, and retries are not
+substitutes. The protocol-handshake `/v1/sumeragi/status/sse` stream is the
+intentional public exception.
+
 Consensus (Sumeragi)
 - Metrics: `sumeragi_new_view_receipts_by_hv{height,view}` gauges mirror the counts.
 - GET `/v1/sumeragi/status`
@@ -24,15 +30,12 @@ Evidence (audit; non-consensus)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
 - GET `/v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
   - Includes basic fields (e.g., DoublePrepare/DoubleCommit, InvalidQc, InvalidProposal) for inspection.
-  - Examples:
-    - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
-    - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`
   - CLI helpers:
-    - `iroha --output-format text ops sumeragi evidence list`
-    - `iroha --output-format text ops sumeragi evidence count`
+    - `iroha --operator-private-key-file /run/secrets/iroha/operator.key --output-format text ops sumeragi evidence list`
+    - `iroha --operator-private-key-file /run/secrets/iroha/operator.key --output-format text ops sumeragi evidence count`
   - Evidence admission is consensus-authenticated; Torii has no mutation endpoint.
 
-Operator authentication (WebAuthn/mTLS)
+Operator authentication (exact request signature, optional WebAuthn/mTLS second factor)
 - POST `/v1/operator/auth/registration/options`
   - Returns WebAuthn registration options (`publicKey`) for initial credential enrollment.
 - POST `/v1/operator/auth/registration/verify`
@@ -42,16 +45,17 @@ Operator authentication (WebAuthn/mTLS)
 - POST `/v1/operator/auth/login/verify`
   - Verifies the WebAuthn assertion payload and returns an operator session token.
 - Headers:
-  - `x-iroha-operator-session`: session token for operator endpoints (issued by login verify).
-  - `x-iroha-operator-token`: bootstrap token (allowed when `torii.operator_auth.token_fallback` permits it).
-  - `x-api-token`: required when `torii.require_api_token = true` or `torii.operator_auth.token_source = "api"`.
+  - `x-iroha-operator-public-key`, `x-iroha-operator-timestamp-ms`, `x-iroha-operator-nonce`, and `x-iroha-operator-signature`: mandatory on every route cataloged as `OperatorSignature`. The signature covers the exact runtime `NetworkId`, HTTP method, path, sorted query, raw body hash, timestamp, and nonce.
+  - `x-iroha-operator-session`: optional second-factor session token issued by login verify when `[torii.operator_auth]` is enabled. It never replaces the exact request signature.
+  - `x-iroha-operator-token`: bootstrap/second-factor token when `torii.operator_auth.token_fallback` permits it. It never replaces the exact request signature.
+  - `x-api-token`: listener credential when `torii.require_api_token = true`, or an optional operator-auth second factor when `torii.operator_auth.token_source = "api"`; it never replaces the exact request signature.
   - `x-forwarded-client-cert`: required when `torii.operator_auth.require_mtls = true` (set by the ingress proxy).
 - Enrollment flow:
   1. Call registration options with a bootstrap token (only allowed before the first credential is enrolled when `token_fallback = "bootstrap"`).
   2. Run `navigator.credentials.create` in the operator UI and submit the attestation to registration verify.
   3. Call login options and login verify to obtain `x-iroha-operator-session`.
-  4. Send `x-iroha-operator-session` on operator endpoints.
+  4. Send `x-iroha-operator-session` together with a fresh exact-network operator request signature on each operator endpoint. If `[torii.operator_auth]` is disabled, the exact request signature remains mandatory by itself.
 
 Notes
 - These endpoints are node-local views (in-memory where noted) and do not affect consensus or persistence.
-- Access may be guarded by API tokens, operator auth (WebAuthn/mTLS), and rate limits depending on your Torii configuration.
+- Operator routes always require an allow-listed exact-network request signature. API tokens, WebAuthn/mTLS, and rate limits can add gates but cannot weaken or replace it.

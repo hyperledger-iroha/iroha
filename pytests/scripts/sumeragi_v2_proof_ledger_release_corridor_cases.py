@@ -11,7 +11,7 @@ def test_release_inventory_constants_match_current_source_seal(
         "a40a9d7ef0dafcad2a6e3eb710d550a7f80f905c378117ef9a52b39a86d77b1e"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "aa1e14a1f3c77859ce5470ffa804ce1bcac2921b1f98b3f9544a0243ecda1c1f"
+        "dc24cfbd5235670fc5aa097aa367e413000ccf4a7a33dba69fe14b161a1a3151"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"

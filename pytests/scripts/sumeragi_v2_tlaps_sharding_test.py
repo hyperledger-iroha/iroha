@@ -16,6 +16,43 @@ checker = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = checker
 SPEC.loader.exec_module(checker)
 
+RECOVERY_BOUNDARY_CONTINUATION = (
+    "SumeragiV2AsyncRecoveryVoteEpochBoundaryContinuationProofs"
+)
+RECOVERY_BOUNDARY_CONTINUATION_THEOREMS = (
+    "AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary",
+    "AsyncTimeoutRecoveryRetainedEpisodesHaveCurrentBoundary",
+    "AsyncTimeoutRecoveryNewEpisodeDecomposition",
+    "AsyncTimeoutRecoveryNewBaseEpisodeInHasCurrentBoundary",
+    "AsyncTimeoutRecoveryNewEpisodeInHasCurrentBoundary",
+    "AsyncTimeoutRecoveryNewEpisodesHaveCurrentBoundary",
+    "AsyncTimeoutRecoveryEpisodeUnionEstablishesCurrentBoundary",
+    "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionPreservesCurrentBoundary",
+    "AsyncTimeoutRecoveryVoteOwnerImagePreservesCurrentBoundary",
+    "AsyncControlServiceTypeProjectsTimeoutRecoveryEpisodeSet",
+    "AsyncControlServiceResetPreservesTimeoutRecoveryEpisodeSet",
+    "AsyncControlServiceSlotTransitionEstablishesTimeoutRecoveryCurrentBoundary",
+    "AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant",
+    "AsyncNextPreservesStrongTypeInvariant",
+    "AsyncBracketNextPreservesStrongTypeInvariant",
+    "RetainedBodyRebindCandidateIsTypedAndOwned",
+    "DeliverProposalSchedulesRetainedBodyRebind",
+    "RebindSchedulesCurrentRoundStore",
+    "StoreSchedulesCurrentRoundValidation",
+    "ValidationSchedulesPrepareAndLockedCommitAttempts",
+    "PrepareQcDeliverySchedulesCompletionLockedCommitAttempt",
+    "PersistedPrepareObservationSchedulesCompletionLockedCommitAttempt",
+    "ReadyRetainedBodyRebindEnablesExecution",
+    "ReadyRetainedBodyRebindIsDispatchable",
+    "RebindCommandSelectsRetainedRebind",
+    "ExecuteRebindStagesCurrentRoundBody",
+    "ValidationCommandSelectsValidationAction",
+    "ExecuteValidationBindsCurrentViewAndGeneration",
+    "PrepareVoteAdmissionIsCurrentView",
+    "CommitVoteAdmissionIsExactLockedCommit",
+    "CommitFormationIsExactLockedRound",
+)
+
 
 def _sources() -> dict[str, str]:
     modules = [name for name, _ in checker.ASYNC_LIVENESS_SHARDS]
@@ -59,71 +96,186 @@ def test_checked_in_shards_are_bounded_ordered_and_uniquely_resolved() -> None:
 def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
     sources = _sources()
     recovery = "SumeragiV2AsyncRecoveryVoteEpochProofs"
+    boundary_continuation = RECOVERY_BOUNDARY_CONTINUATION
     continuation = "SumeragiV2AsyncRecoveryVoteEpochContinuationProofs"
     fair_service = "SumeragiV2AsyncFairServiceProofs"
     footer = "=============================================================================\n"
 
     assert checker.ASYNC_LIVENESS_SHARD_MAX_THEOREMS == 150
-    assert checker.ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS[recovery] == 158
+    assert recovery not in checker.ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS
+    assert (
+        boundary_continuation not in checker.ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS
+    )
     assert continuation not in checker.ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS
-    assert sum(
-        kind == "theorem"
-        for _, kind, _, _ in checker._top_level_declarations(sources[recovery])
-    ) == 158
-    assert sum(
-        kind == "theorem"
-        for _, kind, _, _ in checker._top_level_declarations(sources[continuation])
-    ) == 47
-    continuation_theorems = [
+    assert (
+        sum(
+            kind == "theorem"
+            for _, kind, _, _ in checker._top_level_declarations(sources[recovery])
+        )
+        == 146
+    )
+    boundary_continuation_theorems = tuple(
         name
         for name, kind, _, _ in checker._top_level_declarations(
-            sources[continuation]
+            sources[boundary_continuation]
         )
         if kind == "theorem"
+    )
+    assert boundary_continuation_theorems == RECOVERY_BOUNDARY_CONTINUATION_THEOREMS
+    assert (
+        sum(
+            kind == "theorem"
+            for _, kind, _, _ in checker._top_level_declarations(sources[continuation])
+        )
+        == 28
+    )
+    corridor_theorems = [
+        name
+        for module in (recovery, boundary_continuation, continuation)
+        for name, kind, _, _ in checker._top_level_declarations(sources[module])
+        if kind == "theorem"
     ]
-    assert len(continuation_theorems) == len(set(continuation_theorems))
+    assert len(corridor_theorems) == len(set(corridor_theorems))
 
-    recovery_header = f"---- MODULE {recovery} ----\nEXTENDS SumeragiV2AsyncTimeoutKernelProofs\n\n"
+    recovery_header = (
+        f"---- MODULE {recovery} ----\nEXTENDS SumeragiV2AsyncTimeoutKernelProofs\n\n"
+    )
+    boundary_continuation_header = (
+        f"---- MODULE {boundary_continuation} ----\nEXTENDS {recovery}\n\n"
+    )
     continuation_header = (
-        f"---- MODULE {continuation} ----\nEXTENDS {recovery}\n\n"
+        f"---- MODULE {continuation} ----\nEXTENDS {boundary_continuation}\n\n"
     )
     assert sources[recovery].startswith(recovery_header)
+    assert sources[boundary_continuation].startswith(boundary_continuation_header)
     assert sources[continuation].startswith(continuation_header)
     assert sources[recovery].endswith(footer)
+    assert sources[boundary_continuation].endswith(footer)
     assert sources[continuation].endswith(footer)
     combined_body = (
         sources[recovery][len(recovery_header) : -len(footer)]
+        + sources[boundary_continuation][
+            len(boundary_continuation_header) : -len(footer)
+        ]
         + sources[continuation][len(continuation_header) : -len(footer)]
     )
     assert hashlib.sha256(combined_body.encode("utf-8")).hexdigest() == (
-        "890905af5a1709778d0d5c1c34be35fec5e90895cd03484aba220644181a0bd4"
+        "b65d1129d878e583e0628a236670e648f3697f0644bf8f7d739b15db86dd8945"
     )
 
     errors, providers = checker._async_liveness_shard_contract(sources)
     assert errors == []
+    assert all(
+        providers[theorem] == boundary_continuation
+        for theorem in RECOVERY_BOUNDARY_CONTINUATION_THEOREMS
+    )
+    assert providers["AsyncNextPreservesCandidateLifecycleSchedulerCoverage"] == recovery
     for theorem in (
-        "AsyncNextPreservesCandidateLifecycleSchedulerCoverage",
+        "AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary",
         "AsyncNextPreservesStrongTypeInvariant",
-        "AsyncBracketNextPreservesStrongTypeInvariant",
         "RetainedBodyRebindCandidateIsTypedAndOwned",
+        "CommitFormationIsExactLockedRound",
+    ):
+        assert providers[theorem] == boundary_continuation
+    for theorem in (
+        "AsyncServeProducerEpisodeTransitionPreservesTypeInvariant",
+        "AsyncStrongTypeProjectsControlServiceStateType",
+        "FreshReplayCandidateIsDisjointFromScheduled",
+        "ReplayingOrdinaryStepPreservesRecoveryCorridor",
         "HistoricalVoteAdmissionIsExactLockedCommit",
         "HistoricalCommitFormationIsExactLockedRound",
         "HistoricalLockedCommitUsesProgressReserve",
         "HistoricalBeginLockExecutionCreatesSameRefPending",
     ):
         assert providers[theorem] == continuation
-    assert checker._module_extends(sources[continuation]) == (recovery,)
+    assert checker._module_extends(sources[boundary_continuation]) == (recovery,)
+    assert checker._module_extends(sources[continuation]) == (boundary_continuation,)
     assert checker._module_extends(sources[fair_service]) == (continuation,)
     sources[recovery] = sources[recovery].replace(
         footer,
-        "THEOREM ReviewedRecoveryCeilingMutation == TRUE\nBY PTL\n\n" + footer,
+        "".join(
+                f"THEOREM ReviewedRecoveryCeilingMutation{index} == TRUE\nBY PTL\n\n"
+                for index in range(5)
+        ) + footer,
         1,
     )
     errors, _ = checker._async_liveness_shard_contract(sources)
     assert any(
-        f"{recovery}.tla exceeds 158 top-level theorems: found 159" in error
+        f"{recovery}.tla exceeds 150 top-level theorems: found 151" in error
         for error in errors
     ), errors
+
+    base_seals = checker._TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256[f"{recovery}.tla"]
+    boundary_continuation_seals = checker._TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256[
+        f"{boundary_continuation}.tla"
+    ]
+    assert set(boundary_continuation_seals) == set(
+        RECOVERY_BOUNDARY_CONTINUATION_THEOREMS[:13]
+    )
+    assert not set(base_seals).intersection(RECOVERY_BOUNDARY_CONTINUATION_THEOREMS)
+    base_operator_seals = checker._TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256[
+        f"{recovery}.tla"
+    ]
+    boundary_continuation_operator_seals = (
+        checker._TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256[
+            f"{boundary_continuation}.tla"
+        ]
+    )
+    assert set(boundary_continuation_operator_seals) == {
+        "AsyncTimeoutRecoveryNewBaseEpisodeIn",
+        "AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn",
+    }
+    assert not set(base_operator_seals).intersection(
+        boundary_continuation_operator_seals
+    )
+
+
+def test_recovery_boundary_partition_rejects_wrong_ownership() -> None:
+    sources = _sources()
+    recovery = "SumeragiV2AsyncRecoveryVoteEpochProofs"
+    boundary_continuation = RECOVERY_BOUNDARY_CONTINUATION
+    footer = "=============================================================================\n"
+    first_marker = f"THEOREM {RECOVERY_BOUNDARY_CONTINUATION_THEOREMS[0]} =="
+    second_marker = f"THEOREM {RECOVERY_BOUNDARY_CONTINUATION_THEOREMS[1]} =="
+    first_start = sources[boundary_continuation].index(first_marker)
+    first_end = sources[boundary_continuation].index(second_marker)
+    first_theorem = sources[boundary_continuation][first_start:first_end]
+    seventh_marker = f"THEOREM {RECOVERY_BOUNDARY_CONTINUATION_THEOREMS[6]} =="
+    first_six_end = sources[boundary_continuation].index(seventh_marker)
+    first_six_theorems = sources[boundary_continuation][first_start:first_six_end]
+
+    omitted = dict(sources)
+    omitted[boundary_continuation] = omitted[boundary_continuation].replace(
+        first_theorem, "", 1
+    )
+    errors, providers = checker._async_liveness_shard_contract(omitted)
+    assert RECOVERY_BOUNDARY_CONTINUATION_THEOREMS[0] not in providers
+    assert any("not a mechanical partition" in error for error in errors)
+
+    duplicated = dict(sources)
+    duplicated[recovery] = duplicated[recovery].replace(
+        footer, first_theorem + footer, 1
+    )
+    errors, _ = checker._async_liveness_shard_contract(duplicated)
+    assert any(
+        f"declaration {RECOVERY_BOUNDARY_CONTINUATION_THEOREMS[0]} is duplicated"
+        in error
+        for error in errors
+    )
+
+    wrong_shard = dict(sources)
+    wrong_shard[recovery] = wrong_shard[recovery].replace(
+        footer, first_six_theorems + footer, 1
+    )
+    wrong_shard[boundary_continuation] = wrong_shard[boundary_continuation].replace(
+        first_six_theorems, "", 1
+    )
+    errors, providers = checker._async_liveness_shard_contract(wrong_shard)
+    assert providers[RECOVERY_BOUNDARY_CONTINUATION_THEOREMS[0]] == recovery
+    assert not any("not a mechanical partition" in error for error in errors)
+    assert any(
+        f"{recovery}.tla exceeds 150 top-level theorems" in error for error in errors
+    )
 
 
 def test_deadlock_shard_exact_finite_runner_dependency_is_acyclic() -> None:
@@ -200,7 +352,7 @@ def test_global_mechanical_body_reconstruction_is_exact() -> None:
         checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256
     )
     assert checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 == (
-        "4038baf8706294252436e6dc8cf8934556c4553fb234df6a22e578f7f802a6ae"
+        "ee6735723a4cd1aa6f4a061a7d15dc857b5cc90dec095c6d6a081e7564e53922"
     )
 
 
@@ -361,11 +513,28 @@ def test_shard_contract_enforces_line_theorem_and_step_caps() -> None:
 
 def test_shard_contract_rejects_reconstruction_drift() -> None:
     sources = _sources()
-    sources["SumeragiV2AsyncDecisionApplicationProofs"] = sources[
-        "SumeragiV2AsyncDecisionApplicationProofs"
-    ].replace("Exact Decision-to-application", "Changed Decision-to-application", 1)
+    boundary_continuation = "SumeragiV2AsyncRecoveryVoteEpochBoundaryContinuationProofs"
+    prepare_admission = 'vote.phase = "Prepare" /\\ VoteRoundAdmissible(node, vote)'
+    commit_admission = 'vote.phase = "Commit" /\\ VoteRoundAdmissible(node, vote)'
+    assert sources[boundary_continuation].count(prepare_admission) == 1
+    sources[boundary_continuation] = sources[boundary_continuation].replace(
+        prepare_admission, commit_admission, 1
+    )
 
     errors, _ = checker._async_liveness_shard_contract(sources)
+
+    assert any("not a mechanical partition" in error for error in errors)
+
+
+def test_shard_contract_rejects_stale_reconstruction_digest() -> None:
+    current_digest = checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256
+    try:
+        checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
+            "946223a56f68896ae0484ec2d46acc7d3337e17beeb1409f3167d39ab294a52a"
+        )
+        errors, _ = checker._async_liveness_shard_contract(_sources())
+    finally:
+        checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = current_digest
 
     assert any("not a mechanical partition" in error for error in errors)
 

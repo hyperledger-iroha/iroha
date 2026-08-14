@@ -1,9 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for Torii subscription endpoints.
 #![cfg(feature = "app_api")]
-
 use std::{net::SocketAddr, num::NonZeroU64, str::FromStr as _, sync::Arc};
-
 use axum::{
     body::Body,
     extract::connect_info::ConnectInfo,
@@ -46,14 +44,12 @@ use iroha_primitives::{
     json::Json as IrohaJson,
     numeric::{NumericSpec, Quantity},
 };
-use iroha_test_samples::{ALICE_ID, BOB_ID};
+use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, json_entry, json_object};
 use mv::storage::StorageReadOnly;
 use tower::ServiceExt as _;
-
 #[path = "fixtures.rs"]
 mod fixtures;
-
 struct SubscriptionHarness {
     app: axum::Router,
     state: Arc<State>,
@@ -62,7 +58,6 @@ struct SubscriptionHarness {
     subscription_id: NftId,
     billing_trigger_id: TriggerId,
 }
-
 fn build_subscription_plan(charge_asset_id: AssetDefinitionId) -> SubscriptionPlan {
     SubscriptionPlan {
         provider: ALICE_ID.clone(),
@@ -81,7 +76,6 @@ fn build_subscription_plan(charge_asset_id: AssetDefinitionId) -> SubscriptionPl
         }),
     }
 }
-
 fn build_subscription_state(
     plan_id: AssetDefinitionId,
     billing_trigger_id: TriggerId,
@@ -102,7 +96,6 @@ fn build_subscription_state(
         billing_trigger_id,
     }
 }
-
 fn build_subscription_invoice(
     subscription_id: NftId,
     charge_asset_id: AssetDefinitionId,
@@ -118,7 +111,6 @@ fn build_subscription_invoice(
         tx_hash: None,
     }
 }
-
 fn build_existing_billing_trigger(
     trigger_id: TriggerId,
     authority: iroha_data_model::account::AccountId,
@@ -137,14 +129,12 @@ fn build_existing_billing_trigger(
         .expect("trigger action fixture satisfies validation invariants"),
     )
 }
-
 fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
     let charge_asset_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
@@ -159,7 +149,6 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
         Name::from_str("subscription").expect("subscription name"),
     );
     let billing_trigger_id: TriggerId = "bill_subscription_router".parse().expect("trigger id");
-
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str(SUBSCRIPTION_METADATA_KEY).expect("subscription metadata key"),
@@ -176,7 +165,6 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
             charge_asset_id.clone(),
         )),
     );
-
     let domain = Domain::new(domain_id).build(&ALICE_ID);
     let provider_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let subscriber_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
@@ -209,7 +197,6 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
         [nft],
     );
     fixtures::seed_peer(&mut world, local_peer_id.clone());
-
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     {
         let expected_height = u64::try_from(state.view().height())
@@ -234,7 +221,6 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
         stx.apply();
         block.commit().expect("commit trigger registration");
     }
-
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
@@ -256,7 +242,6 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
         None,
         MaybeTelemetry::disabled(),
     );
-
     SubscriptionHarness {
         app: torii.api_router_for_tests(),
         state,
@@ -266,14 +251,25 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
         billing_trigger_id,
     }
 }
-
 async fn call_app(app: &axum::Router, mut request: Request<Body>) -> Response {
     request
         .extensions_mut()
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
     app.clone().oneshot(request).await.expect("router responds")
 }
-
+fn signed_bob_mutation(uri: &str, body: &str) -> Request<Body> {
+    fixtures::app_signed_request(
+        &BOB_ID,
+        &BOB_KEYPAIR,
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_owned()))
+            .expect("request"),
+        body.as_bytes(),
+    )
+}
 async fn response_json(resp: Response) -> norito::json::Value {
     let body = resp
         .into_body()
@@ -283,7 +279,6 @@ async fn response_json(resp: Response) -> norito::json::Value {
         .to_bytes();
     norito::json::from_slice(&body).expect("valid json response")
 }
-
 #[tokio::test]
 async fn subscription_mutation_routes_are_registered() {
     let harness = build_subscription_harness(SubscriptionStatus::Paused);
@@ -298,16 +293,8 @@ async fn subscription_mutation_routes_are_registered() {
         format!("/v1/subscriptions/{subscription_id}/usage"),
         format!("/v1/subscriptions/{subscription_id}/charge-now"),
     ] {
-        let resp = call_app(
-            &harness.app,
-            Request::builder()
-                .method("POST")
-                .uri(&uri)
-                .header(CONTENT_TYPE, "application/json")
-                .body(Body::from("{}"))
-                .expect("request"),
-        )
-        .await;
+        let body = "{}";
+        let resp = call_app(&harness.app, signed_bob_mutation(&uri, body)).await;
         assert!(
             !matches!(
                 resp.status(),
@@ -317,12 +304,10 @@ async fn subscription_mutation_routes_are_registered() {
         );
     }
 }
-
 #[tokio::test]
 async fn subscription_list_and_get_return_generic_plan_metadata() {
     let harness = build_subscription_harness(SubscriptionStatus::Paused);
     let subscription_id = harness.subscription_id.to_string();
-
     let list_resp = call_app(
         &harness.app,
         Request::builder()
@@ -348,7 +333,6 @@ async fn subscription_list_and_get_return_generic_plan_metadata() {
     let list_invoice: SubscriptionInvoice =
         norito::json::from_value(items[0]["invoice"].clone()).expect("subscription invoice");
     assert_eq!(list_invoice.asset_definition, harness.charge_asset_id);
-
     let get_resp = call_app(
         &harness.app,
         Request::builder()
@@ -369,7 +353,6 @@ async fn subscription_list_and_get_return_generic_plan_metadata() {
         norito::json::from_value(get_json["invoice"].clone()).expect("subscription invoice");
     assert_eq!(get_invoice.asset_definition, harness.charge_asset_id);
 }
-
 #[tokio::test]
 async fn subscription_resume_route_returns_exact_unsigned_draft_without_mutating() {
     let harness = build_subscription_harness(SubscriptionStatus::Paused);
@@ -379,15 +362,12 @@ async fn subscription_resume_route_returns_exact_unsigned_draft_without_mutating
         json_entry("charge_at_ms", 5_000_u64),
     ]);
     let body = norito::json::to_json(&body).expect("serialize resume request");
-
     let resume_resp = call_app(
         &harness.app,
-        Request::builder()
-            .method("POST")
-            .uri(format!("/v1/subscriptions/{subscription_id}/resume"))
-            .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(body))
-            .expect("request"),
+        signed_bob_mutation(
+            &format!("/v1/subscriptions/{subscription_id}/resume"),
+            &body,
+        ),
     )
     .await;
     assert_eq!(resume_resp.status(), StatusCode::OK);
@@ -435,7 +415,6 @@ async fn subscription_resume_route_returns_exact_unsigned_draft_without_mutating
     }));
     assert!(resume_json.get("ok").is_none());
     assert!(resume_json.get("tx_hash_hex").is_none());
-
     let view = harness.state.view();
     let nft = view
         .world()
@@ -461,7 +440,6 @@ async fn subscription_resume_route_returns_exact_unsigned_draft_without_mutating
         "draft construction must not replace the committed billing trigger"
     );
 }
-
 #[tokio::test]
 async fn subscription_action_route_rejects_legacy_private_key_payload() {
     let harness = build_subscription_harness(SubscriptionStatus::Paused);
@@ -472,18 +450,48 @@ async fn subscription_action_route_rejects_legacy_private_key_payload() {
         json_entry("charge_at_ms", 5_000_u64),
     ]))
     .expect("serialize legacy request");
-
     let response = call_app(
         &harness.app,
-        Request::builder()
-            .method("POST")
-            .uri(format!("/v1/subscriptions/{subscription_id}/resume"))
-            .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(body))
-            .expect("request"),
+        signed_bob_mutation(
+            &format!("/v1/subscriptions/{subscription_id}/resume"),
+            &body,
+        ),
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(harness.queue.queued_len(), 0);
+}
+#[tokio::test]
+async fn subscription_cancel_route_requires_exact_tagged_mode() {
+    let harness = build_subscription_harness(SubscriptionStatus::Paused);
+    let subscription_id = harness.subscription_id.to_string();
+    let uri = format!("/v1/subscriptions/{subscription_id}/cancel");
+    let legacy_body = norito::json::to_json(&json_object(vec![
+        json_entry("authority", BOB_ID.to_string()),
+        json_entry("cancel_mode", "immediate"),
+    ]))
+    .expect("serialize legacy cancel request");
+    let response = call_app(&harness.app, signed_bob_mutation(&uri, &legacy_body)).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let cancel_mode = json_object(vec![
+        json_entry("mode", "immediate"),
+        ("value".to_owned(), norito::json::Value::Null),
+    ]);
+    let body = norito::json::to_json(&json_object(vec![
+        json_entry("authority", BOB_ID.to_string()),
+        ("cancel_mode".to_owned(), cancel_mode),
+    ]))
+    .expect("serialize exact cancel request");
+    let response = call_app(&harness.app, signed_bob_mutation(&uri, &body)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = response_json(response).await;
+    assert_eq!(
+        response["details"]["cancel_mode"]["mode"].as_str(),
+        Some("immediate")
+    );
+    assert_eq!(
+        response["details"]["cancel_mode"]["value"],
+        norito::json::Value::Null
+    );
     assert_eq!(harness.queue.queued_len(), 0);
 }

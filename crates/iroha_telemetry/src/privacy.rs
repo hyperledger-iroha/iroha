@@ -8,13 +8,11 @@
 //! bucket; otherwise the bucket is surfaced as suppressed so downstream
 //! dashboards can reason about withheld windows without leaking per-relay
 //! details.
-
 use std::{
     collections::{BTreeMap, VecDeque, btree_map::Entry},
     sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 use blake3::Hasher as Blake3Hasher;
 use iroha_data_model::soranet::privacy_metrics::{
     SoranetGarAbuseCountV1, SoranetGarAbuseShareV1, SoranetLatencyPercentileV1,
@@ -25,7 +23,6 @@ use iroha_data_model::soranet::privacy_metrics::{
 };
 use norito::json;
 use thiserror::Error;
-
 /// Percentiles exposed for RTT measurements.
 /// Percentile configuration expressed as a rational ratio.
 #[derive(Clone, Copy)]
@@ -34,7 +31,6 @@ struct PercentileSpec {
     numerator: u64,
     denominator: u64,
 }
-
 const RTT_PERCENTILES: &[PercentileSpec] = &[
     PercentileSpec {
         label: "p50",
@@ -52,15 +48,12 @@ const RTT_PERCENTILES: &[PercentileSpec] = &[
         denominator: 100,
     },
 ];
-
 /// Histogram bucket bounds (inclusive) for RTT observations, measured in milliseconds.
 const RTT_BUCKET_BOUNDS_MS: &[u64] = &[
     10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000, 1500, 2000, 2500, 3000,
 ];
-
 /// Number of histogram buckets derived from [`RTT_BUCKET_BOUNDS_MS`].
 const RTT_BUCKET_COUNT: usize = RTT_BUCKET_BOUNDS_MS.len() + 1;
-
 fn pow_reason_from_detail(detail: Option<&str>) -> SoranetPowFailureReasonV1 {
     let Some(raw) = detail else {
         return SoranetPowFailureReasonV1::InvalidSolution;
@@ -123,7 +116,6 @@ fn pow_reason_from_detail(detail: Option<&str>) -> SoranetPowFailureReasonV1 {
         _ => SoranetPowFailureReasonV1::InvalidSolution,
     }
 }
-
 /// Configuration for the privacy-preserving aggregation pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrivacyBucketConfig {
@@ -142,7 +134,6 @@ pub struct PrivacyBucketConfig {
     /// Maximum bucket lag allowed for collector shares before the bucket is suppressed.
     pub max_share_lag_buckets: u64,
 }
-
 impl Default for PrivacyBucketConfig {
     fn default() -> Self {
         Self {
@@ -156,15 +147,11 @@ impl Default for PrivacyBucketConfig {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeMap, time::Duration};
-
     use iroha_data_model::soranet::privacy_metrics::SoranetPrivacyModeV1;
-
     use super::*;
-
     fn base_config() -> PrivacyBucketConfig {
         PrivacyBucketConfig {
             bucket_secs: 1,
@@ -176,14 +163,12 @@ mod tests {
             max_share_lag_buckets: 3,
         }
     }
-
     #[test]
     fn snapshot_reports_open_buckets() {
         let aggregator =
             SoranetSecureAggregator::new(base_config()).expect("config should be valid");
         let start = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
         aggregator.record_handshake_success(SoranetPrivacyModeV1::Entry, start, None, None);
-
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(2);
         let (drained, snapshot) = aggregator.drain_ready_with_snapshot(now);
         assert!(
@@ -206,7 +191,6 @@ mod tests {
             "entry mode open bucket count should be tracked"
         );
     }
-
     #[test]
     fn snapshot_tracks_evicted_completed_buckets() {
         let mut config = base_config();
@@ -214,14 +198,12 @@ mod tests {
         config.max_completed_buckets = 1;
         config.force_flush_buckets = 2;
         let aggregator = SoranetSecureAggregator::new(config).expect("config should be valid");
-
         let first = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
         let second = SystemTime::UNIX_EPOCH + Duration::from_secs(2);
         let third = SystemTime::UNIX_EPOCH + Duration::from_secs(3);
         for when in [first, second, third] {
             aggregator.record_handshake_success(SoranetPrivacyModeV1::Entry, when, None, None);
         }
-
         let (drained, snapshot) = aggregator.drain_ready_with_snapshot(third);
         assert_eq!(
             drained.len(),
@@ -246,7 +228,6 @@ mod tests {
             "the newest bucket still collecting contributors should stay open"
         );
     }
-
     #[test]
     fn snapshot_reports_suppressed_counts() {
         let mut config = base_config();
@@ -254,10 +235,8 @@ mod tests {
         config.flush_delay_buckets = 1;
         config.force_flush_buckets = 2;
         let aggregator = SoranetSecureAggregator::new(config).expect("config should be valid");
-
         let bucket_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
         aggregator.record_handshake_success(SoranetPrivacyModeV1::Exit, bucket_time, None, None);
-
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(4);
         let (drained, snapshot) = aggregator.drain_ready_with_snapshot(now);
         assert_eq!(drained.len(), 1, "forced flush should drain the bucket");
@@ -285,7 +264,6 @@ mod tests {
             "per-mode suppressed map tracks forced flushes"
         );
     }
-
     #[test]
     fn verified_bytes_accumulate_in_bucket_metrics() {
         let aggregator =
@@ -298,7 +276,6 @@ mod tests {
         aggregator.record_verified_bytes(SoranetPrivacyModeV1::Entry, bucket_time, 2_048);
         aggregator.record_verified_bytes(SoranetPrivacyModeV1::Entry, bucket_time, 512);
         aggregator.record_verified_bytes(SoranetPrivacyModeV1::Entry, bucket_time, 0);
-
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(3);
         let (drained, snapshot) = aggregator.drain_ready_with_snapshot(now);
         assert_eq!(drained.len(), 1, "bucket should drain once delay elapses");
@@ -307,7 +284,6 @@ mod tests {
             snapshot.suppressed_counts.is_empty(),
             "bucket met the contributor threshold"
         );
-
         let metrics = &drained[0];
         assert_eq!(metrics.mode, SoranetPrivacyModeV1::Entry);
         assert!(!metrics.suppressed, "bucket was emitted, not suppressed");
@@ -316,7 +292,6 @@ mod tests {
             "verified byte totals should saturate within the bucket"
         );
     }
-
     #[test]
     fn drain_ready_flushes_across_modes() {
         let mut config = base_config();
@@ -324,12 +299,10 @@ mod tests {
         config.flush_delay_buckets = 1;
         config.force_flush_buckets = 2;
         let aggregator = SoranetSecureAggregator::new(config).expect("config should be valid");
-
         let ready_time = SystemTime::UNIX_EPOCH + Duration::from_secs(8);
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10);
         aggregator.record_handshake_success(SoranetPrivacyModeV1::Entry, now, None, None);
         aggregator.record_handshake_success(SoranetPrivacyModeV1::Exit, ready_time, None, None);
-
         let (drained, snapshot) = aggregator.drain_ready_with_snapshot(now);
         assert_eq!(
             drained.len(),
@@ -347,7 +320,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn gar_categories_are_hashed_and_counted() {
         let aggregator =
@@ -360,15 +332,12 @@ mod tests {
         aggregator.record_gar_category(SoranetPrivacyModeV1::Exit, bucket_time, "spam");
         aggregator.record_gar_category(SoranetPrivacyModeV1::Exit, bucket_time, "");
         aggregator.record_gar_category(SoranetPrivacyModeV1::Exit, bucket_time, "   ");
-
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(15);
         let (drained, _) = aggregator.drain_ready_with_snapshot(now);
         assert_eq!(drained.len(), 1, "bucket should drain once delay elapses");
-
         let metrics = &drained[0];
         assert_eq!(metrics.mode, SoranetPrivacyModeV1::Exit);
         assert!(!metrics.suppressed);
-
         let fraud_hash = gar_category_hash("fraud");
         let spam_hash = gar_category_hash("spam");
         let mut counts = BTreeMap::new();
@@ -391,7 +360,6 @@ mod tests {
         );
     }
 }
-
 impl PrivacyBucketConfig {
     /// Validate the supplied configuration.
     ///
@@ -426,7 +394,6 @@ impl PrivacyBucketConfig {
         Ok(())
     }
 }
-
 /// Errors surfaced when the privacy bucket configuration is invalid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyConfigError {
@@ -459,7 +426,6 @@ pub enum PrivacyConfigError {
     #[error("max_share_lag_buckets must be non-zero")]
     ZeroShareLagWindow,
 }
-
 /// Errors surfaced when Prio collector shares are invalid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyShareError {
@@ -510,7 +476,6 @@ pub enum PrivacyShareError {
         received: SoranetPrivacyModeV1,
     },
 }
-
 /// Errors encountered while ingesting relay privacy events.
 #[derive(Debug, Error)]
 pub enum PrivacyEventError {
@@ -524,7 +489,6 @@ pub enum PrivacyEventError {
         source: json::Error,
     },
 }
-
 /// Observed handshake failure reasons surfaced by the aggregator inputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::exhaustive_enums)]
@@ -541,7 +505,6 @@ pub enum HandshakeFailure {
     /// Any other failure reason.
     Other,
 }
-
 /// Scope for throttling decisions surfaced to the aggregator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::exhaustive_enums)]
@@ -559,14 +522,12 @@ pub enum PrivacyThrottleScope {
     /// Operator emergency stop throttled the circuit.
     Emergency,
 }
-
 /// Privacy-preserving aggregation pipeline that produces SNNet-8 metrics buckets.
 #[derive(Debug)]
 pub struct SoranetSecureAggregator {
     config: PrivacyBucketConfig,
     state: Mutex<PrivacyState>,
 }
-
 /// Snapshot of queue state returned alongside drained privacy buckets.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PrivacyDrainSnapshot {
@@ -584,7 +545,6 @@ pub struct PrivacyDrainSnapshot {
     pub suppressed_by_mode:
         BTreeMap<SoranetPrivacyModeV1, BTreeMap<SoranetPrivacySuppressionReasonV1, u64>>,
 }
-
 impl SoranetSecureAggregator {
     /// Construct a new aggregator using the provided configuration.
     ///
@@ -598,13 +558,11 @@ impl SoranetSecureAggregator {
             state: Mutex::new(PrivacyState::default()),
         })
     }
-
     /// Access the current configuration.
     #[must_use]
     pub fn config(&self) -> PrivacyBucketConfig {
         self.config
     }
-
     /// Record a successful anonymous circuit establishment.
     pub fn record_handshake_success(
         &self,
@@ -617,7 +575,6 @@ impl SoranetSecureAggregator {
             bucket.record_success(rtt_millis, active_circuits)
         });
     }
-
     /// Record a failed handshake and its failure reason.
     pub fn record_handshake_failure(
         &self,
@@ -630,7 +587,6 @@ impl SoranetSecureAggregator {
             bucket.record_failure(reason, rtt_millis)
         });
     }
-
     /// Record a throttling decision.
     pub fn record_throttle(
         &self,
@@ -640,7 +596,6 @@ impl SoranetSecureAggregator {
     ) {
         self.with_bucket(mode, when, |bucket| bucket.record_throttle(scope));
     }
-
     /// Record an instantaneous sample of active circuits outside handshake events.
     pub fn record_active_sample(
         &self,
@@ -652,7 +607,6 @@ impl SoranetSecureAggregator {
             bucket.record_active_sample(active_circuits)
         });
     }
-
     /// Record verified bytes relayed within the anonymised circuit.
     pub fn record_verified_bytes(&self, mode: SoranetPrivacyModeV1, when: SystemTime, bytes: u128) {
         if bytes == 0 {
@@ -660,7 +614,6 @@ impl SoranetSecureAggregator {
         }
         self.with_bucket(mode, when, |bucket| bucket.record_verified_bytes(bytes));
     }
-
     /// Record an anonymised GAR abuse report category.
     pub fn record_gar_category(
         &self,
@@ -675,7 +628,6 @@ impl SoranetSecureAggregator {
         let hash = gar_category_hash(trimmed);
         self.with_bucket(mode, when, |bucket| bucket.record_gar_category(hash));
     }
-
     /// Record a telemetry event expressed via the `SoranetPrivacyEventV1` payload.
     pub fn record_event(&self, event: &SoranetPrivacyEventV1) {
         let when = unix_seconds_to_system_time(event.timestamp_unix);
@@ -713,7 +665,6 @@ impl SoranetSecureAggregator {
             }
         }
     }
-
     /// Ingest a newline-delimited JSON payload emitted by relay admin endpoints.
     ///
     /// # Errors
@@ -735,7 +686,6 @@ impl SoranetSecureAggregator {
         }
         Ok(count)
     }
-
     /// Ingest a Prio share emitted by a distributed privacy collector.
     ///
     /// Shares are accumulated per-bucket until [`PrivacyBucketConfig::expected_shares`]
@@ -761,7 +711,6 @@ impl SoranetSecureAggregator {
         }
         Ok(())
     }
-
     /// Drain ready buckets using the supplied timestamp to evaluate flush delays.
     pub fn drain_ready_with_snapshot(
         &self,
@@ -803,25 +752,21 @@ impl SoranetSecureAggregator {
         };
         (drained, snapshot)
     }
-
     /// Drain ready buckets using the supplied timestamp and discard the snapshot metadata.
     pub fn drain_ready(&self, now: SystemTime) -> Vec<SoranetPrivacyBucketMetricsV1> {
         let (drained, _) = self.drain_ready_with_snapshot(now);
         drained
     }
-
     /// Drain ready buckets as of the current wall clock.
     pub fn drain_ready_now(&self) -> Vec<SoranetPrivacyBucketMetricsV1> {
         self.drain_ready(SystemTime::now())
     }
-
     /// Drain ready buckets and return the accompanying queue snapshot using the current wall clock.
     pub fn drain_ready_now_with_snapshot(
         &self,
     ) -> (Vec<SoranetPrivacyBucketMetricsV1>, PrivacyDrainSnapshot) {
         self.drain_ready_with_snapshot(SystemTime::now())
     }
-
     fn with_bucket<F>(&self, mode: SoranetPrivacyModeV1, when: SystemTime, mut update: F)
     where
         F: FnMut(&mut BucketStats),
@@ -836,7 +781,6 @@ impl SoranetSecureAggregator {
         state.flush_ready(bucket_idx, &self.config);
     }
 }
-
 #[derive(Debug, Default)]
 struct PrivacyState {
     open: BTreeMap<(SoranetPrivacyModeV1, u64), BucketStats>,
@@ -844,7 +788,6 @@ struct PrivacyState {
     collector_shares: BTreeMap<(SoranetPrivacyModeV1, u64), CollectorShareAccumulator>,
     evicted_completed: u64,
 }
-
 impl PrivacyState {
     fn flush_ready(&mut self, current_idx: u64, config: &PrivacyBucketConfig) {
         self.evict_stale_collectors(current_idx, config);
@@ -866,7 +809,6 @@ impl PrivacyState {
                 ));
             }
         }
-
         for ((mode, bucket_idx), suppression_reason) in ready {
             if let Some(stats) = self.open.remove(&(mode, bucket_idx)) {
                 let metrics = stats.into_metrics(mode, bucket_idx, suppression_reason, config);
@@ -874,7 +816,6 @@ impl PrivacyState {
             }
         }
     }
-
     fn push_completed(
         &mut self,
         metrics: SoranetPrivacyBucketMetricsV1,
@@ -886,7 +827,6 @@ impl PrivacyState {
             self.evicted_completed = self.evicted_completed.saturating_add(1);
         }
     }
-
     fn open_bucket_counts(&self) -> BTreeMap<SoranetPrivacyModeV1, usize> {
         let mut counts = BTreeMap::new();
         for (mode, _) in self.open.keys() {
@@ -894,7 +834,6 @@ impl PrivacyState {
         }
         counts
     }
-
     fn collector_backlog_by_mode(&self) -> BTreeMap<SoranetPrivacyModeV1, usize> {
         let mut counts = BTreeMap::new();
         for (mode, _) in self.collector_shares.keys() {
@@ -902,7 +841,6 @@ impl PrivacyState {
         }
         counts
     }
-
     fn evict_stale_collectors(&mut self, current_idx: u64, config: &PrivacyBucketConfig) {
         let mut stale = Vec::new();
         for (&(mode, bucket_idx), accumulator) in &self.collector_shares {
@@ -927,13 +865,11 @@ impl PrivacyState {
             self.push_completed(suppressed, config);
         }
     }
-
     fn take_evicted_completed(&mut self) -> u64 {
         let evicted = self.evicted_completed;
         self.evicted_completed = 0;
         evicted
     }
-
     fn ingest_prio_share(
         &mut self,
         share: SoranetPrivacyPrioShareV1,
@@ -984,7 +920,6 @@ impl PrivacyState {
         }
     }
 }
-
 #[derive(Debug, Clone, Default)]
 struct BucketStats {
     handshake_success: u64,
@@ -1004,7 +939,6 @@ struct BucketStats {
     bytes_verified: u128,
     gar_counts: BTreeMap<[u8; 8], u64>,
 }
-
 impl BucketStats {
     fn record_success(&mut self, rtt_millis: Option<u64>, active_circuits: Option<u64>) {
         self.handshake_success = self.handshake_success.saturating_add(1);
@@ -1015,7 +949,6 @@ impl BucketStats {
             self.active.record(active);
         }
     }
-
     fn record_failure(&mut self, reason: HandshakeFailure, rtt_millis: Option<u64>) {
         if let Some(latency) = rtt_millis {
             self.rtt.observe(latency);
@@ -1037,7 +970,6 @@ impl BucketStats {
             }
         }
     }
-
     fn record_throttle(&mut self, scope: PrivacyThrottleScope) {
         match scope {
             PrivacyThrottleScope::Congestion => {
@@ -1060,20 +992,16 @@ impl BucketStats {
             }
         }
     }
-
     fn record_active_sample(&mut self, count: u64) {
         self.active.record(count);
     }
-
     fn record_verified_bytes(&mut self, bytes: u128) {
         self.bytes_verified = self.bytes_verified.saturating_add(bytes);
     }
-
     fn record_gar_category(&mut self, hash: [u8; 8]) {
         let counter = self.gar_counts.entry(hash).or_insert(0);
         *counter = counter.saturating_add(1);
     }
-
     fn handshake_events(&self) -> u64 {
         self.handshake_success
             .saturating_add(self.handshake_pow_rejects)
@@ -1081,7 +1009,6 @@ impl BucketStats {
             .saturating_add(self.handshake_timeouts)
             .saturating_add(self.handshake_other_failures)
     }
-
     fn into_metrics(
         self,
         mode: SoranetPrivacyModeV1,
@@ -1099,9 +1026,7 @@ impl BucketStats {
                 reason,
             );
         }
-
         let contributor_count = u32::try_from(self.handshake_events()).unwrap_or(u32::MAX);
-
         let Self {
             handshake_success,
             handshake_pow_rejects,
@@ -1120,7 +1045,6 @@ impl BucketStats {
             bytes_verified,
             gar_counts,
         } = self;
-
         let (active_mean, active_max) = active.into_summary();
         let percentiles = rtt
             .into_percentiles()
@@ -1135,7 +1059,6 @@ impl BucketStats {
             .into_iter()
             .map(|(reason, count)| SoranetPowFailureCountV1 { reason, count })
             .collect();
-
         SoranetPrivacyBucketMetricsV1 {
             mode,
             bucket_start_unix,
@@ -1163,7 +1086,6 @@ impl BucketStats {
         }
     }
 }
-
 #[derive(Debug)]
 struct CollectorShareAccumulator {
     bucket_start_unix: u64,
@@ -1171,7 +1093,6 @@ struct CollectorShareAccumulator {
     mode: SoranetPrivacyModeV1,
     shares: BTreeMap<u16, SoranetPrivacyPrioShareV1>,
 }
-
 impl CollectorShareAccumulator {
     fn new(bucket_start_unix: u64, bucket_duration_secs: u32, mode: SoranetPrivacyModeV1) -> Self {
         Self {
@@ -1181,7 +1102,6 @@ impl CollectorShareAccumulator {
             shares: BTreeMap::new(),
         }
     }
-
     fn insert(&mut self, share: SoranetPrivacyPrioShareV1) -> Result<(), PrivacyShareError> {
         if share.bucket_start_unix != self.bucket_start_unix {
             return Err(PrivacyShareError::BucketAlignmentMismatch {
@@ -1211,11 +1131,9 @@ impl CollectorShareAccumulator {
         self.shares.insert(share.collector_id, share);
         Ok(())
     }
-
     fn ready(&self, expected_shares: u16) -> bool {
         u16::try_from(self.shares.len()).unwrap_or(u16::MAX) >= expected_shares.max(1)
     }
-
     fn combine(
         &self,
         config: &PrivacyBucketConfig,
@@ -1232,7 +1150,6 @@ impl CollectorShareAccumulator {
         )
     }
 }
-
 #[derive(Debug)]
 struct CombinedShareTotals {
     handshake_success: i128,
@@ -1254,7 +1171,6 @@ struct CombinedShareTotals {
     gar_counts: BTreeMap<[u8; 8], i128>,
     suppressed_all: bool,
 }
-
 impl Default for CombinedShareTotals {
     fn default() -> Self {
         Self {
@@ -1279,7 +1195,6 @@ impl Default for CombinedShareTotals {
         }
     }
 }
-
 impl CombinedShareTotals {
     fn add_share(&mut self, share: &SoranetPrivacyPrioShareV1) -> Result<(), PrivacyShareError> {
         self.handshake_success = checked_add_i128(
@@ -1377,7 +1292,6 @@ impl CombinedShareTotals {
         self.suppressed_all &= share.suppressed;
         Ok(())
     }
-
     fn finalize(
         self,
         mode: SoranetPrivacyModeV1,
@@ -1413,7 +1327,6 @@ impl CombinedShareTotals {
             ensure_non_negative_u64(self.active_samples, "active_circuits_samples")?;
         let verified_bytes = ensure_non_negative_u128(self.verified_bytes, "verified_bytes")?;
         let rtt_counts = ensure_non_negative_histogram(&self.rtt_counts)?;
-
         let mut gar_counts = BTreeMap::new();
         for (hash, count) in self.gar_counts {
             let value = ensure_non_negative_u64(count, "gar_abuse_counts")?;
@@ -1421,7 +1334,6 @@ impl CombinedShareTotals {
                 gar_counts.insert(hash, value);
             }
         }
-
         let handshake_total = self.handshake_success
             + self.handshake_pow_rejects
             + self.handshake_downgrades
@@ -1442,7 +1354,6 @@ impl CombinedShareTotals {
         } else {
             None
         };
-
         if let Some(reason) = suppression_reason {
             return Ok(SoranetPrivacyBucketMetricsV1::suppressed_with_reason(
                 mode,
@@ -1473,31 +1384,26 @@ impl CombinedShareTotals {
             bytes_verified: verified_bytes,
             gar_counts,
         };
-
         let bucket_idx = bucket_start_unix / config.bucket_secs;
         Ok(stats.into_metrics(mode, bucket_idx, None, config))
     }
 }
-
 fn checked_add_i128(lhs: i128, rhs: i128, field: &'static str) -> Result<i128, PrivacyShareError> {
     lhs.checked_add(rhs)
         .ok_or(PrivacyShareError::AggregateOverflow { field })
 }
-
 fn ensure_non_negative_u64(value: i128, field: &'static str) -> Result<u64, PrivacyShareError> {
     if value < 0 {
         return Err(PrivacyShareError::NegativeAggregate { field, value });
     }
     u64::try_from(value).map_err(|_| PrivacyShareError::AggregateOverflow { field })
 }
-
 fn ensure_non_negative_u128(value: i128, field: &'static str) -> Result<u128, PrivacyShareError> {
     if value < 0 {
         return Err(PrivacyShareError::NegativeAggregate { field, value });
     }
     u128::try_from(value).map_err(|_| PrivacyShareError::AggregateOverflow { field })
 }
-
 fn ensure_non_negative_histogram(counts: &[i128]) -> Result<Vec<u64>, PrivacyShareError> {
     let mut result = Vec::with_capacity(counts.len());
     for value in counts {
@@ -1505,14 +1411,12 @@ fn ensure_non_negative_histogram(counts: &[i128]) -> Result<Vec<u64>, PrivacySha
     }
     Ok(result)
 }
-
 #[derive(Debug, Clone, Copy, Default)]
 struct ActiveAccumulator {
     total: u128,
     count: u64,
     max: u64,
 }
-
 impl ActiveAccumulator {
     fn record(&mut self, sample: u64) {
         self.total = self.total.saturating_add(u128::from(sample));
@@ -1521,7 +1425,6 @@ impl ActiveAccumulator {
             self.max = sample;
         }
     }
-
     fn into_summary(self) -> (Option<u64>, Option<u64>) {
         if self.count == 0 {
             return (None, None);
@@ -1531,13 +1434,11 @@ impl ActiveAccumulator {
         (Some(avg), Some(self.max))
     }
 }
-
 #[derive(Debug, Clone)]
 struct LatencyHistogram {
     buckets: [u64; RTT_BUCKET_BOUNDS_MS.len() + 1],
     total: u64,
 }
-
 impl Default for LatencyHistogram {
     fn default() -> Self {
         Self {
@@ -1546,7 +1447,6 @@ impl Default for LatencyHistogram {
         }
     }
 }
-
 impl LatencyHistogram {
     fn observe(&mut self, millis: u64) {
         let idx = RTT_BUCKET_BOUNDS_MS
@@ -1556,7 +1456,6 @@ impl LatencyHistogram {
         self.buckets[idx] = self.buckets[idx].saturating_add(1);
         self.total = self.total.saturating_add(1);
     }
-
     fn merge_counts(&mut self, counts: &[u64]) {
         debug_assert_eq!(counts.len(), RTT_BUCKET_COUNT);
         let added: u64 = counts.iter().sum();
@@ -1565,7 +1464,6 @@ impl LatencyHistogram {
             *slot = slot.saturating_add(*addition);
         }
     }
-
     fn from_counts(counts: &[u64]) -> Self {
         let mut histogram = Self::default();
         if !counts.is_empty() {
@@ -1573,12 +1471,10 @@ impl LatencyHistogram {
         }
         histogram
     }
-
     fn into_percentiles(self) -> Vec<(String, u64)> {
         if self.total == 0 {
             return Vec::new();
         }
-
         let mut result = Vec::with_capacity(RTT_PERCENTILES.len());
         for spec in RTT_PERCENTILES {
             let numerator = u128::from(spec.numerator);
@@ -1595,7 +1491,6 @@ impl LatencyHistogram {
                 .copied()
                 .unwrap_or_default()
                 .max(1);
-
             for (idx, count) in self.buckets.iter().copied().enumerate() {
                 cumulative = cumulative.saturating_add(count);
                 if cumulative >= rank {
@@ -1609,25 +1504,20 @@ impl LatencyHistogram {
                     break;
                 }
             }
-
             result.push((spec.label.to_string(), value));
         }
-
         result
     }
 }
-
 fn bucket_index(timestamp: SystemTime, bucket_secs: u64) -> u64 {
     if bucket_secs == 0 {
         return 0;
     }
-
     timestamp
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() / bucket_secs)
         .unwrap_or(0)
 }
-
 fn gar_category_hash(category: &str) -> [u8; 8] {
     let mut hasher = Blake3Hasher::new();
     hasher.update(category.trim().as_bytes());
@@ -1636,11 +1526,9 @@ fn gar_category_hash(category: &str) -> [u8; 8] {
     truncated.copy_from_slice(&digest.as_bytes()[..8]);
     truncated
 }
-
 fn unix_seconds_to_system_time(seconds: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(seconds)
 }
-
 impl From<SoranetPrivacyHandshakeFailureV1> for HandshakeFailure {
     fn from(value: SoranetPrivacyHandshakeFailureV1) -> Self {
         match value {
@@ -1653,7 +1541,6 @@ impl From<SoranetPrivacyHandshakeFailureV1> for HandshakeFailure {
         }
     }
 }
-
 impl From<SoranetPrivacyThrottleScopeV1> for PrivacyThrottleScope {
     fn from(value: SoranetPrivacyThrottleScopeV1) -> Self {
         match value {

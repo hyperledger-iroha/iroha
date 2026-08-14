@@ -1,11 +1,9 @@
 #![allow(clippy::missing_panics_doc)]
-
 use std::{
     fs::{self, File},
     io::{self, BufWriter, Read, Write},
     path::{Component, Path, PathBuf},
 };
-
 use clap::Parser;
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::da::manifest::DaManifestV1;
@@ -13,13 +11,10 @@ use norito::{
     decode_from_bytes,
     json::{Map, Value},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
-
 const DEFAULT_CHUNK_TEMPLATE: &str = "chunk_{index:05}.bin";
 const MAX_CHUNK_TEMPLATE_WIDTH: usize = 20;
-
 #[derive(Parser, Debug)]
 #[command(
     author,
@@ -43,29 +38,24 @@ struct Args {
     #[arg(long = "chunk-template", default_value = DEFAULT_CHUNK_TEMPLATE)]
     chunk_template: String,
 }
-
 fn main() {
     if let Err(err) = run(Args::parse()) {
         eprintln!("error: {err:?}");
         std::process::exit(1);
     }
 }
-
 fn run(args: Args) -> Result<()> {
     let manifest = load_manifest(&args.manifest_path)
         .wrap_err_with(|| format!("failed to load manifest `{}`", args.manifest_path.display()))?;
-
     let output_path = args
         .output
         .unwrap_or_else(|| args.chunks_dir.join("payload.bin"));
-
     let summary = reconstruct_payload(
         &manifest,
         &args.chunks_dir,
         &output_path,
         &args.chunk_template,
     )?;
-
     if let Some(path) = args.json_out {
         write_summary_json(&summary, &manifest, &path)?;
         println!(
@@ -87,10 +77,8 @@ fn run(args: Args) -> Result<()> {
             summary.parity_chunks
         );
     }
-
     Ok(())
 }
-
 #[derive(Debug, Clone)]
 struct ReconstructionSummary {
     chunk_count: usize,
@@ -100,7 +88,6 @@ struct ReconstructionSummary {
     expected_blob_hash_hex: String,
     output_path: String,
 }
-
 fn reconstruct_payload(
     manifest: &DaManifestV1,
     chunk_dir: &Path,
@@ -113,28 +100,23 @@ fn reconstruct_payload(
             chunk_dir.display()
         ));
     }
-
     if manifest.chunks.is_empty() {
         return Err(eyre!("manifest does not contain any chunk commitments"));
     }
     render_chunk_template(chunk_template, 0)?;
     let mut ordered_chunks = manifest.chunks.iter().collect::<Vec<_>>();
     ordered_chunks.sort_by_key(|chunk| chunk.index);
-
     let mut writer = BufWriter::new(open_output_file(output_path, "reconstructed payload")?);
-
     let mut hasher = blake3::Hasher::new();
     let mut buffer = Vec::new();
     let mut total_bytes = 0u64;
     let mut data_chunks = 0usize;
     let mut parity_chunks = 0usize;
-
     for chunk in ordered_chunks {
         let file_name = render_chunk_template(chunk_template, chunk.index as usize)?;
         let path = chunk_dir.join(file_name);
         let mut file = File::open(&path)
             .wrap_err_with(|| format!("failed to open chunk `{}`", path.display()))?;
-
         let mut metadata_len = file
             .metadata()
             .map(|meta| meta.len())
@@ -151,7 +133,6 @@ fn reconstruct_payload(
                 metadata_len
             ));
         }
-
         buffer.resize(chunk.length as usize, 0);
         file.read_exact(&mut buffer).wrap_err_with(|| {
             format!(
@@ -160,7 +141,6 @@ fn reconstruct_payload(
                 path.display()
             )
         })?;
-
         let digest = blake3::hash(&buffer);
         if digest.as_bytes() != chunk.commitment.as_ref() {
             return Err(eyre!(
@@ -170,14 +150,12 @@ fn reconstruct_payload(
                 hex::encode(digest.as_bytes())
             ));
         }
-
         if chunk.parity {
             parity_chunks = parity_chunks
                 .checked_add(1)
                 .ok_or_else(|| eyre!("parity chunk counter overflow"))?;
             continue;
         }
-
         if chunk.offset != total_bytes {
             return Err(eyre!(
                 "chunk {} offset {} does not match reconstructed cursor {}",
@@ -186,7 +164,6 @@ fn reconstruct_payload(
                 total_bytes
             ));
         }
-
         writer
             .write_all(&buffer)
             .wrap_err("failed to write reconstructed payload")?;
@@ -201,7 +178,6 @@ fn reconstruct_payload(
     writer
         .flush()
         .wrap_err("failed to flush reconstructed payload")?;
-
     if total_bytes != manifest.total_size {
         return Err(eyre!(
             "reconstructed length {} does not match manifest content_length {}",
@@ -209,7 +185,6 @@ fn reconstruct_payload(
             manifest.total_size
         ));
     }
-
     let expected = manifest.blob_hash.as_bytes();
     let computed = hasher.finalize();
     if expected != computed.as_bytes() {
@@ -219,7 +194,6 @@ fn reconstruct_payload(
             hex::encode(computed.as_bytes())
         ));
     }
-
     Ok(ReconstructionSummary {
         chunk_count: manifest.chunks.len(),
         data_chunks,
@@ -229,14 +203,12 @@ fn reconstruct_payload(
         output_path: output_path.display().to_string(),
     })
 }
-
 fn load_manifest(path: &Path) -> Result<DaManifestV1> {
     let bytes =
         fs::read(path).wrap_err_with(|| format!("failed to read manifest `{}`", path.display()))?;
     let decoded = decode_manifest_bytes(&bytes)?;
     decode_from_bytes(&decoded).wrap_err("failed to decode Norito manifest")
 }
-
 fn decode_manifest_bytes(raw: &[u8]) -> Result<Vec<u8>> {
     let Ok(text) = std::str::from_utf8(raw) else {
         return Ok(raw.to_vec());
@@ -244,7 +216,6 @@ fn decode_manifest_bytes(raw: &[u8]) -> Result<Vec<u8>> {
     if text.is_empty() {
         return Err(eyre!("manifest file is empty"));
     }
-
     let compact = text
         .chars()
         .filter(|c| !c.is_ascii_whitespace())
@@ -260,7 +231,6 @@ fn decode_manifest_bytes(raw: &[u8]) -> Result<Vec<u8>> {
         && compact_without_prefix
             .chars()
             .all(|c| c.is_ascii_hexdigit());
-
     if !looks_like_hex {
         return Ok(raw.to_vec());
     }
@@ -283,15 +253,12 @@ fn decode_manifest_bytes(raw: &[u8]) -> Result<Vec<u8>> {
             "manifest hex payload must contain an even number of digits"
         ));
     }
-
     hex::decode(text).wrap_err("failed to decode manifest hex payload")
 }
-
 fn render_chunk_template(template: &str, index: usize) -> Result<String> {
     let mut output = String::new();
     let mut cursor = template;
     let mut replaced = false;
-
     while let Some(pos) = cursor.find("{index") {
         output.push_str(&cursor[..pos]);
         cursor = &cursor[pos + "{index".len()..];
@@ -318,7 +285,6 @@ fn render_chunk_template(template: &str, index: usize) -> Result<String> {
         };
         output.push_str(&formatted);
     }
-
     output.push_str(cursor);
     if !replaced {
         return Err(eyre!(
@@ -328,7 +294,6 @@ fn render_chunk_template(template: &str, index: usize) -> Result<String> {
     validate_chunk_file_name(&output)?;
     Ok(output)
 }
-
 fn parse_chunk_template_width(spec: &str) -> Result<usize> {
     if spec.is_empty() {
         return Err(eyre!("chunk template width must not be empty"));
@@ -336,7 +301,6 @@ fn parse_chunk_template_width(spec: &str) -> Result<usize> {
     if spec.as_bytes().iter().any(u8::is_ascii_whitespace) {
         return Err(eyre!("chunk template width must not contain whitespace"));
     }
-
     let digits = spec.strip_prefix('0').unwrap_or(spec);
     if digits.is_empty() {
         return Err(eyre!("chunk template width must be greater than zero"));
@@ -361,7 +325,6 @@ fn parse_chunk_template_width(spec: &str) -> Result<usize> {
     }
     Ok(width)
 }
-
 fn validate_chunk_file_name(file_name: &str) -> Result<()> {
     if file_name.is_empty() {
         return Err(eyre!("rendered chunk filename must not be empty"));
@@ -376,7 +339,6 @@ fn validate_chunk_file_name(file_name: &str) -> Result<()> {
             "rendered chunk filename `{file_name}` must be a single path component"
         ));
     }
-
     let mut components = Path::new(file_name).components();
     match (components.next(), components.next()) {
         (Some(Component::Normal(_)), None) => Ok(()),
@@ -385,7 +347,6 @@ fn validate_chunk_file_name(file_name: &str) -> Result<()> {
         )),
     }
 }
-
 fn write_summary_json(
     summary: &ReconstructionSummary,
     manifest: &DaManifestV1,
@@ -423,7 +384,6 @@ fn write_summary_json(
     file.write_all(rendered.as_bytes())
         .wrap_err_with(|| format!("failed to write summary `{}`", path.display()))
 }
-
 fn open_output_file(path: &Path, label: &str) -> Result<File> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -445,7 +405,6 @@ fn open_output_file(path: &Path, label: &str) -> Result<File> {
     }
     Ok(file)
 }
-
 fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -456,7 +415,6 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 fn validate_output_path(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -473,7 +431,6 @@ fn validate_output_path(path: &Path) -> Result<()> {
                 .wrap_err_with(|| format!("failed to inspect output `{}`", path.display()));
         }
     }
-
     if let Some(parent) = path.parent() {
         for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
             if ancestor.as_os_str().is_empty() {
@@ -505,20 +462,16 @@ fn validate_output_path(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut fs::OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -534,7 +487,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -551,11 +503,9 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0
 }
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         da::{
@@ -578,15 +528,12 @@ mod tests {
     use sorafs_car::{CarBuildPlan, CarChunk, ChunkStore, build_plan_from_da_manifest};
     use sorafs_chunker::ChunkProfile;
     use tempfile::{TempDir, tempdir};
-
     use super::*;
-
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");
         (temp, path)
     }
-
     #[test]
     fn render_chunk_template_supports_width() {
         assert_eq!(
@@ -603,7 +550,6 @@ mod tests {
         );
         assert!(render_chunk_template("no-placeholder", 1).is_err());
     }
-
     #[test]
     fn render_chunk_template_rejects_unsafe_or_noncanonical_forms() {
         for template in [
@@ -629,7 +575,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn decode_manifest_accepts_canonical_hex_payloads() {
         let (manifest, _) = sample_manifest();
@@ -637,11 +582,9 @@ mod tests {
         let encoded = hex::encode(&bytes);
         let decoded = decode_manifest_bytes(encoded.as_bytes()).expect("decode hex");
         assert_eq!(decoded, bytes);
-
         let parsed: DaManifestV1 = decode_from_bytes(&decoded).expect("decode manifest");
         assert_eq!(parsed.chunks.len(), manifest.chunks.len());
     }
-
     #[test]
     fn decode_manifest_rejects_noncanonical_hex_payloads() {
         for payload in ["", "0x4e52", "4E52", "4e52\n", "4e 52", "4e5"] {
@@ -657,12 +600,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn reconstructs_payload_from_chunks() {
         let (manifest, payload) = sample_manifest();
         let plan = build_plan_from_da_manifest(&manifest).expect("plan");
-
         let (_dir, dir_path) = canonical_tempdir();
         for (index, chunk) in plan.chunks.iter().enumerate() {
             let path = dir_path
@@ -671,17 +612,14 @@ mod tests {
             let end = start + chunk.length as usize;
             fs::write(path, &payload[start..end]).expect("write chunk");
         }
-
         let out_path = dir_path.join("reconstructed.bin");
         let summary = reconstruct_payload(&manifest, &dir_path, &out_path, DEFAULT_CHUNK_TEMPLATE)
             .expect("reconstruct");
-
         let reconstructed = fs::read(&out_path).expect("read reconstructed");
         assert_eq!(reconstructed, payload);
         assert_eq!(summary.chunk_count, plan.chunks.len());
         assert_eq!(summary.payload_bytes, payload.len() as u64);
     }
-
     #[test]
     fn reconstructs_fixture_with_parity_chunks() {
         let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -713,22 +651,18 @@ mod tests {
         let expected = fs::read(fixture_root.join("payload.bin")).expect("read fixture payload");
         assert_eq!(reconstructed, expected);
     }
-
     #[test]
     fn open_output_file_creates_parent_and_writes_all_bytes() {
         let (_temp, temp_path) = canonical_tempdir();
         let output_path = temp_path.join("nested").join("payload.bin");
         let mut file = open_output_file(&output_path, "test output").expect("open output");
-
         file.write_all(b"da-reconstruct").expect("write output");
         drop(file);
-
         assert_eq!(
             fs::read(&output_path).expect("read output"),
             b"da-reconstruct"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn write_summary_json_rejects_symlink_output() {
@@ -739,18 +673,15 @@ mod tests {
         std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
         let (manifest, _) = sample_manifest();
         let summary = sample_summary();
-
         let err = write_summary_json(&summary, &manifest, &output_path)
             .expect_err("reject symlink output");
         let message = err.to_string();
-
         assert!(
             message.contains("must not be a symlink"),
             "unexpected error: {message}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
     }
-
     #[cfg(unix)]
     #[test]
     fn open_output_file_rejects_symlink_parent() {
@@ -760,13 +691,11 @@ mod tests {
         let linked_dir = temp_path.join("linked");
         std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
         let output_path = linked_dir.join("payload.bin");
-
         let err = match open_output_file(&output_path, "test output") {
             Ok(_) => panic!("symlink parent should be rejected"),
             Err(err) => err,
         };
         let message = err.to_string();
-
         assert!(
             message.contains("parent") && message.contains("must not be a symlink"),
             "unexpected error: {message}"
@@ -776,7 +705,6 @@ mod tests {
             "symlink parent should not receive output"
         );
     }
-
     #[test]
     #[ignore = "regenerates DA reconstruction fixtures on disk"]
     fn regenerate_da_reconstruct_fixture_assets() {
@@ -784,7 +712,6 @@ mod tests {
         const DATA_SHARDS: u16 = 2;
         const PARITY_SHARDS: u16 = 2;
         const CHUNK_SIZE: u32 = 32;
-
         let payload =
             build_fixture_payload(STRIPES * usize::from(DATA_SHARDS) * CHUNK_SIZE as usize);
         let chunk_profile = ChunkProfile {
@@ -801,7 +728,6 @@ mod tests {
         let chunk_output = chunk_store
             .ingest_plan_stream_to_directory(&plan, &mut reader, chunk_dir.path())
             .expect("persist chunk files");
-
         let (manifest, parity_payloads) = build_fixture_manifest(
             &payload,
             &chunk_store,
@@ -809,14 +735,12 @@ mod tests {
             DATA_SHARDS,
             PARITY_SHARDS,
         );
-
         let fixture_root = fixture_root_path();
         if fixture_root.exists() {
             fs::remove_dir_all(&fixture_root).expect("clean existing fixture directory");
         }
         let chunks_dir = fixture_root.join("chunks");
         fs::create_dir_all(&chunks_dir).expect("create chunks directory");
-
         for record in &chunk_output.records {
             let src = chunk_dir.path().join(&record.file_name);
             let dst = chunks_dir.join(&record.file_name);
@@ -826,7 +750,6 @@ mod tests {
             let dst = chunks_dir.join(format!("chunk_{index:05}.bin"));
             fs::write(&dst, &payload_bytes).expect("write parity chunk");
         }
-
         let manifest_bytes = to_bytes(&manifest).expect("encode manifest");
         fs::write(
             fixture_root.join("manifest.norito.hex"),
@@ -838,7 +761,6 @@ mod tests {
             .expect("write manifest json");
         write_chunk_matrix_json(&manifest, &fixture_root.join("chunk_matrix.json"));
         fs::write(fixture_root.join("payload.bin"), &payload).expect("write payload copy");
-
         let manifest_digest = ManifestDigest::new(*blake3::hash(&manifest_bytes).as_bytes());
         let chunk_root_hash = Hash::prehashed(*manifest.chunk_root.as_ref());
         let proof_digest = Hash::prehashed(*blake3::hash(b"da-fixture-proof").as_bytes());
@@ -870,13 +792,11 @@ mod tests {
             bundle_json.as_bytes(),
         )
         .expect("write bundle json");
-
         println!(
             "refreshed reconstruction fixture at {}",
             fixture_root.display()
         );
     }
-
     fn build_fixture_payload(total_bytes: usize) -> Vec<u8> {
         let mut payload = Vec::with_capacity(total_bytes);
         for idx in 0..total_bytes {
@@ -885,7 +805,6 @@ mod tests {
         }
         payload
     }
-
     fn build_fixture_manifest(
         payload: &[u8],
         chunk_store: &ChunkStore,
@@ -913,7 +832,6 @@ mod tests {
                 stripe_id,
             ));
         }
-
         let mut stripes = Vec::new();
         for chunk_group in stripe_symbols.chunks(data_shards as usize) {
             let mut padded = chunk_group.to_vec();
@@ -924,7 +842,6 @@ mod tests {
         }
         let total_stripes = u32::try_from(stripes.len()).unwrap_or(u32::MAX);
         let shards_per_stripe = u32::from(data_shards.saturating_add(parity_shards));
-
         let mut parity_payloads = Vec::new();
         let mut next_index = chunk_commitments.len() as u32;
         for (stripe_idx, stripe) in stripes.into_iter().enumerate() {
@@ -957,7 +874,6 @@ mod tests {
                 next_index = next_index.checked_add(1).expect("chunk index overflow");
             }
         }
-
         let manifest = DaManifestV1 {
             version: DaManifestV1::VERSION,
             client_blob_id: BlobDigest::from_hash(blake3::hash(b"fixture-client")),
@@ -986,10 +902,8 @@ mod tests {
             metadata: ExtraMetadata::default(),
             issued_at_unix: 1_701_111_111,
         };
-
         (manifest, parity_payloads)
     }
-
     fn fixture_root_path() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
@@ -997,7 +911,6 @@ mod tests {
             .expect("workspace root")
             .join("fixtures/da/reconstruct/rs_parity_v1")
     }
-
     fn write_chunk_matrix_json(manifest: &DaManifestV1, output: &Path) {
         let mut rows = Vec::with_capacity(manifest.chunks.len());
         for chunk in &manifest.chunks {
@@ -1016,7 +929,6 @@ mod tests {
             norito_json::to_json_pretty(&JsonValue::Array(rows)).expect("render chunk matrix json");
         fs::write(output, rendered.as_bytes()).expect("write chunk matrix json");
     }
-
     fn sample_summary() -> ReconstructionSummary {
         ReconstructionSummary {
             chunk_count: 1,
@@ -1027,13 +939,11 @@ mod tests {
             output_path: "payload.bin".to_owned(),
         }
     }
-
     fn sample_manifest() -> (DaManifestV1, Vec<u8>) {
         let payload = b"chunked payload example bytes for reconstruction harness".to_vec();
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
         (manifest_from_plan(&plan, payload.len() as u64), payload)
     }
-
     fn manifest_from_plan(plan: &CarBuildPlan, total_size: u64) -> DaManifestV1 {
         let profile = ErasureProfile::default();
         let data_shards = usize::from(profile.data_shards);

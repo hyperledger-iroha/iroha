@@ -1,25 +1,20 @@
 //! AEAD key-envelope handling with explicit in-memory secret scrubbing.
-
 use std::fmt;
-
 use iroha_crypto::{
     KeyPair, PrivateKey,
     encryption::{ChaCha20Poly1305, SymmetricEncryptor},
 };
 use norito::codec::{Decode, Encode};
-
 use super::protocol::{
     SIGNER_KEY_MAGIC_V1, SIGNER_MAX_PRIVATE_KEY_BYTES_V1, SIGNER_MAX_REQUEST_PAYLOAD_BYTES_V1,
     SIGNER_PROTOCOL_VERSION_V1, SoftwareSignerKeyAlgorithmV1, SoftwareSignerPurposeBindingV1,
     SoftwareSignerRoleV1, digest_canonical, digest_parts, public_key_digest, scrub, valid_identity,
     valid_software_signer_handle,
 };
-
 const KEY_ENVELOPE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.key-envelope.v1";
 const KEY_ENVELOPE_AAD_DOMAIN_V1: &[u8] = b"iroha.external-signer.key-envelope.aad.v1";
 const KEY_ENVELOPE_KEK_DOMAIN_V1: &[u8] = b"iroha.external-signer.key-envelope.kek.v1";
 const KEY_ENVELOPE_MAX_CIPHERTEXT_BYTES_V1: usize = SIGNER_MAX_PRIVATE_KEY_BYTES_V1 + 1024;
-
 /// Public, authenticated metadata for one encrypted signer key generation.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct SoftwareSignerKeyEnvelopeAadV1 {
@@ -41,7 +36,6 @@ pub(super) struct SoftwareSignerKeyEnvelopeAadV1 {
     pub public_key_digest: [u8; 32],
     pub max_request_bytes: u32,
 }
-
 impl SoftwareSignerKeyEnvelopeAadV1 {
     pub(super) fn validate(&self) -> Result<(), SoftwareSignerEnvelopeErrorV1> {
         if self.backend != super::protocol::ExternalSignerBackendV1::Software
@@ -76,7 +70,6 @@ impl SoftwareSignerKeyEnvelopeAadV1 {
         Ok(())
     }
 }
-
 /// Versioned ChaCha20-Poly1305 envelope for one software signing key.
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SoftwareSignerKeyEnvelopeV1 {
@@ -91,7 +84,6 @@ pub struct SoftwareSignerKeyEnvelopeV1 {
     /// Domain-separated digest covering metadata and ciphertext.
     pub envelope_digest: [u8; 32],
 }
-
 impl fmt::Debug for SoftwareSignerKeyEnvelopeV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -107,7 +99,6 @@ impl fmt::Debug for SoftwareSignerKeyEnvelopeV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl SoftwareSignerKeyEnvelopeV1 {
     pub(super) fn create(
         aad: SoftwareSignerKeyEnvelopeAadV1,
@@ -158,7 +149,6 @@ impl SoftwareSignerKeyEnvelopeV1 {
         envelope.envelope_digest = envelope.compute_digest()?;
         Ok(envelope)
     }
-
     pub(super) fn open(
         &self,
         wrapping_key: &SoftwareSignerWrappingKeyV1,
@@ -204,7 +194,6 @@ impl SoftwareSignerKeyEnvelopeV1 {
         }
         Ok(keypair)
     }
-
     pub(super) fn validate_public(&self) -> Result<(), SoftwareSignerEnvelopeErrorV1> {
         if self.magic != SIGNER_KEY_MAGIC_V1
             || self.version != SIGNER_PROTOCOL_VERSION_V1
@@ -220,7 +209,6 @@ impl SoftwareSignerKeyEnvelopeV1 {
         }
         Ok(())
     }
-
     pub(super) fn compute_digest(&self) -> Result<[u8; 32], SoftwareSignerEnvelopeErrorV1> {
         digest_canonical(
             KEY_ENVELOPE_DIGEST_DOMAIN_V1,
@@ -233,12 +221,10 @@ impl SoftwareSignerKeyEnvelopeV1 {
         )
         .map_err(|_| SoftwareSignerEnvelopeErrorV1::Invalid)
     }
-
     pub(super) const fn aad(&self) -> &SoftwareSignerKeyEnvelopeAadV1 {
         &self.aad
     }
 }
-
 #[derive(Decode, Encode)]
 struct SoftwareSignerPrivateKeyPlaintextV1 {
     magic: [u8; 8],
@@ -246,18 +232,15 @@ struct SoftwareSignerPrivateKeyPlaintextV1 {
     algorithm: SoftwareSignerKeyAlgorithmV1,
     private_payload: Vec<u8>,
 }
-
 impl Drop for SoftwareSignerPrivateKeyPlaintextV1 {
     fn drop(&mut self) {
         scrub(&mut self.private_payload);
     }
 }
-
 /// Runtime-only 256-bit key used to open signer key envelopes.
 pub struct SoftwareSignerWrappingKeyV1 {
     bytes: [u8; 32],
 }
-
 impl SoftwareSignerWrappingKeyV1 {
     /// Construct a wrapping key from exactly 32 runtime-supplied bytes.
     ///
@@ -270,25 +253,21 @@ impl SoftwareSignerWrappingKeyV1 {
         }
         Ok(Self { bytes })
     }
-
     fn derive_key(&self, aad: &[u8]) -> [u8; 32] {
         let context = digest_parts(KEY_ENVELOPE_KEK_DOMAIN_V1, &[aad]);
         *blake3::keyed_hash(&self.bytes, &context).as_bytes()
     }
 }
-
 impl fmt::Debug for SoftwareSignerWrappingKeyV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("SoftwareSignerWrappingKeyV1([REDACTED])")
     }
 }
-
 impl Drop for SoftwareSignerWrappingKeyV1 {
     fn drop(&mut self) {
         scrub(&mut self.bytes);
     }
 }
-
 fn canonical_aad(
     aad: &SoftwareSignerKeyEnvelopeAadV1,
 ) -> Result<Vec<u8>, SoftwareSignerEnvelopeErrorV1> {
@@ -304,7 +283,6 @@ fn canonical_aad(
     ))
     .map_err(|_| SoftwareSignerEnvelopeErrorV1::Invalid)
 }
-
 /// Payload-free key-envelope failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoftwareSignerEnvelopeErrorV1 {
@@ -321,18 +299,14 @@ pub enum SoftwareSignerEnvelopeErrorV1 {
     /// Cryptographic randomness or the AEAD implementation was unavailable.
     Unavailable,
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
-
     use super::*;
     use crate::external_software_signer::protocol::ExternalSignerBackendV1;
-
     fn wrapping(byte: u8) -> SoftwareSignerWrappingKeyV1 {
         SoftwareSignerWrappingKeyV1::try_from_bytes([byte; 32]).expect("fixture wrapping key")
     }
-
     fn fixture() -> (KeyPair, SoftwareSignerKeyEnvelopeAadV1) {
         let keypair =
             KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519).expect("fixture signer key");
@@ -357,7 +331,6 @@ mod tests {
         };
         (keypair, aad)
     }
-
     #[test]
     fn wrong_wrapping_key_aad_and_ciphertext_fail_aead_authentication() {
         let (keypair, aad) = fixture();
@@ -367,7 +340,6 @@ mod tests {
             envelope.open(&wrapping(0x44)),
             Err(SoftwareSignerEnvelopeErrorV1::AuthenticationFailed)
         ));
-
         let mut wrong_aad = envelope.clone();
         wrong_aad.aad.policy_digest[0] ^= 1;
         wrong_aad.envelope_digest = wrong_aad.compute_digest().expect("outer digest");
@@ -375,7 +347,6 @@ mod tests {
             wrong_aad.open(&wrapping(0x43)),
             Err(SoftwareSignerEnvelopeErrorV1::AuthenticationFailed)
         ));
-
         let mut corrupt_ciphertext = envelope;
         corrupt_ciphertext.ciphertext[0] ^= 1;
         corrupt_ciphertext.envelope_digest =

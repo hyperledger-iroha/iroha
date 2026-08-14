@@ -3,19 +3,16 @@
 //! The elliptic-curve arithmetic uses a constant-time backend layered on top of
 //! `crypto-bigint` Montgomery field arithmetic with Jacobian point operations.
 //! All field operations remain deterministic across platforms.
-
 #[cfg(test)]
 use core::ops::ShrAssign;
 use core::{cmp::Ordering, fmt};
 use std::sync::LazyLock;
-
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, Zero};
 use rand::{RngCore, rngs::OsRng};
 use rand_core::TryRngCore;
 use streebog::{Digest, Streebog256, Streebog512};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
-
 #[cfg(feature = "gost")]
 mod constant_time {
     #![allow(dead_code)]
@@ -24,9 +21,7 @@ mod constant_time {
     //! This module provides field operations backed by `crypto-bigint`’s constant-time
     //! Montgomery arithmetic and Jacobian point helpers that will replace the compat
     //! `num-bigint` implementation during Task G2.
-
     use std::{ptr, sync::LazyLock};
-
     use crypto_bigint::{
         Odd, U256, U512, Uint,
         modular::{MontyForm, MontyParams},
@@ -34,82 +29,67 @@ mod constant_time {
     use num_bigint::BigUint;
     use num_traits::Zero;
     use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
-
     use super::{AffinePoint as OuterAffinePoint, CurveParams as OuterCurveParams};
     #[cfg(test)]
     use crate::Algorithm;
-
     /// Field element represented in Montgomery form with constant-time operations.
     #[derive(Clone, Copy)]
     struct FieldElement<const LIMBS: usize> {
         residue: MontyForm<LIMBS>,
     }
-
     impl<const LIMBS: usize> FieldElement<LIMBS> {
         fn zero(params: MontyParams<LIMBS>) -> Self {
             Self {
                 residue: MontyForm::zero(params),
             }
         }
-
         fn one(params: MontyParams<LIMBS>) -> Self {
             Self {
                 residue: MontyForm::one(params),
             }
         }
-
         fn from_uint(value: Uint<LIMBS>, params: MontyParams<LIMBS>) -> Self {
             Self {
                 residue: MontyForm::new(&value, params),
             }
         }
-
         fn as_uint(&self) -> Uint<LIMBS> {
             self.residue.retrieve()
         }
-
         fn add(&self, rhs: &Self) -> Self {
             Self {
                 residue: self.residue.add(&rhs.residue),
             }
         }
-
         fn sub(&self, rhs: &Self) -> Self {
             Self {
                 residue: self.residue.sub(&rhs.residue),
             }
         }
-
         fn mul(&self, rhs: &Self) -> Self {
             Self {
                 residue: self.residue.mul(&rhs.residue),
             }
         }
-
         fn square(&self) -> Self {
             Self {
                 residue: self.residue.square(),
             }
         }
-
         fn double(&self) -> Self {
             self.add(self)
         }
-
         fn triple(&self) -> Self {
             self.double().add(self)
         }
-
         fn negate(&self) -> Self {
             Self {
                 residue: self.residue.neg(),
             }
         }
-
         fn is_zero(&self) -> Choice {
             self.residue.retrieve().ct_eq(&Uint::<LIMBS>::ZERO)
         }
-
         fn invert(&self) -> Option<Self> {
             if bool::from(self.is_zero()) {
                 return None;
@@ -124,33 +104,28 @@ mod constant_time {
                 residue: self.residue.pow(&exponent),
             })
         }
-
         fn conditional_select(a: &Self, b: &Self, choice: Choice) -> Self {
             Self {
                 residue: MontyForm::conditional_select(&a.residue, &b.residue, choice),
             }
         }
     }
-
     impl<const LIMBS: usize> ConstantTimeEq for FieldElement<LIMBS> {
         fn ct_eq(&self, other: &Self) -> Choice {
             self.residue.retrieve().ct_eq(&other.residue.retrieve())
         }
     }
-
     #[derive(Clone, Copy)]
     struct AffinePoint<const LIMBS: usize> {
         x: FieldElement<LIMBS>,
         y: FieldElement<LIMBS>,
     }
-
     #[derive(Clone, Copy)]
     struct JacobianPoint<const LIMBS: usize> {
         x: FieldElement<LIMBS>,
         y: FieldElement<LIMBS>,
         z: FieldElement<LIMBS>,
     }
-
     impl<const LIMBS: usize> JacobianPoint<LIMBS> {
         fn infinity(params: MontyParams<LIMBS>) -> Self {
             Self {
@@ -159,7 +134,6 @@ mod constant_time {
                 z: FieldElement::zero(params),
             }
         }
-
         fn from_affine(point: &AffinePoint<LIMBS>, params: MontyParams<LIMBS>) -> Self {
             Self {
                 x: point.x,
@@ -167,67 +141,52 @@ mod constant_time {
                 z: FieldElement::one(params),
             }
         }
-
         fn is_infinity(&self) -> Choice {
             self.z.is_zero()
         }
-
         fn double(&self, curve: &CurveParameters<LIMBS>) -> Self {
             let params = curve.field_params;
-
             let is_inf = self.is_infinity();
             let mut result = Self::infinity(params);
-
             if bool::from(is_inf) {
                 return result;
             }
-
             let xx = self.x.square();
             let yy = self.y.square();
             let yyyy = yy.square();
             let zz = self.z.square();
             let zz2 = zz.square();
-
             let s = self.x.mul(&yy).double().double(); // 4 * X * Y^2
             let m = xx.triple().add(&curve.a.mul(&zz2));
             let x3 = m.square().sub(&s.double());
-
             let s_minus_x3 = s.sub(&x3);
             let y3 = m.mul(&s_minus_x3).sub(&yyyy.double().double().double());
             let z3 = self.y.mul(&self.z).double();
-
             result.x = x3;
             result.y = y3;
             result.z = z3;
             result
         }
-
         fn add(&self, other: &Self, curve: &CurveParameters<LIMBS>) -> Self {
             let params = curve.field_params;
             let inf_self = self.is_infinity();
             let inf_other = other.is_infinity();
-
             let z1z1 = self.z.square();
             let z2z2 = other.z.square();
             let u1 = self.x.mul(&z2z2);
             let u2 = other.x.mul(&z1z1);
-
             let z1_cubed = self.z.mul(&z1z1);
             let z2_cubed = other.z.mul(&z2z2);
             let s1 = self.y.mul(&z2_cubed);
             let s2 = other.y.mul(&z1_cubed);
-
             let delta_x = u2.sub(&u1);
             let double_delta_y = s2.sub(&s1).double();
-
             let delta_x_is_zero = delta_x.is_zero();
             let double_delta_y_is_zero = double_delta_y.is_zero();
-
             let doubled_delta_x = delta_x.double();
             let delta_x_double_squared = doubled_delta_x.square();
             let delta_x_cubed = delta_x.mul(&delta_x_double_squared);
             let u1_scaled = u1.mul(&delta_x_double_squared);
-
             let x3_generic = double_delta_y
                 .square()
                 .sub(&delta_x_cubed)
@@ -240,28 +199,23 @@ mod constant_time {
                 .sub(&z1z1)
                 .sub(&z2z2)
                 .mul(&delta_x);
-
             let generic = Self {
                 x: x3_generic,
                 y: y3_generic,
                 z: z3_generic,
             };
-
             let infinity = Self::infinity(params);
             let doubled = self.double(curve);
-
             // H == 0 && R == 0  => points are equal (use doubling)
             let select_double = delta_x_is_zero & double_delta_y_is_zero;
             // H == 0 && R != 0 => result is infinity
             let select_infinity = delta_x_is_zero & (!double_delta_y_is_zero);
-
             let mut result = Self::conditional_select(&generic, &infinity, select_infinity);
             result = Self::conditional_select(&result, &doubled, select_double);
             result = Self::conditional_select(&result, other, inf_self);
             result = Self::conditional_select(&result, self, inf_other);
             result
         }
-
         fn conditional_select(a: &Self, b: &Self, choice: Choice) -> Self {
             Self {
                 x: FieldElement::conditional_select(&a.x, &b.x, choice),
@@ -269,7 +223,6 @@ mod constant_time {
                 z: FieldElement::conditional_select(&a.z, &b.z, choice),
             }
         }
-
         fn as_affine(&self) -> Option<AffinePoint<LIMBS>> {
             if bool::from(self.is_infinity()) {
                 return None;
@@ -277,13 +230,11 @@ mod constant_time {
             let z_inv = self.z.invert()?;
             let z_inv2 = z_inv.square();
             let z_inv3 = z_inv2.mul(&z_inv);
-
             let x = self.x.mul(&z_inv2);
             let y = self.y.mul(&z_inv3);
             Some(AffinePoint { x, y })
         }
     }
-
     struct CurveParameters<const LIMBS: usize> {
         field_params: MontyParams<LIMBS>,
         a: FieldElement<LIMBS>,
@@ -291,33 +242,27 @@ mod constant_time {
         generator: AffinePoint<LIMBS>,
         scalar_modulus: Uint<LIMBS>,
     }
-
     impl<const LIMBS: usize> CurveParameters<LIMBS> {
         fn generator(&self) -> JacobianPoint<LIMBS> {
             JacobianPoint::from_affine(&self.generator, self.field_params)
         }
-
         fn scalar_modulus(&self) -> Uint<LIMBS> {
             self.scalar_modulus
         }
-
         fn field_params(&self) -> MontyParams<LIMBS> {
             self.field_params
         }
     }
-
     fn params_from_hex<const LIMBS: usize>(hex: &str) -> MontyParams<LIMBS> {
         let modulus = Odd::new(Uint::<LIMBS>::from_be_hex(hex)).expect("curve modulus must be odd");
         MontyParams::new_vartime(modulus)
     }
-
     fn fe_from_hex<const LIMBS: usize>(
         hex: &str,
         params: MontyParams<LIMBS>,
     ) -> FieldElement<LIMBS> {
         FieldElement::from_uint(Uint::<LIMBS>::from_be_hex(hex), params)
     }
-
     fn curve_from_constants_256(
         p_hex: &str,
         q_hex: &str,
@@ -338,7 +283,6 @@ mod constant_time {
             scalar_modulus,
         }
     }
-
     fn curve_from_constants_512(
         p_hex: &str,
         q_hex: &str,
@@ -359,7 +303,6 @@ mod constant_time {
             scalar_modulus,
         }
     }
-
     static CURVE_256_A: LazyLock<CurveParameters<{ U256::LIMBS }>> = LazyLock::new(|| {
         curve_from_constants_256(
             "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD97",
@@ -372,7 +315,6 @@ mod constant_time {
             ),
         )
     });
-
     static CURVE_256_B: LazyLock<CurveParameters<{ U256::LIMBS }>> = LazyLock::new(|| {
         curve_from_constants_256(
             "8000000000000000000000000000000000000000000000000000000000000C99",
@@ -385,7 +327,6 @@ mod constant_time {
             ),
         )
     });
-
     static CURVE_256_C: LazyLock<CurveParameters<{ U256::LIMBS }>> = LazyLock::new(|| {
         curve_from_constants_256(
             "9B9F605F5A858107AB1EC85E6B41C8AACF846E86789051D37998F7B9022D759B",
@@ -398,7 +339,6 @@ mod constant_time {
             ),
         )
     });
-
     static CURVE_512_A: LazyLock<CurveParameters<{ U512::LIMBS }>> = LazyLock::new(|| {
         curve_from_constants_512(
             "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFDC7",
@@ -411,7 +351,6 @@ mod constant_time {
             ),
         )
     });
-
     static CURVE_512_B: LazyLock<CurveParameters<{ U512::LIMBS }>> = LazyLock::new(|| {
         curve_from_constants_512(
             "8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006F",
@@ -424,12 +363,10 @@ mod constant_time {
             ),
         )
     });
-
     enum CurveSelection {
         Bits256(&'static CurveParameters<{ U256::LIMBS }>),
         Bits512(&'static CurveParameters<{ U512::LIMBS }>),
     }
-
     #[cfg(test)]
     fn curve_for_algorithm(algo: Algorithm) -> Option<CurveSelection> {
         match algo {
@@ -441,7 +378,6 @@ mod constant_time {
             _ => None,
         }
     }
-
     fn curve_for_params(params: &OuterCurveParams) -> Option<CurveSelection> {
         if ptr::eq(
             ptr::from_ref(params),
@@ -475,7 +411,6 @@ mod constant_time {
         }
         None
     }
-
     fn biguint_to_uint<const LIMBS: usize>(value: &BigUint) -> Option<Uint<LIMBS>> {
         let bytes = value.to_bytes_be();
         if bytes.len() > Uint::<LIMBS>::BYTES {
@@ -486,7 +421,6 @@ mod constant_time {
         padded[offset..].copy_from_slice(&bytes);
         Some(Uint::<LIMBS>::from_be_slice(&padded))
     }
-
     fn uint_to_biguint<const LIMBS: usize>(value: &Uint<LIMBS>) -> BigUint {
         let mut bytes = Vec::with_capacity(Uint::<LIMBS>::BYTES);
         for word in value.to_words() {
@@ -494,7 +428,6 @@ mod constant_time {
         }
         BigUint::from_bytes_le(&bytes)
     }
-
     fn generator_outer_point<const LIMBS: usize>(
         curve: &CurveParameters<LIMBS>,
     ) -> OuterAffinePoint {
@@ -507,7 +440,6 @@ mod constant_time {
             uint_to_biguint(&generator_affine.y.as_uint()),
         )
     }
-
     fn affine_from_outer<const LIMBS: usize>(
         curve: &CurveParameters<LIMBS>,
         point: &OuterAffinePoint,
@@ -517,7 +449,6 @@ mod constant_time {
         let y = FieldElement::from_uint(biguint_to_uint::<LIMBS>(&point.y)?, params);
         Some(AffinePoint { x, y })
     }
-
     fn scalar_mul_impl<const LIMBS: usize>(
         curve: &CurveParameters<LIMBS>,
         scalar: &BigUint,
@@ -530,26 +461,22 @@ mod constant_time {
         if bool::from(scalar_uint.ct_eq(&Uint::<LIMBS>::ZERO)) {
             return None;
         }
-
         let params = curve.field_params();
         let base_affine = affine_from_outer(curve, point)?;
         let base = JacobianPoint::from_affine(&base_affine, params);
         let mut acc = JacobianPoint::infinity(params);
-
         for i in (0..Uint::<LIMBS>::BITS).rev() {
             let doubled = acc.double(curve);
             let added = doubled.add(&base, curve);
             let choice = scalar_uint.bit(i);
             acc = JacobianPoint::conditional_select(&doubled, &added, choice.into());
         }
-
         let affine = acc.as_affine()?;
         Some(OuterAffinePoint::new(
             uint_to_biguint(&affine.x.as_uint()),
             uint_to_biguint(&affine.y.as_uint()),
         ))
     }
-
     fn point_add_impl<const LIMBS: usize>(
         curve: &CurveParameters<LIMBS>,
         p: &OuterAffinePoint,
@@ -565,7 +492,6 @@ mod constant_time {
             uint_to_biguint(&affine.y.as_uint()),
         ))
     }
-
     pub(super) fn scalar_mul(
         params: &OuterCurveParams,
         scalar: &BigUint,
@@ -576,7 +502,6 @@ mod constant_time {
             CurveSelection::Bits512(curve) => scalar_mul_impl(curve, scalar, point),
         })
     }
-
     fn scalar_mul_base_impl<const LIMBS: usize>(
         curve: &CurveParameters<LIMBS>,
         scalar: &BigUint,
@@ -587,7 +512,6 @@ mod constant_time {
         let generator = generator_outer_point(curve);
         scalar_mul_impl(curve, scalar, &generator)
     }
-
     pub(super) fn scalar_mul_base(
         params: &OuterCurveParams,
         scalar: &BigUint,
@@ -597,7 +521,6 @@ mod constant_time {
             CurveSelection::Bits512(curve) => scalar_mul_base_impl(curve, scalar),
         })
     }
-
     fn mul_add_impl<const LIMBS: usize>(
         curve: &CurveParameters<LIMBS>,
         scalar_g: &BigUint,
@@ -612,7 +535,6 @@ mod constant_time {
         ) {
             return None;
         }
-
         let params = curve.field_params();
         let base = curve.generator();
         let affine_q = affine_from_outer(curve, point_q)?;
@@ -626,30 +548,24 @@ mod constant_time {
         table[1] = base;
         table[2] = point;
         table[3] = table[1].add(&table[2], curve);
-
         let mut acc = JacobianPoint::infinity(params);
         for bit_index in (0..Uint::<LIMBS>::BITS).rev() {
             acc = acc.double(curve);
-
             let bit_g = Choice::from(generator_scalar_uint.bit(bit_index));
             let bit_q = Choice::from(point_scalar_uint.bit(bit_index));
             let both = bit_g & bit_q;
-
             let mut addend = table[0];
             addend = JacobianPoint::conditional_select(&addend, &table[1], bit_g);
             addend = JacobianPoint::conditional_select(&addend, &table[2], bit_q);
             addend = JacobianPoint::conditional_select(&addend, &table[3], both);
-
             acc = acc.add(&addend, curve);
         }
-
         let affine = acc.as_affine()?;
         Some(OuterAffinePoint::new(
             uint_to_biguint(&affine.x.as_uint()),
             uint_to_biguint(&affine.y.as_uint()),
         ))
     }
-
     pub(super) fn mul_add(
         params: &OuterCurveParams,
         scalar_g: &BigUint,
@@ -661,7 +577,6 @@ mod constant_time {
             CurveSelection::Bits512(curve) => mul_add_impl(curve, scalar_g, scalar_q, point_q),
         })
     }
-
     pub(super) fn point_add(
         params: &OuterCurveParams,
         p: &OuterAffinePoint,
@@ -672,19 +587,16 @@ mod constant_time {
             CurveSelection::Bits512(curve) => point_add_impl(curve, p, q),
         })
     }
-
     #[cfg(test)]
     mod tests {
         use num_bigint::BigUint;
         use num_traits::{One, Zero};
         use rand_core::RngCore;
-
         use super::*;
         use crate::{
             rng::rng_from_seed,
             signature::gost::{Params, compat_point_add, compat_scalar_mul, params_for_algorithm},
         };
-
         #[test]
         fn generator_is_on_curve_all_params() {
             for algo in [
@@ -728,14 +640,12 @@ mod constant_time {
                 }
             }
         }
-
         #[test]
         fn jacobian_double_matches_compat_add() {
             let curve = &*CURVE_256_A;
             let generator_point = curve.generator();
             let doubled = generator_point.double(curve);
             let affine = doubled.as_affine().expect("affine conversion");
-
             let compat_params =
                 match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetA).unwrap() {
                     Params::Bits256(p) => p,
@@ -749,7 +659,6 @@ mod constant_time {
             assert_eq!(x, compat_double.x);
             assert_eq!(y, compat_double.y);
         }
-
         #[test]
         fn scalar_mul_matches_compat() {
             let curve = &*CURVE_256_B;
@@ -758,7 +667,6 @@ mod constant_time {
                 Params::Bits256(p) => p,
                 _ => unreachable!(),
             };
-
             let mut rng = rng_from_seed(b"ct-scalar-test".to_vec());
             let mut scalar_bytes = vec![0u8; params.scalar_len];
             rng.fill_bytes(&mut scalar_bytes);
@@ -772,7 +680,6 @@ mod constant_time {
             let mut reduced_bytes = scalar_big.to_bytes_le();
             reduced_bytes.resize(U256::BYTES, 0);
             let scalar = U256::from_le_slice(&reduced_bytes);
-
             let mut acc = JacobianPoint::infinity(curve.field_params());
             let base = curve.generator();
             for i in (0..U256::BITS).rev() {
@@ -785,13 +692,11 @@ mod constant_time {
             let compat_point = compat_scalar_mul(params, &scalar_big, &params.generator()).unwrap();
             let x = BigUint::from_bytes_le(&affine.x.as_uint().to_le_bytes());
             let y = BigUint::from_bytes_le(&affine.y.as_uint().to_le_bytes());
-
             assert_eq!(x, compat_point.x);
             assert_eq!(y, compat_point.y);
         }
     }
 }
-
 trait DeterministicNonceGenerator {
     fn generate(
         &mut self,
@@ -801,32 +706,26 @@ trait DeterministicNonceGenerator {
         extra_entropy: Option<&[u8]>,
     ) -> Result<BigUint, Error>;
 }
-
 const NONCE_DOMAIN_TAG: &[u8] = b"iroha:gost:nonce:v1";
-
 struct StreebogNonceGenerator {
     domain_tag: &'static [u8],
 }
-
 impl StreebogNonceGenerator {
     fn new() -> Self {
         Self {
             domain_tag: NONCE_DOMAIN_TAG,
         }
     }
-
     #[cfg(test)]
     fn with_domain(domain_tag: &'static [u8]) -> Self {
         Self { domain_tag }
     }
 }
-
 impl Default for StreebogNonceGenerator {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl DeterministicNonceGenerator for StreebogNonceGenerator {
     fn generate(
         &mut self,
@@ -836,16 +735,12 @@ impl DeterministicNonceGenerator for StreebogNonceGenerator {
         extra_entropy: Option<&[u8]>,
     ) -> Result<BigUint, Error> {
         use num_traits::Zero as _;
-
         const BLOCK_LEN: usize = 64;
-
         let hash_len = params.digest_len;
         let mut k = Zeroizing::new(vec![0_u8; hash_len]);
         let mut v = Zeroizing::new(vec![0x01_u8; hash_len]);
-
         let private_octets = Zeroizing::new(int_to_octets(private_scalar, params.scalar_len));
         let message_octets = Zeroizing::new(bits_to_octets(params, message));
-
         k = hmac_streebog_nonce_seed(
             hash_len,
             BLOCK_LEN,
@@ -874,7 +769,6 @@ impl DeterministicNonceGenerator for StreebogNonceGenerator {
             },
         )?;
         v = hmac_streebog(hash_len, BLOCK_LEN, k.as_slice(), &[v.as_slice()])?;
-
         loop {
             let mut t = Zeroizing::new(Vec::with_capacity(params.scalar_len));
             while t.len() < params.scalar_len {
@@ -891,7 +785,6 @@ impl DeterministicNonceGenerator for StreebogNonceGenerator {
         }
     }
 }
-
 fn int_to_octets(value: &BigUint, length: usize) -> Vec<u8> {
     let mut bytes = value.to_bytes_be();
     match bytes.len().cmp(&length) {
@@ -907,12 +800,10 @@ fn int_to_octets(value: &BigUint, length: usize) -> Vec<u8> {
     }
     bytes
 }
-
 fn bits_to_octets(params: &CurveParams, message: &[u8]) -> Vec<u8> {
     let scalar = hash_to_scalar(params, message);
     int_to_octets(&scalar, params.scalar_len)
 }
-
 #[derive(Clone, Copy)]
 struct NonceSeedParts<'a> {
     v: &'a [u8],
@@ -922,7 +813,6 @@ struct NonceSeedParts<'a> {
     message_octets: &'a [u8],
     extra_entropy: Option<&'a [u8]>,
 }
-
 fn hmac_streebog_nonce_seed(
     digest_len: usize,
     block_len: usize,
@@ -961,7 +851,6 @@ fn hmac_streebog_nonce_seed(
         },
     )
 }
-
 fn hmac_streebog(
     digest_len: usize,
     block_len: usize,
@@ -975,14 +864,12 @@ fn hmac_streebog(
     } else {
         key_block[..key.len()].copy_from_slice(key);
     }
-
     let mut inner_pad = Zeroizing::new(vec![0x36_u8; block_len]);
     let mut outer_pad = Zeroizing::new(vec![0x5c_u8; block_len]);
     for i in 0..block_len {
         inner_pad[i] ^= key_block[i];
         outer_pad[i] ^= key_block[i];
     }
-
     let inner_hash = Zeroizing::new(streebog_hash_prefixed(
         digest_len,
         inner_pad.as_slice(),
@@ -993,11 +880,9 @@ fn hmac_streebog(
         &[outer_pad.as_slice(), inner_hash.as_slice()],
     )?))
 }
-
 fn unsupported_streebog_digest_len(digest_len: usize) -> Error {
     Error::Signing(format!("unsupported Streebog digest length: {digest_len}"))
 }
-
 fn streebog_hash_prefixed(
     digest_len: usize,
     prefix: &[u8],
@@ -1023,7 +908,6 @@ fn streebog_hash_prefixed(
         _ => Err(unsupported_streebog_digest_len(digest_len)),
     }
 }
-
 fn streebog_hash(digest_len: usize, parts: &[&[u8]]) -> Result<Vec<u8>, Error> {
     match digest_len {
         32 => {
@@ -1043,55 +927,45 @@ fn streebog_hash(digest_len: usize, parts: &[&[u8]]) -> Result<Vec<u8>, Error> {
         _ => Err(unsupported_streebog_digest_len(digest_len)),
     }
 }
-
 use crate::{Algorithm, Error, ParseError, rng::rng_from_seed_slice};
-
 /// Parsed GOST private key (little-endian scalar).
 #[derive(Clone, PartialEq, Eq)]
 pub struct PrivateKey {
     bytes_le: Zeroizing<Vec<u8>>,
 }
-
 impl PrivateKey {
     /// Borrow the little-endian scalar bytes that back this private key.
     pub fn as_bytes(&self) -> &[u8] {
         self.bytes_le.as_ref()
     }
 }
-
 impl fmt::Debug for PrivateKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("[REDACTED GOST PrivateKey]")
     }
 }
-
 impl fmt::Display for PrivateKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("[REDACTED GOST PrivateKey]")
     }
 }
-
 impl Zeroize for PrivateKey {
     fn zeroize(&mut self) {
         self.bytes_le.zeroize();
     }
 }
-
 impl ZeroizeOnDrop for PrivateKey {}
-
 /// Parsed GOST public key (little-endian `x || y` form).
 #[derive(Clone, PartialEq, Eq)]
 pub struct PublicKey {
     bytes_le: Vec<u8>,
 }
-
 impl PublicKey {
     /// Borrow the little-endian concatenated affine coordinates of this public key.
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes_le
     }
 }
-
 impl fmt::Debug for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("GostPublicKey")
@@ -1099,19 +973,16 @@ impl fmt::Debug for PublicKey {
             .finish()
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AffinePoint {
     x: BigUint,
     y: BigUint,
 }
-
 impl AffinePoint {
     fn new(x: BigUint, y: BigUint) -> Self {
         Self { x, y }
     }
 }
-
 struct CurveParams {
     name: &'static str,
     p: BigUint,
@@ -1123,18 +994,15 @@ struct CurveParams {
     scalar_len: usize,
     digest_len: usize,
 }
-
 impl CurveParams {
     fn generator(&self) -> AffinePoint {
         AffinePoint::new(self.gx.clone(), self.gy.clone())
     }
 }
-
 enum Params<'a> {
     Bits256(&'a CurveParams),
     Bits512(&'a CurveParams),
 }
-
 impl<'a> Params<'a> {
     fn curve(self) -> &'a CurveParams {
         match self {
@@ -1142,7 +1010,6 @@ impl<'a> Params<'a> {
         }
     }
 }
-
 fn params_for_algorithm(algorithm: Algorithm) -> Result<Params<'static>, ParseError> {
     match algorithm {
         Algorithm::Gost3410_2012_256ParamSetA => Ok(Params::Bits256(&PARAM_256_A)),
@@ -1155,7 +1022,6 @@ fn params_for_algorithm(algorithm: Algorithm) -> Result<Params<'static>, ParseEr
         ))),
     }
 }
-
 macro_rules! curve256 {
     ($name:ident, $algo:expr, $p:literal, $q:literal, $a:literal, $b:literal, $gx:literal, $gy:literal) => {
         static $name: LazyLock<CurveParams> = LazyLock::new(|| CurveParams {
@@ -1186,7 +1052,6 @@ macro_rules! curve256 {
         });
     };
 }
-
 macro_rules! curve512 {
     ($name:ident, $algo:expr, $p:literal, $q:literal, $a:literal, $b:literal, $gx:literal, $gy:literal) => {
         static $name: LazyLock<CurveParams> = LazyLock::new(|| CurveParams {
@@ -1217,7 +1082,6 @@ macro_rules! curve512 {
         });
     };
 }
-
 curve256!(
     PARAM_256_A,
     Algorithm::Gost3410_2012_256ParamSetA,
@@ -1228,7 +1092,6 @@ curve256!(
     "0000000000000000000000000000000000000000000000000000000000000001",
     "8d91e471e0989cda27df505a453f2b7635294f2ddf23e3b122acc99c9e9f1e14"
 );
-
 curve256!(
     PARAM_256_B,
     Algorithm::Gost3410_2012_256ParamSetB,
@@ -1239,7 +1102,6 @@ curve256!(
     "0000000000000000000000000000000000000000000000000000000000000001",
     "3fa8124359f96680b83d1c3eb2c070e5c545c9858d03ecfb744bf8d717717efc"
 );
-
 curve256!(
     PARAM_256_C,
     Algorithm::Gost3410_2012_256ParamSetC,
@@ -1250,7 +1112,6 @@ curve256!(
     "0000000000000000000000000000000000000000000000000000000000000000",
     "41ece55743711a8c3cbf3783cd08c0ee4d4dc440d4641a8f366e550dfdb3bb67"
 );
-
 curve512!(
     PARAM_512_A,
     Algorithm::Gost3410_2012_512ParamSetA,
@@ -1261,7 +1122,6 @@ curve512!(
     "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003",
     "7503cfe87a836ae3a61b8816e25450e6ce5e1c93acf1abc1778064fdcbefa921df1626be4fd036e93d75e6a50e3a41e98028fe5fc235f5b889a589cb5215f2a4"
 );
-
 curve512!(
     PARAM_512_B,
     Algorithm::Gost3410_2012_512ParamSetB,
@@ -1272,28 +1132,23 @@ curve512!(
     "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002",
     "1a8f7eda389b094c2c071e3647a8940f3c123b697578c213be6dd9e6c8ec7335dcb228fd1edf4a39152cbcaaf8c0398828041055f94ceeec7e21340780fe41bd"
 );
-
 fn be_hex(hex: &str) -> BigUint {
     BigUint::parse_bytes(hex.as_bytes(), 16).expect("valid hex")
 }
-
 fn le_bytes_to_biguint(bytes: &[u8]) -> BigUint {
     BigUint::from_bytes_le(bytes)
 }
-
 fn scalar_to_le_bytes(value: &BigUint, length: usize) -> Vec<u8> {
     let mut bytes = value.to_bytes_le();
     bytes.resize(length, 0);
     bytes
 }
-
 fn point_to_le_bytes(point: &AffinePoint, coord_len: usize) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(coord_len * 2);
     bytes.extend_from_slice(&scalar_to_le_bytes(&point.x, coord_len));
     bytes.extend_from_slice(&scalar_to_le_bytes(&point.y, coord_len));
     bytes
 }
-
 fn mod_add(a: &BigUint, b: &BigUint, modulus: &BigUint) -> BigUint {
     let mut sum = a + b;
     if sum >= *modulus {
@@ -1301,7 +1156,6 @@ fn mod_add(a: &BigUint, b: &BigUint, modulus: &BigUint) -> BigUint {
     }
     sum
 }
-
 #[cfg(test)]
 fn mod_sub(a: &BigUint, b: &BigUint, modulus: &BigUint) -> BigUint {
     if a >= b {
@@ -1310,15 +1164,12 @@ fn mod_sub(a: &BigUint, b: &BigUint, modulus: &BigUint) -> BigUint {
         (modulus + a - b) % modulus
     }
 }
-
 fn mod_mul(a: &BigUint, b: &BigUint, modulus: &BigUint) -> BigUint {
     ((a % modulus) * (b % modulus)) % modulus
 }
-
 fn mod_square(a: &BigUint, modulus: &BigUint) -> BigUint {
     a.modpow(&BigUint::from(2u8), modulus)
 }
-
 fn mod_inv(value: &BigUint, modulus: &BigUint) -> Option<BigUint> {
     if value.is_zero() {
         return None;
@@ -1327,7 +1178,6 @@ fn mod_inv(value: &BigUint, modulus: &BigUint) -> Option<BigUint> {
     let mut new_t = BigInt::one();
     let mut r = BigInt::from_biguint(Sign::Plus, modulus.clone());
     let mut new_r = BigInt::from_biguint(Sign::Plus, value.clone());
-
     while !new_r.is_zero() {
         let quotient = &r / &new_r;
         let tmp_t = t - &quotient * &new_t;
@@ -1337,17 +1187,14 @@ fn mod_inv(value: &BigUint, modulus: &BigUint) -> Option<BigUint> {
         r = new_r;
         new_r = tmp_r;
     }
-
     if r != BigInt::one() {
         return None;
     }
-
     if t.sign() == Sign::Minus {
         t += BigInt::from_biguint(Sign::Plus, modulus.clone());
     }
     t.to_biguint()
 }
-
 fn is_on_curve(params: &CurveParams, point: &AffinePoint) -> bool {
     if point.x >= params.p || point.y >= params.p {
         return false;
@@ -1359,19 +1206,16 @@ fn is_on_curve(params: &CurveParams, point: &AffinePoint) -> bool {
     let rhs = mod_add(&mod_add(&x3, &ax, &params.p), &params.b, &params.p);
     lhs == rhs
 }
-
 #[allow(dead_code)]
 fn point_add(params: &CurveParams, p: &AffinePoint, q: &AffinePoint) -> Option<AffinePoint> {
     constant_time::point_add(params, p, q)
 }
-
 fn scalar_mul(params: &CurveParams, scalar: &BigUint, point: &AffinePoint) -> Option<AffinePoint> {
     if point.x == params.gx && point.y == params.gy {
         return constant_time::scalar_mul_base(params, scalar);
     }
     constant_time::scalar_mul(params, scalar, point)
 }
-
 #[allow(dead_code)]
 fn mul_add(
     params: &CurveParams,
@@ -1381,7 +1225,6 @@ fn mul_add(
 ) -> Option<AffinePoint> {
     constant_time::mul_add(params, scalar_g, scalar_q, point_q)
 }
-
 #[cfg(test)]
 #[allow(private_interfaces)]
 pub(super) fn compat_point_add(
@@ -1432,7 +1275,6 @@ pub(super) fn compat_point_add(
         Some(AffinePoint::new(x3, y3))
     }
 }
-
 #[cfg(test)]
 #[allow(private_interfaces)]
 pub(super) fn compat_scalar_mul(
@@ -1446,7 +1288,6 @@ pub(super) fn compat_scalar_mul(
     let mut k = scalar.clone();
     let mut result: Option<AffinePoint> = None;
     let mut addend = point.clone();
-
     let one = BigUint::one();
     while !k.is_zero() {
         if (&k & &one) == one {
@@ -1460,7 +1301,6 @@ pub(super) fn compat_scalar_mul(
     }
     result
 }
-
 fn hash_to_scalar(params: &CurveParams, message: &[u8]) -> BigUint {
     let mut digest = if params.digest_len == 32 {
         let mut hasher = Streebog256::new();
@@ -1481,13 +1321,11 @@ fn hash_to_scalar(params: &CurveParams, message: &[u8]) -> BigUint {
         value
     }
 }
-
 fn increment_nonce(params: &CurveParams, current: &BigUint) -> BigUint {
     let mut next = current + BigUint::one();
     next %= &params.q;
     if next.is_zero() { BigUint::one() } else { next }
 }
-
 fn parse_private_generic(params: &CurveParams, payload: &[u8]) -> Result<PrivateKey, ParseError> {
     if payload.len() != params.scalar_len {
         return Err(ParseError(format!(
@@ -1508,7 +1346,6 @@ fn parse_private_generic(params: &CurveParams, payload: &[u8]) -> Result<Private
         bytes_le: Zeroizing::new(payload.to_vec()),
     })
 }
-
 fn parse_public_generic(params: &CurveParams, payload: &[u8]) -> Result<PublicKey, ParseError> {
     if payload.len() != params.scalar_len * 2 {
         return Err(ParseError(format!(
@@ -1536,7 +1373,6 @@ fn parse_public_generic(params: &CurveParams, payload: &[u8]) -> Result<PublicKe
         bytes_le: payload.to_vec(),
     })
 }
-
 fn scalar_from_private(params: &CurveParams, key: &PrivateKey) -> Result<BigUint, Error> {
     if key.as_bytes().len() != params.scalar_len {
         return Err(Error::KeyGen(format!(
@@ -1546,7 +1382,6 @@ fn scalar_from_private(params: &CurveParams, key: &PrivateKey) -> Result<BigUint
     }
     Ok(le_bytes_to_biguint(key.as_bytes()))
 }
-
 fn point_from_public(params: &CurveParams, key: &PublicKey) -> Result<AffinePoint, Error> {
     if key.as_bytes().len() != params.scalar_len * 2 {
         return Err(Error::BadSignature);
@@ -1561,7 +1396,6 @@ fn point_from_public(params: &CurveParams, key: &PublicKey) -> Result<AffinePoin
     }
     Ok(point)
 }
-
 fn sign_impl(
     params: &CurveParams,
     message: &[u8],
@@ -1582,7 +1416,6 @@ fn sign_impl(
     }
     let mut nonce = nonce_gen.generate(params, &private_scalar, message, extra_entropy)?;
     let generator = params.generator();
-
     loop {
         let point = if let Some(point) = scalar_mul(params, &nonce, &generator) {
             point
@@ -1608,7 +1441,6 @@ fn sign_impl(
         return Ok(signature);
     }
 }
-
 fn verify_impl(
     params: &CurveParams,
     message: &[u8],
@@ -1632,9 +1464,7 @@ fn verify_impl(
     let z1 = (&s * &inv) % &params.q;
     let r_neg = (&params.q + &params.q - &r) % &params.q;
     let z2 = (&r_neg * &inv) % &params.q;
-
     let q_point = point_from_public(params, public)?;
-
     let sum = mul_add(params, &z1, &z2, &q_point).ok_or(Error::BadSignature)?;
     let x = sum.x % &params.q;
     if x == r {
@@ -1643,7 +1473,6 @@ fn verify_impl(
         Err(Error::BadSignature)
     }
 }
-
 fn derive_public_impl(params: &CurveParams, private: &PrivateKey) -> Result<PublicKey, Error> {
     let scalar = scalar_from_private(params, private)?;
     let point = scalar_mul(params, &scalar, &params.generator())
@@ -1657,10 +1486,8 @@ fn derive_public_impl(params: &CurveParams, private: &PrivateKey) -> Result<Publ
         bytes_le: point_to_le_bytes(&point, params.scalar_len),
     })
 }
-
 fn random_scalar<R: RngCore>(params: &CurveParams, rng: &mut R) -> Result<BigUint, Error> {
     const MAX_DETERMINISTIC_SCALAR_ATTEMPTS: usize = 1024;
-
     let mut buf = Zeroizing::new(vec![0u8; params.scalar_len]);
     for _ in 0..MAX_DETERMINISTIC_SCALAR_ATTEMPTS {
         rng.fill_bytes(buf.as_mut_slice());
@@ -1674,18 +1501,15 @@ fn random_scalar<R: RngCore>(params: &CurveParams, rng: &mut R) -> Result<BigUin
         "GOST deterministic RNG did not produce a valid scalar".to_owned(),
     ))
 }
-
 fn random_scalar_from_os(params: &CurveParams) -> Result<BigUint, Error> {
     random_scalar_from_rng(params, &mut OsRng)
 }
-
 fn random_scalar_from_rng<R>(params: &CurveParams, rng: &mut R) -> Result<BigUint, Error>
 where
     R: TryRngCore,
     R::Error: fmt::Display,
 {
     const MAX_RANDOM_SCALAR_ATTEMPTS: usize = 1024;
-
     let mut buf = Zeroizing::new(vec![0u8; params.scalar_len]);
     for _ in 0..MAX_RANDOM_SCALAR_ATTEMPTS {
         rng.try_fill_bytes(buf.as_mut_slice())
@@ -1704,7 +1528,6 @@ where
         "GOST OS RNG did not produce a valid scalar".to_owned(),
     ))
 }
-
 fn keypair_random_impl(params: &CurveParams) -> Result<(PublicKey, PrivateKey), Error> {
     let scalar = random_scalar_from_os(params)?;
     let private = PrivateKey {
@@ -1713,7 +1536,6 @@ fn keypair_random_impl(params: &CurveParams) -> Result<(PublicKey, PrivateKey), 
     let public = derive_public_impl(params, &private)?;
     Ok((public, private))
 }
-
 fn keypair_seed_impl(params: &CurveParams, seed: &[u8]) -> Result<(PublicKey, PrivateKey), Error> {
     validate_seed_material_not_all_zero(seed)?;
     let mut rng = rng_from_seed_slice(seed);
@@ -1724,7 +1546,6 @@ fn keypair_seed_impl(params: &CurveParams, seed: &[u8]) -> Result<(PublicKey, Pr
     let public = derive_public_impl(params, &private)?;
     Ok((public, private))
 }
-
 fn validate_seed_material_not_all_zero(seed: &[u8]) -> Result<(), Error> {
     if !seed.is_empty() && seed.iter().all(|&byte| byte == 0) {
         return Err(Error::KeyGen(
@@ -1733,11 +1554,9 @@ fn validate_seed_material_not_all_zero(seed: &[u8]) -> Result<(), Error> {
     }
     Ok(())
 }
-
 fn signing_entropy_from_os(params: &CurveParams) -> Result<Zeroizing<Vec<u8>>, Error> {
     signing_entropy_from_rng(params, &mut OsRng)
 }
-
 fn signing_entropy_from_rng<R>(
     params: &CurveParams,
     rng: &mut R,
@@ -1756,7 +1575,6 @@ where
     }
     Ok(entropy)
 }
-
 /// Parse a serialized public key for the selected GOST parameter set.
 ///
 /// # Errors
@@ -1765,7 +1583,6 @@ pub fn parse_public_key(algorithm: Algorithm, payload: &[u8]) -> Result<PublicKe
     let params = params_for_algorithm(algorithm)?;
     parse_public_generic(params.curve(), payload)
 }
-
 /// Parse a serialized private key for the selected GOST parameter set.
 ///
 /// # Errors
@@ -1774,7 +1591,6 @@ pub fn parse_private_key(algorithm: Algorithm, payload: &[u8]) -> Result<Private
     let params = params_for_algorithm(algorithm)?;
     parse_private_generic(params.curve(), payload)
 }
-
 /// Generate a random key pair.
 ///
 /// # Errors
@@ -1783,7 +1599,6 @@ pub fn generate_random_keypair(algorithm: Algorithm) -> Result<(PublicKey, Priva
     let params = params_for_algorithm(algorithm).map_err(|err| Error::KeyGen(err.to_string()))?;
     keypair_random_impl(params.curve())
 }
-
 /// Generate a deterministic key pair from a seed.
 ///
 /// # Errors
@@ -1795,7 +1610,6 @@ pub fn generate_seeded_keypair(
     let params = params_for_algorithm(algorithm).map_err(|err| Error::KeyGen(err.to_string()))?;
     keypair_seed_impl(params.curve(), seed)
 }
-
 /// Derive the matching public key from the given private key.
 ///
 /// # Errors
@@ -1804,7 +1618,6 @@ pub fn derive_public_key(algorithm: Algorithm, private: &PrivateKey) -> Result<P
     let params = params_for_algorithm(algorithm).map_err(|err| Error::KeyGen(err.to_string()))?;
     derive_public_impl(params.curve(), private)
 }
-
 /// Validate that the supplied public and private keys form a pair.
 ///
 /// # Errors
@@ -1821,7 +1634,6 @@ pub fn validate_key_pair(
         Err(Error::KeyGen("GOST key pair mismatch".into()))
     }
 }
-
 /// Sign a message with the specified private key.
 ///
 /// # Errors
@@ -1839,7 +1651,6 @@ pub fn sign(algorithm: Algorithm, message: &[u8], private: &PrivateKey) -> Resul
         Some(entropy.as_slice()),
     )
 }
-
 /// Verify a signature produced by the specified parameter set.
 ///
 /// # Errors
@@ -1853,44 +1664,33 @@ pub fn verify(
     let params = params_for_algorithm(algorithm).map_err(|err| Error::KeyGen(err.to_string()))?;
     verify_impl(params.curve(), message, signature, public_key)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{hint::black_box, time::Instant};
-
     use num_traits::{One, ToPrimitive, Zero as _};
     use rand::{RngCore, SeedableRng, rngs::StdRng};
-
     use super::*;
-
     const LEGACY_HMAC_BLOCK_LEN: usize = 64;
-
     fn seed_pair() -> (PublicKey, PrivateKey) {
         let seed = b"iroha-gost-test-seed";
         generate_seeded_keypair(Algorithm::Gost3410_2012_256ParamSetA, seed).unwrap()
     }
-
     struct FixedTryRng {
         byte: u8,
     }
-
     impl TryRngCore for FixedTryRng {
         type Error = core::convert::Infallible;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Ok(u64::from_le_bytes([self.byte; 8]))
         }
-
         fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
             dest.fill(self.byte);
             Ok(())
         }
     }
-
     fn legacy_hmac_streebog(
         digest_len: usize,
         block_len: usize,
@@ -1904,24 +1704,20 @@ mod tests {
         } else {
             key_block[..key.len()].copy_from_slice(key);
         }
-
         let mut inner_pad = vec![0x36_u8; block_len];
         let mut outer_pad = vec![0x5c_u8; block_len];
         for i in 0..block_len {
             inner_pad[i] ^= key_block[i];
             outer_pad[i] ^= key_block[i];
         }
-
         let mut inner_segments = Vec::with_capacity(data.len() + 1);
         inner_segments.push(inner_pad.as_slice());
         inner_segments.extend_from_slice(data);
-
         let inner_hash =
             streebog_hash(digest_len, &inner_segments).expect("legacy inner Streebog hash");
         streebog_hash(digest_len, &[outer_pad.as_slice(), inner_hash.as_slice()])
             .expect("legacy outer Streebog hash")
     }
-
     fn legacy_streebog_nonce(
         params: &CurveParams,
         domain_tag: &[u8],
@@ -1932,7 +1728,6 @@ mod tests {
         let hash_len = params.digest_len;
         let mut k = vec![0_u8; hash_len];
         let mut v = vec![0x01_u8; hash_len];
-
         let mut seed = Vec::with_capacity(
             domain_tag.len() + params.scalar_len * 2 + extra_entropy.map_or(0, <[u8]>::len),
         );
@@ -1942,12 +1737,10 @@ mod tests {
         if let Some(extra) = extra_entropy {
             seed.extend_from_slice(extra);
         }
-
         k = legacy_hmac_streebog(hash_len, LEGACY_HMAC_BLOCK_LEN, &k, &[&v, &[0x00], &seed]);
         v = legacy_hmac_streebog(hash_len, LEGACY_HMAC_BLOCK_LEN, &k, &[&v]);
         k = legacy_hmac_streebog(hash_len, LEGACY_HMAC_BLOCK_LEN, &k, &[&v, &[0x01], &seed]);
         v = legacy_hmac_streebog(hash_len, LEGACY_HMAC_BLOCK_LEN, &k, &[&v]);
-
         loop {
             let mut t = Vec::with_capacity(params.scalar_len);
             while t.len() < params.scalar_len {
@@ -1963,13 +1756,11 @@ mod tests {
             v = legacy_hmac_streebog(hash_len, LEGACY_HMAC_BLOCK_LEN, &k, &[&v]);
         }
     }
-
     #[test]
     fn hmac_streebog_streaming_matches_legacy_inner_segments() {
         let key = [0xA5; 97];
         let tail = [0x42, 0x43, 0x44];
         let data: [&[u8]; 4] = [b"alpha", b"", b"beta", tail.as_slice()];
-
         for digest_len in [32, 64] {
             let actual = hmac_streebog(digest_len, LEGACY_HMAC_BLOCK_LEN, &key, &data)
                 .expect("streaming HMAC Streebog");
@@ -1979,19 +1770,16 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn deterministic_nonce_streaming_matches_legacy_contiguous_seed() {
         let message = b"GOST nonce compatibility";
         let private_scalar = BigUint::from(42u32);
-
         for algorithm in [
             Algorithm::Gost3410_2012_256ParamSetA,
             Algorithm::Gost3410_2012_512ParamSetB,
         ] {
             let params = params_for_algorithm(algorithm).unwrap().curve();
             let extra_entropy = vec![0x5A; params.scalar_len + 7];
-
             for entropy in [None, Some(extra_entropy.as_slice())] {
                 let mut generator = StreebogNonceGenerator::new();
                 assert_eq!(
@@ -2009,7 +1797,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn sign_verify_roundtrip() {
         let (public, private) = seed_pair();
@@ -2029,7 +1816,6 @@ mod tests {
         );
         result.unwrap();
     }
-
     #[test]
     fn signature_deterministic_without_extra_entropy() {
         let (_, private) = seed_pair();
@@ -2044,7 +1830,6 @@ mod tests {
         let sig2 = sign_impl(params, message, &private, &mut gen2, None).unwrap();
         assert_eq!(sig1, sig2);
     }
-
     #[test]
     fn signature_changes_with_extra_entropy() {
         let (_, private) = seed_pair();
@@ -2063,7 +1848,6 @@ mod tests {
             Some(extra1.as_slice()),
         )
         .unwrap();
-
         let mut gen2 = StreebogNonceGenerator::new();
         let extra2 = vec![0xBB; params.scalar_len];
         let sig2 = sign_impl(
@@ -2074,10 +1858,8 @@ mod tests {
             Some(extra2.as_slice()),
         )
         .unwrap();
-
         assert_ne!(sig1, sig2);
     }
-
     #[test]
     fn gost_sign_constant_time_under_dudect() {
         let algorithms = [
@@ -2087,29 +1869,23 @@ mod tests {
             Algorithm::Gost3410_2012_512ParamSetA,
             Algorithm::Gost3410_2012_512ParamSetB,
         ];
-
         for algorithm in algorithms {
             run_dudect_timing_check(algorithm);
         }
     }
-
     fn run_dudect_timing_check(algorithm: Algorithm) {
         const SAMPLES_PER_CLASS: usize = 40;
         const WARMUP_ITERATIONS: usize = 20;
-
         let params = match params_for_algorithm(algorithm).unwrap() {
             Params::Bits512(params) | Params::Bits256(params) => params,
         };
         let (_, private) = generate_seeded_keypair(algorithm, b"dudect-gost-keyseed")
             .expect("seeded keypair for dudect");
-
         let zero_message = vec![0u8; 64];
         let mut random_message = zero_message.clone();
         let mut rng = StdRng::from_seed([0x42; 32]);
-
         let mut class0 = Vec::with_capacity(SAMPLES_PER_CLASS);
         let mut class1 = Vec::with_capacity(SAMPLES_PER_CLASS);
-
         let total_iterations = (SAMPLES_PER_CLASS * 2) + WARMUP_ITERATIONS;
         for iteration in 0..total_iterations {
             let class_is_zero = iteration % 2 == 0;
@@ -2119,25 +1895,21 @@ mod tests {
                 rng.fill_bytes(random_message.as_mut_slice());
                 random_message.as_slice()
             };
-
             let mut nonce_gen = StreebogNonceGenerator::new();
             let start = Instant::now();
             let signature =
                 sign_impl(params, message, &private, &mut nonce_gen, None).expect("sign");
             black_box(signature);
             let elapsed = start.elapsed().as_secs_f64();
-
             if iteration < WARMUP_ITERATIONS {
                 continue;
             }
-
             if class_is_zero {
                 class0.push(elapsed);
             } else {
                 class1.push(elapsed);
             }
         }
-
         assert_eq!(
             class0.len(),
             SAMPLES_PER_CLASS,
@@ -2148,14 +1920,12 @@ mod tests {
             SAMPLES_PER_CLASS,
             "class1 samples missing for {algorithm:?}"
         );
-
         let t_stat = welch_t(&class0, &class1);
         assert!(
             t_stat.abs() < 5.0,
             "GOST signer for {algorithm:?} failed dudect check: t-statistic={t_stat}"
         );
     }
-
     #[test]
     fn seeded_keypair_reproducible() {
         let seed = b"seeded gost keypair";
@@ -2166,7 +1936,6 @@ mod tests {
         assert_eq!(public1.as_bytes(), public2.as_bytes());
         assert_eq!(private1.as_bytes(), private2.as_bytes());
     }
-
     #[test]
     fn seeded_keypair_rejects_all_zero_seed_material() {
         let err = generate_seeded_keypair(Algorithm::Gost3410_2012_256ParamSetB, &[0u8; 32])
@@ -2176,7 +1945,6 @@ mod tests {
             Error::KeyGen(message) if message.contains("all zero")
         ));
     }
-
     #[test]
     fn random_scalar_rejects_all_zero_rng_material() {
         let params = match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetA).unwrap() {
@@ -2184,16 +1952,13 @@ mod tests {
             _ => unreachable!(),
         };
         let mut rng = FixedTryRng { byte: 0 };
-
         let err = random_scalar_from_rng(params, &mut rng)
             .expect_err("all-zero GOST scalar material must fail");
-
         assert!(matches!(
             err,
             Error::KeyGen(message) if message.contains("all-zero scalar material")
         ));
     }
-
     #[test]
     fn signing_entropy_rejects_all_zero_rng_material() {
         let params = match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetA).unwrap() {
@@ -2201,16 +1966,13 @@ mod tests {
             _ => unreachable!(),
         };
         let mut rng = FixedTryRng { byte: 0 };
-
         let err = signing_entropy_from_rng(params, &mut rng)
             .expect_err("all-zero GOST signing entropy must fail");
-
         assert!(matches!(
             err,
             Error::KeyGen(message) if message.contains("all-zero signing entropy")
         ));
     }
-
     #[test]
     fn random_keypair_signs_and_verifies() {
         let (public, private) = generate_random_keypair(Algorithm::Gost3410_2012_256ParamSetA)
@@ -2226,7 +1988,6 @@ mod tests {
         )
         .expect("verify");
     }
-
     #[test]
     fn verify_rejects_modified_message() {
         let (public, private) = seed_pair();
@@ -2243,7 +2004,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn sign_verify_roundtrip_512() {
         let seed = b"gost-512-roundtrip";
@@ -2260,7 +2020,6 @@ mod tests {
         )
         .expect("verify");
     }
-
     #[test]
     fn reject_invalid_key_sizes() {
         let params = match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetA).unwrap() {
@@ -2272,7 +2031,6 @@ mod tests {
         // Public key must be 2 * scalar_len bytes.
         assert!(parse_public_generic(params, &[0x02; 10]).is_err());
     }
-
     #[test]
     fn parse_public_key_rejects_all_zero_payloads() {
         for algorithm in [
@@ -2284,17 +2042,14 @@ mod tests {
         ] {
             let params = params_for_algorithm(algorithm).unwrap().curve();
             let payload = vec![0u8; params.scalar_len * 2];
-
             let err = parse_public_key(algorithm, &payload)
                 .expect_err("all-zero GOST public-key payload must fail");
-
             assert!(
                 err.to_string().contains("all zero"),
                 "unexpected error for {algorithm:?}: {err}"
             );
         }
     }
-
     #[test]
     fn verify_rejects_internal_all_zero_public_key() {
         let (public, private) = seed_pair();
@@ -2308,7 +2063,6 @@ mod tests {
         let zero_public = PublicKey {
             bytes_le: vec![0u8; public.as_bytes().len()],
         };
-
         let err = verify(
             Algorithm::Gost3410_2012_256ParamSetA,
             message,
@@ -2316,11 +2070,9 @@ mod tests {
             &zero_public,
         )
         .expect_err("all-zero GOST verifier key must fail");
-
         assert!(matches!(err, Error::BadSignature));
         assert_eq!(zero_public.as_bytes().len(), params.scalar_len * 2);
     }
-
     #[test]
     fn generator_is_on_curve() {
         let params = match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetA).unwrap() {
@@ -2329,7 +2081,6 @@ mod tests {
         };
         assert!(is_on_curve(params, &params.generator()));
     }
-
     #[test]
     fn generator_is_on_curve_512() {
         let params = match params_for_algorithm(Algorithm::Gost3410_2012_512ParamSetA).unwrap() {
@@ -2345,7 +2096,6 @@ mod tests {
         assert_eq!(lhs, rhs);
         assert!(is_on_curve(params, &generator));
     }
-
     #[test]
     fn scalar_mul_matches_repeated_addition() {
         let params = match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetA).unwrap() {
@@ -2357,13 +2107,11 @@ mod tests {
         let expected_two = point_add(params, &generator, &generator).unwrap();
         assert_eq!(two.x, expected_two.x);
         assert_eq!(two.y, expected_two.y);
-
         let three = scalar_mul(params, &BigUint::from(3u8), &generator).unwrap();
         let expected_three = point_add(params, &expected_two, &generator).unwrap();
         assert_eq!(three.x, expected_three.x);
         assert_eq!(three.y, expected_three.y);
     }
-
     #[test]
     fn mul_add_matches_compat() {
         let mut rng = crate::rng::rng_from_seed(b"gost-mul-add".to_vec());
@@ -2376,19 +2124,15 @@ mod tests {
         ] {
             let params_variant = params_for_algorithm(algorithm).unwrap();
             let params = params_variant.curve();
-
             for _ in 0..8 {
                 let scalar_g = random_scalar(params, &mut rng).expect("valid scalar g");
                 let scalar_q = random_scalar(params, &mut rng).expect("valid scalar q");
                 let point_scalar = random_scalar(params, &mut rng).expect("valid point scalar");
-
                 let q_point = match compat_scalar_mul(params, &point_scalar, &params.generator()) {
                     Some(point) => point,
                     None => continue,
                 };
-
                 let actual = mul_add(params, &scalar_g, &scalar_q, &q_point);
-
                 let expected = {
                     let part_g = compat_scalar_mul(params, &scalar_g, &params.generator());
                     let part_q = compat_scalar_mul(params, &scalar_q, &q_point);
@@ -2399,7 +2143,6 @@ mod tests {
                         (None, None) => None,
                     }
                 };
-
                 match (actual, expected) {
                     (None, None) => {}
                     (Some(a), Some(e)) => {
@@ -2416,7 +2159,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn deterministic_nonce_uses_domain_separation() {
         let params = match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetA).unwrap() {
@@ -2425,20 +2167,16 @@ mod tests {
         };
         let secret = BigUint::from(42u32);
         let message = b"domain separation check";
-
         let mut generator_with_tag = StreebogNonceGenerator::new();
         let nonce_with_domain = generator_with_tag
             .generate(params, &secret, message, None)
             .expect("nonce with domain");
-
         let mut generator_without_tag = StreebogNonceGenerator::with_domain(b"");
         let nonce_without_domain = generator_without_tag
             .generate(params, &secret, message, None)
             .expect("nonce without domain");
-
         assert_ne!(nonce_with_domain, nonce_without_domain);
     }
-
     #[test]
     fn deterministic_nonce_rejects_unsupported_streebog_digest_len_without_panic() {
         let params = match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetA).unwrap() {
@@ -2457,7 +2195,6 @@ mod tests {
             digest_len: 48,
         };
         let mut generator = StreebogNonceGenerator::new();
-
         let err = generator
             .generate(
                 &invalid_params,
@@ -2466,13 +2203,11 @@ mod tests {
                 None,
             )
             .expect_err("unsupported digest length must fail closed");
-
         assert!(
             matches!(err, Error::Signing(ref message) if message.contains("unsupported Streebog digest length: 48")),
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     #[ignore = "emits fixture data for Wycheproof compatibility checks"]
     fn dump_wycheproof_vectors() {
@@ -2506,7 +2241,6 @@ mod tests {
                 sign_impl(params, message, &private, &mut generator, None).expect("sign");
             let mut invalid_signature = signature.clone();
             invalid_signature[0] ^= 0x01;
-
             println!(
                 "{{\"algorithm\":\"{alg:?}\",\"public\":\"{public}\",\"message\":\"{msg}\",\"valid\":\"{sig}\",\"invalid\":\"{bad}\"}}",
                 alg = algorithm,
@@ -2517,7 +2251,6 @@ mod tests {
             );
         }
     }
-
     fn welch_t(class0: &[f64], class1: &[f64]) -> f64 {
         fn mean(samples: &[f64]) -> f64 {
             let len = samples.len();
@@ -2527,7 +2260,6 @@ mod tests {
             let len = len.to_f64().expect("sample length fits into f64 mantissa");
             samples.iter().sum::<f64>() / len
         }
-
         fn variance(samples: &[f64], mean: f64) -> f64 {
             if samples.len() < 2 {
                 return 0.0;
@@ -2544,12 +2276,10 @@ mod tests {
                 .expect("sample length fits into f64 mantissa");
             sum / denom
         }
-
         let mean0 = mean(class0);
         let mean1 = mean(class1);
         let var0 = variance(class0, mean0);
         let var1 = variance(class1, mean1);
-
         let len0 = class0
             .len()
             .to_f64()
@@ -2565,7 +2295,6 @@ mod tests {
             (mean0 - mean1) / denom.sqrt()
         }
     }
-
     fn increment_le_bytes(bytes: &mut [u8]) {
         let mut carry = 1u16;
         for byte in bytes.iter_mut() {
@@ -2577,27 +2306,22 @@ mod tests {
             }
         }
     }
-
     struct StubRng {
         samples: Vec<Vec<u8>>,
         idx: usize,
     }
-
     impl StubRng {
         fn new(samples: Vec<Vec<u8>>) -> Self {
             Self { samples, idx: 0 }
         }
     }
-
     impl RngCore for StubRng {
         fn next_u32(&mut self) -> u32 {
             panic!("next_u32 not supported in StubRng");
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("next_u64 not supported in StubRng");
         }
-
         fn fill_bytes(&mut self, dest: &mut [u8]) {
             let sample = self
                 .samples
@@ -2612,32 +2336,26 @@ mod tests {
             dest.copy_from_slice(sample);
         }
     }
-
     struct FixedRng {
         byte: u8,
     }
-
     impl RngCore for FixedRng {
         fn next_u32(&mut self) -> u32 {
             u32::from_le_bytes([self.byte; 4])
         }
-
         fn next_u64(&mut self) -> u64 {
             u64::from_le_bytes([self.byte; 8])
         }
-
         fn fill_bytes(&mut self, dest: &mut [u8]) {
             dest.fill(self.byte);
         }
     }
-
     #[test]
     fn random_scalar_rejects_zero_and_out_of_range_samples() {
         let params = match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetA).unwrap() {
             Params::Bits256(params) => params,
             _ => unreachable!(),
         };
-
         let zero = vec![0u8; params.scalar_len];
         let mut q_bytes = params.q.to_bytes_le();
         q_bytes.resize(params.scalar_len, 0);
@@ -2650,14 +2368,11 @@ mod tests {
         }
         let mut valid = (&params.q - BigUint::one()).to_bytes_le();
         valid.resize(params.scalar_len, 0);
-
         let samples = vec![zero, q_bytes, q_plus_one, high, valid.clone()];
         let mut rng = StubRng::new(samples);
-
         let scalar = random_scalar(params, &mut rng).expect("valid scalar after invalid samples");
         assert_eq!(scalar, &params.q - BigUint::one());
     }
-
     #[test]
     fn random_scalar_rejects_repeated_invalid_deterministic_samples() {
         let params = match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetA).unwrap() {
@@ -2665,16 +2380,13 @@ mod tests {
             _ => unreachable!(),
         };
         let mut rng = FixedRng { byte: 0 };
-
         let err = random_scalar(params, &mut rng)
             .expect_err("repeated all-zero deterministic scalar samples must fail");
-
         assert!(matches!(
             err,
             Error::KeyGen(message) if message.contains("did not produce a valid scalar")
         ));
     }
-
     #[test]
     fn biguint_mod_matches_python() {
         use num_bigint::BigUint as NumBigUint;

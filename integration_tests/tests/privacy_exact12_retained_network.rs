@@ -4,12 +4,10 @@
 //! exact-finality, and restart gate for the six retained exact-12 native
 //! engines: ZK-ACE, Anonymous PGC, VeRange, Bootle/Lantern, FCMP++, and the
 //! private-IVM note protocol.
-
 use std::{
     num::{NonZeroU32, NonZeroU64},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -65,7 +63,6 @@ use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use tokio::time::{Instant, sleep, timeout};
-
 const ZK_ACE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
 const PGC_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
 const VERANGE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
@@ -80,7 +77,6 @@ const PROTOCOLS: [PrivacyProtocolIdV1; 6] = [
     FCMP_PROTOCOL,
     IVM_PROTOCOL,
 ];
-
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(180);
 const PROVER_TIMEOUT: Duration = Duration::from_secs(1_800);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
@@ -92,37 +88,31 @@ const ACTION_TTL: Duration = Duration::from_secs(7_200);
 const TRANSACTION_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
 const TORII_CONTENT_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
 const NETWORK_FRAME_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
-
 #[derive(Clone, Copy)]
 struct ProtocolExpectationV1 {
     protocol: PrivacyProtocolIdV1,
     compiled: PrivacyCompiledProfileSnapshotV1,
     activation: Option<PrivacyProtocolActivationRecordV1>,
 }
-
 fn bounded_client(mut client: Client) -> Client {
     client.transaction_status_timeout = SUBMISSION_TIMEOUT;
     client.torii_request_timeout = Duration::from_secs(45);
     client
 }
-
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
 }
-
 fn error_chain_contains(error: &eyre::Report, needle: &str) -> bool {
     let needle = needle.to_ascii_lowercase();
     error
         .chain()
         .any(|cause| cause.to_string().to_ascii_lowercase().contains(&needle))
 }
-
 fn error_chain_contains_any(error: &eyre::Report, needles: &[&str]) -> bool {
     needles
         .iter()
         .any(|needle| error_chain_contains(error, needle))
 }
-
 fn is_exact_transaction_replay(error: &eyre::Report) -> bool {
     error_chain_contains_any(
         error,
@@ -136,7 +126,6 @@ fn is_exact_transaction_replay(error: &eyre::Report) -> bool {
         ],
     )
 }
-
 fn protocol_row(
     snapshot: &PrivacyExact12CapabilityManifestV1,
     protocol: PrivacyProtocolIdV1,
@@ -148,7 +137,6 @@ fn protocol_row(
         .find(|row| row.protocol_id == protocol)
         .ok_or_else(|| eyre!("canonical capability snapshot omitted {protocol:?}"))
 }
-
 fn assert_protocol_expectations(
     snapshot: &PrivacyExact12CapabilityManifestV1,
     expectations: &[ProtocolExpectationV1],
@@ -175,7 +163,6 @@ fn assert_protocol_expectations(
     }
     Ok(())
 }
-
 async fn wait_for_all_peer_protocols(
     network: &sandbox::SerializedNetwork,
     minimum_height: u64,
@@ -221,7 +208,6 @@ async fn wait_for_all_peer_protocols(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     let blocks = client
         .query(FindBlocks)
@@ -240,7 +226,6 @@ fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     ensure!(hash != [0; 32], "canonical genesis hash must be nonzero");
     Ok(hash)
 }
-
 fn next_incoming_height(client: &Client) -> Result<u64> {
     client
         .get_privacy_capabilities()
@@ -249,7 +234,6 @@ fn next_incoming_height(client: &Client) -> Result<u64> {
         .checked_add(1)
         .ok_or_else(|| eyre!("incoming privacy height overflowed"))
 }
-
 fn proposed_activation(
     compiled: CompiledPrivacyProfileV1,
     proposed_at_height: u64,
@@ -262,7 +246,6 @@ fn proposed_activation(
         },
     ))
 }
-
 fn active_activation(
     compiled: CompiledPrivacyProfileV1,
     proposed_at_height: u64,
@@ -276,7 +259,6 @@ fn active_activation(
         },
     ))
 }
-
 async fn submit_instructions(
     client: &Client,
     instructions: Vec<InstructionBox>,
@@ -292,7 +274,6 @@ async fn submit_instructions(
     .map_err(|error| eyre!("{context}: submission task failed: {error}"))?
     .wrap_err_with(|| context.to_owned())
 }
-
 async fn submit_signed_transaction(
     client: &Client,
     transaction: &SignedTransaction,
@@ -309,7 +290,6 @@ async fn submit_signed_transaction(
     .map_err(|error| eyre!("{context}: submission task failed: {error}"))?
     .wrap_err_with(|| context.to_owned())
 }
-
 async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<()> {
     let start = client
         .get_privacy_capabilities()
@@ -343,7 +323,6 @@ async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<
     );
     Ok(())
 }
-
 fn exact_transaction_result(
     client: &Client,
     transaction: &SignedTransaction,
@@ -366,7 +345,6 @@ fn exact_transaction_result(
     );
     Ok(Some(committed.result().0.is_ok()))
 }
-
 fn exact_transaction_block_subject(
     client: &Client,
     transaction: &SignedTransaction,
@@ -413,7 +391,6 @@ fn exact_transaction_block_subject(
     };
     Ok((header.height().get(), subject))
 }
-
 async fn wait_for_transaction_result_on_peers(
     clients: &[Client],
     transaction: &SignedTransaction,
@@ -451,7 +428,6 @@ async fn wait_for_transaction_result_on_peers(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 fn asset_quantities(client: &Client, asset_ids: &[AssetId]) -> Result<Vec<Option<Quantity>>> {
     let assets = client
         .query(FindAssets::new())
@@ -467,7 +443,6 @@ fn asset_quantities(client: &Client, asset_ids: &[AssetId]) -> Result<Vec<Option
         })
         .collect())
 }
-
 async fn wait_for_asset_quantities(
     clients: &[Client],
     asset_ids: &[AssetId],
@@ -504,7 +479,6 @@ async fn wait_for_asset_quantities(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 fn resign_replaced_envelope(
     client: &Client,
     valid: &SignedTransaction,
@@ -536,7 +510,6 @@ fn resign_replaced_envelope(
     );
     Ok(adversarial)
 }
-
 fn assert_exactly_one_direct_privacy_submission(
     transaction: &SignedTransaction,
     context: &str,
@@ -562,7 +535,6 @@ fn assert_exactly_one_direct_privacy_submission(
         .ok_or_else(|| eyre!("{context}: direct privacy submission was not detected"))?;
     Ok(())
 }
-
 fn independently_sign_two_submit_transaction(
     client: &Client,
     canonical: &SignedTransaction,
@@ -589,7 +561,6 @@ fn independently_sign_two_submit_transaction(
     );
     Ok(adversarial)
 }
-
 fn independently_resign_corrupted_proof(
     client: &Client,
     valid: &SignedTransaction,
@@ -612,7 +583,6 @@ fn independently_resign_corrupted_proof(
         .wrap_err_with(|| format!("{context}: corruption broke generic envelope shape"))?;
     resign_replaced_envelope(client, valid, envelope, context)
 }
-
 fn independently_resign_cross_profile_proof(
     client: &Client,
     target: &SignedTransaction,
@@ -637,7 +607,6 @@ fn independently_resign_cross_profile_proof(
         .wrap_err("cross-profile bytes must preserve the generic envelope contract")?;
     resign_replaced_envelope(client, target, envelope, "cross-profile proof substitution")
 }
-
 fn independently_resign_wrong_statement_digest(
     client: &Client,
     valid: &SignedTransaction,
@@ -655,7 +624,6 @@ fn independently_resign_wrong_statement_digest(
         .wrap_err("wrong statement digest must preserve the generic envelope contract")?;
     resign_replaced_envelope(client, valid, envelope, "wrong statement-digest binding")
 }
-
 async fn wait_for_exact_v2_commit_subject(
     clients: &[Client],
     expected_height: u64,
@@ -723,7 +691,6 @@ async fn wait_for_exact_v2_commit_subject(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 fn action_context(
     client: &Client,
     genesis_hash: [u8; 32],
@@ -741,7 +708,6 @@ fn action_context(
         genesis_hash,
     }
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart()
 -> Result<()> {
@@ -775,7 +741,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
     let zk_asset_at_reserve = AssetId::new(zk_asset.clone(), reserve_account.clone());
     let transaction_budget =
         NonZeroU64::new(TRANSACTION_BUDGET_BYTES).expect("fixed transaction budget is nonzero");
-
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -784,6 +749,10 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         .with_config_layer(|layer| {
             layer
                 .write(["torii", "max_content_len"], TORII_CONTENT_BUDGET_BYTES)
+                .write(
+                    ["torii", "query_fanout_max_retained_bytes"],
+                    TORII_CONTENT_BUDGET_BYTES,
+                )
                 .write(["network", "max_frame_bytes"], NETWORK_FRAME_BUDGET_BYTES)
                 .write(
                     ["network", "max_frame_bytes_consensus"],
@@ -848,7 +817,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
     };
-
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
@@ -872,7 +840,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
                     .wrap_err_with(|| format!("load canonical {protocol:?} compiled profile"))
             })
             .collect::<Result<Vec<_>>>()?;
-
         submit_instructions(
             &client,
             vec![
@@ -885,7 +852,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "grant CanEnactGovernance",
         )
         .await?;
-
         let registration_height = next_incoming_height(&client)?;
         let activation_height = registration_height
             .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
@@ -924,7 +890,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "exact proposed retained exact-12 lifecycles",
         )
         .await?;
-
         let creation_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .wrap_err("system clock is before the Unix epoch")?;
@@ -1151,7 +1116,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             .await
             .map_err(|_| eyre!("retained exact-12 proving exceeded {PROVER_TIMEOUT:?}"))?
             .map_err(|error| eyre!("retained exact-12 prover task failed: {error}"))??;
-
         ensure!(
             zk.policy == zk_replay.policy
                 && zk.statement.replay_nullifier == zk_replay.statement.replay_nullifier,
@@ -1214,7 +1178,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         ] {
             assert_exactly_one_direct_privacy_submission(transaction, label)?;
         }
-
         let advance_target = activation_height
             .checked_sub(2)
             .ok_or_else(|| eyre!("activation height lacks a pre-activation predecessor"))?;
@@ -1251,7 +1214,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "pre-activation rejection must preserve ZK-ACE public balances",
         )
         .await?;
-
         submit_instructions(
             &client,
             vec![
@@ -1287,7 +1249,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "exact active retained exact-12 lifecycles",
         )
         .await?;
-
         // Taira permits one budgeted privacy action per transaction. Keep
         // every governed policy/bootstrap in its own consensus action so the
         // PGC proof is bound to the exact action index zero and no setup path
@@ -1328,7 +1289,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "bootstrap authoritative private-IVM pool",
         )
         .await?;
-
         let corrupted_zk = independently_resign_corrupted_proof(
             &client,
             &zk.transaction,
@@ -1572,7 +1532,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
                 "{label} canonical action appeared before canonical submission"
             );
         }
-
         let restart_index = network.peers().len() - 1;
         let restart_peer = network.peers()[restart_index].clone();
         let config_layers = network.config_layers().collect::<Vec<_>>();
@@ -1587,7 +1546,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             .filter(|(index, _)| *index != restart_index)
             .map(|(_, peer)| bounded_client(peer.client()))
             .collect::<Vec<_>>();
-
         for (label, transaction) in [
             ("ZK-ACE", &zk.transaction),
             ("Anonymous-PGC", &pgc.transaction),
@@ -1617,7 +1575,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "canonical ZK-ACE transfer must apply atomically",
         )
         .await?;
-
         let canonical_height = client
             .get_privacy_capabilities()
             .wrap_err("query height before exact retained exact-12 replays")?
@@ -1663,7 +1620,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "healthy-peer exact retained exact-12 carrier subject",
         )
         .await?;
-
         timeout(
             RESTART_TIMEOUT,
             restart_peer.start_checked(config_layers.iter(), None),
@@ -1711,7 +1667,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             canonical_genesis_hash(&restarted_client)? == genesis_hash,
             "restarted peer derived a different canonical genesis hash"
         );
-
         for (label, transaction, expected_reasons) in [
             (
                 "ZK-ACE stable-nullifier replay",
@@ -1760,7 +1715,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "fresh state replays must preserve post-ZK-ACE public balances",
         )
         .await?;
-
         submit_instructions(
             &restarted_client,
             vec![
@@ -1794,7 +1748,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "stale Bootle/Lantern policy rejection convergence",
         )
         .await?;
-
         for (label, transaction) in [
             ("pre-activation VeRange", &pre_verange.transaction),
             ("corrupted ZK-ACE", &corrupted_zk),
@@ -1860,7 +1813,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         Ok(())
     }
     .await;
-
     network.shutdown().await;
     result
 }

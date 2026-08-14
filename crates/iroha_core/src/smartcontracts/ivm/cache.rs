@@ -3,13 +3,11 @@ use std::{
     ops::{Deref, DerefMut},
     sync::Arc,
 };
-
 use iroha_crypto::Hash;
 use ivm::ProgramMetadata;
 use ivm::analysis::{ProgramAnalysis, ProgramAnalysisError};
 use ivm::runtime::IvmConfig;
 use parking_lot::{Condvar, Mutex};
-
 /// Counters for the bounded prepared-contract artifact store.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PreparedContractCacheStats {
@@ -32,7 +30,6 @@ pub struct PreparedContractCacheStats {
     /// Nested runtimes restored and returned to the shared pool.
     pub runtime_dirty_resets: u64,
 }
-
 #[derive(Debug)]
 struct PreparedContractStore {
     entries: BTreeMap<Hash, Arc<ivm::PreparedContract>>,
@@ -43,7 +40,6 @@ struct PreparedContractStore {
     capacity: usize,
     stats: PreparedContractCacheStats,
 }
-
 /// Cloneable bounded store of immutable prepared contract artifacts.
 ///
 /// The handle is independent from runtime-pool borrowing, so an executing VM
@@ -53,7 +49,6 @@ pub struct PreparedContractCache {
     inner: Arc<Mutex<PreparedContractStore>>,
     ready: Arc<Condvar>,
 }
-
 impl PreparedContractCache {
     /// Construct a store with the same entry bound used by the runtime cache.
     #[must_use]
@@ -71,7 +66,6 @@ impl PreparedContractCache {
             ready: Arc::new(Condvar::new()),
         }
     }
-
     /// Resolve or prepare the artifact identified by `code_hash`.
     ///
     /// Hits do not inspect `bytecode`. Misses validate the complete artifact
@@ -89,7 +83,6 @@ impl PreparedContractCache {
         self.get_or_prepare_with_status(code_hash, bytecode)
             .map(|(contract, _)| contract)
     }
-
     /// Resolve an already prepared artifact by its trusted content address.
     ///
     /// This lookup deliberately takes no byte slice. Nested-call dispatch uses
@@ -103,7 +96,6 @@ impl PreparedContractCache {
         store.touch(code_hash);
         Some(contract)
     }
-
     fn get_or_prepare_with_status(
         &self,
         code_hash: Hash,
@@ -123,7 +115,6 @@ impl PreparedContractCache {
             self.ready.wait(&mut store);
         }
         drop(store);
-
         let prepared = ivm::prepare_contract(Arc::from(bytecode))
             .map_err(ivm::ContractArtifactError::into_vm_error);
         let mut store = self.inner.lock();
@@ -154,7 +145,6 @@ impl PreparedContractCache {
         self.ready.notify_all();
         Ok((prepared, true))
     }
-
     fn publish(&self, contract: Arc<ivm::PreparedContract>) -> Result<(), ivm::VMError> {
         let code_hash = contract.code_hash();
         let mut store = self.inner.lock();
@@ -168,7 +158,6 @@ impl PreparedContractCache {
         store.insert(code_hash, contract);
         Ok(())
     }
-
     /// Check out a VM for a nested contract invocation.
     ///
     /// The pool is shared by every host carrying this prepared-cache handle.
@@ -212,7 +201,6 @@ impl PreparedContractCache {
                 vm: Some(vm),
             });
         }
-
         let mut vm = ivm::IVM::new(gas_limit);
         vm.set_zk_trace_enabled(false);
         vm.memory.set_heap_max_limit(heap_limit)?;
@@ -239,7 +227,6 @@ impl PreparedContractCache {
             baseline
         };
         drop(store);
-
         Ok(PreparedRuntimeLease {
             cache: self.clone(),
             key,
@@ -247,7 +234,6 @@ impl PreparedContractCache {
             vm: Some(vm),
         })
     }
-
     fn return_runtime(
         &self,
         key: RuntimeKey,
@@ -281,20 +267,17 @@ impl PreparedContractCache {
         store.touch_nested_runtime(key);
         store.evict_nested_runtimes();
     }
-
     /// Return current prepared-artifact cache counters.
     #[must_use]
     pub fn stats(&self) -> PreparedContractCacheStats {
         self.inner.lock().stats
     }
 }
-
 impl Default for PreparedContractCache {
     fn default() -> Self {
         Self::with_capacity(iroha_config::parameters::defaults::pipeline::CACHE_SIZE)
     }
 }
-
 impl PreparedContractStore {
     fn touch(&mut self, code_hash: Hash) {
         if let Some(position) = self
@@ -306,7 +289,6 @@ impl PreparedContractStore {
         }
         self.order.push_back(code_hash);
     }
-
     fn insert(&mut self, code_hash: Hash, contract: Arc<ivm::PreparedContract>) {
         if self.capacity == 0 {
             return;
@@ -323,7 +305,6 @@ impl PreparedContractStore {
             }
         }
     }
-
     fn touch_nested_runtime(&mut self, key: RuntimeKey) {
         if let Some(position) = self
             .nested_runtime_order
@@ -334,7 +315,6 @@ impl PreparedContractStore {
         }
         self.nested_runtime_order.push_back(key);
     }
-
     fn insert_nested_runtime(&mut self, key: RuntimeKey, pool: SharedRuntimePool) {
         if self.capacity == 0 {
             return;
@@ -343,7 +323,6 @@ impl PreparedContractStore {
         self.touch_nested_runtime(key);
         self.evict_nested_runtimes();
     }
-
     fn evict_nested_runtimes(&mut self) {
         while self.nested_runtimes.len() > self.capacity {
             let Some(evicted) = self.nested_runtime_order.pop_front() else {
@@ -354,7 +333,6 @@ impl PreparedContractStore {
             }
         }
     }
-
     fn remove_nested_runtimes_for(&mut self, code_hash: Hash) {
         self.nested_runtimes
             .retain(|key, _| key.code_hash != code_hash);
@@ -362,25 +340,21 @@ impl PreparedContractStore {
             .retain(|key| key.code_hash != code_hash);
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct SummaryKey {
     code_hash: Hash,
 }
-
 impl SummaryKey {
     fn new(code_hash: Hash) -> Self {
         Self { code_hash }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct RuntimeKey {
     code_hash: Hash,
     stack_limit: u64,
     heap_limit: u64,
 }
-
 impl RuntimeKey {
     fn new(code_hash: Hash, stack_limit: u64, heap_limit: u64) -> Self {
         Self {
@@ -389,16 +363,13 @@ impl RuntimeKey {
             heap_limit,
         }
     }
-
     fn summary_key(&self) -> SummaryKey {
         SummaryKey::new(self.code_hash)
     }
 }
-
 fn stack_limit_for_gas(gas_limit: u64) -> u64 {
     IvmConfig::new(gas_limit).stack_limit_for_gas()
 }
-
 /// Return whether a syscall is available to a contract-less IVM program.
 ///
 /// The canonical policy lives in `ivm_abi` and is hashed into ABI V1. Core
@@ -408,7 +379,6 @@ fn stack_limit_for_gas(gas_limit: u64) -> u64 {
 pub(crate) fn is_generic_syscall_allowed(number: u32) -> bool {
     ivm::syscalls::is_generic_program_syscall_allowed(ivm::SyscallPolicy::AbiV1, number)
 }
-
 /// Summary of a compiled IVM program derived during admission.
 #[derive(Clone, Debug)]
 pub struct ProgramSummary {
@@ -427,7 +397,6 @@ pub struct ProgramSummary {
     /// Hash of the encoded metadata header.
     pub meta_hash: Hash,
 }
-
 /// Fully validated ABI-bound generic IVM program.
 ///
 /// Generic programs deliberately have no `CNTR` interface, contract identity,
@@ -450,21 +419,18 @@ pub struct GenericProgramSummary {
     /// Hash of the canonical encoded metadata header.
     pub meta_hash: Hash,
 }
-
 impl GenericProgramSummary {
     /// Return the complete validated program image.
     #[must_use]
     pub fn program(&self) -> &[u8] {
         &self.program
     }
-
     /// Clone the shared immutable program image without copying its bytes.
     #[must_use]
     pub fn shared_program(&self) -> Arc<[u8]> {
         Arc::clone(&self.program)
     }
 }
-
 /// Admission result for either a self-describing contract or a generic IVM
 /// program.
 #[derive(Clone, Debug)]
@@ -474,7 +440,6 @@ pub enum ExecutableProgramSummary {
     /// An ABI-authenticated generic program without contract identity.
     Generic(GenericProgramSummary),
 }
-
 impl ExecutableProgramSummary {
     /// Return the parsed metadata shared by both program kinds.
     #[must_use]
@@ -484,7 +449,6 @@ impl ExecutableProgramSummary {
             Self::Generic(summary) => &summary.metadata,
         }
     }
-
     /// Return the instruction offset shared by both program kinds.
     #[must_use]
     pub fn code_offset(&self) -> usize {
@@ -493,7 +457,6 @@ impl ExecutableProgramSummary {
             Self::Generic(summary) => summary.code_offset,
         }
     }
-
     /// Return the complete program hash shared by both program kinds.
     #[must_use]
     pub fn code_hash(&self) -> Hash {
@@ -502,7 +465,6 @@ impl ExecutableProgramSummary {
             Self::Generic(summary) => summary.code_hash,
         }
     }
-
     /// Return the authenticated ABI hash shared by both program kinds.
     #[must_use]
     pub fn abi_hash(&self) -> Hash {
@@ -512,7 +474,6 @@ impl ExecutableProgramSummary {
         }
     }
 }
-
 impl ProgramSummary {
     /// Prepare and summarize one complete deployable contract artifact.
     ///
@@ -527,19 +488,16 @@ impl ProgramSummary {
     pub fn from_artifact(bytecode: &[u8]) -> Result<Self, ivm::VMError> {
         IvmCache::new().summarize_program(bytecode)
     }
-
     /// Return the immutable validated contract shared by analysis and runtimes.
     #[must_use]
     pub fn prepared_contract(&self) -> &ivm::PreparedContract {
         &self.prepared
     }
-
     /// Return the shared bounded cache used for nested contract preparation.
     #[must_use]
     pub fn prepared_contract_cache(&self) -> PreparedContractCache {
         self.prepared_cache.clone()
     }
-
     /// Check out a warmed runtime backed by the shared prepared-artifact pool.
     ///
     /// The owned lease does not hold the cache mutex while guest code runs.
@@ -558,17 +516,14 @@ impl ProgramSummary {
             .checkout_runtime(self.prepared_contract(), gas_limit, heap_limit)
     }
 }
-
 struct RuntimePool {
     baseline: Arc<ivm::RuntimeTemplate>,
     available: Vec<ivm::IVM>,
 }
-
 struct SharedRuntimePool {
     baseline: Arc<ivm::RuntimeTemplate>,
     available: Vec<ivm::IVM>,
 }
-
 impl std::fmt::Debug for SharedRuntimePool {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -578,7 +533,6 @@ impl std::fmt::Debug for SharedRuntimePool {
             .finish()
     }
 }
-
 /// Checked-out nested-call runtime returned to the shared prepared cache on
 /// every success, error, and unwind path.
 pub struct PreparedRuntimeLease {
@@ -587,17 +541,14 @@ pub struct PreparedRuntimeLease {
     baseline: Arc<ivm::RuntimeTemplate>,
     vm: Option<ivm::IVM>,
 }
-
 impl Deref for PreparedRuntimeLease {
     type Target = ivm::IVM;
-
     fn deref(&self) -> &Self::Target {
         self.vm
             .as_ref()
             .expect("prepared runtime lease always owns a VM")
     }
 }
-
 impl DerefMut for PreparedRuntimeLease {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.vm
@@ -605,7 +556,6 @@ impl DerefMut for PreparedRuntimeLease {
             .expect("prepared runtime lease always owns a VM")
     }
 }
-
 impl Drop for PreparedRuntimeLease {
     fn drop(&mut self) {
         if let Some(vm) = self.vm.take() {
@@ -614,7 +564,6 @@ impl Drop for PreparedRuntimeLease {
         }
     }
 }
-
 /// Checked-out warmed runtime that automatically returns to its cache.
 ///
 /// Dropping the lease restores only dirty memory chunks and makes the same VM
@@ -626,21 +575,17 @@ pub struct RuntimeLease<'a> {
     baseline: Arc<ivm::RuntimeTemplate>,
     vm: Option<ivm::IVM>,
 }
-
 impl Deref for RuntimeLease<'_> {
     type Target = ivm::IVM;
-
     fn deref(&self) -> &Self::Target {
         self.vm.as_ref().expect("runtime lease always owns a VM")
     }
 }
-
 impl DerefMut for RuntimeLease<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.vm.as_mut().expect("runtime lease always owns a VM")
     }
 }
-
 impl Drop for RuntimeLease<'_> {
     fn drop(&mut self) {
         if let Some(vm) = self.vm.take() {
@@ -649,7 +594,6 @@ impl Drop for RuntimeLease<'_> {
         }
     }
 }
-
 /// Lightweight cache counters for diagnostics and tests.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CacheStats {
@@ -678,7 +622,6 @@ pub struct CacheStats {
     /// Evictions triggered by capacity limits.
     pub evictions: u64,
 }
-
 /// Admission-time cache for IVM program summaries and warmed runtimes.
 pub struct IvmCache {
     prepared_contracts: PreparedContractCache,
@@ -691,26 +634,22 @@ pub struct IvmCache {
     capacity: usize,
     stats: CacheStats,
 }
-
 impl Default for IvmCache {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl IvmCache {
     /// Constructor with a default capacity of 64 entries.
     #[must_use]
     pub fn new() -> Self {
         Self::with_capacity(iroha_config::parameters::defaults::pipeline::CACHE_SIZE)
     }
-
     /// Construct a cache with a specific maximum number of entries.
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self::with_prepared_contract_cache(capacity, PreparedContractCache::with_capacity(capacity))
     }
-
     /// Construct a worker-local summary/analysis cache backed by a shared
     /// immutable prepared-contract and owned-runtime pool.
     ///
@@ -733,7 +672,6 @@ impl IvmCache {
             stats: CacheStats::default(),
         }
     }
-
     /// Prepare a contract and cache its summary by the complete artifact hash.
     ///
     /// # Errors
@@ -743,7 +681,6 @@ impl IvmCache {
         self.stats.artifact_hashes = self.stats.artifact_hashes.saturating_add(1);
         self.summarize_program_with_hash(code_hash, bytecode)
     }
-
     /// Validate and summarize either a self-describing contract or a generic
     /// ABI-bound IVM program.
     ///
@@ -768,7 +705,6 @@ impl IvmCache {
                 .map(ExecutableProgramSummary::Generic)
         }
     }
-
     /// Validate and summarize an ABI-bound program that has no `CNTR` section.
     ///
     /// # Errors
@@ -789,12 +725,10 @@ impl IvmCache {
             self.touch_summary(key);
             return Ok(hit);
         }
-
         let parsed = ProgramMetadata::parse(bytecode)?;
         if parsed.contract_interface.is_some() {
             return Err(ivm::VMError::InvalidMetadata);
         }
-
         self.finish_generic_program_summary(
             bytecode,
             code_hash,
@@ -803,7 +737,6 @@ impl IvmCache {
             parsed.header_len,
         )
     }
-
     /// Validate and summarize a generic program whose metadata was already parsed by the caller.
     ///
     /// `code_hash` must be the authenticated complete-program hash retained by world state. The
@@ -831,10 +764,8 @@ impl IvmCache {
             self.touch_summary(key);
             return Ok(hit);
         }
-
         self.finish_generic_program_summary(bytecode, code_hash, metadata, code_offset, header_len)
     }
-
     fn finish_generic_program_summary(
         &mut self,
         bytecode: &[u8],
@@ -864,7 +795,6 @@ impl IvmCache {
                 syscall: forbidden.number,
             });
         }
-
         let summary = GenericProgramSummary {
             program: Arc::from(bytecode),
             code_offset,
@@ -879,7 +809,6 @@ impl IvmCache {
         self.stats.preparations = self.stats.preparations.saturating_add(1);
         Ok(summary)
     }
-
     /// Return the prepared summary for a trusted content-addressed artifact.
     ///
     /// Cache hits use only `code_hash` and do not inspect, parse, hash, or
@@ -898,7 +827,6 @@ impl IvmCache {
             return Ok(hit);
         }
         let key = SummaryKey::new(code_hash);
-
         let (prepared, prepared_now) = self
             .prepared_contracts
             .get_or_prepare_with_status(code_hash, bytecode)?;
@@ -913,7 +841,6 @@ impl IvmCache {
         // binding with the local descriptor. Preserve the artifact-carried
         // value here so manifest checks never substitute node-local metadata.
         let abi_hash = Hash::prehashed(prepared.contract_interface().abi_hash);
-
         let summary = ProgramSummary {
             prepared,
             prepared_cache: self.prepared_contracts.clone(),
@@ -928,7 +855,6 @@ impl IvmCache {
         self.stats.metadata_misses = self.stats.metadata_misses.saturating_add(1);
         Ok(summary)
     }
-
     /// Resolve a locally cached summary by a trusted admitted content address.
     ///
     /// This path takes no byte slice, so callers can check a world-state
@@ -952,7 +878,6 @@ impl IvmCache {
         self.touch_summary(key);
         Ok(Some(hit))
     }
-
     /// Resolve a locally cached generic-program summary by its authenticated content address.
     ///
     /// The caller remains responsible for comparing the retained shared image with its
@@ -969,7 +894,6 @@ impl IvmCache {
         self.touch_summary(key);
         Some(hit)
     }
-
     /// Analyze a program once per cached summary and return a reusable static AMX summary.
     ///
     /// # Errors
@@ -985,7 +909,6 @@ impl IvmCache {
             self.touch_summary(key);
             return Ok(hit);
         }
-
         self.stats.analysis_misses = self.stats.analysis_misses.saturating_add(1);
         let analysis = ivm::analysis::analyze_prepared(summary.prepared_contract());
         if self.capacity != 0 {
@@ -995,7 +918,6 @@ impl IvmCache {
         }
         Ok(analysis)
     }
-
     /// Analyze a validated generic program once per content-addressed summary.
     ///
     /// # Errors
@@ -1011,7 +933,6 @@ impl IvmCache {
             self.touch_summary(key);
             return Ok(hit);
         }
-
         self.stats.analysis_misses = self.stats.analysis_misses.saturating_add(1);
         let analysis = ivm::analysis::analyze_program(summary.program())?;
         if self.capacity != 0 {
@@ -1021,7 +942,6 @@ impl IvmCache {
         }
         Ok(analysis)
     }
-
     /// Check out a warmed runtime for `summary.code_hash`, loading it if needed.
     ///
     /// The returned lease restores and returns the VM automatically on every
@@ -1045,7 +965,6 @@ impl IvmCache {
             vm: Some(vm),
         })
     }
-
     /// Check out a warmed runtime for a validated generic IVM program.
     ///
     /// The returned lease restores all mutated runtime state before returning
@@ -1098,7 +1017,6 @@ impl IvmCache {
             }
             (baseline, vm)
         };
-
         Ok(RuntimeLease {
             cache: self,
             key,
@@ -1106,7 +1024,6 @@ impl IvmCache {
             vm: Some(vm),
         })
     }
-
     fn take_runtime(
         &mut self,
         summary: &ProgramSummary,
@@ -1126,7 +1043,6 @@ impl IvmCache {
             vm.set_gas_limit(gas_limit);
             return Ok((key, baseline, vm));
         }
-
         self.stats.runtime_misses = self.stats.runtime_misses.saturating_add(1);
         let mut vm = ivm::IVM::new(gas_limit);
         vm.set_zk_trace_enabled(false);
@@ -1153,19 +1069,16 @@ impl IvmCache {
         }
         Ok((key, baseline, vm))
     }
-
     /// Return a snapshot of cache counters.
     #[must_use]
     pub fn stats(&self) -> CacheStats {
         self.stats
     }
-
     /// Return the prepared-artifact store shared with contract hosts.
     #[must_use]
     pub fn prepared_contract_cache(&self) -> PreparedContractCache {
         self.prepared_contracts.clone()
     }
-
     fn insert_summary(&mut self, key: SummaryKey, summary: ProgramSummary) {
         if self.capacity == 0 {
             return;
@@ -1174,7 +1087,6 @@ impl IvmCache {
         self.touch_summary(key);
         self.evict_summaries_if_needed();
     }
-
     fn insert_generic_summary(&mut self, key: SummaryKey, summary: GenericProgramSummary) {
         if self.capacity == 0 {
             return;
@@ -1183,7 +1095,6 @@ impl IvmCache {
         self.touch_summary(key);
         self.evict_summaries_if_needed();
     }
-
     fn insert_runtime_pool(&mut self, key: RuntimeKey, pool: RuntimePool) {
         if self.capacity == 0 {
             return;
@@ -1192,7 +1103,6 @@ impl IvmCache {
         self.touch_runtime(key);
         self.evict_runtimes_if_needed();
     }
-
     fn return_runtime(
         &mut self,
         key: RuntimeKey,
@@ -1219,7 +1129,6 @@ impl IvmCache {
         self.touch_runtime(key);
         self.evict_runtimes_if_needed();
     }
-
     fn touch_summary(&mut self, key: SummaryKey) {
         if self.capacity == 0 {
             return;
@@ -1229,7 +1138,6 @@ impl IvmCache {
         }
         self.summary_order.push_back(key);
     }
-
     fn touch_runtime(&mut self, key: RuntimeKey) {
         if self.capacity == 0 {
             return;
@@ -1240,7 +1148,6 @@ impl IvmCache {
         self.runtime_order.push_back(key);
         self.touch_summary(key.summary_key());
     }
-
     fn evict_summaries_if_needed(&mut self) {
         while self.capacity != 0 && self.summary_order.len() > self.capacity {
             if let Some(old) = self.summary_order.pop_front() {
@@ -1252,7 +1159,6 @@ impl IvmCache {
             }
         }
     }
-
     fn evict_runtimes_if_needed(&mut self) {
         while self.capacity != 0 && self.runtime_order.len() > self.capacity {
             if let Some(old) = self.runtime_order.pop_front() {
@@ -1261,7 +1167,6 @@ impl IvmCache {
             }
         }
     }
-
     fn prune_runtime_for_summary(&mut self, key: SummaryKey) {
         self.runtime_templates
             .retain(|runtime_key, _| runtime_key.summary_key() != key);
@@ -1269,16 +1174,12 @@ impl IvmCache {
             .retain(|runtime_key| runtime_key.summary_key() != key);
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
     use ivm::runtime::IvmConfig;
-
     use super::*;
-
     const HEAP_LIMIT: u64 = ivm::Memory::HEAP_MAX_SIZE;
-
     /// Assemble a minimal program containing only a HALT instruction.
     fn minimal_program() -> Vec<u8> {
         let mut program = ivm::ProgramMetadata::default().encode();
@@ -1311,7 +1212,6 @@ mod tests {
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
     }
-
     fn minimal_generic_program() -> Vec<u8> {
         let mut program = ivm::ProgramMetadata {
             max_cycles: 10_000,
@@ -1321,7 +1221,6 @@ mod tests {
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
     }
-
     #[test]
     fn executable_summary_distinguishes_contracts_from_generic_programs() {
         let mut cache = IvmCache::with_capacity(4);
@@ -1342,7 +1241,6 @@ mod tests {
             "CNTR artifacts must never be downgraded to generic programs"
         );
     }
-
     #[test]
     fn generic_runtime_is_validated_reset_and_reused() {
         const GAS_LIMIT: u64 = 10_000;
@@ -1370,7 +1268,6 @@ mod tests {
         drop(runtime);
         assert_eq!(cache.stats().runtime_hits, 1);
     }
-
     #[test]
     fn generic_summary_rejects_disallowed_syscalls_during_preparation() {
         let mut program = ivm::ProgramMetadata {
@@ -1380,13 +1277,11 @@ mod tests {
         .encode();
         program.extend_from_slice(&ivm::encoding::wide::encode_syscallx(0x00ff_ffff).to_le_bytes());
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-
         assert!(
             IvmCache::new().summarize_generic_program(&program).is_err(),
             "unknown generic-program syscalls must fail before execution"
         );
     }
-
     #[test]
     fn generic_summary_rejects_contract_only_syscalls_with_stable_reason() {
         for syscall in [
@@ -1417,7 +1312,6 @@ mod tests {
             .encode();
             program.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
             program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-
             let error = IvmCache::new()
                 .summarize_generic_program(&program)
                 .expect_err("generic syscall profile must reject contract-only calls");
@@ -1428,7 +1322,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn generic_summary_accepts_unconditional_and_context_gated_syscalls() {
         for syscall in [
@@ -1444,21 +1337,17 @@ mod tests {
             .encode();
             program.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
             program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-
             IvmCache::new()
                 .summarize_generic_program(&program)
                 .expect("system trigger syscall belongs to the generic V1 profile");
         }
     }
-
     #[test]
     fn runtime_is_reused_across_transactions() {
         const TEST_REGISTER: usize = 1;
         const GAS_LIMIT: u64 = 10_000;
         let program = minimal_program();
-
         let mut cache = IvmCache::with_capacity(2);
-
         // First transaction warms both summary and runtime template.
         let summary = cache.summarize_program(&program).expect("summary");
         let memory_allocation = {
@@ -1478,13 +1367,11 @@ mod tests {
                 .expect("mutate input memory");
             allocation
         };
-
         // Cache stats should reflect misses.
         let stats = cache.stats();
         assert_eq!(stats.metadata_misses, 1);
         assert_eq!(stats.runtime_misses, 1);
         assert_eq!(stats.runtime_hits, 0);
-
         // Second transaction should reuse the cached template and preserve code load.
         let summary = cache.summarize_program(&program).expect("cached summary");
         let runtime2 = cache
@@ -1519,14 +1406,12 @@ mod tests {
         assert_eq!(stats.runtime_hits, 1);
         assert_eq!(stats.runtime_misses, 1);
     }
-
     #[test]
     fn runtime_pool_discards_a_vm_with_mismatched_template_geometry() {
         const GAS_LIMIT: u64 = 10_000;
         let program = minimal_program();
         let mut cache = IvmCache::with_capacity(2);
         let summary = cache.summarize_program(&program).expect("summary");
-
         {
             let mut runtime = cache
                 .checkout_runtime(&summary, &program, GAS_LIMIT, HEAP_LIMIT)
@@ -1540,7 +1425,6 @@ mod tests {
             after_mismatch.dirty_resets, 0,
             "a rejected reset must not count or pool the mismatched VM"
         );
-
         {
             let runtime = cache
                 .checkout_runtime(&summary, &program, GAS_LIMIT, HEAP_LIMIT)
@@ -1552,7 +1436,6 @@ mod tests {
         assert_eq!(after_replacement.runtime_hits, 0);
         assert_eq!(after_replacement.dirty_resets, 1);
     }
-
     #[test]
     fn runtime_pool_never_reuses_stale_heap_authority() {
         const GAS_LIMIT: u64 = 10_000;
@@ -1561,7 +1444,6 @@ mod tests {
         let program = minimal_program();
         let mut cache = IvmCache::with_capacity(2);
         let summary = cache.summarize_program(&program).expect("summary");
-
         {
             let runtime = cache
                 .checkout_runtime(&summary, &program, GAS_LIMIT, SMALL_HEAP_LIMIT)
@@ -1577,7 +1459,6 @@ mod tests {
         let after_distinct_limits = cache.stats();
         assert_eq!(after_distinct_limits.runtime_misses, 2);
         assert_eq!(after_distinct_limits.runtime_hits, 0);
-
         let runtime = cache
             .checkout_runtime(&summary, &program, GAS_LIMIT, SMALL_HEAP_LIMIT)
             .expect("warm small governed runtime");
@@ -1585,13 +1466,11 @@ mod tests {
         drop(runtime);
         assert_eq!(cache.stats().runtime_hits, 1);
     }
-
     #[test]
     fn public_program_summary_constructor_initializes_prepared_runtime_state() {
         const GAS_LIMIT: u64 = 10_000;
         let program = minimal_program();
         let summary = ProgramSummary::from_artifact(&program).expect("public summary constructor");
-
         assert_eq!(summary.code_hash, ivm::contract_code_hash(&program));
         assert_eq!(summary.prepared_contract().code_hash(), summary.code_hash);
         assert_eq!(summary.prepared_contract().artifact(), program.as_slice());
@@ -1600,14 +1479,12 @@ mod tests {
             .expect("summary owns initialized prepared runtime state");
         assert_eq!(runtime.remaining_gas(), GAS_LIMIT);
     }
-
     #[test]
     fn content_addressed_hit_skips_repreparation_and_reuses_dirty_reset_runtime() {
         const GAS_LIMIT: u64 = 10_000;
         let program = minimal_program();
         let code_hash = ivm::contract_code_hash(&program);
         let mut cache = IvmCache::with_capacity(2);
-
         let summary = cache
             .summarize_program_with_hash(code_hash, &program)
             .expect("first preparation");
@@ -1633,7 +1510,6 @@ mod tests {
         assert_eq!(after_first.prepared_loads, 1);
         assert_eq!(after_first.template_builds, 1);
         assert_eq!(after_first.dirty_resets, 1);
-
         // A content-addressed hit does not even inspect the byte slice. The
         // canonical bytes and all decoded state come from ProgramSummary.
         let summary = cache
@@ -1669,7 +1545,6 @@ mod tests {
         assert_eq!(after_second.template_builds, after_first.template_builds);
         assert_eq!(after_second.dirty_resets, after_first.dirty_resets + 1);
     }
-
     #[test]
     fn second_nested_resolution_reuses_shared_prepared_artifact() {
         let outer_program = minimal_program();
@@ -1679,7 +1554,6 @@ mod tests {
             .expect("outer contract summary");
         let nested_cache = outer_summary.prepared_contract_cache();
         let before_nested = nested_cache.stats();
-
         let mut nested_program = minimal_program();
         nested_program[8..16].copy_from_slice(&17u64.to_le_bytes());
         let nested_hash = ivm::contract_code_hash(&nested_program);
@@ -1689,7 +1563,6 @@ mod tests {
         let after_first = nested_cache.stats();
         assert_eq!(after_first.misses, before_nested.misses + 1);
         assert_eq!(after_first.preparations, before_nested.preparations + 1);
-
         // A second nested call resolves solely by the trusted content address:
         // no byte inspection, artifact hash, parse, validation, or predecode.
         let second = nested_cache
@@ -1701,7 +1574,6 @@ mod tests {
         assert_eq!(after_second.misses, after_first.misses);
         assert_eq!(after_second.preparations, after_first.preparations);
     }
-
     #[test]
     fn worker_caches_share_one_preparation_and_owned_runtime_pool() {
         const GAS_LIMIT: u64 = 10_000;
@@ -1710,7 +1582,6 @@ mod tests {
         let shared = PreparedContractCache::with_capacity(4);
         let mut first_worker = IvmCache::with_prepared_contract_cache(4, shared.clone());
         let mut second_worker = IvmCache::with_prepared_contract_cache(4, shared.clone());
-
         let first = first_worker
             .summarize_program_with_hash(code_hash, &program)
             .expect("first worker preparation");
@@ -1724,7 +1595,6 @@ mod tests {
                 .expect("code memory")
                 .as_ptr()
         };
-
         // The second worker has no local summary. Supplying no bytes proves it
         // resolves through the shared content-addressed prepared store.
         let second = second_worker
@@ -1741,7 +1611,6 @@ mod tests {
                 .as_ptr(),
             allocation
         );
-
         let stats = shared.stats();
         assert_eq!(stats.preparations, 1);
         assert_eq!(stats.runtime_prepared_loads, 1);
@@ -1750,7 +1619,6 @@ mod tests {
         assert_eq!(first_worker.stats().preparations, 1);
         assert_eq!(second_worker.stats().preparations, 0);
     }
-
     #[test]
     fn concurrent_workers_singleflight_contract_preparation() {
         const WORKERS: usize = 8;
@@ -1775,7 +1643,6 @@ mod tests {
             .into_iter()
             .map(|handle| handle.join().expect("worker must not panic"))
             .collect::<Vec<_>>();
-
         let artifact = prepared[0].artifact().as_ptr();
         assert!(
             prepared
@@ -1787,7 +1654,6 @@ mod tests {
         assert_eq!(stats.misses, 1);
         assert_eq!(stats.hits, (WORKERS - 1) as u64);
     }
-
     #[test]
     fn nested_runtime_pool_reuses_allocation_and_dirty_resets_memory() {
         const GAS_LIMIT: u64 = 10_000;
@@ -1798,7 +1664,6 @@ mod tests {
         let prepared = cache
             .get_or_prepare(code_hash, &program)
             .expect("prepare nested contract");
-
         let memory_allocation = {
             let mut runtime = cache
                 .checkout_runtime(prepared.as_ref(), GAS_LIMIT, GOVERNED_HEAP_LIMIT)
@@ -1821,7 +1686,6 @@ mod tests {
         assert_eq!(after_first.runtime_prepared_loads, 1);
         assert_eq!(after_first.runtime_template_builds, 1);
         assert_eq!(after_first.runtime_dirty_resets, 1);
-
         {
             let runtime = cache
                 .checkout_runtime(prepared.as_ref(), GAS_LIMIT, GOVERNED_HEAP_LIMIT)
@@ -1862,7 +1726,6 @@ mod tests {
             after_first.runtime_dirty_resets + 1
         );
     }
-
     #[test]
     fn program_summary_owned_lease_reuses_runtime_on_early_return() {
         const GAS_LIMIT: u64 = 10_000;
@@ -1874,7 +1737,6 @@ mod tests {
             Some(summary.code_hash)
         );
         let prepared_cache = summary.prepared_contract_cache();
-
         fn dirty_then_return(summary: &ProgramSummary) -> Result<(), *const u8> {
             let mut runtime = summary
                 .checkout_runtime(GAS_LIMIT, HEAP_LIMIT)
@@ -1891,11 +1753,9 @@ mod tests {
                 .expect("dirty input page");
             Err(allocation)
         }
-
         let allocation = dirty_then_return(&summary).expect_err("early return");
         let after_error = prepared_cache.stats();
         assert_eq!(after_error.runtime_dirty_resets, 1);
-
         let runtime = summary
             .checkout_runtime(GAS_LIMIT, HEAP_LIMIT)
             .expect("warm runtime");
@@ -1911,7 +1771,6 @@ mod tests {
         );
         assert_eq!(prepared_cache.stats().runtime_hits, 1);
     }
-
     #[test]
     fn prepared_store_evicts_lru_and_rejects_hash_mismatches() {
         let mut first_program = minimal_program();
@@ -1921,7 +1780,6 @@ mod tests {
         second_program[8..16].copy_from_slice(&29u64.to_le_bytes());
         let second_hash = ivm::contract_code_hash(&second_program);
         let cache = PreparedContractCache::with_capacity(1);
-
         assert!(matches!(
             cache.get_or_prepare(first_hash, &second_program),
             Err(ivm::VMError::InvalidMetadata)
@@ -1934,7 +1792,6 @@ mod tests {
             .expect("second valid artifact");
         let after_eviction = cache.stats();
         assert_eq!(after_eviction.evictions, 1);
-
         // Once evicted, a hash-only lookup cannot silently reuse a stale or
         // different artifact. The caller must supply the exact bytes again.
         assert!(matches!(
@@ -1945,12 +1802,10 @@ mod tests {
         assert_eq!(final_stats.misses, after_eviction.misses + 1);
         assert_eq!(final_stats.preparations, after_eviction.preparations);
     }
-
     #[test]
     fn analysis_is_reused_across_transactions() {
         let program = minimal_program();
         let mut cache = IvmCache::with_capacity(2);
-
         let summary = cache.summarize_program(&program).expect("summary");
         let first = cache
             .analyze_program(&summary, &program)
@@ -1958,32 +1813,26 @@ mod tests {
         let second = cache
             .analyze_program(&summary, &program)
             .expect("second analysis");
-
         assert_eq!(first.instruction_count, second.instruction_count);
         assert_eq!(first.metadata.max_cycles, second.metadata.max_cycles);
         let stats = cache.stats();
         assert_eq!(stats.analysis_misses, 1);
         assert_eq!(stats.analysis_hits, 1);
     }
-
     #[test]
     fn metadata_cache_distinguishes_header_changes() {
         let mut cache = IvmCache::with_capacity(4);
-
         // Same body but different metadata (max_cycles) must not share cache entries.
         let mut program = minimal_program();
         program[8..16].copy_from_slice(&1u64.to_le_bytes());
         let summary1 = cache.summarize_program(&program).expect("first summary");
-
         let mut program2 = program.clone();
         program2[8..16].copy_from_slice(&2u64.to_le_bytes());
         let summary2 = cache.summarize_program(&program2).expect("second summary");
-
         assert_ne!(summary1.meta_hash, summary2.meta_hash);
         let stats = cache.stats();
         assert_eq!(stats.metadata_hits, 0);
         assert_eq!(stats.metadata_misses, 2);
-
         {
             let vm1 = cache
                 .checkout_runtime(&summary1, &program, 1_000, HEAP_LIMIT)
@@ -1995,20 +1844,17 @@ mod tests {
             .expect("runtime for second variant");
         assert_eq!(vm2.metadata().max_cycles, 2);
     }
-
     #[test]
     fn runtime_stack_limit_tracks_gas_limit() {
         let mut cache = IvmCache::with_capacity(1);
         let mut program = minimal_program();
         program[8..16].copy_from_slice(&14u64.to_le_bytes());
         program[16] = 1; // abi_version
-
         let summary = cache.summarize_program(&program).expect("summary");
         let gas_limit = 100_000;
         let vm = cache
             .checkout_runtime(&summary, &program, gas_limit, HEAP_LIMIT)
             .expect("runtime");
-
         let expected = IvmConfig::new(gas_limit).stack_limit_for_gas();
         assert!(
             expected > 64 * 1024,
@@ -2016,12 +1862,10 @@ mod tests {
         );
         assert_eq!(vm.memory.stack_limit(), expected);
     }
-
     #[test]
     fn eviction_prunes_runtimes_for_evicted_summary() {
         let mut cache = IvmCache::with_capacity(1);
         let gas_limit = 50_000;
-
         let mut program1 = minimal_program();
         program1[8..16].copy_from_slice(&1u64.to_le_bytes());
         let summary1 = cache.summarize_program(&program1).expect("summary1");
@@ -2030,23 +1874,19 @@ mod tests {
                 .checkout_runtime(&summary1, &program1, gas_limit, HEAP_LIMIT)
                 .expect("runtime1");
         }
-
         let mut program2 = minimal_program();
         program2[8..16].copy_from_slice(&2u64.to_le_bytes());
         let summary2 = cache.summarize_program(&program2).expect("summary2");
-
         let summary1_key = SummaryKey::new(summary1.code_hash);
         let summary2_key = SummaryKey::new(summary2.code_hash);
         assert!(!cache.summaries.contains_key(&summary1_key));
         assert!(cache.summaries.contains_key(&summary2_key));
-
         let runtime1_key = RuntimeKey::new(
             summary1.code_hash,
             stack_limit_for_gas(gas_limit),
             HEAP_LIMIT,
         );
         assert!(!cache.runtime_templates.contains_key(&runtime1_key));
-
         {
             let _runtime = cache
                 .checkout_runtime(&summary2, &program2, gas_limit, HEAP_LIMIT)

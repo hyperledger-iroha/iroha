@@ -1,7 +1,5 @@
 //! Tests for header feature gating of vector instructions.
-
 use ivm::{IVM, Memory, ProgramMetadata, VMError, encoding, instruction};
-
 fn build_prog_with_vector(vmode: bool) -> Vec<u8> {
     // Emit a single VADD32 between vector registers v0 <- v0 + v1, then HALT.
     let mut code = Vec::new();
@@ -18,7 +16,6 @@ fn build_prog_with_vector(vmode: bool) -> Vec<u8> {
     out.extend_from_slice(&code);
     out
 }
-
 fn build_prog_with_load128(vmode: bool) -> Vec<u8> {
     let mut code = Vec::new();
     let word = encoding::wide::encode_load128(instruction::wide::memory::LOAD128, 2, 1, 3);
@@ -33,7 +30,6 @@ fn build_prog_with_load128(vmode: bool) -> Vec<u8> {
     out.extend_from_slice(&code);
     out
 }
-
 fn build_prog_with_store128(vmode: bool) -> Vec<u8> {
     let mut code = Vec::new();
     let word = encoding::wide::encode_store128(instruction::wide::memory::STORE128, 1, 2, 3);
@@ -48,7 +44,6 @@ fn build_prog_with_store128(vmode: bool) -> Vec<u8> {
     out.extend_from_slice(&code);
     out
 }
-
 #[test]
 fn vector_ops_rejected_without_header_bit() {
     let prog = build_prog_with_vector(false);
@@ -63,7 +58,6 @@ fn vector_ops_rejected_without_header_bit() {
         other => panic!("expected VectorExtensionDisabled, got {other:?}"),
     }
 }
-
 #[test]
 fn vector_ops_allowed_with_header_bit() {
     let prog = build_prog_with_vector(true);
@@ -76,7 +70,6 @@ fn vector_ops_allowed_with_header_bit() {
     let out = vm.vector_register(0);
     assert_eq!(out, [11, 22, 33, 44]);
 }
-
 #[test]
 fn load128_rejected_without_header_bit() {
     let prog = build_prog_with_load128(false);
@@ -86,7 +79,6 @@ fn load128_rejected_without_header_bit() {
     let err = vm.run().unwrap_err();
     assert!(matches!(err, VMError::VectorExtensionDisabled));
 }
-
 #[test]
 fn store128_rejected_without_header_bit() {
     let prog = build_prog_with_store128(false);

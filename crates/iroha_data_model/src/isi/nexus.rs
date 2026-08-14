@@ -10,7 +10,6 @@ use crate::{
     peer::PeerId,
 };
 use iroha_primitives::numeric::Quantity;
-
 isi! {
     /// Set or clear emergency validator peers used for lane relay quorum recovery.
     ///
@@ -32,7 +31,6 @@ isi! {
         pub metadata: Metadata,
     }
 }
-
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[derive(getset::Getters)]
@@ -59,7 +57,6 @@ iroha_data_model_derive::model_single! {
         pub effect_proof_blob: Option<ProofBlob>,
     }
 }
-
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[derive(getset::Getters)]
@@ -96,7 +93,6 @@ iroha_data_model_derive::model_single! {
         pub proof_blob: ProofBlob,
     }
 }
-
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[derive(getset::Getters)]
@@ -109,7 +105,6 @@ iroha_data_model_derive::model_single! {
         pub program: FeeSponsorProgram,
     }
 }
-
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[derive(getset::Getters)]
@@ -122,7 +117,6 @@ iroha_data_model_derive::model_single! {
         pub revision: FeeSponsorProgramRevision,
     }
 }
-
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[derive(getset::Getters)]
@@ -142,7 +136,6 @@ iroha_data_model_derive::model_single! {
         pub activate_at_height: u64,
     }
 }
-
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[derive(getset::Getters)]
@@ -155,7 +148,6 @@ iroha_data_model_derive::model_single! {
         pub program_id: FeeSponsorProgramId,
     }
 }
-
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[derive(getset::Getters)]
@@ -168,7 +160,6 @@ iroha_data_model_derive::model_single! {
         pub program_id: FeeSponsorProgramId,
     }
 }
-
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[derive(getset::Getters)]
@@ -181,7 +172,6 @@ iroha_data_model_derive::model_single! {
         pub program_id: FeeSponsorProgramId,
     }
 }
-
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[derive(getset::Getters)]
@@ -196,7 +186,6 @@ iroha_data_model_derive::model_single! {
         pub beneficiary: AccountId,
     }
 }
-
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[derive(getset::Getters)]
@@ -211,7 +200,6 @@ iroha_data_model_derive::model_single! {
         pub beneficiary: AccountId,
     }
 }
-
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[derive(getset::Getters)]
@@ -228,7 +216,6 @@ iroha_data_model_derive::model_single! {
         pub amount: Quantity,
     }
 }
-
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[derive(getset::Getters)]
@@ -250,31 +237,26 @@ iroha_data_model_derive::model_single! {
         pub amount: Quantity,
     }
 }
-
 impl PartialOrd for RegisterVerifiedLaneRelay {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for RegisterVerifiedLaneRelay {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.encode().cmp(&other.encode())
     }
 }
-
 impl PartialOrd for RegisterVerifiedFeeSponsorVaultAllocation {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for RegisterVerifiedFeeSponsorVaultAllocation {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.encode().cmp(&other.encode())
     }
 }
-
 macro_rules! impl_instruction_ord {
     ($($ty:ty),+ $(,)?) => {
         $(
@@ -283,7 +265,6 @@ macro_rules! impl_instruction_ord {
                     Some(self.cmp(other))
                 }
             }
-
             impl Ord for $ty {
                 fn cmp(&self, other: &Self) -> std::cmp::Ordering {
                     self.encode().cmp(&other.encode())
@@ -292,7 +273,6 @@ macro_rules! impl_instruction_ord {
         )+
     };
 }
-
 impl_instruction_ord!(
     CreateFeeSponsorProgram,
     StageFeeSponsorProgramRevision,
@@ -305,7 +285,6 @@ impl_instruction_ord!(
     FundFeeSponsorProgram,
     WithdrawFeeSponsorProgram,
 );
-
 impl crate::seal::Instruction for SetLaneRelayEmergencyValidators {}
 impl crate::seal::Instruction for RegisterVerifiedLaneRelay {}
 impl crate::seal::Instruction for RegisterVerifiedFeeSponsorVaultAllocation {}
@@ -319,18 +298,15 @@ impl crate::seal::Instruction for EnrollFeeSponsorBeneficiary {}
 impl crate::seal::Instruction for UnenrollFeeSponsorBeneficiary {}
 impl crate::seal::Instruction for FundFeeSponsorProgram {}
 impl crate::seal::Instruction for WithdrawFeeSponsorProgram {}
-
 fn nexus_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for SetLaneRelayEmergencyValidators {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = nexus_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let lane_id = super::decode_aos_canonical_field::<LaneId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -363,14 +339,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetLaneRelayEmergencyValidators {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RegisterVerifiedLaneRelay {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = nexus_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let envelope = super::decode_aos_canonical_field::<LaneRelayEnvelope>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -402,7 +376,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterVerifiedLaneRelay {
         ))
     }
 }
-
 macro_rules! impl_decode_fields {
     ($ty:ident { $($field:ident: $field_ty:ty),+ $(,)? }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -411,7 +384,6 @@ macro_rules! impl_decode_fields {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 $(
                     let $field = super::decode_aos_canonical_field::<$field_ty>(
@@ -428,7 +400,6 @@ macro_rules! impl_decode_fields {
         }
     };
 }
-
 impl_decode_fields!(RegisterVerifiedFeeSponsorVaultAllocation {
     program_id: FeeSponsorProgramId,
     program_revision: u64,
@@ -480,16 +451,13 @@ impl_decode_fields!(WithdrawFeeSponsorProgram {
     asset_definition_id: AssetDefinitionId,
     amount: Quantity,
 });
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
-
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::codec::{Decode, Encode};
     use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::{
         block::{BlockHeader, consensus::LaneBlockCommitment},
@@ -498,7 +466,6 @@ mod tests {
             FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect, LaneId,
         },
     };
-
     #[derive(Encode)]
     struct ForgedRegisterVerifiedFeeSponsorVaultAllocation {
         program_id: FeeSponsorProgramId,
@@ -513,7 +480,6 @@ mod tests {
         manifest_root: [u8; 32],
         proof_blob: ProofBlob,
     }
-
     fn sample_commitment(height: u64) -> LaneBlockCommitment {
         LaneBlockCommitment {
             block_height: height,
@@ -531,7 +497,6 @@ mod tests {
             native_amx_receipts: Vec::new(),
         }
     }
-
     fn sample_header(height: u64) -> BlockHeader {
         BlockHeader::new(
             NonZeroU64::new(height).expect("nonzero height"),
@@ -542,37 +507,31 @@ mod tests {
             0,
         )
     }
-
     fn sample_envelope(height: u64) -> LaneRelayEnvelope {
         LaneRelayEnvelope::new(sample_header(height), None, sample_commitment(height), 0)
             .expect("valid lane relay envelope")
     }
-
     fn sample_proof_blob(seed: u8) -> ProofBlob {
         ProofBlob {
             payload: vec![seed, seed.wrapping_add(1)],
             expiry_slot: None,
         }
     }
-
     fn sponsor_account_id() -> AccountId {
         let sponsor_keypair = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)
             .expect("derive checked Nexus sponsor fixture keypair");
         AccountId::new(sponsor_keypair.public_key().clone())
     }
-
     fn sample_peer_id(seed: u8) -> PeerId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked Nexus peer fixture keypair");
         PeerId::new(keypair.public_key().clone())
     }
-
     fn sample_metadata() -> Metadata {
         let mut metadata = Metadata::default();
         metadata.insert("reason".parse().expect("metadata key"), true);
         metadata
     }
-
     fn sample_emergency_validators_instruction() -> SetLaneRelayEmergencyValidators {
         SetLaneRelayEmergencyValidators {
             lane_id: LaneId::new(9),
@@ -581,7 +540,6 @@ mod tests {
             metadata: sample_metadata(),
         }
     }
-
     fn sample_lane_relay_instruction() -> RegisterVerifiedLaneRelay {
         RegisterVerifiedLaneRelay {
             envelope: sample_envelope(5),
@@ -589,7 +547,6 @@ mod tests {
             effect_proof_blob: None,
         }
     }
-
     fn sample_fee_budget_instruction() -> RegisterVerifiedFeeSponsorVaultAllocation {
         RegisterVerifiedFeeSponsorVaultAllocation {
             program_id: sample_fee_sponsor_program().id,
@@ -605,13 +562,11 @@ mod tests {
             proof_blob: sample_proof_blob(0x02),
         }
     }
-
     fn sample_fee_asset_id() -> AssetDefinitionId {
         "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
             .parse()
             .expect("canonical asset definition id")
     }
-
     fn sample_fee_sponsor_program() -> FeeSponsorProgram {
         let program_id = FeeSponsorProgramId::new(
             sponsor_account_id(),
@@ -619,7 +574,6 @@ mod tests {
         );
         FeeSponsorProgram::new(program_id, sponsor_account_id())
     }
-
     fn sample_fee_sponsor_revision(program_id: FeeSponsorProgramId) -> FeeSponsorProgramRevision {
         FeeSponsorProgramRevision {
             program_id,
@@ -640,7 +594,6 @@ mod tests {
             }],
         }
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -651,7 +604,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(
         registry: &crate::isi::InstructionRegistry,
         wire_id: &'static str,
@@ -671,7 +623,6 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn register_verified_lane_relay_order_uses_canonical_encoding() {
         let left = sample_lane_relay_instruction();
@@ -680,14 +631,12 @@ mod tests {
             proof_blob: sample_proof_blob(0x02),
             effect_proof_blob: None,
         };
-
         assert_eq!(
             left.partial_cmp(&right),
             Some(left.encode().cmp(&right.encode()))
         );
         assert_eq!(left.cmp(&right), left.encode().cmp(&right.encode()));
     }
-
     #[test]
     fn register_verified_fee_sponsor_allocation_order_uses_canonical_encoding() {
         let left = sample_fee_budget_instruction();
@@ -695,14 +644,12 @@ mod tests {
             proof_blob: sample_proof_blob(0x03),
             ..left.clone()
         };
-
         assert_eq!(
             left.partial_cmp(&right),
             Some(left.encode().cmp(&right.encode()))
         );
         assert_eq!(left.cmp(&right), left.encode().cmp(&right.encode()));
     }
-
     #[test]
     fn nexus_verified_payload_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(sample_emergency_validators_instruction());
@@ -750,7 +697,6 @@ mod tests {
             amount: Quantity::from(1_u32),
         });
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn withdrawal_json_rejects_caller_selected_destination() {
@@ -765,13 +711,11 @@ mod tests {
             "destination".to_owned(),
             norito::json::to_value(&sponsor_account_id()).expect("serialize forged account"),
         );
-
         assert!(
             norito::json::from_value::<WithdrawFeeSponsorProgram>(value).is_err(),
             "caller-selected withdrawal destinations are not part of the first-release wire"
         );
     }
-
     #[test]
     fn negative_numeric_payload_cannot_decode_as_verified_nexus_balance() {
         let valid = sample_fee_budget_instruction();
@@ -789,13 +733,11 @@ mod tests {
             proof_blob: sample_proof_blob(0x02),
         };
         let encoded = forged.encode();
-
         assert!(
             RegisterVerifiedFeeSponsorVaultAllocation::decode(&mut encoded.as_slice()).is_err(),
             "a signed negative payload must not cross the verified-allocation boundary"
         );
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -832,7 +774,6 @@ mod tests {
             .register_with_id_slice::<WithdrawFeeSponsorProgram>(
                 "nexus::WithdrawFeeSponsorProgram",
             );
-
         assert_registry_decodes(
             &registry,
             "nexus::SetLaneRelayEmergencyValidators",

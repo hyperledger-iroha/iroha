@@ -1,5 +1,4 @@
 //! Production proof and wallet facades for first-release PQ-MASP.
-
 use iroha_data_model::privacy::{
     PqMaspStarkStatementV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
     PrivacyEncryptedOutputV1, PrivacyNativeConsensusBindingV1,
@@ -8,7 +7,6 @@ use iroha_data_model::privacy::{
 use rand::{TryCryptoRng, rngs::OsRng};
 use soranet_pq::HedgedRngSeed;
 use thiserror::Error;
-
 use super::{
     relation::{
         PqMaspNotePlaintextV1, PqMaspRelationErrorV1, PqMaspWitnessV1,
@@ -28,11 +26,9 @@ use crate::privacy_engines::{
         derive_healthy_try_crypto_seed_v1,
     },
 };
-
 const PQ_MASP_AUTHORIZATION_HEDGE_PURPOSE_V1: &[u8] =
     b"iroha:privacy:pq-masp:authorization-hedge:v1";
 const PQ_MASP_NOTE_ENCRYPTION_PURPOSE_V1: &[u8] = b"iroha:privacy:pq-masp:note-encryption-seed:v1";
-
 /// Failure constructing or checking a complete authorized PQ-MASP proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PqMaspProofErrorV1 {
@@ -71,21 +67,18 @@ pub enum PqMaspProofErrorV1 {
     #[error("PQ-MASP prover self-verification failed")]
     SelfVerification,
 }
-
 fn map_entropy_error_v1(error: TryCryptoProverRandomnessErrorV1) -> PqMaspProofErrorV1 {
     match error {
         TryCryptoProverRandomnessErrorV1::Unavailable => PqMaspProofErrorV1::RandomnessUnavailable,
         TryCryptoProverRandomnessErrorV1::Unhealthy => PqMaspProofErrorV1::UnhealthyRandomness,
     }
 }
-
 fn map_wallet_entropy_error_v1(error: TryCryptoProverRandomnessErrorV1) -> PqMaspWireErrorV1 {
     match error {
         TryCryptoProverRandomnessErrorV1::Unavailable => PqMaspWireErrorV1::RandomnessUnavailable,
         TryCryptoProverRandomnessErrorV1::Unhealthy => PqMaspWireErrorV1::UnhealthyRandomness,
     }
 }
-
 fn map_prover_error_v1(error: ProofManagedNoteStarkErrorV1) -> PqMaspProofErrorV1 {
     match error {
         ProofManagedNoteStarkErrorV1::Randomness => PqMaspProofErrorV1::RandomnessUnavailable,
@@ -102,7 +95,6 @@ fn map_prover_error_v1(error: ProofManagedNoteStarkErrorV1) -> PqMaspProofErrorV
         | ProofManagedNoteStarkErrorV1::Internal => PqMaspProofErrorV1::ProverInvariant,
     }
 }
-
 fn map_verifier_error_v1(error: ProofManagedNoteStarkErrorV1) -> PqMaspProofErrorV1 {
     match error {
         ProofManagedNoteStarkErrorV1::Resource => PqMaspProofErrorV1::ResourceLimit,
@@ -120,7 +112,6 @@ fn map_verifier_error_v1(error: ProofManagedNoteStarkErrorV1) -> PqMaspProofErro
         | ProofManagedNoteStarkErrorV1::Randomness => PqMaspProofErrorV1::InvalidProof,
     }
 }
-
 fn statement_digest_v1(
     statement: &PqMaspStarkStatementV1,
 ) -> Result<iroha_data_model::privacy::PrivacyStatementDigestV1, PqMaspProofErrorV1> {
@@ -128,7 +119,6 @@ fn statement_digest_v1(
         .digest()
         .map_err(|_| PqMaspProofErrorV1::StatementEncoding)
 }
-
 /// Construct a complete STARK-plus-ML-DSA PQ-MASP proof with injected entropy.
 ///
 /// The function preflights the exact one-to-two relation and ML-DSA secret-key
@@ -184,7 +174,6 @@ pub fn prove_pq_masp_v1_with_rng<R: TryCryptoRng + ?Sized>(
         .map_err(|_| PqMaspProofErrorV1::SelfVerification)?;
     Ok(proof)
 }
-
 /// Construct a complete STARK-plus-ML-DSA PQ-MASP proof with OS entropy.
 ///
 /// # Errors
@@ -206,7 +195,6 @@ pub fn prove_pq_masp_v1(
         &mut OsRng,
     )
 }
-
 /// Verify one complete first-release PQ-MASP authorization and inner STARK.
 ///
 /// # Errors
@@ -240,7 +228,6 @@ pub fn verify_pq_masp_v1(
     )
     .map_err(map_verifier_error_v1)
 }
-
 /// Encrypt one PQ-MASP output note with injected, health-checked entropy.
 ///
 /// The recipient binding and note commitment are checked before entropy is
@@ -272,7 +259,6 @@ pub fn encrypt_pq_masp_note_v1_with_rng<R: TryCryptoRng + ?Sized>(
         HedgedRngSeed::from_entropy(*seed),
     )
 }
-
 /// Encrypt one PQ-MASP output note with operating-system entropy.
 ///
 /// # Errors
@@ -286,45 +272,35 @@ pub fn encrypt_pq_masp_note_v1(
 ) -> Result<(PrivacyCommitmentV1, PrivacyEncryptedOutputV1), PqMaspWireErrorV1> {
     encrypt_pq_masp_note_v1_with_rng(statement, note, recipient_public_key, &mut OsRng)
 }
-
 #[cfg(test)]
 mod tests {
     use rand::{TryCryptoRng, TryRngCore};
-
     use super::*;
     use crate::privacy_engines::pq_masp::{
         PQ_MASP_TREE_DEPTH_V1, PqMaspInputWitnessV1, PqMaspOutputWitnessV1, PqMaspWitnessV1,
         derive_pq_masp_authorization_key_digest_v1, derive_pq_masp_nullifier_key_digest_v1,
     };
-
     #[derive(Debug)]
     struct InjectedEntropyError;
-
     impl core::fmt::Display for InjectedEntropyError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected PQ-MASP entropy failure")
         }
     }
-
     enum EntropyMode {
         FailPartial,
         Constant,
         Repeated,
     }
-
     struct AdversarialRng(EntropyMode);
-
     impl TryRngCore for AdversarialRng {
         type Error = InjectedEntropyError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(InjectedEntropyError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(InjectedEntropyError)
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             match self.0 {
                 EntropyMode::FailPartial => {
@@ -345,9 +321,7 @@ mod tests {
             }
         }
     }
-
     impl TryCryptoRng for AdversarialRng {}
-
     #[derive(Clone, Copy, Debug)]
     enum PartitionFaultV1 {
         FirstPartialFailure,
@@ -358,17 +332,14 @@ mod tests {
         SecondPeriodic,
         SecondRepeatsFirst,
     }
-
     struct PartitionFaultRngV1 {
         fault: PartitionFaultV1,
         requests: usize,
     }
-
     impl PartitionFaultRngV1 {
         const fn new(fault: PartitionFaultV1) -> Self {
             Self { fault, requests: 0 }
         }
-
         fn fill_healthy_block_v1(destination: &mut [u8]) {
             for (index, byte) in destination.iter_mut().enumerate() {
                 *byte = u8::try_from(index)
@@ -377,25 +348,20 @@ mod tests {
                     .wrapping_add(19);
             }
         }
-
         fn fill_periodic_block_v1(destination: &mut [u8]) {
             for (index, byte) in destination.iter_mut().enumerate() {
                 *byte = [1, 3, 7, 9][index % 4];
             }
         }
     }
-
     impl TryRngCore for PartitionFaultRngV1 {
         type Error = InjectedEntropyError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(InjectedEntropyError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(InjectedEntropyError)
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             self.requests += 1;
             assert_eq!(
@@ -426,9 +392,7 @@ mod tests {
             }
         }
     }
-
     impl TryCryptoRng for PartitionFaultRngV1 {}
-
     fn consensus_material(
         statement: &PqMaspStarkStatementV1,
     ) -> (PrivacyNativeConsensusBindingV1, PrivacyConsensusLimitsV1) {
@@ -437,7 +401,6 @@ mod tests {
             .expect("valid PQ-MASP consensus binding");
         (binding, limits)
     }
-
     fn note() -> PqMaspNotePlaintextV1 {
         let secret = [0x31; 32];
         PqMaspNotePlaintextV1::new(
@@ -451,7 +414,6 @@ mod tests {
         )
         .expect("note")
     }
-
     #[test]
     fn typed_witnesses_reject_malformed_material_and_redact_debug() {
         let note = note();
@@ -491,7 +453,6 @@ mod tests {
         assert!(debug.contains("input_count"));
         assert!(!debug.contains("31313131"));
     }
-
     #[test]
     fn authorization_seed_rejects_failure_constant_and_repeated_patterns() {
         assert_eq!(
@@ -519,11 +480,9 @@ mod tests {
             Err(TryCryptoProverRandomnessErrorV1::Unhealthy)
         );
     }
-
     #[test]
     fn authorized_facade_maps_every_partition_entropy_failure_before_proving() {
         use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
-
         let authorization_keys = generate_mldsa_keypair_from_seed(
             MlDsaSuite::MlDsa65,
             HedgedRngSeed::from_entropy([0xA6; 32]),
@@ -594,11 +553,9 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn authorized_facade_rejects_relation_binding_and_key_before_entropy() {
         use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
-
         let authorization_keys = generate_mldsa_keypair_from_seed(
             MlDsaSuite::MlDsa65,
             HedgedRngSeed::from_entropy([0xA7; 32]),
@@ -612,7 +569,6 @@ mod tests {
             crate::privacy_engines::pq_masp::relation::tests::
                 valid_fixture_with_authorization_key_digest(key_digest);
         let (binding, limits) = consensus_material(&statement);
-
         let mut invalid_statement = statement.clone();
         invalid_statement.nullifiers[0] =
             iroha_data_model::privacy::PrivacyNullifierV1::new([0xF1; 32]);
@@ -629,7 +585,6 @@ mod tests {
             Err(PqMaspProofErrorV1::Relation(_))
         ));
         assert_eq!(relation_rng.requests, 0);
-
         let mut invalid_binding = binding.clone();
         invalid_binding.genesis_hash = [0; 32];
         let mut binding_rng = PartitionFaultRngV1::new(PartitionFaultV1::SecondPartialFailure);
@@ -645,7 +600,6 @@ mod tests {
             Err(PqMaspProofErrorV1::ConsensusBinding(_))
         ));
         assert_eq!(binding_rng.requests, 0);
-
         let wrong_keys = generate_mldsa_keypair_from_seed(
             MlDsaSuite::MlDsa65,
             HedgedRngSeed::from_entropy([0xA8; 32]),
@@ -668,7 +622,6 @@ mod tests {
         );
         assert_eq!(key_rng.requests, 0);
     }
-
     #[test]
     fn verifier_preflights_statement_bounds_before_outer_proof_parsing() {
         let (mut statement, _) = crate::privacy_engines::pq_masp::relation::tests::valid_fixture();
@@ -685,13 +638,11 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn verifier_rejects_every_mismatched_consensus_binding_axis_before_wire_parsing() {
         let (statement, _) = crate::privacy_engines::pq_masp::relation::tests::valid_fixture();
         let (binding, limits) = consensus_material(&statement);
         let mut substitutions = Vec::new();
-
         let mut zero_genesis = binding.clone();
         zero_genesis.genesis_hash = [0; 32];
         substitutions.push((
@@ -699,7 +650,6 @@ mod tests {
             zero_genesis,
             PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash,
         ));
-
         let mut network_id = binding.clone();
         network_id.network_id =
             iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
@@ -713,7 +663,6 @@ mod tests {
             network_id,
             PrivacyNativeConsensusBindingValidationErrorV1::NetworkIdMismatch,
         ));
-
         let mut action_index = binding.clone();
         action_index.action_index += 1;
         substitutions.push((
@@ -721,7 +670,6 @@ mod tests {
             action_index,
             PrivacyNativeConsensusBindingValidationErrorV1::ActionIndexMismatch,
         ));
-
         let mut transaction_intent = binding.clone();
         transaction_intent.transaction_intent_digest =
             iroha_data_model::privacy::PrivacyTransactionIntentDigestV1::new([0xE1; 32]);
@@ -730,7 +678,6 @@ mod tests {
             transaction_intent,
             PrivacyNativeConsensusBindingValidationErrorV1::TransactionIntentDigestMismatch,
         ));
-
         let mut parameter_id = binding.clone();
         parameter_id.parameter_id =
             iroha_data_model::privacy::PrivacyParameterIdV1::new([0xE2; 32]);
@@ -739,7 +686,6 @@ mod tests {
             parameter_id,
             PrivacyNativeConsensusBindingValidationErrorV1::ParameterIdMismatch,
         ));
-
         let mut parameter_digest = binding.clone();
         parameter_digest.parameter_digest =
             iroha_data_model::privacy::PrivacyParameterDigestV1::new([0xE3; 32]);
@@ -748,7 +694,6 @@ mod tests {
             parameter_digest,
             PrivacyNativeConsensusBindingValidationErrorV1::ParameterDigestMismatch,
         ));
-
         let mut verifier_digest = binding.clone();
         verifier_digest.verifier_digest =
             iroha_data_model::privacy::PrivacyVerifierDigestV1::new([0xE4; 32]);
@@ -757,7 +702,6 @@ mod tests {
             verifier_digest,
             PrivacyNativeConsensusBindingValidationErrorV1::VerifierDigestMismatch,
         ));
-
         let mut schema_digest = binding.clone();
         schema_digest.statement_schema_digest =
             iroha_data_model::privacy::PrivacyStatementSchemaDigestV1::new([0xE5; 32]);
@@ -766,7 +710,6 @@ mod tests {
             schema_digest,
             PrivacyNativeConsensusBindingValidationErrorV1::StatementSchemaDigestMismatch,
         ));
-
         let mut manifest_digest = binding;
         manifest_digest.engine_manifest_digest =
             iroha_data_model::privacy::PrivacyEngineManifestDigestV1::new([0xE6; 32]);
@@ -775,7 +718,6 @@ mod tests {
             manifest_digest,
             PrivacyNativeConsensusBindingValidationErrorV1::EngineManifestDigestMismatch,
         ));
-
         for (axis, substituted, expected) in substitutions {
             assert_eq!(
                 verify_pq_masp_v1(&statement, &substituted, &limits, &[]),

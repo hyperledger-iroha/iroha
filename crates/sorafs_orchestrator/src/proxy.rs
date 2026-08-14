@@ -4,9 +4,7 @@
 //! relays metadata (certificate, manifest) to browser extensions so they can
 //! connect to SoraNet-enabled Torii gateways without handling certificates or
 //! guard cache keys directly.
-
 #![allow(unexpected_cfgs)]
-
 #[cfg(feature = "local-quic-proxy")]
 use std::net::IpAddr;
 #[cfg(all(feature = "local-quic-proxy", unix))]
@@ -19,7 +17,6 @@ use std::{
     pin::Pin,
     task::{Context, Poll},
 };
-
 use hex::ToHex;
 #[cfg(feature = "local-quic-proxy")]
 use iroha_logger::info;
@@ -53,13 +50,9 @@ use tokio::{
 };
 #[cfg(feature = "local-quic-proxy")]
 use url::{Host, Url};
-
 use crate::soranet::{GuardCacheKey, GuardCacheKeyError};
 #[cfg(feature = "local-quic-proxy")]
-use crate::{
-    OutboundNetworkPolicy, is_public_ip, resolve_and_validate_host, validate_public_dns_name,
-};
-
+use crate::{OutboundNetworkPolicy, is_public_ip, resolve_and_validate_host, validate_public_dns_name};
 #[cfg(feature = "local-quic-proxy")]
 const PROXY_HANDSHAKE_VERSION: u8 = 1;
 #[cfg(feature = "local-quic-proxy")]
@@ -145,7 +138,6 @@ const STREAM_ACK_UNSUPPORTED_VERSION: u8 = 5;
 const STREAM_ACK_NOT_IMPLEMENTED: u8 = 7;
 #[cfg(feature = "local-quic-proxy")]
 const CACHE_TAG_FIELD_SEPARATOR: u8 = 0x1f;
-
 /// Configuration for the local QUIC proxy.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, Default)]
 pub enum ProxyMode {
@@ -157,7 +149,6 @@ pub enum ProxyMode {
     #[norito(rename = "metadata-only")]
     MetadataOnly,
 }
-
 impl ProxyMode {
     /// Returns the canonical label for this proxy mode.
     #[must_use]
@@ -167,7 +158,6 @@ impl ProxyMode {
             Self::MetadataOnly => "metadata-only",
         }
     }
-
     /// Parses a textual proxy mode label.
     pub fn parse(label: &str) -> Option<Self> {
         match label.trim().to_ascii_lowercase().as_str() {
@@ -177,13 +167,11 @@ impl ProxyMode {
         }
     }
 }
-
 impl norito::json::FastJsonWrite for ProxyMode {
     fn write_json(&self, out: &mut String) {
         norito::json::write_json_string(self.as_str(), out);
     }
 }
-
 impl norito::json::JsonDeserialize for ProxyMode {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -192,7 +180,6 @@ impl norito::json::JsonDeserialize for ProxyMode {
         ProxyMode::parse(&value)
             .ok_or_else(|| norito::json::Error::Message(format!("invalid proxy_mode `{value}`")))
     }
-
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
         if let Some(label) = value.as_str() {
             return ProxyMode::parse(label).ok_or_else(|| {
@@ -203,13 +190,11 @@ impl norito::json::JsonDeserialize for ProxyMode {
             "proxy_mode expects a string".to_owned(),
         ))
     }
-
     fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
         ProxyMode::parse(key)
             .ok_or_else(|| norito::json::Error::Message(format!("invalid proxy_mode `{key}`")))
     }
 }
-
 #[derive(
     Debug,
     Clone,
@@ -254,7 +239,6 @@ pub struct LocalQuicProxyConfig {
     #[norito(default)]
     pub kaigi_bridge: Option<ProxyKaigiBridgeConfig>,
 }
-
 impl Default for LocalQuicProxyConfig {
     fn default() -> Self {
         Self {
@@ -272,7 +256,6 @@ impl Default for LocalQuicProxyConfig {
         }
     }
 }
-
 #[derive(
     Debug,
     Clone,
@@ -288,11 +271,9 @@ pub struct ProxyNoritoBridgeConfig {
     #[norito(default = "default_norito_bridge_extension")]
     pub extension: Option<String>,
 }
-
 fn default_norito_bridge_extension() -> Option<String> {
     Some("norito".to_string())
 }
-
 #[derive(
     Debug,
     Clone,
@@ -310,11 +291,9 @@ pub struct ProxyCarBridgeConfig {
     #[norito(default)]
     pub allow_zst: bool,
 }
-
 fn default_car_bridge_extension() -> Option<String> {
     Some("car".to_string())
 }
-
 #[derive(
     Debug,
     Clone,
@@ -332,11 +311,9 @@ pub struct ProxyKaigiBridgeConfig {
     #[norito(default)]
     pub room_policy: Option<String>,
 }
-
 fn default_kaigi_bridge_extension() -> Option<String> {
     Some("norito".to_string())
 }
-
 #[cfg(feature = "local-quic-proxy")]
 #[derive(Clone, Default)]
 struct ProxyBridgeConfig {
@@ -344,7 +321,6 @@ struct ProxyBridgeConfig {
     car: Option<ProxyCarBridge>,
     kaigi: Option<ProxyKaigiBridge>,
 }
-
 #[cfg(feature = "local-quic-proxy")]
 impl ProxyBridgeConfig {
     fn from_config(config: &LocalQuicProxyConfig) -> Result<Self, ProxyError> {
@@ -377,27 +353,22 @@ impl ProxyBridgeConfig {
             })?;
         Ok(Self { norito, car, kaigi })
     }
-
     fn norito(&self) -> Option<&ProxyNoritoBridge> {
         self.norito.as_ref()
     }
-
     fn car(&self) -> Option<&ProxyCarBridge> {
         self.car.as_ref()
     }
-
     fn kaigi(&self) -> Option<&ProxyKaigiBridge> {
         self.kaigi.as_ref()
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 #[derive(Clone)]
 struct ProxyNoritoBridge {
     spool_dir: PathBuf,
     extension: Option<String>,
 }
-
 #[cfg(feature = "local-quic-proxy")]
 impl ProxyNoritoBridge {
     fn from_config(cfg: &ProxyNoritoBridgeConfig) -> Result<Self, String> {
@@ -415,7 +386,6 @@ impl ProxyNoritoBridge {
             extension,
         })
     }
-
     fn resolve_target(&self, target: &str) -> Result<PathBuf, String> {
         let sanitized = sanitize_relative_target(target)?;
         let mut path = self.spool_dir.join(sanitized);
@@ -427,7 +397,6 @@ impl ProxyNoritoBridge {
         Ok(path)
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 #[derive(Clone)]
 struct ProxyCarBridge {
@@ -435,7 +404,6 @@ struct ProxyCarBridge {
     extension: Option<String>,
     allow_zst: bool,
 }
-
 #[cfg(feature = "local-quic-proxy")]
 impl ProxyCarBridge {
     fn from_config(cfg: &ProxyCarBridgeConfig) -> Result<Self, String> {
@@ -454,7 +422,6 @@ impl ProxyCarBridge {
             allow_zst: cfg.allow_zst,
         })
     }
-
     fn resolve_target(&self, target: &str) -> Result<PathBuf, String> {
         let sanitized = sanitize_relative_target(target)?;
         let mut path = self.cache_dir.join(&sanitized);
@@ -471,7 +438,6 @@ impl ProxyCarBridge {
         Ok(path)
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 #[derive(Clone)]
 struct ProxyKaigiBridge {
@@ -479,7 +445,6 @@ struct ProxyKaigiBridge {
     extension: Option<String>,
     room_policy: ProxyKaigiRoomPolicy,
 }
-
 #[cfg(feature = "local-quic-proxy")]
 impl ProxyKaigiBridge {
     fn from_config(cfg: &ProxyKaigiBridgeConfig) -> Result<Self, String> {
@@ -502,7 +467,6 @@ impl ProxyKaigiBridge {
             room_policy,
         })
     }
-
     fn resolve_target(&self, target: &str) -> Result<PathBuf, String> {
         let path = sanitize_relative_target(target)?;
         let mut resolved = self.spool_dir.clone();
@@ -514,12 +478,10 @@ impl ProxyKaigiBridge {
         }
         Ok(resolved)
     }
-
     fn room_policy(&self) -> ProxyKaigiRoomPolicy {
         self.room_policy
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 fn sanitize_extension(ext: &str) -> Result<String, String> {
     let trimmed = ext.trim().trim_start_matches('.');
@@ -533,7 +495,6 @@ fn sanitize_extension(ext: &str) -> Result<String, String> {
     }
     Ok(trimmed.to_ascii_lowercase())
 }
-
 #[cfg(feature = "local-quic-proxy")]
 fn canonical_bridge_root(path: &Path) -> Result<PathBuf, String> {
     let metadata = std::fs::symlink_metadata(path)
@@ -544,7 +505,6 @@ fn canonical_bridge_root(path: &Path) -> Result<PathBuf, String> {
     std::fs::canonicalize(path)
         .map_err(|error| format!("failed to canonicalize bridge root: {error}"))
 }
-
 #[cfg(feature = "local-quic-proxy")]
 fn sanitize_relative_target(target: &str) -> Result<PathBuf, String> {
     if target.trim().is_empty() {
@@ -567,14 +527,12 @@ fn sanitize_relative_target(target: &str) -> Result<PathBuf, String> {
     }
     Ok(sanitized)
 }
-
 #[cfg(feature = "local-quic-proxy")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProxyKaigiRoomPolicy {
     Public,
     Authenticated,
 }
-
 #[cfg(feature = "local-quic-proxy")]
 impl ProxyKaigiRoomPolicy {
     fn from_str(value: &str) -> Result<Self, String> {
@@ -587,7 +545,6 @@ impl ProxyKaigiRoomPolicy {
             )),
         }
     }
-
     fn as_label(&self) -> &'static str {
         match self {
             Self::Public => "public",
@@ -595,7 +552,6 @@ impl ProxyKaigiRoomPolicy {
         }
     }
 }
-
 impl LocalQuicProxyConfig {
     fn parsed_bind_addr(&self) -> Result<SocketAddr, ProxyError> {
         let bind_addr = SocketAddr::from_str(self.bind_addr.trim()).map_err(|err| {
@@ -606,7 +562,6 @@ impl LocalQuicProxyConfig {
         }
         Ok(bind_addr)
     }
-
     fn guard_cache_key(&self) -> Result<Option<GuardCacheKey>, ProxyError> {
         match self.guard_cache_key_hex.as_deref() {
             Some(hex) => Ok(Some(
@@ -615,7 +570,6 @@ impl LocalQuicProxyConfig {
             None => Ok(None),
         }
     }
-
     #[cfg(feature = "local-quic-proxy")]
     fn validated_stream_limit(&self) -> Result<u32, ProxyError> {
         let limit = self.max_streams_per_circuit.unwrap_or(64);
@@ -628,7 +582,6 @@ impl LocalQuicProxyConfig {
         Ok(limit)
     }
 }
-
 /// Errors surfaced while starting or running the proxy.
 #[derive(Debug, Error)]
 pub enum ProxyError {
@@ -690,26 +643,22 @@ pub enum ProxyError {
         message: String,
     },
 }
-
 /// Runtime handle for a spawned local QUIC proxy.
 #[derive(Clone)]
 pub struct LocalQuicProxyHandle {
     inner: Arc<LocalQuicProxyInner>,
 }
-
 impl LocalQuicProxyHandle {
     /// Address that the proxy listens on.
     #[must_use]
     pub fn local_addr(&self) -> SocketAddr {
         self.inner.local_addr
     }
-
     /// PEM-encoded certificate accepted by the proxy.
     #[must_use]
     pub fn certificate_pem(&self) -> &str {
         &self.inner.certificate_pem
     }
-
     /// Optional manifest payload for browser extensions.
     pub fn browser_manifest(&self) -> Result<Option<BrowserExtensionManifest>, ProxyError> {
         match self.inner.browser_manifest.as_ref() {
@@ -717,19 +666,16 @@ impl LocalQuicProxyHandle {
             None => Ok(None),
         }
     }
-
     /// Runtime mode advertised by the proxy.
     #[must_use]
     pub fn mode(&self) -> ProxyMode {
         self.inner.mode.clone()
     }
-
     /// Guard cache key associated with the proxy (if configured).
     #[must_use]
     pub fn guard_cache_key(&self) -> Option<GuardCacheKey> {
         self.inner.guard_cache_key.clone()
     }
-
     /// Gracefully shuts the proxy down.
     #[cfg(feature = "local-quic-proxy")]
     pub async fn shutdown(&self) {
@@ -739,12 +685,10 @@ impl LocalQuicProxyHandle {
             let _ = handle.await;
         }
     }
-
     /// Gracefully shuts the proxy down.
     #[cfg(not(feature = "local-quic-proxy"))]
     pub async fn shutdown(&self) {}
 }
-
 struct LocalQuicProxyInner {
     #[cfg(feature = "local-quic-proxy")]
     #[allow(unused)]
@@ -759,18 +703,15 @@ struct LocalQuicProxyInner {
     #[cfg(feature = "local-quic-proxy")]
     join_handle: Mutex<Option<JoinHandle<()>>>,
 }
-
 #[derive(Clone)]
 struct BrowserManifestTemplate {
     base: BrowserExtensionManifest,
 }
-
 impl BrowserManifestTemplate {
     #[cfg(feature = "local-quic-proxy")]
     fn new(base: BrowserExtensionManifest) -> Self {
         Self { base }
     }
-
     fn instantiate(&self) -> Result<BrowserExtensionManifest, ProxyError> {
         let mut manifest = self.base.clone();
         manifest.session_id = Some(generate_session_id()?);
@@ -779,12 +720,10 @@ impl BrowserManifestTemplate {
         }
         Ok(manifest)
     }
-
     fn preview(&self) -> Result<BrowserExtensionManifest, ProxyError> {
         self.instantiate()
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 fn build_manifest_template(
     config: &LocalQuicProxyConfig,
@@ -796,14 +735,12 @@ fn build_manifest_template(
     if !config.emit_browser_manifest {
         return None;
     }
-
     let mut hasher = Sha256::new();
     hasher.update(certificate_der);
     let fingerprint_hex = hex::encode(hasher.finalize());
     let guard_cache_key_hex = guard_cache_key.map(GuardCacheKey::to_hex);
     let mut capabilities = Vec::with_capacity(PROXY_CAPABILITIES.len());
     capabilities.extend(PROXY_CAPABILITIES.iter().map(|cap| cap.to_string()));
-
     let circuit = ProxyCircuitHints {
         ttl_sec: config.circuit_ttl_hint_secs,
         max_streams_per_circuit: config.max_streams_per_circuit,
@@ -829,7 +766,6 @@ fn build_manifest_template(
         }),
         privacy: Some(ProxyTelemetryPrivacy::new_default()),
     };
-
     let mut route_hints = Vec::new();
     if let Some(kaigi_bridge) = config.kaigi_bridge.as_ref() {
         let policy_label = kaigi_bridge
@@ -843,7 +779,6 @@ fn build_manifest_template(
             categories: vec!["kaigi".into(), format!("kaigi.room_policy.{policy_label}")],
         });
     }
-
     let manifest = BrowserExtensionManifest {
         version: 2,
         authority: local_addr.to_string(),
@@ -861,10 +796,8 @@ fn build_manifest_template(
         cache_tagging: Some(cache_tagging),
         telemetry_v2: Some(telemetry),
     };
-
     Some(BrowserManifestTemplate::new(manifest))
 }
-
 /// Manifest returned to browser extensions establishing trust with the proxy.
 #[derive(
     Debug,
@@ -920,7 +853,6 @@ pub struct BrowserExtensionManifest {
     #[norito(default)]
     pub telemetry_v2: Option<ProxyTelemetryHints>,
 }
-
 /// Per-session circuit hints surfaced to clients.
 #[derive(
     Debug,
@@ -947,7 +879,6 @@ pub struct ProxyCircuitHints {
     #[norito(default)]
     pub reuse_policy: Option<String>,
 }
-
 /// Guard selection preferences exposed to callers.
 #[derive(
     Debug,
@@ -974,7 +905,6 @@ pub struct ProxyGuardSelection {
     #[norito(default)]
     pub max_guards: Option<u32>,
 }
-
 /// Lightweight route hints surfaced to browser clients.
 #[derive(
     Debug,
@@ -998,7 +928,6 @@ pub struct ProxyRouteHint {
     #[norito(default)]
     pub categories: Vec<String>,
 }
-
 /// Cache tagging parameters advertised by the proxy.
 #[derive(
     Debug,
@@ -1024,7 +953,6 @@ pub struct ProxyCacheTagging {
     #[norito(default)]
     pub attach_on: Vec<String>,
 }
-
 impl Default for ProxyCacheTagging {
     fn default() -> Self {
         Self {
@@ -1036,7 +964,6 @@ impl Default for ProxyCacheTagging {
         }
     }
 }
-
 /// Telemetry hints for browser integrations.
 #[derive(
     Debug,
@@ -1059,7 +986,6 @@ pub struct ProxyTelemetryHints {
     #[norito(default)]
     pub privacy: Option<ProxyTelemetryPrivacy>,
 }
-
 /// Static telemetry labels.
 #[derive(
     Debug,
@@ -1077,7 +1003,6 @@ pub struct ProxyTelemetryLabels {
     #[norito(default)]
     pub authority: Option<String>,
 }
-
 /// Telemetry sampling hints.
 #[derive(
     Debug,
@@ -1095,7 +1020,6 @@ pub struct ProxyTelemetrySampling {
     #[norito(default)]
     pub metrics: Option<f64>,
 }
-
 /// Telemetry privacy hints (low-cardinality fingerprints, etc.).
 #[derive(
     Debug,
@@ -1113,7 +1037,6 @@ pub struct ProxyTelemetryPrivacy {
     #[norito(default)]
     pub redact_authority: bool,
 }
-
 impl ProxyTelemetryPrivacy {
     #[cfg(feature = "local-quic-proxy")]
     fn new_default() -> Self {
@@ -1123,61 +1046,51 @@ impl ProxyTelemetryPrivacy {
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for ProxyTelemetryHints {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical(bytes)
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for ProxyTelemetryLabels {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical(bytes)
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for ProxyTelemetrySampling {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical(bytes)
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for ProxyTelemetryPrivacy {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical(bytes)
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for BrowserExtensionManifest {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical(bytes)
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for ProxyCircuitHints {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical(bytes)
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for ProxyGuardSelection {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical(bytes)
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for ProxyRouteHint {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical(bytes)
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for ProxyCacheTagging {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical(bytes)
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 #[derive(Clone)]
 struct ProxySession {
@@ -1188,7 +1101,6 @@ struct ProxySession {
     cache_tags: Option<CacheTagContext>,
     bridge: Arc<ProxyBridgeConfig>,
 }
-
 #[cfg(feature = "local-quic-proxy")]
 #[derive(Clone)]
 struct CacheTagContext {
@@ -1196,7 +1108,6 @@ struct CacheTagContext {
     attach_on: Vec<String>,
     salt: Vec<u8>,
 }
-
 #[cfg(feature = "local-quic-proxy")]
 impl CacheTagContext {
     fn from_cache_tagging(tagging: &ProxyCacheTagging) -> Option<Self> {
@@ -1223,12 +1134,10 @@ impl CacheTagContext {
             salt,
         })
     }
-
     fn from_manifest(manifest: &BrowserExtensionManifest) -> Option<Self> {
         let tagging = manifest.cache_tagging.as_ref()?;
         Self::from_cache_tagging(tagging)
     }
-
     fn supports(&self, service: &str) -> bool {
         if self.attach_on.is_empty() {
             return false;
@@ -1236,7 +1145,6 @@ impl CacheTagContext {
         self.attach_on.iter().any(|label| label == service)
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 impl ProxySession {
     fn cache_tag_for(
@@ -1253,7 +1161,6 @@ impl ProxySession {
         if !context.supports(service_label) {
             return None;
         }
-
         let mut message = Vec::with_capacity(context.salt.len() + 64);
         message.extend_from_slice(&context.salt);
         append_tag_component(&mut message, Some(service_label));
@@ -1263,30 +1170,25 @@ impl ProxySession {
         append_tag_component(&mut message, open_frame.route_policy_id.as_deref());
         append_tag_component(&mut message, open_frame.exit_country.as_deref());
         append_tag_component(&mut message, self.session_id.as_deref());
-
         let mac = hmac_sha256_128(guard_key.as_bytes(), &message);
         Some(hex::encode_upper(mac))
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 struct QuicBidirectionalStream {
     send: quinn::SendStream,
     recv: quinn::RecvStream,
 }
-
 #[cfg(feature = "local-quic-proxy")]
 impl QuicBidirectionalStream {
     fn new(send: quinn::SendStream, recv: quinn::RecvStream) -> Self {
         Self { send, recv }
     }
-
     async fn shutdown(&mut self) {
         let _ = self.send.finish();
         let _ = self.recv.stop(VarInt::from_u32(0));
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 impl AsyncRead for QuicBidirectionalStream {
     fn poll_read(
@@ -1297,7 +1199,6 @@ impl AsyncRead for QuicBidirectionalStream {
         Pin::new(&mut self.recv).poll_read(cx, buf)
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 impl AsyncWrite for QuicBidirectionalStream {
     fn poll_write(
@@ -1311,7 +1212,6 @@ impl AsyncWrite for QuicBidirectionalStream {
             Poll::Pending => Poll::Pending,
         }
     }
-
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match Pin::new(&mut self.send).poll_flush(cx) {
             Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
@@ -1319,7 +1219,6 @@ impl AsyncWrite for QuicBidirectionalStream {
             Poll::Pending => Poll::Pending,
         }
     }
-
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match Pin::new(&mut self.send).poll_shutdown(cx) {
             Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
@@ -1328,7 +1227,6 @@ impl AsyncWrite for QuicBidirectionalStream {
         }
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 fn append_tag_component(buffer: &mut Vec<u8>, value: Option<&str>) {
     buffer.push(CACHE_TAG_FIELD_SEPARATOR);
@@ -1339,7 +1237,6 @@ fn append_tag_component(buffer: &mut Vec<u8>, value: Option<&str>) {
         }
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 fn hmac_sha256_128(key: &[u8], message: &[u8]) -> [u8; 16] {
     const BLOCK: usize = 64;
@@ -1350,29 +1247,24 @@ fn hmac_sha256_128(key: &[u8], message: &[u8]) -> [u8; 16] {
     } else {
         key_block[..key.len()].copy_from_slice(key);
     }
-
     let mut o_key_pad = [0u8; BLOCK];
     let mut i_key_pad = [0u8; BLOCK];
     for i in 0..BLOCK {
         o_key_pad[i] = key_block[i] ^ 0x5c;
         i_key_pad[i] = key_block[i] ^ 0x36;
     }
-
     let mut inner = Sha256::new();
     inner.update(i_key_pad);
     inner.update(message);
     let inner_sum = inner.finalize();
-
     let mut outer = Sha256::new();
     outer.update(o_key_pad);
     outer.update(inner_sum);
     let mac = outer.finalize();
-
     let mut truncated = [0u8; 16];
     truncated.copy_from_slice(&mac[..16]);
     truncated
 }
-
 /// Spawn a QUIC proxy bound to the configured address.
 #[cfg(feature = "local-quic-proxy")]
 pub fn spawn_local_quic_proxy(
@@ -1382,14 +1274,12 @@ pub fn spawn_local_quic_proxy(
     let guard_cache_key = config.guard_cache_key()?;
     let stream_limit = config.validated_stream_limit()?;
     let bridge_config = Arc::new(ProxyBridgeConfig::from_config(&config)?);
-
     let sans = vec!["localhost".to_string(), bind_addr.ip().to_string()];
     let rcgen::CertifiedKey { cert, signing_key } =
         generate_simple_self_signed(sans).map_err(ProxyError::Certificate)?;
     let cert_der: CertificateDer<'static> = cert.der().clone();
     let private_key = PrivateKeyDer::try_from(signing_key.serialize_der())
         .map_err(|err| ProxyError::PrivateKey(err.to_string()))?;
-
     let mut tls_config = quinn::rustls::ServerConfig::builder_with_protocol_versions(&[
         &quinn::rustls::version::TLS13,
     ])
@@ -1406,13 +1296,11 @@ pub fn spawn_local_quic_proxy(
     transport_config.max_concurrent_bidi_streams(VarInt::from_u32(stream_limit));
     transport_config.max_concurrent_uni_streams(VarInt::from_u32(0));
     server_config.transport = Arc::new(transport_config);
-
     let endpoint = Endpoint::server(server_config, bind_addr)
         .map_err(|err| ProxyError::QuinnEndpoint(err.to_string()))?;
     let local_addr = endpoint
         .local_addr()
         .map_err(|err| ProxyError::QuinnEndpoint(err.to_string()))?;
-
     let certificate_pem = cert.pem().to_string();
     let browser_manifest = build_manifest_template(
         &config,
@@ -1421,12 +1309,10 @@ pub fn spawn_local_quic_proxy(
         cert_der.as_ref(),
         guard_cache_key.as_ref(),
     );
-
     let telemetry_label = config
         .telemetry_label
         .clone()
         .unwrap_or_else(|| "proxy".to_string());
-
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let join_handle = tokio::spawn({
         let guard_cache_key = guard_cache_key.clone();
@@ -1444,7 +1330,6 @@ pub fn spawn_local_quic_proxy(
             shutdown_rx,
         )
     });
-
     Ok(LocalQuicProxyHandle {
         inner: Arc::new(LocalQuicProxyInner {
             endpoint,
@@ -1458,7 +1343,6 @@ pub fn spawn_local_quic_proxy(
         }),
     })
 }
-
 /// Report that local QUIC proxy runtime support was not compiled in.
 #[cfg(not(feature = "local-quic-proxy"))]
 pub fn spawn_local_quic_proxy(
@@ -1468,7 +1352,6 @@ pub fn spawn_local_quic_proxy(
     let _ = config.guard_cache_key()?;
     Err(ProxyError::Unavailable)
 }
-
 #[cfg(feature = "local-quic-proxy")]
 struct AcceptLoopContext {
     telemetry_label: String,
@@ -1478,7 +1361,6 @@ struct AcceptLoopContext {
     bridge_config: Arc<ProxyBridgeConfig>,
     connection_permits: Arc<Semaphore>,
 }
-
 #[cfg(feature = "local-quic-proxy")]
 async fn run_accept_loop(
     endpoint: Endpoint,
@@ -1504,11 +1386,9 @@ async fn run_accept_loop(
             }
             incoming = endpoint.accept() => incoming,
         };
-
         let Some(incoming) = connecting_opt else {
             break;
         };
-
         let permit = match Arc::clone(&connection_permits).try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
@@ -1517,7 +1397,6 @@ async fn run_accept_loop(
                 continue;
             }
         };
-
         match incoming.accept() {
             Ok(connecting) => {
                 let manifest_template = manifest_template.clone();
@@ -1558,7 +1437,6 @@ async fn run_accept_loop(
         }
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 async fn handle_connection(
     connection: quinn::Connection,
@@ -1573,14 +1451,12 @@ async fn handle_connection(
             .await
             .map_err(|_| ProxyError::Handshake("handshake stream timed out".into()))?
             .map_err(|err| ProxyError::Handshake(err.to_string()))?;
-
     let handshake_bytes = timeout(PROXY_CONTROL_FRAME_TIMEOUT, read_frame(&mut recv_stream))
         .await
         .map_err(|_| ProxyError::Handshake("handshake frame timed out".into()))?
         .map_err(|err| ProxyError::Handshake(err.to_string()))?;
     let handshake: ProxyHandshakeV1 = decode_from_bytes(&handshake_bytes)
         .map_err(|err| ProxyError::Handshake(err.to_string()))?;
-
     if handshake.version != PROXY_HANDSHAKE_VERSION {
         let ack = ProxyHandshakeAckV1 {
             version: PROXY_HANDSHAKE_VERSION,
@@ -1615,7 +1491,6 @@ async fn handle_connection(
         record_transport_event(telemetry_label, "handshake_reject", "invalid_field");
         return Ok(());
     }
-
     record_transport_event(telemetry_label, "handshake_accept", "ok");
     let manifest = match manifest_template.as_ref() {
         Some(template) => Some(template.instantiate()?),
@@ -1654,12 +1529,10 @@ async fn handle_connection(
         record_transport_event(telemetry_label, "handshake_close_error", &err.to_string());
         return Err(ProxyError::Handshake(err.to_string()));
     }
-
     if matches!(session.mode, ProxyMode::MetadataOnly) {
         record_transport_event(telemetry_label, "bridge_disabled", "metadata_only");
         return Ok(());
     }
-
     loop {
         match connection.accept_bi().await {
             Ok((stream_send, stream_recv)) => {
@@ -1684,10 +1557,8 @@ async fn handle_connection(
             }
         }
     }
-
     Ok(())
 }
-
 #[cfg(feature = "local-quic-proxy")]
 #[derive(Debug, Error)]
 enum FrameError {
@@ -1696,7 +1567,6 @@ enum FrameError {
     #[error("frame read error: {0}")]
     Read(#[from] quinn::ReadExactError),
 }
-
 #[cfg(feature = "local-quic-proxy")]
 async fn read_frame(stream: &mut quinn::RecvStream) -> Result<Vec<u8>, FrameError> {
     let mut len_buf = [0u8; 4];
@@ -1712,7 +1582,6 @@ async fn read_frame(stream: &mut quinn::RecvStream) -> Result<Vec<u8>, FrameErro
     stream.read_exact(&mut buf).await?;
     Ok(buf)
 }
-
 #[cfg(feature = "local-quic-proxy")]
 async fn write_frame<T: NoritoSerialize>(
     stream: &mut quinn::SendStream,
@@ -1731,7 +1600,6 @@ async fn write_frame<T: NoritoSerialize>(
     stream.flush().await.map_err(|err| err.to_string())?;
     Ok(())
 }
-
 #[cfg(feature = "local-quic-proxy")]
 async fn handle_application_stream(
     mut send_stream: quinn::SendStream,
@@ -1745,7 +1613,6 @@ async fn handle_application_stream(
         .map_err(|err| ProxyError::Stream(err.to_string()))?;
     let open_frame: ProxyStreamOpenV1 =
         decode_from_bytes(&frame_bytes).map_err(|err| ProxyError::Stream(err.to_string()))?;
-
     if open_frame.version != PROXY_STREAM_VERSION {
         record_transport_event(telemetry_label, "stream_reject", "unsupported_version");
         let ack = ProxyStreamAckV1 {
@@ -1762,7 +1629,6 @@ async fn handle_application_stream(
         let _ = recv_stream.stop(VarInt::from_u32(0));
         return Ok(());
     }
-
     if !valid_control_field(&open_frame.service)
         || [
             open_frame.authority.as_deref(),
@@ -1789,9 +1655,7 @@ async fn handle_application_stream(
         )
         .await;
     }
-
     let service = ProxyStreamService::from_label(&open_frame.service);
-
     if matches!(session.mode, ProxyMode::MetadataOnly) {
         record_transport_event(telemetry_label, "stream_reject", "mode_metadata_only");
         let ack = ProxyStreamAckV1 {
@@ -1808,7 +1672,6 @@ async fn handle_application_stream(
         let _ = recv_stream.stop(VarInt::from_u32(0));
         return Ok(());
     }
-
     if service == ProxyStreamService::Unknown {
         record_transport_event(telemetry_label, "stream_reject", "unsupported_service");
         let ack = ProxyStreamAckV1 {
@@ -1825,7 +1688,6 @@ async fn handle_application_stream(
         let _ = recv_stream.stop(VarInt::from_u32(0));
         return Ok(());
     }
-
     match service {
         ProxyStreamService::Tcp => {
             handle_tcp_stream(send_stream, recv_stream, session, open_frame).await
@@ -1842,12 +1704,10 @@ async fn handle_application_stream(
         ProxyStreamService::Unknown => unreachable!("unknown service handled earlier"),
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 fn valid_control_field(value: &str) -> bool {
     value.len() <= PROXY_MAX_CONTROL_FIELD_BYTES && !value.chars().any(char::is_control)
 }
-
 #[cfg(feature = "local-quic-proxy")]
 fn record_transport_event(label: &str, event: &str, reason: &str) {
     let metrics = global_or_default();
@@ -1862,7 +1722,6 @@ fn record_transport_event(label: &str, event: &str, reason: &str) {
         reason,
     );
 }
-
 #[cfg(feature = "local-quic-proxy")]
 async fn send_failure_ack(
     mut send_stream: quinn::SendStream,
@@ -1876,7 +1735,6 @@ async fn send_failure_ack(
     let _ = recv_stream.stop(VarInt::from_u32(0));
     Ok(())
 }
-
 #[cfg(feature = "local-quic-proxy")]
 async fn handle_tcp_stream(
     mut send_stream: quinn::SendStream,
@@ -1906,7 +1764,6 @@ async fn handle_tcp_stream(
         )
         .await;
     };
-
     let (host, port) = match parse_public_tcp_authority(&authority) {
         Ok(target) => target,
         Err(reason) => {
@@ -1944,7 +1801,6 @@ async fn handle_tcp_stream(
                 .await;
             }
         };
-
     let mut tcp_stream = match timeout(
         PROXY_CONNECT_TIMEOUT,
         TcpStream::connect(addresses.as_slice()),
@@ -1989,7 +1845,6 @@ async fn handle_tcp_stream(
             .await;
         }
     };
-
     let cache_tag = session.cache_tag_for(ProxyStreamService::Tcp, &open_frame);
     let ack = ProxyStreamAckV1 {
         version: PROXY_STREAM_VERSION,
@@ -2001,7 +1856,6 @@ async fn handle_tcp_stream(
     write_frame(&mut send_stream, &ack)
         .await
         .map_err(|err| ProxyError::Stream(err.to_string()))?;
-
     let mut quic_stream = QuicBidirectionalStream::new(send_stream, recv_stream);
     match timeout(
         PROXY_TRANSFER_TIMEOUT,
@@ -2032,12 +1886,10 @@ async fn handle_tcp_stream(
             return Err(ProxyError::Stream("TCP transfer timed out".into()));
         }
     }
-
     quic_stream.shutdown().await;
     let _ = tcp_stream.shutdown().await;
     Ok(())
 }
-
 #[cfg(feature = "local-quic-proxy")]
 fn parse_public_tcp_authority(authority: &str) -> Result<(String, u16), String> {
     if authority.is_empty()
@@ -2085,7 +1937,6 @@ fn parse_public_tcp_authority(authority: &str) -> Result<(String, u16), String> 
         .ok_or_else(|| "authority must include a non-zero port".to_string())?;
     Ok((host, port))
 }
-
 #[cfg(feature = "local-quic-proxy")]
 #[derive(Debug, Error)]
 enum BridgeFileError {
@@ -2104,7 +1955,6 @@ enum BridgeFileError {
     #[error("payload streaming timed out")]
     Timeout,
 }
-
 #[cfg(feature = "local-quic-proxy")]
 impl BridgeFileError {
     fn ack_code(&self) -> u8 {
@@ -2113,7 +1963,6 @@ impl BridgeFileError {
             Self::Changed | Self::Truncated | Self::Io | Self::Timeout => STREAM_ACK_INTERNAL_ERROR,
         }
     }
-
     fn reason(&self) -> &'static str {
         match self {
             Self::NotFound => "not_found",
@@ -2126,7 +1975,6 @@ impl BridgeFileError {
         }
     }
 }
-
 #[cfg(all(feature = "local-quic-proxy", unix))]
 #[derive(Clone, Copy)]
 struct BridgeFileIdentity {
@@ -2138,7 +1986,6 @@ struct BridgeFileIdentity {
     changed_secs: i64,
     changed_nanos: i64,
 }
-
 #[cfg(all(feature = "local-quic-proxy", unix))]
 impl BridgeFileIdentity {
     fn from_metadata(metadata: &std::fs::Metadata) -> Self {
@@ -2153,14 +2000,12 @@ impl BridgeFileIdentity {
         }
     }
 }
-
 #[cfg(all(feature = "local-quic-proxy", not(unix)))]
 #[derive(Clone)]
 struct BridgeFileIdentity {
     length: u64,
     modified: Option<std::time::SystemTime>,
 }
-
 #[cfg(all(feature = "local-quic-proxy", not(unix)))]
 impl BridgeFileIdentity {
     fn from_metadata(metadata: &std::fs::Metadata) -> Self {
@@ -2170,7 +2015,6 @@ impl BridgeFileIdentity {
         }
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 impl PartialEq for BridgeFileIdentity {
     fn eq(&self, other: &Self) -> bool {
@@ -2190,7 +2034,6 @@ impl PartialEq for BridgeFileIdentity {
         }
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 struct OpenBridgeFile {
     file: fs::File,
@@ -2198,7 +2041,6 @@ struct OpenBridgeFile {
     length: u64,
     identity: BridgeFileIdentity,
 }
-
 #[cfg(feature = "local-quic-proxy")]
 async fn ensure_no_symlink_components(root: &Path, path: &Path) -> Result<(), BridgeFileError> {
     let relative = path
@@ -2228,7 +2070,6 @@ async fn ensure_no_symlink_components(root: &Path, path: &Path) -> Result<(), Br
     }
     Ok(())
 }
-
 #[cfg(feature = "local-quic-proxy")]
 async fn open_bridge_file(
     root: &Path,
@@ -2253,7 +2094,6 @@ async fn open_bridge_file(
     if before.file_type().is_symlink() || !before.is_file() {
         return Err(BridgeFileError::Unsafe);
     }
-
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -2290,7 +2130,6 @@ async fn open_bridge_file(
         identity: BridgeFileIdentity::from_metadata(&opened),
     })
 }
-
 #[cfg(feature = "local-quic-proxy")]
 async fn stream_bridge_file_exact(
     opened: &mut OpenBridgeFile,
@@ -2311,7 +2150,6 @@ async fn stream_bridge_file_exact(
     verify_bridge_file_unchanged(opened).await?;
     Ok(bytes)
 }
-
 #[cfg(feature = "local-quic-proxy")]
 async fn verify_bridge_file_unchanged(opened: &OpenBridgeFile) -> Result<(), BridgeFileError> {
     let opened_after = opened
@@ -2330,7 +2168,6 @@ async fn verify_bridge_file_unchanged(opened: &OpenBridgeFile) -> Result<(), Bri
     }
     Ok(())
 }
-
 #[cfg(feature = "local-quic-proxy")]
 async fn handle_norito_stream(
     mut send_stream: quinn::SendStream,
@@ -2354,7 +2191,6 @@ async fn handle_norito_stream(
         )
         .await;
     };
-
     let Some(target) = extract_stream_target(&open_frame) else {
         record_transport_event(telemetry_label, "stream_reject", "norito_missing_target");
         return send_failure_ack(
@@ -2370,7 +2206,6 @@ async fn handle_norito_stream(
         )
         .await;
     };
-
     let path = match bridge.resolve_target(target) {
         Ok(path) => path,
         Err(reason) => {
@@ -2389,7 +2224,6 @@ async fn handle_norito_stream(
             .await;
         }
     };
-
     let mut file = match open_bridge_file(&bridge.spool_dir, path, PROXY_MAX_LOCAL_FILE_BYTES).await
     {
         Ok(file) => file,
@@ -2409,7 +2243,6 @@ async fn handle_norito_stream(
             .await;
         }
     };
-
     let cache_tag = session.cache_tag_for(ProxyStreamService::Norito, &open_frame);
     let ack = ProxyStreamAckV1 {
         version: PROXY_STREAM_VERSION,
@@ -2421,7 +2254,6 @@ async fn handle_norito_stream(
     write_frame(&mut send_stream, &ack)
         .await
         .map_err(|err| ProxyError::Stream(err.to_string()))?;
-
     match stream_bridge_file_exact(&mut file, &mut send_stream).await {
         Ok(bytes) => {
             record_transport_event(telemetry_label, "stream_complete", "norito_ok");
@@ -2443,7 +2275,6 @@ async fn handle_norito_stream(
         }
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 async fn handle_kaigi_stream(
     mut send_stream: quinn::SendStream,
@@ -2467,7 +2298,6 @@ async fn handle_kaigi_stream(
         )
         .await;
     };
-
     let Some(target) = extract_stream_target(&open_frame) else {
         record_transport_event(telemetry_label, "stream_reject", "kaigi_missing_target");
         return send_failure_ack(
@@ -2483,7 +2313,6 @@ async fn handle_kaigi_stream(
         )
         .await;
     };
-
     let path = match bridge.resolve_target(target) {
         Ok(path) => path,
         Err(reason) => {
@@ -2502,7 +2331,6 @@ async fn handle_kaigi_stream(
             .await;
         }
     };
-
     let mut file = match open_bridge_file(&bridge.spool_dir, path, PROXY_MAX_LOCAL_FILE_BYTES).await
     {
         Ok(file) => file,
@@ -2522,7 +2350,6 @@ async fn handle_kaigi_stream(
             .await;
         }
     };
-
     let room_policy = bridge.room_policy().as_label().to_string();
     let cache_tag = session.cache_tag_for(ProxyStreamService::Kaigi, &open_frame);
     let ack = ProxyStreamAckV1 {
@@ -2544,11 +2371,9 @@ async fn handle_kaigi_stream(
     recv_stream
         .stop(VarInt::from_u32(0))
         .map_err(|err| ProxyError::Stream(err.to_string()))?;
-
     record_transport_event(telemetry_label, "stream_complete", "kaigi_ok");
     Ok(())
 }
-
 #[cfg(feature = "local-quic-proxy")]
 async fn handle_car_stream(
     mut send_stream: quinn::SendStream,
@@ -2572,7 +2397,6 @@ async fn handle_car_stream(
         )
         .await;
     };
-
     let Some(target) = extract_stream_target(&open_frame) else {
         record_transport_event(telemetry_label, "stream_reject", "car_missing_target");
         return send_failure_ack(
@@ -2588,7 +2412,6 @@ async fn handle_car_stream(
         )
         .await;
     };
-
     let path = match bridge.resolve_target(target) {
         Ok(path) => path,
         Err(reason) => {
@@ -2607,7 +2430,6 @@ async fn handle_car_stream(
             .await;
         }
     };
-
     let mut file = match open_bridge_file(&bridge.cache_dir, path, PROXY_MAX_LOCAL_FILE_BYTES).await
     {
         Ok(file) => file,
@@ -2627,7 +2449,6 @@ async fn handle_car_stream(
             .await;
         }
     };
-
     let cache_tag = session.cache_tag_for(ProxyStreamService::Car, &open_frame);
     let ack = ProxyStreamAckV1 {
         version: PROXY_STREAM_VERSION,
@@ -2639,7 +2460,6 @@ async fn handle_car_stream(
     write_frame(&mut send_stream, &ack)
         .await
         .map_err(|err| ProxyError::Stream(err.to_string()))?;
-
     match stream_bridge_file_exact(&mut file, &mut send_stream).await {
         Ok(bytes) => {
             record_transport_event(telemetry_label, "stream_complete", "car_ok");
@@ -2661,7 +2481,6 @@ async fn handle_car_stream(
         }
     }
 }
-
 #[cfg(feature = "local-quic-proxy")]
 fn extract_stream_target(open_frame: &ProxyStreamOpenV1) -> Option<&str> {
     open_frame
@@ -2670,12 +2489,10 @@ fn extract_stream_target(open_frame: &ProxyStreamOpenV1) -> Option<&str> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
 }
-
 fn generate_session_id() -> Result<String, ProxyError> {
     let mut rng = OsRng;
     generate_session_id_with_rng(&mut rng)
 }
-
 fn generate_session_id_with_rng<R: TryCryptoRng + ?Sized>(
     rng: &mut R,
 ) -> Result<String, ProxyError> {
@@ -2687,12 +2504,10 @@ fn generate_session_id_with_rng<R: TryCryptoRng + ?Sized>(
         })?;
     Ok(bytes.encode_hex::<String>())
 }
-
 fn generate_cache_salt() -> Result<String, ProxyError> {
     let mut rng = OsRng;
     generate_cache_salt_with_rng(&mut rng)
 }
-
 fn generate_cache_salt_with_rng<R: TryCryptoRng + ?Sized>(
     rng: &mut R,
 ) -> Result<String, ProxyError> {
@@ -2704,7 +2519,6 @@ fn generate_cache_salt_with_rng<R: TryCryptoRng + ?Sized>(
         })?;
     Ok(bytes.encode_hex::<String>())
 }
-
 /// Proxy handshake payload dispatched by clients.
 #[cfg(feature = "local-quic-proxy")]
 #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
@@ -2715,7 +2529,6 @@ struct ProxyHandshakeV1 {
     #[norito(default)]
     user_agent: Option<String>,
 }
-
 /// Acknowledgement returned to clients after the handshake completes.
 #[cfg(feature = "local-quic-proxy")]
 #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
@@ -2727,7 +2540,6 @@ struct ProxyHandshakeAckV1 {
     #[norito(default)]
     manifest: Option<BrowserExtensionManifest>,
 }
-
 /// Stream open frame dispatched per application channel.
 #[cfg(feature = "local-quic-proxy")]
 #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
@@ -2746,7 +2558,6 @@ struct ProxyStreamOpenV1 {
     #[norito(default)]
     client_id: Option<String>,
 }
-
 /// Stream acknowledgement returned once the proxy routes a request.
 #[cfg(feature = "local-quic-proxy")]
 #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
@@ -2759,7 +2570,6 @@ struct ProxyStreamAckV1 {
     #[norito(default)]
     cache_tag_hex: Option<String>,
 }
-
 #[cfg(feature = "local-quic-proxy")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProxyStreamService {
@@ -2769,7 +2579,6 @@ enum ProxyStreamService {
     Kaigi,
     Unknown,
 }
-
 #[cfg(feature = "local-quic-proxy")]
 impl ProxyStreamService {
     fn from_label(label: &str) -> Self {
@@ -2781,7 +2590,6 @@ impl ProxyStreamService {
             _ => Self::Unknown,
         }
     }
-
     fn as_label(&self) -> &'static str {
         match self {
             Self::Tcp => "tcp",
@@ -2792,49 +2600,36 @@ impl ProxyStreamService {
         }
     }
 }
-
 #[cfg(all(test, feature = "local-quic-proxy"))]
 mod tests {
     use std::{net::SocketAddr, sync::Arc, time::Duration};
-
     use tempfile::TempDir;
     use tokio::{io::AsyncWriteExt, task::JoinHandle};
-
     use super::*;
     use rand::rand_core::TryRngCore;
-
     const TEST_GUARD_KEY: &str = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
-
     #[derive(Debug)]
     struct FailingProxyRng;
-
     #[derive(Debug)]
     struct FailingProxyRngError;
-
     impl std::fmt::Display for FailingProxyRngError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str("failing proxy session RNG")
         }
     }
-
     impl std::error::Error for FailingProxyRngError {}
-
     impl TryRngCore for FailingProxyRng {
         type Error = FailingProxyRngError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingProxyRngError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(FailingProxyRngError)
         }
-
         fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
             Err(FailingProxyRngError)
         }
     }
-
     #[test]
     fn tcp_authority_policy_rejects_ssrf_targets() {
         for authority in [
@@ -2856,7 +2651,6 @@ mod tests {
                 "unsafe authority was accepted: {authority}"
             );
         }
-
         assert_eq!(
             parse_public_tcp_authority("93.184.216.34:443").expect("public IPv4 authority"),
             ("93.184.216.34".into(), 443)
@@ -2866,7 +2660,6 @@ mod tests {
             ("relay.example.org".into(), 443)
         );
     }
-
     #[test]
     fn proxy_rejects_unbounded_stream_configuration() {
         let zero = LocalQuicProxyConfig {
@@ -2877,7 +2670,6 @@ mod tests {
             zero.validated_stream_limit(),
             Err(ProxyError::StreamLimit { .. })
         ));
-
         let excessive = LocalQuicProxyConfig {
             max_streams_per_circuit: Some(PROXY_MAX_STREAMS_PER_CONNECTION + 1),
             ..LocalQuicProxyConfig::default()
@@ -2887,7 +2679,6 @@ mod tests {
             Err(ProxyError::StreamLimit { .. })
         ));
     }
-
     #[tokio::test]
     async fn bridge_file_open_is_bounded_and_detects_mutation() {
         let root = TempDir::new().expect("tempdir");
@@ -2895,12 +2686,10 @@ mod tests {
         tokio::fs::write(&path, b"payload")
             .await
             .expect("write payload");
-
         assert!(matches!(
             open_bridge_file(root.path(), path.clone(), 3).await,
             Err(BridgeFileError::TooLarge { .. })
         ));
-
         let opened = open_bridge_file(root.path(), path.clone(), 64)
             .await
             .expect("open regular payload");
@@ -2912,7 +2701,6 @@ mod tests {
             Err(BridgeFileError::Changed)
         ));
     }
-
     #[tokio::test]
     async fn bridge_file_open_detects_replacement() {
         let root = TempDir::new().expect("tempdir");
@@ -2935,12 +2723,10 @@ mod tests {
             Err(BridgeFileError::Changed)
         ));
     }
-
     #[cfg(unix)]
     #[tokio::test]
     async fn bridge_file_open_rejects_symlinks_and_symlink_roots() {
         use std::os::unix::fs::symlink;
-
         let root = TempDir::new().expect("tempdir");
         let real = root.path().join("real.norito");
         let link = root.path().join("link.norito");
@@ -2952,15 +2738,12 @@ mod tests {
             open_bridge_file(root.path(), link, 64).await,
             Err(BridgeFileError::Unsafe)
         ));
-
         let root_link = root.path().with_extension("link");
         symlink(root.path(), &root_link).expect("create root symlink");
         assert!(canonical_bridge_root(&root_link).is_err());
         std::fs::remove_file(root_link).expect("remove root symlink");
     }
-
     impl TryCryptoRng for FailingProxyRng {}
-
     use quinn::{
         ClientConfig, Endpoint, ServerConfig, VarInt,
         crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
@@ -2971,11 +2754,9 @@ mod tests {
             pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime},
         },
     };
-
     fn should_skip_socket_permission(message: &str) -> bool {
         message.contains("Operation not permitted") || message.contains("Permission denied")
     }
-
     fn spawn_proxy_or_skip(config: LocalQuicProxyConfig) -> Option<LocalQuicProxyHandle> {
         match spawn_local_quic_proxy(config) {
             Ok(handle) => Some(handle),
@@ -2986,7 +2767,6 @@ mod tests {
             Err(err) => panic!("spawn proxy: {err}"),
         }
     }
-
     fn sample_certificate() -> (String, Vec<u8>) {
         let rcgen::CertifiedKey { cert, .. } =
             generate_simple_self_signed(vec!["localhost".into()]).expect("generate certificate");
@@ -2994,7 +2774,6 @@ mod tests {
         let cert_der = cert.der().to_vec();
         (cert_pem, cert_der)
     }
-
     #[allow(clippy::type_complexity)]
     fn spawn_frame_server_or_skip() -> Option<(
         Endpoint,
@@ -3017,7 +2796,6 @@ mod tests {
             QuinnRustlsServerConfig::try_from(Arc::new(tls_config)).expect("server crypto");
         let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
         server_config.transport = Arc::new(quinn::TransportConfig::default());
-
         let endpoint = match Endpoint::server(server_config, "127.0.0.1:0".parse().expect("addr")) {
             Ok(endpoint) => endpoint,
             Err(err) if should_skip_socket_permission(&err.to_string()) => {
@@ -3035,10 +2813,8 @@ mod tests {
             let (_send, mut recv) = connection.accept_bi().await.expect("accept stream");
             read_frame(&mut recv).await
         });
-
         Some((endpoint, local_addr, join_handle))
     }
-
     #[test]
     fn manifest_template_populates_expected_fields() {
         let config = LocalQuicProxyConfig {
@@ -3049,23 +2825,19 @@ mod tests {
         let guard_key = GuardCacheKey::from_bytes([0xAB; GuardCacheKey::LENGTH]);
         let (cert_pem, cert_der) = sample_certificate();
         let addr: SocketAddr = "127.0.0.1:4433".parse().expect("addr");
-
         let template =
             build_manifest_template(&config, addr, &cert_pem, &cert_der, Some(&guard_key))
                 .expect("manifest template");
         let manifest = template.preview().expect("manifest preview");
-
         let expected_fingerprint = {
             let mut hasher = Sha256::new();
             hasher.update(&cert_der);
             hex::encode(hasher.finalize())
         };
-
         let expected_caps: Vec<String> = PROXY_CAPABILITIES
             .iter()
             .map(|cap| cap.to_string())
             .collect();
-
         assert_eq!(manifest.version, 2);
         assert_eq!(manifest.alpn.as_deref(), Some(PROXY_ALPN_LABEL));
         assert_eq!(manifest.capabilities, expected_caps);
@@ -3085,7 +2857,6 @@ mod tests {
         let salt = cache.salt_hex.expect("salt");
         assert_eq!(salt.len(), PROXY_CACHE_TAG_SALT_LEN * 2);
     }
-
     #[test]
     fn proxy_session_id_reports_rng_failure() {
         let error =
@@ -3098,7 +2869,6 @@ mod tests {
             other => panic!("expected random bytes error, got {other}"),
         }
     }
-
     #[test]
     fn proxy_cache_salt_reports_rng_failure() {
         let error =
@@ -3111,7 +2881,6 @@ mod tests {
             other => panic!("expected random bytes error, got {other}"),
         }
     }
-
     #[test]
     fn cache_tag_generation_matches_expected() {
         let config = LocalQuicProxyConfig {
@@ -3122,7 +2891,6 @@ mod tests {
         let guard_key = GuardCacheKey::from_bytes([0x11; GuardCacheKey::LENGTH]);
         let (cert_pem, cert_der) = sample_certificate();
         let addr: SocketAddr = "127.0.0.1:9443".parse().expect("addr");
-
         let template =
             build_manifest_template(&config, addr, &cert_pem, &cert_der, Some(&guard_key))
                 .expect("manifest template");
@@ -3132,7 +2900,6 @@ mod tests {
         let expected_context = cache_context.clone();
         let bridge_config =
             Arc::new(ProxyBridgeConfig::from_config(&config).expect("valid bridge config"));
-
         let session = ProxySession {
             telemetry_label: "test".into(),
             mode: ProxyMode::Bridge,
@@ -3141,7 +2908,6 @@ mod tests {
             cache_tags: Some(cache_context),
             bridge: bridge_config,
         };
-
         let open_frame = ProxyStreamOpenV1 {
             version: PROXY_STREAM_VERSION,
             service: "car".into(),
@@ -3151,11 +2917,9 @@ mod tests {
             exit_country: Some("JP".into()),
             client_id: Some("client-1".into()),
         };
-
         let actual = session
             .cache_tag_for(ProxyStreamService::Car, &open_frame)
             .expect("cache tag");
-
         let mut expected_message = Vec::new();
         expected_message.extend_from_slice(&expected_context.salt);
         append_tag_component(&mut expected_message, Some("car"));
@@ -3165,10 +2929,8 @@ mod tests {
         append_tag_component(&mut expected_message, open_frame.route_policy_id.as_deref());
         append_tag_component(&mut expected_message, open_frame.exit_country.as_deref());
         append_tag_component(&mut expected_message, session.session_id.as_deref());
-
         let expected = hex::encode_upper(hmac_sha256_128(guard_key.as_bytes(), &expected_message));
         assert_eq!(actual, expected);
-
         let tcp_tag = session
             .cache_tag_for(ProxyStreamService::Tcp, &open_frame)
             .expect("tcp cache tag");
@@ -3184,7 +2946,6 @@ mod tests {
         let expected_tcp = hex::encode_upper(hmac_sha256_128(guard_key.as_bytes(), &tcp_message));
         assert_eq!(tcp_tag, expected_tcp);
     }
-
     #[test]
     fn proxy_stream_service_lookup_handles_unknown() {
         assert_eq!(
@@ -3204,7 +2965,6 @@ mod tests {
             ProxyStreamService::Unknown
         );
     }
-
     #[test]
     fn extract_stream_target_filters_blanks() {
         let frame = ProxyStreamOpenV1 {
@@ -3217,7 +2977,6 @@ mod tests {
             client_id: None,
         };
         assert_eq!(extract_stream_target(&frame), Some("routes/route-alpha"));
-
         let blank = ProxyStreamOpenV1 {
             version: PROXY_STREAM_VERSION,
             service: "norito".into(),
@@ -3228,7 +2987,6 @@ mod tests {
             client_id: None,
         };
         assert!(extract_stream_target(&blank).is_none());
-
         let none_target = ProxyStreamOpenV1 {
             version: PROXY_STREAM_VERSION,
             service: "norito".into(),
@@ -3240,7 +2998,6 @@ mod tests {
         };
         assert!(extract_stream_target(&none_target).is_none());
     }
-
     #[test]
     fn spawn_local_quic_proxy_rejects_non_loopback_bind_addr() {
         let result = spawn_local_quic_proxy(LocalQuicProxyConfig {
@@ -3255,7 +3012,6 @@ mod tests {
             Err(other) => panic!("expected loopback bind rejection, got {other}"),
         }
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn read_frame_rejects_oversized_payload() {
         let Some((server_endpoint, server_addr, server_task)) = spawn_frame_server_or_skip() else {
@@ -3271,7 +3027,6 @@ mod tests {
             .expect("write frame length");
         send_stream.flush().await.expect("flush frame length");
         send_stream.finish().expect("finish stream");
-
         let result = tokio::time::timeout(Duration::from_secs(2), server_task)
             .await
             .expect("server task timeout")
@@ -3283,12 +3038,10 @@ mod tests {
             }
             other => panic!("expected FrameTooLarge error, got {other:?}"),
         }
-
         connection.close(VarInt::from_u32(0), b"done");
         client_endpoint.wait_idle().await;
         server_endpoint.wait_idle().await;
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn handshake_manifest_includes_cache_tagging() {
         let config = LocalQuicProxyConfig {
@@ -3301,11 +3054,9 @@ mod tests {
             return;
         };
         let proxy_addr = proxy.local_addr();
-
         let (endpoint, connection) = connect_proxy_client(proxy_addr).await;
         let handshake_ack = perform_proxy_handshake(&connection).await;
         assert!(handshake_ack.accepted);
-
         let manifest = handshake_ack
             .manifest
             .expect("handshake should include manifest");
@@ -3319,12 +3070,10 @@ mod tests {
                 && cache.attach_on.iter().any(|label| label == "car"),
             "expected cache tagging to advertise both norito and car services"
         );
-
         connection.close(VarInt::from_u32(0), b"done");
         endpoint.wait_idle().await;
         proxy.shutdown().await;
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn stream_rejects_version_mismatch() {
         let config = LocalQuicProxyConfig {
@@ -3337,11 +3086,9 @@ mod tests {
             return;
         };
         let proxy_addr = proxy.local_addr();
-
         let (endpoint, connection) = connect_proxy_client(proxy_addr).await;
         let handshake_ack = perform_proxy_handshake(&connection).await;
         assert!(handshake_ack.accepted);
-
         let open_frame = ProxyStreamOpenV1 {
             version: PROXY_STREAM_VERSION.saturating_add(1),
             service: "norito".into(),
@@ -3357,12 +3104,10 @@ mod tests {
         assert_eq!(stream_ack.code, STREAM_ACK_UNSUPPORTED_VERSION);
         let _ = stream_send.finish();
         let _ = stream_recv.stop(VarInt::from_u32(0));
-
         connection.close(VarInt::from_u32(0), b"done");
         endpoint.wait_idle().await;
         proxy.shutdown().await;
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn handshake_rejects_version_mismatch() {
         let config = LocalQuicProxyConfig {
@@ -3374,7 +3119,6 @@ mod tests {
             return;
         };
         let proxy_addr = proxy.local_addr();
-
         let (endpoint, connection) = connect_proxy_client(proxy_addr).await;
         let (mut handshake_send, mut handshake_recv) =
             connection.open_bi().await.expect("open handshake stream");
@@ -3394,12 +3138,10 @@ mod tests {
         assert_eq!(ack.version, PROXY_HANDSHAKE_VERSION);
         assert!(!ack.accepted);
         assert_eq!(ack.message.as_deref(), Some("unsupported version"));
-
         connection.close(VarInt::from_u32(0), b"done");
         endpoint.wait_idle().await;
         proxy.shutdown().await;
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn norito_bridge_streams_spool_payload() {
         let spool_dir = TempDir::new().expect("tempdir");
@@ -3411,7 +3153,6 @@ mod tests {
         tokio::fs::write(&spool_path, b"norito-bytes")
             .await
             .expect("write norito payload");
-
         let mut config = LocalQuicProxyConfig {
             bind_addr: "127.0.0.1:0".into(),
             proxy_mode: ProxyMode::Bridge,
@@ -3426,11 +3167,9 @@ mod tests {
             return;
         };
         let proxy_addr = proxy.local_addr();
-
         let (endpoint, connection) = connect_proxy_client(proxy_addr).await;
         let handshake_ack = perform_proxy_handshake(&connection).await;
         assert!(handshake_ack.accepted);
-
         let open_frame = ProxyStreamOpenV1 {
             version: PROXY_STREAM_VERSION,
             service: "norito".into(),
@@ -3445,18 +3184,15 @@ mod tests {
         assert!(stream_ack.accepted);
         assert_eq!(stream_ack.code, STREAM_ACK_OK);
         stream_send.finish().expect("finish stream open");
-
         let payload = stream_recv
             .read_to_end(16 * 1024 * 1024)
             .await
             .expect("read norito payload");
         assert_eq!(payload, b"norito-bytes");
-
         connection.close(VarInt::from_u32(0), b"done");
         endpoint.wait_idle().await;
         proxy.shutdown().await;
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn car_bridge_streams_archive() {
         let cache_dir = TempDir::new().expect("tempdir");
@@ -3468,7 +3204,6 @@ mod tests {
         tokio::fs::write(&car_path, b"car-bytes")
             .await
             .expect("write car payload");
-
         let mut config = LocalQuicProxyConfig {
             bind_addr: "127.0.0.1:0".into(),
             proxy_mode: ProxyMode::Bridge,
@@ -3484,11 +3219,9 @@ mod tests {
             return;
         };
         let proxy_addr = proxy.local_addr();
-
         let (endpoint, connection) = connect_proxy_client(proxy_addr).await;
         let handshake_ack = perform_proxy_handshake(&connection).await;
         assert!(handshake_ack.accepted);
-
         let open_frame = ProxyStreamOpenV1 {
             version: PROXY_STREAM_VERSION,
             service: "car".into(),
@@ -3503,18 +3236,15 @@ mod tests {
         assert!(stream_ack.accepted);
         assert_eq!(stream_ack.code, STREAM_ACK_OK);
         stream_send.finish().expect("finish stream open");
-
         let payload = stream_recv
             .read_to_end(16 * 1024 * 1024)
             .await
             .expect("read car payload");
         assert_eq!(payload, b"car-bytes");
-
         connection.close(VarInt::from_u32(0), b"done");
         endpoint.wait_idle().await;
         proxy.shutdown().await;
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn kaigi_bridge_streams_spool_payload_with_policy() {
         let spool_dir = TempDir::new().expect("tempdir");
@@ -3526,7 +3256,6 @@ mod tests {
         tokio::fs::write(&spool_path, b"kaigi-bytes")
             .await
             .expect("write kaigi payload");
-
         let mut config = LocalQuicProxyConfig {
             bind_addr: "127.0.0.1:0".into(),
             proxy_mode: ProxyMode::Bridge,
@@ -3543,11 +3272,9 @@ mod tests {
             return;
         };
         let proxy_addr = proxy.local_addr();
-
         let (endpoint, connection) = connect_proxy_client(proxy_addr).await;
         let handshake_ack = perform_proxy_handshake(&connection).await;
         assert!(handshake_ack.accepted);
-
         let open_frame = ProxyStreamOpenV1 {
             version: PROXY_STREAM_VERSION,
             service: "kaigi".into(),
@@ -3570,20 +3297,16 @@ mod tests {
             .as_ref()
             .expect("kaigi ack should include cache tag");
         assert_eq!(cache_tag.len(), 32);
-
         stream_send.finish().expect("finish stream open");
-
         let payload = stream_recv
             .read_to_end(16 * 1024 * 1024)
             .await
             .expect("read kaigi payload");
         assert_eq!(payload, b"kaigi-bytes");
-
         connection.close(VarInt::from_u32(0), b"done");
         endpoint.wait_idle().await;
         proxy.shutdown().await;
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn tcp_stream_bridge_rejects_loopback_ssrf() {
         let config = LocalQuicProxyConfig {
@@ -3597,11 +3320,9 @@ mod tests {
             return;
         };
         let proxy_addr = proxy.local_addr();
-
         let (endpoint, connection) = connect_proxy_client(proxy_addr).await;
         let handshake_ack = perform_proxy_handshake(&connection).await;
         assert!(handshake_ack.accepted);
-
         let open_frame = ProxyStreamOpenV1 {
             version: PROXY_STREAM_VERSION,
             service: "tcp".into(),
@@ -3618,12 +3339,10 @@ mod tests {
         assert!(stream_ack.cache_tag_hex.is_none());
         let _ = stream_send.finish();
         let _ = stream_recv.stop(VarInt::from_u32(0));
-
         connection.close(VarInt::from_u32(0), b"done");
         endpoint.wait_idle().await;
         proxy.shutdown().await;
     }
-
     async fn connect_proxy_client(proxy_addr: SocketAddr) -> (Endpoint, quinn::Connection) {
         let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap()).expect("endpoint");
         let verifier: Arc<dyn ServerCertVerifier> = Arc::new(NoCertificateVerification);
@@ -3637,14 +3356,12 @@ mod tests {
             QuinnRustlsClientConfig::try_from(Arc::clone(&tls_config)).expect("client crypto");
         let client_config = ClientConfig::new(Arc::new(crypto));
         endpoint.set_default_client_config(client_config);
-
         let connecting = endpoint
             .connect(proxy_addr, "localhost")
             .expect("connect request");
         let connection = connecting.await.expect("proxy handshake");
         (endpoint, connection)
     }
-
     async fn perform_proxy_handshake(connection: &quinn::Connection) -> ProxyHandshakeAckV1 {
         let (mut handshake_send, mut handshake_recv) =
             connection.open_bi().await.expect("open handshake stream");
@@ -3665,7 +3382,6 @@ mod tests {
         let _ = ack.message.as_ref();
         ack
     }
-
     async fn open_proxy_stream(
         connection: &quinn::Connection,
         open_frame: &ProxyStreamOpenV1,
@@ -3681,10 +3397,8 @@ mod tests {
         let _ = ack.message.as_ref();
         (stream_send, stream_recv, ack)
     }
-
     #[derive(Debug)]
     struct NoCertificateVerification;
-
     impl ServerCertVerifier for NoCertificateVerification {
         fn verify_server_cert(
             &self,
@@ -3696,7 +3410,6 @@ mod tests {
         ) -> Result<ServerCertVerified, RustlsError> {
             Ok(ServerCertVerified::assertion())
         }
-
         fn verify_tls12_signature(
             &self,
             _message: &[u8],
@@ -3705,7 +3418,6 @@ mod tests {
         ) -> Result<HandshakeSignatureValid, RustlsError> {
             Ok(HandshakeSignatureValid::assertion())
         }
-
         fn verify_tls13_signature(
             &self,
             _message: &[u8],
@@ -3714,7 +3426,6 @@ mod tests {
         ) -> Result<HandshakeSignatureValid, RustlsError> {
             Ok(HandshakeSignatureValid::assertion())
         }
-
         fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
             vec![
                 SignatureScheme::ECDSA_NISTP256_SHA256,
@@ -3724,11 +3435,9 @@ mod tests {
         }
     }
 }
-
 #[cfg(all(test, not(feature = "local-quic-proxy")))]
 mod tests {
     use super::*;
-
     #[test]
     fn spawn_local_quic_proxy_reports_disabled_feature() {
         let result = spawn_local_quic_proxy(LocalQuicProxyConfig::default());
@@ -3738,7 +3447,6 @@ mod tests {
             Err(other) => panic!("expected unavailable feature error, got {other}"),
         }
     }
-
     #[test]
     fn disabled_proxy_still_validates_loopback_binding() {
         let result = spawn_local_quic_proxy(LocalQuicProxyConfig {

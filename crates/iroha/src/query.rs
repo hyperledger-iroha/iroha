@@ -1,13 +1,11 @@
 //! Functions and types to make queries to the Iroha peer.
 #![allow(clippy::result_large_err)]
-
 use std::{
     collections::HashMap,
     fmt::Debug,
     num::NonZeroU64,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 use eyre::{Report, Result, eyre};
 use http::{StatusCode, header::CONTENT_TYPE};
 use iroha_data_model::query::QueryOutputBatchBoxTuple;
@@ -15,7 +13,6 @@ use iroha_torii_shared::uri as torii_uri;
 use iroha_version::codec::EncodeVersioned;
 use norito::json;
 use url::Url;
-
 use crate::{
     client::{APPLICATION_NORITO, Client, QueryResult, ResponseReport, join_torii_url},
     crypto::KeyPair,
@@ -33,7 +30,6 @@ use crate::{
     http::{Method as HttpMethod, RequestBuilder},
     http_default::DefaultRequestBuilder,
 };
-
 #[derive(Debug)]
 struct ClientQueryRequestHead {
     torii_url: Url,
@@ -44,14 +40,12 @@ struct ClientQueryRequestHead {
     request_timeout: Duration,
     accept_header: &'static str,
 }
-
 impl ClientQueryRequestHead {
     #[cfg(test)]
     fn assemble(&self, query: QueryRequest) -> Result<DefaultRequestBuilder, QueryError> {
         let body = self.sign_and_encode(query)?;
         Ok(self.assemble_body(body))
     }
-
     fn assemble_body(&self, body: Vec<u8>) -> DefaultRequestBuilder {
         DefaultRequestBuilder::new(
             HttpMethod::POST,
@@ -65,7 +59,6 @@ impl ClientQueryRequestHead {
         .timeout(self.request_timeout)
         .body(body)
     }
-
     fn assemble_body_with_accept(
         &self,
         body: Vec<u8>,
@@ -81,7 +74,6 @@ impl ClientQueryRequestHead {
         .timeout(self.request_timeout)
         .body(body)
     }
-
     fn sign_and_encode(&self, query: QueryRequest) -> Result<Vec<u8>, QueryError> {
         let creation_time_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -122,7 +114,6 @@ impl ClientQueryRequestHead {
         Ok(query.encode_versioned())
     }
 }
-
 /// Decode a raw response from the node's query endpoint
 fn decode_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult<QueryResponse> {
     match resp.status() {
@@ -185,7 +176,6 @@ fn decode_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult<QueryRes
             .into()),
     }
 }
-
 /// Decode `QueryResponse` from a canonical Norito byte body.
 fn decode_query_response_body(body: &[u8]) -> QueryResult<QueryResponse> {
     norito::decode_from_bytes::<QueryResponse>(body).map_err(|error| {
@@ -196,7 +186,6 @@ fn decode_query_response_body(body: &[u8]) -> QueryResult<QueryResponse> {
             .into()
     })
 }
-
 fn send_once<F>(mut make_request: F) -> Result<http::Response<Vec<u8>>, QueryError>
 where
     F: FnMut() -> Result<DefaultRequestBuilder, QueryError>,
@@ -208,7 +197,6 @@ where
             .and_then(|request| request.send().map_err(QueryError::from))
     })
 }
-
 /// Send a signed query exactly once and decode its response.
 ///
 /// A transport or response-decode failure is deliberately ambiguous: the node may already have
@@ -222,7 +210,6 @@ where
     let response = send_once(make_request)?;
     decode(&response)
 }
-
 fn decode_singular_query_response(
     resp: &http::Response<Vec<u8>>,
 ) -> QueryResult<SingularQueryOutputBox> {
@@ -234,7 +221,6 @@ fn decode_singular_query_response(
     };
     Ok(resp)
 }
-
 fn decode_iterable_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult<QueryOutput> {
     let QueryResponse::Iterable(resp) = decode_query_response(resp)? else {
         return Err(eyre!(
@@ -244,7 +230,6 @@ fn decode_iterable_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult
     };
     Ok(resp)
 }
-
 /// Ensure the requested fetch size respects client-side limits.
 fn validate_fetch_size(fetch_size: NonZeroU64) -> QueryResult<()> {
     if fetch_size > MAX_FETCH_SIZE {
@@ -252,7 +237,6 @@ fn validate_fetch_size(fetch_size: NonZeroU64) -> QueryResult<()> {
     }
     Ok(())
 }
-
 /// An iterable query cursor for use in the client
 #[derive(Debug)]
 pub struct QueryCursor {
@@ -262,14 +246,12 @@ pub struct QueryCursor {
     request_head: ClientQueryRequestHead,
     cursor: ForwardCursor,
 }
-
 impl QueryCursor {
     /// Return the underlying Iroha forward cursor.
     pub fn forward_cursor(&self) -> &ForwardCursor {
         &self.cursor
     }
 }
-
 /// Different errors as a result of query response handling
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum QueryError {
@@ -280,18 +262,15 @@ pub enum QueryError {
     /// Other error
     Other(#[from] eyre::Error),
 }
-
 impl From<ResponseReport> for QueryError {
     #[inline]
     fn from(ResponseReport(err): ResponseReport) -> Self {
         Self::Other(err)
     }
 }
-
 impl QueryExecutor for Client {
     type Cursor = QueryCursor;
     type Error = QueryError;
-
     fn execute_singular_query(
         &self,
         query: SingularQueryBox,
@@ -300,7 +279,6 @@ impl QueryExecutor for Client {
             .map_err(QueryError::from)?;
         let is_parameters_query = matches!(query, SingularQueryBox::FindParameters(_));
         let request_head = self.get_query_request_head();
-
         let request = QueryRequest::Singular(query);
         let body = request_head.sign_and_encode(request)?;
         let make_request = || {
@@ -312,7 +290,6 @@ impl QueryExecutor for Client {
         };
         send_once_and_decode(make_request, decode_singular_query_response)
     }
-
     fn start_query(
         &self,
         query: QueryWithParams,
@@ -325,24 +302,18 @@ impl QueryExecutor for Client {
             .fetch_size
             .unwrap_or(DEFAULT_FETCH_SIZE);
         validate_fetch_size(requested_fetch_size)?;
-
         let request_head = self.get_query_request_head();
-
         let request = QueryRequest::Start(query);
         let body = request_head.sign_and_encode(request)?;
         let make_request = || Ok(request_head.assemble_body(body.clone()));
         let response = send_once_and_decode(make_request, decode_iterable_query_response)?;
-
         let (batch, remaining_items, _has_more, cursor) = response.into_parts_with_count_mode();
-
         let cursor = cursor.map(|cursor| QueryCursor {
             request_head,
             cursor,
         });
-
         Ok((batch, remaining_items, cursor))
     }
-
     fn continue_query(
         cursor: Self::Cursor,
     ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
@@ -350,36 +321,27 @@ impl QueryExecutor for Client {
             request_head,
             cursor,
         } = cursor;
-
         let request = QueryRequest::Continue(cursor);
         let body = request_head.sign_and_encode(request)?;
         let make_request = || Ok(request_head.assemble_body(body.clone()));
         let response = send_once_and_decode(make_request, decode_iterable_query_response)?;
-
         let (batch, remaining_items, _has_more, cursor) = response.into_parts_with_count_mode();
-
         let cursor = cursor.map(|cursor| QueryCursor {
             request_head,
             cursor,
         });
-
         Ok((batch, remaining_items, cursor))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-
     use iroha_data_model::query::{SignedQuery, executor::prelude::FindExecutorDataModel};
     use iroha_version::codec::DecodeVersioned as _;
-
     use super::*;
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked query fixture keypair")
     }
-
     #[test]
     fn assemble_binds_network_freshness_and_one_shot_nonce() {
         let network_id =
@@ -402,7 +364,6 @@ mod tests {
             .expect("sign query request")
             .build()
             .expect("request build");
-
         crate::http_default::with_send_hook(
             Arc::new(move |snapshot| {
                 let accept = snapshot
@@ -434,7 +395,6 @@ mod tests {
             },
         );
     }
-
     #[test]
     fn validate_fetch_size_rejects_over_max() {
         let over = MAX_FETCH_SIZE.checked_add(1).expect("nonzero add");
@@ -446,34 +406,29 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn validate_fetch_size_accepts_limits() {
         assert!(super::validate_fetch_size(MAX_FETCH_SIZE).is_ok());
         assert!(super::validate_fetch_size(DEFAULT_FETCH_SIZE).is_ok());
     }
-
     #[test]
     fn garbled_not_found_is_treated_as_missing() {
         let resp = http::Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(vec![0xff, 0x00, 0x01])
             .expect("response");
-
         let err = super::decode_query_response(&resp).expect_err("expected validation error");
         assert!(matches!(
             err,
             QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))
         ));
     }
-
     #[test]
     fn garbled_gone_is_treated_as_expired() {
         let resp = http::Response::builder()
             .status(StatusCode::GONE)
             .body(b"query_validation_failed: The stored cursor has expired".to_vec())
             .expect("response");
-
         let err = super::decode_query_response(&resp).expect_err("expected validation error");
         assert!(matches!(
             err,
@@ -503,7 +458,6 @@ impl Client {
         let make_request = || Ok(request_head.assemble_body(body.clone()));
         send_once_and_decode(make_request, decode_query_response)
     }
-
     /// Execute an arbitrary `SignedQuery` (already signed and Norito-encoded) against the `/query` endpoint.
     /// Returns a typed `QueryResponse` which may be singular or iterable.
     /// # Errors
@@ -528,7 +482,6 @@ impl Client {
         send_once_and_decode(make_request, decode_query_response)
     }
 }
-
 impl Client {
     /// Get a [`ClientQueryRequestHead`] - an object that can be used to make queries independently of the client.
     ///
@@ -544,7 +497,6 @@ impl Client {
             accept_header: self.wire_format_preference.accept_header(),
         }
     }
-
     /// Execute a singular query and return the result
     ///
     /// # Errors
@@ -558,14 +510,11 @@ impl Client {
         <Q::Output as TryFrom<SingularQueryOutputBox>>::Error: Debug,
     {
         let query = SingularQueryBox::from(query);
-
         let result = self.execute_singular_query(query)?;
-
         Ok(result
             .try_into()
             .expect("BUG: iroha returned unexpected type in singular query"))
     }
-
     /// Build an iterable query and return a builder object
     pub fn query<Q>(&self, query: Q) -> QueryBuilder<'_, Self, Q, Q::Item>
     where
@@ -573,7 +522,6 @@ impl Client {
     {
         QueryBuilder::new(self, query)
     }
-
     /// Make a request to continue an iterable query with the provided raw [`ForwardCursor`]
     ///
     /// You probably do not want to use this function, but rather use the [`Self::query`] method to make a query and iterate over its results.
@@ -588,17 +536,13 @@ impl Client {
         self.ensure_data_model_compatibility()
             .map_err(QueryError::from)?;
         let request_head = self.get_query_request_head();
-
         let request = QueryRequest::Continue(cursor);
         let body = request_head.sign_and_encode(request)?;
         let make_request = || Ok(request_head.assemble_body(body.clone()));
-
         let response = send_once_and_decode(make_request, decode_query_response)?;
-
         Ok(response)
     }
 }
-
 #[cfg(test)]
 mod query_errors_handling {
     use std::{
@@ -610,7 +554,6 @@ mod query_errors_handling {
         },
         time::Duration,
     };
-
     use http::Response;
     use iroha_config::parameters::actual::SorafsRolloutPhase;
     use iroha_data_model::{
@@ -622,7 +565,6 @@ mod query_errors_handling {
     use sorafs_manifest::alias_cache::AliasCachePolicy;
     use sorafs_orchestrator::AnonymityPolicy;
     use url::Url;
-
     use super::*;
     use crate::{
         client::{APPLICATION_NORITO, DataModelCompatibility, DataModelCompatibilityError},
@@ -630,14 +572,12 @@ mod query_errors_handling {
         http::StatusCode as HttpStatusCode,
         http_default::{RequestSnapshot, with_send_hook},
     };
-
     #[test]
     fn certain_errors() -> Result<()> {
         let responses = vec![(StatusCode::UNPROCESSABLE_ENTITY, ValidationFail::TooComplex)];
         for (status_code, err) in responses {
             let body = norito::to_bytes(&err)?;
             let resp = Response::builder().status(status_code).body(body)?;
-
             match decode_query_response(&resp) {
                 Err(QueryError::Validation(actual)) => {
                     // PartialEq isn't implemented, so asserting by encoded repr
@@ -646,22 +586,18 @@ mod query_errors_handling {
                 x => return Err(eyre!("Wrong output for {:?}: {:?}", (status_code, err), x)),
             }
         }
-
         Ok(())
     }
-
     #[test]
     fn indeterminate() -> Result<()> {
         let response = Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Vec::<u8>::new())?;
-
         match decode_query_response(&response) {
             Err(QueryError::Other(_)) => Ok(()),
             x => Err(eyre!("Expected indeterminate, found: {:?}", x)),
         }
     }
-
     #[test]
     fn malformed_iterable_response_error_remains_typed() {
         let error = QueryError::from(
@@ -674,12 +610,10 @@ mod query_errors_handling {
             )
         ));
     }
-
     #[test]
     fn signed_query_transport_never_retries_ambiguous_decode_failure() {
         let sends = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&sends);
-
         with_mock_http(
             move |_| {
                 observed.fetch_add(1, Ordering::Relaxed);
@@ -701,10 +635,8 @@ mod query_errors_handling {
                     .expect_err("malformed response must be reported without retry");
             },
         );
-
         assert_eq!(sends.load(Ordering::Relaxed), 1);
     }
-
     #[test]
     fn norito_body_with_json_content_type_errors_cleanly() -> Result<()> {
         let expected = QueryResponse::Iterable(QueryOutput {
@@ -717,13 +649,11 @@ mod query_errors_handling {
             .status(HttpStatusCode::OK)
             .header("content-type", "application/json")
             .body(norito::to_bytes(&expected)?)?;
-
         match decode_query_response(&response) {
             Err(QueryError::Other(_)) => Ok(()),
             other => Err(eyre!("expected strict JSON decode failure, got {other:?}")),
         }
     }
-
     #[test]
     fn json_body_decodes_iterable_response() -> Result<()> {
         let expected = QueryResponse::Iterable(QueryOutput {
@@ -736,13 +666,10 @@ mod query_errors_handling {
             .status(HttpStatusCode::OK)
             .header("content-type", "application/json")
             .body(norito::json::to_vec(&expected)?)?;
-
         let decoded = decode_query_response(&response)?;
         assert_eq!(decoded, expected);
-
         Ok(())
     }
-
     #[test]
     fn text_json_is_not_a_supported_response_media_type() -> Result<()> {
         let payload = QueryResponse::Iterable(QueryOutput {
@@ -755,21 +682,18 @@ mod query_errors_handling {
             .status(HttpStatusCode::OK)
             .header("content-type", "text/json")
             .body(norito::json::to_vec(&payload)?)?;
-
         assert!(
             matches!(decode_query_response(&response), Err(QueryError::Other(_))),
             "the retired text/json alias must not select JSON decoding"
         );
         Ok(())
     }
-
     #[test]
     fn json_body_reports_decode_errors_with_json_context() -> Result<()> {
         let response = Response::builder()
             .status(HttpStatusCode::OK)
             .header("content-type", "application/json")
             .body(vec![0_u8, 1, 2, 3])?;
-
         match decode_query_response(&response) {
             Err(QueryError::Other(inner)) => {
                 let messages: Vec<String> = inner.chain().map(ToString::to_string).collect();
@@ -782,10 +706,8 @@ mod query_errors_handling {
             }
             other => panic!("decode must fail with QueryError::Other, got {other:?}"),
         }
-
         Ok(())
     }
-
     #[test]
     fn missing_content_type_defaults_to_norito_decode() -> Result<()> {
         let expected = QueryResponse::Iterable(QueryOutput {
@@ -797,31 +719,25 @@ mod query_errors_handling {
         let response = Response::builder()
             .status(HttpStatusCode::OK)
             .body(norito::to_bytes(&expected)?)?;
-
         let decoded = decode_query_response(&response)?;
         assert_eq!(decoded, expected);
-
         Ok(())
     }
-
     #[test]
     fn empty_ok_body_errors_cleanly() -> Result<()> {
         let response = Response::builder()
             .status(HttpStatusCode::OK)
             .body(Vec::<u8>::new())?;
-
         match decode_query_response(&response) {
             Err(QueryError::Other(_)) => Ok(()),
             other => Err(eyre!("expected Other error for empty body, got {other:?}")),
         }
     }
-
     #[test]
     fn non_ok_garbage_body_errors_cleanly() -> Result<()> {
         let response = Response::builder()
             .status(HttpStatusCode::INTERNAL_SERVER_ERROR)
             .body(vec![1_u8, 2, 3, 4])?;
-
         match decode_query_response(&response) {
             Err(QueryError::Other(_)) => Ok(()),
             other => Err(eyre!(
@@ -829,7 +745,6 @@ mod query_errors_handling {
             )),
         }
     }
-
     #[test]
     fn validation_fail_with_json_content_type_is_parsed() -> Result<()> {
         let body = norito::to_bytes(&ValidationFail::TooComplex)?;
@@ -837,7 +752,6 @@ mod query_errors_handling {
             .status(HttpStatusCode::UNPROCESSABLE_ENTITY)
             .header("content-type", "application/json")
             .body(body)?;
-
         match decode_query_response(&response) {
             Err(QueryError::Validation(v)) => {
                 assert_eq!(v.encode(), ValidationFail::TooComplex.encode());
@@ -846,7 +760,6 @@ mod query_errors_handling {
             other => Err(eyre!("expected Validation error, got {other:?}")),
         }
     }
-
     #[test]
     fn validation_fail_with_norito_header_is_parsed() -> Result<()> {
         let body = norito::to_bytes(&ValidationFail::TooComplex)?;
@@ -854,7 +767,6 @@ mod query_errors_handling {
             .status(HttpStatusCode::UNPROCESSABLE_ENTITY)
             .header("content-type", APPLICATION_NORITO)
             .body(body)?;
-
         match decode_query_response(&response) {
             Err(QueryError::Validation(v)) => {
                 assert_eq!(v.encode(), ValidationFail::TooComplex.encode());
@@ -863,7 +775,6 @@ mod query_errors_handling {
             other => Err(eyre!("expected Validation error, got {other:?}")),
         }
     }
-
     #[test]
     fn query_request_head_sets_accept_header() {
         let (account_id, key_pair) = gen_account_in("wonderland");
@@ -884,10 +795,8 @@ mod query_errors_handling {
             gas_budget: None,
         };
         let query_request = QueryRequest::Continue(cursor);
-
         let observed = Arc::new(AtomicBool::new(false));
         let observed_clone = Arc::clone(&observed);
-
         with_mock_http(
             move |snapshot| {
                 observed_clone.store(true, Ordering::Relaxed);
@@ -903,13 +812,11 @@ mod query_errors_handling {
                     .expect("send");
             },
         );
-
         assert!(
             observed.load(Ordering::Relaxed),
             "send hook was not triggered"
         );
     }
-
     #[test]
     fn execute_signed_query_raw_sets_accept_header() {
         let (account_id, key_pair) = gen_account_in("wonderland");
@@ -931,7 +838,6 @@ mod query_errors_handling {
             data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Compatible)),
             wire_format_preference: crate::client::WireFormatPreference::default(),
         };
-
         let encoded_response = norito::to_bytes(&QueryResponse::Iterable(QueryOutput {
             batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::String(Vec::new())),
             remaining_items: Some(0),
@@ -939,7 +845,6 @@ mod query_errors_handling {
             continue_cursor: None,
         }))
         .expect("encode query response");
-
         let observed = Arc::new(AtomicBool::new(false));
         let observed_clone = Arc::clone(&observed);
         with_mock_http(
@@ -960,13 +865,11 @@ mod query_errors_handling {
                 assert!(matches!(response, QueryResponse::Iterable(_)));
             },
         );
-
         assert!(
             observed.load(Ordering::Relaxed),
             "send hook was not triggered"
         );
     }
-
     #[test]
     fn execute_signed_query_raw_rejects_incompatible_data_model_version_before_query_request() {
         let (account_id, key_pair) = gen_account_in("wonderland");
@@ -993,7 +896,6 @@ mod query_errors_handling {
         let mismatched_version = crate::data_model::DATA_MODEL_VERSION + 1;
         let capabilities_body =
             format!(r#"{{"data_model_version":{mismatched_version}}}"#).into_bytes();
-
         with_mock_http(
             move |snapshot| match snapshot.url.path() {
                 "/v1/node/capabilities" => Ok(Response::builder()
@@ -1026,27 +928,23 @@ mod query_errors_handling {
                 ));
             },
         );
-
         assert!(
             !query_seen.load(Ordering::Relaxed),
             "query request must not be sent after compatibility mismatch"
         );
     }
-
     fn with_mock_http<R>(
         responder: impl Fn(RequestSnapshot) -> Result<Response<Vec<u8>>> + Send + Sync + 'static,
         f: impl FnOnce() -> R,
     ) -> R {
         with_send_hook(Arc::new(responder), f)
     }
-
     fn ok_empty_response() -> Response<Vec<u8>> {
         Response::builder()
             .status(HttpStatusCode::OK)
             .body(Vec::new())
             .expect("response")
     }
-
     fn assert_accept_header(snapshot: &RequestSnapshot, expected: &str) {
         let header = snapshot
             .headers
@@ -1060,7 +958,6 @@ mod query_errors_handling {
             snapshot.headers
         );
     }
-
     fn sample_alias_policy() -> AliasCachePolicy {
         AliasCachePolicy::new(
             Duration::from_secs(1),

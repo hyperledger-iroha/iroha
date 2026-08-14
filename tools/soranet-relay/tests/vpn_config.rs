@@ -1,5 +1,4 @@
 use soranet_relay::config::{ConfigError, VpnConfig, VpnCoverTrafficConfig};
-
 #[test]
 fn vpn_defaults_apply_and_validate() {
     let mut cfg = VpnConfig {
@@ -29,7 +28,6 @@ fn vpn_defaults_apply_and_validate() {
         },
         billing: Default::default(),
     };
-
     cfg.validate().expect("vpn defaults should validate");
     assert_eq!(cfg.cell_size_bytes, 1_024);
     assert!(cfg.pacing_millis > 0);
@@ -43,7 +41,6 @@ fn vpn_defaults_apply_and_validate() {
     assert_eq!(cfg.helper_ticket_replay_store_capacity, 8_192);
     assert!(!cfg.helper_ticket_replay_store_path.as_os_str().is_empty());
 }
-
 #[test]
 fn vpn_flow_label_bits_must_be_bounded() {
     let mut cfg = VpnConfig {
@@ -55,12 +52,10 @@ fn vpn_flow_label_bits_must_be_bounded() {
     };
     let err = cfg.validate().expect_err("zero bits should fail");
     assert!(matches!(err, ConfigError::Vpn(message) if message.contains("flow_label_bits")));
-
     cfg.flow_label_bits = 25;
     let err = cfg.validate().expect_err("overflow bits should fail");
     assert!(matches!(err, ConfigError::Vpn(message) if message.contains("flow_label_bits")));
 }
-
 #[test]
 fn vpn_cover_jitter_guardrails() {
     let mut cfg = VpnConfig {
@@ -91,7 +86,6 @@ fn vpn_cover_jitter_guardrails() {
         },
         billing: Default::default(),
     };
-
     let err = cfg.validate().expect_err("jitter should be bounded");
     match err {
         ConfigError::Vpn(message) => assert!(
@@ -101,18 +95,15 @@ fn vpn_cover_jitter_guardrails() {
         other => panic!("unexpected error {other:?}"),
     }
 }
-
 #[test]
 fn vpn_runtime_available_allows_enable() {
     let cfg = VpnConfig {
         enabled: true,
         ..VpnConfig::default()
     };
-
     cfg.require_runtime_available()
         .expect("vpn runtime availability should pass");
 }
-
 #[test]
 fn vpn_config_json_roundtrip_preserves_fields() {
     let mut cfg = VpnConfig {
@@ -137,10 +128,8 @@ fn vpn_config_json_roundtrip_preserves_fields() {
         billing: Default::default(),
     };
     cfg.validate().expect("config should validate");
-
     let json = norito::json::to_vec(&cfg).expect("serialize vpn config");
     let decoded: VpnConfig = norito::json::from_slice(&json).expect("decode vpn config");
-
     assert_eq!(cfg.enabled, decoded.enabled);
     assert_eq!(cfg.cell_size_bytes, decoded.cell_size_bytes);
     assert_eq!(cfg.flow_label_bits, decoded.flow_label_bits);
@@ -162,7 +151,6 @@ fn vpn_config_json_roundtrip_preserves_fields() {
     );
     assert_eq!(cfg.receipt_spool_dir, decoded.receipt_spool_dir);
 }
-
 #[test]
 fn vpn_rejects_mismatched_cell_size() {
     let mut cfg = VpnConfig {
@@ -170,7 +158,6 @@ fn vpn_rejects_mismatched_cell_size() {
         cell_size_bytes: 512,
         ..VpnConfig::default()
     };
-
     let err = cfg.validate().expect_err("cell size mismatch should fail");
     match err {
         ConfigError::Vpn(message) => {
@@ -182,7 +169,6 @@ fn vpn_rejects_mismatched_cell_size() {
         other => panic!("unexpected error {other:?}"),
     }
 }
-
 #[test]
 fn vpn_meter_hash_must_be_valid_hex() {
     let mut cfg = VpnConfig {
@@ -193,7 +179,6 @@ fn vpn_meter_hash_must_be_valid_hex() {
         },
         ..VpnConfig::default()
     };
-
     let err = cfg.validate().expect_err("invalid meter hash should fail");
     match err {
         ConfigError::Vpn(message) => assert!(
@@ -203,7 +188,6 @@ fn vpn_meter_hash_must_be_valid_hex() {
         other => panic!("unexpected error {other:?}"),
     }
 }
-
 #[test]
 fn vpn_pacing_must_fit_u16() {
     let mut cfg = VpnConfig {
@@ -211,7 +195,6 @@ fn vpn_pacing_must_fit_u16() {
         pacing_millis: u64::from(u16::MAX) + 1,
         ..VpnConfig::default()
     };
-
     let err = cfg.validate().expect_err("pacing overflow should fail");
     match err {
         ConfigError::Vpn(message) => {

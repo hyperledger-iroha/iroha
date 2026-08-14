@@ -5,7 +5,6 @@
 //! permutation without duplicating the arithmetic. The implementation sticks
 //! to the BN254 field parameters used by the fastpq Halo2 gadgets to keep all
 //! call-sites in sync with the proving backend.
-
 use halo2curves::{
     bn256::Fr,
     ff::{Field, PrimeField},
@@ -13,13 +12,11 @@ use halo2curves::{
 use once_cell::sync::OnceCell;
 use poseidon_primitives::poseidon::primitives::Spec;
 use std::io::{self, Write};
-
 const FULL_ROUNDS: usize = 8;
 const FULL_ROUNDS_HALF: usize = FULL_ROUNDS / 2;
 const PARTIAL_ROUNDS: usize = 56;
 const ROUND_COUNT: usize = FULL_ROUNDS + PARTIAL_ROUNDS;
 type PoseidonConstants<const W: usize> = ([[Fr; W]; ROUND_COUNT], [[Fr; W]; W]);
-
 /// Poseidon2 parameters (round constants + MDS) encoded as byte arrays.
 #[derive(Debug, Clone)]
 pub struct Poseidon2Params<const W: usize> {
@@ -28,53 +25,42 @@ pub struct Poseidon2Params<const W: usize> {
     /// MDS matrix entries for the width.
     pub mds: [[[u8; 32]; W]; W],
 }
-
 #[derive(Debug)]
 struct FrSpec;
-
 impl Spec<Fr, 3, 2> for FrSpec {
     fn full_rounds() -> usize {
         FULL_ROUNDS
     }
-
     fn partial_rounds() -> usize {
         PARTIAL_ROUNDS
     }
-
     fn sbox(val: Fr) -> Fr {
         crate::poseidon::sbox(val)
     }
-
     fn secure_mds() -> usize {
         0
     }
 }
-
 impl Spec<Fr, 6, 5> for FrSpec {
     fn full_rounds() -> usize {
         FULL_ROUNDS
     }
-
     fn partial_rounds() -> usize {
         PARTIAL_ROUNDS
     }
-
     fn sbox(val: Fr) -> Fr {
         crate::poseidon::sbox(val)
     }
-
     fn secure_mds() -> usize {
         0
     }
 }
-
 #[inline(always)]
 fn sbox(x: Fr) -> Fr {
     let x2 = x.square();
     let x4 = x2.square();
     x4 * x
 }
-
 #[inline(always)]
 fn apply_mds3(state: &mut [Fr; 3], mds: &[[Fr; 3]; 3]) {
     let s0 = state[0];
@@ -89,7 +75,6 @@ fn apply_mds3(state: &mut [Fr; 3], mds: &[[Fr; 3]; 3]) {
         m20 * s0 + m21 * s1 + m22 * s2,
     ];
 }
-
 #[inline(always)]
 fn full_round3(state: &mut [Fr; 3], rc: &[Fr; 3], mds: &[[Fr; 3]; 3]) {
     state[0] = sbox(state[0] + rc[0]);
@@ -97,7 +82,6 @@ fn full_round3(state: &mut [Fr; 3], rc: &[Fr; 3], mds: &[[Fr; 3]; 3]) {
     state[2] = sbox(state[2] + rc[2]);
     apply_mds3(state, mds);
 }
-
 #[inline(always)]
 fn partial_round3(state: &mut [Fr; 3], rc: &[Fr; 3], mds: &[[Fr; 3]; 3]) {
     state[0] += rc[0];
@@ -106,7 +90,6 @@ fn partial_round3(state: &mut [Fr; 3], rc: &[Fr; 3], mds: &[[Fr; 3]; 3]) {
     state[0] = sbox(state[0]);
     apply_mds3(state, mds);
 }
-
 #[inline(always)]
 fn fr_from_le_bytes(bytes: &[u8]) -> Fr {
     debug_assert!(bytes.len() >= 8);
@@ -114,7 +97,6 @@ fn fr_from_le_bytes(bytes: &[u8]) -> Fr {
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ]))
 }
-
 #[inline(always)]
 fn partial_u64_from_le_bytes(bytes: &[u8; 8], len: usize) -> u64 {
     debug_assert!(len <= bytes.len());
@@ -125,7 +107,6 @@ fn partial_u64_from_le_bytes(bytes: &[u8; 8], len: usize) -> u64 {
         _ => word & ((1u64 << (len * 8)) - 1),
     }
 }
-
 #[inline(always)]
 fn partial_u64_from_le_slice(bytes: &[u8]) -> u64 {
     debug_assert!(bytes.len() < 8);
@@ -151,7 +132,6 @@ fn partial_u64_from_le_slice(bytes: &[u8]) -> u64 {
         _ => unreachable!("partial byte word must be shorter than a u64"),
     }
 }
-
 #[inline(always)]
 fn apply_mds6(state: &mut [Fr; 6], mds: &[[Fr; 6]; 6]) {
     let s0 = state[0];
@@ -199,7 +179,6 @@ fn apply_mds6(state: &mut [Fr; 6], mds: &[[Fr; 6]; 6]) {
             + mds[5][5] * s5,
     ];
 }
-
 fn poseidon3_params() -> &'static PoseidonConstants<3> {
     static CONSTS: OnceCell<PoseidonConstants<3>> = OnceCell::new();
     CONSTS.get_or_init(|| {
@@ -207,7 +186,6 @@ fn poseidon3_params() -> &'static PoseidonConstants<3> {
         (round_constants_array(rc), m)
     })
 }
-
 fn poseidon6_params() -> &'static PoseidonConstants<6> {
     static CONSTS: OnceCell<PoseidonConstants<6>> = OnceCell::new();
     CONSTS.get_or_init(|| {
@@ -215,41 +193,33 @@ fn poseidon6_params() -> &'static PoseidonConstants<6> {
         (round_constants_array(rc), m)
     })
 }
-
 fn round_constants_array<const W: usize>(rc: Vec<[Fr; W]>) -> [[Fr; W]; ROUND_COUNT] {
     rc.try_into()
         .unwrap_or_else(|rc: Vec<[Fr; W]>| panic!("unexpected Poseidon round count: {}", rc.len()))
 }
-
 #[inline(always)]
 fn poseidon3_permute(state: &mut [Fr; 3]) {
     let (round_constants, mds) = poseidon3_params();
-
     for rc in &round_constants[..FULL_ROUNDS_HALF] {
         full_round3(state, rc, mds);
     }
-
     let partial_end = FULL_ROUNDS_HALF + PARTIAL_ROUNDS;
     for rc in &round_constants[FULL_ROUNDS_HALF..partial_end] {
         partial_round3(state, rc, mds);
     }
-
     for rc in &round_constants[partial_end..partial_end + FULL_ROUNDS_HALF] {
         full_round3(state, rc, mds);
     }
 }
-
 #[inline(always)]
 fn poseidon2_field(a: u64, b: u64) -> Fr {
     let mut state = [Fr::from(a), Fr::from(b), Fr::ZERO];
     poseidon3_permute(&mut state);
     state[0]
 }
-
 #[inline(always)]
 fn poseidon6_field(inputs: [u64; 6]) -> Fr {
     let (round_constants, mds) = poseidon6_params();
-
     let mut state = [
         Fr::from(inputs[0]),
         Fr::from(inputs[1]),
@@ -258,17 +228,14 @@ fn poseidon6_field(inputs: [u64; 6]) -> Fr {
         Fr::from(inputs[4]),
         Fr::from(inputs[5]),
     ];
-
     let rf_half = <FrSpec as Spec<Fr, 6, 5>>::full_rounds() / 2;
     let rp = <FrSpec as Spec<Fr, 6, 5>>::partial_rounds();
-
     for rc in round_constants.iter().take(rf_half) {
         for (i, s) in state.iter_mut().enumerate() {
             *s = sbox(*s + rc[i]);
         }
         apply_mds6(&mut state, mds);
     }
-
     for rc in round_constants.iter().skip(rf_half).take(rp) {
         for (i, s) in state.iter_mut().enumerate() {
             *s += rc[i];
@@ -276,7 +243,6 @@ fn poseidon6_field(inputs: [u64; 6]) -> Fr {
         state[0] = sbox(state[0]);
         apply_mds6(&mut state, mds);
     }
-
     let tail_start = rf_half + rp;
     for rc in round_constants.iter().skip(tail_start).take(rf_half) {
         for (i, s) in state.iter_mut().enumerate() {
@@ -284,10 +250,8 @@ fn poseidon6_field(inputs: [u64; 6]) -> Fr {
         }
         apply_mds6(&mut state, mds);
     }
-
     state[0]
 }
-
 fn params_to_bytes<const W: usize>(params: &PoseidonConstants<W>) -> Poseidon2Params<W> {
     let (round_constants, mds) = params;
     let round_constants = round_constants
@@ -300,19 +264,16 @@ fn params_to_bytes<const W: usize>(params: &PoseidonConstants<W>) -> Poseidon2Pa
         mds,
     }
 }
-
 /// Export Poseidon2 parameters for width 3 as byte arrays.
 #[must_use]
 pub fn poseidon2_params_width3() -> Poseidon2Params<3> {
     params_to_bytes(poseidon3_params())
 }
-
 /// Export Poseidon2 parameters for width 6 as byte arrays.
 #[must_use]
 pub fn poseidon2_params_width6() -> Poseidon2Params<6> {
     params_to_bytes(poseidon6_params())
 }
-
 #[cfg(test)]
 fn pack_bytes_to_fr(bytes: &[u8]) -> Vec<Fr> {
     if bytes.is_empty() {
@@ -327,7 +288,6 @@ fn pack_bytes_to_fr(bytes: &[u8]) -> Vec<Fr> {
         })
         .collect()
 }
-
 fn hash_words_internal(words: &[Fr]) -> Fr {
     let mut state = [Fr::ZERO; 3];
     let mut index = 0;
@@ -346,7 +306,6 @@ fn hash_words_internal(words: &[Fr]) -> Fr {
     poseidon3_permute(&mut state);
     state[0]
 }
-
 fn hash_u64_words_internal(words: &[u64]) -> Fr {
     let mut state = [Fr::ZERO; 3];
     let mut pairs = words.chunks_exact(2);
@@ -366,7 +325,6 @@ fn hash_u64_words_internal(words: &[u64]) -> Fr {
     poseidon3_permute(&mut state);
     state[0]
 }
-
 /// Streaming byte hasher matching [`hash_bytes`] without materializing field words.
 #[derive(Debug, Clone)]
 pub struct PoseidonByteHasher {
@@ -375,13 +333,11 @@ pub struct PoseidonByteHasher {
     pending_bytes: [u8; 8],
     pending_len: usize,
 }
-
 impl Default for PoseidonByteHasher {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl PoseidonByteHasher {
     /// Create an empty streaming byte hasher.
     #[must_use]
@@ -393,7 +349,6 @@ impl PoseidonByteHasher {
             pending_len: 0,
         }
     }
-
     #[inline(always)]
     fn absorb_word(&mut self, word: Fr) {
         self.state[self.rate_len] += word;
@@ -403,7 +358,6 @@ impl PoseidonByteHasher {
             self.rate_len = 0;
         }
     }
-
     #[inline(always)]
     fn absorb_word_pair(&mut self, first: Fr, second: Fr) {
         debug_assert_eq!(self.rate_len, 0);
@@ -411,7 +365,6 @@ impl PoseidonByteHasher {
         self.state[1] += second;
         poseidon3_permute(&mut self.state);
     }
-
     /// Add one already-packed little-endian `u64` byte word to the Poseidon sponge.
     #[inline(always)]
     pub fn update_u64_le_word(&mut self, word: u64) {
@@ -421,7 +374,6 @@ impl PoseidonByteHasher {
             self.update(&word.to_le_bytes());
         }
     }
-
     /// Add bytes to the Poseidon sponge.
     #[inline(always)]
     pub fn update(&mut self, mut bytes: &[u8]) {
@@ -437,12 +389,10 @@ impl PoseidonByteHasher {
                 self.pending_len = 0;
             }
         }
-
         if self.rate_len == 1 && bytes.len() >= 8 {
             self.absorb_word(fr_from_le_bytes(&bytes[..8]));
             bytes = &bytes[8..];
         }
-
         while bytes.len() >= 16 {
             self.absorb_word_pair(
                 fr_from_le_bytes(&bytes[..8]),
@@ -450,18 +400,15 @@ impl PoseidonByteHasher {
             );
             bytes = &bytes[16..];
         }
-
         if bytes.len() >= 8 {
             self.absorb_word(fr_from_le_bytes(&bytes[..8]));
             bytes = &bytes[8..];
         }
-
         if !bytes.is_empty() {
             self.pending_bytes[..bytes.len()].copy_from_slice(bytes);
             self.pending_len = bytes.len();
         }
     }
-
     /// Finish hashing and return canonical BN254 field bytes.
     #[must_use]
     #[inline(always)]
@@ -486,49 +433,41 @@ impl PoseidonByteHasher {
         field_to_bytes(self.state[0])
     }
 }
-
 impl Write for PoseidonByteHasher {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.update(buf);
         Ok(buf.len())
     }
-
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
-
 /// Hash an arbitrary list of BN254 field elements using Poseidon2 (rate 2).
 #[must_use]
 pub fn hash_words(words: &[Fr]) -> Fr {
     hash_words_internal(words)
 }
-
 /// Hash an arbitrary list of BN254 field elements and return canonical bytes.
 #[must_use]
 pub fn hash_words_bytes(words: &[Fr]) -> [u8; 32] {
     field_to_bytes(hash_words_internal(words))
 }
-
 /// Hash already packed little-endian `u64` byte words using the Poseidon2 sponge.
 #[must_use]
 pub fn hash_u64_words_bytes(words: &[u64]) -> [u8; 32] {
     field_to_bytes(hash_u64_words_internal(words))
 }
-
 /// Hash an arbitrary byte slice using the Poseidon2 sponge.
 #[must_use]
 pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
     let mut state = [Fr::ZERO; 3];
     let mut bytes = bytes;
-
     while bytes.len() >= 16 {
         state[0] += fr_from_le_bytes(&bytes[..8]);
         state[1] += fr_from_le_bytes(&bytes[8..16]);
         poseidon3_permute(&mut state);
         bytes = &bytes[16..];
     }
-
     let mut rate_len = if bytes.len() >= 8 {
         state[0] += fr_from_le_bytes(&bytes[..8]);
         bytes = &bytes[8..];
@@ -536,7 +475,6 @@ pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
     } else {
         0
     };
-
     if !bytes.is_empty() {
         debug_assert!(bytes.len() < 8);
         state[rate_len] += Fr::from(partial_u64_from_le_slice(bytes));
@@ -546,21 +484,17 @@ pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
             rate_len = 0;
         }
     }
-
     match rate_len {
         0 => state[0] += Fr::ONE,
         1 => state[1] += Fr::ONE,
         _ => unreachable!("Poseidon byte hash rate length cannot exceed the rate"),
     }
-
     poseidon3_permute(&mut state);
     field_to_bytes(state[0])
 }
-
 fn field_to_bytes(f: Fr) -> [u8; 32] {
     f.to_repr().into()
 }
-
 fn field_to_u64(f: Fr) -> u64 {
     let repr = f.to_repr();
     let bytes = repr.as_ref();
@@ -568,35 +502,29 @@ fn field_to_u64(f: Fr) -> u64 {
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ])
 }
-
 /// Hash two 64-bit limbs with Poseidon2 and return the resulting field element as bytes.
 #[must_use]
 pub fn hash2_bytes(a: u64, b: u64) -> [u8; 32] {
     field_to_bytes(poseidon2_field(a, b))
 }
-
 /// Hash six 64-bit limbs with Poseidon2 (width 6) and return the resulting bytes.
 #[must_use]
 pub fn hash6_bytes(inputs: [u64; 6]) -> [u8; 32] {
     field_to_bytes(poseidon6_field(inputs))
 }
-
 /// Hash two 64-bit limbs with Poseidon2 and return the low 64 bits.
 #[must_use]
 pub fn hash2_u64(a: u64, b: u64) -> u64 {
     field_to_u64(poseidon2_field(a, b))
 }
-
 /// Hash six 64-bit limbs with Poseidon2 (width 6) and return the low 64 bits.
 #[must_use]
 pub fn hash6_u64(inputs: [u64; 6]) -> u64 {
     field_to_u64(poseidon6_field(inputs))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn poseidon2_samples_are_consistent() {
         let cases = [
@@ -605,17 +533,14 @@ mod tests {
             (u64::MAX, 123_456_789),
             (0xDEAD_BEEF_DEAD_BEEF, 0x0123_4567_89AB_CDEF),
         ];
-
         for (a, b) in cases {
             let bytes_first = hash2_bytes(a, b);
             let bytes_second = hash2_bytes(a, b);
             assert_eq!(bytes_first, bytes_second, "Poseidon2 must be deterministic");
-
             let low = hash2_u64(a, b);
             assert_eq!(bytes_first[..8], low.to_le_bytes());
         }
     }
-
     #[test]
     fn poseidon6_samples_are_consistent() {
         let inputs = [1u64, 2, 3, 4, 5, 6];
@@ -624,7 +549,6 @@ mod tests {
         assert_eq!(bytes_first, bytes_second, "Poseidon6 must be deterministic");
         assert_eq!(bytes_first[..8], hash6_u64(inputs).to_le_bytes());
     }
-
     #[test]
     fn partial_u64_from_le_slice_matches_zero_padded_words() {
         let input = [0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76];
@@ -638,7 +562,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn hash_bytes_known_vectors() {
         let cases: &[(&[u8], [u8; 32])] = &[
@@ -664,13 +587,11 @@ mod tests {
                 ],
             ),
         ];
-
         for (input, expected) in cases {
             let digest = hash_bytes(input);
             assert_eq!(digest, *expected, "unexpected digest for input {input:?}");
         }
     }
-
     #[test]
     fn hash_bytes_streaming_matches_word_path() {
         for len in [
@@ -696,26 +617,22 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn poseidon_byte_hasher_split_updates_match_one_shot() {
         let input = (0..97).map(|idx| (idx * 17 + 3) as u8).collect::<Vec<_>>();
         let one_shot = hash_bytes(&input);
-
         for split in [0usize, 1, 2, 7, 8, 9, 16, 33, input.len()] {
             let mut hasher = PoseidonByteHasher::new();
             hasher.update(&input[..split]);
             hasher.update(&input[split..]);
             assert_eq!(hasher.finalize(), one_shot, "split {split}");
         }
-
         let mut bytewise = PoseidonByteHasher::new();
         for byte in &input {
             bytewise.update(core::slice::from_ref(byte));
         }
         assert_eq!(bytewise.finalize(), one_shot, "bytewise updates");
     }
-
     #[test]
     fn poseidon_byte_hasher_packed_word_after_partial_update_matches_one_shot() {
         let prefix = [0x10, 0x20, 0x30];
@@ -725,15 +642,12 @@ mod tests {
         input.extend_from_slice(&prefix);
         input.extend_from_slice(&word.to_le_bytes());
         input.extend_from_slice(&suffix);
-
         let mut hasher = PoseidonByteHasher::new();
         hasher.update(&prefix);
         hasher.update_u64_le_word(word);
         hasher.update(&suffix);
-
         assert_eq!(hasher.finalize(), hash_bytes(&input));
     }
-
     #[test]
     fn poseidon_params_exports_match_widths() {
         let params3 = poseidon2_params_width3();
@@ -744,7 +658,6 @@ mod tests {
         );
         assert_eq!(params3.mds.len(), 3);
         assert_eq!(params3.mds[0].len(), 3);
-
         let params6 = poseidon2_params_width6();
         assert_eq!(
             params6.round_constants.len(),

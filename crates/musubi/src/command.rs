@@ -1,10 +1,9 @@
-//! Cargo-style Musubi V1 command parsing and signer-free local workflows.
+//! Cargo-style Musubi V1 command parsing and exact-network authenticated workflows.
 //!
-//! This module owns the public command grammar and returns logical output. Local
-//! and read-only commands never construct a signer; network mutations load one
-//! only at their explicit registry boundary. Resolution, authenticated fetch,
+//! This module owns the public command grammar and returns logical output. Purely local commands
+//! never construct a signer; network reads and mutations load one only at their explicit registry
+//! boundary. Resolution, authenticated fetch,
 //! compiler, test, cache, and publication work stays in dedicated V1 modules.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
@@ -14,7 +13,6 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
 };
-
 use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use iroha_data_model::{
     isi::musubi::{
@@ -36,7 +34,6 @@ use iroha_data_model::{
     name::Name,
 };
 use norito::json::{Map, Value};
-
 use crate::{
     archive_fetch::{
         ArchiveFetchErrorV1, ArchiveFetchFailureClassV1, ArchiveTransportErrorV1,
@@ -85,22 +82,18 @@ use crate::{
         WorkspaceMember, discover_manifest, load_workspace,
     },
 };
-
 const LOCK_FILE_NAME: &str = "Musubi.lock";
-
 /// Parsed presentation mode and logical command result.
 pub struct Invocation {
     pub format: OutputFormat,
     pub output: CommandOutput,
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 enum OutputArg {
     #[default]
     Human,
     Json,
 }
-
 impl From<OutputArg> for OutputFormat {
     fn from(value: OutputArg) -> Self {
         match value {
@@ -109,7 +102,6 @@ impl From<OutputArg> for OutputFormat {
         }
     }
 }
-
 #[derive(Parser, Debug)]
 #[command(
     name = "musubi",
@@ -127,7 +119,6 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 }
-
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Create a new package directory.
@@ -173,7 +164,6 @@ enum Command {
     /// Verify, repair, or prune the immutable source cache.
     Cache(CacheArgs),
 }
-
 impl Command {
     const fn name(&self) -> &'static str {
         match self {
@@ -201,7 +191,6 @@ impl Command {
         }
     }
 }
-
 #[derive(Args, Clone, Debug)]
 struct PackageTemplateArgs {
     /// Canonical public namespace.
@@ -241,7 +230,6 @@ struct PackageTemplateArgs {
     #[arg(long = "include", value_name = "PATH")]
     includes: Vec<PortablePath>,
 }
-
 #[derive(Args, Debug)]
 struct NewArgs {
     /// New package directory. Its parent must already exist.
@@ -250,7 +238,6 @@ struct NewArgs {
     #[command(flatten)]
     package: PackageTemplateArgs,
 }
-
 #[derive(Args, Debug)]
 struct InitArgs {
     /// Existing directory to initialize.
@@ -262,7 +249,6 @@ struct InitArgs {
     #[arg(long)]
     force: bool,
 }
-
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Args, Debug)]
 struct AddArgs {
@@ -291,7 +277,6 @@ struct AddArgs {
     #[arg(long)]
     replace: bool,
 }
-
 #[derive(Args, Debug)]
 struct RemoveArgs {
     /// Parent-local dependency alias.
@@ -303,7 +288,6 @@ struct RemoveArgs {
     #[arg(long = "workspace-dependency", conflicts_with = "dev")]
     workspace_dependency: bool,
 }
-
 #[derive(Args, Clone, Debug, Default)]
 struct SelectionArgs {
     /// Select every active workspace member.
@@ -316,7 +300,6 @@ struct SelectionArgs {
     #[arg(long, value_name = "PACKAGE", requires = "workspace")]
     exclude: Vec<MusubiPackageSelectorV1>,
 }
-
 #[derive(Args, Clone, Copy, Debug, Default)]
 struct GraphModeArgs {
     /// Fail instead of changing `Musubi.lock`.
@@ -329,23 +312,19 @@ struct GraphModeArgs {
     #[arg(long)]
     frozen: bool,
 }
-
 impl GraphModeArgs {
     const fn effective_locked(self) -> bool {
         self.locked || self.frozen
     }
-
     const fn effective_offline(self) -> bool {
         self.offline || self.frozen
     }
 }
-
 #[derive(Args, Debug)]
 struct MetadataArgs {
     #[command(flatten)]
     selection: SelectionArgs,
 }
-
 #[derive(Args, Debug)]
 struct TreeArgs {
     #[command(flatten)]
@@ -354,7 +333,6 @@ struct TreeArgs {
     #[arg(long)]
     no_dev: bool,
 }
-
 #[derive(Args, Debug)]
 struct FetchArgs {
     #[command(flatten)]
@@ -364,7 +342,6 @@ struct FetchArgs {
     #[command(flatten)]
     registry: RegistryReadArgs,
 }
-
 #[derive(Args, Debug)]
 struct BuildArgs {
     #[command(flatten)]
@@ -377,7 +354,6 @@ struct BuildArgs {
     #[arg(long)]
     release: bool,
 }
-
 #[derive(Args, Debug)]
 struct PackageArgs {
     #[command(flatten)]
@@ -390,21 +366,18 @@ struct PackageArgs {
     #[arg(long)]
     list: bool,
 }
-
 #[derive(Args, Clone, Debug, Default)]
 struct RegistryReadArgs {
-    /// Explicit platform Iroha client configuration path for signer-free registry reads.
+    /// Explicit platform Iroha client configuration path for authenticated registry reads.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 }
-
 #[derive(Args, Clone, Debug, Default)]
 struct NetworkArgs {
     /// Explicit platform Iroha client configuration path.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 }
-
 #[derive(Args, Debug)]
 struct PublishArgs {
     #[command(flatten)]
@@ -431,7 +404,6 @@ struct PublishArgs {
     )]
     recover: Option<PublicationOperationIdV1>,
 }
-
 #[derive(Args, Debug)]
 struct SearchArgs {
     /// Search text for the finalized event projection.
@@ -442,7 +414,6 @@ struct SearchArgs {
     #[command(flatten)]
     network: NetworkArgs,
 }
-
 #[derive(Args, Debug)]
 struct PackageQueryArgs {
     /// Canonical namespaced package.
@@ -450,7 +421,6 @@ struct PackageQueryArgs {
     #[command(flatten)]
     network: NetworkArgs,
 }
-
 #[derive(Args, Debug)]
 struct ReleaseMutationArgs {
     /// Canonical namespaced package.
@@ -466,19 +436,16 @@ struct ReleaseMutationArgs {
     #[command(flatten)]
     network: NetworkArgs,
 }
-
 #[derive(Args, Debug)]
 struct OwnerArgs {
     #[command(subcommand)]
     command: OwnerCommand,
 }
-
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum RoleArg {
     Owner,
     Maintainer,
 }
-
 #[allow(
     clippy::struct_excessive_bools,
     reason = "the four independent permission switches are the stable CLI shape"
@@ -498,7 +465,6 @@ struct MaintainerPermissionArgs {
     #[arg(long)]
     archive_locations: bool,
 }
-
 #[derive(Subcommand, Debug)]
 enum OwnerCommand {
     /// Invite an account to a package role.
@@ -568,13 +534,11 @@ enum OwnerCommand {
         network: NetworkArgs,
     },
 }
-
 #[derive(Args, Debug)]
 struct AliasArgs {
     #[command(subcommand)]
     command: AliasCommand,
 }
-
 #[derive(Subcommand, Debug)]
 enum AliasCommand {
     /// Buy and permanently register a global alias.
@@ -605,7 +569,6 @@ enum AliasCommand {
         network: NetworkArgs,
     },
 }
-
 #[derive(Args, Debug)]
 struct UpdateArgs {
     /// Unlock only this package, optionally at one currently locked version.
@@ -619,16 +582,13 @@ struct UpdateArgs {
     #[command(flatten)]
     registry: RegistryReadArgs,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct UpdateTarget {
     package: MusubiPackageSelectorV1,
     locked_version: Option<MusubiVersionV1>,
 }
-
 impl FromStr for UpdateTarget {
     type Err = String;
-
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         let (package, locked_version) = match raw.rsplit_once('@') {
             Some((package, version)) => {
@@ -650,13 +610,11 @@ impl FromStr for UpdateTarget {
         })
     }
 }
-
 #[derive(Args, Debug)]
 struct CacheArgs {
     #[command(subcommand)]
     command: CacheCommand,
 }
-
 #[derive(Subcommand, Debug)]
 enum CacheCommand {
     /// Verify immutable archive commitments and extracted trees.
@@ -683,14 +641,11 @@ enum CacheCommand {
         registry: RegistryReadArgs,
     },
 }
-
 struct Success {
     message: String,
     data: Value,
 }
-
 type CommandResult = Result<Success, Diagnostic>;
-
 /// Parse and execute an argv sequence without writing process streams.
 pub fn invoke<I, T>(args: I) -> Invocation
 where
@@ -731,7 +686,6 @@ where
         },
     }
 }
-
 fn detect_output_format(argv: &[OsString]) -> OutputFormat {
     for (index, argument) in argv.iter().enumerate() {
         let argument = argument.to_string_lossy();
@@ -743,7 +697,6 @@ fn detect_output_format(argv: &[OsString]) -> OutputFormat {
     }
     OutputFormat::Human
 }
-
 fn dispatch(manifest_path: Option<&Path>, command: &Command) -> CommandResult {
     match command {
         Command::New(args) => run_new(args),
@@ -769,7 +722,6 @@ fn dispatch(manifest_path: Option<&Path>, command: &Command) -> CommandResult {
         Command::Cache(args) => run_cache(manifest_path, args),
     }
 }
-
 fn run_new(args: &NewArgs) -> CommandResult {
     match fs::symlink_metadata(&args.path) {
         Ok(_) => {
@@ -806,7 +758,6 @@ fn run_new(args: &NewArgs) -> CommandResult {
         ]),
     })
 }
-
 fn run_init(args: &InitArgs) -> CommandResult {
     let metadata = fs::symlink_metadata(&args.path)
         .map_err(|error| io_diagnostic("inspect package directory", &args.path, &error))?;
@@ -840,7 +791,6 @@ fn run_init(args: &InitArgs) -> CommandResult {
         ]),
     })
 }
-
 fn package_name_for_root(
     root: &Path,
     explicit: Option<&MusubiPackageNameV1>,
@@ -865,7 +815,6 @@ fn package_name_for_root(
             .with_help("pass `--name LOWERCASE-KEBAB` explicitly")
     })
 }
-
 fn render_package_manifest(
     package: &PackageTemplateArgs,
     name: &MusubiPackageNameV1,
@@ -915,14 +864,12 @@ fn render_package_manifest(
         .map_err(|error| manifest_diagnostic(Path::new(MANIFEST_FILE_NAME), &error))?;
     Ok(output)
 }
-
 fn push_toml_string(output: &mut String, key: &str, value: &str) {
     output.push_str(key);
     output.push_str(" = ");
     output.push_str(&toml_quote(value));
     output.push('\n');
 }
-
 fn push_toml_array<I, S>(output: &mut String, key: &str, values: I)
 where
     I: IntoIterator<Item = S>,
@@ -940,7 +887,6 @@ where
     output.push_str(&values.join(", "));
     output.push_str("]\n");
 }
-
 fn toml_quote(value: &str) -> String {
     let mut quoted = String::with_capacity(value.len() + 2);
     quoted.push('"');
@@ -957,7 +903,6 @@ fn toml_quote(value: &str) -> String {
     quoted.push('"');
     quoted
 }
-
 fn initialize_package_files(
     root: &Path,
     source_dir: &PortablePath,
@@ -1000,7 +945,6 @@ fn initialize_package_files(
         .replace(Path::new(MANIFEST_FILE_NAME), manifest.as_bytes())
         .map_err(atomic_diagnostic)
 }
-
 fn run_add(explicit_manifest: Option<&Path>, args: &AddArgs) -> CommandResult {
     let initial_manifest = project_manifest_path(explicit_manifest)?;
     let section = if args.dev {
@@ -1064,7 +1008,6 @@ fn run_add(explicit_manifest: Option<&Path>, args: &AddArgs) -> CommandResult {
         ]),
     })
 }
-
 fn dependency_from_add(args: &AddArgs) -> Result<(Name, DependencySpec), Diagnostic> {
     if args.workspace {
         if args.version.is_some() || args.path.is_some() || args.rename.is_some() {
@@ -1138,21 +1081,18 @@ fn dependency_from_add(args: &AddArgs) -> Result<(Name, DependencySpec), Diagnos
     let alias = args.rename.clone().unwrap_or(default_alias);
     Ok((alias, DependencySpec::Concrete(dependency)))
 }
-
 fn dependency_alias_from_package(package: &MusubiPackageSelectorV1) -> Result<Name, Diagnostic> {
     package.name.as_str().parse::<Name>().map_err(|error| {
         Diagnostic::new(ErrorCode::Internal, error.to_string())
             .with_context("package", package.to_string())
     })
 }
-
 fn workspace_dependency_exists(manifest: &Manifest, alias: &Name) -> bool {
     manifest
         .workspace
         .as_ref()
         .is_some_and(|workspace| workspace.dependencies.contains_key(alias.as_ref()))
 }
-
 fn validate_workspace_inheritance(manifest_path: &Path, alias: &Name) -> Result<(), Diagnostic> {
     let workspace = load_workspace(manifest_path).map_err(workspace_diagnostic)?;
     let declaration = workspace
@@ -1174,7 +1114,6 @@ fn validate_workspace_inheritance(manifest_path: &Path, alias: &Name) -> Result<
     }
     Ok(())
 }
-
 fn validate_added_path_dependency(
     manifest_path: &Path,
     section: DependencySection,
@@ -1246,7 +1185,6 @@ fn validate_added_path_dependency(
     }
     Ok(())
 }
-
 fn run_remove(explicit_manifest: Option<&Path>, args: &RemoveArgs) -> CommandResult {
     let initial_manifest = project_manifest_path(explicit_manifest)?;
     let section = if args.dev {
@@ -1276,7 +1214,6 @@ fn run_remove(explicit_manifest: Option<&Path>, args: &RemoveArgs) -> CommandRes
         ]),
     })
 }
-
 fn run_metadata(explicit_manifest: Option<&Path>, args: &MetadataArgs) -> CommandResult {
     let manifest_path = project_manifest_path(explicit_manifest)?;
     let workspace = load_workspace(&manifest_path).map_err(workspace_diagnostic)?;
@@ -1330,7 +1267,6 @@ fn run_metadata(explicit_manifest: Option<&Path>, args: &MetadataArgs) -> Comman
         ]),
     })
 }
-
 fn run_tree(explicit_manifest: Option<&Path>, args: &TreeArgs) -> CommandResult {
     let manifest_path = project_manifest_path(explicit_manifest)?;
     let workspace = load_workspace(&manifest_path).map_err(workspace_diagnostic)?;
@@ -1370,7 +1306,6 @@ fn run_tree(explicit_manifest: Option<&Path>, args: &TreeArgs) -> CommandResult 
         ]),
     })
 }
-
 fn render_locked_roots(
     lock: &LockfileV1,
     selected: &[&WorkspaceMember],
@@ -1398,7 +1333,6 @@ fn render_locked_roots(
         );
     }
 }
-
 fn render_locked_edges(
     lock: &LockfileV1,
     edges: &[MusubiExactDependencyEdgeV1],
@@ -1441,7 +1375,6 @@ fn render_locked_edges(
         visiting.remove(&edge.selected);
     }
 }
-
 fn render_tree_dependencies(
     workspace: &Workspace,
     member: &WorkspaceMember,
@@ -1483,7 +1416,6 @@ fn render_tree_dependencies(
         }
     }
 }
-
 fn select_members<'a>(
     workspace: &'a Workspace,
     selection: &SelectionArgs,
@@ -1492,7 +1424,6 @@ fn select_members<'a>(
         .select_members(selection.workspace, &selection.packages, &selection.exclude)
         .map_err(workspace_diagnostic)
 }
-
 fn member_json(member: &WorkspaceMember, workspace: &Workspace) -> Value {
     let dependencies = member
         .dependencies
@@ -1516,14 +1447,12 @@ fn member_json(member: &WorkspaceMember, workspace: &Workspace) -> Value {
         ("dependencies", Value::Array(dependencies)),
     ])
 }
-
 const fn dependency_kind_text(kind: DependencyKind) -> &'static str {
     match kind {
         DependencyKind::Normal => "normal",
         DependencyKind::Development => "development",
     }
 }
-
 fn dependency_text(dependency: &EffectiveDependency, workspace: &Workspace) -> String {
     match &dependency.dependency {
         ConcreteDependency::Registry {
@@ -1562,7 +1491,6 @@ fn dependency_text(dependency: &EffectiveDependency, workspace: &Workspace) -> S
         }
     }
 }
-
 fn project_manifest_path(explicit: Option<&Path>) -> Result<PathBuf, Diagnostic> {
     if let Some(path) = explicit {
         let candidate = if path.is_dir() {
@@ -1584,7 +1512,6 @@ fn project_manifest_path(explicit: Option<&Path>) -> Result<PathBuf, Diagnostic>
         discover_manifest(&current).map_err(workspace_diagnostic)
     }
 }
-
 fn read_manifest_source(path: &Path) -> Result<String, Diagnostic> {
     let bytes = read_bounded_single_link_regular_file_v1(path, MAX_MANIFEST_BYTES)
         .map_err(|error| io_diagnostic("read bounded manifest", path, &error))?;
@@ -1596,7 +1523,6 @@ fn read_manifest_source(path: &Path) -> Result<String, Diagnostic> {
         )
     })
 }
-
 fn atomic_replace_manifest(path: &Path, contents: &[u8]) -> Result<(), Diagnostic> {
     let root = path.parent().ok_or_else(|| {
         Diagnostic::new(ErrorCode::Io, "manifest path has no parent")
@@ -1607,13 +1533,11 @@ fn atomic_replace_manifest(path: &Path, contents: &[u8]) -> Result<(), Diagnosti
         .replace(Path::new(MANIFEST_FILE_NAME), contents)
         .map_err(atomic_diagnostic)
 }
-
 fn manifest_diagnostic(path: &Path, error: &crate::manifest::ManifestError) -> Diagnostic {
     Diagnostic::new(ErrorCode::ManifestInvalid, error.to_string())
         .with_context("path", path.display().to_string())
         .with_context("field", error.location())
 }
-
 #[allow(clippy::needless_pass_by_value)]
 fn workspace_diagnostic(error: crate::workspace::WorkspaceError) -> Diagnostic {
     let mut diagnostic = Diagnostic::new(ErrorCode::WorkspaceInvalid, error.message());
@@ -1622,18 +1546,15 @@ fn workspace_diagnostic(error: crate::workspace::WorkspaceError) -> Diagnostic {
     }
     diagnostic
 }
-
 #[allow(clippy::needless_pass_by_value)]
 fn atomic_diagnostic(error: crate::atomic_io::AtomicWriteError) -> Diagnostic {
     Diagnostic::new(ErrorCode::Io, error.to_string())
         .with_context("path", error.path().display().to_string())
 }
-
 fn io_diagnostic(operation: &str, path: &Path, error: &io::Error) -> Diagnostic {
     Diagnostic::new(ErrorCode::Io, format!("failed to {operation}: {error}"))
         .with_context("path", path.display().to_string())
 }
-
 fn read_optional_workspace_lock(workspace: &Workspace) -> Result<Option<LockfileV1>, Diagnostic> {
     let path = workspace.root().join(LOCK_FILE_NAME);
     let metadata = match fs::symlink_metadata(&path) {
@@ -1652,7 +1573,6 @@ fn read_optional_workspace_lock(workspace: &Workspace) -> Result<Option<Lockfile
         .map(Some)
         .map_err(|error| lockfile_diagnostic(&path, &error))
 }
-
 fn lockfile_diagnostic(path: &Path, error: &LockfileError) -> Diagnostic {
     let code = if matches!(error, LockfileError::Legacy) {
         ErrorCode::LockfileLegacy
@@ -1668,7 +1588,6 @@ fn lockfile_diagnostic(path: &Path, error: &LockfileError) -> Diagnostic {
         .with_context("path", path.display().to_string())
         .with_help(help)
 }
-
 fn lockfile_json(lock: &LockfileV1) -> Value {
     object([
         ("schema", Value::from(lock.schema.clone())),
@@ -1739,7 +1658,6 @@ fn lockfile_json(lock: &LockfileV1) -> Value {
         ),
     ])
 }
-
 fn lock_edge_json(edge: &MusubiExactDependencyEdgeV1) -> Value {
     object([
         ("alias", Value::from(edge.alias.to_string())),
@@ -1755,7 +1673,6 @@ fn lock_edge_json(edge: &MusubiExactDependencyEdgeV1) -> Value {
         ("selected", Value::from(edge.selected.to_string())),
     ])
 }
-
 fn object<const N: usize>(entries: [(&str, Value); N]) -> Value {
     Value::Object(
         entries
@@ -1764,7 +1681,6 @@ fn object<const N: usize>(entries: [(&str, Value); N]) -> Value {
             .collect::<Map>(),
     )
 }
-
 fn load_selected_workspace(
     explicit_manifest: Option<&Path>,
     selection: &SelectionArgs,
@@ -1778,7 +1694,6 @@ fn load_selected_workspace(
         .collect();
     Ok((workspace, selected_packages))
 }
-
 struct ResolvedWorkspaceGraphV1 {
     lock: LockfileV1,
     registry: Option<RegistryReadClientV1>,
@@ -1788,12 +1703,10 @@ struct ResolvedWorkspaceGraphV1 {
     platform_config_provenance: Option<PlatformConfigProvenanceV1>,
     account_chain_discriminant: u16,
 }
-
 impl ResolvedWorkspaceGraphV1 {
     const fn account_chain_discriminant(&self) -> u16 {
         self.account_chain_discriminant
     }
-
     fn online_registry(&self) -> Result<&RegistryReadClientV1, Diagnostic> {
         self.registry.as_ref().ok_or_else(|| {
             Diagnostic::new(
@@ -1802,7 +1715,6 @@ impl ResolvedWorkspaceGraphV1 {
             )
         })
     }
-
     fn bind_selector_namespace(
         &self,
         selector: &MusubiPackageSelectorV1,
@@ -1822,7 +1734,6 @@ impl ResolvedWorkspaceGraphV1 {
             .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))
     }
 }
-
 fn resolve_and_update_workspace_lock(
     workspace: &Workspace,
     selected_packages: &[MusubiPackageSelectorV1],
@@ -1941,7 +1852,6 @@ fn resolve_and_update_workspace_lock(
         account_chain_discriminant,
     })
 }
-
 fn graph_diagnostic(error: GraphErrorV1) -> Diagnostic {
     match error {
         GraphErrorV1::Workspace(error) => workspace_diagnostic(error),
@@ -2004,7 +1914,6 @@ fn graph_diagnostic(error: GraphErrorV1) -> Diagnostic {
         .with_context("reason", reason),
     }
 }
-
 fn run_fetch(explicit_manifest: Option<&Path>, args: &FetchArgs) -> CommandResult {
     let (workspace, selected_names) = load_selected_workspace(explicit_manifest, &args.selection)?;
     let lock_path = workspace.root().join(LOCK_FILE_NAME);
@@ -2029,7 +1938,6 @@ fn run_fetch(explicit_manifest: Option<&Path>, args: &FetchArgs) -> CommandResul
         ]),
     })
 }
-
 fn ensure_graph_archives(
     cache: &MusubiCache,
     graph: &ResolvedWorkspaceGraphV1,
@@ -2123,7 +2031,6 @@ fn ensure_graph_archives(
     }
     Ok(fetched)
 }
-
 fn archive_transport_diagnostic(error: ArchiveTransportErrorV1) -> Diagnostic {
     let code = match error.class() {
         ArchiveFetchFailureClassV1::Retryable => ErrorCode::Network,
@@ -2138,7 +2045,6 @@ fn archive_transport_diagnostic(error: ArchiveTransportErrorV1) -> Diagnostic {
     )
     .with_context("archive_code", error.code())
 }
-
 fn archive_fetch_diagnostic(error: ArchiveFetchErrorV1) -> Diagnostic {
     let code = match error.class() {
         ArchiveFetchFailureClassV1::Retryable => ErrorCode::Network,
@@ -2149,7 +2055,6 @@ fn archive_fetch_diagnostic(error: ArchiveFetchErrorV1) -> Diagnostic {
     Diagnostic::new(code, "authenticated SoraFS archive fetch failed")
         .with_context("archive_code", error.code())
 }
-
 #[allow(
     clippy::too_many_lines,
     reason = "the CLI handler keeps one auditable build/test orchestration sequence"
@@ -2272,7 +2177,6 @@ fn run_build(
             ]),
         });
     }
-
     let artifacts = execution
         .artifacts
         .iter()
@@ -2325,7 +2229,6 @@ fn run_build(
         ]),
     })
 }
-
 fn open_user_cache() -> Result<MusubiCache, Diagnostic> {
     let root = platform_cache_root_v1().map_err(|error| {
         Diagnostic::new(ErrorCode::Io, "platform Musubi cache root is unavailable")
@@ -2344,7 +2247,6 @@ fn open_user_cache() -> Result<MusubiCache, Diagnostic> {
             .with_context("reason", error.to_string())
     })
 }
-
 fn compiler_bridge_diagnostic(error: &CompilerBridgeErrorV1) -> Diagnostic {
     let code = match error {
         CompilerBridgeErrorV1::Workspace(_) => ErrorCode::WorkspaceInvalid,
@@ -2355,7 +2257,6 @@ fn compiler_bridge_diagnostic(error: &CompilerBridgeErrorV1) -> Diagnostic {
     };
     Diagnostic::new(code, error.to_string())
 }
-
 fn graph_mode_compiler_diagnostic(
     error: &CompilerBridgeErrorV1,
     mode: GraphModeArgs,
@@ -2369,7 +2270,6 @@ fn graph_mode_compiler_diagnostic(
     }
     compiler_bridge_diagnostic(error)
 }
-
 fn test_runner_diagnostic(error: &WorkspaceTestErrorV1) -> Diagnostic {
     let code = match error {
         WorkspaceTestErrorV1::UnsupportedPlatform => ErrorCode::Io,
@@ -2384,7 +2284,6 @@ fn test_runner_diagnostic(error: &WorkspaceTestErrorV1) -> Diagnostic {
     };
     Diagnostic::new(code, error.to_string())
 }
-
 fn graph_mode_test_diagnostic(error: &WorkspaceTestErrorV1, mode: GraphModeArgs) -> Diagnostic {
     if mode.effective_offline() && matches!(&error, WorkspaceTestErrorV1::Cache(_)) {
         return Diagnostic::new(
@@ -2395,7 +2294,6 @@ fn graph_mode_test_diagnostic(error: &WorkspaceTestErrorV1, mode: GraphModeArgs)
     }
     test_runner_diagnostic(error)
 }
-
 #[allow(
     clippy::too_many_lines,
     reason = "the CLI handler keeps clean-package validation and receipt assembly together"
@@ -2423,7 +2321,6 @@ fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandR
     let mut listed = Vec::new();
     let mut packaged = Vec::new();
     let mut output_writer = None;
-
     for selector in &selected_names {
         let member = workspace
             .members()
@@ -2452,7 +2349,6 @@ fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandR
             .iter()
             .map(|file| Value::from(file.path().to_owned()))
             .collect::<Vec<_>>();
-
         if args.list {
             listed.push(object([
                 ("package", Value::from(selector.to_string())),
@@ -2462,7 +2358,6 @@ fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandR
             ]));
             continue;
         }
-
         let cache = cache.as_ref().expect("non-list package opens the cache");
         let interface_digest = validate_packaged_plan(
             cache,
@@ -2549,7 +2444,6 @@ fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandR
             ),
         ]));
     }
-
     if args.list {
         return Ok(Success {
             message: format!("listed {} clean package(s)", listed.len()),
@@ -2568,7 +2462,6 @@ fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandR
         ]),
     })
 }
-
 fn package_output_writer(workspace: &Workspace) -> Result<AtomicWriteRoot, Diagnostic> {
     let mut current = workspace.root().to_path_buf();
     for component in ["target", "package"] {
@@ -2614,7 +2507,6 @@ fn package_output_writer(workspace: &Workspace) -> Result<AtomicWriteRoot, Diagn
     }
     AtomicWriteRoot::new(workspace.root()).map_err(atomic_diagnostic)
 }
-
 fn package_diagnostic(error: &PackageError) -> Diagnostic {
     let code = if matches!(
         error,
@@ -2626,7 +2518,6 @@ fn package_diagnostic(error: &PackageError) -> Diagnostic {
     };
     Diagnostic::new(code, error.to_string())
 }
-
 #[allow(
     clippy::too_many_lines,
     reason = "publication setup is one security-sensitive validation and staging workflow"
@@ -2651,7 +2542,6 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
             "publication requires authenticated seed ingress and finalized registry evidence",
         ));
     }
-
     let (workspace, selected_names) = load_selected_workspace(explicit_manifest, &args.selection)?;
     let [selector] = selected_names.as_slice() else {
         return Err(Diagnostic::new(
@@ -2806,7 +2696,6 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
         })?;
     let mut backend = RegistryPublicationBackendV1::new(registry, signing, services, &request)
         .map_err(|error| registry_diagnostic(error, ErrorCode::Publish))?;
-
     match engine
         .advance_once(operation_id, &source, &mut backend)
         .map_err(|error| publication_diagnostic(&error))?
@@ -2839,7 +2728,6 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
         &mut backend,
     )
 }
-
 #[allow(
     clippy::too_many_lines,
     reason = "recovery keeps the journal-derived clean rebuild and exact sidecar comparison adjacent"
@@ -2860,11 +2748,9 @@ fn recover_publication_sidecars(
         .with_context("operation_id", operation_id.to_string())
         .with_help("remove `--workspace`, `--exclude`, and `-p/--package` from `--recover`"));
     }
-
     let state_root = publication_state_root()?;
     recover_publication_sidecars_at(explicit_manifest, args, operation_id, &state_root, None)
 }
-
 #[allow(
     clippy::too_many_lines,
     reason = "recovery keeps the journal-derived clean rebuild and exact sidecar comparison adjacent"
@@ -2893,7 +2779,6 @@ fn recover_publication_sidecars_at(
         namespace: journal.request.namespace.clone(),
         name: expected_release.package.name.clone(),
     };
-
     let manifest_path = project_manifest_path(explicit_manifest)?;
     let workspace = load_workspace(&manifest_path).map_err(workspace_diagnostic)?;
     let member = workspace
@@ -2918,7 +2803,6 @@ fn recover_publication_sidecars_at(
         .with_context("journal_version", expected_release.version.to_string())
         .with_context("workspace_version", member.package.version.to_string()));
     }
-
     let verification_lock = journal.request.publication.resolution.lock.clone();
     let graph_lock = LockfileV1::new(
         journal.request.network_id(),
@@ -2941,7 +2825,6 @@ fn recover_publication_sidecars_at(
     let layout = package_layout_for_member(workspace.root(), member);
     let plan = plan_package(&layout, &manifest, &verification_lock)
         .map_err(|error| package_diagnostic(&error))?;
-
     let (registry, config_image) =
         RegistryReadClientV1::load_with_config_image(args.network.config.as_deref())
             .map_err(|error| registry_diagnostic(error, ErrorCode::Publish))?;
@@ -2993,7 +2876,6 @@ fn recover_publication_sidecars_at(
         verification_lock,
     )
     .map_err(|error| package_diagnostic(&error))?;
-
     let engine = PublicationEngine::new(&store);
     engine
         .recover_pre_ingress_sidecars(
@@ -3012,7 +2894,6 @@ fn recover_publication_sidecars_at(
         operation_id,
     ))
 }
-
 fn resume_publication(args: &PublishArgs, operation_id: PublicationOperationIdV1) -> CommandResult {
     let state_root = publication_state_root()?;
     let store = PublicationJournalStore::open(&state_root)
@@ -3046,7 +2927,6 @@ fn resume_publication(args: &PublishArgs, operation_id: PublicationOperationIdV1
         &mut backend,
     )
 }
-
 fn finish_publication(
     engine: &PublicationEngine<'_>,
     operation_id: PublicationOperationIdV1,
@@ -3075,7 +2955,6 @@ fn finish_publication(
         }
     }
 }
-
 fn recovered_publication_result(
     namespace: &MusubiNamespaceV1,
     release: &MusubiReleaseIdV1,
@@ -3099,7 +2978,6 @@ fn recovered_publication_result(
         ]),
     }
 }
-
 fn detached_publication_result(
     namespace: &MusubiNamespaceV1,
     release: &MusubiReleaseIdV1,
@@ -3119,7 +2997,6 @@ fn detached_publication_result(
         ]),
     }
 }
-
 fn publication_result(namespace: &MusubiNamespaceV1, result: PublicationResultV1) -> Success {
     let PublicationResultV1 {
         operation_id,
@@ -3197,11 +3074,9 @@ fn publication_result(namespace: &MusubiNamespaceV1, result: PublicationResultV1
         ]),
     }
 }
-
 fn namespaced_release(namespace: &MusubiNamespaceV1, release: &MusubiReleaseIdV1) -> String {
     format!("{namespace}/{}@{}", release.package.name, release.version)
 }
-
 fn publication_compiler_output_digest(
     interface_digest: MusubiContentDigestV1,
     release_digest: iroha_data_model::musubi::MusubiReleaseDigestV1,
@@ -3214,7 +3089,6 @@ fn publication_compiler_output_digest(
     hasher.update(verification_lock_digest.as_bytes());
     MusubiContentDigestV1::new(*hasher.finalize().as_bytes())
 }
-
 fn validate_prepared_publication_car(
     operation_id: PublicationOperationIdV1,
     request: &PublicationRequestV1,
@@ -3247,7 +3121,6 @@ fn validate_prepared_publication_car(
         resolution_snapshot: request.publication.resolution.snapshot,
     })
 }
-
 fn validate_resumable_publication_car(
     operation_id: PublicationOperationIdV1,
     request: &PublicationRequestV1,
@@ -3266,7 +3139,6 @@ fn validate_resumable_publication_car(
         ),
     )
 }
-
 fn validate_prepared_car_stream(
     input: &mut dyn Read,
     expected_size: u64,
@@ -3301,7 +3173,6 @@ fn validate_prepared_car_stream(
     }
     Ok(())
 }
-
 fn unpredictable_publication_nonce() -> [u8; 32] {
     loop {
         let key_pair = iroha::crypto::KeyPair::random();
@@ -3314,7 +3185,6 @@ fn unpredictable_publication_nonce() -> [u8; 32] {
         }
     }
 }
-
 fn publication_configuration_diagnostic(
     error: crate::publication_runtime::ProductionPublicationConfigurationErrorV1,
 ) -> Diagnostic {
@@ -3335,13 +3205,11 @@ fn publication_configuration_diagnostic(
         diagnostic
     }
 }
-
 fn publication_state_root() -> Result<PathBuf, Diagnostic> {
     #[cfg(target_os = "windows")]
     let root = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .map(|path| path.join("Iroha").join("musubi"));
-
     #[cfg(target_os = "macos")]
     let root = std::env::var_os("HOME").map(PathBuf::from).map(|path| {
         path.join("Library")
@@ -3349,7 +3217,6 @@ fn publication_state_root() -> Result<PathBuf, Diagnostic> {
             .join("Iroha")
             .join("musubi")
     });
-
     #[cfg(all(unix, not(target_os = "macos")))]
     let root = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
@@ -3359,10 +3226,8 @@ fn publication_state_root() -> Result<PathBuf, Diagnostic> {
                 .map(PathBuf::from)
                 .map(|path| path.join(".local/state/iroha/musubi"))
         });
-
     #[cfg(not(any(unix, target_os = "windows")))]
     let root: Option<PathBuf> = None;
-
     let requested = root.ok_or_else(|| {
         Diagnostic::new(
             ErrorCode::Io,
@@ -3373,7 +3238,6 @@ fn publication_state_root() -> Result<PathBuf, Diagnostic> {
         .map(|root| root.path().to_path_buf())
         .map_err(atomic_diagnostic)
 }
-
 fn publication_diagnostic(error: &PublicationError) -> Diagnostic {
     let public_code = match error {
         PublicationError::Backend(backend) => backend.code(),
@@ -3397,7 +3261,6 @@ fn publication_diagnostic(error: &PublicationError) -> Diagnostic {
     Diagnostic::new(ErrorCode::Publish, "publication operation failed")
         .with_context("publication_code", public_code)
 }
-
 fn run_search(args: &SearchArgs) -> CommandResult {
     let registry = load_registry_reader(&args.network)?;
     let page = registry
@@ -3414,7 +3277,6 @@ fn run_search(args: &SearchArgs) -> CommandResult {
         data: registry_json(&page)?,
     })
 }
-
 fn run_package_info(args: &PackageQueryArgs) -> CommandResult {
     let registry = load_registry_reader(&args.network)?;
     let package = registry
@@ -3432,7 +3294,6 @@ fn run_package_info(args: &PackageQueryArgs) -> CommandResult {
         data: registry_json(&record)?,
     })
 }
-
 fn run_package_versions(args: &PackageQueryArgs) -> CommandResult {
     let registry = load_registry_reader(&args.network)?;
     let package = registry
@@ -3456,7 +3317,6 @@ fn run_package_versions(args: &PackageQueryArgs) -> CommandResult {
         data: registry_json(&page)?,
     })
 }
-
 fn run_release_yank(args: &ReleaseMutationArgs, yanked: bool) -> CommandResult {
     require_nonzero_revision(args.expected_revision, "expected yank revision")?;
     let registry = load_registry_reader(&args.network)?;
@@ -3495,7 +3355,6 @@ fn run_release_yank(args: &ReleaseMutationArgs, yanked: bool) -> CommandResult {
         ])),
     })
 }
-
 #[allow(
     clippy::too_many_lines,
     reason = "the command preserves one explicit match arm per governance operation"
@@ -3684,7 +3543,6 @@ fn run_owner(args: &OwnerArgs) -> CommandResult {
         }
     }
 }
-
 fn owner_role(
     role: RoleArg,
     permissions: MaintainerPermissionArgs,
@@ -3708,7 +3566,6 @@ fn owner_role(
         RoleArg::Maintainer => Ok(MusubiPackageRoleV1::Maintainer(permissions)),
     }
 }
-
 fn parse_invite_id(raw: &str) -> Result<MusubiInviteIdV1, Diagnostic> {
     if raw.len() != 64
         || raw
@@ -3732,7 +3589,6 @@ fn parse_invite_id(raw: &str) -> Result<MusubiInviteIdV1, Diagnostic> {
         })?;
     Ok(MusubiInviteIdV1::new(bytes))
 }
-
 fn require_nonzero_revision(revision: u64, label: &str) -> Result<(), Diagnostic> {
     if revision == 0 {
         return Err(Diagnostic::new(
@@ -3742,7 +3598,6 @@ fn require_nonzero_revision(revision: u64, label: &str) -> Result<(), Diagnostic
     }
     Ok(())
 }
-
 fn owner_mutation_json(
     package: &iroha_data_model::musubi::MusubiPackageIdV1,
     account: Option<&iroha_data_model::account::AccountId>,
@@ -3759,7 +3614,6 @@ fn owner_mutation_json(
     );
     Value::Object(map)
 }
-
 fn run_owner_list(selector: &MusubiPackageSelectorV1, network: &NetworkArgs) -> CommandResult {
     let registry = load_registry_reader(network)?;
     let package = registry
@@ -3774,7 +3628,6 @@ fn run_owner_list(selector: &MusubiPackageSelectorV1, network: &NetworkArgs) -> 
     let mut seen_cursor_keys = BTreeSet::new();
     let mut entries = Vec::new();
     let mut snapshot = None;
-
     loop {
         let page = registry
             .maintainers(&MusubiPackagePageQueryV1 {
@@ -3815,7 +3668,6 @@ fn run_owner_list(selector: &MusubiPackageSelectorV1, network: &NetworkArgs) -> 
         }
         cursor = Some(next);
     }
-
     let accepted = entries
         .iter()
         .filter(|entry| matches!(entry, MusubiMaintainerDirectoryEntryV1::Accepted(_)))
@@ -3841,7 +3693,6 @@ fn run_owner_list(selector: &MusubiPackageSelectorV1, network: &NetworkArgs) -> 
         ]),
     })
 }
-
 fn run_alias(args: &AliasArgs) -> CommandResult {
     match &args.command {
         AliasCommand::Register {
@@ -3914,12 +3765,10 @@ fn run_alias(args: &AliasArgs) -> CommandResult {
         }
     }
 }
-
 fn load_registry_reader(network: &NetworkArgs) -> Result<RegistryReadClientV1, Diagnostic> {
     RegistryReadClientV1::load(network.config.as_deref())
         .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))
 }
-
 fn registry_json<T: norito::json::JsonSerialize + ?Sized>(value: &T) -> Result<Value, Diagnostic> {
     norito::json::to_value(value).map_err(|_| {
         Diagnostic::new(
@@ -3928,7 +3777,6 @@ fn registry_json<T: norito::json::JsonSerialize + ?Sized>(value: &T) -> Result<V
         )
     })
 }
-
 fn registry_diagnostic(error: RegistryErrorV1, fallback: ErrorCode) -> Diagnostic {
     let code = match (error.code(), error.class()) {
         ("MUSUBI_PUBLICATION_AUTHORITY_MISMATCH", _) => ErrorCode::Unauthorized,
@@ -3943,7 +3791,6 @@ fn registry_diagnostic(error: RegistryErrorV1, fallback: ErrorCode) -> Diagnosti
     Diagnostic::new(code, "Musubi registry operation failed")
         .with_context("registry_code", error.code())
 }
-
 fn run_update(explicit_manifest: Option<&Path>, args: &UpdateArgs) -> CommandResult {
     let manifest_path = project_manifest_path(explicit_manifest)?;
     let workspace = load_workspace(&manifest_path).map_err(workspace_diagnostic)?;
@@ -3958,7 +3805,6 @@ fn run_update(explicit_manifest: Option<&Path>, args: &UpdateArgs) -> CommandRes
             )
         },
     );
-
     if args.mode.effective_locked() {
         return Err(Diagnostic::new(
             ErrorCode::Locked,
@@ -3976,7 +3822,6 @@ fn run_update(explicit_manifest: Option<&Path>, args: &UpdateArgs) -> CommandRes
         .with_context("lockfile", lock_path.display().to_string())
         .with_context("target", target));
     }
-
     let member_packages = workspace
         .members()
         .values()
@@ -4002,7 +3847,6 @@ fn run_update(explicit_manifest: Option<&Path>, args: &UpdateArgs) -> CommandRes
     }
     selected.sort();
     selected.dedup();
-
     let graph_update = args.package.as_ref().map(|target| GraphUpdateV1 {
         package: target.package.clone(),
         locked_version: target.locked_version.clone(),
@@ -4032,7 +3876,6 @@ fn run_update(explicit_manifest: Option<&Path>, args: &UpdateArgs) -> CommandRes
         ]),
     })
 }
-
 fn run_cache(explicit_manifest: Option<&Path>, args: &CacheArgs) -> CommandResult {
     match &args.command {
         CacheCommand::Verify { all, registry } => {
@@ -4105,7 +3948,6 @@ fn run_cache(explicit_manifest: Option<&Path>, args: &CacheArgs) -> CommandResul
         }
     }
 }
-
 fn optional_cache_project_lock(
     explicit_manifest: Option<&Path>,
 ) -> Result<Option<LockfileV1>, Diagnostic> {
@@ -4126,13 +3968,11 @@ fn optional_cache_project_lock(
     let workspace = load_workspace(&manifest_path).map_err(workspace_diagnostic)?;
     read_optional_workspace_lock(&workspace)
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CacheRetentionDeploymentV1 {
     network_id: iroha_data_model::NetworkId,
     snapshot: MusubiRegistrySnapshotV1,
 }
-
 fn empty_cache_prune_success(dry_run: bool) -> Success {
     Success {
         message: if dry_run {
@@ -4153,7 +3993,6 @@ fn empty_cache_prune_success(dry_run: bool) -> Success {
         ]),
     }
 }
-
 #[allow(
     clippy::too_many_lines,
     reason = "finalized classification and the fail-closed non-empty live-prune handoff remain one auditable workflow"
@@ -4176,7 +4015,6 @@ fn prune_cache_targets(
             "local cache inventory is not a strictly ordered set of non-zero ArchiveIds",
         ));
     }
-
     let mut deployment = None::<CacheRetentionDeploymentV1>;
     let mut decisions = Vec::with_capacity(archive_ids.len());
     for archive_batch in archive_ids.chunks(MUSUBI_MAX_ARCHIVE_RETENTION_BATCH_V1) {
@@ -4225,7 +4063,6 @@ fn prune_cache_targets(
     let deployment = deployment.ok_or_else(|| {
         cache_retention_diagnostic("archive-retention proof has no finalized deployment binding")
     })?;
-
     let prunable = decisions
         .iter()
         .filter(|decision| !decision.must_retain())
@@ -4304,7 +4141,6 @@ fn prune_cache_targets(
         ]),
     })
 }
-
 fn cache_retention_decision_json(
     decision: &iroha_data_model::musubi::MusubiArchiveRetentionDecisionV1,
 ) -> Value {
@@ -4341,7 +4177,6 @@ fn cache_retention_decision_json(
         ("storage", storage.map_or(Value::Null, Value::from)),
     ])
 }
-
 fn cache_retention_diagnostic(reason: &'static str) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::Registry,
@@ -4350,7 +4185,6 @@ fn cache_retention_diagnostic(reason: &'static str) -> Diagnostic {
     .with_context("reason", reason)
     .with_help("no cache path has been changed")
 }
-
 fn load_registry_and_archive_transport(
     config: Option<&Path>,
 ) -> Result<(RegistryReadClientV1, ProductionSorafsArchiveTransportV1), Diagnostic> {
@@ -4364,7 +4198,6 @@ fn load_registry_and_archive_transport(
         build_production_archive_transport_v1(&prepared).map_err(archive_transport_diagnostic)?;
     Ok((registry, transport))
 }
-
 fn verify_cache_targets(
     cache: &MusubiCache,
     targets: &BTreeSet<iroha_data_model::musubi::ArchiveId>,
@@ -4407,7 +4240,6 @@ fn verify_cache_targets(
         data: object([("archives", Value::Array(verified))]),
     })
 }
-
 fn repair_cache_targets(
     cache: &MusubiCache,
     targets: &BTreeSet<iroha_data_model::musubi::ArchiveId>,
@@ -4492,7 +4324,6 @@ fn repair_cache_targets(
         ]),
     })
 }
-
 fn cache_maintenance_diagnostic(error: &CacheError) -> Diagnostic {
     let code = if matches!(
         error,
@@ -4505,7 +4336,6 @@ fn cache_maintenance_diagnostic(error: &CacheError) -> Diagnostic {
     Diagnostic::new(code, "immutable Musubi cache validation failed")
         .with_context("reason", error.to_string())
 }
-
 #[cfg(all(test, unix))]
 mod tests {
     include!("command_tests.rs");

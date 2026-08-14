@@ -9,23 +9,19 @@ use iroha_data_model::{
 };
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 use sha2::Digest;
-
 use crate::{
     Error, OperationKind, PublicInputs, Result, StateTransition, TransitionBatch,
     gadgets::transfer::decode_transcripts,
     proof::{Proof, verify},
 };
-
 /// Metadata key binding the structured AXT FASTPQ payload into the proof trace.
 pub const AXT_FASTPQ_BINDING_METADATA_KEY: &str = "axt_fastpq_binding";
-
 /// Metadata key sealing a concrete FASTPQ batch to its AXT statement.
 ///
 /// The seal is computed over the carried batch after AXT metadata has been
 /// inserted and with this field removed. It prevents descriptor-only synthetic
 /// batches from being accepted as AXT proof material.
 pub const AXT_FASTPQ_BATCH_SEAL_METADATA_KEY: &str = "axt_fastpq_batch_seal_v1";
-
 /// Canonical FASTPQ parameter name used by maintained AXT flows.
 pub const DEFAULT_PARAMETER: &str = "fastpq-lane-balanced";
 /// Maximum encoded AXT `FastPQ` batch/proof payload accepted before decoding.
@@ -33,7 +29,6 @@ const DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES: usize = 1024 * 1024;
 const AXT_STATEMENT_DOMAIN: &[u8] = b"fastpq:axt:statement:v1";
 const AXT_BATCH_SEAL_DOMAIN: &[u8] = b"fastpq:axt:batch-seal:v1";
 const ENTRY_HASH_METADATA_KEY: &str = "entry_hash";
-
 /// `FastPQ` payload carried inside an [`AxtProofEnvelope`] proof field.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[repr(C)]
@@ -43,7 +38,6 @@ pub struct AxtFastpqProofPayload {
     /// `FastPQ` V1 proof for `batch`.
     pub proof: Proof,
 }
-
 /// Result returned after an AXT `FastPQ` envelope has been verified.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AxtVerifiedProof {
@@ -58,7 +52,6 @@ pub struct AxtVerifiedProof {
     /// Proven transaction/statement-set commitment.
     pub tx_set_hash: [u8; 32],
 }
-
 /// Canonicalize a structured AXT FASTPQ binding before proving or verification.
 ///
 /// # Errors
@@ -93,7 +86,6 @@ pub fn canonicalize_binding(binding: &AxtFastpqBinding) -> Result<AxtFastpqBindi
             .transpose()?,
     })
 }
-
 /// Encode a `FastPQ` batch/proof pair for the `proof` field of an AXT envelope.
 ///
 /// # Errors
@@ -105,7 +97,6 @@ pub fn encode_axt_fastpq_payload(batch: &TransitionBatch, proof: Proof) -> Resul
     };
     encode_canonical_norito(&payload)
 }
-
 /// Decode the canonical AXT binding already embedded in a `FastPQ` batch.
 ///
 /// This helper never mutates the batch. It is intended for export paths that
@@ -122,7 +113,6 @@ pub fn embedded_axt_binding(batch: &TransitionBatch) -> Result<AxtFastpqBinding>
     verify_batch_matches_binding(batch, &binding)?;
     Ok(binding)
 }
-
 /// Build an AXT proof envelope from an already AXT-bound batch and proof.
 ///
 /// The batch must already contain canonical AXT metadata and the batch seal
@@ -150,7 +140,6 @@ pub fn axt_proof_envelope_from_bound_batch(
         amount_commitment: None,
     })
 }
-
 /// Build an AXT proof blob from an already AXT-bound batch and proof.
 ///
 /// # Errors
@@ -168,7 +157,6 @@ pub fn axt_proof_blob_from_bound_batch(
         expiry_slot,
     })
 }
-
 /// Bind an already-captured FASTPQ batch to an AXT statement.
 ///
 /// This helper inserts the canonical AXT metadata and batch seal required by
@@ -203,7 +191,6 @@ pub fn bind_axt_batch(batch: &mut TransitionBatch, binding: &AxtFastpqBinding) -
         .insert(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY.into(), seal.to_vec());
     Ok(())
 }
-
 /// Verify an AXT envelope that carries a real `FastPQ` batch and proof payload.
 ///
 /// # Errors
@@ -242,7 +229,6 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
         tx_set_hash: batch.public_inputs.tx_set_hash,
     })
 }
-
 /// Convert a prover batch into the shared `FastPQ` data-model representation.
 #[must_use]
 pub fn transition_batch_to_model(batch: &TransitionBatch) -> FastpqTransitionBatch {
@@ -269,7 +255,6 @@ pub fn transition_batch_to_model(batch: &TransitionBatch) -> FastpqTransitionBat
         metadata: batch.metadata.clone(),
     }
 }
-
 /// Convert a shared `FastPQ` data-model batch into the prover representation.
 #[must_use]
 pub fn transition_batch_from_model(dto: &FastpqTransitionBatch) -> TransitionBatch {
@@ -295,7 +280,6 @@ pub fn transition_batch_from_model(dto: &FastpqTransitionBatch) -> TransitionBat
     batch.metadata = dto.metadata.clone();
     batch
 }
-
 fn operation_to_model(operation: &OperationKind) -> FastpqOperationKind {
     match operation {
         OperationKind::Transfer => FastpqOperationKind::Transfer,
@@ -322,7 +306,6 @@ fn operation_to_model(operation: &OperationKind) -> FastpqOperationKind {
         OperationKind::MetaSet => FastpqOperationKind::MetaSet,
     }
 }
-
 fn operation_from_model(operation: &FastpqOperationKind) -> OperationKind {
     match operation {
         FastpqOperationKind::Transfer => OperationKind::Transfer,
@@ -341,7 +324,6 @@ fn operation_from_model(operation: &FastpqOperationKind) -> OperationKind {
         FastpqOperationKind::MetaSet => OperationKind::MetaSet,
     }
 }
-
 struct BindingContext<'a> {
     binding: &'a AxtFastpqBinding,
     source_tx_commitment: [u8; 32],
@@ -350,7 +332,6 @@ struct BindingContext<'a> {
     policy_commitment: [u8; 32],
     effect_type: String,
 }
-
 impl<'a> BindingContext<'a> {
     fn from_binding(binding: &'a AxtFastpqBinding) -> Result<Self> {
         Ok(Self {
@@ -369,7 +350,6 @@ impl<'a> BindingContext<'a> {
         })
     }
 }
-
 fn verify_batch_matches_binding(batch: &TransitionBatch, binding: &AxtFastpqBinding) -> Result<()> {
     let canonical = require_canonical_binding(binding)?;
     let context = BindingContext::from_binding(&canonical)?;
@@ -418,7 +398,6 @@ fn verify_batch_matches_binding(batch: &TransitionBatch, binding: &AxtFastpqBind
     require_transfer_claim_witnesses(batch, &context, canonical.claim_type.as_str())?;
     Ok(())
 }
-
 fn required_metadata<'a>(batch: &'a TransitionBatch, key: &str) -> Result<&'a [u8]> {
     batch
         .metadata
@@ -428,7 +407,6 @@ fn required_metadata<'a>(batch: &'a TransitionBatch, key: &str) -> Result<&'a [u
             key: key.to_string(),
         })
 }
-
 fn require_metadata_eq(batch: &TransitionBatch, key: &str, expected: &[u8]) -> Result<()> {
     let actual = required_metadata(batch, key)?;
     if actual == expected {
@@ -439,7 +417,6 @@ fn require_metadata_eq(batch: &TransitionBatch, key: &str, expected: &[u8]) -> R
         })
     }
 }
-
 fn require_concrete_execution_batch(
     batch: &TransitionBatch,
     context: &BindingContext<'_>,
@@ -455,7 +432,6 @@ fn require_concrete_execution_batch(
         &context.source_tx_commitment,
     )
 }
-
 fn require_transfer_claim_witnesses(
     batch: &TransitionBatch,
     context: &BindingContext<'_>,
@@ -491,7 +467,6 @@ fn require_transfer_claim_witnesses(
     }
     Ok(())
 }
-
 fn axt_statement_digest(
     envelope: &AxtProofEnvelope,
     binding: &AxtFastpqBinding,
@@ -508,7 +483,6 @@ fn axt_statement_digest(
     payload.extend_from_slice(&encode_canonical_norito(batch)?);
     Ok(Hash::new(payload).into())
 }
-
 fn axt_batch_seal(
     batch: &TransitionBatch,
     canonical_binding: &AxtFastpqBinding,
@@ -523,7 +497,6 @@ fn axt_batch_seal(
     payload.extend_from_slice(&encode_canonical_norito(&sealed_batch)?);
     Ok(Hash::new(payload).into())
 }
-
 fn insert_binding_metadata(
     batch: &mut TransitionBatch,
     context: &BindingContext<'_>,
@@ -567,7 +540,6 @@ fn insert_binding_metadata(
     }
     Ok(())
 }
-
 fn required_string(value: &str, field: &str) -> Result<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -578,17 +550,14 @@ fn required_string(value: &str, field: &str) -> Result<String> {
         Ok(trimmed.to_string())
     }
 }
-
 fn required_digest(value: &str, field: &str) -> Result<String> {
     let trimmed = value.trim().to_ascii_lowercase();
     decode_hex_digest(&trimmed, field)?;
     Ok(trimmed)
 }
-
 fn normalized_parameter(value: &str) -> Result<String> {
     required_string(value, "parameter")
 }
-
 fn normalized_verifier_id(value: &str) -> Result<String> {
     let verifier_id = required_string(value, "verifier_id")?.to_ascii_lowercase();
     if verifier_id == "fastpq" {
@@ -599,7 +568,6 @@ fn normalized_verifier_id(value: &str) -> Result<String> {
         })
     }
 }
-
 fn normalized_verifier_version(value: &str) -> Result<String> {
     let verifier_version = required_string(value, "verifier_version")?.to_ascii_lowercase();
     if verifier_version == "v1" {
@@ -610,7 +578,6 @@ fn normalized_verifier_version(value: &str) -> Result<String> {
         })
     }
 }
-
 fn required_target_dsids(values: &[u64]) -> Result<Vec<u64>> {
     if values.is_empty() {
         return Err(Error::InvalidAxtBinding {
@@ -634,7 +601,6 @@ fn required_target_dsids(values: &[u64]) -> Result<Vec<u64>> {
     }
     Ok(values.to_vec())
 }
-
 fn normalized_claim_type(value: &str) -> Result<String> {
     let claim_type = value.trim().to_ascii_lowercase();
     match claim_type.as_str() {
@@ -644,7 +610,6 @@ fn normalized_claim_type(value: &str) -> Result<String> {
         }),
     }
 }
-
 fn canonicalize_effect_binding(binding: &AxtEffectBinding) -> Result<AxtEffectBinding> {
     Ok(AxtEffectBinding {
         destination_domain: canonical_optional_string(
@@ -675,11 +640,9 @@ fn canonicalize_effect_binding(binding: &AxtEffectBinding) -> Result<AxtEffectBi
         destination_amount_i64: binding.destination_amount_i64,
     })
 }
-
 fn canonical_optional_string(value: Option<&str>, field: &str) -> Result<Option<String>> {
     value.map(|value| required_string(value, field)).transpose()
 }
-
 fn require_canonical_binding(binding: &AxtFastpqBinding) -> Result<AxtFastpqBinding> {
     let canonical = canonicalize_binding(binding)?;
     if &canonical != binding {
@@ -689,13 +652,11 @@ fn require_canonical_binding(binding: &AxtFastpqBinding) -> Result<AxtFastpqBind
     }
     Ok(canonical)
 }
-
 fn encode_canonical_norito<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>> {
     let _canonical_flags =
         norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     to_bytes(value).map_err(Error::Encode)
 }
-
 fn decode_canonical_binding(encoded: &[u8]) -> Result<AxtFastpqBinding> {
     let _canonical_flags =
         norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
@@ -708,7 +669,6 @@ fn decode_canonical_binding(encoded: &[u8]) -> Result<AxtFastpqBinding> {
     }
     require_canonical_binding(&binding)
 }
-
 fn decode_canonical_axt_fastpq_payload(encoded: &[u8]) -> Result<AxtFastpqProofPayload> {
     let _canonical_flags =
         norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
@@ -721,13 +681,11 @@ fn decode_canonical_axt_fastpq_payload(encoded: &[u8]) -> Result<AxtFastpqProofP
     }
     Ok(payload)
 }
-
 fn dsid_bytes(source_dsid: u64) -> [u8; 16] {
     let mut output = [0_u8; 16];
     output[..8].copy_from_slice(&DataSpaceId::new(source_dsid).as_u64().to_le_bytes());
     output
 }
-
 fn encode_target_dsids(values: &[u64]) -> Vec<u8> {
     let mut output = Vec::with_capacity(values.len() * 8);
     for value in values {
@@ -735,7 +693,6 @@ fn encode_target_dsids(values: &[u64]) -> Vec<u8> {
     }
     output
 }
-
 fn decode_hex_digest(value: &str, field: &str) -> Result<[u8; 32]> {
     let decoded = hex::decode(value).map_err(|err| Error::InvalidAxtBinding {
         details: format!("{field} is not valid hex: {err}"),
@@ -744,7 +701,6 @@ fn decode_hex_digest(value: &str, field: &str) -> Result<[u8; 32]> {
         details: format!("{field} must be exactly 32 bytes"),
     })
 }
-
 /// Deterministic manifest digest for a binding payload.
 ///
 /// # Errors
@@ -755,7 +711,6 @@ pub fn batch_manifest_sha256(binding: &AxtFastpqBinding) -> Result<String> {
     let bytes = encode_canonical_norito(&canonical)?;
     Ok(format!("{:x}", sha2::Sha256::digest(bytes)))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -768,7 +723,6 @@ mod tests {
         fastpq::{TransferDeltaTranscript, TransferSmtWitness, TransferTranscript},
     };
     use iroha_primitives::numeric::Quantity;
-
     fn sample_binding() -> AxtFastpqBinding {
         AxtFastpqBinding {
             parameter: DEFAULT_PARAMETER.to_string(),
@@ -792,14 +746,12 @@ mod tests {
             effect_binding: None,
         }
     }
-
     fn alternate_norito_bytes<T: NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         to_bytes(value).expect("encode alternate-layout fixture")
     }
-
     fn envelope_with_payload(binding: AxtFastpqBinding, proof: Vec<u8>) -> AxtProofEnvelope {
         AxtProofEnvelope {
             dsid: DataSpaceId::new(binding.source_dsid),
@@ -811,7 +763,6 @@ mod tests {
             amount_commitment: None,
         }
     }
-
     fn real_authorization_batch(binding: &AxtFastpqBinding) -> TransitionBatch {
         let mut batch = TransitionBatch::new(
             DEFAULT_PARAMETER,
@@ -849,12 +800,10 @@ mod tests {
         bind_axt_batch(&mut batch, binding).expect("bind AXT batch");
         batch
     }
-
     fn real_transfer_claim_batch(binding: &AxtFastpqBinding) -> TransitionBatch {
         const TRANSFER_AMOUNT: u64 = 35;
         const SENDER_START: u64 = 900;
         const RECEIVER_START: u64 = 120;
-
         let domain = DomainId::try_new("axt", "universal").expect("domain id");
         let asset_definition =
             AssetDefinitionId::derive_from_components(domain.clone(), "rose".parse().unwrap());
@@ -863,7 +812,6 @@ mod tests {
         let entry_hash = decode_hex_digest(&binding.source_tx_commitment, "source_tx_commitment")
             .expect("entry hash");
         let transcript_batch_hash = Hash::prehashed(entry_hash);
-
         let mut batch = TransitionBatch::new(
             DEFAULT_PARAMETER,
             PublicInputs {
@@ -887,7 +835,6 @@ mod tests {
             (RECEIVER_START + TRANSFER_AMOUNT).to_le_bytes().to_vec(),
             OperationKind::Transfer,
         ));
-
         let mut transcripts = vec![transfer_transcript(
             &asset_definition,
             &from_account,
@@ -913,31 +860,26 @@ mod tests {
         bind_axt_batch(&mut batch, binding).expect("bind transfer AXT batch");
         batch
     }
-
     fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
         let seed: [u8; Hash::LENGTH] = Hash::new(format!("{label}@{domain}")).into();
         let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::default())
             .expect("derive AXT fixture account key");
         AccountId::new(keypair.public_key().clone())
     }
-
     #[test]
     fn deterministic_account_uses_checked_seed_derivation() {
         let domain = DomainId::try_new("wonderland", "universal").expect("domain id");
         let seed: [u8; Hash::LENGTH] = Hash::new(format!("alice@{domain}")).into();
         let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::default())
             .expect("derive AXT fixture account key");
-
         assert_eq!(
             deterministic_account("alice", &domain),
             AccountId::new(keypair.public_key().clone())
         );
     }
-
     fn transfer_balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {
         format!("asset/{asset}/{account}").into_bytes()
     }
-
     fn transfer_transcript(
         asset_definition: &AssetDefinitionId,
         from_account: &AccountId,
@@ -967,7 +909,6 @@ mod tests {
             poseidon_preimage_digest: Some(digest),
         }
     }
-
     #[test]
     fn canonicalize_binding_rejects_non_fastpq_v1_or_blank_verifier_labels() {
         let mut binding = sample_binding();
@@ -976,28 +917,24 @@ mod tests {
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("verifier_id"))
         );
-
         let mut binding = sample_binding();
         binding.verifier_version = "v2".to_owned();
         let err = canonicalize_binding(&binding).expect_err("wrong verifier version must fail");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("verifier_version"))
         );
-
         let mut binding = sample_binding();
         binding.verifier_id.clear();
         let err = canonicalize_binding(&binding).expect_err("blank verifier id must fail");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("verifier_id"))
         );
-
         let mut binding = sample_binding();
         binding.verifier_version.clear();
         let err = canonicalize_binding(&binding).expect_err("blank verifier version must fail");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("verifier_version"))
         );
-
         let mut binding = sample_binding();
         binding.parameter.clear();
         let err = canonicalize_binding(&binding).expect_err("blank parameter must fail");
@@ -1006,7 +943,6 @@ mod tests {
             Error::InvalidAxtBinding { details } if details.contains("parameter")
         ));
     }
-
     #[test]
     fn canonicalize_binding_requires_strictly_ordered_unique_targets() {
         let mut binding = sample_binding();
@@ -1015,21 +951,18 @@ mod tests {
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("target_dsids"))
         );
-
         let mut binding = sample_binding();
         binding.target_dsids = vec![9, 9];
         let err = canonicalize_binding(&binding).expect_err("duplicate targets must fail");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("duplicate"))
         );
-
         let mut binding = sample_binding();
         binding.target_dsids = vec![11, 9];
         let err = canonicalize_binding(&binding).expect_err("out-of-order targets must fail");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("strictly ordered"))
         );
-
         let mut binding = sample_binding();
         binding.target_dsids = vec![9, 11];
         assert_eq!(
@@ -1039,7 +972,6 @@ mod tests {
             vec![9, 11]
         );
     }
-
     #[test]
     fn canonicalize_binding_normalizes_labels_and_manifest_hash() {
         let mut binding = sample_binding();
@@ -1054,7 +986,6 @@ mod tests {
         binding.verifier_id = "  fastpq  ".to_owned();
         binding.verifier_version = "  v1  ".to_owned();
         binding.corridor = "  corridor-a  ".to_owned();
-
         let canonical = canonicalize_binding(&binding).expect("canonical binding");
         assert_eq!(canonical.parameter, DEFAULT_PARAMETER);
         assert_eq!(canonical.source_dataspace, "taira");
@@ -1076,7 +1007,6 @@ mod tests {
             batch_manifest_sha256(&canonical).expect("canonical manifest")
         );
     }
-
     #[test]
     fn verification_rejects_normalizable_but_noncanonical_binding_values() {
         let mutations: [fn(&mut AxtFastpqBinding); 4] = [
@@ -1102,7 +1032,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn bind_axt_batch_pins_canonical_norito_flags_under_an_ambient_layout() {
         let binding = sample_binding();
@@ -1113,7 +1042,6 @@ mod tests {
             let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             real_authorization_batch(&binding)
         };
-
         assert_eq!(
             under_alternate_layout
                 .metadata
@@ -1127,7 +1055,6 @@ mod tests {
             canonical.metadata.get(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY)
         );
     }
-
     #[test]
     fn canonicalize_binding_rejects_malformed_digest_and_claim_type() {
         let mut binding = sample_binding();
@@ -1136,7 +1063,6 @@ mod tests {
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("claim_digest"))
         );
-
         let mut binding = sample_binding();
         binding.claim_type = "synthetic".to_owned();
         let err = canonicalize_binding(&binding).expect_err("unsupported claim type must fail");
@@ -1144,7 +1070,6 @@ mod tests {
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("claim_type"))
         );
     }
-
     #[test]
     fn transition_batch_model_roundtrip_preserves_operations_and_metadata() {
         let mut batch = TransitionBatch::new(
@@ -1189,11 +1114,9 @@ mod tests {
         batch
             .metadata
             .insert("fixture".to_owned(), b"roundtrip".to_vec());
-
         let roundtrip = transition_batch_from_model(&transition_batch_to_model(&batch));
         assert_eq!(roundtrip, batch);
     }
-
     #[test]
     fn verify_axt_envelope_rejects_mismatched_verifier_label() {
         let good_binding = sample_binding();
@@ -1206,14 +1129,12 @@ mod tests {
         let mut bad_binding = good_binding;
         bad_binding.verifier_id = "synthetic".to_owned();
         let envelope = envelope_with_payload(bad_binding, payload);
-
         let err =
             verify_axt_proof_envelope(&envelope).expect_err("non-FastPQ verifier label must fail");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("verifier_id"))
         );
     }
-
     #[test]
     fn verify_axt_envelope_rejects_missing_fastpq_binding() {
         let binding = sample_binding();
@@ -1225,13 +1146,11 @@ mod tests {
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let mut envelope = envelope_with_payload(binding, payload);
         envelope.fastpq_binding = None;
-
         let err = verify_axt_proof_envelope(&envelope).expect_err("missing binding must fail");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("fastpq_binding"))
         );
     }
-
     #[test]
     fn bind_axt_batch_rejects_empty_execution_batch() {
         let binding = sample_binding();
@@ -1251,13 +1170,11 @@ mod tests {
         batch
             .metadata
             .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
-
         let err = bind_axt_batch(&mut batch, &binding).expect_err("empty batch must fail");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("state transitions"))
         );
     }
-
     #[test]
     fn bind_axt_batch_rejects_parameter_mismatch() {
         let binding = sample_binding();
@@ -1283,13 +1200,11 @@ mod tests {
         batch
             .metadata
             .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
-
         let err = bind_axt_batch(&mut batch, &binding).expect_err("parameter mismatch must fail");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("parameter"))
         );
     }
-
     #[test]
     fn bind_axt_batch_rejects_missing_entry_hash() {
         let binding = sample_binding();
@@ -1310,11 +1225,9 @@ mod tests {
             b"authorized".to_vec(),
             OperationKind::MetaSet,
         ));
-
         let err = bind_axt_batch(&mut batch, &binding).expect_err("entry hash is required");
         assert!(matches!(err, Error::MissingMetadata { key } if key == ENTRY_HASH_METADATA_KEY));
     }
-
     #[test]
     fn bind_axt_batch_rejects_entry_hash_mismatch() {
         let binding = sample_binding();
@@ -1338,13 +1251,11 @@ mod tests {
         batch
             .metadata
             .insert(ENTRY_HASH_METADATA_KEY.into(), vec![0xAA; 32]);
-
         let err = bind_axt_batch(&mut batch, &binding).expect_err("wrong entry hash fails");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains(ENTRY_HASH_METADATA_KEY))
         );
     }
-
     #[test]
     fn verify_axt_envelope_rejects_missing_required_binding_metadata() {
         let binding = sample_binding();
@@ -1353,13 +1264,11 @@ mod tests {
             .expect("prover")
             .prove(&batch)
             .expect("proof");
-
         for key in ["claim_digest", "policy_commitment", "verified_effect_type"] {
             let mut tampered = batch.clone();
             tampered.metadata.remove(key);
             let payload = encode_axt_fastpq_payload(&tampered, proof.clone()).expect("payload");
             let envelope = envelope_with_payload(binding.clone(), payload);
-
             let err = match verify_axt_proof_envelope(&envelope) {
                 Ok(_) => panic!("missing {key} must fail"),
                 Err(err) => err,
@@ -1367,7 +1276,6 @@ mod tests {
             assert!(matches!(err, Error::MissingMetadata { key: missing } if missing == key));
         }
     }
-
     #[test]
     fn verify_axt_envelope_rejects_required_metadata_mismatches() {
         let binding = sample_binding();
@@ -1376,13 +1284,11 @@ mod tests {
             .expect("prover")
             .prove(&batch)
             .expect("proof");
-
         for key in ["source_receipt_id", "witness_commitment", "corridor"] {
             let mut tampered = batch.clone();
             tampered.metadata.insert(key.to_owned(), b"wrong".to_vec());
             let payload = encode_axt_fastpq_payload(&tampered, proof.clone()).expect("payload");
             let envelope = envelope_with_payload(binding.clone(), payload);
-
             let err = match verify_axt_proof_envelope(&envelope) {
                 Ok(_) => panic!("mismatched {key} must fail"),
                 Err(err) => err,
@@ -1393,7 +1299,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn verify_axt_envelope_rejects_envelope_dsid_mismatch() {
         let binding = sample_binding();
@@ -1405,13 +1310,11 @@ mod tests {
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let mut envelope = envelope_with_payload(binding, payload);
         envelope.dsid = DataSpaceId::new(envelope.dsid.as_u64() + 1);
-
         let err = verify_axt_proof_envelope(&envelope).expect_err("envelope dsid mismatch");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("source_dsid"))
         );
     }
-
     #[test]
     fn verify_axt_envelope_rejects_batch_parameter_mismatch() {
         let binding = sample_binding();
@@ -1423,13 +1326,11 @@ mod tests {
         batch.parameter = "fastpq-lane-minimal".to_owned();
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
-
         let err = verify_axt_proof_envelope(&envelope).expect_err("parameter mismatch");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("parameter"))
         );
     }
-
     #[test]
     fn verify_axt_envelope_rejects_batch_public_dsid_mismatch() {
         let binding = sample_binding();
@@ -1441,13 +1342,11 @@ mod tests {
         batch.public_inputs.dsid = dsid_bytes(binding.source_dsid + 1);
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
-
         let err = verify_axt_proof_envelope(&envelope).expect_err("batch dsid mismatch");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("public dsid"))
         );
     }
-
     #[test]
     fn verify_axt_envelope_rejects_embedded_binding_metadata_mismatch() {
         let binding = sample_binding();
@@ -1465,13 +1364,11 @@ mod tests {
         );
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
-
         let err = verify_axt_proof_envelope(&envelope).expect_err("binding metadata mismatch");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("metadata binding"))
         );
     }
-
     #[test]
     fn verify_axt_envelope_rejects_malformed_embedded_binding_metadata() {
         let binding = sample_binding();
@@ -1485,11 +1382,9 @@ mod tests {
             .insert(AXT_FASTPQ_BINDING_METADATA_KEY.into(), vec![0xFF, 0x00]);
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
-
         let err = verify_axt_proof_envelope(&envelope).expect_err("malformed binding metadata");
         assert!(matches!(err, Error::TransferMetadataDecode { .. }));
     }
-
     #[test]
     fn embedded_axt_binding_rejects_alternate_norito_layout() {
         let binding = sample_binding();
@@ -1507,13 +1402,11 @@ mod tests {
         batch
             .metadata
             .insert(AXT_FASTPQ_BINDING_METADATA_KEY.into(), alternate);
-
         let err = embedded_axt_binding(&batch).expect_err("alternate binding layout must fail");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("canonical Norito"))
         );
     }
-
     #[test]
     fn embedded_axt_binding_rejects_semantically_noncanonical_metadata() {
         let binding = sample_binding();
@@ -1524,14 +1417,12 @@ mod tests {
             AXT_FASTPQ_BINDING_METADATA_KEY.into(),
             encode_canonical_norito(&noncanonical).expect("canonical Norito layout"),
         );
-
         let err = embedded_axt_binding(&batch)
             .expect_err("normalizable metadata value must not be accepted as canonical");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("exact canonical"))
         );
     }
-
     #[test]
     fn verify_axt_envelope_rejects_source_tx_commitment_metadata_mismatch() {
         let binding = sample_binding();
@@ -1545,13 +1436,11 @@ mod tests {
             .insert("source_tx_commitment".into(), vec![0xAA; 32]);
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
-
         let err = verify_axt_proof_envelope(&envelope).expect_err("commitment metadata mismatch");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("source_tx_commitment"))
         );
     }
-
     #[test]
     fn verify_axt_envelope_rejects_target_dsid_metadata_mismatch() {
         let binding = sample_binding();
@@ -1566,13 +1455,11 @@ mod tests {
         );
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
-
         let err = verify_axt_proof_envelope(&envelope).expect_err("target dsid mismatch");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("target_dsids"))
         );
     }
-
     #[test]
     fn verify_axt_envelope_rejects_transfer_claim_missing_transcripts() {
         let mut binding = sample_binding();
@@ -1607,13 +1494,11 @@ mod tests {
             .expect("proof");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
-
         let err = verify_axt_proof_envelope(&envelope).expect_err("missing transfer transcripts");
         assert!(
             matches!(err, Error::MissingMetadata { key } if key == TRANSFER_TRANSCRIPTS_METADATA_KEY)
         );
     }
-
     #[test]
     fn verify_axt_envelope_rejects_transfer_claim_without_transfer_rows() {
         let mut binding = sample_binding();
@@ -1625,13 +1510,11 @@ mod tests {
             .expect("proof");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
-
         let err = verify_axt_proof_envelope(&envelope).expect_err("non-transfer claim must fail");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("transfer transitions"))
         );
     }
-
     #[test]
     fn verify_axt_envelope_accepts_transfer_claims_with_real_transcripts() {
         for claim_type in ["tx_predicate", "value_conservation"] {
@@ -1657,14 +1540,12 @@ mod tests {
                 .expect("proof");
             let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
             let envelope = envelope_with_payload(binding, payload);
-
             let verified = verify_axt_proof_envelope(&envelope)
                 .unwrap_or_else(|err| panic!("{claim_type} transfer claim should verify: {err}"));
             assert!(verified.statement_digest.iter().any(|byte| *byte != 0));
             assert!(verified.proof_digest.as_ref().iter().any(|byte| *byte != 0));
         }
     }
-
     #[test]
     fn verify_axt_envelope_rejects_transfer_transcript_from_an_unrelated_transaction() {
         let mut binding = sample_binding();
@@ -1691,14 +1572,12 @@ mod tests {
             .expect("proof for internally consistent unrelated transcript");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
-
         let err = verify_axt_proof_envelope(&envelope)
             .expect_err("unrelated transaction transcript must fail");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("batch_hash") && details.contains("source_tx_commitment"))
         );
     }
-
     #[test]
     fn verify_axt_envelope_accepts_empty_corridor_without_metadata() {
         let mut binding = sample_binding();
@@ -1714,10 +1593,8 @@ mod tests {
             .expect("proof");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
-
         verify_axt_proof_envelope(&envelope).expect("empty corridor binding verifies");
     }
-
     #[test]
     fn verify_axt_envelope_rejects_oversized_payload_before_decode() {
         let binding = sample_binding();
@@ -1734,7 +1611,6 @@ mod tests {
                 && max == DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES
         ));
     }
-
     #[test]
     fn verify_axt_envelope_rejects_alternate_payload_layout_and_encoder_is_pinned() {
         let binding = sample_binding();
@@ -1756,7 +1632,6 @@ mod tests {
                 .expect("ordinary Norito accepts advertised alternate layout"),
             payload
         );
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let pinned_under_ambient = {
@@ -1764,7 +1639,6 @@ mod tests {
             encode_axt_fastpq_payload(&batch, proof).expect("pinned payload")
         };
         assert_eq!(pinned_under_ambient, canonical);
-
         let envelope = envelope_with_payload(binding, alternate);
         let err =
             verify_axt_proof_envelope(&envelope).expect_err("alternate payload layout must fail");
@@ -1772,7 +1646,6 @@ mod tests {
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("proof payload") && details.contains("canonical Norito"))
         );
     }
-
     #[test]
     fn verify_axt_envelope_accepts_embedded_batch_and_proof() {
         let binding = sample_binding();
@@ -1783,7 +1656,6 @@ mod tests {
             .expect("proof");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
-
         let verified = verify_axt_proof_envelope(&envelope).expect("verified AXT proof");
         assert!(verified.statement_digest.iter().any(|byte| *byte != 0));
         assert!(verified.proof_digest.as_ref().iter().any(|byte| *byte != 0));
@@ -1791,7 +1663,6 @@ mod tests {
         assert_eq!(verified.new_root, batch.public_inputs.new_root);
         assert_eq!(verified.tx_set_hash, batch.public_inputs.tx_set_hash);
     }
-
     #[test]
     fn verify_axt_envelope_statement_digest_binds_optional_da_commitment() {
         let binding = sample_binding();
@@ -1807,11 +1678,9 @@ mod tests {
         let mut without_da = envelope_with_payload(binding, payload);
         without_da.da_commitment = None;
         let without_da = verify_axt_proof_envelope(&without_da).expect("without DA commitment");
-
         assert_ne!(with_da.statement_digest, without_da.statement_digest);
         assert_eq!(with_da.proof_digest, without_da.proof_digest);
     }
-
     #[test]
     fn verify_axt_envelope_rejects_batch_mutated_after_seal() {
         let binding = sample_binding();
@@ -1829,13 +1698,11 @@ mod tests {
         batch.sort();
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
-
         let err = verify_axt_proof_envelope(&envelope).expect_err("tampered seal must fail");
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY))
         );
     }
-
     #[test]
     fn verify_axt_envelope_rejects_proof_for_different_batch() {
         let binding = sample_binding();
@@ -1855,11 +1722,9 @@ mod tests {
             .expect("proof");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
-
         let err = verify_axt_proof_envelope(&envelope).expect_err("mismatched proof must fail");
         assert!(matches!(err, Error::CommitmentMismatch));
     }
-
     #[test]
     fn verify_axt_envelope_rejects_raw_fastpq_proof_without_batch() {
         let binding = sample_binding();
@@ -1870,11 +1735,9 @@ mod tests {
             .expect("proof");
         let raw_proof = to_bytes(&proof).expect("proof bytes");
         let envelope = envelope_with_payload(binding, raw_proof);
-
         let err = verify_axt_proof_envelope(&envelope).expect_err("raw proof must fail");
         assert!(matches!(err, Error::AxtProofPayloadDecode { .. }));
     }
-
     #[test]
     fn axt_proof_blob_helper_accepts_already_bound_batch() {
         let binding = sample_binding();
@@ -1884,7 +1747,6 @@ mod tests {
             .prove(&batch)
             .expect("proof");
         let manifest_root = [0x42; 32];
-
         let blob = axt_proof_blob_from_bound_batch(
             &batch,
             proof,
@@ -1903,7 +1765,6 @@ mod tests {
             decode_from_bytes(&blob.payload).expect("decode AXT proof envelope");
         verify_axt_proof_envelope(&envelope).expect("packaged AXT proof verifies");
     }
-
     #[test]
     fn axt_proof_blob_helper_rejects_unbound_batch() {
         let binding = sample_binding();
@@ -1913,14 +1774,12 @@ mod tests {
             .expect("prover")
             .prove(&batch)
             .expect("proof");
-
         let err = axt_proof_blob_from_bound_batch(&batch, proof, [0x42; 32], None, None)
             .expect_err("unbound batch must fail");
         assert!(
             matches!(err, Error::MissingMetadata { key } if key == AXT_FASTPQ_BINDING_METADATA_KEY)
         );
     }
-
     #[test]
     fn verify_axt_envelope_rejects_batch_without_axt_binding_metadata() {
         let binding = sample_binding();
@@ -1932,7 +1791,6 @@ mod tests {
             .expect("proof");
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
-
         let err = verify_axt_proof_envelope(&envelope).expect_err("missing binding must fail");
         assert!(
             matches!(err, Error::MissingMetadata { key } if key == AXT_FASTPQ_BINDING_METADATA_KEY)

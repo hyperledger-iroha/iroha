@@ -1,7 +1,5 @@
 //! Utility to print the expected `SoraFS` pin registry snapshot fixture.
-
 use std::{convert::TryInto, error::Error, fs, path::PathBuf};
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_core::{
     kura::Kura,
@@ -40,22 +38,17 @@ use sorafs_manifest::{
     ReplicationOrderV1, chunker_registry,
     pin_registry::{AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest},
 };
-
 const FIXTURE_PATH: &str = "crates/iroha_core/tests/fixtures/sorafs_pin_registry/snapshot.json";
-
 fn main() -> Result<(), Box<dyn Error>> {
     let state = make_state();
     seed_completion_anchor(&state);
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
     let council_keys = council_keypair();
-
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys)?;
-
     let alias_binding = alias_binding_for(digest, "sora", "docs", 12, 36, &council_keys)?;
     BindManifestAlias {
         digest,
@@ -64,7 +57,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         expiry_epoch: 36,
     }
     .execute(&alice(), &mut tx)?;
-
     let providers = [
         ProviderId::new([0x51; 32]),
         ProviderId::new([0x52; 32]),
@@ -81,7 +73,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         musubi_archive: None,
     }
     .execute(&alice(), &mut tx)?;
-
     for provider_id in providers {
         CompleteReplicationOrder {
             order_id,
@@ -93,13 +84,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         .execute(&alice(), &mut tx)?;
     }
-
     tx.apply();
     block.commit()?;
-
     let view = state.view();
     let world = view.world();
-
     let manifest = world.pin_manifests().get(&digest).expect("manifest stored");
     let alias_id = ManifestAliasId::from(&alias_binding);
     let alias_record = world
@@ -110,19 +98,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         .replication_orders()
         .get(&order_id)
         .expect("order stored");
-
     let snapshot = snapshot_json(manifest, alias_record, order_record);
     let pretty = json::to_string_pretty(&snapshot)?;
     fs::write(PathBuf::from(FIXTURE_PATH), format!("{pretty}\n"))?;
     println!("{pretty}");
     Ok(())
 }
-
 fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
     if tx.tx_call_hash.is_none() {
         tx.tx_call_hash = Some(Hash::prehashed([0x91; Hash::LENGTH]));
     }
-
     let alice = alice();
     let default_domain =
         DomainId::try_new("default", "universal").expect("explicit fixture domain");
@@ -136,7 +121,6 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
             .execute(&alice, tx)
             .expect("register sorafs authority");
     }
-
     {
         let world = &mut tx.world;
         for perm in [
@@ -148,7 +132,6 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
         }
     }
     seed_public_pin_fee_assets(tx);
-
     for provider_id in [
         ProviderId::new([0x51; 32]),
         ProviderId::new([0x52; 32]),
@@ -174,7 +157,6 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
         .expect("register provider completion authority");
     }
 }
-
 fn register_and_approve(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
     digest: ManifestDigest,
@@ -195,7 +177,6 @@ fn register_and_approve(
     }
     .execute(&alice(), tx)
     .expect("register manifest");
-
     let stored = tx
         .world()
         .pin_manifests()
@@ -212,7 +193,6 @@ fn register_and_approve(
             revoked_at_block_height: None,
         }];
     let envelope = build_envelope(&stored, council_keys)?;
-
     ApprovePinManifest {
         digest,
         council_envelope: Some(envelope),
@@ -222,7 +202,6 @@ fn register_and_approve(
     .expect("approve manifest");
     Ok(())
 }
-
 fn snapshot_json(
     manifest: &PinManifestRecord,
     alias: &ManifestAliasRecord,
@@ -231,7 +210,6 @@ fn snapshot_json(
     let manifest_obj = manifest_snapshot(manifest);
     let alias_obj = alias_snapshot(alias);
     let order_obj = order_snapshot(order);
-
     let mut root = json::Map::new();
     root.insert(
         "manifests".into(),
@@ -247,7 +225,6 @@ fn snapshot_json(
     );
     Value::Object(root)
 }
-
 fn manifest_snapshot(manifest: &PinManifestRecord) -> json::Map {
     let mut manifest_obj = json::Map::new();
     manifest_obj.insert(
@@ -319,7 +296,6 @@ fn manifest_snapshot(manifest: &PinManifestRecord) -> json::Map {
     );
     manifest_obj
 }
-
 fn alias_snapshot(alias: &ManifestAliasRecord) -> json::Map {
     let mut alias_obj = json::Map::new();
     alias_obj.insert(
@@ -344,7 +320,6 @@ fn alias_snapshot(alias: &ManifestAliasRecord) -> json::Map {
     );
     alias_obj
 }
-
 fn order_completion_snapshot(completion: &ReplicationOrderCompletionRecord) -> Value {
     let mut map = json::Map::new();
     map.insert(
@@ -401,7 +376,6 @@ fn order_completion_snapshot(completion: &ReplicationOrderCompletionRecord) -> V
     );
     Value::Object(map)
 }
-
 fn order_assignment_snapshot(assignment: &ReplicationAssignmentV1) -> Value {
     let mut map = json::Map::new();
     map.insert(
@@ -411,7 +385,6 @@ fn order_assignment_snapshot(assignment: &ReplicationAssignmentV1) -> Value {
     map.insert("slice_gib".into(), Value::from(assignment.slice_gib));
     Value::Object(map)
 }
-
 fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
     let order_payload: ReplicationOrderV1 =
         norito::decode_from_bytes(&order.canonical_order).expect("decode order payload");
@@ -485,7 +458,6 @@ fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
     );
     order_obj
 }
-
 fn make_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let live = LiveQueryStore::start_test();
@@ -521,24 +493,20 @@ fn make_state() -> State {
     state.set_gov(governance);
     state
 }
-
 fn completion_anchor_header() -> iroha_data_model::block::BlockHeader {
     iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 42, 0)
 }
-
 fn completion_anchor() -> ProviderIngestFinalizedAnchorV1 {
     ProviderIngestFinalizedAnchorV1 {
         height: 1,
         block_hash: *iroha_crypto::HashOf::new(&completion_anchor_header()).as_ref(),
     }
 }
-
 fn seed_completion_anchor(state: &State) {
     let mut committed_hashes = state.block_hashes.block();
     committed_hashes.push_for_tests(iroha_crypto::HashOf::new(&completion_anchor_header()));
     committed_hashes.commit_for_tests();
 }
-
 fn completion_authority(owner: &AccountId) -> ProviderIngestCompletionAuthorityV1 {
     ProviderIngestCompletionAuthorityV1::new(
         owner.clone(),
@@ -550,7 +518,6 @@ fn completion_authority(owner: &AccountId) -> ProviderIngestCompletionAuthorityV
         },
     )
 }
-
 fn seed_public_pin_fee_assets(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
     let fee_asset_id = tx.gov.sorafs_pin_fee_asset_id.clone();
     let domain_id =
@@ -579,7 +546,6 @@ fn seed_public_pin_fee_assets(tx: &mut iroha_core::state::StateTransaction<'_, '
     }
     seed_pin_fee_balance(tx, &alice(), 10_000_000_000_000);
 }
-
 fn seed_pin_fee_balance(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
     account: &AccountId,
@@ -590,7 +556,6 @@ fn seed_pin_fee_balance(
         .execute(&alice(), tx)
         .expect("mint SoraFS public pin fee balance");
 }
-
 fn default_chunker() -> ChunkerProfileHandle {
     let descriptor = chunker_registry::default_descriptor();
     ChunkerProfileHandle {
@@ -601,7 +566,6 @@ fn default_chunker() -> ChunkerProfileHandle {
         multihash_code: descriptor.multihash_code,
     }
 }
-
 fn block_header(height: u64) -> iroha_data_model::block::BlockHeader {
     iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(height).expect("height must be non-zero"),
@@ -612,11 +576,9 @@ fn block_header(height: u64) -> iroha_data_model::block::BlockHeader {
         0,
     )
 }
-
 fn default_digest() -> ManifestDigest {
     manifest_digest_for_seed(0xAA)
 }
-
 fn manifest_fixture_with_chunk_digest(seed: u8, chunk_digest_sha3_256: [u8; 32]) -> ManifestV1 {
     let commitment = seed.max(1);
     ManifestBuilder::new()
@@ -639,38 +601,30 @@ fn manifest_fixture_with_chunk_digest(seed: u8, chunk_digest_sha3_256: [u8; 32])
         .build()
         .expect("fixture manifest")
 }
-
 fn chunk_digest_for_seed(seed: u8) -> [u8; 32] {
     [seed.wrapping_add(0x23).max(1); 32]
 }
-
 fn manifest_fixture(seed: u8) -> ManifestV1 {
     manifest_fixture_with_chunk_digest(seed, chunk_digest_for_seed(seed))
 }
-
 fn manifest_digest_for_seed(seed: u8) -> ManifestDigest {
     ManifestDigest::from_manifest(&manifest_fixture(seed)).expect("digest fixture manifest")
 }
-
 fn fixture_seed_for_digest(digest: ManifestDigest) -> u8 {
     (1..=u8::MAX)
         .find(|seed| manifest_digest_for_seed(*seed) == digest)
         .expect("manifest digest must belong to a fixture seed")
 }
-
 fn root_cid_for_manifest(digest: ManifestDigest) -> ManifestRootCid {
     ManifestRootCid::try_from_slice(&manifest_fixture(fixture_seed_for_digest(digest)).root_cid)
         .expect("canonical root CID")
 }
-
 fn default_chunk_digest() -> [u8; 32] {
     chunk_digest_for_seed(0xAA)
 }
-
 fn default_content_length() -> u64 {
     1_073_741_824
 }
-
 fn default_policy() -> PinPolicy {
     PinPolicy {
         min_replicas: 3,
@@ -678,7 +632,6 @@ fn default_policy() -> PinPolicy {
         retention_epoch: 42,
     }
 }
-
 fn replication_order(
     order_id: ReplicationOrderId,
     manifest: ManifestDigest,
@@ -716,7 +669,6 @@ fn replication_order(
         metadata: Vec::new(),
     }
 }
-
 fn alias_binding_for(
     digest: ManifestDigest,
     namespace: &str,
@@ -731,14 +683,11 @@ fn alias_binding_for(
         bound_at,
         expiry_epoch,
     };
-
     let merkle_path: Vec<[u8; 32]> = Vec::new();
     let registry_root =
         alias_merkle_root(&binding_payload, &merkle_path).expect("compute alias proof merkle root");
-
     let generated_at_unix = 1_700_000_000;
     let expires_at_unix = generated_at_unix + 86_400;
-
     let mut bundle = AliasProofBundleV1 {
         binding: binding_payload,
         registry_root,
@@ -748,19 +697,16 @@ fn alias_binding_for(
         merkle_path,
         council_signatures: Vec::new(),
     };
-
     let digest = alias_proof_signature_digest(&bundle);
     let signature = Signature::try_new(council_keys.private_key(), digest.as_ref())?;
     let public_bytes = checked_ed25519_public_key_bytes(council_keys, "alias council public key");
     let signer: [u8; 32] = public_bytes
         .try_into()
         .expect("ed25519 public key must contain 32 bytes");
-
     bundle.council_signatures.push(CouncilSignature {
         signer,
         signature: signature.payload().to_vec(),
     });
-
     let proof = to_bytes(&bundle).expect("encode alias proof bundle");
     Ok(ManifestAliasBinding {
         name: name.to_owned(),
@@ -768,14 +714,12 @@ fn alias_binding_for(
         proof,
     })
 }
-
 fn council_keypair() -> KeyPair {
     let secret_bytes = [0x11; 32];
     let private =
         PrivateKey::from_bytes(Algorithm::Ed25519, &secret_bytes).expect("private key bytes");
     KeyPair::from_private_key(private).expect("derive keypair")
 }
-
 fn checked_ed25519_public_key_bytes<'a>(keypair: &'a KeyPair, context: &str) -> &'a [u8] {
     let (algorithm, public_bytes) = keypair
         .public_key()
@@ -784,7 +728,6 @@ fn checked_ed25519_public_key_bytes<'a>(keypair: &'a KeyPair, context: &str) -> 
     assert_eq!(algorithm, Algorithm::Ed25519, "{context} must be Ed25519");
     public_bytes
 }
-
 fn build_envelope(
     record: &PinManifestRecord,
     keypair: &KeyPair,
@@ -805,7 +748,6 @@ fn build_envelope(
         "signer_multihash".into(),
         Value::from(keypair.public_key().to_string()),
     );
-
     let mut envelope = json::Map::new();
     envelope.insert(
         "chunk_digest_sha3_256".into(),
@@ -820,12 +762,10 @@ fn build_envelope(
         "signatures".into(),
         Value::Array(vec![Value::Object(sig_entry)]),
     );
-
     let mut serialized = json::to_vec_pretty(&Value::Object(envelope)).expect("serialize envelope");
     serialized.push(b'\n');
     Ok(serialized)
 }
-
 fn alice() -> AccountId {
     AccountId::new(
         "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
@@ -833,11 +773,9 @@ fn alice() -> AccountId {
             .expect("public key"),
     )
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn test_manifest_record() -> PinManifestRecord {
         PinManifestRecord::new(
             default_digest(),
@@ -854,7 +792,6 @@ mod tests {
             Metadata::default(),
         )
     }
-
     #[test]
     fn alias_binding_uses_checked_signature_and_verifies() {
         let council_keys = council_keypair();
@@ -862,11 +799,9 @@ mod tests {
             .expect("alias binding should sign");
         let bundle: AliasProofBundleV1 =
             norito::decode_from_bytes(&binding.proof).expect("decode alias proof bundle");
-
         verify_alias_proof_bundle_untrusted_signers(&bundle)
             .expect("checked alias proof signature integrity should verify");
     }
-
     #[test]
     fn council_envelope_uses_checked_signature_and_verifies() {
         let keypair = council_keypair();
@@ -892,7 +827,6 @@ mod tests {
         let signature_bytes = hex::decode(signature_hex).expect("signature hex");
         let signature = Signature::try_from_bytes(&signature_bytes)
             .expect("council envelope signature is non-empty and nonzero");
-
         signature
             .verify(keypair.public_key(), record.digest.as_bytes())
             .expect("checked council envelope signature should verify");

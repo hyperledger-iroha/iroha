@@ -4,13 +4,10 @@
     clippy::cast_sign_loss,
     clippy::suboptimal_flops
 )]
-
 //! Theme intro with animated ASCII prologue and optional audio playback.
 //! The builtin audio path renders a gagaku-inspired chamber arrangement of
 //! Etenraku with softer winds and a slower shō bed.
-
 use std::{fs, io::Write as _, path::PathBuf};
-
 #[cfg(any(
     target_os = "macos",
     target_os = "windows",
@@ -21,22 +18,18 @@ use std::{
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
-
 use eyre::{Context as _, Result};
 use tokio::{
     process::Child,
     time::{Duration, sleep},
 };
-
 use crate::{ascii::AsciiAnimator, etenraku};
-
 #[cfg(any(
     target_os = "macos",
     target_os = "windows",
     all(target_os = "linux", feature = "linux-builtin-synth")
 ))]
 use crate::synth;
-
 #[cfg(any(
     target_os = "macos",
     target_os = "windows",
@@ -61,27 +54,22 @@ const THEME_WAV_SECONDS: u32 = 82;
     all(target_os = "linux", feature = "linux-builtin-synth")
 ))]
 const THEME_WAV_CHUNK_FRAMES: usize = 2048;
-
 pub struct ThemeIntro;
-
 #[derive(Default)]
 pub struct ThemePlayback {
     midi_child: Option<Child>,
     audio_file: Option<PathBuf>,
 }
-
 #[derive(Default, Clone)]
 pub struct ThemeOptions {
     pub audio: bool,
     pub midi_player: Option<String>,
     pub midi_file: Option<String>,
 }
-
 impl ThemeIntro {
     pub fn new() -> Self {
         Self
     }
-
     #[allow(clippy::future_not_send)]
     pub async fn play(&self, options: ThemeOptions) -> Result<ThemePlayback> {
         let mut playback = ThemePlayback::default();
@@ -109,13 +97,10 @@ impl ThemeIntro {
                 }
             }
         }
-
         render_ascii_intro().await?;
-
         Ok(playback)
     }
 }
-
 impl ThemePlayback {
     #[allow(clippy::future_not_send)]
     pub async fn stop(&mut self) {
@@ -128,7 +113,6 @@ impl ThemePlayback {
         }
     }
 }
-
 async fn render_ascii_intro() -> Result<()> {
     let mut anim = AsciiAnimator::new();
     let mut stdout = std::io::stdout();
@@ -146,7 +130,6 @@ async fn render_ascii_intro() -> Result<()> {
     sleep(Duration::from_millis(220)).await;
     Ok(())
 }
-
 #[cfg(any(
     target_os = "macos",
     target_os = "windows",
@@ -157,13 +140,11 @@ fn start_builtin_synth_demo() -> eyre::Result<(Child, PathBuf)> {
     if crate::theme::test_support::should_force_failure() {
         return Err(eyre::eyre!("forced builtin audio failure (test)"));
     }
-
     let path = render_builtin_theme_wav()?;
     let child = spawn_default_audio_player(&path)
         .wrap_err_with(|| format!("start default audio player for {}", path.display()))?;
     Ok((child, path))
 }
-
 #[cfg(not(any(
     target_os = "macos",
     target_os = "windows",
@@ -172,12 +153,10 @@ fn start_builtin_synth_demo() -> eyre::Result<(Child, PathBuf)> {
 fn start_builtin_synth_demo() -> eyre::Result<(Child, PathBuf)> {
     #[cfg(test)]
     let _ = crate::theme::test_support::should_force_failure();
-
     Err(eyre::eyre!(
         "built-in synth unavailable; rebuild with linux-builtin-synth or pass --midi-player"
     ))
 }
-
 #[cfg(any(
     target_os = "macos",
     target_os = "windows",
@@ -196,7 +175,6 @@ fn render_builtin_theme_wav() -> Result<PathBuf> {
     let mut writer = BufWriter::new(file);
     let frames = THEME_WAV_SAMPLE_RATE * THEME_WAV_SECONDS;
     write_wav_header(&mut writer, frames)?;
-
     let mut state = synth::prepare(THEME_WAV_SAMPLE_RATE, THEME_WAV_CHANNELS);
     let mut chunk = vec![0.0f32; THEME_WAV_CHUNK_FRAMES * THEME_WAV_CHANNELS];
     let mut remaining = frames as usize;
@@ -213,7 +191,6 @@ fn render_builtin_theme_wav() -> Result<PathBuf> {
     writer.flush()?;
     Ok(path)
 }
-
 #[cfg(any(
     target_os = "macos",
     target_os = "windows",
@@ -239,7 +216,6 @@ fn write_wav_header(writer: &mut impl std::io::Write, frames: u32) -> Result<()>
     writer.write_all(&data_len.to_le_bytes())?;
     Ok(())
 }
-
 #[cfg(target_os = "macos")]
 fn spawn_default_audio_player(path: &Path) -> Result<Child> {
     tokio::process::Command::new("afplay")
@@ -247,7 +223,6 @@ fn spawn_default_audio_player(path: &Path) -> Result<Child> {
         .spawn()
         .wrap_err("spawn afplay")
 }
-
 #[cfg(target_os = "windows")]
 fn spawn_default_audio_player(path: &Path) -> Result<Child> {
     let path = path.to_string_lossy().replace('\'', "''");
@@ -260,7 +235,6 @@ fn spawn_default_audio_player(path: &Path) -> Result<Child> {
         .spawn()
         .wrap_err("spawn powershell audio player")
 }
-
 #[cfg(all(unix, not(target_os = "macos"), feature = "linux-builtin-synth"))]
 fn spawn_default_audio_player(path: &Path) -> Result<Child> {
     let candidates: &[(&str, &[&str])] = &[
@@ -284,37 +258,29 @@ fn spawn_default_audio_player(path: &Path) -> Result<Child> {
             .unwrap_or_else(|| "no candidates tried".to_string())
     ))
 }
-
 #[cfg(test)]
 mod test_support {
     use std::sync::atomic::{AtomicBool, Ordering};
-
     static FORCE_FAILURE: AtomicBool = AtomicBool::new(false);
-
     pub(super) fn should_force_failure() -> bool {
         FORCE_FAILURE.load(Ordering::SeqCst)
     }
-
     pub(super) struct FailureGuard;
-
     impl FailureGuard {
         pub(super) fn enable() -> Self {
             FORCE_FAILURE.store(true, Ordering::SeqCst);
             Self
         }
     }
-
     impl Drop for FailureGuard {
         fn drop(&mut self) {
             FORCE_FAILURE.store(false, Ordering::SeqCst);
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::{test_support, *};
-
     #[tokio::test]
     async fn intro_renders_without_audio() {
         let intro = ThemeIntro::new();
@@ -328,11 +294,9 @@ mod tests {
             .expect("play intro");
         assert!(playback.midi_child.is_none());
     }
-
     #[tokio::test]
     async fn intro_survives_synth_start_failure() {
         let _guard = test_support::FailureGuard::enable();
-
         let intro = ThemeIntro::new();
         let playback = intro
             .play(ThemeOptions {
@@ -342,7 +306,6 @@ mod tests {
             })
             .await
             .expect("intro should ignore soft-synth failure");
-
         assert!(playback.midi_child.is_none());
     }
 }

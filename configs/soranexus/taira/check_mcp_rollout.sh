@@ -51,6 +51,8 @@ VALIDATOR_PROGRESS_DELAY_SECONDS="${VALIDATOR_PROGRESS_DELAY_SECONDS:-2}"
 VALIDATOR_ALIGNMENT_ATTEMPTS="${VALIDATOR_ALIGNMENT_ATTEMPTS:-10}"
 EXPECTED_TAIRA_GIT_SHA="${EXPECTED_TAIRA_GIT_SHA:-}"
 EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT="${EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT:-}"
+OPERATOR_NETWORK_ID="${OPERATOR_NETWORK_ID:-}"
+OPERATOR_PRIVATE_KEY_FILE="${OPERATOR_PRIVATE_KEY_FILE:-}"
 EXPECTED_TAIRA_CHAIN_ID=""
 PUBLIC_LANE_ID="${PUBLIC_LANE_ID:-0}"
 CONTRACT_NAMESPACE="${CONTRACT_NAMESPACE:-universal}"
@@ -84,6 +86,8 @@ Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url 
                             [--expected-chain-id UUID]
                             [--expected-git-sha 7_TO_40_HEX_SHA]
                             [--expected-dpn-validator-release-commit 40_HEX_COMMIT]
+                            [--operator-network-id NETWORK_ID]
+                            [--operator-private-key-file ABSOLUTE_PATH]
                             [--skip-write-canary]
 
 Verify that Taira's native Torii MCP endpoint is live locally and/or publicly.
@@ -114,7 +118,7 @@ The check fails unless:
   - when `--expected-git-sha` is supplied, GET /status reports a matching
     `build.git_commit_sha` (published and expected values must be 7 to 40
     hexadecimal characters; short or full prefix matches are accepted)
-  - GET /v1/sumeragi/status reports wire-revision-4 durable reducer state
+  - operator-signed GET /v1/sumeragi/status reports wire-revision-4 durable reducer state
   - GET /v1/pipeline/transactions/status reaches the canonical typed status
     handler (the no-hash probe returns HTTP 400), while the retired
     /v1/transactions/status alias remains unmounted (HTTP 404)
@@ -619,6 +623,22 @@ while [[ $# -gt 0 ]]; do
       EXPECTED_TAIRA_CHAIN_ID="$2"
       shift 2
       ;;
+    --operator-network-id)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --operator-network-id" >&2
+        exit 1
+      }
+      OPERATOR_NETWORK_ID="$2"
+      shift 2
+      ;;
+    --operator-private-key-file)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --operator-private-key-file" >&2
+        exit 1
+      }
+      OPERATOR_PRIVATE_KEY_FILE="$2"
+      shift 2
+      ;;
     --iroha-bin)
       [[ $# -ge 2 ]] || {
         echo "missing value for --iroha-bin" >&2
@@ -678,6 +698,14 @@ EXPECTED_TAIRA_CHAIN_ID="$(printf '%s' "$EXPECTED_TAIRA_CHAIN_ID" | tr 'A-F' 'a-
 
 if [[ $SKIP_LOCAL -eq 1 && $SKIP_PUBLIC -eq 1 ]]; then
   echo "nothing to check: both local and public checks were skipped" >&2
+  exit 1
+fi
+if [[ -z "$OPERATOR_NETWORK_ID" || -z "$OPERATOR_PRIVATE_KEY_FILE" ]]; then
+  echo "operator-protected rollout reads require --operator-network-id and --operator-private-key-file" >&2
+  exit 1
+fi
+if [[ "$OPERATOR_PRIVATE_KEY_FILE" != /* ]]; then
+  echo "--operator-private-key-file must be an absolute runtime-only path" >&2
   exit 1
 fi
 
@@ -991,6 +1019,56 @@ status_is_one_of() {
   return 1
 }
 
+operator_protected_url() {
+  local url="$1"
+  local target path
+  target="/${url#*://*/}"
+  path="${target%%\?*}"
+  case "$path" in
+    /v1/sumeragi/status|/v1/sumeragi/diagnostics|/v1/sumeragi/leader|\
+    /v1/sumeragi/bls-keys|/v1/sumeragi/qc|/v1/sumeragi/checkpoints|\
+    /v1/sumeragi/commit-certificates|/v1/sumeragi/validator-sets|\
+    /v1/sumeragi/validator-sets/*|/v1/sumeragi/consensus-keys|\
+    /v1/sumeragi/key-lifecycle|/v1/sumeragi/telemetry|/v1/sumeragi/params|\
+    /v1/sumeragi/commit-qcs/*|/v1/sumeragi/evidence|/v1/sumeragi/evidence/count|\
+    /v1/sumeragi/vrf/penalties/*|/v1/sumeragi/vrf/epoch/*|/v1/peers|\
+    /v1/time/status|/v1/pipeline/preflight|/v1/pipeline/policy|\
+    /v1/pipeline/proof-retention|/v1/pipeline/recovery/*|\
+    /v1/connect/status/aggregate)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+append_operator_auth_args() {
+  local method="$1"
+  local url="$2"
+  local header_output header
+  OPERATOR_CURL_AUTH_ARGS=()
+  if ! operator_protected_url "$url"; then
+    return 0
+  fi
+  if ! header_output="$(
+    python3 "${REPO_ROOT}/scripts/operator_http_headers.py" \
+      --network-id "$OPERATOR_NETWORK_ID" \
+      --private-key-file "$OPERATOR_PRIVATE_KEY_FILE" \
+      --method "$method" \
+      --url "$url"
+  )"; then
+    echo "failed to build fresh operator headers for ${method} ${url}" >&2
+    exit 1
+  fi
+  while IFS= read -r header; do
+    [[ -n "$header" ]] || continue
+    OPERATOR_CURL_AUTH_ARGS+=(-H "$header")
+  done <<<"$header_output"
+  if [[ ${#OPERATOR_CURL_AUTH_ARGS[@]} -ne 8 ]]; then
+    echo "operator header helper returned an incomplete signature quartet" >&2
+    exit 1
+  fi
+}
+
 http_request() {
   local method="$1"
   local url="$2"
@@ -1019,6 +1097,8 @@ http_request() {
   last_headers="$header_file"
   build_curl_resolve_args "$url"
   curl_cmd+=( ${CURL_URL_RESOLVE_ARGS[@]+"${CURL_URL_RESOLVE_ARGS[@]}"} )
+  append_operator_auth_args "$method" "$url"
+  curl_cmd+=( ${OPERATOR_CURL_AUTH_ARGS[@]+"${OPERATOR_CURL_AUTH_ARGS[@]}"} )
 
   if [[ "$method" == "GET" ]]; then
     set +e
@@ -2831,10 +2911,12 @@ check_route_parity() {
   check_route_status "$label" GET "${root_url}/v1/transactions/status" "404" \
     "retired transaction-status compatibility route must remain unmounted" \
     "" "route_not_found"
-  check_route_status "$label" POST "${root_url}/v1/musubi/queries/ordered-prefix" "400" \
-    "Musubi V1 typed ordered-prefix route should reject an empty request" '{}'
-  check_route_status "$label" POST "${root_url}/v1/musubi/instructions/release-yank-set" "400" \
-    "Musubi V1 typed yank instruction builder should reject an empty request" '{}'
+  check_route_status "$label" POST "${root_url}/v1/musubi/queries/ordered-prefix" "401" \
+    "Musubi V1 ordered-prefix route should authenticate before typed body decode" '{}' \
+    "canonical_authentication_required"
+  check_route_status "$label" POST "${root_url}/v1/musubi/instructions/release-yank-set" "401" \
+    "Musubi V1 yank builder should authenticate before typed body decode" '{}' \
+    "canonical_authentication_required"
   check_route_status "$label" POST "${root_url}/v1/contracts/deploy" "404" \
     "retired server-side contract deploy route must remain unmounted" '{}' \
     "route_not_found"

@@ -1,7 +1,5 @@
 //! Direct asset quantity transfer helper for live operator workflows.
-
 use std::{path::PathBuf, str::FromStr};
-
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
@@ -16,13 +14,11 @@ use iroha::{
         transaction::FeePaymentIntent,
     },
 };
-
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum FeePayer {
     Authority,
     Sponsor,
 }
-
 #[derive(Parser, Debug)]
 struct Args {
     #[arg(long)]
@@ -44,7 +40,6 @@ struct Args {
     #[arg(long, value_name = "NONZERO_U64")]
     fee_program_revision: Option<u64>,
 }
-
 fn parse_account(raw: &str) -> Result<AccountId> {
     parse_account_address(raw, None)
         .wrap_err("failed to parse account address")?
@@ -52,7 +47,6 @@ fn parse_account(raw: &str) -> Result<AccountId> {
         .to_account_id()
         .map_err(|err| eyre!(err.to_string()))
 }
-
 fn fee_payment(args: &Args) -> Result<FeePaymentIntent> {
     match args.fee_payer {
         FeePayer::Authority => {
@@ -83,7 +77,6 @@ fn fee_payment(args: &Args) -> Result<FeePaymentIntent> {
         }
     }
 }
-
 fn main() -> Result<()> {
     let args = Args::parse();
     let config = Config::load(LoadPath::Explicit(&args.config))
@@ -104,11 +97,9 @@ fn main() -> Result<()> {
     println!("{tx_hash}");
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn args_with(extra: &[&str]) -> Args {
         let mut argv = vec![
             "direct_asset_transfer",
@@ -126,7 +117,6 @@ mod tests {
         argv.extend_from_slice(extra);
         Args::try_parse_from(argv).expect("parse fee selection fixture")
     }
-
     #[test]
     fn fee_payment_requires_explicit_consistent_payer_selection() {
         assert!(matches!(

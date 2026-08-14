@@ -1,6 +1,5 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-
 // JSON-safe string content from arbitrary bytes (without surrounding quotes).
 fn esc_str(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len());
@@ -25,7 +24,6 @@ fn esc_str(data: &[u8]) -> String {
     }
     out
 }
-
 // Simple recursive generator for nested JSON from bytes; depth and size limited.
 fn derive_limits(data: &[u8]) -> (usize, usize) {
     // Derive max depth in [4..12] and a token budget in [256..4096]
@@ -35,7 +33,6 @@ fn derive_limits(data: &[u8]) -> (usize, usize) {
     let budget = 256 + ((b1 as usize) * 16).min(3840); // up to 4096
     (max_depth, budget)
 }
-
 fn take_slice<'a>(data: &'a [u8], idx: &mut usize, max_len: usize) -> &'a [u8] {
     if *idx >= data.len() {
         return &data[0..0];
@@ -47,7 +44,6 @@ fn take_slice<'a>(data: &'a [u8], idx: &mut usize, max_len: usize) -> &'a [u8] {
     *idx = end;
     s
 }
-
 fn gen_key(data: &[u8], idx: &mut usize) -> String {
     // Build a JSON key content that includes escaped characters.
     // Returned string is already escaped for use inside quotes.
@@ -93,7 +89,6 @@ fn gen_key(data: &[u8], idx: &mut usize) -> String {
     }
     s
 }
-
 fn gen_number(data: &[u8], idx: &mut usize, tag: u8) -> String {
     // Integers or simple floats
     if (tag & 1) == 0 {
@@ -117,7 +112,6 @@ fn gen_number(data: &[u8], idx: &mut usize, tag: u8) -> String {
         )
     }
 }
-
 fn gen_json(
     data: &[u8],
     depth: usize,
@@ -185,7 +179,6 @@ fn gen_json(
         }
     }
 }
-
 // Build a JSON array: [<nested_value>, "needle"]
 fn json_nested_with_tail_str(data: &[u8]) -> String {
     let (max_depth, mut budget) = derive_limits(data);
@@ -195,11 +188,9 @@ fn json_nested_with_tail_str(data: &[u8]) -> String {
     let tail = esc_str(tail_bytes);
     format!("[{},\"{}\"]", first, tail)
 }
-
 fuzz_target!(|data: &[u8]| {
     // Exercise both Parser and TapeWalker skip_value across nested structures.
     let s = json_nested_with_tail_str(data);
-
     // Parser::skip_value
     let mut p = norito::json::Parser::new(&s);
     if p.consume_char(b'[').is_ok() {
@@ -207,7 +198,6 @@ fuzz_target!(|data: &[u8]| {
         let _ = p.consume_comma_if_present();
         let _ = p.parse_string();
     }
-
     // TapeWalker::skip_value
     let mut w = norito::json::TapeWalker::new(&s);
     if let Some((off, ch)) = w.peek_struct() {

@@ -1,5 +1,4 @@
 //! Pointer-ABI Norito roundtrip tests for manifest and NFT syscalls.
-
 use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
@@ -13,7 +12,6 @@ use norito::{
     codec::{Decode, Encode},
     decode_from_bytes, to_bytes,
 };
-
 fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(2 + 1 + 4 + payload.len() + Hash::LENGTH);
     out.extend_from_slice(&(type_id as u16).to_be_bytes());
@@ -26,11 +24,9 @@ fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&digest);
     out
 }
-
 fn checked_random_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked pointer ABI keypair")
 }
-
 #[test]
 fn manifest_pointer_roundtrip() {
     let account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -55,40 +51,31 @@ fn manifest_pointer_roundtrip() {
         error_codes: None,
         provenance: None,
     };
-
     let payload = to_bytes(&manifest).expect("encode manifest");
     let tlv = make_tlv(PointerType::NoritoBytes, &payload);
-
     let view = validate_tlv_bytes(&tlv).expect("well-formed TLV");
     assert_eq!(view.type_id, PointerType::NoritoBytes);
-
     let decoded: ContractManifest =
         decode_from_bytes(view.payload).expect("decode manifest payload");
     assert_eq!(decoded, manifest);
 }
-
 #[test]
 fn nft_syscall_pointers_roundtrip() {
     let keypair = checked_random_keypair();
     let (public_key, _) = keypair.into_parts();
     let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let account_id = AccountId::new(public_key);
-
     let nft_name: Name = "collectible".parse().expect("valid name");
     let nft_id = NftId::of(domain, nft_name);
-
     let account_payload = account_id.encode();
     let nft_payload = nft_id.encode();
-
     let account_tlv = make_tlv(PointerType::AccountId, &account_payload);
     let nft_tlv = make_tlv(PointerType::NftId, &nft_payload);
-
     let account_view = validate_tlv_bytes(&account_tlv).expect("account TLV must validate");
     assert_eq!(account_view.type_id, PointerType::AccountId);
     let decoded_account =
         AccountId::decode(&mut &*account_view.payload).expect("decode account id");
     assert_eq!(decoded_account, account_id);
-
     let nft_view = validate_tlv_bytes(&nft_tlv).expect("nft TLV must validate");
     assert_eq!(nft_view.type_id, PointerType::NftId);
     let decoded_nft = NftId::decode(&mut &*nft_view.payload).expect("decode nft id");

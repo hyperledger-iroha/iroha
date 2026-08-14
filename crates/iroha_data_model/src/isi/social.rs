@@ -1,5 +1,4 @@
 use super::*;
-
 isi! {
     /// Claim a promotional reward for an active Twitter follow binding.
     pub struct ClaimTwitterFollowReward {
@@ -7,7 +6,6 @@ isi! {
         pub binding_hash: crate::oracle::KeyedHash,
     }
 }
-
 isi! {
     /// Send a reward to a Twitter handle; funds are escrowed until the binding appears.
     pub struct SendToTwitter {
@@ -17,7 +15,6 @@ isi! {
         pub amount: iroha_primitives::numeric::Quantity,
     }
 }
-
 isi! {
     /// Cancel an existing escrow created by [`SendToTwitter`].
     pub struct CancelTwitterEscrow {
@@ -25,22 +22,18 @@ isi! {
         pub binding_hash: crate::oracle::KeyedHash,
     }
 }
-
 impl crate::seal::Instruction for ClaimTwitterFollowReward {}
 impl crate::seal::Instruction for SendToTwitter {}
 impl crate::seal::Instruction for CancelTwitterEscrow {}
-
 fn social_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ClaimTwitterFollowReward {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = social_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let binding_hash = super::decode_aos_canonical_field::<crate::oracle::KeyedHash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -53,14 +46,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ClaimTwitterFollowReward {
         Ok((Self { binding_hash }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for SendToTwitter {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = social_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let binding_hash = super::decode_aos_canonical_field::<crate::oracle::KeyedHash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -83,14 +74,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SendToTwitter {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for CancelTwitterEscrow {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = social_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let binding_hash = super::decode_aos_canonical_field::<crate::oracle::KeyedHash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -103,24 +92,19 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CancelTwitterEscrow {
         Ok((Self { binding_hash }, offset))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::core::DecodeFromSlice;
-
     use super::*;
-
     #[derive(norito::codec::Encode)]
     struct ForgedSendToTwitter {
         binding_hash: crate::oracle::KeyedHash,
         amount: Numeric,
     }
-
     fn binding_hash() -> crate::oracle::KeyedHash {
         crate::oracle::KeyedHash::new("pepper-social-v1", b"pepper", b"twitter_user_123")
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -131,7 +115,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, value: T)
     where
         T: crate::isi::Instruction
@@ -149,7 +132,6 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn social_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(ClaimTwitterFollowReward {
@@ -163,27 +145,23 @@ mod tests {
             binding_hash: binding_hash(),
         });
     }
-
     #[test]
     fn negative_numeric_payload_cannot_decode_as_social_escrow_quantity() {
         let forged = ForgedSendToTwitter {
             binding_hash: binding_hash(),
             amount: Numeric::new(-1_i32, 0),
         };
-
         assert!(
             SendToTwitter::decode_from_slice(&forged.encode()).is_err(),
             "a negative signed payload must not decode as a social escrow quantity"
         );
     }
-
     #[test]
     fn social_registry_decodes_type_names() {
         let registry = crate::isi::InstructionRegistry::new()
             .register_slice::<ClaimTwitterFollowReward>()
             .register_slice::<SendToTwitter>()
             .register_slice::<CancelTwitterEscrow>();
-
         assert_registry_decodes(
             &registry,
             ClaimTwitterFollowReward {

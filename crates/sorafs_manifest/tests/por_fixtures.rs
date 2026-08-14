@@ -1,9 +1,6 @@
 //! Deterministic SoraFS PoR and cross-SDK fixture regeneration checks.
-
 #![allow(unexpected_cfgs)]
-
 use std::{fs, path::Path};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use sorafs_manifest::{
     PotrReceiptV1, ProofStreamTier, RepairTaskRecordV1, RepairTaskStateV1,
@@ -13,16 +10,13 @@ use sorafs_manifest::{
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, decode_por_proof_v1},
 };
 use tempfile::tempdir;
-
 const FIXTURES_ROOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/sorafs_manifest"
 );
-
 fn read_fixture(path: &str) -> Vec<u8> {
     fs::read(path).unwrap_or_else(|err| panic!("failed to read {path}: {err}"))
 }
-
 #[cfg(unix)]
 fn seed_generator_inputs(root: &Path) {
     for directory in [
@@ -52,7 +46,6 @@ fn seed_generator_inputs(root: &Path) {
         );
     }
 }
-
 fn run_generator(root: &Path, arguments: &[&str]) -> std::process::Output {
     cargo_bin_cmd!("generate_por_fixtures")
         .current_dir(root)
@@ -60,7 +53,6 @@ fn run_generator(root: &Path, arguments: &[&str]) -> std::process::Output {
         .output()
         .expect("run deterministic SoraFS fixture generator")
 }
-
 #[cfg(unix)]
 fn assert_generator_success(output: &std::process::Output, mode: &str) {
     assert!(
@@ -70,14 +62,12 @@ fn assert_generator_success(output: &std::process::Output, mode: &str) {
         String::from_utf8_lossy(&output.stderr),
     );
 }
-
 #[cfg(unix)]
 fn regenerate_fixtures(root: &Path) {
     seed_generator_inputs(root);
     let write = run_generator(root, &["--write"]);
     assert_generator_success(&write, "--write");
 }
-
 #[cfg(unix)]
 fn copy_fixture_tree(source: &Path, destination: &Path) {
     fs::create_dir_all(destination).unwrap_or_else(|error| {
@@ -109,7 +99,6 @@ fn copy_fixture_tree(source: &Path, destination: &Path) {
         }
     }
 }
-
 #[test]
 fn por_fixture_generator_requires_exactly_one_explicit_mode() {
     let root = tempdir().expect("create CLI contract directory");
@@ -131,7 +120,6 @@ fn por_fixture_generator_requires_exactly_one_explicit_mode() {
         );
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn por_fixture_generator_check_rejects_drift_unexpected_entries_and_hardlinks() {
@@ -142,7 +130,6 @@ fn por_fixture_generator_check_rejects_drift_unexpected_entries_and_hardlinks() 
     let original = fs::read(&challenge).expect("read generated challenge");
     let baseline = run_generator(root.path(), &["--check"]);
     assert_generator_success(&baseline, "baseline --check");
-
     let mut drifted = original.clone();
     drifted.push(0);
     fs::write(&challenge, &drifted).expect("write deterministic drift");
@@ -160,7 +147,6 @@ fn por_fixture_generator_check_rejects_drift_unexpected_entries_and_hardlinks() 
         "--check mutated a drifted fixture"
     );
     fs::write(&challenge, &original).expect("restore generated challenge");
-
     let unexpected_a = fixture_root.join("por/aaa_unexpected_v1.json");
     let unexpected_z = fixture_root.join("por/zzz_unexpected_v1.json");
     fs::write(&unexpected_z, b"{}\n").expect("write unexpected z fixture");
@@ -193,7 +179,6 @@ fn por_fixture_generator_check_rejects_drift_unexpected_entries_and_hardlinks() 
     );
     fs::remove_file(&unexpected_a).expect("remove unexpected a fixture");
     fs::remove_file(&unexpected_z).expect("remove unexpected z fixture");
-
     let publication_lock = fixture_root.join(".generate_por_fixtures.lock");
     fs::write(&publication_lock, b"stale\n").expect("write stale publication lock");
     let locked = run_generator(root.path(), &["--check"]);
@@ -207,7 +192,6 @@ fn por_fixture_generator_check_rejects_drift_unexpected_entries_and_hardlinks() 
         String::from_utf8_lossy(&locked.stderr)
     );
     fs::remove_file(&publication_lock).expect("remove stale publication lock");
-
     let hardlink = root.path().join("challenge-hardlink.to");
     if fs::hard_link(&challenge, &hardlink).is_ok() {
         let write = run_generator(root.path(), &["--write"]);
@@ -228,12 +212,10 @@ fn por_fixture_generator_check_rejects_drift_unexpected_entries_and_hardlinks() 
         fs::remove_file(&hardlink).expect("remove hardlink alias");
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn por_fixture_generator_rejects_symlinked_managed_targets() {
     use std::os::unix::fs::symlink;
-
     let root = tempdir().expect("create symlink fixture directory");
     regenerate_fixtures(root.path());
     let fixture_root = root.path().join("fixtures/sorafs_manifest");
@@ -242,7 +224,6 @@ fn por_fixture_generator_rejects_symlinked_managed_targets() {
     let original = fs::read(&challenge).expect("read generated challenge");
     fs::rename(&challenge, &backup).expect("move challenge outside managed tree");
     symlink(&backup, &challenge).expect("install managed symlink");
-
     for mode in ["--check", "--write"] {
         let output = run_generator(root.path(), &[mode]);
         assert!(
@@ -261,7 +242,6 @@ fn por_fixture_generator_rejects_symlinked_managed_targets() {
         "failed publication changed the symlink target"
     );
 }
-
 #[test]
 fn por_challenge_fixture_decodes_and_validates() {
     let bytes = read_fixture(&format!("{FIXTURES_ROOT}/por/challenge_v1.to"));
@@ -273,7 +253,6 @@ fn por_challenge_fixture_decodes_and_validates() {
         usize::from(challenge.sample_count)
     );
 }
-
 #[test]
 fn por_proof_fixture_decodes_and_validates() {
     let bytes = read_fixture(&format!("{FIXTURES_ROOT}/por/proof_v1.to"));
@@ -285,7 +264,6 @@ fn por_proof_fixture_decodes_and_validates() {
         .expect("provider proof signature must verify");
     assert!(!digest.iter().all(|&b| b == 0), "digest must be non-zero");
 }
-
 #[test]
 fn audit_verdict_fixture_decodes_and_validates() {
     let bytes = read_fixture(&format!("{FIXTURES_ROOT}/por/verdict_v1.to"));
@@ -297,7 +275,6 @@ fn audit_verdict_fixture_decodes_and_validates() {
         .expect("auditor verdict signature must verify");
     assert_eq!(verdict.outcome, AuditOutcomeV1::Success);
 }
-
 #[test]
 fn potr_receipt_fixture_decodes_and_validates() {
     let bytes = read_fixture(&format!("{FIXTURES_ROOT}/potr/receipt_v1.to"));
@@ -308,7 +285,6 @@ fn potr_receipt_fixture_decodes_and_validates() {
     assert_eq!(receipt.manifest_digest, [0x42; 32]);
     assert_eq!(receipt.provider_id, [0x10; 32]);
 }
-
 #[test]
 fn repair_task_fixture_decodes_and_validates() {
     let bytes = read_fixture(&format!("{FIXTURES_ROOT}/repair/task_v1.to"));
@@ -319,7 +295,6 @@ fn repair_task_fixture_decodes_and_validates() {
     assert_eq!(task.manifest_digest, [0x42; 32]);
     assert_eq!(task.provider_id, [0x10; 32]);
 }
-
 #[test]
 fn repair_link_negative_fixtures_are_structurally_valid() {
     let manifest_bytes = read_fixture(&format!(
@@ -332,7 +307,6 @@ fn repair_link_negative_fixtures_are_structurally_valid() {
         .expect("manifest-mismatch repair task must remain structurally valid");
     assert_eq!(manifest_task.manifest_digest, [0x99; 32]);
     assert_eq!(manifest_task.provider_id, [0x10; 32]);
-
     let provider_bytes = read_fixture(&format!(
         "{FIXTURES_ROOT}/repair/negative/task_provider_unassigned_v1.to"
     ));
@@ -344,7 +318,6 @@ fn repair_link_negative_fixtures_are_structurally_valid() {
     assert_eq!(provider_task.manifest_digest, [0x42; 32]);
     assert_eq!(provider_task.provider_id, [0x99; 32]);
 }
-
 #[test]
 fn governance_node_fixture_wraps_por_proof() {
     let bytes = read_fixture(&format!("{FIXTURES_ROOT}/governance/node_v1.to"));
@@ -363,7 +336,6 @@ fn governance_node_fixture_wraps_por_proof() {
         other => panic!("expected PorProof payload, got {other:?}"),
     }
 }
-
 #[test]
 fn moderation_governance_node_fixture_is_typed_and_signed() {
     let bytes = read_fixture(&format!("{FIXTURES_ROOT}/moderation/governance_node_v1.to"));
@@ -390,7 +362,6 @@ fn moderation_governance_node_fixture_is_typed_and_signed() {
         other => panic!("expected ModerationBallotEvent payload, got {other:?}"),
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn governance_sdk_fixture_regeneration_is_byte_identical() {
@@ -422,12 +393,10 @@ fn governance_sdk_fixture_regeneration_is_byte_identical() {
         "dag_head_validation_outcome_v1.json",
         "sdk_validation_inventory_v1.json",
     ];
-
     let first = tempdir().expect("create first fixture generation directory");
     let second = tempdir().expect("create second fixture generation directory");
     regenerate_fixtures(first.path());
     regenerate_fixtures(second.path());
-
     for name in INVENTORIED_FILES {
         let relative = Path::new("fixtures/sorafs_manifest/governance").join(name);
         let first_bytes = fs::read(first.path().join(&relative))
@@ -435,7 +404,6 @@ fn governance_sdk_fixture_regeneration_is_byte_identical() {
         let second_bytes = fs::read(second.path().join(&relative))
             .unwrap_or_else(|error| panic!("read second regenerated `{name}`: {error}"));
         let checked_in = read_fixture(&format!("{FIXTURES_ROOT}/governance/{name}"));
-
         assert_eq!(
             first_bytes, second_bytes,
             "two regenerations diverged for `{name}`"
@@ -446,7 +414,6 @@ fn governance_sdk_fixture_regeneration_is_byte_identical() {
         );
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn release_wide_reference_sdk_fixture_regeneration_is_byte_identical() {
@@ -479,12 +446,10 @@ fn release_wide_reference_sdk_fixture_regeneration_is_byte_identical() {
         "reference_sdk/bundle_routing_admission_positive_validation_outcome_v1.json",
         "reference_sdk_validation_inventory_v1.json",
     ];
-
     let first = tempdir().expect("create first release-wide generation directory");
     let second = tempdir().expect("create second release-wide generation directory");
     regenerate_fixtures(first.path());
     regenerate_fixtures(second.path());
-
     for name in INVENTORIED_FILES {
         let relative = Path::new("fixtures/sorafs_manifest").join(name);
         let first_bytes = fs::read(first.path().join(&relative))
@@ -492,7 +457,6 @@ fn release_wide_reference_sdk_fixture_regeneration_is_byte_identical() {
         let second_bytes = fs::read(second.path().join(&relative))
             .unwrap_or_else(|error| panic!("read second regenerated `{name}`: {error}"));
         let checked_in = read_fixture(&format!("{FIXTURES_ROOT}/{name}"));
-
         assert_eq!(
             first_bytes, second_bytes,
             "two release-wide regenerations diverged for `{name}`"

@@ -3,9 +3,7 @@
 //! Points use the RFC 9380 `P256_XMD:SHA-256_SSWU_RO_` suite and are encoded as
 //! canonical compressed SEC1 values.  Scalars are canonical big-endian
 //! integers strictly below the P-256 group order.
-
 use core::fmt;
-
 use p256::{
     AffinePoint, EncodedPoint, FieldBytes, NistP256, ProjectivePoint, Scalar,
     elliptic_curve::{
@@ -18,21 +16,16 @@ use rand_core_06::{CryptoRng, RngCore};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
-
 use super::prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1};
-
 /// P-256 ES256 signing key used by first-release wallet-side device proofs.
 pub use p256::ecdsa::SigningKey as DeviceSigningKeyV1;
-
 /// Maximum opaque proof bytes accepted before Norito decoding.
 pub const MAX_P256_ENGINE_PROOF_BYTES_V1: usize = 8 * 1024 * 1024;
-
 const TRANSCRIPT_VERSION_V1: u8 = 1;
 const TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.privacy.transcript.v1";
 const CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.privacy.challenge.p256.v1";
 const GENERATOR_DIGEST_DOMAIN_V1: &[u8] = b"iroha.privacy.generators.p256.v1";
 const MAX_REJECTION_ATTEMPTS: u32 = 1 << 16;
-
 /// Failure returned by the shared P-256 privacy substrate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum P256EngineError {
@@ -96,7 +89,6 @@ pub enum P256EngineError {
     #[error("invalid canonical Norito engine proof")]
     InvalidProofEncoding,
 }
-
 /// Canonical compressed SEC1 encoding of a non-identity P-256 point.
 #[derive(
     Clone,
@@ -113,7 +105,6 @@ pub enum P256EngineError {
 pub struct CompressedPointV1 {
     bytes: [u8; 33],
 }
-
 impl CompressedPointV1 {
     /// Parse and canonicalize a compressed SEC1 point.
     ///
@@ -133,13 +124,11 @@ impl CompressedPointV1 {
         let _ = point.to_projective()?;
         Ok(point)
     }
-
     /// Return the exact canonical SEC1 bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 33] {
         &self.bytes
     }
-
     pub(crate) fn from_projective(point: ProjectivePoint) -> Result<Self, P256EngineError> {
         if bool::from(point.is_identity()) {
             return Err(P256EngineError::IdentityPoint);
@@ -153,7 +142,6 @@ impl CompressedPointV1 {
         fixed.copy_from_slice(bytes);
         Ok(Self { bytes: fixed })
     }
-
     pub(crate) fn to_projective(self) -> Result<ProjectivePoint, P256EngineError> {
         if !matches!(self.bytes[0], 0x02 | 0x03) {
             return Err(P256EngineError::InvalidPointEncoding);
@@ -174,13 +162,11 @@ impl CompressedPointV1 {
         }
         Ok(projective)
     }
-
     #[cfg(test)]
     pub(crate) const fn from_unchecked_bytes(bytes: [u8; 33]) -> Self {
         Self { bytes }
     }
 }
-
 impl fmt::Debug for CompressedPointV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -189,7 +175,6 @@ impl fmt::Debug for CompressedPointV1 {
             .finish()
     }
 }
-
 /// Canonical big-endian encoding of a P-256 scalar.
 #[derive(
     Clone,
@@ -206,7 +191,6 @@ impl fmt::Debug for CompressedPointV1 {
 pub struct CanonicalScalarV1 {
     bytes: [u8; 32],
 }
-
 impl CanonicalScalarV1 {
     /// Parse a canonical scalar.  Zero is admitted for public responses.
     ///
@@ -218,36 +202,30 @@ impl CanonicalScalarV1 {
         let _ = value.to_scalar()?;
         Ok(value)
     }
-
     /// Return the exact canonical big-endian bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.bytes
     }
-
     /// Return whether this scalar is zero.
     #[must_use]
     pub fn is_zero(&self) -> bool {
         self.bytes == [0; 32]
     }
-
     pub(crate) fn from_scalar(value: Scalar) -> Self {
         let bytes: [u8; 32] = value.to_repr().into();
         Self { bytes }
     }
-
     pub(crate) fn to_scalar(self) -> Result<Scalar, P256EngineError> {
         let repr = FieldBytes::from(self.bytes);
         Option::<Scalar>::from(Scalar::from_repr(repr))
             .ok_or(P256EngineError::InvalidScalarEncoding)
     }
-
     #[cfg(test)]
     pub(crate) const fn from_unchecked_bytes(bytes: [u8; 32]) -> Self {
         Self { bytes }
     }
 }
-
 impl fmt::Debug for CanonicalScalarV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -256,12 +234,10 @@ impl fmt::Debug for CanonicalScalarV1 {
             .finish()
     }
 }
-
 /// Zeroizing canonical non-zero scalar used for secret keys and blindings.
 pub struct SecretScalarV1 {
     bytes: Zeroizing<[u8; 32]>,
 }
-
 impl SecretScalarV1 {
     /// Construct a secret scalar from canonical big-endian bytes.
     ///
@@ -277,7 +253,6 @@ impl SecretScalarV1 {
             bytes: Zeroizing::new(bytes),
         })
     }
-
     /// Generate an unbiased non-zero secret scalar by rejection sampling.
     ///
     /// # Errors
@@ -294,23 +269,19 @@ impl SecretScalarV1 {
             bytes: Zeroizing::new(scalar.to_repr().into()),
         })
     }
-
     #[cfg(test)]
     pub(crate) fn canonical_encoding(&self) -> CanonicalScalarV1 {
         CanonicalScalarV1 { bytes: *self.bytes }
     }
-
     pub(crate) fn expose_scalar(&self) -> Scalar {
         scalar_from_bytes(*self.bytes).expect("secret scalar was validated at construction")
     }
 }
-
 impl fmt::Debug for SecretScalarV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("SecretScalarV1([REDACTED])")
     }
 }
-
 /// Consensus-relevant binding supplied to a versioned privacy transcript.
 #[derive(Clone, Copy, Debug)]
 pub struct TranscriptBindingV1<'a> {
@@ -335,7 +306,6 @@ pub struct TranscriptBindingV1<'a> {
     /// Digest of the exact independently derived generator basis.
     pub generator_digest: [u8; 32],
 }
-
 impl TranscriptBindingV1<'_> {
     /// Validate all mandatory bindings.
     ///
@@ -367,13 +337,11 @@ impl TranscriptBindingV1<'_> {
         Ok(())
     }
 }
-
 /// SHA-256 Fiat--Shamir transcript with canonical length-delimited fields.
 #[derive(Clone)]
 pub struct TranscriptV1 {
     hasher: Sha256,
 }
-
 impl TranscriptV1 {
     /// Begin a transcript for a closed protocol suite.
     ///
@@ -403,7 +371,6 @@ impl TranscriptV1 {
         transcript.append_message(b"generator_digest", &binding.generator_digest)?;
         Ok(transcript)
     }
-
     /// Append one canonically framed message.
     ///
     /// # Errors
@@ -421,7 +388,6 @@ impl TranscriptV1 {
         self.hasher.update(value);
         Ok(())
     }
-
     /// Append a canonical compressed point.
     ///
     /// # Errors
@@ -434,7 +400,6 @@ impl TranscriptV1 {
     ) -> Result<(), P256EngineError> {
         self.append_message(label, point.as_bytes())
     }
-
     /// Derive one independent non-zero scalar by SHA-256 rejection sampling.
     ///
     /// The accepted scalar is appended to the transcript before this method
@@ -475,19 +440,16 @@ impl TranscriptV1 {
         }
         Err(P256EngineError::RejectionSamplingExhausted)
     }
-
     /// Return the digest of the transcript-so-far without mutating it.
     #[must_use]
     pub fn digest(&self) -> [u8; 32] {
         self.hasher.clone().finalize().into()
     }
 }
-
 pub(crate) fn scalar_from_bytes(bytes: [u8; 32]) -> Result<Scalar, P256EngineError> {
     Option::<Scalar>::from(Scalar::from_repr(FieldBytes::from(bytes)))
         .ok_or(P256EngineError::InvalidScalarEncoding)
 }
-
 pub(crate) fn health_checked_p256_rng_v1<R>(
     rng: &mut R,
 ) -> Result<HealthCheckedCryptoRngV1<'_, R>, P256EngineError>
@@ -499,7 +461,6 @@ where
         ProverRandomnessErrorV1::Unhealthy => P256EngineError::RandomnessHealthCheckFailed,
     })
 }
-
 pub(crate) fn random_nonzero_scalar<R>(rng: &mut R) -> Result<Scalar, P256EngineError>
 where
     R: CryptoRng + RngCore,
@@ -520,7 +481,6 @@ where
     }
     Err(P256EngineError::RejectionSamplingExhausted)
 }
-
 pub(crate) fn hash_to_curve_rfc9380(
     dst: &'static [u8],
     message: &[u8],
@@ -532,7 +492,6 @@ pub(crate) fn hash_to_curve_rfc9380(
     }
     Ok(point)
 }
-
 pub(crate) fn generator_digest(
     suite: &[u8],
     points: &[CompressedPointV1],
@@ -556,7 +515,6 @@ pub(crate) fn generator_digest(
     }
     Ok(hash.finalize().into())
 }
-
 pub(crate) fn validate_generator_independence(
     points: &[CompressedPointV1],
 ) -> Result<(), P256EngineError> {
@@ -574,50 +532,37 @@ pub(crate) fn validate_generator_independence(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use p256::elliptic_curve::sec1::ToEncodedPoint as _;
-
     use super::*;
-
     struct FailingRng;
-
     impl RngCore for FailingRng {
         fn next_u32(&mut self) -> u32 {
             panic!("P-256 privacy engines must use the fallible RNG interface")
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("P-256 privacy engines must use the fallible RNG interface")
         }
-
         fn fill_bytes(&mut self, _destination: &mut [u8]) {
             panic!("P-256 privacy engines must use the fallible RNG interface")
         }
-
         fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
             Err(rand_core_06::Error::new("injected P-256 RNG failure"))
         }
     }
-
     impl CryptoRng for FailingRng {}
-
     struct PeriodicRng;
-
     impl RngCore for PeriodicRng {
         fn next_u32(&mut self) -> u32 {
             panic!("P-256 privacy engines must use the fallible RNG interface")
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("P-256 privacy engines must use the fallible RNG interface")
         }
-
         fn fill_bytes(&mut self, _destination: &mut [u8]) {
             panic!("P-256 privacy engines must use the fallible RNG interface")
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
             for (index, byte) in destination.iter_mut().enumerate() {
                 *byte = ((index % 16) as u8).wrapping_mul(17).wrapping_add(5);
@@ -625,9 +570,7 @@ mod tests {
             Ok(())
         }
     }
-
     impl CryptoRng for PeriodicRng {}
-
     fn binding() -> TranscriptBindingV1<'static> {
         TranscriptBindingV1 {
             network_id: &[1; 32],
@@ -642,7 +585,6 @@ mod tests {
             generator_digest: [4; 32],
         }
     }
-
     #[test]
     fn rfc9380_p256_vector_matches() {
         const DST: &[u8] = b"QUUX-V01-CS02-with-P256_XMD:SHA-256_SSWU_RO_";
@@ -656,7 +598,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn strict_point_codec_rejects_malformed_forms() {
         let point = hash_to_curve_rfc9380(b"IROHA-TEST-P256_XMD:SHA-256_SSWU_RO_", b"canonical")
@@ -666,7 +607,6 @@ mod tests {
             CompressedPointV1::from_slice(canonical.as_bytes()).expect("roundtrip"),
             canonical
         );
-
         assert!(matches!(
             CompressedPointV1::from_slice(&canonical.as_bytes()[..32]),
             Err(P256EngineError::InvalidPointLength { actual: 32 })
@@ -683,7 +623,6 @@ mod tests {
         off_curve[0] = 0x02;
         assert!(CompressedPointV1::from_slice(&off_curve).is_err());
     }
-
     #[test]
     fn scalar_codec_rejects_order_and_accepts_boundaries() {
         let zero = CanonicalScalarV1::from_bytes([0; 32]).expect("zero is a public scalar");
@@ -715,7 +654,6 @@ mod tests {
             Err(P256EngineError::RandomnessHealthCheckFailed)
         ));
     }
-
     #[test]
     fn transcript_binds_every_context_field_and_prior_state() {
         let mut first = TranscriptV1::new(b"suite", &binding()).expect("transcript");
@@ -729,7 +667,6 @@ mod tests {
         assert_ne!(c0, c1);
         assert!(!c0.is_zero());
         assert!(!c1.is_zero());
-
         let mut changed_fields = Vec::new();
         let mut changed = binding();
         changed.network_id = &[8; 32];
@@ -759,7 +696,6 @@ mod tests {
         let mut changed = binding();
         changed.generator_digest[0] ^= 1;
         changed_fields.push(changed);
-
         for changed in changed_fields {
             let mut transcript = TranscriptV1::new(b"suite", &changed).expect("changed transcript");
             transcript
@@ -772,7 +708,6 @@ mod tests {
                 c0
             );
         }
-
         let mut prior_changed = TranscriptV1::new(b"suite", &binding()).expect("transcript");
         prior_changed
             .append_message(b"commitment", b"B")
@@ -783,7 +718,6 @@ mod tests {
                 .expect("challenge"),
             c0
         );
-
         let mut suite_changed =
             TranscriptV1::new(b"different-suite", &binding()).expect("transcript");
         suite_changed
@@ -796,7 +730,6 @@ mod tests {
             c0
         );
     }
-
     #[test]
     fn repeated_challenges_are_nonzero_and_transcript_separated() {
         let mut transcript = TranscriptV1::new(b"suite", &binding()).expect("transcript");
@@ -816,7 +749,6 @@ mod tests {
             challenges.push(challenge);
         }
     }
-
     #[test]
     fn transcript_rejects_missing_or_inconsistent_bindings() {
         let mut zero_network = binding();
@@ -825,14 +757,12 @@ mod tests {
             zero_network.validate(),
             Err(P256EngineError::ZeroNetworkId)
         ));
-
         let mut mismatched_network = binding();
         mismatched_network.network_id = &[9; 32];
         assert_eq!(
             mismatched_network.validate(),
             Err(P256EngineError::NetworkGenesisMismatch)
         );
-
         let mut zero_statement = binding();
         zero_statement.statement_digest = [0; 32];
         assert!(matches!(
@@ -841,7 +771,6 @@ mod tests {
                 field: "statement_digest"
             })
         ));
-
         let zeroing_mutations: [(&str, fn(&mut TranscriptBindingV1<'_>)); 8] = [
             ("genesis_hash", |binding: &mut TranscriptBindingV1<'_>| {
                 binding.genesis_hash = [0; 32]

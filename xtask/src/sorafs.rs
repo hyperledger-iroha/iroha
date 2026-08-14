@@ -10,7 +10,6 @@ use std::{
     str::FromStr,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use blake3::hash as blake3_hash;
 use eyre::{WrapErr, eyre};
@@ -86,9 +85,7 @@ use sorafs_manifest::{
     verify_advert_against_record,
 };
 use time::{Duration as TimeDuration, OffsetDateTime, format_description::well_known::Rfc3339};
-
 use crate::{JsonTarget, normalize_path, workspace_root, write_json_output};
-
 #[derive(Clone, Debug)]
 pub struct ReserveMatrixOptions {
     pub capacities_gib: Vec<u64>,
@@ -100,7 +97,6 @@ pub struct ReserveMatrixOptions {
     pub policy_norito: Option<PathBuf>,
     pub label: Option<String>,
 }
-
 pub fn parse_storage_class_label(input: &str) -> eyre::Result<StorageClass> {
     match input.trim().to_ascii_lowercase().as_str() {
         "hot" => Ok(StorageClass::Hot),
@@ -111,7 +107,6 @@ pub fn parse_storage_class_label(input: &str) -> eyre::Result<StorageClass> {
         )),
     }
 }
-
 pub fn parse_reserve_tier_label(input: &str) -> eyre::Result<ReserveTier> {
     match input.trim().to_ascii_lowercase().as_str() {
         "tier-a" | "a" => Ok(ReserveTier::TierA),
@@ -122,7 +117,6 @@ pub fn parse_reserve_tier_label(input: &str) -> eyre::Result<ReserveTier> {
         )),
     }
 }
-
 pub fn parse_reserve_duration_label(input: &str) -> eyre::Result<ReserveDuration> {
     match input.trim().to_ascii_lowercase().as_str() {
         "monthly" => Ok(ReserveDuration::Monthly),
@@ -133,7 +127,6 @@ pub fn parse_reserve_duration_label(input: &str) -> eyre::Result<ReserveDuration
         )),
     }
 }
-
 pub fn parse_xor_amount_decimal(input: &str) -> eyre::Result<XorQuantity> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -164,7 +157,6 @@ pub fn parse_xor_amount_decimal(input: &str) -> eyre::Result<XorQuantity> {
             "reserve balance supports up to six fractional digits (micro XOR precision)"
         ));
     }
-
     let whole_value = if whole_part.is_empty() {
         0
     } else {
@@ -191,7 +183,6 @@ pub fn parse_xor_amount_decimal(input: &str) -> eyre::Result<XorQuantity> {
         .ok_or_else(|| eyre!("reserve balance exceeds supported range"))?;
     Ok(XorQuantity::try_from_micro(total).expect("legacy micro-XOR value is representable"))
 }
-
 const fn storage_class_label(class: StorageClass) -> &'static str {
     match class {
         StorageClass::Hot => "hot",
@@ -199,7 +190,6 @@ const fn storage_class_label(class: StorageClass) -> &'static str {
         StorageClass::Cold => "cold",
     }
 }
-
 const fn reserve_tier_label(tier: ReserveTier) -> &'static str {
     match tier {
         ReserveTier::TierA => "tier-a",
@@ -207,7 +197,6 @@ const fn reserve_tier_label(tier: ReserveTier) -> &'static str {
         ReserveTier::TierC => "tier-c",
     }
 }
-
 const fn reserve_duration_label(duration: ReserveDuration) -> &'static str {
     match duration {
         ReserveDuration::Monthly => "monthly",
@@ -215,7 +204,6 @@ const fn reserve_duration_label(duration: ReserveDuration) -> &'static str {
         ReserveDuration::Annual => "annual",
     }
 }
-
 pub fn reserve_matrix_report(options: ReserveMatrixOptions) -> Result<json::Value, Box<dyn Error>> {
     if options.capacities_gib.is_empty() {
         return Err(eyre!("reserve matrix requires at least one --capacity").into());
@@ -229,7 +217,6 @@ pub fn reserve_matrix_report(options: ReserveMatrixOptions) -> Result<json::Valu
     if options.durations.is_empty() {
         return Err(eyre!("reserve matrix requires at least one --duration").into());
     }
-
     let (policy, policy_source) = load_reserve_policy_from_paths(
         options.policy_json.as_deref(),
         options.policy_norito.as_deref(),
@@ -244,7 +231,6 @@ pub fn reserve_matrix_report(options: ReserveMatrixOptions) -> Result<json::Valu
             .expect("XOR quantity has exact legacy micro representation"),
     )
     .map_err(|_| eyre!("reserve balance exceeds supported range"))?;
-
     let mut matrix_entries = Vec::new();
     for &storage_class in &options.storage_classes {
         for &tier in &options.tiers {
@@ -280,7 +266,6 @@ pub fn reserve_matrix_report(options: ReserveMatrixOptions) -> Result<json::Valu
             }
         }
     }
-
     let mut payload = json::Map::new();
     payload.insert(
         "capacities_gib".into(),
@@ -362,7 +347,6 @@ pub fn reserve_matrix_report(options: ReserveMatrixOptions) -> Result<json::Valu
     payload.insert("matrix".into(), json::Value::Array(matrix_entries));
     Ok(json::Value::Object(payload))
 }
-
 fn load_reserve_policy_from_paths(
     json_path: Option<&Path>,
     norito_path: Option<&Path>,
@@ -407,7 +391,6 @@ fn load_reserve_policy_from_paths(
         )),
     }
 }
-
 fn build_matrix_entry_value(
     storage_class: StorageClass,
     tier: ReserveTier,
@@ -447,7 +430,6 @@ fn build_matrix_entry_value(
     entry.insert("ledger_projection".into(), projection_value);
     Ok(json::Value::Object(entry))
 }
-
 fn matrix_inputs_value(
     storage_class: StorageClass,
     tier: ReserveTier,
@@ -471,11 +453,8 @@ fn matrix_inputs_value(
     inputs.insert("reserve_balance".into(), reserve_value);
     Ok(json::Value::Object(inputs))
 }
-
 mod gateway_fixture;
-
 const DEFAULT_PROFILE_HANDLE: &str = "sorafs.sf1@1.0.0";
-
 #[derive(Clone)]
 pub struct FetchFixtureOptions {
     pub signatures_source: FetchSource,
@@ -484,7 +463,6 @@ pub struct FetchFixtureOptions {
     pub profile_handle: String,
     pub allow_unsigned: bool,
 }
-
 #[derive(Clone)]
 pub struct AdoptionCheckOptions {
     pub scoreboard_paths: Vec<PathBuf>,
@@ -497,7 +475,6 @@ pub struct AdoptionCheckOptions {
     pub require_direct_only: bool,
     pub require_telemetry_region: bool,
 }
-
 #[derive(Debug, Serialize)]
 pub struct AdoptionCheckReport {
     pub scoreboard_reports: Vec<ScoreboardReport>,
@@ -506,7 +483,6 @@ pub struct AdoptionCheckReport {
     pub single_source_override_used: bool,
     pub implicit_metadata_override_used: bool,
 }
-
 #[derive(Debug, Serialize)]
 pub struct ScoreboardReport {
     pub scoreboard_path: String,
@@ -526,7 +502,6 @@ pub struct ScoreboardReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<ScoreboardMetadata>,
 }
-
 #[derive(Debug, Serialize, Default)]
 pub struct ScoreboardMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -574,14 +549,12 @@ pub struct ScoreboardMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anonymity_policy_override_label: Option<String>,
 }
-
 #[derive(Clone)]
 pub struct ScoreboardDiffOptions {
     pub previous_scoreboard: PathBuf,
     pub current_scoreboard: PathBuf,
     pub threshold_percent: f64,
 }
-
 #[derive(Debug, Serialize)]
 pub struct ScoreboardDiffReport {
     pub previous_scoreboard: String,
@@ -590,7 +563,6 @@ pub struct ScoreboardDiffReport {
     pub total_providers: usize,
     pub changed_providers: Vec<ProviderWeightDelta>,
 }
-
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderWeightDelta {
     pub provider_id: String,
@@ -602,7 +574,6 @@ pub struct ProviderWeightDelta {
     pub was_removed: bool,
     pub exceeds_threshold: bool,
 }
-
 #[derive(Clone)]
 pub struct BurnInCheckOptions {
     pub log_paths: Vec<PathBuf>,
@@ -612,7 +583,6 @@ pub struct BurnInCheckOptions {
     pub max_brownout_ratio: f64,
     pub min_fetches: u64,
 }
-
 #[derive(Debug, Serialize)]
 pub struct BurnInSummary {
     pub sources: Vec<String>,
@@ -631,19 +601,16 @@ pub struct BurnInSummary {
     pub pq_ratio_avg: f64,
     pub failure_reasons: BTreeMap<String, u64>,
 }
-
 #[derive(Clone)]
 pub struct TaikaiCacheBundleOptions {
     pub profile_paths: Vec<PathBuf>,
     pub output_root: PathBuf,
 }
-
 #[derive(Clone)]
 pub enum FetchSource {
     File(PathBuf),
     Url(Url),
 }
-
 #[derive(Clone)]
 pub struct GatewayAttestOptions {
     pub output_dir: PathBuf,
@@ -651,7 +618,6 @@ pub struct GatewayAttestOptions {
     pub signer_account: String,
     pub gateway_target: Option<String>,
 }
-
 #[derive(Clone)]
 pub struct GatewayProbeOptions {
     pub request: Option<GatewayProbeRequest>,
@@ -668,7 +634,6 @@ pub struct GatewayProbeOptions {
     pub drill: Option<DrillLogConfig>,
     pub pagerduty: Option<PagerDutyConfig>,
 }
-
 #[derive(Clone)]
 pub struct DrillLogConfig {
     pub log_path: PathBuf,
@@ -678,7 +643,6 @@ pub struct DrillLogConfig {
     pub notes: Option<String>,
     pub link: Option<String>,
 }
-
 #[derive(Clone)]
 pub struct PagerDutyConfig {
     pub payload_path: PathBuf,
@@ -692,13 +656,11 @@ pub struct PagerDutyConfig {
     pub links: Vec<PagerDutyLink>,
     pub endpoint_url: Option<Url>,
 }
-
 #[derive(Clone)]
 pub struct PagerDutyLink {
     pub text: String,
     pub href: String,
 }
-
 #[derive(Clone)]
 pub struct GatewayProbeRequest {
     pub url: String,
@@ -706,7 +668,6 @@ pub struct GatewayProbeRequest {
     pub timeout_secs: Option<u64>,
     pub extra_headers: Vec<(String, String)>,
 }
-
 #[derive(Debug)]
 pub enum GatewayCliCommand {
     TlsRenew(GatewayTlsRenewOptions),
@@ -714,7 +675,6 @@ pub enum GatewayCliCommand {
     KeyRotate(GatewayKeyRotateOptions),
     RoutePlan(Box<GatewayRoutePlanOptions>),
 }
-
 #[derive(Debug, Clone)]
 pub struct GatewayTlsRenewOptions {
     pub hostnames: Vec<String>,
@@ -724,7 +684,6 @@ pub struct GatewayTlsRenewOptions {
     pub output_dir: PathBuf,
     pub force: bool,
 }
-
 #[derive(Debug, Clone)]
 pub struct GatewayTlsRevokeOptions {
     pub bundle_dir: PathBuf,
@@ -732,7 +691,6 @@ pub struct GatewayTlsRevokeOptions {
     pub reason: Option<String>,
     pub force: bool,
 }
-
 #[derive(Debug, Clone)]
 pub struct GatewayKeyRotateOptions {
     pub kind: String,
@@ -740,7 +698,6 @@ pub struct GatewayKeyRotateOptions {
     pub public_out: Option<PathBuf>,
     pub force: bool,
 }
-
 #[derive(Debug, Clone)]
 pub struct GatewayRoutePlanOptions {
     pub manifest_json: PathBuf,
@@ -761,7 +718,6 @@ pub struct GatewayRoutePlanOptions {
     pub include_hsts: bool,
     pub now: OffsetDateTime,
 }
-
 #[derive(Debug, Serialize)]
 struct GatewayRoutePlan {
     version: u32,
@@ -778,7 +734,6 @@ struct GatewayRoutePlan {
     headers_path: Option<String>,
     rollback: Option<GatewayRouteRollback>,
 }
-
 #[derive(Debug, Serialize)]
 struct GatewayRouteRollback {
     manifest_json: String,
@@ -788,7 +743,6 @@ struct GatewayRouteRollback {
     headers_template: String,
     headers_path: Option<String>,
 }
-
 #[derive(Debug)]
 struct RouteBindingContext {
     manifest_json: PathBuf,
@@ -801,14 +755,12 @@ struct RouteBindingContext {
     include_hsts: bool,
     generated_at: OffsetDateTime,
 }
-
 struct RouteBindingOutput {
     content_cid: String,
     route_binding: String,
     headers: BTreeMap<String, String>,
     headers_template: String,
 }
-
 #[derive(Debug)]
 pub struct GatewayTlsRenewOutcome {
     pub certificate_path: PathBuf,
@@ -818,21 +770,18 @@ pub struct GatewayTlsRenewOutcome {
     pub expiry_rfc3339: String,
     pub hostnames: Vec<String>,
 }
-
 pub struct GatewayTlsRevokeOutcome {
     pub archive_dir: PathBuf,
     pub archived_files: Vec<PathBuf>,
     pub timestamp_epoch: u64,
     pub reason: Option<String>,
 }
-
 pub struct GatewayKeyRotateOutcome {
     pub private_key_path: PathBuf,
     pub public_key_hex: String,
     pub public_key_prefixed: String,
     pub public_out_path: Option<PathBuf>,
 }
-
 pub fn parse_gateway_cli<I>(args: I) -> Result<GatewayCliCommand, Box<dyn Error>>
 where
     I: IntoIterator<Item = String>,
@@ -842,7 +791,6 @@ where
         gateway_cli_usage();
         return Err("sorafs-gateway requires a subcommand (tls|key|route)".into());
     };
-
     match subcommand.as_str() {
         "tls" => {
             let remaining: Vec<String> = iter.collect();
@@ -866,7 +814,6 @@ where
         }
     }
 }
-
 pub fn run_gateway_cli(command: GatewayCliCommand) -> Result<(), Box<dyn Error>> {
     match command {
         GatewayCliCommand::TlsRenew(options) => {
@@ -905,10 +852,8 @@ pub fn run_gateway_cli(command: GatewayCliCommand) -> Result<(), Box<dyn Error>>
             run_gateway_route_plan(*options)?;
         }
     }
-
     Ok(())
 }
-
 fn parse_gateway_tls_cli<I>(args: I) -> Result<GatewayCliCommand, Box<dyn Error>>
 where
     I: IntoIterator<Item = String>,
@@ -918,7 +863,6 @@ where
         gateway_cli_usage();
         return Err("sorafs-gateway tls requires an action (renew|revoke)".into());
     };
-
     match action.as_str() {
         "renew" => {
             let mut hostnames = Vec::new();
@@ -981,7 +925,6 @@ where
                     }
                 }
             }
-
             for path in host_files {
                 let additional = load_tls_hosts_from_file(&path)
                     .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
@@ -1000,7 +943,6 @@ where
                 hostnames.extend(additional);
             }
             dedup_tls_hosts(&mut hostnames);
-
             if hostnames.is_empty() {
                 return Err(
                     "sorafs-gateway tls renew requires at least one --host or --hosts-from entry"
@@ -1011,7 +953,6 @@ where
                 .ok_or_else(|| "sorafs-gateway tls renew requires --out <dir>".to_string())?;
             let directory_url =
                 directory_url.unwrap_or_else(|| AcmeConfig::default().directory_url);
-
             Ok(GatewayCliCommand::TlsRenew(GatewayTlsRenewOptions {
                 hostnames,
                 account_email,
@@ -1059,7 +1000,6 @@ where
                     }
                 }
             }
-
             let bundle_dir = bundle_dir
                 .ok_or_else(|| "sorafs-gateway tls revoke requires --out <dir>".to_string())?;
             Ok(GatewayCliCommand::TlsRevoke(GatewayTlsRevokeOptions {
@@ -1079,7 +1019,6 @@ where
         }
     }
 }
-
 fn parse_gateway_route_cli<I>(args: I) -> Result<GatewayCliCommand, Box<dyn Error>>
 where
     I: IntoIterator<Item = String>,
@@ -1089,7 +1028,6 @@ where
         gateway_cli_usage();
         return Err("sorafs-gateway route requires an action (plan)".into());
     };
-
     match action.as_str() {
         "plan" => {
             let mut manifest_json: Option<PathBuf> = None;
@@ -1108,7 +1046,6 @@ where
             let mut include_csp = true;
             let mut include_permissions = true;
             let mut include_hsts = true;
-
             for arg in iter {
                 if let Some(rest) = arg.strip_prefix("--manifest-json=") {
                     manifest_json = Some(PathBuf::from(rest));
@@ -1149,7 +1086,6 @@ where
                     return Err(format!("unknown flag for sorafs-gateway route plan: {arg}").into());
                 }
             }
-
             let manifest_json = manifest_json.ok_or_else(|| {
                 "--manifest-json=<path> is required for sorafs-gateway route plan".to_string()
             })?;
@@ -1168,7 +1104,6 @@ where
                     .parent()
                     .map(|parent| parent.join("gateway.route.rollback.headers.txt"))
             });
-
             Ok(GatewayCliCommand::RoutePlan(Box::new(
                 GatewayRoutePlanOptions {
                     manifest_json,
@@ -1197,7 +1132,6 @@ where
         }
     }
 }
-
 fn run_gateway_route_plan(options: GatewayRoutePlanOptions) -> Result<(), Box<dyn Error>> {
     let binding_context = RouteBindingContext {
         manifest_json: options.manifest_json.clone(),
@@ -1212,7 +1146,6 @@ fn run_gateway_route_plan(options: GatewayRoutePlanOptions) -> Result<(), Box<dy
     };
     let primary_binding = build_route_binding(&binding_context)?;
     write_optional_output(&options.headers_out, &primary_binding.headers_template)?;
-
     let rollback = if let Some(rollback_manifest) = options.rollback_manifest.clone() {
         let rollback_context = RouteBindingContext {
             manifest_json: rollback_manifest.clone(),
@@ -1244,7 +1177,6 @@ fn run_gateway_route_plan(options: GatewayRoutePlanOptions) -> Result<(), Box<dy
     } else {
         None
     };
-
     if let Some(parent) = options.output_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -1276,7 +1208,6 @@ fn run_gateway_route_plan(options: GatewayRoutePlanOptions) -> Result<(), Box<dy
     println!("wrote {}", options.output_path.display());
     Ok(())
 }
-
 const ROUTE_HEADER_ORDER: &[&str] = &[
     "Sora-Name",
     "Sora-Content-CID",
@@ -1287,11 +1218,9 @@ const ROUTE_HEADER_ORDER: &[&str] = &[
     "Strict-Transport-Security",
     "Permissions-Policy",
 ];
-
 const DEFAULT_ROUTE_CSP: &str = "default-src 'self'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'";
 const DEFAULT_ROUTE_PERMISSIONS: &str = "accelerometer=(), ambient-light-sensor=(), autoplay=(), camera=(), clipboard-read=(self), clipboard-write=(self), encrypted-media=(), fullscreen=(self), geolocation=(), gyroscope=(), hid=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), speaker-selection=(), usb=(), xr-spatial-tracking=()";
 const DEFAULT_ROUTE_HSTS_MAX_AGE: u32 = 63_072_000;
-
 fn build_route_binding(
     context: &RouteBindingContext,
 ) -> Result<RouteBindingOutput, Box<dyn Error>> {
@@ -1314,7 +1243,6 @@ fn build_route_binding(
     let content_cid = format!("b{}", encode_base32_lower(&root_bytes));
     let mut headers = BTreeMap::new();
     headers.insert("Sora-Content-CID".into(), content_cid.clone());
-
     if let Some(alias) = context.alias.as_deref() {
         headers.insert("Sora-Name".into(), alias.to_string());
         let proof_payload = serde_json::json!({
@@ -1330,7 +1258,6 @@ fn build_route_binding(
             .unwrap_or_else(|| "ok".to_string());
         headers.insert("Sora-Proof-Status".into(), status);
     }
-
     let hostname = context.hostname.as_ref().ok_or_else(|| {
         "hostname must be supplied for sorafs-gateway route plan (--hostname)".to_string()
     })?;
@@ -1348,7 +1275,6 @@ fn build_route_binding(
     }
     let route_binding = binding_parts.join(";");
     headers.insert("Sora-Route-Binding".into(), route_binding.clone());
-
     if context.include_csp {
         headers.insert("Content-Security-Policy".into(), DEFAULT_ROUTE_CSP.into());
     }
@@ -1367,7 +1293,6 @@ fn build_route_binding(
             DEFAULT_ROUTE_PERMISSIONS.into(),
         );
     }
-
     let headers_template = format_headers_template(&headers);
     Ok(RouteBindingOutput {
         content_cid,
@@ -1376,7 +1301,6 @@ fn build_route_binding(
         headers_template,
     })
 }
-
 fn manifest_root_bytes(manifest: &JsonValue) -> Result<Vec<u8>, Box<dyn Error>> {
     if let Some(array) = manifest.get("root_cid").and_then(|value| value.as_array()) {
         let mut bytes = Vec::with_capacity(array.len());
@@ -1415,10 +1339,8 @@ fn manifest_root_bytes(manifest: &JsonValue) -> Result<Vec<u8>, Box<dyn Error>> 
         return hex::decode(hex_value.trim())
             .map_err(|err| format!("failed to decode root_cid_hex value: {err}").into());
     }
-
     Err("manifest JSON is missing `root_cid`, `root_cids_hex`, or `root_cid_hex` fields".into())
 }
-
 fn encode_base32_lower(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
     if bytes.is_empty() {
@@ -1442,7 +1364,6 @@ fn encode_base32_lower(bytes: &[u8]) -> String {
     }
     output
 }
-
 fn format_headers_template(headers: &BTreeMap<String, String>) -> String {
     let mut lines = Vec::new();
     for &key in ROUTE_HEADER_ORDER {
@@ -1460,7 +1381,6 @@ fn format_headers_template(headers: &BTreeMap<String, String>) -> String {
     rendered.push('\n');
     rendered
 }
-
 fn write_optional_output(path: &Option<PathBuf>, contents: &str) -> Result<(), Box<dyn Error>> {
     if let Some(path) = path {
         if let Some(parent) = path.parent() {
@@ -1471,7 +1391,6 @@ fn write_optional_output(path: &Option<PathBuf>, contents: &str) -> Result<(), B
     }
     Ok(())
 }
-
 fn parse_gateway_key_cli<I>(args: I) -> Result<GatewayCliCommand, Box<dyn Error>>
 where
     I: IntoIterator<Item = String>,
@@ -1481,7 +1400,6 @@ where
         gateway_cli_usage();
         return Err("sorafs-gateway key requires an action (rotate)".into());
     };
-
     match action.as_str() {
         "rotate" => {
             let mut kind: Option<String> = None;
@@ -1521,7 +1439,6 @@ where
                     }
                 }
             }
-
             let kind = kind.unwrap_or_else(|| "token-signing".to_string());
             let output_path = output_path
                 .ok_or_else(|| "sorafs-gateway key rotate requires --out <path>".to_string())?;
@@ -1542,7 +1459,6 @@ where
         }
     }
 }
-
 pub fn gateway_tls_renew(
     options: GatewayTlsRenewOptions,
 ) -> Result<GatewayTlsRenewOutcome, Box<dyn Error>> {
@@ -1583,7 +1499,6 @@ pub fn gateway_tls_renew(
             .into(),
     )
 }
-
 pub fn gateway_tls_revoke(
     options: GatewayTlsRevokeOptions,
 ) -> Result<GatewayTlsRevokeOutcome, Box<dyn Error>> {
@@ -1594,19 +1509,16 @@ pub fn gateway_tls_revoke(
         )
         .into());
     }
-
     let archive_dir = options
         .archive_dir
         .clone()
         .unwrap_or_else(|| options.bundle_dir.join("revoked"));
     fs::create_dir_all(&archive_dir)?;
-
     let timestamp_epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "system clock before UNIX epoch")?
         .as_secs();
     let suffix = format!(".revoked.{timestamp_epoch}");
-
     let mut archived_files = Vec::new();
     for name in ["fullchain.pem", "privkey.pem"] {
         let source = options.bundle_dir.join(name);
@@ -1632,7 +1544,6 @@ pub fn gateway_tls_revoke(
         fs::rename(&source, &target)?;
         archived_files.push(target);
     }
-
     let ech_source = options.bundle_dir.join("ech.json");
     if ech_source.exists() {
         let target = archive_dir.join(format!("ech.json{suffix}"));
@@ -1646,7 +1557,6 @@ pub fn gateway_tls_revoke(
         fs::rename(&ech_source, &target)?;
         archived_files.push(target);
     }
-
     let mut audit = Map::new();
     audit.insert(
         "timestamp_epoch".into(),
@@ -1665,7 +1575,6 @@ pub fn gateway_tls_revoke(
     let audit_path = archive_dir.join(format!("revocation-{timestamp_epoch}.json"));
     write_file_with_mode(&audit_path, audit_json.as_bytes(), true, 0o600)?;
     archived_files.push(audit_path.clone());
-
     Ok(GatewayTlsRevokeOutcome {
         archive_dir,
         archived_files,
@@ -1673,7 +1582,6 @@ pub fn gateway_tls_revoke(
         reason: options.reason,
     })
 }
-
 pub fn gateway_key_rotate(
     options: GatewayKeyRotateOptions,
 ) -> Result<GatewayKeyRotateOutcome, Box<dyn Error>> {
@@ -1684,11 +1592,9 @@ pub fn gateway_key_rotate(
         )
         .into());
     }
-
     if let Some(parent) = options.output_path.parent() {
         fs::create_dir_all(parent)?;
     }
-
     let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let (algorithm, private_bytes) = keypair.private_key().to_bytes();
     if algorithm != Algorithm::Ed25519 {
@@ -1702,7 +1608,6 @@ pub fn gateway_key_rotate(
         options.force,
         0o600,
     )?;
-
     let public = keypair.public_key();
     let public_bytes =
         checked_ed25519_public_key_bytes(public, "generated token-signing public key")?;
@@ -1710,7 +1615,6 @@ pub fn gateway_key_rotate(
     let public_key_prefixed = public.try_to_prefixed_string().map_err(|err| {
         format!("generated token-signing public key cannot be formatted as multihash: {err}")
     })?;
-
     let mut public_out_path = None;
     if let Some(path) = options.public_out.as_ref() {
         if let Some(parent) = path.parent() {
@@ -1728,7 +1632,6 @@ pub fn gateway_key_rotate(
         write_file_with_mode(path, json.as_bytes(), options.force, 0o640)?;
         public_out_path = Some(path.clone());
     }
-
     Ok(GatewayKeyRotateOutcome {
         private_key_path: options.output_path,
         public_key_hex,
@@ -1736,7 +1639,6 @@ pub fn gateway_key_rotate(
         public_out_path,
     })
 }
-
 fn gateway_cli_usage() {
     eprintln!("sorafs-gateway CLI usage:");
     eprintln!(
@@ -1752,7 +1654,6 @@ fn gateway_cli_usage() {
         "  cargo xtask sorafs-gateway route plan --manifest-json <path> --hostname <host> [--alias <namespace:name>] [--route-label <label>] [--out <path>] [--headers-out <path>] [--rollback-manifest-json <path>] [--rollback-route-label <label>]"
     );
 }
-
 fn normalize_tls_host(value: &str) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -1768,7 +1669,6 @@ fn normalize_tls_host(value: &str) -> Result<String, String> {
     }
     Ok(trimmed.to_ascii_lowercase())
 }
-
 fn load_tls_hosts_from_file(path: &Path) -> Result<Vec<String>, String> {
     let data = fs::read(path)
         .map_err(|err| format!("failed to read host fixture `{}`: {err}", path.display()))?;
@@ -1795,7 +1695,6 @@ fn load_tls_hosts_from_file(path: &Path) -> Result<Vec<String>, String> {
     };
     Ok(hosts)
 }
-
 fn parse_host_array(path: &Path, array: &[JsonValue]) -> Result<Vec<String>, String> {
     let mut hosts = Vec::new();
     let mut seen = BTreeSet::new();
@@ -1818,25 +1717,20 @@ fn parse_host_array(path: &Path, array: &[JsonValue]) -> Result<Vec<String>, Str
     }
     Ok(hosts)
 }
-
 fn dedup_tls_hosts(hosts: &mut Vec<String>) {
     let mut seen = HashSet::new();
     hosts.retain(|host| seen.insert(host.clone()));
 }
-
 #[cfg(test)]
 mod reserve_matrix_tests {
     use serde_json::Value as SerdeJsonValue;
-
     use super::*;
-
     fn render_matrix_json(options: ReserveMatrixOptions) -> SerdeJsonValue {
         let value = reserve_matrix_report(options).expect("matrix report");
         let rendered =
             norito::json::to_json_pretty(&value).expect("matrix payload renders to JSON");
         serde_json::from_str(&rendered).expect("matrix payload parses")
     }
-
     #[test]
     fn reserve_matrix_includes_ledger_projection() {
         let options = ReserveMatrixOptions {
@@ -1876,7 +1770,6 @@ mod reserve_matrix_tests {
         let effective_rent = entry["quote"]["effective_rent"].as_u64().unwrap();
         assert_eq!(rent_due, effective_rent);
     }
-
     #[test]
     fn reserve_matrix_requires_capacity() {
         let options = ReserveMatrixOptions {
@@ -1897,13 +1790,10 @@ mod reserve_matrix_tests {
         );
     }
 }
-
 #[cfg(test)]
 mod rollout_tests {
     use std::fs;
-
     use super::*;
-
     #[test]
     fn route_plan_generates_headers_and_plan() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1931,7 +1821,6 @@ mod rollout_tests {
             now: OffsetDateTime::UNIX_EPOCH,
         };
         run_gateway_route_plan(options).expect("route plan generation succeeds");
-
         let rendered = fs::read_to_string(&plan_path).expect("plan contents");
         let plan_json: serde_json::Value =
             serde_json::from_str(&rendered).expect("json plan payload");
@@ -1959,7 +1848,6 @@ mod rollout_tests {
             serde_json::Value::String(headers_path.display().to_string())
         );
         assert!(plan_json["rollback"].is_null());
-
         let template = fs::read_to_string(headers_path).expect("headers template");
         assert!(
             template.contains("Sora-Route-Binding: host=docs.sora.link;cid=baaaaaaaa;generated_at=1970-01-01T00:00:00Z;label=docs@canary"),
@@ -1967,7 +1855,6 @@ mod rollout_tests {
         );
         assert!(template.contains("Content-Security-Policy: default-src 'self'"));
     }
-
     #[test]
     fn route_plan_embeds_rollback_metadata() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1997,7 +1884,6 @@ mod rollout_tests {
             now: OffsetDateTime::UNIX_EPOCH,
         };
         run_gateway_route_plan(options).expect("route plan generation succeeds");
-
         let rendered = fs::read_to_string(&plan_path).expect("plan contents");
         let plan_json: serde_json::Value =
             serde_json::from_str(&rendered).expect("json plan payload");
@@ -2026,7 +1912,6 @@ mod rollout_tests {
         assert!(template.contains("label=previous"));
     }
 }
-
 fn write_file_with_mode(
     path: &Path,
     contents: &[u8],
@@ -2060,11 +1945,9 @@ fn write_file_with_mode(
     }
     Ok(())
 }
-
 pub fn default_gateway_fixture_dir() -> PathBuf {
     self::gateway_fixture::default_output_dir()
 }
-
 pub fn write_gateway_fixtures(output: &Path) -> Result<(), Box<dyn Error>> {
     let metadata = self::gateway_fixture::write_bundle(output)?;
     println!(
@@ -2079,7 +1962,6 @@ pub fn write_gateway_fixtures(output: &Path) -> Result<(), Box<dyn Error>> {
     );
     Ok(())
 }
-
 pub fn verify_gateway_fixtures(target: &Path) -> Result<(), Box<dyn Error>> {
     let metadata = self::gateway_fixture::verify_bundle(target)?;
     println!(
@@ -2094,7 +1976,6 @@ pub fn verify_gateway_fixtures(target: &Path) -> Result<(), Box<dyn Error>> {
     );
     Ok(())
 }
-
 impl FetchSource {
     pub fn parse(raw: &str) -> Result<Self, Box<dyn Error>> {
         if raw.starts_with("http://") || raw.starts_with("https://") {
@@ -2116,7 +1997,6 @@ impl FetchSource {
         };
         Ok(Self::File(resolved))
     }
-
     fn resolve_relative(&self, value: &str) -> Result<Self, Box<dyn Error>> {
         if value.starts_with("http://")
             || value.starts_with("https://")
@@ -2146,7 +2026,6 @@ impl FetchSource {
             }
         }
     }
-
     fn fetch_bytes(&self, client: &Client) -> Result<Vec<u8>, Box<dyn Error>> {
         match self {
             Self::Url(url) => {
@@ -2166,7 +2045,6 @@ impl FetchSource {
                 .map_err(|err| format!("failed to read {}: {err}", path.display()))?),
         }
     }
-
     fn describe(&self) -> String {
         match self {
             Self::Url(url) => url.as_str().to_owned(),
@@ -2174,7 +2052,6 @@ impl FetchSource {
         }
     }
 }
-
 pub fn fetch_fixture(options: FetchFixtureOptions) -> Result<(), Box<dyn Error>> {
     let FetchFixtureOptions {
         signatures_source,
@@ -2183,21 +2060,17 @@ pub fn fetch_fixture(options: FetchFixtureOptions) -> Result<(), Box<dyn Error>>
         profile_handle,
         allow_unsigned,
     } = options;
-
     let client = Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
-
     let profile_handle = if profile_handle.is_empty() {
         DEFAULT_PROFILE_HANDLE.to_owned()
     } else {
         profile_handle
     };
-
     let vectors = FixtureProfile::SF1_V1.generate_vectors();
     let expected_chunk_digest = vectors.sha3_digest_hex();
-
     let signatures_bytes = signatures_source.fetch_bytes(&client).map_err(|err| {
         format!(
             "failed to fetch manifest signatures from {}: {err}",
@@ -2206,10 +2079,8 @@ pub fn fetch_fixture(options: FetchFixtureOptions) -> Result<(), Box<dyn Error>>
     })?;
     let signatures_value: Value = json::from_slice(&signatures_bytes)
         .map_err(|err| format!("failed to parse manifest signatures JSON: {err}"))?;
-
     ensure_profile_matches(&signatures_value, &profile_handle)?;
     ensure_aliases(&signatures_value, &profile_handle)?;
-
     let chunk_digest_from_signatures =
         extract_string(&signatures_value, "chunk_digest_sha3_256")?.to_ascii_lowercase();
     if chunk_digest_from_signatures != expected_chunk_digest {
@@ -2219,18 +2090,15 @@ pub fn fetch_fixture(options: FetchFixtureOptions) -> Result<(), Box<dyn Error>>
         )
         .into());
     }
-
     let manifest_name = extract_string(&signatures_value, "manifest")?;
     let manifest_digest_expected =
         extract_string(&signatures_value, "manifest_blake3")?.to_ascii_lowercase();
-
     let manifest_source = match manifest_source {
         Some(source) => source,
         None => signatures_source
             .resolve_relative(manifest_name)
             .map_err(|err| format!("failed to resolve manifest path {manifest_name}: {err}"))?,
     };
-
     let manifest_bytes = manifest_source.fetch_bytes(&client).map_err(|err| {
         format!(
             "failed to fetch manifest from {}: {err}",
@@ -2246,7 +2114,6 @@ pub fn fetch_fixture(options: FetchFixtureOptions) -> Result<(), Box<dyn Error>>
         )
         .into());
     }
-
     let manifest_value: Value = json::from_slice(&manifest_bytes)
         .map_err(|err| format!("failed to parse manifest JSON: {err}"))?;
     ensure_profile_matches(&manifest_value, &profile_handle)?;
@@ -2260,30 +2127,25 @@ pub fn fetch_fixture(options: FetchFixtureOptions) -> Result<(), Box<dyn Error>>
         )
         .into());
     }
-
     let signature_count = verify_manifest_signatures(
         &signatures_value,
         manifest_digest_actual.as_bytes(),
         allow_unsigned,
     )?;
-
     fs::create_dir_all(&output_dir)?;
     fs::write(
         output_dir.join("manifest_signatures.json"),
         &signatures_bytes,
     )?;
     fs::write(output_dir.join("manifest_blake3.json"), &manifest_bytes)?;
-
     println!(
         "Fetched SoraFS chunker manifest to {} (signatures: {}, digest: {})",
         output_dir.display(),
         signature_count,
         manifest_digest_actual_hex
     );
-
     Ok(())
 }
-
 pub fn generate_gateway_attestation(options: GatewayAttestOptions) -> Result<(), Box<dyn Error>> {
     let GatewayAttestOptions {
         output_dir,
@@ -2291,20 +2153,16 @@ pub fn generate_gateway_attestation(options: GatewayAttestOptions) -> Result<(),
         signer_account,
         gateway_target,
     } = options;
-
     fs::create_dir_all(&output_dir)
         .map_err(|err| format!("failed to create {}: {err}", output_dir.display()))?;
-
     let mut context = HarnessContext::new();
     if let Some(target) = gateway_target {
         context = context.with_gateway_target(target);
     }
-
     let suite = integration_tests::sorafs_gateway_conformance::run_suite(&context);
     if !suite.all_passed() {
         return Err("gateway conformance suite failed; refusing to issue attestation".into());
     }
-
     let key_text = fs::read_to_string(&signing_key_path).map_err(|err| {
         format!(
             "failed to read signing key {}: {err}",
@@ -2325,14 +2183,12 @@ pub fn generate_gateway_attestation(options: GatewayAttestOptions) -> Result<(),
             })?;
     let key_pair =
         KeyPair::from_private_key(private_key).map_err(|err| format!("invalid key pair: {err}"))?;
-
     let signer_literal = signer_account.trim();
     let signer = AccountAddress::parse_encoded(
         signer_literal,
         Some(iroha_data_model::account::address::chain_discriminant()),
     )
     .map_err(|err| format!("invalid signer account `{}`: {err}", signer_literal))?;
-
     let bundle = integration_tests::sorafs_gateway_conformance::generate_attestation(
         &suite,
         &key_pair,
@@ -2340,11 +2196,9 @@ pub fn generate_gateway_attestation(options: GatewayAttestOptions) -> Result<(),
         SystemTime::now(),
     )
     .map_err(|err| format!("failed to generate attestation: {err}"))?;
-
     let report_path = output_dir.join("sorafs_gateway_report.json");
     fs::write(&report_path, bundle.report_json)
         .map_err(|err| format!("failed to write report {}: {err}", report_path.display()))?;
-
     let envelope_path = output_dir.join("sorafs_gateway_attestation.to");
     fs::write(&envelope_path, bundle.envelope_bytes).map_err(|err| {
         format!(
@@ -2352,7 +2206,6 @@ pub fn generate_gateway_attestation(options: GatewayAttestOptions) -> Result<(),
             envelope_path.display()
         )
     })?;
-
     let summary_path = output_dir.join("sorafs_gateway_attestation.txt");
     fs::write(&summary_path, bundle.summary_text).map_err(|err| {
         format!(
@@ -2360,17 +2213,14 @@ pub fn generate_gateway_attestation(options: GatewayAttestOptions) -> Result<(),
             summary_path.display()
         )
     })?;
-
     println!(
         "Wrote SoraFS gateway conformance attestation:\n  report: {}\n  envelope: {}\n  summary: {}",
         report_path.display(),
         envelope_path.display(),
         summary_path.display()
     );
-
     Ok(())
 }
-
 /// Verify a SoraFS gateway conformance attestation envelope and print metadata.
 pub fn verify_gateway_attestation(envelope_path: &Path) -> Result<(), Box<dyn Error>> {
     let envelope_bytes = fs::read(envelope_path).map_err(|err| {
@@ -2382,7 +2232,6 @@ pub fn verify_gateway_attestation(envelope_path: &Path) -> Result<(), Box<dyn Er
     let verified =
         integration_tests::sorafs_gateway_conformance::verify_attestation_envelope(&envelope_bytes)
             .map_err(|err| format!("failed to verify SoraFS gateway attestation: {err}"))?;
-
     println!(
         "Verified SoraFS gateway conformance attestation:\n  envelope: {}\n  profile: {}\n  scenarios: {}\n  digest: {}\n  signer: {}\n  algorithm: {}\n  public_key: {}\n  signed_at_unix: {}",
         envelope_path.display(),
@@ -2394,10 +2243,8 @@ pub fn verify_gateway_attestation(envelope_path: &Path) -> Result<(), Box<dyn Er
         verified.public_key_hex,
         verified.signed_at_unix
     );
-
     Ok(())
 }
-
 const DEFAULT_CACHE_MAX_AGE: u64 = 600;
 const DEFAULT_CACHE_STALE_WHILE_REVALIDATE: u64 = 120;
 const DEFAULT_CACHE_HARD_EXPIRY: u64 = 900;
@@ -2424,12 +2271,10 @@ struct ProbeRunSummary<'a> {
     gar_path: PathBuf,
     findings: &'a [ProbeFinding],
 }
-
 impl<'a> ProbeRunSummary<'a> {
     fn failure_count(&self) -> usize {
         self.findings.iter().filter(|finding| !finding.ok).count()
     }
-
     fn target_label(&self) -> String {
         self.target_url
             .clone()
@@ -2437,7 +2282,6 @@ impl<'a> ProbeRunSummary<'a> {
             .unwrap_or_else(|| self.source_description.clone())
     }
 }
-
 pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Error>> {
     let report_target = options.report_target.clone();
     let log_to_stderr = matches!(report_target.as_ref(), Some(JsonTarget::Stdout));
@@ -2458,9 +2302,7 @@ pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Err
             .expect("headers_path required when no request is present");
         probe_headers_from_file(path)?
     };
-
     let mut findings = Vec::new();
-
     let status_ok = (200..=299).contains(&response.status);
     record_finding(
         &mut findings,
@@ -2468,7 +2310,6 @@ pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Err
         "HTTP status",
         format!("{} {}", response.status, response.source.describe()),
     );
-
     let host = resolve_probe_host(&options, &response)?;
     let host_matches = gar_record.matches_host(&host);
     record_finding(
@@ -2481,13 +2322,11 @@ pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Err
             format!("host `{host}` missing from GAR host_patterns")
         },
     );
-
     let cache_control = expect_header(&response.headers, "Cache-Control", &mut findings);
     let sora_name = expect_header(&response.headers, "Sora-Name", &mut findings);
     let sora_content_cid = expect_header(&response.headers, "Sora-Content-CID", &mut findings);
     let sora_proof_header = expect_header(&response.headers, "Sora-Proof", &mut findings);
     let sora_proof_status = expect_header(&response.headers, "Sora-Proof-Status", &mut findings);
-
     if options.require_tls_state {
         match read_header(&response.headers, "X-Sora-TLS-State") {
             Ok(Some(value)) => {
@@ -2516,7 +2355,6 @@ pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Err
             }
         }
     }
-
     if let Some(template) = gar_record.csp_template() {
         match read_header(&response.headers, "Content-Security-Policy") {
             Ok(Some(value)) => {
@@ -2543,7 +2381,6 @@ pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Err
             Err(err) => record_finding(&mut findings, false, "Content-Security-Policy", err),
         }
     }
-
     if let Some(template) = gar_record.hsts_template() {
         match read_header(&response.headers, "Strict-Transport-Security") {
             Ok(Some(value)) => {
@@ -2570,31 +2407,25 @@ pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Err
             Err(err) => record_finding(&mut findings, false, "Strict-Transport-Security", err),
         }
     }
-
     if let Some(header) = cache_control {
         let directives = parse_cache_directives(&header);
         let expected_max_age = options.cache_max_age.unwrap_or(DEFAULT_CACHE_MAX_AGE);
         let expected_swr = options
             .cache_swr
             .unwrap_or(DEFAULT_CACHE_STALE_WHILE_REVALIDATE);
-
         let parsed_max_age = directives
             .get("max-age")
             .and_then(|value| value.parse::<u64>().ok());
         let parsed_swr = directives
             .get("stale-while-revalidate")
             .and_then(|value| value.parse::<u64>().ok());
-
         let ttl_ok = parsed_max_age == Some(expected_max_age) && parsed_swr == Some(expected_swr);
-
         let detail = format!(
             "Cache-Control max-age={:?} (expected {expected_max_age}), stale-while-revalidate={:?} (expected {expected_swr})",
             parsed_max_age, parsed_swr
         );
-
         record_finding(&mut findings, ttl_ok, "Cache-Control policy", detail);
     }
-
     let mut proof_bundle: Option<AliasProofBundleV1> = None;
     if let Some(proof_b64) = sora_proof_header {
         match BASE64_STD.decode(proof_b64.as_bytes()) {
@@ -2619,7 +2450,6 @@ pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Err
             }
         }
     }
-
     if let (Some(alias), Some(bundle)) = (sora_name.as_ref(), proof_bundle.as_ref()) {
         let matches = alias == &bundle.binding.alias;
         record_finding(
@@ -2636,7 +2466,6 @@ pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Err
             },
         );
     }
-
     if let Some(bundle) = proof_bundle.as_ref() {
         match alias_manifest_id(bundle) {
             Ok(proof_cid) => {
@@ -2659,7 +2488,6 @@ pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Err
             Err(err) => record_finding(&mut findings, false, "Alias proof manifest", err),
         }
     }
-
     if let Some(content_cid) = sora_content_cid.as_ref() {
         let gar_cid = gar_record.manifest_cid().trim();
         let matches = content_cid.trim() == gar_cid;
@@ -2674,7 +2502,6 @@ pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Err
             },
         );
     }
-
     if let (Some(bundle), Some(status_value)) = (proof_bundle.as_ref(), sora_proof_status.as_ref())
     {
         let policy = default_alias_policy();
@@ -2692,7 +2519,6 @@ pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Err
         );
         record_finding(&mut findings, matches, "Sora-Proof-Status", detail);
     }
-
     if log_to_stderr {
         eprintln!(
             "SoraFS gateway probe summary ({})",
@@ -2721,13 +2547,11 @@ pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Err
             }
         }
     }
-
     if let Some(target) = report_target {
         let gar_info = GatewayProbeGarInfo::from_record(&options.gar_path, &gar_record);
         let report = build_probe_report_value(now_secs, &response, &host, &gar_info, &findings);
         write_json_output(&report, target)?;
     }
-
     let ended_at = OffsetDateTime::now_utc();
     let summary = ProbeRunSummary {
         started_at,
@@ -2739,21 +2563,18 @@ pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Err
         gar_path: options.gar_path.clone(),
         findings: &findings,
     };
-
     if let Some(path) = &options.summary_path {
         write_probe_summary(path, &summary)?;
     }
     if let Some(drill) = &options.drill {
         append_drill_log_entry(drill, &summary)?;
     }
-
     if has_failures {
         if let Some(config) = &options.pagerduty {
             emit_pagerduty_event(config, &summary)?;
         }
         return Err("one or more gateway probe checks failed".into());
     }
-
     if log_to_stderr {
         eprintln!("All SoraFS gateway probe checks passed.");
     } else {
@@ -2761,7 +2582,6 @@ pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Err
     }
     Ok(())
 }
-
 fn load_and_verify_gar(
     options: &GatewayProbeOptions,
     now_secs: u64,
@@ -2777,7 +2597,6 @@ fn load_and_verify_gar(
         .verify_at(jws, now_secs)
         .map_err(|err| format!("failed to verify GAR {}: {err}", options.gar_path.display()).into())
 }
-
 fn build_gar_verifier(
     entries: &[(String, Vec<u8>)],
 ) -> Result<GatewayAuthorizationVerifier, Box<dyn Error>> {
@@ -2789,19 +2608,16 @@ fn build_gar_verifier(
     }
     Ok(verifier)
 }
-
 fn probe_headers_via_http(request: &GatewayProbeRequest) -> Result<ProbeResponse, Box<dyn Error>> {
     let method = request.method.trim().to_ascii_uppercase();
     let url = Url::parse(&request.url)
         .map_err(|err| format!("invalid gateway URL `{}`: {err}", request.url))?;
     let host = url.host_str().map(|h| h.to_ascii_lowercase());
-
     let mut builder = Client::builder().redirect(reqwest::redirect::Policy::none());
     if let Some(timeout) = request.timeout_secs {
         builder = builder.timeout(Duration::from_secs(timeout));
     }
     let client = builder.build()?;
-
     let mut req = match method.as_str() {
         "GET" => client.get(url.clone()),
         "HEAD" => client.head(url.clone()),
@@ -2809,7 +2625,6 @@ fn probe_headers_via_http(request: &GatewayProbeRequest) -> Result<ProbeResponse
             return Err(format!("unsupported HTTP method `{other}`").into());
         }
     };
-
     for (name, value) in &request.extra_headers {
         let header_name = HeaderName::from_bytes(name.trim().as_bytes())
             .map_err(|err| format!("invalid header name `{name}`: {err}"))?;
@@ -2817,7 +2632,6 @@ fn probe_headers_via_http(request: &GatewayProbeRequest) -> Result<ProbeResponse
             .map_err(|err| format!("invalid value for header `{name}`: {err}"))?;
         req = req.header(header_name, header_value);
     }
-
     let response = req.send()?;
     let status = response.status().as_u16();
     let headers = response.headers().clone();
@@ -2830,7 +2644,6 @@ fn probe_headers_via_http(request: &GatewayProbeRequest) -> Result<ProbeResponse
         },
     })
 }
-
 fn probe_headers_from_file(path: &Path) -> Result<ProbeResponse, Box<dyn Error>> {
     let raw = fs::read_to_string(path)
         .map_err(|err| format!("failed to read header file {}: {err}", path.display()))?;
@@ -2870,7 +2683,6 @@ fn probe_headers_from_file(path: &Path) -> Result<ProbeResponse, Box<dyn Error>>
         },
     })
 }
-
 fn parse_status_line(line: &str) -> Result<u16, Box<dyn Error>> {
     let mut parts = line.split_whitespace();
     let _http = parts
@@ -2883,7 +2695,6 @@ fn parse_status_line(line: &str) -> Result<u16, Box<dyn Error>> {
         .parse::<u16>()
         .map_err(|err| format!("invalid status code `{status}`: {err}").into())
 }
-
 fn resolve_probe_host(
     options: &GatewayProbeOptions,
     response: &ProbeResponse,
@@ -2896,7 +2707,6 @@ fn resolve_probe_host(
     }
     Err("host is unknown; provide --host when parsing captured headers".into())
 }
-
 fn expect_header(
     headers: &HeaderMap,
     name: &str,
@@ -2914,7 +2724,6 @@ fn expect_header(
         }
     }
 }
-
 fn read_header(headers: &HeaderMap, name: &str) -> Result<Option<String>, String> {
     match headers.get(name) {
         Some(value) => value
@@ -2924,7 +2733,6 @@ fn read_header(headers: &HeaderMap, name: &str) -> Result<Option<String>, String
         None => Ok(None),
     }
 }
-
 fn parse_cache_directives(value: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for directive in value.split(',') {
@@ -2943,7 +2751,6 @@ fn parse_cache_directives(value: &str) -> HashMap<String, String> {
     }
     map
 }
-
 fn findings_to_json(findings: &[ProbeFinding]) -> Vec<Value> {
     findings
         .iter()
@@ -2956,7 +2763,6 @@ fn findings_to_json(findings: &[ProbeFinding]) -> Vec<Value> {
         })
         .collect()
 }
-
 fn write_probe_summary(path: &Path, summary: &ProbeRunSummary) -> Result<(), Box<dyn Error>> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| {
@@ -3021,7 +2827,6 @@ fn write_probe_summary(path: &Path, summary: &ProbeRunSummary) -> Result<(), Box
         .map_err(|err| format!("failed to write summary JSON {}: {err}", path.display()))?;
     Ok(())
 }
-
 fn append_drill_log_entry(
     config: &DrillLogConfig,
     summary: &ProbeRunSummary,
@@ -3096,7 +2901,6 @@ fn append_drill_log_entry(
     .map_err(|err| format!("failed to append drill log row: {err}"))?;
     Ok(())
 }
-
 fn sanitise_table_field(input: &str) -> String {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -3108,7 +2912,6 @@ fn sanitise_table_field(input: &str) -> String {
             .replace('\r', "")
     }
 }
-
 fn emit_pagerduty_event(
     config: &PagerDutyConfig,
     summary: &ProbeRunSummary,
@@ -3152,7 +2955,6 @@ fn emit_pagerduty_event(
     }
     Ok(())
 }
-
 fn pagerduty_payload_value(
     config: &PagerDutyConfig,
     summary: &ProbeRunSummary,
@@ -3185,7 +2987,6 @@ fn pagerduty_payload_value(
         "findings".into(),
         Value::Array(findings_to_json(summary.findings)),
     );
-
     let mut payload = Map::new();
     payload.insert(
         "summary".into(),
@@ -3208,7 +3009,6 @@ fn pagerduty_payload_value(
     }
     payload.insert("timestamp".into(), Value::String(timestamp));
     payload.insert("custom_details".into(), Value::Object(custom_details));
-
     let mut event = Map::new();
     event.insert(
         "routing_key".into(),
@@ -3231,7 +3031,6 @@ fn pagerduty_payload_value(
     event.insert("payload".into(), Value::Object(payload));
     Ok(Value::Object(event))
 }
-
 fn default_alias_policy() -> AliasCachePolicy {
     AliasCachePolicy::new(
         Duration::from_secs(DEFAULT_CACHE_MAX_AGE),
@@ -3244,7 +3043,6 @@ fn default_alias_policy() -> AliasCachePolicy {
         Duration::from_secs(DEFAULT_GOVERNANCE_GRACE),
     )
 }
-
 fn proof_status_matches(evaluation: &AliasProofEvaluation, header: &str) -> bool {
     let normalized = header.trim().to_ascii_lowercase();
     match evaluation.state {
@@ -3267,13 +3065,11 @@ fn proof_status_matches(evaluation: &AliasProofEvaluation, header: &str) -> bool
         AliasProofState::HardExpired => normalized == "hard-expired",
     }
 }
-
 fn alias_manifest_id(bundle: &AliasProofBundleV1) -> Result<String, String> {
     String::from_utf8(bundle.binding.manifest_cid.clone())
         .map(|text| text.trim().to_string())
         .map_err(|_| "manifest CID in alias proof is not valid UTF-8".to_string())
 }
-
 fn record_finding(
     findings: &mut Vec<ProbeFinding>,
     ok: bool,
@@ -3286,24 +3082,20 @@ fn record_finding(
         detail: detail.into(),
     });
 }
-
 struct ProbeFinding {
     ok: bool,
     name: String,
     detail: String,
 }
-
 struct ProbeResponse {
     status: u16,
     headers: HeaderMap,
     source: ProbeSource,
 }
-
 enum ProbeSource {
     Http { url: String, host: Option<String> },
     File { path: PathBuf },
 }
-
 impl ProbeSource {
     fn describe(&self) -> String {
         match self {
@@ -3311,14 +3103,12 @@ impl ProbeSource {
             Self::File { path } => format!("captured headers from {}", path.display()),
         }
     }
-
     fn host(&self) -> Option<&str> {
         match self {
             Self::Http { host, .. } => host.as_deref(),
             Self::File { .. } => None,
         }
     }
-
     fn url(&self) -> Option<&str> {
         match self {
             Self::Http { url, .. } => Some(url.as_str()),
@@ -3326,7 +3116,6 @@ impl ProbeSource {
         }
     }
 }
-
 struct GatewayProbeGarInfo {
     path: String,
     name: String,
@@ -3336,7 +3125,6 @@ struct GatewayProbeGarInfo {
     valid_until_epoch: Option<u64>,
     host_patterns: Vec<String>,
 }
-
 impl GatewayProbeGarInfo {
     fn from_record(path: &Path, record: &GatewayAuthorizationRecord) -> Self {
         Self {
@@ -3354,7 +3142,6 @@ impl GatewayProbeGarInfo {
         }
     }
 }
-
 fn build_probe_report_value(
     timestamp: u64,
     response: &ProbeResponse,
@@ -3392,7 +3179,6 @@ fn build_probe_report_value(
     }
     Value::Object(root)
 }
-
 fn gar_info_to_json(gar_info: &GatewayProbeGarInfo) -> Value {
     let mut map = Map::new();
     map.insert("path".into(), Value::String(gar_info.path.clone()));
@@ -3429,7 +3215,6 @@ fn gar_info_to_json(gar_info: &GatewayProbeGarInfo) -> Value {
     );
     Value::Object(map)
 }
-
 fn probe_source_json(source: &ProbeSource) -> Value {
     match source {
         ProbeSource::Http { url, host } => {
@@ -3449,7 +3234,6 @@ fn probe_source_json(source: &ProbeSource) -> Value {
         }
     }
 }
-
 fn ensure_profile_matches(root: &Value, expected: &str) -> Result<(), Box<dyn Error>> {
     let profile = extract_string(root, "profile")?;
     if profile != expected {
@@ -3457,7 +3241,6 @@ fn ensure_profile_matches(root: &Value, expected: &str) -> Result<(), Box<dyn Er
     }
     Ok(())
 }
-
 fn ensure_aliases(root: &Value, canonical: &str) -> Result<(), Box<dyn Error>> {
     let aliases = root
         .get("profile_aliases")
@@ -3474,7 +3257,6 @@ fn ensure_aliases(root: &Value, canonical: &str) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn verify_manifest_signatures(
     root: &Value,
     manifest_digest: &[u8],
@@ -3493,7 +3275,6 @@ fn verify_manifest_signatures(
         }
         return Err("manifest signatures array empty".into());
     }
-
     for entry in entries {
         let map = entry
             .as_object()
@@ -3513,41 +3294,33 @@ fn verify_manifest_signatures(
             .get("signature")
             .and_then(Value::as_str)
             .ok_or_else(|| "signature entry missing signature".to_owned())?;
-
         let signer_bytes = decode_hex(signer_hex)?;
         let signature_bytes = decode_hex(signature_hex)?;
-
         let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &signer_bytes)
             .map_err(|err| format!("invalid signer public key: {err}"))?;
-
         let public_key_hex = public_key.to_string();
         if let Some(multihash) = map.get("signer_multihash").and_then(Value::as_str)
             && multihash != public_key_hex
         {
             return Err("signer_multihash does not match encoded public key".into());
         }
-
         let signature = iroha_crypto::ed25519_parse_signature(&signature_bytes)
             .map_err(|err| format!("invalid signature material: {err}"))?;
         signature
             .verify(&public_key, manifest_digest)
             .map_err(|err| format!("signature verification failed: {err}"))?;
     }
-
     Ok(entries.len())
 }
-
 fn extract_string<'a>(root: &'a Value, key: &str) -> Result<&'a str, Box<dyn Error>> {
     root.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("{key} field missing or not a string").into())
 }
-
 fn decode_hex(input: &str) -> Result<Vec<u8>, Box<dyn Error>> {
     hex::decode(input.trim())
         .map_err(|err| format!("failed to decode hex value {input}: {err}").into())
 }
-
 fn checked_ed25519_public_key_bytes<'a>(
     public_key: &'a PublicKey,
     context: &str,
@@ -3571,7 +3344,6 @@ fn checked_ed25519_public_key_bytes<'a>(
     }
     Ok(public_bytes)
 }
-
 fn checked_ed25519_public_key_array(
     public_key: &PublicKey,
     context: &str,
@@ -3585,12 +3357,10 @@ fn checked_ed25519_public_key_array(
         .into()
     })
 }
-
 const PROVIDER_ADMISSION_FIXTURE_COUNCIL_SEEDS: [&str; 2] = [
     "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
     "8899aabbccddeeff00112233445566778899aabbccddeeff0011223344556677",
 ];
-
 fn provider_admission_fixture_council_keypairs() -> Result<Vec<KeyPair>, Box<dyn Error>> {
     PROVIDER_ADMISSION_FIXTURE_COUNCIL_SEEDS
         .iter()
@@ -3602,7 +3372,6 @@ fn provider_admission_fixture_council_keypairs() -> Result<Vec<KeyPair>, Box<dyn
         })
         .collect()
 }
-
 fn provider_admission_fixture_council_policy(
     keypairs: &[KeyPair],
 ) -> Result<ProviderAdmissionCouncilPolicy, Box<dyn Error>> {
@@ -3613,19 +3382,15 @@ fn provider_admission_fixture_council_policy(
     ProviderAdmissionCouncilPolicy::new(trusted_signers, keypairs.len())
         .map_err(|err| format!("invalid council admission fixture policy: {err}").into())
 }
-
 pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(target_dir)?;
-
     let descriptor = chunker_registry::lookup_by_handle("sorafs.sf1@1.0.0")
         .ok_or("chunker profile sorafs.sf1@1.0.0 is not registered in the chunker registry")?;
-
     let canonical_handle = format!(
         "{}.{}@{}",
         descriptor.namespace, descriptor.name, descriptor.semver
     );
     let profile_aliases = canonical_profile_aliases(descriptor);
-
     let provider_seed =
         decode_hex_array::<32>("505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f")?;
     let provider_pair = KeyPair::try_from_seed(provider_seed.to_vec(), Algorithm::Ed25519)
@@ -3645,12 +3410,10 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
             .try_into()
             .map_err(|_| "Normal BLS public key must be 48 bytes")?,
     );
-
     let provider_id =
         decode_hex_array::<32>("11223344556677889900aabbccddeeff00112233445566778899aabbccddeeff")?;
     let stake_pool_id =
         decode_hex_array::<32>("ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100")?;
-
     let range_capability = ProviderCapabilityRangeV1 {
         max_chunk_span: 32,
         min_granularity: 8,
@@ -3660,7 +3423,6 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
     }
     .to_bytes()
     .expect("encode range capability");
-
     let capabilities = vec![
         CapabilityTlv {
             cap_type: CapabilityType::ToriiGateway,
@@ -3675,7 +3437,6 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
             payload: range_capability,
         },
     ];
-
     let torii_endpoint = AdvertEndpoint {
         kind: EndpointKind::Torii,
         host_pattern: "storage.alpha.svc".to_owned(),
@@ -3706,7 +3467,6 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
         alpn_ids: vec!["h3".to_owned()],
         report: decode_hex_vec("a1b2c3")?,
     };
-
     let endpoints = vec![
         EndpointAdmissionV1 {
             endpoint: torii_endpoint.clone(),
@@ -3717,12 +3477,10 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
             attestation: quic_attestation,
         },
     ];
-
     let stake_pointer = StakePointer {
         pool_id: stake_pool_id,
         stake_amount: XorQuantity::try_from_micro(7_500).expect("fixture stake is representable"),
     };
-
     let proposal = ProviderAdmissionProposalV1 {
         version: sorafs_manifest::PROVIDER_ADMISSION_PROPOSAL_VERSION_V1,
         provider_id,
@@ -3754,10 +3512,8 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
     proposal
         .validate()
         .map_err(|err| format!("proposal validation failed: {err}"))?;
-
     let proposal_bytes = to_bytes(&proposal)?;
     let proposal_digest = compute_proposal_digest(&proposal)?;
-
     let advert_body = ProviderAdvertBodyV1 {
         provider_id,
         profile_id: canonical_handle.clone(),
@@ -3792,11 +3548,9 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
     advert_body
         .validate()
         .map_err(|err| format!("advert body validation failed: {err}"))?;
-
     let advert_body_bytes = to_bytes(&advert_body)?;
     let issued_at = 1_700_592_000;
     let expires_at = issued_at + 3_600;
-
     let mut advert = ProviderAdvertV1 {
         version: sorafs_manifest::PROVIDER_ADVERT_VERSION_V1,
         issued_at,
@@ -3826,10 +3580,8 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
         .map_err(|err| format!("advert signature validation failed: {err}"))?;
     let advert_bytes = to_bytes(&advert)?;
     let advert_body_digest = compute_advert_body_digest(&advert_body)?;
-
     let council_keypairs = provider_admission_fixture_council_keypairs()?;
     let council_policy = provider_admission_fixture_council_policy(&council_keypairs)?;
-
     let retention_epoch = issued_at + 86_400 * 90;
     let mut envelope = ProviderAdmissionEnvelopeV1 {
         version: sorafs_manifest::PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
@@ -3859,15 +3611,12 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
         .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
     council_signatures.sort_unstable_by_key(|signature| signature.signer);
     envelope.council_signatures = council_signatures.clone();
-
     let record = AdmissionRecord::new(envelope.clone(), &council_policy)
         .map_err(|err| format!("envelope validation failed: {err}"))?;
     verify_advert_against_record(&advert, &record)
         .map_err(|err| format!("fixture advert mismatched envelope: {err}"))?;
-
     let envelope_bytes = to_bytes(&envelope)?;
     let envelope_digest = compute_envelope_digest(&envelope)?;
-
     write_binary(
         target_dir.join("provider_alpha_proposal.to"),
         &proposal_bytes,
@@ -3881,7 +3630,6 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
         target_dir.join("provider_alpha_envelope.to"),
         &envelope_bytes,
     )?;
-
     write_json_file(
         target_dir.join("provider_alpha_proposal.json"),
         build_proposal_summary(
@@ -3918,12 +3666,9 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
             &council_signatures,
         ),
     )?;
-
     write_readme(target_dir)?;
-
     Ok(())
 }
-
 fn canonical_profile_aliases(descriptor: &ChunkerProfileDescriptor) -> Vec<String> {
     let canonical_handle = format!(
         "{}.{}@{}",
@@ -3936,7 +3681,6 @@ fn canonical_profile_aliases(descriptor: &ChunkerProfileDescriptor) -> Vec<Strin
     aliases.retain(|alias| seen.insert(alias.clone()));
     aliases
 }
-
 fn build_proposal_summary(
     proposal: &ProviderAdmissionProposalV1,
     proposal_bytes: &[u8],
@@ -4015,7 +3759,6 @@ fn build_proposal_summary(
     );
     map
 }
-
 fn build_advert_body_summary(
     advert_body: &ProviderAdvertBodyV1,
     capabilities: &[CapabilityTlv],
@@ -4112,7 +3855,6 @@ fn build_advert_body_summary(
     );
     map
 }
-
 fn build_advert_summary(
     advert: &ProviderAdvertV1,
     advert_bytes: &[u8],
@@ -4158,7 +3900,6 @@ fn build_advert_summary(
     );
     map
 }
-
 fn build_envelope_summary(
     envelope: &ProviderAdmissionEnvelopeV1,
     signatures: &[CouncilSignature],
@@ -4203,7 +3944,6 @@ fn build_envelope_summary(
     }
     map
 }
-
 fn build_metadata_summary(
     proposal_digest: &[u8; 32],
     advert_body_digest: &[u8; 32],
@@ -4242,7 +3982,6 @@ fn build_metadata_summary(
     );
     map
 }
-
 fn write_binary(path: PathBuf, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -4250,7 +3989,6 @@ fn write_binary(path: PathBuf, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     fs::write(path, bytes)?;
     Ok(())
 }
-
 fn write_json_file(path: PathBuf, map: Map) -> Result<(), Box<dyn Error>> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -4260,7 +3998,6 @@ fn write_json_file(path: PathBuf, map: Map) -> Result<(), Box<dyn Error>> {
     fs::write(path, text)?;
     Ok(())
 }
-
 fn write_readme(target_dir: &Path) -> Result<(), Box<dyn Error>> {
     let readme_path = target_dir.join("README.md");
     let mut content = String::from(
@@ -4281,7 +4018,6 @@ stable so CI can detect drift or accidental edits.\n",
     fs::write(readme_path, content)?;
     Ok(())
 }
-
 fn decode_hex_array<const N: usize>(input: &str) -> Result<[u8; N], Box<dyn Error>> {
     let bytes = hex::decode(input).map_err(|err| format!("invalid hex `{input}`: {err}"))?;
     if bytes.len() != N {
@@ -4295,15 +4031,12 @@ fn decode_hex_array<const N: usize>(input: &str) -> Result<[u8; N], Box<dyn Erro
     array.copy_from_slice(&bytes);
     Ok(array)
 }
-
 fn decode_hex_vec(input: &str) -> Result<Vec<u8>, Box<dyn Error>> {
     hex::decode(input).map_err(|err| format!("invalid hex `{input}`: {err}").into())
 }
-
 fn hex_lower<T: AsRef<[u8]>>(bytes: T) -> String {
     hex::encode(bytes)
 }
-
 fn stream_budget_to_value(budget: &StreamBudgetV1) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -4323,7 +4056,6 @@ fn stream_budget_to_value(budget: &StreamBudgetV1) -> Value {
     );
     Value::Object(map)
 }
-
 fn transport_hints_to_value(hints: &[TransportHintV1]) -> Value {
     Value::Array(
         hints
@@ -4340,7 +4072,6 @@ fn transport_hints_to_value(hints: &[TransportHintV1]) -> Value {
             .collect(),
     )
 }
-
 fn transport_protocol_label(protocol: TransportProtocol) -> &'static str {
     match protocol {
         TransportProtocol::ToriiHttpRange => "torii_http_range",
@@ -4349,7 +4080,6 @@ fn transport_protocol_label(protocol: TransportProtocol) -> &'static str {
         TransportProtocol::VendorReserved => "vendor_reserved",
     }
 }
-
 fn capability_label(cap: CapabilityType) -> &'static str {
     match cap {
         CapabilityType::ToriiGateway => "torii_gateway",
@@ -4360,7 +4090,6 @@ fn capability_label(cap: CapabilityType) -> &'static str {
         CapabilityType::VendorReserved => "vendor_reserved",
     }
 }
-
 pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>> {
     let providers = [
         ProviderId::new([0x51; 32]),
@@ -4372,12 +4101,9 @@ pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>>
     let mut block = state.block(pin_fixture_block_header(2));
     let mut tx = block.transaction();
     pin_fixture_bootstrap(&mut tx, &providers)?;
-
     let (digest, manifest_root_cid, manifest_payload) = pin_fixture_default_manifest()?;
     let council_keys = pin_fixture_council_keypair();
-
     pin_fixture_register_and_approve(&mut tx, digest, manifest_payload, &council_keys)?;
-
     let alias_binding =
         pin_fixture_alias_binding_for(&manifest_root_cid, "sora", "docs", 12, 36, &council_keys)?;
     BindManifestAlias {
@@ -4388,7 +4114,6 @@ pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>>
     }
     .execute(&pin_fixture_alice(), &mut tx)
     .map_err(|err| format!("failed to bind alias: {err}"))?;
-
     let order_id = ReplicationOrderId::new([0x44; 32]);
     let order_struct =
         pin_fixture_replication_order(order_id, digest, &manifest_root_cid, &providers, 3);
@@ -4402,7 +4127,6 @@ pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>>
     }
     .execute(&pin_fixture_alice(), &mut tx)
     .map_err(|err| format!("failed to issue replication order: {err}"))?;
-
     for provider_id in providers {
         CompleteReplicationOrder {
             order_id,
@@ -4415,15 +4139,12 @@ pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>>
         .execute(&pin_fixture_alice(), &mut tx)
         .map_err(|err| format!("failed to complete provider replication assignment: {err}"))?;
     }
-
     tx.apply();
     block
         .commit()
         .map_err(|err| format!("failed to commit block: {err}"))?;
-
     let view = state.view();
     let world = view.world();
-
     let manifest = world
         .pin_manifests()
         .get(&digest)
@@ -4440,7 +4161,6 @@ pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>>
         .get(&order_id)
         .cloned()
         .ok_or("replication order missing after execution")?;
-
     let snapshot = pin_fixture_snapshot_json(&manifest, &alias_record, &order_record)?;
     let pretty = to_string_pretty(&snapshot)?;
     if let Some(parent) = output.parent() {
@@ -4450,7 +4170,6 @@ pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>>
     println!("wrote {}", output.display());
     Ok(())
 }
-
 fn pin_fixture_make_state(providers: &[ProviderId]) -> State {
     let kura = Kura::blank_kura_for_testing();
     let live = LiveQueryStore::start_test();
@@ -4469,7 +4188,6 @@ fn pin_fixture_make_state(providers: &[ProviderId]) -> State {
     state.set_gov(governance);
     state
 }
-
 fn pin_fixture_block_header(height: u64) -> iroha_data_model::block::BlockHeader {
     iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(height).expect("non-zero height"),
@@ -4480,7 +4198,6 @@ fn pin_fixture_block_header(height: u64) -> iroha_data_model::block::BlockHeader
         0,
     )
 }
-
 fn pin_fixture_completion_anchor_header() -> iroha_data_model::block::BlockHeader {
     iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero height"),
@@ -4491,14 +4208,12 @@ fn pin_fixture_completion_anchor_header() -> iroha_data_model::block::BlockHeade
         0,
     )
 }
-
 fn pin_fixture_completion_anchor() -> ProviderIngestFinalizedAnchorV1 {
     ProviderIngestFinalizedAnchorV1 {
         height: 1,
         block_hash: *iroha_crypto::HashOf::new(&pin_fixture_completion_anchor_header()).as_ref(),
     }
 }
-
 fn pin_fixture_commit_completion_anchor(state: &State) -> Result<(), Box<dyn Error>> {
     let mut block = state.block(pin_fixture_completion_anchor_header());
     block.block_hashes.push_for_tests(iroha_crypto::HashOf::new(
@@ -4507,7 +4222,6 @@ fn pin_fixture_commit_completion_anchor(state: &State) -> Result<(), Box<dyn Err
     block.commit()?;
     Ok(())
 }
-
 fn pin_fixture_completion_authority() -> ProviderIngestCompletionAuthorityV1 {
     ProviderIngestCompletionAuthorityV1::new(
         pin_fixture_alice(),
@@ -4519,7 +4233,6 @@ fn pin_fixture_completion_authority() -> ProviderIngestCompletionAuthorityV1 {
         },
     )
 }
-
 fn pin_fixture_bootstrap(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
     providers: &[ProviderId],
@@ -4545,7 +4258,6 @@ fn pin_fixture_bootstrap(
     }
     Ok(())
 }
-
 fn pin_fixture_seed_public_pin_fee_assets(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
 ) -> Result<(), Box<dyn Error>> {
@@ -4570,7 +4282,6 @@ fn pin_fixture_seed_public_pin_fee_assets(
     .execute(&pin_fixture_alice(), tx)?;
     Ok(())
 }
-
 fn pin_fixture_register_and_approve(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
     digest: ManifestDigest,
@@ -4580,7 +4291,6 @@ fn pin_fixture_register_and_approve(
     RegisterPinManifest::new(manifest_payload, None, None)
         .execute(&pin_fixture_alice(), tx)
         .map_err(|err| format!("failed to register manifest: {err}"))?;
-
     let stored = tx
         .world()
         .pin_manifests()
@@ -4588,7 +4298,6 @@ fn pin_fixture_register_and_approve(
         .cloned()
         .ok_or("manifest missing after registration")?;
     let envelope = pin_fixture_build_envelope(&stored, council_keys)?;
-
     ApprovePinManifest {
         digest,
         council_envelope: Some(envelope),
@@ -4598,7 +4307,6 @@ fn pin_fixture_register_and_approve(
     .map_err(|err| format!("failed to approve manifest: {err}"))?;
     Ok(())
 }
-
 fn pin_fixture_default_manifest()
 -> Result<(ManifestDigest, ManifestRootCid, Vec<u8>), Box<dyn Error>> {
     let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
@@ -4622,19 +4330,15 @@ fn pin_fixture_default_manifest()
     let payload = manifest.encode()?;
     Ok((digest, root_cid, payload))
 }
-
 fn pin_fixture_default_chunk_digest() -> [u8; 32] {
     [0xCD; 32]
 }
-
 fn pin_fixture_default_por_root() -> [u8; 32] {
     [0xCE; 32]
 }
-
 fn pin_fixture_default_content_length() -> u64 {
     1_048_576
 }
-
 fn pin_fixture_default_chunker() -> ChunkerProfileHandle {
     let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
     ChunkerProfileHandle {
@@ -4645,7 +4349,6 @@ fn pin_fixture_default_chunker() -> ChunkerProfileHandle {
         multihash_code: descriptor.multihash_code,
     }
 }
-
 #[cfg(test)]
 fn pin_fixture_default_policy() -> iroha_data_model::sorafs::pin_registry::PinPolicy {
     iroha_data_model::sorafs::pin_registry::PinPolicy {
@@ -4654,7 +4357,6 @@ fn pin_fixture_default_policy() -> iroha_data_model::sorafs::pin_registry::PinPo
         retention_epoch: 42,
     }
 }
-
 fn pin_fixture_replication_order(
     order_id: ReplicationOrderId,
     manifest: ManifestDigest,
@@ -4693,7 +4395,6 @@ fn pin_fixture_replication_order(
         metadata: Vec::new(),
     }
 }
-
 fn pin_fixture_alias_binding_for(
     manifest_root_cid: &ManifestRootCid,
     namespace: &str,
@@ -4708,14 +4409,11 @@ fn pin_fixture_alias_binding_for(
         bound_at,
         expiry_epoch,
     };
-
     let merkle_path: Vec<[u8; 32]> = Vec::new();
     let registry_root =
         alias_merkle_root(&binding_payload, &merkle_path).map_err(|err| format!("{err}"))?;
-
     let generated_at_unix = 1_700_000_000;
     let expires_at_unix = generated_at_unix + 86_400;
-
     let mut bundle = AliasProofBundleV1 {
         binding: binding_payload,
         registry_root,
@@ -4725,18 +4423,15 @@ fn pin_fixture_alias_binding_for(
         merkle_path,
         council_signatures: Vec::new(),
     };
-
     let digest = alias_proof_signature_digest(&bundle);
     let signature = Signature::try_new(council_keys.private_key(), digest.as_ref())
         .map_err(|err| format!("failed to sign alias proof fixture: {err}"))?;
     let signer =
         checked_ed25519_public_key_array(council_keys.public_key(), "alias council public key")?;
-
     bundle.council_signatures.push(CouncilSignature {
         signer,
         signature: signature.payload().to_vec(),
     });
-
     let proof = to_bytes(&bundle)?;
     Ok(ManifestAliasBinding {
         name: name.to_owned(),
@@ -4744,14 +4439,12 @@ fn pin_fixture_alias_binding_for(
         proof,
     })
 }
-
 fn pin_fixture_council_keypair() -> KeyPair {
     let secret_bytes = [0x11; 32];
     let private =
         PrivateKey::from_bytes(Algorithm::Ed25519, &secret_bytes).expect("private key from bytes");
     KeyPair::from_private_key(private).expect("derive keypair")
 }
-
 fn pin_fixture_build_envelope(
     record: &PinManifestRecord,
     keypair: &KeyPair,
@@ -4773,7 +4466,6 @@ fn pin_fixture_build_envelope(
         "signer_multihash".into(),
         Value::from(keypair.public_key().to_string()),
     );
-
     let mut envelope = json::Map::new();
     envelope.insert(
         "chunk_digest_sha3_256".into(),
@@ -4788,12 +4480,10 @@ fn pin_fixture_build_envelope(
         "signatures".into(),
         Value::Array(vec![Value::Object(sig_entry)]),
     );
-
     let mut serialized = json::to_vec_pretty(&Value::Object(envelope))?;
     serialized.push(b'\n');
     Ok(serialized)
 }
-
 fn pin_fixture_snapshot_json(
     manifest: &PinManifestRecord,
     alias: &ManifestAliasRecord,
@@ -4802,7 +4492,6 @@ fn pin_fixture_snapshot_json(
     let manifest_obj = pin_fixture_manifest_snapshot(manifest)?;
     let alias_obj = pin_fixture_alias_snapshot(alias)?;
     let order_obj = pin_fixture_order_snapshot(order)?;
-
     let mut root = json::Map::new();
     root.insert(
         "manifests".into(),
@@ -4818,7 +4507,6 @@ fn pin_fixture_snapshot_json(
     );
     Ok(Value::Object(root))
 }
-
 fn pin_fixture_manifest_snapshot(
     manifest: &PinManifestRecord,
 ) -> Result<json::Map, Box<dyn Error>> {
@@ -4888,7 +4576,6 @@ fn pin_fixture_manifest_snapshot(
     );
     Ok(manifest_obj)
 }
-
 fn pin_fixture_alias_snapshot(alias: &ManifestAliasRecord) -> Result<json::Map, Box<dyn Error>> {
     let mut alias_obj = json::Map::new();
     alias_obj.insert(
@@ -4913,7 +4600,6 @@ fn pin_fixture_alias_snapshot(alias: &ManifestAliasRecord) -> Result<json::Map, 
     );
     Ok(alias_obj)
 }
-
 fn pin_fixture_order_snapshot(order: &ReplicationOrderRecord) -> Result<json::Map, Box<dyn Error>> {
     let order_payload: ReplicationOrderV1 =
         norito::decode_from_bytes(&order.canonical_order).map_err(|err| format!("{err}"))?;
@@ -5046,7 +4732,6 @@ fn pin_fixture_order_snapshot(order: &ReplicationOrderRecord) -> Result<json::Ma
     order_obj.insert("assignments".into(), Value::Array(assignments));
     Ok(order_obj)
 }
-
 fn pin_fixture_alice() -> AccountId {
     let public_key: PublicKey =
         "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
@@ -5054,7 +4739,6 @@ fn pin_fixture_alice() -> AccountId {
             .expect("valid public key");
     AccountId::new(public_key)
 }
-
 pub fn run_adoption_check(
     options: AdoptionCheckOptions,
 ) -> Result<AdoptionCheckReport, Box<dyn Error>> {
@@ -5066,7 +4750,6 @@ pub fn run_adoption_check(
     if scoreboard_paths.is_empty() {
         return Err("no scoreboards supplied for adoption check".into());
     }
-
     let summary_paths = if options.summary_paths.is_empty() {
         scoreboard_paths
             .iter()
@@ -5082,7 +4765,6 @@ pub fn run_adoption_check(
         )
         .into());
     };
-
     let mut evaluated = 0usize;
     let mut single_source_override_used = false;
     let mut implicit_metadata_override_used = false;
@@ -5117,7 +4799,6 @@ pub fn run_adoption_check(
         })?;
         let mut expected_gateway_manifest: Option<(String, String)> = None;
         let scoreboard_telemetry_label = non_empty_trimmed(meta.telemetry_source.as_deref());
-
         let direct = meta.provider_count.ok_or_else(|| {
             format!(
                 "scoreboard `{}` metadata missing `provider_count`; rerun the capture with the latest CLI/SDK so adoption evidence records provider totals",
@@ -5291,7 +4972,6 @@ pub fn run_adoption_check(
             )
             .into());
         }
-
         let summary_bytes = fs::read(summary_path)
             .map_err(|err| format!("failed to read summary `{}`: {err}", summary_path.display()))?;
         let summary_value: Value = json::from_slice(&summary_bytes).map_err(|err| {
@@ -5597,7 +5277,6 @@ pub fn run_adoption_check(
             )
             .into());
         }
-
         evaluated += 1;
         reports.push(ScoreboardReport {
             scoreboard_path: path.display().to_string(),
@@ -5616,11 +5295,9 @@ pub fn run_adoption_check(
             metadata,
         });
     }
-
     if evaluated == 0 {
         return Err("no scoreboards evaluated; provide --scoreboard <path>".into());
     }
-
     Ok(AdoptionCheckReport {
         scoreboard_reports: reports,
         total_evaluated: evaluated,
@@ -5629,7 +5306,6 @@ pub fn run_adoption_check(
         implicit_metadata_override_used,
     })
 }
-
 fn default_adoption_scoreboard_path() -> PathBuf {
     crate::workspace_root()
         .join("artifacts")
@@ -5637,23 +5313,19 @@ fn default_adoption_scoreboard_path() -> PathBuf {
         .join("latest")
         .join("scoreboard.json")
 }
-
 const WEIGHT_EPSILON: f64 = 1e-9;
-
 pub fn run_scoreboard_diff(
     options: ScoreboardDiffOptions,
 ) -> Result<ScoreboardDiffReport, Box<dyn Error>> {
     if options.threshold_percent < 0.0 {
         return Err("threshold-percent must be non-negative".into());
     }
-
     let threshold_fraction = (options.threshold_percent / 100.0).abs();
     let previous = load_scoreboard_weights(&options.previous_scoreboard)?;
     let current = load_scoreboard_weights(&options.current_scoreboard)?;
     let mut providers: BTreeSet<String> = BTreeSet::new();
     providers.extend(previous.keys().cloned());
     providers.extend(current.keys().cloned());
-
     let mut deltas: Vec<ProviderWeightDelta> = Vec::new();
     for provider in &providers {
         let previous_weight = *previous.get(provider).unwrap_or(&0.0);
@@ -5673,7 +5345,6 @@ pub fn run_scoreboard_diff(
             exceeds_threshold: delta.abs() > threshold_fraction + WEIGHT_EPSILON,
         });
     }
-
     deltas.sort_by(|left, right| {
         right
             .delta
@@ -5682,7 +5353,6 @@ pub fn run_scoreboard_diff(
             .unwrap_or(Ordering::Equal)
             .then_with(|| left.provider_id.cmp(&right.provider_id))
     });
-
     Ok(ScoreboardDiffReport {
         previous_scoreboard: options.previous_scoreboard.display().to_string(),
         current_scoreboard: options.current_scoreboard.display().to_string(),
@@ -5691,7 +5361,6 @@ pub fn run_scoreboard_diff(
         changed_providers: deltas,
     })
 }
-
 pub fn print_scoreboard_diff(report: &ScoreboardDiffReport) {
     println!("sorafs scoreboard diff:");
     println!("  previous: {}", report.previous_scoreboard);
@@ -5743,7 +5412,6 @@ pub fn print_scoreboard_diff(report: &ScoreboardDiffReport) {
         );
     }
 }
-
 fn load_scoreboard_weights(path: &Path) -> Result<HashMap<String, f64>, Box<dyn Error>> {
     let bytes = fs::read(path)
         .map_err(|err| format!("failed to read scoreboard `{}`: {err}", path.display()))?;
@@ -5757,7 +5425,6 @@ fn load_scoreboard_weights(path: &Path) -> Result<HashMap<String, f64>, Box<dyn 
         .get("entries")
         .and_then(Value::as_array)
         .ok_or_else(|| format!("scoreboard `{}` missing `entries` array", path.display()))?;
-
     let mut weights = HashMap::new();
     for (index, entry) in entries.iter().enumerate() {
         if !scoreboard_entry_is_eligible(entry) {
@@ -5783,7 +5450,6 @@ fn load_scoreboard_weights(path: &Path) -> Result<HashMap<String, f64>, Box<dyn 
             })?;
         weights.insert(provider.to_string(), weight);
     }
-
     if weights.is_empty() {
         return Err(format!(
             "scoreboard `{}` has no eligible providers to compare",
@@ -5793,18 +5459,15 @@ fn load_scoreboard_weights(path: &Path) -> Result<HashMap<String, f64>, Box<dyn 
     }
     Ok(weights)
 }
-
 fn approx_equal(left: f64, right: f64) -> bool {
     (left - right).abs() <= WEIGHT_EPSILON
 }
-
 fn default_summary_path_for_scoreboard(scoreboard_path: &Path) -> PathBuf {
     scoreboard_path
         .parent()
         .map(|parent| parent.join("summary.json"))
         .unwrap_or_else(|| PathBuf::from("summary.json"))
 }
-
 fn scoreboard_entry_is_eligible(entry: &Value) -> bool {
     match entry.get("eligibility") {
         Some(Value::String(label)) => label == "eligible",
@@ -5812,7 +5475,6 @@ fn scoreboard_entry_is_eligible(entry: &Value) -> bool {
         _ => false,
     }
 }
-
 struct SummaryStats {
     active_providers: HashSet<String>,
     chunk_receipt_providers: HashSet<String>,
@@ -5829,7 +5491,6 @@ struct SummaryStats {
     telemetry_source: Option<String>,
     telemetry_region: Option<String>,
 }
-
 fn collect_summary_stats(summary: &Value, path: &Path) -> Result<SummaryStats, String> {
     let chunk_count = summary
         .get("chunk_count")
@@ -5873,7 +5534,6 @@ fn collect_summary_stats(summary: &Value, path: &Path) -> Result<SummaryStats, S
             })?;
         receipt_providers.insert(provider.to_string());
     }
-
     let reports = summary
         .get("provider_reports")
         .and_then(Value::as_array)
@@ -5916,7 +5576,6 @@ fn collect_summary_stats(summary: &Value, path: &Path) -> Result<SummaryStats, S
             active_providers.insert(provider.to_string());
         }
     }
-
     let provider_success_total = summary
         .get("provider_success_total")
         .and_then(Value::as_u64)
@@ -5942,7 +5601,6 @@ fn collect_summary_stats(summary: &Value, path: &Path) -> Result<SummaryStats, S
             chunk_count
         ));
     }
-
     let gateway_manifest_provided = summary
         .get("gateway_manifest_provided")
         .and_then(Value::as_bool)
@@ -6029,7 +5687,6 @@ fn collect_summary_stats(summary: &Value, path: &Path) -> Result<SummaryStats, S
         .and_then(Value::as_str)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-
     Ok(SummaryStats {
         active_providers,
         chunk_receipt_providers: receipt_providers,
@@ -6047,7 +5704,6 @@ fn collect_summary_stats(summary: &Value, path: &Path) -> Result<SummaryStats, S
         telemetry_region,
     })
 }
-
 fn parse_scoreboard_metadata(
     value: &Value,
     path: &Path,
@@ -6106,7 +5762,6 @@ fn parse_scoreboard_metadata(
     }
     Ok(Some(metadata))
 }
-
 fn value_as_u64(value: Option<&Value>) -> Option<u64> {
     value.and_then(|v| match v {
         Value::Number(num) => num
@@ -6115,15 +5770,12 @@ fn value_as_u64(value: Option<&Value>) -> Option<u64> {
         _ => None,
     })
 }
-
 fn value_as_bool(value: Option<&Value>) -> Option<bool> {
     value.and_then(Value::as_bool)
 }
-
 fn value_as_string(value: Option<&Value>) -> Option<String> {
     value.and_then(Value::as_str).map(|s| s.to_string())
 }
-
 fn non_empty_trimmed(value: Option<&str>) -> Option<String> {
     value.and_then(|raw| {
         let trimmed = raw.trim();
@@ -6134,7 +5786,6 @@ fn non_empty_trimmed(value: Option<&str>) -> Option<String> {
         }
     })
 }
-
 fn metadata_direct_transport_label(metadata: &ScoreboardMetadata) -> Option<&str> {
     metadata
         .transport_policy
@@ -6147,11 +5798,9 @@ fn metadata_direct_transport_label(metadata: &ScoreboardMetadata) -> Option<&str
                 .filter(|label| is_direct_only_label(label))
         })
 }
-
 fn is_direct_only_label(label: &str) -> bool {
     label == "direct-only"
 }
-
 fn require_canonical_transport_policy(label: &str, context: &str) -> Result<(), String> {
     match label {
         "soranet-first" | "soranet-strict" | "direct-only" => Ok(()),
@@ -6160,7 +5809,6 @@ fn require_canonical_transport_policy(label: &str, context: &str) -> Result<(), 
         )),
     }
 }
-
 fn provider_mix_label_from_counts(direct: u64, gateway: u64) -> &'static str {
     match (direct > 0, gateway > 0) {
         (true, true) => "mixed",
@@ -6169,7 +5817,6 @@ fn provider_mix_label_from_counts(direct: u64, gateway: u64) -> &'static str {
         (false, false) => "none",
     }
 }
-
 fn metadata_single_source_hint(metadata: &ScoreboardMetadata) -> Option<(&'static str, u64)> {
     if let Some(value) = metadata.max_parallel
         && value <= 1
@@ -6198,12 +5845,10 @@ fn metadata_single_source_hint(metadata: &ScoreboardMetadata) -> Option<(&'stati
     }
     None
 }
-
 pub fn run_burn_in_check(options: BurnInCheckOptions) -> Result<BurnInSummary, Box<dyn Error>> {
     if options.log_paths.is_empty() {
         return Err("sorafs-burn-in-check requires at least one --log <path>".into());
     }
-
     let mut accumulator = BurnInAccumulator::default();
     for path in &options.log_paths {
         let contents = fs::read_to_string(path)?;
@@ -6213,11 +5858,9 @@ pub fn run_burn_in_check(options: BurnInCheckOptions) -> Result<BurnInSummary, B
             }
         }
     }
-
     let summary = accumulator.finalize(&options)?;
     Ok(summary)
 }
-
 pub fn run_taikai_cache_bundle(options: TaikaiCacheBundleOptions) -> Result<(), Box<dyn Error>> {
     let mut profile_paths = if options.profile_paths.is_empty() {
         discover_taikai_cache_profiles(default_taikai_cache_profile_dir())?
@@ -6229,14 +5872,12 @@ pub fn run_taikai_cache_bundle(options: TaikaiCacheBundleOptions) -> Result<(), 
     if profile_paths.is_empty() {
         return Err("no Taikai cache profiles were specified or discovered".into());
     }
-
     fs::create_dir_all(&options.output_root).map_err(|err| {
         format!(
             "failed to create Taikai cache output directory `{}`: {err}",
             options.output_root.display()
         )
     })?;
-
     let mut index_entries: Vec<TaikaiCacheIndexEntry> = Vec::new();
     for profile_path in profile_paths {
         let document = TaikaiCacheProfileDocument::load(&profile_path)?;
@@ -6248,7 +5889,6 @@ pub fn run_taikai_cache_bundle(options: TaikaiCacheBundleOptions) -> Result<(), 
             )
         })?;
         ensure_safe_profile_id(&profile.profile_id)?;
-
         let profile_dir = options.output_root.join(&profile.profile_id);
         fs::create_dir_all(&profile_dir).map_err(|err| {
             format!(
@@ -6256,7 +5896,6 @@ pub fn run_taikai_cache_bundle(options: TaikaiCacheBundleOptions) -> Result<(), 
                 profile_dir.display()
             )
         })?;
-
         let profile_json_bytes = json::to_vec_pretty(&profile)?;
         let profile_json_path = profile_dir.join("profile.json");
         fs::write(&profile_json_path, &profile_json_bytes).map_err(|err| {
@@ -6265,7 +5904,6 @@ pub fn run_taikai_cache_bundle(options: TaikaiCacheBundleOptions) -> Result<(), 
                 profile_json_path.display()
             )
         })?;
-
         let cache_json_bytes = json::to_vec_pretty(&profile.config)?;
         let cache_json_path = profile_dir.join("cache_config.json");
         fs::write(&cache_json_path, &cache_json_bytes).map_err(|err| {
@@ -6274,7 +5912,6 @@ pub fn run_taikai_cache_bundle(options: TaikaiCacheBundleOptions) -> Result<(), 
                 cache_json_path.display()
             )
         })?;
-
         let artifact_bytes = to_bytes(&profile)?;
         let artifact_path = profile_dir.join("profile.taikai_cache_profile.to");
         fs::write(&artifact_path, &artifact_bytes).map_err(|err| {
@@ -6283,11 +5920,9 @@ pub fn run_taikai_cache_bundle(options: TaikaiCacheBundleOptions) -> Result<(), 
                 artifact_path.display()
             )
         })?;
-
         let artifact_digest = ArtifactDigest::from_bytes(&artifact_bytes);
         let profile_json_digest = ArtifactDigest::from_bytes(&profile_json_bytes);
         let cache_json_digest = ArtifactDigest::from_bytes(&cache_json_bytes);
-
         let manifest_artifact = BundleArtifact::with_path(
             rel_posix_path(&profile_dir, &artifact_path)?,
             &artifact_digest,
@@ -6300,7 +5935,6 @@ pub fn run_taikai_cache_bundle(options: TaikaiCacheBundleOptions) -> Result<(), 
             rel_posix_path(&profile_dir, &cache_json_path)?,
             &cache_json_digest,
         );
-
         let manifest = TaikaiCacheBundleManifest {
             version: 1,
             profile_id: profile.profile_id.clone(),
@@ -6319,7 +5953,6 @@ pub fn run_taikai_cache_bundle(options: TaikaiCacheBundleOptions) -> Result<(), 
                 manifest_path.display()
             )
         })?;
-
         index_entries.push(TaikaiCacheIndexEntry {
             profile_id: profile.profile_id.clone(),
             rollout_stage: profile.rollout_stage.as_str().to_string(),
@@ -6339,7 +5972,6 @@ pub fn run_taikai_cache_bundle(options: TaikaiCacheBundleOptions) -> Result<(), 
             annotations: profile.annotations.clone(),
         });
     }
-
     let index = TaikaiCacheBundleIndex {
         generated_unix_ms: unix_timestamp_ms(),
         profiles: index_entries,
@@ -6352,16 +5984,13 @@ pub fn run_taikai_cache_bundle(options: TaikaiCacheBundleOptions) -> Result<(), 
             index_path.display()
         )
     })?;
-
     println!(
         "[taikai-cache] bundled {} profile(s) into {}",
         index.profiles.len(),
         options.output_root.display()
     );
-
     Ok(())
 }
-
 pub fn resolve_taikai_cache_profile_path(spec: &str) -> Result<PathBuf, Box<dyn Error>> {
     let trimmed = spec.trim();
     if trimmed.is_empty() {
@@ -6373,15 +6002,12 @@ pub fn resolve_taikai_cache_profile_path(spec: &str) -> Result<PathBuf, Box<dyn 
     }
     Ok(default_taikai_cache_profile_dir().join(format!("{trimmed}.json")))
 }
-
 pub fn default_taikai_cache_output_root() -> PathBuf {
     workspace_root().join("artifacts/taikai_cache")
 }
-
 fn default_taikai_cache_profile_dir() -> PathBuf {
     workspace_root().join("configs/taikai_cache/profiles")
 }
-
 fn discover_taikai_cache_profiles(dir: PathBuf) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     let mut entries = Vec::new();
     let read_dir = fs::read_dir(&dir).map_err(|err| {
@@ -6411,7 +6037,6 @@ fn discover_taikai_cache_profiles(dir: PathBuf) -> Result<Vec<PathBuf>, Box<dyn 
     }
     Ok(entries)
 }
-
 fn ensure_safe_profile_id(id: &str) -> Result<(), Box<dyn Error>> {
     if id.trim().is_empty() {
         return Err("Taikai cache profile id must not be empty".into());
@@ -6421,14 +6046,12 @@ fn ensure_safe_profile_id(id: &str) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn unix_timestamp_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|dur| dur.as_millis() as u64)
         .unwrap_or(0)
 }
-
 fn rel_posix_path(base: &Path, path: &Path) -> Result<String, Box<dyn Error>> {
     let rel = path.strip_prefix(base).map_err(|err| {
         format!(
@@ -6451,7 +6074,6 @@ fn rel_posix_path(base: &Path, path: &Path) -> Result<String, Box<dyn Error>> {
     }
     Ok(buffer)
 }
-
 #[derive(Clone, Debug, Serialize)]
 struct TaikaiCacheBundleManifest {
     version: u8,
@@ -6463,13 +6085,11 @@ struct TaikaiCacheBundleManifest {
     cache_json: BundleArtifact,
     annotations: BTreeMap<String, String>,
 }
-
 #[derive(Clone, Debug, Serialize)]
 struct TaikaiCacheBundleIndex {
     generated_unix_ms: u64,
     profiles: Vec<TaikaiCacheIndexEntry>,
 }
-
 #[derive(Clone, Debug, Serialize)]
 struct TaikaiCacheIndexEntry {
     profile_id: String,
@@ -6480,7 +6100,6 @@ struct TaikaiCacheIndexEntry {
     manifest_path: String,
     annotations: BTreeMap<String, String>,
 }
-
 #[derive(Clone, Debug, Serialize)]
 struct BundleArtifact {
     path: String,
@@ -6488,7 +6107,6 @@ struct BundleArtifact {
     sha256_hex: String,
     blake3_hex: String,
 }
-
 impl BundleArtifact {
     fn with_path(path: String, digest: &ArtifactDigest) -> Self {
         Self {
@@ -6499,14 +6117,12 @@ impl BundleArtifact {
         }
     }
 }
-
 #[derive(Clone, Debug)]
 struct ArtifactDigest {
     bytes: u64,
     sha256_hex: String,
     blake3_hex: String,
 }
-
 impl ArtifactDigest {
     fn from_bytes(bytes: &[u8]) -> Self {
         let mut sha = Sha256::new();
@@ -6520,7 +6136,6 @@ impl ArtifactDigest {
         }
     }
 }
-
 #[derive(Debug, JsonDeserialize)]
 struct TaikaiCacheProfileDocument {
     #[norito(default)]
@@ -6534,7 +6149,6 @@ struct TaikaiCacheProfileDocument {
     #[norito(skip)]
     source_path: PathBuf,
 }
-
 impl TaikaiCacheProfileDocument {
     fn load(path: &Path) -> Result<Self, Box<dyn Error>> {
         let bytes = fs::read(path).map_err(|err| {
@@ -6568,7 +6182,6 @@ impl TaikaiCacheProfileDocument {
         doc.source_path = path.to_path_buf();
         Ok(doc)
     }
-
     fn into_profile(self) -> Result<TaikaiCacheProfileV1, Box<dyn Error>> {
         let profile_id = self.profile_id.unwrap_or_default().trim().to_string();
         if profile_id.is_empty() {
@@ -6594,7 +6207,6 @@ impl TaikaiCacheProfileDocument {
         })
     }
 }
-
 #[derive(Debug, JsonDeserialize)]
 struct TaikaiCacheConfigDocument {
     hot_capacity_bytes: u64,
@@ -6605,7 +6217,6 @@ struct TaikaiCacheConfigDocument {
     cold_retention_secs: u64,
     qos: TaikaiCacheQosDocument,
 }
-
 impl From<TaikaiCacheConfigDocument> for TaikaiCacheConfigV1 {
     fn from(value: TaikaiCacheConfigDocument) -> Self {
         Self {
@@ -6619,7 +6230,6 @@ impl From<TaikaiCacheConfigDocument> for TaikaiCacheConfigV1 {
         }
     }
 }
-
 #[derive(Debug, JsonDeserialize)]
 struct TaikaiCacheQosDocument {
     priority_rate_bps: u64,
@@ -6627,7 +6237,6 @@ struct TaikaiCacheQosDocument {
     bulk_rate_bps: u64,
     burst_multiplier: u32,
 }
-
 impl From<TaikaiCacheQosDocument> for TaikaiCacheQosConfigV1 {
     fn from(value: TaikaiCacheQosDocument) -> Self {
         Self {
@@ -6638,13 +6247,11 @@ impl From<TaikaiCacheQosDocument> for TaikaiCacheQosConfigV1 {
         }
     }
 }
-
 struct ParsedTelemetryLine {
     timestamp: OffsetDateTime,
     target: String,
     fields: HashMap<String, String>,
 }
-
 fn parse_telemetry_line(line: &str) -> Option<ParsedTelemetryLine> {
     let trimmed = line.trim();
     if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -6654,7 +6261,6 @@ fn parse_telemetry_line(line: &str) -> Option<ParsedTelemetryLine> {
     let timestamp_raw = parts.next()?;
     let target_raw = parts.next()?;
     let rest = parts.next().unwrap_or_default();
-
     if !target_raw.starts_with("telemetry::") {
         return None;
     }
@@ -6670,19 +6276,16 @@ fn parse_telemetry_line(line: &str) -> Option<ParsedTelemetryLine> {
             fields.insert(key.trim().to_string(), value);
         }
     }
-
     Some(ParsedTelemetryLine {
         timestamp,
         target,
         fields,
     })
 }
-
 fn tokenize_field_pairs(input: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
-
     for ch in input.chars() {
         match ch {
             '"' => {
@@ -6697,13 +6300,11 @@ fn tokenize_field_pairs(input: &str) -> Vec<String> {
             _ => current.push(ch),
         }
     }
-
     if !current.is_empty() {
         tokens.push(current);
     }
     tokens
 }
-
 struct BurnInAccumulator {
     first_timestamp: Option<OffsetDateTime>,
     last_timestamp: Option<OffsetDateTime>,
@@ -6717,7 +6318,6 @@ struct BurnInAccumulator {
     pq_ratio_samples: u64,
     failure_reasons: HashMap<String, u64>,
 }
-
 impl Default for BurnInAccumulator {
     fn default() -> Self {
         Self {
@@ -6735,7 +6335,6 @@ impl Default for BurnInAccumulator {
         }
     }
 }
-
 impl BurnInAccumulator {
     fn observe(&mut self, event: ParsedTelemetryLine) {
         self.update_span(event.timestamp);
@@ -6755,7 +6354,6 @@ impl BurnInAccumulator {
             _ => {}
         }
     }
-
     fn update_span(&mut self, timestamp: OffsetDateTime) {
         match self.first_timestamp {
             Some(existing) if timestamp < existing => self.first_timestamp = Some(timestamp),
@@ -6768,7 +6366,6 @@ impl BurnInAccumulator {
             _ => {}
         }
     }
-
     fn observe_lifecycle(&mut self, fields: &HashMap<String, String>) {
         if let Some("complete") = fields.get("event").map(String::as_str) {
             self.fetches_total += 1;
@@ -6797,7 +6394,6 @@ impl BurnInAccumulator {
             }
         }
     }
-
     fn finalize(self, options: &BurnInCheckOptions) -> Result<BurnInSummary, Box<dyn Error>> {
         let first = self
             .first_timestamp
@@ -6808,7 +6404,6 @@ impl BurnInAccumulator {
         if last < first {
             return Err("telemetry timestamps are out of order".into());
         }
-
         let span = last - first;
         let required_days = i64::try_from(options.required_window_days)
             .map_err(|_| "required_window_days exceeds supported range")?;
@@ -6821,7 +6416,6 @@ impl BurnInAccumulator {
             )
             .into());
         }
-
         if self.fetches_total == 0 {
             return Err("telemetry log did not include any completed fetches".into());
         }
@@ -6859,7 +6453,6 @@ impl BurnInAccumulator {
             )
             .into());
         }
-
         let coverage_days = span.as_seconds_f64() / 86_400.0;
         let brownout_ratio = self.brownout_fetches as f64 / self.fetches_total as f64;
         if brownout_ratio > options.max_brownout_ratio + f64::EPSILON {
@@ -6898,19 +6491,14 @@ impl BurnInAccumulator {
         Ok(summary)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{collections::HashSet, fs, path::Path, time::Duration};
-
     use sorafs_manifest::pin_registry::verify_alias_proof_bundle_untrusted_signers;
     use tempfile::tempdir;
-
     use super::*;
-
     const TEST_MANIFEST_ID: &str = "fixture-manifest";
     const TEST_MANIFEST_CID: &str = "fixture-cid";
-
     fn summary_with_providers_value(providers: &[(&str, u64)]) -> Value {
         let mut receipts: Vec<Value> = Vec::new();
         let mut chunk_index = 0u64;
@@ -6968,13 +6556,11 @@ mod tests {
             "transport_policy_override_label": null,
         })
     }
-
     fn write_summary_with_providers(path: &Path, providers: &[(&str, u64)]) {
         let summary = summary_with_providers_value(providers);
         fs::write(path, to_string_pretty(&summary).expect("render summary"))
             .expect("write summary");
     }
-
     fn write_summary_with_telemetry(
         path: &Path,
         providers: &[(&str, u64)],
@@ -6995,7 +6581,6 @@ mod tests {
         fs::write(path, to_string_pretty(&summary).expect("render summary"))
             .expect("write summary");
     }
-
     fn write_scoreboard_with_weights(path: &Path, entries: &[(&str, f64)]) {
         let rows: Vec<Value> = entries
             .iter()
@@ -7014,14 +6599,12 @@ mod tests {
         )
         .expect("write scoreboard");
     }
-
     #[test]
     fn adoption_transport_policies_require_exact_v1_labels() {
         for canonical in ["soranet-first", "soranet-strict", "direct-only"] {
             require_canonical_transport_policy(canonical, "test policy")
                 .expect("canonical transport policy");
         }
-
         let path = Path::new("selector-fixture.json");
         for alias in [
             "direct_only",
@@ -7033,7 +6616,6 @@ mod tests {
         ] {
             require_canonical_transport_policy(alias, "test policy")
                 .expect_err("transport policy alias must fail");
-
             let mut summary = summary_with_providers_value(&[("alpha", 1), ("beta", 1)]);
             summary
                 .as_object_mut()
@@ -7043,7 +6625,6 @@ mod tests {
                 collect_summary_stats(&summary, path).is_err(),
                 "summary transport policy alias must fail"
             );
-
             let metadata = norito::json!({
                 "transport_policy": alias,
                 "transport_policy_override": false,
@@ -7051,7 +6632,6 @@ mod tests {
             });
             parse_scoreboard_metadata(&metadata, path)
                 .expect_err("scoreboard transport policy alias must fail");
-
             let mut summary = summary_with_providers_value(&[("alpha", 1), ("beta", 1)]);
             summary
                 .as_object_mut()
@@ -7061,7 +6641,6 @@ mod tests {
                 collect_summary_stats(&summary, path).is_err(),
                 "summary override label alias must fail"
             );
-
             let metadata = norito::json!({
                 "transport_policy": "soranet-first",
                 "transport_policy_override": true,
@@ -7071,7 +6650,6 @@ mod tests {
                 .expect_err("scoreboard override label alias must fail");
         }
     }
-
     #[test]
     fn normalize_tls_host_guards_whitespace() {
         assert_eq!(
@@ -7080,17 +6658,14 @@ mod tests {
         );
         assert!(normalize_tls_host("invalid host").is_err());
     }
-
     #[test]
     fn admission_fixtures_write_checked_public_key_artifacts() {
         let temp = tempdir().expect("tempdir");
         write_admission_fixtures(temp.path()).expect("write admission fixtures");
-
         let advert_path = temp.path().join("provider_alpha_advert.to");
         let envelope_path = temp.path().join("provider_alpha_envelope.to");
         assert!(envelope_path.is_file());
         assert!(temp.path().join("provider_alpha_metadata.json").is_file());
-
         let advert_bytes = fs::read(advert_path).expect("read provider advert");
         let advert: ProviderAdvertV1 =
             decode_from_bytes(&advert_bytes).expect("decode provider advert");
@@ -7104,7 +6679,6 @@ mod tests {
             .expect("provider advert fixture signature is non-empty and nonzero")
             .verify(&advert_public_key, &advert_signature_payload)
             .expect("provider advert signature verifies");
-
         let envelope_bytes = fs::read(envelope_path).expect("read provider envelope");
         let envelope: ProviderAdmissionEnvelopeV1 =
             decode_from_bytes(&envelope_bytes).expect("decode provider envelope");
@@ -7114,7 +6688,6 @@ mod tests {
             .expect("build fixture council policy");
         AdmissionRecord::new(envelope, &council_policy).expect("council signatures verify");
     }
-
     #[test]
     fn pin_registry_fixtures_use_checked_signatures() {
         let council_keys = pin_fixture_council_keypair();
@@ -7135,7 +6708,6 @@ mod tests {
             Metadata::default(),
         );
         record.approve(12, None);
-
         let manifest_signatures =
             pin_fixture_build_envelope(&record, &council_keys).expect("build manifest envelope");
         let manifest_root: Value =
@@ -7145,7 +6717,6 @@ mod tests {
                 .expect("manifest signature verifies"),
             1
         );
-
         let alias_binding =
             pin_fixture_alias_binding_for(&record.root_cid, "sora", "docs", 12, 36, &council_keys)
                 .expect("build alias proof");
@@ -7154,7 +6725,6 @@ mod tests {
         verify_alias_proof_bundle_untrusted_signers(&alias_bundle)
             .expect("alias proof signature integrity verifies");
     }
-
     #[test]
     fn manifest_signatures_reject_malformed_ed25519_signature_r() {
         const SMALL_ORDER_R: [u8; 32] = [
@@ -7166,7 +6736,6 @@ mod tests {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         let council_keys = pin_fixture_council_keypair();
         let (manifest_digest, manifest_root_cid, _) =
             pin_fixture_default_manifest().expect("build canonical fixture manifest");
@@ -7194,7 +6763,6 @@ mod tests {
                 .expect("valid manifest signature verifies"),
             1
         );
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
@@ -7216,7 +6784,6 @@ mod tests {
                 "signature".to_owned(),
                 Value::String(hex::encode(signature_bytes)),
             );
-
             let err = verify_manifest_signatures(&malformed_root, record.digest.as_bytes(), false)
                 .expect_err("malformed Ed25519 R must fail admission");
             assert!(
@@ -7225,7 +6792,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn load_tls_hosts_from_fixture_payload() {
         let temp = tempdir().expect("tempdir");
@@ -7247,7 +6813,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn dedup_tls_hosts_preserves_first_occurrence() {
         let mut hosts = vec![
@@ -7264,7 +6829,6 @@ mod tests {
             ]
         );
     }
-
     fn metadata_with_counts(direct: Option<u64>, gateway: Option<u64>) -> ScoreboardMetadata {
         ScoreboardMetadata {
             provider_count: direct,
@@ -7272,7 +6836,6 @@ mod tests {
             ..Default::default()
         }
     }
-
     #[test]
     fn metadata_single_source_hint_allows_gateway_multi_source() {
         let meta = metadata_with_counts(Some(0), Some(2));
@@ -7281,7 +6844,6 @@ mod tests {
             "gateway multi-source should not trigger fallback"
         );
     }
-
     #[test]
     fn metadata_single_source_hint_allows_mixed_provider_classes() {
         let meta = metadata_with_counts(Some(1), Some(1));
@@ -7290,7 +6852,6 @@ mod tests {
             "mixed direct+gateway providers should pass"
         );
     }
-
     #[test]
     fn metadata_single_source_hint_flags_single_gateway_provider() {
         let meta = metadata_with_counts(Some(0), Some(1));
@@ -7299,7 +6860,6 @@ mod tests {
             Some(("gateway_provider_count", 1))
         );
     }
-
     #[test]
     fn burn_in_check_accepts_valid_window() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -7312,7 +6872,6 @@ mod tests {
 ",
         )
         .expect("write log");
-
         let summary = run_burn_in_check(BurnInCheckOptions {
             log_paths: vec![log_path],
             required_window_days: 30,
@@ -7322,7 +6881,6 @@ mod tests {
             min_fetches: 1,
         })
         .expect("burn-in check should succeed");
-
         assert_eq!(summary.fetches_total, 1);
         assert_eq!(summary.successful_fetches, 1);
         assert!(
@@ -7343,7 +6901,6 @@ mod tests {
             "stall chunk ratio should be zero"
         );
     }
-
     #[test]
     fn scoreboard_diff_detects_added_and_changed_weights() {
         let temp = tempdir().expect("tempdir");
@@ -7351,14 +6908,12 @@ mod tests {
         let current = temp.path().join("curr.scoreboard.json");
         write_scoreboard_with_weights(&previous, &[("alpha", 0.7), ("beta", 0.3)]);
         write_scoreboard_with_weights(&current, &[("alpha", 0.5), ("beta", 0.3), ("gamma", 0.2)]);
-
         let report = run_scoreboard_diff(ScoreboardDiffOptions {
             previous_scoreboard: previous,
             current_scoreboard: current,
             threshold_percent: 5.0,
         })
         .expect("diff report");
-
         assert_eq!(report.total_providers, 3);
         assert_eq!(report.changed_providers.len(), 2);
         let alpha = report
@@ -7378,7 +6933,6 @@ mod tests {
         assert!(!gamma.was_removed);
         assert!(gamma.exceeds_threshold);
     }
-
     #[test]
     fn scoreboard_diff_marks_removed_providers() {
         let temp = tempdir().expect("tempdir");
@@ -7386,14 +6940,12 @@ mod tests {
         let current = temp.path().join("curr.scoreboard.json");
         write_scoreboard_with_weights(&previous, &[("alpha", 0.4), ("beta", 0.6)]);
         write_scoreboard_with_weights(&current, &[("beta", 1.0)]);
-
         let report = run_scoreboard_diff(ScoreboardDiffOptions {
             previous_scoreboard: previous,
             current_scoreboard: current,
             threshold_percent: 10.0,
         })
         .expect("diff report");
-
         assert_eq!(report.changed_providers.len(), 2);
         let alpha = report
             .changed_providers
@@ -7412,7 +6964,6 @@ mod tests {
         assert!(!beta.was_removed);
         assert!(beta.exceeds_threshold);
     }
-
     #[test]
     fn burn_in_check_rejects_low_pq_ratio() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -7425,7 +6976,6 @@ mod tests {
 ",
         )
         .expect("write log");
-
         let result = run_burn_in_check(BurnInCheckOptions {
             log_paths: vec![log_path],
             required_window_days: 30,
@@ -7434,10 +6984,8 @@ mod tests {
             max_brownout_ratio: 0.05,
             min_fetches: 1,
         });
-
         assert!(result.is_err(), "expected pq ratio violation");
     }
-
     #[test]
     fn burn_in_check_rejects_no_provider_errors() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -7451,7 +6999,6 @@ mod tests {
 ",
         )
         .expect("write log");
-
         let result = run_burn_in_check(BurnInCheckOptions {
             log_paths: vec![log_path],
             required_window_days: 30,
@@ -7460,13 +7007,11 @@ mod tests {
             max_brownout_ratio: 0.05,
             min_fetches: 1,
         });
-
         assert!(
             result.is_err(),
             "expected failure when no_healthy_providers errors are present"
         );
     }
-
     #[test]
     fn burn_in_check_rejects_brownout_ratio() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -7480,7 +7025,6 @@ mod tests {
 ",
         )
         .expect("write log");
-
         let result = run_burn_in_check(BurnInCheckOptions {
             log_paths: vec![log_path],
             required_window_days: 30,
@@ -7489,13 +7033,11 @@ mod tests {
             max_brownout_ratio: 0.10,
             min_fetches: 1,
         });
-
         assert!(
             result.is_err(),
             "expected failure when brownout ratio exceeds threshold"
         );
     }
-
     #[test]
     fn burn_in_check_reports_stall_ratios() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -7509,7 +7051,6 @@ mod tests {
 ",
         )
         .expect("write log");
-
         let summary = run_burn_in_check(BurnInCheckOptions {
             log_paths: vec![log_path],
             required_window_days: 1,
@@ -7519,7 +7060,6 @@ mod tests {
             min_fetches: 1,
         })
         .expect("burn-in summary should succeed");
-
         assert_eq!(summary.fetches_total, 2);
         assert_eq!(summary.stall_events, 1);
         assert_eq!(summary.stall_chunks, 6);
@@ -7532,7 +7072,6 @@ mod tests {
             "expected stall chunk ratio for six stalled chunks across two fetches"
         );
     }
-
     #[test]
     fn telemetry_parser_extracts_fields() {
         let line = "2026-02-05T00:00:00Z telemetry::sorafs.fetch.lifecycle event=\"complete\" status=\"success\" anonymity_ratio=0.98 stall_count=0";
@@ -7552,7 +7091,6 @@ mod tests {
             Some("0")
         );
     }
-
     #[test]
     fn burn_in_accumulator_tracks_complete_events() {
         let line = "2026-02-05T00:00:00Z telemetry::sorafs.fetch.lifecycle event=\"complete\" status=\"success\" anonymity_ratio=0.98 stall_count=0";
@@ -7570,7 +7108,6 @@ mod tests {
             accumulator.pq_ratio_samples
         );
     }
-
     #[test]
     fn adoption_check_accepts_multi_provider_scoreboard() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -7629,7 +7166,6 @@ mod tests {
             2
         );
     }
-
     #[test]
     fn adoption_check_rejects_missing_metadata() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -7669,7 +7205,6 @@ mod tests {
             "metadata must be present even when not explicitly required"
         );
     }
-
     #[test]
     fn adoption_check_rejects_null_metadata() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -7702,7 +7237,6 @@ mod tests {
             "null metadata block should fail the adoption gate"
         );
     }
-
     #[test]
     fn adoption_check_rejects_missing_provider_totals() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -7752,7 +7286,6 @@ mod tests {
             err
         );
     }
-
     #[test]
     fn adoption_check_rejects_missing_provider_mix_metadata_without_counts() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -7800,7 +7333,6 @@ mod tests {
             "error should mention missing provider totals: {err}"
         );
     }
-
     #[test]
     fn adoption_check_rejects_provider_count_mismatch() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -7850,7 +7382,6 @@ mod tests {
             "metadata/provider count mismatch should fail the adoption gate"
         );
     }
-
     #[test]
     fn adoption_check_rejects_summary_provider_count_mismatch() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -7916,7 +7447,6 @@ mod tests {
             "mismatched summary provider_count should fail the adoption gate",
         );
     }
-
     #[test]
     fn adoption_check_rejects_summary_gateway_count_mismatch() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -7992,7 +7522,6 @@ mod tests {
             "mismatched summary gateway_provider_count should fail the adoption gate",
         );
     }
-
     #[test]
     fn adoption_check_rejects_missing_summary_provider_mix() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8056,7 +7585,6 @@ mod tests {
             "missing summary provider_mix should fail the adoption gate",
         );
     }
-
     #[test]
     fn adoption_check_rejects_gateway_runs_without_metadata() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8091,7 +7619,6 @@ mod tests {
             "error should mention missing metadata for gateway captures: {err_text}"
         );
     }
-
     #[test]
     fn adoption_check_accepts_matching_provider_counts() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8137,7 +7664,6 @@ mod tests {
         .expect("matching counts should pass the adoption gate");
         assert_eq!(report.total_evaluated, 1);
     }
-
     #[test]
     fn adoption_check_rejects_missing_provider_mix_metadata() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8185,7 +7711,6 @@ mod tests {
             "error should mention provider_mix requirement"
         );
     }
-
     #[test]
     fn adoption_check_rejects_metadata_missing_transport_policy() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8232,7 +7757,6 @@ mod tests {
             "error should mention missing transport policy metadata: {err}"
         );
     }
-
     #[test]
     fn adoption_check_rejects_metadata_transport_policy_mismatch() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8282,7 +7806,6 @@ mod tests {
             "error should highlight transport policy mismatch: {err}"
         );
     }
-
     #[test]
     fn adoption_check_rejects_metadata_transport_override_mismatch() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8332,7 +7855,6 @@ mod tests {
             "error should mention override mismatch: {err}"
         );
     }
-
     #[test]
     fn adoption_check_rejects_metadata_missing_override_label() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8395,7 +7917,6 @@ mod tests {
             "error should mention missing override label: {err}"
         );
     }
-
     #[test]
     fn adoption_check_rejects_provider_mix_mismatch() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8444,7 +7965,6 @@ mod tests {
             "error should flag the provider_mix mismatch"
         );
     }
-
     #[test]
     fn adoption_check_rejects_gateway_runs_without_manifest_metadata() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8498,7 +8018,6 @@ mod tests {
             "expected error mentioning gateway manifest requirement, got: {err_msg}"
         );
     }
-
     #[test]
     fn adoption_check_rejects_gateway_manifest_metadata_without_gateways() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8557,7 +8076,6 @@ mod tests {
             "error should mention gateway manifest metadata mismatch"
         );
     }
-
     #[test]
     fn adoption_check_accepts_gateway_runs_with_manifest_metadata() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8610,7 +8128,6 @@ mod tests {
         assert_eq!(report.total_evaluated, 1);
         assert!(!report.single_source_override_used);
     }
-
     #[test]
     fn adoption_check_rejects_gateway_runs_without_manifest_identifiers() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8664,7 +8181,6 @@ mod tests {
             "error should mention missing manifest id: {err_msg}"
         );
     }
-
     #[test]
     fn adoption_check_rejects_summary_manifest_flag_without_metadata() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8730,7 +8246,6 @@ mod tests {
             "error should mention stray summary manifest flag: {err_msg}"
         );
     }
-
     #[test]
     fn adoption_check_rejects_gateway_runs_with_summary_manifest_gap() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8798,7 +8313,6 @@ mod tests {
             "error should mention missing summary manifest field: {err_msg}"
         );
     }
-
     #[test]
     fn adoption_check_rejects_gateway_runs_with_manifest_mismatch() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8864,7 +8378,6 @@ mod tests {
             "error should mention manifest mismatch: {err_msg}"
         );
     }
-
     #[test]
     fn adoption_check_rejects_single_provider_scoreboard() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8904,7 +8417,6 @@ mod tests {
         });
         assert!(result.is_err(), "single-provider scoreboard should fail");
     }
-
     #[test]
     fn adoption_check_rejects_metadata_single_source_max_parallel() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -8961,7 +8473,6 @@ mod tests {
             "metadata with max_parallel=1 should be rejected without override"
         );
     }
-
     #[test]
     fn adoption_check_allows_metadata_single_source_with_override() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9030,7 +8541,6 @@ mod tests {
             "override flag should be recorded when metadata trips single-source hint"
         );
     }
-
     #[test]
     fn adoption_check_rejects_direct_only_transport_policy_without_override() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9079,7 +8589,6 @@ mod tests {
             "direct-only transport policy should be rejected without override"
         );
     }
-
     #[test]
     fn adoption_check_reports_override_for_direct_only_transport_policy() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9145,7 +8654,6 @@ mod tests {
             "direct-only override should be recorded"
         );
     }
-
     #[test]
     fn adoption_check_requires_direct_only_when_flag_is_set() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9194,7 +8702,6 @@ mod tests {
             "runs that set --require-direct-only must fail when the summary advertises the SoraNet-first posture"
         );
     }
-
     #[test]
     fn adoption_check_accepts_direct_only_when_required_flag_is_set() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9261,7 +8768,6 @@ mod tests {
             "direct-only override should still be recorded in the adoption report"
         );
     }
-
     #[test]
     fn adoption_check_rejects_direct_only_summary_transport_without_override() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9334,7 +8840,6 @@ mod tests {
             "summary transport policy downgrades should be rejected without an override"
         );
     }
-
     #[test]
     fn adoption_check_reports_override_for_direct_only_summary_transport() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9411,7 +8916,6 @@ mod tests {
             "direct-only override should be recorded when surfaced via summary"
         );
     }
-
     #[test]
     fn adoption_check_allows_single_provider_with_override() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9452,7 +8956,6 @@ mod tests {
         .expect("explicit override should allow single-provider fallback");
         assert!(report.single_source_override_used);
     }
-
     #[test]
     fn adoption_check_rejects_scoreboard_metadata_opt_out() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9493,7 +8996,6 @@ mod tests {
             "metadata that disables scoreboard mode should fail the adoption gate"
         );
     }
-
     #[test]
     fn adoption_check_rejects_single_source_metadata_without_override() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9540,7 +9042,6 @@ mod tests {
             "single-source metadata must fail when overrides are not allowed"
         );
     }
-
     #[test]
     fn adoption_check_reports_override_for_single_source_metadata() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9607,7 +9108,6 @@ mod tests {
             "override flag should be surfaced in the adoption report"
         );
     }
-
     #[test]
     fn adoption_check_rejects_implicit_metadata_without_override() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9661,7 +9161,6 @@ mod tests {
             "implicit metadata should fail without an explicit override"
         );
     }
-
     #[test]
     fn adoption_check_reports_override_for_implicit_metadata() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9716,7 +9215,6 @@ mod tests {
             "implicit metadata override usage should be tracked"
         );
     }
-
     #[test]
     fn adoption_check_requires_telemetry_source_when_requested() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9768,7 +9266,6 @@ mod tests {
             "requiring telemetry should fail when metadata.telemetry_source is missing"
         );
     }
-
     #[test]
     fn adoption_check_accepts_present_telemetry_source() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9821,7 +9318,6 @@ mod tests {
         })
         .expect("telemetry metadata should satisfy the new requirement");
     }
-
     #[test]
     fn adoption_check_requires_summary_telemetry_label() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9874,7 +9370,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn adoption_check_rejects_mismatched_summary_telemetry() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9932,7 +9427,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn adoption_check_requires_summary_telemetry_region_when_metadata_present() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -9992,7 +9486,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn adoption_check_rejects_mismatched_telemetry_region() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -10051,7 +9544,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn adoption_check_accepts_matching_telemetry_region() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -10106,7 +9598,6 @@ mod tests {
         })
         .expect("matching telemetry_region labels should pass");
     }
-
     #[test]
     fn adoption_check_allows_missing_telemetry_region_without_flag() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -10160,7 +9651,6 @@ mod tests {
         })
         .expect("missing telemetry_region should be allowed without the flag");
     }
-
     #[test]
     fn adoption_check_requires_telemetry_region_when_requested() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -10218,7 +9708,6 @@ mod tests {
             "missing telemetry_region error should mention telemetry_region"
         );
     }
-
     #[test]
     fn adoption_check_rejects_zero_weight_provider_when_required() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -10258,7 +9747,6 @@ mod tests {
             "zero-weight provider should fail strict check"
         );
     }
-
     #[test]
     fn adoption_check_allows_zero_weight_when_override_enabled() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -10304,7 +9792,6 @@ mod tests {
         })
         .expect("override should allow zero-weight entries");
     }
-
     #[test]
     fn adoption_check_rejects_weight_sum_mismatch() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -10344,7 +9831,6 @@ mod tests {
             "weights that do not sum to unity should fail adoption check"
         );
     }
-
     #[test]
     fn adoption_check_rejects_single_active_provider_in_summary() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -10388,7 +9874,6 @@ mod tests {
             "single active provider in summary should fail adoption check"
         );
     }
-
     #[test]
     fn adoption_check_allows_single_active_provider_in_summary_with_override() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -10440,7 +9925,6 @@ mod tests {
         })
         .expect("override should allow single active provider when downgrade is intentional");
     }
-
     #[test]
     fn adoption_check_rejects_chunk_count_mismatch() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -10494,7 +9978,6 @@ mod tests {
             "chunk_count mismatch should fail adoption check"
         );
     }
-
     #[test]
     fn adoption_check_rejects_unknown_provider_in_summary() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -10561,7 +10044,6 @@ mod tests {
             "summary referencing providers outside scoreboard should fail"
         );
     }
-
     #[test]
     fn cache_directive_parser_extracts_expected_values() {
         let directives = parse_cache_directives("max-age=600, stale-while-revalidate=120, public");
@@ -10572,7 +10054,6 @@ mod tests {
         );
         assert!(directives.contains_key("public"));
     }
-
     #[test]
     fn proof_status_matching_handles_rotate_suffix() {
         let evaluation = AliasProofEvaluation {
@@ -10587,7 +10068,6 @@ mod tests {
         assert!(proof_status_matches(&evaluation, "fresh"));
         assert!(!proof_status_matches(&evaluation, "refresh"));
     }
-
     #[test]
     fn tls_renew_fails_without_runtime_acme_backend() {
         let temp = tempfile::tempdir().expect("create tempdir");
@@ -10600,7 +10080,6 @@ mod tests {
             output_dir: bundle_dir.clone(),
             force: false,
         };
-
         let err = gateway_tls_renew(options).expect_err("missing ACME backend must fail closed");
         assert!(err.to_string().contains("runtime-injected provider client"));
         assert!(
@@ -10608,7 +10087,6 @@ mod tests {
             "failed renewal must not write key material"
         );
     }
-
     #[test]
     fn tls_revoke_archives_bundle() {
         let temp = tempfile::tempdir().expect("create tempdir");
@@ -10617,7 +10095,6 @@ mod tests {
         fs::write(bundle_dir.join("fullchain.pem"), "CERT").expect("seed cert");
         fs::write(bundle_dir.join("privkey.pem"), "KEY").expect("seed key");
         fs::write(bundle_dir.join("ech.json"), "null\n").expect("seed ech");
-
         let outcome = gateway_tls_revoke(GatewayTlsRevokeOptions {
             bundle_dir: bundle_dir.clone(),
             archive_dir: None,
@@ -10625,7 +10102,6 @@ mod tests {
             force: false,
         })
         .expect("revoke");
-
         assert!(
             !bundle_dir.join("fullchain.pem").exists(),
             "certificate should be moved"
@@ -10635,13 +10111,11 @@ mod tests {
             assert!(path.exists(), "{path:?} should exist");
         }
     }
-
     #[test]
     fn key_rotate_generates_material() {
         let temp = tempfile::tempdir().expect("create tempdir");
         let private_path = temp.path().join("token_signing_sk");
         let public_path = temp.path().join("token_signing_pk.json");
-
         let outcome = gateway_key_rotate(GatewayKeyRotateOptions {
             kind: "token-signing".into(),
             output_path: private_path.clone(),
@@ -10649,7 +10123,6 @@ mod tests {
             force: true,
         })
         .expect("rotate");
-
         let private_contents = fs::read_to_string(&private_path).expect("read private key");
         assert_eq!(private_contents.trim().len(), 64);
         assert!(public_path.exists());
@@ -10671,24 +10144,20 @@ mod tests {
             Some(outcome.public_key_prefixed.as_str())
         );
     }
-
     #[test]
     fn checked_ed25519_public_key_bytes_rejects_non_ed25519_key() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
-
         let error = checked_ed25519_public_key_bytes(
             keypair.public_key(),
             "gateway token-signing public key",
         )
         .expect_err("secp256k1 gateway key must be rejected");
-
         assert!(
             error
                 .to_string()
                 .contains("gateway token-signing public key must be Ed25519, got secp256k1")
         );
     }
-
     fn finding(ok: bool, name: &str, detail: &str) -> ProbeFinding {
         ProbeFinding {
             ok,
@@ -10696,7 +10165,6 @@ mod tests {
             detail: detail.into(),
         }
     }
-
     #[test]
     fn gateway_probe_report_includes_failure_summary() {
         let gar_info = GatewayProbeGarInfo {
@@ -10720,7 +10188,6 @@ mod tests {
             finding(false, "HTTP status", "503 HTTP probe via capture"),
             finding(true, "GAR host pattern", gar_detail),
         ];
-
         let report = build_probe_report_value(
             1_700_123_456,
             &response,
@@ -10728,7 +10195,6 @@ mod tests {
             &gar_info,
             &findings,
         );
-
         assert_eq!(report["ok"], norito::json!(false));
         assert_eq!(report["failure_count"], norito::json!(1u64));
         assert_eq!(report["status"], norito::json!(503u64));
@@ -10746,7 +10212,6 @@ mod tests {
             norito::json!("503 HTTP probe via capture")
         );
     }
-
     #[test]
     fn gateway_probe_rejects_cross_origin_head_and_get_redirects() {
         for (method, status) in [("HEAD", 302_u16), ("GET", 307_u16)] {
@@ -10773,7 +10238,6 @@ mod tests {
             assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
         }
     }
-
     #[test]
     fn gateway_probe_operational_artifacts_include_summary_details() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -10838,7 +10302,6 @@ mod tests {
             norito::json!("https://example.com/drill")
         );
     }
-
     #[test]
     fn taikai_cache_bundle_writes_artifacts() {
         let temp_profiles = tempfile::tempdir().expect("tempdir");
@@ -10871,13 +10334,11 @@ mod tests {
             output_root: output_dir.path().to_path_buf(),
         })
         .expect("bundle generation succeeds");
-
         let profile_dir = output_dir.path().join("bundle");
         assert!(profile_dir.join("profile.json").exists());
         assert!(profile_dir.join("cache_config.json").exists());
         assert!(profile_dir.join("profile.taikai_cache_profile.to").exists());
         assert!(profile_dir.join("profile.manifest.json").exists());
-
         let manifest_bytes =
             fs::read(profile_dir.join("profile.manifest.json")).expect("read manifest");
         let manifest: Value = json::from_slice(&manifest_bytes).expect("parse manifest json");
@@ -10886,7 +10347,6 @@ mod tests {
             manifest["artifact"]["path"],
             Value::String("profile.taikai_cache_profile.to".to_string())
         );
-
         let index_path = output_dir.path().join("index.json");
         assert!(index_path.exists());
         let index: Value =

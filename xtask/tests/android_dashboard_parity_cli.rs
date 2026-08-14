@@ -1,20 +1,16 @@
 use std::{fs, path::PathBuf, process::Command};
-
 use assert_cmd::prelude::*;
 use tempfile::tempdir;
-
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("xtask has a parent")
         .to_path_buf()
 }
-
 #[test]
 fn dashboard_parity_cli_respects_cli_overrides() -> Result<(), Box<dyn std::error::Error>> {
     let root = repo_root();
     let tmp = tempdir()?;
-
     let dashboard = r#"
 {
   "panels": [
@@ -38,12 +34,10 @@ fn dashboard_parity_cli_respects_cli_overrides() -> Result<(), Box<dyn std::erro
   ]
 }
 "#;
-
     let android_dash = tmp.path().join("android.json");
     let rust_dash = tmp.path().join("rust.json");
     fs::write(&android_dash, dashboard)?;
     fs::write(&rust_dash, dashboard)?;
-
     let allowances = tmp.path().join("allowances.json");
     fs::write(
         &allowances,
@@ -56,7 +50,6 @@ fn dashboard_parity_cli_respects_cli_overrides() -> Result<(), Box<dyn std::erro
 }
 "#,
     )?;
-
     let artifact = tmp.path().join("diff.json");
     Command::new("python3")
         .current_dir(&root)
@@ -71,7 +64,6 @@ fn dashboard_parity_cli_respects_cli_overrides() -> Result<(), Box<dyn std::erro
         .arg(&artifact)
         .assert()
         .success();
-
     Command::new("ci/check_android_dashboard_parity.sh")
         .current_dir(&root)
         .arg("--android")
@@ -84,6 +76,5 @@ fn dashboard_parity_cli_respects_cli_overrides() -> Result<(), Box<dyn std::erro
         .arg(&artifact)
         .assert()
         .success();
-
     Ok(())
 }

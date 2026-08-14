@@ -1,10 +1,8 @@
 //! Closed route descriptors for the authenticated SoraFS proof-of-personhood service.
-
 use super::{
     AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
     RouteDescriptor, RouteEffect, RouteProjections,
 };
-
 const fn authenticated_post(
     stable_route_id: &'static str,
     path: &'static str,
@@ -24,7 +22,6 @@ const fn authenticated_post(
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true)
 }
-
 /// Submit one canonical encrypted enrollment.
 pub const POP_ENROLLMENT: RouteDescriptor = authenticated_post(
     "sorafs.pop.enrollment.submit",

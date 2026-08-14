@@ -1,8 +1,6 @@
 //! Tests for transaction TTL configuration parsing
-
 use iroha::config::UserConfig;
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
-
 fn config_with_ttl(ttl_ms: u64, timeout_ms: u64) -> toml::Table {
     toml::toml! {
         chain = "00000000-0000-0000-0000-000000000000"
@@ -18,7 +16,6 @@ fn config_with_ttl(ttl_ms: u64, timeout_ms: u64) -> toml::Table {
         nonce = false
     }
 }
-
 #[test]
 fn accepts_ttl_not_smaller_than_minimum() {
     ConfigReader::new()
@@ -28,7 +25,6 @@ fn accepts_ttl_not_smaller_than_minimum() {
         .parse()
         .expect("should accept minimal ttl");
 }
-
 #[test]
 fn rejects_ttl_smaller_than_minimum() {
     let err = ConfigReader::new()

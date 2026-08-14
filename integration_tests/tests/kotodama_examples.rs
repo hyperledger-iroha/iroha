@@ -8,15 +8,12 @@
 //!
 //! Run manually with:
 //!   cargo test -p `integration_tests` --test `nexus_and_streaming` `kotodama_examples::` -- --nocapture
-
 use std::{
     env, fs,
     path::{Path, PathBuf},
     process::Command,
 };
-
 use integration_tests::process::{output_with_timeout, process_timeout, status_with_timeout};
-
 fn on_path(bin: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     for p in env::split_paths(&path) {
@@ -35,7 +32,6 @@ fn on_path(bin: &str) -> Option<PathBuf> {
     }
     None
 }
-
 #[cfg(unix)]
 fn is_executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
@@ -43,12 +39,10 @@ fn is_executable(p: &Path) -> bool {
         .map(|m| m.permissions().mode() & 0o111 != 0)
         .unwrap_or(false)
 }
-
 #[cfg(windows)]
 fn is_executable(p: &Path) -> bool {
     p.extension().map(|e| e == "exe").unwrap_or(false)
 }
-
 #[test]
 fn compile_and_run_hello() {
     let koto_bin = env::var("KOTO_BIN")
@@ -60,7 +54,6 @@ fn compile_and_run_hello() {
         return;
     }
     let koto_bin = koto_bin.unwrap();
-
     let ivm_bin = env::var("IVM_BIN")
         .ok()
         .map(PathBuf::from)
@@ -70,7 +63,6 @@ fn compile_and_run_hello() {
         return;
     }
     let ivm_bin = ivm_bin.unwrap();
-
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -78,14 +70,12 @@ fn compile_and_run_hello() {
     let src = root.join("examples/hello/hello.ko");
     let out = root.join("target/examples/hello.to");
     std::fs::create_dir_all(out.parent().unwrap()).unwrap();
-
     // Compile
     let mut command = Command::new(&koto_bin);
     command.arg("build").arg(&src).arg("--out").arg(&out);
     let status =
         status_with_timeout(&mut command, process_timeout()).expect("failed to spawn koto");
     assert!(status.success(), "koto build failed: {status:?}");
-
     // Run
     let mut command = Command::new(&ivm_bin);
     command.arg(&out).arg("--args").arg("{}");
@@ -98,14 +88,12 @@ fn compile_and_run_hello() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("Hello from Kotodama") || stdout.contains("write_detail"),
         "unexpected VM output: {stdout}"
     );
 }
-
 #[test]
 fn inspect_hello() {
     let ivm_tool = env::var("IVM_TOOL_BIN")
@@ -117,7 +105,6 @@ fn inspect_hello() {
         return;
     }
     let ivm_tool = ivm_tool.unwrap();
-
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -127,7 +114,6 @@ fn inspect_hello() {
         out.exists(),
         "hello.to not found; run compile_and_run_hello first or compile manually"
     );
-
     let mut command = Command::new(&ivm_tool);
     command.arg("inspect").arg(&out);
     let output = output_with_timeout(&mut command, process_timeout())
@@ -145,7 +131,6 @@ fn inspect_hello() {
         "unexpected inspect output: {stdout}"
     );
 }
-
 #[test]
 fn compile_and_run_nft() {
     let koto_bin = env::var("KOTO_BIN")
@@ -166,7 +151,6 @@ fn compile_and_run_nft() {
         return;
     }
     let ivm_bin = ivm_bin.unwrap();
-
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -174,13 +158,11 @@ fn compile_and_run_nft() {
     let src = root.join("examples/nft/nft.ko");
     let out = root.join("target/examples/nft.to");
     std::fs::create_dir_all(out.parent().unwrap()).unwrap();
-
     let mut command = Command::new(&koto_bin);
     command.arg("build").arg(&src).arg("--out").arg(&out);
     let status =
         status_with_timeout(&mut command, process_timeout()).expect("failed to spawn koto");
     assert!(status.success(), "koto build failed: {status:?}");
-
     let mut command = Command::new(&ivm_bin);
     command.arg(&out).arg("--args").arg("{}");
     let output =

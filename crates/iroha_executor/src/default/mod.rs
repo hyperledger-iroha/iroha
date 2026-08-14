@@ -1,5 +1,4 @@
 //! Definition of Iroha default executor and accompanying execute functions.
-
 /// Re-export account visitor helpers used by the default executor.
 pub use account::{
     visit_approve_account_recovery, visit_cancel_account_recovery,
@@ -171,26 +170,21 @@ pub use trigger::{
     visit_register_trigger, visit_remove_trigger_key_value, visit_set_trigger_key_value,
     visit_unregister_trigger,
 };
-
 use crate::{
     Execute, deny, execute,
     permission::{AnyPermission, ExecutorPermission as _},
 };
-
 fn is_reserved_multisig_role_id(role_id: &RoleId) -> bool {
     const MULTISIG_SIGNATORY_NAMESPACE: &str = "MULTISIG_SIGNATORY";
-
     let name = role_id.name().as_ref();
     name == MULTISIG_SIGNATORY_NAMESPACE
         || name
             .strip_prefix(MULTISIG_SIGNATORY_NAMESPACE)
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
-
 #[cfg(test)]
 mod multisig_role_namespace_tests {
     use super::*;
-
     #[test]
     fn reservation_is_exact_and_does_not_parse_process_local_addresses() {
         for name in [
@@ -204,7 +198,6 @@ mod multisig_role_namespace_tests {
                 "must reserve {name}"
             );
         }
-
         for name in [
             "MULTISIG_SIGNATORY_ADJACENT",
             "MULTISIG_SIGNATORY2/domain/address",
@@ -218,15 +211,12 @@ mod multisig_role_namespace_tests {
         }
     }
 }
-
 /// Helpers shared by custom instruction integrations.
 pub mod isi;
-
 // NOTE: If any new `visit_..` functions are introduced in this module, one should
 // not forget to update the default executor boilerplate too, specifically the
 // `iroha_executor::derive::default::impl_derive_visit` function
 // signature list.
-
 #[derive(norito::derive::JsonDeserialize)]
 struct IvmProvedJsonView {
     bytecode: IvmBytecode,
@@ -234,14 +224,12 @@ struct IvmProvedJsonView {
     events_commitment: Hash,
     gas_policy_commitment: Hash,
 }
-
 fn decode_ivm_proved_view(proved: &IvmProved) -> Option<(IvmBytecode, Vec<InstructionBox>)> {
     let rendered = norito::json::to_json(proved).ok()?;
     let parsed: IvmProvedJsonView = norito::json::from_str(&rendered).ok()?;
     let _ = (parsed.events_commitment, parsed.gas_policy_commitment);
     Some((parsed.bytecode, parsed.overlay))
 }
-
 /// Recognize the sole non-genesis path that may grant deployment authority.
 ///
 /// Torii can onboard a transaction authority that does not exist yet, but the
@@ -266,7 +254,6 @@ fn has_contract_deployment_self_bootstrap_prefix(
     let Some([register, grant, deployment]) = instructions.get(..3) else {
         return false;
     };
-
     let Some(RegisterBox::Account(register)) = register.as_any().downcast_ref::<RegisterBox>()
     else {
         return false;
@@ -279,7 +266,6 @@ fn has_contract_deployment_self_bootstrap_prefix(
     {
         return false;
     }
-
     let Some(GrantBox::Permission(grant)) = grant.as_any().downcast_ref::<GrantBox>() else {
         return false;
     };
@@ -288,14 +274,12 @@ fn has_contract_deployment_self_bootstrap_prefix(
     if grant.destination() != authority || grant.object() != &expected_permission {
         return false;
     }
-
     deployment
         .as_any()
         .downcast_ref::<UploadSmartContractCodeChunk>()
         .is_some_and(|upload| *upload.chunk_index() == 0)
         || deployment.as_any().is::<RegisterSmartContractCode>()
 }
-
 fn classify_contract_deployment_account_lookup<T>(
     authority: &AccountId,
     result: Result<T, ValidationFail>,
@@ -310,7 +294,6 @@ fn classify_contract_deployment_account_lookup<T>(
         Err(error) => Err(error),
     }
 }
-
 fn account_exists_before_transaction<V: Execute + Visit + ?Sized>(
     executor: &V,
     authority: &AccountId,
@@ -322,11 +305,9 @@ fn account_exists_before_transaction<V: Execute + Visit + ?Sized>(
             .query_single(FindAccountById::new(authority.clone())),
     )
 }
-
 #[cfg(test)]
 mod contract_deployment_bootstrap_tests {
     use std::num::NonZeroU64;
-
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         account::{AccountAlias, NewAccount, OpaqueAccountId},
@@ -339,16 +320,13 @@ mod contract_deployment_bootstrap_tests {
         prelude::Json,
         smart_contract::manifest::ContractManifest,
     };
-
     use super::*;
     use crate::{Iroha, prelude};
-
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("non-zero deterministic key seed");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn upload_instruction() -> InstructionBox {
         UploadSmartContractCodeChunk {
             code_hash: Hash::new(b"executor deployment bootstrap fixture"),
@@ -359,7 +337,6 @@ mod contract_deployment_bootstrap_tests {
         }
         .into()
     }
-
     fn bootstrap_prefix(
         registered_account: NewAccount,
         grant_destination: AccountId,
@@ -372,11 +349,9 @@ mod contract_deployment_bootstrap_tests {
             deployment,
         ]
     }
-
     fn deployment_permission() -> Permission {
         iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into()
     }
-
     fn manifest() -> ContractManifest {
         ContractManifest {
             seiyaku_name: None,
@@ -392,21 +367,18 @@ mod contract_deployment_bootstrap_tests {
             provenance: None,
         }
     }
-
     fn manifest_instruction() -> InstructionBox {
         RegisterSmartContractCode {
             manifest: manifest(),
         }
         .into()
     }
-
     #[derive(Debug)]
     struct TestExecutor {
         host: Iroha,
         context: prelude::Context,
         verdict: crate::data_model::executor::Result<(), ValidationFail>,
     }
-
     impl TestExecutor {
         fn non_genesis(authority: AccountId) -> Self {
             Self {
@@ -426,31 +398,24 @@ mod contract_deployment_bootstrap_tests {
             }
         }
     }
-
     impl Execute for TestExecutor {
         fn host(&self) -> &Iroha {
             &self.host
         }
-
         fn context(&self) -> &prelude::Context {
             &self.context
         }
-
         fn context_mut(&mut self) -> &mut prelude::Context {
             &mut self.context
         }
-
         fn verdict(&self) -> &crate::data_model::executor::Result<(), ValidationFail> {
             &self.verdict
         }
-
         fn deny(&mut self, reason: ValidationFail) {
             self.verdict = Err(reason);
         }
     }
-
     impl Visit for TestExecutor {}
-
     #[test]
     fn exact_native_upload_self_bootstrap_prefix_is_recognized() {
         let authority = account(1);
@@ -460,13 +425,11 @@ mod contract_deployment_bootstrap_tests {
             deployment_permission(),
             upload_instruction(),
         );
-
         assert!(has_contract_deployment_self_bootstrap_prefix(
             &authority,
             &instructions
         ));
     }
-
     #[test]
     fn exact_matching_code_manifest_self_bootstrap_prefix_is_recognized() {
         let authority = account(1);
@@ -476,18 +439,15 @@ mod contract_deployment_bootstrap_tests {
             deployment_permission(),
             manifest_instruction(),
         );
-
         assert!(has_contract_deployment_self_bootstrap_prefix(
             &authority,
             &instructions
         ));
     }
-
     #[test]
     fn deployment_account_lookup_only_treats_exact_missing_authority_as_absent() {
         let authority = account(1);
         let other = account(2);
-
         assert_eq!(
             classify_contract_deployment_account_lookup(&authority, Ok::<_, ValidationFail>(())),
             Ok(true)
@@ -501,7 +461,6 @@ mod contract_deployment_bootstrap_tests {
             ),
             Ok(false)
         );
-
         let wrong_missing =
             ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::Account(other)));
         assert_eq!(
@@ -511,30 +470,25 @@ mod contract_deployment_bootstrap_tests {
             ),
             Err(wrong_missing)
         );
-
         let unrelated = ValidationFail::QueryFailed(QueryExecutionFail::NotFound);
         assert_eq!(
             classify_contract_deployment_account_lookup::<()>(&authority, Err(unrelated.clone()),),
             Err(unrelated)
         );
     }
-
     #[test]
     fn direct_non_genesis_deployment_permission_grant_remains_genesis_only() {
         use crate::permission::ValidateGrantRevoke as _;
-
         let authority = account(1);
         let executor = TestExecutor::non_genesis(authority.clone());
         let permission =
             iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
-
         let error = permission
             .validate_grant(&authority, executor.context(), executor.host())
             .expect_err("ordinary non-genesis self-grant must remain genesis-only");
         assert!(matches!(error, ValidationFail::NotPermitted(message) if
             message.contains("only allowed inside the genesis block")));
     }
-
     #[test]
     fn contract_lifecycle_instructions_reach_core_dispatch() {
         let authority = account(1);
@@ -599,7 +553,6 @@ mod contract_deployment_bootstrap_tests {
             .into(),
             SetContractAlias::clear(contract_address).into(),
         ];
-
         for instruction in instructions {
             let mut executor = TestExecutor::non_genesis(authority.clone());
             visit_instruction(&mut executor, &instruction);
@@ -609,12 +562,10 @@ mod contract_deployment_bootstrap_tests {
             );
         }
     }
-
     #[test]
     fn deployment_self_bootstrap_rejects_adversarial_shapes() {
         let authority = account(1);
         let other = account(2);
-
         let wrong_account = bootstrap_prefix(
             Account::new(other.clone()),
             authority.clone(),
@@ -625,7 +576,6 @@ mod contract_deployment_bootstrap_tests {
             &authority,
             &wrong_account
         ));
-
         let wrong_destination = bootstrap_prefix(
             Account::new(authority.clone()),
             other,
@@ -636,7 +586,6 @@ mod contract_deployment_bootstrap_tests {
             &authority,
             &wrong_destination
         ));
-
         let malformed_permission = Permission::new(
             "CanRegisterSmartContractCode".into(),
             Json::from_raw_json("{\"unexpected\":true}".to_owned()).expect("valid JSON fixture"),
@@ -651,7 +600,6 @@ mod contract_deployment_bootstrap_tests {
             &authority,
             &malformed_grant
         ));
-
         let cleanup = bootstrap_prefix(
             Account::new(authority.clone()),
             authority.clone(),
@@ -664,7 +612,6 @@ mod contract_deployment_bootstrap_tests {
         assert!(!has_contract_deployment_self_bootstrap_prefix(
             &authority, &cleanup
         ));
-
         let non_initial_upload = bootstrap_prefix(
             Account::new(authority.clone()),
             authority.clone(),
@@ -683,7 +630,6 @@ mod contract_deployment_bootstrap_tests {
             &non_initial_upload
         ));
     }
-
     #[test]
     fn deployment_self_bootstrap_rejects_adversarial_sequences() {
         let authority = account(1);
@@ -697,7 +643,6 @@ mod contract_deployment_bootstrap_tests {
         assert!(!has_contract_deployment_self_bootstrap_prefix(
             &authority, &reordered
         ));
-
         let exact = bootstrap_prefix(
             Account::new(authority.clone()),
             authority.clone(),
@@ -715,7 +660,6 @@ mod contract_deployment_bootstrap_tests {
         assert!(!has_contract_deployment_self_bootstrap_prefix(
             &authority, &shifted
         ));
-
         let mut atomic_deployment = exact.clone();
         atomic_deployment.push(
             CommitContractDeployment {
@@ -741,7 +685,6 @@ mod contract_deployment_bootstrap_tests {
             &atomic_deployment
         ));
     }
-
     #[test]
     fn deployment_self_bootstrap_rejects_decorated_accounts() {
         let authority = account(1);
@@ -773,17 +716,14 @@ mod contract_deployment_bootstrap_tests {
         }
     }
 }
-
 #[cfg(test)]
 mod ivm_proved_decode_tests {
     use super::*;
-
     #[test]
     fn decode_ivm_proved_view_roundtrips_minimal_payload() {
         let expected_bytecode = IvmBytecode::from_compiled(vec![0xA1, 0xB2, 0xC3]);
         let expected_events_commitment = Hash::new(b"executor-events");
         let expected_gas_commitment = Hash::new(b"executor-gas");
-
         let bytecode_json = norito::json::to_json(&expected_bytecode).expect("bytecode json");
         let events_json =
             norito::json::to_json(&expected_events_commitment).expect("events commitment json");
@@ -793,14 +733,12 @@ mod ivm_proved_decode_tests {
         );
         let proved: IvmProved =
             norito::json::from_str(&proved_json).expect("IvmProved JSON payload should decode");
-
         let (bytecode, overlay) =
             decode_ivm_proved_view(&proved).expect("helper should decode proved payload");
         assert_eq!(bytecode.as_ref(), expected_bytecode.as_ref());
         assert!(overlay.is_empty(), "overlay should roundtrip as empty");
     }
 }
-
 /// Execute [`SignedTransaction`].
 ///
 /// Transaction is executed following successful validation.
@@ -850,7 +788,6 @@ pub fn visit_transaction<V: Execute + Visit + ?Sized>(
                         return;
                     }
                 };
-
             for (index, isi) in instructions.iter().enumerate() {
                 if executor.verdict().is_ok() {
                     if allow_deployment_self_bootstrap && index == 1 {
@@ -873,18 +810,15 @@ pub fn visit_transaction<V: Execute + Visit + ?Sized>(
         }
     }
 }
-
 /// Execute [`InstructionBox`] by delegating to the appropriate visitor
 /// implementation.
 pub fn visit_instruction<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &InstructionBox) {
     isi.dispatch(executor);
 }
-
 /// Forward declarative alias setup to Core's consensus-critical classifier and executor.
 pub fn visit_ensure_alias<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &EnsureAlias) {
     execute!(executor, isi);
 }
-
 /// Forward guarded alias lease renewal to Core's expiry-CAS executor.
 pub fn visit_renew_alias_lease<V: Execute + Visit + ?Sized>(
     executor: &mut V,
@@ -892,7 +826,6 @@ pub fn visit_renew_alias_lease<V: Execute + Visit + ?Sized>(
 ) {
     execute!(executor, isi);
 }
-
 /// Forward alias auto-renew configuration to Core's owner-only CAS executor.
 pub fn visit_configure_alias_auto_renew<V: Execute + Visit + ?Sized>(
     executor: &mut V,
@@ -900,7 +833,6 @@ pub fn visit_configure_alias_auto_renew<V: Execute + Visit + ?Sized>(
 ) {
     execute!(executor, isi);
 }
-
 /// Forward explicit alias rebinding to Core's target-account CAS executor.
 pub fn visit_rebind_account_alias<V: Execute + Visit + ?Sized>(
     executor: &mut V,
@@ -908,7 +840,6 @@ pub fn visit_rebind_account_alias<V: Execute + Visit + ?Sized>(
 ) {
     execute!(executor, isi);
 }
-
 /// Forward primary-alias compare-and-set to Core's lifecycle executor.
 pub fn visit_compare_and_set_primary_account_alias<V: Execute + Visit + ?Sized>(
     executor: &mut V,
@@ -916,17 +847,14 @@ pub fn visit_compare_and_set_primary_account_alias<V: Execute + Visit + ?Sized>(
 ) {
     execute!(executor, isi);
 }
-
 trait InstructionDispatch {
     fn dispatch<V: Execute + Visit + ?Sized>(&self, executor: &mut V);
 }
-
 impl InstructionDispatch for InstructionBox {
     #[allow(clippy::too_many_lines)]
     fn dispatch<V: Execute + Visit + ?Sized>(&self, executor: &mut V) {
         // InstructionBox wraps a trait object. Downcast to known built-ins.
         let any = self.as_any();
-
         if let Some(isi) = any.downcast_ref::<SetParameter>() {
             executor.visit_set_parameter(isi);
             return;
@@ -1471,19 +1399,15 @@ impl InstructionDispatch for InstructionBox {
             executor.visit_custom_instruction(isi);
             return;
         }
-
         deny!(executor, "unexpected instruction type");
     }
 }
-
 /// Permission-checked visitors for native settlement instructions.
 pub mod settlement {
     use iroha_executor_data_model::permission::settlement::{
         CanManageFxCorridors, CanSetFxCorridorPolicy,
     };
-
     use super::*;
-
     /// Dispatch a settlement instruction, gating policy updates and deferring settlement-source
     /// authorization to Core.
     pub fn visit_settlement_instruction<V: Execute + Visit + ?Sized>(
@@ -1493,7 +1417,6 @@ pub mod settlement {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-
         let authority = &executor.context().authority;
         match isi {
             SettlementInstructionBox::SetFxCorridorPolicy(set) => {
@@ -1521,11 +1444,9 @@ pub mod settlement {
         }
     }
 }
-
 #[cfg(test)]
 mod core_authorization_dispatch_tests {
     use core::num::NonZeroU64;
-
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         alias_setup::{
@@ -1548,17 +1469,14 @@ mod core_authorization_dispatch_tests {
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         prelude::{AccountId, AssetDefinitionId, DomainId, Quantity, ValidationFail},
     };
-
     use super::*;
     use crate::{Iroha, prelude};
-
     #[derive(Debug)]
     struct TestExecutor {
         host: Iroha,
         context: prelude::Context,
         verdict: crate::data_model::executor::Result<(), ValidationFail>,
     }
-
     impl TestExecutor {
         fn new(authority: AccountId) -> Self {
             Self {
@@ -1578,46 +1496,36 @@ mod core_authorization_dispatch_tests {
             }
         }
     }
-
     impl Execute for TestExecutor {
         fn host(&self) -> &Iroha {
             &self.host
         }
-
         fn context(&self) -> &prelude::Context {
             &self.context
         }
-
         fn context_mut(&mut self) -> &mut prelude::Context {
             &mut self.context
         }
-
         fn verdict(&self) -> &crate::data_model::executor::Result<(), ValidationFail> {
             &self.verdict
         }
-
         fn deny(&mut self, reason: ValidationFail) {
             self.verdict = Err(reason);
         }
     }
-
     impl Visit for TestExecutor {
         fn visit_ensure_alias(&mut self, operation: &EnsureAlias) {
             super::visit_ensure_alias(self, operation);
         }
-
         fn visit_renew_alias_lease(&mut self, operation: &RenewAliasLease) {
             super::visit_renew_alias_lease(self, operation);
         }
-
         fn visit_configure_alias_auto_renew(&mut self, operation: &ConfigureAliasAutoRenew) {
             super::visit_configure_alias_auto_renew(self, operation);
         }
-
         fn visit_rebind_account_alias(&mut self, operation: &RebindAccountAlias) {
             super::visit_rebind_account_alias(self, operation);
         }
-
         fn visit_compare_and_set_primary_account_alias(
             &mut self,
             operation: &CompareAndSetPrimaryAccountAlias,
@@ -1625,20 +1533,17 @@ mod core_authorization_dispatch_tests {
             super::visit_compare_and_set_primary_account_alias(self, operation);
         }
     }
-
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked FX executor fixture keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn asset(domain: &str, name: &str) -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new(domain, "universal").expect("valid FX asset domain"),
             name.parse().expect("valid FX asset name"),
         )
     }
-
     fn offline_attestation_registration(
         account_id: AccountId,
     ) -> OfflineDeviceAttestationRegistration {
@@ -1652,7 +1557,6 @@ mod core_authorization_dispatch_tests {
         .expect("canonical uncompressed P-256 generator point");
         let attestation_report = b"executor-offline-attestation-report".to_vec();
         let evidence = b"executor-offline-attestation-evidence".to_vec();
-
         OfflineDeviceAttestationRegistration {
             version: 1,
             platform: "android-keymint".to_owned(),
@@ -1681,7 +1585,6 @@ mod core_authorization_dispatch_tests {
             expires_at_ms: 2_000_000_000_000,
         }
     }
-
     #[test]
     fn fx_settlement_reaches_core_without_executor_permission() {
         let authority = account(0x41);
@@ -1714,15 +1617,12 @@ mod core_authorization_dispatch_tests {
             },
         });
         let mut executor = TestExecutor::new(authority);
-
         settlement::visit_settlement_instruction(&mut executor, &settlement);
-
         assert!(
             executor.verdict().is_ok(),
             "the default executor must defer FX source authorization to Core"
         );
     }
-
     #[test]
     fn offline_attestation_instructions_reach_core_authorization() {
         let authority = account(0x43);
@@ -1742,7 +1642,6 @@ mod core_authorization_dispatch_tests {
                 },
             )),
         ];
-
         for instruction in instructions {
             let mut executor = TestExecutor::new(authority.clone());
             visit_instruction(&mut executor, &instruction);
@@ -1752,7 +1651,6 @@ mod core_authorization_dispatch_tests {
             );
         }
     }
-
     #[test]
     fn alias_lifecycle_instructions_reach_core_dispatch() {
         let authority = account(0x44);
@@ -1792,7 +1690,6 @@ mod core_authorization_dispatch_tests {
             CompareAndSetPrimaryAccountAlias::new(authority.clone(), None, Some(account_alias))
                 .into(),
         ];
-
         for instruction in instructions {
             let mut executor = TestExecutor::new(authority.clone());
             visit_instruction(&mut executor, &instruction);
@@ -1803,11 +1700,9 @@ mod core_authorization_dispatch_tests {
         }
     }
 }
-
 /// Permission-aware dispatch for SCCP governance proposal instructions.
 pub mod governance {
     use super::*;
-
     /// Dispatch a typed SCCP route-governance proposal to Core, which admits registered citizens
     /// or holders of `CanProposeSccpRouteGovernance` (including role grants).
     pub fn visit_propose_sccp_route_governance<V: Execute + Visit + ?Sized>(
@@ -1816,7 +1711,6 @@ pub mod governance {
     ) {
         execute!(executor, isi)
     }
-
     /// Dispatch a typed SoraFS provider-owner proposal to Core.
     ///
     /// Core admits proposal authors separately; only a successful referendum
@@ -1827,7 +1721,6 @@ pub mod governance {
     ) {
         execute!(executor, isi)
     }
-
     /// Dispatch a bonded-citizen validation-fee proposal to the Parliament lifecycle in Core.
     pub fn visit_propose_validation_fee_policy<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1835,7 +1728,6 @@ pub mod governance {
     ) {
         execute!(executor, isi)
     }
-
     /// Dispatch a bonded-citizen payout-lifecycle proposal to the Parliament lifecycle in Core.
     pub fn visit_propose_validation_fee_payout_lifecycle<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1843,7 +1735,6 @@ pub mod governance {
     ) {
         execute!(executor, isi)
     }
-
     /// Dispatch a body-specific Parliament approval to Core.
     pub fn visit_approve_governance_proposal<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1851,7 +1742,6 @@ pub mod governance {
     ) {
         execute!(executor, isi)
     }
-
     /// Dispatch a body-specific Parliament ballot to Core.
     pub fn visit_cast_parliament_ballot<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1859,7 +1749,6 @@ pub mod governance {
     ) {
         execute!(executor, isi)
     }
-
     /// Dispatch permissionless referendum finalization to Core.
     pub fn visit_finalize_referendum<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1867,7 +1756,6 @@ pub mod governance {
     ) {
         execute!(executor, isi)
     }
-
     /// Dispatch permissionless referendum enactment to Core.
     pub fn visit_enact_referendum<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1875,7 +1763,6 @@ pub mod governance {
     ) {
         execute!(executor, isi)
     }
-
     /// Dispatch the full-preimage SCCP referendum enactment to Core.
     pub fn visit_enact_sccp_route_governance<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1883,7 +1770,6 @@ pub mod governance {
     ) {
         execute!(executor, isi)
     }
-
     /// Dispatch citizen registration to Core, which enforces self-registration and the configured
     /// citizenship bond floor against committed governance parameters.
     pub fn visit_register_citizen<V: Execute + Visit + ?Sized>(
@@ -1893,13 +1779,10 @@ pub mod governance {
         execute!(executor, isi)
     }
 }
-
 /// Permission-checked visitors for peer management instructions.
 pub mod peer {
     use iroha_executor_data_model::permission::peer::CanManagePeers;
-
     use super::*;
-
     /// Registers a peer when genesis or a peer manager submits the instruction.
     pub fn visit_register_peer<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1911,10 +1794,8 @@ pub mod peer {
         if CanManagePeers.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't register peer");
     }
-
     /// Unregisters a peer if the caller has peer management privileges.
     pub fn visit_unregister_peer<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1926,17 +1807,13 @@ pub mod peer {
         if CanManagePeers.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't unregister peer");
     }
 }
-
 /// Permission-checked visitors for public-lane validator lifecycle instructions.
 pub mod staking {
     use iroha_executor_data_model::permission::peer::CanManagePeers;
-
     use super::*;
-
     /// Register a public-lane validator when the caller is authorised or during genesis.
     pub fn visit_register_public_lane_validator<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1950,7 +1827,6 @@ pub mod staking {
         }
         deny!(executor, "Can't register public-lane validator");
     }
-
     /// Activate a pending public-lane validator when the caller is authorised or during genesis.
     pub fn visit_activate_public_lane_validator<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1964,7 +1840,6 @@ pub mod staking {
         }
         deny!(executor, "Can't activate public-lane validator");
     }
-
     /// Mark a validator as exiting when the caller is authorised or during genesis.
     pub fn visit_exit_public_lane_validator<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1979,13 +1854,10 @@ pub mod staking {
         deny!(executor, "Can't exit public-lane validator");
     }
 }
-
 /// Permission-checked visitors for Nexus lane relay recovery instructions.
 pub mod nexus {
     use iroha_executor_data_model::permission::peer::CanManageLaneRelayEmergency;
-
     use super::*;
-
     /// Set or clear emergency lane relay validators when the caller is authorised or during genesis.
     pub fn visit_set_lane_relay_emergency_validators<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2000,7 +1872,6 @@ pub mod nexus {
         deny!(executor, "Can't set lane relay emergency validators");
     }
 }
-
 /// Permission-checked visitors for `SoraFS` registry and pricing instructions.
 pub mod sorafs {
     use iroha_executor_data_model::permission::sorafs::{
@@ -2010,7 +1881,6 @@ pub mod sorafs {
         CanRecordSorafsReputationJournal, CanResolveSorafsCapacityDispute, CanSetSorafsPricing,
         CanSetSorafsReservePolicy, CanUpsertSorafsProviderCredit,
     };
-
     use super::*;
     use iroha_smart_contract::data_model::query::sorafs::prelude::{
         FindSorafsModerationAppeal, FindSorafsModerationCase, FindSorafsModerationChallenge,
@@ -2032,35 +1902,30 @@ pub mod sorafs {
         FindSorafsReserveAppealById, FindSorafsReserveEvents, FindSorafsReserveMovementById,
         FindSorafsReservePolicy, FindSorafsReserveProviderById,
     };
-
     /// Authoritative repair tasks are public operational state.
     pub fn visit_find_sorafs_repair_task<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsRepairTask,
     ) {
     }
-
     /// Authoritative repair-task pages are public operational state.
     pub fn visit_find_sorafs_repair_tasks<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsRepairTasks,
     ) {
     }
-
     /// Authoritative repair counters are public operational state.
     pub fn visit_find_sorafs_repair_status<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsRepairStatus,
     ) {
     }
-
     /// Committed repair-ledger event pages are public operational state.
     pub fn visit_find_sorafs_repair_events<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsRepairEvents,
     ) {
     }
-
     /// The payload-free finalized reputation journal is public transparency state.
     #[expect(
         clippy::trivially_copy_pass_by_ref,
@@ -2071,7 +1936,6 @@ pub mod sorafs {
         _query: &FindSorafsReputationJournalEvents,
     ) {
     }
-
     /// One payload-free finalized reputation source result is public transparency state.
     #[expect(
         clippy::trivially_copy_pass_by_ref,
@@ -2082,7 +1946,6 @@ pub mod sorafs {
         _query: &FindSorafsReputationJournalEventBySourceId,
     ) {
     }
-
     /// Validate permission to read the active reputation-journal authority policy.
     #[expect(
         clippy::trivially_copy_pass_by_ref,
@@ -2107,7 +1970,6 @@ pub mod sorafs {
             "Can't read the active authoritative SoraFS reputation-journal authority policy"
         );
     }
-
     fn visit_orderbook_read<V: Execute + Visit + ?Sized>(executor: &mut V) {
         if executor.context().curr_block.is_genesis()
             || CanSetSorafsPricing.is_owned_by(&executor.context().authority, executor.host())
@@ -2118,7 +1980,6 @@ pub mod sorafs {
         }
         deny!(executor, "Can't read authoritative SoraFS orderbook state");
     }
-
     /// Validate permission to read the active authoritative orderbook policy.
     #[expect(
         clippy::trivially_copy_pass_by_ref,
@@ -2130,7 +1991,6 @@ pub mod sorafs {
     ) {
         visit_orderbook_read(executor);
     }
-
     /// Validate permission to read an authoritative order.
     pub fn visit_find_sorafs_orderbook_order_by_id<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2138,7 +1998,6 @@ pub mod sorafs {
     ) {
         visit_orderbook_read(executor);
     }
-
     /// Validate permission to read an authoritative cancellation.
     pub fn visit_find_sorafs_orderbook_cancellation_by_order_id<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2146,7 +2005,6 @@ pub mod sorafs {
     ) {
         visit_orderbook_read(executor);
     }
-
     /// Validate permission to read an authoritative settlement receipt.
     pub fn visit_find_sorafs_orderbook_receipt_by_id<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2154,7 +2012,6 @@ pub mod sorafs {
     ) {
         visit_orderbook_read(executor);
     }
-
     /// Validate permission to read an authoritative matched trade.
     pub fn visit_find_sorafs_orderbook_trade_by_id<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2162,7 +2019,6 @@ pub mod sorafs {
     ) {
         visit_orderbook_read(executor);
     }
-
     /// Validate permission to read an authoritative settlement channel.
     pub fn visit_find_sorafs_orderbook_channel_by_id<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2170,7 +2026,6 @@ pub mod sorafs {
     ) {
         visit_orderbook_read(executor);
     }
-
     /// Validate permission to read authoritative orderbook counters.
     #[expect(
         clippy::trivially_copy_pass_by_ref,
@@ -2182,7 +2037,6 @@ pub mod sorafs {
     ) {
         visit_orderbook_read(executor);
     }
-
     /// Validate permission to list authoritative orders.
     pub fn visit_find_sorafs_orderbook_orders<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2190,7 +2044,6 @@ pub mod sorafs {
     ) {
         visit_orderbook_read(executor);
     }
-
     /// Validate permission to list authoritative settlement receipts.
     pub fn visit_find_sorafs_orderbook_receipts<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2198,7 +2051,6 @@ pub mod sorafs {
     ) {
         visit_orderbook_read(executor);
     }
-
     /// Validate permission to list authoritative matched trades.
     pub fn visit_find_sorafs_orderbook_trades<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2206,7 +2058,6 @@ pub mod sorafs {
     ) {
         visit_orderbook_read(executor);
     }
-
     /// Validate permission to list authoritative settlement channels.
     pub fn visit_find_sorafs_orderbook_channels<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2214,7 +2065,6 @@ pub mod sorafs {
     ) {
         visit_orderbook_read(executor);
     }
-
     /// Validate permission to list committed authoritative orderbook events.
     pub fn visit_find_sorafs_orderbook_events<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2222,7 +2072,6 @@ pub mod sorafs {
     ) {
         visit_orderbook_read(executor);
     }
-
     fn visit_reserve_read<V: Execute + Visit + ?Sized>(executor: &mut V) {
         if executor.context().curr_block.is_genesis()
             || CanSetSorafsReservePolicy.is_owned_by(&executor.context().authority, executor.host())
@@ -2231,7 +2080,6 @@ pub mod sorafs {
         }
         deny!(executor, "Can't read authoritative SoraFS reserve state");
     }
-
     /// Validate permission to read the active reserve policy.
     #[expect(
         clippy::trivially_copy_pass_by_ref,
@@ -2243,7 +2091,6 @@ pub mod sorafs {
     ) {
         visit_reserve_read(executor);
     }
-
     /// Validate permission to read a provider reserve account.
     pub fn visit_find_sorafs_reserve_provider_by_id<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2251,7 +2098,6 @@ pub mod sorafs {
     ) {
         visit_reserve_read(executor);
     }
-
     /// Validate permission to read a reserve custody movement.
     pub fn visit_find_sorafs_reserve_movement_by_id<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2259,7 +2105,6 @@ pub mod sorafs {
     ) {
         visit_reserve_read(executor);
     }
-
     /// Validate permission to read a reserve lifecycle appeal.
     pub fn visit_find_sorafs_reserve_appeal_by_id<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2267,7 +2112,6 @@ pub mod sorafs {
     ) {
         visit_reserve_read(executor);
     }
-
     /// Validate permission to list provider reserve accounts.
     pub fn visit_find_sorafs_reserve_providers<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2275,7 +2119,6 @@ pub mod sorafs {
     ) {
         visit_reserve_read(executor);
     }
-
     /// Validate permission to list reserve custody movements.
     pub fn visit_find_sorafs_reserve_movements<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2283,7 +2126,6 @@ pub mod sorafs {
     ) {
         visit_reserve_read(executor);
     }
-
     /// Validate permission to list reserve lifecycle appeals.
     pub fn visit_find_sorafs_reserve_appeals<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2291,7 +2133,6 @@ pub mod sorafs {
     ) {
         visit_reserve_read(executor);
     }
-
     /// Validate permission to list committed authoritative reserve events.
     pub fn visit_find_sorafs_reserve_events<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2299,7 +2140,6 @@ pub mod sorafs {
     ) {
         visit_reserve_read(executor);
     }
-
     /// `PoP` issuer policy is public transparency state.
     #[expect(
         clippy::trivially_copy_pass_by_ref,
@@ -2310,14 +2150,12 @@ pub mod sorafs {
         _query: &FindSorafsPopIssuerPolicy,
     ) {
     }
-
     /// Payload-free credential commitments are public transparency state.
     pub fn visit_find_sorafs_pop_credential_commitment_by_digest<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsPopCredentialCommitmentByDigest,
     ) {
     }
-
     /// Signed commitment-root publications are public transparency state.
     #[expect(
         clippy::trivially_copy_pass_by_ref,
@@ -2328,7 +2166,6 @@ pub mod sorafs {
         _query: &FindSorafsPopCommitmentRootByVersion,
     ) {
     }
-
     /// Signed revocation publications are public transparency state.
     #[expect(
         clippy::trivially_copy_pass_by_ref,
@@ -2339,14 +2176,12 @@ pub mod sorafs {
         _query: &FindSorafsPopRevocationPublicationByVersion,
     ) {
     }
-
     /// Payload-free revocation commitments are public transparency state.
     pub fn visit_find_sorafs_pop_revocation_by_nonce_commitment<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsPopRevocationByNonceCommitment,
     ) {
     }
-
     /// Registry audit links are public transparency state.
     #[expect(
         clippy::trivially_copy_pass_by_ref,
@@ -2357,7 +2192,6 @@ pub mod sorafs {
         _query: &FindSorafsPopAuditDigestBySequence,
     ) {
     }
-
     /// Registry anchors and counters are public transparency state.
     #[expect(
         clippy::trivially_copy_pass_by_ref,
@@ -2368,7 +2202,6 @@ pub mod sorafs {
         _query: &FindSorafsPopRegistryStatus,
     ) {
     }
-
     /// Authoritative moderation policy is public transparency state.
     #[expect(
         clippy::trivially_copy_pass_by_ref,
@@ -2379,14 +2212,12 @@ pub mod sorafs {
         _query: &FindSorafsModerationPolicy,
     ) {
     }
-
     /// Appeal intake, pinned roots, and deterministic roster are public transparency state.
     pub fn visit_find_sorafs_moderation_appeal<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsModerationAppeal,
     ) {
     }
-
     /// A payload-free eligibility record is visible to its juror and moderation operators.
     pub fn visit_find_sorafs_moderation_juror_eligibility<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2403,49 +2234,42 @@ pub mod sorafs {
             "Can't read another juror's moderation PoP eligibility record"
         );
     }
-
     /// Authoritative moderation case headers are public transparency state.
     pub fn visit_find_sorafs_moderation_case<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsModerationCase,
     ) {
     }
-
     /// Sealed commitment digests and provenance are public transparency state.
     pub fn visit_find_sorafs_moderation_commit<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsModerationCommit,
     ) {
     }
-
     /// Accepted reveals are public after their commit-bound submission.
     pub fn visit_find_sorafs_moderation_reveal<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsModerationReveal,
     ) {
     }
-
     /// Payload-free challenge records are public transparency state.
     pub fn visit_find_sorafs_moderation_challenge<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsModerationChallenge,
     ) {
     }
-
     /// Terminal moderation outcomes are public transparency state.
     pub fn visit_find_sorafs_moderation_outcome<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsModerationOutcome,
     ) {
     }
-
     /// Derived no-show penalty records are public transparency state.
     pub fn visit_find_sorafs_moderation_no_show<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsModerationNoShow,
     ) {
     }
-
     /// Authoritative moderation counters are public transparency state.
     #[expect(
         clippy::trivially_copy_pass_by_ref,
@@ -2456,7 +2280,6 @@ pub mod sorafs {
         _query: &FindSorafsModerationStatus,
     ) {
     }
-
     /// A complete snapshot includes every juror eligibility record and requires moderation access.
     #[expect(
         clippy::trivially_copy_pass_by_ref,
@@ -2474,14 +2297,12 @@ pub mod sorafs {
             "Can't read the complete authoritative SoraFS moderation snapshot"
         );
     }
-
     /// Payload-free committed moderation events are public transparency state.
     pub fn visit_find_sorafs_moderation_events<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsModerationEvents,
     ) {
     }
-
     /// Register a `SoraFS` pin manifest.
     ///
     /// Public submissions rely on the universal-lane Nexus fee schedule instead
@@ -2492,7 +2313,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Submit a threshold-signed approval for a pending `SoraFS` pin manifest.
     ///
     /// Core validates the governed approval envelope. The submitting account
@@ -2503,7 +2323,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Retire an account-owned `SoraFS` pin manifest.
     ///
     /// Core requires the authenticated transaction authority to be the exact
@@ -2514,7 +2333,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Bind or update a `SoraFS` manifest alias when permitted.
     pub fn visit_bind_manifest_alias<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2526,10 +2344,8 @@ pub mod sorafs {
         if CanBindSorafsAlias.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't bind SoraFS manifest alias");
     }
-
     /// Register a capacity declaration when permitted.
     pub fn visit_register_capacity_declaration<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2537,7 +2353,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Record a capacity telemetry snapshot when permitted.
     pub fn visit_record_capacity_telemetry<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2545,7 +2360,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// File a capacity dispute when permitted.
     pub fn visit_register_capacity_dispute<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2558,10 +2372,8 @@ pub mod sorafs {
         {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't file SoraFS capacity dispute");
     }
-
     /// Resolve an authoritative capacity dispute when permitted.
     pub fn visit_resolve_capacity_dispute<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2575,7 +2387,6 @@ pub mod sorafs {
         }
         deny!(executor, "Can't resolve SoraFS capacity dispute");
     }
-
     /// Activate or rotate the governed reputation-recorder policy when permitted.
     pub fn visit_set_reputation_journal_authority_policy<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2592,7 +2403,6 @@ pub mod sorafs {
             "Can't manage the authoritative SoraFS reputation recorder policy"
         );
     }
-
     /// Append a governed PoR reputation projection when permitted.
     pub fn visit_append_por_reputation_journal_entry<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2609,7 +2419,6 @@ pub mod sorafs {
             "Can't record an authoritative SoraFS reputation event"
         );
     }
-
     /// Append a governed stream-token reputation projection when permitted.
     pub fn visit_append_stream_token_reputation_journal_entry<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2626,7 +2435,6 @@ pub mod sorafs {
             "Can't record an authoritative SoraFS reputation event"
         );
     }
-
     /// Issue a replication order when permitted.
     pub fn visit_issue_replication_order<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2640,10 +2448,8 @@ pub mod sorafs {
         {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't issue SoraFS replication order");
     }
-
     /// Complete a replication order when permitted.
     pub fn visit_complete_replication_order<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2657,10 +2463,8 @@ pub mod sorafs {
         {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't complete SoraFS replication order");
     }
-
     /// Revise a pending replication order's assignments when permitted.
     pub fn visit_revise_replication_order_assignments<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2674,13 +2478,11 @@ pub mod sorafs {
         {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Can't revise SoraFS replication order assignments"
         );
     }
-
     /// Expire a replication order when permitted.
     pub fn visit_expire_replication_order<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2694,10 +2496,8 @@ pub mod sorafs {
         {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't expire SoraFS replication order");
     }
-
     /// Dispatch the retired direct owner-registration surface so Core can reject it uniformly.
     pub fn visit_register_provider_owner<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2705,7 +2505,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi)
     }
-
     /// Dispatch the retired direct owner-removal surface so Core can reject it uniformly.
     pub fn visit_unregister_provider_owner<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2713,7 +2512,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi)
     }
-
     /// Dispatch completion-authority rotation; Core requires the exact governed owner.
     pub fn visit_set_provider_ingest_completion_authority<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2721,7 +2519,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi)
     }
-
     /// Dispatch completion-authority revocation; Core requires the exact governed owner.
     pub fn visit_revoke_provider_ingest_completion_authority<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2729,7 +2526,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi)
     }
-
     /// Update the `SoraFS` pricing schedule when permitted.
     pub fn visit_set_pricing_schedule<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2741,10 +2537,8 @@ pub mod sorafs {
         if CanSetSorafsPricing.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't set SoraFS pricing schedule");
     }
-
     /// Upsert a `SoraFS` provider credit record when permitted.
     pub fn visit_upsert_provider_credit<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2757,10 +2551,8 @@ pub mod sorafs {
         {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't upsert SoraFS provider credit");
     }
-
     /// Submit an authority-bound repair report; native execution enforces the
     /// provider-scoped operator permission and source identity.
     pub fn visit_submit_repair_task<V: Execute + Visit + ?Sized>(
@@ -2769,7 +2561,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Apply a revision-checked repair action; native execution enforces lease
     /// ownership, expiry, and provider scope.
     pub fn visit_apply_repair_task_action<V: Execute + Visit + ?Sized>(
@@ -2778,7 +2569,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Submit the single provider-owner appeal against an escalated repair.
     pub fn visit_submit_repair_appeal<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2786,7 +2576,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Activate the next authoritative orderbook policy revision when permitted.
     pub fn visit_set_orderbook_policy<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2800,7 +2589,6 @@ pub mod sorafs {
         }
         deny!(executor, "Can't set SoraFS orderbook policy");
     }
-
     /// Submit a signed order; native execution enforces owner and signer binding.
     pub fn visit_submit_orderbook_order<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2808,7 +2596,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Cancel an order; native execution enforces owner and signer binding.
     pub fn visit_cancel_orderbook_order<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2816,7 +2603,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Record a settlement receipt when the matcher/settlement authority is permitted.
     pub fn visit_record_orderbook_settlement_receipt<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2832,7 +2618,6 @@ pub mod sorafs {
         }
         deny!(executor, "Can't record SoraFS orderbook settlement receipt");
     }
-
     /// Run deterministic order matching when settlement permission is present.
     pub fn visit_match_orderbook<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2846,7 +2631,6 @@ pub mod sorafs {
         }
         deny!(executor, "Can't match authoritative SoraFS orders");
     }
-
     /// Expire orders and settlement channels when settlement permission is present.
     pub fn visit_maintain_orderbook<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2863,7 +2647,6 @@ pub mod sorafs {
             "Can't maintain the authoritative SoraFS orderbook"
         );
     }
-
     fn execute_with_reserve_governance<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &(impl iroha_smart_contract::data_model::isi::Instruction + norito::NoritoSerialize),
@@ -2878,7 +2661,6 @@ pub mod sorafs {
             "Can't govern the authoritative SoraFS reserve ledger"
         );
     }
-
     /// Activate the next reserve policy revision when governance is permitted.
     pub fn visit_set_reserve_policy<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2886,7 +2668,6 @@ pub mod sorafs {
     ) {
         execute_with_reserve_governance(executor, isi);
     }
-
     /// Register a provider reserve partition through the exact governed service account.
     pub fn visit_register_reserve_account<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2894,7 +2675,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Admit a provider-signed reserve movement request.
     pub fn visit_request_reserve_movement<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2902,7 +2682,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Decide a reserve movement through the exact governed decision account.
     pub fn visit_decide_reserve_movement<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2910,7 +2689,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Charge deterministic provider rent through the exact governed operations account.
     pub fn visit_charge_reserve_rent<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2918,7 +2696,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Advance reserve lifecycle state through the exact governed operations account.
     pub fn visit_advance_reserve_lifecycle<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2926,7 +2703,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Draw protocol reserve credit through the exact governed operations account.
     pub fn visit_draw_reserve_credit<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2934,7 +2710,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Admit a provider-signed credit repayment.
     pub fn visit_repay_reserve_credit<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2942,7 +2717,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Admit a provider-signed reserve lifecycle appeal.
     pub fn visit_submit_reserve_appeal<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2950,7 +2724,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Decide a reserve lifecycle appeal through the exact governed decision account.
     pub fn visit_decide_reserve_appeal<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2958,7 +2731,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Activate a `PoP` issuer policy when governance permission is present.
     pub fn visit_set_pop_issuer_policy<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2975,7 +2747,6 @@ pub mod sorafs {
             "Can't manage the authoritative SoraFS PoP issuer policy"
         );
     }
-
     /// Commit an issuer-authenticated credential batch when permitted.
     pub fn visit_commit_pop_credential_batch<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2991,7 +2762,6 @@ pub mod sorafs {
             "Can't operate the authoritative SoraFS PoP issuer"
         );
     }
-
     /// Publish a signed revocation-list extension when permitted.
     pub fn visit_publish_pop_revocation_list<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3007,12 +2777,10 @@ pub mod sorafs {
             "Can't operate the authoritative SoraFS PoP issuer"
         );
     }
-
     fn can_manage_moderation<V: Execute + Visit + ?Sized>(executor: &V) -> bool {
         executor.context().curr_block.is_genesis()
             || CanManageSorafsModeration.is_owned_by(&executor.context().authority, executor.host())
     }
-
     /// Activate a moderation policy when the caller is authorised.
     pub fn visit_set_moderation_policy<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3026,7 +2794,6 @@ pub mod sorafs {
             "Can't manage authoritative SoraFS moderation state"
         );
     }
-
     /// Submit an authority-bound appeal intake; native execution checks appellant identity.
     pub fn visit_submit_moderation_appeal<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3034,7 +2801,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Register an authority-bound private `PoP` eligibility proof.
     pub fn visit_register_moderation_juror_eligibility<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3042,7 +2808,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Finalize deterministic panel sortition when the caller is authorised.
     pub fn visit_finalize_moderation_sortition<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3056,7 +2821,6 @@ pub mod sorafs {
             "Can't manage authoritative SoraFS moderation sortition"
         );
     }
-
     /// Accept an authority-bound primary juror assignment.
     pub fn visit_accept_moderation_juror_assignment<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3064,7 +2828,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Apply deterministic failover and activate the case when authorised.
     pub fn visit_activate_moderation_case<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3078,7 +2841,6 @@ pub mod sorafs {
             "Can't activate authoritative SoraFS moderation cases"
         );
     }
-
     /// Submit a juror commitment; native execution binds it to the authority.
     pub fn visit_submit_moderation_commit<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3086,7 +2848,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Raise an authenticated payload-free moderation challenge.
     pub fn visit_raise_moderation_challenge<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3094,7 +2855,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Resolve a moderation challenge when the caller is authorised.
     pub fn visit_resolve_moderation_challenge<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3108,7 +2868,6 @@ pub mod sorafs {
             "Can't manage authoritative SoraFS moderation state"
         );
     }
-
     /// Submit a juror reveal; native execution verifies the stored commitment.
     pub fn visit_submit_moderation_reveal<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3116,7 +2875,6 @@ pub mod sorafs {
     ) {
         execute!(executor, isi);
     }
-
     /// Finalize a closed case when the caller is authorised.
     pub fn visit_finalize_moderation_case<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3131,19 +2889,12 @@ pub mod sorafs {
         );
     }
 }
-
 /// Permission-checked visitors for domain lifecycle instructions.
 pub mod domain {
-    use iroha_executor_data_model::permission::domain::{
-        CanModifyDomainMetadata, CanUnregisterDomain,
-    };
+    use iroha_executor_data_model::permission::domain::{CanModifyDomainMetadata, CanUnregisterDomain};
     use iroha_smart_contract::data_model::{asset::AssetDefinitionId, domain::DomainId};
-
     use super::*;
-    use crate::permission::{
-        account::is_account_owner, domain::is_domain_owner, revoke_permissions,
-    };
-
+    use crate::permission::{account::is_account_owner, domain::is_domain_owner, revoke_permissions};
     /// Registers a domain only while applying genesis.
     ///
     /// Ordinary signed transactions must use the declarative `EnsureAlias`
@@ -3156,20 +2907,17 @@ pub mod domain {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Raw domain registration is reserved for genesis; use EnsureAlias"
         );
     }
-
     /// Unregisters a domain after checking that the caller governs the domain or holds the revoke permission.
     pub fn visit_unregister_domain<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Unregister<Domain>,
     ) {
         let domain_id = isi.object();
-
         if executor.context().curr_block.is_genesis()
             || match is_domain_owner(domain_id, &executor.context().authority, executor.host()) {
                 Err(err) => deny!(executor, err),
@@ -3194,12 +2942,10 @@ pub mod domain {
             if let Err(err) = err {
                 deny!(executor, err);
             }
-
             execute!(executor, isi);
         }
         deny!(executor, "Can't unregister domain");
     }
-
     /// Transfers domain ownership when the caller owns the source account or domain.
     pub fn visit_transfer_domain<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3207,7 +2953,6 @@ pub mod domain {
     ) {
         let source_id = isi.source();
         let domain_id = isi.object();
-
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
@@ -3219,17 +2964,14 @@ pub mod domain {
             Ok(true) => execute!(executor, isi),
             Ok(false) => {}
         }
-
         deny!(executor, "Can't transfer domain of another account");
     }
-
     /// Sets domain metadata after verifying the caller's authority.
     pub fn visit_set_domain_key_value<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &SetKeyValue<Domain>,
     ) {
         let domain_id = isi.object();
-
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
@@ -3246,17 +2988,14 @@ pub mod domain {
         {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't set key value in domain metadata");
     }
-
     /// Removes domain metadata when the caller holds the relevant modify permission.
     pub fn visit_remove_domain_key_value<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &RemoveKeyValue<Domain>,
     ) {
         let domain_id = isi.object();
-
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
@@ -3273,10 +3012,8 @@ pub mod domain {
         {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't remove key value in domain metadata");
     }
-
     fn asset_definition_ids_owned_by_domain(
         host: &Iroha,
         domain_id: &DomainId,
@@ -3290,7 +3027,6 @@ pub mod domain {
         }
         Ok(ids)
     }
-
     #[allow(clippy::too_many_lines)]
     pub(crate) fn is_permission_domain_associated(
         permission: &Permission,
@@ -3452,16 +3188,13 @@ pub mod domain {
         }
     }
 }
-
 /// Permission-checked visitors for account management instructions.
 pub mod account {
     use iroha_executor_data_model::permission::account::{
         CanModifyAccountMetadata, CanReplaceAccountController, CanUnregisterAccount,
     };
-
     use super::*;
     use crate::permission::{account::is_account_owner, revoke_permissions};
-
     /// Registers a canonical account.
     pub fn visit_register_account<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3469,14 +3202,12 @@ pub mod account {
     ) {
         execute!(executor, isi);
     }
-
     /// Unregisters an account when the caller owns it or has the unregister permission.
     pub fn visit_unregister_account<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Unregister<Account>,
     ) {
         let account_id = isi.object();
-
         if executor.context().curr_block.is_genesis()
             || is_account_owner(account_id, &executor.context().authority, executor.host())
             || {
@@ -3493,12 +3224,10 @@ pub mod account {
             if let Err(err) = err {
                 deny!(executor, err);
             }
-
             execute!(executor, isi);
         }
         deny!(executor, "Can't unregister another account");
     }
-
     /// Sets account metadata after verifying ownership or the metadata permission.
     pub fn visit_set_account_key_value<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3514,7 +3243,6 @@ pub mod account {
             );
         }
         let account_id = isi.object();
-
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
@@ -3529,13 +3257,11 @@ pub mod account {
         {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Can't set value to the metadata of another account"
         );
     }
-
     /// Removes account metadata provided the caller is authorised.
     pub fn visit_remove_account_key_value<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3551,7 +3277,6 @@ pub mod account {
             );
         }
         let account_id = isi.object();
-
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
@@ -3566,20 +3291,17 @@ pub mod account {
         {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Can't remove value from the metadata of another account"
         );
     }
-
     /// Replaces the controller for an account when the caller owns it or has the replacement permission.
     pub fn visit_replace_account_controller<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &ReplaceAccountController,
     ) {
         let account_id = isi.account();
-
         if executor.context().curr_block.is_genesis()
             || is_account_owner(account_id, &executor.context().authority, executor.host())
             || (CanReplaceAccountController {
@@ -3589,17 +3311,14 @@ pub mod account {
         {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't replace another account controller");
     }
-
     /// Sets an account recovery policy when the caller owns the account or has replacement rights.
     pub fn visit_set_account_recovery_policy<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &SetAccountRecoveryPolicy,
     ) {
         let account_id = isi.account();
-
         if executor.context().curr_block.is_genesis()
             || is_account_owner(account_id, &executor.context().authority, executor.host())
             || (CanReplaceAccountController {
@@ -3609,17 +3328,14 @@ pub mod account {
         {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't set another account recovery policy");
     }
-
     /// Clears an account recovery policy when the caller owns the account or has replacement rights.
     pub fn visit_clear_account_recovery_policy<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &ClearAccountRecoveryPolicy,
     ) {
         let account_id = isi.account();
-
         if executor.context().curr_block.is_genesis()
             || is_account_owner(account_id, &executor.context().authority, executor.host())
             || (CanReplaceAccountController {
@@ -3629,10 +3345,8 @@ pub mod account {
         {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't clear another account recovery policy");
     }
-
     /// Delegates proposal authorisation to the core recovery state machine.
     pub fn visit_propose_account_recovery<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3640,7 +3354,6 @@ pub mod account {
     ) {
         execute!(executor, isi);
     }
-
     /// Delegates approval authorisation to the core recovery state machine.
     pub fn visit_approve_account_recovery<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3648,7 +3361,6 @@ pub mod account {
     ) {
         execute!(executor, isi);
     }
-
     /// Delegates cancellation authorisation to the core recovery state machine.
     pub fn visit_cancel_account_recovery<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3656,7 +3368,6 @@ pub mod account {
     ) {
         execute!(executor, isi);
     }
-
     /// Delegates finalization authorisation to the core recovery state machine.
     pub fn visit_finalize_account_recovery<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3664,7 +3375,6 @@ pub mod account {
     ) {
         execute!(executor, isi);
     }
-
     pub(crate) fn is_permission_account_associated(
         permission: &Permission,
         account_id: &AccountId,
@@ -3770,20 +3480,17 @@ pub mod account {
         }
     }
 }
-
 /// Permission-checked visitors for asset definition instructions.
 pub mod asset_definition {
     use iroha_executor_data_model::permission::asset_definition::{
         CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
     };
     use iroha_smart_contract::data_model::asset::AssetDefinitionId;
-
     use super::*;
     use crate::permission::{
         account::is_account_owner, asset_definition::is_asset_definition_owner,
         domain::is_domain_owner, revoke_permissions,
     };
-
     /// Registers an asset definition.
     pub fn visit_register_asset_definition<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3805,14 +3512,12 @@ pub mod asset_definition {
             "Only the owning-domain owner may register a domain-owned asset definition"
         );
     }
-
     /// Unregisters an asset definition after confirming ownership or revoke permission.
     pub fn visit_unregister_asset_definition<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Unregister<AssetDefinition>,
     ) {
         let asset_definition_id = isi.object();
-
         if executor.context().curr_block.is_genesis()
             || match is_asset_definition_owner(
                 asset_definition_id,
@@ -3836,7 +3541,6 @@ pub mod asset_definition {
             if let Err(err) = err {
                 deny!(executor, err);
             }
-
             execute!(executor, isi);
         }
         deny!(
@@ -3844,34 +3548,29 @@ pub mod asset_definition {
             "Can't unregister asset definition owned by another account"
         );
     }
-
     /// Transfers an asset definition when the caller owns the source account or definition.
     pub fn visit_transfer_asset_definition<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Transfer<Account, AssetDefinitionId, Account>,
     ) {
         let source_id = isi.source();
-
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
         if is_account_owner(source_id, &executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Can't transfer asset definition of another account"
         );
     }
-
     /// Sets metadata on an asset definition provided the caller is authorised.
     pub fn visit_set_asset_definition_key_value<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &SetKeyValue<AssetDefinition>,
     ) {
         let asset_definition_id = isi.object();
-
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
@@ -3892,20 +3591,17 @@ pub mod asset_definition {
         {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Can't set value to the asset definition metadata created by another account"
         );
     }
-
     /// Removes metadata from an asset definition when the caller holds modify rights.
     pub fn visit_remove_asset_definition_key_value<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &RemoveKeyValue<AssetDefinition>,
     ) {
         let asset_definition_id = isi.object();
-
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
@@ -3926,13 +3622,11 @@ pub mod asset_definition {
         {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Can't remove value from the asset definition metadata created by another account"
         );
     }
-
     /// Enforces the asset-owner half of an asset-definition alias update.
     ///
     /// Core independently requires the matching
@@ -3959,7 +3653,6 @@ pub mod asset_definition {
             "Only the asset-definition owner may change its alias"
         );
     }
-
     #[expect(
         clippy::too_many_lines,
         reason = "keeping the exhaustive permission association matrix in one match makes this security boundary auditable"
@@ -4089,7 +3782,6 @@ pub mod asset_definition {
         }
     }
 }
-
 /// Permission-checked visitors for asset operations.
 pub mod asset {
     use iroha_executor_data_model::permission::asset::{
@@ -4102,10 +3794,8 @@ pub mod asset {
         BuiltInInstruction, RemoveAssetKeyValue, SetAssetKeyValue,
     };
     use norito::NoritoSerialize;
-
     use super::*;
     use crate::permission::{asset::is_asset_owner, asset_definition::is_asset_definition_owner};
-
     fn target_account_scope(
         executor: &(impl Execute + Visit + ?Sized),
         account_id: &AccountId,
@@ -4141,7 +3831,6 @@ pub mod asset {
             "transfer-control target account `{account_id}` does not exist"
         ))
     }
-
     /// Sets account transfer availability when genesis or the asset-definition owner invokes it.
     pub fn visit_set_asset_transfer_availability<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -4159,7 +3848,6 @@ pub mod asset {
             Ok(true) => execute!(executor, isi),
             Ok(false) => {}
         }
-
         let permission = CanSetAssetTransferAvailability {
             account: isi.account_id().clone(),
             asset_definition: isi.asset_definition_id().clone(),
@@ -4172,7 +3860,6 @@ pub mod asset {
             "transfer availability requires an exact account-and-asset permission"
         );
     }
-
     /// Sets account transfer limits when genesis or the asset-definition owner invokes it.
     pub fn visit_set_asset_transfer_control<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -4190,14 +3877,12 @@ pub mod asset {
             Ok(true) => execute!(executor, isi),
             Ok(false) => {}
         }
-
         if isi.limits().len() != 1 || isi.limits()[0].window != AssetTransferControlWindow::Day {
             deny!(
                 executor,
                 "delegated daily-limit permission accepts exactly one DAY limit"
             );
         }
-
         let (account_domain, account_dataspace) =
             match target_account_scope(executor, isi.account_id()) {
                 Ok(scope) => scope,
@@ -4216,7 +3901,6 @@ pub mod asset {
             "daily limit requires an asset- and account-domain-scoped permission"
         );
     }
-
     /// Sets a native holding limit when invoked by genesis, the asset-definition
     /// owner, or an explicitly provisioned exact account-and-asset authority.
     pub fn visit_set_asset_holding_limit<V: Execute + Visit + ?Sized>(
@@ -4235,7 +3919,6 @@ pub mod asset {
             Ok(true) => execute!(executor, isi),
             Ok(false) => {}
         }
-
         let permission = CanSetAssetHoldingLimit {
             account: isi.account_id().clone(),
             asset_definition: isi.asset_definition_id().clone(),
@@ -4248,7 +3931,6 @@ pub mod asset {
             "holding limit requires an exact account-and-asset permission"
         );
     }
-
     fn execute_mint_asset<V>(executor: &mut V, isi: &Mint<Quantity, Asset>)
     where
         V: Execute + Visit + ?Sized,
@@ -4282,13 +3964,11 @@ pub mod asset {
         if can_mint_to_account_token.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Can't mint assets with definitions registered by other accounts"
         );
     }
-
     /// Mints an asset quantity when the caller owns the definition or has explicit permission.
     pub fn visit_mint_asset_quantity<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -4296,7 +3976,6 @@ pub mod asset {
     ) {
         execute_mint_asset(executor, isi);
     }
-
     fn execute_burn_asset<V>(executor: &mut V, isi: &Burn<Quantity, Asset>)
     where
         V: Execute + Visit + ?Sized,
@@ -4332,10 +4011,8 @@ pub mod asset {
         if can_burn_user_asset_token.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't burn assets from another account");
     }
-
     /// Burns an asset quantity if the caller controls the asset or holds burn permission.
     pub fn visit_burn_asset_quantity<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -4343,14 +4020,12 @@ pub mod asset {
     ) {
         execute_burn_asset(executor, isi);
     }
-
     /// Placeholder visitor for asset metadata insertion.
     pub fn visit_set_asset_key_value<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &SetAssetKeyValue,
     ) {
         let asset_id = isi.asset();
-
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
@@ -4378,20 +4053,17 @@ pub mod asset {
         if asset_token.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Can't set metadata for an asset without ownership or explicit permission"
         );
     }
-
     /// Modify asset metadata by removing a key if ownership or grants allow it.
     pub fn visit_remove_asset_key_value<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &RemoveAssetKeyValue,
     ) {
         let asset_id = isi.asset();
-
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
@@ -4419,13 +4091,11 @@ pub mod asset {
         if asset_token.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Can't remove metadata for an asset without ownership or explicit permission"
         );
     }
-
     /// Transfers an asset quantity after verifying ownership or transfer permission.
     pub fn visit_transfer_asset_quantity<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -4453,16 +4123,12 @@ pub mod asset {
         {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't transfer assets of another account");
     }
-
     #[cfg(test)]
     mod tests {
         use core::num::NonZeroU64;
-
         use iroha_crypto::{Algorithm, KeyPair};
-
         use super::*;
         use crate::{
             Execute, Iroha,
@@ -4489,25 +4155,21 @@ pub mod asset {
             },
             prelude::{Context, Visit},
         };
-
         fn fixture_key_pair(seed: u8) -> KeyPair {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                 .expect("fixture seed must derive a valid keypair")
         }
-
         fn fixture_key_pair_from_height(height: u64) -> KeyPair {
             let mut seed = vec![0; 32];
             seed[..core::mem::size_of::<u64>()].copy_from_slice(&height.to_le_bytes());
             KeyPair::try_from_seed(seed, Algorithm::Ed25519)
                 .expect("fixture block height must derive a valid keypair")
         }
-
         struct StubExecutor {
             host: Iroha,
             context: Context,
             verdict: ExecResult,
         }
-
         impl StubExecutor {
             fn new(height: u64) -> (Self, AssetId) {
                 let domain: DomainId =
@@ -4541,31 +4203,24 @@ pub mod asset {
                 )
             }
         }
-
         impl Execute for StubExecutor {
             fn host(&self) -> &Iroha {
                 &self.host
             }
-
             fn context(&self) -> &Context {
                 &self.context
             }
-
             fn context_mut(&mut self) -> &mut Context {
                 &mut self.context
             }
-
             fn verdict(&self) -> &ExecResult {
                 &self.verdict
             }
-
             fn deny(&mut self, reason: ValidationFail) {
                 self.verdict = Err(reason);
             }
         }
-
         impl Visit for StubExecutor {}
-
         #[test]
         fn fixture_key_pair_uses_checked_seed_derivation() {
             assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
@@ -4578,7 +4233,6 @@ pub mod asset {
                 "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
             );
         }
-
         #[test]
         fn set_asset_key_value_genesis_returns_ok() {
             let (mut executor, asset) = StubExecutor::new(1);
@@ -4587,12 +4241,9 @@ pub mod asset {
                 "tag".parse().expect("valid name"),
                 Json::new("value"),
             );
-
             visit_set_asset_key_value(&mut executor, &instruction);
-
             assert!(executor.verdict().is_ok());
         }
-
         #[test]
         fn set_asset_key_value_non_genesis_owner_allows() {
             let (mut executor, asset) = StubExecutor::new(2);
@@ -4601,15 +4252,12 @@ pub mod asset {
                 "tag".parse().expect("valid name"),
                 Json::new("value"),
             );
-
             visit_set_asset_key_value(&mut executor, &instruction);
-
             assert!(
                 executor.verdict().is_ok(),
                 "asset owner should be able to set metadata outside genesis"
             );
         }
-
         #[test]
         fn set_asset_key_value_non_owner_denied() {
             let (mut executor, asset) = StubExecutor::new(2);
@@ -4621,9 +4269,7 @@ pub mod asset {
                 "tag".parse().expect("valid name"),
                 Json::new("value"),
             );
-
             visit_set_asset_key_value(&mut executor, &instruction);
-
             assert!(
                 matches!(
                     executor.verdict(),
@@ -4633,7 +4279,6 @@ pub mod asset {
                 executor.verdict()
             );
         }
-
         #[test]
         fn visit_instruction_dispatches_register_peer_with_pop() {
             let (mut executor, _) = StubExecutor::new(1);
@@ -4641,15 +4286,12 @@ pub mod asset {
             let peer_id = PeerId::from(peer_keypair.public_key().clone());
             let instruction = RegisterPeerWithPop::new(peer_id, vec![1, 2, 3]);
             let instruction_box: InstructionBox = instruction.into();
-
             visit_instruction(&mut executor, &instruction_box);
-
             assert!(
                 executor.verdict().is_ok(),
                 "register peer with pop should succeed during genesis"
             );
         }
-
         #[test]
         fn visit_instruction_dispatches_register_public_lane_validator() {
             let (mut executor, asset) = StubExecutor::new(1);
@@ -4663,15 +4305,12 @@ pub mod asset {
                 Metadata::default(),
             );
             let instruction_box: InstructionBox = instruction.into();
-
             visit_instruction(&mut executor, &instruction_box);
-
             assert!(
                 executor.verdict().is_ok(),
                 "register public-lane validator should succeed during genesis"
             );
         }
-
         #[test]
         fn visit_instruction_dispatches_register_citizen() {
             let (mut executor, _) = StubExecutor::new(2);
@@ -4680,15 +4319,12 @@ pub mod asset {
                 amount: Quantity::zero(),
             };
             let instruction_box: InstructionBox = instruction.into();
-
             visit_instruction(&mut executor, &instruction_box);
-
             assert!(
                 executor.verdict().is_ok(),
                 "citizen self-registration must reach Core for owner and bond validation"
             );
         }
-
         #[test]
         fn visit_instruction_dispatches_record_bridge_receipt() {
             let (mut executor, _) = StubExecutor::new(1);
@@ -4704,15 +4340,12 @@ pub mod asset {
             };
             let instruction = RecordBridgeReceipt::new(receipt);
             let instruction_box: InstructionBox = instruction.into();
-
             visit_instruction(&mut executor, &instruction_box);
-
             assert!(
                 executor.verdict().is_ok(),
                 "record bridge receipt should succeed during genesis"
             );
         }
-
         #[test]
         fn visit_instruction_dispatches_repo_instruction_box() {
             let (mut executor, _) = StubExecutor::new(1);
@@ -4744,29 +4377,23 @@ pub mod asset {
                 RepoGovernance::with_defaults(0, 0),
             );
             let instruction_box: InstructionBox = RepoInstructionBox::from(repo_instruction).into();
-
             visit_instruction(&mut executor, &instruction_box);
-
             assert!(
                 executor.verdict().is_ok(),
                 "repo instruction box should dispatch through executor"
             );
         }
-
         #[test]
         fn remove_asset_key_value_non_genesis_owner_allows() {
             let (mut executor, asset) = StubExecutor::new(2);
             let instruction =
                 RemoveAssetKeyValue::new(asset.clone(), "tag".parse().expect("valid name"));
-
             visit_remove_asset_key_value(&mut executor, &instruction);
-
             assert!(
                 executor.verdict().is_ok(),
                 "asset owner should be able to remove metadata outside genesis"
             );
         }
-
         #[test]
         fn remove_asset_key_value_non_owner_denied() {
             let (mut executor, asset) = StubExecutor::new(2);
@@ -4775,9 +4402,7 @@ pub mod asset {
             executor.context_mut().authority = intruder;
             let instruction =
                 RemoveAssetKeyValue::new(asset.clone(), "tag".parse().expect("valid name"));
-
             visit_remove_asset_key_value(&mut executor, &instruction);
-
             assert!(
                 matches!(
                     executor.verdict(),
@@ -4787,21 +4412,17 @@ pub mod asset {
                 executor.verdict()
             );
         }
-
         #[test]
         fn transfer_asset_quantity_source_owner_allows() {
             let (mut executor, asset) = StubExecutor::new(2);
             let destination = AccountId::new(fixture_key_pair(11).public_key().clone());
             let instruction = Transfer::asset_quantity(asset, Quantity::one(), destination);
-
             visit_transfer_asset_quantity(&mut executor, &instruction);
-
             assert!(
                 executor.verdict().is_ok(),
                 "the source account owner must be allowed to transfer"
             );
         }
-
         #[test]
         fn transfer_asset_quantity_non_owner_without_exact_permission_is_denied() {
             let (mut executor, asset) = StubExecutor::new(2);
@@ -4809,9 +4430,7 @@ pub mod asset {
                 AccountId::new(fixture_key_pair(12).public_key().clone());
             let destination = AccountId::new(fixture_key_pair(13).public_key().clone());
             let instruction = Transfer::asset_quantity(asset, Quantity::one(), destination);
-
             visit_transfer_asset_quantity(&mut executor, &instruction);
-
             assert!(
                 matches!(
                     executor.verdict(),
@@ -4822,14 +4441,12 @@ pub mod asset {
         }
     }
 }
-
 /// Permission-checked visitors for non-fungible asset instructions.
 pub mod nft {
     use iroha_executor_data_model::permission::nft::{
         CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft,
     };
     use norito::NoritoSerialize;
-
     use super::*;
     use crate::{
         data_model::isi::BuiltInInstruction,
@@ -4839,11 +4456,9 @@ pub mod nft {
             revoke_permissions,
         },
     };
-
     /// Registers an NFT when the caller owns the domain or has the registration permission.
     pub fn visit_register_nft<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &Register<Nft>) {
         let domain_id = isi.object().id().domain();
-
         match crate::permission::domain::is_domain_owner(
             domain_id,
             &executor.context().authority,
@@ -4853,7 +4468,6 @@ pub mod nft {
             Ok(true) => execute!(executor, isi),
             Ok(false) => {}
         }
-
         let can_register_nft_in_domain_token = CanRegisterNft {
             domain: domain_id.clone(),
         };
@@ -4862,20 +4476,17 @@ pub mod nft {
         {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Can't register NFT in a domain owned by another account"
         );
     }
-
     /// Unregisters an NFT once the caller proves ownership or holds the revoke token.
     pub fn visit_unregister_nft<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Unregister<Nft>,
     ) {
         let nft_id = isi.object();
-
         if executor.context().curr_block.is_genesis()
             || match is_nft_full_owner(nft_id, &executor.context().authority, executor.host()) {
                 Err(err) => deny!(executor, err),
@@ -4894,7 +4505,6 @@ pub mod nft {
             if let Err(err) = err {
                 deny!(executor, err);
             }
-
             execute!(executor, isi);
         }
         deny!(
@@ -4902,7 +4512,6 @@ pub mod nft {
             "Can't unregister NFT in a domain owned by another account"
         );
     }
-
     fn is_permission_nft_associated(permission: &Permission, nft_id: &NftId) -> bool {
         use AnyPermission::*;
         let Ok(permission) = AnyPermission::try_from(permission) else {
@@ -4915,7 +4524,6 @@ pub mod nft {
             _ => false,
         }
     }
-
     /// Transfers an NFT after verifying the caller's ownership or transfer permission.
     pub fn visit_transfer_nft<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -4923,7 +4531,6 @@ pub mod nft {
     ) {
         let source_id = isi.source();
         let nft_id = isi.object();
-
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
@@ -4935,17 +4542,14 @@ pub mod nft {
             Ok(true) => execute!(executor, isi),
             Ok(false) => {}
         }
-
         let can_transfer_nft_token = CanTransferNft {
             nft: nft_id.clone(),
         };
         if can_transfer_nft_token.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't transfer NFT of another account");
     }
-
     /// Sets NFT metadata when the caller is authorised to mutate it.
     pub fn visit_set_nft_key_value<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -4953,7 +4557,6 @@ pub mod nft {
     ) {
         execute_modify_nft_key_value(executor, isi.object(), isi);
     }
-
     /// Removes NFT metadata once appropriate permissions are confirmed.
     pub fn visit_remove_nft_key_value<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -4961,7 +4564,6 @@ pub mod nft {
     ) {
         execute_modify_nft_key_value(executor, isi.object(), isi);
     }
-
     fn execute_modify_nft_key_value<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         nft_id: &NftId,
@@ -4979,29 +4581,23 @@ pub mod nft {
             Ok(true) => execute!(executor, isi),
             Ok(false) => {}
         }
-
         let can_modify_nft_token = CanModifyNftMetadata {
             nft: nft_id.clone(),
         };
         if can_modify_nft_token.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Can't modify NFT from domain owned by another account"
         );
     }
 }
-
 /// Permission-checked visitors for network parameter updates.
 pub mod parameter {
     use iroha_executor_data_model::permission::parameter::CanSetParameters;
-
     use super::*;
-
     const SCCP_REGISTRY_PARAMETER_ID: &str = "sccp_registry_v1";
-
     fn updates_sccp_governance(isi: &SetParameter) -> bool {
         matches!(
             isi.inner(),
@@ -5009,7 +4605,6 @@ pub mod parameter {
                 if parameter.id().name().as_ref() == SCCP_REGISTRY_PARAMETER_ID
         )
     }
-
     fn updates_validation_fee_governance(isi: &SetParameter) -> bool {
         matches!(
             isi.inner(),
@@ -5019,7 +4614,6 @@ pub mod parameter {
                 )
         )
     }
-
     /// Applies a network parameter change when genesis or a parameter manager invokes it.
     pub fn visit_set_parameter<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &SetParameter) {
         if updates_sccp_governance(isi) {
@@ -5040,27 +4634,22 @@ pub mod parameter {
         if CanSetParameters.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Can't set executor configuration parameters without permission"
         );
     }
 }
-
 /// Permission-checked visitors for role registration and mutation.
 pub mod role {
     use iroha_executor_data_model::permission::role::CanManageRoles;
     use iroha_smart_contract::{Iroha, data_model::role::Role};
-
     use super::*;
-
     #[derive(Clone, Copy)]
     pub(super) enum RoleDelegationOperation {
         Grant,
         Revoke,
     }
-
     pub(super) fn validate_role_delegation_permissions(
         role: &Role,
         authority: &AccountId,
@@ -5093,15 +4682,12 @@ pub mod role {
         }
         Ok(())
     }
-
     macro_rules! impl_execute_grant_revoke_account_role {
         ($executor:ident, $isi:ident, $operation:ident) => {
             let role_id = $isi.object();
-
             if $executor.context().curr_block.is_genesis() {
                 execute!($executor, $isi)
             }
-
             if !find_account_roles($executor.context().authority.clone(), $executor.host())
                 .any(|authority_role_id| authority_role_id == *role_id)
             {
@@ -5110,7 +4696,6 @@ pub mod role {
                     "Can't grant or revoke a role the authority does not hold"
                 );
             }
-
             let Some(role) = find_role(role_id, $executor.host()) else {
                 deny!($executor, "Can't grant or revoke an unknown role");
             };
@@ -5123,16 +4708,13 @@ pub mod role {
             ) {
                 deny!($executor, error);
             }
-
             execute!($executor, $isi)
         };
     }
-
     macro_rules! impl_execute_grant_revoke_role_permission {
         ($executor:ident, $isi:ident, $method:ident, $isi_type:ty) => {
             let role_id = $isi.destination().clone();
             let permission = $isi.object();
-
             if let Ok(any_permission) = AnyPermission::try_from(permission) {
                 if !$executor.context().curr_block.is_genesis() {
                     if !find_account_roles($executor.context().authority.clone(), $executor.host())
@@ -5140,7 +4722,6 @@ pub mod role {
                     {
                         deny!($executor, "Can't modify role");
                     }
-
                     if let Err(error) = crate::permission::ValidateGrantRevoke::$method(
                         &any_permission,
                         &$executor.context().authority,
@@ -5150,37 +4731,30 @@ pub mod role {
                         deny!($executor, error);
                     }
                 }
-
                 let isi = &<$isi_type>::role_permission(any_permission, role_id);
                 execute!($executor, isi);
             }
-
             deny!(
                 $executor,
                 ValidationFail::NotPermitted(format!("{permission:?}: Unknown permission"))
             );
         };
     }
-
     fn find_account_roles(account_id: AccountId, host: &Iroha) -> impl Iterator<Item = RoleId> {
         use iroha_smart_contract::DebugExpectExt as _;
-
         host.query(FindRolesByAccountId::new(account_id))
             .execute()
             .dbg_expect("INTERNAL BUG: `FindRolesByAccountId` must never fail")
             .map(|role| role.dbg_expect("Failed to get role from cursor"))
     }
-
     fn find_role(role_id: &RoleId, host: &Iroha) -> Option<Role> {
         use iroha_smart_contract::DebugExpectExt as _;
-
         host.query(FindRoles)
             .execute()
             .dbg_expect("INTERNAL BUG: `FindAllRoles` must never fail")
             .map(|role| role.dbg_expect("Failed to get role from cursor"))
             .find(|role| role.id() == role_id)
     }
-
     pub(super) fn validated_role_registration_permissions(
         role: &Role,
         authority: &AccountId,
@@ -5204,7 +4778,6 @@ pub mod role {
         }
         Ok(permissions)
     }
-
     /// Registers a role and seeds its permissions when the caller controls role governance.
     pub fn visit_register_role<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -5213,14 +4786,12 @@ pub mod role {
         let role = isi.object();
         let grant_role = &Grant::account_role(role.id().clone(), role.grant_to().clone());
         let mut new_role = Role::new(role.id().clone(), role.grant_to().clone());
-
         if is_reserved_multisig_role_id(role.id()) {
             deny!(
                 executor,
                 "reserved multisig role names may not be registered"
             );
         }
-
         let permissions = match validated_role_registration_permissions(
             role.inner(),
             &executor.context().authority,
@@ -5233,7 +4804,6 @@ pub mod role {
         for any_permission in permissions {
             new_role = new_role.add_permission(any_permission);
         }
-
         if executor.context().curr_block.is_genesis()
             || CanManageRoles.is_owned_by(&executor.context().authority, executor.host())
         {
@@ -5241,13 +4811,10 @@ pub mod role {
             if let Err(err) = executor.host().submit(isi) {
                 deny!(executor, err);
             }
-
             execute!(executor, grant_role);
         }
-
         deny!(executor, "Can't register role");
     }
-
     /// Unregisters a role if genesis or a role manager invokes the instruction.
     pub fn visit_unregister_role<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -5259,10 +4826,8 @@ pub mod role {
         if CanManageRoles.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't unregister role");
     }
-
     /// Grants a role to an account when the caller is authorised to manage roles.
     pub fn visit_grant_account_role<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -5270,7 +4835,6 @@ pub mod role {
     ) {
         impl_execute_grant_revoke_account_role!(executor, isi, Grant);
     }
-
     /// Revokes a role from an account after verifying role management permissions.
     pub fn visit_revoke_account_role<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -5278,7 +4842,6 @@ pub mod role {
     ) {
         impl_execute_grant_revoke_account_role!(executor, isi, Revoke);
     }
-
     /// Grants a permission to a role after ensuring the caller may mutate role permissions.
     pub fn visit_grant_role_permission<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -5286,7 +4849,6 @@ pub mod role {
     ) {
         impl_execute_grant_revoke_role_permission!(executor, isi, validate_grant, Grant<Permission, Role>);
     }
-
     /// Revokes a permission from a role once the caller passes the permission gate.
     pub fn visit_revoke_role_permission<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -5295,7 +4857,6 @@ pub mod role {
         impl_execute_grant_revoke_role_permission!(executor, isi, validate_revoke, Revoke<Permission, Role>);
     }
 }
-
 /// Permission-checked visitors for trigger lifecycle and metadata instructions.
 pub mod trigger {
     use iroha_executor_data_model::permission::trigger::{
@@ -5303,10 +4864,8 @@ pub mod trigger {
         CanUnregisterTrigger,
     };
     use iroha_smart_contract::data_model::trigger::Trigger;
-
     use super::*;
     use crate::permission::{revoke_permissions, trigger::is_trigger_owner};
-
     /// Registers a trigger when the caller is genesis, the trigger authority, or holds the grant token.
     pub fn visit_register_trigger<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -5314,7 +4873,6 @@ pub mod trigger {
     ) {
         let trigger = isi.object();
         let is_genesis = executor.context().curr_block.is_genesis();
-
         if is_genesis || trigger.action().authority() == &executor.context().authority || {
             let can_register_user_trigger_token = CanRegisterTrigger {
                 authority: isi.object().action().authority().clone(),
@@ -5328,14 +4886,12 @@ pub mod trigger {
         }
         deny!(executor, "Can't register trigger owned by another account");
     }
-
     /// Unregisters a trigger once the caller is authorised and revokes related permissions.
     pub fn visit_unregister_trigger<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Unregister<Trigger>,
     ) {
         let trigger_id = isi.object();
-
         if executor.context().curr_block.is_genesis()
             || match is_trigger_owner(trigger_id, &executor.context().authority, executor.host()) {
                 Err(err) => deny!(executor, err),
@@ -5355,7 +4911,6 @@ pub mod trigger {
             if let Err(err) = err {
                 deny!(executor, err);
             }
-
             execute!(executor, isi);
         }
         deny!(
@@ -5363,14 +4918,12 @@ pub mod trigger {
             "Can't unregister trigger owned by another account"
         );
     }
-
     /// Increments the trigger repetition counter when the caller controls the trigger.
     pub fn visit_mint_trigger_repetitions<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Mint<u32, Trigger>,
     ) {
         let trigger_id = isi.destination();
-
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
@@ -5385,20 +4938,17 @@ pub mod trigger {
         if can_mint_user_trigger_token.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Can't mint execution count for trigger owned by another account"
         );
     }
-
     /// Decrements the trigger repetition counter for authorised callers.
     pub fn visit_burn_trigger_repetitions<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Burn<u32, Trigger>,
     ) {
         let trigger_id = isi.destination();
-
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
@@ -5413,20 +4963,17 @@ pub mod trigger {
         if can_mint_user_trigger_token.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Can't burn execution count for trigger owned by another account"
         );
     }
-
     /// Executes a trigger when the caller is the owner or holds the execute permission.
     pub fn visit_execute_trigger<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &ExecuteTrigger,
     ) {
         let trigger_id = isi.trigger();
-
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
@@ -5442,17 +4989,14 @@ pub mod trigger {
         if can_execute_trigger_token.is_owned_by(authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't execute trigger owned by another account");
     }
-
     /// Sets metadata for a trigger when the caller may mutate its key-value store.
     pub fn visit_set_trigger_key_value<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &SetKeyValue<Trigger>,
     ) {
         let trigger_id = isi.object();
-
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
@@ -5469,13 +5013,11 @@ pub mod trigger {
         {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Can't set value to the metadata of another trigger"
         );
     }
-
     /// Removes trigger metadata after verifying the caller may modify it.
     pub fn visit_remove_trigger_key_value<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -5484,7 +5026,6 @@ pub mod trigger {
         let trigger_id = isi.object();
         let isi = RemoveKeyValueBox::from(isi.clone());
         let isi = &isi;
-
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
@@ -5501,13 +5042,11 @@ pub mod trigger {
         {
             execute!(executor, isi);
         }
-
         deny!(
             executor,
             "Can't remove value from the metadata of another trigger"
         );
     }
-
     fn is_permission_trigger_associated(permission: &Permission, trigger_id: &TriggerId) -> bool {
         let Ok(permission) = AnyPermission::try_from(permission) else {
             return false;
@@ -5597,11 +5136,9 @@ pub mod trigger {
             | AnyPermission::CanEnrollFeeSponsorProgram(_) => false,
         }
     }
-
     #[cfg(test)]
     mod tests {
         use core::str::FromStr as _;
-
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_executor_data_model::permission::{
             account::{
@@ -5632,7 +5169,6 @@ pub mod trigger {
                 CanIngestSoranetPrivacy, CanIssueSoranetVpnQuote, CanManageSoranetVpnQuoteIssuers,
             },
         };
-
         use super::*;
         use crate::data_model::{
             account::AccountId,
@@ -5640,17 +5176,14 @@ pub mod trigger {
             domain::DomainId,
             nexus::FeeSponsorProgramId,
         };
-
         fn fixture_key_pair(seed: u8) -> KeyPair {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                 .expect("fixture seed must derive a valid keypair")
         }
-
         fn sample_account_id(seed: u8, _domain_id: &DomainId) -> AccountId {
             let keypair = fixture_key_pair(seed);
             AccountId::new(keypair.public_key().clone())
         }
-
         #[test]
         fn fixture_key_pair_uses_checked_seed_derivation() {
             assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
@@ -5659,7 +5192,6 @@ pub mod trigger {
                 "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
             );
         }
-
         fn sora_permissions() -> Vec<AnyPermission> {
             vec![
                 AnyPermission::CanBindSorafsAlias(CanBindSorafsAlias),
@@ -5682,7 +5214,6 @@ pub mod trigger {
                 AnyPermission::CanManageSccpGovernance(CanManageSccpGovernance),
             ]
         }
-
         #[test]
         fn asset_metadata_permissions_not_trigger_associated() {
             let trigger_id =
@@ -5695,7 +5226,6 @@ pub mod trigger {
             );
             let account_id = sample_account_id(0x11, &domain_id);
             let asset_id = AssetId::new(asset_definition_id.clone(), account_id);
-
             let permission = Permission::from(AnyPermission::CanModifyAssetMetadataWithDefinition(
                 CanModifyAssetMetadataWithDefinition {
                     asset_definition: asset_definition_id,
@@ -5705,7 +5235,6 @@ pub mod trigger {
                 !is_permission_trigger_associated(&permission, &trigger_id),
                 "metadata-with-definition permission must not bind to triggers"
             );
-
             let permission = Permission::from(AnyPermission::CanModifyAssetMetadata(
                 CanModifyAssetMetadata { asset: asset_id },
             ));
@@ -5714,12 +5243,10 @@ pub mod trigger {
                 "asset-metadata permission must not bind to triggers"
             );
         }
-
         #[test]
         fn sora_permissions_not_trigger_associated() {
             let trigger_id =
                 TriggerId::from_str("metadata_cleanup").expect("trigger id must be valid");
-
             for permission in sora_permissions() {
                 let permission = Permission::from(permission);
                 assert!(
@@ -5728,7 +5255,6 @@ pub mod trigger {
                 );
             }
         }
-
         #[test]
         fn default_executor_forwards_the_complete_vpn_lifecycle() {
             let source = include_str!("mod.rs");
@@ -5740,7 +5266,6 @@ pub mod trigger {
                 .find("if let Some(isi) = any.downcast_ref::<SetAssetKeyValue>()")
                 .expect("VPN lifecycle dispatch terminator");
             let dispatch = &tail[..end];
-
             for instruction in [
                 "OpenVpnLeaseEscrow",
                 "SettleVpnLease",
@@ -5752,7 +5277,6 @@ pub mod trigger {
                 );
             }
         }
-
         #[test]
         fn sora_permissions_not_domain_account_or_definition_associated() {
             let domain_id =
@@ -5762,7 +5286,6 @@ pub mod trigger {
                 DomainId::try_new("test", "universal").unwrap(),
                 "token".parse().unwrap(),
             );
-
             for permission in sora_permissions() {
                 let permission = Permission::from(permission);
                 assert!(
@@ -5782,7 +5305,6 @@ pub mod trigger {
                 );
             }
         }
-
         #[test]
         fn fee_sponsor_permission_associations() {
             let domain_id =
@@ -5797,7 +5319,6 @@ pub mod trigger {
             );
             let trigger_id =
                 TriggerId::from_str("fee_sponsor_trigger").expect("trigger id must be valid");
-
             let program_id = FeeSponsorProgramId::new(
                 sponsor.clone(),
                 "default"
@@ -5814,7 +5335,6 @@ pub mod trigger {
                     CanEnrollFeeSponsorProgram { program_id },
                 )),
             ];
-
             for permission in permissions {
                 assert!(!domain::is_permission_domain_associated(
                     &permission,
@@ -5843,14 +5363,12 @@ pub mod trigger {
                 assert!(!is_permission_trigger_associated(&permission, &trigger_id));
             }
         }
-
         #[test]
         fn account_domain_manifest_and_program_associations_remain_independent() {
             let hbl_domain = DomainId::try_new("hbl", "sbp").expect("HBL domain must be valid");
             let ubl_domain = DomainId::try_new("ubl", "sbp").expect("UBL domain must be valid");
             let sponsor = sample_account_id(0x31, &hbl_domain);
             let unrelated = sample_account_id(0x33, &ubl_domain);
-
             let publisher = Permission::from(
                 AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(
                     CanPublishSpaceDirectoryManifestForAccountDomain {
@@ -5869,7 +5387,6 @@ pub mod trigger {
                 &ubl_domain,
                 &[]
             ));
-
             let enrollment = Permission::from(AnyPermission::CanEnrollFeeSponsorProgram(
                 CanEnrollFeeSponsorProgram {
                     program_id: FeeSponsorProgramId::new(
@@ -5892,7 +5409,6 @@ pub mod trigger {
                 &unrelated
             ));
         }
-
         #[test]
         fn asset_permission_domain_association_uses_authoritative_ownership_set() {
             let domain_id = DomainId::try_new("issuer", "universal").expect("domain id");
@@ -5906,7 +5422,6 @@ pub mod trigger {
                     asset_definition: definition_id.clone(),
                 },
             ));
-
             assert!(domain::is_permission_domain_associated(
                 &permission,
                 &domain_id,
@@ -5918,14 +5433,12 @@ pub mod trigger {
                 &[],
             ));
         }
-
         #[test]
         fn account_alias_domain_permissions_match_qualified_domain() {
             let domain_id =
                 DomainId::try_new("test", "universal").expect("domain id must be valid");
             let other_domain =
                 DomainId::try_new("other", "universal").expect("domain id must be valid");
-
             let resolve_permission = Permission::from(AnyPermission::CanResolveAccountAlias(
                 CanResolveAccountAlias {
                     scope: AccountAliasPermissionScope::Domain(domain_id.clone()),
@@ -5947,7 +5460,6 @@ pub mod trigger {
                     scope: AssetDefinitionAliasPermissionScope::Domain(domain_id.clone()),
                 }),
             );
-
             assert!(
                 domain::is_permission_domain_associated(&resolve_permission, &domain_id, &[]),
                 "alias resolve permission should bind to the matching domain"
@@ -5991,11 +5503,9 @@ pub mod trigger {
         }
     }
 }
-
 #[cfg(test)]
 mod sorafs_permission_tests {
     use core::num::NonZeroU64;
-
     use super::*;
     use crate::{Iroha, prelude, tests::with_mock_permissions};
     use iroha_crypto::PublicKey;
@@ -6072,27 +5582,22 @@ mod sorafs_permission_tests {
     use iroha_executor_data_model::permission::{
         domain::CanRegisterDomain, parameter::CanSetParameters, sccp::CanManageSccpGovernance,
     };
-
     const AUTHORITY_PUBLIC_KEY: &str =
         "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
     const OWNER_PUBLIC_KEY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
-
     fn account_id_from_public_key_hex(hex_literal: &str) -> AccountId {
         let public_key: PublicKey = hex_literal
             .parse()
             .expect("test public key literal should parse");
         AccountId::new(public_key)
     }
-
     fn authority_account_id() -> AccountId {
         account_id_from_public_key_hex(AUTHORITY_PUBLIC_KEY)
     }
-
     fn owner_account_id() -> AccountId {
         account_id_from_public_key_hex(OWNER_PUBLIC_KEY)
     }
-
     fn authority_public_key_bytes() -> [u8; 32] {
         let authority = authority_account_id();
         let (_, bytes) = authority
@@ -6101,14 +5606,12 @@ mod sorafs_permission_tests {
             .expect("authority public key bytes");
         bytes.try_into().expect("Ed25519 public key length")
     }
-
     #[derive(Debug, iroha_executor_derive::Visit)]
     struct MockExecutor {
         host: Iroha,
         ctx: prelude::Context,
         verdict: crate::data_model::executor::Result<(), ValidationFail>,
     }
-
     impl MockExecutor {
         fn new(genesis: bool) -> Self {
             let height = if genesis { 1 } else { 2 };
@@ -6131,29 +5634,23 @@ mod sorafs_permission_tests {
             }
         }
     }
-
     impl Execute for MockExecutor {
         fn host(&self) -> &Iroha {
             &self.host
         }
-
         fn context(&self) -> &prelude::Context {
             &self.ctx
         }
-
         fn context_mut(&mut self) -> &mut prelude::Context {
             &mut self.ctx
         }
-
         fn verdict(&self) -> &crate::data_model::executor::Result<(), ValidationFail> {
             &self.verdict
         }
-
         fn deny(&mut self, reason: ValidationFail) {
             self.verdict = Err(reason);
         }
     }
-
     fn assert_denied_without_permission<T: Clone>(
         instruction: T,
         visit: impl Fn(&mut MockExecutor, &T),
@@ -6167,7 +5664,6 @@ mod sorafs_permission_tests {
             );
         });
     }
-
     fn assert_allowed_without_permission<T: Clone>(
         instruction: T,
         visit: impl Fn(&mut MockExecutor, &T),
@@ -6179,7 +5675,6 @@ mod sorafs_permission_tests {
             "expected instruction to be permitted without permission"
         );
     }
-
     fn assert_allowed_with_permission<T: Clone>(
         instruction: T,
         permission: PermissionObject,
@@ -6194,7 +5689,6 @@ mod sorafs_permission_tests {
             );
         });
     }
-
     fn assert_denied_with_permission<T: Clone>(
         instruction: T,
         permission: PermissionObject,
@@ -6209,15 +5703,12 @@ mod sorafs_permission_tests {
             );
         });
     }
-
     fn sample_provider_id() -> ProviderId {
         ProviderId::new([0xAB; 32])
     }
-
     fn sample_manifest_digest() -> ManifestDigest {
         ManifestDigest::new([0xCD; 32])
     }
-
     fn register_pin_manifest() -> RegisterPinManifest {
         RegisterPinManifest::new(
             include_bytes!("../../../../fixtures/sorafs_gateway/1.0.0/manifest_v1.to").to_vec(),
@@ -6225,15 +5716,12 @@ mod sorafs_permission_tests {
             None,
         )
     }
-
     fn approve_pin_manifest() -> ApprovePinManifest {
         ApprovePinManifest::new(sample_manifest_digest(), None, None)
     }
-
     fn retire_pin_manifest() -> RetirePinManifest {
         RetirePinManifest::new(sample_manifest_digest(), None)
     }
-
     fn bind_manifest_alias() -> BindManifestAlias {
         BindManifestAlias::new(
             sample_manifest_digest(),
@@ -6246,7 +5734,6 @@ mod sorafs_permission_tests {
             5,
         )
     }
-
     fn set_pop_issuer_policy() -> SetSorafsPopIssuerPolicy {
         SetSorafsPopIssuerPolicy::new(PopIssuerPolicyV1 {
             version: POP_ISSUER_POLICY_VERSION_V1,
@@ -6262,7 +5749,6 @@ mod sorafs_permission_tests {
             paused: false,
         })
     }
-
     fn register_capacity_declaration() -> RegisterCapacityDeclaration {
         RegisterCapacityDeclaration::new(CapacityDeclarationRecord::new(
             sample_provider_id(),
@@ -6274,7 +5760,6 @@ mod sorafs_permission_tests {
             Metadata::default(),
         ))
     }
-
     fn record_capacity_telemetry() -> RecordCapacityTelemetry {
         RecordCapacityTelemetry::new(
             CapacityTelemetryRecord::new(
@@ -6297,7 +5782,6 @@ mod sorafs_permission_tests {
             .with_nonce(0),
         )
     }
-
     fn register_capacity_dispute() -> RegisterCapacityDispute {
         RegisterCapacityDispute::new(CapacityDisputeRecord::new_pending(
             CapacityDisputeId::new([0x01; 32]),
@@ -6317,7 +5801,6 @@ mod sorafs_permission_tests {
             vec![0x04],
         ))
     }
-
     fn reputation_policy() -> ReputationJournalAuthorityPolicyV1 {
         let authority = authority_account_id();
         ReputationJournalAuthorityPolicyV1 {
@@ -6330,7 +5813,6 @@ mod sorafs_permission_tests {
             max_source_age_ms: 24 * 60 * 60 * 1_000,
         }
     }
-
     fn por_reputation_entry() -> ReputationJournalEntryV1 {
         let policy = reputation_policy();
         ReputationJournalEntryV1::try_new(
@@ -6359,7 +5841,6 @@ mod sorafs_permission_tests {
         )
         .expect("canonical PoR reputation fixture")
     }
-
     fn token_reputation_entry() -> ReputationJournalEntryV1 {
         let policy = reputation_policy();
         ReputationJournalEntryV1::try_new(
@@ -6382,7 +5863,6 @@ mod sorafs_permission_tests {
         )
         .expect("canonical reputation fixture")
     }
-
     fn resolve_capacity_dispute() -> ResolveSorafsCapacityDispute {
         ResolveSorafsCapacityDispute::new(
             CapacityDisputeId::new([0x01; 32]),
@@ -6394,11 +5874,9 @@ mod sorafs_permission_tests {
             Some("upheld".to_owned()),
         )
     }
-
     fn issue_replication_order() -> IssueReplicationOrder {
         IssueReplicationOrder::new(ReplicationOrderId::new([0x11; 32]), vec![0x22], 1, 2)
     }
-
     fn provider_ingest_completion_authority() -> ProviderIngestCompletionAuthorityV1 {
         ProviderIngestCompletionAuthorityV1::new(
             owner_account_id(),
@@ -6410,7 +5888,6 @@ mod sorafs_permission_tests {
             },
         )
     }
-
     fn complete_replication_order() -> CompleteReplicationOrder {
         CompleteReplicationOrder::new(
             ReplicationOrderId::new([0x11; 32]),
@@ -6424,7 +5901,6 @@ mod sorafs_permission_tests {
             },
         )
     }
-
     fn revise_replication_order_assignments() -> ReviseReplicationOrderAssignments {
         ReviseReplicationOrderAssignments::new(
             ReplicationOrderId::new([0x11; 32]),
@@ -6433,7 +5909,6 @@ mod sorafs_permission_tests {
             Vec::new(),
         )
     }
-
     fn set_provider_ingest_completion_authority() -> SetProviderIngestCompletionAuthority {
         SetProviderIngestCompletionAuthority::new(
             ProviderId::new([0x12; 32]),
@@ -6441,22 +5916,18 @@ mod sorafs_permission_tests {
             provider_ingest_completion_authority(),
         )
     }
-
     fn revoke_provider_ingest_completion_authority() -> RevokeProviderIngestCompletionAuthority {
         RevokeProviderIngestCompletionAuthority::new(
             ProviderId::new([0x12; 32]),
             provider_ingest_completion_authority(),
         )
     }
-
     fn expire_replication_order() -> ExpireReplicationOrder {
         ExpireReplicationOrder::new(ReplicationOrderId::new([0x11; 32]), 4)
     }
-
     fn set_pricing_schedule() -> SetPricingSchedule {
         SetPricingSchedule::new(PricingScheduleRecord::launch_default())
     }
-
     fn upsert_provider_credit() -> UpsertProviderCredit {
         UpsertProviderCredit::new(ProviderCreditRecord::new(
             sample_provider_id(),
@@ -6469,7 +5940,6 @@ mod sorafs_permission_tests {
             Metadata::default(),
         ))
     }
-
     fn set_moderation_policy() -> SetSorafsModerationPolicy {
         SetSorafsModerationPolicy::new(ModerationLedgerPolicyV1 {
             version: MODERATION_LEDGER_POLICY_VERSION_V1,
@@ -6485,7 +5955,6 @@ mod sorafs_permission_tests {
             unrevealed_commit_penalty_points: 20,
         })
     }
-
     fn moderation_appeal_intake() -> ModerationAppealIntakeV1 {
         let appellant = authority_account_id();
         ModerationAppealIntakeV1 {
@@ -6512,15 +5981,12 @@ mod sorafs_permission_tests {
             policy_digest: [0x15; 32],
         }
     }
-
     fn register_provider_owner() -> RegisterProviderOwner {
         RegisterProviderOwner::new(sample_provider_id(), owner_account_id())
     }
-
     fn unregister_provider_owner() -> UnregisterProviderOwner {
         UnregisterProviderOwner::new(sample_provider_id())
     }
-
     macro_rules! sorafs_permission_case {
         ($name:ident, $instruction:expr, $permission:expr, $visitor:path) => {
             #[test]
@@ -6535,7 +6001,6 @@ mod sorafs_permission_tests {
             }
         };
     }
-
     #[test]
     fn register_pin_manifest_is_public() {
         assert_allowed_without_permission(
@@ -6543,7 +6008,6 @@ mod sorafs_permission_tests {
             sorafs::visit_register_pin_manifest,
         );
     }
-
     #[test]
     fn approve_pin_manifest_relays_governed_envelopes_without_permission() {
         assert_allowed_without_permission(
@@ -6551,19 +6015,16 @@ mod sorafs_permission_tests {
             sorafs::visit_approve_pin_manifest,
         );
     }
-
     #[test]
     fn retire_pin_manifest_defers_exact_owner_check_to_core() {
         assert_allowed_without_permission(retire_pin_manifest(), sorafs::visit_retire_pin_manifest);
     }
-
     sorafs_permission_case!(
         bind_manifest_alias_requires_permission,
         bind_manifest_alias(),
         CanBindSorafsAlias,
         sorafs::visit_bind_manifest_alias
     );
-
     #[test]
     fn register_capacity_declaration_is_public() {
         assert_allowed_without_permission(
@@ -6571,7 +6032,6 @@ mod sorafs_permission_tests {
             sorafs::visit_register_capacity_declaration,
         );
     }
-
     #[test]
     fn record_capacity_telemetry_is_public() {
         assert_allowed_without_permission(
@@ -6579,70 +6039,60 @@ mod sorafs_permission_tests {
             sorafs::visit_record_capacity_telemetry,
         );
     }
-
     sorafs_permission_case!(
         record_capacity_dispute_requires_permission,
         register_capacity_dispute(),
         CanFileSorafsCapacityDispute,
         sorafs::visit_register_capacity_dispute
     );
-
     sorafs_permission_case!(
         resolve_capacity_dispute_requires_permission,
         resolve_capacity_dispute(),
         CanResolveSorafsCapacityDispute,
         sorafs::visit_resolve_capacity_dispute
     );
-
     sorafs_permission_case!(
         set_reputation_policy_requires_permission,
         SetSorafsReputationJournalAuthorityPolicy::new(reputation_policy()),
         CanManageSorafsReputationJournalPolicy,
         sorafs::visit_set_reputation_journal_authority_policy
     );
-
     sorafs_permission_case!(
         append_por_reputation_requires_permission,
         AppendSorafsPorReputationJournalEntry::new(por_reputation_entry()),
         CanRecordSorafsReputationJournal,
         sorafs::visit_append_por_reputation_journal_entry
     );
-
     sorafs_permission_case!(
         append_stream_token_reputation_requires_permission,
         AppendSorafsStreamTokenReputationJournalEntry::new(token_reputation_entry()),
         CanRecordSorafsReputationJournal,
         sorafs::visit_append_stream_token_reputation_journal_entry
     );
-
     sorafs_permission_case!(
         issue_replication_order_requires_permission,
         issue_replication_order(),
         CanIssueSorafsReplicationOrder,
         sorafs::visit_issue_replication_order
     );
-
     sorafs_permission_case!(
         complete_replication_order_requires_permission,
         complete_replication_order(),
         CanCompleteSorafsReplicationOrder,
         sorafs::visit_complete_replication_order
     );
-
     sorafs_permission_case!(
         revise_replication_order_assignments_requires_permission,
         revise_replication_order_assignments(),
         CanIssueSorafsReplicationOrder,
         sorafs::visit_revise_replication_order_assignments
     );
-
     sorafs_permission_case!(
         expire_replication_order_requires_permission,
         expire_replication_order(),
         CanIssueSorafsReplicationOrder,
         sorafs::visit_expire_replication_order
     );
-
     #[test]
     fn retired_direct_provider_owner_instructions_reach_core_for_uniform_rejection() {
         assert_allowed_without_permission(
@@ -6654,7 +6104,6 @@ mod sorafs_permission_tests {
             sorafs::visit_unregister_provider_owner,
         );
     }
-
     #[test]
     fn completion_authority_instructions_reach_core_owner_check() {
         assert_allowed_without_permission(
@@ -6666,28 +6115,24 @@ mod sorafs_permission_tests {
             sorafs::visit_revoke_provider_ingest_completion_authority,
         );
     }
-
     sorafs_permission_case!(
         set_pricing_schedule_requires_permission,
         set_pricing_schedule(),
         CanSetSorafsPricing,
         sorafs::visit_set_pricing_schedule
     );
-
     sorafs_permission_case!(
         upsert_provider_credit_requires_permission,
         upsert_provider_credit(),
         CanUpsertSorafsProviderCredit,
         sorafs::visit_upsert_provider_credit
     );
-
     sorafs_permission_case!(
         set_moderation_policy_requires_permission,
         set_moderation_policy(),
         CanManageSorafsModeration,
         sorafs::visit_set_moderation_policy
     );
-
     #[test]
     fn moderation_appeal_eligibility_and_acceptance_are_public_at_executor_layer() {
         assert_allowed_without_permission(
@@ -6711,7 +6156,6 @@ mod sorafs_permission_tests {
             sorafs::visit_accept_moderation_juror_assignment,
         );
     }
-
     sorafs_permission_case!(
         finalize_moderation_sortition_requires_permission,
         FinalizeSorafsModerationSortition::new(
@@ -6725,7 +6169,6 @@ mod sorafs_permission_tests {
         CanManageSorafsModeration,
         sorafs::visit_finalize_moderation_sortition
     );
-
     sorafs_permission_case!(
         activate_moderation_case_requires_permission,
         ActivateSorafsModerationCase::new(
@@ -6736,28 +6179,24 @@ mod sorafs_permission_tests {
         CanManageSorafsModeration,
         sorafs::visit_activate_moderation_case
     );
-
     sorafs_permission_case!(
         set_pop_issuer_policy_requires_permission,
         set_pop_issuer_policy(),
         CanManageSorafsPopRegistry,
         sorafs::visit_set_pop_issuer_policy
     );
-
     sorafs_permission_case!(
         commit_pop_credential_batch_requires_permission,
         CommitSorafsPopCredentialBatch::new(vec![0x01]),
         CanOperateSorafsPopIssuer,
         sorafs::visit_commit_pop_credential_batch
     );
-
     sorafs_permission_case!(
         publish_pop_revocations_requires_permission,
         PublishSorafsPopRevocationList::new(vec![0x01], [1; 32]),
         CanOperateSorafsPopIssuer,
         sorafs::visit_publish_pop_revocation_list
     );
-
     #[test]
     fn moderation_commit_submission_is_public_at_executor_layer() {
         assert_allowed_without_permission(
@@ -6765,7 +6204,6 @@ mod sorafs_permission_tests {
             sorafs::visit_submit_moderation_commit,
         );
     }
-
     #[test]
     fn moderation_transparency_queries_are_public() {
         assert_allowed_without_permission(
@@ -6792,7 +6230,6 @@ mod sorafs_permission_tests {
             sorafs::visit_find_sorafs_moderation_events,
         );
     }
-
     #[test]
     fn reputation_journal_query_is_public_transparency_state() {
         let cursor = ReputationJournalFinalizedCursorV1 {
@@ -6812,7 +6249,6 @@ mod sorafs_permission_tests {
             super::visit_find_sorafs_reputation_journal_event_by_source_id,
         );
     }
-
     #[test]
     fn reputation_journal_authority_policy_query_requires_operator_permission() {
         let query = FindSorafsReputationJournalAuthorityPolicy;
@@ -6836,7 +6272,6 @@ mod sorafs_permission_tests {
             sorafs::visit_find_sorafs_reputation_journal_authority_policy,
         );
     }
-
     #[test]
     fn complete_moderation_snapshot_is_manager_only() {
         let query = FindSorafsModerationSnapshot::new(8, 16);
@@ -6847,7 +6282,6 @@ mod sorafs_permission_tests {
             sorafs::visit_find_sorafs_moderation_snapshot,
         );
     }
-
     #[test]
     fn moderation_eligibility_query_is_self_or_manager_only() {
         assert_allowed_without_permission(
@@ -6873,7 +6307,6 @@ mod sorafs_permission_tests {
             sorafs::visit_find_sorafs_moderation_juror_eligibility,
         );
     }
-
     #[test]
     fn derived_default_visit_dispatches_private_juror_eligibility_query() {
         with_mock_permissions(vec![PermissionObject::from(CanBindSorafsAlias)], || {
@@ -6886,16 +6319,13 @@ mod sorafs_permission_tests {
                 .into(),
             );
             let mut executor = MockExecutor::new(false);
-
             executor.visit_query(&query);
-
             assert!(
                 executor.verdict().is_err(),
                 "derived default Visit dispatch must not bypass foreign juror privacy"
             );
         });
     }
-
     fn orderbook_page_queries() -> Vec<iroha_smart_contract::data_model::query::AnyQueryBox> {
         [
             FindSorafsOrderbookTrades::new(None, None, 10).into(),
@@ -6906,7 +6336,6 @@ mod sorafs_permission_tests {
         .map(iroha_smart_contract::data_model::query::AnyQueryBox::Singular)
         .collect()
     }
-
     #[test]
     fn derived_default_visit_dispatches_orderbook_pages_through_permission_checks() {
         with_mock_permissions(vec![PermissionObject::from(CanBindSorafsAlias)], || {
@@ -6919,7 +6348,6 @@ mod sorafs_permission_tests {
                 );
             }
         });
-
         for permission in [
             PermissionObject::from(CanSetSorafsPricing),
             PermissionObject::from(CanCompleteSorafsReplicationOrder),
@@ -6936,7 +6364,6 @@ mod sorafs_permission_tests {
             });
         }
     }
-
     fn custom_parameter(name: &str) -> SetParameter {
         let id = iroha_smart_contract::data_model::parameter::CustomParameterId::new(
             name.parse().expect("test custom parameter id"),
@@ -6945,7 +6372,6 @@ mod sorafs_permission_tests {
             iroha_smart_contract::data_model::parameter::CustomParameter::new(id, Json::new(())),
         ))
     }
-
     fn remove_sccp_route() -> ApplySccpRouteGovernance {
         ApplySccpRouteGovernance::new(
             iroha_smart_contract::data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(
@@ -6962,7 +6388,6 @@ mod sorafs_permission_tests {
             ),
         )
     }
-
     #[test]
     fn direct_sccp_route_governance_dispatch_is_retired_for_every_permission() {
         let instruction = remove_sccp_route();
@@ -6980,7 +6405,6 @@ mod sorafs_permission_tests {
             PermissionObject::from(CanManageSccpGovernance),
             bridge::visit_apply_sccp_route_governance,
         );
-
         with_mock_permissions(
             vec![PermissionObject::from(CanManageSccpGovernance)],
             || {
@@ -6993,19 +6417,15 @@ mod sorafs_permission_tests {
             },
         );
     }
-
     include!("governance_query_tail_tests.rs");
 }
-
 /// Permission-checked visitors for direct permission grants and revocations.
 pub mod permission {
     use super::*;
-
     macro_rules! impl_execute {
         ($executor:ident, $isi:ident, $method:ident, $isi_type:ty) => {
             let account_id = $isi.destination().clone();
             let permission = $isi.object();
-
             if let Ok(any_permission) = AnyPermission::try_from(permission) {
                 if !$executor.context().curr_block.is_genesis() {
                     if let Err(error) = crate::permission::ValidateGrantRevoke::$method(
@@ -7017,18 +6437,15 @@ pub mod permission {
                         deny!($executor, error);
                     }
                 }
-
                 let isi = &<$isi_type>::account_permission(any_permission, account_id);
                 execute!($executor, isi);
             }
-
             deny!(
                 $executor,
                 ValidationFail::NotPermitted(format!("{permission:?}: Unknown permission"))
             );
         };
     }
-
     /// Grants an account-level permission after validating the caller's authority.
     pub fn visit_grant_account_permission<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -7036,7 +6453,6 @@ pub mod permission {
     ) {
         impl_execute!(executor, isi, validate_grant, Grant<Permission, Account>);
     }
-
     /// Revokes an account-level permission once the caller passes permission checks.
     pub fn visit_revoke_account_permission<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -7045,15 +6461,11 @@ pub mod permission {
         impl_execute!(executor, isi, validate_revoke, Revoke<Permission, Account>);
     }
 }
-
 include!("governed_offline_permission_tests.rs");
-
 /// Permission-checked visitor for executor upgrade instructions.
 pub mod executor {
     use iroha_executor_data_model::permission::executor::CanUpgradeExecutor;
-
     use super::*;
-
     /// Upgrades the executor when invoked during genesis or by an authorised authority.
     pub fn visit_upgrade<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &Upgrade) {
         if executor.context().curr_block.is_genesis() {
@@ -7062,25 +6474,20 @@ pub mod executor {
         if CanUpgradeExecutor.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-
         deny!(executor, "Can't upgrade executor");
     }
 }
-
 /// Visitor for log instructions which are always permitted.
 pub mod log {
     use super::*;
-
     /// Emits a log instruction directly because logging has no permission gates.
     pub fn visit_log<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &Log) {
         execute!(executor, isi)
     }
 }
-
 /// Permission-checked visitors for bridge instructions.
 pub mod bridge {
     use super::*;
-
     /// Records a bridge receipt without additional permission gates.
     pub fn visit_record_bridge_receipt<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -7088,7 +6495,6 @@ pub mod bridge {
     ) {
         execute!(executor, isi)
     }
-
     /// Applies one typed governed SCCP registry action.
     pub fn visit_apply_sccp_route_governance<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -7099,7 +6505,6 @@ pub mod bridge {
             "direct SCCP route mutation is retired; enact a finalized threshold referendum"
         )
     }
-
     /// Dispatch owner-bound route escrow funding to Core.
     pub fn visit_fund_sccp_route_escrow<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -7107,7 +6512,6 @@ pub mod bridge {
     ) {
         execute!(executor, isi)
     }
-
     /// Dispatch owner-bound inactive-route escrow refund to Core.
     pub fn visit_refund_sccp_route_escrow<V: Execute + Visit + ?Sized>(
         executor: &mut V,

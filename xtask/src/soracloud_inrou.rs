@@ -6,15 +6,12 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
-
 use serde::Deserialize;
-
 pub enum CommandMode {
     Portable,
     Firecracker,
     MixedHost { inventory: PathBuf },
 }
-
 #[derive(Debug, Deserialize)]
 struct MixedHostInventory {
     portable_host: RemoteSmokeHost,
@@ -22,7 +19,6 @@ struct MixedHostInventory {
     proxy_only_host: RemoteSmokeHost,
     status_gate: Option<RemoteSmokeCommand>,
 }
-
 #[derive(Debug, Deserialize)]
 struct RemoteSmokeHost {
     ssh_target: String,
@@ -30,7 +26,6 @@ struct RemoteSmokeHost {
     command: Option<String>,
     env: Option<BTreeMap<String, String>>,
 }
-
 #[derive(Debug, Deserialize)]
 struct RemoteSmokeCommand {
     ssh_target: String,
@@ -38,7 +33,6 @@ struct RemoteSmokeCommand {
     command: String,
     env: Option<BTreeMap<String, String>>,
 }
-
 pub fn run(mode: CommandMode) -> Result<(), Box<dyn Error>> {
     match mode {
         CommandMode::Portable => run_portable_local(),
@@ -46,7 +40,6 @@ pub fn run(mode: CommandMode) -> Result<(), Box<dyn Error>> {
         CommandMode::MixedHost { inventory } => run_mixed_host(&inventory),
     }
 }
-
 fn run_portable_local() -> Result<(), Box<dyn Error>> {
     require_portable_guest_asset_env()?;
     run_cargo_smoke_command(
@@ -102,7 +95,6 @@ fn run_portable_local() -> Result<(), Box<dyn Error>> {
     )?;
     Ok(())
 }
-
 fn require_portable_guest_asset_env() -> Result<(), Box<dyn Error>> {
     for name in [
         "IROHA_INROU_PORTABLE_KERNEL_IMAGE",
@@ -129,18 +121,15 @@ fn require_portable_guest_asset_env() -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn portable_guest_asset_hint(name: &str) -> String {
     format!(
         "{name} must point to an existing file. {}",
         portable_guest_asset_prepare_hint()
     )
 }
-
 fn portable_guest_asset_prepare_hint() -> &'static str {
     "Prepare Debian genericcloud guest assets with `eval \"$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --print-env)\"`."
 }
-
 fn run_local_script(script_name: &str) -> Result<(), Box<dyn Error>> {
     let script_path = crate::workspace_root().join("scripts/ci").join(script_name);
     if !script_path.is_file() {
@@ -152,7 +141,6 @@ fn run_local_script(script_name: &str) -> Result<(), Box<dyn Error>> {
     }
     Err(format!("{} failed with status {status}", script_path.display()).into())
 }
-
 fn run_cargo_smoke_command(args: &[&str], env: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
     let mut command = Command::new("cargo");
     command.args(args).current_dir(crate::workspace_root());
@@ -165,11 +153,9 @@ fn run_cargo_smoke_command(args: &[&str], env: &[(&str, &str)]) -> Result<(), Bo
     }
     Err(format!("cargo {} failed with status {status}", args.join(" ")).into())
 }
-
 fn run_mixed_host(inventory_path: &Path) -> Result<(), Box<dyn Error>> {
     let inventory_raw = fs::read_to_string(inventory_path)?;
     let inventory: MixedHostInventory = toml::from_str(&inventory_raw)?;
-
     run_remote_host_command(
         "portable_host",
         &inventory.portable_host.ssh_target,
@@ -216,7 +202,6 @@ fn run_mixed_host(inventory_path: &Path) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn run_remote_host_command(
     label: &str,
     ssh_target: &str,
@@ -249,7 +234,6 @@ fn run_remote_host_command(
     }
     Err(format!("{label} remote smoke command failed with status {status}").into())
 }
-
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }

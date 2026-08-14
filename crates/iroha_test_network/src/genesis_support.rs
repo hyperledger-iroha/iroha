@@ -1,10 +1,8 @@
 //! Shared orchestration helpers for preparing and validating local genesis artifacts.
-
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
-
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use iroha_config::{base::toml::TomlSource, parameters::actual};
 use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey};
@@ -16,14 +14,12 @@ use iroha_data_model::{
     parameter::system::SumeragiConsensusMode,
 };
 use iroha_genesis::{RawGenesisTransaction, ValidatedGenesisBundle};
-
 /// Exact placeholder accepted while a genesis hash is not yet known.
 ///
 /// The placeholder is replaced only in memory and only by
 /// [`sign_prepared_genesis_from_config`]. Persisted node configurations still
 /// have to contain the exact hash before normal startup validation.
 pub const UNRESOLVED_GENESIS_EXPECTED_HASH: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
-
 /// Filesystem paths controlled by a local node-generation orchestrator.
 ///
 /// Every path is owned and detached from `iroha_config`'s origin wrappers.
@@ -52,7 +48,6 @@ pub struct ManagedNodePaths {
     /// SoraNet proof-of-work ticket-revocation store path.
     pub soranet_pow_revocation_store_path: PathBuf,
 }
-
 /// Owned projection of the node configuration bindings needed by genesis orchestration.
 ///
 /// This deliberately exposes domain types and owned values rather than any
@@ -83,7 +78,6 @@ pub struct ManagedNodeConfig {
     /// Filesystem paths managed by local node generation.
     pub managed_paths: ManagedNodePaths,
 }
-
 impl ManagedNodeConfig {
     /// Parse a node configuration through `iroha_config` and project the
     /// genesis bindings needed by local orchestration.
@@ -99,7 +93,6 @@ impl ManagedNodeConfig {
         let (config, _) = load_node_config(path, false)?;
         Self::from_root(config)
     }
-
     fn from_root(config: actual::Root) -> Result<Self> {
         let genesis_block_path = config
             .genesis
@@ -141,7 +134,6 @@ impl ManagedNodeConfig {
                     .as_ref(),
             ),
         };
-
         Ok(Self {
             chain_id: config.common.chain.clone(),
             chain_discriminant: *config.common.chain_discriminant.value(),
@@ -158,7 +150,6 @@ impl ManagedNodeConfig {
         })
     }
 }
-
 /// Build and sign a prepared genesis manifest using the policies selected by a
 /// canonical node configuration.
 ///
@@ -211,7 +202,6 @@ pub fn sign_prepared_genesis_from_config(
                 config.genesis_manifest_path.display()
             )
         })?;
-
     if manifest.chain_id() != &config.chain_id {
         return Err(eyre!(
             "genesis manifest chain `{}` differs from configured chain `{}`",
@@ -242,7 +232,6 @@ pub fn sign_prepared_genesis_from_config(
             expected_mode
         ));
     }
-
     let block = manifest
         .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
             key_pair,
@@ -260,7 +249,6 @@ pub fn sign_prepared_genesis_from_config(
     }
     Ok(block)
 }
-
 /// Validate a canonical prepared-genesis bundle for node startup.
 ///
 /// This composes the independent manifest/wire validator with Core's complete
@@ -285,7 +273,6 @@ pub fn validate_prepared_genesis_for_startup(
             expected_chain_id
         ));
     }
-
     let validated = iroha_genesis::validate_prepared_genesis_bundle(
         signed_wire,
         manifest,
@@ -297,11 +284,9 @@ pub fn validate_prepared_genesis_for_startup(
         .map_err(|error| eyre!("validate prepared genesis with Core: {error}"))?;
     Ok(validated)
 }
-
 fn load_node_config(path: &Path, allow_unresolved_hash: bool) -> Result<(actual::Root, bool)> {
     let mut source = TomlSource::from_file(path)
         .map_err(|error| eyre!("read node configuration `{}`: {error:?}", path.display()))?;
-
     let unresolved_hash_replaced = allow_unresolved_hash
         && source
             .table_mut()
@@ -323,27 +308,21 @@ fn load_node_config(path: &Path, allow_unresolved_hash: bool) -> Result<(actual:
             .to_ascii_uppercase();
         *expected_hash = toml::Value::String(norito::literal::format("hash", hash_body.as_str()));
     }
-
     let config = actual::Root::from_toml_source(source)
         .map_err(|error| eyre!("parse node configuration `{}`: {error:?}", path.display()))?;
     Ok((config, unresolved_hash_replaced))
 }
-
 #[cfg(test)]
 mod tests {
     use std::fs;
-
     use iroha_crypto::{Algorithm, bls_normal_pop_prove};
     use iroha_data_model::peer::PeerId;
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
-
     use super::*;
-
     const CONFIGURED_HASH: &str =
         "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E";
     const FIXTURE_GENESIS_PUBLIC_KEY: &str =
         "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4";
-
     fn prepared_manifest(chain_id: ChainId) -> (RawGenesisTransaction, KeyPair) {
         let topology = (0..4)
             .map(|_| {
@@ -361,7 +340,6 @@ mod tests {
         let genesis_key = KeyPair::try_random().expect("generate genesis key");
         (manifest, genesis_key)
     }
-
     fn write_node_config(
         directory: &Path,
         chain_id: &ChainId,
@@ -378,7 +356,6 @@ mod tests {
         )
         .expect("write signed rANS tables fixture");
         let rans_tables_literal = rans_tables_path.to_string_lossy().replace('\\', "\\\\");
-
         let mut config = include_str!("../../iroha_config/iroha_test_config.toml").to_owned();
         config = config.replacen(
             "chain = \"00000000-0000-0000-0000-000000000000\"",
@@ -436,12 +413,10 @@ revocation_store_path = "managed/soranet/revocations.norito"
             "[torii]\naddress = \"addr:127.0.0.1:8080#8942\"\ndata_dir = \"managed/torii\"",
             1,
         );
-
         let path = directory.join("config.toml");
         fs::write(&path, config).expect("write node config");
         path
     }
-
     #[test]
     fn managed_projection_owns_exact_genesis_bindings_and_paths() {
         let directory = tempfile::tempdir().expect("create temporary directory");
@@ -455,7 +430,6 @@ revocation_store_path = "managed/soranet/revocations.norito"
             genesis_key.public_key(),
             CONFIGURED_HASH,
         );
-
         let projected = ManagedNodeConfig::from_path(&config_path).expect("project config");
         assert_eq!(projected.chain_id, chain_id);
         assert_eq!(projected.chain_discriminant, chain_discriminant);
@@ -520,7 +494,6 @@ revocation_store_path = "managed/soranet/revocations.norito"
             projected.managed_paths.soranet_pow_revocation_store_path,
             PathBuf::from("managed/soranet/revocations.norito")
         );
-
         let (parsed, replaced) = load_node_config(&config_path, false).expect("parse config");
         assert!(!replaced);
         assert_eq!(
@@ -532,7 +505,6 @@ revocation_store_path = "managed/soranet/revocations.norito"
             iroha_core::state::compute_genesis_confidential_policy_hash(&parsed.zk)
         );
     }
-
     #[test]
     fn signing_accepts_only_selected_manifest_and_exact_unresolved_sentinel() {
         let directory = tempfile::tempdir().expect("create temporary directory");
@@ -551,7 +523,6 @@ revocation_store_path = "managed/soranet/revocations.norito"
             genesis_key.public_key(),
             UNRESOLVED_GENESIS_EXPECTED_HASH,
         );
-
         let (parsed, replaced) =
             load_node_config(&config_path, true).expect("parse sentinel config");
         assert!(replaced);
@@ -587,7 +558,6 @@ revocation_store_path = "managed/soranet/revocations.norito"
                 .and_then(|features| features.zk_policy_hash),
             Some(expected_confidential)
         );
-
         let wire = block.encode_wire().expect("encode signed block");
         let validated = validate_prepared_genesis_for_startup(
             &wire,
@@ -598,7 +568,6 @@ revocation_store_path = "managed/soranet/revocations.norito"
         )
         .expect("run composed startup validation");
         assert_eq!(validated.block(), &block);
-
         let other_manifest = directory.path().join("other-genesis.json");
         fs::copy(&manifest_path, &other_manifest).expect("copy manifest");
         let error = sign_prepared_genesis_from_config(
@@ -614,7 +583,6 @@ revocation_store_path = "managed/soranet/revocations.norito"
                 .contains("differs from configured manifest")
         );
     }
-
     #[test]
     fn resolved_hash_and_expected_chain_are_enforced() {
         let directory = tempfile::tempdir().expect("create temporary directory");
@@ -633,7 +601,6 @@ revocation_store_path = "managed/soranet/revocations.norito"
             genesis_key.public_key(),
             CONFIGURED_HASH,
         );
-
         let error = sign_prepared_genesis_from_config(
             &manifest_path,
             &config_path,
@@ -642,7 +609,6 @@ revocation_store_path = "managed/soranet/revocations.norito"
         )
         .expect_err("resolved hash must bind the produced block");
         assert!(error.to_string().contains("configuration requires"));
-
         let near_miss = format!("{UNRESOLVED_GENESIS_EXPECTED_HASH} ");
         let config_path = write_node_config(
             directory.path(),
@@ -659,7 +625,6 @@ revocation_store_path = "managed/soranet/revocations.norito"
         )
         .expect_err("a near-miss unresolved sentinel must not be substituted");
         assert!(error.to_string().contains("parse node configuration"));
-
         let error = validate_prepared_genesis_for_startup(
             &[],
             &manifest,

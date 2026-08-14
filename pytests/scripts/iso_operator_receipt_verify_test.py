@@ -2225,7 +2225,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "response_body_preview": "accepted",
                 "error": None,
             }
-            rail_endpoint = "http://rail.local-bank.bank/v1/iso20022"
+            rail_endpoint = "http://rail.local-bank.bank/v1/iso20022?profile=swift-cbpr-plus"
             rail_xml_path = root / "rail" / "rail-status.xml"
             rail_body = {
                 "version": VERIFIER.RECEIPT_VERSION,

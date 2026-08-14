@@ -3,7 +3,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     da::types::{BlobDigest, StorageTicketId},
@@ -22,7 +21,6 @@ use sorafs_orchestrator::taikai_cache::{
     CacheAdmissionTracker, CacheTierKind, CachedSegment, QosClass, TaikaiCacheConfig,
     TaikaiCacheHandle, TaikaiPullRequest, TaikaiShardId,
 };
-
 fn sample_envelope(sequence: u64) -> TaikaiSegmentEnvelopeV1 {
     let event_id = TaikaiEventId::new(Name::from_str("soranet-demo").expect("valid event id"));
     let stream_id = TaikaiStreamId::new(Name::from_str("primary").expect("valid stream id"));
@@ -52,13 +50,11 @@ fn sample_envelope(sequence: u64) -> TaikaiSegmentEnvelopeV1 {
         ingest,
     )
 }
-
 fn sample_segment(sequence: u64, qos: QosClass) -> CachedSegment {
     let envelope = sample_envelope(sequence);
     let payload = vec![sequence as u8; 512];
     CachedSegment::new(envelope, Arc::from(payload.into_boxed_slice()), qos)
 }
-
 #[test]
 fn cache_admission_envelope_roundtrip_and_verify() {
     let shard = TaikaiShardId(17);
@@ -90,7 +86,6 @@ fn cache_admission_envelope_roundtrip_and_verify() {
         .verify(issued_ms + 15_000)
         .expect("verify before expiry");
 }
-
 #[test]
 fn cache_admission_detects_tampering_and_expiry() {
     let shard = TaikaiShardId(2);
@@ -110,12 +105,10 @@ fn cache_admission_detects_tampering_and_expiry() {
     let key_pair = KeyPair::try_from_seed(vec![0xBB; 32], Algorithm::Ed25519)
         .expect("fixture Taikai cache admission key");
     let envelope = CacheAdmissionEnvelope::sign(record.clone(), &key_pair).expect("sign");
-
     let err = envelope
         .verify(record.expires_unix_ms() + 1)
         .expect_err("expired");
     assert!(matches!(err, CacheAdmissionError::Expired { .. }));
-
     let (mut forged_body, signer, signature) = envelope.clone().into_parts();
     forged_body.payload_len += 1;
     let forged = CacheAdmissionEnvelope::from_parts(forged_body, signer, signature);
@@ -124,7 +117,6 @@ fn cache_admission_detects_tampering_and_expiry() {
         .expect_err("payload tampering");
     assert!(matches!(err, CacheAdmissionError::InvalidSignature));
 }
-
 #[test]
 fn cache_admission_gossip_signs_and_verifies() {
     let shard = TaikaiShardId(5);
@@ -149,9 +141,7 @@ fn cache_admission_gossip_signs_and_verifies() {
     let body =
         CacheAdmissionGossipBody::with_nonce(envelope.clone(), issued_ms, ttl, &mut rng).unwrap();
     let gossip = CacheAdmissionGossip::sign(body, &key_pair).expect("sign gossip");
-
     gossip.verify(issued_ms + 5_000).expect("verify gossip");
-
     let (body, signer, _) = gossip.clone().into_parts();
     let forged_signature =
         iroha_crypto::Signature::try_new(key_pair.private_key(), b"tamper-cache-admission")
@@ -161,13 +151,11 @@ fn cache_admission_gossip_signs_and_verifies() {
         .verify(issued_ms + 5_000)
         .expect_err("signature mismatch");
     assert!(matches!(err, CacheAdmissionError::InvalidSignature));
-
     let err = gossip
         .verify(gossip.body().expires_unix_ms() + 1)
         .expect_err("expired gossip");
     assert!(matches!(err, CacheAdmissionError::Expired { .. }));
 }
-
 #[test]
 fn cache_admission_replay_filter_blocks_replays_and_expires() {
     let shard = TaikaiShardId(9);
@@ -189,11 +177,9 @@ fn cache_admission_replay_filter_blocks_replays_and_expires() {
     )
     .expect("record");
     let envelope = CacheAdmissionEnvelope::sign(record, &key_pair).expect("sign");
-
     let body_a =
         CacheAdmissionGossipBody::with_nonce(envelope.clone(), issued_ms, ttl, &mut rng).unwrap();
     let gossip_a = CacheAdmissionGossip::sign(body_a, &key_pair).expect("sign gossip a");
-
     let mut filter =
         CacheAdmissionReplayFilter::new(Duration::from_millis(500), 3).expect("filter");
     assert!(
@@ -206,7 +192,6 @@ fn cache_admission_replay_filter_blocks_replays_and_expires() {
             .observe(&gossip_a, issued_ms + 100)
             .expect("replay rejected inside window")
     );
-
     // New nonce → new digest.
     let mut alt_nonce = [0u8; 16];
     rng.fill_bytes(&mut alt_nonce);
@@ -219,14 +204,12 @@ fn cache_admission_replay_filter_blocks_replays_and_expires() {
             .observe(&gossip_b, issued_ms + 120)
             .expect("distinct nonce accepted")
     );
-
     // Window expiry permits the original digest again.
     assert!(
         filter
             .observe(&gossip_a, issued_ms + 1_000)
             .expect("replay allowed after expiry")
     );
-
     // Capacity eviction clears oldest entries.
     let body_c =
         CacheAdmissionGossipBody::with_nonce(envelope, issued_ms + 130, ttl, &mut rng).unwrap();
@@ -242,14 +225,12 @@ fn cache_admission_replay_filter_blocks_replays_and_expires() {
         .observe(&gossip_a, issued_ms + 1_200)
         .expect("replay filter remains functional after capacity rotation");
 }
-
 #[test]
 fn cache_admission_tracker_populates_queue_shards() {
     let handle = TaikaiCacheHandle::from_config(TaikaiCacheConfig::default());
     let replay =
         CacheAdmissionReplayFilter::new(Duration::from_secs(5), 16).expect("tracker replay");
     let mut tracker = CacheAdmissionTracker::new(handle.clone(), replay);
-
     let shard = TaikaiShardId(5);
     let issuer = GuardDirectoryId::new("soranet/tracker");
     let cached = sample_segment(77, QosClass::Priority);
@@ -271,14 +252,12 @@ fn cache_admission_tracker_populates_queue_shards() {
     let gossip_body =
         CacheAdmissionGossipBody::new(envelope.clone(), issued_ms, ttl).expect("gossip body");
     let gossip = CacheAdmissionGossip::sign(gossip_body, &key_pair).expect("gossip");
-
     assert!(
         tracker
             .ingest(&gossip, issued_ms)
             .expect("tracker accepts gossip")
     );
     assert_eq!(tracker.active_shards(), vec![shard]);
-
     let request =
         TaikaiPullRequest::new(cached.key(), QosClass::Priority, cached.size_bytes(), None);
     handle.enqueue_pull(request).expect("enqueue pull");
@@ -288,7 +267,6 @@ fn cache_admission_tracker_populates_queue_shards() {
         .expect("queue alive")
         .expect("batch issued");
     assert_eq!(batch.shard, Some(shard));
-
     assert!(
         !tracker
             .ingest(&gossip, issued_ms + 1)

@@ -7,7 +7,6 @@
 //! implementation below keeps the ergonomics of the previous API but routes all
 //! checks through tiny Halo2 gadgets so the proving backend observes real
 //! constraints during tests and benchmarks.
-
 use halo2_proofs::{
     circuit::{Layouter, SimpleFloorPlanner, Value},
     dev::MockProver,
@@ -15,19 +14,16 @@ use halo2_proofs::{
     plonk::{Circuit, Column, ConstraintSystem, Error as PlonkError, Selector},
     poly::Rotation,
 };
-
 /// Scalar field element type used for secret scalars in the circuits.
 pub type Scalar = u64;
 /// Base field element type used for commitments and hashes in tests.
 pub type Field = u64;
-
 /// Representation of an elliptic curve point in affine coordinates.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ECPoint {
     pub x: Field,
     pub y: Field,
 }
-
 /// Poseidon hash helper used across circuits.
 fn poseidon_hash(inputs: &[Field]) -> Field {
     if inputs.is_empty() {
@@ -39,7 +35,6 @@ fn poseidon_hash(inputs: &[Field]) -> Field {
     if inputs.len() == 2 {
         return crate::poseidon::poseidon2(inputs[0], inputs[1]);
     }
-
     let mut idx = 0usize;
     let mut acc = 0u64;
     let mut first_round = true;
@@ -70,27 +65,21 @@ fn poseidon_hash(inputs: &[Field]) -> Field {
     }
     acc
 }
-
 /// Pedersen commitment helper reused by the mock circuits.
 fn pedersen_commit(value: Field, blind: Scalar) -> Field {
     crate::pedersen::pedersen_commit_truncated(value, blind)
 }
-
 const HALO2_EQ_K: u32 = 9;
-
 fn halo_from_u64(value: u64) -> HaloScalar {
     HaloScalar::from(value)
 }
-
 fn halo_from_bool(flag: bool) -> HaloScalar {
     HaloScalar::from(flag as u64)
 }
-
 #[derive(Clone, Default)]
 struct EqualityBatchCircuit {
     pairs: Vec<(HaloScalar, HaloScalar)>,
 }
-
 macro_rules! impl_equality_batch_circuit {
     () => {
         impl_equality_batch_circuit!(@inner type Params = (););
@@ -104,11 +93,9 @@ macro_rules! impl_equality_batch_circuit {
             );
             $($extra)*
             type FloorPlanner = SimpleFloorPlanner;
-
             fn without_witnesses(&self) -> Self {
                 Self::default()
             }
-
             fn configure(meta: &mut ConstraintSystem<HaloScalar>) -> Self::Config {
                 let lhs = meta.advice_column();
                 let rhs = meta.advice_column();
@@ -123,7 +110,6 @@ macro_rules! impl_equality_batch_circuit {
                 });
                 (lhs, rhs, s_eq)
             }
-
             fn synthesize(
                 &self,
                 (lhs, rhs, sel): Self::Config,
@@ -147,9 +133,7 @@ macro_rules! impl_equality_batch_circuit {
         impl_equality_batch_circuit!(@inner $($extra)*);
     };
 }
-
 impl_equality_batch_circuit!();
-
 fn enforce_pairs(pairs: Vec<(HaloScalar, HaloScalar)>) -> Result<(), &'static str> {
     if pairs.is_empty() {
         return Ok(());
@@ -159,15 +143,12 @@ fn enforce_pairs(pairs: Vec<(HaloScalar, HaloScalar)>) -> Result<(), &'static st
         MockProver::run(HALO2_EQ_K, &circuit, vec![]).map_err(|_| "halo2 synthesis failure")?;
     prover.verify().map_err(|_| "halo2 constraint failure")
 }
-
 fn ensure_equal_u64(lhs: u64, rhs: u64) -> Result<(), &'static str> {
     enforce_pairs(vec![(halo_from_u64(lhs), halo_from_u64(rhs))])
 }
-
 fn ensure_equal_bool(lhs: bool, rhs: bool) -> Result<(), &'static str> {
     enforce_pairs(vec![(halo_from_bool(lhs), halo_from_bool(rhs))])
 }
-
 fn ensure_bytes_equal(lhs: &[u8], rhs: &[u8]) -> Result<(), &'static str> {
     if lhs.len() != rhs.len() {
         return Err("byte slice length mismatch");
@@ -179,7 +160,6 @@ fn ensure_bytes_equal(lhs: &[u8], rhs: &[u8]) -> Result<(), &'static str> {
         .collect();
     enforce_pairs(pairs)
 }
-
 fn ensure_slice_equal_u64(lhs: &[u64], rhs: &[u64]) -> Result<(), &'static str> {
     if lhs.len() != rhs.len() {
         return Err("u64 slice length mismatch");
@@ -191,7 +171,6 @@ fn ensure_slice_equal_u64(lhs: &[u64], rhs: &[u64]) -> Result<(), &'static str> 
         .collect();
     enforce_pairs(pairs)
 }
-
 fn ensure_slice_equal_bool(lhs: &[bool], rhs: &[bool]) -> Result<(), &'static str> {
     if lhs.len() != rhs.len() {
         return Err("bool slice length mismatch");
@@ -203,11 +182,9 @@ fn ensure_slice_equal_bool(lhs: &[bool], rhs: &[bool]) -> Result<(), &'static st
         .collect();
     enforce_pairs(pairs)
 }
-
 // -----------------------------------------------------------------------------
 // Mint Circuit
 // -----------------------------------------------------------------------------
-
 /// Private witness inputs for the Mint circuit.
 #[derive(Clone, Debug, Default)]
 pub struct MintWitness {
@@ -220,7 +197,6 @@ pub struct MintWitness {
     pub value_blind: Scalar,
     pub token_blind: Field,
 }
-
 /// Public outputs of the Mint circuit.
 #[derive(Clone, Debug, Default)]
 pub struct MintPublic {
@@ -228,20 +204,17 @@ pub struct MintPublic {
     pub value_commitment: ECPoint,
     pub token_commitment: Field,
 }
-
 /// Deterministic Mint circuit model object.
 #[derive(Clone, Debug, Default)]
 pub struct MintCircuit {
     pub witness: MintWitness,
     pub public: MintPublic,
 }
-
 impl MintCircuit {
     /// Create a new Mint circuit instance.
     pub fn new(witness: MintWitness, public: MintPublic) -> Self {
         Self { witness, public }
     }
-
     /// Verify the circuit by recomputing commitments from the witness
     /// values and comparing them to the provided public outputs.
     pub fn verify(&self) -> Result<(), &'static str> {
@@ -262,11 +235,9 @@ impl MintCircuit {
         ensure_equal_u64(self.public.token_commitment, tok_commit)
     }
 }
-
 // -----------------------------------------------------------------------------
 // Burn Circuit
 // -----------------------------------------------------------------------------
-
 /// Private witness inputs for the Burn circuit.
 #[derive(Clone, Debug, Default)]
 pub struct BurnWitness {
@@ -283,7 +254,6 @@ pub struct BurnWitness {
     pub merkle_path: [Field; 32],
     pub sig_secret: Scalar,
 }
-
 /// Public outputs of the Burn circuit.
 #[derive(Clone, Debug, Default)]
 pub struct BurnPublic {
@@ -295,20 +265,17 @@ pub struct BurnPublic {
     pub hook_id: Field,
     pub sig_public: ECPoint,
 }
-
 /// Deterministic Burn circuit model object.
 #[derive(Clone, Debug, Default)]
 pub struct BurnCircuit {
     pub witness: BurnWitness,
     pub public: BurnPublic,
 }
-
 impl BurnCircuit {
     /// Create a new Burn circuit instance.
     pub fn new(witness: BurnWitness, public: BurnPublic) -> Self {
         Self { witness, public }
     }
-
     /// Verify the circuit by recomputing all public outputs from the witness
     /// data.  This mirrors the behaviour of the real Halo2 circuit which would
     /// enforce these relationships via constraints.
@@ -341,11 +308,9 @@ impl BurnCircuit {
         ensure_equal_u64(self.public.sig_public.y, sig_pk.y)
     }
 }
-
 // -----------------------------------------------------------------------------
 // Merkle Inclusion Circuit
 // -----------------------------------------------------------------------------
-
 /// Private witness inputs for the Merkle inclusion circuit.
 #[derive(Clone, Debug, Default)]
 pub struct MerkleWitness {
@@ -353,26 +318,22 @@ pub struct MerkleWitness {
     pub index: u32,
     pub path: [Field; 32],
 }
-
 /// Public output for the Merkle inclusion circuit.
 #[derive(Clone, Debug, Default)]
 pub struct MerklePublic {
     pub root: Field,
 }
-
 /// Deterministic Merkle inclusion circuit model object.
 #[derive(Clone, Debug, Default)]
 pub struct MerkleCircuit {
     pub witness: MerkleWitness,
     pub public: MerklePublic,
 }
-
 impl MerkleCircuit {
     /// Create a new Merkle inclusion circuit object.
     pub fn new(witness: MerkleWitness, public: MerklePublic) -> Self {
         Self { witness, public }
     }
-
     /// Verify the circuit by recomputing the Merkle root from the witness
     /// values and comparing it to the provided public root.
     pub fn verify(&self) -> Result<(), &'static str> {
@@ -380,11 +341,9 @@ impl MerkleCircuit {
         ensure_equal_u64(self.public.root, root)
     }
 }
-
 // -----------------------------------------------------------------------------
 // Merkle Inclusion Gadget
 // -----------------------------------------------------------------------------
-
 /// Verify that a leaf is included in a Merkle tree with the given root.
 /// This is a simplified Poseidon-based Merkle gadget used by the tests.
 pub fn verify_merkle_path(leaf: Field, index: u32, path: &[Field; 32]) -> Field {
@@ -399,7 +358,6 @@ pub fn verify_merkle_path(leaf: Field, index: u32, path: &[Field; 32]) -> Field 
     }
     current
 }
-
 /// Verify a Merkle path using an index for a limited `depth`.
 /// Mirrors `verify_merkle_path` but only consumes the first `depth` siblings.
 pub fn verify_merkle_path_depth(
@@ -419,7 +377,6 @@ pub fn verify_merkle_path_depth(
     }
     current
 }
-
 /// Verify a Merkle path using an explicit direction bitmask and a fixed
 /// maximum depth. The `dirs` bitmask encodes the direction at each level:
 /// - bit i = 0 => the running accumulator is the left child at level i
@@ -443,18 +400,15 @@ pub fn verify_merkle_path_with_dirs(
     }
     current
 }
-
 #[inline]
 fn super_hash(a: Field, b: Field) -> Field {
     // Use the canonical Poseidon2 permutation over BN254 for pairwise
     // compression in Merkle gadgets so the VM mirrors the Halo2 circuit.
     iroha_zkp_halo2::poseidon::hash2_u64(a, b)
 }
-
 // -----------------------------------------------------------------------------
 // Nullifier Gadget
 // -----------------------------------------------------------------------------
-
 /// Compute the nullifier from a secret key and serial number.
 pub fn compute_nullifier(secret: Scalar, serial: Field) -> Field {
     // Use the Poseidon2 hash to derive a unique nullifier. In the real
@@ -463,11 +417,9 @@ pub fn compute_nullifier(secret: Scalar, serial: Field) -> Field {
     // two-input Poseidon permutation.
     crate::poseidon::poseidon2(secret, serial)
 }
-
 // -----------------------------------------------------------------------------
 // Signature Key Gadget
 // -----------------------------------------------------------------------------
-
 /// Derive an EC point from a signing secret.
 pub fn derive_public_key(secret: Scalar) -> ECPoint {
     ECPoint {
@@ -475,7 +427,6 @@ pub fn derive_public_key(secret: Scalar) -> ECPoint {
         y: 0,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,7 +436,6 @@ mod tests {
         metadata::ProgramMetadata,
         zk::{Constraint, RegisterState},
     };
-
     #[test]
     fn super_hash_aligns_with_poseidon_permutation() {
         let samples = [
@@ -509,7 +459,6 @@ mod tests {
             );
         }
     }
-
     fn build_program(words: &[u32]) -> Vec<u8> {
         let mut bytes = ProgramMetadata::default_for(1, 0, 1).encode();
         for word in words {
@@ -517,7 +466,6 @@ mod tests {
         }
         bytes
     }
-
     fn base_state(pc: u64) -> RegisterState {
         RegisterState {
             pc,
@@ -525,7 +473,6 @@ mod tests {
             tags: [false; 256],
         }
     }
-
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -535,15 +482,12 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     #[test]
     fn ed25519_verify_circuit_rejects_malformed_signature_r_before_dalek_decode() {
         use ed25519_dalek::{Signer as _, SigningKey};
-
         let signing_key = SigningKey::from_bytes(&[0x4a; 32]);
         let message = b"ivm-halo2-ed25519-malformed-r";
         let public_key = signing_key.verifying_key().to_bytes();
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_R),
             ("noncanonical", NONCANONICAL_ED25519_R),
@@ -556,7 +500,6 @@ mod tests {
                 message,
                 result: true,
             };
-
             assert_eq!(
                 circuit
                     .verify()
@@ -564,14 +507,12 @@ mod tests {
                 "halo2 constraint failure",
                 "{label} R must be classified as a false verification result before signature decode"
             );
-
             circuit.result = false;
             circuit
                 .verify()
                 .expect("malformed Ed25519 R must fail closed as a false result");
         }
     }
-
     #[test]
     fn vm_execution_circuit_accepts_wrapping_addi_and_sub_semantics() {
         let program = build_program(&[
@@ -580,26 +521,20 @@ mod tests {
             wide_enc::encode_rr(wide::arithmetic::SUB, 5, 4, 1),
             wide_enc::encode_halt(),
         ]);
-
         let mut s0 = base_state(0);
         s0.gpr[1] = u64::MAX;
         s0.gpr[2] = 2;
-
         let mut s1 = s0.clone();
         s1.pc = 4;
         s1.gpr[3] = s0.gpr[1].wrapping_add(s0.gpr[2]);
-
         let mut s2 = s1.clone();
         s2.pc = 8;
         s2.gpr[4] = s1.gpr[3].wrapping_add((-1_i8) as i64 as u64);
-
         let mut s3 = s2.clone();
         s3.pc = 12;
         s3.gpr[5] = s2.gpr[4].wrapping_sub(s2.gpr[1]);
-
         let mut s4 = s3.clone();
         s4.pc = 16;
-
         let trace = vec![s0, s1, s2, s3, s4];
         let constraints = vec![
             Constraint::Eq {
@@ -613,11 +548,9 @@ mod tests {
                 cycle: 3,
             },
         ];
-
         let circuit = VMExecutionCircuit::new(&program, &trace, &constraints);
         assert!(circuit.verify().is_ok());
     }
-
     #[test]
     fn vm_execution_circuit_accepts_taken_beq_trace() {
         let program = build_program(&[
@@ -625,22 +558,17 @@ mod tests {
             wide_enc::encode_ri(wide::arithmetic::ADDI, 3, 0, 7),
             wide_enc::encode_halt(),
         ]);
-
         let mut s0 = base_state(0);
         s0.gpr[1] = 9;
         s0.gpr[2] = 9;
-
         let mut s1 = s0.clone();
         s1.pc = 8;
-
         let mut s2 = s1.clone();
         s2.pc = 12;
-
         let trace = vec![s0, s1, s2];
         let circuit = VMExecutionCircuit::new(&program, &trace, &[]);
         assert!(circuit.verify().is_ok());
     }
-
     #[test]
     fn vm_execution_circuit_accepts_not_taken_bne_trace() {
         let program = build_program(&[
@@ -648,98 +576,78 @@ mod tests {
             wide_enc::encode_ri(wide::arithmetic::ADDI, 3, 0, 7),
             wide_enc::encode_halt(),
         ]);
-
         let mut s0 = base_state(0);
         s0.gpr[1] = 9;
         s0.gpr[2] = 9;
-
         let mut s1 = s0.clone();
         s1.pc = 4;
-
         let mut s2 = s1.clone();
         s2.pc = 8;
         s2.gpr[3] = 7;
-
         let mut s3 = s2.clone();
         s3.pc = 12;
-
         let trace = vec![s0, s1, s2, s3];
         let circuit = VMExecutionCircuit::new(&program, &trace, &[]);
         assert!(circuit.verify().is_ok());
     }
-
     #[test]
     fn vm_execution_circuit_rejects_unsupported_opcode() {
         let program = build_program(&[
             wide_enc::encode_rr(wide::arithmetic::AND, 3, 1, 2),
             wide_enc::encode_halt(),
         ]);
-
         let mut s0 = base_state(0);
         s0.gpr[1] = 0xF0;
         s0.gpr[2] = 0xAA;
         let mut s1 = s0.clone();
         s1.pc = 4;
         s1.gpr[3] = s0.gpr[1] & s0.gpr[2];
-
         let trace = vec![s0, s1];
         let circuit = VMExecutionCircuit::new(&program, &trace, &[]);
         assert_eq!(circuit.verify(), Err("unsupported opcode"));
     }
-
     #[test]
     fn vm_execution_circuit_rejects_unexpected_register_drift() {
         let program = build_program(&[
             wide_enc::encode_rr(wide::arithmetic::ADD, 3, 1, 2),
             wide_enc::encode_halt(),
         ]);
-
         let mut s0 = base_state(0);
         s0.gpr[1] = 5;
         s0.gpr[2] = 7;
-
         let mut s1 = s0.clone();
         s1.pc = 4;
         s1.gpr[3] = 12;
         s1.gpr[8] = 99;
-
         let mut s2 = s1.clone();
         s2.pc = 8;
-
         let trace = vec![s0, s1, s2];
         let circuit = VMExecutionCircuit::new(&program, &trace, &[]);
         assert_eq!(circuit.verify(), Err("halo2 constraint failure"));
     }
-
     #[test]
     fn vm_execution_circuit_rejects_constraint_mismatch() {
         let program = build_program(&[
             wide_enc::encode_rr(wide::arithmetic::ADD, 3, 1, 2),
             wide_enc::encode_halt(),
         ]);
-
         let mut s0 = base_state(0);
         s0.gpr[1] = 5;
         s0.gpr[2] = 7;
-
         let mut s1 = s0.clone();
         s1.pc = 4;
         s1.gpr[3] = 12;
-
         let mut s2 = s1.clone();
         s2.pc = 8;
-
         let trace = vec![s0, s1, s2];
         let constraints = vec![Constraint::Zero { reg: 3, cycle: 1 }];
         let circuit = VMExecutionCircuit::new(&program, &trace, &constraints);
         assert_eq!(circuit.verify(), Err("constraint failure"));
     }
 }
-
 // -----------------------------------------------------------------------------
 // Arithmetic and Bitwise Operation Circuit
 // -----------------------------------------------------------------------------
-
 /// Arithmetic/logic operation specifier.
 #[derive(Clone, Copy)]
 pub enum ALUOp {
@@ -755,7 +663,6 @@ pub enum ALUOp {
     Rol,
     Ror,
 }
-
 /// Simple circuit object verifying a single arithmetic/logic operation.
 pub struct ALUCircuit {
     pub op: ALUOp,
@@ -763,7 +670,6 @@ pub struct ALUCircuit {
     pub b: u64,
     pub result: u64,
 }
-
 impl ALUCircuit {
     /// Verify the operation by recomputing the expected result from the inputs.
     pub fn verify(&self) -> Result<(), &'static str> {
@@ -783,7 +689,6 @@ impl ALUCircuit {
         ensure_equal_u64(expected, self.result)
     }
 }
-
 /// Circuit verifying a 32-bit addition with carry.
 pub struct AddCarryCircuit {
     pub a: u32,
@@ -792,7 +697,6 @@ pub struct AddCarryCircuit {
     pub sum: u32,
     pub carry_out: u8,
 }
-
 impl AddCarryCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         if self.carry_in > 1 || self.carry_out > 1 {
@@ -805,11 +709,9 @@ impl AddCarryCircuit {
         ensure_equal_u64(c as u64, self.carry_out as u64)
     }
 }
-
 // -----------------------------------------------------------------------------
 // Field Arithmetic Circuit
 // -----------------------------------------------------------------------------
-
 /// Field arithmetic operation specifier.
 #[derive(Clone, Copy)]
 pub enum FieldOp {
@@ -818,7 +720,6 @@ pub enum FieldOp {
     Mul,
     Inv,
 }
-
 /// Simple circuit object verifying a single field arithmetic operation.
 pub struct FieldCircuit {
     pub op: FieldOp,
@@ -826,7 +727,6 @@ pub struct FieldCircuit {
     pub b: u64,
     pub result: u64,
 }
-
 impl FieldCircuit {
     /// Verify the operation by recomputing the expected result from the inputs.
     pub fn verify(&self) -> Result<(), &'static str> {
@@ -842,16 +742,13 @@ impl FieldCircuit {
             };
             Ok(v)
         }
-
         let expected = do_op(self.op, self.a, self.b)?;
         ensure_equal_u64(expected, self.result)
     }
 }
-
 // -----------------------------------------------------------------------------
 // Comparison and Conditional Move Circuit
 // -----------------------------------------------------------------------------
-
 /// Comparison/conditional operation specifier.
 #[derive(Clone, Copy)]
 pub enum CmpOp {
@@ -861,7 +758,6 @@ pub enum CmpOp {
     Sne,
     Cmov,
 }
-
 /// Simple circuit object verifying comparison and conditional move operations.
 pub struct CmpCircuit {
     pub op: CmpOp,
@@ -871,7 +767,6 @@ pub struct CmpCircuit {
     pub prev: u64,
     pub result: u64,
 }
-
 impl CmpCircuit {
     /// Verify the operation by recomputing the expected result from the inputs.
     pub fn verify(&self) -> Result<(), &'static str> {
@@ -915,11 +810,9 @@ impl CmpCircuit {
         ensure_equal_u64(expected, self.result)
     }
 }
-
 // -----------------------------------------------------------------------------
 // Vector Operation Circuit
 // -----------------------------------------------------------------------------
-
 /// Vector arithmetic/logic operation specifier.
 #[derive(Clone, Copy)]
 pub enum VectorOp {
@@ -930,7 +823,6 @@ pub enum VectorOp {
     Vor,
     Vrot32,
 }
-
 /// Simple circuit object verifying a 128-bit vector operation.
 pub struct VectorCircuit {
     pub op: VectorOp,
@@ -940,7 +832,6 @@ pub struct VectorCircuit {
     pub k: u32,
     pub result: [u32; 4],
 }
-
 impl VectorCircuit {
     /// Verify the operation by recomputing the expected result from the inputs.
     pub fn verify(&self) -> Result<(), &'static str> {
@@ -953,18 +844,15 @@ impl VectorCircuit {
             VectorOp::Vor => vector::vor(self.a, self.b),
             VectorOp::Vrot32 => vector::vrot32(self.a, self.k & 31),
         };
-
         for (&exp, &out) in expected.iter().zip(self.result.iter()) {
             ensure_equal_u64(exp as u64, out as u64)?;
         }
         Ok(())
     }
 }
-
 // -----------------------------------------------------------------------------
 // SHA-256 Compression Circuit
 // -----------------------------------------------------------------------------
-
 /// Circuit verifying the SHA256BLOCK vector instruction.
 pub struct Sha256BlockCircuit {
     /// Input hash state (8 x 32-bit words).
@@ -974,7 +862,6 @@ pub struct Sha256BlockCircuit {
     /// Output state after compression.
     pub result: [u32; 8],
 }
-
 impl Sha256BlockCircuit {
     /// Verify the SHA-256 compression of one block.
     pub fn verify(&self) -> Result<(), &'static str> {
@@ -986,11 +873,9 @@ impl Sha256BlockCircuit {
         Ok(())
     }
 }
-
 // -----------------------------------------------------------------------------
 // SHA-3 Compression Circuit
 // -----------------------------------------------------------------------------
-
 /// Circuit verifying the SHA3BLOCK instruction.
 pub struct Sha3BlockCircuit {
     /// Input state (25 x 64-bit words).
@@ -1000,7 +885,6 @@ pub struct Sha3BlockCircuit {
     /// Output state after absorption and permutation.
     pub result: [u64; 25],
 }
-
 impl Sha3BlockCircuit {
     /// Verify the SHA-3 compression of one block.
     pub fn verify(&self) -> Result<(), &'static str> {
@@ -1012,11 +896,9 @@ impl Sha3BlockCircuit {
         Ok(())
     }
 }
-
 // -----------------------------------------------------------------------------
 // Poseidon Hash Circuits
 // -----------------------------------------------------------------------------
-
 /// Circuit verifying the POSEIDON2 instruction (2-input Poseidon hash).
 pub struct Poseidon2Circuit {
     /// First input element.
@@ -1026,7 +908,6 @@ pub struct Poseidon2Circuit {
     /// Expected hash output.
     pub result: u64,
 }
-
 impl Poseidon2Circuit {
     /// Verify the Poseidon2 hash by recomputing it from the inputs.
     pub fn verify(&self) -> Result<(), &'static str> {
@@ -1034,7 +915,6 @@ impl Poseidon2Circuit {
         ensure_equal_u64(expected, self.result)
     }
 }
-
 /// Circuit verifying the POSEIDON6 instruction (6-input Poseidon hash).
 pub struct Poseidon6Circuit {
     /// Input elements to hash.
@@ -1042,7 +922,6 @@ pub struct Poseidon6Circuit {
     /// Expected hash output.
     pub result: u64,
 }
-
 impl Poseidon6Circuit {
     /// Verify the Poseidon6 hash by recomputing it from the inputs.
     pub fn verify(&self) -> Result<(), &'static str> {
@@ -1050,43 +929,36 @@ impl Poseidon6Circuit {
         ensure_equal_u64(expected, self.result)
     }
 }
-
 // -----------------------------------------------------------------------------
 // AES Round Circuits
 // -----------------------------------------------------------------------------
-
 /// Circuit verifying the AESENC instruction (one AES encryption round).
 pub struct AesEncCircuit {
     pub state: [u8; 16],
     pub round_key: [u8; 16],
     pub result: [u8; 16],
 }
-
 impl AesEncCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         let expected = crate::aes::aesenc(self.state, self.round_key);
         ensure_bytes_equal(&expected, &self.result)
     }
 }
-
 /// Circuit verifying the AESDEC instruction (one AES decryption round).
 pub struct AesDecCircuit {
     pub state: [u8; 16],
     pub round_key: [u8; 16],
     pub result: [u8; 16],
 }
-
 impl AesDecCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         let expected = crate::aes::aesdec(self.state, self.round_key);
         ensure_bytes_equal(&expected, &self.result)
     }
 }
-
 // -----------------------------------------------------------------------------
 // Ed25519 Signature Verification Circuit
 // -----------------------------------------------------------------------------
-
 /// Circuit verifying an Ed25519 signature over a message.
 #[derive(Clone, Debug)]
 pub struct Ed25519VerifyCircuit<'a> {
@@ -1099,7 +971,6 @@ pub struct Ed25519VerifyCircuit<'a> {
     /// Expected verification result.
     pub result: bool,
 }
-
 impl<'a> Ed25519VerifyCircuit<'a> {
     /// Verify the signature using `ed25519-dalek` and compare with the
     /// expected `result` flag.
@@ -1122,11 +993,9 @@ impl<'a> Ed25519VerifyCircuit<'a> {
         ensure_equal_bool(valid, self.result)
     }
 }
-
 // -----------------------------------------------------------------------------
 // Dilithium Signature Verification Circuit
 // -----------------------------------------------------------------------------
-
 /// Dilithium security level.
 #[derive(Clone, Copy)]
 pub enum DilithiumLevel {
@@ -1134,7 +1003,6 @@ pub enum DilithiumLevel {
     Level3,
     Level5,
 }
-
 /// Circuit verifying a Dilithium signature over a message.
 pub struct DilithiumVerifyCircuit<'a> {
     /// Parameter set to use (2, 3 or 5).
@@ -1148,14 +1016,12 @@ pub struct DilithiumVerifyCircuit<'a> {
     /// Expected verification result.
     pub result: bool,
 }
-
 impl<'a> DilithiumVerifyCircuit<'a> {
     /// Verify the signature using the appropriate Dilithium level and compare
     /// with the expected `result` flag.
     pub fn verify(&self) -> Result<(), &'static str> {
         use pqcrypto_mldsa::{mldsa44 as dilithium2, mldsa65 as dilithium3, mldsa87 as dilithium5};
         use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
-
         let valid = match self.level {
             DilithiumLevel::Level2 => {
                 if self.public_key.len() != dilithium2::public_key_bytes() {
@@ -1221,22 +1087,18 @@ impl<'a> DilithiumVerifyCircuit<'a> {
                 }
             }
         };
-
         ensure_equal_bool(valid, self.result)
     }
 }
-
 // -----------------------------------------------------------------------------
 // secp256k1 Curve Arithmetic Circuits
 // -----------------------------------------------------------------------------
-
 /// Circuit verifying secp256k1 point addition.
 pub struct Secp256k1AddCircuit {
     pub p: [u8; 65],
     pub q: [u8; 65],
     pub result: [u8; 65],
 }
-
 impl Secp256k1AddCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         use k256::{
@@ -1263,13 +1125,11 @@ impl Secp256k1AddCircuit {
         }
     }
 }
-
 pub struct Secp256k1MulCircuit {
     pub scalar: [u8; 32],
     pub point: [u8; 65],
     pub result: [u8; 65],
 }
-
 impl Secp256k1MulCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         use k256::{
@@ -1294,14 +1154,12 @@ impl Secp256k1MulCircuit {
         }
     }
 }
-
 pub struct EcdsaVerifyCircuit {
     pub public_key: [u8; 33],
     pub message_hash: [u8; 32],
     pub signature: [u8; 64],
     pub result: bool,
 }
-
 impl EcdsaVerifyCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         use k256::ecdsa::{Signature, VerifyingKey};
@@ -1323,18 +1181,15 @@ impl EcdsaVerifyCircuit {
         }
     }
 }
-
 // -----------------------------------------------------------------------------
 // Elliptic Curve Arithmetic Circuits (BLS12-381)
 // -----------------------------------------------------------------------------
-
 /// Circuit verifying point addition on the BLS12‑381 G1 curve.
 pub struct ECAddCircuit {
     pub p: [u8; 48],
     pub q: [u8; 48],
     pub result: [u8; 48],
 }
-
 impl ECAddCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         use blstrs::{G1Affine, G1Projective};
@@ -1351,14 +1206,12 @@ impl ECAddCircuit {
         }
     }
 }
-
 /// Circuit verifying variable‑point scalar multiplication on BLS12‑381 G1.
 pub struct ECMulVarCircuit {
     pub scalar: [u8; 32],
     pub point: [u8; 48],
     pub result: [u8; 48],
 }
-
 impl ECMulVarCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         use blstrs::{G1Affine, G1Projective, Scalar};
@@ -1375,14 +1228,12 @@ impl ECMulVarCircuit {
         }
     }
 }
-
 /// Circuit verifying public key generation (scalar multiplication by the
 /// fixed generator) on BLS12‑381 G1.
 pub struct PubKeyGenCircuit {
     pub secret: [u8; 32],
     pub result: [u8; 48],
 }
-
 impl PubKeyGenCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         use blstrs::{G1Projective, Scalar};
@@ -1392,7 +1243,6 @@ impl PubKeyGenCircuit {
         ensure_bytes_equal(&expected, &self.result)
     }
 }
-
 /// Circuit verifying the PAIRING instruction (BLS12‑381 pairing check).
 pub struct PairingCircuit {
     /// Scalar multiplier for the G1 generator.
@@ -1402,7 +1252,6 @@ pub struct PairingCircuit {
     /// Expected output of the pairing helper (truncated u64 form).
     pub result: u64,
 }
-
 impl PairingCircuit {
     /// Verify the pairing check by recomputing it from the witness scalars.
     pub fn verify(&self) -> Result<(), &'static str> {
@@ -1410,13 +1259,10 @@ impl PairingCircuit {
         ensure_equal_u64(expected, self.result)
     }
 }
-
 // -----------------------------------------------------------------------------
 // Memory Load/Store Circuits
 // -----------------------------------------------------------------------------
-
 const CHUNK_SIZE: usize = 32;
-
 // Paths are ordered from leaf → root. Keep this in sync with
 // ByteMerkleTree::path and tests under crates/ivm/tests.
 fn verify_memory_path(leaf: [u8; 32], index: usize, path: &[[u8; 32]]) -> [u8; 32] {
@@ -1457,7 +1303,6 @@ fn verify_memory_path(leaf: [u8; 32], index: usize, path: &[[u8; 32]]) -> [u8; 3
     out[31] |= 1;
     out
 }
-
 fn region_perm(addr: u64, size: u32, code_len: u64, heap_limit: u64) -> Option<crate::error::Perm> {
     use crate::memory::Memory;
     let end = addr.checked_add(size as u64)?;
@@ -1478,7 +1323,6 @@ fn region_perm(addr: u64, size: u32, code_len: u64, heap_limit: u64) -> Option<c
     }
     None
 }
-
 /// Simple circuit verifying a memory load operation via its Merkle proof.
 pub struct LoadCircuit {
     pub root: [u8; 32],
@@ -1490,7 +1334,6 @@ pub struct LoadCircuit {
     pub code_len: u64,
     pub heap_limit: u64,
 }
-
 impl LoadCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         use crate::error::Perm;
@@ -1512,7 +1355,6 @@ impl LoadCircuit {
         if !perm.contains(Perm::READ) {
             return Err("access violation");
         }
-
         // Check value bytes inside leaf
         let offset = (self.addr as usize) % CHUNK_SIZE;
         let mut buf = [0u8; 16];
@@ -1521,14 +1363,12 @@ impl LoadCircuit {
             &self.leaf[offset..offset + self.size as usize],
             &buf[..self.size as usize],
         )?;
-
         // Verify Merkle path
         let idx = (self.addr as usize) / CHUNK_SIZE;
         let root = verify_memory_path(self.leaf, idx, &self.path);
         ensure_bytes_equal(&root, &self.root)
     }
 }
-
 /// Simple circuit verifying a memory store operation and root update.
 pub struct StoreCircuit {
     pub root_before: [u8; 32],
@@ -1541,7 +1381,6 @@ pub struct StoreCircuit {
     pub code_len: u64,
     pub heap_limit: u64,
 }
-
 impl StoreCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         use crate::error::Perm;
@@ -1561,28 +1400,23 @@ impl StoreCircuit {
         if !perm.contains(Perm::WRITE) {
             return Err("access violation");
         }
-
         let idx = (self.addr as usize) / CHUNK_SIZE;
         let computed_before = verify_memory_path(self.old_leaf, idx, &self.path);
         ensure_bytes_equal(&computed_before, &self.root_before)?;
-
         let offset = (self.addr as usize) % CHUNK_SIZE;
         let mut new_leaf = self.old_leaf;
         let mut val_bytes = [0u8; 16];
         val_bytes.copy_from_slice(&self.value.to_le_bytes());
         new_leaf[offset..offset + self.size as usize]
             .copy_from_slice(&val_bytes[..self.size as usize]);
-
         let computed_after = verify_memory_path(new_leaf, idx, &self.path);
         ensure_bytes_equal(&computed_after, &self.root_after)
     }
 }
-
 /// Vector load circuit (16-byte load).
 pub struct VectorLoadCircuit {
     pub inner: LoadCircuit,
 }
-
 impl VectorLoadCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         if self.inner.size != 16 {
@@ -1591,12 +1425,10 @@ impl VectorLoadCircuit {
         self.inner.verify()
     }
 }
-
 /// Vector store circuit (16-byte store).
 pub struct VectorStoreCircuit {
     pub inner: StoreCircuit,
 }
-
 impl VectorStoreCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         if self.inner.size != 16 {
@@ -1605,11 +1437,9 @@ impl VectorStoreCircuit {
         self.inner.verify()
     }
 }
-
 // -----------------------------------------------------------------------------
 // System Instruction Circuits
 // -----------------------------------------------------------------------------
-
 /// Circuit verifying heap allocation via `SYSCALL_ALLOC`.
 pub struct AllocCircuit {
     /// Heap pointer before the allocation (in bytes).
@@ -1623,7 +1453,6 @@ pub struct AllocCircuit {
     /// Address returned to the caller.
     pub addr: u64,
 }
-
 impl AllocCircuit {
     /// Verify that the allocation obeys alignment and bounds rules.
     pub fn verify(&self) -> Result<(), &'static str> {
@@ -1636,7 +1465,6 @@ impl AllocCircuit {
         ensure_equal_bool(self.heap_alloc_after <= Memory::HEAP_MAX_SIZE, true)
     }
 }
-
 /// Circuit verifying the `GETGAS` instruction.
 pub struct GetGasCircuit {
     /// Initial gas supplied to the VM.
@@ -1646,7 +1474,6 @@ pub struct GetGasCircuit {
     /// Value reported by GETGAS.
     pub reported: u64,
 }
-
 impl GetGasCircuit {
     /// Verify that the reported gas matches the remaining budget.
     pub fn verify(&self) -> Result<(), &'static str> {
@@ -1655,42 +1482,35 @@ impl GetGasCircuit {
         ensure_equal_u64(self.reported, expected)
     }
 }
-
 // -----------------------------------------------------------------------------
 // Assertion Circuits
 // -----------------------------------------------------------------------------
-
 /// Simple circuit verifying that a value is zero.
 pub struct AssertZeroCircuit {
     pub value: u64,
 }
-
 impl AssertZeroCircuit {
     /// Verify the circuit by checking the value is zero.
     pub fn verify(&self) -> Result<(), &'static str> {
         ensure_equal_u64(self.value, 0)
     }
 }
-
 /// Simple circuit verifying that two values are equal.
 pub struct AssertEqCircuit {
     pub a: u64,
     pub b: u64,
 }
-
 impl AssertEqCircuit {
     /// Verify the circuit by checking the two values are equal.
     pub fn verify(&self) -> Result<(), &'static str> {
         ensure_equal_u64(self.a, self.b)
     }
 }
-
 /// Simple circuit verifying that a value lies in a range [0, 2^bits).
 pub struct AssertRangeCircuit {
     pub value: u64,
     pub bits: u8,
 }
-
 impl AssertRangeCircuit {
     /// Verify the circuit by checking the value fits within the bit range.
     pub fn verify(&self) -> Result<(), &'static str> {
@@ -1707,11 +1527,9 @@ impl AssertRangeCircuit {
         }
     }
 }
-
 // -----------------------------------------------------------------------------
 // Control Flow Circuits
 // -----------------------------------------------------------------------------
-
 /// Circuit verifying an unconditional jump (JMP).
 pub struct JumpCircuit {
     pub pc: u64,
@@ -1719,7 +1537,6 @@ pub struct JumpCircuit {
     pub next_pc: u64,
     pub code_len: u64,
 }
-
 impl JumpCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         let target = ((self.pc as i64) + self.offset as i64) as u64;
@@ -1728,7 +1545,6 @@ impl JumpCircuit {
         ensure_equal_bool(self.next_pc < self.code_len, true)
     }
 }
-
 /// Circuit verifying a jump and link instruction.
 pub struct JalCircuit {
     pub pc: u64,
@@ -1737,7 +1553,6 @@ pub struct JalCircuit {
     pub link: u64,
     pub code_len: u64,
 }
-
 impl JalCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         ensure_equal_u64(self.link, self.pc.wrapping_add(4))?;
@@ -1750,7 +1565,6 @@ impl JalCircuit {
         .verify()
     }
 }
-
 /// Circuit verifying a register-based jump (JALR/JR).
 pub struct JumpRegCircuit {
     pub pc: u64,
@@ -1760,7 +1574,6 @@ pub struct JumpRegCircuit {
     pub link: Option<u64>,
     pub code_len: u64,
 }
-
 impl JumpRegCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         if let Some(l) = self.link {
@@ -1772,7 +1585,6 @@ impl JumpRegCircuit {
         ensure_equal_bool(self.next_pc < self.code_len, true)
     }
 }
-
 /// Circuit verifying a conditional branch.
 pub struct BranchCircuit {
     pub pc: u64,
@@ -1781,7 +1593,6 @@ pub struct BranchCircuit {
     pub next_pc: u64,
     pub code_len: u64,
 }
-
 impl BranchCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         let taken_pc = ((self.pc as i64) + self.offset as i64) as u64;
@@ -1792,23 +1603,19 @@ impl BranchCircuit {
         ensure_equal_bool(self.next_pc < self.code_len, true)
     }
 }
-
 /// Circuit verifying a HALT instruction.
 pub struct HaltCircuit {
     pub pc: u64,
     pub next_pc: u64,
 }
-
 impl HaltCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
         ensure_equal_u64(self.next_pc, self.pc.wrapping_add(4))
     }
 }
-
 // -----------------------------------------------------------------------------
 // Full VM Execution Circuit
 // -----------------------------------------------------------------------------
-
 /// Verify an entire IVM execution trace.
 ///
 /// The witness consists of the executed program bytes together with the
@@ -1821,7 +1628,6 @@ pub struct VMExecutionCircuit<'a> {
     pub trace: &'a [crate::zk::RegisterState],
     pub constraints: &'a [crate::zk::Constraint],
 }
-
 impl<'a> VMExecutionCircuit<'a> {
     /// Create a new execution circuit over the given program and trace.
     pub fn new(
@@ -1835,36 +1641,29 @@ impl<'a> VMExecutionCircuit<'a> {
             constraints,
         }
     }
-
     /// Verify the trace row by row using the opcode circuits.
     pub fn verify(&self) -> Result<(), &'static str> {
         if self.trace.is_empty() {
             return Err("empty trace");
         }
-
         let offset = crate::metadata::ProgramMetadata::parse(self.program)
             .map_err(|_| "program")?
             .code_offset;
         let code = &self.program[offset..];
-
         for window in self.trace.windows(2) {
             let curr = &window[0];
             let next = &window[1];
-
             if curr.pc as usize >= code.len() {
                 ensure_equal_u64(curr.pc, next.pc)?;
                 ensure_slice_equal_u64(&curr.gpr, &next.gpr)?;
                 ensure_slice_equal_bool(&curr.tags, &next.tags)?;
                 continue;
             }
-
             let bytes: [u8; 4] = code[curr.pc as usize..curr.pc as usize + 4]
                 .try_into()
                 .map_err(|_| "pc out of bounds")?;
             let instr = u32::from_le_bytes(bytes);
-
             let op = crate::instruction::wide::opcode(instr);
-
             match op {
                 x if x == crate::instruction::wide::arithmetic::ADD => {
                     let (_op, rd, rs1, rs2) = crate::encoding::wide::decode_rr(instr);
@@ -1943,17 +1742,13 @@ impl<'a> VMExecutionCircuit<'a> {
                 _ => return Err("unsupported opcode"),
             }
         }
-
         crate::zk::verify_trace(self.trace, self.constraints, &[], &[])
             .map_err(|_| "constraint failure")?;
-
         Ok(())
     }
-
     fn check_pc(expected: u64, actual: u64) -> Result<(), &'static str> {
         ensure_equal_u64(expected, actual)
     }
-
     fn check_regs(
         curr: &crate::zk::RegisterState,
         next: &crate::zk::RegisterState,

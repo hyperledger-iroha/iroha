@@ -1,11 +1,8 @@
 //! `IntoSchema` derive tests for named fields.
-
 mod common;
-
 use common::{assert_schema, entry};
 use iroha_schema::prelude::*;
 use norito::{Decode, Encode};
-
 #[derive(IntoSchema, Encode, Decode)]
 struct Command {
     executable: String,
@@ -14,7 +11,6 @@ struct Command {
     mock: bool,
     num: i32,
 }
-
 #[test]
 fn named_fields() {
     assert_schema::<Command>(

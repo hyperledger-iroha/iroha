@@ -2,7 +2,6 @@
 mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
-
     use super::super::projection;
     use super::*;
     use crate::sumeragi::{
@@ -13,7 +12,6 @@ mod tests {
         },
         v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
     };
-
     pub(super) struct FetchStoreFixture {
         coordinator: LifecycleCoordinator,
         lease: TurnLease,
@@ -24,7 +22,6 @@ mod tests {
         pub(super) store_candidate: CandidateAdmission,
         store_replay: CertifiedStoreReplayEvidenceV1,
     }
-
     struct StoreValidateFixture {
         coordinator: LifecycleCoordinator,
         lease: TurnLease,
@@ -37,7 +34,6 @@ mod tests {
         validate_candidate: CandidateAdmission,
         validate_replay: DurableValidateReplayEvidenceV1,
     }
-
     struct ValidateApplyFixture {
         coordinator: LifecycleCoordinator,
         lease: TurnLease,
@@ -50,7 +46,6 @@ mod tests {
         apply_effect: AdapterEffect,
         apply_candidate: CandidateAdmission,
     }
-
     fn capacity_geometry(effect_limit: usize) -> super::super::schema::CapacityGeometry {
         super::super::schema::CapacityGeometry::new(CapacityClass::ALL.into_iter().map(|class| {
             (
@@ -63,13 +58,11 @@ mod tests {
             )
         }))
     }
-
     fn lifecycle_context(context: &wire::HeightContext) -> super::super::LifecycleContext {
         let mut id = [0_u8; 32];
         id.copy_from_slice(context.id().0.as_ref());
         super::super::LifecycleContext::new(super::super::LifecycleDigest::new(id), context.height)
     }
-
     fn verified_context() -> (VerifiedHeightContext, wire::HeightContext) {
         let mut keys = (1_u8..=4)
             .map(|seed| {
@@ -120,7 +113,6 @@ mod tests {
             .expect("verified Fetch-to-Store height context");
         (verified, context)
     }
-
     fn fixture_execution_commitment() -> wire::ExecutionCommitment {
         wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"fetch-store state root"),
@@ -130,7 +122,6 @@ mod tests {
             Hash::new(b"fetch-store fee summary"),
         )
     }
-
     fn body_manifest(
         verified: &VerifiedHeightContext,
         round: wire::ConsensusRound,
@@ -145,7 +136,6 @@ mod tests {
             chunk_root: Hash::new(b"body-pipeline chunk root"),
         }
     }
-
     fn durable_body_receipt(
         verified: &VerifiedHeightContext,
         manifest: &wire::PayloadManifest,
@@ -157,7 +147,6 @@ mod tests {
             HashOf::new(manifest),
         )
     }
-
     fn prepare_authorized_body_transition<'a>(
         coordinator: &'a mut LifecycleCoordinator,
         lease: &TurnLease,
@@ -178,7 +167,6 @@ mod tests {
             child_digest: transition.child_digest,
         })
     }
-
     fn prepare_authorized_validate_apply_transition<'a>(
         coordinator: &'a mut LifecycleCoordinator,
         lease: &TurnLease,
@@ -214,11 +202,9 @@ mod tests {
             DurableContinuationEdge::ValidateToApply,
         )
     }
-
     pub(super) fn fetch_store_fixture(effect_limit: usize) -> FetchStoreFixture {
         fetch_store_fixture_with_authority(effect_limit, wire::GlobalPhase::Prepare)
     }
-
     #[allow(clippy::too_many_lines)]
     fn fetch_store_fixture_with_authority(
         effect_limit: usize,
@@ -356,7 +342,6 @@ mod tests {
             store_replay,
         }
     }
-
     fn store_validate_fixture(
         effect_limit: usize,
         inherited_commitment: bool,
@@ -366,7 +351,6 @@ mod tests {
             inherited_commitment.then_some(wire::GlobalPhase::Prepare),
         )
     }
-
     #[allow(clippy::too_many_lines)]
     fn store_validate_fixture_with_authority(
         effect_limit: usize,
@@ -539,7 +523,6 @@ mod tests {
             validate_replay,
         }
     }
-
     fn validate_apply_fixture(
         effect_limit: usize,
         inherited_commitment: bool,
@@ -549,7 +532,6 @@ mod tests {
             inherited_commitment.then_some(wire::GlobalPhase::Prepare),
         )
     }
-
     fn validate_apply_fixture_with_authority(
         effect_limit: usize,
         inherited_authority: Option<wire::GlobalPhase>,
@@ -639,7 +621,6 @@ mod tests {
             apply_candidate,
         }
     }
-
     #[test]
     fn full_effect_capacity_stages_net_zero_success_and_drop_is_inert() {
         let FetchStoreFixture {
@@ -720,7 +701,6 @@ mod tests {
         drop(prepared);
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn wrong_and_stale_fetch_leases_reject_without_coordinator_mutation() {
         let FetchStoreFixture {
@@ -743,7 +723,6 @@ mod tests {
             Err(BodyStageTransitionError::WrongParentShape)
         ));
         assert_eq!(format!("{coordinator:#?}"), before);
-
         let mut stale = lease.clone();
         stale.id = super::super::LeaseId(lease.id().0 + 1);
         let parent_payload = store_candidate.payload;
@@ -759,7 +738,6 @@ mod tests {
         ));
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn foreign_store_projection_rejects_without_coordinator_mutation() {
         let FetchStoreFixture {
@@ -797,7 +775,6 @@ mod tests {
         ));
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn fetch_store_rejects_a_foreign_body_receipt_without_mutation() {
         let FetchStoreFixture {
@@ -834,7 +811,6 @@ mod tests {
         ));
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn fetch_store_rejects_a_payload_free_parent_after_body_completion() {
         let FetchStoreFixture {
@@ -862,7 +838,6 @@ mod tests {
         ));
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn staged_capacity_wait_leaves_fetch_parent_claimed() {
         let FetchStoreFixture {
@@ -891,7 +866,6 @@ mod tests {
         assert_eq!(format!("{coordinator:#?}"), before_capacity);
         assert_eq!(coordinator.active_lease, Some(lease));
     }
-
     #[test]
     fn fetch_store_rejects_max_high_water_without_mutation() {
         let FetchStoreFixture {
@@ -916,7 +890,6 @@ mod tests {
         assert_eq!(format!("{coordinator:#?}"), before_ordinal);
         assert_eq!(coordinator.active_lease, Some(lease));
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn full_effect_capacity_stages_exact_store_validate_cut_and_drop_is_inert() {
@@ -939,7 +912,6 @@ mod tests {
             DurableContinuationEdge::StoreToValidate,
         )
         .expect("Store release makes room for exact Validate at full capacity");
-
         assert!(matches!(
             prepared.edge,
             DurableContinuationEdge::StoreToValidate
@@ -957,7 +929,6 @@ mod tests {
             prepared.child_digest,
             digest_from_hash(validate_pending.exact_effect_identity())
         );
-
         let parent = &prepared.staged.records[&prepared.parent_ordinal];
         assert_eq!(parent.ordinal, prepared.parent_ordinal);
         assert_eq!(parent.owner, lease.owner());
@@ -987,7 +958,6 @@ mod tests {
             parent.owner.causal_root().digest()
         );
         assert_eq!(parent_metadata.payload, expected_frame);
-
         let child = &prepared.staged.records[&prepared.child_ordinal];
         assert_eq!(child.ordinal, prepared.child_ordinal);
         assert_eq!(child.owner, lease.owner());
@@ -1033,7 +1003,6 @@ mod tests {
         );
         assert_eq!(parent.key.phase(), LifecyclePhase::Store);
         assert_eq!(child.key.phase(), LifecyclePhase::Validate);
-
         assert_eq!(
             prepared.staged.capacity_used[&CapacityClass::Effect],
             capacity_used_before[&CapacityClass::Effect]
@@ -1055,11 +1024,9 @@ mod tests {
                 capacity_generation_before[&class]
             );
         }
-
         drop(prepared);
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn store_validate_accepts_exact_no_commitment_lineage() {
         let StoreValidateFixture {
@@ -1088,7 +1055,6 @@ mod tests {
         drop(prepared);
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn store_validate_rejects_a_substituted_frame_without_mutation() {
         let StoreValidateFixture {
@@ -1121,7 +1087,6 @@ mod tests {
         ));
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn wrong_and_stale_store_leases_reject_without_coordinator_mutation() {
         let StoreValidateFixture {
@@ -1144,7 +1109,6 @@ mod tests {
             Err(BodyStageTransitionError::WrongParentShape)
         ));
         assert_eq!(format!("{coordinator:#?}"), before);
-
         let mut stale = lease.clone();
         stale.id = super::super::LeaseId(lease.id().0 + 1);
         assert!(matches!(
@@ -1159,7 +1123,6 @@ mod tests {
         ));
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn wrong_validate_effect_binding_and_owner_reject_without_mutation() {
         let StoreValidateFixture {
@@ -1209,7 +1172,6 @@ mod tests {
             Err(AdapterEffectAdmissionError::InvalidCarrier)
         ));
         assert_eq!(format!("{coordinator:#?}"), before);
-
         let foreign_owner_tag = EventTag::new(
             tag.height(),
             tag.view(),
@@ -1257,7 +1219,6 @@ mod tests {
         ));
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn foreign_store_lineage_rejects_without_mutation() {
         let StoreValidateFixture {
@@ -1303,7 +1264,6 @@ mod tests {
         ));
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn store_validate_rejects_max_high_water_without_mutation() {
         let StoreValidateFixture {
@@ -1327,7 +1287,6 @@ mod tests {
         assert_eq!(format!("{coordinator:#?}"), before);
         assert_eq!(coordinator.active_lease, Some(lease));
     }
-
     #[test]
     fn store_validate_rejects_capacity_generation_overflow_without_mutation() {
         let StoreValidateFixture {
@@ -1353,7 +1312,6 @@ mod tests {
         assert_eq!(format!("{coordinator:#?}"), before);
         assert_eq!(coordinator.active_lease, Some(lease));
     }
-
     #[test]
     fn corrupt_store_reconstruction_source_rejects_without_mutation() {
         let StoreValidateFixture {
@@ -1383,7 +1341,6 @@ mod tests {
         assert_eq!(format!("{coordinator:#?}"), before);
         assert_eq!(coordinator.active_lease, Some(lease));
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn full_effect_capacity_stages_exact_validate_apply_cut_and_drop_is_inert() {
@@ -1407,7 +1364,6 @@ mod tests {
             apply_candidate.clone(),
         )
         .expect("Validate release makes room for exact Apply at full capacity");
-
         assert!(matches!(
             prepared.edge,
             DurableContinuationEdge::ValidateToApply
@@ -1468,7 +1424,6 @@ mod tests {
         drop(prepared);
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[allow(clippy::too_many_lines)]
     fn assert_validate_sign_transition_is_exact(phase: wire::GlobalPhase) {
         let inherited = match phase {
@@ -1586,13 +1541,11 @@ mod tests {
         drop(prepared);
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn validate_sign_prepare_and_commit_stage_exact_net_zero_cuts() {
         assert_validate_sign_transition_is_exact(wire::GlobalPhase::Prepare);
         assert_validate_sign_transition_is_exact(wire::GlobalPhase::Commit);
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn rejected_validate_reservation_converts_into_exact_report_capacity() {
@@ -1721,7 +1674,6 @@ mod tests {
         drop(prepared);
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     fn assert_validate_no_successor_cut_is_exact(rejected: bool) {
         let ValidateApplyFixture {
             mut coordinator,
@@ -1795,7 +1747,6 @@ mod tests {
         drop(transition);
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn validated_and_rejected_no_effect_cuts_release_exact_capacity() {
         // The registry test pins all four accepted preview discriminators and
@@ -1804,7 +1755,6 @@ mod tests {
         // without adding a test constructor for the private dual-borrow preview.
         assert_validate_no_successor_cut_is_exact(false);
         assert_validate_no_successor_cut_is_exact(true);
-
         let ValidateApplyFixture {
             coordinator,
             lease,
@@ -1823,7 +1773,6 @@ mod tests {
             Err(BodyStageTransitionError::InvalidOutputReservation)
         ));
     }
-
     #[test]
     fn validate_apply_acquires_commit_authority_for_ordinary_validation() {
         let ValidateApplyFixture {
@@ -1853,7 +1802,6 @@ mod tests {
         drop(prepared);
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn advanced_validate_link_stutters_and_recovers_its_exact_apply() {
         let ValidateApplyFixture {
@@ -1878,7 +1826,6 @@ mod tests {
             prepared.staged.admit(retry),
             AdmissionDecision::StutterTerminal { owner } if owner == lease.owner()
         ));
-
         let ledger = super::super::ledger::LifecycleLedgerV1::from_coordinator(&prepared.staged)
             .expect("project linked body rows into LedgerV1");
         let physical_universes = prepared
@@ -1902,7 +1849,6 @@ mod tests {
                 lease.ordinal() + 1,
             )
         );
-
         let mut missing_link = snapshot;
         missing_link
             .records
@@ -1915,7 +1861,6 @@ mod tests {
         rejected.reconcile_restart(missing_link);
         assert_eq!(rejected.fault(), Some(CoordinatorFault::RecoveryRejected));
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn durable_open_joins_terminal_validate_to_authenticated_apply() {
@@ -1954,7 +1899,6 @@ mod tests {
             .persist(&ledger)
             .expect("persist linked Validate-to-Apply ledger");
         drop(ledger_store);
-
         let body_store = crate::sumeragi::v2_body_store::V2BodyStore::open(
             &body_root,
             verified.context().clone(),
@@ -1989,7 +1933,6 @@ mod tests {
             .is_err(),
             "a live Apply successor requires exact authenticated recovery coverage"
         );
-
         let (mut exact_payload_store, exact_payloads) =
             crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
                 &exact_payload_root,
@@ -2030,7 +1973,6 @@ mod tests {
             LifecycleState::Ready
         );
     }
-
     #[test]
     fn validate_apply_rejects_wrong_binding_and_foreign_commitment_without_mutation() {
         let ValidateApplyFixture {
@@ -2057,7 +1999,6 @@ mod tests {
             .is_none()
         );
         assert_eq!(format!("{coordinator:#?}"), before);
-
         let AdapterEffect::Apply {
             tag,
             subject,
@@ -2097,7 +2038,6 @@ mod tests {
         ));
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn ordinary_validate_receipt_rejects_self_consistent_foreign_apply_binding() {
         let ValidateApplyFixture {
@@ -2157,7 +2097,6 @@ mod tests {
         ));
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn commit_authorized_validate_retains_only_the_exact_commit_result() {
         let ValidateApplyFixture {
@@ -2188,7 +2127,6 @@ mod tests {
         );
         drop(prepared);
         assert_eq!(format!("{coordinator:#?}"), before);
-
         let AdapterEffect::Apply {
             tag,
             subject,
@@ -2218,7 +2156,6 @@ mod tests {
         );
         assert_eq!(format!("{coordinator:#?}"), before);
     }
-
     #[test]
     fn validate_apply_rejects_corrupt_parent_commitment_lineage_without_mutation() {
         let ValidateApplyFixture {

@@ -1,9 +1,7 @@
 use ivm::{IVM, VMError, encoding, instruction, zk::MAX_CYCLES};
 mod common;
 use common::assemble_zk;
-
 const HALT_WORD: u32 = encoding::wide::encode_halt();
-
 fn encode_words(words: &[u32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(words.len() * 4);
     for &word in words {
@@ -11,7 +9,6 @@ fn encode_words(words: &[u32]) -> Vec<u8> {
     }
     bytes
 }
-
 #[test]
 fn test_assert_instruction() {
     let mut vm = IVM::new(u64::MAX);
@@ -22,7 +19,6 @@ fn test_assert_instruction() {
     eprintln!("r1 before run = {}", vm.register(1));
     let res = vm.run();
     assert!(matches!(res, Err(VMError::AssertionFailed)));
-
     // Passing case
     let mut vm2 = IVM::new(u64::MAX);
     vm2.set_register(1, 0);
@@ -30,7 +26,6 @@ fn test_assert_instruction() {
     vm2.load_program(&prog).unwrap();
     vm2.run().expect("assert should pass");
 }
-
 #[test]
 fn test_assert_eq_instruction() {
     let mut vm = IVM::new(u64::MAX);
@@ -41,7 +36,6 @@ fn test_assert_eq_instruction() {
     let prog = assemble_zk(&code, 32);
     vm.load_program(&prog).unwrap();
     vm.run().expect("assert_eq should pass");
-
     // Failing case
     let mut vm2 = IVM::new(u64::MAX);
     vm2.set_register(1, 1);
@@ -52,7 +46,6 @@ fn test_assert_eq_instruction() {
     let res = vm2.run();
     assert!(matches!(res, Err(VMError::AssertionFailed)));
 }
-
 #[test]
 fn test_assert_zk_padding() {
     let mut vm = IVM::new(u64::MAX);

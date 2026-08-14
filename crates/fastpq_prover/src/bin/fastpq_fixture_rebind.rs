@@ -1,11 +1,8 @@
 //! One-shot local helper for refreshing checked-in FASTPQ measurement fixtures.
-
 use std::{env, fs, path::PathBuf};
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use fastpq_prover::{TransitionBatch, transition_batch_from_model, transition_batch_to_model};
 use iroha_data_model::fastpq::FastpqTransitionBatch;
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args_os().skip(1);
     let input = PathBuf::from(args.next().ok_or("missing input batch path")?);
@@ -23,7 +20,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.next().is_some() {
         return Err("unexpected extra argument".into());
     }
-
     let entry_hash = hex::decode(entry_hash)?;
     if entry_hash.len() != 32 {
         return Err("entry hash must be exactly 32 bytes".into());

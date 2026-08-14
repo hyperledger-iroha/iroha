@@ -5,13 +5,11 @@
 //! `/v1/sumeragi/telemetry` snapshots against the Prometheus metrics surface
 //! over multiple block heights, then injects a large RBC payload with
 //! deterministic chunk loss and validates the backlog telemetry.
-
 use std::time::{Duration, Instant};
-
 use eyre::{Context as _, Result, ensure};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::{
-    client::Status,
+    client::{Client, Status},
     data_model::{
         Level,
         isi::{Log, SetParameter},
@@ -20,10 +18,9 @@ use iroha::{
 };
 use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
-use norito::json::{self, Value};
+use norito::json::Value;
 use reqwest::Client as HttpClient;
 use tokio::time::sleep;
-
 const EPOCH_LENGTH_BLOCKS: u64 = 6;
 const DROP_EVERY_NTH_CHUNK: i64 = 3;
 const RBC_STORE_SOFT_SESSIONS: i64 = 1;
@@ -36,7 +33,6 @@ const RBC_WARMUP_MESSAGES: u64 = 1;
 const SAMPLE_ITERATIONS: usize = 3;
 const PROGRESS_BLOCKS_PER_ITERATION: u64 = 1;
 const TELEMETRY_RETRY_ATTEMPTS: usize = 40;
-
 fn u64_to_f64(value: u64) -> f64 {
     const MAX_SAFE: u64 = 1 << f64::MANTISSA_DIGITS;
     debug_assert!(
@@ -48,22 +44,18 @@ fn u64_to_f64(value: u64) -> f64 {
         value as f64
     }
 }
-
 const TELEMETRY_RETRY_INTERVAL: Duration = Duration::from_millis(200);
 const METRICS_RETRY_ATTEMPTS: usize = 20;
 const METRICS_RETRY_INTERVAL: Duration = Duration::from_millis(200);
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn npos_telemetry_soak_matches_metrics_under_chunk_loss() -> Result<()> {
     init_instruction_registry();
-
     let npos_params = SumeragiNposParameters {
         epoch_length_blocks: std::num::NonZeroU64::new(EPOCH_LENGTH_BLOCKS)
             .expect("test epoch must be non-zero"),
         ..SumeragiNposParameters::default()
     };
-
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -105,7 +97,6 @@ async fn npos_telemetry_soak_matches_metrics_under_chunk_loss() -> Result<()> {
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos_params.into_custom_parameter(),
         )));
-
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(npos_telemetry_soak_matches_metrics_under_chunk_loss),
@@ -114,7 +105,6 @@ async fn npos_telemetry_soak_matches_metrics_under_chunk_loss() -> Result<()> {
     else {
         return Ok(());
     };
-
     let client = network.client();
     let status = client.get_status()?;
     for idx in status.blocks..2 {
@@ -124,17 +114,11 @@ async fn npos_telemetry_soak_matches_metrics_under_chunk_loss() -> Result<()> {
         )?;
     }
     wait_for_total_height_quorum_with_bounded_lag(&network, 2).await?;
-
     let http = HttpClient::new();
-    let telemetry_url = client
-        .torii_url
-        .join("v1/sumeragi/telemetry")
-        .wrap_err("compose telemetry URL")?;
     let metrics_url = client
         .torii_url
         .join("metrics")
         .wrap_err("compose metrics URL")?;
-
     let mut previous_total_votes = 0_u64;
     let mut previous_vrf_updated = 0_u64;
     for iteration in 0..SAMPLE_ITERATIONS {
@@ -149,8 +133,7 @@ async fn npos_telemetry_soak_matches_metrics_under_chunk_loss() -> Result<()> {
             format!("telemetry iteration {iteration}"),
         )?;
         wait_for_non_empty_height_quorum_with_bounded_lag(&network, target_non_empty).await?;
-
-        let telemetry = wait_for_telemetry(&http, &telemetry_url, |snapshot| {
+        let telemetry = wait_for_telemetry(&client, |snapshot| {
             snapshot
                 .get("availability")
                 .and_then(Value::as_object)
@@ -160,17 +143,14 @@ async fn npos_telemetry_soak_matches_metrics_under_chunk_loss() -> Result<()> {
         })
         .await?;
         let metrics = wait_for_metrics(&http, &metrics_url).await?;
-
         let total_votes = availability_total_votes(&telemetry)?;
         ensure!(
             total_votes >= previous_total_votes,
             "availability vote counter regressed (before={previous_total_votes}, after={total_votes})"
         );
-
         compare_availability(&telemetry, &metrics)?;
         compare_qc_latency(&telemetry, &metrics)?;
         compare_rbc_backlog(&telemetry, &metrics)?;
-
         if let Some(vrf) = telemetry.get("vrf").and_then(Value::as_object)
             && let Some(updated) = vrf.get("updated_at_height").and_then(Value::as_u64)
         {
@@ -180,12 +160,10 @@ async fn npos_telemetry_soak_matches_metrics_under_chunk_loss() -> Result<()> {
             );
             previous_vrf_updated = updated;
         }
-
         previous_total_votes = total_votes;
     }
-
     inject_large_rbc_payloads(&network, "telemetry adversarial backlog".to_owned()).await?;
-    let telemetry = wait_for_telemetry(&http, &telemetry_url, |snapshot| {
+    let telemetry = wait_for_telemetry(&client, |snapshot| {
         snapshot
             .get("rbc_backlog")
             .and_then(Value::as_object)
@@ -194,11 +172,9 @@ async fn npos_telemetry_soak_matches_metrics_under_chunk_loss() -> Result<()> {
     .await?;
     let metrics = wait_for_metrics(&http, &metrics_url).await?;
     compare_rbc_backlog(&telemetry, &metrics)?;
-
     network.shutdown().await;
     Ok(())
 }
-
 fn availability_total_votes(snapshot: &Value) -> Result<u64> {
     snapshot
         .get("availability")
@@ -207,7 +183,6 @@ fn availability_total_votes(snapshot: &Value) -> Result<u64> {
         .and_then(Value::as_u64)
         .ok_or_else(|| eyre::eyre!("telemetry payload missing availability total"))
 }
-
 fn compare_availability(snapshot: &Value, metrics: &MetricsReader) -> Result<()> {
     let availability = snapshot
         .get("availability")
@@ -222,10 +197,8 @@ fn compare_availability(snapshot: &Value, metrics: &MetricsReader) -> Result<()>
         (metric_total - u64_to_f64(total_votes)).abs() < f64::EPSILON,
         "metric/telemetry total votes mismatch ({metric_total} vs {total_votes})"
     );
-
     Ok(())
 }
-
 fn compare_qc_latency(snapshot: &Value, metrics: &MetricsReader) -> Result<()> {
     let entries = snapshot
         .get("qc_latency_ms")
@@ -255,7 +228,6 @@ fn compare_qc_latency(snapshot: &Value, metrics: &MetricsReader) -> Result<()> {
     }
     Ok(())
 }
-
 fn compare_rbc_backlog(snapshot: &Value, metrics: &MetricsReader) -> Result<()> {
     let backlog = snapshot
         .get("rbc_backlog")
@@ -273,7 +245,6 @@ fn compare_rbc_backlog(snapshot: &Value, metrics: &MetricsReader) -> Result<()> 
         .get("max_missing_chunks")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-
     let metric_pending = metrics
         .get_optional("sumeragi_rbc_backlog_sessions_pending")
         .unwrap_or(0.0);
@@ -283,7 +254,6 @@ fn compare_rbc_backlog(snapshot: &Value, metrics: &MetricsReader) -> Result<()> 
     let metric_max_missing = metrics
         .get_optional("sumeragi_rbc_backlog_chunks_max")
         .unwrap_or(0.0);
-
     ensure!(
         (metric_pending - u64_to_f64(pending)).abs() < f64::EPSILON,
         "pending sessions metric mismatch ({metric_pending} vs {pending})"
@@ -296,16 +266,13 @@ fn compare_rbc_backlog(snapshot: &Value, metrics: &MetricsReader) -> Result<()> 
         (metric_max_missing - u64_to_f64(max_missing)).abs() < f64::EPSILON,
         "max missing chunks metric mismatch ({metric_max_missing} vs {max_missing})"
     );
-
     Ok(())
 }
-
 #[derive(Clone, Copy)]
 enum TelemetryHeightKind {
     Total,
     NonEmpty,
 }
-
 impl TelemetryHeightKind {
     fn label(self) -> &'static str {
         match self {
@@ -313,7 +280,6 @@ impl TelemetryHeightKind {
             Self::NonEmpty => "non_empty",
         }
     }
-
     fn value(self, status: &Status) -> u64 {
         match self {
             Self::Total => status.blocks,
@@ -321,14 +287,12 @@ impl TelemetryHeightKind {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TelemetryHeightSnapshot {
     blocks: u64,
     blocks_non_empty: u64,
     queue_size: u64,
 }
-
 impl TelemetryHeightSnapshot {
     fn from_status(status: &Status) -> Self {
         Self {
@@ -338,7 +302,6 @@ impl TelemetryHeightSnapshot {
         }
     }
 }
-
 async fn wait_for_total_height_quorum_with_bounded_lag(
     network: &iroha_test_network::Network,
     target_height: u64,
@@ -346,7 +309,6 @@ async fn wait_for_total_height_quorum_with_bounded_lag(
     wait_for_height_quorum_with_bounded_lag(network, TelemetryHeightKind::Total, target_height)
         .await
 }
-
 async fn wait_for_non_empty_height_quorum_with_bounded_lag(
     network: &iroha_test_network::Network,
     target_height: u64,
@@ -354,7 +316,6 @@ async fn wait_for_non_empty_height_quorum_with_bounded_lag(
     wait_for_height_quorum_with_bounded_lag(network, TelemetryHeightKind::NonEmpty, target_height)
         .await
 }
-
 async fn wait_for_height_quorum_with_bounded_lag(
     network: &iroha_test_network::Network,
     kind: TelemetryHeightKind,
@@ -363,13 +324,11 @@ async fn wait_for_height_quorum_with_bounded_lag(
     let deadline = Instant::now() + network.sync_timeout();
     let peer_count = network.peers().len();
     let quorum = commit_quorum_from_len(peer_count).max(1);
-
     loop {
         let mut snapshots = Vec::new();
         let mut heights = Vec::new();
         let mut client_height = None;
         let mut errors = Vec::new();
-
         for (idx, peer) in network.peers().iter().enumerate() {
             if !peer.is_running() {
                 continue;
@@ -386,7 +345,6 @@ async fn wait_for_height_quorum_with_bounded_lag(
                 Err(err) => errors.push(format!("peer#{idx}: {err:#}")),
             }
         }
-
         if errors.is_empty()
             && client_and_quorum_height_with_bounded_lag(
                 client_height,
@@ -397,7 +355,6 @@ async fn wait_for_height_quorum_with_bounded_lag(
         {
             return Ok(());
         }
-
         if Instant::now() >= deadline {
             let label = kind.label();
             eyre::bail!(
@@ -405,11 +362,9 @@ async fn wait_for_height_quorum_with_bounded_lag(
                 network.sync_timeout()
             );
         }
-
         sleep(TELEMETRY_RETRY_INTERVAL).await;
     }
 }
-
 fn client_and_quorum_height_with_bounded_lag(
     client_height: Option<u64>,
     heights: &[u64],
@@ -419,7 +374,6 @@ fn client_and_quorum_height_with_bounded_lag(
     client_height.is_some_and(|height| height >= target_height)
         && height_quorum_with_bounded_lag(heights, target_height, quorum)
 }
-
 fn height_quorum_with_bounded_lag(heights: &[u64], target_height: u64, quorum: usize) -> bool {
     if heights
         .iter()
@@ -429,35 +383,25 @@ fn height_quorum_with_bounded_lag(heights: &[u64], target_height: u64, quorum: u
     {
         return false;
     }
-
     let Some(min_height) = heights.iter().min().copied() else {
         return false;
     };
     let Some(max_height) = heights.iter().max().copied() else {
         return false;
     };
-
     max_height >= target_height && max_height.saturating_sub(min_height) <= 1
 }
-
-async fn wait_for_telemetry<F>(http: &HttpClient, url: &reqwest::Url, predicate: F) -> Result<Value>
+async fn wait_for_telemetry<F>(client: &Client, predicate: F) -> Result<Value>
 where
     F: Fn(&Value) -> bool,
 {
     for attempt in 0..TELEMETRY_RETRY_ATTEMPTS {
-        let response = http
-            .get(url.clone())
-            .header("accept", "application/json")
-            .send()
-            .await
-            .wrap_err("fetch telemetry snapshot")?;
-        ensure!(
-            response.status().is_success(),
-            "telemetry endpoint returned {}",
-            response.status()
-        );
-        let body = response.text().await.wrap_err("read telemetry body")?;
-        let value: Value = json::from_str(&body)?;
+        let request_client = client.clone();
+        let value =
+            tokio::task::spawn_blocking(move || request_client.get_sumeragi_telemetry_json())
+                .await
+                .wrap_err("join operator-signed telemetry request")?
+                .wrap_err("fetch operator-signed telemetry snapshot")?;
         if predicate(&value) {
             return Ok(value);
         }
@@ -468,7 +412,6 @@ where
     }
     eyre::bail!("telemetry endpoint did not satisfy predicate within retries")
 }
-
 async fn wait_for_metrics(http: &HttpClient, url: &reqwest::Url) -> Result<MetricsReader> {
     for attempt in 0..METRICS_RETRY_ATTEMPTS {
         let response = http
@@ -489,7 +432,6 @@ async fn wait_for_metrics(http: &HttpClient, url: &reqwest::Url) -> Result<Metri
     }
     eyre::bail!("metrics endpoint did not return success within retries")
 }
-
 async fn inject_large_rbc_payloads(
     network: &iroha_test_network::Network,
     batch_prefix: String,
@@ -506,7 +448,6 @@ async fn inject_large_rbc_payloads(
     }
     Ok(())
 }
-
 fn submit_progress_logs(
     network: &iroha_test_network::Network,
     blocks: u64,
@@ -521,17 +462,14 @@ fn submit_progress_logs(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::{
         availability_total_votes, client_and_quorum_height_with_bounded_lag, compare_availability,
     };
-
     #[test]
     fn compare_availability_handles_zero_counters() {
         use integration_tests::metrics::MetricsReader;
-
         let payload = norito::json!({
             "availability": {
                 "total_votes_ingested": 0
@@ -549,7 +487,6 @@ mod tests {
         compare_availability(&payload, &metrics).expect("availability comparison succeeds");
         assert_eq!(availability_total_votes(&payload).expect("total votes"), 0);
     }
-
     #[test]
     fn client_and_quorum_height_accepts_one_block_tail_lag() {
         assert!(client_and_quorum_height_with_bounded_lag(
@@ -559,7 +496,6 @@ mod tests {
             3
         ));
     }
-
     #[test]
     fn client_and_quorum_height_rejects_unsafe_progress_splits() {
         assert!(!client_and_quorum_height_with_bounded_lag(

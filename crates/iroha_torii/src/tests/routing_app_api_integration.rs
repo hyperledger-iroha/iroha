@@ -3,7 +3,6 @@
 mod app_api_integration_tests {
     use std::borrow::Cow;
     use std::sync::{LazyLock, Mutex, MutexGuard};
-
     use axum::{Router, routing::post};
     use http_body_util::BodyExt as _;
     use iroha_core::{
@@ -16,23 +15,18 @@ mod app_api_integration_tests {
     };
     use norito::json;
     use tower::ServiceExt;
-
     use super::*;
     use crate::tests_runtime_handlers::mk_app_state_for_tests;
-
     static APP_QUERY_LIMITS_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
     fn app_query_limits_guard() -> MutexGuard<'static, ()> {
         APP_QUERY_LIMITS_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
-
     struct AppQueryLimitsOverride {
         _guard: MutexGuard<'static, ()>,
         previous: AppQueryLimits,
     }
-
     impl AppQueryLimitsOverride {
         fn new(limits: AppQueryLimits) -> Self {
             let guard = app_query_limits_guard();
@@ -44,25 +38,20 @@ mod app_api_integration_tests {
             }
         }
     }
-
     impl Drop for AppQueryLimitsOverride {
         fn drop(&mut self) {
             set_app_query_limits(self.previous);
         }
     }
-
     fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
         crate::json_object(pairs)
     }
-
     fn arr(values: Vec<Value>) -> Value {
         crate::json_array(values)
     }
-
     fn val<T: json::JsonSerialize + ?Sized>(value: &T) -> Value {
         crate::json_value(value)
     }
-
     fn checked_app_api_keypair(
         seed: u8,
         algorithm: iroha_crypto::Algorithm,
@@ -70,7 +59,6 @@ mod app_api_integration_tests {
     ) -> iroha_crypto::KeyPair {
         checked_routing_fixture_keypair(seed, algorithm, context)
     }
-
     fn checked_app_api_account_id(seed: u8, context: &'static str) -> AccountId {
         AccountId::new(
             checked_app_api_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
@@ -78,7 +66,6 @@ mod app_api_integration_tests {
                 .clone(),
         )
     }
-
     fn state_with_assets(
         domain_id: DomainId,
         authority: AccountId,
@@ -110,11 +97,9 @@ mod app_api_integration_tests {
             LiveQueryStore::start_test(),
         ))
     }
-
     #[test]
     fn collect_projected_account_assets_reads_only_scoped_account_assets() {
         let _guard = app_query_limits_guard();
-
         let alice_id =
             checked_app_api_account_id(0x75, "derive projected account assets Alice fixture key");
         let bob_id =
@@ -150,7 +135,6 @@ mod app_api_integration_tests {
         );
         let world = state.world_view();
         let scoped_accounts = vec![alice_id.clone()];
-
         let projected = collect_projected_account_assets(
             state.as_ref(),
             &world,
@@ -159,13 +143,11 @@ mod app_api_integration_tests {
             Some(&rose_def),
             None,
         );
-
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0].account_id, alice_id.to_string());
         assert_eq!(projected[0].asset, rose_def.to_string());
         assert_eq!(projected[0].quantity, Quantity::from(10_u32));
     }
-
     #[test]
     fn accumulate_asset_holder_quantity_respects_scope_filter() {
         let account_id =
@@ -181,7 +163,6 @@ mod app_api_integration_tests {
         );
         let scope_filter = AssetBalanceScope::Global;
         let mut map = BTreeMap::new();
-
         accumulate_asset_holder_quantity(
             &mut map,
             &global_asset_id,
@@ -196,18 +177,15 @@ mod app_api_integration_tests {
             Some(&scope_filter),
         )
         .expect("filtered holder quantity accumulation");
-
         assert_eq!(map.len(), 1);
         assert_eq!(
             map.get(&(account_id, AssetBalanceScope::Global)),
             Some(&Quantity::from(10_u32))
         );
     }
-
     #[test]
     fn explorer_circulating_quantity_rejects_inconsistent_locked_supply() {
         use iroha_primitives::numeric::Quantity;
-
         assert_eq!(
             explorer_circulating_quantity(&Quantity::from(100_u32), &Quantity::from(40_u32))
                 .expect("locked supply is within total"),
@@ -218,7 +196,6 @@ mod app_api_integration_tests {
                 .is_err()
         );
     }
-
     #[test]
     fn asset_holder_filter_account_candidates_extracts_safe_exact_constraints() {
         let alice_id =
@@ -239,11 +216,9 @@ mod app_api_integration_tests {
             ),
             FilterExpr::Gt(FieldPath("quantity".into()), Value::from(1_u64)),
         ]);
-
         let candidates = asset_holder_filter_account_candidates(Some(&expr)).unwrap();
         assert_eq!(candidates.len(), 1);
         assert!(candidates.contains(&alice_id));
-
         let unsafe_or = FilterExpr::Or(vec![
             FilterExpr::Eq(
                 FieldPath("account_id".into()),
@@ -253,7 +228,6 @@ mod app_api_integration_tests {
         ]);
         assert!(asset_holder_filter_account_candidates(Some(&unsafe_or)).is_none());
     }
-
     #[tokio::test]
     async fn tx_query_empty_ok() {
         let _guard = app_query_limits_guard();
@@ -262,7 +236,6 @@ mod app_api_integration_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-
         let app = Router::new().route(
             "/v1/accounts/{account_id}/transactions/query",
             post({
@@ -279,7 +252,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         let req_body = json_string(crate::json_object(vec![
             json_entry("filter", Value::Null),
             json_entry(
@@ -293,17 +265,14 @@ mod app_api_integration_tests {
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(req_body))
             .unwrap();
-
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::OK);
-
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let s = String::from_utf8(bytes.to_vec()).unwrap();
         let json: norito::json::Value = norito::json::from_str(&s).unwrap();
         assert_eq!(json["total"].as_u64(), Some(0));
         assert!(json["items"].as_array().unwrap().is_empty());
     }
-
     #[tokio::test]
     async fn tx_query_sorted_total_counts_matches() {
         let _guard = app_query_limits_guard();
@@ -314,7 +283,6 @@ mod app_api_integration_tests {
             kura.clone(),
             query,
         ));
-
         // Build three transactions with distinct timestamps
         let network_id = *state.network_id_ref();
         let kp_a = checked_app_api_keypair(
@@ -365,7 +333,6 @@ mod app_api_integration_tests {
             .with_instructions::<InstructionBox>([])
             .sign(kp_b.private_key());
         let tx3 = AcceptedTransaction::new_unchecked(Cow::Owned(tx3));
-
         // Commit
         let leader = checked_app_api_keypair(
             0x7C,
@@ -383,7 +350,6 @@ mod app_api_integration_tests {
             .unpack(|_| {});
         let committed = valid.clone().commit_unchecked().unpack(|_| {});
         crate::test_utils::finalize_committed_block(&state, st_block, committed);
-
         // Sorted by timestamp, request middle page (offset=1, limit=1)
         let env = crate::filter::QueryEnvelope {
             query: None,
@@ -418,7 +384,6 @@ mod app_api_integration_tests {
         assert_eq!(json["items"].as_array().unwrap().len(), 1);
         assert_eq!(json["items"][0]["timestamp_ms"].as_u64(), Some(3000));
     }
-
     #[tokio::test]
     async fn tx_query_rejects_invalid_authority_value() {
         let _guard = app_query_limits_guard();
@@ -427,7 +392,6 @@ mod app_api_integration_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-
         let app = Router::new().route(
             "/v1/accounts/{account_id}/transactions/query",
             post({
@@ -444,7 +408,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         let body = json_string(obj(vec![
             (
                 "filter",
@@ -464,11 +427,9 @@ mod app_api_integration_tests {
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
-
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
     }
-
     #[tokio::test]
     async fn tx_query_rejects_invalid_entrypoint_hash_value() {
         let _guard = app_query_limits_guard();
@@ -493,7 +454,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         // Not-hex
         let body = json_string(obj(vec![(
             "filter",
@@ -510,7 +470,6 @@ mod app_api_integration_tests {
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
-
         // Wrong length
         let body2 = json_string(obj(vec![(
             "filter",
@@ -528,7 +487,6 @@ mod app_api_integration_tests {
         let resp2 = app.clone().oneshot(req2).await.unwrap();
         assert_eq!(resp2.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
     }
-
     #[tokio::test]
     async fn tx_query_rejects_excessive_set_size_and_depth() {
         let _guard = app_query_limits_guard();
@@ -553,7 +511,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         // Build a large IN set (> 256)
         let mut set = Vec::new();
         for _ in 0..300 {
@@ -576,7 +533,6 @@ mod app_api_integration_tests {
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
-
         // Excessive nesting depth (> 10)
         fn nest(mut inner: Value, depth: usize) -> Value {
             for _ in 0..depth {
@@ -596,7 +552,6 @@ mod app_api_integration_tests {
         let resp2 = app.clone().oneshot(req2).await.unwrap();
         assert_eq!(resp2.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
     }
-
     #[tokio::test]
     async fn tx_query_rejects_invalid_operator_for_authority() {
         let _guard = app_query_limits_guard();
@@ -605,7 +560,6 @@ mod app_api_integration_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-
         let app = Router::new().route(
             "/v1/accounts/{account_id}/transactions/query",
             post({
@@ -622,7 +576,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         // Attempt to use a numeric comparison on a string field: authority < 1
         let body = json_string(obj(vec![(
             "filter",
@@ -637,11 +590,9 @@ mod app_api_integration_tests {
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
-
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
     }
-
     #[tokio::test]
     async fn account_assets_query_rejects_invalid_operator_for_quantity() {
         let _guard = app_query_limits_guard();
@@ -650,7 +601,6 @@ mod app_api_integration_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-
         let app = Router::new().route(
             "/v1/accounts/{account_id}/assets/query",
             post({
@@ -667,7 +617,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         // Attempt to compare quantity using a string
         let body = json_string(obj(vec![(
             "filter",
@@ -683,16 +632,13 @@ mod app_api_integration_tests {
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
-
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
     }
-
     #[tokio::test]
     async fn asset_holders_query_rejects_invalid_operator_for_account_id() {
         let _guard = app_query_limits_guard();
         let (state, _, _) = build_asset_holder_fixture_state();
-
         let telemetry = MaybeTelemetry::disabled();
         let app = Router::new().route(
             "/v1/assets/{definition_id}/holders/query",
@@ -713,7 +659,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         // Attempt to compare account_id numerically
         let body = json_string(obj(vec![(
             "filter",
@@ -728,11 +673,9 @@ mod app_api_integration_tests {
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
-
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
     }
-
     #[tokio::test]
     async fn account_assets_query_pagination_preserves_total() {
         let _guard = app_query_limits_guard();
@@ -762,7 +705,6 @@ mod app_api_integration_tests {
             vec![(rose_def, "rose".to_owned()), (lily_def, "lily".to_owned())],
             assets,
         );
-
         // Route under test
         let app = Router::new().route(
             "/v1/accounts/{account_id}/assets/query",
@@ -780,7 +722,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         // Ask for only 1 item, expect total to be 2
         let body = json_string(obj(vec![
             ("filter", Value::Null),
@@ -792,7 +733,6 @@ mod app_api_integration_tests {
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
-
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::OK);
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -801,7 +741,6 @@ mod app_api_integration_tests {
         assert_eq!(json["total"].as_u64(), Some(2));
         assert_eq!(json["items"].as_array().unwrap().len(), 1);
     }
-
     #[tokio::test]
     async fn account_assets_query_sort_by_quantity_desc() {
         let _guard = app_query_limits_guard();
@@ -831,7 +770,6 @@ mod app_api_integration_tests {
             vec![(rose_def, "rose".to_owned()), (lily_def, "lily".to_owned())],
             assets,
         );
-
         let app = Router::new().route(
             "/v1/accounts/{account_id}/assets/query",
             post({
@@ -848,7 +786,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         let body = json_string(obj(vec![
             ("filter", Value::Null),
             (
@@ -865,7 +802,6 @@ mod app_api_integration_tests {
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
-
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::OK);
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -878,7 +814,6 @@ mod app_api_integration_tests {
         assert_eq!(first_qty, "10");
         assert_eq!(second_qty, "7");
     }
-
     #[tokio::test]
     async fn account_assets_query_rejects_limit_above_max_config() {
         let _limits = AppQueryLimitsOverride::new(AppQueryLimits::new(1, 3, 10, 1));
@@ -887,7 +822,6 @@ mod app_api_integration_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-
         let app = Router::new().route(
             "/v1/accounts/{account_id}/assets/query",
             post({
@@ -904,7 +838,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         let body = json_string(obj(vec![
             ("filter", Value::Null),
             ("pagination", obj(vec![("limit", val(&10u64))])),
@@ -915,11 +848,9 @@ mod app_api_integration_tests {
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
-
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
     }
-
     #[tokio::test]
     async fn domains_query_respects_desc_sort() {
         let _guard = app_query_limits_guard();
@@ -942,7 +873,6 @@ mod app_api_integration_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-
         let app = Router::new().route(
             "/v1/domains/query",
             post({
@@ -953,7 +883,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         let body = json_string(obj(vec![
             ("filter", Value::Null),
             (
@@ -967,7 +896,6 @@ mod app_api_integration_tests {
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
-
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::OK);
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -987,12 +915,10 @@ mod app_api_integration_tests {
             "domain ids are not sorted descending: {ids:?}"
         );
     }
-
     #[tokio::test]
     async fn asset_holders_query_pagination_preserves_total() {
         let _guard = app_query_limits_guard();
         let (state, _, _) = build_asset_holder_fixture_state();
-
         // Route under test
         let telemetry = MaybeTelemetry::disabled();
         let app = Router::new().route(
@@ -1014,7 +940,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         // Ask for only 1 item, expect total to be 2
         let body = json_string(obj(vec![
             ("filter", Value::Null),
@@ -1026,7 +951,6 @@ mod app_api_integration_tests {
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
-
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::OK);
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -1035,12 +959,10 @@ mod app_api_integration_tests {
         assert_eq!(json["total"].as_u64(), Some(2));
         assert_eq!(json["items"].as_array().unwrap().len(), 1);
     }
-
     #[tokio::test]
     async fn asset_holders_query_sort_by_quantity_desc() {
         let _guard = app_query_limits_guard();
         let (state, _, _) = build_asset_holder_fixture_state();
-
         let telemetry = MaybeTelemetry::disabled();
         let app = Router::new().route(
             "/v1/assets/{definition_id}/holders/query",
@@ -1061,7 +983,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         let body = json_string(obj(vec![
             ("filter", Value::Null),
             (
@@ -1078,7 +999,6 @@ mod app_api_integration_tests {
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
-
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::OK);
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -1091,12 +1011,10 @@ mod app_api_integration_tests {
         assert_eq!(first_qty, "20");
         assert_eq!(second_qty, "10");
     }
-
     #[tokio::test]
     async fn asset_holders_query_filters_by_account_id() {
         let _guard = app_query_limits_guard();
         let (state, alice_id, _bob_id) = build_asset_holder_fixture_state();
-
         let telemetry = MaybeTelemetry::disabled();
         let app = Router::new().route(
             "/v1/assets/{definition_id}/holders/query",
@@ -1117,7 +1035,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         let body = json_string(obj(vec![(
             "filter",
             obj(vec![
@@ -1134,7 +1051,6 @@ mod app_api_integration_tests {
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
-
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::OK);
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -1145,7 +1061,6 @@ mod app_api_integration_tests {
         let account_id = items[0]["account_id"].as_str().unwrap();
         assert_eq!(account_id, alice_id.to_string());
     }
-
     #[tokio::test]
     async fn account_assets_get_pagination_preserves_total() {
         let _guard = app_query_limits_guard();
@@ -1175,7 +1090,6 @@ mod app_api_integration_tests {
             vec![(rose_def, "rose".to_owned()), (lily_def, "lily".to_owned())],
             assets,
         );
-
         use axum::routing::get;
         let app = Router::new().route(
             "/v1/accounts/{account_id}/assets",
@@ -1193,7 +1107,6 @@ mod app_api_integration_tests {
                     }
             }),
         );
-
         // Preserve the account literal textual representation (I105 by default)
         let req = http::Request::builder()
             .method("GET")
@@ -1208,7 +1121,6 @@ mod app_api_integration_tests {
         assert_eq!(json["total"].as_u64(), Some(2));
         assert_eq!(json["items"].as_array().unwrap().len(), 1);
     }
-
     #[tokio::test]
     async fn account_assets_get_filters_by_asset_and_scope() {
         let _guard = app_query_limits_guard();
@@ -1241,7 +1153,6 @@ mod app_api_integration_tests {
             ],
             assets,
         );
-
         use axum::routing::get;
         let app = Router::new().route(
             "/v1/accounts/{account_id}/assets",
@@ -1259,7 +1170,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         let asset = rose_def.to_string();
         let req = http::Request::builder()
             .method("GET")
@@ -1290,7 +1200,6 @@ mod app_api_integration_tests {
         );
         assert!(items[0]["asset_alias"].is_null());
     }
-
     #[tokio::test]
     async fn account_assets_routes_return_dataspace_scoped_asset_holder_without_account_record() {
         let _guard = app_query_limits_guard();
@@ -1314,7 +1223,6 @@ mod app_api_integration_tests {
             vec![(kina_def.clone(), "kina".to_owned())],
             assets,
         );
-
         use axum::routing::get;
         let app = Router::new()
             .route(
@@ -1349,7 +1257,6 @@ mod app_api_integration_tests {
                     }
                 }),
             );
-
         let holder_literal = holder_id.to_string();
         let asset_literal = kina_def.to_string();
         let get_req = http::Request::builder()
@@ -1372,7 +1279,6 @@ mod app_api_integration_tests {
         assert_eq!(get_items[0]["asset"].as_str(), Some(asset_literal.as_str()));
         assert_eq!(get_items[0]["scope"].as_str(), Some("dataspace:10"));
         assert_eq!(get_items[0]["quantity"].as_str(), Some("81"));
-
         let query_body = json_string(obj(vec![
             ("filter", Value::Null),
             ("pagination", obj(vec![("limit", val(&10u64))])),
@@ -1394,7 +1300,6 @@ mod app_api_integration_tests {
             Some(holder_literal.as_str())
         );
     }
-
     #[tokio::test]
     async fn account_assets_get_rejects_limit_above_cap() {
         let _guard = app_query_limits_guard();
@@ -1417,7 +1322,6 @@ mod app_api_integration_tests {
             assets,
         );
         let cap = app_query_limits().max_page_limit;
-
         let params = AccountAssetsGetParams {
             limit: Some(cap + 1),
             offset: 0,
@@ -1425,7 +1329,6 @@ mod app_api_integration_tests {
             scope: None,
             count_mode: None,
         };
-
         let err = handle_v1_account_assets(
             state,
             axum::extract::Path(alice_id.to_string()),
@@ -1433,19 +1336,16 @@ mod app_api_integration_tests {
             MaybeTelemetry::for_tests(),
         )
         .await;
-
         match err {
             Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
             Err(other) => panic!("unexpected error: {other:?}"),
             Ok(_) => panic!("expected error for limit above cap"),
         }
     }
-
     #[tokio::test]
     async fn asset_holders_get_pagination_preserves_total() {
         let _guard = app_query_limits_guard();
         let (state, _, _) = build_asset_holder_fixture_state();
-
         use axum::routing::get;
         let telemetry = MaybeTelemetry::for_tests();
         let app = Router::new().route(
@@ -1469,7 +1369,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         let req = http::Request::builder()
             .method("GET")
             .uri("/v1/assets/rose%23centralbank/holders?limit=1&count_mode=exact")
@@ -1483,12 +1382,10 @@ mod app_api_integration_tests {
         assert_eq!(json["total"].as_u64(), Some(2));
         assert_eq!(json["items"].as_array().unwrap().len(), 1);
     }
-
     #[tokio::test]
     async fn asset_holders_get_filters_by_account_id() {
         let _guard = app_query_limits_guard();
         let (state, alice_id, _) = build_asset_holder_fixture_state();
-
         use axum::routing::get;
         let telemetry = MaybeTelemetry::for_tests();
         let app = Router::new().route(
@@ -1512,7 +1409,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         let expected_account = alice_id.to_string();
         let req = http::Request::builder()
             .method("GET")
@@ -1540,12 +1436,10 @@ mod app_api_integration_tests {
             Some(expected_account.as_str())
         );
     }
-
     #[tokio::test]
     async fn asset_holders_get_filters_by_account_alias() {
         let _guard = app_query_limits_guard();
         let (state, alice_id, _) = build_asset_holder_fixture_state();
-
         use axum::routing::get;
         let telemetry = MaybeTelemetry::for_tests();
         let app = Router::new().route(
@@ -1569,7 +1463,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         let req = http::Request::builder()
             .method("GET")
             .uri("/v1/assets/rose%23centralbank/holders?account_id=treasury%40universal&count_mode=exact")
@@ -1594,7 +1487,6 @@ mod app_api_integration_tests {
             Some(expected_account.as_str())
         );
     }
-
     #[tokio::test]
     async fn asset_holders_get_rejects_limit_above_cap() {
         let _guard = app_query_limits_guard();
@@ -1607,7 +1499,6 @@ mod app_api_integration_tests {
             scope: None,
             count_mode: None,
         };
-
         let err = handle_v1_asset_holders(
             state,
             axum::extract::Path("rose#centralbank".to_string()),
@@ -1615,14 +1506,12 @@ mod app_api_integration_tests {
             MaybeTelemetry::for_tests(),
         )
         .await;
-
         match err {
             Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
             Err(other) => panic!("unexpected error: {other:?}"),
             Ok(_) => panic!("expected error for limit above cap"),
         }
     }
-
     #[tokio::test]
     async fn asset_holders_get_rejects_legacy_aid_path_selector() {
         let _guard = app_query_limits_guard();
@@ -1634,7 +1523,6 @@ mod app_api_integration_tests {
             scope: None,
             count_mode: None,
         };
-
         let result = handle_v1_asset_holders(
             state,
             axum::extract::Path("prefix:550e8400e29b41d4a7164466554400dd".to_string()),
@@ -1642,19 +1530,16 @@ mod app_api_integration_tests {
             MaybeTelemetry::for_tests(),
         )
         .await;
-
         match result {
             Err(Error::Query(iroha_data_model::ValidationFail::NotPermitted(_))) => {}
             Err(other) => panic!("unexpected error: {other:?}"),
             Ok(_) => panic!("prefixed selector must be rejected"),
         }
     }
-
     #[tokio::test]
     async fn asset_holders_get_uses_canonical_i105_literals() {
         let _guard = app_query_limits_guard();
         use axum::routing::get;
-
         let (state, alice_id, bob_id) = build_asset_holder_fixture_state();
         let telemetry = MaybeTelemetry::for_tests();
         let app = Router::new().route(
@@ -1678,7 +1563,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         let req = http::Request::builder()
             .method("GET")
             .uri("/v1/assets/rose%23centralbank/holders?limit=4")
@@ -1694,7 +1578,6 @@ mod app_api_integration_tests {
             .expect("items array should exist");
         assert_eq!(parsed["total"].as_u64(), Some(2));
         assert_eq!(items.len(), 2);
-
         let expected = [i105_literal(&alice_id), i105_literal(&bob_id)];
         for literal in expected {
             assert!(
@@ -1708,7 +1591,6 @@ mod app_api_integration_tests {
             );
         }
     }
-
     #[tokio::test]
     async fn confidential_asset_transitions_reports_pending_window_metadata() {
         let _guard = app_query_limits_guard();
@@ -1806,7 +1688,6 @@ mod app_api_integration_tests {
         );
         assert!(json["block_height"].as_u64().is_some());
     }
-
     #[tokio::test]
     async fn confidential_asset_transitions_rejects_prefixed_path_selector() {
         let _guard = app_query_limits_guard();
@@ -1822,7 +1703,6 @@ mod app_api_integration_tests {
             Ok(_) => panic!("prefixed selector must be rejected"),
         }
     }
-
     #[tokio::test]
     async fn get_parameters_returns_json() {
         let _guard = app_query_limits_guard();
@@ -1854,7 +1734,6 @@ mod app_api_integration_tests {
         assert!(json.get("block").is_some());
         assert!(json.get("transaction").is_some());
     }
-
     #[tokio::test]
     async fn asset_holders_query_uses_canonical_i105_literals() {
         let _guard = app_query_limits_guard();
@@ -1918,7 +1797,6 @@ mod app_api_integration_tests {
             );
         }
     }
-
     #[tokio::test]
     async fn asset_holders_query_filter_accepts_account_alias() {
         let _guard = app_query_limits_guard();
@@ -1986,7 +1864,6 @@ mod app_api_integration_tests {
             Some(expected_account.as_str())
         );
     }
-
     #[tokio::test]
     async fn asset_holders_query_aggregate_groups_pkrs_by_primary_alias_domain() {
         let _guard = app_query_limits_guard();
@@ -2011,7 +1888,6 @@ mod app_api_integration_tests {
         assert_eq!(items[1]["user_count"].as_u64(), Some(1));
         assert_eq!(items[1]["pkr_total"].as_str(), Some("5"));
     }
-
     #[tokio::test]
     async fn asset_holders_query_aggregate_uses_cached_projection_shards_when_published() {
         let _guard = app_query_limits_guard();
@@ -2039,21 +1915,17 @@ mod app_api_integration_tests {
         assert_eq!(items[1]["pkr_total"].as_str(), Some("5"));
         clear_query_projection_archive_cache_for_tests();
     }
-
     #[tokio::test]
-    async fn asset_holders_query_aggregate_hydrates_projection_store_from_remote_provider() {
+    async fn asset_holders_query_aggregate_requires_capability_for_remote_projection_hydration() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-
         use axum::{
             Router,
             body::Bytes,
             extract::Path as AxumPath,
             routing::{get, post},
         };
-
         let _guard = app_query_limits_guard();
         clear_query_projection_archive_cache_for_tests();
-
         let (state, _, _) = build_asset_holder_aggregate_fixture_state();
         let published = publish_asset_holder_checkpoint_with_real_manifests(&state).await;
         let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
@@ -2067,7 +1939,6 @@ mod app_api_integration_tests {
         let fetch_requests = Arc::new(AtomicUsize::new(0));
         let mut manifest_responses = std::collections::HashMap::new();
         let mut fetch_responses = std::collections::HashMap::new();
-
         for (index, (archive, manifest)) in published.iter().enumerate() {
             let (payload, plan, manifest_for_storage) =
                 query_projection_archive_storage_artifacts(archive)
@@ -2114,7 +1985,6 @@ mod app_api_integration_tests {
                 index.wrapping_add(1) as u8,
             );
         }
-
         let remote_router = Router::new()
             .route(
                 "/v1/sorafs/storage/manifest/{manifest_id_hex}",
@@ -2162,45 +2032,64 @@ mod app_api_integration_tests {
                 .await
                 .expect("serve remote storage routes");
         });
-
         let (app, _storage_dir) = app_state_with_projection_provider_fixture(&fixture);
-        let parsed = run_asset_holder_alias_aggregate_query(Some(app.clone()), state.clone()).await;
-        assert_eq!(
-            parsed["query_source"].as_str(),
-            Some("projection_da_hydrated")
-        );
+        let invoke = || {
+            handle_v1_asset_holders_query_with_app(
+                Some(app.clone()),
+                state.clone(),
+                axum::extract::Path("pkr#paynet".to_owned()),
+                crate::utils::extractors::NoritoJson(asset_holder_alias_aggregate_query()),
+                MaybeTelemetry::for_tests(),
+            )
+        };
+        let error = match invoke().await {
+            Err(error) => error,
+            Ok(_) => panic!("unsigned remote projection hydration must remain disabled"),
+        };
+        match error {
+            Error::AppServiceUnavailable { code, message } => {
+                assert_eq!(code, "projection_archive_unavailable");
+                assert!(message.contains(crate::sorafs::api::REMOTE_HYDRATION_CAPABILITY_REQUIRED));
+            }
+            other => panic!("unexpected remote hydration error: {other:?}"),
+        }
         assert_eq!(
             manifest_requests.load(Ordering::SeqCst),
-            published.len(),
-            "first aggregate query should fetch every missing shard manifest once",
+            1,
+            "the first missing shard manifest may be verified before capability rejection",
         );
         assert_eq!(
             fetch_requests.load(Ordering::SeqCst),
-            published.len(),
-            "first aggregate query should fetch every missing shard payload once",
+            0,
+            "the retired unsigned legacy payload route must not be called",
         );
-
-        let cached = run_asset_holder_alias_aggregate_query(Some(app), state).await;
-        assert_eq!(cached["query_source"].as_str(), Some("projection_da_cache"));
+        let second_error = match invoke().await {
+            Err(error) => error,
+            Ok(_) => panic!("capability rejection must not create a projection cache entry"),
+        };
+        assert!(matches!(
+            second_error,
+            Error::AppServiceUnavailable {
+                code: "projection_archive_unavailable",
+                ..
+            }
+        ));
         assert_eq!(
             manifest_requests.load(Ordering::SeqCst),
-            published.len(),
-            "second aggregate query should reuse the hydrated local cache",
+            2,
+            "a rejected remote payload must not populate the local cache",
         );
         assert_eq!(
             fetch_requests.load(Ordering::SeqCst),
-            published.len(),
-            "second aggregate query should reuse the hydrated local cache",
+            0,
+            "retries must remain fail-closed before legacy payload fetch",
         );
-
         remote_server.abort();
         clear_query_projection_archive_cache_for_tests();
     }
-
     fn build_asset_holder_fixture_state() -> (Arc<iroha_core::state::State>, AccountId, AccountId) {
         let alice_id = checked_app_api_account_id(0x86, "derive asset holder fixture Alice key");
         let bob_id = checked_app_api_account_id(0x87, "derive asset holder fixture Bob key");
-
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def: AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
@@ -2238,10 +2127,8 @@ mod app_api_integration_tests {
         ));
         bind_permanent_asset_alias_for_test(&state, &alice_id, &rose_def, "rose#centralbank");
         bind_account_alias_for_test(&state, &alice_id, "treasury@universal");
-
         (state, alice_id, bob_id)
     }
-
     fn build_asset_holder_aggregate_fixture_state()
     -> (Arc<iroha_core::state::State>, AccountId, AccountId) {
         let alice_id = checked_app_api_account_id(0x88, "derive aggregate asset holder Alice key");
@@ -2251,7 +2138,6 @@ mod app_api_integration_tests {
         let ubl_settlement_id =
             checked_app_api_account_id(0x8B, "derive UBL settlement asset holder key");
         let ubl_user_id = checked_app_api_account_id(0x8C, "derive UBL user asset holder key");
-
         let domain_id: DomainId = DomainId::try_new("aggregate-holders", "universal").unwrap();
         let pkr_def: AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400de");
@@ -2366,10 +2252,8 @@ mod app_api_integration_tests {
         bind_account_alias_for_test(&state, &ubl_user_id, "amir@ubl.paynet");
         bind_account_alias_for_test(&state, &hbl_settlement_id, "cbdc@hbl.paynet");
         bind_account_alias_for_test(&state, &ubl_settlement_id, "cbdc@ubl.paynet");
-
         (state, alice_id, bob_id)
     }
-
     fn install_asset_holder_alias_parent_leases_for_test(
         world: &mut World,
         owner: &AccountId,
@@ -2404,7 +2288,6 @@ mod app_api_integration_tests {
             iroha_core::sns::record_storage_key(&dataspace_selector),
             norito::codec::Encode::encode(&dataspace_record),
         );
-
         for domain in domains {
             let selector =
                 iroha_core::sns::selector_for_domain(domain).expect("parent domain selector");
@@ -2425,7 +2308,6 @@ mod app_api_integration_tests {
             );
         }
     }
-
     fn asset_holder_alias_aggregate_query() -> QueryEnvelope {
         QueryEnvelope {
             query: None,
@@ -2474,7 +2356,6 @@ mod app_api_integration_tests {
             count_mode: None,
         }
     }
-
     async fn run_asset_holder_alias_aggregate_query(
         app: Option<crate::SharedAppState>,
         state: Arc<iroha_core::state::State>,
@@ -2498,7 +2379,6 @@ mod app_api_integration_tests {
             .to_bytes();
         norito::json::from_slice(&payload).expect("json response")
     }
-
     fn default_projection_registry_block_header() -> iroha_data_model::block::BlockHeader {
         iroha_data_model::block::BlockHeader::new(
             std::num::NonZeroU64::new(1).expect("non-zero block height"),
@@ -2509,7 +2389,6 @@ mod app_api_integration_tests {
             0,
         )
     }
-
     fn default_projection_registry_chunker_handle()
     -> iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
@@ -2521,7 +2400,6 @@ mod app_api_integration_tests {
             multihash_code: descriptor.multihash_code,
         }
     }
-
     fn projection_query_sorafs_node_with_temp_storage()
     -> (sorafs_node::NodeHandle, tempfile::TempDir) {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -2531,7 +2409,6 @@ mod app_api_integration_tests {
             .build();
         (sorafs_node::NodeHandle::new(cfg), temp_dir)
     }
-
     fn seed_projection_registry_manifest_for_test(
         state: &iroha_core::state::State,
         manifest: &sorafs_manifest::ManifestV1,
@@ -2592,7 +2469,6 @@ mod app_api_integration_tests {
         tx.world_mut_for_testing()
             .pin_manifests_mut_for_testing()
             .insert(manifest_digest.clone(), manifest_record);
-
         let order_id =
             iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([order_seed; 32]);
         let canonical_order = norito::to_bytes(&sorafs_manifest::capacity::ReplicationOrderV1 {
@@ -2657,32 +2533,26 @@ mod app_api_integration_tests {
                     status: iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Completed(9),
                 },
             );
-
         tx.apply();
         block
             .commit()
             .expect("commit projection registry seed block");
     }
-
     #[derive(Clone)]
     struct ProjectionProviderFixture {
         advert: sorafs_manifest::ProviderAdvertV1,
         envelope: sorafs_manifest::ProviderAdmissionEnvelopeV1,
     }
-
     impl ProjectionProviderFixture {
         fn provider_id(&self) -> [u8; 32] {
             self.advert.body.provider_id
         }
-
         fn issued_at(&self) -> u64 {
             self.advert.issued_at
         }
     }
-
     fn make_projection_provider_fixture(host_pattern: &str) -> ProjectionProviderFixture {
         use ed25519_dalek::{Signer as _, SigningKey};
-
         let signing_key = SigningKey::from_bytes(&[0xA5; 32]);
         let provider_id = [0x11; 32];
         let stake_pool_id = [0x21; 32];
@@ -2841,10 +2711,8 @@ mod app_api_integration_tests {
                 signer: council_key.verifying_key().to_bytes(),
                 signature: council_signature.to_bytes().to_vec(),
             });
-
         ProjectionProviderFixture { advert, envelope }
     }
-
     fn app_state_with_projection_provider_fixture(
         fixture: &ProjectionProviderFixture,
     ) -> (crate::SharedAppState, tempfile::TempDir) {
@@ -2874,7 +2742,6 @@ mod app_api_integration_tests {
         cache
             .commit_prepared(prepared, fixture.issued_at())
             .expect("ingest fixture advert");
-
         let (node, dir) = projection_query_sorafs_node_with_temp_storage();
         (
             crate::tests_runtime_handlers::reconfigure_sorafs_runtime_for_tests(
@@ -2885,7 +2752,6 @@ mod app_api_integration_tests {
             dir,
         )
     }
-
     async fn publish_asset_holder_checkpoint_with_real_manifests(
         state: &Arc<iroha_core::state::State>,
     ) -> Vec<(QueryProjectionShardArchive, sorafs_manifest::ManifestV1)> {
@@ -2904,7 +2770,6 @@ mod app_api_integration_tests {
             !catalog.entries.is_empty(),
             "fixture should produce holder shards"
         );
-
         let mut checkpoint_shards = Vec::new();
         let mut published = Vec::new();
         for (index, entry) in catalog.entries.iter().enumerate() {
@@ -2942,7 +2807,6 @@ mod app_api_integration_tests {
         state.publish_query_projection_checkpoint(1_714_111_000, checkpoint_shards);
         published
     }
-
     #[test]
     fn query_projection_archive_decoder_rejects_noncanonical_norito() {
         let archive = QueryProjectionShardArchive::from_index_status(
@@ -2962,10 +2826,8 @@ mod app_api_integration_tests {
         };
         assert!(norito::decode_from_bytes::<QueryProjectionShardArchive>(&alternate).is_ok());
         let compressed = zstd::bulk::compress(&alternate, 3).expect("compress archive");
-
         assert!(decode_query_projection_archive_payload(&compressed).is_err());
     }
-
     fn i105_literal(account_id: &AccountId) -> String {
         let i105 = account_id
             .to_account_address()

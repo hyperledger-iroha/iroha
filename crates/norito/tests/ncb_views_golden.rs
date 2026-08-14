@@ -1,8 +1,6 @@
 //! Golden-like tests for NCB (columnar) borrowed views.
 //! Validates roundtrip and error paths for several shapes.
-
 use norito::core::Error;
-
 #[test]
 fn ncb_view_str_bool_roundtrip() {
     let rows: Vec<(u64, &str, bool)> = vec![(1, "alice", true), (2, "bob", false)];
@@ -15,7 +13,6 @@ fn ncb_view_str_bool_roundtrip() {
         assert_eq!(view.flag(i), row.2);
     }
 }
-
 #[test]
 fn ncb_view_bytes_bool_roundtrip() {
     let rows: Vec<(u64, &[u8], bool)> =
@@ -29,7 +26,6 @@ fn ncb_view_bytes_bool_roundtrip() {
         assert_eq!(view.flag(i), row.2);
     }
 }
-
 #[test]
 fn ncb_view_u32_bool_roundtrip() {
     let rows: Vec<(u64, u32, bool)> = vec![(1, 7, true), (5, 9, false), (9, 12, true)];
@@ -45,7 +41,6 @@ fn ncb_view_u32_bool_roundtrip() {
         }
     }
 }
-
 #[test]
 fn ncb_view_str_u32_bool_roundtrip() {
     let rows: Vec<(u64, &str, u32, bool)> = vec![(1, "aa", 3, true), (2, "bbb", 0, false)];
@@ -59,7 +54,6 @@ fn ncb_view_str_u32_bool_roundtrip() {
         assert_eq!(view.flag(i), row.3);
     }
 }
-
 #[test]
 fn ncb_view_opt_str_bool_roundtrip() {
     let rows: Vec<(u64, Option<&str>, bool)> = vec![(1, Some("aa"), true), (2, None, false)];
@@ -73,7 +67,6 @@ fn ncb_view_opt_str_bool_roundtrip() {
         assert_eq!(view.flag(i), row.2);
     }
 }
-
 #[test]
 fn ncb_view_opt_u32_bool_roundtrip() {
     let rows: Vec<(u64, Option<u32>, bool)> = vec![(1, Some(7), true), (2, None, false)];
@@ -86,12 +79,9 @@ fn ncb_view_opt_u32_bool_roundtrip() {
         assert_eq!(view.flag(i), row.2);
     }
 }
-
 #[test]
 fn ncb_view_enum_roundtrip() {
-    use norito::columnar::{
-        ColEnumRef, EnumBorrow, encode_ncb_u64_enum_bool, view_ncb_u64_enum_bool,
-    };
+    use norito::columnar::{ColEnumRef, EnumBorrow, encode_ncb_u64_enum_bool, view_ncb_u64_enum_bool};
     let rows = vec![
         (5u64, EnumBorrow::Name("aaa"), true),
         (6u64, EnumBorrow::Code(42), false),
@@ -128,7 +118,6 @@ fn ncb_view_enum_roundtrip() {
         }
     }
 }
-
 #[test]
 fn ncb_view_str_bool_invalid_utf8_detected() {
     // Build a valid buffer then corrupt a byte inside the string blob.

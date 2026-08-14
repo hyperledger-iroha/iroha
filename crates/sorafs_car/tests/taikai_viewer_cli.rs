@@ -8,7 +8,6 @@ use std::{
     str::FromStr,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 use iroha_data_model::{
     name::Name,
     taikai::{
@@ -17,14 +16,12 @@ use iroha_data_model::{
 };
 use norito::json;
 use tempfile::tempdir;
-
 fn taikai_publisher_example_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
         .join("sdk/examples/taikai_publisher")
 }
-
 #[test]
 fn taikai_viewer_emits_metrics_and_summary() -> Result<(), Box<dyn Error>> {
     let python = env::var("PYTHON3").unwrap_or_else(|_| "python3".to_string());
@@ -32,7 +29,6 @@ fn taikai_viewer_emits_metrics_and_summary() -> Result<(), Box<dyn Error>> {
         eprintln!("skipping taikai_viewer test because `{python}` is unavailable");
         return Ok(());
     }
-
     let taikai_car_path = assert_cmd::cargo::cargo_bin!("taikai_car");
     let taikai_viewer_path = {
         let candidate = taikai_car_path
@@ -70,7 +66,6 @@ fn taikai_viewer_emits_metrics_and_summary() -> Result<(), Box<dyn Error>> {
     let temp_path = temp.path().canonicalize()?;
     let out_dir = temp_path.join("publisher");
     let summary_path = out_dir.join("publisher_summary.json");
-
     let output = Command::new(&python)
         .arg(&script)
         .arg("--config")
@@ -93,7 +88,6 @@ fn taikai_viewer_emits_metrics_and_summary() -> Result<(), Box<dyn Error>> {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
     let envelope_primary = out_dir.join("sample_segment_0001.norito");
     let car_primary = out_dir.join("sample_segment_0001.car");
     let envelope_ladder = out_dir.join("sample_segment_0001_720p.norito");
@@ -106,7 +100,6 @@ fn taikai_viewer_emits_metrics_and_summary() -> Result<(), Box<dyn Error>> {
     ] {
         assert!(required.exists(), "missing {}", required.display());
     }
-
     let cek_path = temp_path.join("cek_receipt.norito");
     let receipt = CekRotationReceiptV1 {
         schema_version: CEK_ROTATION_RECEIPT_VERSION_V1,
@@ -126,10 +119,8 @@ fn taikai_viewer_emits_metrics_and_summary() -> Result<(), Box<dyn Error>> {
     };
     let receipt_buf = norito::to_bytes(&receipt).expect("encode cek receipt");
     fs::write(&cek_path, &receipt_buf)?;
-
     let metrics_out = temp_path.join("metrics.prom");
     let viewer_summary = temp_path.join("viewer_summary.json");
-
     let viewer_output = Command::new(&taikai_viewer_path)
         .arg("--segment")
         .arg(format!(
@@ -167,7 +158,6 @@ fn taikai_viewer_emits_metrics_and_summary() -> Result<(), Box<dyn Error>> {
         String::from_utf8_lossy(&viewer_output.stdout),
         String::from_utf8_lossy(&viewer_output.stderr)
     );
-
     let metrics_text = fs::read_to_string(&metrics_out)?;
     assert!(
         metrics_text.contains(
@@ -189,7 +179,6 @@ fn taikai_viewer_emits_metrics_and_summary() -> Result<(), Box<dyn Error>> {
         metrics_text.contains("taikai_viewer_cek_rotation_seconds_ago{lane=\"lane-main\"}"),
         "CEK rotation gauge missing: {metrics_text}"
     );
-
     let summary_raw = fs::read(&viewer_summary)?;
     let summary: json::Value = json::from_slice(&summary_raw)?;
     assert_eq!(
@@ -210,6 +199,5 @@ fn taikai_viewer_emits_metrics_and_summary() -> Result<(), Box<dyn Error>> {
     );
     let cek = summary["cek"].as_object().expect("cek object in summary");
     assert_eq!(cek["duration_ms"], json::Value::from(25u64));
-
     Ok(())
 }

@@ -1,12 +1,9 @@
 //! Focused parser tests for the SoraFS PoP credential-service policy.
-
 use super::*;
-
 fn ed25519_public_hex(seed: u8) -> String {
     let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key");
     hex::encode(key.public_key().to_bytes().1)
 }
-
 fn valid_config() -> SorafsPopCredentialService {
     SorafsPopCredentialService {
         enabled: true,
@@ -40,13 +37,11 @@ fn valid_config() -> SorafsPopCredentialService {
         ..SorafsPopCredentialService::default()
     }
 }
-
 fn assert_rejected(config: SorafsPopCredentialService) {
     let mut emitter = Emitter::new();
     assert!(config.parse(true, &mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn governed_pop_policy_parses_without_runtime_secrets() {
     let mut emitter = Emitter::new();
@@ -73,7 +68,6 @@ fn governed_pop_policy_parses_without_runtime_secrets() {
     assert_eq!(parsed.runtime_provider_registry_revision, 7);
     assert_eq!(parsed.runtime_provider_registry_policy_digest, [0x51; 32]);
 }
-
 #[test]
 fn disabled_pop_policy_rejects_stale_authority_claims() {
     let mut config = SorafsPopCredentialService::default();
@@ -82,7 +76,6 @@ fn disabled_pop_policy_rejects_stale_authority_claims() {
     assert!(config.parse(false, &mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn unsafe_pop_policy_fails_closed() {
     let mut config = valid_config();
@@ -94,12 +87,10 @@ fn unsafe_pop_policy_fails_closed() {
     config.max_seen_nullifiers = 0;
     config.worker_interval_ms = 0;
     config.max_finalized_time_skew_secs = 301;
-
     let mut emitter = Emitter::new();
     assert!(config.parse(true, &mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn enabled_pop_policy_requires_storage_and_dual_control() {
     let mut config = valid_config();
@@ -109,7 +100,6 @@ fn enabled_pop_policy_requires_storage_and_dual_control() {
     let _ = config.parse(false, &mut emitter);
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn enabled_pop_policy_rejects_missing_or_stale_provider_qualification() {
     let missing_handle = {
@@ -157,7 +147,6 @@ fn enabled_pop_policy_rejects_missing_or_stale_provider_qualification() {
         config.runtime_provider_registry_policy_digest_hex = Some("00".repeat(32));
         config
     };
-
     for config in [
         missing_handle,
         missing_revision,
@@ -172,7 +161,6 @@ fn enabled_pop_policy_rejects_missing_or_stale_provider_qualification() {
         assert_rejected(config);
     }
 }
-
 #[test]
 fn enabled_pop_policy_rejects_test_marked_provider_handles() {
     let test_signer = {
@@ -201,7 +189,6 @@ fn enabled_pop_policy_rejects_test_marked_provider_handles() {
             Some("runtime://pop/providers/placeholder".to_owned());
         config
     };
-
     for config in [
         test_signer,
         test_enrollment_recipient,

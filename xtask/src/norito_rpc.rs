@@ -2,53 +2,42 @@
 //!
 //! The implementation lives in `norito_codegen_exporter`; these adapters keep
 //! the workspace command dispatcher thin.
-
 mod alias_setup_fixture;
-
 use eyre::Result;
 pub use norito_codegen_exporter::FixtureOptions;
 use norito_codegen_exporter::{
     JsonOutput, generate_fixtures as generate_fixtures_impl, run_verify as run_verify_impl,
 };
-
 use crate::JsonTarget;
-
 /// Verify canonical Norito RPC fixtures and optionally write a JSON report.
 pub fn run_verify(json_out: Option<JsonTarget>) -> Result<()> {
     let alias_setup_fixture = alias_setup_fixture::render()?;
     run_verify_impl(&alias_setup_fixture, json_out.map(json_output))
 }
-
 /// Regenerate canonical Norito RPC fixtures using the focused exporter crate.
 pub fn generate_fixtures(options: FixtureOptions) -> Result<()> {
     let alias_setup_fixture = alias_setup_fixture::render()?;
     generate_fixtures_impl(options, &alias_setup_fixture)
 }
-
 fn json_output(target: JsonTarget) -> JsonOutput {
     match target {
         JsonTarget::Stdout => JsonOutput::Stdout,
         JsonTarget::File(path) => JsonOutput::File(path),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};
-
     use super::*;
-
     #[test]
     fn output_target_adapter_preserves_variants() {
         assert_eq!(json_output(JsonTarget::Stdout), JsonOutput::Stdout);
-
         let path = PathBuf::from("artifacts/norito-rpc.json");
         assert_eq!(
             json_output(JsonTarget::File(path.clone())),
             JsonOutput::File(path)
         );
     }
-
     #[test]
     fn fixture_options_are_owned_by_exporter() {
         assert!(
@@ -56,7 +45,6 @@ mod tests {
                 .starts_with("norito_codegen_exporter::norito_rpc::")
         );
     }
-
     #[test]
     fn fixture_generation_errors_are_forwarded() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
@@ -64,7 +52,6 @@ mod tests {
         fs::create_dir(&output_root).expect("create output root");
         let missing = output_root.join("fixtures/norito_rpc/transaction_payloads.json");
         let options = FixtureOptions::new(Some(output_root));
-
         let error = generate_fixtures(options).expect_err("missing source fixture must fail");
         assert!(
             error.to_string().contains("fixtures JSON missing"),
@@ -75,7 +62,6 @@ mod tests {
             "delegated error should retain the missing path: {error}"
         );
     }
-
     #[test]
     fn wrapper_remains_an_exporter_delegate() {
         let source = include_str!("norito_rpc.rs");
@@ -99,7 +85,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn alias_setup_owner_is_source_driven_and_has_no_identity_fallback() {
         let source = include_str!("norito_rpc/alias_setup_fixture.rs");

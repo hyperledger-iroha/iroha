@@ -1,13 +1,10 @@
 //! CLI coverage for the SoraFS reference validator.
-
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{PermissionsExt, symlink};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use ed25519_dalek::{Signature, Signer, SigningKey};
 use iroha_crypto::{Algorithm, KeyPair, sha256};
@@ -22,13 +19,11 @@ use sorafs_manifest::{
     sign_potr_receipt_v1, verify_order_request_signature_v1,
 };
 use tempfile::tempdir;
-
 fn workspace_fixture(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join(path)
 }
-
 fn run_release_manifest_verify(
     manifest: &Path,
     public_key: &Path,
@@ -50,7 +45,6 @@ fn run_release_manifest_verify(
         .output()
         .expect("run sorafs-validate release-manifest")
 }
-
 fn run_release_manifest_development_sign(
     manifest: &Path,
     public_key: &Path,
@@ -82,7 +76,6 @@ fn run_release_manifest_development_sign(
         .output()
         .expect("run sorafs-validate release-manifest development signing")
 }
-
 fn assert_release_manifest_failure(output: &std::process::Output, exit_code: i32, message: &str) {
     assert_eq!(
         output.status.code(),
@@ -97,7 +90,6 @@ fn assert_release_manifest_failure(output: &std::process::Output, exit_code: i32
         String::from_utf8_lossy(&output.stderr)
     );
 }
-
 fn potr_receipt() -> PotrReceiptV1 {
     let receipt = PotrReceiptV1 {
         version: POTR_RECEIPT_VERSION_V1,
@@ -120,7 +112,6 @@ fn potr_receipt() -> PotrReceiptV1 {
     };
     sign_potr_fixture(receipt)
 }
-
 fn sign_potr_fixture(receipt: PotrReceiptV1) -> PotrReceiptV1 {
     let gateway_key =
         KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519).expect("fixture gateway key");
@@ -128,7 +119,6 @@ fn sign_potr_fixture(receipt: PotrReceiptV1) -> PotrReceiptV1 {
         KeyPair::try_from_seed(vec![0x31; 32], Algorithm::MlDsa).expect("fixture provider key");
     sign_potr_receipt_v1(receipt, &gateway_key, &provider_key).expect("sign PoTR fixture")
 }
-
 fn repair_task_record() -> RepairTaskRecordV1 {
     RepairTaskRecordV1 {
         version: REPAIR_TASK_VERSION_V1,
@@ -146,13 +136,11 @@ fn repair_task_record() -> RepairTaskRecordV1 {
         slash_proposal_digest: None,
     }
 }
-
 fn governance_node_fixture() -> GovernanceLogNodeV1 {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/governance/node_v1.to");
     norito::decode_from_bytes(&fs::read(fixture).expect("read governance node fixture"))
         .expect("decode governance node fixture")
 }
-
 fn empty_governance_ed25519_signature() -> GovernanceLogSignatureV1 {
     GovernanceLogSignatureV1 {
         algorithm: GovernanceSignatureAlgorithm::Ed25519,
@@ -160,7 +148,6 @@ fn empty_governance_ed25519_signature() -> GovernanceLogSignatureV1 {
         signature: Vec::new(),
     }
 }
-
 fn sign_governance_dag_block(block: &mut GovernanceDagBlockV1, seed: &[u8; 32]) {
     let signing_key = SigningKey::from_bytes(seed);
     let payload_bytes = block
@@ -173,7 +160,6 @@ fn sign_governance_dag_block(block: &mut GovernanceDagBlockV1, seed: &[u8; 32]) 
         signature: signature.to_bytes().to_vec(),
     };
 }
-
 fn governance_dag_node(prev_cid: Option<Vec<u8>>, timestamp: u64) -> GovernanceLogNodeV1 {
     let mut node = governance_node_fixture();
     node.prev_cid = prev_cid;
@@ -195,7 +181,6 @@ fn governance_dag_node(prev_cid: Option<Vec<u8>>, timestamp: u64) -> GovernanceL
     };
     node
 }
-
 fn sign_governance_dag_head(head: &mut GovernanceDagHeadV1, seed: &[u8; 32]) {
     let signing_key = SigningKey::from_bytes(seed);
     let payload_bytes = head
@@ -208,7 +193,6 @@ fn sign_governance_dag_head(head: &mut GovernanceDagHeadV1, seed: &[u8; 32]) {
         signature: signature.to_bytes().to_vec(),
     };
 }
-
 fn governance_dag_block(
     prev_block_cid: Option<Vec<u8>>,
     prev_node_cid: Option<Vec<u8>>,
@@ -243,7 +227,6 @@ fn governance_dag_block(
     sign_governance_dag_block(&mut block, &[0xC7; 32]);
     block
 }
-
 fn governance_dag_head(blocks: &[GovernanceDagBlockV1]) -> GovernanceDagHeadV1 {
     let mut head = GovernanceDagHeadV1 {
         version: GOVERNANCE_DAG_HEAD_VERSION_V1,
@@ -261,7 +244,6 @@ fn governance_dag_head(blocks: &[GovernanceDagBlockV1]) -> GovernanceDagHeadV1 {
     sign_governance_dag_head(&mut head, &[0xC7; 32]);
     head
 }
-
 #[test]
 fn sorafs_validate_advert_accepts_committed_fixture() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/provider_admission/advert_v1.to");
@@ -284,7 +266,6 @@ fn sorafs_validate_advert_accepts_committed_fixture() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -296,13 +277,11 @@ fn sorafs_validate_advert_accepts_committed_fixture() {
         Some(123)
     );
 }
-
 #[test]
 fn sorafs_validate_advert_rejects_malformed_norito() {
     let temp = tempdir().expect("tempdir");
     let input = temp.path().join("bad.to");
     fs::write(&input, b"not norito").expect("write malformed payload");
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "advert",
@@ -318,7 +297,6 @@ fn sorafs_validate_advert_rejects_malformed_norito() {
         .output()
         .expect("run sorafs-validate");
     assert_eq!(output.status.code(), Some(2));
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
     assert_eq!(
@@ -330,7 +308,6 @@ fn sorafs_validate_advert_rejects_malformed_norito() {
         Some("norito")
     );
 }
-
 #[test]
 fn sorafs_validate_admission_accepts_committed_fixture() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/provider_admission/envelope_v1.to");
@@ -351,7 +328,6 @@ fn sorafs_validate_admission_accepts_committed_fixture() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -363,7 +339,6 @@ fn sorafs_validate_admission_accepts_committed_fixture() {
         Some(123)
     );
 }
-
 #[test]
 fn sorafs_validate_admission_accepts_committed_renewal_fixture() {
     let envelope = workspace_fixture("fixtures/sorafs_manifest/provider_admission/envelope_v1.to");
@@ -388,7 +363,6 @@ fn sorafs_validate_admission_accepts_committed_renewal_fixture() {
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -400,7 +374,6 @@ fn sorafs_validate_admission_accepts_committed_renewal_fixture() {
         Some(123)
     );
 }
-
 #[test]
 fn sorafs_validate_admission_accepts_committed_revocation_fixture() {
     let envelope = workspace_fixture("fixtures/sorafs_manifest/provider_admission/envelope_v1.to");
@@ -426,7 +399,6 @@ fn sorafs_validate_admission_accepts_committed_revocation_fixture() {
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -438,13 +410,11 @@ fn sorafs_validate_admission_accepts_committed_revocation_fixture() {
         Some(123)
     );
 }
-
 #[test]
 fn sorafs_validate_admission_rejects_malformed_norito() {
     let temp = tempdir().expect("tempdir");
     let input = temp.path().join("bad-envelope.to");
     fs::write(&input, b"not norito").expect("write malformed payload");
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "admission",
@@ -458,7 +428,6 @@ fn sorafs_validate_admission_rejects_malformed_norito() {
         .output()
         .expect("run sorafs-validate");
     assert_eq!(output.status.code(), Some(2));
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
     assert_eq!(
@@ -470,7 +439,6 @@ fn sorafs_validate_admission_rejects_malformed_norito() {
         Some("norito")
     );
 }
-
 #[test]
 fn sorafs_validate_order_accepts_committed_fixture() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/replication_order/order_v1.to");
@@ -491,7 +459,6 @@ fn sorafs_validate_order_accepts_committed_fixture() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -503,13 +470,11 @@ fn sorafs_validate_order_accepts_committed_fixture() {
         Some(123)
     );
 }
-
 #[test]
 fn sorafs_validate_order_rejects_malformed_norito() {
     let temp = tempdir().expect("tempdir");
     let input = temp.path().join("bad-order.to");
     fs::write(&input, b"not norito").expect("write malformed payload");
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "order",
@@ -523,7 +488,6 @@ fn sorafs_validate_order_rejects_malformed_norito() {
         .output()
         .expect("run sorafs-validate");
     assert_eq!(output.status.code(), Some(2));
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
     assert_eq!(
@@ -535,7 +499,6 @@ fn sorafs_validate_order_rejects_malformed_norito() {
         Some("norito")
     );
 }
-
 #[test]
 fn sorafs_validate_orderbook_accepts_committed_receipt_fixture() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/orderbook/settlement_receipt_v1.to");
@@ -556,7 +519,6 @@ fn sorafs_validate_orderbook_accepts_committed_receipt_fixture() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -568,7 +530,6 @@ fn sorafs_validate_orderbook_accepts_committed_receipt_fixture() {
         Some(123)
     );
 }
-
 #[test]
 fn sorafs_validate_sign_orderbook_writes_verified_order_payload() {
     let temp = tempdir().expect("tempdir");
@@ -579,7 +540,6 @@ fn sorafs_validate_sign_orderbook_writes_verified_order_payload() {
         .verifying_key()
         .to_bytes()
         .to_vec();
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "sign",
@@ -605,7 +565,6 @@ fn sorafs_validate_sign_orderbook_writes_verified_order_payload() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert!(
@@ -625,14 +584,12 @@ fn sorafs_validate_sign_orderbook_writes_verified_order_payload() {
                     && field.get("value").and_then(Value::as_str) == Some("order-request")
             }))
     );
-
     let signed_bytes = fs::read(output_path).expect("read signed orderbook order");
     let signed_order: OrderRequestV1 =
         norito::decode_from_bytes(&signed_bytes).expect("decode signed orderbook order");
     assert_eq!(signed_order.signature.public_key, expected_key);
     verify_order_request_signature_v1(&signed_order).expect("signed order verifies");
 }
-
 #[test]
 fn sorafs_validate_pdp_accepts_committed_fixtures() {
     let commitment = workspace_fixture("fixtures/sorafs_manifest/pdp/commitment_v1.to");
@@ -660,7 +617,6 @@ fn sorafs_validate_pdp_accepts_committed_fixtures() {
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -688,7 +644,6 @@ fn sorafs_validate_pdp_accepts_committed_fixtures() {
         "{outcome:?}"
     );
 }
-
 #[test]
 fn sorafs_validate_pdp_rejects_negative_proof_fixture() {
     let challenge = workspace_fixture("fixtures/sorafs_manifest/pdp/challenge_v1.to");
@@ -709,7 +664,6 @@ fn sorafs_validate_pdp_rejects_negative_proof_fixture() {
         .output()
         .expect("run sorafs-validate");
     assert_eq!(output.status.code(), Some(2));
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
     assert_eq!(
@@ -721,7 +675,6 @@ fn sorafs_validate_pdp_rejects_negative_proof_fixture() {
         Some("signature")
     );
 }
-
 #[test]
 fn sorafs_validate_por_accepts_committed_fixtures() {
     let challenge = workspace_fixture("fixtures/sorafs_manifest/por/challenge_v1.to");
@@ -745,7 +698,6 @@ fn sorafs_validate_por_accepts_committed_fixtures() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -757,14 +709,12 @@ fn sorafs_validate_por_accepts_committed_fixtures() {
         Some(123)
     );
 }
-
 #[test]
 fn sorafs_validate_por_rejects_malformed_challenge() {
     let temp = tempdir().expect("tempdir");
     let challenge = temp.path().join("bad-challenge.to");
     fs::write(&challenge, b"not norito").expect("write malformed payload");
     let proof = workspace_fixture("fixtures/sorafs_manifest/por/proof_v1.to");
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "por",
@@ -780,7 +730,6 @@ fn sorafs_validate_por_rejects_malformed_challenge() {
         .output()
         .expect("run sorafs-validate");
     assert_eq!(output.status.code(), Some(2));
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
     assert_eq!(
@@ -792,7 +741,6 @@ fn sorafs_validate_por_rejects_malformed_challenge() {
         Some("norito")
     );
 }
-
 #[test]
 fn sorafs_validate_potr_accepts_generated_receipt() {
     let temp = tempdir().expect("tempdir");
@@ -802,7 +750,6 @@ fn sorafs_validate_potr_accepts_generated_receipt() {
         norito::to_bytes(&potr_receipt()).expect("encode receipt"),
     )
     .expect("write receipt");
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "potr",
@@ -822,7 +769,6 @@ fn sorafs_validate_potr_accepts_generated_receipt() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -834,7 +780,6 @@ fn sorafs_validate_potr_accepts_generated_receipt() {
         Some(123)
     );
 }
-
 #[test]
 fn sorafs_validate_potr_accepts_committed_fixture() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/potr/receipt_v1.to");
@@ -857,7 +802,6 @@ fn sorafs_validate_potr_accepts_committed_fixture() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -869,7 +813,6 @@ fn sorafs_validate_potr_accepts_committed_fixture() {
         Some(123)
     );
 }
-
 #[test]
 fn sorafs_validate_potr_rejects_profile_mismatch() {
     let temp = tempdir().expect("tempdir");
@@ -879,7 +822,6 @@ fn sorafs_validate_potr_rejects_profile_mismatch() {
         norito::to_bytes(&potr_receipt()).expect("encode receipt"),
     )
     .expect("write receipt");
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "potr",
@@ -895,7 +837,6 @@ fn sorafs_validate_potr_rejects_profile_mismatch() {
         .output()
         .expect("run sorafs-validate");
     assert_eq!(output.status.code(), Some(2));
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
     assert_eq!(
@@ -907,7 +848,6 @@ fn sorafs_validate_potr_rejects_profile_mismatch() {
         Some("validation")
     );
 }
-
 #[test]
 fn sorafs_validate_repair_accepts_generated_task_record() {
     let temp = tempdir().expect("tempdir");
@@ -917,7 +857,6 @@ fn sorafs_validate_repair_accepts_generated_task_record() {
         norito::to_bytes(&repair_task_record()).expect("encode repair task"),
     )
     .expect("write repair task");
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "repair",
@@ -935,7 +874,6 @@ fn sorafs_validate_repair_accepts_generated_task_record() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -947,7 +885,6 @@ fn sorafs_validate_repair_accepts_generated_task_record() {
         Some(123)
     );
 }
-
 #[test]
 fn sorafs_validate_repair_accepts_committed_task_fixture() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/repair/task_v1.to");
@@ -968,7 +905,6 @@ fn sorafs_validate_repair_accepts_committed_task_fixture() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -980,13 +916,11 @@ fn sorafs_validate_repair_accepts_committed_task_fixture() {
         Some(123)
     );
 }
-
 #[test]
 fn sorafs_validate_repair_rejects_malformed_norito() {
     let temp = tempdir().expect("tempdir");
     let input = temp.path().join("bad-repair-task.to");
     fs::write(&input, b"not norito").expect("write malformed payload");
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "repair",
@@ -1002,7 +936,6 @@ fn sorafs_validate_repair_rejects_malformed_norito() {
         .output()
         .expect("run sorafs-validate");
     assert_eq!(output.status.code(), Some(2));
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
     assert_eq!(
@@ -1014,7 +947,6 @@ fn sorafs_validate_repair_rejects_malformed_norito() {
         Some("norito")
     );
 }
-
 #[test]
 fn sorafs_validate_bundle_accepts_committed_fixture_root() {
     let bundle = workspace_fixture("fixtures/sorafs_manifest");
@@ -1038,7 +970,6 @@ fn sorafs_validate_bundle_accepts_committed_fixture_root() {
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -1104,7 +1035,6 @@ fn sorafs_validate_bundle_accepts_committed_fixture_root() {
         "{outcome:?}"
     );
 }
-
 #[test]
 fn sorafs_validate_bundle_rejects_manifest_mismatch() {
     let temp = tempdir().expect("tempdir");
@@ -1128,7 +1058,6 @@ fn sorafs_validate_bundle_rejects_manifest_mismatch() {
         norito::to_bytes(&receipt).expect("encode receipt"),
     )
     .expect("write receipt");
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "bundle",
@@ -1144,7 +1073,6 @@ fn sorafs_validate_bundle_rejects_manifest_mismatch() {
         .output()
         .expect("run sorafs-validate");
     assert_eq!(output.status.code(), Some(2));
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
     assert_eq!(
@@ -1156,7 +1084,6 @@ fn sorafs_validate_bundle_rejects_manifest_mismatch() {
         Some("validation")
     );
 }
-
 #[test]
 fn sorafs_validate_governance_accepts_committed_fixture() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/governance/node_v1.to");
@@ -1184,7 +1111,6 @@ fn sorafs_validate_governance_accepts_committed_fixture() {
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -1196,7 +1122,6 @@ fn sorafs_validate_governance_accepts_committed_fixture() {
         Some(123)
     );
 }
-
 #[test]
 fn sorafs_validate_governance_rejects_cid_mismatch() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/governance/node_v1.to");
@@ -1215,7 +1140,6 @@ fn sorafs_validate_governance_rejects_cid_mismatch() {
         .output()
         .expect("run sorafs-validate");
     assert_eq!(output.status.code(), Some(2));
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
     assert_eq!(
@@ -1227,7 +1151,6 @@ fn sorafs_validate_governance_rejects_cid_mismatch() {
         Some("validation")
     );
 }
-
 #[test]
 fn sorafs_validate_governance_rejects_missing_node_cid() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/governance/node_v1.to");
@@ -1243,7 +1166,6 @@ fn sorafs_validate_governance_rejects_missing_node_cid() {
         ])
         .output()
         .expect("run sorafs-validate");
-
     assert_eq!(output.status.code(), Some(4));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -1256,7 +1178,6 @@ fn sorafs_validate_governance_rejects_missing_node_cid() {
         String::from_utf8_lossy(&output.stdout)
     );
 }
-
 #[test]
 fn sorafs_validate_governance_dag_block_accepts_signed_block() {
     let temp = tempdir().expect("tempdir");
@@ -1268,7 +1189,6 @@ fn sorafs_validate_governance_dag_block_accepts_signed_block() {
     )
     .expect("write governance DAG block");
     let expected_cid = format!("hex:{}", hex::encode(&block.block_cid));
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "governance",
@@ -1289,7 +1209,6 @@ fn sorafs_validate_governance_dag_block_accepts_signed_block() {
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -1297,7 +1216,6 @@ fn sorafs_validate_governance_dag_block_accepts_signed_block() {
         Some("SFS-OK-000")
     );
 }
-
 #[test]
 fn sorafs_validate_governance_dag_block_rejects_cid_mismatch() {
     let temp = tempdir().expect("tempdir");
@@ -1308,7 +1226,6 @@ fn sorafs_validate_governance_dag_block_rejects_cid_mismatch() {
         norito::to_bytes(&block).expect("encode governance DAG block"),
     )
     .expect("write governance DAG block");
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "governance",
@@ -1324,7 +1241,6 @@ fn sorafs_validate_governance_dag_block_rejects_cid_mismatch() {
         .output()
         .expect("run sorafs-validate governance block");
     assert_eq!(output.status.code(), Some(2));
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
     assert_eq!(
@@ -1336,7 +1252,6 @@ fn sorafs_validate_governance_dag_block_rejects_cid_mismatch() {
         Some("validation")
     );
 }
-
 #[test]
 fn sorafs_validate_governance_dag_head_accepts_signed_chain() {
     let temp = tempdir().expect("tempdir");
@@ -1367,7 +1282,6 @@ fn sorafs_validate_governance_dag_head_accepts_signed_chain() {
         norito::to_bytes(&blocks[1]).expect("encode governance DAG block"),
     )
     .expect("write governance DAG block 1");
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "governance",
@@ -1390,7 +1304,6 @@ fn sorafs_validate_governance_dag_head_accepts_signed_chain() {
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -1398,14 +1311,12 @@ fn sorafs_validate_governance_dag_head_accepts_signed_chain() {
         Some("SFS-OK-000")
     );
 }
-
 #[test]
 fn sorafs_validate_sign_advert_writes_valid_signed_norito() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/provider_admission/advert_v1.to");
     let temp = tempdir().expect("tempdir");
     let output_path = temp.path().join("signed-advert.to");
     let key_hex = "a5".repeat(32);
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "sign",
@@ -1433,14 +1344,12 @@ fn sorafs_validate_sign_advert_writes_valid_signed_norito() {
         String::from_utf8_lossy(&output.stdout)
     );
     assert!(output_path.is_file());
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
         outcome.get("code").and_then(Value::as_str),
         Some("SFS-OK-000")
     );
-
     let validate_output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "advert",
@@ -1468,12 +1377,10 @@ fn sorafs_validate_sign_advert_writes_valid_signed_norito() {
         Some("Ok")
     );
 }
-
 #[test]
 fn sorafs_validate_sign_advert_rejects_noncanonical_operator_inputs_before_output() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/provider_admission/advert_v1.to");
     let canonical_key = "a5".repeat(32);
-
     let run_case = |output_path: &Path, key_hex: &str, now: &str, generated_at: &str| {
         cargo_bin_cmd!("sorafs-validate")
             .args([
@@ -1496,7 +1403,6 @@ fn sorafs_validate_sign_advert_rejects_noncanonical_operator_inputs_before_outpu
             .output()
             .expect("run sorafs-validate sign")
     };
-
     for (key_hex, now, generated_at, expected) in [
         (
             canonical_key.as_str(),
@@ -1520,7 +1426,6 @@ fn sorafs_validate_sign_advert_rejects_noncanonical_operator_inputs_before_outpu
         let temp = tempdir().expect("tempdir");
         let output_path = temp.path().join("signed-advert.to");
         let output = run_case(&output_path, key_hex, now, generated_at);
-
         assert!(
             !output.status.success(),
             "noncanonical timestamp unexpectedly succeeded"
@@ -1536,7 +1441,6 @@ fn sorafs_validate_sign_advert_rejects_noncanonical_operator_inputs_before_outpu
             output_path.display()
         );
     }
-
     for (key_hex, expected) in [
         (
             format!("ed25519:{canonical_key}"),
@@ -1563,7 +1467,6 @@ fn sorafs_validate_sign_advert_rejects_noncanonical_operator_inputs_before_outpu
         let temp = tempdir().expect("tempdir");
         let output_path = temp.path().join("signed-advert.to");
         let output = run_case(&output_path, &key_hex, "120", "123");
-
         assert!(
             !output.status.success(),
             "noncanonical key unexpectedly succeeded"
@@ -1580,14 +1483,12 @@ fn sorafs_validate_sign_advert_rejects_noncanonical_operator_inputs_before_outpu
         );
     }
 }
-
 #[test]
 fn sorafs_validate_sign_order_writes_valid_signed_norito() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/replication_order/order_v1.to");
     let temp = tempdir().expect("tempdir");
     let output_path = temp.path().join("signed-order.to");
     let key_hex = "a7".repeat(32);
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "sign",
@@ -1613,14 +1514,12 @@ fn sorafs_validate_sign_order_writes_valid_signed_norito() {
         String::from_utf8_lossy(&output.stdout)
     );
     assert!(output_path.is_file());
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
         outcome.get("code").and_then(Value::as_str),
         Some("SFS-OK-000")
     );
-
     let signed_order: SignedReplicationOrderV1 =
         norito::decode_from_bytes(&fs::read(&output_path).expect("read signed order"))
             .expect("decode signed order");
@@ -1631,7 +1530,6 @@ fn sorafs_validate_sign_order_writes_valid_signed_norito() {
     signed_order
         .verify_signature()
         .expect("signed replication order verifies");
-
     let validate_output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "order",
@@ -1657,14 +1555,12 @@ fn sorafs_validate_sign_order_writes_valid_signed_norito() {
         Some("Ok")
     );
 }
-
 #[test]
 fn sorafs_validate_sign_governance_writes_valid_signed_norito() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/governance/node_v1.to");
     let temp = tempdir().expect("tempdir");
     let output_path = temp.path().join("signed-governance-node.to");
     let key_hex = "a6".repeat(32);
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "sign",
@@ -1690,14 +1586,12 @@ fn sorafs_validate_sign_governance_writes_valid_signed_norito() {
         String::from_utf8_lossy(&output.stdout)
     );
     assert!(output_path.is_file());
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
         outcome.get("code").and_then(Value::as_str),
         Some("SFS-OK-000")
     );
-
     let signed_node: GovernanceLogNodeV1 =
         norito::decode_from_bytes(&fs::read(&output_path).expect("read signed governance node"))
             .expect("decode signed governance node");
@@ -1709,7 +1603,6 @@ fn sorafs_validate_sign_governance_writes_valid_signed_norito() {
         .verify_publisher_signature()
         .expect("signed governance node verifies");
     let expected_cid = format!("hex:{}", hex::encode(&signed_node.node_cid));
-
     let validate_output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "governance",
@@ -1737,7 +1630,6 @@ fn sorafs_validate_sign_governance_writes_valid_signed_norito() {
         Some("Ok")
     );
 }
-
 #[test]
 fn sorafs_validate_release_manifest_verifies_strict_raw_ed25519() {
     let temp = tempdir().expect("tempdir");
@@ -1753,7 +1645,6 @@ fn sorafs_validate_release_manifest_verifies_strict_raw_ed25519() {
     fs::write(&signature, signing_key.sign(manifest_bytes).to_bytes())
         .expect("write raw signature");
     let fingerprint = hex::encode(sha256(public_key_bytes));
-
     let output =
         run_release_manifest_verify(&manifest, &public_key, fingerprint.as_str(), &signature);
     assert!(
@@ -1765,7 +1656,6 @@ fn sorafs_validate_release_manifest_verifies_strict_raw_ed25519() {
         String::from_utf8_lossy(&output.stdout)
             .contains("release manifest Ed25519 signature verified")
     );
-
     fs::write(
         &manifest,
         br#"{"package":"sorafs-validate","schema_version":2}"#,
@@ -1778,7 +1668,6 @@ fn sorafs_validate_release_manifest_verifies_strict_raw_ed25519() {
         String::from_utf8_lossy(&tampered.stderr).contains("Ed25519 signature verification failed")
     );
 }
-
 #[test]
 fn sorafs_validate_release_manifest_rejects_malformed_crypto_inputs() {
     let temp = tempdir().expect("tempdir");
@@ -1792,24 +1681,20 @@ fn sorafs_validate_release_manifest_rejects_malformed_crypto_inputs() {
     let fingerprint = hex::encode(sha256(public_key_bytes));
     fs::write(&manifest, manifest_bytes).expect("write release manifest");
     fs::write(&public_key, public_key_bytes).expect("write raw public key");
-
     fs::write(&signature, [0_u8; 64]).expect("write zero signature");
     let zero =
         run_release_manifest_verify(&manifest, &public_key, fingerprint.as_str(), &signature);
     assert_eq!(zero.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&zero.stderr).contains("must not be all zero"));
-
     fs::write(&signature, [0x11_u8; 63]).expect("write short signature");
     let short =
         run_release_manifest_verify(&manifest, &public_key, fingerprint.as_str(), &signature);
     assert_eq!(short.status.code(), Some(2));
-
     fs::write(&signature, [0x11_u8; 64]).expect("write invalid signature");
     let invalid =
         run_release_manifest_verify(&manifest, &public_key, fingerprint.as_str(), &signature);
     assert_eq!(invalid.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&invalid.stderr).contains("signature verification failed"));
-
     let uppercase = run_release_manifest_verify(
         &manifest,
         &public_key,
@@ -1818,7 +1703,6 @@ fn sorafs_validate_release_manifest_rejects_malformed_crypto_inputs() {
     );
     assert_eq!(uppercase.status.code(), Some(4));
     assert!(String::from_utf8_lossy(&uppercase.stderr).contains("lowercase SHA-256 hex"));
-
     let mut weak_public_key = [0_u8; 32];
     weak_public_key[0] = 1;
     fs::write(&public_key, weak_public_key).expect("write small-order public key");
@@ -1832,13 +1716,11 @@ fn sorafs_validate_release_manifest_rejects_malformed_crypto_inputs() {
     );
     assert_eq!(weak.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&weak.stderr).contains("must not be weak or small-order"));
-
     fs::write(&public_key, b"-----BEGIN PUBLIC KEY-----\n").expect("write PEM-shaped key");
     let encoded =
         run_release_manifest_verify(&manifest, &public_key, fingerprint.as_str(), &signature);
     assert_eq!(encoded.status.code(), Some(2));
 }
-
 #[test]
 fn sorafs_validate_release_manifest_rejects_binding_and_size_adversaries() {
     let temp = tempdir().expect("tempdir");
@@ -1859,7 +1741,6 @@ fn sorafs_validate_release_manifest_rejects_binding_and_size_adversaries() {
     #[cfg(unix)]
     fs::set_permissions(&seed_path, fs::Permissions::from_mode(0o600))
         .expect("secure signing seed");
-
     let wrong_fingerprint =
         run_release_manifest_verify(&manifest, &public_key, &"00".repeat(32), &signature);
     assert_release_manifest_failure(
@@ -1867,7 +1748,6 @@ fn sorafs_validate_release_manifest_rejects_binding_and_size_adversaries() {
         2,
         "public key does not match the reviewed fingerprint",
     );
-
     fs::write(&seed_path, [0x72_u8; 32]).expect("write mismatched signing seed");
     let mismatch_out = root.join("mismatch.sig");
     let mismatch = run_release_manifest_development_sign(
@@ -1884,7 +1764,6 @@ fn sorafs_validate_release_manifest_rejects_binding_and_size_adversaries() {
         "public key does not match the development signing seed",
     );
     assert!(!mismatch_out.exists());
-
     fs::write(&seed_path, [0_u8; 32]).expect("write all-zero signing seed");
     let zero_out = root.join("zero.sig");
     let zero = run_release_manifest_development_sign(
@@ -1897,7 +1776,6 @@ fn sorafs_validate_release_manifest_rejects_binding_and_size_adversaries() {
     );
     assert_release_manifest_failure(&zero, 2, "development signing seed must not be all zero");
     assert!(!zero_out.exists());
-
     fs::write(&seed_path, [0x71_u8; 32]).expect("restore signing seed");
     fs::write(&manifest, vec![b'x'; 1024 * 1024 + 1]).expect("write oversized manifest");
     let oversized_out = root.join("oversized.sig");
@@ -1912,7 +1790,6 @@ fn sorafs_validate_release_manifest_rejects_binding_and_size_adversaries() {
     assert_release_manifest_failure(&oversized, 2, "size is outside the supported range");
     assert!(!oversized_out.exists());
 }
-
 #[test]
 fn sorafs_validate_release_manifest_development_signing_is_explicit_and_no_clobber() {
     let temp = tempdir().expect("tempdir");
@@ -1930,7 +1807,6 @@ fn sorafs_validate_release_manifest_development_signing_is_explicit_and_no_clobb
     #[cfg(unix)]
     fs::set_permissions(&seed_path, fs::Permissions::from_mode(0o600)).expect("secure raw seed");
     fs::write(&public_key, public_key_bytes).expect("write raw public key");
-
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "release-manifest",
@@ -1961,7 +1837,6 @@ fn sorafs_validate_release_manifest_development_signing_is_explicit_and_no_clobb
         .verifying_key()
         .verify_strict(manifest_bytes, &Signature::from_bytes(&signature))
         .expect("generated release signature verifies");
-
     let clobber = cargo_bin_cmd!("sorafs-validate")
         .args([
             "release-manifest",
@@ -1981,7 +1856,6 @@ fn sorafs_validate_release_manifest_development_signing_is_explicit_and_no_clobb
         .expect("rerun development signing");
     assert_eq!(clobber.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&clobber.stderr).contains("must not already exist"));
-
     let missing_gate_out = root.join("ungated.sig");
     let missing_gate = cargo_bin_cmd!("sorafs-validate")
         .args([
@@ -2002,7 +1876,6 @@ fn sorafs_validate_release_manifest_development_signing_is_explicit_and_no_clobb
     assert_eq!(missing_gate.status.code(), Some(4));
     assert!(!missing_gate_out.exists());
 }
-
 #[cfg(unix)]
 #[test]
 fn sorafs_validate_release_manifest_rejects_unsafe_paths_and_permissions() {
@@ -2029,7 +1902,6 @@ fn sorafs_validate_release_manifest_rejects_unsafe_paths_and_permissions() {
     )
     .expect("write signature");
     symlink(&signature, &signature_link).expect("create signature symlink");
-
     let linked_public = run_release_manifest_verify(
         &manifest,
         &public_key_link,
@@ -2037,7 +1909,6 @@ fn sorafs_validate_release_manifest_rejects_unsafe_paths_and_permissions() {
         &signature,
     );
     assert_release_manifest_failure(&linked_public, 2, "direct regular file");
-
     let linked_signature = run_release_manifest_verify(
         &manifest,
         &public_key,
@@ -2045,7 +1916,6 @@ fn sorafs_validate_release_manifest_rejects_unsafe_paths_and_permissions() {
         &signature_link,
     );
     assert_release_manifest_failure(&linked_signature, 2, "direct regular file");
-
     let real_signature_parent = root.join("real-signature-parent");
     fs::create_dir(&real_signature_parent).expect("create real signature parent");
     let nested_signature = real_signature_parent.join("release.sig");
@@ -2060,7 +1930,6 @@ fn sorafs_validate_release_manifest_rejects_unsafe_paths_and_permissions() {
         &linked_signature_parent.join("release.sig"),
     );
     assert_release_manifest_failure(&parent_linked, 2, "parent must be a real directory");
-
     let hardlinked_seed = root.join("release-signing-hardlink.seed");
     fs::hard_link(&seed_path, &hardlinked_seed).expect("hard-link signing seed");
     let hardlink_out = root.join("hardlink.sig");
@@ -2075,7 +1944,6 @@ fn sorafs_validate_release_manifest_rejects_unsafe_paths_and_permissions() {
     assert_release_manifest_failure(&hardlink, 2, "must have exactly one hard link");
     assert!(!hardlink_out.exists());
     fs::remove_file(&hardlinked_seed).expect("remove temporary signing seed hard link");
-
     fs::set_permissions(&public_key, fs::Permissions::from_mode(0o666))
         .expect("make public key group/world writable");
     let writable_out = root.join("writable-public.sig");
@@ -2091,7 +1959,6 @@ fn sorafs_validate_release_manifest_rejects_unsafe_paths_and_permissions() {
     assert!(!writable_out.exists());
     fs::set_permissions(&public_key, fs::Permissions::from_mode(0o644))
         .expect("restore public key permissions");
-
     fs::set_permissions(&seed_path, fs::Permissions::from_mode(0o644))
         .expect("make seed permissions unsafe");
     let unsafe_out = root.join("unsafe.sig");

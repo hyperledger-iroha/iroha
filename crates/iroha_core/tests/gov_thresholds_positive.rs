@@ -1,7 +1,6 @@
 //! Positive-path threshold test: approvals meet ratio and turnout.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::items_after_statements)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -18,11 +17,9 @@ use iroha_data_model::{
     prelude::{Account, Domain},
 };
 use mv::storage::StorageReadOnly;
-
 fn canonical_abi_hex() -> String {
     hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
 }
-
 fn proposal_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
     iroha_data_model::smart_contract::ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -34,11 +31,9 @@ fn proposal_contract_address() -> iroha_data_model::smart_contract::ContractAddr
     )
     .expect("proposal contract address")
 }
-
 #[test]
 fn approves_when_ratio_and_turnout_met() {
     use core::num::NonZeroU64;
-
     use iroha_data_model::{
         events::data::{DataEvent, governance::GovernanceEvent},
         isi::governance::{CastPlainBallot, FinalizeReferendum, ProposeDeployContract, VotingMode},
@@ -49,7 +44,6 @@ fn approves_when_ratio_and_turnout_met() {
         CanProposeContractDeployment, CanSubmitGovernanceBallot,
     };
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -58,7 +52,6 @@ fn approves_when_ratio_and_turnout_met() {
     let bob_account: Account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
     let world = World::with([domain], [alice_account, bob_account], []);
     let mut state = State::new_for_testing(world, kura, query_handle);
-
     // Set threshold num/den = 1/2, min_turnout=0 (defaults); ensure ratio 3/(3+1) >= 1/2
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;
@@ -68,7 +61,6 @@ fn approves_when_ratio_and_turnout_met() {
     cfg.min_turnout = 0;
     cfg.conviction_step_blocks = 1;
     state.set_gov(cfg);
-
     // H=1: open a Plain referendum via propose
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).unwrap(),
@@ -100,7 +92,6 @@ fn approves_when_ratio_and_turnout_met() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("propose");
-
     let proposal_id = {
         let mut proposals = stx.world.governance_proposals().iter();
         let proposal_id = *proposals.next().expect("proposal record").0;
@@ -115,7 +106,6 @@ fn approves_when_ratio_and_turnout_met() {
         stx.world.governance_referenda().get(&rid).is_some(),
         "proposal must create its exact referendum"
     );
-
     let ballot_permission: Permission = CanSubmitGovernanceBallot {
         referendum_id: rid.clone(),
     }
@@ -126,7 +116,6 @@ fn approves_when_ratio_and_turnout_met() {
     Grant::account_permission(ballot_permission, BOB_ID.clone())
         .execute(&BOB_ID, &mut stx)
         .expect("grant ballot B");
-
     let required_bodies = [
         ParliamentBody::RulesCommittee,
         ParliamentBody::AgendaCouncil,
@@ -149,7 +138,6 @@ fn approves_when_ratio_and_turnout_met() {
     stx.world
         .governance_stage_approvals_mut()
         .insert(rid.clone(), approvals);
-
     // Model the exact post-Parliament state with a one-block inclusive voting window.
     stx.world.governance_referenda_mut().insert(
         rid.clone(),
@@ -181,7 +169,6 @@ fn approves_when_ratio_and_turnout_met() {
     .expect("bob ballot");
     stx.apply();
     sblock.commit().expect("commit inclusive voting block");
-
     // H=2 is the first height after the inclusive voting window.
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(2).unwrap(),
@@ -200,7 +187,6 @@ fn approves_when_ratio_and_turnout_met() {
     .execute(&ALICE_ID, &mut stx)
     .expect("finalize ok");
     stx.apply();
-
     let evs = sblock.world.take_external_events();
     assert!(evs.iter().any(|event| matches!(
         event.as_data_event(),

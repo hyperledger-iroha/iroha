@@ -1,6 +1,5 @@
 #![cfg(feature = "ivm_zk_tests")]
 use ivm::{halo2::PairingCircuit, pairing_check_truncated};
-
 #[test]
 fn test_pairing_circuit() {
     let a = 2u64;
@@ -13,7 +12,6 @@ fn test_pairing_circuit() {
     };
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_pairing_circuit_bad_witness() {
     let a = 2u64;

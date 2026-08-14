@@ -5,7 +5,6 @@ struct NativeAmxEvidenceFile {
     path: PathBuf,
     metadata: StableSidecarMetadata,
 }
-
 #[derive(Debug, Default)]
 struct NativeAmxEvidenceInventory {
     manifests: BTreeMap<u64, NativeAmxEvidenceFile>,
@@ -14,7 +13,6 @@ struct NativeAmxEvidenceInventory {
     manifest_stable_bytes: u64,
     receipt_stable_bytes: u64,
 }
-
 impl NativeAmxEvidenceInventory {
     fn stable(&self, kind: NativeAmxEvidenceKind) -> &BTreeMap<u64, NativeAmxEvidenceFile> {
         match kind {
@@ -22,26 +20,22 @@ impl NativeAmxEvidenceInventory {
             NativeAmxEvidenceKind::Receipt => &self.receipts,
         }
     }
-
     fn stable_bytes(&self, kind: NativeAmxEvidenceKind) -> u64 {
         match kind {
             NativeAmxEvidenceKind::Manifest => self.manifest_stable_bytes,
             NativeAmxEvidenceKind::Receipt => self.receipt_stable_bytes,
         }
     }
-
     fn temporary(&self, kind: NativeAmxEvidenceKind) -> Option<&NativeAmxEvidenceFile> {
         self.temporaries.get(&kind)
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeAmxEvidenceRecoveryPhase {
     ManifestPublication,
     ReceiptPublication,
     Startup,
 }
-
 impl BoundProgressNamespace {
     /// Return the descriptor-bound parent path as canonical UTF-8 components
     /// relative to the Kura root. The identity survives relocation of the
@@ -98,7 +92,6 @@ impl BoundProgressNamespace {
         Ok(components)
     }
 }
-
 #[derive(Debug)]
 struct BoundProgressSidecar {
     namespace: BoundProgressNamespace,
@@ -107,19 +100,16 @@ struct BoundProgressSidecar {
     data_metadata: StableSidecarMetadata,
     index_metadata: StableSidecarMetadata,
 }
-
 #[derive(Debug)]
 enum BoundProgressPair {
     Absent(BoundProgressNamespace),
     Present(BoundProgressSidecar),
 }
-
 #[derive(Debug)]
 struct BoundProgressPromotionError {
     published: bool,
     source: std::io::Error,
 }
-
 /// Stable classification for a failed bound progress-sidecar recovery pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BoundProgressRecoveryFailure {
@@ -129,7 +119,6 @@ enum BoundProgressRecoveryFailure {
     /// The namespace or protocol state is hostile, malformed, or ambiguous.
     InvalidData,
 }
-
 impl BoundProgressRecoveryFailure {
     fn from_io(error: &std::io::Error) -> Self {
         match error.kind() {
@@ -142,7 +131,6 @@ impl BoundProgressRecoveryFailure {
             _ => Self::RetryableIo,
         }
     }
-
     fn from_kura(error: &Error) -> Self {
         match error {
             Error::IO(source, _) | Error::MkDir(source, _) => Self::from_io(source),
@@ -150,14 +138,12 @@ impl BoundProgressRecoveryFailure {
         }
     }
 }
-
 #[derive(Debug)]
 struct BoundSidecarIndexSnapshot {
     layout: SidecarIndexLayout,
     entries: Vec<SidecarIndexEntry>,
     indexed_end: u64,
 }
-
 /// Durable undo/redo record for one ordinary progress-sidecar append.
 ///
 /// The record is published before either main file is mutated. Its index byte
@@ -187,16 +173,13 @@ struct BoundProgressAppendIntentV1 {
     new_index_bytes: Vec<u8>,
     integrity_hash: Hash,
 }
-
 impl BoundProgressAppendIntentV1 {
     fn payload_digest(payload: &[u8]) -> Hash {
         Hash::new_from_chunks(&[BOUND_PROGRESS_APPEND_DIGEST_DOMAIN, payload])
     }
-
     fn payload_len(&self) -> Option<u64> {
         self.new_data_len.checked_sub(self.old_data_len)
     }
-
     fn computed_integrity_hash(&self) -> Option<Hash> {
         let mut canonical = self.clone();
         canonical.integrity_hash = Hash::prehashed([0; Hash::LENGTH]);
@@ -204,14 +187,12 @@ impl BoundProgressAppendIntentV1 {
             Hash::new_from_chunks(&[BOUND_PROGRESS_APPEND_INTENT_DIGEST_DOMAIN, &bytes])
         })
     }
-
     fn seal(mut self) -> Self {
         self.integrity_hash = self
             .computed_integrity_hash()
             .expect("fixed progress append intent must encode");
         self
     }
-
     fn validate_for(
         &self,
         namespace: &BoundProgressNamespace,
@@ -265,7 +246,6 @@ impl BoundProgressAppendIntentV1 {
         if new_bytes_len == 0 || new_bytes_len > max_index_window {
             return Err("bound progress append new index window exceeds its hard limit");
         }
-
         if self.index_write_offset == self.old_index_len {
             if old_bytes_len != 0
                 || self
@@ -287,7 +267,6 @@ impl BoundProgressAppendIntentV1 {
         }
         Ok(())
     }
-
     fn validate_against_old_layout(
         &self,
         old_layout: SidecarIndexLayout,
@@ -315,14 +294,12 @@ impl BoundProgressAppendIntentV1 {
         if SidecarIndexEntry::from_bytes(encoded_entry) != expected_entry {
             return Err("bound progress append intent target entry is inconsistent");
         }
-
         if self.index_write_offset != self.old_index_len {
             if old_layout.entry_position(self.height) != Some(self.index_write_offset) {
                 return Err("bound progress append replacement names the wrong height");
             }
             return Ok(());
         }
-
         let prefix_len = self
             .new_index_bytes
             .len()
@@ -348,7 +325,6 @@ impl BoundProgressAppendIntentV1 {
             }
             return Ok(());
         }
-
         if self.new_index_bytes.len() % PIPELINE_INDEX_ENTRY_SIZE != 0 {
             return Err("bound progress initial index window is misaligned");
         }
@@ -415,7 +391,6 @@ impl BoundProgressAppendIntentV1 {
         Ok(())
     }
 }
-
 impl BoundProgressPair {
     fn sidecar(&self) -> Option<&BoundProgressSidecar> {
         match self {
@@ -423,7 +398,6 @@ impl BoundProgressPair {
             Self::Present(sidecar) => Some(sidecar),
         }
     }
-
     fn sidecar_mut(&mut self) -> Option<&mut BoundProgressSidecar> {
         match self {
             Self::Absent(_) => None,
@@ -431,7 +405,6 @@ impl BoundProgressPair {
         }
     }
 }
-
 /// One canonical outbound SCCP payload retained in commitment-index order.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
@@ -443,7 +416,6 @@ struct KuraRetainedSccpMessage {
     /// Exact canonical SCCP V1 payload bytes.
     payload_bytes: Vec<u8>,
 }
-
 /// Legacy retained-record layout written before wire-length and merge-reference binding.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
@@ -463,7 +435,6 @@ struct KuraRetainedBlockRecordV2 {
     /// Successful outbound SCCP messages in exact commitment-index order.
     sccp_archive: Vec<KuraRetainedSccpMessage>,
 }
-
 impl KuraRetainedBlockRecordV2 {
     fn into_current(self) -> KuraRetainedBlockRecord {
         KuraRetainedBlockRecord {
@@ -478,7 +449,6 @@ impl KuraRetainedBlockRecordV2 {
             sccp_archive: self.sccp_archive,
         }
     }
-
     fn from_current(record: &KuraRetainedBlockRecord) -> Option<Self> {
         (record.format_version == RETAINED_BLOCK_RECORD_VERSION_V2
             && record.executed_block_wire_len == 0
@@ -494,7 +464,6 @@ impl KuraRetainedBlockRecordV2 {
         })
     }
 }
-
 /// Immutable Kura-local block evidence retained before body eviction or finality publication.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
@@ -524,7 +493,6 @@ struct KuraRetainedBlockRecord {
     /// Successful outbound SCCP messages in exact commitment-index order.
     sccp_archive: Vec<KuraRetainedSccpMessage>,
 }
-
 impl KuraRetainedBlockRecord {
     fn new(
         block_header: BlockHeader,
@@ -546,17 +514,14 @@ impl KuraRetainedBlockRecord {
             sccp_archive,
         }
     }
-
     fn canonical_storage_bytes(&self) -> Vec<u8> {
         KuraRetainedBlockRecordV2::from_current(self)
             .map_or_else(|| self.encode(), |legacy| legacy.encode())
     }
-
     fn canonical_storage_encoded_len(&self) -> usize {
         KuraRetainedBlockRecordV2::from_current(self)
             .map_or_else(|| self.encoded_len(), |legacy| legacy.encoded_len())
     }
-
     fn is_legacy_upgrade_of(&self, legacy: &Self) -> bool {
         self.format_version == RETAINED_BLOCK_RECORD_VERSION
             && legacy.format_version == RETAINED_BLOCK_RECORD_VERSION_V2
@@ -571,7 +536,6 @@ impl KuraRetainedBlockRecord {
             && self.sccp_archive == legacy.sccp_archive
     }
 }
-
 /// Fixed-size inventory entry for one nonempty retained SCCP archive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RetainedSccpArchiveSummary {
@@ -582,7 +546,6 @@ pub(crate) struct RetainedSccpArchiveSummary {
     /// Number of dense commitment positions in the retained archive.
     pub(crate) message_count: u32,
 }
-
 /// Raw and independently scanned Kura disk-usage state exposed only to crate tests.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -600,7 +563,6 @@ pub(crate) struct DiskUsageAccountingSnapshotForTesting {
     /// Exact total bytes from a read-only filesystem scan.
     pub(crate) exact_total_bytes: u64,
 }
-
 #[derive(Debug)]
 struct StagedRetainedBlockRewriteEntry {
     height: u64,
@@ -608,19 +570,16 @@ struct StagedRetainedBlockRewriteEntry {
     bytes_hash: Hash,
     bytes_len: u64,
 }
-
 #[derive(Debug)]
 struct StagedRetainedBlockRewrite {
     blocks_dir: PathBuf,
     entries: Vec<StagedRetainedBlockRewriteEntry>,
     removed_total_bytes: u64,
 }
-
 enum RetainedBlockRewritePublication<T> {
     Complete(T),
     CommittedWithDeferredCleanup { cleanup_error: Error },
 }
-
 impl<T> RetainedBlockRewritePublication<T> {
     fn into_result(self, kura: &Kura) -> Result<T> {
         match self {
@@ -644,33 +603,28 @@ impl<T> RetainedBlockRewritePublication<T> {
         }
     }
 }
-
 #[derive(Debug, Default)]
 struct TotalDiskUsageAccountingState {
     generation: u64,
     mutations_in_flight: usize,
 }
-
 /// In-flight filesystem mutation registered with Kura's total-usage seqlock.
 #[must_use]
 pub(crate) struct TotalDiskUsageMutation<'a> {
     kura: &'a Kura,
     published: bool,
 }
-
 impl TotalDiskUsageMutation<'_> {
     /// Mark the mutation's cache delta as completely published.
     pub(crate) fn finish(mut self) {
         self.published = true;
     }
 }
-
 impl Drop for TotalDiskUsageMutation<'_> {
     fn drop(&mut self) {
         self.kura.finish_total_disk_usage_mutation(self.published);
     }
 }
-
 /// Move-only ownership of the exact opened safety-WAL directory for one live Kura.
 ///
 /// Only [`Kura`] can mint this authority. Production consensus consumes it
@@ -685,26 +639,20 @@ pub(crate) struct KuraSafetyWalDirectoryAuthority {
     #[cfg(not(all(unix, not(target_os = "espidf"))))]
     _unsupported: (),
 }
-
 impl KuraSafetyWalDirectoryAuthority {
     /// Confirm that this authority was minted by the exact supplied live Kura.
     #[cfg(all(unix, not(target_os = "espidf")))]
     pub(crate) fn matches_kura(&self, kura: &Kura) -> bool {
         self.kura_identity.matches(kura)
     }
-
     /// Consume the authority only when its identity still names this live Kura.
     #[cfg(all(unix, not(target_os = "espidf")))]
-    pub(crate) fn into_opened_directory_for(
-        self,
-        kura: &Kura,
-    ) -> Option<(PathBuf, std::fs::File)> {
+    pub(crate) fn into_opened_directory_for(self, kura: &Kura) -> Option<(PathBuf, std::fs::File)> {
         self.kura_identity
             .matches(kura)
             .then_some((self.directory.expected_path, self.directory.file))
     }
 }
-
 impl Kura {
     #[cfg(all(unix, not(target_os = "espidf")))]
     fn open_safety_wal_store_root_directory(
@@ -712,7 +660,6 @@ impl Kura {
         store_root_lock_file: &std::fs::File,
     ) -> Result<BoundProgressDirectory> {
         use std::os::unix::fs::MetadataExt as _;
-
         let lock_path = store_root.join(STORE_ROOT_LOCK_FILE_NAME);
         let lock_before = store_root_lock_file
             .metadata()
@@ -770,7 +717,6 @@ impl Kura {
         }
         Ok(root)
     }
-
     /// Mint one opened `sumeragi_v2/wal` directory owner from this live Kura root.
     #[cfg(all(unix, not(target_os = "espidf")))]
     pub(crate) fn mint_safety_wal_directory_authority(
@@ -809,7 +755,6 @@ impl Kura {
             directory: wal_directory,
         })
     }
-
     #[cfg(all(unix, not(target_os = "espidf")))]
     fn open_or_create_safety_wal_child_directory(
         &self,
@@ -830,11 +775,8 @@ impl Kura {
             Ok(()) | Err(rustix::io::Errno::EXIST) => {}
             Err(error) => return Err(Error::IO(std::io::Error::from(error), expected_path)),
         }
-        let child = Self::open_bound_progress_child_directory(
-            &self.store_root,
-            parent,
-            &expected_path,
-        )?;
+        let child =
+            Self::open_bound_progress_child_directory(&self.store_root, parent, &expected_path)?;
         if !self.bound_safety_wal_directory_unchanged(parent) {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -850,11 +792,9 @@ impl Kura {
             .map_err(|error| Error::IO(error, parent.expected_path.clone()))?;
         Ok(child)
     }
-
     #[cfg(all(unix, not(target_os = "espidf")))]
     fn bound_safety_wal_directory_unchanged(&self, directory: &BoundProgressDirectory) -> bool {
         use std::os::unix::fs::MetadataExt as _;
-
         let Ok(opened) = directory.file.metadata() else {
             return false;
         };
@@ -884,7 +824,6 @@ impl Kura {
                     && linked.ino() == opened.ino()
             })
     }
-
     /// Reject production WAL minting without descriptor-relative ancestry.
     #[cfg(not(all(unix, not(target_os = "espidf"))))]
     pub(crate) fn mint_safety_wal_directory_authority(
@@ -899,7 +838,6 @@ impl Kura {
         ))
     }
 }
-
 /// Private durable finality envelope paired by height with a retained block record.
 ///
 /// The companion retained record stores independent hashes of the canonical
@@ -916,7 +854,6 @@ struct KuraV2FinalityRecord {
     /// Self-contained consensus finality evidence.
     artifact: V2FinalityArtifact,
 }
-
 impl KuraV2FinalityRecord {
     fn new(block_header: BlockHeader, artifact: V2FinalityArtifact) -> Self {
         Self {

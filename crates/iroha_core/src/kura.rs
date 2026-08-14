@@ -3,7 +3,6 @@
 //! new [`Block`](iroha_data_model::block::SignedBlock)s on the
 //! blockchain.
 mod lane_geometry;
-
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt::Debug,
@@ -18,7 +17,6 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use crate::telemetry::StateTelemetry;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_config::{
@@ -103,7 +101,6 @@ use norito::{
     json::Value as JsonValue,
 };
 use parking_lot::{Condvar, Mutex, RwLock};
-
 use crate::lane_consensus::{
     CommittedLaneBlockSession, DurableLaneBlockNewViewCertificateV1,
     DurableLaneBlockViewCheckpointV1, DurableLanePayloadAvailabilityCertificateV1,
@@ -169,13 +166,11 @@ use crate::{
     },
 };
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
-
 impl From<CommittedBlock> for Arc<SignedBlock> {
     fn from(value: CommittedBlock) -> Self {
         Arc::new(value.into())
     }
 }
-
 const INDEX_FILE_NAME: &str = "blocks.index";
 const DATA_FILE_NAME: &str = "blocks.data";
 const HASHES_FILE_NAME: &str = "blocks.hashes";
@@ -191,6 +186,12 @@ const MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES: usize = 1024;
 const STORE_ROOT_LOCK_FILE_NAME: &str = ".kura.lock";
 const VERIFIED_SNAPSHOT_TAIL_DIGEST_DOMAIN: &[u8] = b"iroha:kura:verified-snapshot-tail:v1\0";
 const ROLLBACK_INTENT_FILE_NAME: &str = "rollback-intent.norito";
+/// Hard wire-size limit for the fixed-width version-one rollback record.
+///
+/// The record contains only four integer fields and one optional block hash.
+/// One KiB therefore leaves ample canonical-header/layout headroom while
+/// preventing a damaged startup marker from choosing the read allocation.
+const MAX_ROLLBACK_INTENT_V1_BYTES: usize = 1024;
 const PIPELINE_DIR_NAME: &str = "pipeline";
 const DA_BLOCKS_DIR_NAME: &str = "da_blocks";
 const DA_BLOCK_REWRITE_STAGE_FILE_NAME: &str = "da_block_rewrite_stage.norito";
@@ -218,13 +219,11 @@ const KAGEMUSHA_ACTIVE_RECEIVER_SIDECARS_DIR_NAME: &str = "kagemusha_active_rece
 const MAX_KAGEMUSHA_TOPUP_FINALITY_SIDECAR_BYTES: usize = 64 * 1024;
 const MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES: usize = 32 * 1024;
 include!("kura/startup_finality_support.rs");
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum NativeAmxEvidenceKind {
     Manifest,
     Receipt,
 }
-
 impl NativeAmxEvidenceKind {
     const fn prefix(self) -> &'static str {
         match self {
@@ -232,7 +231,6 @@ impl NativeAmxEvidenceKind {
             Self::Receipt => NATIVE_AMX_PARTICIPANT_RECEIPT_FILE_PREFIX,
         }
     }
-
     const fn label(self) -> &'static str {
         match self {
             Self::Manifest => NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
@@ -240,9 +238,7 @@ impl NativeAmxEvidenceKind {
         }
     }
 }
-
 include!("kura/bound_progress_and_retained_support.rs");
-
 const CERTIFIED_LANE_BLOCKS_DATA_FILE: &str = "certified_blocks.norito";
 const CERTIFIED_LANE_BLOCKS_INDEX_FILE: &str = "certified_blocks.index";
 const LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_FILE: &str = "latest_certified_frontier.norito";
@@ -374,23 +370,47 @@ const INDEXED_SIDECAR_BASE_CHECK_MASK: u64 = 0x6B75_7261_2D69_6478;
 const MAX_INDEXED_SIDECAR_GAP_ENTRIES: u64 = 4_096;
 const DISK_USAGE_TOTAL_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const BLOCK_NOTIFY_CHANNEL_CAPACITY: usize = 1;
-
 /// Whether this target provides the descriptor-relative, crash-safe storage
 /// primitives required by Sumeragi v2 validator progress witnesses.
 #[must_use]
 pub(crate) const fn sumeragi_v2_validator_storage_supported() -> bool {
     cfg!(any(target_os = "linux", target_os = "macos"))
 }
-
 const SIZE_OF_BLOCK_HASH: u64 = Hash::LENGTH as u64;
 pub(crate) const STRICT_INIT_MAX_BLOCK_BYTES: u64 = MAX_EXECUTED_BLOCK_WIRE_BYTES;
+/// V1 rewrite stage: at most one maximum old body, one maximum new body, and 1 MiB framing.
 const MAX_DA_BLOCK_REWRITE_STAGE_BYTES: u64 = STRICT_INIT_MAX_BLOCK_BYTES * 2 + 1024 * 1024;
 const MAX_DA_BLOCK_REWRITE_STAGE_ENTRIES: usize = 4_096;
+/// V1 association stage: one maximum block, one maximum merge entry, and 1 MiB framing.
 const MAX_CANONICAL_ASSOCIATION_STAGE_BYTES: u64 =
     STRICT_INIT_MAX_BLOCK_BYTES + MAX_MERGE_LEDGER_ENTRY_BYTES as u64 + 1024 * 1024;
+/// Decode-depth ceiling for Kura's version-one canonical recovery records.
+///
+/// Block bodies in these records are opaque byte fields. The remaining typed
+/// merge/rewrite envelopes are shallow, so this is deliberately below Norito's
+/// generic owned-value limit while retaining generous schema headroom.
+const RECOVERY_CONTROL_DECODE_DEPTH_V1: usize = 128;
 const EVICTED_BLOCK_START: u64 = u64::MAX;
 const PENDING_MERGE_ENTRIES_DIR: &str = "pending_merge_entries";
 const PENDING_QUEUE_PLAN_ADMISSIONS_DIR: &str = "pending_queue_plan_admissions";
+/// Build the conservative Norito budget at a recovery format's exact V1 wire cap.
+///
+/// `decode_canonical_with_limits` also installs its payload-derived budget, so
+/// a shorter damaged file inherits the stricter bound instead of gaining the
+/// full protocol maximum.
+fn recovery_control_decode_limits_v1(wire_limit: u64) -> Result<norito::DecodeLimits> {
+    let wire_limit = usize::try_from(wire_limit)?;
+    let defaults = norito::canonical_decode_limits(wire_limit);
+    Ok(norito::DecodeLimits::new(
+        defaults.max_sequence_elements(),
+        defaults.max_field_bytes(),
+        defaults.max_total_elements(),
+        defaults.max_total_allocated_bytes(),
+        defaults
+            .max_nesting_depth()
+            .min(RECOVERY_CONTROL_DECODE_DEPTH_V1),
+    ))
+}
 pub(crate) const MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES: usize =
     iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
 /// Release-default aggregate payload-byte bound used by the test-only indexed
@@ -405,25 +425,21 @@ const DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES: u64 =
 fn checked_keypair() -> KeyPair {
     KeyPair::try_random().expect("kura fixture key generation should succeed")
 }
-
 #[cfg(test)]
 fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
     KeyPair::try_random_with_algorithm(algorithm)
         .expect("kura algorithm-specific fixture key generation should succeed")
 }
-
 #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 fn checked_peer_id() -> PeerId {
     PeerId::new(checked_keypair().public_key().clone())
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HashOnlySnapshotExtensionMode {
     HardForkBootstrap,
     #[cfg(any(test, feature = "iroha-core-tests"))]
     VerifiedLocalSnapshot,
 }
-
 impl HashOnlySnapshotExtensionMode {
     fn label(self) -> &'static str {
         match self {
@@ -432,32 +448,25 @@ impl HashOnlySnapshotExtensionMode {
             Self::VerifiedLocalSnapshot => "verified local snapshot recovery",
         }
     }
-
     fn marks_hash_only_prefix(self) -> bool {
         matches!(self, Self::HardForkBootstrap)
     }
 }
-
 fn default_fastpq_proof_sidecar_queue_cap() -> usize {
     FASTPQ_DEFAULTS::PROOF_SIDECAR_QUEUE_CAP.get()
 }
-
 fn default_pipeline_sidecar_queue_cap() -> usize {
     BLOCKS_IN_MEMORY.get()
 }
-
 fn default_fastpq_proof_sidecar_max_bytes() -> usize {
     usize::try_from(FASTPQ_DEFAULTS::PROOF_SIDECAR_MAX_BYTES.get())
         .unwrap_or(usize::MAX)
         .max(1)
 }
-
 fn default_fastpq_proof_sidecar_max_retries() -> usize {
     FASTPQ_DEFAULTS::PROOF_SIDECAR_MAX_RETRIES.get()
 }
-
 include!("kura/certified_bundle_capacity_reservation_types.rs");
-
 /// The interface of Kura subsystem.
 ///
 /// Merge-ledger persistence requirements are tracked in
@@ -786,10 +795,8 @@ pub struct Kura {
     /// Retains the temporary storage directory used by isolated Kura instances.
     _temp_store_dir: Option<tempfile::TempDir>,
 }
-
 #[derive(Debug)]
 struct KuraInstanceIdentityMarker;
-
 /// Comparison-only identity for one exact live Kura instance.
 ///
 /// This seal carries no storage path and cannot reopen Kura. Lifecycle startup
@@ -797,21 +804,17 @@ struct KuraInstanceIdentityMarker;
 /// launching its workers against another.
 #[derive(Clone, Debug)]
 pub(crate) struct KuraInstanceIdentity(Arc<KuraInstanceIdentityMarker>);
-
 impl KuraInstanceIdentity {
     /// Return whether this seal came from the exact supplied Kura instance.
     pub(crate) fn matches(&self, kura: &Kura) -> bool {
         Arc::ptr_eq(&self.0, &kura.instance_identity)
     }
-
     /// Return whether two seals name the same live Kura instance.
     pub(crate) fn same_instance(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
 }
-
 include!("kura/prune_commit_merge_support.rs");
-
 fn sanitize_merge_cache_capacity(capacity: usize) -> usize {
     if capacity == 0 {
         MERGE_LEDGER_CACHE_CAPACITY
@@ -819,7 +822,6 @@ fn sanitize_merge_cache_capacity(capacity: usize) -> usize {
         capacity
     }
 }
-
 impl MergeLedgerLog {
     fn open_at(path: &Path, cache_capacity: usize) -> Result<Self> {
         let cache_capacity = sanitize_merge_cache_capacity(cache_capacity);
@@ -857,7 +859,6 @@ impl MergeLedgerLog {
             fail_next_append_after: None,
         })
     }
-
     fn in_memory(cache_capacity: usize) -> Self {
         let cache_capacity = sanitize_merge_cache_capacity(cache_capacity);
         Self {
@@ -884,7 +885,6 @@ impl MergeLedgerLog {
             fail_next_append_after: None,
         }
     }
-
     fn append(&mut self, entry: &MergeLedgerEntry) -> Result<bool> {
         if self.preflight_append(entry)? {
             self.append_preflighted(entry)?;
@@ -892,7 +892,6 @@ impl MergeLedgerLog {
         }
         Ok(false)
     }
-
     /// Validate an append without mutating the durable log.
     ///
     /// Returns `false` when the exact entry is already present and `true` when
@@ -940,7 +939,6 @@ impl MergeLedgerLog {
         Self::validate_execution_entry_index_update(&self.latest_execution_entries, entry)?;
         Ok(true)
     }
-
     fn recover_failed_append_tail(&mut self) -> Result<()> {
         let Some(frame_offset) = self.append_recovery_offset else {
             return Ok(());
@@ -955,7 +953,6 @@ impl MergeLedgerLog {
         self.append_recovery_offset = None;
         Ok(())
     }
-
     #[cfg(test)]
     fn injected_append_boundary_error(point: MergeLedgerAppendFailurePoint) -> Error {
         Error::IO(
@@ -965,7 +962,6 @@ impl MergeLedgerLog {
             PathBuf::from("merge_log_test_fail"),
         )
     }
-
     fn append_preflighted(&mut self, entry: &MergeLedgerEntry) -> Result<()> {
         let entry_hash = entry.canonical_hash();
         let encoded = Encode::encode(entry);
@@ -984,7 +980,6 @@ impl MergeLedgerLog {
         }
         #[cfg(test)]
         let fail_after = self.fail_next_append_after.take();
-
         let frame_offset = if let Some(file) = self.file.as_mut() {
             let frame_offset = file.try_io(|f| f.seek(SeekFrom::End(0)))?;
             let append_result = (|| {
@@ -1024,7 +1019,6 @@ impl MergeLedgerLog {
         } else {
             u64::try_from(self.total_entries).unwrap_or(u64::MAX)
         };
-
         self.total_entries = self.total_entries.saturating_add(1);
         let frame = MergeLedgerFrameIndex {
             frame_offset,
@@ -1042,7 +1036,6 @@ impl MergeLedgerLog {
         self.trim_cache();
         Ok(())
     }
-
     fn read_indexed_frame(
         file: &mut FileWrap,
         frame: MergeLedgerFrameIndex,
@@ -1083,7 +1076,6 @@ impl MergeLedgerLog {
         }
         Ok(entry)
     }
-
     fn all_entries(&mut self) -> Result<Vec<MergeLedgerEntry>> {
         self.recover_failed_append_tail()?;
         #[cfg(test)]
@@ -1126,7 +1118,6 @@ impl MergeLedgerLog {
         self.entries.reverse();
         Ok(entries)
     }
-
     fn validate_indexed_file_length(&mut self) -> Result<()> {
         self.recover_failed_append_tail()?;
         let Some(file) = self.file.as_mut() else {
@@ -1149,7 +1140,6 @@ impl MergeLedgerLog {
         }
         Ok(())
     }
-
     fn load_entries(
         file: &mut FileWrap,
         cache_capacity: usize,
@@ -1274,13 +1264,11 @@ impl MergeLedgerLog {
             latest_execution_entries,
         ))
     }
-
     fn truncate_to_len(&mut self, keep: usize) -> Result<()> {
         self.recover_failed_append_tail()?;
         if keep >= self.total_entries {
             return Ok(());
         }
-
         if let Some(file) = self.file.as_mut() {
             let new_len = if keep == 0 {
                 0
@@ -1337,11 +1325,9 @@ impl MergeLedgerLog {
             self.total_entries = keep;
             self.latest_execution_entries = Self::execution_index_for_entries(&self.entries)?;
         }
-
         self.trim_cache();
         Ok(())
     }
-
     fn trim_cache(&mut self) {
         if self.entries.len() > self.cache_capacity {
             let overflow = self.entries.len() - self.cache_capacity;
@@ -1349,45 +1335,37 @@ impl MergeLedgerLog {
         }
     }
 }
-
 include!("kura/merge_ledger_latest_execution_index.rs");
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BlockNotify {
     NewBlock,
     StorageBudgetEviction,
     Shutdown,
 }
-
 /// One body-backed repair of the reverse finality-to-merge-carrier index.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FinalizedMergeCarrierRepair {
     block: Arc<SignedBlock>,
     entry: MergeLedgerEntry,
 }
-
 impl FinalizedMergeCarrierRepair {
     pub(crate) fn block(&self) -> &SignedBlock {
         &self.block
     }
-
     pub(crate) fn entry(&self) -> &MergeLedgerEntry {
         &self.entry
     }
 }
-
 /// Complete read-only startup audit of finalized merge-carrier projections.
 pub(crate) struct FinalizedMergeCarrierRepairPreflight {
     repairs: Vec<FinalizedMergeCarrierRepair>,
     missing_bodies: Vec<(u64, HashOf<BlockHeader>)>,
 }
-
 enum FinalizedMergeCarrierAtHeight {
     Complete,
     Repair(FinalizedMergeCarrierRepair),
     MissingBody(HashOf<BlockHeader>),
 }
-
 /// Result of one bounded lane-history compaction pass.
 ///
 /// Capacity-blocked maintenance is deliberately distinct from incomplete
@@ -1398,7 +1376,6 @@ enum LaneHistoryCompactionOutcome {
     Complete,
     CapacityBlocked,
 }
-
 impl FinalizedMergeCarrierRepairPreflight {
     pub(crate) fn into_parts(
         self,
@@ -1409,7 +1386,6 @@ impl FinalizedMergeCarrierRepairPreflight {
         (self.repairs, self.missing_bodies)
     }
 }
-
 impl Kura {
     fn notify_block_writer_sender(
         sender: &mpsc::SyncSender<BlockNotify>,
@@ -1432,22 +1408,18 @@ impl Kura {
             }
         }
     }
-
     fn notify_block_writer(&self, notification: BlockNotify, context: &'static str) {
         Self::notify_block_writer_sender(&self.block_notify_tx, notification, context);
     }
-
     fn ensure_prune_recovery_not_required(&self) -> Result<()> {
         if self.prune_recovery_required.load(Ordering::Acquire) {
             return Err(Error::PruneRecoveryRequired);
         }
         Ok(())
     }
-
     fn prune_recovery_is_required(&self) -> bool {
         self.prune_recovery_required.load(Ordering::Acquire)
     }
-
     /// Return whether a consensus-path sidecar enqueue must fail closed for pruning.
     ///
     /// Callers repeat this check while holding the queue mutex. A queue insertion whose locked
@@ -1456,7 +1428,6 @@ impl Kura {
     fn prune_blocks_sidecar_enqueue(&self) -> bool {
         self.prune_in_progress.load(Ordering::Acquire) || self.prune_recovery_is_required()
     }
-
     #[cfg(test)]
     fn observe_canonical_read_after_prune_check_for_tests(&self, reader_kind: usize) {
         if self
@@ -1467,7 +1438,6 @@ impl Kura {
                 .fetch_or(reader_kind, Ordering::AcqRel);
         }
     }
-
     #[cfg(test)]
     fn maybe_pause_prune_before_intent(&self) {
         if self.pause_prune_before_intent.load(Ordering::Acquire) {
@@ -1480,7 +1450,6 @@ impl Kura {
                 .store(false, Ordering::Release);
         }
     }
-
     fn build_block_height_index(block_data: &BlockData) -> BlockHeightIndex {
         block_data
             .iter()
@@ -1493,7 +1462,6 @@ impl Kura {
                 index
             })
     }
-
     fn build_transaction_entrypoint_index(block_data: &BlockData) -> TransactionEntrypointIndex {
         let mut index = TransactionEntrypointIndex {
             complete: false,
@@ -1506,7 +1474,6 @@ impl Kura {
             heights_by_timestamp_ms: BTreeMap::new(),
             heights_by_result_status: BTreeMap::new(),
         };
-
         for (idx, (_, block)) in block_data.iter().enumerate() {
             let Some(block) = block else {
                 continue;
@@ -1521,10 +1488,8 @@ impl Kura {
         }
         index.complete = index.incomplete_merge_heights.is_empty()
             && index.indexed_heights.len() == block_data.len();
-
         index
     }
-
     fn insert_transaction_entrypoint_heights(
         index: &mut TransactionEntrypointIndex,
         height: NonZeroUsize,
@@ -1576,7 +1541,6 @@ impl Kura {
                 .insert(height);
         }
     }
-
     fn insert_offline_operation_id_heights(
         index: &mut TransactionEntrypointIndex,
         height: NonZeroUsize,
@@ -1608,7 +1572,6 @@ impl Kura {
                 .insert(height);
         }
     }
-
     fn validate_merge_transaction_uniqueness(
         block: &SignedBlock,
         entry: &MergeLedgerEntry,
@@ -1641,7 +1604,6 @@ impl Kura {
                 "carrier block duplicates an ordinary and/or merge entrypoint hash".to_owned(),
             ));
         }
-
         let ordinary_entrypoints = block.entrypoints_cloned().collect::<Vec<_>>();
         let ordinary_transactions =
             crate::state::committed_transaction_hashes_for_entrypoints(&ordinary_entrypoints)
@@ -1664,7 +1626,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn insert_merge_execution_index_heights(
         index: &mut TransactionEntrypointIndex,
         height: NonZeroUsize,
@@ -1709,7 +1670,6 @@ impl Kura {
                 .insert(height);
         }
     }
-
     fn remove_transaction_entrypoint_height(
         index: &mut TransactionEntrypointIndex,
         height: NonZeroUsize,
@@ -1741,7 +1701,6 @@ impl Kura {
         index.indexed_heights.remove(&height);
         index.incomplete_merge_heights.remove(&height);
     }
-
     fn set_transaction_entrypoint_index_entry(
         &self,
         height: usize,
@@ -1759,7 +1718,6 @@ impl Kura {
             merge_association_complete,
         );
     }
-
     fn set_transaction_entrypoint_index_entry_with_merge(
         &self,
         height: usize,
@@ -1783,7 +1741,6 @@ impl Kura {
         index.complete =
             index.incomplete_merge_heights.is_empty() && index.indexed_heights.len() == chain_len;
     }
-
     fn set_transaction_entrypoint_index_entry_from_finalized_bodyless_merge(
         &self,
         height: usize,
@@ -1803,7 +1760,6 @@ impl Kura {
                 height.get()
             )));
         }
-
         let ordinary_projection_is_empty = canonical_header.merkle_root().is_none()
             && canonical_header.result_merkle_root().is_none();
         let mut index = self.transaction_entrypoint_index.lock();
@@ -1823,7 +1779,6 @@ impl Kura {
             index.incomplete_merge_heights.is_empty() && index.indexed_heights.len() == chain_len;
         Ok(())
     }
-
     fn truncate_transaction_heights<K: Ord>(
         index: &mut BTreeMap<K, BTreeSet<NonZeroUsize>>,
         keep: usize,
@@ -1833,7 +1788,6 @@ impl Kura {
             !indexed_heights.is_empty()
         });
     }
-
     fn truncate_transaction_entrypoint_index(&self, keep: usize) {
         let mut index = self.transaction_entrypoint_index.lock();
         index
@@ -1851,7 +1805,6 @@ impl Kura {
         index.complete =
             index.incomplete_merge_heights.is_empty() && index.indexed_heights.len() == keep;
     }
-
     fn set_block_height_index_entry(&self, height: usize, hash: HashOf<BlockHeader>) {
         let Some(height) = NonZeroUsize::new(height) else {
             return;
@@ -1860,15 +1813,12 @@ impl Kura {
         index.retain(|_, indexed_height| *indexed_height != height);
         index.insert(hash, height);
     }
-
     fn truncate_block_height_index(&self, keep: usize) {
         let mut index = self.block_height_index.lock();
         index.retain(|_, height| height.get() <= keep);
     }
 }
-
 include!("kura/replica_advert_and_body_status.rs");
-
 impl Kura {
     /// Initialize a fresh Kura with the canonical single-lane storage geometry.
     ///
@@ -1894,7 +1844,6 @@ impl Kura {
             PendingControlSidecarLimits::default(),
         )
     }
-
     #[cfg(not(test))]
     fn validate_unauthenticated_fresh_store(
         config: &Config,
@@ -1902,7 +1851,6 @@ impl Kura {
     ) -> Result<()> {
         Self::validate_unauthenticated_fresh_store_inputs(config, lane_config)
     }
-
     fn validate_unauthenticated_fresh_store_inputs(
         config: &Config,
         lane_config: &LaneConfig,
@@ -1917,7 +1865,6 @@ impl Kura {
                 store_root,
             ));
         }
-
         let metadata = match std::fs::symlink_metadata(&store_root) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
@@ -1932,7 +1879,6 @@ impl Kura {
                 store_root,
             ));
         }
-
         let mut entries =
             std::fs::read_dir(&store_root).map_err(|error| Error::IO(error, store_root.clone()))?;
         if let Some(entry) = entries.next() {
@@ -1945,10 +1891,8 @@ impl Kura {
                 entry.path(),
             ));
         }
-
         Ok(())
     }
-
     /// Initialize Kura after authenticating the process-configured lane catalog.
     ///
     /// Unlike [`Self::new`], this production startup boundary checks an existing
@@ -1975,7 +1919,6 @@ impl Kura {
             PendingControlSidecarLimits::default(),
         )
     }
-
     /// Initialize Kura with an explicit provisional audited-snapshot decode exemption.
     ///
     /// The exemption is read-only and exists only so a configured legacy prefix can be opened
@@ -1996,7 +1939,6 @@ impl Kura {
             &SumeragiV2RuntimeLimits::default(),
         )
     }
-
     /// Initialize authenticated Kura with exact fingerprint-bound Sumeragi v2
     /// pending-control persistence limits.
     ///
@@ -2040,7 +1982,6 @@ impl Kura {
             pending_control_sidecar_limits,
         )
     }
-
     fn new_with_configured_lane_catalog_inner(
         config: &Config,
         lane_config: &LaneConfig,
@@ -2088,7 +2029,6 @@ impl Kura {
             pending_control_sidecar_limits,
         )
     }
-
     /// Initialize an authenticated Kura in an isolated temporary directory.
     ///
     /// This applies the same configured-catalog authentication as
@@ -2128,7 +2068,6 @@ impl Kura {
         kura_inner._temp_store_dir = Some(temp_store_dir);
         Ok(kura)
     }
-
     fn acquire_store_root_lock(store_root: &Path) -> Result<std::fs::File> {
         let canonical_root = std::fs::canonicalize(store_root)
             .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
@@ -2160,13 +2099,11 @@ impl Kura {
                 lock_path,
             ));
         }
-
         let mut options = std::fs::OpenOptions::new();
         options.read(true).write(true).create(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
-
             options
                 .mode(0o600)
                 .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
@@ -2222,7 +2159,6 @@ impl Kura {
         }
         Ok(file)
     }
-
     fn new_inner(
         config: &Config,
         lane_config: &LaneConfig,
@@ -2258,7 +2194,6 @@ impl Kura {
         let roster_retention = config.block_sync_roster_retention;
         let roster_sidecar_retention = config.roster_sidecar_retention;
         let roster_log_path = Self::roster_log_path(&store_root);
-
         let primary_lane = lane_config.primary();
         let authenticated_configured_catalog = configured_catalog_hash.is_some();
         let mut provisional_open = provisional_hash_only_prefix.is_some();
@@ -2354,7 +2289,6 @@ impl Kura {
             Self::reverify_configured_primary_blocks_open(preflight, &blocks_root, false)?;
             Self::reverify_configured_primary_merge_open(preflight, &merge_log_path, false)?;
         }
-
         let mut block_store =
             BlockStore::with_fsync(&blocks_root, config.fsync_mode, config.fsync_interval);
         let mut provisional_snapshot_bootstrap = None;
@@ -2446,7 +2380,6 @@ impl Kura {
         if let Some(preflight) = configured_primary_preflight.as_mut() {
             Self::reverify_configured_primary_blocks_open(preflight, &blocks_root, true)?;
         }
-
         let prune_intent = Self::read_prune_intent_for_startup(&store_root, provisional_open)?;
         if prune_intent.is_some() && pending_rollback.is_some() {
             return Err(Error::PruneIntentConflict(
@@ -2463,7 +2396,6 @@ impl Kura {
                 });
             }
         }
-
         if let Some(intent) = pending_rollback.as_ref() {
             warn!(
                 from_height = intent.from_height,
@@ -2485,7 +2417,6 @@ impl Kura {
                 Self::reverify_configured_primary_merge_open(preflight, &merge_log_path, true)?;
             }
         }
-
         if let Some(preflight) = configured_primary_preflight.as_mut() {
             Self::reverify_configured_primary_merge_open(preflight, &merge_log_path, false)?;
         }
@@ -2506,13 +2437,10 @@ impl Kura {
             Self::validate_prune_intent_merge_prefix(&mut merge_log, intent)?;
             Self::apply_prune_intent_to_block_store(&mut block_store, intent)?;
         }
-
         let (block_notify_tx, block_notify_rx) = mpsc::sync_channel(BLOCK_NOTIFY_CHANNEL_CAPACITY);
-
         let block_plain_text_path = config
             .debug_output_new_blocks
             .then(|| blocks_root.join("blocks.jsonl"));
-
         let (_, mut chain_validation) = Kura::init(
             &mut block_store,
             config.init_mode,
@@ -2572,14 +2500,12 @@ impl Kura {
             block_count,
             "Kura block journal init complete"
         );
-
         if !provisional_open && let Some(preflight) = configured_primary_preflight.as_mut() {
             Self::reverify_configured_primary_merge_open(preflight, &merge_log_path, false)?;
         }
         if !provisional_open && let Some(preflight) = configured_primary_preflight.as_mut() {
             Self::reverify_configured_primary_merge_open(preflight, &merge_log_path, true)?;
         }
-
         let defer_lane_provisioning = authenticated_configured_catalog || journal_resolved_primary;
         if !provisional_open {
             if defer_lane_provisioning {
@@ -2603,7 +2529,6 @@ impl Kura {
         } else {
             Self::lane_storage_entries_from_config(lane_config)
         };
-
         if !provisional_open && merge_log.total_entries > block_count {
             let trimmed = merge_log.total_entries - block_count;
             if chain_validation.truncated {
@@ -2619,7 +2544,6 @@ impl Kura {
             }
             merge_log.truncate_to_len(block_count)?;
         }
-
         let kura = Arc::new(Self {
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
             #[cfg(all(unix, not(target_os = "espidf")))]
@@ -2800,12 +2724,10 @@ impl Kura {
             total_disk_usage_scan_paused: AtomicBool::new(false),
             _temp_store_dir: None,
         });
-
         if let Some(intent) = prune_intent.as_ref() {
             kura.preflight_recovered_prune_capacity_before_mutation(intent)?;
         }
         kura.audit_retained_autonomous_lifecycle_cursor_generations()?;
-
         if !provisional_open {
             kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;
             kura.recover_lane_block_execution_input_pairs_on_startup()?;
@@ -2834,7 +2756,6 @@ impl Kura {
             kura.refresh_v2_startup_replay_auxiliary_binding()?;
             kura.validate_configured_kura_capacity_after_startup_recovery()?;
         }
-
         match kura.kura_disk_usage_bytes() {
             Ok(bytes) => {
                 kura.disk_usage.store(bytes, Ordering::Relaxed);
@@ -2854,7 +2775,6 @@ impl Kura {
                 "failed to measure initial total Kura disk usage"
             ),
         }
-
         let verified_finality_count = kura
             .v2_startup_finality_verification_inventory
             .lock()
@@ -2869,7 +2789,6 @@ impl Kura {
         );
         Ok((kura, BlockCount(block_count)))
     }
-
     /// Create an isolated Kura instance for tests.
     ///
     /// The instance keeps blocks in memory for normal test access, while any background writer
@@ -2882,7 +2801,6 @@ impl Kura {
             BLOCKS_IN_MEMORY,
         )
     }
-
     /// Override the shared pending-control byte bound before a test Kura is shared.
     ///
     /// This focused hook drives the exact production candidate-admission field below
@@ -2896,7 +2814,6 @@ impl Kura {
     ) {
         self.pending_control_sidecar_limits.aggregate_bytes = aggregate_bytes.get();
     }
-
     /// Create an isolated test Kura whose canonical primary and lane segments match `lane_config`.
     ///
     /// Unlike reconciling a default test Kura after construction, this opens the
@@ -2906,7 +2823,6 @@ impl Kura {
     pub(crate) fn blank_kura_for_testing_with_lane_config(lane_config: &LaneConfig) -> Arc<Kura> {
         Self::blank_kura_for_testing_with_lane_config_and_retention(lane_config, BLOCKS_IN_MEMORY)
     }
-
     /// Create an isolated Kura with a caller-selected body-retention bound.
     ///
     /// This is exposed only to crate tests and downstream users of the
@@ -2921,7 +2837,6 @@ impl Kura {
             blocks_in_memory,
         )
     }
-
     fn blank_kura_for_testing_with_lane_config_and_retention(
         lane_config: &LaneConfig,
         blocks_in_memory: NonZeroUsize,
@@ -3166,23 +3081,19 @@ impl Kura {
             _temp_store_dir: Some(temp_store_dir),
         })
     }
-
     /// Attach a telemetry sink for storage budget reporting.
     pub fn attach_telemetry(&self, telemetry: StateTelemetry) {
         let _ = self.telemetry.set(telemetry);
     }
-
     /// Return the current committed-lane status evidence revision.
     #[must_use]
     pub(crate) fn committed_lane_status_revision(&self) -> u64 {
         self.committed_lane_status_revision.load(Ordering::Acquire)
     }
-
     fn note_committed_lane_status_change(&self) {
         self.committed_lane_status_revision
             .fetch_add(1, Ordering::Release);
     }
-
     /// Configure FASTPQ proof sidecar persistence limits from runtime configuration.
     pub fn configure_fastpq_proof_sidecar_limits(&self, config: &FastpqConfig) {
         let max_bytes = usize::try_from(config.proof_sidecar_max_bytes.get())
@@ -3194,7 +3105,6 @@ impl Kura {
             config.proof_sidecar_max_retries.get(),
         );
     }
-
     fn set_fastpq_proof_sidecar_limits(
         &self,
         queue_cap: usize,
@@ -3208,14 +3118,12 @@ impl Kura {
         self.fastpq_proof_sidecar_max_retries
             .store(max_retries.max(1), Ordering::Relaxed);
     }
-
     /// Record that a FASTPQ proof could not be persisted because no entry hash was available.
     pub fn record_fastpq_missing_entry_hash(&self) {
         let _ = self;
         let telemetry = FastpqProofSidecarTelemetry;
         telemetry.record_event("missing_entry_hash");
     }
-
     #[cfg(test)]
     fn set_fastpq_proof_sidecar_limits_for_testing(
         &self,
@@ -3225,25 +3133,21 @@ impl Kura {
     ) {
         self.set_fastpq_proof_sidecar_limits(queue_cap, max_bytes, max_retries);
     }
-
     #[cfg(test)]
     fn set_pipeline_sidecar_queue_cap_for_testing(&self, queue_cap: usize) {
         self.pipeline_sidecar_queue_cap
             .store(queue_cap.max(1), Ordering::Relaxed);
     }
-
     /// Return the number of pipeline recovery sidecars pending in the test-only writer queue.
     #[cfg(test)]
     pub(crate) fn pipeline_sidecar_queue_len_for_testing(&self) -> usize {
         self.pipeline_sidecar_queue.lock().len()
     }
-
     /// Root directory used by this Kura instance.
     #[must_use]
     pub fn store_root(&self) -> PathBuf {
         self.store_root.clone()
     }
-
     /// Return cached total on-disk bytes used by Kura (active + retired segments).
     ///
     /// Local body caches and immutable retained-block/finality evidence are tracked in the total
@@ -3273,7 +3177,6 @@ impl Kura {
             return Ok(self.disk_usage_total.load(Ordering::Relaxed));
         }
     }
-
     /// Recompute on-disk bytes used by Kura and refresh the cached value.
     pub(crate) fn refresh_disk_usage_bytes(&self) -> Result<u64> {
         loop {
@@ -3334,7 +3237,6 @@ impl Kura {
             return Ok(usage);
         }
     }
-
     /// Recompute total on-disk bytes and refresh the cached value.
     pub(crate) fn refresh_total_disk_usage_bytes(&self) -> Result<u64> {
         loop {
@@ -3370,7 +3272,6 @@ impl Kura {
             return Ok(usage);
         }
     }
-
     /// Register a filesystem mutation before its first write, rename, or removal.
     pub(crate) fn begin_total_disk_usage_mutation(&self) -> TotalDiskUsageMutation<'_> {
         let mut accounting = self.disk_usage_total_accounting.lock();
@@ -3385,7 +3286,6 @@ impl Kura {
             published: false,
         }
     }
-
     fn finish_total_disk_usage_mutation(&self, published: bool) {
         let mut accounting = self.disk_usage_total_accounting.lock();
         if !published {
@@ -3403,7 +3303,6 @@ impl Kura {
             self.disk_usage_total_accounting_changed.notify_all();
         }
     }
-
     #[cfg(test)]
     fn maybe_pause_total_disk_usage_scan_after_scan_for_tests(&self) {
         if self
@@ -3417,7 +3316,6 @@ impl Kura {
             }
         }
     }
-
     fn maybe_refresh_total_disk_usage_bytes(&self) -> Result<()> {
         if !self.disk_usage_total_initialized.load(Ordering::Relaxed) {
             let _ = self.refresh_total_disk_usage_bytes()?;
@@ -3430,7 +3328,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn ensure_disk_usage_initialized(&self) -> Result<()> {
         if self.disk_usage_initialized.load(Ordering::Relaxed) {
             return Ok(());
@@ -3438,7 +3335,6 @@ impl Kura {
         let _ = self.refresh_disk_usage_bytes()?;
         Ok(())
     }
-
     /// Update the cached disk usage by applying a before/after delta.
     pub(crate) fn update_disk_usage_delta(&self, before: u64, after: u64) {
         if before == after {
@@ -3450,7 +3346,6 @@ impl Kura {
             self.sub_disk_usage_bytes(before - after);
         }
     }
-
     fn update_total_disk_usage_delta(&self, before: u64, after: u64) {
         if before == after {
             return;
@@ -3461,7 +3356,6 @@ impl Kura {
             self.sub_total_disk_usage_bytes(before - after);
         }
     }
-
     fn add_disk_usage_bytes(&self, delta: u64) {
         if delta == 0 {
             return;
@@ -3469,7 +3363,6 @@ impl Kura {
         let _accounting_guard = self.disk_usage_total_accounting.lock();
         self.add_disk_usage_bytes_locked(delta);
     }
-
     fn add_disk_usage_bytes_locked(&self, delta: u64) {
         let _ = self
             .disk_usage
@@ -3478,7 +3371,6 @@ impl Kura {
             });
         self.add_total_disk_usage_bytes_locked(delta);
     }
-
     fn sub_disk_usage_bytes(&self, delta: u64) {
         if delta == 0 {
             return;
@@ -3486,7 +3378,6 @@ impl Kura {
         let _accounting_guard = self.disk_usage_total_accounting.lock();
         self.sub_disk_usage_bytes_locked(delta);
     }
-
     fn sub_disk_usage_bytes_locked(&self, delta: u64) {
         let _ = self
             .disk_usage
@@ -3495,12 +3386,10 @@ impl Kura {
             });
         self.sub_total_disk_usage_bytes_locked(delta);
     }
-
     fn add_total_disk_usage_bytes(&self, delta: u64) {
         let _accounting_guard = self.disk_usage_total_accounting.lock();
         self.add_total_disk_usage_bytes_locked(delta);
     }
-
     fn add_total_disk_usage_bytes_locked(&self, delta: u64) {
         if delta == 0 || !self.disk_usage_total_initialized.load(Ordering::Relaxed) {
             return;
@@ -3511,12 +3400,10 @@ impl Kura {
                     Some(current.saturating_add(delta))
                 });
     }
-
     fn sub_total_disk_usage_bytes(&self, delta: u64) {
         let _accounting_guard = self.disk_usage_total_accounting.lock();
         self.sub_total_disk_usage_bytes_locked(delta);
     }
-
     fn sub_total_disk_usage_bytes_locked(&self, delta: u64) {
         if delta == 0 || !self.disk_usage_total_initialized.load(Ordering::Relaxed) {
             return;
@@ -3527,7 +3414,6 @@ impl Kura {
                     Some(current.saturating_sub(delta))
                 });
     }
-
     /// Attempt to purge retired Kura segments to reclaim disk budget.
     pub(crate) fn purge_retired_segments(&self) -> Result<bool> {
         let _prune_guard = self.prune_lock.lock();
@@ -3536,17 +3422,14 @@ impl Kura {
         self.resolve_canonical_storage_before_mutation()?;
         self.purge_retired_storage_under_prune_and_canonical_guards()
     }
-
     fn invalidate_pending_budget_cache(&self) {
         self.pending_budget_bytes_valid
             .store(false, Ordering::Relaxed);
     }
-
     fn request_background_budget_eviction(&self, bytes_needed: u64) {
         if bytes_needed == 0 || self.store_root.as_os_str().is_empty() {
             return;
         }
-
         let mut current = self.pending_budget_eviction_bytes.load(Ordering::Relaxed);
         while bytes_needed > current {
             match self.pending_budget_eviction_bytes.compare_exchange_weak(
@@ -3559,19 +3442,16 @@ impl Kura {
                 Err(actual) => current = actual,
             }
         }
-
         self.notify_block_writer(
             BlockNotify::StorageBudgetEviction,
             "storage budget eviction",
         );
     }
-
     fn flush_pending_budget_eviction(&self) -> u64 {
         let bytes_needed = self.pending_budget_eviction_bytes.swap(0, Ordering::AcqRel);
         if bytes_needed == 0 {
             return 0;
         }
-
         match self.evict_block_bodies_unlocked(bytes_needed) {
             Ok(freed) => {
                 if freed < bytes_needed {
@@ -3593,7 +3473,6 @@ impl Kura {
             }
         }
     }
-
     fn durable_budget_snapshot(&self) -> Option<(usize, u64)> {
         if !self.durable_budget_snapshot_valid.load(Ordering::Acquire) {
             return None;
@@ -3603,7 +3482,6 @@ impl Kura {
             self.durable_budget_unindexed_bytes.load(Ordering::Relaxed),
         ))
     }
-
     fn publish_durable_budget_snapshot(&self, persisted_count: usize, unindexed_bytes: u64) {
         self.durable_budget_persisted_count
             .store(persisted_count, Ordering::Relaxed);
@@ -3612,16 +3490,13 @@ impl Kura {
         self.durable_budget_snapshot_valid
             .store(true, Ordering::Release);
     }
-
     fn invalidate_durable_budget_snapshot(&self) {
         self.durable_budget_snapshot_valid
             .store(false, Ordering::Release);
     }
-
     fn lock_block_store_for_write(&self) -> parking_lot::MutexGuard<'_, ()> {
         self.block_store_write_lock.lock()
     }
-
     #[cfg(test)]
     fn maybe_pause_store_after_pending_merge_stage_for_tests(&self) {
         if self
@@ -3638,7 +3513,6 @@ impl Kura {
             }
         }
     }
-
     #[cfg(test)]
     fn maybe_pause_eviction_after_snapshot_for_tests(&self) {
         if self
@@ -3652,7 +3526,6 @@ impl Kura {
             }
         }
     }
-
     #[cfg(test)]
     fn maybe_pause_eviction_before_stage_publication_for_tests(&self) {
         if self
@@ -3669,7 +3542,6 @@ impl Kura {
             }
         }
     }
-
     #[cfg(test)]
     fn maybe_pause_block_read_before_cache_recheck_for_tests(&self) {
         if self
@@ -3686,7 +3558,6 @@ impl Kura {
             }
         }
     }
-
     #[cfg(test)]
     fn maybe_pause_hash_only_extension_before_store_for_tests(&self) {
         if self
@@ -3703,7 +3574,6 @@ impl Kura {
             }
         }
     }
-
     #[cfg(test)]
     fn maybe_pause_canonical_poison_after_latch_for_tests(&self) {
         if self
@@ -3720,7 +3590,6 @@ impl Kura {
             }
         }
     }
-
     fn record_writer_fault(&self, context: &'static str, error: &Error) {
         {
             let mut fault = self.writer_fault.lock();
@@ -3732,7 +3601,6 @@ impl Kura {
             telemetry.inc_storage_budget_exceeded("kura_writer_fault");
         }
     }
-
     fn poison_canonical_storage(&self, context: &'static str, error: &Error) {
         // Publish the process-local fail-stop latch before looking for consensus.
         // The handshake lock then serializes this lookup with guard publication:
@@ -3751,7 +3619,6 @@ impl Kura {
         drop(binding_guard);
         self.record_writer_fault(context, error);
     }
-
     /// Bind canonical-storage fail-stop handling to the authoritative consensus guard.
     ///
     /// Rebinding the same guard is idempotent. A different guard would create
@@ -3775,7 +3642,6 @@ impl Kura {
             Err(Error::ConsensusOutputGuardAlreadyBound)
         }
     }
-
     fn committed_recovery_failure(&self, context: &'static str, error: &Error) -> Error {
         let recovery_error = Error::CanonicalBlockCommittedRecoveryRequired {
             detail: format!("{context}: {error}"),
@@ -3783,7 +3649,6 @@ impl Kura {
         self.poison_canonical_storage(context, &recovery_error);
         recovery_error
     }
-
     fn record_or_poison_fsync_fault(&self, context: &'static str, error: &Error) {
         if self.store_root.as_os_str().is_empty() {
             self.record_writer_fault(context, error);
@@ -3812,14 +3677,12 @@ impl Kura {
             self.record_writer_fault(context, error);
         }
     }
-
     fn ensure_canonical_storage_not_poisoned(&self) -> Result<()> {
         if self.canonical_storage_poisoned.load(Ordering::Acquire) {
             return Err(Error::CanonicalStoragePoisoned);
         }
         Ok(())
     }
-
     fn resolve_canonical_storage_before_mutation(&self) -> Result<()> {
         self.durable_mutation_authorized()?;
         if self.store_root.as_os_str().is_empty() {
@@ -3847,13 +3710,11 @@ impl Kura {
         // canonical commit point.
         self.recover_canonical_association_stage()
     }
-
     fn canonical_association_stage_path(&self) -> PathBuf {
         self.active_blocks_dir
             .lock()
             .join(CANONICAL_ASSOCIATION_STAGE_FILE_NAME)
     }
-
     fn validate_canonical_association_stage(
         &self,
         stage: &CanonicalAssociationStageV1,
@@ -3899,33 +3760,35 @@ impl Kura {
         }
         Ok(block)
     }
-
     fn read_canonical_association_stage(&self) -> Result<Option<CanonicalAssociationStageV1>> {
         let path = self.canonical_association_stage_path();
-        let metadata = match std::fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(Error::IO(error, path)),
-        };
-        if metadata.file_type().is_symlink()
-            || !metadata.is_file()
-            || metadata.len() > MAX_CANONICAL_ASSOCIATION_STAGE_BYTES
-        {
-            return Err(Error::IO(
+        let expected_directory = path.parent().ok_or_else(|| {
+            Error::IO(
                 std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "canonical association stage is not a bounded regular file",
+                    ErrorKind::InvalidInput,
+                    "canonical association stage has no parent directory",
                 ),
-                path,
-            ));
-        }
-        let bytes = std::fs::read(&path).map_err(|error| Error::IO(error, path.clone()))?;
-        let stage = norito::decode_canonical::<CanonicalAssociationStageV1>(&bytes)
-            .map_err(|error| Error::NoritoFrame(error.into()))?;
+                path.clone(),
+            )
+        })?;
+        let Some(bytes) = self.read_regular_sidecar_bytes(
+            &path,
+            expected_directory,
+            usize::try_from(MAX_CANONICAL_ASSOCIATION_STAGE_BYTES)?,
+        )?
+        else {
+            return Ok(None);
+        };
+        let decode_limits =
+            recovery_control_decode_limits_v1(MAX_CANONICAL_ASSOCIATION_STAGE_BYTES)?;
+        let stage = norito::decode_canonical_with_limits::<CanonicalAssociationStageV1>(
+            &bytes,
+            decode_limits,
+        )
+        .map_err(|error| Error::NoritoFrame(error.into()))?;
         let _ = self.validate_canonical_association_stage(&stage)?;
         Ok(Some(stage))
     }
-
     fn write_canonical_association_stage(
         &self,
         block: &SignedBlock,
@@ -3953,7 +3816,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn remove_canonical_association_stage(&self) -> Result<()> {
         let path = self.canonical_association_stage_path();
         let before = Self::file_len_or_zero(&path)?;
@@ -3970,15 +3832,12 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn durable_hash_ignoring_poison(&self, height: u64) -> Result<Option<HashOf<BlockHeader>>> {
         Self::read_durable_hash_at_height(&mut self.block_store.lock(), height)
     }
-
     fn recover_canonical_association_stage(&self) -> Result<()> {
         self.recover_canonical_association_stage_with_authority(None)
     }
-
     fn recover_canonical_association_stage_during_snapshot_finalization(
         &self,
         authority: &SnapshotFinalizationMutationAuthority<'_>,
@@ -3986,7 +3845,6 @@ impl Kura {
         authority.validate_for(self)?;
         self.recover_canonical_association_stage_with_authority(Some(authority))
     }
-
     fn recover_canonical_association_stage_with_authority(
         &self,
         finalization_authority: Option<&SnapshotFinalizationMutationAuthority<'_>>,
@@ -4024,7 +3882,6 @@ impl Kura {
         }
         self.remove_canonical_association_stage()
     }
-
     /// Evict persisted block bodies after enough remote replicas advertise the same height/hash.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn evict_block_bodies(&self, bytes_needed: u64) -> Result<u64> {
@@ -4032,7 +3889,6 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         self.evict_block_bodies_unlocked(bytes_needed)
     }
-
     #[allow(clippy::too_many_lines)]
     fn evict_block_bodies_unlocked(&self, bytes_needed: u64) -> Result<u64> {
         if bytes_needed == 0 || self.store_root.as_os_str().is_empty() {
@@ -4064,7 +3920,6 @@ impl Kura {
         ) = {
             let mut block_store = self.block_store.lock();
             block_store.flush_pending_fsync(true)?;
-
             let persisted = usize::try_from(block_store.read_durable_index_count()?)?;
             let canonical_tip = u64::try_from(persisted)?;
             let (minimum_height, maximum_height) =
@@ -4110,7 +3965,6 @@ impl Kura {
             if evict_limit <= 1 {
                 return Ok(0);
             }
-
             let mut indices = vec![BlockIndex::default(); persisted];
             block_store.read_block_indices(0, &mut indices)?;
             let hashes = block_store.read_block_hashes(0, persisted)?;
@@ -4170,7 +4024,6 @@ impl Kura {
                     });
                 }
             }
-
             let mut evict_mask = vec![false; persisted];
             let mut freed = 0u64;
             let mut selected = 0usize;
@@ -4220,11 +4073,9 @@ impl Kura {
                     break;
                 }
             }
-
             if freed == 0 {
                 return Ok(0);
             }
-
             let before_bytes = Self::block_store_tracked_bytes(&mut block_store)?;
             block_store.ensure_da_blocks_dir()?;
             let data_path = block_store.path_to_blockchain.join(DATA_FILE_NAME);
@@ -4235,7 +4086,6 @@ impl Kura {
             let (marker_len, marker_digest) = BlockStore::eviction_file_digest(&marker_path)?;
             let hashes_path = block_store.path_to_blockchain.join(HASHES_FILE_NAME);
             let (hashes_len, hashes_digest) = BlockStore::eviction_file_digest(&hashes_path)?;
-
             (
                 persisted,
                 evict_limit,
@@ -4255,10 +4105,8 @@ impl Kura {
                 da_blocks_dir,
             )
         };
-
         #[cfg(test)]
         self.maybe_pause_eviction_after_snapshot_for_tests();
-
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let mut evicted =
             Vec::with_capacity(evict_mask.iter().filter(|selected| **selected).count());
@@ -4323,11 +4171,19 @@ impl Kura {
                 return Err(Error::V2FinalityExecutedBlockWireHashMismatch { height });
             }
             self.persist_retained_block_record(&blocks_dir, canonical_hash, &block)?;
-
             let da_before = Self::file_len_or_zero(&path)?;
             self.write_atomic_synced_replace(&path, &buffer)?;
-            let durable_wire =
-                std::fs::read(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            let durable_wire = self
+                .read_regular_sidecar_bytes(&path, &da_blocks_dir, length)?
+                .ok_or_else(|| {
+                    Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::NotFound,
+                            "eviction DA sidecar disappeared during bounded readback",
+                        ),
+                        path.clone(),
+                    )
+                })?;
             if durable_wire != buffer {
                 return Err(Error::IO(
                     std::io::Error::new(
@@ -4347,12 +4203,10 @@ impl Kura {
                 wire_len: entry.length,
             });
         }
-
         if evicted.is_empty() {
             self.invalidate_durable_budget_snapshot();
             return Ok(0);
         }
-
         let mut new_indices = indices.clone();
         let mut cursor = 0u64;
         let mut data_tmp_file = FileWrap::open_with(data_tmp.clone(), |opts| {
@@ -4389,7 +4243,6 @@ impl Kura {
             file.set_len(cursor)?;
             file.sync_all()
         })?;
-
         let mut index_tmp_file = FileWrap::open_with(index_tmp.clone(), |opts| {
             opts.write(true).create_new(true);
         })?;
@@ -4434,7 +4287,6 @@ impl Kura {
                     .to_path_buf(),
             )
         })?;
-
         let (data_len, data_digest) = BlockStore::eviction_file_digest(&data_tmp)?;
         let (actual_index_len, index_digest) = BlockStore::eviction_file_digest(&index_tmp)?;
         if actual_index_len != index_len {
@@ -4446,7 +4298,6 @@ impl Kura {
                 index_tmp,
             ));
         }
-
         {
             let mut block_store = self.block_store.lock();
             let current_persisted = usize::try_from(block_store.read_durable_index_count()?)?;
@@ -4469,10 +4320,8 @@ impl Kura {
                 self.invalidate_durable_budget_snapshot();
                 return Ok(0);
             }
-
             #[cfg(test)]
             self.maybe_pause_eviction_before_stage_publication_for_tests();
-
             let fresh_authority = if eviction_authorities.len() == evicted.len() {
                 evicted.iter().zip(&eviction_authorities).try_fold(
                     true,
@@ -4519,7 +4368,6 @@ impl Kura {
                 self.invalidate_durable_budget_snapshot();
                 return Ok(0);
             }
-
             let stage = EvictionCompactionStageV1 {
                 format_version: EVICTION_COMPACTION_STAGE_VERSION,
                 marker,
@@ -4594,55 +4442,46 @@ impl Kura {
                     }
                 }
             }
-
             block_store.fsync.clear();
             block_store.drop_cached_handles();
             let after_bytes = Self::block_store_tracked_bytes(&mut block_store)?;
             self.update_disk_usage_delta(before_bytes, after_bytes);
             self.publish_durable_budget_snapshot(persisted, 0);
         }
-
         if freed > 0 {
             if let Some(telemetry) = self.telemetry.get() {
                 telemetry.add_storage_da_churn_bytes("kura", "evicted", freed);
             }
         }
-
         accounting_mutation.finish();
         Ok(freed)
     }
-
     /// Retention window for commit-roster snapshots.
     #[must_use]
     pub fn block_sync_roster_retention(&self) -> NonZeroUsize {
         self.block_sync_roster_retention
     }
-
     /// Number of newest canonical block bodies protected from Kura eviction.
     #[must_use]
     pub(crate) fn blocks_in_memory(&self) -> NonZeroUsize {
         self.blocks_in_memory
     }
-
     /// Number of body-evictable historical identities retained for advert refresh.
     #[must_use]
     pub(crate) fn replica_advert_evictable_window(&self) -> NonZeroUsize {
         self.replica_advert_evictable_window
     }
-
     /// Lifetime of one authenticated remote replica observation.
     #[must_use]
     #[cfg(test)]
     pub(crate) fn replica_advert_ttl(&self) -> Duration {
         self.replica_advert_ttl
     }
-
     /// Cadence for proactively refreshing selected-keeper replica adverts.
     #[must_use]
     pub(crate) fn replica_advert_refresh_interval(&self) -> Duration {
         self.replica_advert_refresh_interval
     }
-
     /// Return the single shared owner of the structurally validated legacy archival journal.
     ///
     /// State and Kura pruning must never retain independent clean snapshots of the same durable
@@ -4651,13 +4490,11 @@ impl Kura {
     pub(crate) fn commit_roster_journal_handle(&self) -> Arc<RwLock<CommitRosterJournal>> {
         Arc::clone(&self.roster_log)
     }
-
     /// Retention window for roster sidecars stored alongside blocks.
     #[must_use]
     pub fn roster_sidecar_retention(&self) -> NonZeroUsize {
         self.roster_sidecar_retention
     }
-
     /// Shared bounded-history budget for durable per-route Native AMX evidence.
     ///
     /// Native manifests and receipts use the existing operator-configured Kura
@@ -4667,7 +4504,6 @@ impl Kura {
     fn native_amx_participant_evidence_retention(&self) -> NonZeroUsize {
         self.roster_sidecar_retention
     }
-
     /// Configured stable aggregate for both Native artifact families combined.
     ///
     /// The historical method name is retained to keep geometry callers on one
@@ -4676,7 +4512,6 @@ impl Kura {
         u64::try_from(self.pending_control_sidecar_limits.aggregate_bytes)
             .expect("configured pending-control sidecar bytes fit u64")
     }
-
     /// Maximum combined Native manifest/receipt payload bytes admitted while
     /// one complete pair is crossing its crash-safe publication barriers.
     ///
@@ -4694,7 +4529,6 @@ impl Kura {
                 )
             })
     }
-
     fn native_amx_participant_evidence_pair_fits_stable_bytes(
         &self,
         manifest_bytes: usize,
@@ -4710,7 +4544,6 @@ impl Kura {
                     })
                 })
     }
-
     fn validate_native_amx_participant_application_pair_byte_lengths(
         &self,
         manifest_bytes: usize,
@@ -4771,7 +4604,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Validate the exact framed Native AMX evidence pair for every route
     /// without locks, filesystem access, inventory reads, or telemetry.
     ///
@@ -4803,7 +4635,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn native_amx_evidence_stable_payload_bytes(
         inventory: &NativeAmxEvidenceInventory,
     ) -> Option<u64> {
@@ -4811,7 +4642,6 @@ impl Kura {
             .stable_bytes(NativeAmxEvidenceKind::Manifest)
             .checked_add(inventory.stable_bytes(NativeAmxEvidenceKind::Receipt))
     }
-
     fn native_amx_evidence_total_payload_bytes(
         inventory: &NativeAmxEvidenceInventory,
     ) -> Option<u64> {
@@ -4820,7 +4650,6 @@ impl Kura {
             |total, file| total.checked_add(file.metadata.file.len()),
         )
     }
-
     /// Validate the retained per-route evidence window independently of its
     /// oldest pruned predecessor.
     ///
@@ -4850,7 +4679,6 @@ impl Kura {
                 "retained Native AMX evidence is not a contiguous participant-height suffix",
             );
         }
-
         let manifest_only = manifest_heights
             .difference(&receipt_heights)
             .copied()
@@ -4871,7 +4699,6 @@ impl Kura {
                 "retained Native AMX evidence does not contain exact complete pairs plus at most one highest repair half",
             );
         }
-
         for (height, manifest) in manifests {
             let Some(receipt) = receipts.get(height) else {
                 continue;
@@ -4888,7 +4715,6 @@ impl Kura {
                 );
             }
         }
-
         for pair in retained_heights.windows(2) {
             let predecessor_height = pair[0];
             let successor_height = pair[1];
@@ -4930,7 +4756,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn native_amx_evidence_prune_intent_max_entries(retention: NonZeroUsize) -> Result<usize> {
         retention
             .get()
@@ -4942,7 +4767,6 @@ impl Kura {
                 )
             })
     }
-
     fn native_amx_evidence_prune_intent_max_bytes_for_retention(
         retention: NonZeroUsize,
         pending_control_sidecar_bytes: usize,
@@ -4965,7 +4789,6 @@ impl Kura {
                     .to_owned(),
             ));
         }
-
         let maximum_hash = Hash::prehashed([u8::MAX; Hash::LENGTH]);
         let maximum_entry = NativeAmxEvidencePruneEntryV2 {
             kind: NativeAmxEvidencePruneIntentV2::RECEIPT_KIND,
@@ -5008,11 +4831,9 @@ impl Kura {
         }
         Ok(encoded_len)
     }
-
     fn native_amx_evidence_prune_intent_max_bytes(&self) -> usize {
         self.native_amx_evidence_prune_intent_max_bytes
     }
-
     fn lane_storage_entries_from_config(
         lane_config: &LaneConfig,
     ) -> BTreeMap<LaneId, LaneConfigEntry> {
@@ -5023,19 +4844,16 @@ impl Kura {
             .map(|entry| (entry.lane_id, entry))
             .collect()
     }
-
     #[cfg(test)]
     fn set_lane_storage_entry(&self, entry: &LaneConfigEntry) {
         self.lane_storage_entries
             .lock()
             .insert(entry.lane_id, entry.clone());
     }
-
     #[cfg(test)]
     fn remove_lane_storage_entry(&self, lane_id: LaneId) {
         self.lane_storage_entries.lock().remove(&lane_id);
     }
-
     fn lane_storage_entry(&self, lane_id: LaneId) -> Result<LaneConfigEntry> {
         self.lane_storage_entries
             .lock()
@@ -5053,11 +4871,9 @@ impl Kura {
                 )
             })
     }
-
     fn roster_log_path(store_root: &Path) -> PathBuf {
         CommitRosterJournal::journal_path(store_root)
     }
-
     fn ensure_lane_directories(
         store_dir: &Path,
         lane_config: &LaneConfig,
@@ -5082,11 +4898,9 @@ impl Kura {
             let lane_artifacts_dir = Self::lane_artifact_dir(&blocks_dir);
             std::fs::create_dir_all(&lane_artifacts_dir)
                 .map_err(|err| Error::MkDir(err, lane_artifacts_dir))?;
-
             if is_primary {
                 continue;
             }
-
             let merge_path = entry.merge_log_path(store_dir);
             if merge_path.as_path() != active_merge_path {
                 if let Some(parent) = merge_path.parent() {
@@ -5100,10 +4914,8 @@ impl Kura {
                 }
             }
         }
-
         Ok(())
     }
-
     /// Provision an unauthenticated lane-storage fixture for unit tests.
     ///
     /// Production topology changes must use the authenticated geometry journal.
@@ -5127,7 +4939,6 @@ impl Kura {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.resolve_canonical_storage_before_mutation()?;
         let mut changed = false;
-
         for (previous, _) in replacements {
             self.retire_lane_storage(previous)?;
             self.remove_lane_storage_entry(previous.lane_id);
@@ -5148,7 +4959,6 @@ impl Kura {
             self.remove_lane_storage_entry(entry.lane_id);
             changed = true;
         }
-
         if changed {
             if let Err(err) = self.refresh_disk_usage_bytes() {
                 warn!(
@@ -5157,10 +4967,8 @@ impl Kura {
                 );
             }
         }
-
         Ok(())
     }
-
     /// Restore the effective lane catalog recorded in a trusted WSV snapshot.
     ///
     /// Kura is opened before the WSV snapshot is decoded, so its in-memory lane
@@ -5183,7 +4991,6 @@ impl Kura {
         }
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.resolve_canonical_storage_before_mutation()?;
-
         let primary = lane_config.primary();
         let primary_blocks_dir = primary.blocks_dir(&self.store_root);
         let active_blocks_dir = self.active_blocks_dir.lock().clone();
@@ -5207,7 +5014,6 @@ impl Kura {
                 primary_merge_path,
             ));
         }
-
         for entry in lane_config.entries() {
             self.preflight_prepare_lane_storage(entry)?;
         }
@@ -5234,7 +5040,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Reject legacy snapshot lane restore without retained-lineage evidence.
     ///
     /// This entry point is retained for source compatibility, but its arguments
@@ -5259,7 +5064,6 @@ impl Kura {
             self.lane_geometry_journal_path(),
         ))
     }
-
     /// Restore snapshot lane storage at an exact committed transition height
     /// and retained-lineage commitment.
     pub(crate) fn restore_lane_segments_with_geometry_at_height_and_lineage_root(
@@ -5279,7 +5083,6 @@ impl Kura {
         )?;
         self.finish_restored_lane_segments_with_geometry(lane_config)
     }
-
     /// Restore lane storage to the cursor before every transition at one committed height.
     ///
     /// Startup replay uses this for the genesis/configuration height, where more than one
@@ -5301,7 +5104,6 @@ impl Kura {
         )?;
         self.finish_restored_lane_segments_with_geometry(lane_config)
     }
-
     fn finish_restored_lane_segments_with_geometry(&self, lane_config: &LaneConfig) -> Result<()> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(());
@@ -5344,7 +5146,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Validate lane storage topology changes that can fail without mutating Kura state.
     ///
     /// This catches deterministic path-shape conflicts before callers reconcile
@@ -5363,11 +5164,9 @@ impl Kura {
         if self.store_root.as_os_str().is_empty() {
             return Ok(());
         }
-
         for (previous, current) in replacements {
             self.preflight_replace_lane_storage(previous, current)?;
         }
-
         for entry in added {
             self.preflight_prepare_lane_storage(entry)?;
         }
@@ -5377,17 +5176,14 @@ impl Kura {
         for (previous, current) in relabelled {
             self.preflight_relabel_lane_storage(previous, current)?;
         }
-
         Ok(())
     }
-
     fn preflight_replace_lane_storage(
         &self,
         previous: &LaneConfigEntry,
         current: &LaneConfigEntry,
     ) -> Result<()> {
         self.preflight_retire_lane_storage(previous)?;
-
         let old_dir = previous.blocks_dir(&self.store_root);
         let new_dir = current.blocks_dir(&self.store_root);
         if old_dir != new_dir && new_dir.exists() {
@@ -5399,7 +5195,6 @@ impl Kura {
                 new_dir,
             ));
         }
-
         let old_merge = previous.merge_log_path(&self.store_root);
         let new_merge = current.merge_log_path(&self.store_root);
         if old_merge != new_merge && new_merge.exists() {
@@ -5411,10 +5206,8 @@ impl Kura {
                 new_merge,
             ));
         }
-
         self.preflight_prepare_lane_storage(current)
     }
-
     /// Test the low-level rollback mechanics for a direct lane-path move.
     ///
     /// Production relabels exclusively use the durable lane-geometry journal; this helper is not
@@ -5438,7 +5231,6 @@ impl Kura {
         for (previous, current) in migrations {
             self.preflight_relabel_lane_storage(previous, current)?;
         }
-
         // Provisioning an entirely absent prior path is not a rename and can be
         // completed before taking the block-store writer lock. A lone prior merge
         // log is inconsistent and must not be silently orphaned.
@@ -5468,7 +5260,6 @@ impl Kura {
             }
             moves.push((*previous, *current));
         }
-
         let _write_guard = self.block_store_write_lock.lock();
         let mut merge_log = self.merge_log.lock();
         let accounting_mutation = self.begin_total_disk_usage_mutation();
@@ -5486,7 +5277,6 @@ impl Kura {
             if let Some(store) = block_store.as_mut() {
                 store.drop_cached_handles();
             }
-
             let mut canonical_path_moved = false;
             let move_result: Result<()> = (|| {
                 if old_dir != new_dir {
@@ -5584,7 +5374,6 @@ impl Kura {
                 }
                 return Err(error);
             }
-
             if let Some(store) = block_store.as_mut() {
                 store.retarget_existing_path(new_dir.clone());
                 *self.active_blocks_dir.lock() = new_dir.clone();
@@ -5605,7 +5394,6 @@ impl Kura {
                 }
             }
             self.set_lane_storage_entry(current);
-
             iroha_logger::info!(
                 lane = %current.lane_id.as_u32(),
                 alias_before = previous.alias,
@@ -5615,11 +5403,9 @@ impl Kura {
                 "lane storage relabelled to match updated alias"
             );
         }
-
         accounting_mutation.finish();
         Ok(())
     }
-
     #[cfg(test)]
     fn relabel_merge_log(
         &self,
@@ -5631,7 +5417,6 @@ impl Kura {
         if old_path == new_path {
             return Ok(());
         }
-
         if !old_path.exists() {
             if let Some(parent) = new_path.parent() {
                 create_dir_all_with_context(parent)?;
@@ -5643,7 +5428,6 @@ impl Kura {
             }
             return Ok(());
         }
-
         if let Some(parent) = new_path.parent() {
             create_dir_all_with_context(parent)?;
         }
@@ -5656,7 +5440,6 @@ impl Kura {
                 new_path,
             ));
         }
-
         std::fs::rename(&old_path, &new_path).map_err(|err| Error::IO(err, old_path.clone()))?;
         let new_parent = new_path.parent();
         let old_parent = old_path.parent();
@@ -5668,7 +5451,6 @@ impl Kura {
                 sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
             }
         }
-
         iroha_logger::info!(
             lane = %current.lane_id.as_u32(),
             alias_before = previous.alias,
@@ -5677,10 +5459,8 @@ impl Kura {
             target = %new_path.display(),
             "lane merge-ledger relabelled"
         );
-
         Ok(())
     }
-
     fn prepare_lane_storage_resolved(&self, entry: &LaneConfigEntry) -> Result<()> {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let blocks_dir = entry.blocks_dir(&self.store_root);
@@ -5698,7 +5478,6 @@ impl Kura {
             block_store.create_files_if_they_do_not_exist()?;
         }
         create_dir_all_with_context(&Self::lane_artifact_dir(&blocks_dir))?;
-
         let merge_path = entry.merge_log_path(&self.store_root);
         if let Some(parent) = merge_path.parent() {
             create_dir_all_with_context(parent)?;
@@ -5708,7 +5487,6 @@ impl Kura {
                 opts.read(true).write(true).create(true).append(true);
             })?;
         }
-
         iroha_logger::info!(
             lane = %entry.lane_id.as_u32(),
             alias = entry.alias,
@@ -5719,7 +5497,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn preflight_prepare_lane_storage(&self, entry: &LaneConfigEntry) -> Result<()> {
         let blocks_dir = entry.blocks_dir(&self.store_root);
         Self::preflight_dir_path(&blocks_dir)?;
@@ -5727,7 +5504,6 @@ impl Kura {
         for name in [INDEX_FILE_NAME, DATA_FILE_NAME, HASHES_FILE_NAME] {
             Self::preflight_file_path(&blocks_dir.join(name))?;
         }
-
         let merge_path = entry.merge_log_path(&self.store_root);
         if let Some(parent) = merge_path.parent() {
             Self::preflight_dir_path(parent)?;
@@ -5735,7 +5511,6 @@ impl Kura {
         Self::preflight_file_path(&merge_path)?;
         Ok(())
     }
-
     fn preflight_retire_lane_storage(&self, entry: &LaneConfigEntry) -> Result<()> {
         self.ensure_lane_has_no_certified_bundle_capacity_reservation(entry)?;
         let blocks_dir = entry.blocks_dir(&self.store_root);
@@ -5746,13 +5521,11 @@ impl Kura {
         if merge_path == *self.active_merge_path.lock() {
             return Ok(());
         }
-
         let retired_root = self.store_root.join("retired");
         Self::preflight_dir_path(&retired_root.join("blocks"))?;
         Self::preflight_dir_path(&retired_root.join("merge_ledger"))?;
         Ok(())
     }
-
     fn preflight_relabel_lane_storage(
         &self,
         previous: &LaneConfigEntry,
@@ -5777,7 +5550,6 @@ impl Kura {
             self.preflight_prepare_lane_storage(current)?;
             return Ok(());
         }
-
         if let Some(parent) = new_dir.parent() {
             Self::preflight_dir_path(parent)?;
         }
@@ -5792,7 +5564,6 @@ impl Kura {
         }
         self.preflight_relabel_merge_log(previous, current)
     }
-
     fn preflight_relabel_merge_log(
         &self,
         previous: &LaneConfigEntry,
@@ -5821,7 +5592,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn preflight_dir_path(path: &Path) -> Result<()> {
         if path.exists() && !path.is_dir() {
             return Err(Error::MkDir(
@@ -5831,7 +5601,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn preflight_file_path(path: &Path) -> Result<()> {
         if path.exists() && !path.is_file() {
             return Err(Error::IO(
@@ -5841,7 +5610,6 @@ impl Kura {
         }
         Ok(())
     }
-
     #[cfg(test)]
     fn retire_lane_storage(&self, entry: &LaneConfigEntry) -> Result<()> {
         let blocks_dir = entry.blocks_dir(&self.store_root);
@@ -5865,14 +5633,12 @@ impl Kura {
             );
             return Ok(());
         }
-
         let retired_root = self.store_root.join("retired");
         let retired_blocks_root = retired_root.join("blocks");
         let retired_merge_root = retired_root.join("merge_ledger");
         create_dir_all_with_context(&retired_blocks_root)?;
         create_dir_all_with_context(&retired_merge_root)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
-
         if blocks_dir.exists() {
             let dest = unique_retired_path(&retired_blocks_root, &entry.kura_segment, None::<&str>);
             std::fs::rename(&blocks_dir, &dest)
@@ -5895,7 +5661,6 @@ impl Kura {
                 "retired lane block directory"
             );
         }
-
         if merge_path.exists() {
             let dest = unique_retired_path(&retired_merge_root, &entry.merge_segment, Some("log"));
             std::fs::rename(&merge_path, &dest)
@@ -5918,11 +5683,9 @@ impl Kura {
                 "retired lane merge log"
             );
         }
-
         accounting_mutation.finish();
         Ok(())
     }
-
     /// Append a merge-ledger entry to the persistent log and in-memory cache.
     ///
     /// # Errors
@@ -5932,7 +5695,6 @@ impl Kura {
         self.resolve_canonical_storage_before_mutation()?;
         self.append_merge_entry_after_storage_resolution(entry)
     }
-
     fn append_merge_entry_after_storage_resolution(&self, entry: &MergeLedgerEntry) -> Result<()> {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let appended = self.merge_log.lock().append(entry)?;
@@ -5943,45 +5705,36 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn merge_carrier_dir(&self) -> PathBuf {
         self.store_root.join(MERGE_CARRIERS_DIR)
     }
-
     fn merge_carrier_path(&self, block_height: u64) -> PathBuf {
         self.merge_carrier_dir()
             .join(format!("{block_height}.norito"))
     }
-
     #[cfg(unix)]
     fn sidecar_metadata_same_object(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
         use std::os::unix::fs::MetadataExt as _;
-
         left.dev() == right.dev() && left.ino() == right.ino()
     }
-
     #[cfg(windows)]
     fn sidecar_metadata_same_object(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
         use std::os::windows::fs::MetadataExt as _;
-
         left.volume_serial_number() == right.volume_serial_number()
             && left.file_index() == right.file_index()
             && left.volume_serial_number().is_some()
             && left.file_index().is_some()
     }
-
     #[cfg(all(not(unix), not(windows)))]
     fn sidecar_metadata_same_object(_left: &std::fs::Metadata, _right: &std::fs::Metadata) -> bool {
         false
     }
-
     #[cfg(unix)]
     fn sidecar_file_metadata_unchanged(
         left: &std::fs::Metadata,
         right: &std::fs::Metadata,
     ) -> bool {
         use std::os::unix::fs::MetadataExt as _;
-
         Self::sidecar_metadata_same_object(left, right)
             && left.nlink() == 1
             && right.nlink() == 1
@@ -5991,14 +5744,12 @@ impl Kura {
             && left.ctime() == right.ctime()
             && left.ctime_nsec() == right.ctime_nsec()
     }
-
     #[cfg(unix)]
     fn sidecar_file_metadata_unchanged_across_rename(
         left: &std::fs::Metadata,
         right: &std::fs::Metadata,
     ) -> bool {
         use std::os::unix::fs::MetadataExt as _;
-
         // Renaming the bound object legitimately advances ctime. Preserve the
         // exact-object, link-count, length, and content-mtime checks that detect
         // replacement or concurrent writes across quarantine publication.
@@ -6009,33 +5760,28 @@ impl Kura {
             && left.mtime() == right.mtime()
             && left.mtime_nsec() == right.mtime_nsec()
     }
-
     #[cfg(unix)]
     fn sidecar_directory_metadata_unchanged(
         left: &std::fs::Metadata,
         right: &std::fs::Metadata,
     ) -> bool {
         use std::os::unix::fs::MetadataExt as _;
-
         Self::sidecar_metadata_same_object(left, right)
             && left.mtime() == right.mtime()
             && left.mtime_nsec() == right.mtime_nsec()
             && left.ctime() == right.ctime()
             && left.ctime_nsec() == right.ctime_nsec()
     }
-
     #[cfg(windows)]
     fn sidecar_directory_metadata_unchanged(
         left: &std::fs::Metadata,
         right: &std::fs::Metadata,
     ) -> bool {
         use std::os::windows::fs::MetadataExt as _;
-
         Self::sidecar_metadata_same_object(left, right)
             && left.last_write_time() == right.last_write_time()
             && left.creation_time() == right.creation_time()
     }
-
     #[cfg(all(not(unix), not(windows)))]
     fn sidecar_directory_metadata_unchanged(
         _left: &std::fs::Metadata,
@@ -6043,7 +5789,6 @@ impl Kura {
     ) -> bool {
         false
     }
-
     fn sidecar_directory_binding_unchanged(
         left: &std::fs::Metadata,
         right: &std::fs::Metadata,
@@ -6054,14 +5799,12 @@ impl Kura {
         // stronger timestamp comparison in `sidecar_directory_metadata_unchanged`.
         Self::sidecar_metadata_same_object(left, right)
     }
-
     #[cfg(windows)]
     fn sidecar_file_metadata_unchanged(
         left: &std::fs::Metadata,
         right: &std::fs::Metadata,
     ) -> bool {
         use std::os::windows::fs::MetadataExt as _;
-
         Self::sidecar_metadata_same_object(left, right)
             && left.number_of_links() == Some(1)
             && right.number_of_links() == Some(1)
@@ -6069,7 +5812,6 @@ impl Kura {
             && left.last_write_time() == right.last_write_time()
             && left.creation_time() == right.creation_time()
     }
-
     #[cfg(all(not(unix), not(windows)))]
     fn sidecar_file_metadata_unchanged(
         left: &std::fs::Metadata,
@@ -6079,7 +5821,6 @@ impl Kura {
             && left.len() == right.len()
             && left.modified().ok() == right.modified().ok()
     }
-
     fn stable_sidecar_metadata_unchanged(
         left: &StableSidecarMetadata,
         right: &StableSidecarMetadata,
@@ -6088,7 +5829,6 @@ impl Kura {
             && Self::sidecar_file_metadata_unchanged(&left.file, &right.file)
             && Self::sidecar_directory_metadata_unchanged(&left.directory, &right.directory)
     }
-
     fn stable_sidecar_directory_metadata_unchanged(
         left: &StableSidecarDirectoryMetadata,
         right: &StableSidecarDirectoryMetadata,
@@ -6103,47 +5843,36 @@ impl Kura {
             (None, Some(_)) | (Some(_), None) => false,
         }
     }
-
     #[cfg(unix)]
     fn sidecar_is_single_link(metadata: &std::fs::Metadata) -> bool {
         use std::os::unix::fs::MetadataExt as _;
-
         metadata.nlink() == 1
     }
-
     #[cfg(windows)]
     fn sidecar_is_single_link(metadata: &std::fs::Metadata) -> bool {
         use std::os::windows::fs::MetadataExt as _;
-
         metadata.number_of_links() == Some(1)
     }
-
     #[cfg(all(not(unix), not(windows)))]
     fn sidecar_is_single_link(_metadata: &std::fs::Metadata) -> bool {
         false
     }
-
     #[cfg(unix)]
     fn sidecar_has_link_count(metadata: &std::fs::Metadata, expected: u64) -> bool {
         use std::os::unix::fs::MetadataExt as _;
-
         metadata.nlink() == expected
     }
-
     #[cfg(windows)]
     fn sidecar_has_link_count(metadata: &std::fs::Metadata, expected: u64) -> bool {
         use std::os::windows::fs::MetadataExt as _;
-
         u32::try_from(expected)
             .ok()
             .is_some_and(|expected| metadata.number_of_links() == Some(expected))
     }
-
     #[cfg(all(not(unix), not(windows)))]
     fn sidecar_has_link_count(_metadata: &std::fs::Metadata, _expected: u64) -> bool {
         false
     }
-
     fn canonical_sidecar_directory_for(
         store_root: &Path,
         expected_directory: &Path,
@@ -6200,14 +5929,12 @@ impl Kura {
         }
         Ok(Some((canonical_directory, after)))
     }
-
     fn canonical_sidecar_directory(
         &self,
         expected_directory: &Path,
     ) -> Result<Option<(PathBuf, std::fs::Metadata)>> {
         Self::canonical_sidecar_directory_for(&self.store_root, expected_directory)
     }
-
     fn stable_sidecar_directory_metadata(
         &self,
         expected_directory: &Path,
@@ -6219,14 +5946,12 @@ impl Kura {
             metadata: current.map(|(_, metadata)| metadata),
         })
     }
-
     fn stable_sidecar_directory_inventory(
         &self,
         expected_directory: &Path,
     ) -> Result<StableSidecarDirectoryInventory> {
         self.stable_sidecar_directory_inventory_with_recognized_child(expected_directory, None)
     }
-
     fn stable_sidecar_directory_inventory_with_recognized_child(
         &self,
         expected_directory: &Path,
@@ -6291,7 +6016,6 @@ impl Kura {
             files,
         })
     }
-
     fn stable_historical_autonomous_recovery_directory_inventory(
         &self,
         expected_directory: &Path,
@@ -6345,7 +6069,6 @@ impl Kura {
             encoded_bytes,
         ))
     }
-
     fn stable_sidecar_directory_inventory_unchanged(
         left: &StableSidecarDirectoryInventory,
         right: &StableSidecarDirectoryInventory,
@@ -6358,7 +6081,6 @@ impl Kura {
                 })
             })
     }
-
     fn regular_sidecar_metadata_for(
         store_root: &Path,
         path: &Path,
@@ -6417,7 +6139,6 @@ impl Kura {
             directory: directory_metadata,
         }))
     }
-
     fn regular_sidecar_metadata(
         &self,
         path: &Path,
@@ -6425,7 +6146,6 @@ impl Kura {
     ) -> Result<Option<StableSidecarMetadata>> {
         Self::regular_sidecar_metadata_for(&self.store_root, path, expected_directory)
     }
-
     fn open_bound_progress_file(
         namespace: &BoundProgressNamespace,
         path: &Path,
@@ -6458,7 +6178,6 @@ impl Kura {
                 path.to_path_buf(),
             )
         })?;
-
         #[cfg(unix)]
         let file = std::fs::File::from(
             rustix::fs::openat(
@@ -6472,7 +6191,6 @@ impl Kura {
             .map_err(std::io::Error::from)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?,
         );
-
         #[cfg(not(unix))]
         let file = {
             let mut options = std::fs::OpenOptions::new();
@@ -6480,7 +6198,6 @@ impl Kura {
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt as _;
-
                 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
                 options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
             }
@@ -6502,7 +6219,6 @@ impl Kura {
         }
         Ok(file)
     }
-
     fn open_optional_bound_progress_file(
         &self,
         namespace: &BoundProgressNamespace,
@@ -6561,7 +6277,6 @@ impl Kura {
         }
         Ok(Some(file))
     }
-
     fn open_direct_sidecar_file_in_namespace(
         path: &Path,
         create: bool,
@@ -6583,11 +6298,9 @@ impl Kura {
                 "sidecar path is not a direct single-link regular file",
             ));
         }
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-
             let parent_path = path.parent().ok_or_else(|| {
                 std::io::Error::new(ErrorKind::InvalidInput, "sidecar path has no parent")
             })?;
@@ -6653,7 +6366,6 @@ impl Kura {
                 }
                 &owned_parent
             };
-
             let mut flags = rustix::fs::OFlags::RDWR
                 | rustix::fs::OFlags::NOFOLLOW
                 | rustix::fs::OFlags::CLOEXEC;
@@ -6692,7 +6404,6 @@ impl Kura {
             }
             return Ok(file);
         }
-
         #[cfg(not(unix))]
         {
             let mut options = std::fs::OpenOptions::new();
@@ -6700,7 +6411,6 @@ impl Kura {
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt as _;
-
                 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
                 options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
             }
@@ -6725,7 +6435,6 @@ impl Kura {
             Ok(file)
         }
     }
-
     fn remove_bound_progress_temp_if_present(
         namespace: &BoundProgressNamespace,
         path: &Path,
@@ -6745,7 +6454,6 @@ impl Kura {
         let name = path.file_name().ok_or_else(|| {
             std::io::Error::new(ErrorKind::InvalidInput, "progress temp has no entry name")
         })?;
-
         #[cfg(unix)]
         {
             let entry = match rustix::fs::statat(
@@ -6770,7 +6478,6 @@ impl Kura {
                 .map_err(std::io::Error::from)?;
             return Ok(());
         }
-
         #[cfg(not(unix))]
         {
             match std::fs::symlink_metadata(path) {
@@ -6790,7 +6497,6 @@ impl Kura {
             }
         }
     }
-
     fn remove_bound_progress_file_if_matches(
         namespace: &BoundProgressNamespace,
         path: &Path,
@@ -6819,11 +6525,9 @@ impl Kura {
                 "progress file changed after exact-object verification",
             ));
         }
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
-
             let entry =
                 rustix::fs::statat(&immediate.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
                     .map_err(std::io::Error::from)?;
@@ -6843,7 +6547,6 @@ impl Kura {
                 .map_err(std::io::Error::from)?;
             return Ok(());
         }
-
         #[cfg(not(unix))]
         {
             let current = std::fs::symlink_metadata(path)?;
@@ -6860,7 +6563,6 @@ impl Kura {
             std::fs::remove_file(path)
         }
     }
-
     fn create_new_bound_progress_temp(
         namespace: &BoundProgressNamespace,
         path: &Path,
@@ -6880,7 +6582,6 @@ impl Kura {
         let name = path.file_name().ok_or_else(|| {
             std::io::Error::new(ErrorKind::InvalidInput, "progress temp has no entry name")
         })?;
-
         #[cfg(unix)]
         {
             let file = std::fs::File::from(
@@ -6914,7 +6615,6 @@ impl Kura {
             }
             return Ok(file);
         }
-
         #[cfg(not(unix))]
         {
             let mut options = std::fs::OpenOptions::new();
@@ -6922,7 +6622,6 @@ impl Kura {
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt as _;
-
                 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
                 options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
             }
@@ -6937,7 +6636,6 @@ impl Kura {
             Ok(file)
         }
     }
-
     fn promote_bound_progress_temp(
         namespace: &BoundProgressNamespace,
         temp_path: &Path,
@@ -6982,11 +6680,9 @@ impl Kura {
                 std::io::Error::new(ErrorKind::InvalidInput, "progress index has no entry name")
             })
             .map_err(unpublished)?;
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
-
             let metadata = temp.metadata().map_err(unpublished)?;
             let before = rustix::fs::statat(
                 &immediate.file,
@@ -7027,7 +6723,6 @@ impl Kura {
             }
             return Ok(());
         }
-
         #[cfg(not(unix))]
         {
             let _ = (namespace, temp_path, main_path, temp);
@@ -7040,15 +6735,12 @@ impl Kura {
             })
         }
     }
-
     fn bound_progress_append_build_path(index_path: &Path) -> PathBuf {
         index_path.with_extension("index.append.build.tmp")
     }
-
     fn bound_progress_append_intent_path(index_path: &Path) -> PathBuf {
         index_path.with_extension("index.append.intent.tmp")
     }
-
     fn sync_bound_progress_intent_directories(
         namespace: &BoundProgressNamespace,
     ) -> std::io::Result<()> {
@@ -7079,7 +6771,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn promote_bound_progress_temp_noreplace(
         namespace: &BoundProgressNamespace,
         temp_path: &Path,
@@ -7124,11 +6815,9 @@ impl Kura {
                 std::io::Error::new(ErrorKind::InvalidInput, "progress intent has no entry name")
             })
             .map_err(unpublished)?;
-
         #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
         {
             use std::os::unix::fs::MetadataExt as _;
-
             let metadata = temp.metadata().map_err(unpublished)?;
             let before = rustix::fs::statat(
                 &immediate.file,
@@ -7175,7 +6864,6 @@ impl Kura {
             }
             return Ok(());
         }
-
         #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
         {
             let _ = (namespace, temp_path, intent_path, temp);
@@ -7188,7 +6876,6 @@ impl Kura {
             })
         }
     }
-
     fn publish_bound_progress_append_intent(
         namespace: &BoundProgressNamespace,
         index_path: &Path,
@@ -7286,7 +6973,6 @@ impl Kura {
         }
         Some(build)
     }
-
     fn open_bound_progress_directory(
         store_root: &Path,
         expected_path: &Path,
@@ -7306,7 +6992,6 @@ impl Kura {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
-
             options.custom_flags(
                 (rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW).bits() as i32,
             );
@@ -7314,7 +6999,6 @@ impl Kura {
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt as _;
-
             const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
             const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
             options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
@@ -7349,7 +7033,6 @@ impl Kura {
             metadata,
         })
     }
-
     fn open_bound_progress_child_directory(
         store_root: &Path,
         parent: &BoundProgressDirectory,
@@ -7375,11 +7058,9 @@ impl Kura {
                 expected_path.to_path_buf(),
             )
         })?;
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
-
             let before =
                 rustix::fs::statat(&parent.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
                     .map_err(std::io::Error::from)
@@ -7441,7 +7122,6 @@ impl Kura {
                 metadata,
             });
         }
-
         #[cfg(not(unix))]
         {
             let mut child = Self::open_bound_progress_directory(store_root, expected_path)?;
@@ -7449,7 +7129,6 @@ impl Kura {
             Ok(child)
         }
     }
-
     fn open_bound_progress_namespace(
         &self,
         data_path: &Path,
@@ -7511,7 +7190,6 @@ impl Kura {
             directories.push(child);
         }
         directories.reverse();
-
         let namespace = BoundProgressNamespace {
             data_path: data_path.to_path_buf(),
             index_path: index_path.to_path_buf(),
@@ -7528,7 +7206,6 @@ impl Kura {
         }
         Ok(namespace)
     }
-
     fn open_bound_progress_pair(
         &self,
         data_path: &Path,
@@ -7539,7 +7216,6 @@ impl Kura {
             .data_path
             .parent()
             .expect("bound progress namespace always has an immediate parent");
-
         let data_metadata =
             Self::regular_sidecar_metadata_for(&self.store_root, data_path, sidecar_dir)?;
         let index_metadata =
@@ -7570,7 +7246,6 @@ impl Kura {
         };
         let data = Self::open_bound_progress_file(&namespace, data_path, &data_metadata)?;
         let index = Self::open_bound_progress_file(&namespace, index_path, &index_metadata)?;
-
         let bound = BoundProgressSidecar {
             namespace,
             data,
@@ -7589,7 +7264,6 @@ impl Kura {
         }
         Ok(BoundProgressPair::Present(bound))
     }
-
     fn open_bound_progress_sidecar(
         &self,
         data_path: &Path,
@@ -7603,7 +7277,6 @@ impl Kura {
             )),
         }
     }
-
     fn bound_progress_namespace_unchanged(&self, namespace: &BoundProgressNamespace) -> bool {
         namespace
             .directories
@@ -7616,7 +7289,6 @@ impl Kura {
                 #[cfg(unix)]
                 if let Some(name) = directory.entry_name.as_deref() {
                     use std::os::unix::fs::MetadataExt as _;
-
                     let Some(parent) = namespace.directories.get(index.saturating_add(1)) else {
                         return false;
                     };
@@ -7652,7 +7324,6 @@ impl Kura {
                     })
             })
     }
-
     fn bound_progress_sidecar_unchanged(&self, bound: &BoundProgressSidecar) -> bool {
         let Some(sidecar_dir) = bound.namespace.data_path.parent() else {
             return false;
@@ -7694,7 +7365,6 @@ impl Kura {
         }
         self.bound_progress_namespace_unchanged(&bound.namespace)
     }
-
     fn sync_bound_progress_namespace(
         &self,
         namespace: &BoundProgressNamespace,
@@ -7718,7 +7388,6 @@ impl Kura {
         }
         self.bound_progress_namespace_unchanged(namespace)
     }
-
     fn sync_bound_progress_absence(&self, namespace: &BoundProgressNamespace, kind: &str) -> bool {
         if !self.sync_bound_progress_namespace(namespace, kind) {
             return false;
@@ -7741,7 +7410,6 @@ impl Kura {
             Ok(None)
         ) && self.bound_progress_namespace_unchanged(namespace)
     }
-
     fn sync_bound_progress_sidecar(&self, bound: &BoundProgressSidecar, kind: &str) -> bool {
         if let Err(err) = sync_indexed_sidecar_data(&bound.data) {
             iroha_logger::warn!(?err, path = ?bound.namespace.data_path, kind, "failed to sync progress sidecar payload");
@@ -7754,7 +7422,6 @@ impl Kura {
         self.sync_bound_progress_namespace(&bound.namespace, kind)
             && self.bound_progress_sidecar_unchanged(bound)
     }
-
     fn bound_indexed_sidecar_payload_heights(
         &self,
         bound: &mut BoundProgressSidecar,
@@ -7868,7 +7535,6 @@ impl Kura {
         }
         Ok(heights)
     }
-
     fn bound_indexed_sidecar_height_range(
         &self,
         bound: &mut BoundProgressSidecar,
@@ -7918,7 +7584,6 @@ impl Kura {
         }
         Ok(layout.height_range())
     }
-
     fn read_regular_sidecar_bytes_for(
         store_root: &Path,
         path: &Path,
@@ -7933,13 +7598,35 @@ impl Kura {
         )?
         .map(|snapshot| snapshot.bytes))
     }
-
     fn read_regular_sidecar_snapshot_for(
         store_root: &Path,
         path: &Path,
         expected_directory: &Path,
         byte_limit: usize,
     ) -> Result<Option<StableSidecarRead>> {
+        Self::read_regular_sidecar_snapshot_for_with_admission_hook(
+            store_root,
+            path,
+            expected_directory,
+            byte_limit,
+            || {},
+        )
+    }
+    /// Perform one stable, no-follow bounded read after invoking a post-admission hook.
+    ///
+    /// Production passes a no-op hook. Tests use the seam to grow a file after
+    /// its capped metadata has been admitted, proving that the reader allocates
+    /// only the admitted length and rejects the max-plus-one race.
+    fn read_regular_sidecar_snapshot_for_with_admission_hook<F>(
+        store_root: &Path,
+        path: &Path,
+        expected_directory: &Path,
+        byte_limit: usize,
+        after_admission: F,
+    ) -> Result<Option<StableSidecarRead>>
+    where
+        F: FnOnce(),
+    {
         let directory_before =
             Self::canonical_sidecar_directory_for(store_root, expected_directory)?;
         let Some(metadata) =
@@ -7965,6 +7652,7 @@ impl Kura {
                 path.to_path_buf(),
             ));
         }
+        after_admission();
         let mut file =
             std::fs::File::open(path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
         let opened_metadata = file
@@ -7979,11 +7667,25 @@ impl Kura {
             ));
         }
         let mut bytes = Vec::new();
-        bytes.try_reserve_exact(usize::try_from(metadata.file.len())?)?;
-        Read::by_ref(&mut file)
-            .take(u64::try_from(byte_limit.saturating_add(1))?)
-            .read_to_end(&mut bytes)
+        let expected_len = usize::try_from(metadata.file.len())?;
+        bytes.try_reserve_exact(expected_len)?;
+        bytes.resize(expected_len, 0);
+        file.read_exact(&mut bytes)
             .map_err(|err| Error::IO(err, path.to_path_buf()))?;
+        let mut growth_probe = [0_u8; 1];
+        if file
+            .read(&mut growth_probe)
+            .map_err(|err| Error::IO(err, path.to_path_buf()))?
+            != 0
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar grew beyond its admitted length while reading",
+                ),
+                path.to_path_buf(),
+            ));
+        }
         let opened_after = file
             .metadata()
             .map_err(|err| Error::IO(err, path.to_path_buf()))?;
@@ -8010,7 +7712,6 @@ impl Kura {
             metadata: path_after.expect("validated stable sidecar metadata exists"),
         }))
     }
-
     fn read_regular_sidecar_snapshot(
         &self,
         path: &Path,
@@ -8024,7 +7725,6 @@ impl Kura {
             byte_limit,
         )
     }
-
     fn read_regular_sidecar_bytes(
         &self,
         path: &Path,
@@ -8033,22 +7733,18 @@ impl Kura {
     ) -> Result<Option<Vec<u8>>> {
         Self::read_regular_sidecar_bytes_for(&self.store_root, path, expected_directory, byte_limit)
     }
-
     #[cfg(test)]
     fn record_startup_replay_historical_payload_read(&self) {
         self.startup_replay_historical_payload_reads
             .fetch_add(1, Ordering::Relaxed);
     }
-
     #[cfg(not(test))]
     fn record_startup_replay_historical_payload_read(&self) {}
-
     fn block_merge_reference(
         block: &SignedBlock,
     ) -> Option<&iroha_data_model::block::CertifiedMergeLedgerReference> {
         block.execution_context()?.merge_entry.as_ref()
     }
-
     fn carrier_record_for_block_entry(
         block: &SignedBlock,
         entry: &MergeLedgerEntry,
@@ -8074,7 +7770,6 @@ impl Kura {
         }
         Ok(MergeLedgerCarrierRecord::new(entry, block))
     }
-
     fn read_merge_carrier_path(&self, path: &Path) -> Result<Option<MergeLedgerCarrierRecord>> {
         let Some(bytes) = self.read_regular_sidecar_bytes(
             path,
@@ -8087,7 +7782,6 @@ impl Kura {
         self.decode_merge_carrier_record(path, path, &bytes)
             .map(Some)
     }
-
     fn decode_merge_carrier_record(
         &self,
         source_path: &Path,
@@ -8112,7 +7806,6 @@ impl Kura {
         }
         Ok(record)
     }
-
     fn reconcile_merge_carrier_temp_files_unlocked(&self) -> Result<()> {
         let directory = self.merge_carrier_dir();
         let read_dir = match std::fs::read_dir(&directory) {
@@ -8218,7 +7911,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn merge_carrier_records_from_disk_unlocked(&self) -> Result<Vec<MergeLedgerCarrierRecord>> {
         let directory = self.merge_carrier_dir();
         let read_dir = match std::fs::read_dir(&directory) {
@@ -8276,7 +7968,6 @@ impl Kura {
         records.sort_by_key(|record| record.block_height);
         Ok(records)
     }
-
     fn ensure_merge_carrier_index_initialized_unlocked(&self) -> Result<()> {
         {
             let index = self.merge_carrier_index.lock();
@@ -8302,7 +7993,6 @@ impl Kura {
         index.generation = index.generation.saturating_add(1);
         Ok(())
     }
-
     fn merge_carrier_records_unlocked(&self) -> Result<Vec<MergeLedgerCarrierRecord>> {
         self.ensure_merge_carrier_index_initialized_unlocked()?;
         #[cfg(test)]
@@ -8315,7 +8005,6 @@ impl Kura {
         }
         Ok(index.by_height.values().copied().collect())
     }
-
     fn write_merge_carrier_record_unlocked(
         &self,
         record: MergeLedgerCarrierRecord,
@@ -8433,7 +8122,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(true)
     }
-
     fn preflight_merge_carrier_record_unlocked(
         &self,
         record: MergeLedgerCarrierRecord,
@@ -8468,7 +8156,6 @@ impl Kura {
         }
         Ok(true)
     }
-
     fn remove_merge_carrier_record_unlocked(&self, record: MergeLedgerCarrierRecord) -> Result<()> {
         let path = self.merge_carrier_path(record.block_height);
         let Some(existing) = self.read_merge_carrier_path(&path)? else {
@@ -8497,7 +8184,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn validate_merge_carrier_record_against_header(
         &self,
         record: MergeLedgerCarrierRecord,
@@ -8557,7 +8243,6 @@ impl Kura {
         }
         Ok(entry)
     }
-
     fn validate_merge_carrier_record_against_block_projection(
         &self,
         record: MergeLedgerCarrierRecord,
@@ -8581,7 +8266,6 @@ impl Kura {
         }
         Ok(entry)
     }
-
     /// Derive the exact merge-carrier projection at the finality publication seam.
     ///
     /// This is deliberately the only pre-finality path which may authorize a
@@ -8598,7 +8282,6 @@ impl Kura {
         let block_hash = canonical_header.hash();
         let record = self.merge_carrier_record_for_block(height, block_hash)?;
         let block = self.get_block_without_merge_sidecar(block_height);
-
         let entry_hash = match (block, record) {
             (Some(block), Some(record)) => {
                 if block.header() != *canonical_header {
@@ -8624,10 +8307,8 @@ impl Kura {
             }
             (None, None) => None,
         };
-
         Ok(entry_hash.map(iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1::new))
     }
-
     fn validate_merge_carrier_finality_projection(
         record: MergeLedgerCarrierRecord,
         entry: &MergeLedgerEntry,
@@ -8654,7 +8335,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn validate_merge_carrier_record_under_prune_and_canonical_guards(
         &self,
         record: MergeLedgerCarrierRecord,
@@ -8704,7 +8384,6 @@ impl Kura {
             ))),
         }
     }
-
     fn merge_carrier_record_for_block(
         &self,
         block_height: u64,
@@ -8728,7 +8407,6 @@ impl Kura {
             ))),
         }
     }
-
     /// Resolve the exact canonical carrier for a committed merge entry hash.
     ///
     /// # Errors
@@ -8741,7 +8419,6 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.merge_carrier_for_entry_under_prune_guard(entry_hash)
     }
-
     fn merge_carrier_for_entry_under_prune_guard(
         &self,
         entry_hash: HashOf<MergeLedgerEntry>,
@@ -8749,7 +8426,6 @@ impl Kura {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.merge_carrier_for_entry_under_prune_and_canonical_guards(entry_hash)
     }
-
     fn merge_carrier_for_entry_under_prune_and_canonical_guards(
         &self,
         entry_hash: HashOf<MergeLedgerEntry>,
@@ -8770,7 +8446,6 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         Ok(record)
     }
-
     /// Resolve the complete committed merge entry carried by an exact global block.
     ///
     /// This reads the complete merge log rather than the capacity-truncated
@@ -8783,7 +8458,6 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.merge_entry_for_carrier_under_prune_guard(block_height, block_hash)
     }
-
     fn merge_entry_for_carrier_under_prune_guard(
         &self,
         block_height: u64,
@@ -8792,7 +8466,6 @@ impl Kura {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.merge_entry_for_carrier_under_prune_and_canonical_guards(block_height, block_hash)
     }
-
     fn merge_entry_for_carrier_under_prune_and_canonical_guards(
         &self,
         block_height: u64,
@@ -8807,7 +8480,6 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         Ok(Some(entry))
     }
-
     fn preflight_finalized_merge_carrier_at_under_prune_and_canonical_guards(
         &self,
         height: u64,
@@ -8820,7 +8492,6 @@ impl Kura {
         let block = self.get_block_without_merge_sidecar(block_height);
         let record = self.merge_carrier_record_for_block(height, block_hash)?;
         let expected = finality.commit_qc.execution_commitment.merge_carrier;
-
         let Some(expected) = expected else {
             if record.is_some()
                 || block
@@ -8839,7 +8510,6 @@ impl Kura {
                 "finalized block {height} has an invalid merge-carrier commitment: {error}"
             ))
         })?;
-
         if let Some(record) = record {
             if record.entry_hash != expected.entry_hash {
                 return Err(Error::MergeCarrierConflict(format!(
@@ -8849,7 +8519,6 @@ impl Kura {
             let _ = self.validate_merge_carrier_record_under_prune_and_canonical_guards(record)?;
             return Ok(FinalizedMergeCarrierAtHeight::Complete);
         }
-
         let Some(block) = block else {
             return Ok(FinalizedMergeCarrierAtHeight::MissingBody(block_hash));
         };
@@ -8893,7 +8562,6 @@ impl Kura {
             FinalizedMergeCarrierRepair { block, entry },
         ))
     }
-
     /// Reverse-audit every verified finality projection through `committed_height`.
     pub(crate) fn preflight_finalized_merge_carrier_repairs(
         &self,
@@ -8952,7 +8620,6 @@ impl Kura {
             missing_bodies,
         })
     }
-
     /// Ensure a newly cached finalized body can reconstruct any signed missing
     /// merge-carrier record before generic recovery retires the body need.
     pub(crate) fn preflight_cached_finalized_merge_carrier_reconstruction(
@@ -8984,7 +8651,6 @@ impl Kura {
             )),
         }
     }
-
     /// Publish an all-item-preflighted finalized merge-carrier repair set and
     /// rebuild merge application receipts from authenticated committed entries.
     pub(crate) fn apply_finalized_merge_carrier_repairs(
@@ -9068,7 +8734,6 @@ impl Kura {
         }
         Ok(repairs.len())
     }
-
     /// Resolve the complete committed merge entry carried at a canonical block height.
     ///
     /// The lookup is index-backed and validates the complete durable log length,
@@ -9131,7 +8796,6 @@ impl Kura {
             "sparse merge carriers changed during complete query snapshot".to_owned(),
         ))
     }
-
     /// Snapshot every sparse merge carrier after validating each record against
     /// the canonical durable block hash. The result is ordered by block height.
     ///
@@ -9142,12 +8806,10 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.merge_carrier_records_under_prune_guard()
     }
-
     fn merge_carrier_records_under_prune_guard(&self) -> Result<Vec<MergeLedgerCarrierRecord>> {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.merge_carrier_records_under_prune_and_canonical_guards()
     }
-
     fn merge_carrier_records_under_prune_and_canonical_guards(
         &self,
     ) -> Result<Vec<MergeLedgerCarrierRecord>> {
@@ -9172,7 +8834,6 @@ impl Kura {
             "sparse merge carriers changed during validated snapshot".to_owned(),
         ))
     }
-
     fn merge_carrier_records_for_prune_under_prune_and_canonical_guards(
         &self,
         retained_height: u64,
@@ -9191,7 +8852,6 @@ impl Kura {
                         .validate_merge_carrier_record_under_prune_and_canonical_guards(record)?;
                     continue;
                 }
-
                 // A pruned, unfinalized suffix is never exposed as committed
                 // carrier evidence. It must still bind exactly to the durable
                 // canonical body, merge log, and sparse carrier record before
@@ -9235,7 +8895,6 @@ impl Kura {
             "sparse merge carriers changed during prune validation".to_owned(),
         ))
     }
-
     fn merge_carrier_records_for_startup_prepublication_reconciliation(
         &self,
         durable_tip: u64,
@@ -9245,7 +8904,6 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.ensure_canonical_storage_not_poisoned()?;
-
         for _ in 0..2 {
             let (records, generation) = {
                 let _guard = self.merge_carrier_lock.lock();
@@ -9321,7 +8979,6 @@ impl Kura {
             "sparse merge carriers changed during startup reconciliation".to_owned(),
         ))
     }
-
     fn reconcile_merge_carriers_during_snapshot_finalization(
         &self,
         authority: &SnapshotFinalizationMutationAuthority<'_>,
@@ -9329,7 +8986,6 @@ impl Kura {
         authority.validate_for(self)?;
         self.reconcile_merge_carriers_from_durable_blocks_with_authority(Some(authority), false)
     }
-
     fn reconcile_merge_carriers_from_durable_blocks_with_authority(
         &self,
         finalization_authority: Option<&SnapshotFinalizationMutationAuthority<'_>>,
@@ -9341,7 +8997,6 @@ impl Kura {
         self.validate_pending_merge_entries_on_startup()?;
         let block_count = self.exact_durable_blocks_count()?;
         let block_count_u64 = u64::try_from(block_count)?;
-
         // Recover the only intentionally non-atomic window in the publication
         // sequence: merge log -> carrier sidecar -> canonical block. Complete
         // carrier temporaries are published only when their exact block is
@@ -9369,7 +9024,6 @@ impl Kura {
                     index.directory_scans = index.directory_scans.saturating_add(1);
                 }
             }
-
             let future_records = records
                 .iter()
                 .copied()
@@ -9425,7 +9079,6 @@ impl Kura {
                 self.truncate_merge_log_to_len(retained_len)?;
             }
         }
-
         // Repair the sole block-first crash window from exact canonical body
         // bytes, but keep every merge-derived transaction index explicitly
         // incomplete until the repaired carrier is authenticated by durable
@@ -9469,7 +9122,6 @@ impl Kura {
                 false,
             );
         }
-
         // Existing carrier files must never silently migrate to another
         // block. A normal process restart may retain only the sole durable tip
         // as an unpublished pre-finality recovery candidate; snapshot
@@ -9517,23 +9169,19 @@ impl Kura {
         }
         Ok(())
     }
-
     fn pending_merge_entry_dir(&self) -> PathBuf {
         self.store_root.join(PENDING_MERGE_ENTRIES_DIR)
     }
-
     fn pending_merge_entry_path(&self, hash: HashOf<MergeLedgerEntry>) -> PathBuf {
         self.pending_merge_entry_dir()
             .join(format!("{}.norito", hex::encode(hash.as_ref())))
     }
-
     fn invalid_pending_merge_entry_error(path: PathBuf, message: impl Into<String>) -> Error {
         Error::IO(
             std::io::Error::new(ErrorKind::InvalidData, message.into()),
             path,
         )
     }
-
     fn validate_pending_merge_hash_text(path: &Path, hash_text: &str) -> Result<()> {
         let decoded_hash = hex::decode(hash_text).map_err(|_| {
             Self::invalid_pending_merge_entry_error(
@@ -9549,7 +9197,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn ensure_pending_merge_entry_dir_unlocked(&self) -> Result<()> {
         let directory = self.pending_merge_entry_dir();
         match std::fs::symlink_metadata(&directory) {
@@ -9580,7 +9227,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn create_exclusive_pending_merge_temp(&self, path: &Path) -> Result<std::fs::File> {
         let directory = self.pending_merge_entry_dir();
         if path.parent() != Some(directory.as_path()) {
@@ -9603,11 +9249,9 @@ impl Kura {
                 "pending merge temporary has no filename",
             )
         })?;
-
         #[cfg(unix)]
         let file = {
             use std::os::unix::fs::OpenOptionsExt as _;
-
             let mut directory_options = std::fs::OpenOptions::new();
             directory_options.read(true).custom_flags(
                 (rustix::fs::OFlags::DIRECTORY
@@ -9647,7 +9291,6 @@ impl Kura {
                 .map_err(|error| Error::IO(error, path.to_path_buf()))?,
             )
         };
-
         #[cfg(not(unix))]
         let file = {
             let mut options = std::fs::OpenOptions::new();
@@ -9655,7 +9298,6 @@ impl Kura {
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt as _;
-
                 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
                 options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
             }
@@ -9663,7 +9305,6 @@ impl Kura {
                 .open(path)
                 .map_err(|error| Error::IO(error, path.to_path_buf()))?
         };
-
         let opened = file
             .metadata()
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
@@ -9692,16 +9333,13 @@ impl Kura {
         }
         Ok(file)
     }
-
     fn pending_queue_plan_admission_dir(&self) -> PathBuf {
         self.store_root.join(PENDING_QUEUE_PLAN_ADMISSIONS_DIR)
     }
-
     fn pending_queue_plan_admission_path(&self, hash: Hash) -> PathBuf {
         self.pending_queue_plan_admission_dir()
             .join(format!("{}.norito", hex::encode(hash.as_ref())))
     }
-
     fn invalid_pending_queue_plan_admission_error(
         path: PathBuf,
         message: impl Into<String>,
@@ -9711,7 +9349,6 @@ impl Kura {
             path,
         )
     }
-
     fn validate_pending_queue_plan_admission_hash_text(path: &Path, hash_text: &str) -> Result<()> {
         let decoded_hash = hex::decode(hash_text).map_err(|_| {
             Self::invalid_pending_queue_plan_admission_error(
@@ -9727,7 +9364,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn pending_queue_plan_admission_paths_unlocked(&self) -> Result<(Vec<PathBuf>, usize)> {
         let directory = self.pending_queue_plan_admission_dir();
         let read_dir = match std::fs::read_dir(&directory) {
@@ -9797,7 +9433,6 @@ impl Kura {
         paths.sort();
         Ok((paths, total_bytes))
     }
-
     fn ensure_pending_queue_plan_admission_dir_unlocked(&self) -> Result<()> {
         let directory = self.pending_queue_plan_admission_dir();
         match std::fs::symlink_metadata(&directory) {
@@ -9828,7 +9463,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn create_exclusive_pending_queue_plan_admission_temp(
         &self,
         path: &Path,
@@ -9854,11 +9488,9 @@ impl Kura {
                 "pending QueuePlan admission temporary has no filename",
             )
         })?;
-
         #[cfg(unix)]
         let file = {
             use std::os::unix::fs::OpenOptionsExt as _;
-
             let mut directory_options = std::fs::OpenOptions::new();
             directory_options.read(true).custom_flags(
                 (rustix::fs::OFlags::DIRECTORY
@@ -9898,7 +9530,6 @@ impl Kura {
                 .map_err(|error| Error::IO(error, path.to_path_buf()))?,
             )
         };
-
         #[cfg(not(unix))]
         let file = {
             let mut options = std::fs::OpenOptions::new();
@@ -9906,7 +9537,6 @@ impl Kura {
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt as _;
-
                 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
                 options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
             }
@@ -9914,7 +9544,6 @@ impl Kura {
                 .open(path)
                 .map_err(|error| Error::IO(error, path.to_path_buf()))?
         };
-
         let opened = file
             .metadata()
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
@@ -9943,7 +9572,6 @@ impl Kura {
         }
         Ok(file)
     }
-
     fn read_pending_queue_plan_admission_path(
         &self,
         path: &Path,
@@ -9974,7 +9602,6 @@ impl Kura {
         }
         Ok(Some((hash, bytes)))
     }
-
     fn validate_pending_queue_plan_admission_temp_bytes(
         &self,
         path: &Path,
@@ -9996,7 +9623,6 @@ impl Kura {
         }
         Ok(hash)
     }
-
     fn pending_control_recovery_directory_bytes_unlocked(
         &self,
         directory: &Path,
@@ -10013,7 +9639,6 @@ impl Kura {
             #[cfg(not(unix))]
             Synthetic(usize),
         }
-
         struct RecoveryRecord {
             path: PathBuf,
             hash_text: String,
@@ -10021,13 +9646,11 @@ impl Kura {
             metadata: std::fs::Metadata,
             identity: RecoveryFileIdentity,
         }
-
         struct RecoveryAliases {
             first: usize,
             second: Option<usize>,
             count: usize,
         }
-
         let invalid = |path: PathBuf, message: String| {
             if queue_plan_admission {
                 Self::invalid_pending_queue_plan_admission_error(path, message)
@@ -10125,7 +9748,6 @@ impl Kura {
             #[cfg(unix)]
             let identity = {
                 use std::os::unix::fs::MetadataExt as _;
-
                 RecoveryFileIdentity::Unix {
                     device: metadata.dev(),
                     inode: metadata.ino(),
@@ -10134,7 +9756,6 @@ impl Kura {
             #[cfg(windows)]
             let identity = {
                 use std::os::windows::fs::MetadataExt as _;
-
                 match (metadata.volume_serial_number(), metadata.file_index()) {
                     (Some(volume), Some(index)) => RecoveryFileIdentity::Windows { volume, index },
                     // Match `sidecar_metadata_same_object`: missing Windows identity
@@ -10189,7 +9810,6 @@ impl Kura {
                 identity,
             });
         }
-
         for record in &records {
             if !Self::sidecar_has_link_count(&record.metadata, 2) {
                 continue;
@@ -10235,7 +9855,6 @@ impl Kura {
         }
         Ok(unique_bytes)
     }
-
     fn preflight_pending_control_recovery_unlocked(&self) -> Result<(usize, usize)> {
         self.ensure_pending_merge_entry_dir_unlocked()?;
         self.ensure_pending_queue_plan_admission_dir_unlocked()?;
@@ -10262,7 +9881,6 @@ impl Kura {
         }
         Ok((merge_bytes, admission_bytes))
     }
-
     fn pending_merge_entry_paths_unlocked(&self) -> Result<(Vec<PathBuf>, usize)> {
         let directory = self.pending_merge_entry_dir();
         let read_dir = match std::fs::read_dir(&directory) {
@@ -10326,7 +9944,6 @@ impl Kura {
         paths.sort();
         Ok((paths, total_bytes))
     }
-
     fn validate_pending_merge_entries_on_startup(&self) -> Result<()> {
         let _guard = self.sidecar_lock.lock();
         self.reconcile_pending_merge_temp_files_unlocked()?;
@@ -10365,7 +9982,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn reconcile_pending_merge_temp_files_unlocked(&self) -> Result<()> {
         let _ = self.preflight_pending_control_recovery_unlocked()?;
         let directory = self.pending_merge_entry_dir();
@@ -10426,7 +10042,6 @@ impl Kura {
             #[cfg(windows)]
             let count_file_bytes = {
                 use std::os::windows::fs::MetadataExt as _;
-
                 let volume = metadata.volume_serial_number().ok_or_else(|| {
                     Self::invalid_pending_merge_entry_error(
                         path.clone(),
@@ -10639,7 +10254,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn reconcile_pending_queue_plan_admission_temp_files_unlocked(&self) -> Result<()> {
         let _ = self.preflight_pending_control_recovery_unlocked()?;
         let directory = self.pending_queue_plan_admission_dir();
@@ -10709,13 +10323,11 @@ impl Kura {
             #[cfg(unix)]
             let count_file_bytes = {
                 use std::os::unix::fs::MetadataExt as _;
-
                 seen_inodes.insert((metadata.dev(), metadata.ino()))
             };
             #[cfg(windows)]
             let count_file_bytes = {
                 use std::os::windows::fs::MetadataExt as _;
-
                 let volume = metadata.volume_serial_number().ok_or_else(|| {
                     Self::invalid_pending_queue_plan_admission_error(
                         path.clone(),
@@ -10749,7 +10361,6 @@ impl Kura {
                     "pending QueuePlan admission recovery bytes exceed the aggregate hard limit",
                 ));
             }
-
             let Some(file_name) = entry.file_name().to_str().map(str::to_owned) else {
                 return Err(Self::invalid_pending_queue_plan_admission_error(
                     path,
@@ -10791,7 +10402,6 @@ impl Kura {
                 Err(err) if err.kind() == ErrorKind::NotFound => None,
                 Err(err) => return Err(Error::IO(err, target_path.clone())),
             };
-
             if let Some(target_metadata) = target_metadata {
                 if target_metadata.file_type().is_symlink()
                     || !target_metadata.file_type().is_file()
@@ -10874,7 +10484,6 @@ impl Kura {
                 sync_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?;
                 continue;
             }
-
             if stable_count == self.pending_control_sidecar_limits.queue_plan_admissions {
                 return Err(Self::invalid_pending_queue_plan_admission_error(
                     directory,
@@ -10940,7 +10549,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn read_pending_merge_entry_path(
         &self,
         path: &Path,
@@ -10980,7 +10588,6 @@ impl Kura {
         }
         Ok(Some(entry))
     }
-
     fn retain_pending_certified_merge_entries_unlocked(
         &self,
         mut retain: impl FnMut(&MergeLedgerEntry) -> bool,
@@ -11009,7 +10616,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(removed)
     }
-
     fn prune_pending_certified_merge_entries_not_bound_to_unlocked(
         &self,
         carrier_height: u64,
@@ -11022,7 +10628,6 @@ impl Kura {
                 && entry.merge_qc.view == view
         })
     }
-
     /// Remove pending certificates that can no longer be carried by the exact current round.
     ///
     /// This cleanup runs before pending-count and aggregate-byte admission, so missed rounds
@@ -11043,7 +10648,6 @@ impl Kura {
             view,
         )
     }
-
     /// At a locked carrier, retain only the exact full entry referenced by the
     /// immutable body. With no reference, remove every losing sidecar for that
     /// carrier height while leaving other heights untouched.
@@ -11060,7 +10664,6 @@ impl Kura {
                 || reference.is_some_and(|reference| reference.matches_entry(entry))
         })
     }
-
     /// Remove every pending merge sidecar whose carrier height is already
     /// finalized. No losing sidecar can become canonical after height rollover.
     pub(crate) fn prune_finalized_pending_certified_merge_entries(
@@ -11074,7 +10677,6 @@ impl Kura {
             entry.merge_qc.carrier_height > finalized_height
         })
     }
-
     /// Persist a fully certified entry in the hash-addressed pending sidecar
     /// store without appending it to the globally committed merge log.
     ///
@@ -11133,7 +10735,6 @@ impl Kura {
                 "pending merge and QueuePlan admission bytes exceed their shared hard limit",
             ));
         }
-
         let mut temp = self.create_exclusive_pending_merge_temp(&temp_path)?;
         temp.write_all(&bytes)
             .map_err(|error| Error::IO(error, temp_path.clone()))?;
@@ -11219,7 +10820,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(hash)
     }
-
     /// Persist exact canonical QueuePlan admission certificate bytes before
     /// they become eligible for a global carrier.
     ///
@@ -11255,7 +10855,6 @@ impl Kura {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         self.reconcile_pending_merge_temp_files_unlocked()?;
         self.reconcile_pending_queue_plan_admission_temp_files_unlocked()?;
-
         if let Some((_, existing)) =
             self.read_pending_queue_plan_admission_path(&path, Some(hash))?
         {
@@ -11289,7 +10888,6 @@ impl Kura {
                 "pending merge and QueuePlan admission bytes exceed their shared hard limit",
             ));
         }
-
         let mut temp = self.create_exclusive_pending_queue_plan_admission_temp(&temp_path)?;
         temp.write_all(canonical_certificate_bytes)
             .map_err(|error| Error::IO(error, temp_path.clone()))?;
@@ -11375,7 +10973,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(hash)
     }
-
     /// Resolve one exact pending QueuePlan admission certificate by its byte hash.
     #[cfg(test)]
     pub(crate) fn pending_queue_plan_admission_certificate(
@@ -11406,7 +11003,6 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         Ok(certificate)
     }
-
     /// Return every pending QueuePlan admission certificate in byte-hash order.
     #[cfg(test)]
     pub(crate) fn pending_queue_plan_admission_certificates(&self) -> Result<Vec<(Hash, Vec<u8>)>> {
@@ -11414,7 +11010,6 @@ impl Kura {
             self.pending_control_sidecar_limits.queue_plan_admissions,
         )
     }
-
     /// Return at most `limit` pending QueuePlan admission certificates in
     /// deterministic byte-hash order.
     pub(crate) fn pending_queue_plan_admission_certificates_bounded(
@@ -11453,13 +11048,11 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         Ok(certificates)
     }
-
     /// Fingerprint-bound QueuePlan admission capacity used by bounded callers.
     #[must_use]
     pub(crate) const fn pending_queue_plan_admission_capacity(&self) -> usize {
         self.pending_control_sidecar_limits.queue_plan_admissions
     }
-
     /// Remove pending QueuePlan admission certificates rejected by `retain`.
     ///
     /// This is the byte-oriented cleanup hook used by the admission layer for
@@ -11497,7 +11090,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(removed)
     }
-
     /// Remove one pending QueuePlan admission certificate after canonical
     /// carrier commitment or explicit stale-certificate rejection.
     pub(crate) fn remove_pending_queue_plan_admission_certificate(&self, hash: Hash) -> Result<()> {
@@ -11517,7 +11109,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     /// Resolve an exact merge entry from the pending sidecar store or the
     /// globally committed merge log.
     ///
@@ -11546,7 +11137,6 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         Ok(entry)
     }
-
     /// Return canonical, uncommitted certified merge sidecars in deterministic order.
     ///
     /// The pending store is bounded at admission, and entries already present in the committed
@@ -11558,7 +11148,6 @@ impl Kura {
             self.pending_control_sidecar_limits.certified_merge_entries,
         )
     }
-
     /// Return at most `limit` deterministic pending merge sidecars.
     ///
     /// Directory shape and aggregate metadata remain fail-closed under the
@@ -11586,7 +11175,6 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         Ok(entries)
     }
-
     /// Return deterministic hashes for matching uncommitted pending merge evidence.
     ///
     /// At most `evidence_scan_limit` sidecars are decoded, one at a time. The
@@ -11616,7 +11204,6 @@ impl Kura {
             matches.into_iter().map(|(_, hash)| hash).collect(),
         ))
     }
-
     fn visit_pending_certified_merge_entries(
         &self,
         evidence_scan_limit: usize,
@@ -11634,7 +11221,6 @@ impl Kura {
         if paths.len() > evidence_scan_limit {
             return Ok(PendingCertifiedMergeVisitOutcome::ScanLimitExceeded);
         }
-
         for path in paths {
             let entry = {
                 let _guard = self.sidecar_lock.lock();
@@ -11662,7 +11248,6 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         Ok(PendingCertifiedMergeVisitOutcome::Complete)
     }
-
     /// Return whether an uncommitted certified merge sidecar still carries
     /// work for one exact active lane incarnation.
     ///
@@ -11797,7 +11382,6 @@ impl Kura {
         )?;
         Ok(outcome != PendingCertifiedMergeVisitOutcome::Complete)
     }
-
     /// Select the next pending certified entry deterministically by
     /// `(epoch_id, entry_hash)`, excluding entries already in the committed log.
     ///
@@ -11810,7 +11394,6 @@ impl Kura {
     ) -> Result<Option<(HashOf<MergeLedgerEntry>, MergeLedgerEntry)>> {
         Ok(self.pending_certified_merge_entries()?.into_iter().next())
     }
-
     /// Select the first canonical pending entry accepted by `eligible`.
     ///
     /// The predicate runs without the sidecar lock, allowing callers to perform
@@ -11825,7 +11408,6 @@ impl Kura {
             .into_iter()
             .find(|(hash, entry)| eligible(*hash, entry)))
     }
-
     /// Remove a pending sidecar after the same entry is globally committed.
     ///
     /// # Errors
@@ -11839,7 +11421,6 @@ impl Kura {
         self.durable_mutation_authorized()?;
         self.remove_pending_certified_merge_entry_after_authorization(hash)
     }
-
     fn remove_pending_certified_merge_entry_after_authorization(
         &self,
         hash: HashOf<MergeLedgerEntry>,
@@ -11873,7 +11454,6 @@ impl Kura {
         }
         result
     }
-
     fn preflight_committed_merge_entry_for_block(
         &self,
         block: &SignedBlock,
@@ -11885,7 +11465,6 @@ impl Kura {
         self.preflight_merge_carrier_record_unlocked(record)?;
         Ok(())
     }
-
     fn associated_merge_entry_for_block(
         &self,
         block: &SignedBlock,
@@ -11909,7 +11488,6 @@ impl Kura {
         }
         Ok(Some(entry))
     }
-
     fn remove_committed_pending_merge_entry_best_effort(&self, hash: HashOf<MergeLedgerEntry>) {
         if let Err(error) = self.remove_pending_certified_merge_entry(hash) {
             warn!(
@@ -11919,7 +11497,6 @@ impl Kura {
             );
         }
     }
-
     fn append_committed_merge_entry_for_block_if_missing(
         &self,
         block: &SignedBlock,
@@ -11945,7 +11522,6 @@ impl Kura {
             merge_log.append(entry)?;
             appended = true;
         }
-
         let carrier_written = match self.write_merge_carrier_record_unlocked(record) {
             Ok(written) => written,
             Err(err) => {
@@ -11975,7 +11551,6 @@ impl Kura {
         }
         Ok((merge_log_len_before, carrier_written))
     }
-
     /// Snapshot merge-ledger entries retained in the in-memory cache.
     pub fn merge_ledger_snapshot(&self) -> Vec<MergeLedgerEntry> {
         if self.prune_recovery_is_required()
@@ -11997,7 +11572,6 @@ impl Kura {
         }
         entries
     }
-
     /// Snapshot at most `limit` newest cached merge-ledger entries, newest first.
     ///
     /// Unlike [`Self::merge_ledger_snapshot`], diagnostic callers can use this
@@ -12024,7 +11598,6 @@ impl Kura {
         }
         entries
     }
-
     /// Read every durable merge-ledger entry in chronological order.
     ///
     /// # Errors
@@ -12041,7 +11614,6 @@ impl Kura {
         self.ensure_canonical_storage_not_poisoned()?;
         Ok(entries)
     }
-
     /// Return the latest committed lane-local execution height for every active
     /// `(lane, dataspace, incarnation)` identity.
     ///
@@ -12062,12 +11634,10 @@ impl Kura {
         self.ensure_canonical_storage_not_poisoned()?;
         Ok(heights)
     }
-
     #[cfg(test)]
     pub(crate) fn fail_next_merge_append_for_test(&self) {
         self.merge_log.lock().fail_next_append = true;
     }
-
     /// Reset merge-history read counters used by transaction-query complexity tests.
     #[cfg(test)]
     pub(crate) fn reset_merge_query_read_counters_for_test(&self) {
@@ -12076,7 +11646,6 @@ impl Kura {
         merge_log.indexed_lookups = 0;
         merge_log.complete_execution_scans = 0;
     }
-
     /// Return `(full_log_scans, complete_execution_scans, indexed_lookups)` for tests.
     #[cfg(test)]
     pub(crate) fn merge_query_read_counters_for_test(&self) -> (usize, usize, usize) {
@@ -12087,7 +11656,6 @@ impl Kura {
             merge_log.indexed_lookups,
         )
     }
-
     /// Corrupt a sidecar payload while retaining its frame index for fail-closed tests.
     #[cfg(test)]
     pub(crate) fn remove_merge_entry_payload_for_test(&self, hash: HashOf<MergeLedgerEntry>) {
@@ -12113,17 +11681,14 @@ impl Kura {
         })
         .expect("corrupt indexed merge sidecar payload for test");
     }
-
     #[cfg(test)]
     fn fail_next_merge_append_after_for_test(&self, point: MergeLedgerAppendFailurePoint) {
         self.merge_log.lock().fail_next_append_after = Some(point);
     }
-
     pub(crate) fn truncate_merge_log_to_len(&self, keep: usize) -> Result<()> {
         self.durable_mutation_authorized()?;
         self.truncate_merge_log_to_len_after_authorization(keep)
     }
-
     fn truncate_merge_log_to_len_after_authorization(&self, keep: usize) -> Result<()> {
         let before = self.merge_log_tracked_bytes()?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
@@ -12133,7 +11698,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     /// Start a thread that receives and stores new blocks
     /// Start the background block writer after all provisional startup authority is finalized.
     ///
@@ -12157,7 +11721,6 @@ impl Kura {
                 "shutdown",
             );
         });
-
         Ok(Child::new(
             tokio::task::spawn(spawn_os_thread_as_future(
                 std::thread::Builder::new().name("kura".to_owned()),
@@ -12168,7 +11731,6 @@ impl Kura {
             OnShutdown::Wait(Duration::from_secs(5)),
         ))
     }
-
     /// Initialize [`Kura`] after its construction to be able to work with it.
     ///
     /// # Errors
@@ -12186,7 +11748,6 @@ impl Kura {
             .read_durable_index_count()?
             .try_into()
             .expect("INTERNAL BUG: block index count exceeds usize::MAX");
-
         let chain_validation = if let Some(audited_height) = provisional_hash_only_prefix {
             Kura::init_provisional_snapshot_bootstrap(
                 block_store,
@@ -12210,7 +11771,6 @@ impl Kura {
                 }
             }?
         };
-
         if chain_validation.truncated {
             warn!(
                 validated_blocks = chain_validation.hashes.len(),
@@ -12220,7 +11780,6 @@ impl Kura {
         if chain_validation.hash_mismatch {
             warn!("Kura rewrote hashes file after detecting mismatches with on-disk blocks");
         }
-
         // The none value is set in order to indicate that the blocks exist on disk but are not yet loaded.
         let block_data = chain_validation
             .hashes
@@ -12230,7 +11789,6 @@ impl Kura {
             .collect();
         Ok((block_data, chain_validation))
     }
-
     fn init_provisional_snapshot_bootstrap(
         block_store: &mut BlockStore,
         block_index_count: usize,
@@ -12250,7 +11808,6 @@ impl Kura {
             .checked_sub(1)
             .and_then(|index| hashes.get(index))
             .copied();
-
         for (index, block_index) in block_indices.iter().enumerate().skip(audited_height) {
             let height = u64::try_from(index)?.saturating_add(1);
             if block_index.length == 0 || block_index.length > STRICT_INIT_MAX_BLOCK_BYTES {
@@ -12311,7 +11868,6 @@ impl Kura {
             hard_fork_hash_only_block_count: audited_height,
         })
     }
-
     fn ensure_startup_rewrite_respects_v2_finality(
         v2_finality_floor: Option<u64>,
         rewrite_from_height: u64,
@@ -12326,7 +11882,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn rewrite_validated_block_hashes(
         block_store: &mut BlockStore,
         hashes: &[HashOf<BlockHeader>],
@@ -12341,7 +11896,6 @@ impl Kura {
         };
         block_store.overwrite_block_hash_suffix(finalized_height, suffix)
     }
-
     #[cfg(test)]
     fn init_hash_only_hard_fork_mode(
         block_store: &mut BlockStore,
@@ -12383,7 +11937,6 @@ impl Kura {
             block_index_count = block_hashes_count;
             repaired_height_mismatch = true;
         }
-
         let expected_hashes = block_store.read_block_hashes(0, block_hashes_count)?;
         if hard_fork_hash_only_block_count >= block_index_count {
             info!(
@@ -12397,7 +11950,6 @@ impl Kura {
                 hard_fork_hash_only_block_count: block_index_count,
             });
         }
-
         let mut block_indices = vec![BlockIndex::default(); block_index_count];
         block_store.read_block_indices(0, &mut block_indices)?;
         let mut validation = Self::validate_block_chain(
@@ -12428,7 +11980,6 @@ impl Kura {
         );
         Ok(validation)
     }
-
     fn init_fast_mode(
         block_store: &mut BlockStore,
         block_index_count: usize,
@@ -12474,7 +12025,6 @@ impl Kura {
             Err(Error::HashesFileHeightMismatch)
         }
     }
-
     fn init_strict_mode(
         block_store: &mut BlockStore,
         block_index_count: usize,
@@ -12519,7 +12069,6 @@ impl Kura {
             }
             None
         };
-
         let validation = Self::validate_block_chain(
             block_store,
             &block_indices,
@@ -12534,10 +12083,8 @@ impl Kura {
                 v2_finality_floor,
             )?;
         }
-
         Ok(validation)
     }
-
     #[allow(clippy::too_many_lines)]
     fn validate_block_chain(
         block_store: &mut BlockStore,
@@ -12567,7 +12114,6 @@ impl Kura {
         let data_file_len = block_store.data_file_len()?;
         let mut truncated = None;
         let mut hash_mismatch = false;
-
         for (idx, block) in block_indices.iter().enumerate() {
             let height = idx.saturating_add(1) as u64;
             if idx < hash_only_prefix {
@@ -12579,7 +12125,6 @@ impl Kura {
                 block_hashes.push(expected);
                 continue;
             }
-
             if block.length == 0
                 && block.is_evicted()
                 && expected_hashes.is_some_and(|hashes| hashes.get(idx).is_some())
@@ -12748,7 +12293,6 @@ impl Kura {
                     block_data_buffer.try_reserve(additional)?;
                 }
                 block_data_buffer.resize(length, 0);
-
                 match block_store.read_block_data(block.start, &mut block_data_buffer) {
                     Ok(()) => match decode_framed_signed_block(&block_data_buffer) {
                         Ok(decoded_block) => decoded_block,
@@ -12773,7 +12317,6 @@ impl Kura {
                     }
                 }
             };
-
             if prev_block_hash != decoded_block.header().prev_block_hash() {
                 truncated = Some(true);
                 error!(
@@ -12784,7 +12327,6 @@ impl Kura {
                 );
                 break;
             }
-
             let decoded_block_hash = decoded_block.hash();
             if let Some(expected) = expected_hashes.and_then(|hashes| hashes.get(idx)).copied() {
                 if expected != decoded_block_hash {
@@ -12798,11 +12340,9 @@ impl Kura {
                     );
                 }
             }
-
             prev_block_hash = Some(decoded_block_hash);
             block_hashes.push(decoded_block_hash);
         }
-
         let truncated = truncated.unwrap_or(false);
         let validated_height = block_hashes.len() as u64;
         if truncated {
@@ -12816,7 +12356,6 @@ impl Kura {
                 "Pruned Kura storage to last validated block after detecting corruption"
             );
         }
-
         let authenticated_hash_only_block_count = verified_snapshot_tail
             .as_ref()
             .filter(|marker| marker.body_prefix_count == marker.snapshot_height)
@@ -12830,7 +12369,6 @@ impl Kura {
             hard_fork_hash_only_block_count: authenticated_hash_only_block_count,
         })
     }
-
     #[iroha_logger::log(skip_all)]
     fn receive_blocks_loop(&self, shutdown_signal: &ShutdownSignal) {
         let kura = self;
@@ -12839,14 +12377,12 @@ impl Kura {
             .lock()
             .take()
             .expect("Kura writer thread already started");
-
         let mut should_exit = false;
         loop {
             if shutdown_signal.is_sent() {
                 info!("Kura block thread is being shut down. Flushing sidecars and fsync state.");
                 should_exit = true;
             }
-
             let prune_guard = kura.prune_lock.lock();
             if kura.prune_recovery_is_required() {
                 error!("Kura writer stopped because canonical prune recovery requires restart");
@@ -12856,7 +12392,6 @@ impl Kura {
             kura.flush_fastpq_proof_snapshots();
             kura.flush_pending_budget_eviction();
             drop(prune_guard);
-
             if should_exit {
                 let _prune_guard = kura.prune_lock.lock();
                 if kura.prune_recovery_is_required() {
@@ -12875,7 +12410,6 @@ impl Kura {
                 info!("Kura has flushed sidecars and pending fsync state and is shutting down.");
                 return;
             }
-
             let wait_for_fsync = {
                 let guard = kura.block_store.lock();
                 guard.next_fsync_wait()
@@ -12932,7 +12466,6 @@ impl Kura {
             }
         }
     }
-
     /// Get the hash of the block at the provided height.
     pub fn get_block_hash(&self, block_height: NonZeroUsize) -> Option<HashOf<BlockHeader>> {
         if self.prune_recovery_is_required()
@@ -12946,16 +12479,13 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return None;
         }
-
         let block_height = block_height.get();
         if hash_data_guard.len() < block_height {
             return None;
         }
-
         let block_index = block_height - 1;
         Some(hash_data_guard[block_index].0)
     }
-
     /// Get the committed hash at the provided height from Kura's durable hash journal.
     pub fn get_durable_block_hash(
         &self,
@@ -12979,7 +12509,6 @@ impl Kura {
         }
         hash
     }
-
     /// Resolve the height of the block with the given hash.
     pub fn get_block_height_by_hash(&self, hash: HashOf<BlockHeader>) -> Option<NonZeroUsize> {
         if self.prune_recovery_is_required()
@@ -12997,7 +12526,6 @@ impl Kura {
         }
         height
     }
-
     /// Resolve block heights containing the given transaction entrypoint hash.
     ///
     /// Returns `None` when the in-memory index is known to be partial, so callers can fall back to
@@ -13027,7 +12555,6 @@ impl Kura {
         }
         heights
     }
-
     /// Resolve block heights containing the given committed transaction hash.
     ///
     /// Merge-sidecar transactions are indexed at their exact sparse global
@@ -13057,7 +12584,6 @@ impl Kura {
         }
         heights
     }
-
     /// Resolve the earliest block height containing an issuer-bound offline operation.
     ///
     /// The outer `None` means the in-memory transaction index is partial. An inner `None`
@@ -13093,7 +12619,6 @@ impl Kura {
         }
         height
     }
-
     /// Resolve block heights containing committed transactions with the given authority.
     ///
     /// Returns `None` when the in-memory transaction index is known to be partial.
@@ -13122,7 +12647,6 @@ impl Kura {
         }
         heights
     }
-
     /// Resolve block heights containing committed transactions with the given timestamp.
     ///
     /// Returns `None` when the in-memory transaction index is known to be partial.
@@ -13151,7 +12675,6 @@ impl Kura {
         }
         heights
     }
-
     /// Resolve block heights containing committed transactions in the timestamp range.
     ///
     /// Returns `None` when the in-memory transaction index is known to be partial.
@@ -13170,7 +12693,6 @@ impl Kura {
         {
             return Some(BTreeSet::new());
         }
-
         let index = self.transaction_entrypoint_index.lock();
         if self.prune_recovery_is_required() {
             return None;
@@ -13189,7 +12711,6 @@ impl Kura {
         }
         heights
     }
-
     /// Resolve block heights containing committed transactions with the given result status.
     ///
     /// Returns `None` when the in-memory transaction index is known to be partial.
@@ -13218,7 +12739,6 @@ impl Kura {
         }
         heights
     }
-
     /// Return the exact durable height and bounded encoded payload length for a
     /// known canonical block hash.
     ///
@@ -13266,7 +12786,6 @@ impl Kura {
         }
         Some((height_u64, index.length))
     }
-
     /// Cache a canonical block body in the local sidecar store after remote rehydration.
     ///
     /// The body must match Kura's durable height/hash metadata. Inline blocks are already local and
@@ -13331,12 +12850,10 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     /// Get a reference to block by height, loading it from disk if needed.
     pub fn get_block(&self, block_height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
         self.get_block_inner(block_height, true)
     }
-
     /// Load a canonical block without resolving its compact merge sidecar.
     ///
     /// Transaction-query budget admission uses this narrow path to inspect the
@@ -13350,7 +12867,6 @@ impl Kura {
     ) -> Option<Arc<SignedBlock>> {
         self.get_block_inner(block_height, false)
     }
-
     fn get_block_inner(
         &self,
         block_height: NonZeroUsize,
@@ -13377,7 +12893,6 @@ impl Kura {
             if data.len() < block_height.get() {
                 return None;
             }
-
             let idx = block_height.get() - 1;
             if self.is_hard_fork_hash_only_block(idx) {
                 debug!(
@@ -13386,13 +12901,11 @@ impl Kura {
                 );
                 return None;
             }
-
             let expected_hash = data[idx].0;
             let cached_block = data[idx].1.as_ref().map(Arc::clone);
             let should_cache = idx + self.blocks_in_memory.get() >= data.len();
             (idx, expected_hash, cached_block, should_cache, data.len())
         };
-
         let (block, is_evicted) = {
             let mut block_store = self.block_store.lock();
             if self.prune_recovery_is_required() {
@@ -13407,7 +12920,6 @@ impl Kura {
             };
             let is_evicted = index.is_evicted();
             let BlockIndex { start, length } = index;
-
             if length == 0 {
                 debug!(
                     block_index,
@@ -13417,12 +12929,10 @@ impl Kura {
                 );
                 return None;
             }
-
             if let Some(telemetry) = self.telemetry.get() {
                 let outcome = if is_evicted { "miss" } else { "hit" };
                 telemetry.inc_storage_da_cache("kura", outcome);
             }
-
             let block = if is_evicted {
                 let height = block_index.saturating_add(1) as u64;
                 let (finality_wire_len, finality_wire_hash) = match self
@@ -13504,7 +13014,6 @@ impl Kura {
                         return None;
                     }
                 };
-
                 match decode_framed_signed_block(bytes) {
                     Ok(decoded) => decoded,
                     Err(error) => {
@@ -13526,7 +13035,6 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return None;
         }
-
         if block.hash() != expected_hash {
             error!(
                 expected = ?expected_hash,
@@ -13536,7 +13044,6 @@ impl Kura {
             );
             return None;
         }
-
         if self.prune_recovery_is_required() {
             return None;
         }
@@ -13564,11 +13071,9 @@ impl Kura {
                 );
             }
         }
-
         if should_cache && update_transaction_index && !is_evicted {
             #[cfg(test)]
             self.maybe_pause_block_read_before_cache_recheck_for_tests();
-
             // Cache publication is opportunistic, but it must be ordered after the durable index
             // observation. Eviction publishes its new index and clears this slot while retaining
             // `block_store`; re-read both durable identity fields before acquiring the cache so a
@@ -13603,17 +13108,14 @@ impl Kura {
             }
             drop(block_store);
         }
-
         if self.prune_recovery_is_required() {
             return None;
         }
         Some(block_arc)
     }
-
     fn is_hard_fork_hash_only_block(&self, block_index: usize) -> bool {
         block_index < self.hard_fork_hash_only_block_count.load(Ordering::Relaxed)
     }
-
     /// Return the provisional imported-prefix boundary and lineage digest.
     ///
     /// This is classification metadata only. Presence does not authenticate
@@ -13629,7 +13131,6 @@ impl Kura {
                 )
             })
     }
-
     /// Return whether Kura is open only for provisional signed-snapshot authentication.
     #[must_use]
     pub fn provisional_snapshot_bootstrap_pending(&self) -> bool {
@@ -13638,7 +13139,6 @@ impl Kura {
             .lock()
             .is_authenticated()
     }
-
     /// Return whether this height belongs to the imported snapshot prefix.
     ///
     /// The result deliberately includes a provisional prefix so startup
@@ -13647,7 +13147,6 @@ impl Kura {
     pub(crate) fn is_audited_snapshot_import_height(&self, block_height: NonZeroUsize) -> bool {
         self.is_hard_fork_hash_only_block(block_height.get().saturating_sub(1))
     }
-
     fn ensure_snapshot_bootstrap_authenticated(&self) -> Result<()> {
         if !self
             .provisional_snapshot_bootstrap
@@ -13658,14 +13157,12 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Authorize a durable sidecar or journal mutation which does not require
     /// canonical block-stage recovery.
     fn durable_mutation_authorized(&self) -> Result<()> {
         self.ensure_snapshot_bootstrap_authenticated()?;
         self.ensure_canonical_storage_not_poisoned()
     }
-
     /// Finalize a provisional imported prefix against an authenticated typed lineage.
     ///
     /// The authorization proves that the outer snapshot signature (or exact
@@ -13744,7 +13241,6 @@ impl Kura {
                     .to_owned(),
             });
         }
-
         {
             let mut store = self.block_store.lock();
             let logical_count = store.read_index_count()?;
@@ -13780,7 +13276,6 @@ impl Kura {
                 });
             }
         }
-
         // The read-only authentication preflight is complete. Claim the one
         // finalization transition immediately before deferred recovery. Any
         // competing or repeated finalizer observes `Finalizing` (or the later
@@ -13792,7 +13287,6 @@ impl Kura {
         {
             return Err(Error::SnapshotBootstrapAuthenticationPending);
         }
-
         // Deferred recovery is now authorized. Any failure poisons canonical
         // storage and deliberately leaves the runtime in `Finalizing`, so no
         // canonical operation can observe partially recovered state.
@@ -13801,7 +13295,6 @@ impl Kura {
             let roster_path = Self::roster_log_path(&self.store_root);
             let roster = CommitRosterJournal::load(roster_path, self.block_sync_roster_retention)?;
             *self.roster_log.write() = roster;
-
             let merge_path = self.active_merge_path.lock().clone();
             let merge_capacity = self.merge_log.lock().cache_capacity;
             let mut merge_log = MergeLedgerLog::open_at(&merge_path, merge_capacity)?;
@@ -13810,7 +13303,6 @@ impl Kura {
                 merge_log.truncate_to_len(block_count)?;
             }
             *self.merge_log.lock() = merge_log;
-
             let blocks_root = self.active_blocks_dir.lock().clone();
             let mut durable_hashes = self
                 .block_data
@@ -13872,10 +13364,8 @@ impl Kura {
             );
             return Err(error);
         }
-
         Ok(())
     }
-
     /// Returns `true` when the canonical block is represented only by its
     /// hash from a hard-fork snapshot bootstrap and the local body is
     /// intentionally unavailable.
@@ -13905,7 +13395,6 @@ impl Kura {
         );
         !self.prune_recovery_is_required() && is_hash_only
     }
-
     /// Force a stored block height into hash-only form when constructing snapshot tests.
     #[doc(hidden)]
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -13924,7 +13413,6 @@ impl Kura {
             *block_body = None;
             (*block_hash, block_count)
         };
-
         let _write_guard = self.block_store_write_lock.lock();
         let mut store = self.block_store.lock();
         store.create_files_if_they_do_not_exist()?;
@@ -13935,7 +13423,6 @@ impl Kura {
             .fetch_max(block_height.get(), Ordering::Relaxed);
         Ok(())
     }
-
     pub(crate) fn hash_only_unavailable_prefix_len(&self, limit: usize) -> usize {
         if self.prune_recovery_is_required() {
             return 0;
@@ -13946,42 +13433,32 @@ impl Kura {
         }
         hash_only_count.min(limit).min(self.block_data.lock().len())
     }
-
     fn wsv_checkpoint_dir_for(blocks_dir: &Path) -> PathBuf {
         blocks_dir.join(WSV_CHECKPOINTS_DIR_NAME)
     }
-
     fn wsv_checkpoint_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
         Self::wsv_checkpoint_dir_for(blocks_dir).join(format!("{height:020}.norito"))
     }
-
     fn wsv_checkpoint_dir(&self) -> PathBuf {
         Self::wsv_checkpoint_dir_for(&self.active_blocks_dir.lock())
     }
-
     fn wsv_checkpoint_path(&self, height: u64) -> PathBuf {
         Self::wsv_checkpoint_path_for(&self.active_blocks_dir.lock(), height)
     }
-
     fn commit_manifest_dir_for(blocks_dir: &Path) -> PathBuf {
         blocks_dir.join(COMMIT_MANIFESTS_DIR_NAME)
     }
-
     fn commit_manifest_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
         Self::commit_manifest_dir_for(blocks_dir).join(format!("{height:020}.norito"))
     }
-
     fn commit_manifest_dir(&self) -> PathBuf {
         Self::commit_manifest_dir_for(&self.active_blocks_dir.lock())
     }
-
     fn commit_manifest_path(&self, height: u64) -> PathBuf {
         Self::commit_manifest_path_for(&self.active_blocks_dir.lock(), height)
     }
 }
-
 include!("kura/retained_finality_replica_authority.rs");
-
 impl Kura {
     fn canonical_block_store_metadata(
         &self,
@@ -14007,7 +13484,6 @@ impl Kura {
             commit_marker: required(COUNT_FILE_NAME)?,
         })
     }
-
     fn canonical_block_store_metadata_unchanged(
         left: &StableCanonicalBlockStoreMetadata,
         right: &StableCanonicalBlockStoreMetadata,
@@ -14017,7 +13493,6 @@ impl Kura {
             && Self::stable_sidecar_metadata_unchanged(&left.hashes, &right.hashes)
             && Self::stable_sidecar_metadata_unchanged(&left.commit_marker, &right.commit_marker)
     }
-
     fn v2_startup_replay_lane_auxiliary_sidecar_directories(
         &self,
     ) -> Result<BTreeMap<PathBuf, PathBuf>> {
@@ -14047,7 +13522,6 @@ impl Kura {
         }
         Ok(directories)
     }
-
     fn capture_v2_startup_replay_lane_auxiliary_sidecars(
         &self,
     ) -> Result<BTreeMap<PathBuf, StableSidecarDirectoryInventory>> {
@@ -14073,7 +13547,6 @@ impl Kura {
                     lane_artifacts,
                 ));
             }
-
             let remaining_records = HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS
                 .checked_sub(historical_records)
                 .ok_or_else(|| {
@@ -14137,7 +13610,6 @@ impl Kura {
         }
         Ok(inventories)
     }
-
     fn capture_v2_startup_replay_auxiliary_sidecars(
         &self,
     ) -> Result<BTreeMap<PathBuf, StableSidecarDirectoryInventory>> {
@@ -14161,7 +13633,6 @@ impl Kura {
         }
         Ok(inventories)
     }
-
     fn decode_v2_startup_wsv_checkpoint(
         &self,
         path: &Path,
@@ -14189,7 +13660,6 @@ impl Kura {
             metadata: snapshot.metadata,
         }))
     }
-
     fn decode_v2_startup_commit_manifest(
         &self,
         path: &Path,
@@ -14217,7 +13687,6 @@ impl Kura {
             metadata: snapshot.metadata,
         }))
     }
-
     fn v2_startup_replay_sidecar_projections_match_inventory(
         &self,
         blocks_dir: &Path,
@@ -14273,7 +13742,6 @@ impl Kura {
         }
         true
     }
-
     fn capture_v2_startup_replay_sidecar_projections(
         &self,
         blocks_dir: &Path,
@@ -14283,7 +13751,6 @@ impl Kura {
         BTreeMap<PathBuf, StableSidecarDirectoryInventory>,
     )> {
         use rayon::prelude::*;
-
         let checkpoint_dir = Self::wsv_checkpoint_dir_for(blocks_dir);
         let manifest_dir = Self::commit_manifest_dir_for(blocks_dir);
         let results = boundary
@@ -14372,7 +13839,6 @@ impl Kura {
         }
         Ok((projections, auxiliary))
     }
-
     /// Refresh only the auxiliary directory binding after deterministic
     /// startup repair or State geometry setup has published lane evidence.
     ///
@@ -14443,7 +13909,6 @@ impl Kura {
                 blocks_dir,
             ));
         }
-
         let previous_lane_auxiliary = std::mem::take(&mut inventory.lane_auxiliary_directories);
         for directory in previous_lane_auxiliary {
             inventory.auxiliary_sidecars.remove(&directory);
@@ -14452,7 +13917,6 @@ impl Kura {
         inventory.lane_auxiliary_directories = lane_auxiliary_directories;
         Ok(())
     }
-
     /// Validate every durable finality envelope against its canonical header,
     /// retained complete-block wire hash, live body when present, and CommitQC.
     ///
@@ -14463,7 +13927,6 @@ impl Kura {
         &self,
     ) -> Result<V2StartupFinalityVerificationInventory> {
         use rayon::prelude::*;
-
         let started_at = Instant::now();
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
@@ -14654,75 +14117,58 @@ impl Kura {
             durable_tip_artifact,
         })
     }
-
     fn kagemusha_topup_finality_staging_dir_for(blocks_dir: &Path) -> PathBuf {
         blocks_dir.join(KAGEMUSHA_TOPUP_FINALITY_STAGING_DIR_NAME)
     }
-
     fn kagemusha_topup_finality_staging_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
         Self::kagemusha_topup_finality_staging_dir_for(blocks_dir)
             .join(format!("{height:020}.norito"))
     }
-
     fn kagemusha_topup_finality_staging_dir(&self) -> PathBuf {
         Self::kagemusha_topup_finality_staging_dir_for(&self.active_blocks_dir.lock())
     }
-
     fn kagemusha_topup_finality_staging_path(&self, height: u64) -> PathBuf {
         Self::kagemusha_topup_finality_staging_path_for(&self.active_blocks_dir.lock(), height)
     }
-
     fn kagemusha_topup_finality_sidecar_dir_for(blocks_dir: &Path) -> PathBuf {
         blocks_dir.join(KAGEMUSHA_TOPUP_FINALITY_SIDECARS_DIR_NAME)
     }
-
     fn kagemusha_topup_finality_sidecar_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
         Self::kagemusha_topup_finality_sidecar_dir_for(blocks_dir)
             .join(format!("{height:020}.norito"))
     }
-
     fn kagemusha_topup_finality_sidecar_dir(&self) -> PathBuf {
         Self::kagemusha_topup_finality_sidecar_dir_for(&self.active_blocks_dir.lock())
     }
-
     fn kagemusha_topup_finality_sidecar_path(&self, height: u64) -> PathBuf {
         Self::kagemusha_topup_finality_sidecar_path_for(&self.active_blocks_dir.lock(), height)
     }
-
     fn kagemusha_active_receiver_staging_dir_for(blocks_dir: &Path) -> PathBuf {
         blocks_dir.join(KAGEMUSHA_ACTIVE_RECEIVER_STAGING_DIR_NAME)
     }
-
     fn kagemusha_active_receiver_staging_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
         Self::kagemusha_active_receiver_staging_dir_for(blocks_dir)
             .join(format!("{height:020}.norito"))
     }
-
     fn kagemusha_active_receiver_staging_dir(&self) -> PathBuf {
         Self::kagemusha_active_receiver_staging_dir_for(&self.active_blocks_dir.lock())
     }
-
     fn kagemusha_active_receiver_staging_path(&self, height: u64) -> PathBuf {
         Self::kagemusha_active_receiver_staging_path_for(&self.active_blocks_dir.lock(), height)
     }
-
     fn kagemusha_active_receiver_sidecar_dir_for(blocks_dir: &Path) -> PathBuf {
         blocks_dir.join(KAGEMUSHA_ACTIVE_RECEIVER_SIDECARS_DIR_NAME)
     }
-
     fn kagemusha_active_receiver_sidecar_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
         Self::kagemusha_active_receiver_sidecar_dir_for(blocks_dir)
             .join(format!("{height:020}.norito"))
     }
-
     fn kagemusha_active_receiver_sidecar_dir(&self) -> PathBuf {
         Self::kagemusha_active_receiver_sidecar_dir_for(&self.active_blocks_dir.lock())
     }
-
     fn kagemusha_active_receiver_sidecar_path(&self, height: u64) -> PathBuf {
         Self::kagemusha_active_receiver_sidecar_path_for(&self.active_blocks_dir.lock(), height)
     }
-
     fn kagemusha_finality_sidecar_dirs_for(blocks_dir: &Path) -> [PathBuf; 4] {
         [
             Self::kagemusha_topup_finality_staging_dir_for(blocks_dir),
@@ -14731,7 +14177,6 @@ impl Kura {
             Self::kagemusha_active_receiver_sidecar_dir_for(blocks_dir),
         ]
     }
-
     fn v2_finality_cache_hit(
         &self,
         height: u64,
@@ -14756,14 +14201,12 @@ impl Kura {
         cache.push_back(entry);
         true
     }
-
     fn install_v2_startup_finality_verification_inventory(
         &self,
         inventory: V2StartupFinalityVerificationInventory,
     ) {
         *self.v2_startup_finality_verification_inventory.lock() = Some(Arc::new(inventory));
     }
-
     /// Rebuild the complete startup finality inventory when a caller-created
     /// Kura (notably focused tests and embedders) did not run normal open-time
     /// initialization, or when a prior identity check invalidated the cache.
@@ -14773,7 +14216,6 @@ impl Kura {
         self.refresh_v2_startup_replay_auxiliary_binding()?;
         Ok(())
     }
-
     fn v2_startup_finality_verification_hit(
         &self,
         height: u64,
@@ -14790,7 +14232,6 @@ impl Kura {
             })
         })
     }
-
     /// Discard the full startup verification inventory after active-height
     /// recovery has consumed it.
     ///
@@ -14798,7 +14239,6 @@ impl Kura {
     pub(crate) fn finish_v2_startup_finality_verification(&self) {
         *self.v2_startup_finality_verification_inventory.lock() = None;
     }
-
     #[cfg(test)]
     pub(crate) fn v2_startup_finality_inventory_len_for_test(&self) -> usize {
         self.v2_startup_finality_verification_inventory
@@ -14806,36 +14246,30 @@ impl Kura {
             .as_ref()
             .map_or(0, |inventory| inventory.entries.len())
     }
-
     #[cfg(test)]
     pub(crate) fn v2_finality_crypto_verifications_for_test(&self) -> usize {
         self.v2_finality_crypto_verifications
             .load(Ordering::Relaxed)
     }
-
     #[cfg(test)]
     pub(crate) fn reset_v2_finality_crypto_verifications_for_test(&self) {
         self.v2_finality_crypto_verifications
             .store(0, Ordering::Relaxed);
     }
-
     #[cfg(test)]
     pub(crate) fn clear_v2_finality_verification_cache_for_test(&self) {
         self.v2_finality_verification_cache.lock().clear();
     }
-
     #[cfg(test)]
     pub(crate) fn startup_replay_historical_payload_reads_for_test(&self) -> usize {
         self.startup_replay_historical_payload_reads
             .load(Ordering::Relaxed)
     }
-
     #[cfg(test)]
     pub(crate) fn reset_startup_replay_historical_payload_reads_for_test(&self) {
         self.startup_replay_historical_payload_reads
             .store(0, Ordering::Relaxed);
     }
-
     fn validate_v2_startup_replay_storage_binding_unlocked(
         &self,
         binding: &V2StartupReplayStorageBinding,
@@ -14947,7 +14381,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Revalidate the bounded storage authorization carried by a replay plan
     /// immediately before active-height recovery.
     pub(crate) fn validate_v2_startup_replay_storage_binding(
@@ -14960,7 +14393,6 @@ impl Kura {
         self.ensure_canonical_storage_not_poisoned()?;
         self.validate_v2_startup_replay_storage_binding_unlocked(binding)
     }
-
     /// Bind one replay-planning pass to the exact canonical storage image
     /// covered by the startup finality audit.
     ///
@@ -14996,7 +14428,6 @@ impl Kura {
             inventory,
         }))
     }
-
     fn v2_startup_retained_entry_matches(
         &self,
         height: u64,
@@ -15015,7 +14446,6 @@ impl Kura {
                 })
             })
     }
-
     fn remember_verified_v2_finality_entry(&self, entry: VerifiedV2FinalityCacheEntry) {
         let mut cache = self.v2_finality_verification_cache.lock();
         cache.retain(|cached| cached.height != entry.height);
@@ -15024,7 +14454,6 @@ impl Kura {
         }
         cache.push_back(entry);
     }
-
     fn remember_verified_v2_finality(
         &self,
         height: u64,
@@ -15039,7 +14468,6 @@ impl Kura {
             metadata,
         });
     }
-
     fn verify_v2_finality_crypto(&self, artifact: &V2FinalityArtifact) -> Result<()> {
         #[cfg(test)]
         self.v2_finality_crypto_verifications
@@ -15047,7 +14475,6 @@ impl Kura {
         artifact.verify()?;
         Ok(())
     }
-
     fn verify_v2_finality_artifact_uncached_at(
         &self,
         path: &Path,
@@ -15075,7 +14502,6 @@ impl Kura {
                 path.to_path_buf(),
             ));
         }
-
         let artifact_hash = HashOf::new(artifact);
         self.verify_v2_finality_crypto(artifact)?;
         let after = self
@@ -15105,7 +14531,6 @@ impl Kura {
             metadata: after,
         })
     }
-
     fn verify_v2_finality_artifact_at(
         &self,
         path: &Path,
@@ -15156,13 +14581,11 @@ impl Kura {
             );
             return Ok(());
         }
-
         let entry =
             self.verify_v2_finality_artifact_uncached_at(path, directory, artifact, read_identity)?;
         self.remember_verified_v2_finality_entry(entry);
         Ok(())
     }
-
     fn cache_newly_verified_v2_finality(
         &self,
         path: &Path,
@@ -15199,7 +14622,6 @@ impl Kura {
         );
         Ok(())
     }
-
     /// Return the chain-scoped root for consensus-v2 journals and transport stores.
     ///
     /// The directory is rooted directly below the immutable Kura store root, not
@@ -15211,12 +14633,10 @@ impl Kura {
     pub(crate) fn sumeragi_v2_storage_root(&self) -> PathBuf {
         self.store_root.join("sumeragi_v2")
     }
-
     /// Project a comparison-only identity for this exact live Kura owner.
     pub(crate) fn instance_identity(&self) -> KuraInstanceIdentity {
         KuraInstanceIdentity(Arc::clone(&self.instance_identity))
     }
-
     fn canonical_header_for_v2_finality(
         &self,
         block_height: NonZeroUsize,
@@ -15244,7 +14664,6 @@ impl Kura {
             .or(retained_header)
             .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })
     }
-
     fn publish_merge_carrier_after_v2_finality_under_prune_and_canonical_guards(
         &self,
         height: u64,
@@ -15284,7 +14703,6 @@ impl Kura {
         self.remove_committed_pending_merge_entry_best_effort(record.entry_hash);
         Ok(())
     }
-
     /// Persist a cryptographically valid v2 finality artifact for an already durable block.
     ///
     /// The returned [`KuraV2CommitReceipt`] is created only after the artifact
@@ -15314,7 +14732,6 @@ impl Kura {
                 max: MAX_V2_FINALITY_ARTIFACT_BYTES,
             });
         }
-
         // Finality association and destructive canonical-chain operations share
         // one serialization lock beneath the prune gate. Appends cannot change
         // an existing height, so the block-store writer lock is deliberately not
@@ -15412,7 +14829,6 @@ impl Kura {
                 "v2 finality for canonical block {height} does not commit to its exact merge carrier"
             )));
         }
-
         if let Some((existing, read_identity)) = self.decode_v2_finality_record_at(&path, &dir)? {
             Self::validate_v2_finality_record_at(&path, height, canonical_hash, &existing)?;
             if retained_header != existing.block_header {
@@ -15431,7 +14847,6 @@ impl Kura {
             )?;
             return Ok(v2_commit_receipt(&existing.artifact));
         }
-
         let record = KuraV2FinalityRecord::new(canonical_header, artifact.clone());
         Self::validate_v2_finality_record_at(&path, height, canonical_hash, &record)?;
         let bytes = record.encode();
@@ -15473,7 +14888,6 @@ impl Kura {
                 PathBuf::from("v2_finality_test_fail"),
             ));
         }
-
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         if !self.write_atomic_synced_noclobber(&path, &bytes)? {
             let Some((existing, read_identity)) = self.decode_v2_finality_record_at(&path, &dir)?
@@ -15500,7 +14914,6 @@ impl Kura {
         )?;
         Ok(v2_commit_receipt(artifact))
     }
-
     fn decode_v2_finality_record_at(
         &self,
         path: &Path,
@@ -15525,7 +14938,6 @@ impl Kura {
         }
         Ok(Some((record, snapshot)))
     }
-
     fn validate_v2_finality_record_at(
         path: &Path,
         expected_height: u64,
@@ -15570,7 +14982,6 @@ impl Kura {
             .validate_for_header(&record.block_header)
             .map_err(Error::from)
     }
-
     /// Read and cryptographically validate a v2 finality artifact for a durable block.
     ///
     /// A missing final path returns `Ok(None)`. Incomplete temporary files left
@@ -15588,7 +14999,6 @@ impl Kura {
             .v2_finality_artifact_with_header(height)?
             .map(|(_, artifact)| artifact))
     }
-
     /// Read a verified finality artifact together with its retained canonical header.
     ///
     /// The signed payload is also matched to the separately retained canonical
@@ -15607,7 +15017,6 @@ impl Kura {
             .v2_finality_artifact_with_archive(height)?
             .map(|(header, artifact, _)| (header, artifact)))
     }
-
     /// Read verified finality and the root-authenticated SCCP archive in one bounded pass.
     ///
     /// Rootless finalized blocks return an empty archive. Combining these reads prevents
@@ -15631,7 +15040,6 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.v2_finality_artifact_with_archive_under_prune_guard(height)
     }
-
     /// Read verified finality and the immutable local merge-reference witness.
     ///
     /// The witness is bounded serving authority; recipients independently verify
@@ -15655,7 +15063,6 @@ impl Kura {
             .v2_finality_artifact_with_retained_witness_under_prune_guard(height)?
             .map(|(header, artifact, _, reference)| (header, artifact, reference)))
     }
-
     /// Inner finality reader for callers that already hold `prune_lock`.
     ///
     /// Keeping the complete canonical-header, retained-wire, and cryptographic
@@ -15675,7 +15082,6 @@ impl Kura {
             .v2_finality_artifact_with_retained_witness_under_prune_guard(height)?
             .map(|(header, artifact, archive, _)| (header, artifact, archive)))
     }
-
     fn v2_finality_artifact_with_retained_witness_under_prune_guard(
         &self,
         height: u64,
@@ -15692,7 +15098,6 @@ impl Kura {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.v2_finality_artifact_with_retained_witness_under_prune_and_canonical_guards(height)
     }
-
     /// Inner finality reader for callers that already hold `prune_lock` and
     /// `canonical_chain_lock`, in that order.
     ///
@@ -15714,7 +15119,6 @@ impl Kura {
             .v2_finality_artifact_with_retained_witness_under_prune_and_canonical_guards(height)?
             .map(|(header, artifact, archive, _)| (header, artifact, archive)))
     }
-
     fn v2_finality_artifact_with_retained_witness_under_prune_and_canonical_guards(
         &self,
         height: u64,
@@ -15735,7 +15139,6 @@ impl Kura {
         else {
             return Ok(None);
         };
-
         let Some(block_height) = NonZeroUsize::new(usize::try_from(height)?) else {
             return Err(Error::NoritoFrame(norito::core::Error::Message(
                 "v2 finality artifact height must be non-zero".into(),
@@ -15779,7 +15182,6 @@ impl Kura {
             merge_reference,
         )))
     }
-
     /// Recover a validated durable v2 finality artifact together with the
     /// same non-forgeable receipt minted by the write path.
     ///
@@ -15798,7 +15200,6 @@ impl Kura {
         let receipt = v2_commit_receipt(&artifact);
         Ok(Some((artifact, receipt)))
     }
-
     fn staged_kagemusha_topup_finality_from_witness(
         height: u64,
         block_hash: HashOf<BlockHeader>,
@@ -15832,7 +15233,6 @@ impl Kura {
                     .to_owned(),
             ));
         }
-
         let leaves = commitment
             .leaves
             .iter()
@@ -15872,7 +15272,6 @@ impl Kura {
             leaves,
         }))
     }
-
     fn validate_staged_kagemusha_topup_finality(
         staged: &StagedKagemushaTopUpFinalitySidecar,
         artifact: &V2FinalityArtifact,
@@ -15929,7 +15328,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn validate_kagemusha_topup_finality_sidecar(
         sidecar: &KagemushaTopUpFinalitySidecar,
         artifact: &V2FinalityArtifact,
@@ -15952,7 +15350,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn decode_staged_kagemusha_topup_finality(
         &self,
         path: &Path,
@@ -15980,7 +15377,6 @@ impl Kura {
         }
         Ok(Some((sidecar, snapshot)))
     }
-
     fn decode_kagemusha_topup_finality_sidecar(
         &self,
         path: &Path,
@@ -16008,7 +15404,6 @@ impl Kura {
         }
         Ok(Some((sidecar, snapshot)))
     }
-
     fn validate_staged_kagemusha_active_receiver_finality(
         staged: &StagedKagemushaActiveReceiverFinalitySidecarV1,
         artifact: &V2FinalityArtifact,
@@ -16045,7 +15440,6 @@ impl Kura {
         })?;
         Ok(())
     }
-
     fn validate_kagemusha_active_receiver_finality_sidecar(
         sidecar: &KagemushaActiveReceiverFinalitySidecarV1,
         artifact: &V2FinalityArtifact,
@@ -16069,7 +15463,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn decode_staged_kagemusha_active_receiver_finality(
         &self,
         path: &Path,
@@ -16102,7 +15495,6 @@ impl Kura {
         }
         Ok(Some((sidecar, snapshot)))
     }
-
     fn decode_kagemusha_active_receiver_finality_sidecar(
         &self,
         path: &Path,
@@ -16130,7 +15522,6 @@ impl Kura {
         }
         Ok(Some((sidecar, snapshot)))
     }
-
     fn stage_kagemusha_active_receiver_finality_sidecar(
         &self,
         height: u64,
@@ -16238,7 +15629,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn remove_exact_staged_kagemusha_active_receiver_finality(
         &self,
         path: &Path,
@@ -16257,7 +15647,6 @@ impl Kura {
         sync_dir(&directory).map_err(|error| Error::IO(error, directory))?;
         Ok(())
     }
-
     fn promote_kagemusha_active_receiver_finality_sidecar(
         &self,
         artifact: &V2FinalityArtifact,
@@ -16285,7 +15674,6 @@ impl Kura {
                 "durable finality differs from active-receiver promotion receipt".to_owned(),
             ));
         }
-
         let _guard = self.sidecar_lock.lock();
         let final_path = self.kagemusha_active_receiver_sidecar_path(artifact.height);
         let staged_path = self.kagemusha_active_receiver_staging_path(artifact.height);
@@ -16370,7 +15758,6 @@ impl Kura {
         )?;
         Ok(())
     }
-
     /// Return the finalized fixed-key receiver snapshot witness proof for one block.
     pub fn kagemusha_active_receiver_witness_proof_v1(
         &self,
@@ -16390,7 +15777,6 @@ impl Kura {
         Self::validate_kagemusha_active_receiver_finality_sidecar(&sidecar, &artifact)?;
         Ok(Some(sidecar.witness_proof))
     }
-
     /// Return the finalized fixed-key validation-fee registry witness proof for one block.
     pub fn validation_fee_policy_witness_proof_v1(
         &self,
@@ -16410,7 +15796,6 @@ impl Kura {
         Self::validate_kagemusha_active_receiver_finality_sidecar(&sidecar, &artifact)?;
         Ok(Some(sidecar.validation_fee_policy_witness))
     }
-
     /// Durably stage the bounded top-up leaf/path projection before WSV commit.
     ///
     /// A block without top-ups creates no file. An existing exact stage is an
@@ -16487,7 +15872,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn remove_exact_staged_kagemusha_topup_finality(
         &self,
         path: &Path,
@@ -16506,7 +15890,6 @@ impl Kura {
         sync_dir(&directory).map_err(|error| Error::IO(error, directory))?;
         Ok(())
     }
-
     /// Promote a witness-derived stage only after the exact finality artifact is durable.
     pub(crate) fn promote_kagemusha_topup_finality_sidecar(
         &self,
@@ -16585,7 +15968,6 @@ impl Kura {
             }
             return Ok(());
         }
-
         let final_path = self.kagemusha_topup_finality_sidecar_path(artifact.height);
         let staged_path = self.kagemusha_topup_finality_staging_path(artifact.height);
         if let Some((existing, _)) = self.decode_kagemusha_topup_finality_sidecar(&final_path)? {
@@ -16598,7 +15980,6 @@ impl Kura {
             }
             return Ok(());
         }
-
         let Some((staged, staged_identity)) =
             self.decode_staged_kagemusha_topup_finality(&staged_path)?
         else {
@@ -16665,7 +16046,6 @@ impl Kura {
         self.remove_exact_staged_kagemusha_topup_finality(&staged_path, &staged_identity)?;
         Ok(())
     }
-
     /// Build a compact peer proof from an exact verified finality artifact and
     /// its independently durable witness-derived leaf/path sidecar.
     pub fn kagemusha_topup_finality_proof_v2(
@@ -16730,7 +16110,6 @@ impl Kura {
         })?;
         Ok(Some(proof))
     }
-
     /// Persist the immutable canonical WSV checkpoint for a durable block.
     ///
     /// The checkpoint is staged from the validated `StateBlock` after the block
@@ -16790,6 +16169,12 @@ impl Kura {
         }
         let tmp_path = path.with_extension("norito.tmp");
         let bytes = checkpoint.encode();
+        Self::ensure_sidecar_encoding_within_limit(
+            &path,
+            "WSV checkpoint",
+            &bytes,
+            MAX_WSV_CHECKPOINT_BYTES,
+        )?;
         let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
             opts.write(true).create(true).truncate(true);
         })?;
@@ -16802,7 +16187,6 @@ impl Kura {
         sync_dir(&dir).map_err(|err| Error::IO(err, dir))?;
         Ok(())
     }
-
     fn bind_wsv_checkpoint_to_manifest(&self, manifest: &CommitManifest) -> Result<()> {
         let path = self.wsv_checkpoint_path(manifest.height);
         let Some(mut checkpoint) = Self::decode_wsv_checkpoint_at(&path)? else {
@@ -16823,6 +16207,12 @@ impl Kura {
         let dir = self.wsv_checkpoint_dir();
         let tmp_path = path.with_extension("norito.tmp");
         let bytes = checkpoint.encode();
+        Self::ensure_sidecar_encoding_within_limit(
+            &path,
+            "WSV checkpoint",
+            &bytes,
+            MAX_WSV_CHECKPOINT_BYTES,
+        )?;
         let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
             opts.write(true).create(true).truncate(true);
         })?;
@@ -16835,7 +16225,6 @@ impl Kura {
         sync_dir(&dir).map_err(|err| Error::IO(err, dir))?;
         Ok(())
     }
-
     /// Persist the durable commit manifest for a committed block height.
     ///
     /// Manifests are written after the block body is durable and WSV commit succeeds. They are the
@@ -16873,6 +16262,12 @@ impl Kura {
         let path = self.commit_manifest_path(manifest.height);
         let tmp_path = path.with_extension("norito.tmp");
         let bytes = manifest.encode();
+        Self::ensure_sidecar_encoding_within_limit(
+            &path,
+            "commit manifest",
+            &bytes,
+            MAX_COMMIT_MANIFEST_BYTES,
+        )?;
         let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
             opts.write(true).create(true).truncate(true);
         })?;
@@ -16889,19 +16284,16 @@ impl Kura {
         self.bind_wsv_checkpoint_to_manifest(&manifest)?;
         Ok(())
     }
-
     fn decode_commit_manifest_at(path: &Path) -> Result<Option<CommitManifest>> {
-        let bytes = match std::fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(Error::IO(err, path.to_path_buf())),
+        let Some(bytes) = Self::read_bounded_replay_sidecar_at(path, MAX_COMMIT_MANIFEST_BYTES)?
+        else {
+            return Ok(None);
         };
         let mut cursor = bytes.as_slice();
         CommitManifest::decode_all(&mut cursor)
             .map(Some)
             .map_err(Error::NoritoFrame)
     }
-
     /// Read and validate the durable commit manifest for a committed block height.
     ///
     /// # Errors
@@ -16913,7 +16305,6 @@ impl Kura {
         let _guard = self.sidecar_lock.lock();
         self.commit_manifest_under_sidecar_guard(height)
     }
-
     /// Read a commit manifest while the caller holds `sidecar_lock`.
     ///
     /// This no-relock variant is used by geometry evidence validation, whose
@@ -16968,7 +16359,6 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         Ok(Some(manifest))
     }
-
     /// Return whether the WSV checkpoint independently binds every byte of `manifest`.
     #[cfg(test)]
     pub(crate) fn commit_manifest_has_wsv_binding(
@@ -16977,7 +16367,6 @@ impl Kura {
     ) -> Result<bool> {
         Ok(self.commit_manifest_binding_state(manifest)? == CommitManifestBindingState::Bound)
     }
-
     /// Classify the checkpoint-to-manifest digest without conflating an interrupted publication
     /// (`None`) with an already published, different digest.
     pub(crate) fn commit_manifest_binding_state(
@@ -16994,7 +16383,6 @@ impl Kura {
             Some(_) => CommitManifestBindingState::Mismatched,
         })
     }
-
     fn ensure_checkpoint_matches_commit_manifest_under_sidecar_guard(
         &self,
         manifest: &CommitManifest,
@@ -17004,7 +16392,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn ensure_checkpoint_accepts_manifest_write(&self, manifest: &CommitManifest) -> Result<()> {
         let checkpoint_path = self.wsv_checkpoint_path(manifest.height);
         let Some(checkpoint) = Self::decode_wsv_checkpoint_at(&checkpoint_path)? else {
@@ -17022,7 +16409,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn ensure_checkpoint_matches_manifest(
         checkpoint: &WsvCheckpoint,
         manifest: &CommitManifest,
@@ -17048,7 +16434,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn reconcile_commit_manifests(
         _block_store: &mut BlockStore,
         blocks_dir: &Path,
@@ -17167,7 +16552,6 @@ impl Kura {
                 Err(err) => return Err(err),
             }
         }
-
         sync_dir(&dir).map_err(|err| Error::IO(err, dir))?;
         Ok(CommitManifestReconciliation {
             manifests_present,
@@ -17176,7 +16560,6 @@ impl Kura {
             retained_height: block_hashes.len(),
         })
     }
-
     fn reconcile_wsv_checkpoints_against_blocks(
         blocks_dir: &Path,
         block_hashes: &[HashOf<BlockHeader>],
@@ -17267,7 +16650,6 @@ impl Kura {
         }
         Ok(pruned)
     }
-
     fn ensure_published_manifest_claim_resolves(
         blocks_dir: &Path,
         checkpoint: &WsvCheckpoint,
@@ -17291,7 +16673,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Read the canonical WSV checkpoint for a committed block height, if one exists.
     ///
     /// # Errors
@@ -17302,60 +16683,9 @@ impl Kura {
         let _guard = self.sidecar_lock.lock();
         self.wsv_checkpoint_under_sidecar_guard(height)
     }
-
-    /// Read a WSV checkpoint while the caller holds `sidecar_lock`.
-    fn wsv_checkpoint_under_sidecar_guard(&self, height: u64) -> Result<Option<WsvCheckpoint>> {
-        self.ensure_prune_recovery_not_required()?;
-        self.record_startup_replay_historical_payload_read();
-        let path = self.wsv_checkpoint_path(height);
-        let checkpoint = Self::decode_wsv_checkpoint_at(&path)?;
-        let Some(checkpoint) = checkpoint else {
-            self.ensure_prune_recovery_not_required()?;
-            return Ok(None);
-        };
-        if checkpoint.height != height {
-            return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
-                "WSV checkpoint height mismatch: expected {height}, got {}",
-                checkpoint.height
-            ))));
-        }
-        let Some(block_height) = NonZeroUsize::new(usize::try_from(height)?) else {
-            return Err(Error::NoritoFrame(norito::core::Error::Message(
-                "WSV checkpoint height must be non-zero".into(),
-            )));
-        };
-        let durable_hash = self.get_durable_block_hash(block_height);
-        self.ensure_prune_recovery_not_required()?;
-        let Some(durable_hash) = durable_hash else {
-            return Err(Error::BlockHeightGap {
-                expected_next_height: u64::try_from(self.exact_durable_blocks_count()?)?
-                    .saturating_add(1),
-                actual_height: height,
-            });
-        };
-        if checkpoint.block_hash != durable_hash {
-            return Err(Error::BlockHeightConflict {
-                height,
-                expected: durable_hash,
-                actual: checkpoint.block_hash,
-            });
-        }
-        self.ensure_prune_recovery_not_required()?;
-        Ok(Some(checkpoint))
-    }
-
-    fn decode_wsv_checkpoint_at(path: &Path) -> Result<Option<WsvCheckpoint>> {
-        let bytes = match std::fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(Error::IO(err, path.to_path_buf())),
-        };
-        let mut cursor = bytes.as_slice();
-        WsvCheckpoint::decode_all(&mut cursor)
-            .map(Some)
-            .map_err(Error::NoritoFrame)
-    }
-
+}
+include!("kura/wsv_checkpoint_read_helpers.rs");
+impl Kura {
     /// Return the latest canonical WSV checkpoint height at or below `height`.
     pub fn latest_wsv_checkpoint_height_at_or_before(&self, height: u64) -> Result<Option<u64>> {
         self.ensure_prune_recovery_not_required()?;
@@ -17399,7 +16729,6 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         Ok(latest)
     }
-
     /// Return whether any canonical WSV checkpoint file exists at or below `height`.
     #[cfg(test)]
     pub(crate) fn has_wsv_checkpoint_at_or_before(&self, height: u64) -> Result<bool> {
@@ -17407,7 +16736,6 @@ impl Kura {
         self.latest_wsv_checkpoint_height_at_or_before(height)
             .map(|height| height.is_some())
     }
-
     fn prune_wsv_checkpoints_above_in_dir(dir: &Path, height: u64) -> Result<bool> {
         if !dir.exists() {
             return Ok(false);
@@ -17436,7 +16764,6 @@ impl Kura {
         sync_dir(dir).map_err(|err| Error::IO(err, dir.to_path_buf()))?;
         Ok(pruned)
     }
-
     fn prune_commit_manifests_above_in_dir(dir: &Path, height: u64) -> Result<()> {
         if !dir.exists() {
             return Ok(());
@@ -17463,13 +16790,11 @@ impl Kura {
         sync_dir(dir).map_err(|err| Error::IO(err, dir.to_path_buf()))?;
         Ok(())
     }
-
     fn prune_v2_finality_artifacts_above(&self, height: u64) -> Result<()> {
         let _guard = self.sidecar_lock.lock();
         let dir = self.v2_finality_artifact_dir();
         Self::prune_v2_finality_artifacts_above_in_dir(&dir, height)
     }
-
     fn prune_v2_finality_artifacts_above_in_dir(dir: &Path, height: u64) -> Result<()> {
         if !dir.exists() {
             return Ok(());
@@ -17497,27 +16822,39 @@ impl Kura {
         Ok(())
     }
 }
-
 include!("kura/durable_block_and_atomic_sidecar_io.rs");
 include!("kura/prune_intent_publication.rs");
-
 impl Kura {
     fn rollback_intent_path(blocks_root: &Path) -> PathBuf {
         blocks_root.join(ROLLBACK_INTENT_FILE_NAME)
     }
-
-    fn decode_rollback_intent(path: &Path) -> Result<KuraRollbackIntent> {
-        let bytes = std::fs::read(path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
-        let intent = norito::decode_canonical::<KuraRollbackIntent>(&bytes).map_err(|err| {
-            Error::RollbackIntentInvalid {
-                path: path.to_path_buf(),
-                reason: format!("failed to decode rollback intent: {err}"),
-            }
+    fn decode_rollback_intent(blocks_root: &Path, path: &Path) -> Result<KuraRollbackIntent> {
+        let bytes = Self::read_regular_sidecar_bytes_for(
+            blocks_root,
+            path,
+            blocks_root,
+            MAX_ROLLBACK_INTENT_V1_BYTES,
+        )?
+        .ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::NotFound,
+                    "rollback intent disappeared during bounded read",
+                ),
+                path.to_path_buf(),
+            )
         })?;
+        let decode_limits =
+            recovery_control_decode_limits_v1(u64::try_from(MAX_ROLLBACK_INTENT_V1_BYTES)?)?;
+        let intent =
+            norito::decode_canonical_with_limits::<KuraRollbackIntent>(&bytes, decode_limits)
+                .map_err(|err| Error::RollbackIntentInvalid {
+                    path: path.to_path_buf(),
+                    reason: format!("failed to decode rollback intent: {err}"),
+                })?;
         intent.validate(path)?;
         Ok(intent)
     }
-
     fn load_rollback_intent(blocks_root: &Path) -> Result<Option<KuraRollbackIntent>> {
         if blocks_root.as_os_str().is_empty() {
             return Err(Error::EmptyStoreRoot);
@@ -17525,12 +16862,12 @@ impl Kura {
         let path = Self::rollback_intent_path(blocks_root);
         let tmp_path = path.with_extension("norito.tmp");
         let main = if path.exists() {
-            Some(Self::decode_rollback_intent(&path))
+            Some(Self::decode_rollback_intent(blocks_root, &path))
         } else {
             None
         };
         let temp = if tmp_path.exists() {
-            Some(Self::decode_rollback_intent(&tmp_path))
+            Some(Self::decode_rollback_intent(blocks_root, &tmp_path))
         } else {
             None
         };
@@ -17554,7 +16891,6 @@ impl Kura {
             }),
         }
     }
-
     fn validate_prune_intent_merge_prefix(
         merge_log: &mut MergeLedgerLog,
         intent: &KuraPruneIntentV2,
@@ -17592,7 +16928,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn remove_rollback_intent(blocks_root: &Path) -> Result<()> {
         let path = Self::rollback_intent_path(blocks_root);
         let tmp_path = path.with_extension("norito.tmp");
@@ -17606,7 +16941,6 @@ impl Kura {
         sync_dir(blocks_root).map_err(|err| Error::IO(err, blocks_root.to_path_buf()))?;
         Ok(())
     }
-
     fn ensure_no_pending_rollback(&self) -> Result<()> {
         let blocks_root = self.active_blocks_dir.lock().clone();
         if let Some(intent) = Self::load_rollback_intent(&blocks_root)? {
@@ -17620,7 +16954,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn block_store_tracked_bytes(block_store: &mut BlockStore) -> Result<u64> {
         if block_store.path_to_blockchain.as_os_str().is_empty() {
             return Ok(0);
@@ -17655,7 +16988,6 @@ impl Kura {
             .saturating_add(index_tmp_len)
             .saturating_add(hashes_tmp_len))
     }
-
     fn da_payload_bytes_for_range(
         block_store: &BlockStore,
         start_height: u64,
@@ -17672,7 +17004,6 @@ impl Kura {
         }
         Ok(total)
     }
-
     fn merge_log_tracked_bytes(&self) -> Result<u64> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(0);
@@ -17680,7 +17011,6 @@ impl Kura {
         let path = self.active_merge_path.lock().clone();
         Self::file_len_or_zero(&path)
     }
-
     fn roster_journal_tracked_bytes(&self) -> Result<u64> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(0);
@@ -17688,7 +17018,6 @@ impl Kura {
         let path = CommitRosterJournal::journal_path(&self.store_root);
         Self::directory_tree_file_bytes(&path)
     }
-
     fn sidecar_tracked_bytes(
         data_path: &Path,
         index_path: &Path,
@@ -17705,7 +17034,6 @@ impl Kura {
         }
         Ok(total)
     }
-
     fn block_required_bytes(block: &SignedBlock) -> Result<u64> {
         let wire = block.canonical_wire()?;
         let (frame, _) = wire.into_parts();
@@ -17714,13 +17042,11 @@ impl Kura {
             .saturating_add(BlockIndex::SIZE)
             .saturating_add(SIZE_OF_BLOCK_HASH))
     }
-
     fn merge_entry_bytes(entry: &MergeLedgerEntry) -> Result<u64> {
         let encoded = Encode::encode(entry);
         let encoded_len = u64::try_from(encoded.len())?;
         Ok(encoded_len.saturating_add(std::mem::size_of::<u32>() as u64))
     }
-
     fn merge_commit_required_bytes(
         &self,
         block: &SignedBlock,
@@ -17764,7 +17090,6 @@ impl Kura {
             .saturating_add(log_bytes)
             .saturating_add(carrier_bytes))
     }
-
     fn block_required_bytes_for_budget(
         &self,
         block: &SignedBlock,
@@ -17775,7 +17100,6 @@ impl Kura {
         Ok(required
             .saturating_add(self.lane_artifact_required_bytes_for_block(block, merge_entry)?))
     }
-
     fn sidecar_bytes_with_historical_budget(
         store_dir: &Path,
         historical_record_budget: &mut usize,
@@ -17896,7 +17220,6 @@ impl Kura {
         }
         Ok(total)
     }
-
     fn block_store_bytes_with_historical_budget(
         blocks_dir: &Path,
         historical_record_budget: &mut usize,
@@ -17932,7 +17255,6 @@ impl Kura {
         )?;
         Ok(files.saturating_add(sidecars))
     }
-
     fn block_store_bytes_with_historical_limit(
         blocks_dir: &Path,
         historical_byte_limit: u64,
@@ -17945,7 +17267,6 @@ impl Kura {
             &mut historical_byte_budget,
         )
     }
-
     fn blocks_root_bytes(root: &Path, historical_byte_limit: u64) -> Result<u64> {
         if root.as_os_str().is_empty() {
             return Ok(0);
@@ -17974,7 +17295,6 @@ impl Kura {
         }
         Ok(total)
     }
-
     fn dir_file_bytes(dir: &Path) -> Result<u64> {
         if dir.as_os_str().is_empty() {
             return Ok(0);
@@ -18001,7 +17321,6 @@ impl Kura {
         }
         Ok(total)
     }
-
     fn block_store_total_bytes_with_historical_budget(
         blocks_dir: &Path,
         historical_record_budget: &mut usize,
@@ -18027,7 +17346,6 @@ impl Kura {
         }
         Ok(total)
     }
-
     fn blocks_root_total_bytes(root: &Path, historical_byte_limit: u64) -> Result<u64> {
         if root.as_os_str().is_empty() {
             return Ok(0);
@@ -18056,7 +17374,6 @@ impl Kura {
         }
         Ok(total)
     }
-
     fn merge_root_bytes(root: &Path) -> Result<u64> {
         if root.as_os_str().is_empty() {
             return Ok(0);
@@ -18079,7 +17396,6 @@ impl Kura {
         }
         Ok(total)
     }
-
     /// Count regular files below `root` without following symbolic links.
     ///
     /// Lane-geometry archives are deliberately opaque to the legacy block and
@@ -18166,7 +17482,6 @@ impl Kura {
         }
         Ok(total)
     }
-
     fn kura_disk_usage_bytes(&self) -> Result<u64> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(0);
@@ -18178,7 +17493,6 @@ impl Kura {
         let retired_merge_root = retired_root.join("merge_ledger");
         let retired_geometry_root = retired_root.join("lane_geometry");
         let historical_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
-
         let mut used = 0u64;
         used = used.saturating_add(Self::blocks_root_bytes(
             &blocks_root,
@@ -18234,7 +17548,6 @@ impl Kura {
         );
         Ok(used)
     }
-
     fn kura_total_disk_usage_bytes(&self) -> Result<u64> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(0);
@@ -18246,7 +17559,6 @@ impl Kura {
         let retired_merge_root = retired_root.join("merge_ledger");
         let retired_geometry_root = retired_root.join("lane_geometry");
         let historical_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
-
         let mut used = 0u64;
         used = used.saturating_add(Self::blocks_root_total_bytes(
             &blocks_root,
@@ -18302,7 +17614,6 @@ impl Kura {
         );
         Ok(used)
     }
-
     #[cfg(test)]
     fn remove_one_regular_file_below_for_tests(root: &Path) -> std::io::Result<bool> {
         let mut pending = vec![root.to_path_buf()];
@@ -18326,7 +17637,6 @@ impl Kura {
         }
         Ok(false)
     }
-
     fn remove_disposable_retired_tree(&self, root: &Path) -> std::io::Result<()> {
         #[cfg(test)]
         if self
@@ -18342,7 +17652,6 @@ impl Kura {
         }
         std::fs::remove_dir_all(root)
     }
-
     /// Purge retired storage while the caller holds `prune_lock` and
     /// `canonical_chain_lock`, in that order.
     fn purge_retired_storage_under_prune_and_canonical_guards(&self) -> Result<bool> {
@@ -18359,7 +17668,6 @@ impl Kura {
         let mut removed_any = false;
         let mut removed_budget_bytes = 0u64;
         let mut removed_total_bytes = 0u64;
-
         self.durable_mutation_authorized()?;
         match self.resume_proven_lane_geometry_archive_gc_under_prune_and_canonical_guards() {
             Ok(summary) if summary.removed_archive_roots > 0 => {
@@ -18376,7 +17684,6 @@ impl Kura {
                 "refusing to purge unproven or tampered lane geometry archives"
             ),
         }
-
         // Only these two legacy trees are disposable.  In particular, never
         // broadly remove `retired/lane_geometry`: only exact transition roots already moved into
         // the journal's snapshot-proven pending-GC set above are disposable.
@@ -18442,7 +17749,6 @@ impl Kura {
                 ),
             }
         }
-
         if !removed_any {
             return Ok(false);
         }
@@ -18464,12 +17770,10 @@ impl Kura {
         }
         Ok(true)
     }
-
     fn pending_block_bytes_raw(&self, persisted_count: usize) -> Result<u64> {
         #[cfg(test)]
         self.pending_budget_raw_scans
             .fetch_add(1, Ordering::Relaxed);
-
         let pending_blocks = {
             let data = self.block_data.lock();
             let start = persisted_count.min(data.len());
@@ -18482,7 +17786,6 @@ impl Kura {
             }
             blocks
         };
-
         let mut pending_bytes = 0u64;
         for block in pending_blocks {
             let merge_entry = if let Some(reference) = Self::block_merge_reference(&block) {
@@ -18502,7 +17805,6 @@ impl Kura {
         }
         Ok(pending_bytes)
     }
-
     fn pending_block_bytes(&self, persisted_count: usize, unindexed_bytes: u64) -> Result<u64> {
         if self.pending_budget_bytes_valid.load(Ordering::Relaxed) {
             let pending = self.pending_budget_bytes.load(Ordering::Relaxed);
@@ -18515,7 +17817,6 @@ impl Kura {
             .store(true, Ordering::Relaxed);
         Ok(pending_bytes.saturating_sub(unindexed_bytes))
     }
-
     fn persisted_count_and_unindexed_bytes_raw(&self) -> Result<(usize, u64)> {
         #[cfg(test)]
         self.durable_budget_metadata_reads
@@ -18540,7 +17841,6 @@ impl Kura {
             .saturating_add(hashes_file_len.saturating_sub(indexed_hash_len));
         Ok((persisted, unindexed_bytes))
     }
-
     fn persisted_count_and_unindexed_bytes(&self) -> Result<(usize, u64)> {
         if let Some(snapshot) = self.durable_budget_snapshot() {
             return Ok(snapshot);
@@ -18549,7 +17849,6 @@ impl Kura {
         self.publish_durable_budget_snapshot(persisted_count, unindexed_bytes);
         Ok((persisted_count, unindexed_bytes))
     }
-
     fn check_storage_budget(
         &self,
         block: &SignedBlock,
@@ -18559,14 +17858,11 @@ impl Kura {
             return Ok(());
         }
         self.ensure_disk_usage_initialized()?;
-
         let merge_entry_bytes = match merge_entry {
             Some(entry) => self.merge_commit_required_bytes(block, entry)?,
             None => 0,
         };
-
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
-
         let limit = self.max_disk_usage_bytes;
         let block_required = self.block_required_bytes_for_budget(block, merge_entry, limit)?;
         let association_stage_bytes =
@@ -18588,7 +17884,6 @@ impl Kura {
             .saturating_add(block_required)
             .saturating_add(merge_entry_bytes)
             .saturating_add(association_stage_bytes);
-
         if required > limit {
             if self.purge_retired_storage_under_prune_and_canonical_guards()? {
                 used = self.disk_usage.load(Ordering::Relaxed);
@@ -18635,21 +17930,17 @@ impl Kura {
                 required,
             });
         }
-
         if let Some(telemetry) = self.telemetry.get() {
             telemetry.record_storage_budget_usage("kura", required, limit);
         }
-
         Ok(())
     }
-
     #[allow(clippy::too_many_lines)]
     fn check_replace_storage_budget(&self, block: &SignedBlock) -> Result<()> {
         if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() {
             return Ok(());
         }
         self.ensure_disk_usage_initialized()?;
-
         let (block_count, old_block) = {
             let data = self.block_data.lock();
             (
@@ -18658,14 +17949,12 @@ impl Kura {
                     .and_then(|(_, block)| block.as_ref().map(Arc::clone)),
             )
         };
-
         if block_count == 0 {
             return self.check_storage_budget(block, None);
         }
         let Some(old_block) = old_block else {
             return self.check_storage_budget(block, None);
         };
-
         let limit = self.max_disk_usage_bytes;
         let new_bytes = self.block_required_bytes_for_budget(block, None, limit)?;
         let old_bytes = self.block_required_bytes_for_budget(&old_block, None, limit)?;
@@ -18674,13 +17963,11 @@ impl Kura {
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
         let pending_raw = self.pending_block_bytes_raw(persisted_count)?;
         let top_is_pending = block_count > persisted_count;
-
         let mut pending_raw_after = pending_raw;
         if top_is_pending {
             pending_raw_after = pending_raw_after.saturating_sub(old_bytes);
         }
         pending_raw_after = pending_raw_after.saturating_add(new_bytes);
-
         let pending_current = pending_raw.saturating_sub(unindexed_bytes);
         let post_wsv_artifact_reservations = self.post_wsv_lane_artifact_budget_reserved_bytes()?;
         let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;
@@ -18714,7 +18001,6 @@ impl Kura {
         let mut required = budget_used
             .max(projected_after)
             .saturating_add(association_stage_bytes);
-
         if required > limit {
             if self.purge_retired_storage_under_prune_and_canonical_guards()? {
                 used = self.disk_usage.load(Ordering::Relaxed);
@@ -18769,14 +18055,11 @@ impl Kura {
                 required,
             });
         }
-
         if let Some(telemetry) = self.telemetry.get() {
             telemetry.record_storage_budget_usage("kura", required, limit);
         }
-
         Ok(())
     }
-
     /// Store a block durably in Kura's canonical block store.
     ///
     /// # Errors
@@ -18798,7 +18081,6 @@ impl Kura {
         self.note_committed_lane_status_change();
         Ok(())
     }
-
     /// Store a block durably in Kura and persist the merge-ledger entry sealing it.
     ///
     /// # Errors
@@ -18816,7 +18098,6 @@ impl Kura {
         self.note_committed_lane_status_change();
         Ok(())
     }
-
     /// Replace Kura's current top block durably.
     ///
     /// # Errors
@@ -18858,7 +18139,6 @@ impl Kura {
                 ));
             }
         }
-
         {
             let data = self.block_data.lock();
             self.ensure_prune_recovery_not_required()?;
@@ -18873,7 +18153,6 @@ impl Kura {
                 return Ok(());
             }
         }
-
         // A checkpoint or manifest proves that WSV committed this exact block. Preserve that
         // integrity evidence and reject a fork replacement instead of erasing it after the block
         // marker changes. This inexpensive preflight runs before budget or rewrite mutation; a
@@ -18885,16 +18164,13 @@ impl Kura {
                 height,
             )?;
         }
-
         self.invalidate_pending_budget_cache();
         self.ensure_v2_finality_allows_rewrite_from(&blocks_dir, height)?;
-
         self.check_replace_storage_budget(block.as_ref())?;
         self.validate_lane_payload_ownership_artifacts_for_block(
             &block,
             LaneBlockArtifactConflictPolicy::AllowCanonicalReplacementAtProposalHeight(height),
         )?;
-
         let replay_metadata_guard = self.sidecar_lock.lock();
         self.ensure_replay_metadata_allows_top_replacement_while_sidecars_locked(
             &blocks_dir,
@@ -18915,7 +18191,6 @@ impl Kura {
             self.note_committed_lane_status_change();
             return Ok(());
         }
-
         self.write_canonical_association_stage(&block, None)?;
         match self.with_retained_block_records_staged_for_rewrite(&blocks_dir, height, || {
             self.persist_block_at_height_while_locked(&block, height, &write_guard)
@@ -18958,7 +18233,6 @@ impl Kura {
         self.note_committed_lane_status_change();
         Ok(())
     }
-
     fn validate_top_replacement(
         block_data: &[(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)],
         height: u64,
@@ -18996,7 +18270,6 @@ impl Kura {
             .last()
             .is_some_and(|(expected, _)| *expected == block_hash))
     }
-
     fn validate_no_numbered_sidecar_suffix(
         directory: &Path,
         target_height: u64,
@@ -19019,7 +18292,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn validate_indexed_sidecar_pair(
         data_path: &Path,
         index_path: &Path,
@@ -19081,7 +18353,6 @@ impl Kura {
                 }
             }
         }
-
         let mut index = std::fs::File::open(index_path)
             .map_err(|err| Error::IO(err, index_path.to_path_buf()))?;
         let index_len = index
@@ -19104,7 +18375,6 @@ impl Kura {
                 "{kind} index extends above canonical height {max_height}"
             )));
         }
-
         let data_len = std::fs::metadata(data_path)
             .map_err(|err| Error::IO(err, data_path.to_path_buf()))?
             .len();
@@ -19161,7 +18431,6 @@ impl Kura {
         }
         Ok(Some(layout))
     }
-
     fn parse_native_amx_evidence_path(
         path: &Path,
     ) -> Result<Option<(NativeAmxEvidenceKind, u64, bool)>> {
@@ -19234,7 +18503,6 @@ impl Kura {
         }
         Ok(None)
     }
-
     fn inventory_native_amx_evidence_files_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -19326,7 +18594,6 @@ impl Kura {
                 )
             })?;
         }
-
         let stable_entry_limit = self
             .native_amx_participant_evidence_retention()
             .get()
@@ -19406,7 +18673,6 @@ impl Kura {
         }
         Ok(inventory)
     }
-
     fn read_native_amx_evidence_file_bytes_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -19448,7 +18714,6 @@ impl Kura {
         }
         Ok(bytes)
     }
-
     fn decode_native_amx_manifest_file_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -19489,7 +18754,6 @@ impl Kura {
         }
         Ok(artifact)
     }
-
     fn decode_native_amx_receipt_file_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -19509,7 +18773,6 @@ impl Kura {
         }
         Ok(artifact)
     }
-
     fn decode_structural_native_amx_receipt_file_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -19544,7 +18807,6 @@ impl Kura {
         }
         Ok(artifact)
     }
-
     fn validate_native_amx_evidence_file_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -19561,7 +18823,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn sync_native_amx_evidence_namespace(
         &self,
         namespace: &BoundProgressNamespace,
@@ -19598,7 +18859,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Recover an interrupted Native AMX evidence publication without
     /// trusting structurally valid bytes merely because they occupy the
     /// descriptor-bound temporary path.
@@ -19641,7 +18901,6 @@ impl Kura {
         }
         Ok(inventory)
     }
-
     fn recover_native_amx_evidence_publication_temp_kind_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -19764,7 +19023,6 @@ impl Kura {
         }
         Ok(true)
     }
-
     fn read_bound_regular_file_bytes_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -19819,7 +19077,6 @@ impl Kura {
         }
         Ok(Some(bytes))
     }
-
     fn open_bound_regular_file_with_exact_bytes_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -19860,7 +19117,6 @@ impl Kura {
         )?;
         Ok((file, metadata))
     }
-
     #[allow(clippy::too_many_arguments)]
     fn verify_bound_open_regular_file_exact_bytes_locked(
         &self,
@@ -19909,7 +19165,6 @@ impl Kura {
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         Ok(())
     }
-
     #[allow(clippy::too_many_arguments)]
     fn verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked(
         &self,
@@ -19960,7 +19215,6 @@ impl Kura {
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         Ok(())
     }
-
     fn publish_bound_noclobber_file_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -20033,7 +19287,6 @@ impl Kura {
         }
         Ok(true)
     }
-
     fn publish_native_amx_evidence_file_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -20134,7 +19387,6 @@ impl Kura {
         }
         Ok(true)
     }
-
     fn native_amx_evidence_special_file_bytes_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -20192,7 +19444,6 @@ impl Kura {
         }
         Ok(total)
     }
-
     fn native_amx_evidence_tracked_bytes_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -20223,7 +19474,6 @@ impl Kura {
                 )
             })
     }
-
     fn native_amx_evidence_prune_entry_kind(
         entry: &NativeAmxEvidencePruneEntryV2,
     ) -> Result<NativeAmxEvidenceKind> {
@@ -20235,7 +19485,6 @@ impl Kura {
             )),
         }
     }
-
     /// Authenticate the prune-owned latest identity without trusting the
     /// replaceable derived pointer.
     ///
@@ -20300,7 +19549,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Derive protection from the highest fully authenticated complete pair,
     /// independently of the optional derived latest pointer.
     fn derive_native_amx_evidence_prune_protected_latest_locked(
@@ -20346,7 +19594,6 @@ impl Kura {
         )?;
         Ok(protected)
     }
-
     fn validate_native_amx_evidence_prune_intent_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -20516,7 +19763,6 @@ impl Kura {
         )?;
         Ok(())
     }
-
     fn decode_native_amx_evidence_prune_intent_bytes(
         path: &Path,
         bytes: &[u8],
@@ -20530,7 +19776,6 @@ impl Kura {
             })?;
         Ok(intent)
     }
-
     fn recover_native_amx_evidence_prune_intent_publication_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -20667,7 +19912,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn require_native_amx_evidence_prune_intent_absent_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -20702,7 +19946,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn complete_native_amx_evidence_prune_intent_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -20812,7 +20055,6 @@ impl Kura {
         self.sync_native_amx_evidence_namespace(namespace, "Native AMX evidence prune intent")?;
         Ok(true)
     }
-
     fn plan_native_amx_evidence_pair_prune_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -20840,7 +20082,6 @@ impl Kura {
         }
         Self::validate_native_amx_retained_history_continuity(&manifests, &receipts, false)
             .map_err(|message| Error::PruneIntentConflict(message.to_owned()))?;
-
         let complete = manifests
             .keys()
             .filter(|height| receipts.contains_key(*height))
@@ -20909,7 +20150,6 @@ impl Kura {
                     .to_owned(),
             ));
         }
-
         let mut removals = Vec::new();
         for height in complete.difference(&kept_complete) {
             for (kind, encoded_kind) in [
@@ -20938,7 +20178,6 @@ impl Kura {
         }
         Ok(Some((protected_latest, removals)))
     }
-
     fn prune_native_amx_evidence_pairs_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -20997,7 +20236,6 @@ impl Kura {
         self.inventory_native_amx_evidence_files_locked(namespace, false)?;
         Ok(())
     }
-
     fn rename_prune_sidecar_temp(
         &self,
         temp_path: &Path,
@@ -21028,7 +20266,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn reconcile_prune_indexed_sidecar_temps(
         &self,
         data_path: &Path,
@@ -21128,7 +20365,6 @@ impl Kura {
         )?;
         Ok(())
     }
-
     #[allow(clippy::too_many_lines)]
     fn truncate_indexed_sidecar_to_height(
         &self,
@@ -21151,7 +20387,6 @@ impl Kura {
         }
         let temp_data_path = data_path.with_extension("norito.tmp");
         let temp_index_path = index_path.with_extension("index.tmp");
-
         let Some(layout) = Self::validate_indexed_sidecar_pair(
             data_path,
             index_path,
@@ -21251,7 +20486,6 @@ impl Kura {
         drop(new_index);
         drop(data);
         drop(index);
-
         let staged_data_bytes = std::fs::symlink_metadata(&temp_data_path)
             .map_err(|error| Error::IO(error, temp_data_path.clone()))?
             .len();
@@ -21265,7 +20499,6 @@ impl Kura {
                 "{kind} staged retained pair differs from its authenticated byte projection"
             )));
         }
-
         // Publish data first. If the process stops between renames, the durable prune intent and
         // the temporary index let the next startup finish the same prefix rewrite forward.
         self.rename_prune_sidecar_temp(&temp_data_path, data_path, PRUNE_SIDECAR_PROMOTION_DATA)?;
@@ -21285,7 +20518,6 @@ impl Kura {
         )?;
         Ok(())
     }
-
     fn validate_completed_prune_intent(&self, intent: &KuraPruneIntentV2) -> Result<()> {
         let target = usize::try_from(intent.target_height)?;
         let data = self.block_data.lock();
@@ -21295,7 +20527,6 @@ impl Kura {
             ));
         }
         drop(data);
-
         if self
             .block_height_index
             .lock()
@@ -21338,7 +20569,6 @@ impl Kura {
                 ));
             }
         }
-
         {
             let mut store = self.block_store.lock();
             let durable_height = store.read_durable_index_count()?;
@@ -21365,7 +20595,6 @@ impl Kura {
                 "DA sidecar directory",
             )?;
         }
-
         let retained_merge_entries = usize::try_from(intent.retained_merge_entries)?;
         let merge_log = self.merge_log.lock();
         if merge_log.total_entries != retained_merge_entries {
@@ -21388,7 +20617,6 @@ impl Kura {
             ));
         }
         drop(merge_log);
-
         if self
             .merge_carrier_index
             .lock()
@@ -21400,7 +20628,6 @@ impl Kura {
                 "recovered carrier index still contains a pruned block height".to_owned(),
             ));
         }
-
         {
             let _guard = self.merge_carrier_lock.lock();
             Self::validate_no_numbered_sidecar_suffix(
@@ -21452,7 +20679,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn truncate_roster_journal_for_rollback(
         roster_log: &mut CommitRosterJournal,
         target_height: u64,
@@ -21465,7 +20691,6 @@ impl Kura {
         *roster_log = candidate;
         Ok(())
     }
-
     fn directory_contains_height_above(dir: &Path, target_height: u64) -> Result<bool> {
         if !dir.exists() {
             return Ok(false);
@@ -21494,7 +20719,6 @@ impl Kura {
         }
         Ok(false)
     }
-
     fn verify_rollback_auxiliary_artifacts(
         store_root: &Path,
         blocks_root: &Path,
@@ -21576,7 +20800,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn maybe_fail_prune_after_stage(&self, stage: usize) {
         #[cfg(test)]
         if self.fail_prune_after_stage.load(Ordering::Relaxed) == stage {
@@ -21587,13 +20810,11 @@ impl Kura {
         #[cfg(not(test))]
         let _ = stage;
     }
-
     fn prune_fail_stop(&self, stage: &'static str, error: &Error) -> ! {
         self.prune_recovery_required.store(true, Ordering::Release);
         self.record_writer_fault(stage, error);
         panic!("Kura prune crossed its durable intent boundary and failed at {stage}: {error}");
     }
-
     fn complete_rollback_during_startup(
         store_root: &Path,
         blocks_root: &Path,
@@ -21605,21 +20826,17 @@ impl Kura {
     ) -> Result<()> {
         let intent_path = Self::rollback_intent_path(blocks_root);
         intent.validate(&intent_path)?;
-
         // The commit marker is the one authoritative boundary. Every finality or replay artifact
         // remains at the old height until this method has durably truncated data/index/hashes/DA
         // and published the target marker.
         block_store.prune_for_rollback(intent, &intent_path)?;
-
         let mut merge_log = MergeLedgerLog::open_at(merge_log_path, merge_cache_capacity)?;
         merge_log.truncate_to_len(usize::try_from(intent.target_merge_entries)?)?;
         rollback_fault_point(RollbackFaultPoint::MergePruned)?;
-
         Self::prune_commit_manifests_above_in_dir(
             &store_root.join(MERGE_CARRIERS_DIR),
             intent.target_height,
         )?;
-
         Self::prune_wsv_checkpoints_above_in_dir(
             &Self::wsv_checkpoint_dir_for(blocks_root),
             intent.target_height,
@@ -21645,7 +20862,6 @@ impl Kura {
         rollback_fault_point(RollbackFaultPoint::RosterSidecarsPruned)?;
         Self::truncate_roster_journal_for_rollback(roster_log, intent.target_height)?;
         rollback_fault_point(RollbackFaultPoint::RosterJournalPruned)?;
-
         block_store.verify_rollback_boundary(intent, &intent_path)?;
         Self::verify_rollback_auxiliary_artifacts(
             store_root,
@@ -21659,7 +20875,6 @@ impl Kura {
         Self::remove_rollback_intent(blocks_root)?;
         Ok(())
     }
-
     /// Truncate the canonical chain to the provided height (inclusive).
     ///
     /// This updates the in-memory block list and prunes persisted storage when available.
@@ -21782,7 +20997,6 @@ impl Kura {
                 sidecar_rewrite,
                 capacity,
             })?;
-
         // Preserve the established lock order used by block publication. Holding
         // block_data keeps readers and appenders on the old tip until every
         // durable prune stage is complete.
@@ -21878,7 +21092,6 @@ impl Kura {
         self.persist_prune_intent(&intent)?;
         self.prune_recovery_required.store(true, Ordering::Release);
         self.maybe_fail_prune_after_stage(PRUNE_STAGE_INTENT);
-
         macro_rules! forward_or_stop {
             ($stage:literal, $expression:expr) => {
                 match $expression {
@@ -21896,7 +21109,6 @@ impl Kura {
             "retained block record suffix",
             self.prune_retained_block_records_from(&blocks_dir, height.saturating_add(1))
         );
-
         let block_store_before = {
             let mut store = self.block_store.lock();
             forward_or_stop!(
@@ -21921,7 +21133,6 @@ impl Kura {
             self.update_disk_usage_delta(block_store_before, after);
         }
         self.publish_durable_budget_snapshot(keep, 0);
-
         for record in carrier_records
             .iter()
             .rev()
@@ -21935,53 +21146,45 @@ impl Kura {
         }
         drop(carrier_guard);
         self.maybe_fail_prune_after_stage(PRUNE_STAGE_MERGE_CARRIERS);
-
         forward_or_stop!(
             "merge-log suffix",
             self.truncate_merge_log_to_len(retained_merge_entries)
         );
         self.maybe_fail_prune_after_stage(PRUNE_STAGE_MERGE_LOG);
-
         forward_or_stop!(
             "commit-roster suffix",
             self.truncate_roster_for_prune(&intent, sidecar_rewrite)
         );
         self.maybe_fail_prune_after_stage(PRUNE_STAGE_ROSTER);
-
         let wsv_dir = self.wsv_checkpoint_dir();
         forward_or_stop!(
             "WSV-checkpoint suffix",
             Self::prune_wsv_checkpoints_above_in_dir(&wsv_dir, height).map(|_| ())
         );
         self.maybe_fail_prune_after_stage(PRUNE_STAGE_WSV_CHECKPOINTS);
-
         let manifest_dir = self.commit_manifest_dir();
         forward_or_stop!(
             "commit-manifest suffix",
             Self::prune_commit_manifests_above_in_dir(&manifest_dir, height)
         );
         self.maybe_fail_prune_after_stage(PRUNE_STAGE_COMMIT_MANIFESTS);
-
         let finality_dir = self.v2_finality_artifact_dir();
         forward_or_stop!(
             "Sumeragi v2 finality suffix",
             Self::prune_v2_finality_artifacts_above_in_dir(&finality_dir, height)
         );
-
         for directory in Self::kagemusha_finality_sidecar_dirs_for(&blocks_dir) {
             forward_or_stop!(
                 "Kagemusha finality sidecar suffix",
                 Self::prune_commit_manifests_above_in_dir(&directory, height)
             );
         }
-
         forward_or_stop!(
             "pipeline and roster sidecar suffixes",
             self.truncate_pipeline_sidecars_for_prune(&intent)
         );
         self.maybe_fail_prune_after_stage(PRUNE_STAGE_PIPELINE_SIDECARS);
         drop(sidecar_guard);
-
         data.truncate(keep);
         self.truncate_block_height_index(keep);
         self.truncate_transaction_entrypoint_index(keep);
@@ -21993,18 +21196,14 @@ impl Kura {
         self.invalidate_pending_budget_cache();
         self.maybe_fail_prune_after_stage(PRUNE_STAGE_MEMORY);
         drop(data);
-
         forward_or_stop!(
             "completed prune validation",
             self.validate_completed_prune_intent(&intent)
         );
-
         forward_or_stop!("prune-intent clearance", self.finish_prune_intent());
-
         self.note_committed_lane_status_change();
         Ok(())
     }
-
     // Drop cached blocks that are already persisted and outside the retention window.
     // Keep the genesis block plus the most recent `blocks_in_memory` persisted blocks.
     fn drop_persisted_blocks(
@@ -22022,7 +21221,6 @@ impl Kura {
             entry.1 = None;
         }
     }
-
     /// Returns count of blocks Kura currently holds
     pub fn blocks_count(&self) -> usize {
         if self.prune_recovery_is_required()
@@ -22036,7 +21234,6 @@ impl Kura {
         }
         data.len()
     }
-
     /// Return the exact count of blocks durably committed to disk.
     ///
     /// Unlike logical-height and telemetry accessors, this propagates commit
@@ -22053,7 +21250,6 @@ impl Kura {
         let count = self.block_store.lock().read_exact_durable_index_count()?;
         usize::try_from(count).map_err(Error::from)
     }
-
     /// Bind startup replay to one exact durable hash-journal image.
     ///
     /// The returned hashes are read under the same block-store lock as the
@@ -22070,7 +21266,6 @@ impl Kura {
         }
         Ok(ExactReplayBoundary { count, hashes })
     }
-
     /// Recheck an audited replay boundary with O(1) journal reads.
     ///
     /// Callers separately compare stable metadata for every canonical journal
@@ -22100,14 +21295,12 @@ impl Kura {
         Ok(durable_tip == boundary.hashes.last().copied()
             && store.read_exact_durable_index_count()? == count)
     }
-
     /// Exclude canonical Kura writers while a fully prevalidated replay State
     /// receipt is published. The caller must not invoke a Kura mutation while
     /// holding this lease because canonical mutations acquire the same lock.
     pub(crate) fn replay_publication_lease(&self) -> parking_lot::MutexGuard<'_, ()> {
         self.canonical_chain_lock.lock()
     }
-
     /// Return a best-effort durable count for diagnostics and telemetry only.
     ///
     /// Security, startup, replay, and mutation decisions must use
@@ -22139,7 +21332,6 @@ impl Kura {
         }
         durable_count.unwrap_or_else(|| self.blocks_count())
     }
-
     /// Return the canonical block hash recorded at `height` without decoding the block body.
     pub fn block_hash_at_height(&self, height: NonZeroUsize) -> Option<HashOf<BlockHeader>> {
         if self.prune_recovery_is_required()
@@ -22154,7 +21346,6 @@ impl Kura {
         data.get(height.get().saturating_sub(1))
             .map(|(hash, _)| *hash)
     }
-
     #[cfg(test)]
     pub(crate) fn hard_fork_extend_hash_only_from_snapshot_with_legacy_count(
         &self,
@@ -22171,7 +21362,6 @@ impl Kura {
             false,
         )
     }
-
     /// Reconcile an exact outer-authenticated bootstrap snapshot while Kura remains provisional.
     pub(crate) fn reconcile_exact_audited_snapshot_bootstrap(
         &self,
@@ -22192,7 +21382,6 @@ impl Kura {
             true,
         )
     }
-
     /// Stage an exact authenticated snapshot prefix for recovery tests.
     ///
     /// Production callers must enter through
@@ -22216,7 +21405,6 @@ impl Kura {
             false,
         )
     }
-
     /// Extend Kura's canonical hash chain using an audited hard-fork snapshot.
     ///
     /// The snapshot payload is the source of truth for hashes above the durable block body log.
@@ -22235,7 +21423,6 @@ impl Kura {
             false,
         )
     }
-
     /// Extend Kura's canonical hash chain using a verified local state snapshot.
     ///
     /// This is used when the signed WSV snapshot is ahead of a truncated durable block-body log.
@@ -22254,7 +21441,6 @@ impl Kura {
             false,
         )
     }
-
     fn extend_hash_only_prefix_from_snapshot_with_legacy_count(
         &self,
         snapshot_hashes: &[HashOf<BlockHeader>],
@@ -22268,7 +21454,6 @@ impl Kura {
         if snapshot_hashes.is_empty() {
             return Ok(0);
         }
-
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         if provisional_transition {
             if !self.provisional_snapshot_bootstrap_pending() {
@@ -22286,7 +21471,6 @@ impl Kura {
         let shared = current.min(target);
         let legacy_count = configured_legacy_count.map(|count| count.min(shared));
         let bootstrap_lineage_hash = bootstrap_lineage.map(snapshot_bootstrap_lineage_digest);
-
         let mut rewrite_from = current;
         for (idx, (existing, _)) in block_data.iter().enumerate().take(shared) {
             let actual = snapshot_hashes[idx];
@@ -22316,7 +21500,6 @@ impl Kura {
             );
             break;
         }
-
         if target < current && rewrite_from == current {
             let Some(legacy_count) = legacy_count else {
                 return Err(Error::HashesFileHeightMismatch);
@@ -22353,7 +21536,6 @@ impl Kura {
             }
             rewrite_from = target;
         }
-
         if target == current && rewrite_from == current {
             if mode.marks_hash_only_prefix() {
                 let marker_result = (|| -> Result<()> {
@@ -22389,7 +21571,6 @@ impl Kura {
             return Ok(0);
         }
         rewrite_from = rewrite_from.min(shared);
-
         self.ensure_no_pending_rollback()?;
         if rewrite_from < current {
             self.ensure_v2_finality_allows_rewrite_from(
@@ -22409,7 +21590,6 @@ impl Kura {
                 let mut block_store = self.block_store.lock();
                 let before_bytes = Self::block_store_tracked_bytes(&mut block_store).ok();
                 let accounting_mutation = self.begin_total_disk_usage_mutation();
-
                 let hashes_file = block_store.ensure_hashes_file()?;
                 hashes_file.try_io(|file| {
                     file.set_len(target_u64.saturating_mul(SIZE_OF_BLOCK_HASH))?;
@@ -22419,7 +21599,6 @@ impl Kura {
                     }
                     file.flush()
                 })?;
-
                 let index_file = block_store.ensure_index_file()?;
                 index_file.try_io(|file| {
                     file.set_len(target_u64.saturating_mul(BlockIndex::SIZE))?;
@@ -22434,7 +21613,6 @@ impl Kura {
                     }
                     file.flush()
                 })?;
-
                 // This marker is the durable capability proving that zero-length entries were
                 // published only after snapshot authentication. Sync its hash/index inputs first
                 // even when normal Kura fsync is deferred by batching, then publish the ordinary
@@ -22451,7 +21629,6 @@ impl Kura {
                     snapshot_hashes,
                     bootstrap_lineage_hash,
                 )?;
-
                 block_store.publish_commit_marker(target_u64)?;
                 if let Some(before_bytes) = before_bytes
                     && let Ok(after_bytes) = Self::block_store_tracked_bytes(&mut block_store)
@@ -22470,7 +21647,6 @@ impl Kura {
             }
         };
         publication.into_result(self)?;
-
         block_data.truncate(rewrite_from);
         block_data.extend(
             snapshot_hashes[rewrite_from..]
@@ -22486,7 +21662,6 @@ impl Kura {
         let mut transaction_entrypoint_index = self.transaction_entrypoint_index.lock();
         *transaction_entrypoint_index = rebuilt_transaction_index;
         drop(transaction_entrypoint_index);
-
         if mode.marks_hash_only_prefix() {
             self.hard_fork_hash_only_block_count
                 .store(target, Ordering::Relaxed);
@@ -22503,10 +21678,8 @@ impl Kura {
         Ok(added)
     }
 }
-
 include!("kura/prune_recovery_capacity.rs");
 include!("kura/block_store_definition_and_test_controls.rs");
-
 /// Read-only mirror of the block data file backed either by a memory mapping or a heap copy.
 #[derive(Clone)]
 enum MemoryMirror {
@@ -22515,7 +21688,6 @@ enum MemoryMirror {
     /// Heap-backed copy used as a portable fallback when memory mapping is unavailable.
     Heap(Arc<[u8]>),
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MemoryMirrorKind {
     /// Mirror is backed by an OS memory map.
@@ -22523,37 +21695,31 @@ enum MemoryMirrorKind {
     /// Mirror contains a heap-allocated copy of the file contents.
     HeapCopy,
 }
-
 impl MemoryMirror {
     fn from_mmap(map: ReadOnlyMmap) -> Self {
         Self::Mapped(Arc::new(map))
     }
-
     fn from_bytes(bytes: Vec<u8>) -> Self {
         Self::Heap(Arc::from(bytes.into_boxed_slice()))
     }
-
     fn len(&self) -> usize {
         match self {
             Self::Mapped(map) => map.len(),
             Self::Heap(bytes) => bytes.len(),
         }
     }
-
     fn slice(&self, start: usize, end: usize) -> &[u8] {
         match self {
             Self::Mapped(map) => &map[start..end],
             Self::Heap(bytes) => &bytes[start..end],
         }
     }
-
     fn kind(&self) -> MemoryMirrorKind {
         match self {
             Self::Mapped(_) => MemoryMirrorKind::MemoryMapped,
             Self::Heap(_) => MemoryMirrorKind::HeapCopy,
         }
     }
-
     fn from_file(file: &mut std::fs::File, len: usize, file_len: u64) -> std::io::Result<Self> {
         match ReadOnlyMmap::copy_read_only_with_file_len(file, len, file_len) {
             Ok(map) => Ok(Self::from_mmap(map)),
@@ -22582,7 +21748,6 @@ impl MemoryMirror {
         }
     }
 }
-
 #[derive(Default, Debug, Clone, Copy)]
 /// Lightweight wrapper for block indices in the block index file
 pub struct BlockIndex {
@@ -22591,24 +21756,20 @@ pub struct BlockIndex {
     /// Length of block section in bytes
     pub length: u64,
 }
-
 impl BlockIndex {
     fn is_evicted(&self) -> bool {
         self.start == EVICTED_BLOCK_START
     }
 }
-
 impl BlockIndex {
     const SIZE: u64 = core::mem::size_of::<Self>() as u64;
     const SIZE_USIZE: usize = core::mem::size_of::<Self>();
-
     fn encode(self) -> [u8; Self::SIZE_USIZE] {
         let mut out = [0u8; Self::SIZE_USIZE];
         out[..core::mem::size_of::<u64>()].copy_from_slice(&self.start.to_le_bytes());
         out[core::mem::size_of::<u64>()..].copy_from_slice(&self.length.to_le_bytes());
         out
     }
-
     fn read(
         file: &mut std::fs::File,
         buff: &mut [u8; core::mem::size_of::<u64>()],
@@ -22619,14 +21780,12 @@ impl BlockIndex {
         ) -> std::io::Result<u64> {
             file.read_exact(buff).map(|()| u64::from_le_bytes(*buff))
         }
-
         Ok(Self {
             start: read_u64(file, buff)?,
             length: read_u64(file, buff)?,
         })
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct BlockStoreCommitMarker {
@@ -22637,7 +21796,6 @@ struct BlockStoreCommitMarker {
     /// Canonical header hash at `count`, or `None` for the empty chain.
     tip_hash: Option<HashOf<BlockHeader>>,
 }
-
 /// Exact old or replacement image for one height in a staged canonical rewrite.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -22653,7 +21811,6 @@ struct DaBlockRewriteImageV1 {
     /// Exact framed block bytes, absent only for an authenticated hash-only entry.
     body: Option<Vec<u8>>,
 }
-
 impl DaBlockRewriteImageV1 {
     fn index(&self) -> BlockIndex {
         BlockIndex {
@@ -22662,7 +21819,6 @@ impl DaBlockRewriteImageV1 {
         }
     }
 }
-
 /// Write-ahead record making DA-sidecar and canonical-journal rewrites recoverable.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -22684,7 +21840,6 @@ struct DaBlockRewriteStageV1 {
     /// Complete replacement suffix supplied by the caller.
     replacement: Vec<DaBlockRewriteImageV1>,
 }
-
 /// Exact canonical identity of one body moved to DA storage by compaction.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -22698,7 +21853,6 @@ struct EvictionCompactionEntryV1 {
     /// Exact framed signed-block byte length retained in the evicted index entry.
     wire_len: u64,
 }
-
 /// Roll-forward manifest for the two-file body-eviction compaction publication.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -22730,7 +21884,6 @@ struct EvictionCompactionStageV1 {
     /// Dense canonical identities of all bodies newly moved to DA storage.
     evicted: Vec<EvictionCompactionEntryV1>,
 }
-
 /// Durable lane/merge association decision resolved only after the canonical marker is known.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -22748,7 +21901,6 @@ struct CanonicalAssociationStageV1 {
     /// Optional complete certified merge entry carried by this block.
     merge_entry: Option<MergeLedgerEntry>,
 }
-
 /// Authenticated metadata for a body-less Kura suffix recovered from a verified local snapshot.
 #[derive(Debug, Clone, Encode, Decode)]
 struct VerifiedSnapshotTailMarkerV1 {
@@ -22767,10 +21919,8 @@ struct VerifiedSnapshotTailMarkerV1 {
     /// the one-time explicitly audited digest policy) before enabling output.
     bootstrap_lineage_hash: Option<Hash>,
 }
-
 impl VerifiedSnapshotTailMarkerV1 {
     const VERSION: u32 = 1;
-
     fn new(
         body_prefix_count: u64,
         snapshot_height: u64,
@@ -22786,50 +21936,41 @@ impl VerifiedSnapshotTailMarkerV1 {
         }
     }
 }
-
 const SNAPSHOT_BOOTSTRAP_LINEAGE_DIGEST_DOMAIN: &[u8] =
     b"iroha:kura:snapshot-bootstrap-lineage:v1\0";
-
 /// Exact authenticated canonical hash-journal image used by startup replay.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ExactReplayBoundary {
     pub(crate) count: u64,
     pub(crate) hashes: Vec<HashOf<BlockHeader>>,
 }
-
 impl V2StartupFinalityVerificationSession<'_> {
     pub(crate) fn replay_boundary(&self) -> &ExactReplayBoundary {
         &self.inventory.boundary
     }
-
     pub(crate) fn canonical_hash(&self, height: u64) -> Option<HashOf<BlockHeader>> {
         let index = usize::try_from(height.checked_sub(1)?).ok()?;
         self.inventory.boundary.hashes.get(index).copied()
     }
-
     pub(crate) fn is_hash_only_height(&self, height: u64) -> bool {
         self.inventory.hash_only_heights.contains(&height)
     }
-
     fn replay_sidecars_at(&self, height: u64) -> Option<&V2StartupReplaySidecarsAtHeight> {
         let index = usize::try_from(height.checked_sub(1)?).ok()?;
         self.inventory.replay_sidecars.get(index)
     }
-
     pub(crate) fn wsv_checkpoint(&self, height: u64) -> Option<&WsvCheckpoint> {
         self.replay_sidecars_at(height)?
             .checkpoint
             .as_ref()
             .map(|checkpoint| &checkpoint.value)
     }
-
     pub(crate) fn commit_manifest(&self, height: u64) -> Option<&CommitManifest> {
         self.replay_sidecars_at(height)?
             .manifest
             .as_ref()
             .map(|manifest| &manifest.value)
     }
-
     pub(crate) fn commit_manifest_binding_state(
         &self,
         height: u64,
@@ -22844,14 +21985,12 @@ impl V2StartupFinalityVerificationSession<'_> {
             Some(_) => CommitManifestBindingState::Mismatched,
         }
     }
-
     pub(crate) fn finality_projection(&self, height: u64) -> Option<&V2StartupFinalityProjection> {
         self.inventory
             .entries
             .get(&height)
             .map(|entry| &entry.projection)
     }
-
     pub(crate) fn durable_tip_finality_artifact(&self, height: u64) -> Option<&V2FinalityArtifact> {
         if height == self.inventory.boundary.count {
             self.inventory.durable_tip_artifact.as_ref()
@@ -22859,7 +21998,6 @@ impl V2StartupFinalityVerificationSession<'_> {
             None
         }
     }
-
     /// Return the exact bounded authorization minted by the startup audit.
     /// [`Kura::begin_v2_startup_finality_verification`] already
     /// rechecked it under this session's mutation guards, so minting the
@@ -22870,12 +22008,10 @@ impl V2StartupFinalityVerificationSession<'_> {
         })
     }
 }
-
 fn snapshot_bootstrap_lineage_digest(record: &SnapshotV2BootstrapRecord) -> Hash {
     let encoded = record.encode();
     Hash::new_from_chunks(&[SNAPSHOT_BOOTSTRAP_LINEAGE_DIGEST_DOMAIN, &encoded])
 }
-
 fn verified_snapshot_hash_journal_digest(snapshot_hashes: &[HashOf<BlockHeader>]) -> Result<Hash> {
     let snapshot_height = u64::try_from(snapshot_hashes.len())?;
     let snapshot_height_bytes = snapshot_height.to_le_bytes();
@@ -22885,12 +22021,12 @@ fn verified_snapshot_hash_journal_digest(snapshot_hashes: &[HashOf<BlockHeader>]
     chunks.extend(snapshot_hashes.iter().map(|hash| hash.as_ref().as_slice()));
     Ok(Hash::new_from_chunks(&chunks))
 }
-
 /// Durable, forward-completing Kura rollback transaction.
 ///
 /// While this file exists, normal startup first completes the rollback. The exact merge-log
 /// boundary is recorded separately from the block height because current merge storage is sparse:
-/// not every canonical block carries a merge-ledger entry.
+/// not every canonical block carries a merge-ledger entry. Its fixed-width V1
+/// wire is admitted under [`MAX_ROLLBACK_INTENT_V1_BYTES`] before allocation.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct KuraRollbackIntent {
     version: u32,
@@ -22900,10 +22036,8 @@ struct KuraRollbackIntent {
     #[norito(default)]
     target_block_hash: Option<HashOf<BlockHeader>>,
 }
-
 impl KuraRollbackIntent {
     const VERSION: u32 = 1;
-
     #[cfg(test)]
     fn new_with_merge_entries(
         from_height: u64,
@@ -22919,7 +22053,6 @@ impl KuraRollbackIntent {
             target_block_hash,
         }
     }
-
     fn validate(&self, path: &Path) -> Result<()> {
         let invalid = |reason: &str| Error::RollbackIntentInvalid {
             path: path.to_path_buf(),
@@ -22942,7 +22075,6 @@ impl KuraRollbackIntent {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RollbackFaultPoint {
     BlockIndexSynced,
@@ -22957,10 +22089,8 @@ enum RollbackFaultPoint {
     RosterJournalPruned,
     BeforeIntentRemoved,
 }
-
 impl BlockStoreCommitMarker {
     const VERSION: u32 = 1;
-
     fn new(count: u64, tip_hash: Option<HashOf<BlockHeader>>) -> Self {
         debug_assert_eq!(count == 0, tip_hash.is_none());
         Self {
@@ -22970,9 +22100,7 @@ impl BlockStoreCommitMarker {
         }
     }
 }
-
 include!("kura/pipeline_and_lane_artifacts.rs");
-
 impl Kura {
     fn now_unix_secs() -> u64 {
         SystemTime::now()
@@ -22980,7 +22108,6 @@ impl Kura {
             .map(|dur| dur.as_secs())
             .unwrap_or(0)
     }
-
     /// Return the path to the block storage directory, if configured.
     /// For in-memory test Kura, returns `None`.
     fn store_dir(&self) -> Option<PathBuf> {
@@ -22991,11 +22118,9 @@ impl Kura {
             Some(path)
         }
     }
-
     fn sidecar_fsync_mode(&self) -> FsyncMode {
         self.block_store.lock().fsync.mode
     }
-
     fn lane_block_artifact_has_hash_only_snapshot_anchor(
         &self,
         artifact: &LaneBlockArtifact,
@@ -23013,11 +22138,9 @@ impl Kura {
             .or_else(|| self.get_durable_block_hash(proposal_height))
             .is_some_and(|expected_hash| expected_hash == artifact.proposal_block_hash)
     }
-
     fn lane_artifact_dir(blocks_dir: &Path) -> PathBuf {
         blocks_dir.join(LANE_ARTIFACTS_DIR_NAME)
     }
-
     fn lane_artifact_paths_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23028,7 +22151,6 @@ impl Kura {
             dir.join(LANE_ARTIFACTS_INDEX_FILE),
         )
     }
-
     fn certified_lane_block_paths_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23039,7 +22161,6 @@ impl Kura {
             dir.join(CERTIFIED_LANE_BLOCKS_INDEX_FILE),
         )
     }
-
     fn latest_certified_lane_block_frontier_paths_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23050,7 +22171,6 @@ impl Kura {
             dir.join(LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_BUILD_FILE),
         )
     }
-
     fn autonomous_lane_block_attempt_path_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23061,7 +22181,6 @@ impl Kura {
             "{AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX}_{lane_block_height:020}_{proposal_height:020}.norito"
         ))
     }
-
     fn autonomous_one_height_coordinate(name: &str, prefix: &str) -> Option<u64> {
         let raw = name
             .strip_prefix(prefix)?
@@ -23071,17 +22190,14 @@ impl Kura {
         (height != 0 && name == format!("{prefix}_{height:020}.norito")).then_some(height)
     }
 }
-
 include!("kura/autonomous_terminal_capacity.rs");
 include!("kura/autonomous_publication_temp_recovery.rs");
 include!("kura/historical_autonomous_recovery_temp_reconciliation.rs");
 include!("kura/hot_path_capacity_preflight.rs");
 include!("kura/autonomous_execution_view_capacity.rs");
 include!("kura/certified_bundle_capacity.rs");
-
 impl Kura {
     kura_autonomous_reservation_inventory_methods!();
-
     fn autonomous_lane_block_attempt_view_state_path_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23092,7 +22208,6 @@ impl Kura {
             "{AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX}_{lane_block_height:020}_{proposal_height:020}.norito"
         ))
     }
-
     fn autonomous_lifecycle_cursor_path_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23103,7 +22218,6 @@ impl Kura {
             "{AUTONOMOUS_LIFECYCLE_CURSOR_PREFIX}_{lane_block_height:020}_{proposal_height:020}.norito"
         ))
     }
-
     fn autonomous_lifecycle_bootstrap_path_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23114,7 +22228,6 @@ impl Kura {
             "{AUTONOMOUS_LIFECYCLE_BOOTSTRAP_PREFIX}_{lane_block_height:020}_{proposal_height:020}.norito"
         ))
     }
-
     fn autonomous_lane_block_latest_attempt_path_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23124,7 +22237,6 @@ impl Kura {
             "{AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX}_{lane_block_height:020}.norito"
         ))
     }
-
     fn autonomous_lane_route_latest_attempt_path_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23132,7 +22244,6 @@ impl Kura {
         Self::lane_artifact_dir(&entry.blocks_dir(store_root))
             .join(AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE)
     }
-
     fn lane_merge_application_frontier_path_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23140,15 +22251,12 @@ impl Kura {
         Self::lane_artifact_dir(&entry.blocks_dir(store_root))
             .join(LANE_MERGE_APPLICATION_FRONTIER_FILE)
     }
-
     fn hash_path_component(hash: &Hash) -> String {
         Self::fixed_bytes_path_component(hash.as_ref())
     }
-
     fn network_id_path_component(network_id: &iroha_data_model::NetworkId) -> String {
         Self::fixed_bytes_path_component(network_id.as_bytes())
     }
-
     fn fixed_bytes_path_component(bytes: &[u8]) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut encoded = String::with_capacity(bytes.len().saturating_mul(2));
@@ -23158,7 +22266,6 @@ impl Kura {
         }
         encoded
     }
-
     fn autonomous_lane_entrypoint_claim_path(
         store_root: &Path,
         network_id: &iroha_data_model::NetworkId,
@@ -23177,11 +22284,9 @@ impl Kura {
                 entrypoint
             ))
     }
-
     fn autonomous_lane_entrypoint_claim_temp_path(path: &Path) -> PathBuf {
         path.with_extension("norito.tmp")
     }
-
     fn lane_block_execution_input_paths_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23192,7 +22297,6 @@ impl Kura {
             dir.join(LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE),
         )
     }
-
     fn lane_block_execution_preflight_paths_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23203,7 +22307,6 @@ impl Kura {
             dir.join(LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE),
         )
     }
-
     fn lane_block_application_receipt_paths_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23214,7 +22317,6 @@ impl Kura {
             dir.join(LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE),
         )
     }
-
     fn native_amx_evidence_file_name(
         kind: NativeAmxEvidenceKind,
         participant_height: u64,
@@ -23226,7 +22328,6 @@ impl Kura {
             width = NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS,
         )
     }
-
     fn native_amx_participant_receipt_path_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23236,7 +22337,6 @@ impl Kura {
             Self::native_amx_evidence_file_name(NativeAmxEvidenceKind::Receipt, participant_height),
         )
     }
-
     fn native_amx_application_manifest_path_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23249,7 +22349,6 @@ impl Kura {
             ),
         )
     }
-
     fn native_amx_evidence_namespace_for_entry(
         &self,
         entry: &LaneConfigEntry,
@@ -23260,7 +22359,6 @@ impl Kura {
             Self::native_amx_participant_receipt_path_for_entry(entry, &self.store_root, 1);
         self.open_bound_progress_namespace(&anchor_manifest, &anchor_receipt)
     }
-
     fn native_amx_participant_receipt_latest_index_path_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23268,14 +22366,12 @@ impl Kura {
         Self::lane_artifact_dir(&entry.blocks_dir(store_root))
             .join(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE)
     }
-
     fn invalid_lane_artifact_error(path: PathBuf, message: impl Into<String>) -> Error {
         Error::IO(
             std::io::Error::new(ErrorKind::InvalidData, message.into()),
             path,
         )
     }
-
     pub(crate) fn validate_lane_block_execution_input_artifact(
         artifact: &LaneBlockExecutionInputArtifact,
     ) -> std::result::Result<(), &'static str> {
@@ -23334,7 +22430,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn validate_lane_block_execution_preflight_artifact(
         artifact: &LaneBlockExecutionPreflightArtifact,
     ) -> std::result::Result<(), &'static str> {
@@ -23370,7 +22465,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn validate_lane_block_application_receipt_artifact(
         artifact: &LaneBlockApplicationReceiptArtifact,
     ) -> std::result::Result<(), &'static str> {
@@ -23465,7 +22559,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn validate_native_amx_participant_application_manifest_artifact(
         artifact: &NativeAmxParticipantApplicationManifestArtifactV1,
     ) -> std::result::Result<(), &'static str> {
@@ -23509,7 +22602,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn native_amx_participant_receipt_matches_manifest_leaf(
         receipt: &NativeAmxParticipantApplicationReceiptArtifact,
         leaf: &NativeAmxApplicationManifestLeafV1,
@@ -23553,7 +22645,6 @@ impl Kura {
                     .map(|member| member.result_hash)
                     .collect::<Vec<_>>()
     }
-
     fn validate_native_amx_participant_application_receipt_artifact(
         artifact: &NativeAmxParticipantApplicationReceiptArtifact,
     ) -> std::result::Result<(), &'static str> {
@@ -23649,7 +22740,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn validate_native_amx_participant_receipt_latest_index(
         latest: &NativeAmxParticipantReceiptLatestIndexV2,
     ) -> std::result::Result<(), &'static str> {
@@ -23697,7 +22787,6 @@ impl Kura {
         }
         Ok(())
     }
-
     const fn maximum_index_growth_for_unresolved_sidecar_write(height: u64) -> u64 {
         if height <= SidecarIndexLayout::LEGACY_BASE_HEIGHT {
             PIPELINE_INDEX_ENTRY_SIZE_U64
@@ -23705,7 +22794,6 @@ impl Kura {
             (MAX_INDEXED_SIDECAR_GAP_ENTRIES + 1) * PIPELINE_INDEX_ENTRY_SIZE_U64
         }
     }
-
     fn decode_native_amx_participant_receipt_latest_index(
         &self,
         entry: &LaneConfigEntry,
@@ -23717,7 +22805,6 @@ impl Kura {
             path,
         )
     }
-
     fn decode_native_amx_participant_receipt_latest_index_for_route(
         &self,
         lane_id: LaneId,
@@ -23746,7 +22833,6 @@ impl Kura {
         )
         .map(Some)
     }
-
     fn decode_native_amx_participant_receipt_latest_index_bytes_for_route(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -23773,7 +22859,6 @@ impl Kura {
         }
         Ok(latest)
     }
-
     fn decode_bound_native_amx_participant_receipt_latest_index_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -23797,7 +22882,6 @@ impl Kura {
         )
         .map(Some)
     }
-
     fn native_amx_latest_index_temp_bytes_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -23814,7 +22898,6 @@ impl Kura {
             "Native AMX participant latest-index temporary",
         )
     }
-
     fn require_native_amx_latest_index_temp_absent_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -23834,7 +22917,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Reject an impossible overlap before either recovery journal is consumed.
     ///
     /// Latest-index staging starts only after the exact manifest and receipt are
@@ -23888,7 +22970,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Resolve a crash-durable latest-index temporary only after startup has
     /// authenticated the complete retained evidence inventory.
     ///
@@ -23938,7 +23019,6 @@ impl Kura {
                 "Native AMX latest-index temporary is stale, conflicting, or unbacked by the exact authenticated highest pair",
             ));
         }
-
         let stable_bytes = self.read_bound_regular_file_bytes_locked(
             namespace,
             latest_path,
@@ -23969,7 +23049,6 @@ impl Kura {
         } else {
             None
         };
-
         if let Some(stable) = stable {
             if stable == temporary {
                 if stable_bytes.as_deref() != Some(temp_bytes.as_slice()) {
@@ -24065,7 +23144,6 @@ impl Kura {
                 ));
             }
         }
-
         let (mut temporary_file, temporary_metadata) = self
             .open_bound_regular_file_with_exact_bytes_locked(
                 namespace,
@@ -24133,7 +23211,6 @@ impl Kura {
         }
         Ok(NativeAmxLatestIndexTempReconciliation::Promoted)
     }
-
     fn replace_bound_native_amx_latest_index_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -24203,7 +23280,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Replace a derived pointer after the caller has fully inventoried and
     /// authenticated the exact highest durable pair.
     ///
@@ -24254,7 +23330,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn lane_block_qc_signer_keys(
         qc: &LaneBlockQcV1,
     ) -> std::result::Result<BTreeSet<PublicKey>, &'static str> {
@@ -24278,9 +23353,7 @@ impl Kura {
         Ok(signers)
     }
 }
-
 include!("kura/lane_artifact_budget.rs");
-
 impl Kura {
     fn persist_lane_payload_ownership_artifacts_for_block(
         &self,
@@ -24294,7 +23367,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn validate_lane_payload_ownership_artifacts_for_block(
         &self,
         block: &SignedBlock,
@@ -24324,7 +23396,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn stage_lane_payload_ownership_artifacts_for_block(
         &self,
         block: &SignedBlock,
@@ -24365,7 +23436,6 @@ impl Kura {
         }
         Ok(Some(batch))
     }
-
     fn lane_payload_ownership_is_durable(_ownership: &SumeragiLanePayloadOwnership) -> bool {
         #[cfg(any(test, feature = "iroha-core-tests"))]
         if crate::block::is_default_test_execution_context_ownership(_ownership) {
@@ -24373,7 +23443,6 @@ impl Kura {
         }
         true
     }
-
     fn validate_lane_block_artifact_write_locked(
         &self,
         artifact: &LaneBlockArtifact,
@@ -24419,7 +23488,6 @@ impl Kura {
                 "failed to recover lane artifact data/index pair",
             ));
         }
-
         if let Some(existing) = Self::read_indexed_sidecar_from_paths_with_recovery(
             lane_block_height,
             &data_path,
@@ -24447,10 +23515,8 @@ impl Kura {
                 ));
             }
         }
-
         Ok(())
     }
-
     fn write_lane_block_artifact_locked(
         &self,
         artifact: &LaneBlockArtifact,
@@ -24491,7 +23557,6 @@ impl Kura {
                 "failed to recover lane artifact data/index pair",
             ));
         }
-
         if let Some(existing) = Self::read_indexed_sidecar_from_paths_with_recovery(
             lane_block_height,
             &data_path,
@@ -24531,7 +23596,6 @@ impl Kura {
                 ));
             }
         }
-
         let checkpoint = self.capture_lane_block_artifact_checkpoint_locked(
             &data_path,
             &index_path,
@@ -24585,7 +23649,6 @@ impl Kura {
         }
         Ok(Some(checkpoint))
     }
-
     /// Check an existing lane sidecar while its write batch is locked.
     ///
     /// Every caller holds `prune_lock` before `sidecar_lock`; this method must not be exposed to
@@ -24601,7 +23664,6 @@ impl Kura {
             .or_else(|| self.get_durable_block_hash(proposal_height))
             == Some(artifact.proposal_block_hash)
     }
-
     fn lane_block_artifact_is_active_canonical_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -24615,7 +23677,6 @@ impl Kura {
                 .is_ok()
             && self.lane_block_artifact_is_canonical_locked(artifact)
     }
-
     fn capture_lane_block_artifact_checkpoint_locked(
         &self,
         data_path: &Path,
@@ -24652,7 +23713,6 @@ impl Kura {
                 None
             }
         };
-
         LaneBlockArtifactWriteCheckpoint {
             data_path: data_path.to_path_buf(),
             index_path: index_path.to_path_buf(),
@@ -24666,7 +23726,6 @@ impl Kura {
             tracked_bytes_before,
         }
     }
-
     fn restore_lane_block_artifact_checkpoint_locked(
         &self,
         checkpoint: &LaneBlockArtifactWriteCheckpoint,
@@ -24674,7 +23733,6 @@ impl Kura {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let tracked_bytes_after_write =
             Self::sidecar_tracked_bytes(&checkpoint.data_path, &checkpoint.index_path, None).ok();
-
         if checkpoint.data_existed {
             let data = std::fs::OpenOptions::new()
                 .create(true)
@@ -24691,7 +23749,6 @@ impl Kura {
         {
             return Err(Error::IO(err, checkpoint.data_path.clone()));
         }
-
         if checkpoint.index_existed {
             let mut index = std::fs::OpenOptions::new()
                 .create(true)
@@ -24823,11 +23880,9 @@ impl Kura {
         {
             return Err(Error::IO(err, checkpoint.index_path.clone()));
         }
-
         if let Some(parent) = checkpoint.data_path.parent() {
             sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
         }
-
         if let (Some(after_write), Some(before_write)) =
             (tracked_bytes_after_write, checkpoint.tracked_bytes_before)
             && let Ok(after_rollback) =
@@ -24842,10 +23897,8 @@ impl Kura {
             }
             accounting_mutation.finish();
         }
-
         Ok(())
     }
-
     fn read_latest_certified_lane_block_frontier_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -24859,7 +23912,6 @@ impl Kura {
         self.require_active_lane_artifact(entry, &frontier.frontier.artifact.proposal.descriptor)?;
         Ok(Some(frontier))
     }
-
     fn confirm_latest_certified_lane_block_frontier_read_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -24918,7 +23970,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn sync_exact_latest_certified_lane_block_frontier_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -24967,7 +24018,6 @@ impl Kura {
             .map_err(|error| Error::IO(error, frontier_path.clone()))?;
         self.confirm_latest_certified_lane_block_frontier_read_locked(entry, expected)
     }
-
     fn publish_latest_certified_lane_block_frontier_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -25003,7 +24053,6 @@ impl Kura {
         )?;
         drop(recovery_namespace);
         let namespace = self.open_bound_progress_namespace(&frontier_path, &build_path)?;
-
         let replacement =
             LatestCertifiedLaneBlockFrontierV1::new(artifact.clone()).ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
@@ -25044,7 +24093,6 @@ impl Kura {
                 }
             }
         }
-
         let bytes = norito::encode_canonical(&replacement).map_err(Error::NoritoFrame)?;
         if bytes.is_empty()
             || bytes.len() > usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).unwrap_or(usize::MAX)
@@ -25125,7 +24173,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(true)
     }
-
     fn recover_certified_lane_block_pair_from_frontier_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -25209,7 +24256,6 @@ impl Kura {
             );
         }
         drop(existing_pair);
-
         let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path, None).ok();
         let payload = artifact.encode_framed()?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
@@ -25274,7 +24320,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn certified_frontier_pair_durability_is_attested(
         &self,
         lane_id: LaneId,
@@ -25299,7 +24344,6 @@ impl Kura {
             });
         metadata_matches && self.bound_progress_sidecar_unchanged(bound)
     }
-
     fn certified_frontier_artifact_validation_is_attested(
         &self,
         lane_id: LaneId,
@@ -25319,7 +24363,6 @@ impl Kura {
                     )
             })
     }
-
     fn note_certified_frontier_pair_durability(
         &self,
         lane_id: LaneId,
@@ -25341,7 +24384,6 @@ impl Kura {
             },
         );
     }
-
     fn note_certified_frontier_artifact_validation(
         &self,
         lane_id: LaneId,
@@ -25363,7 +24405,6 @@ impl Kura {
             },
         );
     }
-
     /// Persist a certified standalone lane-block session under its lane segment.
     ///
     /// # Errors
@@ -25382,7 +24423,6 @@ impl Kura {
     ) -> Result<()> {
         self.persist_committed_lane_block_session_inner(session, signer_pops, None)
     }
-
     pub(crate) fn persist_committed_lane_block_session_with_authority(
         &self,
         session: &crate::lane_consensus::CommittedLaneBlockSession,
@@ -25391,7 +24431,6 @@ impl Kura {
     ) -> Result<()> {
         self.persist_committed_lane_block_session_inner(session, signer_pops, Some(authority))
     }
-
     /// Persist one certified artifact while the caller retains `prune_lock`.
     ///
     /// READY-bearing admission uses this entry point so no competing ordinary
@@ -25461,7 +24500,6 @@ impl Kura {
             ));
         }
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
-
         let _guard = self.sidecar_lock.lock();
         if let Some(autonomous) = self
             .read_current_autonomous_lane_block_record_self_context_locked(
@@ -25648,7 +24686,6 @@ impl Kura {
             }
             return Ok(());
         }
-
         let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
@@ -25721,7 +24758,6 @@ impl Kura {
         self.note_committed_lane_status_change();
         Ok(())
     }
-
     /// Return the bounded durable latest-certified frontier for an active lane.
     ///
     /// Ordinary publication advances only when neither proposal height nor
@@ -25738,7 +24774,6 @@ impl Kura {
     ) -> Option<CertifiedLaneBlockArtifact> {
         self.latest_certified_lane_block_frontier_inner(lane_id, None)
     }
-
     #[cfg(test)]
     pub(crate) fn latest_certified_lane_block_frontier_with_authority(
         &self,
@@ -25747,7 +24782,6 @@ impl Kura {
     ) -> Option<CertifiedLaneBlockArtifact> {
         self.latest_certified_lane_block_frontier_inner(lane_id, Some(authority))
     }
-
     fn ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -25777,7 +24811,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Read and authenticate one active lane's latest certified frontier
     /// without repairing, syncing, publishing, or updating validation caches.
     ///
@@ -25899,7 +24932,6 @@ impl Kura {
         )?;
         Ok(Some((artifact.clone(), pair_repair_required)))
     }
-
     /// Read one exact active certified lane slot without writer recovery or
     /// durability barriers. Any unresolved recovery artifact fails closed.
     pub(crate) fn read_certified_lane_block_artifact_read_only(
@@ -25943,7 +24975,6 @@ impl Kura {
         }
         Ok(artifact)
     }
-
     fn latest_certified_lane_block_frontier_inner(
         &self,
         lane_id: LaneId,
@@ -26024,7 +25055,6 @@ impl Kura {
         );
         (!self.prune_recovery_is_required()).then_some(frontier_read.frontier.artifact)
     }
-
     /// Return the highest valid certified standalone lane block for a lane and dataspace.
     #[must_use]
     pub fn latest_certified_lane_block_artifact_for_dataspace(
@@ -26036,7 +25066,6 @@ impl Kura {
             artifact.proposal.descriptor.dataspace_id == dataspace_id
         })
     }
-
     /// Return the highest valid certified lane block accepted by `accept`.
     ///
     /// The authenticated latest frontier is tried before the bounded historical
@@ -26131,7 +25160,6 @@ impl Kura {
             .into_iter()
             .find(|artifact| rejected_frontier.as_ref() != Some(artifact) && accept(artifact))
     }
-
     /// Return the first valid certified lane block at or above `minimum_height`
     /// accepted by `accept`.
     ///
@@ -26216,7 +25244,6 @@ impl Kura {
         };
         candidates.into_iter().find(|artifact| accept(artifact))
     }
-
     /// Return up to `limit` newest valid certified lane blocks accepted by `accept`.
     ///
     /// Results are returned in ascending lane-height order. The reverse scan is
@@ -26307,7 +25334,6 @@ impl Kura {
         artifacts.reverse();
         artifacts
     }
-
     /// Return all valid certified standalone lane blocks for a lane and dataspace.
     ///
     /// Artifacts are returned in ascending lane-local height order. Malformed,
@@ -26324,7 +25350,6 @@ impl Kura {
             artifact.proposal.descriptor.dataspace_id == dataspace_id
         })
     }
-
     /// Return valid certified lane blocks accepted by `accept` in lane-height order.
     ///
     /// The active geometry marker is enforced during the index scan before the
@@ -26404,7 +25429,6 @@ impl Kura {
             .filter(|artifact| accept(artifact))
             .collect()
     }
-
     fn read_certified_lane_block_artifact_from_paths_durability_attested_locked(
         &self,
         lane_id: LaneId,
@@ -26451,7 +25475,6 @@ impl Kura {
             }
         }
     }
-
     fn read_certified_lane_block_artifact_from_bound_locked(
         &self,
         lane_id: LaneId,
@@ -26474,7 +25497,6 @@ impl Kura {
         }
         Some(artifact)
     }
-
     fn read_certified_lane_block_artifact_structural_from_bound_locked(
         &self,
         lane_id: LaneId,
@@ -26503,7 +25525,6 @@ impl Kura {
         }
         Some(artifact)
     }
-
     fn read_active_certified_lane_block_artifact_from_paths_durability_attested_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -26532,7 +25553,6 @@ impl Kura {
         }
         Some(artifact)
     }
-
     fn read_active_certified_lane_block_artifact_from_bound_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -26556,7 +25576,6 @@ impl Kura {
         }
         Some(artifact)
     }
-
     fn decode_autonomous_lane_block_latest_attempt(
         path: &Path,
         bytes: &[u8],
@@ -26594,15 +25613,12 @@ impl Kura {
         }
         Ok(pointer)
     }
-
     fn autonomous_lifecycle_process_generation_path_for(store_root: &Path) -> PathBuf {
         store_root.join(AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_FILE)
     }
-
     fn autonomous_lifecycle_process_generation_temp_path_for(store_root: &Path) -> PathBuf {
         store_root.join(AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_TEMP_FILE)
     }
-
     fn decode_autonomous_lifecycle_process_generation_record(
         path: &Path,
         bytes: &[u8],
@@ -26633,7 +25649,6 @@ impl Kura {
         }
         Ok(record)
     }
-
     fn read_autonomous_lifecycle_process_generation_record_for(
         store_root: &Path,
     ) -> Result<Option<(AutonomousLifecycleProcessGenerationRecordV1, Vec<u8>)>> {
@@ -26697,7 +25712,6 @@ impl Kura {
         }
         Self::read_autonomous_lifecycle_process_generation_stable_record_for(store_root)
     }
-
     fn read_autonomous_lifecycle_process_generation_stable_record_for(
         store_root: &Path,
     ) -> Result<Option<(AutonomousLifecycleProcessGenerationRecordV1, Vec<u8>)>> {
@@ -26714,19 +25728,16 @@ impl Kura {
         let record = Self::decode_autonomous_lifecycle_process_generation_record(&path, &bytes)?;
         Ok(Some((record, bytes)))
     }
-
     fn read_autonomous_lifecycle_process_generation_record(
         &self,
     ) -> Result<Option<(AutonomousLifecycleProcessGenerationRecordV1, Vec<u8>)>> {
         Self::read_autonomous_lifecycle_process_generation_record_for(&self.store_root)
     }
-
     fn read_autonomous_lifecycle_process_generation_stable_record(
         &self,
     ) -> Result<Option<(AutonomousLifecycleProcessGenerationRecordV1, Vec<u8>)>> {
         Self::read_autonomous_lifecycle_process_generation_stable_record_for(&self.store_root)
     }
-
     fn validate_autonomous_lifecycle_process_generation_claim(
         &self,
         claim: &AutonomousLifecycleProcessGenerationClaim,
@@ -26757,7 +25768,6 @@ impl Kura {
         }
         Ok(record)
     }
-
     fn validate_autonomous_lifecycle_cursor_process_generation(
         record: &AutonomousLifecycleProcessGenerationRecordV1,
         cursor: &AutonomousLifecycleCursorV2,
@@ -26781,7 +25791,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn audit_retained_autonomous_lifecycle_cursor_generations(&self) -> Result<()> {
         let process_generation = self
             .read_autonomous_lifecycle_process_generation_record()?
@@ -26974,7 +25983,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn write_autonomous_lifecycle_process_generation_record(
         &self,
         expected_bytes: Option<&[u8]>,
@@ -27047,7 +26055,6 @@ impl Kura {
         }
         Ok(bytes)
     }
-
     /// Atomically claim the next durable process generation for this Kura root.
     ///
     /// Repeating the exact claim on one live Kura instance is idempotent. A
@@ -27171,7 +26178,6 @@ impl Kura {
         }
         Ok(claim)
     }
-
     fn decode_autonomous_lifecycle_bootstrap(
         path: &Path,
         bytes: &[u8],
@@ -27221,7 +26227,6 @@ impl Kura {
         }
         Ok(bootstrap)
     }
-
     fn validate_autonomous_lifecycle_bootstrap_process_generation(
         current: &AutonomousLifecycleProcessGenerationRecordV1,
         bootstrap: &AutonomousLifecycleBootstrapV1,
@@ -27250,7 +26255,6 @@ impl Kura {
             &bootstrap.body.live_activate,
         )
     }
-
     fn decode_autonomous_lifecycle_cursor(
         path: &Path,
         bytes: &[u8],
@@ -27299,7 +26303,6 @@ impl Kura {
         }
         Ok(cursor)
     }
-
     fn validate_autonomous_lifecycle_cursor_successor(
         lease: &AutonomousLifecycleCursorLease,
         current: Option<&AutonomousLifecycleCursorV2>,
@@ -27472,7 +26475,6 @@ impl Kura {
             _ => Err("autonomous lifecycle cursor phase transition is not contiguous"),
         }
     }
-
     /// Seal one source-specific, internally derived evidence identity to ActivateKura.
     ///
     /// This helper is deliberately private. Public source-specific minting
@@ -27522,7 +26524,6 @@ impl Kura {
             activate_kura,
         })
     }
-
     fn autonomous_lifecycle_payload_custody_evidence_hash(
         domain: &[u8],
         evidence: &impl Encode,
@@ -27530,7 +26531,6 @@ impl Kura {
         let encoded = norito::encode_canonical(evidence).map_err(Error::NoritoFrame)?;
         Ok(Hash::new_from_chunks(&[domain, &encoded]))
     }
-
     fn finish_autonomous_lifecycle_payload_custody_authorization(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -27550,7 +26550,6 @@ impl Kura {
         )
         .map_err(|message| Self::invalid_lane_artifact_error(self.store_root.clone(), message))
     }
-
     /// Authenticate a losing locally-produced payload from its exact terminal
     /// slot retirement. The full typed retirement is hashed internally; no
     /// caller can substitute an arbitrary source or evidence digest.
@@ -27588,7 +26587,6 @@ impl Kura {
             checked_activate_kura,
         )
     }
-
     /// Authenticate payload bytes reconstructed from their exact durable
     /// canonical block and verified global finality artifact.
     pub(crate) fn authorize_canonical_carrier_repair_payload_custody(
@@ -27727,7 +26725,6 @@ impl Kura {
             checked_activate_kura,
         )
     }
-
     /// Authenticate payload custody from the exact protected live global
     /// carrier. The complete frozen context, lock round, subject, local peer,
     /// proposal, and executable identity enter the signed custody digest.
@@ -27814,7 +26811,6 @@ impl Kura {
             checked_activate_kura,
         )
     }
-
     /// Authenticate an autonomous payload from one exact outstanding-request
     /// response carrying matching Prepare/Commit and READY authority.
     #[allow(clippy::too_many_arguments)]
@@ -27976,7 +26972,6 @@ impl Kura {
             checked_activate_kura,
         )
     }
-
     /// Authenticate the full State-preflighted historical recovery record
     /// before any dependent autonomous payload or execution-input sidecar is
     /// written. The durable signed bootstrap becomes the crash fence until the
@@ -28043,7 +27038,6 @@ impl Kura {
             checked_activate_kura,
         )
     }
-
     /// Consume one source-specific custody authority as either an exact
     /// already-durable stutter or a bootstrap requirement. A retained
     /// bootstrap always wins over the stutter so crash recovery cannot strand
@@ -28186,7 +27180,6 @@ impl Kura {
         }
         Ok(Some(authorization))
     }
-
     fn validate_autonomous_lifecycle_bootstrap_producer_queue_authentication_facts(
         body: &AutonomousLifecycleBootstrapBodyV1,
         height_context_id: HeightContextId,
@@ -28260,7 +27253,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn validate_autonomous_lifecycle_bootstrap_payload_custody_authorization(
         body: &AutonomousLifecycleBootstrapBodyV1,
         authorization: &AutonomousLifecyclePayloadCustodyAuthorization,
@@ -28278,7 +27270,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn classify_autonomous_lifecycle_bootstrap_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -28364,7 +27355,6 @@ impl Kura {
             )),
         }
     }
-
     fn autonomous_lifecycle_bootstrap_authority_locked(
         &self,
         process_generation: &AutonomousLifecycleProcessGenerationClaim,
@@ -28390,7 +27380,6 @@ impl Kura {
             stage,
         })
     }
-
     #[cfg(test)]
     fn refresh_autonomous_lifecycle_bootstrap_authority(
         &self,
@@ -28457,7 +27446,6 @@ impl Kura {
             bootstrap,
         )
     }
-
     /// Return every signed bootstrap for one active route in deterministic attempt order.
     pub(crate) fn autonomous_lifecycle_bootstrap_recovery_inventory(
         &self,
@@ -28596,7 +27584,6 @@ impl Kura {
         }
         Ok(inventory)
     }
-
     fn autonomous_lifecycle_bootstrap_body_with_authentication(
         &self,
         process_generation: &AutonomousLifecycleProcessGenerationClaim,
@@ -28661,7 +27648,6 @@ impl Kura {
         .map_err(|message| Self::invalid_lane_artifact_error(self.store_root.clone(), message))?;
         Ok(body)
     }
-
     /// Build the exact full-body producer bootstrap signature preimage.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn autonomous_lifecycle_bootstrap_signing_preimage(
@@ -28691,7 +27677,6 @@ impl Kura {
         .signing_preimage()
         .map_err(Error::NoritoFrame)
     }
-
     /// Build the exact full-body non-Queue bootstrap signature preimage.
     #[allow(clippy::too_many_arguments)]
     #[allow(dead_code)]
@@ -28715,7 +27700,6 @@ impl Kura {
         .signing_preimage()
         .map_err(Error::NoritoFrame)
     }
-
     /// Persist a fully signed lifecycle bootstrap before any payload mutation.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn persist_autonomous_lifecycle_bootstrap(
@@ -28745,7 +27729,6 @@ impl Kura {
             },
         )
     }
-
     /// Persist a signed bootstrap under one exact non-Queue payload-custody authority.
     #[allow(clippy::too_many_arguments)]
     #[allow(dead_code)] // Called by source-specific audited persistence adapters.
@@ -28769,7 +27752,6 @@ impl Kura {
             AutonomousLifecycleBootstrapPersistenceAuthentication::PayloadCustody(&authorization),
         )
     }
-
     #[allow(clippy::too_many_arguments)]
     fn persist_autonomous_lifecycle_bootstrap_with_authentication(
         &self,
@@ -28962,7 +27944,6 @@ impl Kura {
             readback_bootstrap,
         )
     }
-
     /// Recheck a recovery authority under a live Queue activation fence.
     pub(crate) fn authenticate_autonomous_lifecycle_bootstrap_recovery<'queue>(
         &self,
@@ -28993,7 +27974,6 @@ impl Kura {
             fence: AutonomousLifecycleBootstrapCompletionFence::ProducerQueue(authorization),
         })
     }
-
     /// Authorize non-Queue recovery from the already-durable locally signed bootstrap.
     ///
     /// Source-specific evidence was authenticated before this bootstrap could
@@ -29029,7 +28009,6 @@ impl Kura {
             fence: AutonomousLifecycleBootstrapCompletionFence::DurablePayloadCustody,
         })
     }
-
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn autonomous_lifecycle_bootstrap_signing_preimage_for_tests(
@@ -29062,7 +28041,6 @@ impl Kura {
         .signing_preimage()
         .map_err(Error::NoritoFrame)
     }
-
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn persist_autonomous_lifecycle_bootstrap_for_tests(
@@ -29095,7 +28073,6 @@ impl Kura {
             },
         )
     }
-
     #[cfg(test)]
     fn authenticate_autonomous_lifecycle_bootstrap_recovery_for_tests(
         &self,
@@ -29130,7 +28107,6 @@ impl Kura {
             fence: AutonomousLifecycleBootstrapCompletionFence::Test,
         })
     }
-
     fn delete_completed_autonomous_lifecycle_bootstrap(
         &self,
         authority: &AutonomousLifecycleBootstrapRecoveryAuthority,
@@ -29229,7 +28205,6 @@ impl Kura {
         }
         Ok(receipt_terminal)
     }
-
     fn consume_autonomous_lifecycle_bootstrap_completion_fence(
         fence: AutonomousLifecycleBootstrapCompletionFence<'_>,
     ) {
@@ -29242,7 +28217,6 @@ impl Kura {
             AutonomousLifecycleBootstrapCompletionFence::Test => {}
         }
     }
-
     /// Complete the exact bootstrap stages while retaining its typed custody fence.
     pub(crate) fn complete_autonomous_lifecycle_bootstrap(
         &self,
@@ -29347,7 +28321,6 @@ impl Kura {
             },
         ))
     }
-
     /// Read one exact lifecycle cursor and mint a single-use CAS lease.
     ///
     /// An absent cursor still returns a lease. The lease records authenticated
@@ -29437,7 +28410,6 @@ impl Kura {
             },
         })
     }
-
     /// Return every retained local-committee lifecycle attempt for one exact
     /// active route/incarnation in deterministic lane/proposal order.
     ///
@@ -29465,7 +28437,6 @@ impl Kura {
             &[],
         )
     }
-
     /// Return attempts while accepting exact Pending groups covered by the immutable startup planner.
     ///
     /// Sources are revalidated; stale, duplicate, unused, or unlisted groups fail.
@@ -29490,7 +28461,6 @@ impl Kura {
             planner_covered_pending_groups,
         )
     }
-
     /// Read retained local-committee lifecycle attempts without claiming a new process generation.
     ///
     /// This observer-safe path authenticates the existing durable process-generation record against
@@ -29539,7 +28509,6 @@ impl Kura {
             &[],
         )
     }
-
     /// Observer-safe counterpart of
     /// [`Self::active_autonomous_lifecycle_attempt_inventory_with_planner_covered_pending_groups`].
     /// Exact covered Pending attempts are source-validated only for signed identity pairing; callers must not Crash/Recover them.
@@ -29584,7 +28553,6 @@ impl Kura {
             planner_covered_pending_groups,
         )
     }
-
     fn ensure_autonomous_lifecycle_process_generation_record_unchanged(
         &self,
         expected: &AutonomousLifecycleProcessGenerationRecordV1,
@@ -29600,7 +28568,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Atomically compare and swap one exact lifecycle cursor.
     ///
     /// The move-only lease binds the path, prior canonical bytes and digest,
@@ -29823,9 +28790,7 @@ impl Kura {
         })
     }
 }
-
 include!("kura/autonomous_lifecycle_terminal_outcomes.rs");
-
 impl Kura {
     fn read_autonomous_lane_block_latest_attempt_locked(
         &self,
@@ -29869,7 +28834,6 @@ impl Kura {
         }
         Ok(Some(pointer))
     }
-
     fn read_autonomous_lane_route_latest_attempt_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -29905,7 +28869,6 @@ impl Kura {
         }
         Ok(Some(pointer))
     }
-
     fn read_autonomous_lane_block_attempt_artifact_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -29928,7 +28891,6 @@ impl Kura {
             view_state_mode,
         )
     }
-
     fn read_autonomous_lane_block_attempt_artifact_with_view_state_mode_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -30018,11 +28980,9 @@ impl Kura {
             view_state_path,
         })
     }
-
     fn autonomous_lane_block_view_state_temp_path(path: &Path) -> PathBuf {
         path.with_extension("norito.tmp")
     }
-
     fn decode_autonomous_lane_block_view_state(
         path: &Path,
         bytes: &[u8],
@@ -30045,7 +29005,6 @@ impl Kura {
             })?;
         Ok(state)
     }
-
     /// Read the independently replaceable view suffix. A present but malformed
     /// file fails closed; it is never treated as an empty/origin view.
     fn read_autonomous_lane_block_view_state_locked(
@@ -30062,7 +29021,6 @@ impl Kura {
                 current: LaneBlockProposalV1,
             },
         }
-
         let temp_path = Self::autonomous_lane_block_view_state_temp_path(path);
         let parent = path.parent().ok_or_else(|| {
             Self::invalid_lane_artifact_error(
@@ -30149,7 +29107,6 @@ impl Kura {
             };
         }
         let temp = load_candidate(&temp_path)?;
-
         let recovery_rank = |state: &AutonomousLaneBlockViewState,
                              current: &LaneBlockProposalV1| {
             (
@@ -30231,7 +29188,6 @@ impl Kura {
                 replacement_len,
             )?;
         }
-
         let tracked_before = self
             .regular_sidecar_metadata(path, parent)?
             .map_or(0, |metadata| metadata.file.len())
@@ -30306,7 +29262,6 @@ impl Kura {
         }
         result
     }
-
     fn write_autonomous_lane_block_view_state_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -30332,7 +29287,6 @@ impl Kura {
             expected_epoch,
         )
     }
-
     fn write_autonomous_lane_block_view_state_record_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -30453,7 +29407,6 @@ impl Kura {
         after?;
         Ok(())
     }
-
     fn write_autonomous_lane_block_attempt_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -30656,7 +29609,6 @@ impl Kura {
         let artifact_after = Self::file_len_or_zero(&artifact_path)?;
         self.update_disk_usage_delta(artifact_before, artifact_after);
         accounting_mutation.finish();
-
         let view_state_path = Self::autonomous_lane_block_attempt_view_state_path_for_entry(
             entry,
             &self.store_root,
@@ -30673,7 +29625,6 @@ impl Kura {
         )?;
         Ok(AutonomousLaneBlockLatestAttemptV1::from_payload(payload))
     }
-
     fn publish_autonomous_lane_block_latest_attempt_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -30744,7 +29695,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn publish_autonomous_lane_route_latest_attempt_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -30811,28 +29761,20 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn decode_autonomous_lane_entrypoint_claim(
         path: &Path,
     ) -> std::result::Result<AutonomousLaneEntrypointClaimV3, &'static str> {
-        let metadata = std::fs::symlink_metadata(path)
-            .map_err(|_| "failed to inspect autonomous entrypoint claim")?;
-        if metadata.file_type().is_symlink()
-            || !metadata.file_type().is_file()
-            || !Self::sidecar_is_single_link(&metadata)
-        {
-            return Err("autonomous entrypoint claim is not a single-link regular no-follow file");
-        }
-        if metadata.len()
-            > u64::try_from(AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES).unwrap_or(u64::MAX)
-        {
-            return Err("autonomous entrypoint claim exceeds hard byte limit");
-        }
-        let bytes =
-            std::fs::read(path).map_err(|_| "failed to read autonomous entrypoint claim")?;
-        if bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
-            return Err("autonomous entrypoint claim exceeds hard byte limit");
-        }
+        let directory = path
+            .parent()
+            .ok_or("autonomous entrypoint claim has no parent directory")?;
+        let bytes = Self::read_regular_sidecar_bytes_for(
+            directory,
+            path,
+            directory,
+            AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES,
+        )
+        .map_err(|_| "failed stable bounded read of autonomous entrypoint claim")?
+        .ok_or("autonomous entrypoint claim disappeared during bounded read")?;
         let claim = norito::decode_canonical::<AutonomousLaneEntrypointClaimV3>(&bytes)
             .map_err(|_| "failed to decode autonomous entrypoint claim")?;
         if claim.version != AutonomousLaneEntrypointClaimV3::VERSION
@@ -30855,7 +29797,6 @@ impl Kura {
         }
         Ok(claim)
     }
-
     fn autonomous_lane_entrypoint_claim_path_matches(
         &self,
         claim: &AutonomousLaneEntrypointClaimV3,
@@ -30867,7 +29808,6 @@ impl Kura {
             &claim.entrypoint_hash,
         ) == path
     }
-
     fn autonomous_lane_entrypoint_claim_file_exists(path: &Path) -> Result<bool> {
         match std::fs::symlink_metadata(path) {
             Ok(metadata)
@@ -30885,7 +29825,6 @@ impl Kura {
             Err(error) => Err(Error::IO(error, path.to_path_buf())),
         }
     }
-
     /// Inspect the complete claim namespace without mutating it.
     ///
     /// Main and crash-staged temp claims each consume one inventory slot.
@@ -30993,7 +29932,6 @@ impl Kura {
         }
         Ok(files_seen)
     }
-
     fn autonomous_lane_entrypoint_claim_is_superseded_by_active_recreation_locked(
         &self,
         existing: &AutonomousLaneEntrypointClaimV3,
@@ -31022,7 +29960,6 @@ impl Kura {
             && (existing.lane_incarnation != active_incarnation
                 || existing.proposal_height <= activation_height))
     }
-
     fn promote_autonomous_lane_entrypoint_claim_temp(temp_path: &Path, path: &Path) -> Result<()> {
         let temp = std::fs::OpenOptions::new()
             .read(true)
@@ -31039,7 +29976,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Check one exact indexed lane-height slot without invoking sidecar
     /// recovery. This is used only to resolve a claim temp after a crash; a
     /// malformed or in-progress index is conservatively treated as occupied.
@@ -31082,13 +30018,11 @@ impl Kura {
             Err(_) => true,
         }
     }
-
     fn reconcile_autonomous_lane_entrypoint_claim_temps_on_startup_locked(&self) -> Result<()> {
         self.reconcile_autonomous_lane_entrypoint_claim_temps_on_startup_with_limit_locked(
             MAX_AUTONOMOUS_LANE_CLAIM_FILES,
         )
     }
-
     fn reconcile_autonomous_lane_entrypoint_claim_temps_on_startup_with_limit_locked(
         &self,
         max_files: usize,
@@ -31262,7 +30196,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn remove_autonomous_lane_entrypoint_claim_file(&self, path: &Path) -> Result<()> {
         if !Self::autonomous_lane_entrypoint_claim_file_exists(path)? {
             return Ok(());
@@ -31277,7 +30210,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn prepare_autonomous_lane_entrypoint_claims_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -31289,7 +30221,6 @@ impl Kura {
             MAX_AUTONOMOUS_LANE_CLAIM_FILES,
         )
     }
-
     fn prepare_autonomous_lane_entrypoint_claims_with_limit_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -31312,7 +30243,6 @@ impl Kura {
                 &incoming.entrypoint_hash,
             );
             let temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(&path);
-
             let existing = if Self::autonomous_lane_entrypoint_claim_file_exists(&path)? {
                 let existing = Self::decode_autonomous_lane_entrypoint_claim(&path)
                     .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
@@ -31349,7 +30279,6 @@ impl Kura {
             } else {
                 None
             };
-
             if Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
                 let pending = Self::decode_autonomous_lane_entrypoint_claim(&temp_path).map_err(
                     |message| Self::invalid_lane_artifact_error(temp_path.clone(), message),
@@ -31382,7 +30311,6 @@ impl Kura {
                 }
                 self.remove_autonomous_lane_entrypoint_claim_file(&temp_path)?;
             }
-
             let Some(parent) = path.parent() else {
                 return Err(Self::invalid_lane_artifact_error(
                     path,
@@ -31419,7 +30347,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(staged)
     }
-
     fn finalize_autonomous_lane_entrypoint_claims_locked(
         &self,
         staged: &[(PathBuf, AutonomousLaneEntrypointClaimV3)],
@@ -31467,7 +30394,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     /// Durably transition every exact entrypoint owner through one release phase.
     ///
     /// Individual claim replacements are atomic. The full group is validated
@@ -31492,7 +30418,6 @@ impl Kura {
                 .map_err(|message| {
                     Self::invalid_lane_artifact_error(self.store_root.clone(), message)
                 })?;
-
         struct ObservedClaim {
             path: PathBuf,
             temp_path: PathBuf,
@@ -31504,7 +30429,6 @@ impl Kura {
             pending: AutonomousLaneEntrypointClaimV3,
             released: AutonomousLaneEntrypointClaimV3,
         }
-
         struct PlannedClaim {
             path: PathBuf,
             temp_path: PathBuf,
@@ -31518,7 +30442,6 @@ impl Kura {
                 AutonomousLaneEntrypointClaimTransitionAuthorization,
             )>,
         }
-
         // Read and validate the complete ordered group before promoting a
         // crash temp, removing a redundant temp, or replacing a main claim.
         // The only crash-reachable layouts are Pending*/Active* while Queue
@@ -31597,7 +30520,6 @@ impl Kura {
                     ));
                 }
             }
-
             let pending = AutonomousLaneEntrypointClaimV3::release_pending_for_payload(
                 payload,
                 *entrypoint_hash,
@@ -31642,7 +30564,6 @@ impl Kura {
                 released,
             });
         }
-
         let mut previous_stage = 2_u8;
         let mut saw_active = false;
         let mut saw_released = false;
@@ -31669,7 +30590,6 @@ impl Kura {
                 "autonomous entrypoint release requires the exact ReleasePending prefix",
             ));
         }
-
         let released_prefix = u64::try_from(
             observed.iter().take_while(|claim| claim.stage == 2).count(),
         )
@@ -31752,7 +30672,6 @@ impl Kura {
                 "autonomous release does not form one complete ordered durable prefix",
             ));
         }
-
         // Model the entire ordered release group before touching the first
         // named temp or stable claim. Atomic replacement writes overlap the
         // current main; completed prefixes then change the baseline seen by
@@ -31793,7 +30712,6 @@ impl Kura {
             false,
             &capacity_path,
         )?;
-
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         for claim in plan {
             if claim.promote_temp {
@@ -31844,7 +30762,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn prepare_autonomous_lane_entrypoint_claim_release_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -31858,7 +30775,6 @@ impl Kura {
             false,
         )
     }
-
     fn finalize_autonomous_lane_entrypoint_claim_release_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -31872,7 +30788,6 @@ impl Kura {
             true,
         )
     }
-
     fn require_autonomous_lane_entrypoint_claims_released_locked(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -31903,7 +30818,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn require_autonomous_lane_release_completed_or_superseded_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -31975,7 +30889,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Prove that one signed lifecycle bootstrap still authorizes its exact
     /// payload while all Kura mutation-ordering locks are held.
     fn validate_signed_bootstrap_payload_persistence_locked(
@@ -32050,7 +30963,6 @@ impl Kura {
         }
         self.classify_autonomous_lifecycle_bootstrap_locked(entry, &authority.bootstrap)
     }
-
     /// Persist a producer-authenticated, lane-owned executable payload.
     ///
     /// The first valid payload owns the `(lane incarnation, lane height)` slot.
@@ -32148,7 +31060,6 @@ impl Kura {
                 )?;
                 return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted);
             }
-
             if existing_record.retirement.is_none()
                 && existing_payload
                     .origin_proposal
@@ -32199,7 +31110,6 @@ impl Kura {
                 )?;
                 return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted);
             }
-
             if let Some(retirement) = existing_record.retirement.as_ref() {
                 let previous = &existing_payload.origin_proposal.descriptor;
                 let successor = &payload.origin_proposal.descriptor;
@@ -32255,7 +31165,6 @@ impl Kura {
                 "conflicting autonomous lane payload already owns the active incarnation height",
             ));
         }
-
         let staged_claims = self
             .prepare_autonomous_lane_entrypoint_claims_locked(pending_canonical_bytes, payload)?;
         let attempt = AutonomousLaneBlockArtifact::new(payload.clone());
@@ -32281,7 +31190,6 @@ impl Kura {
         )?;
         Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted)
     }
-
     /// Test-only access to the low-level autonomous payload writer. Production
     /// code must cross a Queue or source-specific signed lifecycle bootstrap.
     #[cfg(test)]
@@ -32298,7 +31206,6 @@ impl Kura {
             LaneExecutablePayloadPersistenceMode::Ordinary,
         )
     }
-
     /// Durably close one exact autonomous lane-height slot before releasing its reservations.
     ///
     /// The supplied record must be the canonical identity derived from the already durable
@@ -32407,7 +31314,6 @@ impl Kura {
                 "certified autonomous lane block cannot be retired",
             ));
         }
-
         let mut state = AutonomousLaneBlockViewState::from_artifact(&record.artifact);
         state.retirement = Some(retirement.clone());
         let authorization = self
@@ -32465,7 +31371,6 @@ impl Kura {
         )?;
         Ok(retirement.clone())
     }
-
     fn autonomous_lane_entrypoint_claim_release_progress_locked(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -32538,9 +31443,7 @@ impl Kura {
         Ok((pending_prefix, released_prefix))
     }
 }
-
 include!("kura/autonomous_release_authority.rs");
-
 impl Kura {
     /// Read and fully revalidate the durable retirement for one active lane-height slot.
     ///
@@ -32593,7 +31496,6 @@ impl Kura {
         }
         Ok(record.and_then(|record| record.retirement))
     }
-
     /// Return whether an active lane slot is already at or below durable certification.
     ///
     /// The caller holds the lane-geometry and sidecar locks. Neither frontier
@@ -32646,7 +31548,6 @@ impl Kura {
         }
         Ok(exact_slot)
     }
-
     /// Persist the availability DELIVER certificate for an autonomous payload.
     ///
     /// The certificate is stored in the independently replaceable bounded
@@ -32761,7 +31662,6 @@ impl Kura {
             expected_epoch,
         )
     }
-
     /// Return whether an exact immutable origin proposal has a
     /// restart-verifiable payload availability DELIVER certificate.
     #[cfg(test)]
@@ -32794,10 +31694,8 @@ impl Kura {
                 })
         })
     }
-
     kura_autonomous_reservation_classifier_methods!();
     kura_historical_autonomous_recovery_methods!();
-
     /// Append one fully authenticated, contiguous NewView certificate to a
     /// durable lane-owned payload, unless its immutable origin is already
     /// durably applied.
@@ -32812,7 +31710,6 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
-
         // Authenticate the requested transition against the logical winner of
         // the stable main and crash-temp view states without promoting or
         // deleting either file. This gives us the exact immutable origin needed
@@ -32862,7 +31759,6 @@ impl Kura {
         ) {
             return Ok(LaneBlockNewViewPersistenceOutcome::AlreadyTerminal);
         }
-
         self.durable_mutation_authorized()?;
         let pending_canonical_bytes =
             self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
@@ -32944,7 +31840,6 @@ impl Kura {
         )?;
         Ok(LaneBlockNewViewPersistenceOutcome::Persisted(target))
     }
-
     /// Read and fully revalidate a lane-owned payload and all contiguous view proofs.
     #[must_use]
     pub(crate) fn read_autonomous_lane_block_artifact(
@@ -32962,7 +31857,6 @@ impl Kura {
             true,
         )
     }
-
     fn read_autonomous_lane_block_artifact_with_recovery_policy(
         &self,
         lane_id: LaneId,
@@ -32999,7 +31893,6 @@ impl Kura {
             None,
         )
     }
-
     /// Read an autonomous payload while the caller holds `lane_geometry_lock`.
     fn read_autonomous_lane_block_artifact_geometry_locked(
         &self,
@@ -33023,7 +31916,6 @@ impl Kura {
             pending_canonical_bytes,
         )
     }
-
     /// Return the validated executable payload and current synthetic NewView cursor.
     ///
     /// The second value is suitable only for validating or extending the
@@ -33051,7 +31943,6 @@ impl Kura {
         .ok()?;
         Some((artifact.executable_payload, current))
     }
-
     /// Return the validated payload and its immutable certification proposal.
     ///
     /// The full NewView chain is still validated before this accessor returns,
@@ -33080,7 +31971,6 @@ impl Kura {
         let origin = artifact.executable_payload.origin_proposal.clone();
         Some((artifact.executable_payload, origin))
     }
-
     /// Explicitly reconstruct the bounded route/incarnation latest pointers.
     ///
     /// This is the only autonomous path that scans the versioned attempt
@@ -33922,7 +32812,6 @@ impl Kura {
         self.reconcile_autonomous_lane_entrypoint_claim_temps_on_startup_locked()?;
         Ok(())
     }
-
     /// Revalidate or reconstruct each active route's terminal merge cursor and
     /// finish any prefix compaction interrupted after receipt durability.
     fn repair_lane_merge_application_frontiers_on_startup(&self) -> Result<()> {
@@ -34021,7 +32910,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Return at most `limit` newest fully validated autonomous payloads across
     /// active routes.
     ///
@@ -34130,7 +33018,6 @@ impl Kura {
             Ok(recovered)
         }
     }
-
     fn read_autonomous_lane_block_artifact_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -34169,7 +33056,6 @@ impl Kura {
             }
         }
     }
-
     fn read_autonomous_lane_block_record_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -34204,7 +33090,6 @@ impl Kura {
         }
         Ok(None)
     }
-
     #[allow(clippy::too_many_arguments)]
     fn read_autonomous_lane_block_attempt_record_locked(
         &self,
@@ -34275,7 +33160,6 @@ impl Kura {
         }
         Ok(None)
     }
-
     fn read_current_autonomous_lane_block_record_self_context_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -34297,7 +33181,6 @@ impl Kura {
         }
         Ok(None)
     }
-
     fn recover_lane_block_execution_input_source(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -34323,7 +33206,6 @@ impl Kura {
             _ => Err(LaneBlockPayloadAvailability::DescriptorMismatch),
         }
     }
-
     /// Read durable recovered payload input for a certified standalone lane block.
     ///
     /// Returns `None` when the artifact is absent, malformed, belongs to a
@@ -34338,7 +33220,6 @@ impl Kura {
     ) -> Option<LaneBlockExecutionInputArtifact> {
         self.read_lane_block_execution_input_with_repair_policy(lane_id, lane_block_height, true)
     }
-
     fn read_lane_block_execution_input_with_repair_policy(
         &self,
         lane_id: LaneId,
@@ -34379,7 +33260,6 @@ impl Kura {
         }
         (!self.prune_recovery_is_required()).then_some(artifact)
     }
-
     fn read_active_lane_block_execution_input_structural(
         &self,
         lane_id: LaneId,
@@ -34413,7 +33293,6 @@ impl Kura {
         }
         Some(artifact)
     }
-
     #[cfg(test)]
     pub(crate) fn lane_block_execution_input_available(
         &self,
@@ -34425,7 +33304,6 @@ impl Kura {
         )
         .is_some_and(|artifact| artifact.proposal == *proposal)
     }
-
     fn lane_block_execution_input_matches_canonical_payload(
         &self,
         artifact: &LaneBlockExecutionInputArtifact,
@@ -34460,7 +33338,6 @@ impl Kura {
             }
         }
     }
-
     fn read_lane_block_execution_input_from_paths_locked(
         &self,
         lane_id: LaneId,
@@ -34501,7 +33378,6 @@ impl Kura {
             Some(artifact)
         })
     }
-
     /// Persist direct-execution preflight results for a recovered standalone lane block.
     ///
     /// # Errors
@@ -34547,7 +33423,6 @@ impl Kura {
         );
         self.write_lane_block_execution_preflight_artifact(&artifact)
     }
-
     #[cfg(test)]
     fn write_lane_block_execution_preflight_artifact(
         &self,
@@ -34566,13 +33441,11 @@ impl Kura {
                 "lane execution preflight height must be non-zero",
             ));
         }
-
         let observed_existing = self.read_active_lane_block_execution_preflight_structural(
             lane_id,
             lane_block_height,
             true,
         );
-
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
         self.require_active_lane_artifact(&entry, descriptor)?;
@@ -34586,7 +33459,6 @@ impl Kura {
         };
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
-
         let _guard = self.sidecar_lock.lock();
         if let Some(existing) = Self::read_indexed_sidecar_from_paths(
             lane_block_height,
@@ -34642,7 +33514,6 @@ impl Kura {
                 "overwriting stale lane execution preflight sidecar"
             );
         }
-
         let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
@@ -34693,7 +33564,6 @@ impl Kura {
         self.note_committed_lane_status_change();
         Ok(())
     }
-
     /// Read a durable lane-block direct-execution preflight result.
     ///
     /// Returns `None` when the artifact is absent, malformed, belongs to a
@@ -34711,7 +33581,6 @@ impl Kura {
             true,
         )
     }
-
     fn read_lane_block_execution_preflight_with_repair_policy(
         &self,
         lane_id: LaneId,
@@ -34752,7 +33621,6 @@ impl Kura {
         }
         (!self.prune_recovery_is_required()).then_some(artifact)
     }
-
     fn read_active_lane_block_execution_preflight_structural(
         &self,
         lane_id: LaneId,
@@ -34786,7 +33654,6 @@ impl Kura {
         }
         Some(artifact)
     }
-
     #[cfg(test)]
     pub(crate) fn lane_block_execution_preflight_has_rejections(
         &self,
@@ -34807,7 +33674,6 @@ impl Kura {
             None
         }
     }
-
     /// Return whether the proposal's immediate predecessor has an authenticated
     /// application receipt for the same lane, dataspace, and incarnation.
     ///
@@ -34821,7 +33687,6 @@ impl Kura {
     ) -> bool {
         self.lane_block_predecessor_application_receipt_available_with_repair_policy(proposal, true)
     }
-
     pub(crate) fn lane_block_predecessor_application_receipt_available_without_sidecar_repair(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -34830,7 +33695,6 @@ impl Kura {
             proposal, false,
         )
     }
-
     fn lane_block_predecessor_application_receipt_available_with_repair_policy(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -34876,7 +33740,6 @@ impl Kura {
                 )
             }
     }
-
     #[cfg(test)]
     pub(crate) fn read_preflighted_lane_block_execution_input_for_application(
         &self,
@@ -34915,7 +33778,6 @@ impl Kura {
             None
         }
     }
-
     fn lane_block_execution_preflight_matches_canonical_input(
         &self,
         artifact: &LaneBlockExecutionPreflightArtifact,
@@ -34935,7 +33797,6 @@ impl Kura {
             None => false,
         }
     }
-
     fn read_lane_block_execution_preflight_from_paths_locked(
         &self,
         lane_id: LaneId,
@@ -34977,7 +33838,6 @@ impl Kura {
             Some(artifact)
         })
     }
-
     /// Persist a canonical application receipt for a certified standalone lane block.
     ///
     /// The receipt records the committed transaction results from the canonical
@@ -35004,7 +33864,6 @@ impl Kura {
             })?;
         self.write_lane_block_application_receipt_artifact(&artifact)
     }
-
     fn native_amx_participant_application_evidence_for_block_under_publication_guard(
         &self,
         block: &SignedBlock,
@@ -35120,7 +33979,6 @@ impl Kura {
             artifacts: evidence,
         })
     }
-
     fn validate_native_amx_post_apply_metadata_under_publication_guard(
         &self,
         height: u64,
@@ -35156,7 +34014,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Publish and read back every Native AMX participant frontier before WSV
     /// can stage or commit the corresponding State transition.
     ///
@@ -35192,7 +34049,6 @@ impl Kura {
             NativeAmxParticipantApplicationPublicationMode::PreWsv,
         )
     }
-
     fn native_amx_manifest_leaf_matches_frontier_marker(
         leaf: &iroha_data_model::block::consensus_v2::NativeAmxApplicationManifestLeafV1,
         marker: &crate::state::AppliedNativeAmxParticipantFrontierMarker,
@@ -35218,7 +34074,6 @@ impl Kura {
             && leaf.application_block_hash == marker.application_block_hash
             && u64::try_from(leaf.members.len()).ok() == Some(marker.source_count)
     }
-
     fn native_amx_participant_application_repair_target_indices(
         &self,
         plan: &NativeAmxParticipantApplicationEvidencePlan,
@@ -35264,7 +34119,6 @@ impl Kura {
         }
         Ok(targets.into_iter().collect())
     }
-
     /// Read-only all-item preflight for State-owned Native participant repair.
     ///
     /// Every exact replicated frontier must occur once in the QC-authenticated
@@ -35294,7 +34148,6 @@ impl Kura {
             )?;
         Ok(())
     }
-
     /// Repair every Native AMX participant route after fresh WSV application.
     ///
     /// Fresh application owns the whole participant-route publication boundary. Startup
@@ -35348,7 +34201,6 @@ impl Kura {
             &target_indices,
         )
     }
-
     fn preflight_native_amx_participant_application_repair_targets_under_publication_guard(
         &self,
         plan: &NativeAmxParticipantApplicationEvidencePlan,
@@ -35405,7 +34257,6 @@ impl Kura {
         }
         Ok(preflights)
     }
-
     fn preflight_native_amx_participant_application_plan_under_publication_guard(
         &self,
         plan: &NativeAmxParticipantApplicationEvidencePlan,
@@ -35428,7 +34279,6 @@ impl Kura {
         }
         Ok(preflights)
     }
-
     fn preflight_native_amx_participant_application_route_under_publication_guard(
         &self,
         manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
@@ -35485,7 +34335,6 @@ impl Kura {
         )?;
         Ok(NativeAmxParticipantApplicationRoutePreflight { incoming, current })
     }
-
     fn preflight_native_amx_incoming_artifacts_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -35614,7 +34463,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn native_amx_fully_authenticated_evidence_for_latest_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -35675,7 +34523,6 @@ impl Kura {
         }
         Ok((manifest, receipt))
     }
-
     #[allow(clippy::too_many_lines)]
     fn validate_native_amx_prepublication_transition_locked(
         &self,
@@ -35762,7 +34609,6 @@ impl Kura {
             }
             return Ok(());
         }
-
         if incoming.lane_block_height == 1 {
             if leaf.predecessor_height != 0 || leaf.predecessor_descriptor_hash.is_some() {
                 return Err(Self::invalid_lane_artifact_error(
@@ -35828,7 +34674,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn read_back_native_amx_plan_manifests_under_publication_guard(
         &self,
         plan: &NativeAmxParticipantApplicationEvidencePlan,
@@ -35883,7 +34728,6 @@ impl Kura {
             artifact_hashes,
         })
     }
-
     fn read_back_native_amx_repair_target_manifests_under_publication_guard(
         &self,
         plan: &NativeAmxParticipantApplicationEvidencePlan,
@@ -35939,7 +34783,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn persist_native_amx_participant_application_repair_targets_under_publication_guard(
         &self,
         block: &SignedBlock,
@@ -35965,7 +34808,6 @@ impl Kura {
                 plan,
                 target_indices,
             )?;
-
         // Repair keeps the same crash boundary as live publication, but only
         // marker-owned routes may touch current storage. Authenticate and
         // publish every target manifest before promoting any target receipt.
@@ -36013,7 +34855,6 @@ impl Kura {
         }
         Ok(target_indices.len())
     }
-
     fn persist_native_amx_participant_application_evidence_under_publication_guard(
         &self,
         block: &SignedBlock,
@@ -36037,7 +34878,6 @@ impl Kura {
         let permit_cleanup = mode.permits_retention_cleanup();
         let route_preflights =
             self.preflight_native_amx_participant_application_plan_under_publication_guard(plan)?;
-
         // Publication order is consensus-significant for crash recovery:
         // every manifest, then every receipt, then every exact latest pointer.
         for (manifest, _) in &plan.artifacts {
@@ -36073,7 +34913,6 @@ impl Kura {
                 preflight,
             )?;
         }
-
         let mut identities = Vec::with_capacity(plan.artifacts.len());
         for (manifest, receipt) in &plan.artifacts {
             identities.push(
@@ -36091,7 +34930,6 @@ impl Kura {
                     "Native AMX prepublication token does not cover the exact manifest",
                 )
             })?;
-
         if permit_cleanup {
             for (_, receipt) in &plan.artifacts {
                 self.cleanup_native_amx_participant_application_evidence_under_publication_guard(
@@ -36101,7 +34939,6 @@ impl Kura {
         }
         Ok(token)
     }
-
     /// Validate a Native AMX manifest without acquiring locks.
     ///
     /// The caller holds `prune_lock` and `canonical_chain_lock`, in that
@@ -36141,7 +34978,6 @@ impl Kura {
         };
         self.get_durable_block_hash(height) == Some(leaf.application_block_hash)
     }
-
     #[cfg(test)]
     fn write_native_amx_participant_application_manifest_artifact_under_publication_guard(
         &self,
@@ -36152,7 +34988,6 @@ impl Kura {
             true,
         )
     }
-
     fn write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard(
         &self,
         artifact: &NativeAmxParticipantApplicationManifestArtifactV1,
@@ -36232,7 +35067,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn read_native_amx_participant_application_manifest_from_paths_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -36263,7 +35097,6 @@ impl Kura {
             }
         }
     }
-
     fn native_amx_participant_application_receipt_matches_available_evidence_under_prune_guard(
         &self,
         artifact: &NativeAmxParticipantApplicationReceiptArtifact,
@@ -36307,7 +35140,6 @@ impl Kura {
             &manifest_artifact,
         )
     }
-
     /// Validate a Native AMX receipt and its already decoded manifest without
     /// acquiring locks.
     ///
@@ -36380,7 +35212,6 @@ impl Kura {
             .or_else(|| self.get_durable_block_hash(height))
             == Some(artifact.application_block_hash)
     }
-
     #[cfg(test)]
     fn write_native_amx_participant_application_receipt_artifact_under_publication_guard(
         &self,
@@ -36399,7 +35230,6 @@ impl Kura {
         )?;
         self.cleanup_native_amx_participant_application_evidence_under_publication_guard(artifact)
     }
-
     fn write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard(
         &self,
         artifact: &NativeAmxParticipantApplicationReceiptArtifact,
@@ -36430,7 +35260,6 @@ impl Kura {
                 "Native AMX participant receipt height must be non-zero",
             ));
         }
-
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let canonical_height = usize::try_from(artifact.application_block_height)
@@ -36517,7 +35346,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     #[cfg(test)]
     fn write_native_amx_participant_receipt_latest_index_under_publication_guard(
         &self,
@@ -36558,7 +35386,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard(
         &self,
         artifact: &NativeAmxParticipantApplicationReceiptArtifact,
@@ -36657,7 +35484,6 @@ impl Kura {
             &namespace,
             NativeAmxEvidenceRecoveryPhase::ReceiptPublication,
         )?;
-
         let participant_height = descriptor.lane_block_height;
         let manifest_path = Self::native_amx_application_manifest_path_for_entry(
             &entry,
@@ -36720,7 +35546,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn authenticate_native_amx_participant_application_prepublication_under_publication_guard(
         &self,
         expected_manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
@@ -36830,7 +35655,6 @@ impl Kura {
             )
         })
     }
-
     fn cleanup_native_amx_participant_application_evidence_under_publication_guard(
         &self,
         artifact: &NativeAmxParticipantApplicationReceiptArtifact,
@@ -36872,7 +35696,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn read_native_amx_participant_application_receipt_from_paths_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -36903,7 +35726,6 @@ impl Kura {
             }
         }
     }
-
     /// Read structurally valid durable participant-control evidence at an exact route height.
     ///
     /// Unlike [`Self::read_native_amx_participant_application_receipt`], this
@@ -36950,7 +35772,6 @@ impl Kura {
         self.decode_structural_native_amx_receipt_file_locked(&entry, &namespace, &file)
             .ok()
     }
-
     /// Read exact durable participant-control application evidence.
     #[must_use]
     pub(crate) fn read_native_amx_participant_application_receipt(
@@ -36999,7 +35820,6 @@ impl Kura {
         }
         (read_structural()? == artifact && !self.prune_recovery_is_required()).then_some(artifact)
     }
-
     /// Revalidate and project the exact durable evidence identity used by a
     /// Native-derived lane drain frontier.
     ///
@@ -37087,7 +35907,6 @@ impl Kura {
             latest_index_artifact_hash: Hash::new(latest_index_bytes),
         })
     }
-
     pub(crate) fn latest_native_amx_participant_application_receipt_matching(
         &self,
         lane_id: LaneId,
@@ -37208,7 +36027,6 @@ impl Kura {
         };
         (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
     }
-
     /// Revalidate the receipt fields available without its manifest against
     /// authenticated finality and the durable canonical block identity.
     ///
@@ -37237,7 +36055,6 @@ impl Kura {
             && execution.executed_block_wire_hash == receipt.executed_block_wire_hash
             && self.get_durable_block_hash(height) == Some(receipt.application_block_hash)
     }
-
     /// Classify one structurally decoded receipt against the startup evidence
     /// boundary without acquiring another Kura lock.
     ///
@@ -37303,7 +36120,6 @@ impl Kura {
                 "does not match its active incarnation, QC-authenticated manifest, finality, canonical block, or executed wire",
             ));
         }
-
         let checkpoint = self
             .wsv_checkpoint_under_sidecar_guard(receipt.application_block_height)
             .map_err(|error| invalid(&format!("has an unreadable WSV checkpoint: {error:?}")))?;
@@ -37345,7 +36161,6 @@ impl Kura {
             )),
         }
     }
-
     /// Reconstruct every active lane's bounded Native AMX latest-receipt index.
     ///
     /// This is an explicit startup operation. Every retained receipt and
@@ -37380,7 +36195,6 @@ impl Kura {
         let exact_durable_tip = u64::try_from(self.exact_durable_blocks_count()?)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let mut rebuilt = 0_usize;
-
         for entry in entries {
             let evidence_directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
             match std::fs::symlink_metadata(&evidence_directory) {
@@ -37463,7 +36277,6 @@ impl Kura {
                 }
                 validated_manifests.insert(*manifest_height, manifest);
             }
-
             let mut validated_receipts = BTreeMap::new();
             let mut startup_evidence = BTreeMap::new();
             for receipt_height in &receipt_payload_heights {
@@ -37494,7 +36307,6 @@ impl Kura {
                 validated_receipts.insert(*receipt_height, receipt);
                 startup_evidence.insert(*receipt_height, evidence);
             }
-
             let receipt_without_manifest = receipt_payload_heights
                 .difference(&manifest_payload_heights)
                 .copied()
@@ -37514,7 +36326,6 @@ impl Kura {
                     format!("Native AMX startup retained history is invalid: {message}"),
                 )
             })?;
-
             let expected_receipt = latest_height
                 .and_then(|height| validated_receipts.get(&height))
                 .cloned();
@@ -37594,7 +36405,6 @@ impl Kura {
             } else {
                 false
             };
-
             match (expected, current) {
                 (Some(expected), Some(current)) if current != expected => {
                     if current.lane_block_height > expected.lane_block_height
@@ -37670,7 +36480,6 @@ impl Kura {
                     );
                 }
             }
-
             if !Self::progress_mutation_namespace_unchanged(&namespace) {
                 return Err(Self::invalid_lane_artifact_error(
                     evidence_directory.clone(),
@@ -37703,7 +36512,6 @@ impl Kura {
         }
         Ok(rebuilt)
     }
-
     /// Persist a direct standalone execution receipt for a certified lane block.
     ///
     /// The receipt is accepted only when `input` is the canonical recovered
@@ -37773,7 +36581,6 @@ impl Kura {
         };
         self.write_lane_block_application_receipt_artifact(&artifact)
     }
-
     fn merge_lane_block_artifact(execution: &MergeLaneExecution) -> LaneBlockArtifact {
         let descriptor = &execution.proposal.descriptor;
         let (proposal_block_hash, proposal_view) = Self::autonomous_lane_execution_anchor(
@@ -37803,7 +36610,6 @@ impl Kura {
         };
         LaneBlockArtifact::new(proposal_block_hash, ownership)
     }
-
     /// Persist test-fixture lane-application receipts for a WSV-applied merge entry.
     ///
     /// This explicit-carrier writer is retained only for historical
@@ -37842,7 +36648,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn persist_merge_lane_block_application_receipt(
         &self,
         entry: &MergeLedgerEntry,
@@ -37862,7 +36667,6 @@ impl Kura {
         );
         self.write_lane_block_application_receipt_artifact(&receipt)
     }
-
     fn merge_lane_execution_targets_active_geometry(&self, execution: &MergeLaneExecution) -> bool {
         let descriptor = &execution.proposal.descriptor;
         let _geometry_guard = self.lane_geometry_lock.lock();
@@ -37872,7 +36676,6 @@ impl Kura {
         self.require_active_lane_artifact(&entry, descriptor)
             .is_ok()
     }
-
     fn consume_post_carrier_evidence_repair_authorizations(
         &self,
         entry: &MergeLedgerEntry,
@@ -37932,7 +36735,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn persist_merge_lane_block_application_receipts_after_repair_authorization(
         &self,
         entry: &MergeLedgerEntry,
@@ -37961,7 +36763,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Repair merge application receipts from an entry already aligned with a
     /// canonical carrier block in the committed merge log.
     ///
@@ -38017,7 +36818,6 @@ impl Kura {
             carrier.block_hash,
         )
     }
-
     #[cfg(test)]
     pub(crate) fn persist_merge_lane_block_application_receipts_from_committed_log(
         &self,
@@ -38052,7 +36852,6 @@ impl Kura {
             carrier.block_hash,
         )
     }
-
     /// Persist a recoverable application receipt through a strict power-loss boundary.
     ///
     /// Returns `Ok(false)` while canonical execution evidence is incomplete.
@@ -38096,7 +36895,6 @@ impl Kura {
             )),
         }
     }
-
     /// Persist a receipt which was read-only preflighted by startup repair.
     ///
     /// The complete canonical evidence is deliberately reconstructed again
@@ -38124,7 +36922,6 @@ impl Kura {
         }
         self.write_lane_block_application_receipt_artifact(&actual)
     }
-
     pub(crate) fn persist_lane_block_application_receipt_if_ready(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -38147,21 +36944,18 @@ impl Kura {
         self.write_lane_block_application_receipt_artifact(&artifact)?;
         Ok(true)
     }
-
     fn recover_lane_block_application_receipt_artifact(
         &self,
         proposal: &LaneBlockProposalV1,
     ) -> Result<LaneBlockApplicationReceiptArtifact, LaneBlockPayloadAvailability> {
         self.recover_lane_block_application_receipt_artifact_with_sidecar_repair(proposal, true)
     }
-
     fn recover_lane_block_application_receipt_artifact_without_sidecar_repair(
         &self,
         proposal: &LaneBlockProposalV1,
     ) -> Result<LaneBlockApplicationReceiptArtifact, LaneBlockPayloadAvailability> {
         self.recover_lane_block_application_receipt_artifact_with_sidecar_repair(proposal, false)
     }
-
     fn recover_lane_block_application_receipt_artifact_with_sidecar_repair(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -38206,7 +37000,6 @@ impl Kura {
             results,
         ))
     }
-
     fn write_lane_block_application_receipt_artifact(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
@@ -38234,7 +37027,6 @@ impl Kura {
                 "lane application receipt height must be non-zero",
             ));
         }
-
         // Only evidence valid for the exact active geometry is authoritative. A
         // raw sidecar whose global block or merge carrier was pruned remains
         // replaceable, but its bytes are rechecked under the geometry lock so a
@@ -38250,7 +37042,6 @@ impl Kura {
                     existing, false,
                 )
             });
-
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let pending_canonical_bytes =
             self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
@@ -38266,7 +37057,6 @@ impl Kura {
             ));
         };
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
-
         let _guard = self.sidecar_lock.lock();
         if !self.recover_bound_progress_sidecar_artifacts(
             &data_path,
@@ -38349,7 +37139,6 @@ impl Kura {
                 "overwriting stale lane application receipt after global evidence changed"
             );
         }
-
         let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
@@ -38454,7 +37243,6 @@ impl Kura {
         )?;
         Ok(())
     }
-
     /// Read a durable lane-block application receipt.
     ///
     /// Returns `None` when the artifact is absent, malformed, belongs to a
@@ -38497,7 +37285,6 @@ impl Kura {
         }
         (!self.prune_recovery_is_required()).then_some(artifact)
     }
-
     pub(crate) fn read_lane_block_application_receipt_without_sidecar_repair(
         &self,
         lane_id: LaneId,
@@ -38521,7 +37308,6 @@ impl Kura {
         )?;
         (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
     }
-
     fn read_active_lane_block_application_receipt_structural(
         &self,
         lane_id: LaneId,
@@ -38556,7 +37342,6 @@ impl Kura {
         }
         Some(artifact)
     }
-
     /// Capture existing receipt bytes for the writer's optimistic concurrency check.
     ///
     /// This read is deliberately not a durability witness: the same writer reopens the
@@ -38598,7 +37383,6 @@ impl Kura {
         }
         Some(artifact)
     }
-
     fn read_active_lane_block_application_receipt_durability_attested(
         &self,
         lane_id: LaneId,
@@ -38632,7 +37416,6 @@ impl Kura {
         }
         Some(artifact)
     }
-
     /// Return all valid direct-execution lane-block application receipts.
     #[must_use]
     pub fn direct_lane_block_application_receipts_snapshot(
@@ -38680,7 +37463,6 @@ impl Kura {
             receipts
         }
     }
-
     fn active_lane_block_application_receipts_structural_snapshot(
         &self,
     ) -> Option<Vec<LaneBlockApplicationReceiptArtifact>> {
@@ -38775,7 +37557,6 @@ impl Kura {
         }
         Some(receipts)
     }
-
     #[cfg(test)]
     fn active_direct_lane_block_application_receipts_structural_snapshot(
         &self,
@@ -38795,21 +37576,18 @@ impl Kura {
     ) -> bool {
         self.active_direct_lane_block_application_receipts_structural_snapshot() == receipts
     }
-
     pub(crate) fn lane_block_application_receipt_available(
         &self,
         proposal: &LaneBlockProposalV1,
     ) -> bool {
         self.lane_block_application_receipt_available_with_repair_policy(proposal, true)
     }
-
     pub(crate) fn lane_block_application_receipt_available_without_sidecar_repair(
         &self,
         proposal: &LaneBlockProposalV1,
     ) -> bool {
         self.lane_block_application_receipt_available_with_repair_policy(proposal, false)
     }
-
     fn lane_block_application_receipt_available_with_repair_policy(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -38855,14 +37633,12 @@ impl Kura {
         }
         true
     }
-
     pub(crate) fn lane_block_application_receipt_conflicts_with_preflight(
         &self,
         proposal: &LaneBlockProposalV1,
     ) -> bool {
         self.lane_block_application_receipt_conflicts_with_preflight_inner(proposal, true)
     }
-
     /// Check canonical-result/preflight conflict without publishing a missing
     /// lane-artifact sidecar as a consequence of status projection.
     pub(crate) fn lane_block_application_receipt_conflicts_with_preflight_without_sidecar_repair(
@@ -38871,7 +37647,6 @@ impl Kura {
     ) -> bool {
         self.lane_block_application_receipt_conflicts_with_preflight_inner(proposal, false)
     }
-
     fn lane_block_application_receipt_conflicts_with_preflight_inner(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -38896,7 +37671,6 @@ impl Kura {
             && preflight.entrypoint_hashes == receipt.entrypoint_hashes
             && preflight.result_hashes != receipt.result_hashes
     }
-
     fn lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards(
         &self,
         frontier: &LaneMergeApplicationFrontierV1,
@@ -38952,7 +37726,6 @@ impl Kura {
         );
         frontier.matches_receipt(&expected).then_some(expected)
     }
-
     fn decode_lane_merge_application_frontier(
         &self,
         entry: &LaneConfigEntry,
@@ -39001,7 +37774,6 @@ impl Kura {
         }
         Ok(Some(frontier))
     }
-
     fn publish_lane_merge_application_frontier_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -39058,7 +37830,6 @@ impl Kura {
         )?;
         Ok(Some(frontier))
     }
-
     fn autonomous_auxiliary_lane_height(name: &str) -> Option<u64> {
         Self::autonomous_one_height_coordinate(name, AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX)
             .or_else(|| {
@@ -39073,7 +37844,6 @@ impl Kura {
                 .map(|(lane_height, _)| lane_height)
             })
     }
-
     #[allow(dead_code)] // Reserved for a future durable whole-unit compaction intent.
     fn remove_terminal_autonomous_auxiliary_files_locked(
         &self,
@@ -39090,7 +37860,6 @@ impl Kura {
             self.roster_sidecar_retention.get(),
         )
     }
-
     fn remove_terminal_autonomous_auxiliary_files_with_budget_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -39147,7 +37916,6 @@ impl Kura {
                 break;
             }
         }
-
         let route_latest =
             Self::autonomous_lane_route_latest_attempt_path_for_entry(entry, &self.store_root);
         if let Some(pointer) = self.read_autonomous_lane_route_latest_attempt_locked(entry)?
@@ -39166,7 +37934,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(complete)
     }
-
     fn lane_block_application_receipt_matches_merge_log(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
@@ -39174,7 +37941,6 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.lane_block_application_receipt_matches_merge_log_under_prune_guard(artifact)
     }
-
     fn lane_block_application_receipt_matches_merge_log_under_prune_guard(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
@@ -39184,7 +37950,6 @@ impl Kura {
             artifact,
         )
     }
-
     fn lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
@@ -39235,7 +38000,6 @@ impl Kura {
         );
         expected == *artifact
     }
-
     fn lane_block_application_receipt_matches_canonical_results(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
@@ -39264,7 +38028,6 @@ impl Kura {
             }
         }
     }
-
     fn lane_block_application_receipt_matches_direct_preflight(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
@@ -39288,7 +38051,6 @@ impl Kura {
             && preflight.results == artifact.results
             && !preflight.has_rejections()
     }
-
     #[cfg(test)]
     fn read_lane_block_application_receipt_from_paths_locked(
         &self,
@@ -39331,7 +38093,6 @@ impl Kura {
             Some(artifact)
         })
     }
-
     fn read_lane_block_application_receipt_from_paths_durability_attested_locked(
         &self,
         lane_id: LaneId,
@@ -39378,7 +38139,6 @@ impl Kura {
             }
         }
     }
-
     fn read_lane_block_application_receipt_from_bound_locked(
         &self,
         lane_id: LaneId,
@@ -39416,7 +38176,6 @@ impl Kura {
         }
         Some(artifact)
     }
-
     /// Read a lane-local block artifact by lane and lane-local block height.
     ///
     /// Returns `None` when the artifact is absent, malformed, belongs to a different lane/height
@@ -39446,7 +38205,6 @@ impl Kura {
         }
         (!self.prune_recovery_is_required()).then_some(artifact)
     }
-
     pub(crate) fn read_lane_block_artifact_without_sidecar_repair(
         &self,
         lane_id: LaneId,
@@ -39462,7 +38220,6 @@ impl Kura {
             self.read_active_lane_block_artifact_structural(lane_id, lane_block_height, false)?;
         (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
     }
-
     fn read_active_lane_block_artifact_structural(
         &self,
         lane_id: LaneId,
@@ -39484,7 +38241,6 @@ impl Kura {
             recover,
         )
     }
-
     pub(crate) fn lane_block_payload_availability(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -39494,7 +38250,6 @@ impl Kura {
             Err(availability) => availability,
         }
     }
-
     /// Return whether the exact certified lane payload is locally recoverable
     /// without publishing a missing lane-artifact sidecar.
     #[must_use]
@@ -39502,7 +38257,6 @@ impl Kura {
         self.recover_lane_block_payload_with_sidecar_repair(proposal, false)
             .is_ok()
     }
-
     /// Recover accepted entrypoints for a certified standalone lane block.
     ///
     /// The recovered payload is accepted only when the certified descriptor
@@ -39519,7 +38273,6 @@ impl Kura {
     ) -> Result<RecoveredLaneBlockPayload, LaneBlockPayloadAvailability> {
         self.recover_lane_block_payload_with_sidecar_repair(proposal, true)
     }
-
     fn recover_lane_block_payload_with_sidecar_repair(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -39549,7 +38302,6 @@ impl Kura {
             }
             entrypoints.push(entrypoint);
         }
-
         Ok(RecoveredLaneBlockPayload {
             proposal: proposal.clone(),
             artifact,
@@ -39562,7 +38314,6 @@ impl Kura {
             native_amx_receipts: Vec::new(),
         })
     }
-
     /// Recover a certified lane block directly from its producer-authenticated
     /// lane-owned payload, without requiring the global block body to commit.
     pub(crate) fn recover_autonomous_lane_block_payload(
@@ -39578,7 +38329,6 @@ impl Kura {
             true,
         )
     }
-
     fn recover_autonomous_lane_block_payload_with_sidecar_repair(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -39650,7 +38400,6 @@ impl Kura {
             native_amx_receipts: artifact.executable_payload.native_amx_receipts.clone(),
         })
     }
-
     /// Build a non-persisted execution input candidate directly from a
     /// verified lane-owned payload for stateful routing/admission preflight.
     pub(crate) fn autonomous_lane_block_execution_input_candidate(
@@ -39700,7 +38449,6 @@ impl Kura {
             },
         ))
     }
-
     /// Produce the compatibility anchor carried by an autonomous execution input.
     ///
     /// A global proposal hint is retained when one exists, but autonomous lane
@@ -39723,7 +38471,6 @@ impl Kura {
         ]);
         (HashOf::from_untyped_unchecked(synthetic), 0)
     }
-
     fn lane_block_payload_artifact_and_block_with_sidecar_repair(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -39736,7 +38483,6 @@ impl Kura {
         {
             return Err(LaneBlockPayloadAvailability::DescriptorMismatch);
         }
-
         let artifact = if repair_missing_sidecar {
             self.read_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height)
         } else {
@@ -39753,7 +38499,6 @@ impl Kura {
         if !Self::lane_block_artifact_matches_descriptor(&artifact.ownership, descriptor) {
             return Err(LaneBlockPayloadAvailability::DescriptorMismatch);
         }
-
         let Some(block_height) = self.get_block_height_by_hash(artifact.proposal_block_hash) else {
             return Err(LaneBlockPayloadAvailability::MissingProposalBlock);
         };
@@ -39770,10 +38515,8 @@ impl Kura {
         {
             return Err(LaneBlockPayloadAvailability::DescriptorMismatch);
         }
-
         Ok((artifact, block))
     }
-
     fn recover_lane_block_artifact_from_canonical_blocks(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -39820,7 +38563,6 @@ impl Kura {
         }
         Some((artifact, block))
     }
-
     fn persist_recovered_lane_block_artifact(&self, artifact: &LaneBlockArtifact) -> bool {
         let _prune_guard = self.prune_lock.lock();
         if self.prune_recovery_is_required() {
@@ -39853,7 +38595,6 @@ impl Kura {
             }
         }
     }
-
     fn lane_block_artifact_matches_descriptor(
         ownership: &SumeragiLanePayloadOwnership,
         descriptor: &LaneBlockDescriptorV1,
@@ -39878,26 +38619,22 @@ impl Kura {
             && ownership.lane_block_descriptor_min_quorum == descriptor.min_quorum
             && ownership.qc_mode_tag == descriptor.qc_mode_tag
     }
-
     #[cfg(test)]
     fn block_entrypoint_hash_at(block: &SignedBlock, index: usize) -> Option<Hash> {
         Self::block_entrypoint_at(block, index).map(|entrypoint| Hash::from(entrypoint.hash()))
     }
-
     fn block_entrypoint_at(block: &SignedBlock, index: usize) -> Option<TransactionEntrypoint> {
         if let Some(entrypoints) = block.external_entrypoints_slice() {
             return entrypoints.get(index).cloned();
         }
         block.external_entrypoints_cloned().nth(index)
     }
-
     fn block_transaction_result_at(block: &SignedBlock, index: usize) -> Option<TransactionResult> {
         if !block.has_results() {
             return None;
         }
         block.results().nth(index).cloned()
     }
-
     /// Return the highest valid lane-local block artifact known for `lane_id`.
     ///
     /// Empty index entries created by sparse writes are skipped. Artifacts whose
@@ -39907,7 +38644,6 @@ impl Kura {
     pub fn latest_lane_block_artifact(&self, lane_id: LaneId) -> Option<LaneBlockArtifact> {
         self.latest_lane_block_artifact_matching(lane_id, |_| true)
     }
-
     /// Return the highest valid lane-local block artifact for `lane_id` and `dataspace_id`.
     ///
     /// This scans past valid artifacts from other dataspaces, which can be left
@@ -39923,7 +38659,6 @@ impl Kura {
             artifact.ownership.dataspace_id == dataspace_id
         })
     }
-
     /// Return canonical lane artifacts embedded by one exact global proposal height.
     ///
     /// The global block index makes this lookup independent of lane-history
@@ -39999,7 +38734,6 @@ impl Kura {
             })
             .collect()
     }
-
     /// Return all valid active-incarnation lane-local block artifacts.
     ///
     /// Artifacts are sorted by lane-local height first so recovery can rebuild
@@ -40037,7 +38771,6 @@ impl Kura {
             artifacts
         }
     }
-
     #[cfg(test)]
     fn active_lane_block_artifacts_structural_snapshot(&self) -> Vec<LaneBlockArtifact> {
         let _geometry_guard = self.lane_geometry_lock.lock();
@@ -40113,7 +38846,6 @@ impl Kura {
                 == Some(artifact)
         })
     }
-
     /// Return the highest valid active lane artifact accepted by `accept`.
     ///
     /// Every indexed height consumes one scan slot, including absent,
@@ -40173,7 +38905,6 @@ impl Kura {
         )?;
         (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
     }
-
     fn read_active_lane_block_artifact_from_paths_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -40201,7 +38932,6 @@ impl Kura {
         }
         Some(artifact)
     }
-
     fn decode_lane_block_artifact_from_paths_locked(
         lane_id: LaneId,
         lane_block_height: u64,
@@ -40242,7 +38972,6 @@ impl Kura {
             Some(artifact)
         })
     }
-
     /// Validate a structurally decoded lane artifact against canonical block state without
     /// holding `sidecar_lock`. Keeping canonical locks outside the sidecar critical section avoids
     /// the inverse of prune's `block_data -> sidecar_lock` ordering.
@@ -40288,12 +39017,10 @@ impl Kura {
         Some(artifact)
     }
 }
-
 include!("kura/autonomous_application_evidence.rs");
 include!("kura/indexed_sidecar_io.rs");
 include!("kura/indexed_sidecar_rewrite.rs");
 include!("kura/lane_history_compaction.rs");
-
 impl BlockStore {
     fn retarget_existing_path(&mut self, path: PathBuf) {
         self.drop_cached_handles();
@@ -40301,12 +39028,10 @@ impl BlockStore {
         self.da_blocks_dir = self.path_to_blockchain.join(DA_BLOCKS_DIR_NAME);
         self.fsync.clear();
     }
-
     /// Create a new block store in `path`.
     pub fn new(store_path: impl AsRef<Path>) -> Self {
         Self::with_fsync(store_path, FsyncMode::Always, FSYNC_INTERVAL)
     }
-
     /// Create a new block store in `path` with an explicit fsync policy.
     pub fn with_fsync(
         store_path: impl AsRef<Path>,
@@ -40361,11 +39086,9 @@ impl BlockStore {
             fail_eviction_stage_syncs_remaining: AtomicUsize::new(0),
         }
     }
-
     fn da_block_path(&self, height: u64) -> PathBuf {
         self.da_blocks_dir.join(format!("{height:020}.norito"))
     }
-
     fn ensure_da_blocks_dir(&self) -> Result<()> {
         if self.da_blocks_dir.as_os_str().is_empty() {
             return Ok(());
@@ -40413,29 +39136,24 @@ impl BlockStore {
         sync_dir(&self.path_to_blockchain)
             .map_err(|error| Error::IO(error, self.path_to_blockchain.clone()))
     }
-
     fn eviction_compaction_stage_path(&self) -> PathBuf {
         self.path_to_blockchain
             .join(EVICTION_COMPACTION_STAGE_FILE_NAME)
     }
-
     fn eviction_compaction_data_path(&self) -> PathBuf {
         self.path_to_blockchain
             .join(EVICTION_COMPACTION_DATA_FILE_NAME)
     }
-
     fn eviction_compaction_index_path(&self) -> PathBuf {
         self.path_to_blockchain
             .join(EVICTION_COMPACTION_INDEX_FILE_NAME)
     }
-
     fn invalid_eviction_compaction_stage(&self, message: impl Into<String>) -> Error {
         Error::IO(
             std::io::Error::new(ErrorKind::InvalidData, message.into()),
             self.eviction_compaction_stage_path(),
         )
     }
-
     fn eviction_reader_digest(reader: &mut impl Read, total: u64) -> std::io::Result<Hash> {
         let mut digest = Hash::new(EVICTION_FILE_DIGEST_DOMAIN);
         let mut remaining = total;
@@ -40460,7 +39178,6 @@ impl BlockStore {
             total_bytes.as_slice(),
         ]))
     }
-
     fn eviction_file_digest(path: &Path) -> Result<(u64, Hash)> {
         let before = std::fs::symlink_metadata(path)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
@@ -40492,11 +39209,9 @@ impl BlockStore {
                 path.to_path_buf(),
             ));
         }
-
         let total = before.len();
         let digest = Self::eviction_reader_digest(&mut file, total)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-
         let after_handle = file
             .metadata()
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
@@ -40515,7 +39230,6 @@ impl BlockStore {
         }
         Ok((total, digest))
     }
-
     fn eviction_file_matches(
         path: &Path,
         expected_len: u64,
@@ -40542,7 +39256,6 @@ impl BlockStore {
         let (actual_len, actual_digest) = Self::eviction_file_digest(path)?;
         Ok(actual_len == expected_len && actual_digest == expected_digest)
     }
-
     fn validate_eviction_compaction_stage(&self, stage: &EvictionCompactionStageV1) -> Result<()> {
         let expected_index_len = stage
             .marker
@@ -40590,7 +39303,6 @@ impl BlockStore {
         }
         Ok(())
     }
-
     fn read_eviction_compaction_stage(&self) -> Result<Option<EvictionCompactionStageV1>> {
         let path = self.eviction_compaction_stage_path();
         let byte_limit = usize::try_from(MAX_EVICTION_COMPACTION_STAGE_BYTES)?;
@@ -40615,7 +39327,6 @@ impl BlockStore {
         self.validate_eviction_compaction_stage(&stage)?;
         Ok(Some(stage))
     }
-
     fn sync_eviction_compaction_stage(&self, expected: &EvictionCompactionStageV1) -> Result<()> {
         let path = self.eviction_compaction_stage_path();
         if self.read_eviction_compaction_stage()?.as_ref() != Some(expected) {
@@ -40684,7 +39395,6 @@ impl BlockStore {
         }
         Ok(())
     }
-
     fn write_eviction_compaction_stage(&self, stage: &EvictionCompactionStageV1) -> Result<()> {
         self.validate_eviction_compaction_stage(stage)?;
         let path = self.eviction_compaction_stage_path();
@@ -40724,7 +39434,6 @@ impl BlockStore {
         drop(persisted);
         self.sync_eviction_compaction_stage(stage)
     }
-
     fn remove_eviction_compaction_path(&self, path: &Path) -> Result<bool> {
         match std::fs::remove_file(path) {
             Ok(()) => Ok(true),
@@ -40732,7 +39441,6 @@ impl BlockStore {
             Err(error) => Err(Error::IO(error, path.to_path_buf())),
         }
     }
-
     fn cleanup_unpublished_eviction_compaction_files(&self) -> Result<()> {
         let data = self.eviction_compaction_data_path();
         let index = self.eviction_compaction_index_path();
@@ -40744,7 +39452,6 @@ impl BlockStore {
         }
         Ok(())
     }
-
     fn retained_wire_hashes(
         &self,
         height: u64,
@@ -40769,7 +39476,6 @@ impl BlockStore {
             record.executed_block_wire_hash,
         ))
     }
-
     fn verified_v2_finality_wire_hash(
         &self,
         height: u64,
@@ -40814,7 +39520,6 @@ impl BlockStore {
         record.artifact.verify()?;
         Ok(executed_block_wire_hash)
     }
-
     fn verified_evicted_block_header(
         &self,
         height: u64,
@@ -40859,7 +39564,6 @@ impl BlockStore {
         record.artifact.verify()?;
         Ok(record.block_header)
     }
-
     fn read_optional_da_cache(&self, height: u64) -> Result<Option<Vec<u8>>> {
         let path = self.da_block_path(height);
         Kura::read_regular_sidecar_bytes_for(
@@ -40869,7 +39573,6 @@ impl BlockStore {
             usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES)?,
         )
     }
-
     fn validate_eviction_compaction_result(
         &mut self,
         stage: &EvictionCompactionStageV1,
@@ -40942,7 +39645,6 @@ impl BlockStore {
                 }
                 continue;
             }
-
             let finality_wire_hash =
                 self.verified_v2_finality_wire_hash(height, durable_hash, index.length)?;
             let cached = self.read_optional_da_cache(height)?;
@@ -40993,7 +39695,6 @@ impl BlockStore {
         }
         Ok(())
     }
-
     fn promote_eviction_compaction_file(
         &self,
         live_path: &Path,
@@ -41029,7 +39730,6 @@ impl BlockStore {
                 .map_err(|error| Error::IO(error, live_path.to_path_buf()))
         }
     }
-
     fn recover_eviction_compaction_stage(&mut self) -> Result<()> {
         let Some(stage) = self.read_eviction_compaction_stage()? else {
             return self.cleanup_unpublished_eviction_compaction_files();
@@ -41053,7 +39753,6 @@ impl BlockStore {
                 "durable marker or hash journal changed while eviction compaction was staged",
             ));
         }
-
         #[cfg(test)]
         if self
             .crash_next_eviction_after_stage
@@ -41066,7 +39765,6 @@ impl BlockStore {
                 self.eviction_compaction_stage_path(),
             ));
         }
-
         self.drop_cached_handles();
         let data_path = self.path_to_blockchain.join(DATA_FILE_NAME);
         let index_path = self.path_to_blockchain.join(INDEX_FILE_NAME);
@@ -41119,7 +39817,6 @@ impl BlockStore {
         self.drop_cached_handles();
         Ok(())
     }
-
     /// Resolve every durable canonical-storage transaction before another mutation.
     ///
     /// Eviction compaction is recovered first because it keeps the commit marker and
@@ -41133,7 +39830,6 @@ impl BlockStore {
         self.recover_eviction_compaction_stage()?;
         self.recover_da_block_rewrite_stage()
     }
-
     fn read_da_block_bytes(&self, height: u64, expected_len: u64) -> Result<Vec<u8>> {
         self.ensure_da_blocks_dir()?;
         let path = self.da_block_path(height);
@@ -41160,7 +39856,6 @@ impl BlockStore {
         }
         Ok(bytes)
     }
-
     fn write_da_block_bytes(&self, height: u64, bytes: &[u8]) -> Result<()> {
         if u64::try_from(bytes.len())? > STRICT_INIT_MAX_BLOCK_BYTES {
             return Err(Error::CorruptedBlockLength {
@@ -41287,7 +39982,6 @@ impl BlockStore {
         }
         Ok(())
     }
-
     fn remove_da_block_file(&self, height: u64) -> Result<()> {
         self.ensure_da_blocks_dir()?;
         let path = self.da_block_path(height);
@@ -41331,12 +40025,10 @@ impl BlockStore {
             Err(err) => Err(Error::IO(err, path)),
         }
     }
-
     fn da_block_rewrite_stage_path(&self) -> PathBuf {
         self.path_to_blockchain
             .join(DA_BLOCK_REWRITE_STAGE_FILE_NAME)
     }
-
     fn defer_da_block_rewrite_recovery(&mut self, error: &Error) {
         let message = error.to_string();
         error!(
@@ -41345,17 +40037,14 @@ impl BlockStore {
         );
         self.deferred_da_recovery_fault = Some(message);
     }
-
     fn take_deferred_da_recovery_fault(&mut self) -> Option<String> {
         self.deferred_da_recovery_fault.take()
     }
-
     fn unknown_da_rewrite_state(&self, context: &str, error: &Error) -> Error {
         Error::DaBlockRewriteCommitStateUnknown {
             detail: format!("{context}: {error}"),
         }
     }
-
     fn rollback_da_rewrite_before_returning(&mut self, original_error: Error) -> Error {
         // The replacement marker is not published on this path. Prevent periodic/shutdown fsync
         // from advancing it while rollback is being attempted.
@@ -41368,36 +40057,30 @@ impl BlockStore {
             }
         }
     }
-
     fn invalid_da_block_rewrite_stage(&self, message: impl Into<String>) -> Error {
         Error::IO(
             std::io::Error::new(ErrorKind::InvalidData, message.into()),
             self.da_block_rewrite_stage_path(),
         )
     }
-
     fn read_da_block_rewrite_stage(&self) -> Result<Option<DaBlockRewriteStageV1>> {
         let path = self.da_block_rewrite_stage_path();
-        let metadata = match std::fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(Error::IO(error, path)),
+        let Some(bytes) = Kura::read_regular_sidecar_bytes_for(
+            &self.path_to_blockchain,
+            &path,
+            &self.path_to_blockchain,
+            usize::try_from(MAX_DA_BLOCK_REWRITE_STAGE_BYTES)?,
+        )?
+        else {
+            return Ok(None);
         };
-        if metadata.file_type().is_symlink()
-            || !metadata.is_file()
-            || metadata.len() > MAX_DA_BLOCK_REWRITE_STAGE_BYTES
-        {
-            return Err(self.invalid_da_block_rewrite_stage(
-                "DA block rewrite stage is not a bounded regular file",
-            ));
-        }
-        let bytes = std::fs::read(&path).map_err(|error| Error::IO(error, path.clone()))?;
-        let stage = norito::decode_canonical::<DaBlockRewriteStageV1>(&bytes)
-            .map_err(|error| Error::NoritoFrame(error.into()))?;
+        let decode_limits = recovery_control_decode_limits_v1(MAX_DA_BLOCK_REWRITE_STAGE_BYTES)?;
+        let stage =
+            norito::decode_canonical_with_limits::<DaBlockRewriteStageV1>(&bytes, decode_limits)
+                .map_err(|error| Error::NoritoFrame(error.into()))?;
         self.validate_da_block_rewrite_stage(&stage)?;
         Ok(Some(stage))
     }
-
     fn validate_da_block_rewrite_image(&self, image: &DaBlockRewriteImageV1) -> Result<()> {
         if image.height == 0 || image.index_length > STRICT_INIT_MAX_BLOCK_BYTES {
             return Err(self.invalid_da_block_rewrite_stage(
@@ -41429,7 +40112,6 @@ impl BlockStore {
         }
         Ok(())
     }
-
     fn validate_da_block_rewrite_stage(&self, stage: &DaBlockRewriteStageV1) -> Result<()> {
         if stage.format_version != DA_BLOCK_REWRITE_STAGE_VERSION
             || stage.replacement.is_empty()
@@ -41510,7 +40192,6 @@ impl BlockStore {
         }
         Ok(())
     }
-
     fn write_da_block_rewrite_stage(&self, stage: &DaBlockRewriteStageV1) -> Result<()> {
         self.validate_da_block_rewrite_stage(stage)?;
         let path = self.da_block_rewrite_stage_path();
@@ -41546,7 +40227,6 @@ impl BlockStore {
         sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         Ok(())
     }
-
     fn remove_da_block_rewrite_stage(&self) -> Result<()> {
         let path = self.da_block_rewrite_stage_path();
         match std::fs::remove_file(&path) {
@@ -41560,7 +40240,6 @@ impl BlockStore {
             Err(error) => Err(Error::IO(error, path)),
         }
     }
-
     fn read_block_rewrite_image(&mut self, height: u64) -> Result<DaBlockRewriteImageV1> {
         let index_position = height.saturating_sub(1);
         let index = self.read_block_index(index_position)?;
@@ -41592,14 +40271,12 @@ impl BlockStore {
         self.validate_da_block_rewrite_image(&image)?;
         Ok(image)
     }
-
     fn durable_marker_before_rewrite(&mut self) -> Result<BlockStoreCommitMarker> {
         self.flush_pending_fsync(true)?;
         self.read_commit_marker()?.ok_or_else(|| {
             self.invalid_da_block_rewrite_stage("durable commit marker is unavailable")
         })
     }
-
     fn prepare_da_block_rewrite_stage(
         &mut self,
         start_height: u64,
@@ -41717,7 +40394,6 @@ impl BlockStore {
         self.write_da_block_rewrite_stage(&stage)?;
         Ok(Some(stage))
     }
-
     fn restore_old_da_block_rewrite_stage(&mut self, stage: &DaBlockRewriteStageV1) -> Result<()> {
         self.drop_cached_handles();
         {
@@ -41786,7 +40462,6 @@ impl BlockStore {
         self.drop_cached_handles();
         Ok(())
     }
-
     fn promote_new_da_block_rewrite_stage(&mut self, stage: &DaBlockRewriteStageV1) -> Result<()> {
         if self.read_index_count()? != stage.new_marker.count
             || self.read_hashes_count()? != stage.new_marker.count
@@ -41827,7 +40502,6 @@ impl BlockStore {
         }
         Ok(())
     }
-
     fn recover_da_block_rewrite_stage(&mut self) -> Result<()> {
         let Some(stage) = self.read_da_block_rewrite_stage()? else {
             return Ok(());
@@ -41861,12 +40535,10 @@ impl BlockStore {
         }
         self.remove_da_block_rewrite_stage()
     }
-
     fn prune_da_block_files_above(&self, height: u64) -> Result<()> {
         if self.da_blocks_dir.as_os_str().is_empty() || !self.da_blocks_dir.exists() {
             return Ok(());
         }
-
         for entry in std::fs::read_dir(&self.da_blocks_dir)
             .map_err(|err| Error::IO(err, self.da_blocks_dir.clone()))?
         {
@@ -41888,11 +40560,9 @@ impl BlockStore {
                 std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))?;
             }
         }
-
         sync_dir(&self.da_blocks_dir).map_err(|err| Error::IO(err, self.da_blocks_dir.clone()))?;
         Ok(())
     }
-
     fn ensure_data_file(&mut self) -> Result<&mut FileWrap> {
         if self.data_file.is_none() {
             let path = self.path_to_blockchain.join(DATA_FILE_NAME);
@@ -41900,7 +40570,6 @@ impl BlockStore {
         }
         Ok(self.data_file.as_mut().expect("handle just initialised"))
     }
-
     fn ensure_index_file(&mut self) -> Result<&mut FileWrap> {
         if self.index_file.is_none() {
             let path = self.path_to_blockchain.join(INDEX_FILE_NAME);
@@ -41908,7 +40577,6 @@ impl BlockStore {
         }
         Ok(self.index_file.as_mut().expect("handle just initialised"))
     }
-
     fn ensure_hashes_file(&mut self) -> Result<&mut FileWrap> {
         if self.hashes_file.is_none() {
             let path = self.path_to_blockchain.join(HASHES_FILE_NAME);
@@ -41916,16 +40584,13 @@ impl BlockStore {
         }
         Ok(self.hashes_file.as_mut().expect("handle just initialised"))
     }
-
     fn commit_marker_path(&self) -> PathBuf {
         self.path_to_blockchain.join(COUNT_FILE_NAME)
     }
-
     fn verified_snapshot_tail_marker_path(&self) -> PathBuf {
         self.path_to_blockchain
             .join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME)
     }
-
     fn remove_verified_snapshot_tail_marker(&self) -> Result<()> {
         if self.path_to_blockchain.as_os_str().is_empty() {
             return Ok(());
@@ -41944,7 +40609,6 @@ impl BlockStore {
         }
         Ok(())
     }
-
     fn write_verified_snapshot_tail_marker(
         &self,
         body_prefix_count: u64,
@@ -42052,7 +40716,6 @@ impl BlockStore {
         }
         Ok(())
     }
-
     fn read_verified_snapshot_tail_marker(&self) -> Result<Option<VerifiedSnapshotTailMarkerV1>> {
         if self.path_to_blockchain.as_os_str().is_empty() {
             return Ok(None);
@@ -42086,7 +40749,6 @@ impl BlockStore {
             }
         }
     }
-
     /// Read and validate the structural snapshot marker without repairing or deleting it.
     ///
     /// The returned marker is only provisional metadata.  Its self-digest does
@@ -42147,7 +40809,6 @@ impl BlockStore {
         }
         Ok(Some(marker))
     }
-
     fn validated_verified_snapshot_tail(
         &mut self,
         logical_count: u64,
@@ -42197,7 +40858,6 @@ impl BlockStore {
         }
         Ok(Some(marker))
     }
-
     fn read_bounded_commit_marker_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
         let before = match std::fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
@@ -42267,7 +40927,6 @@ impl BlockStore {
         }
         Ok(Some(bytes))
     }
-
     fn read_commit_marker(&mut self) -> Result<Option<BlockStoreCommitMarker>> {
         let path = self.commit_marker_path();
         if path.as_os_str().is_empty() {
@@ -42319,11 +40978,9 @@ impl BlockStore {
             },
             None => {}
         }
-
         if main_invalid {
             remove_commit_marker_temp_and_sync(&path)?;
         }
-
         match Self::read_bounded_commit_marker_bytes(&tmp_path)? {
             Some(bytes) => match norito::decode_canonical::<BlockStoreCommitMarker>(&bytes) {
                 Ok(marker) => {
@@ -42372,7 +41029,6 @@ impl BlockStore {
             None => Ok(stable_marker),
         }
     }
-
     fn commit_marker_for_count(&mut self, count: u64) -> Result<BlockStoreCommitMarker> {
         let tip_hash = if count == 0 {
             None
@@ -42389,12 +41045,10 @@ impl BlockStore {
         }
         Ok(BlockStoreCommitMarker::new(count, tip_hash))
     }
-
     fn write_commit_marker(&mut self, count: u64) -> Result<()> {
         let marker = self.commit_marker_for_count(count)?;
         self.write_commit_marker_value(&marker)
     }
-
     fn write_commit_marker_value(&mut self, marker: &BlockStoreCommitMarker) -> Result<()> {
         let path = self.commit_marker_path();
         if path.as_os_str().is_empty() {
@@ -42541,7 +41195,6 @@ impl BlockStore {
         }
         Ok(())
     }
-
     fn validate_commit_marker_tip(
         &mut self,
         marker: &BlockStoreCommitMarker,
@@ -42572,7 +41225,6 @@ impl BlockStore {
             self.commit_marker_path(),
         ))
     }
-
     fn align_hashes_len(&mut self) -> Result<u64> {
         if self.path_to_blockchain.as_os_str().is_empty() {
             return Ok(0);
@@ -42589,7 +41241,6 @@ impl BlockStore {
         }
         Ok(aligned / SIZE_OF_BLOCK_HASH)
     }
-
     fn data_backed_count(
         &mut self,
         mut candidate: u64,
@@ -42675,7 +41326,6 @@ impl BlockStore {
         }
         Ok(candidate)
     }
-
     /// Validate the finalized canonical prefix without opening any file for writing.
     ///
     /// `create_files_if_they_do_not_exist` performs commit-marker reconciliation,
@@ -42693,7 +41343,6 @@ impl BlockStore {
         let required_hashes_len = finalized_height
             .checked_mul(SIZE_OF_BLOCK_HASH)
             .ok_or_else(|| mutation(1))?;
-
         let marker_path = self.commit_marker_path();
         let marker_bytes = Self::read_required_bounded_commit_marker_bytes(
             &marker_path,
@@ -42712,7 +41361,6 @@ impl BlockStore {
                 durable_height: marker.count,
             });
         }
-
         let index_path = self.path_to_blockchain.join(INDEX_FILE_NAME);
         let mut index_file = std::fs::File::open(&index_path)
             .map_err(|error| Error::IO(error, index_path.clone()))?;
@@ -42728,7 +41376,6 @@ impl BlockStore {
                     .saturating_add(1),
             ));
         }
-
         let hashes_path = self.path_to_blockchain.join(HASHES_FILE_NAME);
         let hashes_len = std::fs::metadata(&hashes_path)
             .map_err(|error| Error::IO(error, hashes_path.clone()))?
@@ -42766,7 +41413,6 @@ impl BlockStore {
                 return Err(mutation(marker.count));
             }
         }
-
         let data_path = self.path_to_blockchain.join(DATA_FILE_NAME);
         let data_len = std::fs::metadata(&data_path)
             .map_err(|error| Error::IO(error, data_path.clone()))?
@@ -42789,12 +41435,10 @@ impl BlockStore {
         }
         Ok(())
     }
-
     fn init_commit_marker(&mut self) -> Result<()> {
         if self.path_to_blockchain.as_os_str().is_empty() {
             return Ok(());
         }
-
         let logical_count = {
             let index_file = self.ensure_index_file()?;
             let len = index_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
@@ -42837,7 +41481,6 @@ impl BlockStore {
             self.write_commit_marker(data_backed_count)?;
             data_backed_count
         };
-
         if let Some(marker) = &verified_snapshot_tail
             && durable_count < marker.snapshot_height
             && data_backed_count >= marker.snapshot_height
@@ -42845,7 +41488,6 @@ impl BlockStore {
             durable_count = marker.snapshot_height;
             self.write_commit_marker(durable_count)?;
         }
-
         if durable_count > data_backed_count {
             warn!(
                 durable_count,
@@ -42863,7 +41505,6 @@ impl BlockStore {
             durable_count = logical_count;
             self.write_commit_marker(durable_count)?;
         }
-
         if logical_count > durable_count {
             warn!(
                 logical_count,
@@ -42875,7 +41516,6 @@ impl BlockStore {
             self.commit_marker_pending = None;
             self.prune(durable_count)?;
         }
-
         self.truncate_hashes_to_count(durable_count)?;
         self.truncate_data_to_index(durable_count)?;
         if verified_snapshot_tail
@@ -42884,19 +41524,16 @@ impl BlockStore {
         {
             self.remove_verified_snapshot_tail_marker()?;
         }
-
         self.commit_marker_count = durable_count;
         self.commit_marker_pending = None;
         Ok(())
     }
-
     fn drop_cached_handles(&mut self) {
         self.data_file = None;
         self.index_file = None;
         self.hashes_file = None;
         self.invalidate_data_mmap();
     }
-
     fn next_fsync_wait(&self) -> Option<Duration> {
         let deadline = self.fsync.deadline()?;
         let now = Instant::now();
@@ -42906,12 +41543,10 @@ impl BlockStore {
             deadline.checked_duration_since(now)
         }
     }
-
     #[cfg(test)]
     fn fsync_pending_for_tests(&self) -> bool {
         self.fsync.pending_since.is_some()
     }
-
     fn flush_pending_fsync(&mut self, force: bool) -> Result<()> {
         if !self.path_to_blockchain.as_os_str().is_empty()
             && (self.da_block_rewrite_stage_path().exists()
@@ -42924,17 +41559,14 @@ impl BlockStore {
         if !self.fsync.is_due(now, force) {
             return Ok(());
         }
-
         // Sync index last so the commit marker only advances after data/hashes/index are durable.
         self.sync_target(FsyncTarget::Data, Self::ensure_data_file)?;
         self.sync_target(FsyncTarget::Hashes, Self::ensure_hashes_file)?;
         self.sync_target(FsyncTarget::Index, Self::ensure_index_file)?;
-
         self.commit_pending_marker()?;
         self.fsync.clear();
         Ok(())
     }
-
     fn commit_pending_marker(&mut self) -> Result<()> {
         let Some(count) = self.commit_marker_pending else {
             return Ok(());
@@ -43014,13 +41646,11 @@ impl BlockStore {
             }
         }
     }
-
     fn publish_commit_marker(&mut self, count: u64) -> Result<()> {
         self.commit_marker_pending = Some(count);
         self.mark_fsync_pending();
         self.flush_pending_fsync(true)
     }
-
     fn sync_target(
         &mut self,
         target: FsyncTarget,
@@ -43040,22 +41670,18 @@ impl BlockStore {
             }
         }
     }
-
     fn schedule_fsync_after_write(&mut self) -> Result<()> {
         self.mark_fsync_pending();
         self.flush_pending_fsync(false)
     }
-
     fn mark_fsync_pending(&mut self) {
         let now = Instant::now();
         self.fsync.record_write(now);
     }
-
     fn invalidate_data_mmap(&mut self) {
         let _ = self.data_mmap.take();
         self.data_mmap_len = 0;
     }
-
     fn ensure_data_file_present(&mut self) -> Result<()> {
         let path = self.path_to_blockchain.join(DATA_FILE_NAME);
         match std::fs::metadata(&path) {
@@ -43068,24 +41694,20 @@ impl BlockStore {
             }
         }
     }
-
     fn ensure_data_mmap(&mut self) -> Result<()> {
         self.ensure_data_file_present()?;
         let len = {
             let data_file = self.ensure_data_file()?;
             data_file.try_io(|file| file.metadata().map(|meta| meta.len()))?
         };
-
         if len == 0 {
             self.invalidate_data_mmap();
             return Ok(());
         }
-
         if self.data_mmap.as_ref().map(|m| m.len() as u64) == Some(len) {
             self.data_mmap_len = len;
             return Ok(());
         }
-
         self.invalidate_data_mmap();
         let len_usize: usize = len.try_into()?;
         let mirror = {
@@ -43096,7 +41718,6 @@ impl BlockStore {
         self.data_mmap = Some(mirror);
         Ok(())
     }
-
     /// Read a contiguous range of bytes from the block data file.
     ///
     /// # Errors
@@ -43107,7 +41728,6 @@ impl BlockStore {
             self.ensure_data_mmap()?;
             return Ok(&[]);
         }
-
         self.ensure_data_mmap()?;
         let end = start
             .checked_add(length)
@@ -43123,15 +41743,12 @@ impl BlockStore {
                 data_len: self.data_mmap_len,
             });
         }
-
         let len_usize: usize = length.try_into()?;
         let start_usize: usize = start.try_into()?;
         let end_usize = start_usize + len_usize;
-
         if let Some(ref mirror) = self.data_mmap {
             return Ok(mirror.slice(start_usize, end_usize));
         }
-
         let mut scratch = std::mem::take(&mut self.read_scratch);
         if scratch.len() < len_usize {
             scratch.resize(len_usize, 0);
@@ -43143,7 +41760,6 @@ impl BlockStore {
         self.read_scratch = scratch;
         Ok(&self.read_scratch[..len_usize])
     }
-
     /// Read a series of block indices from the block index file and
     /// attempt to fill all of `dest_buffer`.
     ///
@@ -43158,7 +41774,6 @@ impl BlockStore {
         if block_count == 0 {
             return Ok(());
         }
-
         let start_location = start_block_height * BlockIndex::SIZE;
         let required = BlockIndex::SIZE * block_count as u64;
         let index_file = self.ensure_index_file()?;
@@ -43169,7 +41784,6 @@ impl BlockStore {
                 block_count,
             });
         }
-
         index_file.try_io(|file| {
             file.seek(SeekFrom::Start(start_location))?;
             let mut buffer = [0; 8];
@@ -43178,10 +41792,8 @@ impl BlockStore {
             }
             Ok(())
         })?;
-
         Ok(())
     }
-
     /// Call `read_block_indices` with a buffer of one.
     ///
     /// # Errors
@@ -43194,7 +41806,6 @@ impl BlockStore {
         self.read_block_indices(block_height, std::slice::from_mut(&mut index))?;
         Ok(index)
     }
-
     /// Get the number of indices in the index file, which is
     /// calculated as the size of the index file in bytes divided by
     /// `2*size_of(u64)`.
@@ -43213,7 +41824,6 @@ impl BlockStore {
         let len = index_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
         Ok(len / BlockIndex::SIZE)
     }
-
     /// Return the logical index count based on the index file length.
     ///
     /// # Errors
@@ -43222,7 +41832,6 @@ impl BlockStore {
     pub fn read_index_count(&mut self) -> Result<u64> {
         self.read_index_count_from_len()
     }
-
     /// Return the durable index count as recorded by the commit marker.
     ///
     /// # Errors
@@ -43230,7 +41839,6 @@ impl BlockStore {
     pub fn read_durable_index_count(&mut self) -> Result<u64> {
         self.read_exact_durable_index_count()
     }
-
     /// Read and validate the exact durable boundary without repair or fallback.
     ///
     /// This rejects partial journals, missing/malformed/non-canonical commit
@@ -43335,7 +41943,6 @@ impl BlockStore {
         }
         Ok(marker.count)
     }
-
     /// Read a series of block hashes from the block hashes file
     ///
     /// # Errors
@@ -43347,17 +41954,14 @@ impl BlockStore {
     ) -> Result<Vec<HashOf<BlockHeader>>> {
         let hashes_file = self.ensure_hashes_file()?;
         let start_location = start_block_height * SIZE_OF_BLOCK_HASH;
-
         let required = SIZE_OF_BLOCK_HASH * block_count as u64;
         let file_len = hashes_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
-
         if start_location + required > file_len {
             return Err(Error::OutOfBoundsBlockRead {
                 start_block_height,
                 block_count,
             });
         }
-
         let mut hashes = Vec::new();
         hashes.try_reserve(block_count)?;
         hashes_file.try_io(|file| {
@@ -43369,10 +41973,8 @@ impl BlockStore {
             }
             Ok(())
         })?;
-
         Ok(hashes)
     }
-
     /// Get the number of hashes in the hashes file, which is
     /// calculated as the size of the hashes file in bytes divided by
     /// `size_of(HashOf<BlockHeader>)`.
@@ -43388,7 +41990,6 @@ impl BlockStore {
         let len = hashes_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
         Ok(len / SIZE_OF_BLOCK_HASH)
     }
-
     fn truncate_hashes_to_count(&mut self, count: u64) -> Result<()> {
         if self.path_to_blockchain.as_os_str().is_empty() {
             return Ok(());
@@ -43401,7 +42002,6 @@ impl BlockStore {
         }
         Ok(())
     }
-
     fn data_end_for_index_prefix(&mut self, count: u64) -> Result<u64> {
         let mut data_end = 0u64;
         for index_pos in 0..count {
@@ -43421,7 +42021,6 @@ impl BlockStore {
         }
         Ok(data_end)
     }
-
     fn truncate_data_to_index(&mut self, count: u64) -> Result<()> {
         if self.path_to_blockchain.as_os_str().is_empty() {
             return Ok(());
@@ -43453,7 +42052,6 @@ impl BlockStore {
         }
         Ok(())
     }
-
     /// Return the current size of the block data file in bytes.
     ///
     /// # Errors
@@ -43462,7 +42060,6 @@ impl BlockStore {
         let data_file = self.ensure_data_file()?;
         data_file.try_io(|file| file.metadata().map(|meta| meta.len()))
     }
-
     /// Return the current size of the block index file in bytes.
     ///
     /// # Errors
@@ -43471,7 +42068,6 @@ impl BlockStore {
         let index_file = self.ensure_index_file()?;
         index_file.try_io(|file| file.metadata().map(|meta| meta.len()))
     }
-
     /// Return the current size of the block hashes file in bytes.
     ///
     /// # Errors
@@ -43480,7 +42076,6 @@ impl BlockStore {
         let hashes_file = self.ensure_hashes_file()?;
         hashes_file.try_io(|file| file.metadata().map(|meta| meta.len()))
     }
-
     /// Read block data starting from the
     /// `start_location_in_data_file` in data file in order to fill
     /// `dest_buffer`.
@@ -43499,7 +42094,6 @@ impl BlockStore {
         })?;
         Ok(())
     }
-
     /// Write the index of a single block at the specified `block_height`.
     /// If `block_height` is beyond the end of the index file, attempt to
     /// extend the index file.
@@ -43522,7 +42116,6 @@ impl BlockStore {
         self.schedule_fsync_after_write()?;
         Ok(())
     }
-
     /// Change the size of the index file (the value returned by
     /// `read_index_count`).
     ///
@@ -43540,7 +42133,6 @@ impl BlockStore {
         index_file.try_io(|file| file.set_len(new_byte_size))?;
         Ok(())
     }
-
     /// Write `block_data` into the data file starting at
     /// `start_location_in_data_file`. Extend the file if
     /// necessary.
@@ -43566,7 +42158,6 @@ impl BlockStore {
         self.schedule_fsync_after_write()?;
         Ok(())
     }
-
     /// Write the hash of a single block at the specified `block_height`.
     /// If `block_height` is beyond the end of the index file, attempt to
     /// extend the index file.
@@ -43588,7 +42179,6 @@ impl BlockStore {
         self.schedule_fsync_after_write()?;
         Ok(())
     }
-
     /// Write the hashes to the hashes file overwriting any previous hashes.
     ///
     /// # Errors
@@ -43609,7 +42199,6 @@ impl BlockStore {
         self.schedule_fsync_after_write()?;
         Ok(())
     }
-
     /// Rewrite a suffix of the hashes file while preserving every preceding byte.
     ///
     /// `start_block_height` is the zero-based hash index at which `hashes` begins.
@@ -43647,7 +42236,6 @@ impl BlockStore {
                 path.clone(),
             )
         })?;
-
         let hashes_file = self.ensure_hashes_file()?;
         hashes_file.try_io(|file| {
             let current_len = file.metadata()?.len();
@@ -43669,7 +42257,6 @@ impl BlockStore {
         self.schedule_fsync_after_write()?;
         Ok(())
     }
-
     fn require_existing_journal_bound_canonical_files(&self) -> Result<()> {
         for name in [
             INDEX_FILE_NAME,
@@ -43696,7 +42283,6 @@ impl BlockStore {
         }
         Ok(())
     }
-
     /// Open an existing canonical journal without recovery or repair.
     ///
     /// This is the first half of signed-lineage snapshot startup. It may set
@@ -43720,7 +42306,6 @@ impl BlockStore {
                 });
             }
         }
-
         let index_len = self.index_file_len()?;
         let hashes_len = self.hashes_file_len()?;
         if index_len % BlockIndex::SIZE != 0 || hashes_len % SIZE_OF_BLOCK_HASH != 0 {
@@ -43731,7 +42316,6 @@ impl BlockStore {
         if index_count != hashes_count || index_count < u64::try_from(audited_prefix_height)? {
             return Err(Error::HashesFileHeightMismatch);
         }
-
         let marker_path = self.commit_marker_path();
         let marker_bytes = Kura::read_regular_sidecar_bytes_for(
             &self.path_to_blockchain,
@@ -43771,7 +42355,6 @@ impl BlockStore {
         self.commit_marker_pending = None;
         Ok(index_count)
     }
-
     /// Create the index and data files if they do not
     /// already exist.
     ///
@@ -43793,7 +42376,6 @@ impl BlockStore {
         self.drop_cached_handles();
         Ok(())
     }
-
     /// Append `block_data` to this block store. First write
     /// the data to the data file and then create a new index
     /// for it in the index file.
@@ -43805,7 +42387,6 @@ impl BlockStore {
         // Delegate to the batch writer to share fsync/pending logic.
         self.append_block_batch(&[Arc::new(block.clone())])
     }
-
     /// Append multiple blocks to the chain in a single I/O batch.
     ///
     /// This method mirrors [`Self::append_block_to_chain`] but avoids repeated
@@ -43817,7 +42398,6 @@ impl BlockStore {
         let start_height = self.read_index_count()?;
         self.append_block_batch_at(start_height, blocks, 0)
     }
-
     #[allow(clippy::too_many_lines)]
     fn append_block_batch_at(
         &mut self,
@@ -43828,7 +42408,6 @@ impl BlockStore {
         if blocks.is_empty() {
             return Ok(());
         }
-
         self.recover_canonical_storage_stages()?;
         self.invalidate_data_mmap();
         debug!(
@@ -44009,7 +42588,6 @@ impl BlockStore {
             }
             return Err(error);
         }
-
         let end_height = start_height + blocks.len() as u64;
         self.commit_marker_pending = Some(
             self.commit_marker_pending
@@ -44130,286 +42708,51 @@ impl BlockStore {
         {
             self.flush_pending_fsync(false)?;
         }
-
         debug!(start_height, end_height, "append_block_batch complete");
         Ok(())
     }
-
-    /// Prune the block storage to the given height
-    ///
-    /// Removes block entries higher than the given height from
-    /// the data file, index file, and hashes file.
-    ///
-    /// This function **does not** fail if the data in files is behind
-    /// the given height.
-    ///
-    /// # Errors
-    ///
-    /// - If files do not exist (call [`Self::create_files_if_they_do_not_exist`])
-    /// - Other IO errors
-    pub fn prune(&mut self, height: u64) -> Result<()> {
-        self.prune_with_failpoint(height, 0)
-    }
-
-    fn maybe_fail_prune_after_stage(fail_stage: usize, stage: usize) {
-        #[cfg(test)]
-        if fail_stage == stage {
-            panic!("injected block-store prune crash after stage {stage}");
-        }
-        #[cfg(not(test))]
-        let _ = (fail_stage, stage);
-    }
-
-    fn prune_with_failpoint(&mut self, height: u64, fail_stage: usize) -> Result<()> {
-        self.recover_canonical_storage_stages()?;
-        self.prune_durable(height, false, fail_stage)
-    }
-
-    fn validate_rollback_prefix(
-        &mut self,
-        intent: &KuraRollbackIntent,
-        intent_path: &Path,
-    ) -> Result<()> {
-        let invalid = |reason: String| Error::RollbackIntentInvalid {
-            path: intent_path.to_path_buf(),
-            reason,
-        };
-        let index_count = self.read_index_count()?;
-        let hashes_count = self.read_hashes_count()?;
-        if index_count < intent.target_height || hashes_count < intent.target_height {
-            return Err(invalid(format!(
-                "canonical prefix is shorter than rollback target: index={index_count}, hashes={hashes_count}, target={}",
-                intent.target_height
-            )));
-        }
-        if index_count > intent.from_height || hashes_count > intent.from_height {
-            return Err(invalid(format!(
-                "canonical files advanced beyond rollback source: index={index_count}, hashes={hashes_count}, source={}",
-                intent.from_height
-            )));
-        }
-        if intent.target_height > 0 {
-            let actual = self
-                .read_block_hashes(intent.target_height.saturating_sub(1), 1)?
-                .first()
-                .copied()
-                .ok_or_else(|| invalid("rollback target hash is missing".to_owned()))?;
-            if Some(actual) != intent.target_block_hash {
-                return Err(invalid(format!(
-                    "rollback target hash mismatch: expected {:?}, actual {actual}",
-                    intent.target_block_hash
-                )));
-            }
-        }
-        let data_len = self.data_file_len()?;
-        for index in 0..intent.target_height {
-            let entry = self.read_block_index(index)?;
-            if entry.is_evicted() {
-                continue;
-            }
-            let end = entry
-                .start
-                .checked_add(entry.length)
-                .ok_or_else(|| invalid(format!("block data range overflows at index {index}")))?;
-            if entry.length == 0 || end > data_len {
-                return Err(invalid(format!(
-                    "block data does not contain rollback target prefix at index {index}"
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    fn prune_for_rollback(
-        &mut self,
-        intent: &KuraRollbackIntent,
-        intent_path: &Path,
-    ) -> Result<()> {
-        self.validate_rollback_prefix(intent, intent_path)?;
-        self.prune_durable(intent.target_height, true, 0)?;
-        self.verify_rollback_boundary(intent, intent_path)
-    }
-
-    fn verify_rollback_boundary(
-        &mut self,
-        intent: &KuraRollbackIntent,
-        intent_path: &Path,
-    ) -> Result<()> {
-        let index_count = self.read_index_count()?;
-        let hashes_count = self.read_hashes_count()?;
-        if index_count != intent.target_height || hashes_count != intent.target_height {
-            return Err(Error::RollbackIntentInvalid {
-                path: intent_path.to_path_buf(),
-                reason: format!(
-                    "rollback block boundary verification failed: index={index_count}, hashes={hashes_count}, target={}",
-                    intent.target_height
-                ),
-            });
-        }
-        let expected_data_len = self.data_end_for_index_prefix(intent.target_height)?;
-        let actual_data_len = self.data_file_len()?;
-        if actual_data_len != expected_data_len {
-            return Err(Error::RollbackIntentInvalid {
-                path: intent_path.to_path_buf(),
-                reason: format!(
-                    "rollback data boundary verification failed: data={actual_data_len}, expected={expected_data_len}"
-                ),
-            });
-        }
-        let marker_path = self.commit_marker_path();
-        let marker_bytes = Self::read_required_bounded_commit_marker_bytes(
-            &marker_path,
-            "rollback block marker is missing",
-        )?;
-        let marker =
-            norito::decode_canonical::<BlockStoreCommitMarker>(&marker_bytes).map_err(|err| {
-                Error::RollbackIntentInvalid {
-                    path: intent_path.to_path_buf(),
-                    reason: format!("rollback commit marker is not decodable: {err}"),
-                }
-            })?;
-        if marker.version != BlockStoreCommitMarker::VERSION || marker.count != intent.target_height
-        {
-            return Err(Error::RollbackIntentInvalid {
-                path: intent_path.to_path_buf(),
-                reason: format!(
-                    "rollback commit marker boundary mismatch: version={}, count={}, target={}",
-                    marker.version, marker.count, intent.target_height
-                ),
-            });
-        }
-        if self.da_blocks_dir.exists() {
-            for entry in std::fs::read_dir(&self.da_blocks_dir)
-                .map_err(|err| Error::IO(err, self.da_blocks_dir.clone()))?
-            {
-                let entry = entry.map_err(|err| Error::IO(err, self.da_blocks_dir.clone()))?;
-                let path = entry.path();
-                if !entry
-                    .file_type()
-                    .map_err(|err| Error::IO(err, path.clone()))?
-                    .is_file()
-                {
-                    continue;
-                }
-                let Some(height) = path
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .and_then(|stem| stem.parse::<u64>().ok())
-                else {
-                    continue;
-                };
-                if height > intent.target_height {
-                    return Err(Error::RollbackIntentInvalid {
-                        path: intent_path.to_path_buf(),
-                        reason: format!(
-                            "DA block artifact remains above rollback target at height {height}"
-                        ),
-                    });
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn prune_durable(&mut self, height: u64, rollback: bool, fail_stage: usize) -> Result<()> {
-        self.invalidate_data_mmap();
-        let logical_count = self.read_index_count_from_len()?;
-        let durable_count = self.read_durable_index_count()?;
-        let pruned_index_count = height.min(logical_count).min(durable_count);
-        if rollback && pruned_index_count != height {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "rollback target exceeds the durable canonical prefix",
-                ),
-                self.path_to_blockchain.clone(),
-            ));
-        }
-
-        // The prune marker is a forward-recovery authority and is published
-        // before destructive work. Legacy rollback intents instead retain the
-        // source marker until every canonical file reaches the target.
-        if !rollback {
-            self.publish_commit_marker(pruned_index_count)?;
-            Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_BLOCK_MARKER);
-        }
-
-        {
-            let mut file =
-                FileWrap::open_read_write(self.path_to_blockchain.join(INDEX_FILE_NAME))?;
-            let len = file.try_io(|file| file.metadata().map(|metadata| metadata.len()))?;
-            let new_len = (BlockIndex::SIZE * pruned_index_count).min(len);
-            file.try_io(|file| {
-                file.set_len(new_len)?;
-                file.sync_data()
-            })?;
-        }
-        Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_BLOCK_INDEX);
-        if rollback {
-            rollback_fault_point(RollbackFaultPoint::BlockIndexSynced)?;
-        }
-
-        {
-            let mut file =
-                FileWrap::open_read_write(self.path_to_blockchain.join(HASHES_FILE_NAME))?;
-            let len = file.try_io(|file| file.metadata().map(|metadata| metadata.len()))?;
-            let new_len = (SIZE_OF_BLOCK_HASH * pruned_index_count).min(len);
-            file.try_io(|file| {
-                file.set_len(new_len)?;
-                file.sync_data()
-            })?;
-        }
-        Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_BLOCK_HASHES);
-        if rollback {
-            rollback_fault_point(RollbackFaultPoint::BlockHashesSynced)?;
-        }
-
-        {
-            let mut file = FileWrap::open_read_write(self.path_to_blockchain.join(DATA_FILE_NAME))?;
-            let len = file.try_io(|file| file.metadata().map(|metadata| metadata.len()))?;
-            let new_len = self.data_end_for_index_prefix(pruned_index_count)?.min(len);
-            file.try_io(|file| {
-                file.set_len(new_len)?;
-                file.sync_data()
-            })?;
-        }
-        Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_BLOCK_DATA);
-        if rollback {
-            rollback_fault_point(RollbackFaultPoint::BlockDataSynced)?;
-        }
-
-        self.prune_da_block_files_above(pruned_index_count)?;
-        Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_DA_SIDECARS);
-        if rollback {
-            rollback_fault_point(RollbackFaultPoint::DaPruned)?;
-        }
-
-        self.commit_marker_pending = None;
-        self.commit_marker_count = pruned_index_count;
-        if rollback {
-            self.write_commit_marker(pruned_index_count)?;
-            rollback_fault_point(RollbackFaultPoint::CommitMarkerPublished)?;
-        }
-        if self
-            .read_verified_snapshot_tail_marker()?
-            .is_some_and(|marker| pruned_index_count < marker.snapshot_height)
-        {
-            self.remove_verified_snapshot_tail_marker()?;
-        }
-
-        Ok(())
-    }
 }
-
+include!("kura/prune_block_store_tail.rs");
 #[cfg(test)]
 include!("kura/test_fault_injection_state.rs");
-
 #[cfg(test)]
 include!("kura/test_fault_injection_controls.rs");
 include!("kura/file_error_support.rs");
-
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn stable_bounded_sidecar_read_rejects_post_admission_growth() {
+        let root = tempfile::tempdir().expect("create bounded-read root");
+        let path = root.path().join("bounded.norito");
+        std::fs::write(&path, [0_u8; 8]).expect("write admitted sidecar");
+        let error = super::Kura::read_regular_sidecar_snapshot_for_with_admission_hook(
+            root.path(),
+            &path,
+            root.path(),
+            8,
+            || {
+                use std::io::Write as _;
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&path)
+                    .expect("open admitted sidecar for growth")
+                    .write_all(&[1])
+                    .expect("grow admitted sidecar by one byte");
+            },
+        )
+        .expect_err("post-admission growth must invalidate the bounded read");
+        assert!(matches!(
+            error,
+            super::Error::IO(ref source, _)
+                if source.kind() == std::io::ErrorKind::InvalidData
+        ));
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("inspect grown sidecar")
+                .len(),
+            9
+        );
+    }
     // Textual includes preserve every test in the existing `kura::tests` namespace.
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");
     include!("kura/tests/01_prune_capacity_support.rs");

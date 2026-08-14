@@ -8,14 +8,13 @@
 //! this service never registers an archive and never refreshes or replaces the receipt embedded
 //! in the exact registration transaction. An exact active location replay is accepted by Core
 //! before the location-set CAS check; any changed location request remains revision-gated.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt, io,
+    fmt,
+    io::{self, Read},
     path::{Path, PathBuf},
     time::Duration,
 };
-
 use iroha::musubi_runtime::{
     AuthenticatedMusubiPublicationRuntimeClientV1, MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1,
     MusubiFinalizedArchiveRegistrationEvidenceV1, MusubiProviderReadbackRequestV1,
@@ -46,7 +45,6 @@ use iroha_data_model::{
 };
 use norito::{Decode, DecodeLimits, Encode};
 use url::Url;
-
 use crate::{
     atomic_io::{AtomicWriteError, AtomicWriteErrorCode, AtomicWriteRoot},
     local_file::read_bounded_single_link_regular_file_v1,
@@ -67,7 +65,6 @@ use crate::{
         RegistryTransactionStateV1,
     },
 };
-
 const DEFAULT_CLIENT_CONFIG: &str = "client.toml";
 const MAX_CLIENT_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_DELEGATION_BYTES: u64 = 256 * 1024;
@@ -94,7 +91,6 @@ const PROVIDER_ATTESTATION_CHECKPOINT_DECODE_LIMITS: DecodeLimits = DecodeLimits
     MAX_PROVIDER_ATTESTATION_CHECKPOINT_BYTES * 4,
     64,
 );
-
 // The set checkpoint deliberately excludes the archive CAS revision. A finalized concurrent
 // location transition may require rebasing still-missing registration transactions, but it must
 // never permit the coordinator to substitute the archive/order/provider proof set for this
@@ -110,7 +106,6 @@ struct PublicationProviderAttestationSetCheckpointV1 {
     references: Vec<MusubiProviderBundleAttestationRefV1>,
     set_digest: MusubiProviderBundleAttestationSetDigestV1,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct PublicationProviderAttestationCheckpointV1 {
     schema: String,
@@ -124,7 +119,6 @@ struct PublicationProviderAttestationCheckpointV1 {
     signed_transaction: SignedTransaction,
     transaction_hash: [u8; 32],
 }
-
 impl PublicationProviderAttestationSetCheckpointV1 {
     fn new(
         operation_id: PublicationOperationIdV1,
@@ -180,7 +174,6 @@ impl PublicationProviderAttestationSetCheckpointV1 {
             set_digest,
         })
     }
-
     fn validate(&self) -> Result<(), PublicationBackendError> {
         let expected = musubi_provider_bundle_attestation_set_digest_v1(
             self.archive_id,
@@ -203,7 +196,6 @@ impl PublicationProviderAttestationSetCheckpointV1 {
         Ok(())
     }
 }
-
 impl PublicationProviderAttestationCheckpointV1 {
     fn new(
         operation_id: PublicationOperationIdV1,
@@ -227,7 +219,6 @@ impl PublicationProviderAttestationCheckpointV1 {
             transaction_hash,
         }
     }
-
     fn validate_for(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -280,7 +271,6 @@ impl PublicationProviderAttestationCheckpointV1 {
         Ok(())
     }
 }
-
 /// Public request bindings selected by the production platform configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProductionPublicationBindingsV1 {
@@ -293,33 +283,27 @@ pub struct ProductionPublicationBindingsV1 {
     /// Optional public generation-bound delegation for a delegated first package claim.
     pub namespace_delegation: Option<MusubiNamespaceDelegationV1>,
 }
-
 /// Stable, secret-redacted platform publication configuration failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProductionPublicationConfigurationErrorV1 {
     code: &'static str,
 }
-
 impl ProductionPublicationConfigurationErrorV1 {
     const fn new(code: &'static str) -> Self {
         Self { code }
     }
-
     /// Return the stable payload-free failure code.
     #[must_use]
     pub const fn code(&self) -> &'static str {
         self.code
     }
 }
-
 impl fmt::Display for ProductionPublicationConfigurationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.code)
     }
 }
-
 impl std::error::Error for ProductionPublicationConfigurationErrorV1 {}
-
 /// Clean-package compiler validation injected by the packaging command.
 pub trait PublicationCleanPackageValidatorV1 {
     /// Validate the exact packaged CAR and return secret-free evidence.
@@ -335,7 +319,6 @@ pub trait PublicationCleanPackageValidatorV1 {
         car: &mut dyn Read,
     ) -> Result<PublicationValidationEvidenceV1, PublicationBackendError>;
 }
-
 impl<F> PublicationCleanPackageValidatorV1 for F
 where
     F: FnMut(
@@ -353,11 +336,9 @@ where
         self(operation_id, request, car)
     }
 }
-
 /// Fail-closed validator for callers that have not wired clean packaged-tree compilation.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UnavailablePublicationCleanPackageValidatorV1;
-
 impl PublicationCleanPackageValidatorV1 for UnavailablePublicationCleanPackageValidatorV1 {
     fn validate_clean_package(
         &mut self,
@@ -372,7 +353,6 @@ impl PublicationCleanPackageValidatorV1 for UnavailablePublicationCleanPackageVa
         ))
     }
 }
-
 #[derive(Clone)]
 struct ParsedProductionPublicationConfigV1 {
     seed_ingress_url: Url,
@@ -381,7 +361,6 @@ struct ParsedProductionPublicationConfigV1 {
     request_timeout: Duration,
     bindings: ProductionPublicationBindingsV1,
 }
-
 impl fmt::Debug for ParsedProductionPublicationConfigV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -392,7 +371,6 @@ impl fmt::Debug for ParsedProductionPublicationConfigV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Production implementation of the runtime-only publication service boundary.
 pub struct ProductionPublicationRuntimeV1<V> {
     read: RegistryReadClientV1,
@@ -406,7 +384,6 @@ pub struct ProductionPublicationRuntimeV1<V> {
     checkpoint_root: Option<AtomicWriteRoot>,
     verified_provider_checkpoint: Option<PublicationProviderRegistrationCheckpointV1>,
 }
-
 impl<V> fmt::Debug for ProductionPublicationRuntimeV1<V> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -417,14 +394,12 @@ impl<V> fmt::Debug for ProductionPublicationRuntimeV1<V> {
             .finish_non_exhaustive()
     }
 }
-
 impl<V> ProductionPublicationRuntimeV1<V> {
     /// Return the public request bindings while keeping runtime endpoints encapsulated.
     #[must_use]
     pub const fn bindings(&self) -> &ProductionPublicationBindingsV1 {
         &self.bindings
     }
-
     /// Bind immutable provider-attestation transaction checkpoints to the publication state root.
     ///
     /// The journal store must already have created its private `publication-v1` directory. An
@@ -456,7 +431,6 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         self.checkpoint_root = Some(root);
         Ok(())
     }
-
     fn validate_request(
         &self,
         request: &PublicationRequestV1,
@@ -474,13 +448,11 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         }
         Ok(())
     }
-
     fn checkpoint_root(&self) -> Result<&AtomicWriteRoot, PublicationBackendError> {
         self.checkpoint_root.as_ref().ok_or_else(|| {
             PublicationBackendError::permanent("PUBLICATION_CHECKPOINT_STORE_NOT_BOUND")
         })
     }
-
     fn persist_attestation_set_checkpoint(
         &self,
         checkpoint: &PublicationProviderAttestationSetCheckpointV1,
@@ -499,7 +471,6 @@ impl<V> ProductionPublicationRuntimeV1<V> {
             .map_err(map_provider_checkpoint_io)?;
         Ok(sidecar_hash)
     }
-
     fn validate_anchored_attestation_set_checkpoint(
         &self,
         checkpoint: &PublicationProviderAttestationSetCheckpointV1,
@@ -534,7 +505,6 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         }
         Ok(())
     }
-
     fn load_or_prepare_provider_checkpoint(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -575,7 +545,6 @@ impl<V> ProductionPublicationRuntimeV1<V> {
             )?;
             return Ok(checkpoint);
         }
-
         let instruction = RegisterMusubiProviderBundleAttestationV1::new(
             attestation.clone(),
             expected_location_revision,
@@ -611,7 +580,6 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         self.checkpoint_root()?
             .install_immutable(&relative, &encoded)
             .map_err(map_provider_checkpoint_io)?;
-
         let installed = self
             .checkpoint_root()?
             .load_immutable(&relative, MAX_PROVIDER_ATTESTATION_CHECKPOINT_BYTES)
@@ -637,7 +605,6 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         )?;
         Ok(installed)
     }
-
     #[expect(
         clippy::too_many_arguments,
         reason = "checkpoint loading binds every immutable publication and attestation coordinate explicitly"
@@ -701,7 +668,6 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         }
         Ok(checkpoint)
     }
-
     fn exact_provider_attestation_registered(
         &self,
         registered: &PublicationRegisteredArchiveV1,
@@ -718,7 +684,6 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         validate_exact_provider_attestation_record(registered, attestation, &record)?;
         Ok(true)
     }
-
     fn coordinate_absent_archive_location(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -755,7 +720,6 @@ impl<V> ProductionPublicationRuntimeV1<V> {
                 "ARCHIVE_LOCATION_GENERATION_INVALID",
             ));
         }
-
         let coordination_request = MusubiStorageCoordinationRequestV1 {
             version: 1,
             operation_id: *operation_id.as_bytes(),
@@ -821,7 +785,6 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         }
         Ok((response, page, attestation_set))
     }
-
     fn validate_provider_registration_checkpoint(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -874,7 +837,6 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         }
         Ok(())
     }
-
     #[expect(
         clippy::too_many_arguments,
         reason = "the append operation records every signed provider-registration coordinate explicitly"
@@ -916,7 +878,6 @@ impl<V> ProductionPublicationRuntimeV1<V> {
             updated,
         ))
     }
-
     fn provider_attestation_rejection_rebase_revision(
         &self,
         request: &PublicationRequestV1,
@@ -947,7 +908,6 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         }
         Ok(page.archive.location_revision)
     }
-
     fn finalized_archive_page(
         &self,
         request: &PublicationRequestV1,
@@ -982,7 +942,6 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         }
         Ok(page)
     }
-
     fn finalized_location_state(
         &self,
         request: &PublicationRequestV1,
@@ -1032,7 +991,6 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         }
         Ok(FinalizedLocationStateV1::Exact { page })
     }
-
     #[expect(
         clippy::too_many_lines,
         reason = "the finalized transaction state machine keeps all fail-closed archive-location checks adjacent"
@@ -1167,13 +1125,11 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum FinalizedLocationStateV1 {
     Exact { page: MusubiArchiveLocationPageV1 },
     Absent { page: MusubiArchiveLocationPageV1 },
 }
-
 fn validate_exact_provider_attestation_record(
     registered: &PublicationRegisteredArchiveV1,
     expected: &MusubiProviderBundleVerificationAttestationV1,
@@ -1199,7 +1155,6 @@ fn validate_exact_provider_attestation_record(
     }
     Ok(())
 }
-
 fn validate_finalized_archive_page(
     request: &PublicationRequestV1,
     registered: &PublicationRegisteredArchiveV1,
@@ -1251,7 +1206,6 @@ fn validate_finalized_archive_page(
     }
     Ok(())
 }
-
 fn coordination_provider_attestation_set_digest(
     response: &MusubiStorageCoordinationResponseV1,
 ) -> Result<MusubiProviderBundleAttestationSetDigestV1, PublicationBackendError> {
@@ -1278,7 +1232,6 @@ fn coordination_provider_attestation_set_digest(
         }
     }
 }
-
 fn location_matches_coordination_response(
     location: &iroha_data_model::musubi::MusubiArchiveLocationV1,
     response: &MusubiStorageCoordinationResponseV1,
@@ -1296,7 +1249,6 @@ fn location_matches_coordination_response(
         && location.renew_after_epoch == response.renew_after_epoch
         && location.expires_at_epoch == response.expires_at_epoch
 }
-
 fn location_add_instruction(
     response: &MusubiStorageCoordinationResponseV1,
     expected_location_revision: u64,
@@ -1312,7 +1264,6 @@ fn location_add_instruction(
         expected_location_revision,
     })
 }
-
 fn provider_attestation_set_checkpoint_relative_path(
     operation_id: PublicationOperationIdV1,
     generation: u8,
@@ -1321,7 +1272,6 @@ fn provider_attestation_set_checkpoint_relative_path(
         "{operation_id}.location-{generation:02}.provider-set.norito"
     ))
 }
-
 fn encode_attestation_set_checkpoint(
     checkpoint: &PublicationProviderAttestationSetCheckpointV1,
 ) -> Result<Vec<u8>, PublicationBackendError> {
@@ -1335,7 +1285,6 @@ fn encode_attestation_set_checkpoint(
     }
     Ok(encoded)
 }
-
 fn encode_provider_attestation_checkpoint(
     checkpoint: &PublicationProviderAttestationCheckpointV1,
 ) -> Result<Vec<u8>, PublicationBackendError> {
@@ -1349,7 +1298,6 @@ fn encode_provider_attestation_checkpoint(
     }
     Ok(encoded)
 }
-
 fn provider_attestation_sidecar_hash(encoded: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(
@@ -1366,7 +1314,6 @@ fn provider_attestation_sidecar_hash(encoded: &[u8]) -> [u8; 32] {
     hasher.update(encoded);
     *hasher.finalize().as_bytes()
 }
-
 fn provider_attestation_checkpoint_relative_path(
     operation_id: PublicationOperationIdV1,
     generation: u8,
@@ -1384,7 +1331,6 @@ fn provider_attestation_checkpoint_relative_path(
         hex::encode(attestation_digest.as_bytes())
     ))
 }
-
 fn next_provider_attestation_registration_attempt(
     attempt: u8,
 ) -> Result<u8, PublicationBackendError> {
@@ -1397,7 +1343,6 @@ fn next_provider_attestation_registration_attempt(
             )
         })
 }
-
 #[expect(
     clippy::needless_pass_by_value,
     reason = "this adapter is passed directly to Result::map_err and consumes its owned error value"
@@ -1410,7 +1355,6 @@ fn map_provider_checkpoint_io(error: AtomicWriteError) -> PublicationBackendErro
         _ => PublicationBackendError::permanent("PROVIDER_ATTESTATION_CHECKPOINT_IO"),
     }
 }
-
 impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
     for ProductionPublicationRuntimeV1<V>
 {
@@ -1424,7 +1368,6 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
         self.validator
             .validate_clean_package(operation_id, request, car)
     }
-
     fn stage_authenticated_seed_ingress(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -1457,7 +1400,6 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
             .stage_seed_ingress(&self.seed_ingress_url, &request, &car_plan, car)
             .map_err(map_transport_error)
     }
-
     #[expect(
         clippy::too_many_lines,
         reason = "provider registration is an ordered checkpointed state machine whose evidence checks must remain adjacent"
@@ -1489,7 +1431,6 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
                 "ARCHIVE_LOCATION_UNJOURNALED_FINALITY",
             ));
         };
-
         let Some(checkpoint) = checkpoint else {
             let set_sidecar_hash = self.persist_attestation_set_checkpoint(&attestation_set)?;
             let checkpoint = PublicationProviderRegistrationCheckpointV1 {
@@ -1515,7 +1456,6 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
             provider_attestations,
             checkpoint,
         )?;
-
         for attestation in provider_attestations {
             if self.exact_provider_attestation_registered(registered, attestation)? {
                 continue;
@@ -1548,7 +1488,6 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
                     "PROVIDER_REGISTRATION_CHECKPOINT_INVALID",
                 ));
             }
-
             let mut state = self
                 .signing
                 .transaction_application_state_v1(&sidecar.signed_transaction)
@@ -1571,7 +1510,6 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
                     .transaction_application_state_v1(&sidecar.signed_transaction)
                     .map_err(map_registry_error)?;
             }
-
             match state {
                 RegistryTransactionStateV1::Absent => {
                     return match submission.expect("absent state is submitted exactly once") {
@@ -1628,11 +1566,9 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
                 }
             }
         }
-
         self.verified_provider_checkpoint = Some(checkpoint.clone());
         Ok(PublicationProviderRegistrationCheckpointAdvanceV1::Ready)
     }
-
     fn prepare_archive_location_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -1676,7 +1612,6 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
                 ));
             }
         }
-
         let instruction = location_add_instruction(&response, page.archive.location_revision)?;
         let payload = self
             .signing
@@ -1694,7 +1629,6 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
             signed_transaction,
         ))
     }
-
     fn submit_or_recover_archive_location(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -1734,7 +1668,6 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
         }
         self.location_transaction_advance(request, registered, intent, initial_state)
     }
-
     fn readback_provider(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -1771,14 +1704,12 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
         })
     }
 }
-
 /// Loaded signer, runtime services, and public request bindings for one platform config.
 pub struct LoadedProductionPublicationRuntimeV1<V> {
     signing: RegistrySigningClientV1,
     services: ProductionPublicationRuntimeV1<V>,
     bindings: ProductionPublicationBindingsV1,
 }
-
 impl<V> fmt::Debug for LoadedProductionPublicationRuntimeV1<V> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1788,19 +1719,16 @@ impl<V> fmt::Debug for LoadedProductionPublicationRuntimeV1<V> {
             .finish_non_exhaustive()
     }
 }
-
 impl<V> LoadedProductionPublicationRuntimeV1<V> {
     /// Return the public values needed to construct the immutable publication request.
     #[must_use]
     pub const fn bindings(&self) -> &ProductionPublicationBindingsV1 {
         &self.bindings
     }
-
-    /// Clone the signer-free reader built from the same image as this runtime and signer.
+    /// Clone the authenticated reader built from the same image as this runtime and signer.
     pub(crate) fn registry_reader(&self) -> RegistryReadClientV1 {
         self.services.read.clone()
     }
-
     /// Split the loaded boundary into signer, runtime services, and public bindings.
     #[must_use]
     pub fn into_parts(
@@ -1813,7 +1741,6 @@ impl<V> LoadedProductionPublicationRuntimeV1<V> {
         (self.signing, self.services, self.bindings)
     }
 }
-
 /// Load the production runtime exclusively from an explicit or platform `client.toml`.
 ///
 /// # Errors
@@ -1842,9 +1769,8 @@ where
     })?;
     load_production_publication_runtime_from_bytes_v1(&config_path, &config_bytes, validator)
 }
-
 /// Load a production runtime only when the selected platform configuration still matches the
-/// exact image used by the preceding signer-free resolution phase.
+/// exact image used by the preceding authenticated resolution phase.
 ///
 /// The bounded file is read before any signer or runtime configuration is parsed. Its anchored
 /// path and domain-separated digest are process-local provenance and are never returned in an
@@ -1872,7 +1798,6 @@ where
     }
     load_production_publication_runtime_from_bytes_v1(config_path, &config_bytes, validator)
 }
-
 fn load_production_publication_runtime_from_bytes_v1<V>(
     config_path: &Path,
     config_bytes: &[u8],
@@ -1888,7 +1813,7 @@ where
                     "MUSUBI_PUBLICATION_SIGNER_CONFIG_INVALID",
                 )
             })?;
-    let read = RegistryReadClientV1::load_from_config_bytes(config_bytes).map_err(|_| {
+    let read = signing.authenticated_reader().map_err(|_| {
         ProductionPublicationConfigurationErrorV1::new("MUSUBI_PUBLICATION_PUBLIC_CONFIG_INVALID")
     })?;
     if read.account_chain_discriminant() != signing.account_chain_discriminant() {
@@ -1923,7 +1848,6 @@ where
         bindings,
     })
 }
-
 fn parse_publication_config(
     path: &Path,
     signing: &RegistrySigningClientV1,
@@ -1942,7 +1866,6 @@ fn parse_publication_config(
             "MUSUBI_PUBLICATION_CONFIG_MISSING",
         ));
     }
-
     let seed_ingress_url = parse_service_url(required_config_string(
         publication.seed_ingress_url.as_deref(),
     )?)?;
@@ -2000,7 +1923,6 @@ fn parse_publication_config(
         },
     })
 }
-
 fn parse_provider_gateways(
     gateways: &[iroha::config::MusubiPublicationProviderGatewayConfig],
 ) -> Result<BTreeMap<ProviderId, Url>, ProductionPublicationConfigurationErrorV1> {
@@ -2027,7 +1949,6 @@ fn parse_provider_gateways(
     }
     Ok(result)
 }
-
 fn load_namespace_delegation(
     config_path: &Path,
     configured_path: &str,
@@ -2064,7 +1985,6 @@ fn load_namespace_delegation(
     }
     Ok(delegation)
 }
-
 fn parse_service_url(raw: &str) -> Result<Url, ProductionPublicationConfigurationErrorV1> {
     let url = raw.parse::<Url>().map_err(|_| {
         ProductionPublicationConfigurationErrorV1::new("MUSUBI_PUBLICATION_SERVICE_URL_INVALID")
@@ -2074,7 +1994,6 @@ fn parse_service_url(raw: &str) -> Result<Url, ProductionPublicationConfiguratio
     })?;
     Ok(url)
 }
-
 fn parse_provider_id(raw: &str) -> Result<ProviderId, ProductionPublicationConfigurationErrorV1> {
     if raw.len() != 64
         || raw
@@ -2098,7 +2017,6 @@ fn parse_provider_id(raw: &str) -> Result<ProviderId, ProductionPublicationConfi
     }
     Ok(ProviderId::new(bytes))
 }
-
 fn required_config_string(
     value: Option<&str>,
 ) -> Result<&str, ProductionPublicationConfigurationErrorV1> {
@@ -2106,21 +2024,18 @@ fn required_config_string(
         .filter(|value| !value.is_empty() && value.trim() == *value)
         .ok_or_else(invalid_publication_config)
 }
-
 const fn invalid_publication_config() -> ProductionPublicationConfigurationErrorV1 {
     ProductionPublicationConfigurationErrorV1::new("MUSUBI_PUBLICATION_CONFIG_INVALID")
 }
-
 /// Read one exact bounded platform `client.toml` through a no-follow stable descriptor.
 ///
-/// This is shared by publication, signer-free registry reads, and prepared archive fetching so
+/// This is shared by publication, authenticated registry reads, and prepared archive fetching so
 /// all consumers preserve the same single-link and before/after identity checks. The reader is
 /// qualified on Unix; other targets return [`io::ErrorKind::Unsupported`] before path metadata or
 /// file contents are consulted.
 pub(crate) fn read_bounded_platform_config_v1(path: &Path) -> std::io::Result<Vec<u8>> {
     read_bounded_nonempty_regular(path, MAX_CLIENT_CONFIG_BYTES)
 }
-
 fn read_bounded_nonempty_regular(path: &Path, maximum: u64) -> io::Result<Vec<u8>> {
     let bytes = read_bounded_single_link_regular_file_v1(path, maximum)?;
     if bytes.is_empty() {
@@ -2131,7 +2046,6 @@ fn read_bounded_nonempty_regular(path: &Path, maximum: u64) -> io::Result<Vec<u8
     }
     Ok(bytes)
 }
-
 fn map_transport_error(error: MusubiPublicationRuntimeTransportErrorV1) -> PublicationBackendError {
     match error.class() {
         MusubiPublicationRuntimeTransportFailureClassV1::Retryable => {
@@ -2142,7 +2056,6 @@ fn map_transport_error(error: MusubiPublicationRuntimeTransportErrorV1) -> Publi
         }
     }
 }
-
 fn map_registry_error(error: crate::registry::RegistryErrorV1) -> PublicationBackendError {
     match error.class() {
         RegistryFailureClassV1::Retryable | RegistryFailureClassV1::StaleCursor => {
@@ -2153,7 +2066,6 @@ fn map_registry_error(error: crate::registry::RegistryErrorV1) -> PublicationBac
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -2162,10 +2074,7 @@ mod tests {
         net::TcpListener,
         thread,
     };
-
-    use iroha::crypto::{
-        Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, Signature, SignatureOf,
-    };
+    use iroha::crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, Signature, SignatureOf};
     #[cfg(unix)]
     use iroha_data_model::musubi::{
         MusubiNamespaceBindingDigestV1, MusubiNamespaceDelegationApprovalV1,
@@ -2197,16 +2106,13 @@ mod tests {
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
     use tempfile::tempdir;
-
     use super::*;
     use crate::publish::PublicationBackendFailureClass;
-
     fn test_network_id(byte: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([byte; Hash::LENGTH]),
         ))
     }
-
     fn write_client_config(
         path: &Path,
         extra: &str,
@@ -2262,7 +2168,6 @@ mod tests {
         RegistrySigningClientV1::load_with_publication_config(Some(path))
             .expect("load signer with typed publication config")
     }
-
     fn serve_archive_page_once(
         page: &MusubiArchiveLocationPageV1,
     ) -> (Url, thread::JoinHandle<Vec<u8>>) {
@@ -2318,7 +2223,6 @@ mod tests {
             server,
         )
     }
-
     fn rebase_commitment() -> MusubiArchiveCommitmentV1 {
         MusubiArchiveCommitmentV1 {
             root_cid: ManifestRootCid::from_blake3_digest([0x71; 32]).expect("root CID"),
@@ -2341,7 +2245,6 @@ mod tests {
             chunk_count: 4,
         }
     }
-
     struct RebaseFixture {
         runtime: ProductionPublicationRuntimeV1<UnavailablePublicationCleanPackageValidatorV1>,
         request: PublicationRequestV1,
@@ -2349,7 +2252,6 @@ mod tests {
         response: MusubiStorageCoordinationResponseV1,
         page: MusubiArchiveLocationPageV1,
     }
-
     #[expect(
         clippy::too_many_lines,
         reason = "the fixture assembles one internally consistent publication rebase state"
@@ -2539,7 +2441,7 @@ mod tests {
             next_cursor: None,
             snapshot: registered_snapshot,
         };
-        let read = RegistryReadClientV1::new(torii_url, Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(torii_url, Duration::from_secs(2), 369)
             .expect("registry reader");
         let http = signing
             .publication_runtime_client(parsed.request_timeout)
@@ -2564,7 +2466,6 @@ mod tests {
             page,
         }
     }
-
     fn coordinator_location(fixture: &RebaseFixture) -> MusubiArchiveLocationV1 {
         let provider_attestations = coordinator_provider_attestations(fixture);
         MusubiArchiveLocationV1 {
@@ -2587,7 +2488,6 @@ mod tests {
             state: MusubiArchiveLocationStateV1::Healthy,
         }
     }
-
     fn coordinator_provider_attestations(
         fixture: &RebaseFixture,
     ) -> &[MusubiProviderBundleVerificationAttestationV1] {
@@ -2600,25 +2500,22 @@ mod tests {
         };
         provider_attestations
     }
-
     fn serve_rebase_fixture_page(fixture: &mut RebaseFixture) -> thread::JoinHandle<Vec<u8>> {
         fixture
             .page
             .validate()
             .expect("valid finalized archive page");
         let (url, server) = serve_archive_page_once(&fixture.page);
-        fixture.runtime.read = RegistryReadClientV1::new(url, Duration::from_secs(2), 369)
+        fixture.runtime.read = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 369)
             .expect("loopback registry reader");
         server
     }
-
     fn advance_rebase_page(fixture: &mut RebaseFixture, location_revision: u64) {
         fixture.page.snapshot.finalized_height += 1;
         fixture.page.snapshot.finalized_block_hash = [0x87; 32];
         fixture.page.snapshot.index_revision += 1;
         fixture.page.archive.location_revision = location_revision;
     }
-
     fn rebase_location_intent(fixture: &RebaseFixture) -> PublicationArchiveLocationIntentV1 {
         let instruction =
             location_add_instruction(&fixture.response, fixture.page.archive.location_revision)
@@ -2640,7 +2537,6 @@ mod tests {
             builder.sign(publisher_key.private_key()),
         )
     }
-
     fn signed_provider_attestation_transaction(
         request: &PublicationRequestV1,
         instruction: RegisterMusubiProviderBundleAttestationV1,
@@ -2659,7 +2555,6 @@ mod tests {
             .expect("sign provider checkpoint transaction payload");
         builder.build_with_signature(signature)
     }
-
     #[test]
     fn provider_attestation_checkpoint_decode_limits_admit_maximum_approval_set() {
         let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -2707,7 +2602,6 @@ mod tests {
         attestation
             .verify(&attestation.payload.binding)
             .expect("maximum approval-set attestation");
-
         let instruction = RegisterMusubiProviderBundleAttestationV1::new(
             attestation.clone(),
             expected_location_revision,
@@ -2746,7 +2640,6 @@ mod tests {
             )
             .expect("decoded maximum checkpoint remains valid");
     }
-
     #[test]
     fn provider_attestation_set_checkpoint_is_deterministic_and_rejects_substitution() {
         let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -2774,7 +2667,6 @@ mod tests {
             norito::encode_canonical(&checkpoint).expect("encode checkpoint"),
             norito::encode_canonical(&repeated).expect("encode repeated checkpoint")
         );
-
         let mut substituted_reference = checkpoint.clone();
         substituted_reference.references[0].digest =
             MusubiProviderBundleAttestationDigestV1::new([0xee; 32]);
@@ -2782,14 +2674,12 @@ mod tests {
             substituted_reference.validate().is_err(),
             "the aggregate digest must reject a substituted provider reference"
         );
-
         let mut reordered_references = checkpoint.clone();
         reordered_references.references.reverse();
         assert!(
             reordered_references.validate().is_err(),
             "the aggregate digest must reject a reordered provider set"
         );
-
         let mut substituted_order = checkpoint;
         substituted_order.replication_order = ReplicationOrderId::new([0xef; 32]);
         assert!(
@@ -2797,7 +2687,6 @@ mod tests {
             "the aggregate digest must bind the exact replication order"
         );
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -2835,7 +2724,6 @@ mod tests {
                 &attestation,
             )
             .expect("exact signed provider checkpoint");
-
         let mut invalid_provider_attestation = attestation.clone();
         let unrelated_provider_key =
             KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519).expect("unrelated provider");
@@ -2874,7 +2762,6 @@ mod tests {
                 .is_err(),
             "a checkpoint must verify the provider-owner attestation signature"
         );
-
         let substituted_instruction = RegisterMusubiProviderBundleAttestationV1::new(
             attestation.clone(),
             expected_location_revision + 1,
@@ -2900,7 +2787,6 @@ mod tests {
                 .is_err(),
             "a validly signed transaction for another instruction must be rejected"
         );
-
         let mut signature_substitution = checkpoint;
         signature_substitution.signed_transaction =
             signed_provider_attestation_transaction(&fixture.request, exact_instruction, 0x52);
@@ -2920,7 +2806,6 @@ mod tests {
             "a signature outside the publication authority must be rejected"
         );
     }
-
     #[test]
     fn exact_provider_attestation_accepts_another_managers_original_audit_actor() {
         let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -2938,7 +2823,6 @@ mod tests {
         };
         validate_exact_provider_attestation_record(&fixture.registered, &attestation, &record)
             .expect("registered_by is immutable audit provenance, not proof identity");
-
         let mut preexisting = record;
         preexisting.registered_at_height = fixture.registered.archive.registered_at_height;
         let error = validate_exact_provider_attestation_record(
@@ -2953,7 +2837,6 @@ mod tests {
         );
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
     }
-
     #[test]
     fn provider_attestation_checkpoint_restart_loads_exact_attempt_and_rejects_substitution() {
         let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -3010,7 +2893,6 @@ mod tests {
                 .expect("restart loads exact immutable checkpoint"),
             checkpoint
         );
-
         let substituted_attempt_path = provider_attestation_checkpoint_relative_path(
             operation_id,
             1,
@@ -3039,7 +2921,6 @@ mod tests {
         assert_eq!(error.code(), "PROVIDER_ATTESTATION_CHECKPOINT_INVALID");
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
     }
-
     #[test]
     fn anchored_provider_set_sidecar_deletion_is_permanent_on_reopen() {
         let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -3063,7 +2944,6 @@ mod tests {
             .runtime
             .persist_attestation_set_checkpoint(&checkpoint)
             .expect("install provider set sidecar");
-
         let mut reopened = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
         reopened
             .runtime
@@ -3073,7 +2953,6 @@ mod tests {
             .runtime
             .validate_anchored_attestation_set_checkpoint(&checkpoint, sidecar_hash)
             .expect("reopened runtime validates the exact anchored set sidecar");
-
         let relative = provider_attestation_set_checkpoint_relative_path(operation_id, 1);
         fs::remove_file(state.path().join(relative)).expect("delete anchored set sidecar fixture");
         let mut deleted_reopen = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -3088,7 +2967,6 @@ mod tests {
         assert_eq!(error.code(), "PROVIDER_ATTESTATION_SET_CHECKPOINT_MISSING");
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
     }
-
     #[test]
     fn anchored_provider_transaction_sidecar_deletion_is_permanent_on_reopen() {
         let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -3127,7 +3005,6 @@ mod tests {
             .expect("bind checkpoint writer")
             .install_immutable(&relative, &encoded)
             .expect("install provider transaction sidecar");
-
         let mut reopened = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
         reopened
             .runtime
@@ -3148,7 +3025,6 @@ mod tests {
                 .expect("reopened runtime validates the exact anchored transaction sidecar"),
             checkpoint
         );
-
         fs::remove_file(state.path().join(&relative))
             .expect("delete anchored transaction sidecar fixture");
         let mut deleted_reopen = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -3171,7 +3047,6 @@ mod tests {
         assert_eq!(error.code(), "PROVIDER_ATTESTATION_CHECKPOINT_MISSING");
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
     }
-
     #[test]
     fn provider_attestation_checkpoint_attempt_chain_is_bounded() {
         for attempt in 1..MAX_PROVIDER_ATTESTATION_REGISTRATION_ATTEMPTS {
@@ -3191,7 +3066,6 @@ mod tests {
         );
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
     }
-
     #[test]
     fn provider_attestation_rejection_rebases_only_from_a_covering_advanced_snapshot() {
         let mut lagging = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -3209,7 +3083,6 @@ mod tests {
         assert_eq!(error.code(), "PROVIDER_ATTESTATION_FINALIZED_QUERY_PENDING");
         assert_eq!(error.class(), PublicationBackendFailureClass::Retryable);
         server.join().expect("lagging finalized query server");
-
         let mut unchanged = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
         let signed_revision = unchanged.page.archive.location_revision;
         advance_rebase_page(&mut unchanged, signed_revision);
@@ -3227,7 +3100,6 @@ mod tests {
         assert_eq!(error.code(), "PROVIDER_ATTESTATION_REGISTRATION_TERMINAL");
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
         server.join().expect("unchanged finalized query server");
-
         let mut advanced = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
         let signed_revision = advanced.page.archive.location_revision;
         advance_rebase_page(&mut advanced, signed_revision + 1);
@@ -3246,7 +3118,6 @@ mod tests {
             signed_revision + 1
         );
         server.join().expect("advanced finalized query server");
-
         let missing_height = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
         let error = missing_height
             .runtime
@@ -3263,7 +3134,6 @@ mod tests {
         );
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
     }
-
     #[test]
     fn provider_attestation_sidecar_paths_are_deterministic_and_disjoint() {
         let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -3271,7 +3141,6 @@ mod tests {
         let attestation = &coordinator_provider_attestations(&fixture)[0];
         let provider_id = attestation.key().provider_id;
         let attestation_digest = attestation.digest();
-
         let set_path = provider_attestation_set_checkpoint_relative_path(operation_id, 3);
         assert_eq!(
             set_path,
@@ -3283,7 +3152,6 @@ mod tests {
             set_path,
             provider_attestation_set_checkpoint_relative_path(operation_id, 3)
         );
-
         let provider_path = provider_attestation_checkpoint_relative_path(
             operation_id,
             3,
@@ -3365,7 +3233,6 @@ mod tests {
             std::path::Component::ParentDir | std::path::Component::RootDir
         )));
     }
-
     #[test]
     fn finalized_rebase_recovers_preexisting_exact_location_without_submission() {
         let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -3374,7 +3241,6 @@ mod tests {
         fixture.page.archive.location_ids = vec![location.location_id];
         fixture.page.items = vec![location];
         let server = serve_rebase_fixture_page(&mut fixture);
-
         assert!(matches!(
             fixture
                 .runtime
@@ -3392,7 +3258,6 @@ mod tests {
         );
         assert!(query.page.cursor.is_none());
     }
-
     #[test]
     fn archive_location_page_rejects_future_height_and_revision_items() {
         let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -3407,7 +3272,6 @@ mod tests {
             page.validate().is_err(),
             "a finalized page cannot contain a future location transition"
         );
-
         location.finalized_height = page.snapshot.finalized_height;
         location.revision = page.archive.location_revision + 1;
         page.items = vec![location];
@@ -3416,7 +3280,6 @@ mod tests {
             "a location revision cannot exceed its archive CAS revision"
         );
     }
-
     #[test]
     fn preparation_rejects_a_same_id_location_changed_after_coordination() {
         let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -3429,7 +3292,6 @@ mod tests {
         fixture.page.archive.location_ids = vec![location.location_id];
         fixture.page.items = vec![location];
         let server = serve_rebase_fixture_page(&mut fixture);
-
         let error = fixture
             .runtime
             .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
@@ -3438,7 +3300,6 @@ mod tests {
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
         server.join().expect("finalized query server");
     }
-
     #[test]
     fn finalized_rebase_rejects_same_id_with_another_attestation_set() {
         let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -3449,7 +3310,6 @@ mod tests {
         fixture.page.archive.location_ids = vec![location.location_id];
         fixture.page.items = vec![location];
         let server = serve_rebase_fixture_page(&mut fixture);
-
         let error = fixture
             .runtime
             .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
@@ -3458,7 +3318,6 @@ mod tests {
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
         server.join().expect("finalized query server");
     }
-
     #[test]
     fn finalized_rebase_rejects_a_coordinator_location_retired_since_its_checkpoint() {
         let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -3470,7 +3329,6 @@ mod tests {
             MusubiStorageLocationDispositionV1::Registered(historical_location);
         advance_rebase_page(&mut fixture, 3);
         let server = serve_rebase_fixture_page(&mut fixture);
-
         let error = fixture
             .runtime
             .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
@@ -3479,13 +3337,11 @@ mod tests {
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
         server.join().expect("finalized query server");
     }
-
     #[test]
     fn finalized_rebase_uses_current_revision_instead_of_coordinator_cache() {
         let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
         advance_rebase_page(&mut fixture, 7);
         let server = serve_rebase_fixture_page(&mut fixture);
-
         let state = fixture
             .runtime
             .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
@@ -3516,14 +3372,12 @@ mod tests {
         );
         server.join().expect("finalized query server");
     }
-
     #[test]
     fn finalized_rebase_rejects_immutable_archive_conflict() {
         let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
         advance_rebase_page(&mut fixture, 2);
         fixture.page.archive.registered_at_height += 1;
         let server = serve_rebase_fixture_page(&mut fixture);
-
         let error = fixture
             .runtime
             .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
@@ -3532,7 +3386,6 @@ mod tests {
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
         server.join().expect("finalized query server");
     }
-
     #[test]
     fn finalized_rebase_rejects_every_immutable_archive_projection_substitution() {
         enum ProjectionMutation {
@@ -3541,7 +3394,6 @@ mod tests {
             Receipt,
             Registrant,
         }
-
         for mutation in [
             ProjectionMutation::Network,
             ProjectionMutation::Commitment,
@@ -3601,7 +3453,6 @@ mod tests {
                 .validate()
                 .expect("substituted projection remains structurally valid");
             let server = serve_rebase_fixture_page(&mut fixture);
-
             let error = fixture
                 .runtime
                 .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
@@ -3611,7 +3462,6 @@ mod tests {
             server.join().expect("finalized query server");
         }
     }
-
     #[test]
     fn finalized_rebase_retries_a_snapshot_older_than_registration_evidence() {
         let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -3619,7 +3469,6 @@ mod tests {
         fixture.page.snapshot.finalized_block_hash = [0x89; 32];
         fixture.page.snapshot.index_revision -= 1;
         let server = serve_rebase_fixture_page(&mut fixture);
-
         let error = fixture
             .runtime
             .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
@@ -3628,13 +3477,11 @@ mod tests {
         assert_eq!(error.class(), PublicationBackendFailureClass::Retryable);
         server.join().expect("finalized query server");
     }
-
     #[test]
     fn finalized_rebase_rejects_mutable_change_at_the_same_snapshot() {
         let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
         fixture.page.archive.location_revision += 1;
         let server = serve_rebase_fixture_page(&mut fixture);
-
         let error = fixture
             .runtime
             .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
@@ -3643,7 +3490,6 @@ mod tests {
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
         server.join().expect("finalized query server");
     }
-
     #[test]
     fn finalized_rebase_retries_a_regressed_location_revision() {
         let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -3658,7 +3504,6 @@ mod tests {
         }
         advance_rebase_page(&mut fixture, 2);
         let server = serve_rebase_fixture_page(&mut fixture);
-
         let error = fixture
             .runtime
             .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
@@ -3667,13 +3512,11 @@ mod tests {
         assert_eq!(error.class(), PublicationBackendFailureClass::Retryable);
         server.join().expect("finalized query server");
     }
-
     #[test]
     fn finalized_rebase_rejects_exhausted_location_revision() {
         let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
         advance_rebase_page(&mut fixture, u64::MAX);
         let server = serve_rebase_fixture_page(&mut fixture);
-
         let error = fixture
             .runtime
             .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
@@ -3682,7 +3525,6 @@ mod tests {
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
         server.join().expect("finalized query server");
     }
-
     #[test]
     fn location_transaction_waits_for_its_finalized_anchor_and_fails_closed_without_rebase() {
         let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
@@ -3705,7 +3547,6 @@ mod tests {
             PublicationArchiveLocationAdvanceV1::Pending
         );
         server.join().expect("finalized query server");
-
         let server = serve_rebase_fixture_page(&mut fixture);
         let error = fixture
             .runtime
@@ -3723,7 +3564,6 @@ mod tests {
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
         server.join().expect("finalized query server");
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -3762,7 +3602,6 @@ mod tests {
             ) if block_height == rejected_height
         ));
         server.join().expect("finalized query server");
-
         let mut expired = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
         let expired_intent = rebase_location_intent(&expired);
         advance_rebase_page(&mut expired, expired_intent.expected_location_revision);
@@ -3789,7 +3628,6 @@ mod tests {
             })
         ));
         server.join().expect("finalized query server");
-
         let mut applied = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
         let applied_intent = rebase_location_intent(&applied);
         let location = coordinator_location(&applied);
@@ -3819,7 +3657,6 @@ mod tests {
             ) if observed == applied_height
         ));
         server.join().expect("finalized query server");
-
         let mut retired = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
         let retired_intent = rebase_location_intent(&retired);
         advance_rebase_page(&mut retired, retired_intent.expected_location_revision + 2);
@@ -3849,7 +3686,6 @@ mod tests {
         ));
         server.join().expect("finalized query server");
     }
-
     #[test]
     fn platform_config_returns_only_public_request_bindings() {
         let temporary = tempdir().expect("temporary directory");
@@ -3873,7 +3709,6 @@ mod tests {
         let fixture_private = ExposedPrivateKey(fixture_key.private_key().clone()).to_string();
         assert!(!platform_debug.contains(&fixture_private));
     }
-
     #[cfg(unix)]
     #[test]
     fn provenance_bound_loader_accepts_the_unchanged_image_and_reuses_its_reader() {
@@ -3881,10 +3716,9 @@ mod tests {
         let path = temporary.path().join("client.toml");
         let (_signing, _publication) = write_client_config(&path, "");
         let (initial_reader, image) = RegistryReadClientV1::load_with_config_image(Some(&path))
-            .expect("load signer-free configuration image");
+            .expect("load authenticated configuration image");
         let provenance = image.provenance();
         drop(image);
-
         let loaded = load_bound_production_publication_runtime_v1(
             &provenance,
             UnavailablePublicationCleanPackageValidatorV1,
@@ -3897,7 +3731,6 @@ mod tests {
             initial_reader.account_chain_discriminant()
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn provenance_bound_loader_rejects_changed_bytes_before_signer_parsing() {
@@ -3905,10 +3738,9 @@ mod tests {
         let path = temporary.path().join("client.toml");
         let (_signing, _publication) = write_client_config(&path, "");
         let (_, image) = RegistryReadClientV1::load_with_config_image(Some(&path))
-            .expect("load signer-free configuration image");
+            .expect("load authenticated configuration image");
         let provenance = image.provenance();
         drop(image);
-
         let fixture_key =
             KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("fixture key");
         let fixture_private = ExposedPrivateKey(fixture_key.private_key().clone()).to_string();
@@ -3916,7 +3748,6 @@ mod tests {
         let poisoned = original.replace(&fixture_private, "deliberately-not-a-private-key");
         assert_ne!(poisoned, original);
         fs::write(&path, poisoned).expect("replace configuration image");
-
         let error = load_bound_production_publication_runtime_v1(
             &provenance,
             UnavailablePublicationCleanPackageValidatorV1,
@@ -3926,7 +3757,6 @@ mod tests {
         let error_debug = format!("{error:?}");
         assert!(!error_debug.contains(path.to_string_lossy().as_ref()));
         assert!(!error_debug.contains("deliberately-not-a-private-key"));
-
         let unbound_error = load_production_publication_runtime_v1(
             Some(&path),
             UnavailablePublicationCleanPackageValidatorV1,
@@ -3937,7 +3767,6 @@ mod tests {
             "MUSUBI_PUBLICATION_SIGNER_CONFIG_INVALID"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn provenance_bound_loader_rejects_a_different_valid_image() {
@@ -3945,10 +3774,9 @@ mod tests {
         let path = temporary.path().join("client.toml");
         let (_signing, _publication) = write_client_config(&path, "");
         let (_, image) = RegistryReadClientV1::load_with_config_image(Some(&path))
-            .expect("load signer-free configuration image");
+            .expect("load authenticated configuration image");
         let provenance = image.provenance();
         drop(image);
-
         let mut alternate = fs::read_to_string(&path).expect("read original configuration");
         alternate.push_str("\n# valid alternate configuration image\n");
         fs::write(&path, alternate).expect("replace configuration with valid alternate bytes");
@@ -3957,7 +3785,6 @@ mod tests {
             UnavailablePublicationCleanPackageValidatorV1,
         )
         .expect("the alternate image is independently valid");
-
         let error = load_bound_production_publication_runtime_v1(
             &provenance,
             UnavailablePublicationCleanPackageValidatorV1,
@@ -3965,16 +3792,13 @@ mod tests {
         .expect_err("a different valid image must not cross the resolution boundary");
         assert_eq!(error.code(), "MUSUBI_PUBLICATION_CONFIG_CHANGED");
     }
-
     #[cfg(unix)]
     #[test]
     fn production_loader_rejects_linked_configuration_inputs() {
         use std::os::unix::fs::symlink;
-
         let temporary = tempdir().expect("temporary directory");
         let target = temporary.path().join("target.toml");
         let (_signing, _publication) = write_client_config(&target, "");
-
         let symbolic = temporary.path().join("symbolic.toml");
         symlink(&target, &symbolic).expect("create symbolic link");
         let symbolic_error = load_production_publication_runtime_v1(
@@ -3983,7 +3807,6 @@ mod tests {
         )
         .expect_err("symbolic configuration must fail closed");
         assert_eq!(symbolic_error.code(), "MUSUBI_PUBLICATION_CONFIG_INVALID");
-
         let hard = temporary.path().join("hard.toml");
         fs::hard_link(&target, &hard).expect("create hard link");
         let hard_error = load_production_publication_runtime_v1(
@@ -3993,14 +3816,12 @@ mod tests {
         .expect_err("hard-linked configuration must fail closed");
         assert_eq!(hard_error.code(), "MUSUBI_PUBLICATION_CONFIG_INVALID");
     }
-
     #[cfg(unix)]
     #[test]
     fn bounded_platform_config_preserves_the_nonempty_contract() {
         let temporary = tempdir().expect("temporary directory");
         let path = temporary.path().join("client.toml");
         fs::write(&path, b"").expect("write empty configuration");
-
         assert_eq!(
             read_bounded_platform_config_v1(&path)
                 .expect_err("empty platform configuration must fail")
@@ -4008,20 +3829,16 @@ mod tests {
             io::ErrorKind::InvalidData
         );
     }
-
     #[cfg(not(unix))]
     #[test]
     fn bounded_platform_config_is_unsupported_before_path_io() {
         let parent = tempdir().expect("temporary parent");
         let path = parent.path().join("must-remain-absent/client.toml");
-
         let error = read_bounded_platform_config_v1(&path)
             .expect_err("non-Unix platform configuration must be unsupported");
-
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
         assert!(!path.parent().expect("requested path has a parent").exists());
     }
-
     #[test]
     fn provider_gateways_must_have_distinct_provider_ids_and_origins() {
         let gateways = vec![
@@ -4038,7 +3855,6 @@ mod tests {
         ];
         assert!(parse_provider_gateways(&gateways).is_err());
     }
-
     #[test]
     fn unknown_fields_and_retired_upload_routes_fail_closed() {
         let temporary = tempdir().expect("temporary directory");
@@ -4053,7 +3869,6 @@ mod tests {
         );
         assert!(parse_service_url("https://seed.example/v1/sorafs/upload/").is_err());
     }
-
     #[cfg(unix)]
     #[test]
     fn public_namespace_delegation_file_is_bounded_and_delegate_bound() {
@@ -4096,7 +3911,6 @@ mod tests {
             parsed.bindings.namespace_delegation.as_ref(),
             Some(&delegation)
         );
-
         let mut mismatched = delegation;
         mismatched.payload.delegate = mismatched.payload.owner.clone();
         fs::write(

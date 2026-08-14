@@ -1,8 +1,6 @@
 //! Typed, digest-pinned activation certificates for the X.509 release profile.
-
 use iroha_data_model::privacy::ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1;
 use sha2::{Digest as _, Sha256};
-
 use super::*;
 use crate::privacy_engines::{
     aggregate_stark::{
@@ -28,7 +26,6 @@ use crate::privacy_engines::{
         },
     },
 };
-
 const SOUNDNESS_CERTIFICATE_SCHEMA_VERSION_V1: u16 = 1;
 const SOUNDNESS_CERTIFICATE_DOMAIN_V1: &[u8] = b"iroha.zk-x509.soundness-certificate.payload.v1";
 const SOUNDNESS_CERTIFICATE_FIELD_COUNT_V1: u16 = 61;
@@ -39,7 +36,6 @@ const SOUNDNESS_ROUND_BY_ROUND_UNION_TERMS_V1: u8 = 7;
 const SHA_MEMORY_EQUALITIES_V1: u8 = 2;
 const SHA_CALL_EQUALITIES_V1: u8 = 1;
 const SHA_BASE_FOLD_EQUALITIES_V1: u8 = 1;
-
 /// Independent SHA-256 pin for the typed soundness-certificate payload.
 ///
 /// It is not part of the payload it authenticates. Operators can reproduce
@@ -50,12 +46,10 @@ pub(crate) const ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1: [u8; 32] = [
     0xd2, 0x73, 0xa1, 0xbd, 0x01, 0x3f, 0x48, 0x08, 0x8d, 0x75, 0xa6, 0x21, 0xad, 0x89, 0x38, 0x64,
     0xce, 0x4a, 0xa5, 0xce, 0x73, 0x11, 0x27, 0xaa, 0x04, 0x38, 0xac, 0xd8, 0xb9, 0x59, 0x2d, 0xaf,
 ];
-
 pub(crate) const ZK_X509_RESOURCE_CERTIFICATE_SCHEMA_VERSION_V1: u16 = 1;
 const RESOURCE_CERTIFICATE_DOMAIN_V1: &[u8] =
     b"iroha.zk-x509.native-resource-certificate.payload.v1";
 const RESOURCE_CERTIFICATE_FIELD_COUNT_V1: u16 = 60;
-
 pub(crate) const ZK_X509_RESOURCE_OPERATING_SYSTEM_V1: &str = "linux";
 pub(crate) const ZK_X509_RESOURCE_ARCHITECTURE_V1: &str = "aarch64";
 pub(crate) const ZK_X509_RESOURCE_ENDIANNESS_V1: &str = "little";
@@ -71,7 +65,6 @@ pub(crate) const ZK_X509_RESOURCE_CPU_MODEL_V1: &str = "Neoverse-V1";
 pub(crate) const ZK_X509_RESOURCE_LOGICAL_CPU_COUNT_V1: u16 = 16;
 pub(crate) const ZK_X509_RESOURCE_ONLINE_CPU_COUNT_V1: u16 = 16;
 pub(crate) const ZK_X509_RESOURCE_AFFINITY_CPU_COUNT_V1: u16 = 16;
-
 const RESOURCE_MAIN_THREAD_STACK_BYTES_V1: u64 = 8 * 1024 * 1024;
 const RESOURCE_RAYON_WORKER_STACK_BYTES_V1: u64 = 8 * 1024 * 1024;
 const RESOURCE_WATCHDOG_THREAD_STACK_BYTES_V1: u64 = 8 * 1024 * 1024;
@@ -81,7 +74,6 @@ const RESOURCE_MAX_STAGE_OPEN_FILES_V1: u16 = 4;
 const RESOURCE_CORE_DUMP_BYTES_V1: u64 = 0;
 const RESOURCE_LANDLOCK_ABI_MINIMUM_V1: u16 = 3;
 const RESOURCE_MINIMUM_EFFECTIVE_MEMORY_BYTES_V1: u64 = 12 * 1024 * 1024 * 1024;
-
 /// Independently reviewed elapsed time observed for the positive stage.
 pub(crate) const ZK_X509_RESOURCE_POSITIVE_ELAPSED_MILLIS_V1: u64 = 0;
 /// Independently reviewed peak RSS observed for the positive stage.
@@ -94,14 +86,12 @@ pub(crate) const ZK_X509_RESOURCE_MAXIMUM_ELAPSED_MILLIS_V1: u64 = 0;
 pub(crate) const ZK_X509_RESOURCE_MAXIMUM_PEAK_RSS_BYTES_V1: u64 = 0;
 /// Independently reviewed peak address space observed for the maximum-shape stage.
 pub(crate) const ZK_X509_RESOURCE_MAXIMUM_PEAK_ADDRESS_SPACE_BYTES_V1: u64 = 0;
-
 /// Independent SHA-256 pin for the typed native-resource payload.
 ///
 /// This bootstrap pin remains zero until native Linux capture has populated
 /// and reviewers have accepted every observation. It is not hashed into the
 /// payload it authenticates.
 pub(crate) const ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1: [u8; 32] = [0; 32];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ZkX509SoundnessCertificateV1 {
     schema_version: u16,
@@ -130,7 +120,6 @@ struct ZkX509SoundnessCertificateV1 {
     sha_base_fold_challenge_lanes: u8,
     round_by_round_union_terms: u8,
 }
-
 /// Exact release-machine identity bound by the resource certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509ResourceEnvironmentV1<'a> {
@@ -149,7 +138,6 @@ pub(crate) struct ZkX509ResourceEnvironmentV1<'a> {
     pub(crate) online_cpu_count: u16,
     pub(crate) affinity_cpu_count: u16,
 }
-
 /// Reviewed isolation and process ceilings, distinct from observations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509ResourceProcessLimitsV1 {
@@ -174,7 +162,6 @@ pub(crate) struct ZkX509ResourceProcessLimitsV1 {
     pub(crate) static_elf_only: bool,
     pub(crate) seccomp_tsync: bool,
 }
-
 /// One exact positive or maximum-shape native observation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509ResourceObservationV1 {
@@ -189,7 +176,6 @@ pub(crate) struct ZkX509ResourceObservationV1 {
     pub(crate) relation_depth: u64,
     pub(crate) relation_depth_ceiling: u64,
 }
-
 /// Complete typed payload authenticated by the native-resource pin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509ResourceCertificateV1<'a> {
@@ -204,9 +190,7 @@ pub(crate) struct ZkX509ResourceCertificateV1<'a> {
     pub(crate) positive: ZkX509ResourceObservationV1,
     pub(crate) maximum: ZkX509ResourceObservationV1,
 }
-
 struct CertificateFrameV1(Sha256);
-
 impl CertificateFrameV1 {
     fn new(domain: &[u8], field_count: u16) -> Self {
         let mut hash = Sha256::new();
@@ -220,7 +204,6 @@ impl CertificateFrameV1 {
         hash.update(field_count.to_be_bytes());
         Self(hash)
     }
-
     fn field(&mut self, bytes: &[u8]) {
         self.0.update(
             u64::try_from(bytes.len())
@@ -229,12 +212,10 @@ impl CertificateFrameV1 {
         );
         self.0.update(bytes);
     }
-
     fn finish(self) -> [u8; 32] {
         self.0.finalize().into()
     }
 }
-
 fn append_fri_certificate_v1(
     frame: &mut CertificateFrameV1,
     certificate: AggregateFriTheorem2CertificateV1,
@@ -263,7 +244,6 @@ fn append_fri_certificate_v1(
     frame.field(&[u8::from(certificate.uniform_rejection_sampling)]);
     frame.field(&certificate.claimed_query_error_bits.to_be_bytes());
 }
-
 fn canonical_soundness_certificate_v1(
     compiled_profile_digest: [u8; 32],
 ) -> ZkX509SoundnessCertificateV1 {
@@ -305,7 +285,6 @@ fn canonical_soundness_certificate_v1(
         round_by_round_union_terms: SOUNDNESS_ROUND_BY_ROUND_UNION_TERMS_V1,
     }
 }
-
 fn soundness_certificate_digest_v1(certificate: ZkX509SoundnessCertificateV1) -> [u8; 32] {
     let mut frame = CertificateFrameV1::new(
         SOUNDNESS_CERTIFICATE_DOMAIN_V1,
@@ -338,7 +317,6 @@ fn soundness_certificate_digest_v1(certificate: ZkX509SoundnessCertificateV1) ->
     frame.field(&[certificate.round_by_round_union_terms]);
     frame.finish()
 }
-
 fn validate_fri_certificate_v1(
     certificate: AggregateFriTheorem2CertificateV1,
     native_trace_log2: u8,
@@ -366,7 +344,6 @@ fn validate_fri_certificate_v1(
     .ok()?;
     validate_affine_batched_fri_theorem2_v1(parameters, &layout, certificate).ok()
 }
-
 fn ceil_log2_v1(value: u16) -> Option<u16> {
     if value == 0 {
         return None;
@@ -377,7 +354,6 @@ fn ceil_log2_v1(value: u16) -> Option<u16> {
         u16::try_from(u16::BITS - (value - 1).leading_zeros()).ok()?
     })
 }
-
 fn collision_union_security_bits_v1(denominator: u64, terms: &[(u64, u8, u16)]) -> Option<u16> {
     let mut minimum_bits = u16::MAX;
     let mut total_terms = 0_u16;
@@ -393,12 +369,10 @@ fn collision_union_security_bits_v1(denominator: u64, terms: &[(u64, u8, u16)]) 
     }
     minimum_bits.checked_sub(ceil_log2_v1(total_terms)?)
 }
-
 fn exponent_union_security_bits_v1(terms: &[u16]) -> Option<u16> {
     let minimum_bits = terms.iter().copied().min()?;
     minimum_bits.checked_sub(ceil_log2_v1(u16::try_from(terms.len()).ok()?)?)
 }
-
 fn validate_soundness_certificate_payload_v1(
     certificate: ZkX509SoundnessCertificateV1,
 ) -> Option<[u8; 32]> {
@@ -499,12 +473,10 @@ fn validate_soundness_certificate_payload_v1(
     .ok()?;
     Some(soundness_certificate_digest_v1(certificate))
 }
-
 pub(super) fn soundness_certificate_is_pinned_v1(compiled_profile_digest: [u8; 32]) -> bool {
     let certificate = canonical_soundness_certificate_v1(compiled_profile_digest);
     soundness_certificate_matches_pin_v1(certificate, ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1)
 }
-
 fn soundness_certificate_matches_pin_v1(
     certificate: ZkX509SoundnessCertificateV1,
     expected_certificate_sha256: [u8; 32],
@@ -513,7 +485,6 @@ fn soundness_certificate_matches_pin_v1(
         && validate_soundness_certificate_payload_v1(certificate)
             .is_some_and(|digest| digest == expected_certificate_sha256)
 }
-
 /// Return the exact reviewed process limits included in every resource payload.
 pub(crate) const fn canonical_resource_process_limits_v1() -> ZkX509ResourceProcessLimitsV1 {
     ZkX509ResourceProcessLimitsV1 {
@@ -539,7 +510,6 @@ pub(crate) const fn canonical_resource_process_limits_v1() -> ZkX509ResourceProc
         seccomp_tsync: true,
     }
 }
-
 /// Return the exact release environment included in every resource payload.
 pub(crate) const fn canonical_resource_environment_v1() -> ZkX509ResourceEnvironmentV1<'static> {
     ZkX509ResourceEnvironmentV1 {
@@ -559,7 +529,6 @@ pub(crate) const fn canonical_resource_environment_v1() -> ZkX509ResourceEnviron
         affinity_cpu_count: ZK_X509_RESOURCE_AFFINITY_CPU_COUNT_V1,
     }
 }
-
 const fn canonical_positive_observation_v1(
     elapsed_millis: u64,
     peak_rss_bytes: u64,
@@ -578,7 +547,6 @@ const fn canonical_positive_observation_v1(
         relation_depth_ceiling: ZK_X509_MAX_CRL_ENTRIES_V1 as u64,
     }
 }
-
 const fn canonical_maximum_observation_v1(
     elapsed_millis: u64,
     peak_rss_bytes: u64,
@@ -597,7 +565,6 @@ const fn canonical_maximum_observation_v1(
         relation_depth_ceiling: ZK_X509_MAX_CRL_ENTRIES_V1 as u64,
     }
 }
-
 fn source_resource_certificate_v1(
     compiled_profile_digest: [u8; 32],
 ) -> ZkX509ResourceCertificateV1<'static> {
@@ -622,7 +589,6 @@ fn source_resource_certificate_v1(
         ),
     }
 }
-
 fn append_observation_v1(frame: &mut CertificateFrameV1, observation: ZkX509ResourceObservationV1) {
     frame.field(&[observation.case_kind]);
     frame.field(&observation.elapsed_millis.to_be_bytes());
@@ -635,7 +601,6 @@ fn append_observation_v1(frame: &mut CertificateFrameV1, observation: ZkX509Reso
     frame.field(&observation.relation_depth.to_be_bytes());
     frame.field(&observation.relation_depth_ceiling.to_be_bytes());
 }
-
 fn resource_certificate_digest_v1(certificate: ZkX509ResourceCertificateV1<'_>) -> [u8; 32] {
     let mut frame = CertificateFrameV1::new(
         RESOURCE_CERTIFICATE_DOMAIN_V1,
@@ -730,7 +695,6 @@ fn resource_certificate_digest_v1(certificate: ZkX509ResourceCertificateV1<'_>) 
     append_observation_v1(&mut frame, certificate.maximum);
     frame.finish()
 }
-
 fn observation_is_valid_v1(
     actual: ZkX509ResourceObservationV1,
     expected_shape: ZkX509ResourceObservationV1,
@@ -750,7 +714,6 @@ fn observation_is_valid_v1(
         && actual.peak_address_space_bytes > 0
         && actual.peak_address_space_bytes <= limits.address_space_ceiling_bytes
 }
-
 /// Validate and digest a capture payload without consulting the bootstrap pin.
 ///
 /// Capture uses this before the independent source pin exists. Final evidence
@@ -785,7 +748,6 @@ pub(crate) fn validate_resource_certificate_payload_v1(
     }
     Some(resource_certificate_digest_v1(certificate))
 }
-
 /// Require a validated capture payload to equal every installed source field
 /// and the distinct compiled certificate pin.
 pub(crate) fn resource_certificate_matches_source_v1(
@@ -800,12 +762,10 @@ pub(crate) fn resource_certificate_matches_source_v1(
         ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1,
     )
 }
-
 pub(super) fn resource_certificate_is_pinned_v1(compiled_profile_digest: [u8; 32]) -> bool {
     let certificate = source_resource_certificate_v1(compiled_profile_digest);
     resource_certificate_matches_source_v1(certificate, ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1)
 }
-
 fn resource_certificate_matches_expected_v1(
     certificate: ZkX509ResourceCertificateV1<'_>,
     expected_source: ZkX509ResourceCertificateV1<'_>,
@@ -818,13 +778,10 @@ fn resource_certificate_matches_expected_v1(
             digest == claimed_certificate_sha256 && digest == expected_certificate_sha256
         })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const TEST_PROFILE_DIGEST: [u8; 32] = [0x51; 32];
-
     fn independently_append_fri_fields_v1(
         fields: &mut Vec<Vec<u8>>,
         certificate: AggregateFriTheorem2CertificateV1,
@@ -862,7 +819,6 @@ mod tests {
         fields.push(vec![u8::from(certificate.uniform_rejection_sampling)]);
         fields.push(certificate.claimed_query_error_bits.to_be_bytes().to_vec());
     }
-
     fn independently_digest_soundness_certificate_v1(
         certificate: ZkX509SoundnessCertificateV1,
     ) -> ([u8; 32], usize) {
@@ -902,7 +858,6 @@ mod tests {
             fields.len(),
             usize::from(SOUNDNESS_CERTIFICATE_FIELD_COUNT_V1)
         );
-
         let mut hash = Sha256::new();
         hash.update(ZK_X509_HASH_FRAME_DOMAIN_V1);
         hash.update(
@@ -922,7 +877,6 @@ mod tests {
         }
         (hash.finalize().into(), payload_bytes)
     }
-
     macro_rules! reject_fri_mutations {
         ($certificate:ident, $digest:ident, $field:ident) => {{
             macro_rules! reject {
@@ -978,7 +932,6 @@ mod tests {
                 1);
         }};
     }
-
     macro_rules! reject_process_limit_mutations {
         ($certificate:ident, $digest:ident) => {{
             macro_rules! reject {
@@ -1026,7 +979,6 @@ mod tests {
             reject!(|value: &mut ZkX509ResourceProcessLimitsV1| value.seccomp_tsync ^= true);
         }};
     }
-
     macro_rules! reject_observation_mutations {
         ($certificate:ident, $digest:ident, $field:ident) => {{
             macro_rules! reject {
@@ -1054,7 +1006,6 @@ mod tests {
             reject!(|value: &mut ZkX509ResourceObservationV1| value.relation_depth_ceiling += 1);
         }};
     }
-
     fn test_resource_certificate_v1() -> ZkX509ResourceCertificateV1<'static> {
         ZkX509ResourceCertificateV1 {
             schema_version: ZK_X509_RESOURCE_CERTIFICATE_SCHEMA_VERSION_V1,
@@ -1069,7 +1020,6 @@ mod tests {
             maximum: canonical_maximum_observation_v1(2_000, 2 * 1024 * 1024, 128 * 1024 * 1024),
         }
     }
-
     #[test]
     fn soundness_certificate_recomputes_the_complete_bound_and_pin() {
         let certificate = canonical_soundness_certificate_v1(TEST_PROFILE_DIGEST);
@@ -1085,7 +1035,6 @@ mod tests {
             wrong_pin
         ));
     }
-
     #[test]
     fn installed_soundness_pin_matches_the_current_compiled_profile() {
         let compiled_profile_digest =
@@ -1109,7 +1058,6 @@ mod tests {
         assert_eq!(independent, ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1);
         assert!(soundness_certificate_is_pinned_v1(compiled_profile_digest));
     }
-
     #[test]
     fn every_soundness_certificate_field_is_hashed_and_pinned() {
         let certificate = canonical_soundness_certificate_v1(TEST_PROFILE_DIGEST);
@@ -1130,7 +1078,6 @@ mod tests {
                 );
             }};
         }
-
         reject_mutation!(|value: &mut ZkX509SoundnessCertificateV1| value.schema_version += 1);
         reject_mutation!(|value: &mut ZkX509SoundnessCertificateV1| value
             .compiled_profile_digest[0] ^=
@@ -1179,7 +1126,6 @@ mod tests {
             .round_by_round_union_terms +=
             1);
     }
-
     #[test]
     fn resource_certificate_accepts_only_distinct_nonzero_measurements_and_pin() {
         let certificate = test_resource_certificate_v1();
@@ -1212,7 +1158,6 @@ mod tests {
             wrong_digest,
             digest,
         ));
-
         for mutation in [
             ZkX509ResourceCertificateV1 {
                 positive: ZkX509ResourceObservationV1 {
@@ -1246,7 +1191,6 @@ mod tests {
             assert!(validate_resource_certificate_payload_v1(mutation).is_none());
         }
     }
-
     #[test]
     fn every_resource_certificate_field_is_hashed_and_source_bound() {
         let certificate = test_resource_certificate_v1();
@@ -1272,7 +1216,6 @@ mod tests {
                 );
             }};
         }
-
         reject_mutation!(|value: &mut ZkX509ResourceCertificateV1<'_>| value.schema_version += 1);
         reject_mutation!(|value: &mut ZkX509ResourceCertificateV1<'_>| value
             .compiled_profile_digest[0] ^=

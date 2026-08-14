@@ -6,10 +6,13 @@ import java.util.ArrayList
 import java.util.Collections
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.locks.ReentrantLock
+import org.hyperledger.iroha.sdk.client.CanonicalRequestSigner
 import org.hyperledger.iroha.sdk.client.transport.TransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.client.LocalSigningContext
+import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.ZkMerklePathEntry
 import org.hyperledger.iroha.sdk.client.ZkMerklePathResponse
 import org.hyperledger.iroha.sdk.core.model.NetworkId
@@ -1884,8 +1887,11 @@ class KagemushaRecursiveSpendProver private constructor() {
             }
 
         @JvmStatic
-        fun newToriiClient(baseUri: URI, transport: TransportExecutor): ToriiClient =
-            ToriiClient(baseUri, transport)
+        fun newToriiClient(
+            baseUri: URI,
+            transport: TransportExecutor,
+            localSigningContext: LocalSigningContext,
+        ): ToriiClient = ToriiClient(baseUri, transport, localSigningContext)
 
         internal fun isExactBridgeAbi(abiVersion: Int): Boolean =
             abiVersion == REQUIRED_NATIVE_BRIDGE_ABI_VERSION
@@ -4097,7 +4103,11 @@ class KagemushaRecursiveSpendProver private constructor() {
     }
 
     /** Strict typed client for the five first-release Kagemusha Torii routes. */
-    class ToriiClient internal constructor(baseUri: URI, private val transport: TransportExecutor) {
+    class ToriiClient internal constructor(
+        baseUri: URI,
+        private val transport: TransportExecutor,
+        private val localSigningContext: LocalSigningContext,
+    ) {
         companion object {
             const val READINESS_PATH: String = "/v1/offline/readiness"
             const val TOP_UP_PATH: String = "/v1/offline/top-up"
@@ -4150,16 +4160,46 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         fun getRecipientRegistrationLineage(
             query: RecipientLineageQueryV2,
+            canonicalAuth: ToriiCanonicalRequestAuth,
         ): CompletableFuture<RecipientRegistrationLineage> {
+            val target = URI.create("$baseUri$RECEIVER_LINEAGE_PATH")
+            val body = query.noritoEncoded()
+            val timestampMs = canonicalAuth.timestampMs
+            val nonce = canonicalAuth.nonce
+            require((timestampMs == null) == (nonce == null)) {
+                "timestampMs and nonce must be provided together"
+            }
+            val authHeaders = if (timestampMs == null) {
+                CanonicalRequestSigner.buildHeaders(
+                    localSigningContext.networkId(),
+                    "POST",
+                    target,
+                    body,
+                    canonicalAuth.accountId,
+                    canonicalAuth.privateKey,
+                )
+            } else {
+                CanonicalRequestSigner.buildHeaders(
+                    localSigningContext.networkId(),
+                    "POST",
+                    target,
+                    body,
+                    canonicalAuth.accountId,
+                    canonicalAuth.privateKey,
+                    timestampMs,
+                    nonce!!,
+                )
+            }
+            val builder = TransportRequest.builder()
+                .setMethod("POST")
+                .setUri(target)
+                .addHeader("Accept", NORITO_MEDIA_TYPE)
+                .addHeader("Content-Type", NORITO_MEDIA_TYPE)
+                .setBody(body)
+                .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
+            authHeaders.forEach { (name, value) -> builder.addHeader(name, value) }
             return execute(
-                TransportRequest.builder()
-                    .setMethod("POST")
-                    .setUri(URI.create("$baseUri$RECEIVER_LINEAGE_PATH"))
-                    .addHeader("Accept", NORITO_MEDIA_TYPE)
-                    .addHeader("Content-Type", NORITO_MEDIA_TYPE)
-                    .setBody(query.noritoEncoded())
-                    .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
-                    .build(),
+                builder.build(),
                 200,
             ).thenApply { RecipientRegistrationLineage(it.body) }
         }

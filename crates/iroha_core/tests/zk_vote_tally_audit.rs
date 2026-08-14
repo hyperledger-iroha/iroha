@@ -1,14 +1,12 @@
 //! Audit coverage for vote tally proofs: ensure the production Halo2/IPA circuit accepts valid envelopes and rejects tampering.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
-
 #[cfg(all(
     feature = "halo2-dev-tests",
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
 #[path = "zk_testkit.rs"]
 mod zk_testkit;
-
 #[cfg(all(
     feature = "halo2-dev-tests",
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
@@ -36,9 +34,7 @@ mod tests {
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
-
     use super::zk_testkit;
-
     #[test]
     fn vote_tally_proof_verifies_with_vk_bytes() {
         let bundle = zk_testkit::vote_merkle8_bundle();
@@ -50,13 +46,11 @@ mod tests {
             .as_ref()
             .expect("bundle must include verifying key bytes")
             .clone();
-
         assert!(
             zk_backend::verify_backend(backend, &proof_box, Some(&vk_box)),
             "expected untampered proof to verify"
         );
     }
-
     #[test]
     fn vote_tally_proof_rejects_commit_tampering() {
         let bundle = zk_testkit::vote_merkle8_bundle();
@@ -67,16 +61,13 @@ mod tests {
             .as_ref()
             .expect("bundle must include verifying key bytes")
             .clone();
-
         let tampered_bytes = tamper_instance_column(bundle.proof_bytes.clone(), 0);
         let proof_box = ProofBox::new(backend.into(), tampered_bytes);
-
         assert!(
             !zk_backend::verify_backend(backend, &proof_box, Some(&vk_box)),
             "commit column tampering must be rejected"
         );
     }
-
     #[test]
     fn vote_tally_proof_rejects_root_tampering() {
         let bundle = zk_testkit::vote_merkle8_bundle();
@@ -87,16 +78,13 @@ mod tests {
             .as_ref()
             .expect("bundle must include verifying key bytes")
             .clone();
-
         let tampered_bytes = tamper_instance_column(bundle.proof_bytes.clone(), 1);
         let proof_box = ProofBox::new(backend.into(), tampered_bytes);
-
         assert!(
             !zk_backend::verify_backend(backend, &proof_box, Some(&vk_box)),
             "root column tampering must be rejected"
         );
     }
-
     #[test]
     fn vote_tally_proof_verifies_with_registered_vk() {
         let state = new_state();
@@ -104,18 +92,14 @@ mod tests {
         let mut block = state.block(header);
         grant_manage_vk(&mut block);
         let exec = Executor::default();
-
         let bundle = zk_testkit::vote_merkle8_bundle();
         register_vk(&exec, &mut block, &bundle.vk_id, &bundle.vk_record);
-
         let proof = ProofBox::new(bundle.backend.into(), bundle.proof_bytes.clone());
         let attachment =
             ProofAttachment::new_ref(bundle.backend.into(), proof, bundle.vk_id.clone());
-
         execute_verify_proof(&mut block, attachment, bundle.vk_record.commitment)
             .expect("canonical vote tally proof should verify");
     }
-
     #[test]
     fn vote_tally_schema_hash_guard_rejects_commit_tamper() {
         let state = new_state();
@@ -123,20 +107,16 @@ mod tests {
         let mut block = state.block(header);
         grant_manage_vk(&mut block);
         let exec = Executor::default();
-
         let bundle = zk_testkit::vote_merkle8_bundle();
         register_vk(&exec, &mut block, &bundle.vk_id, &bundle.vk_record);
-
         let tampered = tamper_instance_column(bundle.proof_bytes.clone(), 0);
         let proof = ProofBox::new(bundle.backend.into(), tampered);
         let attachment =
             ProofAttachment::new_ref(bundle.backend.into(), proof, bundle.vk_id.clone());
-
         let err = execute_verify_proof(&mut block, attachment, bundle.vk_record.commitment)
             .expect_err("tampered commit must be rejected");
         assert_schema_hash_violation(err);
     }
-
     #[test]
     fn vote_tally_schema_hash_guard_rejects_root_tamper() {
         let state = new_state();
@@ -144,20 +124,16 @@ mod tests {
         let mut block = state.block(header);
         grant_manage_vk(&mut block);
         let exec = Executor::default();
-
         let bundle = zk_testkit::vote_merkle8_bundle();
         register_vk(&exec, &mut block, &bundle.vk_id, &bundle.vk_record);
-
         let tampered = tamper_instance_column(bundle.proof_bytes.clone(), 1);
         let proof = ProofBox::new(bundle.backend.into(), tampered);
         let attachment =
             ProofAttachment::new_ref(bundle.backend.into(), proof, bundle.vk_id.clone());
-
         let err = execute_verify_proof(&mut block, attachment, bundle.vk_record.commitment)
             .expect_err("tampered root must be rejected");
         assert_schema_hash_violation(err);
     }
-
     #[test]
     fn vote_tally_schema_hash_guard_rejects_registry_tamper() {
         let state = new_state();
@@ -165,21 +141,17 @@ mod tests {
         let mut block = state.block(header);
         grant_manage_vk(&mut block);
         let exec = Executor::default();
-
         let bundle = zk_testkit::vote_merkle8_bundle();
         let mut record: VerifyingKeyRecord = bundle.vk_record.clone();
         record.public_inputs_schema_hash = [0xEE; 32];
         register_vk(&exec, &mut block, &bundle.vk_id, &record);
-
         let proof = ProofBox::new(bundle.backend.into(), bundle.proof_bytes.clone());
         let attachment =
             ProofAttachment::new_ref(bundle.backend.into(), proof, bundle.vk_id.clone());
-
         let err = execute_verify_proof(&mut block, attachment, bundle.vk_record.commitment)
             .expect_err("registry hash tamper must be rejected");
         assert_schema_hash_violation(err);
     }
-
     /// Flip the lowest byte of the requested public input column (0 = commit, 1 = root).
     ///
     /// For `halo2/ipa` proofs this tampers both the outer `OpenVerifyEnvelope.public_inputs`
@@ -200,10 +172,8 @@ mod tests {
             return norito::to_bytes(&env)
                 .expect("tampered OpenVerifyEnvelope must serialize with Norito");
         }
-
         tamper_zk1_instance_column(envelope, column_index)
     }
-
     fn tamper_zk1_instance_column(mut envelope: Vec<u8>, column_index: usize) -> Vec<u8> {
         const TAG: &[u8; 4] = b"I10P";
         let tag_pos = envelope
@@ -224,7 +194,6 @@ mod tests {
             length,
             envelope.len()
         );
-
         let cols = u32::from_le_bytes(
             envelope[payload_start..payload_start + 4]
                 .try_into()
@@ -235,7 +204,6 @@ mod tests {
                 .try_into()
                 .expect("rows bytes"),
         ) as usize;
-
         assert_eq!(rows, 1, "vote tally bundle should expose a single row");
         assert!(
             column_index < cols,
@@ -243,17 +211,14 @@ mod tests {
             column_index,
             cols
         );
-
         let scalars_start = payload_start + 8;
         let offset = scalars_start + column_index * 32;
         let target = envelope
             .get_mut(offset)
             .expect("scalar column within envelope bounds");
         *target ^= 0x01;
-
         envelope
     }
-
     fn assert_schema_hash_violation(err: ValidationFail) {
         match err {
             ValidationFail::InstructionFailed(
@@ -265,7 +230,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     fn new_state() -> State {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -280,7 +244,6 @@ mod tests {
         state.zk.verify_timeout = std::time::Duration::ZERO;
         state
     }
-
     fn grant_manage_vk(block: &mut iroha_core::state::StateBlock<'_>) {
         let mut stx = block.transaction();
         let perm = Permission::new(
@@ -294,7 +257,6 @@ mod tests {
             .expect("grant manage verifying keys");
         stx.apply();
     }
-
     fn register_vk(
         exec: &Executor,
         block: &mut iroha_core::state::StateBlock<'_>,
@@ -311,7 +273,6 @@ mod tests {
             .expect("register verifying key");
         stx.apply();
     }
-
     fn execute_verify_proof(
         block: &mut iroha_core::state::StateBlock<'_>,
         mut attachment: ProofAttachment,

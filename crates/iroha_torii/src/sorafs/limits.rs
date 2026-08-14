@@ -1,18 +1,14 @@
 //! Quota enforcement for SoraFS control-plane endpoints.
-
 use std::{
     collections::VecDeque,
     fmt,
     sync::Arc,
     time::{Duration, Instant},
 };
-
 use dashmap::DashMap;
 use iroha_logger::warn;
 use parking_lot::Mutex;
-
 const MAX_QUOTA_SUBJECTS: usize = 4_096;
-
 /// Categories of SoraFS operations subject to quotas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SorafsAction {
@@ -25,7 +21,6 @@ pub enum SorafsAction {
     /// Proof-of-retrievability submissions (challenge/proof/verdict).
     PorSubmission,
 }
-
 impl fmt::Display for SorafsAction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -36,7 +31,6 @@ impl fmt::Display for SorafsAction {
         }
     }
 }
-
 /// Error returned when a quota is exceeded.
 #[derive(Debug, Clone, Copy)]
 pub struct QuotaExceeded {
@@ -44,7 +38,6 @@ pub struct QuotaExceeded {
     max_events: u32,
     window: Duration,
 }
-
 impl QuotaExceeded {
     fn new(action: SorafsAction, max_events: u32, window: Duration) -> Self {
         Self {
@@ -53,26 +46,22 @@ impl QuotaExceeded {
             window,
         }
     }
-
     /// Action whose quota was exceeded.
     #[must_use]
     pub fn action(&self) -> SorafsAction {
         self.action
     }
-
     /// Maximum events permitted within the quota window.
     #[must_use]
     pub fn max_events(&self) -> u32 {
         self.max_events
     }
-
     /// Duration of the enforced quota window.
     #[must_use]
     pub fn window(&self) -> Duration {
         self.window
     }
 }
-
 impl fmt::Display for QuotaExceeded {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -82,7 +71,6 @@ impl fmt::Display for QuotaExceeded {
         )
     }
 }
-
 /// Rolling-window quota for a single action.
 struct ActionLimiter {
     window: Duration,
@@ -90,12 +78,10 @@ struct ActionLimiter {
     buckets: DashMap<[u8; 32], SubjectWindow>,
     bucket_admission: Mutex<()>,
 }
-
 struct SubjectWindow {
     events: VecDeque<Instant>,
     last_seen: Instant,
 }
-
 impl ActionLimiter {
     fn new(window: Duration, max_events: u32) -> Option<Self> {
         if max_events == 0 || window.is_zero() {
@@ -108,13 +94,11 @@ impl ActionLimiter {
             bucket_admission: Mutex::new(()),
         })
     }
-
     fn allow(&self, subject: &[u8; 32]) -> bool {
         let now = Instant::now();
         if let Some(mut window) = self.buckets.get_mut(subject) {
             return self.consume(&mut window, now);
         }
-
         // Serialize only first-seen subjects so the memory ceiling remains exact under
         // concurrent requests without putting established authorities behind one lock.
         let _admission = self.bucket_admission.lock();
@@ -135,7 +119,6 @@ impl ActionLimiter {
                 self.buckets.remove(&oldest);
             }
         }
-
         let mut events = VecDeque::with_capacity(self.max_events.min(16) as usize);
         events.push_back(now);
         self.buckets.insert(
@@ -147,7 +130,6 @@ impl ActionLimiter {
         );
         true
     }
-
     fn consume(&self, window: &mut SubjectWindow, now: Instant) -> bool {
         window.last_seen = now;
         while let Some(&front) = window.events.front() {
@@ -163,7 +145,6 @@ impl ActionLimiter {
         window.events.push_back(now);
         true
     }
-
     fn prune_inactive(&self, now: Instant) {
         let inactive = self
             .buckets
@@ -182,7 +163,6 @@ impl ActionLimiter {
         }
     }
 }
-
 /// Quota enforcement covering SoraFS control-plane write endpoints.
 #[derive(Clone, Copy, Debug)]
 pub struct SorafsQuotaWindow {
@@ -191,7 +171,6 @@ pub struct SorafsQuotaWindow {
     /// Rolling window length for quota accounting.
     pub window: Duration,
 }
-
 /// Consolidated quota configuration for all SoraFS control-plane actions.
 #[derive(Clone, Copy, Debug)]
 pub struct SorafsQuotaConfig {
@@ -204,7 +183,6 @@ pub struct SorafsQuotaConfig {
     /// Quota applied to proof-of-retrievability submissions.
     pub por_submission: SorafsQuotaWindow,
 }
-
 impl SorafsQuotaConfig {
     /// Configuration with quota enforcement disabled.
     #[must_use]
@@ -230,7 +208,6 @@ impl SorafsQuotaConfig {
         }
     }
 }
-
 impl Default for SorafsQuotaConfig {
     fn default() -> Self {
         const HOUR: Duration = Duration::from_hours(1);
@@ -255,7 +232,6 @@ impl Default for SorafsQuotaConfig {
         }
     }
 }
-
 /// Quota enforcement covering SoraFS control-plane write endpoints.
 #[derive(Clone)]
 pub struct SorafsQuotaEnforcer {
@@ -264,7 +240,6 @@ pub struct SorafsQuotaEnforcer {
     dispute: Option<Arc<ActionLimiter>>,
     por: Option<Arc<ActionLimiter>>,
 }
-
 impl SorafsQuotaEnforcer {
     /// Construct an enforcer with conservative defaults.
     ///
@@ -275,7 +250,6 @@ impl SorafsQuotaEnforcer {
     pub fn new_default() -> Self {
         Self::from_config(&SorafsQuotaConfig::default())
     }
-
     /// Construct an enforcer from configuration supplied by Torii.
     #[must_use]
     pub fn from_config(config: &SorafsQuotaConfig) -> Self {
@@ -286,13 +260,11 @@ impl SorafsQuotaEnforcer {
             por: limiter_from_window(config.por_submission),
         }
     }
-
     /// Construct an enforcer with all quotas disabled (tests).
     #[must_use]
     pub fn unlimited() -> Self {
         Self::from_config(&SorafsQuotaConfig::unlimited())
     }
-
     /// Attempt to consume a quota unit for the specified action and authenticated subject.
     ///
     /// Returns `Ok(())` when the request is permitted, or [`QuotaExceeded`] when throttled.
@@ -319,7 +291,6 @@ impl SorafsQuotaEnforcer {
             ))
         }
     }
-
     fn limiter(&self, action: SorafsAction) -> Option<&Arc<ActionLimiter>> {
         match action {
             SorafsAction::CapacityDeclaration => self.declaration.as_ref(),
@@ -329,20 +300,16 @@ impl SorafsQuotaEnforcer {
         }
     }
 }
-
 fn limiter_from_window(window: SorafsQuotaWindow) -> Option<Arc<ActionLimiter>> {
     window
         .max_events
         .and_then(|max| ActionLimiter::new(window.window, max))
         .map(Arc::new)
 }
-
 #[cfg(test)]
 mod tests {
     use std::thread;
-
     use super::*;
-
     #[test]
     fn quota_allows_within_window() {
         let enforcer = SorafsQuotaEnforcer {
@@ -368,7 +335,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn quota_resets_after_window() {
         let limiter = ActionLimiter::new(Duration::from_millis(50), 1).unwrap();
@@ -378,7 +344,6 @@ mod tests {
         thread::sleep(Duration::from_millis(60));
         assert!(limiter.allow(&provider));
     }
-
     #[test]
     fn unlimited_enforcer_never_blocks() {
         let enforcer = SorafsQuotaEnforcer::unlimited();
@@ -391,17 +356,14 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn quota_exceeded_display_includes_limit_context() {
         let error = QuotaExceeded::new(SorafsAction::PorSubmission, 17, Duration::from_secs(90));
-
         assert_eq!(
             error.to_string(),
             "SoraFS por_submission quota exceeded: maximum 17 events per 90s"
         );
     }
-
     #[test]
     fn quota_subject_state_is_hard_bounded() {
         let limiter = ActionLimiter::new(Duration::from_mins(1), 1).unwrap();

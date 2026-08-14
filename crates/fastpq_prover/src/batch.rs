@@ -1,17 +1,14 @@
 use core::cmp::Ordering;
 use std::collections::BTreeMap;
-
 #[allow(unused_imports)]
 use norito::json::{JsonDeserialize, JsonSerialize};
 use norito::{NoritoDeserialize, NoritoSerialize};
-
 /// Stable nominal Norito schema identity for [`TransitionBatch`].
 ///
 /// This intentionally preserves the type-name hash carried by the existing
 /// canonical FASTPQ fixtures while making it independent of Cargo features and
 /// Rust module refactors.
 pub const TRANSITION_BATCH_SCHEMA_NAME: &str = "fastpq_prover::batch::TransitionBatch";
-
 /// Public inputs supplied by the host for a FASTPQ batch.
 #[derive(
     Debug,
@@ -39,7 +36,6 @@ pub struct PublicInputs {
     /// Transaction set hash recorded by the scheduler.
     pub tx_set_hash: [u8; 32],
 }
-
 /// A single key-value transition touched by a transaction batch.
 #[derive(
     Debug,
@@ -66,7 +62,6 @@ pub struct StateTransition {
     #[norito(skip)]
     pub(crate) ordinal: usize,
 }
-
 impl StateTransition {
     /// Construct a new transition.
     pub fn new(
@@ -83,14 +78,12 @@ impl StateTransition {
             ordinal: 0,
         }
     }
-
     /// Rank associated with the operation selector as defined by FASTPQ.
     #[inline]
     pub fn operation_rank(&self) -> u8 {
         self.operation.rank()
     }
 }
-
 /// FASTPQ selector describing the semantics of a transition row.
 #[derive(
     Debug,
@@ -131,7 +124,6 @@ pub enum OperationKind {
     /// Metadata mutation (domains, accounts, assets, etc.).
     MetaSet,
 }
-
 impl OperationKind {
     /// Selector rank used for deterministic ordering.
     #[inline]
@@ -145,7 +137,6 @@ impl OperationKind {
             Self::MetaSet => 5,
         }
     }
-
     /// Returns true when the selector participates in the permission lookup
     /// grand-product (role grant/revoke).
     #[inline]
@@ -153,7 +144,6 @@ impl OperationKind {
         matches!(self, Self::RoleGrant { .. } | Self::RoleRevoke { .. })
     }
 }
-
 /// A batch of state transitions representing a single DS proof input.
 #[derive(
     Debug,
@@ -177,7 +167,6 @@ pub struct TransitionBatch {
     /// structure Norito-friendly without nested structs for now).
     pub metadata: BTreeMap<String, Vec<u8>>,
 }
-
 impl TransitionBatch {
     /// Create an empty batch for the given parameter set name.
     pub fn new(parameter: impl Into<String>, public_inputs: PublicInputs) -> Self {
@@ -188,13 +177,11 @@ impl TransitionBatch {
             metadata: BTreeMap::new(),
         }
     }
-
     /// Add a transition entry.
     pub fn push(&mut self, mut transition: StateTransition) {
         transition.ordinal = self.transitions.len();
         self.transitions.push(transition);
     }
-
     /// Normalise transitions by sorting on keys to achieve deterministic encoding.
     pub fn sort(&mut self) {
         for (idx, transition) in self.transitions.iter_mut().enumerate() {
@@ -210,11 +197,9 @@ impl TransitionBatch {
             });
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn transition_batch_schema_identity_is_stable() {
         let expected = norito::core::schema_hash_for_name(TRANSITION_BATCH_SCHEMA_NAME);
@@ -234,7 +219,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn sort_orders_by_key() {
         let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
@@ -254,7 +238,6 @@ mod tests {
         let ordered: Vec<_> = batch.transitions.iter().map(|t| t.key.clone()).collect();
         assert_eq!(ordered, vec![b"a".to_vec(), b"b".to_vec()]);
     }
-
     #[test]
     fn sort_respects_operation_rank() {
         let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());

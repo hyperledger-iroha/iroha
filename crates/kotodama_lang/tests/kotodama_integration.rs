@@ -1,5 +1,4 @@
 //! Consolidated integration-test harness for Kotodama language coverage.
-
 #[path = "branded_declarations.rs"]
 mod branded_declarations;
 #[path = "compile_fail_goldens.rs"]

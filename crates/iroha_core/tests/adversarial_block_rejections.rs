@@ -1,8 +1,6 @@
 //! Adversarial block validation regressions for forged/invalid transactions.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
-
 use iroha_core::{
     block::{BlockBuilder, BlockValidationError, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -20,18 +18,15 @@ use iroha_data_model::{
 use iroha_primitives::{numeric::NumericSpec, time::TimeSource};
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
-
 fn checked_random_adversarial_bls_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("generate checked adversarial BLS keypair")
 }
-
 #[test]
 fn adversarial_block_fixture_uses_checked_bls_randomness() {
     let key_pair = checked_random_adversarial_bls_keypair();
     assert_eq!(key_pair.public_key().algorithm(), Algorithm::BlsNormal);
 }
-
 fn balance(state: &State, id: &AssetId) -> Quantity {
     state
         .view()
@@ -40,7 +35,6 @@ fn balance(state: &State, id: &AssetId) -> Quantity {
         .get(id)
         .map_or_else(Quantity::zero, |value| value.clone().into_inner())
 }
-
 struct AdversarialSetup {
     state: State,
     alice_id: AccountId,
@@ -49,7 +43,6 @@ struct AdversarialSetup {
     alice_asset_id: AssetId,
     bob_asset_id: AssetId,
 }
-
 fn setup_world() -> AdversarialSetup {
     let (alice_id, alice_kp) = gen_account_in("wonderland");
     let (bob_id, _) = gen_account_in("wonderland");
@@ -68,12 +61,10 @@ fn setup_world() -> AdversarialSetup {
     .build(&alice_id);
     let alice_account = Account::new(alice_id.clone()).build(&alice_id);
     let bob_account = Account::new(bob_id.clone()).build(&alice_id);
-
     let alice_asset_id = AssetId::of(ad.id().clone(), alice_id.clone());
     let bob_asset_id = AssetId::of(ad.id().clone(), bob_id.clone());
     let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(50_u64));
     let bob_asset = Asset::new(bob_asset_id.clone(), Quantity::from(0_u64));
-
     let world = World::with_assets(
         [domain],
         [alice_account, bob_account],
@@ -98,7 +89,6 @@ fn setup_world() -> AdversarialSetup {
         bob_asset_id,
     }
 }
-
 #[test]
 fn adversarial_transactions_rejected_without_state_mutation() {
     let AdversarialSetup {
@@ -110,7 +100,6 @@ fn adversarial_transactions_rejected_without_state_mutation() {
         bob_asset_id,
     } = setup_world();
     let network_id = *state.network_id_ref();
-
     let max_clock_drift = state
         .view()
         .world()
@@ -119,7 +108,6 @@ fn adversarial_transactions_rejected_without_state_mutation() {
         .max_clock_drift();
     let tx_params = state.view().world().parameters().transaction();
     let crypto = state.crypto.read().clone();
-
     let mut state_block = state.block(BlockHeader::new(
         NonZeroU64::new(1).expect("height"),
         None,
@@ -129,14 +117,12 @@ fn adversarial_transactions_rejected_without_state_mutation() {
         0,
     ));
     let mut ivm_cache = IvmCache::new();
-
     let ghost_def: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "ghost".parse().unwrap(),
         );
     let ghost_asset_id = AssetId::of(ghost_def, alice_id.clone());
-
     let forged_transfer = TransactionBuilder::new(
         network_id,
         alice_id.clone(),
@@ -156,7 +142,6 @@ fn adversarial_transactions_rejected_without_state_mutation() {
         crypto.as_ref(),
     )
     .expect("admission should pass for forged transfer");
-
     let missing_burn = TransactionBuilder::new(
         network_id,
         alice_id.clone(),
@@ -172,7 +157,6 @@ fn adversarial_transactions_rejected_without_state_mutation() {
         crypto.as_ref(),
     )
     .expect("admission should pass for missing-asset burn");
-
     let valid_transfer = TransactionBuilder::new(
         network_id,
         alice_id.clone(),
@@ -192,29 +176,23 @@ fn adversarial_transactions_rejected_without_state_mutation() {
         crypto.as_ref(),
     )
     .expect("admission should pass for valid transfer");
-
     let (_, forged_result) = state_block.validate_transaction(forged_transfer, &mut ivm_cache);
     assert!(
         forged_result.is_err(),
         "transfer from missing asset should be rejected"
     );
-
     let (_, burn_result) = state_block.validate_transaction(missing_burn, &mut ivm_cache);
     assert!(
         burn_result.is_err(),
         "burn on missing asset should be rejected"
     );
-
     let (_, valid_result) = state_block.validate_transaction(valid_transfer, &mut ivm_cache);
     assert!(valid_result.is_ok(), "well-formed transfer should succeed");
-
     state_block.commit().expect("commit state");
-
     // Only the valid transfer applies: Alice loses 10, Bob gains 10.
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(40_u64));
     assert_eq!(balance(&state, &bob_asset_id), Quantity::from(10_u64));
 }
-
 #[test]
 fn block_history_tamper_rejected_without_mutation() {
     let AdversarialSetup {
@@ -229,7 +207,6 @@ fn block_history_tamper_rejected_without_mutation() {
     let peer_key = checked_random_adversarial_bls_keypair();
     let peer = PeerId::from(peer_key.public_key().clone());
     let time_source = TimeSource::new_system();
-
     // Commit a baseline block at height 1 so subsequent rewinds have a stable checkpoint.
     let baseline_tx = TransactionBuilder::new(
         network_id,
@@ -264,7 +241,6 @@ fn block_history_tamper_rejected_without_mutation() {
     baseline_state_block
         .commit()
         .expect("commit baseline state");
-
     let height_after_baseline = state.view().height();
     assert_eq!(
         height_after_baseline, 1,
@@ -272,7 +248,6 @@ fn block_history_tamper_rejected_without_mutation() {
     );
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(50_u64));
     assert_eq!(balance(&state, &bob_asset_id), Quantity::from(5_u64));
-
     // Forge a block that rewinds height to 1 with a conflicting prev hash and extra mint.
     let rewind_tx = TransactionBuilder::new(
         network_id,
@@ -319,12 +294,10 @@ fn block_history_tamper_rejected_without_mutation() {
         matches!(reason, BlockValidationError::PrevBlockHashMismatch { .. }),
         "static validation would reject the tampered prev hash"
     );
-
     // State stays on the canonical head.
     assert_eq!(state.view().height(), height_after_baseline);
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(50_u64));
     assert_eq!(balance(&state, &bob_asset_id), Quantity::from(5_u64));
-
     let summary = format!(
         "{{\"scenario\":\"prev_hash_tamper\",\"expected_prev_hash\":{},\"canonical_height\":{},\"alice_balance\":\"{}\",\"bob_balance\":\"{}\"}}",
         expected_prev.is_some(),

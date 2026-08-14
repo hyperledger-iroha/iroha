@@ -1,8 +1,6 @@
 //! Exact-network Iroha Connect MCP request construction.
-
 use base64::Engine as _;
 use norito::json::{Map, Value};
-
 pub(super) fn build_connect_session_create_body(arguments: &Map) -> Result<Value, String> {
     for retired in [
         "sid",
@@ -18,7 +16,6 @@ pub(super) fn build_connect_session_create_body(arguments: &Map) -> Result<Value
             ));
         }
     }
-
     let network_id_literal = required_string(arguments, "network_id")?;
     let network_id = network_id_literal
         .parse::<iroha_data_model::NetworkId>()
@@ -28,7 +25,6 @@ pub(super) fn build_connect_session_create_body(arguments: &Map) -> Result<Value
             "`network_id` must use the canonical checksummed NetworkId spelling".to_owned(),
         );
     }
-
     let app_pk: [u8; 32] = decode_canonical(arguments, "app_pk", 32)?
         .try_into()
         .map_err(|_| "validated Connect app key had the wrong length".to_owned())?;
@@ -37,7 +33,6 @@ pub(super) fn build_connect_session_create_body(arguments: &Map) -> Result<Value
         .map_err(|_| "validated Connect nonce had the wrong length".to_owned())?;
     let sid = iroha_torii_shared::connect_sdk::derive_session_id(&network_id, &app_pk, &nonce);
     let encode = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
-
     let mut payload = Map::new();
     payload.insert("sid".into(), Value::String(encode(&sid)));
     payload.insert(
@@ -57,11 +52,9 @@ pub(super) fn build_connect_session_create_body(arguments: &Map) -> Result<Value
         }
         payload.insert("node".into(), Value::String(node.to_owned()));
     }
-
     Ok(Value::Object(payload))
 }
-
-fn required_string<'a>(arguments: &'a Map, field: &str) -> Result<&'a str, String> {
+pub(super) fn required_string<'a>(arguments: &'a Map, field: &str) -> Result<&'a str, String> {
     let value = arguments
         .get(field)
         .and_then(Value::as_str)
@@ -73,8 +66,11 @@ fn required_string<'a>(arguments: &'a Map, field: &str) -> Result<&'a str, Strin
     }
     Ok(value)
 }
-
-fn decode_canonical(arguments: &Map, field: &str, expected_len: usize) -> Result<Vec<u8>, String> {
+pub(super) fn decode_canonical(
+    arguments: &Map,
+    field: &str,
+    expected_len: usize,
+) -> Result<Vec<u8>, String> {
     let literal = required_string(arguments, field)?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(literal)

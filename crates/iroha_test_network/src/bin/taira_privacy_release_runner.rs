@@ -4,9 +4,7 @@
 //! re-executed through this exact executable's hidden child mode, with a
 //! parent-enforced wall-clock, resident-memory, and virtual-address-space
 //! ceilings. Norito is authoritative; JSON is only a typed projection.
-
 #![cfg(unix)]
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
@@ -25,7 +23,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-
 #[cfg(target_os = "linux")]
 use std::{
     ffi::CString,
@@ -39,7 +36,6 @@ use std::{
         mpsc,
     },
 };
-
 use iroha_core::privacy_release_evidence::{
     PRIVACY_RELEASE_CASE_COUNT_V1, PRIVACY_RELEASE_EVIDENCE_SCHEMA_VERSION_V1,
     PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1, PRIVACY_RELEASE_MAX_PROOF_ARTIFACTS_V1,
@@ -73,7 +69,6 @@ use norito::{
     DecodeLimits,
     derive::{JsonDeserialize, JsonSerialize},
 };
-
 #[path = "taira_privacy_release_runner/expectation_pins.rs"]
 mod expectation_pins;
 #[path = "taira_privacy_release_runner/process_resources.rs"]
@@ -97,7 +92,6 @@ use process_resources::{
     elapsed_millis_ceil, install_hidden_stage_resource_limits, kill_stage_process_group,
     sample_process_memory_v1, validate_process_ceilings, validate_stage_process_ceilings_v1,
 };
-
 const ARTIFACT_SCHEMA_VERSION_V1: u16 = 1;
 const MAX_EXACT12_BYTES: u64 = 64 * 1024;
 // Per-stage structural allowance for ordinals, hashes, the closed descriptor,
@@ -176,27 +170,22 @@ const STAGE_TASK_DIRECTORY_FD_V1: RawFd = 4;
 const STAGE_LANDLOCK_RULESET_FD_V1: RawFd = 5;
 const MINIMUM_LANDLOCK_ABI_V1: u16 = 3;
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(10);
-
 const fn checked_release_size_add_v1(left: u64, right: u64) -> u64 {
     match left.checked_add(right) {
         Some(sum) => sum,
         None => panic!("privacy release encoded-size addition overflow"),
     }
 }
-
 const fn checked_release_size_mul_v1(left: u64, right: u64) -> u64 {
     match left.checked_mul(right) {
         Some(product) => product,
         None => panic!("privacy release encoded-size multiplication overflow"),
     }
 }
-
 const fn base64_encoded_len_v1(byte_len: u64) -> u64 {
     checked_release_size_mul_v1(byte_len.div_ceil(3), 4)
 }
-
 type DynError = Box<dyn Error + Send + Sync>;
-
 #[derive(
     Clone,
     Debug,
@@ -214,7 +203,6 @@ struct PrivacyReleaseExpectedStageV1 {
     max_peak_rss_bytes: u64,
     max_address_space_bytes: u64,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -231,7 +219,6 @@ struct PrivacyReleaseExpectationsV1 {
     stage_count: u16,
     stages: Vec<PrivacyReleaseExpectedStageV1>,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -260,7 +247,6 @@ struct PrivacyReleaseIsolationPolicyV1 {
     landlock_abi_minimum: u16,
     seccomp_tsync: bool,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -288,7 +274,6 @@ struct PrivacyReleaseCommandManifestV1 {
     command_arguments: Vec<String>,
     stage_command_template: Vec<String>,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -306,7 +291,6 @@ struct PrivacyReleaseMeasuredStageV1 {
     peak_rss_bytes: u64,
     peak_address_space_bytes: u64,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -323,7 +307,6 @@ struct PrivacyReleaseStageArtifactsV1 {
     stage_count: u16,
     stages: Vec<PrivacyReleaseMeasuredStageV1>,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -339,7 +322,6 @@ struct PrivacyReleaseArtifactPairDigestV1 {
     norito_sha256: [u8; 32],
     json_sha256: [u8; 32],
 }
-
 #[derive(
     Clone,
     Debug,
@@ -369,27 +351,23 @@ struct PrivacyReleaseReceiptV1 {
     contains_canonical_proof_artifacts: bool,
     isolation_policy_enforced: bool,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct FileIdentityV1 {
     device: u64,
     inode: u64,
 }
-
 #[cfg(target_os = "linux")]
 struct OutputParentAnchorV1 {
     absolute_path: PathBuf,
     directory: File,
     identity: FileIdentityV1,
 }
-
 #[cfg(target_os = "linux")]
 struct OutputTargetV1 {
     absolute_path: PathBuf,
     parent_index: usize,
     basename: CString,
 }
-
 #[cfg(target_os = "linux")]
 struct CreatedOutputV1 {
     target_index: usize,
@@ -397,7 +375,6 @@ struct CreatedOutputV1 {
     identity: FileIdentityV1,
     expected_length: u64,
 }
-
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy)]
 struct OutputEntryFactsV1 {
@@ -406,25 +383,21 @@ struct OutputEntryFactsV1 {
     link_count: u64,
     length: u64,
 }
-
 struct SecureInputV1 {
     bytes: Vec<u8>,
     sha256: [u8; 32],
     identity: FileIdentityV1,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SecureInputErrorClassV1 {
     ExternalHardLinkAlias,
 }
-
 #[derive(Debug)]
 struct SecureInputErrorV1 {
     class: SecureInputErrorClassV1,
     label: String,
     observed_links: u64,
 }
-
 impl std::fmt::Display for SecureInputErrorV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.class {
@@ -436,22 +409,18 @@ impl std::fmt::Display for SecureInputErrorV1 {
         }
     }
 }
-
 impl Error for SecureInputErrorV1 {}
-
 struct HashedInputV1 {
     sha256: [u8; 32],
     identity: FileIdentityV1,
     mode: u32,
 }
-
 struct ImmutableRunnerV1 {
     executable: File,
     source_path: PathBuf,
     source_identity: FileIdentityV1,
     sha256: [u8; 32],
 }
-
 #[derive(Clone)]
 struct CommonInputsV1 {
     build_profile: String,
@@ -463,7 +432,6 @@ struct CommonInputsV1 {
     cargo_lock_path: PathBuf,
     validator_binary_path: PathBuf,
 }
-
 struct LoadedInputsV1 {
     common: CommonInputsV1,
     exact12_sha256: [u8; 32],
@@ -476,7 +444,6 @@ struct LoadedInputsV1 {
     runner_binary_sha256: [u8; 32],
     runner: ImmutableRunnerV1,
 }
-
 #[derive(Clone)]
 struct GenerateOutputsV1 {
     command_manifest_norito: PathBuf,
@@ -486,7 +453,6 @@ struct GenerateOutputsV1 {
     receipt_norito: PathBuf,
     receipt_json: PathBuf,
 }
-
 #[derive(Clone)]
 struct VerifyArtifactsV1 {
     command_manifest_norito: PathBuf,
@@ -496,7 +462,6 @@ struct VerifyArtifactsV1 {
     receipt_norito: PathBuf,
     receipt_json: PathBuf,
 }
-
 #[derive(Clone)]
 struct CaptureOptionsV1 {
     exact12_path: PathBuf,
@@ -507,7 +472,6 @@ struct CaptureOptionsV1 {
     max_peak_rss_bytes: u64,
     max_address_space_bytes: u64,
 }
-
 #[derive(Clone)]
 struct CapturedFixtureValidationOptionsV1 {
     exact12_path: PathBuf,
@@ -515,7 +479,6 @@ struct CapturedFixtureValidationOptionsV1 {
     expectations_json_path: PathBuf,
     x509_resource_paths: resource_certificate::ResourceInputPathsV1,
 }
-
 #[derive(Clone, Debug)]
 struct MeasuredStageV1 {
     evidence: PrivacyReleaseStageEvidenceV1,
@@ -523,14 +486,12 @@ struct MeasuredStageV1 {
     peak_rss_bytes: u64,
     peak_address_space_bytes: u64,
 }
-
 fn main() {
     if let Err(error) = real_main() {
         eprintln!("taira privacy release evidence failed: {error}");
         std::process::exit(1);
     }
 }
-
 fn real_main() -> Result<(), DynError> {
     let mut arguments = env::args_os();
     let _program = arguments.next();
@@ -539,7 +500,6 @@ fn real_main() -> Result<(), DynError> {
     )?;
     let mode = mode.to_str().ok_or("mode must be valid UTF-8")?.to_owned();
     let rest: Vec<OsString> = arguments.collect();
-
     match mode.as_str() {
         "generate" => {
             let options = parse_options(&rest, &generate_option_names())?;
@@ -599,7 +559,6 @@ fn real_main() -> Result<(), DynError> {
         _ => Err(format!("unknown mode `{mode}`").into()),
     }
 }
-
 fn common_option_names() -> Vec<&'static str> {
     vec![
         "build-profile",
@@ -613,7 +572,6 @@ fn common_option_names() -> Vec<&'static str> {
         "validator-binary",
     ]
 }
-
 fn generate_option_names() -> Vec<&'static str> {
     let mut names = common_option_names();
     names.extend([
@@ -626,7 +584,6 @@ fn generate_option_names() -> Vec<&'static str> {
     ]);
     names
 }
-
 fn verify_option_names() -> Vec<&'static str> {
     let mut names = common_option_names();
     names.extend([
@@ -639,7 +596,6 @@ fn verify_option_names() -> Vec<&'static str> {
     ]);
     names
 }
-
 fn captured_fixture_validation_option_names() -> Vec<&'static str> {
     vec![
         "exact12-matrix",
@@ -649,7 +605,6 @@ fn captured_fixture_validation_option_names() -> Vec<&'static str> {
         "x509-resource-json",
     ]
 }
-
 fn parse_options(
     arguments: &[OsString],
     allowed_names: &[&str],
@@ -687,7 +642,6 @@ fn parse_options(
     }
     Ok(parsed)
 }
-
 fn parse_common_inputs(options: &BTreeMap<String, String>) -> Result<CommonInputsV1, DynError> {
     let build_profile = option(options, "build-profile")?.to_owned();
     if build_profile != "debug" && build_profile != "release" {
@@ -719,14 +673,12 @@ fn parse_common_inputs(options: &BTreeMap<String, String>) -> Result<CommonInput
         validator_binary_path: path_option(options, "validator-binary")?,
     })
 }
-
 fn option<'a>(options: &'a BTreeMap<String, String>, name: &str) -> Result<&'a str, DynError> {
     options
         .get(name)
         .map(String::as_str)
         .ok_or_else(|| format!("missing --{name}").into())
 }
-
 fn path_option(options: &BTreeMap<String, String>, name: &str) -> Result<PathBuf, DynError> {
     let value = option(options, name)?;
     let path = PathBuf::from(value);
@@ -735,7 +687,6 @@ fn path_option(options: &BTreeMap<String, String>, name: &str) -> Result<PathBuf
     }
     Ok(path)
 }
-
 fn canonical_u64_option(options: &BTreeMap<String, String>, name: &str) -> Result<u64, DynError> {
     let value = option(options, name)?;
     if value != "0" && (value.starts_with('0') || !value.bytes().all(|byte| byte.is_ascii_digit()))
@@ -746,7 +697,6 @@ fn canonical_u64_option(options: &BTreeMap<String, String>, name: &str) -> Resul
         .parse::<u64>()
         .map_err(|_| format!("--{name} is outside u64").into())
 }
-
 fn canonical_raw_fd_option(
     options: &BTreeMap<String, String>,
     name: &str,
@@ -758,7 +708,6 @@ fn canonical_raw_fd_option(
     }
     Ok(fd)
 }
-
 fn canonical_stage_result_fd_option(options: &BTreeMap<String, String>) -> Result<RawFd, DynError> {
     let fd = canonical_raw_fd_option(options, "out-fd")?;
     if fd != CANONICAL_STAGE_RESULT_FD_V1 {
@@ -766,7 +715,6 @@ fn canonical_stage_result_fd_option(options: &BTreeMap<String, String>) -> Resul
     }
     Ok(fd)
 }
-
 fn generate(common: CommonInputsV1, outputs: GenerateOutputsV1) -> Result<(), DynError> {
     ensure_taira_release_platform()?;
     let output_paths = generate_output_paths(&outputs);
@@ -774,7 +722,6 @@ fn generate(common: CommonInputsV1, outputs: GenerateOutputsV1) -> Result<(), Dy
     let loaded = load_common_inputs(common, &output_paths)?;
     let measured = run_all_stages(&loaded.expectations, &loaded.runner)?;
     validate_measured_against_expectations(&measured, &loaded.expectations)?;
-
     let command_manifest = build_command_manifest(&loaded);
     let stage_artifacts = PrivacyReleaseStageArtifactsV1 {
         schema_version: ARTIFACT_SCHEMA_VERSION_V1,
@@ -791,7 +738,6 @@ fn generate(common: CommonInputsV1, outputs: GenerateOutputsV1) -> Result<(), Dy
             .collect(),
     };
     validate_stage_artifacts(&stage_artifacts, &loaded.expectations)?;
-
     let command_norito = canonical_norito_bytes(&command_manifest, "command manifest")?;
     let command_json = canonical_json_bytes(&command_manifest, "command manifest")?;
     let stages_norito = canonical_norito_bytes(&stage_artifacts, "stage artifacts")?;
@@ -816,7 +762,6 @@ fn generate(common: CommonInputsV1, outputs: GenerateOutputsV1) -> Result<(), Dy
         MAX_STAGE_ARTIFACTS_JSON_BYTES,
         "stage artifacts JSON",
     )?;
-
     let receipt = PrivacyReleaseReceiptV1 {
         schema_version: ARTIFACT_SCHEMA_VERSION_V1,
         build_profile: loaded.common.build_profile.clone(),
@@ -856,7 +801,6 @@ fn generate(common: CommonInputsV1, outputs: GenerateOutputsV1) -> Result<(), Dy
         "receipt Norito",
     )?;
     enforce_encoded_size(receipt_json.len(), MAX_RECEIPT_JSON_BYTES, "receipt JSON")?;
-
     let artifacts = [
         (
             outputs.command_manifest_norito.as_path(),
@@ -884,7 +828,6 @@ fn generate(common: CommonInputsV1, outputs: GenerateOutputsV1) -> Result<(), Dy
     );
     Ok(())
 }
-
 fn verify(common: CommonInputsV1, artifacts: VerifyArtifactsV1) -> Result<(), DynError> {
     ensure_taira_release_platform()?;
     let artifact_paths = verify_artifact_paths(&artifacts);
@@ -912,7 +855,6 @@ fn verify(common: CommonInputsV1, artifacts: VerifyArtifactsV1) -> Result<(), Dy
         MAX_RECEIPT_JSON_BYTES,
         "receipt",
     )?;
-
     let expected_command = build_command_manifest(&loaded);
     if command_manifest != expected_command {
         return Err(
@@ -929,7 +871,6 @@ fn verify(common: CommonInputsV1, artifacts: VerifyArtifactsV1) -> Result<(), Dy
         &stages_norito,
         &stages_json,
     )?;
-
     // Stored evidence is not sufficient: run all 48 production stages again
     // using this exact executable and compare every deterministic field.
     let rerun = run_all_stages(&loaded.expectations, &loaded.runner)?;
@@ -948,7 +889,6 @@ fn verify(common: CommonInputsV1, artifacts: VerifyArtifactsV1) -> Result<(), Dy
     );
     Ok(())
 }
-
 fn capture_expectations(options: CaptureOptionsV1) -> Result<(), DynError> {
     ensure_taira_release_platform()?;
     expectation_pins::require_capture_open_v1()?;
@@ -974,7 +914,6 @@ fn capture_expectations(options: CaptureOptionsV1) -> Result<(), DynError> {
         &exact12,
         &runner,
     )?;
-
     let provisional_stages = canonical_stage_coordinates()?
         .iter()
         .copied()
@@ -1054,7 +993,6 @@ fn capture_expectations(options: CaptureOptionsV1) -> Result<(), DynError> {
     );
     Ok(())
 }
-
 fn validate_captured_fixtures(options: CapturedFixtureValidationOptionsV1) -> Result<(), DynError> {
     ensure_taira_release_platform()?;
     // This corridor is deliberately limited to the attested zero-pin runner.
@@ -1072,7 +1010,6 @@ fn validate_captured_fixtures(options: CapturedFixtureValidationOptionsV1) -> Re
     ];
     reject_lexical_path_aliases(&all_paths)?;
     reject_existing_inode_aliases(&all_paths)?;
-
     let exact12 = secure_read(&options.exact12_path, MAX_EXACT12_BYTES, "exact12 matrix")?;
     validate_exact12_matrix(&exact12.bytes)?;
     let (expectations, expectations_norito, expectations_json) =
@@ -1084,7 +1021,6 @@ fn validate_captured_fixtures(options: CapturedFixtureValidationOptionsV1) -> Re
         &options.x509_resource_paths.norito,
         &options.x509_resource_paths.json,
     )?;
-
     let identities = [
         exact12.identity,
         expectations_norito.identity,
@@ -1102,7 +1038,6 @@ fn validate_captured_fixtures(options: CapturedFixtureValidationOptionsV1) -> Re
         expectations_norito.sha256,
         expectations_json.sha256,
     )?;
-
     // Structural self-consistency is insufficient for a first release: rerun
     // every production stage through the sealed child corridor and compare all
     // deterministic evidence with the candidate fixture before installation.
@@ -1114,7 +1049,6 @@ fn validate_captured_fixtures(options: CapturedFixtureValidationOptionsV1) -> Re
     );
     Ok(())
 }
-
 fn load_common_inputs(
     common: CommonInputsV1,
     other_paths: &[PathBuf],
@@ -1136,7 +1070,6 @@ fn load_common_inputs(
     .concat();
     reject_lexical_path_aliases(&all_paths)?;
     reject_existing_inode_aliases(&all_paths)?;
-
     let exact12 = secure_read(&common.exact12_path, MAX_EXACT12_BYTES, "exact12 matrix")?;
     validate_exact12_matrix(&exact12.bytes)?;
     let (expectations, expectations_norito, expectations_json) =
@@ -1153,7 +1086,6 @@ fn load_common_inputs(
     {
         return Err("X.509 resource certificate binds a different expectation pair".into());
     }
-
     let cargo_lock = secure_hash(&common.cargo_lock_path, MAX_CARGO_LOCK_BYTES, "Cargo.lock")?;
     let validator = secure_hash(
         &common.validator_binary_path,
@@ -1163,7 +1095,6 @@ fn load_common_inputs(
     if validator.mode & 0o111 == 0 {
         return Err("validator and runner inputs must both be executable regular files".into());
     }
-
     let identities = [
         exact12.identity,
         expectations_norito.identity,
@@ -1177,7 +1108,6 @@ fn load_common_inputs(
     if identities.iter().copied().collect::<BTreeSet<_>>().len() != identities.len() {
         return Err("input paths alias the same inode; hard-link aliases are forbidden".into());
     }
-
     Ok(LoadedInputsV1 {
         common,
         exact12_sha256: exact12.sha256,
@@ -1191,7 +1121,6 @@ fn load_common_inputs(
         runner,
     })
 }
-
 fn build_command_manifest(loaded: &LoadedInputsV1) -> PrivacyReleaseCommandManifestV1 {
     PrivacyReleaseCommandManifestV1 {
         schema_version: ARTIFACT_SCHEMA_VERSION_V1,
@@ -1248,7 +1177,6 @@ fn build_command_manifest(loaded: &LoadedInputsV1) -> PrivacyReleaseCommandManif
         ],
     }
 }
-
 fn canonical_isolation_policy_v1() -> PrivacyReleaseIsolationPolicyV1 {
     let stage_stack_bytes = u64::try_from(PRIVACY_RELEASE_STAGE_STACK_BYTES_V1)
         .expect("frozen 8 MiB release stack size fits u64");
@@ -1270,7 +1198,6 @@ fn canonical_isolation_policy_v1() -> PrivacyReleaseIsolationPolicyV1 {
         seccomp_tsync: true,
     }
 }
-
 fn run_all_stages(
     expectations: &PrivacyReleaseExpectationsV1,
     runner: &ImmutableRunnerV1,
@@ -1291,7 +1218,6 @@ fn run_all_stages(
     }
     Ok(measured)
 }
-
 fn run_stage_child(
     runner: &ImmutableRunnerV1,
     protocol_id: PrivacyProtocolIdV1,
@@ -1319,7 +1245,6 @@ fn run_stage_child(
         .try_clone()
         .map_err(|error| format!("cannot clone child-stderr descriptor: {error}"))?;
     let result_fd = result_child.as_raw_fd();
-
     // Keep a dedicated executable duplicate above the canonical result slot.
     // The child may then move its result descriptor to FD 3 without replacing
     // the `/proc/self/fd/N` executable anchor before `execve` resolves it.
@@ -1423,7 +1348,6 @@ fn run_stage_child(
     let elapsed_millis = elapsed_millis_ceil(start.elapsed())?;
     let peak_rss_bytes = sampled_peak_rss.max(waited.peak_rss_bytes);
     let peak_address_space_bytes = sampled_peak_address_space;
-
     if let Some(reason) = killed_for {
         return Err(format!(
             "stage {}/{} exceeded its {reason} (elapsed={elapsed_millis}ms, peak_rss={peak_rss_bytes} bytes, peak_address_space={peak_address_space_bytes} bytes)",
@@ -1509,7 +1433,6 @@ fn run_stage_child(
         peak_address_space_bytes,
     })
 }
-
 fn hidden_stage_process_ceilings_v1(
     protocol_id: PrivacyProtocolIdV1,
     options: &BTreeMap<String, String>,
@@ -1527,7 +1450,6 @@ fn hidden_stage_process_ceilings_v1(
     )?;
     Ok(ceilings)
 }
-
 fn run_hidden_stage(options: &BTreeMap<String, String>) -> Result<(), DynError> {
     ensure_taira_release_platform()?;
     let protocol_label = option(options, "protocol")?;
@@ -1576,7 +1498,6 @@ fn run_hidden_stage(options: &BTreeMap<String, String>) -> Result<(), DynError> 
     secure_write_anonymous_stage_result(out_fd, &encoded)?;
     Ok(())
 }
-
 fn validate_hidden_stage_environment_v1(
     environment: &[(OsString, OsString)],
 ) -> Result<(), DynError> {
@@ -1590,7 +1511,6 @@ fn validate_hidden_stage_environment_v1(
     }
     Ok(())
 }
-
 #[cfg(target_os = "linux")]
 fn close_post_exec_descriptors_v1(result_fd: RawFd) -> Result<(), DynError> {
     if result_fd != CANONICAL_STAGE_RESULT_FD_V1 {
@@ -1615,7 +1535,6 @@ fn close_post_exec_descriptors_v1(result_fd: RawFd) -> Result<(), DynError> {
         )
         .into());
     }
-
     let stdin = fstat_stage_descriptor_v1(libc::STDIN_FILENO, "stdin")?;
     let stdout = fstat_stage_descriptor_v1(libc::STDOUT_FILENO, "stdout")?;
     let stderr = fstat_stage_descriptor_v1(libc::STDERR_FILENO, "stderr")?;
@@ -1660,7 +1579,6 @@ fn close_post_exec_descriptors_v1(result_fd: RawFd) -> Result<(), DynError> {
     }
     Ok(())
 }
-
 #[cfg(target_os = "linux")]
 fn fstat_stage_descriptor_v1(fd: RawFd, label: &str) -> Result<libc::stat, DynError> {
     let mut facts = MaybeUninit::<libc::stat>::uninit();
@@ -1676,7 +1594,6 @@ fn fstat_stage_descriptor_v1(fd: RawFd, label: &str) -> Result<libc::stat, DynEr
     // SAFETY: successful fstat initialized the complete structure.
     Ok(unsafe { facts.assume_init() })
 }
-
 #[cfg(target_os = "linux")]
 fn stage_descriptor_access_mode_v1(fd: RawFd, label: &str) -> Result<libc::c_int, DynError> {
     // SAFETY: F_GETFL is a read-only query on a required live descriptor.
@@ -1690,19 +1607,16 @@ fn stage_descriptor_access_mode_v1(fd: RawFd, label: &str) -> Result<libc::c_int
     }
     Ok(flags & libc::O_ACCMODE)
 }
-
 #[cfg(not(target_os = "linux"))]
 fn close_post_exec_descriptors_v1(_result_fd: RawFd) -> Result<(), DynError> {
     Err("Taira post-exec descriptor closure requires Linux".into())
 }
-
 #[cfg(target_os = "linux")]
 #[repr(C)]
 struct ReleaseCapabilityHeaderV1 {
     version: u32,
     pid: i32,
 }
-
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -1711,7 +1625,6 @@ struct ReleaseCapabilityDataV1 {
     permitted: u32,
     inheritable: u32,
 }
-
 #[cfg(target_os = "linux")]
 fn drop_stage_privileges_and_rearm_parent_death_v1() -> Result<(), DynError> {
     const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
@@ -1721,7 +1634,6 @@ fn drop_stage_privileges_and_rearm_parent_death_v1() -> Result<(), DynError> {
     if expected_parent <= 1 {
         return Err("hidden stage lost its release-runner parent before privilege drop".into());
     }
-
     // Root-running builder layers are converted to the kernel's conventional
     // unprivileged identity inside the stage only. A non-root caller keeps its
     // exact identity but must not bring supplementary groups into the proof.
@@ -1751,7 +1663,6 @@ fn drop_stage_privileges_and_rearm_parent_death_v1() -> Result<(), DynError> {
             .into());
         }
     }
-
     // SAFETY: getgroups with a zero count queries the required count.
     let supplementary_group_count = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
     if supplementary_group_count != 0 {
@@ -1779,7 +1690,6 @@ fn drop_stage_privileges_and_rearm_parent_death_v1() -> Result<(), DynError> {
     {
         return Err("hidden stage did not reach one exact non-root UID/GID identity".into());
     }
-
     let mut header = ReleaseCapabilityHeaderV1 {
         version: LINUX_CAPABILITY_VERSION_3,
         pid: 0,
@@ -1833,7 +1743,6 @@ fn drop_stage_privileges_and_rearm_parent_death_v1() -> Result<(), DynError> {
     {
         return Err("hidden stage retained process capabilities".into());
     }
-
     // Credential changes clear PDEATHSIG, so re-arm it after the final change
     // and close the race with the same exact-parent check used before exec.
     // SAFETY: PR_SET_PDEATHSIG accepts one signal number.
@@ -1844,17 +1753,14 @@ fn drop_stage_privileges_and_rearm_parent_death_v1() -> Result<(), DynError> {
     }
     Ok(())
 }
-
 #[cfg(not(target_os = "linux"))]
 fn drop_stage_privileges_and_rearm_parent_death_v1() -> Result<(), DynError> {
     Err("Taira hidden-stage privilege dropping requires Linux".into())
 }
-
 #[cfg(target_os = "linux")]
 struct StageTaskDirectoryV1 {
     file: File,
 }
-
 #[cfg(target_os = "linux")]
 impl StageTaskDirectoryV1 {
     fn open() -> Result<Self, DynError> {
@@ -1908,11 +1814,9 @@ impl StageTaskDirectoryV1 {
         }
         Ok(Self { file })
     }
-
     fn count(&self) -> Result<u64, DynError> {
         count_linux_task_directory_entries_v1(self.file.as_raw_fd())
     }
-
     fn close(self) -> Result<(), DynError> {
         let fd = self.file.into_raw_fd();
         // SAFETY: ownership of the exact task-directory descriptor was moved
@@ -1927,7 +1831,6 @@ impl StageTaskDirectoryV1 {
         Ok(())
     }
 }
-
 #[cfg(target_os = "linux")]
 fn count_linux_task_directory_entries_v1(fd: RawFd) -> Result<u64, DynError> {
     const LINUX_DIRENT64_NAME_OFFSET: usize = 19;
@@ -2004,31 +1907,25 @@ fn count_linux_task_directory_entries_v1(fd: RawFd) -> Result<u64, DynError> {
     }
     Ok(count)
 }
-
 #[cfg(not(target_os = "linux"))]
 struct StageTaskDirectoryV1;
-
 #[cfg(not(target_os = "linux"))]
 impl StageTaskDirectoryV1 {
     fn open() -> Result<Self, DynError> {
         Err("Taira hidden-stage task attestation requires Linux procfs".into())
     }
-
     fn count(&self) -> Result<u64, DynError> {
         Err("Taira hidden-stage task attestation requires Linux procfs".into())
     }
-
     fn close(self) -> Result<(), DynError> {
         Err("Taira hidden-stage task attestation requires Linux procfs".into())
     }
 }
-
 #[cfg(target_os = "linux")]
 #[repr(C)]
 struct ReleaseLandlockRulesetAttrV1 {
     handled_access_fs: u64,
 }
-
 #[cfg(target_os = "linux")]
 fn install_stage_landlock_v1() -> Result<(), DynError> {
     const LANDLOCK_CREATE_RULESET_VERSION: u32 = 1;
@@ -2063,7 +1960,6 @@ fn install_stage_landlock_v1() -> Result<(), DynError> {
         | LANDLOCK_ACCESS_FS_MAKE_SYM
         | LANDLOCK_ACCESS_FS_REFER
         | LANDLOCK_ACCESS_FS_TRUNCATE;
-
     // SAFETY: the VERSION query requires null attributes and a zero size.
     let abi = unsafe {
         libc::syscall(
@@ -2138,23 +2034,19 @@ fn install_stage_landlock_v1() -> Result<(), DynError> {
     }
     Ok(())
 }
-
 #[cfg(not(target_os = "linux"))]
 fn install_stage_landlock_v1() -> Result<(), DynError> {
     Err("Taira hidden-stage filesystem confinement requires Linux Landlock".into())
 }
-
 #[cfg(target_os = "linux")]
 fn initialize_stage_rayon_pool_v1() -> Result<(), DynError> {
     initialize_privacy_release_rayon_pool_v1()
         .map_err(|error| format!("cannot initialize exact hidden-stage Rayon pool: {error}").into())
 }
-
 #[cfg(not(target_os = "linux"))]
 fn initialize_stage_rayon_pool_v1() -> Result<(), DynError> {
     Err("Taira hidden-stage Rayon initialization requires Linux".into())
 }
-
 #[cfg(target_os = "linux")]
 fn seal_hidden_stage_open_file_limit_v1(result_fd: RawFd) -> Result<(), DynError> {
     if result_fd != CANONICAL_STAGE_RESULT_FD_V1 {
@@ -2194,18 +2086,15 @@ fn seal_hidden_stage_open_file_limit_v1(result_fd: RawFd) -> Result<(), DynError
     }
     Ok(())
 }
-
 #[cfg(not(target_os = "linux"))]
 fn seal_hidden_stage_open_file_limit_v1(_result_fd: RawFd) -> Result<(), DynError> {
     Err("Taira hidden-stage open-file sealing requires Linux".into())
 }
-
 #[cfg(target_os = "linux")]
 struct StageParentDeathWatchdogV1 {
     stop: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
 }
-
 #[cfg(target_os = "linux")]
 impl StageParentDeathWatchdogV1 {
     fn start() -> Result<Self, DynError> {
@@ -2261,7 +2150,6 @@ impl StageParentDeathWatchdogV1 {
         }
     }
 }
-
 #[cfg(target_os = "linux")]
 impl Drop for StageParentDeathWatchdogV1 {
     fn drop(&mut self) {
@@ -2271,17 +2159,14 @@ impl Drop for StageParentDeathWatchdogV1 {
         }
     }
 }
-
 #[cfg(not(target_os = "linux"))]
 struct StageParentDeathWatchdogV1;
-
 #[cfg(not(target_os = "linux"))]
 impl StageParentDeathWatchdogV1 {
     fn start() -> Result<Self, DynError> {
         Err("Taira parent-death thread-group containment requires Linux".into())
     }
 }
-
 #[cfg(target_os = "linux")]
 fn reset_parent_sigchld_disposition_v1() -> Result<(), DynError> {
     // A launcher can otherwise make children auto-reap by inheriting SIG_IGN or
@@ -2323,12 +2208,10 @@ fn reset_parent_sigchld_disposition_v1() -> Result<(), DynError> {
     }
     Ok(())
 }
-
 #[cfg(not(target_os = "linux"))]
 fn reset_parent_sigchld_disposition_v1() -> Result<(), DynError> {
     Err("Taira stage child lifecycle normalization requires Linux".into())
 }
-
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const RELEASE_AUDIT_ARCH_V1: u32 = 0xc000_003e;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -2337,7 +2220,6 @@ const RELEASE_FORBIDDEN_SYSCALL_ABI_MASK_V1: u32 = 0x4000_0000;
 const RELEASE_AUDIT_ARCH_V1: u32 = 0xc000_00b7;
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const RELEASE_FORBIDDEN_SYSCALL_ABI_MASK_V1: u32 = 0;
-
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const RELEASE_NR_FORK_V1: u32 = 57;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -2360,7 +2242,6 @@ const RELEASE_NR_EXECVE_V1: u32 = 59;
 const RELEASE_NR_EXECVEAT_V1: u32 = 322;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const RELEASE_NR_PRCTL_V1: u32 = 157;
-
 // AArch64 exposes process creation through clone/clone3; fork and vfork have
 // no syscall numbers there, so impossible sentinel values retain one fixed BPF
 // layout across both supported Taira release architectures.
@@ -2386,14 +2267,12 @@ const RELEASE_NR_EXECVE_V1: u32 = 221;
 const RELEASE_NR_EXECVEAT_V1: u32 = 281;
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const RELEASE_NR_PRCTL_V1: u32 = 167;
-
 #[cfg(target_os = "linux")]
 const RELEASE_SECCOMP_RET_KILL_PROCESS_V1: u32 = 0x8000_0000;
 #[cfg(target_os = "linux")]
 const RELEASE_SECCOMP_RET_ALLOW_V1: u32 = 0x7fff_0000;
 #[cfg(target_os = "linux")]
 const RELEASE_SECCOMP_RET_ERRNO_V1: u32 = 0x0005_0000;
-
 #[cfg(target_os = "linux")]
 const fn release_bpf_statement_v1(code: u16, k: u32) -> libc::sock_filter {
     libc::sock_filter {
@@ -2403,12 +2282,10 @@ const fn release_bpf_statement_v1(code: u16, k: u32) -> libc::sock_filter {
         k,
     }
 }
-
 #[cfg(target_os = "linux")]
 const fn release_bpf_jump_v1(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
     libc::sock_filter { code, jt, jf, k }
 }
-
 #[cfg(all(
     target_os = "linux",
     target_endian = "little",
@@ -2424,7 +2301,6 @@ fn install_pre_exec_stage_controls(
         return Err(std::io::Error::from_raw_os_error(libc::EINVAL));
     }
     install_pre_exec_stage_stack_limit_v1()?;
-
     let allocation_limit: libc::rlim_t = address_space_ceiling_bytes
         .try_into()
         .map_err(|_| std::io::Error::from_raw_os_error(libc::EOVERFLOW))?;
@@ -2469,7 +2345,6 @@ fn install_pre_exec_stage_controls(
     {
         return Err(std::io::Error::last_os_error());
     }
-
     // Mark every non-stdio descriptor close-on-exec, then move the
     // parent-created anonymous result descriptor to canonical FD 3. The
     // dedicated executable memfd remains above FD 3 and CLOEXEC:
@@ -2526,7 +2401,6 @@ fn install_pre_exec_stage_controls(
     {
         return Err(std::io::Error::from_raw_os_error(libc::EPERM));
     }
-
     // Install the parent-death signal before checking the parent identity; the
     // follow-up getppid closes the documented prctl race.
     // SAFETY: PR_SET_PDEATHSIG accepts one signal number.
@@ -2539,7 +2413,6 @@ fn install_pre_exec_stage_controls(
     }
     install_pre_exec_seccomp_v1()
 }
-
 #[cfg(all(
     target_os = "linux",
     target_endian = "little",
@@ -2586,7 +2459,6 @@ fn install_pre_exec_seccomp_v1() -> std::io::Result<()> {
     ];
     install_seccomp_filter_v1(&mut filter, 0)
 }
-
 #[cfg(all(
     target_os = "linux",
     target_endian = "little",
@@ -2649,7 +2521,6 @@ const RELEASE_POST_EXEC_UNCONDITIONAL_SYSCALLS_V1: &[libc::c_long] = &[
     libc::SYS_sysinfo,
     libc::SYS_restart_syscall,
 ];
-
 #[cfg(all(
     target_os = "linux",
     target_endian = "little",
@@ -2664,7 +2535,6 @@ fn install_post_exec_stage_controls_v1() -> Result<(), DynError> {
     const SECCOMP_DATA_ARCH_OFFSET: u32 = 4;
     const SECCOMP_DATA_ARG0_LOW_OFFSET: u32 = 16;
     const SECCOMP_DATA_ARG2_LOW_OFFSET: u32 = 32;
-
     let mut parent_death_signal = 0;
     // SAFETY: PR_GET_PDEATHSIG writes one integer to the supplied pointer.
     if unsafe { libc::prctl(libc::PR_GET_PDEATHSIG, &mut parent_death_signal) } != 0
@@ -2688,7 +2558,6 @@ fn install_post_exec_stage_controls_v1() -> Result<(), DynError> {
     {
         return Err("hidden stage could not disable ptrace-style dumpability".into());
     }
-
     let deny = RELEASE_SECCOMP_RET_ERRNO_V1
         | u32::try_from(libc::EPERM).map_err(|_| "EPERM is outside seccomp errno width")?;
     let unsupported = RELEASE_SECCOMP_RET_ERRNO_V1
@@ -2717,7 +2586,6 @@ fn install_post_exec_stage_controls_v1() -> Result<(), DynError> {
             RELEASE_SECCOMP_RET_ALLOW_V1,
         ));
     }
-
     for syscall_number in [libc::SYS_mmap, libc::SYS_mprotect] {
         filter.extend([
             release_bpf_jump_v1(
@@ -2770,7 +2638,6 @@ fn install_post_exec_stage_controls_v1() -> Result<(), DynError> {
     install_seccomp_filter_v1(&mut filter, libc::SECCOMP_FILTER_FLAG_TSYNC)
         .map_err(|error| format!("cannot seal the post-exec stage boundary: {error}").into())
 }
-
 #[cfg(all(
     target_os = "linux",
     target_endian = "little",
@@ -2813,7 +2680,6 @@ fn install_seccomp_filter_v1(
     }
     Ok(())
 }
-
 #[cfg(all(
     target_os = "linux",
     not(all(
@@ -2829,7 +2695,6 @@ fn install_pre_exec_stage_controls(
 ) -> std::io::Result<()> {
     Err(std::io::Error::from_raw_os_error(libc::ENOTSUP))
 }
-
 #[cfg(any(
     not(target_os = "linux"),
     all(
@@ -2843,7 +2708,6 @@ fn install_pre_exec_stage_controls(
 fn install_post_exec_stage_controls_v1() -> Result<(), DynError> {
     Err("Taira post-exec confinement supports only Linux x86_64 and aarch64".into())
 }
-
 #[cfg(not(target_os = "linux"))]
 fn install_pre_exec_stage_controls(
     _expected_parent_pid: i32,
@@ -2853,7 +2717,6 @@ fn install_pre_exec_stage_controls(
 ) -> std::io::Result<()> {
     Err(std::io::Error::from_raw_os_error(libc::ENOTSUP))
 }
-
 fn immutable_runner_exec_path(fd: RawFd) -> Result<PathBuf, DynError> {
     if fd < 0 {
         return Err("immutable runner file descriptor is negative".into());
@@ -2867,7 +2730,6 @@ fn immutable_runner_exec_path(fd: RawFd) -> Result<PathBuf, DynError> {
         Err("Taira release stages require Linux sealed-fd execution".into())
     }
 }
-
 fn ensure_taira_release_platform() -> Result<(), DynError> {
     #[cfg(all(
         target_os = "linux",
@@ -2886,7 +2748,6 @@ fn ensure_taira_release_platform() -> Result<(), DynError> {
         Err("Taira privacy release evidence requires little-endian Linux x86_64 or aarch64".into())
     }
 }
-
 #[cfg(target_os = "linux")]
 fn linux_open_absolute(
     path: &Path,
@@ -2962,7 +2823,6 @@ fn linux_open_absolute(
     // SAFETY: successful openat2 returned one newly owned descriptor.
     Ok(unsafe { File::from_raw_fd(opened) })
 }
-
 #[cfg(target_os = "linux")]
 fn open_release_input(path: &Path, label: &str) -> Result<File, DynError> {
     linux_open_absolute(
@@ -2972,7 +2832,6 @@ fn open_release_input(path: &Path, label: &str) -> Result<File, DynError> {
         label,
     )
 }
-
 #[cfg(not(target_os = "linux"))]
 fn open_release_input(path: &Path, label: &str) -> Result<File, DynError> {
     let absolute = absolute_normalized(path)?;
@@ -2983,7 +2842,6 @@ fn open_release_input(path: &Path, label: &str) -> Result<File, DynError> {
         .open(&absolute)
         .map_err(|error| format!("cannot open {label} without following links: {error}").into())
 }
-
 #[cfg(not(target_os = "linux"))]
 fn open_release_output_create_new(path: &Path, label: &str) -> Result<File, DynError> {
     let absolute = absolute_normalized(path)?;
@@ -2996,7 +2854,6 @@ fn open_release_output_create_new(path: &Path, label: &str) -> Result<File, DynE
         .open(&absolute)
         .map_err(|error| format!("cannot securely create new {label}: {error}").into())
 }
-
 #[cfg(target_os = "linux")]
 fn open_live_process_executable() -> Result<File, DynError> {
     // `/proc/self/exe` is the kernel-owned identity of the image executing this
@@ -3014,7 +2871,6 @@ fn open_live_process_executable() -> Result<File, DynError> {
     // SAFETY: successful open returned one newly owned descriptor.
     Ok(unsafe { File::from_raw_fd(fd) })
 }
-
 #[cfg(target_os = "linux")]
 fn validate_static_release_elf_v1(file: &File, file_len: u64) -> Result<(), DynError> {
     const ELF64_HEADER_BYTES: usize = 64;
@@ -3031,7 +2887,6 @@ fn validate_static_release_elf_v1(file: &File, file_len: u64) -> Result<(), DynE
     const DT_NEEDED: i64 = 1;
     const MAX_PROGRAM_HEADERS: u16 = 256;
     const MAX_DYNAMIC_TABLE_BYTES: u64 = 1024 * 1024;
-
     if file_len < ELF64_HEADER_BYTES as u64 {
         return Err("release runner is shorter than one ELF64 header".into());
     }
@@ -3078,7 +2933,6 @@ fn validate_static_release_elf_v1(file: &File, file_len: u64) -> Result<(), DynE
     if table_end > file_len {
         return Err("release runner program-header table exceeds the file".into());
     }
-
     let mut saw_load = false;
     for index in 0..program_header_count {
         let offset = program_header_offset
@@ -3156,7 +3010,6 @@ fn validate_static_release_elf_v1(file: &File, file_len: u64) -> Result<(), DynE
     }
     Ok(())
 }
-
 #[cfg(target_os = "linux")]
 fn prepare_immutable_runner() -> Result<ImmutableRunnerV1, DynError> {
     let source_path = env::current_exe().map_err(|error| {
@@ -3192,7 +3045,6 @@ fn prepare_immutable_runner() -> Result<ImmutableRunnerV1, DynError> {
     source
         .seek(SeekFrom::Start(0))
         .map_err(|error| format!("cannot rewind runner binary: {error}"))?;
-
     let name =
         CString::new("taira-privacy-release-runner-v1").expect("fixed memfd label contains no NUL");
     // SAFETY: the fixed C string is NUL-terminated and flags are valid for
@@ -3264,7 +3116,6 @@ fn prepare_immutable_runner() -> Result<ImmutableRunnerV1, DynError> {
     if observed_seals < 0 || observed_seals & required_seals != required_seals {
         return Err("anonymous runner did not retain every mandatory write/size seal".into());
     }
-
     executable
         .seek(SeekFrom::Start(0))
         .map_err(|error| format!("cannot rewind sealed runner: {error}"))?;
@@ -3288,7 +3139,6 @@ fn prepare_immutable_runner() -> Result<ImmutableRunnerV1, DynError> {
     {
         return Err("runner binary changed while its sealed copy was prepared".into());
     }
-
     Ok(ImmutableRunnerV1 {
         executable,
         source_path,
@@ -3296,12 +3146,10 @@ fn prepare_immutable_runner() -> Result<ImmutableRunnerV1, DynError> {
         sha256: sealed_digest,
     })
 }
-
 #[cfg(not(target_os = "linux"))]
 fn prepare_immutable_runner() -> Result<ImmutableRunnerV1, DynError> {
     Err("anonymous sealed runner preparation requires Linux memfd seals".into())
 }
-
 fn exit_status_description(status: ExitStatus) -> String {
     if let Some(code) = status.code() {
         format!("with code {code}")
@@ -3311,7 +3159,6 @@ fn exit_status_description(status: ExitStatus) -> String {
         "with unknown status".to_owned()
     }
 }
-
 fn canonical_stage_coordinates()
 -> Result<&'static [PrivacyReleaseStageCoordinateV1; PRIVACY_RELEASE_STAGE_COUNT_V1], DynError> {
     if !validate_privacy_release_stage_coordinates_v1(&PRIVACY_RELEASE_STAGE_COORDINATES_V1) {
@@ -3322,7 +3169,6 @@ fn canonical_stage_coordinates()
     }
     Ok(&PRIVACY_RELEASE_STAGE_COORDINATES_V1)
 }
-
 fn validate_expectation_stage_coordinates_v1(
     expectations: &PrivacyReleaseExpectationsV1,
 ) -> Result<(), DynError> {
@@ -3350,7 +3196,6 @@ fn validate_expectation_stage_coordinates_v1(
     }
     Ok(())
 }
-
 fn validate_expectations(expectations: &PrivacyReleaseExpectationsV1) -> Result<(), DynError> {
     if expectations.schema_version != ARTIFACT_SCHEMA_VERSION_V1 {
         return Err("expectations schema version is not exactly v1".into());
@@ -3415,7 +3260,6 @@ fn validate_expectations(expectations: &PrivacyReleaseExpectationsV1) -> Result<
     }
     Ok(())
 }
-
 fn validate_aggregate_proof_artifact_bytes_v1<'a, I>(stages: I) -> Result<u64, DynError>
 where
     I: Clone + Iterator<Item = &'a PrivacyReleaseStageEvidenceV1>,
@@ -3427,7 +3271,6 @@ where
             .map(|artifact| artifact.canonical_proof_bytes.len())
     }))
 }
-
 fn validate_aggregate_proof_artifact_lengths_v1<I>(artifact_lengths: I) -> Result<u64, DynError>
 where
     I: Clone + Iterator<Item = usize>,
@@ -3452,7 +3295,6 @@ where
         )
         .into());
     }
-
     let mut total_bytes = 0_u64;
     for artifact_length in artifact_lengths {
         let artifact_bytes = u64::try_from(artifact_length)
@@ -3470,7 +3312,6 @@ where
     }
     Ok(total_bytes)
 }
-
 fn validate_stage_evidence(
     evidence: &PrivacyReleaseStageEvidenceV1,
     protocol_id: PrivacyProtocolIdV1,
@@ -3521,7 +3362,6 @@ fn validate_stage_evidence(
     }
     Ok(())
 }
-
 fn validate_resource_facts(
     resources: &PrivacyReleaseResourceFactsV1,
     protocol_id: PrivacyProtocolIdV1,
@@ -3548,7 +3388,6 @@ fn validate_resource_facts(
     }
     Ok(())
 }
-
 fn validate_measured_against_expectations(
     measured: &[MeasuredStageV1],
     expectations: &PrivacyReleaseExpectationsV1,
@@ -3604,7 +3443,6 @@ fn validate_measured_against_expectations(
     }
     Ok(())
 }
-
 fn validate_stage_artifacts(
     artifacts: &PrivacyReleaseStageArtifactsV1,
     expectations: &PrivacyReleaseExpectationsV1,
@@ -3656,7 +3494,6 @@ fn validate_stage_artifacts(
     }
     Ok(())
 }
-
 fn validate_receipt(
     receipt: &PrivacyReleaseReceiptV1,
     loaded: &LoadedInputsV1,
@@ -3704,11 +3541,9 @@ fn validate_receipt(
     }
     Ok(())
 }
-
 fn validate_exact12_matrix(bytes: &[u8]) -> Result<(), DynError> {
     validate_exact12_matrix_structure(bytes)
 }
-
 fn validate_exact12_matrix_structure(bytes: &[u8]) -> Result<(), DynError> {
     let generated = privacy_exact12_matrix_bytes_v1()
         .map_err(|error| format!("cannot generate compiled exact12 matrix: {error}"))?;
@@ -3948,7 +3783,6 @@ fn validate_exact12_matrix_structure(bytes: &[u8]) -> Result<(), DynError> {
     }
     Ok(())
 }
-
 fn parse_nonzero_sha256(value: &str, label: &str) -> Result<[u8; 32], DynError> {
     let digest = parse_sha256(value)?;
     if digest == [0; 32] {
@@ -3956,7 +3790,6 @@ fn parse_nonzero_sha256(value: &str, label: &str) -> Result<[u8; 32], DynError> 
     }
     Ok(digest)
 }
-
 fn parse_canonical_usize(value: &str) -> Result<usize, DynError> {
     if value != "0" && (value.starts_with('0') || !value.bytes().all(|byte| byte.is_ascii_digit()))
     {
@@ -3966,7 +3799,6 @@ fn parse_canonical_usize(value: &str) -> Result<usize, DynError> {
         .parse::<usize>()
         .map_err(|_| "exact12 protocol index exceeds usize".into())
 }
-
 fn canonical_norito_bytes<T>(value: &T, label: &str) -> Result<Vec<u8>, DynError>
 where
     T: PartialEq + norito::NoritoSerialize,
@@ -3982,7 +3814,6 @@ where
     }
     Ok(bytes)
 }
-
 fn decode_canonical_norito<T>(bytes: &[u8], maximum_bytes: u64, label: &str) -> Result<T, DynError>
 where
     T: norito::NoritoSerialize,
@@ -3998,7 +3829,6 @@ where
     }
     Ok(value)
 }
-
 fn canonical_json_bytes<T>(value: &T, label: &str) -> Result<Vec<u8>, DynError>
 where
     T: PartialEq + norito::json::JsonSerialize + norito::json::JsonDeserialize,
@@ -4013,7 +3843,6 @@ where
     }
     Ok(json.into_bytes())
 }
-
 fn decode_canonical_json<T>(bytes: &[u8], label: &str) -> Result<T, DynError>
 where
     T: PartialEq + norito::json::JsonSerialize + norito::json::JsonDeserialize,
@@ -4028,7 +3857,6 @@ where
     }
     Ok(value)
 }
-
 fn load_typed_pair<T>(
     norito_path: &Path,
     max_norito_bytes: u64,
@@ -4055,7 +3883,6 @@ where
     }
     Ok((authoritative, norito_input.bytes, json_input.bytes))
 }
-
 fn artifact_decode_limits(payload_len: usize) -> DecodeLimits {
     // Canonical decoding validates and then deterministically re-encodes the
     // complete governed enclosure. Use Norito's payload-derived cumulative
@@ -4074,7 +3901,6 @@ fn artifact_decode_limits(payload_len: usize) -> DecodeLimits {
         32,
     )
 }
-
 fn secure_anonymous_stage_file(label: &str) -> Result<File, DynError> {
     let file = tempfile::tempfile()
         .map_err(|error| format!("cannot create anonymous {label} file: {error}"))?;
@@ -4092,7 +3918,6 @@ fn secure_anonymous_stage_file(label: &str) -> Result<File, DynError> {
     validate_anonymous_stage_metadata(&metadata, 0, label)?;
     Ok(file)
 }
-
 fn validate_anonymous_stage_metadata(
     metadata: &Metadata,
     maximum: u64,
@@ -4110,7 +3935,6 @@ fn validate_anonymous_stage_metadata(
     }
     Ok(())
 }
-
 fn anonymous_file_len(file: &File, label: &str) -> Result<u64, DynError> {
     let metadata = file
         .metadata()
@@ -4121,7 +3945,6 @@ fn anonymous_file_len(file: &File, label: &str) -> Result<u64, DynError> {
     }
     Ok(metadata.len())
 }
-
 fn read_bounded_anonymous_file(
     file: &mut File,
     maximum: u64,
@@ -4163,7 +3986,6 @@ fn read_bounded_anonymous_file(
     }
     Ok(bytes)
 }
-
 fn secure_write_anonymous_stage_result(fd: RawFd, bytes: &[u8]) -> Result<(), DynError> {
     // SAFETY: `fd` is the one inherited, parent-created anonymous result
     // descriptor and ownership transfers to this hidden child.
@@ -4190,7 +4012,6 @@ fn secure_write_anonymous_stage_result(fd: RawFd, bytes: &[u8]) -> Result<(), Dy
     }
     Ok(())
 }
-
 fn secure_read(path: &Path, maximum: u64, label: &str) -> Result<SecureInputV1, DynError> {
     let mut file = open_release_input(path, label)?;
     let before = file
@@ -4231,7 +4052,6 @@ fn secure_read(path: &Path, maximum: u64, label: &str) -> Result<SecureInputV1, 
         identity,
     })
 }
-
 fn secure_hash(path: &Path, maximum: u64, label: &str) -> Result<HashedInputV1, DynError> {
     let mut file = open_release_input(path, label)?;
     let before = file
@@ -4262,7 +4082,6 @@ fn secure_hash(path: &Path, maximum: u64, label: &str) -> Result<HashedInputV1, 
         mode: after.mode(),
     })
 }
-
 fn validate_regular_metadata(
     metadata: &Metadata,
     maximum: u64,
@@ -4286,14 +4105,12 @@ fn validate_regular_metadata(
     }
     Ok(())
 }
-
 fn file_identity(metadata: &Metadata) -> FileIdentityV1 {
     FileIdentityV1 {
         device: metadata.dev(),
         inode: metadata.ino(),
     }
 }
-
 fn generate_output_paths(outputs: &GenerateOutputsV1) -> Vec<PathBuf> {
     vec![
         outputs.command_manifest_norito.clone(),
@@ -4304,7 +4121,6 @@ fn generate_output_paths(outputs: &GenerateOutputsV1) -> Vec<PathBuf> {
         outputs.receipt_json.clone(),
     ]
 }
-
 fn verify_artifact_paths(artifacts: &VerifyArtifactsV1) -> Vec<PathBuf> {
     vec![
         artifacts.command_manifest_norito.clone(),
@@ -4315,7 +4131,6 @@ fn verify_artifact_paths(artifacts: &VerifyArtifactsV1) -> Vec<PathBuf> {
         artifacts.receipt_json.clone(),
     ]
 }
-
 fn preflight_output_paths(paths: &[PathBuf]) -> Result<(), DynError> {
     if paths.is_empty() {
         return Err("output path set is empty".into());
@@ -4355,7 +4170,6 @@ fn preflight_output_paths(paths: &[PathBuf]) -> Result<(), DynError> {
     }
     Ok(())
 }
-
 #[cfg(target_os = "linux")]
 fn open_output_parent_directory(path: &Path) -> Result<File, DynError> {
     let absolute = absolute_normalized(path)?;
@@ -4429,7 +4243,6 @@ fn open_output_parent_directory(path: &Path) -> Result<File, DynError> {
         "output parent directory",
     )
 }
-
 #[cfg(target_os = "linux")]
 fn verify_output_parent_anchor_live(anchor: &OutputParentAnchorV1) -> Result<(), DynError> {
     let metadata = anchor.directory.metadata().map_err(|error| {
@@ -4447,7 +4260,6 @@ fn verify_output_parent_anchor_live(anchor: &OutputParentAnchorV1) -> Result<(),
     }
     Ok(())
 }
-
 #[cfg(target_os = "linux")]
 fn verify_output_parent_anchor_named(anchor: &OutputParentAnchorV1) -> Result<(), DynError> {
     verify_output_parent_anchor_live(anchor)?;
@@ -4472,7 +4284,6 @@ fn verify_output_parent_anchor_named(anchor: &OutputParentAnchorV1) -> Result<()
     }
     Ok(())
 }
-
 #[cfg(target_os = "linux")]
 fn output_entry_facts(
     anchor: &OutputParentAnchorV1,
@@ -4520,7 +4331,6 @@ fn output_entry_facts(
         length: stat.st_size as u64,
     }))
 }
-
 #[cfg(target_os = "linux")]
 fn prepare_output_plan(
     paths: &[PathBuf],
@@ -4533,7 +4343,6 @@ fn prepare_output_plan(
     let mut parent_indices = BTreeMap::<PathBuf, usize>::new();
     let mut parent_identities = BTreeMap::<FileIdentityV1, PathBuf>::new();
     let mut targets = Vec::<OutputTargetV1>::with_capacity(paths.len());
-
     for path in paths {
         let absolute = absolute_normalized(path)?;
         let parent = absolute
@@ -4595,7 +4404,6 @@ fn prepare_output_plan(
             basename,
         });
     }
-
     for anchor in &anchors {
         verify_output_parent_anchor_named(anchor)?;
     }
@@ -4611,7 +4419,6 @@ fn prepare_output_plan(
     }
     Ok((anchors, targets))
 }
-
 #[cfg(target_os = "linux")]
 fn open_output_target_create_new(
     anchor: &OutputParentAnchorV1,
@@ -4647,7 +4454,6 @@ fn open_output_target_create_new(
     // SAFETY: successful `openat2` returned one newly owned descriptor.
     Ok(unsafe { File::from_raw_fd(opened) })
 }
-
 #[cfg(target_os = "linux")]
 fn validate_created_output_metadata(
     metadata: &Metadata,
@@ -4669,7 +4475,6 @@ fn validate_created_output_metadata(
     }
     Ok(())
 }
-
 #[cfg(target_os = "linux")]
 fn validate_created_output_entry(
     anchor: &OutputParentAnchorV1,
@@ -4697,7 +4502,6 @@ fn validate_created_output_entry(
     }
     Ok(())
 }
-
 #[cfg(target_os = "linux")]
 fn remove_output_entry_if_identity(
     anchor: &OutputParentAnchorV1,
@@ -4714,7 +4518,6 @@ fn remove_output_entry_if_identity(
     // was just checked without following links and matches our created inode.
     unsafe { libc::unlinkat(anchor.directory.as_raw_fd(), target.basename.as_ptr(), 0) == 0 }
 }
-
 #[cfg(target_os = "linux")]
 fn secure_write_create_new(
     anchors: &[OutputParentAnchorV1],
@@ -4792,7 +4595,6 @@ fn secure_write_create_new(
         expected_length,
     })
 }
-
 #[cfg(target_os = "linux")]
 fn rollback_created_outputs(
     anchors: &[OutputParentAnchorV1],
@@ -4814,7 +4616,6 @@ fn rollback_created_outputs(
         }
     }
 }
-
 #[cfg(target_os = "linux")]
 fn write_artifact_set_create_new(artifacts: &[(&Path, &[u8])]) -> Result<(), DynError> {
     let paths = artifacts
@@ -4832,7 +4633,6 @@ fn write_artifact_set_create_new(artifacts: &[(&Path, &[u8])]) -> Result<(), Dyn
             }
         }
     }
-
     let commit = (|| -> Result<(), DynError> {
         for output in &created {
             let target = &targets[output.target_index];
@@ -4875,7 +4675,6 @@ fn write_artifact_set_create_new(artifacts: &[(&Path, &[u8])]) -> Result<(), Dyn
     }
     Ok(())
 }
-
 #[cfg(not(target_os = "linux"))]
 fn secure_create_new_file(path: &Path) -> Result<File, DynError> {
     let absolute = absolute_normalized(path)?;
@@ -4918,7 +4717,6 @@ fn secure_create_new_file(path: &Path) -> Result<File, DynError> {
     }
     Ok(file)
 }
-
 #[cfg(not(target_os = "linux"))]
 fn secure_write_create_new(path: &Path, bytes: &[u8]) -> Result<FileIdentityV1, DynError> {
     let mut file = secure_create_new_file(path)?;
@@ -4951,7 +4749,6 @@ fn secure_write_create_new(path: &Path, bytes: &[u8]) -> Result<FileIdentityV1, 
     }
     result
 }
-
 #[cfg(not(target_os = "linux"))]
 fn write_artifact_set_create_new(artifacts: &[(&Path, &[u8])]) -> Result<(), DynError> {
     let paths = artifacts
@@ -4990,7 +4787,6 @@ fn write_artifact_set_create_new(artifacts: &[(&Path, &[u8])]) -> Result<(), Dyn
     }
     Ok(())
 }
-
 #[cfg(not(target_os = "linux"))]
 fn rollback_created_outputs(created: &[(PathBuf, FileIdentityV1)]) {
     for (path, expected_identity) in created.iter().rev() {
@@ -5005,7 +4801,6 @@ fn rollback_created_outputs(created: &[(PathBuf, FileIdentityV1)]) {
         }
     }
 }
-
 #[cfg(not(target_os = "linux"))]
 fn remove_output_if_identity(path: &Path, expected_identity: FileIdentityV1) {
     let Ok(metadata) = fs::symlink_metadata(path) else {
@@ -5018,7 +4813,6 @@ fn remove_output_if_identity(path: &Path, expected_identity: FileIdentityV1) {
         let _ = fs::remove_file(path);
     }
 }
-
 fn reject_lexical_path_aliases(paths: &[PathBuf]) -> Result<(), DynError> {
     let mut normalized = BTreeSet::new();
     for path in paths {
@@ -5033,7 +4827,6 @@ fn reject_lexical_path_aliases(paths: &[PathBuf]) -> Result<(), DynError> {
     }
     Ok(())
 }
-
 fn reject_existing_inode_aliases(paths: &[PathBuf]) -> Result<(), DynError> {
     let mut identities = BTreeMap::<FileIdentityV1, PathBuf>::new();
     for path in paths {
@@ -5064,7 +4857,6 @@ fn reject_existing_inode_aliases(paths: &[PathBuf]) -> Result<(), DynError> {
     }
     Ok(())
 }
-
 fn absolute_normalized(path: &Path) -> Result<PathBuf, DynError> {
     if path.as_os_str().is_empty() {
         return Err("empty filesystem path".into());
@@ -5097,7 +4889,6 @@ fn absolute_normalized(path: &Path) -> Result<PathBuf, DynError> {
     }
     Ok(normalized)
 }
-
 fn reject_symlink_ancestors(path: &Path, include_leaf: bool) -> Result<(), DynError> {
     let absolute = absolute_normalized(path)?;
     let mut current = PathBuf::new();
@@ -5123,7 +4914,6 @@ fn reject_symlink_ancestors(path: &Path, include_leaf: bool) -> Result<(), DynEr
     }
     Ok(())
 }
-
 fn enforce_encoded_size(observed: usize, maximum: u64, label: &str) -> Result<(), DynError> {
     let observed = u64::try_from(observed).map_err(|_| format!("{label} size exceeds u64"))?;
     if observed == 0 || observed > maximum {
@@ -5131,7 +4921,6 @@ fn enforce_encoded_size(observed: usize, maximum: u64, label: &str) -> Result<()
     }
     Ok(())
 }
-
 fn parse_sha256(value: &str) -> Result<[u8; 32], DynError> {
     if value.len() != 64
         || !value
@@ -5146,7 +4935,6 @@ fn parse_sha256(value: &str) -> Result<[u8; 32], DynError> {
     }
     Ok(digest)
 }
-
 fn hex_nibble(byte: u8) -> Result<u8, DynError> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),
@@ -5154,7 +4942,6 @@ fn hex_nibble(byte: u8) -> Result<u8, DynError> {
         _ => Err("invalid lowercase hexadecimal digit".into()),
     }
 }
-
 fn hex_sha256(digest: &[u8; 32]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(64);
@@ -5164,34 +4951,27 @@ fn hex_sha256(digest: &[u8; 32]) -> String {
     }
     output
 }
-
 fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
     sha256(bytes)
 }
-
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::symlink;
-
     use super::*;
-
     #[cfg(all(
         target_os = "linux",
         target_endian = "little",
         any(target_arch = "x86_64", target_arch = "aarch64")
     ))]
     const STACK_LIMIT_CHILD_MARKER_V1: &str = "IROHA_PRIVACY_RELEASE_STACK_LIMIT_CHILD_MODE_V1";
-
     fn exact12_bytes() -> Vec<u8> {
         privacy_exact12_matrix_bytes_v1().expect("generate compiled exact12 matrix")
     }
-
     fn checked_in_exact12_bytes() -> Vec<u8> {
         let path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/privacy/exact12_v1.tsv");
         fs::read(path).expect("read exact12 fixture")
     }
-
     fn canonical_expectations_v1() -> PrivacyReleaseExpectationsV1 {
         let stages = canonical_stage_coordinates()
             .expect("frozen stage declaration")
@@ -5284,11 +5064,9 @@ mod tests {
             stages,
         }
     }
-
     fn refresh_artifact_hash(artifact: &mut PrivacyReleaseProofArtifactEvidenceV1) {
         artifact.proof_sha256 = sha256_bytes(&artifact.canonical_proof_bytes);
     }
-
     fn measured_from_expectations(
         expectations: &PrivacyReleaseExpectationsV1,
     ) -> Vec<MeasuredStageV1> {
@@ -5303,7 +5081,6 @@ mod tests {
             })
             .collect()
     }
-
     fn captured_resource_certificate_v1(
         expectations: &PrivacyReleaseExpectationsV1,
     ) -> (
@@ -5333,7 +5110,6 @@ mod tests {
         .expect("typed resource certificate");
         (certificate, norito, json)
     }
-
     #[test]
     fn capture_validation_binds_resource_certificate_to_exact_expectations() {
         let expectations = canonical_expectations_v1();
@@ -5345,7 +5121,6 @@ mod tests {
             sha256_bytes(&json),
         )
         .expect("resource certificate binds the exact expectation pair");
-
         assert!(
             resource_certificate::validate_capture_expectation_binding_v1(
                 &certificate,
@@ -5355,7 +5130,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut substituted_kat = expectations;
         let ordinal = usize::from(privacy_release_stage_ordinal_v1(
             PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
@@ -5374,7 +5148,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn proc_status_memory_parser_accepts_only_exact_complete_peak_fields() {
         let sampled = parse_process_status_memory_v1(
@@ -5388,7 +5161,6 @@ mod tests {
                 peak_address_space_bytes: 65536 * 1024,
             }
         );
-
         let malformed = [
             b"VmPeak:\t65536 kB\n".as_slice(),
             b"VmHWM:\t1024 kB\n".as_slice(),
@@ -5419,14 +5191,12 @@ mod tests {
             "oversized /proc status must fail closed"
         );
     }
-
     #[test]
     fn measured_and_persisted_peak_address_space_is_nonzero_and_bounded() {
         let expectations = canonical_expectations_v1();
         let measured = measured_from_expectations(&expectations);
         validate_measured_against_expectations(&measured, &expectations)
             .expect("canonical process peaks validate");
-
         for value in [
             0,
             expectations.stages[0]
@@ -5438,7 +5208,6 @@ mod tests {
             malformed[0].peak_address_space_bytes = value;
             assert!(validate_measured_against_expectations(&malformed, &expectations).is_err());
         }
-
         let artifacts = PrivacyReleaseStageArtifactsV1 {
             schema_version: ARTIFACT_SCHEMA_VERSION_V1,
             stage_count: u16::try_from(PRIVACY_RELEASE_STAGE_COUNT_V1).unwrap(),
@@ -5478,90 +5247,70 @@ mod tests {
             assert!(validate_stage_artifacts(&malformed, &expectations).is_err());
         }
     }
-
     #[test]
     fn frozen_stage_declaration_rejects_omission_duplication_reorder_and_coordinate_drift() {
         let canonical = PRIVACY_RELEASE_STAGE_COORDINATES_V1.to_vec();
         assert!(validate_privacy_release_stage_coordinates_v1(&canonical));
-
         let mut malformed = Vec::new();
-
         let mut omitted = canonical.clone();
         omitted.pop();
         malformed.push(omitted);
-
         let mut duplicated = canonical.clone();
         duplicated[1] = duplicated[0];
         malformed.push(duplicated);
-
         let mut reordered = canonical.clone();
         reordered.swap(0, 1);
         malformed.push(reordered);
-
         let mut ordinal_drift = canonical.clone();
         ordinal_drift[0].stage_ordinal = 1;
         malformed.push(ordinal_drift);
-
         let mut protocol_substitution = canonical.clone();
         protocol_substitution[0].protocol_id = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
         malformed.push(protocol_substitution);
-
         let mut case_substitution = canonical;
         case_substitution[0].case_kind = PrivacyReleaseCaseKindV1::MaximumShapeResource;
         malformed.push(case_substitution);
-
         for coordinates in malformed {
             assert!(!validate_privacy_release_stage_coordinates_v1(&coordinates));
         }
     }
-
     #[test]
     fn expectation_schedule_rejects_omission_duplication_reorder_and_coordinate_substitution() {
         let canonical = canonical_expectations_v1();
         validate_expectation_stage_coordinates_v1(&canonical)
             .expect("canonical expectation schedule");
-
         let mut malformed = Vec::new();
-
         let mut omitted = canonical.clone();
         omitted.stages.pop();
         omitted.stage_count -= 1;
         malformed.push(omitted);
-
         let mut duplicated = canonical.clone();
         duplicated.stages[1] = duplicated.stages[0].clone();
         malformed.push(duplicated);
-
         let mut reordered = canonical.clone();
         reordered.stages.swap(0, 1);
         malformed.push(reordered);
-
         let mut ordinal_drift = canonical.clone();
         ordinal_drift.stages[0].evidence.stage_ordinal = 1;
         malformed.push(ordinal_drift);
-
         let mut protocol_substitution = canonical.clone();
         protocol_substitution.stages[0].evidence.protocol_id =
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
         malformed.push(protocol_substitution);
-
         let mut case_substitution = canonical;
         case_substitution.stages[0].evidence.case_kind =
             PrivacyReleaseCaseKindV1::MaximumShapeResource;
         malformed.push(case_substitution);
-
         for expectations in malformed {
             assert!(validate_expectation_stage_coordinates_v1(&expectations).is_err());
         }
     }
-
     #[test]
     fn coordinated_resource_fact_and_ceiling_substitution_rejects_at_comparison() {
         let mut expectations = canonical_expectations_v1();
         let mut measured = measured_from_expectations(&expectations);
         validate_measured_against_expectations(&measured, &expectations)
             .expect("canonical measured/expectation comparison");
-
         let index = usize::from(privacy_release_stage_ordinal_v1(
             PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
             PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
@@ -5584,7 +5333,6 @@ mod tests {
         assert!(validate_expectations(&expectations).is_err());
         assert!(validate_measured_against_expectations(&measured, &expectations).is_err());
     }
-
     #[test]
     fn capture_uses_total_frozen_resources_for_every_exact12_stage() {
         for coordinate in PRIVACY_RELEASE_STAGE_COORDINATES_V1 {
@@ -5602,7 +5350,6 @@ mod tests {
             .expect("canonical stage resource facts validate");
         }
     }
-
     #[test]
     fn checked_in_exact12_artifact_is_derived_from_the_compiled_generator() {
         let generated = exact12_bytes();
@@ -5610,28 +5357,24 @@ mod tests {
         assert_eq!(checked_in, generated);
         assert_eq!(sha256_bytes(&checked_in), sha256_bytes(&generated));
     }
-
     #[test]
     fn exact12_parser_accepts_only_the_closed_order_and_registry_digest() {
         let canonical = exact12_bytes();
         validate_exact12_matrix_structure(&canonical).expect("canonical exact12 structure");
         validate_exact12_matrix(&canonical).expect("canonical exact12");
         let canonical_text = String::from_utf8(canonical.clone()).unwrap();
-
         let reordered = canonical_text.replacen(
             "protocol\t0\tzk-ace-pq-authorization-v0",
             "protocol\t0\tanonymous-pgc-k-out-of-n-v1",
             1,
         );
         assert!(validate_exact12_matrix_structure(reordered.as_bytes()).is_err());
-
         let wrong_digest = canonical_text.replacen(
             "registry-sha256\t734eafb58f0c54f5319b9cc26557920e564453f689071931393dcdba91123e51",
             "registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000",
             1,
         );
         assert!(validate_exact12_matrix_structure(wrong_digest.as_bytes()).is_err());
-
         let crlf = canonical
             .iter()
             .flat_map(|byte| {
@@ -5644,7 +5387,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(validate_exact12_matrix_structure(&crlf).is_err());
     }
-
     #[test]
     fn exact12_parser_rejects_typed_route_retirement_and_shape_substitutions() {
         let canonical = String::from_utf8(exact12_bytes()).unwrap();
@@ -5678,7 +5420,6 @@ mod tests {
             String::from_utf8(substituted_digest).expect("canonical digest remains UTF-8");
         let valid_looking_digest_substitution =
             canonical.replacen(first_statement_digest, &substituted_digest, 1);
-
         let mutations = [
             canonical.replacen(first_header, "# attacker-defined parity matrix", 1),
             canonical.replacen(&format!("{first_header}\n"), "", 1),
@@ -5740,7 +5481,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn exact_pid_wait4_does_not_consume_an_unrelated_exited_child() {
         let mut unrelated = Command::new("/bin/sh")
@@ -5783,7 +5523,6 @@ mod tests {
             Some(9)
         );
     }
-
     #[test]
     fn exact_pid_wait4_reports_complete_child_lifetime_and_reaps() {
         let child = Command::new("/bin/sh")
@@ -5811,7 +5550,6 @@ mod tests {
         assert!(waited.peak_rss_bytes > 0);
         assert!(guard.reaped);
     }
-
     #[test]
     fn child_guard_drop_kills_and_reaps_on_early_error_paths() {
         let child = Command::new("/bin/sleep")
@@ -5834,7 +5572,6 @@ mod tests {
             Some(libc::ESRCH)
         );
     }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn immutable_runner_is_digest_identical_anonymous_and_write_sealed() {
@@ -5888,7 +5625,6 @@ mod tests {
             Some(libc::EPERM)
         );
     }
-
     #[test]
     fn sha256_parser_rejects_noncanonical_or_ambiguous_text() {
         assert_eq!(parse_sha256(&"ab".repeat(32)).unwrap(), [0xab; 32]);
@@ -5901,7 +5637,6 @@ mod tests {
             assert!(parse_sha256(&invalid).is_err(), "{invalid}");
         }
     }
-
     #[test]
     fn common_inputs_bind_nonzero_source_and_the_compiled_build_profile() {
         let compiled = if cfg!(debug_assertions) {
@@ -5930,14 +5665,12 @@ mod tests {
             ("validator-binary".to_owned(), "/iroha3d".to_owned()),
         ]);
         assert!(parse_common_inputs(&options).is_ok());
-
         options.insert("source-sha256".to_owned(), "00".repeat(32));
         assert!(parse_common_inputs(&options).is_err());
         options.insert("source-sha256".to_owned(), "11".repeat(32));
         options.insert("build-profile".to_owned(), opposite.to_owned());
         assert!(parse_common_inputs(&options).is_err());
     }
-
     #[test]
     fn option_parser_rejects_duplicates_unknowns_positionals_and_missing_values() {
         let allowed = ["one", "two"];
@@ -5948,7 +5681,6 @@ mod tests {
         assert!(parse_options(&os(&["one", "a", "--two", "b"]), &allowed).is_err());
         assert!(parse_options(&os(&["--one", "a", "--two"]), &allowed).is_err());
     }
-
     #[test]
     fn hidden_stage_contract_requires_canonical_hard_resource_ceilings() {
         let os = |values: &[&str]| values.iter().map(OsString::from).collect::<Vec<_>>();
@@ -6022,7 +5754,6 @@ mod tests {
             None
         );
         assert_eq!(checked_stage_cpu_limit_seconds_v1(u64::MAX), None);
-
         let missing_hard_limits = os(&[
             "--protocol",
             "zk-ace-pq-authorization-v0",
@@ -6032,12 +5763,10 @@ mod tests {
             "9",
         ]);
         assert!(parse_options(&missing_hard_limits, &stage_option_names()).is_err());
-
         let mut noncanonical = parsed;
         noncanonical.insert("elapsed-ceiling-ms".to_owned(), "060000".to_owned());
         assert!(canonical_u64_option(&noncanonical, "elapsed-ceiling-ms").is_err());
     }
-
     #[test]
     fn zk_x509_process_profile_overrides_capture_and_requires_exact_child_values() {
         let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
@@ -6046,7 +5775,6 @@ mod tests {
         assert_eq!(profile.elapsed_ceiling_millis, 300_000);
         assert_eq!(profile.peak_rss_ceiling_bytes, 12_884_901_888);
         assert_eq!(profile.address_space_ceiling_bytes, 34_359_738_368);
-
         for (generic_elapsed, generic_rss, generic_address_space) in [
             (
                 MAX_STAGE_ELAPSED_MILLIS,
@@ -6080,7 +5808,6 @@ mod tests {
                 }
             );
         }
-
         validate_stage_process_ceilings_v1(
             protocol_id,
             profile.elapsed_ceiling_millis,
@@ -6133,7 +5860,6 @@ mod tests {
         assert!(
             validate_stage_process_ceilings_v1(protocol_id, u64::MAX, u64::MAX, u64::MAX,).is_err()
         );
-
         let other_protocol = canonical_stage_process_ceilings_v1(
             PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
             MAX_STAGE_ELAPSED_MILLIS,
@@ -6148,7 +5874,6 @@ mod tests {
             MAX_STAGE_ADDRESS_SPACE_BYTES
         );
     }
-
     #[test]
     fn hidden_stage_options_reject_both_directions_around_the_zk_x509_profile() {
         let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
@@ -6177,7 +5902,6 @@ mod tests {
                 address_space_bytes: profile.address_space_ceiling_bytes,
             }
         );
-
         for elapsed in [
             profile.elapsed_ceiling_millis - 1,
             profile.elapsed_ceiling_millis + 1,
@@ -6206,7 +5930,6 @@ mod tests {
             assert!(hidden_stage_process_ceilings_v1(protocol_id, &mutated).is_err());
         }
     }
-
     #[test]
     fn parent_stage_entry_rejects_both_directions_around_the_zk_x509_profile() {
         let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
@@ -6269,7 +5992,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn expectations_require_exact_zk_x509_profile_for_each_of_its_four_stages() {
         let exact = canonical_expectations_v1();
@@ -6295,7 +6017,6 @@ mod tests {
             );
         }
         validate_expectations(&exact).expect("all four exact zk-X509 process caps");
-
         for case_kind in PrivacyReleaseCaseKindV1::ALL {
             let index = usize::from(privacy_release_stage_ordinal_v1(
                 PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
@@ -6326,7 +6047,6 @@ mod tests {
                 assert!(validate_expectations(&mutation).is_err());
             }
         }
-
         let other_index = usize::from(privacy_release_stage_ordinal_v1(
             PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
             PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
@@ -6338,7 +6058,6 @@ mod tests {
         validate_expectations(&other_protocol)
             .expect("zk-X509 hard caps do not silently change other protocols");
     }
-
     #[test]
     fn isolation_policy_freezes_the_exact_compute_only_descriptor_boundary() {
         let policy = canonical_isolation_policy_v1();
@@ -6374,7 +6093,6 @@ mod tests {
         assert!(policy.exact_environment_only);
         assert!(policy.seccomp_tsync);
     }
-
     #[test]
     fn hidden_stage_environment_rejects_rust_stack_override() {
         let canonical = vec![(
@@ -6383,7 +6101,6 @@ mod tests {
         )];
         validate_hidden_stage_environment_v1(&canonical)
             .expect("canonical hidden-stage environment");
-
         let mut injected = canonical;
         injected.push((OsString::from("RUST_MIN_STACK"), OsString::from("1048576")));
         assert!(
@@ -6391,7 +6108,6 @@ mod tests {
             "a stack-policy environment override must fail closed"
         );
     }
-
     #[cfg(all(
         target_os = "linux",
         target_endian = "little",
@@ -6422,7 +6138,6 @@ mod tests {
         let expected = rlim_t::try_from(PRIVACY_RELEASE_STAGE_STACK_BYTES_V1).unwrap();
         assert_eq!((soft, hard), (expected, expected));
     }
-
     #[cfg(all(
         target_os = "linux",
         target_endian = "little",
@@ -6447,7 +6162,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(all(
         target_os = "linux",
         target_endian = "little",
@@ -6492,7 +6206,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn procfs_task_counter_rewinds_without_allocating_another_descriptor() {
@@ -6504,14 +6217,12 @@ mod tests {
         assert!(first >= 1);
         assert!(second >= 1);
     }
-
     #[test]
     fn anonymous_stage_descriptors_reject_every_linked_file() {
         let anonymous = secure_anonymous_stage_file("unit-test result").unwrap();
         let anonymous_metadata = anonymous.metadata().unwrap();
         assert_eq!(anonymous_metadata.nlink(), 0);
         validate_anonymous_stage_metadata(&anonymous_metadata, 0, "unit-test result").unwrap();
-
         let temp = tempfile::tempdir().unwrap();
         let linked_path = temp.path().join("linked");
         let linked = OpenOptions::new()
@@ -6534,7 +6245,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn seccomp_rejects_x32_process_and_exec_bypasses_but_allows_threads() {
@@ -6568,20 +6278,17 @@ mod tests {
             Some(libc::EPERM)
         );
     }
-
     #[test]
     fn output_preflight_rejects_existing_symlink_and_duplicate_targets() {
         let temp = tempfile::tempdir().unwrap();
         let existing = temp.path().join("existing");
         fs::write(&existing, b"x").unwrap();
         assert!(preflight_output_paths(std::slice::from_ref(&existing)).is_err());
-
         let target = temp.path().join("target");
         fs::write(&target, b"x").unwrap();
         let link = temp.path().join("link");
         symlink(&target, &link).unwrap();
         assert!(preflight_output_paths(std::slice::from_ref(&link)).is_err());
-
         let fresh = temp.path().join("fresh");
         assert!(
             preflight_output_paths(&[fresh.clone(), fresh])
@@ -6590,7 +6297,6 @@ mod tests {
                 .contains("alias")
         );
     }
-
     #[test]
     fn secure_inputs_reject_external_hard_link_aliases() {
         let temp = tempfile::tempdir().unwrap();
@@ -6613,7 +6319,6 @@ mod tests {
         );
         assert_eq!(rejection.observed_links, 2);
     }
-
     #[test]
     fn input_alias_guard_rejects_hard_links() {
         let temp = tempfile::tempdir().unwrap();
@@ -6623,7 +6328,6 @@ mod tests {
         fs::hard_link(&first, &second).unwrap();
         assert!(reject_existing_inode_aliases(&[first, second]).is_err());
     }
-
     #[test]
     fn create_new_writer_never_overwrites_and_rolls_back_partial_set() {
         let temp = tempfile::tempdir().unwrap();
@@ -6640,7 +6344,6 @@ mod tests {
         assert!(!first.exists());
         assert_eq!(fs::read(second).unwrap(), b"sentinel");
     }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn output_parent_replacement_is_detected_before_anchored_creation() {
@@ -6651,7 +6354,6 @@ mod tests {
         let output = parent.join("artifact");
         let (anchors, targets) =
             prepare_output_plan(std::slice::from_ref(&output)).expect("anchor original parent");
-
         fs::rename(&parent, &moved_parent).unwrap();
         fs::create_dir(&parent).unwrap();
         let error = secure_write_create_new(&anchors, &targets[0], 0, b"evidence")
@@ -6664,7 +6366,6 @@ mod tests {
         assert!(!parent.join("artifact").exists());
         assert!(!moved_parent.join("artifact").exists());
     }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn anchored_output_open_cannot_escape_through_an_adversarial_basename() {
@@ -6683,7 +6384,6 @@ mod tests {
         assert!(open_output_target_create_new(&anchors[0], &adversarial).is_err());
         assert!(!escape.exists());
     }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn rollback_never_unlinks_a_replacement_inode() {
@@ -6694,15 +6394,12 @@ mod tests {
             prepare_output_plan(std::slice::from_ref(&output)).expect("anchor output parent");
         let created = secure_write_create_new(&anchors, &targets[0], 0, b"owned")
             .expect("create anchored output");
-
         fs::rename(&output, &displaced).unwrap();
         fs::write(&output, b"replacement").unwrap();
         rollback_created_outputs(&anchors, &targets, std::slice::from_ref(&created));
-
         assert_eq!(fs::read(&output).unwrap(), b"replacement");
         assert_eq!(fs::read(&displaced).unwrap(), b"owned");
     }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn anchored_rollback_removes_the_owned_exact_mode_inode() {
@@ -6717,11 +6414,9 @@ mod tests {
         assert_eq!(metadata.mode() & 0o7777, 0o600);
         assert_eq!(metadata.nlink(), 1);
         assert_eq!(metadata.len(), 5);
-
         rollback_created_outputs(&anchors, &targets, std::slice::from_ref(&created));
         assert!(!output.exists());
     }
-
     #[test]
     fn canonical_norito_and_json_pairs_reject_trailing_and_projection_drift() {
         let value = PrivacyReleaseArtifactPairDigestV1 {
@@ -6755,7 +6450,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn norito_decode_budget_admits_governed_proof_sequences_above_128_bytes() {
         let value = vec![0xA5_u8; 129];
@@ -6768,7 +6462,6 @@ mod tests {
         .unwrap();
         assert_eq!(decoded, value);
     }
-
     #[test]
     fn norito_decode_budget_admits_exact_maximum_artifact_and_rejects_cap_plus_one() {
         let maximum = usize::try_from(PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1).unwrap();
@@ -6784,7 +6477,6 @@ mod tests {
         assert_eq!(decoded.len(), maximum);
         assert_eq!(decoded.first(), Some(&0x5A));
         assert_eq!(decoded.last(), Some(&0x5A));
-
         let oversized = vec![0xA6_u8; maximum + 1];
         let oversized_encoded =
             norito::encode_canonical(&oversized).expect("encode adversarial advertised length");
@@ -6797,7 +6489,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn norito_decode_budget_admits_two_max_artifacts_and_multi_stage_enclosures() {
         let maximum = usize::try_from(PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1).unwrap();
@@ -6824,7 +6515,6 @@ mod tests {
         drop(decoded);
         drop(encoded);
         drop(two_artifact_stage);
-
         let per_stage = 3 * 1024 * 1024;
         let stages = PrivacyProtocolIdV1::ALL
             .into_iter()
@@ -6864,7 +6554,6 @@ mod tests {
         .unwrap();
         assert_eq!(decoded, aggregate);
     }
-
     #[test]
     fn norito_decode_budget_covers_the_governed_aggregate_payload() {
         let maximum_payload = usize::try_from(MAX_EXPECTATIONS_NORITO_BYTES).unwrap();
@@ -6884,7 +6573,6 @@ mod tests {
         );
         assert_eq!(limits.max_nesting_depth(), 32);
     }
-
     #[test]
     fn receipt_json_rejects_removed_combined_proof_field() {
         let pair = PrivacyReleaseArtifactPairDigestV1 {
@@ -6919,15 +6607,12 @@ mod tests {
             "the first-release receipt must reject the removed combined field"
         );
     }
-
     #[test]
     fn expectations_reject_wrong_failure_class_and_artifact_overrun() {
         let mut expectations = canonical_expectations_v1();
         validate_expectations(&expectations).unwrap();
-
         expectations.stages[1].evidence.failure_class = PrivacyReleaseFailureClassV1::NotApplicable;
         assert!(validate_expectations(&expectations).is_err());
-
         let mut overrun = canonical_expectations_v1();
         let artifact = &mut overrun.stages[0].evidence.proof_artifacts[0];
         artifact.canonical_proof_bytes.resize(
@@ -6937,9 +6622,7 @@ mod tests {
         refresh_artifact_hash(artifact);
         assert!(validate_expectations(&overrun).is_err());
     }
-
     include!("taira_privacy_release_runner/proof_artifact_shape_tests.rs");
-
     #[test]
     fn expectations_require_the_exact_x5s1_artifact_ceiling_below_the_outer_action_cap() {
         let exact = canonical_expectations_v1();
@@ -6954,7 +6637,6 @@ mod tests {
             Some(EXACT_X5S1_BYTES)
         );
         assert!(EXACT_X5S1_BYTES < PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1);
-
         for case_kind in PrivacyReleaseCaseKindV1::ALL {
             let stage_index = usize::from(privacy_release_stage_ordinal_v1(protocol_id, case_kind));
             assert_eq!(
@@ -6973,7 +6655,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn derived_encoded_size_and_aggregate_guards_accept_cap_and_reject_cap_plus_one() {
         assert_eq!(PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1, 9 * 1024 * 1024);
@@ -6988,7 +6669,6 @@ mod tests {
             enforce_encoded_size(exact, maximum, "boundary").unwrap();
             assert!(enforce_encoded_size(exact + 1, maximum, "boundary").is_err());
         }
-
         let exact_lengths = [usize::try_from(PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1)
             .expect("Taira artifact cap fits usize");
             PRIVACY_RELEASE_PROOF_ARTIFACT_COUNT_V1];
@@ -7006,7 +6686,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn expectations_reject_descriptor_substitution_and_zero_statement_hash() {
         let mut cross_protocol = canonical_expectations_v1();
@@ -7014,14 +6693,12 @@ mod tests {
             privacy_release_protocol_descriptor_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
                 .to_owned();
         assert!(validate_expectations(&cross_protocol).is_err());
-
         let mut consistently_substituted = canonical_expectations_v1();
         for stage in &mut consistently_substituted.stages[..PRIVACY_RELEASE_CASE_COUNT_V1] {
             stage.evidence.protocol_descriptor =
                 "zk-ace-pq-authorization-v0; attacker-controlled descriptor".to_owned();
         }
         assert!(validate_expectations(&consistently_substituted).is_err());
-
         let mut zero_statement = canonical_expectations_v1();
         zero_statement.stages[0].evidence.public_statement_sha256 = [0; 32];
         assert!(validate_expectations(&zero_statement).is_err());

@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests {
     use core::num::NonZeroU64;
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         ChainId, NetworkId, Registrable,
@@ -26,7 +25,6 @@ mod tests {
         ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _},
         elliptic_curve::sec1::ToEncodedPoint as _,
     };
-
     use super::*;
     use crate::{
         kura::Kura,
@@ -34,21 +32,17 @@ mod tests {
         role::RoleIdWithOwner,
         state::{State, World},
     };
-
     const POLICY_TEST_TIME_MS: u64 = 1_800_000_000_000;
-
     fn test_network_id(seed: impl AsRef<[u8]>) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             seed,
         )))
     }
-
     #[test]
     fn redemption_context_rejects_same_label_foreign_genesis() {
         let first_display_label = ChainId::from("shared-offline-display-label");
         let second_display_label = ChainId::from("shared-offline-display-label");
         assert_eq!(first_display_label, second_display_label);
-
         let live_network = test_network_id(b"shared-label-live-offline-genesis");
         let foreign_network = test_network_id(b"shared-label-foreign-offline-genesis");
         assert_ne!(live_network, foreign_network);
@@ -71,7 +65,6 @@ mod tests {
         )
         .expect("the exact live NetworkId must pass the domain gate");
     }
-
     #[test]
     fn anchor_drawdown_is_canonical_bounded_and_cross_anchor() {
         let balances = [
@@ -102,7 +95,6 @@ mod tests {
             allocate_kagemusha_v4_anchor_drawdown(&balances, 0).is_none(),
             "zero-value drawdown must not produce a state update"
         );
-
         let corrupt = [KagemushaV4AnchorDrawdownBalance {
             operation_id: [0x33; 32],
             capacity_atomic_units: 1,
@@ -112,7 +104,6 @@ mod tests {
             allocate_kagemusha_v4_anchor_drawdown(&corrupt, 1).is_none(),
             "a persisted drawdown above its anchor must fail closed"
         );
-
         let duplicate = [
             KagemushaV4AnchorDrawdownBalance {
                 operation_id: [0x44; 32],
@@ -130,7 +121,6 @@ mod tests {
             "duplicate anchor identities must fail closed before allocation"
         );
     }
-
     #[test]
     fn anchor_drawdown_state_is_paired_sequential_and_rollback_safe() {
         let operation_id = [0x45; 32];
@@ -179,7 +169,6 @@ mod tests {
         let anchor_archive = norito::encode_canonical(&anchor).expect("canonical anchor bytes");
         persist_kagemusha_v4_topup_anchor(&anchor, &mut transaction)
             .expect("paired canonical anchor/drawdown initialization");
-
         let anchor_key =
             kagemusha_v4_topup_anchor_state_key(operation_id).expect("anchor state key");
         let drawdown_key =
@@ -193,13 +182,11 @@ mod tests {
             Some(&0_u128.to_le_bytes().to_vec()),
             "paired initialization must persist an exact zero u128",
         );
-
         assert_eq!(
             load_kagemusha_v4_topup_anchor(operation_id, &transaction)
                 .expect("persisted canonical anchor"),
             anchor,
         );
-
         let first =
             plan_kagemusha_v4_anchor_drawdown(core::slice::from_ref(&anchor_ref), 40, &transaction)
                 .expect("first drawdown plan");
@@ -209,7 +196,6 @@ mod tests {
                 .expect("first persisted drawdown"),
             40,
         );
-
         let second =
             plan_kagemusha_v4_anchor_drawdown(core::slice::from_ref(&anchor_ref), 60, &transaction)
                 .expect("second drawdown plan");
@@ -219,7 +205,6 @@ mod tests {
                 .expect("cumulative persisted drawdown"),
             100,
         );
-
         let assets_before = offline_asset_entries(&transaction);
         let confidential_before = transaction
             .world
@@ -249,7 +234,6 @@ mod tests {
             .get(&receipt_key)
             .cloned();
         let events_before = transaction.world.internal_event_buf.len();
-
         let overdraw =
             plan_kagemusha_v4_anchor_drawdown(core::slice::from_ref(&anchor_ref), 1, &transaction)
                 .expect_err("one unit beyond cumulative capacity must fail");
@@ -298,7 +282,6 @@ mod tests {
             100,
         );
         assert_eq!(transaction.world.internal_event_buf.len(), events_before);
-
         transaction
             .world
             .smart_contract_state
@@ -320,7 +303,6 @@ mod tests {
                 .contains("topup_drawdown_invalid"),
         );
     }
-
     #[test]
     fn offline_proof_boundary_rejects_alternate_norito_layout() {
         let envelope = OpenVerifyEnvelope {
@@ -338,7 +320,6 @@ mod tests {
                 .expect("canonical envelope must decode"),
             envelope
         );
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate = {
@@ -358,7 +339,6 @@ mod tests {
             "unexpected boundary error: {error}"
         );
     }
-
     #[test]
     fn kagemusha_v4_chain_state_namespaces_are_version_distinct() {
         let operation_id = [0x41; 32];
@@ -383,21 +363,17 @@ mod tests {
                 .starts_with("kagemusha_v4_redemption_")
         );
     }
-
     #[test]
     fn kagemusha_topup_note_freshness_rejects_all_state_namespace_collisions() {
         const EXISTING_COMMITMENT: [u8; 32] = [0x51; 32];
         const SPENT_NULLIFIER: [u8; 32] = [0x52; 32];
         const FRESH_COMMITMENT: [u8; 32] = [0x53; 32];
         const FRESH_NULLIFIER: [u8; 32] = [0x54; 32];
-
         let mut zk_state = crate::state::ZkAssetState::default();
         zk_state.commitments.push(EXISTING_COMMITMENT);
         assert!(zk_state.nullifiers.insert(SPENT_NULLIFIER));
-
         ensure_kagemusha_v4_topup_note_is_fresh(&zk_state, FRESH_COMMITMENT, FRESH_NULLIFIER)
             .expect("disjoint top-up note material must remain admissible");
-
         for (note_commitment, spend_nullifier, expected_label) in [
             (EXISTING_COMMITMENT, FRESH_NULLIFIER, "duplicate_output"),
             (FRESH_COMMITMENT, SPENT_NULLIFIER, "duplicate_nullifier"),
@@ -418,7 +394,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn kagemusha_v4_admission_authenticates_exact_release_without_global_backend_flag() {
         let source = include_str!("../offline.rs");
@@ -434,7 +409,6 @@ mod tests {
                 .expect("offline executor test module");
         let topup = &source[topup_start..redeem_start];
         let redeem = &source[redeem_start..tests_start];
-
         for (name, executor) in [("top-up", topup), ("redemption", redeem)] {
             assert!(
                 !executor.contains("KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE"),
@@ -454,7 +428,6 @@ mod tests {
             "partial redemption must separately verify its operation-bound change bundle",
         );
     }
-
     #[test]
     fn kagemusha_v4_execute_replay_boundary_is_auth_before_committed_state() {
         let source = include_str!("../offline.rs");
@@ -467,7 +440,6 @@ mod tests {
                 cursor += offset + needle.len();
             }
         };
-
         let topup_helper_start = source
             .find("fn authenticate_kagemusha_v4_topup_submission_before_replay")
             .expect("top-up pre-replay boundary");
@@ -496,7 +468,6 @@ mod tests {
                 "kagemusha_v4_replay_status",
             ],
         );
-
         let topup_execute_start = source
             .find("impl Execute for TopUpKagemushaRecursiveV4")
             .expect("top-up executor");
@@ -528,7 +499,6 @@ mod tests {
             ],
         );
     }
-
     #[test]
     fn kagemusha_v4_activation_overlap_inventory_is_consensus_derived() {
         let source = include_str!("../offline.rs");
@@ -548,15 +518,12 @@ mod tests {
             "release-window inventory must not depend on optional local directories",
         );
     }
-
     fn offline_permission(name: &str) -> Permission {
         Permission::new(name.to_owned(), Json::new(()))
     }
-
     fn offline_permission_with_payload(name: &str, payload: Json) -> Permission {
         Permission::new(name.to_owned(), payload)
     }
-
     fn offline_test_state() -> State {
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob = Account::new(BOB_ID.clone()).build(&BOB_ID);
@@ -566,7 +533,6 @@ mod tests {
             LiveQueryStore::start_test(),
         )
     }
-
     fn offline_holding_limit_test_state(
         escrow_balance: Option<u32>,
     ) -> (State, AssetDefinitionId, AssetId, AccountId) {
@@ -620,7 +586,6 @@ mod tests {
         state.set_settlement(settlement);
         (state, definition_id, source_asset, escrow_account)
     }
-
     fn set_offline_holding_limit(
         state_transaction: &mut StateTransaction<'_, '_>,
         account: &AccountId,
@@ -636,7 +601,6 @@ mod tests {
         .execute(&ALICE_ID, state_transaction)
         .expect("asset definition owner sets holding limit");
     }
-
     fn offline_asset_entries(
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Vec<(AssetId, Quantity)> {
@@ -647,7 +611,6 @@ mod tests {
             .map(|(id, asset)| (id.clone(), asset.as_ref().clone()))
             .collect()
     }
-
     fn assert_holding_limit_exceeded(error: &Error) {
         assert!(
             matches!(
@@ -659,7 +622,6 @@ mod tests {
             "expected typed holding-limit rejection, got {error:?}",
         );
     }
-
     #[test]
     fn offline_use_lazily_materializes_deterministic_escrow_for_any_asset() {
         let chain_id = ChainId::from("universal-offline-test");
@@ -700,7 +662,6 @@ mod tests {
                 .escrow_accounts
                 .is_empty()
         );
-
         reserve_kagemusha_escrow(
             &mut state_transaction,
             source_asset.account(),
@@ -709,7 +670,6 @@ mod tests {
             &Quantity::from(3_u32),
         )
         .expect("offline use should need no asset flag or configured catalog");
-
         let expected = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
             state_transaction.network_id(),
             &definition_id,
@@ -733,7 +693,6 @@ mod tests {
             &Quantity::from(3_u32)
         );
     }
-
     #[test]
     fn offline_escrow_reservation_holding_limit_failure_is_atomic() {
         let (state, definition_id, source_asset, escrow_account) =
@@ -743,7 +702,6 @@ mod tests {
         set_offline_holding_limit(&mut state_transaction, &escrow_account, &definition_id, 0);
         let entries_before = offline_asset_entries(&state_transaction);
         let events_before = state_transaction.world.internal_event_buf.len();
-
         let error = reserve_kagemusha_escrow(
             &mut state_transaction,
             source_asset.account(),
@@ -752,7 +710,6 @@ mod tests {
             &Quantity::from(1_u32),
         )
         .expect_err("escrow reservation above its holding limit must fail");
-
         assert_holding_limit_exceeded(&error);
         assert_eq!(offline_asset_entries(&state_transaction), entries_before);
         assert_eq!(
@@ -761,7 +718,6 @@ mod tests {
             "rejected escrow reservation must not emit events",
         );
     }
-
     #[test]
     fn kagemusha_redemption_plan_rejects_holding_limit_without_mutation() {
         let (state, definition_id, source_asset, _) = offline_holding_limit_test_state(Some(10));
@@ -770,7 +726,6 @@ mod tests {
         set_offline_holding_limit(&mut state_transaction, &BOB_ID, &definition_id, 0);
         let entries_before = offline_asset_entries(&state_transaction);
         let events_before = state_transaction.world.internal_event_buf.len();
-
         let error = plan_kagemusha_v2_escrow_credit(
             [0x82; 32],
             &source_asset,
@@ -779,7 +734,6 @@ mod tests {
             &state_transaction,
         )
         .expect_err("Kagemusha redemption planning must enforce the recipient holding limit");
-
         assert_holding_limit_exceeded(&error);
         assert_eq!(offline_asset_entries(&state_transaction), entries_before);
         assert_eq!(
@@ -788,7 +742,6 @@ mod tests {
             "rejected Kagemusha redemption planning must not emit events",
         );
     }
-
     #[test]
     fn kagemusha_redemption_commit_rechecks_holding_limit_atomically() {
         let (state, definition_id, source_asset, _) = offline_holding_limit_test_state(Some(10));
@@ -806,11 +759,9 @@ mod tests {
         set_offline_holding_limit(&mut state_transaction, &BOB_ID, &definition_id, 0);
         let entries_before = offline_asset_entries(&state_transaction);
         let events_before = state_transaction.world.internal_event_buf.len();
-
         let error = plan
             .commit(&mut state_transaction)
             .expect_err("commit must recheck a holding limit changed after planning");
-
         assert_holding_limit_exceeded(&error);
         assert_eq!(offline_asset_entries(&state_transaction), entries_before);
         assert_eq!(
@@ -819,7 +770,6 @@ mod tests {
             "rejected Kagemusha redemption commit must not emit events",
         );
     }
-
     #[test]
     fn every_offline_executor_is_independent_of_local_service_switch() {
         let source = include_str!("../offline.rs");
@@ -843,7 +793,6 @@ mod tests {
             + source[last_start..]
                 .find("#[cfg(test)]")
                 .expect("offline executor test module");
-
         for (index, name) in executor_names.iter().enumerate() {
             let end = starts.get(index + 1).copied().unwrap_or(tests_start);
             let executor = &source[starts[index]..end];
@@ -854,7 +803,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn offline_instruction_execution_requires_no_enablement_switch() {
         let state = offline_test_state();
@@ -879,7 +827,6 @@ mod tests {
             "valid offline instructions must execute regardless of local service state"
         );
     }
-
     fn release_activation_device_policy() -> OfflineDeviceAttestationPolicy {
         let mut policy = default_offline_device_attestation_policy()
             .expect("built-in roots form a valid activation-policy template");
@@ -892,13 +839,11 @@ mod tests {
         }];
         policy
     }
-
     #[test]
     fn release_activation_device_policy_is_production_and_fail_closed() {
         let policy = release_activation_device_policy();
         validate_offline_attestation_policy_for_release_activation(&policy, 0)
             .expect("exact production policy must be activation-eligible");
-
         let mut missing_android_gate = policy.clone();
         missing_android_gate.require_android_app_policy = false;
         assert!(
@@ -906,7 +851,6 @@ mod tests {
                 .is_err(),
             "activation must not publish an Android fail-open policy",
         );
-
         let mut development_ios = policy.clone();
         development_ios.ios_apps[0].environment = "development".to_owned();
         assert!(
@@ -914,7 +858,6 @@ mod tests {
                 .is_err(),
             "activation must not publish a development App Attest policy",
         );
-
         let mut legacy_ios = policy.clone();
         legacy_ios.ios_apps[0].allow_legacy_auth_data_without_extensions = true;
         assert!(
@@ -922,7 +865,6 @@ mod tests {
             "activation must not publish a legacy App Attest fallback",
         );
     }
-
     #[test]
     fn production_device_policy_constructor_binds_explicit_apps_and_builtin_roots() {
         let policy = production_offline_device_attestation_policy_v1(
@@ -935,7 +877,6 @@ mod tests {
             1_800_000_000_000,
         )
         .expect("explicit production app identities should build a fail-closed policy");
-
         assert_eq!(policy.trusted_roots.len(), 3);
         assert!(policy.require_ios_app_policy);
         assert!(policy.require_android_app_policy);
@@ -952,7 +893,6 @@ mod tests {
             vec![vec![0x55; 32], vec![0x66; 32]]
         );
     }
-
     #[test]
     fn production_device_policy_constructor_rejects_duplicate_operator_input() {
         let error = production_offline_device_attestation_policy_v1(
@@ -967,7 +907,6 @@ mod tests {
         .expect_err("duplicate policy input must not be silently normalized");
         assert!(error.contains("must not contain duplicates"));
     }
-
     #[test]
     fn release_activation_authority_requires_both_exact_governance_permissions() {
         fn authorization_result(permissions: Vec<Permission>) -> Result<(), Error> {
@@ -987,11 +926,9 @@ mod tests {
                 &ALICE_ID,
             )
         }
-
         let activate =
             || offline_permission(CAN_ACTIVATE_KAGEMUSHA_RECURSIVE_RELEASE_V4_PERMISSION);
         let manage = || offline_permission(CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION);
-
         assert!(authorization_result(Vec::new()).is_err());
         let error = authorization_result(vec![activate()])
             .expect_err("activate-only authority must not publish the composite instruction");
@@ -1009,7 +946,6 @@ mod tests {
         );
         authorization_result(vec![activate(), manage()])
             .expect("both exact unit permissions authorize the composite guard");
-
         let foreign_payload = Json::new("foreign-scope");
         assert!(
             authorization_result(vec![
@@ -1034,13 +970,11 @@ mod tests {
             "the device-policy permission payload must match exactly",
         );
     }
-
     #[test]
     fn offline_device_attestation_policy_absence_fails_closed() {
         let state = offline_test_state();
         let mut block = state.block(offline_test_header());
         let mut state_transaction = block.transaction();
-
         let error = effective_offline_device_attestation_policy(&state_transaction)
             .expect_err("missing governed attestation policy must fail closed");
         assert!(
@@ -1049,7 +983,6 @@ mod tests {
                 .contains("offline_reason::invalid_attestation_policy"),
             "unexpected missing-policy rejection: {error}"
         );
-
         let policy = default_offline_device_attestation_policy()
             .expect("bundled roots form a valid policy template");
         state_transaction.world.smart_contract_state.insert(
@@ -1062,7 +995,6 @@ mod tests {
             policy
         );
     }
-
     fn offline_test_header() -> BlockHeader {
         BlockHeader::new(
             NonZeroU64::new(1).expect("nonzero block height"),
@@ -1073,7 +1005,6 @@ mod tests {
             0,
         )
     }
-
     fn offline_test_asset(account: &AccountId) -> AssetId {
         let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("offline", "universal").expect("valid test domain"),
@@ -1081,19 +1012,16 @@ mod tests {
         );
         AssetId::new(definition, account.clone())
     }
-
     fn online_assertion_signing_key(seed: u8) -> SigningKey {
         SigningKey::from_bytes((&[seed; 32]).into())
             .expect("nonzero P-256 online assertion test scalar")
     }
-
     fn online_assertion_signature(key: &SigningKey, message: &[u8]) -> KagemushaDeviceSignatureV2 {
         let signature: P256Signature = key.sign(message);
         let signature = signature.normalize_s().unwrap_or(signature);
         KagemushaDeviceSignatureV2::from_raw_bytes(signature.to_bytes().as_slice())
             .expect("canonical low-S online assertion fixture")
     }
-
     fn test_der_tlv(tag: &[u8], value: &[u8]) -> Vec<u8> {
         assert!(value.len() < 128, "test DER fixture uses one-byte lengths");
         let mut encoded = Vec::with_capacity(tag.len() + 1 + value.len());
@@ -1102,7 +1030,6 @@ mod tests {
         encoded.extend_from_slice(value);
         encoded
     }
-
     fn android_key_description_usage_count_fixture(
         software_usage_count_limit: bool,
         hardware_usage_count_limit: bool,
@@ -1117,7 +1044,6 @@ mod tests {
             };
             test_der_tlv(&[0x30], &body)
         }
-
         let mut body = Vec::new();
         body.extend_from_slice(&test_der_tlv(&[0x02], &[3]));
         body.extend_from_slice(&test_der_tlv(&[0x0A], &[1]));
@@ -1129,7 +1055,6 @@ mod tests {
         body.extend_from_slice(&authorization_list(hardware_usage_count_limit));
         test_der_tlv(&[0x30], &body)
     }
-
     #[test]
     fn android_usage_count_limit_must_be_hardware_enforced() {
         let hardware = parse_android_key_description(&android_key_description_usage_count_fixture(
@@ -1137,7 +1062,6 @@ mod tests {
         ))
         .expect("hardware-enforced usageCountLimit is admitted");
         assert_eq!(hardware.usage_count_limit, Some(1));
-
         assert!(
             parse_android_key_description(&android_key_description_usage_count_fixture(
                 true, false,
@@ -1146,7 +1070,6 @@ mod tests {
             "a software-only usageCountLimit must not satisfy the hardware one-use profile",
         );
     }
-
     fn android_online_registration(
         account: &AccountId,
         asset: &AssetDefinitionId,
@@ -1190,7 +1113,6 @@ mod tests {
             expires_at_ms,
         }
     }
-
     fn android_online_authorization(
         registration: &OfflineDeviceAttestationRegistration,
         assertion_key: &SigningKey,
@@ -1231,7 +1153,6 @@ mod tests {
             .set_hardware_signature(online_assertion_signature(assertion_key, &signing_bytes));
         authorization
     }
-
     fn install_android_online_registration(
         state_transaction: &mut StateTransaction<'_, '_>,
         registration: OfflineDeviceAttestationRegistration,
@@ -1247,7 +1168,6 @@ mod tests {
             (*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY).clone(),
             norito::to_bytes(&policy).expect("canonical test policy"),
         );
-
         let registration_hash = canonical_registration_hash(&registration)
             .map(|hash| exact_hash_bytes(&hash))
             .expect("canonical registration hash");
@@ -1270,7 +1190,6 @@ mod tests {
         );
         state_key
     }
-
     fn committed_android_replay_fixture(
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> (
@@ -1311,7 +1230,6 @@ mod tests {
         commit_kagemusha_v4_replay_markers(replay_markers, state_transaction);
         (asset, authorization, wrong_signature, state_key)
     }
-
     #[test]
     fn topup_committed_replay_authenticates_submitter_and_hardware_before_lookup() {
         let state = offline_test_state();
@@ -1319,7 +1237,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let (asset, authorization, wrong_signature, state_key) =
             committed_android_replay_fixture(&mut state_transaction);
-
         let unauthorized = authenticate_kagemusha_v4_topup_submission_before_replay(
             &asset,
             &BOB_ID,
@@ -1330,7 +1247,6 @@ mod tests {
             panic!("an unrelated submitter must not observe a committed top-up retry")
         };
         assert!(error.to_string().contains("unauthorized_controller"));
-
         let malformed = authenticate_kagemusha_v4_topup_submission_before_replay(
             &asset,
             &ALICE_ID,
@@ -1341,7 +1257,6 @@ mod tests {
             panic!("a wrong hardware signature must not observe a committed top-up retry")
         };
         assert!(error.to_string().contains("invalid_authorization"));
-
         let registration_before = state_transaction
             .world
             .smart_contract_state
@@ -1362,7 +1277,6 @@ mod tests {
             "idempotent retry authentication must not consume the lifecycle again",
         );
     }
-
     #[test]
     fn redeem_committed_replay_authenticates_submitter_and_hardware_before_receipt() {
         let state = offline_test_state();
@@ -1370,7 +1284,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let (asset, authorization, wrong_signature, state_key) =
             committed_android_replay_fixture(&mut state_transaction);
-
         let unauthorized = authenticate_kagemusha_v4_redeem_submission_before_replay(
             &ALICE_ID,
             asset.definition(),
@@ -1382,7 +1295,6 @@ mod tests {
             panic!("an unrelated submitter must not observe a committed redemption receipt")
         };
         assert!(error.to_string().contains("unauthorized_controller"));
-
         let malformed = authenticate_kagemusha_v4_redeem_submission_before_replay(
             &ALICE_ID,
             asset.definition(),
@@ -1394,7 +1306,6 @@ mod tests {
             panic!("a wrong hardware signature must not observe a committed redemption receipt")
         };
         assert!(error.to_string().contains("invalid_authorization"));
-
         let registration_before = state_transaction
             .world
             .smart_contract_state
@@ -1416,7 +1327,6 @@ mod tests {
             "idempotent retry authentication must not consume the lifecycle again",
         );
     }
-
     #[test]
     fn active_receiver_snapshot_routes_one_native_registration_and_rejects_ambiguity() {
         let state = offline_test_state();
@@ -1441,7 +1351,6 @@ mod tests {
             POLICY_TEST_TIME_MS + 60_000,
         );
         install_android_online_registration(&mut state_transaction, registration.clone());
-
         let snapshot = derive_kagemusha_active_receiver_snapshot_v1(
             &state_transaction.world,
             1,
@@ -1468,7 +1377,6 @@ mod tests {
         )
         .expect("active leaf resolves to exact native state");
         assert_eq!(resolved.registration, registration);
-
         let second_assertion_key = online_assertion_signing_key(0x62);
         let conflicting = android_online_registration(
             &ALICE_ID,
@@ -1488,7 +1396,6 @@ mod tests {
             "multiple native registrations for one tuple must fail closed"
         );
     }
-
     #[test]
     fn android_online_assertion_is_staged_then_consumed_exactly_once() {
         let state = offline_test_state();
@@ -1510,7 +1417,6 @@ mod tests {
             .get(&state_key)
             .cloned()
             .expect("installed online registration state");
-
         let plan =
             ensure_registered_kagemusha_v2_device(&authorization, &asset, &state_transaction)
                 .expect("valid unused one-use assertion is admitted");
@@ -1519,7 +1425,6 @@ mod tests {
             Some(&before),
             "read-only admission must not consume the key when the transaction later fails",
         );
-
         commit_kagemusha_online_hardware_assertion(plan, &mut state_transaction)
             .expect("successful transaction atomically consumes the assertion");
         let consumed: KagemushaOnlineRegistrationStateV3 = norito::decode_from_bytes(
@@ -1540,7 +1445,6 @@ mod tests {
                 .expect("a fresh execution cannot consume the same KeyMint key twice");
         assert!(error.to_string().contains("hardware_assertion_consumed"));
     }
-
     #[test]
     fn attestation_policy_rotation_forces_device_reregistration() {
         let state = offline_test_state();
@@ -1562,7 +1466,6 @@ mod tests {
             .get(&state_key)
             .cloned()
             .expect("installed registration state");
-
         let policy_bytes = state_transaction
             .world
             .smart_contract_state
@@ -1576,7 +1479,6 @@ mod tests {
             (*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY).clone(),
             norito::to_bytes(&rotated).expect("rotated policy must encode"),
         );
-
         let error =
             ensure_registered_kagemusha_v2_device(&authorization, &asset, &state_transaction)
                 .err()
@@ -1591,7 +1493,6 @@ mod tests {
             "rejected use after policy rotation must not consume the hardware lifecycle"
         );
     }
-
     #[test]
     fn legacy_registration_state_without_policy_hash_fails_closed() {
         #[derive(Encode)]
@@ -1600,7 +1501,6 @@ mod tests {
             registration: OfflineDeviceAttestationRegistration,
             lifecycle: KagemushaOnlineHardwareAssertionLifecycleV1,
         }
-
         let state = offline_test_state();
         let mut block = state.block(offline_test_header());
         let mut state_transaction = block.transaction();
@@ -1624,14 +1524,12 @@ mod tests {
             })
             .expect("legacy registration state must encode"),
         );
-
         assert!(
             ensure_registered_kagemusha_v2_device(&authorization, &asset, &state_transaction)
                 .is_err(),
             "state without an admission-policy hash must require re-registration"
         );
     }
-
     #[test]
     fn android_online_assertion_rejects_cross_binding_and_conflicting_commit() {
         let state = offline_test_state();
@@ -1647,7 +1545,6 @@ mod tests {
         );
         let authorization = android_online_authorization(&registration, &assertion_key);
         install_android_online_registration(&mut state_transaction, registration.clone());
-
         let mut cross_account = authorization.clone();
         cross_account.authority = BOB_ID.clone();
         let mut cross_device = authorization.clone();
@@ -1673,7 +1570,6 @@ mod tests {
         );
         let wrong_key = online_assertion_signing_key(0x63);
         let wrong_signature = android_online_authorization(&registration, &wrong_key);
-
         for (candidate, candidate_asset) in [
             (cross_account, asset.clone()),
             (cross_device, asset.clone()),
@@ -1699,7 +1595,6 @@ mod tests {
                 "account/device/asset/platform/hash/key substitutions must fail closed",
             );
         }
-
         let first =
             ensure_registered_kagemusha_v2_device(&authorization, &asset, &state_transaction)
                 .expect("first atomic commit plan");
@@ -1712,7 +1607,6 @@ mod tests {
             .expect_err("stale lifecycle compare-and-swap must conflict");
         assert!(error.to_string().contains("hardware_assertion_conflict"));
     }
-
     #[test]
     fn expired_registration_fails_and_exact_committed_retry_precedes_consumption() {
         let state = offline_test_state();
@@ -1728,7 +1622,6 @@ mod tests {
         );
         let authorization = android_online_authorization(&registration, &assertion_key);
         install_android_online_registration(&mut state_transaction, registration);
-
         let replay_markers = match kagemusha_v4_replay_status(&authorization, &state_transaction)
             .expect("fresh request")
         {
@@ -1741,7 +1634,6 @@ mod tests {
         commit_kagemusha_online_hardware_assertion(hardware_plan, &mut state_transaction)
             .expect("consume hardware assertion");
         commit_kagemusha_v4_replay_markers(replay_markers, &mut state_transaction);
-
         assert!(matches!(
             kagemusha_v4_replay_status(&authorization, &state_transaction)
                 .expect("byte-identical committed retry"),
@@ -1753,7 +1645,6 @@ mod tests {
             kagemusha_v4_replay_status(&mutated, &state_transaction).is_err(),
             "same operation/nonce/payload with changed authorization bytes must conflict",
         );
-
         let expired_registration = android_online_registration(
             &ALICE_ID,
             &asset,
@@ -1775,7 +1666,6 @@ mod tests {
             "an expired exact registration must not authorize a fresh operation",
         );
     }
-
     fn deliberately_invalid_registration(
         account: &AccountId,
     ) -> OfflineDeviceAttestationRegistration {
@@ -1786,7 +1676,6 @@ mod tests {
             .expect("derived test public key must be canonical");
         let attestation_report = b"authorization-boundary-report".to_vec();
         let evidence = b"authorization-boundary-evidence".to_vec();
-
         OfflineDeviceAttestationRegistration {
             // The unsupported version makes validation stop immediately
             // after the authorization boundary.
@@ -1817,7 +1706,6 @@ mod tests {
             expires_at_ms: POLICY_TEST_TIME_MS + 60_000,
         }
     }
-
     fn insert_role(
         state_transaction: &mut StateTransaction<'_, '_>,
         role_name: &str,
@@ -1833,7 +1721,6 @@ mod tests {
         state_transaction.world.roles.insert(role_id.clone(), role);
         role_id
     }
-
     fn assign_role(
         state_transaction: &mut StateTransaction<'_, '_>,
         account: &AccountId,
@@ -1844,13 +1731,11 @@ mod tests {
             .account_roles
             .insert(RoleIdWithOwner::new(account.clone(), role_id), ());
     }
-
     #[derive(Clone, Copy, Debug)]
     enum GrantSource {
         Direct,
         Role,
     }
-
     fn grant_permission(
         state_transaction: &mut StateTransaction<'_, '_>,
         account: &AccountId,
@@ -1874,7 +1759,6 @@ mod tests {
             }
         }
     }
-
     fn assert_unauthorized(result: Result<(), Error>, context: &str) {
         let error = result.expect_err("offline authorization must fail closed");
         assert!(
@@ -1884,7 +1768,6 @@ mod tests {
             "{context}: unexpected offline authorization error: {error}"
         );
     }
-
     #[test]
     fn exact_offline_escrow_grants_and_self_submission_are_preserved() {
         let state = offline_test_state();
@@ -1898,7 +1781,6 @@ mod tests {
             &state_transaction,
         )
         .expect("a payer must remain able to submit its own top-up");
-
         for source in [GrantSource::Direct, GrantSource::Role] {
             let state = offline_test_state();
             let mut block = state.block(offline_test_header());
@@ -1909,7 +1791,6 @@ mod tests {
                 source,
                 offline_permission(CAN_MANAGE_OFFLINE_ESCROW_PERMISSION),
             );
-
             ensure_can_submit_kagemusha_for_account(&BOB_ID, &ALICE_ID, &state_transaction)
                 .unwrap_or_else(|error| {
                     panic!("{source:?} exact permission must authorize delegation: {error}")
@@ -1924,7 +1805,6 @@ mod tests {
             });
         }
     }
-
     #[derive(Clone, Copy, Debug)]
     enum RejectedRoleState {
         Unassigned,
@@ -1932,7 +1812,6 @@ mod tests {
         RevokedAssignment,
         MissingRoleRecord,
     }
-
     #[test]
     fn stale_or_unrelated_offline_escrow_roles_fail_closed() {
         for case in [
@@ -1950,7 +1829,6 @@ mod tests {
                 &ALICE_ID,
                 [offline_permission(CAN_MANAGE_OFFLINE_ESCROW_PERMISSION)],
             );
-
             match case {
                 RejectedRoleState::Unassigned => {}
                 RejectedRoleState::AssignedToAnotherAccount => {
@@ -1972,14 +1850,12 @@ mod tests {
                     );
                 }
             }
-
             assert_unauthorized(
                 ensure_can_submit_kagemusha_for_account(&BOB_ID, &ALICE_ID, &state_transaction),
                 &format!("{case:?}"),
             );
         }
     }
-
     #[test]
     fn same_name_non_unit_permission_payloads_are_rejected() {
         let forged_payloads = [
@@ -1987,7 +1863,6 @@ mod tests {
             ("string", Json::new("forged-scope")),
             ("array", Json::new(vec![1_u8, 2_u8])),
         ];
-
         for source in [GrantSource::Direct, GrantSource::Role] {
             for (payload_name, payload) in &forged_payloads {
                 let state = offline_test_state();
@@ -2002,7 +1877,6 @@ mod tests {
                         payload.clone(),
                     ),
                 );
-
                 assert_unauthorized(
                     ensure_can_submit_kagemusha_for_account(&BOB_ID, &ALICE_ID, &state_transaction),
                     &format!("{source:?} same-name {payload_name} payload"),
@@ -2010,13 +1884,11 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn only_an_exact_permission_among_multiple_roles_authorizes() {
         let state = offline_test_state();
         let mut block = state.block(offline_test_header());
         let mut state_transaction = block.transaction();
-
         for (role_name, permission) in [
             (
                 "similarly_named_offline_manager",
@@ -2037,12 +1909,10 @@ mod tests {
             let role_id = insert_role(&mut state_transaction, role_name, &ALICE_ID, [permission]);
             assign_role(&mut state_transaction, &ALICE_ID, role_id);
         }
-
         assert_unauthorized(
             ensure_can_submit_kagemusha_for_account(&BOB_ID, &ALICE_ID, &state_transaction),
             "multiple inexact roles",
         );
-
         let exact_role = insert_role(
             &mut state_transaction,
             "exact_offline_manager",
@@ -2050,18 +1920,15 @@ mod tests {
             [offline_permission(CAN_MANAGE_OFFLINE_ESCROW_PERMISSION)],
         );
         assign_role(&mut state_transaction, &ALICE_ID, exact_role);
-
         ensure_can_submit_kagemusha_for_account(&BOB_ID, &ALICE_ID, &state_transaction)
             .expect("one exact assigned permission among unrelated roles must authorize");
     }
-
     #[derive(Clone, Copy, Debug)]
     enum RegistrationBoundaryGrant {
         None,
         ExactRole,
         SameNameNonUnitRole,
     }
-
     #[test]
     fn delegated_registration_enforces_role_permission_at_execute_boundary() {
         for grant in [
@@ -2090,13 +1957,11 @@ mod tests {
                     ),
                 ),
             }
-
             let replay_keys_before = state_transaction.world.kagemusha_replay_keys.iter().count();
             let error =
                 RegisterOfflineDeviceAttestation::new(deliberately_invalid_registration(&BOB_ID))
                     .execute(&ALICE_ID, &mut state_transaction)
                     .expect_err("deliberately invalid registration must not succeed");
-
             match grant {
                 RegistrationBoundaryGrant::ExactRole => assert!(
                     error
@@ -2119,7 +1984,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn exact_direct_and_role_policy_manager_permissions_can_update_policy() {
         for source in [GrantSource::Direct, GrantSource::Role] {
@@ -2134,7 +1998,6 @@ mod tests {
                 source,
                 offline_permission(CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION),
             );
-
             SetOfflineDeviceAttestationPolicy::new(policy.clone())
                 .execute(&ALICE_ID, &mut state_transaction)
                 .unwrap_or_else(|error| {
@@ -2150,7 +2013,6 @@ mod tests {
             assert_eq!(decoded, policy, "{source:?} stored the wrong policy");
         }
     }
-
     #[derive(Clone, Copy, Debug)]
     enum RejectedPolicyUpdate {
         NoPermission,
@@ -2160,7 +2022,6 @@ mod tests {
         UnsupportedVersion,
         MissingTrustedRoots,
     }
-
     #[test]
     fn rejected_policy_updates_never_mutate_existing_policy() {
         for case in [
@@ -2183,7 +2044,6 @@ mod tests {
                 (*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY).clone(),
                 baseline_bytes.clone(),
             );
-
             let expected_reason = match case {
                 RejectedPolicyUpdate::NoPermission => "unauthorized_controller",
                 RejectedPolicyUpdate::SimilarPermissionName => {
@@ -2238,7 +2098,6 @@ mod tests {
                     "invalid_attestation_policy"
                 }
             };
-
             let error = SetOfflineDeviceAttestationPolicy::new(candidate)
                 .execute(&ALICE_ID, &mut state_transaction)
                 .expect_err("adversarial policy update must be rejected");
@@ -2256,7 +2115,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn offline_escrow_manager_permission_is_exact_directly_and_through_roles() {
         let key_pair = KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519)
@@ -2294,12 +2152,10 @@ mod tests {
         );
         let mut block = state.block(header);
         let mut state_transaction = block.transaction();
-
         assert!(
             !is_offline_escrow_manager(&authority, &state_transaction),
             "matching names with non-canonical payloads must not authorize escrow control"
         );
-
         state_transaction.world.account_permissions.insert(
             authority.clone(),
             [offline_escrow_manager_permission()].into_iter().collect(),
@@ -2308,7 +2164,6 @@ mod tests {
             is_offline_escrow_manager(&authority, &state_transaction),
             "the exact manager permission granted directly must authorize escrow control"
         );
-
         state_transaction
             .world
             .account_permissions
@@ -2322,7 +2177,6 @@ mod tests {
             "the exact manager permission inherited through a role must authorize escrow control"
         );
     }
-
     #[test]
     fn attestation_policy_manager_permission_is_exact_and_inherited_from_role() {
         let key_pair = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
@@ -2358,24 +2212,20 @@ mod tests {
         );
         let mut block = state.block(header);
         let mut state_transaction = block.transaction();
-
         assert!(
             !can_manage_offline_device_attestation_policy(&state_transaction, &authority),
             "a matching name with a non-canonical payload must not authorize policy changes"
         );
-
         let exact = offline_device_attestation_policy_manager_permission();
         let role = Role::new(role_id.clone(), authority.clone())
             .add_permission(exact)
             .build(&authority);
         state_transaction.world.roles.insert(role_id, role);
-
         assert!(
             can_manage_offline_device_attestation_policy(&state_transaction, &authority),
             "the exact manager permission inherited through a role must authorize policy changes"
         );
     }
-
     fn ios_assertion_extension_bytes(bundle_version: &str, validation_category: u32) -> Vec<u8> {
         let value = ciborium::value::Value::Map(vec![
             (
@@ -2392,7 +2242,6 @@ mod tests {
             .expect("encode App Attest assertion extensions");
         encoded
     }
-
     fn ios_assertion_auth_data(
         rp_id_hash: [u8; 32],
         flags: u8,
@@ -2406,7 +2255,6 @@ mod tests {
         auth_data.extend_from_slice(extension_bytes);
         auth_data
     }
-
     fn ios_assertion_policy(
         allow_legacy_auth_data_without_extensions: bool,
     ) -> OfflineIosAppAttestationPolicy {
@@ -2419,7 +2267,6 @@ mod tests {
             allow_legacy_auth_data_without_extensions,
         }
     }
-
     #[test]
     fn ios_assertion_auth_data_enforces_exact_extensions_and_policy() {
         let rp_id_hash = [0xA5; 32];
@@ -2439,7 +2286,6 @@ mod tests {
             parsed.extensions.as_ref(),
         )
         .expect("the exact governed category and bundle version are accepted");
-
         let reverse_order = ciborium::value::Value::Map(vec![
             (
                 ciborium::value::Value::Text("validationCategory".to_owned()),
@@ -2461,7 +2307,6 @@ mod tests {
         );
         parse_ios_app_attest_assertion_auth_data(&reverse_order_auth_data)
             .expect("Apple does not require one map-key order");
-
         let mut nonminimal_definite = vec![0xB8, 0x02];
         nonminimal_definite.extend_from_slice(&extension_bytes[1..]);
         let nonminimal_definite_auth_data = ios_assertion_auth_data(
@@ -2472,7 +2317,6 @@ mod tests {
         );
         parse_ios_app_attest_assertion_auth_data(&nonminimal_definite_auth_data)
             .expect("valid definite Apple CBOR is accepted without serializer byte equality");
-
         let wrong_category = ios_assertion_extension_bytes("42", 5);
         let wrong_category = ios_assertion_auth_data(
             rp_id_hash,
@@ -2490,7 +2334,6 @@ mod tests {
             .is_err(),
             "an unlisted validation category must fail closed",
         );
-
         let wrong_version = ios_assertion_extension_bytes("43", 4);
         let wrong_version = ios_assertion_auth_data(
             rp_id_hash,
@@ -2509,12 +2352,10 @@ mod tests {
             "an unlisted bundle version must fail closed",
         );
     }
-
     #[test]
     fn ios_assertion_auth_data_rejects_bad_flags_trailing_and_unknown_extensions() {
         let rp_id_hash = [0xB6; 32];
         let extension_bytes = ios_assertion_extension_bytes("42", 4);
-
         for flags in [
             OFFLINE_ATTESTATION_APP_ATTEST_FLAG_USER_PRESENT,
             OFFLINE_ATTESTATION_APP_ATTEST_FLAG_ATTESTED_CREDENTIAL_DATA,
@@ -2526,7 +2367,6 @@ mod tests {
                 "App Attest assertion flags other than ED must fail closed",
             );
         }
-
         let missing_extensions = ios_assertion_auth_data(
             rp_id_hash,
             OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA,
@@ -2534,7 +2374,6 @@ mod tests {
             &[],
         );
         assert!(parse_ios_app_attest_assertion_auth_data(&missing_extensions).is_err());
-
         let mut indefinite_extensions = vec![0xBF];
         indefinite_extensions.extend_from_slice(&extension_bytes[1..]);
         indefinite_extensions.push(0xFF);
@@ -2545,10 +2384,8 @@ mod tests {
             &indefinite_extensions,
         );
         assert!(parse_ios_app_attest_assertion_auth_data(&indefinite).is_err());
-
         let extensions_without_ed = ios_assertion_auth_data(rp_id_hash, 0, 1, &extension_bytes);
         assert!(parse_ios_app_attest_assertion_auth_data(&extensions_without_ed).is_err());
-
         let mut trailing_extensions = extension_bytes.clone();
         trailing_extensions.push(0xF6);
         let trailing = ios_assertion_auth_data(
@@ -2558,7 +2395,6 @@ mod tests {
             &trailing_extensions,
         );
         assert!(parse_ios_app_attest_assertion_auth_data(&trailing).is_err());
-
         let unknown = ciborium::value::Value::Map(vec![
             (
                 ciborium::value::Value::Text("bundleVersion".to_owned()),
@@ -2579,7 +2415,6 @@ mod tests {
             &unknown_extensions,
         );
         assert!(parse_ios_app_attest_assertion_auth_data(&unknown).is_err());
-
         let apple_attestation_keys = ciborium::value::Value::Map(vec![
             (
                 ciborium::value::Value::Text("apple_bundle_version_01".to_owned()),
@@ -2608,7 +2443,6 @@ mod tests {
             "assertion validationCategory/bundleVersion keys must not be accepted in attestation authData",
         );
     }
-
     #[test]
     fn ios_assertion_legacy_and_counter_rules_are_explicit_and_strict() {
         let rp_id_hash = [0xC7; 32];
@@ -2629,7 +2463,6 @@ mod tests {
             .is_err(),
             "implicit legacy fallback must be rejected",
         );
-
         validate_ios_app_attest_assertion_binding(&parsed, rp_id_hash, 8)
             .expect("a strictly increasing counter is accepted");
         for (sign_count, last_sign_count) in [(0, 0), (8, 8), (7, 8)] {
@@ -2649,7 +2482,6 @@ mod tests {
             "the RP/application hash must match exactly",
         );
     }
-
     #[test]
     fn ios_policy_rejects_reserved_or_inappropriate_validation_categories() {
         let mut policy = default_offline_device_attestation_policy()
@@ -2666,13 +2498,11 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn ios_app_admission_requires_explicit_pinned_policy() {
         let mut policy = default_offline_device_attestation_policy()
             .expect("built-in roots form a valid test policy");
         let app = ios_assertion_policy(true);
-
         assert!(
             ensure_ios_app_allowed_by_policy(
                 &policy,
@@ -2683,7 +2513,6 @@ mod tests {
             .is_err(),
             "the consensus default must not admit an arbitrary iOS app",
         );
-
         policy.ios_apps = vec![app.clone()];
         assert!(
             ensure_ios_app_allowed_by_policy(
@@ -2695,7 +2524,6 @@ mod tests {
             .is_err(),
             "a pinned iOS app must remain disabled until governance enables App Attest",
         );
-
         policy.require_ios_app_policy = true;
         ensure_ios_app_allowed_by_policy(&policy, &app.team_id, &app.bundle_id, &app.environment)
             .expect("the exact enabled iOS app identity is accepted");
@@ -2710,7 +2538,6 @@ mod tests {
             "a substituted iOS bundle must fail closed",
         );
     }
-
     #[test]
     fn registration_lifetime_requires_one_continuously_active_platform_root() {
         let mut policy = default_offline_device_attestation_policy()
@@ -2737,7 +2564,6 @@ mod tests {
             .is_err(),
             "different roots covering opposite endpoints must not be combined into a lifetime admission",
         );
-
         policy
             .trusted_roots
             .iter_mut()
@@ -2753,19 +2579,16 @@ mod tests {
         .expect("one root covering both endpoints is sufficient");
         assert_eq!(lifetime.trusted_roots.len(), 1);
     }
-
     #[test]
     fn android_app_admission_requires_explicit_pinned_policy() {
         let package_name = "com.pk.retailwallet";
         let signing_digest = [0xE9; 32];
         let mut policy = default_offline_device_attestation_policy()
             .expect("built-in roots form a valid test policy");
-
         assert!(
             ensure_android_app_allowed_by_policy(&policy, package_name, &signing_digest,).is_err(),
             "the consensus default must not admit arbitrary Android apps",
         );
-
         policy.android_apps = vec![OfflineAndroidAppAttestationPolicy {
             package_name: package_name.to_owned(),
             signing_certificate_sha256: vec![signing_digest.to_vec()],
@@ -2774,7 +2597,6 @@ mod tests {
             ensure_android_app_allowed_by_policy(&policy, package_name, &signing_digest,).is_err(),
             "a pinned app entry must remain disabled until governance enables Android",
         );
-
         policy.require_android_app_policy = true;
         ensure_android_app_allowed_by_policy(&policy, package_name, &signing_digest)
             .expect("the exact enabled package and signer are accepted");

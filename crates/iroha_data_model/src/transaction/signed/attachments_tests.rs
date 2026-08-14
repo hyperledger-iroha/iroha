@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod attachments_tests {
     use super::*;
-
     #[test]
     fn signed_tx_with_attachments_roundtrip() {
         let network_id = test_network_id(0x2E);
@@ -10,7 +9,6 @@ mod attachments_tests {
                 .parse()
                 .unwrap();
         let authority = AccountId::new(iroha_crypto::PublicKey::from(private_key.clone()));
-
         let attachments = crate::proof::ProofAttachmentList::try_from(vec![
             crate::proof::ProofAttachment::new_ref(
                 "halo2/ipa".into(),
@@ -19,7 +17,6 @@ mod attachments_tests {
             ),
         ])
         .expect("one attachment is a valid bounded proof list");
-
         let tx: SignedTransaction = TransactionBuilder::new(
             network_id,
             authority,
@@ -28,7 +25,6 @@ mod attachments_tests {
         .with_executable(Executable::Instructions(Vec::new().into()))
         .with_attachments(attachments)
         .sign(&private_key);
-
         let bytes = norito::to_bytes(&tx).expect("encode");
         let archived = norito::from_bytes::<SignedTransaction>(&bytes).expect("archived");
         let decoded: SignedTransaction = norito::core::NoritoDeserialize::deserialize(archived);
@@ -36,7 +32,6 @@ mod attachments_tests {
         decoded
             .verify_signature()
             .expect("round-tripped attachment remains signature-bound");
-
         let original_hash = decoded.hash();
         let mut tampered = decoded;
         tampered.payload.attachments = Some(

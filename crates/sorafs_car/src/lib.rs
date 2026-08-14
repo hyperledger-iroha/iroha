@@ -7,9 +7,7 @@
 //! `CarWriter` when it is time to emit a CARv2 archive (pragma + header +
 //! CARv1 payload + MultihashIndexSorted index), or to `CarStreamingWriter`
 //! when the source payload cannot be buffered in memory.
-
 #![allow(unexpected_cfgs)]
-
 #[cfg(feature = "manifest")]
 use std::str::FromStr;
 use std::{
@@ -19,7 +17,6 @@ use std::{
     io::{self, Read, Write},
     path::{Path, PathBuf},
 };
-
 #[cfg(any(unix, test))]
 use std::fs;
 #[cfg(unix)]
@@ -29,12 +26,10 @@ use std::{
     io::{Seek as _, SeekFrom},
     path::Component,
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
-
 use blake3::{Hash, Hasher};
 #[cfg(feature = "manifest")]
 use iroha_data_model::{
@@ -101,7 +96,6 @@ pub use verifier::{CarVerificationReport, CarVerifier, CarVerifyError, VerifiedC
 pub fn compute_chunk_digest(payload: &[u8]) -> [u8; 32] {
     blake3::hash(payload).into()
 }
-
 /// Compute the SHA3-256 commitment of a deterministic CAR chunk plan.
 ///
 /// The canonical transcript is the ordered concatenation of each chunk's
@@ -115,7 +109,6 @@ pub fn compute_chunk_plan_digest_sha3(chunks: &[CarChunk]) -> [u8; 32] {
             .map(|chunk| (chunk.offset, u64::from(chunk.length), chunk.digest)),
     )
 }
-
 /// Compute the canonical PoR commitment for `payload` under an existing CAR plan.
 ///
 /// The plan is revalidated against the payload before the root is returned, so manifest
@@ -125,21 +118,17 @@ pub fn compute_por_root(payload: &[u8], plan: &CarBuildPlan) -> Result<[u8; 32],
     store.ingest_plan(payload, plan)?;
     Ok(*store.por_tree().root())
 }
-
 /// Identifier assigned to registered chunking profiles.
 #[allow(unexpected_cfgs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProfileId(pub u32);
-
 #[cfg(feature = "manifest")]
 impl From<sorafs_manifest::ProfileId> for ProfileId {
     fn from(id: sorafs_manifest::ProfileId) -> Self {
         Self(id.0)
     }
 }
-
 pub mod por_json;
-
 /// Errors that can occur while building a CAR plan.
 #[derive(Debug, Error)]
 pub enum CarPlanError {
@@ -195,7 +184,6 @@ pub enum CarPlanError {
     #[error("generated CAR plan is invalid: {0}")]
     InvalidPlan(#[from] CarPlanValidationError),
 }
-
 /// Errors surfaced by the future CAR writer.
 #[derive(Debug, Error)]
 pub enum CarWriteError {
@@ -227,7 +215,6 @@ pub enum CarWriteError {
     #[error("CAR plan is invalid: {0}")]
     InvalidPlan(#[from] CarPlanValidationError),
 }
-
 /// Errors that can occur while ingesting chunk metadata from a stream.
 #[derive(Debug, Error)]
 pub enum ChunkStoreError {
@@ -303,12 +290,10 @@ pub enum ChunkStoreError {
     #[error("canonical PDP tree construction failed: {0}")]
     PdpTree(#[from] PdpMerkleTreeError),
 }
-
 /// Abstraction over payload sources that support random-access reads.
 pub trait PayloadSource {
     /// Reads exactly `buf.len()` bytes starting at `offset` into `buf`.
     fn read_exact(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ChunkStoreError>;
-
     /// Verify that the source contains exactly the planned payload length.
     ///
     /// Implementations must fail closed when the exact source length cannot be
@@ -316,13 +301,11 @@ pub trait PayloadSource {
     /// trailing bytes to escape the canonical payload commitment.
     fn ensure_exhausted(&mut self, expected_len: u64) -> Result<(), ChunkStoreError>;
 }
-
 /// Streaming payload backed by a sequential reader.
 struct ReaderPayload<'a, R> {
     reader: &'a mut R,
     consumed: u64,
 }
-
 impl<'a, R> ReaderPayload<'a, R> {
     fn new(reader: &'a mut R) -> Self {
         Self {
@@ -331,7 +314,6 @@ impl<'a, R> ReaderPayload<'a, R> {
         }
     }
 }
-
 impl<R: Read> PayloadSource for ReaderPayload<'_, R> {
     fn read_exact(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ChunkStoreError> {
         if offset != self.consumed {
@@ -349,7 +331,6 @@ impl<R: Read> PayloadSource for ReaderPayload<'_, R> {
             .ok_or(ChunkStoreError::PayloadLengthTooLarge)?;
         Ok(())
     }
-
     fn ensure_exhausted(&mut self, expected_len: u64) -> Result<(), ChunkStoreError> {
         let mut trailing = [0u8; 1];
         match self
@@ -372,19 +353,16 @@ impl<R: Read> PayloadSource for ReaderPayload<'_, R> {
         }
     }
 }
-
 /// Payload source backed by an in-memory byte slice.
 pub struct InMemoryPayload<'a> {
     data: &'a [u8],
 }
-
 impl<'a> InMemoryPayload<'a> {
     #[must_use]
     pub fn new(data: &'a [u8]) -> Self {
         Self { data }
     }
 }
-
 impl PayloadSource for InMemoryPayload<'_> {
     fn read_exact(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ChunkStoreError> {
         let data_len =
@@ -408,7 +386,6 @@ impl PayloadSource for InMemoryPayload<'_> {
         buf.copy_from_slice(&self.data[start..end]);
         Ok(())
     }
-
     fn ensure_exhausted(&mut self, expected_len: u64) -> Result<(), ChunkStoreError> {
         let actual =
             u64::try_from(self.data.len()).map_err(|_| ChunkStoreError::PayloadLengthTooLarge)?;
@@ -421,7 +398,6 @@ impl PayloadSource for InMemoryPayload<'_> {
         Ok(())
     }
 }
-
 /// Payload source backed by a stable no-follow regular file on Unix.
 ///
 /// Non-Unix platforms fail closed with [`io::ErrorKind::Unsupported`].
@@ -435,7 +411,6 @@ pub struct FilePayload {
     #[cfg(not(unix))]
     _unsupported: std::convert::Infallible,
 }
-
 impl FilePayload {
     /// Open a stable no-follow regular-file payload source.
     pub fn open(path: &Path) -> Result<Self, io::Error> {
@@ -455,7 +430,6 @@ impl FilePayload {
             Self::from_open_file(path, file)
         }
     }
-
     /// Adopt an already-open stable regular-file handle without reopening its path.
     ///
     /// This is used when a create-new writer becomes the reader after it has durably completed;
@@ -489,7 +463,6 @@ impl FilePayload {
             })
         }
     }
-
     #[cfg(unix)]
     fn validate_unchanged(&self) -> Result<(), ChunkStoreError> {
         validate_payload_file_handle(
@@ -501,7 +474,6 @@ impl FilePayload {
         .map_err(ChunkStoreError::Io)
     }
 }
-
 #[cfg(unix)]
 impl PayloadSource for FilePayload {
     fn read_exact(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ChunkStoreError> {
@@ -512,7 +484,6 @@ impl PayloadSource for FilePayload {
         self.file.read_exact(buf).map_err(ChunkStoreError::Io)?;
         Ok(())
     }
-
     fn ensure_exhausted(&mut self, expected_len: u64) -> Result<(), ChunkStoreError> {
         self.validate_unchanged()?;
         let actual = self.file.metadata().map_err(ChunkStoreError::Io)?.len();
@@ -525,19 +496,16 @@ impl PayloadSource for FilePayload {
         Ok(())
     }
 }
-
 #[cfg(not(unix))]
 impl PayloadSource for FilePayload {
     fn read_exact(&mut self, _offset: u64, _buf: &mut [u8]) -> Result<(), ChunkStoreError> {
         let _ = &self._unsupported;
         Err(ChunkStoreError::Io(unsupported_secure_filesystem_error()))
     }
-
     fn ensure_exhausted(&mut self, _expected_len: u64) -> Result<(), ChunkStoreError> {
         Err(ChunkStoreError::Io(unsupported_secure_filesystem_error()))
     }
 }
-
 #[cfg(unix)]
 struct FileSpan {
     start: u64,
@@ -545,7 +513,6 @@ struct FileSpan {
     path: PathBuf,
     metadata: fs::Metadata,
 }
-
 /// Payload source backed by multiple files described by a [`CarBuildPlan`].
 ///
 /// Secure file-backed operation is available on Unix; other platforms fail closed.
@@ -565,7 +532,6 @@ pub struct DirectoryPayload {
     #[cfg(not(unix))]
     _unsupported: std::convert::Infallible,
 }
-
 impl DirectoryPayload {
     /// Open a root-confined payload inventory and capture every file's identity and exact size.
     ///
@@ -583,7 +549,6 @@ impl DirectoryPayload {
             Self::new_unix(root, files)
         }
     }
-
     #[cfg(unix)]
     fn new_unix(root: &Path, files: &[FilePlan]) -> Result<Self, io::Error> {
         let root_metadata = fs::symlink_metadata(root)?;
@@ -609,7 +574,6 @@ impl DirectoryPayload {
                 ),
             ));
         }
-
         let mut preliminary = Vec::new();
         preliminary.try_reserve_exact(files.len()).map_err(|_| {
             io::Error::other(format!(
@@ -648,7 +612,6 @@ impl DirectoryPayload {
                 ));
             }
             previous_path = Some(&file.path);
-
             let mut path = canonical_root.clone();
             for component in &file.path {
                 path.push(component);
@@ -662,7 +625,6 @@ impl DirectoryPayload {
             preliminary.push((offset, end, path));
             offset = end;
         }
-
         let mut spans = Vec::new();
         spans.try_reserve_exact(preliminary.len()).map_err(|_| {
             io::Error::other(format!(
@@ -689,7 +651,6 @@ impl DirectoryPayload {
             cached_file: None,
         })
     }
-
     #[cfg(unix)]
     fn validate_root(&self) -> Result<(), ChunkStoreError> {
         let current = fs::symlink_metadata(&self.canonical_root).map_err(ChunkStoreError::Io)?;
@@ -703,7 +664,6 @@ impl DirectoryPayload {
         }
         Ok(())
     }
-
     #[cfg(unix)]
     fn open_file(&mut self, span_index: usize) -> Result<&mut File, ChunkStoreError> {
         self.validate_root()?;
@@ -733,7 +693,6 @@ impl DirectoryPayload {
         Ok(file)
     }
 }
-
 #[cfg(unix)]
 impl PayloadSource for DirectoryPayload {
     fn read_exact(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ChunkStoreError> {
@@ -764,11 +723,9 @@ impl PayloadSource for DirectoryPayload {
                 len: self.total_len,
             });
         }
-
         let mut remaining = buf.len();
         let mut current_offset = offset;
         let mut buf_cursor = 0usize;
-
         while remaining > 0 {
             let span_index = self
                 .spans
@@ -779,7 +736,6 @@ impl PayloadSource for DirectoryPayload {
                     len: self.total_len,
                 })?;
             let span = &self.spans[span_index];
-
             let span_offset = current_offset - span.start;
             let span_remaining = usize::try_from(span.end - current_offset).map_err(|_| {
                 ChunkStoreError::OffsetOutOfRange {
@@ -788,13 +744,11 @@ impl PayloadSource for DirectoryPayload {
                 }
             })?;
             let to_read = span_remaining.min(remaining);
-
             let file = self.open_file(span_index)?;
             file.seek(SeekFrom::Start(span_offset))
                 .map_err(ChunkStoreError::Io)?;
             file.read_exact(&mut buf[buf_cursor..buf_cursor + to_read])
                 .map_err(ChunkStoreError::Io)?;
-
             remaining -= to_read;
             buf_cursor += to_read;
             current_offset = current_offset
@@ -809,10 +763,8 @@ impl PayloadSource for DirectoryPayload {
                     len: self.total_len,
                 })?;
         }
-
         Ok(())
     }
-
     fn ensure_exhausted(&mut self, expected_len: u64) -> Result<(), ChunkStoreError> {
         if self.total_len != expected_len {
             return Err(ChunkStoreError::LengthMismatch {
@@ -833,19 +785,16 @@ impl PayloadSource for DirectoryPayload {
         Ok(())
     }
 }
-
 #[cfg(not(unix))]
 impl PayloadSource for DirectoryPayload {
     fn read_exact(&mut self, _offset: u64, _buf: &mut [u8]) -> Result<(), ChunkStoreError> {
         let _ = &self._unsupported;
         Err(ChunkStoreError::Io(unsupported_secure_filesystem_error()))
     }
-
     fn ensure_exhausted(&mut self, _expected_len: u64) -> Result<(), ChunkStoreError> {
         Err(ChunkStoreError::Io(unsupported_secure_filesystem_error()))
     }
 }
-
 #[cfg(unix)]
 fn open_confined_payload_file(
     canonical_root: &Path,
@@ -878,7 +827,6 @@ fn open_confined_payload_file(
     }
     Ok(file)
 }
-
 #[cfg(unix)]
 fn validate_no_symlinks_below_root(canonical_root: &Path, path: &Path) -> io::Result<()> {
     let relative = path.strip_prefix(canonical_root).map_err(|_| {
@@ -913,7 +861,6 @@ fn validate_no_symlinks_below_root(canonical_root: &Path, path: &Path) -> io::Re
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn validate_payload_file_handle(
     path: &Path,
@@ -953,7 +900,6 @@ fn validate_payload_file_handle(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn validate_payload_metadata(metadata: &fs::Metadata) -> io::Result<()> {
     if !metadata_is_safe_payload_file(metadata) {
@@ -964,22 +910,18 @@ fn validate_payload_metadata(metadata: &fs::Metadata) -> io::Result<()> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn metadata_is_safe_payload_file(metadata: &fs::Metadata) -> bool {
     metadata.is_file() && !metadata_is_symlink(metadata) && metadata_has_one_hard_link(metadata)
 }
-
 #[cfg(unix)]
 fn metadata_is_symlink(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
-
 #[cfg(unix)]
 fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
     metadata.nlink() == 1
 }
-
 #[cfg(not(unix))]
 fn unsupported_secure_filesystem_error() -> io::Error {
     // Non-Unix hosts fail closed: stable handle identity and no-follow are required.
@@ -988,7 +930,6 @@ fn unsupported_secure_filesystem_error() -> io::Error {
         "secure SoraFS file-backed payloads require Unix file identities and no-follow opens",
     )
 }
-
 /// Planning structure describing the chunks required to build a CAR payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CarBuildPlan {
@@ -1003,7 +944,6 @@ pub struct CarBuildPlan {
     /// File descriptors describing which chunks belong to each file.
     pub files: Vec<FilePlan>,
 }
-
 /// File entry used by [`CarBuildPlan`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilePlan {
@@ -1012,7 +952,6 @@ pub struct FilePlan {
     pub chunk_count: usize,
     pub size: u64,
 }
-
 /// Hint describing the Taikai segment a chunk belongs to.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TaikaiSegmentHint {
@@ -1029,7 +968,6 @@ pub struct TaikaiSegmentHint {
     /// BLAKE3 digest of the payload, when provided by the ingest metadata.
     pub payload_digest: Option<[u8; 32]>,
 }
-
 /// Chunk entry used by [`CarBuildPlan`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CarChunk {
@@ -1039,7 +977,6 @@ pub struct CarChunk {
     /// Optional Taikai segment hint carried alongside the chunk metadata.
     pub taikai_segment_hint: Option<TaikaiSegmentHint>,
 }
-
 const CAR_CHUNK_LENGTH_LIMIT: u32 = u32::MAX;
 // Keep a single untrusted plan entry from requesting a multi-gigabyte allocation. Canonical
 // SoraFS profiles are at most 512 KiB and DA ingest is specified at no more than 2 MiB, so this
@@ -1063,28 +1000,24 @@ const CAR_LOGICAL_PATH_MAX_BYTES: usize = 4 * 1024;
 pub const DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES: usize = 512 * 1024 * 1024;
 #[cfg(unix)]
 const CAR_EAGER_DIRECTORY_MAX_BYTES: u64 = DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES as u64;
-
 /// Allocation geometry returned after a complete, allocation-free CAR plan validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CarPlanValidation {
     max_chunk_len: usize,
     estimated_ingest_heap_bytes: usize,
 }
-
 impl CarPlanValidation {
     /// Largest chunk buffer required by the plan.
     #[must_use]
     pub fn max_chunk_len(self) -> usize {
         self.max_chunk_len
     }
-
     /// Conservative checked estimate of peak heap used by chunk-store ingestion.
     #[must_use]
     pub fn estimated_ingest_heap_bytes(self) -> usize {
         self.estimated_ingest_heap_bytes
     }
 }
-
 /// Structural, canonicality, and checked-geometry failures for [`CarBuildPlan`].
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum CarPlanValidationError {
@@ -1227,7 +1160,6 @@ pub enum CarPlanValidationError {
     #[error("allocation estimate overflowed while accounting for {context}")]
     EstimateOverflow { context: &'static str },
 }
-
 fn ensure_car_plan_profile(profile: ChunkProfile) -> Result<(), CarPlanError> {
     profile.validate()?;
     let limit = CHUNK_STORE_MAX_CHUNK_BYTES as usize;
@@ -1239,7 +1171,6 @@ fn ensure_car_plan_profile(profile: ChunkProfile) -> Result<(), CarPlanError> {
     }
     Ok(())
 }
-
 fn ensure_chunk_store_profile(profile: ChunkProfile) -> Result<(), ChunkStoreError> {
     profile.validate()?;
     let limit = CHUNK_STORE_MAX_CHUNK_BYTES as usize;
@@ -1251,14 +1182,12 @@ fn ensure_chunk_store_profile(profile: ChunkProfile) -> Result<(), ChunkStoreErr
     }
     Ok(())
 }
-
 fn preflight_chunk_store_plan(
     plan: &CarBuildPlan,
     max_estimated_heap_bytes: usize,
 ) -> Result<CarPlanValidation, ChunkStoreError> {
     plan.validate_for_ingest_with_limit(max_estimated_heap_bytes)
 }
-
 #[cfg(feature = "manifest")]
 fn build_canonical_pdp_tree(payload: &[u8]) -> Result<Option<PdpMerkleTreeV1>, PdpMerkleTreeError> {
     if payload.is_empty() {
@@ -1268,7 +1197,6 @@ fn build_canonical_pdp_tree(payload: &[u8]) -> Result<Option<PdpMerkleTreeV1>, P
     builder.update(payload)?;
     builder.finish().map(Some)
 }
-
 #[cfg(feature = "manifest")]
 const META_TAIKAI_EVENT_ID: &str = "taikai.event_id";
 #[cfg(feature = "manifest")]
@@ -1283,7 +1211,6 @@ const META_TAIKAI_CACHE_HINT: &str = "taikai.cache_hint";
 const TAIKAI_NAME_MAX_BYTES: usize = 255;
 #[cfg(feature = "manifest")]
 const TAIKAI_CACHE_HINT_MAX_BYTES: usize = 4 * 1024;
-
 /// Errors emitted when deriving a [`CarBuildPlan`] from a DA manifest.
 #[cfg(feature = "manifest")]
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -1323,7 +1250,6 @@ pub enum PlanFromManifestError {
     #[error("manifest produced an invalid CAR plan: {0}")]
     InvalidPlan(#[from] CarPlanValidationError),
 }
-
 /// Build a [`CarBuildPlan`] directly from a canonical DA manifest.
 #[cfg(feature = "manifest")]
 pub fn build_plan_from_da_manifest(
@@ -1364,7 +1290,6 @@ pub fn build_plan_from_da_manifest(
     let payload_digest = Hash::from(*manifest.blob_hash.as_ref());
     let taikai_hint = taikai_segment_hint_from_manifest(manifest)?;
     preflight_manifest_plan_heap(chunk_count, taikai_hint.as_ref())?;
-
     let mut chunks = Vec::new();
     try_reserve_manifest(&mut chunks, chunk_count, "manifest CAR chunk inventory")?;
     for chunk in &manifest.chunks {
@@ -1402,7 +1327,6 @@ pub fn build_plan_from_da_manifest(
     plan.validate()?;
     Ok(plan)
 }
-
 #[cfg(feature = "manifest")]
 fn try_reserve_manifest<T>(
     values: &mut Vec<T>,
@@ -1416,7 +1340,6 @@ fn try_reserve_manifest<T>(
             requested: additional,
         })
 }
-
 #[cfg(feature = "manifest")]
 fn try_owned_manifest_string(
     value: &str,
@@ -1432,7 +1355,6 @@ fn try_owned_manifest_string(
     owned.push_str(value);
     Ok(owned)
 }
-
 #[cfg(feature = "manifest")]
 fn try_clone_taikai_hint_for_manifest(
     hint: &TaikaiSegmentHint,
@@ -1446,7 +1368,6 @@ fn try_clone_taikai_hint_for_manifest(
         payload_digest: hint.payload_digest,
     })
 }
-
 #[cfg(feature = "manifest")]
 fn preflight_manifest_plan_heap(
     chunk_count: usize,
@@ -1487,7 +1408,6 @@ fn preflight_manifest_plan_heap(
     }
     Ok(())
 }
-
 #[cfg(feature = "manifest")]
 fn preflight_da_manifest_chunks(
     manifest: &DaManifestV1,
@@ -1574,7 +1494,6 @@ fn preflight_da_manifest_chunks(
     }
     Ok(())
 }
-
 #[cfg(feature = "manifest")]
 fn parse_canonical_taikai_sequence(raw: &str) -> Result<u64, PlanFromManifestError> {
     if raw.is_empty()
@@ -1594,7 +1513,6 @@ fn parse_canonical_taikai_sequence(raw: &str) -> Result<u64, PlanFromManifestErr
             reason: err.to_string(),
         })
 }
-
 /// Extract a Taikai segment hint from a manifest when the blob class indicates a Taikai segment.
 #[cfg(feature = "manifest")]
 pub fn taikai_segment_hint_from_manifest(
@@ -1603,7 +1521,6 @@ pub fn taikai_segment_hint_from_manifest(
     if manifest.blob_class != BlobClass::TaikaiSegment {
         return Ok(None);
     }
-
     let metadata = &manifest.metadata;
     let event = parse_taikai_name(metadata, META_TAIKAI_EVENT_ID)?;
     let stream = parse_taikai_name(metadata, META_TAIKAI_STREAM_ID)?;
@@ -1611,7 +1528,6 @@ pub fn taikai_segment_hint_from_manifest(
     let sequence_raw = read_taikai_metadata_field(metadata, META_TAIKAI_SEGMENT_SEQUENCE)?;
     let sequence = parse_canonical_taikai_sequence(sequence_raw)?;
     let cache_hint = decode_taikai_cache_hint(metadata)?;
-
     let mut hint = TaikaiSegmentHint {
         event: try_owned_manifest_string(event.as_ref(), "Taikai event hint")?,
         stream: try_owned_manifest_string(stream.as_ref(), "Taikai stream hint")?,
@@ -1624,10 +1540,8 @@ pub fn taikai_segment_hint_from_manifest(
         hint.payload_len = cache_hint.payload_len;
         hint.payload_digest = cache_hint.payload_digest;
     }
-
     Ok(Some(hint))
 }
-
 /// Derive a Taikai segment hint from a stored SoraFS manifest (metadata-based).
 ///
 /// Returns `Ok(None)` when no Taikai metadata keys are present; otherwise
@@ -1651,7 +1565,6 @@ pub fn taikai_segment_hint_from_sorafs_manifest(
         }
         Ok(value)
     }
-
     let Some(event_raw) = lookup(manifest, META_TAIKAI_EVENT_ID)? else {
         return Ok(None);
     };
@@ -1664,13 +1577,11 @@ pub fn taikai_segment_hint_from_sorafs_manifest(
     let sequence_raw = lookup(manifest, META_TAIKAI_SEGMENT_SEQUENCE)?.ok_or(
         PlanFromManifestError::MissingTaikaiMetadata(META_TAIKAI_SEGMENT_SEQUENCE),
     )?;
-
     let event = parse_taikai_name_value(event_raw, META_TAIKAI_EVENT_ID)?;
     let stream = parse_taikai_name_value(stream_raw, META_TAIKAI_STREAM_ID)?;
     let rendition = parse_taikai_name_value(rendition_raw, META_TAIKAI_RENDITION_ID)?;
     let sequence = parse_canonical_taikai_sequence(sequence_raw)?;
     let cache_hint = decode_taikai_cache_hint_from_sorafs_manifest(manifest)?;
-
     let mut hint = TaikaiSegmentHint {
         event: try_owned_manifest_string(event.as_ref(), "Taikai event hint")?,
         stream: try_owned_manifest_string(stream.as_ref(), "Taikai stream hint")?,
@@ -1683,10 +1594,8 @@ pub fn taikai_segment_hint_from_sorafs_manifest(
         hint.payload_len = cache_hint.payload_len;
         hint.payload_digest = cache_hint.payload_digest;
     }
-
     Ok(Some(hint))
 }
-
 #[cfg(feature = "manifest")]
 fn parse_taikai_name(
     metadata: &ExtraMetadata,
@@ -1695,7 +1604,6 @@ fn parse_taikai_name(
     let raw = read_taikai_metadata_field(metadata, key)?;
     parse_taikai_name_value(raw, key)
 }
-
 #[cfg(feature = "manifest")]
 fn parse_taikai_name_value(raw: &str, key: &'static str) -> Result<Name, PlanFromManifestError> {
     if raw.len() > TAIKAI_NAME_MAX_BYTES {
@@ -1716,7 +1624,6 @@ fn parse_taikai_name_value(raw: &str, key: &'static str) -> Result<Name, PlanFro
     }
     Ok(name)
 }
-
 #[cfg(feature = "manifest")]
 fn read_taikai_metadata_field<'a>(
     metadata: &'a ExtraMetadata,
@@ -1749,14 +1656,12 @@ fn read_taikai_metadata_field<'a>(
         reason: err.to_string(),
     })
 }
-
 #[cfg(feature = "manifest")]
 #[derive(Debug, Default)]
 struct CacheHintFields {
     payload_len: Option<u64>,
     payload_digest: Option<[u8; 32]>,
 }
-
 #[cfg(feature = "manifest")]
 fn decode_taikai_cache_hint(
     metadata: &ExtraMetadata,
@@ -1809,7 +1714,6 @@ fn decode_taikai_cache_hint(
             field: META_TAIKAI_CACHE_HINT,
             reason: "cache hint must be a JSON object".into(),
         })?;
-
     let payload_len = hint_obj
         .get("payload_len")
         .map(|value| {
@@ -1831,13 +1735,11 @@ fn decode_taikai_cache_hint(
             });
         }
     };
-
     Ok(Some(CacheHintFields {
         payload_len,
         payload_digest,
     }))
 }
-
 #[cfg(feature = "manifest")]
 fn decode_taikai_cache_hint_from_sorafs_manifest(
     manifest: &SorafsManifestV1,
@@ -1873,7 +1775,6 @@ fn decode_taikai_cache_hint_from_sorafs_manifest(
             field: META_TAIKAI_CACHE_HINT,
             reason: "cache hint must be a JSON object".into(),
         })?;
-
     let payload_len = hint_obj
         .get("payload_len")
         .map(|value| {
@@ -1895,13 +1796,11 @@ fn decode_taikai_cache_hint_from_sorafs_manifest(
             });
         }
     };
-
     Ok(Some(CacheHintFields {
         payload_len,
         payload_digest,
     }))
 }
-
 #[cfg(feature = "manifest")]
 fn decode_digest_hex_hint(hex: &str) -> Result<[u8; 32], PlanFromManifestError> {
     if hex.len() != 64 {
@@ -1918,7 +1817,6 @@ fn decode_digest_hex_hint(hex: &str) -> Result<[u8; 32], PlanFromManifestError> 
     }
     Ok(bytes)
 }
-
 #[cfg(feature = "manifest")]
 fn decode_hex_nibble_hint(byte: u8) -> Result<u8, PlanFromManifestError> {
     match byte {
@@ -1931,7 +1829,6 @@ fn decode_hex_nibble_hint(byte: u8) -> Result<u8, PlanFromManifestError> {
         }),
     }
 }
-
 /// Specification for fetching a chunk from storage or remote peers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChunkFetchSpec {
@@ -1946,7 +1843,6 @@ pub struct ChunkFetchSpec {
     /// Optional Taikai segment hint propagated from the ingest manifest.
     pub taikai_segment_hint: Option<TaikaiSegmentHint>,
 }
-
 /// Canonical chunk store used during SoraFS node ingestion.
 ///
 /// Captures chunk metadata, payload digests, and the two-level (64 KiB / 4 KiB) PoR sampling tree.
@@ -1962,15 +1858,12 @@ pub struct ChunkStore {
     #[cfg(feature = "manifest")]
     pdp_tree: Option<PdpMerkleTreeV1>,
 }
-
 /// Sink trait used by [`ChunkStore::ingest_plan_source_with_sink`] to persist chunk payloads.
 pub trait ChunkSink {
     /// Output produced after all chunks have been written.
     type Output;
-
     /// Prepare internal state before chunk ingestion begins.
     fn prepare(&mut self, plan: &CarBuildPlan) -> Result<(), ChunkStoreError>;
-
     /// Write an individual chunk payload.
     fn write_chunk(
         &mut self,
@@ -1978,21 +1871,16 @@ pub trait ChunkSink {
         chunk: &CarChunk,
         data: &[u8],
     ) -> Result<(), ChunkStoreError>;
-
     /// Finish the sink and return the final output.
     fn finish(self) -> Result<Self::Output, ChunkStoreError>;
 }
-
 #[derive(Debug, Default)]
 struct NoopSink;
-
 impl ChunkSink for NoopSink {
     type Output = ();
-
     fn prepare(&mut self, _plan: &CarBuildPlan) -> Result<(), ChunkStoreError> {
         Ok(())
     }
-
     fn write_chunk(
         &mut self,
         _index: usize,
@@ -2001,12 +1889,10 @@ impl ChunkSink for NoopSink {
     ) -> Result<(), ChunkStoreError> {
         Ok(())
     }
-
     fn finish(self) -> Result<Self::Output, ChunkStoreError> {
         Ok(())
     }
 }
-
 /// Metadata describing a chunk persisted to disk by [`DirectoryChunkSink`].
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub struct PersistedChunkRecord {
@@ -2019,7 +1905,6 @@ pub struct PersistedChunkRecord {
     /// Expected BLAKE3 digest of the chunk.
     pub digest: [u8; 32],
 }
-
 /// Output returned by [`DirectoryChunkSink`].
 #[derive(Debug)]
 pub struct DirectoryChunkSinkOutput {
@@ -2030,7 +1915,6 @@ pub struct DirectoryChunkSinkOutput {
     /// Durability result after the staging directory became visible at its immutable root.
     pub publication: DirectoryPublicationStatus,
 }
-
 /// Outcome of the irreversible staging-to-root rename.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DirectoryPublicationStatus {
@@ -2042,10 +1926,8 @@ pub enum DirectoryPublicationStatus {
     /// records and reconcile durability on restart rather than attempting the ingest again.
     PublishedButDurabilityUncertain,
 }
-
 #[cfg(unix)]
 const ATOMIC_PATH_RETRIES: usize = 32;
-
 #[cfg(unix)]
 fn normalized_parent(path: &Path) -> Result<&Path, ChunkStoreError> {
     path.parent()
@@ -2058,7 +1940,6 @@ fn normalized_parent(path: &Path) -> Result<&Path, ChunkStoreError> {
         })
         .ok_or_else(|| ChunkStoreError::Io(io::Error::other("missing parent directory")))
 }
-
 #[cfg(unix)]
 fn canonical_existing_private_directory(path: &Path) -> Result<PathBuf, ChunkStoreError> {
     if path
@@ -2109,13 +1990,11 @@ fn canonical_existing_private_directory(path: &Path) -> Result<PathBuf, ChunkSto
     }
     Ok(canonical)
 }
-
 #[cfg(unix)]
 fn validate_directory_path(path: &Path) -> Result<(), ChunkStoreError> {
     let metadata = fs::symlink_metadata(path).map_err(ChunkStoreError::Io)?;
     validate_directory_metadata(path, &metadata)
 }
-
 #[cfg(unix)]
 fn validate_directory_metadata(
     path: &Path,
@@ -2129,7 +2008,6 @@ fn validate_directory_metadata(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn validate_atomic_destination_absent(path: &Path) -> Result<(), ChunkStoreError> {
     match fs::symlink_metadata(path) {
@@ -2157,7 +2035,6 @@ fn validate_atomic_destination_absent(path: &Path) -> Result<(), ChunkStoreError
         Err(err) => Err(ChunkStoreError::Io(err)),
     }
 }
-
 #[cfg(unix)]
 fn validate_atomic_temp(path: &Path, file: &File) -> Result<(), ChunkStoreError> {
     let opened = file.metadata().map_err(ChunkStoreError::Io)?;
@@ -2176,12 +2053,10 @@ fn validate_atomic_temp(path: &Path, file: &File) -> Result<(), ChunkStoreError>
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(unix)]
 fn metadata_snapshot_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     metadata_identifies_same_file(left, right)
@@ -2193,7 +2068,6 @@ fn metadata_snapshot_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool 
         && left.ctime_nsec() == right.ctime_nsec()
         && left.nlink() == right.nlink()
 }
-
 #[cfg(unix)]
 fn remove_path_no_follow(path: &Path) {
     match fs::symlink_metadata(path) {
@@ -2206,22 +2080,18 @@ fn remove_path_no_follow(path: &Path) {
         Err(_) => {}
     }
 }
-
 #[cfg(unix)]
 fn sync_directory(path: &Path) -> io::Result<()> {
     File::open(path)?.sync_all()
 }
-
 #[cfg(unix)]
 fn set_atomic_no_follow(options: &mut OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -2237,7 +2107,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -2254,7 +2123,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0
 }
-
 /// Writes each chunk into a deterministic directory layout (`chunk_{idx:05}.bin`).
 ///
 /// Writes are assembled in a private sibling directory and published only from [`Self::finish`].
@@ -2285,21 +2153,18 @@ pub struct DirectoryChunkSink {
     #[cfg(all(test, unix))]
     commit_fault: Option<DirectoryCommitFault>,
 }
-
 #[cfg(all(test, unix))]
 #[derive(Debug, Clone, Copy)]
 enum DirectoryCommitFault {
     PostRenameIdentity,
     ParentSync,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ExpectedSinkChunk {
     offset: u64,
     length: u32,
     digest: [u8; 32],
 }
-
 impl DirectoryChunkSink {
     /// Construct a sink that writes chunks into `root`.
     #[must_use]
@@ -2327,7 +2192,6 @@ impl DirectoryChunkSink {
             commit_fault: None,
         }
     }
-
     /// Override the checked heap limit applied before this sink allocates plan-sized state.
     pub fn with_max_estimated_heap_bytes(
         mut self,
@@ -2339,14 +2203,12 @@ impl DirectoryChunkSink {
         self.max_estimated_heap_bytes = max_estimated_heap_bytes;
         Ok(self)
     }
-
     #[cfg(unix)]
     fn write_atomic(path: &Path, data: &[u8]) -> Result<(), ChunkStoreError> {
         let parent = normalized_parent(path)?;
         validate_directory_path(parent)?;
         let parent_before = fs::symlink_metadata(parent).map_err(ChunkStoreError::Io)?;
         validate_atomic_destination_absent(path)?;
-
         let file_name = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -2387,7 +2249,6 @@ impl DirectoryChunkSink {
                 "atomic chunk temporary file handle was not retained",
             ))
         })?;
-
         let result = (|| {
             file.write_all(data).map_err(ChunkStoreError::Io)?;
             file.sync_all().map_err(ChunkStoreError::Io)?;
@@ -2410,7 +2271,6 @@ impl DirectoryChunkSink {
         }
         result
     }
-
     #[cfg(unix)]
     fn create_staging_root(&self, parent: &Path) -> Result<PathBuf, ChunkStoreError> {
         for _ in 0..ATOMIC_PATH_RETRIES {
@@ -2438,7 +2298,6 @@ impl DirectoryChunkSink {
             "failed to allocate a collision-free chunk staging directory",
         )))
     }
-
     #[cfg(unix)]
     fn validate_staging_unchanged(&self, staging: &Path) -> Result<(), ChunkStoreError> {
         let before = self
@@ -2454,7 +2313,6 @@ impl DirectoryChunkSink {
         }
         validate_directory_metadata(staging, &current)
     }
-
     #[cfg(unix)]
     fn validate_staged_chunks(&self, staging: &Path) -> Result<(), ChunkStoreError> {
         let mut entry_count = 0usize;
@@ -2475,7 +2333,6 @@ impl DirectoryChunkSink {
                 actual_bytes: self.total_bytes,
             });
         }
-
         let mut read_buffer = [0u8; 64 * 1024];
         for (index, expected) in self.expected_chunks.iter().enumerate() {
             let path = staging.join(format!("chunk_{index:05}.bin"));
@@ -2506,7 +2363,6 @@ impl DirectoryChunkSink {
         }
         Ok(())
     }
-
     #[cfg(unix)]
     fn commit_staging(
         &self,
@@ -2563,7 +2419,6 @@ impl DirectoryChunkSink {
         }
     }
 }
-
 impl Clone for DirectoryChunkSink {
     fn clone(&self) -> Self {
         let mut clone = Self::new(self.root.clone());
@@ -2571,7 +2426,6 @@ impl Clone for DirectoryChunkSink {
         clone
     }
 }
-
 #[cfg(unix)]
 impl Drop for DirectoryChunkSink {
     fn drop(&mut self) {
@@ -2584,10 +2438,8 @@ impl Drop for DirectoryChunkSink {
         }
     }
 }
-
 impl ChunkSink for DirectoryChunkSink {
     type Output = DirectoryChunkSinkOutput;
-
     #[cfg(unix)]
     fn prepare(&mut self, plan: &CarBuildPlan) -> Result<(), ChunkStoreError> {
         if self.staging_root.is_some() {
@@ -2610,7 +2462,6 @@ impl ChunkSink for DirectoryChunkSink {
         self.root = canonical_parent.join(root_name);
         validate_atomic_destination_absent(&self.root)?;
         let parent_before = fs::symlink_metadata(&canonical_parent).map_err(ChunkStoreError::Io)?;
-
         self.records.clear();
         self.records
             .try_reserve_exact(plan.chunks.len())
@@ -2647,12 +2498,10 @@ impl ChunkSink for DirectoryChunkSink {
         self.staging_before = Some(staging_before);
         Ok(())
     }
-
     #[cfg(not(unix))]
     fn prepare(&mut self, _plan: &CarBuildPlan) -> Result<(), ChunkStoreError> {
         Err(ChunkStoreError::Io(unsupported_secure_filesystem_error()))
     }
-
     #[cfg(unix)]
     fn write_chunk(
         &mut self,
@@ -2722,7 +2571,6 @@ impl ChunkSink for DirectoryChunkSink {
         self.next_chunk_index += 1;
         Ok(())
     }
-
     #[cfg(not(unix))]
     fn write_chunk(
         &mut self,
@@ -2732,7 +2580,6 @@ impl ChunkSink for DirectoryChunkSink {
     ) -> Result<(), ChunkStoreError> {
         Err(ChunkStoreError::Io(unsupported_secure_filesystem_error()))
     }
-
     #[cfg(unix)]
     fn finish(mut self) -> Result<Self::Output, ChunkStoreError> {
         if self.next_chunk_index != self.expected_chunks.len()
@@ -2759,20 +2606,17 @@ impl ChunkSink for DirectoryChunkSink {
             publication,
         })
     }
-
     #[cfg(not(unix))]
     fn finish(self) -> Result<Self::Output, ChunkStoreError> {
         Err(ChunkStoreError::Io(unsupported_secure_filesystem_error()))
     }
 }
-
 impl ChunkStore {
     /// Creates a chunk store bound to the default `sorafs.sf1@1.0.0` profile.
     #[must_use]
     pub fn new() -> Self {
         Self::with_profile(sorafs_chunker::ChunkProfile::DEFAULT)
     }
-
     /// Creates a chunk store bound to the provided chunking profile.
     #[must_use]
     pub fn with_profile(profile: sorafs_chunker::ChunkProfile) -> Self {
@@ -2787,7 +2631,6 @@ impl ChunkStore {
             pdp_tree: None,
         }
     }
-
     /// Create a chunk store with an explicit per-ingest checked heap limit.
     pub fn with_profile_and_heap_limit(
         profile: sorafs_chunker::ChunkProfile,
@@ -2801,13 +2644,11 @@ impl ChunkStore {
         store.max_estimated_heap_bytes = max_estimated_heap_bytes;
         Ok(store)
     }
-
     /// Return the checked heap limit applied before every ingest operation.
     #[must_use]
     pub fn max_estimated_heap_bytes(&self) -> usize {
         self.max_estimated_heap_bytes
     }
-
     /// Update the checked heap limit used by subsequent ingest operations.
     pub fn set_max_estimated_heap_bytes(
         &mut self,
@@ -2819,37 +2660,31 @@ impl ChunkStore {
         self.max_estimated_heap_bytes = max_estimated_heap_bytes;
         Ok(())
     }
-
     /// Returns the chunking profile used by this store.
     #[must_use]
     pub fn profile(&self) -> sorafs_chunker::ChunkProfile {
         self.profile
     }
-
     /// Returns the canonical payload digest (BLAKE3-256).
     #[must_use]
     pub fn payload_digest(&self) -> &Hash {
         &self.payload_digest
     }
-
     /// Returns total payload length (bytes) captured by the store.
     #[must_use]
     pub fn payload_len(&self) -> u64 {
         self.payload_len
     }
-
     /// Returns the stored chunk records.
     #[must_use]
     pub fn chunks(&self) -> &[StoredChunk] {
         &self.chunks
     }
-
     /// Returns the PoR sampling tree derived from the ingested payload.
     #[must_use]
     pub fn por_tree(&self) -> &PorMerkleTree {
         &self.por_tree
     }
-
     /// Move the PoR tree out of this store without cloning its retained metadata.
     ///
     /// The store retains its chunk inventory and payload digest; its PoR accessors expose an empty
@@ -2857,14 +2692,12 @@ impl ChunkStore {
     pub fn take_por_tree(&mut self) -> PorMerkleTree {
         std::mem::replace(&mut self.por_tree, PorMerkleTree::empty())
     }
-
     /// Returns the canonical PDP v1 tree, or `None` for an empty payload.
     #[cfg(feature = "manifest")]
     #[must_use]
     pub fn pdp_tree(&self) -> Option<&PdpMerkleTreeV1> {
         self.pdp_tree.as_ref()
     }
-
     /// Move the canonical PDP v1 tree out of this store without cloning its node slabs.
     ///
     /// The store retains its chunk and PoR metadata; subsequent PDP accessors return the
@@ -2873,21 +2706,18 @@ impl ChunkStore {
     pub fn take_pdp_tree(&mut self) -> Option<PdpMerkleTreeV1> {
         self.pdp_tree.take()
     }
-
     /// Returns the canonical PDP hot-leaf commitment root (4 KiB granularity).
     #[cfg(feature = "manifest")]
     #[must_use]
     pub fn pdp_hot_root(&self) -> Option<[u8; 32]> {
         self.pdp_tree.as_ref().map(PdpMerkleTreeV1::hot_root)
     }
-
     /// Returns the canonical PDP segment commitment root (256 KiB granularity).
     #[cfg(feature = "manifest")]
     #[must_use]
     pub fn pdp_segment_root(&self) -> Option<[u8; 32]> {
         self.pdp_tree.as_ref().map(PdpMerkleTreeV1::segment_root)
     }
-
     /// Returns the total number of canonical PDP hot leaves.
     #[cfg(feature = "manifest")]
     #[must_use]
@@ -2896,7 +2726,6 @@ impl ChunkStore {
             .as_ref()
             .map_or(0, PdpMerkleTreeV1::hot_leaf_count)
     }
-
     /// Returns the total number of canonical PDP segments.
     #[cfg(feature = "manifest")]
     #[must_use]
@@ -2905,7 +2734,6 @@ impl ChunkStore {
             .as_ref()
             .map_or(0, PdpMerkleTreeV1::segment_count)
     }
-
     /// Build canonical PDP witnesses using the supplied random-access payload source.
     #[cfg(feature = "manifest")]
     pub fn prove_pdp_samples_with<P: PayloadSource>(
@@ -2922,13 +2750,11 @@ impl ChunkStore {
             Ok(buffer.len())
         })
     }
-
     /// Returns the total number of PoR leaves tracked by the current tree.
     #[must_use]
     pub fn por_leaf_count(&self) -> usize {
         self.por_tree.leaf_count()
     }
-
     /// Samples PoR leaves deterministically using `splitmix64` seeded with `seed`.
     pub fn sample_leaves(
         &self,
@@ -2939,7 +2765,6 @@ impl ChunkStore {
         let mut source = InMemoryPayload::new(payload);
         self.sample_leaves_with(count, seed, &mut source)
     }
-
     pub fn sample_leaves_with<P: PayloadSource>(
         &self,
         count: usize,
@@ -2990,13 +2815,11 @@ impl ChunkStore {
         }
         Ok(samples)
     }
-
     /// Clears the store and ingests the provided payload without panicking on invalid input,
     /// resource limits, or canonical PDP allocation failures.
     pub fn ingest_bytes(&mut self, payload: &[u8]) -> Result<(), ChunkStoreError> {
         self.try_ingest_bytes(payload)
     }
-
     /// Clears the store and ingests the provided payload, returning chunker
     /// validation errors instead of panicking on invalid profile parameters.
     pub fn try_ingest_bytes(&mut self, payload: &[u8]) -> Result<(), ChunkStoreError> {
@@ -3090,7 +2913,6 @@ impl ChunkStore {
         let payload_digest = blake3::hash(payload);
         #[cfg(feature = "manifest")]
         let pdp_tree = build_canonical_pdp_tree(payload)?;
-
         self.chunks = chunks;
         self.por_tree = por_tree;
         self.payload_digest = payload_digest;
@@ -3101,7 +2923,6 @@ impl ChunkStore {
         }
         Ok(())
     }
-
     /// Ingests a payload using chunk boundaries supplied by an existing plan.
     pub fn ingest_plan(
         &mut self,
@@ -3111,7 +2932,6 @@ impl ChunkStore {
         let mut source = InMemoryPayload::new(payload);
         self.ingest_plan_source(plan, &mut source)
     }
-
     /// Ingests chunk metadata by reading the payload stream according to `plan`.
     pub fn ingest_plan_stream<R: Read>(
         &mut self,
@@ -3121,7 +2941,6 @@ impl ChunkStore {
         let mut source = ReaderPayload::new(reader);
         self.ingest_plan_source(plan, &mut source)
     }
-
     /// Ingests chunk metadata using a random-access payload source.
     pub fn ingest_plan_source<P: PayloadSource>(
         &mut self,
@@ -3131,7 +2950,6 @@ impl ChunkStore {
         self.ingest_plan_source_with_sink(plan, source, NoopSink)
             .map(|_| ())
     }
-
     /// Ingests chunk metadata using a random-access payload source and an output sink.
     pub fn ingest_plan_source_with_sink<P, S>(
         &mut self,
@@ -3146,7 +2964,6 @@ impl ChunkStore {
         let validation = preflight_chunk_store_plan(plan, self.max_estimated_heap_bytes)?;
         let max_chunk_len = validation.max_chunk_len();
         let chunk_count = plan.chunks.len();
-
         let mut chunks = Vec::new();
         chunks
             .try_reserve_exact(chunk_count)
@@ -3175,13 +2992,10 @@ impl ChunkStore {
                 context: "chunk read buffer",
                 requested: max_chunk_len,
             })?;
-
         sink.prepare(plan)?;
-
         let mut payload_hasher = blake3::Hasher::new();
         #[cfg(feature = "manifest")]
         let mut pdp_builder = (plan.content_length != 0).then(PdpMerkleTreeBuilderV1::new);
-
         let mut next_por_leaf_index = 0u64;
         for (idx, chunk_plan) in plan.chunks.iter().enumerate() {
             let expected_len = chunk_plan.length as usize;
@@ -3200,7 +3014,6 @@ impl ChunkStore {
                 }
                 Err(other) => return Err(other),
             }
-
             let digest = blake3::hash(&buffer);
             if digest.as_bytes() != &chunk_plan.digest {
                 return Err(ChunkStoreError::DigestMismatch { chunk_index: idx });
@@ -3210,13 +3023,11 @@ impl ChunkStore {
             if let Some(builder) = pdp_builder.as_mut() {
                 builder.update(&buffer)?;
             }
-
             chunks.push(StoredChunk {
                 offset: chunk_plan.offset,
                 length: chunk_plan.length,
                 blake3: chunk_plan.digest,
             });
-
             let (chunk_tree, chunk_root, next_leaf_index) =
                 PorMerkleTree::build_chunk_tree_from_bytes(
                     idx,
@@ -3229,17 +3040,13 @@ impl ChunkStore {
             chunk_roots.push(chunk_root);
             chunk_nodes.push(chunk_tree);
             next_por_leaf_index = next_leaf_index;
-
             sink.write_chunk(idx, chunk_plan, &buffer)?;
         }
-
         source.ensure_exhausted(plan.content_length)?;
-
         let payload_digest = payload_hasher.finalize();
         if payload_digest != plan.payload_digest {
             return Err(ChunkStoreError::PayloadDigestMismatch);
         }
-
         let por_tree = if plan.content_length == 0 {
             PorMerkleTree::empty()
         } else {
@@ -3250,7 +3057,6 @@ impl ChunkStore {
             .map(PdpMerkleTreeBuilderV1::finish)
             .transpose()?;
         let output = sink.finish()?;
-
         self.profile = plan.chunk_profile;
         self.chunks = chunks;
         self.por_tree = por_tree;
@@ -3262,7 +3068,6 @@ impl ChunkStore {
         }
         Ok(output)
     }
-
     /// Ingests chunk metadata while persisting chunk bytes to `directory` on Unix.
     ///
     /// Non-Unix platforms fail closed before inspecting or creating `directory`.
@@ -3276,7 +3081,6 @@ impl ChunkStore {
             .with_max_estimated_heap_bytes(self.max_estimated_heap_bytes)?;
         self.ingest_plan_source_with_sink(plan, source, sink)
     }
-
     /// Streams chunk metadata from `reader`, persisting chunk bytes to `directory` on Unix.
     ///
     /// Non-Unix platforms fail closed before inspecting or creating `directory`.
@@ -3292,13 +3096,11 @@ impl ChunkStore {
         self.ingest_plan_source_with_sink(plan, &mut source, sink)
     }
 }
-
 impl Default for ChunkStore {
     fn default() -> Self {
         Self::new()
     }
 }
-
 /// Metadata about an ingested chunk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredChunk {
@@ -3306,18 +3108,15 @@ pub struct StoredChunk {
     pub length: u32,
     pub blake3: [u8; 32],
 }
-
 /// Size of a PoR sampling segment (bytes).
 pub const POR_SEGMENT_SIZE: usize = 64 * 1024;
 /// Size of a PoR sampling leaf (bytes).
 pub const POR_LEAF_SIZE: usize = 4 * 1024;
-
 const POR_LEAF_DOMAIN: &[u8] = b"sorafs:por:leaf:v1";
 const POR_SEGMENT_DOMAIN: &[u8] = b"sorafs:por:segment:v1";
 const POR_CHUNK_DOMAIN: &[u8] = b"sorafs:por:chunk:v1";
 const POR_CHUNK_NODE_DOMAIN: &[u8] = b"sorafs:por:chunk-node:v1";
 const POR_ROOT_DOMAIN: &[u8] = b"sorafs:por:root-merkle:v1";
-
 fn try_reserve_store<T>(
     values: &mut Vec<T>,
     additional: usize,
@@ -3330,7 +3129,6 @@ fn try_reserve_store<T>(
             requested: additional,
         })
 }
-
 fn checked_por_heap_add_product(
     total: &mut usize,
     count: usize,
@@ -3348,7 +3146,6 @@ fn checked_por_heap_add_product(
     }
     Ok(())
 }
-
 fn ensure_por_chunk_count(chunk_count: usize) -> Result<(), ChunkStoreError> {
     if chunk_count > CAR_PLAN_MAX_CHUNKS {
         return Err(ChunkStoreError::InvalidPlan(
@@ -3360,7 +3157,6 @@ fn ensure_por_chunk_count(chunk_count: usize) -> Result<(), ChunkStoreError> {
     }
     Ok(())
 }
-
 /// Two-level Merkle tree used for Proof-of-Retrievability sampling.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PorMerkleTree {
@@ -3370,7 +3166,6 @@ pub struct PorMerkleTree {
     payload_len: u64,
     leaf_count: u64,
 }
-
 impl PorMerkleTree {
     /// Returns an empty PoR tree.
     #[must_use]
@@ -3383,7 +3178,6 @@ impl PorMerkleTree {
             leaf_count: 0,
         }
     }
-
     /// Builds and validates a PoR tree from the provided payload and chunk metadata.
     pub fn try_from_payload(
         payload: &[u8],
@@ -3406,7 +3200,6 @@ impl PorMerkleTree {
             });
         }
         ensure_por_chunk_count(chunks.len())?;
-
         let mut chunk_nodes = Vec::new();
         try_reserve_store(&mut chunk_nodes, chunks.len(), "PoR chunk nodes")?;
         let mut chunk_roots = Vec::new();
@@ -3473,10 +3266,8 @@ impl PorMerkleTree {
                 context: "payload chunk final coverage",
             });
         }
-
         Self::try_from_chunks(chunk_nodes, chunk_roots, payload_len)
     }
-
     /// Builds a PoR tree from precomputed chunk subtrees and validates all canonical geometry and
     /// commitment relationships before publishing it.
     pub fn try_from_chunks(
@@ -3499,7 +3290,6 @@ impl PorMerkleTree {
             });
         }
         ensure_por_chunk_count(chunks.len())?;
-
         let mut expected_chunk_offset = 0u64;
         let mut total_segments = 0usize;
         let mut total_leaves = 0u64;
@@ -3526,7 +3316,6 @@ impl PorMerkleTree {
                     context: "PoR chunk payload coverage",
                 });
             }
-
             total_segments = total_segments.checked_add(chunk.segments.len()).ok_or(
                 ChunkStoreError::PorCountOverflow {
                     context: "PoR segment count",
@@ -3564,7 +3353,6 @@ impl PorMerkleTree {
                         context: "PoR leaf count",
                     },
                 )?;
-
                 let mut expected_leaf_offset = segment.offset;
                 let mut remaining_segment = expected_segment_len;
                 for leaf in &segment.leaves {
@@ -3671,44 +3459,37 @@ impl PorMerkleTree {
             leaf_count: total_leaves,
         })
     }
-
     /// Returns the root digest of the PoR tree.
     #[must_use]
     pub fn root(&self) -> &[u8; 32] {
         &self.root
     }
-
     /// Returns the chunk-level PoR subtrees.
     #[must_use]
     pub fn chunks(&self) -> &[PorChunkTree] {
         &self.chunks
     }
-
     /// Returns the total payload length represented by this tree.
     #[must_use]
     pub fn payload_len(&self) -> u64 {
         self.payload_len
     }
-
     /// Returns the authenticated total number of PoR leaves represented by this tree.
     #[must_use]
     pub fn leaf_count_u64(&self) -> u64 {
         self.leaf_count
     }
-
     /// Returns true if the tree is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.chunks.is_empty()
     }
-
     /// Returns the total number of PoR leaves tracked by this tree, rejecting host-width overflow.
     pub fn try_leaf_count(&self) -> Result<usize, ChunkStoreError> {
         usize::try_from(self.leaf_count).map_err(|_| ChunkStoreError::PorCountOverflow {
             context: "PoR leaf count host width",
         })
     }
-
     /// Returns the total number of PoR leaves tracked by this validated tree.
     ///
     /// Validated constructors prove this cannot overflow. `usize::MAX` is returned defensively if
@@ -3720,7 +3501,6 @@ impl PorMerkleTree {
             Err(_) => usize::MAX,
         }
     }
-
     /// Returns the total number of segments tracked by this tree, rejecting host-width overflow.
     pub fn try_segment_count(&self) -> Result<usize, ChunkStoreError> {
         self.chunks.iter().try_fold(0usize, |total, chunk| {
@@ -3731,7 +3511,6 @@ impl PorMerkleTree {
                 })
         })
     }
-
     /// Returns the total number of segments tracked by this validated tree.
     #[must_use]
     pub fn segment_count(&self) -> usize {
@@ -3740,7 +3519,6 @@ impl PorMerkleTree {
             Err(_) => usize::MAX,
         }
     }
-
     /// Returns the `(chunk, segment, leaf)` tuple for the provided flattened leaf index.
     #[must_use]
     pub fn leaf_path(&self, mut leaf_index: usize) -> Option<(usize, usize, usize)> {
@@ -3755,7 +3533,6 @@ impl PorMerkleTree {
         }
         None
     }
-
     /// Constructs a PoR proof for the specified chunk/segment/leaf tuple.
     pub fn try_prove_leaf(
         &self,
@@ -3767,7 +3544,6 @@ impl PorMerkleTree {
         let mut source = InMemoryPayload::new(payload);
         self.prove_leaf_with(chunk_index, segment_index, leaf_index, &mut source)
     }
-
     pub fn prove_leaf_with<P: PayloadSource>(
         &self,
         chunk_index: usize,
@@ -3783,7 +3559,6 @@ impl PorMerkleTree {
             DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES,
         )
     }
-
     fn prove_leaf_with_limit<P: PayloadSource>(
         &self,
         chunk_index: usize,
@@ -3825,7 +3600,6 @@ impl PorMerkleTree {
                 leaf_index,
             });
         }
-
         let mut segment_leaves = Vec::new();
         try_reserve_store(
             &mut segment_leaves,
@@ -3845,7 +3619,6 @@ impl PorMerkleTree {
             chunk_segments.push(entry.digest);
         }
         let chunk_merkle_path = self.chunk_merkle_path(chunk_index)?;
-
         Ok(Some(PorProof {
             payload_len: self.payload_len,
             chunk_count: u64::try_from(self.chunks.len()).map_err(|_| {
@@ -3874,7 +3647,6 @@ impl PorMerkleTree {
             chunk_merkle_path,
         }))
     }
-
     fn chunk_merkle_path(&self, chunk_index: usize) -> Result<Vec<[u8; 32]>, ChunkStoreError> {
         let depth = chunk_merkle_depth(self.chunks.len());
         let mut path = Vec::new();
@@ -3905,7 +3677,6 @@ impl PorMerkleTree {
         }
         Ok(path)
     }
-
     fn estimate_proof_heap(
         &self,
         chunk: &PorChunkTree,
@@ -3941,7 +3712,6 @@ impl PorMerkleTree {
         )?;
         Ok(estimated)
     }
-
     fn estimate_sample_heap(&self, target: usize) -> Result<usize, ChunkStoreError> {
         if target == 0 {
             return Ok(0);
@@ -3976,7 +3746,6 @@ impl PorMerkleTree {
         )?;
         Ok(estimated)
     }
-
     fn build_chunk_tree_from_bytes(
         chunk_index: usize,
         chunk_offset: u64,
@@ -3994,7 +3763,6 @@ impl PorMerkleTree {
                 context: "PoR chunk byte coverage",
             });
         }
-
         let segment_count = bytes.len().div_ceil(POR_SEGMENT_SIZE);
         let mut segments = Vec::new();
         try_reserve_store(&mut segments, segment_count, "PoR chunk segments")?;
@@ -4093,7 +3861,6 @@ impl PorMerkleTree {
             &chunk_digest,
             &segment_hashes,
         );
-
         Ok((
             PorChunkTree {
                 chunk_index,
@@ -4108,7 +3875,6 @@ impl PorMerkleTree {
         ))
     }
 }
-
 /// PoR metadata for a single chunk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PorChunkTree {
@@ -4119,7 +3885,6 @@ pub struct PorChunkTree {
     pub root: [u8; 32],
     pub segments: Vec<PorSegment>,
 }
-
 /// PoR metadata for a sampling segment (64 KiB target).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PorSegment {
@@ -4128,7 +3893,6 @@ pub struct PorSegment {
     pub digest: [u8; 32],
     pub leaves: Vec<PorLeaf>,
 }
-
 /// PoR metadata for a sampling leaf (4 KiB target).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PorLeaf {
@@ -4138,7 +3902,6 @@ pub struct PorLeaf {
     pub length: u32,
     pub digest: [u8; 32],
 }
-
 /// Proof-of-Retrievability witness for a single leaf.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PorProof {
@@ -4164,7 +3927,6 @@ pub struct PorProof {
     pub chunk_segments: Vec<[u8; 32]>,
     pub chunk_merkle_path: Vec<[u8; 32]>,
 }
-
 impl PorProof {
     fn reconstructed_root(&self) -> Option<[u8; 32]> {
         let chunk_count = usize::try_from(self.chunk_count).ok()?;
@@ -4206,7 +3968,6 @@ impl PorProof {
         )
         .ok()
     }
-
     /// Checks that every digest and geometry claim inside this witness agrees with the others.
     ///
     /// This is not an authenticity check: the root is reconstructed from the untrusted witness
@@ -4217,7 +3978,6 @@ impl PorProof {
         self.reconstructed_root()
             .is_some_and(|witness_root| self.verify(&witness_root))
     }
-
     /// Verifies the proof against the expected PoR root.
     #[must_use]
     pub fn verify(&self, expected_root: &[u8; 32]) -> bool {
@@ -4329,7 +4089,6 @@ impl PorProof {
         if recomputed_leaf != self.leaf_digest {
             return false;
         }
-
         let recomputed_segment = hash_segment(
             self.segment_offset,
             self.segment_length,
@@ -4338,7 +4097,6 @@ impl PorProof {
         if recomputed_segment != self.segment_digest {
             return false;
         }
-
         let chunk_index = match u64::try_from(self.chunk_index) {
             Ok(index) => index,
             Err(_) => return false,
@@ -4353,12 +4111,10 @@ impl PorProof {
         if recomputed_chunk != self.chunk_root {
             return false;
         }
-
         self.reconstructed_root()
             .is_some_and(|recomputed_root| &recomputed_root == expected_root)
     }
 }
-
 fn hash_leaf(flat_index: u64, offset: u64, bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Hasher::new();
     hasher.update(POR_LEAF_DOMAIN);
@@ -4368,7 +4124,6 @@ fn hash_leaf(flat_index: u64, offset: u64, bytes: &[u8]) -> [u8; 32] {
     hasher.update(bytes);
     hasher.finalize().into()
 }
-
 fn hash_segment(offset: u64, length: u32, leaves: &[[u8; 32]]) -> [u8; 32] {
     let mut hasher = Hasher::new();
     hasher.update(POR_SEGMENT_DOMAIN);
@@ -4380,7 +4135,6 @@ fn hash_segment(offset: u64, length: u32, leaves: &[[u8; 32]]) -> [u8; 32] {
     }
     hasher.finalize().into()
 }
-
 fn hash_segment_from_entries(segment: &PorSegment) -> Result<[u8; 32], ChunkStoreError> {
     let mut hasher = Hasher::new();
     hasher.update(POR_SEGMENT_DOMAIN);
@@ -4396,7 +4150,6 @@ fn hash_segment_from_entries(segment: &PorSegment) -> Result<[u8; 32], ChunkStor
     }
     Ok(hasher.finalize().into())
 }
-
 fn hash_chunk(
     index: u64,
     offset: u64,
@@ -4416,7 +4169,6 @@ fn hash_chunk(
     }
     hasher.finalize().into()
 }
-
 fn hash_chunk_from_entries(index: u64, chunk: &PorChunkTree) -> Result<[u8; 32], ChunkStoreError> {
     let mut hasher = Hasher::new();
     hasher.update(POR_CHUNK_DOMAIN);
@@ -4434,7 +4186,6 @@ fn hash_chunk_from_entries(index: u64, chunk: &PorChunkTree) -> Result<[u8; 32],
     }
     Ok(hasher.finalize().into())
 }
-
 fn chunk_merkle_depth(chunk_count: usize) -> usize {
     if chunk_count <= 1 {
         0
@@ -4442,7 +4193,6 @@ fn chunk_merkle_depth(chunk_count: usize) -> usize {
         usize::BITS as usize - (chunk_count - 1).leading_zeros() as usize
     }
 }
-
 fn hash_chunk_node(level: u32, parent_index: u64, left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     let mut hasher = Hasher::new();
     hasher.update(POR_CHUNK_NODE_DOMAIN);
@@ -4452,7 +4202,6 @@ fn hash_chunk_node(level: u32, parent_index: u64, left: &[u8; 32], right: &[u8; 
     hasher.update(right);
     hasher.finalize().into()
 }
-
 fn build_chunk_merkle_levels(
     chunk_roots: &[[u8; 32]],
 ) -> Result<Vec<Vec<[u8; 32]>>, ChunkStoreError> {
@@ -4504,7 +4253,6 @@ fn build_chunk_merkle_levels(
     }
     Ok(levels)
 }
-
 fn hash_root(
     total_len: u64,
     chunk_count: usize,
@@ -4543,7 +4291,6 @@ fn hash_root(
     hasher.update(chunk_tree_root);
     Ok(hasher.finalize().into())
 }
-
 /// Deterministic, allocation-bounded iterator over unique PoR sample indices.
 ///
 /// Each SplitMix64 candidate is reduced into the authenticated leaf population. Collisions use
@@ -4557,7 +4304,6 @@ pub struct PorSampleIndices {
     rng_state: u64,
     seen: HashSet<u64>,
 }
-
 impl PorSampleIndices {
     /// Build a deterministic sample schedule bounded by `min(count, leaf_count)`.
     pub fn new(leaf_count: u64, count: usize, seed: u64) -> Result<Self, ChunkStoreError> {
@@ -4583,17 +4329,14 @@ impl PorSampleIndices {
             seen,
         })
     }
-
     /// Return the exact number of indices this schedule will emit.
     #[must_use]
     pub fn sample_count(&self) -> usize {
         self.target
     }
 }
-
 impl Iterator for PorSampleIndices {
     type Item = u64;
-
     fn next(&mut self) -> Option<Self::Item> {
         if self.emitted == self.target || self.leaf_count == 0 {
             return None;
@@ -4610,15 +4353,12 @@ impl Iterator for PorSampleIndices {
         self.emitted += 1;
         Some(candidate)
     }
-
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = self.target - self.emitted;
         (remaining, Some(remaining))
     }
 }
-
 impl ExactSizeIterator for PorSampleIndices {}
-
 /// SplitMix64 round used by the canonical PoR sample schedule.
 #[must_use]
 pub fn splitmix64(mut state: u64) -> u64 {
@@ -4628,14 +4368,12 @@ pub fn splitmix64(mut state: u64) -> u64 {
     z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
     z ^ (z >> 31)
 }
-
 /// Summary produced by [`ingest_single_file`], combining chunk metadata and a CAR plan.
 #[derive(Debug, Clone)]
 pub struct IngestSummary {
     pub chunk_store: ChunkStore,
     pub plan: CarBuildPlan,
 }
-
 /// Failure while deriving and ingesting a single-file CAR plan.
 #[derive(Debug, Error)]
 pub enum IngestSingleFileError {
@@ -4646,7 +4384,6 @@ pub enum IngestSingleFileError {
     #[error(transparent)]
     Store(#[from] ChunkStoreError),
 }
-
 /// Ingests a single payload using the default registry profile and derives a CAR plan.
 pub fn ingest_single_file(bytes: &[u8]) -> Result<IngestSummary, IngestSingleFileError> {
     let plan = CarBuildPlan::single_file(bytes)?;
@@ -4654,14 +4391,12 @@ pub fn ingest_single_file(bytes: &[u8]) -> Result<IngestSummary, IngestSingleFil
     chunk_store.ingest_bytes(bytes)?;
     Ok(IngestSummary { chunk_store, plan })
 }
-
 /// CARv2 writer that produces spec-compliant archives.
 pub struct CarWriter<'a> {
     plan: &'a CarBuildPlan,
     payload: &'a [u8],
     expected_roots: Option<Vec<Vec<u8>>>,
 }
-
 impl<'a> CarWriter<'a> {
     /// Creates a new writer for the provided plan and payload.
     pub fn new(plan: &'a CarBuildPlan, payload: &'a [u8]) -> Result<Self, CarWriteError> {
@@ -4682,7 +4417,6 @@ impl<'a> CarWriter<'a> {
             expected_roots: None,
         })
     }
-
     /// Sets an expected root list that must match the computed CAR roots.
     pub fn with_expected_roots(
         plan: &'a CarBuildPlan,
@@ -4693,7 +4427,6 @@ impl<'a> CarWriter<'a> {
         writer.expected_roots = Some(roots);
         Ok(writer)
     }
-
     /// Writes a CARv2 container (pragma + header + CARv1 payload + optional
     /// MultihashIndexSorted index) to the provided writer.
     pub fn write_to<W: Write>(&self, mut writer: W) -> Result<CarWriteStats, CarWriteError> {
@@ -4725,20 +4458,17 @@ impl<'a> CarWriter<'a> {
             },
         )
     }
-
     /// Returns the plan used by this writer.
     #[must_use]
     pub fn plan(&self) -> &CarBuildPlan {
         self.plan
     }
 }
-
 /// Streaming CAR writer that reads chunk bytes from an arbitrary reader.
 pub struct CarStreamingWriter<'a> {
     plan: &'a CarBuildPlan,
     expected_roots: Option<Vec<Vec<u8>>>,
 }
-
 impl<'a> CarStreamingWriter<'a> {
     /// Creates a new streaming writer for the provided plan.
     #[must_use]
@@ -4748,7 +4478,6 @@ impl<'a> CarStreamingWriter<'a> {
             expected_roots: None,
         }
     }
-
     /// Same as [`Self::new`] but enforces an expected root list.
     #[must_use]
     pub fn with_expected_roots(plan: &'a CarBuildPlan, roots: Vec<Vec<u8>>) -> Self {
@@ -4757,7 +4486,6 @@ impl<'a> CarStreamingWriter<'a> {
             expected_roots: Some(roots),
         }
     }
-
     /// Streams bytes from `reader`, emitting a CARv2 container to `writer`.
     pub fn write_from_reader<W: Write, R: Read>(
         &self,
@@ -4794,14 +4522,12 @@ impl<'a> CarStreamingWriter<'a> {
             },
         )
     }
-
     /// Returns the plan associated with this writer.
     #[must_use]
     pub fn plan(&self) -> &CarBuildPlan {
         self.plan
     }
 }
-
 /// Summary statistics returned by the writer once implemented.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CarWriteStats {
@@ -4817,7 +4543,6 @@ pub struct CarWriteStats {
     pub dag_codec: u64,
     pub chunk_profile: ChunkProfile,
 }
-
 fn write_buffer<W: Write>(
     writer: &mut W,
     file_hasher: &mut blake3::Hasher,
@@ -4831,11 +4556,9 @@ fn write_buffer<W: Write>(
     }
     car_usize_to_u64(buf.len(), "written CAR byte count")
 }
-
 const PRAGMA: [u8; 11] = [
     0x0a, 0xa1, 0x67, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x02,
 ];
-
 const HEADER_LEN: usize = 40;
 const RAW_CODEC: u64 = 0x55;
 const DAG_CBOR_CODEC: u64 = 0x71;
@@ -4845,7 +4568,6 @@ const DAG_NODE_VERSION: u64 = 1;
 const LEAF_NODE_TYPE: &str = "sorafs.file.leaf.v1";
 const BRANCH_NODE_TYPE: &str = "sorafs.file.branch.v1";
 const DIR_NODE_TYPE: &str = "sorafs.dir.node.v1";
-
 struct CarLayout {
     header_bytes: [u8; 40],
     carv1_header_prefix: Vec<u8>,
@@ -4854,7 +4576,6 @@ struct CarLayout {
     index_bytes: Option<Vec<u8>>,
     root_cids: Vec<Vec<u8>>,
 }
-
 struct CarSection {
     length_varint: Vec<u8>,
     cid_bytes: Vec<u8>,
@@ -4862,12 +4583,10 @@ struct CarSection {
     digest: [u8; 32],
     offset: u64,
 }
-
 enum SectionData {
     Chunk { chunk_index: usize },
     Node(Vec<u8>),
 }
-
 impl CarSection {
     fn data_len(&self, plan: &CarBuildPlan) -> Result<usize, CarWriteError> {
         match &self.data {
@@ -4882,12 +4601,10 @@ impl CarSection {
         }
     }
 }
-
 struct ChunkRef<'a> {
     cid: &'a [u8],
     length: u32,
 }
-
 #[derive(Clone)]
 struct TreeNode {
     cid_bytes: Vec<u8>,
@@ -4895,46 +4612,38 @@ struct TreeNode {
     digest: [u8; 32],
     size: u64,
 }
-
 struct FileDag {
     nodes: Vec<TreeNode>,
     root_index: usize,
 }
-
 struct FileRootInfo<'a> {
     path: &'a [String],
     cid: Vec<u8>,
     size: u64,
 }
-
 struct DirectoryDag {
     nodes: Vec<TreeNode>,
     root_cid: Vec<u8>,
 }
-
 #[derive(Default)]
 struct DirectoryBuilderNode<'a> {
     entries: BTreeMap<&'a str, DirectoryBuilderEntry<'a>>,
 }
-
 enum DirectoryBuilderEntry<'a> {
     File(DirectoryFile),
     Directory(Box<DirectoryBuilderNode<'a>>),
 }
-
 #[derive(Clone)]
 struct DirectoryFile {
     cid: Vec<u8>,
     size: u64,
 }
-
 struct DirectoryEntry<'a> {
     name: &'a str,
     cid: Vec<u8>,
     kind: DirectoryEntryKind,
     size: u64,
 }
-
 fn try_reserve_car<T>(
     values: &mut Vec<T>,
     additional: usize,
@@ -4947,7 +4656,6 @@ fn try_reserve_car<T>(
             requested: additional,
         })
 }
-
 fn checked_car_usize_add(
     left: usize,
     right: usize,
@@ -4956,7 +4664,6 @@ fn checked_car_usize_add(
     left.checked_add(right)
         .ok_or(CarWriteError::ArithmeticOverflow { context })
 }
-
 fn checked_car_usize_mul(
     left: usize,
     right: usize,
@@ -4965,23 +4672,19 @@ fn checked_car_usize_mul(
     left.checked_mul(right)
         .ok_or(CarWriteError::ArithmeticOverflow { context })
 }
-
 fn checked_car_u64_add(left: u64, right: u64, context: &'static str) -> Result<u64, CarWriteError> {
     left.checked_add(right)
         .ok_or(CarWriteError::ArithmeticOverflow { context })
 }
-
 fn car_usize_to_u64(value: usize, context: &'static str) -> Result<u64, CarWriteError> {
     u64::try_from(value).map_err(|_| CarWriteError::ArithmeticOverflow { context })
 }
-
 fn try_clone_car_bytes(bytes: &[u8], context: &'static str) -> Result<Vec<u8>, CarWriteError> {
     let mut clone = Vec::new();
     try_reserve_car(&mut clone, bytes.len(), context)?;
     clone.extend_from_slice(bytes);
     Ok(clone)
 }
-
 fn try_clone_car_byte_vectors(
     values: &[Vec<u8>],
     context: &'static str,
@@ -4993,12 +4696,10 @@ fn try_clone_car_byte_vectors(
     }
     Ok(clone)
 }
-
 #[cfg(unix)]
 fn format_path(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
-
 #[cfg(unix)]
 fn directory_plan_io(path: &Path, source: io::Error) -> CarPlanError {
     CarPlanError::DirectoryIo {
@@ -5006,7 +4707,6 @@ fn directory_plan_io(path: &Path, source: io::Error) -> CarPlanError {
         source,
     }
 }
-
 fn try_reserve_plan<T>(
     values: &mut Vec<T>,
     additional: usize,
@@ -5019,7 +4719,6 @@ fn try_reserve_plan<T>(
             requested: additional,
         })
 }
-
 fn try_owned_plan_string(value: &str, context: &'static str) -> Result<String, CarPlanError> {
     let mut owned = String::new();
     owned
@@ -5031,7 +4730,6 @@ fn try_owned_plan_string(value: &str, context: &'static str) -> Result<String, C
     owned.push_str(value);
     Ok(owned)
 }
-
 fn try_clone_logical_path(path: &[String]) -> Result<Vec<String>, CarPlanError> {
     let mut clone = Vec::new();
     try_reserve_plan(&mut clone, path.len(), "logical file path")?;
@@ -5040,7 +4738,6 @@ fn try_clone_logical_path(path: &[String]) -> Result<Vec<String>, CarPlanError> 
     }
     Ok(clone)
 }
-
 fn try_clone_taikai_hint(hint: &TaikaiSegmentHint) -> Result<TaikaiSegmentHint, CarPlanError> {
     Ok(TaikaiSegmentHint {
         event: try_owned_plan_string(&hint.event, "Taikai event hint")?,
@@ -5051,13 +4748,11 @@ fn try_clone_taikai_hint(hint: &TaikaiSegmentHint) -> Result<TaikaiSegmentHint, 
         payload_digest: hint.payload_digest,
     })
 }
-
 fn checked_plan_payload_add(total: usize, additional: usize) -> Result<usize, CarPlanError> {
     total
         .checked_add(additional)
         .ok_or(CarPlanError::ContentLengthTooLarge)
 }
-
 fn ensure_plan_file_count(count: usize) -> Result<(), CarPlanError> {
     if count > CAR_PLAN_MAX_FILES {
         return Err(CarPlanError::TooManyFiles {
@@ -5067,7 +4762,6 @@ fn ensure_plan_file_count(count: usize) -> Result<(), CarPlanError> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 struct SecureDirectoryScan {
     canonical_root: PathBuf,
@@ -5076,7 +4770,6 @@ struct SecureDirectoryScan {
     entry_count: usize,
     total_bytes: u64,
 }
-
 #[cfg(unix)]
 impl SecureDirectoryScan {
     fn validate_root(&self) -> Result<(), CarPlanError> {
@@ -5093,7 +4786,6 @@ impl SecureDirectoryScan {
         }
         Ok(())
     }
-
     fn scan(
         &mut self,
         current: &Path,
@@ -5108,7 +4800,6 @@ impl SecureDirectoryScan {
         if before.file_type().is_symlink() || !before.is_dir() {
             return Err(CarPlanError::InvalidPath(format_path(current)));
         }
-
         let read_dir = fs::read_dir(current).map_err(|error| directory_plan_io(current, error))?;
         let mut entries = Vec::new();
         for entry in read_dir {
@@ -5130,7 +4821,6 @@ impl SecureDirectoryScan {
             entries.push(entry);
         }
         entries.sort_by_key(|entry| entry.file_name());
-
         for entry in entries {
             let path = entry.path();
             let name = entry.file_name();
@@ -5161,7 +4851,6 @@ impl SecureDirectoryScan {
                     path.display()
                 )));
             }
-
             let file_type = entry
                 .file_type()
                 .map_err(|error| directory_plan_io(&path, error))?;
@@ -5176,7 +4865,6 @@ impl SecureDirectoryScan {
             if linked.file_type().is_symlink() {
                 return Err(CarPlanError::InvalidPath(format_path(&path)));
             }
-
             try_reserve_plan(logical_path, 1, "directory logical path")?;
             logical_path.push(try_owned_plan_string(name, "directory path component")?);
             let result = if file_type.is_dir() && linked.is_dir() {
@@ -5192,7 +4880,6 @@ impl SecureDirectoryScan {
             logical_path.pop();
             result?;
         }
-
         let after =
             fs::symlink_metadata(current).map_err(|error| directory_plan_io(current, error))?;
         if !metadata_snapshot_matches(&before, &after) {
@@ -5203,7 +4890,6 @@ impl SecureDirectoryScan {
         }
         self.validate_root()
     }
-
     fn read_file(
         &mut self,
         path: &Path,
@@ -5243,7 +4929,6 @@ impl SecureDirectoryScan {
                 maximum: CAR_EAGER_DIRECTORY_MAX_BYTES,
             });
         }
-
         let mut file =
             open_confined_payload_file(&self.canonical_root, path, linked.len(), Some(linked))
                 .map_err(|error| directory_plan_io(path, error))?;
@@ -5251,7 +4936,6 @@ impl SecureDirectoryScan {
             .metadata()
             .map_err(|error| directory_plan_io(path, error))?;
         on_file_opened(path).map_err(|error| directory_plan_io(path, error))?;
-
         let byte_count =
             usize::try_from(linked.len()).map_err(|_| CarPlanError::ContentLengthTooLarge)?;
         let mut data = Vec::new();
@@ -5273,7 +4957,6 @@ impl SecureDirectoryScan {
         validate_payload_file_handle(path, &file, linked.len(), Some(&opened))
             .map_err(|error| directory_plan_io(path, error))?;
         self.validate_root()?;
-
         try_reserve_plan(&mut self.files, 1, "directory file inventory")?;
         self.files.push(FileEntry {
             path: try_clone_logical_path(logical_path)?,
@@ -5283,7 +4966,6 @@ impl SecureDirectoryScan {
         Ok(())
     }
 }
-
 #[cfg(unix)]
 fn gather_files_secure(
     root: &Path,
@@ -5319,7 +5001,6 @@ fn gather_files_secure(
     scan.validate_root()?;
     Ok(scan.files)
 }
-
 #[cfg(not(unix))]
 fn gather_files_secure(
     _root: &Path,
@@ -5327,7 +5008,6 @@ fn gather_files_secure(
 ) -> Result<Vec<FileEntry>, CarPlanError> {
     Err(CarPlanError::SecureDirectoryUnsupported)
 }
-
 const fn require_secure_directory_platform() -> Result<(), CarPlanError> {
     #[cfg(unix)]
     {
@@ -5338,13 +5018,11 @@ const fn require_secure_directory_platform() -> Result<(), CarPlanError> {
         Err(CarPlanError::SecureDirectoryUnsupported)
     }
 }
-
 #[derive(Debug, Clone, Copy)]
 enum DirectoryEntryKind {
     File,
     Directory,
 }
-
 impl CarLayout {
     fn new(plan: &CarBuildPlan) -> Result<Self, CarWriteError> {
         plan.validate()?;
@@ -5361,7 +5039,6 @@ impl CarLayout {
         )?;
         let mut file_nodes = Vec::new();
         try_reserve_car(&mut file_nodes, plan.files.len(), "file DAG inventory")?;
-
         for file in &plan.files {
             let start = file.first_chunk;
             let end = checked_car_usize_add(start, file.chunk_count, "file chunk range")?;
@@ -5399,7 +5076,6 @@ impl CarLayout {
             });
             file_nodes.push(file_dag.nodes);
         }
-
         let needs_directory =
             plan.files.len() != 1 || plan.files.first().is_none_or(|file| !file.path.is_empty());
         let directory = if needs_directory {
@@ -5407,7 +5083,6 @@ impl CarLayout {
         } else {
             None
         };
-
         let root_cid = if let Some(dir) = &directory {
             try_clone_car_bytes(&dir.root_cid, "directory root CID")?
         } else {
@@ -5419,7 +5094,6 @@ impl CarLayout {
         let mut root_cids = Vec::new();
         try_reserve_car(&mut root_cids, 1, "CAR root list")?;
         root_cids.push(root_cid);
-
         let carv1_header_bytes = encode_carv1_header(&root_cids)?;
         let carv1_header_prefix = encode_uleb128_vec(car_usize_to_u64(
             carv1_header_bytes.len(),
@@ -5431,7 +5105,6 @@ impl CarLayout {
             "CARv1 framed header length",
         )?;
         let header_len = car_usize_to_u64(header_len_usize, "CARv1 framed header length")?;
-
         let mut section_count = plan.chunks.len();
         for nodes in &file_nodes {
             section_count =
@@ -5446,7 +5119,6 @@ impl CarLayout {
         }
         let mut sections = Vec::new();
         try_reserve_car(&mut sections, section_count, "CAR sections")?;
-
         for (idx, chunk) in plan.chunks.iter().enumerate() {
             let cid = chunk_cids.get(idx).ok_or(CarWriteError::DagInvariant {
                 context: "chunk section CID",
@@ -5467,7 +5139,6 @@ impl CarLayout {
                 offset: 0,
             });
         }
-
         for nodes in file_nodes {
             for node in nodes {
                 let section_length = checked_car_usize_add(
@@ -5488,7 +5159,6 @@ impl CarLayout {
                 });
             }
         }
-
         if let Some(mut dir) = directory {
             for node in dir.nodes.drain(..) {
                 let section_length = checked_car_usize_add(
@@ -5509,7 +5179,6 @@ impl CarLayout {
                 });
             }
         }
-
         let mut payload_len = header_len;
         let mut section_offset = header_len;
         for section in sections.iter_mut() {
@@ -5529,14 +5198,12 @@ impl CarLayout {
                 checked_car_u64_add(section_offset, section_size, "CAR section offset")?;
             payload_len = checked_car_u64_add(payload_len, section_size, "CAR payload length")?;
         }
-
         let data_offset = checked_car_u64_add(
             car_usize_to_u64(PRAGMA.len(), "CAR data offset")?,
             car_usize_to_u64(HEADER_LEN, "CAR data offset")?,
             "CAR data offset",
         )?;
         let mut characteristics = [0u8; 16];
-
         let index_bytes = build_index(&sections)?;
         let index_offset = if index_bytes.is_some() {
             characteristics[0] |= 0x80;
@@ -5555,13 +5222,11 @@ impl CarLayout {
                 "CAR archive length",
             )?;
         }
-
         let mut header_bytes = [0u8; HEADER_LEN];
         header_bytes[..16].copy_from_slice(&characteristics);
         header_bytes[16..24].copy_from_slice(&data_offset.to_le_bytes());
         header_bytes[24..32].copy_from_slice(&payload_len.to_le_bytes());
         header_bytes[32..40].copy_from_slice(&index_offset.unwrap_or(0).to_le_bytes());
-
         Ok(Self {
             header_bytes,
             carv1_header_prefix,
@@ -5571,7 +5236,6 @@ impl CarLayout {
             root_cids,
         })
     }
-
     fn write_car<W, F>(
         &self,
         plan: &CarBuildPlan,
@@ -5585,7 +5249,6 @@ impl CarLayout {
         let mut file_hasher = Hasher::new();
         let mut payload_hasher = Hasher::new();
         let mut total_written = 0u64;
-
         total_written = checked_car_u64_add(
             total_written,
             write_buffer(writer, &mut file_hasher, None, &PRAGMA)?,
@@ -5634,13 +5297,11 @@ impl CarLayout {
                 "CAR archive write length",
             )?;
         }
-
         let car_archive_digest = file_hasher.finalize();
         let car_payload_digest = payload_hasher.finalize();
         let mut digest_arr = [0u8; 32];
         digest_arr.copy_from_slice(car_archive_digest.as_bytes());
         let car_cid = encode_cid(RAW_CODEC, &digest_arr);
-
         Ok(CarWriteStats {
             payload_bytes: plan.content_length,
             chunk_count: plan.chunks.len(),
@@ -5653,7 +5314,6 @@ impl CarLayout {
             chunk_profile: plan.chunk_profile,
         })
     }
-
     fn write_sections<W, F>(
         &self,
         plan: &CarBuildPlan,
@@ -5714,7 +5374,6 @@ impl CarLayout {
         Ok(written)
     }
 }
-
 fn build_file_dag(chunks: &[ChunkRef<'_>], expected_size: u64) -> Result<FileDag, CarWriteError> {
     let leaf_count = chunks.len().div_ceil(MAX_FANOUT).max(1);
     let mut node_count = leaf_count;
@@ -5727,19 +5386,16 @@ fn build_file_dag(chunks: &[ChunkRef<'_>], expected_size: u64) -> Result<FileDag
     try_reserve_car(&mut nodes, node_count, "file DAG nodes")?;
     let mut current_indices: Vec<usize> = Vec::new();
     try_reserve_car(&mut current_indices, leaf_count, "file DAG leaf indices")?;
-
     for group in chunks.chunks(MAX_FANOUT) {
         let node = build_leaf_node(group)?;
         nodes.push(node);
         current_indices.push(nodes.len() - 1);
     }
-
     if current_indices.is_empty() {
         let node = build_leaf_node(&[])?;
         nodes.push(node);
         current_indices.push(nodes.len() - 1);
     }
-
     while current_indices.len() > 1 {
         let next_count = div_ceil_usize(current_indices.len(), MAX_FANOUT);
         let mut next_indices = Vec::new();
@@ -5758,7 +5414,6 @@ fn build_file_dag(chunks: &[ChunkRef<'_>], expected_size: u64) -> Result<FileDag
         }
         current_indices = next_indices;
     }
-
     let root_index = current_indices
         .first()
         .copied()
@@ -5776,10 +5431,8 @@ fn build_file_dag(chunks: &[ChunkRef<'_>], expected_size: u64) -> Result<FileDag
             context: "file DAG payload size",
         });
     }
-
     Ok(FileDag { nodes, root_index })
 }
-
 fn build_leaf_node(group: &[ChunkRef<'_>]) -> Result<TreeNode, CarWriteError> {
     let mut total_size = 0u64;
     let mut buffer_capacity = 128usize;
@@ -5820,7 +5473,6 @@ fn build_leaf_node(group: &[ChunkRef<'_>]) -> Result<TreeNode, CarWriteError> {
     encode_cbor_text(&mut buf, LEAF_NODE_TYPE);
     encode_cbor_text(&mut buf, "version");
     encode_cbor_uint(&mut buf, DAG_NODE_VERSION);
-
     let digest: [u8; 32] = blake3::hash(&buf).into();
     let cid_bytes = encode_cid(DAG_CBOR_CODEC, &digest);
     Ok(TreeNode {
@@ -5830,7 +5482,6 @@ fn build_leaf_node(group: &[ChunkRef<'_>]) -> Result<TreeNode, CarWriteError> {
         size: total_size,
     })
 }
-
 fn build_branch_node(group: &[&TreeNode]) -> Result<TreeNode, CarWriteError> {
     let mut total_size = 0u64;
     let mut buffer_capacity = 128usize;
@@ -5867,7 +5518,6 @@ fn build_branch_node(group: &[&TreeNode]) -> Result<TreeNode, CarWriteError> {
     encode_cbor_text(&mut buf, BRANCH_NODE_TYPE);
     encode_cbor_text(&mut buf, "version");
     encode_cbor_uint(&mut buf, DAG_NODE_VERSION);
-
     let digest: [u8; 32] = blake3::hash(&buf).into();
     let cid_bytes = encode_cid(DAG_CBOR_CODEC, &digest);
     Ok(TreeNode {
@@ -5877,7 +5527,6 @@ fn build_branch_node(group: &[&TreeNode]) -> Result<TreeNode, CarWriteError> {
         size: total_size,
     })
 }
-
 fn build_directory_dag(files: &[FileRootInfo<'_>]) -> Result<DirectoryDag, CarWriteError> {
     let mut directory_node_bound = 1usize;
     for file in files {
@@ -5889,7 +5538,6 @@ fn build_directory_dag(files: &[FileRootInfo<'_>]) -> Result<DirectoryDag, CarWr
     }
     let mut nodes = Vec::new();
     try_reserve_car(&mut nodes, directory_node_bound, "directory DAG nodes")?;
-
     let mut root = DirectoryBuilderNode::default();
     for file in files {
         insert_directory_entry(
@@ -5901,12 +5549,9 @@ fn build_directory_dag(files: &[FileRootInfo<'_>]) -> Result<DirectoryDag, CarWr
             },
         )?;
     }
-
     let (root_cid, _) = materialize_directory_nodes(&root, &mut nodes)?;
-
     Ok(DirectoryDag { nodes, root_cid })
 }
-
 fn insert_directory_entry<'a>(
     node: &mut DirectoryBuilderNode<'a>,
     path: &'a [String],
@@ -5932,7 +5577,6 @@ fn insert_directory_entry<'a>(
         }
     }
 }
-
 fn materialize_directory_nodes<'a>(
     node: &DirectoryBuilderNode<'a>,
     nodes: &mut Vec<TreeNode>,
@@ -5940,7 +5584,6 @@ fn materialize_directory_nodes<'a>(
     let mut entries = Vec::new();
     try_reserve_car(&mut entries, node.entries.len(), "directory node entries")?;
     let mut total_size = 0u64;
-
     for (name, entry) in node.entries.iter() {
         match entry {
             DirectoryBuilderEntry::File(file) => {
@@ -5966,13 +5609,11 @@ fn materialize_directory_nodes<'a>(
             }
         }
     }
-
     let dir_node = build_directory_node(&entries, total_size)?;
     let cid = try_clone_car_bytes(&dir_node.cid_bytes, "materialized directory CID")?;
     nodes.push(dir_node);
     Ok((cid, total_size))
 }
-
 fn build_directory_node(
     entries: &[DirectoryEntry<'_>],
     size: u64,
@@ -6025,7 +5666,6 @@ fn build_directory_node(
     encode_cbor_text(&mut buf, DIR_NODE_TYPE);
     encode_cbor_text(&mut buf, "version");
     encode_cbor_uint(&mut buf, DAG_NODE_VERSION);
-
     let digest: [u8; 32] = blake3::hash(&buf).into();
     let cid_bytes = encode_cid(DAG_CBOR_CODEC, &digest);
     Ok(TreeNode {
@@ -6035,7 +5675,6 @@ fn build_directory_node(
         size,
     })
 }
-
 fn encode_carv1_header(roots: &[Vec<u8>]) -> Result<Vec<u8>, CarWriteError> {
     let mut capacity = 64usize;
     for root in roots {
@@ -6056,33 +5695,26 @@ fn encode_carv1_header(roots: &[Vec<u8>]) -> Result<Vec<u8>, CarWriteError> {
     buf.push(0x01);
     Ok(buf)
 }
-
 fn encode_cbor_text(buf: &mut Vec<u8>, text: &str) {
     encode_cbor_bytestring(buf, text.as_bytes(), true);
 }
-
 fn encode_cbor_bytes(buf: &mut Vec<u8>, len: u64) {
     encode_cbor_major(buf, 2, len);
 }
-
 fn encode_cbor_array(buf: &mut Vec<u8>, len: u64) {
     encode_cbor_major(buf, 4, len);
 }
-
 fn encode_cbor_map(buf: &mut Vec<u8>, len: u64) {
     encode_cbor_major(buf, 5, len);
 }
-
 fn encode_cbor_uint(buf: &mut Vec<u8>, value: u64) {
     encode_cbor_major(buf, 0, value);
 }
-
 fn encode_cbor_bytestring(buf: &mut Vec<u8>, bytes: &[u8], text: bool) {
     let major = if text { 3 } else { 2 };
     encode_cbor_major(buf, major, bytes.len() as u64);
     buf.extend_from_slice(bytes);
 }
-
 fn encode_cbor_major(buf: &mut Vec<u8>, major: u8, len: u64) {
     if len < 24 {
         buf.push((major << 5) | len as u8);
@@ -6100,7 +5732,6 @@ fn encode_cbor_major(buf: &mut Vec<u8>, major: u8, len: u64) {
         buf.extend_from_slice(&len.to_be_bytes());
     }
 }
-
 fn encode_cid(codec: u64, digest: &[u8; 32]) -> Vec<u8> {
     // CIDv1 + two worst-case u64 varints + one-byte fixed BLAKE3-256 length + digest. The
     // production codecs currently use one-byte varints, but the fixed 54-byte bound keeps this
@@ -6114,13 +5745,11 @@ fn encode_cid(codec: u64, digest: &[u8; 32]) -> Vec<u8> {
     cid.extend_from_slice(digest);
     cid
 }
-
 fn encode_uleb128_vec(value: u64) -> Vec<u8> {
     let mut buf = Vec::new();
     encode_uleb128(value, &mut buf);
     buf
 }
-
 fn encode_uleb128(mut value: u64, buf: &mut Vec<u8>) {
     loop {
         let mut byte = (value & 0x7F) as u8;
@@ -6134,11 +5763,9 @@ fn encode_uleb128(mut value: u64, buf: &mut Vec<u8>) {
         }
     }
 }
-
 fn div_ceil_usize(value: usize, divisor: usize) -> usize {
     value.div_ceil(divisor)
 }
-
 fn build_index(sections: &[CarSection]) -> Result<Option<Vec<u8>>, CarWriteError> {
     if sections.is_empty() {
         return Ok(None);
@@ -6149,7 +5776,6 @@ fn build_index(sections: &[CarSection]) -> Result<Option<Vec<u8>>, CarWriteError
         entries.push((section.digest, section.offset));
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
-
     let entries_capacity = checked_car_usize_mul(entries.len(), 40, "CAR index capacity")?;
     let capacity = checked_car_usize_add(64, entries_capacity, "CAR index capacity")?;
     let mut buf = Vec::new();
@@ -6164,7 +5790,6 @@ fn build_index(sections: &[CarSection]) -> Result<Option<Vec<u8>>, CarWriteError
     }
     Ok(Some(buf))
 }
-
 fn validate_car_plan(plan: &CarBuildPlan) -> Result<CarPlanValidation, CarPlanValidationError> {
     plan.chunk_profile.validate()?;
     if plan.chunk_profile.max_size > CHUNK_STORE_MAX_CHUNK_BYTES as usize {
@@ -6200,7 +5825,6 @@ fn validate_car_plan(plan: &CarBuildPlan) -> Result<CarPlanValidation, CarPlanVa
     } else if plan.chunks.is_empty() {
         return Err(CarPlanValidationError::MissingChunks);
     }
-
     let profile_limit = u32::try_from(plan.chunk_profile.max_size).map_err(|_| {
         CarPlanValidationError::ChunkProfileTooLarge {
             max_size: plan.chunk_profile.max_size,
@@ -6257,7 +5881,6 @@ fn validate_car_plan(plan: &CarBuildPlan) -> Result<CarPlanValidation, CarPlanVa
             actual: expected_offset,
         });
     }
-
     let mut expected_file_offset = 0u64;
     let mut expected_first_chunk = 0usize;
     let mut previous_path: Option<&[String]> = None;
@@ -6330,7 +5953,6 @@ fn validate_car_plan(plan: &CarBuildPlan) -> Result<CarPlanValidation, CarPlanVa
             }
         }
         previous_path = Some(&file.path);
-
         if file.first_chunk != expected_first_chunk {
             return Err(CarPlanValidationError::NonCanonicalFileChunkStart {
                 file_index,
@@ -6413,7 +6035,6 @@ fn validate_car_plan(plan: &CarBuildPlan) -> Result<CarPlanValidation, CarPlanVa
             actual: expected_file_offset,
         });
     }
-
     let mut estimated_ingest_heap_bytes = max_chunk_len;
     checked_estimate_add_product(
         &mut estimated_ingest_heap_bytes,
@@ -6479,13 +6100,11 @@ fn validate_car_plan(plan: &CarBuildPlan) -> Result<CarPlanValidation, CarPlanVa
             context: "host allocation limit",
         });
     }
-
     Ok(CarPlanValidation {
         max_chunk_len,
         estimated_ingest_heap_bytes,
     })
 }
-
 fn checked_estimate_add_product(
     total: &mut usize,
     count: usize,
@@ -6503,7 +6122,6 @@ fn checked_estimate_add_product(
         .ok_or(CarPlanValidationError::EstimateOverflow { context })?;
     Ok(())
 }
-
 fn estimate_direct_chunk_store_heap(
     payload_len: usize,
     profile: ChunkProfile,
@@ -6601,7 +6219,6 @@ fn estimate_direct_chunk_store_heap(
     }
     Ok(total)
 }
-
 fn is_portable_normal_component(component: &str) -> bool {
     if component.is_empty()
         || component == "."
@@ -6637,7 +6254,6 @@ fn is_portable_normal_component(component: &str) -> bool {
     }
     true
 }
-
 fn append_file_chunks(
     profile: ChunkProfile,
     data: &[u8],
@@ -6672,7 +6288,6 @@ fn append_file_chunks(
             maximum: maximum_chunks,
         });
     }
-
     for boundary in boundaries {
         let end =
             boundary
@@ -6716,7 +6331,6 @@ fn append_file_chunks(
     }
     Ok(())
 }
-
 impl CarBuildPlan {
     /// Validate the complete chunk/file plan and return checked allocation geometry.
     ///
@@ -6726,12 +6340,10 @@ impl CarBuildPlan {
     pub fn validate(&self) -> Result<CarPlanValidation, CarPlanValidationError> {
         validate_car_plan(self)
     }
-
     /// Validate this plan for chunk-store ingestion using the production default heap limit.
     pub fn validate_for_ingest(&self) -> Result<CarPlanValidation, ChunkStoreError> {
         self.validate_for_ingest_with_limit(DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES)
     }
-
     /// Validate this plan for chunk-store ingestion under an explicit heap estimate limit.
     pub fn validate_for_ingest_with_limit(
         &self,
@@ -6746,13 +6358,11 @@ impl CarBuildPlan {
         }
         Ok(validation)
     }
-
     /// Creates a CAR plan by chunking the provided payload with the SoraFS SF-1
     /// profile. Returns `CarPlanError::EmptyInput` if the payload is empty.
     pub fn single_file(payload: &[u8]) -> Result<Self, CarPlanError> {
         Self::single_file_with_profile(payload, ChunkProfile::DEFAULT)
     }
-
     /// Same as [`single_file`] but uses a custom chunking profile.
     pub fn single_file_with_profile(
         payload: &[u8],
@@ -6797,7 +6407,6 @@ impl CarBuildPlan {
         plan.validate()?;
         Ok(plan)
     }
-
     /// Builds a CAR plan for every regular file under `root`, preserving
     /// lexicographic order and returning the concatenated payload.
     ///
@@ -6811,7 +6420,6 @@ impl CarBuildPlan {
     pub fn from_directory(root: &Path) -> Result<(Self, Vec<u8>), CarPlanError> {
         Self::from_directory_with_profile(root, ChunkProfile::DEFAULT)
     }
-
     /// Same as [`from_directory`] but uses a custom chunking profile.
     ///
     /// # Errors
@@ -6832,7 +6440,6 @@ impl CarBuildPlan {
         }
         Self::from_files_with_profile(files, profile)
     }
-
     /// Builds a CAR plan for multiple files, returning the plan alongside the
     /// concatenated payload bytes that must be passed to [`CarWriter`]. The
     /// files are addressed by their UTF-8 path components (relative to the
@@ -6843,7 +6450,6 @@ impl CarBuildPlan {
     pub fn from_files(files: Vec<FileEntry>) -> Result<(Self, Vec<u8>), CarPlanError> {
         Self::from_files_with_profile(files, ChunkProfile::DEFAULT)
     }
-
     pub fn from_files_with_profile(
         mut files: Vec<FileEntry>,
         profile: ChunkProfile,
@@ -6853,7 +6459,6 @@ impl CarBuildPlan {
         }
         ensure_plan_file_count(files.len())?;
         ensure_car_plan_profile(profile)?;
-
         files.sort_by(|a, b| a.path.cmp(&b.path));
         let mut total_payload_len = 0usize;
         let mut maximum_chunk_count = 0usize;
@@ -6891,7 +6496,6 @@ impl CarBuildPlan {
         }
         let content_length =
             u64::try_from(total_payload_len).map_err(|_| CarPlanError::ContentLengthTooLarge)?;
-
         let mut chunks = Vec::new();
         try_reserve_plan(&mut chunks, maximum_chunk_count, "CAR chunk inventory")?;
         let mut file_plans = Vec::new();
@@ -6900,7 +6504,6 @@ impl CarBuildPlan {
         try_reserve_plan(&mut payload, total_payload_len, "concatenated CAR payload")?;
         let mut hasher = blake3::Hasher::new();
         let mut base_offset = 0u64;
-
         for entry in files {
             let start_chunk = chunks.len();
             let data_len =
@@ -6919,7 +6522,6 @@ impl CarBuildPlan {
                 .checked_add(data_len)
                 .ok_or(CarPlanError::ContentLengthTooLarge)?;
         }
-
         let payload_digest = hasher.finalize();
         if payload.len() != total_payload_len || base_offset != content_length {
             return Err(CarPlanError::ContentLengthTooLarge);
@@ -6934,7 +6536,6 @@ impl CarBuildPlan {
         plan.validate()?;
         Ok((plan, payload))
     }
-
     /// Tries to build the list of chunk fetch specifications derived from this validated plan.
     ///
     /// This helper is convenient for multi-source retrieval orchestrators that
@@ -6991,7 +6592,6 @@ impl CarBuildPlan {
         Ok(specs)
     }
 }
-
 fn validate_path(path: &[String]) -> Result<(), CarPlanError> {
     if path.is_empty() {
         return Err(CarPlanError::InvalidPath("".into()));
@@ -7022,29 +6622,22 @@ fn validate_path(path: &[String]) -> Result<(), CarPlanError> {
     }
     Ok(())
 }
-
 fn path_to_string(path: &[String]) -> String {
     path.join("/")
 }
-
 /// Input file used when constructing multi-file CAR plans.
 #[derive(Debug, Clone)]
 pub struct FileEntry {
     pub path: Vec<String>,
     pub data: Vec<u8>,
 }
-
 #[cfg(test)]
 mod tests {
     use std::{cell::Cell, collections::HashSet, fs, io::Cursor, rc::Rc};
-
     use sorafs_chunker::fixtures::FixtureProfile;
     use tempfile::tempdir;
-
     use super::*;
-
     include!("lib/decode_test_helpers.rs");
-
     #[derive(Debug)]
     struct StoreSnapshot {
         profile: ChunkProfile,
@@ -7057,7 +6650,6 @@ mod tests {
         #[cfg(feature = "manifest")]
         pdp_segment_root: Option<[u8; 32]>,
     }
-
     impl StoreSnapshot {
         fn capture(store: &ChunkStore) -> Self {
             Self {
@@ -7072,7 +6664,6 @@ mod tests {
                 pdp_segment_root: store.pdp_segment_root(),
             }
         }
-
         fn assert_unchanged(&self, store: &ChunkStore) {
             assert_eq!(store.profile(), self.profile);
             assert_eq!(store.chunks(), self.chunks);
@@ -7086,12 +6677,10 @@ mod tests {
             }
         }
     }
-
     #[derive(Clone)]
     struct ProbeSource {
         reads: Rc<Cell<usize>>,
     }
-
     impl PayloadSource for ProbeSource {
         fn read_exact(&mut self, _offset: u64, _buf: &mut [u8]) -> Result<(), ChunkStoreError> {
             self.reads.set(self.reads.get() + 1);
@@ -7099,21 +6688,18 @@ mod tests {
                 "probe source must not be read",
             )))
         }
-
         fn ensure_exhausted(&mut self, _expected_len: u64) -> Result<(), ChunkStoreError> {
             Err(ChunkStoreError::Io(io::Error::other(
                 "probe source length must not be queried",
             )))
         }
     }
-
     #[derive(Debug, Clone, Copy)]
     enum ProbeSinkFailure {
         Never,
         Write(usize),
         Finish,
     }
-
     #[derive(Clone)]
     struct ProbeSink {
         prepares: Rc<Cell<usize>>,
@@ -7121,15 +6707,12 @@ mod tests {
         finishes: Rc<Cell<usize>>,
         failure: ProbeSinkFailure,
     }
-
     impl ChunkSink for ProbeSink {
         type Output = ();
-
         fn prepare(&mut self, _plan: &CarBuildPlan) -> Result<(), ChunkStoreError> {
             self.prepares.set(self.prepares.get() + 1);
             Ok(())
         }
-
         fn write_chunk(
             &mut self,
             index: usize,
@@ -7144,7 +6727,6 @@ mod tests {
             }
             Ok(())
         }
-
         fn finish(self) -> Result<Self::Output, ChunkStoreError> {
             self.finishes.set(self.finishes.get() + 1);
             if matches!(self.failure, ProbeSinkFailure::Finish) {
@@ -7155,7 +6737,6 @@ mod tests {
             Ok(())
         }
     }
-
     fn probe_sink(failure: ProbeSinkFailure) -> (ProbeSink, [Rc<Cell<usize>>; 3]) {
         let prepares = Rc::new(Cell::new(0));
         let writes = Rc::new(Cell::new(0));
@@ -7170,7 +6751,6 @@ mod tests {
             [prepares, writes, finishes],
         )
     }
-
     fn reject_before_io(plan: &CarBuildPlan) -> ChunkStoreError {
         let mut store = ChunkStore::new();
         store
@@ -7192,7 +6772,6 @@ mod tests {
         before.assert_unchanged(&store);
         error
     }
-
     #[test]
     fn chunk_plan_digest_depends_on_ordered_chunk_metadata() {
         let first = CarChunk {
@@ -7207,11 +6786,9 @@ mod tests {
             digest: [2; 32],
             taikai_segment_hint: None,
         };
-
         let digest = compute_chunk_plan_digest_sha3(&[first.clone(), second.clone()]);
         let repeated = compute_chunk_plan_digest_sha3(&[first.clone(), second.clone()]);
         let reordered = compute_chunk_plan_digest_sha3(&[second, first.clone()]);
-
         let mut content_changed = first;
         content_changed.digest[0] ^= 1;
         let content_changed = compute_chunk_plan_digest_sha3(&[
@@ -7223,12 +6800,10 @@ mod tests {
                 taikai_segment_hint: None,
             },
         ]);
-
         assert_eq!(digest, repeated);
         assert_ne!(digest, reordered);
         assert_ne!(digest, content_changed);
     }
-
     #[cfg(feature = "manifest")]
     fn sample_manifest() -> DaManifestV1 {
         use iroha_data_model::{
@@ -7242,7 +6817,6 @@ mod tests {
             },
             nexus::LaneId,
         };
-
         let chunk_digest = ChunkDigest::new([0xAA; 32]);
         let chunk = ChunkCommitment::new_with_role(0, 0, 8, chunk_digest, ChunkRole::Data, 0);
         let metadata = ExtraMetadata {
@@ -7306,12 +6880,10 @@ mod tests {
             issued_at_unix: 123,
         }
     }
-
     #[cfg(feature = "manifest")]
     #[test]
     fn build_plan_from_da_manifest_matches_manifest() {
         use blake3::Hash as BlakeHash;
-
         let manifest = sample_manifest();
         let plan = build_plan_from_da_manifest(&manifest).expect("plan from manifest");
         assert_eq!(plan.content_length, manifest.total_size);
@@ -7338,12 +6910,10 @@ mod tests {
         assert_eq!(plan.files[0].chunk_count, manifest.chunks.len());
         assert_eq!(plan.files[0].size, manifest.total_size);
     }
-
     #[cfg(feature = "manifest")]
     #[test]
     fn build_plan_from_da_manifest_uses_cache_hint_metadata() {
         use iroha_data_model::da::types::MetadataVisibility;
-
         let mut manifest = sample_manifest();
         let payload_digest = [0xAB; 32];
         let cache_hint = format!(
@@ -7358,7 +6928,6 @@ mod tests {
                 cache_hint.into_bytes(),
                 MetadataVisibility::Public,
             ));
-
         let plan = build_plan_from_da_manifest(&manifest).expect("plan from manifest");
         let hint = plan.chunks[0]
             .taikai_segment_hint
@@ -7367,7 +6936,6 @@ mod tests {
         assert_eq!(hint.payload_len, Some(4096));
         assert_eq!(hint.payload_digest, Some(payload_digest));
     }
-
     #[cfg(feature = "manifest")]
     #[test]
     fn build_plan_from_da_manifest_errors_on_missing_taikai_metadata() {
@@ -7376,19 +6944,16 @@ mod tests {
             .metadata
             .items
             .retain(|entry| entry.key != "taikai.segment.sequence");
-
         let err = build_plan_from_da_manifest(&manifest).expect_err("missing metadata rejected");
         assert_eq!(
             err,
             PlanFromManifestError::MissingTaikaiMetadata("taikai.segment.sequence")
         );
     }
-
     #[cfg(feature = "manifest")]
     #[test]
     fn build_plan_from_da_manifest_errors_on_encrypted_taikai_metadata() {
         use iroha_data_model::da::types::MetadataEncryption;
-
         let mut manifest = sample_manifest();
         if let Some(entry) = manifest
             .metadata
@@ -7400,7 +6965,6 @@ mod tests {
         } else {
             panic!("taikai event id metadata entry missing");
         }
-
         let err = build_plan_from_da_manifest(&manifest).expect_err("encrypted metadata rejected");
         assert!(matches!(
             err,
@@ -7408,7 +6972,6 @@ mod tests {
             if field == META_TAIKAI_EVENT_ID
         ));
     }
-
     #[cfg(feature = "manifest")]
     #[test]
     fn taikai_sequence_requires_exact_canonical_unsigned_decimal() {
@@ -7436,7 +6999,6 @@ mod tests {
             parse_canonical_taikai_sequence("18446744073709551615").expect("u64 max"),
             u64::MAX
         );
-
         let mut manifest = sample_manifest();
         let sequence = manifest
             .metadata
@@ -7453,7 +7015,6 @@ mod tests {
             })
         ));
     }
-
     #[cfg(feature = "manifest")]
     #[test]
     fn taikai_metadata_rejects_duplicate_and_oversized_fields() {
@@ -7473,7 +7034,6 @@ mod tests {
                 ..
             })
         ));
-
         let mut oversized = sample_manifest();
         let event = oversized
             .metadata
@@ -7490,7 +7050,6 @@ mod tests {
             })
         ));
     }
-
     #[cfg(feature = "manifest")]
     #[test]
     fn manifest_plan_preflight_rejects_geometry_before_construction() {
@@ -7502,7 +7061,6 @@ mod tests {
                 CarPlanValidationError::NonContiguousChunk { chunk_index: 0, .. }
             ))
         ));
-
         let mut manifest = sample_manifest();
         manifest.total_size += 1;
         assert!(matches!(
@@ -7511,7 +7069,6 @@ mod tests {
                 CarPlanValidationError::ContentLengthMismatch { .. }
             ))
         ));
-
         let mut manifest = sample_manifest();
         manifest.chunk_size = CHUNK_STORE_MAX_CHUNK_BYTES + 1;
         assert!(matches!(
@@ -7521,7 +7078,6 @@ mod tests {
             ))
         ));
     }
-
     #[cfg(feature = "manifest")]
     #[test]
     fn manifest_plan_heap_estimate_rejects_multiplicative_hint_bombs() {
@@ -7540,26 +7096,22 @@ mod tests {
             Err(PlanFromManifestError::EstimatedPlanHeapLimitExceeded { .. })
         ));
     }
-
     #[cfg(feature = "manifest")]
     #[test]
     fn build_plan_from_da_manifest_errors_on_invalid_chunks() {
         use iroha_data_model::da::types::{BlobDigest, RetentionPolicy};
-
         let mut manifest = sample_manifest();
         manifest.chunks.clear();
         assert_eq!(
             build_plan_from_da_manifest(&manifest),
             Err(PlanFromManifestError::EmptyChunks)
         );
-
         manifest.chunks = sample_manifest().chunks;
         manifest.chunk_size = 0;
         assert_eq!(
             build_plan_from_da_manifest(&manifest),
             Err(PlanFromManifestError::ZeroChunkSize)
         );
-
         // ensure other fields don't affect validation by restoring chunk size
         manifest.chunk_size = 8;
         manifest.total_size = 8;
@@ -7574,7 +7126,6 @@ mod tests {
         let plan = build_plan_from_da_manifest(&manifest).expect("plan");
         assert_eq!(plan.chunks.len(), manifest.chunks.len());
     }
-
     #[test]
     fn chunk_store_ingest_matches_fixture() {
         let vectors = FixtureProfile::SF1_V1.generate_vectors();
@@ -7591,19 +7142,16 @@ mod tests {
             assert_eq!(chunk.length as usize, vectors.chunk_lengths[idx]);
             assert_eq!(chunk.blake3, vectors.chunk_digests_blake3[idx]);
         }
-
         let por_tree = store.por_tree();
         assert!(!por_tree.is_empty(), "expected PoR tree for fixture data");
         assert_eq!(por_tree.chunks().len(), chunks.len());
         assert_eq!(por_tree.payload_len(), store.payload_len());
-
         let mut expected_chunk_roots = Vec::new();
         for (idx, chunk) in por_tree.chunks().iter().enumerate() {
             assert_eq!(chunk.chunk_index, idx);
             assert_eq!(chunk.offset, chunks[idx].offset);
             assert_eq!(chunk.length, chunks[idx].length);
             assert_eq!(chunk.chunk_digest, chunks[idx].blake3);
-
             let mut chunk_total = 0u64;
             let mut segment_roots = Vec::new();
             for segment in &chunk.segments {
@@ -7643,7 +7191,6 @@ mod tests {
             assert_eq!(chunk.root, expected_chunk);
             expected_chunk_roots.push(chunk.root);
         }
-
         let expected_levels =
             build_chunk_merkle_levels(&expected_chunk_roots).expect("build expected chunk tree");
         let expected_chunk_tree_root = expected_levels
@@ -7660,7 +7207,6 @@ mod tests {
         .expect("hash expected PoR root");
         assert_eq!(por_tree.root(), &expected_root);
     }
-
     #[cfg(unix)]
     #[test]
     fn chunk_store_persists_chunks_to_directory() {
@@ -7671,19 +7217,16 @@ mod tests {
         let dir = fs::canonicalize(base.path())
             .expect("canonical base")
             .join("chunks");
-
         let mut source = InMemoryPayload::new(payload);
         let output = store
             .ingest_plan_to_directory(&plan, &mut source, &dir)
             .expect("ingest directory");
-
         assert_eq!(output.total_bytes, plan.content_length);
         assert_eq!(output.records.len(), plan.chunks.len());
         assert_eq!(output.publication, DirectoryPublicationStatus::Durable);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             assert_eq!(
                 fs::metadata(&dir)
                     .expect("sink directory metadata")
@@ -7694,7 +7237,6 @@ mod tests {
                 "published sink directory must remain private"
             );
         }
-
         for record in &output.records {
             let chunk_path = dir.join(&record.file_name);
             let bytes = fs::read(&chunk_path).expect("chunk file");
@@ -7703,7 +7245,6 @@ mod tests {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt as _;
-
                 assert_eq!(
                     fs::metadata(&chunk_path)
                         .expect("chunk metadata")
@@ -7715,13 +7256,11 @@ mod tests {
                 );
             }
         }
-
         assert_eq!(
             store.payload_digest().as_bytes(),
             blake3::hash(payload).as_bytes()
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn chunk_store_stream_persist_consumes_reader() {
@@ -7733,24 +7272,20 @@ mod tests {
             .expect("canonical base")
             .join("chunks");
         let mut reader = Cursor::new(payload.clone());
-
         let output = store
             .ingest_plan_stream_to_directory(&plan, &mut reader, &dir)
             .expect("stream ingest");
-
         assert_eq!(output.total_bytes, plan.content_length);
         assert_eq!(output.records.len(), plan.chunks.len());
         assert_eq!(output.publication, DirectoryPublicationStatus::Durable);
         assert_eq!(reader.position(), payload.len() as u64);
     }
-
     #[test]
     fn ingest_preflight_rejects_u32_max_chunk_before_allocation_or_io() {
         let payload = b"x";
         let mut plan = CarBuildPlan::single_file(payload).expect("plan");
         plan.chunks[0].length = u32::MAX;
         plan.content_length = u64::from(u32::MAX);
-
         let error = reject_before_io(&plan);
         assert!(matches!(
             error,
@@ -7761,7 +7296,6 @@ mod tests {
             }) if limit == ChunkProfile::DEFAULT.max_size as u32
         ));
     }
-
     #[test]
     fn ingest_preflight_rejects_chunk_longer_than_declared_profile() {
         let payload = b"x";
@@ -7774,7 +7308,6 @@ mod tests {
         };
         plan.chunks[0].length = 2;
         plan.content_length = 2;
-
         let error = reject_before_io(&plan);
         assert!(matches!(
             error,
@@ -7785,14 +7318,12 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn ingest_preflight_rejects_noncontiguous_offsets_before_io() {
         let payload = b"ab";
         let mut plan = CarBuildPlan::single_file(payload).expect("plan");
         plan.chunks[0].offset = 1;
         plan.content_length = 3;
-
         let error = reject_before_io(&plan);
         assert!(matches!(
             error,
@@ -7803,7 +7334,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn ingest_preflight_rejects_overflowing_chunk_range_before_io() {
         let payload = b"ab";
@@ -7815,7 +7345,6 @@ mod tests {
             taikai_segment_hint: None,
         });
         plan.content_length = u64::MAX;
-
         let error = reject_before_io(&plan);
         assert!(matches!(
             error,
@@ -7824,7 +7353,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn ingest_preflight_rejects_zero_length_and_empty_plans_before_io() {
         let payload = b"x";
@@ -7836,7 +7364,6 @@ mod tests {
                 chunk_index: 0
             })
         ));
-
         let mut empty = CarBuildPlan::single_file(payload).expect("plan");
         empty.chunks.clear();
         assert!(matches!(
@@ -7844,7 +7371,6 @@ mod tests {
             ChunkStoreError::InvalidPlan(CarPlanValidationError::MissingChunks)
         ));
     }
-
     #[test]
     fn ingest_preflight_rejects_content_length_mismatch_before_io() {
         let payload = b"payload";
@@ -7856,7 +7382,6 @@ mod tests {
             ChunkStoreError::InvalidPlan(CarPlanValidationError::ContentLengthMismatch { .. })
         ));
     }
-
     #[test]
     fn short_read_preserves_preexisting_chunk_store_state() {
         let payload = b"replacement payload";
@@ -7867,7 +7392,6 @@ mod tests {
             .expect("seed store");
         let before = StoreSnapshot::capture(&store);
         let mut reader = Cursor::new(&payload[..payload.len() - 1]);
-
         let error = store
             .ingest_plan_stream(&plan, &mut reader)
             .expect_err("short read must fail");
@@ -7877,7 +7401,6 @@ mod tests {
         ));
         before.assert_unchanged(&store);
     }
-
     #[test]
     fn trailing_stream_data_preserves_preexisting_chunk_store_state() {
         let payload = b"replacement payload";
@@ -7890,7 +7413,6 @@ mod tests {
         let mut with_trailer = payload.to_vec();
         with_trailer.extend_from_slice(b"attacker trailer");
         let mut reader = Cursor::new(with_trailer);
-
         let error = store
             .ingest_plan_stream(&plan, &mut reader)
             .expect_err("trailing data must fail");
@@ -7903,7 +7425,6 @@ mod tests {
         ));
         before.assert_unchanged(&store);
     }
-
     #[test]
     fn chunk_and_payload_digest_failures_preserve_preexisting_store_state() {
         let payload = b"replacement payload";
@@ -7913,7 +7434,6 @@ mod tests {
             .ingest_bytes(b"pre-existing store state")
             .expect("seed store");
         let before = StoreSnapshot::capture(&store);
-
         let mut corrupted = payload.to_vec();
         corrupted[0] ^= 0xff;
         let mut source = InMemoryPayload::new(&corrupted);
@@ -7922,7 +7442,6 @@ mod tests {
             Err(ChunkStoreError::DigestMismatch { chunk_index: 0 })
         ));
         before.assert_unchanged(&store);
-
         let mut wrong_payload_digest = plan.clone();
         wrong_payload_digest.payload_digest = blake3::hash(b"wrong payload digest");
         let mut source = InMemoryPayload::new(payload);
@@ -7932,7 +7451,6 @@ mod tests {
         ));
         before.assert_unchanged(&store);
     }
-
     #[test]
     fn sink_write_and_finish_failures_preserve_preexisting_store_state() {
         let payload = b"replacement payload";
@@ -7942,7 +7460,6 @@ mod tests {
             .ingest_bytes(b"pre-existing store state")
             .expect("seed store");
         let before = StoreSnapshot::capture(&store);
-
         let (sink, counters) = probe_sink(ProbeSinkFailure::Write(0));
         let mut source = InMemoryPayload::new(payload);
         assert!(matches!(
@@ -7953,7 +7470,6 @@ mod tests {
         assert_eq!(counters[1].get(), 1);
         assert_eq!(counters[2].get(), 0);
         before.assert_unchanged(&store);
-
         let (sink, counters) = probe_sink(ProbeSinkFailure::Finish);
         let mut source = InMemoryPayload::new(payload);
         assert!(matches!(
@@ -7965,7 +7481,6 @@ mod tests {
         assert_eq!(counters[2].get(), 1);
         before.assert_unchanged(&store);
     }
-
     #[cfg(unix)]
     #[test]
     fn directory_sink_rejects_existing_directory_without_touching_it() {
@@ -7975,7 +7490,6 @@ mod tests {
             .join("chunks");
         fs::create_dir(&root).expect("old root");
         fs::write(root.join("sentinel"), b"old state").expect("old sentinel");
-
         let payload = b"abc";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let mut source = InMemoryPayload::new(payload);
@@ -7984,7 +7498,6 @@ mod tests {
             .ingest_bytes(b"pre-existing store state")
             .expect("seed store");
         let before = StoreSnapshot::capture(&store);
-
         assert!(matches!(
             store.ingest_plan_to_directory(&plan, &mut source, &root),
             Err(ChunkStoreError::Io(_))
@@ -8002,7 +7515,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(staged.is_empty(), "orphan staging paths: {staged:?}");
     }
-
     #[cfg(unix)]
     #[test]
     fn directory_sink_detects_destination_collision_before_commit() {
@@ -8016,7 +7528,6 @@ mod tests {
         sink.prepare(&plan).expect("prepare");
         sink.write_chunk(0, &plan.chunks[0], payload)
             .expect("staged chunk");
-
         fs::create_dir(&root).expect("attacker collision root");
         fs::write(root.join("sentinel"), b"attacker state").expect("sentinel");
         assert!(matches!(sink.finish(), Err(ChunkStoreError::Io(_))));
@@ -8025,14 +7536,12 @@ mod tests {
             b"attacker state"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn directory_sink_rejects_incomplete_and_malformed_direct_writes() {
         let base = tempdir().expect("base");
         let payload = b"validated payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-
         let canonical_base = fs::canonicalize(base.path()).expect("canonical base");
         let incomplete_root = canonical_base.join("incomplete");
         let mut incomplete = DirectoryChunkSink::new(&incomplete_root);
@@ -8042,7 +7551,6 @@ mod tests {
             Err(ChunkStoreError::SinkIncomplete { .. })
         ));
         assert!(!incomplete_root.exists());
-
         let root = canonical_base.join("malformed");
         let mut sink = DirectoryChunkSink::new(&root);
         sink.prepare(&plan).expect("prepare sink");
@@ -8053,7 +7561,6 @@ mod tests {
                 actual: 1
             })
         ));
-
         let mut wrong_metadata = plan.chunks[0].clone();
         wrong_metadata.offset = 1;
         assert!(matches!(
@@ -8078,7 +7585,6 @@ mod tests {
             payload
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn directory_sink_rechecks_staged_chunk_before_publication() {
@@ -8100,7 +7606,6 @@ mod tests {
         ));
         assert!(!root.exists());
     }
-
     #[cfg(unix)]
     #[test]
     fn post_rename_failures_return_non_retryable_published_outcome() {
@@ -8119,7 +7624,6 @@ mod tests {
             let mut source = InMemoryPayload::new(payload);
             let mut store = ChunkStore::new();
             store.ingest_bytes(b"old").expect("seed store");
-
             let output = store
                 .ingest_plan_source_with_sink(&plan, &mut source, sink)
                 .expect("published outcome is successful");
@@ -8132,7 +7636,6 @@ mod tests {
                 fs::read(root.join("chunk_00000.bin")).expect("published chunk"),
                 payload
             );
-
             let after = StoreSnapshot::capture(&store);
             let mut source = InMemoryPayload::new(payload);
             assert!(matches!(
@@ -8142,7 +7645,6 @@ mod tests {
             after.assert_unchanged(&store);
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn atomic_chunk_write_ignores_predictable_partial_collision() {
@@ -8152,7 +7654,6 @@ mod tests {
         let victim = dir.path().join("victim");
         fs::write(&victim, b"victim").expect("victim");
         std::os::unix::fs::symlink(&victim, &stale_partial).expect("partial symlink");
-
         DirectoryChunkSink::write_atomic(&output, b"new chunk").expect("atomic write");
         assert_eq!(fs::read(&output).expect("output"), b"new chunk");
         assert_eq!(fs::read(&victim).expect("victim"), b"victim");
@@ -8168,7 +7669,6 @@ mod tests {
             "orphan random partials: {random_partials:?}"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn atomic_chunk_write_rejects_existing_file_collision() {
@@ -8181,16 +7681,13 @@ mod tests {
         ));
         assert_eq!(fs::read(&output).expect("output"), b"old chunk");
     }
-
     #[cfg(unix)]
     #[test]
     fn atomic_chunk_write_rejects_symlink_and_hardlink_destinations() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("dir");
         let victim = dir.path().join("victim");
         fs::write(&victim, b"victim").expect("victim");
-
         let symlink_path = dir.path().join("symlink-chunk");
         symlink(&victim, &symlink_path).expect("symlink");
         assert!(matches!(
@@ -8198,7 +7695,6 @@ mod tests {
             Err(ChunkStoreError::Io(_))
         ));
         assert_eq!(fs::read(&victim).expect("victim"), b"victim");
-
         let hardlink_path = dir.path().join("hardlink-chunk");
         fs::hard_link(&victim, &hardlink_path).expect("hard link");
         assert!(matches!(
@@ -8207,12 +7703,10 @@ mod tests {
         ));
         assert_eq!(fs::read(&victim).expect("victim"), b"victim");
     }
-
     #[cfg(unix)]
     #[test]
     fn directory_sink_rejects_symlink_root_without_touching_target() {
         use std::os::unix::fs::symlink;
-
         let base = tempdir().expect("base");
         let canonical_base = fs::canonicalize(base.path()).expect("canonical base");
         let victim = canonical_base.join("victim");
@@ -8220,7 +7714,6 @@ mod tests {
         fs::write(victim.join("sentinel"), b"victim").expect("sentinel");
         let root = canonical_base.join("chunks");
         symlink(&victim, &root).expect("root symlink");
-
         let payload = b"payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let mut source = InMemoryPayload::new(payload);
@@ -8239,12 +7732,10 @@ mod tests {
             b"victim"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn directory_sink_detects_staging_symlink_replacement_without_following_it() {
         use std::os::unix::fs::symlink;
-
         let base = tempdir().expect("base");
         let canonical_base = fs::canonicalize(base.path()).expect("canonical base");
         let root = canonical_base.join("chunks");
@@ -8259,7 +7750,6 @@ mod tests {
         let displaced = canonical_base.join("displaced-staging");
         fs::rename(&staging, &displaced).expect("displace staging");
         symlink(&victim, &staging).expect("replace staging with symlink");
-
         assert!(matches!(
             sink.write_chunk(0, &plan.chunks[0], payload),
             Err(ChunkStoreError::Io(_))
@@ -8276,12 +7766,10 @@ mod tests {
                 .is_symlink()
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn directory_sink_rejects_symlinked_intermediate_parent() {
         use std::os::unix::fs::symlink;
-
         let base = tempdir().expect("base");
         let canonical_base = fs::canonicalize(base.path()).expect("canonical base");
         let outside = tempdir().expect("outside");
@@ -8293,7 +7781,6 @@ mod tests {
         assert!(matches!(sink.prepare(&plan), Err(ChunkStoreError::Io(_))));
         assert!(!outside_path.join("chunks").exists());
     }
-
     #[cfg(unix)]
     #[test]
     fn directory_sink_detects_concurrent_parent_swap_before_write() {
@@ -8306,7 +7793,6 @@ mod tests {
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let mut sink = DirectoryChunkSink::new(&root);
         sink.prepare(&plan).expect("prepare");
-
         let displaced = canonical_base.join("displaced-parent");
         fs::rename(&parent, &displaced).expect("displace parent");
         fs::create_dir(&parent).expect("replacement parent");
@@ -8319,13 +7805,11 @@ mod tests {
             fs::read(parent.join("sentinel")).expect("sentinel"),
             b"replacement"
         );
-
         fs::remove_dir_all(&parent).expect("remove replacement");
         fs::rename(&displaced, &parent).expect("restore parent");
         drop(sink);
         assert!(!root.exists());
     }
-
     #[test]
     fn por_proof_verification_succeeds() {
         let vectors = FixtureProfile::SF1_V1.generate_vectors();
@@ -8337,31 +7821,24 @@ mod tests {
             .expect("proof construction")
             .expect("proof for first leaf");
         assert!(proof.verify(tree.root()));
-
         let mut tampered = proof.clone();
         tampered.leaf_bytes[0] ^= 0xFF;
         assert!(!tampered.verify(tree.root()));
-
         let mut tampered = proof.clone();
         tampered.leaf_length = tampered.leaf_length.saturating_add(1);
         assert!(!tampered.verify(tree.root()));
-
         let mut tampered = proof.clone();
         tampered.leaf_offset = tampered.leaf_offset.saturating_add(1);
         assert!(!tampered.verify(tree.root()));
-
         let mut tampered = proof.clone();
         tampered.segment_length = tampered.segment_length.saturating_add(1);
         assert!(!tampered.verify(tree.root()));
-
         let mut tampered = proof.clone();
         tampered.segment_leaves.push([0x55; 32]);
         assert!(!tampered.verify(tree.root()));
-
         let mut tampered = proof.clone();
         tampered.leaf_count = tampered.leaf_count.saturating_add(1);
         assert!(!tampered.verify(tree.root()));
-
         let mut tampered = proof.clone();
         tampered.leaf_index_flat = if tampered.leaf_count > 1 {
             (tampered.leaf_index_flat + 1) % tampered.leaf_count
@@ -8369,12 +7846,10 @@ mod tests {
             tampered.leaf_count
         };
         assert!(!tampered.verify(tree.root()));
-
         let mut tampered = proof;
         tampered.chunk_count = tampered.chunk_count.saturating_add(1);
         assert!(!tampered.verify(tree.root()));
     }
-
     #[test]
     fn por_proof_above_legacy_chunk_cap_is_logarithmic_and_roundtrips() {
         const CHUNK_COUNT: usize = 2_049;
@@ -8399,13 +7874,11 @@ mod tests {
         assert_eq!(proof.chunk_count, CHUNK_COUNT as u64);
         assert_eq!(proof.chunk_merkle_path.len(), 12);
         assert!(proof.verify(tree.root()));
-
         let encoded = por_json::proof_to_value(&proof);
         let decoded = por_json::proof_from_value(&encoded).expect("roundtrip canonical proof JSON");
         assert_eq!(decoded, proof);
         assert!(decoded.verify(tree.root()));
     }
-
     #[test]
     fn por_direct_construction_enforces_canonical_chunk_bounds_before_work() {
         assert!(matches!(
@@ -8417,7 +7890,6 @@ mod tests {
                 }
             )) if count == CAR_PLAN_MAX_CHUNKS + 1
         ));
-
         let mut payload = vec![0x5a; CHUNK_STORE_MAX_CHUNK_BYTES as usize];
         let canonical_chunk = StoredChunk {
             offset: 0,
@@ -8432,7 +7904,6 @@ mod tests {
             .expect("construct proof at chunk ceiling")
             .expect("one proof");
         assert!(proof.verify(tree.root()));
-
         payload.push(0x5b);
         let oversized_chunk = StoredChunk {
             offset: 0,
@@ -8446,12 +7917,10 @@ mod tests {
                 limit: CHUNK_STORE_MAX_CHUNK_BYTES,
             }) if length == CHUNK_STORE_MAX_CHUNK_BYTES as usize + 1
         ));
-
         let mut oversized_proof = proof;
         oversized_proof.chunk_length = CHUNK_STORE_MAX_CHUNK_BYTES + 1;
         assert!(!oversized_proof.verify(tree.root()));
     }
-
     #[test]
     fn por_sampling_is_deterministic_and_unique() {
         let vectors = FixtureProfile::SF1_V1.generate_vectors();
@@ -8479,7 +7948,6 @@ mod tests {
             assert_eq!(proof.leaf_index, leaf_idx);
         }
     }
-
     #[test]
     fn por_sampling_collision_resolution_is_deterministic_and_bounded() {
         let leaf_count = 5u64;
@@ -8506,7 +7974,6 @@ mod tests {
             5
         );
     }
-
     #[test]
     fn sampling_truncates_to_leaf_count() {
         let vectors = FixtureProfile::SF1_V1.generate_vectors();
@@ -8518,7 +7985,6 @@ mod tests {
             .expect("sample leaves");
         assert_eq!(samples.len(), total);
     }
-
     #[test]
     fn por_tree_empty_payload() {
         let mut store = ChunkStore::new();
@@ -8527,7 +7993,6 @@ mod tests {
         assert!(tree.is_empty());
         assert_eq!(tree.root(), &[0u8; 32]);
     }
-
     #[test]
     fn por_try_from_payload_rejects_gap_overlap_and_digest_mismatch() {
         let payload = b"abcdefgh";
@@ -8545,21 +8010,18 @@ mod tests {
         };
         PorMerkleTree::try_from_payload(payload, &[first.clone(), second.clone()])
             .expect("canonical two-chunk tree");
-
         let mut gap = second.clone();
         gap.offset = 5;
         assert!(matches!(
             PorMerkleTree::try_from_payload(payload, &[first.clone(), gap]),
             Err(ChunkStoreError::PorInvariant { .. })
         ));
-
         let mut overlap = second.clone();
         overlap.offset = 3;
         assert!(matches!(
             PorMerkleTree::try_from_payload(payload, &[first.clone(), overlap]),
             Err(ChunkStoreError::PorInvariant { .. })
         ));
-
         let mut wrong_digest = second;
         wrong_digest.blake3[0] ^= 0xff;
         assert!(matches!(
@@ -8567,7 +8029,6 @@ mod tests {
             Err(ChunkStoreError::DigestMismatch { chunk_index: 1 })
         ));
     }
-
     #[test]
     fn por_try_from_payload_rejects_empty_inventory_mismatches() {
         assert_eq!(
@@ -8588,7 +8049,6 @@ mod tests {
             Err(ChunkStoreError::PorInvariant { .. })
         ));
     }
-
     #[test]
     fn por_try_from_chunks_rejects_malformed_geometry_and_root_vectors() {
         let payload = vec![0x5a; POR_SEGMENT_SIZE + POR_LEAF_SIZE + 1];
@@ -8600,7 +8060,6 @@ mod tests {
         let tree = PorMerkleTree::try_from_payload(&payload, &[chunk]).expect("canonical tree");
         let chunks = tree.chunks.clone();
         let roots = chunks.iter().map(|entry| entry.root).collect::<Vec<_>>();
-
         let mut mismatched_roots = roots.clone();
         mismatched_roots[0][0] ^= 0xff;
         assert!(matches!(
@@ -8611,28 +8070,24 @@ mod tests {
             PorMerkleTree::try_from_chunks(chunks.clone(), Vec::new(), tree.payload_len),
             Err(ChunkStoreError::PorInvariant { .. })
         ));
-
         let mut segment_gap = chunks.clone();
         segment_gap[0].segments[1].offset += 1;
         assert!(matches!(
             PorMerkleTree::try_from_chunks(segment_gap, roots.clone(), tree.payload_len),
             Err(ChunkStoreError::PorInvariant { .. })
         ));
-
         let mut leaf_overlap = chunks.clone();
         leaf_overlap[0].segments[0].leaves[1].offset -= 1;
         assert!(matches!(
             PorMerkleTree::try_from_chunks(leaf_overlap, roots.clone(), tree.payload_len),
             Err(ChunkStoreError::PorInvariant { .. })
         ));
-
         let mut reordered_flat_index = chunks.clone();
         reordered_flat_index[0].segments[0].leaves[0].flat_index += 1;
         assert!(matches!(
             PorMerkleTree::try_from_chunks(reordered_flat_index, roots.clone(), tree.payload_len),
             Err(ChunkStoreError::PorInvariant { .. })
         ));
-
         let mut forged_segment = chunks;
         forged_segment[0].segments[0].digest[0] ^= 0xff;
         assert!(matches!(
@@ -8640,7 +8095,6 @@ mod tests {
             Err(ChunkStoreError::PorInvariant { .. })
         ));
     }
-
     #[test]
     fn por_chunk_builder_rejects_absolute_offset_overflow() {
         let payload = vec![0x11; POR_LEAF_SIZE + 1];
@@ -8657,7 +8111,6 @@ mod tests {
             Err(ChunkStoreError::PorInvariant { .. })
         ));
     }
-
     #[test]
     fn por_sampling_propagates_payload_read_failures() {
         let payload = b"non-empty PoR sampling payload";
@@ -8667,7 +8120,6 @@ mod tests {
             store.sample_leaves(1, 7, &[]),
             Err(ChunkStoreError::OffsetOutOfRange { .. })
         ));
-
         let mut tampered = payload.to_vec();
         tampered[0] ^= 0xff;
         assert!(matches!(
@@ -8675,7 +8127,6 @@ mod tests {
             Err(ChunkStoreError::PorProofLeafDigestMismatch { .. })
         ));
     }
-
     #[test]
     fn por_sampling_rejects_aggregate_proof_heap_before_payload_io() {
         let payload = b"bounded PoR sampling payload";
@@ -8694,7 +8145,6 @@ mod tests {
         ));
         assert_eq!(reads.get(), 0, "heap rejection must precede payload I/O");
     }
-
     #[test]
     fn por_tree_can_be_moved_out_without_cloning_or_discarding_chunks() {
         let payload = b"PoR ownership transfer";
@@ -8702,14 +8152,12 @@ mod tests {
         store.ingest_bytes(payload).expect("ingest payload");
         let expected_root = *store.por_tree().root();
         let chunk_count = store.chunks().len();
-
         let tree = store.take_por_tree();
         assert_eq!(tree.root(), &expected_root);
         assert!(store.por_tree().is_empty());
         assert_eq!(store.chunks().len(), chunk_count);
         assert!(store.take_por_tree().is_empty());
     }
-
     #[cfg(feature = "manifest")]
     #[test]
     fn canonical_pdp_roots_match_manifest_tree_across_boundaries() {
@@ -8746,7 +8194,6 @@ mod tests {
             assert_eq!(store.pdp_segment_count(), reference.segment_count());
         }
     }
-
     #[cfg(feature = "manifest")]
     #[test]
     fn canonical_pdp_tree_can_be_moved_out_without_disturbing_por_state() {
@@ -8755,7 +8202,6 @@ mod tests {
         store.ingest_bytes(payload).expect("ingest payload");
         let por_root = *store.por_tree().root();
         let expected_hot_root = store.pdp_hot_root().expect("PDP hot root");
-
         let tree = store.take_pdp_tree().expect("move PDP tree");
         assert_eq!(tree.hot_root(), expected_hot_root);
         assert!(store.pdp_tree().is_none());
@@ -8764,7 +8210,6 @@ mod tests {
         assert_eq!(store.por_tree().root(), &por_root);
         assert!(store.take_pdp_tree().is_none());
     }
-
     #[cfg(feature = "manifest")]
     #[test]
     fn streamed_pdp_tree_is_transactional_and_supports_random_access_proofs() {
@@ -8784,7 +8229,6 @@ mod tests {
         let mut store = ChunkStore::new();
         store.ingest_bytes(b"old state").expect("seed store");
         let before = StoreSnapshot::capture(&store);
-
         let mut corrupted = payload.clone();
         let second_offset = plan.chunks[1].offset as usize;
         corrupted[second_offset] ^= 0xff;
@@ -8794,14 +8238,12 @@ mod tests {
             Err(ChunkStoreError::DigestMismatch { chunk_index: 1 })
         ));
         before.assert_unchanged(&store);
-
         let mut source = InMemoryPayload::new(&payload);
         store
             .ingest_plan_source(&plan, &mut source)
             .expect("streamed PDP ingest");
         assert_eq!(store.pdp_hot_root(), Some(reference.hot_root()));
         assert_eq!(store.pdp_segment_root(), Some(reference.segment_root()));
-
         let samples = [PdpSampleV1 {
             segment_index: 1,
             hot_leaf_indices: vec![0, 1],
@@ -8814,7 +8256,6 @@ mod tests {
             .prove_samples(&samples, &payload)
             .expect("reference witnesses");
         assert_eq!(proofs, reference_proofs);
-
         let mut tampered = payload.clone();
         tampered[256 * 1024] ^= 0xff;
         let mut source = InMemoryPayload::new(&tampered);
@@ -8828,7 +8269,6 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn ingest_single_file_produces_matching_plan() {
         let vectors = FixtureProfile::SF1_V1.generate_vectors();
@@ -8843,7 +8283,6 @@ mod tests {
             blake3::hash(&vectors.input).as_bytes()
         );
     }
-
     fn sample_input() -> Vec<u8> {
         let mut buf = Vec::with_capacity(1 << 20);
         let mut state: u64 = 0xDEC0DED;
@@ -8855,7 +8294,6 @@ mod tests {
         }
         buf
     }
-
     #[test]
     fn plan_matches_chunker_fixture() {
         let input = sample_input();
@@ -8872,7 +8310,6 @@ mod tests {
             "chunk lengths drifted"
         );
     }
-
     #[test]
     fn plan_from_files_orders_and_offsets() {
         let files = vec![
@@ -8900,7 +8337,6 @@ mod tests {
         assert_eq!(plan.content_length as usize, payload.len());
         assert!(plan.payload_digest.as_bytes().len() == 32);
     }
-
     #[test]
     fn empty_files_emit_no_chunks_and_zero_content_plan_ingests() {
         let files = vec![
@@ -8930,7 +8366,6 @@ mod tests {
         store
             .ingest_plan_source(&plan, &mut source)
             .expect("mixed empty ingest");
-
         let all_empty = vec![
             FileEntry {
                 path: vec!["a.empty".to_owned()],
@@ -8954,12 +8389,10 @@ mod tests {
         assert!(store.por_tree().is_empty());
         #[cfg(feature = "manifest")]
         assert!(store.pdp_tree().is_none());
-
         let writer = CarWriter::new(&empty_plan, &empty_payload).expect("empty CAR writer");
         let mut output = Cursor::new(Vec::new());
         writer.write_to(&mut output).expect("empty CAR");
     }
-
     #[test]
     fn plan_rejects_nonportable_paths_and_malformed_file_coverage() {
         for component in [
@@ -9001,7 +8434,6 @@ mod tests {
         for component in ["console", "COM0", "COM10", "LPT0", "report.txt", "文件"] {
             assert!(is_portable_normal_component(component), "{component}");
         }
-
         let (mut plan, _) = CarBuildPlan::from_files(vec![FileEntry {
             path: vec!["payload".to_owned()],
             data: b"payload".to_vec(),
@@ -9016,7 +8448,6 @@ mod tests {
                 actual: 1
             })
         ));
-
         let (mut plan, _) = CarBuildPlan::from_files(vec![FileEntry {
             path: vec!["payload".to_owned()],
             data: b"payload".to_vec(),
@@ -9032,7 +8463,6 @@ mod tests {
             Err(CarWriteError::InvalidPlan(_))
         ));
     }
-
     #[test]
     fn plan_rejects_below_minimum_chunk_bomb_and_heap_limit() {
         let profile = ChunkProfile {
@@ -9069,7 +8499,6 @@ mod tests {
             Err(CarPlanValidationError::TooManyFileChunks { .. })
                 | Err(CarPlanValidationError::ChunkBelowProfileMinimum { .. })
         ));
-
         let valid = CarBuildPlan::single_file(b"payload").expect("valid plan");
         let estimate = valid
             .validate()
@@ -9083,7 +8512,6 @@ mod tests {
                 limit
             }) if estimated == estimate && limit == estimate - 1
         ));
-
         let mut total = 0usize;
         assert!(matches!(
             checked_estimate_add_product(&mut total, usize::MAX, 2, "adversarial test"),
@@ -9111,7 +8539,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn plan_from_files_rejects_conflicting_paths() {
         let files = vec![
@@ -9127,23 +8554,18 @@ mod tests {
         let err = CarBuildPlan::from_files(files).unwrap_err();
         assert!(matches!(err, CarPlanError::PathConflict { .. }));
     }
-
     #[cfg(unix)]
     #[test]
     fn plan_from_directory_matches_from_files() {
         use std::fs;
-
         use tempfile::tempdir;
-
         let tempdir = tempdir().expect("tempdir");
         let root = tempdir.path();
         fs::create_dir(root.join("docs")).expect("create docs dir");
         fs::write(root.join("docs").join("a.txt"), b"AAA").expect("write a");
         fs::write(root.join("docs").join("b.txt"), b"BBBB").expect("write b");
-
         let (plan_dir, payload_dir) =
             CarBuildPlan::from_directory(root).expect("plan from directory");
-
         let files = vec![
             FileEntry {
                 path: vec!["docs".to_owned(), "a.txt".to_owned()],
@@ -9155,18 +8577,15 @@ mod tests {
             },
         ];
         let (plan_files, payload_files) = CarBuildPlan::from_files(files).expect("plan from files");
-
         assert_eq!(plan_dir.files, plan_files.files);
         assert_eq!(plan_dir.content_length, plan_files.content_length);
         assert_eq!(plan_dir.chunks.len(), plan_files.chunks.len());
         assert_eq!(payload_dir, payload_files);
     }
-
     #[cfg(unix)]
     #[test]
     fn from_directory_rejects_symlink_files_directories_roots_and_hardlinks() {
         use std::os::unix::fs::symlink;
-
         let base = tempdir().expect("base");
         let root = base.path().join("root");
         let outside = base.path().join("outside");
@@ -9174,24 +8593,19 @@ mod tests {
         fs::create_dir(&outside).expect("outside");
         fs::write(root.join("payload"), b"payload").expect("payload");
         fs::write(outside.join("outside"), b"outside").expect("outside payload");
-
         symlink(outside.join("outside"), root.join("file-link")).expect("file symlink");
         assert!(CarBuildPlan::from_directory(&root).is_err());
         fs::remove_file(root.join("file-link")).expect("remove file symlink");
-
         symlink(&outside, root.join("directory-link")).expect("directory symlink");
         assert!(CarBuildPlan::from_directory(&root).is_err());
         fs::remove_file(root.join("directory-link")).expect("remove directory symlink");
-
         fs::hard_link(root.join("payload"), root.join("hardlink")).expect("hardlink");
         assert!(CarBuildPlan::from_directory(&root).is_err());
         fs::remove_file(root.join("hardlink")).expect("remove hardlink");
-
         let linked_root = base.path().join("linked-root");
         symlink(&root, &linked_root).expect("root symlink");
         assert!(CarBuildPlan::from_directory(&linked_root).is_err());
     }
-
     #[cfg(unix)]
     #[test]
     fn secure_directory_scan_rejects_mid_scan_file_and_root_mutations() {
@@ -9202,7 +8616,6 @@ mod tests {
             Truncate,
             RenameRoot,
         }
-
         for (label, mutation) in [
             ("replace", Mutation::Replace),
             ("grow", Mutation::Grow),
@@ -9246,7 +8659,6 @@ mod tests {
             assert!(mutated, "mutation hook did not run for {label}: {error}");
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn from_directory_rejects_deep_trees_and_oversized_sparse_inventory() {
@@ -9261,7 +8673,6 @@ mod tests {
             CarBuildPlan::from_directory(deep.path()),
             Err(CarPlanError::InvalidPath(_))
         ));
-
         let oversized = tempdir().expect("oversized root");
         let sparse = File::create(oversized.path().join("sparse")).expect("sparse file");
         sparse
@@ -9275,7 +8686,6 @@ mod tests {
             }) if bytes == CAR_EAGER_DIRECTORY_MAX_BYTES + 1
         ));
     }
-
     #[cfg(not(unix))]
     #[test]
     fn from_directory_fails_closed_without_secure_unix_file_identity() {
@@ -9284,7 +8694,6 @@ mod tests {
             Err(CarPlanError::SecureDirectoryUnsupported)
         ));
     }
-
     #[test]
     fn plan_building_rejects_invalid_chunk_profile_without_panicking() {
         let invalid_profile = ChunkProfile {
@@ -9298,7 +8707,6 @@ mod tests {
             err,
             CarPlanError::Chunking(sorafs_chunker::ChunkerError::TargetBeforeMin { .. })
         ));
-
         let files = vec![FileEntry {
             path: vec!["payload.bin".to_owned()],
             data: b"payload".to_vec(),
@@ -9309,7 +8717,6 @@ mod tests {
             CarPlanError::Chunking(sorafs_chunker::ChunkerError::TargetBeforeMin { .. })
         ));
     }
-
     #[test]
     fn chunk_store_try_ingest_rejects_invalid_profile_without_mutation() {
         let invalid_profile = ChunkProfile {
@@ -9331,7 +8738,6 @@ mod tests {
             blake3::hash(&[]).as_bytes()
         );
     }
-
     #[test]
     fn chunk_store_heap_limit_is_checked_before_every_ingest() {
         assert!(matches!(
@@ -9347,7 +8753,6 @@ mod tests {
             .expect("non-zero sink limit");
         assert_eq!(sink.max_estimated_heap_bytes, 123);
         assert_eq!(sink.clone().max_estimated_heap_bytes, 123);
-
         let mut store = ChunkStore::new();
         store
             .ingest_bytes(b"pre-existing state")
@@ -9362,7 +8767,6 @@ mod tests {
             Err(ChunkStoreError::EstimatedHeapLimitExceeded { limit: 1, .. })
         ));
         before.assert_unchanged(&store);
-
         let plan = CarBuildPlan::single_file(b"replacement").expect("plan");
         let reads = Rc::new(Cell::new(0));
         let mut source = ProbeSource {
@@ -9374,14 +8778,12 @@ mod tests {
         ));
         assert_eq!(reads.get(), 0, "heap rejection must precede source I/O");
         before.assert_unchanged(&store);
-
         assert!(matches!(
             store.set_max_estimated_heap_bytes(0),
             Err(ChunkStoreError::InvalidEstimatedHeapLimit)
         ));
         assert_eq!(store.max_estimated_heap_bytes(), 1);
     }
-
     #[test]
     fn plan_heap_estimate_accounts_for_directory_sink_state() {
         let plan = CarBuildPlan::single_file(b"payload").expect("plan");
@@ -9396,13 +8798,11 @@ mod tests {
             Err(ChunkStoreError::EstimatedHeapLimitExceeded { .. })
         ));
     }
-
     #[test]
     fn production_chunk_ceiling_covers_100_gib_high_density_geometry() {
         let t2_max_bytes = 100_u64 * 1024 * 1024 * 1024;
         let minimum_chunk_bytes = sorafs_chunker::HIGH_DENSITY_PROFILE.min_size as u64;
         let worst_case_chunks = t2_max_bytes.div_ceil(minimum_chunk_bytes);
-
         assert_eq!(worst_case_chunks, 3_276_800);
         assert!(
             worst_case_chunks <= CAR_PLAN_MAX_CHUNKS as u64,
@@ -9418,7 +8818,6 @@ mod tests {
             assert!(estimate > DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES);
         }
     }
-
     #[test]
     fn car_plan_and_store_reject_profiles_wider_than_production_limit() {
         let max_size = CHUNK_STORE_MAX_CHUNK_BYTES as usize + 1;
@@ -9428,7 +8827,6 @@ mod tests {
             max_size,
             break_mask: 1,
         };
-
         let err = CarBuildPlan::single_file_with_profile(b"payload", profile).unwrap_err();
         assert!(matches!(
             err,
@@ -9437,7 +8835,6 @@ mod tests {
                 limit: CHUNK_STORE_MAX_CHUNK_BYTES
             } if observed == max_size
         ));
-
         let files = vec![FileEntry {
             path: vec!["payload.bin".to_owned()],
             data: b"payload".to_vec(),
@@ -9450,7 +8847,6 @@ mod tests {
                 limit: CHUNK_STORE_MAX_CHUNK_BYTES
             } if observed == max_size
         ));
-
         let mut store = ChunkStore::with_profile(profile);
         let err = store.try_ingest_bytes(b"payload").unwrap_err();
         assert!(matches!(
@@ -9463,28 +8859,21 @@ mod tests {
         assert!(store.chunks().is_empty());
         assert_eq!(store.payload_len(), 0);
     }
-
     #[test]
     fn writer_emits_spec_compliant_carv2() {
         use std::io::Cursor;
-
         let input = sample_input();
         let plan = CarBuildPlan::single_file(&input).expect("plan");
         let writer = CarWriter::new(&plan, &input).expect("writer");
-
         let mut buffer = Cursor::new(Vec::new());
         let stats = writer.write_to(&mut buffer).expect("write carv2");
         let bytes = buffer.into_inner();
-
         assert_eq!(stats.payload_bytes, input.len() as u64);
         assert_eq!(stats.chunk_count, plan.chunks.len());
         assert_eq!(stats.car_size as usize, bytes.len());
-
         assert_eq!(&bytes[..PRAGMA.len()], &PRAGMA);
-
         let characteristics = &bytes[PRAGMA.len()..PRAGMA.len() + 16];
         assert_eq!(characteristics[0] & 0x80, 0x80);
-
         let header_offset = PRAGMA.len() + HEADER_LEN;
         let data_offset = u64::from_le_bytes(
             bytes[PRAGMA.len() + 16..PRAGMA.len() + 24]
@@ -9492,7 +8881,6 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(data_offset as usize, header_offset);
-
         let data_size = u64::from_le_bytes(
             bytes[PRAGMA.len() + 24..PRAGMA.len() + 32]
                 .try_into()
@@ -9505,7 +8893,6 @@ mod tests {
         );
         assert_eq!(index_offset, data_offset + data_size);
         assert!(index_offset as usize <= bytes.len());
-
         let payload_slice = &bytes[data_offset as usize..(data_offset + data_size) as usize];
         assert_eq!(
             stats.car_payload_digest.as_bytes(),
@@ -9520,7 +8907,6 @@ mod tests {
         assert_eq!(stats.car_cid, encode_cid(RAW_CODEC, &digest_arr));
         assert_eq!(stats.root_cids.len(), 1, "expected single root cid");
         assert_eq!(stats.dag_codec, DAG_CBOR_CODEC);
-
         let mut cursor = header_offset;
         let (header_len, header_len_bytes) = decode_uleb128(&bytes[cursor..]);
         cursor += header_len_bytes;
@@ -9546,7 +8932,6 @@ mod tests {
         header_idx += consumed;
         assert_eq!(header_idx, header_bytes.len());
         cursor += header_len as usize;
-
         let mut observed_entries: Vec<([u8; 32], u64)> = Vec::new();
         let data_end = data_offset + data_size;
         let chunk_count = plan.chunks.len();
@@ -9560,9 +8945,7 @@ mod tests {
             let data_len = section_len as usize - cid_len;
             let data_slice = &bytes[cursor..cursor + data_len];
             cursor += data_len;
-
             let offset = (section_start - header_offset) as u64;
-
             let digest: [u8; 32] = if observed_entries.len() < chunk_count {
                 let chunk = &plan.chunks[observed_entries.len()];
                 assert_eq!(codec, RAW_CODEC);
@@ -9576,52 +8959,39 @@ mod tests {
                 assert!(matches!(data_slice.first().map(|b| b & 0xe0), Some(0xa0)));
                 blake3::hash(data_slice).into()
             };
-
             observed_entries.push((digest, offset));
         }
-
         assert_eq!(cursor as u64, data_end);
-
         let (index_codec, index_codec_len) = decode_uleb128(&bytes[index_offset as usize..]);
         assert_eq!(index_codec, 0x0401);
         let mut idx_cursor = index_offset as usize + index_codec_len;
-
         let mut indexed_entries: Vec<([u8; 32], u64)> = Vec::new();
         while idx_cursor < bytes.len() {
             let mh_code = u64::from_le_bytes(bytes[idx_cursor..idx_cursor + 8].try_into().unwrap());
             assert_eq!(mh_code, BLAKE3_256_MULTIHASH_CODE);
             idx_cursor += 8;
-
             let digest_size =
                 u32::from_le_bytes(bytes[idx_cursor..idx_cursor + 4].try_into().unwrap());
             assert_eq!(digest_size, 32);
             idx_cursor += 4;
-
             let count = u64::from_le_bytes(bytes[idx_cursor..idx_cursor + 8].try_into().unwrap());
             idx_cursor += 8;
-
             for _ in 0..count {
                 let mut digest = [0u8; 32];
                 digest.copy_from_slice(&bytes[idx_cursor..idx_cursor + digest_size as usize]);
                 idx_cursor += digest_size as usize;
-
                 let offset =
                     u64::from_le_bytes(bytes[idx_cursor..idx_cursor + 8].try_into().unwrap());
                 idx_cursor += 8;
-
                 indexed_entries.push((digest, offset));
             }
         }
-
         assert_eq!(idx_cursor, bytes.len());
-
         assert_eq!(indexed_entries.len(), observed_entries.len());
-
         let mut expected_entries = observed_entries.clone();
         expected_entries.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(indexed_entries, expected_entries);
     }
-
     #[test]
     fn car_layout_helpers_fail_closed_on_invariants_overflow_and_capacity() {
         assert!(matches!(
@@ -9630,7 +9000,6 @@ mod tests {
                 context: "file DAG payload size"
             })
         ));
-
         let first_path = vec!["docs".to_owned()];
         let descendant_path = vec!["docs".to_owned(), "payload.bin".to_owned()];
         let files = [
@@ -9649,7 +9018,6 @@ mod tests {
             build_directory_dag(&files),
             Err(CarWriteError::DirectoryPathConflict)
         ));
-
         let empty_path: Vec<String> = Vec::new();
         let empty_path_file = [FileRootInfo {
             path: &empty_path,
@@ -9662,7 +9030,6 @@ mod tests {
                 context: "directory DAG file path"
             })
         ));
-
         let first = TreeNode {
             cid_bytes: vec![1],
             data: Vec::new(),
@@ -9687,7 +9054,6 @@ mod tests {
                 context: "test arithmetic"
             })
         ));
-
         let mut allocation = Vec::<u8>::new();
         assert!(matches!(
             try_reserve_car(&mut allocation, usize::MAX, "test allocation"),
@@ -9711,44 +9077,35 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn streaming_writer_matches_buffered_output() {
         use std::io::Cursor;
-
         let mut payload = Vec::new();
         for i in 0..(512 * 3 + 123) {
             payload.push((i % 251) as u8);
         }
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let writer = CarWriter::new(&plan, &payload).expect("writer");
         let mut buffered_bytes = Vec::new();
         let stats_buffered = writer
             .write_to(&mut buffered_bytes)
             .expect("buffered write");
-
         let streaming_writer = CarStreamingWriter::new(&plan);
         let mut reader = Cursor::new(payload.clone());
         let mut streaming_bytes = Vec::new();
         let stats_streaming = streaming_writer
             .write_from_reader(&mut reader, &mut streaming_bytes)
             .expect("streaming write");
-
         assert_eq!(buffered_bytes, streaming_bytes);
         assert_eq!(stats_buffered, stats_streaming);
     }
-
     #[test]
     fn streaming_writer_detects_digest_mismatch() {
         use std::io::Cursor;
-
         let payload = vec![0u8; 600_000];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let mut corrupted = payload.clone();
         corrupted[123] ^= 0xff;
-
         let streaming_writer = CarStreamingWriter::new(&plan);
         let mut reader = Cursor::new(corrupted);
         let result = streaming_writer.write_from_reader(&mut reader, &mut Vec::new());
@@ -9757,7 +9114,6 @@ mod tests {
             Err(CarWriteError::DigestMismatch { chunk_index: 0 })
         ));
     }
-
     #[test]
     fn writer_rejects_payload_mismatch() {
         let input = sample_input();
@@ -9768,7 +9124,6 @@ mod tests {
             Ok(_) => panic!("expected PayloadMismatch, got Ok"),
         }
     }
-
     #[test]
     fn writer_rejects_digest_mismatch() {
         let mut input = sample_input();
@@ -9779,11 +9134,9 @@ mod tests {
             Err(CarWriteError::PayloadDigestMismatch)
         ));
     }
-
     #[test]
     fn writer_respects_expected_roots() {
         use std::io::Cursor;
-
         let input = sample_input();
         let plan = CarBuildPlan::single_file(&input).expect("plan");
         let mut baseline = Cursor::new(Vec::new());
@@ -9792,20 +9145,16 @@ mod tests {
             .write_to(&mut baseline)
             .expect("baseline write");
         let expected_root = baseline_stats.root_cids[0].clone();
-
         let writer = CarWriter::with_expected_roots(&plan, &input, vec![expected_root.clone()])
             .expect("writer with expected roots");
-
         let mut buffer = Cursor::new(Vec::new());
         let stats = writer.write_to(&mut buffer).expect("write");
         assert_eq!(stats.root_cids, vec![expected_root.clone()]);
         let data = buffer.into_inner();
-
         let header_offset = PRAGMA.len() + HEADER_LEN;
         let (header_len, len_bytes) = decode_uleb128(&data[header_offset..]);
         let header_start = header_offset + len_bytes;
         let header = &data[header_start..header_start + header_len as usize];
-
         let (map_len, consumed) = decode_cbor_map_len(header);
         assert_eq!(map_len, 2);
         let (key_roots, delta) = decode_cbor_text(&header[consumed..]);
@@ -9825,26 +9174,21 @@ mod tests {
         let offset = offset + delta;
         assert_eq!(offset, header.len());
     }
-
     #[test]
     fn ingest_plan_stream_matches_in_memory() {
         let input = sample_input();
         let plan = CarBuildPlan::single_file(&input).expect("plan");
-
         let mut store_mem = ChunkStore::with_profile(plan.chunk_profile);
         store_mem.ingest_plan(&input, &plan).expect("memory ingest");
-
         let mut store_stream = ChunkStore::with_profile(plan.chunk_profile);
         let mut cursor = Cursor::new(&input);
         store_stream
             .ingest_plan_stream(&plan, &mut cursor)
             .expect("stream ingest");
-
         assert_eq!(store_mem.payload_len(), store_stream.payload_len());
         assert_eq!(store_mem.payload_digest(), store_stream.payload_digest());
         assert_eq!(store_mem.por_tree().root(), store_stream.por_tree().root());
     }
-
     #[cfg(unix)]
     #[test]
     fn directory_payload_sampling_matches_in_memory() {
@@ -9854,39 +9198,31 @@ mod tests {
         let file_b = root.join("b.bin");
         fs::write(&file_a, b"hello world").expect("write a");
         fs::write(&file_b, vec![7u8; 8192]).expect("write b");
-
         let (plan, payload) = CarBuildPlan::from_directory(root).expect("plan directory");
-
         let mut store_mem = ChunkStore::with_profile(plan.chunk_profile);
         store_mem
             .ingest_plan(&payload, &plan)
             .expect("memory ingest");
-
         let mut dir_source_ingest = DirectoryPayload::new(root, &plan.files).expect("dir payload");
         let mut store_dir = ChunkStore::with_profile(plan.chunk_profile);
         store_dir
             .ingest_plan_source(&plan, &mut dir_source_ingest)
             .expect("directory ingest");
-
         assert_eq!(store_mem.por_tree().root(), store_dir.por_tree().root());
-
         let mut mem_source = InMemoryPayload::new(&payload);
         let mem_samples = store_dir
             .sample_leaves_with(5, 0x1234_5678, &mut mem_source)
             .expect("mem samples");
-
         let mut dir_source = DirectoryPayload::new(root, &plan.files).expect("dir payload");
         let dir_samples = store_dir
             .sample_leaves_with(5, 0x1234_5678, &mut dir_source)
             .expect("dir samples");
-
         assert_eq!(mem_samples.len(), dir_samples.len());
         for (mem, dir) in mem_samples.iter().zip(dir_samples.iter()) {
             assert_eq!(mem.0, dir.0);
             assert_eq!(mem.1.leaf_bytes, dir.1.leaf_bytes);
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn directory_payload_rejects_file_span_length_overflow() {
@@ -9910,12 +9246,10 @@ mod tests {
         };
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
     #[cfg(unix)]
     #[test]
     fn file_payload_rejects_symlink_nonregular_swap_and_resize() {
         use std::os::unix::fs::symlink;
-
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("payload");
         fs::write(&path, b"payload").expect("payload");
@@ -9927,7 +9261,6 @@ mod tests {
         fs::hard_link(&path, &hardlink).expect("hardlink");
         assert!(FilePayload::open(&path).is_err());
         fs::remove_file(&hardlink).expect("remove hardlink");
-
         let mut source = FilePayload::open(&path).expect("file payload");
         let mut bytes = [0u8; 7];
         source.read_exact(0, &mut bytes).expect("initial read");
@@ -9937,7 +9270,6 @@ mod tests {
             source.read_exact(0, &mut bytes),
             Err(ChunkStoreError::Io(_))
         ));
-
         let resize_path = temp.path().join("resize");
         fs::write(&resize_path, b"payload").expect("resize payload");
         let mut source = FilePayload::open(&resize_path).expect("file payload");
@@ -9951,7 +9283,6 @@ mod tests {
             source.ensure_exhausted(7),
             Err(ChunkStoreError::Io(_))
         ));
-
         let truncate_path = temp.path().join("truncate");
         fs::write(&truncate_path, b"payload").expect("truncate payload");
         let mut source = FilePayload::open(&truncate_path).expect("file payload");
@@ -9966,7 +9297,6 @@ mod tests {
             Err(ChunkStoreError::Io(_))
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn directory_payload_rejects_nonportable_paths_and_actual_size_mismatch() {
@@ -9982,7 +9312,6 @@ mod tests {
             .err()
             .expect("traversal rejected");
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-
         let wrong_size = [FilePlan {
             path: vec!["payload".to_owned()],
             first_chunk: 0,
@@ -9994,12 +9323,10 @@ mod tests {
             .expect("size mismatch rejected");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
     #[cfg(unix)]
     #[test]
     fn directory_payload_rejects_symlink_and_hardlink_sources() {
         use std::os::unix::fs::symlink;
-
         let temp = tempdir().expect("tempdir");
         let victim = temp.path().join("victim");
         fs::write(&victim, b"payload").expect("victim");
@@ -10012,7 +9339,6 @@ mod tests {
             size: 7,
         }];
         assert!(DirectoryPayload::new(temp.path(), &symlink_plan).is_err());
-
         let hardlink_path = temp.path().join("hardlink");
         fs::hard_link(&victim, &hardlink_path).expect("hardlink");
         let hardlink_plan = [FilePlan {
@@ -10023,7 +9349,6 @@ mod tests {
         }];
         assert!(DirectoryPayload::new(temp.path(), &hardlink_plan).is_err());
         assert_eq!(fs::read(&victim).expect("victim unchanged"), b"payload");
-
         let outside = tempdir().expect("outside");
         fs::write(outside.path().join("escaped"), b"payload").expect("outside payload");
         symlink(outside.path(), temp.path().join("escape-dir")).expect("ancestor symlink");
@@ -10038,7 +9363,6 @@ mod tests {
             .expect("ancestor escape rejected");
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
-
     #[cfg(unix)]
     #[test]
     fn directory_payload_detects_mutation_before_read_and_final_recheck() {
@@ -10051,7 +9375,6 @@ mod tests {
             chunk_count: 1,
             size: 7,
         }];
-
         let mut source = DirectoryPayload::new(temp.path(), &files).expect("source");
         let replacement = temp.path().join("replacement");
         fs::write(&replacement, b"changed").expect("replacement");
@@ -10062,7 +9385,6 @@ mod tests {
             source.read_exact(0, &mut bytes),
             Err(ChunkStoreError::Io(_))
         ));
-
         fs::write(&path, b"payload").expect("restore payload");
         let mut source = DirectoryPayload::new(temp.path(), &files).expect("fresh source");
         source.read_exact(0, &mut bytes).expect("initial read");
@@ -10077,7 +9399,6 @@ mod tests {
             Err(ChunkStoreError::Io(_))
         ));
     }
-
     #[cfg(not(unix))]
     #[test]
     fn secure_file_backed_apis_fail_closed_without_side_effects_on_non_unix() {
@@ -10085,7 +9406,6 @@ mod tests {
         let missing = temp.path().join("missing");
         let sentinel = temp.path().join("sentinel");
         fs::write(&sentinel, b"unchanged").expect("sentinel");
-
         let file_error = FilePayload::open(&missing)
             .err()
             .expect("file payload unsupported");
@@ -10095,12 +9415,10 @@ mod tests {
             .err()
             .expect("adopted file payload unsupported");
         assert_eq!(adopted_error.kind(), io::ErrorKind::Unsupported);
-
         let directory_error = DirectoryPayload::new(&missing, &[])
             .err()
             .expect("directory payload unsupported");
         assert_eq!(directory_error.kind(), io::ErrorKind::Unsupported);
-
         let plan = CarBuildPlan::single_file(b"payload").expect("plan");
         let root = temp.path().join("chunks");
         let mut sink = DirectoryChunkSink::new(&root);
@@ -10126,7 +9444,6 @@ mod tests {
             b"unchanged"
         );
     }
-
     #[cfg(windows)]
     include!("lib/directory_car_tests.rs");
 }

@@ -1,7 +1,5 @@
 //! Validator lifecycle helpers and identifiers.
-
 use norito::codec::{Decode, Encode};
-
 /// Mode for validator admission and activation.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,

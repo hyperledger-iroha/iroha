@@ -1,12 +1,10 @@
 //! Crash-safe local signing guard for automatic lane drain certificates.
-
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
 };
-
 use iroha_crypto::Hash;
 use iroha_data_model::{
     block::consensus::LaneBlockVoteBodyV1,
@@ -16,12 +14,9 @@ use iroha_data_model::{
 use norito::codec::{Decode, Encode};
 use parking_lot::Mutex;
 use thiserror::Error;
-
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-
 use crate::{lane_consensus::validate_lane_drain_certificate_body, sumeragi::consensus::Phase};
-
 const GUARD_VERSION: u8 = 1;
 const GUARD_DIRECTORY: &str = "lane-drain-signing-guard-v1";
 const RECORD_EXTENSION: &str = "norito";
@@ -31,14 +26,12 @@ const RECORD_KEY_DOMAIN: &[u8] = b"iroha:lane-drain:signing-record:v1\0";
 const RECORD_INTEGRITY_DOMAIN: &[u8] = b"iroha:lane-drain:signing-record-integrity:v1\0";
 const MAX_RECORD_BYTES: usize = 32 * 1024;
 const MAX_RECORDS: usize = 65_536;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 struct LaneDrainSigningKeyV1 {
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
     lane_incarnation: Hash,
 }
-
 impl LaneDrainSigningKeyV1 {
     fn from_commit_vote(body: &LaneBlockVoteBodyV1) -> Self {
         Self {
@@ -47,7 +40,6 @@ impl LaneDrainSigningKeyV1 {
             lane_incarnation: body.lane_incarnation,
         }
     }
-
     fn from_drain(body: &LaneDrainCertificateBodyV1) -> Self {
         Self {
             lane_id: body.intent.lane_id,
@@ -55,13 +47,11 @@ impl LaneDrainSigningKeyV1 {
             lane_incarnation: body.intent.lane_incarnation,
         }
     }
-
     fn digest(self) -> Hash {
         let encoded = self.encode();
         Hash::new_from_chunks(&[RECORD_KEY_DOMAIN, encoded.as_slice()])
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 struct LaneCommitVoteLockV1 {
     proposal_height: u64,
@@ -70,7 +60,6 @@ struct LaneCommitVoteLockV1 {
     descriptor_hash: Hash,
     vote_body_digest: Hash,
 }
-
 impl LaneCommitVoteLockV1 {
     fn from_body(body: &LaneBlockVoteBodyV1) -> Self {
         Self {
@@ -82,7 +71,6 @@ impl LaneCommitVoteLockV1 {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct LaneDrainSigningRecordV1 {
     version: u8,
@@ -91,7 +79,6 @@ struct LaneDrainSigningRecordV1 {
     drain_body: Option<LaneDrainCertificateBodyV1>,
     integrity_hash: Hash,
 }
-
 impl LaneDrainSigningRecordV1 {
     fn empty(key: LaneDrainSigningKeyV1) -> Self {
         Self {
@@ -102,7 +89,6 @@ impl LaneDrainSigningRecordV1 {
             integrity_hash: Hash::prehashed([0; Hash::LENGTH]),
         }
     }
-
     fn computed_integrity_hash(&self) -> Hash {
         let mut payload = self.version.encode();
         payload.extend(self.key.encode());
@@ -110,14 +96,12 @@ impl LaneDrainSigningRecordV1 {
         payload.extend(self.drain_body.encode());
         Hash::new_from_chunks(&[RECORD_INTEGRITY_DOMAIN, payload.as_slice()])
     }
-
     fn canonical_for_persistence(&self) -> Self {
         let mut canonical = self.clone();
         canonical.integrity_hash = canonical.computed_integrity_hash();
         canonical
     }
 }
-
 /// Failure to establish a durable anti-equivocation decision before signing.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub(crate) enum LaneDrainSigningGuardError {
@@ -140,7 +124,6 @@ pub(crate) enum LaneDrainSigningGuardError {
     #[error("invalid lane drain signing input: {0}")]
     InvalidInput(String),
 }
-
 /// Crash-safe, per-incarnation journal used before lane commit and drain signatures.
 ///
 /// Each decision is written, fsynced, atomically renamed, and directory-fsynced
@@ -153,7 +136,6 @@ pub(crate) struct LaneDrainSigningGuard {
     _owner_lock: File,
     serial: Mutex<()>,
 }
-
 impl LaneDrainSigningGuard {
     /// Open the journal below the Kura root and discard records for finalized,
     /// inactive incarnations. Malformed files, symlinks, and non-canonical
@@ -174,15 +156,12 @@ impl LaneDrainSigningGuard {
         guard.validate_and_prune(active_incarnations)?;
         Ok(guard)
     }
-
     fn record_path_for(directory: &Path, key: LaneDrainSigningKeyV1) -> PathBuf {
         directory.join(format!("{}.{}", key.digest(), RECORD_EXTENSION))
     }
-
     fn record_path(&self, key: LaneDrainSigningKeyV1) -> PathBuf {
         Self::record_path_for(&self.directory, key)
     }
-
     fn read_record(
         directory: &Path,
         path: &Path,
@@ -242,7 +221,6 @@ impl LaneDrainSigningGuard {
         }
         Ok(record)
     }
-
     fn validate_and_prune(
         &self,
         active_incarnations: &BTreeSet<(LaneId, Hash)>,
@@ -280,7 +258,6 @@ impl LaneDrainSigningGuard {
         }
         Ok(())
     }
-
     fn load_or_empty(
         &self,
         key: LaneDrainSigningKeyV1,
@@ -294,7 +271,6 @@ impl LaneDrainSigningGuard {
             Err(error) => Err(unsafe_journal(&path, error.to_string())),
         }
     }
-
     fn ensure_capacity_for_new_record(&self) -> Result<(), LaneDrainSigningGuardError> {
         let mut count = 0_usize;
         for item in fs::read_dir(&self.directory)
@@ -313,7 +289,6 @@ impl LaneDrainSigningGuard {
         }
         Ok(())
     }
-
     fn persist_record(
         &self,
         record: &LaneDrainSigningRecordV1,
@@ -353,7 +328,6 @@ impl LaneDrainSigningGuard {
         fs::rename(&temp, &path).map_err(|error| unsafe_journal(&path, error.to_string()))?;
         sync_directory(&self.directory)
     }
-
     /// Durably authorize one lane commit-vote body before its BLS signature is
     /// created. Heights may advance monotonically; the same height may only be
     /// retried for the exact domain-separated vote body.
@@ -396,7 +370,6 @@ impl LaneDrainSigningGuard {
         record.highest_commit_vote = Some(attempted);
         self.persist_record(&record)
     }
-
     /// Durably close one lane incarnation before producing a drain vote.
     /// The certified frontier must cover the exact descriptor of every locally
     /// signed lane commit high-water. Structural validation includes the exact
@@ -432,7 +405,6 @@ impl LaneDrainSigningGuard {
         record.drain_body = Some(body.clone());
         self.persist_record(&record)
     }
-
     #[cfg(test)]
     fn decision(
         &self,
@@ -454,7 +426,6 @@ impl LaneDrainSigningGuard {
         }
     }
 }
-
 fn ensure_drain_covers_commit(
     highest_commit_vote: Option<LaneCommitVoteLockV1>,
     body: &LaneDrainCertificateBodyV1,
@@ -470,7 +441,6 @@ fn ensure_drain_covers_commit(
     }
     Ok(())
 }
-
 fn valid_record_filename(name: &str) -> bool {
     let suffix = format!(".{RECORD_EXTENSION}");
     let Some(stem) = name.strip_suffix(&suffix) else {
@@ -478,7 +448,6 @@ fn valid_record_filename(name: &str) -> bool {
     };
     stem.len() == Hash::LENGTH * 2 && stem.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
-
 fn valid_temp_filename(name: &str) -> bool {
     let suffix = format!(".{TEMP_EXTENSION}");
     let Some(stem) = name.strip_suffix(&suffix) else {
@@ -486,7 +455,6 @@ fn valid_temp_filename(name: &str) -> bool {
     };
     stem.len() == Hash::LENGTH * 2 && stem.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
-
 fn acquire_owner_lock(directory: &Path) -> Result<File, LaneDrainSigningGuardError> {
     let path = directory.join(LOCK_FILENAME);
     let before = match fs::symlink_metadata(&path) {
@@ -553,7 +521,6 @@ fn acquire_owner_lock(directory: &Path) -> Result<File, LaneDrainSigningGuardErr
     }
     Ok(file)
 }
-
 fn validate_owner_lock_metadata(
     path: &Path,
     metadata: &fs::Metadata,
@@ -573,30 +540,24 @@ fn validate_owner_lock_metadata(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(not(unix))]
 fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len()
 }
-
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut OpenOptions) {}
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -612,7 +573,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -629,7 +589,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0
 }
-
 fn ensure_regular_directory(path: &Path) -> Result<(), LaneDrainSigningGuardError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -659,7 +618,6 @@ fn ensure_regular_directory(path: &Path) -> Result<(), LaneDrainSigningGuardErro
     }
     Ok(())
 }
-
 fn reconcile_temps(directory: &Path) -> Result<(), LaneDrainSigningGuardError> {
     let mut removed = false;
     for item in
@@ -693,7 +651,6 @@ fn reconcile_temps(directory: &Path) -> Result<(), LaneDrainSigningGuardError> {
     }
     Ok(())
 }
-
 fn sync_directory(path: &Path) -> Result<(), LaneDrainSigningGuardError> {
     let directory = OpenOptions::new()
         .read(true)
@@ -703,11 +660,9 @@ fn sync_directory(path: &Path) -> Result<(), LaneDrainSigningGuardError> {
         .sync_all()
         .map_err(|error| unsafe_journal(path, error.to_string()))
 }
-
 fn unsafe_journal(path: &Path, message: impl Into<String>) -> LaneDrainSigningGuardError {
     LaneDrainSigningGuardError::UnsafeJournal(format!("{}: {}", path.display(), message.into()))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -717,15 +672,12 @@ mod tests {
         merge::{LaneDrainFrontierV1, LaneDrainIntentV1},
         peer::PeerId,
     };
-
     fn incarnation() -> Hash {
         Hash::new(b"lane-drain-signing-guard-incarnation")
     }
-
     fn active_incarnations() -> BTreeSet<(LaneId, Hash)> {
         BTreeSet::from([(LaneId::new(3), incarnation())])
     }
-
     fn validator_set() -> Vec<PeerId> {
         vec![PeerId::new(
             KeyPair::try_from_seed(b"lane-drain-guard-validator".to_vec(), Algorithm::BlsNormal)
@@ -734,7 +686,6 @@ mod tests {
                 .clone(),
         )]
     }
-
     fn commit_vote(height: u64, descriptor_byte: u8) -> LaneBlockVoteBodyV1 {
         LaneBlockVoteBodyV1 {
             phase: Phase::Commit,
@@ -758,7 +709,6 @@ mod tests {
             qc_mode_tag: "permissioned".to_owned(),
         }
     }
-
     fn drain_body(height: u64, descriptor_byte: u8) -> LaneDrainCertificateBodyV1 {
         let validator_set = validator_set();
         LaneDrainCertificateBodyV1 {
@@ -796,7 +746,6 @@ mod tests {
             ),
         }
     }
-
     #[test]
     fn drain_must_cover_durable_commit_vote_high_water() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -805,7 +754,6 @@ mod tests {
         guard
             .authorize_commit_vote(&commit_vote(5, 5))
             .expect("authorize commit vote");
-
         assert_eq!(
             guard.authorize_drain(&drain_body(4, 4)),
             Err(LaneDrainSigningGuardError::DrainFrontierBelowSignedCommit)
@@ -818,7 +766,6 @@ mod tests {
             .authorize_drain(&drain_body(5, 5))
             .expect("matching frontier closes lane");
     }
-
     #[test]
     fn drain_guard_rejects_an_intent_with_a_non_exact_embedded_committee() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -826,7 +773,6 @@ mod tests {
             LaneDrainSigningGuard::open(temp.path(), &active_incarnations()).expect("open guard");
         let mut body = drain_body(5, 5);
         body.intent.validator_set.clear();
-
         assert!(matches!(
             guard.authorize_drain(&body),
             Err(LaneDrainSigningGuardError::InvalidInput(_))
@@ -839,7 +785,6 @@ mod tests {
             "invalid committee input must not create a durable close decision"
         );
     }
-
     #[test]
     fn maximum_supported_committee_drain_record_fits_and_reopens() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -861,7 +806,6 @@ mod tests {
         .expect("maximum committee quorum fits u32");
         body.intent.validator_set_hash = HashOf::new(&committee);
         body.intent.validator_set = committee;
-
         let record_path = {
             let guard = LaneDrainSigningGuard::open(temp.path(), &active_incarnations())
                 .expect("open guard");
@@ -874,7 +818,6 @@ mod tests {
             .expect("maximum-committee record metadata")
             .len();
         assert!(record_len <= MAX_RECORD_BYTES as u64);
-
         let reopened =
             LaneDrainSigningGuard::open(temp.path(), &active_incarnations()).expect("reopen guard");
         assert_eq!(
@@ -886,7 +829,6 @@ mod tests {
             Some(body)
         );
     }
-
     #[test]
     fn drain_lock_survives_restart_allows_frontier_advance_and_rejects_commit() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -899,7 +841,6 @@ mod tests {
                 .expect("authorize commit vote");
             guard.authorize_drain(&body).expect("authorize drain");
         }
-
         let reopened =
             LaneDrainSigningGuard::open(temp.path(), &active_incarnations()).expect("reopen guard");
         reopened.authorize_drain(&body).expect("idempotent retry");
@@ -932,7 +873,6 @@ mod tests {
             .expect("decision exists");
         assert_eq!(decision.drain_body, Some(advanced));
     }
-
     #[test]
     fn same_height_commit_equivocation_and_regression_are_rejected() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -957,7 +897,6 @@ mod tests {
             .authorize_commit_vote(&commit_vote(6, 6))
             .expect("monotonic advance");
     }
-
     #[test]
     fn same_hashes_cannot_mask_a_different_commit_vote_body() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -967,7 +906,6 @@ mod tests {
         guard
             .authorize_commit_vote(&vote)
             .expect("authorize first vote");
-
         let mut conflicting = vote;
         conflicting.subject_hash = Hash::new(b"different subject behind unchanged outer hashes");
         assert_eq!(
@@ -975,7 +913,6 @@ mod tests {
             Err(LaneDrainSigningGuardError::CommitVoteEquivocation)
         );
     }
-
     #[test]
     fn corrupt_record_fails_restart_closed() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -997,13 +934,11 @@ mod tests {
         let corrupt_but_canonical =
             norito::to_bytes(&record).expect("re-encode structurally canonical corrupt record");
         fs::write(&record_path, corrupt_but_canonical).expect("corrupt signing record");
-
         assert!(matches!(
             LaneDrainSigningGuard::open(temp.path(), &active_incarnations()),
             Err(LaneDrainSigningGuardError::UnsafeJournal(_))
         ));
     }
-
     #[test]
     fn unpublished_regular_temp_is_discarded_on_restart() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1017,18 +952,15 @@ mod tests {
             fs::copy(&record_path, &temp_path).expect("simulate unpublished temp record");
             (record_path, temp_path)
         };
-
         LaneDrainSigningGuard::open(temp.path(), &active_incarnations())
             .expect("restart discards unpublished temp");
         assert!(record_path.exists());
         assert!(!temp_path.exists());
     }
-
     #[cfg(unix)]
     #[test]
     fn journal_directory_record_and_temp_symlinks_fail_closed() {
         use std::os::unix::fs::symlink;
-
         let target = tempfile::tempdir().expect("symlink target root");
         let directory_link_root = tempfile::tempdir().expect("directory symlink root");
         symlink(
@@ -1040,7 +972,6 @@ mod tests {
             LaneDrainSigningGuard::open(directory_link_root.path(), &active_incarnations()),
             Err(LaneDrainSigningGuardError::UnsafeJournal(_))
         ));
-
         let owner_link_root = tempfile::tempdir().expect("owner-lock symlink root");
         let owner_directory = owner_link_root.path().join(GUARD_DIRECTORY);
         fs::create_dir_all(&owner_directory).expect("create owner-lock directory");
@@ -1052,7 +983,6 @@ mod tests {
             LaneDrainSigningGuard::open(owner_link_root.path(), &active_incarnations()),
             Err(LaneDrainSigningGuardError::UnsafeJournal(_))
         ));
-
         let owner_hardlink_root = tempfile::tempdir().expect("owner-lock hardlink root");
         let owner_directory = owner_hardlink_root.path().join(GUARD_DIRECTORY);
         fs::create_dir_all(&owner_directory).expect("create owner-hardlink directory");
@@ -1064,7 +994,6 @@ mod tests {
             LaneDrainSigningGuard::open(owner_hardlink_root.path(), &active_incarnations()),
             Err(LaneDrainSigningGuardError::UnsafeJournal(_))
         ));
-
         let source_root = tempfile::tempdir().expect("source record root");
         let vote = commit_vote(5, 5);
         let source_path = {
@@ -1075,7 +1004,6 @@ mod tests {
                 .expect("authorize source vote");
             guard.record_path(LaneDrainSigningKeyV1::from_commit_vote(&vote))
         };
-
         let record_link_root = tempfile::tempdir().expect("record symlink root");
         let record_guard = LaneDrainSigningGuard::open(
             record_link_root.path(),
@@ -1089,7 +1017,6 @@ mod tests {
             LaneDrainSigningGuard::open(record_link_root.path(), &active_incarnations()),
             Err(LaneDrainSigningGuardError::UnsafeJournal(_))
         ));
-
         let temp_link_root = tempfile::tempdir().expect("temp symlink root");
         let temp_guard =
             LaneDrainSigningGuard::open(temp_link_root.path(), &BTreeSet::<(LaneId, Hash)>::new())
@@ -1104,7 +1031,6 @@ mod tests {
             Err(LaneDrainSigningGuardError::UnsafeJournal(_))
         ));
     }
-
     #[test]
     fn inactive_records_are_pruned_but_unknown_files_fail_closed() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1129,7 +1055,6 @@ mod tests {
             Err(LaneDrainSigningGuardError::UnsafeJournal(_))
         ));
     }
-
     #[test]
     fn signing_directory_has_one_process_owner_and_releases_on_drop() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1140,7 +1065,6 @@ mod tests {
             Err(LaneDrainSigningGuardError::UnsafeJournal(message))
                 if message.contains("already owned by another process")
         ));
-
         drop(first);
         LaneDrainSigningGuard::open(temp.path(), &active_incarnations())
             .expect("ownership lock releases when the process guard drops");

@@ -4,9 +4,7 @@
 //! browser WebAssembly. It deliberately depends on the stable `ivm_abi`
 //! surface and canonical primitive codecs, not on the VM runtime, caches,
 //! proof systems, or host integrations.
-
 use std::{error::Error as StdError, fmt, fmt::Write as _};
-
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
@@ -35,12 +33,9 @@ use ivm_abi::{
 #[cfg(test)]
 use norito::NoritoSerialize;
 use norito::codec::{Decode, Encode};
-
 mod policy;
-
 /// Maximum executable-image bytes admitted by IVM code memory.
 pub const MAX_CONTRACT_IMAGE_BYTES: u64 = 0x0010_0000;
-
 /// One fixed-width decoded instruction in the executable stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DecodedOp {
@@ -48,7 +43,6 @@ pub(crate) struct DecodedOp {
     pub(crate) inst: u32,
     pub(crate) len: u32,
 }
-
 /// Admission outputs derived from the artifact itself.
 #[derive(Clone, Debug)]
 pub struct VerifiedContractArtifact {
@@ -67,14 +61,12 @@ pub struct VerifiedContractArtifact {
     /// Canonical unsigned on-chain manifest derived from the interface.
     pub manifest: ContractManifest,
 }
-
 /// Stable failure returned when a deployable artifact is malformed or unsafe.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContractArtifactError {
     message: String,
     abi_hash_mismatch: Option<([u8; 32], [u8; 32])>,
 }
-
 impl ContractArtifactError {
     /// Construct an ordinary admission error. Public for the native preparation
     /// adapter; artifact callers should receive errors from verification.
@@ -85,7 +77,6 @@ impl ContractArtifactError {
             abi_hash_mismatch: None,
         }
     }
-
     /// Construct the ABI-descriptor mismatch variant.
     #[doc(hidden)]
     pub fn abi_hash_mismatch(expected: [u8; 32], actual: [u8; 32]) -> Self {
@@ -94,7 +85,6 @@ impl ContractArtifactError {
             abi_hash_mismatch: Some((expected, actual)),
         }
     }
-
     /// Convert admission failure into the stable VM error surface.
     #[must_use]
     pub fn into_vm_error(self) -> VMError {
@@ -104,15 +94,12 @@ impl ContractArtifactError {
             })
     }
 }
-
 impl fmt::Display for ContractArtifactError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
     }
 }
-
 impl StdError for ContractArtifactError {}
-
 /// Verify a self-describing IVM 1.1 artifact and derive its canonical manifest.
 ///
 /// # Errors
@@ -139,10 +126,8 @@ pub fn verify_contract_artifact(
         .contract_interface
         .take()
         .expect("validated contract envelope retains its CNTR interface");
-
     Ok(verified_from_parts(artifact, parsed, contract_interface))
 }
-
 /// Verify a compiler-produced generic IVM 1.0 Kotodama test harness against
 /// its compiler-owned interface sidecar.
 ///
@@ -167,10 +152,8 @@ pub fn verify_koto_test_artifact(
         policy::ValidationProfile::KotoTest,
     )?;
     validate_literal_table(artifact, &parsed, &decoded)?;
-
     Ok(verified_from_parts(artifact, parsed, contract_interface))
 }
-
 fn verified_from_parts(
     artifact: &[u8],
     parsed: ParsedProgramMetadata,
@@ -198,7 +181,6 @@ fn verified_from_parts(
             .then_some(contract_interface.kotoba.clone()),
         provenance: None,
     };
-
     VerifiedContractArtifact {
         metadata: parsed.metadata,
         header_len: parsed.header_len,
@@ -209,7 +191,6 @@ fn verified_from_parts(
         manifest,
     }
 }
-
 fn parse_contract_metadata(
     artifact: &[u8],
 ) -> Result<ParsedProgramMetadata, ContractArtifactError> {
@@ -223,7 +204,6 @@ fn parse_contract_metadata(
         other => ContractArtifactError::invalid(format!("metadata parse failed: {other}")),
     })
 }
-
 fn validate_contract_envelope<'a>(
     artifact: &[u8],
     parsed: &'a ParsedProgramMetadata,
@@ -282,7 +262,6 @@ fn validate_contract_envelope<'a>(
     }
     Ok(contract_interface)
 }
-
 fn validate_koto_test_envelope(
     artifact: &[u8],
     parsed: &ParsedProgramMetadata,
@@ -340,7 +319,6 @@ fn validate_koto_test_envelope(
     }
     Ok(())
 }
-
 fn decode_instruction_stream(code: &[u8]) -> Result<Vec<DecodedOp>, ContractArtifactError> {
     if code.len() as u64 > MAX_CONTRACT_IMAGE_BYTES || !code.len().is_multiple_of(4) {
         return Err(ContractArtifactError::invalid(
@@ -361,13 +339,11 @@ fn decode_instruction_stream(code: &[u8]) -> Result<Vec<DecodedOp>, ContractArti
     }
     Ok(decoded)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DecodedLiteral {
     Pointer,
     I64,
 }
-
 fn validate_literal_table(
     artifact: &[u8],
     parsed: &ParsedProgramMetadata,
@@ -405,7 +381,6 @@ fn validate_literal_table(
     }
     Ok(())
 }
-
 fn decode_literal_table(
     program: &[u8],
     header_len: usize,
@@ -413,7 +388,6 @@ fn decode_literal_table(
     policy: SyscallPolicy,
 ) -> Result<Vec<DecodedLiteral>, VMError> {
     use ivm_abi::metadata::{LiteralKindV1, decode_literal_descriptor};
-
     let Some(section) = section else {
         return Ok(Vec::new());
     };
@@ -488,20 +462,17 @@ fn decode_literal_table(
     }
     Ok(entries)
 }
-
 fn decode_canonical_literal_payload<T>(payload: &[u8]) -> Result<T, VMError>
 where
     T: Decode + Encode,
 {
     decode_canonical_norito(payload).map_err(|_| VMError::InvalidMetadata)
 }
-
 fn validate_literal_payload(
     type_id: ivm_abi::pointer_abi::PointerType,
     payload: &[u8],
 ) -> Result<(), VMError> {
     use ivm_abi::pointer_abi::PointerType;
-
     // A literal pointer's nominal type is part of the authenticated artifact
     // contract. Validate every compiler-structured payload at admission rather
     // than deferring malformed frames to whichever syscall first consumes
@@ -557,7 +528,6 @@ fn validate_literal_payload(
     }
     .map_err(|_| VMError::InvalidMetadata)
 }
-
 fn manifest_state_descriptors(states: &[EmbeddedStateDescriptor]) -> Vec<StateDescriptor> {
     states
         .iter()
@@ -567,7 +537,6 @@ fn manifest_state_descriptors(states: &[EmbeddedStateDescriptor]) -> Vec<StateDe
         })
         .collect()
 }
-
 enum ManifestStateTypeFragment<'a> {
     Type {
         ty: &'a EmbeddedStateType,
@@ -576,7 +545,6 @@ enum ManifestStateTypeFragment<'a> {
     Text(&'a str),
     Capacity(u8),
 }
-
 fn manifest_state_type_name(ty: &EmbeddedStateType) -> String {
     let mut output = String::new();
     let mut pending = vec![ManifestStateTypeFragment::Type { ty, depth: 1 }];
@@ -593,7 +561,6 @@ fn manifest_state_type_name(ty: &EmbeddedStateType) -> String {
     }
     output
 }
-
 fn manifest_scalar_state_type_name(ty: &EmbeddedStateType) -> Option<&'static str> {
     match ty {
         EmbeddedStateType::Int => Some("int"),
@@ -618,7 +585,6 @@ fn manifest_scalar_state_type_name(ty: &EmbeddedStateType) -> Option<&'static st
         | EmbeddedStateType::List { .. } => None,
     }
 }
-
 fn schedule_manifest_state_type_name<'a>(
     ty: &'a EmbeddedStateType,
     depth: usize,
@@ -713,17 +679,14 @@ fn schedule_manifest_state_type_name<'a>(
         _ => unreachable!("scalar embedded state types returned before compound formatting"),
     }
 }
-
 fn header_declares_contract_minor_one(artifact: &[u8]) -> bool {
     artifact.len() >= HEADER_SIZE && artifact[4] == 1 && artifact[5] == 1
 }
-
 fn cntr_section_missing(artifact: &[u8]) -> bool {
     artifact.len() < HEADER_SIZE + 4
         || artifact[HEADER_SIZE..HEADER_SIZE + 4]
             != ivm_abi::metadata::CONTRACT_INTERFACE_SECTION_MAGIC
 }
-
 /// Deterministic JSON admission result used by the raw browser-WASM boundary.
 #[must_use]
 pub fn verify_contract_artifact_json(artifact: &[u8]) -> String {
@@ -747,7 +710,6 @@ pub fn verify_contract_artifact_json(artifact: &[u8]) -> String {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_data_model::{nexus::LaneId, smart_contract::manifest::EntryPointKind};
@@ -759,13 +721,10 @@ mod tests {
         metadata::EmbeddedStateFieldDescriptor,
         pointer_abi::PointerType,
     };
-
     use super::*;
-
     fn encoded(descriptor: &AxtDescriptor) -> Vec<u8> {
         norito::to_bytes(descriptor).expect("encode canonical AXT descriptor")
     }
-
     fn contract_artifact_with_state_type(ty: EmbeddedStateType) -> Vec<u8> {
         let entrypoint = EmbeddedEntrypointDescriptor {
             name: "main".to_owned(),
@@ -801,7 +760,6 @@ mod tests {
         artifact.extend_from_slice(&ivm_abi::encoding::encode_halt().to_le_bytes());
         artifact
     }
-
     #[test]
     fn manifest_state_type_names_preserve_variant_spelling_and_order() {
         let scalar_cases = [
@@ -823,7 +781,6 @@ mod tests {
         for (ty, expected) in scalar_cases {
             assert_eq!(manifest_state_type_name(&ty), expected);
         }
-
         let composite = EmbeddedStateType::Struct {
             name: "Envelope".to_owned(),
             fields: vec![
@@ -856,7 +813,6 @@ mod tests {
             "Envelope{ordered_tuple: (int, decimal), ordered_map: StateMap<Name, Result<Option<quantity>, List<bytes, 64>>>}"
         );
     }
-
     #[test]
     fn depth_255_state_admission_and_manifest_formatting_are_stack_safe() {
         std::thread::Builder::new()
@@ -877,7 +833,6 @@ mod tests {
                     .expect("verified manifest retains its state descriptors");
                 assert_eq!(states.len(), 1);
                 assert_eq!(states[0].name, "deep_state");
-
                 let mut expected = "Option<".repeat(wrappers);
                 expected.push_str("bool");
                 expected.push_str(&">".repeat(wrappers));
@@ -888,7 +843,6 @@ mod tests {
             .join()
             .expect("depth-255 admission and formatting must not overflow the native stack");
     }
-
     #[test]
     fn axt_descriptor_literal_validation_matches_host_invariants() {
         let dsid = DataSpaceId::new(7);
@@ -906,7 +860,6 @@ mod tests {
             validate_literal_payload(PointerType::AxtDescriptor, &encoded(&valid)),
             Ok(())
         );
-
         let invalid = [
             AxtDescriptor {
                 dsids: Vec::new(),
@@ -945,7 +898,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn capability_literal_validation_rejects_context_free_faults() {
         let valid_handle = AssetHandle {
@@ -977,7 +929,6 @@ mod tests {
             validate_literal_payload(PointerType::AssetHandle, &canonical_handle),
             Ok(())
         );
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate_handle = {
@@ -994,7 +945,6 @@ mod tests {
             validate_literal_payload(PointerType::AssetHandle, &alternate_handle),
             Err(VMError::InvalidMetadata)
         );
-
         let mut malformed_handle = valid_handle.clone();
         malformed_handle.axt_binding.pop();
         assert_eq!(
@@ -1019,7 +969,6 @@ mod tests {
             validate_literal_payload(PointerType::AssetHandle, &encoded_value(&unusable_handle)),
             Err(VMError::InvalidMetadata)
         );
-
         {
             let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             let ambient_before = encoded_value(&valid_handle);
@@ -1033,7 +982,6 @@ mod tests {
                 "admission must restore the caller's ambient Norito layout"
             );
         }
-
         let valid_proof = ProofBlob {
             payload: vec![1],
             expiry_slot: None,
@@ -1051,7 +999,6 @@ mod tests {
             Err(VMError::InvalidMetadata)
         );
     }
-
     fn encoded_value<T: NoritoSerialize>(value: &T) -> Vec<u8> {
         norito::to_bytes(value).expect("encode canonical capability value")
     }

@@ -1,7 +1,5 @@
 //! Cancellation regression tests for multisig proposal quorum and pruning.
-
 use super::*;
-
 #[test]
 fn multisig_cancel_requires_quorum_and_prunes_target_proposal() {
     let kura = Kura::blank_kura_for_testing();
@@ -17,7 +15,6 @@ fn multisig_cancel_requires_quorum_and_prunes_target_proposal() {
     let mut state_transaction = block.transaction();
     let domain_id: iroha_data_model::domain::DomainId =
         DomainId::try_new("cancel", "universal").unwrap();
-
     let owner_key = checked_keypair();
     let owner_id = new_account_id(&owner_key);
     register_domain_with_name_lease(
@@ -33,7 +30,6 @@ fn multisig_cancel_requires_quorum_and_prunes_target_proposal() {
         &owner_id,
         "register owner",
     );
-
     let signer1_key = checked_keypair();
     let signer1_id = new_account_id(&signer1_key);
     register_account_in_domain(
@@ -52,7 +48,6 @@ fn multisig_cancel_requires_quorum_and_prunes_target_proposal() {
         &signer2_id,
         "register signer2",
     );
-
     let spec = MultisigSpec {
         signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
         quorum: NonZeroU16::new(2).unwrap(),
@@ -65,7 +60,6 @@ fn multisig_cancel_requires_quorum_and_prunes_target_proposal() {
         &spec,
         "register multisig account",
     );
-
     let target_instructions: Vec<InstructionBox> = Vec::new();
     let target_hash = HashOf::new(&target_instructions);
     let target_proposal =
@@ -77,7 +71,6 @@ fn multisig_cancel_requires_quorum_and_prunes_target_proposal() {
             InstructionBox::from(target_proposal),
         )
         .expect("create target proposal");
-
     let cancel = MultisigCancel::new(multisig_id.clone(), target_hash);
     let direct_err = Executor::Initial
         .execute_instruction(
@@ -99,7 +92,6 @@ fn multisig_cancel_requires_quorum_and_prunes_target_proposal() {
         proposal_value(&state_transaction, &multisig_id, &target_hash).is_ok(),
         "target proposal should remain after rejected direct cancel"
     );
-
     let cancel_instructions = vec![InstructionBox::from(cancel)];
     let cancel_hash = HashOf::new(&cancel_instructions);
     let cancel_proposal = MultisigPropose::new(multisig_id.clone(), cancel_instructions, None);
@@ -117,7 +109,6 @@ fn multisig_cancel_requires_quorum_and_prunes_target_proposal() {
             InstructionBox::from(MultisigApprove::new(multisig_id.clone(), cancel_hash)),
         )
         .expect("approve cancel proposal");
-
     assert!(
         proposal_value(&state_transaction, &multisig_id, &target_hash).is_err(),
         "target proposal should be pruned once cancel reaches quorum"

@@ -1,5 +1,4 @@
 // Certified lane-block read and sparse-height regression tests.
-
 #[test]
 fn certified_lane_block_persists_under_lane_segment_and_reloads() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -13,7 +12,6 @@ fn certified_lane_block_persists_under_lane_segment_and_reloads() {
         lane_entry.dataspace_id,
         lane_block_height,
     );
-
     let (kura, _) = Kura::new(&config, &lane_config).expect("init Kura");
     assert!(
         kura.persist_committed_lane_block_session(&session, &signer_pops)
@@ -41,7 +39,6 @@ fn certified_lane_block_persists_under_lane_segment_and_reloads() {
         .expect("persist certified lane block");
     kura.persist_committed_lane_block_session(&session, &signer_pops)
         .expect("duplicate certified lane block persistence is idempotent");
-
     let artifact = kura
         .read_certified_lane_block_artifact(lane_id, lane_block_height)
         .expect("certified lane block");
@@ -50,7 +47,6 @@ fn certified_lane_block_persists_under_lane_segment_and_reloads() {
     assert_eq!(artifact.prepare_qc, session.prepare_qc);
     assert_eq!(artifact.commit_qc, session.commit_qc);
     assert_eq!(artifact.signer_pops, signer_pops);
-
     let (data_path, index_path) =
         Kura::certified_lane_block_paths_for_entry(lane_entry, temp_dir.path());
     assert!(
@@ -61,7 +57,6 @@ fn certified_lane_block_persists_under_lane_segment_and_reloads() {
         index_path.is_file(),
         "certified lane block index file missing"
     );
-
     drop(kura);
     let (reloaded, _) = Kura::new(&config, &lane_config).expect("reopen kura");
     assert_eq!(
@@ -69,7 +64,6 @@ fn certified_lane_block_persists_under_lane_segment_and_reloads() {
         Some(artifact)
     );
 }
-
 #[test]
 fn latest_certified_frontier_reloads_and_repairs_a_missing_progress_pair() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -91,7 +85,6 @@ fn latest_certified_frontier_reloads_and_repairs_a_missing_progress_pair() {
         kura.latest_certified_lane_block_frontier(lane_id),
         Some(expected.clone())
     );
-
     let (data_path, index_path) =
         Kura::certified_lane_block_paths_for_entry(lane_entry, temp_dir.path());
     fs::remove_file(&data_path).expect("remove ordinary certified data");
@@ -105,7 +98,6 @@ fn latest_certified_frontier_reloads_and_repairs_a_missing_progress_pair() {
         kura.read_certified_lane_block_artifact(lane_id, 3),
         Some(expected.clone())
     );
-
     drop(kura);
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
     assert_eq!(
@@ -113,7 +105,6 @@ fn latest_certified_frontier_reloads_and_repairs_a_missing_progress_pair() {
         Some(expected)
     );
 }
-
 #[test]
 fn unchanged_latest_certified_frontier_does_not_repeat_pair_fsync() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -132,7 +123,6 @@ fn unchanged_latest_certified_frontier_does_not_repeat_pair_fsync() {
         Some(expected.clone()),
         "the first read must strictly attest the ordinary pair"
     );
-
     fail_next_indexed_sidecar_data_sync_for_tests();
     assert_eq!(
         kura.latest_certified_lane_block_frontier(lane_id),
@@ -146,7 +136,6 @@ fn unchanged_latest_certified_frontier_does_not_repeat_pair_fsync() {
         "the cached frontier read must leave the injected fsync fault unconsumed"
     );
 }
-
 #[test]
 fn unchanged_latest_certified_frontier_does_not_repeat_bls_validation() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -165,7 +154,6 @@ fn unchanged_latest_certified_frontier_does_not_repeat_bls_validation() {
         Some(expected.clone()),
         "first read must perform full artifact validation"
     );
-
     fail_next_certified_lane_block_artifact_validation_for_tests();
     assert_eq!(
         kura.latest_certified_lane_block_frontier(lane_id),
@@ -178,7 +166,6 @@ fn unchanged_latest_certified_frontier_does_not_repeat_bls_validation() {
         "the unchanged cached read must leave the injected validation fault unconsumed"
     );
 }
-
 #[test]
 fn latest_certified_matching_reuses_attested_frontier_before_history_scan() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -197,7 +184,6 @@ fn latest_certified_matching_reuses_attested_frontier_before_history_scan() {
         Some(expected.clone()),
         "prime the exact frontier validation attestation"
     );
-
     fail_next_certified_lane_block_artifact_validation_for_tests();
     assert_eq!(
         kura.latest_certified_lane_block_artifact_matching(lane_id, |_| {
@@ -222,7 +208,6 @@ fn latest_certified_matching_reuses_attested_frontier_before_history_scan() {
         "the frontier short-circuit must leave historical validation untouched"
     );
 }
-
 #[test]
 fn latest_certified_frontier_validation_attestation_is_exact_artifact_bound() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -241,7 +226,6 @@ fn latest_certified_frontier_validation_attestation_is_exact_artifact_bound() {
         Some(expected),
         "first read must validate and attest the exact artifact"
     );
-
     let (frontier_path, _) =
         Kura::latest_certified_lane_block_frontier_paths_for_entry(lane_entry, temp_dir.path());
     let stored = fs::read(&frontier_path).expect("read attested frontier");
@@ -260,14 +244,12 @@ fn latest_certified_frontier_validation_attestation_is_exact_artifact_bound() {
         norito::to_bytes(&invalid).expect("encode invalid-proof frontier"),
     )
     .expect("replace frontier with an invalid proof");
-
     assert_eq!(
         kura.latest_certified_lane_block_frontier(lane_id),
         None,
         "a different artifact hash must never reuse the prior BLS validation attestation"
     );
 }
-
 #[test]
 fn latest_certified_frontier_rejects_equal_height_conflict_before_publication() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -338,7 +320,6 @@ fn latest_certified_frontier_rejects_equal_height_conflict_before_publication() 
         Some(expected)
     );
 }
-
 #[test]
 fn latest_certified_frontier_reset_authority_crosses_height_and_repairs_crash() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -376,7 +357,6 @@ fn latest_certified_frontier_reset_authority_crosses_height_and_repairs_crash() 
         .expect("persist pre-reset occupied slot");
     kura.persist_committed_lane_block_session(&old_tip, &old_tip_pops)
         .expect("persist high pre-reset tip");
-
     fail_next_bound_progress_append_data_sync_for_tests();
     assert!(
         kura.persist_committed_lane_block_session_with_authority(&fresh, &fresh_pops, &authority,)
@@ -384,7 +364,6 @@ fn latest_certified_frontier_reset_authority_crosses_height_and_repairs_crash() 
         "fault must interrupt after the lower post-reset frontier wins but before pair replacement"
     );
     drop(kura);
-
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen after frontier crash");
     assert_eq!(
         reopened.latest_certified_lane_block_frontier_with_authority(lane_id, &authority,),
@@ -396,7 +375,6 @@ fn latest_certified_frontier_reset_authority_crosses_height_and_repairs_crash() 
         Some(expected)
     );
 }
-
 #[test]
 fn read_only_certified_frontier_preflight_plans_reused_slot_without_mutation() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -435,7 +413,6 @@ fn read_only_certified_frontier_preflight_plans_reused_slot_without_mutation() {
         .expect("persist pre-reset occupied slot");
     kura.persist_committed_lane_block_session(&old_tip, &old_tip_pops)
         .expect("persist high pre-reset tip");
-
     fail_next_bound_progress_append_data_sync_for_tests();
     assert!(
         kura.persist_committed_lane_block_session_with_authority(&fresh, &fresh_pops, &authority,)
@@ -443,7 +420,6 @@ fn read_only_certified_frontier_preflight_plans_reused_slot_without_mutation() {
         "fixture must leave the fresh frontier over the stale ordinary slot"
     );
     drop(kura);
-
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen after frontier crash");
     let (data_path, index_path) =
         Kura::certified_lane_block_paths_for_entry(lane_entry, temp_dir.path());
@@ -456,7 +432,6 @@ fn read_only_certified_frontier_preflight_plans_reused_slot_without_mutation() {
     ];
     assert!(!build_path.exists());
     let revision = reopened.committed_lane_status_revision();
-
     let planned = reopened
         .preflight_latest_certified_lane_block_frontier_with_authority(lane_id, &authority)
         .expect("read-only frontier preflight")
@@ -484,7 +459,6 @@ fn read_only_certified_frontier_preflight_plans_reused_slot_without_mutation() {
     );
     assert!(!build_path.exists());
 }
-
 #[test]
 fn latest_certified_frontier_absence_never_bootstraps_from_ordinary_history() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -501,7 +475,6 @@ fn latest_certified_frontier_absence_never_bootstraps_from_ordinary_history() {
     let (frontier_path, _) =
         Kura::latest_certified_lane_block_frontier_paths_for_entry(lane_entry, temp_dir.path());
     fs::remove_file(&frontier_path).expect("remove mandatory frontier");
-
     assert_eq!(
         kura.latest_certified_lane_block_frontier(lane_id),
         None,
@@ -519,7 +492,6 @@ fn latest_certified_frontier_absence_never_bootstraps_from_ordinary_history() {
     );
     assert!(!frontier_path.exists());
 }
-
 #[test]
 fn latest_certified_frontier_corruption_and_post_validation_substitution_fail_closed() {
     let make_kura = || {
@@ -535,7 +507,6 @@ fn latest_certified_frontier_corruption_and_post_validation_substitution_fail_cl
             .expect("persist certificate");
         (temp_dir, lane_config, lane_entry, lane_id, kura)
     };
-
     let (corrupt_dir, _corrupt_config, corrupt_entry, corrupt_lane, corrupt_kura) = make_kura();
     let (corrupt_path, _) = Kura::latest_certified_lane_block_frontier_paths_for_entry(
         &corrupt_entry,
@@ -548,7 +519,6 @@ fn latest_certified_frontier_corruption_and_post_validation_substitution_fail_cl
         corrupt_kura.latest_certified_lane_block_frontier(corrupt_lane),
         None
     );
-
     let (substitute_dir, _substitute_config, substitute_entry, substitute_lane, substitute_kura) =
         make_kura();
     let (substitute_path, _) = Kura::latest_certified_lane_block_frontier_paths_for_entry(
@@ -574,12 +544,10 @@ fn latest_certified_frontier_corruption_and_post_validation_substitution_fail_cl
         "post-authentication ambiguity must fail-stop the live frontier"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn latest_certified_frontier_rejects_hardlink_and_symlink_paths() {
     use std::os::unix::fs::symlink;
-
     for hardlink in [true, false] {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -607,7 +575,6 @@ fn latest_certified_frontier_rejects_hardlink_and_symlink_paths() {
         );
     }
 }
-
 #[test]
 fn certified_lane_block_encoding_enforces_source_envelope() {
     let lane_id = LaneId::from(1);
@@ -615,14 +582,12 @@ fn certified_lane_block_encoding_enforces_source_envelope() {
     let (session, signer_pops) =
         sample_committed_lane_block_session_for_kura(lane_id, dataspace_id, 1);
     let mut artifact = CertifiedLaneBlockArtifact::new(session, signer_pops);
-
     assert!(
         artifact.encode_framed().is_ok(),
         "a normal certified lane source must fit its reserved envelope"
     );
     artifact.commit_qc.bls_aggregate_signature =
         vec![0xA5; MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES];
-
     assert!(
         artifact.encode_framed().is_err(),
         "an oversized certified source must fail before persistence or recovery fanout"
@@ -632,7 +597,6 @@ fn certified_lane_block_encoding_enforces_source_envelope() {
         Err("certified lane block exceeds the merge source envelope byte limit")
     );
 }
-
 fn certified_lane_block_strict_retry_reissues_every_barrier() {
     for (label, failure) in strict_progress_sidecar_failure_modes() {
         let temp_dir = TempDir::new().expect("create temp dir");
@@ -652,7 +616,6 @@ fn certified_lane_block_strict_retry_reissues_every_barrier() {
             lane_block_height,
         );
         let expected = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
-
         let (kura, _) = Kura::new(&config, &lane_config).expect("init Kura");
         kura.install_lane_incarnation_marker_for_test(
             lane_entry,
@@ -662,7 +625,6 @@ fn certified_lane_block_strict_retry_reissues_every_barrier() {
         .expect("install explicit certified-session marker");
         let (data_path, index_path) =
             Kura::certified_lane_block_paths_for_entry(lane_entry, temp_dir.path());
-
         failure.inject();
         assert!(
             kura.persist_committed_lane_block_session(&session, &signer_pops)
@@ -681,7 +643,6 @@ fn certified_lane_block_strict_retry_reissues_every_barrier() {
         let first_data_len = fs::metadata(&data_path)
             .expect("certified lane data metadata")
             .len();
-
         drop(kura);
         let (kura, _) = Kura::new(&config, &lane_config).expect("reopen Kura after fault");
         failure.inject();
@@ -690,7 +651,6 @@ fn certified_lane_block_strict_retry_reissues_every_barrier() {
             None,
             "a reopened public reader must not expose a certificate while its {label} barrier fails"
         );
-
         failure.inject();
         assert!(
             kura.persist_committed_lane_block_session(&session, &signer_pops)
@@ -704,7 +664,6 @@ fn certified_lane_block_strict_retry_reissues_every_barrier() {
             first_data_len,
             "failed exact certificate retry must not append duplicate bytes"
         );
-
         kura.persist_committed_lane_block_session(&session, &signer_pops)
             .expect("certificate retry after barrier recovery");
         assert_eq!(
@@ -721,7 +680,6 @@ fn certified_lane_block_strict_retry_reissues_every_barrier() {
         );
     }
 }
-
 #[test]
 fn certified_lane_block_rejects_foreign_active_dataspace() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -733,7 +691,6 @@ fn certified_lane_block_rejects_foreign_active_dataspace() {
         sample_committed_lane_block_session_for_kura(lane_id, lane_entry.dataspace_id, 2);
     let (foreign, foreign_pops) =
         sample_committed_lane_block_session_for_kura(lane_id, DataSpaceId::new(77), 3);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.persist_committed_lane_block_session(&active, &active_pops)
         .expect("persist active certified lane block");
@@ -742,14 +699,12 @@ fn certified_lane_block_rejects_foreign_active_dataspace() {
             .is_err(),
         "a certified session must not define the dataspace of active lane storage"
     );
-
     let latest = kura
         .latest_certified_lane_block_artifact_for_dataspace(lane_id, lane_entry.dataspace_id)
         .expect("latest certified active lane block");
     assert_eq!(latest.proposal, active.proposal);
     assert_eq!(latest.proposal.descriptor.lane_block_height, 2);
 }
-
 #[test]
 fn certified_lane_block_artifacts_for_dataspace_replays_ordered_active_backlog() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -763,7 +718,6 @@ fn certified_lane_block_artifacts_for_dataspace_replays_ordered_active_backlog()
         sample_committed_lane_block_session_for_kura(lane_id, lane_entry.dataspace_id, 2);
     let (foreign, foreign_pops) =
         sample_committed_lane_block_session_for_kura(lane_id, DataSpaceId::new(77), 3);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.persist_committed_lane_block_session(&first, &first_pops)
         .expect("persist first active certified lane block");
@@ -774,7 +728,6 @@ fn certified_lane_block_artifacts_for_dataspace_replays_ordered_active_backlog()
             .is_err(),
         "foreign-dataspace history must be rejected before entering the active segment"
     );
-
     let active =
         kura.certified_lane_block_artifacts_for_dataspace(lane_id, lane_entry.dataspace_id);
     assert_eq!(
@@ -787,12 +740,10 @@ fn certified_lane_block_artifacts_for_dataspace_replays_ordered_active_backlog()
     );
     assert_eq!(active[0].proposal, first.proposal);
     assert_eq!(active[1].proposal, second.proposal);
-
     let latest = kura
         .latest_certified_lane_block_artifact_for_dataspace(lane_id, lane_entry.dataspace_id)
         .expect("latest certified active lane block");
     assert_eq!(latest.proposal, second.proposal);
-
     let first_from_two = kura
         .first_certified_lane_block_artifact_matching_from(lane_id, 2, |artifact| {
             artifact.proposal.descriptor.dataspace_id == lane_entry.dataspace_id
@@ -808,14 +759,12 @@ fn certified_lane_block_artifacts_for_dataspace_replays_ordered_active_backlog()
             .is_none(),
         "a rejected foreign height must not appear in the active backlog"
     );
-
     let lifecycle_filtered = kura.certified_lane_block_artifacts_matching(lane_id, |artifact| {
         artifact.proposal.descriptor.dataspace_id == lane_entry.dataspace_id
             && artifact.proposal.descriptor.lane_block_height == 2
     });
     assert_eq!(lifecycle_filtered.len(), 1);
     assert_eq!(lifecycle_filtered[0].proposal, second.proposal);
-
     let reverse_filtered = kura
         .latest_certified_lane_block_artifact_matching(lane_id, |artifact| {
             artifact.proposal.descriptor.dataspace_id == lane_entry.dataspace_id
@@ -823,7 +772,6 @@ fn certified_lane_block_artifacts_for_dataspace_replays_ordered_active_backlog()
         })
         .expect("reverse scan should continue past rejected newer sidecars");
     assert_eq!(reverse_filtered.proposal, first.proposal);
-
     let bounded_latest =
         kura.latest_certified_lane_block_artifacts_matching(lane_id, 1, |artifact| {
             artifact.proposal.descriptor.dataspace_id == lane_entry.dataspace_id
@@ -836,7 +784,6 @@ fn certified_lane_block_artifacts_for_dataspace_replays_ordered_active_backlog()
         "a zero recovery budget must not scan certified history"
     );
 }
-
 #[test]
 fn certified_lane_block_read_rejects_qc_signature_mismatch() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -850,7 +797,6 @@ fn certified_lane_block_read_rejects_qc_signature_mismatch() {
         lane_entry.dataspace_id,
         lane_block_height,
     );
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.persist_committed_lane_block_session(&session, &signer_pops)
         .expect("persist certified lane block");
@@ -874,14 +820,12 @@ fn certified_lane_block_read_rejects_qc_signature_mismatch() {
         ),
         "tampered sidecar overwrite should be written for read rejection test"
     );
-
     assert!(
         kura.read_certified_lane_block_artifact(lane_id, lane_block_height)
             .is_none(),
         "certified lane block reads must reject invalid QC aggregate signatures"
     );
 }
-
 #[test]
 fn certified_lane_block_read_rejects_qc_body_mismatch() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -895,7 +839,6 @@ fn certified_lane_block_read_rejects_qc_body_mismatch() {
         lane_entry.dataspace_id,
         lane_block_height,
     );
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.persist_committed_lane_block_session(&session, &signer_pops)
         .expect("persist certified lane block");
@@ -919,14 +862,12 @@ fn certified_lane_block_read_rejects_qc_body_mismatch() {
         ),
         "tampered sidecar overwrite should be written for read rejection test"
     );
-
     assert!(
         kura.read_certified_lane_block_artifact(lane_id, lane_block_height)
             .is_none(),
         "certified lane block reads must reject QC bodies that drift from the proposal"
     );
 }
-
 #[test]
 fn latest_lane_block_artifact_returns_highest_valid_height() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -954,12 +895,10 @@ fn latest_lane_block_artifact_returns_highest_valid_height() {
         .first()
         .expect("lane ownership")
         .clone();
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(first).expect("store first lane artifact");
     kura.store_block(later)
         .expect("store sparse later artifact");
-
     let latest = kura
         .latest_lane_block_artifact(lane_id)
         .expect("latest lane block artifact");

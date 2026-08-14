@@ -1,7 +1,5 @@
 //! Direct host entry point for the Android candidate scenario authority.
-
 use std::{env, error::Error, io::Write as _, path::PathBuf};
-
 fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = env::args_os().skip(1);
     let mut candidate_record = None;

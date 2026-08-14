@@ -1,10 +1,8 @@
 // Exact-network wire and durable-domain regressions.
-
 #[test]
 fn source_attestation_and_archive_head_roundtrip_with_exact_network_id() {
     let fixture = moderation_panel_notification_archive_broker_fixture_v1()
         .expect("build canonical moderation archive fixture");
-
     let statement_bytes =
         norito::to_bytes(&fixture.source_attestation).expect("encode source attestation");
     let decoded_statement: ModerationPanelNotificationSourceAttestationV1 =
@@ -15,7 +13,6 @@ fn source_attestation_and_archive_head_roundtrip_with_exact_network_id() {
         norito::to_bytes(&decoded_statement).expect("re-encode source attestation"),
         statement_bytes
     );
-
     let decoded_head: ModerationPanelNotificationArchiveHeadV1 =
         norito::decode_from_bytes(&fixture.canonical_signed_head)
             .expect("decode canonical signed archive head");
@@ -25,7 +22,6 @@ fn source_attestation_and_archive_head_roundtrip_with_exact_network_id() {
         fixture.canonical_signed_head
     );
 }
-
 #[test]
 fn handoff_and_notification_roundtrip_retain_exact_network_identity() {
     let network_id = test_network_id();
@@ -58,7 +54,6 @@ fn handoff_and_notification_roundtrip_retain_exact_network_identity() {
     assert_eq!(decoded, notification);
     assert!(decoded.is_bound_to_network(&network_id));
     assert!(!decoded.is_bound_to_network(&foreign_network));
-
     let mut handoff = ModerationTerminalHandoffV1 {
         handoff_id: [0; 32],
         network_id,

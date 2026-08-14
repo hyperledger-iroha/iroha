@@ -1,12 +1,9 @@
 //! Ensure Norito defaults to compact sequential encoding.
-
 use norito::core::{self, DecodeFlagsGuard, header_flags};
-
 #[test]
 fn default_encode_flags_use_compact_lengths() {
     assert_eq!(core::default_encode_flags(), header_flags::COMPACT_LEN);
 }
-
 #[test]
 fn serialize_sets_only_compact_len_by_default() {
     let payload: Vec<u32> = (0..128u32).collect();
@@ -26,14 +23,12 @@ fn serialize_sets_only_compact_len_by_default() {
         "default payloads should remain sequential"
     );
 }
-
 #[test]
 fn decode_flags_guard_sanitizes_reserved_bits() {
     core::reset_decode_state();
     assert!(core::use_compact_len());
     assert!(!core::use_packed_seq());
     assert!(!core::use_packed_struct());
-
     {
         let _guard = DecodeFlagsGuard::enter(
             header_flags::COMPACT_LEN
@@ -51,6 +46,5 @@ fn decode_flags_guard_sanitizes_reserved_bits() {
             "reserved flags should be masked out"
         );
     }
-
     core::reset_decode_state();
 }

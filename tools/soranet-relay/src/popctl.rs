@@ -2,14 +2,71 @@
 //!
 //! The module offers data structures for PoP configuration templates,
 //! validation routines, and health evaluation helpers so the CLI can stay thin.
-
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fmt,
 };
-
 use norito::json::{JsonDeserialize, JsonSerialize};
-
+// First-release semantic corridors for decoded `soranet-popctl` inputs. The
+// JSON decoder applies the per-container ceilings; these aggregate limits also
+// prevent validly nested inputs from amplifying retained validation results.
+const POP_CONFIG_MAX_COLLECTION_ENTRIES_V1: usize = 2_048;
+const POP_CONFIG_MAX_NODES_V1: usize = 4_096;
+const HEALTH_REPORT_MAX_SERVICES_V1: usize = 2_048;
+const HEALTH_REPORT_MAX_CHECK_RESULTS_V1: usize = 8_192;
+const SIGSTORE_BUNDLE_MAX_ANNOTATIONS_V1: usize = 2_048;
+const PXE_LOG_MAX_EVENTS_V1: usize = 8_192;
+const CONFIG_VALIDATION_MAX_DIAGNOSTICS_V1: usize = 16_512;
+const HEALTH_SUMMARY_MAX_RESULTS_V1: usize =
+    HEALTH_REPORT_MAX_CHECK_RESULTS_V1 + POP_CONFIG_MAX_COLLECTION_ENTRIES_V1;
+const PXE_LOG_MAX_DIAGNOSTICS_V1: usize = PXE_LOG_MAX_EVENTS_V1 + POP_CONFIG_MAX_NODES_V1;
+fn admit_count(field: &str, found: usize, maximum: usize) -> Result<(), String> {
+    if found > maximum {
+        return Err(format!(
+            "{field} contains {found} entries; first-release limit is {maximum}"
+        ));
+    }
+    Ok(())
+}
+#[derive(Debug)]
+struct BoundedDiagnostics {
+    entries: Vec<String>,
+    maximum: usize,
+    truncated: bool,
+}
+impl BoundedDiagnostics {
+    fn new(maximum: usize) -> Self {
+        Self {
+            entries: Vec::new(),
+            maximum,
+            truncated: false,
+        }
+    }
+    fn push(&mut self, entry: impl Into<String>) {
+        if self.entries.len() < self.maximum {
+            self.entries.push(entry.into());
+        } else {
+            self.truncated = true;
+        }
+    }
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+    fn into_message(mut self) -> String {
+        if self.truncated {
+            let marker = format!(
+                "additional diagnostics omitted after the first {} issues",
+                self.maximum
+            );
+            if let Some(last) = self.entries.last_mut() {
+                *last = marker;
+            } else {
+                return marker;
+            }
+        }
+        self.entries.join("; ")
+    }
+}
 /// Configuration describing a SoraNet PoP rollout.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct PopConfig {
@@ -30,7 +87,6 @@ pub struct PopConfig {
     /// Health policy describing required probes.
     pub health: HealthPolicy,
 }
-
 /// Static metadata attached to a PoP configuration.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct PopMetadata {
@@ -44,7 +100,6 @@ pub struct PopMetadata {
     #[norito(default)]
     pub labels: BTreeMap<String, String>,
 }
-
 /// Network topology and rack information for the PoP.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct NetworkConfig {
@@ -60,7 +115,6 @@ pub struct NetworkConfig {
     #[norito(default)]
     pub racks: Vec<RackSpec>,
 }
-
 /// Rack specification describing the hardware footprint.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct RackSpec {
@@ -72,7 +126,6 @@ pub struct RackSpec {
     #[norito(default)]
     pub nodes: Vec<NodeSpec>,
 }
-
 /// Node specification inside a PoP rack.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct NodeSpec {
@@ -84,7 +137,6 @@ pub struct NodeSpec {
     /// Base image digest used for provisioning.
     pub image: String,
 }
-
 /// Service configuration describing workloads deployed within the PoP.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct ServiceConfig {
@@ -103,7 +155,6 @@ pub struct ServiceConfig {
     #[norito(default)]
     pub env: BTreeMap<String, String>,
 }
-
 /// Secrets required for PoP bootstrap.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SecretSpec {
@@ -117,14 +168,12 @@ pub struct SecretSpec {
     #[norito(default)]
     pub description: Option<String>,
 }
-
 /// Promotion policy covering lifecycle transitions.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct PromotionPolicy {
     /// Ordered list of stages that a PoP must pass through.
     pub stages: Vec<PromotionStage>,
 }
-
 /// Individual promotion stage with explicit gates.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct PromotionStage {
@@ -136,7 +185,6 @@ pub struct PromotionStage {
     #[norito(default)]
     pub gates: Vec<PromotionGate>,
 }
-
 /// Promotion gate type.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct PromotionGate {
@@ -149,7 +197,6 @@ pub struct PromotionGate {
     #[norito(default)]
     pub service: Option<String>,
 }
-
 /// Sigstore policy configuration.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SigstorePolicy {
@@ -164,14 +211,12 @@ pub struct SigstorePolicy {
     #[norito(default)]
     pub required_annotations: BTreeMap<String, String>,
 }
-
 /// Health policy capturing required probes.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct HealthPolicy {
     /// Expected probes that should report healthy before promotion.
     pub checks: Vec<HealthCheckSpec>,
 }
-
 /// Health check definition for the PoP.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct HealthCheckSpec {
@@ -190,7 +235,6 @@ pub struct HealthCheckSpec {
     #[norito(default)]
     pub latency_threshold_ms: Option<u64>,
 }
-
 /// Template options used to seed a PoP configuration.
 #[derive(Debug, Clone)]
 pub struct TemplateOptions {
@@ -211,7 +255,6 @@ pub struct TemplateOptions {
     /// Data plane (gateway) image reference.
     pub edge_image: String,
 }
-
 impl Default for TemplateOptions {
     fn default() -> Self {
         Self {
@@ -226,7 +269,6 @@ impl Default for TemplateOptions {
         }
     }
 }
-
 /// Build a default PoP configuration using the supplied template options.
 pub fn build_template(options: &TemplateOptions) -> PopConfig {
     let metadata = PopMetadata {
@@ -235,7 +277,6 @@ pub fn build_template(options: &TemplateOptions) -> PopConfig {
         environment: options.environment.clone(),
         labels: BTreeMap::new(),
     };
-
     let network = NetworkConfig {
         asn: options.asn,
         anycast_ipv4: options.anycast_ipv4.clone(),
@@ -268,7 +309,6 @@ pub fn build_template(options: &TemplateOptions) -> PopConfig {
             },
         ],
     };
-
     let services = vec![
         ServiceConfig {
             name: "soranet-edge-gateway".to_string(),
@@ -295,7 +335,6 @@ pub fn build_template(options: &TemplateOptions) -> PopConfig {
             env: BTreeMap::new(),
         },
     ];
-
     let secrets = vec![
         SecretSpec {
             name: "acme-account-key".to_string(),
@@ -310,7 +349,6 @@ pub fn build_template(options: &TemplateOptions) -> PopConfig {
             description: Some("Gateway bootstrap token exchanged with orchestrator".to_string()),
         },
     ];
-
     let promotion = PromotionPolicy {
         stages: vec![
             PromotionStage {
@@ -352,7 +390,6 @@ pub fn build_template(options: &TemplateOptions) -> PopConfig {
             },
         ],
     };
-
     let sigstore = SigstorePolicy {
         fulcio_url: "https://fulcio.sigstore.dev".to_string(),
         rekor_url: "https://rekor.sigstore.dev".to_string(),
@@ -370,7 +407,6 @@ pub fn build_template(options: &TemplateOptions) -> PopConfig {
             annotations
         },
     };
-
     let health = HealthPolicy {
         checks: vec![
             HealthCheckSpec {
@@ -399,7 +435,6 @@ pub fn build_template(options: &TemplateOptions) -> PopConfig {
             },
         ],
     };
-
     PopConfig {
         metadata,
         network,
@@ -410,7 +445,6 @@ pub fn build_template(options: &TemplateOptions) -> PopConfig {
         health,
     }
 }
-
 /// Validation errors produced while checking a PoP configuration.
 #[derive(Debug, thiserror::Error)]
 pub enum PopValidationError {
@@ -418,23 +452,75 @@ pub enum PopValidationError {
     #[error("configuration validation failed: {0}")]
     Invalid(String),
 }
-
+fn validate_config_admission(config: &PopConfig) -> Result<(), PopValidationError> {
+    for (field, found) in [
+        ("network.racks", config.network.racks.len()),
+        ("services", config.services.len()),
+        ("secrets", config.secrets.len()),
+        ("promotion.stages", config.promotion.stages.len()),
+        (
+            "sigstore.trusted_oidc_issuers",
+            config.sigstore.trusted_oidc_issuers.len(),
+        ),
+        (
+            "sigstore.required_annotations",
+            config.sigstore.required_annotations.len(),
+        ),
+        ("health.checks", config.health.checks.len()),
+    ] {
+        admit_count(field, found, POP_CONFIG_MAX_COLLECTION_ENTRIES_V1)
+            .map_err(PopValidationError::Invalid)?;
+    }
+    let node_count = config
+        .network
+        .racks
+        .iter()
+        .try_fold(0_usize, |total, rack| {
+            total
+                .checked_add(rack.nodes.len())
+                .ok_or_else(|| "network node count overflowed".to_string())
+        });
+    let node_count = node_count.map_err(PopValidationError::Invalid)?;
+    admit_count("network nodes", node_count, POP_CONFIG_MAX_NODES_V1)
+        .map_err(PopValidationError::Invalid)?;
+    let mut service_names = BTreeSet::new();
+    for service in &config.services {
+        if !service_names.insert(service.name.as_str()) {
+            return Err(PopValidationError::Invalid(format!(
+                "duplicate service name `{}`",
+                service.name
+            )));
+        }
+    }
+    let mut node_names = BTreeSet::new();
+    for node in config
+        .network
+        .racks
+        .iter()
+        .flat_map(|rack| rack.nodes.iter())
+    {
+        if !node_names.insert(node.hostname.as_str()) {
+            return Err(PopValidationError::Invalid(format!(
+                "duplicate node hostname `{}`",
+                node.hostname
+            )));
+        }
+    }
+    Ok(())
+}
 /// Validate a PoP configuration and surface all discovered issues.
 pub fn validate_config(config: &PopConfig) -> Result<(), PopValidationError> {
-    let mut errors = Vec::new();
-
+    validate_config_admission(config)?;
+    let mut errors = BoundedDiagnostics::new(CONFIG_VALIDATION_MAX_DIAGNOSTICS_V1);
     if config.metadata.name.trim().is_empty() {
         errors.push("metadata.name must not be empty".to_string());
     }
-
     if config.metadata.region.trim().is_empty() {
         errors.push("metadata.region must not be empty".to_string());
     }
-
     if config.network.anycast_ipv4.is_empty() && config.network.anycast_ipv6.is_empty() {
         errors.push("at least one anycast prefix must be configured (IPv4/IPv6)".to_string());
     }
-
     if config.services.is_empty() {
         errors.push("at least one service must be defined".to_string());
     } else {
@@ -456,7 +542,6 @@ pub fn validate_config(config: &PopConfig) -> Result<(), PopValidationError> {
             }
         }
     }
-
     if !config
         .services
         .iter()
@@ -464,7 +549,6 @@ pub fn validate_config(config: &PopConfig) -> Result<(), PopValidationError> {
     {
         errors.push("an `edge-gateway` service role is required for PoP operation".to_string());
     }
-
     for secret in &config.secrets {
         if secret.name.trim().is_empty() {
             errors.push("secret.name must not be empty".to_string());
@@ -482,19 +566,15 @@ pub fn validate_config(config: &PopConfig) -> Result<(), PopValidationError> {
             ));
         }
     }
-
     if config.promotion.stages.is_empty() {
         errors.push("promotion policy must contain at least one stage".to_string());
     }
-
     if config.sigstore.fulcio_url.trim().is_empty() {
         errors.push("sigstore.fulcio_url must not be empty".to_string());
     }
-
     if config.sigstore.rekor_url.trim().is_empty() {
         errors.push("sigstore.rekor_url must not be empty".to_string());
     }
-
     if config.health.checks.is_empty() {
         errors.push("health policy must include at least one check".to_string());
     } else {
@@ -514,14 +594,12 @@ pub fn validate_config(config: &PopConfig) -> Result<(), PopValidationError> {
             }
         }
     }
-
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(PopValidationError::Invalid(errors.join("; ")))
+        Err(PopValidationError::Invalid(errors.into_message()))
     }
 }
-
 /// Parsed health report emitted by PoP monitoring.
 #[derive(Debug, Clone, JsonDeserialize)]
 pub struct HealthReport {
@@ -530,7 +608,6 @@ pub struct HealthReport {
     /// Individual service health entries.
     pub services: Vec<ServiceHealth>,
 }
-
 /// Health entry for a specific service.
 #[derive(Debug, Clone, JsonDeserialize)]
 pub struct ServiceHealth {
@@ -544,7 +621,6 @@ pub struct ServiceHealth {
     #[norito(default)]
     pub checks: Vec<CheckResult>,
 }
-
 /// Detailed result for a health check.
 #[derive(Debug, Clone, JsonDeserialize)]
 pub struct CheckResult {
@@ -559,7 +635,6 @@ pub struct CheckResult {
     #[norito(default)]
     pub message: Option<String>,
 }
-
 /// High-level health state interpreted from the report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum HealthState {
@@ -570,7 +645,6 @@ pub enum HealthState {
     /// Service is unavailable.
     Unhealthy,
 }
-
 impl HealthState {
     fn from_label(label: &str) -> Option<Self> {
         match label {
@@ -580,7 +654,6 @@ impl HealthState {
             _ => None,
         }
     }
-
     /// Convert the health state back into the canonical label.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -590,13 +663,11 @@ impl HealthState {
         }
     }
 }
-
 impl fmt::Display for HealthState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
-
 /// Summary produced after evaluating PoP health.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HealthSummary {
@@ -607,7 +678,6 @@ pub struct HealthSummary {
     /// Checks that failed or reported degraded status.
     pub failed_checks: Vec<FailedCheck>,
 }
-
 /// Missing health check information.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MissingCheck {
@@ -616,7 +686,6 @@ pub struct MissingCheck {
     /// Check identifier.
     pub check: String,
 }
-
 /// Failed health check information.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FailedCheck {
@@ -629,7 +698,6 @@ pub struct FailedCheck {
     /// Optional failure message.
     pub message: Option<String>,
 }
-
 /// Errors surfaced while processing health reports.
 #[derive(Debug, thiserror::Error)]
 pub enum HealthError {
@@ -639,24 +707,80 @@ pub enum HealthError {
     /// Health report contained an unknown status label.
     #[error("unknown health status `{status}`")]
     UnknownStatus { status: String },
+    /// Configuration or producer output exceeded a first-release semantic corridor.
+    #[error("health input rejected: {0}")]
+    InvalidInput(String),
+    /// Evaluating the admitted inputs would retain too many result entries.
+    #[error("health summary would retain {found} results; first-release limit is {maximum}")]
+    ResultLimitExceeded { found: usize, maximum: usize },
 }
-
+fn validate_health_inputs(config: &PopConfig, report: &HealthReport) -> Result<(), HealthError> {
+    validate_config_admission(config)
+        .map_err(|error| HealthError::InvalidInput(error.to_string()))?;
+    admit_count(
+        "health report services",
+        report.services.len(),
+        HEALTH_REPORT_MAX_SERVICES_V1,
+    )
+    .map_err(HealthError::InvalidInput)?;
+    let check_count = report.services.iter().try_fold(0_usize, |total, service| {
+        total
+            .checked_add(service.checks.len())
+            .ok_or_else(|| "health report check count overflowed".to_string())
+    });
+    let check_count = check_count.map_err(HealthError::InvalidInput)?;
+    admit_count(
+        "health report check results",
+        check_count,
+        HEALTH_REPORT_MAX_CHECK_RESULTS_V1,
+    )
+    .map_err(HealthError::InvalidInput)?;
+    let mut service_names = BTreeSet::new();
+    for service in &report.services {
+        if !service_names.insert(service.service.as_str()) {
+            return Err(HealthError::InvalidInput(format!(
+                "duplicate health service entry `{}`",
+                service.service
+            )));
+        }
+        let mut check_names = BTreeSet::new();
+        for check in &service.checks {
+            if !check_names.insert(check.name.as_str()) {
+                return Err(HealthError::InvalidInput(format!(
+                    "duplicate health check `{}` for service `{}`",
+                    check.name, service.service
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+fn admit_health_summary_result(failed: usize, missing: usize) -> Result<(), HealthError> {
+    let retained = failed.checked_add(missing).unwrap_or(usize::MAX);
+    let found = retained.checked_add(1).unwrap_or(usize::MAX);
+    if found > HEALTH_SUMMARY_MAX_RESULTS_V1 {
+        return Err(HealthError::ResultLimitExceeded {
+            found,
+            maximum: HEALTH_SUMMARY_MAX_RESULTS_V1,
+        });
+    }
+    Ok(())
+}
 /// Evaluate PoP health by comparing the report against the configuration.
 pub fn evaluate_health(
     config: &PopConfig,
     report: &HealthReport,
 ) -> Result<HealthSummary, HealthError> {
+    validate_health_inputs(config, report)?;
     let mut overall = HealthState::Healthy;
     let mut failed_checks = Vec::new();
     let mut missing_checks = Vec::new();
-
     let expected_checks: BTreeMap<(&str, &str), &HealthCheckSpec> = config
         .health
         .checks
         .iter()
         .map(|check| ((check.service.as_str(), check.name.as_str()), check))
         .collect();
-
     for service in &config.services {
         let entry = report
             .services
@@ -665,7 +789,6 @@ pub fn evaluate_health(
             .ok_or_else(|| HealthError::MissingService {
                 service: service.name.clone(),
             })?;
-
         let service_state =
             HealthState::from_label(&entry.status).ok_or_else(|| HealthError::UnknownStatus {
                 status: entry.status.clone(),
@@ -673,7 +796,6 @@ pub fn evaluate_health(
         if service_state > overall {
             overall = service_state;
         }
-
         let mut seen: BTreeSet<&str> = BTreeSet::new();
         for check in &entry.checks {
             let check_state = HealthState::from_label(&check.status).ok_or_else(|| {
@@ -685,6 +807,7 @@ pub fn evaluate_health(
                 if check_state > overall {
                     overall = check_state;
                 }
+                admit_health_summary_result(failed_checks.len(), missing_checks.len())?;
                 failed_checks.push(FailedCheck {
                     service: service.name.clone(),
                     check: check.name.clone(),
@@ -693,10 +816,10 @@ pub fn evaluate_health(
                 });
             }
         }
-
         for ((svc, check_name), expected) in expected_checks.iter() {
             if *svc == service.name {
                 if !seen.contains(check_name) {
+                    admit_health_summary_result(failed_checks.len(), missing_checks.len())?;
                     missing_checks.push(MissingCheck {
                         service: service.name.clone(),
                         check: (*check_name).to_string(),
@@ -710,6 +833,7 @@ pub fn evaluate_health(
                     && let Some(latency) = entry_check.latency_ms
                     && latency > threshold
                 {
+                    admit_health_summary_result(failed_checks.len(), missing_checks.len())?;
                     failed_checks.push(FailedCheck {
                         service: service.name.clone(),
                         check: (*check_name).to_string(),
@@ -725,14 +849,12 @@ pub fn evaluate_health(
             }
         }
     }
-
     Ok(HealthSummary {
         overall_status: overall,
         missing_checks,
         failed_checks,
     })
 }
-
 /// Sigstore bundle with annotations extracted for validation.
 #[derive(Debug, Clone, JsonDeserialize)]
 pub struct SigstoreBundle {
@@ -749,7 +871,6 @@ pub struct SigstoreBundle {
     #[norito(default)]
     pub issued_at: Option<String>,
 }
-
 /// PXE execution log entry emitted during provisioning.
 #[derive(Debug, Clone, JsonDeserialize)]
 pub struct PxeEvent {
@@ -766,7 +887,6 @@ pub struct PxeEvent {
     #[norito(default)]
     pub timestamp: Option<String>,
 }
-
 /// Attestation verification failures.
 #[derive(Debug, thiserror::Error)]
 pub enum AttestationError {
@@ -786,8 +906,10 @@ pub enum AttestationError {
     /// Attestation did not include an image digest.
     #[error("attestation bundle missing image digest")]
     MissingImageDigest,
+    /// Policy or producer output exceeded a first-release semantic corridor.
+    #[error("attestation input rejected: {0}")]
+    InvalidInput(String),
 }
-
 /// PXE log validation failures.
 #[derive(Debug, thiserror::Error)]
 pub enum PxeLogError {
@@ -795,16 +917,40 @@ pub enum PxeLogError {
     #[error("pxe log validation failed: {0}")]
     Invalid(String),
 }
-
+fn validate_attestation_inputs(
+    policy: &SigstorePolicy,
+    bundle: &SigstoreBundle,
+) -> Result<(), AttestationError> {
+    for (field, found, maximum) in [
+        (
+            "sigstore trusted issuers",
+            policy.trusted_oidc_issuers.len(),
+            POP_CONFIG_MAX_COLLECTION_ENTRIES_V1,
+        ),
+        (
+            "sigstore required annotations",
+            policy.required_annotations.len(),
+            POP_CONFIG_MAX_COLLECTION_ENTRIES_V1,
+        ),
+        (
+            "attestation annotations",
+            bundle.annotations.len(),
+            SIGSTORE_BUNDLE_MAX_ANNOTATIONS_V1,
+        ),
+    ] {
+        admit_count(field, found, maximum).map_err(AttestationError::InvalidInput)?;
+    }
+    Ok(())
+}
 /// Verify the attestation bundle against the configured sigstore policy.
 pub fn verify_attestation(
     policy: &SigstorePolicy,
     bundle: &SigstoreBundle,
 ) -> Result<(), AttestationError> {
+    validate_attestation_inputs(policy, bundle)?;
     if bundle.image_digest.trim().is_empty() {
         return Err(AttestationError::MissingImageDigest);
     }
-
     if !policy
         .trusted_oidc_issuers
         .iter()
@@ -814,7 +960,6 @@ pub fn verify_attestation(
             issuer: bundle.issuer.clone(),
         });
     }
-
     for (key, expected) in &policy.required_annotations {
         match bundle.annotations.get(key) {
             Some(found) if found == expected => {}
@@ -830,22 +975,23 @@ pub fn verify_attestation(
             }
         }
     }
-
     Ok(())
 }
-
+fn validate_pxe_inputs(config: &PopConfig, events: &[PxeEvent]) -> Result<(), PxeLogError> {
+    validate_config_admission(config).map_err(|error| PxeLogError::Invalid(error.to_string()))?;
+    admit_count("PXE log", events.len(), PXE_LOG_MAX_EVENTS_V1).map_err(PxeLogError::Invalid)
+}
 /// Ensure PXE logs cover every node and report success.
 pub fn verify_pxe_log(config: &PopConfig, events: &[PxeEvent]) -> Result<(), PxeLogError> {
-    let mut errors = Vec::new();
+    validate_pxe_inputs(config, events)?;
+    let mut errors = BoundedDiagnostics::new(PXE_LOG_MAX_DIAGNOSTICS_V1);
     let mut successes: HashSet<&str> = HashSet::new();
-
     let expected_hosts: BTreeSet<&str> = config
         .network
         .racks
         .iter()
         .flat_map(|rack| rack.nodes.iter().map(|node| node.hostname.as_str()))
         .collect();
-
     for event in events {
         if !expected_hosts.contains(event.hostname.as_str()) {
             errors.push(format!(
@@ -854,7 +1000,6 @@ pub fn verify_pxe_log(config: &PopConfig, events: &[PxeEvent]) -> Result<(), Pxe
             ));
             continue;
         }
-
         match event.stage.as_str() {
             "pxe" | "PXE" => match event.status.as_str() {
                 "success" | "completed" | "success-with-warnings" => {
@@ -874,24 +1019,332 @@ pub fn verify_pxe_log(config: &PopConfig, events: &[PxeEvent]) -> Result<(), Pxe
             )),
         }
     }
-
     for host in expected_hosts {
         if !successes.contains(host) {
             errors.push(format!("missing PXE success event for host `{host}`"));
         }
     }
-
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(PxeLogError::Invalid(errors.join("; ")))
+        Err(PxeLogError::Invalid(errors.into_message()))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    fn config_without_health_consumers() -> PopConfig {
+        let mut config = build_template(&TemplateOptions::default());
+        config.services.clear();
+        config.health.checks.clear();
+        config
+    }
+    fn test_node(index: usize) -> NodeSpec {
+        NodeSpec {
+            hostname: format!("node-{index}"),
+            roles: vec!["edge".to_string()],
+            image: "sha256:test".to_string(),
+        }
+    }
+    #[test]
+    fn count_admission_accepts_exact_limit_and_rejects_plus_one() {
+        admit_count("test entries", 7, 7).expect("exact count must be admitted");
+        let error = admit_count("test entries", 8, 7).expect_err("count + 1 must fail");
+        assert!(error.contains("contains 8 entries"), "{error}");
+        assert!(error.contains("limit is 7"), "{error}");
+    }
+    #[test]
+    fn semantic_admission_rejects_ambiguous_producer_identifiers() {
+        let mut config = build_template(&TemplateOptions::default());
+        let duplicate_service = config.services[0].clone();
+        config.services.push(duplicate_service);
+        let error = validate_config(&config).expect_err("duplicate service must fail");
+        assert!(error.to_string().contains("duplicate service name"));
+        let mut config = build_template(&TemplateOptions::default());
+        let duplicate_node = config.network.racks[0].nodes[0].clone();
+        config.network.racks[1].nodes.push(duplicate_node);
+        let error = validate_config(&config).expect_err("duplicate node must fail");
+        assert!(error.to_string().contains("duplicate node hostname"));
+        let config = config_without_health_consumers();
+        let service = ServiceHealth {
+            service: "worker".to_string(),
+            role: "worker".to_string(),
+            status: "healthy".to_string(),
+            checks: Vec::new(),
+        };
+        let report = HealthReport {
+            generated_at: "2026-01-02T03:04:05Z".to_string(),
+            services: vec![service.clone(), service],
+        };
+        let error =
+            evaluate_health(&config, &report).expect_err("duplicate service feed must fail");
+        assert!(error.to_string().contains("duplicate health service entry"));
+        let check = CheckResult {
+            name: "ready".to_string(),
+            status: "healthy".to_string(),
+            latency_ms: None,
+            message: None,
+        };
+        let report = HealthReport {
+            generated_at: "2026-01-02T03:04:05Z".to_string(),
+            services: vec![ServiceHealth {
+                service: "worker".to_string(),
+                role: "worker".to_string(),
+                status: "healthy".to_string(),
+                checks: vec![check.clone(), check],
+            }],
+        };
+        let error = evaluate_health(&config, &report).expect_err("duplicate check feed must fail");
+        assert!(error.to_string().contains("duplicate health check"));
+    }
+    #[test]
+    fn bounded_diagnostics_retains_exact_limit_and_marks_plus_one() {
+        let mut exact = BoundedDiagnostics::new(3);
+        exact.push("one");
+        exact.push("two");
+        exact.push("three");
+        assert_eq!(exact.into_message(), "one; two; three");
+        let mut plus_one = BoundedDiagnostics::new(3);
+        plus_one.push("one");
+        plus_one.push("two");
+        plus_one.push("three");
+        plus_one.push("four");
+        assert_eq!(plus_one.entries.len(), 3);
+        assert!(
+            plus_one
+                .into_message()
+                .contains("additional diagnostics omitted after the first 3 issues")
+        );
+    }
+    #[test]
+    fn config_admission_accepts_exact_collection_limits_and_rejects_plus_one() {
+        let base = build_template(&TemplateOptions::default());
+        let mut config = base.clone();
+        let service = config.services[0].clone();
+        config.services = (0..POP_CONFIG_MAX_COLLECTION_ENTRIES_V1)
+            .map(|index| {
+                let mut service = service.clone();
+                service.name = format!("service-{index}");
+                service.role = if index == 0 {
+                    "edge-gateway".to_string()
+                } else {
+                    "worker".to_string()
+                };
+                service
+            })
+            .collect();
+        validate_config(&config).expect("exact service count must be admitted");
+        config.services.push(ServiceConfig {
+            name: "service-plus-one".to_string(),
+            ..service
+        });
+        assert!(validate_config(&config).is_err());
+        let mut config = base.clone();
+        let secret = config.secrets[0].clone();
+        config.secrets = (0..POP_CONFIG_MAX_COLLECTION_ENTRIES_V1)
+            .map(|index| SecretSpec {
+                name: format!("secret-{index}"),
+                ..secret.clone()
+            })
+            .collect();
+        validate_config(&config).expect("exact secret count must be admitted");
+        config.secrets.push(SecretSpec {
+            name: "secret-plus-one".to_string(),
+            ..secret
+        });
+        assert!(validate_config(&config).is_err());
+        let mut config = base.clone();
+        let stage = config.promotion.stages[0].clone();
+        config.promotion.stages = vec![stage.clone(); POP_CONFIG_MAX_COLLECTION_ENTRIES_V1];
+        validate_config(&config).expect("exact promotion stage count must be admitted");
+        config.promotion.stages.push(stage);
+        assert!(validate_config(&config).is_err());
+        let mut config = base.clone();
+        config.sigstore.trusted_oidc_issuers = (0..POP_CONFIG_MAX_COLLECTION_ENTRIES_V1)
+            .map(|index| format!("https://issuer-{index}.example"))
+            .collect();
+        validate_config(&config).expect("exact trusted issuer count must be admitted");
+        config
+            .sigstore
+            .trusted_oidc_issuers
+            .push("https://issuer-plus-one.example".to_string());
+        assert!(validate_config(&config).is_err());
+        let mut config = base.clone();
+        config.sigstore.required_annotations = (0..POP_CONFIG_MAX_COLLECTION_ENTRIES_V1)
+            .map(|index| (format!("key-{index}"), format!("value-{index}")))
+            .collect();
+        validate_config(&config).expect("exact required annotation count must be admitted");
+        config
+            .sigstore
+            .required_annotations
+            .insert("key-plus-one".to_string(), "value-plus-one".to_string());
+        assert!(validate_config(&config).is_err());
+        let mut config = base;
+        let check = config.health.checks[0].clone();
+        config.health.checks = (0..POP_CONFIG_MAX_COLLECTION_ENTRIES_V1)
+            .map(|index| HealthCheckSpec {
+                name: format!("check-{index}"),
+                ..check.clone()
+            })
+            .collect();
+        validate_config(&config).expect("exact health check count must be admitted");
+        config.health.checks.push(HealthCheckSpec {
+            name: "check-plus-one".to_string(),
+            ..check
+        });
+        assert!(validate_config(&config).is_err());
+    }
+    #[test]
+    fn config_admission_accepts_exact_rack_and_node_limits_and_rejects_plus_one() {
+        let base = build_template(&TemplateOptions::default());
+        let rack = base.network.racks[0].clone();
+        let mut config = base.clone();
+        config.network.racks = (0..POP_CONFIG_MAX_COLLECTION_ENTRIES_V1)
+            .map(|index| RackSpec {
+                name: format!("rack-{index}"),
+                nodes: Vec::new(),
+                ..rack.clone()
+            })
+            .collect();
+        validate_config(&config).expect("exact rack count must be admitted");
+        config.network.racks.push(RackSpec {
+            name: "rack-plus-one".to_string(),
+            nodes: Vec::new(),
+            ..rack.clone()
+        });
+        assert!(validate_config(&config).is_err());
+        let mut config = base;
+        config.network.racks = vec![RackSpec {
+            nodes: (0..POP_CONFIG_MAX_NODES_V1).map(test_node).collect(),
+            ..rack
+        }];
+        validate_config(&config).expect("exact total node count must be admitted");
+        config.network.racks[0]
+            .nodes
+            .push(test_node(POP_CONFIG_MAX_NODES_V1));
+        assert!(validate_config(&config).is_err());
+    }
+    #[test]
+    fn health_input_accepts_exact_service_and_check_limits_and_rejects_plus_one() {
+        let config = config_without_health_consumers();
+        let mut report = HealthReport {
+            generated_at: "2026-01-02T03:04:05Z".to_string(),
+            services: (0..HEALTH_REPORT_MAX_SERVICES_V1)
+                .map(|index| ServiceHealth {
+                    service: format!("service-{index}"),
+                    role: "worker".to_string(),
+                    status: "healthy".to_string(),
+                    checks: Vec::new(),
+                })
+                .collect(),
+        };
+        evaluate_health(&config, &report).expect("exact service count must be admitted");
+        report.services.push(ServiceHealth {
+            service: "service-plus-one".to_string(),
+            role: "worker".to_string(),
+            status: "healthy".to_string(),
+            checks: Vec::new(),
+        });
+        assert!(evaluate_health(&config, &report).is_err());
+        let mut report = HealthReport {
+            generated_at: "2026-01-02T03:04:05Z".to_string(),
+            services: vec![ServiceHealth {
+                service: "worker".to_string(),
+                role: "worker".to_string(),
+                status: "healthy".to_string(),
+                checks: (0..HEALTH_REPORT_MAX_CHECK_RESULTS_V1)
+                    .map(|index| CheckResult {
+                        name: format!("check-{index}"),
+                        status: "healthy".to_string(),
+                        latency_ms: None,
+                        message: None,
+                    })
+                    .collect(),
+            }],
+        };
+        evaluate_health(&config, &report).expect("exact check count must be admitted");
+        report.services[0].checks.push(CheckResult {
+            name: "check-plus-one".to_string(),
+            status: "healthy".to_string(),
+            latency_ms: None,
+            message: None,
+        });
+        assert!(evaluate_health(&config, &report).is_err());
+    }
+    #[test]
+    fn health_summary_result_admission_accepts_exact_limit_and_rejects_plus_one() {
+        admit_health_summary_result(HEALTH_SUMMARY_MAX_RESULTS_V1 - 1, 0)
+            .expect("exact result count must be admitted");
+        assert!(admit_health_summary_result(HEALTH_SUMMARY_MAX_RESULTS_V1, 0).is_err());
+    }
+    #[test]
+    fn attestation_input_accepts_exact_annotation_limits_and_rejects_plus_one() {
+        let mut policy = build_template(&TemplateOptions::default()).sigstore;
+        policy.trusted_oidc_issuers = (0..POP_CONFIG_MAX_COLLECTION_ENTRIES_V1)
+            .map(|index| format!("https://issuer-{index}.example"))
+            .collect();
+        let annotations: BTreeMap<_, _> = (0..POP_CONFIG_MAX_COLLECTION_ENTRIES_V1)
+            .map(|index| (format!("required-{index}"), "value".to_string()))
+            .collect();
+        policy.required_annotations = annotations.clone();
+        let mut bundle = SigstoreBundle {
+            issuer: "https://issuer-0.example".to_string(),
+            subject: "workload@example".to_string(),
+            image_digest: "sha256:1234".to_string(),
+            annotations,
+            issued_at: None,
+        };
+        verify_attestation(&policy, &bundle).expect("exact policy and bundle counts must pass");
+        bundle
+            .annotations
+            .insert("annotation-plus-one".to_string(), "value".to_string());
+        assert!(verify_attestation(&policy, &bundle).is_err());
+        bundle.annotations.remove("annotation-plus-one");
+        policy
+            .trusted_oidc_issuers
+            .push("https://issuer-plus-one.example".to_string());
+        assert!(verify_attestation(&policy, &bundle).is_err());
+    }
+    #[test]
+    fn pxe_input_accepts_exact_event_and_node_limits_and_rejects_plus_one() {
+        let mut empty_config = config_without_health_consumers();
+        empty_config.network.racks = vec![RackSpec {
+            name: "rack".to_string(),
+            role: "edge".to_string(),
+            nodes: vec![test_node(0)],
+        }];
+        let event = PxeEvent {
+            hostname: "node-0".to_string(),
+            stage: "pxe".to_string(),
+            status: "success".to_string(),
+            log_digest: None,
+            timestamp: None,
+        };
+        let mut events = vec![event.clone(); PXE_LOG_MAX_EVENTS_V1];
+        verify_pxe_log(&empty_config, &events).expect("exact event count must pass");
+        events.push(event);
+        assert!(verify_pxe_log(&empty_config, &events).is_err());
+        let mut config = empty_config;
+        config.network.racks = vec![RackSpec {
+            name: "rack".to_string(),
+            role: "edge".to_string(),
+            nodes: (0..POP_CONFIG_MAX_NODES_V1).map(test_node).collect(),
+        }];
+        let events: Vec<_> = (0..POP_CONFIG_MAX_NODES_V1)
+            .map(|index| PxeEvent {
+                hostname: format!("node-{index}"),
+                stage: "pxe".to_string(),
+                status: "success".to_string(),
+                log_digest: None,
+                timestamp: None,
+            })
+            .collect();
+        verify_pxe_log(&config, &events).expect("exact node count must pass");
+        config.network.racks[0]
+            .nodes
+            .push(test_node(POP_CONFIG_MAX_NODES_V1));
+        assert!(verify_pxe_log(&config, &events).is_err());
+    }
     #[test]
     fn template_includes_edge_gateway() {
         let config = build_template(&TemplateOptions::default());
@@ -912,7 +1365,6 @@ mod tests {
             "template must include an edge health check"
         );
     }
-
     #[test]
     fn validation_detects_missing_edge_role() {
         let mut config = build_template(&TemplateOptions::default());
@@ -924,7 +1376,6 @@ mod tests {
             "error should mention missing edge-gateway role, got {message}"
         );
     }
-
     #[test]
     fn health_reports_success() {
         let config = build_template(&TemplateOptions::default());
@@ -971,7 +1422,6 @@ mod tests {
         assert!(summary.failed_checks.is_empty());
         assert!(summary.missing_checks.is_empty());
     }
-
     #[test]
     fn health_detects_missing_check() {
         let config = build_template(&TemplateOptions::default());
@@ -1025,7 +1475,6 @@ mod tests {
             "failed_checks should include degraded resolver-dnssec"
         );
     }
-
     #[test]
     fn health_unknown_status_errors() {
         let config = build_template(&TemplateOptions::default());
@@ -1046,7 +1495,6 @@ mod tests {
             other => panic!("unexpected error variant: {other:?}"),
         }
     }
-
     #[test]
     fn attestation_verification_succeeds() {
         let mut config = build_template(&TemplateOptions::default());
@@ -1066,7 +1514,6 @@ mod tests {
         };
         verify_attestation(&config.sigstore, &bundle).expect("attestation should pass");
     }
-
     #[test]
     fn attestation_missing_annotation_fails() {
         let mut config = build_template(&TemplateOptions::default());
@@ -1089,7 +1536,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn pxe_log_verification_detects_failure() {
         let config = build_template(&TemplateOptions::default());
@@ -1115,7 +1561,6 @@ mod tests {
             "unexpected error: {error}"
         );
     }
-
     #[test]
     fn pxe_log_verification_succeeds() {
         let config = build_template(&TemplateOptions::default());

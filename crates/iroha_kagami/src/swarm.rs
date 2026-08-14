@@ -1,11 +1,10 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs,
     io::{BufWriter, Read, Write},
     path::{Path, PathBuf},
     time::Duration,
 };
-
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{WrapErr as _, ensure, eyre};
 use iroha_config::{base::toml::TomlSource, parameters::actual};
@@ -27,13 +26,15 @@ use iroha_data_model::{
     prelude::AccountId,
     transaction::Executable,
 };
-use iroha_genesis::RawGenesisTransaction;
+use iroha_genesis::{
+    GENESIS_MANIFEST_JSON_MAX_BYTES_V1, RawGenesisTransaction, SIGNED_GENESIS_MAX_BYTES_V1,
+    ValidatedGenesisBundle,
+};
 use iroha_swarm::{
     PeerOverride, PreparedBuildLine, PreparedGenesisArtifacts, PreparedRuntimeFile,
     PreparedSecretFile, PreparedValidator,
 };
 use iroha_version::BuildLine;
-
 use crate::{
     Outcome, RunArgs,
     genesis::{
@@ -42,7 +43,6 @@ use crate::{
     },
     tui,
 };
-
 /// Docker Compose configuration generator for Iroha.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(ClapArgs, Debug, Clone)]
@@ -136,7 +136,6 @@ pub struct Args {
     #[arg(long)]
     no_banner: bool,
 }
-
 impl Args {
     /// If this returns `Ok(true)`, then Swarm is allowed to proceed.
     fn user_allows_overwrite(&self) -> Result<bool, inquire::InquireError> {
@@ -153,7 +152,6 @@ impl Args {
         Ok(true)
     }
 }
-
 #[derive(Debug)]
 struct PreparedBundle {
     chain: ChainId,
@@ -162,29 +160,18 @@ struct PreparedBundle {
     public_key: PathBuf,
     expected_hash: PathBuf,
 }
-
-struct ValidatedGenesis {
-    block: iroha_data_model::block::SignedBlock,
-    canonical_wire: Vec<u8>,
-    public_key: PublicKey,
-    expected_hash: HashOf<BlockHeader>,
-    validator_pops: BTreeMap<PublicKey, Vec<u8>>,
-}
-
 struct AdmittedPreparedValidator {
     config: actual::Root,
     table: toml::Table,
     key_pair: iroha_crypto::KeyPair,
     pop: Vec<u8>,
 }
-
 struct PreparedRuntimePeer {
     service_name: String,
     p2p_port: u16,
     api_port: u16,
     public_key: PublicKey,
 }
-
 fn read_exact_record(path: &Path, label: &str) -> color_eyre::Result<String> {
     const MAX_EXACT_RECORD_BYTES: u64 = 64 * 1024;
     let record = read_runtime_file_bounded(path, label, MAX_EXACT_RECORD_BYTES)?;
@@ -205,13 +192,12 @@ fn read_exact_record(path: &Path, label: &str) -> color_eyre::Result<String> {
     );
     Ok(payload.to_owned())
 }
-
 fn validate_prepared_genesis(
     signed_block: &Path,
     public_key_path: &Path,
     expected_hash_path: &Path,
     manifest: &RawGenesisTransaction,
-) -> color_eyre::Result<ValidatedGenesis> {
+) -> color_eyre::Result<ValidatedGenesisBundle> {
     let public_record = read_exact_record(public_key_path, "genesis public-key")?;
     let public_key = public_record
         .parse::<PublicKey>()
@@ -220,7 +206,6 @@ fn validate_prepared_genesis(
         public_key.to_string() == public_record,
         "prepared genesis public-key record is not canonical"
     );
-
     let expected_record = read_exact_record(expected_hash_path, "genesis expected-hash")?;
     let expected_hash = expected_record
         .parse::<HashOf<BlockHeader>>()
@@ -229,12 +214,10 @@ fn validate_prepared_genesis(
         expected_hash.to_string() == expected_record,
         "prepared genesis expected-hash record is not canonical lowercase marked hex"
     );
-
-    const MAX_SIGNED_GENESIS_BYTES: u64 = 512 * 1024 * 1024;
     let signed = read_runtime_file_bounded(
         signed_block,
         "signed genesis body",
-        MAX_SIGNED_GENESIS_BYTES,
+        u64::try_from(SIGNED_GENESIS_MAX_BYTES_V1).expect("signed-genesis limit fits u64"),
     )?;
     ensure!(
         !signed.is_empty(),
@@ -248,18 +231,11 @@ fn validate_prepared_genesis(
         expected_hash,
     )
     .wrap_err("independently validate prepared genesis bundle")?;
+    drop(signed);
     iroha_core::validate_genesis_block(validated.block(), &AccountId::new(public_key.clone()))
         .map_err(|error| eyre!("prepared genesis failed full core validation: {error}"))?;
-
-    Ok(ValidatedGenesis {
-        block: validated.block().clone(),
-        canonical_wire: validated.canonical_wire().to_vec(),
-        public_key: validated.public_key().clone(),
-        expected_hash: validated.expected_hash(),
-        validator_pops: validated.validator_pops().clone(),
-    })
+    Ok(validated)
 }
-
 fn signed_genesis_consensus_metadata(
     block: &SignedBlock,
 ) -> color_eyre::Result<ConsensusHandshakeMetadata> {
@@ -291,7 +267,6 @@ fn signed_genesis_consensus_metadata(
     metadata
         .ok_or_else(|| eyre!("prepared signed genesis contains no consensus metadata instruction"))
 }
-
 fn prepared_peer_config_paths(
     config_dir: &Path,
     count: std::num::NonZeroU16,
@@ -338,12 +313,10 @@ fn prepared_peer_config_paths(
         .map(|index| config_dir.join(format!("peer{index}.toml")))
         .collect())
 }
-
 struct ParsedPreparedPeerConfig {
     actual: actual::Root,
     table: toml::Table,
 }
-
 fn parse_prepared_peer_config(path: &Path) -> color_eyre::Result<ParsedPreparedPeerConfig> {
     const MAX_PREPARED_CONFIG_BYTES: u64 = 8 * 1024 * 1024;
     let raw = read_runtime_file_bounded(path, "validator config", MAX_PREPARED_CONFIG_BYTES)?;
@@ -374,7 +347,6 @@ fn parse_prepared_peer_config(path: &Path) -> color_eyre::Result<ParsedPreparedP
     })?;
     Ok(ParsedPreparedPeerConfig { actual, table })
 }
-
 fn ensure_toml_table<'a>(
     root: &'a mut toml::Table,
     path: &[&str],
@@ -393,7 +365,6 @@ fn ensure_toml_table<'a>(
     }
     Ok(current)
 }
-
 fn set_toml_string(
     root: &mut toml::Table,
     table_path: &[&str],
@@ -403,7 +374,6 @@ fn set_toml_string(
     ensure_toml_table(root, table_path)?.insert(key.to_owned(), toml::Value::String(value.into()));
     Ok(())
 }
-
 fn remove_toml_key(
     root: &mut toml::Table,
     table_path: &[&str],
@@ -429,7 +399,6 @@ fn remove_toml_key(
     current.remove(key);
     Ok(())
 }
-
 fn toml_contains(root: &toml::Table, table_path: &[&str], key: &str) -> bool {
     let mut current = root;
     for segment in table_path {
@@ -440,7 +409,6 @@ fn toml_contains(root: &toml::Table, table_path: &[&str], key: &str) -> bool {
     }
     current.contains_key(key)
 }
-
 fn config_requires_sora_profile(config: &actual::Root) -> bool {
     config.torii.sorafs_storage.enabled
         || config.torii.sorafs_discovery.discovery_enabled
@@ -449,7 +417,6 @@ fn config_requires_sora_profile(config: &actual::Root) -> bool {
         || config.nexus.uses_multilane_catalogs()
         || config.nexus.has_lane_overrides()
 }
-
 fn effective_runtime_config(mut config: actual::Root, table: &toml::Table) -> (actual::Root, bool) {
     let requires_sora_profile = config_requires_sora_profile(&config);
     if requires_sora_profile {
@@ -469,11 +436,9 @@ fn effective_runtime_config(mut config: actual::Root, table: &toml::Table) -> (a
     }
     (config, requires_sora_profile)
 }
-
 fn compose_addr_literal(host: &str, port: u16) -> String {
     norito::literal::format("addr", &format!("{host}:{port}"))
 }
-
 fn rewrite_container_network(
     table: &mut toml::Table,
     index: usize,
@@ -528,7 +493,6 @@ fn rewrite_container_network(
     );
     Ok(())
 }
-
 fn validate_prepared_network_projection(
     config: &actual::Root,
     path: &Path,
@@ -646,11 +610,9 @@ fn validate_prepared_network_projection(
     );
     Ok(())
 }
-
 #[cfg(unix)]
 fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev()
         && left.ino() == right.ino()
         && left.mode() == right.mode()
@@ -663,7 +625,6 @@ fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(not(unix))]
 fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.is_file() == right.is_file()
@@ -671,7 +632,6 @@ fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.len() == right.len()
         && left.modified().ok() == right.modified().ok()
 }
-
 fn read_runtime_file_bounded(
     path: &Path,
     label: &str,
@@ -717,9 +677,15 @@ fn read_runtime_file_bounded(
         before.len(),
         max_bytes
     );
-    let mut raw = Vec::with_capacity(usize::try_from(before.len()).unwrap_or(0));
+    let capacity = usize::try_from(before.len()).map_err(|_| {
+        eyre!(
+            "prepared {label} {} length cannot be addressed on this platform",
+            path.display()
+        )
+    })?;
+    let mut raw = Vec::with_capacity(capacity.saturating_add(1));
     Read::by_ref(&mut file)
-        .take(max_bytes.saturating_add(1))
+        .take(before.len().saturating_add(1))
         .read_to_end(&mut raw)
         .wrap_err_with(|| format!("read prepared {label} {}", path.display()))?;
     ensure!(
@@ -737,7 +703,6 @@ fn read_runtime_file_bounded(
     );
     Ok(raw)
 }
-
 fn collect_runtime_directory(
     source: &Path,
     projection_root: &Path,
@@ -749,7 +714,6 @@ fn collect_runtime_directory(
     const MAX_ENTRIES: usize = 256;
     const MAX_DEPTH: usize = 8;
     const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
-
     fn collect_entries(
         directory: &Path,
         relative_prefix: &str,
@@ -886,7 +850,6 @@ fn collect_runtime_directory(
         );
         Ok(())
     }
-
     let lexical_source = fs::symlink_metadata(source).wrap_err_with(|| {
         format!(
             "inspect configured prepared {label} directory {}",
@@ -1057,7 +1020,6 @@ fn collect_runtime_directory(
     })?;
     Ok((files, validation_dir))
 }
-
 fn execution_policy_projection(config: &actual::Root) -> [u8; 32] {
     actual::execution_policy_digest_v1(
         &config.pipeline,
@@ -1072,7 +1034,6 @@ fn execution_policy_projection(config: &actual::Root) -> [u8; 32] {
         Some([0x44; 32]),
     )
 }
-
 fn validate_runtime_projection_policy(
     source: &actual::Root,
     projected: &actual::Root,
@@ -1133,7 +1094,6 @@ fn validate_runtime_projection_policy(
     );
     Ok(())
 }
-
 fn ensure_container_projection_directory(directory: &Path) -> color_eyre::Result<()> {
     match fs::symlink_metadata(directory) {
         Ok(metadata) => ensure!(
@@ -1175,7 +1135,6 @@ fn ensure_container_projection_directory(directory: &Path) -> color_eyre::Result
     {
         use rustix::fs::{Mode, OFlags, fchmod, open};
         use std::os::unix::fs::MetadataExt as _;
-
         let lexical = fs::symlink_metadata(directory).wrap_err_with(|| {
             format!(
                 "inspect prepared runtime projection directory {}",
@@ -1244,7 +1203,6 @@ fn ensure_container_projection_directory(directory: &Path) -> color_eyre::Result
     }
     Ok(())
 }
-
 fn materialize_read_only_file_at(
     projection_dir: &Path,
     name: &str,
@@ -1262,7 +1220,6 @@ fn materialize_read_only_file_at(
         "prepared runtime projection filename `{name}` is not portable"
     );
     ensure_container_projection_directory(projection_dir)?;
-
     let path = projection_dir.join(name);
     match fs::symlink_metadata(&path) {
         Ok(lexical) => {
@@ -1411,7 +1368,6 @@ fn materialize_read_only_file_at(
     })?;
     Ok(root.join(name))
 }
-
 fn materialize_container_readable_file(
     projection_root: &Path,
     namespace: &str,
@@ -1431,7 +1387,6 @@ fn materialize_container_readable_file(
     ensure_container_projection_directory(&projection_dir)?;
     materialize_read_only_file_at(&projection_dir, name, content)
 }
-
 fn materialize_runtime_projection(
     projection_root: &Path,
     index: usize,
@@ -1444,13 +1399,11 @@ fn materialize_runtime_projection(
         content.as_bytes(),
     )
 }
-
 struct CapturedValidationPath {
     table_path: &'static [&'static str],
     key: &'static str,
     source: PathBuf,
 }
-
 #[allow(clippy::too_many_arguments)]
 fn capture_prepared_runtime_file(
     table: &mut toml::Table,
@@ -1480,7 +1433,6 @@ fn capture_prepared_runtime_file(
         },
     ))
 }
-
 fn ensure_fresh_state_directory(
     path: &Path,
     label: &str,
@@ -1527,7 +1479,6 @@ fn ensure_fresh_state_directory(
     );
     Ok(())
 }
-
 fn ensure_fresh_state_file(path: &Path, label: &str, config_path: &Path) -> color_eyre::Result<()> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -1561,7 +1512,6 @@ fn ensure_fresh_state_file(path: &Path, label: &str, config_path: &Path) -> colo
     }
     Ok(())
 }
-
 fn ensure_fresh_prepared_state(
     config: &actual::Root,
     config_path: &Path,
@@ -1578,7 +1528,6 @@ fn ensure_fresh_prepared_state(
         |path: &Path, label: &str| ensure_fresh_state_directory(&resolve(path), label, config_path);
     let file =
         |path: &Path, label: &str| ensure_fresh_state_file(&resolve(path), label, config_path);
-
     directory(config.kura.store_dir.value(), "Kura store")?;
     directory(config.snapshot.store_dir.value(), "snapshot store")?;
     directory(&config.torii.data_dir, "Torii data")?;
@@ -1699,7 +1648,6 @@ fn ensure_fresh_prepared_state(
     }
     Ok(())
 }
-
 fn project_prepared_runtime_config(
     config_dir: &Path,
     projection_root: &Path,
@@ -1726,7 +1674,6 @@ fn project_prepared_runtime_config(
     const SORAFS_SALT_TARGET: &str = "/config/runtime/sorafs-salt-schedule";
     const KAGEMUSHA_ARTIFACT_TARGET: &str = "/config/runtime/kagemusha-artifacts";
     const SITE_BINDINGS_TARGET: &str = "/config/runtime/sorafs_sites.json";
-
     let source_table = table.clone();
     let (effective_source, source_requires_sora) =
         effective_runtime_config(source.clone(), &source_table);
@@ -1739,7 +1686,6 @@ fn project_prepared_runtime_config(
         "revocation_store_path",
         "/storage/network/soranet-ticket-revocations.norito",
     )?;
-
     let rans_content = read_runtime_file_bounded(
         &source.streaming.codec.rans_tables_path,
         "rANS table",
@@ -1757,7 +1703,6 @@ fn project_prepared_runtime_config(
     }];
     let mut secret_files = Vec::new();
     let mut captured_validation_paths = Vec::new();
-
     set_toml_string(
         &mut table,
         &["genesis"],
@@ -2030,7 +1975,6 @@ fn project_prepared_runtime_config(
             toml::Value::String("/storage/streaming/soranet".to_owned()),
         );
         streaming.insert("soranet".into(), toml::Value::Table(soranet));
-
         let mut soravpn = match streaming.get("soravpn") {
             Some(toml::Value::Table(existing)) => existing.clone(),
             Some(_) => {
@@ -2107,12 +2051,8 @@ fn project_prepared_runtime_config(
         });
         captured_faucet_private_key = Some(captured);
     }
-
-    if let Some(path) = source
-        .torii
-        .tx_history
-        .as_ref()
-        .and_then(|history| history.mandatory_aliases_path.as_deref())
+    if let Some((path, maximum)) =
+        tx_history_mandatory_alias_source(source.torii.tx_history.as_ref())
     {
         let (file, captured) = capture_prepared_runtime_file(
             &mut table,
@@ -2122,7 +2062,7 @@ fn project_prepared_runtime_config(
             "mandatory_aliases.norito",
             "/config/runtime/tx-history-mandatory-aliases.norito",
             "transaction-history mandatory-alias policy",
-            16 * 1024 * 1024,
+            maximum,
             &["torii", "tx_history"],
             "mandatory_aliases_path",
         )?;
@@ -2299,7 +2239,6 @@ fn project_prepared_runtime_config(
         runtime_files.push(file);
         captured_validation_paths.push(captured);
     }
-
     let captured_manifest_directory = if source.nexus.enabled {
         if let Some(manifest_directory) = source.nexus.registry.manifest_directory.as_deref() {
             let (files, validation_directory) = collect_runtime_directory(
@@ -2434,7 +2373,6 @@ fn project_prepared_runtime_config(
             source: validation_directory,
         });
     }
-
     let mut captured_site_bindings = None;
     if let Some(site_bindings) = source.torii.sorafs_gateway.site_bindings.path.as_deref() {
         let site_content = read_runtime_file_bounded(
@@ -2459,7 +2397,6 @@ fn project_prepared_runtime_config(
             SITE_BINDINGS_TARGET,
         )?;
     }
-
     let mut validation_table = table.clone();
     for captured in &captured_validation_paths {
         set_toml_string(
@@ -2547,7 +2484,6 @@ fn project_prepared_runtime_config(
         "container runtime projection changed Sora profile requirements"
     );
     validate_runtime_projection_policy(source, &projected_effective, metadata)?;
-
     let mut content = toml::to_string_pretty(&table)
         .wrap_err("serialize container-safe prepared runtime projection")?;
     if !content.ends_with('\n') {
@@ -2564,7 +2500,19 @@ fn project_prepared_runtime_config(
         projected_effective,
     ))
 }
-
+fn tx_history_mandatory_alias_source(
+    history: Option<&actual::ToriiTxHistory>,
+) -> Option<(&Path, u64)> {
+    history.and_then(|history| {
+        history.mandatory_aliases_path.as_deref().map(|path| {
+            (
+                path,
+                u64::try_from(history.mandatory_aliases_max_file_bytes)
+                    .expect("validated V1 alias-policy file limit fits u64"),
+            )
+        })
+    })
+}
 fn load_prepared_bundle(
     config_dir: &Path,
     projection_root: &Path,
@@ -2587,9 +2535,8 @@ fn load_prepared_bundle(
         &expected_hash_path,
         manifest,
     )?;
-    let signed_metadata = signed_genesis_consensus_metadata(&validated.block)?;
+    let signed_metadata = signed_genesis_consensus_metadata(validated.block())?;
     let config_paths = prepared_peer_config_paths(config_dir, count)?;
-
     let mut chain = None;
     let mut admitted = Vec::with_capacity(config_paths.len());
     let mut validator_keys = BTreeSet::new();
@@ -2625,16 +2572,16 @@ fn load_prepared_bundle(
         );
         validate_prepared_network_projection(&config, path)?;
         ensure!(
-            config.genesis.public_key == validated.public_key,
+            &config.genesis.public_key == validated.public_key(),
             "prepared validator config {} has a different genesis verifier key",
             path.display()
         );
         ensure!(
-            config.genesis.expected_hash == validated.expected_hash,
+            config.genesis.expected_hash == validated.expected_hash(),
             "prepared validator config {} has genesis hash {}, expected {}",
             path.display(),
             config.genesis.expected_hash,
-            validated.expected_hash
+            validated.expected_hash()
         );
         let configured_genesis = config.genesis.file.as_ref().ok_or_else(|| {
             eyre!(
@@ -2661,10 +2608,9 @@ fn load_prepared_bundle(
             "prepared validator config {} must not select a runtime genesis manifest; the source manifest is admission-only",
             path.display()
         );
-
         let trusted = config.common.trusted_peers.value();
         ensure!(
-            trusted.pops == validated.validator_pops,
+            &trusted.pops == validated.validator_pops(),
             "prepared validator config {} PoP roster differs from signed genesis",
             path.display()
         );
@@ -2675,14 +2621,13 @@ fn load_prepared_bundle(
         ensure!(
             trusted_keys
                 == validated
-                    .validator_pops
+                    .validator_pops()
                     .keys()
                     .cloned()
                     .collect::<BTreeSet<_>>(),
             "prepared validator config {} trusted roster differs from signed genesis",
             path.display()
         );
-
         let key_pair = config.common.key_pair.clone();
         let validator_key = key_pair.public_key().clone();
         ensure!(
@@ -2715,7 +2660,7 @@ fn load_prepared_bundle(
             path.display()
         );
         let pop = validated
-            .validator_pops
+            .validator_pops()
             .get(&validator_key)
             .cloned()
             .ok_or_else(|| {
@@ -2750,7 +2695,7 @@ fn load_prepared_bundle(
     ensure!(
         validator_keys
             == validated
-                .validator_pops
+                .validator_pops()
                 .keys()
                 .cloned()
                 .collect::<BTreeSet<_>>(),
@@ -2758,11 +2703,10 @@ fn load_prepared_bundle(
     );
     let chain = chain.expect("non-empty prepared bundle has a chain id");
     iroha_core::validate_genesis_block(
-        &validated.block,
-        &AccountId::new(validated.public_key.clone()),
+        validated.block(),
+        &AccountId::new(validated.public_key().clone()),
     )
     .map_err(|error| eyre!("prepared signed genesis failed full validation: {error}"))?;
-
     let runtime_peers = admitted
         .iter()
         .enumerate()
@@ -2854,7 +2798,7 @@ fn load_prepared_bundle(
         } else {
             let context = crate::genesis::staged_signed_sumeragi_v2_context_hashes(
                 manifest,
-                &validated.block,
+                validated.block(),
                 &effective_config,
             )
             .wrap_err_with(|| {
@@ -2896,28 +2840,26 @@ fn load_prepared_bundle(
             secret_files,
         });
     }
-
     let runtime_signed_block = materialize_container_readable_file(
         projection_root,
         "genesis",
         "genesis.signed.nrt",
-        &validated.canonical_wire,
+        validated.canonical_wire(),
     )?;
-    let public_key_record = format!("{}\n", validated.public_key);
+    let public_key_record = format!("{}\n", validated.public_key());
     let runtime_public_key = materialize_container_readable_file(
         projection_root,
         "genesis-key",
         crate::localnet::GENESIS_PUBLIC_KEY_FILE,
         public_key_record.as_bytes(),
     )?;
-    let expected_hash_record = format!("{}\n", validated.expected_hash);
+    let expected_hash_record = format!("{}\n", validated.expected_hash());
     let runtime_expected_hash = materialize_container_readable_file(
         projection_root,
         "genesis-hash",
         crate::localnet::GENESIS_EXPECTED_HASH_FILE,
         expected_hash_record.as_bytes(),
     )?;
-
     Ok(PreparedBundle {
         chain,
         validators,
@@ -2926,39 +2868,36 @@ fn load_prepared_bundle(
         expected_hash: runtime_expected_hash,
     })
 }
-
 impl<T: Write> RunArgs<T> for Args {
     #[allow(clippy::too_many_lines)]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         // let args: Args = <Args as clap::Parser>::parse();
         let args = self;
-
         ensure!(
             is_valid_committee_size(usize::from(args.peers.get())),
             "`--peers` ({}) must form an exact Sumeragi v2 `3f + 1` validator committee \
              in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT}",
             args.peers
         );
-
         if !args.print && !args.user_allows_overwrite()? {
             return Ok(());
         }
-
         let build_line = build_line_from_env();
         let genesis_path = args.config_dir.join("genesis.json");
-        const MAX_GENESIS_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
         let manifest_raw = read_runtime_file_bounded(
             &genesis_path,
             "genesis manifest",
-            MAX_GENESIS_MANIFEST_BYTES,
+            u64::try_from(GENESIS_MANIFEST_JSON_MAX_BYTES_V1)
+                .expect("genesis-manifest limit fits u64"),
         )?;
-        let manifest: RawGenesisTransaction = norito::json::from_slice(&manifest_raw)
-            .wrap_err_with(|| {
+        let manifest =
+            RawGenesisTransaction::from_json_slice(&manifest_raw).wrap_err_with(|| {
                 eyre!(
                     "failed to parse genesis manifest at {}",
                     genesis_path.display()
                 )
             })?;
+        drop(manifest_raw);
         let manifest_mode = manifest.consensus_mode();
         validate_consensus_mode_for_line(build_line, manifest_mode, ConsensusPolicy::Any)?;
         if matches!(manifest_mode, SumeragiConsensusMode::Npos) {
@@ -2968,12 +2907,10 @@ impl<T: Write> RunArgs<T> for Args {
             BuildLine::Iroha2 => PreparedBuildLine::Iroha2,
             BuildLine::Iroha3 => PreparedBuildLine::Iroha3,
         };
-
         let peer_overrides = match &args.peer_config {
             Some(path) => Some(load_peer_overrides(path)?),
             None => None,
         };
-
         tui::status("Composing Docker deployment manifest");
         let prepared_artifacts;
         let swarm = if let Some(seed) = args.seed.as_deref() {
@@ -3027,9 +2964,7 @@ impl<T: Write> RunArgs<T> for Args {
             swarm
         };
         let schema = swarm.build();
-
         let mut file;
-
         let manifest_writer: &mut dyn Write = if args.print {
             writer
         } else {
@@ -3038,7 +2973,6 @@ impl<T: Write> RunArgs<T> for Args {
                 .wrap_err("Could not open the target file.")?;
             &mut file
         };
-
         let banner = if args.no_banner {
             None
         } else {
@@ -3054,12 +2988,10 @@ impl<T: Write> RunArgs<T> for Args {
         let banner_refs = banner
             .as_ref()
             .map(|lines| lines.iter().map(String::as_str).collect::<Vec<_>>());
-
         schema.write(
             &mut std::io::BufWriter::new(manifest_writer),
             banner_refs.as_deref(),
         )?;
-
         if !args.print {
             writeln!(
                 writer,
@@ -3096,11 +3028,9 @@ impl<T: Write> RunArgs<T> for Args {
             )?;
         }
         tui::success("Compose manifest ready");
-
         Ok(())
     }
 }
-
 fn load_peer_overrides(path: &Path) -> color_eyre::Result<Vec<PeerOverride>> {
     ensure!(
         path.exists(),
@@ -3117,7 +3047,6 @@ fn load_peer_overrides(path: &Path) -> color_eyre::Result<Vec<PeerOverride>> {
     parse_peer_override_toml(&contents)
         .wrap_err_with(|| eyre!("failed to parse peer configuration at {}", path.display()))
 }
-
 fn parse_peer_override_toml(input: &str) -> color_eyre::Result<Vec<PeerOverride>> {
     let value: toml::Value =
         toml::from_str(input).wrap_err("peer configuration is not valid TOML")?;
@@ -3126,12 +3055,10 @@ fn parse_peer_override_toml(input: &str) -> color_eyre::Result<Vec<PeerOverride>
         .ok_or_else(|| eyre!("peer configuration must define [[peers]] entries"))?
         .as_array()
         .ok_or_else(|| eyre!("`peers` must be an array of tables"))?;
-
     ensure!(
         !peers.is_empty(),
         "peer configuration must list at least one peer"
     );
-
     peers
         .iter()
         .map(|entry| -> color_eyre::Result<PeerOverride> {
@@ -3152,7 +3079,6 @@ fn parse_peer_override_toml(input: &str) -> color_eyre::Result<Vec<PeerOverride>
         })
         .collect()
 }
-
 fn parse_port(table: &toml::Table, field: &str) -> color_eyre::Result<u16> {
     let raw = table
         .get(field)
@@ -3163,7 +3089,6 @@ fn parse_port(table: &toml::Table, field: &str) -> color_eyre::Result<u16> {
     let port = u16::try_from(value).map_err(|_| eyre!("`{field}` must fit into a u16"))?;
     Ok(port)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -3172,7 +3097,6 @@ mod tests {
         num::{NonZeroU16, NonZeroUsize},
         path::{Path, PathBuf},
     };
-
     use iroha_crypto::{Algorithm, Hash, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId,
@@ -3185,14 +3109,43 @@ mod tests {
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
     use iroha_swarm::PreparedBuildLine;
     use iroha_version::BuildLine;
-
     use super::{
         Args, load_peer_overrides, load_prepared_bundle, parse_peer_override_toml,
-        parse_prepared_peer_config, signed_genesis_consensus_metadata, validate_prepared_genesis,
+        parse_prepared_peer_config, read_runtime_file_bounded, signed_genesis_consensus_metadata,
+        tx_history_mandatory_alias_source, validate_prepared_genesis,
         validate_runtime_projection_policy,
     };
     use crate::{RunArgs, localnet::LocalnetOptions};
-
+    #[test]
+    fn prepared_tx_history_alias_source_uses_configured_limit() {
+        let path = PathBuf::from("aliases.json");
+        let history = iroha_config::parameters::actual::ToriiTxHistory {
+            mandatory_aliases_path: Some(path.clone()),
+            mandatory_aliases_max_file_bytes: 73,
+            allowed_asset_definition_id: None,
+            jwt: None,
+        };
+        assert_eq!(
+            tx_history_mandatory_alias_source(Some(&history)),
+            Some((path.as_path(), 73))
+        );
+        assert_eq!(tx_history_mandatory_alias_source(None), None);
+    }
+    #[test]
+    fn prepared_tx_history_alias_source_limit_is_enforced_at_exact_boundary() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("aliases.json");
+        fs::write(&path, b"{}").expect("write policy fixture");
+        assert_eq!(
+            read_runtime_file_bounded(&path, "transaction-history mandatory-alias policy", 2,)
+                .expect("exact policy cap"),
+            b"{}"
+        );
+        assert!(
+            read_runtime_file_bounded(&path, "transaction-history mandatory-alias policy", 1,)
+                .is_err()
+        );
+    }
     fn generate_prepared_bundle(root: &Path) -> PathBuf {
         let bundle = root.join("prepared-bundle");
         let options = LocalnetOptions {
@@ -3215,7 +3168,6 @@ mod tests {
             .expect("generate authoritative prepared localnet bundle");
         bundle
     }
-
     fn load_test_prepared_bundle(
         config_dir: &Path,
         projection_root: &Path,
@@ -3231,7 +3183,6 @@ mod tests {
             PreparedBuildLine::Iroha3,
         )
     }
-
     #[test]
     fn run_succeeds_without_banner() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
@@ -3252,19 +3203,16 @@ mod tests {
             force: false,
             no_banner: true,
         };
-
         let mut buffer = Vec::new();
         let mut writer = BufWriter::new(&mut buffer);
         args.run(&mut writer)
             .expect("`Args::run` should succeed without banner");
         writer.flush().expect("flush buffer");
         drop(writer);
-
         let output = String::from_utf8(buffer).expect("output should be UTF-8");
         assert!(!output.contains("Generated by `kagami docker`."));
         assert!(!output.contains("Seed:"));
     }
-
     #[test]
     fn file_output_reports_required_runtime_genesis_artifacts() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
@@ -3286,12 +3234,10 @@ mod tests {
             force: false,
             no_banner: true,
         };
-
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer).expect("write Compose manifest");
         let output = String::from_utf8(writer.into_inner().expect("flush summary"))
             .expect("summary is UTF-8");
-
         assert!(compose_path.is_file());
         assert!(output.contains("genesis_public_key_file_env: IROHA_GENESIS_PUBLIC_KEY_FILE"));
         assert!(output.contains("genesis_signed_file_env: IROHA_GENESIS_SIGNED_FILE"));
@@ -3301,7 +3247,6 @@ mod tests {
         assert!(!output.contains("IROHA_GENESIS_PRIVATE_KEY_FILE"));
         assert!(output.contains("next: docker compose"));
     }
-
     #[test]
     fn prepared_bundle_renders_exact_read_only_runtime_inputs() {
         let temp_dir = tempfile::tempdir().expect("prepared bundle temp dir");
@@ -3322,7 +3267,6 @@ mod tests {
             force: false,
             no_banner: true,
         };
-
         let mut output = Vec::new();
         let mut writer = BufWriter::new(&mut output);
         args.run(&mut writer)
@@ -3359,7 +3303,6 @@ mod tests {
         assert!(!output.contains("streaming_private_key"));
         assert!(!output.contains("environment:"));
         assert!(!output.contains("PRIVATE_KEY:"));
-
         let projection_root = deployment_dir.join(".kagami-compose");
         let peer0_directory = fs::read_dir(&projection_root)
             .expect("read projection root")
@@ -3515,7 +3458,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             assert_eq!(
                 fs::metadata(&projection_root)
                     .expect("projection-root metadata")
@@ -3554,7 +3496,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn prepared_bundle_allows_loopback_but_rejects_bridge_trust_cidrs() {
         let temp_dir = tempfile::tempdir().expect("prepared CIDR temp dir");
@@ -3566,7 +3507,6 @@ mod tests {
             count,
         )
         .expect("generated loopback-only Torii CIDRs remain local inside each container");
-
         let peer0_path = config_dir.join("peer0.toml");
         let mut peer0 = fs::read_to_string(&peer0_path)
             .expect("read peer0 fixture")
@@ -3585,7 +3525,6 @@ mod tests {
             toml::to_string_pretty(&peer0).expect("serialize mutated peer0 fixture"),
         )
         .expect("write mutated peer0 fixture");
-
         let error = load_test_prepared_bundle(
             &config_dir,
             &temp_dir.path().join("bridge-projection"),
@@ -3597,7 +3536,6 @@ mod tests {
             "unexpected bridge-CIDR rejection: {error:#}"
         );
     }
-
     #[test]
     fn prepared_bundle_rejects_existing_default_projected_state() {
         let temp_dir = tempfile::tempdir().expect("prepared state temp dir");
@@ -3609,7 +3547,6 @@ mod tests {
         fs::create_dir_all(revocations.parent().expect("revocation-store parent"))
             .expect("create default revocation-store parent");
         fs::write(&revocations, b"existing state").expect("write existing revocation state");
-
         let error = load_test_prepared_bundle(
             &config_dir,
             &temp_dir.path().join("state-projection"),
@@ -3623,7 +3560,6 @@ mod tests {
             "unexpected state rejection: {error:#}"
         );
     }
-
     #[test]
     fn prepared_bundle_rejects_signer_hash_roster_and_pop_mismatches() {
         let temp_dir = tempfile::tempdir().expect("prepared mismatch temp dir");
@@ -3632,7 +3568,6 @@ mod tests {
         let count = NonZeroU16::new(4).expect("non-zero");
         load_test_prepared_bundle(&config_dir, &projection_root, count)
             .expect("baseline prepared bundle validates");
-
         let signed_path = config_dir.join("genesis.signed.nrt");
         let public_path = config_dir.join(crate::localnet::GENESIS_PUBLIC_KEY_FILE);
         let hash_path = config_dir.join(crate::localnet::GENESIS_EXPECTED_HASH_FILE);
@@ -3642,7 +3577,7 @@ mod tests {
         let validated =
             validate_prepared_genesis(&signed_path, &public_path, &hash_path, &manifest)
                 .expect("validate prepared genesis fixture");
-        let metadata = signed_genesis_consensus_metadata(&validated.block)
+        let metadata = signed_genesis_consensus_metadata(validated.block())
             .expect("prepared fixture has consensus metadata");
         let parsed = parse_prepared_peer_config(&config_dir.join("peer0.toml"))
             .expect("parse prepared peer0 fixture");
@@ -3666,7 +3601,6 @@ mod tests {
                 .contains("safety/liveness fingerprint"),
             "unexpected projection-policy mismatch: {projection_error:#}"
         );
-
         let original_signed = fs::read(&signed_path).expect("read signed genesis fixture");
         let mut noncanonical_signed = original_signed.clone();
         noncanonical_signed.push(0);
@@ -3679,7 +3613,6 @@ mod tests {
             "unexpected canonical-wire mismatch: {canonical_error}"
         );
         fs::write(&signed_path, original_signed).expect("restore signed genesis fixture");
-
         let original_public = fs::read(&public_path).expect("read public-key fixture");
         let other_signer = KeyPair::try_from_seed(
             b"different-prepared-genesis-signer".to_vec(),
@@ -3695,7 +3628,6 @@ mod tests {
             "unexpected signer mismatch: {signer_error:#}"
         );
         fs::write(&public_path, original_public).expect("restore public-key fixture");
-
         let original_hash = fs::read(&hash_path).expect("read hash fixture");
         fs::write(
             &hash_path,
@@ -3709,7 +3641,6 @@ mod tests {
             "unexpected hash mismatch: {hash_error:#}"
         );
         fs::write(&hash_path, original_hash).expect("restore hash fixture");
-
         let peer3_path = config_dir.join("peer3.toml");
         let peer3 = fs::read(&peer3_path).expect("read peer3 fixture");
         fs::remove_file(&peer3_path).expect("remove peer3 fixture");
@@ -3720,7 +3651,6 @@ mod tests {
             "unexpected roster mismatch: {roster_error:#}"
         );
         fs::write(&peer3_path, peer3).expect("restore peer3 fixture");
-
         let peer0_path = config_dir.join("peer0.toml");
         let original_peer0 = fs::read_to_string(&peer0_path).expect("read peer0 fixture");
         let marker = "pop_hex = \"";
@@ -3747,7 +3677,6 @@ mod tests {
             "unexpected PoP mismatch: {pop_error:#}"
         );
         fs::write(&peer0_path, &original_peer0).expect("restore peer0 fixture");
-
         let alternate_signed_path = config_dir.join("alternate-genesis.signed.nrt");
         fs::copy(&signed_path, &alternate_signed_path)
             .expect("write alternate signed genesis fixture");
@@ -3774,7 +3703,6 @@ mod tests {
             "unexpected configured-body mismatch: {selected_body_error:#}"
         );
         fs::write(&peer0_path, &original_peer0).expect("restore peer0 fixture");
-
         let runtime_manifest_peer0 = original_peer0.replacen(
             "[genesis]\n",
             "[genesis]\nmanifest_json = \"genesis.json\"\n",
@@ -3795,7 +3723,6 @@ mod tests {
             "unexpected runtime-manifest mismatch: {runtime_manifest_error:#}"
         );
         fs::write(&peer0_path, &original_peer0).expect("restore peer0 fixture");
-
         let manifest_path = config_dir.join("genesis.json");
         let original_manifest = fs::read(&manifest_path).expect("read genesis manifest fixture");
         write_minimal_genesis(&manifest_path);
@@ -3810,7 +3737,6 @@ mod tests {
         );
         fs::write(&manifest_path, original_manifest).expect("restore genesis manifest fixture");
     }
-
     #[test]
     fn prepared_bundle_rejects_resultless_genesis_after_shared_bundle_checks() {
         let temp_dir = tempfile::tempdir().expect("resultless prepared temp dir");
@@ -3867,7 +3793,6 @@ mod tests {
             resultless.encode_wire().expect("encode resultless block"),
         )
         .expect("write resultless prepared block");
-
         let error = validate_prepared_genesis(&signed_path, &public_path, &hash_path, &manifest)
             .err()
             .expect("resultless prepared genesis must fail full core validation");
@@ -3876,7 +3801,6 @@ mod tests {
             "unexpected resultless-genesis rejection: {error:#}"
         );
     }
-
     #[test]
     fn load_peer_overrides_reads_valid_file() -> color_eyre::Result<()> {
         let file = tempfile::NamedTempFile::new()?;
@@ -3894,7 +3818,6 @@ p2p_port = 2001
 api_port = 9001
 "#,
         )?;
-
         let overrides = load_peer_overrides(file.path())?;
         assert_eq!(overrides.len(), 2);
         assert_eq!(overrides[0].name, "alpha");
@@ -3905,7 +3828,6 @@ api_port = 9001
         assert_eq!(overrides[1].api_port, 9001);
         Ok(())
     }
-
     #[test]
     fn parse_peer_override_toml_rejects_empty_peer_list() {
         let err = parse_peer_override_toml("peers = []").expect_err("should fail on empty peers");
@@ -3914,7 +3836,6 @@ api_port = 9001
             "unexpected error message: {err}"
         );
     }
-
     #[test]
     fn parse_peer_override_toml_rejects_out_of_range_ports() {
         let err = parse_peer_override_toml(
@@ -3931,7 +3852,6 @@ api_port = 9000
             "unexpected error message: {err}"
         );
     }
-
     #[test]
     fn swarm_uses_manifest_consensus_without_environment_overrides() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
@@ -3952,14 +3872,12 @@ api_port = 9000
             force: false,
             no_banner: true,
         };
-
         let mut buffer = Vec::new();
         let mut writer = BufWriter::new(&mut buffer);
         args.run(&mut writer)
             .expect("`Args::run` should render compose yaml");
         writer.flush().expect("flush buffer");
         drop(writer);
-
         let output = String::from_utf8(buffer).expect("output should be UTF-8");
         for retired_override in [
             "GENESIS_CONSENSUS_MODE:",
@@ -3972,14 +3890,12 @@ api_port = 9000
             );
         }
     }
-
     #[test]
     fn npos_swarm_requires_genesis_with_npos_parameters() {
         let temp_dir = tempfile::tempdir().expect("tmp dir");
         let config_dir = temp_dir.path().join("cfg");
         fs::create_dir_all(&config_dir).expect("create config dir");
         write_npos_genesis_without_parameters(&config_dir.join("genesis.json"));
-
         let args = Args {
             peers: NonZeroU16::new(4).expect("non-zero"),
             seed: Some("swarm-invalid-npos-dev".to_owned()),
@@ -3994,7 +3910,6 @@ api_port = 9000
             force: true,
             no_banner: true,
         };
-
         let mut writer = BufWriter::new(Vec::new());
         let err = args
             .run(&mut writer)
@@ -4004,14 +3919,12 @@ api_port = 9000
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn npos_swarm_succeeds_with_npos_genesis() {
         let temp_dir = tempfile::tempdir().expect("tmp dir");
         let config_dir = temp_dir.path().join("cfg");
         fs::create_dir_all(&config_dir).expect("create config dir");
         write_npos_genesis(&config_dir.join("genesis.json"));
-
         let args = Args {
             peers: NonZeroU16::new(7).expect("non-zero"),
             seed: Some("npos-ok".to_owned()),
@@ -4026,19 +3939,16 @@ api_port = 9000
             force: true,
             no_banner: true,
         };
-
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer)
             .expect("npos genesis with parameters should pass");
     }
-
     #[test]
     fn run_rejects_non_committee_peer_counts() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let config_dir = temp_dir.path().join("cfg");
         fs::create_dir_all(&config_dir).expect("create config dir");
         write_minimal_genesis(&config_dir.join("genesis.json"));
-
         for count in [1_u16, 2, 3, 5, 32] {
             let args = Args {
                 peers: NonZeroU16::new(count).expect("fixture count is non-zero"),
@@ -4054,7 +3964,6 @@ api_port = 9000
                 force: false,
                 no_banner: true,
             };
-
             let mut writer = BufWriter::new(Vec::new());
             let error = args
                 .run(&mut writer)
@@ -4065,7 +3974,6 @@ api_port = 9000
             );
         }
     }
-
     fn write_minimal_genesis(path: &Path) {
         let manifest =
             GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
@@ -4076,7 +3984,6 @@ api_port = 9000
         let genesis_json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(path, genesis_json).expect("write minimal genesis");
     }
-
     fn write_npos_genesis_without_parameters(path: &Path) {
         let manifest = GenesisBuilder::new_without_executor(
             ChainId::from("npos-without-parameters"),
@@ -4087,7 +3994,6 @@ api_port = 9000
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(path, json).expect("write NPoS genesis without parameters");
     }
-
     fn write_npos_genesis(path: &Path) {
         let chain = ChainId::from("npos-swarm");
         let manifest = GenesisBuilder::new_without_executor(chain, PathBuf::from("."))

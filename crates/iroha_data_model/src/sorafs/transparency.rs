@@ -2,15 +2,11 @@
 //!
 //! The wire schemas and validators live in [`sorafs_manifest::transparency`]
 //! so manifest validation and the data model share one implementation.
-
 pub use sorafs_manifest::transparency::*;
-
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;
-
     use super::*;
-
     #[test]
     fn data_model_reexport_has_exact_manifest_type_and_wire_identity() {
         assert_eq!(
@@ -38,7 +34,6 @@ mod tests {
         entry
             .validate()
             .expect("reexported validator accepts entry");
-
         let data_model_bytes = norito::to_bytes(&entry).expect("encode through reexport");
         let canonical: sorafs_manifest::transparency::ModerationLedgerEntryV1 = entry;
         let manifest_bytes = norito::to_bytes(&canonical).expect("encode canonical type");

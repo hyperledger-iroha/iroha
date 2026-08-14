@@ -5,7 +5,6 @@
 //! `specs/da/ingest_plan.md`. The actual networking/storage plumbing
 //! lives outside the data model; these structures exist purely for Norito
 //! encoding, schema documentation, and cross-crate integration.
-
 /// Commitment structures embedded into blocks and RPC responses.
 pub mod commitment;
 /// Confidential-compute lane policies.
@@ -18,7 +17,6 @@ pub mod manifest;
 pub mod pin_intent;
 /// Common DA type aliases and shared structs (blob identifiers, policies, etc.).
 pub mod types;
-
 /// Convenience re-export of frequently used DA types.
 pub mod prelude {
     pub use super::{

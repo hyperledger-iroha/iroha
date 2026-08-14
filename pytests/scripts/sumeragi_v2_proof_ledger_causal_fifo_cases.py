@@ -202,6 +202,24 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
     )
 
     adapter.write_text(
+        mutate_drive(
+            "        let mut ready = Vec::new();\n",
+            "        let mut ready = Vec::new();\n"
+            "        if false {\n"
+            "            return Ok(Vec::new());\n"
+            "        }\n",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "drive_effects declaration, contract, and complete control flow must match"
+        in error
+        for error in errors
+    ), errors
+    adapter.write_text(canonical_adapter, encoding="utf-8")
+
+    adapter.write_text(
         canonical_adapter.replace(
             helper_call,
             "                    if false {\n"

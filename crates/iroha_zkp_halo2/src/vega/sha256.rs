@@ -1,10 +1,8 @@
 //! Bit-constrained SHA-256 gadget for the fixed Figure 9 byte strings.
-
 use super::{
     VegaT256ScalarV1 as Scalar,
     circuit::{Bit, CircuitBuilder, CircuitError, LinearCombination},
 };
-
 const IV: [u32; 8] = [
     0x6a09_e667,
     0xbb67_ae85,
@@ -15,7 +13,6 @@ const IV: [u32; 8] = [
     0x1f83_d9ab,
     0x5be0_cd19,
 ];
-
 const ROUND_CONSTANTS: [u32; 64] = [
     0x428a_2f98,
     0x7137_4491,
@@ -82,36 +79,29 @@ const ROUND_CONSTANTS: [u32; 64] = [
     0xbef9_a3f7,
     0xc671_78f2,
 ];
-
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ByteVar {
     pub(super) bits_le: [Bit; 8],
 }
-
 impl ByteVar {
     pub(super) fn lc(self) -> LinearCombination {
         bits_to_lc(&self.bits_le)
     }
-
     pub(super) fn bits_le(self) -> [Bit; 8] {
         self.bits_le
     }
 }
-
 #[derive(Clone, Copy)]
 pub(super) struct WordVar {
     bits_le: [Bit; 32],
 }
-
 impl WordVar {
     pub(super) fn lc(self) -> LinearCombination {
         bits_to_lc(&self.bits_le)
     }
-
     pub(super) fn bits_le(self) -> [Bit; 32] {
         self.bits_le
     }
-
     pub(super) fn to_be_bytes(self) -> [ByteVar; 4] {
         core::array::from_fn(|byte| {
             let source = 3 - byte;
@@ -121,12 +111,10 @@ impl WordVar {
         })
     }
 }
-
 #[derive(Clone)]
 pub(super) struct Sha256Trace {
     pub(super) states_after_blocks: Vec<[WordVar; 8]>,
 }
-
 pub(super) fn allocate_bytes(
     builder: &mut CircuitBuilder,
     bytes: &[u8],
@@ -137,7 +125,6 @@ pub(super) fn allocate_bytes(
         .map(|byte| allocate_byte(builder, byte))
         .collect()
 }
-
 pub(super) fn allocate_byte(
     builder: &mut CircuitBuilder,
     byte: u8,
@@ -151,7 +138,6 @@ pub(super) fn allocate_byte(
             .map_err(|_| CircuitError::InvalidDimension)?,
     })
 }
-
 pub(super) fn enforce_byte_constant(
     builder: &mut CircuitBuilder,
     byte: ByteVar,
@@ -162,7 +148,6 @@ pub(super) fn enforce_byte_constant(
         LinearCombination::constant(Scalar::from_u64(u64::from(expected))),
     )
 }
-
 /// Bit-decompose one public input as an exact unsigned 32-bit word.
 pub(super) fn public_word(
     builder: &mut CircuitBuilder,
@@ -175,14 +160,12 @@ pub(super) fn public_word(
     builder.enforce_equal(word.lc(), public.into())?;
     Ok(word)
 }
-
 pub(super) fn sha256(
     builder: &mut CircuitBuilder,
     message: &[ByteVar],
 ) -> Result<[WordVar; 8], CircuitError> {
     sha256_with_trace(builder, message).map(|(digest, _)| digest)
 }
-
 pub(super) fn sha256_with_trace(
     builder: &mut CircuitBuilder,
     message: &[ByteVar],
@@ -209,7 +192,6 @@ pub(super) fn sha256_with_trace(
     if padded.len() != padded_len {
         return Err(CircuitError::InvalidDimension);
     }
-
     let mut state = IV
         .into_iter()
         .map(|word| allocate_constant_word(builder, word))
@@ -234,7 +216,6 @@ pub(super) fn sha256_with_trace(
                 2,
             )?);
         }
-
         let original = state.clone();
         let mut a = state[0];
         let mut b = state[1];
@@ -265,7 +246,6 @@ pub(super) fn sha256_with_trace(
             let temp_two = add_mod_32(builder, &[sigma_zero.lc(), majority.lc()], 1)?;
             let new_e = add_mod_32(builder, &[d.lc(), temp_one.lc()], 1)?;
             let new_a = add_mod_32(builder, &[temp_one.lc(), temp_two.lc()], 1)?;
-
             h = g;
             g = f;
             f = e;
@@ -297,7 +277,6 @@ pub(super) fn sha256_with_trace(
         },
     ))
 }
-
 fn allocate_word(builder: &mut CircuitBuilder, word: u32) -> Result<WordVar, CircuitError> {
     let bits = (0..32)
         .map(|bit| builder.alloc_bit(word & (1 << bit) != 0))
@@ -308,13 +287,11 @@ fn allocate_word(builder: &mut CircuitBuilder, word: u32) -> Result<WordVar, Cir
             .map_err(|_| CircuitError::InvalidDimension)?,
     })
 }
-
 fn allocate_constant_byte(builder: &mut CircuitBuilder, byte: u8) -> Result<ByteVar, CircuitError> {
     let allocated = allocate_byte(builder, byte)?;
     enforce_byte_constant(builder, allocated, byte)?;
     Ok(allocated)
 }
-
 fn allocate_constant_word(
     builder: &mut CircuitBuilder,
     word: u32,
@@ -326,7 +303,6 @@ fn allocate_constant_word(
     )?;
     Ok(allocated)
 }
-
 fn word_from_be_bytes(bytes: &[ByteVar]) -> Result<WordVar, CircuitError> {
     if bytes.len() != 4 {
         return Err(CircuitError::InvalidDimension);
@@ -339,7 +315,6 @@ fn word_from_be_bytes(bytes: &[ByteVar]) -> Result<WordVar, CircuitError> {
         }),
     })
 }
-
 fn bits_to_lc(bits: &[Bit]) -> LinearCombination {
     let mut coefficient = Scalar::one();
     let mut result = LinearCombination::zero();
@@ -349,7 +324,6 @@ fn bits_to_lc(bits: &[Bit]) -> LinearCombination {
     }
     result
 }
-
 fn scalar_to_u64(value: Scalar) -> Result<u64, CircuitError> {
     let bytes = value.to_be_bytes();
     if bytes[..24].iter().any(|byte| *byte != 0) {
@@ -361,7 +335,6 @@ fn scalar_to_u64(value: Scalar) -> Result<u64, CircuitError> {
             .map_err(|_| CircuitError::InvalidAssignment)?,
     ))
 }
-
 fn add_mod_32(
     builder: &mut CircuitBuilder,
     inputs: &[LinearCombination],
@@ -395,13 +368,11 @@ fn add_mod_32(
     builder.enforce_equal(left, output.lc().plus(&carry_lc))?;
     Ok(output)
 }
-
 fn rotate_right(word: WordVar, distance: usize) -> WordVar {
     WordVar {
         bits_le: core::array::from_fn(|index| word.bits_le[(index + distance) % 32]),
     }
 }
-
 fn shift_right(
     builder: &mut CircuitBuilder,
     word: WordVar,
@@ -415,7 +386,6 @@ fn shift_right(
         }),
     })
 }
-
 fn xor_words(
     builder: &mut CircuitBuilder,
     left: WordVar,
@@ -433,7 +403,6 @@ fn xor_words(
             .map_err(|_| CircuitError::InvalidDimension)?,
     })
 }
-
 fn xor_three_words(
     builder: &mut CircuitBuilder,
     first: WordVar,
@@ -443,7 +412,6 @@ fn xor_three_words(
     let first_two = xor_words(builder, first, second)?;
     xor_words(builder, first_two, third)
 }
-
 fn small_sigma_zero(builder: &mut CircuitBuilder, word: WordVar) -> Result<WordVar, CircuitError> {
     let shifted = shift_right(builder, word, 3)?;
     xor_three_words(
@@ -453,7 +421,6 @@ fn small_sigma_zero(builder: &mut CircuitBuilder, word: WordVar) -> Result<WordV
         shifted,
     )
 }
-
 fn small_sigma_one(builder: &mut CircuitBuilder, word: WordVar) -> Result<WordVar, CircuitError> {
     let shifted = shift_right(builder, word, 10)?;
     xor_three_words(
@@ -463,7 +430,6 @@ fn small_sigma_one(builder: &mut CircuitBuilder, word: WordVar) -> Result<WordVa
         shifted,
     )
 }
-
 fn big_sigma_zero(builder: &mut CircuitBuilder, word: WordVar) -> Result<WordVar, CircuitError> {
     xor_three_words(
         builder,
@@ -472,7 +438,6 @@ fn big_sigma_zero(builder: &mut CircuitBuilder, word: WordVar) -> Result<WordVar
         rotate_right(word, 22),
     )
 }
-
 fn big_sigma_one(builder: &mut CircuitBuilder, word: WordVar) -> Result<WordVar, CircuitError> {
     xor_three_words(
         builder,
@@ -481,7 +446,6 @@ fn big_sigma_one(builder: &mut CircuitBuilder, word: WordVar) -> Result<WordVar,
         rotate_right(word, 25),
     )
 }
-
 fn choice(
     builder: &mut CircuitBuilder,
     x: WordVar,
@@ -505,7 +469,6 @@ fn choice(
             .map_err(|_| CircuitError::InvalidDimension)?,
     })
 }
-
 fn majority(
     builder: &mut CircuitBuilder,
     x: WordVar,
@@ -528,11 +491,9 @@ fn majority(
             .map_err(|_| CircuitError::InvalidDimension)?,
     })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn expected_words(bytes: [u8; 32]) -> Vec<Scalar> {
         bytes
             .chunks_exact(4)
@@ -543,7 +504,6 @@ mod tests {
             })
             .collect()
     }
-
     fn synthesize(message: &[u8], expected: [u8; 32]) -> Result<(), CircuitError> {
         let public = expected_words(expected);
         let mut builder = CircuitBuilder::new(public.clone())?;
@@ -555,15 +515,9 @@ mod tests {
         let assignment = builder.finalize()?;
         assignment
             .shape
-            .validate_relaxed_assignment(
-                &assignment.witness,
-                Scalar::one(),
-                &assignment.public_inputs,
-                &vec![Scalar::zero(); assignment.shape.constraint_count()],
-            )
+            .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
             .map_err(CircuitError::from)
     }
-
     #[test]
     fn sha256_abc_matches_the_independent_standard_vector() {
         let expected: [u8; 32] =

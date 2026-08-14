@@ -9,7 +9,6 @@ struct MockCheckpointStore {
     attestation_calls: AtomicUsize,
     next_cas_behavior: AtomicUsize,
 }
-
 impl Default for MockCheckpointStore {
     fn default() -> Self {
         Self {
@@ -24,7 +23,6 @@ impl Default for MockCheckpointStore {
         }
     }
 }
-
 impl MockCheckpointStore {
     fn with_handle(handle: impl Into<String>) -> Self {
         Self {
@@ -32,7 +30,6 @@ impl MockCheckpointStore {
             ..Self::default()
         }
     }
-
     fn set_qualification(
         &self,
         qualification: Result<
@@ -42,16 +39,13 @@ impl MockCheckpointStore {
     ) {
         *self.qualification.lock().expect("checkpoint qualification") = qualification;
     }
-
     fn fail_next_cas(&self, behavior: usize) {
         self.next_cas_behavior
             .store(behavior, AtomicOrdering::SeqCst);
     }
-
     fn fail_cas_after_one_success(&self) {
         self.next_cas_behavior.store(4, AtomicOrdering::SeqCst);
     }
-
     fn latest(&self) -> ModerationCheckpointStoreRecordV1 {
         self.latest
             .lock()
@@ -59,21 +53,17 @@ impl MockCheckpointStore {
             .clone()
             .expect("committed checkpoint")
     }
-
     fn attestation_calls(&self) -> usize {
         self.attestation_calls.load(AtomicOrdering::SeqCst)
     }
-
     fn replace_latest(&self, record: ModerationCheckpointStoreRecordV1) {
         *self.latest.lock().expect("checkpoint latest") = Some(record);
     }
 }
-
 impl ModerationRuntimeProviderV1 for MockCheckpointStore {
     fn handle(&self) -> &str {
         &self.handle
     }
-
     fn qualification(
         &self,
     ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
@@ -81,19 +71,16 @@ impl ModerationRuntimeProviderV1 for MockCheckpointStore {
         *self.qualification.lock().expect("checkpoint qualification")
     }
 }
-
 impl ModerationCheckpointStoreV1 for MockCheckpointStore {
     fn attestation_public_key(&self) -> [u8; 32] {
         self.attestation_signing_key.verifying_key().to_bytes()
     }
-
     fn load_latest(
         &self,
     ) -> Result<Option<ModerationCheckpointStoreRecordV1>, ModerationCheckpointStoreExternalErrorV1>
     {
         Ok(self.latest.lock().expect("checkpoint latest").clone())
     }
-
     fn compare_and_swap_latest(
         &self,
         expected_revision: Option<[u8; 32]>,
@@ -122,7 +109,6 @@ impl ModerationCheckpointStoreV1 for MockCheckpointStore {
             Ok(())
         }
     }
-
     fn attest_terminal_set(
         &self,
         statement: &ModerationPanelNotificationSourceAttestationV1,
@@ -158,7 +144,6 @@ impl ModerationCheckpointStoreV1 for MockCheckpointStore {
             .to_bytes())
     }
 }
-
 fn deps_with_checkpoint_store(
     reader: Arc<MockSnapshotReader>,
     submitter: Arc<MockSubmitter>,
@@ -168,13 +153,11 @@ fn deps_with_checkpoint_store(
     runtime_deps.checkpoint_store = checkpoint_store;
     runtime_deps
 }
-
 #[test]
 fn checkpoint_store_startup_rejects_substituted_stale_and_test_marked_providers() {
     let temp = tempfile::tempdir().expect("tempdir");
     let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
     let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
-
     for store in [
         Arc::new(MockCheckpointStore::with_handle(
             "sealed-cas:moderation-checkpoint-substitute",
@@ -191,7 +174,6 @@ fn checkpoint_store_startup_rejects_substituted_stale_and_test_marked_providers(
             Err(ModerationOrchestratorError::InvalidConfiguration(_))
         ));
     }
-
     let stale = Arc::new(MockCheckpointStore::default());
     stale.set_qualification(Err(ModerationRuntimeProviderReadinessErrorV1::Rejected));
     assert!(matches!(
@@ -202,7 +184,6 @@ fn checkpoint_store_startup_rejects_substituted_stale_and_test_marked_providers(
         Err(ModerationOrchestratorError::InvalidConfiguration(_))
     ));
 }
-
 #[test]
 fn ambiguous_checkpoint_commit_is_resolved_only_by_exact_authoritative_readback() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -214,14 +195,12 @@ fn ambiguous_checkpoint_commit_is_resolved_only_by_exact_authoritative_readback(
         deps_with_checkpoint_store(reader, submitter, store.clone()),
     )
     .expect("open");
-
     store.fail_next_cas(2);
     orchestrator
         .reconcile()
         .expect("exact authoritative readback resolves ambiguity");
     assert_eq!(store.latest().checkpoint_generation, 1);
 }
-
 #[test]
 fn ambiguous_checkpoint_commit_without_exact_readback_fences_the_replica() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -233,7 +212,6 @@ fn ambiguous_checkpoint_commit_without_exact_readback_fences_the_replica() {
         deps_with_checkpoint_store(reader, submitter, store.clone()),
     )
     .expect("open");
-
     store.fail_next_cas(3);
     assert_eq!(
         orchestrator.reconcile(),
@@ -245,7 +223,6 @@ fn ambiguous_checkpoint_commit_without_exact_readback_fences_the_replica() {
     );
     assert_eq!(store.latest().checkpoint_generation, 0);
 }
-
 #[test]
 fn competing_replica_is_fenced_before_overwriting_a_committed_successor() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -269,7 +246,6 @@ fn competing_replica_is_fenced_before_overwriting_a_committed_successor() {
         ),
     )
     .expect("second replica");
-
     first.reconcile().expect("first successor");
     assert_eq!(
         second.reconcile(),
@@ -281,7 +257,6 @@ fn competing_replica_is_fenced_before_overwriting_a_committed_successor() {
     );
     assert_eq!(store.latest().checkpoint_generation, 1);
 }
-
 #[test]
 fn sealed_record_replay_and_equivocation_fail_startup_closed() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -296,7 +271,6 @@ fn sealed_record_replay_and_equivocation_fail_startup_closed() {
     .expect("open");
     orchestrator.reconcile().expect("commit successor");
     drop(orchestrator);
-
     let mut equivocal = store.latest();
     equivocal.checkpoint_store_revision += 1;
     store.replace_latest(equivocal);
@@ -309,7 +283,6 @@ fn sealed_record_replay_and_equivocation_fail_startup_closed() {
         ModerationOrchestratorError::CheckpointStoreEquivocation
     );
 }
-
 #[test]
 fn authoritative_store_recovers_when_the_verified_local_cache_is_absent() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -326,7 +299,6 @@ fn authoritative_store_recovers_when_the_verified_local_cache_is_absent() {
     let expected = orchestrator.snapshot().expect("snapshot");
     drop(orchestrator);
     std::fs::remove_file(&checkpoint.checkpoint_path).expect("remove cache");
-
     let recovered = ModerationOrchestratorV1::open(
         checkpoint,
         deps_with_checkpoint_store(reader, submitter, store),
@@ -334,7 +306,6 @@ fn authoritative_store_recovers_when_the_verified_local_cache_is_absent() {
     .expect("recover from authority");
     assert_eq!(recovered.snapshot(), Some(expected));
 }
-
 #[test]
 fn authoritative_store_rollback_behind_local_cache_fails_startup_closed() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -351,7 +322,6 @@ fn authoritative_store_rollback_behind_local_cache_fails_startup_closed() {
     orchestrator.reconcile().expect("commit successor");
     assert_eq!(store.latest().checkpoint_generation, 1);
     drop(orchestrator);
-
     store.replace_latest(genesis);
     assert_eq!(
         ModerationOrchestratorV1::open(

@@ -1,5 +1,4 @@
 // Same-scope regression coverage extracted to keep the parent source budget bounded.
-
 #[test]
 fn policy_activation_is_permissioned_and_exactly_chained() {
     let operator = keypair(0x11);
@@ -7,7 +6,6 @@ fn policy_activation_is_permissioned_and_exactly_chained() {
     let state = state_with_accounts(&[&operator]);
     let mut block = state.block(block_header());
     let mut stx = block.transaction();
-
     let first = policy();
     let first_digest = first.digest().expect("digest first policy");
     SetSorafsOrderbookPolicy::new(first.clone())
@@ -18,7 +16,6 @@ fn policy_activation_is_permissioned_and_exactly_chained() {
         .expect("policy");
     assert_eq!(stored.policy_digest, first_digest);
     assert_eq!(stored.activated_at_unix, NOW);
-
     for invalid in {
         let mut gap = first.clone();
         gap.revision = 3;
@@ -45,7 +42,6 @@ fn policy_activation_is_permissioned_and_exactly_chained() {
             first_digest
         );
     }
-
     let mut second = first;
     second.revision = 2;
     second.predecessor_policy_digest = Some(first_digest);

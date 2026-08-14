@@ -6,7 +6,6 @@
 //! verification lock documents to [`plan_package`], and use the resulting immutable plan for a
 //! clean compiler check and `SoraFS` CAR construction. Filesystem-backed planning is qualified on
 //! Unix; other targets fail with [`PackageError::UnsupportedPlatform`] before parsing or I/O.
-
 use std::{
     collections::BTreeMap,
     error::Error,
@@ -15,7 +14,6 @@ use std::{
     path::{Component, Path, PathBuf},
     str::FromStr,
 };
-
 pub use iroha_data_model::musubi::MusubiArtifactDescriptorV1;
 use iroha_data_model::{
     musubi::{
@@ -37,16 +35,13 @@ use sorafs_car::{
     CarBuildPlan, CarWriteStats, CarWriter, FileEntry, FilePayload, PayloadSource,
     chunker_registry::default_descriptor, compute_chunk_plan_digest_sha3, compute_por_root,
 };
-
 use crate::{
     lockfile::{MUSUBI_MAX_VERIFICATION_LOCK_BYTES_V1, render_verification_lock},
     manifest::Inheritable,
     workspace::WorkspaceMember,
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
-
 /// Maximum total bytes in a Musubi V1 normalized source tree.
 pub const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 /// Maximum bytes in a Musubi V1 `CARv2` archive.
@@ -55,7 +50,6 @@ pub const MAX_CAR_BYTES: u64 = 96 * 1024 * 1024;
 pub const MAX_SOURCE_FILES: usize = 4_096;
 /// Maximum number of chunks in a Musubi V1 source CAR plan.
 pub const MAX_SOURCE_CHUNKS: usize = 16_384;
-
 const MANIFEST_PATH: &str = "Musubi.toml";
 const VERIFICATION_LOCK_PATH: &str = "Musubi.lock";
 const BUNDLE_RELEASE_PATH: &str = ".musubi/semantic-release.norito";
@@ -71,11 +65,9 @@ const MAX_SOURCE_ENTRIES: usize = MAX_SOURCE_FILES * MAX_PATH_COMPONENTS;
 // `read_dir` names are retained only long enough to impose deterministic byte ordering. Keep one
 // unusually wide selected directory from consuming the whole tree-wide traversal budget at once.
 const MAX_DIRECTORY_ENTRIES: usize = MAX_SOURCE_FILES * 2;
-
 const SOURCE_TREE_DOMAIN: &[u8] = b"musubi-source-tree-v1\0";
 const ARTIFACT_DESCRIPTOR_DOMAIN: &[u8] = b"musubi-artifact-descriptor-v1\0";
 const BUNDLE_DOMAIN: &[u8] = b"musubi-bundle-v1\0";
-
 /// A manifest-derived positive selection of package files.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackageLayout {
@@ -88,14 +80,12 @@ pub struct PackageLayout {
     includes: Vec<PathBuf>,
     external: Vec<ExternalSelection>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ExternalSelection {
     root: PathBuf,
     selector: PathBuf,
     shape: SelectionShape,
 }
-
 impl PackageLayout {
     /// Start a package layout rooted at `root` with no source selectors.
     pub fn new(root: impl Into<PathBuf>) -> Self {
@@ -110,43 +100,35 @@ impl PackageLayout {
             external: Vec::new(),
         }
     }
-
     /// Return the package root.
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
-
     /// Set the declared library source directory.
     pub fn set_library(&mut self, path: impl Into<PathBuf>) {
         self.library = Some(path.into());
     }
-
     /// Add one declared local contract file or directory.
     pub fn add_contract(&mut self, path: impl Into<PathBuf>) {
         self.contracts.push(path.into());
     }
-
     /// Add one declared test file or directory.
     pub fn add_test(&mut self, path: impl Into<PathBuf>) {
         self.tests.push(path.into());
     }
-
     /// Set the declared readme file.
     pub fn set_readme(&mut self, path: impl Into<PathBuf>) {
         self.readme = Some(path.into());
     }
-
     /// Set the declared license file.
     pub fn set_license(&mut self, path: impl Into<PathBuf>) {
         self.license = Some(path.into());
     }
-
     /// Add one explicit positive include file or directory.
     pub fn add_include(&mut self, path: impl Into<PathBuf>) {
         self.includes.push(path.into());
     }
-
     fn add_external(
         &mut self,
         root: impl Into<PathBuf>,
@@ -160,7 +142,6 @@ impl PackageLayout {
         });
     }
 }
-
 /// One immutable file selected for a clean package tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlannedFile {
@@ -168,53 +149,45 @@ pub struct PlannedFile {
     components: Vec<String>,
     bytes: Vec<u8>,
 }
-
 impl PlannedFile {
     /// Return the canonical portable archive path.
     #[must_use]
     pub fn path(&self) -> &str {
         &self.path
     }
-
     /// Return the exact file payload.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
 }
-
 /// A bounded, byte-ordered package file plan.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackagePlan {
     files: Vec<PlannedFile>,
     source_bytes: u64,
 }
-
 impl PackagePlan {
     /// Return files in strict UTF-8 byte order by canonical portable path.
     #[must_use]
     pub fn files(&self) -> &[PlannedFile] {
         &self.files
     }
-
     /// Return the total regular-file payload size.
     #[must_use]
     pub const fn source_bytes(&self) -> u64 {
         self.source_bytes
     }
-
     /// Return the generated normalized verification lock bytes.
     #[must_use]
     pub fn verification_lock(&self) -> &[u8] {
         self.required_file(VERIFICATION_LOCK_PATH)
     }
-
     /// Return the canonicalized package manifest bytes.
     #[must_use]
     pub fn canonical_manifest(&self) -> &[u8] {
         self.required_file(MANIFEST_PATH)
     }
-
     /// Build deterministic source-tree, descriptor, and bundle commitment materials.
     ///
     /// # Errors
@@ -274,7 +247,6 @@ impl PackagePlan {
             bundle_digest,
         })
     }
-
     /// Consume the plan and construct its bounded deterministic `SoraFS` `CARv2` bundle.
     ///
     /// The CAR directory DAG contains the normalized source tree and verification
@@ -328,7 +300,6 @@ impl PackagePlan {
         plan.validate_for_ingest()
             .map_err(|error| PackageError::CarPlan(error.to_string()))?;
         enforce_chunk_limit(plan.chunks.len())?;
-
         let mut output = BoundedWriter::new(MAX_CAR_BYTES);
         let writer = CarWriter::new(&plan, &payload)
             .map_err(|error| PackageError::CarWrite(error.to_string()))?;
@@ -353,7 +324,6 @@ impl PackagePlan {
             source_bytes,
         })
     }
-
     fn required_file(&self, path: &str) -> &[u8] {
         self.files
             .binary_search_by(|file| file.path.as_str().cmp(path))
@@ -363,7 +333,6 @@ impl PackagePlan {
             .expect("package planner always injects canonical manifest and lock")
     }
 }
-
 /// A deterministic, bounded `SoraFS` CAR generated from a [`PackagePlan`].
 #[derive(Debug)]
 pub struct PackageCar {
@@ -375,7 +344,6 @@ pub struct PackageCar {
     source_file_count: usize,
     source_bytes: u64,
 }
-
 impl PackageCar {
     /// Return the exact validated `SoraFS` plan used to write this package CAR.
     ///
@@ -388,45 +356,38 @@ impl PackageCar {
     pub const fn plan(&self) -> &CarBuildPlan {
         &self.plan
     }
-
     /// Return the exact concatenated source payload expected by the CAR plan.
     #[must_use]
     #[cfg(all(test, unix))]
     pub fn payload(&self) -> &[u8] {
         &self.payload
     }
-
     /// Return the complete deterministic `CARv2` bytes.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
-
     /// Return `SoraFS` writer statistics and roots.
     #[must_use]
     pub const fn stats(&self) -> &CarWriteStats {
         &self.stats
     }
-
     /// Return all normalized source-tree, descriptor, and bundle commitments.
     #[must_use]
     pub const fn commitments(&self) -> &PackageCommitments {
         &self.commitments
     }
-
     /// Return the source-tree file count, excluding three mandatory bundle metadata entries.
     #[must_use]
     #[cfg(all(test, unix))]
     pub const fn source_file_count(&self) -> usize {
         self.source_file_count
     }
-
     /// Return source-tree bytes, excluding the three mandatory bundle metadata entries.
     #[must_use]
     pub const fn source_bytes(&self) -> u64 {
         self.source_bytes
     }
-
     /// Derive and validate the complete immutable registry archive commitment.
     ///
     /// # Errors
@@ -488,7 +449,6 @@ impl PackageCar {
         Ok(commitment)
     }
 }
-
 /// All canonical materials and digests needed by the archive-commitment layer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackageCommitments {
@@ -497,34 +457,29 @@ pub struct PackageCommitments {
     descriptor_digest: MusubiContentDigestV1,
     bundle_digest: MusubiContentDigestV1,
 }
-
 impl PackageCommitments {
     /// Return the domain-separated source-tree digest.
     #[must_use]
     pub const fn source_tree_digest(&self) -> MusubiContentDigestV1 {
         self.source_tree_digest
     }
-
     /// Return the typed artifact descriptor.
     #[must_use]
     #[cfg(all(test, unix))]
     pub const fn descriptor(&self) -> &MusubiArtifactDescriptorV1 {
         &self.descriptor
     }
-
     /// Return the descriptor digest.
     #[must_use]
     pub const fn descriptor_digest(&self) -> MusubiContentDigestV1 {
         self.descriptor_digest
     }
-
     /// Return the domain-separated bundle digest.
     #[must_use]
     pub const fn bundle_digest(&self) -> MusubiContentDigestV1 {
         self.bundle_digest
     }
 }
-
 /// Error returned while planning or encoding a secure package.
 #[derive(Debug)]
 pub enum PackageError {
@@ -639,7 +594,6 @@ pub enum PackageError {
     /// `SoraFS` could not encode the CAR.
     CarWrite(String),
 }
-
 impl fmt::Display for PackageError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -745,7 +699,6 @@ impl fmt::Display for PackageError {
         }
     }
 }
-
 impl Error for PackageError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
@@ -754,7 +707,6 @@ impl Error for PackageError {
         }
     }
 }
-
 /// Canonicalize and validate a Musubi V1 package manifest.
 ///
 /// The TOML parser rejects duplicate keys. Semantic unknown-field validation remains the
@@ -777,7 +729,6 @@ pub fn canonicalize_manifest_toml(input: &str) -> Result<Vec<u8>, PackageError> 
     }
     Ok(bytes)
 }
-
 /// Canonicalize and validate a generated Musubi V1 verification lock.
 ///
 /// Exact graph normalization (including deterministic node and edge ordering) belongs to the
@@ -803,7 +754,6 @@ pub fn normalize_verification_lock_toml(input: &str) -> Result<Vec<u8>, PackageE
     reject_consumer_only_lock_fields(&toml::Value::Table(table))?;
     Ok(bytes)
 }
-
 /// Plan a clean, positive-set Musubi V1 source tree.
 ///
 /// `manifest_toml` is parsed and rendered canonically. `verification_lock` must be the
@@ -838,7 +788,6 @@ pub fn plan_package(
     let mut collector = Collector::new(root);
     collector.insert_virtual(MANIFEST_PATH, manifest)?;
     collector.insert_virtual(VERIFICATION_LOCK_PATH, lock)?;
-
     if let Some(path) = &layout.library {
         collector.collect_selector(path, SelectionShape::Directory)?;
     }
@@ -869,10 +818,8 @@ pub fn plan_package(
             collector.insert(original, file.path, file.components, file.bytes)?;
         }
     }
-
     collector.finish()
 }
-
 /// Derive the positive file selection for one fully resolved workspace package.
 ///
 /// Path-bearing `[workspace.package]` values are selected relative to the workspace
@@ -891,7 +838,6 @@ pub fn package_layout_for_member(workspace_root: &Path, member: &WorkspaceMember
     for target in &member.manifest.tests {
         layout.add_test(target.path.to_path_buf());
     }
-
     let package = member
         .manifest
         .package
@@ -924,11 +870,9 @@ pub fn package_layout_for_member(workspace_root: &Path, member: &WorkspaceMember
     }
     layout
 }
-
 fn inherited<T>(value: Option<&Inheritable<T>>) -> bool {
     matches!(value, Some(Inheritable::Workspace))
 }
-
 /// Render one clean publishable package manifest with workspace and local path state removed.
 ///
 /// Effective normal dependencies are retained as canonical registry package/range pairs.
@@ -940,7 +884,6 @@ fn inherited<T>(value: Option<&Inheritable<T>>) -> bool {
 pub fn publication_manifest_toml(member: &WorkspaceMember) -> Result<String, PackageError> {
     let mut root = toml::Table::new();
     root.insert("manifest-version".to_owned(), toml::Value::Integer(1));
-
     let resolved = &member.package;
     let mut package = toml::Table::new();
     package.insert(
@@ -991,7 +934,6 @@ pub fn publication_manifest_toml(member: &WorkspaceMember) -> Result<String, Pac
         );
     }
     root.insert("package".to_owned(), toml::Value::Table(package));
-
     let library = member
         .manifest
         .library
@@ -1015,7 +957,6 @@ pub fn publication_manifest_toml(member: &WorkspaceMember) -> Result<String, Pac
     root.insert("lib".to_owned(), toml::Value::Table(library_table));
     insert_targets(&mut root, "contract", &member.manifest.contracts);
     insert_targets(&mut root, "test", &member.manifest.tests);
-
     if !member.dependencies.is_empty() {
         let mut dependencies = toml::Table::new();
         for (alias, effective) in &member.dependencies {
@@ -1040,7 +981,6 @@ pub fn publication_manifest_toml(member: &WorkspaceMember) -> Result<String, Pac
         }
         root.insert("dependencies".to_owned(), toml::Value::Table(dependencies));
     }
-
     let rendered = toml::to_string(&root).map_err(|error| PackageError::InvalidDocument {
         document: MANIFEST_PATH,
         reason: error.to_string(),
@@ -1051,7 +991,6 @@ pub fn publication_manifest_toml(member: &WorkspaceMember) -> Result<String, Pac
     })?;
     Ok(rendered)
 }
-
 /// Construct the canonical archive-independent release semantics for a clean package.
 pub fn semantic_release_manifest(
     member: &WorkspaceMember,
@@ -1145,7 +1084,6 @@ pub fn semantic_release_manifest(
     validate_semantic_release_encoded_bound(&semantic)?;
     Ok(semantic)
 }
-
 /// Bind clean bundle semantics and an exact verification graph to one immutable archive.
 pub fn publication_claim(
     semantic: &MusubiSemanticReleaseManifestV1,
@@ -1189,17 +1127,14 @@ pub fn publication_claim(
     }
     Ok(publication)
 }
-
 fn bundle_parse_error(error: iroha_data_model::ParseError) -> PackageError {
     PackageError::InvalidBundleBinding(error.to_string())
 }
-
 fn insert_optional_string(table: &mut toml::Table, key: &str, value: Option<&str>) {
     if let Some(value) = value {
         table.insert(key.to_owned(), toml::Value::String(value.to_owned()));
     }
 }
-
 fn insert_optional_path(
     table: &mut toml::Table,
     key: &str,
@@ -1209,7 +1144,6 @@ fn insert_optional_path(
         table.insert(key.to_owned(), toml::Value::String(value.to_string()));
     }
 }
-
 fn insert_targets(root: &mut toml::Table, key: &str, targets: &[crate::manifest::LocalTarget]) {
     if targets.is_empty() {
         return;
@@ -1235,7 +1169,6 @@ fn insert_targets(root: &mut toml::Table, key: &str, targets: &[crate::manifest:
         ),
     );
 }
-
 fn canonicalize_toml(
     document: &'static str,
     input: &str,
@@ -1255,14 +1188,12 @@ fn canonicalize_toml(
     }
     Ok((table, output.into_bytes()))
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SelectionShape {
     File,
     Directory,
     Either,
 }
-
 struct Collector {
     root: PathBuf,
     files: BTreeMap<String, PlannedFile>,
@@ -1270,7 +1201,6 @@ struct Collector {
     source_bytes: u64,
     visited_entries: usize,
 }
-
 impl Collector {
     fn new(root: PathBuf) -> Self {
         Self {
@@ -1281,7 +1211,6 @@ impl Collector {
             visited_entries: 0,
         }
     }
-
     fn consume_entries(&mut self, count: usize) -> Result<(), PackageError> {
         let Some(next) = self.visited_entries.checked_add(count) else {
             return Err(PackageError::TooManyEntries {
@@ -1293,7 +1222,6 @@ impl Collector {
         self.visited_entries = next;
         Ok(())
     }
-
     fn insert_virtual(&mut self, path: &str, bytes: Vec<u8>) -> Result<(), PackageError> {
         if let Some(marker) = sensitive_content_marker(&bytes) {
             return Err(PackageError::SensitiveContent {
@@ -1304,7 +1232,6 @@ impl Collector {
         let components = canonical_portable_components(path)?;
         self.insert(path.to_owned(), path.to_owned(), components, bytes)
     }
-
     fn collect_selector(
         &mut self,
         selector: &Path,
@@ -1349,7 +1276,6 @@ impl Collector {
             Err(PackageError::SpecialFile(relative))
         }
     }
-
     fn collect_directory(&mut self, relative: &Path) -> Result<(), PackageError> {
         validate_portable_relative_path(relative)?;
         let physical = self.root.join(relative);
@@ -1368,7 +1294,6 @@ impl Collector {
             ordered.push((name, entry));
         }
         ordered.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
-
         for (name, entry) in ordered {
             let child = relative.join(&name);
             let linked = fs::symlink_metadata(entry.path())
@@ -1395,7 +1320,6 @@ impl Collector {
         }
         Ok(())
     }
-
     fn collect_file(&mut self, relative: &Path) -> Result<(), PackageError> {
         if is_fixed_generated_file(relative) {
             return Ok(());
@@ -1403,7 +1327,6 @@ impl Collector {
         let original = relative_to_utf8(relative)?;
         let components = canonical_portable_components(&original)?;
         let canonical = components.join("/");
-
         if self
             .collision_origins
             .get(&portable_collision_key(&components))
@@ -1434,7 +1357,6 @@ impl Collector {
                     maximum: MAX_SOURCE_BYTES,
                 })?;
         enforce_source_limit(next_size)?;
-
         let mut source = FilePayload::open(&physical)
             .map_err(|source| io_error("securely open package file", relative, source))?;
         validate_confined_file(&self.root, relative)?;
@@ -1474,7 +1396,6 @@ impl Collector {
         }
         self.insert(original, canonical, components, bytes)
     }
-
     fn insert(
         &mut self,
         original: String,
@@ -1517,7 +1438,6 @@ impl Collector {
         self.source_bytes = next_size;
         Ok(())
     }
-
     fn finish(self) -> Result<PackagePlan, PackageError> {
         enforce_file_limit(self.files.len())?;
         enforce_source_limit(self.source_bytes)?;
@@ -1530,7 +1450,6 @@ impl Collector {
         })
     }
 }
-
 fn validate_root(root: &Path) -> Result<PathBuf, PackageError> {
     let metadata = fs::symlink_metadata(root)
         .map_err(|source| io_error("inspect package root", root, source))?;
@@ -1539,7 +1458,6 @@ fn validate_root(root: &Path) -> Result<PathBuf, PackageError> {
     }
     fs::canonicalize(root).map_err(|source| io_error("canonicalize package root", root, source))
 }
-
 fn validate_selector(selector: &Path) -> Result<PathBuf, PackageError> {
     if selector.is_absolute() {
         return Err(PackageError::InvalidSelector(selector.to_path_buf()));
@@ -1563,7 +1481,6 @@ fn validate_selector(selector: &Path) -> Result<PathBuf, PackageError> {
     validate_portable_relative_path(&output)?;
     Ok(output)
 }
-
 fn validate_portable_relative_path(path: &Path) -> Result<(), PackageError> {
     if path.as_os_str().is_empty() {
         return Ok(());
@@ -1571,7 +1488,6 @@ fn validate_portable_relative_path(path: &Path) -> Result<(), PackageError> {
     let portable = relative_to_utf8(path)?;
     canonical_portable_components(&portable).map(|_| ())
 }
-
 fn validate_no_symlink_chain(root: &Path, relative: &Path) -> Result<(), PackageError> {
     let mut current = root.to_path_buf();
     let mut shown = PathBuf::new();
@@ -1589,7 +1505,6 @@ fn validate_no_symlink_chain(root: &Path, relative: &Path) -> Result<(), Package
     }
     Ok(())
 }
-
 fn validate_confined_directory(root: &Path, relative: &Path) -> Result<(), PackageError> {
     validate_no_symlink_chain(root, relative)?;
     let physical = root.join(relative);
@@ -1608,7 +1523,6 @@ fn validate_confined_directory(root: &Path, relative: &Path) -> Result<(), Packa
     }
     Ok(())
 }
-
 fn validate_confined_parent(root: &Path, relative: &Path) -> Result<(), PackageError> {
     let parent = relative.parent().unwrap_or_else(|| Path::new(""));
     let canonical = fs::canonicalize(root.join(parent))
@@ -1618,7 +1532,6 @@ fn validate_confined_parent(root: &Path, relative: &Path) -> Result<(), PackageE
     }
     Ok(())
 }
-
 fn validate_confined_file(root: &Path, relative: &Path) -> Result<(), PackageError> {
     // TODO: Replace these before/after namespace checks with retained, handle-relative directory
     // traversal when safe Rust exposes a portable no-follow/open-beneath primitive. The stable
@@ -1632,7 +1545,6 @@ fn validate_confined_file(root: &Path, relative: &Path) -> Result<(), PackageErr
     }
     Ok(())
 }
-
 fn reject_explicit_excluded_or_sensitive(relative: &Path) -> Result<(), PackageError> {
     for component in relative.components() {
         let Component::Normal(component) = component else {
@@ -1650,7 +1562,6 @@ fn reject_explicit_excluded_or_sensitive(relative: &Path) -> Result<(), PackageE
     }
     Ok(())
 }
-
 fn relative_to_utf8(path: &Path) -> Result<String, PackageError> {
     let mut components = Vec::new();
     for component in path.components() {
@@ -1671,7 +1582,6 @@ fn relative_to_utf8(path: &Path) -> Result<String, PackageError> {
     }
     Ok(components.join("/"))
 }
-
 fn canonical_portable_components(path: &str) -> Result<Vec<String>, PackageError> {
     if path.is_empty() || path.starts_with('/') || path.contains('\\') {
         return Err(PackageError::NonPortablePath(path.to_owned()));
@@ -1694,7 +1604,6 @@ fn canonical_portable_components(path: &str) -> Result<Vec<String>, PackageError
     }
     Ok(canonical)
 }
-
 fn canonical_portable_component(component: &str) -> Result<String, PackageError> {
     if component.is_empty()
         || component == "."
@@ -1713,7 +1622,6 @@ fn canonical_portable_component(component: &str) -> Result<String, PackageError>
     }
     normalize_nfc(component).map_err(|()| PackageError::NonPortablePath(component.to_owned()))
 }
-
 fn normalize_nfc(component: &str) -> Result<String, ()> {
     let mut output = String::with_capacity(component.len());
     let mut segment = String::new();
@@ -1737,7 +1645,6 @@ fn normalize_nfc(component: &str) -> Result<String, ()> {
     flush(&mut segment, &mut output)?;
     Ok(output)
 }
-
 fn portable_collision_key(components: &[String]) -> String {
     components
         .join("/")
@@ -1749,7 +1656,6 @@ fn portable_collision_key(components: &[String]) -> String {
         .flat_map(char::to_lowercase)
         .collect()
 }
-
 fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -1761,7 +1667,6 @@ fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
         true
     }
 }
-
 fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -1773,7 +1678,6 @@ fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
         false
     }
 }
-
 fn is_reserved_component(component: &str) -> bool {
     let basename = component.split('.').next().unwrap_or(component);
     if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"]
@@ -1789,7 +1693,6 @@ fn is_reserved_component(component: &str) -> bool {
     }
     false
 }
-
 fn is_bidi_control(character: char) -> bool {
     matches!(
         character,
@@ -1800,11 +1703,9 @@ fn is_bidi_control(character: char) -> bool {
             | '\u{2066}'..='\u{2069}'
     )
 }
-
 fn is_fixed_generated_file(path: &Path) -> bool {
     matches!(path.to_str(), Some(MANIFEST_PATH | VERIFICATION_LOCK_PATH))
 }
-
 pub fn is_excluded_directory(component: &str) -> bool {
     matches!(
         component.to_ascii_lowercase().as_str(),
@@ -1826,7 +1727,6 @@ pub fn is_excluded_directory(component: &str) -> bool {
             | "node_modules"
     )
 }
-
 pub fn is_sensitive_component(component: &str) -> bool {
     let lower = component.to_ascii_lowercase();
     lower == ".env"
@@ -1870,7 +1770,6 @@ pub fn is_sensitive_component(component: &str) -> bool {
             .iter()
             .any(|suffix| lower.ends_with(suffix))
 }
-
 fn sensitive_content_marker(bytes: &[u8]) -> Option<&'static str> {
     const FIXED: &[(&[u8], &str)] = &[
         (b"-----BEGIN PRIVATE KEY-----", "PKCS#8 private key"),
@@ -1906,7 +1805,6 @@ fn sensitive_content_marker(bytes: &[u8]) -> Option<&'static str> {
     }
     None
 }
-
 #[cfg(all(test, unix))]
 fn reject_consumer_only_lock_fields(value: &toml::Value) -> Result<(), PackageError> {
     const FORBIDDEN: &[&str] = &[
@@ -1953,7 +1851,6 @@ fn reject_consumer_only_lock_fields(value: &toml::Value) -> Result<(), PackageEr
     }
     Ok(())
 }
-
 fn sensitive_assignment(line: &[u8]) -> bool {
     let input = trim_ascii(line);
     if sensitive_assignment_at(input) {
@@ -1967,7 +1864,6 @@ fn sensitive_assignment(line: &[u8]) -> bool {
             && sensitive_assignment_at(&input[index + 1..])
     })
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "the bounded secret-assignment recognizer keeps its explicit cross-shell token grammar in one auditable scanner"
@@ -2089,7 +1985,6 @@ fn sensitive_assignment_at(line: &[u8]) -> bool {
     let value = trim_ascii(value);
     value.len() >= 24 && !is_secret_placeholder_reference(value)
 }
-
 fn quoted_assignment_value_end(value: &[u8], quote: u8) -> usize {
     let mut backslashes = 0_usize;
     for (index, byte) in value.iter().copied().enumerate() {
@@ -2104,7 +1999,6 @@ fn quoted_assignment_value_end(value: &[u8], quote: u8) -> usize {
     }
     value.len()
 }
-
 fn is_secret_placeholder_reference(value: &[u8]) -> bool {
     let identifier = |bytes: &[u8]| {
         !bytes.is_empty()
@@ -2121,7 +2015,6 @@ fn is_secret_placeholder_reference(value: &[u8]) -> bool {
             && value.len() > 2
             && identifier(&value[1..value.len() - 1]))
 }
-
 fn contains_aws_access_key(bytes: &[u8]) -> bool {
     bytes.windows(20).any(|window| {
         matches!(&window[..4], b"AKIA" | b"ASIA")
@@ -2130,13 +2023,11 @@ fn contains_aws_access_key(bytes: &[u8]) -> bool {
                 .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
     })
 }
-
 fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
     haystack
         .windows(needle.len())
         .any(|window| window.eq_ignore_ascii_case(needle))
 }
-
 fn trim_ascii(bytes: &[u8]) -> &[u8] {
     let start = bytes
         .iter()
@@ -2148,7 +2039,6 @@ fn trim_ascii(bytes: &[u8]) -> &[u8] {
         .map_or(start, |index| index + 1);
     &bytes[start..end]
 }
-
 fn trim_ascii_start(bytes: &[u8]) -> &[u8] {
     let start = bytes
         .iter()
@@ -2156,7 +2046,6 @@ fn trim_ascii_start(bytes: &[u8]) -> &[u8] {
         .unwrap_or(bytes.len());
     &bytes[start..]
 }
-
 fn source_tree_material(files: &[PlannedFile]) -> Vec<u8> {
     let mut output = Vec::new();
     append_frame(&mut output, SOURCE_TREE_DOMAIN);
@@ -2176,7 +2065,6 @@ fn source_tree_material(files: &[PlannedFile]) -> Vec<u8> {
     }
     output
 }
-
 fn validate_sorafs_bundle_paths(files: &[PlannedFile]) -> Result<(), PackageError> {
     let mut entries = files
         .iter()
@@ -2201,14 +2089,12 @@ fn validate_sorafs_bundle_paths(files: &[PlannedFile]) -> Result<(), PackageErro
         .map(|_| ())
         .map_err(|error| PackageError::CarPlan(error.to_string()))
 }
-
 fn descriptor_commitment_material(descriptor: &MusubiArtifactDescriptorV1) -> Vec<u8> {
     let mut output = Vec::new();
     append_frame(&mut output, ARTIFACT_DESCRIPTOR_DOMAIN);
     append_frame(&mut output, &descriptor.encode());
     output
 }
-
 fn bundle_commitment_material(
     semantic_release_manifest: &[u8],
     descriptor_material: &[u8],
@@ -2223,7 +2109,6 @@ fn bundle_commitment_material(
     append_frame(&mut output, verification_lock);
     output
 }
-
 fn append_frame(output: &mut Vec<u8>, bytes: &[u8]) {
     output.extend_from_slice(
         &u64::try_from(bytes.len())
@@ -2232,7 +2117,6 @@ fn append_frame(output: &mut Vec<u8>, bytes: &[u8]) {
     );
     output.extend_from_slice(bytes);
 }
-
 fn domain_digest(domain: &[u8], material: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
@@ -2244,7 +2128,6 @@ fn domain_digest(domain: &[u8], material: &[u8]) -> [u8; 32] {
     hasher.update(material);
     *hasher.finalize().as_bytes()
 }
-
 fn enforce_file_limit(count: usize) -> Result<(), PackageError> {
     if count > MAX_SOURCE_FILES {
         return Err(PackageError::TooManyFiles {
@@ -2254,14 +2137,12 @@ fn enforce_file_limit(count: usize) -> Result<(), PackageError> {
     }
     Ok(())
 }
-
 fn enforce_entry_limit(count: usize, maximum: usize) -> Result<(), PackageError> {
     if count > maximum {
         return Err(PackageError::TooManyEntries { count, maximum });
     }
     Ok(())
 }
-
 fn enforce_source_limit(bytes: u64) -> Result<(), PackageError> {
     if bytes > MAX_SOURCE_BYTES {
         return Err(PackageError::SourceTooLarge {
@@ -2271,7 +2152,6 @@ fn enforce_source_limit(bytes: u64) -> Result<(), PackageError> {
     }
     Ok(())
 }
-
 fn encode_verification_lock_bounded(
     verification_lock: &MusubiVerificationLockV1,
 ) -> Result<Vec<u8>, PackageError> {
@@ -2280,7 +2160,6 @@ fn encode_verification_lock_bounded(
         MUSUBI_MAX_VERIFICATION_LOCK_BYTES_V1,
     )
 }
-
 fn validate_semantic_release_encoded_bound(
     semantic_release: &MusubiSemanticReleaseManifestV1,
 ) -> Result<u64, PackageError> {
@@ -2289,7 +2168,6 @@ fn validate_semantic_release_encoded_bound(
         MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1,
     )
 }
-
 fn validate_semantic_release_encoded_bound_with_limit(
     semantic_release: &MusubiSemanticReleaseManifestV1,
     maximum: u64,
@@ -2314,7 +2192,6 @@ fn validate_semantic_release_encoded_bound_with_limit(
     }
     Ok(payload_len)
 }
-
 fn encode_verification_lock_bounded_with_limit(
     verification_lock: &MusubiVerificationLockV1,
     maximum: u64,
@@ -2329,7 +2206,6 @@ fn encode_verification_lock_bounded_with_limit(
     }
     Ok(bytes)
 }
-
 fn validate_verification_lock_encoded_bound(
     verification_lock: &MusubiVerificationLockV1,
 ) -> Result<u64, PackageError> {
@@ -2338,7 +2214,6 @@ fn validate_verification_lock_encoded_bound(
         MUSUBI_MAX_VERIFICATION_LOCK_BYTES_V1,
     )
 }
-
 fn validate_verification_lock_encoded_bound_with_limit(
     verification_lock: &MusubiVerificationLockV1,
     maximum: u64,
@@ -2363,7 +2238,6 @@ fn validate_verification_lock_encoded_bound_with_limit(
     }
     Ok(payload_len)
 }
-
 fn enforce_chunk_limit(count: usize) -> Result<(), PackageError> {
     if count > MAX_SOURCE_CHUNKS {
         return Err(PackageError::TooManyChunks {
@@ -2373,7 +2247,6 @@ fn enforce_chunk_limit(count: usize) -> Result<(), PackageError> {
     }
     Ok(())
 }
-
 fn enforce_car_limit(bytes: u64) -> Result<(), PackageError> {
     if bytes > MAX_CAR_BYTES {
         return Err(PackageError::CarTooLarge {
@@ -2383,7 +2256,6 @@ fn enforce_car_limit(bytes: u64) -> Result<(), PackageError> {
     }
     Ok(())
 }
-
 fn io_error(operation: &'static str, path: &Path, source: io::Error) -> PackageError {
     PackageError::Io {
         operation,
@@ -2391,14 +2263,12 @@ fn io_error(operation: &'static str, path: &Path, source: io::Error) -> PackageE
         source,
     }
 }
-
 struct BoundedWriter {
     bytes: Vec<u8>,
     maximum: u64,
     attempted: u64,
     exceeded: bool,
 }
-
 impl BoundedWriter {
     fn new(maximum: u64) -> Self {
         Self {
@@ -2409,7 +2279,6 @@ impl BoundedWriter {
         }
     }
 }
-
 impl Write for BoundedWriter {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         let additional = u64::try_from(buffer.len())
@@ -2428,12 +2297,10 @@ impl Write for BoundedWriter {
         self.bytes.extend_from_slice(buffer);
         Ok(buffer.len())
     }
-
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
-
 #[cfg(all(test, unix))]
 mod tests {
     use std::{
@@ -2444,7 +2311,6 @@ mod tests {
         },
         time::Duration,
     };
-
     use iroha::{
         crypto::{Algorithm, Hash, HashOf, KeyPair},
         musubi_runtime::{
@@ -2475,10 +2341,8 @@ mod tests {
         sorafs::capacity::ProviderId,
     };
     use tempfile::tempdir;
-
     use super::*;
     use crate::workspace::load_workspace;
-
     const MANIFEST: &str = r#"
 manifest-version = 1
 
@@ -2491,7 +2355,6 @@ version = "1.0.0"
         layout.set_library("src");
         layout
     }
-
     fn semantic_release() -> (MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1) {
         let package = MusubiPackageIdV1::new(
             DataSpaceId::new(7),
@@ -2518,7 +2381,6 @@ version = "1.0.0"
         };
         (semantic, lock)
     }
-
     struct ExactPackageSeedBackend {
         provider: ProviderId,
         operation_id: [u8; 32],
@@ -2528,12 +2390,10 @@ version = "1.0.0"
         car: Vec<u8>,
         admitted: Arc<AtomicBool>,
     }
-
     impl MusubiSeedIngressBackendV1 for ExactPackageSeedBackend {
         fn provider_id(&self) -> ProviderId {
             self.provider
         }
-
         fn stage_exact_car(
             &mut self,
             operation_id: [u8; 32],
@@ -2554,9 +2414,7 @@ version = "1.0.0"
             Ok(())
         }
     }
-
     struct UnusedPackageStorageBackend;
-
     impl MusubiStorageCoordinationBackendV1 for UnusedPackageStorageBackend {
         fn coordinate_storage(
             &mut self,
@@ -2566,9 +2424,7 @@ version = "1.0.0"
             Err(MusubiPublicationServiceBackendErrorV1::Permanent)
         }
     }
-
     struct UnusedPackageReadbackBackend;
-
     impl MusubiProviderReadbackBackendV1 for UnusedPackageReadbackBackend {
         fn readback_provider(
             &mut self,
@@ -2578,7 +2434,6 @@ version = "1.0.0"
             Err(MusubiPublicationServiceBackendErrorV1::Permanent)
         }
     }
-
     #[test]
     fn plans_only_positive_files_in_byte_order() {
         let temp = tempdir().expect("tempdir");
@@ -2586,7 +2441,6 @@ version = "1.0.0"
         fs::write(temp.path().join("src/z.ko"), b"z").expect("z");
         fs::write(temp.path().join("src/a.ko"), b"a").expect("a");
         fs::write(temp.path().join("undeclared-secret.txt"), b"do not scan").expect("extra");
-
         let plan =
             plan_package(&base_layout(temp.path()), MANIFEST, &semantic_release().1).expect("plan");
         let paths = plan
@@ -2600,7 +2454,6 @@ version = "1.0.0"
         );
         assert!(!paths.contains(&"undeclared-secret.txt"));
     }
-
     #[test]
     fn injects_canonical_documents_instead_of_disk_copies() {
         let temp = tempdir().expect("tempdir");
@@ -2610,7 +2463,6 @@ version = "1.0.0"
         fs::write(temp.path().join(VERIFICATION_LOCK_PATH), b"not the lock").expect("disk lock");
         let mut layout = base_layout(temp.path());
         layout.add_include(".");
-
         let plan = plan_package(&layout, MANIFEST, &semantic_release().1).expect("plan");
         assert_eq!(
             plan.canonical_manifest(),
@@ -2623,7 +2475,6 @@ version = "1.0.0"
                 .as_bytes()
         );
     }
-
     #[test]
     fn canonical_toml_is_order_independent_and_requires_v1_markers() {
         let left = canonicalize_manifest_toml("manifest-version=1\nname='x'\n").expect("left");
@@ -2646,7 +2497,6 @@ version = "1.0.0"
             Err(PackageError::InvalidDocument { .. })
         ));
     }
-
     #[test]
     #[allow(
         clippy::too_many_lines,
@@ -2710,7 +2560,6 @@ exports = []
 "#,
         )
         .expect("dep manifest");
-
         let workspace = load_workspace(&temp.path().join("app")).expect("workspace");
         let member = workspace
             .members()
@@ -2746,7 +2595,6 @@ exports = []
                 .collect::<Vec<_>>(),
             ["shared"]
         );
-
         let layout = package_layout_for_member(workspace.root(), member);
         let plan = plan_package(&layout, &rendered, &semantic_release().1).expect("package plan");
         let paths = plan
@@ -2758,7 +2606,6 @@ exports = []
         assert!(paths.contains(&"shared/note.txt"));
         assert!(paths.contains(&"src/lib.ko"));
     }
-
     #[test]
     fn publication_manifest_rejects_local_only_normal_path_dependencies() {
         let temp = tempdir().expect("tempdir");
@@ -2816,7 +2663,6 @@ exports = []
                 if reason.contains("publishable normal path dependency")
         ));
     }
-
     #[test]
     fn semantic_release_manifest_binds_typed_interface_and_metadata() {
         let temp = tempdir().expect("tempdir");
@@ -2860,7 +2706,6 @@ exports = []
         assert_eq!(semantic.metadata.keywords.len(), 2);
         assert_eq!(semantic.verification_lock_digest, lock.digest());
     }
-
     #[test]
     fn excludes_generated_roots_but_rejects_explicit_selection() {
         let temp = tempdir().expect("tempdir");
@@ -2879,14 +2724,12 @@ exports = []
                 .any(|file| file.path().contains("target"))
         );
         assert!(!plan.files().iter().any(|file| file.path() == "src/.git"));
-
         let mut explicit = PackageLayout::new(temp.path());
         explicit.add_include("src/target");
         assert!(matches!(
             plan_package(&explicit, MANIFEST, &semantic_release().1),
             Err(PackageError::ExcludedPath(_))
         ));
-
         let mut explicit_marker = PackageLayout::new(temp.path());
         explicit_marker.add_include("src/.git");
         assert!(matches!(
@@ -2894,7 +2737,6 @@ exports = []
             Err(PackageError::ExcludedPath(_))
         ));
     }
-
     #[test]
     fn rejects_overdeep_empty_directory_trees_before_recursing_past_v1_bounds() {
         let temp = tempdir().expect("tempdir");
@@ -2904,13 +2746,11 @@ exports = []
             directory.push(format!("d{index}"));
             fs::create_dir(&directory).expect("nested directory");
         }
-
         assert!(matches!(
             plan_package(&base_layout(temp.path()), MANIFEST, &semantic_release().1),
             Err(PackageError::NonPortablePath(_))
         ));
     }
-
     #[test]
     fn rejects_traversal_absolute_and_portable_reserved_paths() {
         let temp = tempdir().expect("tempdir");
@@ -2920,14 +2760,12 @@ exports = []
             plan_package(&traversal, MANIFEST, &semantic_release().1),
             Err(PackageError::InvalidSelector(_))
         ));
-
         let mut absolute = PackageLayout::new(temp.path());
         absolute.add_include(temp.path());
         assert!(matches!(
             plan_package(&absolute, MANIFEST, &semantic_release().1),
             Err(PackageError::InvalidSelector(_))
         ));
-
         fs::create_dir(temp.path().join("src")).expect("src");
         fs::write(temp.path().join("src/CON.ko"), b"reserved").expect("reserved");
         assert!(matches!(
@@ -2935,7 +2773,6 @@ exports = []
             Err(PackageError::NonPortablePath(_))
         ));
     }
-
     #[test]
     fn rejects_every_portable_reserved_and_control_name_class() {
         for component in [
@@ -2972,7 +2809,6 @@ exports = []
             );
         }
     }
-
     #[test]
     fn rejects_case_and_unicode_equivalent_collisions() {
         // Exercise the logical-path index directly: common macOS filesystems collapse these
@@ -2987,7 +2823,6 @@ exports = []
             collector.insert_virtual("src/foo.ko", b"two".to_vec()),
             Err(PackageError::PathCollision { .. })
         ));
-
         let unicode = tempdir().expect("tempdir");
         let mut collector = Collector::new(unicode.path().to_path_buf());
         collector
@@ -2997,7 +2832,6 @@ exports = []
             collector.insert_virtual("src/cafe\u{301}.ko", b"two".to_vec()),
             Err(PackageError::PathCollision { .. })
         ));
-
         let caseless = tempdir().expect("tempdir");
         let mut collector = Collector::new(caseless.path().to_path_buf());
         collector
@@ -3007,7 +2841,6 @@ exports = []
             collector.insert_virtual("src/STRASSE.ko", b"two".to_vec()),
             Err(PackageError::PathCollision { .. })
         ));
-
         let prefix = tempdir().expect("tempdir");
         let mut collector = Collector::new(prefix.path().to_path_buf());
         collector
@@ -3018,7 +2851,6 @@ exports = []
             .expect("case-sensitive directory spelling");
         assert!(matches!(collector.finish(), Err(PackageError::CarPlan(_))));
     }
-
     #[test]
     fn normalizes_a_single_decomposed_unicode_path() {
         let temp = tempdir().expect("tempdir");
@@ -3032,7 +2864,6 @@ exports = []
                 .any(|file| file.path() == "src/caf\u{e9}.ko")
         );
     }
-
     #[test]
     fn rejects_sensitive_paths_and_contents_without_echoing_secrets() {
         for path in [
@@ -3060,7 +2891,6 @@ exports = []
             ),
             Err(PackageError::SensitivePath(_))
         ));
-
         let content_case = tempdir().expect("tempdir");
         fs::create_dir(content_case.path().join("src")).expect("src");
         fs::write(
@@ -3120,7 +2950,6 @@ exports = []
         assert!(!sensitive_assignment(
             b"{\"apiKeySuffix\":\"0123456789abcdef0123456789abcdef\"}"
         ));
-
         let exported_secret = tempdir().expect("tempdir");
         fs::create_dir(exported_secret.path().join("src")).expect("src");
         fs::write(
@@ -3140,7 +2969,6 @@ exports = []
             })
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn rejects_symlinks_hardlinks_special_files_and_non_utf8_paths() {
@@ -3148,7 +2976,6 @@ exports = []
             ffi::OsString,
             os::unix::{ffi::OsStringExt as _, fs::symlink, net::UnixListener},
         };
-
         let symlinks = tempdir().expect("tempdir");
         fs::create_dir(symlinks.path().join("src")).expect("src");
         fs::write(symlinks.path().join("outside.ko"), b"outside").expect("outside");
@@ -3161,7 +2988,6 @@ exports = []
             ),
             Err(PackageError::Symlink(_))
         ));
-
         let ancestor = tempdir().expect("tempdir");
         fs::create_dir(ancestor.path().join("src")).expect("src");
         fs::create_dir(ancestor.path().join("outside")).expect("outside directory");
@@ -3174,7 +3000,6 @@ exports = []
             plan_package(&escaped_include, MANIFEST, &semantic_release().1),
             Err(PackageError::Symlink(path)) if path == Path::new("src/linked")
         ));
-
         let linked_root_parent = tempdir().expect("tempdir");
         let real_root = linked_root_parent.path().join("real-root");
         fs::create_dir(&real_root).expect("real root");
@@ -3188,7 +3013,6 @@ exports = []
             ),
             Err(PackageError::InvalidRoot(path)) if path == linked_root
         ));
-
         let hardlinks = tempdir().expect("tempdir");
         fs::create_dir(hardlinks.path().join("src")).expect("src");
         fs::write(hardlinks.path().join("src/a.ko"), b"source").expect("source");
@@ -3205,7 +3029,6 @@ exports = []
             ),
             Err(PackageError::Hardlink(_))
         ));
-
         let special = tempdir().expect("tempdir");
         fs::create_dir(special.path().join("src")).expect("src");
         let _socket = UnixListener::bind(special.path().join("src/socket")).expect("socket");
@@ -3217,7 +3040,6 @@ exports = []
             ),
             Err(PackageError::SpecialFile(_))
         ));
-
         let non_utf8 = tempdir().expect("tempdir");
         fs::create_dir(non_utf8.path().join("src")).expect("src");
         let mut non_utf8_selector = PackageLayout::new(non_utf8.path());
@@ -3250,7 +3072,6 @@ exports = []
             Err(PackageError::NonPortablePath(_))
         ));
     }
-
     #[test]
     fn exposed_car_plan_exactly_binds_the_archive_commitment() {
         let temp = tempdir().expect("tempdir");
@@ -3262,7 +3083,6 @@ exports = []
         let car = package.into_car(&semantic, &lock).expect("CAR");
         let plan = car.plan();
         let commitment = car.archive_commitment().expect("archive commitment");
-
         plan.validate().expect("exposed plan validates");
         assert_eq!(plan.payload_digest, blake3::hash(car.payload()));
         assert!(
@@ -3280,7 +3100,6 @@ exports = []
             commitment.chunk_plan_digest,
             MusubiContentDigestV1::new(compute_chunk_plan_digest_sha3(&plan.chunks))
         );
-
         let mandatory_bundle_paths = [
             BUNDLE_RELEASE_PATH,
             BUNDLE_DESCRIPTOR_PATH,
@@ -3303,7 +3122,6 @@ exports = []
             plan.files.len(),
             source_file_count + mandatory_bundle_paths.len()
         );
-
         let wire_plan = iroha::musubi_runtime::MusubiSeedIngressCarPlanV1::from_car_build_plan(
             plan,
             &commitment,
@@ -3316,7 +3134,6 @@ exports = []
             *plan
         );
     }
-
     #[test]
     #[allow(
         clippy::too_many_lines,
@@ -3335,7 +3152,6 @@ exports = []
         let commitment = car.archive_commitment().expect("archive commitment");
         let witness = MusubiSeedIngressCarPlanV1::from_car_build_plan(car.plan(), &commitment)
             .expect("seed-ingress witness");
-
         let publisher_key = KeyPair::try_from_seed(
             b"musubi-package-service-publisher".to_vec(),
             Algorithm::Ed25519,
@@ -3358,7 +3174,6 @@ exports = []
             Duration::from_secs(5),
         )
         .expect("authenticated runtime");
-
         let broker_key = KeyPair::try_from_seed(
             b"musubi-package-service-broker".to_vec(),
             Algorithm::Ed25519,
@@ -3391,7 +3206,6 @@ exports = []
             .prepare_seed_ingress_request(&request, car.plan(), &mut car_reader)
             .expect("memory-only prepared request");
         assert!(prepared.authorization_expires_at_ms() > prepared.authorization_issued_at_ms());
-
         let config = MusubiPublicationServiceConfigurationV1 {
             network_id,
             ingress_broker: broker.clone(),
@@ -3425,7 +3239,6 @@ exports = []
             Box::new(UnusedPackageReadbackBackend),
         )
         .expect("private seed service");
-
         let response = service.handle(prepared.as_private_http_request());
         assert_eq!(response.status, 200);
         assert!(admitted.load(Ordering::SeqCst));
@@ -3435,7 +3248,6 @@ exports = []
             .verify(prepared.binding(), receipt.payload.issued_at_ms)
             .expect("exact producer receipt binding");
     }
-
     #[test]
     fn exact_source_payload_ceiling_leaves_room_for_bundle_metadata() {
         let (semantic, lock) = semantic_release();
@@ -3468,7 +3280,6 @@ exports = []
             ],
             source_bytes: MAX_SOURCE_BYTES,
         };
-
         let car = plan
             .into_car(&semantic, &lock)
             .expect("source-limit package still fits the larger bundle/CAR ceilings");
@@ -3481,13 +3292,11 @@ exports = []
                 <= iroha_data_model::musubi::MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1
         );
     }
-
     #[test]
     fn typed_bundle_metadata_is_admitted_before_allocation() {
         let (semantic, lock) = semantic_release();
         let expected = lock.encode();
         let exact = u64::try_from(expected.len()).expect("encoded lock length fits u64");
-
         assert_eq!(
             encode_verification_lock_bounded_with_limit(&lock, exact)
                 .expect("exact typed-lock byte bound"),
@@ -3498,7 +3307,6 @@ exports = []
             Err(PackageError::VerificationLockTooLarge { bytes, maximum })
                 if bytes == exact && maximum == exact - 1
         ));
-
         let semantic_exact = u64::try_from(semantic.encode().len())
             .expect("encoded semantic-release length fits u64");
         assert_eq!(
@@ -3512,7 +3320,6 @@ exports = []
                 if bytes == semantic_exact && maximum == semantic_exact - 1
         ));
     }
-
     #[test]
     fn commitments_and_car_are_deterministic() {
         let left = tempdir().expect("tempdir");
@@ -3524,7 +3331,6 @@ exports = []
         fs::write(left.path().join("src/a.ko"), b"a").expect("a");
         fs::write(right.path().join("src/a.ko"), b"a").expect("a");
         fs::write(right.path().join("src/b.ko"), b"b").expect("b");
-
         let left_plan = plan_package(&base_layout(left.path()), MANIFEST, &semantic_release().1)
             .expect("left plan");
         let right_plan = plan_package(&base_layout(right.path()), MANIFEST, &semantic_release().1)
@@ -3553,7 +3359,6 @@ exports = []
             MusubiArtifactDescriptorV1::decode(&mut encoded_descriptor.as_slice())
                 .expect("decode descriptor");
         assert_eq!(&decoded_descriptor, left_commitments.descriptor());
-
         let left_car = left_plan.into_car(&semantic, &lock).expect("left CAR");
         let right_car = right_plan.into_car(&semantic, &lock).expect("right CAR");
         assert_eq!(left_car.bytes(), right_car.bytes());
@@ -3615,7 +3420,6 @@ exports = []
         assert_eq!(publication.manifest.semantic_manifest(), semantic);
         assert!(!publication.manifest.release_digest().is_zero());
     }
-
     #[test]
     fn semantic_bundle_rejects_a_different_exact_lock() {
         let temp = tempdir().expect("tempdir");
@@ -3630,7 +3434,6 @@ exports = []
             Err(PackageError::InvalidBundleBinding(_))
         ));
     }
-
     #[test]
     fn semantic_bundle_rejects_unproven_direct_dependencies() {
         let temp = tempdir().expect("tempdir");
@@ -3652,14 +3455,12 @@ exports = []
             .expect("semantic manifest remains independently valid");
         lock.validate()
             .expect("verification lock remains independently valid");
-
         assert!(matches!(
             plan.commitment_materials(&semantic, &lock),
             Err(PackageError::InvalidBundleBinding(reason))
                 if reason.contains("dependency counts differ")
         ));
     }
-
     #[test]
     fn commitment_materials_apply_sorafs_portable_path_validation_first() {
         // `PackagePlan` fields are private to this module, so production callers cannot bypass
@@ -3679,7 +3480,6 @@ exports = []
             Err(PackageError::CarPlan(_))
         ));
     }
-
     #[test]
     fn commitment_materials_reject_casefold_colliding_internal_plans() {
         let malformed = PackagePlan {
@@ -3698,13 +3498,11 @@ exports = []
             source_bytes: 6,
         };
         let (semantic, lock) = semantic_release();
-
         assert!(matches!(
             malformed.commitment_materials(&semantic, &lock),
             Err(PackageError::CarPlan(_))
         ));
     }
-
     #[test]
     fn semantic_bundle_rejects_two_individually_valid_lock_representations() {
         let temp = tempdir().expect("tempdir");
@@ -3712,7 +3510,6 @@ exports = []
         fs::write(temp.path().join("src/lib.ko"), b"fn demo() {}").expect("source");
         let (original_semantic, original_lock) = semantic_release();
         let plan = plan_package(&base_layout(temp.path()), MANIFEST, &original_lock).expect("plan");
-
         let mut different_lock = original_lock;
         different_lock.root.version = "1.0.1".parse().expect("different version");
         let mut different_semantic = original_semantic;
@@ -3726,7 +3523,6 @@ exports = []
                 if reason.contains("source-tree and typed verification locks")
         ));
     }
-
     #[test]
     fn limit_guards_report_exact_v1_ceilings() {
         assert!(enforce_file_limit(MAX_SOURCE_FILES).is_ok());
@@ -3781,7 +3577,6 @@ exports = []
         ));
     }
 }
-
 #[cfg(all(test, not(unix)))]
 mod unsupported_platform_tests {
     use iroha_data_model::{
@@ -3791,9 +3586,7 @@ mod unsupported_platform_tests {
         },
         nexus::DataSpaceId,
     };
-
     use super::{PackageError, PackageLayout, plan_package};
-
     #[test]
     fn package_planning_fails_before_parsing_or_inspecting_the_root() {
         let package = MusubiPackageIdV1::new(
@@ -3811,10 +3604,8 @@ mod unsupported_platform_tests {
         let parent = tempfile::tempdir().expect("temporary parent");
         let requested = parent.path().join("must-remain-absent");
         let layout = PackageLayout::new(&requested);
-
         let error = plan_package(&layout, "not valid TOML", &lock)
             .expect_err("non-Unix package planning must fail");
-
         assert!(matches!(error, PackageError::UnsupportedPlatform));
         assert!(!requested.exists());
     }

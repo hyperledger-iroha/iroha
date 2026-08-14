@@ -1,11 +1,8 @@
 //! Adds support for sending/receiving custom Iroha messages over the WebSocket
-
 use core::{result::Result, time::Duration};
-
 use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket};
 use futures::{SinkExt, StreamExt};
 use norito::prelude::*;
-
 /// Error type with generic for actual Stream/Sink error type
 #[derive(Debug, displaydoc::Display, thiserror::Error)]
 #[ignore_extra_doc_attributes]
@@ -30,7 +27,6 @@ pub enum Error {
     /// Connection is closed
     Closed,
 }
-
 /// RFC 6455 close code for invalid frame payload data.
 pub const CLOSE_INVALID_PAYLOAD: u16 = 1007;
 /// RFC 6455 close code for a protocol policy violation.
@@ -39,7 +35,6 @@ pub const CLOSE_POLICY_VIOLATION: u16 = 1008;
 pub const CLOSE_INTERNAL_ERROR: u16 = 1011;
 /// RFC 6455 close code asking the client to retry later.
 pub const CLOSE_TRY_AGAIN_LATER: u16 = 1013;
-
 fn decode_subscription_request<M>(bytes: &[u8]) -> Result<M, norito::Error>
 where
     M: NoritoSerialize,
@@ -47,21 +42,18 @@ where
 {
     norito::decode_canonical(bytes)
 }
-
 /// Wrapper to send/receive Norito encoded messages
 #[derive(Debug)]
 pub struct WebSocketNorito {
     ws: WebSocket,
     timeout: Duration,
 }
-
 impl WebSocketNorito {
     /// Create a new Norito WebSocket wrapper with a fixed message timeout.
     #[must_use]
     pub fn new(ws: WebSocket, timeout: Duration) -> Self {
         Self { ws, timeout }
     }
-
     /// Send message encoded in Norito
     pub async fn send<M: NoritoSerialize + Send>(&mut self, message: M) -> Result<(), Error> {
         // Use Norito framing (header + checksum) so clients can validate payloads.
@@ -74,7 +66,6 @@ impl WebSocketNorito {
         .map_err(|_err| Error::SendTimeout)?
         .map_err(extract_ws_closed)
     }
-
     /// Send a JSON string as a Text WebSocket frame (used for convenience event streams).
     pub async fn send_json_text(&mut self, json: &str) -> Result<(), Error> {
         tokio::time::timeout(
@@ -86,7 +77,6 @@ impl WebSocketNorito {
         .map_err(|_err| Error::SendTimeout)?
         .map_err(extract_ws_closed)
     }
-
     /// Send an empty WebSocket ping frame as a transport heartbeat.
     pub async fn ping(&mut self) -> Result<(), Error> {
         tokio::time::timeout(
@@ -97,7 +87,6 @@ impl WebSocketNorito {
         .map_err(|_err| Error::SendTimeout)?
         .map_err(extract_ws_closed)
     }
-
     /// Receive and decode one canonical, uncompressed Norito request.
     pub async fn recv<M>(&mut self) -> Result<M, Error>
     where
@@ -113,7 +102,6 @@ impl WebSocketNorito {
                 // NOTE: `None` is the same as `ConnectionClosed` or `AlreadyClosed`
                 .ok_or(Error::Closed)?
                 .map_err(extract_ws_closed)?;
-
             match message {
                 Message::Binary(binary) => {
                     return decode_subscription_request::<M>(binary.as_ref())
@@ -135,7 +123,6 @@ impl WebSocketNorito {
             }
         }
     }
-
     /// Receive one canonical request with a custom timeout.
     ///
     /// Returns [`Error::ReadTimeout`] when `dur` expires.
@@ -167,7 +154,6 @@ impl WebSocketNorito {
             }
         }
     }
-
     /// Wait for the peer to close while rejecting post-subscription data frames.
     ///
     /// Canonical Torii event and block streams are server-to-client after their
@@ -202,7 +188,6 @@ impl WebSocketNorito {
             }
         }
     }
-
     /// Close websocket
     pub async fn close(mut self) -> Result<(), Error> {
         // NOTE: use `SinkExt::close` because it's not trying to write to closed socket
@@ -214,7 +199,6 @@ impl WebSocketNorito {
             Err(error) => Err(error),
         }
     }
-
     /// Close the WebSocket with a stable protocol status and reason.
     pub async fn close_with(self, code: u16, reason: impl Into<String>) -> Result<(), Error> {
         let mut this = self;
@@ -231,7 +215,6 @@ impl WebSocketNorito {
             },
             Ok(Ok(())) => {}
         }
-
         match <_ as SinkExt<_>>::close(&mut this.ws)
             .await
             .map_err(extract_ws_closed)
@@ -241,17 +224,13 @@ impl WebSocketNorito {
         }
     }
 }
-
 #[cfg(test)]
 mod subscription_decode_tests {
     use std::num::NonZeroU64;
-
     use iroha_data_model::{
         block::stream::BlockSubscriptionRequest, events::stream::EventSubscriptionRequest,
     };
-
     use super::*;
-
     fn assert_common_noncanonical_frames_rejected<T>(value: &T)
     where
         T: NoritoSerialize,
@@ -259,7 +238,6 @@ mod subscription_decode_tests {
     {
         let canonical = norito::encode_canonical(value).expect("encode canonical subscription");
         decode_subscription_request::<T>(&canonical).expect("canonical subscription must decode");
-
         let compressed =
             norito::to_compressed_bytes(value, Some(norito::CompressionConfig::default()))
                 .expect("encode compressed subscription");
@@ -267,11 +245,9 @@ mod subscription_decode_tests {
             decode_subscription_request::<T>(&compressed),
             Err(norito::Error::NonCanonicalEncoding)
         ));
-
         let mut trailing = canonical.clone();
         trailing.push(0);
         assert!(decode_subscription_request::<T>(&trailing).is_err());
-
         let length_offset = norito::core::Header::SIZE
             - 2 * core::mem::size_of::<u64>()
             - core::mem::size_of::<u8>();
@@ -280,12 +256,10 @@ mod subscription_decode_tests {
             .copy_from_slice(&(1024_u64 * 1024).to_le_bytes());
         assert!(decode_subscription_request::<T>(&oversized).is_err());
     }
-
     #[test]
     fn event_subscription_requires_one_exact_canonical_frame() {
         let request = EventSubscriptionRequest::new(Vec::new());
         assert_common_noncanonical_frames_rejected(&request);
-
         let canonical = norito::encode_canonical(&request).expect("encode canonical event request");
         let alternate_flags =
             norito::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -302,7 +276,6 @@ mod subscription_decode_tests {
             Err(norito::Error::NonCanonicalEncoding)
         ));
     }
-
     #[test]
     fn block_subscription_requires_one_exact_canonical_frame() {
         let request = BlockSubscriptionRequest(
@@ -311,7 +284,6 @@ mod subscription_decode_tests {
         assert_common_noncanonical_frames_rejected(&request);
     }
 }
-
 /// Check if websocket was closed normally
 pub fn extract_ws_closed(error: axum::Error) -> Error {
     let error = error.into_inner();
@@ -322,30 +294,24 @@ pub fn extract_ws_closed(error: axum::Error) -> Error {
     if let Some(tungstenite::Error::AlreadyClosed) = error.downcast_ref::<tungstenite::Error>() {
         return Error::Closed;
     }
-
     Error::WebSocket(axum::Error::new(error))
 }
-
 #[cfg(feature = "p2p_ws")]
 mod ws_io {
     use futures::stream::{SplitSink, SplitStream};
     use futures::{Sink, Stream};
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-
     use super::*;
-
     /// Read half adapter over a WebSocket stream that yields bytes from Binary frames.
     pub struct WsReadHalf {
         inner: SplitStream<WebSocket>,
         buf: axum::body::Bytes,
     }
-
     /// Write half adapter over a WebSocket sink that sends bytes as Binary frames on flush.
     pub struct WsWriteHalf {
         inner: SplitSink<WebSocket, Message>,
         buf: Vec<u8>,
     }
-
     impl WsWriteHalf {
         fn poll_send_buffered(
             &mut self,
@@ -371,7 +337,6 @@ mod ws_io {
             core::task::Poll::Ready(Ok(()))
         }
     }
-
     impl AsyncRead for WsReadHalf {
         fn poll_read(
             mut self: core::pin::Pin<&mut Self>,
@@ -412,7 +377,6 @@ mod ws_io {
             }
         }
     }
-
     impl AsyncWrite for WsWriteHalf {
         fn poll_write(
             mut self: core::pin::Pin<&mut Self>,
@@ -428,7 +392,6 @@ mod ws_io {
             self.buf.extend_from_slice(&data[..accepted]);
             core::task::Poll::Ready(Ok(accepted))
         }
-
         fn poll_flush(
             mut self: core::pin::Pin<&mut Self>,
             cx: &mut core::task::Context<'_>,
@@ -440,13 +403,11 @@ mod ws_io {
             }))?;
             core::task::Poll::Ready(Ok(()))
         }
-
         fn poll_shutdown(
             mut self: core::pin::Pin<&mut Self>,
             cx: &mut core::task::Context<'_>,
         ) -> core::task::Poll<std::io::Result<()>> {
             futures::ready!(self.as_mut().poll_flush(cx))?;
-
             let mut sink = core::pin::Pin::new(&mut self.inner);
             futures::ready!(sink.as_mut().poll_close(cx).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::Other, format!("ws close error: {e}"))
@@ -454,7 +415,6 @@ mod ws_io {
             core::task::Poll::Ready(Ok(()))
         }
     }
-
     pub fn split(ws: WebSocket) -> (WsReadHalf, WsWriteHalf) {
         let (sink, stream) = ws.split();
         (
@@ -468,11 +428,9 @@ mod ws_io {
             },
         )
     }
-
     #[cfg(test)]
     mod tests {
         use std::sync::{Arc, Mutex};
-
         use axum::{Router, extract::ws::WebSocketUpgrade, routing::get};
         use tokio::{
             io::{AsyncReadExt as _, AsyncWriteExt as _},
@@ -485,11 +443,8 @@ mod ws_io {
             Message as TungsteniteMessage, client::connect_with_config, protocol::WebSocketConfig,
             stream::MaybeTlsStream,
         };
-
         use super::*;
-
         const TEST_TIMEOUT: Duration = Duration::from_secs(30);
-
         fn websocket_config() -> WebSocketConfig {
             let chunk_bytes = iroha_p2p::transport::ws::WEBSOCKET_CHUNK_BYTES;
             WebSocketConfig::default()
@@ -499,7 +454,6 @@ mod ws_io {
                 .max_message_size(Some(chunk_bytes))
                 .max_frame_size(Some(chunk_bytes))
         }
-
         async fn assert_chunked_stream(byte_len: usize) {
             let expected = Arc::new(
                 (0..byte_len)
@@ -513,7 +467,6 @@ mod ws_io {
             let write_done_tx = Arc::new(Mutex::new(Some(write_done_tx)));
             let server_write_done = Arc::clone(&write_done_tx);
             let chunk_bytes = iroha_p2p::transport::ws::WEBSOCKET_CHUNK_BYTES;
-
             let app = Router::new().route(
                 "/p2p",
                 get(move |ws: WebSocketUpgrade| {
@@ -543,7 +496,6 @@ mod ws_io {
                     }
                 }),
             );
-
             let listener = TcpListener::bind("127.0.0.1:0")
                 .await
                 .expect("bind loopback WebSocket server");
@@ -553,7 +505,6 @@ mod ws_io {
                 let _ = shutdown_rx.await;
             });
             let server_task = tokio::spawn(async move { server.await });
-
             let client_task = spawn_blocking(move || {
                 let (mut client, _response) =
                     connect_with_config(format!("ws://{address}/p2p"), Some(websocket_config()), 0)
@@ -563,7 +514,6 @@ mod ws_io {
                         .set_read_timeout(Some(TEST_TIMEOUT))
                         .expect("set loopback WebSocket read timeout");
                 }
-
                 let mut received = Vec::with_capacity(byte_len);
                 let mut binary_messages = 0usize;
                 while received.len() < byte_len {
@@ -592,7 +542,6 @@ mod ws_io {
                 .await
                 .expect("WebSocket observer must not time out")
                 .expect("WebSocket observer must not panic");
-
             assert_eq!(
                 received.as_slice(),
                 expected.as_slice(),
@@ -608,7 +557,6 @@ mod ws_io {
                 .expect("server writer completion must not time out")
                 .expect("server writer completion channel must remain open")
                 .expect("server writer must flush successfully");
-
             let _ = shutdown_tx.send(());
             timeout(TEST_TIMEOUT, server_task)
                 .await
@@ -616,7 +564,6 @@ mod ws_io {
                 .expect("loopback server task must not panic")
                 .expect("loopback server must shut down cleanly");
         }
-
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn write_half_chunks_boundaries_and_default_maximum_p2p_frame() {
             let chunk_bytes = iroha_p2p::transport::ws::WEBSOCKET_CHUNK_BYTES;
@@ -630,14 +577,12 @@ mod ws_io {
                 assert_chunked_stream(byte_len).await;
             }
         }
-
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn read_half_ignores_empty_binary_without_reporting_stream_eof() {
             let (read_done_tx, read_done_rx) = oneshot::channel();
             let read_done_tx = Arc::new(Mutex::new(Some(read_done_tx)));
             let server_read_done = Arc::clone(&read_done_tx);
             let chunk_bytes = iroha_p2p::transport::ws::WEBSOCKET_CHUNK_BYTES;
-
             let app = Router::new().route(
                 "/p2p",
                 get(move |ws: WebSocketUpgrade| {
@@ -666,7 +611,6 @@ mod ws_io {
                     }
                 }),
             );
-
             let listener = TcpListener::bind("127.0.0.1:0")
                 .await
                 .expect("bind loopback WebSocket server");
@@ -676,7 +620,6 @@ mod ws_io {
                 let _ = shutdown_rx.await;
             });
             let server_task = tokio::spawn(async move { server.await });
-
             let expected = [0xA5, 0x5A, 0x11, 0x22];
             let client_task = spawn_blocking(move || {
                 let (mut client, _response) =
@@ -699,7 +642,6 @@ mod ws_io {
                 .expect("server reader completion channel must remain open")
                 .expect("empty Binary message must not terminate the byte stream");
             assert_eq!(received, expected);
-
             let _ = shutdown_tx.send(());
             timeout(TEST_TIMEOUT, server_task)
                 .await
@@ -709,6 +651,5 @@ mod ws_io {
         }
     }
 }
-
 #[cfg(feature = "p2p_ws")]
 pub use ws_io::{WsReadHalf, WsWriteHalf, split as ws_split};

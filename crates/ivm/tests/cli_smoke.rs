@@ -1,5 +1,4 @@
 use std::{fs, path::PathBuf, process::Command};
-
 #[test]
 fn koto_build_meta_header_smoke() {
     // Path to the compiled CLI binary provided by Cargo.
@@ -9,7 +8,6 @@ fn koto_build_meta_header_smoke() {
         .join("docs")
         .join("examples")
         .join("10_meta_header.ko");
-
     // Output into a temporary file under target dir to avoid permissions issues.
     let out = PathBuf::from(manifest_dir)
         .join("target")
@@ -24,7 +22,6 @@ fn koto_build_meta_header_smoke() {
         .status()
         .expect("spawn CLI");
     assert!(status.success(), "CLI did not exit successfully");
-
     let bytes = fs::read(&out).expect("read output .to");
     let parsed = ivm::ProgramMetadata::parse(&bytes).expect("parse header");
     let meta = parsed.metadata;
@@ -42,7 +39,6 @@ fn koto_build_meta_header_smoke() {
     assert_eq!(meta.mode & ivm::ivm_mode::ZK, 0);
     assert_eq!(meta.mode & ivm::ivm_mode::VECTOR, 0);
 }
-
 #[test]
 fn compile_tuple_return_minimal() {
     let src = "seiyaku Tuple { view fn pair(int a, int b) -> (int, int) { return (a, b); } }";
@@ -52,7 +48,6 @@ fn compile_tuple_return_minimal() {
     let parsed = ivm::ProgramMetadata::parse(&code).expect("parse compiled tuple contract");
     assert!(parsed.contract_interface.is_some());
 }
-
 #[test]
 fn koto_build_manifest_out_smoke() {
     // Path to CLI binary and sample input
@@ -62,7 +57,6 @@ fn koto_build_manifest_out_smoke() {
         .join("docs")
         .join("examples")
         .join("10_meta_header.ko");
-
     // Output paths
     let out_to = PathBuf::from(manifest_dir)
         .join("target")
@@ -70,7 +64,6 @@ fn koto_build_manifest_out_smoke() {
     let out_manifest = PathBuf::from(manifest_dir)
         .join("target")
         .join("cli_smoke_manifest.json");
-
     let status = std::process::Command::new(bin)
         .arg("build")
         .arg(input.as_os_str())
@@ -81,7 +74,6 @@ fn koto_build_manifest_out_smoke() {
         .status()
         .expect("spawn CLI");
     assert!(status.success(), "CLI did not exit successfully");
-
     // Read and sanity-check manifest JSON
     let s = std::fs::read_to_string(&out_manifest).expect("read manifest json");
     assert!(s.contains("abi_hash"), "manifest JSON missing abi_hash");
@@ -90,7 +82,6 @@ fn koto_build_manifest_out_smoke() {
         "manifest JSON missing compiler_fingerprint",
     );
 }
-
 #[test]
 fn koto_build_manifest_out_stdout_smoke() {
     let bin = env!("CARGO_BIN_EXE_koto");
@@ -99,7 +90,6 @@ fn koto_build_manifest_out_stdout_smoke() {
         .join("docs")
         .join("examples")
         .join("10_meta_header.ko");
-
     let out_to = PathBuf::from(manifest_dir)
         .join("target")
         .join("cli_smoke_manifest_stdout.to");
@@ -107,7 +97,6 @@ fn koto_build_manifest_out_stdout_smoke() {
         .join("target")
         .join("cli_smoke_manifest_stdout.manifest.json");
     let _ = fs::remove_file(&sibling_manifest);
-
     let output = std::process::Command::new(bin)
         .arg("build")
         .arg(input.as_os_str())
@@ -129,7 +118,6 @@ fn koto_build_manifest_out_stdout_smoke() {
         "stdout mode must not publish an unexpected sibling manifest"
     );
 }
-
 #[test]
 fn koto_build_verify_is_read_only_and_fails_on_tampering() {
     let bin = env!("CARGO_BIN_EXE_koto");
@@ -147,7 +135,6 @@ fn koto_build_verify_is_read_only_and_fails_on_tampering() {
     for path in [&artifact, &manifest, &record] {
         let _ = fs::remove_file(path);
     }
-
     let initial = Command::new(bin)
         .arg("build")
         .arg(&input)
@@ -160,7 +147,6 @@ fn koto_build_verify_is_read_only_and_fails_on_tampering() {
         .expect("artifact metadata")
         .modified()
         .ok();
-
     let verified = Command::new(bin)
         .arg("build")
         .arg("--verify")
@@ -178,7 +164,6 @@ fn koto_build_verify_is_read_only_and_fails_on_tampering() {
         before,
         "verification must not rewrite a current output"
     );
-
     fs::write(&artifact, b"tampered").expect("tamper artifact");
     let rejected = Command::new(bin)
         .arg("build")

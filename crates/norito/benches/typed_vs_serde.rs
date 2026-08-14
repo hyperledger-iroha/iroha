@@ -1,8 +1,6 @@
 //! Compare typed encode/decode across Norito's JSON helpers (generic vs fast paths).
-
 #[cfg(all(feature = "json", feature = "bench-internal"))]
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
-
 #[cfg(all(feature = "json", feature = "bench-internal"))]
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
@@ -12,7 +10,6 @@ struct Inner {
     name: String,
     tag: Option<String>,
 }
-
 #[cfg(all(feature = "json", feature = "bench-internal"))]
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
@@ -23,7 +20,6 @@ struct Outer {
     flag: bool,
     inner: Vec<Inner>,
 }
-
 #[cfg(all(feature = "json", feature = "bench-internal"))]
 fn make_outer(n_inner: usize, payload: &str) -> Outer {
     let mut inners = Vec::with_capacity(n_inner);
@@ -41,13 +37,11 @@ fn make_outer(n_inner: usize, payload: &str) -> Outer {
         inner: inners,
     }
 }
-
 #[cfg(all(feature = "json", feature = "bench-internal"))]
 fn bench_typed(c: &mut Criterion) {
     let mut group = c.benchmark_group("typed_vs_generic");
     for &n in &[4usize, 16, 64] {
         let v = make_outer(n, "payload");
-
         group.bench_function(BenchmarkId::new("encode_generic", n), |b| {
             b.iter_batched(
                 || v.clone(),
@@ -55,24 +49,18 @@ fn bench_typed(c: &mut Criterion) {
                 BatchSize::SmallInput,
             )
         });
-
         let s_generic = norito::json::to_json(&v).unwrap();
-
         group.bench_function(BenchmarkId::new("decode_generic", n), |b| {
             b.iter(|| norito::json::from_json::<Outer>(&s_generic).unwrap())
         });
-
         // Fast-path encode/decode benches removed for Clippy build.
     }
     group.finish();
 }
-
 #[cfg(all(feature = "json", feature = "bench-internal"))]
 criterion_group!(benches, bench_typed);
-
 #[cfg(all(feature = "json", feature = "bench-internal"))]
 criterion_main!(benches);
-
 #[cfg(not(all(feature = "json", feature = "bench-internal")))]
 fn main() {
     eprintln!("Enable `json` and `bench-internal` features to run this benchmark.");

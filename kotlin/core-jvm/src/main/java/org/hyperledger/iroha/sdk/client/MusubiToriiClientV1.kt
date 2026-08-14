@@ -32,11 +32,14 @@ import org.hyperledger.iroha.sdk.musubi.MusubiSearchPageV1
 import org.hyperledger.iroha.sdk.musubi.MusubiSearchQueryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiVersionV1
 
-/** Read-only client for the twelve typed first-release Musubi registry queries. */
+/** Exact-network authenticated client for the twelve typed Musubi registry queries. */
 class MusubiToriiClientV1 private constructor(builder: Builder) {
     private val executor: HttpTransportExecutor =
         builder.executor ?: PlatformHttpTransportExecutor.createDefault()
     private val baseUri: URI = builder.baseUri
+    private val localSigningContext: LocalSigningContext = checkNotNull(builder.localSigningContext) {
+        "localSigningContext must be configured before building a Musubi client"
+    }
     private val timeout: Duration? = builder.timeout
     private val defaultHeaders: Map<String, String> =
         Collections.unmodifiableMap(LinkedHashMap(builder.defaultHeaders))
@@ -45,24 +48,27 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
     /** Fetches one exact structural package record. */
     fun findExactPackage(
         request: MusubiExactPackageQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<MusubiPackageRecordV1> =
-        executePost(EXACT_PACKAGE_PATH, request.toJsonBytes()) { payload ->
+        executePost(EXACT_PACKAGE_PATH, request.toJsonBytes(), canonicalAuth) { payload ->
             MusubiJsonV1.parseExactPackage(payload).also { it.requireMatches(request) }
         }
 
     /** Fetches paired home and universal projections for one exact release at finality. */
     fun findExactRelease(
         request: MusubiExactReleaseQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<MusubiExactReleaseSnapshotV1> =
-        executePost(EXACT_RELEASE_PATH, request.toJsonBytes()) { payload ->
+        executePost(EXACT_RELEASE_PATH, request.toJsonBytes(), canonicalAuth) { payload ->
             MusubiJsonV1.parseExactRelease(payload).also { it.requireMatches(request) }
         }
 
     /** Fetches one immutable provider proof by its archive/order/provider identity. */
     fun findProviderBundleAttestation(
         request: MusubiProviderBundleAttestationKeyV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<MusubiProviderBundleAttestationRecordV1> =
-        executePost(PROVIDER_BUNDLE_ATTESTATION_PATH, request.toJsonBytes()) { payload ->
+        executePost(PROVIDER_BUNDLE_ATTESTATION_PATH, request.toJsonBytes(), canonicalAuth) { payload ->
             MusubiJsonV1.parseProviderBundleAttestation(payload).also {
                 it.requireMatches(request)
             }
@@ -71,24 +77,27 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
     /** Reads the finalized universal sparse resolver index. */
     fun findResolverIndex(
         request: MusubiResolverIndexQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<MusubiResolverIndexPageV1> =
-        executePost(RESOLVER_INDEX_PATH, request.toJsonBytes()) { payload ->
+        executePost(RESOLVER_INDEX_PATH, request.toJsonBytes(), canonicalAuth) { payload ->
             MusubiJsonV1.parseResolverPage(payload).also { it.requireMatches(request) }
         }
 
     /** Lists exact structured versions for a package. */
     fun findVersions(
         request: MusubiPackagePageQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<MusubiPageV1<MusubiVersionV1>> =
-        executePost(VERSIONS_PATH, request.toJsonBytes()) { payload ->
+        executePost(VERSIONS_PATH, request.toJsonBytes(), canonicalAuth) { payload ->
             MusubiJsonV1.parseVersionPage(payload).also { it.requireVersionMatches(request) }
         }
 
     /** Lists accepted owners/maintainers and pending invitations for a package. */
     fun findMaintainers(
         request: MusubiPackagePageQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<MusubiPageV1<MusubiMaintainerDirectoryEntryV1>> =
-        executePost(MAINTAINERS_PATH, request.toJsonBytes()) { payload ->
+        executePost(MAINTAINERS_PATH, request.toJsonBytes(), canonicalAuth) { payload ->
             MusubiJsonV1.parseMaintainerPage(payload).also { page ->
                 page.requireMaintainerMatches(request)
             }
@@ -97,10 +106,12 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
     /** Lists renewable SoraFS locations for an archive. */
     fun findArchiveLocations(
         request: MusubiArchiveLocationQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<MusubiArchiveLocationPageV1> =
         executePost(
             ARCHIVE_LOCATIONS_PATH,
             request.toJsonBytes(),
+            canonicalAuth,
         ) { payload ->
             MusubiJsonV1.parseArchiveLocationPage(payload).also { it.requireMatches(request) }
         }
@@ -108,25 +119,31 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
     /** Classifies a bounded exact archive batch for fail-closed cache retention. */
     fun findArchiveRetention(
         request: MusubiArchiveRetentionQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<MusubiArchiveRetentionPageV1> =
         executePost(
             ARCHIVE_RETENTION_PATH,
             request.toJsonBytes(),
+            canonicalAuth,
         ) { payload ->
             MusubiJsonV1.parseArchiveRetentionPage(payload).also { it.requireMatches(request) }
         }
 
     /** Resolves one paid permanent global alias. */
-    fun findAlias(request: MusubiAliasQueryV1): CompletableFuture<MusubiAliasRecordV1> =
-        executePost(ALIAS_PATH, request.toJsonBytes()) { payload ->
+    fun findAlias(
+        request: MusubiAliasQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<MusubiAliasRecordV1> =
+        executePost(ALIAS_PATH, request.toJsonBytes(), canonicalAuth) { payload ->
             MusubiJsonV1.parseAlias(payload).also { it.requireMatches(request) }
         }
 
     /** Lists immutable history for one permanent global alias. */
     fun findAliasHistory(
         request: MusubiAliasQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<MusubiPageV1<MusubiAliasHistoryEntryV1>> =
-        executePost(ALIAS_HISTORY_PATH, request.toJsonBytes()) { payload ->
+        executePost(ALIAS_HISTORY_PATH, request.toJsonBytes(), canonicalAuth) { payload ->
             MusubiJsonV1.parseAliasHistoryPage(payload).also { page ->
                 page.requireAliasHistoryMatches(request)
             }
@@ -135,17 +152,22 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
     /** Scans the deterministic public package directory by byte prefix. */
     fun findOrderedPrefix(
         request: MusubiOrderedPrefixQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<MusubiOrderedPrefixPageV1> =
         executePost(
             ORDERED_PREFIX_PATH,
             request.toJsonBytes(),
+            canonicalAuth,
         ) { payload ->
             MusubiJsonV1.parseOrderedPackagePage(payload).also { it.requireMatches(request) }
         }
 
     /** Searches package metadata by bounded exact normalized terms. */
-    fun search(request: MusubiSearchQueryV1): CompletableFuture<MusubiSearchPageV1> =
-        executePost(SEARCH_PATH, request.toJsonBytes()) { payload ->
+    fun search(
+        request: MusubiSearchQueryV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<MusubiSearchPageV1> =
+        executePost(SEARCH_PATH, request.toJsonBytes(), canonicalAuth) { payload ->
             MusubiJsonV1.parseSearchPage(payload).also { it.requireMatches(request) }
         }
 
@@ -154,12 +176,13 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
     private fun <T> executePost(
         path: String,
         body: ByteArray,
+        canonicalAuth: ToriiCanonicalRequestAuth,
         parser: (ByteArray) -> T,
     ): CompletableFuture<T> {
         require(body.size <= REQUEST_MAX_BYTES) {
             "Musubi request exceeds the $REQUEST_MAX_BYTES-byte route limit"
         }
-        val request = buildRequest(path, body)
+        val request = buildRequest(path, body, canonicalAuth)
         notifyRequest(request)
         return executor.execute(request).handle { response, throwable ->
             if (throwable != null) {
@@ -211,13 +234,19 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
         }
     }
 
-    private fun buildRequest(path: String, body: ByteArray): TransportRequest {
+    private fun buildRequest(
+        path: String,
+        body: ByteArray,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): TransportRequest {
         val normalized = path.removePrefix("/")
         val base = baseUri.toString()
         val target = URI.create(if (base.endsWith('/')) base + normalized else "$base/$normalized")
         val headers = LinkedHashMap(defaultHeaders)
         ensureHeader(headers, "Accept", "application/json")
         ensureHeader(headers, "Content-Type", "application/json")
+        requireCanonicalHeadersUnset(headers)
+        headers.putAll(buildCanonicalHeaders(target, body, canonicalAuth))
         TransportSecurity.requireHttpRequestAllowed(
             "MusubiToriiClientV1",
             baseUri,
@@ -235,6 +264,45 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
         return builder.build()
     }
 
+    private fun buildCanonicalHeaders(
+        target: URI,
+        body: ByteArray,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): Map<String, String> {
+        val timestampMs = canonicalAuth.timestampMs
+        val nonce = canonicalAuth.nonce
+        require((timestampMs == null) == (nonce == null)) {
+            "timestampMs and nonce must be provided together"
+        }
+        return if (timestampMs == null) {
+            CanonicalRequestSigner.buildHeaders(
+                localSigningContext.networkId(),
+                "POST",
+                target,
+                body,
+                canonicalAuth.accountId,
+                canonicalAuth.privateKey,
+            )
+        } else {
+            CanonicalRequestSigner.buildHeaders(
+                localSigningContext.networkId(),
+                "POST",
+                target,
+                body,
+                canonicalAuth.accountId,
+                canonicalAuth.privateKey,
+                timestampMs,
+                nonce!!,
+            )
+        }
+    }
+
+    private fun requireCanonicalHeadersUnset(headers: Map<String, String>) {
+        require(headers.keys.none { candidate ->
+            CANONICAL_AUTH_HEADERS.any { it.equals(candidate, ignoreCase = true) }
+        }) { "canonical request headers must be supplied only through canonicalAuth" }
+    }
+
     private fun notifyRequest(request: TransportRequest) = observers.forEach { it.onRequest(request) }
 
     private fun notifyResponse(request: TransportRequest, response: ClientResponse) =
@@ -246,12 +314,16 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
     class Builder internal constructor() {
         internal var executor: HttpTransportExecutor? = null
         internal var baseUri: URI = URI.create("http://localhost:8080")
+        internal var localSigningContext: LocalSigningContext? = null
         internal var timeout: Duration? = Duration.ofSeconds(15)
         internal val defaultHeaders = LinkedHashMap<String, String>()
         internal val observers = ArrayList<ClientObserver>()
 
         fun executor(executor: HttpTransportExecutor): Builder = apply { this.executor = executor }
         fun baseUri(baseUri: URI): Builder = apply { this.baseUri = baseUri }
+        fun localSigningContext(localSigningContext: LocalSigningContext): Builder = apply {
+            this.localSigningContext = localSigningContext
+        }
         fun timeout(timeout: Duration?): Builder = apply { this.timeout = timeout }
         fun addHeader(name: String, value: String): Builder = apply { defaultHeaders[name] = value }
         fun defaultHeaders(headers: Map<String, String>?): Builder = apply {
@@ -282,6 +354,13 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
         private const val REQUEST_MAX_BYTES = 64 * 1024
         // Exact-release JSON repeats the bounded dependency vector in both registry projections.
         private const val RESPONSE_MAX_BYTES = 32 * 1024 * 1024
+        private val CANONICAL_AUTH_HEADERS = setOf(
+            CanonicalRequestSigner.HEADER_ACCOUNT,
+            CanonicalRequestSigner.HEADER_SIGNATURE,
+            CanonicalRequestSigner.HEADER_TIMESTAMP_MS,
+            CanonicalRequestSigner.HEADER_NONCE,
+            "X-Iroha-Witness",
+        )
 
         @JvmStatic fun builder(): Builder = Builder()
 

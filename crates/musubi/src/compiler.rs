@@ -4,14 +4,12 @@
 //! re-authenticated the complete bundle against an exact lock node. Local path
 //! packages remain explicit `local:` identities, while every registry import
 //! uses the exact structural release identity selected by the consumer lock.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt,
     path::PathBuf,
 };
-
 use iroha_data_model::musubi::{
     MusubiContentDigestV1, MusubiDependencyKindV1, MusubiPackageSelectorV1,
     MusubiVerificationLockV1, MusubiVerificationNodeV1,
@@ -34,7 +32,6 @@ use ivm::{
     },
     syscalls::compute_abi_hash,
 };
-
 use crate::{
     cache::{CachedCompilerPackageV1, MusubiCache},
     graph::{GraphErrorV1, collect_local_members},
@@ -43,7 +40,6 @@ use crate::{
     package::PackagePlan,
     workspace::{EffectiveDependency, Workspace, WorkspaceMember},
 };
-
 /// Compiler operation requested by the Cargo-style command surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompilerActionV1 {
@@ -52,7 +48,6 @@ pub enum CompilerActionV1 {
     /// Compile and atomically publish every selected local contract target.
     Build,
 }
-
 /// One generated contract artifact.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompilerArtifactV1 {
@@ -69,7 +64,6 @@ pub struct CompilerArtifactV1 {
     /// Whether compilation ran or authenticated outputs were already fresh.
     pub fresh: bool,
 }
-
 /// Canonical typed interface proven for one reusable local package.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompilerPackageInterfaceV1 {
@@ -78,7 +72,6 @@ pub struct CompilerPackageInterfaceV1 {
     /// Domain-separated digest of the exact exported function signatures.
     pub digest: MusubiContentDigestV1,
 }
-
 /// Successful compiler graph execution summary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompilerExecutionV1 {
@@ -93,7 +86,6 @@ pub struct CompilerExecutionV1 {
     /// Typed reusable-package interfaces in canonical package order.
     pub package_interfaces: Vec<CompilerPackageInterfaceV1>,
 }
-
 /// Stable compiler-bridge failure.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CompilerBridgeErrorV1 {
@@ -108,7 +100,6 @@ pub enum CompilerBridgeErrorV1 {
     /// The canonical Kotodama compiler rejected the graph.
     Compiler(String),
 }
-
 impl fmt::Display for CompilerBridgeErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -120,16 +111,13 @@ impl fmt::Display for CompilerBridgeErrorV1 {
         }
     }
 }
-
 impl Error for CompilerBridgeErrorV1 {}
-
 trait RegistryCompilerSourceV1 {
     fn load(
         &self,
         node: &MusubiVerificationNodeV1,
     ) -> Result<CachedCompilerPackageV1, CompilerBridgeErrorV1>;
 }
-
 impl RegistryCompilerSourceV1 for MusubiCache {
     fn load(
         &self,
@@ -139,7 +127,6 @@ impl RegistryCompilerSourceV1 for MusubiCache {
             .map_err(|error| CompilerBridgeErrorV1::Cache(error.to_string()))
     }
 }
-
 /// Execute one authenticated compiler operation for selected workspace packages.
 pub fn execute_compiler_graph(
     cache: &MusubiCache,
@@ -160,7 +147,6 @@ pub fn execute_compiler_graph(
         chain_discriminant,
     )
 }
-
 /// Rebuild and validate the exact clean source tree that will enter a release bundle.
 ///
 /// Unlike ordinary workspace checking, every root import is taken from the normalized
@@ -173,7 +159,6 @@ pub fn validate_packaged_plan(
 ) -> Result<MusubiContentDigestV1, CompilerBridgeErrorV1> {
     validate_packaged_with_source(cache, plan, verification_lock, chain_discriminant)
 }
-
 #[allow(
     clippy::too_many_lines,
     reason = "clean-package validation is one fail-closed compiler boundary"
@@ -240,7 +225,6 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
             "clean publication package has no declared Kotodama library sources".to_owned(),
         ));
     }
-
     let expected_abi = compute_abi_hash(SyscallPolicy::AbiV1);
     let mut dependencies = Vec::with_capacity(verification_lock.nodes.len());
     for node in &verification_lock.nodes {
@@ -314,7 +298,6 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
     )?;
     Ok(interface_digest)
 }
-
 /// Recompute every authenticated registry package interface against one exact source graph.
 ///
 /// The caller supplies source units copied out of authenticated immutable cache entries. This
@@ -345,7 +328,6 @@ pub fn validate_exact_registry_interfaces_v1<'node>(
     if packages_by_identity.len() != packages.len() {
         return Err("the exact registry graph contains duplicate source identities".to_owned());
     }
-
     let graph = ModuleBuildGraph::default();
     let session = CompilerSession::new(options);
     for node in nodes {
@@ -386,13 +368,11 @@ pub fn validate_exact_registry_interfaces_v1<'node>(
     }
     Ok(())
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PackagedTargetKindV1 {
     Contract,
     Test,
 }
-
 impl PackagedTargetKindV1 {
     const fn label(self) -> &'static str {
         match self {
@@ -401,7 +381,6 @@ impl PackagedTargetKindV1 {
         }
     }
 }
-
 fn validate_packaged_contract_targets(
     driver: &BuildDriver,
     plan: &PackagePlan,
@@ -430,7 +409,6 @@ fn validate_packaged_contract_targets(
     }
     Ok(())
 }
-
 fn validate_packaged_test_targets(
     plan: &PackagePlan,
     targets: &[LocalTarget],
@@ -473,7 +451,6 @@ fn validate_packaged_test_targets(
     }
     Ok(())
 }
-
 fn packaged_target_source_units(
     plan: &PackagePlan,
     target: &PortablePath,
@@ -491,7 +468,6 @@ fn packaged_target_source_units(
         return packaged_source_unit(file.path(), file.path(), file.bytes(), kind)
             .map(|unit| vec![unit]);
     }
-
     let prefix = (target_path != ".").then(|| format!("{target_path}/"));
     let mut source_bytes = 0usize;
     let mut units = Vec::new();
@@ -540,7 +516,6 @@ fn packaged_target_source_units(
     }
     Ok(units)
 }
-
 fn packaged_source_unit(
     packaged_path: &str,
     source_name: &str,
@@ -558,7 +533,6 @@ fn packaged_source_unit(
         source: source.to_owned(),
     })
 }
-
 #[allow(
     clippy::too_many_lines,
     reason = "compiler graph authentication and execution form one deterministic workflow"
@@ -591,7 +565,6 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
             "two local packages share one manifest path".to_owned(),
         ));
     }
-
     let mut local_units = BTreeMap::new();
     let mut package_interfaces = Vec::with_capacity(local_members.len());
     for member in &local_members {
@@ -603,7 +576,6 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
             )));
         }
     }
-
     let expected_abi = compute_abi_hash(SyscallPolicy::AbiV1);
     let mut registry_units = BTreeMap::new();
     for node in &lock.nodes {
@@ -622,7 +594,6 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
             )));
         }
     }
-
     let all_packages = local_units
         .values()
         .chain(registry_units.values())
@@ -635,7 +606,6 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
     };
     let driver = BuildDriver::for_current_executable(CompilerSession::new(options))
         .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
-
     for member in &local_members {
         let identity = local_identity(member);
         let package = local_units.get(&identity).cloned().ok_or_else(|| {
@@ -658,7 +628,6 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
         });
     }
     package_interfaces.sort_by(|left, right| left.package.cmp(&right.package));
-
     let profile = if release { "release" } else { "debug" };
     let mut result = CompilerExecutionV1 {
         validated_packages: local_members.len(),
@@ -727,7 +696,6 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
     });
     Ok(result)
 }
-
 fn package_target_root(workspace: &Workspace, member: &WorkspaceMember) -> PathBuf {
     workspace
         .root()
@@ -735,22 +703,18 @@ fn package_target_root(workspace: &Workspace, member: &WorkspaceMember) -> PathB
         .join(member.package.selector.namespace.as_str())
         .join(member.package.selector.name.as_str())
 }
-
 fn graph_error(error: &GraphErrorV1) -> CompilerBridgeErrorV1 {
     CompilerBridgeErrorV1::Workspace(error.to_string())
 }
-
 fn local_identity(member: &WorkspaceMember) -> String {
     format!(
         "local:{}@{}",
         member.package.selector, member.package.version
     )
 }
-
 fn exact_registry_identity(node: &MusubiVerificationNodeV1) -> String {
     node.release.to_string()
 }
-
 fn local_source_package(
     member: &WorkspaceMember,
     lock: &LockfileV1,
@@ -778,7 +742,6 @@ fn local_source_package(
         imports: local_imports(member, lock, local_identities)?,
     })
 }
-
 fn local_imports(
     member: &WorkspaceMember,
     lock: &LockfileV1,
@@ -818,7 +781,6 @@ fn local_imports(
     });
     Ok(imports)
 }
-
 fn exact_edge_identity(
     root: &crate::lockfile::LockedRootV1,
     dependency: &EffectiveDependency,
@@ -854,7 +816,6 @@ fn exact_edge_identity(
     }
     Ok(edge.selected.to_string())
 }
-
 fn cached_source_package(
     node: &MusubiVerificationNodeV1,
     cached: CachedCompilerPackageV1,
@@ -934,7 +895,6 @@ fn cached_source_package(
         imports,
     })
 }
-
 fn validate_manifest_dependency_edges(
     release: &iroha_data_model::musubi::MusubiReleaseIdV1,
     edges: &[iroha_data_model::musubi::MusubiExactDependencyEdgeV1],
@@ -974,7 +934,6 @@ fn validate_manifest_dependency_edges(
     }
     Ok(())
 }
-
 fn relative_library_source(path: &str, source_dir: &PortablePath) -> Option<String> {
     if source_dir.as_str() == "." {
         return has_kotodama_extension(path).then(|| path.to_owned());
@@ -984,11 +943,9 @@ fn relative_library_source(path: &str, source_dir: &PortablePath) -> Option<Stri
         .filter(|relative| has_kotodama_extension(relative) && !relative.is_empty())
         .map(ToOwned::to_owned)
 }
-
 fn has_kotodama_extension(path: &str) -> bool {
     path.strip_suffix(".ko").is_some()
 }
-
 fn target_source_units(
     member: &WorkspaceMember,
     target: &PortablePath,
@@ -1027,11 +984,9 @@ fn target_source_units(
         path.display()
     )))
 }
-
 #[cfg(all(test, unix))]
 mod tests {
     use std::fs;
-
     use iroha_data_model::{
         musubi::{
             ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiExactDependencyEdgeV1,
@@ -1043,7 +998,6 @@ mod tests {
         nexus::DataSpaceId,
     };
     use tempfile::TempDir;
-
     use super::*;
     use crate::{
         cache::CachedKotodamaSourceV1,
@@ -1051,9 +1005,7 @@ mod tests {
         package::{PackageLayout, plan_package},
         workspace::load_workspace,
     };
-
     struct EmptyRegistry;
-
     impl RegistryCompilerSourceV1 for EmptyRegistry {
         fn load(
             &self,
@@ -1065,11 +1017,9 @@ mod tests {
             )))
         }
     }
-
     struct FixedRegistry {
         package: CachedCompilerPackageV1,
     }
-
     impl RegistryCompilerSourceV1 for FixedRegistry {
         fn load(
             &self,
@@ -1084,7 +1034,6 @@ mod tests {
             Ok(self.package.clone())
         }
     }
-
     fn clean_verification_lock() -> MusubiVerificationLockV1 {
         let package = MusubiPackageIdV1::new(
             DataSpaceId::new(9),
@@ -1099,12 +1048,10 @@ mod tests {
             nodes: Vec::new(),
         }
     }
-
     fn write_clean_library(root: &std::path::Path) {
         fs::create_dir_all(root.join("src")).expect("source directory");
         fs::write(root.join("src/lib.ko"), "module Demo {}").expect("library source");
     }
-
     #[test]
     fn validates_dependency_free_local_library_without_registry_sources() {
         let temp = TempDir::new().expect("temporary directory");
@@ -1164,7 +1111,6 @@ exports = ["value"]
         assert_eq!(execution.package_interfaces[0].package, selector);
         assert!(!execution.package_interfaces[0].digest.is_zero());
     }
-
     #[test]
     fn library_path_filter_is_component_bounded() {
         let source_dir = PortablePath::new("src").expect("source dir");
@@ -1175,7 +1121,6 @@ exports = ["value"]
         assert_eq!(relative_library_source("src2/add.ko", &source_dir), None);
         assert_eq!(relative_library_source("src/readme.txt", &source_dir), None);
     }
-
     #[test]
     fn kotodama_extension_is_an_exact_case_sensitive_portable_suffix() {
         assert!(has_kotodama_extension(".ko"));
@@ -1185,7 +1130,6 @@ exports = ["value"]
         assert!(!has_kotodama_extension("src/main.ko.bak"));
         assert!(!has_kotodama_extension("src/mainko"));
     }
-
     #[test]
     #[allow(
         clippy::too_many_lines,
@@ -1290,14 +1234,12 @@ dep = { package = "deps.sora/dep", version = "^1.0.0" }
         let mut layout = PackageLayout::new(temp.path());
         layout.set_library("src");
         let plan = plan_package(&layout, manifest, &verification_lock).expect("package plan");
-
         assert!(matches!(
             validate_packaged_with_source(&registry, &plan, &verification_lock, 1),
             Err(CompilerBridgeErrorV1::Cache(reason))
                 if reason.contains("typed interface disagrees with its exact lock digest")
         ));
     }
-
     #[test]
     fn packaged_directory_targets_expand_deterministically_from_plan_paths() {
         let temp = TempDir::new().expect("temporary directory");
@@ -1337,7 +1279,6 @@ path = "tests"
         layout.add_contract("contracts");
         layout.add_test("tests");
         let plan = plan_package(&layout, manifest, &lock).expect("package plan");
-
         let contracts = packaged_target_source_units(
             &plan,
             &PortablePath::new("contracts").expect("contract target"),
@@ -1365,7 +1306,6 @@ path = "tests"
             ["tests/a.ko", "tests/nested/z.ko"]
         );
     }
-
     #[test]
     fn invalid_packaged_contract_is_not_reopened_from_a_repaired_workspace() {
         let temp = TempDir::new().expect("temporary directory");
@@ -1394,14 +1334,12 @@ path = "contracts/deploy.ko"
         let plan = plan_package(&layout, manifest, &lock).expect("snapshot invalid contract");
         fs::write(&contract, "seiyaku Repaired { hajimari() {} }")
             .expect("repair ambient contract");
-
         assert!(matches!(
             validate_packaged_with_source(&EmptyRegistry, &plan, &lock, 1),
             Err(CompilerBridgeErrorV1::Compiler(reason))
                 if reason.contains("packaged contract target `deploy`")
         ));
     }
-
     #[test]
     fn invalid_packaged_test_bytes_are_not_reopened_from_a_repaired_workspace() {
         let temp = TempDir::new().expect("temporary directory");
@@ -1433,14 +1371,12 @@ path = "tests/unit.ko"
             "seiyaku Repaired { #[test] fn repaired() { test::assert(true); } }",
         )
         .expect("repair ambient test");
-
         assert!(matches!(
             validate_packaged_with_source(&EmptyRegistry, &plan, &lock, 1),
             Err(CompilerBridgeErrorV1::Package(reason))
                 if reason.contains("packaged test source `tests/unit.ko` is not UTF-8")
         ));
     }
-
     #[test]
     fn clean_targets_ignore_ambient_mutation_and_do_not_change_library_interface() {
         let temp = TempDir::new().expect("temporary directory");
@@ -1504,7 +1440,6 @@ exports = []
         .expect("mutate ambient contract");
         fs::write(temp.path().join("tests/unit.ko"), "invalid ambient test")
             .expect("mutate ambient test");
-
         let with_targets = validate_packaged_with_source(&EmptyRegistry, &plan, &lock, 1)
             .expect("validate immutable target snapshot");
         let mut library_layout = PackageLayout::new(temp.path());
@@ -1515,7 +1450,6 @@ exports = []
             .expect("validate library-only package");
         assert_eq!(with_targets, library_only);
     }
-
     #[test]
     fn packaged_test_missing_a_normal_dependency_has_a_dev_boundary_diagnostic() {
         let temp = TempDir::new().expect("temporary directory");
@@ -1545,14 +1479,12 @@ path = "tests/unit.ko"
         layout.set_library("src");
         layout.add_test("tests/unit.ko");
         let plan = plan_package(&layout, manifest, &lock).expect("package plan");
-
         assert!(matches!(
             validate_packaged_with_source(&EmptyRegistry, &plan, &lock, 1),
             Err(CompilerBridgeErrorV1::Compiler(reason))
                 if reason.contains("development dependencies do not propagate")
         ));
     }
-
     #[test]
     fn build_outputs_are_partitioned_by_public_package_identity() {
         let temp = TempDir::new().expect("temporary directory");
@@ -1580,7 +1512,6 @@ exports = []
             workspace.root().join("target/kotodama/apps.sora/demo")
         );
     }
-
     #[test]
     fn clean_packaged_tree_produces_a_typed_interface_digest() {
         let temp = TempDir::new().expect("temporary directory");

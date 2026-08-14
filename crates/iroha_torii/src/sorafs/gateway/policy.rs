@@ -1,11 +1,9 @@
 //! Gateway policy orchestration for GAR enforcement and rate limiting.
-
 use std::{
     net::SocketAddr,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use hex::ToHex;
 use iroha_data_model::{
@@ -13,37 +11,29 @@ use iroha_data_model::{
     sorafs::{capacity::ProviderId, pin_registry::ManifestDigest},
 };
 use iroha_logger::debug;
-
-use super::rate_limit::{
-    ClientFingerprint, GatewayRateLimitConfig, GatewayRateLimiter, RateLimitError,
-};
+use super::rate_limit::{ClientFingerprint, GatewayRateLimitConfig, GatewayRateLimiter, RateLimitError};
 use crate::sorafs::AdmissionRegistry;
-
 /// Canonical, bounded HTTP authority host admitted to GAR event metadata.
 ///
 /// The inner string is private so [`RequestContext`] cannot retain raw request
 /// header bytes by construction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CanonicalHost(String);
-
 impl CanonicalHost {
     /// Parse and canonicalize an HTTP authority or `Host` header value.
     pub(crate) fn parse_authority(raw: &str) -> Option<Self> {
         crate::sorafs::site::normalize_host_header(raw).map(Self)
     }
-
     fn as_str(&self) -> &str {
         &self.0
     }
 }
-
 /// Validated two-letter region code supplied by a trusted gateway boundary.
 ///
 /// Construction is crate-private; the HTTP adapter additionally proves that
 /// the immediate peer is a configured trusted proxy before creating one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RegionCode(String);
-
 impl RegionCode {
     /// Validate and canonicalize one trusted-proxy region header value.
     pub(crate) fn parse(raw: &str) -> Option<Self> {
@@ -51,12 +41,10 @@ impl RegionCode {
         (trimmed.len() == 2 && trimmed.bytes().all(|byte| byte.is_ascii_alphabetic()))
             .then(|| Self(trimmed.to_ascii_uppercase()))
     }
-
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 }
-
 /// Policy configuration controlling the enforcement surface.
 #[derive(Clone, Copy, Debug)]
 pub struct GatewayPolicyConfig {
@@ -67,7 +55,6 @@ pub struct GatewayPolicyConfig {
     /// Rate limiting configuration applied to gateway clients.
     pub rate_limit: GatewayRateLimitConfig,
 }
-
 impl Default for GatewayPolicyConfig {
     fn default() -> Self {
         Self {
@@ -77,7 +64,6 @@ impl Default for GatewayPolicyConfig {
         }
     }
 }
-
 /// Result returned after evaluating policy rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyDecision {
@@ -86,7 +72,6 @@ pub enum PolicyDecision {
     /// Request is denied because a rule triggered.
     Deny(PolicyViolation),
 }
-
 /// Detailed classification for policy denials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyViolation {
@@ -104,7 +89,6 @@ pub enum PolicyViolation {
     /// Rate limiting rejected the client.
     RateLimited(RateLimitError),
 }
-
 /// Context supplied to the policy evaluator for each request.
 #[derive(Debug)]
 pub struct RequestContext<'a> {
@@ -120,7 +104,6 @@ pub struct RequestContext<'a> {
     region: Option<RegionCode>,
     cache_ttl_secs: Option<u64>,
 }
-
 impl<'a> RequestContext<'a> {
     /// Construct a new context with mandatory metadata.
     #[must_use]
@@ -143,130 +126,110 @@ impl<'a> RequestContext<'a> {
             cache_ttl_secs: None,
         }
     }
-
     /// Attach the provider identifier used for GAR enforcement.
     #[must_use]
     pub fn with_provider_id(mut self, provider_id: &'a [u8; 32]) -> Self {
         self.provider_id = Some(provider_id);
         self
     }
-
     /// Attach the manifest digest to the GAR event context.
     #[must_use]
     pub fn with_manifest_digest(mut self, digest: &'a [u8; 32]) -> Self {
         self.manifest_digest = Some(digest);
         self
     }
-
     /// Attach the content identifier (CID) to the GAR event context.
     #[must_use]
     pub fn with_content_cid(mut self, cid: &'a [u8]) -> Self {
         self.content_cid = Some(cid);
         self
     }
-
     /// Marks that the manifest envelope was supplied for this request.
     #[must_use]
     pub fn with_manifest_envelope(mut self, present: bool) -> Self {
         self.manifest_envelope_present = present;
         self
     }
-
     /// Provider identifier associated with the request, if known.
     #[must_use]
     pub fn provider_id(&self) -> Option<&'a [u8; 32]> {
         self.provider_id
     }
-
     /// Manifest digest associated with the request (BLAKE3-256), if supplied.
     #[must_use]
     pub fn manifest_digest(&self) -> Option<&'a [u8; 32]> {
         self.manifest_digest
     }
-
     /// Content identifier (CID) referenced by the request, if any.
     #[must_use]
     pub fn content_cid(&self) -> Option<&'a [u8]> {
         self.content_cid
     }
-
     /// Whether a manifest envelope was supplied alongside the request.
     #[must_use]
     pub fn manifest_envelope_present(&self) -> bool {
         self.manifest_envelope_present
     }
-
     /// Fingerprint representing the client issuing the request.
     #[must_use]
     pub fn client(&self) -> &'a ClientFingerprint {
         self.client
     }
-
     /// Attach the remote socket address associated with the request.
     #[must_use]
     pub fn with_remote_addr(mut self, remote: SocketAddr) -> Self {
         self.remote_addr = Some(remote);
         self
     }
-
     /// Attach the validated canonical host associated with the request.
     #[must_use]
     pub(crate) fn with_canonical_host(mut self, host: CanonicalHost) -> Self {
         self.canonical_host = Some(host);
         self
     }
-
     /// Attach the validated region associated with the request.
     #[must_use]
     pub(crate) fn with_region(mut self, region: RegionCode) -> Self {
         self.region = Some(region);
         self
     }
-
     /// Attach the cache TTL observed on the request (seconds).
     #[must_use]
     pub fn with_cache_ttl_secs(mut self, ttl: u64) -> Self {
         self.cache_ttl_secs = Some(ttl);
         self
     }
-
     /// Remote socket address for the request, when available.
     #[must_use]
     pub fn remote_addr(&self) -> Option<SocketAddr> {
         self.remote_addr
     }
-
     /// Current wall-clock time associated with the request.
     #[must_use]
     pub fn wall_time(&self) -> SystemTime {
         self.wall_time
     }
-
     /// Monotonic instant used for rate-limiter accounting.
     #[must_use]
     pub fn monotonic_now(&self) -> Instant {
         self.monotonic_now
     }
-
     /// Canonical host for the request, if supplied.
     #[must_use]
     pub fn canonical_host(&self) -> Option<&str> {
         self.canonical_host.as_ref().map(CanonicalHost::as_str)
     }
-
     /// Optional region label associated with the request.
     #[must_use]
     pub fn region(&self) -> Option<&str> {
         self.region.as_ref().map(RegionCode::as_str)
     }
-
     /// Optional cache TTL observed for the request (seconds).
     #[must_use]
     pub fn cache_ttl_secs(&self) -> Option<u64> {
         self.cache_ttl_secs
     }
 }
-
 impl PolicyViolation {
     /// Convert the violation into telemetry-friendly reason/detail labels.
     #[must_use]
@@ -283,7 +246,6 @@ impl PolicyViolation {
         }
     }
 }
-
 /// Policy orchestrator performing GAR and rate limiting checks.
 #[derive(Debug)]
 pub struct GatewayPolicy {
@@ -291,7 +253,6 @@ pub struct GatewayPolicy {
     admission: Option<Arc<AdmissionRegistry>>,
     rate_limiter: GatewayRateLimiter,
 }
-
 impl GatewayPolicy {
     /// Construct a policy instance.
     #[must_use]
@@ -306,7 +267,6 @@ impl GatewayPolicy {
             rate_limiter,
         }
     }
-
     /// Construct a policy using default configuration.
     #[must_use]
     pub fn new_default(admission: Option<Arc<AdmissionRegistry>>) -> Self {
@@ -314,14 +274,12 @@ impl GatewayPolicy {
         let rate_limiter = GatewayRateLimiter::new(config.rate_limit);
         Self::new(config, admission, rate_limiter)
     }
-
     /// Evaluate the supplied request context and return the policy decision.
     #[must_use]
     pub fn evaluate(&self, ctx: &RequestContext<'_>) -> PolicyDecision {
         if self.config.require_manifest_envelope && !ctx.manifest_envelope_present() {
             return PolicyDecision::Deny(PolicyViolation::ManifestEnvelopeMissing);
         }
-
         if self.config.enforce_admission {
             match (self.admission.as_ref(), ctx.provider_id()) {
                 (Some(registry), Some(provider_id)) => {
@@ -343,21 +301,17 @@ impl GatewayPolicy {
                 }
             }
         }
-
         if let Err(err) = self.rate_limiter.check(ctx.client(), ctx.monotonic_now()) {
             return PolicyDecision::Deny(PolicyViolation::RateLimited(err));
         }
-
         PolicyDecision::Allow
     }
-
     /// Returns a reference to the rate limiter (primarily for tests).
     #[must_use]
     pub fn rate_limiter(&self) -> &GatewayRateLimiter {
         &self.rate_limiter
     }
 }
-
 /// Build a [`SorafsGarViolation`] payload describing the provided policy failure.
 pub fn build_gar_violation_event(
     ctx: &RequestContext<'_>,
@@ -374,7 +328,6 @@ pub fn build_gar_violation_event(
     let mut policy_labels: Vec<String> = Vec::new();
     let observed_ttl_seconds = ctx.cache_ttl_secs();
     let rate_ceiling_rps: Option<u64> = None;
-
     let (policy, detail) = match violation {
         PolicyViolation::ManifestEnvelopeMissing => (
             SorafsGarPolicy::ManifestEnvelope,
@@ -409,11 +362,9 @@ pub fn build_gar_violation_event(
             (SorafsGarPolicy::RateLimit, detail)
         }
     };
-
     let (reason_label, detail_label) = violation.telemetry_labels();
     policy_labels.insert(0, detail_label.to_string());
     policy_labels.insert(0, reason_label.to_string());
-
     let client_fingerprint_hex = ctx.client().as_bytes().encode_hex::<String>();
     let remote_addr = ctx.remote_addr().map(|addr| addr.to_string());
     let occurred_at_unix = ctx
@@ -421,7 +372,6 @@ pub fn build_gar_violation_event(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0))
         .as_secs();
-
     SorafsGarViolation {
         policy,
         detail,
@@ -439,17 +389,13 @@ pub fn build_gar_violation_event(
         occurred_at_unix,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, SystemTime};
-
     use super::*;
-
     fn sample_provider_id() -> [u8; 32] {
         [0x42; 32]
     }
-
     #[test]
     fn policy_denies_missing_manifest_envelope() {
         let admission = Some(Arc::new(AdmissionRegistry::empty()));
@@ -465,7 +411,6 @@ mod tests {
             PolicyDecision::Deny(PolicyViolation::ManifestEnvelopeMissing)
         ));
     }
-
     #[test]
     fn policy_denies_unknown_provider() {
         let admission = Some(Arc::new(AdmissionRegistry::empty()));
@@ -481,7 +426,6 @@ mod tests {
             PolicyDecision::Deny(PolicyViolation::ProviderNotAdmitted { .. })
         ));
     }
-
     #[test]
     fn policy_denies_when_admission_registry_is_unavailable() {
         let policy = GatewayPolicy::new_default(None);
@@ -490,28 +434,23 @@ mod tests {
         let ctx = RequestContext::new(&client, SystemTime::now(), Instant::now())
             .with_provider_id(&provider)
             .with_manifest_envelope(true);
-
         let decision = policy.evaluate(&ctx);
-
         assert!(matches!(
             decision,
             PolicyDecision::Deny(PolicyViolation::AdmissionUnavailable)
         ));
     }
-
     #[test]
     fn policy_does_not_fail_open_without_registry_or_provider_id() {
         let policy = GatewayPolicy::new_default(None);
         let client = ClientFingerprint::from_identifier("client");
         let ctx = RequestContext::new(&client, SystemTime::now(), Instant::now())
             .with_manifest_envelope(true);
-
         assert!(matches!(
             policy.evaluate(&ctx),
             PolicyDecision::Deny(PolicyViolation::AdmissionUnavailable)
         ));
     }
-
     #[test]
     fn policy_denies_rate_limited_client() {
         let admission = None;
@@ -547,7 +486,6 @@ mod tests {
             PolicyDecision::Deny(PolicyViolation::RateLimited(_))
         ));
     }
-
     #[test]
     fn gar_violation_event_for_provider_not_admitted() {
         let client = ClientFingerprint::from_identifier("client");
@@ -565,7 +503,6 @@ mod tests {
         assert_eq!(event.provider_id.unwrap().as_bytes(), &provider);
         assert_eq!(event.remote_addr.as_deref(), Some("127.0.0.1:8080"));
     }
-
     #[test]
     fn gar_violation_event_for_rate_limit_violation() {
         let client = ClientFingerprint::from_identifier("client");
@@ -583,7 +520,6 @@ mod tests {
             vec!["rate_limit".to_string(), "limited".to_string()]
         );
     }
-
     #[test]
     fn gar_violation_event_for_missing_envelope_maps_labels() {
         let client = ClientFingerprint::from_identifier("client");
@@ -597,11 +533,9 @@ mod tests {
             vec!["manifest_envelope".to_string(), "missing".to_string()]
         );
     }
-
     fn base_context(client: &ClientFingerprint) -> RequestContext<'_> {
         RequestContext::new(client, SystemTime::now(), Instant::now()).with_manifest_envelope(true)
     }
-
     #[test]
     fn request_context_host_and_region_are_canonical_by_construction() {
         let client = ClientFingerprint::from_identifier("client");
@@ -610,7 +544,6 @@ mod tests {
         let ctx = base_context(&client)
             .with_canonical_host(host)
             .with_region(region);
-
         assert_eq!(ctx.canonical_host(), Some("cdn.example"));
         assert_eq!(ctx.region(), Some("US"));
         assert!(CanonicalHost::parse_authority("").is_none());

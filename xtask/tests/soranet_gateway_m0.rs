@@ -1,14 +1,11 @@
 use std::fs;
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
 use tempfile::tempdir;
-
 #[test]
 fn soranet_gateway_m0_pack_is_deterministic() {
     let temp = tempdir().expect("tempdir");
     let out_dir = temp.path().join("gateway");
-
     let mut cmd = cargo_bin_cmd!("xtask");
     let output = cmd
         .args([
@@ -26,7 +23,6 @@ fn soranet_gateway_m0_pack_is_deterministic() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
     let edge_config =
         fs::read_to_string(out_dir.join("gateway_edge_h3.yaml")).expect("edge config exists");
     let expected_edge = "# Gateway edge baseline for soranet-edge-m0\n\
@@ -64,7 +60,6 @@ gateway:\n\
         edge_config, expected_edge,
         "edge config drifted from baseline"
     );
-
     let verifier = fs::read_to_string(out_dir.join("gateway_trustless_verifier.toml"))
         .expect("trustless verifier exists");
     let expected_verifier = "# Trustless verifier skeleton for SN15-M0 (streaming Merkle/KZG checks)\n\
@@ -95,7 +90,6 @@ emit_metrics = true\n";
         verifier, expected_verifier,
         "trustless verifier skeleton drifted"
     );
-
     let waf_policy =
         fs::read_to_string(out_dir.join("gateway_waf_policy.yaml")).expect("waf policy exists");
     let expected_waf = "# WAF + rate policy pack for SN15-M0\n\
@@ -141,7 +135,6 @@ rules:\n\
         expect_status: 200\n\
     notes: \"False-positive harness kept in the pack so rollbacks are validated automatically\"\n";
     assert_eq!(waf_policy, expected_waf, "waf policy drifted");
-
     let summary_bytes = fs::read(out_dir.join("gateway_m0_summary.json")).expect("summary exists");
     let summary: Value = json::from_slice(&summary_bytes).expect("summary parses");
     assert_eq!(

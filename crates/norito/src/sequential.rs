@@ -4,23 +4,18 @@
 //! collections without depending on compile-time feature flags. They always
 //! emit little-endian 64-bit length headers followed by element payloads
 //! encoded with [`NoritoSerialize`], and decode the inverse layout.
-
+use crate::core::{Error, NoritoDeserialize, NoritoSerialize, decode_field_canonical};
+use byteorder::{LittleEndian, WriteBytesExt};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     convert::TryInto,
     hash::Hash,
 };
-
-use byteorder::{LittleEndian, WriteBytesExt};
-
-use crate::core::{Error, NoritoDeserialize, NoritoSerialize, decode_field_canonical};
-
 fn write_len_u64(writer: &mut Vec<u8>, len: usize) -> Result<(), Error> {
     let len_u64 = u64::try_from(len).map_err(|_| Error::LengthMismatch)?;
     writer.write_u64::<LittleEndian>(len_u64)?;
     Ok(())
 }
-
 fn read_len_u64(bytes: &[u8], cursor: &mut usize) -> Result<usize, Error> {
     let next = cursor.checked_add(8).ok_or(Error::LengthMismatch)?;
     if next > bytes.len() {
@@ -33,13 +28,11 @@ fn read_len_u64(bytes: &[u8], cursor: &mut usize) -> Result<usize, Error> {
     *cursor = next;
     usize::try_from(len).map_err(|_| Error::LengthMismatch)
 }
-
 fn serialize_element<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
     let mut buf = Vec::new();
     crate::core::serialize_to_buffer(value, &mut buf)?;
     Ok(buf)
 }
-
 fn deserialize_element<T>(bytes: &[u8]) -> Result<T, Error>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
@@ -50,7 +43,6 @@ where
     }
     Ok(value)
 }
-
 pub fn serialize_vec<T: NoritoSerialize>(values: &[T]) -> Result<Vec<u8>, Error> {
     let mut out = Vec::new();
     write_len_u64(&mut out, values.len())?;
@@ -61,7 +53,6 @@ pub fn serialize_vec<T: NoritoSerialize>(values: &[T]) -> Result<Vec<u8>, Error>
     }
     Ok(out)
 }
-
 pub fn deserialize_vec<T>(bytes: &[u8]) -> Result<Vec<T>, Error>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
@@ -100,7 +91,6 @@ where
     }
     Ok(out)
 }
-
 pub fn serialize_btreemap<K, V>(map: &BTreeMap<K, V>) -> Result<Vec<u8>, Error>
 where
     K: NoritoSerialize,
@@ -118,7 +108,6 @@ where
     }
     Ok(out)
 }
-
 pub fn deserialize_btreemap<K, V>(bytes: &[u8]) -> Result<BTreeMap<K, V>, Error>
 where
     K: for<'de> NoritoDeserialize<'de> + Ord + NoritoSerialize,
@@ -139,7 +128,6 @@ where
         let key_slice = &bytes[cursor..key_end];
         let key = deserialize_element::<K>(key_slice)?;
         cursor = key_end;
-
         let value_len = read_len_u64(bytes, &mut cursor)?;
         let value_end = cursor.checked_add(value_len).ok_or(Error::LengthMismatch)?;
         if value_end > bytes.len() {
@@ -148,7 +136,6 @@ where
         let value_slice = &bytes[cursor..value_end];
         let value = deserialize_element::<V>(value_slice)?;
         cursor = value_end;
-
         map.insert(key, value);
     }
     if cursor != bytes.len() {
@@ -156,7 +143,6 @@ where
     }
     Ok(map)
 }
-
 pub fn serialize_hashmap<K, V>(map: &HashMap<K, V>) -> Result<Vec<u8>, Error>
 where
     K: NoritoSerialize + Ord + Hash + Eq,
@@ -176,7 +162,6 @@ where
     }
     Ok(out)
 }
-
 pub fn deserialize_hashmap<K, V>(bytes: &[u8]) -> Result<HashMap<K, V>, Error>
 where
     K: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Eq + Hash + Ord,
@@ -185,7 +170,6 @@ where
     let ordered = deserialize_btreemap::<K, V>(bytes)?;
     Ok(ordered.into_iter().collect())
 }
-
 pub fn serialize_btreeset<T: NoritoSerialize + Ord>(set: &BTreeSet<T>) -> Result<Vec<u8>, Error> {
     let mut out = Vec::new();
     write_len_u64(&mut out, set.len())?;
@@ -196,7 +180,6 @@ pub fn serialize_btreeset<T: NoritoSerialize + Ord>(set: &BTreeSet<T>) -> Result
     }
     Ok(out)
 }
-
 pub fn deserialize_btreeset<T>(bytes: &[u8]) -> Result<BTreeSet<T>, Error>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Ord,
@@ -204,7 +187,6 @@ where
     let values = deserialize_vec::<T>(bytes)?;
     Ok(values.into_iter().collect())
 }
-
 pub fn serialize_hashset<T>(set: &HashSet<T>) -> Result<Vec<u8>, Error>
 where
     T: NoritoSerialize + Ord + Hash + Eq,
@@ -220,7 +202,6 @@ where
     }
     Ok(out)
 }
-
 pub fn deserialize_hashset<T>(bytes: &[u8]) -> Result<HashSet<T>, Error>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Eq + Hash + Ord,

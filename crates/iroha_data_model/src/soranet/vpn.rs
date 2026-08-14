@@ -6,12 +6,10 @@
 //! padding budget) followed by a padded payload. Control-plane envelopes
 //! describe DNS/route pushes, guard/exit selection, and metering receipts so
 //! exit gateways can emit deterministic Norito payloads for governance.
-
 use core::fmt;
 #[cfg(feature = "json")]
 use core::fmt::Write as FmtWrite;
 use std::net::{Ipv4Addr, Ipv6Addr};
-
 use blake3;
 use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
 use iroha_primitives::{
@@ -22,10 +20,8 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json;
-
 use super::RelayId;
 use crate::{NetworkId, account::AccountId, asset::AssetDefinitionId};
-
 /// Fixed-length cell size used by the VPN tunnel.
 pub const VPN_CELL_LEN: usize = 1_024;
 /// Magic prefix used by helper-authenticated VPN tickets.
@@ -40,16 +36,13 @@ pub const VPN_HELPER_TICKET_LEN: usize = 664;
 pub const VPN_USAGE_VOUCHER_CONTROL_MAGIC: &[u8; 8] = b"SVPNUV1\0";
 /// Default MTU advertised to Sora VPN clients and local tunnel helpers.
 pub const VPN_DEFAULT_TUNNEL_MTU_BYTES: u16 = 1_280;
-
 /// Header serialization length (bytes).
 const VPN_HEADER_LEN: usize = 42;
 const VPN_SESSION_IPV4_BASE: u32 = u32::from_be_bytes([10, 208, 0, 0]);
 const VPN_SESSION_IPV4_SUBNET_COUNT: u32 = 1 << 18;
 const VPN_SESSION_IPV6_BASE: u128 = 0xfd53_7261_6574_0000_0000_0000_0000_0000u128;
-
 /// Number of disjoint point-to-point address slots available to VPN leases.
 pub const VPN_ADDRESS_SLOT_COUNT_V1: u32 = VPN_SESSION_IPV4_SUBNET_COUNT;
-
 /// Typed index of a deterministic VPN point-to-point address allocation.
 ///
 /// The index is signed by the operator and claimed in consensus state. Keeping
@@ -62,7 +55,6 @@ pub const VPN_ADDRESS_SLOT_COUNT_V1: u32 = VPN_SESSION_IPV4_SUBNET_COUNT;
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct VpnAddressSlotV1(u32);
-
 impl VpnAddressSlotV1 {
     /// Construct a slot after checking the V1 allocation range.
     ///
@@ -74,19 +66,16 @@ impl VpnAddressSlotV1 {
         }
         Ok(Self(index))
     }
-
     /// Return the canonical zero-based slot index.
     #[must_use]
     pub const fn index(self) -> u32 {
         self.0
     }
-
     /// Return whether a decoded slot is inside the V1 allocation pool.
     #[must_use]
     pub const fn is_valid(self) -> bool {
         self.0 < VPN_ADDRESS_SLOT_COUNT_V1
     }
-
     /// Extract the slot embedded in a canonical V1 session identifier.
     #[must_use]
     pub const fn from_session_id(session_id: [u8; 16]) -> Self {
@@ -95,7 +84,6 @@ impl VpnAddressSlotV1 {
         Self(index & (VPN_ADDRESS_SLOT_COUNT_V1 - 1))
     }
 }
-
 /// Error returned for an out-of-range VPN address slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("VPN address slot {index} is outside the V1 allocation pool")]
@@ -103,7 +91,6 @@ pub struct VpnAddressSlotError {
     /// Rejected zero-based slot index.
     pub index: u32,
 }
-
 /// Deterministic per-session address plan shared by Torii, relays, and local tunnel helpers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VpnSessionAddressPlanV1 {
@@ -114,7 +101,6 @@ pub struct VpnSessionAddressPlanV1 {
     /// Session-local subnet routes that should point at the tunnel interface on the backend.
     pub session_routes: Vec<String>,
 }
-
 /// Enumeration of supported cell classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub enum VpnCellClassV1 {
@@ -127,7 +113,6 @@ pub enum VpnCellClassV1 {
     /// Control-plane update (route push, key rotation).
     Control,
 }
-
 impl VpnCellClassV1 {
     /// Returns the on-wire tag for the class.
     #[must_use]
@@ -140,13 +125,11 @@ impl VpnCellClassV1 {
         }
     }
 }
-
 /// Bitfield describing cell handling hints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct VpnCellFlagsV1 {
     bits: u8,
 }
-
 impl VpnCellFlagsV1 {
     /// Allowed flag mask (all known flags).
     pub const ALLOWED_MASK: u8 =
@@ -159,13 +142,11 @@ impl VpnCellFlagsV1 {
     pub const MIGRATION: u8 = 0x04;
     /// Flag indicating a key rotation hint for the guard/exit.
     pub const KEY_ROTATION: u8 = 0x08;
-
     /// Construct a new flag bitfield from raw bits.
     #[must_use]
     pub const fn from_bits(bits: u8) -> Self {
         Self { bits }
     }
-
     /// Construct a new flag bitfield from individual hints.
     #[must_use]
     #[allow(clippy::fn_params_excessive_bools)]
@@ -185,33 +166,34 @@ impl VpnCellFlagsV1 {
         }
         Self { bits }
     }
-
     /// Returns the raw bitfield.
     #[must_use]
     pub const fn bits(self) -> u8 {
         self.bits
     }
-
     /// Returns `true` when any unknown flag bits are set.
     #[must_use]
     pub const fn has_unknown_bits(self) -> bool {
         (self.bits & !Self::ALLOWED_MASK) != 0
     }
-
     /// Returns `true` when the cover flag is set.
     #[must_use]
     pub const fn is_cover(self) -> bool {
         (self.bits & Self::COVER) != 0
     }
 }
-
 #[cfg(feature = "json")]
 impl json::JsonSerialize for VpnCellFlagsV1 {
     fn json_serialize(&self, out: &mut String) {
         let _ = FmtWrite::write_fmt(out, format_args!("{}", self.bits));
     }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::JsonSerialize::json_serialize_to(&self.bits, out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl json::JsonDeserialize for VpnCellFlagsV1 {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -224,20 +206,17 @@ impl json::JsonDeserialize for VpnCellFlagsV1 {
         Ok(Self::from_bits(bits))
     }
 }
-
 /// Flow label assigned to a tunnel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct VpnFlowLabelV1 {
     /// Three-byte flow label encoded in network byte order.
     pub bytes: [u8; 3],
 }
-
 impl VpnFlowLabelV1 {
     /// Maximum allowed flow label value (24 bits).
     pub const MAX: u32 = 0x00FF_FFFF;
     /// Maximum supported flow label width.
     pub const MAX_BITS: u8 = 24;
-
     /// Construct a new flow label from a 24-bit integer.
     ///
     /// # Errors
@@ -255,7 +234,6 @@ impl VpnFlowLabelV1 {
             bytes: [bytes[1], bytes[2], bytes[3]],
         })
     }
-
     /// Construct a new flow label bounded by `bits` (1–24).
     ///
     /// # Errors
@@ -276,7 +254,6 @@ impl VpnFlowLabelV1 {
             bytes: [bytes[1], bytes[2], bytes[3]],
         })
     }
-
     /// Returns the maximum representable flow label for the supplied width.
     ///
     /// # Errors
@@ -291,7 +268,6 @@ impl VpnFlowLabelV1 {
         }
         Ok((1u32 << bits) - 1)
     }
-
     /// Ensures the flow label fits inside the supplied bit width.
     ///
     /// # Errors
@@ -306,21 +282,24 @@ impl VpnFlowLabelV1 {
         }
         Ok(())
     }
-
     /// Decode the flow label into a 24-bit integer.
     #[must_use]
     pub const fn to_u32(self) -> u32 {
         u32::from_be_bytes([0, self.bytes[0], self.bytes[1], self.bytes[2]])
     }
 }
-
 #[cfg(feature = "json")]
 impl json::JsonSerialize for VpnFlowLabelV1 {
     fn json_serialize(&self, out: &mut String) {
         let _ = FmtWrite::write_fmt(out, format_args!("{}", self.to_u32()));
     }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::JsonSerialize::json_serialize_to(&self.to_u32(), out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl json::JsonDeserialize for VpnFlowLabelV1 {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -330,7 +309,6 @@ impl json::JsonDeserialize for VpnFlowLabelV1 {
         Ok(flow)
     }
 }
-
 /// Fixed header carried by every VPN cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct VpnCellHeaderV1 {
@@ -341,7 +319,7 @@ pub struct VpnCellHeaderV1 {
     /// Handling flags.
     pub flags: VpnCellFlagsV1,
     /// Circuit identifier derived from the route directory entry.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub circuit_id: [u8; 16],
     /// Flow label (24 bits).
     pub flow_label: VpnFlowLabelV1,
@@ -354,7 +332,6 @@ pub struct VpnCellHeaderV1 {
     /// Payload length prior to padding.
     pub payload_len: u16,
 }
-
 impl VpnCellHeaderV1 {
     /// Returns the serialized header length.
     #[must_use]
@@ -362,24 +339,21 @@ impl VpnCellHeaderV1 {
         VPN_HEADER_LEN
     }
 }
-
 /// VPN cell with payload (unpadded).
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct VpnCellV1 {
     /// Cell header.
     pub header: VpnCellHeaderV1,
     /// Raw payload carried by the cell.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub payload: Vec<u8>,
 }
-
 impl VpnCellV1 {
     /// Maximum payload length (bytes) permitted in a single cell.
     #[must_use]
     pub const fn max_payload_len() -> usize {
         VPN_CELL_LEN - VPN_HEADER_LEN
     }
-
     /// Pad the cell into a fixed-length frame suitable for transport.
     ///
     /// # Errors
@@ -401,9 +375,7 @@ impl VpnCellV1 {
                 declared: u16::MAX,
                 actual: self.payload.len(),
             })?;
-
         self.header.payload_len = payload_len;
-
         let mut frame = [0u8; VPN_CELL_LEN];
         let mut cursor = 0;
         frame[cursor] = self.header.version;
@@ -424,26 +396,21 @@ impl VpnCellV1 {
         cursor += 2;
         frame[cursor..cursor + 2].copy_from_slice(&self.header.payload_len.to_be_bytes());
         cursor += 2;
-
         frame[cursor..cursor + usize::from(payload_len)].copy_from_slice(&self.payload);
-
         Ok(VpnPaddedCellV1 { bytes: frame })
     }
 }
-
 /// Fixed-length padded cell frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VpnPaddedCellV1 {
     /// Raw frame bytes (always [`VPN_CELL_LEN`] long).
     pub bytes: [u8; VPN_CELL_LEN],
 }
-
 impl AsRef<[u8]> for VpnPaddedCellV1 {
     fn as_ref(&self) -> &[u8] {
         &self.bytes
     }
 }
-
 impl VpnPaddedCellV1 {
     /// Parse a padded cell frame back into the header and payload components.
     ///
@@ -458,7 +425,6 @@ impl VpnPaddedCellV1 {
     pub fn parse(&self) -> Result<VpnCellV1, VpnCellError> {
         Self::parse_bytes(&self.bytes)
     }
-
     /// Parse a padded cell frame and enforce a maximum flow-label width.
     ///
     /// # Errors
@@ -471,7 +437,6 @@ impl VpnPaddedCellV1 {
     ) -> Result<VpnCellV1, VpnCellError> {
         Self::parse_bytes_with_flow_label_bits(&self.bytes, max_flow_label_bits)
     }
-
     /// Parse an arbitrary byte slice into a VPN cell with flow-label validation.
     ///
     /// # Errors
@@ -486,7 +451,6 @@ impl VpnPaddedCellV1 {
         cell.header.flow_label.ensure_width(max_flow_label_bits)?;
         Ok(cell)
     }
-
     /// Parse an arbitrary byte slice into a VPN cell, expecting a full padded frame.
     ///
     /// # Errors
@@ -499,12 +463,10 @@ impl VpnPaddedCellV1 {
                 actual: bytes.len(),
             });
         }
-
         let version = bytes[0];
         if version != 1 {
             return Err(VpnCellError::UnsupportedVersion(version));
         }
-
         let class = match bytes[1] {
             0 => VpnCellClassV1::Data,
             1 => VpnCellClassV1::Cover,
@@ -523,14 +485,11 @@ impl VpnPaddedCellV1 {
                 allowed: VpnCellFlagsV1::ALLOWED_MASK,
             });
         }
-
         let mut circuit_id = [0u8; 16];
         circuit_id.copy_from_slice(&bytes[3..19]);
-
         let flow_label = VpnFlowLabelV1 {
             bytes: [bytes[19], bytes[20], bytes[21]],
         };
-
         let sequence = u64::from_be_bytes(bytes[22..30].try_into().expect("slice length"));
         let ack = u64::from_be_bytes(bytes[30..38].try_into().expect("slice length"));
         let padding_budget_ms = u16::from_be_bytes(bytes[38..40].try_into().expect("slice length"));
@@ -549,7 +508,6 @@ impl VpnPaddedCellV1 {
                 available: available_payload,
             });
         }
-
         let payload_end = VPN_HEADER_LEN + payload_len_usize;
         if payload_end < bytes.len()
             && let Some((offset, value)) = bytes[payload_end..]
@@ -564,7 +522,6 @@ impl VpnPaddedCellV1 {
             });
         }
         let payload = bytes[VPN_HEADER_LEN..payload_end].to_vec();
-
         Ok(VpnCellV1 {
             header: VpnCellHeaderV1 {
                 version,
@@ -581,7 +538,6 @@ impl VpnPaddedCellV1 {
         })
     }
 }
-
 /// Cover traffic scheduler parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct VpnCoverScheduleV1 {
@@ -594,7 +550,6 @@ pub struct VpnCoverScheduleV1 {
     /// Maximum jitter applied to cover spacing (milliseconds).
     pub jitter_ms: u16,
 }
-
 impl VpnCoverScheduleV1 {
     /// Generate a deterministic cover/data plan using the provided seed.
     #[must_use]
@@ -615,7 +570,6 @@ impl VpnCoverScheduleV1 {
             } else {
                 cover_streak = 0;
             }
-
             let jitter = u64::from(self.jitter_ms);
             let jitter_offset = if jitter == 0 {
                 0
@@ -625,7 +579,6 @@ impl VpnCoverScheduleV1 {
             let slot_ms = u64::from(self.heartbeat_ms);
             let slot_start = slot_ms.saturating_mul(idx as u64);
             let scheduled_ms = slot_start + jitter_offset;
-
             entries.push(VpnCoverPlanEntryV1 {
                 slot_ms: scheduled_ms,
                 is_cover,
@@ -634,7 +587,6 @@ impl VpnCoverScheduleV1 {
         entries
     }
 }
-
 /// Deterministic PRNG seeded by a 32-byte buffer.
 ///
 /// The generator streams bytes from a BLAKE3 XOF so all seed bits influence the
@@ -642,7 +594,6 @@ impl VpnCoverScheduleV1 {
 struct DeterministicPrng {
     reader: blake3::OutputReader,
 }
-
 impl DeterministicPrng {
     fn new(seed: [u8; 32]) -> Self {
         let mut hasher = blake3::Hasher::new();
@@ -652,13 +603,11 @@ impl DeterministicPrng {
             reader: hasher.finalize_xof(),
         }
     }
-
     fn next_u64(&mut self) -> u64 {
         let mut buf = [0u8; 8];
         self.reader.fill(&mut buf);
         u64::from_le_bytes(buf)
     }
-
     fn next_below(&mut self, upper: u64) -> u64 {
         if upper == 0 {
             return 0;
@@ -666,7 +615,6 @@ impl DeterministicPrng {
         self.next_u64() % upper
     }
 }
-
 /// A scheduled cell emitted by the cover/data planner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct VpnCoverPlanEntryV1 {
@@ -675,7 +623,6 @@ pub struct VpnCoverPlanEntryV1 {
     /// Whether the slot carries cover traffic instead of user data.
     pub is_cover: bool,
 }
-
 /// Exit class advertised for billing/telemetry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -691,7 +638,6 @@ pub enum VpnExitClassV1 {
     /// High-security exit class (higher cover, slower).
     HighSecurity,
 }
-
 /// Errors returned when parsing exit-class labels from config/client inputs.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("unknown VPN exit class label: {label}")]
@@ -699,7 +645,6 @@ pub struct VpnExitClassParseError {
     /// The label that failed validation.
     pub label: String,
 }
-
 impl VpnExitClassV1 {
     /// Parse a human-readable exit-class label into the enum, accepting the
     /// canonical labels and their hyphen/underscore variants.
@@ -716,7 +661,6 @@ impl VpnExitClassV1 {
             }),
         }
     }
-
     /// Canonical hyphenated label for the exit class.
     #[must_use]
     pub const fn as_label(self) -> &'static str {
@@ -727,7 +671,6 @@ impl VpnExitClassV1 {
         }
     }
 }
-
 /// Control-plane envelope used to push DNS/routes and guard/exit choices.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct VpnControlPlaneV1 {
@@ -744,7 +687,6 @@ pub struct VpnControlPlaneV1 {
     /// Lease duration for the control-plane assignment (seconds).
     pub lease_seconds: u32,
 }
-
 /// Route entry pushed to a VPN client.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct VpnRouteV1 {
@@ -755,7 +697,6 @@ pub struct VpnRouteV1 {
     /// Optional metric controlling route ordering.
     pub metric: Option<u16>,
 }
-
 /// Derive the deterministic point-to-point address plan for a typed slot.
 #[must_use]
 pub fn derive_vpn_address_plan_v1(slot: VpnAddressSlotV1) -> VpnSessionAddressPlanV1 {
@@ -767,19 +708,16 @@ pub fn derive_vpn_address_plan_v1(slot: VpnAddressSlotV1) -> VpnSessionAddressPl
     let v4_route = format!("{}/30", Ipv4Addr::from(v4_network));
     let v4_server = format!("{}/30", Ipv4Addr::from(v4_network + 1));
     let v4_client = format!("{}/30", Ipv4Addr::from(v4_network + 2));
-
     let v6_network = VPN_SESSION_IPV6_BASE | (u128::from(v4_index) << 2);
     let v6_route = format!("{}/126", Ipv6Addr::from(v6_network));
     let v6_server = format!("{}/126", Ipv6Addr::from(v6_network | 1));
     let v6_client = format!("{}/126", Ipv6Addr::from(v6_network | 2));
-
     VpnSessionAddressPlanV1 {
         server_tunnel_addresses: vec![v4_server, v6_server],
         client_tunnel_addresses: vec![v4_client, v6_client],
         session_routes: vec![v4_route, v6_route],
     }
 }
-
 /// Derive a deterministic initial address-slot candidate from a quote id.
 ///
 /// Consensus still claims the typed slot explicitly because different quote
@@ -795,7 +733,6 @@ pub fn derive_vpn_address_slot_v1(quote_id: [u8; 32]) -> VpnAddressSlotV1 {
         u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) % VPN_ADDRESS_SLOT_COUNT_V1;
     VpnAddressSlotV1(index)
 }
-
 /// Derive the canonical lease identifier for an exact-network-bound operator quote.
 #[must_use]
 pub fn derive_vpn_lease_id_v1(
@@ -810,7 +747,6 @@ pub fn derive_vpn_lease_id_v1(
     hasher.update(&client_account_id.encode());
     *hasher.finalize().as_bytes()
 }
-
 /// Derive the canonical session identifier and embed its address slot.
 #[must_use]
 pub fn derive_vpn_session_id_v1(
@@ -831,24 +767,22 @@ pub fn derive_vpn_session_id_v1(
     session_id[..3].copy_from_slice(&slot_bytes[1..]);
     session_id
 }
-
 /// Derive the deterministic point-to-point address plan for a canonical VPN session.
 #[must_use]
 pub fn derive_vpn_session_address_plan_v1(session_id: [u8; 16]) -> VpnSessionAddressPlanV1 {
     derive_vpn_address_plan_v1(VpnAddressSlotV1::from_session_id(session_id))
 }
-
 /// Client-signed cumulative usage voucher used to release escrowed XOR to an operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 pub struct VpnUsageVoucherBodyV1 {
     /// Session identifier bound to the tunnel runtime.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub session_id: [u8; 16],
     /// Quote identifier that fixed the XOR price and relay policy.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub quote_id: [u8; 32],
     /// Relay fingerprint that served the session.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
     /// Monotonic voucher sequence.
     pub sequence: u64,
@@ -861,7 +795,6 @@ pub struct VpnUsageVoucherBodyV1 {
     /// Client timestamp in milliseconds since the Unix epoch.
     pub issued_at_ms: u64,
 }
-
 /// Signed client usage voucher used for VPN escrow settlement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 pub struct VpnUsageVoucherV1 {
@@ -872,7 +805,6 @@ pub struct VpnUsageVoucherV1 {
     /// Signature over the Norito-encoded voucher body.
     pub signature: Signature,
 }
-
 impl VpnUsageVoucherV1 {
     /// Sign a cumulative usage body with the client's metering private key.
     ///
@@ -890,7 +822,6 @@ impl VpnUsageVoucherV1 {
             signature,
         })
     }
-
     /// Verify that the voucher signature matches the embedded public key and body.
     ///
     /// # Errors
@@ -907,7 +838,6 @@ impl VpnUsageVoucherV1 {
         };
         signature.verify(&self.client_public_key, &self.body.encode())
     }
-
     /// Deterministic hash of the signed voucher used by relay receipts.
     #[must_use]
     pub fn hash(&self) -> [u8; 32] {
@@ -915,7 +845,6 @@ impl VpnUsageVoucherV1 {
         *blake3::hash(&encoded).as_bytes()
     }
 }
-
 /// Client-signed voucher plus the client-computed earned XOR for relay receipt construction.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct VpnUsageVoucherEnvelopeV1 {
@@ -924,7 +853,6 @@ pub struct VpnUsageVoucherEnvelopeV1 {
     /// Nominal earned fee that the relay should mirror in its receipt.
     pub earned_fee: Quantity,
 }
-
 /// Deterministic XOR tariff used to settle a VPN lease from a client usage voucher.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -941,7 +869,6 @@ pub struct VpnTariffV1 {
     /// Relay-to-client payload price per mebibyte.
     pub egress_fee_per_mib: Quantity,
 }
-
 /// Durable quote policy needed to reconstruct VPN sessions and receipts from WSV.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -954,21 +881,21 @@ pub struct VpnQuotePolicyV1 {
     /// Relay endpoint advertised to the client.
     pub relay_endpoint: String,
     /// Exact Ed25519 relay identity authenticated by the guard directory.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
     /// Relay descriptor commitment authenticated by the certificate.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub descriptor_commit: [u8; 32],
     /// Exact DNS name authenticated by TLS and the relay handshake.
     pub tls_server_name: String,
     /// Exact SHA-256 SPKI pin for the relay TLS leaf certificate.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_tls_spki_sha256: [u8; 32],
     /// SHA-256 digest of the canonical signed relay certificate bundle.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_certificate_sha256: [u8; 32],
     /// Externally provisioned digest authenticating the exact directory snapshot.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub directory_snapshot_digest: [u8; 32],
     /// Exclusive upper bound on relay trust validity, in milliseconds since the Unix epoch.
     pub relay_trust_valid_until_ms: u64,
@@ -995,7 +922,6 @@ pub struct VpnQuotePolicyV1 {
     /// Per-cell padding budget in milliseconds fixed by the quote.
     pub padding_budget_ms: u16,
 }
-
 /// Canonical operator-authored VPN quote admitted by the native lease ISI.
 ///
 /// Every economic, identity, trust, lifetime, and address-allocation field is
@@ -1010,13 +936,13 @@ pub struct VpnQuoteBodyV1 {
     /// Exact genesis-derived network on which this quote may open a lease.
     pub network_id: NetworkId,
     /// Operator-issued quote identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub quote_id: [u8; 32],
     /// Canonical chain/client/quote-derived lease identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub lease_id: [u8; 32],
     /// Canonical chain/client/quote/slot-derived session identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub session_id: [u8; 16],
     /// Consensus-claimed point-to-point address allocation.
     pub address_slot: VpnAddressSlotV1,
@@ -1039,7 +965,6 @@ pub struct VpnQuoteBodyV1 {
     /// Additional operator settlement window after service expiry.
     pub settlement_grace_ms: u64,
 }
-
 /// Operator signature over a canonical, domain-separated VPN quote body.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1052,7 +977,6 @@ pub struct VpnSignedQuoteV1 {
     /// Signature by the single-signatory operator account.
     pub signature: Signature,
 }
-
 impl VpnSignedQuoteV1 {
     /// Build and sign a canonical VPN quote.
     ///
@@ -1072,7 +996,6 @@ impl VpnSignedQuoteV1 {
         let signature = Signature::try_new(private_key, &vpn_quote_signing_bytes(&body))?;
         Ok(Self { body, signature })
     }
-
     /// Verify the operator signature over the canonical quote body.
     ///
     /// # Errors
@@ -1098,7 +1021,6 @@ impl VpnSignedQuoteV1 {
             .map_err(VpnQuoteSignatureError::Signature)
     }
 }
-
 fn vpn_quote_signing_bytes(body: &VpnQuoteBodyV1) -> Vec<u8> {
     let encoded = body.encode();
     let mut bytes = Vec::with_capacity(b"soranet-vpn-operator-quote-v1".len() + encoded.len());
@@ -1106,7 +1028,6 @@ fn vpn_quote_signing_bytes(body: &VpnQuoteBodyV1) -> Vec<u8> {
     bytes.extend_from_slice(&encoded);
     bytes
 }
-
 /// Operator-quote signature verification failure.
 #[derive(Debug, thiserror::Error)]
 pub enum VpnQuoteSignatureError {
@@ -1120,12 +1041,10 @@ pub enum VpnQuoteSignatureError {
     #[error("VPN quote signature verification failed: {0}")]
     Signature(#[from] iroha_crypto::Error),
 }
-
 impl VpnTariffV1 {
     const MILLIS_PER_MINUTE: u64 = 60_000;
     const BYTES_PER_MIB: u64 = 1_048_576;
     const XOR_SCALE: u32 = 9;
-
     /// Compute the nominal earned fee from a cumulative client usage voucher.
     ///
     /// Every non-zero partial minute or MiB is rounded up so all nodes agree on
@@ -1153,7 +1072,6 @@ impl VpnTariffV1 {
                 RoundingMode::Ceil,
             )
         }
-
         let active = component(
             &self.active_fee_per_minute,
             voucher.active_ms,
@@ -1177,7 +1095,6 @@ impl VpnTariffV1 {
         })
     }
 }
-
 /// Lifecycle status for an on-chain VPN lease escrow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1193,7 +1110,6 @@ pub enum VpnLeaseStatusV1 {
     /// Lease expired without settlement and was refunded to the client.
     Refunded,
 }
-
 /// On-chain VPN lease escrow record.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1202,13 +1118,13 @@ pub enum VpnLeaseStatusV1 {
 )]
 pub struct VpnLeaseRecordV1 {
     /// Canonical chain/client/quote-derived lease identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub lease_id: [u8; 32],
     /// Session identifier bound to the tunnel runtime.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub session_id: [u8; 16],
     /// Quote identifier that fixed pricing and route policy.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub quote_id: [u8; 32],
     /// Client account that funded the escrow.
     pub client_account_id: AccountId,
@@ -1223,7 +1139,7 @@ pub struct VpnLeaseRecordV1 {
     /// Deterministic protocol custody account holding the lease fee.
     pub custody_account_id: AccountId,
     /// Relay fingerprint authorized by the quote.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
     /// Deterministic usage tariff fixed at lease opening.
     pub tariff: VpnTariffV1,
@@ -1234,7 +1150,7 @@ pub struct VpnLeaseRecordV1 {
     /// Exact operator-signed quote admitted when the lease opened.
     pub signed_quote: VpnSignedQuoteV1,
     /// Hash of the transaction that opened and funded this lease.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub open_tx_hash: [u8; 32],
     /// Current lease lifecycle status.
     pub status: VpnLeaseStatusV1,
@@ -1255,13 +1171,13 @@ pub struct VpnLeaseRecordV1 {
     /// Hash of the settled client voucher.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub client_voucher_hash: Option<[u8; 32]>,
     /// Hash of the relay receipt used for settlement.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub relay_receipt_hash: Option<[u8; 32]>,
     /// Full relay receipt accepted during settlement.
@@ -1272,7 +1188,6 @@ pub struct VpnLeaseRecordV1 {
     /// Nominal fee refunded to the client.
     pub refunded_fee: Quantity,
 }
-
 impl VpnLeaseRecordV1 {
     /// First timestamp at which anyone can refund the lease to the client.
     #[must_use]
@@ -1280,7 +1195,6 @@ impl VpnLeaseRecordV1 {
         self.expires_at_ms.saturating_add(self.settlement_grace_ms)
     }
 }
-
 /// Billing and telemetry receipt emitted by an exit gateway.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1289,19 +1203,19 @@ impl VpnLeaseRecordV1 {
 )]
 pub struct VpnSessionReceiptV1 {
     /// Session identifier (client-assigned, 16 bytes).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub session_id: [u8; 16],
     /// Quote identifier that fixed pricing and route policy.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub quote_id: [u8; 32],
     /// Hash of the committed XOR escrow payment transaction.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub payment_tx_hash: [u8; 32],
     /// Hash of the paying canonical account id.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub account_hash: [u8; 32],
     /// Relay fingerprint that emitted the receipt.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
     /// Total ingress bytes (user payloads only).
     pub ingress_bytes: u64,
@@ -1318,17 +1232,16 @@ pub struct VpnSessionReceiptV1 {
     /// Exit class applied for billing.
     pub exit_class: VpnExitClassV1,
     /// Hash of the meter manifest applied to this session.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub meter_hash: [u8; 32],
     /// Nominal fee earned by the relay for the verified usage window.
     pub earned_fee: Quantity,
     /// Highest client usage voucher sequence accepted by the relay.
     pub highest_voucher_sequence: u64,
     /// Hash of the highest accepted client voucher.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub client_voucher_hash: [u8; 32],
 }
-
 impl VpnSessionReceiptV1 {
     /// Deterministic hash of the relay receipt used by lease settlement records.
     #[must_use]
@@ -1336,7 +1249,6 @@ impl VpnSessionReceiptV1 {
         *blake3::hash(&self.encode()).as_bytes()
     }
 }
-
 /// Helper-authenticated ticket carried by the local VPN controller when opening a relay session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VpnHelperTicketV1 {
@@ -1357,7 +1269,6 @@ pub struct VpnHelperTicketV1 {
     /// Absolute expiry time in milliseconds since the Unix epoch.
     pub expires_at_ms: u64,
 }
-
 impl VpnHelperTicketV1 {
     /// Fallibly serialize the helper ticket into its fixed-length on-wire representation.
     ///
@@ -1406,14 +1317,12 @@ impl VpnHelperTicketV1 {
         bytes[cursor..cursor + mac_bytes.len()].copy_from_slice(mac_bytes);
         Ok(bytes)
     }
-
     /// Serialize the helper ticket into its fixed-length on-wire representation.
     #[must_use]
     pub fn to_bytes(&self, secret: &[u8; 32]) -> [u8; VPN_HELPER_TICKET_LEN] {
         self.try_to_bytes(secret)
             .expect("invalid VPN helper ticket metering public key")
     }
-
     /// Fallibly serialize the helper ticket as hex for transport through JSON control-plane payloads.
     ///
     /// # Errors
@@ -1423,20 +1332,17 @@ impl VpnHelperTicketV1 {
     pub fn try_to_hex(&self, secret: &[u8; 32]) -> Result<String, VpnHelperTicketError> {
         Ok(hex::encode(self.try_to_bytes(secret)?))
     }
-
     /// Serialize the helper ticket as hex for transport through JSON control-plane payloads.
     #[must_use]
     pub fn to_hex(&self, secret: &[u8; 32]) -> String {
         self.try_to_hex(secret)
             .expect("invalid VPN helper ticket metering public key")
     }
-
     /// Return `true` when the supplied bytes look like a helper-auth ticket.
     #[must_use]
     pub fn looks_like(bytes: &[u8]) -> bool {
         bytes.len() == VPN_HELPER_TICKET_LEN && bytes.starts_with(VPN_HELPER_TICKET_MAGIC)
     }
-
     /// Decode the client-visible ticket metadata without authenticating its MAC.
     ///
     /// This is only for the local client helper, which needs the metering key and
@@ -1452,7 +1358,6 @@ impl VpnHelperTicketV1 {
         validate_helper_ticket_frame(bytes)?;
         decode_helper_ticket_fields(bytes)
     }
-
     /// Parse and verify a helper-authenticated ticket.
     ///
     /// # Errors
@@ -1477,7 +1382,6 @@ impl VpnHelperTicketV1 {
         }
         Ok(ticket)
     }
-
     /// Parse and verify a helper-authenticated ticket encoded as hex.
     ///
     /// # Errors
@@ -1491,7 +1395,6 @@ impl VpnHelperTicketV1 {
         Self::parse(&decoded, secret, now_ms)
     }
 }
-
 fn validate_helper_ticket_frame(bytes: &[u8]) -> Result<(), VpnHelperTicketError> {
     if bytes.len() != VPN_HELPER_TICKET_LEN {
         return Err(VpnHelperTicketError::InvalidLength {
@@ -1504,7 +1407,6 @@ fn validate_helper_ticket_frame(bytes: &[u8]) -> Result<(), VpnHelperTicketError
     }
     Ok(())
 }
-
 fn decode_helper_ticket_fields(bytes: &[u8]) -> Result<VpnHelperTicketV1, VpnHelperTicketError> {
     debug_assert_eq!(bytes.len(), VPN_HELPER_TICKET_LEN);
     let mut cursor = VPN_HELPER_TICKET_MAGIC.len();
@@ -1551,9 +1453,7 @@ fn decode_helper_ticket_fields(bytes: &[u8]) -> Result<VpnHelperTicketV1, VpnHel
         expires_at_ms: u64::from_be_bytes(expires),
     })
 }
-
 const VPN_HELPER_TICKET_QUANTITY_SLOT_LEN: usize = 1 + MAX_QUANTITY_FRAME_BYTES_V1;
-
 fn encode_helper_ticket_quantity(
     output: &mut [u8; VPN_HELPER_TICKET_LEN],
     cursor: &mut usize,
@@ -1573,7 +1473,6 @@ fn encode_helper_ticket_quantity(
     *cursor += VPN_HELPER_TICKET_QUANTITY_SLOT_LEN;
     Ok(())
 }
-
 fn decode_helper_ticket_quantity(
     input: &[u8],
     cursor: &mut usize,
@@ -1594,18 +1493,15 @@ fn decode_helper_ticket_quantity(
     *cursor += VPN_HELPER_TICKET_QUANTITY_SLOT_LEN;
     Ok(quantity)
 }
-
 fn helper_ticket_mac(secret: &[u8; 32], payload: &[u8]) -> blake3::Hash {
     let mut hasher = blake3::Hasher::new_keyed(secret);
     hasher.update(b"soranet-vpn-helper-ticket-v1");
     hasher.update(payload);
     hasher.finalize()
 }
-
 fn helper_ticket_mac_matches(expected: &blake3::Hash, encoded: &[u8]) -> bool {
     blake3::Hash::from_slice(encoded).is_ok_and(|actual| expected == &actual)
 }
-
 /// Errors surfaced while parsing or verifying helper-authenticated VPN tickets.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VpnHelperTicketError {
@@ -1638,7 +1534,6 @@ pub enum VpnHelperTicketError {
     /// Hex decoding failed before ticket verification.
     Hex(hex::FromHexError),
 }
-
 impl fmt::Display for VpnHelperTicketError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1671,9 +1566,7 @@ impl fmt::Display for VpnHelperTicketError {
         }
     }
 }
-
 impl std::error::Error for VpnHelperTicketError {}
-
 /// Errors surfaced while building or validating VPN cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VpnCellError {
@@ -1754,7 +1647,6 @@ pub enum VpnCellError {
         actual: u64,
     },
 }
-
 impl fmt::Display for VpnCellError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1816,22 +1708,17 @@ impl fmt::Display for VpnCellError {
         }
     }
 }
-
 impl std::error::Error for VpnCellError {}
-
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};
-
     use hex::FromHex;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use norito::{
         derive::{JsonDeserialize, JsonSerialize},
         json::{self, to_string_pretty},
     };
-
     use super::*;
-
     const FIXTURE_PATH: &str = "../../IrohaSwift/Tests/IrohaSwiftTests/Fixtures/vpn_vectors.json";
     const HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET: usize =
         VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32;
@@ -1844,38 +1731,49 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("test fixture random key generation should succeed")
     }
-
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
             panic!("{algorithm:?} VPN fixture key generation should succeed: {err}")
         })
     }
-
     fn checked_random_public_key() -> iroha_crypto::PublicKey {
         checked_random_keypair().public_key().clone()
     }
-
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),
         ))
     }
-
     fn quantity_nanos(value: u64) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(value, 9))
             .expect("u64 nano-XOR test value fits Quantity")
     }
-
     fn maximum_quantity() -> Quantity {
         "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
             .parse()
             .expect("signed 512-bit maximum quantity")
     }
-
+    #[cfg(feature = "json")]
+    fn assert_exact_json<T: json::JsonSerialize>(value: &T) {
+        let legacy = json::to_json(value).expect("serialize legacy JSON");
+        assert_eq!(
+            json::to_json_bounded(value, legacy.len()).expect("serialize at exact bound"),
+            legacy
+        );
+        assert_eq!(
+            json::to_json_bounded(value, legacy.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn vpn_numeric_scalar_json_has_exact_checked_bounds() {
+        assert_exact_json(&VpnCellFlagsV1::from_bits(5));
+        assert_exact_json(&VpnFlowLabelV1::from_u32(0x00ab_cdef).expect("24-bit flow label"));
+    }
     fn sample_quote_body(
         network_id: NetworkId,
         quote_id: [u8; 32],
@@ -1937,7 +1835,6 @@ mod tests {
             settlement_grace_ms: 1_000,
         }
     }
-
     fn sample_helper_ticket(expires_at_ms: u64) -> VpnHelperTicketV1 {
         let metering_key_pair = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
@@ -1957,7 +1854,6 @@ mod tests {
             expires_at_ms,
         }
     }
-
     fn sample_usage_voucher() -> (KeyPair, VpnUsageVoucherV1) {
         let key_pair = checked_random_keypair();
         let body = VpnUsageVoucherBodyV1 {
@@ -1974,7 +1870,6 @@ mod tests {
             VpnUsageVoucherV1::try_sign(body, key_pair.private_key()).expect("checked voucher");
         (key_pair, voucher)
     }
-
     const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -1984,7 +1879,6 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn signature_with_malformed_ed25519_r(
         signature: &Signature,
         replacement_r: &[u8; 32],
@@ -1993,7 +1887,6 @@ mod tests {
         payload[..replacement_r.len()].copy_from_slice(replacement_r);
         Signature::from_bytes(&payload)
     }
-
     #[test]
     fn flow_label_roundtrip_respects_bounds() {
         let label = VpnFlowLabelV1::from_u32(0xABCDE).expect("flow label within bounds");
@@ -2004,7 +1897,6 @@ mod tests {
             Err(VpnCellError::FlowLabelOverflow { max_bits: 24, .. })
         ));
     }
-
     #[test]
     fn flow_label_respects_requested_width() {
         let narrow = VpnFlowLabelV1::from_u32_with_bits(0xFF, 8).expect("label fits");
@@ -2015,7 +1907,6 @@ mod tests {
             Err(VpnCellError::FlowLabelOverflow { max_bits: 8, .. })
         ));
     }
-
     #[test]
     fn parse_rejects_flow_label_overflow_for_width() {
         let mut frame = [0u8; VPN_CELL_LEN];
@@ -2035,14 +1926,12 @@ mod tests {
         // padding budget and payload length = 0
         frame[38..40].copy_from_slice(&1u16.to_be_bytes());
         frame[40..42].copy_from_slice(&0u16.to_be_bytes());
-
         let result = VpnPaddedCellV1 { bytes: frame }.parse_with_flow_label_bits(8);
         assert!(matches!(
             result,
             Err(VpnCellError::FlowLabelOverflow { max_bits: 8, .. })
         ));
     }
-
     #[test]
     fn helper_ticket_roundtrips_and_verifies_mac() {
         let secret = [0x42; 32];
@@ -2053,11 +1942,9 @@ mod tests {
         let bytes = ticket.to_bytes(&secret);
         assert_eq!(checked_bytes, bytes);
         assert!(VpnHelperTicketV1::looks_like(&bytes));
-
         let parsed = VpnHelperTicketV1::parse(&bytes, &secret, 1_699_999_999_000)
             .expect("helper ticket should verify");
         assert_eq!(ticket, parsed);
-
         let checked_hex = ticket
             .try_to_hex(&secret)
             .expect("checked helper ticket hex serialization");
@@ -2067,12 +1954,10 @@ mod tests {
             .expect("helper ticket hex should verify");
         assert_eq!(ticket, parsed_hex);
     }
-
     #[test]
     fn helper_ticket_mac_comparison_checks_the_complete_digest() {
         let expected = helper_ticket_mac(&[0x42; 32], b"helper-ticket-payload");
         assert!(helper_ticket_mac_matches(&expected, expected.as_bytes()));
-
         for index in [0, blake3::OUT_LEN / 2, blake3::OUT_LEN - 1] {
             let mut altered = *expected.as_bytes();
             altered[index] ^= 0x01;
@@ -2083,7 +1968,6 @@ mod tests {
             &expected.as_bytes()[..blake3::OUT_LEN - 1]
         ));
     }
-
     #[test]
     fn helper_ticket_unverified_decode_is_structural_only() {
         let secret = [0x42; 32];
@@ -2091,7 +1975,6 @@ mod tests {
         let mut bytes = ticket.to_bytes(&secret);
         let mac_offset = VPN_HELPER_TICKET_LEN - blake3::OUT_LEN;
         bytes[mac_offset] ^= 0x01;
-
         let decoded = VpnHelperTicketV1::decode_unverified(&bytes)
             .expect("client metadata decoder deliberately ignores the MAC");
         assert_eq!(decoded, ticket);
@@ -2099,7 +1982,6 @@ mod tests {
             VpnHelperTicketV1::parse(&bytes, &secret, 1_699_999_999_000),
             Err(VpnHelperTicketError::InvalidMac)
         );
-
         let tariff_offset = VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32 + 32;
         bytes = ticket.to_bytes(&secret);
         bytes[tariff_offset] = 0;
@@ -2108,7 +1990,6 @@ mod tests {
             Err(VpnHelperTicketError::InvalidTariffQuantity)
         );
     }
-
     #[test]
     fn helper_ticket_try_to_bytes_rejects_non_ed25519_metering_key() {
         let secret = [0x42; 32];
@@ -2122,7 +2003,6 @@ mod tests {
             Algorithm::Secp256k1
         );
         ticket.metering_public_key = secp_key_pair.public_key().clone();
-
         assert_eq!(
             ticket.try_to_bytes(&secret),
             Err(VpnHelperTicketError::InvalidMeteringPublicKey)
@@ -2132,14 +2012,12 @@ mod tests {
             Err(VpnHelperTicketError::InvalidMeteringPublicKey)
         );
     }
-
     #[test]
     fn helper_ticket_rejects_old_length_ticket() {
         let secret = [0x42; 32];
         let ticket = sample_helper_ticket(1_700_000_000_000);
         let bytes = ticket.to_bytes(&secret);
         let old_len = bytes[..192].to_vec();
-
         let err = VpnHelperTicketV1::parse(&old_len, &secret, 1_699_999_999_000)
             .expect_err("old ticket length must fail");
         assert_eq!(
@@ -2150,7 +2028,6 @@ mod tests {
             err
         );
     }
-
     #[test]
     fn helper_ticket_rejects_tampering() {
         let secret = [0x24; 32];
@@ -2160,7 +2037,6 @@ mod tests {
         let err = VpnHelperTicketV1::parse(&bytes, &secret, 1).expect_err("tamper must fail");
         assert_eq!(VpnHelperTicketError::InvalidMac, err);
     }
-
     #[test]
     fn helper_ticket_parse_rejects_inert_metering_public_key_material() {
         let secret = [0x42; 32];
@@ -2177,7 +2053,6 @@ mod tests {
             let mac_offset = VPN_HELPER_TICKET_LEN - blake3::OUT_LEN;
             let mac = helper_ticket_mac(&secret, &bytes[..mac_offset]);
             bytes[mac_offset..].copy_from_slice(mac.as_bytes());
-
             let err = VpnHelperTicketV1::parse(&bytes, &secret, 1)
                 .expect_err("authenticated inert metering key must fail admission");
             assert_eq!(
@@ -2187,51 +2062,39 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn helper_ticket_rejects_wrong_secret() {
         let secret = [0x24; 32];
         let wrong_secret = [0x25; 32];
         let ticket = sample_helper_ticket(55_000);
         let bytes = ticket.to_bytes(&secret);
-
         let err =
             VpnHelperTicketV1::parse(&bytes, &wrong_secret, 1).expect_err("wrong secret must fail");
-
         assert_eq!(VpnHelperTicketError::InvalidMac, err);
     }
-
     #[test]
     fn helper_ticket_rejects_bad_magic_at_valid_length() {
         let secret = [0x24; 32];
         let ticket = sample_helper_ticket(55_000);
         let mut bytes = ticket.to_bytes(&secret);
         bytes[0] ^= 0xFF;
-
         assert!(!VpnHelperTicketV1::looks_like(&bytes));
         let err = VpnHelperTicketV1::parse(&bytes, &secret, 1).expect_err("bad magic must fail");
-
         assert_eq!(VpnHelperTicketError::InvalidMagic, err);
     }
-
     #[test]
     fn helper_ticket_parse_hex_rejects_non_hex() {
         let secret = [0x24; 32];
-
         let err = VpnHelperTicketV1::parse_hex("not-hex", &secret, 1)
             .expect_err("non-hex ticket must fail");
-
         assert!(matches!(err, VpnHelperTicketError::Hex(_)));
     }
-
     #[test]
     fn helper_ticket_parse_hex_rejects_valid_hex_wrong_length() {
         let secret = [0x24; 32];
         let short_ticket = hex::encode(vec![0u8; VPN_HELPER_TICKET_LEN - 1]);
-
         let err = VpnHelperTicketV1::parse_hex(&short_ticket, &secret, 1)
             .expect_err("wrong-length hex ticket must fail");
-
         assert_eq!(
             VpnHelperTicketError::InvalidLength {
                 expected: VPN_HELPER_TICKET_LEN,
@@ -2240,7 +2103,6 @@ mod tests {
             err
         );
     }
-
     #[test]
     fn helper_ticket_mac_covers_metering_public_key() {
         let secret = [0x24; 32];
@@ -2248,13 +2110,10 @@ mod tests {
         let mut bytes = ticket.to_bytes(&secret);
         let metering_offset = VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32;
         bytes[metering_offset] ^= 0x01;
-
         let err = VpnHelperTicketV1::parse(&bytes, &secret, 1)
             .expect_err("metering key tamper must fail");
-
         assert_eq!(VpnHelperTicketError::InvalidMac, err);
     }
-
     #[test]
     fn helper_ticket_mac_covers_tariff_fields() {
         let secret = [0x24; 32];
@@ -2262,13 +2121,10 @@ mod tests {
         let mut bytes = ticket.to_bytes(&secret);
         let tariff_offset = VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32 + 32;
         bytes[tariff_offset + 7] ^= 0x01;
-
         let err =
             VpnHelperTicketV1::parse(&bytes, &secret, 1).expect_err("tariff tamper must fail");
-
         assert_eq!(VpnHelperTicketError::InvalidMac, err);
     }
-
     #[test]
     fn helper_ticket_mac_covers_expiry() {
         let secret = [0x24; 32];
@@ -2283,13 +2139,10 @@ mod tests {
             + 32
             + (4 * VPN_HELPER_TICKET_QUANTITY_SLOT_LEN);
         bytes[expiry_offset + 7] ^= 0x01;
-
         let err =
             VpnHelperTicketV1::parse(&bytes, &secret, 1).expect_err("expiry tamper must fail");
-
         assert_eq!(VpnHelperTicketError::InvalidMac, err);
     }
-
     #[test]
     fn helper_ticket_rejects_expired_ticket() {
         let secret = [0x99; 32];
@@ -2304,15 +2157,12 @@ mod tests {
             err
         );
     }
-
     #[test]
     fn usage_voucher_verifies_signature_and_hashes() {
         let (_key_pair, voucher) = sample_usage_voucher();
-
         voucher.verify().expect("voucher signature must verify");
         assert_ne!([0u8; 32], voucher.hash());
     }
-
     #[test]
     fn usage_voucher_try_sign_uses_checked_signature_and_verifies() {
         let key_pair = checked_random_keypair();
@@ -2326,30 +2176,25 @@ mod tests {
             active_ms: 90_000,
             issued_at_ms: 1_700_000_000_123,
         };
-
         let mut voucher =
             VpnUsageVoucherV1::try_sign(body, key_pair.private_key()).expect("checked voucher");
-
         assert_eq!(voucher.body, body);
         assert_eq!(&voucher.client_public_key, key_pair.public_key());
         voucher
             .verify()
             .expect("checked usage voucher signature must verify");
-
         voucher.signature = Signature::from_bytes(&[0_u8; 64]);
         assert!(
             voucher.verify().is_err(),
             "tampered checked voucher signature must fail"
         );
     }
-
     #[test]
     fn usage_voucher_rejects_malformed_ed25519_signature_r() {
         let (_key_pair, mut voucher) = sample_usage_voucher();
         voucher
             .verify()
             .expect("checked usage voucher signature must verify");
-
         let valid_signature = voucher.signature.clone();
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
@@ -2364,7 +2209,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn usage_voucher_rejects_malformed_mldsa_signature_lengths() {
         let key_pair = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
@@ -2384,7 +2228,6 @@ mod tests {
             .verify()
             .expect("valid ML-DSA usage voucher signature verifies");
         let valid_signature = voucher.signature.payload().to_vec();
-
         for (label, replacement_signature) in [
             (
                 "short",
@@ -2405,24 +2248,19 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn usage_voucher_rejects_body_tampering() {
         let (_key_pair, mut voucher) = sample_usage_voucher();
         voucher.body.egress_bytes = voucher.body.egress_bytes.saturating_add(1);
-
         assert!(voucher.verify().is_err());
     }
-
     #[test]
     fn usage_voucher_rejects_public_key_substitution() {
         let (_key_pair, mut voucher) = sample_usage_voucher();
         let other_key_pair = checked_random_keypair();
         voucher.client_public_key = other_key_pair.public_key().clone();
-
         assert!(voucher.verify().is_err());
     }
-
     #[test]
     fn usage_voucher_rejects_signature_substitution() {
         let (_key_pair, mut voucher) = sample_usage_voucher();
@@ -2430,15 +2268,12 @@ mod tests {
         voucher.signature = VpnUsageVoucherV1::try_sign(voucher.body, other_key_pair.private_key())
             .expect("checked wrong-key voucher")
             .signature;
-
         assert!(voucher.verify().is_err());
     }
-
     #[test]
     fn usage_voucher_hash_commits_body_public_key_and_signature() {
         let (key_pair, voucher) = sample_usage_voucher();
         let base_hash = voucher.hash();
-
         let mut body_changed = voucher.clone();
         body_changed.body.sequence = body_changed.body.sequence.saturating_add(1);
         body_changed.signature =
@@ -2446,11 +2281,9 @@ mod tests {
                 .expect("checked changed-body voucher")
                 .signature;
         assert_ne!(base_hash, body_changed.hash());
-
         let mut public_key_changed = voucher.clone();
         public_key_changed.client_public_key = checked_random_public_key();
         assert_ne!(base_hash, public_key_changed.hash());
-
         let signature_key_pair = checked_random_keypair();
         let signature_changed = VpnUsageVoucherV1 {
             signature: VpnUsageVoucherV1::try_sign(voucher.body, signature_key_pair.private_key())
@@ -2460,7 +2293,6 @@ mod tests {
         };
         assert_ne!(base_hash, signature_changed.hash());
     }
-
     #[test]
     fn tariff_computes_earned_fee_with_integer_ceiling_and_cap() {
         let tariff = VpnTariffV1 {
@@ -2479,12 +2311,10 @@ mod tests {
             active_ms: 1,
             issued_at_ms: 1_700_000_000_000,
         };
-
         assert_eq!(
             tariff.earned_fee(&voucher).expect("bounded fee"),
             quantity_nanos(103)
         );
-
         let capped = VpnUsageVoucherBodyV1 {
             ingress_bytes: u64::MAX,
             egress_bytes: u64::MAX,
@@ -2496,7 +2326,6 @@ mod tests {
             tariff.lease_fee
         );
     }
-
     #[test]
     fn tariff_component_bounds_only_the_final_ratio_result() {
         let maximum = maximum_quantity();
@@ -2516,7 +2345,6 @@ mod tests {
             active_ms: VpnTariffV1::MILLIS_PER_MINUTE,
             issued_at_ms: 1,
         };
-
         assert_eq!(
             tariff
                 .earned_fee(&voucher)
@@ -2524,7 +2352,6 @@ mod tests {
             maximum
         );
     }
-
     #[test]
     fn session_address_plan_is_deterministic_and_split_by_role() {
         let session_id = [0xA5; 16];
@@ -2540,7 +2367,6 @@ mod tests {
         assert!(first.session_routes[0].ends_with("/30"));
         assert!(first.session_routes[1].ends_with("/126"));
     }
-
     #[test]
     fn session_address_plan_changes_with_session_id() {
         let first = derive_vpn_session_address_plan_v1([0x01; 16]);
@@ -2551,7 +2377,6 @@ mod tests {
         );
         assert_ne!(first.session_routes, second.session_routes);
     }
-
     #[test]
     fn typed_address_slot_is_range_checked_and_embedded_in_session_id() {
         assert!(VpnAddressSlotV1::new(VPN_ADDRESS_SLOT_COUNT_V1).is_err());
@@ -2565,7 +2390,6 @@ mod tests {
             derive_vpn_address_plan_v1(slot)
         );
     }
-
     #[test]
     fn operator_quote_signature_binds_network_economics_identity_trust_and_slot() {
         let operator = checked_random_keypair();
@@ -2581,7 +2405,6 @@ mod tests {
         let quote = VpnSignedQuoteV1::try_sign(body, operator.private_key())
             .expect("operator signs canonical quote");
         quote.verify().expect("exact signed quote verifies");
-
         let mut substitutions = Vec::new();
         let mut changed = quote.clone();
         changed.body.network_id = test_network_id(0x42);
@@ -2604,14 +2427,12 @@ mod tests {
                 "every security-sensitive field substitution must invalidate the quote"
             );
         }
-
         let wrong_signer = checked_random_keypair();
         assert!(
             VpnSignedQuoteV1::try_sign(quote.body, wrong_signer.private_key()).is_err(),
             "a non-operator key must not issue the quote"
         );
     }
-
     #[test]
     fn operator_quote_reports_malformed_generic_algorithm_signature_payload() {
         let operator = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
@@ -2626,13 +2447,11 @@ mod tests {
         let mut quote = VpnSignedQuoteV1::try_sign(body, operator.private_key())
             .expect("secp256k1 operator signs canonical quote");
         quote.signature = Signature::from_bytes(&[0_u8; 64]);
-
         assert!(matches!(
             quote.verify(),
             Err(VpnQuoteSignatureError::MalformedSignature(_))
         ));
     }
-
     #[test]
     fn historical_quote_id_collision_fixtures_have_an_explicit_shared_slot_claim() {
         let mut quote_0009 = [0_u8; 32];
@@ -2646,7 +2465,6 @@ mod tests {
         let first_session = derive_vpn_session_id_v1(&network_id, quote_0009, &first_client, slot);
         let second_session =
             derive_vpn_session_id_v1(&network_id, quote_0198, &second_client, slot);
-
         assert_ne!(
             first_session, second_session,
             "session identity stays exact"
@@ -2657,7 +2475,6 @@ mod tests {
             "the bounded address collision is now represented by one typed claim"
         );
     }
-
     #[test]
     fn padded_cell_serializes_header_and_payload() {
         let header = VpnCellHeaderV1 {
@@ -2687,7 +2504,6 @@ mod tests {
         assert_eq!(&[0xBB; 32], &padded.bytes[42..74]);
         assert!(padded.bytes[74..].iter().all(|byte| *byte == 0));
     }
-
     #[test]
     fn padded_cell_rejects_oversized_payload() {
         let header = VpnCellHeaderV1 {
@@ -2706,7 +2522,6 @@ mod tests {
         let result = cell.into_padded_frame();
         assert!(matches!(result, Err(VpnCellError::PayloadTooLarge { .. })));
     }
-
     #[test]
     fn padded_cell_parses_roundtrip() {
         let header = VpnCellHeaderV1 {
@@ -2727,7 +2542,6 @@ mod tests {
         };
         let padded = cell.clone().into_padded_frame().expect("frame padded");
         let parsed = padded.parse().expect("frame parsed");
-
         assert_eq!(cell.header.version, parsed.header.version);
         assert_eq!(cell.header.class, parsed.header.class);
         assert_eq!(cell.header.flags, parsed.header.flags);
@@ -2742,7 +2556,6 @@ mod tests {
         assert_eq!(payload.len(), usize::from(parsed.header.payload_len));
         assert_eq!(payload, parsed.payload);
     }
-
     #[test]
     fn parse_rejects_invalid_class() {
         let header = VpnCellHeaderV1 {
@@ -2764,7 +2577,6 @@ mod tests {
         let parsed = padded.parse();
         assert!(matches!(parsed, Err(VpnCellError::InvalidClass(9))));
     }
-
     #[test]
     fn parse_rejects_non_zero_padding() {
         let header = VpnCellHeaderV1 {
@@ -2793,7 +2605,6 @@ mod tests {
             if index == VPN_HEADER_LEN + 4 && value == 0xAA
         ));
     }
-
     #[test]
     fn parse_rejects_unknown_flag_bits() {
         let header = VpnCellHeaderV1 {
@@ -2813,14 +2624,12 @@ mod tests {
             .expect("frame padded");
         // Set a reserved flag bit.
         padded.bytes[2] = 0x80;
-
         let parsed = padded.parse();
         assert!(matches!(
             parsed,
             Err(VpnCellError::InvalidFlags { bits, .. }) if bits == 0x80
         ));
     }
-
     #[test]
     fn parse_rejects_payload_overrun() {
         let header = VpnCellHeaderV1 {
@@ -2843,7 +2652,6 @@ mod tests {
         let parsed = padded.parse();
         assert!(matches!(parsed, Err(VpnCellError::PayloadTooLarge { .. })));
     }
-
     #[test]
     fn parse_rejects_short_frame() {
         let short_frame = vec![0u8; VPN_HEADER_LEN];
@@ -2853,7 +2661,6 @@ mod tests {
             Err(VpnCellError::FrameLengthMismatch { .. })
         ));
     }
-
     #[test]
     fn parse_rejects_non_zero_padding_trailing() {
         let header = VpnCellHeaderV1 {
@@ -2873,7 +2680,6 @@ mod tests {
             .expect("frame");
         let last = VPN_CELL_LEN - 1;
         frame.bytes[last] = 1;
-
         let parsed = frame.parse();
         assert!(matches!(
             parsed,
@@ -2881,7 +2687,6 @@ mod tests {
                 if index == last && value == 1
         ));
     }
-
     #[test]
     fn parse_rejects_flag_class_mismatch() {
         let header = VpnCellHeaderV1 {
@@ -2901,7 +2706,6 @@ mod tests {
         }
         .into_padded_frame()
         .expect("frame");
-
         let parsed = frame.parse();
         assert!(matches!(
             parsed,
@@ -2911,7 +2715,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn cover_schedule_is_deterministic() {
         let schedule = VpnCoverScheduleV1 {
@@ -2934,7 +2737,6 @@ mod tests {
             assert_eq!(cover, entry.is_cover);
         }
     }
-
     #[test]
     fn cover_schedule_consumes_full_seed() {
         let schedule = VpnCoverScheduleV1 {
@@ -2950,7 +2752,6 @@ mod tests {
         let plan_b = schedule.plan(seed_b, 5);
         assert_ne!(plan_a, plan_b);
     }
-
     #[test]
     fn cover_schedule_resets_after_burst_cap() {
         let schedule = VpnCoverScheduleV1 {
@@ -2965,34 +2766,28 @@ mod tests {
             assert_eq!(cover, entry.is_cover);
         }
     }
-
     #[test]
     fn exit_class_accepts_known_labels() {
         let standard = VpnExitClassV1::try_from_label("standard").expect("standard parsed");
         assert_eq!(VpnExitClassV1::Standard, standard);
         assert_eq!("standard", standard.as_label());
-
         let low = VpnExitClassV1::try_from_label("LOW-LATENCY").expect("low-latency parsed");
         assert_eq!(VpnExitClassV1::LowLatency, low);
         assert_eq!("low-latency", low.as_label());
-
         let high = VpnExitClassV1::try_from_label("high_security").expect("high_security parsed");
         assert_eq!(VpnExitClassV1::HighSecurity, high);
         assert_eq!("high-security", high.as_label());
     }
-
     #[test]
     fn exit_class_rejects_unknown_labels() {
         let err = VpnExitClassV1::try_from_label("ultra-fast").expect_err("label rejected");
         assert_eq!("ultra-fast", err.label);
     }
-
     #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
     struct VpnVectorFixtureFile {
         flow_label_bits: u8,
         vectors: Vec<VpnVectorFixture>,
     }
-
     #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
     struct VpnVectorFixture {
         name: String,
@@ -3006,12 +2801,10 @@ mod tests {
         payload_hex: String,
         frame_hex: String,
     }
-
     impl VpnVectorFixtureFile {
         fn path() -> PathBuf {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_PATH)
         }
-
         fn load() -> Self {
             let expected = sample_fixture();
             let path = Self::path();
@@ -3034,7 +2827,6 @@ mod tests {
             }
             actual
         }
-
         #[allow(dead_code)]
         fn render() -> String {
             let fixture = sample_fixture();
@@ -3046,7 +2838,6 @@ mod tests {
             rendered
         }
     }
-
     impl VpnVectorFixture {
         fn class(&self) -> VpnCellClassV1 {
             match self.class.as_str() {
@@ -3057,7 +2848,6 @@ mod tests {
                 other => panic!("unknown class label in fixture: {other}"),
             }
         }
-
         fn circuit_id(&self) -> [u8; 16] {
             let bytes = <Vec<u8>>::from_hex(&self.circuit_id_hex)
                 .expect("fixture circuit id hex should decode");
@@ -3065,11 +2855,9 @@ mod tests {
                 .try_into()
                 .expect("fixture circuit id must be 16 bytes")
         }
-
         fn payload(&self) -> Vec<u8> {
             <Vec<u8>>::from_hex(&self.payload_hex).expect("fixture payload hex should decode")
         }
-
         fn frame_bytes(&self) -> [u8; VPN_CELL_LEN] {
             let bytes =
                 <Vec<u8>>::from_hex(&self.frame_hex).expect("fixture frame hex should decode");
@@ -3084,7 +2872,6 @@ mod tests {
             frame.copy_from_slice(&bytes);
             frame
         }
-
         fn to_cell(&self) -> VpnCellV1 {
             let flow_label =
                 VpnFlowLabelV1::from_u32(self.flow_label).expect("fixture flow label is valid");
@@ -3105,7 +2892,6 @@ mod tests {
             }
         }
     }
-
     fn sample_fixture() -> VpnVectorFixtureFile {
         let vectors = vec![
             build_vector(
@@ -3147,7 +2933,6 @@ mod tests {
             vectors,
         }
     }
-
     #[allow(clippy::too_many_arguments)]
     fn build_vector(
         name: &str,
@@ -3191,7 +2976,6 @@ mod tests {
             frame_hex: hex::encode(frame.as_ref()),
         }
     }
-
     fn class_label(class: VpnCellClassV1) -> String {
         match class {
             VpnCellClassV1::Data => "data",
@@ -3201,14 +2985,12 @@ mod tests {
         }
         .to_string()
     }
-
     #[test]
     fn vpn_vector_fixture_matches_generator() {
         let expected = sample_fixture();
         let actual = VpnVectorFixtureFile::load();
         assert_eq!(expected, actual, "vpn vector fixture content drifted");
     }
-
     #[test]
     fn vpn_vector_fixture_roundtrips() {
         let fixture = VpnVectorFixtureFile::load();
@@ -3228,13 +3010,11 @@ mod tests {
                 "encoded frame did not match fixture for {}",
                 vector.name
             );
-
             let parsed = VpnPaddedCellV1 {
                 bytes: vector.frame_bytes(),
             }
             .parse()
             .expect("fixture frame should parse");
-
             assert_eq!(
                 1, parsed.header.version,
                 "version mismatch for {}",

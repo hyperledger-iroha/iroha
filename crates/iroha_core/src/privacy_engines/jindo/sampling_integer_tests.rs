@@ -1,10 +1,7 @@
 use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-
 use super::*;
-
 #[derive(Clone)]
 struct TestRng(u64);
-
 impl RngCore for TestRng {
     fn next_u32(&mut self) -> u32 {
         self.next_u64() as u32
@@ -29,7 +26,6 @@ impl RngCore for TestRng {
     }
 }
 impl CryptoRng for TestRng {}
-
 struct FailingRng;
 impl RngCore for FailingRng {
     fn next_u32(&mut self) -> u32 {
@@ -46,7 +42,6 @@ impl RngCore for FailingRng {
     }
 }
 impl CryptoRng for FailingRng {}
-
 #[test]
 fn uniform_samplers_are_bounded_and_fallible() {
     let mut rng = TestRng(9);
@@ -61,7 +56,6 @@ fn uniform_samplers_are_bounded_and_fallible() {
         Err(JindoSamplingErrorV1::RandomnessUnavailable)
     );
 }
-
 #[test]
 fn aggregate_gaussian_is_inside_the_exact_tail() {
     let mut rng = TestRng(0x1234_5678_9abc_def0);
@@ -73,7 +67,6 @@ fn aggregate_gaussian_is_inside_the_exact_tail() {
     .unwrap();
     assert!(sample.unsigned_abs() <= JindoGaussianWidthV1::AggregateMask.tail_radius());
 }
-
 #[test]
 fn rejection_probability_is_integer_defined_and_rng_fallible() {
     let mut a = TestRng(77);
@@ -87,7 +80,6 @@ fn rejection_probability_is_integer_defined_and_rng_fallible() {
         Err(JindoSamplingErrorV1::RandomnessUnavailable),
     );
 }
-
 #[test]
 fn uniform_field_sampler_is_canonical() {
     let mut rng = TestRng(42);

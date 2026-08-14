@@ -4,13 +4,7 @@
 //! T256 Hyrax commitment, sequential Nova folding, and one terminal Relaxed
 //! Spartan proof. A fresh full relaxed assignment masks every strict witness
 //! coordinate before Spartan's direct openings are released.
-
 #![allow(unexpected_cfgs)]
-
-use core::ops::{Deref, DerefMut};
-
-use thiserror::Error;
-
 use super::{
     VegaPointWireV1, VegaScalarWireV1, VegaT256ScalarV1 as Scalar,
     circuit::{CircuitAssignment, MAX_CIRCUIT_ROWS},
@@ -21,12 +15,15 @@ use super::{
     sumcheck::{CompressedUnivariate, SumcheckProof},
     transcript::VegaTranscriptV1,
 };
-
+use core::ops::{Deref, DerefMut};
+#[cfg(test)]
+use std::collections::VecDeque;
+use std::sync::Arc;
+use thiserror::Error;
 pub(super) const MASKED_RELAXED_COMMITMENT_COLUMNS_V1: usize = 1024;
 pub(super) const MAX_MASKED_RELAXED_STRICT_INSTANCES_V1: usize = 8;
 const PROOF_VERSION_V1: u8 = 1;
 const RANDOM_HEALTH_RETRIES: usize = 16;
-
 /// Failure explicitly reported by an injected cryptographic random source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum MaskedRelaxedRandomErrorV1 {
@@ -34,13 +31,11 @@ pub enum MaskedRelaxedRandomErrorV1 {
     #[error("masked relaxed-R1CS cryptographic random source is unavailable")]
     Unavailable,
 }
-
 /// Fallible cryptographic byte source used by the masked composer.
 pub trait MaskedRelaxedRandomSourceV1 {
     /// Fill the complete destination or report unavailability.
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1>;
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum MaskedRelaxedErrorV1 {
     #[error("masked relaxed-R1CS strict-instance count {actual} is outside 1..={max}")]
@@ -60,7 +55,6 @@ pub enum MaskedRelaxedErrorV1 {
     #[error(transparent)]
     Random(#[from] MaskedRelaxedRandomErrorV1),
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct MaskedRelaxedDimensionsV1 {
     pub(super) variable_count: usize,
@@ -71,7 +65,6 @@ pub(super) struct MaskedRelaxedDimensionsV1 {
     pub(super) outer_sumcheck_rounds: usize,
     pub(super) inner_sumcheck_rounds: usize,
 }
-
 impl MaskedRelaxedDimensionsV1 {
     pub(super) fn from_shape(shape: &Shape) -> Result<Self, MaskedRelaxedErrorV1> {
         if shape.public_input_count() == 0
@@ -109,7 +102,6 @@ impl MaskedRelaxedDimensionsV1 {
                 .ok_or(MaskedRelaxedErrorV1::InvalidProfile)?,
         })
     }
-
     pub(super) fn proof_decode_limits(
         self,
         expected_instances: usize,
@@ -161,7 +153,35 @@ impl MaskedRelaxedDimensionsV1 {
         ))
     }
 }
-
+/// Immutable protocol inputs shared by one streamed masked-relaxed precomputation.
+pub(super) struct MaskedRelaxedStreamConfigV1<'a> {
+    domain: &'static [u8],
+    context_frame: &'a [u8],
+    commitment_key_label: &'a [u8],
+    shape: Arc<Shape>,
+    strict_public_inputs: &'a [Vec<Scalar>],
+    worker_count: usize,
+}
+impl<'a> MaskedRelaxedStreamConfigV1<'a> {
+    /// Bind transcript, commitment, shape, input, and worker parameters for one stream.
+    pub(super) fn new(
+        domain: &'static [u8],
+        context_frame: &'a [u8],
+        commitment_key_label: &'a [u8],
+        shape: Arc<Shape>,
+        strict_public_inputs: &'a [Vec<Scalar>],
+        worker_count: usize,
+    ) -> Self {
+        Self {
+            domain,
+            context_frame,
+            commitment_key_label,
+            shape,
+            strict_public_inputs,
+            worker_count,
+        }
+    }
+}
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -170,7 +190,6 @@ impl MaskedRelaxedDimensionsV1 {
 pub(super) struct MaskedRelaxedCommitmentWireV1 {
     pub(super) points: Vec<VegaPointWireV1>,
 }
-
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -193,7 +212,6 @@ pub(super) struct MaskedRelaxedProofWireV1 {
     pub(super) error_opening: Vec<VegaScalarWireV1>,
     pub(super) error_opening_blinding: VegaScalarWireV1,
 }
-
 /// Producer-side masked Nova history before the terminal Spartan proof.
 ///
 /// The final folded witness remains inside a zeroizing wrapper. Public
@@ -201,7 +219,7 @@ pub(super) struct MaskedRelaxedProofWireV1 {
 /// settlement must derive the terminal instance again with
 /// [`verify_and_replay_masked_relaxed_v1`].
 pub(super) struct MaskedRelaxedPrecomputationV1 {
-    pub(super) shape: Shape,
+    pub(super) shape: Arc<Shape>,
     pub(super) mask_instance: RelaxedInstance,
     pub(super) strict_instances: Vec<Instance>,
     pub(super) folds: Vec<NovaNifs>,
@@ -209,86 +227,103 @@ pub(super) struct MaskedRelaxedPrecomputationV1 {
     pub(super) folded_instance: RelaxedInstance,
     folded_witness: SecretRelaxedWitness,
 }
-
 /// Own all caller-supplied circuit witnesses before the first fallible check.
 ///
 /// Processed witnesses are moved into narrower RAII owners; any unprocessed
 /// witness remains here and is erased on success, error, or unwind.
-struct SecretCircuitAssignmentsV1(Vec<CircuitAssignment>);
-
+#[cfg(test)]
+struct SecretCircuitAssignmentsV1(VecDeque<CircuitAssignment>);
+#[cfg(test)]
 impl SecretCircuitAssignmentsV1 {
     fn new(assignments: Vec<CircuitAssignment>) -> Self {
-        Self(assignments)
+        Self(assignments.into())
     }
-
     fn len(&self) -> usize {
         self.0.len()
     }
-
     fn first(&self) -> Option<&CircuitAssignment> {
-        self.0.first()
+        self.0.front()
     }
-
-    fn iter(&self) -> core::slice::Iter<'_, CircuitAssignment> {
+    fn iter(&self) -> std::collections::vec_deque::Iter<'_, CircuitAssignment> {
         self.0.iter()
     }
-
-    fn iter_mut(&mut self) -> core::slice::IterMut<'_, CircuitAssignment> {
-        self.0.iter_mut()
+    fn take_next(&mut self) -> Option<CircuitAssignment> {
+        self.0.pop_front()
     }
 }
-
+#[cfg(test)]
 impl Drop for SecretCircuitAssignmentsV1 {
     fn drop(&mut self) {
         for assignment in &mut self.0 {
             clear_secret_scalar_slice_v1(&mut assignment.witness);
         }
         #[cfg(test)]
-        if self
-            .0
-            .iter()
-            .all(|assignment| assignment.witness.iter().all(|value| value.is_zero()))
+        if !self.0.is_empty()
+            && self
+                .0
+                .iter()
+                .all(|assignment| assignment.witness.iter().all(|value| value.is_zero()))
         {
             let _ = SECRET_ASSIGNMENT_WITNESS_ZEROIZED_DROPS_V1
                 .try_with(|drops| drops.set(drops.get().saturating_add(1)));
         }
     }
 }
-
+/// Own the sole materialized strict witness for one streaming fold step.
+///
+/// No later assignment is requested until this owner has transferred its
+/// witness into [`SecretWitness`] and left scope. This keeps both the normal
+/// and unwind paths bounded to one strict assignment at a time.
+struct SecretCircuitAssignmentV1(CircuitAssignment);
+impl SecretCircuitAssignmentV1 {
+    fn new(assignment: CircuitAssignment) -> Self {
+        #[cfg(test)]
+        note_streaming_assignment_created_v1();
+        Self(assignment)
+    }
+}
+impl Deref for SecretCircuitAssignmentV1 {
+    type Target = CircuitAssignment;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl DerefMut for SecretCircuitAssignmentV1 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for SecretCircuitAssignmentV1 {
+    fn drop(&mut self) {
+        clear_secret_scalar_slice_v1(&mut self.0.witness);
+        #[cfg(test)]
+        if self.0.witness.iter().all(|value| value.is_zero()) {
+            let _ = SECRET_ASSIGNMENT_WITNESS_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+        #[cfg(test)]
+        note_streaming_assignment_dropped_v1();
+    }
+}
 impl MaskedRelaxedPrecomputationV1 {
     pub(super) fn folded_witness(&self) -> &RelaxedWitness {
         &self.folded_witness
     }
+    /// Consume the precomputation and move its final folded scalar owners
+    /// without cloning them through a second release-sized representation.
+    #[cfg(test)]
+    pub(super) fn into_folded_opening(mut self) -> (RelaxedInstance, RelaxedWitness) {
+        let folded_witness = self.folded_witness.take();
+        (self.folded_instance, folded_witness)
+    }
 }
-
-pub(super) fn prove_masked_relaxed_v1<R: MaskedRelaxedRandomSourceV1>(
-    domain: &'static [u8],
-    context_frame: &[u8],
-    commitment_key_label: &[u8],
-    assignments: Vec<CircuitAssignment>,
-    worker_count: usize,
-    random: &mut R,
-) -> Result<MaskedRelaxedProofWireV1, MaskedRelaxedErrorV1> {
-    let precomputation = precompute_masked_relaxed_v1(
-        domain,
-        context_frame,
-        commitment_key_label,
-        assignments,
-        worker_count,
-        random,
-    )?;
-    prove_masked_relaxed_precomputation_v1(
-        domain,
-        context_frame,
-        commitment_key_label,
-        &precomputation,
-        worker_count,
-    )
-}
-
 /// Build the complete producer-side masked Nova history from strict circuit
 /// assignments. This is the canonical source of the transcript schedule used
 /// by plaintext KATs and by the encrypted Phase-II/III conformance oracle.
+///
+/// This compatibility wrapper is intended only for small callers that already
+/// own every witness. Release paths should call the streaming factory below.
+#[cfg(test)]
 pub(super) fn precompute_masked_relaxed_v1<R: MaskedRelaxedRandomSourceV1>(
     domain: &'static [u8],
     context_frame: &[u8],
@@ -299,49 +334,94 @@ pub(super) fn precompute_masked_relaxed_v1<R: MaskedRelaxedRandomSourceV1>(
 ) -> Result<MaskedRelaxedPrecomputationV1, MaskedRelaxedErrorV1> {
     let mut assignments = SecretCircuitAssignmentsV1::new(assignments);
     validate_count(assignments.len())?;
+    let shape = assignments
+        .first()
+        .map(|assignment| Arc::clone(&assignment.shape))
+        .ok_or(MaskedRelaxedErrorV1::InvalidProfile)?;
+    let public_inputs = assignments
+        .iter()
+        .map(|assignment| assignment.public_inputs.clone())
+        .collect::<Vec<_>>();
+    precompute_masked_relaxed_stream_v1(
+        MaskedRelaxedStreamConfigV1::new(
+            domain,
+            context_frame,
+            commitment_key_label,
+            shape,
+            &public_inputs,
+            worker_count,
+        ),
+        |_| {
+            assignments
+                .take_next()
+                .ok_or(MaskedRelaxedErrorV1::InvalidProfile)
+        },
+        random,
+    )
+}
+/// Build the masked Nova history while materializing at most one strict
+/// circuit assignment at a time.
+///
+/// `strict_public_inputs` fixes the complete transcript before the first
+/// assignment is requested. The factory is then called exactly once per row,
+/// in order; the returned witness is zeroized and released before the next
+/// call. This preserves the canonical transcript while avoiding a
+/// release-sized `Vec<CircuitAssignment>` owner.
+pub(super) fn precompute_masked_relaxed_stream_v1<
+    R: MaskedRelaxedRandomSourceV1,
+    F: FnMut(usize) -> Result<CircuitAssignment, MaskedRelaxedErrorV1>,
+>(
+    config: MaskedRelaxedStreamConfigV1<'_>,
+    mut assignment_at: F,
+    random: &mut R,
+) -> Result<MaskedRelaxedPrecomputationV1, MaskedRelaxedErrorV1> {
+    let MaskedRelaxedStreamConfigV1 {
+        domain,
+        context_frame,
+        commitment_key_label,
+        shape,
+        strict_public_inputs,
+        worker_count,
+    } = config;
+    validate_count(strict_public_inputs.len())?;
     validate_worker_count(worker_count)?;
     if domain.is_empty() || context_frame.is_empty() || commitment_key_label.is_empty() {
         return Err(MaskedRelaxedErrorV1::InvalidProfile);
     }
-    let shape = assignments
-        .first()
-        .map(|assignment| assignment.shape.clone())
-        .ok_or(MaskedRelaxedErrorV1::InvalidProfile)?;
     let dimensions = MaskedRelaxedDimensionsV1::from_shape(&shape)?;
-    if assignments.iter().any(|assignment| {
-        assignment.shape != shape || assignment.public_inputs.len() != dimensions.public_input_count
-    }) {
+    if strict_public_inputs
+        .iter()
+        .any(|inputs| inputs.len() != dimensions.public_input_count)
+    {
         return Err(MaskedRelaxedErrorV1::InvalidProfile);
-    }
-    for assignment in assignments.iter() {
-        shape
-            .validate_relaxed_assignment(
-                &assignment.witness,
-                Scalar::one(),
-                &assignment.public_inputs,
-                &vec![Scalar::zero(); shape.constraint_count()],
-            )
-            .map_err(|_| MaskedRelaxedErrorV1::UnsatisfiedWitness)?;
     }
     let key = CommitmentKey::derive(commitment_key_label, MASKED_RELAXED_COMMITMENT_COLUMNS_V1)
         .and_then(|key| key.with_worker_count(worker_count))
         .map_err(|_| MaskedRelaxedErrorV1::InvalidProfile)?;
-
     validate_random_health(random)?;
     let (mut folded_instance, folded_witness) =
         sample_relaxed_mask(random, &shape, &key, dimensions)?;
     let mut folded_witness = SecretRelaxedWitness::new(folded_witness);
     let mask_instance = folded_instance.clone();
-    let public_inputs = assignments
-        .iter()
-        .map(|assignment| assignment.public_inputs.clone())
-        .collect::<Vec<_>>();
-    let mut transcript =
-        composition_transcript(domain, context_frame, &shape, &public_inputs, dimensions)?;
-    let mut strict_instances = Vec::with_capacity(assignments.len());
-    let mut folds = Vec::with_capacity(assignments.len());
-
-    for assignment in assignments.iter_mut() {
+    let mut transcript = composition_transcript(
+        domain,
+        context_frame,
+        &shape,
+        strict_public_inputs,
+        dimensions,
+    )?;
+    let mut strict_instances = Vec::with_capacity(strict_public_inputs.len());
+    let mut folds = Vec::with_capacity(strict_public_inputs.len());
+    for (index, expected_public_inputs) in strict_public_inputs.iter().enumerate() {
+        let mut assignment = SecretCircuitAssignmentV1::new(assignment_at(index)?);
+        if !Arc::ptr_eq(&assignment.shape, &shape)
+            || assignment.public_inputs.as_slice() != expected_public_inputs.as_slice()
+        {
+            return Err(MaskedRelaxedErrorV1::InvalidProfile);
+        }
+        shape
+            .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
+            .map_err(|_| MaskedRelaxedErrorV1::UnsatisfiedWitness)?;
         let mut regular_witness = SecretWitness::new(Witness {
             values: core::mem::take(&mut assignment.witness),
             blindings: Vec::new(),
@@ -357,7 +437,7 @@ pub(super) fn precompute_masked_relaxed_v1<R: MaskedRelaxedRandomSourceV1>(
             witness_commitment: key
                 .commit(&regular_witness.values, &regular_witness.blindings)
                 .map_err(|_| MaskedRelaxedErrorV1::DegenerateRandomness)?,
-            public_inputs: assignment.public_inputs.clone(),
+            public_inputs: expected_public_inputs.clone(),
         };
         let cross_blindings = SecretScalars::new(sample_nonzero_scalars(
             random,
@@ -390,7 +470,6 @@ pub(super) fn precompute_masked_relaxed_v1<R: MaskedRelaxedRandomSourceV1>(
         folded_witness,
     })
 }
-
 /// Finish one producer-side precomputation without exposing or copying its
 /// zeroized final folded witness.
 pub(super) fn prove_masked_relaxed_precomputation_v1(
@@ -412,7 +491,6 @@ pub(super) fn prove_masked_relaxed_precomputation_v1(
         worker_count,
     )
 }
-
 /// Finish a masked relaxed-R1CS proof from a publicly replayable fold history
 /// and the one final folded witness reconstructed by the PBS.
 ///
@@ -451,7 +529,6 @@ pub(super) fn prove_precomputed_masked_relaxed_v1(
         worker_count,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 fn prove_precomputed_masked_relaxed_inner_v1(
     domain: &'static [u8],
@@ -506,7 +583,6 @@ fn prove_precomputed_masked_relaxed_inner_v1(
             )
             .map_err(|_| MaskedRelaxedErrorV1::VerificationFailed)?;
     }
-
     shape
         .validate_relaxed_assignment(
             &folded_witness.values,
@@ -526,7 +602,6 @@ fn prove_precomputed_masked_relaxed_inner_v1(
     {
         return Err(MaskedRelaxedErrorV1::VerificationFailed);
     }
-
     let spartan = RelaxedSpartanProof::prove(
         shape,
         &key,
@@ -537,7 +612,6 @@ fn prove_precomputed_masked_relaxed_inner_v1(
     .map_err(|_| MaskedRelaxedErrorV1::InvalidProfile)?;
     let proof =
         MaskedRelaxedProofWireV1::from_protocol(mask_instance, strict_instances, folds, &spartan)?;
-
     // A native prover bug must never escape as a settlement-acceptable wire.
     verify_masked_relaxed_v1(
         domain,
@@ -549,7 +623,6 @@ fn prove_precomputed_masked_relaxed_inner_v1(
     )?;
     Ok(proof)
 }
-
 pub(super) fn verify_masked_relaxed_v1(
     domain: &'static [u8],
     context_frame: &[u8],
@@ -568,7 +641,6 @@ pub(super) fn verify_masked_relaxed_v1(
     )
     .map(|_| ())
 }
-
 /// Verify the complete masked fold proof and return the terminal relaxed
 /// instance derived by public replay.
 ///
@@ -616,7 +688,6 @@ pub(super) fn verify_and_replay_masked_relaxed_v1(
         .map_err(|_| MaskedRelaxedErrorV1::VerificationFailed)?;
     Ok(folded)
 }
-
 impl MaskedRelaxedProofWireV1 {
     fn from_protocol(
         mask: &RelaxedInstance,
@@ -687,7 +758,6 @@ impl MaskedRelaxedProofWireV1 {
             error_opening_blinding: VegaScalarWireV1::from_scalar(spartan.error_opening_blinding),
         })
     }
-
     pub(super) fn validate_shape(
         &self,
         dimensions: MaskedRelaxedDimensionsV1,
@@ -717,7 +787,6 @@ impl MaskedRelaxedProofWireV1 {
         }
         Ok(())
     }
-
     fn to_protocol(
         &self,
         strict_public_inputs: &[Vec<Scalar>],
@@ -784,7 +853,6 @@ impl MaskedRelaxedProofWireV1 {
         Ok((mask, strict, folds, spartan))
     }
 }
-
 impl MaskedRelaxedCommitmentWireV1 {
     fn from_commitment(commitment: &Commitment) -> Result<Self, MaskedRelaxedErrorV1> {
         Ok(Self {
@@ -797,7 +865,6 @@ impl MaskedRelaxedCommitmentWireV1 {
                 .map_err(|_| MaskedRelaxedErrorV1::InvalidProfile)?,
         })
     }
-
     fn to_commitment(&self) -> Result<Commitment, MaskedRelaxedErrorV1> {
         Commitment::from_points(
             self.points
@@ -810,43 +877,31 @@ impl MaskedRelaxedCommitmentWireV1 {
         .map_err(|_| MaskedRelaxedErrorV1::InvalidProofEncoding)
     }
 }
-
 fn sample_relaxed_mask<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
     shape: &Shape,
     key: &CommitmentKey,
     dimensions: MaskedRelaxedDimensionsV1,
 ) -> Result<(RelaxedInstance, RelaxedWitness), MaskedRelaxedErrorV1> {
-    let values = SecretScalars::new(sample_scalars(random, shape.variable_count())?);
+    let mut values = SecretScalars::new(sample_scalars(random, shape.variable_count())?);
     let relaxation = SecretScalar::new(sample_scalar(random)?);
-    let public_inputs = SecretScalars::new(sample_scalars(random, shape.public_input_count())?);
+    let mut public_inputs = SecretScalars::new(sample_scalars(random, shape.public_input_count())?);
     if relaxation.is_zero()
         && values.iter().all(|value| value.is_zero())
         && public_inputs.iter().all(|value| value.is_zero())
     {
         return Err(MaskedRelaxedErrorV1::DegenerateRandomness);
     }
-    let mut assignment = SecretScalars::new(Vec::with_capacity(shape.columns()));
-    assignment.extend_from_slice(&values);
-    assignment.push(*relaxation);
-    assignment.extend_from_slice(&public_inputs);
-    let products = shape
-        .multiply(&assignment)
-        .map_err(|_| MaskedRelaxedErrorV1::InvalidProfile)?;
-    let error = SecretScalars::new(
-        products
-            .a
-            .into_iter()
-            .zip(products.b)
-            .zip(products.c)
-            .map(|((a, b), c)| a * b - *relaxation * c)
-            .collect(),
+    let mut error = SecretScalars::new(
+        shape
+            .derive_relaxed_error(&values, *relaxation, &public_inputs)
+            .map_err(|_| MaskedRelaxedErrorV1::InvalidProfile)?,
     );
-    let witness_blindings = SecretScalars::new(sample_nonzero_scalars(
+    let mut witness_blindings = SecretScalars::new(sample_nonzero_scalars(
         random,
         dimensions.witness_commitment_points,
     )?);
-    let error_blindings = SecretScalars::new(sample_nonzero_scalars(
+    let mut error_blindings = SecretScalars::new(sample_nonzero_scalars(
         random,
         dimensions.error_commitment_points,
     )?);
@@ -860,18 +915,17 @@ fn sample_relaxed_mask<R: MaskedRelaxedRandomSourceV1>(
         RelaxedInstance {
             witness_commitment,
             error_commitment,
-            public_inputs: public_inputs.to_vec(),
+            public_inputs: core::mem::take(&mut *public_inputs),
             relaxation: *relaxation,
         },
         RelaxedWitness {
-            values: values.to_vec(),
-            witness_blindings: witness_blindings.to_vec(),
-            error: error.to_vec(),
-            error_blindings: error_blindings.to_vec(),
+            values: core::mem::take(&mut *values),
+            witness_blindings: core::mem::take(&mut *witness_blindings),
+            error: core::mem::take(&mut *error),
+            error_blindings: core::mem::take(&mut *error_blindings),
         },
     ))
 }
-
 /// Construct the sole masked-Nova composition transcript used by plaintext,
 /// encrypted, prover, and verifier paths.
 pub(super) fn masked_relaxed_composition_transcript_v1(
@@ -899,7 +953,6 @@ pub(super) fn masked_relaxed_composition_transcript_v1(
         dimensions,
     )
 }
-
 fn composition_transcript(
     domain: &'static [u8],
     context_frame: &[u8],
@@ -950,7 +1003,6 @@ fn composition_transcript(
         .map_err(|_| MaskedRelaxedErrorV1::InvalidProfile)?;
     Ok(transcript)
 }
-
 fn push_frame(output: &mut Vec<u8>, tag: u8, value: &[u8]) -> Result<(), MaskedRelaxedErrorV1> {
     output.push(tag);
     output.extend_from_slice(
@@ -961,7 +1013,6 @@ fn push_frame(output: &mut Vec<u8>, tag: u8, value: &[u8]) -> Result<(), MaskedR
     output.extend_from_slice(value);
     Ok(())
 }
-
 fn sample_scalar<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
 ) -> Result<Scalar, MaskedRelaxedErrorV1> {
@@ -969,7 +1020,6 @@ fn sample_scalar<R: MaskedRelaxedRandomSourceV1>(
     random.fill_bytes(wide.as_mut_slice())?;
     Ok(Scalar::from_uniform_le_bytes_ref(wide.as_array()))
 }
-
 fn sample_nonzero_scalar<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
 ) -> Result<Scalar, MaskedRelaxedErrorV1> {
@@ -981,7 +1031,6 @@ fn sample_nonzero_scalar<R: MaskedRelaxedRandomSourceV1>(
     }
     Err(MaskedRelaxedErrorV1::DegenerateRandomness)
 }
-
 fn validate_random_health<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
 ) -> Result<(), MaskedRelaxedErrorV1> {
@@ -994,7 +1043,6 @@ fn validate_random_health<R: MaskedRelaxedRandomSourceV1>(
     }
     Err(MaskedRelaxedErrorV1::DegenerateRandomness)
 }
-
 fn sample_scalars<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
     count: usize,
@@ -1003,9 +1051,8 @@ fn sample_scalars<R: MaskedRelaxedRandomSourceV1>(
     for _ in 0..count {
         values.push(sample_scalar(random)?);
     }
-    Ok(values.to_vec())
+    Ok(core::mem::take(&mut *values))
 }
-
 fn sample_nonzero_scalars<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
     count: usize,
@@ -1014,9 +1061,8 @@ fn sample_nonzero_scalars<R: MaskedRelaxedRandomSourceV1>(
     for _ in 0..count {
         values.push(sample_nonzero_scalar(random)?);
     }
-    Ok(values.to_vec())
+    Ok(core::mem::take(&mut *values))
 }
-
 fn validate_count(count: usize) -> Result<(), MaskedRelaxedErrorV1> {
     if count == 0 || count > MAX_MASKED_RELAXED_STRICT_INSTANCES_V1 {
         return Err(MaskedRelaxedErrorV1::InvalidInstanceCount {
@@ -1026,7 +1072,6 @@ fn validate_count(count: usize) -> Result<(), MaskedRelaxedErrorV1> {
     }
     Ok(())
 }
-
 fn validate_worker_count(worker_count: usize) -> Result<(), MaskedRelaxedErrorV1> {
     if worker_count == 0 || worker_count > MAX_COMMITMENT_WORKERS {
         return Err(MaskedRelaxedErrorV1::InvalidWorkerCount {
@@ -1036,7 +1081,6 @@ fn validate_worker_count(worker_count: usize) -> Result<(), MaskedRelaxedErrorV1
     }
     Ok(())
 }
-
 fn scalar_array_to_wire<const N: usize>(
     scalars: &[Scalar],
 ) -> Result<[VegaScalarWireV1; N], MaskedRelaxedErrorV1> {
@@ -1048,17 +1092,14 @@ fn scalar_array_to_wire<const N: usize>(
         .try_into()
         .map_err(|_| MaskedRelaxedErrorV1::InvalidProfile)
 }
-
 fn wire_to_scalar(scalar: VegaScalarWireV1) -> Result<Scalar, MaskedRelaxedErrorV1> {
     scalar
         .to_scalar()
         .map_err(|_| MaskedRelaxedErrorV1::InvalidProofEncoding)
 }
-
 fn wire_to_scalars(scalars: &[VegaScalarWireV1]) -> Result<Vec<Scalar>, MaskedRelaxedErrorV1> {
     scalars.iter().copied().map(wire_to_scalar).collect()
 }
-
 fn wire_to_scalar_array<const N: usize>(
     scalars: &[VegaScalarWireV1; N],
 ) -> Result<[Scalar; N], MaskedRelaxedErrorV1> {
@@ -1066,33 +1107,26 @@ fn wire_to_scalar_array<const N: usize>(
         .try_into()
         .map_err(|_| MaskedRelaxedErrorV1::InvalidProofEncoding)
 }
-
 const MASKED_RELAXED_SCALAR_ENTROPY_BYTES_V1: usize = 64;
-
 fn clear_secret_byte_slice_v1(bytes: &mut [u8]) {
     let bytes = core::hint::black_box(bytes);
     bytes.fill(0);
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     let _ = core::hint::black_box(&mut *bytes);
 }
-
 /// Fixed-size entropy owner cleared on success, error, and unwind.
 struct SecretScalarEntropyV1([u8; MASKED_RELAXED_SCALAR_ENTROPY_BYTES_V1]);
-
 impl SecretScalarEntropyV1 {
     const fn zeroed() -> Self {
         Self([0; MASKED_RELAXED_SCALAR_ENTROPY_BYTES_V1])
     }
-
     fn as_mut_slice(&mut self) -> &mut [u8] {
         &mut self.0
     }
-
     fn as_array(&self) -> &[u8; MASKED_RELAXED_SCALAR_ENTROPY_BYTES_V1] {
         &self.0
     }
 }
-
 impl Drop for SecretScalarEntropyV1 {
     fn drop(&mut self) {
         let bytes = core::hint::black_box(&mut self.0);
@@ -1106,23 +1140,18 @@ impl Drop for SecretScalarEntropyV1 {
         let _ = core::hint::black_box(&mut *bytes);
     }
 }
-
 struct SecretScalar(Scalar);
-
 impl SecretScalar {
     fn new(value: Scalar) -> Self {
         Self(value)
     }
 }
-
 impl Deref for SecretScalar {
     type Target = Scalar;
-
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 impl Drop for SecretScalar {
     fn drop(&mut self) {
         let value = core::hint::black_box(&mut self.0);
@@ -1136,9 +1165,7 @@ impl Drop for SecretScalar {
         let _ = core::hint::black_box(&mut *value);
     }
 }
-
 struct SecretScalars(Vec<Scalar>);
-
 fn clear_secret_scalar_slice_v1(values: &mut [Scalar]) {
     let values = core::hint::black_box(values);
     for value in values.iter_mut() {
@@ -1147,7 +1174,6 @@ fn clear_secret_scalar_slice_v1(values: &mut [Scalar]) {
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     let _ = core::hint::black_box(&mut *values);
 }
-
 #[cfg(test)]
 std::thread_local! {
     static SECRET_ASSIGNMENT_WITNESS_ZEROIZED_DROPS_V1: core::cell::Cell<usize> = const {
@@ -1174,60 +1200,84 @@ std::thread_local! {
     static STRICT_WITNESS_HANDOFF_FAULT_V1: core::cell::Cell<u8> = const {
         core::cell::Cell::new(0)
     };
+    static STREAMING_ASSIGNMENT_LIVE_V1: core::cell::Cell<usize> = const {
+        core::cell::Cell::new(0)
+    };
+    static STREAMING_ASSIGNMENT_PEAK_V1: core::cell::Cell<usize> = const {
+        core::cell::Cell::new(0)
+    };
 }
-
+#[cfg(test)]
+fn note_streaming_assignment_created_v1() {
+    let _ = STREAMING_ASSIGNMENT_LIVE_V1.try_with(|live| {
+        let next = live.get().saturating_add(1);
+        live.set(next);
+        let _ = STREAMING_ASSIGNMENT_PEAK_V1.try_with(|peak| peak.set(peak.get().max(next)));
+    });
+}
+#[cfg(test)]
+fn note_streaming_assignment_dropped_v1() {
+    let _ = STREAMING_ASSIGNMENT_LIVE_V1.try_with(|live| live.set(live.get().saturating_sub(1)));
+}
+#[cfg(test)]
+fn reset_streaming_assignment_residency_v1() {
+    let _ = STREAMING_ASSIGNMENT_LIVE_V1.try_with(|live| live.set(0));
+    let _ = STREAMING_ASSIGNMENT_PEAK_V1.try_with(|peak| peak.set(0));
+}
+#[cfg(test)]
+fn streaming_assignment_residency_v1() -> (usize, usize) {
+    let live = STREAMING_ASSIGNMENT_LIVE_V1
+        .try_with(core::cell::Cell::get)
+        .unwrap_or(usize::MAX);
+    let peak = STREAMING_ASSIGNMENT_PEAK_V1
+        .try_with(core::cell::Cell::get)
+        .unwrap_or(usize::MAX);
+    (live, peak)
+}
 #[cfg(test)]
 fn secret_assignment_witness_zeroized_drop_count_v1() -> usize {
     SECRET_ASSIGNMENT_WITNESS_ZEROIZED_DROPS_V1
         .try_with(core::cell::Cell::get)
         .unwrap_or(0)
 }
-
 #[cfg(test)]
 fn secret_scalar_entropy_zeroized_drop_count_v1() -> usize {
     SECRET_SCALAR_ENTROPY_ZEROIZED_DROPS_V1
         .try_with(core::cell::Cell::get)
         .unwrap_or(0)
 }
-
 #[cfg(test)]
 fn secret_scalar_zeroized_drop_count_v1() -> usize {
     SECRET_SCALAR_ZEROIZED_DROPS_V1
         .try_with(core::cell::Cell::get)
         .unwrap_or(0)
 }
-
 #[cfg(test)]
 fn secret_scalars_zeroized_drop_count_v1() -> usize {
     SECRET_SCALARS_ZEROIZED_DROPS_V1
         .try_with(core::cell::Cell::get)
         .unwrap_or(0)
 }
-
 #[cfg(test)]
 fn secret_witness_zeroized_drop_count_v1() -> usize {
     SECRET_WITNESS_ZEROIZED_DROPS_V1
         .try_with(core::cell::Cell::get)
         .unwrap_or(0)
 }
-
 #[cfg(test)]
 fn secret_relaxed_witness_zeroized_clear_count_v1() -> usize {
     SECRET_RELAXED_WITNESS_ZEROIZED_CLEARS_V1
         .try_with(core::cell::Cell::get)
         .unwrap_or(0)
 }
-
 #[cfg(test)]
 fn arm_error_after_strict_witness_handoff_v1() {
     let _ = STRICT_WITNESS_HANDOFF_FAULT_V1.try_with(|fault| fault.set(1));
 }
-
 #[cfg(test)]
 fn arm_panic_after_strict_witness_handoff_v1() {
     let _ = STRICT_WITNESS_HANDOFF_FAULT_V1.try_with(|fault| fault.set(2));
 }
-
 #[cfg(test)]
 fn maybe_fail_after_strict_witness_handoff_v1() -> Result<(), MaskedRelaxedErrorV1> {
     match STRICT_WITNESS_HANDOFF_FAULT_V1
@@ -1242,12 +1292,10 @@ fn maybe_fail_after_strict_witness_handoff_v1() -> Result<(), MaskedRelaxedError
         _ => unreachable!("strict witness handoff fault mode is bounded"),
     }
 }
-
 #[cfg(test)]
 fn arm_panic_after_precomputed_witness_handoff_v1() {
     let _ = PANIC_AFTER_PRECOMPUTED_WITNESS_HANDOFF_V1.try_with(|armed| armed.set(true));
 }
-
 #[cfg(test)]
 fn maybe_panic_after_precomputed_witness_handoff_v1() {
     let should_panic = PANIC_AFTER_PRECOMPUTED_WITNESS_HANDOFF_V1
@@ -1258,27 +1306,22 @@ fn maybe_panic_after_precomputed_witness_handoff_v1() {
         "injected panic after precomputed folded-witness handoff"
     );
 }
-
 impl SecretScalars {
     fn new(values: Vec<Scalar>) -> Self {
         Self(values)
     }
 }
-
 impl Deref for SecretScalars {
     type Target = Vec<Scalar>;
-
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 impl DerefMut for SecretScalars {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
-
 impl Drop for SecretScalars {
     fn drop(&mut self) {
         let values = core::hint::black_box(&mut self.0);
@@ -1292,23 +1335,18 @@ impl Drop for SecretScalars {
         let _ = core::hint::black_box(&mut *values);
     }
 }
-
 struct SecretWitness(Witness);
-
 impl SecretWitness {
     fn new(witness: Witness) -> Self {
         Self(witness)
     }
 }
-
 impl Deref for SecretWitness {
     type Target = Witness;
-
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 impl Drop for SecretWitness {
     fn drop(&mut self) {
         let witness = core::hint::black_box(&mut self.0);
@@ -1325,21 +1363,29 @@ impl Drop for SecretWitness {
         let _ = core::hint::black_box(&mut *witness);
     }
 }
-
 struct SecretRelaxedWitness(RelaxedWitness);
-
 impl SecretRelaxedWitness {
     fn new(witness: RelaxedWitness) -> Self {
         Self(witness)
     }
-
     fn replace(&mut self, witness: RelaxedWitness) {
         self.clear_secret();
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         self.0 = witness;
         let _ = core::hint::black_box(&mut self.0);
     }
-
+    #[cfg(test)]
+    fn take(&mut self) -> RelaxedWitness {
+        core::mem::replace(
+            &mut self.0,
+            RelaxedWitness {
+                values: Vec::new(),
+                witness_blindings: Vec::new(),
+                error: Vec::new(),
+                error_blindings: Vec::new(),
+            },
+        )
+    }
     fn clear_secret(&mut self) {
         let witness = core::hint::black_box(&mut self.0);
         clear_secret_scalar_slice_v1(&mut witness.values);
@@ -1362,41 +1408,32 @@ impl SecretRelaxedWitness {
         let _ = core::hint::black_box(&mut *witness);
     }
 }
-
 impl Deref for SecretRelaxedWitness {
     type Target = RelaxedWitness;
-
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 impl Drop for SecretRelaxedWitness {
     fn drop(&mut self) {
         self.clear_secret();
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vega::r1cs::SparseMatrix;
-
     const TEST_DOMAIN: &[u8] = b"iroha.test.masked-relaxed.precomputed";
     const TEST_CONTEXT: &[u8] = b"ordered-batch-context-v1";
     const TEST_KEY_LABEL: &[u8] = b"iroha.test.masked-relaxed.precomputed.key";
-
     struct ConstantRandom(u8);
-
     impl MaskedRelaxedRandomSourceV1 for ConstantRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             destination.fill(self.0);
             Ok(())
         }
     }
-
     struct FailureRandom;
-
     impl MaskedRelaxedRandomSourceV1 for FailureRandom {
         fn fill_bytes(
             &mut self,
@@ -1405,18 +1442,14 @@ mod tests {
             Err(MaskedRelaxedRandomErrorV1::Unavailable)
         }
     }
-
     struct PanicRandom;
-
     impl MaskedRelaxedRandomSourceV1 for PanicRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             destination[0] = 0xa5;
             panic!("injected entropy-source panic after a partial write");
         }
     }
-
     struct CounterRandom(u64);
-
     impl MaskedRelaxedRandomSourceV1 for CounterRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             for chunk in destination.chunks_mut(8) {
@@ -1429,7 +1462,6 @@ mod tests {
             Ok(())
         }
     }
-
     struct PrecomputedFixture {
         shape: Shape,
         mask: RelaxedInstance,
@@ -1438,11 +1470,9 @@ mod tests {
         folded_instance: RelaxedInstance,
         folded_witness: RelaxedWitness,
     }
-
     fn s(value: u64) -> Scalar {
         Scalar::from_u64(value)
     }
-
     fn precomputed_test_shape() -> Shape {
         let variables = MASKED_RELAXED_COMMITMENT_COLUMNS_V1;
         let constraints = MASKED_RELAXED_COMMITMENT_COLUMNS_V1;
@@ -1457,7 +1487,6 @@ mod tests {
             .expect("canonical C");
         Shape::new(constraints, variables, 1, a, b, c).expect("valid test shape")
     }
-
     fn precomputed_fixture(values: &[u64]) -> PrecomputedFixture {
         let shape = precomputed_test_shape();
         let dimensions = MaskedRelaxedDimensionsV1::from_shape(&shape).expect("dimensions");
@@ -1528,9 +1557,8 @@ mod tests {
             folded_witness,
         }
     }
-
     fn strict_assignment(value: u64) -> CircuitAssignment {
-        let shape = precomputed_test_shape();
+        let shape = Arc::new(precomputed_test_shape());
         let mut witness = vec![Scalar::zero(); shape.variable_count()];
         witness[0] = s(value);
         let assignment = CircuitAssignment {
@@ -1540,16 +1568,100 @@ mod tests {
         };
         assignment
             .shape
-            .validate_relaxed_assignment(
-                &assignment.witness,
-                Scalar::one(),
-                &assignment.public_inputs,
-                &vec![Scalar::zero(); assignment.shape.constraint_count()],
-            )
+            .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
             .expect("strict test assignment satisfies W[0] * u = x[0]");
         assignment
     }
-
+    #[test]
+    fn streamed_precompute_shares_shape_and_owns_one_strict_assignment_at_a_time() {
+        reset_streaming_assignment_residency_v1();
+        let shape = Arc::new(precomputed_test_shape());
+        let assignment_shape = Arc::clone(&shape);
+        let strict_public_inputs = vec![vec![s(3)], vec![s(5)]];
+        let values = [3_u64, 5];
+        let precomputation = precompute_masked_relaxed_stream_v1(
+            MaskedRelaxedStreamConfigV1::new(
+                TEST_DOMAIN,
+                TEST_CONTEXT,
+                TEST_KEY_LABEL,
+                Arc::clone(&shape),
+                &strict_public_inputs,
+                1,
+            ),
+            |index| {
+                let mut witness = vec![Scalar::zero(); assignment_shape.variable_count()];
+                witness[0] = s(values[index]);
+                Ok(CircuitAssignment {
+                    shape: Arc::clone(&assignment_shape),
+                    witness,
+                    public_inputs: strict_public_inputs[index].clone(),
+                })
+            },
+            &mut CounterRandom(0x243f_6a88_85a3_08d3),
+        )
+        .expect("two strict assignments stream in canonical order");
+        assert!(Arc::ptr_eq(&precomputation.shape, &shape));
+        assert_eq!(precomputation.strict_instances.len(), values.len());
+        assert_eq!(precomputation.folds.len(), values.len());
+        assert_eq!(streaming_assignment_residency_v1(), (0, 1));
+        let source = include_str!("masked_relaxed.rs");
+        let production = source
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("production masked-relaxed source");
+        assert!(source.contains(
+            "#[cfg(test)]\nstruct SecretCircuitAssignmentsV1(VecDeque<CircuitAssignment>)"
+        ));
+        assert!(source.contains("#[cfg(test)]\npub(super) fn precompute_masked_relaxed_v1"));
+        assert!(!source.contains("fn prove_masked_relaxed_v1"));
+        assert!(source.contains("self.0.pop_front()"));
+        assert!(production.contains("Arc::ptr_eq(&assignment.shape, &shape)"));
+        assert!(!production.contains("remove(0)"));
+        assert!(!production.contains("&vec![Scalar::zero(); shape.constraint_count()]"));
+        let expected_values = precomputation.folded_witness().values.len();
+        let (folded_instance, folded_witness) = precomputation.into_folded_opening();
+        assert_eq!(folded_instance.public_inputs.len(), 1);
+        assert_eq!(folded_witness.values.len(), expected_values);
+        drop(SecretRelaxedWitness::new(folded_witness));
+        assert!(production.contains("self.folded_witness.take()"));
+    }
+    #[test]
+    fn sampled_mask_streams_error_and_moves_secret_buffers() {
+        let shape = precomputed_test_shape();
+        let dimensions = MaskedRelaxedDimensionsV1::from_shape(&shape).expect("dimensions");
+        let key = CommitmentKey::derive(TEST_KEY_LABEL, MASKED_RELAXED_COMMITMENT_COLUMNS_V1)
+            .expect("commitment key");
+        let zeroized_before = secret_scalars_zeroized_drop_count_v1();
+        let (instance, witness) = sample_relaxed_mask(
+            &mut CounterRandom(0xbb67_ae85_84ca_a73b),
+            &shape,
+            &key,
+            dimensions,
+        )
+        .expect("sampled relaxed mask");
+        shape
+            .validate_relaxed_assignment(
+                &witness.values,
+                instance.relaxation,
+                &instance.public_inputs,
+                &witness.error,
+            )
+            .expect("streamed error matches the sampled assignment");
+        assert!(secret_scalars_zeroized_drop_count_v1() > zeroized_before);
+        drop(SecretRelaxedWitness::new(witness));
+        let source = include_str!("masked_relaxed.rs");
+        let production = source
+            .split("fn sample_relaxed_mask")
+            .nth(1)
+            .and_then(|tail| tail.split("/// Construct the sole masked-Nova").next())
+            .expect("sampled mask implementation");
+        assert!(production.contains("shape\n            .derive_relaxed_error"));
+        assert!(production.contains("core::mem::take(&mut *values)"));
+        assert!(production.contains("core::mem::take(&mut *error)"));
+        assert!(!production.contains("shape.multiply"));
+        assert!(!production.contains("let mut assignment"));
+        assert!(!production.contains(".to_vec()"));
+    }
     #[test]
     fn random_health_rejects_unavailable_zero_and_constant_sources() {
         assert_eq!(
@@ -1567,7 +1679,6 @@ mod tests {
             Err(MaskedRelaxedErrorV1::DegenerateRandomness)
         );
     }
-
     #[test]
     fn scalar_entropy_owner_and_secret_scalar_clear_on_every_exit_class() {
         let entropy_before = secret_scalar_entropy_zeroized_drop_count_v1();
@@ -1576,7 +1687,6 @@ mod tests {
             secret_scalar_entropy_zeroized_drop_count_v1(),
             entropy_before + 1
         );
-
         let entropy_before = secret_scalar_entropy_zeroized_drop_count_v1();
         assert_eq!(
             sample_scalar(&mut FailureRandom),
@@ -1588,7 +1698,6 @@ mod tests {
             secret_scalar_entropy_zeroized_drop_count_v1(),
             entropy_before + 1
         );
-
         let entropy_before = secret_scalar_entropy_zeroized_drop_count_v1();
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = sample_scalar(&mut PanicRandom);
@@ -1598,12 +1707,10 @@ mod tests {
             secret_scalar_entropy_zeroized_drop_count_v1(),
             entropy_before + 1
         );
-
         let scalar_before = secret_scalar_zeroized_drop_count_v1();
         drop(SecretScalar::new(s(9)));
         assert_eq!(secret_scalar_zeroized_drop_count_v1(), scalar_before + 1);
     }
-
     #[test]
     fn witness_owners_clear_after_precompute_error_and_unwind() {
         let assignment_before = secret_assignment_witness_zeroized_drop_count_v1();
@@ -1635,7 +1742,6 @@ mod tests {
             secret_relaxed_witness_zeroized_clear_count_v1(),
             relaxed_before + 1
         );
-
         let assignment_before = secret_assignment_witness_zeroized_drop_count_v1();
         let witness_before = secret_witness_zeroized_drop_count_v1();
         arm_error_after_strict_witness_handoff_v1();
@@ -1657,7 +1763,6 @@ mod tests {
             assignment_before + 1
         );
         assert_eq!(secret_witness_zeroized_drop_count_v1(), witness_before + 1);
-
         let assignment_before = secret_assignment_witness_zeroized_drop_count_v1();
         let witness_before = secret_witness_zeroized_drop_count_v1();
         arm_panic_after_strict_witness_handoff_v1();
@@ -1677,7 +1782,6 @@ mod tests {
             assignment_before + 1
         );
         assert_eq!(secret_witness_zeroized_drop_count_v1(), witness_before + 1);
-
         let assignment_before = secret_assignment_witness_zeroized_drop_count_v1();
         assert!(matches!(
             precompute_masked_relaxed_v1(
@@ -1696,7 +1800,6 @@ mod tests {
             secret_assignment_witness_zeroized_drop_count_v1(),
             assignment_before + 1
         );
-
         let assignment_before = secret_assignment_witness_zeroized_drop_count_v1();
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = precompute_masked_relaxed_v1(
@@ -1713,7 +1816,6 @@ mod tests {
             secret_assignment_witness_zeroized_drop_count_v1(),
             assignment_before + 1
         );
-
         let fixture = precomputed_fixture(&[17]);
         let relaxed_before = secret_relaxed_witness_zeroized_clear_count_v1();
         assert_eq!(
@@ -1737,7 +1839,6 @@ mod tests {
             secret_relaxed_witness_zeroized_clear_count_v1(),
             relaxed_before + 1
         );
-
         let relaxed_before = secret_relaxed_witness_zeroized_clear_count_v1();
         arm_panic_after_precomputed_witness_handoff_v1();
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1759,7 +1860,6 @@ mod tests {
             relaxed_before + 1
         );
     }
-
     #[test]
     fn precomputed_history_round_trips_and_binds_ordered_public_inputs() {
         let fixture = precomputed_fixture(&[3, 5]);
@@ -1806,7 +1906,6 @@ mod tests {
             .expect("canonical history replays"),
             fixture.folded_instance
         );
-
         let mut reordered = public_inputs.clone();
         reordered.swap(0, 1);
         assert_eq!(
@@ -1834,11 +1933,9 @@ mod tests {
             Err(MaskedRelaxedErrorV1::VerificationFailed)
         );
     }
-
     #[test]
     fn precomputed_history_rejects_splicing_and_final_witness_forgery() {
         let fixture = precomputed_fixture(&[7, 11]);
-
         let mut reordered_strict = fixture.strict.clone();
         reordered_strict.swap(0, 1);
         assert!(
@@ -1855,7 +1952,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut spliced_folds = fixture.folds.clone();
         spliced_folds.swap(0, 1);
         assert!(
@@ -1872,7 +1968,6 @@ mod tests {
             )
             .is_err()
         );
-
         assert_eq!(
             prove_precomputed_masked_relaxed_v1(
                 TEST_DOMAIN,
@@ -1887,7 +1982,6 @@ mod tests {
             ),
             Err(MaskedRelaxedErrorV1::InvalidProfile)
         );
-
         let mut forged_relation = fixture.folded_witness.clone();
         forged_relation.error[0] += Scalar::one();
         assert_eq!(
@@ -1904,7 +1998,6 @@ mod tests {
             ),
             Err(MaskedRelaxedErrorV1::UnsatisfiedWitness)
         );
-
         let mut forged_blinding = fixture.folded_witness.clone();
         forged_blinding.witness_blindings[0] += Scalar::one();
         assert_eq!(

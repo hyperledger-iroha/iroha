@@ -1,5 +1,4 @@
 use std::{collections::BTreeMap, str};
-
 use blake3::{Hasher, hash as blake3_hash};
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -8,7 +7,6 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
 };
 use norito::codec::Encode;
-
 use super::*;
 impl Execute for iroha_data_model::isi::content::PublishContentBundle {
     #[allow(clippy::too_many_lines)]
@@ -18,7 +16,6 @@ impl Execute for iroha_data_model::isi::content::PublishContentBundle {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let config = &state_transaction.content;
-
         if !config.publish_allow_accounts.is_empty()
             && !config
                 .publish_allow_accounts
@@ -29,7 +26,6 @@ impl Execute for iroha_data_model::isi::content::PublishContentBundle {
                 "content publishing not permitted for this account".into(),
             ));
         }
-
         let tar_len = self.tarball.len() as u64;
         if tar_len == 0 {
             return Err(Error::InvariantViolation(
@@ -45,7 +41,6 @@ impl Execute for iroha_data_model::isi::content::PublishContentBundle {
                 .into(),
             ));
         }
-
         let bundle_id = Hash::new(&self.tarball);
         if bundle_id != self.bundle_id {
             return Err(Error::InvariantViolation(
@@ -62,23 +57,19 @@ impl Execute for iroha_data_model::isi::content::PublishContentBundle {
                 "content bundle already exists".into(),
             ));
         }
-
         let chunk_size = usize::try_from(config.chunk_size_bytes).unwrap_or(0);
         if chunk_size == 0 {
             return Err(Error::InvariantViolation(
                 "content.chunk_size_bytes must be greater than zero".into(),
             ));
         }
-
         let files = parse_tar_index(
             &self.tarball,
             config.max_files,
             config.max_path_len,
             &state_transaction.content,
         )?;
-
         let manifest = build_manifest(bundle_id, &files, config, self.manifest.clone())?;
-
         if let Some(expiry) = self.expires_at_height {
             let current_height = state_transaction._curr_block.height().get();
             let max_expiry = current_height.saturating_add(config.max_retention_blocks);
@@ -96,7 +87,6 @@ impl Execute for iroha_data_model::isi::content::PublishContentBundle {
                 ));
             }
         }
-
         let mut chunk_hashes = Vec::new();
         let mut offset = 0usize;
         while offset < self.tarball.len() {
@@ -106,7 +96,6 @@ impl Execute for iroha_data_model::isi::content::PublishContentBundle {
             let mut hash_bytes = [0u8; 32];
             hash_bytes.copy_from_slice(hash.as_bytes());
             chunk_hashes.push(hash_bytes);
-
             if let Some(mut existing) = state_transaction
                 .world
                 .content_chunks
@@ -126,10 +115,8 @@ impl Execute for iroha_data_model::isi::content::PublishContentBundle {
             }
             offset = end;
         }
-
         let chunk_root = compute_chunk_root(&chunk_hashes);
         let stripe_layout = manifest.stripe_layout;
-
         let record = ContentBundleRecord {
             bundle_id,
             manifest,
@@ -144,16 +131,13 @@ impl Execute for iroha_data_model::isi::content::PublishContentBundle {
             created_height: state_transaction._curr_block.height().get(),
             expires_at_height: self.expires_at_height,
         };
-
         state_transaction
             .world
             .content_bundles
             .insert(bundle_id, record);
-
         Ok(())
     }
 }
-
 impl Execute for iroha_data_model::isi::content::RetireContentBundle {
     fn execute(
         self,
@@ -173,12 +157,10 @@ impl Execute for iroha_data_model::isi::content::RetireContentBundle {
                 "only the content bundle creator may retire it".into(),
             ));
         }
-
         state_transaction
             .world
             .content_bundles
             .remove(self.bundle_id);
-
         for hash in &record.chunk_hashes {
             if let Some(mut chunk) = state_transaction.world.content_chunks.get(hash).cloned() {
                 if chunk.dec_and_should_prune() {
@@ -188,11 +170,9 @@ impl Execute for iroha_data_model::isi::content::RetireContentBundle {
                 }
             }
         }
-
         Ok(())
     }
 }
-
 fn build_manifest(
     bundle_id: Hash,
     files: &[ContentFileEntry],
@@ -233,7 +213,6 @@ fn build_manifest(
             mime_overrides: BTreeMap::new(),
         }
     };
-
     manifest.bundle_id = bundle_id;
     manifest.index_hash = index_hash;
     if manifest.cache.max_age_seconds == 0 {
@@ -252,7 +231,6 @@ fn build_manifest(
     if manifest.stripe_layout.total_stripes == 0 || manifest.stripe_layout.shards_per_stripe == 0 {
         manifest.stripe_layout = config.stripe_layout;
     }
-
     for path in manifest.mime_overrides.keys() {
         if !files.iter().any(|entry| &entry.path == path) {
             return Err(Error::InvariantViolation(
@@ -260,10 +238,8 @@ fn build_manifest(
             ));
         }
     }
-
     Ok(manifest)
 }
-
 /// Compute the deterministic hash of a content file index using the canonical Norito encoding.
 ///
 /// # Errors
@@ -273,7 +249,6 @@ pub fn hash_index(files: &[ContentFileEntry]) -> Result<[u8; 32], Error> {
     let buf = Encode::encode(&files.to_vec());
     Ok(hash_bytes(&buf))
 }
-
 /// Public to allow tooling (CLI/xtask) to build manifests using the same parser.
 ///
 /// # Errors
@@ -291,7 +266,6 @@ pub fn parse_tar_index(
             "tarball too small to contain header".into(),
         ));
     }
-
     let mut entries = Vec::new();
     let mut offset: usize = 0;
     while offset + HEADER_LEN <= tarball.len() {
@@ -299,18 +273,15 @@ pub fn parse_tar_index(
         if header.iter().all(|b| *b == 0) {
             break;
         }
-
         let name_raw = &header[0..100];
         let size_raw = &header[124..136];
         let typeflag = header[156];
         let prefix_raw = &header[345..500];
-
         if !matches!(typeflag, 0 | b'0') {
             return Err(Error::InvariantViolation(
                 "only regular files are supported in content bundles".into(),
             ));
         }
-
         let name = parse_tar_string(name_raw)?;
         let prefix = parse_tar_string(prefix_raw)?;
         let path = if prefix.is_empty() {
@@ -318,7 +289,6 @@ pub fn parse_tar_index(
         } else {
             format!("{prefix}/{name}")
         };
-
         if path.is_empty() {
             return Err(Error::InvariantViolation("empty path in tar entry".into()));
         }
@@ -329,7 +299,6 @@ pub fn parse_tar_index(
                 format!("path exceeds max length ({path_len} > {max_path_len})").into(),
             ));
         }
-
         let size = parse_tar_size(size_raw)?;
         let data_start = offset
             .checked_add(HEADER_LEN)
@@ -344,7 +313,6 @@ pub fn parse_tar_index(
                 "tar entry exceeds archive length".into(),
             ));
         }
-
         let payload = &tarball[data_start..data_end];
         let file_hash = hash_file(payload);
         entries.push(ContentFileEntry {
@@ -353,7 +321,6 @@ pub fn parse_tar_index(
             length: size,
             file_hash,
         });
-
         let entry_count = u32::try_from(entries.len())
             .map_err(|_| Error::InvariantViolation("too many tar entries".into()))?;
         if entry_count > max_files {
@@ -361,26 +328,21 @@ pub fn parse_tar_index(
                 "tarball exceeds maximum file count".into(),
             ));
         }
-
         let padding = size_usize.div_ceil(HEADER_LEN) * HEADER_LEN;
         offset = data_start + padding;
     }
-
     if entries.is_empty() {
         return Err(Error::InvariantViolation(
             "content bundle contains no files".into(),
         ));
     }
-
     if tarball.len() as u64 > config.max_bundle_bytes {
         return Err(Error::InvariantViolation(
             "content tarball exceeds configured size".into(),
         ));
     }
-
     Ok(entries)
 }
-
 fn parse_tar_string(bytes: &[u8]) -> Result<String, Error> {
     let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
     let raw = &bytes[..end];
@@ -390,7 +352,6 @@ fn parse_tar_string(bytes: &[u8]) -> Result<String, Error> {
         .to_string();
     Ok(s)
 }
-
 fn parse_tar_size(bytes: &[u8]) -> Result<u64, Error> {
     let trimmed = bytes
         .iter()
@@ -403,18 +364,15 @@ fn parse_tar_size(bytes: &[u8]) -> Result<u64, Error> {
     u64::from_str_radix(s, 8)
         .map_err(|_| Error::InvariantViolation("invalid tar size field".into()))
 }
-
 fn hash_file(bytes: &[u8]) -> [u8; 32] {
     hash_bytes(bytes)
 }
-
 fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
     let hash = Hash::new(bytes);
     let mut out = [0u8; 32];
     out.copy_from_slice(hash.as_ref());
     out
 }
-
 fn compute_chunk_root(chunks: &[[u8; 32]]) -> [u8; 32] {
     let mut hasher = Hasher::new();
     for chunk in chunks {
@@ -422,7 +380,6 @@ fn compute_chunk_root(chunks: &[[u8; 32]]) -> [u8; 32] {
     }
     hasher.finalize().into()
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
@@ -433,13 +390,11 @@ mod tests {
         prelude::*,
     };
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{
         query::store::LiveQueryStore,
         state::{State, World},
     };
-
     fn make_tar(entries: &[(&str, &[u8])]) -> Vec<u8> {
         const HEADER_LEN: usize = 512;
         let mut out = Vec::new();
@@ -461,13 +416,11 @@ mod tests {
         out.resize(out.len() + HEADER_LEN * 2, 0);
         out
     }
-
     fn checked_account_id() -> AccountId {
         let key_pair =
             KeyPair::try_random().expect("content fixture key generation should succeed");
         AccountId::new(key_pair.public_key().clone())
     }
-
     #[test]
     fn checked_account_id_preserves_default_algorithm() {
         let account_id = checked_account_id();
@@ -476,21 +429,17 @@ mod tests {
             Algorithm::default()
         );
     }
-
     #[test]
     fn publish_and_retire_content_bundle() {
         let tar = make_tar(&[("index.html", b"hi"), ("app.js", b"console.log(1);")]);
         let bundle_id = Hash::new(&tar);
-
         let world = World::default();
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let publish = PublishContentBundle {
             bundle_id,
             tarball: tar.clone(),
@@ -501,7 +450,6 @@ mod tests {
         publish
             .execute(&authority, &mut tx)
             .expect("publish content");
-
         let stored = tx.world.content_bundles.get(&bundle_id).cloned().unwrap();
         assert_eq!(stored.total_bytes, tar.len() as u64);
         assert_eq!(stored.files.len(), 2);
@@ -521,7 +469,6 @@ mod tests {
                 row_parity_stripes: 0,
             }
         );
-
         let retire = RetireContentBundle { bundle_id };
         retire.execute(&authority, &mut tx).expect("retire content");
         assert!(tx.world.content_bundles.get(&bundle_id).is_none());
@@ -529,21 +476,17 @@ mod tests {
             assert!(tx.world.content_chunks.get(&hash).is_none());
         }
     }
-
     #[test]
     fn retire_content_bundle_rejects_non_creator() {
         let tar = make_tar(&[("index.html", b"creator-owned")]);
         let bundle_id = Hash::new(&tar);
-
         let world = World::default();
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let creator = checked_account_id();
         let attacker = checked_account_id();
         assert_ne!(creator, attacker);
@@ -555,7 +498,6 @@ mod tests {
         }
         .execute(&creator, &mut tx)
         .expect("creator publishes content");
-
         let stored = tx
             .world
             .content_bundles

@@ -3,17 +3,13 @@ use std::{
     io::{self, Write},
     process,
 };
-
 use blake3::{Hash, Hasher};
 use sorafs_chunker::{Chunk, ChunkProfile, Chunker, fixtures::FixtureProfile};
-
 const TOTAL_LEN: usize = 1 << 30; // 1 GiB
-
 fn collect_chunks(template: &[u8]) -> Result<Vec<Chunk>, String> {
     if template.is_empty() {
         return Err("template must not be empty".to_owned());
     }
-
     let mut chunker = Chunker::new();
     let mut chunks = Vec::new();
     let repeat = TOTAL_LEN / template.len();
@@ -29,17 +25,14 @@ fn collect_chunks(template: &[u8]) -> Result<Vec<Chunk>, String> {
     chunker.finish(|chunk| chunks.push(chunk));
     Ok(chunks)
 }
-
 fn replay_chunks(chunks: &[Chunk], template: &[u8]) -> Result<(Hash, Vec<Hash>), String> {
     if template.is_empty() {
         return Err("template must not be empty".to_owned());
     }
-
     let mut overall = Hasher::new();
     let mut per_chunk = Vec::with_capacity(chunks.len());
     let mut offset = 0usize;
     let template_len = template.len();
-
     for chunk in chunks {
         let mut chunk_hasher = Hasher::new();
         let mut remaining = chunk.length;
@@ -54,7 +47,6 @@ fn replay_chunks(chunks: &[Chunk], template: &[u8]) -> Result<(Hash, Vec<Hash>),
         }
         per_chunk.push(chunk_hasher.finalize());
     }
-
     if offset != TOTAL_LEN {
         return Err(format!(
             "replay covered {offset} bytes, expected {TOTAL_LEN}"
@@ -62,7 +54,6 @@ fn replay_chunks(chunks: &[Chunk], template: &[u8]) -> Result<(Hash, Vec<Hash>),
     }
     Ok((overall.finalize(), per_chunk))
 }
-
 fn write_json(
     profile_handle: &str,
     chunks: &[Chunk],
@@ -105,14 +96,12 @@ fn write_json(
     writer.write_all(b"}}")?;
     writer.flush()
 }
-
 fn main() {
     if let Err(err) = run(env::args()) {
         eprintln!("error: {err}");
         process::exit(1);
     }
 }
-
 fn run<I>(args: I) -> Result<(), String>
 where
     I: IntoIterator<Item = String>,
@@ -126,7 +115,6 @@ where
             "usage: {program}   # no arguments; emits JSON with digest statistics"
         ));
     }
-
     let template = FixtureProfile::SF1_V1.generate_input();
     let chunks = collect_chunks(&template)?;
     let (overall_digest, per_chunk_digests) = replay_chunks(&chunks, &template)?;
@@ -138,11 +126,9 @@ where
     )
     .map_err(|err| format!("failed to write digest report: {err}"))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn collect_chunks_rejects_empty_template() {
         let err = collect_chunks(&[]).expect_err("empty template must fail");
@@ -151,7 +137,6 @@ mod tests {
             "unexpected error message: {err}"
         );
     }
-
     #[test]
     fn collect_chunks_rejects_uneven_template() {
         let err = collect_chunks(b"abc").expect_err("uneven template must fail");
@@ -160,7 +145,6 @@ mod tests {
             "unexpected error message: {err}"
         );
     }
-
     #[test]
     fn replay_chunks_rejects_empty_template() {
         let err = replay_chunks(&[], &[]).expect_err("empty template must fail");
@@ -169,7 +153,6 @@ mod tests {
             "unexpected error message: {err}"
         );
     }
-
     #[test]
     fn replay_chunks_reports_length_mismatch() {
         let chunks = [Chunk {
@@ -182,7 +165,6 @@ mod tests {
             "unexpected error message: {err}"
         );
     }
-
     #[test]
     fn run_rejects_extra_arguments() {
         let err = run(["sorafs_chunk_digest".to_owned(), "--unexpected".to_owned()])

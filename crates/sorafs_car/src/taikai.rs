@@ -4,7 +4,6 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
 };
-
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::{
     da::types::{BlobDigest, ExtraMetadata, StorageTicketId},
@@ -15,12 +14,9 @@ use iroha_data_model::{
     },
 };
 use norito::json::{self, Map, Value};
-
 use crate::{CarWriter, RAW_CODEC, ingest_single_file, verifier::ParsedCar};
-
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
-
 /// Request describing a Taikai segment bundle operation.
 pub struct BundleRequest<'a> {
     pub payload_path: &'a Path,
@@ -44,7 +40,6 @@ pub struct BundleRequest<'a> {
     pub ingest_node_id: Option<String>,
     pub extra_metadata: Option<ExtraMetadata>,
 }
-
 /// Summary describing the bundle artifacts that were generated.
 #[derive(Debug, Clone)]
 pub struct BundleSummary {
@@ -58,7 +53,6 @@ pub struct BundleSummary {
     pub ingest_metadata_out: Option<PathBuf>,
     pub ingest_metadata: Map,
 }
-
 struct SegmentDetails<'a> {
     event_id: &'a TaikaiEventId,
     stream_id: &'a TaikaiStreamId,
@@ -73,7 +67,6 @@ struct SegmentDetails<'a> {
     ingest_node_id: Option<&'a str>,
     extra_metadata: Option<ExtraMetadata>,
 }
-
 /// Request describing how to regenerate Taikai bundle metadata from an existing CAR.
 pub struct RehydrateRequest<'a> {
     pub car_in: &'a Path,
@@ -96,7 +89,6 @@ pub struct RehydrateRequest<'a> {
     pub ingest_node_id: Option<String>,
     pub extra_metadata: Option<ExtraMetadata>,
 }
-
 /// Bundle a Taikai segment into deterministic CAR + Norito artifacts.
 pub fn bundle_segment(request: &BundleRequest<'_>) -> Result<BundleSummary> {
     let payload_cow: Cow<'_, [u8]> = if let Some(bytes) = request.payload_bytes {
@@ -109,14 +101,12 @@ pub fn bundle_segment(request: &BundleRequest<'_>) -> Result<BundleSummary> {
             )
         })?)
     };
-
     if payload_cow.is_empty() {
         return Err(eyre!(
             "payload `{}` is empty; segments must contain data",
             request.payload_path.display()
         ));
     }
-
     let summary = ingest_single_file(payload_cow.as_ref()).map_err(|err| {
         eyre!(
             "failed to build CAR plan for `{}`: {err}",
@@ -130,7 +120,6 @@ pub fn bundle_segment(request: &BundleRequest<'_>) -> Result<BundleSummary> {
         .try_into()
         .map_err(|_| eyre!("chunk count exceeds u32::MAX"))?;
     let chunk_root = BlobDigest::new(*summary.chunk_store.por_tree().root());
-
     let writer = CarWriter::new(&summary.plan, payload_cow.as_ref())
         .map_err(|err| eyre!("failed to initialise CAR writer: {err}"))?;
     let mut car_file = open_output_file(request.car_out, "CAR archive")?;
@@ -140,11 +129,9 @@ pub fn bundle_segment(request: &BundleRequest<'_>) -> Result<BundleSummary> {
             request.car_out.display()
         )
     })?;
-
     let car_digest = BlobDigest::from_hash(car_stats.car_archive_digest);
     let cid_multibase = format!("b{}", encode_base32_lower(&car_stats.car_cid)?);
     let car_pointer = TaikaiCarPointer::new(cid_multibase.clone(), car_digest, car_stats.car_size);
-
     let ingest_pointer = TaikaiIngestPointer::new(
         request.manifest_hash,
         request.storage_ticket,
@@ -152,7 +139,6 @@ pub fn bundle_segment(request: &BundleRequest<'_>) -> Result<BundleSummary> {
         chunk_count,
         car_pointer.clone(),
     );
-
     let details = SegmentDetails {
         event_id: &request.event_id,
         stream_id: &request.stream_id,
@@ -167,10 +153,8 @@ pub fn bundle_segment(request: &BundleRequest<'_>) -> Result<BundleSummary> {
         ingest_node_id: request.ingest_node_id.as_deref(),
         extra_metadata: request.extra_metadata.clone(),
     };
-
     let envelope = build_envelope(&details, ingest_pointer);
     let ingest_metadata = build_ingest_metadata_from_details(&details)?;
-
     write_outputs(
         &envelope,
         ingest_metadata,
@@ -180,7 +164,6 @@ pub fn bundle_segment(request: &BundleRequest<'_>) -> Result<BundleSummary> {
         request.car_out,
     )
 }
-
 fn build_envelope(
     details: &SegmentDetails<'_>,
     ingest_pointer: TaikaiIngestPointer,
@@ -210,7 +193,6 @@ fn build_envelope(
     }
     envelope
 }
-
 fn build_ingest_metadata_from_details(details: &SegmentDetails<'_>) -> Result<Map> {
     let params = IngestMetadataParams {
         event_id: details.event_id,
@@ -227,7 +209,6 @@ fn build_ingest_metadata_from_details(details: &SegmentDetails<'_>) -> Result<Ma
     };
     build_ingest_metadata_inner(&params)
 }
-
 fn write_outputs(
     envelope: &TaikaiSegmentEnvelopeV1,
     ingest_metadata: Map,
@@ -239,7 +220,6 @@ fn write_outputs(
     let envelope_bytes =
         norito::to_bytes(envelope).wrap_err("failed to encode Taikai envelope payload")?;
     write_output_bytes(envelope_out, "envelope output", &envelope_bytes)?;
-
     let indexes = envelope.indexes();
     let indexes_out_paths = if let Some(path) = indexes_out {
         let rendered = json::to_json_pretty(&indexes)
@@ -249,7 +229,6 @@ fn write_outputs(
     } else {
         None
     };
-
     let ingest_metadata_out_paths = if let Some(path) = ingest_metadata_out {
         let rendered = json::to_json_pretty(&Value::Object(ingest_metadata.clone()))
             .map_err(|err| eyre!("failed to render ingest metadata JSON: {err}"))?;
@@ -258,7 +237,6 @@ fn write_outputs(
     } else {
         None
     };
-
     Ok(BundleSummary {
         car_pointer: envelope.ingest.car.clone(),
         chunk_root: envelope.ingest.chunk_root,
@@ -271,14 +249,12 @@ fn write_outputs(
         ingest_metadata,
     })
 }
-
 /// Rebuild Taikai envelope/index/ingest metadata for an existing CAR archive.
 pub fn rehydrate_from_car(request: &RehydrateRequest<'_>) -> Result<BundleSummary> {
     let car_bytes = fs::read(request.car_in)
         .wrap_err_with(|| format!("failed to read CAR `{}`", request.car_in.display()))?;
     let parsed = ParsedCar::parse(&car_bytes)
         .map_err(|err| eyre!("failed to parse CAR `{}`: {err}", request.car_in.display()))?;
-
     // Rehydration explicitly needs an owned payload for its ingest artefacts;
     // ordinary CAR verification keeps payload bytes as borrowed CAR slices.
     let payload = parsed.payload_bytes().map_err(|err| {
@@ -293,7 +269,6 @@ pub fn rehydrate_from_car(request: &RehydrateRequest<'_>) -> Result<BundleSummar
             request.car_in.display()
         )
     })?;
-
     if ingest_summary.plan.chunks.len() != parsed.chunk_sections().len() {
         return Err(eyre!(
             "chunk count mismatch between CAR ({}) and rebuilt plan ({})",
@@ -322,7 +297,6 @@ pub fn rehydrate_from_car(request: &RehydrateRequest<'_>) -> Result<BundleSummar
             ));
         }
     }
-
     let chunk_count: u32 = ingest_summary
         .chunk_store
         .chunks()
@@ -330,12 +304,10 @@ pub fn rehydrate_from_car(request: &RehydrateRequest<'_>) -> Result<BundleSummar
         .try_into()
         .map_err(|_| eyre!("chunk count exceeds u32::MAX"))?;
     let chunk_root = BlobDigest::new(*ingest_summary.chunk_store.por_tree().root());
-
     let car_digest = BlobDigest::from_hash(parsed.car_archive_digest());
     let car_cid = crate::encode_cid(RAW_CODEC, parsed.car_archive_digest().as_bytes());
     let cid_multibase = format!("b{}", encode_base32_lower(&car_cid)?);
     let car_pointer = TaikaiCarPointer::new(cid_multibase, car_digest, parsed.total_len());
-
     let ingest_pointer = TaikaiIngestPointer::new(
         request.manifest_hash,
         request.storage_ticket,
@@ -343,7 +315,6 @@ pub fn rehydrate_from_car(request: &RehydrateRequest<'_>) -> Result<BundleSummar
         chunk_count,
         car_pointer,
     );
-
     let details = SegmentDetails {
         event_id: &request.event_id,
         stream_id: &request.stream_id,
@@ -358,14 +329,11 @@ pub fn rehydrate_from_car(request: &RehydrateRequest<'_>) -> Result<BundleSummar
         ingest_node_id: request.ingest_node_id.as_deref(),
         extra_metadata: request.extra_metadata.clone(),
     };
-
     if request.car_out != request.car_in {
         write_output_bytes(request.car_out, "CAR output", &car_bytes)?;
     }
-
     let envelope = build_envelope(&details, ingest_pointer);
     let ingest_metadata = build_ingest_metadata_from_details(&details)?;
-
     write_outputs(
         &envelope,
         ingest_metadata,
@@ -375,7 +343,6 @@ pub fn rehydrate_from_car(request: &RehydrateRequest<'_>) -> Result<BundleSummar
         request.car_out,
     )
 }
-
 /// Load the optional extra metadata JSON document used by publishers.
 pub fn load_extra_metadata(path: &Path) -> Result<ExtraMetadata> {
     let contents = fs::read_to_string(path)
@@ -383,13 +350,11 @@ pub fn load_extra_metadata(path: &Path) -> Result<ExtraMetadata> {
     json::from_str(&contents)
         .wrap_err_with(|| format!("failed to parse metadata JSON `{}`", path.display()))
 }
-
 fn write_output_bytes(path: &Path, label: &str, bytes: &[u8]) -> Result<()> {
     let mut file = open_output_file(path, label)?;
     file.write_all(bytes)
         .wrap_err_with(|| format!("failed to write {label} `{}`", path.display()))
 }
-
 fn open_output_file(path: &Path, label: &str) -> Result<fs::File> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -411,7 +376,6 @@ fn open_output_file(path: &Path, label: &str) -> Result<fs::File> {
     }
     Ok(file)
 }
-
 fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -422,7 +386,6 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 fn validate_output_path(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -441,7 +404,6 @@ fn validate_output_path(path: &Path) -> Result<()> {
             ));
         }
     }
-
     if let Some(parent) = path.parent() {
         for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
             if ancestor.as_os_str().is_empty() {
@@ -474,20 +436,16 @@ fn validate_output_path(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut fs::OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -503,7 +461,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -520,7 +477,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0
 }
-
 struct IngestMetadataParams<'a> {
     event_id: &'a TaikaiEventId,
     stream_id: &'a TaikaiStreamId,
@@ -534,7 +490,6 @@ struct IngestMetadataParams<'a> {
     live_edge_drift_ms: Option<i32>,
     ingest_node_id: Option<&'a str>,
 }
-
 fn build_ingest_metadata_inner(params: &IngestMetadataParams<'_>) -> Result<Map> {
     let mut map = Map::new();
     map.insert(
@@ -549,7 +504,6 @@ fn build_ingest_metadata_inner(params: &IngestMetadataParams<'_>) -> Result<Map>
         "taikai.rendition_id".into(),
         Value::from(params.rendition_id.as_name().as_ref()),
     );
-
     let (kind_label, codec_label, resolution_label, audio_layout_label) =
         track_labels(params.track);
     map.insert("taikai.track.kind".into(), Value::from(kind_label));
@@ -570,7 +524,6 @@ fn build_ingest_metadata_inner(params: &IngestMetadataParams<'_>) -> Result<Map>
             Value::from(layout.to_string()),
         );
     }
-
     map.insert(
         "taikai.segment.sequence".into(),
         Value::from(params.segment_sequence.to_string()),
@@ -607,7 +560,6 @@ fn build_ingest_metadata_inner(params: &IngestMetadataParams<'_>) -> Result<Map>
     }
     Ok(map)
 }
-
 fn track_labels(
     track: &TaikaiTrackMetadata,
 ) -> (&'static str, String, Option<String>, Option<String>) {
@@ -644,7 +596,6 @@ fn track_labels(
         audio_layout_label,
     )
 }
-
 fn encode_base32_lower(data: &[u8]) -> Result<String> {
     const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
     if data.is_empty() {
@@ -682,17 +633,14 @@ fn encode_base32_lower(data: &[u8]) -> Result<String> {
     }
     Ok(out)
 }
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
-
     use iroha_data_model::{
         name::Name,
         taikai::{TaikaiAudioLayout, TaikaiCodec, TaikaiResolution},
     };
     use tempfile::{TempDir, tempdir};
-
     #[test]
     fn base32_lower_matches_rfc4648_unpadded_vectors() {
         for (input, expected) in [
@@ -707,15 +655,12 @@ mod tests {
             assert_eq!(encode_base32_lower(input).expect("encode base32"), expected);
         }
     }
-
     use super::*;
-
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");
         (temp, path)
     }
-
     #[test]
     fn bundle_writes_outputs() {
         let (_tmp, tmp_path) = canonical_tempdir();
@@ -754,7 +699,6 @@ mod tests {
             ingest_node_id: Some("node-a".into()),
             extra_metadata: None,
         };
-
         let summary = bundle_segment(&request).expect("bundle");
         assert_eq!(summary.chunk_count, 1);
         assert!(summary.car_out.exists());
@@ -773,21 +717,17 @@ mod tests {
         assert!(summary.indexes_out.as_ref().unwrap().exists());
         assert!(summary.ingest_metadata_out.as_ref().unwrap().exists());
     }
-
     #[test]
     fn write_output_bytes_creates_parent_and_writes_all_bytes() {
         let (_tmp, tmp_path) = canonical_tempdir();
         let output_path = tmp_path.join("nested").join("segment.to");
-
         write_output_bytes(&output_path, "test output", b"taikai-output")
             .expect("write output bytes");
-
         assert_eq!(
             fs::read(output_path).expect("read output"),
             b"taikai-output"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn write_output_bytes_rejects_symlink_output() {
@@ -796,18 +736,15 @@ mod tests {
         fs::write(&target_path, b"unchanged\n").expect("write target");
         let output_path = tmp_path.join("segment.to");
         std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
-
         let err = write_output_bytes(&output_path, "test output", b"replace")
             .expect_err("reject symlink output");
         let message = err.to_string();
-
         assert!(
             message.contains("must not be a symlink"),
             "unexpected error: {message}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
     }
-
     #[cfg(unix)]
     #[test]
     fn write_output_bytes_rejects_symlink_parent() {
@@ -817,11 +754,9 @@ mod tests {
         let linked_dir = tmp_path.join("linked");
         std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
         let output_path = linked_dir.join("segment.to");
-
         let err = write_output_bytes(&output_path, "test output", b"replace")
             .expect_err("reject symlink parent");
         let message = err.to_string();
-
         assert!(
             message.contains("parent") && message.contains("must not be a symlink"),
             "unexpected error: {message}"
@@ -831,7 +766,6 @@ mod tests {
             "symlink parent should not receive output"
         );
     }
-
     #[test]
     fn track_labels_cover_audio() {
         let track =

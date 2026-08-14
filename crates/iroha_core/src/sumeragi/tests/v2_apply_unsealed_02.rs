@@ -2,7 +2,6 @@ fn direct_archive_tempdir() -> tempfile::TempDir {
     let root = std::env::current_dir().expect("resolve direct archive test root");
     tempfile::tempdir_in(root).expect("create direct archive test directory")
 }
-
 fn provider_ingest_archive_bounds(
     max_record_bytes: u64,
     max_total_bytes: u64,
@@ -18,21 +17,18 @@ fn provider_ingest_archive_bounds(
     )
     .expect("valid provider-ingest archive bounds")
 }
-
 fn fixture_reserve_asset_definition() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("sorafs", "universal").expect("valid fixture settlement domain"),
         "xor".parse().expect("valid fixture settlement asset name"),
     )
 }
-
 fn fixture_queue(state: &State, events_sender: crate::EventsSender) -> Arc<Queue> {
     let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
     let manifests = state.lane_manifests.read().clone();
     queue.install_lane_manifests(&manifests);
     queue
 }
-
 type ApplyNativeReceiptBuilder =
     fn(
         &ApplyFixture,
@@ -43,12 +39,8 @@ type ApplyNativeReceiptBuilder =
         &[crate::queue::LaneQueueReservationKeyV2],
         &[crate::queue::RoutingPlan],
     ) -> Vec<Option<iroha_data_model::block::consensus::NativeAmxReceipt>>;
-
 fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightContext) {
-    use iroha_data_model::nexus::{
-        DataSpaceCatalog, DataSpaceMetadata, LaneConfig, LaneLifecyclePlan,
-    };
-
+    use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneConfig, LaneLifecyclePlan};
     let participant_lane = LaneId::new(1);
     let participant_dataspace = DataSpaceId::new(7);
     let mut nexus = state.nexus_snapshot();
@@ -66,7 +58,6 @@ fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightCont
     state
         .set_nexus(nexus)
         .expect("install Native fixture dataspace before genesis");
-
     let lane = LaneConfig {
         id: participant_lane,
         dataspace_id: participant_dataspace,
@@ -79,7 +70,6 @@ fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightCont
             retire: Vec::new(),
         })
         .expect("install Native fixture lane before genesis");
-
     let validators = context
         .roster
         .iter()
@@ -121,7 +111,6 @@ fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightCont
     };
     statuses.insert(participant_lane, status);
     state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
-
     let mut expected = context
         .roster
         .iter()
@@ -143,7 +132,6 @@ fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightCont
     context.nexus_amx_context_hash =
         crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state);
 }
-
 fn native_amx_receipts_for_apply_fixture(
     fixture: &ApplyFixture,
     context: &wire::HeightContext,
@@ -164,7 +152,6 @@ fn native_amx_receipts_for_apply_fixture(
         NativeAmxAttestationBodyV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
         SumeragiLanePayloadOwnership,
     };
-
     assert_eq!(entrypoints.len(), 2, "grouped Native fixture source count");
     assert_eq!(reservation_keys.len(), entrypoints.len());
     assert_eq!(routing_plans.len(), entrypoints.len());
@@ -181,7 +168,6 @@ fn native_amx_receipts_for_apply_fixture(
         routing_plans.iter().all(|plan| plan == &expected_plan),
         "grouped fixture transactions derive one exact Native plan"
     );
-
     let source_ids = reservation_keys
         .iter()
         .map(|key| {
@@ -205,7 +191,6 @@ fn native_amx_receipts_for_apply_fixture(
             .all(|(key, entrypoint_hash)| key.entrypoint_hash == *entrypoint_hash),
         "grouped Native reservations bind the typed entrypoints"
     );
-
     let mut validator_set = fixture
         .state
         .authoritative_lane_peer_ids_at_height(participant_lane, context.height);
@@ -336,7 +321,6 @@ fn native_amx_receipts_for_apply_fixture(
     participant_proposal.proposal_hash = participant_proposal.computed_proposal_hash();
     crate::lane_consensus::validate_lane_block_proposal(&participant_proposal)
         .expect("grouped Native participant proposal is production-valid");
-
     let coordinator_descriptor = &coordinator_proposal.descriptor;
     assert_eq!(
         RoutingDecision::new(
@@ -394,7 +378,6 @@ fn native_amx_receipts_for_apply_fixture(
     let participant_settlement_hash =
         iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
             .expect("hash exact two-source participant settlement");
-
     let qc_for = |body: NativeAmxAttestationBodyV2| {
         let votes = validator_keys
             .iter()
@@ -417,7 +400,6 @@ fn native_amx_receipts_for_apply_fixture(
         )
         .expect("aggregate grouped Native participant QC")
     };
-
     source_ids
         .iter()
         .copied()
@@ -481,7 +463,6 @@ fn native_amx_receipts_for_apply_fixture(
         })
         .collect()
 }
-
 v2_apply_test!(
     checkpoint_write_failure_keeps_wsv_behind_durable_kura_tip,
     {
@@ -522,7 +503,6 @@ v2_apply_test!(
                 .block_hash,
             fixture.body.hash()
         );
-
         drop(store);
         let mut reopened = fixture.reopen_body_store();
         assert!(
@@ -537,7 +517,6 @@ v2_apply_test!(
         fixture.assert_complete();
     }
 );
-
 v2_apply_test!(
     provider_ingest_archive_failure_after_kura_and_checkpoint_keeps_state_unpublished,
     {
@@ -552,7 +531,6 @@ v2_apply_test!(
         );
         fixture.service.provider_ingest_finalized_archive = Some(Arc::clone(&archive));
         let mut store = fixture.reopen_body_store();
-
         let error = fixture
             .execute(&mut store)
             .expect_err("provider-ingest capture must exceed the tiny record bound");
@@ -595,7 +573,6 @@ v2_apply_test!(
         );
     }
 );
-
 v2_apply_test!(
     provider_ingest_archive_recovery_replays_exact_capture_without_duplicate_generation,
     {
@@ -613,7 +590,6 @@ v2_apply_test!(
             .service
             .fail_after_provider_ingest_archive_capture_for_test();
         let mut first_store = fixture.reopen_body_store();
-
         let error = fixture
             .execute(&mut first_store)
             .expect_err("inject crash after provider-ingest archive capture");
@@ -637,7 +613,6 @@ v2_apply_test!(
         assert_eq!(qualification.kura_tip_height(), 1);
         assert_eq!(qualification.lag_blocks(), 0);
         drop(first_store);
-
         let (restarted_service, restarted_state) =
             fixture.restart_service_from_last_finalized_snapshot();
         let mut restarted_store = fixture.reopen_body_store();
@@ -652,7 +627,6 @@ v2_apply_test!(
             generation_after_capture,
             "an exact replay must not publish another archive generation"
         );
-
         let (_, receipt) = restarted_service
             .kura
             .v2_finality_artifact_with_receipt(1)
@@ -668,7 +642,6 @@ v2_apply_test!(
         );
     }
 );
-
 v2_apply_test!(
     reputation_archive_failure_after_kura_and_checkpoint_keeps_state_unpublished,
     {
@@ -682,7 +655,6 @@ v2_apply_test!(
         );
         fixture.service.reputation_finalized_archive = Some(Arc::clone(&archive));
         let mut store = fixture.reopen_body_store();
-
         let error = fixture
             .execute(&mut store)
             .expect_err("archive capture must exceed the deliberately tiny bound");
@@ -725,7 +697,6 @@ v2_apply_test!(
         );
     }
 );
-
 v2_apply_test!(
     crash_after_reputation_archive_capture_precedes_state_block_commit,
     {
@@ -743,7 +714,6 @@ v2_apply_test!(
             .service
             .fail_after_reputation_archive_capture_for_test();
         let mut store = fixture.reopen_body_store();
-
         let error = fixture
             .execute(&mut store)
             .expect_err("injected post-capture crash");
@@ -776,7 +746,6 @@ v2_apply_test!(
         );
     }
 );
-
 v2_apply_test!(
     reputation_archive_recovery_is_idempotent_without_skipping_height,
     {
@@ -821,7 +790,6 @@ v2_apply_test!(
             "archive-boundary crash must precede commit-manifest publication"
         );
         drop(first_store);
-
         let (restarted_service, restarted_state) =
             fixture.restart_service_from_last_finalized_snapshot();
         let mut restarted_store = fixture.reopen_body_store();
@@ -858,7 +826,6 @@ v2_apply_test!(
             .expect("recovered archive remains contiguous and exact");
         assert_eq!(qualification.activation_floor().height, 1);
         assert_eq!(qualification.archive_tip().height, 1);
-
         let (_, receipt) = restarted_service
             .kura
             .v2_finality_artifact_with_receipt(1)
@@ -874,7 +841,6 @@ v2_apply_test!(
         );
     }
 );
-
 v2_apply_test!(
     reputation_archive_virtual_base_allows_commit_owned_successor_capture,
     {
@@ -888,7 +854,6 @@ v2_apply_test!(
                 .expect("open retained-capture archive"),
         );
         fixture.service.reputation_finalized_archive = Some(Arc::clone(&archive));
-
         let mut parent_store = fixture.reopen_body_store();
         fixture
             .execute(&mut parent_store)
@@ -926,7 +891,6 @@ v2_apply_test!(
                 .expect("read active virtual base"),
             Some(parent.key.clone())
         );
-
         let mut successor = build_successor_apply_fixture(&fixture);
         let completion =
             match fixture
@@ -971,7 +935,6 @@ v2_apply_test!(
         let generation = archive
             .health_generation()
             .expect("read post-successor archive generation");
-
         drop(successor);
         fixture.service.reputation_finalized_archive = None;
         drop(archive);
@@ -1005,7 +968,6 @@ v2_apply_test!(
             Some(compaction.checkpoint_digest())
         );
         assert_eq!(reopened_qualification.kura_tip_height(), 2);
-
         let (_, receipt) = fixture
             .kura
             .v2_finality_artifact_with_receipt(2)
@@ -1026,7 +988,6 @@ v2_apply_test!(
         );
     }
 );
-
 v2_apply_test!(
     reputation_retention_restart_recovers_both_cas_publication_boundaries,
     {
@@ -1041,7 +1002,6 @@ v2_apply_test!(
                     .expect("open retention-recovery archive"),
             );
             fixture.service.reputation_finalized_archive = Some(Arc::clone(&archive));
-
             let mut parent_store = fixture.reopen_body_store();
             fixture
                 .execute(&mut parent_store)
@@ -1060,7 +1020,6 @@ v2_apply_test!(
                 .prepare_kura_authenticated_compaction(&fence, fixture.kura.as_ref())
                 .expect("prepare exact retention proposal");
             authority.fail_nth_load_after_next_cas(failed_load_after_cas);
-
             assert!(matches!(
                 archive.approve_and_install_kura_authenticated_compaction(
                     &proposal,
@@ -1089,7 +1048,6 @@ v2_apply_test!(
                     .count(),
                 usize::from(checkpoint_was_published)
             );
-
             fixture.service.reputation_finalized_archive = None;
             drop(archive);
             let recovered = ReputationFinalizedArchive::try_open_with_retention_authority(
@@ -1123,7 +1081,6 @@ v2_apply_test!(
             let recovered_generation = recovered
                 .health_generation()
                 .expect("read recovered archive generation");
-
             drop(recovered);
             let reopened = ReputationFinalizedArchive::try_open_with_retention_authority(
                 archive_root.path(),
@@ -1150,7 +1107,6 @@ v2_apply_test!(
         }
     }
 );
-
 v2_apply_test!(
     crash_after_staged_checkpoint_replays_exact_tip_without_double_apply,
     {
@@ -1192,7 +1148,6 @@ v2_apply_test!(
         );
         let staged_state_hash = staged_checkpoint.state_hash();
         drop(first_process_store);
-
         // Snapshot publication is gated on the complete
         // checkpoint/manifest/finality tuple, so a process crash reloads
         // the last finalized snapshot (height zero here). The exact
@@ -1217,7 +1172,6 @@ v2_apply_test!(
             staged_state_hash,
             "recovery must reproduce the exact pre-commit checkpointed WSV"
         );
-
         let durable_state_hash =
             crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref());
         restarted_service
@@ -1239,7 +1193,6 @@ v2_apply_test!(
         fixture.assert_complete_for_state(restarted_state.as_ref());
     }
 );
-
 v2_apply_test!(restart_recovers_manifest_after_pre_wsv_finality, {
     let fixture = ApplyFixture::new();
     let mut store = fixture.reopen_body_store();
@@ -1278,13 +1231,11 @@ v2_apply_test!(restart_recovers_manifest_after_pre_wsv_finality, {
             .expect("read finality")
             .is_some()
     );
-
     drop(store);
     let mut reopened = fixture.reopen_body_store();
     fixture.execute(&mut reopened).expect("complete manifest");
     fixture.assert_complete();
 });
-
 v2_apply_test!(restart_recovers_kura_block_before_pre_wsv_finality, {
     let fixture = ApplyFixture::new();
     let mut store = fixture.reopen_body_store();
@@ -1324,7 +1275,6 @@ v2_apply_test!(restart_recovers_kura_block_before_pre_wsv_finality, {
             .expect("read finality")
             .is_none()
     );
-
     drop(store);
     let mut reopened = fixture.reopen_body_store();
     fixture
@@ -1332,7 +1282,6 @@ v2_apply_test!(restart_recovers_kura_block_before_pre_wsv_finality, {
         .expect("complete pre-WSV finality and apply");
     fixture.assert_complete();
 });
-
 v2_apply_test!(
     complete_apply_replay_is_idempotent_and_never_advances_twice,
     {
@@ -1345,7 +1294,6 @@ v2_apply_test!(
             .v2_finality_artifact(1)
             .expect("read finality")
             .expect("finality exists");
-
         fixture.execute(&mut store).expect("idempotent replay");
         fixture.assert_complete();
         assert_eq!(

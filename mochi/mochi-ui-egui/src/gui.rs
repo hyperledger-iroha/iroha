@@ -1,5 +1,4 @@
 //! MOCHI egui desktop entry point.
-
 #[path = "chaos_view.rs"]
 mod chaos_view;
 #[path = "composer_scenarios.rs"]
@@ -18,7 +17,6 @@ mod sandbox_cli;
 mod test_support;
 #[path = "wizard.rs"]
 mod wizard;
-
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     convert::TryFrom,
@@ -35,7 +33,6 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, SystemTimeError, UNIX_EPOCH},
 };
-
 use config::{
     BinaryOverrides, BundleConfig, ResolvedBundleConfig, default_config_path, load_bundle_config,
     load_bundle_config_at,
@@ -106,7 +103,6 @@ use tokio::{
     },
 };
 use toml::{self, Table as TomlTable, Value as TomlValue};
-
 const MAX_BLOCK_EVENTS: usize = 100;
 const MAX_EVENT_EVENTS: usize = 200;
 const MAX_LOG_EVENTS: usize = 200;
@@ -147,10 +143,8 @@ const SAMPLE_OTHER_PUBLIC_KEY: &str =
     "ed0120E9F632D3034BAB6BB26D92AC8FD93EF878D9C5E69E01B61B4C47101884EE2F99";
 const SAMPLE_ALICE_ACCOUNT_ID: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 const SAMPLE_BOB_ACCOUNT_ID: &str = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
-
 static CLI_OVERRIDES: LazyLock<Mutex<CliOverrides>> =
     LazyLock::new(|| Mutex::new(CliOverrides::default()));
-
 #[derive(Debug, Default, Clone)]
 struct CliOverrides {
     workspace_root: Option<PathBuf>,
@@ -171,13 +165,11 @@ struct CliOverrides {
     nexus_enabled: Option<bool>,
     nexus_lane_count: Option<u32>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedProfileOverride {
     profile: NetworkProfile,
     genesis_profile: Option<GenesisProfile>,
 }
-
 impl CliOverrides {
     fn apply_to(&self, mut builder: SupervisorBuilder) -> SupervisorBuilder {
         if let Some(root) = &self.data_root {
@@ -234,49 +226,41 @@ impl CliOverrides {
         builder
     }
 }
-
 struct StatusStreamHandle {
     stream: ManagedStatusStream,
     receiver: BroadcastReceiver<StatusStreamEvent>,
 }
-
 impl StatusStreamHandle {
     fn new(handle: &Handle, alias: String, client: ToriiClient) -> Self {
         let stream = ManagedStatusStream::spawn(handle, alias, client, STATUS_POLL_INTERVAL);
         let receiver = stream.subscribe();
         Self { stream, receiver }
     }
-
     fn abort(&mut self) {
         self.stream.abort();
     }
 }
-
 impl Drop for StatusStreamHandle {
     fn drop(&mut self) {
         self.stream.abort();
     }
 }
-
 #[derive(Debug)]
 struct ParsedCli {
     command: CliCommand,
     overrides: CliOverrides,
     help: bool,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CliCommand {
     Gui,
     SandboxServe,
     SandboxWipeRehearsal,
 }
-
 #[derive(Debug)]
 struct CliParseError {
     message: String,
 }
-
 impl CliParseError {
     fn new(message: impl Into<String>) -> Self {
         Self {
@@ -284,27 +268,22 @@ impl CliParseError {
         }
     }
 }
-
 impl std::fmt::Display for CliParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
     }
 }
-
 impl std::error::Error for CliParseError {}
-
 fn parse_cli_overrides() -> Result<ParsedCli, CliParseError> {
     let args: Vec<OsString> = env::args_os().skip(1).collect();
     let mut parsed = parse_cli_overrides_from(args)?;
     if parsed.help {
         return Ok(parsed);
     }
-
     let env_overrides = parse_env_overrides()?;
     parsed.overrides = merge_overrides(env_overrides, parsed.overrides);
     Ok(parsed)
 }
-
 fn parse_cli_overrides_from<I>(args: I) -> Result<ParsedCli, CliParseError>
 where
     I: IntoIterator<Item = OsString>,
@@ -315,7 +294,6 @@ where
     let mut restart_mode: Option<RestartModeFlag> = None;
     let mut restart_max: Option<usize> = None;
     let mut restart_backoff_ms: Option<u64> = None;
-
     while let Some(arg) = iter.next() {
         let flag = arg
             .into_string()
@@ -441,17 +419,14 @@ where
             }
         }
     }
-
     overrides.restart_policy =
         build_restart_policy_override(restart_mode, restart_max, restart_backoff_ms)?;
-
     Ok(ParsedCli {
         command,
         overrides,
         help: false,
     })
 }
-
 fn extract_cli_command<I>(args: I) -> Result<(CliCommand, Vec<OsString>), CliParseError>
 where
     I: IntoIterator<Item = OsString>,
@@ -484,7 +459,6 @@ where
     }
     Ok((CliCommand::Gui, args))
 }
-
 fn merge_overrides(env: CliOverrides, cli: CliOverrides) -> CliOverrides {
     CliOverrides {
         workspace_root: cli.workspace_root.or(env.workspace_root),
@@ -510,10 +484,8 @@ fn merge_overrides(env: CliOverrides, cli: CliOverrides) -> CliOverrides {
         nexus_lane_count: cli.nexus_lane_count.or(env.nexus_lane_count),
     }
 }
-
 fn parse_env_overrides() -> Result<CliOverrides, CliParseError> {
     let mut overrides = CliOverrides::default();
-
     if let Some(root) = env_value("MOCHI_WORKSPACE_ROOT")? {
         overrides.workspace_root = Some(PathBuf::from(root));
     }
@@ -565,7 +537,6 @@ fn parse_env_overrides() -> Result<CliOverrides, CliParseError> {
             "MOCHI_READINESS_TIMEOUT_MS",
         )?);
     }
-
     let env_restart_mode = env_value("MOCHI_RESTART_MODE")?
         .map(|value| parse_restart_mode_flag(&value))
         .transpose()?;
@@ -575,13 +546,10 @@ fn parse_env_overrides() -> Result<CliOverrides, CliParseError> {
     let env_restart_backoff_ms = env_value("MOCHI_RESTART_BACKOFF_MS")?
         .map(|value| parse_u64_flag(&value, "MOCHI_RESTART_BACKOFF_MS"))
         .transpose()?;
-
     overrides.restart_policy =
         build_restart_policy_override(env_restart_mode, env_restart_max, env_restart_backoff_ms)?;
-
     Ok(overrides)
 }
-
 fn env_value(key: &str) -> Result<Option<String>, CliParseError> {
     match env::var(key) {
         Ok(value) => {
@@ -597,7 +565,6 @@ fn env_value(key: &str) -> Result<Option<String>, CliParseError> {
         }
     }
 }
-
 fn next_value<I>(iter: &mut I, flag: &str) -> Result<OsString, CliParseError>
 where
     I: Iterator<Item = OsString>,
@@ -605,7 +572,6 @@ where
     iter.next()
         .ok_or_else(|| CliParseError::new(format!("expected value after {flag}")))
 }
-
 fn next_value_string<I>(iter: &mut I, flag: &str) -> Result<String, CliParseError>
 where
     I: Iterator<Item = OsString>,
@@ -614,7 +580,6 @@ where
         .into_string()
         .map_err(|_| CliParseError::new(format!("{flag} value must be valid UTF-8")))
 }
-
 fn apply_profile_override(
     overrides: &mut CliOverrides,
     parsed: ParsedProfileOverride,
@@ -633,7 +598,6 @@ fn apply_profile_override(
     }
     Ok(())
 }
-
 fn parse_profile_override(value: &str) -> Result<ParsedProfileOverride, CliParseError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -673,7 +637,6 @@ fn parse_profile_override(value: &str) -> Result<ParsedProfileOverride, CliParse
         })?;
     parse_profile_table_override(table)
 }
-
 fn parse_profile_table_override(table: &TomlTable) -> Result<ParsedProfileOverride, CliParseError> {
     let peer_value = table
         .get("peer_count")
@@ -690,22 +653,18 @@ fn parse_profile_table_override(table: &TomlTable) -> Result<ParsedProfileOverri
         .filter(|value| !value.is_empty())
         .map(|value| value.parse().map_err(|err: String| CliParseError::new(err)))
         .transpose()?;
-
     if genesis_profile.is_some() && consensus_mode != SumeragiConsensusMode::Npos {
         return Err(CliParseError::new(
             "profile override with genesis_profile requires consensus_mode = \"npos\"",
         ));
     }
-
     let profile = NetworkProfile::custom(peer_count, consensus_mode)
         .map_err(|err| CliParseError::new(format!("invalid profile override: {err}")))?;
-
     Ok(ParsedProfileOverride {
         profile,
         genesis_profile,
     })
 }
-
 fn parse_profile_peer_count(value: &TomlValue) -> Result<usize, CliParseError> {
     let raw = value
         .as_integer()
@@ -721,7 +680,6 @@ fn parse_profile_peer_count(value: &TomlValue) -> Result<usize, CliParseError> {
     usize::try_from(unsigned)
         .map_err(|_| CliParseError::new("profile override peer_count exceeds the supported range"))
 }
-
 fn parse_profile_consensus_mode(value: &TomlValue) -> Result<SumeragiConsensusMode, CliParseError> {
     let raw = value
         .as_str()
@@ -735,7 +693,6 @@ fn parse_profile_consensus_mode(value: &TomlValue) -> Result<SumeragiConsensusMo
         ))),
     }
 }
-
 fn parse_profile_preset(value: &str) -> Option<ProfilePreset> {
     let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
     match normalized.as_str() {
@@ -744,11 +701,9 @@ fn parse_profile_preset(value: &str) -> Option<ProfilePreset> {
         _ => None,
     }
 }
-
 fn parse_genesis_profile_flag(value: &str) -> Result<GenesisProfile, CliParseError> {
     value.parse().map_err(CliParseError::new)
 }
-
 fn parse_nexus_config_file(path: &str) -> Result<toml::Table, CliParseError> {
     let contents = fs::read_to_string(path).map_err(|err| {
         CliParseError::new(format!("--nexus-config failed to read {path}: {err}"))
@@ -772,7 +727,6 @@ fn parse_nexus_config_file(path: &str) -> Result<toml::Table, CliParseError> {
         Ok(table.clone())
     }
 }
-
 fn parse_port_flag(value: &str, flag: &str) -> Result<u16, CliParseError> {
     let port: u16 = value.parse().map_err(|_| {
         CliParseError::new(format!("{flag} expects an integer between 1 and 65535"))
@@ -784,13 +738,11 @@ fn parse_port_flag(value: &str, flag: &str) -> Result<u16, CliParseError> {
     }
     Ok(port)
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RestartModeFlag {
     Never,
     OnFailure,
 }
-
 fn parse_restart_mode_flag(value: &str) -> Result<RestartModeFlag, CliParseError> {
     match value.to_ascii_lowercase().as_str() {
         "never" => Ok(RestartModeFlag::Never),
@@ -800,25 +752,21 @@ fn parse_restart_mode_flag(value: &str) -> Result<RestartModeFlag, CliParseError
         ))),
     }
 }
-
 fn parse_usize_flag(value: &str, flag: &str) -> Result<usize, CliParseError> {
     value
         .parse::<usize>()
         .map_err(|_| CliParseError::new(format!("{flag} expects a non-negative integer")))
 }
-
 fn parse_u32_flag(value: &str, flag: &str) -> Result<u32, CliParseError> {
     value
         .parse::<u32>()
         .map_err(|_| CliParseError::new(format!("{flag} expects a non-negative integer")))
 }
-
 fn parse_u64_flag(value: &str, flag: &str) -> Result<u64, CliParseError> {
     value
         .parse::<u64>()
         .map_err(|_| CliParseError::new(format!("{flag} expects a non-negative integer")))
 }
-
 fn parse_positive_millis_flag(value: &str, flag: &str) -> Result<Duration, CliParseError> {
     let millis = parse_u64_flag(value, flag)?;
     if millis == 0 {
@@ -828,7 +776,6 @@ fn parse_positive_millis_flag(value: &str, flag: &str) -> Result<Duration, CliPa
     }
     Ok(Duration::from_millis(millis))
 }
-
 fn parse_bool_flag(value: &str, flag: &str) -> Result<bool, CliParseError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Ok(true),
@@ -838,7 +785,6 @@ fn parse_bool_flag(value: &str, flag: &str) -> Result<bool, CliParseError> {
         ))),
     }
 }
-
 fn default_restart_policy_params() -> (usize, u64) {
     match RestartPolicy::default() {
         RestartPolicy::OnFailure {
@@ -856,7 +802,6 @@ fn default_restart_policy_params() -> (usize, u64) {
         RestartPolicy::Never => (3, 1_000),
     }
 }
-
 fn build_restart_policy_override(
     mode: Option<RestartModeFlag>,
     max_restarts: Option<usize>,
@@ -885,24 +830,20 @@ fn build_restart_policy_override(
         }
     }
 }
-
 fn cli_overrides() -> CliOverrides {
     CLI_OVERRIDES
         .lock()
         .expect("cli overrides mutex poisoned")
         .clone()
 }
-
 fn set_cli_overrides(overrides: CliOverrides) {
     *CLI_OVERRIDES.lock().expect("cli overrides mutex poisoned") = overrides;
 }
-
 #[cfg(test)]
 fn reset_cli_overrides_for_tests() {
     let env_overrides = parse_env_overrides().expect("parse env overrides");
     set_cli_overrides(env_overrides);
 }
-
 fn print_cli_usage() {
     println!("MOCHI usage:");
     println!("  mochi [options]");
@@ -941,7 +882,6 @@ fn print_cli_usage() {
     println!("  --restart-backoff-ms <millis>  Override the base retry backoff (ms).");
     println!("  -h, --help                   Show this help text.");
 }
-
 fn configured_readiness_smoke_for(
     config: Option<&ResolvedBundleConfig>,
     overrides: &CliOverrides,
@@ -951,7 +891,6 @@ fn configured_readiness_smoke_for(
         .or_else(|| config.and_then(|cfg| cfg.config.readiness_smoke))
         .unwrap_or(true)
 }
-
 fn configured_readiness_options_for(overrides: &CliOverrides) -> ReadinessOptions {
     ReadinessOptions::new(
         overrides
@@ -960,7 +899,6 @@ fn configured_readiness_options_for(overrides: &CliOverrides) -> ReadinessOption
     )
     .with_poll_interval(READINESS_POLL_INTERVAL)
 }
-
 fn should_default_workspace_root(
     overrides: &CliOverrides,
     config: Option<&ResolvedBundleConfig>,
@@ -973,7 +911,6 @@ fn should_default_workspace_root(
         None => true,
     }
 }
-
 fn resolved_build_binaries(
     overrides: &CliOverrides,
     config: Option<&ResolvedBundleConfig>,
@@ -983,7 +920,6 @@ fn resolved_build_binaries(
         .or_else(|| config.and_then(|cfg| cfg.config.build_binaries))
         .unwrap_or(true)
 }
-
 fn resolve_workspace_root_for_cli(
     overrides: &CliOverrides,
     config: Option<&ResolvedBundleConfig>,
@@ -1008,7 +944,6 @@ fn resolve_workspace_root_for_cli(
         .or_else(|| env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."))
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActiveView {
     Dashboard,
@@ -1018,7 +953,6 @@ enum ActiveView {
     Composer,
     Chaos,
 }
-
 impl ActiveView {
     fn label(self) -> &'static str {
         match self {
@@ -1030,7 +964,6 @@ impl ActiveView {
             ActiveView::Chaos => "Chaos Lab",
         }
     }
-
     fn all() -> [ActiveView; 6] {
         [
             ActiveView::Dashboard,
@@ -1041,7 +974,6 @@ impl ActiveView {
             ActiveView::Chaos,
         ]
     }
-
     fn storage_value(self) -> &'static str {
         match self {
             ActiveView::Dashboard => "dashboard",
@@ -1052,7 +984,6 @@ impl ActiveView {
             ActiveView::Chaos => "chaos",
         }
     }
-
     fn from_storage_value(raw: &str) -> Option<Self> {
         match raw.trim() {
             "dashboard" => Some(Self::Dashboard),
@@ -1065,14 +996,12 @@ impl ActiveView {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActivityView {
     Logs,
     Events,
     Blocks,
 }
-
 impl ActivityView {
     fn label(self) -> &'static str {
         match self {
@@ -1081,7 +1010,6 @@ impl ActivityView {
             ActivityView::Blocks => "Blocks",
         }
     }
-
     fn all() -> [ActivityView; 3] {
         [
             ActivityView::Logs,
@@ -1090,31 +1018,26 @@ impl ActivityView {
         ]
     }
 }
-
 fn now_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
 }
-
 fn lag_to_usize(skipped: u64) -> usize {
     usize::try_from(skipped).unwrap_or(usize::MAX)
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ComposerStep {
     Build,
     Raw,
     Preview,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ComposerMode {
     Scenarios,
     Advanced,
 }
-
 impl ComposerMode {
     fn label(self) -> &'static str {
         match self {
@@ -1123,7 +1046,6 @@ impl ComposerMode {
         }
     }
 }
-
 impl ComposerStep {
     fn label(self) -> &'static str {
         match self {
@@ -1132,7 +1054,6 @@ impl ComposerStep {
             ComposerStep::Preview => "3. Preview",
         }
     }
-
     fn all() -> [ComposerStep; 3] {
         [
             ComposerStep::Build,
@@ -1141,7 +1062,6 @@ impl ComposerStep {
         ]
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ComposerInstructionKind {
     MintAsset,
@@ -1156,7 +1076,6 @@ enum ComposerInstructionKind {
     AccountAdmissionPolicy,
     MultisigPropose,
 }
-
 impl ComposerInstructionKind {
     fn label(self) -> &'static str {
         match self {
@@ -1175,7 +1094,6 @@ impl ComposerInstructionKind {
             ComposerInstructionKind::MultisigPropose => "Multisig proposal",
         }
     }
-
     fn permission(self) -> InstructionPermission {
         match self {
             ComposerInstructionKind::MintAsset => InstructionPermission::MintAsset,
@@ -1200,7 +1118,6 @@ impl ComposerInstructionKind {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ComposerTemplate {
     MintRoseToSigner,
@@ -1217,7 +1134,6 @@ enum ComposerTemplate {
     AdmissionPolicyExplicitOnly,
     MultisigProposeSample,
 }
-
 fn draft_fixture_payload(fixture: &str, field: &str) -> String {
     let value: Value = json::from_str(fixture).expect("composer draft fixture json");
     let Value::Object(map) = value else {
@@ -1228,7 +1144,6 @@ fn draft_fixture_payload(fixture: &str, field: &str) -> String {
         .unwrap_or_else(|| panic!("composer draft fixture missing field `{field}`"));
     json::to_string_pretty(payload).expect("composer draft fixture payload should encode")
 }
-
 impl ComposerTemplate {
     const fn label(self) -> &'static str {
         match self {
@@ -1247,7 +1162,6 @@ impl ComposerTemplate {
             ComposerTemplate::MultisigProposeSample => "Multisig propose sample",
         }
     }
-
     const fn description(self) -> &'static str {
         match self {
             ComposerTemplate::MintRoseToSigner => {
@@ -1291,7 +1205,6 @@ impl ComposerTemplate {
             }
         }
     }
-
     fn options_for(kind: ComposerInstructionKind) -> &'static [ComposerTemplate] {
         const MINT: &[ComposerTemplate] = &[
             ComposerTemplate::MintRoseToSigner,
@@ -1317,7 +1230,6 @@ impl ComposerTemplate {
             ComposerTemplate::AdmissionPolicyExplicitOnly,
         ];
         const MULTISIG_PROPOSE: &[ComposerTemplate] = &[ComposerTemplate::MultisigProposeSample];
-
         match kind {
             ComposerInstructionKind::MintAsset => MINT,
             ComposerInstructionKind::BurnAsset => BURN,
@@ -1332,7 +1244,6 @@ impl ComposerTemplate {
             ComposerInstructionKind::MultisigPropose => MULTISIG_PROPOSE,
         }
     }
-
     fn apply(self, app: &mut MochiApp, available_signers: &[SigningAuthority]) {
         let signers: &[SigningAuthority] = if available_signers.is_empty() {
             development_signing_authorities()
@@ -1343,7 +1254,6 @@ impl ComposerTemplate {
             .composer_selected_signer
             .and_then(|index| signers.get(index))
             .or_else(|| signers.first());
-
         match self {
             ComposerTemplate::MintRoseToSigner => {
                 app.composer_instruction_kind = ComposerInstructionKind::MintAsset;
@@ -1541,7 +1451,6 @@ impl ComposerTemplate {
                 app.last_info = Some("Loaded multisig proposal template.".to_owned());
             }
         }
-
         app.composer_step = ComposerStep::Build;
         app.composer_preview = None;
         app.composer_submit_error = None;
@@ -1550,34 +1459,27 @@ impl ComposerTemplate {
         app.last_error = None;
     }
 }
-
 fn template_asset_id(definition: &str, owner: &AccountId) -> Option<String> {
     let definition = definition.parse::<AssetDefinitionId>().ok()?;
     let asset_id = AssetId::new(definition, owner.clone());
     Some(asset_literal(&asset_id))
 }
-
 fn sample_rose_definition_literal() -> String {
     sample_rose_definition_id().to_string()
 }
-
 fn sample_cabbage_definition_literal() -> String {
     sample_cabbage_definition_id().to_string()
 }
-
 fn account_literal(account_id: &AccountId) -> String {
     account_id.to_string()
 }
-
 fn asset_literal(asset_id: &AssetId) -> String {
     asset_id.to_string()
 }
-
 fn sample_account_id(public_key: &str) -> String {
     let public_key = public_key.parse().expect("sample public key must parse");
     AccountId::new(public_key).to_string()
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MaintenanceDialog {
     ExportSnapshot,
@@ -1585,7 +1487,6 @@ enum MaintenanceDialog {
     RestoreSnapshot,
     ResetLane,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MaintenanceTask {
     Snapshot,
@@ -1593,7 +1494,6 @@ enum MaintenanceTask {
     Restore,
     LaneReset,
 }
-
 #[derive(Debug, Clone)]
 enum MaintenanceCommand {
     ExportSnapshot { label: Option<String> },
@@ -1601,7 +1501,6 @@ enum MaintenanceCommand {
     Restore { target: String },
     ResetLane { lane_id: u32 },
 }
-
 impl MaintenanceCommand {
     fn task(&self) -> MaintenanceTask {
         match self {
@@ -1612,7 +1511,6 @@ impl MaintenanceCommand {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 struct MaintenanceBanner {
     color: Color32,
@@ -1620,7 +1518,6 @@ struct MaintenanceBanner {
     show_spinner: bool,
     dismissable: bool,
 }
-
 #[derive(Debug, Clone, Default)]
 enum MaintenanceState {
     #[default]
@@ -1633,7 +1530,6 @@ enum MaintenanceState {
         error: String,
     },
 }
-
 #[derive(Debug)]
 enum MaintenanceOutcome {
     Snapshot(Result<PathBuf, String>),
@@ -1641,20 +1537,17 @@ enum MaintenanceOutcome {
     Restore(Result<PathBuf, String>),
     LaneReset(Result<(), String>),
 }
-
 #[derive(Debug)]
 struct MaintenanceUpdate {
     supervisor: Supervisor,
     outcome: MaintenanceOutcome,
 }
-
 #[derive(Debug, Clone)]
 struct LaneResetCandidate {
     lane_id: u32,
     alias: String,
     dataspace: String,
 }
-
 impl LaneResetCandidate {
     fn label(&self) -> String {
         format!(
@@ -1664,7 +1557,6 @@ impl LaneResetCandidate {
         )
     }
 }
-
 #[derive(Debug, Clone)]
 struct LanePathPreview {
     lane_id: u32,
@@ -1674,7 +1566,6 @@ struct LanePathPreview {
     merge_log: PathBuf,
     _selection_lease: Option<SelectedPeerStoragePaths>,
 }
-
 #[derive(Debug, Clone)]
 struct ReadinessRecord {
     outcome: ReadinessRecordOutcome,
@@ -1682,7 +1573,6 @@ struct ReadinessRecord {
     total_elapsed: Duration,
     finished_at: Instant,
 }
-
 impl ReadinessRecord {
     fn ready(status: ToriiStatusSnapshot, elapsed: Duration, finished_at: Instant) -> Self {
         Self {
@@ -1692,7 +1582,6 @@ impl ReadinessRecord {
             finished_at,
         }
     }
-
     fn committed(outcome: ReadinessSmokeOutcome, finished_at: Instant) -> Self {
         let attempts = outcome.attempt.max(1);
         let elapsed = outcome.total_elapsed;
@@ -1703,7 +1592,6 @@ impl ReadinessRecord {
             finished_at,
         }
     }
-
     fn failed(
         error: ToriiErrorInfo,
         attempts: usize,
@@ -1717,7 +1605,6 @@ impl ReadinessRecord {
             finished_at,
         }
     }
-
     fn label(&self) -> (String, Color32) {
         match &self.outcome {
             ReadinessRecordOutcome::Ready { status } => {
@@ -1748,7 +1635,6 @@ impl ReadinessRecord {
             }
         }
     }
-
     fn detail(&self) -> Option<String> {
         match &self.outcome {
             ReadinessRecordOutcome::Ready { status } => {
@@ -1766,14 +1652,12 @@ impl ReadinessRecord {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 enum ReadinessRecordOutcome {
     Ready { status: ToriiStatusSnapshot },
     Committed(ReadinessSmokeOutcome),
     Failed { error: ToriiErrorInfo },
 }
-
 #[derive(Debug)]
 enum ReadinessUpdate {
     Finished {
@@ -1781,32 +1665,26 @@ enum ReadinessUpdate {
         record: ReadinessRecord,
     },
 }
-
 #[derive(Debug, Clone, Default)]
 struct PeerReadinessView {
     last_record: Option<ReadinessRecord>,
 }
-
 impl PeerReadinessView {
     fn update(&mut self, record: ReadinessRecord) {
         self.last_record = Some(record);
     }
-
     fn summary(&self) -> Option<(String, Color32)> {
         self.last_record.as_ref().map(ReadinessRecord::label)
     }
-
     fn detail(&self) -> Option<String> {
         self.last_record.as_ref().and_then(ReadinessRecord::detail)
     }
-
     fn age_seconds(&self) -> Option<f32> {
         self.last_record
             .as_ref()
             .map(|record| record.finished_at.elapsed().as_secs_f32())
     }
 }
-
 impl MaintenanceTask {
     fn running_message(self) -> &'static str {
         match self {
@@ -1817,12 +1695,10 @@ impl MaintenanceTask {
         }
     }
 }
-
 impl MaintenanceState {
     fn is_running(&self) -> bool {
         matches!(self, Self::Running(_))
     }
-
     fn banner(&self) -> Option<MaintenanceBanner> {
         match self {
             MaintenanceState::Idle => None,
@@ -1847,7 +1723,6 @@ impl MaintenanceState {
         }
     }
 }
-
 pub fn run() -> eframe::Result<()> {
     let parsed_cli = match parse_cli_overrides() {
         Ok(parsed) => parsed,
@@ -1857,12 +1732,10 @@ pub fn run() -> eframe::Result<()> {
             process::exit(1);
         }
     };
-
     if parsed_cli.help {
         print_cli_usage();
         return Ok(());
     }
-
     #[cfg(target_os = "macos")]
     {
         const ENV: &str = "ICRATE_UNSAFE_DISABLE_RUNTIME_ASSERTS";
@@ -1881,7 +1754,6 @@ pub fn run() -> eframe::Result<()> {
             }
         }
     }
-
     match parsed_cli.command {
         CliCommand::SandboxServe => {
             if let Err(err) = sandbox_cli::run_serve(parsed_cli.overrides) {
@@ -1899,9 +1771,7 @@ pub fn run() -> eframe::Result<()> {
         }
         CliCommand::Gui => {}
     }
-
     set_cli_overrides(parsed_cli.overrides);
-
     let options = NativeOptions::default();
     eframe::run_native(
         "MOCHI",
@@ -1913,13 +1783,11 @@ pub fn run() -> eframe::Result<()> {
         ),
     )
 }
-
 #[derive(Debug)]
 struct ComposerSubmitUpdate {
     peer: String,
     result: Result<String, ToriiErrorInfo>,
 }
-
 #[derive(Debug)]
 struct StateUpdate {
     peer: String,
@@ -1927,12 +1795,10 @@ struct StateUpdate {
     reset: bool,
     result: Result<StatePage, String>,
 }
-
 #[derive(Debug)]
 struct DashboardUpdate {
     result: Result<DashboardSnapshot, String>,
 }
-
 #[derive(Debug)]
 enum ChaosUpdate {
     Event {
@@ -1944,7 +1810,6 @@ enum ChaosUpdate {
         error: Option<String>,
     },
 }
-
 #[derive(Debug, Clone)]
 struct SignerEntryState {
     label: String,
@@ -1953,7 +1818,6 @@ struct SignerEntryState {
     permissions: BTreeSet<InstructionPermission>,
     roles: String,
 }
-
 impl SignerEntryState {
     fn from_signer(signer: &SigningAuthority) -> Self {
         let private_key = ExposedPrivateKey(signer.key_pair().private_key().clone()).to_string();
@@ -1972,7 +1836,6 @@ impl SignerEntryState {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 struct SignerEntryForm {
     label: String,
@@ -1981,7 +1844,6 @@ struct SignerEntryForm {
     permissions: BTreeSet<InstructionPermission>,
     roles: String,
 }
-
 impl Default for SignerEntryForm {
     fn default() -> Self {
         Self {
@@ -1995,13 +1857,11 @@ impl Default for SignerEntryForm {
         }
     }
 }
-
 impl SignerEntryForm {
     fn reset(&mut self) {
         *self = Self::default();
     }
 }
-
 #[derive(Debug)]
 struct SignerVaultDialog {
     entries: Vec<SignerEntryState>,
@@ -2011,7 +1871,6 @@ struct SignerVaultDialog {
     using_fallback: bool,
     dirty: bool,
 }
-
 impl SignerVaultDialog {
     fn load(supervisor: &Supervisor) -> Result<Self, String> {
         let vault = supervisor.signer_vault();
@@ -2038,13 +1897,11 @@ impl SignerVaultDialog {
             dirty: false,
         })
     }
-
     fn mark_dirty(&mut self) {
         self.dirty = true;
         self.status = None;
     }
 }
-
 struct MochiApp {
     supervisor: Option<Supervisor>,
     supervisor_error: Option<SupervisorError>,
@@ -2190,14 +2047,12 @@ struct MochiApp {
     chaos_rx: UnboundedReceiver<ChaosUpdate>,
     chaos_tx: UnboundedSender<ChaosUpdate>,
 }
-
 #[derive(Debug)]
 struct PendingSettingsApply {
     force_start_after_rebuild: bool,
     close_dialog: bool,
     success_message: String,
 }
-
 #[derive(Debug, Clone)]
 struct FirstRunWizardState {
     open: bool,
@@ -2206,7 +2061,6 @@ struct FirstRunWizardState {
     preset: ProfilePreset,
     enable_nexus: bool,
 }
-
 impl Default for FirstRunWizardState {
     fn default() -> Self {
         Self {
@@ -2218,7 +2072,6 @@ impl Default for FirstRunWizardState {
         }
     }
 }
-
 fn prepare_supervisor() -> (
     Option<Supervisor>,
     Option<SupervisorError>,
@@ -2226,7 +2079,6 @@ fn prepare_supervisor() -> (
 ) {
     prepare_supervisor_with_overrides(&cli_overrides())
 }
-
 fn prepare_supervisor_with_overrides(
     overrides: &CliOverrides,
 ) -> (
@@ -2255,11 +2107,9 @@ fn prepare_supervisor_with_overrides(
     } else {
         SupervisorBuilder::new(ProfilePreset::FourPeerBft)
     };
-
     if let Some(cfg) = config.as_ref() {
         builder = cfg.config.apply_to(builder);
     }
-
     builder = overrides.clone().apply_to(builder);
     builder = builder.auto_build_binaries(resolved_build_binaries(overrides, config.as_ref()));
     if should_default_workspace_root(overrides, config.as_ref()) {
@@ -2267,19 +2117,16 @@ fn prepare_supervisor_with_overrides(
             builder = builder.data_root(sandbox_root_for_workspace(workspace_root));
         }
     }
-
     match builder.build() {
         Ok(supervisor) => (Some(supervisor), None, config),
         Err(err) => (None, Some(err), config),
     }
 }
-
 impl Default for MochiApp {
     fn default() -> Self {
         Self::with_persisted_ui(EventFilterState::default(), ActiveView::Dashboard, false)
     }
 }
-
 impl MochiApp {
     fn new(cc: &CreationContext<'_>) -> Self {
         let filter = load_event_filter(cc.storage);
@@ -2287,7 +2134,6 @@ impl MochiApp {
         let wizard_completed = load_first_run_completed(cc.storage);
         Self::with_persisted_ui(filter, active_view, wizard_completed)
     }
-
     fn with_persisted_ui(
         event_filter: EventFilterState,
         active_view: ActiveView,
@@ -2458,15 +2304,12 @@ impl MochiApp {
         app
     }
 }
-
 #[cfg(test)]
 fn socket_bind_available() -> bool {
     std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).is_ok()
 }
-
 #[cfg(test)]
 mod cli_tests;
-
 impl Drop for MochiApp {
     fn drop(&mut self) {
         if let Some(stream) = self.block_stream.take() {
@@ -2480,7 +2323,6 @@ impl Drop for MochiApp {
         self.log_receiver = None;
     }
 }
-
 #[derive(Clone, Copy)]
 struct UiPalette {
     base: Color32,
@@ -2498,7 +2340,6 @@ struct UiPalette {
     warning: Color32,
     danger: Color32,
 }
-
 impl UiPalette {
     fn new() -> Self {
         Self {
@@ -2519,7 +2360,6 @@ impl UiPalette {
         }
     }
 }
-
 impl MochiApp {
     fn ensure_theme(&mut self, ctx: &egui::Context) {
         if self.theme_applied {
@@ -2571,7 +2411,6 @@ impl MochiApp {
         visuals.widgets.inactive.corner_radius = widget_radius;
         visuals.widgets.hovered.corner_radius = widget_radius;
         visuals.widgets.active.corner_radius = widget_radius;
-
         let mut style = (*ctx.style()).clone();
         style.visuals = visuals;
         style.spacing.item_spacing = egui::vec2(10.0, 8.0);
@@ -2603,22 +2442,18 @@ impl MochiApp {
         ctx.set_style(style);
         self.theme_applied = true;
     }
-
     fn palette() -> UiPalette {
         UiPalette::new()
     }
-
     fn profile_name(supervisor: &Supervisor) -> String {
         supervisor.profile().label()
     }
-
     fn copy_text(ui: &mut egui::Ui, text: impl Into<String>) {
         let text = text.into();
         ui.output_mut(|output| {
             output.commands.push(OutputCommand::CopyText(text));
         });
     }
-
     fn queue_settings_apply(
         &mut self,
         force_start_after_rebuild: bool,
@@ -2636,7 +2471,6 @@ impl MochiApp {
             success_message: success_message.into(),
         });
     }
-
     fn flush_pending_settings_apply(&mut self) {
         let Some(pending) = self.pending_settings_apply.take() else {
             return;
@@ -2655,7 +2489,6 @@ impl MochiApp {
             }
         }
     }
-
     fn running_peer_aliases(supervisor: &Supervisor) -> Vec<String> {
         supervisor
             .peers()
@@ -2664,14 +2497,12 @@ impl MochiApp {
             .map(|peer| peer.alias().to_owned())
             .collect()
     }
-
     fn peer_is_running(supervisor: &Supervisor, alias: &str) -> bool {
         supervisor
             .peers()
             .iter()
             .any(|peer| peer.alias() == alias && matches!(peer.state(), PeerState::Running))
     }
-
     fn collect_alias_operation_failures<E, F>(aliases: &[String], mut operation: F) -> Vec<String>
     where
         E: std::fmt::Display,
@@ -2686,7 +2517,6 @@ impl MochiApp {
             })
             .collect()
     }
-
     fn start_requested_peer_aliases(
         supervisor: &mut Supervisor,
         aliases: &[String],
@@ -2701,7 +2531,6 @@ impl MochiApp {
             supervisor.start_peer(alias)
         })
     }
-
     fn start_requested_peer_aliases_with<E, F>(
         aliases: &[String],
         already_running: &HashSet<String>,
@@ -2726,7 +2555,6 @@ impl MochiApp {
             })
         }
     }
-
     fn combine_with_running_set_restore(
         primary: SupervisorError,
         restore: Result<(), SupervisorError>,
@@ -2739,7 +2567,6 @@ impl MochiApp {
             },
         }
     }
-
     fn preferred_activity_alias(
         selection: Option<&String>,
         active: Option<&String>,
@@ -2757,23 +2584,19 @@ impl MochiApp {
         }
         running.first().cloned()
     }
-
     fn selected_quickstart_preset(&self, supervisor: &Supervisor) -> ProfilePreset {
         parse_profile_preset(self.settings_profile_input.trim())
             .or(supervisor.profile().preset)
             .unwrap_or(ProfilePreset::FourPeerBft)
     }
-
     fn set_quickstart_preset(&mut self, preset: ProfilePreset) {
         self.settings_profile_input.clear();
         self.settings_profile_input.push_str(preset.slug());
     }
-
     fn profile_recipe_value(profile: &NetworkProfile) -> String {
         if let Some(preset) = profile.preset {
             return preset.slug().to_owned();
         }
-
         let consensus_mode = match profile.consensus_mode {
             SumeragiConsensusMode::Permissioned => "permissioned",
             SumeragiConsensusMode::Npos => "npos",
@@ -2783,7 +2606,6 @@ impl MochiApp {
             profile.topology.peer_count, consensus_mode
         )
     }
-
     fn effective_profile_recipe(&self, supervisor: &Supervisor) -> String {
         let trimmed = self.settings_profile_input.trim();
         if !trimmed.is_empty() {
@@ -2792,7 +2614,6 @@ impl MochiApp {
             Self::profile_recipe_value(supervisor.profile())
         }
     }
-
     fn configured_workspace_root_path(&self, supervisor: Option<&Supervisor>) -> Option<PathBuf> {
         self.cli_overrides
             .workspace_root
@@ -2804,11 +2625,9 @@ impl MochiApp {
             })
             .or_else(|| supervisor.and_then(Self::infer_workspace_root_from_supervisor))
     }
-
     fn infer_workspace_root_from_supervisor(supervisor: &Supervisor) -> Option<PathBuf> {
         infer_workspace_root_from_sandbox_root(&Self::supervisor_base_data_root(supervisor))
     }
-
     fn effective_workspace_root_path(&self, supervisor: Option<&Supervisor>) -> Option<PathBuf> {
         let trimmed = self.settings_data_root_input.trim();
         if !trimmed.is_empty() {
@@ -2818,7 +2637,6 @@ impl MochiApp {
                 .or_else(|| supervisor.map(Self::supervisor_base_data_root))
         }
     }
-
     fn effective_sandbox_base_root(&self, supervisor: Option<&Supervisor>) -> PathBuf {
         if let Some(root) = self.cli_overrides.data_root.clone() {
             return root;
@@ -2837,21 +2655,18 @@ impl MochiApp {
             .map(Self::supervisor_base_data_root)
             .unwrap_or_else(std::env::temp_dir)
     }
-
     fn effective_workspace_recipe(&self, supervisor: &Supervisor) -> String {
         self.effective_workspace_root_path(Some(supervisor))
             .unwrap_or_else(|| Self::supervisor_base_data_root(supervisor))
             .display()
             .to_string()
     }
-
     fn effective_sandbox_recipe(&self, supervisor: &Supervisor) -> String {
         self.effective_sandbox_base_root(Some(supervisor))
             .join(supervisor.profile().slug())
             .display()
             .to_string()
     }
-
     fn effective_chain_id_recipe(&self, supervisor: &Supervisor) -> String {
         let trimmed = self.settings_chain_id_input.trim();
         if !trimmed.is_empty() {
@@ -2860,7 +2675,6 @@ impl MochiApp {
             supervisor.chain_id().to_owned()
         }
     }
-
     fn effective_torii_port_recipe(&self, supervisor: &Supervisor) -> Option<u16> {
         self.settings_torii_port_input
             .trim()
@@ -2869,7 +2683,6 @@ impl MochiApp {
             .filter(|port| *port > 0)
             .or_else(|| Self::infer_torii_base_port(supervisor))
     }
-
     fn effective_p2p_port_recipe(&self, supervisor: &Supervisor) -> Option<u16> {
         self.settings_p2p_port_input
             .trim()
@@ -2878,7 +2691,6 @@ impl MochiApp {
             .filter(|port| *port > 0)
             .or_else(|| Self::infer_p2p_base_port(supervisor))
     }
-
     fn launch_recipe(&self, supervisor: &Supervisor) -> String {
         compose_launch_recipe(
             &self.effective_profile_recipe(supervisor),
@@ -2890,26 +2702,22 @@ impl MochiApp {
             self.settings_readiness_smoke,
         )
     }
-
     fn recipe_peer(peer_rows: &[PeerRow]) -> Option<&PeerRow> {
         peer_rows
             .iter()
             .find(|row| row.api_base.is_some())
             .or_else(|| peer_rows.first())
     }
-
     fn peer_api_base(row: &PeerRow) -> String {
         row.api_base
             .as_deref()
             .map(ensure_http_base)
             .unwrap_or_else(|| ensure_http_base(&row.torii))
     }
-
     fn status_probe_recipe(&self, peer_rows: &[PeerRow]) -> Option<String> {
         let peer = Self::recipe_peer(peer_rows)?;
         Some(compose_status_probe_recipe(&Self::peer_api_base(peer)))
     }
-
     fn app_env_recipe(&self, supervisor: &Supervisor, peer_rows: &[PeerRow]) -> Option<String> {
         let peer = Self::recipe_peer(peer_rows)?;
         let signer = supervisor.signers().first();
@@ -2929,7 +2737,6 @@ impl MochiApp {
             private_key.as_deref(),
         ))
     }
-
     fn start_block_stream_for(
         &mut self,
         supervisor: &Supervisor,
@@ -2957,7 +2764,6 @@ impl MochiApp {
         self.last_info = Some(format!("Following blocks from {alias}."));
         Ok(())
     }
-
     fn stop_block_stream(&mut self, disable_auto_follow: bool) {
         if disable_auto_follow {
             self.auto_block_stream = false;
@@ -2976,7 +2782,6 @@ impl MochiApp {
             Self::push_block_event(&mut self.block_events, Some(alias), notice);
         }
     }
-
     fn start_event_stream_for(
         &mut self,
         supervisor: &Supervisor,
@@ -3004,7 +2809,6 @@ impl MochiApp {
         self.last_info = Some(format!("Following events from {alias}."));
         Ok(())
     }
-
     fn stop_event_stream(&mut self, disable_auto_follow: bool) {
         if disable_auto_follow {
             self.auto_event_stream = false;
@@ -3023,7 +2827,6 @@ impl MochiApp {
             Self::push_event_event(&mut self.event_events, Some(alias), notice);
         }
     }
-
     fn start_log_stream_for(&mut self, supervisor: &Supervisor, alias: &str) -> Result<(), String> {
         self.stop_log_stream(false);
         let Some(stream) = supervisor.log_stream(alias) else {
@@ -3039,7 +2842,6 @@ impl MochiApp {
         self.last_info = Some(format!("Tailing logs from {alias}."));
         Ok(())
     }
-
     fn ensure_auto_activity_streams(&mut self, supervisor: &Supervisor) {
         let running = Self::running_peer_aliases(supervisor);
         if self.auto_block_stream
@@ -3073,7 +2875,6 @@ impl MochiApp {
             let _ = self.start_log_stream_for(supervisor, &alias);
         }
     }
-
     fn poll_block_stream_events(&mut self) {
         if let Some(mut receiver) = self.block_receiver.take() {
             let mut keep_receiver = true;
@@ -3121,12 +2922,10 @@ impl MochiApp {
                     }
                 }
             }
-
             if keep_receiver {
                 self.block_receiver = Some(receiver);
             }
         }
-
         if self
             .block_stream
             .as_ref()
@@ -3147,7 +2946,6 @@ impl MochiApp {
             }
         }
     }
-
     fn poll_event_stream_events(&mut self) {
         if let Some(mut receiver) = self.event_receiver.take() {
             let mut keep_receiver = true;
@@ -3186,12 +2984,10 @@ impl MochiApp {
                     }
                 }
             }
-
             if keep_receiver {
                 self.event_receiver = Some(receiver);
             }
         }
-
         if self
             .event_stream
             .as_ref()
@@ -3209,7 +3005,6 @@ impl MochiApp {
             Self::push_event_event(&mut self.event_events, alias, closed);
         }
     }
-
     fn poll_log_events(&mut self) {
         if let Some(mut receiver) = self.log_receiver.take() {
             let mut keep_receiver = true;
@@ -3243,13 +3038,11 @@ impl MochiApp {
                     }
                 }
             }
-
             if keep_receiver {
                 self.log_receiver = Some(receiver);
             }
         }
     }
-
     fn poll_maintenance_updates(&mut self, supervisor_slot: &mut Option<Supervisor>) {
         while let Ok(update) = self.maintenance_rx.try_recv() {
             *supervisor_slot = Some(update.supervisor);
@@ -3346,7 +3139,6 @@ impl MochiApp {
             }
         }
     }
-
     fn schedule_pending_maintenance(&mut self, supervisor_slot: &mut Option<Supervisor>) {
         if self.maintenance_inflight.is_some() {
             return;
@@ -3358,12 +3150,10 @@ impl MochiApp {
             self.maintenance_command = Some(command);
             return;
         };
-
         let tx = self.maintenance_tx.clone();
         let task = command.task();
         self.maintenance_inflight = Some(task);
         let handle = self.runtime.handle().clone();
-
         self.runtime.spawn_blocking(move || {
             let mut supervisor = supervisor;
             let outcome = match command {
@@ -3397,7 +3187,6 @@ impl MochiApp {
             let _ = tx.send(update);
         });
     }
-
     fn poll_state_updates(&mut self) {
         loop {
             match self.state_rx.try_recv() {
@@ -3407,7 +3196,6 @@ impl MochiApp {
             }
         }
     }
-
     fn handle_state_update(&mut self, update: StateUpdate) {
         let Some(current_peer) = self.state_selected_peer.as_deref() else {
             return;
@@ -3446,7 +3234,6 @@ impl MochiApp {
             }
         }
     }
-
     fn poll_composer_updates(&mut self) {
         loop {
             match self.composer_submit_rx.try_recv() {
@@ -3456,7 +3243,6 @@ impl MochiApp {
             }
         }
     }
-
     fn handle_composer_update(&mut self, update: ComposerSubmitUpdate) {
         self.composer_submitting = false;
         match update.result {
@@ -3487,12 +3273,10 @@ impl MochiApp {
             }
         }
     }
-
     fn select_state_page(&mut self, kind: StateQueryKind, index: usize) {
         let tab = self.state_tabs.get_mut(kind);
         tab.select_page(index);
     }
-
     fn request_state_page(&mut self, supervisor: &Supervisor, reset: bool) {
         let kind = self.state_query_kind;
         let Some(peer) = self.state_selected_peer.clone() else {
@@ -3507,7 +3291,6 @@ impl MochiApp {
             tab.error = Some("Torii client unavailable for selected peer.".to_owned());
             return;
         };
-
         let fetch_size = NonZeroU64::new(self.state_fetch_size as u64);
         let cursor = {
             let tab = self.state_tabs.get_mut(kind);
@@ -3519,7 +3302,6 @@ impl MochiApp {
             if reset { None } else { tab.cursor.clone() }
         };
         let tx = self.state_tx.clone();
-
         self.runtime.spawn(async move {
             let result = run_state_query(client, kind, cursor, fetch_size)
                 .await
@@ -3532,7 +3314,6 @@ impl MochiApp {
             });
         });
     }
-
     fn sync_status_streams(&mut self, supervisor: &Supervisor, aliases: &[String]) {
         let desired: HashSet<String> = aliases.iter().cloned().collect();
         self.status_snapshots
@@ -3547,7 +3328,6 @@ impl MochiApp {
                 false
             }
         });
-
         let runtime_handle = self.runtime.handle().clone();
         for alias in aliases {
             if self.status_streams.contains_key(alias) {
@@ -3559,11 +3339,9 @@ impl MochiApp {
             }
         }
     }
-
     fn configured_build_binaries(&self) -> bool {
         resolved_build_binaries(&self.cli_overrides, self.bundle_config.as_ref())
     }
-
     fn configured_readiness_smoke(&self) -> bool {
         self.cli_overrides
             .readiness_smoke
@@ -3574,7 +3352,6 @@ impl MochiApp {
             })
             .unwrap_or(true)
     }
-
     fn spawn_readiness_checks<I>(&mut self, supervisor: &Supervisor, aliases: I)
     where
         I: IntoIterator<Item = String>,
@@ -3676,7 +3453,6 @@ impl MochiApp {
             });
         }
     }
-
     fn poll_status_streams(&mut self) {
         let mut finished = Vec::new();
         let mut pending = Vec::new();
@@ -3769,19 +3545,16 @@ impl MochiApp {
             }
         }
     }
-
     fn poll_readiness_updates(&mut self) {
         let mut updates = Vec::new();
         while let Ok(update) = self.readiness_rx.try_recv() {
             updates.push(update);
         }
-
         for update in updates {
             let ReadinessUpdate::Finished { alias, record } = update;
             let entry = self.readiness_results.entry(alias.clone()).or_default();
             entry.update(record.clone());
             self.readiness_inflight.remove(&alias);
-
             match &record.outcome {
                 ReadinessRecordOutcome::Ready { status } => {
                     self.last_info = Some(format!(
@@ -3811,7 +3584,6 @@ impl MochiApp {
             }
         }
     }
-
     fn handle_status_snapshot_event(
         &mut self,
         alias: &str,
@@ -3827,7 +3599,6 @@ impl MochiApp {
         let sumeragi_value = sumeragi.map(|value| (*value).clone());
         let sumeragi_diagnostics_value = sumeragi_diagnostics.map(|value| (*value).clone());
         let metrics_value = metrics.as_ref().map(|value| value.as_ref().clone());
-
         let view = self.status_snapshots.entry(alias.to_owned()).or_default();
         view.record_snapshot(
             snapshot_value,
@@ -3837,7 +3608,6 @@ impl MochiApp {
             metrics_error,
             timestamp,
         );
-
         let history = self.status_history.entry(alias.to_owned()).or_default();
         history.push_back(StatusHistoryEntry {
             timestamp,
@@ -3848,12 +3618,10 @@ impl MochiApp {
             history.pop_front();
         }
     }
-
     fn handle_status_error(&mut self, alias: &str, error: ToriiErrorInfo) {
         let view = self.status_snapshots.entry(alias.to_owned()).or_default();
         view.record_error(error, Instant::now());
     }
-
     fn record_stream_event(&mut self, alias: Option<String>, event: &BlockStreamEvent) {
         let Some(alias) = alias else {
             return;
@@ -3895,7 +3663,6 @@ impl MochiApp {
             }
         }
     }
-
     fn record_event_stream_event(&mut self, alias: Option<String>, event: &EventStreamEvent) {
         let Some(alias) = alias else {
             return;
@@ -3934,7 +3701,6 @@ impl MochiApp {
             }
         }
     }
-
     fn record_log_snapshot(&mut self, event: &PeerLogEvent) {
         let alias = Self::event_alias(event).to_owned();
         let label = match event {
@@ -3951,7 +3717,6 @@ impl MochiApp {
         snapshot.color = color;
         snapshot.timestamp = timestamp;
     }
-
     fn push_block_event(
         events: &mut Vec<DisplayEvent>,
         alias: Option<String>,
@@ -3962,7 +3727,6 @@ impl MochiApp {
             events.remove(0);
         }
     }
-
     fn push_event_event(
         events: &mut Vec<EventDisplay>,
         alias: Option<String>,
@@ -3973,7 +3737,6 @@ impl MochiApp {
             events.remove(0);
         }
     }
-
     fn push_log_event(&mut self, event: PeerLogEvent) {
         self.record_log_snapshot(&event);
         if self.log_events.len() >= MAX_LOG_EVENTS {
@@ -3981,7 +3744,6 @@ impl MochiApp {
         }
         self.log_events.push(event);
     }
-
     fn stop_log_stream(&mut self, disable_auto_follow: bool) {
         if disable_auto_follow {
             self.auto_log_stream = false;
@@ -3994,14 +3756,12 @@ impl MochiApp {
         self.log_receiver = None;
         self.log_stream_peer = None;
     }
-
     fn log_event_kind(event: &PeerLogEvent) -> LogStreamKind {
         match event {
             PeerLogEvent::Line { kind, .. } => *kind,
             PeerLogEvent::Lifecycle { .. } => LogStreamKind::System,
         }
     }
-
     fn is_log_kind_enabled(&self, kind: LogStreamKind) -> bool {
         match kind {
             LogStreamKind::Stdout => self.settings_log_stdout,
@@ -4009,7 +3769,6 @@ impl MochiApp {
             LogStreamKind::System => self.settings_log_system,
         }
     }
-
     fn format_block_event(entry: &DisplayEvent) -> String {
         let alias = entry.alias.as_deref().unwrap_or("unnamed");
         match &entry.event {
@@ -4042,7 +3801,6 @@ impl MochiApp {
             }
         }
     }
-
     fn render_event_line(entry: &EventDisplay) -> RenderedEventLine {
         let alias = entry.alias.as_deref().unwrap_or("unnamed");
         match &entry.event {
@@ -4194,7 +3952,6 @@ impl MochiApp {
             ),
         }
     }
-
     fn render_pipeline_event(
         alias: &str,
         base_kind: RenderedEventKind,
@@ -4359,7 +4116,6 @@ impl MochiApp {
             }
         }
     }
-
     fn render_trigger_completed(
         alias: &str,
         completed: &TriggerCompletedEvent,
@@ -4422,7 +4178,6 @@ impl MochiApp {
         )
         .with_badges(badges)
     }
-
     fn render_event_entry(
         &mut self,
         ui: &mut egui::Ui,
@@ -4482,7 +4237,6 @@ impl MochiApp {
             });
         });
     }
-
     fn format_decode_stage(stage: BlockDecodeStage) -> &'static str {
         match stage {
             BlockDecodeStage::Frame => "frame",
@@ -4490,7 +4244,6 @@ impl MochiApp {
             BlockDecodeStage::Stream => "stream",
         }
     }
-
     fn system_log_event(alias: &str, message: String) -> PeerLogEvent {
         PeerLogEvent::Line {
             alias: Arc::from(alias.to_owned()),
@@ -4499,7 +4252,6 @@ impl MochiApp {
             message,
         }
     }
-
     fn format_log_event(event: &PeerLogEvent) -> String {
         match event {
             PeerLogEvent::Line {
@@ -4526,7 +4278,6 @@ impl MochiApp {
             ),
         }
     }
-
     fn format_lifecycle_event(event: &LifecycleEvent) -> String {
         match event {
             LifecycleEvent::Started { attempt } if *attempt == 0 => "started".to_owned(),
@@ -4552,7 +4303,6 @@ impl MochiApp {
             LifecycleEvent::StoppedByUser => "stopped by user".to_owned(),
         }
     }
-
     fn log_event_color(event: &PeerLogEvent) -> Color32 {
         match event {
             PeerLogEvent::Line { kind, .. } => match kind {
@@ -4563,23 +4313,19 @@ impl MochiApp {
             PeerLogEvent::Lifecycle { .. } => Color32::from_rgb(64, 144, 200),
         }
     }
-
     fn event_alias(event: &PeerLogEvent) -> &str {
         match event {
             PeerLogEvent::Line { alias, .. } => alias.as_ref(),
             PeerLogEvent::Lifecycle { alias, .. } => alias.as_ref(),
         }
     }
-
     fn format_timestamp(timestamp_ms: u128) -> String {
         let seconds = timestamp_ms / 1000;
         let millis = (timestamp_ms % 1000) as u32;
         format!("{seconds}.{millis:03}s")
     }
-
     fn render_ready(&mut self, ui: &mut egui::Ui, supervisor: &mut Supervisor) {
         supervisor.refresh_peer_states();
-
         self.poll_block_stream_events();
         self.poll_event_stream_events();
         self.poll_log_events();
@@ -4587,16 +4333,13 @@ impl MochiApp {
         self.poll_composer_updates();
         self.poll_readiness_updates();
         self.poll_dashboard_updates();
-
         let peer_aliases: Vec<String> = supervisor
             .peers()
             .iter()
             .map(|peer| peer.alias().to_owned())
             .collect();
-
         self.sync_status_streams(supervisor, &peer_aliases);
         self.poll_status_streams();
-
         Self::ensure_selection(&mut self.selected_peer, &peer_aliases);
         Self::ensure_selection(&mut self.event_selected_peer, &peer_aliases);
         Self::ensure_selection(&mut self.log_selected_peer, &peer_aliases);
@@ -4605,7 +4348,6 @@ impl MochiApp {
         Self::ensure_selection(&mut self.chaos_selected_peer, &peer_aliases);
         Self::ensure_signer_selection(&mut self.composer_selected_signer, supervisor.signers());
         self.ensure_auto_activity_streams(supervisor);
-
         if let Some(error) = &self.last_error {
             ui.colored_label(Color32::from_rgb(200, 64, 64), error);
         }
@@ -4634,18 +4376,13 @@ impl MochiApp {
                 }
             });
         }
-
         ui.add_space(6.0);
         self.render_view_tabs(ui);
         ui.add_space(12.0);
-
         let peer_rows = self.build_peer_rows(supervisor);
         let metrics = self.collect_dashboard_metrics(&peer_rows);
-
         self.render_overview_bar(ui, supervisor, &peer_rows, &metrics);
-
         ui.add_space(16.0);
-
         match self.active_view {
             ActiveView::Dashboard => {
                 self.render_dashboard_view(ui, supervisor, &peer_rows, &peer_aliases, &metrics);
@@ -4659,7 +4396,6 @@ impl MochiApp {
             ActiveView::Chaos => self.render_chaos_view(ui, supervisor, &peer_aliases),
         }
     }
-
     fn ensure_selection(selection: &mut Option<String>, peer_aliases: &[String]) {
         if let Some(current) = selection.as_ref()
             && !peer_aliases.iter().any(|alias| alias == current)
@@ -4670,7 +4406,6 @@ impl MochiApp {
             *selection = peer_aliases.first().cloned();
         }
     }
-
     fn ensure_signer_selection(selection: &mut Option<usize>, signers: &[SigningAuthority]) {
         if signers.is_empty() {
             *selection = None;
@@ -4682,7 +4417,6 @@ impl MochiApp {
             _ => *selection = Some(0),
         }
     }
-
     fn begin_maintenance(&mut self, task: MaintenanceTask) -> bool {
         if self.maintenance_state.is_running() {
             return false;
@@ -4690,15 +4424,12 @@ impl MochiApp {
         self.maintenance_state = MaintenanceState::Running(task);
         true
     }
-
     fn complete_maintenance(&mut self, message: String) {
         self.maintenance_state = MaintenanceState::Completed { message };
     }
-
     fn fail_maintenance(&mut self, error: String) {
         self.maintenance_state = MaintenanceState::Failed { error };
     }
-
     fn sync_log_export_dir_input(&mut self) {
         self.settings_log_export_dir_input = self
             .log_export_dir
@@ -4706,7 +4437,6 @@ impl MochiApp {
             .map(|path| path.display().to_string())
             .unwrap_or_default();
     }
-
     fn sync_state_export_dir_input(&mut self) {
         self.settings_state_export_dir_input = self
             .state_export_dir
@@ -4714,7 +4444,6 @@ impl MochiApp {
             .map(|path| path.display().to_string())
             .unwrap_or_default();
     }
-
     fn sync_raw_editor_from_drafts(&mut self) {
         match drafts_to_pretty_json(&self.composer_drafts) {
             Ok(text) => {
@@ -4732,7 +4461,6 @@ impl MochiApp {
             }
         }
     }
-
     fn apply_raw_editor_to_drafts(&mut self) {
         let source = if self.composer_raw_editor.trim().is_empty() {
             "[]"
@@ -4755,7 +4483,6 @@ impl MochiApp {
             }
         }
     }
-
     fn reset_runtime_state_after_maintenance(&mut self) {
         if let Some(stream) = self.block_stream.take() {
             stream.abort();
@@ -4803,7 +4530,6 @@ impl MochiApp {
         self.composer_submit_success = None;
         self.sync_raw_editor_from_drafts();
     }
-
     fn initialize_settings_from_supervisor(&mut self) {
         let nexus_table = self
             .supervisor
@@ -4845,7 +4571,6 @@ impl MochiApp {
             self.settings_build_binaries = self.configured_build_binaries();
             self.settings_readiness_smoke = self.configured_readiness_smoke();
         }
-
         self.settings_nexus_enabled = nexus_table
             .and_then(|table| table.get("enabled").and_then(TomlValue::as_bool))
             .unwrap_or_else(|| nexus_table.is_some());
@@ -4858,13 +4583,10 @@ impl MochiApp {
             Self::format_toml_array_input(nexus_table, "lane_catalog");
         self.settings_nexus_dataspace_catalog_input =
             Self::format_toml_array_input(nexus_table, "dataspace_catalog");
-
         self.lane_reset_selection = None;
-
         self.sync_log_export_dir_input();
         self.sync_state_export_dir_input();
     }
-
     fn initialize_settings_from_runtime(&mut self, supervisor: Option<&Supervisor>) {
         let nexus_table = supervisor
             .and_then(|runtime| runtime.nexus_config_overrides())
@@ -4904,7 +4626,6 @@ impl MochiApp {
             self.settings_build_binaries = self.configured_build_binaries();
             self.settings_readiness_smoke = self.configured_readiness_smoke();
         }
-
         self.settings_nexus_enabled = nexus_table
             .and_then(|table| table.get("enabled").and_then(TomlValue::as_bool))
             .unwrap_or_else(|| nexus_table.is_some());
@@ -4917,13 +4638,10 @@ impl MochiApp {
             Self::format_toml_array_input(nexus_table, "lane_catalog");
         self.settings_nexus_dataspace_catalog_input =
             Self::format_toml_array_input(nexus_table, "dataspace_catalog");
-
         self.lane_reset_selection = None;
-
         self.sync_log_export_dir_input();
         self.sync_state_export_dir_input();
     }
-
     fn initialize_first_run_wizard(&mut self) {
         if let Some(supervisor) = self.supervisor.as_ref() {
             self.first_run_wizard.workspace_input = self
@@ -4944,7 +4662,6 @@ impl MochiApp {
                 PathBuf::from("dist/mochi").display().to_string();
         }
     }
-
     fn supervisor_base_data_root(supervisor: &Supervisor) -> PathBuf {
         let mut root = supervisor.paths().root().to_path_buf();
         let slug = supervisor.profile().slug();
@@ -4953,7 +4670,6 @@ impl MochiApp {
         }
         root
     }
-
     fn infer_torii_base_port(supervisor: &Supervisor) -> Option<u16> {
         supervisor.peers().first().and_then(|peer| {
             peer.torii_address()
@@ -4962,7 +4678,6 @@ impl MochiApp {
                 .and_then(|port| port.parse::<u16>().ok())
         })
     }
-
     fn infer_p2p_base_port(supervisor: &Supervisor) -> Option<u16> {
         supervisor.peers().first().and_then(|peer| {
             peer.p2p_address()
@@ -4971,7 +4686,6 @@ impl MochiApp {
                 .and_then(|port| port.parse::<u16>().ok())
         })
     }
-
     fn rebuild_supervisor(
         &mut self,
         data_root: Option<PathBuf>,
@@ -5005,7 +4719,6 @@ impl MochiApp {
         if let Some(existing) = self.supervisor.as_ref() {
             builder = builder.binaries(existing.binaries().clone());
         }
-
         let mut previous = self.supervisor.take();
         let previously_running = previous
             .as_ref()
@@ -5029,7 +4742,6 @@ impl MochiApp {
             }
         }
         self.reset_runtime_state_after_maintenance();
-
         let build_result = match previous {
             Some(old) => builder
                 .build_replacing(old)
@@ -5066,7 +4778,6 @@ impl MochiApp {
             }
         }
     }
-
     fn apply_settings_changes_with_restart(
         &mut self,
         force_start_after_rebuild: bool,
@@ -5078,7 +4789,6 @@ impl MochiApp {
             Some(PathBuf::from(workspace_root_input))
         };
         let data_root = workspace_root.as_ref().map(sandbox_root_for_workspace);
-
         let torii_port = {
             let trimmed = self.settings_torii_port_input.trim();
             if trimmed.is_empty() {
@@ -5089,7 +4799,6 @@ impl MochiApp {
                 })?)
             }
         };
-
         let p2p_port = {
             let trimmed = self.settings_p2p_port_input.trim();
             if trimmed.is_empty() {
@@ -5100,7 +4809,6 @@ impl MochiApp {
                 })?)
             }
         };
-
         let chain_id = {
             let trimmed = self.settings_chain_id_input.trim();
             if trimmed.is_empty() {
@@ -5109,7 +4817,6 @@ impl MochiApp {
                 Some(trimmed.to_owned())
             }
         };
-
         let log_export_dir = {
             let trimmed = self.settings_log_export_dir_input.trim();
             if trimmed.is_empty() {
@@ -5118,7 +4825,6 @@ impl MochiApp {
                 Some(PathBuf::from(trimmed))
             }
         };
-
         let state_export_dir = {
             let trimmed = self.settings_state_export_dir_input.trim();
             if trimmed.is_empty() {
@@ -5127,7 +4833,6 @@ impl MochiApp {
                 Some(PathBuf::from(trimmed))
             }
         };
-
         let lane_count = Self::parse_lane_count_input(&self.settings_nexus_lane_count_input)?;
         let mut lane_catalog = Self::parse_toml_array_input(
             &self.settings_nexus_lane_catalog_input,
@@ -5145,7 +4850,6 @@ impl MochiApp {
         if matches!(dataspace_catalog.as_ref(), Some(values) if values.is_empty()) {
             dataspace_catalog = None;
         }
-
         let mut resolved = self
             .bundle_config
             .clone()
@@ -5157,7 +4861,6 @@ impl MochiApp {
                     .clone()
                     .unwrap_or_else(default_config_path),
             });
-
         let profile_override_input = self.settings_profile_input.trim();
         let profile_override = if profile_override_input.is_empty() {
             None
@@ -5166,7 +4869,6 @@ impl MochiApp {
                 .map_err(|err| format!("Profile override error: {err}"))?;
             Some(parsed)
         };
-
         resolved.config.set_workspace_root(workspace_root.clone());
         resolved.config.set_data_root(None);
         let current_profile = self
@@ -5204,7 +4906,6 @@ impl MochiApp {
         resolved
             .config
             .set_readiness_smoke(Some(self.settings_readiness_smoke));
-
         let has_lane_overrides = lane_count.is_some_and(|count| count > 1)
             || lane_catalog.is_some()
             || dataspace_catalog.is_some();
@@ -5256,12 +4957,10 @@ impl MochiApp {
         } else {
             resolved.config.nexus = None;
         }
-
         if let Err(err) = resolved.config.write_to_path(&resolved.path) {
             return Err(err.to_string());
         }
         self.bundle_config = Some(resolved);
-
         self.rebuild_supervisor(
             data_root,
             torii_port,
@@ -5277,7 +4976,6 @@ impl MochiApp {
         self.settings_dialog = false;
         Ok(())
     }
-
     fn mintable_label(mintable: Mintable) -> String {
         match mintable {
             Mintable::Infinitely => "Infinitely".to_owned(),
@@ -5286,7 +4984,6 @@ impl MochiApp {
             Mintable::Limited(tokens) => format!("Limited({})", tokens.value()),
         }
     }
-
     fn preview_snapshot_label(raw: &str) -> Option<String> {
         let mut sanitized = String::with_capacity(raw.len());
         for ch in raw.chars() {
@@ -5307,7 +5004,6 @@ impl MochiApp {
             Some(trimmed)
         }
     }
-
     fn format_toml_array_input(table: Option<&TomlTable>, key: &str) -> String {
         let Some(table) = table else {
             return String::new();
@@ -5321,7 +5017,6 @@ impl MochiApp {
             .map(|value| value.trim().to_string())
             .unwrap_or_default()
     }
-
     fn parse_toml_array_input(
         raw: &str,
         key: &str,
@@ -5355,7 +5050,6 @@ impl MochiApp {
         }
         Ok(Some(array.clone()))
     }
-
     fn parse_lane_count_input(raw: &str) -> Result<Option<u32>, String> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -5369,7 +5063,6 @@ impl MochiApp {
         }
         Ok(Some(parsed))
     }
-
     fn lane_reset_candidates(nexus: Option<&TomlTable>) -> Vec<LaneResetCandidate> {
         let Some(nexus) = nexus else {
             return Vec::new();
@@ -5391,19 +5084,16 @@ impl MochiApp {
             })
             .collect()
     }
-
     fn lane_metadata_for_id(nexus: Option<&TomlTable>, lane_id: u32) -> LaneMetadata {
         let snapshot = lane_catalog_snapshot(nexus);
         let alias = snapshot.lane_alias(lane_id);
         let dataspace_id = snapshot.lane_dataspace_id(lane_id).unwrap_or(0);
-
         let mut metadata = LaneMetadata {
             id: LaneId::new(lane_id),
             alias,
             dataspace_id: DataSpaceId::new(u64::from(dataspace_id)),
             ..Default::default()
         };
-
         let table = nexus
             .and_then(|nexus| nexus.get("lane_catalog"))
             .and_then(TomlValue::as_array)
@@ -5418,7 +5108,6 @@ impl MochiApp {
                     (entry_lane_id == lane_id).then_some(table)
                 })
             });
-
         if let Some(table) = table {
             if let Some(description) = table.get("description").and_then(toml_string) {
                 metadata.description = Some(description);
@@ -5463,10 +5152,8 @@ impl MochiApp {
                 }
             }
         }
-
         metadata
     }
-
     fn lane_storage_preview(
         supervisor: &Supervisor,
         lane_id: u32,
@@ -5491,7 +5178,6 @@ impl MochiApp {
             _selection_lease: None,
         })
     }
-
     fn lane_path_previews(
         &self,
         lane_count: Option<u32>,
@@ -5525,7 +5211,6 @@ impl MochiApp {
                 let kura_root = selected.storage_dir().join("kura");
                 (peer_alias, kura_root, Some(selected))
             };
-
         let mut aliases = BTreeMap::new();
         let mut max_index: Option<u32> = None;
         if let Some(entries) = lane_catalog {
@@ -5547,7 +5232,6 @@ impl MochiApp {
                 aliases.insert(lane_id, alias);
             }
         }
-
         let effective_count = lane_count
             .or_else(|| max_index.map(|value| value.saturating_add(1)))
             .unwrap_or(1);
@@ -5566,7 +5250,6 @@ impl MochiApp {
                     .or_insert_with(|| default_lane_alias(lane_id));
             }
         }
-
         let previews = aliases
             .into_iter()
             .map(|(lane_id, alias)| {
@@ -5589,7 +5272,6 @@ impl MochiApp {
             .collect::<Vec<_>>();
         Some(previews)
     }
-
     fn reset_lane_with_lifecycle(
         supervisor: &mut Supervisor,
         lane_id: u32,
@@ -5643,7 +5325,6 @@ impl MochiApp {
             }
             return Err(error);
         }
-
         // The signed retire/add replacement owns the lane incarnation and its
         // authenticated storage geometry. Never delete bound Kura paths after
         // finality; doing so makes the next authenticated open fail closed.
@@ -5654,7 +5335,6 @@ impl MochiApp {
         }
         Ok(())
     }
-
     fn lane_reset_lifecycle_plan(supervisor: &Supervisor, lane_id: u32) -> LaneLifecyclePlan {
         LaneLifecyclePlan {
             additions: vec![Self::lane_metadata_for_id(
@@ -5664,7 +5344,6 @@ impl MochiApp {
             retire: vec![LaneId::new(lane_id)],
         }
     }
-
     fn render_view_tabs(&mut self, ui: &mut egui::Ui) {
         let palette = Self::palette();
         Frame::new()
@@ -5696,7 +5375,6 @@ impl MochiApp {
             });
         ui.add_space(8.0);
     }
-
     fn build_peer_rows(&self, supervisor: &Supervisor) -> Vec<PeerRow> {
         supervisor
             .peers()
@@ -5718,7 +5396,6 @@ impl MochiApp {
             })
             .collect()
     }
-
     fn collect_dashboard_metrics(&self, peer_rows: &[PeerRow]) -> DashboardMetrics {
         let total_peers = peer_rows.len();
         let running_peers = peer_rows
@@ -5738,7 +5415,6 @@ impl MochiApp {
         let pending_block_events = self.block_events.len();
         let pending_event_frames = self.event_events.len();
         let stored_logs = self.log_events.len();
-
         let mut latest_height = None;
         let mut total_tx = 0u64;
         let mut total_rejected_tx = 0u64;
@@ -5752,7 +5428,6 @@ impl MochiApp {
                 total_rejected_tx += summary.rejected_transaction_count as u64;
             }
         }
-
         let mut queue_total = 0.0f64;
         let mut queue_count = 0u64;
         let mut latency_total = 0.0f64;
@@ -5775,7 +5450,6 @@ impl MochiApp {
         } else {
             None
         };
-
         let mut tx_delta_total = 0u64;
         let mut timespan_total = 0f64;
         for history in self.status_history.values() {
@@ -5804,7 +5478,6 @@ impl MochiApp {
         } else {
             None
         };
-
         DashboardMetrics {
             total_peers,
             running_peers,
@@ -5821,7 +5494,6 @@ impl MochiApp {
             stored_logs,
         }
     }
-
     fn render_overview_bar(
         &mut self,
         ui: &mut egui::Ui,
@@ -5856,7 +5528,6 @@ impl MochiApp {
         let queue_value = metrics.queue_text();
         let latency_value = metrics.latency_text();
         let throughput_value = metrics.throughput_text();
-
         let stream_detail = format!(
             "{} block streams · {} event streams",
             metrics.connected_block_streams, metrics.connected_event_streams
@@ -5868,7 +5539,6 @@ impl MochiApp {
         let queue_detail = format!("{} event frames buffered", metrics.pending_event_frames);
         let latency_detail = format!("{} block frames buffered", metrics.pending_block_events);
         let throughput_detail = format!("{} stored logs", metrics.stored_logs);
-
         Frame::new()
             .fill(palette.panel_alt)
             .stroke(Stroke::new(1.0, palette.border))
@@ -5986,7 +5656,6 @@ impl MochiApp {
                         );
                     });
                 };
-
                 if ui.available_width() < 980.0 {
                     render_glance(ui, self);
                     ui.add_space(12.0);
@@ -5997,7 +5666,6 @@ impl MochiApp {
                         render_metrics(&mut columns[1], self);
                     });
                 }
-
                 ui.add_space(12.0);
                 self.render_control_bar(ui, supervisor, peer_rows);
                 ui.add_space(8.0);
@@ -6019,7 +5687,6 @@ impl MochiApp {
                 ui.label(RichText::new(footer).size(12.0).color(palette.text_muted));
             });
     }
-
     fn render_control_bar(
         &mut self,
         ui: &mut egui::Ui,
@@ -6137,7 +5804,6 @@ impl MochiApp {
             });
         });
     }
-
     fn render_settings_dialog(&mut self, ctx: &egui::Context, supervisor: Option<&Supervisor>) {
         if !self.settings_dialog {
             return;
@@ -6420,12 +6086,10 @@ impl MochiApp {
             self.settings_dialog = false;
         }
     }
-
     fn render_maintenance_dialog(&mut self, ctx: &egui::Context, supervisor: &mut Supervisor) {
         let Some(dialog) = self.maintenance_dialog else {
             return;
         };
-
         match dialog {
             MaintenanceDialog::ExportSnapshot => {
                 let mut open = true;
@@ -6705,7 +6369,6 @@ impl MochiApp {
             }
         }
     }
-
     fn render_stat_card(
         &self,
         ui: &mut egui::Ui,
@@ -6728,7 +6391,6 @@ impl MochiApp {
                 }
             });
     }
-
     fn render_overview_badge(&self, ui: &mut egui::Ui, label: &str, value: &str, accent: Color32) {
         let palette = Self::palette();
         Frame::new()
@@ -6741,7 +6403,6 @@ impl MochiApp {
                 ui.label(RichText::new(value).size(12.5).color(palette.text));
             });
     }
-
     fn render_network_view(
         &mut self,
         ui: &mut egui::Ui,
@@ -6760,7 +6421,6 @@ impl MochiApp {
                 self.render_peer_overview_panel(ui, supervisor, peer_rows, peer_aliases, metrics);
             });
     }
-
     fn render_activity_view(
         &mut self,
         ui: &mut egui::Ui,
@@ -6774,7 +6434,6 @@ impl MochiApp {
             self.log_stream_peer.as_ref(),
             &running,
         );
-
         Frame::new()
             .fill(palette.panel_alt)
             .stroke(Stroke::new(1.0, palette.border))
@@ -6831,14 +6490,12 @@ impl MochiApp {
                 });
             });
         ui.add_space(12.0);
-
         match self.activity_view {
             ActivityView::Logs => self.render_logs_view(ui, supervisor, peer_aliases),
             ActivityView::Events => self.render_events_view(ui, supervisor, peer_aliases),
             ActivityView::Blocks => self.render_blocks_view(ui, supervisor, peer_aliases),
         }
     }
-
     fn render_devnet_quickstart(
         &mut self,
         ui: &mut egui::Ui,
@@ -6850,7 +6507,6 @@ impl MochiApp {
         let running = supervisor.is_any_running();
         let workspace_label = self.effective_workspace_recipe(supervisor);
         let launch_recipe = self.launch_recipe(supervisor);
-
         Frame::new()
             .fill(palette.panel_alt)
             .stroke(Stroke::new(1.0, palette.border))
@@ -7013,7 +6669,6 @@ impl MochiApp {
                 ui.small("Local only, disposable by default, and meant for fast iteration.");
             });
     }
-
     fn render_devnet_access_panel(
         &mut self,
         ui: &mut egui::Ui,
@@ -7025,7 +6680,6 @@ impl MochiApp {
         let launch_recipe = self.launch_recipe(supervisor);
         let app_env_recipe = self.app_env_recipe(supervisor, peer_rows);
         let status_recipe = self.status_probe_recipe(peer_rows);
-
         Frame::new()
             .fill(palette.panel_alt)
             .stroke(Stroke::new(1.0, palette.border))
@@ -7079,9 +6733,7 @@ impl MochiApp {
                             );
                         }
                     });
-
                 ui.add_space(10.0);
-
                 ui.label(RichText::new("Endpoints").strong());
                 if peer_rows.is_empty() {
                     ui.small("No peer endpoints are available yet.");
@@ -7115,7 +6767,6 @@ impl MochiApp {
                         ui.add_space(6.0);
                     }
                 }
-
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Development identities").strong());
@@ -7168,7 +6819,6 @@ impl MochiApp {
                 }
             });
     }
-
     fn render_peer_overview_panel(
         &mut self,
         ui: &mut egui::Ui,
@@ -7188,7 +6838,6 @@ impl MochiApp {
         });
         let lane_catalog = lane_catalog_snapshot(nexus_table);
         let narrow = ui.available_width() < 1_120.0;
-
         if narrow {
             ui.heading("Peer overview");
             ui.add_space(6.0);
@@ -7204,7 +6853,6 @@ impl MochiApp {
             self.render_activity_panel(ui, metrics);
             return;
         }
-
         ui.columns(2, |columns| {
             columns[0].heading("Peer overview");
             columns[0].add_space(6.0);
@@ -7212,7 +6860,6 @@ impl MochiApp {
                 self.render_peer_card(&mut columns[0], supervisor, row);
                 columns[0].add_space(8.0);
             }
-
             columns[1].heading("Telemetry");
             columns[1].add_space(6.0);
             self.render_status_panel(&mut columns[1], peer_aliases, metrics, &lane_catalog);
@@ -7220,7 +6867,6 @@ impl MochiApp {
             self.render_activity_panel(&mut columns[1], metrics);
         });
     }
-
     fn render_peer_card(&mut self, ui: &mut egui::Ui, supervisor: &mut Supervisor, row: &PeerRow) {
         let palette = Self::palette();
         Frame::new()
@@ -7289,7 +6935,6 @@ impl MochiApp {
                     ui.small(format!("Config: {}", row.config));
                     ui.small(format!("Logs: {}", row.logs));
                 });
-
                 if let Some(snapshot) = self.block_snapshots.get(&row.alias) {
                     let (status_text, status_color) = snapshot.status_label();
                     ui.add_space(6.0);
@@ -7310,7 +6955,6 @@ impl MochiApp {
                         ui.small(format!("Last block error: {error}"));
                     }
                 }
-
                 if let Some(status_snapshot) = self.status_snapshots.get(&row.alias) {
                     let (status_text, status_color) = status_snapshot.status_label();
                     ui.colored_label(status_color, status_text);
@@ -7324,13 +6968,11 @@ impl MochiApp {
                         ui.colored_label(Color32::from_rgb(220, 140, 80), sealed);
                     }
                 }
-
                 if let Some(event_snapshot) = self.event_snapshots.get(&row.alias) {
                     let (status_text, status_color) = event_snapshot.status_label();
                     ui.colored_label(status_color, status_text);
                     ui.small(event_snapshot.summary_text());
                 }
-
                 if let Some(snapshot) = self.log_snapshots.get(&row.alias)
                     && !snapshot.label.is_empty()
                 {
@@ -7343,7 +6985,6 @@ impl MochiApp {
                         format!("Latest log: {} ({ts})", snapshot.label),
                     );
                 }
-
                 let readiness_inflight = self.readiness_inflight.contains(&row.alias);
                 if let Some(view) = self.readiness_results.get(&row.alias) {
                     ui.add_space(6.0);
@@ -7367,7 +7008,6 @@ impl MochiApp {
                 }
             });
     }
-
     fn peer_state_color(state: PeerState) -> Color32 {
         let palette = Self::palette();
         match state {
@@ -7376,7 +7016,6 @@ impl MochiApp {
             _ => palette.warning,
         }
     }
-
     fn render_status_panel(
         &self,
         ui: &mut egui::Ui,
@@ -7389,7 +7028,6 @@ impl MochiApp {
             ui.label("Waiting for telemetry updates…");
             return;
         }
-
         Frame::new()
             .fill(palette.surface)
             .stroke(Stroke::new(1.0, palette.border))
@@ -7559,7 +7197,6 @@ impl MochiApp {
                     });
             });
     }
-
     fn queue_plot_points(&self, alias: &str) -> Option<PlotPoints<'_>> {
         let history = self.status_history.get(alias)?;
         if history.len() < 2 {
@@ -7580,7 +7217,6 @@ impl MochiApp {
             .collect();
         Some(points)
     }
-
     fn commit_latency_plot_points(&self, alias: &str) -> Option<PlotPoints<'_>> {
         let history = self.status_history.get(alias)?;
         if history.len() < 2 {
@@ -7601,7 +7237,6 @@ impl MochiApp {
             .collect();
         Some(points)
     }
-
     fn throughput_plot_points(&self, alias: &str) -> Option<PlotPoints<'static>> {
         let history = self.status_history.get(alias)?;
         if history.len() < 2 {
@@ -7631,19 +7266,15 @@ impl MochiApp {
             Some(PlotPoints::Owned(samples))
         }
     }
-
     fn consensus_queue_plot_points(&self, alias: &str) -> Option<PlotPoints<'static>> {
         self.metrics_plot_points(alias, |metrics| metrics.sumeragi_tx_queue_depth)
     }
-
     fn view_change_plot_points(&self, alias: &str) -> Option<PlotPoints<'static>> {
         self.status_delta_plot_points(alias, |metrics| metrics.view_change_delta.into())
     }
-
     fn reschedule_plot_points(&self, alias: &str) -> Option<PlotPoints<'static>> {
         self.status_delta_plot_points(alias, |metrics| metrics.da_reschedule_delta)
     }
-
     fn status_delta_plot_points<F>(&self, alias: &str, mut mapper: F) -> Option<PlotPoints<'static>>
     where
         F: FnMut(&StatusMetrics) -> u64,
@@ -7674,7 +7305,6 @@ impl MochiApp {
             Some(PlotPoints::Owned(samples))
         }
     }
-
     fn metrics_plot_points<F>(&self, alias: &str, mut value: F) -> Option<PlotPoints<'static>>
     where
         F: FnMut(&ToriiMetricsSnapshot) -> Option<f64>,
@@ -7704,7 +7334,6 @@ impl MochiApp {
             Some(PlotPoints::Owned(samples))
         }
     }
-
     fn render_activity_panel(&self, ui: &mut egui::Ui, metrics: &DashboardMetrics) {
         let palette = Self::palette();
         Frame::new()
@@ -7747,7 +7376,6 @@ impl MochiApp {
                 ));
             });
     }
-
     fn render_blocks_view(
         &mut self,
         ui: &mut egui::Ui,
@@ -7758,13 +7386,11 @@ impl MochiApp {
             ui.label("No peers available for streaming.");
             return;
         }
-
         Self::ensure_selection(&mut self.selected_peer, peer_aliases);
         let mut chosen = self
             .selected_peer
             .clone()
             .unwrap_or_else(|| peer_aliases[0].clone());
-
         Frame::new()
             .fill(Color32::from_rgb(22, 30, 40))
             .stroke(Stroke::new(1.0, Color32::from_rgb(46, 64, 84)))
@@ -7792,7 +7418,6 @@ impl MochiApp {
                     );
                 });
             });
-
         let selection_changed = self.selected_peer.as_ref() != Some(&chosen);
         if selection_changed {
             self.selected_peer = Some(chosen.clone());
@@ -7806,7 +7431,6 @@ impl MochiApp {
         {
             self.last_error = Some(err);
         }
-
         if let Some(snapshot) = self.block_snapshots.get(chosen.as_str()) {
             Frame::new()
                 .fill(Color32::from_rgb(22, 30, 40))
@@ -7842,11 +7466,9 @@ impl MochiApp {
                     }
                 });
         }
-
         if !chosen_running {
             ui.small("Selected peer is stopped. Start the devnet or pick a running peer to inspect blocks.");
         }
-
         if self.block_stream.is_none() {
             let button_label = if self.auto_block_stream {
                 format!("Reconnect block stream to {chosen}")
@@ -7904,7 +7526,6 @@ impl MochiApp {
                 }
             });
         }
-
         Frame::new()
             .fill(Color32::from_rgb(22, 30, 40))
             .stroke(Stroke::new(1.0, Color32::from_rgb(46, 64, 84)))
@@ -7931,7 +7552,6 @@ impl MochiApp {
                 }
             });
     }
-
     fn render_events_view(
         &mut self,
         ui: &mut egui::Ui,
@@ -7942,13 +7562,11 @@ impl MochiApp {
             ui.label("No peers available for event streaming.");
             return;
         }
-
         Self::ensure_selection(&mut self.event_selected_peer, peer_aliases);
         let mut chosen = self
             .event_selected_peer
             .clone()
             .unwrap_or_else(|| peer_aliases[0].clone());
-
         Frame::new()
             .fill(Color32::from_rgb(22, 30, 40))
             .stroke(Stroke::new(1.0, Color32::from_rgb(46, 64, 84)))
@@ -7976,7 +7594,6 @@ impl MochiApp {
                     );
                 });
             });
-
         let selection_changed = self.event_selected_peer.as_ref() != Some(&chosen);
         if selection_changed {
             self.event_selected_peer = Some(chosen.clone());
@@ -7990,7 +7607,6 @@ impl MochiApp {
         {
             self.last_error = Some(err);
         }
-
         if let Some(snapshot) = self.event_snapshots.get(chosen.as_str()) {
             Frame::new()
                 .fill(Color32::from_rgb(22, 30, 40))
@@ -8026,11 +7642,9 @@ impl MochiApp {
                     }
                 });
         }
-
         if !chosen_running {
             ui.small("Selected peer is stopped. Start the devnet or pick a running peer to inspect events.");
         }
-
         if self.event_stream.is_none() {
             if ui
                 .add_enabled(
@@ -8086,7 +7700,6 @@ impl MochiApp {
                 }
             });
         }
-
         let rendered_events: Vec<RenderedEventLine> = self
             .event_events
             .iter()
@@ -8095,7 +7708,6 @@ impl MochiApp {
         let mut alias_set: BTreeSet<String> = peer_aliases.iter().cloned().collect();
         alias_set.extend(rendered_events.iter().map(|line| line.alias.clone()));
         let alias_options: Vec<String> = alias_set.into_iter().collect();
-
         Frame::new()
             .fill(Color32::from_rgb(22, 30, 40))
             .stroke(Stroke::new(1.0, Color32::from_rgb(46, 64, 84)))
@@ -8155,7 +7767,6 @@ impl MochiApp {
                     });
                 }
             });
-
         let query = self.event_filter.normalized_query();
         let matching_indices: Vec<usize> = rendered_events
             .iter()
@@ -8177,7 +7788,6 @@ impl MochiApp {
                 Some(EventStreamEvent::Event { .. })
             )
         });
-
         Frame::new()
             .fill(Color32::from_rgb(22, 30, 40))
             .stroke(Stroke::new(1.0, Color32::from_rgb(46, 64, 84)))
@@ -8254,7 +7864,6 @@ impl MochiApp {
                 }
             });
     }
-
     fn render_state_entry(&mut self, ui: &mut egui::Ui, entry: StateEntry) {
         Frame::new()
             .fill(Color32::from_rgb(20, 28, 38))
@@ -8304,12 +7913,10 @@ impl MochiApp {
                             Some("State entry Norito bytes copied to clipboard.".to_owned());
                     }
                 });
-
                 ui.add_space(4.0);
                 ui.label(RichText::new(&entry.title).strong());
                 ui.small(&entry.subtitle);
                 ui.small(&entry.detail);
-
                 if entry.domain.is_some()
                     || entry.owner.is_some()
                     || entry.asset_definition.is_some()
@@ -8339,19 +7946,16 @@ impl MochiApp {
                         }
                     });
                 }
-
                 if let Some(json) = &entry.json {
                     ui.collapsing("JSON", |ui| {
                         ui.monospace(json);
                     });
                 }
-
                 ui.collapsing("Raw debug", |ui| {
                     ui.monospace(&entry.raw);
                 });
             });
     }
-
     fn state_entry_matches(
         entry: &StateEntry,
         kind: StateQueryKind,
@@ -8365,14 +7969,12 @@ impl MochiApp {
         {
             return false;
         }
-
         if let Some(filter) = domain_filter {
             match entry.domain_lower.as_deref() {
                 Some(domain) if domain.contains(filter) => {}
                 _ => return false,
             }
         }
-
         if matches!(
             kind,
             StateQueryKind::Assets | StateQueryKind::AssetDefinitions | StateQueryKind::Domains
@@ -8383,7 +7985,6 @@ impl MochiApp {
                 _ => return false,
             }
         }
-
         if matches!(kind, StateQueryKind::Assets)
             && let Some(filter) = definition_filter
         {
@@ -8392,10 +7993,8 @@ impl MochiApp {
                 _ => return false,
             }
         }
-
         true
     }
-
     fn render_logs_view(
         &mut self,
         ui: &mut egui::Ui,
@@ -8406,13 +8005,11 @@ impl MochiApp {
             ui.label("No peers available.");
             return;
         }
-
         Self::ensure_selection(&mut self.log_selected_peer, peer_aliases);
         let mut chosen = self
             .log_selected_peer
             .clone()
             .unwrap_or_else(|| peer_aliases[0].clone());
-
         Frame::new()
             .fill(Color32::from_rgb(22, 30, 40))
             .stroke(Stroke::new(1.0, Color32::from_rgb(46, 64, 84)))
@@ -8440,7 +8037,6 @@ impl MochiApp {
                     );
                 });
             });
-
         let selection_changed = self.log_selected_peer.as_ref() != Some(&chosen);
         if selection_changed {
             self.log_selected_peer = Some(chosen.clone());
@@ -8454,7 +8050,6 @@ impl MochiApp {
         {
             self.last_error = Some(err);
         }
-
         ui.horizontal(|ui| {
             if ui.button("Clear log buffer").clicked() {
                 self.log_events.clear();
@@ -8467,7 +8062,6 @@ impl MochiApp {
                 self.log_filter.clear();
             }
         });
-
         if let Some(snapshot) = self.log_snapshots.get(chosen.as_str()) {
             Frame::new()
                 .fill(Color32::from_rgb(22, 30, 40))
@@ -8493,11 +8087,9 @@ impl MochiApp {
                     }
                 });
         }
-
         if !chosen_running {
             ui.small("Selected peer is stopped. Start the devnet or pick a running peer to inspect logs.");
         }
-
         if self.log_receiver.is_none() {
             if ui
                 .add_enabled(
@@ -8540,7 +8132,6 @@ impl MochiApp {
                 }
             });
         }
-
         let display_alias = self
             .log_stream_peer
             .clone()
@@ -8567,7 +8158,6 @@ impl MochiApp {
                 Some((idx, formatted))
             })
             .collect();
-
         if !filtered_logs.is_empty() {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -8636,7 +8226,6 @@ impl MochiApp {
                 ));
             });
         }
-
         Frame::new()
             .fill(Color32::from_rgb(22, 30, 40))
             .stroke(Stroke::new(1.0, Color32::from_rgb(46, 64, 84)))
@@ -8659,7 +8248,6 @@ impl MochiApp {
                 });
             });
     }
-
     fn render_state_view(
         &mut self,
         ui: &mut egui::Ui,
@@ -8673,13 +8261,10 @@ impl MochiApp {
             ui.label("No peers available.");
             return;
         }
-
         Self::ensure_selection(&mut self.state_selected_peer, peer_aliases);
-
         let mut peer_changed = false;
         let mut kind_changed = false;
         let mut run_query_reset = false;
-
         let query_kinds = StateQueryKind::all();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -8720,7 +8305,6 @@ impl MochiApp {
                 }
             }
         });
-
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label("Peer");
@@ -8742,9 +8326,7 @@ impl MochiApp {
                     }
                 });
         });
-
         let kind = self.state_query_kind;
-
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label("Fetch size");
@@ -8761,19 +8343,15 @@ impl MochiApp {
                 ui.add(egui::Spinner::new());
             }
         });
-
         if peer_changed {
             self.state_tabs.reset_results_for_all();
         }
-
         if kind_changed {
             self.state_tabs.get_mut(kind).filter.adapt_to_kind(kind);
         }
-
         if peer_changed || kind_changed {
             run_query_reset = true;
         }
-
         {
             let tab = self.state_tabs.get_mut(kind);
             let mut domain_options = BTreeSet::new();
@@ -8799,7 +8377,6 @@ impl MochiApp {
             let domain_options: Vec<String> = domain_options.into_iter().collect();
             let owner_options: Vec<String> = owner_options.into_iter().collect();
             let definition_options: Vec<String> = definition_options.into_iter().collect();
-
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.label("Search");
@@ -8809,7 +8386,6 @@ impl MochiApp {
                     tab.filter.adapt_to_kind(kind);
                 }
             });
-
             match kind {
                 StateQueryKind::Accounts => {
                     render_filter_selector(ui, "Domain", &mut tab.filter.domain, &domain_options);
@@ -8842,13 +8418,10 @@ impl MochiApp {
                 }
             }
         }
-
         let snapshot = self.build_state_snapshot(kind);
-
         let mut fetch_next_page = false;
         let mut select_page: Option<usize> = None;
         let mut export_action: Option<StateExportAction> = None;
-
         ui.add_space(6.0);
         if snapshot.page_count > 0 {
             let mut summary = format!(
@@ -8874,11 +8447,9 @@ impl MochiApp {
         } else if let Some(remaining) = snapshot.remaining {
             ui.small(format!("Remaining items: {remaining}"));
         }
-
         if let Some(error) = &snapshot.error {
             ui.colored_label(Color32::from_rgb(200, 64, 64), error);
         }
-
         if snapshot.page_count == 0 {
             if snapshot.loading {
                 ui.add(egui::Spinner::new());
@@ -8922,7 +8493,6 @@ impl MochiApp {
                     ui.add(egui::Spinner::new());
                 }
             });
-
             if !snapshot.matching_cached_entries.is_empty() {
                 ui.add_space(4.0);
                 egui::CollapsingHeader::new("Export filtered results")
@@ -8968,7 +8538,6 @@ impl MochiApp {
                         });
                     });
             }
-
             ui.add_space(6.0);
             if snapshot.filters_active {
                 if snapshot.matching_cached_entries.is_empty() {
@@ -9000,7 +8569,6 @@ impl MochiApp {
                     });
             }
         }
-
         if run_query_reset {
             self.request_state_page(supervisor, true);
         } else if fetch_next_page {
@@ -9013,7 +8581,6 @@ impl MochiApp {
             self.apply_state_export_action(ui, action);
         }
     }
-
     fn build_state_snapshot(&self, kind: StateQueryKind) -> StateRenderSnapshot {
         let tab = self.state_tabs.get(kind);
         let search_query = tab.filter.search_query();
@@ -9052,7 +8619,6 @@ impl MochiApp {
             has_cursor: tab.has_cursor(),
         }
     }
-
     fn apply_state_export_action(&mut self, ui: &mut egui::Ui, action: StateExportAction) {
         match action {
             StateExportAction::CopyJson(entries) => {
@@ -9122,7 +8688,6 @@ impl MochiApp {
             }
         }
     }
-
     fn render_composer_view(
         &mut self,
         ui: &mut egui::Ui,
@@ -9134,20 +8699,16 @@ impl MochiApp {
             ui.label("No peers available.");
             return;
         }
-
         let signers = supervisor.signers();
         if signers.is_empty() {
             ui.label("No signing authorities available.");
             return;
         }
-
         Self::ensure_selection(&mut self.composer_selected_peer, peer_aliases);
         Self::ensure_signer_selection(&mut self.composer_selected_signer, signers);
-
         if self.composer_chain_id.trim().is_empty() {
             self.composer_chain_id = supervisor.chain_id().to_owned();
         }
-
         ui.horizontal(|ui| {
             ui.label("Peer");
             let current_label = self
@@ -9169,7 +8730,6 @@ impl MochiApp {
                 });
         });
         ui.add_space(6.0);
-
         ui.horizontal(|ui| {
             ui.label("Signing authority");
             let current_label = self
@@ -9227,7 +8787,6 @@ impl MochiApp {
             }
         });
         ui.add_space(6.0);
-
         ui.horizontal(|ui| {
             ui.label("Chain ID");
             ui.text_edit_singleline(&mut self.composer_chain_id);
@@ -9235,7 +8794,6 @@ impl MochiApp {
         ui.add_space(6.0);
         self.render_composer_advanced_options(ui);
         self.render_composer_mode_selector(ui);
-
         ui.horizontal(|ui| {
             ui.label("Wizard");
             ui.spacing_mut().item_spacing.x = 12.0;
@@ -9250,14 +8808,12 @@ impl MochiApp {
             }
         });
         ui.separator();
-
         match self.composer_step {
             ComposerStep::Build => self.render_composer_build_step(ui, supervisor),
             ComposerStep::Raw => self.render_composer_raw_step(ui, supervisor),
             ComposerStep::Preview => self.render_composer_preview_step(ui, supervisor, signers),
         }
     }
-
     fn render_composer_advanced_options(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         egui::CollapsingHeader::new("Advanced transaction options")
@@ -9313,7 +8869,6 @@ impl MochiApp {
             });
         ui.add_space(6.0);
     }
-
     fn apply_composer_template(
         &mut self,
         template: ComposerTemplate,
@@ -9321,7 +8876,6 @@ impl MochiApp {
     ) {
         template.apply(self, signers);
     }
-
     fn open_signer_vault_dialog(&mut self, supervisor: &Supervisor) {
         match SignerVaultDialog::load(supervisor) {
             Ok(mut dialog) => {
@@ -9334,7 +8888,6 @@ impl MochiApp {
             }
         }
     }
-
     fn render_signer_vault_dialog(&mut self, ctx: &egui::Context, supervisor: &mut Supervisor) {
         let Some(dialog) = self.signer_dialog.as_mut() else {
             return;
@@ -9357,7 +8910,6 @@ impl MochiApp {
                 } else {
                     ui.add_space(4.0);
                 }
-
                 if let Some(error) = dialog.error.as_ref() {
                     ui.colored_label(Color32::from_rgb(200, 64, 64), error);
                     ui.add_space(4.0);
@@ -9365,10 +8917,8 @@ impl MochiApp {
                     ui.colored_label(Color32::from_rgb(48, 160, 72), status);
                     ui.add_space(4.0);
                 }
-
                 ui.label(RichText::new("Configured authorities").strong());
                 ui.add_space(4.0);
-
                 if dialog.entries.is_empty() {
                     ui.label("No signing authorities configured yet.");
                 } else {
@@ -9442,7 +8992,6 @@ impl MochiApp {
                         dialog.mark_dirty();
                     }
                 }
-
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(8.0);
@@ -9498,7 +9047,6 @@ impl MochiApp {
                         }
                     }
                 }
-
                 ui.add_space(12.0);
                 ui.separator();
                 ui.add_space(8.0);
@@ -9546,7 +9094,6 @@ impl MochiApp {
             self.signer_dialog = None;
         }
     }
-
     fn entry_form_to_state(form: &SignerEntryForm) -> Result<SignerEntryState, String> {
         let label = form.label.trim();
         if label.is_empty() {
@@ -9560,17 +9107,14 @@ impl MochiApp {
         if private_key.is_empty() {
             return Err("Private key is required.".to_owned());
         }
-
         AccountId::parse_encoded(account)
             .map(|parsed| parsed.into_account_id())
             .map_err(|err| format!("Invalid account `{account}`: {err}"))?;
         PrivateKey::from_str(private_key).map_err(|err| format!("Invalid private key: {err}"))?;
-
         if form.permissions.is_empty() {
             return Err("Select at least one permission for the signer.".to_owned());
         }
         Self::parse_role_list(&form.roles)?;
-
         Ok(SignerEntryState {
             label: label.to_owned(),
             account: account.to_owned(),
@@ -9579,7 +9123,6 @@ impl MochiApp {
             roles: form.roles.trim().to_owned(),
         })
     }
-
     fn signer_entries_to_signers(
         entries: &[SignerEntryState],
     ) -> Result<Vec<SigningAuthority>, String> {
@@ -9620,7 +9163,6 @@ impl MochiApp {
         }
         Ok(signers)
     }
-
     fn parse_role_list(raw: &str) -> Result<Vec<RoleId>, String> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -9638,14 +9180,12 @@ impl MochiApp {
         }
         Ok(roles)
     }
-
     const fn admission_mode_label(mode: AccountAdmissionMode) -> &'static str {
         match mode {
             AccountAdmissionMode::ImplicitReceive => "Implicit receive",
             AccountAdmissionMode::ExplicitOnly => "Explicit only",
         }
     }
-
     fn parse_multisig_policy(raw: &str) -> Result<MultisigSpec, String> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -9653,7 +9193,6 @@ impl MochiApp {
         }
         json::from_str(trimmed).map_err(|err| format!("Invalid multisig policy JSON: {err}"))
     }
-
     fn parse_optional_u32(raw: &str, label: &str) -> Result<Option<u32>, String> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -9664,7 +9203,6 @@ impl MochiApp {
             .map(Some)
             .map_err(|err| format!("{label} must be a number: {err}"))
     }
-
     fn render_composer_kind_button(
         &mut self,
         ui: &mut egui::Ui,
@@ -9708,7 +9246,6 @@ impl MochiApp {
             self.composer_error = None;
         }
     }
-
     fn parse_min_initial_amounts(
         raw: &str,
     ) -> Result<BTreeMap<AssetDefinitionId, Quantity>, String> {
@@ -9740,7 +9277,6 @@ impl MochiApp {
         }
         Ok(amounts)
     }
-
     fn parse_account_admission_policy(
         &mut self,
     ) -> Result<(String, AccountAdmissionPolicy), String> {
@@ -9751,15 +9287,12 @@ impl MochiApp {
         }
         let domain_id = DomainId::parse_fully_qualified(&domain_raw)
             .map_err(|err| format!("Invalid domain `{domain_raw}`: {err}"))?;
-
         let max_per_tx_raw = self.composer_admission_max_per_tx.trim().to_owned();
         self.composer_admission_max_per_tx = max_per_tx_raw.clone();
         let max_per_tx = Self::parse_optional_u32(&max_per_tx_raw, "Max per tx")?;
-
         let max_per_block_raw = self.composer_admission_max_per_block.trim().to_owned();
         self.composer_admission_max_per_block = max_per_block_raw.clone();
         let max_per_block = Self::parse_optional_u32(&max_per_block_raw, "Max per block")?;
-
         let implicit_creation_fee = if self.composer_admission_fee_enabled {
             let asset_raw = self.composer_admission_fee_asset.trim().to_owned();
             self.composer_admission_fee_asset = asset_raw.clone();
@@ -9801,10 +9334,8 @@ impl MochiApp {
         } else {
             None
         };
-
         let min_initial_amounts =
             Self::parse_min_initial_amounts(&self.composer_admission_min_initial_amounts)?;
-
         let role_raw = self.composer_admission_default_role.trim().to_owned();
         self.composer_admission_default_role = role_raw.clone();
         let default_role_on_create = if role_raw.is_empty() {
@@ -9815,7 +9346,6 @@ impl MochiApp {
                     .map_err(|err| format!("Invalid default role `{role_raw}`: {err}"))?,
             )
         };
-
         let policy = AccountAdmissionPolicy {
             mode: self.composer_admission_mode,
             max_implicit_creations_per_tx: max_per_tx,
@@ -9824,10 +9354,8 @@ impl MochiApp {
             min_initial_amounts,
             default_role_on_create,
         };
-
         Ok((domain_id.to_string(), policy))
     }
-
     fn summarize_private_key(key: &str) -> String {
         let trimmed = key.trim();
         if trimmed.is_empty() {
@@ -9836,7 +9364,6 @@ impl MochiApp {
             format!("stored ({} chars)", trimmed.len())
         }
     }
-
     fn render_composer_build_step(&mut self, ui: &mut egui::Ui, supervisor: &Supervisor) {
         const COMMON_KINDS: [ComposerInstructionKind; 5] = [
             ComposerInstructionKind::MintAsset,
@@ -9853,20 +9380,16 @@ impl MochiApp {
             ComposerInstructionKind::AccountAdmissionPolicy,
             ComposerInstructionKind::MultisigPropose,
         ];
-
         ui.label(RichText::new("Transaction builder").strong());
         ui.small("Pick a common devnet action first. Raw and governance flows stay available, but they no longer dominate the main path.");
         ui.add_space(4.0);
-
         let signers = supervisor.signers();
         let selected_signer = self
             .composer_selected_signer
             .and_then(|index| signers.get(index));
-
         if self.composer_mode == ComposerMode::Scenarios {
             self.render_composer_scenario_cards(ui, signers);
         }
-
         ui.label(RichText::new("Common local-dev actions").strong());
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
@@ -9891,7 +9414,6 @@ impl MochiApp {
             "Selected action: {}",
             self.composer_instruction_kind.label()
         ));
-
         let templates = ComposerTemplate::options_for(self.composer_instruction_kind);
         if !templates.is_empty() {
             ui.add_space(6.0);
@@ -9909,7 +9431,6 @@ impl MochiApp {
             });
             ui.add_space(4.0);
         }
-
         match self.composer_instruction_kind {
             ComposerInstructionKind::MintAsset
             | ComposerInstructionKind::BurnAsset
@@ -9925,7 +9446,6 @@ impl MochiApp {
             }
             _ => {}
         }
-
         if matches!(
             self.composer_instruction_kind,
             ComposerInstructionKind::TransferAsset
@@ -9938,7 +9458,6 @@ impl MochiApp {
                 "Implicit receives follow the domain admission policy (caps, fees, default role).",
             );
         }
-
         if matches!(
             self.composer_instruction_kind,
             ComposerInstructionKind::RegisterAccount
@@ -9948,7 +9467,6 @@ impl MochiApp {
                 ui.text_edit_singleline(&mut self.composer_account_id);
             });
         }
-
         if matches!(
             self.composer_instruction_kind,
             ComposerInstructionKind::RegisterAssetDefinition
@@ -10014,7 +9532,6 @@ impl MochiApp {
                 }
             });
         }
-
         if matches!(
             self.composer_instruction_kind,
             ComposerInstructionKind::PublishSpaceDirectoryManifest
@@ -10027,7 +9544,6 @@ impl MochiApp {
             );
             ui.small("AXT/AMX manifests define deterministic allowances for a UAID.");
         }
-
         if matches!(
             self.composer_instruction_kind,
             ComposerInstructionKind::RegisterPinManifest
@@ -10040,7 +9556,6 @@ impl MochiApp {
             );
             ui.small("Pin intents require 32-byte digests and a pin policy.");
         }
-
         if matches!(
             self.composer_instruction_kind,
             ComposerInstructionKind::AccountAdmissionPolicy
@@ -10147,7 +9662,6 @@ impl MochiApp {
                 ui.small("Implicit account creation is disabled for this domain.");
             }
         }
-
         if matches!(
             self.composer_instruction_kind,
             ComposerInstructionKind::GrantRole | ComposerInstructionKind::RevokeRole
@@ -10161,7 +9675,6 @@ impl MochiApp {
                 ui.text_edit_singleline(&mut self.composer_role_account);
             });
         }
-
         if matches!(
             self.composer_instruction_kind,
             ComposerInstructionKind::MultisigPropose
@@ -10225,7 +9738,6 @@ impl MochiApp {
                 }
             }
         }
-
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             if ui.button("Add instruction to batch").clicked() {
@@ -10247,7 +9759,6 @@ impl MochiApp {
                 self.composer_step = ComposerStep::Raw;
             }
         });
-
         ui.add_space(6.0);
         if self.composer_drafts.is_empty() {
             ui.small("Draft instructions will appear here once they are added to the batch.");
@@ -10292,7 +9803,6 @@ impl MochiApp {
                 );
             }
         }
-
         ui.add_space(6.0);
         if ui
             .add_enabled(
@@ -10304,22 +9814,18 @@ impl MochiApp {
         {
             self.composer_step = ComposerStep::Preview;
         }
-
         if let Some(err) = &self.composer_error {
             ui.colored_label(Color32::from_rgb(200, 64, 64), err);
         } else if self.composer_preview.is_none() && !self.composer_drafts.is_empty() {
             ui.small("Preview the transaction to inspect the encoded payload and signature.");
         }
     }
-
     fn render_composer_raw_step(&mut self, ui: &mut egui::Ui, supervisor: &Supervisor) {
         ui.label(RichText::new("Instruction batch (JSON)").strong());
         ui.add_space(4.0);
-
         if !self.composer_raw_dirty && self.composer_raw_editor.trim().is_empty() {
             self.sync_raw_editor_from_drafts();
         }
-
         let response = ui.add(
             egui::TextEdit::multiline(&mut self.composer_raw_editor)
                 .code_editor()
@@ -10329,7 +9835,6 @@ impl MochiApp {
         if response.changed() {
             self.composer_raw_dirty = true;
         }
-
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             if ui.button("Sync from drafts").clicked() {
@@ -10345,7 +9850,6 @@ impl MochiApp {
                 }
             }
         });
-
         if let Some(err) = &self.composer_raw_error {
             ui.colored_label(Color32::from_rgb(200, 64, 64), err);
         } else if self.composer_raw_dirty {
@@ -10359,7 +9863,6 @@ impl MochiApp {
         ui.add_space(6.0);
         ui.small("Raw drafts follow the builder format. Unknown fields are ignored when applying.");
     }
-
     fn render_composer_preview_step(
         &mut self,
         ui: &mut egui::Ui,
@@ -10372,7 +9875,6 @@ impl MochiApp {
             );
             return;
         };
-
         ui.label(RichText::new("Preview summary").strong());
         ui.small(format!("Authority account: {}", preview.authority()));
         ui.small(format!("Transaction hash: {}", preview.hash()));
@@ -10390,7 +9892,6 @@ impl MochiApp {
                 index.key_pair().public_key()
             ));
         }
-
         let transaction_signature = preview.signed_transaction().signature().payload();
         let mut signature_hex = encode_upper(transaction_signature.payload());
         ui.add_space(6.0);
@@ -10406,7 +9907,6 @@ impl MochiApp {
             "Signature length: {} bytes",
             transaction_signature.payload().len()
         ));
-
         ui.add_space(6.0);
         ui.label(RichText::new("Norito payload (hex)").strong());
         let mut hex_payload = preview.encoded_hex().to_owned();
@@ -10417,13 +9917,11 @@ impl MochiApp {
                 .interactive(false)
                 .lock_focus(true),
         );
-
         ui.add_space(6.0);
         ui.label(RichText::new("Instructions").strong());
         for (idx, instruction) in preview.instructions().iter().enumerate() {
             ui.small(format!("{idx}: {instruction}"));
         }
-
         ui.add_space(6.0);
         ui.label(RichText::new("Timing & nonce").strong());
         ui.small(format!(
@@ -10440,7 +9938,6 @@ impl MochiApp {
         } else {
             ui.small("Nonce: node assigned");
         }
-
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             let submit_enabled = !self.composer_submitting;
@@ -10457,21 +9954,18 @@ impl MochiApp {
                 self.composer_step = ComposerStep::Build;
             }
         });
-
         if let Some(success) = &self.composer_submit_success {
             ui.colored_label(Color32::from_rgb(80, 160, 80), success);
         }
         if let Some(error) = &self.composer_submit_error {
             ui.colored_label(error.color(), error.label());
         }
-
         ui.add_space(6.0);
         ui.small(
             RichText::new("Adjust the signing vault to switch the key used for submissions.")
                 .italics(),
         );
     }
-
     fn build_transaction_preview(&mut self, supervisor: &Supervisor) -> bool {
         let chain = if self.composer_chain_id.trim().is_empty() {
             supervisor.chain_id().to_owned()
@@ -10489,14 +9983,12 @@ impl MochiApp {
                 return false;
             }
         };
-
         if self.composer_drafts.is_empty() {
             self.composer_error =
                 Some("Add at least one instruction before building a preview.".to_owned());
             self.composer_preview = None;
             return false;
         }
-
         let signers = supervisor.signers();
         Self::ensure_signer_selection(&mut self.composer_selected_signer, signers);
         let Some(index) = self.composer_selected_signer else {
@@ -10515,7 +10007,6 @@ impl MochiApp {
             self.composer_submit_success = None;
             return false;
         }
-
         let mut options = TransactionComposeOptions::default();
         if self.composer_ttl_override {
             options = options.with_ttl(Duration::from_millis(self.composer_ttl_ms));
@@ -10534,7 +10025,6 @@ impl MochiApp {
                 return false;
             }
         }
-
         match compose_preview_with_options(network_id, &self.composer_drafts, signer, &options) {
             Ok(preview) => {
                 self.composer_preview = Some(preview);
@@ -10551,7 +10041,6 @@ impl MochiApp {
             }
         }
     }
-
     fn add_instruction_to_batch(&mut self, supervisor: Option<&Supervisor>) {
         let signers = if let Some(supervisor) = supervisor {
             supervisor.signers()
@@ -10576,7 +10065,6 @@ impl MochiApp {
             ));
             return;
         }
-
         let result = match self.composer_instruction_kind {
             ComposerInstructionKind::MintAsset => {
                 let asset = self.composer_asset_id.trim().to_owned();
@@ -10760,7 +10248,6 @@ impl MochiApp {
                 InstructionDraft::multisig_propose_from_json(&account, &instructions, ttl)
             }
         };
-
         match result {
             Ok(draft) => {
                 self.composer_drafts.push(draft);
@@ -10780,7 +10267,6 @@ impl MochiApp {
             }
         }
     }
-
     fn clear_instruction_batch(&mut self) {
         self.composer_drafts.clear();
         self.composer_preview = None;
@@ -10789,7 +10275,6 @@ impl MochiApp {
         self.composer_error = None;
         self.sync_raw_editor_from_drafts();
     }
-
     fn submit_transaction(&mut self, supervisor: &Supervisor) {
         if self.composer_submitting {
             return;
@@ -10821,16 +10306,13 @@ impl MochiApp {
             self.last_error = Some(message);
             return;
         };
-
         let bytes = preview.encoded_bytes();
         let hash = preview.hash().to_owned();
         let tx = self.composer_submit_tx.clone();
-
         self.composer_submitting = true;
         self.composer_submit_error = None;
         self.composer_submit_success = None;
         self.last_info = None;
-
         self.runtime.spawn(async move {
             let result = client
                 .submit_transaction(&bytes)
@@ -10841,28 +10323,22 @@ impl MochiApp {
         });
     }
 }
-
 fn unix_timestamp_ms_from_duration(duration: Result<Duration, SystemTimeError>) -> u64 {
     duration
         .unwrap_or(Duration::ZERO)
         .as_millis()
         .min(u128::from(u64::MAX)) as u64
 }
-
 fn unix_timestamp_ms(time: SystemTime) -> u64 {
     unix_timestamp_ms_from_duration(time.duration_since(UNIX_EPOCH))
 }
-
 fn current_unix_timestamp_ms() -> u64 {
     unix_timestamp_ms(SystemTime::now())
 }
-
 #[cfg(test)]
 mod timestamp_tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
     use super::{current_unix_timestamp_ms, unix_timestamp_ms, unix_timestamp_ms_from_duration};
-
     #[test]
     fn unix_timestamp_ms_clamps_before_epoch() {
         let err = UNIX_EPOCH
@@ -10870,19 +10346,16 @@ mod timestamp_tests {
             .unwrap_err();
         assert_eq!(unix_timestamp_ms_from_duration(Err(err)), 0);
     }
-
     #[test]
     fn current_timestamp_ms_matches_now_within_margin() {
         let lower_bound = unix_timestamp_ms(SystemTime::now());
         let actual = current_unix_timestamp_ms();
         let upper_bound = unix_timestamp_ms(SystemTime::now());
-
         // Accept a generous margin to avoid flakes on slow or skewed clocks.
         assert!(actual >= lower_bound.saturating_sub(60_000));
         assert!(actual <= upper_bound + 60_000);
     }
 }
-
 impl App for MochiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ensure_theme(ctx);
@@ -10922,7 +10395,6 @@ impl App for MochiApp {
         self.supervisor = supervisor_opt;
         self.flush_pending_settings_apply();
     }
-
     fn save(&mut self, storage: &mut dyn Storage) {
         if let Some(serialized) = serialize_event_filter(&self.event_filter) {
             storage.set_string(EVENT_FILTER_STORAGE_KEY, serialized);
@@ -10941,7 +10413,6 @@ impl App for MochiApp {
         );
     }
 }
-
 #[derive(Clone)]
 struct PeerRow {
     alias: String,
@@ -10952,7 +10423,6 @@ struct PeerRow {
     config: String,
     logs: String,
 }
-
 #[derive(Debug, Default, Clone)]
 struct DashboardMetrics {
     total_peers: usize,
@@ -10969,48 +10439,40 @@ struct DashboardMetrics {
     pending_event_frames: usize,
     stored_logs: usize,
 }
-
 impl DashboardMetrics {
     fn peers_label(&self) -> String {
         format!("{} / {}", self.running_peers, self.total_peers.max(1))
     }
-
     fn latest_height_text(&self) -> String {
         self.latest_height
             .map(|height| height.to_string())
             .unwrap_or_else(|| "—".to_owned())
     }
-
     fn queue_text(&self) -> String {
         self.avg_queue
             .map(|value| format!("{value:.1}"))
             .unwrap_or_else(|| "—".to_owned())
     }
-
     fn latency_text(&self) -> String {
         self.avg_commit_latency_ms
             .map(|value| format!("{value:.1} ms"))
             .unwrap_or_else(|| "—".to_owned())
     }
-
     fn throughput_text(&self) -> String {
         self.throughput_per_sec
             .map(|value| format!("{value:.2} tx/s"))
             .unwrap_or_else(|| "—".to_owned())
     }
 }
-
 struct DisplayEvent {
     alias: Option<String>,
     event: BlockStreamEvent,
 }
-
 #[derive(Debug, Clone)]
 struct EventDisplay {
     alias: Option<String>,
     event: EventStreamEvent,
 }
-
 #[derive(Debug, Clone, Copy)]
 enum RenderedEventKind {
     Category(EventCategory),
@@ -11019,7 +10481,6 @@ enum RenderedEventKind {
     Lagged,
     Closed,
 }
-
 #[derive(Debug, Clone)]
 struct EventBadge {
     label: &'static str,
@@ -11027,7 +10488,6 @@ struct EventBadge {
     color: Color32,
     search_blob: String,
 }
-
 impl EventBadge {
     fn new(
         label: &'static str,
@@ -11046,7 +10506,6 @@ impl EventBadge {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 struct RenderedEventLine {
     alias: String,
@@ -11058,7 +10517,6 @@ struct RenderedEventLine {
     search_blob: String,
     badges: Vec<EventBadge>,
 }
-
 impl RenderedEventLine {
     fn new(
         alias: &str,
@@ -11079,7 +10537,6 @@ impl RenderedEventLine {
             badges: Vec::new(),
         }
     }
-
     fn with_badges(mut self, badges: Vec<EventBadge>) -> Self {
         if !badges.is_empty() {
             for badge in &badges {
@@ -11091,7 +10548,6 @@ impl RenderedEventLine {
         self
     }
 }
-
 #[derive(Debug, Clone)]
 struct EventFilterState {
     search: String,
@@ -11106,7 +10562,6 @@ struct EventFilterState {
     show_closed: bool,
     alias_filters: BTreeSet<String>,
 }
-
 impl Default for EventFilterState {
     fn default() -> Self {
         Self {
@@ -11124,12 +10579,10 @@ impl Default for EventFilterState {
         }
     }
 }
-
 impl EventFilterState {
     fn reset(&mut self) {
         *self = Self::default();
     }
-
     fn normalized_query(&self) -> Option<String> {
         let trimmed = self.search.trim();
         if trimmed.is_empty() {
@@ -11138,11 +10591,9 @@ impl EventFilterState {
             Some(trimmed.to_ascii_lowercase())
         }
     }
-
     fn clear_aliases(&mut self) {
         self.alias_filters.clear();
     }
-
     fn toggle_alias(&mut self, alias: &str, enabled: bool) {
         let key = alias.to_ascii_lowercase();
         if enabled {
@@ -11151,15 +10602,12 @@ impl EventFilterState {
             self.alias_filters.insert(key);
         }
     }
-
     fn alias_selected(&self, alias: &str) -> bool {
         !self.alias_filters.contains(&alias.to_ascii_lowercase())
     }
-
     fn has_alias_filters(&self) -> bool {
         !self.alias_filters.is_empty()
     }
-
     fn matches(&self, line: &RenderedEventLine, query: Option<&str>) -> bool {
         if self.alias_filters.contains(&line.alias_lower) {
             return false;
@@ -11185,7 +10633,6 @@ impl EventFilterState {
             None => true,
         }
     }
-
     fn to_json_value(&self) -> Value {
         let mut map = Map::new();
         map.insert("search".into(), Value::String(self.search.clone()));
@@ -11216,7 +10663,6 @@ impl EventFilterState {
         map.insert("alias_filters".into(), Value::Array(aliases));
         Value::Object(map)
     }
-
     fn from_json_value(value: &Value) -> Option<Self> {
         let map = value.as_object()?;
         let mut filter = EventFilterState::default();
@@ -11271,7 +10717,6 @@ impl EventFilterState {
         Some(filter)
     }
 }
-
 #[derive(Debug, Clone, Default)]
 struct StateFilter {
     search: String,
@@ -11279,13 +10724,11 @@ struct StateFilter {
     owner: String,
     asset_definition: String,
 }
-
 #[derive(Debug, Clone, Default)]
 struct StatePageCache {
     entries: Vec<StateEntry>,
     remaining: u64,
 }
-
 #[derive(Debug, Clone)]
 struct StateTabState {
     kind: StateQueryKind,
@@ -11298,7 +10741,6 @@ struct StateTabState {
     error: Option<String>,
     loading: bool,
 }
-
 impl StateTabState {
     fn new(kind: StateQueryKind) -> Self {
         let mut filter = StateFilter::default();
@@ -11315,7 +10757,6 @@ impl StateTabState {
             loading: false,
         }
     }
-
     fn reset_results(&mut self) {
         self.entries.clear();
         self.pages.clear();
@@ -11325,12 +10766,10 @@ impl StateTabState {
         self.error = None;
         self.loading = false;
     }
-
     fn reset_for_peer_change(&mut self) {
         self.reset_results();
         self.filter.adapt_to_kind(self.kind);
     }
-
     fn select_page(&mut self, index: usize) {
         if index >= self.pages.len() {
             return;
@@ -11344,7 +10783,6 @@ impl StateTabState {
             self.remaining = None;
         }
     }
-
     fn total_cached(&self) -> usize {
         if self.pages.is_empty() {
             self.entries.len()
@@ -11352,12 +10790,10 @@ impl StateTabState {
             self.pages.iter().map(|page| page.entries.len()).sum()
         }
     }
-
     fn has_cursor(&self) -> bool {
         self.cursor.is_some()
     }
 }
-
 #[derive(Debug)]
 struct StateTabs {
     accounts: StateTabState,
@@ -11366,7 +10802,6 @@ struct StateTabs {
     domains: StateTabState,
     peers: StateTabState,
 }
-
 impl Default for StateTabs {
     fn default() -> Self {
         Self {
@@ -11378,7 +10813,6 @@ impl Default for StateTabs {
         }
     }
 }
-
 impl StateTabs {
     fn get(&self, kind: StateQueryKind) -> &StateTabState {
         match kind {
@@ -11389,7 +10823,6 @@ impl StateTabs {
             StateQueryKind::Peers => &self.peers,
         }
     }
-
     fn get_mut(&mut self, kind: StateQueryKind) -> &mut StateTabState {
         let tab = match kind {
             StateQueryKind::Accounts => &mut self.accounts,
@@ -11401,7 +10834,6 @@ impl StateTabs {
         tab.filter.adapt_to_kind(kind);
         tab
     }
-
     fn reset_results_for_all(&mut self) {
         self.accounts.reset_for_peer_change();
         self.assets.reset_for_peer_change();
@@ -11410,7 +10842,6 @@ impl StateTabs {
         self.peers.reset_for_peer_change();
     }
 }
-
 #[derive(Debug, Clone)]
 struct StateRenderSnapshot {
     entries_on_page: Vec<StateEntry>,
@@ -11426,7 +10857,6 @@ struct StateRenderSnapshot {
     total_cached: usize,
     has_cursor: bool,
 }
-
 #[derive(Debug)]
 enum StateExportAction {
     CopyJson(Vec<StateEntry>),
@@ -11434,12 +10864,10 @@ enum StateExportAction {
     SaveJson(Vec<StateEntry>),
     SaveNorito(Vec<StateEntry>),
 }
-
 impl StateFilter {
     fn clear(&mut self) {
         *self = Self::default();
     }
-
     fn adapt_to_kind(&mut self, kind: StateQueryKind) {
         match kind {
             StateQueryKind::Accounts => {
@@ -11461,7 +10889,6 @@ impl StateFilter {
             }
         }
     }
-
     fn search_query(&self) -> Option<String> {
         let trimmed = self.search.trim();
         if trimmed.is_empty() {
@@ -11470,20 +10897,16 @@ impl StateFilter {
             Some(trimmed.to_ascii_lowercase())
         }
     }
-
     fn normalized_domain(&self) -> Option<String> {
         normalized_filter(&self.domain)
     }
-
     fn normalized_owner(&self) -> Option<String> {
         normalized_filter(&self.owner)
     }
-
     fn normalized_definition(&self) -> Option<String> {
         normalized_filter(&self.asset_definition)
     }
 }
-
 #[derive(Debug, Clone, Default)]
 struct BlockStreamSnapshot {
     last_summary: Option<BlockSummary>,
@@ -11491,7 +10914,6 @@ struct BlockStreamSnapshot {
     connected: bool,
     last_update: Option<Instant>,
 }
-
 impl BlockStreamSnapshot {
     fn status_label(&self) -> (String, Color32) {
         if let Some(error) = &self.last_error {
@@ -11505,7 +10927,6 @@ impl BlockStreamSnapshot {
         }
     }
 }
-
 fn truncate(input: &str, max_len: usize) -> String {
     if input.len() <= max_len {
         input.to_owned()
@@ -11515,7 +10936,6 @@ fn truncate(input: &str, max_len: usize) -> String {
         format!("{}…", &input[..max_len.saturating_sub(1)])
     }
 }
-
 fn normalized_filter(input: &str) -> Option<String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -11524,7 +10944,6 @@ fn normalized_filter(input: &str) -> Option<String> {
         Some(trimmed.to_ascii_lowercase())
     }
 }
-
 fn shell_quote(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -11541,7 +10960,6 @@ fn shell_quote(value: &str) -> String {
         format!("'{}'", trimmed.replace('\'', "'\"'\"'"))
     }
 }
-
 fn ensure_http_base(value: &str) -> String {
     let trimmed = value.trim().trim_end_matches('/');
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
@@ -11550,7 +10968,6 @@ fn ensure_http_base(value: &str) -> String {
         format!("http://{trimmed}")
     }
 }
-
 fn compose_launch_recipe(
     profile: &str,
     workspace_root: &str,
@@ -11588,7 +11005,6 @@ fn compose_launch_recipe(
     });
     parts.join(" ")
 }
-
 fn compose_app_env_recipe(
     api_base: &str,
     torii_url: &str,
@@ -11607,14 +11023,12 @@ fn compose_app_env_recipe(
     }
     .render_shell_exports()
 }
-
 fn compose_status_probe_recipe(api_base: &str) -> String {
     format!(
         "curl -sS {}/status",
         shell_quote(&ensure_http_base(api_base))
     )
 }
-
 fn render_filter_selector(ui: &mut egui::Ui, label: &str, value: &mut String, options: &[String]) {
     ui.horizontal(|ui| {
         ui.label(label);
@@ -11645,7 +11059,6 @@ fn render_filter_selector(ui: &mut egui::Ui, label: &str, value: &mut String, op
         }
     });
 }
-
 fn filter_state_entries<'a>(
     pages: &'a [StatePageCache],
     current_entries: &'a [StateEntry],
@@ -11668,7 +11081,6 @@ fn filter_state_entries<'a>(
             indices.push(idx);
         }
     }
-
     let matching_cached: Vec<&'a StateEntry> = if pages.is_empty() {
         current_entries
             .iter()
@@ -11699,10 +11111,8 @@ fn filter_state_entries<'a>(
             })
             .collect()
     };
-
     (indices, matching_cached)
 }
-
 fn compose_search_blob(alias: &str, summary: &str, detail: Option<&str>) -> String {
     let mut blob = String::new();
     blob.push_str(&alias.to_ascii_lowercase());
@@ -11714,17 +11124,14 @@ fn compose_search_blob(alias: &str, summary: &str, detail: Option<&str>) -> Stri
     }
     blob
 }
-
 fn serialize_event_filter(filter: &EventFilterState) -> Option<String> {
     json::to_string(&filter.to_json_value()).ok()
 }
-
 fn load_active_view(storage: Option<&dyn Storage>) -> Option<ActiveView> {
     let storage = storage?;
     let raw = storage.get_string(ACTIVE_VIEW_STORAGE_KEY)?;
     ActiveView::from_storage_value(&raw)
 }
-
 fn load_first_run_completed(storage: Option<&dyn Storage>) -> bool {
     let Some(storage) = storage else {
         return false;
@@ -11734,7 +11141,6 @@ fn load_first_run_completed(storage: Option<&dyn Storage>) -> bool {
         .map(|value| value.trim().eq_ignore_ascii_case("true"))
         .unwrap_or(false)
 }
-
 fn load_event_filter(storage: Option<&dyn Storage>) -> EventFilterState {
     let Some(storage) = storage else {
         return EventFilterState::default();
@@ -11747,7 +11153,6 @@ fn load_event_filter(storage: Option<&dyn Storage>) -> EventFilterState {
     };
     EventFilterState::from_json_value(&parsed).unwrap_or_default()
 }
-
 fn event_decode_stage_label(stage: EventDecodeStage) -> &'static str {
     match stage {
         EventDecodeStage::Frame => "frame",
@@ -11755,7 +11160,6 @@ fn event_decode_stage_label(stage: EventDecodeStage) -> &'static str {
         EventDecodeStage::Stream => "stream",
     }
 }
-
 fn event_json_value(event: &EventStreamEvent) -> Result<Value, String> {
     match event {
         EventStreamEvent::Event { event, .. } => json::to_value(event.as_ref())
@@ -11763,13 +11167,11 @@ fn event_json_value(event: &EventStreamEvent) -> Result<Value, String> {
         _ => Err("Only structured events can be exported as JSON.".to_owned()),
     }
 }
-
 fn event_json_string(event: &EventStreamEvent) -> Result<String, String> {
     event_json_value(event).and_then(|value| {
         json::to_string_pretty(&value).map_err(|err| format!("Failed to encode event JSON: {err}"))
     })
 }
-
 fn collect_event_text(indices: &[usize], rendered: &[RenderedEventLine]) -> String {
     let mut lines = Vec::new();
     for &idx in indices.iter().rev() {
@@ -11794,7 +11196,6 @@ fn collect_event_text(indices: &[usize], rendered: &[RenderedEventLine]) -> Stri
     }
     lines.join("\n")
 }
-
 fn collect_state_json(entries: &[&StateEntry]) -> Result<String, String> {
     if entries.is_empty() {
         return Err("No state entries selected for JSON export.".to_owned());
@@ -11812,7 +11213,6 @@ fn collect_state_json(entries: &[&StateEntry]) -> Result<String, String> {
     json::to_string_pretty(&Value::Array(values))
         .map_err(|err| format!("Failed to encode Norito JSON array: {err}"))
 }
-
 fn collect_state_norito(entries: &[&StateEntry]) -> Result<String, String> {
     if entries.is_empty() {
         return Err("No state entries selected for Norito export.".to_owned());
@@ -11830,7 +11230,6 @@ fn collect_state_norito(entries: &[&StateEntry]) -> Result<String, String> {
     }
     Ok(lines.join("\n"))
 }
-
 fn state_export_directory(base_dir: Option<&Path>, suffix: &str) -> Result<PathBuf, String> {
     let dir = match base_dir {
         Some(path) => path.to_path_buf(),
@@ -11850,7 +11249,6 @@ fn state_export_directory(base_dir: Option<&Path>, suffix: &str) -> Result<PathB
     path.push(format!("mochi_state_{timestamp}.{suffix}"));
     Ok(path)
 }
-
 fn save_state_json_to_file(
     entries: &[&StateEntry],
     base_dir: Option<&Path>,
@@ -11860,7 +11258,6 @@ fn save_state_json_to_file(
     fs::write(&path, contents).map_err(|err| format!("Failed to write state export: {err}"))?;
     Ok(path)
 }
-
 fn save_state_norito_to_file(
     entries: &[&StateEntry],
     base_dir: Option<&Path>,
@@ -11870,7 +11267,6 @@ fn save_state_norito_to_file(
     fs::write(&path, contents).map_err(|err| format!("Failed to write state export: {err}"))?;
     Ok(path)
 }
-
 fn collect_log_text(entries: &[(usize, String)]) -> Result<String, String> {
     if entries.is_empty() {
         return Err("No log entries selected for export.".to_owned());
@@ -11884,7 +11280,6 @@ fn collect_log_text(entries: &[(usize, String)]) -> Result<String, String> {
     }
     Ok(buffer)
 }
-
 fn save_logs_to_file(
     entries: &[(usize, String)],
     base_dir: Option<&Path>,
@@ -11912,7 +11307,6 @@ fn save_logs_to_file(
     fs::write(&path, contents).map_err(|err| format!("Failed to write log export: {err}"))?;
     Ok(path)
 }
-
 fn collect_event_json(indices: &[usize], events: &[EventDisplay]) -> Result<String, String> {
     let mut values = Vec::new();
     for &idx in indices.iter().rev() {
@@ -11933,17 +11327,14 @@ fn collect_event_json(indices: &[usize], events: &[EventDisplay]) -> Result<Stri
     json::to_string_pretty(&Value::Array(values))
         .map_err(|err| format!("Failed to encode JSON array: {err}"))
 }
-
 #[derive(Debug, Clone)]
 struct StatusError {
     info: ToriiErrorInfo,
 }
-
 trait ToriiErrorInfoUiExt {
     fn label(&self) -> String;
     fn color(&self) -> Color32;
 }
-
 fn reject_code_hint(code: &str) -> Option<&'static str> {
     match code {
         "PRTRY:TX_UNSUPPORTED_AUTHORITY" => Some("unsupported signer authority"),
@@ -11989,7 +11380,6 @@ fn reject_code_hint(code: &str) -> Option<&'static str> {
         }
     }
 }
-
 impl ToriiErrorInfoUiExt for ToriiErrorInfo {
     fn label(&self) -> String {
         if let Some(code) = &self.reject_code {
@@ -12009,10 +11399,11 @@ impl ToriiErrorInfoUiExt for ToriiErrorInfo {
         }
         self.message.clone()
     }
-
     fn color(&self) -> Color32 {
         match self.kind {
-            ToriiErrorKind::Decode => Color32::from_rgb(200, 160, 64),
+            ToriiErrorKind::Decode | ToriiErrorKind::ResponseResourceLimit => {
+                Color32::from_rgb(200, 160, 64)
+            }
             ToriiErrorKind::Timeout | ToriiErrorKind::SmokeAdmissionOutcomeUnknown => {
                 Color32::from_rgb(200, 160, 64)
             }
@@ -12029,17 +11420,14 @@ impl ToriiErrorInfoUiExt for ToriiErrorInfo {
         }
     }
 }
-
 impl StatusError {
     fn label(&self) -> String {
         self.info.label()
     }
-
     fn color(&self) -> Color32 {
         self.info.color()
     }
 }
-
 #[derive(Debug, Clone, Default)]
 struct LaneCatalogSnapshot {
     lane_aliases: BTreeMap<u32, String>,
@@ -12047,7 +11435,6 @@ struct LaneCatalogSnapshot {
     dataspace_aliases: BTreeMap<u32, String>,
     lane_count: Option<u32>,
 }
-
 impl LaneCatalogSnapshot {
     fn lane_ids(&self) -> BTreeSet<u32> {
         let mut ids: BTreeSet<u32> = self
@@ -12067,18 +11454,15 @@ impl LaneCatalogSnapshot {
         }
         ids
     }
-
     fn lane_alias(&self, lane_id: u32) -> String {
         self.lane_aliases
             .get(&lane_id)
             .cloned()
             .unwrap_or_else(|| default_lane_alias(lane_id))
     }
-
     fn lane_dataspace_id(&self, lane_id: u32) -> Option<u32> {
         self.lane_dataspaces.get(&lane_id).copied()
     }
-
     fn dataspace_label(&self, dataspace_id: Option<u32>) -> String {
         let Some(dataspace_id) = dataspace_id else {
             return "—".to_owned();
@@ -12096,7 +11480,6 @@ impl LaneCatalogSnapshot {
             .unwrap_or_else(|| format!("id {dataspace_id}"))
     }
 }
-
 fn default_lane_alias(index: u32) -> String {
     if index == 0 {
         "default".to_owned()
@@ -12104,11 +11487,9 @@ fn default_lane_alias(index: u32) -> String {
         format!("lane{index}")
     }
 }
-
 fn lane_slug(alias: &str, lane_id: u32) -> String {
     let mut slug = String::with_capacity(alias.len());
     let mut underscore_written = false;
-
     for ch in alias.chars() {
         if ch.is_ascii_alphanumeric() {
             slug.push(ch.to_ascii_lowercase());
@@ -12123,7 +11504,6 @@ fn lane_slug(alias: &str, lane_id: u32) -> String {
             underscore_written = true;
         }
     }
-
     let slug = slug.trim_matches('_').to_string();
     if slug.is_empty() {
         format!("lane{lane_id}")
@@ -12131,7 +11511,6 @@ fn lane_slug(alias: &str, lane_id: u32) -> String {
         slug
     }
 }
-
 fn toml_u32(value: &TomlValue) -> Option<u32> {
     match value {
         TomlValue::Integer(raw) => u32::try_from(*raw).ok(),
@@ -12139,22 +11518,18 @@ fn toml_u32(value: &TomlValue) -> Option<u32> {
         _ => None,
     }
 }
-
 fn toml_string(value: &TomlValue) -> Option<String> {
     match value {
         TomlValue::String(raw) => Some(raw.clone()),
         _ => None,
     }
 }
-
 fn lane_catalog_snapshot(nexus: Option<&TomlTable>) -> LaneCatalogSnapshot {
     let mut snapshot = LaneCatalogSnapshot::default();
     let Some(nexus) = nexus else {
         return snapshot;
     };
-
     snapshot.lane_count = nexus.get("lane_count").and_then(toml_u32);
-
     if let Some(values) = nexus.get("dataspace_catalog").and_then(TomlValue::as_array) {
         for (idx, entry) in values.iter().enumerate() {
             let Some(table) = entry.as_table() else {
@@ -12171,7 +11546,6 @@ fn lane_catalog_snapshot(nexus: Option<&TomlTable>) -> LaneCatalogSnapshot {
             }
         }
     }
-
     if let Some(values) = nexus.get("lane_catalog").and_then(TomlValue::as_array) {
         for (idx, entry) in values.iter().enumerate() {
             let Some(table) = entry.as_table() else {
@@ -12188,7 +11562,6 @@ fn lane_catalog_snapshot(nexus: Option<&TomlTable>) -> LaneCatalogSnapshot {
                 .and_then(toml_string)
                 .unwrap_or_else(|| default_lane_alias(lane_id));
             snapshot.lane_aliases.insert(lane_id, alias);
-
             let dataspace_id = table
                 .get("dataspace_id")
                 .and_then(toml_u32)
@@ -12210,7 +11583,6 @@ fn lane_catalog_snapshot(nexus: Option<&TomlTable>) -> LaneCatalogSnapshot {
             }
         }
     }
-
     if snapshot.lane_aliases.is_empty() {
         let count = snapshot.lane_count.unwrap_or(1);
         if count > 1 {
@@ -12226,20 +11598,16 @@ fn lane_catalog_snapshot(nexus: Option<&TomlTable>) -> LaneCatalogSnapshot {
         let max = snapshot.lane_aliases.keys().copied().max().unwrap_or(0);
         snapshot.lane_count = Some(max.saturating_add(1));
     }
-
     snapshot
         .dataspace_aliases
         .entry(0)
         .or_insert_with(|| "universal".to_owned());
-
     let lane_ids = snapshot.lane_ids();
     for lane_id in lane_ids {
         snapshot.lane_dataspaces.entry(lane_id).or_insert(0);
     }
-
     snapshot
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RelayIngestState {
     Waiting,
@@ -12248,7 +11616,6 @@ enum RelayIngestState {
     MissingManifest,
     Ready,
 }
-
 impl RelayIngestState {
     fn label(self) -> &'static str {
         match self {
@@ -12259,7 +11626,6 @@ impl RelayIngestState {
             RelayIngestState::Ready => "ready",
         }
     }
-
     fn color(self) -> Color32 {
         match self {
             RelayIngestState::Ready => Color32::from_rgb(80, 160, 80),
@@ -12270,7 +11636,6 @@ impl RelayIngestState {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 struct LaneStatusRow {
     lane_id: u32,
@@ -12284,32 +11649,27 @@ struct LaneStatusRow {
     da_cursor_sequence: Option<u64>,
     relay_state: RelayIngestState,
 }
-
 impl LaneStatusRow {
     fn block_height_label(&self) -> String {
         self.block_height
             .map(|value| value.to_string())
             .unwrap_or_else(|| "—".to_owned())
     }
-
     fn relay_height_label(&self) -> String {
         self.relay_height
             .map(|value| value.to_string())
             .unwrap_or_else(|| "—".to_owned())
     }
-
     fn relay_lag_label(&self) -> String {
         self.relay_lag
             .map(|value| value.to_string())
             .unwrap_or_else(|| "—".to_owned())
     }
-
     fn rbc_bytes_label(&self) -> String {
         self.rbc_bytes
             .map(|value| value.to_string())
             .unwrap_or_else(|| "—".to_owned())
     }
-
     fn da_cursor_label(&self) -> String {
         match (self.da_cursor_epoch, self.da_cursor_sequence) {
             (Some(epoch), Some(seq)) => format!("e{epoch} s{seq}"),
@@ -12318,7 +11678,6 @@ impl LaneStatusRow {
         }
     }
 }
-
 #[derive(Debug, Clone, Default)]
 struct PeerStatusView {
     last_snapshot: Option<ToriiStatusSnapshot>,
@@ -12329,7 +11688,6 @@ struct PeerStatusView {
     last_metrics: Option<ToriiMetricsSnapshot>,
     last_metrics_error: Option<StatusError>,
 }
-
 impl PeerStatusView {
     fn record_snapshot(
         &mut self,
@@ -12356,12 +11714,10 @@ impl PeerStatusView {
             self.last_metrics_error = Some(StatusError { info: error });
         }
     }
-
     fn record_error(&mut self, error: ToriiErrorInfo, timestamp: Instant) {
         self.last_error = Some(StatusError { info: error });
         self.last_update = Some(timestamp);
     }
-
     fn status_label(&self) -> (String, Color32) {
         if let Some(error) = &self.last_error {
             let label = truncate(&error.label(), 64);
@@ -12402,13 +11758,11 @@ impl PeerStatusView {
             ("Unknown".to_owned(), Color32::from_gray(140))
         }
     }
-
     fn is_stale(&self) -> bool {
         self.last_update
             .map(|instant| instant.elapsed() > STATUS_POLL_INTERVAL * STATUS_STALE_MULTIPLIER)
             .unwrap_or(false)
     }
-
     fn delta_summary(&self) -> Option<String> {
         let snapshot = self.last_snapshot.as_ref()?;
         let metrics = snapshot.metrics;
@@ -12437,7 +11791,6 @@ impl PeerStatusView {
             Some(format!("Δ{}", parts.join(" | ")))
         }
     }
-
     fn membership_summary(&self) -> Option<String> {
         let sumeragi = self.last_sumeragi.as_ref()?;
         let restart = if sumeragi.restart_required {
@@ -12455,7 +11808,6 @@ impl PeerStatusView {
             restart
         ))
     }
-
     fn sealed_lane_count(&self) -> Option<u32> {
         let total = self
             .last_sumeragi_diagnostics
@@ -12464,7 +11816,6 @@ impl PeerStatusView {
             .unwrap_or(0);
         (total > 0).then_some(total)
     }
-
     fn sealed_summary(&self) -> Option<String> {
         let sumeragi = self.last_sumeragi_diagnostics.as_ref()?;
         let total = sumeragi.lane_governance_sealed_total;
@@ -12492,7 +11843,6 @@ impl PeerStatusView {
         };
         Some(format!("Sealed lanes: {total} ({summary})"))
     }
-
     fn consensus_queue_summary(&self) -> Option<String> {
         let metrics = self.last_metrics.as_ref()?;
         let depth = metrics.sumeragi_tx_queue_depth?;
@@ -12507,7 +11857,6 @@ impl PeerStatusView {
         }
         Some(summary)
     }
-
     fn storage_summary(&self) -> Option<String> {
         let metrics = self.last_metrics.as_ref()?;
         let hot = metrics.state_tiered_hot_entries?;
@@ -12519,14 +11868,12 @@ impl PeerStatusView {
         }
         Some(summary)
     }
-
     fn lane_status_rows(&self, catalog: &LaneCatalogSnapshot) -> Vec<LaneStatusRow> {
         let snapshot = self.last_snapshot.as_ref();
         let sumeragi = self.last_sumeragi_diagnostics.as_ref();
         let (Some(snapshot), Some(sumeragi)) = (snapshot, sumeragi) else {
             return Vec::new();
         };
-
         let mut commitments = BTreeMap::new();
         for commitment in &sumeragi.lane_commitments {
             commitments.insert(commitment.lane_id.as_u32(), commitment);
@@ -12539,7 +11886,6 @@ impl PeerStatusView {
         for entry in &sumeragi.lane_governance {
             governance.insert(entry.lane_id.as_u32(), entry);
         }
-
         let mut da_cursors: BTreeMap<u32, (u64, u64)> = BTreeMap::new();
         for cursor in &snapshot.status.da_receipt_cursors {
             let entry = da_cursors
@@ -12551,13 +11897,11 @@ impl PeerStatusView {
                 *entry = (cursor.epoch, cursor.highest_sequence);
             }
         }
-
         let mut lane_ids = catalog.lane_ids();
         lane_ids.extend(commitments.keys().copied());
         lane_ids.extend(relays.keys().copied());
         lane_ids.extend(governance.keys().copied());
         lane_ids.extend(da_cursors.keys().copied());
-
         let mut rows = Vec::new();
         for lane_id in lane_ids {
             let alias = governance
@@ -12571,7 +11915,6 @@ impl PeerStatusView {
                     .and_then(|relay| u32::try_from(relay.dataspace_id.as_u64()).ok())
             });
             let dataspace = catalog.dataspace_label(dataspace_id);
-
             let block_height = commitments.get(&lane_id).map(|entry| entry.block_height);
             let relay_height = relays.get(&lane_id).map(|entry| entry.block_height);
             let relay_lag = match (block_height, relay_height) {
@@ -12588,10 +11931,8 @@ impl PeerStatusView {
                 .get(&lane_id)
                 .map(|(epoch, sequence)| (Some(*epoch), Some(*sequence)))
                 .unwrap_or((None, None));
-
             let relay_state =
                 Self::relay_state_for_lane(relays.get(&lane_id), governance.get(&lane_id));
-
             rows.push(LaneStatusRow {
                 lane_id,
                 alias,
@@ -12605,10 +11946,8 @@ impl PeerStatusView {
                 relay_state,
             });
         }
-
         rows
     }
-
     fn relay_state_for_lane(
         relay: Option<&&LaneRelayEnvelope>,
         governance: Option<&&SumeragiLaneGovernance>,
@@ -12643,27 +11982,23 @@ impl PeerStatusView {
             RelayIngestState::Waiting
         }
     }
-
     fn metrics_error_label(&self) -> Option<(String, Color32)> {
         let error = self.last_metrics_error.as_ref()?;
         Some((format!("Metrics: {}", error.label()), error.color()))
     }
 }
-
 #[derive(Debug, Clone)]
 struct StatusHistoryEntry {
     timestamp: Instant,
     snapshot: ToriiStatusSnapshot,
     metrics: Option<ToriiMetricsSnapshot>,
 }
-
 #[derive(Debug, Clone)]
 struct LogSnapshot {
     label: String,
     color: Color32,
     timestamp: Option<u128>,
 }
-
 impl Default for LogSnapshot {
     fn default() -> Self {
         Self {
@@ -12673,7 +12008,6 @@ impl Default for LogSnapshot {
         }
     }
 }
-
 #[derive(Debug, Clone, Default)]
 struct EventSnapshot {
     last_summary: Option<EventSummary>,
@@ -12681,7 +12015,6 @@ struct EventSnapshot {
     connected: bool,
     last_update: Option<Instant>,
 }
-
 impl EventSnapshot {
     fn summary_text(&self) -> String {
         if let Some(summary) = &self.last_summary {
@@ -12695,7 +12028,6 @@ impl EventSnapshot {
             "—".to_owned()
         }
     }
-
     fn status_label(&self) -> (String, Color32) {
         if let Some(error) = &self.last_error {
             (truncate(error, 48), Color32::from_rgb(200, 64, 64))
@@ -12708,2320 +12040,6 @@ impl EventSnapshot {
         }
     }
 }
-
 #[cfg(test)]
-mod tests {
-    use std::{
-        collections::VecDeque,
-        num::NonZeroU64,
-        path::Path,
-        time::{Duration, Instant},
-    };
-
-    use egui::{CentralPanel, Color32, Context, FontFamily, TextStyle};
-    use iroha_data_model::{
-        account::{AccountAdmissionMode, admission::ImplicitAccountFeeDestination},
-        asset::id::AssetId,
-        block::{
-            BlockHeader,
-            consensus::{
-                SumeragiDataspaceCommitment, SumeragiDiagnosticsStatus, SumeragiLaneCommitment,
-                SumeragiLaneGovernance, SumeragiRuntimeUpgradeHook,
-            },
-            consensus_v2::{
-                ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
-                SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase,
-            },
-        },
-        da::commitment::DaProofScheme,
-        events::{
-            EventBox,
-            time::{TimeEvent, TimeInterval},
-        },
-        nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneStorageProfile, LaneVisibility},
-        prelude::{Hash, HashOf},
-        role::RoleId,
-    };
-    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-    use mochi_core::{
-        ExposedPrivateKey, TelemetryStatus, ToriiError, TxGossipSnapshot,
-        torii::{GovernanceStatus, StatusMetrics, Uptime},
-    };
-    use norito::json::{self, Value};
-
-    use super::test_support::{
-        TestEnvGuard, env_lock, genesis_invocation_count, install_kagami_stub, install_noop_stub,
-        kagami_sign_invocation_count,
-    };
-    use super::{
-        ActiveView, CliOverrides, InstructionPermission, MaintenanceCommand, MaintenanceState,
-        MaintenanceTask, MochiApp, ProfilePreset, SignerEntryForm, SignerEntryState,
-        StatePageCache, StateQueryKind, SupervisorBuilder, SupervisorError, compose_app_env_recipe,
-        compose_launch_recipe, ensure_http_base, filter_state_entries,
-        reset_cli_overrides_for_tests, shell_quote,
-    };
-
-    #[test]
-    fn snapshot_label_preview_matches_expectations() {
-        assert_eq!(
-            MochiApp::preview_snapshot_label("My Snapshot!!!"),
-            Some("my-snapshot".to_owned())
-        );
-        assert_eq!(
-            MochiApp::preview_snapshot_label("   "),
-            None,
-            "blank labels should produce no preview"
-        );
-    }
-
-    #[test]
-    fn theme_palette_applied_to_visuals() {
-        let mut app = MochiApp::default();
-        let ctx = Context::default();
-        app.ensure_theme(&ctx);
-        let visuals = &ctx.style().visuals;
-        let palette = MochiApp::palette();
-        assert_eq!(visuals.panel_fill, palette.panel);
-        assert_eq!(visuals.window_fill, palette.panel);
-        assert_eq!(visuals.hyperlink_color, palette.accent);
-        assert_eq!(visuals.selection.bg_fill, palette.accent);
-        assert_eq!(visuals.widgets.inactive.bg_fill, palette.surface);
-        assert_eq!(visuals.weak_text_color, Some(palette.text_muted));
-        let style = ctx.style();
-        let heading = style
-            .text_styles
-            .get(&TextStyle::Heading)
-            .expect("heading style");
-        assert_eq!(heading.family, FontFamily::Proportional);
-        assert!((heading.size - 20.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn shell_quote_handles_spaces_and_single_quotes() {
-        assert_eq!(shell_quote("mochi-local"), "mochi-local");
-        assert_eq!(shell_quote("/tmp/mochi data"), "'/tmp/mochi data'");
-        assert_eq!(shell_quote("alice's sandbox"), "'alice'\"'\"'s sandbox'");
-    }
-
-    #[test]
-    fn ensure_http_base_adds_scheme_once() {
-        assert_eq!(ensure_http_base("127.0.0.1:8080"), "http://127.0.0.1:8080");
-        assert_eq!(
-            ensure_http_base("http://127.0.0.1:8080/"),
-            "http://127.0.0.1:8080"
-        );
-    }
-
-    #[test]
-    fn compose_launch_recipe_includes_current_flags() {
-        let recipe = compose_launch_recipe(
-            "single-peer",
-            "/tmp/mochi data",
-            "mochi-local",
-            Some(8080),
-            Some(1337),
-            true,
-            false,
-        );
-        assert!(
-            recipe.starts_with("cargo run -p mochi-ui --features gui --bin mochi -- sandbox serve")
-        );
-        assert!(recipe.contains("--profile single-peer"));
-        assert!(recipe.contains("--workspace-root '/tmp/mochi data'"));
-        assert!(recipe.contains("--chain-id mochi-local"));
-        assert!(recipe.contains("--torii-start 8080"));
-        assert!(recipe.contains("--p2p-start 1337"));
-        assert!(recipe.contains("--build-binaries"));
-        assert!(recipe.contains("--disable-smoke"));
-    }
-
-    #[test]
-    fn compose_app_env_recipe_emits_local_bootstrap_exports() {
-        let recipe = compose_app_env_recipe(
-            "127.0.0.1:8080",
-            "127.0.0.1:8080",
-            Some("http://127.0.0.1:8080/v1/mcp"),
-            "mochi-local",
-            Some("alice@wonderland"),
-            Some("deadbeef"),
-        );
-        assert!(recipe.contains("export IROHA_API_BASE=http://127.0.0.1:8080"));
-        assert!(recipe.contains("export IROHA_TORII_URL=http://127.0.0.1:8080"));
-        assert!(recipe.contains("export IROHA_MCP_URL=http://127.0.0.1:8080/v1/mcp"));
-        assert!(recipe.contains("export IROHA_CHAIN_ID=mochi-local"));
-        assert!(recipe.contains("export IROHA_ACCOUNT_ID=alice@wonderland"));
-        assert!(recipe.contains("export IROHA_PRIVATE_KEY=deadbeef"));
-    }
-
-    #[test]
-    fn render_view_tabs_keeps_active_view() {
-        let mut app = MochiApp::default();
-        app.active_view = ActiveView::Activity;
-        let ctx = Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            CentralPanel::default().show(ctx, |ui| {
-                app.render_view_tabs(ui);
-            });
-        });
-        assert_eq!(app.active_view, ActiveView::Activity);
-    }
-
-    #[test]
-    fn render_overview_bar_smoke() {
-        if !super::socket_bind_available() {
-            eprintln!("Skipping overview bar test due to socket restrictions");
-            return;
-        }
-        let _lock = env_lock().lock().expect("env lock");
-        let temp = tempfile::tempdir().expect("temp dir");
-        let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
-        let irohad_stub = install_noop_stub(temp.path(), "irohad_ui_stub.sh");
-        let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
-        let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
-        let data_root = temp.path().join("ui-data");
-        let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-        reset_cli_overrides_for_tests();
-
-        let mut app = MochiApp::default();
-        let mut supervisor = app.supervisor.take().expect("supervisor ready");
-        let peer_rows = app.build_peer_rows(&supervisor);
-        let metrics = app.collect_dashboard_metrics(&peer_rows);
-
-        let ctx = Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            CentralPanel::default().show(ctx, |ui| {
-                app.render_overview_bar(ui, &mut supervisor, &peer_rows, &metrics);
-            });
-        });
-
-        assert!(!app.settings_dialog);
-        app.supervisor = Some(supervisor);
-    }
-
-    #[test]
-    fn cli_profile_override_reconfigures_builder() {
-        let overrides = CliOverrides {
-            profile: Some(NetworkProfile::from_preset(ProfilePreset::FourPeerBft)),
-            ..Default::default()
-        };
-        let builder = overrides.apply_to(SupervisorBuilder::new(ProfilePreset::SinglePeer));
-        assert_eq!(builder.profile().preset, Some(ProfilePreset::FourPeerBft));
-        assert_eq!(builder.profile().topology.peer_count, 4);
-    }
-
-    #[test]
-    fn maintenance_state_running_shows_spinner() {
-        let banner = MaintenanceState::Running(MaintenanceTask::Snapshot)
-            .banner()
-            .expect("running state should surface banner");
-        assert!(banner.show_spinner, "running banner should show spinner");
-        assert!(
-            !banner.dismissable,
-            "running banner should not be dismissable"
-        );
-    }
-
-    #[test]
-    fn maintenance_state_completed_is_dismissable() {
-        let banner = MaintenanceState::Completed {
-            message: "Network reset complete".to_owned(),
-        }
-        .banner()
-        .expect("completed state should surface banner");
-        assert!(
-            !banner.show_spinner,
-            "completed banner should not show spinner"
-        );
-        assert!(banner.dismissable, "completed banner should be dismissable");
-        assert!(
-            banner.text.contains("Network reset"),
-            "completed banner should retain completion message"
-        );
-    }
-
-    #[test]
-    fn entry_form_to_state_accepts_valid_inputs() {
-        let form = SignerEntryForm {
-            label: "Test signer".to_owned(),
-            account: account_literal(&ALICE_ID),
-            private_key: ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()).to_string(),
-            permissions: [InstructionPermission::MintAsset].into_iter().collect(),
-            roles: String::new(),
-        };
-
-        let state = MochiApp::entry_form_to_state(&form)
-            .expect("valid signer form should produce entry state");
-        assert_eq!(state.label, "Test signer");
-        assert_eq!(state.account, account_literal(&ALICE_ID));
-        assert!(
-            state
-                .permissions
-                .contains(&InstructionPermission::MintAsset)
-        );
-    }
-
-    #[test]
-    fn entry_form_to_state_rejects_missing_fields() {
-        let form = SignerEntryForm {
-            label: "Missing account".to_owned(),
-            private_key: "deadbeef".to_owned(),
-            ..Default::default()
-        };
-        let err = MochiApp::entry_form_to_state(&form)
-            .expect_err("missing account should produce validation error");
-        assert!(
-            err.contains("Account identifier is required"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn signer_entries_to_signers_converts_entries() {
-        let private_key = ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()).to_string();
-        let entry = SignerEntryState {
-            label: "Alice real".to_owned(),
-            account: account_literal(&ALICE_ID),
-            private_key,
-            permissions: InstructionPermission::all().into_iter().collect(),
-            roles: String::new(),
-        };
-
-        let signers =
-            MochiApp::signer_entries_to_signers(&[entry]).expect("expected successful conversion");
-        assert_eq!(signers.len(), 1);
-        let signer = &signers[0];
-        assert_eq!(signer.label(), "Alice real");
-        assert_eq!(signer.account_id(), &*ALICE_ID);
-    }
-
-    #[test]
-    fn signer_entries_to_signers_rejects_empty_permissions() {
-        let entry = SignerEntryState {
-            label: "No perms".to_owned(),
-            account: account_literal(&ALICE_ID),
-            private_key: ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()).to_string(),
-            permissions: Default::default(),
-            roles: String::new(),
-        };
-
-        let err = MochiApp::signer_entries_to_signers(&[entry])
-            .expect_err("empty permission list should be rejected");
-        assert!(
-            err.contains("must permit at least one instruction"),
-            "unexpected error message: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_role_list_accepts_comma_separated_roles() {
-        let roles =
-            MochiApp::parse_role_list("auditor, basic_user").expect("role list should parse");
-        assert_eq!(roles.len(), 2);
-    }
-
-    #[test]
-    fn parse_role_list_rejects_invalid_roles() {
-        let err =
-            MochiApp::parse_role_list("not a role").expect_err("invalid roles should be rejected");
-        assert!(
-            err.contains("Invalid role"),
-            "unexpected error message: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_optional_u32_accepts_empty_and_numbers() {
-        assert_eq!(
-            MochiApp::parse_optional_u32("", "Max per tx").expect("empty ok"),
-            None
-        );
-        assert_eq!(
-            MochiApp::parse_optional_u32(" 7 ", "Max per tx").expect("parse ok"),
-            Some(7)
-        );
-    }
-
-    #[test]
-    fn parse_lane_count_input_rejects_zero() {
-        let err =
-            MochiApp::parse_lane_count_input("0").expect_err("zero lane count should be rejected");
-        assert!(err.contains("greater than zero"), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn parse_lane_count_input_accepts_numbers() {
-        assert_eq!(
-            MochiApp::parse_lane_count_input(" 3 ").expect("parse ok"),
-            Some(3)
-        );
-        assert_eq!(
-            MochiApp::parse_lane_count_input("").expect("empty ok"),
-            None
-        );
-    }
-
-    #[test]
-    fn toml_helpers_extract_strings_and_numbers() {
-        let value = TomlValue::String("alpha".to_owned());
-        assert_eq!(toml_string(&value).as_deref(), Some("alpha"));
-        assert_eq!(toml_u32(&TomlValue::Integer(7)), Some(7));
-        assert_eq!(toml_u32(&TomlValue::String("12".to_owned())), Some(12));
-    }
-
-    include!("gui/tests/lane_and_admission.rs");
-
-    #[test]
-    fn maintenance_export_snapshot_creates_snapshot_directory() {
-        if !super::socket_bind_available() {
-            eprintln!("Skipping snapshot maintenance test due to socket restrictions");
-            return;
-        }
-        let _lock = env_lock().lock().expect("env lock");
-        let temp = tempfile::tempdir().expect("temp dir");
-
-        let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
-        let irohad_stub = install_noop_stub(temp.path(), "irohad_snapshot_stub.sh");
-        let log_path = temp.path().join("kagami_snapshot.log");
-
-        let _log_guard = TestEnvGuard::set("MOCHI_TEST_KAGAMI_LOG", &log_path);
-        let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
-        let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
-
-        let data_root = temp.path().join("snapshot-data");
-        let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-
-        let mut app = MochiApp::default();
-        let mut supervisor_slot = app.supervisor.take();
-        let initial_invocations = genesis_invocation_count(&log_path);
-
-        assert!(
-            app.begin_maintenance(MaintenanceTask::Snapshot),
-            "snapshot maintenance should start when idle"
-        );
-        let label = "Smoke Snapshot 42".to_owned();
-        app.maintenance_command = Some(MaintenanceCommand::ExportSnapshot {
-            label: Some(label.clone()),
-        });
-        app.schedule_pending_maintenance(&mut supervisor_slot);
-
-        for _ in 0..100 {
-            app.poll_maintenance_updates(&mut supervisor_slot);
-            if !matches!(app.maintenance_state, MaintenanceState::Running(_)) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-
-        assert!(
-            !matches!(app.maintenance_state, MaintenanceState::Running(_)),
-            "snapshot maintenance did not finish in time"
-        );
-        assert!(
-            supervisor_slot.is_some(),
-            "supervisor should be restored after maintenance"
-        );
-
-        app.supervisor = supervisor_slot;
-        let supervisor = app.supervisor.as_ref().expect("supervisor restored");
-        match &app.maintenance_state {
-            MaintenanceState::Completed { message } => {
-                assert!(
-                    message.contains("Snapshot exported"),
-                    "expected completion message, got `{message}`"
-                );
-            }
-            other => panic!("snapshot maintenance did not complete: {other:?}"),
-        }
-
-        let snapshots_dir = supervisor.paths().snapshots_dir();
-        let snapshot_slug = "smoke-snapshot-42";
-        let snapshot_root = snapshots_dir.join(snapshot_slug);
-        assert!(
-            snapshot_root.exists(),
-            "expected snapshot directory {}",
-            snapshot_root.display()
-        );
-        let metadata_bytes =
-            fs::read(snapshot_root.join("metadata.json")).expect("read snapshot metadata");
-        let metadata: Value = json::from_slice(&metadata_bytes).expect("parse snapshot metadata");
-        assert_eq!(
-            metadata.get("snapshot").and_then(Value::as_str),
-            Some(snapshot_slug),
-            "metadata should record sanitized snapshot slug"
-        );
-        assert_eq!(
-            metadata.get("peer_count").and_then(Value::as_u64),
-            Some(supervisor.peers().len() as u64),
-            "metadata peer_count should match supervisor peer count"
-        );
-
-        let final_invocations = genesis_invocation_count(&log_path);
-        assert_eq!(
-            final_invocations, initial_invocations,
-            "exporting snapshots must not trigger additional kagami invocations"
-        );
-    }
-
-    #[test]
-    fn maintenance_reset_invokes_kagami_and_cleans_storage() {
-        if !super::socket_bind_available() {
-            eprintln!("Skipping reset maintenance test due to socket restrictions");
-            return;
-        }
-        let _lock = env_lock().lock().expect("env lock");
-        let temp = tempfile::tempdir().expect("temp dir");
-
-        let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
-        let irohad_stub = install_noop_stub(temp.path(), "irohad_reset_stub.sh");
-        let log_path = temp.path().join("kagami_reset.log");
-
-        let _log_guard = TestEnvGuard::set("MOCHI_TEST_KAGAMI_LOG", &log_path);
-        let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
-        let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
-
-        let data_root = temp.path().join("reset-data");
-        let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-
-        let mut app = MochiApp::default();
-        let mut supervisor_slot = app.supervisor.take();
-
-        {
-            let supervisor = supervisor_slot.as_ref().expect("supervisor ready");
-            for peer in supervisor.peers() {
-                let storage_dir = peer.storage_dir();
-                fs::write(storage_dir.join("junk.bin"), b"junk").expect("write junk file");
-            }
-        }
-
-        let baseline_invocations = genesis_invocation_count(&log_path);
-
-        assert!(
-            app.begin_maintenance(MaintenanceTask::Reset),
-            "reset maintenance should start when idle"
-        );
-        app.maintenance_command = Some(MaintenanceCommand::Reset);
-        app.schedule_pending_maintenance(&mut supervisor_slot);
-
-        for _ in 0..120 {
-            app.poll_maintenance_updates(&mut supervisor_slot);
-            if !matches!(app.maintenance_state, MaintenanceState::Running(_)) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-
-        assert!(
-            !matches!(app.maintenance_state, MaintenanceState::Running(_)),
-            "reset maintenance did not finish in time"
-        );
-        assert!(
-            supervisor_slot.is_some(),
-            "supervisor should be restored after maintenance"
-        );
-
-        app.supervisor = supervisor_slot;
-        let supervisor = app.supervisor.as_ref().expect("supervisor restored");
-        match &app.maintenance_state {
-            MaintenanceState::Completed { message } => {
-                assert!(
-                    message.contains("reset"),
-                    "expected reset completion message, got `{message}`"
-                );
-            }
-            other => panic!("reset maintenance did not complete: {other:?}"),
-        }
-
-        for peer in supervisor.peers() {
-            let storage_dir = peer.storage_dir();
-            assert!(
-                !storage_dir.join("junk.bin").exists(),
-                "storage should remove junk for {}",
-                peer.alias()
-            );
-            let snapshot_dir = peer.snapshot_dir();
-            assert!(
-                snapshot_dir.exists(),
-                "snapshot directory should exist for {}",
-                peer.alias()
-            );
-            let entries = fs::read_dir(&snapshot_dir)
-                .expect("snapshot dir entries")
-                .map(|entry| entry.expect("snapshot entry").file_name())
-                .collect::<Vec<_>>();
-            assert_eq!(entries, vec!["generations"]);
-            assert!(
-                fs::read_dir(snapshot_dir.join("generations"))
-                    .expect("snapshot generations")
-                    .next()
-                    .is_none(),
-                "snapshot generations should remain empty for {}",
-                peer.alias()
-            );
-        }
-
-        let final_invocations = genesis_invocation_count(&log_path);
-        assert!(
-            final_invocations > baseline_invocations,
-            "wipe & re-genesis should invoke kagami again"
-        );
-    }
-
-    #[test]
-    fn maintenance_restore_snapshot_rehydrates_storage() {
-        if !super::socket_bind_available() {
-            eprintln!("Skipping restore maintenance test due to socket restrictions");
-            return;
-        }
-        let _lock = env_lock().lock().expect("env lock");
-        let temp = tempfile::tempdir().expect("temp dir");
-
-        let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
-        let irohad_stub = install_noop_stub(temp.path(), "irohad_restore_stub.sh");
-        let log_path = temp.path().join("kagami_restore.log");
-
-        let _log_guard = TestEnvGuard::set("MOCHI_TEST_KAGAMI_LOG", &log_path);
-        let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
-        let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
-
-        let data_root = temp.path().join("restore-data");
-        let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-
-        let mut app = MochiApp::default();
-        let mut supervisor_slot = app.supervisor.take();
-        let supervisor = supervisor_slot.as_mut().expect("supervisor ready");
-
-        let peer = supervisor.peers().first().expect("at least one peer");
-        let storage_dir = peer.storage_dir();
-        let marker_path = storage_dir.join("marker.txt");
-        fs::write(&marker_path, b"snapshot-data").expect("write snapshot data");
-
-        let snapshot_root = supervisor
-            .export_snapshot(Some("Restore Snapshot 7"))
-            .expect("export snapshot");
-        let slug = snapshot_root
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
-
-        fs::write(&marker_path, b"mutated-data").expect("mutate storage marker");
-
-        assert!(
-            app.begin_maintenance(MaintenanceTask::Restore),
-            "restore maintenance should start when idle"
-        );
-        let target = slug.clone();
-        app.maintenance_command = Some(MaintenanceCommand::Restore { target });
-        app.schedule_pending_maintenance(&mut supervisor_slot);
-
-        for _ in 0..120 {
-            app.poll_maintenance_updates(&mut supervisor_slot);
-            if !matches!(app.maintenance_state, MaintenanceState::Running(_)) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-
-        assert!(
-            !matches!(app.maintenance_state, MaintenanceState::Running(_)),
-            "restore maintenance did not finish in time"
-        );
-        assert!(
-            supervisor_slot.is_some(),
-            "supervisor should be restored after maintenance"
-        );
-
-        app.supervisor = supervisor_slot;
-        let supervisor = app.supervisor.as_ref().expect("supervisor restored");
-        match &app.maintenance_state {
-            MaintenanceState::Completed { message } => {
-                assert!(
-                    message.contains("restored"),
-                    "expected restore completion message, got `{message}`"
-                );
-            }
-            other => panic!("restore maintenance did not complete: {other:?}"),
-        }
-
-        let restored_marker =
-            fs::read(marker_path).expect("read storage marker after restore completed");
-        assert_eq!(
-            restored_marker, b"snapshot-data",
-            "restore should rehydrate storage contents"
-        );
-
-        let snapshots_dir = supervisor.paths().snapshots_dir();
-        assert!(
-            snapshots_dir.join(&slug).exists(),
-            "snapshot should remain available for future restores"
-        );
-    }
-
-    fn sample_sumeragi_status_wire() -> SumeragiV2Status {
-        SumeragiV2Status {
-            protocol_version: PROTOCOL_VERSION,
-            node_fingerprint: Hash::new(b"mochi-ui-node"),
-            build_fingerprint: Hash::new(b"mochi-ui-build"),
-            config_fingerprint: Hash::new(b"mochi-ui-config"),
-            restart_required: false,
-            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-                b"mochi-ui-context",
-            ))),
-            height: 10,
-            view: 4,
-            phase: SumeragiV2StatusPhase::Prepare,
-            leader: 1,
-            locked_prepare_qc: None,
-            highest_prepare_qc: None,
-            last_timeout_certificate: None,
-            body_state: SumeragiV2BodyState::Validated,
-            pending_persistence_id: None,
-            last_committed_height: 9,
-            last_committed_subject: None,
-            height_context: SumeragiV2HeightContextStatus {
-                epoch: 1,
-                epoch_end_height: 100,
-                mode: ConsensusMode::Permissioned,
-                epoch_seed: [0xA5; 32],
-                validator_count: 4,
-                quorum: DualQuorum {
-                    min_signers: 3,
-                    total_power: 4,
-                },
-            },
-            last_commit_qc: None,
-            liveness: Default::default(),
-        }
-    }
-
-    fn sample_sumeragi_diagnostics() -> SumeragiDiagnosticsStatus {
-        SumeragiDiagnosticsStatus {
-            pipeline_execution: Default::default(),
-            tx_queue_depth: 4,
-            tx_queue_capacity: 128,
-            tx_queue_retained_bytes: 0,
-            tx_queue_max_retained_bytes: 1,
-            tx_queue_saturated: false,
-            tx_queue_saturated_by_count: false,
-            tx_queue_saturated_by_bytes: false,
-            tx_queue_saturated_by_age: false,
-            tx_queue_oldest_queued_age_ms: 0,
-            npos: None,
-            lane_commitments: vec![SumeragiLaneCommitment {
-                block_height: 10,
-                lane_id: LaneId::new(0),
-                tx_count: 3,
-                total_chunks: 4,
-                rbc_bytes_total: 384,
-                teu_total: 96,
-                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                    [0x90; Hash::LENGTH],
-                )),
-            }],
-            dataspace_commitments: vec![SumeragiDataspaceCommitment {
-                block_height: 10,
-                lane_id: LaneId::new(0),
-                dataspace_id: DataSpaceId::new(2),
-                tx_count: 1,
-                total_chunks: 2,
-                rbc_bytes_total: 128,
-                teu_total: 32,
-                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                    [0x91; Hash::LENGTH],
-                )),
-            }],
-            lane_settlement_commitments: Vec::new(),
-            lane_relay_envelopes: Vec::new(),
-            lane_payload_ownerships: Vec::new(),
-            committed_lane_blocks: Vec::new(),
-            lane_block_sessions: Vec::new(),
-            lane_governance_sealed_total: 0,
-            lane_governance_sealed_aliases: Vec::new(),
-            lane_governance: vec![SumeragiLaneGovernance {
-                lane_id: LaneId::new(0),
-                alias: "alpha".to_owned(),
-                governance: Some("parliament".to_owned()),
-                manifest_required: true,
-                manifest_ready: true,
-                manifest_path: Some("/etc/iroha/lanes/alpha.json".to_owned()),
-                validator_ids: vec![
-                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
-                    "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB".to_owned(),
-                ],
-                quorum: Some(2),
-                protected_namespaces: vec!["finance".to_owned()],
-                runtime_upgrade: Some(SumeragiRuntimeUpgradeHook {
-                    allow: true,
-                    require_metadata: true,
-                    metadata_key: Some("upgrade_id".to_owned()),
-                    allowed_ids: vec!["alpha-upgrade".to_owned()],
-                }),
-            }],
-            native_amx_participant_applications: Vec::new(),
-            autonomous_lane_executions: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn ensure_selection_picks_first_available() {
-        let mut selection = Some("missing".to_owned());
-        let aliases = vec!["alpha".to_owned(), "beta".to_owned()];
-        MochiApp::ensure_selection(&mut selection, &aliases);
-        assert_eq!(selection, Some("alpha".to_owned()));
-    }
-
-    #[test]
-    fn collect_event_text_includes_summary_and_detail() {
-        let rendered = vec![
-            RenderedEventLine::new(
-                "alpha",
-                "[alpha] Transaction Rejected — ABC".to_owned(),
-                Some("hash=ABCDEF • raw=128B".to_owned()),
-                Color32::from_rgb(225, 90, 90),
-                RenderedEventKind::Category(EventCategory::Pipeline),
-            )
-            .with_badges(vec![EventBadge::new(
-                "reason",
-                "invalid_signature".to_owned(),
-                None,
-                Color32::from_rgb(255, 140, 140),
-            )]),
-            RenderedEventLine::new(
-                "alpha",
-                "[alpha] Block Committed — height 1".to_owned(),
-                None,
-                Color32::from_rgb(110, 200, 220),
-                RenderedEventKind::Category(EventCategory::Pipeline),
-            ),
-        ];
-        let export = collect_event_text(&[0, 1], &rendered);
-        let lines: Vec<&str> = export.lines().collect();
-        assert_eq!(lines.len(), 2, "expected two exported lines");
-        assert_eq!(
-            lines[0], "[alpha] Block Committed — height 1",
-            "newest event should appear first"
-        );
-        assert_eq!(
-            lines[1],
-            "[alpha] Transaction Rejected — ABC — hash=ABCDEF • raw=128B — reason=invalid_signature"
-        );
-    }
-
-    #[test]
-    fn collect_event_json_serializes_structured_events() {
-        let time_interval = TimeInterval::new(Duration::from_millis(10), Duration::from_millis(5));
-        let time_event = EventBox::Time(TimeEvent::new(time_interval));
-        let summary = EventSummary {
-            category: EventCategory::Time,
-            label: "Interval".to_owned(),
-            detail: Some("since=10ms length=5ms".to_owned()),
-        };
-        let structured_event = EventDisplay {
-            alias: Some("alpha".to_owned()),
-            event: EventStreamEvent::Event {
-                summary,
-                event: Arc::new(time_event),
-                raw_len: 42,
-            },
-        };
-        let as_json = collect_event_json(&[0], std::slice::from_ref(&structured_event))
-            .expect("structured event should export to JSON");
-        let parsed: Value =
-            json::from_str(&as_json).expect("exported JSON should be parseable via Norito");
-        let array = parsed.as_array().expect("export must be a JSON array");
-        assert_eq!(array.len(), 1, "expected a single exported event payload");
-
-        let text_event = EventDisplay {
-            alias: Some("alpha".to_owned()),
-            event: EventStreamEvent::Text {
-                text: "note".to_owned(),
-            },
-        };
-        assert!(
-            collect_event_json(&[1], &[structured_event, text_event]).is_err(),
-            "JSON export must fail when no structured events match"
-        );
-    }
-
-    fn sample_state_entry(title: &str, bytes: Vec<u8>) -> super::StateEntry {
-        let json_payload = format!("{{\"title\":\"{title}\"}}");
-        super::StateEntry {
-            title: title.to_owned(),
-            subtitle: "subtitle".to_owned(),
-            detail: "detail".to_owned(),
-            raw: "{}".to_owned(),
-            domain: None,
-            domain_lower: None,
-            owner: None,
-            owner_lower: None,
-            asset_definition: None,
-            asset_definition_lower: None,
-            json: Some(json_payload),
-            norito_bytes: Some(bytes),
-            search_blob: title.to_ascii_lowercase(),
-        }
-    }
-
-    fn sample_state_entry_with_domain(
-        title: &str,
-        domain: &str,
-        bytes: Vec<u8>,
-    ) -> super::StateEntry {
-        let mut entry = sample_state_entry(title, bytes);
-        let lower = domain.to_ascii_lowercase();
-        entry.domain = Some(domain.to_owned());
-        entry.domain_lower = Some(lower.clone());
-        entry.search_blob.push(' ');
-        entry.search_blob.push_str(&lower);
-        entry
-    }
-
-    #[test]
-    fn collect_state_json_exports_array() {
-        let entries = [
-            sample_state_entry(
-                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-                vec![0xAA, 0x01],
-            ),
-            sample_state_entry(
-                "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-                vec![0xBB, 0x02],
-            ),
-        ];
-        let refs: Vec<&super::StateEntry> = entries.iter().collect();
-        let json_text = super::collect_state_json(&refs).expect("export filtered state to json");
-        let parsed: Value = json::from_str(&json_text).expect("parse exported Norito JSON");
-        let array = parsed
-            .as_array()
-            .expect("exported state should be a JSON array");
-        assert_eq!(array.len(), 2, "expected two exported state entries");
-        assert_eq!(
-            array[0].get("title").and_then(Value::as_str),
-            Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
-        );
-        assert_eq!(
-            array[1].get("title").and_then(Value::as_str),
-            Some("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB")
-        );
-    }
-
-    #[test]
-    fn collect_state_norito_exports_hex_dump() {
-        let entries = [sample_state_entry(
-            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            vec![0xAB, 0xCD],
-        )];
-        let refs: Vec<&super::StateEntry> = entries.iter().collect();
-        let dump = super::collect_state_norito(&refs).expect("export filtered state to norito");
-        assert!(
-            dump.contains("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"),
-            "export should include the entry title"
-        );
-        let mut parts = dump.split(':');
-        let _ = parts.next().expect("title prefix should be present");
-        let hex_section = parts
-            .next()
-            .expect("hex suffix should be present")
-            .trim()
-            .to_owned();
-        assert!(
-            !hex_section.is_empty(),
-            "hex section should not be empty for Norito export"
-        );
-        assert!(
-            hex_section.chars().all(|c| c.is_ascii_hexdigit()),
-            "hex section should contain only hexadecimal digits"
-        );
-    }
-
-    #[test]
-    fn save_state_json_to_file_writes_filtered_entries() {
-        let entries = [sample_state_entry(
-            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            vec![0x01, 0x02],
-        )];
-        let refs: Vec<&super::StateEntry> = entries.iter().collect();
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path =
-            super::save_state_json_to_file(&refs, Some(dir.path())).expect("export state json");
-        assert!(
-            path.starts_with(dir.path()),
-            "export path should reside within provided directory"
-        );
-        let written = std::fs::read_to_string(&path).expect("read exported state json");
-        assert!(
-            written.contains("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"),
-            "exported JSON should include entry identifier"
-        );
-    }
-
-    #[test]
-    fn save_state_json_to_file_rejects_empty_entries() {
-        let entries: Vec<&super::StateEntry> = Vec::new();
-        assert!(
-            super::save_state_json_to_file(&entries, None).is_err(),
-            "export should fail when no state entries are selected"
-        );
-    }
-
-    #[test]
-    fn save_state_norito_to_file_writes_filtered_entries() {
-        let entries = [sample_state_entry(
-            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            vec![0x0A, 0x0B],
-        )];
-        let refs: Vec<&super::StateEntry> = entries.iter().collect();
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path =
-            super::save_state_norito_to_file(&refs, Some(dir.path())).expect("export state norito");
-        assert!(
-            path.starts_with(dir.path()),
-            "export path should reside within provided directory"
-        );
-        let written = std::fs::read_to_string(&path).expect("read exported state norito");
-        assert!(
-            written.contains("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"),
-            "exported Norito dump should include entry identifier"
-        );
-    }
-
-    #[test]
-    fn save_state_norito_to_file_rejects_empty_entries() {
-        let entries: Vec<&super::StateEntry> = Vec::new();
-        assert!(
-            super::save_state_norito_to_file(&entries, None).is_err(),
-            "export should fail when no state entries are selected"
-        );
-    }
-
-    #[test]
-    fn state_tab_select_page_updates_entries_and_remaining() {
-        let mut tab = super::StateTabState::new(StateQueryKind::Accounts);
-        let first = sample_state_entry(
-            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            vec![0xAA],
-        );
-        let second = sample_state_entry(
-            "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-            vec![0xBB],
-        );
-        tab.pages = vec![
-            StatePageCache {
-                entries: vec![first.clone()],
-                remaining: 2,
-            },
-            StatePageCache {
-                entries: vec![second.clone()],
-                remaining: 0,
-            },
-        ];
-
-        tab.select_page(0);
-        assert_eq!(tab.entries.len(), 1, "expected a single entry on page 0");
-        assert_eq!(
-            tab.entries.first().map(|entry| entry.title.as_str()),
-            Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"),
-            "selecting first page should surface corresponding entries"
-        );
-        assert_eq!(
-            tab.remaining,
-            Some(2),
-            "remaining counter should be preserved when greater than zero"
-        );
-
-        tab.select_page(1);
-        assert_eq!(tab.entries.len(), 1, "expected a single entry on page 1");
-        assert_eq!(
-            tab.entries.first().map(|entry| entry.title.as_str()),
-            Some("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"),
-            "switching pages should update visible entries"
-        );
-        assert_eq!(
-            tab.remaining, None,
-            "remaining counter should drop to None when reported as zero"
-        );
-    }
-
-    #[test]
-    fn state_tabs_reset_results_preserves_filters() {
-        let mut tabs = super::StateTabs::default();
-        let tab = tabs.get_mut(StateQueryKind::Accounts);
-        tab.filter.search = "alice".to_owned();
-        tab.entries.push(sample_state_entry(
-            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            vec![0x01],
-        ));
-        tab.pages.push(StatePageCache {
-            entries: vec![sample_state_entry(
-                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-                vec![0x02],
-            )],
-            remaining: 1,
-        });
-        let peer_tab = tabs.get_mut(StateQueryKind::Peers);
-        peer_tab
-            .entries
-            .push(sample_state_entry("peer#0", vec![0x03]));
-        peer_tab.pages.push(StatePageCache {
-            entries: vec![sample_state_entry("peer#1", vec![0x04])],
-            remaining: 0,
-        });
-
-        tabs.reset_results_for_all();
-        let tab = tabs.get(StateQueryKind::Accounts);
-        assert!(
-            tab.entries.is_empty(),
-            "reset should drop cached entries for each tab"
-        );
-        assert!(
-            tab.pages.is_empty(),
-            "reset should clear page caches for each tab"
-        );
-        assert_eq!(
-            tab.filter.search, "alice",
-            "reset should not discard the active search query"
-        );
-        let peer_tab = tabs.get(StateQueryKind::Peers);
-        assert!(
-            peer_tab.entries.is_empty(),
-            "reset should drop cached entries for the peers tab"
-        );
-        assert!(
-            peer_tab.pages.is_empty(),
-            "reset should clear cached pages for the peers tab"
-        );
-    }
-
-    #[test]
-    fn state_filter_adapts_peer_fields() {
-        let mut filter = super::StateFilter {
-            search: "peer".to_owned(),
-            domain: "wonderland".to_owned(),
-            owner: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
-            asset_definition: sample_rose_definition_literal(),
-        };
-        filter.adapt_to_kind(StateQueryKind::Peers);
-        assert_eq!(
-            filter.search, "peer",
-            "adaptation should not clear the free-form search query"
-        );
-        assert!(
-            filter.domain.is_empty(),
-            "peer filter should not retain domain constraints"
-        );
-        assert!(
-            filter.owner.is_empty(),
-            "peer filter should not retain owner constraints"
-        );
-        assert!(
-            filter.asset_definition.is_empty(),
-            "peer filter should not retain asset definition constraints"
-        );
-    }
-
-    #[test]
-    fn filter_state_entries_collects_cached_matches() {
-        let entry_page0 = sample_state_entry(
-            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            vec![0xAA],
-        );
-        let entry_page1 = sample_state_entry(
-            "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-            vec![0xBB],
-        );
-        let pages = vec![
-            StatePageCache {
-                entries: vec![entry_page0.clone()],
-                remaining: 1,
-            },
-            StatePageCache {
-                entries: vec![entry_page1.clone()],
-                remaining: 0,
-            },
-        ];
-        let current_entries = vec![entry_page0];
-        let (page_indices, cached_matches) = filter_state_entries(
-            &pages,
-            &current_entries,
-            StateQueryKind::Accounts,
-            Some("rrjxvb"),
-            None,
-            None,
-            None,
-        );
-        assert!(
-            page_indices.is_empty(),
-            "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB is not present on the selected page"
-        );
-        assert_eq!(
-            cached_matches.len(),
-            1,
-            "expected a cached match sourced from another page"
-        );
-        assert_eq!(
-            cached_matches[0].title, "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-            "cached match should reference the sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB entry"
-        );
-    }
-
-    #[test]
-    fn filter_state_entries_falls_back_to_current_page() {
-        let entry_page0 = sample_state_entry(
-            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            vec![0xAC],
-        );
-        let current_entries = vec![entry_page0.clone()];
-        let pages: Vec<StatePageCache> = Vec::new();
-        let (page_indices, cached_matches) = filter_state_entries(
-            &pages,
-            &current_entries,
-            StateQueryKind::Accounts,
-            Some("ggm2d"),
-            None,
-            None,
-            None,
-        );
-        assert_eq!(
-            page_indices,
-            vec![0],
-            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D should be matched on the current page"
-        );
-        assert_eq!(
-            cached_matches.len(),
-            1,
-            "fallback to current page should return a single match"
-        );
-        assert_eq!(
-            cached_matches[0].title, "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            "cached results should include the local page entry"
-        );
-    }
-
-    #[test]
-    fn filter_state_entries_respects_domain_filter() {
-        let entry_page0 = sample_state_entry_with_domain(
-            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            "wonderland",
-            vec![0xDE, 0x01],
-        );
-        let entry_page1 = sample_state_entry_with_domain(
-            "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-            "narnia",
-            vec![0xDE, 0x02],
-        );
-        let pages = vec![
-            StatePageCache {
-                entries: vec![entry_page0.clone()],
-                remaining: 1,
-            },
-            StatePageCache {
-                entries: vec![entry_page1.clone()],
-                remaining: 0,
-            },
-        ];
-        let current_entries = vec![entry_page0];
-        let (page_indices, cached_matches) = filter_state_entries(
-            &pages,
-            &current_entries,
-            StateQueryKind::Accounts,
-            None,
-            Some("narnia"),
-            None,
-            None,
-        );
-        assert!(
-            page_indices.is_empty(),
-            "domain filter should skip non-matching entries on the current page"
-        );
-        assert_eq!(
-            cached_matches.len(),
-            1,
-            "domain filter should surface matches from cached pages"
-        );
-        assert_eq!(
-            cached_matches[0].domain.as_deref(),
-            Some("narnia"),
-            "matched entry should report the requested domain"
-        );
-    }
-
-    #[test]
-    fn collect_log_text_joins_lines() {
-        let entries = vec![
-            (0usize, "[alpha] started".to_owned()),
-            (1, "[alpha] running".to_owned()),
-        ];
-        let text = super::collect_log_text(&entries).expect("export log lines");
-        assert_eq!(text, "[alpha] started\n[alpha] running");
-    }
-
-    include!("gui/collect_log_text_empty_test.rs");
-
-    #[test]
-    fn save_logs_to_file_writes_filtered_entries() {
-        let entries = vec![
-            (0usize, "[alpha] started".to_owned()),
-            (1, "[alpha] running".to_owned()),
-        ];
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path =
-            super::save_logs_to_file(&entries, Some(dir.path())).expect("save filtered logs");
-        assert!(
-            path.starts_with(dir.path()),
-            "export should write inside the provided directory"
-        );
-        let written = std::fs::read_to_string(&path).expect("read exported logs");
-        assert!(written.contains("[alpha] started"));
-        assert!(written.contains("[alpha] running"));
-    }
-
-    #[test]
-    fn save_logs_to_file_rejects_empty_entries() {
-        let entries: Vec<(usize, String)> = Vec::new();
-        assert!(
-            super::save_logs_to_file(&entries, None).is_err(),
-            "export should fail with no matching logs"
-        );
-    }
-
-    #[test]
-    fn log_kind_filter_respects_settings() {
-        let mut app = MochiApp::default();
-        app.settings_log_stdout = false;
-        let stdout_event = PeerLogEvent::Line {
-            alias: Arc::from("alpha"),
-            kind: LogStreamKind::Stdout,
-            timestamp_ms: 0,
-            message: "stdout".to_owned(),
-        };
-        assert!(
-            !app.is_log_kind_enabled(MochiApp::log_event_kind(&stdout_event)),
-            "stdout events should be hidden when the toggle is disabled"
-        );
-
-        let system_event = PeerLogEvent::Lifecycle {
-            alias: Arc::from("alpha"),
-            event: LifecycleEvent::Started { attempt: 0 },
-            timestamp_ms: 0,
-        };
-        assert!(
-            app.is_log_kind_enabled(MochiApp::log_event_kind(&system_event)),
-            "system events remain visible by default"
-        );
-    }
-
-    #[test]
-    fn event_filter_honours_alias_filters() {
-        let mut filter = EventFilterState::default();
-        let line = RenderedEventLine::new(
-            "alpha",
-            "[alpha] Text frame".to_owned(),
-            None,
-            Color32::from_gray(190),
-            RenderedEventKind::Text,
-        );
-        assert!(
-            filter.matches(&line, None),
-            "default filter should allow events"
-        );
-        filter.toggle_alias("alpha", false);
-        assert!(
-            !filter.matches(&line, None),
-            "disabled alias should be filtered out"
-        );
-        filter.toggle_alias("alpha", true);
-        assert!(
-            filter.matches(&line, None),
-            "re-enabled alias should match again"
-        );
-    }
-
-    #[test]
-    fn event_filter_supports_multiple_peer_toggles() {
-        let mut filter = EventFilterState::default();
-        let alpha = RenderedEventLine::new(
-            "alpha",
-            "[alpha] text frame".to_owned(),
-            None,
-            Color32::from_gray(190),
-            RenderedEventKind::Text,
-        );
-        let beta = RenderedEventLine::new(
-            "beta",
-            "[beta] text frame".to_owned(),
-            None,
-            Color32::from_gray(190),
-            RenderedEventKind::Text,
-        );
-        assert!(filter.matches(&alpha, None));
-        assert!(filter.matches(&beta, None));
-
-        filter.toggle_alias("beta", false);
-        assert!(
-            filter.matches(&alpha, None),
-            "unfiltered alias should remain visible"
-        );
-        assert!(
-            !filter.matches(&beta, None),
-            "disabled alias should be hidden"
-        );
-    }
-
-    #[test]
-    fn event_filter_alias_toggle_is_case_insensitive() {
-        let mut filter = EventFilterState::default();
-        filter.toggle_alias("BETA", false);
-        let beta = RenderedEventLine::new(
-            "beta",
-            "[beta] text frame".to_owned(),
-            None,
-            Color32::from_gray(190),
-            RenderedEventKind::Text,
-        );
-        assert!(
-            !filter.matches(&beta, None),
-            "alias filters should treat names case-insensitively"
-        );
-    }
-
-    #[test]
-    fn event_filter_serializes_and_restores_state() {
-        let mut filter = EventFilterState {
-            search: "Hash:ABC".to_owned(),
-            show_decode_errors: false,
-            ..EventFilterState::default()
-        };
-        filter.toggle_alias("alpha", false);
-        let serialized = serialize_event_filter(&filter).expect("filter should serialize");
-        let parsed: Value =
-            json::from_str(&serialized).expect("serialized filter should be valid JSON");
-        let restored =
-            EventFilterState::from_json_value(&parsed).expect("filter should restore from JSON");
-        assert_eq!(restored.search, filter.search);
-        assert_eq!(restored.show_decode_errors, filter.show_decode_errors);
-        assert!(
-            !restored.alias_selected("alpha"),
-            "alias selection should persist with lowercasing"
-        );
-    }
-
-    #[test]
-    fn collect_dashboard_metrics_counts_resources() {
-        let mut app = MochiApp::default();
-        let peer_rows = vec![
-            PeerRow {
-                alias: "alpha".to_owned(),
-                state: PeerState::Running,
-                torii: "http://alpha".to_owned(),
-                api_base: Some("http://alpha".to_owned()),
-                api_error: None,
-                config: "config-alpha".to_owned(),
-                logs: "logs-alpha".to_owned(),
-            },
-            PeerRow {
-                alias: "beta".to_owned(),
-                state: PeerState::Stopped,
-                torii: "http://beta".to_owned(),
-                api_base: Some("http://beta".to_owned()),
-                api_error: None,
-                config: "config-beta".to_owned(),
-                logs: "logs-beta".to_owned(),
-            },
-        ];
-
-        let summary = BlockSummary {
-            height: 5,
-            hash_hex: "hash".to_owned(),
-            transaction_count: 3,
-            rejected_transaction_count: 1,
-            time_trigger_count: 0,
-            signature_count: 2,
-            view_change_index: 0,
-            creation_time_ms: 42,
-            is_genesis: false,
-        };
-        let block_snapshot = BlockStreamSnapshot {
-            connected: true,
-            last_summary: Some(summary),
-            ..Default::default()
-        };
-        app.block_snapshots
-            .insert("alpha".to_owned(), block_snapshot);
-        app.block_events.push(DisplayEvent {
-            alias: Some("alpha".to_owned()),
-            event: BlockStreamEvent::Text {
-                text: "started".to_owned(),
-            },
-        });
-
-        let event_snapshot = EventSnapshot {
-            connected: true,
-            ..Default::default()
-        };
-        app.event_snapshots
-            .insert("alpha".to_owned(), event_snapshot);
-        app.event_events.push(EventDisplay {
-            alias: Some("alpha".to_owned()),
-            event: EventStreamEvent::Text {
-                text: "ping".to_owned(),
-            },
-        });
-        app.log_events
-            .push(MochiApp::system_log_event("alpha", "log".to_owned()));
-
-        let metrics = app.collect_dashboard_metrics(&peer_rows);
-        assert_eq!(metrics.total_peers, 2);
-        assert_eq!(metrics.running_peers, 1);
-        assert_eq!(metrics.connected_block_streams, 1);
-        assert_eq!(metrics.connected_event_streams, 1);
-        assert_eq!(metrics.latest_height, Some(5));
-        assert_eq!(metrics.total_tx, 3);
-        assert_eq!(metrics.total_rejected_tx, 1);
-        assert_eq!(metrics.pending_block_events, 1);
-        assert_eq!(metrics.pending_event_frames, 1);
-        assert_eq!(metrics.stored_logs, 1);
-        assert!(metrics.avg_queue.is_none());
-        assert!(metrics.avg_commit_latency_ms.is_none());
-    }
-
-    #[test]
-    fn peer_status_view_captures_metrics_and_errors() {
-        let mut view = PeerStatusView::default();
-        let now = Instant::now();
-
-        let initial = TelemetryStatus {
-            build: Default::default(),
-            peers: 2,
-            blocks: 10,
-            blocks_non_empty: 8,
-            commit_time_ms: 45,
-            da_reschedule_total: 2,
-            txs_approved: 5,
-            txs_rejected: 1,
-            last_rejection_at_ms: None,
-            txs_rejected_recent_5m: 0,
-            uptime: Uptime(Duration::from_secs(5)),
-            view_changes: 0,
-            queue_size: 4,
-            crypto: Default::default(),
-            stack: Default::default(),
-            sumeragi: None,
-            governance: GovernanceStatus::default(),
-            teu_lane_commit: Vec::new(),
-            teu_dataspace_backlog: Vec::new(),
-            tx_gossip: TxGossipSnapshot::default(),
-            sorafs_micropayments: Vec::new(),
-            taikai_ingest: Vec::new(),
-            taikai_alias_rotations: Vec::new(),
-            da_receipt_cursors: Vec::new(),
-            ..TelemetryStatus::default()
-        };
-        let mut sumeragi_initial = sample_sumeragi_status_wire();
-        sumeragi_initial.height = 21;
-        let initial_snapshot = ToriiStatusSnapshot {
-            timestamp: now,
-            status: initial.clone(),
-            metrics: StatusMetrics::from_samples(None, &initial),
-        };
-        view.record_snapshot(
-            initial_snapshot,
-            Some(sumeragi_initial),
-            Some(sample_sumeragi_diagnostics()),
-            None,
-            None,
-            now,
-        );
-        assert!(view.delta_summary().is_none());
-        let (label, color) = view.status_label();
-        assert!(label.contains("peers=2"));
-        assert!(label.contains("queue=4"));
-        assert!(label.contains("commit=45ms"));
-        assert_eq!(color, Color32::from_rgb(80, 160, 80));
-        let membership_summary = view.membership_summary().expect("membership summary");
-        assert!(membership_summary.contains("h21"));
-        assert!(membership_summary.contains("leader 1"));
-
-        let updated = TelemetryStatus {
-            build: Default::default(),
-            peers: 3,
-            blocks: 11,
-            blocks_non_empty: 9,
-            commit_time_ms: 120,
-            da_reschedule_total: 5,
-            txs_approved: 9,
-            txs_rejected: 3,
-            last_rejection_at_ms: Some(6_000),
-            txs_rejected_recent_5m: 3,
-            uptime: Uptime(Duration::from_secs(6)),
-            view_changes: 1,
-            queue_size: 9,
-            crypto: Default::default(),
-            stack: Default::default(),
-            sumeragi: None,
-            governance: GovernanceStatus::default(),
-            teu_lane_commit: Vec::new(),
-            teu_dataspace_backlog: Vec::new(),
-            tx_gossip: TxGossipSnapshot::default(),
-            sorafs_micropayments: Vec::new(),
-            taikai_ingest: Vec::new(),
-            taikai_alias_rotations: Vec::new(),
-            da_receipt_cursors: Vec::new(),
-            ..TelemetryStatus::default()
-        };
-        let mut sumeragi_updated = sample_sumeragi_status_wire();
-        sumeragi_updated.height = 30;
-        let updated_snapshot = ToriiStatusSnapshot {
-            timestamp: now + Duration::from_secs(2),
-            status: updated.clone(),
-            metrics: StatusMetrics::from_samples(Some(&initial), &updated),
-        };
-        view.record_snapshot(
-            updated_snapshot,
-            Some(sumeragi_updated),
-            Some(sample_sumeragi_diagnostics()),
-            None,
-            None,
-            now + Duration::from_secs(2),
-        );
-        let delta = view.delta_summary().expect("delta summary");
-        assert!(delta.contains("tx +4 / -2"));
-        assert!(delta.contains("queue +5"));
-        assert!(delta.contains("resched +3"));
-        assert!(delta.contains("view +1"));
-        let (label, color) = view.status_label();
-        assert!(label.contains("peers=3"));
-        assert!(label.contains("commit=120ms"));
-        assert_eq!(color, Color32::from_rgb(200, 160, 64));
-        let membership_summary = view.membership_summary().expect("membership summary");
-        assert!(membership_summary.contains("h30"));
-        assert!(membership_summary.contains("committed 9"));
-
-        let err_info = ToriiError::Decode("bad payload".to_owned()).summarize();
-        view.record_error(err_info, now + Duration::from_secs(3));
-        let (label, color) = view.status_label();
-        assert!(label.to_ascii_lowercase().contains("decode"));
-        assert_eq!(color, Color32::from_rgb(200, 160, 64));
-        assert!(view.membership_summary().is_some());
-    }
-
-    #[test]
-    fn peer_status_view_surfaces_sealed_lanes() {
-        let mut view = PeerStatusView::default();
-        let now = Instant::now();
-
-        let status = TelemetryStatus {
-            build: Default::default(),
-            peers: 2,
-            blocks: 10,
-            blocks_non_empty: 8,
-            commit_time_ms: 42,
-            da_reschedule_total: 0,
-            txs_approved: 4,
-            txs_rejected: 0,
-            last_rejection_at_ms: None,
-            txs_rejected_recent_5m: 0,
-            uptime: Uptime(Duration::from_secs(5)),
-            view_changes: 0,
-            queue_size: 3,
-            crypto: Default::default(),
-            stack: Default::default(),
-            sumeragi: None,
-            governance: GovernanceStatus::default(),
-            teu_lane_commit: Vec::new(),
-            teu_dataspace_backlog: Vec::new(),
-            tx_gossip: TxGossipSnapshot::default(),
-            sorafs_micropayments: Vec::new(),
-            taikai_ingest: Vec::new(),
-            taikai_alias_rotations: Vec::new(),
-            da_receipt_cursors: Vec::new(),
-            ..TelemetryStatus::default()
-        };
-        let snapshot = ToriiStatusSnapshot {
-            timestamp: now,
-            status: status.clone(),
-            metrics: StatusMetrics::from_samples(None, &status),
-        };
-
-        let sumeragi = sample_sumeragi_status_wire();
-        let mut diagnostics = sample_sumeragi_diagnostics();
-        diagnostics.lane_governance_sealed_total = 2;
-        diagnostics.lane_governance_sealed_aliases = vec![
-            "archive".to_owned(),
-            "payments".to_owned(),
-            "vip".to_owned(),
-            "ops".to_owned(),
-            "extra".to_owned(),
-        ];
-
-        view.record_snapshot(snapshot, Some(sumeragi), Some(diagnostics), None, None, now);
-
-        let (label, color) = view.status_label();
-        assert!(
-            label.contains("sealed=2"),
-            "label should surface sealed lane count: {label}"
-        );
-        assert_eq!(
-            color,
-            Color32::from_rgb(220, 140, 80),
-            "status color should downgrade to amber when lanes remain sealed"
-        );
-        let summary = view.sealed_summary().expect("sealed summary");
-        assert!(
-            summary.contains("Sealed lanes: 2"),
-            "summary should include sealed count: {summary}"
-        );
-        assert!(
-            summary.contains("… +2"),
-            "summary should collapse additional aliases: {summary}"
-        );
-    }
-
-    #[test]
-    fn lane_status_rows_surface_relay_lag_and_cursor() {
-        let mut view = PeerStatusView::default();
-        let now = Instant::now();
-        let status = TelemetryStatus {
-            da_receipt_cursors: vec![iroha_telemetry::metrics::DaReceiptCursorStatus {
-                lane_id: 0,
-                epoch: 2,
-                highest_sequence: 7,
-            }],
-            ..TelemetryStatus::default()
-        };
-        let snapshot = ToriiStatusSnapshot {
-            timestamp: now,
-            status: status.clone(),
-            metrics: StatusMetrics::from_samples(None, &status),
-        };
-        let sumeragi = sample_sumeragi_status_wire();
-        let mut diagnostics = sample_sumeragi_diagnostics();
-        let header = BlockHeader::new(NonZeroU64::new(9).expect("height"), None, None, None, 0, 0);
-        let settlement = iroha_data_model::block::consensus::LaneBlockCommitment {
-            block_height: 9,
-            lane_id: LaneId::new(0),
-            lane_incarnation: Hash::new(b"lane-block-commitment-incarnation"),
-            dataspace_id: DataSpaceId::new(0),
-            tx_count: 1,
-            total_local_amount: "0".parse().expect("valid settlement quantity"),
-            total_xor_due: "0".parse().expect("valid settlement quantity"),
-            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
-            total_xor_variance: "0".parse().expect("valid settlement quantity"),
-            swap_metadata: None,
-            receipts: Vec::new(),
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        };
-        let envelope =
-            LaneRelayEnvelope::new(header, None, None, settlement, 256).expect("envelope");
-        diagnostics.lane_relay_envelopes = vec![envelope];
-
-        view.record_snapshot(snapshot, Some(sumeragi), Some(diagnostics), None, None, now);
-
-        let rows = view.lane_status_rows(&lane_catalog_snapshot(None));
-        assert_eq!(rows.len(), 1);
-        let row = &rows[0];
-        assert_eq!(row.lane_id, 0);
-        assert_eq!(row.alias, "alpha");
-        assert_eq!(row.relay_lag, Some(1));
-        assert_eq!(row.rbc_bytes, Some(384));
-        assert_eq!(row.da_cursor_label(), "e2 s7");
-        assert!(matches!(row.relay_state, RelayIngestState::MissingQc));
-    }
-
-    #[test]
-    fn composer_update_success_records_message() {
-        let mut app = MochiApp::default();
-        app.composer_submitting = true;
-        app.handle_composer_update(ComposerSubmitUpdate {
-            peer: "alpha".to_owned(),
-            result: Ok("hash123".to_owned()),
-        });
-        assert!(!app.composer_submitting);
-        assert_eq!(
-            app.composer_submit_success.as_deref(),
-            Some("Submitted transaction hash123 to alpha.")
-        );
-        assert!(app.composer_submit_error.is_none());
-        assert_eq!(
-            app.last_info.as_deref(),
-            Some("Submitted transaction hash123 to alpha.")
-        );
-        assert!(app.last_error.is_none());
-        assert_eq!(app.active_view, ActiveView::Activity);
-        assert_eq!(app.activity_view, ActivityView::Events);
-        assert_eq!(app.event_selected_peer.as_deref(), Some("alpha"));
-        assert_eq!(app.event_filter.search, "hash123");
-        assert!(app.auto_event_stream);
-    }
-
-    #[test]
-    fn composer_update_failure_records_error() {
-        let mut app = MochiApp::default();
-        app.composer_submitting = true;
-        let info = ToriiErrorInfo::new(ToriiErrorKind::HttpTransport, "network error");
-        app.handle_composer_update(ComposerSubmitUpdate {
-            peer: "beta".to_owned(),
-            result: Err(info),
-        });
-        assert!(!app.composer_submitting);
-        assert!(app.composer_submit_success.is_none());
-        assert_eq!(
-            app.composer_submit_error
-                .as_ref()
-                .map(|error| error.message.as_str()),
-            Some("network error")
-        );
-        assert!(app.last_info.is_none());
-        assert_eq!(
-            app.last_error.as_deref(),
-            Some("Failed to submit transaction to beta: network error")
-        );
-        assert_eq!(app.active_view, ActiveView::Activity);
-        assert_eq!(app.activity_view, ActivityView::Logs);
-        assert_eq!(app.log_selected_peer.as_deref(), Some("beta"));
-        assert!(app.auto_log_stream);
-    }
-
-    #[test]
-    fn add_instruction_to_batch_appends_draft() {
-        let mut app = MochiApp::default();
-        app.composer_selected_signer = Some(0);
-        let asset = AssetId::new(sample_rose_definition_id(), ALICE_ID.clone());
-        app.composer_asset_id = asset_literal(&asset);
-        app.composer_quantity = "5".to_owned();
-        app.add_instruction_to_batch(None);
-        assert_eq!(app.composer_drafts.len(), 1);
-        assert!(app.composer_error.is_none());
-    }
-
-    #[test]
-    fn transfer_without_destination_records_error() {
-        let mut app = MochiApp::default();
-        app.composer_instruction_kind = ComposerInstructionKind::TransferAsset;
-        app.composer_selected_signer = Some(0);
-        let asset = AssetId::new(sample_rose_definition_id(), ALICE_ID.clone());
-        app.composer_asset_id = asset_literal(&asset);
-        app.composer_quantity = "1".to_owned();
-        app.add_instruction_to_batch(None);
-        assert!(app.composer_drafts.is_empty(), "draft should not be added");
-        assert!(
-            app.composer_error
-                .as_deref()
-                .unwrap_or_default()
-                .contains("Destination account"),
-            "expected destination error message"
-        );
-    }
-
-    #[test]
-    fn add_instruction_respects_signer_permissions() {
-        let mut app = MochiApp::default();
-        app.composer_instruction_kind = ComposerInstructionKind::RegisterAccount;
-        app.composer_account_id = sample_account_id(SAMPLE_OTHER_PUBLIC_KEY);
-        // Bob is the second development signer and lacks register-account permission.
-        app.composer_selected_signer = Some(1);
-        app.add_instruction_to_batch(None);
-        assert!(
-            app.composer_drafts.is_empty(),
-            "unauthorised draft should not be added"
-        );
-        let message = app.composer_error.as_deref().unwrap_or_default().to_owned();
-        assert!(
-            message.contains("cannot register accounts"),
-            "expected permission error, got `{message}`"
-        );
-    }
-
-    #[test]
-    fn composer_template_prefills_mint_inputs() {
-        if !super::socket_bind_available() {
-            eprintln!("Skipping mint template test due to socket restrictions");
-            return;
-        }
-        let _lock = env_lock().lock().expect("env lock");
-        let temp = tempfile::tempdir().expect("tempdir");
-        let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
-        let irohad_stub = install_noop_stub(temp.path(), "irohad_stub.sh");
-        let config_dir = temp.path().join("config");
-        fs::create_dir_all(&config_dir).expect("config dir");
-        let config_path = config_dir.join("local.toml");
-        fs::write(&config_path, "[supervisor]\n").expect("write config stub");
-        let data_root = temp
-            .path()
-            .join(format!("mochi-data-{}", std::process::id()));
-        let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
-        let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
-        let _config_guard = TestEnvGuard::set("MOCHI_CONFIG", &config_path);
-        let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-        reset_cli_overrides_for_tests();
-
-        let mut app = MochiApp::default();
-        app.composer_selected_signer = Some(0);
-        let signers = development_signing_authorities();
-
-        app.apply_composer_template(ComposerTemplate::MintRoseToSigner, signers);
-
-        assert_eq!(
-            app.composer_instruction_kind,
-            ComposerInstructionKind::MintAsset
-        );
-        assert!(
-            app.composer_asset_id
-                .contains(&sample_rose_definition_literal()),
-            "expected rose asset id, got {}",
-            app.composer_asset_id
-        );
-        assert_eq!(app.composer_quantity, "10");
-        assert!(
-            app.composer_destination_account.is_empty(),
-            "mint template should not set destination"
-        );
-        assert!(
-            app.last_info
-                .as_deref()
-                .unwrap_or_default()
-                .contains("rose mint"),
-            "should surface mint template info banner"
-        );
-    }
-
-    #[test]
-    fn composer_template_prefills_burn_inputs() {
-        if !super::socket_bind_available() {
-            eprintln!("Skipping burn template test due to socket restrictions");
-            return;
-        }
-        let _lock = env_lock().lock().expect("env lock");
-        let temp = tempfile::tempdir().expect("tempdir");
-        let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
-        let irohad_stub = install_noop_stub(temp.path(), "irohad_stub.sh");
-        let config_dir = temp.path().join("config");
-        fs::create_dir_all(&config_dir).expect("config dir");
-        let config_path = config_dir.join("local.toml");
-        fs::write(&config_path, "[supervisor]\n").expect("write config stub");
-        let data_root = temp
-            .path()
-            .join(format!("mochi-data-{}", std::process::id()));
-        let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
-        let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
-        let _config_guard = TestEnvGuard::set("MOCHI_CONFIG", &config_path);
-        let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-        reset_cli_overrides_for_tests();
-
-        let mut app = MochiApp::default();
-        app.composer_selected_signer = Some(0);
-        let signers = development_signing_authorities();
-
-        app.apply_composer_template(ComposerTemplate::BurnRoseFromSigner, signers);
-
-        assert_eq!(
-            app.composer_instruction_kind,
-            ComposerInstructionKind::BurnAsset
-        );
-        assert!(
-            app.composer_asset_id
-                .contains(&sample_rose_definition_literal()),
-            "expected rose asset id, got {}",
-            app.composer_asset_id
-        );
-        assert_eq!(app.composer_quantity, "1");
-        assert!(
-            app.composer_destination_account.is_empty(),
-            "burn template should not set destination"
-        );
-        assert!(
-            app.last_info
-                .as_deref()
-                .unwrap_or_default()
-                .contains("burn template"),
-            "should surface burn template info banner"
-        );
-    }
-
-    #[test]
-    fn composer_template_prefills_transfer_inputs() {
-        if !super::socket_bind_available() {
-            eprintln!("Skipping transfer template test due to socket restrictions");
-            return;
-        }
-        let _lock = env_lock().lock().expect("env lock");
-        let temp = tempfile::tempdir().expect("tempdir");
-        let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
-        let irohad_stub = install_noop_stub(temp.path(), "irohad_stub.sh");
-        let config_dir = temp.path().join("config");
-        fs::create_dir_all(&config_dir).expect("config dir");
-        let config_path = config_dir.join("local.toml");
-        fs::write(&config_path, "[supervisor]\n").expect("write config stub");
-        let data_root = temp
-            .path()
-            .join(format!("mochi-data-{}", std::process::id()));
-        let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
-        let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
-        let _config_guard = TestEnvGuard::set("MOCHI_CONFIG", &config_path);
-        let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-        reset_cli_overrides_for_tests();
-
-        let mut app = MochiApp::default();
-        app.composer_selected_signer = Some(0);
-        let signers = development_signing_authorities();
-
-        app.apply_composer_template(ComposerTemplate::TransferRoseToTeammate, signers);
-
-        assert_eq!(
-            app.composer_instruction_kind,
-            ComposerInstructionKind::TransferAsset
-        );
-        assert!(
-            app.composer_asset_id
-                .contains(&sample_rose_definition_literal()),
-            "expected rose asset id, got {}",
-            app.composer_asset_id
-        );
-        assert_eq!(app.composer_quantity, "2");
-        assert!(
-            !app.composer_destination_account.is_empty(),
-            "transfer template must set a destination account"
-        );
-        assert_ne!(
-            app.composer_destination_account,
-            account_literal(signers[0].account_id()),
-            "destination should differ from the source signer"
-        );
-    }
-
-    #[test]
-    fn queue_plot_points_returns_points() {
-        let mut app = MochiApp::default();
-        let base = Instant::now();
-        let mut history = VecDeque::new();
-        let status_a = TelemetryStatus {
-            queue_size: 1,
-            txs_approved: 2,
-            ..Default::default()
-        };
-        let snapshot_a = ToriiStatusSnapshot {
-            timestamp: base,
-            status: status_a.clone(),
-            metrics: StatusMetrics::from_samples(None, &status_a),
-        };
-        history.push_back(StatusHistoryEntry {
-            timestamp: base,
-            snapshot: snapshot_a,
-            metrics: None,
-        });
-        let mut status_b = status_a.clone();
-        status_b.queue_size = 4;
-        status_b.txs_approved = 5;
-        let snapshot_b = ToriiStatusSnapshot {
-            timestamp: base + Duration::from_secs(1),
-            status: status_b.clone(),
-            metrics: StatusMetrics::from_samples(Some(&status_a), &status_b),
-        };
-        history.push_back(StatusHistoryEntry {
-            timestamp: base + Duration::from_secs(1),
-            snapshot: snapshot_b,
-            metrics: None,
-        });
-        app.status_history.insert("alpha".to_owned(), history);
-
-        assert!(app.queue_plot_points("alpha").is_some());
-    }
-
-    #[test]
-    fn commit_latency_plot_points_require_multiple_samples() {
-        let mut app = MochiApp::default();
-        assert!(
-            app.commit_latency_plot_points("beta").is_none(),
-            "no history should produce no plot"
-        );
-
-        let base = Instant::now();
-        let mut history = VecDeque::new();
-        let status_a = TelemetryStatus {
-            commit_time_ms: 75,
-            queue_size: 3,
-            ..Default::default()
-        };
-        let snapshot_a = ToriiStatusSnapshot {
-            timestamp: base,
-            status: status_a.clone(),
-            metrics: StatusMetrics::from_samples(None, &status_a),
-        };
-        history.push_back(StatusHistoryEntry {
-            timestamp: base,
-            snapshot: snapshot_a,
-            metrics: None,
-        });
-        app.status_history.insert("beta".to_owned(), history);
-        assert!(
-            app.commit_latency_plot_points("beta").is_none(),
-            "a single sample should not emit a plot"
-        );
-
-        let mut status_b = status_a.clone();
-        status_b.commit_time_ms = 140;
-        status_b.queue_size = 5;
-        let snapshot_b = ToriiStatusSnapshot {
-            timestamp: base + Duration::from_secs(1),
-            status: status_b.clone(),
-            metrics: StatusMetrics::from_samples(Some(&status_a), &status_b),
-        };
-        app.status_history
-            .get_mut("beta")
-            .expect("history must exist")
-            .push_back(StatusHistoryEntry {
-                timestamp: base + Duration::from_secs(1),
-                snapshot: snapshot_b,
-                metrics: None,
-            });
-
-        assert!(
-            app.commit_latency_plot_points("beta").is_some(),
-            "two samples should produce a commit latency plot"
-        );
-    }
-
-    #[test]
-    fn throughput_plot_points_returns_points() {
-        let mut app = MochiApp::default();
-        let base = Instant::now();
-        let mut history = VecDeque::new();
-        let status_a = TelemetryStatus {
-            txs_approved: 8,
-            ..Default::default()
-        };
-        let snapshot_a = ToriiStatusSnapshot {
-            timestamp: base,
-            status: status_a.clone(),
-            metrics: StatusMetrics::from_samples(None, &status_a),
-        };
-        history.push_back(StatusHistoryEntry {
-            timestamp: base,
-            snapshot: snapshot_a,
-            metrics: None,
-        });
-        let mut status_b = status_a.clone();
-        status_b.txs_approved = 12;
-        let snapshot_b = ToriiStatusSnapshot {
-            timestamp: base + Duration::from_secs(2),
-            status: status_b.clone(),
-            metrics: StatusMetrics::from_samples(Some(&status_a), &status_b),
-        };
-        history.push_back(StatusHistoryEntry {
-            timestamp: base + Duration::from_secs(2),
-            snapshot: snapshot_b,
-            metrics: None,
-        });
-        app.status_history.insert("alpha".to_owned(), history);
-        assert!(
-            app.throughput_plot_points("alpha").is_some(),
-            "two samples should produce throughput points"
-        );
-    }
-
-    #[test]
-    fn consensus_queue_plot_points_require_metrics() {
-        let mut app = MochiApp::default();
-        let base = Instant::now();
-        let mut history = VecDeque::new();
-        let status = TelemetryStatus::default();
-        let snapshot_a = ToriiStatusSnapshot {
-            timestamp: base,
-            status: status.clone(),
-            metrics: StatusMetrics::from_samples(None, &status),
-        };
-        history.push_back(StatusHistoryEntry {
-            timestamp: base,
-            snapshot: snapshot_a,
-            metrics: Some(sample_metrics_snapshot(base, 2.0, 8.0)),
-        });
-        let snapshot_b = ToriiStatusSnapshot {
-            timestamp: base + Duration::from_secs(1),
-            status,
-            metrics: StatusMetrics::default(),
-        };
-        history.push_back(StatusHistoryEntry {
-            timestamp: base + Duration::from_secs(1),
-            snapshot: snapshot_b,
-            metrics: Some(sample_metrics_snapshot(
-                base + Duration::from_secs(1),
-                5.0,
-                8.0,
-            )),
-        });
-        app.status_history.insert("alpha".to_owned(), history);
-        assert!(
-            app.consensus_queue_plot_points("alpha").is_some(),
-            "two metrics samples should produce consensus queue points"
-        );
-    }
-
-    #[test]
-    fn view_change_plot_points_record_deltas() {
-        let mut app = MochiApp::default();
-        let base = Instant::now();
-        let mut history = VecDeque::new();
-        let status_a = TelemetryStatus {
-            view_changes: 3,
-            ..Default::default()
-        };
-        let mut metrics_a = StatusMetrics::from_samples(None, &status_a);
-        metrics_a.sample_interval_ms = 1_000;
-        let snapshot_a = ToriiStatusSnapshot {
-            timestamp: base,
-            status: status_a.clone(),
-            metrics: metrics_a,
-        };
-        history.push_back(StatusHistoryEntry {
-            timestamp: base,
-            snapshot: snapshot_a,
-            metrics: None,
-        });
-        let mut status_b = status_a.clone();
-        status_b.view_changes = 6;
-        let mut metrics_b = StatusMetrics::from_samples(Some(&status_a), &status_b);
-        metrics_b.sample_interval_ms = 1_000;
-        let snapshot_b = ToriiStatusSnapshot {
-            timestamp: base + Duration::from_secs(1),
-            status: status_b,
-            metrics: metrics_b,
-        };
-        history.push_back(StatusHistoryEntry {
-            timestamp: base + Duration::from_secs(1),
-            snapshot: snapshot_b,
-            metrics: None,
-        });
-        app.status_history.insert("alpha".to_owned(), history);
-        assert!(
-            app.view_change_plot_points("alpha").is_some(),
-            "non-zero view change deltas should produce points"
-        );
-    }
-
-    #[test]
-    fn reschedule_plot_points_record_activity() {
-        let mut app = MochiApp::default();
-        let base = Instant::now();
-        let mut history = VecDeque::new();
-        let status_a = TelemetryStatus {
-            da_reschedule_total: 5,
-            ..Default::default()
-        };
-        let mut metrics_a = StatusMetrics::from_samples(None, &status_a);
-        metrics_a.sample_interval_ms = 1_000;
-        let snapshot_a = ToriiStatusSnapshot {
-            timestamp: base,
-            status: status_a.clone(),
-            metrics: metrics_a,
-        };
-        history.push_back(StatusHistoryEntry {
-            timestamp: base,
-            snapshot: snapshot_a,
-            metrics: None,
-        });
-        let mut status_b = status_a.clone();
-        status_b.da_reschedule_total = 9;
-        let mut metrics_b = StatusMetrics::from_samples(Some(&status_a), &status_b);
-        metrics_b.sample_interval_ms = 500;
-        let snapshot_b = ToriiStatusSnapshot {
-            timestamp: base + Duration::from_millis(500),
-            status: status_b,
-            metrics: metrics_b,
-        };
-        history.push_back(StatusHistoryEntry {
-            timestamp: base + Duration::from_millis(500),
-            snapshot: snapshot_b,
-            metrics: None,
-        });
-        app.status_history.insert("alpha".to_owned(), history);
-        assert!(
-            app.reschedule_plot_points("alpha").is_some(),
-            "reschedule deltas should produce points"
-        );
-    }
-
-    #[test]
-    fn peer_status_view_summarises_metrics() {
-        let mut view = PeerStatusView::default();
-        let snapshot = ToriiStatusSnapshot {
-            timestamp: Instant::now(),
-            status: TelemetryStatus::default(),
-            metrics: StatusMetrics::default(),
-        };
-        view.record_snapshot(
-            snapshot.clone(),
-            None,
-            None,
-            Some(sample_metrics_snapshot(Instant::now(), 3.0, 10.0)),
-            None,
-            Instant::now(),
-        );
-        let summary = view
-            .consensus_queue_summary()
-            .expect("consensus summary expected");
-        assert!(
-            summary.contains("3"),
-            "summary should include queue depth: {summary}"
-        );
-        let storage = view.storage_summary().expect("storage summary expected");
-        assert!(
-            storage.contains("Tiered state"),
-            "storage string should include Tiered state label"
-        );
-
-        view.record_snapshot(
-            snapshot,
-            None,
-            None,
-            None,
-            Some(ToriiErrorInfo::new(
-                ToriiErrorKind::HttpTransport,
-                "Metrics unavailable",
-            )),
-            Instant::now(),
-        );
-        let (message, _) = view.metrics_error_label().expect("metrics error label");
-        assert!(
-            message.contains("Metrics"),
-            "metrics error label should include prefix"
-        );
-    }
-
-    fn sample_metrics_snapshot(
-        timestamp: Instant,
-        depth: f64,
-        capacity: f64,
-    ) -> ToriiMetricsSnapshot {
-        ToriiMetricsSnapshot {
-            timestamp,
-            queue_size: None,
-            view_changes: None,
-            sumeragi_tx_queue_depth: Some(depth),
-            sumeragi_tx_queue_capacity: Some(capacity),
-            sumeragi_tx_queue_saturated: None,
-            state_tiered_hot_entries: Some(4.0),
-            state_tiered_cold_entries: Some(2.0),
-            state_tiered_cold_bytes: Some(1024.0),
-            uptime_since_genesis_ms: None,
-        }
-    }
-
-    #[test]
-    fn peer_state_color_matches_palette() {
-        let palette = MochiApp::palette();
-        assert_eq!(
-            MochiApp::peer_state_color(PeerState::Running),
-            palette.success
-        );
-        assert_eq!(
-            MochiApp::peer_state_color(PeerState::Stopped),
-            palette.danger
-        );
-        assert_eq!(
-            MochiApp::peer_state_color(PeerState::Restarting),
-            palette.warning
-        );
-    }
-
-    include!("gui/settings_tail_tests.rs");
-}
+#[path = "gui_model_tests.rs"]
+mod tests;

@@ -21,6 +21,7 @@ from iroha_torii_client import (  # noqa: E402
 )
 
 CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+CANONICAL_OWNER_HEADER = "0x02000120" + "00" * 32
 
 
 def _canonical_hash(seed: int) -> str:
@@ -81,7 +82,7 @@ def test_governance_plain_ballot_uses_exact_network_auth_and_one_shot_transport(
     assert payload["network_id"] == GOVERNANCE_NETWORK_ID
     assert payload["duration_blocks"] == "1"
     assert "chain_id" not in payload
-    assert call["headers"]["X-Iroha-Account"] == CANONICAL_OWNER
+    assert call["headers"]["X-Iroha-Account"] == CANONICAL_OWNER_HEADER
     assert captured == [
         canonical_network_request_signature_message(
             GOVERNANCE_NETWORK_ID,

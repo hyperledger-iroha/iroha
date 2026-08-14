@@ -18,7 +18,6 @@ fn final_exact_output_seal_is_one_shot_and_blocks_late_enqueue() {
         &artifact,
         Hash::new(b"empty exact-output final seal lane witness"),
     );
-
     for expected_attempts in 1..=2 {
         assert_eq!(
             service
@@ -51,7 +50,6 @@ fn final_exact_output_seal_is_one_shot_and_blocks_late_enqueue() {
                 .expect("inspect the repeatable handoff")
         );
     }
-
     let handoff = service
         .seal_applied_height_output_handoff(&receipt, &artifact, &lane_authority)
         .expect("the final empty pass mints one receipt");
@@ -84,7 +82,6 @@ fn final_exact_output_seal_is_one_shot_and_blocks_late_enqueue() {
         sealed_output_guard.restart_required(),
         "a rejected late exact output fails closed after observing the seal"
     );
-
     let (reseal_service, reseal_keys) = fixture();
     let (reseal_receipt, reseal_artifact) = durable_finality_fixture(&reseal_service, &reseal_keys);
     let reseal_lane_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
@@ -112,7 +109,6 @@ fn final_exact_output_seal_is_one_shot_and_blocks_late_enqueue() {
         "a duplicate terminal seal is a fail-stop protocol misuse"
     );
 }
-
 #[test]
 fn applied_height_handoff_retires_all_sidecar_flush_states_without_blocking_successor() {
     let (service, keys) = fixture();
@@ -161,7 +157,6 @@ fn applied_height_handoff_retires_all_sidecar_flush_states_without_blocking_succ
     let mut pending =
         PendingExactOutput::new(4, 1, 3, &[]).expect("four bounded sidecar completion states");
     assert_eq!(pending.enqueue(fanout), Ok(ExactFanoutOwnership::Owned));
-
     let (_pending_control, pending_ack, pending_admission) =
         certified_sidecar_flush_fixture(&chunk, &route_a);
     let (mut flushed_control, flushed_ack, flushed_admission) =
@@ -192,7 +187,6 @@ fn applied_height_handoff_retires_all_sidecar_flush_states_without_blocking_succ
         certified_sidecar_flush_fixture(&chunk, &route_a);
     pending.admitted_sidecar_chunks.push_back(admitted);
     assert_eq!(pending.sidecar_control_units(), 4);
-
     assert_eq!(
         pending
             .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
@@ -203,7 +197,6 @@ fn applied_height_handoff_retires_all_sidecar_flush_states_without_blocking_succ
     assert_eq!(pending.pending_sidecar_flushes(), 0);
     assert!(pending.admitted_sidecar_chunks.is_empty());
 }
-
 #[test]
 fn applied_height_handoff_counts_and_clears_parked_reply_cursor_atomically() {
     let (service, keys) = fixture();
@@ -253,7 +246,6 @@ fn applied_height_handoff_counts_and_clears_parked_reply_cursor_atomically() {
         pending.source_fifo_owners.get(&source),
         Some(&BTreeSet::from([fifo_id]))
     );
-
     assert_eq!(
         pending
             .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
@@ -265,7 +257,6 @@ fn applied_height_handoff_counts_and_clears_parked_reply_cursor_atomically() {
     assert!(pending.reservation_owner_counts.is_empty());
     assert_eq!(pending.ownership_units, 0);
     assert_eq!(pending.shared_ownership_units, 0);
-
     let active_route = routes.mint(requester.clone());
     let mut rejected = PendingExactOutput::new(1, 1, 1, &[])
         .expect("one tampered applied-height response corridor");
@@ -294,7 +285,6 @@ fn applied_height_handoff_counts_and_clears_parked_reply_cursor_atomically() {
     assert_eq!(rejected.ownership_units, 1);
     assert_eq!(rejected.shared_ownership_units, 1);
 }
-
 #[test]
 fn applied_height_handoff_rejects_unbound_lane_output_atomically() {
     let (service, keys) = fixture();
@@ -334,14 +324,11 @@ fn applied_height_handoff_rejects_unbound_lane_output_atomically() {
             .expect("unbound lane fanout"),
         )
         .expect("retain unbound lane fanout");
-
     let error = pending
         .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
         .expect_err("a global finality artifact cannot clear unbound lane output");
-
     assert!(error.contains("typed durable rollover authority"));
     assert_eq!(pending.fanouts.len(), 2, "handoff must be all-or-nothing");
-
     let missing = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
         &artifact,
         lane_qc.body.proposal_hash,
@@ -351,7 +338,6 @@ fn applied_height_handoff_rejects_unbound_lane_output_atomically() {
         .expect_err("a winning lane output requires its durable session witness");
     assert!(error.contains("lacks its exact durable session witness"));
     assert_eq!(pending.fanouts.len(), 2, "handoff must be all-or-nothing");
-
     let mut wrong_qc = lane_qc.clone();
     wrong_qc.bls_aggregate_signature.push(2);
     let wrong =
@@ -361,7 +347,6 @@ fn applied_height_handoff_rejects_unbound_lane_output_atomically() {
         .expect_err("a wrong exact lane witness cannot clear retained output");
     assert!(error.contains("does not match its exact durable session witness"));
     assert_eq!(pending.fanouts.len(), 2, "handoff must be all-or-nothing");
-
     let live_peer = service.context.roster[1].validator.clone();
     let live_message = non_retireable_lane_transport_messages(live_peer.clone())
         .into_iter()
@@ -400,7 +385,6 @@ fn applied_height_handoff_rejects_unbound_lane_output_atomically() {
     assert_eq!(live.ownership_units, 1);
     assert_eq!(live.shared_ownership_units, 1);
 }
-
 #[test]
 fn applied_height_handoff_rejects_wrong_height_global_output() {
     let (service, keys) = fixture();
@@ -425,15 +409,12 @@ fn applied_height_handoff_rejects_wrong_height_global_output() {
             .expect("wrong-height fanout"),
         )
         .expect("retain wrong-height fanout");
-
     let error = pending
         .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
         .expect_err("wrong-height output has no applied-height witness");
-
     assert!(error.contains("not bound to the applied height"));
     assert!(pending.is_pending());
 }
-
 #[test]
 fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() {
     let history = durable_history_fixture();
@@ -466,7 +447,6 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
         .expect_err("Kura presence cannot authorize an untyped manual response");
     assert!(error.contains("no typed applied-height rollover claim"));
     assert!(manual.is_pending());
-
     service.set_exact_output_admission_hook(|post, ticket| {
         Err(NetworkActorAdmissionError::Backpressured {
             message: post,
@@ -540,7 +520,6 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
         2
     );
     assert!(!service.has_pending_exact_output().expect("inspect handoff"));
-
     let wire::ConsensusMessageV2Payload::CommitCertificateResponse(mut substituted_commit) =
         history.commit_response.payload.clone()
     else {
@@ -586,7 +565,6 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
         .expect_err("handoff must independently reject a non-Kura CommitQC");
     assert!(error.contains("differs from its Kura finality source"));
     assert!(mismatched.is_pending(), "failed handoff remains atomic");
-
     let mut rejected_commit_service = successor_service_for_history_as(
         Arc::clone(&history.kura),
         &history.artifact,
@@ -625,7 +603,6 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
             .expect("inspect rejected CommitQC response")
     );
     assert!(rejected_commit_service.output_guard.restart_required());
-
     let mut rejected_service = successor_service_for_history_as(
         Arc::clone(&history.kura),
         &history.artifact,
@@ -676,7 +653,6 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
             .expect("inspect rejected body response")
     );
     assert!(rejected_service.output_guard.restart_required());
-
     let mut rejected_body_service = successor_service_for_history_as(
         Arc::clone(&history.kura),
         &history.artifact,
@@ -741,7 +717,6 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
     );
     assert!(rejected_body_service.output_guard.restart_required());
 }
-
 #[test]
 fn applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate() {
     let lane_history = durable_lane_history_fixture();
@@ -789,7 +764,6 @@ fn applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate() 
             .expect("rollover independently rereads the certified Kura lane artifact"),
         1
     );
-
     let mut substituted = certificate;
     substituted.commit_qc.bls_aggregate_signature[0] ^= 0x01;
     let mut rejected_service =
@@ -816,7 +790,6 @@ fn applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate() 
     );
     assert!(rejected_service.output_guard.restart_required());
 }
-
 #[test]
 fn applied_height_handoff_authenticates_exact_payload_chunk_fanout() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -854,7 +827,6 @@ fn applied_height_handoff_authenticates_exact_payload_chunk_fanout() {
                 .expect("non-empty payload-chunk fanout"),
         )
         .expect("retain exact payload-chunk fanout");
-
     assert_eq!(
         pending
             .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
@@ -862,7 +834,6 @@ fn applied_height_handoff_authenticates_exact_payload_chunk_fanout() {
         chunk_count
     );
     assert!(!pending.is_pending());
-
     let mut tampered_chunks = retained_chunks;
     let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &mut tampered_chunks[0].payload
     else {
@@ -890,7 +861,6 @@ fn applied_height_handoff_authenticates_exact_payload_chunk_fanout() {
             .expect("non-empty tampered payload-chunk fanout"),
         )
         .expect("retain structurally exact tampered payload chunks");
-
     let error = tampered
         .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
         .expect_err("an altered chunk signature cannot cross finality handoff");

@@ -1,7 +1,5 @@
 //! Minimal Nexus App Facade transfer recipe with fake wallet/Torii dependencies.
-
 use std::{error::Error, num::NonZeroU32, time::Duration};
-
 use iroha::{
     crypto::{Algorithm, Hash, HashOf, KeyPair, Signature},
     data_model::{
@@ -16,12 +14,10 @@ use iroha::{
         NexusToriiSubmitter, NexusTransferInput, NexusTransferReceipt, NexusWalletSignature,
     },
 };
-
 #[derive(Clone)]
 struct DemoConnectTransport {
     key_pair: KeyPair,
 }
-
 impl NexusConnectTransport for DemoConnectTransport {
     fn start_connect(
         &self,
@@ -41,7 +37,6 @@ impl NexusConnectTransport for DemoConnectTransport {
             signing_public_key: None,
         })
     }
-
     fn await_approval(
         &self,
         _session: &mut NexusConnectSession,
@@ -51,7 +46,6 @@ impl NexusConnectTransport for DemoConnectTransport {
             signing_public_key: self.key_pair.public_key().clone(),
         })
     }
-
     fn request_signature(
         &self,
         _session: &NexusConnectSession,
@@ -74,10 +68,8 @@ impl NexusConnectTransport for DemoConnectTransport {
         })
     }
 }
-
 #[derive(Clone)]
 struct DemoToriiSubmitter;
-
 impl NexusToriiSubmitter for DemoToriiSubmitter {
     fn quote_fee_payment(
         &self,
@@ -85,7 +77,6 @@ impl NexusToriiSubmitter for DemoToriiSubmitter {
     ) -> Result<FeePaymentIntent, NexusAppError> {
         Ok(payload.fee_payment.clone())
     }
-
     fn submit_and_wait(
         &self,
         transaction: &SignedTransaction,
@@ -99,7 +90,6 @@ impl NexusToriiSubmitter for DemoToriiSubmitter {
         })
     }
 }
-
 fn transfer_input(authority: AccountId) -> NexusTransferInput {
     let asset_definition = AssetDefinitionId::from_uuid_bytes([
         0x7e, 0xad, 0x8e, 0xf0, 0x22, 0x22, 0x42, 0x22, 0x82, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22,
@@ -118,17 +108,14 @@ fn transfer_input(authority: AccountId) -> NexusTransferInput {
         nonce: Some(NonZeroU32::new(7).expect("non-zero nonce")),
     }
 }
-
 fn demo_wallet_key_pair() -> Result<KeyPair, iroha::crypto::Error> {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
 }
-
 fn demo_network_id() -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([0xA5; 32]),
     ))
 }
-
 fn main() -> Result<(), Box<dyn Error>> {
     let key_pair = demo_wallet_key_pair()?;
     let account_id = AccountId::new(key_pair.public_key().clone());
@@ -140,7 +127,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         DemoConnectTransport { key_pair },
         DemoToriiSubmitter,
     );
-
     let mut session = client.start_connect(NexusConnectOptions {
         sid: Some("sid-demo-1".to_owned()),
         node: None,
@@ -151,7 +137,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         transfer_input(approved.account_id),
         NexusFinalizeOptions::default(),
     )?;
-
     println!("wallet URI: {}", session.wallet_launch_uri);
     println!(
         "signed transaction hash: {}",
@@ -159,15 +144,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn demo_wallet_key_pair_uses_checked_ed25519_generation() {
         let key_pair = demo_wallet_key_pair().expect("checked demo wallet key generation");
-
         assert_eq!(
             key_pair
                 .public_key()
@@ -176,11 +158,9 @@ mod tests {
             Algorithm::Ed25519
         );
     }
-
     #[test]
     fn demo_connect_transport_uses_checked_wallet_signing() {
         let (key_pair, client, session, signable) = demo_signing_context();
-
         let wallet_signature = client
             .request_signature(&session, &signable)
             .expect("checked wallet signing should succeed");
@@ -192,12 +172,10 @@ mod tests {
             .verify(key_pair.public_key(), &payload_hash)
             .expect("checked demo wallet signature should verify");
     }
-
     #[test]
     fn demo_connect_transport_rejects_non_hex_payload_hash() {
         let (_key_pair, client, session, mut signable) = demo_signing_context();
         signable.payload_hash_hex = "not-a-hex-payload-hash".to_owned();
-
         let err = client
             .request_signature(&session, &signable)
             .expect_err("non-hex payload hash must be rejected");
@@ -207,7 +185,6 @@ mod tests {
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn demo_connect_transport_rejects_wrong_length_payload_hash() {
         let (_key_pair, client, session, signable) = demo_signing_context();
@@ -218,7 +195,6 @@ mod tests {
         ] {
             let mut mutated = signable.clone();
             mutated.payload_hash_hex = payload_hash_hex;
-
             let err = match client.request_signature(&session, &mutated) {
                 Ok(_) => panic!("{label} payload hash must be rejected"),
                 Err(err) => err,
@@ -232,7 +208,6 @@ mod tests {
             );
         }
     }
-
     fn demo_signing_context() -> (
         KeyPair,
         NexusAppClient<DemoConnectTransport, DemoToriiSubmitter>,

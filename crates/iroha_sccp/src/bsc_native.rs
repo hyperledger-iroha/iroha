@@ -7,23 +7,19 @@
 //! supports the post-Mendel first-release protocol and refuses unknown header
 //! layouts or validator-set changes that were not finalized by the preceding
 //! set.
-
 use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec,
     vec::Vec,
 };
-
 use iroha_crypto::EcdsaSecp256k1Sha256;
 use iroha_crypto::{ethereum_bls_pop_fast_aggregate_verify, ethereum_bls_pop_validate_public_key};
 use iroha_data_model::bridge::sccp::{SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1};
 use tiny_keccak::{Hasher as _, Keccak};
-
 use super::{
     H256, SccpPayloadV1, canonical_sccp_payload_bytes, decode_canonical_sccp_payload_bytes,
     prefixed_blake2b, sccp_lane_id_hash_v1, sccp_message_id, sccp_source_identity_hash_v1,
 };
-
 /// BNB Smart Chain mainnet EIP-155 chain identifier.
 pub const BSC_NATIVE_MAINNET_CHAIN_ID: u64 = 56;
 /// BNB Smart Chain Chapel testnet EIP-155 chain identifier.
@@ -38,7 +34,6 @@ pub const BSC_NATIVE_EPOCH_LENGTH: u64 = 1_000;
 pub const BSC_NATIVE_BLOCK_INTERVAL_MS: u64 = 450;
 /// Maximum native fast-finality ancestor depth after Fermi.
 pub const BSC_NATIVE_ATTESTATION_ANCESTOR_DEPTH: usize = 3;
-
 const BSC_NATIVE_ANCHOR_PREFIX_V1: &[u8] = b"sccp:bsc:native-parlia-anchor:v1";
 const BSC_NATIVE_EVENT_ABI_V1: &[u8] =
     b"SccpTransfer(bytes32,bytes32,bytes32,bytes32,bytes32,bytes)";
@@ -70,7 +65,6 @@ const MAX_LOG_TOPICS: usize = 4;
 const MAX_MPT_NODES: usize = 128;
 const MAX_MPT_NODE_BYTES: usize = 512 * 1_024;
 const MAX_MPT_TOTAL_BYTES: usize = 4 * 1_024 * 1_024;
-
 /// Maximum number of post-anchor headers before the selected BSC target.
 ///
 /// V1 requires governance to refresh a Parlia anchor at least once per
@@ -91,7 +85,6 @@ pub const BSC_NATIVE_MAX_FINALITY_SUFFIX_HEADERS: usize = BSC_NATIVE_ATTESTATION
 /// Maximum headers in one canonical native BSC finality continuation.
 pub const BSC_NATIVE_MAX_FINALITY_HEADERS: usize =
     BSC_NATIVE_MAX_TARGET_HEADERS + BSC_NATIVE_MAX_FINALITY_SUFFIX_HEADERS;
-
 /// One Parlia validator and its fast-finality vote key.
 #[derive(
     Clone,
@@ -111,7 +104,6 @@ pub struct BscNativeValidatorV1 {
     #[norito(with = "crate::json_utils::bytes_hex")]
     pub vote_public_key: Vec<u8>,
 }
-
 /// One retained Parlia recent-proposer record.
 #[derive(
     Clone,
@@ -131,7 +123,6 @@ pub struct BscNativeRecentProposerV1 {
     #[norito(with = "crate::json_utils::bytes_hex")]
     pub consensus_address: Vec<u8>,
 }
-
 /// Native Parlia source/target justification state.
 #[derive(
     Clone,
@@ -158,7 +149,6 @@ pub struct BscNativeJustificationV1 {
     #[norito(with = "crate::json_utils::hex32")]
     pub target_hash: H256,
 }
-
 /// Validator context used to verify votes for one recent target block.
 ///
 /// Parlia verifies an attestation using the snapshot at `target_number - 1`.
@@ -184,7 +174,6 @@ pub struct BscNativeVoteContextV1 {
     /// Sorted validator roster active at the target's parent.
     pub validators: Vec<BscNativeValidatorV1>,
 }
-
 /// Epoch roster advertised by an epoch header but not yet activated.
 #[derive(
     Clone,
@@ -208,7 +197,6 @@ pub struct BscNativePendingEpochV1 {
     /// Next turn length carried by the checkpoint header.
     pub turn_length: u8,
 }
-
 /// Governed immutable Parlia checkpoint from which native replay begins.
 #[derive(
     Clone,
@@ -253,7 +241,6 @@ pub struct BscNativeParliaAnchorV1 {
     /// Unactivated epoch roster when the checkpoint lies inside a handover delay.
     pub pending_epoch: Option<BscNativePendingEpochV1>,
 }
-
 /// Consecutive native headers proving Parlia finality from one governed anchor.
 #[derive(
     Clone,
@@ -276,7 +263,6 @@ pub struct BscNativeFinalityProofV1 {
     /// Zero-based proof header containing the SCCP receipt.
     pub target_header_index: u16,
 }
-
 /// Cheap deterministic reservation for native BSC finality verification.
 ///
 /// The estimate is derived from proof framing only and performs no signature
@@ -297,7 +283,6 @@ pub struct BscNativeFinalityWorkEstimateV1 {
     /// Maximum aggregate public-key contributions at the 64-validator cap.
     pub bls_signer_contributions_upper_bound: u32,
 }
-
 /// Merkle-Patricia inclusion proof for one successful execution receipt.
 #[derive(
     Clone,
@@ -320,7 +305,6 @@ pub struct BscNativeReceiptProofV1 {
     #[norito(with = "crate::json_utils::vec_bytes_hex")]
     pub proof_nodes: Vec<Vec<u8>>,
 }
-
 /// Account proof for the immutable concrete SCCP transfer-route contract.
 #[derive(
     Clone,
@@ -337,7 +321,6 @@ pub struct BscNativeEmitterStateProofV1 {
     #[norito(with = "crate::json_utils::vec_bytes_hex")]
     pub account_proof_nodes: Vec<Vec<u8>>,
 }
-
 /// Complete protocol-native BSC SCCP source proof.
 #[derive(
     Clone,
@@ -357,7 +340,6 @@ pub struct BscNativeSourceProofV1 {
     /// Finalized emitter account/runtime-code proof.
     pub emitter_state: BscNativeEmitterStateProofV1,
 }
-
 /// Authenticated finalized BSC execution fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ValidatedBscNativeFinalityV1 {
@@ -376,7 +358,6 @@ pub struct ValidatedBscNativeFinalityV1 {
     /// Highest finalized block hash after replay.
     pub resulting_finalized_hash: H256,
 }
-
 /// Authenticated successful SCCP receipt fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ValidatedBscNativeReceiptV1 {
@@ -395,7 +376,6 @@ pub struct ValidatedBscNativeReceiptV1 {
     /// Immutable concrete route configuration carried by the event.
     pub route_config_hash: H256,
 }
-
 /// Exact governed values that one native BSC receipt must authenticate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BscNativeReceiptExpectationV1<'a> {
@@ -416,7 +396,6 @@ pub struct BscNativeReceiptExpectationV1<'a> {
     /// Exact canonical SCCP payload bytes carried by the source event.
     pub canonical_payload: &'a [u8],
 }
-
 /// Authenticated direct emitter deployment fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ValidatedBscNativeEmitterStateV1 {
@@ -425,7 +404,6 @@ pub struct ValidatedBscNativeEmitterStateV1 {
     /// Runtime code hash opened from the finalized account.
     pub runtime_code_hash: H256,
 }
-
 /// Authenticated result of a complete native BSC SCCP proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ValidatedBscNativeSourceV1 {
@@ -440,7 +418,6 @@ pub struct ValidatedBscNativeSourceV1 {
     /// Finalized emitter account result.
     pub emitter_state: ValidatedBscNativeEmitterStateV1,
 }
-
 /// Fail-closed reason returned by the native Parlia verifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BscNativeFinalityError {
@@ -491,7 +468,6 @@ pub enum BscNativeFinalityError {
     /// The target became final before the last supplied continuation header.
     NonMinimalContinuation,
 }
-
 /// Fail-closed reason returned by receipt inclusion verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BscNativeReceiptError {
@@ -506,7 +482,6 @@ pub enum BscNativeReceiptError {
     /// Logs were malformed or did not contain one exact lane-bound SCCP event.
     InvalidSourceEvent,
 }
-
 /// Fail-closed reason returned by finalized emitter-state verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BscNativeEmitterStateError {
@@ -517,7 +492,6 @@ pub enum BscNativeEmitterStateError {
     /// Finalized account code hash differed from governed identity.
     RuntimeCodeHashMismatch,
 }
-
 /// Fail-closed reason returned by complete native BSC source verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BscNativeSourceError {
@@ -532,13 +506,11 @@ pub enum BscNativeSourceError {
     /// Finalized emitter state verification failed.
     EmitterState(BscNativeEmitterStateError),
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct NetworkParameters {
     chain_id: u64,
     mendel_time: u64,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ParsedHeader<'a> {
     fields: [RlpItem<'a>; 21],
@@ -557,14 +529,12 @@ struct ParsedHeader<'a> {
     excess_blob_gas: u64,
     block_hash: H256,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ParsedExtra {
     seal: [u8; 65],
     attestation: Option<VoteAttestation>,
     epoch: Option<PendingEpoch>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct VoteData {
     source_number: u64,
@@ -572,20 +542,17 @@ struct VoteData {
     target_number: u64,
     target_hash: H256,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct VoteAttestation {
     address_set: u64,
     aggregate_signature: [u8; 96],
     data: VoteData,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Validator {
     address: [u8; 20],
     vote_key: [u8; 48],
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PendingEpoch {
     checkpoint_number: u64,
@@ -593,14 +560,12 @@ struct PendingEpoch {
     validators: Vec<Validator>,
     turn_length: u8,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct VoteContext {
     target_number: u64,
     target_hash: H256,
     validators: Vec<Validator>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ParliaState {
     number: u64,
@@ -614,20 +579,17 @@ struct ParliaState {
     vote_contexts: Vec<VoteContext>,
     pending_epoch: Option<PendingEpoch>,
 }
-
 struct AnchorRosterState {
     validators: Vec<Validator>,
     active_validator_checkpoint: CanonicalBlock,
     current_epoch_checkpoint: u64,
     recents: BTreeMap<u64, [u8; 20]>,
 }
-
 struct AnchorVoteState {
     justification: VoteData,
     vote_contexts: Vec<VoteContext>,
     pending_epoch: Option<PendingEpoch>,
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct BscNativeFinalityWorkPerformedV1 {
     continuation_headers: u16,
@@ -635,7 +597,6 @@ struct BscNativeFinalityWorkPerformedV1 {
     bls_aggregate_checks: u16,
     bls_signer_contributions: u32,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct HeaderState {
     number: u64,
@@ -646,26 +607,22 @@ struct HeaderState {
     blob_gas_used: u64,
     excess_blob_gas: u64,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CanonicalBlock {
     number: u64,
     hash: H256,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RlpItem<'a> {
     raw: &'a [u8],
     payload: &'a [u8],
     is_list: bool,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum MptReference {
     Hash(H256),
     Inline(Vec<u8>),
 }
-
 fn network_parameters(network: SccpNetworkV1) -> Option<NetworkParameters> {
     match network {
         SccpNetworkV1::BscMainnet => Some(NetworkParameters {
@@ -679,7 +636,6 @@ fn network_parameters(network: SccpNetworkV1) -> Option<NetworkParameters> {
         _ => None,
     }
 }
-
 fn keccak256(bytes: &[u8]) -> H256 {
     let mut hash = [0_u8; 32];
     let mut hasher = Keccak::v256();
@@ -687,11 +643,9 @@ fn keccak256(bytes: &[u8]) -> H256 {
     hasher.finalize(&mut hash);
     hash
 }
-
 fn nonzero(bytes: &[u8]) -> bool {
     bytes.iter().any(|byte| *byte != 0)
 }
-
 fn read_be_usize(bytes: &[u8]) -> Option<usize> {
     if bytes.is_empty() || bytes[0] == 0 || bytes.len() > core::mem::size_of::<usize>() {
         return None;
@@ -700,7 +654,6 @@ fn read_be_usize(bytes: &[u8]) -> Option<usize> {
         value.checked_mul(256)?.checked_add(usize::from(*byte))
     })
 }
-
 fn parse_rlp_item(bytes: &[u8], offset: usize) -> Option<(RlpItem<'_>, usize)> {
     let first = *bytes.get(offset)?;
     let (payload_start, payload_len, is_list) = match first {
@@ -749,12 +702,10 @@ fn parse_rlp_item(bytes: &[u8], offset: usize) -> Option<(RlpItem<'_>, usize)> {
         payload_end,
     ))
 }
-
 fn parse_rlp_single(bytes: &[u8]) -> Option<RlpItem<'_>> {
     let (item, end) = parse_rlp_item(bytes, 0)?;
     (end == bytes.len()).then_some(item)
 }
-
 fn parse_rlp_list(bytes: &[u8]) -> Option<Vec<RlpItem<'_>>> {
     let outer = parse_rlp_single(bytes)?;
     if !outer.is_list {
@@ -762,7 +713,6 @@ fn parse_rlp_list(bytes: &[u8]) -> Option<Vec<RlpItem<'_>>> {
     }
     parse_rlp_list_payload(outer.payload)
 }
-
 fn parse_rlp_list_payload(payload: &[u8]) -> Option<Vec<RlpItem<'_>>> {
     let mut items = Vec::new();
     let mut cursor = 0_usize;
@@ -776,11 +726,9 @@ fn parse_rlp_list_payload(payload: &[u8]) -> Option<Vec<RlpItem<'_>>> {
     }
     (cursor == payload.len()).then_some(items)
 }
-
 fn rlp_bytes(item: RlpItem<'_>) -> Option<&[u8]> {
     (!item.is_list).then_some(item.payload)
 }
-
 fn parse_rlp_u64(item: RlpItem<'_>) -> Option<u64> {
     let bytes = rlp_bytes(item)?;
     if bytes.len() > 8 || bytes.first() == Some(&0) {
@@ -790,11 +738,9 @@ fn parse_rlp_u64(item: RlpItem<'_>) -> Option<u64> {
         value.checked_mul(256)?.checked_add(u64::from(*byte))
     })
 }
-
 fn parse_fixed<const N: usize>(item: RlpItem<'_>) -> Option<[u8; N]> {
     rlp_bytes(item)?.try_into().ok()
 }
-
 fn rlp_length_prefix(length: usize, short: u8, long: u8) -> Option<Vec<u8>> {
     if length <= 55 {
         return Some(vec![short.checked_add(u8::try_from(length).ok()?)?]);
@@ -807,7 +753,6 @@ fn rlp_length_prefix(length: usize, short: u8, long: u8) -> Option<Vec<u8>> {
     out.extend_from_slice(significant);
     Some(out)
 }
-
 fn rlp_encode_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
     if bytes.len() == 1 && bytes[0] < 0x80 {
         return Some(bytes.to_vec());
@@ -816,7 +761,6 @@ fn rlp_encode_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
     out.extend_from_slice(bytes);
     Some(out)
 }
-
 fn rlp_encode_u64(value: u64) -> Option<Vec<u8>> {
     if value == 0 {
         return Some(vec![0x80]);
@@ -825,7 +769,6 @@ fn rlp_encode_u64(value: u64) -> Option<Vec<u8>> {
     let first = bytes.iter().position(|byte| *byte != 0)?;
     rlp_encode_bytes(&bytes[first..])
 }
-
 fn rlp_encode_list_raw(fields: &[&[u8]]) -> Option<Vec<u8>> {
     let payload_len = fields
         .iter()
@@ -836,7 +779,6 @@ fn rlp_encode_list_raw(fields: &[&[u8]]) -> Option<Vec<u8>> {
     }
     Some(out)
 }
-
 fn parse_header(raw: &[u8]) -> Result<ParsedHeader<'_>, BscNativeFinalityError> {
     if raw.is_empty() || raw.len() > MAX_HEADER_BYTES {
         return Err(BscNativeFinalityError::ResourceLimit);
@@ -878,7 +820,6 @@ fn parse_header(raw: &[u8]) -> Result<ParsedHeader<'_>, BscNativeFinalityError> 
         parse_fixed(fields[19]).ok_or(BscNativeFinalityError::InvalidHeaderRlp)?;
     let _requests_hash: H256 =
         parse_fixed(fields[20]).ok_or(BscNativeFinalityError::InvalidHeaderRlp)?;
-
     if uncle_hash != EMPTY_UNCLE_HASH
         || !nonzero(&parent_hash)
         || !nonzero(&coinbase)
@@ -923,7 +864,6 @@ fn parse_header(raw: &[u8]) -> Result<ParsedHeader<'_>, BscNativeFinalityError> 
         block_hash: keccak256(raw),
     })
 }
-
 fn verify_fork_window(
     header: &ParsedHeader<'_>,
     params: NetworkParameters,
@@ -933,7 +873,6 @@ fn verify_fork_window(
     }
     Ok(())
 }
-
 fn verify_execution_fields(
     parent: HeaderState,
     header: &ParsedHeader<'_>,
@@ -976,7 +915,6 @@ fn verify_execution_fields(
     }
     Ok(())
 }
-
 fn validators_from_wire(
     validators: &[BscNativeValidatorV1],
 ) -> Result<Vec<Validator>, BscNativeFinalityError> {
@@ -1010,7 +948,6 @@ fn validators_from_wire(
     }
     Ok(out)
 }
-
 fn validators_from_extra(bytes: &[u8]) -> Result<Vec<Validator>, BscNativeFinalityError> {
     if bytes.is_empty() || !bytes.len().is_multiple_of(VALIDATOR_BYTES) {
         return Err(BscNativeFinalityError::InvalidEpochRoster);
@@ -1028,7 +965,6 @@ fn validators_from_extra(bytes: &[u8]) -> Result<Vec<Validator>, BscNativeFinali
         .collect::<Vec<_>>();
     validators_from_wire(&wire)
 }
-
 fn parse_vote_data(item: RlpItem<'_>) -> Option<VoteData> {
     if !item.is_list {
         return None;
@@ -1048,7 +984,6 @@ fn parse_vote_data(item: RlpItem<'_>) -> Option<VoteData> {
         && nonzero(&data.target_hash))
     .then_some(data)
 }
-
 fn parse_attestation(bytes: &[u8]) -> Result<VoteAttestation, BscNativeFinalityError> {
     let fields = parse_rlp_list(bytes).ok_or(BscNativeFinalityError::InvalidAttestation)?;
     if fields.len() != 4 {
@@ -1071,7 +1006,6 @@ fn parse_attestation(bytes: &[u8]) -> Result<VoteAttestation, BscNativeFinalityE
         data,
     })
 }
-
 fn parse_extra(header: &ParsedHeader<'_>) -> Result<ParsedExtra, BscNativeFinalityError> {
     let minimum = EXTRA_VANITY_BYTES
         .checked_add(EXTRA_SEAL_BYTES)
@@ -1144,7 +1078,6 @@ fn parse_extra(header: &ParsedHeader<'_>) -> Result<ParsedExtra, BscNativeFinali
         epoch,
     })
 }
-
 fn proposer_seal_hash(
     header: &ParsedHeader<'_>,
     chain_id: u64,
@@ -1168,7 +1101,6 @@ fn proposer_seal_hash(
     let encoded = rlp_encode_list_raw(&fields).ok_or(BscNativeFinalityError::InvalidHeaderRlp)?;
     Ok(keccak256(&encoded))
 }
-
 fn recover_proposer(
     header: &ParsedHeader<'_>,
     seal: &[u8; 65],
@@ -1186,7 +1118,6 @@ fn recover_proposer(
         .map_err(|_| BscNativeFinalityError::InvalidProposerSeal)?;
     Ok(EcdsaSecp256k1Sha256::evm_address(&public_key))
 }
-
 fn vote_data_hash(data: VoteData) -> Result<H256, BscNativeFinalityError> {
     let source_number =
         rlp_encode_u64(data.source_number).ok_or(BscNativeFinalityError::InvalidAttestation)?;
@@ -1201,7 +1132,6 @@ fn vote_data_hash(data: VoteData) -> Result<H256, BscNativeFinalityError> {
             .ok_or(BscNativeFinalityError::InvalidAttestation)?;
     Ok(keccak256(&encoded))
 }
-
 fn vote_context_from_wire(
     context: &BscNativeVoteContextV1,
 ) -> Result<VoteContext, BscNativeFinalityError> {
@@ -1214,7 +1144,6 @@ fn vote_context_from_wire(
         validators: validators_from_wire(&context.validators)?,
     })
 }
-
 fn pending_epoch_from_wire(
     pending: &BscNativePendingEpochV1,
 ) -> Result<PendingEpoch, BscNativeFinalityError> {
@@ -1235,7 +1164,6 @@ fn pending_epoch_from_wire(
         turn_length: pending.turn_length,
     })
 }
-
 fn miner_history_check_len(validator_count: usize, turn_length: u8) -> Option<u64> {
     let majority = u64::try_from(validator_count)
         .ok()?
@@ -1243,7 +1171,6 @@ fn miner_history_check_len(validator_count: usize, turn_length: u8) -> Option<u6
         .checked_add(1)?;
     majority.checked_mul(u64::from(turn_length))?.checked_sub(1)
 }
-
 fn parse_and_validate_anchor_header(
     anchor: &BscNativeParliaAnchorV1,
     params: NetworkParameters,
@@ -1266,7 +1193,6 @@ fn parse_and_validate_anchor_header(
     }
     Ok((header, parsed_extra))
 }
-
 fn validate_anchor_roster(
     anchor: &BscNativeParliaAnchorV1,
     header: &ParsedHeader<'_>,
@@ -1331,7 +1257,6 @@ fn validate_anchor_roster(
         recents,
     })
 }
-
 fn validate_anchor_votes(
     anchor: &BscNativeParliaAnchorV1,
     header: &ParsedHeader<'_>,
@@ -1400,7 +1325,6 @@ fn validate_anchor_votes(
         pending_epoch,
     })
 }
-
 fn anchor_state(
     anchor: &BscNativeParliaAnchorV1,
 ) -> Result<(ParliaState, H256, NetworkParameters), BscNativeFinalityError> {
@@ -1439,7 +1363,6 @@ fn anchor_state(
         params,
     ))
 }
-
 /// Return the canonical execution block number of a valid governed Parlia anchor.
 ///
 /// # Errors
@@ -1451,12 +1374,10 @@ pub fn bsc_native_anchor_block_number(
     let header = parse_header(&anchor.header_rlp)?;
     Ok(header.number)
 }
-
 // Seed table and generator used by Go 1's `math/rand.NewSource`. Parlia's
 // out-of-turn delay is consensus-visible and therefore cannot be replaced by
 // Rust's RNG or by a statistically equivalent shuffle.
 const GO_RNG_COOKED_BYTES: &[u8; 4_856] = include_bytes!("assets/go_rng_cooked_i64le_v1.bin");
-
 const fn decode_go_rng_cooked(bytes: &[u8; 4_856]) -> [i64; 607] {
     let mut values = [0_i64; 607];
     let mut index = 0;
@@ -1476,15 +1397,12 @@ const fn decode_go_rng_cooked(bytes: &[u8; 4_856]) -> [i64; 607] {
     }
     values
 }
-
 const GO_RNG_COOKED: [i64; 607] = decode_go_rng_cooked(GO_RNG_COOKED_BYTES);
-
 struct GoMathRand {
     tap: usize,
     feed: usize,
     values: [i64; 607],
 }
-
 impl GoMathRand {
     fn new(seed: u64) -> Result<Self, BscNativeFinalityError> {
         const INT32_MAX: u64 = (1_u64 << 31) - 1;
@@ -1514,7 +1432,6 @@ impl GoMathRand {
             values,
         })
     }
-
     fn int63(&mut self) -> u64 {
         self.tap = if self.tap == 0 { 606 } else { self.tap - 1 };
         self.feed = if self.feed == 0 { 606 } else { self.feed - 1 };
@@ -1522,11 +1439,9 @@ impl GoMathRand {
         self.values[self.feed] = value;
         u64::from_ne_bytes(value.to_ne_bytes()) & ((1_u64 << 63) - 1)
     }
-
     fn uint32(&mut self) -> Result<u32, BscNativeFinalityError> {
         u32::try_from(self.int63() >> 31).map_err(|_| BscNativeFinalityError::ResourceLimit)
     }
-
     fn int31n(&mut self, n: u32) -> Result<u32, BscNativeFinalityError> {
         if n == 0 {
             return Err(BscNativeFinalityError::InvalidAnchor);
@@ -1547,7 +1462,6 @@ impl GoMathRand {
         u32::try_from(product >> 32).map_err(|_| BscNativeFinalityError::ResourceLimit)
     }
 }
-
 fn go_seed_rand(value: i32) -> Result<i32, BscNativeFinalityError> {
     const A: i64 = 48_271;
     const Q: i32 = 44_488;
@@ -1561,7 +1475,6 @@ fn go_seed_rand(value: i32) -> Result<i32, BscNativeFinalityError> {
     }
     i32::try_from(next).map_err(|_| BscNativeFinalityError::ResourceLimit)
 }
-
 fn go_math_rand_shuffle(seed: u64, values: &mut [u64]) -> Result<(), BscNativeFinalityError> {
     let mut rng = GoMathRand::new(seed)?;
     for index in (1..values.len()).rev() {
@@ -1572,7 +1485,6 @@ fn go_math_rand_shuffle(seed: u64, values: &mut [u64]) -> Result<(), BscNativeFi
     }
     Ok(())
 }
-
 fn recent_counts(state: &ParliaState) -> Result<BTreeMap<[u8; 20], u8>, BscNativeFinalityError> {
     let history_len = miner_history_check_len(state.validators.len(), state.turn_length)
         .ok_or(BscNativeFinalityError::InvalidAnchor)?;
@@ -1587,13 +1499,11 @@ fn recent_counts(state: &ParliaState) -> Result<BTreeMap<[u8; 20], u8>, BscNativ
     }
     Ok(counts)
 }
-
 fn signed_recently(counts: &BTreeMap<[u8; 20], u8>, address: [u8; 20], turn_length: u8) -> bool {
     counts
         .get(&address)
         .is_some_and(|count| *count >= turn_length)
 }
-
 fn in_turn_validator(state: &ParliaState) -> Option<[u8; 20]> {
     let validator_count = u64::try_from(state.validators.len()).ok()?;
     let offset = state
@@ -1606,7 +1516,6 @@ fn in_turn_validator(state: &ParliaState) -> Option<[u8; 20]> {
         .get(usize::try_from(offset).ok()?)
         .map(|validator| validator.address)
 }
-
 fn parlia_backoff_ms(
     state: &ParliaState,
     header_number: u64,
@@ -1665,13 +1574,11 @@ fn parlia_backoff_ms(
             .ok_or(BscNativeFinalityError::InvalidTimestamp)
     }
 }
-
 fn find_canonical_block(blocks: &[CanonicalBlock], number: u64, hash: H256) -> bool {
     blocks
         .iter()
         .any(|block| block.number == number && block.hash == hash)
 }
-
 fn verify_attestation(
     state: &ParliaState,
     attestation: &VoteAttestation,
@@ -1730,7 +1637,6 @@ fn verify_attestation(
     .map_err(|_| BscNativeFinalityError::InvalidBlsSignature)?;
     Ok(())
 }
-
 fn update_justification(state: &mut ParliaState, data: VoteData) {
     if data.source_number.checked_add(1) == Some(data.target_number) {
         state.justification = data;
@@ -1739,7 +1645,6 @@ fn update_justification(state: &mut ParliaState, data: VoteData) {
         state.justification.target_hash = data.target_hash;
     }
 }
-
 fn checkpoint_is_finalized(
     state: &ParliaState,
     pending: &PendingEpoch,
@@ -1755,7 +1660,6 @@ fn checkpoint_is_finalized(
                 pending.checkpoint_hash,
             ))
 }
-
 fn validate_header_candidate(
     state: &ParliaState,
     header: &ParsedHeader<'_>,
@@ -1805,7 +1709,6 @@ fn validate_header_candidate(
     }
     Ok((extra, proposer))
 }
-
 fn apply_header(
     state: &mut ParliaState,
     header: &ParsedHeader<'_>,
@@ -1827,7 +1730,6 @@ fn apply_header(
     } else if extra.epoch.is_some() {
         return Err(BscNativeFinalityError::InvalidEpochRoster);
     }
-
     let old_history = miner_history_check_len(state.validators.len(), state.turn_length)
         .ok_or(BscNativeFinalityError::InvalidAnchor)?;
     if let Some(expired) = header.number.checked_sub(old_history.saturating_add(1)) {
@@ -1840,7 +1742,6 @@ fn apply_header(
     state
         .recents
         .retain(|number, _| *number > state.justification.source_number);
-
     let context = VoteContext {
         target_number: header.number,
         target_hash: header.block_hash,
@@ -1854,7 +1755,6 @@ fn apply_header(
         number: header.number,
         hash: header.block_hash,
     });
-
     if header.number % BSC_NATIVE_EPOCH_LENGTH == old_history {
         if let Some(pending) = state.pending_epoch.take() {
             let expected_checkpoint = header
@@ -1880,7 +1780,6 @@ fn apply_header(
             }
         }
     }
-
     state.number = header.number;
     state.hash = header.block_hash;
     state.header = HeaderState {
@@ -1894,7 +1793,6 @@ fn apply_header(
     };
     Ok(bls_signer_contributions)
 }
-
 /// Hash a semantically valid governed native Parlia anchor.
 ///
 /// # Errors
@@ -1907,7 +1805,6 @@ pub fn bsc_native_anchor_hash(
     let (_, hash, _) = anchor_state(anchor)?;
     Ok(hash)
 }
-
 /// Return a cryptography-free upper bound for one native BSC finality proof.
 ///
 /// The shape policy admits at most one full post-anchor epoch before the
@@ -1971,7 +1868,6 @@ pub fn bsc_native_finality_work_estimate(
         bls_signer_contributions_upper_bound,
     })
 }
-
 fn bsc_target_is_finalized(
     state: &ParliaState,
     target_number: u64,
@@ -1984,7 +1880,6 @@ fn bsc_target_is_finalized(
             state.justification.source_hash,
         )
 }
-
 fn verify_bsc_native_finality_counted(
     proof: &BscNativeFinalityProofV1,
     expected_network: SccpNetworkV1,
@@ -1999,7 +1894,6 @@ fn verify_bsc_native_finality_counted(
     }
     let _ = bsc_native_finality_work_estimate(proof)?;
     let target_index = usize::from(proof.target_header_index);
-
     work.secp256k1_recoveries = work.secp256k1_recoveries.saturating_add(1);
     let (mut state, anchor_hash, params) = anchor_state(&proof.anchor)?;
     if anchor_hash != expected_anchor_hash {
@@ -2035,7 +1929,6 @@ fn verify_bsc_native_finality_counted(
             work.bls_signer_contributions =
                 work.bls_signer_contributions.saturating_add(contributions);
         }
-
         if let Some((block_number, block_hash, state_root, receipts_root)) = target
             && bsc_target_is_finalized(&state, block_number, &canonical_blocks)
         {
@@ -2055,7 +1948,6 @@ fn verify_bsc_native_finality_counted(
     }
     Err(BscNativeFinalityError::TargetNotFinalized)
 }
-
 /// Verify native Parlia finality for one proof target.
 ///
 /// # Errors
@@ -2075,7 +1967,6 @@ pub fn verify_bsc_native_finality(
         &mut BscNativeFinalityWorkPerformedV1::default(),
     )
 }
-
 fn mpt_proof_is_bounded(nodes: &[Vec<u8>]) -> bool {
     !nodes.is_empty()
         && nodes.len() <= MAX_MPT_NODES
@@ -2087,7 +1978,6 @@ fn mpt_proof_is_bounded(nodes: &[Vec<u8>]) -> bool {
             .try_fold(0_usize, |total, node| total.checked_add(node.len()))
             .is_some_and(|total| total <= MAX_MPT_TOTAL_BYTES)
 }
-
 fn bytes_to_nibbles(bytes: &[u8]) -> Vec<u8> {
     let mut nibbles = Vec::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {
@@ -2096,7 +1986,6 @@ fn bytes_to_nibbles(bytes: &[u8]) -> Vec<u8> {
     }
     nibbles
 }
-
 fn decode_compact_path(bytes: &[u8]) -> Option<(bool, Vec<u8>)> {
     let nibbles = bytes_to_nibbles(bytes);
     let flag = *nibbles.first()?;
@@ -2118,7 +2007,6 @@ fn decode_compact_path(bytes: &[u8]) -> Option<(bool, Vec<u8>)> {
     }
     Some((is_leaf, path))
 }
-
 fn mpt_child_reference(item: RlpItem<'_>) -> Option<MptReference> {
     if item.is_list {
         if item.raw.is_empty() || item.raw.len() >= 32 {
@@ -2129,7 +2017,6 @@ fn mpt_child_reference(item: RlpItem<'_>) -> Option<MptReference> {
     let hash: H256 = item.payload.try_into().ok()?;
     nonzero(&hash).then_some(MptReference::Hash(hash))
 }
-
 fn verify_mpt_inclusion(root: H256, key: &[u8], nodes: &[Vec<u8>]) -> Option<Vec<u8>> {
     if !nonzero(&root) || !mpt_proof_is_bounded(nodes) {
         return None;
@@ -2194,13 +2081,11 @@ fn verify_mpt_inclusion(root: H256, key: &[u8], nodes: &[Vec<u8>]) -> Option<Vec
         }
     }
 }
-
 fn rlp_integer_is_canonical(item: RlpItem<'_>, max_bytes: usize) -> bool {
     rlp_bytes(item).is_some_and(|bytes| {
         bytes.len() <= max_bytes && bytes.first().is_none_or(|first| *first != 0)
     })
 }
-
 fn receipt_payload(receipt: &[u8]) -> Option<&[u8]> {
     let first = *receipt.first()?;
     if (1..=4).contains(&first) {
@@ -2208,7 +2093,6 @@ fn receipt_payload(receipt: &[u8]) -> Option<&[u8]> {
     }
     (first >= 0xc0).then_some(receipt)
 }
-
 fn verify_receipt_event(
     receipt: &[u8],
     expected: &BscNativeReceiptExpectationV1<'_>,
@@ -2292,7 +2176,6 @@ fn verify_receipt_event(
     }
     Ok(())
 }
-
 fn canonical_transfer_event_data_matches(
     data: &[u8],
     payload_hash: H256,
@@ -2335,7 +2218,6 @@ fn canonical_transfer_event_data_matches(
         && data.get(128..128 + payload_len) == Some(canonical_payload)
         && data[128 + payload_len..].iter().all(|byte| *byte == 0)
 }
-
 /// Verify one successful, exactly lane-bound SCCP receipt under a finalized receipts root.
 ///
 /// # Errors
@@ -2371,7 +2253,6 @@ pub fn verify_bsc_native_receipt(
         route_config_hash: expected.route_config_hash,
     })
 }
-
 fn parse_account(value: &[u8]) -> Option<(H256, H256)> {
     let fields = parse_rlp_list(value)?;
     if fields.len() != 4
@@ -2384,7 +2265,6 @@ fn parse_account(value: &[u8]) -> Option<(H256, H256)> {
     let code_hash: H256 = parse_fixed(fields[3])?;
     (nonzero(&storage_root) && nonzero(&code_hash)).then_some((storage_root, code_hash))
 }
-
 /// Verify the immutable concrete emitter account and runtime code hash.
 ///
 /// # Errors
@@ -2414,7 +2294,6 @@ pub fn verify_bsc_native_emitter_state(
         runtime_code_hash,
     })
 }
-
 /// Verify native BSC finality, receipt inclusion, typed lane binding, and emitter state.
 ///
 /// # Errors
@@ -2503,37 +2382,30 @@ pub fn verify_bsc_native_source(
         emitter_state,
     })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const BLS_GENERATOR: [u8; 48] = [
         0x97, 0xf1, 0xd3, 0xa7, 0x31, 0x97, 0xd7, 0x94, 0x26, 0x95, 0x63, 0x8c, 0x4f, 0xa9, 0xac,
         0x0f, 0xc3, 0x68, 0x8c, 0x4f, 0x97, 0x74, 0xb9, 0x05, 0xa1, 0x4e, 0x3a, 0x3f, 0x17, 0x1b,
         0xac, 0x58, 0x6c, 0x55, 0xe8, 0x3f, 0xf9, 0x7a, 0x1a, 0xef, 0xfb, 0x3a, 0xf0, 0x0a, 0xdb,
         0x22, 0xc6, 0xbb,
     ];
-
     fn bytes(value: &[u8]) -> Vec<u8> {
         rlp_encode_bytes(value).expect("test RLP bytes")
     }
-
     fn uint(value: u64) -> Vec<u8> {
         rlp_encode_u64(value).expect("test RLP integer")
     }
-
     fn list(fields: &[Vec<u8>]) -> Vec<u8> {
         let refs = fields.iter().map(Vec::as_slice).collect::<Vec<_>>();
         rlp_encode_list_raw(&refs).expect("test RLP list")
     }
-
     fn signer_address() -> [u8; 20] {
         let signing_key =
             EcdsaSecp256k1Sha256::parse_private_key(&[7_u8; 32]).expect("test signing key");
         EcdsaSecp256k1Sha256::evm_address(&signing_key.public_key())
     }
-
     struct HeaderEncodingInput<'a> {
         parent_hash: H256,
         number: u64,
@@ -2542,7 +2414,6 @@ mod tests {
         coinbase: [u8; 20],
         middle_extra: &'a [u8],
     }
-
     #[derive(Clone, Copy)]
     struct HeaderEncodingOptions {
         seal: [u8; 65],
@@ -2551,7 +2422,6 @@ mod tests {
         blob_gas_used: u64,
         excess_blob_gas: u64,
     }
-
     impl HeaderEncodingOptions {
         fn with_seal(seal: [u8; 65]) -> Self {
             Self {
@@ -2563,7 +2433,6 @@ mod tests {
             }
         }
     }
-
     fn encode_header(input: &HeaderEncodingInput<'_>, options: HeaderEncodingOptions) -> Vec<u8> {
         let mut extra = vec![0_u8; EXTRA_VANITY_BYTES];
         extra.extend_from_slice(input.middle_extra);
@@ -2595,7 +2464,6 @@ mod tests {
             bytes(&[0x55; 32]),
         ])
     }
-
     fn signed_header(
         parent_hash: H256,
         number: u64,
@@ -2623,14 +2491,12 @@ mod tests {
         seal[64] -= 27;
         encode_header(&input, HeaderEncodingOptions::with_seal(seal))
     }
-
     fn validator(address: [u8; 20]) -> BscNativeValidatorV1 {
         BscNativeValidatorV1 {
             consensus_address: address.to_vec(),
             vote_public_key: BLS_GENERATOR.to_vec(),
         }
     }
-
     fn anchor() -> BscNativeParliaAnchorV1 {
         let number = 1_001;
         let header_rlp = signed_header(
@@ -2667,7 +2533,6 @@ mod tests {
             pending_epoch: None,
         }
     }
-
     fn compact_leaf_path(key: &[u8]) -> Vec<u8> {
         let nibbles = bytes_to_nibbles(key);
         assert_eq!(nibbles.len() % 2, 0);
@@ -2678,24 +2543,19 @@ mod tests {
         }
         out
     }
-
     fn singleton_mpt(key: &[u8], value: &[u8]) -> (H256, Vec<Vec<u8>>) {
         let leaf = list(&[bytes(&compact_leaf_path(key)), bytes(value)]);
         (keccak256(&leaf), vec![leaf])
     }
-
     fn test_payload() -> &'static [u8] {
         b"\x02\x01bsc-canonical-transfer"
     }
-
     fn test_message_id() -> H256 {
         [0x66; 32]
     }
-
     fn test_route_config_hash() -> H256 {
         [0x67; 32]
     }
-
     fn source_event_data() -> Vec<u8> {
         let payload = test_payload();
         let padded_len = payload.len().checked_add(31).unwrap() & !31;
@@ -2711,7 +2571,6 @@ mod tests {
         out.resize(128 + padded_len, 0);
         out
     }
-
     fn source_receipt(
         emitter: [u8; 20],
         lane_hash: H256,
@@ -2734,7 +2593,6 @@ mod tests {
         };
         list(&[uint(status), uint(21_000), bytes(&[0_u8; 256]), logs])
     }
-
     fn verify_test_bsc_receipt(
         proof: &BscNativeReceiptProofV1,
         root: H256,
@@ -2754,7 +2612,6 @@ mod tests {
         };
         verify_bsc_native_receipt(proof, &expected)
     }
-
     fn hex_bytes(hex: &str) -> Vec<u8> {
         assert_eq!(hex.len() % 2, 0);
         hex.as_bytes()
@@ -2769,7 +2626,6 @@ mod tests {
             })
             .collect()
     }
-
     fn attestation_bytes(data: VoteData, signature_hex: &str) -> Vec<u8> {
         let signature = hex_bytes(signature_hex);
         assert_eq!(signature.len(), 96);
@@ -2781,7 +2637,6 @@ mod tests {
         ]);
         list(&[uint(1), bytes(&signature), vote_data, bytes(&[])])
     }
-
     #[test]
     fn fork_schedule_and_chain_ids_match_pinned_bsc_config() {
         let mainnet = network_parameters(SccpNetworkV1::BscMainnet).unwrap();
@@ -2796,7 +2651,6 @@ mod tests {
         assert_eq!(verify_fork_window(&post_mendel_future, testnet), Ok(()));
         assert!(network_parameters(SccpNetworkV1::EthereumMainnet).is_none());
     }
-
     #[test]
     fn canonical_rlp_rejects_short_aliases_long_aliases_and_trailing_bytes() {
         assert!(parse_rlp_single(&[0x81, 0x01]).is_none());
@@ -2807,7 +2661,6 @@ mod tests {
         assert_eq!(parse_rlp_u64(zero), None);
         assert_eq!(parse_rlp_u64(parse_rlp_single(&[0x80]).unwrap()), Some(0));
     }
-
     #[test]
     fn current_header_requires_exactly_twenty_one_fields() {
         let raw = signed_header(
@@ -2839,7 +2692,6 @@ mod tests {
             Err(BscNativeFinalityError::InvalidHeaderRlp)
         );
     }
-
     #[test]
     fn proposer_seal_uses_chain_id_full_extra_and_post_prague_fields() {
         let raw = signed_header(
@@ -2859,7 +2711,6 @@ mod tests {
             recover_proposer(&header, &extra.seal, 97).ok(),
             Some(signer_address())
         );
-
         let mut fields = header
             .fields
             .iter()
@@ -2874,7 +2725,6 @@ mod tests {
             Some(signer_address())
         );
     }
-
     #[test]
     fn proposer_recovery_rejects_bad_recovery_id_and_high_s() {
         let raw = signed_header(
@@ -2898,7 +2748,6 @@ mod tests {
             Err(BscNativeFinalityError::InvalidProposerSeal)
         );
     }
-
     #[test]
     fn extra_data_rejects_non_epoch_rosters_and_bad_epoch_lists() {
         let mut roster = vec![1_u8];
@@ -2918,7 +2767,6 @@ mod tests {
                 .epoch
                 .is_some()
         );
-
         let mut zero_count = roster.clone();
         zero_count[0] = 0;
         let zero_count = signed_header(
@@ -2932,7 +2780,6 @@ mod tests {
             parse_extra(&parse_header(&zero_count).unwrap()),
             Err(BscNativeFinalityError::InvalidEpochRoster)
         );
-
         let non_epoch = signed_header(
             [0x11; 32],
             2_001,
@@ -2945,7 +2792,6 @@ mod tests {
             Err(BscNativeFinalityError::InvalidAttestation)
         );
     }
-
     #[test]
     fn validator_roster_rejects_order_duplicates_and_invalid_vote_keys() {
         let mut lower = signer_address();
@@ -2972,19 +2818,16 @@ mod tests {
             Err(BscNativeFinalityError::InvalidBlsSignature)
         );
     }
-
     #[test]
     fn go_math_rand_port_matches_go_1_regression_vectors() {
         let mut rng = GoMathRand::new(0).expect("bounded Go RNG fixture");
         assert_eq!(rng.int63(), 8_717_895_732_742_165_505);
         assert_eq!(rng.int63(), 2_259_404_117_704_393_152);
         assert_eq!(rng.int63(), 6_050_128_673_802_995_827);
-
         let mut values = (0..8).collect::<Vec<_>>();
         go_math_rand_shuffle(0, &mut values).expect("bounded fixture shuffle");
         assert_eq!(values, vec![5, 2, 4, 6, 0, 3, 1, 7]);
     }
-
     #[test]
     fn governed_anchor_hash_binds_network_snapshot_and_header() {
         let anchor = anchor();
@@ -2998,7 +2841,6 @@ mod tests {
         let changed = bsc_native_anchor_hash(&turn).unwrap();
         assert_ne!(changed, hash);
     }
-
     #[test]
     fn governed_anchor_has_stable_norito_and_json_roundtrips() {
         let anchor = anchor();
@@ -3009,7 +2851,6 @@ mod tests {
         let decoded_json: BscNativeParliaAnchorV1 = norito::json::from_json(&json).unwrap();
         assert_eq!(decoded_json, anchor);
     }
-
     #[test]
     fn anchor_rejects_wrong_context_recents_and_fork_window() {
         let mut wrong_context = anchor();
@@ -3040,7 +2881,6 @@ mod tests {
             Err(BscNativeFinalityError::UnsupportedFork)
         );
     }
-
     #[test]
     fn header_replay_rejects_parent_number_time_difficulty_and_recent_proposer() {
         let anchor = anchor();
@@ -3054,7 +2894,6 @@ mod tests {
             hash: state.hash,
         }];
         let _ = apply_header(&mut valid_state, &valid, params, &mut canonical).unwrap();
-
         let wrong_parent_raw = signed_header([0xee; 32], state.number + 1, next_time, 2, &[]);
         let wrong_parent = parse_header(&wrong_parent_raw).unwrap();
         assert_eq!(
@@ -3089,7 +2928,6 @@ mod tests {
             ),
             Err(BscNativeFinalityError::WrongDifficulty)
         );
-
         let mut recent_state = state;
         let proposer = signer_address();
         let other = if proposer == [0xff; 20] {
@@ -3115,7 +2953,6 @@ mod tests {
             Err(BscNativeFinalityError::RecentlySigned)
         );
     }
-
     #[test]
     fn receipt_mpt_authenticates_unique_lane_bound_success_event() {
         let emitter = [0x61; 20];
@@ -3132,7 +2969,6 @@ mod tests {
         let validated = verify_test_bsc_receipt(&proof, root, emitter, lane_hash, digest).unwrap();
         assert_eq!(validated.transaction_index, 7);
         assert_eq!(validated.lane_hash, lane_hash);
-
         assert_eq!(
             verify_test_bsc_receipt(&proof, root, emitter, [0x64; 32], digest),
             Err(BscNativeReceiptError::InvalidSourceEvent)
@@ -3142,7 +2978,6 @@ mod tests {
             Err(BscNativeReceiptError::InvalidSourceEvent)
         );
     }
-
     #[test]
     fn receipt_rejects_failed_duplicate_unsupported_type_and_wrong_mpt_key() {
         let emitter = [0x71; 20];
@@ -3170,7 +3005,6 @@ mod tests {
                 Err(expected)
             );
         }
-
         let legacy = source_receipt(emitter, lane_hash, digest, 1, false);
         let mut typed = vec![0x05];
         typed.extend_from_slice(&legacy);
@@ -3191,7 +3025,6 @@ mod tests {
             Err(BscNativeReceiptError::InvalidMptProof)
         );
     }
-
     #[test]
     fn mpt_rejects_trailing_nodes_bad_hash_and_noncanonical_compact_path() {
         let key = [0x12, 0x34];
@@ -3210,7 +3043,6 @@ mod tests {
         assert_eq!(decode_compact_path(&[0x01]), None);
         assert_eq!(decode_compact_path(&[0x00]), None);
     }
-
     #[test]
     fn finalized_emitter_state_binds_exact_runtime_code() {
         let emitter = [0x81; 20];
@@ -3230,7 +3062,6 @@ mod tests {
             Err(BscNativeEmitterStateError::RuntimeCodeHashMismatch)
         );
     }
-
     #[test]
     fn finality_work_estimate_enforces_epoch_target_and_native_suffix_bounds() {
         let anchor = anchor();
@@ -3253,7 +3084,6 @@ mod tests {
             estimate.framed_header_bytes,
             u32::try_from(anchor_header_bytes + 1).unwrap()
         );
-
         proof.headers_rlp = vec![vec![0xc0]; BSC_NATIVE_MAX_FINALITY_HEADERS];
         proof.target_header_index = u16::try_from(BSC_NATIVE_MAX_TARGET_HEADERS - 1).unwrap();
         let boundary = bsc_native_finality_work_estimate(&proof).unwrap();
@@ -3261,32 +3091,27 @@ mod tests {
             usize::from(boundary.continuation_headers),
             BSC_NATIVE_MAX_FINALITY_HEADERS
         );
-
         proof.target_header_index = u16::try_from(BSC_NATIVE_MAX_TARGET_HEADERS).unwrap();
         assert_eq!(
             bsc_native_finality_work_estimate(&proof),
             Err(BscNativeFinalityError::ResourceLimit)
         );
-
         proof.target_header_index = 0;
         proof.headers_rlp = vec![vec![0xc0]; BSC_NATIVE_MAX_FINALITY_SUFFIX_HEADERS + 2];
         assert_eq!(
             bsc_native_finality_work_estimate(&proof),
             Err(BscNativeFinalityError::ResourceLimit)
         );
-
         proof.headers_rlp = vec![vec![0xc0]; BSC_NATIVE_MAX_FINALITY_HEADERS + 1];
         assert_eq!(
             bsc_native_finality_work_estimate(&proof),
             Err(BscNativeFinalityError::ResourceLimit)
         );
-
         proof.headers_rlp = vec![vec![0; MAX_HEADER_BYTES + 1]];
         assert_eq!(
             bsc_native_finality_work_estimate(&proof),
             Err(BscNativeFinalityError::ResourceLimit)
         );
-
         proof.headers_rlp = vec![vec![0xc0]];
         proof.target_header_index = 1;
         assert_eq!(
@@ -3294,7 +3119,6 @@ mod tests {
             Err(BscNativeFinalityError::TargetNotFinalized)
         );
     }
-
     #[test]
     fn vote_attestation_rejects_source_target_confusion_bitmap_replay_and_quorum() {
         let anchor = anchor();
@@ -3336,11 +3160,9 @@ mod tests {
             Err(BscNativeFinalityError::InvalidAttestation)
         );
     }
-
     const NATIVE_VOTE_SIG1: &str = "994e94da4ef7fb2675cda81271ee1093332aef607aec286404f4b32573a06cee80b60f4570b349669f15c157529a32f009c796d6c0c9ccb9c57c55f5afb8bbb783ae70216c810fbbc6eac13771264e67d551fd566d25fa9bf270b724b17f292a";
     const NATIVE_VOTE_SIG2: &str = "9512d82b2348a3d5b73676bd9bd9be4340ce321eab94b1cc5f7b244a0e5971277a8577a0ba61eb44af2db1f87fdff99b0bef9ddc34ae1cd6fb548c5385a606a2faa37031ef0f5e2eafae439e8ca6305e018c3acb9985aa2af82c9fc857208e0f";
     const NATIVE_VOTE_SIG3: &str = "a9e29885e6ed4dc61a09c5fe8dedb2393ff3b5a333dfaf2a27eeb8fb8f7a4f1d107d420aa9ad5771b93881f1bc6a768a19d3650c9f433c8e3ae7ff4cfe2f4fcf466433e55e0e1e305dddbc1753abd1f047dcd2a563abbc0c0d56903537dceb68";
-
     struct NativeVoteChainFixture {
         anchor_header_hash: H256,
         base_time: u64,
@@ -3348,7 +3170,6 @@ mod tests {
         header1_hash: H256,
         finalized: BscNativeFinalityProofV1,
     }
-
     fn signed_attested_header(
         parent_hash: H256,
         number: u64,
@@ -3364,7 +3185,6 @@ mod tests {
             &attestation_bytes(data, signature_hex),
         )
     }
-
     fn native_vote_chain_fixture() -> NativeVoteChainFixture {
         let anchor = anchor();
         let anchor_header_hash = keccak256(&anchor.header_rlp);
@@ -3436,7 +3256,6 @@ mod tests {
             },
         }
     }
-
     fn finality_work(
         proof: &BscNativeFinalityProofV1,
         anchor_hash: H256,
@@ -3451,7 +3270,6 @@ mod tests {
         .unwrap();
         work
     }
-
     fn append_valid_headers(proof: &mut BscNativeFinalityProofV1, count: u64) {
         let last = parse_header(proof.headers_rlp.last().unwrap()).unwrap();
         let mut parent = last.block_hash;
@@ -3465,7 +3283,6 @@ mod tests {
             proof.headers_rlp.push(header);
         }
     }
-
     fn assert_all_headers_valid(proof: &BscNativeFinalityProofV1) {
         let (mut state, _, params) = anchor_state(&proof.anchor).unwrap();
         let mut canonical_blocks = vec![CanonicalBlock {
@@ -3483,7 +3300,6 @@ mod tests {
             let _ = apply_header(&mut state, &header, params, &mut canonical_blocks).unwrap();
         }
     }
-
     #[test]
     fn native_vote_chain_finalizes_source_not_merely_justified_target() {
         let fixture = native_vote_chain_fixture();
@@ -3511,14 +3327,12 @@ mod tests {
         assert_eq!(result.block_number, 1_002);
         assert_eq!(result.block_hash, fixture.header1_hash);
         assert_eq!(result.resulting_finalized_number, 1_002);
-
         let exact_work = finality_work(&fixture.finalized, fixture.anchor_hash);
         assert_eq!(exact_work.continuation_headers, 3);
         assert_eq!(exact_work.secp256k1_recoveries, 4);
         assert_eq!(exact_work.bls_aggregate_checks, 3);
         assert_eq!(exact_work.bls_signer_contributions, 3);
     }
-
     #[test]
     fn native_vote_chain_rejects_surplus_continuations() {
         let fixture = native_vote_chain_fixture();
@@ -3537,7 +3351,6 @@ mod tests {
             Err(BscNativeFinalityError::NonMinimalContinuation)
         );
         assert_eq!(one_surplus_work, exact_work);
-
         let mut many_surplus = fixture.finalized;
         append_valid_headers(&mut many_surplus, 32);
         assert_all_headers_valid(&many_surplus);
@@ -3557,7 +3370,6 @@ mod tests {
             "over-window continuations fail before anchor or signature work"
         );
     }
-
     #[test]
     fn native_vote_chain_rejects_bad_attestation_signature() {
         let fixture = native_vote_chain_fixture();
@@ -3592,7 +3404,6 @@ mod tests {
             Err(BscNativeFinalityError::InvalidBlsSignature)
         );
     }
-
     #[test]
     fn finality_proof_rejects_empty_bounds_index_and_anchor_replay() {
         let anchor = anchor();

@@ -1,8 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests covering single-mint asset semantics.
-
 use std::time::{Duration, Instant};
-
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -11,7 +9,6 @@ use iroha::{
 };
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
-
 fn wait_for_asset_value(
     client: &Client,
     asset_id: &AssetId,
@@ -20,10 +17,8 @@ fn wait_for_asset_value(
 ) -> Result<Asset> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
-
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "asset was not queried".to_owned();
-
     while Instant::now() < deadline {
         match client.query_single(FindAssetById::new(asset_id.clone())) {
             Ok(asset) => {
@@ -36,15 +31,12 @@ fn wait_for_asset_value(
                 last_observed = format!("query failed: {err}");
             }
         }
-
         std::thread::sleep(POLL_INTERVAL);
     }
-
     Err(eyre!(
         "timed out waiting for asset after {context}; asset_id={asset_id}; expected_value={expected_value:?}; last_observed={last_observed}"
     ))
 }
-
 #[test]
 fn non_mintable_asset_minting_rules() -> Result<()> {
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
@@ -56,7 +48,6 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
     };
     let test_client = network.client();
     let account_id = ALICE_ID.clone();
-
     // Case 1: mintable once can be minted once, but not twice.
     {
         let asset_definition_id = AssetDefinitionId::derive_from_components(
@@ -75,7 +66,6 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
             }
             .mintable_once(),
         );
-
         let metadata = Metadata::default();
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
         let mint = Mint::asset_quantity(200_u32, asset_id.clone());
@@ -85,7 +75,6 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             metadata,
         );
-
         test_client.submit_transaction_blocking(&tx)?;
         wait_for_asset_value(
             &test_client,
@@ -93,7 +82,6 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
             &Quantity::from(200_u32),
             "first mint",
         )?;
-
         assert!(
             test_client
                 .submit_all_blocking(
@@ -103,7 +91,6 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
                 .is_err()
         );
     }
-
     // Case 2: if registered with non-zero value, it cannot be minted again.
     {
         let asset_definition_id = AssetDefinitionId::derive_from_components(
@@ -122,16 +109,13 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
             }
             .mintable_once(),
         );
-
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
         let register_asset = Mint::asset_quantity(1_u32, asset_id.clone());
-
         test_client.submit_all_blocking::<InstructionBox>(
             [create_asset.into(), register_asset.clone().into()],
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
         wait_for_asset_value(&test_client, &asset_id, &Quantity::one(), "seeded mint")?;
-
         assert!(
             test_client
                 .submit_blocking(
@@ -140,7 +124,6 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
                 )
                 .is_err()
         );
-
         let mint = Mint::asset_quantity(1u32, asset_id);
         assert!(
             test_client
@@ -151,6 +134,5 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
                 .is_err()
         );
     }
-
     Ok(())
 }

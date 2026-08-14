@@ -6,7 +6,6 @@ const FIXTURE_STREAMING_PUBLIC_KEY: &str =
     "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB";
 const FIXTURE_STREAMING_PRIVATE_KEY: &str =
     "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F";
-
 fn fixture_soranet_transport_key_pair() -> KeyPair {
     let public_key = FIXTURE_SORANET_TRANSPORT_PUBLIC_KEY
         .parse::<PublicKey>()
@@ -16,7 +15,6 @@ fn fixture_soranet_transport_key_pair() -> KeyPair {
         .expect("fixture SoraNet transport private key");
     KeyPair::new(public_key, private_key).expect("matching fixture SoraNet transport key pair")
 }
-
 fn fixture_streaming_key_pair() -> KeyPair {
     KeyPair::new(
         FIXTURE_STREAMING_PUBLIC_KEY
@@ -28,7 +26,6 @@ fn fixture_streaming_key_pair() -> KeyPair {
     )
     .expect("matching fixture streaming key pair")
 }
-
 fn soranet_transport_layer(key_pair: &KeyPair) -> Table {
     Table::new()
         .write(
@@ -40,7 +37,6 @@ fn soranet_transport_layer(key_pair: &KeyPair) -> Table {
             ExposedPrivateKey(key_pair.private_key().clone()).to_string(),
         )
 }
-
 fn canonical_test_base_table() -> Table {
     let source = fs::read_to_string(fixtures_dir().join("base.toml"))
         .expect("read dedicated SoraNet transport test base config");
@@ -54,7 +50,6 @@ fn canonical_test_base_table() -> Table {
         .insert("expected_hash".into(), TomlValue::String(canonical));
     table
 }
-
 #[test]
 fn soranet_transport_identity_is_required_even_with_streaming_identity() {
     let error = ConfigReader::new()
@@ -70,7 +65,6 @@ fn soranet_transport_identity_is_required_even_with_streaming_identity() {
         "missing parameter: `soranet_transport_private_key`"
     );
 }
-
 #[test]
 fn soranet_transport_identity_env_pair_populates_actual_common() {
     let key_pair = fixture_soranet_transport_key_pair();
@@ -90,7 +84,6 @@ fn soranet_transport_identity_env_pair_populates_actual_common() {
         .expect("transport env pair should complete user config")
         .parse()
         .expect("transport env pair should parse");
-
     assert_eq!(config.common.soranet_transport_key_pair, key_pair);
     assert_eq!(
         config.common.soranet_transport_key_pair.algorithm(),
@@ -106,7 +99,6 @@ fn soranet_transport_identity_env_pair_populates_actual_common() {
             .contains("P2P_SORANET_TRANSPORT_PRIVATE_KEY")
     );
 }
-
 #[test]
 fn soranet_transport_identity_rejects_mismatched_pair_without_disclosing_keys() {
     let mut layer = soranet_transport_layer(&fixture_soranet_transport_key_pair());
@@ -123,13 +115,11 @@ fn soranet_transport_identity_rejects_mismatched_pair_without_disclosing_keys() 
         .parse()
         .expect_err("mismatched SoraNet transport pair must fail");
     let message = strip_ansi_codes(&format!("{error:?}"));
-
     assert_contains!(message, "Invalid dedicated SoraNet transport identity");
     assert_contains!(message, "[REDACTED]");
     assert!(!message.contains(FIXTURE_SORANET_TRANSPORT_PUBLIC_KEY));
     assert!(!message.contains(FIXTURE_STREAMING_PRIVATE_KEY));
 }
-
 #[test]
 fn soranet_transport_identity_rejects_non_ed25519_pair() {
     let bls = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::BlsNormal)
@@ -143,14 +133,12 @@ fn soranet_transport_identity_rejects_non_ed25519_pair() {
         .parse()
         .expect_err("BLS SoraNet transport pair must fail");
     let message = strip_ansi_codes(&format!("{error:?}"));
-
     assert_contains!(message, "Invalid dedicated SoraNet transport identity");
     assert_contains!(
         message,
         "soranet_transport_public_key/private_key must be Ed25519"
     );
 }
-
 #[test]
 fn soranet_transport_identity_rejects_streaming_public_key_reuse() {
     let error = ConfigReader::new()
@@ -164,21 +152,17 @@ fn soranet_transport_identity_rejects_streaming_public_key_reuse() {
         .parse()
         .expect_err("SoraNet transport key reuse must fail");
     let message = strip_ansi_codes(&format!("{error:?}"));
-
     assert_contains!(message, "Invalid dedicated SoraNet transport identity");
     assert_contains!(
         message,
         "soranet_transport_public_key must not reuse streaming.identity_public_key"
     );
 }
-
 #[test]
 fn extra_fields() {
     let error = load_config_from_fixtures("bad.extra_fields.toml")
         .expect_err("should fail with extra field");
-
     let msg = strip_ansi_codes(&format!("{error:?}"));
-
     assert_contains!(msg, "Found unrecognised parameters");
     assert_contains!(msg, "unknown parameter: `bar`");
     assert_contains!(msg, "unknown parameter: `foo`");

@@ -1,7 +1,6 @@
 const LEGACY_HISTORICAL_AUTONOMOUS_RECOVERY_ATOMIC_TEMP_PREFIX: &str = ".kura-sidecar-";
 const HISTORICAL_AUTONOMOUS_RECOVERY_PUBLICATION_MAX_ARTIFACTS: usize =
     HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS * 2;
-
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum HistoricalAutonomousRecoveryPublicationIdentity {
     #[cfg(unix)]
@@ -11,13 +10,11 @@ enum HistoricalAutonomousRecoveryPublicationIdentity {
     #[cfg(not(unix))]
     Synthetic(usize),
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HistoricalAutonomousRecoveryPublicationKind {
     Stable,
     Temporary,
 }
-
 struct HistoricalAutonomousRecoveryPublicationSnapshot {
     entry: LaneConfigEntry,
     directory: PathBuf,
@@ -29,7 +26,6 @@ struct HistoricalAutonomousRecoveryPublicationSnapshot {
     identity: HistoricalAutonomousRecoveryPublicationIdentity,
     kind: HistoricalAutonomousRecoveryPublicationKind,
 }
-
 struct BoundHistoricalAutonomousRecoveryPublicationArtifact {
     path: PathBuf,
     metadata: std::fs::Metadata,
@@ -37,19 +33,16 @@ struct BoundHistoricalAutonomousRecoveryPublicationArtifact {
     record: HistoricalAutonomousLaneRecoveryRecordV1,
     links: u64,
 }
-
 struct HistoricalAutonomousRecoveryPublicationDirectorySnapshot {
     path: PathBuf,
     metadata: std::fs::Metadata,
 }
-
 struct HistoricalAutonomousRecoveryPublicationInventory {
     artifacts: Vec<HistoricalAutonomousRecoveryPublicationSnapshot>,
     directories: Vec<HistoricalAutonomousRecoveryPublicationDirectorySnapshot>,
     temporary_indices: Vec<usize>,
     stable_by_path: BTreeMap<PathBuf, usize>,
 }
-
 impl Kura {
     fn historical_autonomous_recovery_publication_kind(
         name: &std::ffi::OsStr,
@@ -69,7 +62,6 @@ impl Kura {
         })
         .then_some(HistoricalAutonomousRecoveryPublicationKind::Temporary)
     }
-
     fn historical_autonomous_recovery_publication_link_count(
         metadata: &std::fs::Metadata,
     ) -> Option<u64> {
@@ -81,7 +73,6 @@ impl Kura {
             None
         }
     }
-
     fn historical_autonomous_recovery_publication_identity(
         metadata: &std::fs::Metadata,
         synthetic_index: usize,
@@ -89,7 +80,6 @@ impl Kura {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
-
             let _ = synthetic_index;
             HistoricalAutonomousRecoveryPublicationIdentity::Unix {
                 device: metadata.dev(),
@@ -99,7 +89,6 @@ impl Kura {
         #[cfg(windows)]
         {
             use std::os::windows::fs::MetadataExt as _;
-
             match (metadata.volume_serial_number(), metadata.file_index()) {
                 (Some(volume), Some(index)) => {
                     HistoricalAutonomousRecoveryPublicationIdentity::Windows { volume, index }
@@ -113,7 +102,6 @@ impl Kura {
             HistoricalAutonomousRecoveryPublicationIdentity::Synthetic(synthetic_index)
         }
     }
-
     #[cfg(unix)]
     fn historical_autonomous_recovery_publication_metadata_unchanged(
         left: &std::fs::Metadata,
@@ -121,7 +109,6 @@ impl Kura {
         links: u64,
     ) -> bool {
         use std::os::unix::fs::MetadataExt as _;
-
         Self::sidecar_metadata_same_object(left, right)
             && left.nlink() == links
             && right.nlink() == links
@@ -131,7 +118,6 @@ impl Kura {
             && left.ctime() == right.ctime()
             && left.ctime_nsec() == right.ctime_nsec()
     }
-
     #[cfg(windows)]
     fn historical_autonomous_recovery_publication_metadata_unchanged(
         left: &std::fs::Metadata,
@@ -139,7 +125,6 @@ impl Kura {
         links: u64,
     ) -> bool {
         use std::os::windows::fs::MetadataExt as _;
-
         u32::try_from(links).ok().is_some_and(|links| {
             Self::sidecar_metadata_same_object(left, right)
                 && left.number_of_links() == Some(links)
@@ -149,7 +134,6 @@ impl Kura {
                 && left.creation_time() == right.creation_time()
         })
     }
-
     #[cfg(all(not(unix), not(windows)))]
     fn historical_autonomous_recovery_publication_metadata_unchanged(
         _left: &std::fs::Metadata,
@@ -158,7 +142,6 @@ impl Kura {
     ) -> bool {
         false
     }
-
     fn read_bound_historical_autonomous_recovery_publication_artifact(
         &self,
         namespace: &BoundProgressNamespace,
@@ -209,7 +192,6 @@ impl Kura {
                 "historical recovery publication artifact has no direct entry name",
             )
         })?;
-
         #[cfg(unix)]
         let mut file = std::fs::File::from(
             rustix::fs::openat(
@@ -223,7 +205,6 @@ impl Kura {
             .map_err(std::io::Error::from)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?,
         );
-
         #[cfg(not(unix))]
         let mut file = {
             let mut options = std::fs::OpenOptions::new();
@@ -231,7 +212,6 @@ impl Kura {
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt as _;
-
                 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
                 options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
             }
@@ -307,7 +287,6 @@ impl Kura {
             links,
         }))
     }
-
     fn historical_autonomous_recovery_publication_snapshot_unchanged(
         snapshot: &HistoricalAutonomousRecoveryPublicationSnapshot,
         current: &BoundHistoricalAutonomousRecoveryPublicationArtifact,
@@ -321,7 +300,6 @@ impl Kura {
                 snapshot.links,
             )
     }
-
     fn validate_historical_autonomous_recovery_publication_inventory_collisions(
         &self,
         artifacts: &[HistoricalAutonomousRecoveryPublicationSnapshot],
@@ -377,7 +355,6 @@ impl Kura {
         }
         Ok(by_recovery.len())
     }
-
     fn validate_historical_autonomous_recovery_publication_aliases(
         &self,
         artifacts: &[HistoricalAutonomousRecoveryPublicationSnapshot],
@@ -388,7 +365,6 @@ impl Kura {
             second: Option<usize>,
             count: usize,
         }
-
         let mut aliases =
             BTreeMap::<HistoricalAutonomousRecoveryPublicationIdentity, Aliases>::new();
         let mut unique_bytes = 0_u64;
@@ -419,7 +395,6 @@ impl Kura {
                 }
             }
         }
-
         for (index, artifact) in artifacts.iter().enumerate() {
             let aliases = aliases.get(&artifact.identity).ok_or_else(|| {
                 Self::invalid_historical_autonomous_recovery(
@@ -483,7 +458,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn revalidate_historical_autonomous_recovery_publication_inventory(
         &self,
         inventory: &HistoricalAutonomousRecoveryPublicationInventory,
@@ -517,7 +491,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn historical_autonomous_recovery_publication_inventory_locked(
         &self,
         entries: &[LaneConfigEntry],
@@ -655,7 +628,6 @@ impl Kura {
                 metadata: directory_after,
             });
         }
-
         let aggregate_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
         self.validate_historical_autonomous_recovery_publication_aliases(
             &artifacts,
@@ -680,7 +652,6 @@ impl Kura {
         self.revalidate_historical_autonomous_recovery_publication_inventory(&inventory)?;
         Ok(inventory)
     }
-
     fn remove_bound_historical_autonomous_recovery_publication_artifact(
         namespace: &BoundProgressNamespace,
         artifact: &BoundHistoricalAutonomousRecoveryPublicationArtifact,
@@ -717,11 +688,9 @@ impl Kura {
                 "historical recovery publication artifact changed before exact-object removal",
             ));
         }
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
-
             let current =
                 rustix::fs::statat(&immediate.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
                     .map_err(std::io::Error::from)
@@ -741,7 +710,6 @@ impl Kura {
                 .map_err(std::io::Error::from)
                 .map_err(|error| Error::IO(error, artifact.path.clone()))?;
         }
-
         #[cfg(not(unix))]
         {
             let current = std::fs::symlink_metadata(&artifact.path)
@@ -764,7 +732,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn reconcile_one_historical_autonomous_recovery_publication_temporary_locked(
         &self,
         temporary: &HistoricalAutonomousRecoveryPublicationSnapshot,
@@ -814,7 +781,6 @@ impl Kura {
                 "historical recovery stable target changed after authenticated preflight",
             ));
         }
-
         match current_stable {
             None => {
                 if current_temporary.links != 1 {
@@ -896,7 +862,6 @@ impl Kura {
             )),
         }
     }
-
     /// Reconcile only authenticated historical autonomous recovery-seal
     /// temporaries. This namespace has one immutable payload type whose embedded
     /// recovery ID and active lane route derive the exact no-clobber target.
@@ -923,7 +888,6 @@ impl Kura {
         if inventory.temporary_indices.is_empty() {
             return Ok(());
         }
-
         let mut authenticated = BTreeSet::new();
         for index in &inventory.temporary_indices {
             let temporary = &inventory.artifacts[*index];
@@ -936,7 +900,6 @@ impl Kura {
         }
         self.revalidate_historical_autonomous_recovery_publication_inventory(&inventory)?;
         self.durable_mutation_authorized()?;
-
         // Dropping this guard invalidates both cached disk-usage views. Rename
         // preserves physical bytes, while exact-duplicate cleanup can remove a
         // complete inode; the next capacity/read request therefore performs one

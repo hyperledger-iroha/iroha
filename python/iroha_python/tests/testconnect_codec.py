@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import subprocess
+from urllib.parse import quote
 
 import pytest
 
@@ -26,23 +28,35 @@ class FakeToriiConnectClient:
         network_id = connect.NetworkId.parse(str(payload["network_id"]))
         app_pk = str(payload["app_pk"])
         nonce = str(payload["nonce"])
-        node = f"&node={payload['node']}" if payload.get("node") else ""
-        app_uri = (
-            f"iroha://connect?sid={sid}&network_id={network_id.literal}"
-            f"&app_pk={app_pk}&nonce={nonce}{node}&v=1&role=app"
-            "&token=app-token&relay=relay-token"
-        )
+        node = quote(str(payload.get("node", "")), safe="")
+        app_token = _connect_token(0x61)
+        wallet_token = _connect_token(0x62)
+        management_token = _connect_token(0x63)
+        relay_token = _connect_token(0x64)
+
+        def role_uri(role: str, token: str) -> str:
+            return (
+                f"iroha://connect?sid={sid}&network_id={quote(network_id.literal, safe='')}"
+                f"&app_pk={app_pk}&nonce={nonce}&node={node}&v=1&role={role}"
+                f"&token={token}&relay={relay_token}"
+            )
+
         return connect.ConnectSessionInfo(
             sid=sid,
             network_id=network_id,
             app_public_key=connect._decode_canonical_base64url(app_pk, 32, "app_pk"),
             nonce=connect._decode_canonical_base64url(nonce, 16, "nonce"),
-            app_uri=app_uri,
-            app_token="app-token",
-            wallet_token="wallet-token",
-            management_token="management-token",
-            relay_token="relay-token",
+            wallet_uri=role_uri("wallet", wallet_token),
+            app_uri=role_uri("app", app_token),
+            app_token=app_token,
+            wallet_token=wallet_token,
+            management_token=management_token,
+            relay_token=relay_token,
         )
+
+
+def _connect_token(fill: int) -> str:
+    return base64.urlsafe_b64encode(bytes([fill]) * 32).rstrip(b"=").decode("ascii")
 
 
 def _network(fill: int = 0xA5) -> connect.NetworkId:
@@ -124,7 +138,7 @@ def test_generate_connect_sid_binds_network_app_key_and_nonce() -> None:
             "app_public_key must be 32 bytes",
         ),
         (
-            {"app_public_key": bytes(32), "nonce": bytes(15)},
+            {"app_public_key": bytes([1]) * 32, "nonce": bytes(15)},
             "nonce must be 16 bytes",
         ),
         (
@@ -184,7 +198,10 @@ def test_connect_uri_rejects_duplicate_and_substituted_identity() -> None:
         connect.parse_connect_uri(f"{preview.wallet_uri}&sid={preview.sid_base64url}")
     with pytest.raises(ValueError, match="sid does not match"):
         connect.parse_connect_uri(
-            preview.wallet_uri.replace(_network().literal, _network(0xB5).literal)
+            preview.wallet_uri.replace(
+                quote(_network().literal, safe=""),
+                quote(_network(0xB5).literal, safe=""),
+            )
         )
     with pytest.raises(ValueError, match="retired"):
         connect.parse_connect_uri(f"{preview.wallet_uri}&chain_id=legacy")
@@ -213,10 +230,10 @@ def test_bootstrap_connect_preview_session_registers_and_extracts_tokens() -> No
     assert result.session is not None
     assert result.session.sid == result.preview.sid_base64url
     assert result.tokens == connect.ConnectPreviewTokens(
-        wallet="wallet-token",
-        app="app-token",
-        management="management-token",
-        relay="relay-token",
+        wallet=_connect_token(0x62),
+        app=_connect_token(0x61),
+        management=_connect_token(0x63),
+        relay=_connect_token(0x64),
     )
 
 
@@ -276,6 +293,33 @@ def test_bootstrap_connect_preview_session_rejects_identity_substitution() -> No
         )
 
     assert len(client.calls) == 1
+
+
+def test_connect_session_response_rejects_extensions_and_wallet_substitution() -> None:
+    preview = connect.create_connect_session_preview(
+        network_id=_network(),
+        nonce=bytes(range(0xA0, 0xB0)),
+        app_key_pair=_key_pair(),
+    )
+    payload = {
+        "sid": preview.sid_base64url,
+        "network_id": preview.network_id.literal,
+        "app_pk": connect._to_base64url(preview.app_key_pair.public_key),
+        "nonce": connect._to_base64url(preview.nonce),
+    }
+    info = FakeToriiConnectClient().create_connect_session(payload)
+    assert isinstance(info, connect.ConnectSessionInfo)
+    response = info.as_dict()
+    response["ttl"] = "30"
+    with pytest.raises(ValueError, match="inexact field set"):
+        connect.ConnectSessionInfo.from_mapping(response)
+
+    response.pop("ttl")
+    response["wallet_uri"] = response["wallet_uri"].replace(
+        "role=wallet", "role=app"
+    )
+    with pytest.raises(ValueError, match="substituted"):
+        connect.ConnectSessionInfo.from_mapping(response)
 
 
 def test_connect_session_rejects_sid_substitution_gaps_and_replay(

@@ -1,15 +1,12 @@
 #![cfg(feature = "json")]
 //! Tests for FastJson presence bitset: duplicates, missing required, optional defaults.
-
 use norito::json::{JsonDeserialize, Parser, from_json_fast};
-
 #[derive(Debug, PartialEq, norito::derive::FastJson, norito::derive::FastJsonWrite)]
 struct DemoOpt {
     id: u64,
     name: String,
     opt: Option<u64>,
 }
-
 impl JsonDeserialize for DemoOpt {
     fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, norito::json::Error> {
         p.skip_ws();
@@ -50,7 +47,6 @@ impl JsonDeserialize for DemoOpt {
         })
     }
 }
-
 #[test]
 fn optional_field_defaults_to_none_when_absent() {
     let s = r#"{"id":1,"name":"x"}"#;
@@ -64,13 +60,11 @@ fn optional_field_defaults_to_none_when_absent() {
         }
     );
 }
-
 #[derive(Debug, PartialEq, norito::derive::FastJson, norito::derive::FastJsonWrite)]
 struct DemoReq {
     id: u64,
     name: String,
 }
-
 impl JsonDeserialize for DemoReq {
     fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, norito::json::Error> {
         p.skip_ws();
@@ -96,7 +90,6 @@ impl JsonDeserialize for DemoReq {
         })
     }
 }
-
 #[test]
 fn missing_required_field_errors() {
     let s = r#"{"id":1}"#;
@@ -104,13 +97,11 @@ fn missing_required_field_errors() {
     let msg = format!("{err}");
     assert!(msg.contains("missing field `name`"), "msg was: {msg}");
 }
-
 #[derive(Debug, PartialEq, norito::derive::FastJson, norito::derive::FastJsonWrite)]
 struct DemoDup {
     id: u64,
     name: String,
 }
-
 impl JsonDeserialize for DemoDup {
     fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, norito::json::Error> {
         p.skip_ws();
@@ -136,7 +127,6 @@ impl JsonDeserialize for DemoDup {
         })
     }
 }
-
 #[test]
 fn duplicate_field_detection() {
     // Duplicate key "id"

@@ -3,9 +3,7 @@
 //! These tests ensure the JSON fixtures under `fixtures/oracle/` stay aligned
 //! with the data model helpers and the deterministic hashing rules used by
 //! aggregators and connectors.
-
 use std::{collections::BTreeMap, fs, num::NonZeroU64, path::Path, str::FromStr};
-
 use iroha_crypto::{Hash, Signature, SignatureOf};
 use iroha_data_model::{
     account::AccountId,
@@ -20,7 +18,6 @@ use norito::{
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize},
     literal,
 };
-
 const PRICE_FEED_CONFIG_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/oracle/feed_config_price_xor_usd.json"
@@ -41,7 +38,6 @@ const PRICE_FEED_EVENT_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/oracle/feed_event_price_xor_usd.json"
 ));
-
 const FOLLOW_FEED_CONFIG_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/oracle/feed_config_twitter_follow.json"
@@ -62,7 +58,6 @@ const FOLLOW_FEED_EVENT_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/oracle/feed_event_twitter_follow.json"
 ));
-
 #[test]
 fn price_reference_fixtures_are_canonical() {
     let providers = sample_providers();
@@ -79,7 +74,6 @@ fn price_reference_fixtures_are_canonical() {
         ObservationValue::new(1_001_500, 5),
         request_hash,
     );
-
     assert_fixture_eq(
         "feed_config_price_xor_usd.json",
         PRICE_FEED_CONFIG_FIXTURE,
@@ -95,7 +89,6 @@ fn price_reference_fixtures_are_canonical() {
         PRICE_OBSERVATION_FIXTURE,
         &observation_a,
     );
-
     let aggregation = aggregate_observations(
         &feed_config,
         observation_a.body.slot,
@@ -115,7 +108,6 @@ fn price_reference_fixtures_are_canonical() {
         request_hash,
         outcome: aggregation.outcome.clone(),
     };
-
     assert_fixture_eq("report_price_xor_usd.json", PRICE_REPORT_FIXTURE, &report);
     assert_fixture_eq(
         "feed_event_price_xor_usd.json",
@@ -123,19 +115,16 @@ fn price_reference_fixtures_are_canonical() {
         &feed_event,
     );
 }
-
 #[test]
 fn follow_reference_fixtures_are_canonical() {
     let providers = sample_providers();
     let feed_config = follow_feed_config(&providers);
-
     let follow_keyed = KeyedHash::new(
         "pepper-social-v1",
         b"pepper-social-v1",
         b"twitter_user_id:1234567890",
     );
     let follow_value = ObservationValue::from_keyed_hash(&follow_keyed);
-
     let connector_request =
         follow_connector_request(feed_config.feed_config_version, &follow_keyed);
     let request_hash: Hash = connector_request.hash().into();
@@ -151,7 +140,6 @@ fn follow_reference_fixtures_are_canonical() {
         request_hash,
         Some(1_700_000_120_001),
     );
-
     assert_fixture_eq(
         "feed_config_twitter_follow.json",
         FOLLOW_FEED_CONFIG_FIXTURE,
@@ -167,7 +155,6 @@ fn follow_reference_fixtures_are_canonical() {
         FOLLOW_OBSERVATION_FIXTURE,
         &observation_a,
     );
-
     let aggregation = aggregate_observations(
         &feed_config,
         observation_a.body.slot,
@@ -187,7 +174,6 @@ fn follow_reference_fixtures_are_canonical() {
         request_hash,
         outcome: aggregation.outcome.clone(),
     };
-
     assert_fixture_eq("report_twitter_follow.json", FOLLOW_REPORT_FIXTURE, &report);
     assert_fixture_eq(
         "feed_event_twitter_follow.json",
@@ -195,7 +181,6 @@ fn follow_reference_fixtures_are_canonical() {
         &feed_event,
     );
 }
-
 #[test]
 #[ignore = "regenerates oracle reference fixtures"]
 #[allow(clippy::too_many_lines)]
@@ -238,7 +223,6 @@ fn regenerate_follow_reference_fixtures() {
         request_hash: price_request_hash,
         outcome: price_aggregation.outcome.clone(),
     };
-
     write_fixture(
         &base.join("feed_config_price_xor_usd.json"),
         &price_feed_config,
@@ -256,7 +240,6 @@ fn regenerate_follow_reference_fixtures() {
         &base.join("feed_event_price_xor_usd.json"),
         &price_feed_event,
     );
-
     let feed_config = follow_feed_config(&providers);
     let follow_keyed = KeyedHash::new(
         "pepper-social-v1",
@@ -298,7 +281,6 @@ fn regenerate_follow_reference_fixtures() {
         request_hash,
         outcome: aggregation.outcome.clone(),
     };
-
     write_fixture(&base.join("feed_config_twitter_follow.json"), &feed_config);
     write_fixture(
         &base.join("connector_request_twitter_follow.json"),
@@ -311,7 +293,6 @@ fn regenerate_follow_reference_fixtures() {
     write_fixture(&base.join("report_twitter_follow.json"), &report);
     write_fixture(&base.join("feed_event_twitter_follow.json"), &feed_event);
 }
-
 fn assert_fixture_eq<T>(path: &str, fixture: &str, expected: &T)
 where
     T: Clone + PartialEq + FastJsonWrite + JsonDeserialize + JsonSerialize,
@@ -322,21 +303,18 @@ where
             json::to_json_pretty(expected).expect("serialise expected")
         )
     });
-
     assert!(
         decoded == *expected,
         "fixture {path} does not match expected shape\nexpected JSON:\n{}",
         json::to_json_pretty(expected).expect("serialise expected")
     );
 }
-
 fn write_fixture<T: JsonSerialize>(path: &Path, value: &T) {
     let json = json::to_json_pretty(value).expect("serialise fixture");
     fs::write(path, json.as_bytes()).unwrap_or_else(|err| {
         panic!("failed to write {}: {err}", path.display());
     });
 }
-
 fn sample_providers() -> Vec<AccountId> {
     [
         "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
@@ -346,13 +324,11 @@ fn sample_providers() -> Vec<AccountId> {
     .map(parse_fixture_account)
     .collect()
 }
-
 fn parse_fixture_account(literal: &str) -> AccountId {
     AccountId::parse_encoded(literal)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .expect("fixture account id")
 }
-
 fn price_feed_config(providers: &[AccountId]) -> FeedConfig {
     FeedConfig {
         feed_id: FeedId::from_str("price_xor_usd").expect("feed id"),
@@ -373,7 +349,6 @@ fn price_feed_config(providers: &[AccountId]) -> FeedConfig {
         replay_window_slots: NonZeroU64::new(4).expect("replay window"),
     }
 }
-
 fn price_connector_request(feed_config_version: FeedConfigVersion) -> ConnectorRequest {
     let mut headers = BTreeMap::new();
     headers.insert(
@@ -384,10 +359,8 @@ fn price_connector_request(feed_config_version: FeedConfigVersion) -> ConnectorR
         "x-api-key".to_string(),
         iroha_data_model::oracle::RedactedHeaderValue::Hashed(Hash::new(b"price-key")),
     );
-
     let mut query = BTreeMap::new();
     query.insert("pair".to_string(), "XOR/USD".to_string());
-
     ConnectorRequest {
         feed_id: FeedId::from_str("price_xor_usd").expect("feed id"),
         feed_config_version,
@@ -401,7 +374,6 @@ fn price_connector_request(feed_config_version: FeedConfigVersion) -> ConnectorR
         body_hash: Hash::new(b""),
     }
 }
-
 fn price_observation(
     provider: &AccountId,
     value: ObservationValue,
@@ -422,7 +394,6 @@ fn price_observation(
         signature: fixture_signature(0x11),
     }
 }
-
 fn follow_feed_config(providers: &[AccountId]) -> FeedConfig {
     FeedConfig {
         feed_id: FeedId::from_str("twitter_follow_binding").expect("feed id"),
@@ -443,7 +414,6 @@ fn follow_feed_config(providers: &[AccountId]) -> FeedConfig {
         replay_window_slots: NonZeroU64::new(3).expect("replay window"),
     }
 }
-
 fn follow_connector_request(
     feed_config_version: FeedConfigVersion,
     keyed_hash: &KeyedHash,
@@ -465,13 +435,11 @@ fn follow_connector_request(
         "x-challenge-sig".to_string(),
         iroha_data_model::oracle::RedactedHeaderValue::Hashed(Hash::new(b"follow-challenge:proof")),
     );
-
     let mut query = BTreeMap::new();
     query.insert(
         "user_keyed_hash".to_string(),
         hash_literal(&keyed_hash.digest),
     );
-
     ConnectorRequest {
         feed_id: FeedId::from_str("twitter_follow_binding").expect("feed id"),
         feed_config_version,
@@ -485,7 +453,6 @@ fn follow_connector_request(
         body_hash: Hash::new(b""),
     }
 }
-
 fn follow_observation(
     provider: &AccountId,
     value: ObservationValue,
@@ -507,13 +474,11 @@ fn follow_observation(
         signature: fixture_signature(0x55),
     }
 }
-
 fn fixture_signature<T>(byte: u8) -> SignatureOf<T> {
     let signature = Signature::from_hex(format!("{byte:02x}").repeat(128))
         .expect("generate deterministic fixture signature");
     SignatureOf::from_signature(signature)
 }
-
 fn hash_literal(hash: &Hash) -> String {
     literal::format("hash", &hex::encode_upper(hash.as_ref()))
 }

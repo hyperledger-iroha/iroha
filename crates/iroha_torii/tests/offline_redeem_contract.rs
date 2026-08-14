@@ -1,20 +1,16 @@
 //! Source-level closure guards for the first-release typed offline redeem command.
-
 const KAGEMUSHA_COMMANDS_SOURCE: &str = include_str!("../src/offline_commands.rs");
 const OFFLINE_API_SOURCE: &str = include_str!("../../iroha_torii_shared/src/offline_api.rs");
 const TORII_SOURCE: &str = include_str!("../src/lib.rs");
-
 fn production_source(source: &str) -> &str {
     source
         .split("\nmod tests")
         .next()
         .expect("production source")
 }
-
 #[test]
 fn typed_offline_redeem_route_accepts_only_the_direct_v2_request() {
     let commands = production_source(KAGEMUSHA_COMMANDS_SOURCE);
-
     assert!(TORII_SOURCE.contains("&route_catalog::offline::REDEEM"));
     assert!(TORII_SOURCE.contains("catalog_post(handler_offline_redeem)"));
     assert!(TORII_SOURCE.contains("offline_api::OfflineRedeemRequest"));
@@ -35,11 +31,9 @@ fn typed_offline_redeem_route_accepts_only_the_direct_v2_request() {
     assert!(commands.contains("header::RETRY_AFTER"));
     assert!(commands.contains("header::CACHE_CONTROL"));
 }
-
 #[test]
 fn offline_operation_polling_preserves_redeem_identity_and_finality_integrity() {
     let commands = production_source(KAGEMUSHA_COMMANDS_SOURCE);
-
     for marker in [
         "offline_operation_reference_response",
         "offline_operation_status_uri",

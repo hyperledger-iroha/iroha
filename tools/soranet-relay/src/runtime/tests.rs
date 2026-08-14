@@ -1,5 +1,4 @@
 // Relay runtime, authenticated VPN helper, and fail-closed persistence regressions.
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -9,7 +8,6 @@ mod tests {
         sync::Arc,
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
-
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{
         Signature,
@@ -46,7 +44,6 @@ mod tests {
         net::TcpStream,
         time::sleep,
     };
-
     use super::*;
     use crate::{
         capability::{
@@ -58,20 +55,16 @@ mod tests {
         privacy::{PrivacyAggregator, PrivacyConfig, ProxyPolicyEventBuffer},
         scheduler::CellClass,
     };
-
     const TEST_RELAY_ID: RelayId = [0xAB; 32];
-
     fn signed_usage_voucher(key_pair: &KeyPair, body: VpnUsageVoucherBodyV1) -> VpnUsageVoucherV1 {
         VpnUsageVoucherV1::try_sign(body, key_pair.private_key())
             .expect("usage voucher fixture should sign")
     }
-
     #[test]
     fn unix_time_ms_saturates_pre_epoch_clock() {
         assert_eq!(unix_time_ms(UNIX_EPOCH - Duration::from_secs(1)), 0);
         assert_eq!(unix_time_ms(UNIX_EPOCH + Duration::from_millis(42)), 42);
     }
-
     #[test]
     fn handshake_frame_len_prefix_encodes_boundary() {
         assert_eq!(
@@ -81,28 +74,23 @@ mod tests {
                 .to_be_bytes()
         );
     }
-
     #[test]
     fn handshake_frame_len_prefix_rejects_oversized_payload_without_panic() {
         let err = handshake_frame_len_prefix(MAX_HANDSHAKE_FRAME_LEN + 1)
             .expect_err("oversized handshake frame must fail");
-
         assert!(matches!(
             err,
             HandshakeError::FrameTooLarge(length) if length == MAX_HANDSHAKE_FRAME_LEN + 1
         ));
     }
-
     fn sample_metering_key_pair() -> KeyPair {
         KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
             .expect("derive VPN metering fixture key")
     }
-
     fn quantity_nanos(value: u64) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(value, 9))
             .expect("u64 nano-XOR test value fits Quantity")
     }
-
     fn sample_vpn_tariff() -> VpnTariffV1 {
         VpnTariffV1 {
             lease_fee: quantity_nanos(10_000),
@@ -111,7 +99,6 @@ mod tests {
             egress_fee_per_mib: quantity_nanos(2_000),
         }
     }
-
     fn sample_helper_ticket(session_id: [u8; 16]) -> VpnHelperTicketV1 {
         let key_pair = sample_metering_key_pair();
         VpnHelperTicketV1 {
@@ -125,7 +112,6 @@ mod tests {
             expires_at_ms: u64::MAX,
         }
     }
-
     #[test]
     fn route_open_metrics_use_adapter_once() {
         let metrics = Arc::new(Metrics::new());
@@ -134,7 +120,6 @@ mod tests {
         let session = overlay.start_session(Arc::clone(&metrics));
         let handle = overlay.bind_session(session, [0xAA; 16]);
         let adapter = VpnAdapter::new(handle.session().clone(), overlay);
-
         record_route_open_ingress_metrics(Some(&adapter), Some(&handle));
         let snapshot = metrics.snapshot();
         let bytes = RouteOpenFrame::length() as u64;
@@ -145,7 +130,6 @@ mod tests {
         assert_eq!(1, snapshot.vpn_control_ingress_frames);
         assert_eq!(bytes, snapshot.vpn_control_bytes);
         assert_eq!(bytes, snapshot.vpn_control_ingress_bytes);
-
         record_route_open_egress_metrics(Some(&adapter), Some(&handle));
         let snapshot = metrics.snapshot();
         assert_eq!(0, snapshot.vpn_frames);
@@ -158,7 +142,6 @@ mod tests {
         assert_eq!(bytes * 2, snapshot.vpn_control_bytes);
         assert_eq!(bytes, snapshot.vpn_control_egress_bytes);
     }
-
     #[test]
     fn route_open_metrics_fallback_to_session() {
         let metrics = Arc::new(Metrics::new());
@@ -166,7 +149,6 @@ mod tests {
         let overlay = VpnOverlay::from_config(Default::default());
         let session = overlay.start_session(Arc::clone(&metrics));
         let handle = overlay.bind_session(session, [0xBB; 16]);
-
         record_route_open_ingress_metrics(None, Some(&handle));
         let snapshot = metrics.snapshot();
         let bytes = RouteOpenFrame::length() as u64;
@@ -177,7 +159,6 @@ mod tests {
         assert_eq!(1, snapshot.vpn_control_ingress_frames);
         assert_eq!(bytes, snapshot.vpn_control_bytes);
         assert_eq!(bytes, snapshot.vpn_control_ingress_bytes);
-
         record_route_open_egress_metrics(None, Some(&handle));
         let snapshot = metrics.snapshot();
         assert_eq!(0, snapshot.vpn_frames);
@@ -189,23 +170,19 @@ mod tests {
         assert_eq!(bytes * 2, snapshot.vpn_control_bytes);
         assert_eq!(bytes, snapshot.vpn_control_egress_bytes);
     }
-
     #[test]
     fn handshake_byte_guard_does_not_touch_vpn_bytes() {
         let metrics = Arc::new(Metrics::new());
         let overlay = VpnOverlay::from_config(Default::default());
         let _session = overlay.start_session(Arc::clone(&metrics));
         let mut guard = HandshakeByteGuard::new(metrics.as_ref());
-
         guard.add(128);
         guard.finish();
-
         let snapshot = metrics.snapshot();
         assert_eq!(128, snapshot.handshake_bytes);
         assert_eq!(0, snapshot.vpn_bytes);
         assert_eq!(0, snapshot.vpn_ingress_bytes);
     }
-
     #[tokio::test]
     async fn vpn_backend_bootstrap_encodes_session_address_plan() {
         let bootstrap = build_vpn_backend_bootstrap([0x5A; 16]);
@@ -214,11 +191,9 @@ mod tests {
         write_vpn_backend_bootstrap(&mut writer, &bootstrap, Some(&secret))
             .await
             .expect("bootstrap write");
-
         let mut magic = [0u8; 8];
         reader.read_exact(&mut magic).await.expect("magic");
         assert_eq!(&magic, VPN_BACKEND_BOOTSTRAP_MAGIC);
-
         let mut len = [0u8; 2];
         reader.read_exact(&mut len).await.expect("len");
         let len = usize::from(u16::from_be_bytes(len));
@@ -235,7 +210,6 @@ mod tests {
         assert_eq!(decoded.bootstrap.server_tunnel_addresses.len(), 2);
         assert_eq!(decoded.bootstrap.session_routes.len(), 2);
     }
-
     #[tokio::test]
     async fn vpn_backend_status_reports_rejection_message() {
         let (mut writer, mut reader) = duplex(256);
@@ -247,7 +221,6 @@ mod tests {
             .expect_err("status must reject");
         assert!(error.to_string().contains("fail"));
     }
-
     #[tokio::test]
     async fn vpn_backend_bridge_forwards_backend_payloads_into_vpn_frames() {
         let metrics = Arc::new(Metrics::new());
@@ -270,7 +243,6 @@ mod tests {
         let (backend_runtime, mut backend_peer) = duplex(VPN_CELL_LEN * 8);
         let (mut backend_read, mut backend_write) = tokio::io::split(backend_runtime);
         let payload = vec![0xDE, 0xAD, 0xBE, 0xEF];
-
         let bridge_task = tokio::spawn(async move {
             RelayRuntime::bridge_vpn_backend_streams(
                 &mut vpn_write,
@@ -288,7 +260,6 @@ mod tests {
             .await
             .expect("bridge should forward backend payload");
         });
-
         backend_peer
             .write_all(&payload)
             .await
@@ -297,15 +268,12 @@ mod tests {
             .shutdown()
             .await
             .expect("shutdown backend peer");
-
         let parsed = crate::vpn::read_frame(overlay.as_ref(), &mut vpn_peer)
             .await
             .expect("vpn frame");
         assert_eq!(payload, parsed.payload);
-
         bridge_task.await.expect("bridge task joined");
     }
-
     #[tokio::test]
     async fn vpn_backend_bridge_forwards_vpn_payloads_into_backend_stream() {
         let metrics = Arc::new(Metrics::new());
@@ -328,7 +296,6 @@ mod tests {
         let (backend_runtime, mut backend_peer) = duplex(VPN_CELL_LEN * 8);
         let (mut backend_read, mut backend_write) = tokio::io::split(backend_runtime);
         let payload = vec![0xFA, 0xCE, 0xB0, 0x0C];
-
         let bridge_task = tokio::spawn(async move {
             RelayRuntime::bridge_vpn_backend_streams(
                 &mut vpn_write,
@@ -346,7 +313,6 @@ mod tests {
             .await
             .expect("bridge should forward vpn payload");
         });
-
         let cell = overlay
             .data_cell(
                 [0xB2; 16],
@@ -362,26 +328,21 @@ mod tests {
             .await
             .expect("write vpn frame");
         vpn_peer.shutdown().await.expect("shutdown vpn peer");
-
         let mut actual = vec![0u8; payload.len()];
         backend_peer
             .read_exact(&mut actual)
             .await
             .expect("read backend payload");
         assert_eq!(payload, actual);
-
         bridge_task.await.expect("bridge task joined");
     }
-
     #[test]
     fn vpn_voucher_debt_window_rejects_unvouched_overrun() {
         let helper_ticket = sample_helper_ticket([0xA3; 16]);
         let mut window = VpnVoucherDebtWindow::new(&helper_ticket, 4);
-
         window.record_ingress(4).expect("within debt window");
         assert!(window.record_ingress(1).is_err());
     }
-
     #[test]
     fn vpn_voucher_debt_window_rejects_wrong_metering_public_key() {
         let helper_ticket = sample_helper_ticket([0xA5; 16]);
@@ -406,13 +367,11 @@ mod tests {
             voucher,
         };
         let mut window = VpnVoucherDebtWindow::new(&helper_ticket, 64);
-
         let error = window
             .accept_envelope(&envelope)
             .expect_err("wrong metering key must fail");
         assert!(error.to_string().contains("public key"));
     }
-
     #[test]
     fn vpn_usage_voucher_control_updates_receipt() {
         let helper_ticket = sample_helper_ticket([0xA4; 16]);
@@ -453,7 +412,6 @@ mod tests {
             .accept_envelope(&lower_fee_envelope)
             .expect_err("wrong earned fee must fail");
         assert!(lower_fee_error.to_string().contains("earned fee"));
-
         let metrics = Arc::new(Metrics::new());
         metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
         let overlay = VpnOverlay::from_config(Default::default());
@@ -461,11 +419,9 @@ mod tests {
         let handle = overlay.bind_helper_session(session, helper_ticket.clone());
         handle.record_usage_voucher(decoded);
         let receipt = handle.receipt();
-
         assert_eq!(receipt.highest_voucher_sequence, 7);
         assert_eq!(receipt.earned_fee, quantity_nanos(55));
         assert_eq!(receipt.client_voucher_hash, envelope.voucher.hash());
-
         let artifact = handle
             .settlement_artifact()
             .expect("accepted voucher should produce settlement artifact");
@@ -477,6 +433,7 @@ mod tests {
         let path = spool_vpn_settlement_artifact(spool_dir.path(), &artifact)
             .expect("spool settlement artifact");
         let encoded = std::fs::read(&path).expect("read settlement artifact");
+        assert!(encoded.len() <= VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1);
         let record: VpnSettlementSpoolRecord =
             norito::json::from_slice(&encoded).expect("settlement artifact json");
         assert_eq!(record.version, 1);
@@ -506,7 +463,6 @@ mod tests {
             hex::encode(helper_ticket.quote_id)
         );
     }
-
     #[test]
     fn downgrade_detail_prefers_first_non_empty_warning() {
         let warnings = vec![
@@ -527,7 +483,6 @@ mod tests {
             "expected to sanitize suite_list warning"
         );
     }
-
     #[test]
     fn downgrade_detail_sanitizes_constant_rate_warning() {
         let warnings = vec![CapabilityWarning {
@@ -541,13 +496,11 @@ mod tests {
             "constant-rate warnings should produce deterministic slug"
         );
     }
-
     #[test]
     fn handshake_suite_downgrade_records_only_nk3() {
         let metrics = Metrics::new();
         record_handshake_suite_downgrade(&metrics, HandshakeSuite::Nk2Hybrid);
         record_handshake_suite_downgrade(&metrics, HandshakeSuite::Nk3PqForwardSecure);
-
         let snapshot = metrics.snapshot();
         assert_eq!(
             snapshot
@@ -557,7 +510,6 @@ mod tests {
             Some(1)
         );
     }
-
     #[test]
     fn constant_rate_lane_manager_auto_disables_and_restores() {
         let spec = constant_rate::profile_by_name("core").expect("core profile");
@@ -570,15 +522,12 @@ mod tests {
             spec.tick_millis,
             u64::from(spec.dummy_lane_floor),
         );
-
         // 7/8 neighbors => 87.5% saturation, exceeding the 85% disable threshold.
         manager.apply_active_sample(7, &metrics);
         assert_eq!(manager.current_cap(), spec.dummy_lane_floor);
-
         // Drop to 3/8 neighbors (37.5%), which is below the 75% restore threshold.
         manager.apply_active_sample(3, &metrics);
         assert_eq!(manager.current_cap(), spec.neighbor_cap);
-
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.constant_rate_queue_depth, 3);
         assert_eq!(snapshot.constant_rate_active_neighbors, 3);
@@ -606,20 +555,16 @@ mod tests {
             "expected saturation gauge to reflect reduced utilization"
         );
     }
-
     #[test]
     fn constant_rate_engine_tracks_dummy_ratio_and_queue_depth() {
         let spec = constant_rate::profile_by_name("null").expect("null profile");
         let mut engine = ConstantRateEngine::new(spec);
-
         let first = engine.next_cell();
         assert!(first.cell.is_dummy);
         assert_eq!(first.queues.total(), 0);
         assert_eq!(first.dummy_ratio, 1.0);
-
         assert!(engine.enqueue(Cell::new(CellClass::Interactive, vec![0xAA, 0xBB])));
         assert!(engine.enqueue(Cell::new(CellClass::Bulk, vec![0xCC])));
-
         let second = engine.next_cell();
         assert!(
             !second.cell.is_dummy,
@@ -638,25 +583,20 @@ mod tests {
             "dummy ratio should drop after sending a real cell"
         );
     }
-
     #[test]
     fn constant_rate_engine_drops_low_priority_on_congestion_signal() {
         let spec = constant_rate::profile_by_name("home").expect("home profile");
         let mut engine = ConstantRateEngine::new(spec);
-
         assert!(engine.enqueue(Cell::new(CellClass::Control, vec![0x01])));
         assert!(engine.enqueue(Cell::new(CellClass::Interactive, vec![0x02])));
         assert!(engine.enqueue(Cell::new(CellClass::Bulk, vec![0x03])));
-
         let action = engine
             .apply_congestion_hint(CELL_SIZE_BYTES.saturating_sub(1))
             .expect("buffer pressure should emit a congestion action");
         assert_eq!(action.dropped_class, Some(CellClass::Bulk));
-
         // If congestion clears, the signal should return None and avoid spurious drops.
         assert!(engine.apply_congestion_hint(CELL_SIZE_BYTES).is_none());
     }
-
     fn in_memory_ticket_replays(capacity: usize) -> StdMutex<TicketReplayState> {
         let limits =
             TicketRevocationStoreLimits::new(capacity, Duration::from_secs(300)).expect("limits");
@@ -667,7 +607,6 @@ mod tests {
             capacity,
         })
     }
-
     fn client_hello_frame_with_resume(resume_hash: Option<&[u8]>) -> Vec<u8> {
         let mut frame = Vec::new();
         frame.push(crate::handshake::CLIENT_HELLO_TYPE);
@@ -695,14 +634,12 @@ mod tests {
         frame.resize(crate::handshake::NOISE_PADDING_BLOCK, 0);
         frame
     }
-
     #[test]
     fn admission_transcript_commits_to_the_exact_client_hello() {
         let without_resume = client_hello_frame_with_resume(None);
         let with_resume = client_hello_frame_with_resume(Some(&[0x44; 32]));
         ClientHello::parse(&without_resume).expect("parse hello without resume hash");
         ClientHello::parse(&with_resume).expect("parse hello with resume hash");
-
         let first = pow::derive_admission_transcript(&without_resume);
         assert_eq!(
             first,
@@ -715,7 +652,6 @@ mod tests {
             "changing any client hello field must change the admission binding"
         );
     }
-
     #[test]
     fn rejected_admission_never_runs_expensive_handshake() {
         let expensive_ran = std::cell::Cell::new(false);
@@ -735,7 +671,6 @@ mod tests {
             "ML-KEM handshake work must stay behind admission"
         );
     }
-
     #[test]
     fn verify_puzzle_ticket_requires_binding_and_consumes_once() {
         let params = PuzzleParameters::new(
@@ -751,7 +686,6 @@ mod tests {
         let admission_transcript = [0x9Au8; 32];
         let mut rng = StdRng::from_seed([0x5Au8; 32]);
         let replays = in_memory_ticket_replays(4);
-
         let binding = PuzzleBinding::new(&descriptor, &relay_id, &admission_transcript);
         let ticket = puzzle::mint_ticket(&params, &binding, Duration::from_secs(120), &mut rng)
             .expect("mint transcript-bound ticket");
@@ -775,7 +709,6 @@ mod tests {
             ),
             Err(HandshakeError::Pow(pow::Error::Replay))
         ));
-
         let mismatched = [0x44u8; 32];
         let mismatched_replays = in_memory_ticket_replays(4);
         let mismatched_ticket =
@@ -795,7 +728,6 @@ mod tests {
             other => panic!("unexpected puzzle verification error: {other:?}"),
         }
     }
-
     #[test]
     fn verify_puzzle_ticket_rejects_wrong_relay_binding() {
         let params = PuzzleParameters::new(
@@ -810,13 +742,11 @@ mod tests {
         let relay_id = vec![0x42; 32];
         let admission_transcript = [0x24u8; 32];
         let mut rng = StdRng::from_seed([0x91u8; 32]);
-
         let binding = PuzzleBinding::new(&descriptor, &relay_id, &admission_transcript);
         let ticket = puzzle::mint_ticket(&params, &binding, Duration::from_secs(50), &mut rng)
             .expect("mint ticket with relay binding");
         let mismatched_relay = vec![0x99; 32];
         let replays = in_memory_ticket_replays(4);
-
         let err = verify_puzzle_ticket_binding(
             &ticket,
             &params,
@@ -831,7 +761,6 @@ mod tests {
             other => panic!("unexpected puzzle verification error: {other:?}"),
         }
     }
-
     #[test]
     fn verify_pow_ticket_rejects_wrong_relay_binding() {
         let params = PowParameters::new(16, Duration::from_secs(180), Duration::from_secs(45));
@@ -840,12 +769,10 @@ mod tests {
         let relay_b = [0x02; 32];
         let transcript = [0x03; 32];
         let mut rng = StdRng::from_seed([0x22; 32]);
-
         let binding = pow::ChallengeBinding::new(&descriptor, &relay_a, &transcript);
         let ticket = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
             .expect("mint pow ticket");
         let replays = in_memory_ticket_replays(4);
-
         let err = verify_pow_ticket_binding(
             &ticket,
             &params,
@@ -860,7 +787,6 @@ mod tests {
             other => panic!("unexpected pow verification error: {other:?}"),
         }
     }
-
     #[test]
     fn verify_pow_ticket_respects_transcript_binding() {
         let params = PowParameters::new(16, Duration::from_secs(120), Duration::from_secs(30));
@@ -868,12 +794,10 @@ mod tests {
         let relay_id = [0x0D; 32];
         let transcript = [0xFE; 32];
         let mut rng = StdRng::from_seed([0x33; 32]);
-
         let binding = pow::ChallengeBinding::new(&descriptor, &relay_id, &transcript);
         let ticket = pow::mint_ticket(&params, &binding, Duration::from_secs(40), &mut rng)
             .expect("mint pow ticket with transcript");
         let replays = in_memory_ticket_replays(4);
-
         let mismatched = [0xAA; 32];
         let err = verify_pow_ticket_binding(
             &ticket,
@@ -889,7 +813,6 @@ mod tests {
             other => panic!("unexpected pow verification error: {other:?}"),
         }
     }
-
     #[test]
     fn relay_ticket_replay_is_rejected_after_store_reload() {
         let dir = tempdir().expect("tempdir");
@@ -903,7 +826,6 @@ mod tests {
         let mut rng = StdRng::from_seed([0x68; 32]);
         let ticket = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
             .expect("mint ticket");
-
         let persisted =
             TicketRevocationStore::load(&path, limits, SystemTime::now()).expect("load store");
         let replays = StdMutex::new(TicketReplayState {
@@ -921,7 +843,6 @@ mod tests {
         )
         .expect("first ticket use");
         drop(replays);
-
         let persisted =
             TicketRevocationStore::load(&path, limits, SystemTime::now()).expect("reload store");
         let reloaded = StdMutex::new(TicketReplayState {
@@ -941,7 +862,6 @@ mod tests {
             Err(HandshakeError::Pow(pow::Error::Replay))
         ));
     }
-
     #[test]
     fn full_replay_store_rejects_before_costly_ticket_verification() {
         let replays = in_memory_ticket_replays(1);
@@ -955,7 +875,6 @@ mod tests {
             .expect("mint first");
         let second = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
             .expect("mint second");
-
         verify_and_consume_ticket(&first, &replays, || Ok(())).expect("consume first");
         let costly_verify_ran = std::cell::Cell::new(false);
         let err = verify_and_consume_ticket(&second, &replays, || {
@@ -969,7 +888,6 @@ mod tests {
             "capacity gate must run before Argon2 or ML-KEM work"
         );
     }
-
     #[test]
     fn concurrent_duplicate_ticket_is_rejected_while_first_use_is_pending() {
         let replays = Arc::new(in_memory_ticket_replays(2));
@@ -983,7 +901,6 @@ mod tests {
             .expect("mint ticket");
         let (entered_tx, entered_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
-
         let first_replays = Arc::clone(&replays);
         let first = std::thread::spawn(move || {
             verify_and_consume_ticket(&ticket, first_replays.as_ref(), || {
@@ -993,7 +910,6 @@ mod tests {
             })
         });
         entered_rx.recv().expect("first verification entered");
-
         let second_verify_ran = std::cell::Cell::new(false);
         let duplicate = verify_and_consume_ticket(&ticket, replays.as_ref(), || {
             second_verify_ran.set(true);
@@ -1005,14 +921,12 @@ mod tests {
             !second_verify_ran.get(),
             "duplicate must be rejected before verification work"
         );
-
         release_tx.send(()).expect("release first verification");
         first
             .join()
             .expect("first verification thread")
             .expect("first ticket use succeeds");
     }
-
     #[test]
     fn pow_failure_reason_labels_signature_and_absent_key_cases() {
         let signature = pow::Error::InvalidSignature;
@@ -1020,20 +934,17 @@ mod tests {
             pow_failure_reason(&signature),
             SoranetPowFailureReasonV1::SignatureInvalid
         );
-
         let malformed = pow::Error::Malformed("signed ticket payload".to_string());
         assert_eq!(
             pow_failure_reason(&malformed),
             SoranetPowFailureReasonV1::UnsupportedVersion
         );
-
         let overflow = pow::Error::ExpiryTimestampOverflow(u64::MAX);
         assert_eq!(
             pow_failure_reason(&overflow),
             SoranetPowFailureReasonV1::ClockError
         );
     }
-
     #[test]
     fn norito_stream_open_roundtrip() {
         let open = NoritoStreamOpen {
@@ -1055,7 +966,6 @@ mod tests {
         assert_eq!(decoded.padding_budget_ms, open.padding_budget_ms);
         assert_eq!(decoded.access_kind, open.access_kind);
     }
-
     #[test]
     fn kaigi_stream_open_roundtrip() {
         let open = KaigiStreamOpen {
@@ -1079,14 +989,12 @@ mod tests {
         assert_eq!(decoded.access_kind, open.access_kind);
         assert_eq!(decoded.authenticated, open.authenticated);
     }
-
     #[test]
     fn norito_padding_delay_matches_expected_formula() {
         let channel_id = [0x11; 32];
         let period = Duration::from_millis(100);
         let now = UNIX_EPOCH + Duration::from_millis(45);
         let delay = RelayRuntime::norito_padding_delay(&channel_id, period, now);
-
         let period_millis = period.as_millis();
         let mut seed_bytes = [0u8; 8];
         seed_bytes.copy_from_slice(&channel_id[..8]);
@@ -1100,7 +1008,6 @@ mod tests {
         let expected = (period_millis + offset - now_mod) % period_millis;
         assert_eq!(delay.as_millis(), expected);
     }
-
     #[test]
     fn norito_padding_delay_zero_when_on_schedule() {
         let channel_id = [0x42; 32];
@@ -1111,28 +1018,23 @@ mod tests {
         let seed = u64::from_le_bytes(seed_bytes);
         let offset = seed % period_millis;
         let now = UNIX_EPOCH + Duration::from_millis(2 * period_millis + offset);
-
         let delay = RelayRuntime::norito_padding_delay(&channel_id, period, now);
         assert_eq!(delay.as_millis(), 0);
     }
-
     #[test]
     fn kaigi_multiaddr_to_websocket_converts_basic_multiaddr() {
         let url = RelayRuntime::kaigi_multiaddr_to_websocket("/dns/kaigi.test/tcp/9443/ws")
             .expect("convert dns multiaddr");
         assert_eq!(url, "ws://kaigi.test:9443/");
-
         let ipv6_url = RelayRuntime::kaigi_multiaddr_to_websocket("/ip6/2001:db8::1/tcp/8443/wss")
             .expect("convert ipv6 multiaddr");
         assert_eq!(ipv6_url, "wss://[2001:db8::1]:8443/");
     }
-
     #[test]
     fn kaigi_multiaddr_to_websocket_rejects_invalid_multiaddr() {
         assert!(RelayRuntime::kaigi_multiaddr_to_websocket("/udp/host/9999").is_none());
         assert!(RelayRuntime::kaigi_multiaddr_to_websocket("").is_none());
     }
-
     fn load_config(json: &str) -> RelayConfig {
         let file = NamedTempFile::new().expect("create temp file");
         std::fs::write(file.path(), json).expect("write config");
@@ -1147,14 +1049,12 @@ mod tests {
         }
         config
     }
-
     fn sample_account(seed: u8) -> AccountId {
         let (public_key, _) = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive relay runtime fixture account key")
             .into_parts();
         AccountId::new(public_key)
     }
-
     #[test]
     fn fixture_key_helpers_use_checked_seed_derivation() {
         let expected_metering = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
@@ -1163,13 +1063,11 @@ mod tests {
             sample_metering_key_pair().public_key(),
             expected_metering.public_key()
         );
-
         let (public_key, _) = KeyPair::try_from_seed(vec![0x21; 32], Algorithm::Ed25519)
             .expect("derive relay runtime fixture account key")
             .into_parts();
         assert_eq!(sample_account(0x21), AccountId::new(public_key));
     }
-
     fn sample_bandwidth_proof(
         epoch: u32,
         measurement_seed: u8,
@@ -1194,7 +1092,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     struct CertificateTestFixture {
         descriptor_commit: [u8; 32],
         bundle: RelayCertificateBundleV2,
@@ -1204,15 +1101,12 @@ mod tests {
         issuer_ed25519_hex: String,
         issuer_mldsa_hex: String,
     }
-
     const TEST_ML_KEM_PUBLIC_LEN: usize = 1_184;
     const TEST_ML_KEM_SECRET_LEN: usize = 2_400;
-
     impl CertificateTestFixture {
         fn new() -> Self {
             Self::with_valid_until(i64::MAX)
         }
-
         fn with_valid_until(valid_until: i64) -> Self {
             let descriptor_commit = [0xAB; 32];
             let identity_seed = [0x11; 32];
@@ -1220,10 +1114,8 @@ mod tests {
             let identity_signing = SigningKey::from_bytes(&identity_seed);
             let identity_public = identity_signing.verifying_key();
             let identity_public_bytes = identity_public.to_bytes();
-
             let relay_mldsa_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
                 .expect("ML-DSA keypair generation should succeed");
-
             let kem_policy = KemRotationPolicyV1 {
                 mode: KemRotationModeV1::Static,
                 preferred_suite: 0x01,
@@ -1231,10 +1123,8 @@ mod tests {
                 rotation_interval_hours: 0,
                 grace_period_hours: 0,
             };
-
             let ml_kem_private = vec![0x33; TEST_ML_KEM_SECRET_LEN];
             let ml_kem_public = vec![0x44; TEST_ML_KEM_PUBLIC_LEN];
-
             let certificate = RelayCertificateV2 {
                 relay_id: identity_public_bytes,
                 identity_ed25519: identity_public_bytes,
@@ -1273,19 +1163,15 @@ mod tests {
                 issuer_fingerprint: [0x77; 32],
                 pq_kem_public: ml_kem_public.clone(),
             };
-
             let issuer_seed = [0x99; 32];
             let issuer_signing = SigningKey::from_bytes(&issuer_seed);
             let issuer_mldsa_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
                 .expect("ML-DSA keypair generation should succeed");
-
             let bundle = certificate
                 .issue(&issuer_signing, issuer_mldsa_keys.secret_key())
                 .expect("issue certificate");
-
             let bundle_file = NamedTempFile::new().expect("bundle file");
             std::fs::write(bundle_file.path(), bundle.to_cbor()).expect("write bundle");
-
             let manifest_file = NamedTempFile::new().expect("manifest file");
             let manifest_identity_hex = identity_seed_hex.clone();
             std::fs::write(
@@ -1305,10 +1191,8 @@ mod tests {
                 ),
             )
             .expect("write manifest");
-
             let issuer_ed25519_hex = hex::encode(issuer_signing.verifying_key().to_bytes());
             let issuer_mldsa_hex = hex::encode(issuer_mldsa_keys.public_key());
-
             Self {
                 descriptor_commit,
                 bundle,
@@ -1320,13 +1204,11 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn generates_self_signed_config() {
         let config = RelayRuntime::self_signed_server_config("relay.test");
         assert!(config.is_ok());
     }
-
     #[test]
     fn relay_quic_server_rejects_tls_early_data() {
         let rcgen::CertifiedKey { cert, signing_key } =
@@ -1336,10 +1218,44 @@ mod tests {
             PrivateKeyDer::try_from(signing_key.serialize_der()).expect("encode test private key");
         let tls = RelayRuntime::tls_server_config(vec![cert.der().clone()], key)
             .expect("build relay TLS configuration");
-
         assert_eq!(tls.max_early_data_size, 0);
     }
-
+    #[test]
+    fn relay_tls_file_loaders_enforce_first_release_bounds() {
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["relay.test".to_owned()])
+                .expect("generate test certificate");
+        let directory = tempdir().expect("temporary directory");
+        let certificate_path = directory.path().join("relay-chain.pem");
+        let private_key_path = directory.path().join("relay-key.pem");
+        let certificate_pem = format!("{}\n", cert.pem());
+        std::fs::write(
+            &certificate_path,
+            certificate_pem.repeat(TLS_CERTIFICATE_CHAIN_MAX_ENTRIES_V1),
+        )
+        .expect("write exact certificate chain");
+        let certificates = RelayRuntime::load_certificates(&certificate_path)
+            .expect("exact certificate chain must load");
+        assert_eq!(certificates.len(), TLS_CERTIFICATE_CHAIN_MAX_ENTRIES_V1);
+        std::fs::write(
+            &certificate_path,
+            certificate_pem.repeat(TLS_CERTIFICATE_CHAIN_MAX_ENTRIES_V1 + 1),
+        )
+        .expect("write oversized certificate chain");
+        let error = RelayRuntime::load_certificates(&certificate_path)
+            .expect_err("max+1 certificates must fail");
+        assert!(error.to_string().contains("certificate limit"), "{error}");
+        std::fs::write(&private_key_path, signing_key.serialize_pem()).expect("write private key");
+        RelayRuntime::load_private_key(&private_key_path).expect("valid private key must load");
+        std::fs::write(
+            &private_key_path,
+            vec![0_u8; TLS_PRIVATE_KEY_MAX_BYTES_V1 + 1],
+        )
+        .expect("write oversized private key");
+        let error = RelayRuntime::load_private_key(&private_key_path)
+            .expect_err("max+1 private key must fail before parse");
+        assert!(error.to_string().contains("first-release limit"), "{error}");
+    }
     #[test]
     fn vpn_helper_binding_commits_to_authenticated_transport_trust() {
         let relay_id = [0x11; 32];
@@ -1355,14 +1271,12 @@ mod tests {
         let expected =
             vpn_helper_handshake_binding(b"ticket", &relay_id, &descriptor_commit, &trust);
         assert_ne!(expected, [0; 32]);
-
         let mut changed = trust.clone();
         changed.directory_snapshot_digest[0] ^= 0x01;
         assert_ne!(
             expected,
             vpn_helper_handshake_binding(b"ticket", &relay_id, &descriptor_commit, &changed)
         );
-
         let mut changed = trust;
         changed.tls_server_name = "other.relay.test".to_owned();
         assert_ne!(
@@ -1370,7 +1284,6 @@ mod tests {
             vpn_helper_handshake_binding(b"ticket", &relay_id, &descriptor_commit, &changed)
         );
     }
-
     #[test]
     fn vpn_helper_ticket_cannot_outlive_authenticated_transport_trust() {
         let mut ticket = sample_helper_ticket([0x11; 16]);
@@ -1383,7 +1296,6 @@ mod tests {
             directory_snapshot_digest: [0x55; 32],
             valid_until_ms: 100,
         };
-
         let error = ensure_vpn_helper_ticket_within_trust(&ticket, &trust)
             .expect_err("ticket past trust expiry must fail");
         assert!(error.to_string().contains("outlives"));
@@ -1391,7 +1303,6 @@ mod tests {
         ensure_vpn_helper_ticket_within_trust(&ticket, &trust)
             .expect("ticket ending at the exclusive trust boundary is accepted");
     }
-
     #[tokio::test]
     async fn vpn_helper_ticket_replay_is_rejected_after_relay_restart() {
         let directory = tempdir().expect("temporary directory");
@@ -1415,7 +1326,6 @@ mod tests {
                 .await
                 .expect("first redemption must be persisted");
         }
-
         let reloaded = load_vpn_helper_ticket_replay_ledger(&config, &relay_id, now_ms + 1)
             .expect("reload durable replay ledger");
         let error =
@@ -1427,7 +1337,6 @@ mod tests {
             HandshakeError::HelperTicket(VpnHelperTicketError::Replayed)
         ));
     }
-
     #[test]
     fn vpn_helper_ticket_replay_ledger_fails_closed_on_corrupt_state() {
         let directory = tempdir().expect("temporary directory");
@@ -1442,7 +1351,6 @@ mod tests {
             helper_ticket_replay_store_path: replay_path,
             ..VpnConfig::default()
         };
-
         let error = load_vpn_helper_ticket_replay_ledger(&config, &[0x33; 32], 1_000_000)
             .expect_err("corrupt replay state must prevent startup");
         assert!(matches!(
@@ -1450,7 +1358,6 @@ mod tests {
             ConfigError::Vpn(message) if message.contains("failed to load VPN helper-ticket replay ledger")
         ));
     }
-
     #[test]
     fn vpn_helper_ticket_lifetime_is_bounded_by_relay_lease_policy() {
         let directory = tempdir().expect("temporary directory");
@@ -1467,7 +1374,6 @@ mod tests {
         ticket.expires_at_ms = now_ms + 1_001;
         let ledger = load_vpn_helper_ticket_replay_ledger(&config, &ticket.relay_id, now_ms)
             .expect("create replay ledger");
-
         let error = consume_vpn_helper_ticket(
             &StdMutex::new(ledger),
             vpn_helper_ticket_replay_id(&ticket),
@@ -1480,7 +1386,6 @@ mod tests {
             HandshakeError::ReplayStore(message) if message.contains("vpn.lease_secs")
         ));
     }
-
     #[test]
     fn runtime_rejects_missing_identity() {
         let json = r#"
@@ -1500,7 +1405,6 @@ mod tests {
             Ok(_) => panic!("runtime must fail closed without a persistent identity key"),
         }
     }
-
     #[test]
     fn runtime_loads_descriptor_commit_from_certificate() {
         let fixture = CertificateTestFixture::new();
@@ -1535,7 +1439,6 @@ mod tests {
             fixture.descriptor_commit
         );
     }
-
     #[test]
     fn runtime_rejects_expired_certificate_at_startup() {
         let fixture = CertificateTestFixture::with_valid_until(2);
@@ -1569,7 +1472,6 @@ mod tests {
             "unexpected startup error: {err}"
         );
     }
-
     #[test]
     fn resolve_handshake_suites_defaults_without_certificate() {
         let suites = resolve_handshake_suites(None).expect("suites");
@@ -1581,14 +1483,12 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn resolve_handshake_suites_uses_certificate_order() {
         let fixture = CertificateTestFixture::new();
         let suites = resolve_handshake_suites(Some(&fixture.bundle)).expect("suites");
         assert_eq!(suites, fixture.bundle.certificate.handshake_suites);
     }
-
     #[test]
     fn runtime_rejects_descriptor_commit_mismatch() {
         let fixture = CertificateTestFixture::new();
@@ -1627,7 +1527,6 @@ mod tests {
             Ok(_) => panic!("expected mismatch to error"),
         }
     }
-
     #[test]
     fn runtime_config_requires_mldsa65_issuer_key() {
         let fixture = CertificateTestFixture::new();
@@ -1662,7 +1561,6 @@ mod tests {
             Ok(_) => panic!("missing ML-DSA issuer key must fail config validation"),
         }
     }
-
     fn negotiated_caps_fixture() -> NegotiatedCapabilities {
         NegotiatedCapabilities {
             kem: KemAdvertisement {
@@ -1679,7 +1577,6 @@ mod tests {
             constant_rate: None,
         }
     }
-
     #[test]
     fn validate_client_selection_rejects_kem_mismatch() {
         let negotiated = negotiated_caps_fixture();
@@ -1696,7 +1593,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn validate_client_selection_rejects_signature_mismatch() {
         let negotiated = negotiated_caps_fixture();
@@ -1713,7 +1609,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn validate_client_selection_accepts_matching_ids() {
         let negotiated = negotiated_caps_fixture();
@@ -1724,7 +1619,6 @@ mod tests {
         )
         .expect("matching ids accepted");
     }
-
     #[test]
     fn append_grease_tlvs_preserves_order() {
         let base = vec![0xAA, 0xBB];
@@ -1744,7 +1638,6 @@ mod tests {
         ];
         assert_eq!(appended, expected);
     }
-
     #[test]
     fn append_grease_tlvs_rejects_oversized_values_without_truncation() {
         let err = append_grease_tlvs(
@@ -1755,7 +1648,6 @@ mod tests {
             }],
         )
         .expect_err("oversized GREASE TLV must fail");
-
         assert!(matches!(
             err,
             CapabilityError::CapabilityValueTooLarge {
@@ -1764,7 +1656,6 @@ mod tests {
             } if length == usize::from(u16::MAX) + 1
         ));
     }
-
     #[test]
     fn runtime_honours_configured_identity_key() {
         let seed_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
@@ -1780,7 +1671,6 @@ mod tests {
         let config = load_config(&json);
         let runtime = RelayRuntime::new(config).expect("runtime");
         let context = runtime.circuit_context();
-
         let seed_bytes = hex::decode(seed_hex).expect("valid hex");
         let mut seed = [0u8; 32];
         seed.copy_from_slice(&seed_bytes);
@@ -1788,13 +1678,11 @@ mod tests {
             PrivateKey::from_bytes(Algorithm::Ed25519, &seed).expect("configured key parse");
         let expected_pair =
             KeyPair::from_private_key(expected_private).expect("configured keypair derive");
-
         assert_eq!(
             context.identity_key.public_key(),
             expected_pair.public_key()
         );
     }
-
     #[test]
     fn runtime_enables_pow_when_required() {
         let dir = tempdir().expect("tempdir");
@@ -1816,13 +1704,11 @@ mod tests {
         let config = load_config(&json);
         let runtime = RelayRuntime::new(config).expect("runtime");
         let context = runtime.circuit_context();
-
         assert!(context.dos.is_pow_required());
         assert_eq!(context.dos.current_pow_parameters().difficulty(), 6);
         let replay_state = context.ticket_replays.lock().expect("ticket replay lock");
         assert_eq!(replay_state.capacity, 8_192);
     }
-
     #[test]
     fn runtime_fails_closed_on_corrupt_ticket_replay_snapshot() {
         let dir = tempdir().expect("tempdir");
@@ -1854,7 +1740,6 @@ mod tests {
             Ok(_) => panic!("corrupt ticket replay state must fail startup"),
         }
     }
-
     #[test]
     fn runtime_loads_identity_from_manifest() {
         let seed_hex = "c1d1c2f493ad2db3fbc5ff0bfb8bb4e0f2c5c2d9e9caa8ffd5d38a1808fa4c55";
@@ -1871,7 +1756,6 @@ mod tests {
             ),
         )
         .expect("write manifest");
-
         let manifest_path = manifest.path().to_str().expect("path to utf-8");
         let json = format!(
             r#"{{
@@ -1885,7 +1769,6 @@ mod tests {
         let config = load_config(&json);
         let runtime = RelayRuntime::new(config).expect("runtime");
         let context = runtime.circuit_context();
-
         let seed_bytes = hex::decode(seed_hex).expect("valid hex");
         let mut seed = [0u8; 32];
         seed.copy_from_slice(&seed_bytes);
@@ -1893,13 +1776,11 @@ mod tests {
             PrivateKey::from_bytes(Algorithm::Ed25519, &seed).expect("manifest key parse");
         let expected_pair =
             KeyPair::from_private_key(expected_private).expect("manifest keypair derive");
-
         assert_eq!(
             context.identity_key.public_key(),
             expected_pair.public_key()
         );
     }
-
     #[test]
     fn runtime_fails_when_manifest_missing_key() {
         let manifest = NamedTempFile::new().expect("create manifest file");
@@ -1908,7 +1789,6 @@ mod tests {
             r#"{ "version": 1, "identity": { "note": "no private key yet" } }"#,
         )
         .expect("write manifest");
-
         let manifest_path = manifest.path().to_str().expect("path to utf-8");
         let json = format!(
             r#"{{
@@ -1931,7 +1811,6 @@ mod tests {
             Ok(_) => panic!("expected manifest error, got Ok(_)"),
         }
     }
-
     #[tokio::test]
     async fn bandwidth_proof_populates_accumulator() {
         let accumulator = Arc::new(Mutex::new(RelayPerformanceAccumulator::new(TEST_RELAY_ID)));
@@ -1947,7 +1826,6 @@ mod tests {
         let privacy_events = Arc::new(PrivacyEventBuffer::new(64));
         let mode = RelayMode::Entry;
         let remote: SocketAddr = "127.0.0.1:0".parse().expect("socket addr");
-
         RelayRuntime::handle_bandwidth_proof(
             &encoded,
             &accumulator,
@@ -1961,7 +1839,6 @@ mod tests {
         )
         .await
         .expect("proof accepted");
-
         {
             let guard = accumulator.lock().await;
             let summaries = guard.summaries();
@@ -1971,7 +1848,6 @@ mod tests {
             assert_eq!(summary.verified_bandwidth_bytes, proof.verified_bytes);
             assert_eq!(summary.measurement_ids, vec![proof.measurement_id]);
         }
-
         // Duplicate proof must be ignored.
         RelayRuntime::handle_bandwidth_proof(
             &encoded,
@@ -1990,7 +1866,6 @@ mod tests {
         let summaries = guard.summaries();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].measurement_ids.len(), 1);
-
         let rendered = privacy.render_prometheus(
             RelayMode::Entry,
             SystemTime::now() + Duration::from_secs(600),
@@ -2000,7 +1875,6 @@ mod tests {
             "privacy metrics missing bandwidth line: {rendered}"
         );
     }
-
     #[test]
     fn incentive_metrics_expose_relay_label() {
         let summary = EpochSummary {
@@ -2011,8 +1885,8 @@ mod tests {
             confidence_floor_per_mille: 875,
             measurement_ids: vec![[0x99; 32]],
         };
-
-        let metrics = render_incentive_prometheus(TEST_RELAY_ID, &[summary], RelayMode::Entry);
+        let metrics = render_incentive_prometheus(TEST_RELAY_ID, &[summary], RelayMode::Entry)
+            .expect("bounded incentive metrics");
         let relay_hex = hex::encode(TEST_RELAY_ID);
         assert!(
             metrics.contains(&format!("relay=\"{relay_hex}\"")),
@@ -2023,13 +1897,27 @@ mod tests {
             "bandwidth metric missing: {metrics}"
         );
     }
-
+    #[test]
+    fn incentive_metrics_reject_epoch_count_max_plus_one() {
+        let summary = EpochSummary {
+            epoch: 3,
+            uptime_seconds: u64::MAX,
+            scheduled_uptime_seconds: u64::MAX,
+            verified_bandwidth_bytes: u128::MAX,
+            confidence_floor_per_mille: 1_000,
+            measurement_ids: Vec::new(),
+        };
+        let exact = vec![summary.clone(); INCENTIVE_MAX_ACTIVE_EPOCHS_V1];
+        render_incentive_prometheus(TEST_RELAY_ID, &exact, RelayMode::Entry)
+            .expect("exact epoch corridor");
+        let overflow = vec![summary; INCENTIVE_MAX_ACTIVE_EPOCHS_V1 + 1];
+        assert!(render_incentive_prometheus(TEST_RELAY_ID, &overflow, RelayMode::Entry).is_err());
+    }
     #[test]
     fn ensure_nonzero_accepts_non_zero_bytes() {
         let bytes = [0u8, 1, 0, 2];
         assert!(ensure_nonzero("test", &bytes).is_ok());
     }
-
     #[test]
     fn ensure_nonzero_rejects_all_zero_bytes() {
         let bytes = [0u8; 4];
@@ -2039,7 +1927,6 @@ mod tests {
             HandshakeError::InvalidClient("all zero rejected")
         ));
     }
-
     #[test]
     fn admin_authorization_verifies_the_complete_bearer_token() {
         let file = NamedTempFile::new().expect("admin token file");
@@ -2047,54 +1934,43 @@ mod tests {
             .expect("write admin token");
         let authorization =
             AdminAuthorization::load(file.path()).expect("load protected admin token");
-
         assert!(authorization.matches("soranet-admin-token-0123456789abcdef"));
         assert!(!authorization.matches("soranet-admin-token-0123456789abcdeg"));
         assert!(!authorization.matches("soranet-admin-token-0123456789abcde"));
     }
-
     #[test]
     fn admin_authorization_rejects_placeholder_secret() {
         let file = NamedTempFile::new().expect("admin token file");
         std::fs::write(file.path(), b"REPLACE_ME").expect("write placeholder token");
-
         let err = AdminAuthorization::load(file.path()).expect_err("short token must fail closed");
         assert!(matches!(err, ConfigError::Admin(message) if message.contains("32 to 256")));
     }
-
     #[cfg(unix)]
     #[test]
     fn admin_authorization_accepts_dedicated_read_only_group() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let file = NamedTempFile::new().expect("admin token file");
         std::fs::write(file.path(), b"soranet-admin-token-0123456789abcdef")
             .expect("write admin token");
         std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o640))
             .expect("set dedicated-group token permissions");
-
         AdminAuthorization::load(file.path()).expect("dedicated read-only group should be allowed");
     }
-
     #[cfg(unix)]
     #[test]
     fn admin_authorization_rejects_world_readable_secret() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let file = NamedTempFile::new().expect("admin token file");
         std::fs::write(file.path(), b"soranet-admin-token-0123456789abcdef")
             .expect("write admin token");
         std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o644))
             .expect("set world-readable token permissions");
-
         let err = AdminAuthorization::load(file.path()).expect_err("broad permissions must fail");
         assert!(matches!(err, ConfigError::Admin(message) if message.contains("other users")));
     }
-
     #[tokio::test]
     async fn admin_endpoint_serves_privacy_events() {
         const ADMIN_TOKEN: &str = "soranet-test-admin-token-00000001";
-
         let metrics = Arc::new(Metrics::new());
         let privacy = Arc::new(PrivacyAggregator::new(PrivacyConfig::default()));
         let privacy_events = Arc::new(PrivacyEventBuffer::new(8));
@@ -2103,7 +1979,6 @@ mod tests {
         let mode = RelayMode::Middle;
         let privacy_mode: SoranetPrivacyModeV1 = mode.into();
         let event_time = SystemTime::now();
-
         privacy_events.record_handshake_success(privacy_mode, event_time, Some(37), Some(5));
         privacy_events.record_throttle(
             privacy_mode,
@@ -2111,7 +1986,6 @@ mod tests {
             SoranetPrivacyThrottleScopeV1::DescriptorQuota,
         );
         proxy_policy_events.record_downgrade(privacy_mode, event_time, Some("downgrade"));
-
         let listener = match StdTcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
             Err(error) if error.kind() == ErrorKind::PermissionDenied => {
@@ -2124,7 +1998,6 @@ mod tests {
             .local_addr()
             .expect("retrieve listener addr for admin endpoint");
         drop(listener);
-
         let server = {
             let resources = AdminResources {
                 metrics: Arc::clone(&metrics),
@@ -2142,9 +2015,7 @@ mod tests {
                         .await;
             })
         };
-
         sleep(Duration::from_millis(25)).await;
-
         let mut unauthorized_stream = TcpStream::connect(addr)
             .await
             .expect("connect to protected admin endpoint");
@@ -2180,7 +2051,6 @@ mod tests {
             )
             .await
             .expect("write HTTP request");
-
         let mut response = Vec::new();
         stream
             .read_to_end(&mut response)
@@ -2209,9 +2079,7 @@ mod tests {
             privacy_events.drain_ndjson().is_empty(),
             "buffer should drain after serving HTTP response"
         );
-
         stream.shutdown().await.expect("shutdown admin stream");
-
         let mut downgrade_stream = TcpStream::connect(addr)
             .await
             .expect("connect to proxy policy endpoint");
@@ -2227,7 +2095,6 @@ mod tests {
             )
             .await
             .expect("write downgrade HTTP request");
-
         let mut downgrade_response = Vec::new();
         downgrade_stream
             .read_to_end(&mut downgrade_response)
@@ -2257,10 +2124,8 @@ mod tests {
             .shutdown()
             .await
             .expect("shutdown proxy policy stream");
-
         server.abort();
     }
-
     #[tokio::test]
     async fn privacy_events_endpoint_drains_buffer() {
         let metrics = Metrics::new();
@@ -2271,14 +2136,12 @@ mod tests {
         let mode = RelayMode::Entry;
         let privacy_mode: SoranetPrivacyModeV1 = mode.into();
         let sample_time = SystemTime::now();
-
         privacy_events.record_handshake_success(privacy_mode, sample_time, Some(42), Some(7));
         privacy_events.record_throttle(
             privacy_mode,
             sample_time,
             SoranetPrivacyThrottleScopeV1::Congestion,
         );
-
         let context = AdminRenderContext {
             metrics: &metrics,
             privacy: &privacy,
@@ -2306,7 +2169,6 @@ mod tests {
             headers.to_ascii_lowercase().contains(&expected_length),
             "content-length header should match body size: {headers}"
         );
-
         let drained_context = AdminRenderContext {
             metrics: &metrics,
             privacy: &privacy,
@@ -2334,7 +2196,6 @@ mod tests {
             "empty response should advertise zero content length"
         );
     }
-
     #[test]
     fn downgrade_events_hit_metrics_and_proxy_queue() {
         let metrics = Metrics::new();
@@ -2349,10 +2210,8 @@ mod tests {
         for warning in &warnings {
             metrics.record_downgrade(&warning.message);
         }
-
         let event_time = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         proxy_policy_events.record_downgrade(privacy_mode, event_time, Some(&detail));
-
         let rendered = metrics.render_prometheus(mode, proxy_policy_events.queue_depth() as u64);
         let label_block =
             "mode=\"entry\",constant_rate_profile=\"unknown\",constant_rate_neighbors=\"0\"";
@@ -2368,7 +2227,6 @@ mod tests {
             )),
             "proxy queue depth gauge missing: {rendered}"
         );
-
         let ndjson = proxy_policy_events.drain_ndjson();
         assert!(
             ndjson.contains("\"reason\":\"downgrade\""),

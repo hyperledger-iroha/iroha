@@ -4,13 +4,11 @@ enum TestLockOwner {
     Task(tokio::task::Id),
     Thread(std::thread::ThreadId),
 }
-
 #[cfg(test)]
 thread_local! {
     static TEST_LOCK_OWNER_OVERRIDE: std::cell::Cell<Option<TestLockOwner>> =
         const { std::cell::Cell::new(None) };
 }
-
 #[cfg(test)]
 impl TestLockOwner {
     fn current() -> Self {
@@ -20,27 +18,23 @@ impl TestLockOwner {
         tokio::task::try_id().map_or_else(|| Self::Thread(std::thread::current().id()), Self::Task)
     }
 }
-
 #[cfg(test)]
 #[derive(Default)]
 struct TestLockState {
     owner: Option<TestLockOwner>,
     depth: usize,
 }
-
 #[cfg(test)]
 #[derive(Default)]
 struct TestLock {
     state: Mutex<TestLockState>,
     cvar: Condvar,
 }
-
 #[cfg(test)]
 pub(crate) struct TestLockGuard {
     lock: &'static TestLock,
     owner: TestLockOwner,
 }
-
 #[cfg(test)]
 impl Drop for TestLockGuard {
     fn drop(&mut self) {
@@ -58,7 +52,6 @@ impl Drop for TestLockGuard {
         }
     }
 }
-
 #[cfg(test)]
 static STATUS_TEST_GLOBAL_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
@@ -73,12 +66,10 @@ static PEER_KEY_POLICY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 static LOCAL_REMOVED_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static LANE_RELAY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
 #[cfg(test)]
 fn canonical_test_lock(_: &'static OnceLock<TestLock>) -> &'static TestLock {
     STATUS_TEST_GLOBAL_LOCK.get_or_init(TestLock::default)
 }
-
 #[cfg(test)]
 fn reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> TestLockGuard {
     let owner = TestLockOwner::current();
@@ -108,7 +99,6 @@ fn reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> TestLockGuard {
     }
     TestLockGuard { lock, owner }
 }
-
 #[cfg(test)]
 fn try_reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> Option<TestLockGuard> {
     let owner = TestLockOwner::current();
@@ -130,16 +120,13 @@ fn try_reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> Option<TestLoc
         Some(_) => None,
     }
 }
-
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct NexusFeeTestLock;
-
 #[cfg(test)]
 pub(crate) struct NexusFeeTestGuard {
     _guard: TestLockGuard,
 }
-
 #[cfg(test)]
 impl NexusFeeTestLock {
     pub(crate) fn lock(&'static self) -> Result<NexusFeeTestGuard, std::convert::Infallible> {
@@ -148,7 +135,6 @@ impl NexusFeeTestLock {
         })
     }
 }
-
 #[cfg(test)]
 /// Serialize every process-wide v2 status mutation with tests that need a
 /// stable clear/publish/observe window.
@@ -160,29 +146,24 @@ impl NexusFeeTestLock {
 pub(crate) fn rbc_status_test_guard() -> TestLockGuard {
     reentrant_test_guard(&RBC_STATUS_TEST_LOCK)
 }
-
 #[cfg(test)]
 /// Serialize tests that mutate archival commit history.
 pub(crate) fn commit_history_test_guard() -> TestLockGuard {
     reentrant_test_guard(&COMMIT_HISTORY_TEST_LOCK)
 }
-
 #[cfg(test)]
 /// Serialize tests that mutate archival mode tags.
 pub(crate) fn mode_tags_test_guard() -> TestLockGuard {
     reentrant_test_guard(&MODE_TAGS_TEST_LOCK)
 }
-
 #[cfg(test)]
 pub(crate) fn peer_key_policy_test_guard() -> TestLockGuard {
     reentrant_test_guard(&PEER_KEY_POLICY_TEST_LOCK)
 }
-
 #[cfg(test)]
 pub(crate) fn local_removed_test_guard() -> TestLockGuard {
     reentrant_test_guard(&LOCAL_REMOVED_TEST_LOCK)
 }
-
 #[cfg(test)]
 pub(crate) fn lane_relay_test_guard() -> std::sync::MutexGuard<'static, ()> {
     LANE_RELAY_TEST_LOCK
@@ -190,14 +171,12 @@ pub(crate) fn lane_relay_test_guard() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .expect("lane relay test lock poisoned")
 }
-
 #[cfg(test)]
 /// Reset settlement telemetry counters for isolated tests.
 pub fn settlement_status_reset_for_tests() {
     *lock_operator_status_slot(settlement_status_slot(), "settlement status") =
         SettlementStatusState::default();
 }
-
 #[cfg(test)]
 /// Reset process-local telemetry compatibility and lane-adapter diagnostics.
 pub(crate) fn reset_rbc_backlog_stats_for_tests() {

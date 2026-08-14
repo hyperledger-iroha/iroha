@@ -14,7 +14,6 @@ fn effect_queue_is_bounded_and_deduplicates_until_drain() {
     assert!(adapter.push_effect(effect));
     assert_eq!(adapter.effects.len(), 1);
 }
-
 #[test]
 fn duplicate_reply_effect_preserves_exact_source_delivery() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
@@ -51,7 +50,6 @@ fn duplicate_reply_effect_preserves_exact_source_delivery() {
             .any(|retained| retained.same_delivery(&route))
     );
 }
-
 #[test]
 fn reply_effect_rejects_missing_or_retargeted_route_set() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
@@ -66,7 +64,6 @@ fn reply_effect_rejects_missing_or_retargeted_route_set() {
         reply_routes: None,
         message: message.clone(),
     }));
-
     let different_target = adapter.context.roster[2].validator.clone();
     let hub = PeerId::new(KeyPair::random().public_key().clone());
     let mut route_fixture = NetworkReplyRouteTestFixture::new(hub);
@@ -80,7 +77,6 @@ fn reply_effect_rejects_missing_or_retargeted_route_set() {
     }));
     assert!(adapter.effects.is_empty());
 }
-
 #[test]
 fn duplicate_reply_effect_updates_only_later_delivery_from_same_source() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
@@ -101,7 +97,6 @@ fn duplicate_reply_effect_updates_only_later_delivery_from_same_source() {
         reply_routes: Some(NetworkReplyRoutes::try_from_route(route).expect("live reply route")),
         message: message.clone(),
     };
-
     assert!(adapter.push_effect(effect_for(first.clone())));
     assert!(adapter.push_effect(effect_for(later.clone())));
     assert!(
@@ -119,7 +114,6 @@ fn duplicate_reply_effect_updates_only_later_delivery_from_same_source() {
     assert!(retained.iter().any(|route| route.same_delivery(&later)));
     assert!(!retained.iter().any(|route| route.same_delivery(&first)));
 }
-
 #[test]
 fn duplicate_reply_effect_retains_alternate_sources_across_source_update() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
@@ -139,7 +133,6 @@ fn duplicate_reply_effect_retains_alternate_sources_across_source_update() {
         reply_routes: Some(NetworkReplyRoutes::try_from_route(route).expect("live reply route")),
         message: message.clone(),
     };
-
     assert!(adapter.push_effect(effect_for(first_a.clone())));
     assert!(route_fixture.retire(&first_a));
     assert!(adapter.push_effect(effect_for(route_b.clone())));
@@ -168,7 +161,6 @@ fn duplicate_reply_effect_retains_alternate_sources_across_source_update() {
             .iter()
             .any(|route| route.same_delivery(&reconnected_a))
     );
-
     let hub_c = PeerId::new(KeyPair::random().public_key().clone());
     let route_c = route_fixture.mint_via(peer.clone(), hub_c);
     let mut mixed = NetworkReplyRoutes::try_from_route(reconnected_a.clone())
@@ -207,7 +199,6 @@ fn duplicate_reply_effect_retains_alternate_sources_across_source_update() {
             .iter()
             .any(|route| route.same_delivery(&reconnected_a))
     );
-
     let retired_only = Some(
         NetworkReplyRoutes::try_from_route(route_c.clone())
             .expect("candidate captures source C before retirement"),
@@ -235,7 +226,6 @@ fn duplicate_reply_effect_retains_alternate_sources_across_source_update() {
     assert!(retained.iter().any(|route| route.same_delivery(&later_a)));
     assert!(!retained.iter().any(|route| route.same_delivery(&route_c)));
 }
-
 #[test]
 fn temporarily_unserviceable_effect_requeues_behind_later_reserved_work() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
@@ -258,7 +248,6 @@ fn temporarily_unserviceable_effect_requeues_behind_later_reserved_work() {
         adapter.next_effect().as_ref().map(lane_work_effect_key),
         Some(first_key)
     );
-
     let blocked = adapter
         .drain_effects(1)
         .pop()
@@ -281,7 +270,6 @@ fn temporarily_unserviceable_effect_requeues_behind_later_reserved_work() {
     assert_eq!(lane_work_effect_key(&first), first_key);
     assert_eq!(adapter.effect_count(), 0);
 }
-
 #[test]
 fn retransmission_classes_rotate_fairly_at_capacity_one() {
     let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
@@ -296,7 +284,6 @@ fn retransmission_classes_rotate_fairly_at_capacity_one() {
             .payload_block_hint
             .expect("planned proposal carries its global block hint"),
     );
-
     let candidate = record_production_merge_candidate_for_persistence_retry(&adapter, &keys, 0);
     adapter
         .retain_merge_sidecars_for_global_view(candidate.view, None, None)
@@ -310,7 +297,6 @@ fn retransmission_classes_rotate_fairly_at_capacity_one() {
             adapter.frozen_validator_set_hash(),
         ))
     }));
-
     let request = native_request(&adapter, &keys);
     let body = request.body;
     let peer = adapter
@@ -329,7 +315,6 @@ fn retransmission_classes_rotate_fairly_at_capacity_one() {
         NativeAmxMessage::PrepareRequest(request),
     );
     adapter.limits.effect_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
-
     adapter
         .schedule_retransmission()
         .expect("schedule lane retransmission");
@@ -352,7 +337,6 @@ fn retransmission_classes_rotate_fairly_at_capacity_one() {
         [V2LaneWorkEffect::BroadcastMerge(_)]
     ));
 }
-
 #[test]
 fn certified_merge_sidecar_effect_dedup_is_destination_and_payload_bound() {
     let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
@@ -380,11 +364,9 @@ fn certified_merge_sidecar_effect_dedup_is_destination_and_payload_bound() {
         reply_routes: None,
         message: Arc::new(CertifiedMergeSidecarMessage::Request(request.clone())),
     };
-
     assert!(adapter.push_effect(effect.clone()));
     assert!(adapter.push_effect(effect.clone()));
     assert_eq!(adapter.effects.len(), 1, "an exact retry is deduplicated");
-
     assert!(
         adapter.push_effect(V2LaneWorkEffect::PostCertifiedMergeSidecar {
             peer: alternate_destination,
@@ -397,7 +379,6 @@ fn certified_merge_sidecar_effect_dedup_is_destination_and_payload_bound() {
         2,
         "the authenticated destination is part of the effect identity"
     );
-
     let mut distinct_request = request;
     distinct_request.request_id = Hash::new(b"v2-lane-work-sidecar-request-2");
     assert!(
@@ -412,7 +393,6 @@ fn certified_merge_sidecar_effect_dedup_is_destination_and_payload_bound() {
         3,
         "the bounded sidecar payload is part of the effect identity"
     );
-
     assert_eq!(adapter.drain_effects(usize::MAX).len(), 3);
     assert!(adapter.push_effect(effect));
     assert_eq!(

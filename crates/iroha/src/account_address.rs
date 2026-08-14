@@ -4,7 +4,6 @@
 //! so downstream consumers can format and parse account identifiers without depending on the
 //! internal layout of the data model crate. The helpers mirror the roadmap item *ADDR-4a* and
 //! keep error reporting stable via [`AccountAddressErrorCode`].
-
 use iroha_data_model::account::AccountId;
 pub use iroha_data_model::account::{
     AccountAddressSource, ParsedAccountId,
@@ -13,7 +12,6 @@ pub use iroha_data_model::account::{
         DEFAULT_DOMAIN_NAME, chain_discriminant, set_chain_discriminant,
     },
 };
-
 /// Parsed account address with domain-selector metadata.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedAccountAddress {
@@ -22,7 +20,6 @@ pub struct ParsedAccountAddress {
     /// Domain selector classification embedded in the payload.
     pub domain_kind: AddressDomainKind,
 }
-
 impl ParsedAccountAddress {
     /// Canonical hexadecimal representation (`0x…`).
     ///
@@ -32,7 +29,6 @@ impl ParsedAccountAddress {
     pub fn canonical_hex(&self) -> Result<String, AccountAddressError> {
         self.address.canonical_hex()
     }
-
     /// Format the address as I105 using the provided chain discriminant.
     ///
     /// # Errors
@@ -44,7 +40,6 @@ impl ParsedAccountAddress {
     ) -> Result<String, AccountAddressError> {
         self.address.to_i105_for_discriminant(network_prefix)
     }
-
     /// Encode the address as canonical I105 using the configured discriminant.
     ///
     /// # Errors
@@ -53,14 +48,12 @@ impl ParsedAccountAddress {
     pub fn to_i105(&self) -> Result<String, AccountAddressError> {
         self.address.to_i105()
     }
-
     /// Domain selector classification helper.
     #[must_use]
     pub const fn domain_kind(&self) -> AddressDomainKind {
         self.domain_kind
     }
 }
-
 /// Encode an [`AccountId`] into I105 with the supplied `network_prefix`.
 ///
 /// # Errors
@@ -72,7 +65,6 @@ pub fn encode_account_id_to_i105_for_discriminant(
 ) -> Result<String, AccountAddressError> {
     AccountAddress::from_account_id(account)?.to_i105_for_discriminant(network_prefix)
 }
-
 /// Encode an [`AccountId`] as canonical I105 using the configured discriminant.
 ///
 /// # Errors
@@ -81,7 +73,6 @@ pub fn encode_account_id_to_i105_for_discriminant(
 pub fn encode_account_id_to_i105(account: &AccountId) -> Result<String, AccountAddressError> {
     AccountAddress::from_account_id(account)?.to_i105()
 }
-
 /// Encode an [`AccountId`] into canonical hexadecimal representation (`0x…`).
 ///
 /// # Errors
@@ -92,7 +83,6 @@ pub fn encode_account_id_to_canonical_hex(
 ) -> Result<String, AccountAddressError> {
     AccountAddress::from_account_id(account)?.canonical_hex()
 }
-
 /// Parse an address string in strict encoded i105 form.
 ///
 /// # Errors
@@ -109,33 +99,26 @@ pub fn parse_account_address(
         address,
     })
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
-
     use super::*;
-
     #[test]
     fn roundtrip_i105_encoding() {
         let key_pair = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)
             .expect("derive account-address fixture key");
         let account = AccountId::new(key_pair.public_key().clone());
-
         let encoded = encode_account_id_to_i105_for_discriminant(&account, 42).expect("encode");
         let parsed = parse_account_address(&encoded, Some(42)).expect("parse i105");
-
         let expected = AccountAddress::from_account_id(&account).expect("address");
         assert_eq!(parsed.address, expected);
         assert_eq!(parsed.domain_kind(), AddressDomainKind::Default);
     }
-
     #[test]
     fn i105_encoding_matches_data_model() {
         let key_pair = KeyPair::try_from_seed(vec![0xCD; 32], Algorithm::Ed25519)
             .expect("derive account-address fixture key");
         let account = AccountId::new(key_pair.public_key().clone());
-
         let encoded = encode_account_id_to_i105(&account).expect("encode i105");
         let parsed = parse_account_address(&encoded, None).expect("parse i105");
         assert_eq!(
@@ -144,7 +127,6 @@ mod tests {
         );
         assert_eq!(parsed.domain_kind(), AddressDomainKind::Default);
     }
-
     #[test]
     fn parse_reports_error_codes() {
         let err = parse_account_address("??", None).expect_err("invalid input");

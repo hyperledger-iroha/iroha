@@ -1,5 +1,4 @@
 //! Consolidated integration-test harness for `iroha_config`.
-
 #[path = "autoscale_config.rs"]
 mod autoscale_config;
 #[path = "compute_economics.rs"]

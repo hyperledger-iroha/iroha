@@ -1,7 +1,5 @@
 //! Helpers for generating default genesis manifests aligned with Kagami defaults.
-
 use std::{collections::BTreeSet, path::PathBuf, sync::LazyLock};
-
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
     account::Account,
@@ -26,14 +24,12 @@ use iroha_executor_data_model::permission::{
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
-
 static SAMPLE_ROSE_DEFINITION_ID: LazyLock<AssetDefinitionId> = LazyLock::new(|| {
     let wonderland_id =
         DomainId::try_new("wonderland", "universal").expect("sample wonderland domain is valid");
     let rose = "rose".parse().expect("sample rose asset name is valid");
     AssetDefinitionId::derive_from_components(wonderland_id, rose)
 });
-
 static SAMPLE_CABBAGE_DEFINITION_ID: LazyLock<AssetDefinitionId> = LazyLock::new(|| {
     let garden_id = DomainId::try_new("garden_of_live_flowers", "universal")
         .expect("sample garden domain is valid");
@@ -42,25 +38,21 @@ static SAMPLE_CABBAGE_DEFINITION_ID: LazyLock<AssetDefinitionId> = LazyLock::new
         .expect("sample cabbage asset name is valid");
     AssetDefinitionId::derive_from_components(garden_id, cabbage)
 });
-
 const LOCAL_ONBOARDING_ACCOUNT_DOMAIN: &str = "wonderland.universal";
 const LOCAL_ONBOARDING_FEE_ASSET_DOMAIN: &str = "universal.universal";
 const LOCAL_ONBOARDING_FEE_ASSET_NAME: &str = "xor";
 const LOCAL_ONBOARDING_FEE_ASSET_SCALE: u32 = 9;
 const LOCAL_ONBOARDING_FEE_BALANCE: u64 = 10;
-
 /// Canonical asset definition id for the bundled `rose` sample asset.
 #[must_use]
 pub fn sample_rose_definition_id() -> AssetDefinitionId {
     SAMPLE_ROSE_DEFINITION_ID.clone()
 }
-
 /// Canonical asset definition id for the bundled `cabbage` sample asset.
 #[must_use]
 pub fn sample_cabbage_definition_id() -> AssetDefinitionId {
     SAMPLE_CABBAGE_DEFINITION_ID.clone()
 }
-
 /// Build a default genesis manifest with Kagami-equivalent instructions and metadata.
 ///
 /// The resulting manifest mirrors `kagami genesis generate default` and includes
@@ -77,15 +69,12 @@ pub fn default_manifest(
     let ivm_dir = ivm_dir.into();
     let builder = GenesisBuilder::new_without_executor(chain_id, ivm_dir);
     let genesis_account_id = AccountId::new(genesis_public_key.clone());
-
     let mut meta = Metadata::default();
     meta.insert("key".parse()?, Json::new("value"));
-
     let wonderland_id = DomainId::try_new("wonderland", "universal")?;
     let garden_id = DomainId::try_new("garden_of_live_flowers", "universal")?;
     let rose_definition = sample_rose_definition_id();
     let cabbage_definition = sample_cabbage_definition_id();
-
     let mut builder = builder
         .domain_with_metadata(wonderland_id.clone(), meta.clone())
         .account_with_metadata(ALICE_ID.expect_single_signatory().clone(), meta.clone())
@@ -96,7 +85,6 @@ pub fn default_manifest(
         .account(CARPENTER_ID.expect_single_signatory().clone())
         .asset("cabbage".parse()?, NumericSpec::default())
         .finish_domain();
-
     let mint_rose = Mint::asset_quantity(
         13u32,
         AssetId::new(rose_definition.clone(), ALICE_ID.clone()),
@@ -116,11 +104,9 @@ pub fn default_manifest(
     );
     let npos_defaults = SumeragiNposParameters::default();
     let parameters = Parameters::default();
-
     for parameter in parameters.parameters() {
         builder = builder.append_parameter(parameter);
     }
-
     builder = builder
         .next_transaction()
         .append_instruction(mint_rose)
@@ -128,13 +114,11 @@ pub fn default_manifest(
         .append_instruction(transfer_rose_definition)
         .append_instruction(transfer_wonderland)
         .append_instruction(grant_set_parameters);
-
     let gas_param_id = CustomParameterId::new("ivm_gas_limit_per_block".parse()?);
     let gas_param_val = ivm_gas_limit_per_block.unwrap_or(1_680_000u64);
     let gas_param = CustomParameter::new(gas_param_id, Json::new(gas_param_val));
     let set_npos = SetParameter::new(Parameter::Custom(npos_defaults.into()));
     let set_gas_param = SetParameter::new(Parameter::Custom(gas_param));
-
     let builder = builder.append_instruction(set_gas_param);
     let builder = if matches!(consensus_mode, SumeragiConsensusMode::Npos) {
         builder.append_instruction(set_npos)
@@ -142,10 +126,8 @@ pub fn default_manifest(
         builder
     };
     let manifest = builder.build_raw().with_consensus_mode(consensus_mode);
-
     Ok(manifest.with_consensus_meta())
 }
-
 /// Add the exact ledger state required by Mochi's local account-onboarding service.
 ///
 /// The local administrator is already the operator exposed by Mochi's bootstrap
@@ -163,7 +145,6 @@ pub fn with_local_account_onboarding_bootstrap(
     let fee_asset_id =
         AssetDefinitionId::derive_from_components(fee_asset_domain.clone(), fee_asset_name);
     let authority_fee_asset = AssetId::new(fee_asset_id.clone(), authority.clone());
-
     let mut registered_domains = BTreeSet::new();
     let mut registered_accounts = BTreeSet::new();
     let mut registered_asset_definitions = BTreeSet::new();
@@ -195,7 +176,6 @@ pub fn with_local_account_onboarding_bootstrap(
             authority_is_funded = true;
         }
     }
-
     let permissions = [
         Permission::from(CanManageAccountAlias {
             scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
@@ -208,7 +188,6 @@ pub fn with_local_account_onboarding_bootstrap(
             domain: account_domain.clone(),
         }),
     ];
-
     let register_account_domain = !registered_domains.contains(&account_domain);
     let register_fee_asset_domain = !registered_domains.contains(&fee_asset_domain);
     let register_authority = !registered_accounts.contains(authority);
@@ -228,7 +207,6 @@ pub fn with_local_account_onboarding_bootstrap(
     {
         return Ok(manifest);
     }
-
     let mut builder = manifest.into_builder().next_transaction();
     if register_account_domain {
         builder = builder.append_instruction(Register::domain(Domain::new(account_domain)));
@@ -260,10 +238,8 @@ pub fn with_local_account_onboarding_bootstrap(
         builder =
             builder.append_instruction(Grant::account_permission(permission, authority.clone()));
     }
-
     Ok(builder.build_raw())
 }
-
 /// Attach topology information to a genesis manifest inside a dedicated transaction.
 pub fn with_topology(
     manifest: RawGenesisTransaction,
@@ -275,7 +251,6 @@ pub fn with_topology(
         .set_topology(topology)
         .build_raw()
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::KeyPair;
@@ -293,9 +268,7 @@ mod tests {
         transaction::Executable,
     };
     use iroha_primitives::json::Json;
-
     use super::*;
-
     #[test]
     fn local_onboarding_bootstrap_is_exact_funded_and_idempotent() {
         const EXPECTED_CANONICAL_XOR_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
@@ -316,7 +289,6 @@ mod tests {
         let manifest = with_local_account_onboarding_bootstrap(manifest, &ALICE_ID)
             .expect("reapplying local onboarding bootstrap must remain valid");
         assert_eq!(manifest.transactions().len(), transaction_count);
-
         let account_domain =
             DomainId::parse_fully_qualified(LOCAL_ONBOARDING_ACCOUNT_DOMAIN).expect("domain");
         let fee_domain =
@@ -333,7 +305,6 @@ mod tests {
             EXPECTED_CANONICAL_XOR_ID,
             "xor in universal.universal must resolve to the configured Nexus fee asset",
         );
-
         let domain_registrations = manifest
             .instructions()
             .filter_map(|instruction| instruction.as_any().downcast_ref::<RegisterBox>())
@@ -368,7 +339,6 @@ mod tests {
             fee_mint.object().to_string(),
             LOCAL_ONBOARDING_FEE_BALANCE.to_string()
         );
-
         let expected_permissions = BTreeSet::from([
             Permission::from(CanManageAccountAlias {
                 scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
@@ -409,7 +379,6 @@ mod tests {
             assert_eq!(count, 1, "permission must be granted exactly once");
         }
     }
-
     #[test]
     fn bundled_sample_asset_ids_match_default_manifest_assets() {
         let chain_id: ChainId = "local-testnet".parse().expect("infallible chain id");
@@ -425,7 +394,6 @@ mod tests {
         .expect("build default manifest");
         let json = norito::json::to_value(&manifest).expect("manifest json");
         let text = norito::json::to_string(&json).expect("manifest text");
-
         assert!(
             text.contains(&sample_rose_definition_id().to_string()),
             "default manifest should include the bundled rose asset id"
@@ -435,14 +403,12 @@ mod tests {
             "default manifest should include the bundled cabbage asset id"
         );
     }
-
     #[test]
     fn default_manifest_matches_kagami_parameter_baseline() {
         let chain_id: ChainId = "local-testnet".parse().expect("infallible chain id");
         let keypair = KeyPair::random();
         let ivm_dir = tempfile::tempdir().expect("tmp dir for ivm");
         let gas_limit = 2_000_000u64;
-
         let manifest = default_manifest(
             chain_id.clone(),
             keypair.public_key(),
@@ -451,7 +417,6 @@ mod tests {
             Some(gas_limit),
         )
         .expect("build default manifest");
-
         assert_eq!(
             manifest.consensus_mode(),
             SumeragiConsensusMode::Npos,
@@ -462,7 +427,6 @@ mod tests {
             u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION),
             "consensus metadata should populate the first-release protocol version"
         );
-
         let block = manifest
             .build_and_sign(&keypair)
             .expect("sign genesis from default manifest")
@@ -473,13 +437,11 @@ mod tests {
             "default manifest should emit multiple transactions (saw {})",
             transactions.len()
         );
-
         let gas_param_id = CustomParameterId::new(
             "ivm_gas_limit_per_block"
                 .parse()
                 .expect("valid parameter id"),
         );
-
         let expected_npos =
             SetParameter::new(Parameter::Custom(SumeragiNposParameters::default().into()));
         let expected_gas = SetParameter::new(Parameter::Custom(CustomParameter::new(
@@ -494,13 +456,11 @@ mod tests {
             Parameter::Custom(custom) => custom.id().clone(),
             other => panic!("expected_gas should be a custom parameter, got {other:?}"),
         };
-
         let mut saw_npos_defaults = false;
         let mut saw_gas_limit = false;
         let mut saw_handshake_meta = false;
         let mut saw_crypto_manifest = false;
         let mut saw_confidential_registry = false;
-
         for transaction in transactions {
             let Executable::Instructions(instructions) = transaction.instructions() else {
                 continue;
@@ -536,7 +496,6 @@ mod tests {
                 }
             }
         }
-
         assert!(
             saw_npos_defaults,
             "genesis must include the baseline NPoS parameter payload"

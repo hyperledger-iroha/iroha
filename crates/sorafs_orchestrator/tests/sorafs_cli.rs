@@ -1,11 +1,9 @@
 #![cfg(feature = "cli-orchestrator")]
 #![cfg_attr(feature = "cli-orchestrator", allow(unexpected_cfgs))]
-
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-
 use assert_cmd::{Command as AssertCommand, cargo::cargo_bin_cmd};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::hash as blake3_hash;
@@ -49,14 +47,11 @@ use sorafs_manifest::{
     governance_dag_submission_account_digest_v1, validate_governance_dag_head_against_chain_v1,
 };
 use tempfile::TempDir;
-
 const TEST_NETWORK_ID_LITERAL: &str =
     "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
-
 fn sorafs_cli_cmd() -> AssertCommand {
     cargo_bin_cmd!("sorafs_cli")
 }
-
 fn assert_insecure_gateway_rejected(assert: assert_cmd::assert::Assert, output_paths: &[&Path]) {
     let assert = assert.failure();
     let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
@@ -72,18 +67,15 @@ fn assert_insecure_gateway_rejected(assert: assert_cmd::assert::Assert, output_p
         );
     }
 }
-
 struct CanonicalTempDir {
     _inner: TempDir,
     path: PathBuf,
 }
-
 impl CanonicalTempDir {
     fn path(&self) -> &Path {
         &self.path
     }
 }
-
 #[derive(NoritoSerialize)]
 struct TestPorStatusPageV1 {
     version: u8,
@@ -97,7 +89,6 @@ struct TestPorStatusPageV1 {
     next_cursor: Option<String>,
     statuses: Vec<PorChallengeStatusV1>,
 }
-
 #[derive(NoritoSerialize)]
 struct TestPorStatusExportPageV1 {
     version: u8,
@@ -107,7 +98,6 @@ struct TestPorStatusExportPageV1 {
     end_epoch: Option<u64>,
     page: TestPorStatusPageV1,
 }
-
 fn test_por_status_page(
     statuses: Vec<PorChallengeStatusV1>,
     next_cursor: Option<String>,
@@ -133,7 +123,6 @@ fn test_por_status_page(
         statuses,
     }
 }
-
 fn test_por_cursor(
     snapshot_generation: u64,
     epoch_id: u64,
@@ -151,7 +140,6 @@ fn test_por_cursor(
     .encode_opaque()
     .expect("encode canonical PoR cursor fixture")
 }
-
 fn large_por_status_page() -> TestPorStatusPageV1 {
     let statuses = (0..512)
         .map(|index| {
@@ -179,7 +167,6 @@ fn large_por_status_page() -> TestPorStatusPageV1 {
         .collect();
     test_por_status_page(statuses, None)
 }
-
 fn tempdir() -> std::io::Result<CanonicalTempDir> {
     let inner = tempfile::tempdir()?;
     let path = inner.path().canonicalize()?;
@@ -188,7 +175,6 @@ fn tempdir() -> std::io::Result<CanonicalTempDir> {
         path,
     })
 }
-
 fn deterministic_ed25519_authority_and_private_key() -> (String, String) {
     let keypair = KeyPair::try_from_seed(
         b"sorafs-cli-manifest-submit-authority".to_vec(),
@@ -199,7 +185,6 @@ fn deterministic_ed25519_authority_and_private_key() -> (String, String) {
     let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
     (authority, private_key)
 }
-
 fn write_deploy_client_config(dir: &Path, torii_url: &str) -> (PathBuf, String) {
     let keypair = KeyPair::try_from_seed(
         b"sorafs-cli-deploy-authority-seed".to_vec(),
@@ -226,7 +211,6 @@ chain_discriminant = 369
     .expect("write deploy client config");
     (path, private_key)
 }
-
 fn write_deploy_client_config_with_chain(
     dir: &Path,
     torii_url: &str,
@@ -257,7 +241,6 @@ private_key = "{private_key}"
     .expect("write deploy client config with chain");
     (path, private_key)
 }
-
 fn make_stream_token_b64(
     manifest_id_hex: &str,
     provider_id_hex: &str,
@@ -289,7 +272,6 @@ fn make_stream_token_b64(
         hex_encode(signing_key.verifying_key().to_bytes()),
     )
 }
-
 fn council_signed_governance_proofs() -> GovernanceProofs {
     GovernanceProofs {
         council_signatures: vec![CouncilSignature {
@@ -298,7 +280,6 @@ fn council_signed_governance_proofs() -> GovernanceProofs {
         }],
     }
 }
-
 #[test]
 fn car_pack_emits_car_plan_and_summary() {
     let tempdir = tempdir().expect("tempdir");
@@ -308,11 +289,9 @@ fn car_pack_emits_car_plan_and_summary() {
         payload.push((idx as u8).wrapping_mul(17).wrapping_add(3));
     }
     fs::write(&input_path, &payload).expect("write payload");
-
     let car_path = tempdir.path().join("payload.car");
     let plan_path = tempdir.path().join("plan.json");
     let summary_path = tempdir.path().join("summary.json");
-
     let assert = sorafs_cli_cmd()
         .arg("car")
         .arg("pack")
@@ -322,7 +301,6 @@ fn car_pack_emits_car_plan_and_summary() {
         .arg(format!("--summary-out={}", summary_path.display()))
         .assert()
         .success();
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary_stdout: Value = norito::json::from_str(stdout.trim()).expect("stdout summary json");
     let summary_file_bytes = fs::read(&summary_path).expect("read summary file");
@@ -332,7 +310,6 @@ fn car_pack_emits_car_plan_and_summary() {
         summary_stdout, summary_file,
         "stdout summary should match file"
     );
-
     let payload_bytes = summary_stdout
         .get("payload_bytes")
         .and_then(Value::as_u64)
@@ -346,13 +323,11 @@ fn car_pack_emits_car_plan_and_summary() {
         summary_stdout.get("input_kind").and_then(Value::as_str),
         Some("file")
     );
-
     assert!(
         car_path.exists(),
         "expected CAR archive `{}` to be created",
         car_path.display()
     );
-
     let plan_bytes = fs::read(&plan_path).expect("read plan file");
     let plan_json: Value = from_slice(&plan_bytes).expect("parse plan json");
     let canonical_plan =
@@ -367,24 +342,20 @@ fn car_pack_emits_car_plan_and_summary() {
         !plan_array.is_empty(),
         "expected plan array to contain chunk entries"
     );
-
     let chunk_count = summary_stdout
         .get("chunk_count")
         .and_then(Value::as_u64)
         .expect("chunk_count");
     assert_eq!(chunk_count, plan_array.len() as u64);
 }
-
 #[test]
 fn manifest_build_consumes_summary_and_outputs_manifest() {
     let tempdir = tempdir().expect("tempdir");
     let input_path = tempdir.path().join("payload.bin");
     let payload: Vec<u8> = (0..2048).map(|i| (i as u8).wrapping_mul(13)).collect();
     fs::write(&input_path, &payload).expect("write payload");
-
     let car_path = tempdir.path().join("payload.car");
     let summary_path = tempdir.path().join("summary.json");
-
     sorafs_cli_cmd()
         .arg("car")
         .arg("pack")
@@ -393,10 +364,8 @@ fn manifest_build_consumes_summary_and_outputs_manifest() {
         .arg(format!("--summary-out={}", summary_path.display()))
         .assert()
         .success();
-
     let manifest_path = tempdir.path().join("manifest.to");
     let manifest_json_path = tempdir.path().join("manifest.json");
-
     let assert = sorafs_cli_cmd()
         .arg("manifest")
         .arg("build")
@@ -412,7 +381,6 @@ fn manifest_build_consumes_summary_and_outputs_manifest() {
         .arg("--metadata=env=dev")
         .assert()
         .success();
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary: Value = norito::json::from_str(stdout.trim()).expect("manifest summary json");
     assert_eq!(
@@ -422,7 +390,6 @@ fn manifest_build_consumes_summary_and_outputs_manifest() {
             .expect("manifest_path"),
         manifest_path.display().to_string()
     );
-
     let manifest_bytes = fs::read(&manifest_path).expect("read manifest bytes");
     let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes).expect("decode manifest");
     assert_eq!(manifest.content_length, payload.len() as u64);
@@ -435,7 +402,6 @@ fn manifest_build_consumes_summary_and_outputs_manifest() {
             .iter()
             .any(|entry| entry.key == "env" && entry.value == "dev")
     );
-
     let manifest_json = fs::read(&manifest_json_path).expect("read manifest json");
     let manifest_value: Value = from_slice(&manifest_json).expect("parse manifest json");
     assert_eq!(
@@ -447,7 +413,6 @@ fn manifest_build_consumes_summary_and_outputs_manifest() {
         Some(3)
     );
 }
-
 #[test]
 fn por_status_outputs_table() {
     let server = MockServer::start();
@@ -478,7 +443,6 @@ fn por_status_outputs_table() {
             .header("content-type", "application/x-norito")
             .body(body.clone());
     });
-
     let output = sorafs_cli_cmd()
         .arg("por")
         .arg("status")
@@ -495,7 +459,6 @@ fn por_status_outputs_table() {
         "expected status output to mention awaiting-proof status:\n{stdout}"
     );
 }
-
 #[test]
 fn por_status_outputs_json() {
     let server = MockServer::start();
@@ -523,7 +486,6 @@ fn por_status_outputs_json() {
             .header("content-type", "application/x-norito")
             .body(body.clone());
     });
-
     let std_output = sorafs_cli_cmd()
         .arg("por")
         .arg("status")
@@ -540,7 +502,6 @@ fn por_status_outputs_json() {
         "expected JSON output to include forced=true flag:\n{stdout}"
     );
 }
-
 #[test]
 fn por_status_accepts_empty_sparse_page_with_advancing_cursor() {
     let server = MockServer::start();
@@ -554,7 +515,6 @@ fn por_status_accepts_empty_sparse_page_with_advancing_cursor() {
             .header("content-type", "application/x-norito")
             .body(body);
     });
-
     let stderr = sorafs_cli_cmd()
         .arg("por")
         .arg("status")
@@ -570,7 +530,6 @@ fn por_status_accepts_empty_sparse_page_with_advancing_cursor() {
         "empty sparse page must expose its advancing cursor:\n{stderr}"
     );
 }
-
 #[test]
 fn por_status_and_export_accept_fields_above_legacy_64k_limit() {
     let server = MockServer::start();
@@ -590,14 +549,12 @@ fn por_status_and_export_accept_fields_above_legacy_64k_limit() {
             .header("content-type", "application/x-norito")
             .body(status_body);
     });
-
     sorafs_cli_cmd()
         .arg("por")
         .arg("status")
         .arg(format!("--torii-url={}", server.base_url()))
         .assert()
         .success();
-
     let export_body = to_bytes(&TestPorStatusExportPageV1 {
         version: 1,
         start_epoch: None,
@@ -619,7 +576,6 @@ fn por_status_and_export_accept_fields_above_legacy_64k_limit() {
             .header("content-type", "application/octet-stream")
             .body(export_body);
     });
-
     let tempdir = tempdir().expect("tempdir");
     let out_path = tempdir.path().join("large-por-export.norito");
     sorafs_cli_cmd()
@@ -631,14 +587,12 @@ fn por_status_and_export_accept_fields_above_legacy_64k_limit() {
         .success();
     assert!(out_path.exists());
 }
-
 #[test]
 fn por_status_and_export_reject_record_byte_limit_above_torii_contract() {
     let server = MockServer::start();
     let above = POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1 + 1;
     let expected =
         format!("`--max-bytes` must be in 1..={POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1}");
-
     let status_stderr = sorafs_cli_cmd()
         .arg("por")
         .arg("status")
@@ -654,7 +608,6 @@ fn por_status_and_export_reject_record_byte_limit_above_torii_contract() {
             .expect("status stderr utf8")
             .contains(&expected)
     );
-
     let tempdir = tempdir().expect("tempdir");
     let export_stderr = sorafs_cli_cmd()
         .arg("por")
@@ -676,7 +629,6 @@ fn por_status_and_export_reject_record_byte_limit_above_torii_contract() {
             .contains(&expected)
     );
 }
-
 #[test]
 fn por_status_rejects_record_outside_requested_filters_before_output() {
     let server = MockServer::start();
@@ -712,7 +664,6 @@ fn por_status_rejects_record_outside_requested_filters_before_output() {
             .header("content-type", "application/x-norito")
             .body(body);
     });
-
     let output = sorafs_cli_cmd()
         .arg("por")
         .arg("status")
@@ -723,7 +674,6 @@ fn por_status_rejects_record_outside_requested_filters_before_output() {
         .arg("--status=awaiting_proof")
         .output()
         .expect("command executes");
-
     assert!(!output.status.success());
     assert!(
         output.stdout.is_empty(),
@@ -735,7 +685,6 @@ fn por_status_rejects_record_outside_requested_filters_before_output() {
         "unexpected stderr: {stderr}"
     );
 }
-
 #[test]
 fn retired_por_trigger_command_is_absent_and_never_sends_a_request() {
     let server = MockServer::start();
@@ -745,7 +694,6 @@ fn retired_por_trigger_command_is_absent_and_never_sends_a_request() {
             .header("content-type", "application/x-norito");
         then.status(500);
     });
-
     let output = sorafs_cli_cmd()
         .arg("por")
         .arg("trigger")
@@ -755,7 +703,6 @@ fn retired_por_trigger_command_is_absent_and_never_sends_a_request() {
         .get_output()
         .stderr
         .clone();
-
     let stderr = String::from_utf8(output).expect("CLI stderr is UTF-8");
     assert!(
         stderr.contains("sorafs_cli por status"),
@@ -767,7 +714,6 @@ fn retired_por_trigger_command_is_absent_and_never_sends_a_request() {
     );
     trigger_mock.assert_calls(0);
 }
-
 #[test]
 fn por_export_writes_file() {
     let server = MockServer::start();
@@ -805,7 +751,6 @@ fn por_export_writes_file() {
             .header("content-type", "application/octet-stream")
             .body(payload.clone());
     });
-
     let tempdir = tempdir().expect("tempdir");
     let out_path = tempdir.path().join("por-export.norito");
     let output = sorafs_cli_cmd()
@@ -829,7 +774,6 @@ fn por_export_writes_file() {
     let written = fs::read(&out_path).expect("read export file");
     assert_eq!(written, payload);
 }
-
 #[test]
 fn por_export_rejects_noncanonical_response_cursor_without_writing() {
     let server = MockServer::start();
@@ -869,7 +813,6 @@ fn por_export_rejects_noncanonical_response_cursor_without_writing() {
             .header("content-type", "application/octet-stream")
             .body(payload);
     });
-
     let tempdir = tempdir().expect("tempdir");
     let out_path = tempdir.path().join("malformed-export.norito");
     let stderr = sorafs_cli_cmd()
@@ -891,7 +834,6 @@ fn por_export_rejects_noncanonical_response_cursor_without_writing() {
     );
     assert!(!out_path.exists());
 }
-
 #[test]
 fn por_report_outputs_markdown() {
     let server = MockServer::start();
@@ -965,7 +907,6 @@ fn por_report_outputs_markdown() {
         "expected markdown output to include ticket identifier:\n{stdout}"
     );
 }
-
 #[test]
 fn proof_stream_cli_rejects_http_and_argv_secrets_before_network() {
     let tempdir = tempdir().expect("tempdir");
@@ -980,7 +921,6 @@ fn proof_stream_cli_rejects_http_and_argv_secrets_before_network() {
         .assert()
         .failure();
     assert!(String::from_utf8_lossy(&insecure.get_output().stderr).contains("must use HTTPS"));
-
     for unsafe_url in [
         "https://user:secret@torii.sora.example",
         "https://torii.sora.example?token=secret",
@@ -1004,7 +944,6 @@ fn proof_stream_cli_rejects_http_and_argv_secrets_before_network() {
             "unsafe URL credentials leaked into stderr: {stderr}"
         );
     }
-
     let missing_secret = sorafs_cli_cmd()
         .arg("proof")
         .arg("stream")
@@ -1017,7 +956,6 @@ fn proof_stream_cli_rejects_http_and_argv_secrets_before_network() {
         String::from_utf8_lossy(&missing_secret.get_output().stderr)
             .contains("missing required `--bearer-token-env=VAR`")
     );
-
     for (samples, expected) in [
         ("501", "`--samples` must not exceed 500"),
         ("0500", "value must be a canonical unsigned decimal integer"),
@@ -1036,7 +974,6 @@ fn proof_stream_cli_rejects_http_and_argv_secrets_before_network() {
             "bounded canonical sample validation must fail before network access"
         );
     }
-
     for retired in ["--stream-token=secret", "--max-failures=1"] {
         let rejected = sorafs_cli_cmd()
             .arg("proof")
@@ -1054,7 +991,6 @@ fn proof_stream_cli_rejects_http_and_argv_secrets_before_network() {
         );
     }
 }
-
 #[test]
 fn norito_build_compiles_contract() {
     let tempdir = tempdir().expect("tempdir");
@@ -1064,10 +1000,8 @@ fn norito_build_compiles_contract() {
         "expected Kotodama sample `{}` to exist",
         source_path.display()
     );
-
     let bytecode_path = tempdir.path().join("contract.to");
     let summary_path = tempdir.path().join("bytecode.json");
-
     let assert = sorafs_cli_cmd()
         .arg("norito")
         .arg("build")
@@ -1076,7 +1010,6 @@ fn norito_build_compiles_contract() {
         .arg(format!("--summary-out={}", summary_path.display()))
         .assert()
         .success();
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary_stdout: Value = norito::json::from_str(stdout.trim()).expect("stdout summary json");
     let summary_file_bytes = fs::read(&summary_path).expect("read summary file");
@@ -1086,7 +1019,6 @@ fn norito_build_compiles_contract() {
         summary_stdout, summary_file,
         "stdout summary should match file"
     );
-
     assert!(
         bytecode_path.exists(),
         "expected bytecode to be written to `{}`",
@@ -1097,7 +1029,6 @@ fn norito_build_compiles_contract() {
         !bytecode.is_empty(),
         "compiled Kotodama bytecode should not be empty"
     );
-
     assert_eq!(
         summary_stdout
             .get("bytecode_path")
@@ -1117,13 +1048,11 @@ fn norito_build_compiles_contract() {
         "the first-release compiler owns and reports ABI v1"
     );
 }
-
 #[test]
 fn norito_build_rejects_removed_abi_selection() {
     let tempdir = tempdir().expect("tempdir");
     let source_path = PathBuf::from("../kotodama_lang/src/samples/kotodama_swap.ko");
     let bytecode_path = tempdir.path().join("contract.to");
-
     let assert = sorafs_cli_cmd()
         .arg("norito")
         .arg("build")
@@ -1142,7 +1071,6 @@ fn norito_build_rejects_removed_abi_selection() {
         "rejected ABI selection must not publish an artifact"
     );
 }
-
 #[test]
 fn retired_manifest_authentication_commands_fail_closed_without_io_or_network() {
     let tempdir = tempdir().expect("tempdir");
@@ -1150,7 +1078,6 @@ fn retired_manifest_authentication_commands_fail_closed_without_io_or_network() 
     let missing_bundle = tempdir.path().join("missing-bundle.json");
     let bundle_out = tempdir.path().join("retired-bundle.json");
     let signature_out = tempdir.path().join("retired-signature.hex");
-
     let server = MockServer::start();
     let oidc_probe = server.mock(|when, then| {
         when.method(GET).path("/oidc/token");
@@ -1158,7 +1085,6 @@ fn retired_manifest_authentication_commands_fail_closed_without_io_or_network() 
             .header("content-type", "application/json")
             .body(r#"{"value":"header.payload.signature"}"#);
     });
-
     let sign_assert = sorafs_cli_cmd()
         .current_dir(tempdir.path())
         .env("ACTIONS_ID_TOKEN_REQUEST_URL", server.url("/oidc/token"))
@@ -1186,7 +1112,6 @@ fn retired_manifest_authentication_commands_fail_closed_without_io_or_network() 
         !sign_stderr.contains("sorafs_cli manifest sign --"),
         "usage must not advertise the retired manifest sign command: {sign_stderr}"
     );
-
     let verify_assert = sorafs_cli_cmd()
         .current_dir(tempdir.path())
         .arg("manifest")
@@ -1209,7 +1134,6 @@ fn retired_manifest_authentication_commands_fail_closed_without_io_or_network() 
         !verify_stderr.contains("sorafs_cli manifest verify-signature --"),
         "usage must not advertise the retired verification command: {verify_stderr}"
     );
-
     oidc_probe.assert_calls(0);
     for output in [&bundle_out, &signature_out] {
         assert!(
@@ -1219,20 +1143,16 @@ fn retired_manifest_authentication_commands_fail_closed_without_io_or_network() 
         );
     }
 }
-
 #[test]
 fn manifest_submit_posts_payload() {
     let tempdir = tempdir().expect("tempdir");
     let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
-
     let input_path = tempdir.path().join("payload.bin");
     let payload: Vec<u8> = (0..4096).map(|idx| (idx as u8).wrapping_mul(31)).collect();
     fs::write(&input_path, &payload).expect("write payload");
-
     let car_path = tempdir.path().join("payload.car");
     let plan_path = tempdir.path().join("plan.json");
     let pack_summary_path = tempdir.path().join("pack_summary.json");
-
     sorafs_cli_cmd()
         .arg("car")
         .arg("pack")
@@ -1242,7 +1162,6 @@ fn manifest_submit_posts_payload() {
         .arg(format!("--summary-out={}", pack_summary_path.display()))
         .assert()
         .success();
-
     let manifest_path = tempdir.path().join("manifest.to");
     sorafs_cli_cmd()
         .arg("manifest")
@@ -1251,7 +1170,6 @@ fn manifest_submit_posts_payload() {
         .arg(format!("--manifest-out={}", manifest_path.display()))
         .assert()
         .success();
-
     let verify_summary_path = tempdir.path().join("verify_summary.json");
     let assert = sorafs_cli_cmd()
         .arg("proof")
@@ -1261,7 +1179,6 @@ fn manifest_submit_posts_payload() {
         .arg(format!("--summary-out={}", verify_summary_path.display()))
         .assert()
         .success();
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary_stdout: Value = norito::json::from_str(stdout.trim()).expect("verify summary json");
     let summary_file_bytes = fs::read(&verify_summary_path).expect("read verify summary file");
@@ -1271,7 +1188,6 @@ fn manifest_submit_posts_payload() {
         summary_stdout, summary_file,
         "stdout summary should match file"
     );
-
     let expected_digest = compute_chunk_digest_hex(&plan_path);
     assert_eq!(
         summary_stdout
@@ -1279,7 +1195,6 @@ fn manifest_submit_posts_payload() {
             .and_then(Value::as_str),
         Some(expected_digest.as_str())
     );
-
     let plan_value: Value =
         from_slice(&fs::read(&plan_path).expect("read plan")).expect("plan json");
     let specs = chunk_fetch_plan_from_json(&plan_value)
@@ -1289,7 +1204,6 @@ fn manifest_submit_posts_payload() {
         summary_stdout.get("chunk_count").and_then(Value::as_u64),
         Some(specs.len() as u64)
     );
-
     let root_cids = summary_stdout
         .get("root_cids_hex")
         .and_then(Value::as_array)
@@ -1298,7 +1212,6 @@ fn manifest_submit_posts_payload() {
         !root_cids.is_empty(),
         "verify summary should report root CIDs"
     );
-
     assert_eq!(
         summary_stdout.get("chunker_handle").and_then(Value::as_str),
         Some("sorafs.sf1@1.0.0")
@@ -1313,7 +1226,6 @@ fn manifest_submit_posts_payload() {
         summary_stdout.get("payload_bytes").and_then(Value::as_u64),
         Some(payload.len() as u64)
     );
-
     let manifest_bytes = fs::read(&manifest_path).expect("read manifest");
     let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes).expect("decode manifest");
     let manifest_digest = manifest.digest().expect("manifest digest");
@@ -1331,7 +1243,6 @@ fn manifest_submit_posts_payload() {
             .and_then(Value::as_str),
         Some(manifest_car_digest_hex.as_str())
     );
-
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
         when.method(POST)
@@ -1341,10 +1252,8 @@ fn manifest_submit_posts_payload() {
             .header("Content-Type", "application/json")
             .body("{\"status\":\"ok\"}");
     });
-
     let submit_summary_path = tempdir.path().join("submit_summary.json");
     let response_path = tempdir.path().join("torii_response.bin");
-
     let assert = sorafs_cli_cmd()
         .arg("manifest")
         .arg("submit")
@@ -1358,9 +1267,7 @@ fn manifest_submit_posts_payload() {
         .arg(format!("--response-out={}", response_path.display()))
         .assert()
         .success();
-
     mock.assert_calls(1);
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary_stdout: Value = norito::json::from_str(stdout.trim()).expect("submit summary json");
     let summary_file_bytes = fs::read(&submit_summary_path).expect("read submit summary file");
@@ -1370,7 +1277,6 @@ fn manifest_submit_posts_payload() {
         summary_stdout, summary_file,
         "stdout summary should match file"
     );
-
     let expected_endpoint = format!(
         "{}/v1/sorafs/pin/register",
         server.base_url().trim_end_matches('/')
@@ -1383,7 +1289,6 @@ fn manifest_submit_posts_payload() {
         summary_stdout.get("submitted_epoch").is_none(),
         "client-supplied event epochs must not re-enter the signed pin request"
     );
-
     let expected_digest = compute_chunk_digest_hex(&plan_path);
     assert_eq!(
         summary_stdout
@@ -1391,11 +1296,9 @@ fn manifest_submit_posts_payload() {
             .and_then(Value::as_str),
         Some(expected_digest.as_str())
     );
-
     let response_bytes = fs::read(&response_path).expect("read response body");
     assert_eq!(response_bytes, br#"{"status":"ok"}"#);
 }
-
 #[test]
 fn retired_storage_pin_subcommand_does_not_send_http() {
     let output = sorafs_cli_cmd()
@@ -1403,10 +1306,8 @@ fn retired_storage_pin_subcommand_does_not_send_http() {
         .arg("pin")
         .output()
         .expect("command executes");
-
     assert!(!output.status.success());
 }
-
 #[test]
 fn storage_prepare_writes_canonical_payload_and_files_manifest() {
     let tempdir = tempdir().expect("tempdir");
@@ -1419,11 +1320,9 @@ fn storage_prepare_writes_canonical_payload_and_files_manifest() {
         "console.log('hayahi');",
     )
     .expect("write script");
-
     let payload_out = tempdir.path().join("storage.payload.bin");
     let files_out = tempdir.path().join("storage.files.json");
     let summary_out = tempdir.path().join("storage.prepare.summary.json");
-
     let assert = sorafs_cli_cmd()
         .arg("storage")
         .arg("prepare")
@@ -1434,7 +1333,6 @@ fn storage_prepare_writes_canonical_payload_and_files_manifest() {
         .arg(format!("--summary-out={}", summary_out.display()))
         .assert()
         .success();
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary_stdout: Value =
         norito::json::from_str(stdout.trim()).expect("storage prepare summary");
@@ -1451,13 +1349,11 @@ fn storage_prepare_writes_canonical_payload_and_files_manifest() {
             .and_then(Value::as_u64),
         Some(2)
     );
-
     let payload_bytes = fs::read(&payload_out).expect("read payload bytes");
     assert!(
         !payload_bytes.is_empty(),
         "prepared payload should not be empty"
     );
-
     let files_value: Value =
         from_slice(&fs::read(&files_out).expect("read files json")).expect("files json");
     let files = files_value
@@ -1465,18 +1361,15 @@ fn storage_prepare_writes_canonical_payload_and_files_manifest() {
         .expect("directory payload files should be an array");
     assert_eq!(files.len(), 2);
 }
-
 #[test]
 fn deploy_registers_canonical_manifest_for_provider_outbox_ingest() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("site.bin");
     let payload = b"sorafs deploy payload".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
-
     let primary = MockServer::start();
     let (client_config, private_key) =
         write_deploy_client_config(tempdir.path(), &primary.base_url());
-
     let status = primary.mock(|when, then| {
         when.method(GET).path("/status");
         then.status(200)
@@ -1506,7 +1399,6 @@ fn deploy_registers_canonical_manifest_for_provider_outbox_ingest() {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
-
     let summary_path = tempdir.path().join("deploy.summary.json");
     let out_dir = tempdir.path().join("deploy-out");
     let assert = sorafs_cli_cmd()
@@ -1517,12 +1409,10 @@ fn deploy_registers_canonical_manifest_for_provider_outbox_ingest() {
         .arg(format!("--summary-out={}", summary_path.display()))
         .assert()
         .success();
-
     status.assert_calls(1);
     discovery.assert_calls(1);
     register.assert_calls(1);
     gateway.assert_calls(1);
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     assert!(
         !stdout.contains("private_key") && !stdout.contains(&private_key),
@@ -1593,21 +1483,18 @@ fn deploy_registers_canonical_manifest_for_provider_outbox_ingest() {
         Some(true)
     );
 }
-
 #[test]
 fn deploy_accepts_known_chain_client_config_without_account_chain_discriminant() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("known-chain.bin");
     let payload = b"sorafs deploy known chain payload".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
-
     let primary = MockServer::start();
     let (client_config, _private_key) = write_deploy_client_config_with_chain(
         tempdir.path(),
         &primary.base_url(),
         "fc56984b-2be7-431d-840e-21514d1883f0",
     );
-
     let register = primary.mock(|when, then| {
         when.method(POST)
             .path("/v1/sorafs/pin/register")
@@ -1620,7 +1507,6 @@ fn deploy_accepts_known_chain_client_config_without_account_chain_discriminant()
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
-
     let assert = sorafs_cli_cmd()
         .arg("deploy")
         .arg(format!("--payload={}", payload_path.display()))
@@ -1632,26 +1518,21 @@ fn deploy_accepts_known_chain_client_config_without_account_chain_discriminant()
         ))
         .assert()
         .success();
-
     register.assert_calls(1);
     gateway.assert_calls(1);
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
     assert_eq!(summary.get("success").and_then(Value::as_bool), Some(true));
 }
-
 #[test]
 fn deploy_falls_back_to_primary_when_peer_discovery_404() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
     let payload = b"fallback deploy".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
-
     let primary = MockServer::start();
     let (client_config, _private_key) =
         write_deploy_client_config(tempdir.path(), &primary.base_url());
-
     let status = primary.mock(|when, then| {
         when.method(GET).path("/status");
         then.status(200)
@@ -1672,7 +1553,6 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
-
     let assert = sorafs_cli_cmd()
         .arg("deploy")
         .arg(format!("--payload={}", payload_path.display()))
@@ -1683,7 +1563,6 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
         ))
         .assert()
         .success();
-
     status.assert_calls(0);
     discovery.assert_calls(1);
     register.assert_calls(1);
@@ -1699,18 +1578,15 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
             .is_some()
     );
 }
-
 #[test]
 fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
     let payload = b"fallback transaction deploy".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
-
     let primary = MockServer::start();
     let (client_config, _private_key) =
         write_deploy_client_config(tempdir.path(), &primary.base_url());
-
     let register = primary.mock(|when, then| {
         when.method(POST).path("/v1/sorafs/pin/register");
         then.status(405).body("method not allowed");
@@ -1739,7 +1615,6 @@ fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
-
     let output = sorafs_cli_cmd()
         .arg("deploy")
         .arg(format!("--payload={}", payload_path.display()))
@@ -1750,13 +1625,11 @@ fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
         ))
         .output()
         .expect("command executes");
-
     assert!(!output.status.success());
     register.assert_calls(1);
     registry.assert_calls(0);
     transaction.assert_calls(0);
     pipeline.assert_calls(0);
-
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
     let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
     assert_eq!(summary.get("success").and_then(Value::as_bool), Some(false));
@@ -1777,17 +1650,14 @@ fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
             .is_some_and(|error| error.contains("generic transaction fallback is not supported"))
     );
 }
-
 #[test]
 fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
     fs::write(&payload_path, b"abc").expect("write payload");
-
     let primary = MockServer::start();
     let (client_config, _private_key) =
         write_deploy_client_config(tempdir.path(), &primary.base_url());
-
     primary.mock(|when, then| {
         when.method(POST).path("/v1/sorafs/pin/register");
         then.status(200)
@@ -1798,7 +1668,6 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body("xyz");
     });
-
     let output = sorafs_cli_cmd()
         .arg("deploy")
         .arg(format!("--payload={}", payload_path.display()))
@@ -1810,7 +1679,6 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
         ))
         .output()
         .expect("command executes");
-
     assert!(
         !output.status.success(),
         "deploy should fail when gateway bytes have the right length but wrong hash"
@@ -1827,19 +1695,16 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
     assert_eq!(check.get("length_ok").and_then(Value::as_bool), Some(true));
     assert_eq!(check.get("hash_ok").and_then(Value::as_bool), Some(false));
 }
-
 #[test]
 fn manifest_submit_rejects_chunk_digest_mismatch() {
     let tempdir = tempdir().expect("tempdir");
     let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
     let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
-
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
         when.method(POST).path("/v1/sorafs/pin/register");
         then.status(200).body("{\"status\":\"ok\"}");
     });
-
     let wrong_digest = hex_encode([0xAB; 32]);
     let output = sorafs_cli_cmd()
         .arg("manifest")
@@ -1853,7 +1718,6 @@ fn manifest_submit_rejects_chunk_digest_mismatch() {
         .arg(format!("--private-key={private_key}"))
         .output()
         .expect("command executes");
-
     assert!(
         !output.status.success(),
         "CLI must fail when chunk digest mismatches manifest"
@@ -1865,7 +1729,6 @@ fn manifest_submit_rejects_chunk_digest_mismatch() {
     );
     mock.assert_calls(0);
 }
-
 #[test]
 fn manifest_submit_rejects_retired_client_epoch_flags() {
     for retired in ["--submitted-epoch=7", "--resolve-submitted-epoch=true"] {
@@ -1885,7 +1748,6 @@ fn manifest_submit_rejects_retired_client_epoch_flags() {
             "retired client epoch flag produced an unexpected error: {stderr}"
         );
     }
-
     for args in [
         ["deploy", "--submitted-epoch=7", ""],
         ["manifest", "proposal", "--submitted-epoch=7"],
@@ -1902,13 +1764,11 @@ fn manifest_submit_rejects_retired_client_epoch_flags() {
         );
     }
 }
-
 #[test]
 fn manifest_submit_does_not_fallback_or_replay_the_signed_body() {
     let tempdir = tempdir().expect("tempdir");
     let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
     let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
-
     let server = MockServer::start();
     let register_mock = server.mock(|when, then| {
         when.method(POST).path("/v1/sorafs/pin/register");
@@ -1930,7 +1790,6 @@ fn manifest_submit_does_not_fallback_or_replay_the_signed_body() {
             .header("Content-Type", "application/json")
             .body(r#"{"content":{"status":{"kind":"Committed","block_height":16}}}"#);
     });
-
     let output = sorafs_cli_cmd()
         .arg("manifest")
         .arg("submit")
@@ -1942,7 +1801,6 @@ fn manifest_submit_does_not_fallback_or_replay_the_signed_body() {
         .arg(format!("--private-key={private_key}"))
         .output()
         .expect("command executes");
-
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -1954,13 +1812,11 @@ fn manifest_submit_does_not_fallback_or_replay_the_signed_body() {
     tx_mock.assert_calls(0);
     status_mock.assert_calls(0);
 }
-
 #[test]
 fn manifest_submit_does_not_follow_307_or_308_with_the_signed_body() {
     let tempdir = tempdir().expect("tempdir");
     let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
     let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
-
     for status in [307_u16, 308_u16] {
         let server = MockServer::start();
         let register_mock = server.mock(|when, then| {
@@ -1973,7 +1829,6 @@ fn manifest_submit_does_not_follow_307_or_308_with_the_signed_body() {
             when.method(POST).path("/replayed-signed-pin");
             then.status(200).body("unexpected replay");
         });
-
         let output = sorafs_cli_cmd()
             .arg("manifest")
             .arg("submit")
@@ -1985,13 +1840,11 @@ fn manifest_submit_does_not_follow_307_or_308_with_the_signed_body() {
             .arg(format!("--private-key={private_key}"))
             .output()
             .expect("command executes");
-
         assert!(!output.status.success(), "HTTP {status} must be terminal");
         register_mock.assert_calls(1);
         replay_mock.assert_calls(0);
     }
 }
-
 #[test]
 fn fetch_command_rejects_insecure_local_gateway_without_output() {
     let tempdir = tempdir().expect("tempdir");
@@ -2002,7 +1855,6 @@ fn fetch_command_rejects_insecure_local_gateway_without_output() {
     let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json string");
     let plan_path = tempdir.path().join("plan.json");
     fs::write(&plan_path, plan_json).expect("write plan json");
-
     let provider_id_bytes = [0x17u8; 32];
     let provider_id_hex = hex_encode(provider_id_bytes);
     let writer = CarWriter::new(&plan, &payload).expect("writer");
@@ -2037,7 +1889,6 @@ fn fetch_command_rejects_insecure_local_gateway_without_output() {
         plan.chunks.len(),
         "sorafs.sf1@1.0.0"
     );
-
     let chunk_specs = plan.try_chunk_fetch_specs().expect("valid CAR plan");
     let server = MockServer::start();
     let manifest_path = format!("/v1/sorafs/storage/manifest/{manifest_id_hex}");
@@ -2061,7 +1912,6 @@ fn fetch_command_rejects_insecure_local_gateway_without_output() {
         });
         mocks.push(mock);
     }
-
     let signing = SigningKey::from_bytes(&[0xAB; 32]);
     let token_body = StreamTokenBodyV1 {
         token_id: "tok-cli-integration".to_string(),
@@ -2079,16 +1929,13 @@ fn fetch_command_rejects_insecure_local_gateway_without_output() {
     let stream_token_bytes = to_bytes(&stream_token).expect("stream token bytes");
     let stream_token_b64 = BASE64_STANDARD.encode(stream_token_bytes);
     let gateway_public_key_hex = hex_encode(signing.verifying_key().to_bytes());
-
     let base_url = server.base_url();
     let provider_arg = format!(
         "name=alpha,provider-id={provider_id_hex},gateway-key={gateway_public_key_hex},base-url={},stream-token={stream_token_b64}",
         base_url
     );
-
     let output_path = tempdir.path().join("payload.out");
     let json_path = tempdir.path().join("fetch_summary.json");
-
     let assert = sorafs_cli_cmd()
         .arg("fetch")
         .arg(format!("--plan={}", plan_path.display()))
@@ -2107,11 +1954,9 @@ fn fetch_command_rejects_insecure_local_gateway_without_output() {
         return;
     }
     let assert = assert.success();
-
     for mock in mocks {
         mock.assert();
     }
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let stdout_json: Value = norito::json::from_str(stdout.trim()).expect("stdout summary json");
     assert_eq!(
@@ -2129,10 +1974,8 @@ fn fetch_command_rejects_insecure_local_gateway_without_output() {
         stdout_json.get("cache_state").and_then(Value::as_str),
         Some("cold")
     );
-
     let assembled = fs::read(&output_path).expect("read assembled payload");
     assert_eq!(assembled, payload);
-
     let summary_bytes = fs::read(&json_path).expect("read fetch summary");
     let summary_json: Value = from_slice(&summary_bytes).expect("summary json");
     assert_eq!(
@@ -2184,15 +2027,12 @@ fn fetch_command_rejects_insecure_local_gateway_without_output() {
         0
     );
 }
-
 #[test]
 fn proof_verify_reports_chunk_digest() {
     let tempdir = tempdir().expect("tempdir");
-
     let input_path = tempdir.path().join("payload.bin");
     let payload: Vec<u8> = (0..2048).map(|i| (i as u8).wrapping_mul(7)).collect();
     fs::write(&input_path, &payload).expect("write payload");
-
     let car_path = tempdir.path().join("payload.car");
     let plan_path = tempdir.path().join("plan.json");
     let pack_summary_path = tempdir.path().join("pack_summary.json");
@@ -2205,7 +2045,6 @@ fn proof_verify_reports_chunk_digest() {
         .arg(format!("--summary-out={}", pack_summary_path.display()))
         .assert()
         .success();
-
     let manifest_path = tempdir.path().join("manifest.to");
     sorafs_cli_cmd()
         .arg("manifest")
@@ -2214,7 +2053,6 @@ fn proof_verify_reports_chunk_digest() {
         .arg(format!("--manifest-out={}", manifest_path.display()))
         .assert()
         .success();
-
     let verify_summary_path = tempdir.path().join("verify_summary.json");
     let assert = sorafs_cli_cmd()
         .arg("proof")
@@ -2224,7 +2062,6 @@ fn proof_verify_reports_chunk_digest() {
         .arg(format!("--summary-out={}", verify_summary_path.display()))
         .assert()
         .success();
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary_stdout: Value = norito::json::from_str(stdout.trim()).expect("verify summary json");
     let summary_file_bytes = fs::read(&verify_summary_path).expect("read verify summary file");
@@ -2234,7 +2071,6 @@ fn proof_verify_reports_chunk_digest() {
         summary_stdout, summary_file,
         "stdout summary should match file"
     );
-
     let expected_digest = compute_chunk_digest_hex(&plan_path);
     assert_eq!(
         summary_stdout
@@ -2242,7 +2078,6 @@ fn proof_verify_reports_chunk_digest() {
             .and_then(Value::as_str),
         Some(expected_digest.as_str())
     );
-
     let plan_value: Value =
         from_slice(&fs::read(&plan_path).expect("read plan")).expect("plan json");
     let specs = chunk_fetch_plan_from_json(&plan_value)
@@ -2252,7 +2087,6 @@ fn proof_verify_reports_chunk_digest() {
         summary_stdout.get("chunk_count").and_then(Value::as_u64),
         Some(specs.len() as u64)
     );
-
     let root_cids = summary_stdout
         .get("root_cids_hex")
         .and_then(Value::as_array)
@@ -2261,7 +2095,6 @@ fn proof_verify_reports_chunk_digest() {
         !root_cids.is_empty(),
         "verify summary should report root CIDs"
     );
-
     assert_eq!(
         summary_stdout.get("chunker_handle").and_then(Value::as_str),
         Some("sorafs.sf1@1.0.0")
@@ -2276,7 +2109,6 @@ fn proof_verify_reports_chunk_digest() {
         summary_stdout.get("payload_bytes").and_then(Value::as_u64),
         Some(payload.len() as u64)
     );
-
     let manifest_bytes = fs::read(&manifest_path).expect("read manifest");
     let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes).expect("decode manifest");
     let manifest_digest = manifest.digest().expect("manifest digest");
@@ -2288,13 +2120,11 @@ fn proof_verify_reports_chunk_digest() {
         Some(manifest_digest_hex.as_str())
     );
 }
-
 #[test]
 fn proof_verify_rejects_missing_or_substituted_plan_payload_digest() {
     let tempdir = tempdir().expect("tempdir");
     let input_path = tempdir.path().join("payload.bin");
     fs::write(&input_path, b"payload digest bound fetch plan").expect("write payload");
-
     let car_path = tempdir.path().join("payload.car");
     let plan_path = tempdir.path().join("plan.json");
     let pack_summary_path = tempdir.path().join("pack-summary.json");
@@ -2307,7 +2137,6 @@ fn proof_verify_rejects_missing_or_substituted_plan_payload_digest() {
         .arg(format!("--summary-out={}", pack_summary_path.display()))
         .assert()
         .success();
-
     let manifest_path = tempdir.path().join("manifest.to");
     sorafs_cli_cmd()
         .arg("manifest")
@@ -2316,10 +2145,8 @@ fn proof_verify_rejects_missing_or_substituted_plan_payload_digest() {
         .arg(format!("--manifest-out={}", manifest_path.display()))
         .assert()
         .success();
-
     let canonical: Value =
         from_slice(&fs::read(&plan_path).expect("read plan")).expect("parse canonical plan");
-
     let mut missing = canonical.clone();
     missing
         .as_object_mut()
@@ -2344,7 +2171,6 @@ fn proof_verify_rejects_missing_or_substituted_plan_payload_digest() {
         missing_stderr.contains("missing required `payload_digest_blake3_hex`"),
         "unexpected missing-digest failure: {missing_stderr}"
     );
-
     let mut substituted = canonical;
     substituted.as_object_mut().expect("plan object").insert(
         "payload_digest_blake3_hex".into(),
@@ -2370,11 +2196,9 @@ fn proof_verify_rejects_missing_or_substituted_plan_payload_digest() {
         "unexpected substituted-digest failure: {substituted_stderr}"
     );
 }
-
 fn snapshot_id_fixture() -> [u8; 16] {
     [0x42; 16]
 }
-
 fn reputation_snapshot_fixture() -> ReputationSnapshotV1 {
     let metrics = ReputationProviderMetricsV1 {
         version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
@@ -2404,8 +2228,7 @@ fn reputation_snapshot_fixture() -> ReputationSnapshotV1 {
     )
     .expect("reputation snapshot")
 }
-
-fn reputation_auth_args(directory: &CanonicalTempDir) -> [String; 2] {
+fn reputation_auth_args(directory: &CanonicalTempDir) -> [String; 3] {
     let keypair = KeyPair::try_from_seed(
         b"sorafs-cli-reputation-read-auth".to_vec(),
         Algorithm::Ed25519,
@@ -2420,16 +2243,15 @@ fn reputation_auth_args(directory: &CanonicalTempDir) -> [String; 2] {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
             .expect("secure reputation read fixture key");
     }
     [
+        format!("--network-id={TEST_NETWORK_ID_LITERAL}"),
         format!("--auth-account={account}"),
         format!("--auth-private-key-file={}", key_path.display()),
     ]
 }
-
 fn reputation_snapshot_summary_value(snapshot: &ReputationSnapshotV1) -> Value {
     let mut root = Map::new();
     root.insert(
@@ -2451,7 +2273,6 @@ fn reputation_snapshot_summary_value(snapshot: &ReputationSnapshotV1) -> Value {
     root.insert("status".into(), Value::from("accepted"));
     Value::Object(root)
 }
-
 fn reputation_provider_response_value(snapshot: &ReputationSnapshotV1, provider_id: &str) -> Value {
     let provider = snapshot
         .providers
@@ -2461,7 +2282,6 @@ fn reputation_provider_response_value(snapshot: &ReputationSnapshotV1, provider_
     let proof = snapshot
         .merkle_proof(provider_id)
         .expect("provider proof should build");
-
     let mut provider_map = Map::new();
     provider_map.insert(
         "provider_id".into(),
@@ -2471,7 +2291,6 @@ fn reputation_provider_response_value(snapshot: &ReputationSnapshotV1, provider_
         "score_bps".into(),
         Value::from(u64::from(provider.score_bps)),
     );
-
     let mut proof_map = Map::new();
     proof_map.insert("provider_id".into(), Value::from(proof.provider_id));
     proof_map.insert(
@@ -2492,7 +2311,6 @@ fn reputation_provider_response_value(snapshot: &ReputationSnapshotV1, provider_
                 .collect(),
         ),
     );
-
     let mut root = Map::new();
     root.insert(
         "snapshot_id_hex".into(),
@@ -2506,7 +2324,6 @@ fn reputation_provider_response_value(snapshot: &ReputationSnapshotV1, provider_
     root.insert("proof".into(), Value::Object(proof_map));
     Value::Object(root)
 }
-
 fn reputation_events_response_value(snapshot: &ReputationSnapshotV1) -> Value {
     let mut event = Map::new();
     event.insert("version".into(), Value::from(1_u64));
@@ -2528,7 +2345,6 @@ fn reputation_events_response_value(snapshot: &ReputationSnapshotV1) -> Value {
         Value::from(snapshot.providers.len() as u64),
     );
     event.insert("previous_snapshot_id_hex".into(), Value::Null);
-
     let mut root = Map::new();
     root.insert("since".into(), Value::from(0_u64));
     root.insert("limit".into(), Value::from(10_u64));
@@ -2537,11 +2353,9 @@ fn reputation_events_response_value(snapshot: &ReputationSnapshotV1) -> Value {
     root.insert("events".into(), Value::Array(vec![Value::Object(event)]));
     Value::Object(root)
 }
-
 #[test]
 fn reputation_verify_validates_snapshot_and_merkle_proof() {
     let tempdir = tempdir().expect("tempdir");
-
     let snapshot_id = snapshot_id_fixture();
     let snapshot = reputation_snapshot_fixture();
     let proof = snapshot.merkle_proof("provider-a").expect("provider proof");
@@ -2551,7 +2365,6 @@ fn reputation_verify_validates_snapshot_and_merkle_proof() {
         .find(|entry| entry.provider_id == "provider-a")
         .expect("provider-a should be present")
         .clone();
-
     let snapshot_path = tempdir.path().join("reputation-snapshot.to");
     let proof_path = tempdir.path().join("provider-a-proof.to");
     let summary_path = tempdir.path().join("reputation-summary.json");
@@ -2561,7 +2374,6 @@ fn reputation_verify_validates_snapshot_and_merkle_proof() {
     )
     .expect("write reputation snapshot");
     fs::write(&proof_path, to_bytes(&proof).expect("encode proof")).expect("write proof");
-
     let assert = sorafs_cli_cmd()
         .arg("reputation")
         .arg("verify")
@@ -2571,7 +2383,6 @@ fn reputation_verify_validates_snapshot_and_merkle_proof() {
         .arg(format!("--summary-out={}", summary_path.display()))
         .assert()
         .success();
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary_stdout: Value =
         norito::json::from_str(stdout.trim()).expect("reputation summary json");
@@ -2611,7 +2422,6 @@ fn reputation_verify_validates_snapshot_and_merkle_proof() {
         Some(Value::from(true))
     );
 }
-
 #[test]
 fn reputation_verify_missing_provider_diagnostic_is_payload_free() {
     let tempdir = tempdir().expect("tempdir");
@@ -2623,7 +2433,6 @@ fn reputation_verify_missing_provider_diagnostic_is_payload_free() {
     )
     .expect("write reputation snapshot");
     let provider_id = "provider-private-key-missing";
-
     let assert = sorafs_cli_cmd()
         .arg("reputation")
         .arg("verify")
@@ -2632,13 +2441,11 @@ fn reputation_verify_missing_provider_diagnostic_is_payload_free() {
         .arg("--proof=/runtime/missing-proof.to")
         .assert()
         .failure();
-
     let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
     assert!(stderr.contains("requested provider was not found"));
     assert!(!stderr.contains(provider_id));
     assert!(!stderr.contains("private-key"));
 }
-
 #[test]
 fn reputation_verify_invalid_snapshot_diagnostic_is_payload_free() {
     let tempdir = tempdir().expect("tempdir");
@@ -2651,20 +2458,17 @@ fn reputation_verify_invalid_snapshot_diagnostic_is_payload_free() {
         to_bytes(&snapshot).expect("encode invalid reputation snapshot"),
     )
     .expect("write invalid reputation snapshot");
-
     let assert = sorafs_cli_cmd()
         .arg("reputation")
         .arg("verify")
         .arg(format!("--snapshot={}", snapshot_path.display()))
         .assert()
         .failure();
-
     let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
     assert!(stderr.contains("invalid reputation snapshot"));
     assert!(!stderr.contains(provider_id));
     assert!(!stderr.contains("private-key"));
 }
-
 #[test]
 fn reputation_publish_command_is_retired() {
     let assert = sorafs_cli_cmd()
@@ -2676,7 +2480,6 @@ fn reputation_publish_command_is_retired() {
     assert!(stderr.contains("sorafs_cli reputation snapshot"));
     assert!(!stderr.contains("sorafs_cli reputation publish"));
 }
-
 #[test]
 fn reputation_snapshot_fetches_latest_and_writes_output() {
     let tempdir = tempdir().expect("tempdir");
@@ -2684,7 +2487,6 @@ fn reputation_snapshot_fetches_latest_and_writes_output() {
     let output_path = tempdir.path().join("reputation-latest.json");
     let response_value = reputation_snapshot_summary_value(&snapshot);
     let response_body = to_vec(&response_value).expect("encode response");
-
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
         when.method(GET).path("/v1/sorafs/reputation/latest");
@@ -2692,7 +2494,6 @@ fn reputation_snapshot_fetches_latest_and_writes_output() {
             .header("content-type", "application/json")
             .body(response_body.clone());
     });
-
     let assert = sorafs_cli_cmd()
         .arg("reputation")
         .arg("snapshot")
@@ -2702,7 +2503,6 @@ fn reputation_snapshot_fetches_latest_and_writes_output() {
         .assert()
         .success();
     mock.assert();
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let stdout_value: Value = norito::json::from_str(stdout.trim()).expect("stdout JSON");
     let output_value: Value =
@@ -2714,7 +2514,6 @@ fn reputation_snapshot_fetches_latest_and_writes_output() {
         );
     }
 }
-
 #[test]
 fn reputation_fetch_outputs_provider_table_and_writes_summary() {
     let tempdir = tempdir().expect("tempdir");
@@ -2722,7 +2521,6 @@ fn reputation_fetch_outputs_provider_table_and_writes_summary() {
     let summary_path = tempdir.path().join("provider-summary.json");
     let response_value = reputation_provider_response_value(&snapshot, "provider-a");
     let response_body = to_vec(&response_value).expect("encode response");
-
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
         when.method(GET)
@@ -2731,7 +2529,6 @@ fn reputation_fetch_outputs_provider_table_and_writes_summary() {
             .header("content-type", "application/json")
             .body(response_body.clone());
     });
-
     let assert = sorafs_cli_cmd()
         .arg("reputation")
         .arg("fetch")
@@ -2742,7 +2539,6 @@ fn reputation_fetch_outputs_provider_table_and_writes_summary() {
         .assert()
         .success();
     mock.assert();
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     assert!(stdout.contains("provider_id\tscore_bps"));
     assert!(stdout.contains("provider-a"));
@@ -2757,14 +2553,12 @@ fn reputation_fetch_outputs_provider_table_and_writes_summary() {
         Some("provider-a")
     );
 }
-
 #[test]
 fn reputation_fetch_outputs_provider_json() {
     let tempdir = tempdir().expect("tempdir");
     let snapshot = reputation_snapshot_fixture();
     let response_value = reputation_provider_response_value(&snapshot, "provider-a");
     let response_body = to_vec(&response_value).expect("encode response");
-
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
         when.method(GET)
@@ -2773,7 +2567,6 @@ fn reputation_fetch_outputs_provider_json() {
             .header("content-type", "application/json")
             .body(response_body.clone());
     });
-
     let assert = sorafs_cli_cmd()
         .arg("reputation")
         .arg("fetch")
@@ -2784,7 +2577,6 @@ fn reputation_fetch_outputs_provider_json() {
         .assert()
         .success();
     mock.assert();
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let value: Value = norito::json::from_str(stdout.trim()).expect("stdout JSON");
     assert_eq!(
@@ -2796,7 +2588,6 @@ fn reputation_fetch_outputs_provider_json() {
         Some("provider-a")
     );
 }
-
 #[test]
 fn reputation_watch_fetches_events_with_cursor_and_writes_summary() {
     let tempdir = tempdir().expect("tempdir");
@@ -2804,7 +2595,6 @@ fn reputation_watch_fetches_events_with_cursor_and_writes_summary() {
     let summary_path = tempdir.path().join("reputation-events.json");
     let response_value = reputation_events_response_value(&snapshot);
     let response_body = to_vec(&response_value).expect("encode response");
-
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
         when.method(GET)
@@ -2815,7 +2605,6 @@ fn reputation_watch_fetches_events_with_cursor_and_writes_summary() {
             .header("content-type", "application/json")
             .body(response_body.clone());
     });
-
     let assert = sorafs_cli_cmd()
         .arg("reputation")
         .arg("watch")
@@ -2828,7 +2617,6 @@ fn reputation_watch_fetches_events_with_cursor_and_writes_summary() {
         .assert()
         .success();
     mock.assert();
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let value: Value = norito::json::from_str(stdout.trim()).expect("stdout JSON");
     assert_eq!(value.get("next_since").and_then(Value::as_u64), Some(1));
@@ -2836,7 +2624,6 @@ fn reputation_watch_fetches_events_with_cursor_and_writes_summary() {
         from_slice(&fs::read(&summary_path).expect("read summary")).expect("summary JSON");
     assert_eq!(summary_value.get("count").and_then(Value::as_u64), Some(1));
 }
-
 #[test]
 fn proof_verify_accepts_chunk_plan_for_directory_payloads() {
     let tempdir = tempdir().expect("tempdir");
@@ -2850,7 +2637,6 @@ fn proof_verify_accepts_chunk_plan_for_directory_payloads() {
     .expect("write index");
     fs::write(site_dir.join("env.json"), "{\"NETWORK\":\"taira\"}\n").expect("write env");
     fs::write(assets_dir.join("app.js"), "console.log('sorafs');\n").expect("write app");
-
     let car_path = tempdir.path().join("site.car");
     let plan_path = tempdir.path().join("site.plan.json");
     let pack_summary_path = tempdir.path().join("site.pack.summary.json");
@@ -2863,7 +2649,6 @@ fn proof_verify_accepts_chunk_plan_for_directory_payloads() {
         .arg(format!("--summary-out={}", pack_summary_path.display()))
         .assert()
         .success();
-
     let manifest_path = tempdir.path().join("site.manifest.to");
     sorafs_cli_cmd()
         .arg("manifest")
@@ -2872,7 +2657,6 @@ fn proof_verify_accepts_chunk_plan_for_directory_payloads() {
         .arg(format!("--manifest-out={}", manifest_path.display()))
         .assert()
         .success();
-
     let verify_summary_path = tempdir.path().join("site.verify.summary.json");
     let assert = sorafs_cli_cmd()
         .arg("proof")
@@ -2883,7 +2667,6 @@ fn proof_verify_accepts_chunk_plan_for_directory_payloads() {
         .arg(format!("--summary-out={}", verify_summary_path.display()))
         .assert()
         .success();
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary_stdout: Value = norito::json::from_str(stdout.trim()).expect("verify summary json");
     let plan_value: Value =
@@ -2904,13 +2687,11 @@ fn proof_verify_accepts_chunk_plan_for_directory_payloads() {
         Some(specs.len() as u64)
     );
 }
-
 fn governance_fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join("fixtures/sorafs_manifest/governance")
 }
-
 fn governance_fixture_node_cid_display() -> String {
     let bytes = fs::read(governance_fixture_root().join("node_v1.to"))
         .expect("read governance node fixture");
@@ -2925,15 +2706,12 @@ fn governance_fixture_node_cid_display() -> String {
         _ => format!("hex:{}", hex_encode(node.node_cid)),
     }
 }
-
 fn parse_cli_json_stdout(output: &[u8]) -> Value {
     from_slice(output).expect("CLI stdout should be JSON")
 }
-
 fn governance_dag_build_key_hex() -> String {
     "cd".repeat(32)
 }
-
 fn write_governance_dag_provenance_node(root: &Path) -> (PathBuf, String) {
     let account_keypair = KeyPair::try_from_seed(
         b"sorafs-cli-governance-provenance-account".to_vec(),
@@ -3022,7 +2800,6 @@ fn write_governance_dag_provenance_node(root: &Path) -> (PathBuf, String) {
     node.validate().expect("validate provenance-bearing node");
     node.verify_publisher_signature()
         .expect("verify provenance-bearing node signature");
-
     let path = root.join("finance-report.to");
     fs::write(
         &path,
@@ -3031,7 +2808,6 @@ fn write_governance_dag_provenance_node(root: &Path) -> (PathBuf, String) {
     .expect("write provenance-bearing node");
     (path, publisher_account_digest_hex)
 }
-
 fn assert_governance_submission_summary(value: &Value, publisher_account_digest_hex: &str) {
     assert_eq!(
         value
@@ -3046,7 +2822,6 @@ fn assert_governance_submission_summary(value: &Value, publisher_account_digest_
         "signed submission origin should be preserved in {value:?}"
     );
 }
-
 fn build_governance_dag_fixture_archive(build_dir: &Path, summary_path: Option<&Path>) -> Value {
     let root = governance_fixture_root();
     let key_hex = governance_dag_build_key_hex();
@@ -3066,13 +2841,11 @@ fn build_governance_dag_fixture_archive(build_dir: &Path, summary_path: Option<&
     let build_assert = command.assert().success();
     parse_cli_json_stdout(&build_assert.get_output().stdout)
 }
-
 #[test]
 fn governance_dag_list_and_show_validate_fixture() {
     let root = governance_fixture_root();
     let node = root.join("node_v1.to");
     let node_cid = governance_fixture_node_cid_display();
-
     let list_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3121,7 +2894,6 @@ fn governance_dag_list_and_show_validate_fixture() {
             .is_some_and(Value::is_null),
         "internally produced node must expose an explicit null submission origin: {listed_node:?}"
     );
-
     let show_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3156,7 +2928,6 @@ fn governance_dag_list_and_show_validate_fixture() {
         "internally produced node must expose an explicit null submission origin: {shown_node:?}"
     );
 }
-
 #[test]
 fn governance_dag_cli_preserves_signed_submission_provenance() {
     let tempdir = tempdir().expect("tempdir");
@@ -3164,7 +2935,6 @@ fn governance_dag_cli_preserves_signed_submission_provenance() {
     fs::create_dir(&source_root).expect("create source root");
     let (node_path, publisher_account_digest_hex) =
         write_governance_dag_provenance_node(&source_root);
-
     let list_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3181,7 +2951,6 @@ fn governance_dag_cli_preserves_signed_submission_provenance() {
         .and_then(|artifact| artifact.get("node"))
         .expect("listed provenance-bearing node");
     assert_governance_submission_summary(listed_node, &publisher_account_digest_hex);
-
     let show_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3195,7 +2964,6 @@ fn governance_dag_cli_preserves_signed_submission_provenance() {
         .get("node")
         .expect("shown provenance-bearing node");
     assert_governance_submission_summary(shown_node, &publisher_account_digest_hex);
-
     let build_root = tempdir.path().join("build");
     let build_assert = sorafs_cli_cmd()
         .arg("governance")
@@ -3215,7 +2983,6 @@ fn governance_dag_cli_preserves_signed_submission_provenance() {
         .and_then(|blocks| blocks.first())
         .expect("built provenance-bearing block summary");
     assert_governance_submission_summary(built_block, &publisher_account_digest_hex);
-
     let verify_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3232,7 +2999,6 @@ fn governance_dag_cli_preserves_signed_submission_provenance() {
         .expect("verified provenance-bearing block summary");
     assert_governance_submission_summary(verified_block, &publisher_account_digest_hex);
 }
-
 #[test]
 fn governance_dag_verify_rejects_unexpected_head() {
     let root = governance_fixture_root();
@@ -3258,7 +3024,6 @@ fn governance_dag_verify_rejects_unexpected_head() {
         "expected head_cid failure in {errors:?}"
     );
 }
-
 #[test]
 fn governance_dag_verify_and_export_fixture_archive() {
     let root = governance_fixture_root();
@@ -3281,7 +3046,6 @@ fn governance_dag_verify_and_export_fixture_archive() {
             .and_then(Value::as_str),
         Some(head_cid.as_str())
     );
-
     let tempdir = tempdir().expect("tempdir");
     let export_dir = tempdir.path().join("export");
     let export_assert = sorafs_cli_cmd()
@@ -3313,14 +3077,12 @@ fn governance_dag_verify_and_export_fixture_archive() {
         "manifest missing"
     );
 }
-
 #[test]
 fn governance_dag_build_fixture_archive_writes_signed_blocks_and_head() {
     let tempdir = tempdir().expect("tempdir");
     let build_dir = tempdir.path().join("build");
     let summary_path = tempdir.path().join("build-summary.json");
     let key_hex = governance_dag_build_key_hex();
-
     let build_json = build_governance_dag_fixture_archive(&build_dir, Some(&summary_path));
     assert_eq!(
         build_json.get("schema").and_then(Value::as_str),
@@ -3334,7 +3096,6 @@ fn governance_dag_build_fixture_archive_writes_signed_blocks_and_head() {
         build_json.get("generated_at").and_then(Value::as_u64),
         Some(1_700_000_999)
     );
-
     let head_path = build_dir.join("head.to");
     let head_sidecar = build_dir.join("head.to.blake3");
     assert!(head_path.exists(), "head.to missing");
@@ -3353,7 +3114,6 @@ fn governance_dag_build_fixture_archive_writes_signed_blocks_and_head() {
         GovernanceSignatureAlgorithm::Ed25519
     );
     assert_eq!(head.block_count, 1);
-
     let blocks = build_json
         .get("blocks")
         .and_then(Value::as_array)
@@ -3373,7 +3133,6 @@ fn governance_dag_build_fixture_archive_writes_signed_blocks_and_head() {
     );
     validate_governance_dag_head_against_chain_v1(&head, &[block])
         .expect("generated governance DAG block/head chain validates");
-
     let manifest = fs::read_to_string(build_dir.join("manifest.json")).expect("read manifest");
     assert!(
         !manifest.contains(&key_hex),
@@ -3382,7 +3141,6 @@ fn governance_dag_build_fixture_archive_writes_signed_blocks_and_head() {
     let summary = fs::read_to_string(&summary_path).expect("read summary");
     assert_eq!(manifest, summary);
 }
-
 #[test]
 fn governance_dag_build_fixture_archive_writes_car_segment() {
     let root = governance_fixture_root();
@@ -3391,7 +3149,6 @@ fn governance_dag_build_fixture_archive_writes_car_segment() {
     let car_path = tempdir.path().join("governance-dag.car");
     let car_plan_path = tempdir.path().join("governance-dag-plan.json");
     let key_hex = governance_dag_build_key_hex();
-
     let build_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3426,7 +3183,6 @@ fn governance_dag_build_fixture_archive_writes_car_segment() {
         car_summary.get("file_count").and_then(Value::as_u64),
         Some(4)
     );
-
     let car_bytes = fs::read(&car_path).expect("read governance DAG CAR");
     assert_eq!(
         car_summary.get("car_size").and_then(Value::as_u64),
@@ -3445,7 +3201,6 @@ fn governance_dag_build_fixture_archive_writes_car_segment() {
         !canonical_plan.chunk_fetch_specs.is_empty(),
         "CAR chunk plan should contain at least one chunk: {plan_json:?}"
     );
-
     let files = car_summary
         .get("files")
         .and_then(Value::as_array)
@@ -3472,7 +3227,6 @@ fn governance_dag_build_fixture_archive_writes_car_segment() {
             .any(|path| path.starts_with("blocks/") && path.ends_with(".to.blake3"))
     );
 }
-
 #[test]
 fn governance_dag_verify_build_accepts_generated_blocks_and_head() {
     let tempdir = tempdir().expect("tempdir");
@@ -3483,7 +3237,6 @@ fn governance_dag_verify_build_accepts_generated_blocks_and_head() {
         .get("head_block_cid_hex")
         .and_then(Value::as_str)
         .expect("head cid hex");
-
     let verify_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3526,7 +3279,6 @@ fn governance_dag_verify_build_accepts_generated_blocks_and_head() {
     let summary_json: Value = from_slice(summary.as_bytes()).expect("summary json");
     assert_eq!(summary_json, verify_json);
 }
-
 #[test]
 fn governance_dag_verify_build_rejects_tampered_block_snapshot() {
     let tempdir = tempdir().expect("tempdir");
@@ -3553,7 +3305,6 @@ fn governance_dag_verify_build_rejects_tampered_block_snapshot() {
         format!("{}\n", hex_encode(blake3_hash(&tampered_bytes).as_bytes())),
     )
     .expect("write tampered sidecar");
-
     let verify_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3575,7 +3326,6 @@ fn governance_dag_verify_build_rejects_tampered_block_snapshot() {
         "expected head_chain failure in {errors:?}"
     );
 }
-
 #[test]
 fn governance_dag_rebuild_head_recreates_signed_head_from_blocks() {
     let tempdir = tempdir().expect("tempdir");
@@ -3584,7 +3334,6 @@ fn governance_dag_rebuild_head_recreates_signed_head_from_blocks() {
     let summary_path = tempdir.path().join("rebuild-head-summary.json");
     let build_json = build_governance_dag_fixture_archive(&build_dir, None);
     let key_hex = governance_dag_build_key_hex();
-
     let rebuild_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3613,7 +3362,6 @@ fn governance_dag_rebuild_head_recreates_signed_head_from_blocks() {
             .and_then(Value::as_str),
         build_json.get("head_block_cid_hex").and_then(Value::as_str)
     );
-
     let original_head = fs::read(build_dir.join("head.to")).expect("read original head");
     let rebuilt_head = fs::read(&rebuilt_head_path).expect("read rebuilt head");
     assert_eq!(
@@ -3630,7 +3378,6 @@ fn governance_dag_rebuild_head_recreates_signed_head_from_blocks() {
     let summary_json: Value = from_slice(summary.as_bytes()).expect("summary json");
     assert_eq!(summary_json, rebuild_json);
 }
-
 #[test]
 fn governance_dag_rebuild_head_rejects_tampered_block_snapshot() {
     let tempdir = tempdir().expect("tempdir");
@@ -3658,7 +3405,6 @@ fn governance_dag_rebuild_head_rejects_tampered_block_snapshot() {
         format!("{}\n", hex_encode(blake3_hash(&tampered_bytes).as_bytes())),
     )
     .expect("write tampered sidecar");
-
     sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3676,7 +3422,6 @@ fn governance_dag_rebuild_head_rejects_tampered_block_snapshot() {
         "rebuild-head must not write a head for invalid blocks"
     );
 }
-
 #[test]
 fn governance_dag_mirror_build_and_query_generated_snapshot() {
     let tempdir = tempdir().expect("tempdir");
@@ -3687,7 +3432,6 @@ fn governance_dag_mirror_build_and_query_generated_snapshot() {
         .get("head_block_cid_hex")
         .and_then(Value::as_str)
         .expect("head cid hex");
-
     let mirror_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3717,7 +3461,6 @@ fn governance_dag_mirror_build_and_query_generated_snapshot() {
     let disk_index = fs::read_to_string(&index_path).expect("read mirror index");
     let disk_index_json: Value = from_slice(disk_index.as_bytes()).expect("disk mirror index json");
     assert_eq!(disk_index_json, mirror_json);
-
     let block = mirror_json
         .get("blocks")
         .and_then(Value::as_array)
@@ -3731,7 +3474,6 @@ fn governance_dag_mirror_build_and_query_generated_snapshot() {
         .get("node_cid_hex")
         .and_then(Value::as_str)
         .expect("node cid hex");
-
     let head_query = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3753,7 +3495,6 @@ fn governance_dag_mirror_build_and_query_generated_snapshot() {
             .and_then(Value::as_str),
         Some(head_cid_hex)
     );
-
     let block_query = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3775,7 +3516,6 @@ fn governance_dag_mirror_build_and_query_generated_snapshot() {
             .and_then(Value::as_str),
         Some(block_cid_hex)
     );
-
     let node_query = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3798,14 +3538,12 @@ fn governance_dag_mirror_build_and_query_generated_snapshot() {
         Some(node_cid_hex)
     );
 }
-
 #[test]
 fn governance_dag_mirror_query_rejects_unknown_block_cid() {
     let tempdir = tempdir().expect("tempdir");
     let build_dir = tempdir.path().join("build");
     let index_path = tempdir.path().join("mirror-index.json");
     build_governance_dag_fixture_archive(&build_dir, None);
-
     sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3814,7 +3552,6 @@ fn governance_dag_mirror_query_rejects_unknown_block_cid() {
         .arg(format!("--out={}", index_path.display()))
         .assert()
         .success();
-
     let missing_query = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3837,7 +3574,6 @@ fn governance_dag_mirror_query_rejects_unknown_block_cid() {
         "missing block query should return a null block: {missing_json:?}"
     );
 }
-
 #[test]
 fn governance_dag_checkpoint_packages_verified_snapshot_artifacts() {
     let root = governance_fixture_root();
@@ -3848,7 +3584,6 @@ fn governance_dag_checkpoint_packages_verified_snapshot_artifacts() {
     let index_path = tempdir.path().join("mirror-index.json");
     let checkpoint_path = tempdir.path().join("checkpoint.json");
     let key_hex = governance_dag_build_key_hex();
-
     let build_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3867,7 +3602,6 @@ fn governance_dag_checkpoint_packages_verified_snapshot_artifacts() {
         .get("head_block_cid_hex")
         .and_then(Value::as_str)
         .expect("head cid hex");
-
     sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3878,7 +3612,6 @@ fn governance_dag_checkpoint_packages_verified_snapshot_artifacts() {
         .arg(format!("--head-cid=hex:{head_cid_hex}"))
         .assert()
         .success();
-
     let checkpoint_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3915,7 +3648,6 @@ fn governance_dag_checkpoint_packages_verified_snapshot_artifacts() {
             .and_then(Value::as_bool),
         Some(true)
     );
-
     let car_bytes = fs::read(&car_path).expect("read checkpoint CAR");
     let car_digest_hex = hex_encode(blake3_hash(&car_bytes).as_bytes());
     assert_eq!(
@@ -3932,7 +3664,6 @@ fn governance_dag_checkpoint_packages_verified_snapshot_artifacts() {
             .and_then(Value::as_str),
         Some(car_digest_hex.as_str())
     );
-
     let index_bytes = fs::read(&index_path).expect("read checkpoint mirror index");
     let index_digest_hex = hex_encode(blake3_hash(&index_bytes).as_bytes());
     assert_eq!(
@@ -3949,13 +3680,11 @@ fn governance_dag_checkpoint_packages_verified_snapshot_artifacts() {
             .and_then(Value::as_str),
         Some(index_digest_hex.as_str())
     );
-
     let disk_checkpoint = fs::read_to_string(&checkpoint_path).expect("read checkpoint file");
     let disk_checkpoint_json: Value =
         from_slice(disk_checkpoint.as_bytes()).expect("checkpoint json");
     assert_eq!(disk_checkpoint_json, checkpoint_json);
 }
-
 #[test]
 fn governance_dag_checkpoint_rejects_bad_mirror_index_schema() {
     let tempdir = tempdir().expect("tempdir");
@@ -3964,7 +3693,6 @@ fn governance_dag_checkpoint_rejects_bad_mirror_index_schema() {
     let checkpoint_path = tempdir.path().join("checkpoint.json");
     build_governance_dag_fixture_archive(&build_dir, None);
     fs::write(&index_path, r#"{"schema":"not.sorafs"}"#).expect("write bad mirror index");
-
     sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3980,7 +3708,6 @@ fn governance_dag_checkpoint_rejects_bad_mirror_index_schema() {
         "checkpoint must not be written when mirror index schema is invalid"
     );
 }
-
 fn build_governance_dag_checkpoint_fixture(
     base: &Path,
 ) -> (PathBuf, PathBuf, PathBuf, PathBuf, String) {
@@ -3991,7 +3718,6 @@ fn build_governance_dag_checkpoint_fixture(
     let index_path = base.join("mirror-index.json");
     let checkpoint_path = base.join("checkpoint.json");
     let key_hex = governance_dag_build_key_hex();
-
     let build_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -4011,7 +3737,6 @@ fn build_governance_dag_checkpoint_fixture(
         .and_then(Value::as_str)
         .expect("head cid hex")
         .to_string();
-
     sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -4022,7 +3747,6 @@ fn build_governance_dag_checkpoint_fixture(
         .arg(format!("--head-cid=hex:{head_cid_hex}"))
         .assert()
         .success();
-
     sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -4036,7 +3760,6 @@ fn build_governance_dag_checkpoint_fixture(
         .arg("--generated-at=1700001999")
         .assert()
         .success();
-
     (
         build_dir,
         car_path,
@@ -4045,14 +3768,12 @@ fn build_governance_dag_checkpoint_fixture(
         head_cid_hex,
     )
 }
-
 #[test]
 fn governance_dag_checkpoint_verify_accepts_recorded_artifacts() {
     let tempdir = tempdir().expect("tempdir");
     let (build_dir, car_path, index_path, checkpoint_path, head_cid_hex) =
         build_governance_dag_checkpoint_fixture(tempdir.path());
     let summary_path = tempdir.path().join("checkpoint-verify-summary.json");
-
     let verify_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -4105,19 +3826,16 @@ fn governance_dag_checkpoint_verify_accepts_recorded_artifacts() {
             .and_then(Value::as_bool),
         Some(true)
     );
-
     let summary = fs::read_to_string(&summary_path).expect("read checkpoint verify summary");
     let summary_json: Value = from_slice(summary.as_bytes()).expect("checkpoint verify json");
     assert_eq!(summary_json, verify_json);
 }
-
 #[test]
 fn governance_dag_checkpoint_verify_rejects_tampered_car() {
     let tempdir = tempdir().expect("tempdir");
     let (build_dir, car_path, index_path, checkpoint_path, _) =
         build_governance_dag_checkpoint_fixture(tempdir.path());
     fs::write(&car_path, b"tampered governance dag car").expect("tamper CAR");
-
     let verify_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -4149,7 +3867,6 @@ fn governance_dag_checkpoint_verify_rejects_tampered_car() {
         "expected CAR digest failure in {errors:?}"
     );
 }
-
 #[test]
 fn governance_dag_checkpoint_recover_rebuilds_mirror_index() {
     let tempdir = tempdir().expect("tempdir");
@@ -4158,7 +3875,6 @@ fn governance_dag_checkpoint_recover_rebuilds_mirror_index() {
     fs::remove_file(&index_path).expect("remove original mirror index");
     let recovered_index_path = tempdir.path().join("recovered-mirror-index.json");
     let summary_path = tempdir.path().join("checkpoint-recover-summary.json");
-
     let recover_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -4184,7 +3900,6 @@ fn governance_dag_checkpoint_recover_rebuilds_mirror_index() {
             .and_then(Value::as_str),
         Some(head_cid_hex.as_str())
     );
-
     let recovered = fs::read_to_string(&recovered_index_path).expect("read recovered index");
     let recovered_json: Value = from_slice(recovered.as_bytes()).expect("recovered index json");
     assert_eq!(
@@ -4202,7 +3917,6 @@ fn governance_dag_checkpoint_recover_rebuilds_mirror_index() {
     let summary_json: Value = from_slice(summary.as_bytes()).expect("recovery summary json");
     assert_eq!(summary_json, recover_json);
 }
-
 #[test]
 fn governance_dag_checkpoint_recover_rejects_tampered_car_without_writing_index() {
     let tempdir = tempdir().expect("tempdir");
@@ -4210,7 +3924,6 @@ fn governance_dag_checkpoint_recover_rejects_tampered_car_without_writing_index(
         build_governance_dag_checkpoint_fixture(tempdir.path());
     fs::write(&car_path, b"tampered governance dag car").expect("tamper CAR");
     let recovered_index_path = tempdir.path().join("recovered-mirror-index.json");
-
     let recover_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -4239,7 +3952,6 @@ fn governance_dag_checkpoint_recover_rejects_tampered_car_without_writing_index(
         "expected CAR digest failure in {errors:?}"
     );
 }
-
 #[test]
 fn ci_sample_fixtures_are_consistent() {
     let base_rel = PathBuf::from("fixtures/sorafs_manifest/ci_sample");
@@ -4251,7 +3963,6 @@ fn ci_sample_fixtures_are_consistent() {
         "expected fixture directory `{}` to exist",
         base.display()
     );
-
     let payload_path_rel = base_rel.join("payload.txt");
     let payload_path = base.join("payload.txt");
     let payload = fs::read(&payload_path).expect("read payload fixture");
@@ -4262,7 +3973,6 @@ fn ci_sample_fixtures_are_consistent() {
     );
     let payload_digest = blake3_hash(&payload);
     let payload_digest_hex = hex_encode(payload_digest.as_bytes());
-
     let chunk_plan_path = base.join("chunk_plan.json");
     let chunk_plan_bytes = fs::read(&chunk_plan_path).expect("read chunk plan");
     let chunk_plan_value: Value =
@@ -4302,17 +4012,14 @@ fn ci_sample_fixtures_are_consistent() {
         hex_encode(computed_chunk_digest.as_bytes()),
         "chunk digest should match payload hash"
     );
-
     let mut chunk_digest_sha3 = Sha3_256::new();
     chunk_digest_sha3.update(chunk_offset.to_le_bytes());
     chunk_digest_sha3.update(chunk_length.to_le_bytes());
     chunk_digest_sha3.update(chunk_digest_bytes);
     let chunk_digest_sha3_hex = hex_encode(chunk_digest_sha3.finalize());
-
     let car_path = base.join("payload.car");
     let car_bytes = fs::read(&car_path).expect("read CAR archive");
     let car_digest_hex = hex_encode(blake3_hash(&car_bytes).as_bytes());
-
     let car_summary_bytes = fs::read(base.join("car_summary.json")).expect("read car summary");
     let car_summary: Value = from_slice(&car_summary_bytes).expect("car summary json should parse");
     assert_eq!(
@@ -4344,7 +4051,6 @@ fn ci_sample_fixtures_are_consistent() {
         payload_path_rel.display().to_string(),
         "input path should be recorded using workspace-relative path"
     );
-
     let manifest_path = base.join("manifest.to");
     let manifest_bytes = fs::read(&manifest_path).expect("read manifest bytes");
     let manifest: ManifestV1 =
@@ -4376,7 +4082,6 @@ fn ci_sample_fixtures_are_consistent() {
         .digest()
         .expect("manifest digest computation should succeed");
     let manifest_digest_hex = hex_encode(manifest_digest.as_bytes());
-
     let manifest_json_bytes = fs::read(base.join("manifest.json")).expect("read manifest json");
     let manifest_json: Value =
         from_slice(&manifest_json_bytes).expect("manifest json should parse");
@@ -4389,7 +4094,6 @@ fn ci_sample_fixtures_are_consistent() {
         Some("hot"),
         "manifest.json pin policy should mirror Norito manifest"
     );
-
     for retired_artifact in [
         "manifest.bundle.json",
         "manifest.sig",
@@ -4403,7 +4107,6 @@ fn ci_sample_fixtures_are_consistent() {
             retired_path.display()
         );
     }
-
     let proof_bytes = fs::read(base.join("proof.json")).expect("read proof summary");
     let proof_value: Value = from_slice(&proof_bytes).expect("proof summary json should parse");
     assert_eq!(
@@ -4440,16 +4143,13 @@ fn ci_sample_fixtures_are_consistent() {
         "proof summary should embed CAR payload digest"
     );
 }
-
 fn prepare_manifest_artifacts(tempdir: &Path) -> (PathBuf, PathBuf) {
     let input_path = tempdir.join("gha_payload.bin");
     let payload: Vec<u8> = (0..1024).map(|i| (i as u8).wrapping_mul(29)).collect();
     fs::write(&input_path, &payload).expect("write payload");
-
     let car_path = tempdir.join("gha_payload.car");
     let plan_path = tempdir.join("gha_plan.json");
     let summary_path = tempdir.join("gha_summary.json");
-
     sorafs_cli_cmd()
         .arg("car")
         .arg("pack")
@@ -4459,7 +4159,6 @@ fn prepare_manifest_artifacts(tempdir: &Path) -> (PathBuf, PathBuf) {
         .arg(format!("--summary-out={}", summary_path.display()))
         .assert()
         .success();
-
     let manifest_path = tempdir.join("gha_manifest.to");
     sorafs_cli_cmd()
         .arg("manifest")
@@ -4468,10 +4167,8 @@ fn prepare_manifest_artifacts(tempdir: &Path) -> (PathBuf, PathBuf) {
         .arg(format!("--manifest-out={}", manifest_path.display()))
         .assert()
         .success();
-
     (manifest_path, plan_path)
 }
-
 fn compute_chunk_digest_hex(plan_path: &Path) -> String {
     let plan_bytes = fs::read(plan_path).expect("read plan");
     let value: Value = from_slice(&plan_bytes).expect("plan json");
@@ -4488,7 +4185,6 @@ fn compute_chunk_digest_hex(plan_path: &Path) -> String {
     let digest: [u8; 32] = hasher.finalize().into();
     hex_encode(digest)
 }
-
 fn write_proof_stream_manifest(dir: &Path, file_name: &str) -> PathBuf {
     let payload = canonical_por_payload();
     let plan = CarBuildPlan::single_file(&payload).expect("proof-stream manifest plan");
@@ -4520,13 +4216,11 @@ fn write_proof_stream_manifest(dir: &Path, file_name: &str) -> PathBuf {
     fs::write(&path, bytes).expect("write manifest");
     path
 }
-
 fn canonical_por_payload() -> Vec<u8> {
     (0..1024)
         .map(|value| (value as u8).wrapping_mul(29))
         .collect()
 }
-
 #[test]
 fn proof_stream_pdp_rejects_missing_challenge_and_client_sampling()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -4534,7 +4228,6 @@ fn proof_stream_pdp_rejects_missing_challenge_and_client_sampling()
     let manifest_path =
         write_proof_stream_manifest(tempdir.path(), "stream_pdp_invalid_manifest.to");
     let provider_id_hex = hex_encode([0x13u8; 32]);
-
     let missing = sorafs_cli_cmd()
         .arg("proof")
         .arg("stream")
@@ -4548,7 +4241,6 @@ fn proof_stream_pdp_rejects_missing_challenge_and_client_sampling()
         String::from_utf8_lossy(&missing.get_output().stderr)
             .contains("`--challenge-id-hex=HEX32` is required")
     );
-
     let sampled = sorafs_cli_cmd()
         .arg("proof")
         .arg("stream")
@@ -4564,7 +4256,6 @@ fn proof_stream_pdp_rejects_missing_challenge_and_client_sampling()
         String::from_utf8_lossy(&sampled.get_output().stderr)
             .contains("sampling is fixed by the governed challenge")
     );
-
     let legacy_provider = sorafs_cli_cmd()
         .arg("proof")
         .arg("stream")
@@ -4579,7 +4270,6 @@ fn proof_stream_pdp_rejects_missing_challenge_and_client_sampling()
         String::from_utf8_lossy(&legacy_provider.get_output().stderr)
             .contains("unrecognised option `--provider-id`")
     );
-
     let legacy_endpoint = sorafs_cli_cmd()
         .arg("proof")
         .arg("stream")
@@ -4594,7 +4284,6 @@ fn proof_stream_pdp_rejects_missing_challenge_and_client_sampling()
         String::from_utf8_lossy(&legacy_endpoint.get_output().stderr)
             .contains("unrecognised option `--endpoint`")
     );
-
     for invalid_provider_id in [
         "13".repeat(31),
         "ab".repeat(32).to_ascii_uppercase(),
@@ -4618,7 +4307,6 @@ fn proof_stream_pdp_rejects_missing_challenge_and_client_sampling()
                     .contains("must be exact 64-character lowercase hexadecimal")
         );
     }
-
     for (invalid_challenge_id, expected_error) in [
         ("00".repeat(32), "must be non-zero"),
         (
@@ -4650,7 +4338,6 @@ fn proof_stream_pdp_rejects_missing_challenge_and_client_sampling()
             String::from_utf8_lossy(&rejected.get_output().stderr)
         );
     }
-
     for (option, value) in [("--proof-kind", " pdp"), ("--tier", " hot")] {
         let mut command = sorafs_cli_cmd();
         command
@@ -4674,14 +4361,12 @@ fn proof_stream_pdp_rejects_missing_challenge_and_client_sampling()
     }
     Ok(())
 }
-
 #[test]
 fn proof_stream_rejects_retired_root_and_verification_budget_flags()
 -> Result<(), Box<dyn std::error::Error>> {
     let tempdir = tempdir()?;
     let manifest_path = write_proof_stream_manifest(tempdir.path(), "stream_retired_flags.to");
     let provider_id_hex = hex_encode([0x66u8; 32]);
-
     for retired in [
         format!("--por-root-hex={}", hex_encode([0xBBu8; 32])),
         "--max-verification-failures=1".to_string(),
@@ -4705,7 +4390,6 @@ fn proof_stream_rejects_retired_root_and_verification_budget_flags()
         );
         assert!(!stderr.contains("argv-secret"));
     }
-
     let help = sorafs_cli_cmd().arg("--help").assert().failure();
     let stderr = String::from_utf8(help.get_output().stderr.clone())?;
     let proof_stream_help = stderr
@@ -4725,7 +4409,6 @@ fn proof_stream_rejects_retired_root_and_verification_budget_flags()
     }
     Ok(())
 }
-
 #[test]
 fn proof_stream_rejects_zero_root_and_noncanonical_manifest_before_output()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -4736,13 +4419,11 @@ fn proof_stream_rejects_zero_root_and_noncanonical_manifest_before_output()
     zero_root_manifest.por_root = [0; 32];
     let zero_root_path = tempdir.path().join("zero_root_manifest.to");
     fs::write(&zero_root_path, to_bytes(&zero_root_manifest)?)?;
-
     let mut noncanonical_bytes = canonical_bytes;
     noncanonical_bytes.push(0);
     let noncanonical_path = tempdir.path().join("noncanonical_manifest.to");
     fs::write(&noncanonical_path, noncanonical_bytes)?;
     let provider_id_hex = hex_encode([0x67u8; 32]);
-
     for (manifest_path, expected_error, output_tag) in [
         (
             zero_root_path.as_path(),
@@ -4783,14 +4464,12 @@ fn proof_stream_rejects_zero_root_and_noncanonical_manifest_before_output()
     }
     Ok(())
 }
-
 #[test]
 fn proof_stream_potr_without_deadline_errors() -> Result<(), Box<dyn std::error::Error>> {
     let tempdir = tempdir()?;
     let manifest_path =
         write_proof_stream_manifest(tempdir.path(), "stream_potr_missing_deadline.to");
     let provider_id_hex = hex_encode([0x33u8; 32]);
-
     let assert = sorafs_cli_cmd()
         .arg("proof")
         .arg("stream")
@@ -4800,7 +4479,6 @@ fn proof_stream_potr_without_deadline_errors() -> Result<(), Box<dyn std::error:
         .arg("--proof-kind=potr")
         .assert()
         .failure();
-
     let stderr = String::from_utf8(assert.get_output().stderr.clone())?;
     assert!(
         stderr.contains("`--deadline-ms` is required"),
@@ -4808,7 +4486,6 @@ fn proof_stream_potr_without_deadline_errors() -> Result<(), Box<dyn std::error:
     );
     Ok(())
 }
-
 #[test]
 fn proof_stream_potr_without_request_scope_job_id_errors() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -4816,7 +4493,6 @@ fn proof_stream_potr_without_request_scope_job_id_errors() -> Result<(), Box<dyn
     let manifest_path =
         write_proof_stream_manifest(tempdir.path(), "stream_potr_missing_job_id.to");
     let provider_id_hex = hex_encode([0x33u8; 32]);
-
     let assert = sorafs_cli_cmd()
         .arg("proof")
         .arg("stream")
@@ -4827,7 +4503,6 @@ fn proof_stream_potr_without_request_scope_job_id_errors() -> Result<(), Box<dyn
         .arg("--deadline-ms=90000")
         .assert()
         .failure();
-
     let stderr = String::from_utf8(assert.get_output().stderr.clone())?;
     assert!(
         stderr.contains("`--orchestrator-job-id-hex=HEX16` is required"),
@@ -4835,7 +4510,6 @@ fn proof_stream_potr_without_request_scope_job_id_errors() -> Result<(), Box<dyn
     );
     Ok(())
 }
-
 #[test]
 fn fetch_command_gateway_path_rejects_insecure_local_url() {
     let tempdir = tempdir().expect("tempdir");
@@ -4844,11 +4518,9 @@ fn fetch_command_gateway_path_rejects_insecure_local_url() {
     let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json") + "\n";
     let plan_path = tempdir.path().join("plan.json");
     fs::write(&plan_path, plan_json.as_bytes()).expect("write plan");
-
     let server = MockServer::start();
     let writer = CarWriter::new(&plan, &payload).expect("writer");
     let car_stats = writer.write_to(std::io::sink()).expect("write car stats");
-
     let manifest = ManifestBuilder::new()
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
@@ -4871,7 +4543,6 @@ fn fetch_command_gateway_path_rejects_insecure_local_url() {
     let manifest_id_hex = manifest_digest_hex.clone();
     let payload_digest_hex = hex_encode(plan.payload_digest.as_bytes());
     let chunk_profile_handle = "sorafs.sf1@1.0.0";
-
     let manifest_response = format!(
         "{{\"manifest_id_hex\":\"{}\",\"manifest_b64\":\"{}\",\"manifest_digest_hex\":\"{}\",\"payload_digest_hex\":\"{}\",\"content_length\":{},\"chunk_count\":{},\"chunk_profile_handle\":\"{}\",\"stored_at_unix_secs\":1735000000}}",
         manifest_id_hex,
@@ -4882,7 +4553,6 @@ fn fetch_command_gateway_path_rejects_insecure_local_url() {
         plan.chunks.len(),
         chunk_profile_handle
     );
-
     let manifest_report_path = tempdir.path().join("gateway_manifest_report.json");
     fs::write(
         &manifest_report_path,
@@ -4894,7 +4564,6 @@ fn fetch_command_gateway_path_rejects_insecure_local_url() {
         when.method(GET).path(manifest_path.as_str());
         then.status(200).body(manifest_response.clone());
     });
-
     for spec in plan.try_chunk_fetch_specs().expect("valid CAR plan") {
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
@@ -4909,14 +4578,12 @@ fn fetch_command_gateway_path_rejects_insecure_local_url() {
             then.status(200).body(body.clone());
         });
     }
-
     let provider_id_hex = "ab".repeat(32);
     let (stream_token_b64, gateway_public_key_hex) =
         make_stream_token_b64(&manifest_id_hex, &provider_id_hex, "sorafs.sf1@1.0.0", 4);
     let output_path = tempdir.path().join("assembled.bin");
     let summary_path = tempdir.path().join("fetch_summary.json");
     let base_url = server.url("/");
-
     let assert = sorafs_cli_cmd()
         .arg("fetch")
         .arg(format!("--plan={}", plan_path.display()))
@@ -4934,7 +4601,6 @@ fn fetch_command_gateway_path_rejects_insecure_local_url() {
         return;
     }
     let assert = assert.success();
-
     let stdout =
         String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8 summary");
     let stdout_summary: Value =
@@ -4947,10 +4613,8 @@ fn fetch_command_gateway_path_rejects_insecure_local_url() {
         stdout_summary.get("chunker_handle").and_then(Value::as_str),
         Some("sorafs.sf1@1.0.0")
     );
-
     let assembled = fs::read(&output_path).expect("assembled payload");
     assert_eq!(assembled, payload);
-
     let summary_bytes = fs::read(&summary_path).expect("read summary");
     let summary_file: Value = from_slice(&summary_bytes).expect("parse summary json");
     assert_eq!(
@@ -4978,7 +4642,6 @@ fn fetch_command_gateway_path_rejects_insecure_local_url() {
         plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
     );
 }
-
 #[test]
 fn fetch_command_direct_policy_does_not_bypass_gateway_url_security() {
     let tempdir = tempdir().expect("tempdir");
@@ -4987,11 +4650,9 @@ fn fetch_command_direct_policy_does_not_bypass_gateway_url_security() {
     let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json") + "\n";
     let plan_path = tempdir.path().join("plan.json");
     fs::write(&plan_path, plan_json.as_bytes()).expect("write plan json");
-
     let server = MockServer::start();
     let writer = CarWriter::new(&plan, &payload).expect("writer");
     let car_stats = writer.write_to(std::io::sink()).expect("write car stats");
-
     let manifest = ManifestBuilder::new()
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
@@ -5014,7 +4675,6 @@ fn fetch_command_direct_policy_does_not_bypass_gateway_url_security() {
     let manifest_id_hex = manifest_digest_hex.clone();
     let payload_digest_hex = hex_encode(plan.payload_digest.as_bytes());
     let chunk_profile_handle = "sorafs.sf1@1.0.0";
-
     let manifest_response = format!(
         "{{\"manifest_id_hex\":\"{}\",\"manifest_b64\":\"{}\",\"manifest_digest_hex\":\"{}\",\"payload_digest_hex\":\"{}\",\"content_length\":{},\"chunk_count\":{},\"chunk_profile_handle\":\"{}\",\"stored_at_unix_secs\":1735000000}}",
         manifest_id_hex,
@@ -5025,7 +4685,6 @@ fn fetch_command_direct_policy_does_not_bypass_gateway_url_security() {
         plan.chunks.len(),
         chunk_profile_handle
     );
-
     let manifest_report_path = tempdir.path().join("proxy_manifest_report.json");
     fs::write(
         &manifest_report_path,
@@ -5037,7 +4696,6 @@ fn fetch_command_direct_policy_does_not_bypass_gateway_url_security() {
         when.method(GET).path(manifest_path.as_str());
         then.status(200).body(manifest_response.clone());
     });
-
     for spec in plan.try_chunk_fetch_specs().expect("valid CAR plan") {
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
@@ -5052,14 +4710,12 @@ fn fetch_command_direct_policy_does_not_bypass_gateway_url_security() {
             then.status(200).body(body.clone());
         });
     }
-
     let provider_id_hex = "12".repeat(32);
     let (stream_token_b64, gateway_public_key_hex) =
         make_stream_token_b64(&manifest_id_hex, &provider_id_hex, "sorafs.sf1@1.0.0", 2);
     let summary_path = tempdir.path().join("direct_fetch_summary.json");
     let output_path = tempdir.path().join("direct_payload.bin");
     let base_url = server.url("/");
-
     let assert = sorafs_cli_cmd()
         .arg("fetch")
         .arg(format!("--plan={}", plan_path.display()))
@@ -5078,7 +4734,6 @@ fn fetch_command_direct_policy_does_not_bypass_gateway_url_security() {
         return;
     }
     let assert = assert.success();
-
     let stdout_summary: Value = norito::json::from_slice(assert.get_output().stdout.as_slice())
         .expect("stdout summary json");
     assert_eq!(
@@ -5091,7 +4746,6 @@ fn fetch_command_direct_policy_does_not_bypass_gateway_url_security() {
             .and_then(Value::as_str),
         Some(manifest_id_hex.as_str())
     );
-
     let file_summary_bytes = fs::read(&summary_path).expect("read summary file");
     let file_summary: Value =
         norito::json::from_slice(&file_summary_bytes).expect("parse summary file");
@@ -5111,11 +4765,9 @@ fn fetch_command_direct_policy_does_not_bypass_gateway_url_security() {
             .and_then(Value::as_str),
         Some("gw-direct")
     );
-
     let assembled = fs::read(&output_path).expect("read assembled payload");
     assert_eq!(assembled, payload);
 }
-
 #[test]
 fn fetch_command_policy_override_does_not_bypass_gateway_url_security() {
     let tempdir = tempdir().expect("tempdir");
@@ -5124,11 +4776,9 @@ fn fetch_command_policy_override_does_not_bypass_gateway_url_security() {
     let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json") + "\n";
     let plan_path = tempdir.path().join("plan.json");
     fs::write(&plan_path, plan_json.as_bytes()).expect("write plan json");
-
     let server = MockServer::start();
     let writer = CarWriter::new(&plan, &payload).expect("writer");
     let car_stats = writer.write_to(std::io::sink()).expect("write car stats");
-
     let manifest = ManifestBuilder::new()
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(0x71))
@@ -5152,7 +4802,6 @@ fn fetch_command_policy_override_does_not_bypass_gateway_url_security() {
     let manifest_bytes = to_bytes(&manifest).expect("manifest bytes");
     let manifest_digest_hex = hex_encode(manifest.digest().expect("digest").as_bytes());
     let manifest_id_hex = manifest_digest_hex.clone();
-
     let manifest_response = format!(
         "{{\"manifest_id_hex\":\"{}\",\"manifest_b64\":\"{}\",\"manifest_digest_hex\":\"{}\",\"payload_digest_hex\":\"{}\",\"content_length\":{},\"chunk_count\":{},\"chunk_profile_handle\":\"{}\",\"stored_at_unix_secs\":1735000000}}",
         manifest_id_hex,
@@ -5170,7 +4819,6 @@ fn fetch_command_policy_override_does_not_bypass_gateway_url_security() {
         when.method(GET).path(manifest_path.as_str());
         then.status(200).body(manifest_response.clone());
     });
-
     for spec in plan.try_chunk_fetch_specs().expect("valid CAR plan") {
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
@@ -5185,14 +4833,12 @@ fn fetch_command_policy_override_does_not_bypass_gateway_url_security() {
             then.status(200).body(body.clone());
         });
     }
-
     let provider_id_hex = "ca".repeat(32);
     let (stream_token_b64, gateway_public_key_hex) =
         make_stream_token_b64(&manifest_id_hex, &provider_id_hex, "sorafs.sf1@1.0.0", 2);
     let output_path = tempdir.path().join("override.bin");
     let summary_path = tempdir.path().join("override_summary.json");
     let base_url = server.url("/");
-
     let assert = sorafs_cli_cmd()
         .arg("fetch")
         .arg(format!("--plan={}", plan_path.display()))
@@ -5209,7 +4855,6 @@ fn fetch_command_policy_override_does_not_bypass_gateway_url_security() {
         return;
     }
     assert.success();
-
     let summary_bytes = fs::read(&summary_path).expect("read override summary");
     let summary: Value = from_slice(&summary_bytes).expect("parse override summary");
     assert_eq!(

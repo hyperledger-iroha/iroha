@@ -1,14 +1,10 @@
 //! Domain endorsement payloads and records.
-
+use crate::{domain::DomainId, nexus::DataSpaceId, prelude::Metadata};
 use iroha_crypto::{Hash, HashOf, PublicKey, Signature};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
-use crate::{domain::DomainId, nexus::DataSpaceId, prelude::Metadata};
-
 /// Current domain endorsement version.
 pub const DOMAIN_ENDORSEMENT_VERSION_V1: u8 = 1;
-
 /// Scope covered by a domain endorsement (dataspace and optional block window).
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Encode, Decode, IntoSchema,
@@ -25,7 +21,6 @@ pub struct DomainEndorsementScope {
     /// Optional ending block height (inclusive).
     pub block_end: Option<u64>,
 }
-
 impl DomainEndorsementScope {
     /// Check whether a block height is covered by this scope.
     #[must_use]
@@ -43,7 +38,6 @@ impl DomainEndorsementScope {
         true
     }
 }
-
 /// Signature over a domain endorsement statement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -56,7 +50,6 @@ pub struct DomainEndorsementSignature {
     /// Signature over the statement hash bytes.
     pub signature: Signature,
 }
-
 /// Canonical domain endorsement body covered by signatures.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -83,7 +76,6 @@ pub struct DomainEndorsement {
     /// Optional metadata for audit trails (e.g., proposal ids).
     pub metadata: Metadata,
 }
-
 impl DomainEndorsement {
     /// Compute a hash of the endorsement body (excluding signatures).
     #[must_use]
@@ -93,7 +85,6 @@ impl DomainEndorsement {
         HashOf::new(&body)
     }
 }
-
 /// Committee configuration for a protected domain.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -110,7 +101,6 @@ pub struct DomainCommittee {
     /// Optional metadata for dashboards.
     pub metadata: Metadata,
 }
-
 impl DomainCommittee {
     /// Validate committee shape (non-empty members and sensible quorum).
     #[must_use]
@@ -119,7 +109,6 @@ impl DomainCommittee {
         !self.members.is_empty() && self.quorum > 0 && self.quorum <= members
     }
 }
-
 /// Endorsement policy bound to a domain.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -134,7 +123,6 @@ pub struct DomainEndorsementPolicy {
     /// Whether an endorsement is required for the domain.
     pub required: bool,
 }
-
 /// Stored endorsement entry used to detect replay and stale use.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -147,18 +135,14 @@ pub struct DomainEndorsementRecord {
     /// Block height when the endorsement was accepted.
     pub accepted_at_height: u64,
 }
-
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::KeyPair;
-
     use super::*;
     use crate::metadata::Metadata;
-
+    use iroha_crypto::KeyPair;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("test fixture random key generation should succeed")
     }
-
     #[test]
     fn scope_height_checks_bounds() {
         let scope = DomainEndorsementScope {
@@ -172,7 +156,6 @@ mod tests {
         assert!(scope.contains_height(20));
         assert!(!scope.contains_height(21));
     }
-
     #[test]
     fn body_hash_stable_without_signatures() {
         let kp = checked_random_keypair();
@@ -196,7 +179,6 @@ mod tests {
         let with_sig = endorsement.body_hash();
         assert_eq!(baseline, with_sig);
     }
-
     #[test]
     fn committee_validation_rejects_bad_quorum() {
         let kp = checked_random_keypair();

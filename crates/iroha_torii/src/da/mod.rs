@@ -1,5 +1,4 @@
 //! Data availability ingest handlers and persistence helpers for Torii.
-
 pub mod commitments;
 #[cfg(feature = "app_api")]
 mod ingest;
@@ -9,7 +8,6 @@ mod rs16;
 mod spool;
 #[cfg(feature = "app_api")]
 mod taikai;
-
 #[cfg(feature = "app_api")]
 pub use ingest::{handler_get_da_manifest, handler_post_da_ingest, ipa_commitment_from_chunks};
 use iroha_data_model::sorafs::pin_registry::StorageClass;
@@ -19,7 +17,6 @@ pub(crate) use spool::{
 };
 #[cfg(feature = "app_api")]
 pub use taikai::{compute_taikai_ingest_tags, spawn_anchor_worker};
-
 fn storage_class_label(class: StorageClass) -> &'static str {
     match class {
         StorageClass::Hot => "hot",

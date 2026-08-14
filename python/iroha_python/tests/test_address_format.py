@@ -24,6 +24,7 @@ from iroha_python import (
     asset_holders_query_envelope,
 )
 from iroha_python.address import AccountAddress, AccountAddressError
+from client_expensive_query_test_support import authenticated_query_client
 
 CANONICAL_ACCOUNT_ID = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
 
@@ -318,7 +319,8 @@ def test_query_envelope_rejects_invalid_aggregate_shape() -> None:
 
 
 def test_query_transactions_routes_visible_aggregate_query() -> None:
-    client, session = _client_with_session()
+    session = RecordingSession()
+    client = authenticated_query_client(session)
     aggregate = AggregateSpec(
         group_by=["result_ok"],
         metrics=[AggregateMetric("transactions", AggregateFn.COUNT)],
@@ -328,7 +330,7 @@ def test_query_transactions_routes_visible_aggregate_query() -> None:
 
     call = session.calls[0]
     assert call["method"] == "POST"
-    assert call["url"] == "http://localhost:8080/v1/transactions/visible/query"
+    assert call["url"] == "https://torii.example/v1/transactions/visible/query"
     body = json.loads(call["data"].decode("utf-8"))
     assert body["aggregate"] == aggregate.to_dict()
 
@@ -420,7 +422,8 @@ def test_list_accounts_rejects_removed_canonical_i105_arg() -> None:
 
 
 def test_query_accounts_omits_canonical_i105() -> None:
-    client, session = _client_with_session()
+    session = RecordingSession()
+    client = authenticated_query_client(session)
 
     client.query_accounts()
 
@@ -437,7 +440,8 @@ def test_list_asset_holders_omits_canonical_i105() -> None:
 
 
 def test_query_asset_holders_omits_canonical_i105() -> None:
-    client, session = _client_with_session()
+    session = RecordingSession()
+    client = authenticated_query_client(session)
 
     client.query_asset_holders("xor#wonderland")
 

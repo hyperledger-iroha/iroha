@@ -5,7 +5,6 @@
 //! wrapped alongside the Metal bundles already used in release evidence.
 
 #![allow(clippy::missing_panics_doc)]
-
 use std::{
     collections::BTreeMap,
     env,
@@ -16,15 +15,12 @@ use std::{
     process::Command,
     time::{Duration, Instant},
 };
-
 use clap::Parser;
 use fastpq_isi::find_by_name;
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_isi::poseidon::RATE as POSEIDON_RATE;
 #[cfg(feature = "fastpq-gpu")]
-use fastpq_prover::trace::{
-    PoseidonColumnBatch, hash_columns_cpu_batch_inputs, hash_columns_gpu_batch,
-};
+use fastpq_prover::trace::{PoseidonColumnBatch, hash_columns_cpu_batch_inputs, hash_columns_gpu_batch};
 use fastpq_prover::{
     Bn254PoseidonBatchSlice, CudaBackendError, ExecutionMode, Planner,
     clear_execution_mode_observer, fastpq_bn254_fft, fastpq_bn254_lde, set_execution_mode_observer,
@@ -37,25 +33,21 @@ use norito::{
     json::{self, Value},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
 const BN254_LIMBS: usize = 4;
 #[cfg(feature = "fastpq-gpu")]
 const POSEIDON_COLUMN_DOMAIN_PREFIX: &str = "fastpq:v1:trace:column:";
 #[cfg(feature = "fastpq-gpu")]
 const POSEIDON_TRACE_NODE_DOMAIN: &str = "fastpq:v1:trace:node";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OperationFilter {
     All,
     Only(BenchOperation),
 }
-
 impl OperationFilter {
     fn includes(self, operation: BenchOperation) -> bool {
         matches!(self, Self::All) || matches!(self, Self::Only(value) if value == operation)
     }
-
     fn as_str(self) -> &'static str {
         match self {
             Self::All => "all",
@@ -63,7 +55,6 @@ impl OperationFilter {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BenchOperation {
     Fft,
@@ -73,7 +64,6 @@ enum BenchOperation {
     PoseidonMerklePairs,
     Bn254PoseidonWords,
 }
-
 impl BenchOperation {
     fn as_str(self) -> &'static str {
         match self {
@@ -86,7 +76,6 @@ impl BenchOperation {
         }
     }
 }
-
 fn parse_operation_filter(raw: &str) -> Result<OperationFilter, String> {
     if raw.eq_ignore_ascii_case("all") {
         return Ok(OperationFilter::All);
@@ -107,14 +96,12 @@ fn parse_operation_filter(raw: &str) -> Result<OperationFilter, String> {
         _ => Err(format!("unknown --operation '{raw}'")),
     }
 }
-
 fn main() {
     if let Err(err) = run() {
         eprintln!("fastpq_cuda_bench: {err}");
         std::process::exit(1);
     }
 }
-
 #[derive(Parser, Debug, Clone)]
 #[command(name = "fastpq_cuda_bench")]
 struct Config {
@@ -152,7 +139,6 @@ struct Config {
     #[arg(long, default_value = "all", value_parser = parse_operation_filter)]
     operation: OperationFilter,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct BenchMetadata {
     generated_at: String,
@@ -172,13 +158,11 @@ struct BenchMetadata {
     #[norito(skip_serializing_if = "Option::is_none")]
     row_usage_snapshot: Option<RowUsageSnapshot>,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct RowUsageSnapshot {
     source: String,
     batches: Value,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct BenchmarksBlock {
     rows: usize,
@@ -197,7 +181,6 @@ struct BenchmarksBlock {
     bn254_warnings: Option<Vec<String>>,
     operations: Vec<OperationEntry>,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct OperationEntry {
     operation: String,
@@ -216,7 +199,6 @@ struct OperationEntry {
     #[norito(skip_serializing_if = "Option::is_none")]
     speedup_delta_ms: Option<f64>,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct ReportBlock {
     rows: usize,
@@ -234,14 +216,12 @@ struct ReportBlock {
     operations: Vec<ReportOperation>,
     metadata: ReportMetadata,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct ReportMetadata {
     generated_at: String,
     #[norito(skip_serializing_if = "Option::is_none")]
     host: Option<String>,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct ReportOperation {
     operation: String,
@@ -258,39 +238,33 @@ struct ReportOperation {
     #[norito(skip_serializing_if = "Option::is_none")]
     speedup: Option<Speedup>,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct ReportSummary {
     mean_ms: f64,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct Speedup {
     ratio: f64,
     #[norito(skip_serializing_if = "Option::is_none")]
     delta_ms: Option<f64>,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct BenchOutput {
     metadata: BenchMetadata,
     benchmarks: BenchmarksBlock,
     report: ReportBlock,
 }
-
 #[derive(Debug, Clone)]
 struct ExecutionProbe {
     resolved_mode: ExecutionMode,
     backend_label: String,
     gpu_available: bool,
 }
-
 #[derive(Debug, Clone)]
 struct ColumnSets {
     time: Vec<Vec<u64>>,
     coeff: Vec<Vec<u64>>,
 }
-
 #[derive(Debug, Clone)]
 struct Bn254ColumnSets {
     coeff_scalars: Vec<Vec<Bn254Scalar>>,
@@ -298,33 +272,28 @@ struct Bn254ColumnSets {
     coset_scalar: Bn254Scalar,
     coset_limbs: [u64; BN254_LIMBS],
 }
-
 #[derive(Debug, Clone)]
 struct Bn254MetricEntry {
     operation: &'static str,
     cpu: Summary,
     gpu: Option<Summary>,
 }
-
 #[derive(Debug, Clone, Default)]
 struct Bn254BenchCapture {
     metrics: Option<Value>,
     warnings: Vec<String>,
 }
-
 #[derive(Debug, Clone)]
 struct OperationTimings {
     cpu: Summary,
     gpu: Option<Summary>,
 }
-
 #[derive(Debug, Clone)]
 struct Summary {
     min: f64,
     max: f64,
     mean: f64,
 }
-
 impl Summary {
     fn from_samples(samples: &[f64]) -> Option<Self> {
         if samples.is_empty() {
@@ -346,12 +315,10 @@ impl Summary {
             mean: round3(mean),
         })
     }
-
     fn mean_ms(&self) -> f64 {
         self.mean
     }
 }
-
 fn run() -> Result<(), String> {
     let config = Config::parse();
     if config.rows == 0 {
@@ -360,7 +327,6 @@ fn run() -> Result<(), String> {
     if config.iterations == 0 {
         return Err("iterations must be greater than zero".to_owned());
     }
-
     let params = find_by_name(&config.parameter)
         .ok_or_else(|| format!("parameter set '{}' not found", config.parameter))?;
     let planner = Planner::new(params);
@@ -371,7 +337,6 @@ fn run() -> Result<(), String> {
     let eval_len = padded
         .checked_shl(planner.blowup_log())
         .ok_or_else(|| "evaluation domain overflow".to_owned())?;
-
     let probe = resolve_execution_metadata(config.require_gpu)?;
     let columns = prepare_columns(&planner, padded, config.column_count);
     let bn254_capture = collect_bn254_metrics(&config, padded, planner.blowup_log(), &probe)?;
@@ -422,7 +387,6 @@ fn run() -> Result<(), String> {
         },
         report,
     };
-
     let encoded = json::to_vec_pretty(&output).map_err(|err| format!("encode output: {err}"))?;
     if let Some(parent) = config.output.parent()
         && !parent.as_os_str().is_empty()
@@ -435,7 +399,6 @@ fn run() -> Result<(), String> {
     eprintln!("fastpq_cuda_bench: wrote {}", display_path(&config.output));
     Ok(())
 }
-
 fn build_report(
     config: &Config,
     probe: &ExecutionProbe,
@@ -484,7 +447,6 @@ fn build_report(
         },
     }
 }
-
 fn build_metadata(config: &Config) -> Result<BenchMetadata, String> {
     let generated_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -507,7 +469,6 @@ fn build_metadata(config: &Config) -> Result<BenchMetadata, String> {
         row_usage_snapshot,
     })
 }
-
 fn collect_operations(
     planner: &Planner,
     config: &Config,
@@ -537,7 +498,6 @@ fn collect_operations(
             fft.gpu.as_ref(),
         ));
     }
-
     if config.operation.includes(BenchOperation::Ifft) {
         let ifft = OperationTimings {
             cpu: measure_in_place(&columns.time, config.warmups, config.iterations, |cols| {
@@ -558,7 +518,6 @@ fn collect_operations(
             ifft.gpu.as_ref(),
         ));
     }
-
     if config.operation.includes(BenchOperation::Lde) {
         let lde = OperationTimings {
             cpu: measure_map(
@@ -585,12 +544,10 @@ fn collect_operations(
             lde.gpu.as_ref(),
         ));
     }
-
     #[cfg(feature = "fastpq-gpu")]
     if config.operation.includes(BenchOperation::Poseidon) {
         entries.push(collect_poseidon_entry(config, columns, probe));
     }
-
     #[cfg(feature = "fastpq-gpu")]
     if config
         .operation
@@ -598,17 +555,14 @@ fn collect_operations(
     {
         entries.push(collect_poseidon_merkle_pairs_entry(config, probe));
     }
-
     if config
         .operation
         .includes(BenchOperation::Bn254PoseidonWords)
     {
         entries.push(collect_bn254_poseidon_words_entry(config, probe));
     }
-
     entries
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn collect_poseidon_entry(
     config: &Config,
@@ -655,7 +609,6 @@ fn collect_poseidon_entry(
         poseidon.gpu.as_ref(),
     )
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn collect_poseidon_merkle_pairs_entry(config: &Config, probe: &ExecutionProbe) -> OperationEntry {
     let pairs = generate_merkle_pairs(config.rows);
@@ -693,13 +646,11 @@ fn collect_poseidon_merkle_pairs_entry(config: &Config, probe: &ExecutionProbe) 
         gpu.as_ref(),
     )
 }
-
 #[derive(Clone)]
 struct Bn254PoseidonWordBatch {
     words: Vec<u64>,
     slices: Vec<Bn254PoseidonBatchSlice>,
 }
-
 fn collect_bn254_poseidon_words_entry(config: &Config, probe: &ExecutionProbe) -> OperationEntry {
     let batch = generate_bn254_poseidon_word_batch(config.rows);
     let cpu = measure_word_batch(&batch, config.warmups, config.iterations, |input| {
@@ -739,7 +690,6 @@ fn collect_bn254_poseidon_words_entry(config: &Config, probe: &ExecutionProbe) -
         );
     entry
 }
-
 fn generate_bn254_poseidon_word_batch(rows: usize) -> Bn254PoseidonWordBatch {
     let mut words = Vec::with_capacity(rows.saturating_mul(5));
     let mut slices = Vec::with_capacity(rows);
@@ -766,7 +716,6 @@ fn generate_bn254_poseidon_word_batch(rows: usize) -> Bn254PoseidonWordBatch {
     }
     Bn254PoseidonWordBatch { words, slices }
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn generate_merkle_pairs(pair_count: usize) -> Vec<[u64; 2]> {
     (0..pair_count)
@@ -784,12 +733,10 @@ fn generate_merkle_pairs(pair_count: usize) -> Vec<[u64; 2]> {
         })
         .collect()
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn merkle_pair_columns(pairs: &[[u64; 2]]) -> Vec<Vec<u64>> {
     pairs.iter().map(|pair| pair.to_vec()).collect()
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn columns_to_merkle_pairs(columns: &[Vec<u64>]) -> Vec<[u64; 2]> {
     columns
@@ -801,13 +748,11 @@ fn columns_to_merkle_pairs(columns: &[Vec<u64>]) -> Vec<[u64; 2]> {
         })
         .collect()
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn hash_merkle_pairs_cpu(columns: &[Vec<u64>]) -> Option<Vec<u64>> {
     let domains = vec![POSEIDON_TRACE_NODE_DOMAIN; columns.len()];
     hash_columns_cpu_batch_inputs(&domains, columns)
 }
-
 fn hash_bn254_poseidon_words_cpu(
     words: &[u64],
     slices: &[Bn254PoseidonBatchSlice],
@@ -819,7 +764,6 @@ fn hash_bn254_poseidon_words_cpu(
         })
         .collect()
 }
-
 fn collect_bn254_metrics(
     config: &Config,
     padded: usize,
@@ -844,7 +788,6 @@ fn collect_bn254_metrics(
     let lde_twiddles = bn254_stage_twiddles(eval_log);
     let mut entries = Vec::new();
     let mut warnings = Vec::new();
-
     if config.operation.includes(BenchOperation::Fft) {
         entries.push(collect_bn254_fft_entry(
             config,
@@ -855,7 +798,6 @@ fn collect_bn254_metrics(
             &mut warnings,
         ));
     }
-
     if config.operation.includes(BenchOperation::Lde) {
         entries.push(collect_bn254_lde_entry(
             config,
@@ -867,13 +809,11 @@ fn collect_bn254_metrics(
             &mut warnings,
         )?);
     }
-
     Ok(Bn254BenchCapture {
         metrics: bn254_metrics_value(&entries, &probe.backend_label),
         warnings,
     })
 }
-
 fn collect_bn254_fft_entry(
     config: &Config,
     trace_log: u32,
@@ -908,7 +848,6 @@ fn collect_bn254_fft_entry(
         },
     }
 }
-
 fn collect_bn254_lde_entry(
     config: &Config,
     trace_log: u32,
@@ -972,7 +911,6 @@ fn collect_bn254_lde_entry(
         },
     })
 }
-
 fn operation_entry(
     operation: &str,
     input_len: usize,
@@ -999,14 +937,12 @@ fn operation_entry(
         speedup_delta_ms: speedup_delta_ms.map(round3),
     }
 }
-
 fn bytes_for_columns(columns: usize, len: usize) -> usize {
     columns
         .checked_mul(len)
         .and_then(|elements| elements.checked_mul(core::mem::size_of::<u64>()))
         .expect("benchmark operation byte count fits usize")
 }
-
 fn bn254_metric_name(operation: &str) -> Option<&'static str> {
     match operation {
         "fft" => Some("acceleration.bn254_fft_ms"),
@@ -1014,7 +950,6 @@ fn bn254_metric_name(operation: &str) -> Option<&'static str> {
         _ => None,
     }
 }
-
 fn bn254_metrics_value(entries: &[Bn254MetricEntry], backend_label: &str) -> Option<Value> {
     let mut map = json::Map::new();
     for entry in entries {
@@ -1040,14 +975,12 @@ fn bn254_metrics_value(entries: &[Bn254MetricEntry], backend_label: &str) -> Opt
         Some(Value::Object(map))
     }
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn poseidon_domains(column_count: usize) -> Vec<String> {
     (0..column_count)
         .map(|index| format!("{POSEIDON_COLUMN_DOMAIN_PREFIX}bench{index}"))
         .collect()
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn poseidon_input_len(column_len: usize) -> usize {
     let payload_len = column_len
@@ -1060,7 +993,6 @@ fn poseidon_input_len(column_len: usize) -> usize {
         payload_len + (POSEIDON_RATE - remainder)
     }
 }
-
 fn prepare_columns(planner: &Planner, padded: usize, column_count: usize) -> ColumnSets {
     let time_columns = generated_columns(padded, column_count, 0x51a2_d3f4);
     let mut coeff_columns = time_columns.clone();
@@ -1070,7 +1002,6 @@ fn prepare_columns(planner: &Planner, padded: usize, column_count: usize) -> Col
         coeff: coeff_columns,
     }
 }
-
 fn prepare_bn254_columns(log_size: u32, column_count: usize) -> Bn254ColumnSets {
     let len = 1usize << log_size;
     let mut coeff_scalars = Vec::with_capacity(column_count);
@@ -1092,7 +1023,6 @@ fn prepare_bn254_columns(log_size: u32, column_count: usize) -> Bn254ColumnSets 
         coset_limbs,
     }
 }
-
 fn generated_columns(len: usize, column_count: usize, seed: u64) -> Vec<Vec<u64>> {
     let mut columns = Vec::with_capacity(column_count);
     for column in 0..column_count {
@@ -1110,7 +1040,6 @@ fn generated_columns(len: usize, column_count: usize, seed: u64) -> Vec<Vec<u64>
     }
     columns
 }
-
 fn bn254_scalar_to_limbs(value: &Bn254Scalar) -> [u64; BN254_LIMBS] {
     let bytes = (*value).to_bytes();
     let mut limbs = [0u64; BN254_LIMBS];
@@ -1121,7 +1050,6 @@ fn bn254_scalar_to_limbs(value: &Bn254Scalar) -> [u64; BN254_LIMBS] {
     }
     limbs
 }
-
 fn flatten_bn254_columns(columns: &[Vec<Bn254Scalar>]) -> Vec<u64> {
     let scalar_len = columns.first().map_or(0, Vec::len);
     let mut flat = Vec::with_capacity(columns.len() * scalar_len * BN254_LIMBS);
@@ -1132,7 +1060,6 @@ fn flatten_bn254_columns(columns: &[Vec<Bn254Scalar>]) -> Vec<u64> {
     }
     flat
 }
-
 fn bn254_stage_twiddles(log_size: u32) -> Vec<Bn254Scalar> {
     let n = 1usize << log_size;
     let stage_span = n / 2;
@@ -1160,7 +1087,6 @@ fn bn254_stage_twiddles(log_size: u32) -> Vec<Bn254Scalar> {
     }
     twiddles
 }
-
 fn bn254_cpu_fft(columns: &mut [Vec<Bn254Scalar>], log_size: u32, twiddles: &[Bn254Scalar]) {
     let n = 1usize << log_size;
     for column in columns {
@@ -1181,7 +1107,6 @@ fn bn254_cpu_fft(columns: &mut [Vec<Bn254Scalar>], log_size: u32, twiddles: &[Bn
         }
     }
 }
-
 fn bn254_cpu_lde(
     coeffs: &[Vec<Bn254Scalar>],
     trace_log: u32,
@@ -1207,7 +1132,6 @@ fn bn254_cpu_lde(
     }
     outputs
 }
-
 fn measure_in_place<T: Clone>(
     template: &[Vec<T>],
     warmups: usize,
@@ -1230,7 +1154,6 @@ fn measure_in_place<T: Clone>(
     }
     Summary::from_samples(&samples).expect("at least one iteration recorded")
 }
-
 fn measure_map<T: Clone, R>(
     template: &[Vec<T>],
     warmups: usize,
@@ -1253,7 +1176,6 @@ fn measure_map<T: Clone, R>(
     }
     Summary::from_samples(&samples).expect("at least one iteration recorded")
 }
-
 fn measure_word_batch<R>(
     template: &Bn254PoseidonWordBatch,
     warmups: usize,
@@ -1276,7 +1198,6 @@ fn measure_word_batch<R>(
     }
     Summary::from_samples(&samples).expect("at least one iteration recorded")
 }
-
 #[cfg(any(feature = "fastpq-gpu", test))]
 fn measure_map_optional<T: Clone, R>(
     template: &[Vec<T>],
@@ -1300,7 +1221,6 @@ fn measure_map_optional<T: Clone, R>(
     }
     Some(Summary::from_samples(&samples).expect("at least one iteration recorded"))
 }
-
 fn measure_word_batch_optional<R>(
     template: &Bn254PoseidonWordBatch,
     warmups: usize,
@@ -1323,7 +1243,6 @@ fn measure_word_batch_optional<R>(
     }
     Some(Summary::from_samples(&samples).expect("at least one iteration recorded"))
 }
-
 fn measure_flat_in_place_result<T: Clone, E>(
     template: &[T],
     warmups: usize,
@@ -1346,7 +1265,6 @@ fn measure_flat_in_place_result<T: Clone, E>(
     }
     Ok(Summary::from_samples(&samples).expect("at least one iteration recorded"))
 }
-
 fn measure_flat_map_result<T: Clone, R, E>(
     template: &[T],
     warmups: usize,
@@ -1369,7 +1287,6 @@ fn measure_flat_map_result<T: Clone, R, E>(
     }
     Ok(Summary::from_samples(&samples).expect("at least one iteration recorded"))
 }
-
 fn resolve_execution_metadata(require_gpu: bool) -> Result<ExecutionProbe, String> {
     let requested = ExecutionMode::Auto;
     let label = ArcString::default();
@@ -1400,22 +1317,18 @@ fn resolve_execution_metadata(require_gpu: bool) -> Result<ExecutionProbe, Strin
         gpu_available,
     })
 }
-
 #[derive(Clone, Default)]
 struct ArcString(std::sync::Arc<std::sync::Mutex<Option<String>>>);
-
 impl ArcString {
     fn set(&self, value: &str) {
         if let Ok(mut guard) = self.0.lock() {
             *guard = Some(value.to_owned());
         }
     }
-
     fn into_option(self) -> Option<String> {
         self.0.lock().ok().and_then(|value| value.clone())
     }
 }
-
 fn load_row_usage(path: &Path) -> Result<RowUsageSnapshot, String> {
     let data = fs::read(path).map_err(|err| format!("read {}: {err}", display_path(path)))?;
     let value: Value =
@@ -1430,7 +1343,6 @@ fn load_row_usage(path: &Path) -> Result<RowUsageSnapshot, String> {
         .unwrap_or_else(|| path.to_string_lossy().into_owned());
     Ok(RowUsageSnapshot { source, batches })
 }
-
 fn detect_hostname() -> Option<String> {
     Command::new("hostname")
         .output()
@@ -1445,7 +1357,6 @@ fn detect_hostname() -> Option<String> {
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
 }
-
 fn detect_platform() -> Option<String> {
     Command::new("uname")
         .arg("-sr")
@@ -1468,27 +1379,21 @@ fn detect_platform() -> Option<String> {
             ))
         })
 }
-
 fn detect_machine() -> String {
     env::consts::ARCH.to_owned()
 }
-
 fn elapsed_ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000.0
 }
-
 fn padded_rows(rows: usize) -> usize {
     rows.next_power_of_two()
 }
-
 fn round3(value: f64) -> f64 {
     (value * 1_000.0).round() / 1_000.0
 }
-
 fn display_path(path: &Path) -> String {
     path.display().to_string()
 }
-
 impl Display for Summary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -1498,11 +1403,9 @@ impl Display for Summary {
         )
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn summary_rounding_matches_expected() {
         let summary = Summary::from_samples(&[1.2346, 2.0, 3.9999]).expect("summary");
@@ -1510,14 +1413,12 @@ mod tests {
         assert!((summary.max - 4.0).abs() < f64::EPSILON);
         assert!((summary.mean - 2.411).abs() < f64::EPSILON);
     }
-
     #[test]
     fn generated_columns_are_deterministic() {
         let first = generated_columns(8, 2, 0xdead_beef);
         let second = generated_columns(8, 2, 0xdead_beef);
         assert_eq!(first, second);
     }
-
     #[test]
     fn measure_helpers_execute_operations() {
         let template = vec![vec![1u64, 2, 3, 4]];
@@ -1527,18 +1428,15 @@ mod tests {
             }
         });
         assert!(summary.mean >= 0.0);
-
         let map_summary = measure_map(&template, 0, 1, |cols| {
             cols.iter()
                 .map(|col| col.iter().sum::<u64>())
                 .collect::<Vec<_>>()
         });
         assert!(map_summary.mean >= 0.0);
-
         let optional = measure_map_optional(&template, 0, 1, |_cols| None::<Vec<u64>>);
         assert!(optional.is_none());
     }
-
     #[test]
     fn operation_entry_records_shapes_and_transfer_bytes() {
         let cpu = Summary::from_samples(&[2.0]).expect("cpu summary");
@@ -1551,7 +1449,6 @@ mod tests {
         assert_eq!(entry.estimated_gpu_transfer_bytes, 384);
         assert_eq!(entry.speedup_ratio, Some(2.0));
     }
-
     #[test]
     fn collect_operations_includes_ifft_and_explicit_lde_shape() {
         let params = find_by_name("fastpq-lane-balanced").expect("parameter set");
@@ -1602,7 +1499,6 @@ mod tests {
             "bn254_poseidon_words"
         );
     }
-
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn poseidon_domains_follow_trace_prefix() {
@@ -1610,7 +1506,6 @@ mod tests {
         assert_eq!(domains[0], "fastpq:v1:trace:column:bench0");
         assert_eq!(domains[2], "fastpq:v1:trace:column:bench2");
     }
-
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn merkle_pair_generation_is_deterministic_and_cpu_hashable() {
@@ -1622,7 +1517,6 @@ mod tests {
         let hashes = hash_merkle_pairs_cpu(&columns).expect("Merkle pair columns hash");
         assert_eq!(hashes.len(), first.len());
     }
-
     #[test]
     fn operation_filter_parser_accepts_poseidon_aliases() {
         assert_eq!(parse_operation_filter("all").unwrap(), OperationFilter::All);
@@ -1652,7 +1546,6 @@ mod tests {
         );
         assert!(parse_operation_filter("bogus").is_err());
     }
-
     #[test]
     fn collect_operations_honors_single_operation_filter() {
         let params = find_by_name("fastpq-lane-balanced").expect("parameter set");
@@ -1684,7 +1577,6 @@ mod tests {
         assert_eq!(operations.len(), 1);
         assert_eq!(operations[0].operation, "lde");
     }
-
     #[test]
     fn bn254_metrics_capture_cpu_and_gpu_latency() {
         let cpu_fft = Summary::from_samples(&[2.0]).expect("cpu fft");
@@ -1717,7 +1609,6 @@ mod tests {
         );
         assert!(metrics["acceleration.bn254_lde_ms"].get("cuda").is_none());
     }
-
     #[test]
     fn collect_bn254_metrics_honors_operation_filter() {
         let config = Config {
@@ -1744,7 +1635,6 @@ mod tests {
         assert!(metrics.get("acceleration.bn254_fft_ms").is_some());
         assert!(metrics.get("acceleration.bn254_lde_ms").is_none());
     }
-
     #[test]
     fn serialized_blocks_record_operation_filter() {
         let config = Config {
@@ -1811,7 +1701,6 @@ mod tests {
             report_value["bn254_warnings"][0],
             norito::json!("bn254 fft gpu timing skipped: cudaError_t(1)")
         );
-
         let benchmarks = BenchmarksBlock {
             rows: config.rows,
             padded_rows: padded_rows(config.rows),
@@ -1839,7 +1728,6 @@ mod tests {
             norito::json!("bn254 fft gpu timing skipped: cudaError_t(1)")
         );
     }
-
     #[test]
     fn load_row_usage_picks_batches_block_when_present() {
         let dir = env::temp_dir();

@@ -1,8 +1,6 @@
 //! Compare token streaming over Norito's TapeWalker vs native DOM traversal.
 #![cfg(feature = "json")]
-
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-
 fn make_blob(n_objs: usize, payload_size: usize) -> String {
     let mut s = String::with_capacity(n_objs * (payload_size + 64));
     s.push('[');
@@ -24,13 +22,11 @@ fn make_blob(n_objs: usize, payload_size: usize) -> String {
     s.push(']');
     s
 }
-
 fn bench_stream(c: &mut Criterion) {
     let mut group = c.benchmark_group("json_stream");
     for &(n, sz) in &[(64usize, 256usize), (128, 512), (256, 1024)] {
         let blob = make_blob(n, sz);
         group.throughput(Throughput::Bytes(blob.len() as u64));
-
         group.bench_function(
             BenchmarkId::new("norito_stream", format!("{n}x{sz}")),
             |b| {
@@ -60,7 +56,6 @@ fn bench_stream(c: &mut Criterion) {
                 )
             },
         );
-
         group.bench_function(BenchmarkId::new("norito_dom", format!("{n}x{sz}")), |b| {
             b.iter_batched(
                 || blob.as_str(),
@@ -99,6 +94,5 @@ fn bench_stream(c: &mut Criterion) {
     }
     group.finish();
 }
-
 criterion_group!(benches, bench_stream);
 criterion_main!(benches);

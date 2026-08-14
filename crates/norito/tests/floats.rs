@@ -1,7 +1,5 @@
 //! Float roundtrip tests (f32, f64) covering strict-safe paths.
-
 use norito::core::*;
-
 #[test]
 fn f32_roundtrip() {
     let vals: [f32; 5] = [
@@ -24,7 +22,6 @@ fn f32_roundtrip() {
         }
     }
 }
-
 #[test]
 fn f64_roundtrip() {
     let vals: [f64; 5] = [

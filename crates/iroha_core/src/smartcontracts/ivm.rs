@@ -7,9 +7,7 @@ pub mod cache;
 pub mod host;
 /// Exact, privacy-safe public return decoding.
 pub mod return_value;
-
 use std::{collections::BTreeSet, num::NonZeroU64};
-
 use iroha_crypto::Hash;
 use iroha_data_model::{
     ValidationFail,
@@ -23,9 +21,7 @@ use iroha_data_model::{
     smart_contract::manifest::ContractManifest,
 };
 use mv::storage::StorageReadOnly;
-
 use crate::state::WorldReadOnly;
-
 /// Convert deterministic program preparation failures into public admission errors.
 #[must_use]
 pub(crate) fn admission_reason_from_vm_error(error: ivm::VMError) -> IvmAdmissionError {
@@ -62,13 +58,11 @@ pub(crate) fn admission_reason_from_vm_error(error: ivm::VMError) -> IvmAdmissio
         other => IvmAdmissionError::BytecodeDecodingFailed(other.to_string()),
     }
 }
-
 /// Convert deterministic program preparation failures into public admission errors.
 #[must_use]
 pub(crate) fn program_admission_error(error: ivm::VMError) -> ValidationFail {
     ValidationFail::IvmAdmission(admission_reason_from_vm_error(error))
 }
-
 /// Reject contract/deployment metadata on a contract-less generic program.
 ///
 /// Presence is checked before decoding so malformed values cannot evade the
@@ -95,7 +89,6 @@ pub(crate) fn validate_generic_execution_metadata(
     }
     Ok(())
 }
-
 /// Reject every contract identity shape for a contract-less generic program.
 ///
 /// Metadata and the content-addressed manifest registry are checked together so the same hash
@@ -115,7 +108,6 @@ pub(crate) fn validate_generic_execution_context(
     }
     Ok(())
 }
-
 /// Validate the first-release runtime-upgrade ABI surface against this binary.
 ///
 /// Runtime records are persisted consensus state. A node must fail closed when
@@ -146,7 +138,6 @@ pub(crate) fn validate_runtime_upgrade_manifest_abi(
     }
     Ok(local)
 }
-
 /// Return the ABI hash selected by the latest effective runtime upgrade.
 ///
 /// Equal-height active records are invalid even if their payloads happen to
@@ -199,7 +190,6 @@ pub(crate) fn active_runtime_abi_hash(
     }
     Ok(active.map(|(_, _, abi_hash)| abi_hash))
 }
-
 /// Validate the consensus-binding hashes carried by a contract manifest.
 ///
 /// V1 manifests must bind both the complete artifact and the exact ABI
@@ -222,7 +212,6 @@ pub(crate) fn validate_manifest_hashes(
             },
         ));
     }
-
     let expected_abi_hash = manifest
         .abi_hash
         .ok_or(IvmAdmissionError::ManifestAbiHashMissing)?;
@@ -236,7 +225,6 @@ pub(crate) fn validate_manifest_hashes(
     }
     Ok(())
 }
-
 /// Validate and return an artifact's positive cycle limit under node policy.
 ///
 /// This is shared by executable admission and every path that persists an IVM
@@ -257,7 +245,6 @@ pub(crate) fn validate_cycle_ceiling(
     }
     Ok(cycles)
 }
-
 /// Validate an artifact cycle budget against both governance fuel and node policy.
 ///
 /// The governance limit is checked first to preserve transaction-admission error
@@ -286,7 +273,6 @@ pub(crate) fn validate_cycle_limits(
     }
     Ok(cycles)
 }
-
 /// Compute a conservative gas limit for a given cycle budget.
 ///
 /// The interpreter pads traces to exactly `max_cycles` when cycle limits are
@@ -301,7 +287,6 @@ pub fn gas_limit_for_cycles(cycles: NonZeroU64) -> u64 {
         .get()
         .saturating_mul(ivm::gas::max_instruction_cost())
 }
-
 /// Convenience helper to derive a gas limit from program metadata.
 ///
 /// # Errors
@@ -311,13 +296,11 @@ pub fn gas_limit_for_meta(meta: &ivm::ProgramMetadata) -> Result<u64, IvmAdmissi
     let cycles = NonZeroU64::new(meta.max_cycles).ok_or(IvmAdmissionError::MissingMaxCycles)?;
     Ok(gas_limit_for_cycles(cycles))
 }
-
 /// Map a VM execution error into a user-facing validation failure.
 #[must_use]
 pub fn map_vm_error_to_validation(err: &ivm::VMError) -> ValidationFail {
     ValidationFail::NotPermitted(err.to_string())
 }
-
 fn format_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> String {
     let mut message = diag.message.clone();
     use std::fmt::Write as _;
@@ -347,7 +330,6 @@ fn format_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> String {
     }
     message
 }
-
 /// Map a VM execution error into a validation failure enriched with VM context.
 #[must_use]
 pub fn map_vm_error_with_context_to_validation(
@@ -376,7 +358,6 @@ pub fn map_vm_error_with_context_to_validation(
         map_vm_error_to_validation(err)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,7 +370,6 @@ mod tests {
         smart_contract::manifest::ContractManifest,
     };
     use iroha_primitives::json::Json;
-
     fn manifest_with_hashes(code_hash: Option<Hash>, abi_hash: Option<Hash>) -> ContractManifest {
         ContractManifest {
             seiyaku_name: None,
@@ -405,7 +385,6 @@ mod tests {
             provenance: None,
         }
     }
-
     fn runtime_manifest() -> RuntimeUpgradeManifest {
         RuntimeUpgradeManifest {
             name: "numeric-v1".to_owned(),
@@ -421,7 +400,6 @@ mod tests {
             provenance: Vec::new(),
         }
     }
-
     #[test]
     fn generic_programs_reject_every_contract_metadata_shape_without_decoding_values() {
         for key in [
@@ -438,7 +416,6 @@ mod tests {
                 key.parse::<Name>().expect("static metadata key"),
                 Json::new("malformed-reserved-value"),
             );
-
             let error = validate_generic_execution_metadata(&metadata)
                 .expect_err("generic programs must reject contract/deployment metadata");
             assert!(
@@ -447,7 +424,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn generic_program_hash_rejects_live_manifest_binding() {
         let code_hash = Hash::new(b"generic-binding-probe");
@@ -455,7 +431,6 @@ mod tests {
         let mut world = crate::state::World::new();
         validate_generic_execution_context(&world.view(), &metadata, code_hash)
             .expect("unbound generic program is valid");
-
         world.contract_manifests.insert(
             code_hash,
             manifest_with_hashes(Some(code_hash), Some(Hash::new(b"generic-abi"))),
@@ -464,7 +439,6 @@ mod tests {
             .expect_err("a manifest-bound hash is not generic");
         assert!(error.to_string().contains("contract manifest"));
     }
-
     #[test]
     fn runtime_upgrade_manifest_abi_validation_fails_closed() {
         let valid = runtime_manifest();
@@ -472,14 +446,12 @@ mod tests {
             validate_runtime_upgrade_manifest_abi(&valid),
             Ok(Hash::prehashed(valid.abi_hash))
         );
-
         let mut stale = valid.clone();
         stale.abi_hash[0] ^= 0x80;
         assert!(matches!(
             validate_runtime_upgrade_manifest_abi(&stale),
             Err(IvmAdmissionError::ManifestAbiHashMismatch(_))
         ));
-
         let mut unmarked_alias = valid.clone();
         unmarked_alias.abi_hash[31] ^= 1;
         assert_eq!(unmarked_alias.abi_hash[31] & 1, 0);
@@ -487,14 +459,12 @@ mod tests {
             validate_runtime_upgrade_manifest_abi(&unmarked_alias),
             Err(IvmAdmissionError::ManifestAbiHashMismatch(_))
         ));
-
         let mut delta = valid.clone();
         delta.added_syscalls.push(7);
         assert!(matches!(
             validate_runtime_upgrade_manifest_abi(&delta),
             Err(IvmAdmissionError::ManifestMalformed)
         ));
-
         let mut unsupported = valid;
         unsupported.abi_version = 2;
         assert!(matches!(
@@ -502,7 +472,6 @@ mod tests {
             Err(IvmAdmissionError::UnsupportedAbiVersion(2))
         ));
     }
-
     #[test]
     fn active_runtime_selection_validates_all_records_and_rejects_ties() {
         let mut world = crate::state::World::new();
@@ -532,7 +501,6 @@ mod tests {
             active_runtime_abi_hash(&world.view(), 3),
             Err(IvmAdmissionError::ManifestAbiHashMismatch(_))
         ));
-
         world.runtime_upgrades.insert(
             RuntimeUpgradeId([1; 32]),
             RuntimeUpgradeRecord {
@@ -546,7 +514,6 @@ mod tests {
             active_runtime_abi_hash(&world.view(), 3),
             Ok(Some(Hash::prehashed(valid.abi_hash)))
         );
-
         let mut future_stale = valid.clone();
         future_stale.abi_hash[0] ^= 0x20;
         world.runtime_upgrades.insert(
@@ -571,7 +538,6 @@ mod tests {
                 created_height: 3,
             },
         );
-
         world.runtime_upgrades.insert(
             RuntimeUpgradeId([3; 32]),
             RuntimeUpgradeRecord {
@@ -586,14 +552,12 @@ mod tests {
             Err(IvmAdmissionError::ManifestMalformed)
         ));
     }
-
     #[test]
     fn manifest_hash_validation_is_complete_and_has_stable_precedence() {
         let code_hash = Hash::new(b"manifest-code");
         let abi_hash = Hash::new(b"manifest-abi");
         let wrong_code_hash = Hash::new(b"wrong-code");
         let wrong_abi_hash = Hash::new(b"wrong-abi");
-
         assert!(matches!(
             validate_manifest_hashes(&manifest_with_hashes(None, None), code_hash, abi_hash),
             Err(IvmAdmissionError::ManifestCodeHashMissing)
@@ -633,7 +597,6 @@ mod tests {
             Ok(())
         );
     }
-
     #[test]
     fn gas_limit_for_cycles_scales_by_max_instruction_cost() {
         let cost = ivm::gas::max_instruction_cost();
@@ -643,7 +606,6 @@ mod tests {
             cost.saturating_mul(2)
         );
     }
-
     #[test]
     fn gas_limit_for_meta_rejects_zero_cycle_budget() {
         let zero = ivm::ProgramMetadata {
@@ -658,7 +620,6 @@ mod tests {
             gas_limit_for_meta(&zero),
             Err(IvmAdmissionError::MissingMaxCycles)
         ));
-
         let positive = ivm::ProgramMetadata {
             max_cycles: 2,
             ..zero
@@ -668,7 +629,6 @@ mod tests {
             ivm::gas::max_instruction_cost().saturating_mul(2)
         );
     }
-
     #[test]
     fn cycle_ceiling_validation_rejects_zero_and_over_bound() {
         let upper_bound = NonZeroU64::new(42).expect("test ceiling is non-zero");
@@ -680,13 +640,11 @@ mod tests {
             validate_cycle_ceiling(&metadata, upper_bound),
             Err(IvmAdmissionError::MissingMaxCycles)
         ));
-
         metadata.max_cycles = 42;
         assert_eq!(
             validate_cycle_ceiling(&metadata, upper_bound),
             Ok(upper_bound)
         );
-
         metadata.max_cycles = 43;
         assert!(matches!(
             validate_cycle_ceiling(&metadata, upper_bound),
@@ -694,22 +652,18 @@ mod tests {
                 if info.max_cycles == 43 && info.upper_bound == 42
         ));
     }
-
     #[test]
     fn compiler_and_node_release_cycle_defaults_match() {
         let compiler_default = ivm::kotodama::compiler::CompilerOptions::default().max_cycles;
         let node_default = iroha_config::parameters::defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND;
-
         assert_eq!(compiler_default, node_default.get());
         assert_eq!(compiler_default, 1_000_000);
     }
-
     #[test]
     fn vm_error_maps_to_not_permitted() {
         let err = map_vm_error_to_validation(&ivm::VMError::OutOfGas);
         assert!(matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("out of gas")));
     }
-
     #[test]
     fn declared_contract_abort_maps_to_manifest_authenticated_rejection() {
         let artifact = ivm::kotodama::compiler::Compiler::new()
@@ -740,7 +694,6 @@ mod tests {
             .entry_pc;
         vm.set_program_counter(entry_pc)
             .expect("select reject entrypoint");
-
         let error = vm.run().expect_err("declared require must abort");
         assert_eq!(error, ivm::VMError::ContractAbort { code: 18 });
         assert_eq!(

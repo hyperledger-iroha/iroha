@@ -1,5 +1,4 @@
 use super::*;
-
 /// Register a domain endorsement committee.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, Decode, Encode, IntoSchema,
@@ -13,7 +12,6 @@ pub struct RegisterDomainCommittee {
     /// Committee configuration to register.
     pub committee: crate::nexus::DomainCommittee,
 }
-
 /// Set or replace the endorsement policy for a domain.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, Decode, Encode, IntoSchema,
@@ -29,7 +27,6 @@ pub struct SetDomainEndorsementPolicy {
     /// Policy to apply.
     pub policy: crate::nexus::DomainEndorsementPolicy,
 }
-
 /// Submit an endorsement for a protected domain.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, Decode, Encode, IntoSchema,
@@ -43,22 +40,18 @@ pub struct SubmitDomainEndorsement {
     /// Endorsement to validate and record.
     pub endorsement: crate::nexus::DomainEndorsement,
 }
-
 impl crate::seal::Instruction for RegisterDomainCommittee {}
 impl crate::seal::Instruction for SetDomainEndorsementPolicy {}
 impl crate::seal::Instruction for SubmitDomainEndorsement {}
-
 fn endorsement_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RegisterDomainCommittee {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = endorsement_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let committee = super::decode_aos_canonical_field::<crate::nexus::DomainCommittee>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -71,14 +64,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterDomainCommittee {
         Ok((Self { committee }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for SetDomainEndorsementPolicy {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = endorsement_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let domain = super::decode_aos_canonical_field::<crate::domain::DomainId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -95,14 +86,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetDomainEndorsementPolicy {
         Ok((Self { domain, policy }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for SubmitDomainEndorsement {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = endorsement_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let endorsement = super::decode_aos_canonical_field::<crate::nexus::DomainEndorsement>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -115,12 +104,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitDomainEndorsement {
         Ok((Self { endorsement }, offset))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey};
     use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::{
         domain::DomainId,
@@ -130,20 +117,16 @@ mod tests {
             DomainEndorsementPolicy, DomainEndorsementScope, DomainEndorsementSignature,
         },
     };
-
     fn key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked endorsement ISI fixture keypair")
     }
-
     fn public_key(seed: u8) -> PublicKey {
         key_pair(seed).public_key().clone()
     }
-
     fn domain_id() -> DomainId {
         DomainId::try_new("wonderland", "universal").expect("domain id")
     }
-
     fn committee() -> DomainCommittee {
         DomainCommittee {
             committee_id: "retail".to_owned(),
@@ -152,7 +135,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     fn policy() -> DomainEndorsementPolicy {
         DomainEndorsementPolicy {
             committee_id: "retail".to_owned(),
@@ -160,7 +142,6 @@ mod tests {
             required: true,
         }
     }
-
     fn endorsement() -> DomainEndorsement {
         let signer = key_pair(0x93);
         let mut endorsement = DomainEndorsement {
@@ -186,7 +167,6 @@ mod tests {
         });
         endorsement
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -197,7 +177,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(
         registry: &crate::isi::InstructionRegistry,
         wire_id: &'static str,
@@ -217,7 +196,6 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn endorsement_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(RegisterDomainCommittee {
@@ -231,7 +209,6 @@ mod tests {
             endorsement: endorsement(),
         });
     }
-
     #[test]
     fn endorsement_registry_decodes_stable_ids() {
         let registry = crate::isi::InstructionRegistry::new()
@@ -240,7 +217,6 @@ mod tests {
                 "nexus::SetDomainEndorsementPolicy",
             )
             .register_with_id_slice::<SubmitDomainEndorsement>("nexus::SubmitDomainEndorsement");
-
         assert_registry_decodes(
             &registry,
             "nexus::RegisterDomainCommittee",
